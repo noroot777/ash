@@ -31,7 +31,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   onIntent: (intent: "rerun" | "skip", latest: AcceptGateView | null) => void;
   disabled?: boolean;
 }) {
-  const { state, error, running, latest, basis, runningFor, reload } = useAcceptGate(task.id);
+  const { state, error, stale, running, latest, basis, runningFor, reload } = useAcceptGate(task.id);
   const [busy, setBusy] = useState(false);
   // 全文按**哪一次**缓着：切任务、或者同一个任务又跑了一次之后，上一次的全文不能接着
   // 摆在那儿（标题写的是新的那条路径，正文却是旧的 —— 第 1 轮审查不拦项 2）。
@@ -57,7 +57,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   const atFinalGate = isFinalHumanGate(task.workflow, task.workflowAt);
   // 没设、也没跑过：只有能改它的人才看得到这张卡（那时它是一个入口）；改不了的人看到的
   // 是一句跟自己无关的话，纯噪音。
-  const idle = !!state && !state.command && !latest && !(settled && basis);
+  const idle = !!state && !state.command && !running && !settled;
   // 验收做完之后这张卡**留着**（用户 2026-10-23 指定）：它换成一张只读回执 —— 跑过没有、
   // 什么结果、日志在哪。原先在盖章那一刻整个消失，于是「通过了」和「我明确跳过了那条红」
   // 在界面上长得一模一样，而两者的区别恰恰是这次合并到底有没有凭据。
@@ -89,11 +89,8 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
     // 凭据和历史都没有：这一按没什么可回执的（从来没设过门禁的任务就落在这儿）。
     if (!receipt && !latest) return null;
   } else {
-    if (idle && (!canManage || !atFinalGate)) return null;
+    if (idle && !latest && (!canManage || !atFinalGate)) return null;
     if (!latest && !atFinalGate) return null;
-    // 命令已经撤掉了：这一按就是直接合并，再摆「重跑 / 这次跳过」只会让人以为门禁还拦着。
-    // （正在跑的那一条照常显示——它是真的还在跑，收不收得掉是用户现在就要知道的事。）
-    if (!state.command && !running && latest) return null;
   }
   // 卡上摆的是哪一次：正在跑的 > 本次凭据那一次 > 最近一次（最后这种只作历史，措辞里说破）。
   const shown = running ?? receipt?.run ?? latest;
@@ -162,7 +159,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   // 验收做完之后这张卡不再是关口：通过的那一次照常是绿的（stale 与否已经不重要，
   // 它就是这次合并的凭据），没通过的那一次是**你明确跳过的**，用琥珀而不是红 ——
   // 红表示「现在有东西拦着你」，而这时什么都没拦着，只是那条红没人修。
-  const tone = running
+  const tone = stale ? "" : running
     ? "is-running"
     : receipt
       // 回执的调子只由凭据决定：通过是绿的；明确跳过是琥珀（红表示「现在有东西拦着你」，
@@ -175,7 +172,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   return (
     <section className={`accept-gate-card ${idle ? "is-idle" : tone}`} aria-label="验收前置命令">
       <header>
-        <span>{running
+        <span>{stale ? <WarningCircle size={14} /> : running
           ? <SpinnerGap size={14} className="is-spinning" />
           : receipt
             ? receipt.mode === "passed" ? <CheckCircle size={14} weight="fill" /> : <WarningCircle size={14} weight="fill" />
@@ -190,21 +187,22 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
                     : <FileText size={14} />}
         </span>
         <div>
-          <b>{idle ? "这个项目没设验收前置命令" : heading(state, running, latest, receipt, settled, runningFor)}</b>
-          <p>{idle
+          <b>{stale ? "验收前置命令状态待核对" : idle ? "这个项目没设验收前置命令" : heading(state, running, latest, receipt, settled, runningFor)}</b>
+          <p>{stale ? "以下为上次读取的记录，当前状态尚未确认。" : idle && latest
+            ? `项目当前没有验收前置命令，下次验收不会跑它。历史记录：${summarizeAcceptGate(latest)}；这不是下次验收的测试凭据。`
+            : idle
             ? "设一条之后，点「验收通过」会先在任务工作区里跑它，rc=0 才合并 ——「进 main 之前跑一次全量回归」这类事就不用靠人记着哪一轮是最后一轮了。"
             : detail(state, running, latest, receipt, settled)}</p>
-          {error && <p role="alert">状态读取失败：{error}（下面这份可能已经不是最新的）</p>}
+          {error && <p role="alert">状态读取失败：{error}（下面这份可能已经不是最新的，可刷新重试）</p>}
+          {stale && !error && <p role="status">正在核对，下面是上次读取的记录。</p>}
         </div>
-        {!idle && !settled && (
-          <button type="button" className="pending-merge-refresh" disabled={busy} onClick={() => void reload()}>
-            <ArrowClockwise size={12} aria-hidden="true" />刷新
-          </button>
-        )}
+        <button type="button" className="pending-merge-refresh" disabled={busy} onClick={() => void reload()}>
+          <ArrowClockwise size={12} aria-hidden="true" />刷新
+        </button>
       </header>
       {shown?.logTail && (
         <div className="accept-gate-log">
-          <span>日志末尾{receipt?.run ? "（本次验收凭据那一次）" : settled ? "（历史记录，不是本次凭据）" : ""}</span>
+          <span>日志末尾{receipt?.run ? "（本次验收凭据那一次）" : settled || idle ? "（历史记录，不是本次凭据）" : ""}</span>
           <pre>{shown.logTail}</pre>
         </div>
       )}
@@ -238,7 +236,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
               <button type="button" disabled={busy} onClick={() => void cancel()}>
                 <XCircle size={13} />不等了，收掉它
               </button>
-            ) : latest && latest.status !== "passed" && !settled ? (
+            ) : state.command && latest && latest.status !== "passed" && !settled ? (
               <>
                 <button type="button" disabled={busy || disabled} onClick={() => onIntent("rerun", latest)}>
                   <ArrowClockwise size={13} />重跑一次
@@ -248,7 +246,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
                 </button>
               </>
             ) : null}
-            {latest?.status === "failed" && !running && !settled && (
+            {state.command && latest?.status === "failed" && !running && !settled && (
               <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>
                 <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
               </button>

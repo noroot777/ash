@@ -50,6 +50,8 @@ function Fixture() {
   const params = new URLSearchParams(location.search);
   const [notice, setNotice] = useState("");
   const [intent, setIntent] = useState("");
+  const [taskId, setTaskId] = useState("gate-task");
+  const [mounted, setMounted] = useState(true);
   if (params.get("dots") === "1") return <TaskDotsFixture />;
   if (params.get("wait") === "1") {
     return <main style={{ maxWidth: 760, padding: 24, margin: "auto" }}>
@@ -57,8 +59,12 @@ function Fixture() {
       <div className="task-reply-rail">
         <button type="button" className="task-reply-rail-button">派审查</button>
         {/* expected = 任务投影里那个「此刻有命令在跑」：状态读失败时这条靠它仍然出现。 */}
-        <AcceptGateWaitCard taskId="gate-task" expected={params.get("expected") === "1"} notify={setNotice} />
+        {mounted && <AcceptGateWaitCard taskId={taskId} expected={params.get("expected") === "1"} notify={setNotice} />}
       </div>
+      {params.get("switch") === "1" && <>
+        <button onClick={() => setTaskId("other-task")}>切任务</button>
+        <button onClick={() => setMounted(false)}>卸载提示</button>
+      </>}
       <p role="status" aria-label="操作结果">{notice}</p>
     </main>;
   }

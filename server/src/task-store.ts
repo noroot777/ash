@@ -1,8 +1,8 @@
-import { and, eq, inArray, or } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { normalizeDuetConfig } from "@ash/shared/duet";
 import type { AgentType, QuestionItem, Task, TaskListItem, TaskStage, TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
-import { acceptGateRuns, agents, monitors, projects, queueItems, sessions, tasks } from "./db/schema.js";
+import { acceptGateRuns, agents, monitors, projects, queueItems, sessions, taskBackgroundRevisions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
 import { projectHealthLight } from "./git.js";
@@ -168,16 +168,15 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
     .from(queueItems)
     .where(inArray(queueItems.taskId, rows.map((r) => r.id)));
   const byQueueTask = new Map(items.map((q) => [q.taskId, q] as const));
-  const monitoring = new Set((await db.select({ taskId: monitors.taskId }).from(monitors)
-    .where(and(inArray(monitors.taskId, rows.map(row => row.id)), eq(monitors.status, "running"))))
-    .map(monitor => monitor.taskId));
-  const gating = new Set((await db
-    .select({ taskId: acceptGateRuns.taskId })
-    .from(acceptGateRuns)
-    .where(and(
-      inArray(acceptGateRuns.taskId, rows.map((r) => r.id)),
-      or(eq(acceptGateRuns.status, "running"), eq(acceptGateRuns.processPending, true)),
-    ))).map((g) => g.taskId));
+  const background = new Map((await db.select({
+    taskId: tasks.id,
+    backgroundRevision: sql<number>`coalesce(${taskBackgroundRevisions.revision}, 0)`.mapWith(Number),
+    acceptGateRunning: sql<boolean>`exists(select 1 from ${acceptGateRuns} where ${acceptGateRuns.taskId} = ${tasks.id}
+      and (${acceptGateRuns.status} = 'running' or ${acceptGateRuns.processPending} = 1))`.mapWith(Boolean),
+    monitorRunning: sql<boolean>`exists(select 1 from ${monitors} where ${monitors.taskId} = ${tasks.id}
+      and ${monitors.status} = 'running')`.mapWith(Boolean),
+  }).from(tasks).leftJoin(taskBackgroundRevisions, eq(tasks.id, taskBackgroundRevisions.taskId))
+    .where(inArray(tasks.id, rows.map(row => row.id)))).map(row => [row.taskId, row]));
   return rows.map((r) => {
     const q = byQueueTask.get(r.id);
     return {
@@ -185,8 +184,9 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       ...runsTiming(byTask.get(r.id) ?? []),
       queueId: q?.queueId ?? null,
       queuePosition: q?.position ?? null,
-      acceptGateRunning: gating.has(r.id),
-      monitorRunning: monitoring.has(r.id),
+      backgroundRevision: background.get(r.id)?.backgroundRevision ?? 0,
+      acceptGateRunning: background.get(r.id)?.acceptGateRunning ?? false,
+      monitorRunning: background.get(r.id)?.monitorRunning ?? false,
     };
   });
 }

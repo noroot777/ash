@@ -404,6 +404,7 @@ export interface Task {
    */
   acceptGateRunning?: boolean;
   monitorRunning?: boolean;
+  backgroundRevision?: number;
 }
 
 /**

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./test-task-background-sync.mjs";
 import { applyStarredAt, applyTaskMetadataEvent, applyTaskStatusEvent, confirmedDeletions, mergeFetchedTasks, starredAtChanged } from "../src/lib/useTasks.ts";
 
 // useTasks 数据同步纯函数的回归：SSE 事件应用、星标回写、GET 快照合并。

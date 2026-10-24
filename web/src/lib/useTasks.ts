@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ServerEvent, Task, TaskListItem } from "@ash/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
+import { mergeTaskSnapshotFields } from "./taskSnapshot.ts";
 
-function upsert(tasks: TaskListItem[], task: Task, projectId?: string): TaskListItem[] {
+export function upsertTask(tasks: TaskListItem[], task: TaskListItem, projectId?: string): TaskListItem[] {
   if (projectId && task.projectId !== projectId) {
     return tasks.filter((item) => item.id !== task.id);
   }
   return tasks.some((item) => item.id === task.id)
-    ? tasks.map((item) => (item.id === task.id ? task : item))
+    ? tasks.map((item) => (item.id === task.id ? mergeTaskSnapshotFields(item, task) : item))
     : [task, ...tasks];
 }
 
@@ -44,10 +45,10 @@ export function mergeFetchedTasks(
   return fetched.map((task) => {
     const local = byId.get(task.id);
     if (!local) return task;
-    if (local.updatedAt > task.updatedAt) return local;
+    const merged = mergeTaskSnapshotFields(local, task);
     return protectStars?.has(task.id) && local.starredAt !== task.starredAt
-      ? { ...task, starredAt: local.starredAt }
-      : task;
+      ? { ...merged, starredAt: local.starredAt }
+      : merged;
   });
 }
 
@@ -176,7 +177,7 @@ export function useTasks(projectId?: string) {
           if (starredAtChanged(current, event.task)) {
             starEdits.current.set(event.task.id, Date.now());
           }
-          return upsert(current, event.task, projectId);
+          return upsertTask(current, event.task, projectId);
         });
         return;
       }

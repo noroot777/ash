@@ -61,3 +61,13 @@
 .wait-bar__retry { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; margin-left: auto; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 1px 6px; color: var(--muted); font-size: 9.5px; }
 .wait-bar__retry:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .wait-bar > .wait-bar__bar:not(button) { cursor: default; }
+.wait-bar__summary { display: flex; align-items: center; min-width: 0; }
+.wait-bar__summary > .wait-bar__bar { flex: 1; width: auto; }
+.wait-bar__summary > .wait-bar__retry { margin-right: 5px; }
+.accept-gate-wait > .wait-bar__note { padding: 0 8px 6px; }
+@media (max-width: 600px) {
+  .wait-bar__summary { flex-wrap: wrap; }
+  .wait-bar__summary > .wait-bar__bar { flex-basis: 100%; height: auto; min-height: 26px; flex-wrap: wrap; }
+  .wait-bar__summary > .wait-bar__bar > b { flex: 1 1 150px; }
+  .wait-bar__summary > .wait-bar__retry { margin: 0 6px 5px auto; }
+}
