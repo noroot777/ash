@@ -1,9 +1,8 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { statSync, createWriteStream, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { statSync } from "node:fs";
 import { EventEmitter } from "node:events";
-import { PassThrough, Readable } from "node:stream";
+import { Readable } from "node:stream";
 import { IS_WINDOWS } from "../platform.js";
 import { isHostCliIsolatedSync } from "../auth/multi-flag.js";
 import { augmentedEnv, resolveBin, resolveLaunch, withoutForeignNodeBins } from "./bin-resolve.js";
@@ -62,7 +61,9 @@ export function agentBaseEnv(): NodeJS.ProcessEnv {
 export const shq = (s: string) => (/^[\w./:@=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
 
 
-const isDir = (p: string) => {
+// 「这个 cwd 在不在」。导出是因为 detached-win.ts 要用同一份判据:cwd 不存在和命令不存在
+// 都报 ENOENT,只有分开判才不会说假话,而那条判据不该有第二份实现。
+export const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
 };
 
@@ -118,15 +119,16 @@ export function spawnErrorMessage(bin: string, err: NodeJS.ErrnoException): stri
   return `启动 ${bin} 失败：${err.message}`;
 }
 
-// Windows 上一律不 detached。三点理由:
-//  · 白拿不到好处 —— 那边的组杀是 `taskkill /T`,按进程表的父子关系走,不需要进程
-//    组;POSIX 上 detached 的唯一用途(让 kill(-pid) 打得到整棵树)在这里不存在。
-//  · 有实打实的坏处 —— libuv 把 detached 翻译成
-//    `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`:前者让子进程**完全没有控制台**
-//    (个别 CLI 会据此改变输出形态),后者让它脱离本控制台的 Ctrl-C 组。
-//  · 方向也不对 —— Windows 上「活得过 server 重启」这一档本来就砍掉了(见
-//    detached.ts 的 spawnForRun),再让 agent 脱离父进程只会攒出没人管的孤儿。
-// 额外收益:dev 终端 Ctrl-C 会连带把 agent 带走,正好补上下面那条「代价」的缺口。
+// 这条**管道路径**在 Windows 上一律不 detached。注意这是个取舍而不是「那边不需要」:
+// libuv 给每个非 detached 的子进程都做一次 `AssignProcessToJobObject`,圈带着
+// `KILL_ON_JOB_CLOSE` —— 所以 ash 一退出,这条路上的 agent 会被内核连坐杀掉。
+// 走管道的回合**本来就活不过 ash**(输出要经过 ash 的管道),连坐正好等于「ash 一死
+// 这一轮就结束」,不留没人管的孤儿;dev 终端 Ctrl-C 连带收走 agent 也是同一个机制。
+// 要让 agent 活过重启就必须跳过那次 assign,那条路在 detached-win.ts(壳 + `detached:
+// true`,那边记着三种起法的实测数字)。
+// 另一半代价如实记下:`DETACHED_PROCESS` 让子进程没有控制台,个别控制台应用会据此改变
+// 输出形态、甚至当场空退(confine-job.ts 里那组 powershell.exe 的数字)——所以 detached
+// 只开在**壳**上(它是 node,不在乎),CLI 仍由壳用 windowsHide 起。
 const DETACH = !IS_WINDOWS;
 
 // Spawn an agent CLI locally, feeding the prompt via stdin (avoids escaping
@@ -136,7 +138,8 @@ const DETACH = !IS_WINDOWS;
 // stdout/stderr 管道不死，流永远不 EOF，run loop 收不到 close → 任务永远停不掉
 // (真实案例：codex CLI 重装期间 resume，任务卡 running 且 stop 无效)。
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
-// Windows 上反过来 —— 一律不 detached，理由见 DETACH。
+// Windows 上这条路反过来 —— 不 detached，于是 ash 一退出 libuv 的全局 job 会连坐
+// 把它杀掉；那正是「走管道的回合活不过 ash」的实现,理由见 DETACH。
 // extraEnv: per-executor 的环境变量(供应商的 base_url / key、覆盖 CLI 自己的配置)。
 // **值为 `undefined` = 把这个变量从子进程里删掉**:ash 自己环境里带着的同名变量,
 // 不删就会盖掉「这里留空 = 跟随 CLI」(Node 会跳过值为 undefined 的项)。
@@ -148,7 +151,7 @@ export function spawnAgent(
   args: string[],
   prompt: string,
   extraEnv?: Record<string, string | undefined>,
-  opts?: { keepStdin?: boolean; teeOut?: string },
+  opts?: { keepStdin?: boolean },
 ): ChildProcess {
   const blocked = guardAgentSpawn(bin);
   if (blocked) return blocked;
@@ -196,52 +199,9 @@ export function spawnAgent(
   // 「活着才取得到」的那份证据只有这一刻拿得到:根 reap 之后再去问就晚了(第 17 轮审查 F3
   // 在 Windows 真机上实测:正常完成那条路压根建不起区间,每一次正常完成都收不回逃逸后代)。
   registerRootLife(child, bornAt);
-  teeStdout(child, opts?.teeOut);
   child.stdin?.write(prompt);
   if (!opts?.keepStdin) child.stdin?.end();
   return child;
-}
-
-// 管道路径上的「输出同时落盘」。
-//
-// detached.ts 那条路(输出直接写文件)顺带满足了一个**跟活得过重启无关**的需求:
-// 回合结算前 `replayUndeliveredMcpCalls`(mcp-handoff.ts)要回头扫一遍 agent 的
-// 输出,把没送达的 `complete_task` 补录进库。走匿名管道时那个文件根本不存在,补捞
-// 静默变成空操作 —— 一个干完活的任务会被记成 failed,且失败得无声无息。
-//
-// Windows 上「活得过重启」这一档整个砍掉了(spawnForRun),所以那个 out 文件得由
-// 这里补上。
-//
-// 实现上不用 `stdout.pipe(ws)`:pipe 会立刻把原流切进 flowing 模式,而各 executor
-// 的解析器是**之后**才挂 'data' 的,中间这几个 tick 冒出来的字节就永久丢了。改成
-// 接管原流、转发给一个 PassThrough 顶替 child.stdout,顺便把背压一起转发。
-// 开不出文件就当没这回事(best-effort):补捞退回原来的空操作,不该把这轮跑挂掉。
-function teeStdout(child: ChildProcess, file: string | undefined): void {
-  const src = child.stdout;
-  if (!file || !src) return;
-  let sink;
-  try {
-    mkdirSync(dirname(file), { recursive: true });
-    sink = createWriteStream(file, { flags: "a" });
-  } catch {
-    return;
-  }
-  sink.on("error", () => {}); // 盘满/被删:同上,降级不报错
-  const relay = new PassThrough();
-  src.on("data", (chunk: Buffer) => {
-    sink.write(chunk);
-    if (!relay.write(chunk)) src.pause();
-  });
-  relay.on("drain", () => src.resume());
-  src.on("end", () => {
-    relay.end();
-    sink.end();
-  });
-  src.on("error", (e) => {
-    relay.destroy(e);
-    sink.end();
-  });
-  Object.defineProperty(child, "stdout", { value: relay, configurable: true, writable: true });
 }
 
 // Wrap a resume command so it is copy-paste runnable (§13).

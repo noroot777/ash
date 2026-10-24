@@ -15,6 +15,8 @@
 //   5. cmd.exe 的参数引号规则（CVE-2024-24576 那套），含换行直接拒
 //   6. augmentedEnv 去掉 Path/PATH 的大小写重影
 //   7. 用户自己写的整条命令行走 `cmd /d /s /c` + verbatim（跟 5 的转义规则相反）
+//   8. 常用命令走 PowerShell `-EncodedCommand` + 退出码收口（commandLaunch）
+//   9. agent 壳的记号在 server 与 scripts 两侧**一字不差**（重启那一刀靠它认人）
 // 跑：npm -w server run test:win-launch
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -193,7 +195,95 @@ try {
   delete process.env.COMSPEC;
   assert.equal(userShellLaunch("ls").file, "cmd.exe", "COMSPEC 没设时回退 cmd.exe");
 
-  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行）全部通过");
+  for (const command of [
+    '.\\kb.ps1 test full',
+    '  .\\KB.PS1 test full',
+    '".\\scripts with spaces\\kb.ps1" test "full suite"',
+    "& '.\\scripts with spaces\\kb.ps1' test full",
+  ]) {
+    const launch = userShellLaunch(command);
+    assert.match(launch.file, /(?:pwsh|powershell)\.exe$/i, "ps1 必须由 PowerShell 执行，不能交给 cmd 的文件关联");
+    assert.equal(launch.windowsVerbatimArguments, undefined, "PowerShell 不沿用 cmd 的 verbatim 转义");
+    assert.ok(launch.args.includes("-NonInteractive"));
+    assert.ok(launch.args.includes("-NoProfile"));
+    assert.equal(launch.args[launch.args.indexOf("-ExecutionPolicy") + 1], "Bypass");
+    const script = Buffer.from(launch.args.at(-1)!, "base64").toString("utf16le");
+    assert.ok(script.includes(command.trimStart()), "编码后仍保留用户命令与参数");
+    assert.ok(script.includes("$LASTEXITCODE"), "脚本退出码不能被 PowerShell 吞掉");
+  }
+  for (const command of [
+    'echo .\\kb.ps1',
+    'node test.js && npm run build',
+    'powershell.exe -File .\\kb.ps1 test full',
+    '.\\kb.ps1.cmd test full',
+  ]) assert.equal(userShellLaunch(command).file, "cmd.exe", "非 ps1 入口保持原有 cmd 语义");
+
+  // ── 8. 常用命令怎么起（terminal-shell.ts 的 commandLaunch）────────────────────
+  // 这一条也只能在伪造平台下跑：真机上它决定「点启动到底跑不跑得起来」，而开发机永远
+  // 走 POSIX 那一支。钉三件事 ——
+  //   ① 选的是 PowerShell，且 pwsh(7) 优先于随系统的 5.1；
+  //   ② 脚本走 `-EncodedCommand`（UTF-16LE base64）：**原文一个字都不转义**地送过去，
+  //      这正是绕开「node-pty 拼命令行 + PowerShell 再解析」那两层引号雷区的办法；
+  //   ③ 退出码收口跟在脚本后面，语义对齐 `sh -lc`（最后一条**语句**的成败就是会话退出码）。
+  //
+  const psDir = join(stage, "ps");
+  mkdirSync(psDir, { recursive: true });
+  const pwsh = join(psDir, "pwsh.exe");
+  const ps51 = join(psDir, "powershell.exe");
+  writeFileSync(pwsh, "MZ");
+  writeFileSync(ps51, "MZ");
+  const basePath = process.env.PATH!;
+  process.env.PATH = [psDir, basePath].join(";");
+
+  const { commandLaunch } = await import("../src/terminal-shell.js");
+
+  // 用户写的脚本：多行、带引号、带 `$`、带反引号 —— 编码传参之后这些全都不用管
+  const script = 'cd "C:\\My Code"\nnpm run dev -- --name "a b" `# $x';
+  const launch = commandLaunch(script, "/bin/zsh");
+  assert.equal(launch.shell, pwsh, "pwsh.exe 优先（PowerShell 7 才认 && 这类语法）");
+  assert.deepEqual(launch.args.slice(0, 2), ["-NoLogo", "-EncodedCommand"]);
+  const decoded = Buffer.from(launch.args[2], "base64").toString("utf16le");
+  const encodedSource = decoded.match(/FromBase64String\('([^']+)'\)/)?.[1];
+  assert.ok(encodedSource, "完整用户脚本独立传输");
+  assert.equal(Buffer.from(encodedSource, "base64").toString("utf16le"), script, "用户脚本文本不变");
+  const longest = commandLaunch("#".repeat(4000));
+  const commandLineLength = longest.args.reduce((length, argument) => length + argument.length + 3, longest.shell.length + 3);
+  assert.ok(commandLineLength < 32767, "4000 字的完整脚本仍须容纳在 Windows 命令行内");
+
+  // 没装 PowerShell 7 就退 5.1（Windows 自带那个）
+  rmSync(pwsh, { force: true });
+  assert.equal(commandLaunch("echo hi").shell, ps51, "没 pwsh 时退 Windows PowerShell 5.1");
+
+  // 两个都没有：**抛**，不拿 cmd.exe 去跑一段 PowerShell 脚本（多行它压根收不了，
+  // 而「换一套方言悄悄跑」的失败方式看不懂）
+  rmSync(ps51, { force: true });
+  assert.throws(() => commandLaunch("echo hi"), /找不到 PowerShell/, "一个都没有就该拒绝开会话");
+  process.env.PATH = basePath;
+
+  // ── 9. agent 壳的记号:两侧必须一字不差 ───────────────────────────────────────
+  // `scripts/platform.mjs` 在 build 之前就要能跑(setup 的头两件事是装依赖、构建),所以它
+  // 复刻了一份常量而不是 import server 的。重启那一刀靠这个后缀在进程表里认出「这是一个
+  // 活得过 ash 的 agent 壳」并绕开它(第 1 轮审查 F2 的不变量);两边漂了就等于那条不变量
+  // 静默失效 —— 名单漏掉的新 agent 会被 taskkill 掉,而没有任何东西会报错。所以钉在这儿。
+  const { WINDOWS_WRAP_SUFFIX, windowsWrapPaths } = await import("../src/executors/detached-win-wrap.js");
+  const { WINDOWS_AGENT_WRAP_SUFFIX, agentWrapPids } = await import("../../scripts/platform.mjs");
+  assert.equal(WINDOWS_AGENT_WRAP_SUFFIX, WINDOWS_WRAP_SUFFIX,
+    "scripts/platform.mjs 与 detached-win-wrap.ts 的壳记号必须一致");
+  // 再按真实命令行走一遍:记号认的是**壳脚本的路径出现在命令行里**这件事。
+  const wrapScript = windowsWrapPaths({ out: "o", err: "e", rc: "C:\\runs\\s-T0.agent-rc" }).script;
+  assert.ok(wrapScript.endsWith(WINDOWS_WRAP_SUFFIX), "壳文件名必须带记号");
+  assert.deepEqual(
+    agentWrapPids([
+      { pid: 11, ppid: 1, command: `"C:\\Program Files\\nodejs\\node.exe" "${wrapScript}" "claude" "-p"` },
+      { pid: 12, ppid: 11, command: '"C:\\Program Files\\nodejs\\node.exe" "C:\\cli\\claude.js" "-p"' },
+      { pid: 13, ppid: 1, command: "" },
+      { pid: 14, ppid: 1, command: null as unknown as string },
+    ]),
+    [11],
+    "只有壳自己带记号;它起的 CLI 靠核验过代次的父子边一起被保住,不靠命令行",
+  );
+
+  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行/常用命令/壳记号）全部通过");
 } finally {
   rmSync(stage, { recursive: true, force: true });
 }
