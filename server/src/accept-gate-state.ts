@@ -1,5 +1,6 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { existsSync } from "node:fs";
+import { gateConfinementUnavailable } from "./accept-gate-confinement.js";
 import { normalizeAcceptGateCommand, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateFailure, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
@@ -93,9 +94,10 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   if (!task) return { command: null, running: null, latest: null, basis: null };
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const command = acceptGateCommandOf(project);
+  const unavailable = command ? gateConfinementUnavailable() : null;
   const basis = await acceptBasis(task);
   const latestRow = await latestRun(taskId);
-  if (!latestRow) return { command, running: null, latest: null, basis };
+  if (!latestRow) return { command, running: null, latest: null, basis, unavailable };
   const view = gateView(latestRow);
   const pending = (await db.select().from(acceptGateRuns).where(and(eq(acceptGateRuns.taskId, taskId),
     or(eq(acceptGateRuns.status, "running"), eq(acceptGateRuns.processPending, true))))
@@ -106,8 +108,9 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   const head = frozen ? task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null
     : project ? await gateHead(task, project.repoPath) : null;
   const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
-  const source = cwd ? await readGateSource(cwd).catch(() => null) : null;
+  let sourceError: string | null = null;
+  const source = cwd && !unavailable ? await readGateSource(cwd).catch(error => { sourceError = String(error); return null; }) : null;
   const stale = latestRow.command !== command || (frozen ? !head || head !== latestRow.sourceCommit
     : !gateSourceMatches(latestRow, source));
-  return { command, running: null, latest: { ...view, stale }, basis };
+  return { command, running: null, latest: { ...view, stale }, basis, unavailable, sourceError };
 }

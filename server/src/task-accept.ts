@@ -33,7 +33,8 @@ import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
 import { mergePreflight } from "./task-accept-merge-preflight.js";
 import { gateMergeSource } from "./accept-gate-state.js";
-import { acceptGateCheck, dropPendingAcceptGate, startPendingAcceptGate, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
+import { acceptGateCheck, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
+import { discardPendingAcceptanceGate, finishAcceptanceGate } from "./task-accept-gate-launch.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 
 type AcceptSuccess = {
@@ -669,6 +670,9 @@ export async function acceptTask(
         if (tail) result = { ...result, tail };
       }
     }
+  } catch (error) {
+    await discardPendingAcceptanceGate(taskId, error);
+    throw error;
   } finally {
     endAccepting(taskId);
     // 撞冲突时登记的「叫任务自己去解」必须**在验收锁释放之后**才发:锁还锁着时
@@ -678,18 +682,5 @@ export async function acceptTask(
   // 验收前置命令的发射点。**必须在这儿**（仓库锁之外、验收互斥之外）：那条命令要跑十几
   // 分钟，占着仓库锁会让同仓库其它任务的验收全部干等；而它跑完之后还要自己再发起一次
   // 验收，占着验收互斥的话那一次会被自己挡回来。判定仍在锁里做（acceptGateCheck）。
-  if (!result.accepted && result.reason === "accept_gate_required") {
-    const gate = await startPendingAcceptGate(taskId);
-    if (gate) {
-      result = gate.status === "running"
-        ? {
-          ...result, reason: "accept_gate_running", gate,
-          error: `${result.error} 已经在跑了（日志 ${gate.logPath}）。跑完如果是绿的，这次验收会自动接着做完，不用再点。`,
-        }
-        : { ...result, reason: "accept_gate_failed", gate, error: `${result.error} 但这条命令没能跑起来：${gate.logTail.trim() || "详见任务时间线"}` };
-    }
-  } else {
-    dropPendingAcceptGate(taskId);
-  }
-  return result;
+  return finishAcceptanceGate(taskId, result);
 }

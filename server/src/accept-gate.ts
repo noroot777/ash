@@ -45,6 +45,8 @@ import { id as newId, now } from "./util.js";
 import { abandonUnstartedGateProcess, attachGateProcess, claimGateProcess, hasOwnedGateProcess, hasStoppingGateProcess,
   forgetGateProcess, reconcileGateProcesses, stopGateRun, stopOwnedGateProcesses } from "./accept-gate-ownership.js";
 import { prepareGateLaunch } from "./accept-gate-launch.js";
+import { gateConfinementUnavailable } from "./accept-gate-confinement.js";
+import { releaseGateOwnership } from "./accept-gate-release.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type GateRow = typeof acceptGateRuns.$inferSelect;
@@ -129,6 +131,12 @@ export async function acceptGateCheck(
   if (!command || !project) {
     recordBasis("unset", null);
     return null;
+  }
+  const unavailable = gateConfinementUnavailable();
+  if (unavailable && opts.intent !== "skip") {
+    await appendTaskTimeline(task.id, `验收前置命令未执行（本机能力不可用）：${unavailable}`);
+    return { accepted: false, httpStatus: 409, taskId: task.id, reason: "accept_gate_unavailable",
+      error: unavailable, status: task.status };
   }
 
   const cwd = await prepareGateCwd(task, project.repoPath);
@@ -276,7 +284,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
   // 起进程到登记超时闹钟这一段**必须一个 await 都没有**：命令可能几毫秒就退了（`false`
   // 这种），退出回调一来就要找得到这条登记，否则它会被当成「已经被别人收过」而静默丢掉，
   // 任务永远停在「正在跑」（审查前自测复现）。
-  let started: ReturnType<typeof spawnAcceptGate>;
+  let started: Awaited<ReturnType<typeof spawnAcceptGate>>;
   try {
     await createGateSnapshot(plan.cwd, snapshotCwd, plan.source);
     const prepared = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
@@ -284,7 +292,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       await removeGateSnapshot(taskId, runId);
       return prepared ? gateView(prepared) : null;
     }
-    started = spawnAcceptGate({
+    started = await spawnAcceptGate({
       command: plan.command,
       cwd: snapshotCwd,
       logPath,
@@ -315,7 +323,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
 
   try {
     await db.update(acceptGateRuns).set({ pid: started.pid, pidStartedAt: started.startedAt }).where(eq(acceptGateRuns.id, runId));
-    started.authorize();
+    await started.authorize();
   } catch (error) {
     appendGateLog(logPath, `\n[ash] 启动握手失败，命令未获放行：${String(error)}\n`);
     await settleGate(runId, { status: "failed", exitCode: null, failure: "spawn_failed" });
@@ -346,8 +354,8 @@ async function noteIfStillAlive(taskId: string, logPath: string, stopped: boolea
 }
 
 /** 登记了却没能发射（主流程中途出错）时把登记撤掉，别留一条永远不跑的意图。 */
-export function dropPendingAcceptGate(taskId: string): void {
-  pendingStarts.delete(taskId);
+export function dropPendingAcceptGate(taskId: string): boolean {
+  return pendingStarts.delete(taskId);
 }
 
 /**
@@ -553,9 +561,12 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   if (hasLiveAcceptGate(task.id)) return true;
   const command = acceptGateCommandOf(project);
   if (!command || !project) return false;
+  if (gateConfinementUnavailable()) return false;
   if (await runningRun(task.id)) return true;
   const cwd = await existingTaskWorkspacePath(task, project.repoPath);
-  const source = cwd ? await readGateSource(cwd).catch(() => null) : null;
+  if (!cwd) return true;
+  const source = await readGateSource(cwd).catch(() => null);
+  if (!source) return false;
   const previous = await latestRun(task.id);
   return !(previous && previous.status === "passed"
     && gateSourceMatches(previous, source) && previous.command === command);
@@ -581,6 +592,16 @@ export async function cancelAcceptGate(taskId: string, reason = "你在验收台
   return { outcome: current.status === "running" ? "settlement_failed" : current.processPending ? "stopping"
     : wasRunning && current.status === "canceled" ? "canceled" : "already_finished",
     runId: current.id, gate: gateView(current) };
+}
+
+export async function forceReleaseAcceptGate(taskId: string, runId: string) {
+  const result = await releaseGateOwnership(taskId, runId);
+  if (result.ok) {
+    const active = live.get(taskId);
+    if (active?.runId === runId) { clearTimeout(active.timer); live.delete(taskId); }
+    announceGate(taskId);
+  }
+  return result;
 }
 
 /**

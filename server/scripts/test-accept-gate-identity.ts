@@ -93,7 +93,8 @@ try {
     assert.match(readFileSync(row.logPath, "utf8"), /tested: fixed/);
     assert.equal((await task(sample.taskId)).stage, "verified", "a pass on the frozen snapshot cannot merge a dirty source checkout");
     assert.equal((await acceptGateState(sample.taskId)).latest?.stale, true);
-    assert.equal(await acceptGateWouldRun(await task(sample.taskId), await project(sample.projectId)), true);
+    assert.equal(await acceptGateWouldRun(await task(sample.taskId), await project(sample.projectId)), false,
+      "脏输入会立即拒绝，而不是预测为起跑");
     git(sample.cwd, "restore", "value.txt");
     assert.equal((await acceptGateState(sample.taskId)).latest?.stale, false);
     assert.equal(await acceptGateWouldRun(await task(sample.taskId), await project(sample.projectId)), false);

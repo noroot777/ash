@@ -433,6 +433,8 @@ export const api = {
   },
   cancelAcceptGate: (taskId: string, runId: string): Promise<AcceptGateCancelResult> =>
     request(`/tasks/${id(taskId)}/accept-gate/cancel`, json("POST", { runId })),
+  forceReleaseAcceptGate: (taskId: string, runId: string): Promise<{ ok: true; gate: AcceptGateView }> =>
+    request(`/tasks/${id(taskId)}/accept-gate/force-release`, json("POST", { runId, confirmation: "release-without-exit-proof" })),
   // 「再交给智能体去修」：红了那次 ash 已经自动交过一次，这条是补救（那次没投递成功）
   // 与再推一把（agent 那一轮跑完了还没修好）。
   rehandOffAcceptGate: (taskId: string): Promise<{ handedOff: true; gate: AcceptGateView }> =>

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import type { Confinement } from "./executors/kernel-confine.js";
+import type { GateConfinement } from "./accept-gate-confinement.js";
 import { reopenConfinement } from "./executors/kernel-confine.js";
 import { gateJobSupervisorExecutable } from "./accept-gate-confinement-supervisor.js";
 
@@ -16,14 +16,15 @@ export function readGateJobEvidence(logPath: string, id: string): JobEvidence | 
   } catch { return null; }
 }
 
-export function gateJobConfinement(logPath: string, id: string, rootPid: number, fresh = false, rootStartedAt: string | null = null): Confinement {
+export function gateJobConfinement(logPath: string, id: string, rootPid: number, fresh = false, rootStartedAt: string | null = null): GateConfinement {
   const abort = `${logPath}.abort`;
   const probe = reopenConfinement(id);
   return {
     id,
-    enroll(pid) {
+    async enroll(pid) {
       if (!fresh || !rootStartedAt || pid !== rootPid || existsSync(gateJobEvidencePath(logPath))) return false;
-      const executable = gateJobSupervisorExecutable();
+      const executable = await gateJobSupervisorExecutable();
+      if (existsSync(abort)) return false;
       const output = openSync(`${logPath}.supervisor.log`, "a");
       let child;
       try {
@@ -39,7 +40,7 @@ export function gateJobConfinement(logPath: string, id: string, rootPid: number,
         const evidence = readGateJobEvidence(logPath, id);
         if (evidence?.state === "held" && evidence.rootPid === rootPid && evidence.rootStartedAt === rootStartedAt) return true;
         if (existsSync(abort)) return false;
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+        await new Promise(resolve => setTimeout(resolve, 25));
       }
       return false;
     },

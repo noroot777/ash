@@ -15,6 +15,7 @@ import { ArrowClockwise, CaretDown, FileText, SpinnerGap, WarningCircle, XCircle
 import { api } from "../lib/api.ts";
 import { acceptGateCancelMessage } from "@ash/shared/accept-gate";
 import { useAcceptGate } from "./useAcceptGate.ts";
+import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 
 export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
   taskId: string;
@@ -87,10 +88,10 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
         aria-controls={bodyId}
         onClick={() => setOpen((current) => !current)}
       >
-        <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
+        {running.status === "running" ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <WarningCircle size={13} aria-hidden="true" />}
         <b>{running.status === "running" ? "验收前置命令在跑" : "验收前置命令尚待停止"}</b>
         <span className="wait-bar__brief">{running.command}</span>
-        <span className="wait-bar__when">已经 {runningFor}</span>
+        <span className="wait-bar__when">{running.status === "running" ? `已经 ${runningFor}` : "等待退出证据"}</span>
         <CaretDown size={11} weight="bold" className="wait-bar__caret" aria-hidden="true" />
       </button>
       {open && (
@@ -107,6 +108,7 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
                 目标分支一个字节都不会动。</>}
           </p>
           <div className="wait-bar__ops">
+            {running.status !== "running" && running.processPending && <AcceptGateForceRelease key={running.id} taskId={taskId} runId={running.id} reload={reload} notify={notify} />}
             <button type="button" disabled={busy} onClick={() => void openLog()}>
               <FileText size={11} aria-hidden="true" />{shownLog === null ? "看完整日志" : "刷新日志"}
             </button>

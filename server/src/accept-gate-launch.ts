@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Confinement } from "./executors/kernel-confine.js";
 import { inspectProcessSync } from "./platform.js";
-import { createGateConfinement, reopenGateConfinement } from "./accept-gate-confinement.js";
+import { createGateConfinement, reopenGateConfinement, type GateConfinement } from "./accept-gate-confinement.js";
 
 export type GateLaunch = {
   version: 1;
@@ -14,7 +13,7 @@ export type GateLaunch = {
   stoppedEvidence?: "never-authorized" | "kernel-empty";
 };
 
-const confinements = new Map<string, Confinement>();
+const confinements = new Map<string, GateConfinement>();
 const launches = new Map<number, string>();
 export const gateLaunchPath = (logPath: string): string => `${logPath}.launch.json`;
 export const gateAbortPath = (logPath: string): string => `${logPath}.abort`;
@@ -39,11 +38,20 @@ export function writeGateLaunch(logPath: string, launch: GateLaunch): void {
   renameSync(temporary, gateLaunchPath(logPath));
 }
 
-export function gateConfinement(logPath: string, launch: GateLaunch): Confinement | null {
+export function gateConfinement(logPath: string, launch: GateLaunch): GateConfinement | null {
   if (!launch.confinementId) return null;
   const confinement = confinements.get(logPath) ?? reopenGateConfinement(logPath, launch.confinementId, launch.pid ?? 0, launch.startedAt ?? null);
   if (confinement) confinements.set(logPath, confinement);
   return confinement;
+}
+
+export function migrateGateLaunch(logPath: string, launch: GateLaunch): GateLaunch {
+  if (launch.phase !== "armed" || launch.confinementEnrolled !== undefined || !launch.confinementId) return launch;
+  const reading = gateConfinement(logPath, launch)?.read();
+  if (reading?.kind !== "members") return launch;
+  const migrated = { ...launch, confinementEnrolled: true };
+  writeGateLaunch(logPath, migrated);
+  return migrated;
 }
 
 export function registerGateLaunch(logPath: string, pid: number, startedAt: string | null): void {
@@ -54,7 +62,7 @@ export function registerGateLaunch(logPath: string, pid: number, startedAt: stri
 export const gateLaunchOf = (pid: number | null | undefined, logPath?: string): string | undefined =>
   logPath ?? (pid ? launches.get(pid) : undefined);
 
-export function authorizeGateLaunch(logPath: string): boolean {
+export async function authorizeGateLaunch(logPath: string): Promise<boolean> {
   const launch = readGateLaunch(logPath);
   if (!launch || launch.phase !== "prepared" || !launch.pid || !launch.startedAt) {
     throw new Error("验收前置命令的启动身份尚未确认，不能放行命令");
@@ -66,7 +74,7 @@ export function authorizeGateLaunch(logPath: string): boolean {
   confinements.set(logPath, confinement);
   launch.confinementId = confinement.id;
   writeGateLaunch(logPath, launch);
-  const enrolled = confinement.enroll(launch.pid);
+  const enrolled = await confinement.enroll(launch.pid);
   const reading = enrolled ? confinement.read() : null;
   if (reading?.kind !== "members" || !reading.members.some(member => member.pid === launch.pid)) {
     throw new Error("进程归属尚未确认，验收前置命令没有启动");

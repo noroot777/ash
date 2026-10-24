@@ -8,6 +8,7 @@ registerHooks({
       import { isProcessGroupAlive, inspectProcessSync } from ${JSON.stringify(platform)};
       export const GATE_CONFINEMENT_UNAVAILABLE = "orchestration test fixture";
       export function assertGateConfinementAvailable() {}
+      export function gateConfinementUnavailable() { return null; }
       function fixture(pid) {
         return { id: "orchestration-fixture:" + pid,
           enroll: candidate => candidate === pid,

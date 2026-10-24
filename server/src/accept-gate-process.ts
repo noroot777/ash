@@ -10,7 +10,7 @@ import { inspectProcessSync, isPidAlive, userShellLaunch } from "./platform.js";
 import { assertGateConfinementAvailable } from "./accept-gate-confinement.js";
 import { gateBootstrapEnvironment } from "./accept-gate-process-env.js";
 import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, gateConfinement,
-  gateGoPath, gateLaunchOf, gateLaunchPath, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
+  gateGoPath, gateLaunchOf, gateLaunchPath, migrateGateLaunch, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
 
 /** SIGTERM 之后等多久补一刀。给它收尾的时间，但不无限等。 */
 const KILL_GRACE_MS = 5_000;
@@ -37,13 +37,13 @@ export type GateExit = { code: number | null; signal: NodeJS.Signals | null };
  * 输出**全部写文件**：十几分钟的测试输出走管道只会把它攒在 ash 的内存里，而用户真正
  * 要的是能从头翻的一份日志。stdin 给 /dev/null —— 门禁命令不该等人输入，等于挂死。
  */
-export function spawnAcceptGate(opts: {
+export async function spawnAcceptGate(opts: {
   command: string;
   cwd: string;
   logPath: string;
   onExit: (exit: GateExit) => void;
   hold?: boolean;
-}): { pid: number; startedAt: string | null; authorize: () => boolean } {
+}): Promise<{ pid: number; startedAt: string | null; authorize: () => Promise<boolean> }> {
   mkdirSync(dirname(opts.logPath), { recursive: true });
   if (!existsSync(gateLaunchPath(opts.logPath))) prepareGateLaunch(opts.logPath);
   assertGateConfinementAvailable();
@@ -75,7 +75,7 @@ export function spawnAcceptGate(opts: {
     registerGateLaunch(opts.logPath, pid, startedAt);
     const authorize = () => authorizeGateLaunch(opts.logPath);
     if (!opts.hold) {
-      try { authorize(); }
+      try { await authorize(); }
       catch (error) {
         writeFileSync(gateAbortPath(opts.logPath), "abort");
         throw error;
@@ -106,8 +106,9 @@ export async function stopAcceptGate(
   logPath?: string,
 ): Promise<boolean> {
   logPath = gateLaunchOf(pid, logPath);
-  const launch = readGateLaunch(logPath);
-  if (!launch || !logPath) return false;
+  const persisted = readGateLaunch(logPath);
+  if (!persisted || !logPath) return false;
+  const launch = migrateGateLaunch(logPath, persisted);
   writeFileSync(gateAbortPath(logPath), "abort");
   if (launch.phase === "stopped" && launch.stoppedEvidence) return !gateTreeAlive(pid ?? 0, startedAt, logPath);
   if (launch.phase === "prepared" && !existsSync(gateGoPath(logPath))) {

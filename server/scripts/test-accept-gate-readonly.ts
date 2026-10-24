@@ -120,6 +120,15 @@ try {
   }
 
   {
+    const sample = await fixture("source-unavailable");
+    writeFileSync(join(sample.workspace, "untracked-input.txt"), "not committed");
+    assert.equal(await acceptGateWouldRun(await taskRow(sample.taskId), await projectRow(sample.projectId)), false);
+    const rejected = await acceptTask(sample.taskId);
+    assert.equal(rejected.accepted, false);
+    if (!rejected.accepted) assert.equal(rejected.reason, "accept_gate_source_unavailable");
+    assert.equal(await runRow(sample.taskId), undefined, "源码不可用不会被批量预判为起跑，也不创建运行记录");
+  }
+  {
     const sample = await fixture("ownership");
     await db.update(tasks).set({ mode: "team" }).where(eq(tasks.id, sample.taskId));
     const leader = await taskRow(sample.taskId);

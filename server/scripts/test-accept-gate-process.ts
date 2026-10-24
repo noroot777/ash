@@ -69,7 +69,7 @@ try {
     results.push(JSON.parse(refusal.stdout.trim().split("\n").at(-1)!));
     const logPath = join(root, "refused.log");
     const marker = join(root, "must-not-execute");
-    assert.throws(() => spawnAcceptGate({ command: `touch "${marker}"`, cwd: root, logPath,
+    await assert.rejects(spawnAcceptGate({ command: `touch "${marker}"`, cwd: root, logPath,
       onExit: () => assert.fail("没有启动任何进程，不能伪造退出事件") }), /macOS.*内核围栏/);
     assert.equal(existsSync(marker), false);
     assert.equal(readGateLaunch(logPath)?.pid, undefined);
@@ -110,7 +110,7 @@ try {
         for (const generation of ["", "2000-01-01T00:00:00.0000000Z"]) {
           const jobId = `Local\\ash-accept-gate-${randomUUID()}`;
           const evidence = join(root, `wrong-generation-${randomUUID()}.json`);
-          const native = spawnSync(gateJobSupervisorExecutable(), [jobId, String(unrelatedPid), evidence,
+          const native = spawnSync(await gateJobSupervisorExecutable(), [jobId, String(unrelatedPid), evidence,
             `${evidence}.abort`, generation], { timeout: 5000, windowsHide: true });
           assert.equal(native.status, 0, String(native.error ?? native.stderr));
           assert.equal(existsSync(evidence), false, "原生句柄代际缺失或不匹配时不能登记归属");

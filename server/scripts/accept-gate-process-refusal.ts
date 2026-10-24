@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
@@ -22,9 +22,8 @@ export async function testGateRefusal(directory: string): Promise<object> {
   const { projects, tasks, acceptGateRuns } = await import("../src/db/schema.js");
   const { prepareWorktree } = await import("../src/git.js");
   const { acceptTask } = await import("../src/task-accept.js");
-  const { hasLiveAcceptGate, whenAcceptGateSettled } = await import("../src/accept-gate.js");
+  const { hasLiveAcceptGate, acceptGateWouldRun } = await import("../src/accept-gate.js");
   const { acceptGateState } = await import("../src/accept-gate-state.js");
-  const { releaseTurn } = await import("../src/turn-lock.js");
   try {
     await ensureSchema();
     const projectId = "gate-refusal-project";
@@ -40,33 +39,30 @@ export async function testGateRefusal(directory: string): Promise<object> {
     await db.insert(tasks).values({ id: taskId, projectId, title: "refusal", mode: "single", status: "done",
       stage: "verified", workflowMode: "free", useWorktree: true, worktreeBase: "main", mergeTargetBranch: "main",
       createdAt: stamp, updatedAt: stamp });
-    assert.equal((await acceptTask(taskId)).accepted, false);
-    const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId)))[0]!;
-    await whenAcceptGateSettled(row.id);
-    const fresh = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, row.id)))[0]!;
-    assert.equal(fresh.status, "failed");
-    assert.equal(fresh.failure, "spawn_failed");
-    assert.equal(fresh.pid, null);
-    assert.equal(fresh.processPending, false);
+    const rejected = await acceptTask(taskId);
+    assert.equal(rejected.accepted, false);
+    if (!rejected.accepted) assert.equal(rejected.reason, "accept_gate_unavailable");
+    assert.equal((await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId))).length, 0);
     assert.equal(hasLiveAcceptGate(taskId), false);
     assert.equal(existsSync(marker), false);
-    assert.match(readFileSync(fresh.logPath, "utf8"), /macOS.*内核围栏/);
-    assert.equal((await acceptGateState(taskId)).latest?.status, "failed");
-    for (let attempt = 0; attempt < 200; attempt++) {
-      const current = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
-      if (current.status === "running") break;
-      await new Promise(resolve => setTimeout(resolve, 25));
-    }
-    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, taskId));
-    releaseTurn(taskId);
+    const state = await acceptGateState(taskId);
+    assert.equal(state.latest, null);
+    assert.match(state.unavailable!, /macOS.*内核围栏/);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const current = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
+    assert.equal(current.status, "done", "未执行不能叫醒智能体修测试");
+    const project = (await db.select().from(projects).where(eq(projects.id, projectId)))[0]!;
+    assert.equal(await acceptGateWouldRun(current, project), false);
+    const runRoot = process.env.ASH_RUNS_DIR!;
+    assert.equal(existsSync(join(runRoot, taskId)) && readdirSync(join(runRoot, taskId)).some(name => name.endsWith(".source")), false);
     const skipped = await acceptTask(taskId, "human", { acceptGate: "skip" });
     assert.equal(skipped.accepted, true, JSON.stringify(skipped));
     const accepted = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
     assert.equal(accepted.acceptedGateMode, "skipped");
     assert.equal(existsSync(workspace), false);
     assert.equal(existsSync(marker), false);
-    return { mode: "macos-production-refusal", statusPersisted: fresh.status, failure: fresh.failure,
-      processPending: fresh.processPending, userCommandExecuted: false, hintPersisted: true,
+    return { mode: "macos-production-refusal", statusPersisted: "not-executed", failedRuns: 0,
+      processPending: false, agentWoken: false, snapshotCreated: false, userCommandExecuted: false, hintPersisted: true,
       explicitSkipAccepted: skipped.accepted, acceptedGateMode: accepted.acceptedGateMode };
   } finally { await releaseTmpDb(); }
 }

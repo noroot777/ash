@@ -1,10 +1,17 @@
-import { execFileSync } from "node:child_process";
+import { execFileText } from "./exec.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export function gateJobSupervisorExecutable(): string {
+let compiling: Promise<string> | null = null;
+
+export function gateJobSupervisorExecutable(): Promise<string> {
+  if (!compiling) compiling = compileGateJobSupervisor().finally(() => { compiling = null; });
+  return compiling;
+}
+
+async function compileGateJobSupervisor(): Promise<string> {
   const directory = join(tmpdir(), "ash-accept-gate");
   mkdirSync(directory, { recursive: true });
   const digest = createHash("sha256").update(GATE_JOB_SUPERVISOR).digest("hex");
@@ -14,9 +21,8 @@ export function gateJobSupervisorExecutable(): string {
   const script = `$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n${GATE_JOB_SUPERVISOR}\n'@`
     + ` -OutputAssembly '${temporary.replace(/'/g, "''")}' -OutputType WindowsApplication`;
   try {
-    execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64")], { timeout: 20_000, windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"] });
+    await execFileText("powershell", ["-NoProfile", "-NonInteractive", "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64")], { timeout: 20_000 });
     try { renameSync(temporary, executable); }
     catch (error) { if (!existsSync(executable)) throw error; }
     return executable;

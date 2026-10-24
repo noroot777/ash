@@ -4,9 +4,16 @@
 // 没有共享状态 —— 它们只认 taskId。
 import type { Hono } from "hono";
 import { acceptGateLogText } from "./accept-gate-process.js";
-import { acceptGateRunOf, acceptGateState, cancelAcceptGate, rehandOffAcceptGate } from "./accept-gate.js";
+import { acceptGateRunOf, acceptGateState, cancelAcceptGate, forceReleaseAcceptGate, rehandOffAcceptGate } from "./accept-gate.js";
 
 export function mountAcceptGateRoutes(api: Hono): void {
+  api.post("/tasks/:id/accept-gate/force-release", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body.runId !== "string" || !body.runId.trim()
+      || body.confirmation !== "release-without-exit-proof") return c.json({ error: "需要指定 runId 并显式确认无退出证据仍强制释放的风险" }, 400);
+    const result = await forceReleaseAcceptGate(c.req.param("id"), body.runId);
+    return result.ok ? c.json(result) : c.json(result, 409);
+  });
   // 验收台要的那一份：这个项目设没设门禁、上一次跑成什么样、那次结果对现在这棵树还作不作数。
   api.get("/tasks/:id/accept-gate", async (c) => c.json(await acceptGateState(c.req.param("id"))));
 

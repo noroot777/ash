@@ -28,6 +28,10 @@ try {
   rmSync(join(repo, "untracked.txt"));
   mkdirSync(join(repo, "node_modules", "dep"), { recursive: true });
   writeFileSync(join(repo, "node_modules", "dep", "index.js"), "dependency v1");
+  for (const dependency of [".venv", "vendor", "target"]) {
+    mkdirSync(join(repo, dependency));
+    writeFileSync(join(repo, dependency, "dependency.txt"), `${dependency} independent input`);
+  }
   writeFileSync(join(repo, "ignored.env"), "not supplied to tests");
   const source = await readGateSource(repo);
   const snapshot = join(root, "snapshot");
@@ -36,6 +40,11 @@ try {
   assert.equal(git(snapshot, "remote"), "");
   assert.equal(existsSync(join(snapshot, "ignored.env")), false);
   assert.equal(readFileSync(join(snapshot, "value.txt"), "utf8"), "broken");
+  for (const dependency of [".venv", "vendor", "target"]) {
+    assert.equal(readFileSync(join(snapshot, dependency, "dependency.txt"), "utf8"), `${dependency} independent input`);
+    writeFileSync(join(snapshot, dependency, "dependency.txt"), "test output");
+    assert.equal(readFileSync(join(repo, dependency, "dependency.txt"), "utf8"), `${dependency} independent input`);
+  }
   writeFileSync(join(repo, "value.txt"), "fixed");
   assert.equal(readFileSync(join(snapshot, "value.txt"), "utf8"), "broken", "live workspace changes cannot change tested source");
   assert.equal(await verifyGateSnapshot(snapshot, source), true);
@@ -66,11 +75,16 @@ try {
     const borrowed = join(root, "borrowed-dependencies");
     mkdirSync(borrowed);
     writeFileSync(join(borrowed, "dep.js"), "borrowed v1");
+    symlinkSync(borrowed, join(borrowed, "self"));
+    symlinkSync(join(root, "missing-dependency"), join(borrowed, "broken"));
     symlinkSync(borrowed, join(repo, "node_modules"));
     const borrowedSource = await readGateSource(repo);
     const copy = join(root, "borrowed-snapshot");
     await createGateSnapshot(repo, copy, borrowedSource);
     assert.equal(lstatSync(join(copy, "node_modules")).isSymbolicLink(), false);
+    assert.equal(existsSync(join(copy, "node_modules", "self")), false, "环按相同规则从摘要和副本中剪除");
+    assert.equal(existsSync(join(copy, "node_modules", "broken")), false, "不保留指回原工作区的断链");
+    assert.equal((await readGateSource(copy)).fingerprint, borrowedSource.fingerprint);
     writeFileSync(join(borrowed, "dep.js"), "borrowed v2");
     assert.equal(readFileSync(join(copy, "node_modules", "dep.js"), "utf8"), "borrowed v1");
   }

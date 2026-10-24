@@ -170,7 +170,7 @@ async function runAccept(task: TaskRow, def: WorkflowDef | null, step: WorkflowS
   if (result.reason === "accept_gate_required" || result.reason === "accept_gate_running") {
     await appendTaskTimeline(
       task.id,
-      "这条线走到「合并并清理」，但这个项目设了验收前置命令：先在任务工作区里跑一遍它，rc=0 才合。"
+      "这条线走到「合并并清理」，但这个项目设了验收前置命令：先在独立源码快照里跑一遍它，rc=0 且整次退出已确认才合。"
         + "这一站就停在这儿等它 —— 绿了会自动合完并接着往下走，红了会把日志交回这个任务去修。",
     );
     return { ok: false, halted: true, failed: step, reason: result.error };

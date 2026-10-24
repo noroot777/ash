@@ -8,7 +8,9 @@ import { acceptGateRuns, projects, tasks } from "../src/db/schema.js";
 import { acceptTask } from "../src/task-accept.js";
 import { acceptGateState, cancelAcceptGate, hasLiveAcceptGate, recoverAcceptGates, stopAcceptGatesForTask } from "../src/accept-gate.js";
 import { forgetGateProcess, hasStoppingGateProcess } from "../src/accept-gate-ownership.js";
-import { gateLaunchPath } from "../src/accept-gate-launch.js";
+import { gateLaunchPath, readGateLaunch, writeGateLaunch } from "../src/accept-gate-launch.js";
+import { acceptGateCheck } from "../src/accept-gate.js";
+import { discardPendingAcceptanceGate } from "../src/task-accept-gate-launch.js";
 import { mountAcceptGateRoutes } from "../src/accept-gate-routes.js";
 import { acceptGateLogTail, acceptGateLogText, spawnAcceptGate } from "../src/accept-gate-process.js";
 import { taskBusyRejection } from "../src/task-busy.js";
@@ -117,10 +119,14 @@ export async function testGateLifecycle(fixture: GateFixture): Promise<void> {
     const taskId = "gate-recover-terminal";
     const workspace = await seedTask(projectId, repo, taskId, "terminal.txt");
     const childFile = join(root, "recover-terminal.pid");
-    const started = spawnAcceptGate({
+    const started = await spawnAcceptGate({
       command: `sh -c 'trap "" TERM; echo $$ > ${childFile}; sleep 120' & sleep 120`,
       cwd: workspace, logPath: join(root, "recover-terminal.log"), onExit: () => {},
     });
+    const legacyLog = join(root, "recover-terminal.log");
+    const legacy = readGateLaunch(legacyLog)!;
+    delete legacy.confinementEnrolled;
+    writeGateLaunch(legacyLog, legacy);
     await until(() => existsSync(childFile));
     const child = Number(readFileSync(childFile, "utf8").trim());
     const runId = "recover-terminal-run";
@@ -145,7 +151,7 @@ export async function testGateLifecycle(fixture: GateFixture): Promise<void> {
     const projectId = await seedProject("stop-unconfirmed", repo, null);
     const taskId = "gate-stop-unconfirmed";
     const workspace = await seedTask(projectId, repo, taskId, "unconfirmed.txt");
-    const started = spawnAcceptGate({ command: "sleep 120", cwd: workspace,
+    const started = await spawnAcceptGate({ command: "sleep 120", cwd: workspace,
       logPath: join(root, "unconfirmed.log"), onExit: () => {} });
     rmSync(gateLaunchPath(join(root, "unconfirmed.log")));
     const runId = "stop-unconfirmed-run";
@@ -162,14 +168,52 @@ export async function testGateLifecycle(fixture: GateFixture): Promise<void> {
       assert.equal((await acceptTask(taskId, "human", { acceptGate: "skip" })).accepted, false);
       assert.ok(await taskBusyRejection(taskId, "删除"));
       assert.equal((await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId)))[0].processPending, true);
+      const api = new Hono();
+      mountAcceptGateRoutes(api);
+      const releaseUrl = `/tasks/${taskId}/accept-gate/force-release`;
+      const releaseRequest = (body: object) => api.request(releaseUrl, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      assert.equal((await releaseRequest({ runId })).status, 400, "没有明确风险确认不得释放");
+      assert.equal((await releaseRequest({ runId: "other-task-run", confirmation: "release-without-exit-proof" })).status, 409);
+      await dbClient.execute(`CREATE TRIGGER reject_gate_waiver BEFORE UPDATE OF failure ON accept_gate_runs
+        WHEN OLD.id = '${runId}' BEGIN SELECT RAISE(FAIL, 'waiver persistence failure'); END`);
+      try {
+        assert.equal((await releaseRequest({ runId, confirmation: "release-without-exit-proof" })).status, 500);
+        assert.equal(hasLiveAcceptGate(taskId), true, "保存风险确认失败时占用必须保留");
+      } finally { await dbClient.execute("DROP TRIGGER reject_gate_waiver"); }
+      const release = await releaseRequest({ runId, confirmation: "release-without-exit-proof" });
+      assert.equal(release.status, 200);
+      assert.equal((await release.json()).gate.failure, "ownership_waived");
+      assert.equal(alive(started.pid), true, "显式放弃停止责任不等于向不明身份进程发送信号");
+      assert.equal(hasLiveAcceptGate(taskId), false);
+      await recoverAcceptGates();
+      assert.equal(hasLiveAcceptGate(taskId), false, "人工放弃应跨刷新和重启保持，但不是内核退出证据");
+      assert.match((await acceptGateState(taskId)).latest!.logTail, /强制释放.*未取得整次退出证据/);
+      assert.equal((await releaseRequest({ runId, confirmation: "release-without-exit-proof" })).status, 200);
     } finally {
       killTree(started.pid, "SIGKILL");
       await until(() => !alive(started.pid));
     }
-    assert.equal((await acceptTask(taskId)).accepted, false, "仅根进程退出仍无法证明失去归属记录的 detached 后代退出");
-    assert.equal((await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId)))[0].processPending, true);
-    await db.delete(acceptGateRuns).where(eq(acceptGateRuns.id, runId));
-    forgetGateProcess(runId);
+    assert.equal((await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId)))[0].failure, "ownership_waived");
+    assert.equal((await acceptTask(taskId)).accepted, true, "停止证据无法恢复的旧记录有明确风险确认的出路，不靠删库");
+  }
+
+  {
+    const repo = makeRepo("pending-exception");
+    const projectId = await seedProject("pending-exception", repo, "sleep 120");
+    const taskId = "gate-pending-exception";
+    await seedTask(projectId, repo, taskId, "pending.txt");
+    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+    const project = (await db.select().from(projects).where(eq(projects.id, projectId)))[0];
+    assert.equal((await acceptGateCheck(task, project, { choices: { by: "human" }, onBasis() {} }))?.reason, "accept_gate_required");
+    assert.equal(hasLiveAcceptGate(taskId), true);
+    await discardPendingAcceptanceGate(taskId, new Error("injected after registration"));
+    assert.equal(hasLiveAcceptGate(taskId), false);
+    assert.equal((await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId))).length, 0);
+    const retry = await acceptTask(taskId);
+    assert.equal(retry.accepted, false);
+    if (!retry.accepted) assert.ok(retry.gate);
+    await cancelAcceptGate(taskId);
   }
 
   {

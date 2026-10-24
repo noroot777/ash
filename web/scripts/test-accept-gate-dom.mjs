@@ -116,6 +116,15 @@ try {
       store.gate = { ...store.gate, latest: { ...store.gate.latest, handoff: { at: new Date().toISOString(), error: null } } };
       return json(route, { handedOff: true, gate: store.gate.latest });
     });
+    await page.route("**/api/tasks/gate-task/accept-gate/force-release", route => {
+      const body = JSON.parse(route.request().postData());
+      assert.equal(body.runId, store.gate.running.id);
+      assert.equal(body.confirmation, "release-without-exit-proof");
+      store.released = (store.released ?? 0) + 1;
+      store.gate = { ...store.gate, running: null, latest: { ...store.gate.running,
+        status: "interrupted", failure: "ownership_waived", processPending: false } };
+      return json(route, { ok: true, gate: store.gate.latest });
+    });
     await page.route("**/api/tasks/gate-task/accept-gate", async (route) => {
       const plan = states?.[store.reads] ?? null;
       store.reads += 1;
@@ -522,6 +531,41 @@ try {
     await missing.waitFor();
     assert.equal(await missing.isDisabled(), true);
     if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/handoff-log-unavailable.png`, fullPage: true });
+    await page.close();
+  }
+  {
+    const { page, store } = await open({ gate: { command: "npm test", running: null, latest: null,
+      unavailable: "macOS 没有整次运行内核围栏，本机未执行；请换机或明确跳过" } });
+    const card = page.locator(".accept-gate-card");
+    await card.getByText("验收前置命令未执行：本机能力不可用").waitFor();
+    assert.equal(await card.locator(".is-spinning").count(), 0);
+    assert.equal(store.handoffs, 0);
+    await card.getByRole("button", { name: "这次跳过它，直接合并" }).click();
+    assert.equal(await page.getByLabel("验收意图").innerText(), "skip");
+    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-not-executed.png`, fullPage: true });
+    await page.close();
+  }
+  for (const wait of [false, true]) {
+    const pending = run({ status: "failed", failure: "process_unconfirmed", processPending: true });
+    const { page, store } = await open({ gate: { command: pending.command, running: pending, latest: pending }, query: wait ? "?wait=1" : "" });
+    const card = page.locator(wait ? ".accept-gate-wait" : ".accept-gate-card");
+    await card.waitFor();
+    if (wait) {
+      assert.match(await card.innerText(), /等待退出证据/);
+      assert.equal(await card.locator(".is-spinning").count(), 0);
+      await page.locator(".wait-bar__bar").click();
+    }
+    await card.getByRole("button", { name: "停止证据丢失？确认风险并强制释放…" }).click();
+    assert.equal(store.released ?? 0, 0, "展开风险说明不是确认释放");
+    await card.getByRole("button", { name: "保留保护" }).click();
+    assert.equal(store.released ?? 0, 0);
+    await card.getByRole("button", { name: "停止证据丢失？确认风险并强制释放…" }).click();
+    assert.match(await card.getByRole("alert").innerText(), /不等于停止或测试通过/);
+    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/force-release-confirm-${wait ? "wait" : "card"}.png`, fullPage: true });
+    await card.getByRole("button", { name: "我确认风险，强制释放本次占用" }).click();
+    await page.getByRole("status", { name: "操作结果" }).filter({ hasText: "没有取得退出证据" }).waitFor();
+    assert.equal(store.released, 1);
+    assert.equal(store.gate.latest.failure, "ownership_waived");
     await page.close();
   }
   console.log("accept gate card DOM regression passed");

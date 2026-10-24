@@ -46,7 +46,7 @@ if (process.argv[2] === "child") {
     writeFileSync(preload, `require('node:fs').appendFileSync(${JSON.stringify(`${directory}.preload`)}, String(process.pid)+'\\n');`);
     process.env.NODE_OPTIONS = `--require=${JSON.stringify(preload)}`;
   }
-  const started = spawnAcceptGate({ command: `"${process.execPath}" "${script}"`,
+  const started = await spawnAcceptGate({ command: `"${process.execPath}" "${script}"`,
     cwd: process.cwd(), logPath: `${directory}.log`, hold: mode === "controller-preload", onExit: exit => {
       if (mode === "settle") void stopAcceptGate("process-test", null, null, `${directory}.log`)
         .then(stopped => settled({ code: exit.code, stopped }));
@@ -54,7 +54,7 @@ if (process.argv[2] === "child") {
   if (mode === "controller-preload") {
     await sleep(200);
     assert.equal(existsSync(`${directory}.preload`), false, "用户 preload 不能在内核圈定前运行");
-    assert.equal(started.authorize(), true);
+    assert.equal(await started.authorize(), true);
   }
   const deadline = Date.now() + 20_000;
   while (!existsSync(`${directory}.pulse`)) {

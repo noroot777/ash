@@ -6,6 +6,7 @@ import type { Task, TaskListItem } from "@ash/shared";
 import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { api } from "../lib/api.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
+import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 
 // 「验收前置命令」在验收台上的那张卡。它跟 PendingMergeCard 一样住在每个有验收动作的
 // 表面上，自己判要不要出现。
@@ -168,7 +169,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
       // 回执的调子只由凭据决定：通过是绿的；明确跳过是琥珀（红表示「现在有东西拦着你」，
       // 而这时什么都没拦着，只是那条红没人修）；那一刻没设门禁则是中性的一句陈述。
       ? receipt.mode === "passed" ? "is-passed" : receipt.mode === "skipped" ? "is-skipped" : ""
-      : settled ? ""
+      : settled || state.unavailable || state.sourceError ? ""
         : !latest ? ""
           : latest.status === "passed" ? (!latest.stale ? "is-passed" : "")
             : latest.status === "failed" ? "is-failed" : "";
@@ -176,7 +177,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
     <section className={`accept-gate-card ${idle ? "is-idle" : tone}`} aria-label="验收前置命令">
       <header>
         <span>{running
-          ? <SpinnerGap size={14} className="is-spinning" />
+          ? running.status === "running" ? <SpinnerGap size={14} className="is-spinning" /> : <WarningCircle size={14} weight="fill" />
           : receipt
             ? receipt.mode === "passed" ? <CheckCircle size={14} weight="fill" /> : <WarningCircle size={14} weight="fill" />
             : settled
@@ -192,7 +193,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
         <div>
           <b>{idle ? "这个项目没设验收前置命令" : heading(state, running, latest, receipt, settled, runningFor)}</b>
           <p>{idle
-            ? "设一条之后，点「验收通过」会先在任务工作区里跑它，rc=0 才合并 ——「进 main 之前跑一次全量回归」这类事就不用靠人记着哪一轮是最后一轮了。"
+            ? "设一条之后，点「验收通过」会先在独立源码快照里跑它，rc=0 且整次退出已确认才合并。"
             : detail(state, running, latest, receipt, settled)}</p>
           {error && <p role="alert">状态读取失败：{error}（下面这份可能已经不是最新的）</p>}
         </div>
@@ -220,7 +221,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
           />
           <small>
             这是<b>项目设置</b>：改完对这个项目之后的每一次验收都生效，不只这一个任务
-            （和「设置 → 项目设置 → 验收」里那一格是同一个）。命令跑在任务自己的工作区里。
+            （和「设置 → 项目设置 → 验收」里那一格是同一个）。命令跑在独立源码快照里，不使用未提交文件或未纳入的本地配置。
           </small>
         </div>
       )}
@@ -240,7 +241,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
               </button>
             ) : latest && latest.status !== "passed" && !settled ? (
               <>
-                <button type="button" disabled={busy || disabled} onClick={() => onIntent("rerun", latest)}>
+                <button type="button" disabled={busy || disabled || !!state.unavailable} onClick={() => onIntent("rerun", latest)}>
                   <ArrowClockwise size={13} />重跑一次
                 </button>
                 <button type="button" disabled={busy || disabled} onClick={() => onIntent("skip", latest)}>
@@ -248,7 +249,9 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
                 </button>
               </>
             ) : null}
-            {latest?.status === "failed" && !running && !settled && (
+            {state.unavailable && !running && !settled && !latest && <button type="button" disabled={busy || disabled} onClick={() => onIntent("skip", null)}>这次跳过它，直接合并</button>}
+            {running && running.status !== "running" && running.processPending && <AcceptGateForceRelease key={running.id} taskId={task.id} runId={running.id} reload={reload} notify={notify} />}
+            {latest?.status === "failed" && !running && !settled && !state.unavailable && (
               <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>
                 <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
               </button>
@@ -295,6 +298,8 @@ function heading(
     return "本次验收没有经过验收前置命令";
   }
   if (settled) return "这次验收没有留下门禁凭据";
+  if (state.unavailable) return "验收前置命令未执行：本机能力不可用";
+  if (state.sourceError) return "验收前置命令未执行：源码输入不可用";
   if (!latest) return "这个项目设了验收前置命令";
   if (latest.status === "passed") {
     if (!latest.stale) return "验收前置命令已通过";
@@ -316,6 +321,8 @@ function detail(
       + "不用再点；红了会把日志交回这个任务的智能体去修，目标分支一个字节都不会动。";
   }
   if (receipt) return receiptDetail(receipt, state, latest);
+  if (!settled && state.unavailable) return state.unavailable;
+  if (!settled && state.sourceError) return state.sourceError;
   if (settled) {
     // 凭据是后来才开始记的。老数据只能如实说「不知道」—— 拿「最近一次」替它背书，正是
     // 第 1 轮审查实测出来的那条假回执。

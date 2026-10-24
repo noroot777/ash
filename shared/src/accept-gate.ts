@@ -8,12 +8,12 @@
 // 判据只有一条:**rc=0 才合并**。非 0 不合并、不清理、目标分支一个字节不动,日志回流给
 // agent 去修 —— 跟「验收撞冲突叫醒 agent」是同一套退路。
 //
-// 跑的是**任务工作区当前那棵树**。fast-forward 时它就是合并结果;目标分支此后前进过,
+// 跑的是**任务已提交源码的独立快照**。fast-forward 时它就是合并结果;目标分支此后前进过,
 // 被测树就不等于合并结果 —— 那时只如实记一行,不拦(活跃仓库上拦就是永远验收不了)。
 export type AcceptGateStatus = "running" | "passed" | "failed" | "interrupted" | "canceled";
 
 /** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
-export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed";
+export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -31,6 +31,7 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   canceled: "你取消了这一次",
   source_changed: "测试修改了被测源码，不能用结果为原版本放行",
   process_unconfirmed: "尚未取得整次运行退出的证据",
+  ownership_waived: "已确认风险并强制释放，未取得整次退出证据",
 };
 
 export interface AcceptGateView {
@@ -141,6 +142,8 @@ export type AcceptGateBasis = {
 
 /** GET /tasks/:id/accept-gate:这个项目设没设门禁、现在跑没跑、上一次跑成什么样。 */
 export type AcceptGateState = {
+  unavailable?: string | null;
+  sourceError?: string | null;
   /** 项目设置里的那条命令;null = 这个项目没设门禁。 */
   command: string | null;
   running: AcceptGateView | null;
