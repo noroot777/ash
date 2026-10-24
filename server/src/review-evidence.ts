@@ -163,10 +163,14 @@ export async function writeConclusion(
   round: number,
   reviewTaskId: string | null,
   conclusion: ReviewConclusion,
+  strict = false,
 ): Promise<void> {
   if (!conclusion) return;
   const dir = reviewRoundDir(targetId, round);
-  if (!(await safeRunDirectory(dir, true))) return;
+  if (!(await safeRunDirectory(dir, true))) {
+    if (strict) throw new Error("审查结论目录安全检查不通过");
+    return;
+  }
   const file = join(dir, "conclusion.json");
   try {
     const handle = await open(
@@ -185,6 +189,7 @@ export async function writeConclusion(
     // A conclusion is immutable once recorded. EEXIST also covers a malicious
     // final symlink without following or overwriting its target.
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if (strict && await readConclusion(targetId, round) !== conclusion) throw new Error("审查结论文件不可读或与持久结论不一致");
   }
 }
 

@@ -29,7 +29,7 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
   expected?: boolean;
   notify: (message: string) => void;
 }) {
-  const { running, runningFor, error, reload } = useAcceptGate(taskId);
+  const { running, runningFor, error, stale, reload } = useAcceptGate(taskId);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // 全文按**哪一次**缓着：同一个任务又跑一次之后，上一次的全文不能接着摆在那儿
@@ -38,13 +38,13 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
   const bodyId = useId();
   // 读不出来、但服务端说有在跑：如实说「读不出来」并给一颗重试，不装作没在跑。
   if (!running) {
-    if (!expected || !error) return null;
+    if (!error) return null;
     return (
       <section className="wait-bar accept-gate-wait" aria-label="验收前置命令">
         <div className="wait-bar__bar">
           <WarningCircle size={13} weight="fill" aria-hidden="true" />
-          <b>验收前置命令在跑</b>
-          <span className="wait-bar__brief">状态读不出来：{error}</span>
+          <b>验收前置命令状态待核对</b>
+          <span className="wait-bar__brief" role="alert">状态读不出来：{error}{expected ? "（任务列表上次显示正在跑）" : ""}</span>
           <button type="button" className="wait-bar__retry" disabled={busy} onClick={() => void reload()}>
             <ArrowClockwise size={11} aria-hidden="true" />重试
           </button>
@@ -81,6 +81,7 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
 
   return (
     <section className={`wait-bar accept-gate-wait${open ? " is-open" : ""}`} aria-label="验收前置命令">
+      <div className="wait-bar__summary">
       <button
         type="button"
         className="wait-bar__bar"
@@ -88,12 +89,20 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
         aria-controls={bodyId}
         onClick={() => setOpen((current) => !current)}
       >
-        {running.status === "running" ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <WarningCircle size={13} aria-hidden="true" />}
-        <b>{running.status === "running" ? "验收前置命令在跑" : "验收前置命令尚待停止"}</b>
+        {stale || running.status !== "running" ? <WarningCircle size={13} aria-hidden="true" />
+          : <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />}
+        <b>{stale ? "验收前置命令状态待核对" : running.status === "running" ? "验收前置命令在跑" : "验收前置命令尚待停止"}</b>
         <span className="wait-bar__brief">{running.command}</span>
-        <span className="wait-bar__when">{running.status === "running" ? `已经 ${runningFor}` : "等待退出证据"}</span>
+        <span className="wait-bar__when">{running.status !== "running" ? "等待退出证据" : `${stale ? "上次读取时 " : "已经 "}${runningFor}`}</span>
         <CaretDown size={11} weight="bold" className="wait-bar__caret" aria-hidden="true" />
       </button>
+      <button type="button" className="wait-bar__retry" disabled={busy} onClick={() => void reload()}>
+        <ArrowClockwise size={11} aria-hidden="true" />刷新状态
+      </button>
+      </div>
+      {stale && <p className="wait-bar__note" role={error ? "alert" : "status"}>
+        {error ? `状态读取失败：${error}，会有限次数自动重试，也可手动刷新；` : "正在重新核对状态；"}以下为上次读取的记录，不能确认仍在运行。
+      </p>}
       {open && (
         <div className="wait-bar__body" id={bodyId}>
           {(shownLog ?? running.logTail) && (

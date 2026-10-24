@@ -1,7 +1,7 @@
 // 验证「重启接管」的接线本身（detached 机制的存活性由 test-detached-survival 证明）。
 //
 // 用真数据库 + 真进程走一遍实际代码路径：
-//   ① 建一个 running 的任务，用 spawnDetachedAgent 起一个仍在输出的假 agent，
+//   ① 建一个 running 的任务，用 spawnForRun（生产入口，按平台分派）起一个仍在输出的假 agent，
 //      按 orchestrator 的写法把 pid / 启动时间 / 落盘路径 / offset 存进 sessions
 //   ② 调 reattachRunningTasks()：应当认回它、注册进 runs（isRunning 为真）
 //   ③ 调 reconcileInterrupted()：**绝不能**把它判成 failed
@@ -18,7 +18,8 @@ import { eq } from "drizzle-orm";
 
 const { ensureSchema, db } = await import("../src/db/index.js");
 const { tasks, projects, sessions } = await import("../src/db/schema.js");
-const { spawnControllableDetachedAgent, spawnDetachedAgent, detachedPathsFor } = await import("../src/executors/detached.js");
+const { spawnControllableForRun, spawnForRun, detachedPathsFor } = await import("../src/executors/detached.js");
+const { IS_WINDOWS, killTree } = await import("../src/platform.js");
 const { CodexExecutor } = await import("../src/executors/codex.js");
 const { readCodexAppServerState } = await import("../src/executors/codex-app-server.js");
 const { inspectProcess } = await import("../src/proc.js");
@@ -32,18 +33,26 @@ await ensureSchema();
 const dir = mkdtempSync(join(tmpdir(), "ash-reattach-"));
 const TOTAL = 20;
 const agentScript = join(dir, "agent.mjs");
+/** 「普通假 agent 可以收工了」的信号(⑤ 放行时写出来)。 */
+const liveGoFile = join(dir, "live-go");
 const steerAgentScript = join(dir, "steer-agent.mjs");
 const codexAppScript = join(dir, "codex-app.mjs");
 // 冒充 claude 的 stream-json。**正文必须走 stream_event 增量**：claude 开了
 // --include-partial-messages 后正文由 content_block_delta 流出，parseClaudeStream
 // 刻意不再从尾随的完整 assistant 消息里取文本（否则每段会重复一遍）。
 // 第一版测试桩只发了 assistant 消息，结果 .md 全空——那是桩写错，不是代码错。
+// 它**不按时长收工,按信号收工**:前 5 段照常吐(makeCase 要的「重启前已有部分输出」),
+// 然后停在那儿等 ⑤ 放行。原先是 20 段 × 100ms = 2 秒就自己退 —— 在真 Windows 上
+// 「造用例 + codex 握手」那几秒走完,这个「活着的 agent」早没了,于是②③⑤ 一起红在一个
+// 跟产品无关的理由上(实测:接管集合里只有两个 steer 用例)。
 writeFileSync(
   agentScript,
-  `let i = 0;
+  `import { existsSync } from "node:fs";
+let i = 0;
 const emit = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
 emit({type:"system",session_id:"cli-sess-1"});
 const t = setInterval(() => {
+  if (i >= 5 && !existsSync(${JSON.stringify(liveGoFile)})) return;
   i++;
   emit({type:"stream_event",event:{type:"content_block_delta",delta:{type:"text_delta",text:"第"+i+"段\\n"}}});
   if (i >= ${TOTAL}) {
@@ -140,13 +149,21 @@ let bad = 0;
 const cleanupPids = new Set<number>();
 process.on("exit", () => {
   for (const pid of cleanupPids) {
-    try { process.kill(-pid, "SIGKILL"); } catch { /* 已退出 */ }
+    // Windows 没有进程组,整树强杀(taskkill /T /F)是那边的等价物。
+    if (IS_WINDOWS) killTree(pid, "SIGKILL");
+    else try { process.kill(-pid, "SIGKILL"); } catch { /* 已退出 */ }
   }
 });
 const fail = (m: string) => { console.log("   ✕ " + m); bad++; };
 const okLine = (m: string) => console.log("   ✓ " + m);
 
+/**
+ * 伪造一条**中文 locale 的 `ps lstart`** 文本:验的是「落库那一刻和读取那一刻 locale 不同,
+ * 但指向同一秒,仍必须接管」。这是 POSIX 专属形状 —— Windows 上启动时刻来自
+ * `Win32_Process.CreationDate`,一律是 ISO 文本,没有 locale 这一维,所以那边原样用真值。
+ */
 function macChineseStart(pid: number): string | null {
+  if (IS_WINDOWS) return inspectProcess(pid)?.startedAt ?? null;
   const ms = inspectProcess(pid)?.startedAtMs;
   if (ms === null || ms === undefined) return null;
   const d = new Date(ms);
@@ -166,7 +183,7 @@ async function makeCase(taskId: string, live: boolean) {
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
   const paths = detachedPathsFor(runDir, sessId, "T0");
-  const child = spawnDetachedAgent(dir, process.execPath, [agentScript], "", paths);
+  const child = spawnForRun(dir, process.execPath, [agentScript], "", undefined, paths);
   const pid = child.pid!;
   cleanupPids.add(pid);
   // 让它先吐几行再「重启」，这样接管时确实有历史内容与未读内容之分。
@@ -203,7 +220,7 @@ async function makeClaudeSteerCase() {
   mkdirSync(runDir, { recursive: true });
   const paths = detachedPathsFor(runDir, sessId, "T0");
   const initial = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: "OLD" }] } }) + "\n";
-  const child = spawnControllableDetachedAgent(dir, process.execPath, [steerAgentScript], initial, paths);
+  const child = spawnControllableForRun(dir, process.execPath, [steerAgentScript], initial, undefined, paths);
   cleanupPids.add(child.pid!);
   await new Promise((resolve) => setTimeout(resolve, 200));
   await db.insert(sessions).values({
@@ -224,8 +241,16 @@ async function makeCodexSteerCase() {
   const paths = detachedPathsFor(runDir, sessId, "T0");
   // node 的第一个非 flag 参数会被当脚本；App Server 固定参数不能这样装，因此这里用
   // 一个很薄的可执行 shim，让真实 CodexExecutor 仍走 runSteerable 生产路径。
-  const shim = join(dir, "fake-codex");
-  writeFileSync(shim, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(codexAppScript)} "$@"\n`, { mode: 0o755 });
+  // Windows 上没有 shebang 这一档,等价物是一个 `.cmd` 垫片(`%*` 原样转发参数),
+  // 而 resolveLaunch 认得它、会按 cmd.exe 的规则起 —— 跟真 CLI 装出来的垫片同一条路。
+  const shim = join(dir, IS_WINDOWS ? "fake-codex.cmd" : "fake-codex");
+  writeFileSync(
+    shim,
+    IS_WINDOWS
+      ? `@echo off\r\n"${process.execPath}" "${codexAppScript}" %*\r\n`
+      : `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(codexAppScript)} "$@"\n`,
+    { mode: 0o755 },
+  );
   const realExecutor = new CodexExecutor({ bin: shim });
   const handle = realExecutor.runSteerable({ cwd: dir, prompt: "OLD", detach: paths });
   cleanupPids.add(handle.detached!.pid);
@@ -297,7 +322,8 @@ if (!codexSteerMd.includes("CODEX-STEERED") || !codexSteerMd.includes("CODEX-NEW
 } else okLine("Codex 接管后仍可 turn/steer");
 
 console.log("⑤ 等普通假 agent 自然结束，看接管之后的输出有没有落进 .md");
-for (let i = 0; i < 60 && isRunning(LIVE); i++) await new Promise((r) => setTimeout(r, 200));
+writeFileSync(liveGoFile, "1"); // 放行:它这才把剩下的段吐完、自己退出(见 agentScript 顶部)
+for (let i = 0; i < 100 && isRunning(LIVE); i++) await new Promise((r) => setTimeout(r, 200));
 const mdPath = join(RUNS_DIR, LIVE, `${liveCase.sessId}.md`);
 const md = existsSync(mdPath) ? readFileSync(mdPath, "utf8") : "";
 const seen = [...md.matchAll(/第(\d+)段/g)].map((m) => Number(m[1]));
@@ -431,10 +457,17 @@ console.log("⑦ 句柄构造之前失败:后代要收、责任要交出去");
   const runDir = join(RUNS_DIR, RAW);
   mkdirSync(runDir, { recursive: true });
   const paths = detachedPathsFor(runDir, sessId, "T0");
-  const child = spawnDetachedAgent(dir, process.execPath, [rawAgentScript], "", paths);
+  const child = spawnForRun(dir, process.execPath, [rawAgentScript], "", undefined, paths);
   const rootPid = child.pid!;
   cleanupPids.add(rootPid);
-  await new Promise((r) => setTimeout(r, 600));
+  // 等它把后代的 pid 写出来。**按条件轮询而不是睡固定时长**:这一组要起两层 node
+  // (壳 + 假 agent),Windows 上头一次执行刚写出来的脚本还要过一遍 Defender,固定 600ms
+  // 实测不够 —— 而超时不是产品问题,只会红在一个看不出所以然的 ENOENT 上。
+  const kidDeadline = Date.now() + 15000;
+  while (!existsSync(kidPidFile)) {
+    if (Date.now() > kidDeadline) throw new Error("假 agent 没能甩出后代(raw-kid.pid 一直没出现)");
+    await new Promise((r) => setTimeout(r, 100));
+  }
   const kidPid = Number(readFileSync(kidPidFile, "utf8"));
   cleanupPids.add(kidPid);
   assert.ok(isPidAlive(kidPid), "这一组要一个活着的后代");

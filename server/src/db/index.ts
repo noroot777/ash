@@ -9,6 +9,9 @@ import { ensureChatSchema } from "./schema-chat.js";
 import { ensureHandoffTokenUnique } from "./handoff-token-index.js";
 import { ensureFreeWorkflowSchema } from "./schema-free-workflow.js";
 import { ensureAcceptGateSchema } from "./schema-accept-gate.js";
+import { ensureTaskBackgroundSchema } from "./schema-task-background.js";
+import { ensureRegressionChecksSchema } from "./schema-regression-checks.js";
+import { ensureRegressionEvidenceSchema } from "./schema-regression-evidence.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 
 const dbFile = resolveAshDbFile();
@@ -382,6 +385,9 @@ export async function ensureSchema() {
   await ensureChatSchema(client);
   await ensureFreeWorkflowSchema(client);
   await ensureAcceptGateSchema(client);
+  await ensureTaskBackgroundSchema(client);
+  await ensureRegressionChecksSchema(client);
+  await ensureRegressionEvidenceSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。
   await runDataMigrations(client);
 }

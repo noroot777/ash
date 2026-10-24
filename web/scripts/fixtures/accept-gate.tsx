@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { AcceptGateCard } from "../../src/review/AcceptGateCard.tsx";
 import { AcceptGateWaitCard } from "../../src/review/AcceptGateWaitCard.tsx";
+import { TaskStatusDot } from "../../src/components/TaskStatusDot.tsx";
+import { useTasks } from "../../src/lib/useTasks.ts";
+import { deriveTaskStatusIndicator } from "../../src/lib/useTaskReadState.ts";
 import "../../src/styles/global.css";
 
 // 验收前置命令那两处表面的测试舞台：验收台上那张卡，以及主会话页回复框上方那条折叠条
@@ -28,18 +31,40 @@ const task = (over: Partial<Task>): Task => ({
   ...over,
 } as unknown as Task);
 
+function TaskDotsFixture() {
+  const { tasks } = useTasks();
+  return <main style={{ maxWidth: 760, padding: 24, margin: "auto" }}>
+    <h1>任务后台状态</h1>
+    {tasks.map(row => {
+      const workers = tasks.filter(worker => worker.parentId === row.id);
+      const indicator = deriveTaskStatusIndicator(row, workers);
+      return <p key={row.id} data-task-id={row.id} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        {indicator && <TaskStatusDot indicator={indicator} surface={row.mode === "team" ? "team" : "workspace"} />}
+        {row.title}
+      </p>;
+    })}
+  </main>;
+}
+
 function Fixture() {
   const params = new URLSearchParams(location.search);
   const [notice, setNotice] = useState("");
   const [intent, setIntent] = useState("");
+  const [taskId, setTaskId] = useState("gate-task");
+  const [mounted, setMounted] = useState(true);
+  if (params.get("dots") === "1") return <TaskDotsFixture />;
   if (params.get("wait") === "1") {
     return <main style={{ maxWidth: 760, padding: 24, margin: "auto" }}>
       <h1>验收前置命令卡</h1>
       <div className="task-reply-rail">
         <button type="button" className="task-reply-rail-button">派审查</button>
         {/* expected = 任务投影里那个「此刻有命令在跑」：状态读失败时这条靠它仍然出现。 */}
-        <AcceptGateWaitCard taskId="gate-task" expected={params.get("expected") === "1"} notify={setNotice} />
+        {mounted && <AcceptGateWaitCard taskId={taskId} expected={params.get("expected") === "1"} notify={setNotice} />}
       </div>
+      {params.get("switch") === "1" && <>
+        <button onClick={() => setTaskId("other-task")}>切任务</button>
+        <button onClick={() => setMounted(false)}>卸载提示</button>
+      </>}
       <p role="status" aria-label="操作结果">{notice}</p>
     </main>;
   }

@@ -13,7 +13,7 @@ import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAG
 // 的哪次改动引入的)」,而执行者两边都读得到,拿到的是互相打架的指引。
 import {
   CLASS_PROBLEM_BOUNDARY, DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
-  PLAIN_SUMMARY_GUIDE,
+  PLAIN_SUMMARY_GUIDE, REVIEW_VALIDATION_REQUIREMENT,
 } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { TASK_STAGE } from "../schemas.js";
@@ -24,15 +24,22 @@ server.registerTool(
   {
     title: "上报验证结论",
     description:
-      "在验证回合里上报与 TaskStatus 正交的验证结论，不会改变队列或任务结算。验证轮开始时后端自动置 verifying；真实运行验证后报 verified 或 verify_failed。web 改动必须启动服务、用浏览器确认行为，只读代码或只过编译不算验证；截图按需——改动看得见时必须截，看不见的改动（服务端逻辑、CLI、脚本）不需要截图，报告里贴命令与输出即可。验证现在就跑在被验任务自己身上（旁路回合），所以 taskId 填被验任务的 id——那多半就是你当前这个任务；历史的独立审查任务仍填被审任务 id，不是审查任务自己的 id。implemented/awaiting_acceptance/merged/accepted 保留给兼容与验收链路；团队调度台(mode=team)仍不适用。普通执行回合不自我上报验证阶段。",
+      "在验证回合里上报与 TaskStatus 正交的验证结论，不会改变队列或任务结算。验证轮开始时后端自动置 verifying；按验证要求得出结论后报 verified 或 verify_failed。" +
+      REVIEW_VALIDATION_REQUIREMENT +
+      "截图按需——改动看得见时必须截，看不见的改动（服务端逻辑、CLI、脚本）不需要截图，报告技术明细里贴命令与输出即可。验证现在就跑在被验任务自己身上（旁路回合），所以 taskId 填被验任务的 id——那多半就是你当前这个任务；历史的独立审查任务仍填被审任务 id，不是审查任务自己的 id。implemented/awaiting_acceptance/merged/accepted 保留给兼容与验收链路；团队调度台(mode=team)仍不适用。普通执行回合不自我上报验证阶段。",
     inputSchema: {
       taskId: z.string().describe("被验任务 id（就地验证时即当前任务；历史独立审查任务填被审任务 id）"),
       stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
+      verificationBasis: z.object({
+        kind: z.literal("independent"),
+        generation: z.string().min(1),
+        monitorIds: z.array(z.string().min(1)).min(1),
+      }).optional().describe("旧回归资格撤销后的独立验证依据：本轮提示或拒收响应中的 generation，以及该代次后本轮 start_monitor 真实完整通过的检查 id；重放原样保留，不得用刷新清单代替重测"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, stage, directionToken }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage }, directionToken)); }
+  async ({ taskId, stage, directionToken, verificationBasis }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage, verificationBasis }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

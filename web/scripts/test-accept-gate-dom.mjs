@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
+import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 
 // 验收台上那张「验收前置命令」卡。钉住的是四件在真实页面上才看得出来的事：
 //
@@ -71,7 +72,7 @@ try {
 
   // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
   // 带 delay（响应体迟到多久）或 status（直接给个 500）。不给就一直回 store.gate。
-  const open = async ({ gate, role = "admin", query = "", command, states, events = false, cancelOutcome = "canceled" } = {}) => {
+  const open = async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled" } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
     if (events) await page.addInitScript(() => {
       const streams = new Set();
@@ -83,7 +84,16 @@ try {
         for (const stream of streams) stream.onmessage?.({ data: JSON.stringify(event) });
       };
     });
-    const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, logText: "checking 42 / 640", command: command === undefined ? gate.command ?? null : command, gate };
+    const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, tasks, taskReads: 0, taskPlan: null,
+      requestIds: [], status: 0, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate };
+    await page.route("**/api/tasks", async route => {
+      const snapshot = store.tasks;
+      const plan = store.taskPlan;
+      store.taskPlan = null;
+      store.taskReads += 1;
+      if (plan?.delay) await new Promise(resolve => setTimeout(resolve, plan.delay));
+      return json(route, snapshot);
+    });
     await page.route("**/api/tasks/gate-task/accept-gate/log?*", route => route.fulfill({
       status: 200, contentType: "text/plain", body: store.logText,
     }));
@@ -125,11 +135,12 @@ try {
         status: "interrupted", failure: "ownership_waived", processPending: false } };
       return json(route, { ok: true, gate: store.gate.latest });
     });
-    await page.route("**/api/tasks/gate-task/accept-gate", async (route) => {
+    await page.route("**/api/tasks/*/accept-gate", async (route) => {
       const plan = states?.[store.reads] ?? null;
       store.reads += 1;
+      store.requestIds.push(route.request().url().split("/").at(-2));
       if (plan?.delay) await new Promise((resolve) => setTimeout(resolve, plan.delay));
-      if (plan?.status) return json(route, { error: "数据库忙" }, plan.status);
+      if (plan?.status || store.status) return json(route, { error: "数据库忙" }, plan?.status || store.status);
       return json(route, plan?.body ?? store.gate);
     });
     await page.goto(`${base}${query}`);
@@ -276,13 +287,15 @@ try {
     const { page } = await open({ gate: { command: null, running: null, latest: run() } });
     await page.locator("h1").waitFor();
     await page.waitForTimeout(300);
-    assert.equal(await page.locator(".accept-gate-card").count(), 0, "门禁都撤了，卡上还摆出路只会误导");
+    const card = page.locator(".accept-gate-card");
+    assert.match(await card.innerText(), /历史记录/);
+    assert.equal(await card.getByRole("button", { name: "设一条" }).count(), 1);
+    assert.equal(await card.getByRole("button", { name: "重跑一次" }).count(), 0);
     await page.close();
   }
 
   // ⑩ 已经验收完、而且这一按**真的是拿一次跑绿放的行**：卡留着当回执（用户 2026-10-23），
-  //    但只读 —— 不再摆任何会改变状态的按钮（重跑/跳过/交给智能体/改这条命令/刷新），
-  //    只留「看完整日志」。
+  //    但只读 —— 不再摆任何会改变状态的按钮（重跑/跳过/交给智能体/改这条命令）。
   {
     const evidence = run();
     const { page } = await open({
@@ -293,10 +306,11 @@ try {
     await card.waitFor();
     assert.match(await card.innerText(), /验收前置命令通过了/, "盖完章也得留下「这次是拿什么放的行」");
     assert.match(await card.innerText(), /abc12345/, "回执要说清验的是哪棵树");
-    for (const name of ["重跑一次", "这次跳过它，直接合并", "交给智能体去修", "改这条命令", "刷新"]) {
+    for (const name of ["重跑一次", "这次跳过它，直接合并", "交给智能体去修", "改这条命令"]) {
       assert.equal(await card.getByRole("button", { name }).count(), 0, `验收做完之后不该还摆「${name}」`);
     }
     assert.equal(await card.getByRole("button", { name: "看完整日志" }).count(), 1);
+    assert.equal(await card.getByRole("button", { name: "刷新", exact: true }).count(), 1);
     await page.close();
   }
 
@@ -568,6 +582,49 @@ try {
     assert.equal(store.gate.latest.failure, "ownership_waived");
     await page.close();
   }
+  {
+    const timestamp = new Date().toISOString();
+    const rows = [
+      { id: "single", title: "普通任务（暂停）", mode: "single", status: "paused" },
+      { id: "lead", title: "团队（执行者暂停）", mode: "team", status: "idle" },
+      { id: "worker", title: "执行者（暂停）", mode: "single", status: "paused", parentId: "lead" },
+    ].map(row => ({ projectId: "proj-1", updatedAt: timestamp, monitorRunning: false, ...row }));
+    const { page, store } = await open({ query: "?dots=1", events: true, tasks: rows });
+    const assertDots = async kind => {
+      for (const row of rows) {
+        const dot = page.locator(`[data-task-id="${row.id}"] .${row.mode === "team" ? "team" : "workspace"}-status-dot--${kind}`);
+        await dot.waitFor();
+        assert.equal(await dot.evaluate(element => getComputedStyle(element).animationName), kind === "working" ? "task-status-dot-pulse" : "none");
+      }
+    };
+    await assertDots("attention");
+    if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/dots-paused.png` });
+    store.tasks = rows.map(row => ({ ...row, monitorRunning: row.id !== "lead" }));
+    await page.evaluate(() => window.emitGateEvent({ type: "task.monitors", taskId: "worker" }));
+    await assertDots("working");
+    if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/dots-monitor-running.png` });
+    store.tasks = rows;
+    await page.evaluate(() => window.emitGateEvent({ type: "task.monitors", taskId: "worker" }));
+    await assertDots("attention");
+    await page.reload();
+    await assertDots("attention");
+    await page.close();
+  }
+  {
+    const previous = run();
+    const { page, store } = await open({ events: true, gate: { command: previous.command, running: null, latest: previous } });
+    await page.getByText("源码、依赖输入和命令仍与被测快照一致", { exact: false }).waitFor();
+    store.gate = { command: "npm run replacement", running: null, latest: { ...previous, stale: true } };
+    await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
+    await page.locator(".accept-gate-card").filter({ hasText: "npm run replacement" }).waitFor();
+    assert.doesNotMatch(await page.locator(".accept-gate-card").innerText(), /源码、依赖输入和命令仍与被测快照一致/);
+    if (process.env.ASH_BROWSER_EVIDENCE_DIR) await page.screenshot({ path: `${process.env.ASH_BROWSER_EVIDENCE_DIR}/command-invalidated.png` });
+    store.gate = { command: null, running: null, latest: previous };
+    await page.evaluate(() => window.emitGateEvent({ type: "task.acceptGate", taskId: "gate-task" }));
+    await page.locator(".accept-gate-card").filter({ hasText: "历史记录" }).waitFor();
+    await page.close();
+  }
+  await testAcceptGateRecovery({ open, run, basis });
   console.log("accept gate card DOM regression passed");
 } finally {
   await browser?.close();

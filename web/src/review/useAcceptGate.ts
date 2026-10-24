@@ -23,6 +23,7 @@ import { useServerEvents } from "../lib/events.ts";
 export function useAcceptGate(taskId: string): {
   state: AcceptGateState | null;
   error: string | null;
+  stale: boolean;
   running: AcceptGateView | null;
   latest: AcceptGateView | null;
   /** 这一按当初拿什么放的行（已验收才有；null = 还没验收，或老数据没留凭据）。 */
@@ -38,28 +39,52 @@ export function useAcceptGate(taskId: string): {
 } {
   // 状态自带它属于哪个任务：`taskId` 一变，上一个任务那份立刻不作数（清不清都一样安全），
   // 不必等新请求回来才把旧数据换掉。
-  const [snap, setSnap] = useState<{ taskId: string; state: AcceptGateState } | null>(null);
+  const [snap, setSnap] = useState<{ taskId: string; state: AcceptGateState; readAt: number } | null>(null);
   const [failure, setFailure] = useState<{ taskId: string; error: string } | null>(null);
+  const [checking, setChecking] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   // 发出去的第几次。只有号最大的那一次（= 最后发出的）能落地，迟到的旧响应一律丢掉。
   const issued = useRef(0);
+  const activeTask = useRef<string | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCount = useRef(0);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (retry = false): Promise<void> => {
+    if (activeTask.current !== taskId) return;
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+    retryTimer.current = null;
+    if (!retry) retryCount.current = 0;
     const mine = ++issued.current;
+    setChecking(taskId);
     try {
       const next = await api.acceptGate(taskId);
       if (issued.current !== mine) return;
-      setSnap({ taskId, state: next });
+      setSnap({ taskId, state: next, readAt: Date.now() });
       setFailure(null);
+      setChecking(null);
+      retryCount.current = 0;
     } catch (reason) {
       if (issued.current !== mine) return;
       setFailure({ taskId, error: reason instanceof Error ? reason.message : String(reason) });
+      setChecking(null);
+      if (retryCount.current < 5) {
+        const delay = Math.min(1000 * 2 ** retryCount.current++, 10000);
+        retryTimer.current = setTimeout(() => { void reload(true); }, delay);
+      }
     }
   }, [taskId]);
 
-  // 切任务：代次直接推一格，在途的那几个响应全部作废（它们属于上一个任务）。
-  useEffect(() => { issued.current += 1; }, [taskId]);
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    activeTask.current = taskId;
+    issued.current += 1;
+    void reload();
+    return () => {
+      activeTask.current = null;
+      issued.current += 1;
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    };
+  }, [taskId, reload]);
   // 服务端的权威信号只有这一条：起了、结束了、被取消了，都发 task.acceptGate。
   const connected = useServerEvents((event) => {
     const relevant = event.type === "task.updated" ? event.task.id === taskId
@@ -77,31 +102,33 @@ export function useAcceptGate(taskId: string): {
 
   const state = snap?.taskId === taskId ? snap.state : null;
   const error = failure?.taskId === taskId ? failure.error : null;
+  const stale = !!state && (checking === taskId || !!error);
   const running = state?.running ?? null;
   // 「已经跑了 N 分 N 秒」要自己走：这中间服务端一个事件都不会发（命令还在跑），
   // 不走就会定在点下去那一刻的 0 秒上，看着像卡死了。
   useEffect(() => {
-    if (!running) return;
+    if (!running || stale) return;
     const timer = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(timer);
-  }, [running]);
+  }, [running, stale]);
 
   // tick 只在这儿用：它每秒 +1 触发重渲染，下面这句才会跟着重算。
   void tick;
   return {
     state,
     error,
+    stale,
     running,
     latest: state?.latest ?? null,
     basis: state?.basis ?? null,
-    runningFor: running ? elapsedSince(running.startedAt) : null,
+    runningFor: running ? elapsedSince(running.startedAt, stale ? snap!.readAt : Date.now()) : null,
     reload,
   };
 }
 
 /** 「已经跑了多久」。两处表面同一套措辞。 */
-export function elapsedSince(from: string): string {
-  const ms = Math.max(0, Date.now() - new Date(from).getTime());
+export function elapsedSince(from: string, at = Date.now()): string {
+  const ms = Math.max(0, at - new Date(from).getTime());
   const total = Math.floor(ms / 1000);
   const min = Math.floor(total / 60);
   return min > 0 ? `${min} 分 ${total % 60} 秒` : `${total} 秒`;

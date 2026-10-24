@@ -1,11 +1,12 @@
 import { createWriteStream, mkdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AgentType, SessionRole } from "@ash/shared";
 import { desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
-import { sessionTranscriptPath, writeTurn } from "./transcript.js";
+import { sessionTranscriptPath, TURN_SENTINEL, writeTurn } from "./transcript.js";
 import { now } from "./util.js";
 
 // Persist one system event to a task session and mirror it over SSE.
@@ -26,7 +27,7 @@ import { now } from "./util.js";
 export async function appendTaskTimeline(
   taskId: string,
   text: string,
-  target?: { sessionId?: string; agentType?: AgentType; role?: SessionRole },
+  target?: { sessionId?: string; agentType?: AgentType; role?: SessionRole; eventKey?: string },
 ): Promise<boolean> {
   try {
     const all = await db
@@ -43,6 +44,20 @@ export async function appendTaskTimeline(
       all.at(0);
     if (!session) return false;
 
+    if (target?.eventKey) for (const candidate of all) {
+      let transcript: string;
+      try { transcript = await readFile(sessionTranscriptPath(taskId, candidate.id), "utf8"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      if (transcript.split("\n").some((line) => {
+        if (!line.startsWith(TURN_SENTINEL)) return false;
+        try { return (JSON.parse(line.slice(TURN_SENTINEL.length)) as { eventKey?: string }).eventKey === target.eventKey; }
+        catch { return false; }
+      })) return true;
+    }
+
     const at = now();
     const transcriptPath = sessionTranscriptPath(taskId, session.id);
     mkdirSync(dirname(transcriptPath), { recursive: true });
@@ -50,7 +65,9 @@ export async function appendTaskTimeline(
       const out = createWriteStream(transcriptPath, { flags: "a" });
       out.once("error", reject);
       out.once("finish", resolve);
-      writeTurn(out, { t: "system", agent: session.agentType as AgentType, text, aside: true }, at);
+      writeTurn(out, { t: "system", agent: session.agentType as AgentType, text, aside: true,
+        ...(target?.eventKey ? { eventKey: target.eventKey } : {}),
+      }, at);
       out.end();
     });
     bus.publish({

@@ -113,21 +113,18 @@ if (isExec) {
   try {
     running = runTask("t");
     let inFlight: typeof sessions.$inferSelect | undefined;
-    for (let i = 0; i < 200 && !(inFlight?.commandLine && (IS_WINDOWS || inFlight.agentPid)); i += 1) {
+    for (let i = 0; i < 200 && !(inFlight?.commandLine && inFlight.agentPid); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
       inFlight = (await db.select().from(sessions).where(eq(sessions.taskId, "t"))).at(0);
     }
     const taskState = (await db.select().from(tasks).where(eq(tasks.id, "t"))).at(0);
     assert.ok(inFlight?.commandLine,
       `真实 runTask 必须先落 session；session=${JSON.stringify(inFlight)} task=${JSON.stringify(taskState)}`);
-    if (IS_WINDOWS) {
-      assert.equal(inFlight.agentPid, null, "Windows 原生回合按平台约定不 detached");
-      assert.equal(inFlight.agentOutPath, null, "Windows 不得伪造不可接管的 detached 输出路径");
-    } else {
-      assert.ok(inFlight.agentPid, "POSIX 原生引导进程 pid 必须落进 session");
-      assert.ok(inFlight.agentOutPath && inFlight.agentErrPath && inFlight.agentRcPath,
-        "POSIX 原生 runTask 必须整组落下 detached 输出路径");
-    }
+    // 两个平台同一条契约:原生回合的 pid 与三个落盘路径都必须进 session,否则重启后
+    // 没有任何线索能把它接回来(Windows 那条路见 executors/detached-win.ts)。
+    assert.ok(inFlight.agentPid, "原生引导进程 pid 必须落进 session");
+    assert.ok(inFlight.agentOutPath && inFlight.agentErrPath && inFlight.agentRcPath,
+      "原生 runTask 必须整组落下 detached 输出路径");
     assert.match(inFlight.commandLine ?? "", /\bexec\b/, "含 exec 专属参数时必须回退到 codex exec");
     assert.match(inFlight.commandLine ?? "", /--search/, "--search 不得因原生引导被静默丢弃");
     assert.match(inFlight.commandLine ?? "", /--profile my-profile/, "profile 参数及其值必须原样保留");

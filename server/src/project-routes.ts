@@ -24,6 +24,7 @@ import { deleteTaskCompletely } from "./task-delete-routes.js";
 import { isTaskBusy, taskBusyRejection } from "./task-busy.js";
 import { reconcileGateProcesses } from "./accept-gate-ownership.js";
 import { terminalSessions } from "./terminal.js";
+import { bus } from "./bus.js";
 import { findWorkflow } from "./workflows.js";
 import { ensureProjectDir } from "./project-dir.js";
 import { deleteProjectGitCredential } from "./git-credentials.js";
@@ -326,6 +327,10 @@ export function mountProjectRoutes(api: Hono): void {
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
+    if (normalizeAcceptGateCommand(updated.acceptGateCommand) !== normalizeAcceptGateCommand(existing.acceptGateCommand)) {
+      const affected = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, pid));
+      for (const task of affected) bus.publish({ type: "task.acceptGate", taskId: task.id });
+    }
     return c.json(toProject(updated, "admin"));
   });
 

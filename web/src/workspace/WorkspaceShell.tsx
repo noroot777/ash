@@ -6,7 +6,7 @@ import { api } from "../lib/api.ts";
 import { claimAction, isActionFresh } from "../lib/latestInteraction.ts";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { useComposerSendKey } from "../lib/useComposerSendKey.ts";
-import { useTasks } from "../lib/useTasks.ts";
+import { upsertTask, useTasks } from "../lib/useTasks.ts";
 import { handedOut, useOutboundState } from "./useOutboundState.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
@@ -197,9 +197,7 @@ export function WorkspaceShell() {
         setTaskId((current) => current === taskId ? null : current);
         return;
       }
-      setTasks((current) => current.some((item) => item.id === loaded.id)
-        ? current.map((item) => item.id === loaded.id ? loaded : item)
-        : [loaded, ...current]);
+      setTasks(current => upsertTask(current, loaded));
       setProjectId(loaded.projectId);
     }).catch(() => {
       if (alive) setTaskId((current) => current === taskId ? null : current);
@@ -290,9 +288,7 @@ export function WorkspaceShell() {
     () => spreadVisibleTasks(tasks, scope, spread.filter),
     [scope, spread.filter, tasks],
   );
-  const updateTask = useCallback((updated: TaskListItem) => setTasks((current) => current.some((task) => task.id === updated.id)
-    ? current.map((task) => task.id === updated.id ? updated : task)
-    : [updated, ...current]), [setTasks]);
+  const updateTask = useCallback((updated: TaskListItem) => setTasks(current => upsertTask(current, updated)), [setTasks]);
   const openLocalOwnership = useCallback((task: TaskListItem) => {
     setGitOpen(false); setChatOpen(false); setAssistantOrigin(null);
     updateTask(task);
@@ -631,7 +627,7 @@ export function WorkspaceShell() {
         ) : selectedFullTask?.mode === "team" ? (
           <TeamView task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
         ) : selectedFullTask?.mode === "duet" ? (
-          <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
+          <DuetView task={selectedFullTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedFullTask ? (
           <TaskDetail task={selectedFullTask} allTasks={tasks} onTaskUpdate={updateTask} onTasksSynced={applyTaskSnapshots} onDeleted={deleteTask} onOpenTask={selectTaskById} onHandoff={setHandoffTarget} onForkTask={(draft) => openComposer("single", draft)} initialReviewOpen={reviewTaskId === selectedFullTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedFullTask.id : null)} notify={notify} />
         ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">{scopeKind === "tasks" ? "任务" : "项目"}</span><span className="workspace-app-title">{scopeKind === "tasks" ? TASK_MODE_LABEL : currentProject?.name ?? "Ash"}</span>{(scopeKind === "tasks" || currentProject) && <span className="workspace-app-count">{activeTaskCount} 项{scopeKind === "tasks" ? "还没落地" : "任务"}</span>}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} onCreateProject={() => setCreateDialog({ kind: "project", reason: null })} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}

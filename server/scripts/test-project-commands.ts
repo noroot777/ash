@@ -15,6 +15,8 @@ import {
 import { IS_WINDOWS } from "../src/platform.js";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { restartCommand, startCommand, stopCommand, type RunnableCommand } from "../src/terminal-commands.js";
+import { powerShellCommandCases } from "./project-command-powershell-cases.js";
+import { commandLaunch } from "../src/terminal-shell.js";
 
 // ── parse ──────────────────────────────────────────────────────────────────
 assert.equal(parseProjectCommands(null), null);
@@ -77,12 +79,6 @@ assert.deepEqual(parseCommandValues(undefined), {});
 // 替换出来的值本身带 `$&` 这类正则替换记号也必须原样(用的是函数式 replace)。
 assert.equal(fillCommandPlaceholders("echo {{a}}", { a: "$& $1" }), "echo $& $1");
 
-if (IS_WINDOWS) {
-  // 命令会话在 Windows 上明确拒绝(未真机验证的分支不留静默陷阱),没有可测的生命周期。
-  console.log("project commands test passed (windows: parse only)");
-  process.exit(0);
-}
-
 const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ash-cmd-")));
 const manager = new TerminalSessionManager();
 
@@ -116,6 +112,137 @@ function waitExit(sessionId: string, projectId: string): Promise<number> {
     if (!unsubscribe) { clearTimeout(timeout); reject(new Error("session not found")); }
   });
 }
+
+if (IS_WINDOWS) {
+  // ── Windows:真 ConPTY + PowerShell 的生命周期 ──────────────────────────────
+  // 下面那一大段 POSIX 探针(trap / disown / nohup / 独立 PGID / `ps -o pgid`)问的是
+  // 「信号与进程组还能不能触达服务」,而 Windows 上这三个概念压根不存在:没有信号,
+  // 停止走 ConPTY 的 `GetConsoleProcessList` + `taskkill /T`,确定性比那边还高。
+  // 所以这边钉的是另外三件事 —— 方言(PowerShell 多行脚本真能跑)、退出码(收口把
+  // 原生命令的 `$LASTEXITCODE` 透传出来)、以及停止/幂等这几条跨平台契约。
+  try {
+    // ① 多行脚本 + 工作目录:cmd.exe 的 `/c` 收不了多行,所以这一条同时是「选对了
+    //    PowerShell」的证据。写一个文件出来证明它真的跑到了,且跑在 cwd 里。
+    const marker = join(cwd, "win-ok.txt");
+    const live = manager.create("p1", cwd, {
+      command: {
+        id: "dev",
+        name: "web dev",
+        script: `Set-Content -LiteralPath "${marker}" -Value ok -NoNewline\nStart-Sleep -Seconds 60`,
+      },
+    });
+    assert.equal(live.commandId, "dev");
+    assert.equal(live.exitCode, null);
+    const markerDeadline = Date.now() + 15000;
+    let wrote = "";
+    while (wrote !== "ok") {
+      try { wrote = readFileSync(marker, "utf8").trim(); } catch { /* 还没写 */ }
+      if (wrote !== "ok" && Date.now() > markerDeadline) throw new Error(`多行 PowerShell 脚本没跑起来:${wrote}`);
+      if (wrote !== "ok") await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    // 活着的命令会话:找得到、闲置多久都不回收。
+    assert.equal(manager.liveCommandSession("p1", "dev")?.id, live.id);
+    assert.equal(manager.sweepIdleSessions(Date.now() + 31 * 60 * 1000), 0);
+
+    // ② 停止 = terminate:保留现场、打「用户停的」标(刷新后看得出「我停过」)。
+    assert.deepEqual(await manager.terminate(live.id, "p1"), { ok: true });
+    const stoppedInfo = manager.get(live.id, "p1");
+    assert.notEqual(stoppedInfo?.exitCode, null, "停止后 exitCode 必须落下");
+    assert.equal(stoppedInfo?.stoppedByUser, true);
+    assert.equal(manager.liveCommandSession("p1", "dev"), null);
+
+    // ③ 退出码两条路都要对:PowerShell 自己的 `exit`,和**原生命令**的 $LASTEXITCODE
+    //    (后者正是 `-EncodedCommand` 要补那段收口的理由 —— 不补一律 0/1)。
+    const direct = manager.create("p1", cwd, { command: { id: "rc", name: "rc", script: "exit 3" } });
+    assert.equal(await waitExit(direct.id, "p1"), 3);
+    const native = manager.create("p1", cwd, {
+      command: { id: "rc2", name: "rc2", script: 'node -e "process.exit(7)"' },
+    });
+    assert.equal(await waitExit(native.id, "p1"), 7, "原生命令的退出码必须被收口透传出来");
+    const listed = manager.listCommandSessions().find((session) => session.id === native.id);
+    assert.equal(listed?.stoppedByUser, false, "自己退出的不算用户停的");
+
+    // ③' 收口认的是**最后一条语句**,不是「这段脚本里有没有失败过」(第 1 轮审查 F3)。
+    //    `$LASTEXITCODE` 对「最近一个原生命令」有粘性:中途失败之后,后面的 cmdlet 成功
+    //    也不会清掉那个码。所以「先失败、随后补救成功」的脚本必须退 0 —— 这条只有在真
+    //    PowerShell 上跑才算数(粘性是它的行为,文本断言证明不了),所以放在这里而不是
+    //    test-win-launch.ts。
+    const recovered = manager.create("p1", cwd, {
+      command: { id: "rc3", name: "rc3", script: 'node -e "process.exit(7)"\nWrite-Output "RECOVERED"' },
+    });
+    assert.equal(await waitExit(recovered.id, "p1"), 0,
+      "失败的原生命令之后又有语句成功 → 整段算成功(粘住的 $LASTEXITCODE 不得冒充最后一句)");
+    const recoveredNative = manager.create("p1", cwd, {
+      command: { id: "rc4", name: "rc4", script: 'node -e "process.exit(7)"\nnode -e "process.exit(0)"' },
+    });
+    assert.equal(await waitExit(recoveredNative.id, "p1"), 0, "最后一条原生命令成功 → 0");
+    const cmdletFail = manager.create("p1", cwd, {
+      command: { id: "rc5", name: "rc5", script: 'Get-Item -LiteralPath "' + join(cwd, "no-such-file-xyz") + '"' },
+    });
+    assert.notEqual(await waitExit(cmdletFail.id, "p1"), 0, "最后一条是失败的 cmdlet → 非零");
+
+    const version = spawnSync(commandLaunch("").shell, ["-NoLogo", "-NoProfile", "-Command", "100 * $PSVersionTable.PSVersion.Major + $PSVersionTable.PSVersion.Minor"], {
+      encoding: "utf8", timeout: 20_000, windowsHide: true,
+    });
+    assert.ifError(version.error);
+    assert.equal(version.status, 0, version.stderr);
+    const versionNumber = Number(version.stdout.trim());
+    assert.ok(versionNumber >= 500, `unexpected PowerShell version: ${version.stdout}`);
+    for (const testCase of powerShellCommandCases(process.execPath)) {
+      if ((testCase.minimumVersion ?? 500) > versionNumber) continue;
+      const session = manager.create("p1", cwd, {
+        command: { id: "semantic", name: testCase.name, script: testCase.script },
+      });
+      assert.equal(await waitExit(session.id, "p1"), testCase.exitCode, testCase.name);
+      if (testCase.output || testCase.absentOutput) {
+        const output = manager.eventsAfter(session.id, "p1", 0)
+          ?.map((event) => event.type === "data" ? event.data : "").join("") ?? "";
+        if (testCase.output) assert.ok(output.includes(testCase.output), `${testCase.name}: ${output}`);
+        if (testCase.absentOutput) assert.ok(!output.includes(testCase.absentOutput), `${testCase.name}: ${output}`);
+      }
+    }
+
+    // ④ 跨平台契约:start 幂等、restart 先杀旧再起新、stop 落地。走的是真实服务函数
+    //    (全局 terminalSessions),不是上面的 manager。
+    const keep: RunnableCommand = { id: "keep", name: "keep alive", command: "Start-Sleep -Seconds 60", restartCommand: null };
+    const liveKeep = () => terminalSessions.listCommandSessions()
+      .filter((session) => session.projectId === "pcw" && session.commandId === "keep" && session.exitCode === null);
+    const started = await startCommand("pcw", cwd, keep);
+    assert.equal(started.status, 201);
+    const startedId = (started.body as { session: { id: string } }).session.id;
+    const again = await startCommand("pcw", cwd, keep);
+    assert.equal((again.body as { session: { id: string } }).session.id, startedId, "在跑就幂等返回原会话");
+    assert.equal(liveKeep().length, 1);
+    const restarted = await restartCommand("pcw", cwd, keep);
+    assert.equal(restarted.status, 201);
+    assert.notEqual((restarted.body as { session: { id: string } }).session.id, startedId, "restart 换的是新会话");
+    assert.equal(liveKeep().length, 1, "重启后同一条命令只能有一个活会话");
+    assert.deepEqual((await stopCommand("pcw", "keep")).body, { stopped: true });
+    assert.equal(liveKeep().length, 0);
+
+    // ⑤ 占位符:取值由**服务端**填进脚本再跑;必填缺失原地 400 且不留会话。
+    const holder: RunnableCommand = { id: "holder", name: "带参命令", command: "Start-Sleep -Seconds {{秒=60}}", restartCommand: null };
+    const req: RunnableCommand = { ...holder, command: "Start-Sleep -Seconds {{秒}}" };
+    const missing = await startCommand("pcw2", cwd, req);
+    assert.equal(missing.status, 400, "必填占位符没填就该原地拒绝");
+    assert.equal(terminalSessions.liveCommandSession("pcw2", "holder"), null, "拒绝时不得留下会话");
+    const filled = await startCommand("pcw2", cwd, req, { 秒: "60" });
+    assert.equal(filled.status, 201);
+    assert.equal((filled.body as { session: { name: string } }).session.name, "带参命令 · 60");
+    assert.deepEqual((await stopCommand("pcw2", "holder")).body, { stopped: true });
+
+    console.log("project commands test passed (windows)");
+  } finally {
+    manager.shutdown();
+    terminalSessions.shutdown();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+  process.exit(0);
+}
+
+// ── 以下全是 POSIX 专属形状 ────────────────────────────────────────────────────
+// trap / disown / nohup / `set -m` / `ps -o pgid` 这些都是信号与进程组的语义,Windows
+// 上没有对应物(那边的停止判定是 ConPTY 的控制台进程表,见 terminal.ts 的 wrapper 注释)。
 
 try {
   // 活着的命令会话:找得到、闲置多久都不回收。
