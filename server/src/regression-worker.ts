@@ -9,13 +9,14 @@ import { userShellLaunch } from "./platform.js";
 import { safeRunDirectory } from "./review-evidence.js";
 import { regressionLogDigest } from "./regression-files.js";
 import { regressionSnapshot } from "./regression-snapshot.js";
+import { regressionInputIdentity } from "./regression-input.js";
 
 const monitorId = process.argv[2];
 try {
   const record = (await db.select().from(regressionChecks).where(eq(regressionChecks.monitorId, monitorId)))[0];
   if (!record) throw new Error("回归登记不存在");
   const claimed = await db.update(regressionChecks).set({
-    before: regressionSnapshot(record.cwd), startedAt: new Date().toISOString(),
+    before: regressionSnapshot(record.cwd), inputIdentity: regressionInputIdentity(), startedAt: new Date().toISOString(),
   }).where(and(eq(regressionChecks.monitorId, monitorId), isNull(regressionChecks.startedAt))).returning();
   if (!claimed.length) throw new Error("回归命令已经启动，不能重复执行");
   let code: number | null = null;

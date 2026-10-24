@@ -293,8 +293,8 @@ const legacyReviewPrompt = await reviewProtocolFor(
   { path: root, branch: null, isWorktree: false }, root,
 );
 assertCarriesSweepProtocol(legacyReviewPrompt, "历史独立审查 prompt");
-for (const text of [reviewPrompt, legacyReviewPrompt, verifyReminderFor(taskId, 1),
-  reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })]) {
+for (const text of [reviewPrompt, legacyReviewPrompt, await verifyReminderFor(taskId, 1),
+  await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })]) {
   assert.match(text, /reusable=true.*执行者结果.*不再重复运行/, "各条审查路径只复用后端批准的执行者回归结果");
   assert.doesNotMatch(text, /必须真实运行验证/, "不得用无条件重跑要求覆盖回归结果复用约定");
 }
@@ -317,13 +317,13 @@ const assertBrowserOrder = (text: string, source: string) => {
   assert.match(text, /Playwright.*headless/i, `${source} 必须把 Playwright 默认限制为无头`);
 };
 assertNoEmbeddedPolicy(reviewPrompt, "自动验证 prompt");
-assertNoEmbeddedPolicy(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
-assertNoEmbeddedPolicy(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
+assertNoEmbeddedPolicy(await verifyReminderFor(taskId, 1), "自动验证续跑提醒");
+assertNoEmbeddedPolicy(await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
 // 要求本身一条不能少,只是改由投递点交付。
 assertBrowserOrder(withGlobalBrowserPolicy(reviewPrompt, "full"), "自动验证 prompt 经投递点");
-assertBrowserOrder(withGlobalBrowserPolicy(verifyReminderFor(taskId, 1), "reminder"), "自动验证续跑提醒经投递点");
+assertBrowserOrder(withGlobalBrowserPolicy(await verifyReminderFor(taskId, 1), "reminder"), "自动验证续跑提醒经投递点");
 assertBrowserOrder(
-  withGlobalBrowserPolicy(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "reminder"),
+  withGlobalBrowserPolicy(await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "reminder"),
   "历史审查续跑提醒经投递点",
 );
 // 续跑提醒是被打断那条路径上**唯一**还在重贴格式要求的东西（完整 prompt 不重发）。
@@ -337,9 +337,9 @@ assertBrowserOrder(
 // 需求引用、浏览器策略、任务正文里碰巧出现同样的词,格式常量整段删了也照样绿。
 assertSummaryRuleTable();
 assertCarriesSummaryFormat(reviewPrompt, "自动验证 prompt");
-assertCarriesSummaryReminder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
+assertCarriesSummaryReminder(await verifyReminderFor(taskId, 1), "自动验证续跑提醒");
 assertCarriesSummaryReminder(
-  reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }),
+  await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }),
   "历史审查续跑提醒",
 );
 // 报告**形状**的契约（上面那几行）管不了「找到几条」：一份格式完美的单条发现照样全绿。
@@ -347,9 +347,9 @@ assertCarriesSummaryReminder(
 // 包含那个常量」——它是把停机条件从「够判不通过了」改成「该扫的面扫完了」的唯一载体。
 assertSweepRuleTable();
 assertCarriesSweepProtocol(reviewPrompt, "自动验证 prompt");
-assertCarriesSweepReminder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
+assertCarriesSweepReminder(await verifyReminderFor(taskId, 1), "自动验证续跑提醒");
 assertCarriesSweepReminder(
-  reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }),
+  await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }),
   "历史审查续跑提醒",
 );
 const globalFreshPrompt = withGlobalBrowserPolicy("普通任务正文", "full");
@@ -366,8 +366,8 @@ assert.equal(withGlobalBrowserPolicy(globalFreshPrompt, "full"), globalFreshProm
 // 轮审查 P2)。
 for (const [source, text, level] of [
   ["自动验证 prompt", reviewPrompt, "full"],
-  ["自动验证续跑提醒", verifyReminderFor(taskId, 1), "reminder"],
-  ["历史审查续跑提醒", reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "reminder"],
+  ["自动验证续跑提醒", await verifyReminderFor(taskId, 1), "reminder"],
+  ["历史审查续跑提醒", await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "reminder"],
 ] as const) {
   const granted = withGlobalBrowserPolicy(text, level, { domains: ["x.com"] });
   assert.match(granted, /本项目已[\s\S]{0,200}x\.com/, `${source} 必须带上项目已配的授权站点`);

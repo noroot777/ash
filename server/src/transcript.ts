@@ -293,7 +293,7 @@ export function writeTurn(
   // aside:true = 任务时间线旁注（appendTaskTimeline 那一路）。同样必须落盘：它跟「继续
   // （从中断处）」那类真回合起点在盘上长得一模一样，而两者的读法正相反——旁注砸在回合
   // 中间纯属偶然，拿它当回合边界就会把一条回复劈成两半（见 shared/src/events.ts）。
-  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice"; aside?: true; monitorWake?: import("@ash/shared/monitor-wake").MonitorWakeData },
+  turn: { t: "user" | "system"; agent: AgentType; text: string; by?: "system"; level?: "notice"; aside?: true; eventKey?: string; monitorWake?: import("@ash/shared/monitor-wake").MonitorWakeData },
   at: string,
 ): void {
   out.write(`\n${TURN_SENTINEL}${JSON.stringify({ ...turn, at })}\n`);

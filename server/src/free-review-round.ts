@@ -10,6 +10,8 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, projects, sessions, tasks } from "./db/schema.js";
 import { freeReviewPrompt, freeReviewResumeMessage } from "./free-review-prompts.js";
+import { freeReviewEvidenceDir } from "./free-review-files.js";
+import { evidenceState, restartRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { headCommit } from "./git.js";
@@ -51,7 +53,7 @@ export async function roundOf(run: ReviewRunRow): Promise<ReviewRoundRow | null>
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0) ?? null;
 }
 
-export async function cleanupAcceptedMergeRun(run: ReviewRunRow): Promise<void> {
+export async function cleanupAcceptedMergeRun(run: ReviewRunRow, strict = false): Promise<void> {
   if (run.targetKind !== "accepted_merge") return;
   const task = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, run.taskId))).at(0);
   const project = task
@@ -61,6 +63,7 @@ export async function cleanupAcceptedMergeRun(run: ReviewRunRow): Promise<void> 
   try {
     await cleanupPostMergeReviewWorktree(project.repoPath, run.taskId, run.id);
   } catch (error) {
+    if (strict) throw error;
     await appendTaskTimeline(run.taskId, `合并结果审查临时工作区清理失败：${error instanceof Error ? error.message : String(error)}`);
   }
 }
@@ -79,10 +82,11 @@ export async function cleanupAcceptedMergeRun(run: ReviewRunRow): Promise<void> 
  * （同 `status.ts` 的那一处）。收不回来只记日志：审查本身已经结算完了，不该被它拖住；
  * 漏下的哨兵仍有自己的到期时间，而它推的事件会被出口闸按「来源审查已结束」拒掉。
  */
-export async function stopReviewRunMonitors(runId: string, reason: string): Promise<number> {
+export async function stopReviewRunMonitors(runId: string, reason: string, strict = false): Promise<number> {
   return await import("./monitor-reclaim.js")
     .then(({ stopMonitorsForReviewRun }) => stopMonitorsForReviewRun(runId, reason))
     .catch((error) => {
+      if (strict) throw error;
       console.error(`[ash] stopMonitorsForReviewRun(${runId}) failed:`, error);
       return 0;
     });
@@ -258,10 +262,15 @@ export async function reopenFailedFreeReview(
       const blocker = freeReviewRetryBlocker(run, round);
       if (blocker) throw new Error(blocker);
       const at = now();
-      await db.update(freeReviewRounds).set({ status: "reviewing", endedAt: null })
-        .where(eq(freeReviewRounds.id, round!.id));
-      await db.update(freeReviewRuns).set({ status: "reviewing", updatedAt: at, finishedAt: null })
-        .where(eq(freeReviewRuns.id, run!.id));
+      const directory = freeReviewEvidenceDir(taskId, run!.id, run!.currentRound);
+      await evidenceState(taskId, directory, run!.targetKind === "accepted_merge");
+      await db.transaction(async (transaction) => {
+        await restartRegressionEvidence(taskId, directory, transaction);
+        await transaction.update(freeReviewRounds).set({ status: "reviewing", conclusion: null, endedAt: null })
+          .where(eq(freeReviewRounds.id, round!.id));
+        await transaction.update(freeReviewRuns).set({ status: "reviewing", updatedAt: at, finishedAt: null })
+          .where(eq(freeReviewRuns.id, run!.id));
+      }, { behavior: "immediate" });
       const revived = { ...run!, status: "reviewing", updatedAt: at, finishedAt: null };
       try {
         const { resumed } = await launchReviewRound(task, revived, { resumeSessionId: opts.resumeSessionId, retry: true });

@@ -103,7 +103,7 @@ try {
   await reconcileFreeReviews();
   assert.equal(
     (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, "live-reviewing"))).at(0)?.status,
-    "passed", "回合确实死了、结论在卷上时对账才补结算",
+    "failed", "回合已结束但缺少真实退出记录，不能仅凭结论推定审查正常结束",
   );
 
   // ② 验收尾段逐站 durable：崩溃补跑只跑没做过的站，不重复已发生的外部副作用。

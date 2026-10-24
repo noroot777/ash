@@ -100,16 +100,26 @@ try {
       (await db.select().from(monitors).where(eq(monitors.id, result.monitor.id)))[0]?.status === "exited");
     const evidenceDir = join(root, "runs", taskId, "review", "round-1");
     const manifest = () => JSON.parse(readFileSync(join(evidenceDir, "regression-evidence.json"), "utf8")) as {
-      records: Array<{ monitorId: string; logPath: string; reusable: boolean }>;
+      records: Array<{
+        monitorId: string; logPath: string; logDigest: string | null; reusable: boolean;
+        passed: boolean | null; exitCode: number | null; reason: string;
+      }>;
     };
     await regressionEvidenceReference(task, repo, evidenceDir);
     const record = manifest().records.find((item) => item.monitorId === result.monitor.id)!;
-    assert.equal(record.reusable, true);
+    assert.equal(record.passed, true);
+    assert.equal(record.exitCode, 0);
+    assert.ok(record.logDigest);
+    assert.equal(await regressionLogDigest(record.logPath), record.logDigest);
+    assert.match(record.reason, /测试前后与当前代码树一致/);
+    assert.equal(record.reusable, false, "正常日志不能替代不可变输入证明");
     rmSync(record.logPath);
     execFileSync("mkfifo", [record.logPath]);
     await withoutPipeWait(record.logPath, regressionEvidenceReference(task, repo, evidenceDir));
-    assert.equal(manifest().records.find((item) => item.monitorId === result.monitor.id)?.reusable, false,
+    const invalidated = manifest().records.find((item) => item.monitorId === result.monitor.id)!;
+    assert.equal(invalidated.reusable, false,
       "公共派审清单遇到 FIFO 能完成生成并拒绝复用");
+    assert.match(invalidated.reason, /日志缺失、损坏或目录不安全/);
 
     const monitorId = "preexisting-fifo";
     await prepareRegressionCommand(taskId, monitorId, "node -e \"console.log('must not run')\"", repo, "single");

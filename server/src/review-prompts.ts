@@ -23,7 +23,7 @@ import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from 
 import { verifyHistorySection } from "./review-history.js";
 import type { Workspace } from "./git.js";
 import { REVIEW_VALIDATION_REQUIREMENT } from "@ash/shared/free-workflow";
-import { regressionEvidenceReference } from "./regression-checks.js";
+import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -103,7 +103,7 @@ export async function verifyProtocolFor(
   const evidenceDir = reviewRoundDir(target.id, round);
   const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
-  const regression = await regressionEvidenceReference(target, repoPath, evidenceDir);
+  const { reference: regression } = await refreshRegressionEvidence(target.id, evidenceDir);
   // 前面几轮报过的现象行（理由见 review-history.ts 文件头：会话可能被压缩，也可能是
   // 手点的新一轮）。放在验证动作之前，让它先判「我这条是不是上面某条的第 N 个变体」。
   const history = await verifyHistorySection(target.id, round);
@@ -121,11 +121,13 @@ export async function verifyProtocolFor(
 }
 
 /** 就地验证轮的每回合提醒（中途提问、被打断续跑时，只有它跟得到底）。 */
-export function verifyReminderFor(taskId: string, round: number): string {
+export async function verifyReminderFor(taskId: string, round: number): Promise<string> {
   const dir = reviewRoundDir(taskId, round);
+  const { reference } = await refreshRegressionEvidence(taskId, dir);
   return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。验证须有真实执行依据，可复用执行者对本次改动的回归结果；把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
+    reference +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
@@ -145,7 +147,7 @@ export async function reviewProtocolFor(
   const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
   const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
-  const regression = await regressionEvidenceReference(target, repoPath, evidenceDir);
+  const { reference: regression } = await refreshRegressionEvidence(target.id, evidenceDir);
   const history = await verifyHistorySection(target.id, review.reviewRound);
   return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +
     `审查对象：${target.id}\n${requirements}\n\n` +
@@ -161,12 +163,14 @@ export async function reviewProtocolFor(
 }
 
 /** 历史做法：独立审查任务的每回合提醒。 */
-export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "reviewRound">): string {
+export async function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "reviewRound">): Promise<string> {
   if (!review.reviewOf || !review.reviewRound) return "";
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
+  const { reference } = await refreshRegressionEvidence(review.reviewOf, dir);
   return `审查提醒:这是第 ${review.reviewRound} 轮审查；验证须有真实执行依据，可复用执行者对本次改动的回归结果；把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
+    reference +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
     `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
