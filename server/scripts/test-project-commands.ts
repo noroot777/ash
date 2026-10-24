@@ -124,7 +124,7 @@ if (IS_WINDOWS) {
     // ① 多行脚本 + 工作目录:cmd.exe 的 `/c` 收不了多行,所以这一条同时是「选对了
     //    PowerShell」的证据。写一个文件出来证明它真的跑到了,且跑在 cwd 里。
     const marker = join(cwd, "win-ok.txt");
-    const live = manager.create("p1", cwd, {
+    const live = await manager.createAsync("p1", cwd, {
       command: {
         id: "dev",
         name: "web dev",
@@ -153,9 +153,9 @@ if (IS_WINDOWS) {
 
     // ③ 退出码两条路都要对:PowerShell 自己的 `exit`,和**原生命令**的 $LASTEXITCODE
     //    (后者正是 `-EncodedCommand` 要补那段收口的理由 —— 不补一律 0/1)。
-    const direct = manager.create("p1", cwd, { command: { id: "rc", name: "rc", script: "exit 3" } });
+    const direct = await manager.createAsync("p1", cwd, { command: { id: "rc", name: "rc", script: "exit 3" } });
     assert.equal(await waitExit(direct.id, "p1"), 3);
-    const native = manager.create("p1", cwd, {
+    const native = await manager.createAsync("p1", cwd, {
       command: { id: "rc2", name: "rc2", script: 'node -e "process.exit(7)"' },
     });
     assert.equal(await waitExit(native.id, "p1"), 7, "原生命令的退出码必须被收口透传出来");
@@ -167,16 +167,16 @@ if (IS_WINDOWS) {
     //    也不会清掉那个码。所以「先失败、随后补救成功」的脚本必须退 0 —— 这条只有在真
     //    PowerShell 上跑才算数(粘性是它的行为,文本断言证明不了),所以放在这里而不是
     //    test-win-launch.ts。
-    const recovered = manager.create("p1", cwd, {
+    const recovered = await manager.createAsync("p1", cwd, {
       command: { id: "rc3", name: "rc3", script: 'node -e "process.exit(7)"\nWrite-Output "RECOVERED"' },
     });
     assert.equal(await waitExit(recovered.id, "p1"), 0,
       "失败的原生命令之后又有语句成功 → 整段算成功(粘住的 $LASTEXITCODE 不得冒充最后一句)");
-    const recoveredNative = manager.create("p1", cwd, {
+    const recoveredNative = await manager.createAsync("p1", cwd, {
       command: { id: "rc4", name: "rc4", script: 'node -e "process.exit(7)"\nnode -e "process.exit(0)"' },
     });
     assert.equal(await waitExit(recoveredNative.id, "p1"), 0, "最后一条原生命令成功 → 0");
-    const cmdletFail = manager.create("p1", cwd, {
+    const cmdletFail = await manager.createAsync("p1", cwd, {
       command: { id: "rc5", name: "rc5", script: 'Get-Item -LiteralPath "' + join(cwd, "no-such-file-xyz") + '"' },
     });
     assert.notEqual(await waitExit(cmdletFail.id, "p1"), 0, "最后一条是失败的 cmdlet → 非零");
@@ -190,7 +190,7 @@ if (IS_WINDOWS) {
     assert.ok(versionNumber >= 500, `unexpected PowerShell version: ${version.stdout}`);
     for (const testCase of powerShellCommandCases(process.execPath)) {
       if ((testCase.minimumVersion ?? 500) > versionNumber) continue;
-      const session = manager.create("p1", cwd, {
+      const session = await manager.createAsync("p1", cwd, {
         command: { id: "semantic", name: testCase.name, script: testCase.script },
       });
       assert.equal(await waitExit(session.id, "p1"), testCase.exitCode, testCase.name);

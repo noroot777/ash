@@ -208,7 +208,10 @@ try {
     assert.ok(launch.args.includes("-NoProfile"));
     assert.equal(launch.args[launch.args.indexOf("-ExecutionPolicy") + 1], "Bypass");
     const script = Buffer.from(launch.args.at(-1)!, "base64").toString("utf16le");
-    assert.ok(script.includes(command.trimStart()), "编码后仍保留用户命令与参数");
+    const encodedInvocation = script.match(/FromBase64String\('([^']+)'\)/)?.[1];
+    assert.ok(encodedInvocation);
+    const invocation = Buffer.from(encodedInvocation, "base64").toString("utf16le");
+    assert.equal(invocation, /^\s*&/.test(command) ? command.trimStart() : `& ${command.trimStart()}`, "编码后仍保留用户命令与参数");
     assert.ok(script.includes("$LASTEXITCODE"), "脚本退出码不能被 PowerShell 吞掉");
   }
   for (const command of [

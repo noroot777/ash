@@ -5,7 +5,7 @@ import { closeSync, constants, mkdirSync, openSync, readFileSync, rmSync, symlin
 import fsPromises from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { eq } from "drizzle-orm";
 import {
   db, inTurnCaller, makeTask, monitors, projects, root, runs, schema, startMonitor,
@@ -126,7 +126,7 @@ try {
     const workerLog = join(root, "runs", taskId, "regression", `${monitorId}.log`);
     execFileSync("mkfifo", [workerLog]);
     const worker = spawnSync(process.execPath, [
-      "--import", createRequire(import.meta.url).resolve("tsx/esm"),
+      "--import", pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href,
       fileURLToPath(new URL("../src/regression-worker.ts", import.meta.url)), monitorId,
     ], { cwd: repo, encoding: "utf8", timeout: 10_000 });
     assert.ifError(worker.error);

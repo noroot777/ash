@@ -68,6 +68,37 @@ try {
     const success = await run('.\\success.ps1');
     assert.equal(success.exit.code, 0, success.log);
     assert.match(success.log, /GATE_SUCCESS/);
+    for (const testCase of [
+      { name: "recovered", script: 'node -e "process.exit(7)"\nWrite-Output "RECOVERED"', code: 0 },
+      { name: "native-failure", script: 'node -e "process.exit(19)"', code: 19 },
+      { name: "cmdlet-failure", script: 'Write-Error "CMDLET_FAILURE"', code: 1 },
+      { name: "throw", script: 'throw "THROWN_FAILURE"', code: 1 },
+      { name: "explicit-success", script: 'node -e "process.exit(7)"\nexit 0', code: 0 },
+      { name: "explicit-failure", script: 'Write-Output "BEFORE_EXIT"\nexit 23', code: 23 },
+      { name: "nested-failure", script: '& .\\native.ps1', code: 17 },
+      { name: "nested-recovery", script: '& .\\native.ps1\nWrite-Output "RECOVERED"', code: 0 },
+      { name: "nested-explicit-exit", script: '& .\\explicit-failure.ps1', code: 23 },
+      { name: "command-object-failure", script: '$child = Get-Command .\\native.ps1\n& $child', code: 17 },
+      { name: "command-object-cached-failure", script: '$child = Get-Command .\\native.ps1\n& $child\n& $child', code: 17 },
+      { name: "command-object-expression", script: '& (Get-Command .\\native.ps1)', code: 17 },
+      { name: "command-object-recovery", script: '$child = Get-Command .\\native.ps1\n& $child\nWrite-Output "OBJECT_RECOVERED"', code: 0 },
+      { name: "command-object-recovered-child", script: '& (Get-Command .\\recovered.ps1)', code: 0 },
+      { name: "command-object-explicit-success", script: '& (Get-Command .\\explicit-success.ps1)', code: 0 },
+      { name: "command-object-explicit-failure", script: '& (Get-Command .\\explicit-failure.ps1)', code: 23 },
+      { name: "command-object-dot-source", script: '$child = Get-Command .\\native.ps1\n. $child', code: 17 },
+      { name: "command-object-alias", script: 'Set-Alias -Name Invoke-ChildScript -Value .\\native.ps1\n& (Get-Command Invoke-ChildScript)', code: 17 },
+      { name: "command-object-throw", script: '& (Get-Command .\\throw.ps1)', code: 1 },
+      { name: "blocks-end-before-begin", script: 'end { Write-Output "END_OK" }\nbegin { Write-Output "BEGIN_OK" }', code: 0 },
+      { name: "blocks-failure-end-before-begin", script: 'end { & .\\native.ps1 }\nbegin { Write-Output "BEGIN_OK" }', code: 17 },
+    ]) {
+      writeFileSync(join(root, `${testCase.name}.ps1`), testCase.script, "utf8");
+      const result = await run(`.\\${testCase.name}.ps1`);
+      assert.equal(result.exit.code, testCase.code, `${testCase.name}: ${result.log}`);
+      if (testCase.name === "recovered") assert.match(result.log, /RECOVERED/);
+    }
+    assert.equal((await run('.\\success.ps1; .\\native.ps1')).exit.code, 17);
+    assert.equal((await run('.\\native.ps1; .\\success.ps1')).exit.code, 0);
+    assert.equal((await run('.\\success.ps1; .\\explicit-failure.ps1')).exit.code, 23);
     writeFileSync(join(root, "error.ps1"), 'Write-Error "GATE_FAILURE"', "utf8");
     const errored = await run('.\\error.ps1');
     assert.notEqual(errored.exit.code, 0, errored.log);

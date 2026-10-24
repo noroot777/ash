@@ -23,7 +23,7 @@ const probeCommand = IS_WINDOWS
 
 try {
   assert.equal(resolveTerminalDirectory("~"), homedir());
-  const session = manager.create("project-test", cwd, {
+  const session = await manager.createAsync("project-test", cwd, {
     shell,
     shellArgs: [],
     cols: 80,

@@ -21,6 +21,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { IS_WINDOWS } from "./platform-os.js";
 import { join } from "node:path";
+import { powerShellScriptInvocation } from "./powershell-script.js";
 
 // 「这是哪个操作系统」住在 platform-os.ts(叶子模块,打断本文件与 platform-paths.ts
 // 的环,理由见那边顶部)。这个门原样转出,使用方照旧从 platform.js 取。
@@ -89,18 +90,13 @@ export function userShellLaunch(command: string): {
   windowsVerbatimArguments?: true;
 } {
   if (!IS_WINDOWS) return { file: "sh", args: ["-lc", command] };
-  const isPowerShellScript = /^\s*(?:&\s*)?(?:"[^"\r\n]+\.ps1"|'[^'\r\n]+\.ps1'|[^\s"'|&;<>]+\.ps1)(?=\s|$|[|&;<>])/i.test(command);
-  if (isPowerShellScript) {
-    const invocation = /^\s*&/.test(command) ? command : `& ${command.trimStart()}`;
+  const powerShellScript = /^\s*(?:&\s*)?("[^"\r\n]+\.ps1"|'[^'\r\n]+\.ps1'|[^\s"'|&;<>]+\.ps1)(?=\s|$|[|&;<>])/i.exec(command);
+  if (powerShellScript) {
     const script = [
       "$ErrorActionPreference = 'Stop'",
       "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
       "$OutputEncoding = [Console]::OutputEncoding",
-      invocation,
-      "$__ashSucceeded = $?",
-      "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }",
-      "if (-not $__ashSucceeded) { exit 1 }",
-      "exit 0",
+      powerShellScriptInvocation(command, powerShellScript[1]!, powerShellScript[0].length),
     ].join("\n");
     return {
       file: powerShellExe() ?? "powershell.exe",
