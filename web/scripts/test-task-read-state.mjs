@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readEventForTask, reconcileReadState } from "../src/lib/useTaskReadState.ts";
+import { deriveTaskStatusIndicator, readEventForTask, reconcileReadState } from "../src/lib/useTaskReadState.ts";
 
 function task(id, updatedAt) {
   return {
@@ -35,5 +35,34 @@ assert.equal(
 // 保留陈旧项不会掩盖真正的新一轮：终态事件版本变化时仍然不相等，调用方会判未读。
 const restartedSecond = { ...second, updatedAt: "2026-08-20T03:00:00.000Z", endedAt: "2026-08-20T03:00:00.000Z" };
 assert.notEqual(afterFullFetch.second.event, readEventForTask(restartedSecond));
+
+const dot = (over) => deriveTaskStatusIndicator({ ...task("dot", "2026-08-20T01:00:00.000Z"), ...over });
+
+assert.equal(dot({ question: "选哪条？" }), "attention", "有待答问题 = 等你说话");
+assert.equal(dot({ status: "paused" }), "attention", "暂停本身不能证明有后台任务");
+assert.equal(dot({ status: "paused", monitorRunning: true }), "working");
+assert.equal(dot({ status: "done", monitorRunning: true }), "working");
+assert.equal(dot({ status: "paused", monitorRunning: false }), "attention");
+assert.equal(
+  dot({ status: "paused", monitorRunning: true, question: "选哪条？" }),
+  "attention",
+  "既挂着哨兵又在问你：问题优先 —— 出路在你手上",
+);
+// 门禁跑的那十几分钟里任务的 status/stage 一个字都不变，只有这个字段看得出来。
+assert.equal(dot({ stage: "awaiting_acceptance" }), "unaccepted", "干完等验收 = 靛蓝环");
+assert.equal(
+  dot({ stage: "awaiting_acceptance", acceptGateRunning: true }),
+  "working",
+  "验收前置命令正在跑：先说「有东西在跑」，别再显示成静静等你验收",
+);
+const lead = { ...task("lead", "2026-08-20T01:00:00.000Z"), mode: "team", status: "idle" };
+const worker = (over) => ({ ...task("w", "2026-08-20T01:00:00.000Z"), parentId: "lead", ...over });
+assert.equal(deriveTaskStatusIndicator(lead, [worker({ question: "问你" })]), "attention");
+assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "paused" })]), "attention");
+assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "paused", monitorRunning: true })]), "working");
+assert.equal(deriveTaskStatusIndicator({ ...lead, status: "paused" }, []), "attention");
+assert.equal(deriveTaskStatusIndicator({ ...lead, status: "paused", monitorRunning: true }, []), "working");
+assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "paused", monitorRunning: true, question: "问你" })]), "attention");
+assert.equal(deriveTaskStatusIndicator({ ...lead, acceptGateRunning: true }, []), "working");
 
 console.log("test-task-read-state: all assertions passed");

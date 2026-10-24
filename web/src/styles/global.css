@@ -8,6 +8,7 @@
 @import "./image-preview.css";
 @import "./hover-tip.css";
 @import "./task-origin.css";
+@import "./task-status-dot.css";
 @import "./task-tree.css";
 @import "./task-mode.css";
 @import "./workspace.css";
@@ -34,6 +35,7 @@
 @import "./inspector.css";
 @import "./team-info-panel.css";
 @import "./review-inspector.css";
+@import "./wait-bar.css";
 @import "./monitors.css";
 @import "./team-review.css";
 @import "./zoom-layer.css";

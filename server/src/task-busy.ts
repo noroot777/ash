@@ -26,6 +26,7 @@ import { tasks } from "./db/schema.js";
 import { isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { hasLiveAcceptGate } from "./accept-gate.js";
+import { reconcileGateProcesses } from "./accept-gate-ownership.js";
 
 /** 409 的响应体,原样回给 UI。 */
 export interface TaskBusyRejection {
@@ -46,8 +47,9 @@ export function isTaskBusy(row: { id: string; status: string }): boolean {
  * `verb` 只拼进文案(「删除」/「清理」),判据对每个入口完全一致。
  */
 export async function taskBusyRejection(taskId: string, verb: string): Promise<TaskBusyRejection | null> {
+  await reconcileGateProcesses(taskId);
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!row) return null;
+  if (!row) return hasLiveAcceptGate(taskId) ? { error: `验收前置命令尚未确认退出，暂不能${verb}` } : null;
   // 「在执行」和「在验收」要分开报 —— 用户要做的事不一样(一个去停,一个等它跑完);
   // 两句之和正好是 isTaskBusy。
   if (row.status === "running" || row.status === "queued" || isTurnClaimed(taskId)) {
@@ -58,7 +60,9 @@ export async function taskBusyRejection(taskId: string, verb: string): Promise<T
   if (hasLiveAcceptGate(taskId)) {
     return { error: `验收前置命令正在这个任务的工作区里跑，等它跑完或在验收台上收掉它再${verb}`, status: row.status };
   }
-  const busyChild = (await db.select().from(tasks).where(eq(tasks.parentId, taskId))).find(isTaskBusy);
+  const children = await db.select().from(tasks).where(eq(tasks.parentId, taskId));
+  for (const child of children) await reconcileGateProcesses(child.id);
+  const busyChild = children.find(isTaskBusy);
   if (busyChild) {
     return {
       error: `执行者「${busyChild.title}」正在执行，请先停止团队再${verb}`,

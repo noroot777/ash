@@ -31,6 +31,7 @@ import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
+import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import {
@@ -620,6 +621,14 @@ export function TeamView({
               indicatorForTask={indicatorForTask}
               historyReady={conversation.transcriptReady}
             />
+            {/* 验收前置命令那一条，跟普通任务详情页同一个组件、同一条 rail 几何（第 1 轮
+                审查 F4）：团队走的是这套独立的主会话 + 回复框，不经过 TaskDetail，于是
+                给团队点验收之后，命令在工作区里跑十几分钟而这一页上一个字都看不出来。 */}
+            {task.acceptGateRunning && (
+              <div className="task-reply-rail">
+                <AcceptGateWaitCard key={task.id} taskId={task.id} expected notify={notify} />
+              </div>
+            )}
             <TeamReplyBox task={task} onSend={async (text, attachments, options) => {
               // 回复也会起一轮(与普通任务详情页同口径)。
               if (!(await confirmExecutorSwap(task.id))) return null;

@@ -18,6 +18,8 @@ try {
   const { REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER, SWEEP_RULES } = await import("../src/review-sweep.js");
   const { extractReportFindings, priorFindingsSection } = await import("../src/review-history.js");
   const { repairPrompt, reviewReminderFor, verifyReminderFor } = await import("../src/review-prompts.js");
+  const { ensureSchema } = await import("../src/db/index.js");
+  await ensureSchema();
   const {
     assertCarriesClassRepairNote,
     assertCarriesSweepReminder,
@@ -349,9 +351,9 @@ try {
   );
 
   // ── ④ 真的被塞进了各条 prompt ───────────────────────────────────────────────
-  assertCarriesSweepReminder(verifyReminderFor("t-1", 2), "自动验证续跑提醒");
+  assertCarriesSweepReminder(await verifyReminderFor("t-1", 2), "自动验证续跑提醒");
   assertCarriesSweepReminder(
-    reviewReminderFor({ id: "legacy-review", reviewOf: "t-1", reviewRound: 2 }),
+    await reviewReminderFor({ id: "legacy-review", reviewOf: "t-1", reviewRound: 2 }),
     "历史审查续跑提醒",
   );
   // 修复提示那一侧：不带这句话，「不要扩大原任务边界」会把报出来的类改回成一个补丁。
@@ -367,5 +369,7 @@ try {
 
   console.log("✓ review sweep contract");
 } finally {
+  const { dbClient } = await import("../src/db/index.js");
+  dbClient.close();
   rmSync(root, { recursive: true, force: true });
 }

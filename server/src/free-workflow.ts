@@ -13,10 +13,11 @@ import {
   freeReviewRuns,
   freeWorkflowStates,
   reviewerProfiles,
+  regressionEvidence,
   scheduledMessages,
   tasks,
 } from "./db/schema.js";
-import { armFollowUpFreeReview, clearReservationForDispatch, disarmFreeReviewReservation, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview } from "./free-review-reservations.js";
+import { clearReservationForDispatch, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview } from "./free-review-reservations.js";
 import {
   checkMode,
   overrideLabel,
@@ -27,7 +28,6 @@ import {
   reviewOverride,
   reviewRunConfig,
 } from "./free-review-input.js";
-import { freeRepairPrompt } from "./free-review-prompts.js";
 export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 // 「按意见修复」那条链(入口校验 + 放行证明 + 投递回调)住在 free-review-manual-repair.ts;
 // 入口仍从这里导出,调用方(路由/测试/裁定链)不必知道它搬了家。
@@ -39,18 +39,20 @@ import { activeDebateOf, settleDebateTurn } from "./free-review-debate.js";
 // 一轮审查的生命周期（起一轮 / 续下一轮 / 启动失败收尾 / 重跑崩掉的那一轮）住在
 // free-review-round.ts；这里只做「派/预约/结算」这一层的编排。
 import {
-  cleanupAcceptedMergeRun,
   failReviewStart,
   latestWorkspaceRun,
   launchReviewRound,
   nextRound,
   reviewingRun,
-  stopReviewRunMonitors,
 } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
-import { freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
+import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
+import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
+import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
+import { completeRegressionSettlement, regressionSettlementConclusion } from "./regression-settlement.js";
+import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
+import { claimTurn, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { reviewSweepReminder } from "./review-sweep.js";
@@ -123,6 +125,8 @@ export async function freeReviewResumeOptions(taskId: string): Promise<ReviewRes
 export async function freeReviewReminder(taskId: string): Promise<string> {
   const run = await reviewingRun(taskId);
   if (!run) return "";
+  const { reference } = await refreshRegressionEvidence(taskId,
+    freeReviewEvidenceDir(taskId, run.id, run.currentRound), run.targetKind === "accepted_merge");
   // 中途提问后续跑那条路上，只有这条提醒还在重贴要求（崩掉重拉走 freeReviewResumeMessage，
   // 两条路各带一份），所以报告格式和扫描义务两份契约都得在 —— 原先这里只有浏览器提醒，
   // 而就地验证那侧的 `verifyReminderFor` 一直带着摘要契约：两个对称端点只做了一个。
@@ -131,7 +135,7 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
     `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +
     REPORT_SUMMARY_REMINDER +
     reviewSweepReminder(run.targetKind !== "accepted_merge") +
-    `回归证据见 ${freeReviewReportPath(taskId, run.id, run.currentRound).replace(/report\.md$/, "regression-evidence.json")}；合并结果审查不适用此清单。` +
+    reference +
     `结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
     `不要调用 complete_task 或 accept_task。`;
 }
@@ -251,7 +255,7 @@ export async function reconcileFreeReviews(): Promise<void> {
     const round = (await db.select().from(freeReviewRounds)
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
     if (round?.conclusion) {
-      await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, true, "reviewer");
+      await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer");
       continue;
     }
     if (task.question || task.resumePrompt) continue;
@@ -265,18 +269,27 @@ export async function reconcileFreeReviews(): Promise<void> {
         eq(scheduledMessages.sessionRole, "reviewer"),
       )).limit(1)).at(0);
     if (pendingReviewerAnswer) continue;
-    await failReviewStart(run, "服务重启时审查回合尚未启动或已丢失；可再派一轮审查");
-    await disarmFreeReviewReservation(run.taskId);
+    if (!round) await db.insert(freeReviewRounds).values({ id: id(), runId: run.id, round: run.currentRound,
+      status: "reviewing", startedAt: run.createdAt }).onConflictDoNothing();
+    await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer")
+      .catch((error) => console.error(`[ash] 孤儿审查收尾待重试 ${run.id}:`, error));
   }
 }
 
 export async function reportFreeReviewConclusion(
   taskId: string,
   stage: string,
-  opts: { bySessionRecovery?: boolean } = {},
+  opts: { bySessionRecovery?: boolean; verificationBasis?: unknown; expectedTask?: ConclusionTask; expectedDirectionToken?: string | null } = {},
 ): Promise<{ runId: string; round: number } | null> {
   const run = await reviewingRun(taskId);
   if (!run) return null;
+  const task = opts.expectedTask ?? (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+  if (!task || task.id !== taskId || (opts.expectedDirectionToken !== undefined && opts.expectedDirectionToken !== task.activeDirectionToken)) {
+    throw new Error("当前方向身份已变化，结论未提交");
+  }
+  const round = (await db.select().from(freeReviewRounds)
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound))))[0];
+  if (!round || round.status !== "reviewing") throw new Error("当前审查轮次已结束，结论未提交");
   if (stage !== "verified" && stage !== "verify_failed") {
     throw new Error("自由工作流审查回合只能上报 verified 或 verify_failed");
   }
@@ -293,8 +306,21 @@ export async function reportFreeReviewConclusion(
   if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
     throw new Error(`审查结论必须先落报告：请把非空报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
   }
-  await db.update(freeReviewRounds).set({ conclusion: stage })
-    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
+  const checked = await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
+    run.targetKind === "accepted_merge", opts.verificationBasis);
+  await commitRegressionConclusion(checked, async (transaction) => {
+    await assertConclusionTask(transaction, task);
+    const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];
+    const currentRound = (await transaction.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, round.id)))[0];
+    if (!currentRun || currentRun.status !== "reviewing" || currentRun.currentRound !== run.currentRound
+      || currentRound?.status !== "reviewing" || currentRound.conclusion !== round.conclusion) {
+      throw new Error("审查轮次或结论已变化，本次上报未提交");
+    }
+    const evidence = checked && (await transaction.select().from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, checked.directory)))[0];
+    if (evidence?.settlement && currentRound.conclusion !== stage) throw new Error("本轮已进入结算，不能更改结论");
+    await transaction.update(freeReviewRounds).set({ conclusion: stage }).where(eq(freeReviewRounds.id, round.id));
+  });
   bus.publish({ type: "task.review", taskId });
   return { runId: run.id, round: run.currentRound };
 }
@@ -310,7 +336,7 @@ export async function handleFreeWorkflowSettlement(
   taskId: string,
   status: TaskStatus,
   confirmedDone: boolean,
-  turnOk: boolean,
+  turnOk: boolean | null,
   role: SessionRole = "single",
   exitObserved = true,
   executionFailed = false,
@@ -319,7 +345,7 @@ export async function handleFreeWorkflowSettlement(
   if (!task || task.workflowMode !== "free") return false;
   // 辩论段（审查者答辩 / 执行者回应）排在角色分流**之前**收：它既可能是 reviewer 回合
   // 也可能是任务自己的旁路回合，按角色分流会把它误当成普通审查/执行回合结算掉。
-  if (await settleDebateTurn(taskId, turnOk)) return true;
+  if (await settleDebateTurn(taskId, turnOk === true)) return true;
   const run = await reviewingRun(taskId);
   if (role !== "reviewer") {
     if (task.question || task.resumePrompt) {
@@ -420,77 +446,40 @@ export async function handleFreeWorkflowSettlement(
   // 提问守卫只保护「审查回合以提问/检查点收尾」的场景（等答复回来续跑再结算）。
   // reviewer 已交卷（round 有结论）就必须结算——question 可能是实现回合遗留的旧字段，
   // 拿它挡住已有结论的审查会让链永远停在 reviewing（审查实测复现）。
-  if ((task.question || task.resumePrompt) && !round.conclusion) return true;
+  if (turnOk !== false && (task.question || task.resumePrompt) && !round.conclusion) return true;
+  const directory = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
+  const checked = await regressionSettlementConclusion(taskId, directory, {
+    outcome: turnOk === null ? undefined : turnOk ? "done" : "failed", round: run.currentRound,
+    freeRoundId: round.id, acceptedMerge: run.targetKind === "accepted_merge",
+  });
+  if (!checked) return true;
   const at = now();
   const outcome = freeReviewOutcome({
-    turnOk,
-    conclusion: round.conclusion,
+    turnOk: checked.outcome === "done",
+    conclusion: checked.conclusion,
     currentRound: run.currentRound,
     retryLimit: run.retryLimit,
   });
-  if (outcome === "failed") {
-    await db.update(freeReviewRounds).set({ status: "error", endedAt: at }).where(eq(freeReviewRounds.id, round.id));
-    await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));
-    await stopReviewRunMonitors(run.id, "这次审查已结束（未给出结论），它挂的哨兵一并收回");
-    await appendTaskTimeline(taskId, run.targetKind === "accepted_merge"
-      ? "合并结果审查未能正常给出结论；原任务保持已验收，可重新发起审查。"
-      : `自由工作流第 ${run.currentRound} 轮审查未能正常给出结论，已停止自动链。`);
-    await cleanupAcceptedMergeRun(run);
-    bus.publish({ type: "task.review", taskId });
+  await completeRegressionSettlement(directory, checked, async (transaction) => {
+    const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];
+    const currentRound = (await transaction.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, round.id)))[0];
+    if (currentRun?.status !== "reviewing" || currentRun.currentRound !== run.currentRound || currentRound?.status !== "reviewing") return false;
+    await transaction.update(freeReviewRounds).set({ conclusion: checked.conclusion,
+      status: outcome === "failed" ? "error" : outcome === "passed" ? "passed" : "failed", endedAt: at,
+    }).where(eq(freeReviewRounds.id, round.id));
+    await transaction.update(freeReviewRuns).set({ status: outcome === "failed" ? "failed" : outcome === "passed" ? "passed" : "stopped",
+      updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));
+    if (turnOk === null && !round.conclusion) await transaction.update(freeWorkflowStates).set({
+      reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: at,
+      reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
+    }).where(eq(freeWorkflowStates.taskId, taskId));
     return true;
-  }
-
-  const passed = outcome === "passed";
-  await db.update(freeReviewRounds).set({ status: passed ? "passed" : "failed", endedAt: at })
-    .where(eq(freeReviewRounds.id, round.id));
-  if (passed) {
-    await db.update(freeReviewRuns).set({ status: "passed", updatedAt: at, finishedAt: at })
-      .where(eq(freeReviewRuns.id, run.id));
-    await stopReviewRunMonitors(run.id, "这次审查已通过，它挂的哨兵一并收回");
-    await appendTaskTimeline(taskId, run.targetKind === "accepted_merge"
-      ? `合并结果审查通过（${run.reviewerName}）；原任务继续保持已验收。`
-      : `自由工作流第 ${run.currentRound} 轮审查通过（${run.reviewerName}）。`);
-    await cleanupAcceptedMergeRun(run);
-    bus.publish({ type: "task.review", taskId });
-    return true;
-  }
-
-  // 未通过：run 一律落 stopped。链要不要自动续，看轮数——还有就发修复消息 + 挂续轮预约。
-  await db.update(freeReviewRuns).set({ status: "stopped", updatedAt: at, finishedAt: at })
-    .where(eq(freeReviewRuns.id, run.id));
-  await stopReviewRunMonitors(run.id, "这次审查已出结论，它挂的哨兵一并收回");
-  if (run.targetKind === "accepted_merge") {
-    await appendTaskTimeline(taskId, "合并结果审查未通过；原任务保持已验收，可从审查记录创建独立修复任务。");
-    await cleanupAcceptedMergeRun(run);
-    bus.publish({ type: "task.review", taskId });
-    return true;
-  }
-  if (outcome === "repair") {
-    // 只在槽空着时挂续轮预约（判据与理由见 armFollowUpFreeReview）：用户在这一轮审查
-    // 期间自己存的那条预约是更新的意思，不能被自动续轮顶掉。
-    const hooked = await armFollowUpFreeReview(taskId, run, at);
-    await appendTaskTimeline(taskId, hooked
-      ? `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；修复回合正常结束后自动复审。`
-      : `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；你已另外预约了一条审查，执行回合正常结束后按你的预约执行（本链不再自动续轮）。`);
-    bus.publish({ type: "task.review", taskId });
-    // 刚挂上的这条续轮预约的版本令牌：投递失败要撤销的是**它**。迟到的无条件清槽会把
-    // 用户在这期间保存的新预约一起删掉（审查实测同型交错）。没挂上时槽里那条是用户的，
-    // 一个字都不能动。
-    const armed = hooked ? await readFreeReviewReservation(taskId) : null;
-    continueWhenIdle(taskId, await freeRepairPrompt(taskId, run), { byBackend: true }, async (error) => {
-      const canceled = armed ? await consumeFreeReviewReservation(taskId, armed) : null;
-      await appendTaskTimeline(taskId, canceled
-        ? `自由工作流审查意见投递失败：${error}；自动复审已取消，可手动按意见修复或再派审查。`
-        : `自由工作流审查意见投递失败：${error}；请手动按意见修复或再派审查（预约已被更新，保留你最新的设置）。`);
-      bus.publish({ type: "task.review", taskId });
-    });
-    return true;
-  }
-
-  await appendTaskTimeline(taskId, `自由工作流审查仍未通过，自动复审次数已用完；现在由你决定验收通过、按意见修复或再开一轮审查。`);
-  bus.publish({ type: "task.review", taskId });
+  }, finalization("free", { run, outcome, at, turnToken: task.activeTurnToken,
+    directionToken: task.activeDirectionToken, directionEpoch: task.directionEpoch }));
+  await drainRegressionFinalization(directory);
   return true;
 }
+
 
 export type AcceptedMergeReviewTarget = {
   kind: "accepted_merge";

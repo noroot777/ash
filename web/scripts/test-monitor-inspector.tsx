@@ -568,7 +568,7 @@ for (const file of ["../src/task-detail/ReplyBox.tsx", "../src/team/TeamView.tsx
   // 上一版在折叠态上断言「不含『重新叫醒』」,那在任何实现下都成立,等于什么都没查)。
   const shut = wait([stuck]);
   assert.match(shut, /在等 1 个哨兵/, "折叠那一行照旧:在等几个、等的是谁");
-  assert.doesNotMatch(shut, /monitor-wait__body/,
+  assert.doesNotMatch(shut, /wait-bar__body/,
     "折叠态连正文都不渲染 —— 这一条钉住上面那句话的前提:正文的断言只能在真点击里做");
 }
 

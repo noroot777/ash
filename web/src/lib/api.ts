@@ -34,7 +34,7 @@ import type {
   TeamPresetConfig,
 } from "@ash/shared";
 
-import type { AcceptGateView } from "@ash/shared/accept-gate";
+import type { AcceptGateCancelResult, AcceptGateView } from "@ash/shared/accept-gate";
 import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
@@ -423,13 +423,16 @@ export const api = {
   },
   acceptGate: (taskId: string): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`),
   // 整份日志单独取：状态接口每隔几秒拉一次，几十 MB 的回归输出不能搭在它上面。
-  acceptGateLog: async (taskId: string): Promise<string> => {
-    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept-gate/log`));
+  // runId 指定某一次（已验收那张回执看的是**凭据那一次**，不是最近一次）。
+  acceptGateLog: async (taskId: string, runId?: string): Promise<string> => {
+    const response = await fetch(apiPath(
+      `/tasks/${id(taskId)}/accept-gate/log${runId ? `?run=${encodeURIComponent(runId)}` : ""}`,
+    ));
     if (!response.ok) throw apiError(response, await parseBody(response));
     return await response.text();
   },
-  cancelAcceptGate: (taskId: string): Promise<{ canceled: true; gate: AcceptGateView }> =>
-    request(`/tasks/${id(taskId)}/accept-gate/cancel`, json("POST", {})),
+  cancelAcceptGate: (taskId: string, runId: string): Promise<AcceptGateCancelResult> =>
+    request(`/tasks/${id(taskId)}/accept-gate/cancel`, json("POST", { runId })),
   // 「再交给智能体去修」：红了那次 ash 已经自动交过一次，这条是补救（那次没投递成功）
   // 与再推一把（agent 那一轮跑完了还没修好）。
   rehandOffAcceptGate: (taskId: string): Promise<{ handedOff: true; gate: AcceptGateView }> =>

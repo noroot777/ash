@@ -498,8 +498,8 @@ try {
   {
     const bodyOf = async (mode) => {
       const page = await open(undefined, `?wait=${mode}`);
-      await page.locator(".monitor-wait__bar").click();
-      const body = page.locator(".monitor-wait__body");
+      await page.locator(".wait-bar__bar").click();
+      const body = page.locator(".wait-bar__body");
       await body.waitFor();
       const text = await body.innerText();
       await page.close();

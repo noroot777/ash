@@ -30,11 +30,16 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe("被验任务 id（就地验证时即当前任务；历史独立审查任务填被审任务 id）"),
       stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
+      verificationBasis: z.object({
+        kind: z.literal("independent"),
+        generation: z.string().min(1),
+        monitorIds: z.array(z.string().min(1)).min(1),
+      }).optional().describe("旧回归资格撤销后的独立验证依据：本轮提示或拒收响应中的 generation，以及该代次后本轮 start_monitor 真实完整通过的检查 id；重放原样保留，不得用刷新清单代替重测"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, stage, directionToken }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage }, directionToken)); }
+  async ({ taskId, stage, directionToken, verificationBasis }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage, verificationBasis }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

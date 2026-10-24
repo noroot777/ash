@@ -372,9 +372,9 @@ export async function continueTask(
     // 每回合都重贴一遍「你现在在干什么」：验证轮可能中途提问、被打断再续跑，
     // 那些回合都不带最初那段协议，只有从任务状态派生的提醒能跟到底。
     const reviewReminder = reviewTask
-      ? reviewReminderFor(task)
+      ? await reviewReminderFor(task)
       : task.verifyRound
-        ? verifyReminderFor(task.id, task.verifyRound)
+        ? await verifyReminderFor(task.id, task.verifyRound)
         : freeReviewTurn
           ? await freeReviewReminder(task.id)
           : "";

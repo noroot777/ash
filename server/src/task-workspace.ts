@@ -1,4 +1,5 @@
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
@@ -115,6 +116,12 @@ export async function isolatedWorkspaceOwner(
   const parent = await lookup(task.parentId);
   if (!parent || parent.mode !== "team" || parent.projectId !== task.projectId) return null;
   return parent.useWorktree ? parent.id : null;
+}
+
+export async function existingTaskWorkspacePath(task: OwnerTask, repoPath: string): Promise<string | null> {
+  const owner = await isolatedWorkspaceOwner(task);
+  const path = owner ? worktreePathFor(repoPath, owner) : expandHome(repoPath);
+  return isDirSync(path) && (!owner || existsSync(join(path, ".git"))) ? path : null;
 }
 
 /** 共用同一个工作目录的一位任务：id 之外还带着判「在不在飞」和写提示要用的两列。 */

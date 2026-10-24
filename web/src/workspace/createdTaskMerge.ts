@@ -6,14 +6,15 @@
 // 两者在字段上同形(都是「一边 queueId=null、一边非 null」),只能比先后:服务端在
 // 队列变更时 bump 成员 updatedAt(queues.ts publishQueueMembers),这里按它裁决。
 // 相等时保留本地行——SSE 载荷是发布时现读库的 enriched 快照,至少不旧于同刻的响应。
+import { mergeTaskSnapshotFields } from "../lib/taskSnapshot.ts";
+
 export function mergeCreatedTask<T extends { id: string; updatedAt: string }>(
   current: T[],
   created: T,
 ): T[] {
   const existing = current.find((row) => row.id === created.id);
   if (!existing) return [created, ...current];
-  if (existing.updatedAt >= created.updatedAt) return current;
-  return current.map((row) => (row.id === created.id ? created : row));
+  return current.map((row) => (row.id === created.id ? mergeTaskSnapshotFields(existing, created, true) : row));
 }
 
 // 入队响应波及成员(前驱等)的合并策略:同样按 updatedAt 裁决,但**缺行不插入**。
@@ -26,6 +27,6 @@ export function mergeTaskSnapshot<T extends { id: string; updatedAt: string }>(
   snapshot: T,
 ): T[] {
   const existing = current.find((row) => row.id === snapshot.id);
-  if (!existing || existing.updatedAt >= snapshot.updatedAt) return current;
-  return current.map((row) => (row.id === snapshot.id ? snapshot : row));
+  if (!existing) return current;
+  return current.map((row) => (row.id === snapshot.id ? mergeTaskSnapshotFields(existing, snapshot, true) : row));
 }

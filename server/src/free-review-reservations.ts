@@ -239,6 +239,7 @@ export async function armFollowUpFreeReview(
   taskId: string,
   run: { id: string; reviewerId: string | null; checkMode: string; retryLimit: number },
   at: string,
+  query: Pick<typeof db, "insert"> = db,
 ): Promise<boolean> {
   const slot = {
     selectedReviewerId: run.reviewerId, reviewArmed: true, reviewCheckMode: run.checkMode,
@@ -247,7 +248,7 @@ export async function armFollowUpFreeReview(
     // 只会在 UI 的「调整预约复审」表单里冒出来。
     reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
   };
-  const attached = await db.insert(freeWorkflowStates).values({ taskId, ...slot })
+  const attached = await query.insert(freeWorkflowStates).values({ taskId, ...slot })
     .onConflictDoUpdate({
       target: freeWorkflowStates.taskId,
       set: slot,
