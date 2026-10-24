@@ -86,7 +86,7 @@ export interface CliModelCatalog {
  * 服务端返回的 `probeSupported`。与 server catalog 里填了 `models` 的
  * type 是否一致,由 `server/scripts/test-cli-models.ts` 断言,不靠自觉。
  */
-export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", "codex", "grok", "opencode", "pi"]);
+export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", "codex", "grok", "kimi", "opencode", "pi"]);
 
 // CLI-native model aliases used when an executor is on its official account.
 // Provider-backed executors replace these with that provider's /v1/models list.
@@ -137,7 +137,7 @@ export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   trae: [],
   // 2026-08-13 登录态 `grok models`(v1.0.3):grok-4.6(默认) + grok-4.5。
   grok: ["grok-4.6", "grok-4.5"],
-  kimi: ["kimi-code/k3", "kimi-code/kimi-for-coding", "kimi-code/kimi-for-coding-highspeed"],
+  kimi: ["kimi-code/k3.1-pro", "kimi-code/k3.1-pro-highspeed", "kimi-code/k3", "kimi-code/k3-256k", "kimi-code/kimi-for-coding", "kimi-code/kimi-for-coding-highspeed"],
   cursor: ["auto", "grok-4.5", "composer-2.5", "claude-sonnet-5", "claude-opus-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gemini-3.1-pro", "gemini-3.6-flash"],
   // qwen-code 的 Coding Plan 可选模型(2026-07-30 官方 auth 文档);同一菜单里还有
   // glm-5 / kimi-k2.5 / MiniMax-M2.5 等第三方 id,要用直接手填。
@@ -191,7 +191,7 @@ export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
   opencode: ["minimal", "low", "medium", "high", "xhigh", "max"],
   trae: [], // 2026-07-30 核对 docs.trae.cn 的 CLI 参数表与 trae_cli.yaml 字段:TRAE CLI 没有 reasoning/thinking effort 这个概念
   grok: ["low", "medium", "high"],
-  kimi: [], // 2026-07-30:config/API 有 effort,但 Kimi Code CLI 没有对应命令行参数
+  kimi: ["low", "medium", "high", "xhigh", "max"],
   cursor: [], // 2026-07-30 核对 Cursor CLI 参数页:没有独立 reasoning-effort flag;effort/Fast 看起来通过模型变体或账号计划控制
   qwen: [], // 2026-07-30 核对 main 的 yargs 定义:qwen-code 没有 reasoning/thinking effort 参数
   qoder: ["low", "medium", "high", "xhigh", "max"], // 2026-07-30 核对 qodercli@1.1.8 bundle:`--reasoning-effort <level>`,另接 disabled/off/none 与正整数

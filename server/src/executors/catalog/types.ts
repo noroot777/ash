@@ -152,6 +152,7 @@ export interface CliExecSpec {
   model?: CliValueArgs;
   /** 思考强度参数。缺省 = 该 CLI 没有这个概念。 */
   reasoningEffort?: CliValueArgs;
+  reasoningEffortEnv?: string;
   /** 1.5x 加速档要带的 argv。缺省 = 该 CLI 无此概念,忽略 profile 上的 speed。 */
   fastArgs?: string[];
   session?: CliSessionSpec;

@@ -96,6 +96,8 @@
     "test:claude-relay-settings-live": "tsx scripts/test-claude-relay-settings-live.ts",
     "test:model-effort-isolation": "tsx scripts/test-model-effort-isolation.ts",
     "test:cli-catalog": "tsx scripts/test-cli-catalog.ts",
+    "test:kimi": "tsx scripts/test-kimi.ts && node ../scripts/test-kimi-mcp.mjs",
+    "test:kimi-live": "tsx scripts/test-kimi-live.ts",
     "test:cli-models": "tsx scripts/test-cli-models.ts",
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
     "test:task-creation-origin": "tsx scripts/test-task-creation-origin.ts",

@@ -5,7 +5,7 @@ import { cliConfigOverrideEnvPatch } from "@ash/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
-import { cleanupAfterRun, killChild, redactSecrets, resumeFor } from "./spawn.js";
+import { cleanupAfterRun, killChild, redactSecrets, resumeFor, shq } from "./spawn.js";
 import { textParser } from "./catalog/parsers.js";
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting } from "./markdown-image-stream.js";
@@ -67,11 +67,14 @@ export class GenericCliExecutor implements AgentExecutor {
     // relay 只在 spec 声明了注入方式时才生效 —— 半截配置去撞一个必然 401 的端点,
     // 不如老老实实用 CLI 自己的官方账号(同 executors/index.ts 的 loadRelay 口径)。
     this.relay = spec.exec.relay ? opts.relay : undefined;
-    this.resumeEnvHint = resumeEnvHint(
+    const effortEnv = spec.exec.reasoningEffortEnv && this.reasoningEffort
+      ? `${spec.exec.reasoningEffortEnv}=${shq(this.reasoningEffort)} ` : "";
+    const configuredEnvHint = resumeEnvHint(
       this.type,
       this.configOverrides,
       this.relay ? spec.exec.relay!(this.relay).envHint : undefined,
     );
+    this.resumeEnvHint = (effortEnv + (configuredEnvHint ?? "")) || undefined;
     this.label = opts.name ?? `${spec.key}@local${opts.model ? "·" + opts.model : ""}`;
   }
 
@@ -172,6 +175,9 @@ export class GenericCliExecutor implements AgentExecutor {
   // `undefined` 值 = 从子进程环境里删掉那个变量(见 cliConfigOverrideEnvPatch)。
   private env(): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv());
+    if (this.spec.exec.reasoningEffortEnv && this.reasoningEffort) {
+      env[this.spec.exec.reasoningEffortEnv] = this.reasoningEffort;
+    }
     if (this.relay && this.spec.exec.relay) Object.assign(env, this.spec.exec.relay(this.relay).env);
     return env;
   }
