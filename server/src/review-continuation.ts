@@ -11,6 +11,7 @@ import { recordReviewWait, reviewWaitAuthorized, reviewWaitAtTurnStart, snapshot
 import { questionWaitMatches, questionWaitOrigin, reviewWaitOrigin, startTaskWaitTurn } from "./task-wait-ownership.js";
 import { rememberGuardedStart, clearGuardedStart } from "./guarded-turn-start.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
+import { now } from "./util.js";
 
 export { activeReviewEvidence } from "./review-ownership.js";
 
@@ -22,6 +23,7 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
   if (!ignoreActive && (["running", "queued"].includes(owner.status) || isTurnClaimed(owner.id))) return true;
   if (!state || state.settlement) return false;
   if (!await reviewWaitAuthorized(transaction, state)) return false;
+  if (state.continuation?.phase === "uncertain") return true;
   const ownsWait = (origin: WaitOrigin | undefined) =>
     origin?.kind === "review" && origin.directory === state.directory && origin.generation === state.generation;
   const question = owner.question && questionWaitMatches(owner) && ownsWait(owner.waitOwnership?.question?.origin);
@@ -53,8 +55,9 @@ export async function assertReviewTurnStart(taskId: string, turnToken: string, d
     const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
     const evidence = generation ? (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.generation, generation)))[0]
       : task && await activeReviewEvidence(transaction, task);
-    if (!task || !evidence || task.archived || (delivery?.kind === "repair" && ["accepted", "merged"].includes(task.stage ?? ""))
+    if (!task || !evidence || task.archived
       || task.activeTurnToken !== turnToken || task.activeDirectionToken !== directionToken) throw new ReviewSuperseded();
+    if (delivery?.kind === "repair") await reviewDeliveryAuthority(transaction, delivery, taskId);
     if (delivery?.kind !== "repair") {
       const active = await activeReviewEvidence(transaction, task);
       if (active?.directory !== evidence.directory || evidence.settlement) throw new ReviewSuperseded();
@@ -63,6 +66,8 @@ export async function assertReviewTurnStart(taskId: string, turnToken: string, d
         .set({ continuation: { ...evidence.continuation, phase: "running", start: undefined } })
         .where(eq(regressionEvidence.directory, evidence.directory));
     }
+    if (task.waitOwnership?.start) await transaction.update(tasks).set({ waitOwnership: { ...task.waitOwnership,
+      start: { ...task.waitOwnership.start, phase: "launching" } } }).where(eq(tasks.id, taskId));
   }, { behavior: "immediate" });
 }
 
@@ -83,6 +88,7 @@ export async function queueReviewAnswer(transaction: ConclusionTransaction, task
 
 export async function beginReviewContinuation(transaction: ConclusionTransaction, task: TaskRow, source: TurnSource,
   turnToken: string, directionToken: string, delivery?: ReviewDelivery): Promise<ReviewStartReceipt | undefined> {
+  if (task.waitOwnership?.start?.phase === "uncertain") throw new Error("原审查输入是否执行尚不确定，已暂停自动重发；请核对执行记录后重新派审。");
   const deliveredState = delivery ? await reviewDeliveryAuthority(transaction, delivery, task.id) : undefined;
   const state = await activeReviewEvidence(transaction, task, source);
   if (delivery && delivery.kind !== "repair" && (!state || state.directory !== deliveredState?.directory)) throw new ReviewSuperseded();
@@ -90,8 +96,14 @@ export async function beginReviewContinuation(transaction: ConclusionTransaction
   if (!state || delivery?.kind === "repair") {
     await snapshotReviewWait(transaction, task, identity, { kind: "ordinary" });
     if (deliveredState && delivery?.kind === "repair") {
+      if (deliveredState.finalization?.repair?.messageId === delivery.messageId) {
+        await transaction.update(regressionEvidence).set({ finalization: { ...deliveredState.finalization,
+          repair: { ...deliveredState.finalization.repair, identity } } })
+          .where(eq(regressionEvidence.directory, deliveredState.directory));
+      }
       const receipt: ReviewStartReceipt = { directory: deliveredState.directory, generation: deliveredState.generation,
-        identity, repair: true, delivery };
+        identity, repair: true, delivery,
+        ...(deliveredState.finalization?.repair?.messageId === delivery.messageId ? { acceptedRepair: true } : {}) };
       await rememberGuardedStart(transaction, task, receipt, delivery.messageId);
       return receipt;
     }
@@ -113,7 +125,8 @@ export async function beginReviewContinuation(transaction: ConclusionTransaction
   return receipt;
 }
 
-export async function commitReviewTurnDelivery(taskId: string, receipt: ReviewStartReceipt | undefined): Promise<void> {
+export async function commitReviewTurnDelivery(taskId: string, receipt: ReviewStartReceipt | undefined,
+  process?: { pid: number; unitToken?: string | null }): Promise<void> {
   if (!receipt) return;
   await db.transaction(async (transaction) => {
     const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
@@ -125,5 +138,10 @@ export async function commitReviewTurnDelivery(taskId: string, receipt: ReviewSt
       .set({ continuation: { ...state.continuation, phase: "running", start: undefined } })
       .where(eq(regressionEvidence.directory, receipt.directory));
     await clearGuardedStart(transaction, task);
+    const current = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
+    await transaction.update(tasks).set({ waitOwnership: { ...current.waitOwnership,
+      deliveredReview: { directory: receipt.directory, generation: receipt.generation, identity: receipt.identity,
+        input: receipt.delivery, pid: process?.pid, unitToken: process?.unitToken, confirmedAt: now() } } })
+      .where(eq(tasks.id, taskId));
   }, { behavior: "immediate" });
 }

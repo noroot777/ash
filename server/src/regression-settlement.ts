@@ -122,12 +122,15 @@ export async function completeRegressionSettlement(directory: string, checked: C
   return completed;
 }
 
-export async function recordInterruptedRegressionReview(task: typeof tasks.$inferSelect): Promise<void> {
+export async function recordInterruptedRegressionReview(task: typeof tasks.$inferSelect): Promise<boolean> {
+  if (task.waitOwnership?.start && await (await import("./review-start-retry.js"))
+    .restoreUndeliveredReviewStart(task.id, task.waitOwnership.start)) return true;
   const taskId = task.reviewOf ?? task.id, round = task.reviewOf ? task.reviewRound : task.verifyRound;
-  if (!round) return;
+  if (!round) return false;
   const directory = reviewRoundDir(taskId, round);
   const state = await evidenceState(taskId, directory, false);
   if (!state.settlement) await regressionSettlementConclusion(taskId, directory, { round, ownerTaskId: task.id, outcome: "failed" });
+  return false;
 }
 
 export async function reconcileRegressionSettlements(ownerTaskId?: string): Promise<void> {

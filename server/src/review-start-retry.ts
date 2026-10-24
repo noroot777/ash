@@ -9,7 +9,8 @@ import { publishTaskUpdated } from "./task-store.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
-export async function restoreUndeliveredReviewStart(taskId: string, receipt: ReviewStartReceipt | undefined): Promise<boolean> {
+export async function restoreUndeliveredReviewStart(taskId: string, receipt: ReviewStartReceipt | undefined,
+  notLaunched = false): Promise<boolean> {
   if (!receipt) return false;
   const restored = await db.transaction(async (transaction) => {
     const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
@@ -26,6 +27,15 @@ export async function restoreUndeliveredReviewStart(taskId: string, receipt: Rev
       }
     }
     catch (error) { if (error instanceof ReviewSuperseded) return; throw error; }
+    if (!notLaunched && start.phase !== "prepared") {
+      if (start.phase === "uncertain") return { unchanged: true as const };
+      if (!receipt.repair && !state.settlement) await transaction.update(regressionEvidence)
+        .set({ continuation: { ...state.continuation, phase: "uncertain" } }).where(eq(regressionEvidence.directory, state.directory));
+      await transaction.update(tasks).set({ status: "paused", followUpFrom: null, nativeTurn: false,
+        completeConfirmedAt: null, updatedAt: now(), waitOwnership: { ...task.waitOwnership,
+          start: { ...start, phase: "uncertain" } } }).where(eq(tasks.id, taskId));
+      return { task, status: "paused" as const, uncertain: true, unchanged: false as const };
+    }
     if (!receipt.repair) {
       await transaction.update(regressionEvidence).set({ continuation: { ...state.continuation,
         phase: receipt.delivery?.kind === "answer" ? "delivery" : "waiting", start: undefined } })
@@ -35,11 +45,14 @@ export async function restoreUndeliveredReviewStart(taskId: string, receipt: Rev
     await transaction.update(tasks).set({ status, ...directionIdentityCleared(), followUpFrom: null, nativeTurn: false,
       completeConfirmedAt: null, updatedAt: now(), waitOwnership: { ...task.waitOwnership, start: undefined },
     }).where(eq(tasks.id, taskId));
-    return { task, status };
+    return { task, status, uncertain: false, unchanged: false as const };
   }, { behavior: "immediate" });
   if (!restored) return false;
+  if (restored.unchanged) return true;
   recordTaskStatus(restored.task, restored.status);
   await publishTaskUpdated(taskId);
-  await appendTaskTimeline(taskId, "这一轮尚未送达审查输入，启动已撤回；原答复或检查点仍保留，恢复后可继续投递。");
+  await appendTaskTimeline(taskId, restored.uncertain
+    ? "服务在审查输入交付期间中断，无法确认是否已执行；已暂停且保留原输入，不会自动重发。请核对执行记录后重新派审。"
+    : "这一轮尚未送达审查输入，启动已撤回；原答复或检查点仍保留，恢复后可继续投递。");
   return true;
 }

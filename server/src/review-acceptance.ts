@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { regressionEvidence, tasks } from "./db/schema.js";
+import { regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
 import type { TaskWaitOwnership } from "./db/schema-task-wait.js";
 import { assertReviewAuthority, finalizationAuthority, ReviewSuperseded, type ReviewAuthority } from "./review-ownership.js";
 import { now } from "./util.js";
@@ -52,9 +52,21 @@ export async function resumeReviewAcceptedTail(taskId: string, originalCaller: b
   if (originalCaller && isFinalizationDraining(task.waitOwnership.acceptedFinalization.directory)) return null;
   await waitForFinalizationDrain(task.waitOwnership.acceptedFinalization.directory);
   const authority = await reviewAcceptanceAuthority(taskId);
-  if (!authority) return { ok: true };
+  if (!authority) {
+    const current = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+    const state = (await db.select().from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, task.waitOwnership.acceptedFinalization.directory)))[0];
+    const completed = state?.generation === task.waitOwnership.acceptedFinalization.generation
+      && state.finalization?.completed && !state.finalization.superseded && !current?.acceptedTailPending;
+    return { ok: !!completed, ...(!completed ? { reason: "原审查验收尾段未完成或权限已撤回，不能视为补跑成功。" } : {}) };
+  }
+  const current = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, authority.directory)))[0]!;
+  const repair = current.finalization?.repair;
+  const message = repair && (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, repair.messageId)))[0];
+  if (message?.status === "pending") return { ok: false, reason: "验收尾段的修复输入仍待投递，请先完成修复再补跑。" };
   await drainRegressionFinalization(authority.directory, true);
   const state = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, authority.directory)))[0]!;
   return { ok: !!state.finalization?.completed && !state.finalization.superseded,
-    ...(!state.finalization?.completed ? { reason: "原审查验收尾段仍待处理，可核对时间线后再次验收补跑。" } : {}) };
+    ...(!state.finalization?.completed || state.finalization.superseded
+      ? { reason: "原审查验收尾段仍待处理或权限已撤回，可核对时间线后再次验收补跑。" } : {}) };
 }

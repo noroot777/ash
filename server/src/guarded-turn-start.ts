@@ -13,12 +13,26 @@ export async function rememberGuardedStart(transaction: ConclusionTransaction, t
   const owner = (await transaction.select().from(tasks).where(eq(tasks.id, task.id)))[0]!;
   await transaction.update(tasks).set({ waitOwnership: { ...owner.waitOwnership,
     ...(receipt.repair && messageId ? { repairDelivery: { messageId, generation: receipt.generation, identity: receipt.identity } } : {}),
-    start: { ...receipt, priorStatus: taskStartStatus(task) } } }).where(eq(tasks.id, task.id));
+    start: { ...receipt, priorStatus: taskStartStatus(task), phase: "prepared" } } }).where(eq(tasks.id, task.id));
 }
 
 export async function clearGuardedStart(transaction: ConclusionTransaction, task: typeof tasks.$inferSelect): Promise<void> {
   if (task.waitOwnership?.start) await transaction.update(tasks).set({ waitOwnership: { ...task.waitOwnership, start: undefined } })
     .where(eq(tasks.id, task.id));
+}
+
+export async function recordReviewStartNotLaunched(taskId: string, receipt: ReviewStartReceipt | undefined): Promise<void> {
+  if (!receipt) return;
+  await db.transaction(async (transaction) => {
+    const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+    const start = task?.waitOwnership?.start;
+    if (!task || !start || start.directory !== receipt.directory || start.generation !== receipt.generation
+      || JSON.stringify(start.identity) !== JSON.stringify(receipt.identity)
+      || task.activeTurnToken !== receipt.identity.turnToken || task.activeDirectionToken !== receipt.identity.directionToken
+      || task.directionEpoch !== receipt.identity.directionEpoch || start.phase === "uncertain") return;
+    await transaction.update(tasks).set({ waitOwnership: { ...task.waitOwnership, start: { ...start, phase: "prepared" } } })
+      .where(eq(tasks.id, taskId));
+  }, { behavior: "immediate" });
 }
 
 export async function forgetGuardedStart(taskId: string, receipt: ReviewStartReceipt | undefined): Promise<void> {

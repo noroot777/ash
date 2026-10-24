@@ -56,15 +56,29 @@ export async function appendFinalizationTimeline(taskId: string, text: string, e
 export async function enqueueFinalizationRepair(directory: string, generation: string, taskId: string, text: string,
   guard: { turnToken: string | null; directionToken: string | null; directionEpoch: number },
   write?: (transaction: ConclusionTransaction) => Promise<void>): Promise<void> {
-  const message = pendingMessageRow({ taskId, text, origin: `review-settlement:${generation}` });
-  await commitFinalizationStep(directory, generation, "repair", async (transaction) => {
-    const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0]!;
-    await assertReviewAuthority(transaction, settlementAuthority(state));
+  await db.transaction(async (transaction) => {
+    const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
+    if (!state?.finalization || state.generation !== generation) throw new ReviewSuperseded();
+    const plan = state.finalization;
+    const authority = plan.acceptance ? finalizationAuthority(state) : settlementAuthority(state);
+    await assertReviewAuthority(transaction, authority);
     const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
     if (!task || task.directionEpoch !== guard.directionEpoch) throw new ReviewSuperseded();
+    const stepId = plan.runningStep ?? plan.blockedStep;
+    const attempt = (plan.repair?.attempt ?? 0) + 1;
+    const key = plan.acceptance ? `repair:${stepId}:${attempt}` : "repair";
+    if (plan.done.includes(key)) return;
+    if (plan.acceptance && !stepId) throw new ReviewSuperseded();
+    const messageId = `review-repair-${generation}${plan.acceptance ? `-${attempt}` : ""}`;
+    const message = pendingMessageRow({ taskId, text, origin: `review-settlement:${generation}` });
     await write?.(transaction);
-    await transaction.insert(scheduledMessages).values({ ...message, id: `review-repair-${generation}` }).onConflictDoNothing();
-  });
+    await transaction.insert(scheduledMessages).values({ ...message, id: messageId }).onConflictDoNothing();
+    const current = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0]!;
+    await transaction.update(regressionEvidence).set({ finalization: { ...current.finalization!,
+      done: [...current.finalization!.done, key],
+      ...(plan.acceptance ? { repair: { messageId, token: plan.acceptance.token, stepId: stepId!, attempt, identity: authority.target! } } : {}),
+    } }).where(eq(regressionEvidence.directory, directory));
+  }, { behavior: "immediate" });
   publishPendingMessages(taskId);
 }
 

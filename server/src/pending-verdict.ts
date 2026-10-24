@@ -38,6 +38,7 @@ export type DeliveryTaskView = {
   /** 所在分组已被用户暂停(groups.paused,持久事实)。 */
   groupPaused?: boolean;
   reviewBlocked?: string | null;
+  reviewUncertain?: boolean;
   /**
    * **这条哨兵事件的来源审查**现在是什么状态(由调用方查好填进来,纯函数本身不碰库)。
    *
@@ -75,6 +76,7 @@ export function deliveryVerdict(
   if (!task) return { action: "cancel", reason: "任务不存在" };
   if (task.archived) return { action: "cancel", reason: "任务已归档" };
   if (task.reviewBlocked) return { action: "cancel", reason: task.reviewBlocked };
+  if (task.reviewUncertain) return { action: "wait" };
   if (task.mode !== "single" && task.mode !== "team")
     return { action: "cancel", reason: `任务类型 ${task.mode} 不支持回复` };
   // 哨兵事件只有一个出口——「唤醒这个任务」。任务都结束了它再醒来也只是花钱，所以这一条

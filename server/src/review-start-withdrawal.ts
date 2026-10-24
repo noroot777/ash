@@ -15,7 +15,7 @@ import { clearGuardedStart, withdrawRepairStart } from "./guarded-turn-start.js"
 import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
 
 export type ReviewStartReceipt = { directory: string; generation: string; identity: ReviewTargetIdentity;
-  repair?: true; delivery?: ReviewDelivery };
+  repair?: true; acceptedRepair?: true; delivery?: ReviewDelivery };
 
 export async function withdrawReviewStart(taskId: string, receipt: ReviewStartReceipt | undefined,
   priorStatus: TaskStatus | null): Promise<void> {
@@ -71,7 +71,7 @@ export async function reconcileReviewStarts(ownerTaskId?: string): Promise<void>
   const states = await db.select().from(regressionEvidence).where(isNotNull(regressionEvidence.continuation));
   for (const state of states) {
     const start = state.continuation?.start;
-    if (!start || state.settlement || (ownerTaskId && ownerTaskId !== start.ownerTaskId)
+    if (!start || state.settlement || state.continuation?.phase === "uncertain" || (ownerTaskId && ownerTaskId !== start.ownerTaskId)
       || isTurnClaimed(start.ownerTaskId) || !claimTurn(start.ownerTaskId)) continue;
     try {
       await withdrawReviewStart(start.ownerTaskId, { directory: state.directory, generation: state.generation,

@@ -24,7 +24,7 @@ export type ReviewTargetIdentity = {
 };
 
 export type ReviewContinuation = {
-  phase: "running" | "waiting" | "delivery" | "exited";
+  phase: "running" | "waiting" | "delivery" | "uncertain" | "exited";
   start?: { ownerTaskId: string; identity: ReviewTargetIdentity };
   messageId?: string;
   wait?: {
@@ -45,6 +45,7 @@ export type RegressionFinalization = {
   runningStep?: string;
   blockedStep?: string;
   acceptance?: { token: string; stepId: string; stage: "merged" | "accepted" };
+  repair?: { messageId: string; token: string; stepId: string; attempt: number; identity: ReviewTargetIdentity };
   completed?: boolean;
   superseded?: boolean;
 };

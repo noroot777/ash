@@ -439,7 +439,8 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         ? await monitorEventSourceState(m.origin)
         : undefined;
       const reviewBlocked = await reviewDeliveryBlocked(reviewDeliveryFrom(m), m.taskId);
-      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked } : null, at);
+      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
+        reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
       if (verdict.action === "wait") {
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。

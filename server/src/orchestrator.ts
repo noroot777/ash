@@ -15,6 +15,7 @@ import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, 
 import { turnDirectionStart } from "./task-direction-epoch.js";
 import { assertReviewTurnStart, beginReviewContinuation, commitReviewTurnDelivery } from "./review-continuation.js";
 import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
+import { recordReviewStartNotLaunched } from "./guarded-turn-start.js";
 import { ReviewSuperseded } from "./review-ownership.js";
 import { withdrawReviewStart, type ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { retireHistoricalReview } from "./review-retirement.js";
@@ -177,6 +178,7 @@ export async function continueTask(
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
+    if (task.waitOwnership?.start?.phase === "uncertain") return false;
     if (task.mode !== "single") throw new Error("reply is for single tasks");
     const startStatus = taskStartStatus(task);
     goalStartFrom = goalExecution && !["running", "queued"].includes(startStatus) ? startStatus : null;
@@ -360,14 +362,14 @@ export async function continueTask(
     // 崩在中间快照就永久丢了。纯询问的挂回同样吃这份基线(turn-baseline.ts)。
     // 只认真人消息(!opts.system),旁路回合(sideTurn:就地验证/审查轮)也不摘——
     // 那些回合的约定就是「维持原状」,摘了牌又不落基线,挂回机制够不着。
-    const reopened = opts.system || sideTurn ? null : await peekAcceptedStage(taskId);
+    const reopened = opts.system || sideTurn || reviewStart?.acceptedRepair ? null : await peekAcceptedStage(taskId);
     // 起跑前给工作目录拍一张照，**并当场把上一版的验证/验收记录清掉**：新指令一到，
     // 上一版的成绩就作废，线退回「让 AI 干活」那一站（不然这几十分钟里线路图还写着
     // 「已过关口、停在验证站」，那两颗会真合并的按钮此刻就能点）。结算时再拍一张比对，
     // 这一轮要是一个字节都没改，刚才清掉的原样放回 —— 纯询问不该重置任何东西。
     // 只给真人消息拍 —— 系统续跑、队列推进、验证打回后叫 agent 修，那些轮次改代码是
     // 本分，清账反而打断正在跑的流程。详见 turn-baseline.ts。
-    if (!opts.system && !sideTurn) {
+    if (!opts.system && !sideTurn && !reviewStart?.acceptedRepair) {
       const recorded = await recordTurnBaseline(taskId, cwd, freshWorkspace, reopened);
       // 基线内的清账已把 stage 摘下并广播；这里收掉同生命周期的合并快照列——且**只在
       // 基线确实落盘后**才清（失败关闭：快照没持久化就不动验收事实）。
@@ -477,7 +479,7 @@ export async function continueTask(
       env: runEnv,
     });
     trackRun(taskId, handle);
-    await commitReviewTurnDelivery(taskId, reviewStart);
+    await commitReviewTurnDelivery(taskId, reviewStart, handle.detached);
     // 前言已经随 prompt 交到 agent 手上，这一刻起就该划掉（放在 spawn 之后：起跑前
     // 还有 takeFreeze 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
     if (handoffNotice) await clearHandoffNotice(taskId);
@@ -637,8 +639,10 @@ export async function continueTask(
     // 暂停撤回一次、指定继续内容永久丢失,恢复分组后只剩通用「继续」(第 7 轮审查)。
     // 状态结算(落回 paused)仍由失败恢复完成,只是返回值改说实话。
     frozenBeforeSpawn = err instanceof FrozenTurn;
-    if (!handle && (frozenBeforeSpawn || checkingReviewStart)
-      && await restoreUndeliveredReviewStart(taskId, reviewStart)) return false;
+    if (!handle && (frozenBeforeSpawn || checkingReviewStart)) {
+      await recordReviewStartNotLaunched(taskId, reviewStart);
+      if (await restoreUndeliveredReviewStart(taskId, reviewStart, true)) return false;
+    }
     // 失败交代 + 基线对账 + 状态恢复,整段住在 turn-start-failure.ts(顺序讲究见其顶部)。
     await recoverFailedTurnStart({
       startReceipt: reviewStart,

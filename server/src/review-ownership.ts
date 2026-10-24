@@ -73,7 +73,9 @@ export function settlementAuthority(state: typeof regressionEvidence.$inferSelec
 }
 
 export function finalizationAuthority(state: typeof regressionEvidence.$inferSelect): ReviewAuthority {
-  return { ...settlementAuthority(state), finalization: true };
+  const repair = state.finalization?.repair;
+  return { ...settlementAuthority(state),
+    ...(repair && repair.token === state.finalization?.acceptance?.token ? { target: repair.identity } : {}), finalization: true };
 }
 
 export function reviewDeliveryFrom(message: { id: string; origin: string | null }): ReviewDelivery | undefined {
@@ -89,7 +91,15 @@ export async function reviewDeliveryAuthority(transaction: ConclusionTransaction
   const owner = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
   if (!owner || (state.taskId !== taskId && (delivery.kind === "repair" || owner.reviewOf !== state.taskId
     || !owner.reviewRound || state.directory !== reviewRoundDir(state.taskId, owner.reviewRound)))) throw new ReviewSuperseded();
-  let authority = delivery.kind === "repair" ? settlementAuthority(state)
+  const acceptedRepair = delivery.kind === "repair" && state.finalization?.acceptance
+    && state.finalization.repair?.messageId === delivery.messageId
+    && state.finalization.repair.token === state.finalization.acceptance.token;
+  if (acceptedRepair) {
+    const message = (await transaction.select().from(scheduledMessages).where(eq(scheduledMessages.id, delivery.messageId)))[0];
+    if (!message || message.status !== "pending" || message.taskId !== taskId
+      || message.origin !== `review-settlement:${delivery.generation}`) throw new ReviewSuperseded();
+  }
+  let authority = acceptedRepair ? finalizationAuthority(state) : delivery.kind === "repair" ? settlementAuthority(state)
     : { directory: state.directory, generation: state.generation, target: state.targetIdentity };
   if (delivery.kind === "repair" && !reviewIdentityMatches(owner, authority.target)) {
     const transfer = owner.waitOwnership?.repairDelivery;
@@ -101,8 +111,8 @@ export async function reviewDeliveryAuthority(transaction: ConclusionTransaction
   }
   await assertReviewAuthority(transaction, authority, delivery.kind !== "repair");
   if (delivery.kind !== "repair" && (await activeReviewEvidence(transaction, owner))?.directory !== state.directory) throw new ReviewSuperseded();
-  if (delivery.kind === "answer" && (state.settlement || state.continuation?.phase !== "delivery"
-    || state.continuation.messageId !== delivery.messageId)) throw new ReviewSuperseded();
+  if (delivery.kind === "answer" && (state.settlement || !["delivery", "uncertain"].includes(state.continuation?.phase ?? "")
+    || state.continuation?.messageId !== delivery.messageId)) throw new ReviewSuperseded();
   const checkpoint = owner.waitOwnership?.checkpoint;
   if (delivery.kind === "checkpoint" && (state.settlement || state.continuation?.phase === "delivery"
     || owner.resumePrompt !== delivery.text || owner.resumePromptGeneration !== delivery.promptGeneration

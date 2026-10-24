@@ -10,13 +10,17 @@ export type WaitOrigin = { kind: "ordinary" } | {
 export type TaskWaitOwnership = {
   acceptedFinalization?: { directory: string; generation: string; token: string };
   repairDelivery?: { messageId: string; generation: string; identity: ReviewTargetIdentity };
+  deliveredReview?: { directory: string; generation: string; identity: ReviewTargetIdentity;
+    input?: ReviewDelivery; pid?: number; unitToken?: string | null; confirmedAt: string };
   start?: {
     directory: string;
     generation: string;
     identity: ReviewTargetIdentity;
     priorStatus: TaskStatus;
     repair?: true;
+    acceptedRepair?: true;
     delivery?: ReviewDelivery;
+    phase?: "prepared" | "launching" | "uncertain";
   };
   turn?: { identity: ReviewTargetIdentity; origin: WaitOrigin };
   question?: {

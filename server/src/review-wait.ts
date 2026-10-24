@@ -43,7 +43,8 @@ export async function recordReviewWait(transaction: ConclusionTransaction, owner
   const wait = authorized || historical || sameOwner ? snapshot(owner) : state.continuation?.wait ?? { question: null, checkpoint: null };
   if (!authorized && !historical && !sameOwner && field) wait[field] = null;
   await transaction.update(regressionEvidence).set({ continuation: {
-    ...state.continuation, phase: authorized && state.continuation?.phase !== "delivery" ? "waiting" : state.continuation?.phase ?? "running", wait,
+    ...state.continuation, phase: authorized && !["delivery", "uncertain"].includes(state.continuation?.phase ?? "")
+      ? "waiting" : state.continuation?.phase ?? "running", wait,
   } }).where(eq(regressionEvidence.directory, state.directory));
 }
 

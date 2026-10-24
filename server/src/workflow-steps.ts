@@ -11,11 +11,11 @@
 import { eq } from "drizzle-orm";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { segmentAfter } from "@ash/shared/workflow-policy";
+import { acceptPlan, segmentAfter } from "@ash/shared/workflow-policy";
 import type { WorkflowDef, WorkflowStep } from "@ash/shared/workflow";
 import { STEP_LABELS } from "@ash/shared/workflow";
 import { db } from "./db/index.js";
-import { projects, tasks } from "./db/schema.js";
+import { projects, regressionEvidence, tasks } from "./db/schema.js";
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { userShellLaunch } from "./platform.js";
@@ -262,6 +262,16 @@ export async function applyFailPolicy(
   await withReviewAuthority(opts.reviewAuthority, async () => {});
   const label = STEP_LABELS[step.kind];
   const fail = step.fail;
+  if (fail?.mode === "back" && task.useWorktree && opts.reviewAuthority?.finalization) {
+    const state = (await db.select().from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, opts.reviewAuthority.directory)))[0];
+    if (state?.finalization?.acceptance
+      && acceptPlan(taskWorkflowDef(task.workflow), "workflow", state.finalization.acceptance.stepId).clean !== "none") {
+      await appendTaskTimeline(task.id, `「${label}」写的是「打回给 AI 重做」，但工作区刚随验收清掉了，没法再打回；改成问你一句。`);
+      await setTaskQuestion({ ...failureQuestionInput(task.id, label, reason), reviewAuthority: opts.reviewAuthority });
+      return;
+    }
+  }
   if (fail?.mode === "ask") {
     await setTaskQuestion({ ...failureQuestionInput(task.id, label, reason), reviewAuthority: opts.reviewAuthority });
     await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站；线上写的是「问我一句」，已经把问题挂给你了。`);
