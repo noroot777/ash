@@ -2,6 +2,7 @@
 // 导出/导入/HTTP 面三处共用;业务流程见 handoff.ts 顶部注释)。
 import { isAbsolute } from "node:path";
 import type { HandoffErrorCode, HandoffPeerCapabilities, HandoffPingProject } from "@ash/shared";
+import type { HandoffWaitOrigins } from "./handoff-wait.js";
 
 export class HandoffError extends Error {
   // 导入侧专用:true = 这次失败**不证明**本机没留下半截产物(补偿回滚自身失败)。
@@ -247,6 +248,7 @@ export interface HandoffManifest {
      * 一侧:宁可留着让人手点,也不要替它清掉一段可能是 agent 自己留的交代。
      */
     resumePromptAuto?: boolean;
+    waitOrigins?: HandoffWaitOrigins;
     question: string | null;
     questionOptions: string | null;
     questionItems: string | null;

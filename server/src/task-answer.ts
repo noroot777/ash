@@ -14,6 +14,7 @@ import { actorOf, ownerIdOf } from "./auth/context.js";
 import { claimQuestionAnswer, prepareQuestionRecord } from "./task-question-record.js";
 import { queueReviewAnswer } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
+import { questionWaitOrigin } from "./task-wait-ownership.js";
 
 export type TaskAnswerBody = QuestionAnswerInput & { answer?: string };
 
@@ -39,8 +40,9 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof TypeError ? 400 : 409);
   }
-  const asker = task.mode === "single" ? await askingAgentFor(taskId) : null;
-  const reviewRoute = asker?.role === "reviewer" ? await freeReviewResumeOptions(taskId) : null;
+  const origin = await db.transaction((transaction) => questionWaitOrigin(transaction, task), { behavior: "immediate" });
+  const asker = task.mode === "single" ? await askingAgentFor(taskId, origin.kind === "ordinary" ? "single" : undefined) : null;
+  const reviewRoute = origin.kind === "review" && asker?.role === "reviewer" ? await freeReviewResumeOptions(taskId) : null;
   const route = reviewRoute ?? (asker && asker.agent !== task.agentType
     ? { agent: asker.agent, executorId: asker.executorId, model: null, reasoningEffort: null }
     : {});
@@ -81,7 +83,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   // 只能把 followUpFrom 写成 null,停止这轮审查会把原任务结算成 canceled(第 9 轮审查:
   // 队列中已完成任务答复审查提问后 stop,任务从 done 变 canceled;不在队列的对照不变)。
   // 终态任务的普通续聊同理从不经过这里的认领(它不来 /answer),豁免口径一致。
-  const sideways = asker?.role === "reviewer" || task.verifyRound !== null;
+  const sideways = origin.kind !== "ordinary" && (asker?.role === "reviewer" || task.verifyRound !== null);
   if (task.mode === "single" && !sideways) {
     const claim = await claimQueueSeat(taskId);
     if (!claim.ok) {

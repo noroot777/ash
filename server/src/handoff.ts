@@ -58,6 +58,7 @@ import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
+import { exportWaitOrigins } from "./handoff-wait.js";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
   const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -487,6 +488,7 @@ export async function exportHandoff(
           reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
           verifyCompletedSteps: task.verifyCompletedSteps,
           resumePrompt: task.resumePrompt, resumePromptAuto: task.resumePromptAuto, question: task.question,
+          waitOrigins: await exportWaitOrigins(task),
           questionOptions: task.questionOptions, questionItems: task.questionItems,
           questionHistory: task.questionHistory,
           acceptedTargetBranch: task.acceptedTargetBranch,

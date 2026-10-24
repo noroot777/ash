@@ -25,6 +25,7 @@ export type ReviewTargetIdentity = {
 
 export type ReviewContinuation = {
   phase: "running" | "waiting" | "delivery" | "exited";
+  start?: { ownerTaskId: string; identity: ReviewTargetIdentity };
   messageId?: string;
   wait?: {
     owner?: ReviewTargetIdentity;

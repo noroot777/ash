@@ -47,8 +47,10 @@ async function resumeOrRunClaimedTask(taskId: string,
   // 回合：续跑必须带回 reviewer 身份与配置，否则以 single 恢复实现会话，审查链收不了尾。
   const rp = task.resumePrompt;
   if (rp) {
-    const reviewerRoute = await freeReviewResumeOptions(taskId);
-    if (task.verifyRound || task.reviewOf || reviewerRoute) {
+    const checkpoint = task.waitOwnership?.checkpoint;
+    const ordinary = checkpoint?.generation === task.resumePromptGeneration && checkpoint.origin.kind === "ordinary";
+    const reviewerRoute = ordinary ? null : await freeReviewResumeOptions(taskId);
+    if (!ordinary && (task.verifyRound || task.reviewOf || reviewerRoute)) {
       const evidence = await db.transaction((transaction) => activeReviewEvidence(transaction, task), { behavior: "immediate" });
       const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
         actingUserId: acting, ...(reviewerRoute ?? {}),

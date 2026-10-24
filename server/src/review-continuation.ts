@@ -5,7 +5,7 @@ import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import type { WaitOrigin } from "./db/schema-task-wait.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
 import { isTurnClaimed, type TurnSource } from "./runs.js";
-import { activeReviewEvidence, activeReviewScope, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded,
+import { activeReviewEvidence, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded,
   reviewTargetIdentity, type ReviewDelivery } from "./review-ownership.js";
 import { recordReviewWait, reviewWaitAuthorized, reviewWaitAtTurnStart, snapshotReviewWait } from "./review-wait.js";
 import { questionWaitMatches, questionWaitOrigin, reviewWaitOrigin, startTaskWaitTurn } from "./task-wait-ownership.js";
@@ -57,6 +57,8 @@ export async function assertReviewTurnStart(taskId: string, turnToken: string, d
       const active = await activeReviewEvidence(transaction, task);
       if (active?.directory !== evidence.directory || evidence.settlement) throw new ReviewSuperseded();
       await assertReviewAuthority(transaction, { directory: evidence.directory, generation: evidence.generation, target: evidence.targetIdentity }, true);
+      await transaction.update(regressionEvidence).set({ continuation: { ...evidence.continuation, phase: "running", start: undefined } })
+        .where(eq(regressionEvidence.directory, evidence.directory));
     }
   }, { behavior: "immediate" });
 }
@@ -67,10 +69,7 @@ export async function queueReviewAnswer(transaction: ConclusionTransaction, task
   if (origin.kind === "ordinary") return false;
   if (origin.kind === "unknown") throw new ReviewSuperseded();
   const state = await activeReviewEvidence(transaction, task);
-  if (!state) {
-    if (await activeReviewScope(transaction, task)) throw new ReviewSuperseded();
-    return false;
-  }
+  if (!state) throw new ReviewSuperseded();
   if (state.settlement || state.directory !== origin.directory || state.generation !== origin.generation) throw new ReviewSuperseded();
   await assertReviewAuthority(transaction, { directory: state.directory, generation: state.generation, target: state.targetIdentity }, true);
   await transaction.insert(scheduledMessages).values({ ...message, origin: `review-answer:${state.generation}` });
@@ -80,7 +79,7 @@ export async function queueReviewAnswer(transaction: ConclusionTransaction, task
 }
 
 export async function beginReviewContinuation(transaction: ConclusionTransaction, task: TaskRow, source: TurnSource,
-  turnToken: string, directionToken: string, delivery?: ReviewDelivery): Promise<void> {
+  turnToken: string, directionToken: string, delivery?: ReviewDelivery) {
   const deliveredState = delivery ? await reviewDeliveryAuthority(transaction, delivery, task.id) : undefined;
   const state = await activeReviewEvidence(transaction, task, source);
   if (delivery && delivery.kind !== "repair" && (!state || state.directory !== deliveredState?.directory)) throw new ReviewSuperseded();
@@ -96,7 +95,8 @@ export async function beginReviewContinuation(transaction: ConclusionTransaction
   await startTaskWaitTurn(transaction, task, identity, reviewWaitOrigin(state));
   await transaction.update(regressionEvidence).set({
     ...(state.taskId === task.id ? { targetIdentity: { turnToken, directionToken, directionEpoch: task.directionEpoch + 1 } } : {}),
-    continuation: { phase: "running", wait: reviewWaitAtTurnStart(task, turnToken, directionToken),
+    continuation: { phase: "running", start: { ownerTaskId: task.id, identity }, wait: reviewWaitAtTurnStart(task, turnToken, directionToken),
       ...(state.continuation?.messageId ? { messageId: state.continuation.messageId } : {}) },
   }).where(eq(regressionEvidence.directory, state.directory));
+  return { directory: state.directory, generation: state.generation, identity };
 }

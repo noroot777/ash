@@ -180,6 +180,7 @@ try {
       await reconcileRegressionSettlements();
       assert.equal((await review.state()).settlement, null, "a pending lease is a durable review handoff, even after a conclusion");
       assert.equal((await row(review.taskId)).verifyRound, mode === "preset" ? 1 : null);
+      assert(runs.claimTurn(owner.id));
       const resuming = db.transaction(async (transaction) => {
         const current = (await transaction.select().from(tasks).where(eq(tasks.id, owner.id)))[0]!;
         await beginReviewContinuation(transaction, current, mode === "free" || mode === "accepted_merge"
@@ -193,6 +194,7 @@ try {
       assert.equal((await review.state()).continuation?.phase, "running");
       await db.update(tasks).set({ status: "done", ...directionIdentityCleared() }).where(eq(tasks.id, owner.id));
       await review.settle(true);
+      runs.releaseTurn(owner.id);
       assert.equal((await review.state()).settlement?.outcome, "done");
       assert.equal((await review.state()).settlement?.pending, false);
       if (mode === "accepted_merge") assert.equal((await row(review.taskId)).stage, "accepted");

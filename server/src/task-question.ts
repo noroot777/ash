@@ -19,6 +19,7 @@ import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js
 import { recordReviewWait } from "./review-wait.js";
 
 export interface AskInput {
+  waitOrigin?: "ordinary";
   reviewAuthority?: ReviewAuthority;
   taskId: string;
   question: string;
@@ -59,7 +60,7 @@ export async function setTaskQuestion(input: AskInput): Promise<boolean> {
       .returning({ id: tasks.id });
     if (updated.length) {
       const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
-      await recordReviewWait(transaction, task, "question");
+      await recordReviewWait(transaction, task, "question", input.waitOrigin ? { kind: input.waitOrigin } : undefined);
     }
     return updated;
   });
@@ -88,10 +89,11 @@ export async function setTaskQuestion(input: AskInput): Promise<boolean> {
  */
 export async function askingAgentFor(
   taskId: string,
+  role?: "single" | "reviewer",
 ): Promise<{ agent: AgentType; executorId: string | null; role: Extract<SessionRole, "single" | "reviewer"> } | null> {
   const turnAt = (row: { turnStartedAt: string | null; startedAt: string }) => row.turnStartedAt ?? row.startedAt;
   const latest = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-    .filter((row) => row.role === "single" || row.role === "reviewer")
+    .filter((row) => role ? row.role === role : row.role === "single" || row.role === "reviewer")
     .sort((left, right) => turnAt(left).localeCompare(turnAt(right)))
     .at(-1);
   if (!latest) return null;
@@ -119,6 +121,7 @@ export function failureQuestionInput(taskId: string, stepLabel: string, reason: 
   const question = `这条线在「${stepLabel}」这一站没过，线上写的是「问我一句」——接下来怎么办？`
     + (detail ? `\n\n\`\`\`\n${detail.slice(0, 1200)}\n\`\`\`` : "");
   return {
+    waitOrigin: "ordinary",
     taskId,
     question,
     options: [

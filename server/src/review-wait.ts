@@ -31,8 +31,8 @@ export async function reviewWaitAuthorized(transaction: ConclusionTransaction, s
 }
 
 export async function recordReviewWait(transaction: ConclusionTransaction, owner: TaskRow,
-  field?: "question" | "checkpoint"): Promise<void> {
-  if (field) await recordTaskWait(transaction, owner, field);
+  field?: "question" | "checkpoint", origin?: WaitOrigin): Promise<void> {
+  if (field) await recordTaskWait(transaction, owner, field, origin);
   else await captureTaskWait(transaction, owner);
   const state = await activeReviewEvidence(transaction, owner);
   if (!state || state.settlement?.pending === false) return;

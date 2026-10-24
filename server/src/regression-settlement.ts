@@ -18,6 +18,7 @@ import { clearReviewWait, reviewWaitForExit } from "./review-wait.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { now } from "./util.js";
 import { expireClosedTaskWait } from "./task-wait-ownership.js";
+import { reconcileReviewStarts } from "./review-start-withdrawal.js";
 
 export type CheckedSettlement = {
   conclusion: ReviewConclusion;
@@ -60,7 +61,7 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
       settlement = { ...settlement, outcome: input.outcome };
     }
     const wait = await reviewWaitForExit(transaction, owner, state);
-    await transaction.update(regressionEvidence).set({ settlement, continuation: { ...state.continuation, phase: "exited", wait } })
+    await transaction.update(regressionEvidence).set({ settlement, continuation: { ...state.continuation, phase: "exited", start: undefined, wait } })
       .where(eq(regressionEvidence.directory, directory));
     return { conclusion: settlement.conclusion, outcome: settlement.outcome, generation: state.generation,
       target: settlement.target ?? null, unknown: !state.settlement && input.outcome === undefined };
@@ -130,6 +131,7 @@ export async function recordInterruptedRegressionReview(task: typeof tasks.$infe
 }
 
 export async function reconcileRegressionSettlements(ownerTaskId?: string): Promise<void> {
+  await reconcileReviewStarts(ownerTaskId);
   await (await import("./free-workflow.js")).reconcileFreeReviews(ownerTaskId)
     .catch((error) => console.error("[ash] 自由审查发现待重试:", error));
   const candidates = await db.select().from(tasks).where(or(isNotNull(tasks.verifyRound), isNotNull(tasks.reviewOf)));
