@@ -52,7 +52,8 @@ try {
     const after = await row(review.taskId);
     assert.equal(after.stage, "verified");
     assert.equal(after.directionEpoch, before.directionEpoch);
-    assert.equal(after.verifyRounds, before.verifyRounds);
+    assert.equal(after.verifyRounds, before.verifyRounds + (mode === "preset" ? 1 : 0));
+    assert.equal(after.verifyRound, null);
     assert.equal((await review.state()).settlement?.pending, false);
     assert.equal((await review.state()).finalization?.superseded, true);
     runs.releaseTurn(review.taskId);

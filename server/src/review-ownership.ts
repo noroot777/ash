@@ -10,19 +10,24 @@ import type { TurnSource } from "./runs.js";
 type TaskRow = typeof tasks.$inferSelect;
 export type ReviewAuthority = { directory: string; generation: string; target: ReviewTargetIdentity | null };
 
-export async function activeReviewEvidence(transaction: ConclusionTransaction, task: TaskRow, source?: TurnSource) {
-  let directory: string | undefined;
-  if (task.reviewOf && task.reviewRound) directory = reviewRoundDir(task.reviewOf, task.reviewRound);
-  else if (task.verifyRound) directory = reviewRoundDir(task.id, task.verifyRound);
+export async function activeReviewScope(transaction: ConclusionTransaction, task: TaskRow, source?: TurnSource) {
+  if (task.reviewOf && task.reviewRound) return { directory: reviewRoundDir(task.reviewOf, task.reviewRound),
+    taskId: task.reviewOf, round: task.reviewRound };
+  if (task.verifyRound) return { directory: reviewRoundDir(task.id, task.verifyRound), taskId: task.id, round: task.verifyRound };
   else {
     const run = (await transaction.select().from(freeReviewRuns)
       .where(and(eq(freeReviewRuns.taskId, task.id), eq(freeReviewRuns.status, "reviewing"))))[0];
     if (run && (!source || (source.role === "reviewer" && source.review !== "unbound"
       && source.review.run === run.id && source.review.round === run.currentRound))) {
-      directory = freeReviewEvidenceDir(task.id, run.id, run.currentRound);
+      return { directory: freeReviewEvidenceDir(task.id, run.id, run.currentRound), taskId: task.id, round: run.currentRound, run };
     }
   }
-  return directory ? (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0] : undefined;
+  return undefined;
+}
+
+export async function activeReviewEvidence(transaction: ConclusionTransaction, task: TaskRow, source?: TurnSource) {
+  const scope = await activeReviewScope(transaction, task, source);
+  return scope ? (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, scope.directory)))[0] : undefined;
 }
 
 export class ReviewSuperseded extends Error {

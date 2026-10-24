@@ -49,6 +49,7 @@ import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } fro
 import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
 import { completeRegressionSettlement, regressionSettlementConclusion } from "./regression-settlement.js";
+import { retireHistoricalReview } from "./review-retirement.js";
 import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
@@ -250,6 +251,7 @@ export async function reconcileFreeReviews(): Promise<void> {
     // reattach 接回还在跑，此刻按 turnOk=true 补结算是提前放行——reviewer 随后非零
     // 退出/被停止时，正常结算已找不到 reviewing run，错误结论无法撤销（审查实测）。
     if (task.status === "running" || task.status === "queued" || isTurnClaimed(task.id)) continue;
+    if (await retireHistoricalReview(task, { role: "reviewer", review: { run: run.id, round: run.currentRound } })) continue;
     // 已交卷（当前 round 有结论）且回合确实死了：直接补结算，不能因遗留的
     // question/等待态被永远跳过——那会让验收持续被 active review 409 挡住（审查实测）。
     const round = (await db.select().from(freeReviewRounds)
@@ -443,7 +445,7 @@ export async function handleFreeWorkflowSettlement(
   // reviewer 已交卷（round 有结论）就必须结算——question 可能是实现回合遗留的旧字段，
   // 拿它挡住已有结论的审查会让链永远停在 reviewing（审查实测复现）。
   const waitingEvidence = await db.transaction((transaction) => activeReviewEvidence(transaction, task), { behavior: "immediate" });
-  if (turnOk !== false && (task.question || task.resumePrompt)
+  if (turnOk !== false && !waitingEvidence?.settlement && (task.question || task.resumePrompt)
     && (!round.conclusion || waitingEvidence?.continuation?.phase === "waiting")) {
     await preserveReviewWait(task); return true;
   }

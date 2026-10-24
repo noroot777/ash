@@ -4,7 +4,7 @@ import { regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
 import { isTurnClaimed, type TurnSource } from "./runs.js";
-import { activeReviewEvidence, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded,
+import { activeReviewEvidence, activeReviewScope, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded,
   reviewTargetIdentity, type ReviewDelivery } from "./review-ownership.js";
 
 export { activeReviewEvidence } from "./review-ownership.js";
@@ -57,7 +57,10 @@ export async function assertReviewTurnStart(taskId: string, turnToken: string, d
 export async function queueReviewAnswer(transaction: ConclusionTransaction, task: TaskRow,
   message: typeof scheduledMessages.$inferInsert): Promise<boolean> {
   const state = await activeReviewEvidence(transaction, task);
-  if (!state) return false;
+  if (!state) {
+    if (await activeReviewScope(transaction, task)) throw new ReviewSuperseded();
+    return false;
+  }
   if (state.settlement) throw new ReviewSuperseded();
   await assertReviewAuthority(transaction, { directory: state.directory, generation: state.generation, target: state.targetIdentity }, true);
   await transaction.insert(scheduledMessages).values({ ...message, origin: `review-answer:${state.generation}` });

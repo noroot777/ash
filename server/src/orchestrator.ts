@@ -15,6 +15,7 @@ import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, 
 import { turnDirectionStart } from "./task-direction-epoch.js";
 import { assertReviewTurnStart, beginReviewContinuation } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
+import { retireHistoricalReview } from "./review-retirement.js";
 import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -107,6 +108,7 @@ export async function continueTask(
   // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
   const { head, nativeCommand, slash, goalExecution, options } = await prepareContinuationEntry(taskId, userText, opts);
   opts = options;
+  if (head?.mode === "single" && await retireHistoricalReview(head, opts.turnSource, opts.reviewDelivery, opts.turnHeld)) return false;
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
   // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的

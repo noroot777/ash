@@ -25,7 +25,9 @@ export async function finalizeFreeReview(state: typeof regressionEvidence.$infer
       authority.target!,
       async (transaction) => { await armFollowUpFreeReview(run.taskId, run, at, transaction); });
   }
-  const text = outcome === "failed"
+  const text = outcome === "failed" && !authority.target
+    ? `自由工作流第 ${run.currentRound} 轮审查已终止并完成轮次记账；历史记录缺少原目标方向身份，本轮结论未应用，未投递修复。请重新派发审查。`
+    : outcome === "failed"
     ? run.targetKind === "accepted_merge" ? "合并结果审查未能正常给出结论；原任务保持已验收，可重新发起审查。"
       : `自由工作流第 ${run.currentRound} 轮审查未能正常给出结论，已停止自动链。`
     : outcome === "passed"

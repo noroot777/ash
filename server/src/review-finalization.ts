@@ -14,7 +14,7 @@ import { failureQuestionInput } from "./task-question.js";
 import { advanceWorkflowFrom } from "./workflow-advance.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { now } from "./util.js";
-import { assertReviewAuthority, settlementAuthority, withReviewAuthority } from "./review-ownership.js";
+import { assertReviewAuthority, ReviewSuperseded, settlementAuthority, withReviewAuthority } from "./review-ownership.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 const STUCK_AT_VERIFY = "线停在「自动验证」这一站等你：看过验证报告（有截图的话一并看）后，认可就点「人工强制通过」放行，想重跑就点「再验一轮」。";
@@ -37,8 +37,18 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
       `第 ${round} 轮验证结束时任务已归档或验收，结论不再覆盖冻结阶段（这一轮${outcome === "done" ? "正常收尾" : "未正常收尾"}）。`, `${state.generation}:frozen`));
     return true;
   }
+  try {
+    if (plan.superseded) throw new ReviewSuperseded();
+    await withReviewAuthority(authority, async () => {});
+  }
+  catch (error) {
+    if (!(error instanceof ReviewSuperseded)) throw error;
+    await step("unapplied", () => appendFinalizationTimeline(target.id,
+      `第 ${round} 轮验证已终止并完成轮次记账；${plan.superseded ? "原轮次已被替换" : authority.target ? "原目标方向已变化" : "历史记录缺少原目标方向身份"}，本轮结论未应用，未推进工作流或投递修复。请重新派发验证。`,
+      `${state.generation}:unapplied`));
+    throw error;
+  }
   await step("conclusion", async () => { if (outcome === "done") await writeConclusion(target.id, round, reviewTaskId, conclusion, true); });
-  await withReviewAuthority(authority, async () => {});
   const parent = target.parentId && (await db.select().from(tasks).where(eq(tasks.id, target.parentId)))[0];
   const parentIsTeam = !!parent && parent.mode === "team";
   const workflow = taskWorkflowDef(target.workflow), policy = workflowPolicy(workflow, station);

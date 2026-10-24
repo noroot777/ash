@@ -374,6 +374,10 @@ try {
     conclusion: null, startedAt: orphanAt, endedAt: null,
   });
   await db.update(tasks).set({ question: "请确认边界" }).where(eq(tasks.id, "free-legacy-task"));
+  const { evidenceState } = await import("../src/regression-evidence-lifecycle.js");
+  const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
+  await evidenceState("free-legacy-task", freeReviewEvidenceDir("free-legacy-task", "orphan-reviewing", 1), false,
+    (await db.select().from(tasks).where(eq(tasks.id, "free-legacy-task")))[0]!);
   await reconcileFreeReviews();
   const waitingAfter = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, "orphan-reviewing"))).at(0);
   assert.equal(waitingAfter?.status, "reviewing", "等待答复的审查回合不得被对账误杀");
