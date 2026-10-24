@@ -158,24 +158,20 @@ export function restartCommand(
     if (terminalSessions.isProjectClosing(projectId)) {
       return { status: 500 as const, body: { error: "重启失败：项目正在删除" } };
     }
-    // 先确认建得出替代会话再动手杀旧的:create 若注定因会话上限失败,「重启失败」
-    // 会落成「服务被停了」。同命令会话不占这个判断(它们都会让位)。
-    if (!terminalSessions.hasSlotForCommand(projectId, command.id)) {
-      return { status: 500 as const, body: { error: "重启失败：终端会话数量已达上限" } };
-    }
     // 占位符也在杀之前填 —— 同一个理由:取值不合法就该原地拒绝,而不是先把服务停了。
     const resolved = resolveScript(command, command.restartCommand ?? command.command, values);
     if (!resolved.ok) return resolved.result;
-    const live = terminalSessions.liveCommandSession(projectId, command.id);
-    if (live) {
-      const result = await terminalSessions.terminate(live.id, projectId);
-      if (!result.ok) return { status: 502 as const, body: { error: `重启失败：旧进程停不下来（${result.reason}）` } };
-    }
     try {
-      const session = await terminalSessions.createAsync(projectId, cwd, {
-        command: { id: command.id, name: resolved.name, script: resolved.script },
-      });
-      return { status: 201 as const, body: { session } };
+      const reservation = terminalSessions.reserveCommand(projectId, command.id);
+      try {
+        const live = terminalSessions.liveCommandSession(projectId, command.id);
+        if (live) {
+          const result = await terminalSessions.terminate(live.id, projectId);
+          if (!result.ok) return { status: 502 as const, body: { error: `重启失败：旧进程停不下来（${result.reason}）` } };
+        }
+        const session = await reservation.create(cwd, { name: resolved.name, script: resolved.script });
+        return { status: 201 as const, body: { session } };
+      } finally { reservation.release(); }
     } catch (error) {
       return { status: 500 as const, body: { error: `重启失败：${error instanceof Error ? error.message : String(error)}` } };
     }

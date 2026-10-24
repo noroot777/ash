@@ -17,6 +17,7 @@ import {
 } from "./terminal-process-tree.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
+import { TerminalCapacity, type TerminalReservation } from "./terminal-capacity.js";
 
 export { resolveTerminalDirectory } from "./terminal-shell.js";
 
@@ -98,9 +99,9 @@ type CreateOptions = {
 };
 
 export class TerminalSessionManager {
-  private pendingWindows = 0;
   private stopped = false;
   private readonly sessions = new Map<string, TerminalSession>();
+  private readonly capacity = new TerminalCapacity(MAX_SESSIONS, () => this.sessions.values(), (session) => this.sessionAlive(session));
   private readonly sweeper: ReturnType<typeof setInterval>;
   private readonly descendantScanner: ReturnType<typeof setInterval>;
   private scanningDescendants = false;
@@ -139,12 +140,31 @@ export class TerminalSessionManager {
 
   async createAsync(projectId: string, cwd: string, options: CreateOptions = {}): Promise<TerminalSessionInfo> {
     if (!IS_WINDOWS) return this.create(projectId, cwd, options);
+    return this.createReserved(projectId, cwd, options, this.reserve(projectId, options.command?.id ?? null));
+  }
+
+  reserveCommand(projectId: string, commandId: string) {
+    const reservation = this.reserve(projectId, commandId, true);
+    return {
+      create: (cwd: string, command: { name: string; script: string }) => this.createReserved(projectId, cwd, {
+        command: { ...command, id: commandId },
+      }, reservation),
+      release: () => { if (!reservation.started) this.capacity.release(reservation); },
+    };
+  }
+
+  private reserve(projectId: string, commandId: string | null, replaceLive = false): TerminalReservation {
     if (this.stopped || this.closingProjects.has(projectId) || this.deletedProjects.has(projectId)) {
       throw new Error("项目正在删除或已删除，无法新建终端会话");
     }
-    if (this.sessions.size + this.pendingWindows >= MAX_SESSIONS) throw new Error("终端会话数量已达上限");
-    this.pendingWindows++;
+    return this.capacity.reserve(projectId, commandId, replaceLive);
+  }
+
+  private async createReserved(projectId: string, cwd: string, options: CreateOptions,
+    reservation: TerminalReservation): Promise<TerminalSessionInfo> {
+    this.capacity.begin(reservation);
     try {
+      if (!IS_WINDOWS) return this.register(projectId, cwd, options, reservation, pty.spawn);
       const fallback = shellCommand();
       const launch = options.command
         ? commandLaunch(options.command.script, options.shell)
@@ -153,18 +173,22 @@ export class TerminalSessionManager {
         name: "xterm-256color", cols: terminalSize(options.cols, 100, 20, 400),
         rows: terminalSize(options.rows, 24, 5, 200), cwd, env: ptyEnvironment(),
       });
-      try { return this.register(projectId, cwd, options, () => handle); }
+      try { return this.register(projectId, cwd, options, reservation, () => handle); }
       catch (error) { handle.kill(); throw error; }
-    } finally { this.pendingWindows--; }
+    } finally { this.capacity.release(reservation); }
   }
 
   create(projectId: string, cwd: string, options: CreateOptions = {}): TerminalSessionInfo {
     if (IS_WINDOWS) throw new Error("Windows 终端需要异步隔离启动，请使用 createAsync");
-    return this.register(projectId, cwd, options, pty.spawn);
+    const reservation = this.reserve(projectId, options.command?.id ?? null);
+    this.capacity.begin(reservation);
+    try { return this.register(projectId, cwd, options, reservation, pty.spawn); }
+    finally { this.capacity.release(reservation); }
   }
 
-  private register(projectId: string, cwd: string, options: CreateOptions,
+  private register(projectId: string, cwd: string, options: CreateOptions, reservation: TerminalReservation,
     spawnProcess: (file: string, args: string[], options: pty.IPtyForkOptions) => TerminalProcess): TerminalSessionInfo {
+    this.capacity.validate(reservation);
     // 项目正在删除 / 已删除:拒绝新建(shell 与命令 start 都走这里),否则会成为无主会话。
     if (this.stopped || this.closingProjects.has(projectId) || this.deletedProjects.has(projectId)) {
       throw new Error("项目正在删除或已删除，无法新建终端会话");
@@ -174,16 +198,18 @@ export class TerminalSessionManager {
     // tab(有订阅)也照清:订阅钉住退出记录会把 16 个会话槽慢慢吃光,反复重启后 create
     // 失败、restart 变成服务中断(第 1 轮审查实锤)。前端本来就只挂同命令最新会话的
     // tab,旧记录被替换是预期行为。
+    for (const sessionId of reservation.replacedSessionIds) {
+      const previous = this.sessions.get(sessionId);
+      if (previous && this.sessionAlive(previous)) throw new Error("旧命令会话尚未停止，无法替换");
+    }
     if (options.command) {
       for (const stale of [...this.sessions.values()]) {
-        if (stale.projectId === projectId && stale.commandId === options.command.id
-          && !this.sessionAlive(stale)) {
+        if (stale.projectId === projectId && stale.commandId === options.command.id && !this.sessionAlive(stale)) {
           stale.listeners.clear();
           this.sessions.delete(stale.id);
         }
       }
     }
-    if (this.sessions.size >= MAX_SESSIONS) throw new Error("终端会话数量已达上限");
     const fallback = shellCommand();
     // 常用命令怎么起由 commandLaunch 定(POSIX `shell -lc`,Windows PowerShell
     // `-EncodedCommand`,理由见 terminal-shell.ts)。它可能抛 —— Windows 上找不到
@@ -640,12 +666,7 @@ export class TerminalSessionManager {
    * 必须在动手前拒绝 —— 「重启失败」绝不能落成「服务被停了」(第 1 轮审查实锤)。
    */
   hasSlotForCommand(projectId: string, commandId: string): boolean {
-    let occupied = 0;
-    for (const session of this.sessions.values()) {
-      if (session.projectId === projectId && session.commandId === commandId) continue;
-      occupied++;
-    }
-    return occupied < MAX_SESSIONS;
+    return this.capacity.hasSlot(projectId, commandId, true);
   }
 
   private session(sessionId: string, projectId?: string): TerminalSession | null {
