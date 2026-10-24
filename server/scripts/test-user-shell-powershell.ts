@@ -17,6 +17,7 @@ if (!IS_WINDOWS) {
   const quote = (value: string) => `'${value.replace(/'/g, "''")}'`;
   const invocation = `& ${quote(scriptPath)}`;
   const child = (name: string) => `& ${quote(join(directory, `${name}.ps1`))}`;
+  const commandInfo = (name: string) => `(Get-Command ${quote(join(directory, `${name}.ps1`))})`;
   const native = (code: number) => `& ${quote(process.execPath)} -e 'process.exit(${code})'`;
   writeFileSync(join(directory, "child-failure.ps1"), native(7), "utf8");
   writeFileSync(join(directory, "child-success.ps1"), 'Write-Output "CHILD_OK"', "utf8");
@@ -26,6 +27,9 @@ if (!IS_WINDOWS) {
   writeFileSync(join(directory, "child-requires.ps1"), '#requires -Version 999.0\nWrite-Output "MUST_NOT_RUN"', "utf8");
   writeFileSync(join(directory, "child-context.ps1"), `param([string]$Name)\nif ($PSScriptRoot -ne ${quote(directory)} -or $PSCommandPath -ne ${quote(join(directory, "child-context.ps1"))} -or $MyInvocation.MyCommand.Path -ne ${quote(join(directory, "child-context.ps1"))}) { throw "Child context changed" }\nWrite-Output $Name`, "utf8");
   writeFileSync(join(directory, "recursive.ps1"), `param([int]$Depth)\nif ($Depth -gt 0) { & $PSCommandPath ($Depth - 1) } else { ${native(7)} }`, "utf8");
+  writeFileSync(join(directory, "object-parent.ps1"), `$child = ${commandInfo("child-failure")}\n& $child`, "utf8");
+  writeFileSync(join(directory, "object-recursive.ps1"), `param([int]$Depth)\nif ($Depth -gt 0) { $self = Get-Command $PSCommandPath; & $self ($Depth - 1) } else { ${native(7)} }`, "utf8");
+  writeFileSync(join(directory, "child-exports.ps1"), '$exportedValue = "EXPORTED_VALUE"\nfunction Exported-Function { Write-Output "EXPORTED_FUNCTION" }', "utf8");
   const blockOrders = [
     ["begin", "process"], ["process", "begin"], ["begin", "end"], ["end", "begin"], ["process", "end"], ["end", "process"],
     ["begin", "process", "end"], ["begin", "end", "process"], ["process", "begin", "end"],
@@ -68,6 +72,31 @@ if (!IS_WINDOWS) {
         { name: "nested-requires", script: child("child-requires"), exitCode: 1, absentOutput: "MUST_NOT_RUN" },
         { name: "nested-context", script: `${child("child-context")} -Name "CHILD_CONTEXT_OK"`, exitCode: 0, output: "CHILD_CONTEXT_OK" },
         { name: "dynamic-nested-failure", script: `$childPath = ${quote(join(directory, "child-failure.ps1"))}\n& $childPath`, exitCode: 7 },
+        { name: "command-object-failure", script: `$child = ${commandInfo("child-failure")}\n& $child`, exitCode: 7 },
+        { name: "command-object-cached-failure", script: `$child = ${commandInfo("child-failure")}\n& $child\n& $child`, exitCode: 7 },
+        { name: "command-object-recovery", script: `$child = ${commandInfo("child-failure")}\n& $child\nWrite-Output "OBJECT_RECOVERED"`, exitCode: 0, output: "OBJECT_RECOVERED" },
+        { name: "command-object-recovered-child", script: `& ${commandInfo("child-recovery")}`, exitCode: 0, output: "CHILD_RECOVERED" },
+        { name: "command-object-success-after-failure", script: `${native(7)}\n& ${commandInfo("child-success")}`, exitCode: 0, output: "CHILD_OK" },
+        { name: "command-object-expression", script: `& ${commandInfo("child-failure")}`, exitCode: 7 },
+        { name: "command-object-property", script: `$commands = @{ Child = ${commandInfo("child-failure")} }\n& $commands.Child`, exitCode: 7 },
+        { name: "command-object-index", script: `$commands = @(${commandInfo("child-failure")})\n& $commands[0]`, exitCode: 7 },
+        { name: "command-object-session-state", script: `& ($ExecutionContext.SessionState.InvokeCommand.GetCommand(${quote(join(directory, "child-failure.ps1"))}, [System.Management.Automation.CommandTypes]::ExternalScript))`, exitCode: 7 },
+        { name: "command-object-nested", script: child("object-parent"), exitCode: 7 },
+        { name: "command-object-recursion", script: `${child("object-recursive")} 3`, exitCode: 7 },
+        { name: "command-object-explicit-exit", script: `& ${commandInfo("child-exit")}`, exitCode: 23 },
+        { name: "command-object-throw", script: `& ${commandInfo("child-throw")}`, exitCode: 1 },
+        { name: "command-object-requires", script: `& ${commandInfo("child-requires")}`, exitCode: 1, absentOutput: "MUST_NOT_RUN" },
+        { name: "command-object-context", script: `& ${commandInfo("child-context")} -Name "OBJECT_CONTEXT_OK"`, exitCode: 0, output: "OBJECT_CONTEXT_OK" },
+        { name: "command-object-dot-source", script: `$child = ${commandInfo("child-failure")}\n. $child`, exitCode: 7 },
+        { name: "command-object-dot-source-exports", script: `. ${commandInfo("child-exports")}\nExported-Function\nWrite-Output $exportedValue`, exitCode: 0, output: "EXPORTED_VALUE" },
+        { name: "command-object-alias", script: `Set-Alias -Name Invoke-ChildScript -Value ${quote(join(directory, "child-failure.ps1"))}\n& (Get-Command Invoke-ChildScript)`, exitCode: 7 },
+        { name: "command-object-target-evaluated-once", script: `$script:lookupCount = 0\nfunction Resolve-Child { $script:lookupCount++; ${commandInfo("child-success")} }\n& (Resolve-Child)\nif ($script:lookupCount -ne 1) { throw "Target evaluated more than once" }\nWrite-Output "TARGET_ONCE"`, exitCode: 0, output: "TARGET_ONCE" },
+        { name: "command-object-outer-invocation", script: 'Write-Output "FIRST_OK"', arguments: `; & ${commandInfo("child-failure")}`, exitCode: 7 },
+        { name: "command-object-native", script: `& (Get-Command ${quote(process.execPath)}) -e 'process.exit(7)'`, exitCode: 7 },
+        { name: "command-object-cmdlet", script: '& (Get-Command Write-Output) "CMDLET_OK"', exitCode: 0, output: "CMDLET_OK" },
+        { name: "command-object-alias-chain", script: 'Set-Alias -Name Invoke-First -Value ".\\scripts with spaces\\child-failure.ps1"\nSet-Alias -Name Invoke-Second -Value Invoke-First\n& (Get-Command Invoke-Second)', exitCode: 7 },
+        { name: "command-object-static-alias", script: 'Set-Alias -Name Invoke-ChildScript -Value ".\\scripts with spaces\\child-failure.ps1"\nInvoke-ChildScript', exitCode: 7 },
+        { name: "command-object-scriptblock", script: '$callback = { Write-Output "CALLBACK_OK" }; & $callback', exitCode: 0, output: "CALLBACK_OK" },
         { name: "strict-nested-failure", script: `Set-StrictMode -Version Latest\n${child("child-failure")}`, exitCode: 7 },
         { name: "strict-nested-recovery", script: `Set-StrictMode -Version Latest\n${child("child-failure")}\nWrite-Output "STRICT_RECOVERED"`, exitCode: 0, output: "STRICT_RECOVERED" },
         { name: "consecutive-failure", script: 'Write-Output "FIRST_OK"', arguments: `; ${child("child-failure")}`, exitCode: 7, output: "FIRST_OK" },
