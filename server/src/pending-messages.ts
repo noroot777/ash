@@ -46,6 +46,7 @@ import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { id, now } from "./util.js";
+import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 
 // 判定与投递参数的无状态部分拆在 pending-verdict.ts(本文件顶过 700 行上限);
 // 外部引用保持原路径不动。
@@ -241,13 +242,15 @@ export async function beginDelivery(messageId: string): Promise<Row | null> {
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
 // 消息不该被这一步复活。
-export async function markSent(message: Row): Promise<void> {
-  forgetDeliveryBookkeeping(message.id);
-  await db
+export async function markSent(message: Row, transaction?: ConclusionTransaction): Promise<void> {
+  await (transaction ?? db)
     .update(scheduledMessages)
     .set({ status: "sent", sentAt: now(), deliveringSince: null })
     .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.status, "pending")));
-  publishPendingMessages(message.taskId);
+  if (!transaction) {
+    forgetDeliveryBookkeeping(message.id);
+    publishPendingMessages(message.taskId);
+  }
 }
 
 // 开机时清空所有租约(startScheduler 在第一次 tick 之前调)。**不需要超时启发式**:

@@ -126,14 +126,26 @@ export async function beginReviewContinuation(transaction: ConclusionTransaction
 }
 
 export async function commitReviewTurnDelivery(taskId: string, receipt: ReviewStartReceipt | undefined,
-  process?: { pid: number; unitToken?: string | null }): Promise<void> {
+  process?: { pid: number; unitToken?: string | null },
+  persistRunner?: (transaction: ConclusionTransaction) => Promise<void>): Promise<void> {
   if (!receipt) return;
   await db.transaction(async (transaction) => {
     const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
     const start = task?.waitOwnership?.start;
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, receipt.directory)))[0];
     if (!task || !start || !state || state.generation !== receipt.generation
-      || JSON.stringify(start.identity) !== JSON.stringify(receipt.identity) || !reviewIdentityMatches(task, receipt.identity)) return;
+      || start.directory !== receipt.directory || start.generation !== receipt.generation
+      || JSON.stringify(start.identity) !== JSON.stringify(receipt.identity) || !reviewIdentityMatches(task, receipt.identity)) throw new ReviewSuperseded();
+    await persistRunner?.(transaction);
+    if (receipt.delivery?.kind === "checkpoint") {
+      await transaction.update(tasks).set({ resumePrompt: null, updatedAt: now() })
+        .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, receipt.delivery.text),
+          eq(tasks.resumePromptGeneration, receipt.delivery.promptGeneration)));
+    } else if (receipt.delivery) {
+      const message = (await transaction.select().from(scheduledMessages)
+        .where(eq(scheduledMessages.id, receipt.delivery.messageId)))[0];
+      if (message?.taskId === taskId) await (await import("./pending-messages.js")).markSent(message, transaction);
+    }
     if (!receipt.repair && !state.settlement) await transaction.update(regressionEvidence)
       .set({ continuation: { ...state.continuation, phase: "running", start: undefined } })
       .where(eq(regressionEvidence.directory, receipt.directory));

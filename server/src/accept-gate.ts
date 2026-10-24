@@ -403,6 +403,23 @@ async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = fa
     command: row.command, summary: summarizeAcceptGate(view), logPath: row.logPath,
     tail: view.logTail, cwd: row.cwd,
   });
+  if (authority) {
+    try {
+      const { enqueueFinalizationRepair } = await import("./regression-finalization.js");
+      await enqueueFinalizationRepair(authority.directory, authority.generation, row.taskId, prompt, authority.target!,
+        async (transaction) => {
+          await transaction.update(acceptGateRuns).set({ handoffAt: now(), handoffError: null }).where(eq(acceptGateRuns.id, row.id));
+        }, `gate-${row.id}`);
+      bus.publish({ type: "task.acceptGate", taskId: row.taskId });
+      await appendTaskTimeline(row.taskId, `门禁交接：修复输入已持久入队，按原审查权限等待投递（日志 ${row.logPath}）。`);
+      await (await import("./pending-messages.js")).deliverPendingMessages(row.taskId);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await markHandoff(row.id, { at: now(), error: reason });
+      await appendTaskTimeline(row.taskId, `门禁交接失败：${reason}。日志在 ${row.logPath}，可核对后手动再交。`);
+    }
+    return;
+  }
   // 先把「这一次交接发起了」落盘再投递：投递是异步的，中间用户刷新页面的话，不落盘
   // 那张卡只能说「不知道」。失败由下面的 onError 补写原因（两件事都写同一行）。
   await markHandoff(row.id, { at: now(), error: null });
@@ -412,11 +429,7 @@ async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = fa
       again ? "这是你在验收台上手动再交一次。" : ""}修完重新点验收即可，验收会自动再跑一遍。`,
   );
   // byBackend：占真人回合，但字是后端写的（同验收冲突交接）。
-  const reviewDelivery = authority ? { kind: "repair" as const, generation: authority.generation, messageId: row.id } : undefined;
-  const { reviewDeliveryBlocked } = await import("./review-ownership.js");
-  continueWhenIdle(row.taskId, prompt, { byBackend: true, reviewDelivery,
-    ...(reviewDelivery ? { wakeGuard: () => reviewDeliveryBlocked(reviewDelivery, row.taskId) } : {}),
-  }, async (why) => {
+  continueWhenIdle(row.taskId, prompt, { byBackend: true }, async (why) => {
     await markHandoff(row.id, { at: now(), error: why });
     await appendTaskTimeline(
       row.taskId,

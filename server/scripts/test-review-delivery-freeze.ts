@@ -92,7 +92,10 @@ try {
           delivered = true;
           if (message) await db.update(schema.scheduledMessages).set({ status: "sent", deliveringSince: null })
             .where(eq(schema.scheduledMessages.id, message.id));
-          else assert(await takeResumePrompt(taskId, text, checkpoint.resumePromptGeneration));
+          else {
+            await takeResumePrompt(taskId, text, checkpoint.resumePromptGeneration);
+            assert.equal((await row(taskId)).resumePrompt, null);
+          }
         } }), true);
         assert(delivered);
         assert.equal((await row(taskId)).waitOwnership?.start, undefined);

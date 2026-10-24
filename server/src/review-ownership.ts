@@ -91,6 +91,10 @@ export async function reviewDeliveryAuthority(transaction: ConclusionTransaction
   const owner = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
   if (!owner || (state.taskId !== taskId && (delivery.kind === "repair" || owner.reviewOf !== state.taskId
     || !owner.reviewRound || state.directory !== reviewRoundDir(state.taskId, owner.reviewRound)))) throw new ReviewSuperseded();
+  const delivered = owner.waitOwnership?.deliveredReview;
+  if (delivered?.generation === delivery.generation && (delivery.kind === "checkpoint"
+    ? delivered.input?.kind === "checkpoint" && delivered.input.promptGeneration === delivery.promptGeneration
+    : delivered.input?.kind !== "checkpoint" && delivered.input?.messageId === delivery.messageId)) throw new ReviewSuperseded();
   const acceptedRepair = delivery.kind === "repair" && state.finalization?.acceptance
     && state.finalization.repair?.messageId === delivery.messageId
     && state.finalization.repair.token === state.finalization.acceptance.token;

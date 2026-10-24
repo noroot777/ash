@@ -479,90 +479,94 @@ export async function continueTask(
       env: runEnv,
     });
     trackRun(taskId, handle);
-    await commitReviewTurnDelivery(taskId, reviewStart, handle.detached);
     // 前言已经随 prompt 交到 agent 手上，这一刻起就该划掉（放在 spawn 之后：起跑前
     // 还有 takeFreeze 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
-    if (handoffNotice) await clearHandoffNotice(taskId);
 
     // Reuse the agent's session row when resuming; otherwise open a fresh line,
     // inheriting the task's worktree/branch from its first session.
     let cliSessionId = resuming ? prev!.cliSessionId! : handle.sessionId;
-    if (resuming) {
-      // New turn on the same session row: mark it live (clear the prior turn's
-      // end) and stamp this turn's start, so execution-time accounting and the
-      // live 用时 both track the turn actually running now. commandLine must also
-      // reflect this invocation because task-level model/effort can change between turns.
-      await db
-        .update(sessions)
-        .set({
-          // 回合三件套（起点 / 计数 / 清掉上一轮的收尾）一起来自 helper——见
-          // session-turns.ts 顶部：八个起跑入口手写就一定会漏掉其中一处。
-          ...resumedTurnFields(turnStart),
-          exitStatus: null,
-          commandLine: handle.commandLine,
+    const runningHandle = handle;
+    const persistRunner = async (store: Pick<typeof db, "insert" | "update">) => {
+      if (resuming) {
+        // New turn on the same session row: mark it live (clear the prior turn's
+        // end) and stamp this turn's start, so execution-time accounting and the
+        // live 用时 both track the turn actually running now. commandLine must also
+        // reflect this invocation because task-level model/effort can change between turns.
+        await store
+          .update(sessions)
+          .set({
+            // 回合三件套（起点 / 计数 / 清掉上一轮的收尾）一起来自 helper——见
+            // session-turns.ts 顶部：八个起跑入口手写就一定会漏掉其中一处。
+            ...resumedTurnFields(turnStart),
+            exitStatus: null,
+            commandLine: runningHandle.commandLine,
+            executor: ex.label,
+            // 这一轮跑在谁名下 —— 跨人续聊会换人(runOwner 上面刚算过),而 CLI 的会话
+            // 文件跟着这个人的配置目录走。不刷新,接力就会去上一个人的目录里找。
+            runOwnerUserId: runOwner ?? null,
+            // 目录本身跟着一起刷新。走到这一支说明它与记下来的那个相同(不同的话
+            // resumableHere 早把这条会话排除了),刷新只是不让这一列停在老值上。
+            cliConfigDir: await cliConfigDirColumn(runOwner, agent),
+            // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
+            // 思考强度都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
+            executorId: profileId,
+            executorFingerprint: profileFingerprint,
+            turnModel: ex.model ?? null,
+            turnReasoningEffort: ex.reasoningEffort ?? null,
+            sideTurn,
+            // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
+            // 恢复不了的恢复命令,见 ResumeFields。
+            ...ex.resumeFields(cwd, cliSessionId),
+            // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
+            // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
+            agentPid: runningHandle.detached?.pid ?? null,
+            agentStartedAt: runningHandle.detached ? inspectProcess(runningHandle.detached.pid)?.startedAt ?? null : null,
+            agentOutPath: runningHandle.detached ? detach.out : null,
+            agentErrPath: runningHandle.detached ? detach.err : null,
+            agentRcPath: runningHandle.detached ? detach.rc : null,
+            agentOffset: 0,
+            // 跟 pid 同组刷新:沿用上一轮的记号会让清理去找上一轮那批后代。
+            agentUnitToken: runningHandle.detached?.unitToken ?? null,
+          })
+          .where(eq(sessions.id, sessId));
+      } else {
+        const base = all[0];
+        await store.insert(sessions).values({
+          id: sessId,
+          taskId,
+          role: sessionRole,
+          agentType: agent,
           executor: ex.label,
-          // 这一轮跑在谁名下 —— 跨人续聊会换人(runOwner 上面刚算过),而 CLI 的会话
-          // 文件跟着这个人的配置目录走。不刷新,接力就会去上一个人的目录里找。
           runOwnerUserId: runOwner ?? null,
-          // 目录本身跟着一起刷新。走到这一支说明它与记下来的那个相同(不同的话
-          // resumableHere 早把这条会话排除了),刷新只是不让这一列停在老值上。
           cliConfigDir: await cliConfigDirColumn(runOwner, agent),
-          // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
-          // 思考强度都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
           executorId: profileId,
           executorFingerprint: profileFingerprint,
           turnModel: ex.model ?? null,
           turnReasoningEffort: ex.reasoningEffort ?? null,
           sideTurn,
-          // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
-          // 恢复不了的恢复命令,见 ResumeFields。
+          worktreePath: base?.worktreePath ?? null,
+          branch: base?.branch ?? null,
+          cwd,
+          cliSessionId,
           ...ex.resumeFields(cwd, cliSessionId),
-          // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
-          // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
-          agentPid: handle.detached?.pid ?? null,
-          agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
-          agentOutPath: handle.detached ? detach.out : null,
-          agentErrPath: handle.detached ? detach.err : null,
-          agentRcPath: handle.detached ? detach.rc : null,
+          commandLine: runningHandle.commandLine,
+          startedAt: turnStart,
+          ...freshTurnFields(turnStart),
+          activeMs: 0,
+          exitStatus: null,
+          agentPid: runningHandle.detached?.pid ?? null,
+          agentStartedAt: runningHandle.detached ? inspectProcess(runningHandle.detached.pid)?.startedAt ?? null : null,
+          agentOutPath: runningHandle.detached ? detach.out : null,
+          agentErrPath: runningHandle.detached ? detach.err : null,
+          agentRcPath: runningHandle.detached ? detach.rc : null,
           agentOffset: 0,
-          // 跟 pid 同组刷新:沿用上一轮的记号会让清理去找上一轮那批后代。
-          agentUnitToken: handle.detached?.unitToken ?? null,
-        })
-        .where(eq(sessions.id, sessId));
-    } else {
-      const base = all[0];
-      await db.insert(sessions).values({
-        id: sessId,
-        taskId,
-        role: sessionRole,
-        agentType: agent,
-        executor: ex.label,
-        runOwnerUserId: runOwner ?? null,
-        cliConfigDir: await cliConfigDirColumn(runOwner, agent),
-        executorId: profileId,
-        executorFingerprint: profileFingerprint,
-        turnModel: ex.model ?? null,
-        turnReasoningEffort: ex.reasoningEffort ?? null,
-        sideTurn,
-        worktreePath: base?.worktreePath ?? null,
-        branch: base?.branch ?? null,
-        cwd,
-        cliSessionId,
-        ...ex.resumeFields(cwd, cliSessionId),
-        commandLine: handle.commandLine,
-        startedAt: turnStart,
-        ...freshTurnFields(turnStart),
-        activeMs: 0,
-        exitStatus: null,
-        agentPid: handle.detached?.pid ?? null,
-        agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
-        agentOutPath: handle.detached ? detach.out : null,
-        agentErrPath: handle.detached ? detach.err : null,
-        agentRcPath: handle.detached ? detach.rc : null,
-        agentOffset: 0,
-        agentUnitToken: handle.detached?.unitToken ?? null,
-      });
-    }
+          agentUnitToken: runningHandle.detached?.unitToken ?? null,
+        });
+      }
+    };
+    if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner);
+    else await persistRunner(db);
+    if (handoffNotice) await clearHandoffNotice(taskId);
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
     await openTurn({ sessionId: sessId, taskId, cwd, startedAt: turnStart });
 

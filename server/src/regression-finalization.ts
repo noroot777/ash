@@ -55,7 +55,7 @@ export async function appendFinalizationTimeline(taskId: string, text: string, e
 
 export async function enqueueFinalizationRepair(directory: string, generation: string, taskId: string, text: string,
   guard: { turnToken: string | null; directionToken: string | null; directionEpoch: number },
-  write?: (transaction: ConclusionTransaction) => Promise<void>): Promise<void> {
+  write?: (transaction: ConclusionTransaction) => Promise<void>, inputKey?: string): Promise<void> {
   await db.transaction(async (transaction) => {
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
     if (!state?.finalization || state.generation !== generation) throw new ReviewSuperseded();
@@ -66,10 +66,10 @@ export async function enqueueFinalizationRepair(directory: string, generation: s
     if (!task || task.directionEpoch !== guard.directionEpoch) throw new ReviewSuperseded();
     const stepId = plan.runningStep ?? plan.blockedStep;
     const attempt = (plan.repair?.attempt ?? 0) + 1;
-    const key = plan.acceptance ? `repair:${stepId}:${attempt}` : "repair";
+    const key = inputKey ? `repair:${inputKey}` : plan.acceptance ? `repair:${stepId}:${attempt}` : "repair";
     if (plan.done.includes(key)) return;
     if (plan.acceptance && !stepId) throw new ReviewSuperseded();
-    const messageId = `review-repair-${generation}${plan.acceptance ? `-${attempt}` : ""}`;
+    const messageId = `review-repair-${generation}${inputKey ? `-${inputKey}` : plan.acceptance ? `-${attempt}` : ""}`;
     const message = pendingMessageRow({ taskId, text, origin: `review-settlement:${generation}` });
     await write?.(transaction);
     await transaction.insert(scheduledMessages).values({ ...message, id: messageId }).onConflictDoNothing();
