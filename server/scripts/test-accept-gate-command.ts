@@ -77,12 +77,20 @@ try {
       { name: "throw", script: 'throw "THROWN_FAILURE"', code: 1 },
       { name: "explicit-success", script: 'node -e "process.exit(7)"\nexit 0', code: 0 },
       { name: "explicit-failure", script: 'Write-Output "BEFORE_EXIT"\nexit 23', code: 23 },
+      { name: "nested-failure", script: '& .\\native.ps1', code: 17 },
+      { name: "nested-recovery", script: '& .\\native.ps1\nWrite-Output "RECOVERED"', code: 0 },
+      { name: "nested-explicit-exit", script: '& .\\explicit-failure.ps1', code: 23 },
+      { name: "blocks-end-before-begin", script: 'end { Write-Output "END_OK" }\nbegin { Write-Output "BEGIN_OK" }', code: 0 },
+      { name: "blocks-failure-end-before-begin", script: 'end { & .\\native.ps1 }\nbegin { Write-Output "BEGIN_OK" }', code: 17 },
     ]) {
       writeFileSync(join(root, `${testCase.name}.ps1`), testCase.script, "utf8");
       const result = await run(`.\\${testCase.name}.ps1`);
       assert.equal(result.exit.code, testCase.code, `${testCase.name}: ${result.log}`);
       if (testCase.name === "recovered") assert.match(result.log, /RECOVERED/);
     }
+    assert.equal((await run('.\\success.ps1; .\\native.ps1')).exit.code, 17);
+    assert.equal((await run('.\\native.ps1; .\\success.ps1')).exit.code, 0);
+    assert.equal((await run('.\\success.ps1; .\\explicit-failure.ps1')).exit.code, 23);
     writeFileSync(join(root, "error.ps1"), 'Write-Error "GATE_FAILURE"', "utf8");
     const errored = await run('.\\error.ps1');
     assert.notEqual(errored.exit.code, 0, errored.log);
