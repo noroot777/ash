@@ -15,10 +15,7 @@
 // stdin 从匿名管道换成可重开的具名管道，因此 server 重启后两边都能接回。
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { Readable } from "node:stream";
-import { closeSync, createWriteStream, openSync, readFileSync, readSync, existsSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, createWriteStream, openSync, existsSync, unlinkSync } from "node:fs";
 import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
 import {
@@ -34,167 +31,22 @@ import {
 import {
   CONFINE_ENROLL_CMD, openConfinement, registerConfinement, shareConfinement,
 } from "./kernel-confine.js";
+import { reopenWindowsControlStdin, spawnWindowsDetachedAgent } from "./detached-win.js";
+import { registerWindowsOwnership } from "./windows-run-evidence.js";
 
-// 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
-// 换成文件后没人告诉我们了,只能让 shell 跑完自己写一个数字进去。
-export type DetachedPaths = { out: string; err: string; rc: string };
+// 落盘文件 / tailFile / 伪装外壳这一层搬到了 detached-child.ts(那边是纯文件与流,
+// 不碰进程);使用方照旧从本文件 import,所以在这里原样转出。
+import {
+  detachedPathsFor, makeDetachedChild, readExitCode,
+  type DetachedChild, type DetachedPaths,
+} from "./detached-child.js";
 
-export function detachedPathsFor(runDir: string, sessionId: string, turnStart: string): DetachedPaths {
-  const turn = turnStart.replace(/[^0-9A-Za-z]/g, "");
-  const base = join(runDir, `${sessionId}-${turn}`);
-  return { out: `${base}.agent-out.jsonl`, err: `${base}.agent-err.log`, rc: `${base}.agent-rc` };
-}
+export { detachedPathsFor };
+export type { DetachedChild, DetachedPaths };
 
-// 轮询间隔。文件尾巴的读取延迟直接决定网页上「字往外冒」的手感,所以压得比较低;
-// 代价只是每个在跑的任务每 50ms 一次 read 系统调用(10 个并行 = 200 次/秒,可忽略)。
-const POLL_MS = 50;
 // 进程存活探测。只在**接管**路径用(spawn 路径有真的 ChildProcess,exit 事件白送),
 // 频率可以低得多。
 const LIVENESS_MS = 400;
-
-// 跟着文件尾巴走的 Readable。只吐**完整的行** —— 这样 committed 永远落在换行处,
-// 重启后从 committed 接着读绝不会把一行 JSON 劈成两半(claude/codex 的 stream-json
-// 都是一行一个事件,劈开就是解析失败)。
-// 多字节字符同理:全程在 Buffer 上按 0x0A 切,不在半个 UTF-8 字符中间下刀。
-function tailFile(path: string, startOffset: number) {
-  let offset = startOffset;
-  let pending = Buffer.alloc(0);
-  let fd: number | null = null;
-  const stream = new Readable({ read() {} });
-
-  const openFd = () => {
-    if (fd !== null) return fd;
-    if (!existsSync(path)) return null;
-    try {
-      fd = openSync(path, "r");
-    } catch {
-      fd = null;
-    }
-    return fd;
-  };
-
-  // 把文件里当前可读的部分全部吸干。返回是否吐出过新内容。
-  const pump = (): boolean => {
-    const f = openFd();
-    if (f === null) return false;
-    let grew = false;
-    for (;;) {
-      const buf = Buffer.allocUnsafe(64 * 1024);
-      let n = 0;
-      try {
-        n = readSync(f, buf, 0, buf.length, offset);
-      } catch {
-        break; // 文件被删/fd 失效:当作读到头,由存活探测去收尾
-      }
-      if (n <= 0) break;
-      offset += n;
-      pending = Buffer.concat([pending, buf.subarray(0, n)]);
-      const nl = pending.lastIndexOf(0x0a);
-      if (nl >= 0) {
-        stream.push(pending.subarray(0, nl + 1));
-        pending = pending.subarray(nl + 1);
-        grew = true;
-      }
-      if (n < buf.length) break;
-    }
-    return grew;
-  };
-
-  return {
-    stream,
-    pump,
-    // 已经安全消费到的字节位置(落在换行边界上)。存进 DB,重启后从这里接着读。
-    committed: () => offset - pending.length,
-    // 收尾:把剩下的读干净,连同最后那截没有换行的尾巴一起吐出去,然后结束流。
-    finish() {
-      pump();
-      if (pending.length) {
-        stream.push(pending);
-        pending = Buffer.alloc(0);
-      }
-      stream.push(null);
-      if (fd !== null) {
-        try { closeSync(fd); } catch { /* already gone */ }
-        fd = null;
-      }
-    },
-  };
-}
-
-// 读退出码。rc 文件是 shell 在 CLI 跑完之后写的,所以「进程没了但 rc 还没出现」
-// 是正常的竞态(几毫秒),调用方会重试几次。始终读不到 = 它是被杀死的,不是正常
-// 退出 —— 按非零处理,别把一次强杀记成成功。
-function readExitCode(rcPath: string): number | null {
-  try {
-    const raw = readFileSync(rcPath, "utf8").trim();
-    if (!raw) return null;
-    const n = Number(raw);
-    return Number.isInteger(n) ? n : null;
-  } catch {
-    return null;
-  }
-}
-
-// 伪装成 ChildProcess 的公共外壳。两条路(新起 / 接管)只有「怎么知道它死了」
-// 和「怎么杀它」不一样,流的部分完全共用。
-function makeDetachedChild(opts: {
-  pid: number;
-  paths: DetachedPaths;
-  startOffset: number;
-  stdin: ChildProcess["stdin"];
-  kill: () => void;
-  // 注册「进程退出时叫我」。回调参数是退出码(拿不到就 null)。
-  onExit: (cb: (code: number | null) => void) => void;
-}): DetachedChild {
-  // 跟 failedChild 同一个套路:ChildProcess 的 pid/exitCode 等在类型上是只读的,
-  // 合成品只能先当普通对象拼好再整体断言。
-  const child: any = new EventEmitter();
-  const out = tailFile(opts.paths.out, opts.startOffset);
-  const err = tailFile(opts.paths.err, 0);
-  child.stdout = out.stream;
-  child.stderr = err.stream;
-  child.stdin = opts.stdin;
-  child.pid = opts.pid;
-  child.exitCode = null;
-  child.signalCode = null;
-  child.kill = () => {
-    opts.kill();
-    return true;
-  };
-  child.ashCommitted = () => out.committed();
-  child.ashPaths = opts.paths;
-
-  const timer = setInterval(() => {
-    out.pump();
-    err.pump();
-  }, POLL_MS);
-  (timer as { unref?: () => void }).unref?.();
-
-  let settled = false;
-  opts.onExit((code) => {
-    if (settled) return;
-    settled = true;
-    clearInterval(timer);
-    // 关键顺序:先把文件读干净再宣告结束。反过来的话,进程最后一口气写下的
-    // 内容(往往正是 result 那一行)会被丢掉,run loop 就拿不到 session_id /
-    // 退出信息了。
-    out.finish();
-    err.finish();
-    try { child.stdin?.destroy(); } catch { /* 已关闭 */ }
-    child.exitCode = code;
-    child.emit("exit", code, null);
-    child.emit("close", code);
-  });
-
-  return child as DetachedChild;
-}
-
-export type DetachedChild = ChildProcess & {
-  /** 已安全消费到的 stdout 字节位置(换行边界),存进 DB 供重启后接着读。 */
-  ashCommitted: () => number;
-  /** 可重连 stdin 与 App Server 恢复都从同一组路径派生，不另加数据库列。 */
-  ashPaths: DetachedPaths;
-};
 
 const controlPath = (paths: DetachedPaths) => `${paths.rc}.stdin.fifo`;
 
@@ -423,13 +275,16 @@ export function spawnDetachedAgent(
 // detached.ts 已经依赖 spawn.ts,反过来会成环。
 // **常驻会话不要用它** —— 双向单飞走下面的 spawnControllableForRun。
 //
-// **Windows 走管道**:这条路的实现是 `/bin/sh -c '"$@" >>out 2>>err; …'`,一个
-// 无 shell 的等价物在那边写不出来(cmd.exe 的重定向拼不出同样的语义,PowerShell
-// 又会插手编码)。所以那边只保留「输出落盘」——把 out 文件交给 spawnAgent 的 tee
-// (见那里的注释:交卷补捞靠这个文件,砍了会让干完活的任务被记成 failed),
-// 「活得过 server 重启」这一档如实放弃:重启时在跑的任务按 reconcileInterrupted
-// 老语义判 failed,用户重试即可。reattach.ts 那边也一并短路,免得它去认一个从来
-// 就不是这么起的进程。
+// **Windows 也走落盘**(detached-win.ts),只是实现不同:那边不套 shell(直接把两个文件描述符
+// 当 stdout/stderr 交给 CLI),而是套一层按次生成的 node 壳来写退出码、守 stdin。所以两个
+// 平台的契约现在**逐字相同** ——「给了 detach 路径就有 pid + 落盘输出 + 退出码 + 可接管 +
+// 可重连 stdin」,reattach.ts 那边因此也不再按平台短路。实现差异逐条写在 detached-win.ts
+// 顶部。
+//
+// 没给 detach 路径的那条管道路也因此**不再落盘**:它过去靠 spawn.ts 的 `teeStdout` 补一份
+// out 文件给交卷补捞(mcp-handoff.ts),而那份补偿是专为「Windows 没有落盘路」写的 ——
+// 生产的两个起跑入口(task-run.ts / orchestrator.ts)一律给 detach,补偿已无归宿,随这次
+// 一起摘掉。
 export function spawnForRun(
   cwd: string,
   bin: string,
@@ -438,13 +293,19 @@ export function spawnForRun(
   extraEnv?: Record<string, string | undefined>,
   detach?: DetachedPaths,
 ): ChildProcess {
-  if (detach && !IS_WINDOWS) {
+  if (detach && IS_WINDOWS) {
+    return spawnWindowsDetachedAgent(cwd, bin, args, prompt, detach, extraEnv);
+  }
+  if (detach) {
     return spawnDetachedAgent(cwd, bin, args, prompt, detach, extraEnv);
   }
-  return spawnAgent(cwd, bin, args, prompt, extraEnv, { teeOut: detach?.out });
+  return spawnAgent(cwd, bin, args, prompt, extraEnv);
 }
 
-/** 双向 stdin 的当前单飞回合；POSIX 走可重连 FIFO，Windows 保持既有管道语义。 */
+/**
+ * 双向 stdin 的当前单飞回合。两边都是**可重连**的:POSIX 重开 FIFO,Windows 连回壳守着的
+ * 具名管道(`reopenWindowsControlStdin`,见 detached-win.ts 顶部)。
+ */
 export function spawnControllableForRun(
   cwd: string,
   bin: string,
@@ -453,10 +314,13 @@ export function spawnControllableForRun(
   extraEnv?: Record<string, string | undefined>,
   detach?: DetachedPaths,
 ): ChildProcess {
-  if (detach && !IS_WINDOWS) {
+  if (detach && IS_WINDOWS) {
+    return spawnWindowsDetachedAgent(cwd, bin, args, initialInput, detach, extraEnv, { keepStdin: true });
+  }
+  if (detach) {
     return spawnControllableDetachedAgent(cwd, bin, args, initialInput, detach, extraEnv);
   }
-  return spawnAgent(cwd, bin, args, initialInput, extraEnv, { keepStdin: true, teeOut: detach?.out });
+  return spawnAgent(cwd, bin, args, initialInput, extraEnv, { keepStdin: true });
 }
 
 // 把「这个 child 是不是 detached 的」这一判断收在一处,executor 里不必各写一遍
@@ -494,8 +358,11 @@ export function reattachDetachedAgent(opts: {
     pid: opts.pid,
     paths: opts.paths,
     startOffset: opts.offset,
-    // 普通一次性 detached 没有 FIFO，仍是 null；原生引导回合从约定路径重开 writer。
-    stdin: existsSync(controlPath(opts.paths)) ? fifoWriter(controlPath(opts.paths)) : null,
+    // 普通一次性 detached 没有可重连 stdin，仍是 null；原生引导回合从约定路径重开 writer
+    // （POSIX 重开 FIFO，Windows 连回壳守着的具名管道 —— 两边同一个契约，见 detached-win.ts）。
+    stdin: IS_WINDOWS
+      ? reopenWindowsControlStdin(opts.paths, () => isSameProcess(opts.pid, opts.startedAt))
+      : existsSync(controlPath(opts.paths)) ? fifoWriter(controlPath(opts.paths)) : null,
     // 把启动时间**和记号**一起交给 killByPid:接管这一刻核对过的身份,到真要杀它时隔着整段
     // 回合,那个号可能已经换了主人,所以发信号前要按同一判据再核一次(第 1 轮审查 F2)。
     // 记号是其中那份**排他**凭证 —— POSIX 的秒级启动时刻是粗档,单凭它不足以授权下刀。
@@ -531,5 +398,6 @@ export function reattachDetachedAgent(opts: {
   // 接回这条路同样要带上输出文件:重启后它是这次运行仅存的两条跨进程线索之一
   // (另一条是记号),清理责任记录和 `killByPid` 的第二份证据都读它。
   registerRunOutPath(child, opts.paths.out);
+  if (IS_WINDOWS) registerWindowsOwnership(child, opts.paths);
   return child;
 }
