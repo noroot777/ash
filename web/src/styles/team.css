@@ -95,7 +95,6 @@
 .team-feed-tool pre { max-height: 180px; overflow: auto; border-left: 2px solid var(--line); white-space: pre-wrap; }
 .team-feed-tool.is-error { color: var(--red); }
 .team-feed-event { display: flex; max-width: 800px; align-items: center; gap: 8px; margin: 16px 0; color: var(--faint); font-size: 10.5px; }
-.team-feed-event span { height: 1px; flex: 1; background: var(--line); }
 .team-feed-event.is-error { color: var(--red); }
 .team-feed-inbound { max-width: 800px; margin: 0 0 18px; border-left: 2px solid var(--line2); border-radius: 0 8px 8px 0; padding: 7px 9px 7px 11px; }
 .team-feed-inbound.is-question { border-color: var(--cyan); background: linear-gradient(90deg,color-mix(in lch,var(--cyan) 7%,transparent),transparent); }

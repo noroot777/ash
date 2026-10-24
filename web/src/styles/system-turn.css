@@ -254,7 +254,7 @@
 /* 回合边界只留一条很淡的分隔线和说明。 */
 .system-boundary { gap: 8px; color: var(--faint); font-size: 9.5px; }
 .system-boundary > p { flex: none; margin: 0; opacity: 0.78; }
-.system-boundary > span { background: color-mix(in lch, var(--line) 58%, transparent); }
+.system-boundary > .system-boundary-rule { height: 1px; flex: 1; background: color-mix(in lch, var(--line) 58%, transparent); }
 .system-boundary.notice-mode-aligned {
   display: grid;
   width: 100%;
@@ -268,7 +268,7 @@
 }
 .system-boundary.notice-mode-aligned > p { min-width: 0; opacity: 1; }
 .system-boundary.notice-mode-aligned > .system-event-avatar { background: color-mix(in lch, var(--overlay) 70%, var(--panel)); }
-.system-boundary.notice-mode-aligned > .system-boundary-rule { width: 100%; background: color-mix(in lch, var(--line) 58%, transparent); }
+.system-boundary.notice-mode-aligned > .system-boundary-rule { width: 100%; }
 
 /* 旁注不算换段：被它隔开的下半截还是同一个会话在说话，接着上一段排版。 */
 .task-message--agent.is-continuation { margin-top: -6px; }

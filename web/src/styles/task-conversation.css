@@ -287,7 +287,6 @@
 .context-compact-save:disabled { border-color: var(--line); background: transparent; color: var(--faint); }
 
 .task-event-line { display: flex; max-width: 790px; align-items: center; gap: 9px; margin: 17px 0 17px 30px; color: var(--faint); font-size: 10.5px; }
-.task-event-line span { height: 1px; flex: 1; background: var(--line); }
 .task-event-line p { margin: 0; }
 .task-event-line.is-error { color: var(--red); }
 
