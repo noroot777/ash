@@ -51,9 +51,11 @@ export class TerminalCapacity<Session extends CapacitySession> {
   }
 
   private occupied(replaced: ReadonlySet<string>): number {
-    const covered = new Set(replaced);
-    for (const reservation of this.reservations) {
-      for (const sessionId of reservation.replacedSessionIds) covered.add(sessionId);
+    const covered = new Set<string>();
+    const replacementGroups = [replaced, ...Array.from(this.reservations, (reservation) => reservation.replacedSessionIds)];
+    for (const replacementIds of replacementGroups) {
+      const sessionId = replacementIds.values().next().value;
+      if (sessionId !== undefined) covered.add(sessionId);
     }
     let occupied = this.reservations.size;
     for (const session of this.sessions()) {

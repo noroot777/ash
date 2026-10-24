@@ -35,6 +35,34 @@ assert.equal(capacity.hasSlot("allocator", "new"), false);
 capacity.release(staleReplacement);
 console.log("terminal capacity allocator passed: shared counts, unique replacement credit, reservations, cancellation");
 
+const duplicateRecords = new Map([
+  ["old-a", { id: "old-a", projectId: "duplicates", commandId: "same", alive: false }],
+  ["old-b", { id: "old-b", projectId: "duplicates", commandId: "same", alive: false }],
+  ["other", { id: "other", projectId: "duplicates", commandId: "other", alive: true }],
+]);
+const duplicateCapacity = new TerminalCapacity(3, () => duplicateRecords.values(), (session) => session.alive);
+for (const started of [false, true]) {
+  const reserved = duplicateCapacity.reserve("duplicates", "same");
+  assert.equal(reserved.replacedSessionIds.size, 2);
+  assert.equal(duplicateCapacity.hasSlot("duplicates", "unrelated"), false,
+    "pending replacement must not release extra old records before it commits");
+  assert.throws(() => duplicateCapacity.reserve("duplicates", "unrelated"), /终端会话数量已达上限/);
+  if (started) duplicateCapacity.begin(reserved);
+  duplicateCapacity.release(reserved);
+  assert.equal(duplicateRecords.size, 3);
+  assert.equal(duplicateCapacity.hasSlot("duplicates", "unrelated"), false);
+}
+const committed = duplicateCapacity.reserve("duplicates", "same");
+duplicateCapacity.begin(committed);
+duplicateCapacity.validate(committed);
+duplicateRecords.delete("old-a");
+duplicateRecords.delete("old-b");
+duplicateRecords.set("replacement", { id: "replacement", projectId: "duplicates", commandId: "same", alive: true });
+duplicateCapacity.release(committed);
+assert.equal(duplicateCapacity.hasSlot("duplicates", "unrelated"), true,
+  "extra old records become available only after replacement commits");
+console.log("terminal duplicate-record capacity passed: cancellation, startup failure, committed reclamation");
+
 const temporary = realpathSync(mkdtempSync(join(tmpdir(), "ash-terminal-capacity-")));
 const previousDb = process.env.ASH_DB;
 process.env.ASH_DB = join(temporary, "test.db");
@@ -162,6 +190,39 @@ try {
     "failed startup must release its reserved slot");
   assert.equal((await startCommand(projectId, temporary, { ...command, id: "after-failure" })).status, 201);
   assert.equal(manager.listForProject(projectId).length, 16);
+
+  for (const commandId of ["done-2", "done-3"]) {
+    const record = manager.listForProject(projectId).find((session) => session.commandId === commandId)!;
+    assert.deepEqual(await manager.destroy(record.id, projectId), { ok: true });
+  }
+  const duplicateCommand = { ...command, id: "duplicates" };
+  const duplicateSessions = [];
+  for (let index = 0; index < 2; index++) {
+    duplicateSessions.push(await manager.createAsync(projectId, temporary, {
+      command: { id: duplicateCommand.id, name: duplicateCommand.name, script: keepAlive },
+    }));
+  }
+  for (const session of duplicateSessions) assert.deepEqual(await manager.terminate(session.id, projectId), { ok: true });
+  assert.equal(manager.listForProject(projectId).length, 16);
+  const duplicateReservation = manager.reserveCommand(projectId, duplicateCommand.id);
+  try {
+    assert.equal((await startCommand(projectId, temporary, { ...command, id: "unrelated-duplicate" })).status, 500);
+    await assert.rejects(manager.createAsync(projectId, temporary), /终端会话数量已达上限/);
+  } finally { duplicateReservation.release(); }
+  assert.equal(manager.listForProject(projectId).length, 16);
+  assert.equal(manager.hasSlotForCommand(projectId, "unrelated-duplicate"), false);
+  if (windows) {
+    await assert.rejects(manager.createAsync(projectId, join(temporary, "missing-directory"), {
+      command: { id: duplicateCommand.id, name: duplicateCommand.name, script: keepAlive },
+    }));
+    assert.equal(manager.listForProject(projectId).length, 16);
+    assert.equal(manager.hasSlotForCommand(projectId, "unrelated-duplicate"), false);
+  }
+  assert.equal((await startCommand(projectId, temporary, duplicateCommand)).status, 201);
+  assert.equal(manager.listForProject(projectId).length, 15);
+  assert.equal((await startCommand(projectId, temporary, { ...command, id: "unrelated-duplicate" })).status, 201);
+  assert.equal(manager.listForProject(projectId).length, 16);
+  console.log("terminal duplicate-record capacity passed with real processes: no early credits, safe cancel/failure, committed reclamation");
   console.log("terminal capacity passed: full start/restart, reserved replacement, pending startup, full rejection, failed-start release");
 } finally {
   await manager.destroyProject(projectId);
