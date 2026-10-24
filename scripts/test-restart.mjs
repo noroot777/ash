@@ -235,6 +235,98 @@ if (forcedOutput.includes("问不到「重启会打断谁」")) fail("FORCE=1 �
 if (!forcedOutput.includes(`${PORT} 已就绪`)) fail("FORCE=1 没把服务端换成新的", forcedOutput);
 if (serverPid) { killPid(serverPid); serverPid = 0; }
 
+// ── 判据「问不出来」时也必须 fail closed ──────────────────────────────────────
+// 上一条是**服务端明确拒答**(401);这一条是它**在端口上、却没按时答复** —— ash 正忙或者
+// 卡住了。两者的 HTTP 读数都是「没拿到 JSON」,过去被压成同一个空对象,于是:
+//   ① 安全闸算出「0 个会被打断」,不加 FORCE 也照样下刀;
+//   ② Windows 那一刀拿不到 survives 名单,退回 `taskkill /T` 整树强杀,把本来能接管的
+//      agent 一起带走 —— 而命令最后照样打印「已就绪」(第 1 轮审查 F1,真机复现)。
+// 所以这里让假 server 对这条端点**永不响应**,其余照常 200:脚本必须中止、说清成因、
+// 并且一根手指都不许动旧进程。
+const mute = join(TMP, "mute.mjs");
+const MUTE_PID = join(TMP, "mute.pid");
+writeFileSync(mute, `import { writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+createServer((req, res) => {
+  if (req.url?.startsWith("/api/restart-impact")) return; // 收下请求,永不作答
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ ok: true, pid: process.pid }));
+}).listen(${PORT}, "127.0.0.1", () => {
+  writeFileSync(${JSON.stringify(MUTE_PID)}, String(process.pid));
+});
+`);
+
+const muteProc = spawn(process.execPath, [mute], { stdio: "ignore", detached: false });
+stubbornChild = muteProc;
+for (let i = 0; i < 50 && !existsSync(MUTE_PID); i++) await sleep(100);
+if (!existsSync(MUTE_PID)) fail("不作答的假 server 没起来,这条回归没法测");
+const mutePid = Number(readFileSync(MUTE_PID, "utf8").trim());
+
+const muted = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+  cwd: REPO,
+  env: { ...env, START_TIMEOUT: "3" },
+  encoding: "utf8",
+});
+const mutedOutput = (muted.stdout ?? "") + (muted.stderr ?? "");
+const muteSurvived = isPidAlive(mutePid);
+try { muteProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
+stubbornChild = null;
+await sleep(200);
+
+if (muted.status !== 2) fail(`判据问不出来时该以 2 中止,实际 ${muted.status}`, mutedOutput);
+if (!mutedOutput.includes("问不到「重启会打断谁」")) fail("中止信息没说清「问不到判据」这个成因", mutedOutput);
+if (!mutedOutput.includes("没答复这条判据")) {
+  fail("得说清是「它在、只是没答上来」,不是「它不在」", mutedOutput);
+}
+if (mutedOutput.includes("已就绪")) fail("问不出判据却照样重启了", mutedOutput);
+if (!muteSurvived) fail("问不出判据时不许动旧进程,它却被杀了", mutedOutput);
+
+if (IS_WINDOWS) {
+  const statePath = join(TMP, "cim-state.json");
+  const servicePath = join(TMP, "cim-service.mjs");
+  const hookPath = join(TMP, "cim-fault.cjs");
+  writeFileSync(hookPath, `const cp=require('node:child_process');
+const original=cp.execFileSync;
+cp.execFileSync=function(file,args,options){
+  const index=args?.indexOf('-EncodedCommand')??-1;
+  const script=index>=0?Buffer.from(args[index+1],'base64').toString('utf16le'):'';
+  if(script.includes('Get-CimInstance Win32_Process')) throw new Error('test CIM unavailable');
+  return original(file,args,options);
+};
+require('node:module').syncBuiltinESMExports();`);
+  writeFileSync(servicePath, `import {spawn} from 'node:child_process';
+import {createServer} from 'node:http';
+import {writeFileSync} from 'node:fs';
+const agent=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
+createServer((request,response)=>{
+ response.setHeader('content-type','application/json');
+ response.end(JSON.stringify(request.url.startsWith('/api/restart-impact')
+  ? {survives:[{pid:agent.pid,title:'protected fixture'}],resumes:[],interrupted:[],mcpDisrupted:[]}
+  : {ok:true,pid:process.pid}));
+}).listen(${PORT},'127.0.0.1',()=>writeFileSync(${JSON.stringify(statePath)},JSON.stringify({pid:process.pid,agent:agent.pid})));`);
+  const service = spawn(process.execPath, [servicePath], { stdio: "ignore" });
+  stubbornChild = service;
+  try {
+    for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt++) await sleep(100);
+    if (!existsSync(statePath)) fail("CIM 故障用例的服务没有启动");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    const result = spawnSync(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
+      cwd: REPO,
+      env: { ...env, FORCE: "", WAIT: "", NODE_OPTIONS: `--require "${hookPath.replace(/\\/g, "/")}"` },
+      encoding: "utf8", timeout: 60_000,
+    });
+    const output = (result.stdout ?? "") + (result.stderr ?? "");
+    if (result.status !== 2) fail(`CIM 失败时该以 2 中止,实际 ${result.status}`, output);
+    if (output.includes("已就绪")) fail("CIM 失败却宣称重启成功", output);
+    if (!isPidAlive(state.pid) || !isPidAlive(state.agent)) fail("CIM 失败时动了旧服务或受保护任务", output);
+    console.log("✓ HTTP 判据成功但 CIM 查询失败时,完整 restart 在任何终止动作前中止");
+  } finally {
+    try { service.kill("SIGKILL"); } catch {}
+    stubbornChild = null;
+    await sleep(200);
+  }
+}
+
 // ── 「上一轮留下了单例锁」怎么说给用户听 ─────────────────────────────────────
 // 第 2 轮审查打回的是这条提示的措辞:账本里有退出意向时它写的是「上一实例是正常停的」。
 // 那句站不住 —— 记完账之后再被 SIGKILL 留下的是同一个现场(审查实测)。所以这里钉的是
@@ -266,4 +358,5 @@ process.stdout.write(stubbornSkipped
   ? "⏭ 旧进程没能下线那条:Windows 上跳过(没有 SIGTERM,赖着不走的前提搭不出来)\n"
   : "✓ 旧进程没能下线时 restart.mjs 明确失败，不再谎报「已就绪」\n");
 process.stdout.write("✓ 问不到「会打断谁」时 fail closed(FORCE=1 仍可越过)\n");
+process.stdout.write("✓ 判据超时/无答复也走 fail closed,不退回整树强杀\n");
 process.stdout.write("✓ 上一轮留下单例锁时只报观察到的意向,不定性成正常停或强杀\n");
