@@ -63,9 +63,9 @@
 //
 // 需要在别的语句里一起落库的调用方（消息账本、改派回滚、结算）用上面那几个 patch/条件助手
 // 拼进自己的那一笔 —— 口径只有这一份。
-import { and, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import { and, eq, exists, isNotNull, isNull, ne, not, sql, type SQL } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
+import { scheduledMessages, tasks } from "./db/schema.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 
@@ -215,7 +215,14 @@ export async function writeResumePrompt(
    */
   where: (SQL | undefined)[] = [],
 ): Promise<boolean> {
-  return writeInto(taskId, occupyPatch(value, auto), [isNull(tasks.resumePrompt), ...where]);
+  const outstanding = exists(db.select({ one: sql`1` }).from(scheduledMessages).where(and(
+    eq(scheduledMessages.taskId, tasks.id), ne(scheduledMessages.status, "sent"),
+    isNotNull(scheduledMessages.checkpointTaken),
+    sql`coalesce(${scheduledMessages.checkpointGeneration}, 0) = ${tasks.resumePromptGeneration}`,
+  )));
+  return writeInto(taskId, occupyPatch(value, auto), [
+    isNull(tasks.resumePrompt), ...(auto ? [not(outstanding)] : []), ...where,
+  ]);
 }
 
 /**

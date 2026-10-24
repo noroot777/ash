@@ -7,6 +7,7 @@ import { setTaskStatus } from "./status.js";
 import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
+import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 
 const MAX_PARALLEL = 4;
 
@@ -97,6 +98,7 @@ export async function advanceQueue(queueId: string): Promise<void> {
     // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
     // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
     if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
+    if (await preparePendingCheckpointStart(candidate.id)) return "paused";
     // 观察空闲 ≠ 取得所有权:上一版先 isTurnClaimed 再 setQueued,检查与落位之间的
     // await 窗口里 checkpoint 追问这类合法入口照样抢走回合 —— 推进把追问的 running
     // 覆盖成 queued、续跑被旧 reply 占的锁挡回、追问结算恢复 paused,交接蒸发
@@ -354,8 +356,18 @@ async function runParallel(groupId: string): Promise<void> {
     const inflight = new Map<string, Promise<void>>();
 
     const launch = async (taskId: string): Promise<void> => {
-      await setQueued(taskId);
-      await resumeOrRunTask(taskId, { reason: "group" });
+      if (await preparePendingCheckpointStart(taskId)) return;
+      const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+      if (!before || (before.status === "paused" && before.resumePrompt)) return;
+      try {
+        await setQueued(taskId);
+        await resumeOrRunTask(taskId, { reason: "group" });
+      } finally {
+        const after = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+        if (!isTurnClaimed(taskId) && after?.status === "queued") {
+          await setTaskStatus(taskId, before.status as TaskStatus, { quietAdvance: true });
+        }
+      }
     };
 
     while (pending.length || inflight.size) {

@@ -8,6 +8,7 @@ import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
 import { deliverPendingMessages, reclaimStaleDeliveries } from "./pending-messages.js";
+import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
 // Supports *, n, a-b, */n, and comma lists. No seconds, no names.
@@ -72,6 +73,7 @@ async function fire(taskId: string): Promise<boolean> {
   if (t.archived) return false;
   // 接力出去的任务同理:跳过而不消费班次,用户移除接力标记后定时自动恢复。
   if (handoffBlockReason(t.handoff)) return false;
+  if (await preparePendingCheckpointStart(taskId)) return false;
   // Respect a paused group: a pause means "halt this group", so the scheduler
   // must not sneak a group member past it. The task fires on the next due tick
   // once the group is resumed.

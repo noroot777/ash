@@ -5,6 +5,7 @@ import { db } from "./db/index.js";
 import { scheduledMessages } from "./db/schema.js";
 import { beginDelivery } from "./pending-messages.js";
 import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
+import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { retryBlocked } from "./pending-redelivery.js";
 import { isDueForDelivery } from "./pending-verdict.js";
 import { now } from "./util.js";
@@ -31,6 +32,7 @@ function batchTarget(message: Row): string | null {
 }
 
 export async function beginPendingBatch(message: Row): Promise<Row[]> {
+  if (await preparePendingCheckpointStart(message.taskId)) return [];
   const target = batchTarget(message);
   if (target === null) {
     const claimed = await beginDelivery(message.id);

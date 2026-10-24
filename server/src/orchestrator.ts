@@ -115,6 +115,7 @@ export async function continueTask(
       taskId,
       turnHeld: opts.turnHeld,
       wakeGuard: opts.wakeGuard,
+      pendingMessageIds: opts.pendingMessageIds,
     });
     if (!releaseLead) return false;
     try {
@@ -147,6 +148,7 @@ export async function continueTask(
     handoff: head?.handoff,
     turnHeld: opts.turnHeld,
     wakeGuard: opts.wakeGuard,
+    pendingMessageIds: opts.pendingMessageIds,
     source: opts.turnSource ?? { role: "single" },
   })) return false;
   // catch 那边署名用的就是它：出错时 task 可能压根没读出来，所以按 head 的快照兜底，

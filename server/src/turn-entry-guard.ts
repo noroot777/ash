@@ -19,6 +19,7 @@ import { claimTurn, claimWakeTurn, reclaimTurn, releaseTurn, turnSourceRole, tur
 import type { TurnSource } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
+import { pendingCheckpointBlockReason } from "./pending-checkpoint-recovery.js";
 
 export type TurnEntryInput = {
   taskId: string;
@@ -36,6 +37,7 @@ export type TurnEntryInput = {
   turnHeld?: boolean;
   /** 「这个任务此刻还能不能被这条消息叫醒」——占住位之后才问（见 orchestrator 的 opts）。 */
   wakeGuard?: () => Promise<string | null>;
+  pendingMessageIds?: readonly string[];
 };
 
 export async function enterTurn(input: TurnEntryInput): Promise<boolean> {
@@ -69,10 +71,11 @@ export async function enterTurn(input: TurnEntryInput): Promise<boolean> {
   // 这一问要读库，所以它**必须自带 try**（理由见文件头）。读失败按「这一轮先不起」处理，
   // 但不当成拒绝：调用方据此把消息放回托盘重投，而不是取消掉 —— 一次读故障不该让一条
   // 事件永久消失（宁可晚发，不能不发）。
-  if (input.wakeGuard) {
+  {
     let blocked: string | null = null;
     try {
-      blocked = await input.wakeGuard();
+      blocked = await pendingCheckpointBlockReason(taskId, input.pendingMessageIds)
+        ?? await input.wakeGuard?.() ?? null;
     } catch (error) {
       // 出声：咽下去的话，「读不到状态」和「状态说不该起」在日志里长得一模一样。
       console.error(`[ash] 起跑前的资格检查读失败 task=${taskId}:`, error);
@@ -108,6 +111,7 @@ export async function enterLeadDelivery(input: {
   taskId: string;
   turnHeld?: boolean;
   wakeGuard?: () => Promise<string | null>;
+  pendingMessageIds?: readonly string[];
 }): Promise<(() => void) | null> {
   const { taskId, wakeGuard } = input;
   // 入口占的那个位是给「起一轮」用的,而这条路压根不起回合 —— 原样还回。紧接着占唤醒锁:
@@ -123,10 +127,11 @@ export async function enterLeadDelivery(input: {
     release();
     return null;
   }
-  if (wakeGuard) {
+  {
     let blocked: string | null = null;
     try {
-      blocked = await wakeGuard();
+      blocked = await pendingCheckpointBlockReason(taskId, input.pendingMessageIds)
+        ?? await wakeGuard?.() ?? null;
     } catch (error) {
       // 读失败 ≠ 调度台收不下,这两者在团队那一侧的后果差了一个数量级:投递的 catch 是
       // 按「调度台不可用」**无条件取消**消息的,把异常甩给它就等于一次数据库抖动永久
