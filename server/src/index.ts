@@ -239,6 +239,8 @@ async function initializeServer() {
     // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
     const { reconcileFreeReviews } = await import("./free-workflow.js");
     await reconcileFreeReviews().catch((err) => console.error("[ash] 自由审查对账失败（不影响启动）:", err));
+    const { reconcileRegressionSettlements } = await import("./regression-settlement.js");
+    await reconcileRegressionSettlements().catch((err) => console.error("[ash] 延期验证结算对账失败（不影响启动）:", err));
     // 驳回后的辩论同理：`running` 落库，而推进它的投递链只活在内存里（见 free-review-debate.ts）。
     const { reconcileFreeReviewDebates } = await import("./free-review-debate.js");
     await reconcileFreeReviewDebates().catch((err) => console.error("[ash] 审查辩论对账失败（不影响启动）:", err));

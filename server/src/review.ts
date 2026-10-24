@@ -30,7 +30,7 @@ import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { evidenceHeaders } from "./evidence-path.js";
 import { db } from "./db/index.js";
-import { agents, projects, sessions, tasks } from "./db/schema.js";
+import { agents, projects, regressionEvidence, sessions, tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import {
   detectReviewCoverage,
@@ -46,7 +46,8 @@ import {
   writeConclusion,
   reviewRoundDir,
 } from "./review-evidence.js";
-import { regressionSettlementConclusion } from "./regression-settlement.js";
+import { completeRegressionSettlement, regressionSettlementConclusion, type CheckedSettlement } from "./regression-settlement.js";
+import { presetConclusionRound } from "./regression-evidence-lifecycle.js";
 import { repairPrompt, verifyProtocolFor } from "./review-prompts.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -316,14 +317,24 @@ async function concludeRound(
   outcome: Settlement,
   reviewTaskId: string | null,
   at: { station: string | null; stationRound: number },
-  checked?: { conclusion: ReviewConclusion },
+  checked?: CheckedSettlement,
+  recovering = false,
 ): Promise<void> {
   const { station, stationRound } = at;
-  const result = checked ?? await regressionSettlementConclusion(target.id, reviewRoundDir(target.id, round),
-    target.stage === "verified" || target.stage === "verify_failed" ? target.stage : null);
+  const result = checked ?? await regressionSettlementConclusion(target.id, reviewRoundDir(target.id, round), {
+    outcome: recovering ? undefined : outcome === "paused" ? "failed" : outcome, round, ownerTaskId: reviewTaskId ?? target.id,
+  });
   if (!result) return;
+  if (!checked && !await completeRegressionSettlement(reviewRoundDir(target.id, round), result, async (transaction) => {
+    const current = (await transaction.select().from(tasks).where(eq(tasks.id, target.id)))[0];
+    const scope = current && await presetConclusionRound(current, transaction);
+    return scope?.round === round && scope.reviewTaskId === reviewTaskId;
+  })) return;
   const { conclusion } = result;
-  if (conclusion === "verify_failed" && target.stage === "verified") await setTaskStage(target.id, conclusion);
+  outcome = result.outcome;
+  if (outcome !== "done" && (target.stage === "verified" || target.stage === "verify_failed")) {
+    await clearTaskStage(target.id, `第 ${round} 轮审查未正常结束，已收回未完成审查的阶段结论。`);
+  } else if (conclusion === "verify_failed" && target.stage === "verified") await setTaskStage(target.id, conclusion);
   const workflow = taskWorkflowDef(target.workflow);
   const policy = workflowPolicy(workflow, station);
   const action = reviewOutcomeAction({
@@ -405,14 +416,15 @@ async function concludeRound(
 }
 
 /** 就地验证轮结束：清掉轮次标记、记账，再走公共的收尾。 */
-async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void> {
+async function finishVerifyRound(target: TaskRow, turnOk: boolean | null): Promise<void> {
   const round = target.verifyRound ?? 1;
   // 这一轮还没跑完：agent 中途提问（等答复）或写下了检查点（等续跑）。轮次标记留着，
   // 答复/续跑回来的那一回合仍然是这一轮验证 —— 此时下结论会把「还没验完」记成
   // 「验完了但没给结论」。
-  if (target.question || target.resumePrompt) return;
-  const checked = await regressionSettlementConclusion(target.id, reviewRoundDir(target.id, round),
-    target.stage === "verified" || target.stage === "verify_failed" ? target.stage : null);
+  if (turnOk && (target.question || target.resumePrompt)) return;
+  const checked = await regressionSettlementConclusion(target.id, reviewRoundDir(target.id, round), {
+    outcome: turnOk === null ? undefined : turnOk ? "done" : "failed", round,
+  });
   if (!checked) return;
   // verify_rounds 数的是**就地轮次的个数**，不是轮次号：轮次号还要算上历史那批独立
   // 审查任务占掉的号（`nextReviewRound(legacy.length + verifyRounds)`），拿号当计数会
@@ -420,18 +432,20 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
   const stationRound = (target.verifyStationRounds ?? 0) + 1;
   // CAS 收轮:只有把 verify_round 从**本轮号**改成 null 的那一次算数。0 行 = 这一轮
   // 已被别处收掉(并发结算/外部清理),此时再 concludeRound 会给同一轮下两次结论。
-  const closed = await db
-    .update(tasks)
-    .set({
-      verifyRound: null,
-      verifyRounds: (target.verifyRounds ?? 0) + 1,
-      verifyCompletedSteps: verificationStepsAfterRound(target),
-      verifyStationRounds: stationRound,
-      updatedAt: now(),
-    })
-    .where(and(eq(tasks.id, target.id), eq(tasks.verifyRound, round)))
-    .returning({ id: tasks.id });
-  if (!closed.length) return;
+  const closed = await completeRegressionSettlement(reviewRoundDir(target.id, round), checked, async (transaction) => {
+    const updated = await transaction.update(tasks)
+      .set({
+        verifyRound: null,
+        verifyRounds: (target.verifyRounds ?? 0) + 1,
+        verifyCompletedSteps: verificationStepsAfterRound(target),
+        verifyStationRounds: stationRound,
+        updatedAt: now(),
+      })
+      .where(and(eq(tasks.id, target.id), eq(tasks.verifyRound, round)))
+      .returning({ id: tasks.id });
+    return updated.length > 0;
+  });
+  if (!closed) return;
   // 任务在这一轮中途被冻结(归档):线不能再往下推——concludeRound 会写 stage、发时间线、
   // 甚至派下一轮/打回,全是「已冻结的任务还在动」。只把这一轮的 verifying 牌子收干净,
   // 免得留下 archived=true + stage=verifying 的死局(审查实测)。
@@ -451,13 +465,13 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
   if (frozen?.stage === "accepted" || frozen?.stage === "merged") {
     await appendTaskTimeline(
       target.id,
-      `第 ${round} 轮验证结束时任务已验收，结论不再覆盖验收阶段（这一轮${turnOk ? "正常收尾" : "未正常收尾"}）。`,
+      `第 ${round} 轮验证结束时任务已验收，结论不再覆盖验收阶段（这一轮${checked.outcome === "done" ? "正常收尾" : "未正常收尾"}）。`,
     );
     return;
   }
   // 旁路回合的落位永远是任务原来的终态，说明不了验证跑成没跑成，所以这里用回合本身
   // 是否干净收尾来判：崩了/被手停 → 这一轮没结论，按 failed 收尾。
-  await concludeRound(target, round, turnOk ? "done" : "failed", null, {
+  await concludeRound(target, round, checked.outcome, null, {
     // 开这一轮时把站号记在了被验任务身上；老数据没有就回落到线上第一站验证。
     station: target.reviewStep ?? firstAnchor(taskWorkflowDef(target.workflow), "verify")?.id ?? null,
     stationRound,
@@ -465,7 +479,7 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
 }
 
 /** 历史做法：独立审查任务跑完之后的收尾。启动路径已经拆掉，这条只服务存量数据。 */
-async function finishReview(review: TaskRow, status: Settlement): Promise<void> {
+async function finishReview(review: TaskRow, status: Settlement, recovering = false): Promise<void> {
   const target = review.reviewOf
     ? (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf))).at(0)
     : null;
@@ -474,7 +488,7 @@ async function finishReview(review: TaskRow, status: Settlement): Promise<void> 
     // 这一轮验的是哪一站：审查任务身上记着（老审查任务没记，回落到线上第一站验证）。
     station: review.reviewStep ?? firstAnchor(taskWorkflowDef(target.workflow), "verify")?.id ?? null,
     stationRound: await roundAtStation(target.id, review),
-  });
+  }, undefined, recovering);
 }
 
 // 「等我点头」这一站落地：把验收阶段停在 awaiting_acceptance。
@@ -510,7 +524,7 @@ export async function handleTaskSettlement(
   taskId: string,
   status: TaskStatus,
   confirmedDone: boolean,
-  turnOk = true,
+  turnOk: boolean | null = true,
 ): Promise<void> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return;
@@ -522,7 +536,7 @@ export async function handleTaskSettlement(
   }
   if (task.reviewOf) {
     if (status === "done" || status === "failed" || status === "canceled") {
-      await finishReview(task, status);
+      await finishReview(task, status, turnOk === null);
     }
     return;
   }
@@ -563,6 +577,8 @@ export async function handleTaskSettlement(
 // 就地验证轮（where:"inline"）混在一条时间线上，前端只认轮次号和结论。
 async function reviewInfo(target: TaskRow): Promise<TaskReviewInfo> {
   const legacy = await legacyReviewTasks(target.id);
+  const evidence = await db.select().from(regressionEvidence).where(eq(regressionEvidence.taskId, target.id));
+  const settlements = new Map(evidence.map((state) => [state.directory, state.settlement]));
   const legacyRounds = new Set(legacy.map((review) => review.reviewRound ?? 1));
   const latestLegacyId = legacy.at(-1)?.id;
   // 就地轮次没有自己的行，只有一个计数 —— 轮次号是连续的，把历史占掉的号跳过去。
@@ -575,8 +591,9 @@ async function reviewInfo(target: TaskRow): Promise<TaskReviewInfo> {
   const rounds: TaskReviewRound[] = await Promise.all([
     ...legacy.map(async (review): Promise<TaskReviewRound> => {
       const round = review.reviewRound ?? 1;
+      const settlement = settlements.get(reviewRoundDir(target.id, round));
       let conclusion = await readConclusion(target.id, round);
-      if (!conclusion && review.id === latestLegacyId && review.status === "done") {
+      if (!conclusion && review.id === latestLegacyId && (settlement ? !settlement.pending && settlement.outcome === "done" : review.status === "done")) {
         conclusion = target.stage === "verified" || target.stage === "verify_failed"
           ? target.stage as ReviewConclusion
           : null;
@@ -585,17 +602,18 @@ async function reviewInfo(target: TaskRow): Promise<TaskReviewInfo> {
         round,
         where: "task",
         reviewTaskId: review.id,
-        reviewTaskStatus: review.status as TaskStatus,
-        conclusion,
+        reviewTaskStatus: settlement?.pending ? "running" : settlement?.outcome ?? (review.status as TaskStatus),
+        conclusion: settlement && (settlement.pending || settlement.outcome !== "done") ? null : conclusion,
         reportMarkdown: await readReport(target.id, round),
         screenshots: await screenshots(target.id, round),
       };
     }),
     ...inline.map(async (round): Promise<TaskReviewRound> => {
-      const running = target.verifyRound === round;
+      const settlement = settlements.get(reviewRoundDir(target.id, round));
+      const running = target.verifyRound === round || settlement?.pending === true;
       let conclusion = running ? null : await readConclusion(target.id, round);
       // 最后一轮的结论文件可能还没落（结论写在结算那一步），此时看任务身上的 stage。
-      if (!conclusion && !running && round === latestRound) {
+      if (!conclusion && !running && round === latestRound && (!settlement || settlement.outcome === "done")) {
         conclusion = target.stage === "verified" || target.stage === "verify_failed"
           ? target.stage as ReviewConclusion
           : null;
@@ -604,10 +622,8 @@ async function reviewInfo(target: TaskRow): Promise<TaskReviewInfo> {
         round,
         where: "inline",
         reviewTaskId: null,
-        // 就地验证没有独立任务，这一格说的是「这一轮跑完没有」：正在跑 → running，
-        // 跑完 → done。前端只拿它显示轮次状态。
-        reviewTaskStatus: running ? "running" : "done",
-        conclusion,
+        reviewTaskStatus: running ? "running" : settlement?.outcome ?? "done",
+        conclusion: settlement && settlement.outcome !== "done" ? null : conclusion,
         reportMarkdown: await readReport(target.id, round),
         screenshots: await screenshots(target.id, round),
       };

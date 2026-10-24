@@ -10,6 +10,8 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, projects, sessions, tasks } from "./db/schema.js";
 import { freeReviewPrompt, freeReviewResumeMessage } from "./free-review-prompts.js";
+import { freeReviewEvidenceDir } from "./free-review-files.js";
+import { evidenceState, restartRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { headCommit } from "./git.js";
@@ -258,10 +260,15 @@ export async function reopenFailedFreeReview(
       const blocker = freeReviewRetryBlocker(run, round);
       if (blocker) throw new Error(blocker);
       const at = now();
-      await db.update(freeReviewRounds).set({ status: "reviewing", endedAt: null })
-        .where(eq(freeReviewRounds.id, round!.id));
-      await db.update(freeReviewRuns).set({ status: "reviewing", updatedAt: at, finishedAt: null })
-        .where(eq(freeReviewRuns.id, run!.id));
+      const directory = freeReviewEvidenceDir(taskId, run!.id, run!.currentRound);
+      await evidenceState(taskId, directory, run!.targetKind === "accepted_merge");
+      await db.transaction(async (transaction) => {
+        await restartRegressionEvidence(taskId, directory, transaction);
+        await transaction.update(freeReviewRounds).set({ status: "reviewing", conclusion: null, endedAt: null })
+          .where(eq(freeReviewRounds.id, round!.id));
+        await transaction.update(freeReviewRuns).set({ status: "reviewing", updatedAt: at, finishedAt: null })
+          .where(eq(freeReviewRuns.id, run!.id));
+      }, { behavior: "immediate" });
       const revived = { ...run!, status: "reviewing", updatedAt: at, finishedAt: null };
       try {
         const { resumed } = await launchReviewRound(task, revived, { resumeSessionId: opts.resumeSessionId, retry: true });

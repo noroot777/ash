@@ -9,6 +9,7 @@ import { regressionEvidenceReference } from "./regression-checks.js";
 import { independentVerificationBasis, recheckIndependentBasis } from "./regression-conclusion-basis.js";
 import { RegressionConclusionRejected } from "./regression-conclusion-errors.js";
 import type { IndependentVerificationBasis } from "./db/schema-regression-evidence.js";
+import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir, safeRunDirectory } from "./review-evidence.js";
 
 async function manifestPermission(directory: string): Promise<"revoked" | "none"> {
@@ -35,7 +36,7 @@ async function manifestPermission(directory: string): Promise<"revoked" | "none"
   }
 }
 
-async function evidenceState(taskId: string, directory: string, acceptedMerge: boolean) {
+export async function evidenceState(taskId: string, directory: string, acceptedMerge: boolean) {
   const existing = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
   if (existing) return existing;
   return db.transaction(async (transaction) => {
@@ -47,6 +48,15 @@ async function evidenceState(taskId: string, directory: string, acceptedMerge: b
     }).onConflictDoNothing();
     return (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0]!;
   }, { behavior: "immediate" });
+}
+
+export async function restartRegressionEvidence(taskId: string, directory: string, transaction: ConclusionTransaction): Promise<void> {
+  const owners = [taskId, ...(await transaction.select({ id: tasks.id }).from(tasks)
+    .where(eq(tasks.reviewOf, taskId))).map((task) => task.id)];
+  await transaction.update(regressionEvidence).set({ generation: randomUUID(), acceptedBasis: null, settlement: null,
+    excludedMonitors: (await transaction.select({ id: monitors.id }).from(monitors)
+      .where(inArray(monitors.taskId, owners))).map((monitor) => monitor.id),
+  }).where(eq(regressionEvidence.directory, directory));
 }
 
 async function observeEvidence(taskId: string, directory: string, acceptedMerge: boolean) {
@@ -87,34 +97,43 @@ export async function refreshRegressionEvidence(taskId: string, directory: strin
   return { reference, revoked: state.revoked };
 }
 
-type CheckedConclusion = { directory: string; basis: IndependentVerificationBasis | null } | undefined;
-
-export async function recordRegressionConclusion(checked: CheckedConclusion): Promise<void> {
-  if (checked) await db.update(regressionEvidence).set({ acceptedBasis: checked.basis })
-    .where(eq(regressionEvidence.directory, checked.directory));
-}
+export type CheckedConclusion = {
+  directory: string;
+  taskId: string;
+  generation: string;
+  stage: string;
+  basis: IndependentVerificationBasis | null;
+} | undefined;
 
 export async function checkRegressionConclusion(taskId: string, directory: string, stage: string, acceptedMerge = false,
   basis?: unknown, settlement = false): Promise<CheckedConclusion> {
-  if (stage !== "verified") return;
+  if (stage !== "verified" && (stage !== "verify_failed" || settlement)) return;
   const state = await observeEvidence(taskId, directory, acceptedMerge);
+  const checked = { directory, taskId, generation: state.generation, stage, basis: null };
+  if (stage === "verify_failed") return checked;
   if (settlement && state.acceptedBasis) {
     await recheckIndependentBasis(state);
     return;
   }
   if (basis !== undefined) {
     const acceptedBasis = await independentVerificationBasis(state, basis);
-    return { directory, basis: acceptedBasis };
+    return { ...checked, basis: acceptedBasis };
   }
   if (state.revoked) throw new RegressionConclusionRejected(`旧回归复用资格已撤销：generation=${state.generation}；` +
     "请独立执行本轮检查，以 verificationBasis 提交新执行的 monitorIds。重试、补录、清单删除或更新报告不能代替验证");
-  return settlement ? undefined : { directory, basis: null };
+  return settlement ? undefined : checked;
+}
+
+export async function presetConclusionRound(task: typeof tasks.$inferSelect, query: Pick<typeof db, "select"> = db) {
+  if (task.verifyRound) return { round: task.verifyRound, reviewTaskId: null };
+  const review = (await query.select({ round: tasks.reviewRound, reviewTaskId: tasks.id }).from(tasks)
+    .where(eq(tasks.reviewOf, task.id)).orderBy(desc(tasks.reviewRound)).limit(1))[0];
+  return review?.round ? { round: review.round, reviewTaskId: review.reviewTaskId } : null;
 }
 
 export async function checkPresetRegressionConclusion(taskId: string, stage: string, basis?: unknown): Promise<CheckedConclusion> {
   if (stage !== "verified" && stage !== "verify_failed") return;
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
-  const round = task?.verifyRound ?? (await db.select({ round: tasks.reviewRound }).from(tasks)
-    .where(eq(tasks.reviewOf, taskId)).orderBy(desc(tasks.reviewRound)).limit(1))[0]?.round;
-  if (round) return checkRegressionConclusion(taskId, reviewRoundDir(taskId, round), stage, false, basis);
+  const scope = task && await presetConclusionRound(task);
+  if (scope) return checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage, false, basis);
 }

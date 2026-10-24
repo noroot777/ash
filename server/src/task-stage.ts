@@ -5,9 +5,11 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
-import { checkPresetRegressionConclusion, recordRegressionConclusion } from "./regression-evidence-lifecycle.js";
-import { RegressionEvidenceUnavailable } from "./regression-conclusion-errors.js";
+import { regressionEvidence, tasks } from "./db/schema.js";
+import { checkRegressionConclusion, presetConclusionRound } from "./regression-evidence-lifecycle.js";
+import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
+import { RegressionConclusionRejected, RegressionEvidenceUnavailable } from "./regression-conclusion-errors.js";
+import { reviewRoundDir } from "./review-evidence.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -32,6 +34,38 @@ export async function setTaskStage(
     : eq(tasks.id, taskId);
   const updated = await db.update(tasks).set({ stage, updatedAt }).where(where).returning({ id: tasks.id });
   if (!updated.length) return null;
+  bus.publish({ type: "task.stage", taskId, stage, updatedAt });
+  const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);
+  return { updatedAt, timelineRecorded };
+}
+
+export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
+  verificationBasis?: unknown;
+  expectedTask?: ConclusionTask;
+  expectedDirectionToken?: string | null;
+  bySessionRecovery?: boolean;
+} = {}): Promise<{ updatedAt: string; timelineRecorded: boolean }> {
+  const task = opts.expectedTask ?? (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+  if (!task || task.id !== taskId || task.archived || task.stage === "accepted" || task.stage === "merged"
+    || (!opts.bySessionRecovery && (task.activeTurnToken || task.activeDirectionToken) && task.status !== "running")
+    || (opts.expectedDirectionToken !== undefined && opts.expectedDirectionToken !== task.activeDirectionToken)) {
+    throw new RegressionConclusionRejected("当前任务或方向身份不再接受阶段上报");
+  }
+  const scope = await presetConclusionRound(task);
+  const checked = scope && (stage === "verified" || stage === "verify_failed")
+    ? await checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage, false, opts.verificationBasis)
+    : undefined;
+  const updatedAt = now();
+  await commitRegressionConclusion(checked, async (transaction) => {
+    await assertConclusionTask(transaction, task);
+    if (JSON.stringify(await presetConclusionRound(task, transaction)) !== JSON.stringify(scope)) {
+      throw new RegressionConclusionRejected("审查轮次已变化，本次结论未提交");
+    }
+    const evidence = scope && (await transaction.select().from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, reviewRoundDir(taskId, scope.round))))[0];
+    if (evidence?.settlement && task.stage !== stage) throw new RegressionConclusionRejected("本轮已进入结算，不能更改结论");
+    await transaction.update(tasks).set({ stage, updatedAt }).where(eq(tasks.id, taskId));
+  });
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
   const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);
   return { updatedAt, timelineRecorded };
@@ -225,7 +259,7 @@ export function mountTaskStageRoutes(api: Hono): void {
 
     try {
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
-      const freeReview = await reportFreeReviewConclusion(taskId, body.stage, { verificationBasis: body.verificationBasis });
+      const freeReview = await reportFreeReviewConclusion(taskId, body.stage, { verificationBasis: body.verificationBasis, expectedTask: task });
       if (freeReview) {
         return c.json({ reported: true, taskId, stage: body.stage, freeReview, timelineRecorded: false });
       }
@@ -250,15 +284,7 @@ export function mountTaskStageRoutes(api: Hono): void {
 
     let result;
     try {
-      const checked = await checkPresetRegressionConclusion(taskId, body.stage, body.verificationBasis);
-      result = await setTaskStage(
-        taskId,
-        body.stage,
-        task.activeTurnToken || task.activeDirectionToken
-          ? { token: task.activeTurnToken, directionToken: task.activeDirectionToken }
-          : undefined,
-      );
-      if (result) await recordRegressionConclusion(checked);
+      result = await reportTaskStage(taskId, body.stage, { verificationBasis: body.verificationBasis, expectedTask: task });
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof RegressionEvidenceUnavailable ? 503 : 409);
     }

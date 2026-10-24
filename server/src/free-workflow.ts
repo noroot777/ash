@@ -13,6 +13,7 @@ import {
   freeReviewRuns,
   freeWorkflowStates,
   reviewerProfiles,
+  regressionEvidence,
   scheduledMessages,
   tasks,
 } from "./db/schema.js";
@@ -49,8 +50,9 @@ import {
 } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
-import { checkRegressionConclusion, recordRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
-import { regressionSettlementConclusion } from "./regression-settlement.js";
+import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
+import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
+import { completeRegressionSettlement, regressionSettlementConclusion } from "./regression-settlement.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -255,7 +257,7 @@ export async function reconcileFreeReviews(): Promise<void> {
     const round = (await db.select().from(freeReviewRounds)
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
     if (round?.conclusion) {
-      await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, true, "reviewer");
+      await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer");
       continue;
     }
     if (task.question || task.resumePrompt) continue;
@@ -277,10 +279,17 @@ export async function reconcileFreeReviews(): Promise<void> {
 export async function reportFreeReviewConclusion(
   taskId: string,
   stage: string,
-  opts: { bySessionRecovery?: boolean; verificationBasis?: unknown } = {},
+  opts: { bySessionRecovery?: boolean; verificationBasis?: unknown; expectedTask?: ConclusionTask; expectedDirectionToken?: string | null } = {},
 ): Promise<{ runId: string; round: number } | null> {
   const run = await reviewingRun(taskId);
   if (!run) return null;
+  const task = opts.expectedTask ?? (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+  if (!task || task.id !== taskId || (opts.expectedDirectionToken !== undefined && opts.expectedDirectionToken !== task.activeDirectionToken)) {
+    throw new Error("当前方向身份已变化，结论未提交");
+  }
+  const round = (await db.select().from(freeReviewRounds)
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound))))[0];
+  if (!round || round.status !== "reviewing") throw new Error("当前审查轮次已结束，结论未提交");
   if (stage !== "verified" && stage !== "verify_failed") {
     throw new Error("自由工作流审查回合只能上报 verified 或 verify_failed");
   }
@@ -299,9 +308,19 @@ export async function reportFreeReviewConclusion(
   }
   const checked = await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
     run.targetKind === "accepted_merge", opts.verificationBasis);
-  await db.update(freeReviewRounds).set({ conclusion: stage })
-    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
-  await recordRegressionConclusion(checked);
+  await commitRegressionConclusion(checked, async (transaction) => {
+    await assertConclusionTask(transaction, task);
+    const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];
+    const currentRound = (await transaction.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, round.id)))[0];
+    if (!currentRun || currentRun.status !== "reviewing" || currentRun.currentRound !== run.currentRound
+      || currentRound?.status !== "reviewing" || currentRound.conclusion !== round.conclusion) {
+      throw new Error("审查轮次或结论已变化，本次上报未提交");
+    }
+    const evidence = checked && (await transaction.select().from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, checked.directory)))[0];
+    if (evidence?.settlement && currentRound.conclusion !== stage) throw new Error("本轮已进入结算，不能更改结论");
+    await transaction.update(freeReviewRounds).set({ conclusion: stage }).where(eq(freeReviewRounds.id, round.id));
+  });
   bus.publish({ type: "task.review", taskId });
   return { runId: run.id, round: run.currentRound };
 }
@@ -317,7 +336,7 @@ export async function handleFreeWorkflowSettlement(
   taskId: string,
   status: TaskStatus,
   confirmedDone: boolean,
-  turnOk: boolean,
+  turnOk: boolean | null,
   role: SessionRole = "single",
   exitObserved = true,
   executionFailed = false,
@@ -326,7 +345,7 @@ export async function handleFreeWorkflowSettlement(
   if (!task || task.workflowMode !== "free") return false;
   // 辩论段（审查者答辩 / 执行者回应）排在角色分流**之前**收：它既可能是 reviewer 回合
   // 也可能是任务自己的旁路回合，按角色分流会把它误当成普通审查/执行回合结算掉。
-  if (await settleDebateTurn(taskId, turnOk)) return true;
+  if (await settleDebateTurn(taskId, turnOk === true)) return true;
   const run = await reviewingRun(taskId);
   if (role !== "reviewer") {
     if (task.question || task.resumePrompt) {
@@ -427,27 +446,33 @@ export async function handleFreeWorkflowSettlement(
   // 提问守卫只保护「审查回合以提问/检查点收尾」的场景（等答复回来续跑再结算）。
   // reviewer 已交卷（round 有结论）就必须结算——question 可能是实现回合遗留的旧字段，
   // 拿它挡住已有结论的审查会让链永远停在 reviewing（审查实测复现）。
-  if ((task.question || task.resumePrompt) && !round.conclusion) return true;
-  if (round.conclusion) {
-    const checked = await regressionSettlementConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound),
-      round.conclusion === "verified" || round.conclusion === "verify_failed" ? round.conclusion : null,
-      run.targetKind === "accepted_merge");
-    if (!checked) return true;
-    if (checked.conclusion !== round.conclusion) {
-      round.conclusion = checked.conclusion;
-      await db.update(freeReviewRounds).set({ conclusion: round.conclusion }).where(eq(freeReviewRounds.id, round.id));
-    }
-  }
+  if (turnOk !== false && (task.question || task.resumePrompt) && !round.conclusion) return true;
+  const directory = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
+  const checked = await regressionSettlementConclusion(taskId, directory, {
+    outcome: turnOk === null ? undefined : turnOk ? "done" : "failed", round: run.currentRound,
+    freeRoundId: round.id, acceptedMerge: run.targetKind === "accepted_merge",
+  });
+  if (!checked) return true;
   const at = now();
   const outcome = freeReviewOutcome({
-    turnOk,
-    conclusion: round.conclusion,
+    turnOk: checked.outcome === "done",
+    conclusion: checked.conclusion,
     currentRound: run.currentRound,
     retryLimit: run.retryLimit,
   });
+  const committed = await completeRegressionSettlement(directory, checked, async (transaction) => {
+    const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];
+    const currentRound = (await transaction.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, round.id)))[0];
+    if (currentRun?.status !== "reviewing" || currentRun.currentRound !== run.currentRound || currentRound?.status !== "reviewing") return false;
+    await transaction.update(freeReviewRounds).set({ conclusion: checked.conclusion,
+      status: outcome === "failed" ? "error" : outcome === "passed" ? "passed" : "failed", endedAt: at,
+    }).where(eq(freeReviewRounds.id, round.id));
+    await transaction.update(freeReviewRuns).set({ status: outcome === "failed" ? "failed" : outcome === "passed" ? "passed" : "stopped",
+      updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));
+    return true;
+  });
+  if (!committed) return true;
   if (outcome === "failed") {
-    await db.update(freeReviewRounds).set({ status: "error", endedAt: at }).where(eq(freeReviewRounds.id, round.id));
-    await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));
     await stopReviewRunMonitors(run.id, "这次审查已结束（未给出结论），它挂的哨兵一并收回");
     await appendTaskTimeline(taskId, run.targetKind === "accepted_merge"
       ? "合并结果审查未能正常给出结论；原任务保持已验收，可重新发起审查。"
@@ -458,11 +483,7 @@ export async function handleFreeWorkflowSettlement(
   }
 
   const passed = outcome === "passed";
-  await db.update(freeReviewRounds).set({ status: passed ? "passed" : "failed", endedAt: at })
-    .where(eq(freeReviewRounds.id, round.id));
   if (passed) {
-    await db.update(freeReviewRuns).set({ status: "passed", updatedAt: at, finishedAt: at })
-      .where(eq(freeReviewRuns.id, run.id));
     await stopReviewRunMonitors(run.id, "这次审查已通过，它挂的哨兵一并收回");
     await appendTaskTimeline(taskId, run.targetKind === "accepted_merge"
       ? `合并结果审查通过（${run.reviewerName}）；原任务继续保持已验收。`
@@ -473,8 +494,6 @@ export async function handleFreeWorkflowSettlement(
   }
 
   // 未通过：run 一律落 stopped。链要不要自动续，看轮数——还有就发修复消息 + 挂续轮预约。
-  await db.update(freeReviewRuns).set({ status: "stopped", updatedAt: at, finishedAt: at })
-    .where(eq(freeReviewRuns.id, run.id));
   await stopReviewRunMonitors(run.id, "这次审查已出结论，它挂的哨兵一并收回");
   if (run.targetKind === "accepted_merge") {
     await appendTaskTimeline(taskId, "合并结果审查未通过；原任务保持已验收，可从审查记录创建独立修复任务。");
