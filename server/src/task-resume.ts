@@ -50,11 +50,12 @@ async function resumeOrRunClaimedTask(taskId: string,
     const reviewerRoute = await freeReviewResumeOptions(taskId);
     if (task.verifyRound || task.reviewOf || reviewerRoute) {
       const evidence = await db.transaction((transaction) => activeReviewEvidence(transaction, task), { behavior: "immediate" });
-      await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
+      const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
         actingUserId: acting, ...(reviewerRoute ?? {}),
         reviewDelivery: { kind: "checkpoint", generation: evidence?.generation ?? null, text: rp, promptGeneration: task.resumePromptGeneration },
         onDelivered: async () => { await takeResumePrompt(taskId, rp, task.resumePromptGeneration); },
       });
+      if (!started) await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId);
       return;
     }
     // 取走这段 checkpoint 指令要 CAS(`resume_prompt = rp`)：读到 rp 之后到清空之间隔着

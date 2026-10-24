@@ -203,7 +203,8 @@ try {
 
   const atomic = await open("preset");
   await clearMessages(atomic.taskId);
-  await db.update(tasks).set({ status: "done", question: "Preserve the accepted answer atomically" }).where(eq(tasks.id, atomic.taskId));
+  await setTaskQuestion({ taskId: atomic.taskId, question: "Preserve the accepted answer atomically" });
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, atomic.taskId));
   await atomic.settle(true);
   const beforeAnswer = await row(atomic.taskId);
   await dbClient.execute(`CREATE TEMP TRIGGER answer_fault BEFORE INSERT ON scheduled_messages
@@ -228,7 +229,8 @@ try {
 
   const racing = await open("preset");
   await clearMessages(racing.taskId);
-  await db.update(tasks).set({ status: "done", question: "Race answer and recovery" }).where(eq(tasks.id, racing.taskId));
+  await setTaskQuestion({ taskId: racing.taskId, question: "Race answer and recovery" });
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, racing.taskId));
   await racing.settle(true);
   const response = await api.request(`/tasks/${racing.taskId}/answer`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answer: "continue" }) });
   assert.equal(response.status, 200);

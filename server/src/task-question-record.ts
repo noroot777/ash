@@ -46,6 +46,7 @@ export async function claimQuestionAnswer(task: TaskRow, record: QuestionRecord,
       task.questionOptions === null ? isNull(tasks.questionOptions) : eq(tasks.questionOptions, task.questionOptions),
       task.questionItems === null ? isNull(tasks.questionItems) : eq(tasks.questionItems, task.questionItems),
       task.questionHistory === null ? isNull(tasks.questionHistory) : eq(tasks.questionHistory, task.questionHistory),
+      task.waitOwnership === null ? isNull(tasks.waitOwnership) : eq(tasks.waitOwnership, task.waitOwnership),
       task.mode === "team" ? undefined : eq(tasks.status, task.status),
     )).returning({ id: tasks.id });
     if (!claimed.length) return false;

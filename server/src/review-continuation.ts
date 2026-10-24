@@ -2,11 +2,13 @@ import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
+import type { WaitOrigin } from "./db/schema-task-wait.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
 import { isTurnClaimed, type TurnSource } from "./runs.js";
 import { activeReviewEvidence, activeReviewScope, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded,
   reviewTargetIdentity, type ReviewDelivery } from "./review-ownership.js";
 import { recordReviewWait, reviewWaitAuthorized, reviewWaitAtTurnStart, snapshotReviewWait } from "./review-wait.js";
+import { questionWaitMatches, questionWaitOrigin, reviewWaitOrigin, startTaskWaitTurn } from "./task-wait-ownership.js";
 
 export { activeReviewEvidence } from "./review-ownership.js";
 
@@ -16,9 +18,14 @@ type EvidenceRow = typeof regressionEvidence.$inferSelect;
 export async function reviewContinuationPending(transaction: ConclusionTransaction, owner: TaskRow, state?: EvidenceRow,
   hasConclusion = false, ignoreActive = false): Promise<boolean> {
   if (!ignoreActive && (["running", "queued"].includes(owner.status) || isTurnClaimed(owner.id))) return true;
-  if (state?.settlement) return false;
+  if (!state || state.settlement) return false;
   if (!await reviewWaitAuthorized(transaction, state)) return false;
-  if ((owner.question || owner.resumePrompt) && (!hasConclusion || state?.continuation?.phase === "waiting")) return true;
+  const ownsWait = (origin: WaitOrigin | undefined) =>
+    origin?.kind === "review" && origin.directory === state.directory && origin.generation === state.generation;
+  const question = owner.question && questionWaitMatches(owner) && ownsWait(owner.waitOwnership?.question?.origin);
+  const checkpoint = owner.resumePrompt && owner.waitOwnership?.checkpoint?.generation === owner.resumePromptGeneration
+    && ownsWait(owner.waitOwnership.checkpoint.origin);
+  if ((question || checkpoint) && (!hasConclusion || state?.continuation?.phase === "waiting")) return true;
   const pending = await transaction.select().from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, owner.id), eq(scheduledMessages.status, "pending")));
   return pending.some((message) => message.origin === `review-answer:${state?.generation}`
@@ -56,12 +63,15 @@ export async function assertReviewTurnStart(taskId: string, turnToken: string, d
 
 export async function queueReviewAnswer(transaction: ConclusionTransaction, task: TaskRow,
   message: typeof scheduledMessages.$inferInsert): Promise<boolean> {
+  const origin = await questionWaitOrigin(transaction, task);
+  if (origin.kind === "ordinary") return false;
+  if (origin.kind === "unknown") throw new ReviewSuperseded();
   const state = await activeReviewEvidence(transaction, task);
   if (!state) {
     if (await activeReviewScope(transaction, task)) throw new ReviewSuperseded();
     return false;
   }
-  if (state.settlement) throw new ReviewSuperseded();
+  if (state.settlement || state.directory !== origin.directory || state.generation !== origin.generation) throw new ReviewSuperseded();
   await assertReviewAuthority(transaction, { directory: state.directory, generation: state.generation, target: state.targetIdentity }, true);
   await transaction.insert(scheduledMessages).values({ ...message, origin: `review-answer:${state.generation}` });
   await transaction.update(regressionEvidence).set({ continuation: { ...state.continuation, phase: "delivery", messageId: message.id } })
@@ -74,11 +84,16 @@ export async function beginReviewContinuation(transaction: ConclusionTransaction
   const deliveredState = delivery ? await reviewDeliveryAuthority(transaction, delivery, task.id) : undefined;
   const state = await activeReviewEvidence(transaction, task, source);
   if (delivery && delivery.kind !== "repair" && (!state || state.directory !== deliveredState?.directory)) throw new ReviewSuperseded();
-  if (!state || delivery?.kind === "repair") { await snapshotReviewWait(transaction, task); return; }
+  const identity = { turnToken, directionToken, directionEpoch: task.directionEpoch + 1 };
+  if (!state || delivery?.kind === "repair") {
+    await snapshotReviewWait(transaction, task, identity, { kind: "ordinary" });
+    return;
+  }
   const current = (await transaction.select().from(tasks).where(eq(tasks.id, task.id)))[0];
   await assertReviewAuthority(transaction, { directory: state.directory, generation: state.generation, target: state.targetIdentity }, true);
   if (!current || !reviewIdentityMatches(current, reviewTargetIdentity(task))
     || state.settlement || (state.taskId === task.id && !reviewIdentityMatches(current, state.targetIdentity))) throw new ReviewSuperseded();
+  await startTaskWaitTurn(transaction, task, identity, reviewWaitOrigin(state));
   await transaction.update(regressionEvidence).set({
     ...(state.taskId === task.id ? { targetIdentity: { turnToken, directionToken, directionEpoch: task.directionEpoch + 1 } } : {}),
     continuation: { phase: "running", wait: reviewWaitAtTurnStart(task, turnToken, directionToken),

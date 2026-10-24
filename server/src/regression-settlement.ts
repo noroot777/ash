@@ -17,6 +17,7 @@ import { retireHistoricalReview } from "./review-retirement.js";
 import { clearReviewWait, reviewWaitForExit } from "./review-wait.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { now } from "./util.js";
+import { expireClosedTaskWait } from "./task-wait-ownership.js";
 
 export type CheckedSettlement = {
   conclusion: ReviewConclusion;
@@ -101,8 +102,12 @@ export async function completeRegressionSettlement(directory: string, checked: C
     const ownsRound = owner && (await activeReviewScope(transaction, owner))?.directory === directory;
     const wait = ownsRound ? await reviewWaitForExit(transaction, owner, state) : undefined;
     if (!await write(transaction)) return false;
-    if (owner && ownsRound && await clearReviewWait(transaction, owner, wait)) changedOwner = owner.id;
-    if (owner?.reviewOf && ownsRound && ["paused", "queued"].includes(owner.status) && reviewIdentityMatches(owner, wait?.owner)) {
+    if (owner && await clearReviewWait(transaction, owner, state)) changedOwner = owner.id;
+    const waitingTurn = owner?.waitOwnership?.turn;
+    const ownsLegacyTurn = owner && (waitingTurn ? waitingTurn.origin.kind !== "ordinary"
+      && waitingTurn.origin.directory === directory && reviewIdentityMatches(owner, waitingTurn.identity)
+      : !wait?.owner || reviewIdentityMatches(owner, wait.owner));
+    if (owner?.reviewOf && ownsRound && ["paused", "queued"].includes(owner.status) && ownsLegacyTurn) {
       await transaction.update(tasks).set({ status: state.settlement.outcome, updatedAt: now() }).where(eq(tasks.id, owner.id));
       changedOwner = owner.id;
     }
@@ -158,6 +163,15 @@ export async function reconcileRegressionSettlements(ownerTaskId?: string): Prom
       .catch((error) => console.error(`[ash] 审查结算待重试 ${owner.id}:`, error));
   }
   await reconcileRegressionFinalizations(ownerTaskId);
+  const waiting = await db.select().from(tasks).where(ownerTaskId ? eq(tasks.id, ownerTaskId)
+    : or(isNotNull(tasks.question), isNotNull(tasks.resumePrompt)));
+  for (const owner of waiting) {
+    const changed = await db.transaction(async (transaction) => {
+      const current = (await transaction.select().from(tasks).where(eq(tasks.id, owner.id)))[0];
+      return !!current && await expireClosedTaskWait(transaction, current);
+    }, { behavior: "immediate" });
+    if (changed) await announceResumePrompt(owner.id);
+  }
 }
 
 let retrying = false;

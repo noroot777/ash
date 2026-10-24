@@ -88,8 +88,11 @@ export async function reviewDeliveryAuthority(transaction: ConclusionTransaction
   if (delivery.kind !== "repair" && (await activeReviewEvidence(transaction, owner))?.directory !== state.directory) throw new ReviewSuperseded();
   if (delivery.kind === "answer" && (state.settlement || state.continuation?.phase !== "delivery"
     || state.continuation.messageId !== delivery.messageId)) throw new ReviewSuperseded();
+  const checkpoint = owner.waitOwnership?.checkpoint;
   if (delivery.kind === "checkpoint" && (state.settlement || state.continuation?.phase === "delivery"
-    || owner.resumePrompt !== delivery.text || owner.resumePromptGeneration !== delivery.promptGeneration)) throw new ReviewSuperseded();
+    || owner.resumePrompt !== delivery.text || owner.resumePromptGeneration !== delivery.promptGeneration
+    || checkpoint?.generation !== delivery.promptGeneration || checkpoint.origin.kind !== "review"
+    || checkpoint.origin.directory !== state.directory || checkpoint.origin.generation !== state.generation)) throw new ReviewSuperseded();
   return state;
 }
 

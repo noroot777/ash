@@ -504,7 +504,7 @@ await db.insert(tasks).values({
 // ① 验证回合中途提问：这一轮还没验完，轮次标记必须留着，也不许下结论 ——
 //    否则答复回来的那一回合会被当成「验完了却没给结论」。
 await initializeEvidence(inlineId);
-await db.update(tasks).set({ question: "这个按钮该长什么样？" }).where(eq(tasks.id, inlineId));
+await (await import("../src/task-question.js")).setTaskQuestion({ taskId: inlineId, question: "这个按钮该长什么样？" });
 await handleTaskSettlement(inlineId, "paused", false, true);
 let inline = await readTask();
 assert.equal(inline.verifyRound, 1, "验证回合以提问结束时必须保留 verify_round");

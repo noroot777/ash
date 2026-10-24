@@ -1,10 +1,10 @@
 import { eq } from "drizzle-orm";
 import { regressionEvidence, tasks } from "./db/schema.js";
 import type { ReviewContinuation, ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
+import type { WaitOrigin } from "./db/schema-task-wait.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { activeReviewEvidence, activeReviewScope, assertReviewAuthority, reviewIdentityMatches, reviewTargetIdentity, ReviewSuperseded } from "./review-ownership.js";
-import { resumePromptVoidPatch } from "./task-resume-prompt.js";
-import { now } from "./util.js";
+import { captureTaskWait, expireTaskWait, recordTaskWait, reviewWaitOrigin, startTaskWaitTurn } from "./task-wait-ownership.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type EvidenceRow = typeof regressionEvidence.$inferSelect;
@@ -32,6 +32,8 @@ export async function reviewWaitAuthorized(transaction: ConclusionTransaction, s
 
 export async function recordReviewWait(transaction: ConclusionTransaction, owner: TaskRow,
   field?: "question" | "checkpoint"): Promise<void> {
+  if (field) await recordTaskWait(transaction, owner, field);
+  else await captureTaskWait(transaction, owner);
   const state = await activeReviewEvidence(transaction, owner);
   if (!state || state.settlement?.pending === false) return;
   const authorized = !state.settlement && await reviewWaitAuthorized(transaction, state);
@@ -50,9 +52,12 @@ export function reviewWaitAtTurnStart(owner: TaskRow, turnToken: string, directi
 }
 
 export async function snapshotReviewWait(transaction: ConclusionTransaction, owner: TaskRow,
-  nextOwner?: ReviewTargetIdentity): Promise<void> {
+  nextOwner?: ReviewTargetIdentity, origin?: WaitOrigin): Promise<void> {
   const state = await activeReviewEvidence(transaction, owner);
   const reviewStart = !!nextOwner && !!(owner.reviewOf || owner.verifyRound);
+  if (nextOwner) await startTaskWaitTurn(transaction, owner, nextOwner,
+    origin ?? (reviewStart && state ? reviewWaitOrigin(state) : { kind: "ordinary" }));
+  else await captureTaskWait(transaction, owner);
   if (!state || state.settlement || (state.continuation?.wait && !reviewStart)) return;
   await transaction.update(regressionEvidence).set({ continuation: {
     ...state.continuation, phase: state.continuation?.phase ?? "running",
@@ -62,24 +67,11 @@ export async function snapshotReviewWait(transaction: ConclusionTransaction, own
 
 export async function reviewWaitForExit(transaction: ConclusionTransaction, owner: TaskRow | undefined,
   state: EvidenceRow): Promise<ReviewWait | undefined> {
-  if (state.continuation?.wait) return state.continuation.wait;
-  if (!owner || (await activeReviewScope(transaction, owner))?.directory !== state.directory) return;
-  if ((state.targetIdentity || state.settlement?.target) && !await reviewWaitAuthorized(transaction, state)) return;
-  return snapshot(owner);
+  if (owner && (await activeReviewScope(transaction, owner))?.directory === state.directory) await captureTaskWait(transaction, owner);
+  return state.continuation?.wait;
 }
 
 export async function clearReviewWait(transaction: ConclusionTransaction, owner: TaskRow,
-  wait: ReviewWait | undefined): Promise<boolean> {
-  const question = wait?.question;
-  const clearQuestion = !!question && owner.question === question.text
-    && owner.questionOptions === question.options && owner.questionItems === question.items;
-  const checkpoint = wait?.checkpoint;
-  const clearCheckpoint = !!checkpoint && owner.resumePrompt === checkpoint.text
-    && owner.resumePromptGeneration === checkpoint.generation;
-  if (!clearQuestion && !clearCheckpoint) return false;
-  await transaction.update(tasks).set({
-    ...(clearQuestion ? { question: null, questionOptions: null, questionItems: null } : {}),
-    ...(clearCheckpoint ? resumePromptVoidPatch() : {}), updatedAt: now(),
-  }).where(eq(tasks.id, owner.id));
-  return true;
+  state: EvidenceRow): Promise<boolean> {
+  return expireTaskWait(transaction, owner, state);
 }

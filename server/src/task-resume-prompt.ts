@@ -96,6 +96,20 @@ export type ResumePromptReceipt = { text: string; auto: boolean; generation: num
  */
 export type StoredResumePromptReceipt = { text: string; auto: boolean | null; generation: number | null };
 
+const checkpointOwnershipUsable = (): SQL => sql`(
+  json_extract(${tasks.waitOwnership}, '$.checkpoint.origin.kind') = 'ordinary'
+  OR (json_extract(${tasks.waitOwnership}, '$.checkpoint.origin.kind') = 'review'
+    AND EXISTS (SELECT 1 FROM regression_evidence AS wait_review
+      WHERE wait_review.directory = json_extract(${tasks.waitOwnership}, '$.checkpoint.origin.directory')
+        AND wait_review.generation = json_extract(${tasks.waitOwnership}, '$.checkpoint.origin.generation')
+        AND wait_review.settlement IS NULL))
+  OR (json_extract(${tasks.waitOwnership}, '$.checkpoint') IS NULL
+    AND ${tasks.verifyRound} IS NULL AND ${tasks.reviewOf} IS NULL
+    AND NOT EXISTS (SELECT 1 FROM free_review_runs AS wait_run WHERE wait_run.task_id = ${tasks.id})
+    AND NOT EXISTS (SELECT 1 FROM regression_evidence AS wait_history
+      WHERE wait_history.task_id = ${tasks.id} AND wait_history.settlement IS NOT NULL))
+)`;
+
 /**
  * CAS 取走这段续跑指令：只清掉调用方读到的那一段。
  *
@@ -106,7 +120,8 @@ export async function takeResumePrompt(taskId: string, expected: string, generat
   const cleared = await db
     .update(tasks)
     .set({ resumePrompt: null, updatedAt: now() })
-    .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, expected), generation === undefined ? undefined : eq(tasks.resumePromptGeneration, generation)))
+    .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, expected), checkpointOwnershipUsable(),
+      generation === undefined ? undefined : eq(tasks.resumePromptGeneration, generation)))
     // RETURNING 给的是写后的行,而这一笔不碰这两列 —— 所以它们就是取走那一刻的事实。
     .returning({ auto: tasks.resumePromptAuto, generation: tasks.resumePromptGeneration });
   const row = cleared.at(0);
@@ -127,6 +142,7 @@ export const resumePromptSlotFor = (receipt: StoredResumePromptReceipt): SQL[] =
   // 不存在，任务行的代次只能是迁移缺省 0。于是升级后只要有过一次新占用（代次 ≥ 1），这张旧
   // 凭证就此过期 —— 否则它能凭一个空槽填回去，还顺手继承新占用留下的来源（第 3 轮审查 F1）。
   eq(tasks.resumePromptGeneration, receipt.generation ?? 0),
+  checkpointOwnershipUsable(),
 ];
 
 /**
@@ -157,6 +173,7 @@ export const resumePromptTakePatch = () => ({ resumePrompt: null, updatedAt: now
 export const resumePromptHeldBy = (receipt: { text: string; generation: number }): SQL[] => [
   eq(tasks.resumePrompt, receipt.text),
   eq(tasks.resumePromptGeneration, receipt.generation),
+  checkpointOwnershipUsable(),
 ];
 
 /**

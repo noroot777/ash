@@ -15,6 +15,7 @@ import { advanceWorkflowFrom } from "./workflow-advance.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { now } from "./util.js";
 import { assertReviewAuthority, ReviewSuperseded, settlementAuthority, withReviewAuthority } from "./review-ownership.js";
+import { recordTaskWait } from "./task-wait-ownership.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 const STUCK_AT_VERIFY = "线停在「自动验证」这一站等你：看过验证报告（有截图的话一并看）后，认可就点「人工强制通过」放行，想重跑就点「再验一轮」。";
@@ -93,6 +94,8 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
         await assertReviewAuthority(transaction, authority);
         await transaction.update(tasks).set({ question: input.question, questionOptions: JSON.stringify(input.options),
           questionItems: null, updatedAt }).where(eq(tasks.id, target.id));
+        const current = (await transaction.select().from(tasks).where(eq(tasks.id, target.id)))[0]!;
+        await recordTaskWait(transaction, current, "question", { kind: "ordinary" });
       });
       if (changed) bus.publish({ type: "task.question", taskId: target.id, question: input.question,
         questionOptions: input.options ?? null, questionItems: null, updatedAt });

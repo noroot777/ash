@@ -66,7 +66,7 @@ export async function retireHistoricalReview(expected: TaskRow, source: TurnSour
       await transaction.update(regressionEvidence).set({ settlement: { ...settlement, pending: true },
         continuation: { ...state?.continuation, phase: "exited", wait } })
         .where(eq(regressionEvidence.directory, scope.directory));
-      await clearReviewWait(transaction, current, wait);
+      await clearReviewWait(transaction, current, evidence);
       const previous = taskStartStatus(current);
       const updated = await transaction.update(tasks).set({
         ...(current.reviewOf ? { status: settlement.outcome }
