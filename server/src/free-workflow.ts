@@ -14,7 +14,6 @@ import {
   freeWorkflowStates,
   reviewerProfiles,
   regressionEvidence,
-  scheduledMessages,
   tasks,
 } from "./db/schema.js";
 import { clearReservationForDispatch, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview } from "./free-review-reservations.js";
@@ -50,6 +49,7 @@ import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } fro
 import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
 import { completeRegressionSettlement, regressionSettlementConclusion } from "./regression-settlement.js";
+import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimTurn, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
@@ -254,21 +254,17 @@ export async function reconcileFreeReviews(): Promise<void> {
     // question/等待态被永远跳过——那会让验收持续被 active review 409 挡住（审查实测）。
     const round = (await db.select().from(freeReviewRounds)
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
+    const waiting = await db.transaction(async (transaction) => {
+      const evidence = await activeReviewEvidence(transaction, task);
+      return reviewContinuationPending(transaction, task, evidence, !!round?.conclusion);
+    }, { behavior: "immediate" });
+    if (waiting) continue;
     if (round?.conclusion) {
       await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer");
       continue;
     }
-    if (task.question || task.resumePrompt) continue;
-    // /answer 可能已清掉 question、答复正躺在排队消息里等投递（reviewer 提问回合还没
-    // release turn 时的正常路径）：那条链在等答案，不是孤儿——对账先于 scheduler 恢复
-    // 投递，杀了它答复就无处可去了（审查实测）。
-    const pendingReviewerAnswer = (await db.select({ id: scheduledMessages.id }).from(scheduledMessages)
-      .where(and(
-        eq(scheduledMessages.taskId, run.taskId),
-        eq(scheduledMessages.status, "pending"),
-        eq(scheduledMessages.sessionRole, "reviewer"),
-      )).limit(1)).at(0);
-    if (pendingReviewerAnswer) continue;
+    if (await db.transaction(async (transaction) => reviewContinuationPending(transaction, task,
+      await activeReviewEvidence(transaction, task)), { behavior: "immediate" })) continue;
     if (!round) await db.insert(freeReviewRounds).values({ id: id(), runId: run.id, round: run.currentRound,
       status: "reviewing", startedAt: run.createdAt }).onConflictDoNothing();
     await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer")
@@ -446,7 +442,11 @@ export async function handleFreeWorkflowSettlement(
   // 提问守卫只保护「审查回合以提问/检查点收尾」的场景（等答复回来续跑再结算）。
   // reviewer 已交卷（round 有结论）就必须结算——question 可能是实现回合遗留的旧字段，
   // 拿它挡住已有结论的审查会让链永远停在 reviewing（审查实测复现）。
-  if (turnOk !== false && (task.question || task.resumePrompt) && !round.conclusion) return true;
+  const waitingEvidence = await db.transaction((transaction) => activeReviewEvidence(transaction, task), { behavior: "immediate" });
+  if (turnOk !== false && (task.question || task.resumePrompt)
+    && (!round.conclusion || waitingEvidence?.continuation?.phase === "waiting")) {
+    await preserveReviewWait(task); return true;
+  }
   const directory = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   const checked = await regressionSettlementConclusion(taskId, directory, {
     outcome: turnOk === null ? undefined : turnOk ? "done" : "failed", round: run.currentRound,
@@ -474,8 +474,7 @@ export async function handleFreeWorkflowSettlement(
       reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
     }).where(eq(freeWorkflowStates.taskId, taskId));
     return true;
-  }, finalization("free", { run, outcome, at, turnToken: task.activeTurnToken,
-    directionToken: task.activeDirectionToken, directionEpoch: task.directionEpoch }));
+  }, finalization("free", { run, outcome, at }));
   await drainRegressionFinalization(directory);
   return true;
 }

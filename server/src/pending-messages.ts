@@ -42,6 +42,7 @@ import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState, monitorWakeCheckpoint } from "./monitor-session.js";
 import { monitorWakeForDelivery, type MonitorWakeData } from "@ash/shared/monitor-wake";
 import { deliveryOptions, deliveryVerdict, isDueForDelivery, monitorWakeGuard, pendingExecutionIntent } from "./pending-verdict.js";
+import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { id, now } from "./util.js";
@@ -418,6 +419,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       // paused 翻成 queued,orchestrator 误判成执行回合:消费继续指令、无确认结算
       // failed(第 ll7XKsu_ps0n 链第 1 轮:定时追问与连续追问实测,直接回复对照正常)。
       const checkpointFollowUp =
+        reviewDeliveryFrom(m)?.kind === "answer" ||
         t != null && t.mode === "single" && !m.execution && t.status === "paused" && !!t.resumePrompt;
       // paused/backlog 的单任务、以及执行型消息(不论任务状态)才需要问队列;执行型
       // 还要问分组暂停。其余状态别白查几张表。
@@ -436,7 +438,8 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       const monitorSource = t != null && monitorIdFromOrigin(m.origin) !== null
         ? await monitorEventSourceState(m.origin)
         : undefined;
-      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource } : null, at);
+      const reviewBlocked = await reviewDeliveryBlocked(reviewDeliveryFrom(m), m.taskId);
+      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked } : null, at);
       if (verdict.action === "wait") {
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。

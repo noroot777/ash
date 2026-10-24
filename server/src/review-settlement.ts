@@ -11,11 +11,13 @@ import { verificationStepsAfterRound } from "./review-execution.js";
 import { taskWorkflowDef } from "./workflows.js";
 import type { Settlement } from "./review-policy.js";
 import { now } from "./util.js";
+import { assertReviewAuthority, ReviewSuperseded } from "./review-ownership.js";
+import { preserveReviewWait } from "./review-continuation.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
 export async function finishVerifyRound(target: TaskRow, turnOk: boolean | null): Promise<void> {
-  if (turnOk && (target.question || target.resumePrompt)) return;
+  if (turnOk && (target.question || target.resumePrompt)) { await preserveReviewWait(target); return; }
   await settleReview(target, target.verifyRound ?? 1, turnOk === null ? undefined : turnOk ? "done" : "failed", null, {
     station: target.reviewStep ?? firstAnchor(taskWorkflowDef(target.workflow), "verify")?.id ?? null,
     stationRound: (target.verifyStationRounds ?? 0) + 1,
@@ -23,6 +25,9 @@ export async function finishVerifyRound(target: TaskRow, turnOk: boolean | null)
 }
 
 export async function finishReview(review: TaskRow, status: Settlement, recovering = false): Promise<void> {
+  if (!recovering && ["done", "paused"].includes(status) && (review.question || review.resumePrompt)) {
+    await preserveReviewWait(review); return;
+  }
   const target = review.reviewOf && (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf)))[0];
   if (!target) return;
   const reviews = await db.select().from(tasks).where(eq(tasks.reviewOf, target.id));
@@ -45,6 +50,8 @@ async function settleReview(target: TaskRow, round: number, outcome: "done" | "f
   const plan = finalization("preset", { target: { ...target, stage }, round, reviewTaskId, ...at,
     outcome: checked.outcome, conclusion: checked.conclusion, frozen, stageChanged: stage !== target.stage });
   await completeRegressionSettlement(directory, checked, async (transaction) => {
+    try { await assertReviewAuthority(transaction, { directory, generation: checked.generation, target: checked.target }, true); }
+    catch (error) { if (error instanceof ReviewSuperseded) return true; throw error; }
     await assertConclusionTask(transaction, target);
     if (reviewTaskId) {
       const scope = await latestPresetConclusionRound(target, transaction);

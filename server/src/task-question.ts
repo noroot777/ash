@@ -15,8 +15,12 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, sessions, tasks } from "./db/schema.js";
 import { now } from "./util.js";
+import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
+import { activeReviewEvidence } from "./review-continuation.js";
+import { regressionEvidence } from "./db/schema.js";
 
 export interface AskInput {
+  reviewAuthority?: ReviewAuthority;
   taskId: string;
   question: string;
   options?: string[];
@@ -44,16 +48,24 @@ export async function setTaskQuestion(input: AskInput): Promise<boolean> {
             : eq(tasks.activeDirectionToken, currentTurn.directionToken),
       )
     : eq(tasks.id, taskId);
-  const updated = await db
-    .update(tasks)
-    .set({
-      question,
-      questionOptions: options.length ? JSON.stringify(options) : null,
-      questionItems: items ? JSON.stringify(items) : null,
-      updatedAt,
-    })
-    .where(where)
-    .returning({ id: tasks.id });
+  const updated = await withReviewAuthority(input.reviewAuthority, async (transaction) => {
+    const updated = await transaction.update(tasks)
+      .set({
+        question,
+        questionOptions: options.length ? JSON.stringify(options) : null,
+        questionItems: items ? JSON.stringify(items) : null,
+        updatedAt,
+      })
+      .where(where)
+      .returning({ id: tasks.id });
+    if (updated.length && input.currentTurn) {
+      const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
+      const state = await activeReviewEvidence(transaction, task);
+      if (state && !state.settlement) await transaction.update(regressionEvidence).set({ continuation: { phase: "waiting" } })
+        .where(eq(regressionEvidence.directory, state.directory));
+    }
+    return updated;
+  });
   if (!updated.length) return false;
   bus.publish({
     type: "task.question",

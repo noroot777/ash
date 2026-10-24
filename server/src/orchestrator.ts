@@ -13,6 +13,8 @@ import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceRole } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
+import { assertReviewTurnStart, beginReviewContinuation } from "./review-continuation.js";
+import { ReviewSuperseded } from "./review-ownership.js";
 import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -217,11 +219,13 @@ export async function continueTask(
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
     const turnToken = id();
     const directionToken = id();
-    await db
-      .update(tasks)
-      // 方向身份那几列同 task-run.ts:走 `turnDirectionStart`,世代跟着这一次起跑一起前进。
-      .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
-      .where(eq(tasks.id, taskId));
+    await db.transaction(async (transaction) => {
+      await beginReviewContinuation(transaction, task, opts.turnSource ?? { role: "single" }, turnToken, directionToken, opts.reviewDelivery);
+      await transaction.update(tasks)
+        // 方向身份那几列同 task-run.ts:走 `turnDirectionStart`,世代跟着这一次起跑一起前进。
+        .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
+        .where(eq(tasks.id, taskId));
+    }, { behavior: "immediate" });
     // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
     // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
     bindTurnToken(taskId, turnToken);
@@ -427,6 +431,7 @@ export async function continueTask(
     // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
     const browserGrant = await browserGrantForProject(task.projectId);
+    await assertReviewTurnStart(taskId, turnToken, directionToken, opts.reviewDelivery, !nativeCommand && (!!task.verifyRound || freeReviewTurn || !!task.reviewOf));
     // ↓ 这里往下到 `trackRun` 全同步(撤回那条岔路除外,它不起进程):暂停请求要么在
     // takeFreeze 被消费、要么之后才到 —— 那时已有 handle 可杀。
     const freeze = takeFreeze(taskId, frozen);
@@ -604,6 +609,7 @@ export async function continueTask(
   } catch (err) {
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
+    if (err instanceof ReviewSuperseded) return false;
     const steered = await takeSteered(taskId);
     const stopped = takeStopped(taskId);
     if (steered && !stopped) return true;

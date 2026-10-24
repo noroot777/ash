@@ -474,6 +474,10 @@ const { eq } = await import("drizzle-orm");
 const inlineId = "verify-inline-test";
 const readTask = async () =>
   (await db.select().from(tasks).where(eq(tasks.id, inlineId))).at(0)!;
+const initializeEvidence = async (rowId: string) => {
+  const target = (await db.select().from(tasks).where(eq(tasks.id, rowId)))[0]!;
+  await (await import("../src/regression-evidence-lifecycle.js")).evidenceState(rowId, reviewRoundDir(rowId, target.verifyRound!), false, target);
+};
 
 await db.insert(tasks).values({
   id: inlineId,
@@ -499,6 +503,7 @@ await db.insert(tasks).values({
 
 // ① 验证回合中途提问：这一轮还没验完，轮次标记必须留着，也不许下结论 ——
 //    否则答复回来的那一回合会被当成「验完了却没给结论」。
+await initializeEvidence(inlineId);
 await db.update(tasks).set({ question: "这个按钮该长什么样？" }).where(eq(tasks.id, inlineId));
 await handleTaskSettlement(inlineId, "paused", false, true);
 let inline = await readTask();
@@ -583,6 +588,7 @@ await db.insert(tasks).values({
 });
 // 起不来的原因随便挑一个真实的：claude 没有 no-such-effort 这个档位，resolveExecutorFor
 // 会在起进程之前就抛错 —— 所以这条用例不会真的拉起 CLI。
+await initializeEvidence(failId);
 await continueTask(failId, "验证一下", {
   system: "run",
   sideTurn: true,
@@ -637,6 +643,7 @@ const seedTurnTarget = async (rowId: string, verifyRound: number | null = 1) => 
     createdAt: at,
     updatedAt: at,
   });
+  if (verifyRound) await initializeEvidence(rowId);
 };
 
 await seedTurnTarget("native-compact");

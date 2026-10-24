@@ -7,11 +7,13 @@ import { tasks } from "./db/schema.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
-import { enqueueMessage } from "./pending-messages.js";
+import { enqueueMessage, pendingMessageRow, publishPendingMessages, deliverPendingMessages } from "./pending-messages.js";
 import { claimQueueSeat } from "./queue-seat.js";
 import { askingAgentFor } from "./task-question.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { claimQuestionAnswer, prepareQuestionRecord } from "./task-question-record.js";
+import { queueReviewAnswer } from "./review-continuation.js";
+import { ReviewSuperseded } from "./review-ownership.js";
 
 export type TaskAnswerBody = QuestionAnswerInput & { answer?: string };
 
@@ -37,11 +39,6 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof TypeError ? 400 : 409);
   }
-  if (!(await claimQuestionAnswer(task, record))) {
-    return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
-  }
-  bus.publish({ type: "task.question", taskId, updatedAt: record.answeredAt, question: null, questionOptions: null, questionItems: null, answeredQuestion: record });
-
   const asker = task.mode === "single" ? await askingAgentFor(taskId) : null;
   const reviewRoute = asker?.role === "reviewer" ? await freeReviewResumeOptions(taskId) : null;
   const route = reviewRoute ?? (asker && asker.agent !== task.agentType
@@ -50,6 +47,22 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   const answerText = record.reply;
   // 答复也是真人回合:共享项目里给别人的任务答疑,烧的是**我**的 key(§八)。
   const acting = ownerIdOf(actorOf(c));
+  let reviewQueued = false;
+  try {
+    if (!await claimQuestionAnswer(task, record, async (transaction) => {
+      reviewQueued = await queueReviewAnswer(transaction, task,
+        pendingMessageRow({ taskId, text: answerText, ...route, ownerUserId: acting }));
+    })) return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
+  } catch (error) {
+    if (error instanceof ReviewSuperseded) return c.json({ error: error.message }, 409);
+    throw error;
+  }
+  bus.publish({ type: "task.question", taskId, updatedAt: record.answeredAt, question: null, questionOptions: null, questionItems: null, answeredQuestion: record });
+  if (reviewQueued) {
+    publishPendingMessages(taskId);
+    void deliverPendingMessages(taskId).catch((error) => console.error(`[ash] 审查答复待投递 ${taskId}:`, error));
+    return c.json({ answered: true, resumed: false, queued: true, record });
+  }
   // 排在后面的提问任务,答复续跑**是任务的执行回合**(selectNextInQueue 对 paused+question
   // 停队等它,它占着队列位置),必须过共用的队列认领(queue-seat.ts)——此前这里直接
   // continueTask,B 自身空闲就续跑成功,同队前项还在跑也拦不住(第 8 轮审查拦验收 2:

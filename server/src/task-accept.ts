@@ -29,6 +29,7 @@ import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTa
 import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
 import { acceptGateCheck, dropPendingAcceptGate, startPendingAcceptGate, type AcceptGateIntent } from "./accept-gate.js";
@@ -103,6 +104,7 @@ async function acceptTaskUnlocked(
   commitOverride?: boolean,
   gateIntent?: AcceptGateIntent,
   gatePassedRunId?: string,
+  reviewAuthority?: ReviewAuthority,
 ): Promise<AcceptTaskResult> {
   const preflight = await acceptancePreflight(taskId);
   if (preflight) return preflight;
@@ -170,7 +172,7 @@ async function acceptTaskUnlocked(
   // 同仓库其它任务的验收全部干等，所以这里只登记意图，发射在 acceptTask 的锁外那一段。
   const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const gate = await acceptGateCheck(task, gateProject, {
-    choices: { by, commit: commitOverride, confirmUnverified },
+    choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority },
     intent: gateIntent,
     passedRunId: gatePassedRunId,
   });
@@ -614,6 +616,7 @@ export async function acceptTask(
       } else {
         freeWorkflowLocked = context.freeWorkflow;
         result = await withRepoLock(context.repoPath, async (wait) => {
+          await withReviewAuthority(advanceOpts.reviewAuthority, async () => {});
           if (wait.queued) {
             // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
             await appendTaskTimeline(
@@ -624,6 +627,7 @@ export async function acceptTask(
           return acceptTaskUnlocked(
             taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit,
             advanceOpts.acceptGate, advanceOpts.acceptGatePassedRunId,
+            advanceOpts.reviewAuthority,
           );
         });
       }

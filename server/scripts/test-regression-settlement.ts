@@ -28,6 +28,8 @@ try {
     assert.equal(migrated.revoked, 1);
     assert.equal(migrated.unavailable, "EACCES");
     assert.equal(migrated.settlement, null);
+    assert.equal(migrated.target_identity, null);
+    assert.equal(migrated.continuation, null);
   } finally { legacyDb.close(); }
   const { open } = await setupRegressionReviews();
   const api = new Hono();

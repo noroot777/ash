@@ -18,6 +18,7 @@ import { now } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
 export interface PreviewStartOptions {
+  beforeStart?: () => Promise<void>;
   services?: PreviewServiceConfig[];
   primaryServiceId?: string | null;
   proxy?: boolean;
@@ -30,6 +31,7 @@ export async function runPreview(
   taskId: string, step: PreviewStep, cwd: string, gen: string,
   options: PreviewStartOptions | undefined, stopOld: () => Promise<boolean>,
 ): Promise<PreviewResult> {
+  await options?.beforeStart?.();
   await stopOld();
   const selected = options?.services?.filter((s) => s.enabled);
   const configs = selected?.length ? selected : [{ id: "main", name: "预览脚本", command: step.p.cmd, enabled: true, kind: "web" as const }];
@@ -103,6 +105,7 @@ export async function runPreview(
   try {
     for (const s of services) {
       if (!ours()) return fail(CANCELED);
+      await options?.beforeStart?.();
       const tried = await prepareNodeDeps(cwd, s.cmd, s.log, (pid) => {
         installing = pid;
         patchStart(taskId, gen, { installPid: pid > 0 ? pid : null });
@@ -114,6 +117,7 @@ export async function runPreview(
     }
     for (const [i, s] of services.entries()) {
       if (!ours()) return fail(CANCELED);
+      await options?.beforeStart?.();
       const launch = previewScriptLaunch(afterLoginShell(s.cmd, hostApiUrl), dir, `${gen}-${s.id}`);
       const fd = openSync(s.log, "a");
       try {
@@ -167,6 +171,7 @@ export async function runPreview(
     };
     while (Date.now() < deadline) {
       await sleep(500);
+      await options?.beforeStart?.();
       if (!ours()) return fail(CANCELED);
       for (const [i, s] of services.entries()) {
         const unsafe = scanFresh(i);

@@ -7,7 +7,7 @@ import { makeStep } from "@ash/shared/workflow";
 import { db, inTurnCaller, makeTask, runs, schema, startMonitor, tasks } from "./monitors-fixture.js";
 import { setupRegression } from "./regression-fixture.js";
 
-const { refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
+const { evidenceState, refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
 const { mountTaskStageRoutes } = await import("../src/task-stage.js");
 const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
 const { reviewRoundDir } = await import("../src/review-evidence.js");
@@ -57,6 +57,7 @@ export async function setupRegressionReviews() {
     runs.releaseTurn(taskId);
     assert(runs.claimTurn(ownerTaskId, free ? "reviewer" : "single", free ? { run: runId, round } : undefined));
     const directory = free ? freeReviewEvidenceDir(taskId, runId, round) : reviewRoundDir(taskId, round);
+    await evidenceState(taskId, directory, mode === "accepted_merge", (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
     await refreshRegressionEvidence(taskId, directory, mode === "accepted_merge");
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, "report.md"), "Independent current-input check passed.\n");

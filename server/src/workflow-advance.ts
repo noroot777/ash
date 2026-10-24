@@ -27,6 +27,7 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { verifyStationAction } from "./review-policy.js";
 import { advanceSegment, type SegmentOptions } from "./workflow-steps.js";
 import { now } from "./util.js";
+import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -36,8 +37,10 @@ export interface WorkflowAdvanceOptions extends SegmentOptions {
 }
 
 /** 把游标挪到某一站并广播。广播不能省，理由见文件头不变量①。 */
-export async function setWorkflowAt(taskId: string, stepId: string | null): Promise<void> {
-  await db.update(tasks).set({ workflowAt: stepId, updatedAt: now() }).where(eq(tasks.id, taskId));
+export async function setWorkflowAt(taskId: string, stepId: string | null, authority?: ReviewAuthority): Promise<void> {
+  await withReviewAuthority(authority, async (transaction) => {
+    await transaction.update(tasks).set({ workflowAt: stepId, updatedAt: now() }).where(eq(tasks.id, taskId));
+  });
   await publishTaskUpdated(taskId);
 }
 
@@ -94,9 +97,9 @@ async function atVerifyStation(
     return false;
   }
   // 先挪游标再开验证：开那一步要读游标才知道该用哪一站写的执行器去验。
-  await setWorkflowAt(task.id, station.id);
+  await setWorkflowAt(task.id, station.id, opts.reviewAuthority);
   const startVerifyRound = opts.startVerifyRound
-    ?? (await import("./review.js")).startVerifyRound;
+    ?? ((taskId: string) => import("./review.js").then((review) => review.startVerifyRound(taskId, {}, { reviewAuthority: opts.reviewAuthority })));
   await startVerifyRound(task.id).catch((error) => appendTaskTimeline(
     task.id,
     `想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${error instanceof Error ? error.message : String(error)}）。`,
@@ -125,25 +128,25 @@ export async function advanceWorkflowFrom(
     const next: WorkflowStep | null = nextAnchor(def, from);
     if (!next) {
       // 走到头了。游标停在最后一站，前端据此知道这条线已经走完。
-      await setWorkflowAt(task.id, from);
+      await setWorkflowAt(task.id, from, opts.reviewAuthority);
       return;
     }
     if (next.kind === "human") {
-      await setWorkflowAt(task.id, next.id);
+      await setWorkflowAt(task.id, next.id, opts.reviewAuthority);
       const { enterHumanGate } = await import("./review.js");
-      await enterHumanGate(task.id);
+      await enterHumanGate(task.id, opts.reviewAuthority);
       return;
     }
     if (next.kind === "verify") {
       if (!(await atVerifyStation(task, def, next, opts))) return;
       // 跳过这一站：游标照样挪过去，免得下一次事件落回来又从头判一遍。
-      await setWorkflowAt(task.id, next.id);
+      await setWorkflowAt(task.id, next.id, opts.reviewAuthority);
       from = next.id;
       continue;
     }
     // 「让 AI 干活」是这条线的起点，往前走时不会再撞见第二个（run 仍是 singleton）。
     // 真撞见了就停下：再唤醒一次 agent 不是这一层该做的决定。
-    await setWorkflowAt(task.id, from);
+    await setWorkflowAt(task.id, from, opts.reviewAuthority);
     return;
   }
 }

@@ -14,12 +14,14 @@ import { failureQuestionInput } from "./task-question.js";
 import { advanceWorkflowFrom } from "./workflow-advance.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { now } from "./util.js";
+import { assertReviewAuthority, settlementAuthority, withReviewAuthority } from "./review-ownership.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 const STUCK_AT_VERIFY = "线停在「自动验证」这一站等你：看过验证报告（有截图的话一并看）后，认可就点「人工强制通过」放行，想重跑就点「再验一轮」。";
 
 export async function finalizePresetReview(state: typeof regressionEvidence.$inferSelect): Promise<boolean> {
   const plan = state.finalization!;
+  const authority = settlementAuthority(state);
   const { target, round, reviewTaskId, station, stationRound, outcome, conclusion, frozen, stageChanged } = JSON.parse(plan.payload) as {
     target: TaskRow; round: number; reviewTaskId: string | null; station: string | null; stationRound: number;
     outcome: Settlement; conclusion: ReviewConclusion; frozen: boolean; stageChanged: boolean;
@@ -36,11 +38,7 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
     return true;
   }
   await step("conclusion", async () => { if (outcome === "done") await writeConclusion(target.id, round, reviewTaskId, conclusion, true); });
-  const current = (await db.select().from(tasks).where(eq(tasks.id, target.id)))[0];
-  if (!current || current.archived || ["accepted", "merged"].includes(current.stage ?? "")
-    || (current.verifyRound !== null && current.verifyRound !== round)
-    || current.directionEpoch !== target.directionEpoch
-    || current.activeDirectionToken !== target.activeDirectionToken || current.activeTurnToken !== target.activeTurnToken) return true;
+  await withReviewAuthority(authority, async () => {});
   const parent = target.parentId && (await db.select().from(tasks).where(eq(tasks.id, target.parentId)))[0];
   const parentIsTeam = !!parent && parent.mode === "team";
   const workflow = taskWorkflowDef(target.workflow), policy = workflowPolicy(workflow, station);
@@ -56,11 +54,13 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
       const saved = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, state.directory)))[0]!.finalization!;
       let dispatchError: unknown;
       await advanceWorkflowFrom(target, workflow, station, { skipStepIds: new Set(saved.steps),
+        reviewAuthority: authority,
+        onRepair: (text) => enqueueFinalizationRepair(state.directory, state.generation, target.id, text, authority.target!),
         onStepStart: (stepId) => checkpointFinalizationWorkflow(state.directory, state.generation, stepId, "started"),
         onStepFailure: (stepId) => checkpointFinalizationWorkflow(state.directory, state.generation, stepId, "failed"),
         onStepDone: (stepId) => checkpointFinalizationWorkflow(state.directory, state.generation, stepId),
         startVerifyRound: async (taskId) => {
-          try { return await (await import("./review.js")).startVerifyRound(taskId); }
+          try { return await (await import("./review.js")).startVerifyRound(taskId, {}, { reviewAuthority: authority }); }
           catch (error) { dispatchError = error; throw error; }
         },
       });
@@ -79,11 +79,7 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
       const input = failureQuestionInput(target.id, STEP_LABELS.verify, await readReport(target.id, round));
       const updatedAt = now();
       const changed = await commitFinalizationStep(state.directory, state.generation, "question", async (transaction) => {
-        const current = (await transaction.select().from(tasks).where(eq(tasks.id, target.id)))[0];
-        if (!current || current.directionEpoch !== target.directionEpoch
-          || current.activeTurnToken !== target.activeTurnToken || current.activeDirectionToken !== target.activeDirectionToken) {
-          throw new Error("审查提问所属回合或方向已变化");
-        }
+        await assertReviewAuthority(transaction, authority);
         await transaction.update(tasks).set({ question: input.question, questionOptions: JSON.stringify(input.options),
           questionItems: null, updatedAt }).where(eq(tasks.id, target.id));
       });

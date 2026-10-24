@@ -10,18 +10,17 @@ import { isTurnClaimed } from "./runs.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { reconcileRegressionFinalizations } from "./regression-finalization.js";
+import { reviewContinuationPending } from "./review-continuation.js";
+import { reviewIdentityMatches } from "./review-ownership.js";
+import type { ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
 
 export type CheckedSettlement = {
   conclusion: ReviewConclusion;
   outcome: RegressionSettlement["outcome"];
   generation: string;
   recoveryOwnerTaskId?: string;
+  target: ReviewTargetIdentity | null;
 };
-
-async function recoveryOwnerActive(transaction: ConclusionTransaction, ownerTaskId: string): Promise<boolean> {
-  const owner = (await transaction.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, ownerTaskId)))[0];
-  return !owner || owner.status === "running" || owner.status === "queued" || isTurnClaimed(ownerTaskId);
-}
 
 export async function regressionSettlementConclusion(taskId: string, directory: string, input: {
   outcome?: RegressionSettlement["outcome"];
@@ -32,30 +31,36 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
 }): Promise<CheckedSettlement | null> {
   await evidenceState(taskId, directory, input.acceptedMerge ?? false);
   const stored = await db.transaction(async (transaction) => {
-    if (input.outcome === undefined && await recoveryOwnerActive(transaction, input.ownerTaskId ?? taskId)) return null;
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0]!;
+    const owner = (await transaction.select().from(tasks).where(eq(tasks.id, input.ownerTaskId ?? taskId)))[0];
+    if (input.outcome === "done" && owner && !state.settlement
+      && await reviewContinuationPending(transaction, owner, state, !!input.freeRoundId, true)) return null;
     if (state.taskId !== taskId) throw new Error("审查证据所属任务不匹配");
+    const target = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
     const row = input.freeRoundId
       ? (await transaction.select({ conclusion: freeReviewRounds.conclusion }).from(freeReviewRounds)
         .where(eq(freeReviewRounds.id, input.freeRoundId)))[0]
       : (await transaction.select({ conclusion: tasks.stage }).from(tasks).where(eq(tasks.id, taskId)))[0];
-    const currentConclusion = row?.conclusion === "verified" || row?.conclusion === "verify_failed" ? row.conclusion : null;
+    const currentConclusion = (input.freeRoundId || target && reviewIdentityMatches(target, state.targetIdentity))
+      && (row?.conclusion === "verified" || row?.conclusion === "verify_failed") ? row.conclusion : null;
+    if (input.outcome === undefined && (!owner || await reviewContinuationPending(transaction, owner, state,
+      !!input.freeRoundId && currentConclusion !== null))) return null;
     let settlement: RegressionSettlement = state.settlement ?? {
       outcome: input.outcome ?? "failed", conclusion: currentConclusion, round: input.round, ownerTaskId: input.ownerTaskId ?? taskId,
-      ...(input.freeRoundId ? { freeRoundId: input.freeRoundId } : {}), pending: true,
+      ...(input.freeRoundId ? { freeRoundId: input.freeRoundId } : {}), pending: true, target: state.targetIdentity,
     };
     if (settlement.round !== input.round || settlement.ownerTaskId !== (input.ownerTaskId ?? taskId)
       || settlement.freeRoundId !== input.freeRoundId) throw new Error("审查结算身份不匹配");
     if (settlement.pending && settlement.outcome === "done" && input.outcome && input.outcome !== "done") {
       settlement = { ...settlement, outcome: input.outcome };
     }
-    await transaction.update(regressionEvidence).set({ settlement }).where(eq(regressionEvidence.directory, directory));
+    await transaction.update(regressionEvidence).set({ settlement, continuation: { phase: "exited" } }).where(eq(regressionEvidence.directory, directory));
     return { conclusion: settlement.conclusion, outcome: settlement.outcome, generation: state.generation,
-      unknown: !state.settlement && input.outcome === undefined };
+      target: settlement.target ?? null, unknown: !state.settlement && input.outcome === undefined };
   }, { behavior: "immediate" });
   if (!stored) return null;
   const { conclusion, outcome } = stored;
-  const checked: CheckedSettlement = { conclusion, outcome, generation: stored.generation,
+  const checked: CheckedSettlement = { conclusion, outcome, generation: stored.generation, target: stored.target,
     ...(input.outcome === undefined ? { recoveryOwnerTaskId: input.ownerTaskId ?? taskId } : {}),
   };
   if (stored.unknown) await appendTaskTimeline(taskId, "审查缺少持久保存的真实退出结果，不能因已有通过结论推定正常结束；本轮按异常结束处理。");
@@ -78,8 +83,11 @@ export async function completeRegressionSettlement(directory: string, checked: C
   write: (transaction: ConclusionTransaction) => Promise<boolean> = async () => true,
   finalization?: RegressionFinalization): Promise<boolean> {
   return db.transaction(async (transaction) => {
-    if (checked.recoveryOwnerTaskId && await recoveryOwnerActive(transaction, checked.recoveryOwnerTaskId)) return false;
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
+    if (checked.recoveryOwnerTaskId) {
+      const owner = (await transaction.select().from(tasks).where(eq(tasks.id, checked.recoveryOwnerTaskId)))[0];
+      if (!owner || await reviewContinuationPending(transaction, owner, state)) return false;
+    }
     if (!state?.settlement?.pending || state.generation !== checked.generation || state.settlement.outcome !== checked.outcome) return false;
     if (checked.outcome === "done" && checked.conclusion === "verified" && state.revoked && !state.acceptedBasis) return false;
     if (!await write(transaction)) return false;
@@ -110,7 +118,7 @@ export async function reconcileRegressionSettlements(ownerTaskId?: string): Prom
     if (!round) continue;
     const state = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, reviewRoundDir(taskId, round))))[0];
     if (state?.settlement || (!task.verifyRound && !state)) continue;
-    if ((task.question || task.resumePrompt) && !["verified", "verify_failed"].includes(task.stage ?? "")) continue;
+    if (await db.transaction((transaction) => reviewContinuationPending(transaction, task, state), { behavior: "immediate" })) continue;
     const { handleTaskSettlement } = await import("./review.js");
     await handleTaskSettlement(task.id, "failed", false, null).catch((error) => console.error(`[ash] 审查恢复待重试 ${task.id}:`, error));
   }

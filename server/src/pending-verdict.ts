@@ -11,6 +11,7 @@ import { monitorEventSource, monitorWakeGate, type MonitorSourceState } from "./
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { monitorWakeForDelivery } from "@ash/shared/monitor-wake";
+import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
 
@@ -36,6 +37,7 @@ export type DeliveryTaskView = {
   queueBlocked?: boolean;
   /** 所在分组已被用户暂停(groups.paused,持久事实)。 */
   groupPaused?: boolean;
+  reviewBlocked?: string | null;
   /**
    * **这条哨兵事件的来源审查**现在是什么状态(由调用方查好填进来,纯函数本身不碰库)。
    *
@@ -72,6 +74,7 @@ export function deliveryVerdict(
 ): DeliveryVerdict {
   if (!task) return { action: "cancel", reason: "任务不存在" };
   if (task.archived) return { action: "cancel", reason: "任务已归档" };
+  if (task.reviewBlocked) return { action: "cancel", reason: task.reviewBlocked };
   if (task.mode !== "single" && task.mode !== "team")
     return { action: "cancel", reason: `任务类型 ${task.mode} 不支持回复` };
   // 哨兵事件只有一个出口——「唤醒这个任务」。任务都结束了它再醒来也只是花钱，所以这一条
@@ -96,6 +99,7 @@ export function deliveryVerdict(
   // (第 xNb655YqYzcA 链第 2 轮:reply 只在入口暂存不够,30s tick 会从这里穿透)。
   if (
     task.mode === "single" &&
+    !message.origin?.startsWith("review-answer:") &&
     (task.status === "paused" || task.status === "backlog") &&
     task.queueBlocked
   )
@@ -112,6 +116,7 @@ export function deliveryVerdict(
 
 export function deliveryOptions(m: Row) {
   return {
+    reviewDelivery: reviewDeliveryFrom(m),
     monitorWake: monitorWakeForDelivery(m.monitorWake),
     attachments: JSON.parse(m.attachments) as string[],
     agent: (m.agent as AgentType) ?? undefined,
@@ -142,7 +147,7 @@ export function deliveryOptions(m: Row) {
     // 带来源的消息不是真人打的字(眼下只有哨兵事件)。标 byBackend 之后它在会话里显示
     // 成「系统代写的一回合」,而不是冒充用户说过这句话 —— 读端据此分开(见 orchestrator
     // 的 byBackend 注释)。它仍然占一个真实回合,因为 agent 确实要为它跑一轮。
-    ...(m.origin ? { byBackend: true } : {}),
+    ...(m.origin && !m.origin.startsWith("review-answer:") ? { byBackend: true } : {}),
   };
 }
 
@@ -163,6 +168,8 @@ export function deliveryOptions(m: Row) {
  * 生产的 `continueTask`，跟 `deliverWhenIdle` 的装法逐字一致。投递逻辑之外不要调它。
  */
 export function monitorWakeGuard(message: Row): (() => Promise<string | null>) | undefined {
+  const review = reviewDeliveryFrom(message);
+  if (review) return () => reviewDeliveryBlocked(review, message.taskId);
   if (monitorIdFromOrigin(message.origin) === null) return undefined;
   return async () => {
     // 投影**故意只有这两个字段**：回归用「谁按 {status, archived} 两字段读 tasks」来精确

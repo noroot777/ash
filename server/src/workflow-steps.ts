@@ -28,11 +28,12 @@ import { isAcceptingTask } from "./acceptance-lock.js";
 import { isMultiUser } from "./auth/mode.js";
 import { previewState } from "./preview-public.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { askAboutFailure } from "./task-question.js";
+import { failureQuestionInput, setTaskQuestion } from "./task-question.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { continueWhenIdle } from "./runs.js";
 import { execFileText as run } from "./exec.js";
+import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 
 /** 一条命令最多跑多久。跑构建、跑测试都算在内，再久基本是卡住了。 */
 const COMMAND_TIMEOUT_MS = 20 * 60_000;
@@ -58,6 +59,8 @@ export interface SegmentResult {
 }
 
 export interface SegmentOptions {
+  reviewAuthority?: ReviewAuthority;
+  onRepair?: (text: string) => Promise<void>;
   /**
    * 跳过「合并并清理」这一站。只有一种场合要用：**用户刚点完验收**，acceptTask 回过头来
    * 跑「点头之后那一段」——那一站正是刚刚做完的事，不能再做一遍。
@@ -92,9 +95,10 @@ async function cwdFor(task: TaskRow, where: "workspace" | "repo"): Promise<strin
   }
 }
 
-async function runCommand(task: TaskRow, step: CommandStep): Promise<SegmentResult> {
+async function runCommand(task: TaskRow, step: CommandStep, authority?: ReviewAuthority): Promise<SegmentResult> {
   const cwd = await cwdFor(task, step.p.where);
   if (!cwd) return { ok: false, failed: step, reason: "找不到这个任务的工作目录" };
+  await withReviewAuthority(authority, async () => {});
   try {
     // 同 preview:用户那条命令行该交给哪个 shell,由 platform.userShellLaunch 收口。
     const launch = userShellLaunch(step.p.cmd);
@@ -118,7 +122,8 @@ async function runCommand(task: TaskRow, step: CommandStep): Promise<SegmentResu
   }
 }
 
-async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input: WorkspacePreviewInput; gen: string }, registered?: string): Promise<SegmentResult> {
+async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input: WorkspacePreviewInput; gen: string }, registered?: string,
+  authority?: ReviewAuthority): Promise<SegmentResult> {
   const gen = workspace?.gen ?? registered;
   const cwd = workspace ? await workspacePreviewDirectory(task.id) : await cwdFor(task, "workspace");
   if (!cwd) return { ok: false, failed: step, reason: "找不到这个任务的工作目录" };
@@ -133,6 +138,7 @@ async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input:
   }
   if (gen && (previewStartCanceled(gen) || isAcceptingTask(task.id))) throw new Error(PREVIEW_CANCELED);
   const result = await startPreview(task.id, step, cwd, gen, {
+    ...(authority ? { beforeStart: () => withReviewAuthority(authority, async () => {}) } : {}),
     services, primaryServiceId: config?.primaryServiceId, proxy: !!workspace || previewProxyEnabled(project?.previewConfig?.proxy, await isMultiUser()),
   });
   if (result.ok) {
@@ -156,7 +162,7 @@ async function runPreview(task: TaskRow, step: PreviewStep, workspace?: { input:
 // 头），和关口画在前面、用户已经在那儿放行过了。早先只写死前一种，于是「干活 → 预览 →
 // 等我点头 → 验证 → 合并」这种线合并时会写出「这条线上没写「等我点头」」——用户几分钟
 // 前刚在那道关口点过放行，看到这句只会以为系统把他那一下弄丢了。
-async function runAccept(task: TaskRow, def: WorkflowDef | null, step: WorkflowStep): Promise<SegmentResult> {
+async function runAccept(task: TaskRow, def: WorkflowDef | null, step: WorkflowStep, authority?: ReviewAuthority): Promise<SegmentResult> {
   const gated = !!def?.steps.some((s) => s.kind === "human");
   await appendTaskTimeline(
     task.id,
@@ -165,7 +171,7 @@ async function runAccept(task: TaskRow, def: WorkflowDef | null, step: WorkflowS
       : "这条线上没写「等我点头」，走到「合并并清理」就自己合了。",
   );
   const { acceptTask } = await import("./task-accept.js");
-  const result = await acceptTask(task.id, "workflow");
+  const result = await acceptTask(task.id, "workflow", { reviewAuthority: authority });
   if (result.accepted) return { ok: true };
   // 这个项目设了验收前置命令：这一站不是没过，是**在等那条命令**。它绿了会带着当初那次
   // 的选择自己再来一遍（accept-gate.ts 的 continueAcceptance），合完之后这条线照常往下走。
@@ -192,12 +198,13 @@ export async function runSegment(
   for (const step of segmentAfter(def, fromStepId)) {
     if (opts.skipStepIds?.has(step.id)) continue; // 崩溃补跑：这一站上次已经真的跑完了
     await opts.onStepStart?.(step.id);
+    await withReviewAuthority(opts.reviewAuthority, async () => {});
     const result = step.kind === "command"
-      ? await runCommand(task, step)
+      ? await runCommand(task, step, opts.reviewAuthority)
       : step.kind === "preview"
-        ? await runPreview(task, step)
+        ? await runPreview(task, step, undefined, undefined, opts.reviewAuthority)
         : step.kind === "accept" && !opts.skipAccept
-          ? await runAccept(task, def, step)
+          ? await runAccept(task, def, step, opts.reviewAuthority)
           : { ok: true } as SegmentResult;
     if (!result.ok) {
       await opts.onStepFailure?.(step.id);
@@ -250,11 +257,13 @@ export async function applyFailPolicy(
   step: WorkflowStep,
   reason: string | null | undefined,
   repairPrompt: (round: number) => string,
+  opts: SegmentOptions = {},
 ): Promise<void> {
+  await withReviewAuthority(opts.reviewAuthority, async () => {});
   const label = STEP_LABELS[step.kind];
   const fail = step.fail;
   if (fail?.mode === "ask") {
-    await askAboutFailure(task.id, label, reason);
+    await setTaskQuestion({ ...failureQuestionInput(task.id, label, reason), reviewAuthority: opts.reviewAuthority });
     await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站；线上写的是「问我一句」，已经把问题挂给你了。`);
     return;
   }
@@ -271,6 +280,12 @@ export async function applyFailPolicy(
     return;
   }
   await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站，按线上写的打回给 AI 重做（第 ${round} 次）。`);
+  if (opts.onRepair) { await opts.onRepair(repairPrompt(round)); return; }
+  if (opts.reviewAuthority) {
+    const { enqueueFinalizationRepair } = await import("./regression-finalization.js");
+    await enqueueFinalizationRepair(opts.reviewAuthority.directory, opts.reviewAuthority.generation, task.id, repairPrompt(round), opts.reviewAuthority.target!);
+    return;
+  }
   // 打回重做要等这个任务当前这一轮退干净：这些失败策略是在结算钩子里做的，那一刻
   // 任务的单飞锁还锁着，直接 continueTask 会被静默挡回、打回就此石沉大海。
   continueWhenIdle(task.id, repairPrompt(round), { system: "wake" }, (error) => appendTaskTimeline(
@@ -302,7 +317,7 @@ export async function advanceSegment(
   // 「在等一件已经开跑的事」不走失败策略（见 SegmentResult.halted）：安静停下，等它自己回来。
   if (result.halted) return false;
   const step = result.failed!;
-  await applyFailPolicy(task, step, result.reason, stepFailPrompt(step, result.reason));
+  await applyFailPolicy(task, step, result.reason, stepFailPrompt(step, result.reason), opts);
   return false;
 }
 

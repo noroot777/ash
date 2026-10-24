@@ -6,6 +6,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { TaskRow } from "./task-store.js";
 import { now } from "./util.js";
+import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 
 export function prepareQuestionRecord(task: TaskRow, answer: string, input: QuestionAnswerInput): QuestionRecord {
   const source: QuestionSource = {
@@ -32,18 +33,23 @@ export function prepareQuestionRecord(task: TaskRow, answer: string, input: Ques
   };
 }
 
-export async function claimQuestionAnswer(task: TaskRow, record: QuestionRecord): Promise<boolean> {
-  const history: QuestionRecord[] = task.questionHistory ? JSON.parse(task.questionHistory) : [];
-  const claimed = await db.update(tasks).set({
-    question: null, questionOptions: null, questionItems: null,
-    questionHistory: JSON.stringify([...history, record]), updatedAt: record.answeredAt,
-  }).where(and(
-    eq(tasks.id, task.id),
-    eq(tasks.question, task.question!),
-    task.questionOptions === null ? isNull(tasks.questionOptions) : eq(tasks.questionOptions, task.questionOptions),
-    task.questionItems === null ? isNull(tasks.questionItems) : eq(tasks.questionItems, task.questionItems),
-    task.questionHistory === null ? isNull(tasks.questionHistory) : eq(tasks.questionHistory, task.questionHistory),
-    task.mode === "team" ? undefined : eq(tasks.status, task.status),
-  )).returning({ id: tasks.id });
-  return claimed.length > 0;
+export async function claimQuestionAnswer(task: TaskRow, record: QuestionRecord,
+  onClaim?: (transaction: ConclusionTransaction) => Promise<void>): Promise<boolean> {
+  return db.transaction(async (transaction) => {
+    const history: QuestionRecord[] = task.questionHistory ? JSON.parse(task.questionHistory) : [];
+    const claimed = await transaction.update(tasks).set({
+      question: null, questionOptions: null, questionItems: null,
+      questionHistory: JSON.stringify([...history, record]), updatedAt: record.answeredAt,
+    }).where(and(
+      eq(tasks.id, task.id),
+      eq(tasks.question, task.question!),
+      task.questionOptions === null ? isNull(tasks.questionOptions) : eq(tasks.questionOptions, task.questionOptions),
+      task.questionItems === null ? isNull(tasks.questionItems) : eq(tasks.questionItems, task.questionItems),
+      task.questionHistory === null ? isNull(tasks.questionHistory) : eq(tasks.questionHistory, task.questionHistory),
+      task.mode === "team" ? undefined : eq(tasks.status, task.status),
+    )).returning({ id: tasks.id });
+    if (!claimed.length) return false;
+    await onClaim?.(transaction);
+    return true;
+  }, { behavior: "immediate" });
 }

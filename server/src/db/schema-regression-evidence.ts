@@ -14,6 +14,18 @@ export type RegressionSettlement = {
   round: number;
   freeRoundId?: string;
   pending: boolean;
+  target?: ReviewTargetIdentity | null;
+};
+
+export type ReviewTargetIdentity = {
+  turnToken: string | null;
+  directionToken: string | null;
+  directionEpoch: number;
+};
+
+export type ReviewContinuation = {
+  phase: "running" | "waiting" | "delivery" | "exited";
+  messageId?: string;
 };
 
 export type RegressionFinalization = {
@@ -23,6 +35,7 @@ export type RegressionFinalization = {
   steps: string[];
   runningStep?: string;
   completed?: boolean;
+  superseded?: boolean;
 };
 
 export const regressionEvidence = sqliteTable("regression_evidence", {
@@ -35,6 +48,8 @@ export const regressionEvidence = sqliteTable("regression_evidence", {
   unavailable: text("unavailable"),
   settlement: text("settlement", { mode: "json" }).$type<RegressionSettlement>(),
   finalization: text("finalization", { mode: "json" }).$type<RegressionFinalization>(),
+  targetIdentity: text("target_identity", { mode: "json" }).$type<ReviewTargetIdentity>(),
+  continuation: text("continuation", { mode: "json" }).$type<ReviewContinuation>(),
 });
 
 export async function ensureRegressionEvidenceSchema(client: Client): Promise<void> {
@@ -49,5 +64,8 @@ export async function ensureRegressionEvidenceSchema(client: Client): Promise<vo
   }
   if (!columns.some((column) => column.name === "finalization")) {
     await client.execute("ALTER TABLE regression_evidence ADD COLUMN finalization TEXT");
+  }
+  for (const column of ["target_identity", "continuation"]) {
+    if (!columns.some((entry) => entry.name === column)) await client.execute(`ALTER TABLE regression_evidence ADD COLUMN ${column} TEXT`);
   }
 }

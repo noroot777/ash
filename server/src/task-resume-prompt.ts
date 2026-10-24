@@ -102,11 +102,11 @@ export type StoredResumePromptReceipt = { text: string; auto: boolean | null; ge
  * 返回凭证（`null` = 没取到：被另一路取走了，或 agent 刚换了新的一段）。**来源列一个字都不碰**
  * —— 归零会让这段文字的来源凭空丢掉，而改写它会动到下一段文字的来源；它的真正去处是凭证。
  */
-export async function takeResumePrompt(taskId: string, expected: string): Promise<ResumePromptReceipt | null> {
+export async function takeResumePrompt(taskId: string, expected: string, generation?: number): Promise<ResumePromptReceipt | null> {
   const cleared = await db
     .update(tasks)
     .set({ resumePrompt: null, updatedAt: now() })
-    .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, expected)))
+    .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, expected), generation === undefined ? undefined : eq(tasks.resumePromptGeneration, generation)))
     // RETURNING 给的是写后的行,而这一笔不碰这两列 —— 所以它们就是取走那一刻的事实。
     .returning({ auto: tasks.resumePromptAuto, generation: tasks.resumePromptGeneration });
   const row = cleared.at(0);
@@ -248,13 +248,23 @@ async function writeInto(
   patch: Parameters<ReturnType<typeof db.update<typeof tasks>>["set"]>[0],
   where: (SQL | undefined)[] = [],
 ): Promise<boolean> {
-  const restored = await db
-    .update(tasks)
-    .set(patch)
-    // **空位条件由调用方给**：填空位的那两种自己带 `isNull`，而真人暂停就是要盖掉已经挂着
-    // 的那一段（见 `occupyResumePrompt`）。
-    .where(and(eq(tasks.id, taskId), ...where))
-    .returning({ id: tasks.id });
+  const restored = await db.transaction(async (transaction) => {
+    const restored = await transaction.update(tasks)
+      .set(patch)
+      // **空位条件由调用方给**：填空位的那两种自己带 `isNull`，而真人暂停就是要盖掉已经挂着
+      // 的那一段（见 `occupyResumePrompt`）。
+      .where(and(eq(tasks.id, taskId), ...where))
+      .returning({ id: tasks.id });
+    if (restored.length) {
+      const { activeReviewEvidence } = await import("./review-continuation.js");
+      const { regressionEvidence } = await import("./db/schema.js");
+      const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
+      const state = await activeReviewEvidence(transaction, task);
+      if (state && !state.settlement && state.continuation?.phase !== "delivery") await transaction.update(regressionEvidence).set({ continuation: { phase: "waiting" } })
+        .where(eq(regressionEvidence.directory, state.directory));
+    }
+    return restored;
+  }, { behavior: "immediate" });
   if (!restored.length) return false;
   await announceResumePrompt(taskId);
   return true;

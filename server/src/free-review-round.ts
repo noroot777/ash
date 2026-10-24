@@ -126,6 +126,7 @@ export async function launchReviewRound(
   // 且必须关掉 freshSession —— 第 1 轮崩了的话它本来会新开一条空会话。
   opts: { resumeSessionId?: string; retry?: boolean } = {},
 ): Promise<{ resumed: boolean }> {
+  await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), run.targetKind === "accepted_merge", task);
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   let cwd: string | undefined;
   // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，

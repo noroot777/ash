@@ -6,6 +6,7 @@ import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { pendingMessageRow, publishPendingMessages } from "./pending-messages.js";
 import { isTurnClaimed } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { assertReviewAuthority, ReviewSuperseded, settlementAuthority } from "./review-ownership.js";
 
 const draining = new Set<string>();
 
@@ -35,6 +36,7 @@ export async function checkpointFinalizationWorkflow(directory: string, generati
   await db.transaction(async (transaction) => {
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
     if (!state?.finalization || state.generation !== generation) throw new Error("审查收尾代次已变化");
+    await assertReviewAuthority(transaction, settlementAuthority(state), phase !== "started");
     await transaction.update(regressionEvidence).set({ finalization: {
       ...state.finalization, runningStep: phase === "started" ? stepId : undefined,
       steps: phase === "done" ? [...new Set([...state.finalization.steps, stepId])] : state.finalization.steps,
@@ -52,11 +54,10 @@ export async function enqueueFinalizationRepair(directory: string, generation: s
   write?: (transaction: ConclusionTransaction) => Promise<void>): Promise<void> {
   const message = pendingMessageRow({ taskId, text, origin: `review-settlement:${generation}` });
   await commitFinalizationStep(directory, generation, "repair", async (transaction) => {
+    const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0]!;
+    await assertReviewAuthority(transaction, settlementAuthority(state));
     const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
-    if (!task || task.archived || task.directionEpoch !== guard.directionEpoch
-      || task.activeTurnToken !== guard.turnToken || task.activeDirectionToken !== guard.directionToken) {
-      throw new Error("审查修复投递所属回合或方向已变化");
-    }
+    if (!task || task.directionEpoch !== guard.directionEpoch) throw new ReviewSuperseded();
     await write?.(transaction);
     await transaction.insert(scheduledMessages).values({ ...message, id: `review-repair-${generation}` }).onConflictDoNothing();
   });
@@ -69,10 +70,21 @@ export async function drainRegressionFinalization(directory: string): Promise<vo
   try {
     const state = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
     if (!state?.finalization || state.finalization.completed) return;
-    if (state.finalization.kind === "preset") {
-      if (!await (await import("./review-finalization.js")).finalizePresetReview(state)) return;
-    } else {
-      await (await import("./free-review-finalization.js")).finalizeFreeReview(state);
+    try {
+      if (state.finalization.kind === "preset") {
+        if (!await (await import("./review-finalization.js")).finalizePresetReview(state)) return;
+      } else {
+        await (await import("./free-review-finalization.js")).finalizeFreeReview(state);
+      }
+    } catch (error) {
+      if (!(error instanceof ReviewSuperseded)) throw error;
+      await db.transaction(async (transaction) => {
+        const current = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
+        if (current?.generation === state.generation && current.finalization) await transaction.update(regressionEvidence)
+          .set({ finalization: { ...current.finalization, completed: true, superseded: true } })
+          .where(eq(regressionEvidence.directory, directory));
+      }, { behavior: "immediate" });
+      return;
     }
     const current = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
     if (current?.generation === state.generation && current.finalization) await db.update(regressionEvidence)

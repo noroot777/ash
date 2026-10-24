@@ -12,6 +12,7 @@ import type { IndependentVerificationBasis } from "./db/schema-regression-eviden
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir, safeRunDirectory } from "./review-evidence.js";
 import { isTurnClaimed } from "./runs.js";
+import { reviewTargetIdentity } from "./review-ownership.js";
 
 async function manifestPermission(directory: string): Promise<"revoked" | "none"> {
   if (!(await safeRunDirectory(directory))) {
@@ -37,7 +38,7 @@ async function manifestPermission(directory: string): Promise<"revoked" | "none"
   }
 }
 
-export async function evidenceState(taskId: string, directory: string, acceptedMerge: boolean) {
+export async function evidenceState(taskId: string, directory: string, acceptedMerge: boolean, initialTarget?: typeof tasks.$inferSelect) {
   const existing = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
   if (existing) return existing;
   return db.transaction(async (transaction) => {
@@ -45,6 +46,7 @@ export async function evidenceState(taskId: string, directory: string, acceptedM
       .where(eq(regressionChecks.taskId, taskId)).limit(1);
     const owners = [taskId, ...(await transaction.select({ id: tasks.id }).from(tasks).where(eq(tasks.reviewOf, taskId))).map((task) => task.id)];
     await transaction.insert(regressionEvidence).values({ directory, taskId, generation: randomUUID(), revoked: history.length > 0,
+      targetIdentity: initialTarget ? reviewTargetIdentity(initialTarget) : null, continuation: { phase: "running" },
       excludedMonitors: (await transaction.select({ id: monitors.id }).from(monitors).where(inArray(monitors.taskId, owners))).map((monitor) => monitor.id),
     }).onConflictDoNothing();
     return (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0]!;
@@ -52,9 +54,11 @@ export async function evidenceState(taskId: string, directory: string, acceptedM
 }
 
 export async function restartRegressionEvidence(taskId: string, directory: string, transaction: ConclusionTransaction): Promise<void> {
+  const target = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
   const owners = [taskId, ...(await transaction.select({ id: tasks.id }).from(tasks)
     .where(eq(tasks.reviewOf, taskId))).map((task) => task.id)];
   await transaction.update(regressionEvidence).set({ generation: randomUUID(), acceptedBasis: null, settlement: null, finalization: null,
+    targetIdentity: target ? reviewTargetIdentity(target) : null, continuation: { phase: "running" },
     excludedMonitors: (await transaction.select({ id: monitors.id }).from(monitors)
       .where(inArray(monitors.taskId, owners))).map((monitor) => monitor.id),
   }).where(eq(regressionEvidence.directory, directory));

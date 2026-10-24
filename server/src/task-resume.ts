@@ -8,6 +8,7 @@ import { continueTask, runTask, type ResumeReason } from "./orchestrator.js";
 import { handDuePendingMessageToRun } from "./pending-messages.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
+import { activeReviewEvidence } from "./review-continuation.js";
 import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
@@ -41,6 +42,15 @@ export async function resumeOrRunTask(
   const rp = task.resumePrompt;
   if (rp) {
     const reviewerRoute = await freeReviewResumeOptions(taskId);
+    if (task.verifyRound || task.reviewOf || reviewerRoute) {
+      const evidence = await db.transaction((transaction) => activeReviewEvidence(transaction, task), { behavior: "immediate" });
+      await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
+        actingUserId: acting, ...(reviewerRoute ?? {}),
+        reviewDelivery: { kind: "checkpoint", generation: evidence?.generation ?? null, text: rp, promptGeneration: task.resumePromptGeneration },
+        onDelivered: async () => { await takeResumePrompt(taskId, rp, task.resumePromptGeneration); },
+      });
+      return;
+    }
     // 取走这段 checkpoint 指令要 CAS(`resume_prompt = rp`)：读到 rp 之后到清空之间隔着
     // 至少一个 await，两路触发(HTTP /run 与队列推进)会双双读到同一段、双双清空、于是
     // 一路送出、另一路把它当「没送出去」回填，下次触发再送一遍(审查实测:同一段指令投递两次)。

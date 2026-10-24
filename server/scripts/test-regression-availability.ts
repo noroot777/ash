@@ -8,7 +8,7 @@ import { makeStep } from "@ash/shared/workflow";
 import { db, inTurnCaller, makeTask, runs, schema, startMonitor, tasks, teardown } from "./monitors-fixture.js";
 import { setupRegression } from "./regression-fixture.js";
 
-const { refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
+const { evidenceState, refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
 const { mountTaskStageRoutes } = await import("../src/task-stage.js");
 const { handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
 const { handleTaskSettlement } = await import("../src/review.js");
@@ -35,6 +35,7 @@ try {
     runs.releaseTurn(taskId);
     assert(runs.claimTurn(taskId, "reviewer", { run: runId, round: 1 }));
     const directory = freeReviewEvidenceDir(taskId, runId, 1);
+    await evidenceState(taskId, directory, targetKind === "accepted_merge", (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
     mkdirSync(directory, { recursive: true });
     const initial = await refreshRegressionEvidence(taskId, directory, targetKind === "accepted_merge");
     assert.equal(initial.revoked, false);
@@ -69,6 +70,7 @@ try {
   await db.update(tasks).set({ workflowMode: "preset", verifyRound: 1, stage: "verifying", workflowAt: "verify",
     workflow: JSON.stringify({ workspace: "shared", steps: [makeStep("run", "run"), makeStep("verify", "verify")] }),
   }).where(eq(tasks.id, taskId));
+  await evidenceState(taskId, evidenceDir, false, (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
   await refreshRegressionEvidence(taskId, evidenceDir);
   independentlyVerify();
   writeFileSync(join(evidenceDir, "report.md"), "独立验证通过。\n");

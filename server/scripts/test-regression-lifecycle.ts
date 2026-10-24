@@ -17,7 +17,7 @@ const { mountTaskStageRoutes } = await import("../src/task-stage.js");
 const { handleTaskSettlement } = await import("../src/review.js");
 const { replayUndeliveredMcpCalls } = await import("../src/mcp-handoff.js");
 const { detachedPathsFor } = await import("../src/executors/detached.js");
-const { refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
+const { evidenceState, refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
 
 try {
   const { taskId, task, repo, evidenceDir, manifest, run, wait } = await setupRegression();
@@ -132,6 +132,7 @@ try {
     workflow: JSON.stringify({ workspace: "shared", steps: [makeStep("run", "run"), makeStep("verify", "verify")] }),
   }).where(eq(tasks.id, taskId));
   const unsettledDir = join(evidenceDir, "..", "round-3");
+  await evidenceState(taskId, unsettledDir, false, (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
   assert.equal((await stage()).status, 409, "首次接入的旧轮次即使缺清单，也不能放行不明依据");
   stale(unsettledDir);
   await handleTaskSettlement(taskId, "done", false, true);
@@ -147,6 +148,7 @@ try {
   await db.insert(schema.freeReviewRounds).values({ id: "proof-round", runId: "proof-review", round: 1, status: "reviewing", startedAt: now });
   const reviewRun = (await db.select().from(schema.freeReviewRuns).where(eq(schema.freeReviewRuns.id, "proof-review")))[0]!;
   const freeDir = freeReviewEvidenceDir(taskId, reviewRun.id, 1);
+  await evidenceState(taskId, freeDir, false, (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
   await freeReviewPrompt(task, reviewRun, 1, repo);
   stale(freeDir);
   assert.match(await freeReviewReminder(taskId), /regression-evidence\.json/);
@@ -179,6 +181,7 @@ try {
   runs.releaseTurn(taskId);
   assert(runs.claimTurn(taskId, "reviewer", { run: reviewRun.id, round: 2 }));
   const nextDir = freeReviewEvidenceDir(taskId, reviewRun.id, 2);
+  await evidenceState(taskId, nextDir, false, (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
   await refreshRegressionEvidence(taskId, nextDir);
   mkdirSync(nextDir, { recursive: true });
   writeFileSync(join(nextDir, "report.md"), "真实独立验证已通过，不依赖旧回归。\n");

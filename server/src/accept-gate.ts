@@ -40,7 +40,8 @@ type GateRow = typeof acceptGateRuns.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
 
 /** 用户在确认框里做的那几个选择：门禁绿了之后要**原样**替他接着做完。 */
-export type AcceptGateChoices = { by: AcceptBy; commit?: boolean; confirmUnverified?: boolean };
+export type AcceptGateChoices = { by: AcceptBy; commit?: boolean; confirmUnverified?: boolean;
+  reviewAuthority?: import("./review-ownership.js").ReviewAuthority };
 
 /** 这一按对门禁的额外指令。undefined = 照常（有就复用、没有就跑）。 */
 export type AcceptGateIntent = "skip" | "rerun";
@@ -267,6 +268,10 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
   // 任务永远停在「正在跑」（审查前自测复现）。
   let started: { pid: number; startedAt: string | null };
   try {
+    if (plan.choices.reviewAuthority) {
+      const { withReviewAuthority } = await import("./review-ownership.js");
+      await withReviewAuthority(plan.choices.reviewAuthority, async () => {});
+    }
     started = spawnAcceptGate({
       command: plan.command,
       cwd: plan.cwd,
@@ -348,6 +353,7 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     commit: choices.commit,
     confirmUnverified: choices.confirmUnverified,
     acceptGatePassedRunId: row.id,
+    reviewAuthority: choices.reviewAuthority,
   }).catch((error) => ({ accepted: false as const, error: error instanceof Error ? error.message : String(error) }));
   if (!result.accepted) {
     const reason = "reason" in result ? result.reason : null;
@@ -373,7 +379,8 @@ async function continueAcceptance(row: GateRow): Promise<void> {
 function parseChoices(raw: string | null): AcceptGateChoices {
   try {
     const parsed = JSON.parse(raw ?? "{}") as AcceptGateChoices;
-    return { by: parsed.by === "workflow" ? "workflow" : "human", commit: parsed.commit, confirmUnverified: parsed.confirmUnverified };
+    return { by: parsed.by === "workflow" ? "workflow" : "human", commit: parsed.commit,
+      confirmUnverified: parsed.confirmUnverified, reviewAuthority: parsed.reviewAuthority };
   } catch { return { by: "human" }; }
 }
 
@@ -391,6 +398,7 @@ const FAILURE_PROMPT = (p: { command: string; summary: string; logPath: string; 
   `不要自己去动目标分支，也不要绕过这条命令 —— 它是用户给这个项目定的放行条件。`;
 
 async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = false): Promise<void> {
+  const authority = !again ? parseChoices(row.acceptOptions).reviewAuthority : undefined;
   const prompt = FAILURE_PROMPT({
     command: row.command, summary: summarizeAcceptGate(view), logPath: row.logPath,
     tail: view.logTail, cwd: row.cwd,
@@ -404,7 +412,11 @@ async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = fa
       again ? "这是你在验收台上手动再交一次。" : ""}修完重新点验收即可，验收会自动再跑一遍。`,
   );
   // byBackend：占真人回合，但字是后端写的（同验收冲突交接）。
-  continueWhenIdle(row.taskId, prompt, { byBackend: true }, async (why) => {
+  const reviewDelivery = authority ? { kind: "repair" as const, generation: authority.generation, messageId: row.id } : undefined;
+  const { reviewDeliveryBlocked } = await import("./review-ownership.js");
+  continueWhenIdle(row.taskId, prompt, { byBackend: true, reviewDelivery,
+    ...(reviewDelivery ? { wakeGuard: () => reviewDeliveryBlocked(reviewDelivery, row.taskId) } : {}),
+  }, async (why) => {
     await markHandoff(row.id, { at: now(), error: why });
     await appendTaskTimeline(
       row.taskId,

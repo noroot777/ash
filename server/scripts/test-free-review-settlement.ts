@@ -20,7 +20,8 @@ try {
   const { consumeSingleRun } = await import("../src/single-run.js");
   const { pendingMessageRow } = await import("../src/pending-messages.js");
   const { freeWorkflowState, handleFreeWorkflowSettlement, reportFreeReviewConclusion, reserveFreeReview } = await import("../src/free-workflow.js");
-  const { freeReviewReportPath } = await import("../src/free-review-files.js");
+  const { freeReviewEvidenceDir, freeReviewReportPath } = await import("../src/free-review-files.js");
+  const { evidenceState } = await import("../src/regression-evidence-lifecycle.js");
   const { claimTurn, markStopped } = await import("../src/runs.js");
   const { confirmDone } = await import("../src/task-confirmation.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
@@ -101,6 +102,7 @@ try {
       await db.insert(freeReviewRounds).values({
         id: `${runId}-round`, runId, round: 1, status: "reviewing", startedAt: at,
       });
+      await evidenceState(id, freeReviewEvidenceDir(id, runId, 1), false, (await db.select().from(tasks).where(eq(tasks.id, id)))[0]!);
       if (options.reviewConclusion) {
         const report = freeReviewReportPath(id, runId, 1);
         mkdirSync(dirname(report), { recursive: true });
