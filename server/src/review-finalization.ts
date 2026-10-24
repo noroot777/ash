@@ -22,6 +22,7 @@ const STUCK_AT_VERIFY = "线停在「自动验证」这一站等你：看过验�
 export async function finalizePresetReview(state: typeof regressionEvidence.$inferSelect): Promise<boolean> {
   const plan = state.finalization!;
   const authority = settlementAuthority(state);
+  const expiredQuestionNotice = authority.target ? "" : "原提问随本轮终止失效。";
   const { target, round, reviewTaskId, station, stationRound, outcome, conclusion, frozen, stageChanged } = JSON.parse(plan.payload) as {
     target: TaskRow; round: number; reviewTaskId: string | null; station: string | null; stationRound: number;
     outcome: Settlement; conclusion: ReviewConclusion; frozen: boolean; stageChanged: boolean;
@@ -34,7 +35,7 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
   });
   if (frozen) {
     await step("frozen", () => appendFinalizationTimeline(target.id,
-      `第 ${round} 轮验证结束时任务已归档或验收，结论不再覆盖冻结阶段（这一轮${outcome === "done" ? "正常收尾" : "未正常收尾"}）。`, `${state.generation}:frozen`));
+      `第 ${round} 轮验证结束时任务已归档或验收，结论不再覆盖冻结阶段（这一轮${outcome === "done" ? "正常收尾" : "未正常收尾"}）。${expiredQuestionNotice}`, `${state.generation}:frozen`));
     return true;
   }
   try {
@@ -44,7 +45,7 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
   catch (error) {
     if (!(error instanceof ReviewSuperseded)) throw error;
     await step("unapplied", () => appendFinalizationTimeline(target.id,
-      `第 ${round} 轮验证已终止并完成轮次记账；${plan.superseded ? "原轮次已被替换" : authority.target ? "原目标方向已变化" : "历史记录缺少原目标方向身份"}，本轮结论未应用，未推进工作流或投递修复。请重新派发验证。`,
+      `第 ${round} 轮验证已终止并完成轮次记账；${plan.superseded ? "原轮次已被替换" : authority.target ? "原目标方向已变化" : "历史记录缺少原目标方向身份"}，本轮结论未应用，未推进工作流或投递修复。${expiredQuestionNotice}请重新派发验证。`,
       `${state.generation}:unapplied`));
     throw error;
   }

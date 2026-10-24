@@ -62,6 +62,7 @@ export async function retireHistoricalReview(expected: TaskRow, source: TurnSour
         .where(eq(regressionEvidence.directory, scope.directory));
       const previous = taskStartStatus(current);
       const updated = await transaction.update(tasks).set({
+        question: null, questionOptions: null, questionItems: null,
         ...(current.resumePrompt ? resumePromptVoidPatch() : {}),
         ...(current.reviewOf ? { status: settlement.outcome }
           : current.status === "queued" ? { status: previous === "queued" || previous === "running" ? "paused" : previous } : {}),

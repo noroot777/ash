@@ -118,13 +118,23 @@ try {
   for (const mode of ["preset", "legacy", "free", "accepted_merge"] as const) {
     const review = await historical(mode, "identity");
     runs.releaseTurn(review.ownerTaskId);
-    await db.update(tasks).set({ status: "paused", question: "Historical reviewer question" }).where(eq(tasks.id, review.ownerTaskId));
+    await db.update(tasks).set({ status: "paused", question: "Historical reviewer question",
+      questionOptions: JSON.stringify(["Original option"]),
+      questionItems: JSON.stringify([{ question: "Original item", options: ["Original option"] }]),
+    }).where(eq(tasks.id, review.ownerTaskId));
     await occupyResumePrompt(review.ownerTaskId, "Historical checkpoint", false);
+    const before = await row(review.ownerTaskId);
     await reconcileRegressionSettlements();
+    const after = await row(review.ownerTaskId);
     assert.equal((await review.state()).settlement?.pending, false);
-    assert.equal((await row(review.ownerTaskId)).resumePrompt, null);
+    assert.equal(after.resumePrompt, null);
+    assert.equal(after.question, null);
+    assert.equal(after.questionOptions, null);
+    assert.equal(after.questionItems, null);
+    assert.equal(after.questionHistory, before.questionHistory);
     assert.equal((await row(review.taskId)).verifyRound, null);
     assert.match(review.transcript(), /本轮结论未应用/);
+    assert.match(review.transcript(), /原提问随本轮终止失效/);
     console.log(`✓ ${mode}: recovery retires an unprovable historical wait instead of preserving it forever`);
   }
 
@@ -140,7 +150,9 @@ try {
     assert.equal((await review.state()).settlement?.outcome, "done", "retirement preserves the observed exit fact");
     assert.equal((await review.state()).settlement?.pending, false);
     assert.equal((await row(review.ownerTaskId)).resumePrompt, null);
+    assert.equal((await row(review.ownerTaskId)).question, null);
     assert.equal((await row(review.taskId)).verifyRound, null);
+    assert.match(review.transcript(), /原提问随本轮终止失效/);
     console.log(`✓ ${mode}: a pending historical receipt wins over obsolete wait fields and retains its real exit`);
   }
 
@@ -159,6 +171,20 @@ try {
       await reconcileRegressionSettlements();
       assert.equal((await review.state()).settlement?.pending, false);
       assert.equal((await row(review.taskId)).verifyRound, null);
+      const retired = await row(review.ownerTaskId);
+      const lateAnswer = await api.request(`/tasks/${review.ownerTaskId}/answer`, { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ answer: "Answer the obsolete review question" }) });
+      assert.equal(lateAnswer.status, 409);
+      assert.match((await lateAnswer.json()).error, /没有待答复的问题/);
+      assert.deepEqual(await row(review.ownerTaskId), retired, "an expired answer cannot change or resume the implementation task");
+      assert.equal((await db.select().from(schema.scheduledMessages)
+        .where(eq(schema.scheduledMessages.taskId, review.ownerTaskId))).length, 0);
+      if (mode === "preset") {
+        const redispatched = await startVerifyRound(review.taskId);
+        assert.equal(redispatched.round, 2, "a retired historical question cannot block immediate re-dispatch");
+        await until("re-dispatched historical question round settles under the test CLI guard", async () =>
+          !runs.isTurnClaimed(review.taskId) && (await row(review.taskId)).verifyRound === null);
+      }
       console.log(`✓ ${mode} ${missing}: HTTP answer cannot escape historical review ownership into an ordinary turn`);
     }
   }
@@ -196,12 +222,14 @@ try {
   await occupyResumePrompt(newerPrompt.taskId, "Same checkpoint text", false);
   const oldPrompt = await row(newerPrompt.taskId);
   await occupyResumePrompt(newerPrompt.taskId, "Same checkpoint text", false);
+  await db.update(tasks).set({ question: "New checkpoint question" }).where(eq(tasks.id, newerPrompt.taskId));
   assert.equal(await retireHistoricalReview(oldPrompt), false);
   assert.equal(await continueTask(newerPrompt.taskId, "Same checkpoint text", { reviewDelivery: {
     kind: "checkpoint", generation: newerPrompt.basis.generation, text: "Same checkpoint text", promptGeneration: oldPrompt.resumePromptGeneration,
   } }), false);
   assert.equal((await row(newerPrompt.taskId)).resumePrompt, "Same checkpoint text");
   assert.equal((await row(newerPrompt.taskId)).resumePromptGeneration, oldPrompt.resumePromptGeneration + 1);
+  assert.equal((await row(newerPrompt.taskId)).question, "New checkpoint question");
   assert.equal((await newerPrompt.state()).settlement, null);
   console.log("✓ a stale checkpoint generation cannot retire or clear a newer same-text checkpoint");
 
@@ -219,7 +247,10 @@ try {
 
   const atomic = await historical("preset", "identity");
   runs.releaseTurn(atomic.ownerTaskId);
-  await db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, atomic.taskId));
+  await db.update(tasks).set({ status: "queued", question: "Historical question",
+    questionOptions: JSON.stringify(["Original option"]),
+    questionItems: JSON.stringify([{ question: "Original item", options: ["Original option"] }]),
+  }).where(eq(tasks.id, atomic.taskId));
   await occupyResumePrompt(atomic.taskId, "Historical checkpoint", false);
   const before = await row(atomic.taskId);
   await dbClient.execute(`CREATE TEMP TRIGGER history_fault BEFORE UPDATE OF resume_prompt ON tasks
@@ -228,8 +259,14 @@ try {
   finally { await dbClient.execute("DROP TRIGGER history_fault"); }
   assert.equal((await row(atomic.taskId)).resumePrompt, before.resumePrompt);
   assert.equal((await row(atomic.taskId)).resumePromptGeneration, before.resumePromptGeneration);
+  assert.equal((await row(atomic.taskId)).question, before.question);
+  assert.equal((await row(atomic.taskId)).questionOptions, before.questionOptions);
+  assert.equal((await row(atomic.taskId)).questionItems, before.questionItems);
   assert.equal((await atomic.state()).settlement, null);
   await resumeOrRunTask(atomic.taskId, { reason: "queue" });
+  assert.equal((await row(atomic.taskId)).question, null);
+  assert.equal((await row(atomic.taskId)).questionOptions, null);
+  assert.equal((await row(atomic.taskId)).questionItems, null);
   assert.equal((await row(atomic.taskId)).verifyRound, null);
   console.log("✓ failed historical termination rolls back its checkpoint and receipt together, then retries");
 
