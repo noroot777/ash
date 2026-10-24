@@ -13,7 +13,7 @@ const message = (index) => {
   const time = new Date(Date.UTC(2026, 9, 24, 10, 0, index)).toISOString();
   return {
     id: `msg-${index}`, taskId: "task-a", text: kind === 0 || kind === 4
-      ? `【哨兵事件】检查-${index}\nREGRESSION_FINISHED exitCode=${kind === 4 ? 1 : 0} monitor=${index}`
+      ? `【哨兵事件】检查-${index}（monitorId=monitor-${index}）\nREGRESSION_FINISHED exitCode=${kind === 4 ? 1 : 0} monitor=${index}`
       : `输入-${index}\n${"保留完整的正文与排队顺序。".repeat(8)}<img src=x onerror=alert(1)>`,
     attachments: kind === 1 ? ["/tmp/brief.txt"] : [], agent: "codex", executorId: null, model: null, reasoningEffort: null,
     sessionRole: kind === 2 ? "reviewer" : null, origin: kind === 0 || kind === 4 ? `monitor:${index}` : null,
@@ -76,6 +76,7 @@ try {
   await page.getByRole("button", { name: "展开全部 10 条" }).waitFor();
   assert.equal(await card.count(), 1);
   assert.equal(await card.locator(".scheduled-message-row").count(), 2);
+  assert.doesNotMatch(await card.locator(".scheduled-message-previews").innerText(), /monitorId=|REGRESSION_FINISHED|@codex/);
   assert.match(await card.innerText(), /我的消息 4 · 哨兵 4 · 审查答复 2 · 含 2 条定时/);
   const collapsed = await geometry();
   await expand();
@@ -155,7 +156,7 @@ try {
   assert.match(await list.getByRole("button", { name: /引导会话/ }).getAttribute("aria-label"), /输入-6/);
   for (const count of [0, 1, 2, 3]) {
     await reload(Array.from({ length: count }, (_, index) => message(index)));
-    assert.equal(await card.count(), count > 2 ? 1 : 0);
+    assert.equal(await card.count(), count > 0 ? 1 : 0, "所有非空数量均只有一张卡片");
     assert.equal(await page.locator(".scheduled-message-row").count(), Math.min(count, 2));
   }
   await expand();
@@ -164,7 +165,8 @@ try {
   const managedDetails = page.locator('details[data-message-id="msg-2"]');
   await managedDetails.locator("summary").click();
   await reload([message(1), managed]);
-  assert.equal(await list.count(), 0, "回到两条时不留下空展开区");
+  assert.equal(await list.count(), 1, "回到两条时保持同一卡片展开");
+  assert.equal(await card.count(), 1);
   assert.equal(await managedDetails.getAttribute("open"), "", "三条降两条保留已打开的正文");
   assert.equal(await managedDetails.getByText("/tmp/review-notes.txt", { exact: true }).isVisible(), true);
   assert.match(await managedDetails.locator(".scheduled-message-body").innerText(), /保留完整的正文与排队顺序/);
@@ -172,13 +174,14 @@ try {
   assert.equal(await managedDetails.getAttribute("open"), "", "只剩一条审查答复仍可读全文");
   assert.equal(await page.getByRole("button", { name: /撤回|引导会话|取消哨兵事件/ }).count(), 0, "查看审查答复不扩大操作权限");
   await page.reload();
+  await expand();
   await managedDetails.locator("summary").click();
   assert.equal(await managedDetails.getByText("/tmp/review-notes.txt", { exact: true }).isVisible(), true, "刷新后一条消息仍有全文入口");
   await reload([message(0), message(1)]);
-  for (const summary of await page.locator(".scheduled-message-single summary").all()) await summary.click();
-  assert.equal(await page.locator(".scheduled-message-single details[open]").count(), 2, "两条中的哨兵和个人输入均可完整阅读");
+  for (const summary of await list.locator("summary").all()) await summary.click();
+  assert.equal(await list.locator("details[open]").count(), 2, "两条中的哨兵和个人输入均可完整阅读");
   await reload(Array.from({ length: 10 }, (_, index) => message(index)));
-  await expand();
+  assert.equal(await list.isVisible(), true, "消息数量增加时保持同一卡片展开");
   await filter("审查答复").click();
   await reload(pending.filter((item) => !item.sessionRole));
   await page.waitForFunction(() => document.querySelector('.scheduled-message-filters button[aria-pressed="true"]')?.textContent?.startsWith("全部"));

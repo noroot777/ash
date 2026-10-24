@@ -13,6 +13,7 @@ import {
   scheduledMessageCounts,
   scheduledMessageExitCode,
   scheduledMessageMatches,
+  scheduledMessageSummary,
 } from "../src/components/scheduledMessagePresentation.ts";
 import {
   attachmentsFromPaths,
@@ -47,8 +48,10 @@ assert.equal(renderTray([]), "", "空队列不占回复区");
 for (const count of [1, 2]) {
   const markup = renderTray(samples.slice(0, count));
   assert.equal((markup.match(/class="scheduled-message-row"/g) ?? []).length, count);
-  assert.equal((markup.match(/<summary>查看完整输入<\/summary>/g) ?? []).length, count);
-  assert.doesNotMatch(markup, /class="scheduled-message-card/);
+  assert.equal((markup.match(/class="scheduled-message-card/g) ?? []).length, 1, "一两条也统一在同一张卡片中");
+  assert.equal((markup.match(/class="scheduled-message-inspect"/g) ?? []).length, count, "每条预览都有完整输入入口");
+  assert.match(markup, new RegExp(`展开全部 ${count} 条`));
+  assert.doesNotMatch(markup, /scheduled-message-single|另有 [0-] 条/);
 }
 const folded = renderTray(samples);
 assert.equal((folded.match(/class="scheduled-message-card/g) ?? []).length, 1);
@@ -56,11 +59,14 @@ assert.equal((folded.match(/class="scheduled-message-row"/g) ?? []).length, 2);
 assert.match(folded, /展开全部 3 条/);
 assert.match(folded, /另有 1 条已收起/);
 assert.doesNotMatch(folded, /输入-2|scheduled-message-popover/);
-assert.match(renderTray([{ ...samples[0], sessionRole: "reviewer", attachments: ["/tmp/review-notes.txt"] }]), /review-notes.txt/);
+assert.match(renderTray([{ ...samples[0], sessionRole: "reviewer", attachments: ["/tmp/review-notes.txt"] }]), /查看完整输入：输入-0/);
 const equalTime = [samples[1], { ...samples[0], id: "z", sendAt: samples[1].sendAt }, { ...samples[0], sendAt: samples[1].sendAt }];
 assert.deepEqual(bySendTime(equalTime).map((message) => message.id), ["sample-0", "z", "sample-1"]);
 assert.equal(equalTime[0], samples[1], "展示排序不得改动消息原数组");
 const monitor = (text: string): ScheduledMessage => ({ ...samples[0], origin: "monitor:test", sessionRole: "reviewer", text });
+assert.equal(scheduledMessageSummary(monitor("【哨兵事件】完整行为检查（monitorId=test） review-transfer: EXIT=0\n日志正文")), "完整行为检查");
+assert.equal(scheduledMessageSummary(monitor("【哨兵结束】完整行为检查，退出码 1。命令自己跑完了。")), "完整行为检查");
+assert.equal(scheduledMessageSummary({ ...samples[0], text: "保留用户写的 (monitorId=test)\n第二行" }), "保留用户写的 (monitorId=test) 第二行");
 assert.equal(scheduledMessageExitCode(monitor("REGRESSION_FINISHED exitCode=0 monitor=test")), 0);
 assert.equal(scheduledMessageExitCode(monitor("【哨兵事件】检查\nREGRESSION_FINISHED exitCode=1 monitor=test")), 1);
 assert.equal(scheduledMessageExitCode(monitor("【哨兵结束】检查（monitorId=test），退出码 -1。异常结束")), -1);
@@ -253,7 +259,7 @@ assert.deepEqual(
   const monitorMarkup = rows.find((chunk) => chunk.includes("哨兵事件")) ?? "";
   const mineMarkup = rows.find((chunk) => chunk.includes("我自己写的")) ?? "";
   assert.ok(monitorMarkup, "哨兵事件行应被渲染出来");
-  assert.match(monitorMarkup, /哨兵事件 · 任务空闲后唤醒/, "哨兵行要标明这条是谁推的");
+  assert.match(monitorMarkup, /<em>哨兵<\/em>/, "哨兵行要标明这条是谁推的");
   assert.match(monitorMarkup, /取消哨兵事件[\s\S]*这一次唤醒/, "哨兵行要给「取消这次唤醒」");
   assert.doesNotMatch(monitorMarkup, /放回输入框/, "哨兵事件不是用户写的，不得提供撤回");
   assert.doesNotMatch(monitorMarkup, /scheduled-message-guide/, "哨兵事件不得出现引导会话入口");
