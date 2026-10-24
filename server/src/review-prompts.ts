@@ -22,6 +22,8 @@ import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { verifyHistorySection } from "./review-history.js";
 import type { Workspace } from "./git.js";
+import { REVIEW_VALIDATION_REQUIREMENT } from "@ash/shared/free-workflow";
+import { regressionEvidenceReference } from "./regression-checks.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -36,7 +38,7 @@ function requiredChecks(target: TaskRow, at: string | null | undefined): string 
   const checks = workflowPolicy(taskWorkflowDef(target.workflow), at)?.verify?.p.checks ?? [];
   return checks.length
     ? `这条线上勾的验证项必须逐项过：${checks.map((c) => VERIFY_CHECK_LABELS[c]).join("、")}。` +
-      `发现别的风险照样报，但这几项不能跳。\n\n`
+      `发现别的风险照样报，但这几项不能跳；仅「回归测试」可引用本轮后端清单批准的结果，浏览器真实点检和其它勾选项必须实际执行。\n\n`
     : "";
 }
 
@@ -44,10 +46,9 @@ function requiredChecks(target: TaskRow, at: string | null | undefined): string 
 //
 // 截图是**按需**的（用户 2026-08-06 拍板）：一张没人看的截图不叫证据，只是给验收的人
 // 多一次点开再关掉。判据写成「改动看不看得见」而不是「web / 非 web」——同样是 web 改动，
-// 调个接口超时跟挪个按钮，前者截图上什么都看不出来。真实运行验证本身一步都不减。
+// 调个接口超时跟挪个按钮，前者截图上什么都看不出来。
 function verifyRules(evidenceDir: string): string {
-  return `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务、用浏览器确认行为；` +
-    `其它改动也必须运行与风险相称的测试或产物。\n\n` +
+  return REVIEW_VALIDATION_REQUIREMENT + "\n\n" +
     // 「要等一件慢事」这一条必须就在验证义务旁边：2026-10-16 实测的那一轮审查挂了监听、
     // 说了「套件结束会叫我」，然后就这么结束了回合 —— 结算按「没给结论」把整条链停掉，
     // 而它挂的内置 Monitor 本来就活不过那一轮（它的进程在 agent 自己的进程树里）。现在
@@ -102,6 +103,7 @@ export async function verifyProtocolFor(
   const evidenceDir = reviewRoundDir(target.id, round);
   const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
+  const regression = await regressionEvidenceReference(target, repoPath, evidenceDir);
   // 前面几轮报过的现象行（理由见 review-history.ts 文件头：会话可能被压缩，也可能是
   // 手点的新一轮）。放在验证动作之前，让它先判「我这条是不是上面某条的第 N 个变体」。
   const history = await verifyHistorySection(target.id, round);
@@ -109,7 +111,7 @@ export async function verifyProtocolFor(
     `这一轮不是继续做需求，而是**回过头验收你自己刚才的产物**。请切换成审查者的立场：` +
     `默认它有问题，去找出问题，而不是复述你做了什么。\n\n` +
     `验证对象：${target.id}\n${requirements}\n\n` +
-    requiredChecks(target, station ?? target.workflowAt) +
+    requiredChecks(target, station ?? target.workflowAt) + regression + "\n\n" +
     `先检查真实改动：项目仓库 ${repoPath}；你当前的工作目录就是被验产物所在的目录；` +
     `比较基线 ${baseline}。先看 git status / git diff / 相关提交，再决定验证范围。${history}\n\n` +
     `${REVIEW_OVERWRITE_CHECK}\n\n` +
@@ -121,7 +123,7 @@ export async function verifyProtocolFor(
 /** 就地验证轮的每回合提醒（中途提问、被打断续跑时，只有它跟得到底）。 */
 export function verifyReminderFor(taskId: string, round: number): string {
   const dir = reviewRoundDir(taskId, round);
-  return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
+  return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。验证须有真实执行依据，可复用执行者对本次改动的回归结果；把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
@@ -143,10 +145,11 @@ export async function reviewProtocolFor(
   const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
   const baseline = comparisonBaseline(target);
   const requirements = await reviewRequestReference(target, evidenceDir);
+  const regression = await regressionEvidenceReference(target, repoPath, evidenceDir);
   const history = await verifyHistorySection(target.id, review.reviewRound);
   return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +
     `审查对象：${target.id}\n${requirements}\n\n` +
-    requiredChecks(target, review.reviewStep ?? target.workflowAt) +
+    requiredChecks(target, review.reviewStep ?? target.workflowAt) + regression + "\n\n" +
     `先检查真实改动：项目仓库 ${repoPath}；被审工作目录 ${workspace.path}；` +
     `被审分支 ${workspace.branch ?? "(无 Git 分支)"}；比较基线 ${baseline}。` +
     `先看 git status / git diff / 相关提交，再决定验证范围。${history}\n\n` +
@@ -161,7 +164,7 @@ export async function reviewProtocolFor(
 export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "reviewRound">): string {
   if (!review.reviewOf || !review.reviewRound) return "";
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
-  return `审查提醒:这是第 ${review.reviewRound} 轮审查；必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
+  return `审查提醒:这是第 ${review.reviewRound} 轮审查；验证须有真实执行依据，可复用执行者对本次改动的回归结果；把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +

@@ -48,6 +48,7 @@ const {
 const {
   REVIEW_OVERWRITE_CHECK,
   repairPrompt,
+  reviewProtocolFor,
   reviewReminderFor,
   verifyProtocolFor,
   verifyReminderFor,
@@ -287,6 +288,16 @@ await db.insert(tasks).values({
 });
 const promptTarget = (await db.select().from(tasks)).find((row) => row.id === taskId)!;
 const reviewPrompt = await verifyProtocolFor(promptTarget, 1, root);
+const legacyReviewPrompt = await reviewProtocolFor(
+  { ...promptTarget, id: "legacy-review", reviewOf: taskId, reviewRound: 1 },
+  { path: root, branch: null, isWorktree: false }, root,
+);
+assertCarriesSweepProtocol(legacyReviewPrompt, "历史独立审查 prompt");
+for (const text of [reviewPrompt, legacyReviewPrompt, verifyReminderFor(taskId, 1),
+  reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })]) {
+  assert.match(text, /reusable=true.*执行者结果.*不再重复运行/, "各条审查路径只复用后端批准的执行者回归结果");
+  assert.doesNotMatch(text, /必须真实运行验证/, "不得用无条件重跑要求覆盖回归结果复用约定");
+}
 assert.doesNotMatch(reviewPrompt, /grill-me|原始需求里点名/, "自动验证 prompt 不得原样夹带被审需求里的技能名");
 assert.match(reviewPrompt, /request-context\.md/, "自动验证应通过文件交付需求上下文");
 // 审查/验证的正文与提醒**都不自带**浏览器策略:正文是提前生成的,自带的只能是一份「默认

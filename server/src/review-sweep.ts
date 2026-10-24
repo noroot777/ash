@@ -52,6 +52,7 @@ const SHARED = {
   classProblem: "这是类问题",
   /** 没做到可复现时的固定标注。 */
   inferred: "未实测，按代码推断",
+  noRegressionRerun: "不再重复运行",
 } as const;
 
 export const SWEEP_RULES: SweepRule[] = [
@@ -100,6 +101,18 @@ export const SWEEP_RULES: SweepRule[] = [
     probes: [new RegExp(SHARED.classProblem), /不变量/, /触发路径/],
   },
   {
+    id: "执行者回归结果复用",
+    full: "仅回归测试可复用本轮后端证据清单标为 reusable=true 的执行者结果：后端已核验执行者身份、真实退出码、完整日志及测试前后与当前代码树一致。"
+      + `直接引用这些结果，${SHARED.noRegressionRerun}；reusable=true 仅表示证据可引用，通过必须满足 passed=true 且 exitCode=0；失败结果照实报告，不得当作通过。`
+      + "证据缺失、失效或存在未覆盖的新风险时，只针对缺口补跑必要测试或最小复现，不要重跑整套回归。"
+      + "在报告技术明细中列出复用来源、命令、结果和补跑原因，不要把命令输出塞进结论摘要。"
+      + "复用不免除独立代码审查与必要的行为验证，浏览器真实点检不在复用范围内。\n\n",
+    short: `仅回归测试：本轮后端证据清单 reusable=true 的执行者结果可引用，${SHARED.noRegressionRerun}；`
+      + "通过须 passed=true 且 exitCode=0；失败不得当作通过；缺失/失效/未覆盖补跑；技术明细复用来源/命令/结果/原因；不免除独立代码审查与必要的行为验证；",
+    probes: [/仅回归测试/, /本轮后端证据清单/, /reusable=true/, /passed=true/, /exitCode=0/, new RegExp(SHARED.noRegressionRerun),
+      /失败.*不得当作通过/, /缺失.*失效.*未覆盖/, /技术明细.*复用来源/, /不免除独立代码审查与必要的行为验证/],
+  },
+  {
     id: "六个扫描面",
     full: "按这六个面各过一遍，跳过哪一面都要在覆盖声明里说出来：\n"
       + "- **改动面**：diff 里每个改了的文件、导出、分支，逐个给「过没过」的判断\n"
@@ -107,7 +120,7 @@ export const SWEEP_RULES: SweepRule[] = [
       + "- **失败面**：每个新判据的失败路径（超时、异常、空值、权限、并发、重启、磁盘/配额满）\n"
       + "- **边界面**：首次 / 重复 / 并发 / 乱序 / 回滚 / 刷新或重启之后 / 多开一份\n"
       + "- **契约面**：前后端字段、持久化字段、跨进程消息，两端是不是同时改了\n"
-      + "- **回归面**：被动过的旧行为还在不在 —— 跑测试，别只读代码\n"
+      + "- **回归面**：被动过的旧行为还在不在 —— 核对本轮回归证据，缺少适用的真实测试结果时补跑，别只读代码\n"
       + "本轮被限定只做语法与机械检查时，只过改动面和对称面，其余按限定跳过并在覆盖声明里写明是限定所致。\n\n",
     short: null,
     probes: [/改动面/, /对称面/, /失败面/, /边界面/, /契约面/, /回归面/],
@@ -135,6 +148,11 @@ export const SWEEP_RULES: SweepRule[] = [
 export const REVIEW_SWEEP_PROTOCOL = "【一次查全（这一轮的扫描义务）】\n"
   + SWEEP_RULES.map((rule) => rule.full).join("");
 
+export function reviewSweepProtocol(allowReuse: boolean): string {
+  return allowReuse ? REVIEW_SWEEP_PROTOCOL : "【一次查全（这一轮的扫描义务）】\n" +
+    SWEEP_RULES.filter((rule) => rule.id !== "执行者回归结果复用").map((rule) => rule.full).join("");
+}
+
 /**
  * 交回执行者时必须补的一句：**报告说「这是类问题」的那几条，按它指的层级修**。
  *
@@ -161,3 +179,8 @@ export const REVIEW_SWEEP_REMINDER = SWEEP_RULES
   .map((rule) => rule.short)
   .filter((text): text is string => !!text)
   .join("");
+
+export function reviewSweepReminder(allowReuse: boolean): string {
+  return allowReuse ? REVIEW_SWEEP_REMINDER : SWEEP_RULES.filter((rule) => rule.id !== "执行者回归结果复用")
+    .map((rule) => rule.short ?? "").join("") + "合并结果审查不得复用任务分支回归；仍须独立代码审查与必要的行为验证，web 改动必须浏览器点检；";
+}

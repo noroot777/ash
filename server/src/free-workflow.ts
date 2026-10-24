@@ -53,7 +53,7 @@ import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-st
 import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
-import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
+import { reviewSweepReminder } from "./review-sweep.js";
 import { id, now } from "./util.js";
 import type { Actor } from "./auth/context.js";
 import { canUseOwned } from "./auth/owned.js";
@@ -130,7 +130,8 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
   return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
     `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +
     REPORT_SUMMARY_REMINDER +
-    REVIEW_SWEEP_REMINDER +
+    reviewSweepReminder(run.targetKind !== "accepted_merge") +
+    `回归证据见 ${freeReviewReportPath(taskId, run.id, run.currentRound).replace(/report\.md$/, "regression-evidence.json")}；合并结果审查不适用此清单。` +
     `结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
     `不要调用 complete_task 或 accept_task。`;
 }

@@ -4,6 +4,8 @@ import type { ProjectView } from "@ash/shared";
 import {
   MAX_PROJECT_COMMAND_LENGTH,
   MAX_PROJECT_COMMANDS,
+  commandScriptDialect,
+  commandScriptDialectText,
   parseCommandPlaceholders,
   parseProjectCommands,
   type ProjectCommandConfig,
@@ -11,6 +13,7 @@ import {
 } from "@ash/shared/project-commands";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
+import { useHostInfo } from "../lib/useHostInfo.ts";
 import { createClientId } from "../lib/clientId.ts";
 import { ShellScriptEditor, useShellScriptWrapping } from "./ShellScriptEditor.tsx";
 import "./project-commands.css";
@@ -42,6 +45,7 @@ export function ProjectCommandsSettings({ project, onUpdated, notify }: {
   onUpdated: (project: ProjectView) => void;
   notify: (message: string) => void;
 }) {
+  const host = useHostInfo();
   const canManage = project.myRole === "admin";
   const stored = project.commandsConfig ?? null;
   const [service, setService] = useState(() => ({
@@ -93,7 +97,8 @@ export function ProjectCommandsSettings({ project, onUpdated, notify }: {
 
   return <section className="settings-section project-commands" data-settings-anchor="commands"><h2>常用命令</h2><div className="settings-card settings-card--pad">
     <div className="project-commands__intro">
-      <small>命令都在项目目录（主仓当前检出的分支）用你的 shell 执行，端口按项目自己的配置来 —— 要「借端口在任务分支上看效果」用预览，不用这里。</small>
+      <small>命令都在项目目录（主仓当前检出的分支）执行，端口按项目自己的配置来 —— 要「借端口在任务分支上看效果」用预览，不用这里。</small>
+      <small>{commandScriptDialectText(commandScriptDialect(host?.platform))}</small>
       <small>
         支持多行脚本。要执行时临时填参数就写占位符 <code>{"{{分支}}"}</code>，点执行前会弹框让你填；
         <code>{"{{分支=main}}"}</code> 带默认值（可留空不填），没写 <code>=</code> 的就是必填。

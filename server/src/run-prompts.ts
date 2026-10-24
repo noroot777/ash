@@ -2,6 +2,7 @@ import { STEP_LABELS } from "@ash/shared/workflow";
 import { STRICT_DONE_PROTOCOL } from "./settle-status.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { railStalledAtRun } from "./workflows.js";
+import { EXECUTOR_REGRESSION_RECORDING } from "@ash/shared/free-workflow";
 
 // 单任务每一轮 prompt 上下拼的那些**固定措辞**:前言、完成协议、续聊尾巴、工作目录
 // 重建的告警。跟 team/prompts.ts 同一个位置 —— orchestrator.ts 只留「什么时候拼哪一段」
@@ -40,10 +41,10 @@ export const SYS_MARKER = "〔系统〕继续（从中断处）";
 export const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
   ? "验收辅路:验证回合不适用 accept_task；这一轮只负责给出验证结论并留证。"
   : free
-    ? "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task。派审和预览由用户按需触发，任务完成后由用户从统一验收页验收。"
+    ? EXECUTOR_REGRESSION_RECORDING + "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task。派审和预览由用户按需触发，任务完成后由用户从统一验收页验收。"
   : sharedTeamWorker
-    ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
-    : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance", directionToken="<最新【当前方向身份】token>")；` +
+    ? EXECUTOR_REGRESSION_RECORDING + "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
+    : EXECUTOR_REGRESSION_RECORDING + `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance", directionToken="<最新【当前方向身份】token>")；` +
       `只有用户明确表示「验收通过/可以合并」时，调用 accept_task(taskId="${taskId}")，不要自行运行 git merge、worktree remove 或 branch -d。`;
 export const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
