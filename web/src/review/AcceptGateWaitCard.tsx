@@ -105,6 +105,7 @@ export function AcceptGateWaitCard({ taskId, expected = false, notify }: {
       </p>}
       {open && (
         <div className="wait-bar__body" id={bodyId}>
+          {running.executionNotice && <p className="wait-bar__note" role="note">{running.executionNotice}</p>}
           {(shownLog ?? running.logTail) && (
             <pre className="accept-gate-wait__log">{shownLog ?? running.logTail}</pre>
           )}

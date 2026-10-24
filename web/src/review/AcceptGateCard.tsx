@@ -192,8 +192,11 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
           <p>{stale ? "以下为上次读取的记录，当前状态尚未确认。" : idle && latest
             ? `项目当前没有验收前置命令，下次验收不会跑它。历史记录：${summarizeAcceptGate(latest)}；这不是下次验收的测试凭据。`
             : idle
-            ? "设一条之后，点「验收通过」会先在独立源码快照里跑它，rc=0 且整次退出已确认才合并。"
+            ? "设一条之后，点「验收通过」会先在独立源码快照里跑它，rc=0 且进程监督收尾后才合并。"
             : detail(state, running, latest, receipt, settled)}</p>
+          {shown?.executionNotice && <p role="note">{running ? "本次运行：" : settled ? "本次验收运行：" : "历史运行："}{shown.executionNotice}</p>}
+          {!settled && !running && state.command && state.executionNotice && state.executionNotice !== shown?.executionNotice
+            && <p role="note">下次运行：{state.executionNotice}</p>}
           {error && <p role="alert">状态读取失败：{error}（下面这份可能已经不是最新的，可刷新重试）</p>}
           {stale && !error && <p role="status">正在核对，下面是上次读取的记录。</p>}
         </div>
@@ -329,7 +332,7 @@ function detail(
         ? `这个任务名下最近一次执行记录是「${summarizeAcceptGate(latest)}」，但它并不能证明本次验收前跑过它。`
         : "");
   }
-  if (!latest) return `点「验收通过」时会先在独立源码快照里跑一遍 \`${state.command}\`，rc=0 且确认整次运行退出后才合并。`;
+  if (!latest) return `点「验收通过」时会先在独立源码快照里跑一遍 \`${state.command}\`，rc=0 且进程监督收尾后才合并。`;
   if (latest.status === "passed") {
     if (!latest.stale) return `${summarizeAcceptGate(latest)}。源码、依赖输入和命令仍与被测快照一致，所以这次验收不会重跑它。`;
     // 「不作数了」有两种，出路一样但原因完全不同，说错一种用户会去查错的地方。

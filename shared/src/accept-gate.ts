@@ -35,6 +35,7 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
 };
 
 export interface AcceptGateView {
+  executionNotice?: string | null;
   id: string;
   taskId: string;
   /** 跑的那条命令原文(项目设置里改过的话,这里仍是**这一次**用的那条) */
@@ -142,6 +143,7 @@ export type AcceptGateBasis = {
 
 /** GET /tasks/:id/accept-gate:这个项目设没设门禁、现在跑没跑、上一次跑成什么样。 */
 export type AcceptGateState = {
+  executionNotice?: string | null;
   unavailable?: string | null;
   sourceError?: string | null;
   /** 项目设置里的那条命令;null = 这个项目没设门禁。 */

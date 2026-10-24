@@ -16,7 +16,8 @@ try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { acceptGateRuns, projects, tasks } = await import("../src/db/schema.js");
   const { collectGateRuns } = await import("../src/handoff-accept-gate.js");
-  const { collectRunArtifacts } = await import("../src/handoff-collect.js");
+  const { collectRunArtifacts, collectRunArtifactTexts } = await import("../src/handoff-collect.js");
+  const { isTextRel } = await import("../src/handoff-uploads.js");
   const { importHandoff } = await import("../src/handoff-import.js");
   const { validate } = await import("../src/handoff-import-payload.js");
   const { acceptGateState } = await import("../src/accept-gate-state.js");
@@ -41,7 +42,7 @@ try {
       failure: "exit_code", cwd: "foreign/path", logPath: "/unavailable/original.log", startedAt: stamp, finishedAt: stamp },
     { id: "gate-passed", taskId, projectId: "gate-machine-a", command: "new-test", status: "passed", exitCode: 0,
       cwd: "foreign/snapshot", logPath: acceptGateLogPath(taskId, "gate-passed"), sourceCommit: "c".repeat(40),
-      sourceFingerprint: "d".repeat(64), startedAt: stamp, finishedAt: stamp },
+      sourceFingerprint: "d".repeat(64), executionMode: "macos-observed", startedAt: stamp, finishedAt: stamp },
   ]);
   const log = acceptGateLogPath(taskId, "gate-passed");
   mkdirSync(dirname(log), { recursive: true });
@@ -54,6 +55,19 @@ try {
   assert.ok(history.every(run => !("pid" in run) && !("cwd" in run) && !("sourceFingerprint" in run)));
   const artifacts = await collectRunArtifacts(taskId, []);
   assert.deepEqual(artifacts.map(file => file.rel), ["accept-gate-gate-passed.log"]);
+  assert.deepEqual(await collectRunArtifactTexts(taskId, []), [], "gate logs are transferred but not scanned for attachments");
+  const reportText = JSON.stringify({ attachment: join(root, "uploads", "artifact-only.txt") });
+  writeFileSync(join(dirname(log), "report.json"), reportText);
+  const nested = join(dirname(log), "accept-gate-gate-passed.source", "node_modules", "nested");
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(join(nested, "package.json"), JSON.stringify({ attachment: join(root, "uploads", "snapshot-only.txt") }));
+  writeFileSync(`${log}.macos-processes.json`, JSON.stringify({ private: join(root, "uploads", "control-only.txt") }));
+  const previewTexts = await collectRunArtifactTexts(taskId, []);
+  const exportedTexts = (await collectRunArtifacts(taskId, [])).filter(file => isTextRel(file.rel))
+    .map(file => Buffer.from(file.dataBase64, "base64").toString("utf8"));
+  assert.deepEqual(previewTexts, [reportText], "eligible artifact text is included in attachment preview");
+  assert.deepEqual(previewTexts, exportedTexts, "preview and export exclude retained snapshots and supervision files before traversal");
+  assert.equal(previewTexts.some(text => /snapshot-only|control-only/.test(text)), false);
   const sourceTask = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
   const manifest: Manifest = { version: 1, sourceHost: "A", sourceFingerprint: from, originFingerprint: from,
     targetProjectId: "gate-machine-b", transferId: "gate-outbound", autoResume: false, sourceWorkspace: null,
@@ -67,6 +81,7 @@ try {
   assert.equal(state.basis?.mode, "passed");
   assert.equal(state.basis?.run?.id, "gate-passed");
   assert.equal(state.basis?.run?.logAvailable, true);
+  assert.match(state.basis?.run?.executionNotice!, /macOS 兼容监督/);
   assert.match(state.basis!.run!.logTail, /immutable source/);
   let importedRows = await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId));
   assert.ok(importedRows.every(run => run.projectId === "gate-machine-b" && !run.pid && !run.processPending && !run.sourceFingerprint));
@@ -87,6 +102,7 @@ try {
   assert.equal(readFileSync(log, "utf8"), "tested immutable source: passed\n");
   assert.throws(() => validate({ ...manifest, acceptGateRuns: [{ ...history[0], id: "../escape" }] }), /记录非法/);
   assert.throws(() => validate({ ...manifest, acceptGateRuns: [{ ...history[0], status: "running" }] }), /记录非法/);
+  assert.throws(() => validate({ ...manifest, acceptGateRuns: [{ ...history[0], executionMode: "fake-kernel" }] }), /executionMode 非法/);
   assert.throws(() => validate({ ...manifest, acceptGateRuns: [{ ...history[0], id: "gate-passed" }] }), /未通过/);
   await db.insert(acceptGateRuns).values({ id: "active-gate", taskId, projectId: "gate-machine-a", command: "busy",
     status: "running", processPending: true, cwd: "foreign", logPath: join(root, "unknown.log"), startedAt: stamp });

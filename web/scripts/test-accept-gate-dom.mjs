@@ -493,6 +493,21 @@ try {
     assert.deepEqual(animations, ["none", "none", "none", "none"]);
     await page.close();
   }
+  {
+    const historical = "历史 macOS 兼容监督，未观察后代可能无法识别";
+    const upcoming = "当前平台的下次监督范围";
+    for (const command of [null, "new command"]) {
+      for (const executionNotice of [null, upcoming]) {
+        const { page } = await open({ gate: { command, running: null,
+          latest: run({ status: "failed", executionNotice: historical }), executionNotice } });
+        const card = page.getByRole("region", { name: "验收前置命令", exact: true });
+        await card.getByRole("note").filter({ hasText: `历史运行：${historical}` }).waitFor();
+        assert.equal(await card.getByRole("note").filter({ hasText: `下次运行：${upcoming}` }).count(), command && executionNotice ? 1 : 0);
+        if (process.env.ASH_TEST_ARTIFACTS && !command && !executionNotice) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-withdrawn-history.png`, fullPage: true });
+        await page.close();
+      }
+    }
+  }
   for (const wait of [false, true]) {
     const running = run({ status: "running", exitCode: null, finishedAt: null });
     const { page } = await open({ gate: { command: running.command, running, latest: running },
@@ -549,15 +564,29 @@ try {
   }
   {
     const { page, store } = await open({ gate: { command: "npm test", running: null, latest: null,
-      unavailable: "macOS 没有整次运行内核围栏，本机未执行；请换机或明确跳过" } });
+      unavailable: "监督能力不可用，本机未执行；请换机或明确跳过" } });
     const card = page.locator(".accept-gate-card");
     await card.getByText("验收前置命令未执行：本机能力不可用").waitFor();
     assert.equal(await card.locator(".is-spinning").count(), 0);
     assert.equal(store.handoffs, 0);
     await card.getByRole("button", { name: "这次跳过它，直接合并" }).click();
     assert.equal(await page.getByLabel("验收意图").innerText(), "skip");
-    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-not-executed.png`, fullPage: true });
+    if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/supervision-unavailable.png`, fullPage: true });
     await page.close();
+  }
+  {
+    const executionNotice = "macOS 兼容监督：不具备 cgroup/Job 的整次运行内核保证。独立测试快照保留，不自动删除。";
+    for (const query of ["", "?stage=accepted", "?wait=1"]) {
+      const current = run({ status: query === "?wait=1" ? "running" : "passed", executionNotice });
+      const { page, store } = await open({ gate: { command: current.command, running: query === "?wait=1" ? current : null,
+        latest: current, executionNotice, basis: query === "?stage=accepted" ? basis("passed", current) : null }, query });
+      if (query === "?wait=1") await page.getByRole("button", { name: /验收前置命令在跑/ }).click();
+      await page.getByRole("note").filter({ hasText: executionNotice }).waitFor();
+      assert.equal(store.handoffs, 0);
+      assert.equal(await page.getByText("验收前置命令未执行：本机能力不可用").count(), 0);
+      if (process.env.ASH_TEST_ARTIFACTS) await page.screenshot({ path: `${process.env.ASH_TEST_ARTIFACTS}/macos-compatible-${query === "?wait=1" ? "running" : query ? "receipt" : "ready"}.png`, fullPage: true });
+      await page.close();
+    }
   }
   for (const wait of [false, true]) {
     const pending = run({ status: "failed", failure: "process_unconfirmed", processPending: true });

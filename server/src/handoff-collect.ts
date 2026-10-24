@@ -16,6 +16,7 @@ import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { findRollout, rolloutExportPath } from "./executors/codex-rollout.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { HandoffError, MAX_BUNDLE_BYTES, MAX_FILE_BYTES, MB } from "./handoff-types.js";
+import { isTextRel } from "./handoff-uploads.js";
 import type {
   HandoffFilePayload, HandoffFreeReviewRound, HandoffFreeWorkflowPayload, HandoffManifest,
 } from "./handoff-types.js";
@@ -140,10 +141,10 @@ export async function collectSessionFiles(
   return { files, found, notes };
 }
 
-export async function collectRunArtifacts(taskId: string, notes: string[]): Promise<HandoffFilePayload[]> {
+async function enumerateRunArtifacts(taskId: string, notes: string[]): Promise<{ abs: string; rel: string }[]> {
   const root = join(RUNS_DIR, taskId);
   if (!existsSync(root)) return [];
-  const out: HandoffFilePayload[] = [];
+  const out: { abs: string; rel: string }[] = [];
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       if (entry.name.startsWith("accept-gate-") && !/^accept-gate-[A-Za-z0-9_-]+\.log$/.test(entry.name)) continue;
@@ -155,11 +156,25 @@ export async function collectRunArtifacts(taskId: string, notes: string[]): Prom
         notes.push(`会话产物 ${entry.name} ${Math.round(size / MB)}MB 超限,跳过`);
         continue;
       }
-      out.push({ kind: "run-artifact", rel: relative(root, abs).split(sep).join("/"), dataBase64: (await readFile(abs)).toString("base64") });
+      out.push({ abs, rel: relative(root, abs).split(sep).join("/") });
     }
   };
   await walk(root);
   return out;
+}
+
+export async function collectRunArtifacts(taskId: string, notes: string[]): Promise<HandoffFilePayload[]> {
+  const files = await enumerateRunArtifacts(taskId, notes);
+  const out: HandoffFilePayload[] = [];
+  for (const { abs, rel } of files) out.push({ kind: "run-artifact", rel, dataBase64: (await readFile(abs)).toString("base64") });
+  return out;
+}
+
+export async function collectRunArtifactTexts(taskId: string, notes: string[]): Promise<string[]> {
+  const files = await enumerateRunArtifacts(taskId, notes);
+  const texts: string[] = [];
+  for (const { abs, rel } of files) if (isTextRel(rel)) texts.push(await readFile(abs, "utf8"));
+  return texts;
 }
 
 /**
