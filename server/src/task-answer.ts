@@ -54,7 +54,11 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
         pendingMessageRow({ taskId, text: answerText, ...route, ownerUserId: acting }));
     })) return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
   } catch (error) {
-    if (error instanceof ReviewSuperseded) return c.json({ error: error.message }, 409);
+    if (error instanceof ReviewSuperseded) {
+      await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId)
+        .catch((failure) => console.error(`[ash] 失效审查收口待重试 ${taskId}:`, failure));
+      return c.json({ error: error.message }, 409);
+    }
     throw error;
   }
   bus.publish({ type: "task.question", taskId, updatedAt: record.answeredAt, question: null, questionOptions: null, questionItems: null, answeredQuestion: record });

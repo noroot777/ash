@@ -237,9 +237,10 @@ export async function cancelFreeReviewReservation(taskId: string): Promise<FreeW
  * - 任务挂着 question / resumePrompt → 审查回合在等答复或续跑，是正常的等待态；
  * - 其余 → 这条审查已经没有任何东西能把它跑完，落 failed 并撤预约，用户可再派一轮。
  */
-export async function reconcileFreeReviews(): Promise<void> {
+export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> {
   const stuck = await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.status, "reviewing"));
   for (const run of stuck) {
+    if (ownerTaskId && run.taskId !== ownerTaskId) continue;
     const task = (await db.select().from(tasks).where(eq(tasks.id, run.taskId))).at(0);
     if (!task) {
       // 任务行已不存在（旧版删除没做级联）：审查链永远无人结算，原地收尸自愈。
@@ -445,8 +446,8 @@ export async function handleFreeWorkflowSettlement(
   // reviewer 已交卷（round 有结论）就必须结算——question 可能是实现回合遗留的旧字段，
   // 拿它挡住已有结论的审查会让链永远停在 reviewing（审查实测复现）。
   const waitingEvidence = await db.transaction((transaction) => activeReviewEvidence(transaction, task), { behavior: "immediate" });
-  if (turnOk !== false && !waitingEvidence?.settlement && (task.question || task.resumePrompt)
-    && (!round.conclusion || waitingEvidence?.continuation?.phase === "waiting")) {
+  if (turnOk !== false && await db.transaction((transaction) => reviewContinuationPending(transaction, task,
+    waitingEvidence, !!round.conclusion, true), { behavior: "immediate" })) {
     await preserveReviewWait(task); return true;
   }
   const directory = freeReviewEvidenceDir(taskId, run.id, run.currentRound);

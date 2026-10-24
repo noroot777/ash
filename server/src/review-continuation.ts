@@ -6,6 +6,7 @@ import { freeReviewEvidenceDir } from "./free-review-files.js";
 import { isTurnClaimed, type TurnSource } from "./runs.js";
 import { activeReviewEvidence, activeReviewScope, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded,
   reviewTargetIdentity, type ReviewDelivery } from "./review-ownership.js";
+import { recordReviewWait, reviewWaitAuthorized, reviewWaitAtTurnStart, snapshotReviewWait } from "./review-wait.js";
 
 export { activeReviewEvidence } from "./review-ownership.js";
 
@@ -16,6 +17,7 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
   hasConclusion = false, ignoreActive = false): Promise<boolean> {
   if (!ignoreActive && (["running", "queued"].includes(owner.status) || isTurnClaimed(owner.id))) return true;
   if (state?.settlement) return false;
+  if (!await reviewWaitAuthorized(transaction, state)) return false;
   if ((owner.question || owner.resumePrompt) && (!hasConclusion || state?.continuation?.phase === "waiting")) return true;
   const pending = await transaction.select().from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, owner.id), eq(scheduledMessages.status, "pending")));
@@ -29,9 +31,7 @@ export async function preserveReviewWait(owner: TaskRow): Promise<void> {
   await db.transaction(async (transaction) => {
     const current = (await transaction.select().from(tasks).where(eq(tasks.id, owner.id)))[0];
     if (!current || !reviewIdentityMatches(current, reviewTargetIdentity(owner)) || (!current.question && !current.resumePrompt)) return;
-    const state = await activeReviewEvidence(transaction, current);
-    if (state && !state.settlement && state.continuation?.phase !== "delivery") await transaction.update(regressionEvidence).set({ continuation: { phase: "waiting" } })
-      .where(eq(regressionEvidence.directory, state.directory));
+    await recordReviewWait(transaction, current);
   }, { behavior: "immediate" });
 }
 
@@ -64,7 +64,7 @@ export async function queueReviewAnswer(transaction: ConclusionTransaction, task
   if (state.settlement) throw new ReviewSuperseded();
   await assertReviewAuthority(transaction, { directory: state.directory, generation: state.generation, target: state.targetIdentity }, true);
   await transaction.insert(scheduledMessages).values({ ...message, origin: `review-answer:${state.generation}` });
-  await transaction.update(regressionEvidence).set({ continuation: { phase: "delivery", messageId: message.id } })
+  await transaction.update(regressionEvidence).set({ continuation: { ...state.continuation, phase: "delivery", messageId: message.id } })
     .where(eq(regressionEvidence.directory, state.directory));
   return true;
 }
@@ -74,13 +74,14 @@ export async function beginReviewContinuation(transaction: ConclusionTransaction
   const deliveredState = delivery ? await reviewDeliveryAuthority(transaction, delivery, task.id) : undefined;
   const state = await activeReviewEvidence(transaction, task, source);
   if (delivery && delivery.kind !== "repair" && (!state || state.directory !== deliveredState?.directory)) throw new ReviewSuperseded();
-  if (!state || delivery?.kind === "repair") return;
+  if (!state || delivery?.kind === "repair") { await snapshotReviewWait(transaction, task); return; }
   const current = (await transaction.select().from(tasks).where(eq(tasks.id, task.id)))[0];
   await assertReviewAuthority(transaction, { directory: state.directory, generation: state.generation, target: state.targetIdentity }, true);
   if (!current || !reviewIdentityMatches(current, reviewTargetIdentity(task))
     || state.settlement || (state.taskId === task.id && !reviewIdentityMatches(current, state.targetIdentity))) throw new ReviewSuperseded();
   await transaction.update(regressionEvidence).set({
     ...(state.taskId === task.id ? { targetIdentity: { turnToken, directionToken, directionEpoch: task.directionEpoch + 1 } } : {}),
-    continuation: { phase: "running", ...(state.continuation?.messageId ? { messageId: state.continuation.messageId } : {}) },
+    continuation: { phase: "running", wait: reviewWaitAtTurnStart(task, turnToken, directionToken),
+      ...(state.continuation?.messageId ? { messageId: state.continuation.messageId } : {}) },
   }).where(eq(regressionEvidence.directory, state.directory));
 }

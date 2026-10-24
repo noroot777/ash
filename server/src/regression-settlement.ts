@@ -11,9 +11,12 @@ import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { reconcileRegressionFinalizations } from "./regression-finalization.js";
 import { reviewContinuationPending } from "./review-continuation.js";
-import { reviewIdentityMatches } from "./review-ownership.js";
+import { activeReviewScope, reviewIdentityMatches } from "./review-ownership.js";
 import type { ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
 import { retireHistoricalReview } from "./review-retirement.js";
+import { clearReviewWait, reviewWaitForExit } from "./review-wait.js";
+import { announceResumePrompt } from "./task-resume-prompt.js";
+import { now } from "./util.js";
 
 export type CheckedSettlement = {
   conclusion: ReviewConclusion;
@@ -55,7 +58,9 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
     if (settlement.pending && settlement.outcome === "done" && input.outcome && input.outcome !== "done") {
       settlement = { ...settlement, outcome: input.outcome };
     }
-    await transaction.update(regressionEvidence).set({ settlement, continuation: { phase: "exited" } }).where(eq(regressionEvidence.directory, directory));
+    const wait = await reviewWaitForExit(transaction, owner, state);
+    await transaction.update(regressionEvidence).set({ settlement, continuation: { ...state.continuation, phase: "exited", wait } })
+      .where(eq(regressionEvidence.directory, directory));
     return { conclusion: settlement.conclusion, outcome: settlement.outcome, generation: state.generation,
       target: settlement.target ?? null, unknown: !state.settlement && input.outcome === undefined };
   }, { behavior: "immediate" });
@@ -83,7 +88,8 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
 export async function completeRegressionSettlement(directory: string, checked: CheckedSettlement,
   write: (transaction: ConclusionTransaction) => Promise<boolean> = async () => true,
   finalization?: RegressionFinalization): Promise<boolean> {
-  return db.transaction(async (transaction) => {
+  let changedOwner: string | undefined;
+  const completed = await db.transaction(async (transaction) => {
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
     if (checked.recoveryOwnerTaskId) {
       const owner = (await transaction.select().from(tasks).where(eq(tasks.id, checked.recoveryOwnerTaskId)))[0];
@@ -91,13 +97,23 @@ export async function completeRegressionSettlement(directory: string, checked: C
     }
     if (!state?.settlement?.pending || state.generation !== checked.generation || state.settlement.outcome !== checked.outcome) return false;
     if (checked.target && checked.outcome === "done" && checked.conclusion === "verified" && state.revoked && !state.acceptedBasis) return false;
+    const owner = (await transaction.select().from(tasks).where(eq(tasks.id, state.settlement.ownerTaskId)))[0];
+    const ownsRound = owner && (await activeReviewScope(transaction, owner))?.directory === directory;
+    const wait = ownsRound ? await reviewWaitForExit(transaction, owner, state) : undefined;
     if (!await write(transaction)) return false;
+    if (owner && ownsRound && await clearReviewWait(transaction, owner, wait)) changedOwner = owner.id;
+    if (owner?.reviewOf && ownsRound && ["paused", "queued"].includes(owner.status) && reviewIdentityMatches(owner, wait?.owner)) {
+      await transaction.update(tasks).set({ status: state.settlement.outcome, updatedAt: now() }).where(eq(tasks.id, owner.id));
+      changedOwner = owner.id;
+    }
     await transaction.update(regressionEvidence).set({ settlement: { ...state.settlement, pending: false },
       ...(finalization ? { finalization } : {}),
     })
       .where(eq(regressionEvidence.directory, directory));
     return true;
   }, { behavior: "immediate" });
+  if (completed && changedOwner) await announceResumePrompt(changedOwner);
+  return completed;
 }
 
 export async function recordInterruptedRegressionReview(task: typeof tasks.$inferSelect): Promise<void> {
@@ -109,7 +125,7 @@ export async function recordInterruptedRegressionReview(task: typeof tasks.$infe
 }
 
 export async function reconcileRegressionSettlements(ownerTaskId?: string): Promise<void> {
-  if (!ownerTaskId) await (await import("./free-workflow.js")).reconcileFreeReviews()
+  await (await import("./free-workflow.js")).reconcileFreeReviews(ownerTaskId)
     .catch((error) => console.error("[ash] 自由审查发现待重试:", error));
   const candidates = await db.select().from(tasks).where(or(isNotNull(tasks.verifyRound), isNotNull(tasks.reviewOf)));
   for (const task of candidates) {

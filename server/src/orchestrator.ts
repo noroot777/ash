@@ -45,7 +45,7 @@ import { cliGoalSessionCandidates } from "./task-cli-goal-scopes.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
-import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
+import { enterLeadDelivery, enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
 import { isDiagnosticSession } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
@@ -106,9 +106,14 @@ export async function continueTask(
   // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下
   // 上下文」既会被打成 failed,也会顺手把已验收的牌子摘掉——旁路回合不拍工作目录快照,
   // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
-  const { head, nativeCommand, slash, goalExecution, options } = await prepareContinuationEntry(taskId, userText, opts);
+  const { head, nativeCommand, slash, goalExecution, options, retired } = await withTurnPreflight(taskId, opts.turnHeld, async () => {
+    const prepared = await prepareContinuationEntry(taskId, userText, opts);
+    const retired = prepared.head?.mode === "single" && await retireHistoricalReview(prepared.head,
+      prepared.options.turnSource, prepared.options.reviewDelivery, prepared.options.turnHeld);
+    return { ...prepared, retired };
+  });
   opts = options;
-  if (head?.mode === "single" && await retireHistoricalReview(head, opts.turnSource, opts.reviewDelivery, opts.turnHeld)) return false;
+  if (retired) return false;
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
   // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的

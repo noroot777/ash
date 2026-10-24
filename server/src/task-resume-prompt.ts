@@ -256,12 +256,9 @@ async function writeInto(
       .where(and(eq(tasks.id, taskId), ...where))
       .returning({ id: tasks.id });
     if (restored.length) {
-      const { activeReviewEvidence } = await import("./review-continuation.js");
-      const { regressionEvidence } = await import("./db/schema.js");
+      const { recordReviewWait } = await import("./review-wait.js");
       const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
-      const state = await activeReviewEvidence(transaction, task);
-      if (state && !state.settlement && state.continuation?.phase !== "delivery") await transaction.update(regressionEvidence).set({ continuation: { phase: "waiting" } })
-        .where(eq(regressionEvidence.directory, state.directory));
+      await recordReviewWait(transaction, task, "checkpoint");
     }
     return restored;
   }, { behavior: "immediate" });

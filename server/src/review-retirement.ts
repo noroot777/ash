@@ -6,9 +6,11 @@ import { activeReviewScope, type ReviewDelivery } from "./review-ownership.js";
 import { assertConclusionTask } from "./regression-conclusion-commit.js";
 import { RegressionConclusionRejected } from "./regression-conclusion-errors.js";
 import { claimTurn, releaseTurn, type TurnSource } from "./runs.js";
-import { announceResumePrompt, resumePromptVoidPatch } from "./task-resume-prompt.js";
+import { announceResumePrompt } from "./task-resume-prompt.js";
+import { clearReviewWait, reviewWaitForExit } from "./review-wait.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { now } from "./util.js";
+import { withTurnPreflight } from "./turn-entry-guard.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type EvidenceRow = typeof regressionEvidence.$inferSelect;
@@ -22,14 +24,14 @@ export async function retireHistoricalReview(expected: TaskRow, source: TurnSour
   delivery?: ReviewDelivery, turnHeld = false): Promise<boolean> {
   if (delivery?.kind === "repair") return false;
   if (!expected.verifyRound && !expected.reviewOf && source.role !== "reviewer") return false;
-  const candidate = await db.transaction(async (transaction) => {
+  const candidate = await withTurnPreflight(expected.id, turnHeld, () => db.transaction(async (transaction) => {
     const scope = await activeReviewScope(transaction, expected, source);
     if (!scope) return;
     const evidence = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, scope.directory)))[0];
     if (closedHistoricalReview(expected, evidence, !!scope.run)) return;
     return !evidence?.targetIdentity && !evidence?.settlement?.target
       ? { ...scope, generation: evidence?.generation ?? null } : undefined;
-  }, { behavior: "immediate" });
+  }, { behavior: "immediate" }));
   if (!candidate || (!turnHeld && !claimTurn(expected.id, source.role,
     source.role === "reviewer" && source.review !== "unbound" ? source.review : null))) return false;
   let retired = false;
@@ -58,12 +60,15 @@ export async function retireHistoricalReview(expected: TaskRow, source: TurnSour
         round: scope.round, ownerTaskId: current.id, pending: true, target: null,
         ...(freeRound ? { freeRoundId: freeRound.id } : {}),
       };
-      await transaction.update(regressionEvidence).set({ settlement: { ...settlement, pending: true }, continuation: { phase: "exited" } })
+      const evidence = state ?? (await transaction.select().from(regressionEvidence)
+        .where(eq(regressionEvidence.directory, scope.directory)))[0]!;
+      const wait = await reviewWaitForExit(transaction, current, evidence);
+      await transaction.update(regressionEvidence).set({ settlement: { ...settlement, pending: true },
+        continuation: { ...state?.continuation, phase: "exited", wait } })
         .where(eq(regressionEvidence.directory, scope.directory));
+      await clearReviewWait(transaction, current, wait);
       const previous = taskStartStatus(current);
       const updated = await transaction.update(tasks).set({
-        question: null, questionOptions: null, questionItems: null,
-        ...(current.resumePrompt ? resumePromptVoidPatch() : {}),
         ...(current.reviewOf ? { status: settlement.outcome }
           : current.status === "queued" ? { status: previous === "queued" || previous === "running" ? "paused" : previous } : {}),
         updatedAt: now(),

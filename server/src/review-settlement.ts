@@ -12,14 +12,14 @@ import { taskWorkflowDef } from "./workflows.js";
 import type { Settlement } from "./review-policy.js";
 import { now } from "./util.js";
 import { assertReviewAuthority, ReviewSuperseded } from "./review-ownership.js";
-import { activeReviewEvidence, preserveReviewWait } from "./review-continuation.js";
+import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
 async function waitingForReview(owner: TaskRow): Promise<boolean> {
   if (!owner.question && !owner.resumePrompt) return false;
-  const state = await db.transaction((transaction) => activeReviewEvidence(transaction, owner), { behavior: "immediate" });
-  return !state?.settlement;
+  return db.transaction(async (transaction) => reviewContinuationPending(transaction, owner,
+    await activeReviewEvidence(transaction, owner), false, true), { behavior: "immediate" });
 }
 
 export async function finishVerifyRound(target: TaskRow, turnOk: boolean | null): Promise<void> {

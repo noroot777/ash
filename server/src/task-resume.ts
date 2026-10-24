@@ -10,6 +10,7 @@ import { RESUME_PROMPT } from "./run-prompts.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
 import { activeReviewEvidence } from "./review-continuation.js";
 import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
+import { withTurnPreflight } from "./turn-entry-guard.js";
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
 // that was interrupted keeps a session row with a cliSessionId (server restart
@@ -23,6 +24,11 @@ export async function resumeOrRunTask(
   taskId: string,
   opts: { reason?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null } = {},
 ): Promise<void> {
+  return withTurnPreflight(taskId, opts.turnHeld, () => resumeOrRunClaimedTask(taskId, opts));
+}
+
+async function resumeOrRunClaimedTask(taskId: string,
+  opts: { reason?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null }): Promise<void> {
   // `actingUserId` 一路原样往下传:它决定这一轮烧谁的 key(§八)。这里只是个中转,
   // 不给默认值 —— 后端触发的那几路本来就该退回任务归属人。
   const acting = opts.actingUserId ?? undefined;

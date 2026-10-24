@@ -26,6 +26,11 @@ export type ReviewTargetIdentity = {
 export type ReviewContinuation = {
   phase: "running" | "waiting" | "delivery" | "exited";
   messageId?: string;
+  wait?: {
+    owner?: ReviewTargetIdentity;
+    question: { text: string; options: string | null; items: string | null } | null;
+    checkpoint: { text: string; generation: number } | null;
+  };
 };
 
 export type RegressionFinalization = {
