@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { request } from "node:http";
 import { delimiter, join } from "node:path";
-import { windowsRestartTargets, windowsTerminateScript } from "./windows-restart.mjs";
+import { windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
 
 export const IS_WINDOWS = process.platform === "win32";
 
@@ -225,7 +225,11 @@ export function killServerProcesses(pids, protect = [], { force = false } = {}) 
     return "tree";
   }
   const roots = [...new Set([...protect, ...agentWrapPids(rows)])];
-  const doomed = windowsRestartTargets(rows, rootsToStop, roots).filter((row) => row.pid !== process.pid);
+  const plan = windowsRestartPlan(rows, rootsToStop, roots);
+  if (plan.preservedPids.length) {
+    console.warn(`  ⚠ 保留命令行不可读的后代及其子树(PID: ${plan.preservedPids.join(", ")});未对它们强杀,后续清理由所属任务负责。`);
+  }
+  const doomed = plan.targets.filter((row) => row.pid !== process.pid);
   if (!doomed.length) return "gone";
   const result = powerShell(windowsTerminateScript(doomed));
   if (!result.includes("ASH_RESTART_KILLED")) throw new Error("Windows 进程实例核验或终止失败");
