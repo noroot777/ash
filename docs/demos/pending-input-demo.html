@@ -76,7 +76,7 @@
     <footer class="study-footer"><span>ASH / PENDING INPUTS</span><p>这是一份交互提案。消息内容与状态为示例，未修改正式界面及后端逻辑。</p><span>超过 2 条，才折叠。</span></footer>
   </main>
 
-  <dialog id="cancel-dialog" aria-labelledby="cancel-title"><form method="dialog"><span class="dialog-icon"><svg class="icon"><use href="#i-pulse"/></svg></span><h2 id="cancel-title">取消这次唤醒？</h2><p>这条输入会从等待列表移除。哨兵本身仍在运行，后续事件仍会进入队列。</p><p class="cancel-subject" id="cancel-subject"></p><div class="dialog-actions"><button value="back" autofocus>保留输入</button><button class="danger-button" value="cancel">取消这次唤醒</button></div></form></dialog>
+  <dialog id="cancel-dialog" aria-labelledby="cancel-title"><form method="dialog"><span class="dialog-icon"><svg class="icon"><use href="#i-pulse"/></svg></span><h2 id="cancel-title">取消这次唤醒？</h2><p>仅移除这条待发送输入，不执行停止哨兵操作。</p><p class="cancel-subject" id="cancel-subject"></p><div class="dialog-actions"><button value="back" autofocus>保留输入</button><button class="danger-button" value="cancel">取消这次唤醒</button></div></form></dialog>
   <div class="toast" id="toast" role="status" hidden></div>
   <span class="sr-only" id="queue-announcement" role="status" aria-live="polite"></span>
   <script src="pending-input-demo.js"></script>

@@ -48,7 +48,7 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
       <span>{steering ? "引导中" : "引导会话"}</span>
     </button>}
     {fromMonitor ? onCancel && <button type="button" disabled={busy}
-      aria-label={`取消哨兵事件“${displayText}”这一次唤醒（哨兵仍在盯，下一条事件还会来）`} onClick={() => onCancel(message.id)}>
+      aria-label={`取消哨兵事件“${displayText}”这一次唤醒（仅移除本条输入，不执行停止哨兵操作）`} onClick={() => onCancel(message.id)}>
       {busy ? <SpinnerGap size={12} className="is-spinning" /> : <X size={12} weight="bold" />}
     </button> : message.sessionRole ? <small className="scheduled-message-managed">审查会话的答复 · 由审查链投递</small>
       : <button type="button" className="scheduled-message-withdraw" disabled={busy}
@@ -64,6 +64,7 @@ export function ScheduledMessageTray(props: TrayProps) {
   const [filter, setFilter] = useState<ScheduledMessageFilter>("all");
   const [pendingCancel, setPendingCancel] = useState<string | null>(null);
   const [revealId, setRevealId] = useState<string | null>(null);
+  const [readableIds, setReadableIds] = useState<ReadonlySet<string>>(() => new Set());
   const trayRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -78,29 +79,17 @@ export function ScheduledMessageTray(props: TrayProps) {
   useEffect(() => {
     if (!foldable) {
       setExpanded(false);
-      setFilter("all");
     }
+    if (!foldable || (filter === "managed" && !counts.managed)) setFilter("all");
     if (!cancelMessage) setPendingCancel(null);
-  }, [foldable, cancelMessage]);
+  }, [foldable, filter, counts.managed, cancelMessage]);
 
-  useLayoutEffect(() => {
-    if (!open) return;
-    const tray = trayRef.current;
-    const list = listRef.current;
-    const shell = tray?.closest(".task-reply-shell, .team-reply-shell");
-    const container = tray?.closest(".task-detail-main, .team-flow-main");
-    if (!tray || !list || !shell || !container) return;
-    const resize = () => {
-      const available = container.getBoundingClientRect().height - shell.getBoundingClientRect().height + list.getBoundingClientRect().height - 100;
-      const height = Math.max(64, Math.min(260, available));
-      if (Math.abs(list.getBoundingClientRect().height - height) > 0.5) list.style.setProperty("--scheduled-message-list-height", `${height}px`);
-    };
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(container);
-    observer.observe(shell);
-    return () => observer.disconnect();
-  }, [open]);
+  useEffect(() => {
+    setReadableIds((current) => {
+      const next = new Set([...current].filter((messageId) => messages.some((message) => message.id === messageId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [messages]);
 
   useLayoutEffect(() => {
     if (!open || !revealId || !listRef.current) return;
@@ -108,7 +97,7 @@ export function ScheduledMessageTray(props: TrayProps) {
     const details = [...list.querySelectorAll<HTMLDetailsElement>("details[data-message-id]")]
       .find((element) => element.dataset.messageId === revealId);
     if (details) {
-      details.open = true;
+      setReadableIds((current) => new Set(current).add(revealId));
       list.scrollTop += details.getBoundingClientRect().top - list.getBoundingClientRect().top;
       details.querySelector("summary")?.focus({ preventScroll: true });
     }
@@ -130,6 +119,19 @@ export function ScheduledMessageTray(props: TrayProps) {
     busy={cancelingIds.has(message.id) || !!steeringIds?.has(message.id)} steering={!!steeringIds?.has(message.id)}
     steerable={message.id === steerable?.id} onSteer={onSteer} onWithdraw={onWithdraw}
     onCancel={onCancel ? setPendingCancel : undefined} onInspect={inspectable ? () => inspect(message.id) : undefined} />;
+  const details = (message: ScheduledMessage) => <details className="scheduled-message-details" data-message-id={message.id}
+    open={readableIds.has(message.id)} onToggle={(event) => {
+      const visible = event.currentTarget.open;
+      setReadableIds((current) => {
+        if (current.has(message.id) === visible) return current;
+        const next = new Set(current);
+        if (visible) next.add(message.id); else next.delete(message.id);
+        return next;
+      });
+    }}><summary>查看完整输入</summary>
+    <div className="scheduled-message-body">{scheduledMessageText(message) || "[无文字内容]"}</div>
+    {message.attachments.length > 0 && <ul aria-label="消息附件">{message.attachments.map((path, index) => <li key={`${index}:${path}`}>{path}</li>)}</ul>}
+  </details>;
   const filters: [ScheduledMessageFilter, string][] = [["all", "全部"], ["mine", "我的消息"], ["monitor", "哨兵"],
     ...(counts.managed ? [["managed", "审查答复"] as [ScheduledMessageFilter, string]] : []), ["attention", "需留意"]];
   const timed = ordered.filter((message) => message.mode === "timed").length;
@@ -144,7 +146,8 @@ export function ScheduledMessageTray(props: TrayProps) {
     }}>
       {loading && !messages.length && <small>正在加载待发送消息…</small>}
       {error && <p role="alert">待发送消息：{error}</p>}
-      {!foldable ? ordered.map((message) => row(message)) : <section className={`scheduled-message-card${open ? " is-expanded" : ""}`} aria-label="排队输入">
+      {!foldable ? ordered.map((message) => <article className="scheduled-message-single" key={message.id}>{row(message)}{details(message)}</article>)
+        : <section className={`scheduled-message-card${open ? " is-expanded" : ""}`} aria-label="排队输入">
         <header className="scheduled-message-summary">
           <span className="scheduled-message-stack"><Stack size={17} aria-hidden="true" /></span>
           <div className="scheduled-message-summary-copy"><strong>待发送输入 <span>{ordered.length}</span></strong>
@@ -169,10 +172,7 @@ export function ScheduledMessageTray(props: TrayProps) {
                 <div className="scheduled-message-item-meta"><span>#{ordered.indexOf(message) + 1}</span>
                   {exitCode !== null && <span className={exitCode !== 0 ? "is-attention" : undefined}>exit {exitCode}</span>}</div>
                 {row(message)}
-                <details className="scheduled-message-details" data-message-id={message.id}><summary>查看完整输入</summary>
-                  <div className="scheduled-message-body">{scheduledMessageText(message) || "[无文字内容]"}</div>
-                  {message.attachments.length > 0 && <ul aria-label="消息附件">{message.attachments.map((path, index) => <li key={`${index}:${path}`}>{path}</li>)}</ul>}
-                </details>
+                {details(message)}
               </article>;
             })}
             {!ordered.some((message) => scheduledMessageMatches(message, filter)) && <p className="scheduled-message-empty">这个分类下没有待发送输入。</p>}
@@ -183,7 +183,7 @@ export function ScheduledMessageTray(props: TrayProps) {
       </section>}
       <span className="scheduled-message-announcement" role="status">{ordered.length} 条待发送消息{counts.attention > 0 && `，${counts.attention} 条需留意`}</span>
     </div>
-    {cancelMessage && onCancel && <ConfirmDialog title="取消这次唤醒？" message="仅移除这条待发送输入，哨兵仍在运行，后续事件仍会进入队列。"
+    {cancelMessage && onCancel && <ConfirmDialog title="取消这次唤醒？" message="仅移除这条待发送输入，不执行停止哨兵操作。"
       confirmLabel="取消这次唤醒" cancelLabel="保留输入" busy={cancelingIds.has(cancelMessage.id)} danger
       onConfirm={() => onCancel(cancelMessage.id)} onClose={() => setPendingCancel(null)}>
       <p className="scheduled-message-cancel-text">{scheduledMessageText(cancelMessage)}</p>

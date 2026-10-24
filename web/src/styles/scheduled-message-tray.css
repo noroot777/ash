@@ -18,7 +18,10 @@
 .scheduled-message-filters button { border: 0; border-radius: 5px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10px; }
 .scheduled-message-filters button[aria-pressed="true"] { background: var(--sel-bg); color: var(--accent); }
 .scheduled-message-filters button span { margin-left: 4px; font-family: var(--font-mono); font-size: 9px; }
-.scheduled-message-items { height: var(--scheduled-message-list-height, min(260px, 35dvh)); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.scheduled-message-items { height: min(260px, 35dvh); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.scheduled-message-single { border: 1px solid var(--line); border-radius: 7px; background: var(--overlay); padding: 4px 8px; }
+.scheduled-message-single > .scheduled-message-row { border: 0; background: transparent; padding: 0; }
+.scheduled-message-single > .scheduled-message-details { margin-bottom: 3px; }
 .scheduled-message-item { border-bottom: 1px solid var(--line); padding: 9px 12px; }
 .scheduled-message-item:last-child { border-bottom: 0; }
 .scheduled-message-item-meta { display: flex; align-items: center; gap: 10px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; }

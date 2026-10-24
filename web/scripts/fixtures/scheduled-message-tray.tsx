@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { ScheduledMessage } from "@ash/shared";
 import { ScheduledMessageTray, useScheduledMessages } from "../../src/components/ScheduledMessages.tsx";
 import { joinDraftText } from "../../src/task-detail/withdrawDraft.ts";
+import { useReplyLayout } from "../../src/task-detail/useReplyLayout.ts";
 import "../../src/styles/global.css";
 
 function Fixture() {
@@ -10,6 +11,7 @@ function Fixture() {
   const [team, setTeam] = useState(false);
   const [draft, setDraft] = useState("未发送的草稿");
   const scheduled = useScheduledMessages(taskId);
+  const shellRef = useReplyLayout();
   const withdraw = async (message: ScheduledMessage) => {
     if (!await scheduled.cancel(message.id)) return;
     setDraft((current) => joinDraftText(message.text, current));
@@ -26,13 +28,15 @@ function Fixture() {
         <p>当前回合继续运行，排队输入在同一张卡片内向上展开。</p>
         <button type="button">会话区域按钮</button>
       </section></div>
-      <div className={team ? "team-reply-shell" : "task-reply-shell"}>
+      <div ref={shellRef} className={team ? "team-reply-shell" : "task-reply-shell"}>
+        <div className="reply-context">
         <ScheduledMessageTray key={taskId} messages={scheduled.messages} loading={scheduled.loading} error={scheduled.error}
           cancelingIds={scheduled.cancelingIds} steeringIds={scheduled.steeringIds}
           onSteer={team ? undefined : (messageId) => void scheduled.steer(messageId)}
           onWithdraw={(message) => void withdraw(message)} onCancel={(messageId) => void scheduled.cancel(messageId)} />
+        </div>
         <div className={team ? "team-reply-box" : "task-reply-box"}>
-          <textarea aria-label="回复草稿" value={draft} onChange={(event) => setDraft(event.target.value)} style={{ height: 110, minHeight: 110 }} />
+          <textarea aria-label="回复草稿" value={draft} onChange={(event) => setDraft(event.target.value)} style={{ height: 110 }} />
           <footer style={{ padding: "8px 12px", fontSize: 11 }}>codex · 运行中，发送即排队</footer>
         </div>
       </div>

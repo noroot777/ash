@@ -126,6 +126,8 @@ try {
   await cancel.click();
   const dialog = page.getByRole("dialog", { name: "取消这次唤醒？" });
   await dialog.waitFor();
+  assert.match(await dialog.innerText(), /不执行停止哨兵操作/);
+  assert.doesNotMatch(await dialog.innerText(), /仍在运行|后续事件仍会/);
   assert.equal(deleted.length, 0, "弹出确认框不能直接删除输入");
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "hidden" });
@@ -157,10 +159,31 @@ try {
     assert.equal(await page.locator(".scheduled-message-row").count(), Math.min(count, 2));
   }
   await expand();
-  await reload([message(0), message(1)]);
+  const managed = { ...message(2), attachments: ["/tmp/review-notes.txt"] };
+  await reload([message(0), message(1), managed]);
+  const managedDetails = page.locator('details[data-message-id="msg-2"]');
+  await managedDetails.locator("summary").click();
+  await reload([message(1), managed]);
   assert.equal(await list.count(), 0, "回到两条时不留下空展开区");
-  await reload(Array.from({ length: 30 }, (_, index) => message(index)));
+  assert.equal(await managedDetails.getAttribute("open"), "", "三条降两条保留已打开的正文");
+  assert.equal(await managedDetails.getByText("/tmp/review-notes.txt", { exact: true }).isVisible(), true);
+  assert.match(await managedDetails.locator(".scheduled-message-body").innerText(), /保留完整的正文与排队顺序/);
+  await reload([managed]);
+  assert.equal(await managedDetails.getAttribute("open"), "", "只剩一条审查答复仍可读全文");
+  assert.equal(await page.getByRole("button", { name: /撤回|引导会话|取消哨兵事件/ }).count(), 0, "查看审查答复不扩大操作权限");
+  await page.reload();
+  await managedDetails.locator("summary").click();
+  assert.equal(await managedDetails.getByText("/tmp/review-notes.txt", { exact: true }).isVisible(), true, "刷新后一条消息仍有全文入口");
+  await reload([message(0), message(1)]);
+  for (const summary of await page.locator(".scheduled-message-single summary").all()) await summary.click();
+  assert.equal(await page.locator(".scheduled-message-single details[open]").count(), 2, "两条中的哨兵和个人输入均可完整阅读");
+  await reload(Array.from({ length: 10 }, (_, index) => message(index)));
   await expand();
+  await filter("审查答复").click();
+  await reload(pending.filter((item) => !item.sessionRole));
+  await page.waitForFunction(() => document.querySelector('.scheduled-message-filters button[aria-pressed="true"]')?.textContent?.startsWith("全部"));
+  assert.equal(await list.locator(".scheduled-message-item").count(), 8, "审查分类消失后回到全部，不遗留不可选空筛选");
+  await reload(Array.from({ length: 30 }, (_, index) => message(index)));
   for (const width of [1280, 768, 390, 320]) {
     await page.setViewportSize({ width, height: width < 500 ? 700 : 900 });
     await settle();

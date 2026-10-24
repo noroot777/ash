@@ -47,6 +47,7 @@ assert.equal(renderTray([]), "", "空队列不占回复区");
 for (const count of [1, 2]) {
   const markup = renderTray(samples.slice(0, count));
   assert.equal((markup.match(/class="scheduled-message-row"/g) ?? []).length, count);
+  assert.equal((markup.match(/<summary>查看完整输入<\/summary>/g) ?? []).length, count);
   assert.doesNotMatch(markup, /class="scheduled-message-card/);
 }
 const folded = renderTray(samples);
@@ -55,6 +56,7 @@ assert.equal((folded.match(/class="scheduled-message-row"/g) ?? []).length, 2);
 assert.match(folded, /展开全部 3 条/);
 assert.match(folded, /另有 1 条已收起/);
 assert.doesNotMatch(folded, /输入-2|scheduled-message-popover/);
+assert.match(renderTray([{ ...samples[0], sessionRole: "reviewer", attachments: ["/tmp/review-notes.txt"] }]), /review-notes.txt/);
 const equalTime = [samples[1], { ...samples[0], id: "z", sendAt: samples[1].sendAt }, { ...samples[0], sendAt: samples[1].sendAt }];
 assert.deepEqual(bySendTime(equalTime).map((message) => message.id), ["sample-0", "z", "sample-1"]);
 assert.equal(equalTime[0], samples[1], "展示排序不得改动消息原数组");

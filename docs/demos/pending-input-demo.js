@@ -144,7 +144,7 @@ function fitPanel() {
   const composerHeight = select(".composer-zone").getBoundingClientRect().height - cardHeight;
   const availableHeight = select(".task-window").getBoundingClientRect().height - select(".task-header").getBoundingClientRect().height - composerHeight - 100;
   const chromeHeight = cardHeight - list.getBoundingClientRect().height;
-  list.style.maxHeight = `${Math.max(64, Math.min(preferredHeight, availableHeight - chromeHeight))}px`;
+  list.style.maxHeight = `${Math.max(0, Math.min(preferredHeight, availableHeight - chromeHeight))}px`;
 }
 
 function render() {

@@ -100,8 +100,9 @@ h2 { margin: 0; }
 .working-dots i:nth-child(3) { opacity: .3; }
 .conversation-space { display: flex; align-items: center; gap: 10px; padding: 13px 0 24px 39px; color: #acadb6; font-size: 10px; }
 .space-line { flex: 1; height: 1px; background: #ededf1; }
-.composer-zone { padding: 0 24px 10px; position: relative; background: #fcfcfd; flex-shrink: 0; }
-.queue-anchor { position: relative; z-index: 3; }
+.composer-zone { display: flex; min-height: 0; max-height: 100%; flex: 0 1 auto; flex-direction: column; padding: 0 24px 10px; position: relative; background: #fcfcfd; }
+.queue-anchor { min-height: 0; flex: 0 1 auto; overflow-y: auto; position: relative; z-index: 3; }
+.composer-zone > :not(.queue-anchor) { flex-shrink: 0; }
 .queue-card { position: relative; margin: 0 0 12px; border: 1px solid #dedbe9; border-radius: 10px; background: var(--paper); box-shadow: 0 3px 9px #32244e03; }
 .queue-card::before, .queue-card::after { content: ""; position: absolute; height: 5px; border: 1px solid #e5e1ed; background: #f7f5fb; border-radius: 0 0 7px 7px; z-index: -1; }
 .queue-card::before { bottom: -4px; left: 5px; right: 5px; }
