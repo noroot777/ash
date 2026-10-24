@@ -299,6 +299,13 @@ MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` �
 </details>
 
 <details>
+<summary>Windows 常用命令提示无法识别项目里的 kb.cmd 等脚本</summary>
+
+常用命令使用 PowerShell，不会自动搜索当前目录。项目目录里的脚本写为 `.\kb.cmd restart`；路径带空格时用 `& '.\my tool.cmd' restart`。启动和重启命令分别保存，两个字段都要检查。环境变量用 `$env:NAME='value'`，而不是 POSIX 的 `export NAME=value`。
+
+</details>
+
+<details>
 <summary>Windows 上报 Filename too long</summary>
 
 触发 260 字符路径限制。管理员 PowerShell 中启用 `LongPathsEnabled`，并执行 `git config --global core.longpaths true`。`npm run setup` 会自动检测。
