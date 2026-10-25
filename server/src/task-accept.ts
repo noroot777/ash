@@ -33,7 +33,10 @@ import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
-import { acceptGateCheck, dropPendingAcceptGate, startPendingAcceptGate, type AcceptGateIntent } from "./accept-gate.js";
+import { mergePreflight } from "./task-accept-merge-preflight.js";
+import { gateMergeSource } from "./accept-gate-state.js";
+import { acceptGateCheck, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
+import { discardPendingAcceptanceGate, finishAcceptanceGate } from "./task-accept-gate-launch.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 
 export type AcceptSuccess = {
@@ -85,8 +88,9 @@ async function acceptWithoutCleanup(
   kind: AcceptSuccess["kind"],
   message: string,
   authority?: ReviewAuthority,
+  basis: AcceptGateSnapshot | null = null,
 ): Promise<AcceptTaskResult> {
-  const finalized = await finalizeAcceptance(task, message, false, {}, authority);
+  const finalized = await finalizeAcceptance(task, message, false, {}, authority, basis);
   if (finalized.failure) return finalized.failure;
   const { sharedWorkers } = finalized;
   return {
@@ -173,10 +177,14 @@ async function acceptTaskUnlocked(
   // 这里直接 null 放行）。判在锁里、跑在锁外 —— 那条命令动辄十几分钟，占着仓库锁会让
   // 同仓库其它任务的验收全部干等，所以这里只登记意图，发射在 acceptTask 的锁外那一段。
   const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
+  const cheap = await mergePreflight(task, gateProject, by, commitOverride);
+  if (cheap) return cheap;
+  let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority },
     intent: gateIntent,
     passedRunId: gatePassedRunId,
+    onBasis: basis => { gateBasis = basis; },
   });
   if (gate) return gate;
 
@@ -191,6 +199,7 @@ async function acceptTaskUnlocked(
       "in_place",
       `验收通过：${subject}，代码已在原工作区中；无需执行分支合并或 worktree 清理，status 保持 ${task.status}。`,
       reviewAuthority,
+      gateBasis,
     );
   }
 
@@ -222,6 +231,7 @@ async function acceptTaskUnlocked(
       `验收通过：这条线上没有「合并并清理」这一站，所以只记下「我认可这份产物」，` +
         `没有动 git —— 任务分支和 worktree 都留着。要让这条线自己合，在编排里加上这一站即可。`,
       reviewAuthority,
+      gateBasis,
     );
   }
 
@@ -269,13 +279,15 @@ async function acceptTaskUnlocked(
   if (!task.acceptedTargetBranch) {
     await db.update(tasks).set({ acceptedTargetBranch: intendedTarget, updatedAt: now() }).where(eq(tasks.id, taskId));
   }
+  const testedSource = await gateMergeSource(gateBasis);
   if (!retrying) {
-    const source = await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
+    const source = testedSource ?? await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
     await db.update(tasks).set({ acceptedSourceCommit: source }).where(eq(tasks.id, taskId));
   }
   const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge, {
     commit: commitOnAccept,
     retryOfMerged: retrying,
+    sourceCommit: testedSource,
   });
   if (!merge.ok && merge.reason === "target_checked_out" && merge.targetBranch) {
     const owner = await branchOwner(project.repoPath, task.projectId, merge.targetBranch);
@@ -387,8 +399,13 @@ async function acceptTaskUnlocked(
     );
   }
   const mergedAt = now();
-  if (tagged) await db.update(tasks).set({ ...snapshot, updatedAt: mergedAt }).where(eq(tasks.id, taskId));
-  else await commitAcceptanceStage(taskId, "merged", snapshot, reviewAuthority);
+  const mergedSnapshot = {
+    ...snapshot,
+    ...(!preserveSnapshot ? gateBasis : {}),
+  };
+  if (tagged) await db.update(tasks).set({ ...mergedSnapshot, updatedAt: mergedAt }).where(eq(tasks.id, taskId));
+  else await commitAcceptanceStage(taskId, "merged", mergedSnapshot, reviewAuthority);
+  bus.publish({ type: "task.acceptGate", taskId });
   if (!tagged) await recordBranchReceipt(taskId, true);
   if (!tagged) {
     bus.publish({ type: "task.stage", taskId, stage: "merged", updatedAt: mergedAt });
@@ -649,6 +666,9 @@ export async function acceptTask(
       // 之间）——那不是重复执行，是补跑一次从未发生过的发布。
       result = await finishAcceptedTail(result, by, advanceOpts, originalFinalizer);
     }
+  } catch (error) {
+    await discardPendingAcceptanceGate(taskId, error);
+    throw error;
   } finally {
     endAccepting(taskId);
     // 撞冲突时登记的「叫任务自己去解」必须**在验收锁释放之后**才发:锁还锁着时
@@ -658,18 +678,5 @@ export async function acceptTask(
   // 验收前置命令的发射点。**必须在这儿**（仓库锁之外、验收互斥之外）：那条命令要跑十几
   // 分钟，占着仓库锁会让同仓库其它任务的验收全部干等；而它跑完之后还要自己再发起一次
   // 验收，占着验收互斥的话那一次会被自己挡回来。判定仍在锁里做（acceptGateCheck）。
-  if (!result.accepted && result.reason === "accept_gate_required") {
-    const gate = await startPendingAcceptGate(taskId);
-    if (gate) {
-      result = gate.status === "running"
-        ? {
-          ...result, reason: "accept_gate_running", gate,
-          error: `${result.error} 已经在跑了（日志 ${gate.logPath}）。跑完如果是绿的，这次验收会自动接着做完，不用再点。`,
-        }
-        : { ...result, reason: "accept_gate_failed", gate, error: `${result.error} 但这条命令没能跑起来：${gate.logTail.trim() || "详见任务时间线"}` };
-    }
-  } else {
-    dropPendingAcceptGate(taskId);
-  }
-  return result;
+  return finishAcceptanceGate(taskId, result);
 }

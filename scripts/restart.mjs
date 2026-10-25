@@ -2,10 +2,10 @@
 // 一条龙:重建全部 → 重启 :4317 服务端 → 刷新 ash MCP。
 //
 //   npm run restart            # 或直接 node scripts/restart.mjs
-//   FORCE=1 npm run restart    # 即使有任务在跑也强制重启(会把它们判为 failed)
-//   WAIT=1 npm run restart     # 有任务在跑就【等】它们排空再重启,而不是中止
-//   SKIP_MCP=1 npm run restart # 只重建+重启 :4317,不刷新 MCP(不打断正在用 ash MCP 的会话)
-//   FORCE_MCP=1 npm run restart # 明知有 agent 正握着 MCP 通道,也照样刷新(会掐断它们的交卷)
+//   node scripts/restart.mjs --force # 强制重启并刷新 MCP(被打断的任务标为 failed)
+//   node scripts/restart.mjs --wait  # 等会被打断的任务排空再重启,而不是中止
+//   node scripts/restart.mjs --skip-mcp # 只重建+重启 :4317,不刷新 MCP(不打断正在用 ash MCP 的会话)
+//   node scripts/restart.mjs --force-mcp # 明知有 agent 正握着 MCP 通道,也照样刷新(会掐断它们的交卷)
 //
 // 跑法说明:
 //  - :4317 跑的是编译后的 dist,所以改完源码必须先 build 再重启,本脚本一并做掉。
@@ -15,12 +15,14 @@
 //    接回。真会被判 failed 的只剩：旧代码起的（没 agent_pid）、queued 还没起进程
 //    的、进程已经不在的。所以「有 3 个任务在跑」现在完全可能是可以随意重启的。
 //    判据单点在 server 的 /api/restart-impact,跟真正接管时用同一条口径。
-//  - 确定要打断再加 FORCE=1。build 已完成不会丢，只是先不动服务端。
-//  - WAIT=1 把「人守着等排空」换成「脚本替你等」:先等空再 build,build 期间若又
+//  - --force 表示确定要打断。build 已完成不会丢，只是先不动服务端。
+//  - --wait 把「人守着等排空」换成「脚本替你等」:先等空再 build,build 期间若又
 //    有任务起跑就再等一轮,然后重启。WAIT_TIMEOUT=<秒> 可设上限(默认无限等),
 //    等待期间 Ctrl-C 随时可退。FORCE 优先于 WAIT(既然要强杀就不必等)。
-//    注意残留竞态:检查与 kill 之间仍可能有 queued 任务抢跑 —— 真正关死这个窗口
-//    需要服务端的 drain 模式(停止启动新任务并如实报告已排空),这里够不着。
+//    注意残留竞态:检查与 kill 之间仍可能有 queued 任务抢跑,于是它**没被等到**——
+//    真正关死这个窗口需要服务端的 drain 模式(停止启动新任务并如实报告已排空),这里
+//    够不着。但那只影响「等没等干净」这个账:抢跑的那个 agent **不会被这一刀杀掉**
+//    (Windows 那边按壳记号认人,见 platform.mjs 的 killServerProcess)。
 //  - ash MCP 是每个 Codex/Claude 会话各自 spawn 的 stdio 子进程(node mcp/dist/index.js),
 //    不是常驻端口。第 3 步杀掉这些"旧代码"子进程;客户端下次用到时会用新的 mcp/dist 重新拉起。
 //    **这一刀是本脚本唯一真能伤到正在干活的 agent 的地方**(重启 :4317 它们无感,见上一条):
@@ -39,8 +41,22 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, isPidAlive, killPid, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
+import { IS_WINDOWS, isNotListening, isPidAlive, killPid, killServerProcesses, listenerPids, localGet, localJson, pidsRunningScript, sleep } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces } from "./workspace-check.mjs";
+import { repairEmptyWorkspaces } from "./workspace-repair.mjs";
+import { parseRestartOptions, restartCommand, RESTART_USAGE } from "./restart-options.mjs";
+
+let options;
+try {
+  options = parseRestartOptions();
+} catch (error) {
+  process.stderr.write(`✕ ${error.message}\n运行 ${restartCommand("--help")} 查看用法。\n`);
+  process.exit(2);
+}
+if (options.help) {
+  process.stdout.write(`${RESTART_USAGE}\n`);
+  process.exit(0);
+}
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
@@ -52,8 +68,8 @@ const SERVER_NODE = process.env.SERVER_NODE || process.execPath;
 // 起哪个入口。默认就是编译产物;留一个口子是为了 test-restart.mjs 能拿一个假 server
 // 跑完整条流程(否则那条回归只能靠 stub 掉半个脚本,测的就不是真路径了)。
 const SERVER_ENTRY = process.env.SERVER_ENTRY || "server/dist/index.js";
-const FORCE = !!process.env.FORCE;
-const WAIT = !!process.env.WAIT;
+const FORCE = options.force;
+const WAIT = options.wait;
 const WAIT_TIMEOUT = process.env.WAIT_TIMEOUT ? Number(process.env.WAIT_TIMEOUT) : null;
 
 const say = (line) => process.stdout.write(`${line}\n`);
@@ -103,33 +119,56 @@ function hostToken() {
  * 走文件之后（server/src/executors/detached.ts），单飞任务的进程压根不随 server 死，
  * 重启后按 pid+offset 接管，全程无感；团队调度台进程会断但会自动 --resume 接回。
  * 判据单点在 server 的 /api/restart-impact，跟真正接管时用同一条口径，免得这边说能
- * 接、那边又不认。server 没起来 → 各类算 0，照旧重启。
+ * 接、那边又不认。
  *
- * **「服务端拒绝回答」不是「没有会被打断的任务」**：多人模式下这条端点要凭证
- * （见 hostToken），拿不到就得 fail closed —— 否则安全闸静默变成 0，不加 FORCE 的
- * 重启照样打断 queued 任务，命令还不提示（第 1 轮审查 P1）。
+ * 回答分**三档**,而不是「拿到 / 没拿到」两档:
+ *  · 拿到判据          → 原样返回
+ *  · `refused`         服务端答了、但不给判据(多人模式要凭证,见 hostToken)
+ *  · `unknown`         **问不出来**:超时、连接被重置
+ *  · `{}`              端口上压根没人在听 = server 没在跑 = 本来就没有任务会被打断
+ *
+ * 后两者过去被压成同一个 `{}`,于是 ash 响应慢的时候安全闸静默变成 0:不加 FORCE 的重启
+ * 照样下刀,保护名单还跟着变成空数组(第 1 轮审查 F1 / P1 是同一类错)。
+ * **「问不出来」不等于「没有」**,所以这里把它单独报出来,由 impactOrAbort 去 fail closed。
  */
 async function impact() {
   const token = hostToken();
-  const { status, json } = await localGet(
+  const ask = (timeoutMs) => localGet(
     PORT,
     "/api/restart-impact",
-    2000,
+    timeoutMs,
     token ? { "x-ash-host-token": token } : undefined,
   );
-  if (json) return json;
-  // 连不上(status === null)= server 没在跑,本来就没有任务会被打断,照旧算 0。
-  if (status === null) return {};
-  return { refused: status };
+  let probe = await ask(2000);
+  // 慢一次不代表问不出来(重启前这台机器往往正忙):再给一次、时限放宽。注意这**不是**
+  // 修 F1 的办法 —— 两次都没拿到仍然算 unknown,下面照样中止。加这一次只是少一点误拦。
+  if (!probe.json && probe.status === null && !isNotListening(probe.error)) probe = await ask(6000);
+  if (probe.json) return probe.json;
+  if (probe.status !== null) return { refused: probe.status };
+  if (isNotListening(probe.error)) return {};
+  return { unknown: probe.error || "unknown" };
 }
 
 function countOf(data, field) {
   return Array.isArray(data[field]) ? data[field].length : 0;
 }
 
-/** 服务端答了、但没给出判据 —— 只有这种情况才把「查不到」当成危险信号。 */
+/** 服务端答了、但没给出判据。 */
 function refusedStatus(data) {
   return typeof data.refused === "number" ? data.refused : null;
+}
+
+/** 连上了却没拿到答复(超时 / 被重置)。 */
+function unknownReason(data) {
+  return typeof data.unknown === "string" ? data.unknown : null;
+}
+
+/** 「判据问不到」时给人看的那半句话；拿到了判据就返回 null。 */
+function noVerdictReason(data) {
+  const refused = refusedStatus(data);
+  if (refused !== null) return `服务端回 ${refused}`;
+  const unknown = unknownReason(data);
+  return unknown === null ? null : `服务端在端口上，但没答复这条判据（${unknown}）`;
 }
 
 /** build 那一步跑过没有 —— 只用来让中止提示说得准（见 impactOrAbort）。 */
@@ -143,12 +182,20 @@ let built = false;
  */
 async function impactOrAbort() {
   const data = await impact();
-  const refused = refusedStatus(data);
-  if (refused === null || FORCE) return data;
-  say(`  ✋ 问不到「重启会打断谁」(服务端回 ${refused}) —— 已中止,未重启服务端。`);
-  say(`     多人模式下这条判据要宿主机凭证:确认 ${LOCK_FILE} 读得到`);
-  say("     (它由 server 自己写、权限 0600;换个用户跑这个脚本就读不到了)。");
-  say("     明知可能打断也要重启:  FORCE=1 npm run restart");
+  const why = noVerdictReason(data);
+  if (why === null || FORCE) return data;
+  say(`  ✋ 问不到「重启会打断谁」(${why}) —— 已中止,未重启服务端。`);
+  if (refusedStatus(data) !== null) {
+    say(`     多人模式下这条判据要宿主机凭证:确认 ${LOCK_FILE} 读得到`);
+    say("     (它由 server 自己写、权限 0600;换个用户跑这个脚本就读不到了)。");
+  } else {
+    // 这一档是「它在,只是没答上来」:ash 正忙,或者真卡住了。两种都不该让脚本自己拍板下刀
+    // —— 问不出保护名单的那一刀,等于拿正在跑的任务赌一把(第 1 轮审查 F1)。
+    say("     它还在端口上,只是没按时答复 —— ash 正忙,或者卡住了。");
+    say("     「问不出来」不等于「没有任务会被打断」,所以这里不下刀。稍后重试;");
+    say(`     真卡住了就先看日志 ${LOG},必要时手工 kill 掉它再重跑。`);
+  }
+  say(`     明知可能打断也要重启:  ${restartCommand("--force")}`);
   // WAIT 那一档在 build 之前就问,所以这句必须按实际走到哪儿说 —— 说反了会让人
   // 以为新代码已经落盘。
   say(built
@@ -196,7 +243,15 @@ if (WAIT && !FORCE) await drainWait();
 say("▶ 依赖同步…");
 // 跟 setup.mjs 同一道闸:workspace 缺一块的话,npm 会拿本地包名去公共 registry 上找,
 // 报一条读起来像断网的 404。`git pull` 之后少了个目录也会走到这儿。
-const ws = inspectWorkspaces(REPO);
+let ws = inspectWorkspaces(REPO);
+if (!ws.ok) {
+  const repair = repairEmptyWorkspaces(REPO);
+  for (const warning of repair.warnings) say(`  ⚠ ${warning}`);
+  if (repair.restored.length) {
+    say(`  ✓ 已从 HEAD 恢复空 workspace:${repair.restored.join("、")}(未改暂存区,未覆盖已有文件)`);
+    ws = inspectWorkspaces(REPO);
+  }
+}
 if (!ws.ok) {
   for (const p of ws.problems) say(`  ✕ ${p}`);
   for (const line of WORKSPACE_FAIL_HINT) say(`     ${line}`);
@@ -237,8 +292,8 @@ if (old.length) {
   if (busy > 0 && !FORCE) {
     say(`  ✋ 重启会打断 ${busy} 个任务(判为 failed) —— 已中止,未重启服务端。`);
     for (const t of data.interrupted.slice(0, 8)) say(`     · ${t.title} —— ${t.reason}`);
-    say("     让脚本替你等它们跑完:  WAIT=1 npm run restart");
-    say("     确定要打断:            FORCE=1 npm run restart");
+    say(`     让脚本替你等它们跑完:  ${restartCommand("--wait")}`);
+    say(`     确定要打断:            ${restartCommand("--force")}`);
     say(`     (新代码已 build 进 dist,不会丢;只是暂不重启 :${PORT}。MCP 也未动。)`);
     process.exit(2);
   }
@@ -250,7 +305,27 @@ if (old.length) {
     say(`  ✓ 有任务在跑,但重启不会打断:${safe} 个会被接管(继续跑,无感)、${lead} 个调度台会自动接回。`);
   }
   if (busy > 0) say(`  ⚠ FORCE:打断 ${busy} 个**接管不了**的任务(判为 failed,可重试);会被接管的不受影响。`);
-  for (const pid of old) killPid(pid);
+  // 「会被接管的不受影响」在 Windows 上得自己兑现:那边没有信号,旧版这一刀是
+  // `taskkill /T /F`,/T 按父子关系把整棵树一起杀 —— agent 的输出早就落盘了,是这一刀
+  // 把它们带走的。所以把 survives 的那几棵子树点名保住(判据见 platform.mjs 的
+  // killServerProcess)。POSIX 上这个参数没有作用:SIGTERM 从来不级联。
+  //
+  // 这份名单是**上一时刻**的快照,所以它只是个额外输入:真正的不变量在
+  // killServerProcess 那边 —— 它按进程表里的壳记号认人,名单漏了的新 agent 也保得住
+  // (第 1 轮审查 F2)。走到这儿时判据一定是问到了的(问不到 impactOrAbort 已经中止)。
+  const spare = Array.isArray(data.survives) ? data.survives.map((t) => t.pid) : [];
+  let how = "signal";
+  try {
+    how = killServerProcesses(old, spare, { force: FORCE });
+  } catch (error) {
+    say(`  ✋ 无法安全终止 Windows 旧实例: ${error.message}。已中止重启。`);
+    say(`     未授权整树强杀;确定接受任务中断才使用 ${restartCommand("--force")}。`);
+    process.exit(2);
+  }
+  if (IS_WINDOWS && safe > 0 && how !== "selective") {
+    say(`  ⚠ 这一刀走的是整树强杀(taskkill /T),${safe} 个本可接管的任务会跟着断 ——`);
+    say("     只有问得到判据(survives 名单)时才能点名保住它们。");
+  }
 }
 
 // 不管上面找没找到旧进程,端口都必须**彻底安静**才能起新的。这是全脚本唯一不依赖
@@ -346,22 +421,24 @@ say("▶ 3/3 刷新 ash MCP…");
 // server 没起来/老版本没这个字段算 0,退回原来的行为;**服务端拒答则当作「有人握着」**
 // —— 掐断在跑的 agent 是不可逆的,不知道就别掐(第 1 轮审查 P1 的同一条判据)。
 const after = await impact();
-const mcpUnknown = refusedStatus(after) !== null;
+// 「不知道」两档都算(拒答 / 没答上来):掐断在跑的 agent 是不可逆的,不知道就别掐。
+const mcpWhy = noVerdictReason(after);
+const mcpUnknown = mcpWhy !== null;
 const holders = countOf(after, "mcpDisrupted");
-if (process.env.SKIP_MCP) {
+if (options.skipMcp) {
   say("  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 ash MCP 的会话不会被打断。");
-  say("     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 SKIP_MCP 再跑一次。)");
-} else if (mcpUnknown && !process.env.FORCE_MCP && !FORCE) {
-  say(`  ⏭ 问不到「谁还握着 MCP 通道」(服务端回 ${refusedStatus(after)}),已跳过刷新 —— 宁可让旧会话跑旧 mcp,也不冒险掐断在跑的 agent。`);
-  say("     确定要刷新:  FORCE_MCP=1 npm run restart");
-} else if (holders > 0 && !process.env.FORCE_MCP && !FORCE) {
+  say("     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 --skip-mcp / SKIP_MCP 再跑一次。)");
+} else if (mcpUnknown && !options.forceMcp && !FORCE) {
+  say(`  ⏭ 问不到「谁还握着 MCP 通道」(${mcpWhy}),已跳过刷新 —— 宁可让旧会话跑旧 mcp,也不冒险掐断在跑的 agent。`);
+  say(`     确定要刷新:  ${restartCommand("--force-mcp")}`);
+} else if (holders > 0 && !options.forceMcp && !FORCE) {
   // 默认不掐断正在干活的 agent:刷新 MCP 的收益只是"旧会话用上新 mcp 代码",
   // 代价却是它这一轮的交卷调用当场失败(2026-08-06 验证白跑)。收益远小于代价,
   // 所以默认让路,并把出路说清楚。
   say(`  ⏭ 有 ${holders} 个正在干活的 agent 手里握着 ash MCP 通道,已跳过刷新以免掐断它们的交卷。`);
   for (const t of after.mcpDisrupted.slice(0, 8)) say(`     · ${t.title} (pid ${t.pid})`);
   say(`     (:${PORT} 已经是新代码;这些会话仍跑旧 mcp/dist。)`);
-  say("     改了 mcp/ 需要立刻生效:  FORCE_MCP=1 npm run restart");
+  say(`     改了 mcp/ 需要立刻生效:  ${restartCommand("--force-mcp")}`);
 } else {
   const stale = pidsRunningScript(join(REPO, "mcp", "dist", "index.js"));
   if (stale.length) {

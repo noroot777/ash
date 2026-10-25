@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
+import { registerKimiMcp } from "./kimi-mcp.mjs";
 
 // setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
 // 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把规范名钉为 ash。
@@ -247,6 +248,22 @@ if (process.env.SKIP_MCP) {
     }
   } else {
     warn("没装 codex CLI,跳过它的 MCP 注册");
+  }
+
+  const kimiBin = which("kimi") || (!IS_WINDOWS && which(join(process.env.KIMI_INSTALL_DIR || join(homedir(), ".kimi-code"), "bin", "kimi")));
+  if (kimiBin) {
+    try {
+      const result = registerKimiMcp({
+        configDir: process.env.KIMI_CODE_HOME || join(homedir(), ".kimi-code"),
+        mcpEntry,
+        url: URL_BASE,
+      });
+      ok(`kimi:${result.added ? "已注册 ash MCP" : "已有 ash/harness MCP，不动它"} (${result.file})`);
+    } catch (error) {
+      warn(`kimi MCP 注册失败：${error.message}；手动接入见 docs/install.md`);
+    }
+  } else {
+    warn("没装 kimi CLI,跳过它的 MCP 注册");
   }
 }
 

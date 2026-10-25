@@ -22,7 +22,9 @@ import { branchDeletionRejection } from "./task-branch-plan.js";
 import { withRepoLock } from "./repo-lock.js";
 import { deleteTaskCompletely } from "./task-delete-routes.js";
 import { isTaskBusy, taskBusyRejection } from "./task-busy.js";
+import { reconcileGateProcesses } from "./accept-gate-ownership.js";
 import { terminalSessions } from "./terminal.js";
+import { bus } from "./bus.js";
 import { findWorkflow } from "./workflows.js";
 import { ensureProjectDir } from "./project-dir.js";
 import { deleteProjectGitCredential } from "./git-credentials.js";
@@ -325,6 +327,10 @@ export function mountProjectRoutes(api: Hono): void {
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
+    if (normalizeAcceptGateCommand(updated.acceptGateCommand) !== normalizeAcceptGateCommand(existing.acceptGateCommand)) {
+      const affected = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, pid));
+      for (const task of affected) bus.publish({ type: "task.acceptGate", taskId: task.id });
+    }
     return c.json(toProject(updated, "admin"));
   });
 
@@ -343,6 +349,7 @@ export function mountProjectRoutes(api: Hono): void {
     // 单任务 DELETE 的生命周期锁在这里同样成立：turn 已占（status 未落 running）、验收
     // （含发布尾段）进行中删掉任务行，结算/尾段会写向不存在的任务（审查实测：项目入口
     // 完全绕过了任务级门禁）。判据与单任务入口共用 isTaskBusy（task-busy.ts）。
+    for (const task of ptasks) await reconcileGateProcesses(task.id);
     const live = ptasks.find(isTaskBusy);
     if (live) return c.json({ error: "项目有正在运行/排队/验收中的任务，无法删除", taskId: live.id }, 409);
     // 进入删除态:先挂 tombstone(拒绝该项目新建会话),再清场,再删库。三步共享这一个

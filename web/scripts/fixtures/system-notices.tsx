@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import type { Session, Task } from "@ash/shared";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import { buildConversationItems } from "../../src/task-detail/conversationModel.ts";
+import { SystemBoundary } from "../../src/task-detail/SystemNotice.tsx";
+import { SYSTEM_NOTICE_MODES } from "../../src/task-detail/systemNoticeModel.ts";
 import "../../src/styles/global.css";
 
 const session = {
@@ -71,8 +73,28 @@ const items = buildConversationItems([{ session, output, trace: [] }], [session]
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <div style={{ height: "100vh", background: "var(--bg)" }}>
+    {new URLSearchParams(window.location.search).has("boundaries") ? (
+      <main style={{ padding: 20, background: "var(--bg)" }}>
+        {SYSTEM_NOTICE_MODES.map(({ value, label }) => (
+          <section key={value} data-boundary-mode={value}>
+            <h2>{label}</h2>
+            {(["task", "team"] as const).map((surface) => (
+              <div key={surface} data-surface={surface}>
+                {(["neutral", "error"] as const).map((tone) => (
+                  <SystemBoundary
+                    key={tone}
+                    mode={value}
+                    surface={surface}
+                    item={{ text: tone === "error" ? "执行异常结束 · exit 1" : "本轮执行结束", tone }}
+                  />
+                ))}
+              </div>
+            ))}
+          </section>
+        ))}
+      </main>
+    ) : <div style={{ height: "100vh", background: "var(--bg)" }}>
       <ConversationFeed task={task} items={items} sessions={[session]} loading={false} error={null} />
-    </div>
+    </div>}
   </StrictMode>,
 );

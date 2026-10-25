@@ -1,6 +1,7 @@
 // 任务接力——两端共用的传输协议类型、错误类与尺寸常量(从 handoff.ts 拆出,
 // 导出/导入/HTTP 面三处共用;业务流程见 handoff.ts 顶部注释)。
 import { isAbsolute } from "node:path";
+import type { HandoffGateRun } from "./handoff-accept-gate.js";
 import type { HandoffErrorCode, HandoffPeerCapabilities, HandoffPingProject } from "@ash/shared";
 import type { HandoffWaitOrigins } from "./handoff-wait.js";
 
@@ -263,6 +264,8 @@ export interface HandoffManifest {
     acceptedTargetBranch?: string | null;
     acceptedBaseCommit?: string | null;
     acceptedMergeCommit?: string | null;
+    acceptedGateMode?: "passed" | "skipped" | "unset" | null;
+    acceptedGateRunId?: string | null;
     // 「怎么合的」也随任务走：对端要靠它分清「合了但没提交」和「合并早已发生、不可知」。
     // **acceptedPendingTree 不带**：那是本机项目目录索引的内容指纹,搬到另一台机器上没有
     // 任何可核对的对象,带过去只会让对端拿一个假指纹去判「还躺着没提交」。
@@ -274,6 +277,7 @@ export interface HandoffManifest {
     endedAt: string | null;
   };
   sessions: HandoffSessionRow[];
+  acceptGateRuns?: HandoffGateRun[];
   // 自由工作流的审查历史。老版本导出的 manifest 没有这个字段。
   freeWorkflow?: HandoffFreeWorkflowPayload | null;
   // 被任务文本/会话文件引用的上传附件。老版本导出的 manifest 没有这个字段。

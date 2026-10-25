@@ -259,5 +259,6 @@ async function restoreCheckpoint(
       message.taskId,
       `续跑交代没能放回任务行（${detail}）。它仍记在那条待发送的哨兵事件的账本列上，下一次投递会带着它走。`,
     ).catch(() => {});
+    throw error;
   }
 }

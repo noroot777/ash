@@ -86,7 +86,7 @@ export interface CliModelCatalog {
  * 服务端返回的 `probeSupported`。与 server catalog 里填了 `models` 的
  * type 是否一致,由 `server/scripts/test-cli-models.ts` 断言,不靠自觉。
  */
-export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", "codex", "grok", "opencode", "pi"]);
+export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["claude", "codex", "grok", "kimi", "opencode", "pi"]);
 
 // CLI-native model aliases used when an executor is on its official account.
 // Provider-backed executors replace these with that provider's /v1/models list.
@@ -137,7 +137,7 @@ export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   trae: [],
   // 2026-08-13 登录态 `grok models`(v1.0.3):grok-4.6(默认) + grok-4.5。
   grok: ["grok-4.6", "grok-4.5"],
-  kimi: ["kimi-code/k3", "kimi-code/kimi-for-coding", "kimi-code/kimi-for-coding-highspeed"],
+  kimi: ["kimi-code/k3.1-pro", "kimi-code/k3.1-pro-highspeed", "kimi-code/k3", "kimi-code/k3-256k", "kimi-code/kimi-for-coding", "kimi-code/kimi-for-coding-highspeed"],
   cursor: ["auto", "grok-4.5", "composer-2.5", "claude-sonnet-5", "claude-opus-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gemini-3.1-pro", "gemini-3.6-flash"],
   // qwen-code 的 Coding Plan 可选模型(2026-07-30 官方 auth 文档);同一菜单里还有
   // glm-5 / kimi-k2.5 / MiniMax-M2.5 等第三方 id,要用直接手填。
@@ -191,7 +191,7 @@ export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
   opencode: ["minimal", "low", "medium", "high", "xhigh", "max"],
   trae: [], // 2026-07-30 核对 docs.trae.cn 的 CLI 参数表与 trae_cli.yaml 字段:TRAE CLI 没有 reasoning/thinking effort 这个概念
   grok: ["low", "medium", "high"],
-  kimi: [], // 2026-07-30:config/API 有 effort,但 Kimi Code CLI 没有对应命令行参数
+  kimi: ["low", "medium", "high", "xhigh", "max"],
   cursor: [], // 2026-07-30 核对 Cursor CLI 参数页:没有独立 reasoning-effort flag;effort/Fast 看起来通过模型变体或账号计划控制
   qwen: [], // 2026-07-30 核对 main 的 yargs 定义:qwen-code 没有 reasoning/thinking effort 参数
   qoder: ["low", "medium", "high", "xhigh", "max"], // 2026-07-30 核对 qodercli@1.1.8 bundle:`--reasoning-effort <level>`,另接 disabled/off/none 与正整数
@@ -219,15 +219,13 @@ export const REASONING_EFFORT_DETAIL: Record<string, string> = {
  *
  * 为什么仍需要规则表：**没有通用接口给得出这个信息**。供应商的
  * `/v1/models` 只返回 id / owned_by / created（Anthropic 那版多一个 display_name），
- * 没有能力字段；各家 CLI 也没有「查某模型支持哪些 effort」的命令——非法组合要等
- * 真跑起来才被上游拒。所以内置已知规则按实测逐条积累，未知模型明确退回 CLI 并集。
+ * 没有能力字段。CLI 探测拿不到能力时使用内置实测规则；Kimi 未知模型没有可选档位，
+ * 其它 CLI 保留原有并集降级。
  *
  * 匹配保留 `openai/xxx` 里的 provider（多 provider CLI 必须靠它区分），同时也提取
  * 裸模型 id；`:high` 这类 Pi 档位后缀只在它确实是已知 effort 名时才剥掉。多条命中
  * 按 exact > provider+pattern > 更长 pattern 的确定性规则选最具体的一条。
  *
- * 补规则的规矩：`efforts` 写**完整允许集合**，且只能是该 CLI 并集的子集；未知就不
- * 写规则，退回并集并让上游诚实报错，不能猜一个较窄集合把可用档位藏掉。
  */
 export type ModelEffortMatchMode = "exact" | "prefix" | "suffix";
 
@@ -251,6 +249,12 @@ const CODEX_TOP_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as 
 const CODEX_56_LUNA_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export const MODEL_EFFORT_RULES: readonly ModelEffortRule[] = [
+  { id: "kimi:k3", types: ["kimi"], match: { provider: "kimi-code", model: "k3" }, efforts: ["low", "high", "max"] },
+  { id: "kimi:k3-256k", types: ["kimi"], match: { provider: "kimi-code", model: "k3-256k" }, efforts: ["low", "high", "max"] },
+  { id: "kimi:k3.1-pro", types: ["kimi"], match: { provider: "kimi-code", model: "k3.1-pro" }, efforts: ["low", "high", "max"] },
+  { id: "kimi:k3.1-pro-highspeed", types: ["kimi"], match: { provider: "kimi-code", model: "k3.1-pro-highspeed" }, efforts: ["low", "high", "max"] },
+  { id: "kimi:kimi-for-coding", types: ["kimi"], match: { provider: "kimi-code", model: "kimi-for-coding" }, efforts: ["low", "high", "max"] },
+  { id: "kimi:kimi-for-coding-highspeed", types: ["kimi"], match: { provider: "kimi-code", model: "kimi-for-coding-highspeed" }, efforts: [] },
   // Codex：每个模型家族写完整集合。命中按特异度打分(见 ruleScore),所以 luna 这条
   // 更长的前缀会赢过下面那条 gpt-5.6 通条,声明顺序不影响结果。
   { id: "codex:gpt-6", types: ["codex"], match: { model: "gpt-6", mode: "prefix" }, efforts: CODEX_TOP_EFFORTS },
@@ -282,7 +286,7 @@ export interface ReasoningEffortResolution {
   readonly efforts: readonly string[];
   /**
    * probe = CLI 亲口报的(最权威);model-rule = 内置实测规则;cli-fallback = 该模型
-   * 没有任何依据,退回 CLI 并集(这是明确的 unknown,不是对它能力的断言)。
+   * 没有任何依据(Kimi 返回空集合，其它 CLI 保留并集降级)。
    *
    * 界面与报错文案必须把这三者分开:拿一条猜出来的规则当 CLI 的原话,比承认不知道更坏。
    */
@@ -349,15 +353,15 @@ function ruleScore(rule: ModelEffortRule): number {
 /**
  * 解析某个 CLI + 模型的思考强度能力，并保留来源供 UI / 校验层判断是否命中已知规则。
  *
- * 不传 model（或该模型没登记）就退回 CLI 并集：这是明确的 unknown fallback，不是
- * 对该模型能力的断言。
+ * 不传 model（或该模型没登记）是 unknown fallback：Kimi 不提供显式档位，
+ * 其它 CLI 保留并集降级。
  */
 export function resolveReasoningEfforts(
   type: AgentType,
   model?: string | null,
   probed?: ModelEffortMap | null,
 ): ReasoningEffortResolution {
-  const fallback = REASONING_EFFORT_VALUES[type] ?? [];
+  const fallback = type === "kimi" ? [] : REASONING_EFFORT_VALUES[type] ?? [];
   if (!model?.trim()) return { efforts: fallback, source: "cli-fallback", ruleId: null };
   const ref = modelRef(model);
   // probe 优先:CLI 自己报的档位胜过任何内置规则。拿不到(没装 / 没登录 / 这家没来源)

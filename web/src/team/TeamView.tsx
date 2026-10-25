@@ -28,9 +28,11 @@ import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useFileMention } from "../lib/useFileMention.ts";
 import { FileMentionMenu } from "../components/MentionMenu.tsx";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
+import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
+import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { useExecutorGate } from "../task-detail/ExecutorGate.tsx";
 import {
@@ -61,7 +63,7 @@ import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
 import { useWorkerLiveLines } from "./workerLiveLines.ts";
 
-function TeamReplyBox({
+export function TeamReplyBox({
   task,
   onSend,
 }: {
@@ -70,6 +72,7 @@ function TeamReplyBox({
   onSend: (text: string, attachments: string[], options: { sendAt?: string }) => Promise<ReplyTaskResult | null>;
 }) {
   const draft = useTaskReplyDraft(task.id);
+  const shellRef = useReplyLayout();
   const value = draft.text;
   const setValue = draft.setText;
   const [sending, setSending] = useState(false);
@@ -165,7 +168,7 @@ function TeamReplyBox({
     }
   };
   return (
-    <div className="team-reply-shell">
+    <div ref={shellRef} className="team-reply-shell">
       {slash.open && (
         <SlashMenu
           className="team-reply-command-menu"
@@ -192,7 +195,9 @@ function TeamReplyBox({
           onSubmit={() => void send(new Date(sendAt).toISOString())}
         />
       )}
+      <div className="reply-context">
       <ScheduledMessageTray
+        key={task.id}
         messages={scheduled.messages}
         loading={scheduled.loading}
         error={scheduled.error}
@@ -208,6 +213,7 @@ function TeamReplyBox({
         onCancel={uploads.cancel}
       />
       {error && <p>{error}</p>}
+      </div>
       <div className="team-reply-box">
         <ReplyResizeHandle targetRef={inputRef} {...replyHeight} />
         <textarea
@@ -620,6 +626,14 @@ export function TeamView({
               indicatorForTask={indicatorForTask}
               historyReady={conversation.transcriptReady}
             />
+            {/* 验收前置命令那一条，跟普通任务详情页同一个组件、同一条 rail 几何（第 1 轮
+                审查 F4）：团队走的是这套独立的主会话 + 回复框，不经过 TaskDetail，于是
+                给团队点验收之后，命令在工作区里跑十几分钟而这一页上一个字都看不出来。 */}
+            {task.acceptGateRunning && (
+              <div className="task-reply-rail">
+                <AcceptGateWaitCard key={task.id} taskId={task.id} expected notify={notify} />
+              </div>
+            )}
             <TeamReplyBox task={task} onSend={async (text, attachments, options) => {
               // 回复也会起一轮(与普通任务详情页同口径)。
               if (!(await confirmExecutorSwap(task.id))) return null;

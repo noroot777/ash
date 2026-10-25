@@ -20,7 +20,15 @@ type TaskIndex = {
   workersByLead: Map<string, TaskListItem[]>;
 };
 
-export type TaskStatusIndicator = "pending" | "active" | "attention" | "unaccepted" | "success" | "error";
+export type TaskStatusIndicator =
+  | "pending"
+  | "active"
+  | "attention"
+  /** 有东西在后台替它跑着、而且会自己回来：挂着的哨兵、正在跑的验收前置命令。 */
+  | "working"
+  | "unaccepted"
+  | "success"
+  | "error";
 export type IndicatorForTask = (task: TaskListItem) => TaskStatusIndicator | null;
 
 function terminalEvent(task: TaskListItem): string | null {
@@ -57,19 +65,22 @@ export function readEventForTask(task: TaskListItem, workers: TaskListItem[] = [
   return task.mode === "team" && !task.parentId ? teamEvent(task, workers) : terminalEvent(task);
 }
 
+const liveWork = (task: TaskListItem): boolean => !!task.acceptGateRunning || !!task.monitorRunning;
+
 export function deriveTaskStatusIndicator(
   task: TaskListItem,
   workers: TaskListItem[] = [],
   unread = false,
 ): TaskStatusIndicator | null {
   if (task.mode === "team" && !task.parentId) {
-    if (task.question || workers.some((worker) => worker.question || worker.status === "paused")) {
-      return "attention";
-    }
+    // 「等你说话」和「等一件会自己回来的事」分开，判据见下面单飞那一段。
+    if (task.question || workers.some((worker) => worker.question)) return "attention";
+    if (liveWork(task) || workers.some(liveWork)) return "working";
     const leadLive = task.status === "running";
     if (leadLive || workers.some((worker) => worker.status === "running" || worker.status === "queued")) {
       return "active";
     }
+    if (task.status === "paused" || workers.some(worker => worker.status === "paused")) return "attention";
     if (task.status === "backlog" && workers.every((worker) => worker.status === "backlog")) {
       return "pending";
     }
@@ -84,7 +95,9 @@ export function deriveTaskStatusIndicator(
     return failed ? "error" : "success";
   }
 
-  if (task.question || task.status === "paused") return "attention";
+  if (task.question) return "attention";
+  if (liveWork(task)) return "working";
+  if (task.status === "paused") return "attention";
   if (task.status === "running" || task.status === "queued") return "active";
   if (task.status === "backlog") return "pending";
   // 「干完了但我还没验收」是持久事实，不是未读提醒：已读之后仍要标出来，

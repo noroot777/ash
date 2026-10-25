@@ -173,6 +173,11 @@
 .accept-gate-card.is-running { border-color: color-mix(in lch,var(--accent) 30%,var(--line)); background: color-mix(in lch,var(--accent) 5%,var(--panel)); }
 .accept-gate-card.is-passed { border-color: color-mix(in lch,var(--green) 26%,var(--line)); background: var(--green-bg); }
 .accept-gate-card.is-failed { border-color: color-mix(in lch,var(--red) 30%,var(--line)); background: color-mix(in lch,var(--red) 5%,var(--panel)); }
+/* 验收做完之后那张只读回执的「没通过」档:它不是关口(没有任何东西拦着你了),只是这次
+   合并没有通过记录 —— 所以是琥珀不是红。色值自带 alpha 而不是跟 --line 混:--line 的
+   色度是 0、色相却记着 282,lch 会沿短弧把黄插值成品红。 */
+.accept-gate-card.is-skipped { border-color: rgb(181 123 0 / 34%); background: rgb(181 123 0 / 5.5%); }
+.accept-gate-card.is-skipped > header > span:first-child { color: var(--amber); }
 .accept-gate-card > header { display: flex; align-items: flex-start; gap: 8px; }
 .accept-gate-card > header > span:first-child { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: var(--raised); color: var(--muted); }
 .accept-gate-card.is-running > header > span:first-child { color: var(--accent); }

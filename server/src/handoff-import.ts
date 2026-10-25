@@ -17,7 +17,7 @@ import { importMessageOrigin } from "./handoff-messages.js";
 import { db } from "./db/index.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
-  projects, scheduledMessages, schedules, sessionTurns, sessions, tasks,
+  acceptGateRuns, projects, scheduledMessages, schedules, sessionTurns, sessions, tasks,
 } from "./db/schema.js";
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, writeUploads } from "./handoff-uploads.js";
@@ -41,6 +41,7 @@ import { id, now } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@ash/shared";
 import { importWaitOwnership } from "./handoff-wait.js";
+import { collectGateRuns, replaceGateRuns } from "./handoff-accept-gate.js";
 
 export interface HandoffImportResult {
   ok: true;
@@ -120,6 +121,7 @@ async function importValidated(
   }
   // 优先信本机历史标记里的原机指纹；旧标记没有时，才接受签名 manifest 携带的值。
   // returning 只表示“可安全覆盖旧存档”，并不等于回到原机：第二次 A→B 时 B 也有 out 存档。
+  await collectGateRuns(m.task.id);
   const originFingerprint = existingMarker?.originFp ?? m.originFingerprint ?? null;
   // returned 必须由本机已有的 out 存档佐证。普通 import 的新任务只能信任来源机已获批准，
   // 不能再信它自报的 originFingerprint 来伪造“已移回本机”的展示与来源锁解除状态。
@@ -374,6 +376,8 @@ async function importValidated(
     acceptedBaseCommit: m.task.acceptedBaseCommit ?? null,
     acceptedMergeCommit: m.task.acceptedMergeCommit ?? null,
     acceptedMergeMethod: m.task.acceptedMergeMethod ?? null,
+    acceptedGateMode: m.task.acceptedGateMode ?? null,
+    acceptedGateRunId: m.task.acceptedGateRunId ?? null,
     pinnedAt: m.task.pinnedAt,
     starredAt: m.task.starredAt,
     createdAt: m.task.createdAt,
@@ -484,6 +488,7 @@ async function importValidated(
           // 执行器 id 只在本机有意义；agent 类型没变才保留原机选择，否则按类型重新解析。
           executorId: existing?.agentType === m.task.agentType ? existing.executorId : null,
         }).where(eq(tasks.id, m.task.id));
+        await replaceGateRuns(tx, m);
         // 会话、计划和 pending 消息确实随 manifest 迁移，只替换这三类；已发送/取消的
         // 本机消息仍是本机历史，不能和未迁移的自由工作流关联一起误删。
         await tx.delete(sessions).where(eq(sessions.taskId, m.task.id));
@@ -536,6 +541,7 @@ async function importValidated(
     await createTasks([taskRow], async () => {
       // createTasks 先 await 任务行插入、再调 afterInsert——走到这里说明任务行是本次建的。
       taskRowInserted = true;
+      await db.transaction(tx => replaceGateRuns(tx, m));
       if (sessionRows.length) await db.insert(sessions).values(sessionRows);
       if (messageRows.length) {
         // 导入即 pending:sent 只在原话真的进了会话之后才写,源机的 status/sentAt/
@@ -564,6 +570,7 @@ async function importValidated(
         await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, m.task.id));
         await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, m.task.id));
         await db.delete(sessions).where(eq(sessions.taskId, m.task.id));
+        await db.delete(acceptGateRuns).where(eq(acceptGateRuns.taskId, m.task.id));
         await db.delete(tasks).where(eq(tasks.id, m.task.id));
       } catch { rollbackFailed = true; /* 没有更好的办法,如实上报,让源机保留 pending */ }
     }

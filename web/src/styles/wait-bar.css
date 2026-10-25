@@ -1,0 +1,73 @@
+/* ── 回复框上方那条「等一件会自己回来的事」(.task-reply-rail 上的折叠条) ──────────
+   两张卡共用这一套骨架:哨兵(MonitorWaitCard)和验收前置命令(AcceptGateWaitCard)。
+   它们说的是同一类事实 —— **任务此刻不动,是因为有东西在后台替它跑着,而且那东西会
+   自己回来** —— 所以形态、尺寸、展开方式必须一样,只有颜色按「谁在跑」分开。
+
+   两态:
+     折叠 — 一条 26px 的横条,跟旁边的 rail 按钮等高,占满那一行的剩余宽度;
+     展开 — flex-basis 变 100%,被 rail 的 flex-wrap 挤到下一行独占,长成一张卡。
+
+   颜色走 --wait-tint 这一个变量(默认 --accent 的低饱和版):它表达的是「正在等」,不是
+   警告,不该跟红色的故障条抢眼睛。各自的调子在自己的样式表里改这一个变量就够了,别
+   再复制一份骨架。 */
+.wait-bar {
+  --wait-tint: var(--accent);
+  min-width: 0;
+  flex: 1 1 220px;
+  border: 1px solid color-mix(in srgb, var(--wait-tint) 26%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wait-tint) 5%, var(--panel));
+}
+/* 展开 = 换行独占。放在折叠态那条右边会越写越窄,正文根本排不开。 */
+.wait-bar.is-open { flex-basis: 100%; padding-bottom: 9px; }
+.wait-bar__bar { display: flex; width: 100%; min-width: 0; height: 26px; align-items: center; gap: 6px; border: 0; border-radius: 8px; background: transparent; padding: 0 8px; color: var(--wait-tint); text-align: left; }
+.wait-bar__bar:hover { background: color-mix(in srgb, var(--wait-tint) 9%, var(--panel)); }
+.wait-bar__bar:focus-visible { outline: 2px solid color-mix(in srgb, var(--wait-tint) 48%, transparent); outline-offset: 1px; }
+.wait-bar__bar > svg { flex: 0 0 auto; }
+.wait-bar__bar > b { flex: 0 0 auto; color: var(--ink); font-size: 11px; font-weight: 650; letter-spacing: -.01em; }
+/* 摘要是这一行里唯一可长可短的东西,所以压缩和省略号都落在它身上:期限和箭头不许被挤掉。 */
+.wait-bar__brief { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--muted); font-size: 10.5px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.wait-bar__caret { flex: 0 0 auto; color: var(--faint); transition: transform .12s ease; }
+/* 展开后摘要就该让位:下面那份正文把每一条都写全了(各自的期限也在),条上再留一份
+   「头一个 + 期限」就是同一句话印两遍。只留标题——它此刻的作用是这张卡的抬头。 */
+.wait-bar.is-open .wait-bar__brief, .wait-bar.is-open .wait-bar__bar > .wait-bar__when { display: none; }
+.wait-bar.is-open .wait-bar__bar > b { flex: 1 1 auto; }
+.wait-bar.is-open .wait-bar__caret { transform: rotate(180deg); }
+.wait-bar__body { padding: 0 11px; }
+.wait-bar__when { flex: 0 0 auto; margin-left: auto; color: var(--faint); font-size: 9.5px; font-weight: 400; white-space: nowrap; }
+.wait-bar__note { margin: 8px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.65; }
+/* 交代原文是 agent 对自己说的话,排成引文好跟说明本身分开。 */
+.wait-bar__note q { color: var(--muted); quotes: "「" "」"; }
+.wait-bar__note code { border-radius: 4px; background: var(--overlay); padding: 0 3px; font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 9px; }
+.wait-bar__open { display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; border: 0; border-radius: 6px; background: transparent; padding: 2px 6px 2px 0; color: var(--muted); font-size: 10px; }
+.wait-bar__open:hover { color: var(--ink); }
+/* 条上的小按钮(收掉它 / 看完整日志):比 __open 更像操作,所以带框。 */
+.wait-bar__ops { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.wait-bar__ops button { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 2px 7px; color: var(--muted); font-size: 9.5px; }
+.wait-bar__ops button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.wait-bar__ops button:disabled { cursor: not-allowed; opacity: .5; }
+
+/* 验收前置命令那条（AcceptGateWaitCard）：同一套骨架，换成琥珀 —— 跟侧栏那颗呼吸的
+   黄点对上，一眼分得出「这一条不是智能体在跑」。色值自带 alpha 而不是跟 --line 混：
+   --line 的色度是 0、色相却记着 282，lch 会沿短弧把黄插值成品红。 */
+.accept-gate-wait { --wait-tint: var(--amber); border-color: rgb(181 123 0 / 34%); background: rgb(181 123 0 / 5.5%); }
+/* 展开之后「已经跑了多久」要留着。共用骨架默认把它藏起来,是因为哨兵展开后下面那份
+   列表把每一条的期限都重写了一遍;门禁只有一条,藏了就等于把这张卡**唯一会变的那个数**
+   拿掉 —— 而用户点开它多半就是为了看这个数。 */
+.accept-gate-wait.is-open .wait-bar__bar > .wait-bar__when { display: block; }
+.accept-gate-wait__log { max-height: 120px; overflow: auto; margin: 2px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 状态读不出来时那颗重试：这条此刻不是按钮（整条不可展开，因为没有正文可展），所以
+   重试自己带框，别让人去点一条点不开的横条。 */
+.wait-bar__retry { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; margin-left: auto; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 1px 6px; color: var(--muted); font-size: 9.5px; }
+.wait-bar__retry:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.wait-bar > .wait-bar__bar:not(button) { cursor: default; }
+.wait-bar__summary { display: flex; align-items: center; min-width: 0; }
+.wait-bar__summary > .wait-bar__bar { flex: 1; width: auto; }
+.wait-bar__summary > .wait-bar__retry { margin-right: 5px; }
+.accept-gate-wait > .wait-bar__note { padding: 0 8px 6px; }
+@media (max-width: 600px) {
+  .wait-bar__summary { flex-wrap: wrap; }
+  .wait-bar__summary > .wait-bar__bar { flex-basis: 100%; height: auto; min-height: 26px; flex-wrap: wrap; }
+  .wait-bar__summary > .wait-bar__bar > b { flex: 1 1 150px; }
+  .wait-bar__summary > .wait-bar__retry { margin: 0 6px 5px auto; }
+}

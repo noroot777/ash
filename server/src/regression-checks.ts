@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { resolveAshDbFile } from "./db/path.js";
@@ -23,7 +23,7 @@ export async function prepareRegressionCommand(taskId: string, monitorId: string
   if (!shell.expressible(process.execPath)) throw new Error("当前 Node 绝对路径无法安全传给系统 shell");
   const built = fileURLToPath(new URL("./regression-worker.js", import.meta.url));
   const worker = existsSync(built) ? built : fileURLToPath(new URL("./regression-worker.ts", import.meta.url));
-  const loader = existsSync(built) ? [] : ["--import", createRequire(import.meta.url).resolve("tsx/esm")];
+  const loader = existsSync(built) ? [] : ["--import", pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href];
   const script = `const result=require('node:child_process').spawnSync(${JSON.stringify(process.execPath)},` +
     `${JSON.stringify([...loader, worker, monitorId])},{stdio:'inherit',env:{...process.env,ASH_DB:${JSON.stringify(resolveAshDbFile())}}});process.exit(result.status??1)`;
   const encoded = Buffer.from(script).toString("base64");

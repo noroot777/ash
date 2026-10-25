@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentType } from "@ash/shared";
+import type { ModelEffortMap } from "@ash/shared/cli-presets";
 import type { RunTracePaths } from "../diagnostics.js";
 import type { EventQueue } from "../event-queue.js";
 import type { MarkdownImageAccounting } from "../markdown-image-stream.js";
@@ -143,6 +144,7 @@ export interface CliModelsSpec {
 
 /** 非交互一次性运行的命令构造。 */
 export interface CliExecSpec {
+  preflight?: (opts: { args: readonly string[]; reasoningEffort?: string; modelEfforts?: ModelEffortMap }) => string | null;
   /** 一次性非交互运行的子命令,如 codex 的 `["exec"]`;多数 CLI 直接跟 flag。 */
   subcommand?: string[];
   /** 每次运行都带的固定 flag:非交互 / 自动批准工具 / 输出格式等。 */
@@ -152,6 +154,7 @@ export interface CliExecSpec {
   model?: CliValueArgs;
   /** 思考强度参数。缺省 = 该 CLI 没有这个概念。 */
   reasoningEffort?: CliValueArgs;
+  reasoningEffortEnv?: string;
   /** 1.5x 加速档要带的 argv。缺省 = 该 CLI 无此概念,忽略 profile 上的 speed。 */
   fastArgs?: string[];
   session?: CliSessionSpec;

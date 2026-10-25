@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { request } from "node:http";
 import { delimiter, join } from "node:path";
+import { windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
 
 export const IS_WINDOWS = process.platform === "win32";
 
@@ -118,25 +119,121 @@ catch { netstat -ano | Select-String ':${port}\\s' | Select-String 'LISTENING' |
   return uniquePids(capture(which("fuser") ?? "/usr/sbin/fuser", ["-n", "tcp", String(port)]));
 }
 
-/** 全进程表的 `{ pid, command }`。查不到返回空数组。 */
+/**
+ * 全进程表的 `{ pid, ppid, command }`。查不到返回空数组。
+ *
+ * `ppid` 是给「杀旧 server 但保住活得过重启的 agent」那条路用的(见 killServerProcess):
+ * Windows 上没有信号,整树击杀只能自己按父子关系算。拿不到父号的行给 `null` ——
+ * 规范化成 0 等于把「问不出来」说成「它没有父进程」,而这里缺一条边就等于漏掉一棵子树。
+ */
 export function listProcesses() {
   const rows = [];
   if (IS_WINDOWS) {
-    const out = powerShell(`$ErrorActionPreference='SilentlyContinue'
-Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)\`t$($_.CommandLine)" }`);
-    for (const line of out.split(/\r?\n/)) {
-      const tab = line.indexOf("\t");
-      if (tab < 0) continue;
-      const pid = Number(line.slice(0, tab));
-      if (Number.isInteger(pid) && pid > 0) rows.push({ pid, command: line.slice(tab + 1).trim() });
-    }
-    return rows;
+    const out = powerShell(`$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
+$rows=@(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {
+  $born = if ($null -ne $_.CreationDate) { $_.CreationDate.ToUniversalTime().ToFileTimeUtc().ToString() } else { '' }
+  [pscustomobject]@{pid=$_.ProcessId;ppid=$_.ParentProcessId;created=$born;command=$_.CommandLine}
+})
+[Console]::Out.WriteLine((ConvertTo-Json -InputObject $rows -Compress -Depth 3))`);
+    try {
+      const parsed = JSON.parse(out);
+      if (!Array.isArray(parsed)) return [];
+      for (const row of parsed) {
+        if (!Number.isInteger(row.pid) || row.pid < 0 || typeof row.created !== "string") return [];
+        if (row.pid === 0) continue;
+        rows.push({
+          pid: row.pid,
+          ppid: Number.isInteger(row.ppid) && row.ppid >= 0 ? row.ppid : null,
+          created: row.created,
+          command: typeof row.command === "string" ? row.command : "",
+        });
+      }
+      return rows;
+    } catch { return []; }
   }
-  for (const line of capture("ps", ["-ww", "-axo", "pid=,command="]).split("\n")) {
-    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
-    if (m) rows.push({ pid: Number(m[1]), command: m[2] });
+  for (const line of capture("ps", ["-ww", "-axo", "pid=,ppid=,command="]).split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
   }
   return rows;
+}
+
+/**
+ * 「这是一个活得过 ash 的 agent 壳」的记号。跟
+ * `server/src/executors/detached-win-wrap.ts` 的 `WINDOWS_WRAP_SUFFIX` **必须一字不差**
+ * —— 那边按这个后缀生成壳脚本的文件名,这边按它在进程表的命令行里把壳认出来。
+ *
+ * 两份不能合并(这些脚本要在 build 之前就能跑,见本文件顶部),所以拿回归把它们钉在
+ * 一起:`server/scripts/test-win-launch.ts` 最后一节会比对这两个常量。
+ */
+export const WINDOWS_AGENT_WRAP_SUFFIX = ".ash-agent-wrap.cjs";
+
+/**
+ * 进程表里哪些行是 agent 壳。**按命令行里的记号认,不靠外部名单** —— 这是
+ * killServerProcess 那条不变量的全部依据,理由写在那边。
+ */
+export function agentWrapPids(rows) {
+  const want = WINDOWS_AGENT_WRAP_SUFFIX.toLowerCase();
+  return rows
+    .filter((row) => typeof row.command === "string" && row.command.toLowerCase().includes(want))
+    .map((row) => row.pid);
+}
+
+/**
+ * 停掉旧 server 进程。
+ *
+ * POSIX:就是一发 SIGTERM。信号不级联 —— 它的子进程(输出已落盘的 agent、终端会话、
+ * 预览服务)一个都不会被带走,所以「活得过重启」这件事在那边自动成立。
+ *
+ * Windows:没有信号,原先这一刀是 `taskkill /PID <server> /T /F`,而 `/T` **按父子关系把
+ * 整棵树一起杀** —— 输出已经落盘、本该活得过重启的 agent 也被它带走。这才是「Windows 上
+ * 重启必断」的真正原因(不是落盘那一层做不到,见 server/src/executors/detached-win.ts)。
+ * 所以那边改成自己算:整棵后代**减去**要保住的子树,逐个 `/F`;保住的那几棵一刀不发。
+ *
+ * ── 要保住谁:**认记号,不认名单**(第 1 轮审查 F2)─────────────────────────────
+ *
+ * `protect` 是控制面在**上一时刻**给的答案(`/api/restart-impact` 的 survives)。拿它当
+ * 「该保住的全集」是错的:问完到下刀之间,队列推进、别的页面、别的客户端都还能起新 agent,
+ * 那个新壳不在名单里,于是被明确地 taskkill 掉 —— 审查实测过,确定性复现。缩短窗口、
+ * 多问一次都不是不变量。
+ *
+ * 所以这边反过来:**凡是在同一份进程表快照里认得出记号的壳,一律不下刀**(`protect` 退化
+ * 成一个额外输入,名单漏了也不至于误杀)。记号就是壳脚本的文件名后缀,它写在命令行里 ——
+ * 跟「名单」不同,它和 doomed 集合读的是同一份快照,中间没有时间差。
+ *
+ * 快照之后才出生的进程压根不在 doomed 里,也就一刀都挨不着:它要么是个新壳(该活),要么
+ * 是 ash 非 detached 起的子进程 —— 后者会被 libuv 那个 `KILL_ON_JOB_CLOSE` 的全局 Job 在
+ * server 一死时连带收掉(机制见 detached-win.ts 顶部),不需要这里补刀。
+ *
+ */
+export function killServerProcess(pid, protect = [], { force = false } = {}) {
+  return killServerProcesses([pid], protect, { force });
+}
+
+export function killServerProcesses(pids, protect = [], { force = false } = {}) {
+  const rootsToStop = pids.filter((pid) => Number.isInteger(pid) && pid > 1 && pid !== process.pid);
+  if (!rootsToStop.length) return "skipped";
+  if (!IS_WINDOWS) {
+    for (const pid of rootsToStop) killPid(pid);
+    return "signal";
+  }
+  const rows = listProcesses();
+  if (!rows.length) {
+    if (!force) throw new Error("Windows 进程表查询失败");
+    for (const pid of rootsToStop) capture("taskkill", ["/PID", String(pid), "/T", "/F"]);
+    return "tree";
+  }
+  const roots = [...new Set([...protect, ...agentWrapPids(rows)])];
+  const plan = windowsRestartPlan(rows, rootsToStop, roots);
+  if (plan.preservedPids.length) {
+    console.warn(`  ⚠ 保留命令行不可读的后代及其子树(PID: ${plan.preservedPids.join(", ")});未对它们强杀,后续清理由所属任务负责。`);
+  }
+  const doomed = plan.targets.filter((row) => row.pid !== process.pid);
+  if (!doomed.length) return "gone";
+  const result = powerShell(windowsTerminateScript(doomed));
+  if (!result.includes("ASH_RESTART_KILLED")) throw new Error("Windows 进程实例核验或终止失败");
+  return "selective";
 }
 
 /**
@@ -204,9 +301,18 @@ export function localJson(port, path, timeoutMs = 2000, headers = undefined) {
  * 是对的，对**安全闸**是致命的：多人模式下 `/api/restart-impact` 会 401，重启脚本于是
  * 把「会被打断的任务数」算成 0，不加 FORCE 也照样杀（第 1 轮审查 P1）。要 fail closed
  * 的地方用这个，看 `status`：null = 连不上，数字 = 服务端真的答了。
+ *
+ * 第三档也得分开:**「端口上没人在听」和「有人在听但没按时答」不是一回事**
+ * (第 1 轮审查 F1)。两者的 `status` 都是 null,可前者意味着「本来就没有任务会被打断」,
+ * 后者只意味着「问不出来」—— 把后者当前者处理,安全闸就会在 ash 响应慢的时候静默失效。
+ * 所以再带一个 `error`:`null` = 答了,`"timeout"` = 超时,其余是 errno(`ECONNREFUSED`
+ * 这类),由 `isNotListening` 判。
  */
 export function localGet(port, path, timeoutMs = 2000, headers = undefined) {
   return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+    let timedOut = false;
     const req = request(
       { host: "127.0.0.1", port, path, timeout: timeoutMs, ...(headers ? { headers } : {}) },
       (res) => {
@@ -215,19 +321,31 @@ export function localGet(port, path, timeoutMs = 2000, headers = undefined) {
         res.on("data", (chunk) => { body += chunk; });
         res.on("end", () => {
           const status = res.statusCode ?? null;
-          if (!status || status >= 300) return resolve({ status, json: null });
+          if (!status || status >= 300) return done({ status, json: null, error: null });
           try {
-            resolve({ status, json: JSON.parse(body) });
+            done({ status, json: JSON.parse(body), error: null });
           } catch {
-            resolve({ status, json: null });
+            done({ status, json: null, error: null });
           }
         });
       },
     );
-    req.on("timeout", () => req.destroy());
-    req.on("error", () => resolve({ status: null, json: null }));
+    req.on("timeout", () => { timedOut = true; req.destroy(); });
+    req.on("error", (e) => done({ status: null, json: null, error: timedOut ? "timeout" : (e?.code ?? "error") }));
+    // `req.destroy()` 不保证 emit error(跨 Node 版本不一致),少这一条超时就可能永不 resolve。
+    req.on("close", () => done({ status: null, json: null, error: timedOut ? "timeout" : "closed" }));
     req.end();
   });
+}
+
+/**
+ * `localGet` 的 `error` 是不是「端口上压根没人在听」。
+ *
+ * 只有连接被明确拒绝才算。超时、连接被重置、未知错误一律**不算** —— 那些都是「问不出来」,
+ * 而「问不出来」不等于「没有」(见 localGet 顶部那一段、以及 restart.mjs 的 impact)。
+ */
+export function isNotListening(error) {
+  return error === "ECONNREFUSED" || error === "EADDRNOTAVAIL";
 }
 
 export function sleep(ms) {

@@ -12,6 +12,7 @@ export function TaskReplyRail({
   freeToolbar,
   canHandoff,
   monitorWait,
+  gateWait,
   onHandoff,
   notify,
 }: {
@@ -26,6 +27,11 @@ export function TaskReplyRail({
    * 下一行占满——那时它是一张卡，跟按钮挤在一行会两头都读不清。
    */
   monitorWait?: ReactNode;
+  /**
+   * 验收前置命令那一条（折叠态；`AcceptGateWaitCard` 自己判要不要出现）。跟哨兵同一类
+   * 事实、同一套骨架，所以紧挨着它放 —— 两条都在时，它们是同一行里并排的两条。
+   */
+  gateWait?: ReactNode;
   onHandoff: () => void;
   notify: Notify;
 }) {
@@ -42,6 +48,7 @@ export function TaskReplyRail({
         </button>
       )}
       {monitorWait}
+      {gateWait}
     </div>
   );
 }

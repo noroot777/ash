@@ -68,7 +68,14 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 验收前置命令跟哨兵同一个道理:**先停进程再删行**。正常路径上 taskBusyRejection 已经
   // 把「门禁还在跑的任务」挡在删除之外了,这里兜的是绕过那道闸的入口(项目删除的批量路径)
   // —— 行一删,pid 这条唯一线索就没了,那条全量回归会一直跑到机器重启。
-  stopAcceptGatesForTask(taskId);
+  //
+  // **等它真的停下来**(第 1 轮审查 F2):下面紧接着就要删工作区,而那条命令的 cwd 正是
+  // 那儿。两刀都下过仍确认不了退出的,如实抛出 —— 删行是可重试的,留一个还在往已删目录
+  // 里写文件的无主进程不可逆。
+  if (!await stopAcceptGatesForTask(taskId)) {
+    throw new Error("验收前置命令的进程停不掉(TERM、KILL 都发过了仍确认不到它退出),所以没有删除这个任务 —— "
+      + "再往下删会把 pid 这条唯一线索一起抹掉。等它退出后再删一次。");
+  }
 
   // ── 批本体:全删或全不删 ─────────────────────────────────────────────────────
   const runs = db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)

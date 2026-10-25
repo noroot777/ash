@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -129,8 +129,8 @@ try {
     // 目录这会儿已经被清理删掉了,只能拿字符串比(macOS 上 pwd 给的是 /private/var 那一支)。
     const ranIn = readFileSync(cwdProof, "utf8").trim();
     assert.ok(
-      ranIn === wsReal || ranIn === wsPath,
-      `门禁必须跑在这个任务自己的工作区里,不是项目目录(实际 ${ranIn})`,
+      ranIn === join(realpathSync(dirname(run.cwd)), basename(run.cwd)) && ranIn !== wsReal && ranIn !== wsPath,
+      `门禁必须跑在独立的被测源码快照中(实际 ${ranIn})`,
     );
     assert.notEqual(git(repo, "rev-parse", "main"), before, "门禁绿了就该自动把这次验收做完");
     assert.equal((await taskRow(taskId)).stage, "accepted", "用户只点一次，剩下的是系统欠他的");
@@ -237,11 +237,11 @@ try {
   //    舞台：门禁绿了但自动续跑的合并失败（目标分支工作区脏），任务于是还停在可验收态。
   {
     const repo = makeRepo("gate-stale");
-    const projectId = await seedProject("gate-stale", repo, "true");
+    const projectId = await seedProject("gate-stale", repo, "sleep 0.3; true");
     const taskId = "gatestale0004";
     const wsPath = await seedTask(projectId, repo, taskId, "stale.txt");
-    writeFileSync(join(repo, "seed.txt"), "dirty\n"); // 目标分支检出在这儿，且脏 → 合并会被拦
     await acceptTask(taskId);
+    writeFileSync(join(repo, "seed.txt"), "dirty\n");
     await settled(taskId);
     assert.equal((await runsOf(taskId)).at(0)!.status, "passed");
     assert.equal((await taskRow(taskId)).stage, "verified", "合并被拦下了，不该盖 accepted");
@@ -259,7 +259,9 @@ try {
     writeFileSync(join(wsPath, "more.txt"), "more\n");
     git(wsPath, "add", "-A");
     git(wsPath, "commit", "-m", "task more");
+    git(repo, "checkout", "--", "seed.txt");
     const afterChange = await acceptTask(taskId);
+    writeFileSync(join(repo, "seed.txt"), "dirty\n");
     assert.equal(afterChange.accepted, false, "代码改过了，上一次的绿不作数");
     if (!afterChange.accepted) assert.equal(afterChange.reason, "accept_gate_running");
     await settled(taskId);
@@ -285,8 +287,9 @@ try {
     assert.equal(gate.command, "sleep 120");
     const pid = (await runsOf(taskId)).at(0)!.pid!;
     const canceled = await cancelAcceptGate(taskId);
-    assert.equal(canceled?.status, "canceled");
-    assert.equal(canceled?.failure, "canceled");
+    assert.equal(canceled.outcome, "canceled");
+    assert.equal(canceled.gate?.status, "canceled");
+    assert.equal(canceled.gate?.failure, "canceled");
     for (let i = 0; i < 100 && alive(pid); i++) await sleep(25);
     assert.equal(alive(pid), false, "取消必须真的把那条命令收掉，不是只改一行状态");
     assert.equal((await acceptGateState(taskId)).running, null);
@@ -366,12 +369,12 @@ try {
   //    舞台同第 4 条：绿了但自动续跑的合并被脏工作区拦下，任务还停在可验收态。
   {
     const repo = makeRepo("gate-newcmd");
-    const projectId = await seedProject("gate-newcmd", repo, "true");
+    const projectId = await seedProject("gate-newcmd", repo, "sleep 0.3; true");
     const taskId = "gatenewcmd009";
     await seedTask(projectId, repo, taskId, "newcmd.txt");
-    writeFileSync(join(repo, "seed.txt"), "dirty\n");   // 目标分支检出在这儿且脏 → 合并被拦
     const before = git(repo, "rev-parse", "main");
     await acceptTask(taskId);
+    writeFileSync(join(repo, "seed.txt"), "dirty\n");
     await settled(taskId);
     assert.equal((await runsOf(taskId)).at(0)!.status, "passed");
     assert.equal(git(repo, "rev-parse", "main"), before, "舞台没搭对：这一次本来就不该合进去");
@@ -461,7 +464,117 @@ try {
     assert.equal(await taskBusyRejection(taskId, "删除"), null, "收完之后不该再挡着");
   }
 
-  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 全部通过");
+  // 12. 任务列表看得见「它此刻在跑门禁」。
+  //     门禁跑的那十几分钟里任务自己的 status 和 stage 一个字都不会变（它早就 done 了、
+  //     正等着验收），所以侧栏那颗圆点和会话页那条全靠 enrichTasks 现查的这个字段。
+  //     它一旦不准，界面上就只剩一个「安静地等你验收」的任务 —— 而工作区里有条命令在跑。
+  {
+    const { enrichTasks } = await import("../src/task-store.js");
+    const repo = makeRepo("gate-list-flag");
+    const projectId = await seedProject("gate-list-flag", repo, "sleep 120");
+    const taskId = "gatelistflag1";
+    await seedTask(projectId, repo, taskId, "listflag.txt");
+    const rowOf = async () => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+    assert.equal(
+      (await enrichTasks([await rowOf()]))[0]!.acceptGateRunning,
+      false,
+      "还没点验收：什么都没在跑",
+    );
+
+    await acceptTask(taskId);
+    assert.equal(
+      (await enrichTasks([await rowOf()]))[0]!.acceptGateRunning,
+      true,
+      "命令跑着的时候列表必须看得出来，否则这颗点跟平时一模一样",
+    );
+
+    await cancelAcceptGate(taskId, "测试收尾");
+    assert.equal(
+      (await enrichTasks([await rowOf()]))[0]!.acceptGateRunning,
+      false,
+      "收掉之后要落回去：留着就是一个永远在转的幽灵",
+    );
+  }
+
+  // 13. **回执的凭据**：这一按到底拿什么放的行，必须是这一按自己记下来的，不能拿「最近
+  //     一次门禁」反推（第 1 轮审查 F1 实测出一份假回执）。这里把那一幕原样跑一遍：
+  //     命令在 A 上跑绿 → 合并被挡住（目标工作区脏）→ 工作区里又提交了 B → 项目撤掉命令
+  //     → 再按一次。这一次真正放行的理由是「那一刻没有门禁」，而「最近一次」仍是那条绿的。
+  {
+    const repo = makeRepo("gate-basis");
+    const projectId = await seedProject("gate-basis", repo, "sleep 0.3; true");
+    const taskId = "gatebasis0013";
+    const wsPath = await seedTask(projectId, repo, taskId, "basis.txt");
+
+    // 目标工作区脏：main 上放一份未跟踪的 basis.txt，合并会拒绝覆盖它 —— 于是门禁绿了、
+    // 凭据也记下了，章却没盖成。这正是 F1 那一幕的前半段。
+    await acceptTask(taskId);
+    writeFileSync(join(repo, "basis.txt"), "conflicting local edit\n");
+    await settled(taskId);
+    const greenRun = (await runsOf(taskId)).at(0)!;
+    assert.equal(greenRun.status, "passed");
+    const treeA = greenRun.sourceCommit!;
+    assert.notEqual((await taskRow(taskId)).stage, "accepted", "目标工作区脏，这一次不该合进去");
+    assert.equal((await taskRow(taskId)).acceptedGateMode, null, "没有实际合并，不能冻结合并凭据");
+    assert.equal((await taskRow(taskId)).acceptedGateRunId, null);
+
+    // 代码又改了（B），项目把命令撤了，目标工作区收拾干净 —— 这一按是「直接合」。
+    writeFileSync(join(wsPath, "basis.txt"), "second round\n");
+    git(wsPath, "add", "-A");
+    git(wsPath, "commit", "-m", "round B");
+    const treeB = git(wsPath, "rev-parse", "HEAD");
+    assert.notEqual(treeA, treeB);
+    // 那份脏改动是未跟踪文件（main 上还没有 basis.txt），所以收拾干净就是把它删掉。
+    rmSync(join(repo, "basis.txt"));
+    await db.update(projects).set({ acceptGateCommand: null }).where(eq(projects.id, projectId));
+
+    const second = await acceptTask(taskId);
+    assert.equal(second.accepted, true, "没有门禁了，这一按就该直接合");
+    const row = await taskRow(taskId);
+    assert.equal(row.acceptedSourceCommit, treeB, "合进去的是 B");
+    assert.equal(row.acceptedGateMode, "unset", "这一按的凭据是「那一刻没有门禁」，不是那条绿的");
+    assert.equal(row.acceptedGateRunId, null);
+    const view = await acceptGateState(taskId);
+    assert.equal(view.basis?.mode, "unset");
+    assert.equal(view.basis?.run, null, "凭据里不许塞一次跟这一按无关的 run");
+    assert.equal(view.latest?.status, "passed", "历史照常查得到");
+    assert.equal(view.latest?.sourceCommit, treeA, "而它验的是 A —— 界面据此说清「这不是本次凭据」");
+  }
+
+  // 14. **「已取消」必须是整棵进程树真的退出了**（第 1 轮审查 F2 实测）：从前取消只发一刀
+  //     TERM 就返回，而 `trap '' TERM` 的后代照样在跑 —— 紧接着的合并/清理会把它脚下的
+  //     工作区删掉，它却还在往里写。领头那个一 TERM 就没了，所以「父进程不在了」根本
+  //     证明不了后代也不在。
+  {
+    const repo = makeRepo("gate-stop-tree");
+    const childFile = join(root, "stubborn-child.pid");
+    // 领头的 shell 吃默认 TERM（一刀就死），后台那个把 TERM 忽略掉并接着跑。
+    const command = `sh -c 'trap "" TERM; echo $$ > ${childFile}; sleep 120' & sleep 120`;
+    const projectId = await seedProject("gate-stop-tree", repo, command);
+    const taskId = "gatestoptree1";
+    await seedTask(projectId, repo, taskId, "stoptree.txt");
+    await acceptTask(taskId);
+    let childPid = 0;
+    for (let i = 0; i < 200 && !childPid; i++) {
+      try { childPid = Number(readFileSync(childFile, "utf8").trim()); } catch { await sleep(25); }
+    }
+    assert.ok(childPid > 0, "测试自己的前提：那个忽略 TERM 的后代得先真的起来");
+    assert.equal(alive(childPid), true);
+
+    await cancelAcceptGate(taskId, "测试：取消必须等整棵树退出");
+    // **取消返回的那一刻**就得是真的没了：这个返回值被「跳过门禁直接合并」当成
+    // 「可以动工作区了」的信号，中间不许再有一个「它马上就会死」的窗口。
+    assert.equal(alive(childPid), false, "取消返回时那个忽略 TERM 的后代必须已经被补刀收掉");
+    assert.equal((await runsOf(taskId)).at(0)!.status, "canceled");
+  }
+
+  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 全部通过");
+  await (await import("./test-accept-gate-lifecycle.js")).testGateLifecycle({
+    root, makeRepo, seedProject, seedTask, taskRow, settled,
+  });
+  await (await import("./test-accept-gate-startup.js")).testGateStartup({
+    root, makeRepo, seedProject, seedTask, taskRow, settled,
+  });
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

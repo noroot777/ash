@@ -5,7 +5,7 @@ import { RunTargetPicker } from "../../src/components/RunTargetPicker.tsx";
 import type { AgentModelSelection } from "../../src/task-detail/mentionPicker.ts";
 import "../../src/styles/global.css";
 
-const TYPES: AgentType[] = ["claude", "codex"];
+const TYPES: AgentType[] = ["claude", "codex", "kimi"];
 
 function Ash() {
   const [selection, setSelection] = useState<{ agentType: AgentType; executorId: string | null }>({

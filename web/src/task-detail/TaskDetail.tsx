@@ -7,6 +7,7 @@ import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
 import { useSubagents } from "./useSubagents.tsx";
 import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
 import { MonitorWaitCard } from "../monitors/MonitorWaitCard.tsx";
+import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { FileViewer } from "../files/FileViewer.tsx";
 import { FolderViewer } from "../files/FolderViewer.tsx";
@@ -530,6 +531,7 @@ export function TaskDetail({
                     // 看得见。所以 rail 的显示条件要连它一起算,否则「只有哨兵、没有那
                     // 几个按钮」的任务（归档的、预设工作流的）会整条消失。
                     topRail={freeToolbarVisible || canHandoff || liveMonitors.length || liveBuiltinCount
+                      || task.acceptGateRunning
                       ? (
                         <TaskReplyRail
                           task={task}
@@ -545,6 +547,17 @@ export function TaskDetail({
                               resumePrompt={task.resumePrompt ?? null}
                               reviewArmed={!!free.state?.reviewReservation.armed}
                               onOpenPanel={() => openTab("monitors")}
+                            />
+                          )}
+                          // 验收前置命令那一条:点了验收之后它在工作区里跑十几分钟,而
+                          // 任务本身 status/stage 一个字都不变 —— 不摆在这儿,主会话页
+                          // 上就完全看不出有东西在跑(时间轴那行很快被顶走)。
+                          gateWait={(
+                            <AcceptGateWaitCard
+                              key={task.id}
+                              taskId={task.id}
+                              expected={!!task.acceptGateRunning}
+                              notify={notify}
                             />
                           )}
                           onHandoff={() => onHandoff?.(task)}

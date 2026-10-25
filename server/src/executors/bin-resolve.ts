@@ -33,6 +33,7 @@ function extraPaths(): string[] {
       `${home}/.local/bin`,
       `${home}/.bun/bin`,
       `${home}/.deno/bin`,
+      join(process.env.KIMI_INSTALL_DIR || join(home, ".kimi-code"), "bin"),
     ];
   }
   const { APPDATA, LOCALAPPDATA, ProgramFiles, ChocolateyInstall } = process.env;

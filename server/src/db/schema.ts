@@ -190,6 +190,17 @@ export const tasks = sqliteTable("tasks", {
   mergeTargetBranch: text("merge_target_branch"),
   baseTaskId: text("base_task_id"),
   acceptedSourceCommit: text("accepted_source_commit"),
+  /**
+   * **这一次验收**拿什么当凭据放的行:`passed` / `skipped` / `unset`(语义见
+   * shared/src/accept-gate.ts 的 AcceptGateBasisMode)。空 = 还没验收过,或者是没留凭据
+   * 的老数据 —— 读侧如实显示「没留下凭据」,不拿「最近一次门禁」冒充(第 1 轮审查 F1)。
+   *
+   * 为什么是 tasks 上的两列而不是 accept_gate_runs 里的一个标记:它记的是**那一按**的
+   * 事实(一次验收最多一份),而那一按也可能根本没有对应的 run(跳过 / 没设门禁)。
+   */
+  acceptedGateMode: text("accepted_gate_mode"),
+  /** `passed` 时指着真的跑绿的那一次(accept_gate_runs.id)。**不是**最近那一次。 */
+  acceptedGateRunId: text("accepted_gate_run_id"),
   baseUpdateIntent: text("base_update_intent"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   creationOrigin: text("creation_origin"),
@@ -631,5 +642,6 @@ export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions
 
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
 export { monitors, monitorPendingCalls, monitorScanCursors, monitorReclaimDebts } from "./schema-monitors.js";
+export { taskBackgroundRevisions } from "./schema-task-background.js";
 export { regressionChecks } from "./schema-regression-checks.js";
 export { regressionEvidence } from "./schema-regression-evidence.js";

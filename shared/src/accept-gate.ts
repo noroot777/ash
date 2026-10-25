@@ -8,12 +8,12 @@
 // 判据只有一条:**rc=0 才合并**。非 0 不合并、不清理、目标分支一个字节不动,日志回流给
 // agent 去修 —— 跟「验收撞冲突叫醒 agent」是同一套退路。
 //
-// 跑的是**任务工作区当前那棵树**。fast-forward 时它就是合并结果;目标分支此后前进过,
+// 跑的是**任务已提交源码的独立快照**。fast-forward 时它就是合并结果;目标分支此后前进过,
 // 被测树就不等于合并结果 —— 那时只如实记一行,不拦(活跃仓库上拦就是永远验收不了)。
 export type AcceptGateStatus = "running" | "passed" | "failed" | "interrupted" | "canceled";
 
 /** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
-export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled";
+export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -29,9 +29,13 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   spawn_failed: "命令起不来",
   server_restarted: "ash 重启,这次没跑完",
   canceled: "你取消了这一次",
+  source_changed: "测试修改了被测源码，不能用结果为原版本放行",
+  process_unconfirmed: "尚未取得整次运行退出的证据",
+  ownership_waived: "已确认风险并强制释放，未取得整次退出证据",
 };
 
 export interface AcceptGateView {
+  executionNotice?: string | null;
   id: string;
   taskId: string;
   /** 跑的那条命令原文(项目设置里改过的话,这里仍是**这一次**用的那条) */
@@ -50,9 +54,9 @@ export interface AcceptGateView {
   targetCommit: string | null;
   /** 当时合并会不会是纯 fast-forward。false = 被测树 ≠ 合并结果,只提示不拦 */
   fastForward: boolean | null;
-  /** 对「现在这一按」还作不作数(工作区 HEAD 变过、或本来就定不出 HEAD) */
   stale: boolean;
   logPath: string;
+  logAvailable?: boolean;
   /** 日志末尾若干行,够在界面上一眼看出红在哪 */
   logTail: string;
   /**
@@ -60,6 +64,21 @@ export interface AcceptGateView {
    * `error` 非空 = 那一次没能叫醒它(回合被抢占、任务被归档之类),红还在那儿等人处理。
    */
   handoff: { at: string; error: string | null } | null;
+  processPending?: boolean;
+}
+
+export type AcceptGateCancelResult = {
+  outcome: "canceled" | "already_finished" | "stopping" | "not_running" | "settlement_failed";
+  runId: string | null;
+  gate: AcceptGateView | null;
+};
+
+export function acceptGateCancelMessage(result: AcceptGateCancelResult): string {
+  if (result.outcome === "settlement_failed") return "取消结果保存失败，尚未完成结算；请重试取消，工作区仍受保护";
+  if (result.outcome === "canceled") return "已取消这一次验收前置命令；重新验收时会重跑";
+  if (result.outcome === "stopping") return "尚未确认整棵进程树退出，工作区仍被占用；不能合并或清理";
+  if (result.outcome === "already_finished") return "这一次命令已经结束，未执行取消；验收是否完成请以当前回执为准";
+  return "当前没有正在跑的验收前置命令，未执行取消";
 }
 
 /** 这条命令最多跑多久。再久基本是卡住了 —— 出路是验收台上那颗「取消」。 */
@@ -101,3 +120,40 @@ export function summarizeAcceptGate(gate: AcceptGateView): string {
     gate.exitCode !== null && gate.failure === "exit_code" ? `（rc=${gate.exitCode}）` : ""
   }`;
 }
+
+/**
+ * **这一次验收**拿什么当凭据放的行。
+ *
+ * 为什么必须单独记一份、而不能拿「最近一次门禁结果」反推(第 1 轮审查 F1 实测):那两件
+ * 事根本不是一回事 —— 命令在 A 上跑绿、代码又改成了 B、项目再把命令撤掉,此时「最近一次」
+ * 仍然是那条绿的,而真正放行的理由是「现在没有门禁」。照最近那一次说话,回执就会把一份
+ * 从没测过的代码写成「合并前已通过测试」,那是这功能最不该出的错。
+ *
+ *  - `passed`  这一按是拿一次真的跑绿放行的(`runId` 指着那一次,**不是**最近那次)
+ *  - `skipped` 用户在验收时明确选了跳过:没跑,也没有任何通过的证据
+ *  - `unset`   那一刻这个项目根本没设门禁(撤掉了、或从来没设)
+ */
+export type AcceptGateBasisMode = "passed" | "skipped" | "unset";
+
+export type AcceptGateBasis = {
+  mode: AcceptGateBasisMode;
+  /** `passed` 时那一次的完整记录;记录被清掉(归档清理)或非 passed 时为 null。 */
+  run: AcceptGateView | null;
+};
+
+/** GET /tasks/:id/accept-gate:这个项目设没设门禁、现在跑没跑、上一次跑成什么样。 */
+export type AcceptGateState = {
+  executionNotice?: string | null;
+  unavailable?: string | null;
+  sourceError?: string | null;
+  /** 项目设置里的那条命令;null = 这个项目没设门禁。 */
+  command: string | null;
+  running: AcceptGateView | null;
+  /** 最近一次(可能就是 running 那条)。**不是本次验收的凭据**,见 basis。 */
+  latest: AcceptGateView | null;
+  /**
+   * 已经验收过的任务:那一按**实际**拿什么放的行。null = 还没验收,或是没留凭据的老数据
+   * (老数据如实显示「没留下凭据」,不拿 latest 冒充)。
+   */
+  basis: AcceptGateBasis | null;
+};

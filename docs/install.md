@@ -110,6 +110,32 @@ ASH_URL = "http://localhost:4317"
 
 验证:`claude mcp list` 应该看到 `ash: … ✔ Connected`。
 
+### Kimi Code
+
+安装并运行 `kimi login` 登录后，重新运行 `npm run setup`，会把 ash MCP 登记到
+`~/.kimi-code/mcp.json`（设置了 `KIMI_CODE_HOME` 时使用该目录）。已有 ash/harness
+登记和其他 MCP 服务保持不变；改写已有文件前会生成 `.bak-ash-setup` 备份。
+
+手动配置时，把下面的 `ash` 条目合并进该文件的 `mcpServers`：
+
+```json
+{
+  "mcpServers": {
+    "ash": {
+      "command": "node",
+      "args": ["/绝对路径/ash/mcp/dist/index.js"],
+      "env": { "ASH_URL": "http://localhost:4317" }
+    }
+  }
+}
+```
+
+在“智能体”里添加 Kimi Code 执行器即可用于普通任务和团队执行者（暂不支持常驻调度台）。
+模型列表来自 `kimi provider list --json`；智能水平按模型能力提供，通过进程环境注入，
+不改用户的 `config.toml`。Kimi 的 stream-json 不包含思考正文，因此时间线只显示回答和工具调用。
+默认模型或模型能力无法确认时，智能水平仅可跟随 CLI；明确选择已知模型后才可覆盖档位。
+Kimi Code 账号需有可用的编码订阅；403 订阅错误会显示在任务中，不代表 CLI 未安装。
+
 ---
 
 ## 四、日常运维

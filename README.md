@@ -74,10 +74,10 @@ npm start            # http://localhost:4317
 
 📲 **移动端** — Expo 构建的 iOS/Android 客户端，查看任务、回复消息、操作团队，随时随地。
 
-♻️ **重启存活** — agent 进程与 server 解耦。`npm run restart` 会自动检测在跑的任务：能接管的无感接管，不能接管的拦住不重启。**在 macOS/Linux 上，单飞任务的 agent 进程完全不受重启影响**（输出写文件而非管道）；团队调度台自动 `--resume` 接回。
+♻️ **重启存活** — agent 进程与 server 解耦。`npm run restart` 会自动检测在跑的任务：能接管的无感接管，不能接管的拦住不重启。**单飞任务的 agent 进程完全不受重启影响**（输出写文件而非管道），三个平台都是；团队调度台自动 `--resume` 接回。
 
 > [!NOTE]
-> **Windows 上重启会打断正在运行的单飞任务。** 输出落盘的 detached 机制依赖 POSIX shell 重定向（`/bin/sh -c`），Windows 上没有等价实现，因此退化为管道模式 —— server 一重启管道断开，agent 进程随之终止。被打断的任务标记为 failed，可手动重试续跑。`npm run restart` 的安全闸在 Windows 上同样生效：它会提示有多少任务将被打断，不加 `FORCE=1` 不会动手。
+> **三个平台同一个契约**：pid + 落盘输出 + 退出码 + 可接管 + 可重连 stdin。实现不同 —— POSIX 套一层 `/bin/sh` + FIFO，Windows 套一层按次生成的 node 壳 + 具名管道（那边必须有个活过 ash 的进程来写退出码、守着 stdin；libuv 还会把每个非 detached 的子进程塞进一个 `KILL_ON_JOB_CLOSE` 的 Job，所以那层壳是 detached 起的）。重启时不要绕过 `npm run restart` 自己 `taskkill /T`：`/T` 按父子关系杀整棵树，会把本该活下来的 agent 一起带走 —— `npm run restart` 那一刀按进程表里的壳记号认人并绕开它们（名单之外新起的 agent 也保得住），只有进程表压根读不出来且显式设置 `FORCE=1` 时才退回整树强杀；判据问不出来（超时/拒答）时它宁可中止也不下刀。
 
 ## 编排模式
 
@@ -239,19 +239,28 @@ Restart 不是盲目的 kill + start。它会先问服务端「重启会真正�
 |---|---|
 | 无任务 / 全部可接管 | 直接重启，全程无感 |
 | 有会被打断的任务 | **拒绝重启**，列出受影响任务 |
-| `WAIT=1` | 等所有任务跑完再重启 |
-| `FORCE=1` | 强制重启，被打断的标 failed |
+| `node scripts/restart.mjs --wait` | 等会被打断的任务排空再重启，可接管任务不阻塞 |
+| `node scripts/restart.mjs --force` | 强制重启，被打断的标 failed；也会强制刷新 MCP |
 | MCP 通道被占 | 默认跳过 MCP 刷新，不掐断交卷 |
+
+以上 Node 命令在 PowerShell、cmd、Bash 和 zsh 中通用；`node scripts/restart.mjs --help` 查看完整选项。
+使用 npm 启动时，Windows 用 `npm.cmd run restart -- --force`，macOS/Linux 用 `npm run restart -- --force`（其它选项同理）。
+PowerShell 可能将裸 `npm` 解析为会吞掉 `--` 的 `npm.ps1`，带选项时可显式用 `npm.cmd` 或上面的 Node 命令。
+`--skip-mcp` 跳过 MCP 刷新，`--force-mcp` 强制刷新（会掐断在跑的 agent 的 MCP 通道）。
+`--force --skip-mcp` 只强制重启服务端，不刷新 MCP。
+仍兼容原环境变量；PowerShell 不支持 `FORCE=1 npm run restart`，旧版本可用
+`$env:FORCE='1'; npm run restart`（该变量会保留在当前 PowerShell 会话，之后可用 `Remove-Item Env:FORCE` 清除）。
 
 前端修改后仅需 `npm run build`，server 从磁盘读取 `web/dist`，**无需重启**。
 
 ### 回归测试
 
-`build` / `restart` 只做「约定检查 → 类型 → 打包」，**不再跑测试**；回归自己显式跑：
+`build` / `restart` 只做「约定检查 → 类型 → 打包」，**不再跑测试**；回归统一在验收时执行：
 
 ```bash
-npm run test:web                      # 前端全量回归（改完 web/ 交付前跑）
-npm run test:web-gate                 # 上面那道 pre-push 闸自己的回归
+npm run test:web                      # 前端全量回归
+npm run test:accept                   # ash 验收前置命令：前端全量回归
+npm run test:accept-gate              # 验收脚本自身的回归
 npm -w server run test:queue          # 队列推进与排序
 npm -w server run test:accept-merge   # 验收合并与冲突处理
 npm -w server run test:review         # 验证轮与证据落盘
@@ -262,7 +271,9 @@ npm -w server run test:handoff        # 跨机器接力
 > [!CAUTION]
 > 端到端测试会实际启动 agent CLI，消耗真实 API 额度。
 
-前端回归还有一道自动兜底：`.githooks/pre-push` 会在 push 前检查这批提交有没有碰 `web/` 或 `shared/`，碰了才跑 `npm run test:web`（约 4 分钟），没碰直接放行。`git push --no-verify` 或 `SKIP_WEB_TEST=1 git push` 可跳过；worktree 里没装依赖时它只警告不拦。这道闸要 `git config core.hooksPath .githooks`（`npm run setup` 会自动配）。
+在 ash 项目设置的「验收前置命令」里填写 `npm run test:accept`，也可直接填写 `node scripts/accept-test.mjs`。入口在自身所在项目（验收时为独立快照）运行 `npm run test:web`，不按 Git diff 筛选，不受旧的 `SKIP_WEB_TEST` 开关影响；测试失败或启动失败都会返回非零退出码，不会因缺少依赖而放行。所需依赖可提前在任务工作区运行 `npm install` 安装，验收快照会复制现有依赖。
+
+`git push` 不再自动运行回归测试；`.githooks/pre-push` 已移除，其它提交钩子保留。
 
 ## 常见问题
 
@@ -295,6 +306,13 @@ MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` �
 1. **换非 root 用户跑 ash**（推荐）
 2. 启动环境设 `IS_SANDBOX=1`（代价：agent 以 root 无确认地操作整台机器）
 3. 在 bubblewrap 沙箱中跑 ash
+
+</details>
+
+<details>
+<summary>Windows 常用命令提示无法识别项目里的 kb.cmd 等脚本</summary>
+
+常用命令使用 PowerShell，不会自动搜索当前目录。项目目录里的脚本写为 `.\kb.cmd restart`；路径带空格时用 `& '.\my tool.cmd' restart`。启动和重启命令分别保存，两个字段都要检查。环境变量用 `$env:NAME='value'`，而不是 POSIX 的 `export NAME=value`。
 
 </details>
 

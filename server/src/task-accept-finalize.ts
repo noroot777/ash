@@ -12,6 +12,7 @@ import type { AcceptFailure } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
+import type { AcceptGateSnapshot } from "./accept-gate.js";
 
 type Finalization = { sharedWorkers: SharedWorkerAcceptance | null; failure?: never }
   | { failure: AcceptFailure; sharedWorkers?: never };
@@ -22,6 +23,7 @@ export async function finalizeAcceptance(
   removesWorktree: boolean,
   completed: Pick<AcceptFailure, "completedMerge" | "completedTag"> = {},
   authority?: ReviewAuthority,
+  basis: AcceptGateSnapshot | null = null,
 ): Promise<Finalization> {
   // 预览回收可能因记录权限失败，放在 accepted 落章前使重试仍能到达收尾。
   // 这时尾段还没执行，其中刻意开启的新预览不会被旧预览回收误伤。
@@ -35,9 +37,10 @@ export async function finalizeAcceptance(
   if (!preview.stopped) {
     await appendTaskTimeline(task.id, `本次验收保留工作区，继续完成验收。${preview.message}停止记录已保留。`);
   }
-  await commitAcceptanceStage(task.id, "accepted", {}, authority);
+  await commitAcceptanceStage(task.id, "accepted", basis ?? {}, authority);
   bus.publish({ type: "task.stage", taskId: task.id, stage: "accepted", updatedAt: now() });
   await appendTaskTimeline(task.id, "验收阶段更新：已验收（accepted）");
+  bus.publish({ type: "task.acceptGate", taskId: task.id });
   // 尾段 durable 进度：stage=accepted 先落、尾段后跑，进程死在中间的话重试会走
   // already_accepted 快路——不留痕迹，发布步骤就被静默永久漏掉。置位在这里、清零在
   // 尾段真正跑完之后，重试发现它还挂着就补跑。

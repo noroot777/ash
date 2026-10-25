@@ -26,6 +26,11 @@ try {
     contentType: "application/json",
     body: "[]",
   }));
+  await page.route("**/api/agents/models**", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: "[]",
+  }));
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/run-target-picker.html`);
 
   const agentTrigger = page.getByRole("button", { name: /智能体：/ });
@@ -60,6 +65,22 @@ try {
   await page.getByRole("option", { name: /@codex/ }).click();
   await page.getByPlaceholder("筛选 codex 的模型…").waitFor();
   assert.match(await modelTrigger.getAttribute("aria-label") ?? "", /gpt-5\.6-sol/);
+
+  await agentTrigger.click();
+  await page.getByRole("option", { name: /@kimi/ }).click();
+  await effortTrigger.click();
+  assert.match(await effortPanel.textContent() ?? "", /尚未确认实际模型/);
+  assert.equal(await effortPanel.getByRole("option").count(), 1);
+  assert.equal(await effortPanel.getByRole("option", { name: /^medium/ }).count(), 0);
+  await effortPanel.getByRole("option").click();
+
+  await modelTrigger.click();
+  await page.getByRole("option", { name: "kimi-code/k3.1-pro", exact: true }).click();
+  assert.equal(await effortPanel.getByRole("option", { name: /^high/ }).count(), 1);
+  assert.equal(await effortPanel.getByRole("option", { name: /^medium/ }).count(), 0);
+  assert.equal(await effortPanel.getByRole("option", { name: /^xhigh/ }).count(), 0);
+  await effortPanel.getByRole("option", { name: /^high/ }).click();
+  assert.match(await effortTrigger.getAttribute("aria-label") ?? "", /智能水平：high/);
 
   console.log("run target picker test passed");
 } finally {
