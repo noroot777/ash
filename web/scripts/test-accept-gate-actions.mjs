@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { testAcceptGateReads } from "./test-accept-gate-reads.mjs";
 
 export async function testAcceptGateActions({ browser, base, run }) {
   const json = (route, body, status = 200) => route.fulfill({
@@ -141,5 +142,6 @@ export async function testAcceptGateActions({ browser, base, run }) {
       await page.close();
     }
   }
+  await testAcceptGateReads({ browser, base });
   console.log("accept gate failure actions: inline recovery, explicit confirmation, guards and projection refresh covered");
 }

@@ -198,7 +198,7 @@ export function AcceptanceControls({
   const gateFailure = failure?.taskId === task.id && failure.reason === "accept_gate_failed"
     && task.stage !== "accepted" && task.stage !== "merged";
   const gateFallback = gateFailure && !gate.running && (!gate.state || !!gate.error || !gate.latest);
-  const gateUnknown = !midGate && (!gate.state || gate.stale) && !(gateIntent && gateLatest);
+  const gateUnknown = !midGate && (!gate.state || !!gate.error) && !(gateIntent && gateLatest);
   const openGateIntent = (intent: "skip" | "rerun", latest: AcceptGateView | null) => {
     if (archived || inFlight || busy || checkingDependencies || acceptanceBlock) return;
     setGateIntent(intent);
@@ -344,7 +344,7 @@ export function AcceptanceControls({
           </>
         )}
       </div>
-      {failure?.taskId === task.id && task.stage !== "accepted" && task.stage !== "merged" && (!gateFailure || gateFallback) && (
+      {failure?.taskId === task.id && (failure.reason !== "accept_gate_failed" || gateFallback) && (
         <AcceptanceFailureNotice failure={failure} onGateIntent={openGateIntent}
           onRefreshGate={() => void gate.reload()}
           disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock} />
@@ -381,13 +381,14 @@ export function AcceptanceControls({
         >
           {!midGate && (
             <p role={gate.error ? "alert" : "status"}>
-              {!gate.state || gate.stale
-                ? gateIntent && gateLatest
-                  ? <>上次验收使用的命令：<code>{gateLatest.command}</code>。当前配置尚未重新核对；本次{gateIntent === "skip" ? "明确跳过前置命令" : "按项目当前配置重跑前置命令"}。</>
-                  : gate.error ? `前置命令暂时无法读取：${gate.error}。可关闭后在下方卡片刷新重试。` : "正在读取本次验收的前置命令…"
-                : <>项目配置的前置命令：<code>{gate.state.command ?? "未设置"}</code>。
+              {gate.state && !(gate.stale && gateIntent && gateLatest)
+                ? <>{gate.stale ? "上次读取的项目命令" : "项目配置的前置命令"}：<code>{gate.state.command ?? "未设置"}</code>。
                   {gateIntent === "skip" ? "本次明确跳过此命令。" : gateIntent === "rerun" ? "本次会从头重跑此命令。" : gate.state.command
-                    ? "是否重跑取决于当前源码和已有结果；未通过不会合并。" : "本次验收不会运行前置命令。"}</>}
+                    ? "是否重跑取决于当前源码和已有结果；未通过不会合并。" : "本次验收不会运行前置命令。"}
+                  {gate.stale && (gate.error ? `状态暂时无法核对：${gate.error}。可关闭后在下方卡片刷新重试。` : "正在后台核对配置；确认后服务端仍会再次校验。")}</>
+                : gateIntent && gateLatest
+                  ? <>上次验收使用的命令：<code>{gateLatest.command}</code>。当前配置尚未重新核对；本次{gateIntent === "skip" ? "明确跳过前置命令" : "按项目当前配置重跑前置命令"}。</>
+                  : gate.error ? `前置命令暂时无法读取：${gate.error}。可关闭后在下方卡片刷新重试。` : "正在读取本次验收的前置命令…"}
             </p>
           )}
           {/* 这一按跟「普通的验收通过」不是一回事,得在按下去之前说破:一个是明知红着仍然合,

@@ -87,7 +87,7 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
               ? <p role="alert">{error}。这不等于「没有命令在跑」—— 点一下刷新再看。</p>
               : <p role="status">正在核对项目配置和最近运行结果，读取完成后会在这里显示验收使用的命令。</p>}
           </div>
-          <button type="button" className="pending-merge-refresh" disabled={busy || !error} onClick={() => void reload()}>
+          <button type="button" className="pending-merge-refresh" disabled={busy} onClick={() => void reload()}>
             <ArrowClockwise size={12} aria-hidden="true" />刷新
           </button>
         </header>
