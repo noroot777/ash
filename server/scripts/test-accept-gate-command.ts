@@ -6,7 +6,8 @@ import { spawnAcceptGate, stopAcceptGate, type GateExit } from "../src/accept-ga
 import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
 import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
   type GateMissOrigin } from "../src/accept-gate-miss.js";
-import { gateEntryAsk, probeGateEntry, scriptDefinedIn, type GateEntryProbe } from "../src/accept-gate-entry.js";
+import { gateEntryAsk, probeGateEntry, scriptDefinedIn,
+  type GateEntryAsk, type GateEntryProbe } from "../src/accept-gate-entry.js";
 import { gateFailurePrompt } from "../src/accept-gate-messages.js";
 import type { AcceptGateMissAttribution } from "@ash/shared/accept-gate";
 
@@ -122,7 +123,7 @@ try {
   //   `entry`（= 测试压根没启动，唯一会改写 failure 的那一档）**只能**由起跑前核到的那份
   //   事实授权。日志措辞一个字都不授权它 —— 下面每一种 runner 的措辞都会被拿去跑两遍：
   //   没有那份事实时必须退成 inner，核出来「入口在树里」时同样必须退成 inner。
-  const PROBE_BY = "被测快照 package.json 的 scripts";
+  const PROBE_BY = "被测快照 package.json 的 scripts（npm 自己列的）";
   const MISS_CASES: { name: string; command: string; exitCode: number | null; log: string;
     entry?: GateEntryProbe | null; kind: "entry" | "inner" | null; missing?: string | null }[] = [
     {
@@ -232,33 +233,35 @@ try {
   // 「这条命令点名要跑的是什么」—— 认不出来必须交白卷（null），不许挑一个来充当那个入口。
   // 判据是**runner 真会怎么做**,不是「字面像不像」（第 3 轮审查 F1：三条反例都实测过）。
   for (const [command, expected] of [
-    ["npm run test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
-    ["CI=1 npm run test:accept -- --ci", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
-    ["npm run-script accept", { kind: "script", runner: "npm", name: "accept", dir: "." }],
-    ["pnpm run accept", { kind: "script", runner: "pnpm", name: "accept", dir: "." }],
-    ["yarn run accept", { kind: "script", runner: "yarn", name: "accept", dir: "." }],
-    ["npm test", { kind: "script", runner: "npm", name: "test", dir: "." }],
-    ["npm run test:accept > out.log 2>&1", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["npm run test:accept", { kind: "script", name: "test:accept", dir: "." }],
+    ["CI=1 npm run test:accept -- --ci", { kind: "script", name: "test:accept", dir: "." }],
+    ["npm run-script accept", { kind: "script", name: "accept", dir: "." }],
+    // 只认 npm:pnpm/yarn 的配置层和内建脚本语义这台机器上没有实测环境,外推错了要发出去的
+    // 是「测试一行都没跑、不要改代码」（第 6 轮审查 F1 收口）。
+    ["pnpm run accept", null],
+    ["yarn run accept", null],
+    ["npm test", { kind: "script", name: "test", dir: "." }],
+    ["npm run test:accept > out.log 2>&1", { kind: "script", name: "test:accept", dir: "." }],
     // 引号是 shell 的,runner 拿到的名字不带它（实测）。
-    ["npm run 'test:accept'", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
-    ['npm run "test:accept"', { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["npm run 'test:accept'", { kind: "script", name: "test:accept", dir: "." }],
+    ['npm run "test:accept"', { kind: "script", name: "test:accept", dir: "." }],
     // 换了目录就得去**那份** manifest 里核;核错一份,「没有这个脚本」就是假话（反例②）。
-    ["npm --prefix child run test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
-    ["npm --prefix=child run test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
-    ["npm run --prefix child test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
-    ["npm -C packages/kb run accept", { kind: "script", runner: "npm", name: "accept", dir: "packages/kb" }],
+    ["npm --prefix child run test:accept", { kind: "script", name: "test:accept", dir: "child" }],
+    ["npm --prefix=child run test:accept", { kind: "script", name: "test:accept", dir: "child" }],
+    ["npm run --prefix child test:accept", { kind: "script", name: "test:accept", dir: "child" }],
+    ["npm -C packages/kb run accept", { kind: "script", name: "accept", dir: "packages/kb" }],
     // 目录值本身读不出来 → 白卷,不许退回「当前目录」充数。
     ["npm --prefix run test:accept", null],
     ["npm run -C", null],
     // `--` 之后是**脚本的** argv,npm 自己不再解释（第 4 轮审查 F1 实测：跑的是根目录那个
     // 脚本,`--prefix child` 只是它的参数）。照旧版本整条扫一遍,就会去读 child/package.json,
     // 把一次真跑起来、真报断言失败的红说成「一行都没跑到、不要改代码」。
-    ["npm run test:accept -- --prefix child", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
-    ["npm run test:accept -- --ci --prefix=child", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
-    ["npm --prefix child run test:accept -- --prefix ..", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
+    ["npm run test:accept -- --prefix child", { kind: "script", name: "test:accept", dir: "." }],
+    ["npm run test:accept -- --ci --prefix=child", { kind: "script", name: "test:accept", dir: "." }],
+    ["npm --prefix child run test:accept -- --prefix ..", { kind: "script", name: "test:accept", dir: "child" }],
     // 确定不吃下一个词的开关可以跳过;`--x=y` 自带值也一样。
-    ["npm run --silent test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
-    ["npm run test:accept --loglevel=warn", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["npm run --silent test:accept", { kind: "script", name: "test:accept", dir: "." }],
+    ["npm run test:accept --loglevel=warn", { kind: "script", name: "test:accept", dir: "." }],
     // 点名要跑的是那个**脚本文件**,不是传给它的参数 —— 参数在不在树里,这一层答不了。
     ["./runner.sh test:accept", { kind: "path", name: "./runner.sh" }],
     ["./only-on-target.sh 2>/dev/null", { kind: "path", name: "./only-on-target.sh" }],
@@ -275,7 +278,7 @@ try {
     ["pnpm run start", null],
     // 未知选项可能把后面那个词当成自己的值。`--loglevel` 在白名单里(它只影响输出),所以这
     // 条解释得了 —— 实测 npm 真跑的就是 test:accept,把 warn 当脚本名才是错的。
-    ["npm run --loglevel warn test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["npm run --loglevel warn test:accept", { kind: "script", name: "test:accept", dir: "." }],
     ["npm --userconfig /tmp/x run test:accept", null],
     // ── 会把 runner 指到另一份 manifest 的三个入口（第 5 轮审查 F1，四条都本机实测）──
     // ① 命令行:白名单之外一律白卷,**带等号的也一样**。旧版「`--x=y` 自带值就跳过」把
@@ -286,17 +289,16 @@ try {
     ["npm --workspaces=true run test:accept", null],
     ["npm --include-workspace-root run test:accept", null],
     ["pnpm --filter=child run test:accept", null],
-    // ② 环境:runner 自己的配置能从前置赋值进来(实测 `npm_config_workspace=child` 真让它
-    //    跑了子项目那个脚本);无关的环境变量照旧剥掉。
-    ["npm_config_workspace=child npm run test:accept", null],
-    ["NPM_CONFIG_WORKSPACE=child npm run test:accept", null],
+    // ② 环境:前置赋值一律剥下来、**原样带到那两问上**(实测 `npm_config_workspace=child`
+    //    真让 npm 跑了子项目那个脚本,大小写都认)。带上它,npm 自己就把这份 scope 算进答案 ——
+    //    于是白卷落在探针那一层,见下面那一组真跑用例。
     ["yarn_x=1 yarn run accept", null],
-    ["CI=1 TZ=UTC npm run test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["CI=1 TZ=UTC npm run test:accept", { kind: "script", name: "test:accept", dir: "." }],
     // ③ shell 注释按语义截断:注释里那个 `--prefix .` 不是真的目录(旧版拿它覆盖了 child)。
-    ["npm --prefix child run test:accept # --prefix .", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
-    ["npm run test:accept # 这后面写什么都不执行", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["npm --prefix child run test:accept # --prefix .", { kind: "script", name: "test:accept", dir: "child" }],
+    ["npm run test:accept # 这后面写什么都不执行", { kind: "script", name: "test:accept", dir: "." }],
     // 子命令必须在最前:`npm test run` 是「跑 test 这个生命周期、把 run 当参数」。
-    ["npm test run", { kind: "script", runner: "npm", name: "test", dir: "." }],
+    ["npm test run", { kind: "script", name: "test", dir: "." }],
     // 这些把「去哪儿找脚本」整个换掉,解析不了结果就别猜（反例③）。
     ["npm -w web run test", null],
     ["npm run test -w web", null],
@@ -309,6 +311,16 @@ try {
     ["npm run 'test:accept", null],
     ["npm run 'test:*'", null],
     ["npm run test:accept \\; echo done", null],
+    // 分组、后台:shell 照样把里面那条跑了,旧版却去查一个字面上并不存在的文件名(`(./runner.sh)`),
+    // 查不到就发免修令;`&` 那条则拿前半截的缺失代表整条命令（第 6 轮审查 F1 实测两条）。
+    ["(./runner.sh)", null],
+    ["(npm run test:accept)", null],
+    ["./missing & ./runner.sh", null],
+    ["./runner.sh & wait", null],
+    // npm 内建的 `env`:`npm run --json` 列的表里**没有**它,可它真能跑(实测
+    // `npm run env -- node fail.cjs` 把 fail.cjs 跑了)——「表里没有」推不出「没东西可跑」。
+    ["npm run env", null],
+    ["npm run env -- node fail.cjs", null],
     // 多步没有「一个入口」可言;裸程序名、绝对路径、命令替换也都核不了。
     ["npm ci && npm run test:accept", null],
     ["cd web; npm run test:accept", null],
@@ -319,7 +331,33 @@ try {
     ["/usr/local/bin/kb test", null],
     ["$(cat cmd.txt)", null],
   ] as const) {
-    assert.deepEqual(gateEntryAsk(command), expected, `入口解析错了：${command}`);
+    // 期望值只写下游真会用到的那几个字段:kind/name/dir 决定去哪份 manifest 核。flags/env
+    // （重放「问 npm」那两问时要带什么）单独一组钉住。
+    const ask = gateEntryAsk(command);
+    const shape = ask?.kind === "script" ? { kind: ask.kind, name: ask.name, dir: ask.dir } : ask;
+    assert.deepEqual(shape, expected, `入口解析错了：${command}`);
+  }
+
+  // 重放那两问要带什么:目录选项规范成「选项 值」两词(等号写法也一样),前置赋值原样带上,
+  // 而 `--silent`/`--loglevel` 一概不带 —— 实测 `npm run --silent --json` 把 JSON 一起吞掉
+  // （stdout 空）,带上就等于逢 `--silent` 必交白卷,而它本来就是「确定只影响输出」才进白
+  // 名单的。
+  for (const [command, flags, env] of [
+    ["npm run test:accept", [], {}],
+    ["npm --prefix child run test:accept", ["--prefix", "child"], {}],
+    ["npm --prefix=child run test:accept", ["--prefix", "child"], {}],
+    ["npm -C packages/kb run accept", ["-C", "packages/kb"], {}],
+    ["npm run --silent test:accept", [], {}],
+    ["npm run --loglevel warn test:accept", [], {}],
+    ["npm run test:accept --loglevel=warn", [], {}],
+    ["CI=1 TZ=UTC npm run test:accept", [], { CI: "1", TZ: "UTC" }],
+    ["npm_config_workspace=child npm run test:accept", [], { npm_config_workspace: "child" }],
+  ] as const) {
+    const ask = gateEntryAsk(command);
+    assert.equal(ask?.kind, "script", `这条应当解析得出来：${command}`);
+    const script = ask as GateEntryAsk & { kind: "script" };
+    assert.deepEqual(script.flags, flags, `重放要带的目录选项错了：${command}`);
+    assert.deepEqual(script.env, env, `重放要带的前置赋值错了：${command}`);
   }
 
   // package.json 的 scripts 是定义级判据：读不动/形状不对一律 null（「不知道」）。
@@ -335,28 +373,45 @@ try {
     assert.equal(scriptDefinedIn(manifest, name), expected, `scripts 判据算错了：${manifest}`);
   }
 
-  // ── 起跑前那一层:命令行解释得了,**配置来源**也得解释得了（第 5 轮审查 F1）──
-  //    判据要窄到只认实测会改掉查找路径的那一族:npm 跑脚本时会把自己的配置全量注入子进程
-  //    （本机实测注入了 prefix/userconfig/globalconfig/local_prefix 等 12 个 `npm_config_*`）,
-  //    把那些内省变量当成「配置被改过」,等于在任何由 npm 启动的环境里永远交白卷。
+  // ── 起跑前那一层：命令行解释得了，**runner 的有效配置**也得解释得了 ──
+  //    这一组真起 npm 进程。判据不是「我认得哪些配置键」而是「npm 自己怎么说」：前几轮逐条
+  //    枚举键名,`workspace=child` 拦住了、数组写法 `workspace[]=child` 照样放过去（第 6 轮
+  //    审查 F1 实测）。改成问它之后,四层配置、数组写法、大小写全归 npm 解释,这一层只看它
+  //    给的答案是**平铺**（单一包,名字在不在一看即知）还是**嵌套**（有 scope 生效,交白卷）。
   {
     const tree = mkdtempSync(join(tmpdir(), "ash-gate-rc-"));
-    writeFileSync(join(tree, "package.json"), '{"scripts":{"build":"echo x"}}');
-    const probe = () => probeGateEntry(tree, "npm run test:accept");
-    const defined = { ask: "test:accept", resolved: false, by: "被测快照 package.json 的 scripts" };
-    // 这台机器上就有那一堆注入变量,所以这一条同时钉住「不许因它们白卷」。
+    mkdirSync(join(tree, "child"));
+    writeFileSync(join(tree, "package.json"), JSON.stringify({ name: "root", private: true,
+      workspaces: ["child"], scripts: { build: "echo x" } }));
+    writeFileSync(join(tree, "child/package.json"), JSON.stringify({ name: "child", private: true,
+      scripts: { "test:accept": "echo c" } }));
+    const rc = join(tree, ".npmrc");
+    const probe = (command = "npm run test:accept") => probeGateEntry(tree, command);
+    const defined = { ask: "test:accept", resolved: false, by: PROBE_BY };
+    // 这台机器上 npm 会把自己的配置全量注入子进程（实测 12 个 `npm_config_*`,含 prefix /
+    // userconfig / globalconfig）。这一条同时钉住「不许因那些内省变量白卷」—— 那等于在任何
+    // 由 npm 启动的环境里永远交白卷,整个判定作废。
     assert.deepEqual(await probe(), defined, "没有改过配置时照常给确定答案");
-    writeFileSync(join(tree, ".npmrc"), "registry=https://example.com\naudit=false\n");
+    writeFileSync(rc, "registry=https://example.com\naudit=false\n");
     assert.deepEqual(await probe(), defined, "npmrc 里只有无关键,不影响去哪儿找脚本");
-    writeFileSync(join(tree, ".npmrc"), "; workspace=child\n# workspace=child\n");
+    writeFileSync(rc, "; workspace=child\n# workspace=child\n");
     assert.deepEqual(await probe(), defined, "注释掉的设置不算");
-    writeFileSync(join(tree, ".npmrc"), "workspace=child\n");
+    writeFileSync(rc, "workspace=child\n");
     assert.equal(await probe(), null, "npmrc 把 runner 指到子项目:命令行上一个字都看不出来,交白卷");
-    writeFileSync(join(tree, ".npmrc"), "registry=https://example.com\n");
-    process.env.npm_config_workspace = "child";
-    assert.equal(await probe(), null, "环境里已经生效的 workspace 配置同样算");
-    delete process.env.npm_config_workspace;
-    assert.deepEqual(await probe(), defined, "撤掉之后恢复确定答案");
+    writeFileSync(rc, "workspace[]=child\n");
+    assert.equal(await probe(), null, "数组写法一样算（第 6 轮审查 F1 实测:旧版按键名比对,放过了它）");
+    rmSync(rc, { force: true });
+    for (const key of ["npm_config_workspace", "NPM_CONFIG_WORKSPACE"]) {
+      assert.equal(await probe(`${key}=child npm run test:accept`), null,
+        `前置赋值里的 scope 配置照样算（大小写 npm 都认）：${key}`);
+    }
+    assert.deepEqual(await probe("npm run --silent test:accept"), defined,
+      "`--silent` 不许让这一层倒退成白卷:重放时不带它（实测带上会把 JSON 一起吞掉）");
+    assert.deepEqual(await probe("npm --prefix child run test:accept"),
+      { ask: "test:accept", resolved: true, by: "被测快照 child/package.json 的 scripts（npm 自己列的）" },
+      "换了目录就核那份 manifest,而且要跟 npm 自己说的目录对得上");
+    assert.equal(await probe("npm --prefix nosuch run test:accept"), null,
+      "目录对不上（npm 答不出那个 prefix）就交白卷,不许拿这一层算的目录硬下结论");
     rmSync(tree, { recursive: true, force: true });
   }
 

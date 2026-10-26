@@ -8,7 +8,7 @@
 // 了那个判据（它的入口是 `./runner.sh`，缺的是传给它的参数，谁也证明不了顶层没跑）。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db/index.js";
@@ -97,7 +97,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   // 起跑**前**那份事实必须落在这一行上：结算可能发生在重启之后，而跑完再核一次拿到的是
   // 跑完之后的状态（审查 F1 那条自删脚本就是这么被说成「没启动」的）。
   assert.deepEqual(JSON.parse(run.entryProbe ?? "null"),
-    { ask: "test:accept", resolved: false, by: "被测快照 package.json 的 scripts" },
+    { ask: "test:accept", resolved: false, by: "被测快照 package.json 的 scripts（npm 自己列的）" },
     "起跑前核到的入口事实要原样落盘");
   // 「未启动」和「该不该改代码」是两件事，分开存（第 3 轮审查 F2）。这一条核出来是
   // not-mine：基线上没有定义、目标分支上有。
@@ -242,7 +242,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   const scoped = await again("npm --prefix child run test:accept");
   assert.match(readFileSync(scoped.logPath, "utf8"), /CHILD RAN/, "测试自己的前提：child 里那条真跑起来了");
   assert.deepEqual(JSON.parse(scoped.entryProbe ?? "null"),
-    { ask: "test:accept", resolved: true, by: "被测快照 child/package.json 的 scripts" },
+    { ask: "test:accept", resolved: true, by: "被测快照 child/package.json 的 scripts（npm 自己列的）" },
     "核的必须是 --prefix 指的那份 manifest");
   assert.equal(scoped.failure, "exit_code", "真跑起来、真红了，不许因为顶层没这个名字就说它没启动");
   assert.equal(scoped.missAttribution, null, "它不是「没解析出来」那一档");
@@ -340,24 +340,55 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   assert.match(unknownPrompt, /是不是你这次改动把它弄没的/, "要先去核归因");
   assert.match(unknownPrompt, /改回来或同步改配置/, "核下来是自己弄没的就该去改");
 
-  // 对照组十二（审查五 F1）：命令行上一个字都看不出来 —— `.npmrc` 里写着 workspace=child，
-  // runner 真跑的是子项目那个脚本。只核根目录那份 manifest，就会把一次真断言失败说成
-  // 「一行都没跑到、不要改代码」。本机实测过这条配置确实改了 npm run 的落点。
+  // 对照组十二（审查五 F1、六 F1）：命令行上一个字都看不出来 —— `.npmrc` 把 runner 指到了
+  // 子项目，真跑的是那边那个脚本。只核根目录那份 manifest，就会把一次真断言失败说成「一行
+  // 都没跑到、不要改代码」。
+  //
+  // 这里用的是**数组写法** `workspace[]=child`：第 6 轮审查实测，按键名比对的旧判据拦住了
+  // `workspace=child`、却放过了它。现在这件事整块交给 npm 自己回答（它会改口给出按包分组的
+  // 嵌套答案，这一层据此交白卷），两种写法在 test-accept-gate-command.ts 里都真起 npm 跑过。
   writeFileSync(join(wsPath, "package.json"), `${JSON.stringify({
     name: "gate-fixture", private: true, workspaces: ["child"], scripts: { build: "echo build" } }, null, 2)}\n`);
   writeFileSync(join(wsPath, "child", "package.json"), `${JSON.stringify({
     name: "child", private: true,
     scripts: { "test:accept": "echo ACCEPTANCE STARTED; echo ASSERTION FAILED >&2; exit 1" } }, null, 2)}\n`);
-  writeFileSync(join(wsPath, ".npmrc"), "workspace=child\n");
+  writeFileSync(join(wsPath, ".npmrc"), "workspace[]=child\n");
   git(wsPath, "add", "-A");
   git(wsPath, "commit", "-m", "npmrc points npm run at the child workspace");
   const viaRc = await again("npm run test:accept");
   assert.match(readFileSync(viaRc.logPath, "utf8"), /ACCEPTANCE STARTED/,
     "测试自己的前提：子项目那个脚本真跑起来了");
   assert.equal(viaRc.entryProbe, null,
-    "配置能把 runner 指到另一份 manifest 时，起跑前这一层交白卷（审查五 F1）");
+    "配置能把 runner 指到另一份 manifest 时，起跑前这一层交白卷（审查五 F1、六 F1）");
   assert.equal(viaRc.failure, "exit_code", "一次真的断言失败，不许说成「没启动」");
   assert.equal(viaRc.diagnosis, null, "也不许给出任何「不是你的代码」的结论");
 
-  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 / 引入历史读不动 / 继承后删除 / npmrc 换落点 全部通过");
+  // 对照组十三（审查六 F1 反例②）：shell 的分组括号。`(./runner.sh)` 里那条**真被跑了**，
+  // 旧版却把整个 `(./runner.sh)` 当成一个文件名去查，查不到就判「入口不在树里」并发免修令。
+  writeFileSync(join(wsPath, "grouped.sh"),
+    "#!/bin/sh\necho ACCEPTANCE STARTED\necho ASSERTION FAILED >&2\nexit 1\n", { mode: 0o755 });
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "entry runnable through a subshell group");
+  const grouped = await again("(./grouped.sh)");
+  assert.match(readFileSync(grouped.logPath, "utf8"), /ACCEPTANCE STARTED/,
+    "测试自己的前提：括号里那条 shell 真跑了");
+  assert.equal(grouped.entryProbe, null, "读不准的 shell 语义一律交白卷，不许拿字面文件名去查");
+  assert.equal(grouped.failure, "exit_code", "一次真的断言失败，不许说成「没启动」");
+  assert.equal(grouped.diagnosis, null, "也不许给出任何「不是你的代码」的结论");
+
+  // 对照组十四（审查六 F1 反例③）：npm 内建的 `env`。`npm run --json` 列的表里没有它，可它
+  // 真能跑 —— 实测 `npm run env -- node fail.cjs` 把 fail.cjs 跑了。「表里没有」在这个名字上
+  // 推不出「没东西可跑」。
+  rmSync(join(wsPath, ".npmrc"), { force: true });
+  writeFileSync(join(wsPath, "fail.cjs"), 'console.log("FAIL SCRIPT RAN"); process.exit(1);\n');
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "builtin npm env script forwards to a real failing script");
+  const builtin = await again("npm run env -- node fail.cjs");
+  assert.match(readFileSync(builtin.logPath, "utf8"), /FAIL SCRIPT RAN/,
+    "测试自己的前提：内建 env 真把后面那条命令跑了");
+  assert.equal(builtin.entryProbe, null, "有默认行为的名字一律不认，哪怕它不在 scripts 表里");
+  assert.equal(builtin.failure, "exit_code", "真跑起来、真红了，不许说成「没启动」");
+  assert.equal(builtin.diagnosis, null, "也不许给出任何「不是你的代码」的结论");
+
+  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 / 引入历史读不动 / 继承后删除 / npmrc 换落点 / shell 分组 / npm 内建 env 全部通过");
 }

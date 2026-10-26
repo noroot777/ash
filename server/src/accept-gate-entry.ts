@@ -18,32 +18,26 @@
 //  · `npm start` —— 没有 `scripts.start` 时 npm **有默认行为**（有 `server.js` 就跑
 //    `node server.js`，实测如此），所以「manifest 里没有」推不出「没东西可跑」。
 //
-// **而命令行只是三个配置来源之一（第 5 轮审查 F1 实测四条）。** runner 去哪儿找 manifest，
-// 命令行、继承的环境、仓库里的 npmrc 都能改掉，三者任缺一环这份「缺失」就不成立：
-//  · `npm --workspace=child run test:accept` —— 带等号的 scope 选项（旧版「`--x=y` 自带值
-//    就跳过」把它当成了无关选项）；
-//  · `npm_config_workspace=child npm run test:accept` —— 配置从环境进来（旧版无条件剥掉
-//    所有前置赋值）；
-//  · `.npmrc` 里写着 `workspace=child` —— 配置从仓库进来，命令行上一个字都看不出来；
-//  · `npm --prefix child run test:accept # --prefix .` —— shell 注释，旧版把注释里那个
-//    `--prefix .` 当成了真的目录。
-// 四条里 runner 真跑的都是子项目那个脚本、真打了启动提示、真报了断言失败，却都被说成
-// 「一行都没跑到、不要改代码」。
+// **而「runner 去哪儿找」压根不是这一层能解释完的**（第 5、6 轮审查 F1 实测：`--workspace=
+// child`、`npm_config_workspace=child`、`.npmrc` 里 `workspace=child`、再到数组写法
+// `workspace[]=child`）—— 四层配置、数组写法、别名都是 npm 的语义，逐条枚举补一个漏一个。
+// 所以那件事整块交给 npm 自己回答（`accept-gate-entry-npm.ts`），这一层只剩两件事：
+// **把 shell 读准**，以及**把重放那两问要带的东西（目录选项、前置赋值）原样交出去**。
 //
-// 所以这一层的规矩是**证明不了就交白卷**。判据是「这条命令的执行目标我能不能完整解释」，
-// 不是「它像不像我见过的形状」：
-//  · 命令里有任何我读不准的 shell 语义（多步、变量、命令替换、通配、转义、未闭合引号），
-//    返回 null；注释按 shell 语义截断，不当成参数；
+// 规矩是**证明不了就交白卷**。判据是「这条命令的执行目标我能不能完整解释」，不是「它像不像
+// 我见过的形状」：
+//  · 命令里有任何读不准的 shell 语义（多步、分组、后台、变量、命令替换、通配、转义、未闭合
+//    引号），返回 null；注释按 shell 语义截断，不当成参数。第 6 轮审查实测两条反例：
+//    `(./runner.sh)` 旧版当成一个叫 `(./runner.sh)` 的文件去查、查不到就发免修令，而 shell
+//    真把括号里那条跑了；`./missing & ./runner.sh` 旧版只认前半截，拿它的缺失代表整条命令。
 //  · 选项**只认白名单**（换目录的、确定不吃词的开关、确定只影响输出的带值选项），其余一律
-//    返回 null —— 带不带等号都一样。靠黑名单逐条堵组合这条路已经证明走不通：补掉一个写法，
-//    换个写法又进来；
-//  · 前置环境赋值里出现 runner 自己的配置（`npm_config_*`/`yarn_*`/`pnpm_*`），返回 null；
-//    进程环境里已经生效的同类配置也一样查；
-//  · 会生效的 npmrc 里出现改掉查找路径的键（`prefix`/`workspace`/…），或者那份文件存在却
-//    读不动，返回 null；
-//  · 只认那些**绝对没有默认行为**的子命令（`npm run X`、`npm test`），`start`/`restart`
-//    一律不认，而且子命令必须在最前（`npm test run` 不是「跑 run 这个脚本」）；
-//  · 查的 manifest 必须是 runner 真会读的那一份（跟着 `--prefix`/`-C`/`--dir`/`--cwd` 走）。
+//    返回 null —— 带不带等号都一样。靠黑名单逐条堵组合这条路已经证明走不通。
+//  · 只认那些**绝对没有默认行为**的子命令（`npm run X`、`npm test`），有默认行为的名字一律
+//    不认（`start`/`restart`/`stop`，还有 npm 内建的 `env` —— 第 6 轮审查实测
+//    `npm run env -- node fail.cjs` 真把 `fail.cjs` 跑了），而且子命令必须在最前
+//    （`npm test run` 不是「跑 run 这个脚本」）。
+//  · 只认 npm。pnpm/yarn 的配置层和内建脚本语义这台机器上没有实测环境，外推错了要发出去的
+//    是「测试一行都没跑、不要改代码」—— 那张白卷只是少下一个结论。
 //
 // 反方向也要说清：`resolved: true` **只证明它在树里，不证明它跑起来了**（审查实测：一个存在
 // 但没有执行权限的脚本退 126，正文一行没跑）。所以 true 这一档的措辞里不许出现「确实跑起来
@@ -52,15 +46,17 @@
 // 答案在 spawn 之前取一次，连同判据一起落到那一行上（accept_gate_runs.entryProbe），结算时
 // 只许读它、不许重算。
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { readFile } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative } from "node:path";
+import { npmScriptTable } from "./accept-gate-entry-npm.js";
 
 /** 这条命令点名要跑的东西，分能核实的两种。其余形状一律认不出（见文件头）。 */
 export type GateEntryAsk =
   | { kind: "path"; name: string }
-  /** `dir` = runner 真会读 manifest 的那个目录（相对被测树，默认 `.`）。 */
-  | { kind: "script"; runner: "npm" | "pnpm" | "yarn"; name: string; dir: string };
+  /**
+   * `dir` = runner 真会读 manifest 的那个目录（相对被测树，默认 `.`，起跑前会跟 npm 自己说的
+   * 那个交叉核对）；`flags`/`env` = 重放「问 npm」那两问时要原样带上的东西。
+   */
+  | { kind: "script"; name: string; dir: string; flags: string[]; env: Record<string, string> };
 
 export type GateEntryProbe = {
   /** 点名要跑的那个东西：脚本名，或相对这份树的路径。 */
@@ -85,42 +81,19 @@ export type GateEntryProbe = {
 const NPM_LIFECYCLE = new Set(["test"]);
 
 /**
- * 这几个名字**走 `run` 也一样**有默认行为：实测 `npm run start`（没有 `scripts.start`、
- * 目录里有 `server.js`）真的去跑了 `node server.js` 并打出那个脚本的输出（第 4 轮审查 F1）。
- * 旧版本只拦住了裸 `npm start`，于是同一件事换个写法就又被判成「没东西可跑」。
- *
- * 对 pnpm/yarn 一并保守对待：它们的默认行为我没有实测过，而这里多交一张白卷只是少下一个
- * 结论，认错了却要发出「测试一行都没跑、不要改代码」。
+ * 这几个名字**走 `run` 也一样**有默认行为，所以「表里没有」推不出「没东西可跑」：
+ *  · `npm run start`（没有 `scripts.start`、目录里有 `server.js`）真的去跑了 `node server.js`
+ *    并打出那个脚本的输出（第 4 轮审查 F1 实测）；
+ *  · `npm run env -- node fail.cjs` 真的把 `fail.cjs` 跑了（第 6 轮审查 F1 实测）—— `env` 是
+ *    npm 的内建脚本，而 `npm run --json` 列的表里**没有**它（实测），光看表只会得出「不存在」。
  */
-const DEFAULTED_SCRIPTS = new Set(["start", "restart", "stop"]);
+const DEFAULTED_SCRIPTS = new Set(["start", "restart", "stop", "env"]);
 
 /** 这些**子命令**把「跑什么」整个换掉，不是在跑本项目的脚本。 */
 const SCOPE_SUBCOMMANDS = new Set(["workspace", "workspaces", "exec", "dlx", "recursive"]);
 
 /** 告诉 runner 换目录的选项。值可以跟在后面，也可以 `=` 连写。 */
 const DIR_FLAGS = new Set(["--prefix", "-C", "--dir", "--cwd"]);
-
-/**
- * runner 自己的配置也能从环境进来（实测 `npm_config_workspace=child npm run test:accept`
- * 真去跑了子项目那个脚本）。前缀命中这些、键又落在 SCOPE_CONFIG_KEYS 里的，一律交白卷。
- */
-const RUNNER_CONFIG_ENV = /^(npm_config_|yarn_|pnpm_)/i;
-
-/**
- * **实测**会改掉「`npm run` 去哪儿找 manifest」的配置键。只有 workspace 这一族：
- *  · `.npmrc` 写 `workspace=child`、或者环境给 `npm_config_workspace=child`，`npm run probe`
- *    真的跑到了 child（本机实测两种都成立）；
- *  · `prefix=child` 走 `.npmrc` 或走环境**都不改**（实测仍在根目录跑）—— 它是全局安装位置。
- *
- * 判据必须这么窄，否则会反过来废掉整个判定：`npm` 运行脚本时会把自己的配置全量注入子进程
- * （本机实测注入了 prefix / userconfig / globalconfig / local_prefix / global_prefix 等 12 个
- * `npm_config_*`），把那些内省变量算成「配置被改过」，等于在任何由 npm 启动的环境里永远
- * 交白卷。workspace 不在注入清单里，只有用户显式设置时才出现。
- *
- * 命令行侧不靠这张表：那边是**白名单之外一律白卷**，`--workspace=child`、`--userconfig X`
- * 之类自然都落进白卷，不需要逐个点名。
- */
-const SCOPE_CONFIG_KEYS = new Set(["workspace", "workspaces", "include-workspace-root"]);
 
 /**
  * 确定**不吃下一个词**的开关。不在这张表里、又不是 `--x=y` 自带值的选项，一律交白卷：
@@ -140,10 +113,16 @@ const SAFE_VALUED = new Set(["--loglevel", "--log-level"]);
  * 把命令切成词。**读不准就返回 null**，绝不猜。
  *
  * 只处理一件 shell 语义：成对的引号（`npm run 'test:accept'` 里那个名字，runner 拿到的是
- * 不带引号的 —— 审查 F1 实测）。变量、命令替换、通配、转义、未闭合引号、多步一律交白卷。
+ * 不带引号的 —— 审查 F1 实测）。其余一概交白卷：多步、分组 `( )`、后台 `&`、变量、命令
+ * 替换、通配、转义、未闭合引号。分组和 `&` 是第 6 轮审查实测补上的 —— 它们不改变「有东西
+ * 被跑了」这件事，却让旧版去查一个字面上并不存在的文件名。
  */
 function tokenize(command: string): string[] | null {
-  if (/(\|\||&&|[;\n|])/.test(command)) return null;      // 多步：没有「一个入口」可言
+  // `2>&1` 里那个 `&` 是重定向的一部分，不是后台 —— 先把 `>&1` / `<&0` 这类摘掉再筛控制符，
+  // 否则一条普普通通的 `npm run x > out.log 2>&1` 会被整条拒掉（回归用例当场抓到）。
+  // `&>` 留着不摘:那是另一种重定向写法,下面那个重定向正则读不准它,宁可交白卷。
+  const control = command.replace(/[<>]&\d*/g, "");
+  if (/[;\n\r|&()]/.test(control)) return null;            // 多步 / 分组 / 后台：没有「一个入口」可言
   if (/[`$]/.test(command)) return null;                   // 命令替换 / 变量：入口是算出来的
   if (/[\\*?[\]{}~]/.test(command)) return null;           // 转义 / 通配 / 花括号展开
   const words: string[] = [];
@@ -174,8 +153,8 @@ function tokenize(command: string): string[] | null {
 }
 
 /**
- * 把 runner 自己的那段参数读出来：位置参数（`run` / 脚本名 / 子命令）+ 它会去哪个目录读
- * manifest。**任何一个词解释不了就返回 null**（交白卷）。
+ * 把 runner 自己的那段参数读出来：位置参数（`run` / 脚本名 / 子命令）、它会去哪个目录读
+ * manifest、以及**重放那两问时要原样带上的目录选项**。任何一个词解释不了就返回 null。
  *
  * 两条都是实测来的（第 4 轮审查 F1）：
  *  · `--` 之后的词是**传给脚本的**，npm 自己不再解释 —— `npm run x -- --prefix child` 跑的
@@ -183,10 +162,14 @@ function tokenize(command: string): string[] | null {
  *    于是去读了 `child/package.json`，把一次真跑起来、真报断言失败的红说成「一行都没跑到」。
  *  · 未知选项可能吃掉后面那个词（`--loglevel warn`），所以不许按「以 `-` 开头就跳过」去
  *    猜位置参数。
+ *
+ * `flags` 里**只收换目录那一类**：`--silent` 一带上，`npm run --silent --json` 会把 JSON 一起
+ * 吞掉（实测 stdout 空），而它本来就是「确定只影响输出」才进白名单的，不带不改答案。
  */
-function runnerArgs(words: string[]): { positional: string[]; dir: string } | null {
+function runnerArgs(words: string[]): { positional: string[]; dir: string; flags: string[] } | null {
   let dir = ".";
   const positional: string[] = [];
+  const flags: string[] = [];
   for (let at = 0; at < words.length; at++) {
     const word = words[at]!;
     if (word === "--") break;                      // 后面都是脚本的参数，入口身份到这儿定了
@@ -202,6 +185,7 @@ function runnerArgs(words: string[]): { positional: string[]; dir: string } | nu
       const value = inlineValue ?? words[++at];
       if (!value || value.startsWith("-")) return null;
       dir = value;
+      flags.push(flag, value);                     // 规范成「选项 值」两词，重放时不必再管写法
       continue;
     }
     if (SAFE_VALUED.has(flag)) { if (inlineValue === null) at++; continue; }
@@ -210,84 +194,46 @@ function runnerArgs(words: string[]): { positional: string[]; dir: string } | nu
     // 脚本」，而旧版「`--x=y` 自带值就跳过」把它当成了无关选项（第 5 轮审查 F1 实测）。
     return null;
   }
-  return { positional, dir };
-}
-
-/**
- * 进程环境里**已经生效**的 runner 配置（门禁 spawn 继承它）。命中就交白卷。
- *
- * 命令行上看不出来的那一类：用户在 shell 里 export 过 `npm_config_workspace`，门禁跑的时候
- * 它照样生效，而这一层若只读命令行就会去核错一份 manifest。
- */
-const scopeChangingEnv = (): boolean => Object.keys(process.env).some(key => {
-  const prefix = RUNNER_CONFIG_ENV.exec(key);
-  return !!prefix && SCOPE_CONFIG_KEYS.has(key.slice(prefix[0].length).replace(/_/g, "-").toLowerCase());
-});
-
-/**
- * 会生效的那几份 runner 配置文件里，有没有改掉「去哪儿找 manifest」的键。
- *
- *  · 有 → true（交白卷）；
- *  · 文件不存在 → 不影响；
- *  · **存在却读不动 → true** —— 读不出来不等于里面没有，这跟 git 那边同一条规矩。
- *
- * yarn 的 rc 文件不解析：那套语义我没实测过，存在就不敢下结论（只影响 yarn 这一路）。
- */
-async function scopeChangingRc(treeDir: string, runner: "npm" | "pnpm" | "yarn"): Promise<boolean> {
-  if (runner === "yarn" && [".yarnrc", ".yarnrc.yml"].some(name => existsSync(join(treeDir, name)))) return true;
-  // 用户级那份读**生效的**那一个：npm 把它的位置注入成 `npm_config_userconfig`，默认就是
-  // `~/.npmrc`。拿这个变量去读，而不是因为它存在就交白卷（它是注入值，不是用户改过的证据）。
-  const userRc = process.env.npm_config_userconfig?.trim() || join(homedir(), ".npmrc");
-  for (const file of [join(treeDir, ".npmrc"), userRc]) {
-    if (!existsSync(file)) continue;
-    const text = await readFile(file, "utf8").catch(() => null);
-    if (text === null) return true;
-    for (const line of text.split("\n")) {
-      const key = line.split("=")[0]?.trim().toLowerCase();
-      if (key && !/^[;#/[]/.test(key) && SCOPE_CONFIG_KEYS.has(key)) return true;
-    }
-  }
-  return false;
+  return { positional, dir, flags };
 }
 
 /**
  * 这条命令点名要跑的是什么。认不出来返回 null。
  *
- * 判据全在文件头：能读准的 shell 语义 + 没有默认行为的子命令 + runner 真会读的那个目录。
- * 任何一条不满足就交白卷 —— 下游拿这个答案去说「测试一行都没跑、不要改代码」。
+ * 判据全在文件头：能读准的 shell 语义 + 没有默认行为的子命令 + 只认 npm。任何一条不满足就
+ * 交白卷 —— 下游拿这个答案去说「测试一行都没跑、不要改代码」。
  */
 export function gateEntryAsk(command: string): GateEntryAsk | null {
   const words = tokenize(command);
   if (!words) return null;
-  // 前缀的环境变量赋值（`CI=1 npm run x`）不是入口，剥掉；后面出现的 `A=B` 是参数，留着。
-  // 但 runner 自己的配置也能这么传进来（实测 `npm_config_workspace=child` 真让它去跑了子
-  // 项目那个脚本），那一类改掉的正是「去哪儿找脚本」—— 解释不了就交白卷。
+  // 前缀的环境变量赋值（`CI=1 npm run x`）不是入口，剥下来 —— 但要**原样带到那两问上**：
+  // runner 的配置也能这么传进来（实测 `npm_config_workspace=child npm run test:accept` 真让
+  // 它跑了子项目那个脚本），带上它，npm 自己就会把这份 scope 算进答案里。
+  const env: Record<string, string> = {};
   while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) {
-    if (RUNNER_CONFIG_ENV.test(words[0]!)) return null;
-    words.shift();
+    const assignment = words.shift()!;
+    const eq = assignment.indexOf("=");
+    env[assignment.slice(0, eq)] = assignment.slice(eq + 1);
   }
   const head = words[0];
   if (!head) return null;
-  const runner = /^(npm|pnpm|yarn)$/.exec(head)?.[1] as "npm" | "pnpm" | "yarn" | undefined;
-  if (runner) {
+  if (head === "npm") {
     const args = runnerArgs(words.slice(1));
     if (!args) return null;
-    const { positional, dir } = args;
+    const { positional, dir, flags } = args;
     // 子命令必须在最前：`npm test run` 是「跑 test 这个生命周期」，不是「跑 run 这个脚本」。
-    const at = positional[0] === "run" || positional[0] === "run-script" ? 0 : -1;
-    if (at >= 0) {
-      const name = positional[at + 1];
-      if (!name) return null;
-      // `run` 也绕不开默认行为：`npm run start` 缺 `scripts.start` 时照样跑 `node server.js`。
-      return DEFAULTED_SCRIPTS.has(name) ? null : { kind: "script", runner, name, dir };
-    }
-    // 只认 npm 那几个「缺了就是报错」的子命令;yarn/pnpm 的裸子命令和脚本简写混在一起,
-    // 分不清就不猜。
     const sub = positional[0];
-    return runner === "npm" && sub && NPM_LIFECYCLE.has(sub) ? { kind: "script", runner, name: sub, dir } : null;
+    if (sub === "run" || sub === "run-script") {
+      const name = positional[1];
+      // `run` 也绕不开默认行为：`npm run start` 缺 `scripts.start` 时照样跑 `node server.js`，
+      // `npm run env` 跑的是 npm 的内建 env。
+      return !name || DEFAULTED_SCRIPTS.has(name) ? null : { kind: "script", name, dir, flags, env };
+    }
+    return sub && NPM_LIFECYCLE.has(sub) ? { kind: "script", name: sub, dir, flags, env } : null;
   }
   // 相对路径形式的入口（`./runner.sh`、`scripts/verify.sh`）。绝对路径不算：那是机器上的
-  // 东西，缺了跟「任务分支落后了」无关，给合分支的建议只会误导。
+  // 东西，缺了跟「任务分支落后了」无关，给合分支的建议只会误导。pnpm/yarn 这类名字落不进
+  // 这一支（不含 `/`），于是自然交白卷 —— 见文件头最后一条。
   return !isAbsolute(head) && head.includes("/") ? { kind: "path", name: head } : null;
 }
 
@@ -316,8 +262,8 @@ export function insideTree(treeDir: string, name: string): string | null {
 /**
  * 起跑前核这一次。**调用点只能是 spawn 之前**，否则这份答案就不再是「起跑那一刻」的。
  *
- * 核不出来（命令认不出、manifest 读不动、目录踩出树）一律返回 null：这一层宁可交白卷，
- * 也不能交一个推出来的答案 —— 下游拿它去说「测试一行都没跑、不要改代码」。
+ * 核不出来（命令认不出、npm 答不上来、目录踩出树）一律返回 null：这一层宁可交白卷，也不能
+ * 交一个推出来的答案 —— 下游拿它去说「测试一行都没跑、不要改代码」。
  */
 export async function probeGateEntry(treeDir: string, command: string): Promise<GateEntryProbe | null> {
   const ask = gateEntryAsk(command);
@@ -326,17 +272,14 @@ export async function probeGateEntry(treeDir: string, command: string): Promise<
     const resolved = insideTree(treeDir, ask.name);
     return resolved ? { ask: ask.name, resolved: existsSync(resolved), by: "被测快照里的文件" } : null;
   }
-  // 命令行只是三个配置来源之一：环境和 npmrc 同样能把 runner 指到另一份 manifest
-  // （第 5 轮审查 F1 实测）。这两处解释不了就交白卷 —— 这一层的结论会被下游当成
-  // 「测试一行都没跑、不要改代码」。
-  if (scopeChangingEnv() || await scopeChangingRc(treeDir, ask.runner)) return null;
   const file = askManifest(ask);
-  const resolved = insideTree(treeDir, file);
-  if (!resolved) return null;
-  const manifest = await readFile(resolved, "utf8").catch(() => null);
-  if (manifest === null) return null;
-  const defined = scriptDefinedIn(manifest, ask.name);
-  return defined === null ? null : { ask: ask.name, resolved: defined, by: `被测快照 ${file} 的 scripts` };
+  // 归因层要拿这个路径去 git 历史里查定义，踩出树就没地方查了。
+  if (!insideTree(treeDir, file)) return null;
+  // 「这个名字在不在」不自己解析 npm 的配置，让 npm 按它的全部有效配置回答，并跟这一层
+  // 解析出的目录交叉核对（见 accept-gate-entry-npm.ts）。
+  const table = await npmScriptTable(treeDir, ask);
+  return table ? { ask: ask.name, resolved: table.has(ask.name),
+    by: `被测快照 ${file} 的 scripts（npm 自己列的）` } : null;
 }
 
 /** 落盘与读回。字段形状变了就当没核过 —— 跨机接力和旧行都可能带着老形状。 */
