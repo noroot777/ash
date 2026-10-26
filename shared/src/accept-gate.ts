@@ -13,7 +13,7 @@
 export type AcceptGateStatus = "running" | "passed" | "failed" | "interrupted" | "canceled";
 
 /** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
-export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
+export type AcceptGateFailure = "exit_code" | "timeout" | "stalled" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -26,6 +26,7 @@ export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
 export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   exit_code: "命令退出码非 0",
   timeout: "超时",
+  stalled: "卡住了(长时间没有任何输出)",
   spawn_failed: "命令起不来",
   server_restarted: "ash 重启,这次没跑完",
   canceled: "你取消了这一次",
@@ -81,8 +82,24 @@ export function acceptGateCancelMessage(result: AcceptGateCancelResult): string 
   return "当前没有正在跑的验收前置命令，未执行取消";
 }
 
-/** 这条命令最多跑多久。再久基本是卡住了 —— 出路是验收台上那颗「取消」。 */
+/** 这条命令最多跑多久。撞到这条线还没完,出路是验收台上那颗「取消」。 */
 export const ACCEPT_GATE_TIMEOUT_MS = 90 * 60_000;
+
+/**
+ * 日志连着这么久一个字节都不长,就不等满上限了,当场判「卡住了」。
+ *
+ * 为什么是 20 分钟(2026-10-26 的两份真日志):健康的一次 18 分钟打出 71 条脚本横幅,
+ * 平均 15 秒一条;卡住的那次 90 分钟只走到第 27 条,而那一条还正常打了 `ok` —— 之后
+ * 到被收掉为止没有任何输出。门禁命令跑的是 Node 进程、写的是文件 fd(对文件是同步写,
+ * 不攒缓冲),所以「日志不长」就是真的没人在输出,不是缓冲没刷出来。20 分钟 ≈ 健康
+ * 节奏的 80 倍,再慢的机器也不该有哪一条用例连续这么久一声不吭。
+ *
+ * 判错的代价是对称的:误判就重新点一次验收,而不判就是白烧掉剩下的几十分钟。
+ */
+export const ACCEPT_GATE_SILENCE_MS = 20 * 60_000;
+
+/** 多久往门禁日志里落一行进度。这串时间戳就是事后看「它是一直慢还是中途卡住」的依据。 */
+export const ACCEPT_GATE_PROGRESS_MS = 5 * 60_000;
 
 /** 回显给界面和 agent 的日志尾巴长度。全文走单独的接口。 */
 export const ACCEPT_GATE_TAIL_BYTES = 4000;

@@ -8,7 +8,11 @@ export const gateFailurePrompt = (details: { command: string; summary: string; l
   (details.executionNotice ? `${details.executionNotice}\n` : "") +
   `在当前任务工作区复现这条命令：\n\n    cd ${details.sourceCwd} && ${details.command}\n\n` +
   `结果：${details.summary}。所以**没有合并、没有清理**，目标分支一个字节都没动。\n\n` +
-  (details.failure === "timeout" ? "这是整条命令超时，不是已经定位到某个断言失败。日志最后的成功提示只说明那一步的断言完成，不能证明浏览器、开发服务或测试进程已经退出；首次卡住的原因仍需核实。\n\n" : "") +
+  (details.failure === "timeout" || details.failure === "stalled"
+    ? "这不是某个断言红了，是整条命令没能在时限内跑完。日志末尾那段「被收掉时的现场」给了**停在哪一行、静了多久、产出节奏**，"
+      + "先照它判清是某一步卡住还是整台机器在爬，再决定去查那条用例还是去查机器负载。日志最后的成功提示只说明那一步的断言完成，"
+      + "不能证明浏览器、开发服务或测试进程已经退出。\n\n"
+    : "") +
   `完整日志在 \`${details.logPath}\`，末尾是：\n\n\`\`\`\n${details.tail.trim() || "（日志为空）"}\n\`\`\`\n\n` +
   `请你来处理：\n` +
   `1. 在自己的工作目录里重跑这条命令，定位到底是哪一条红的；\n` +

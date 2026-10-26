@@ -37,6 +37,7 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { acceptGateCommandOf, gateView, latestRun, prepareGateCwd, runningRun } from "./accept-gate-state.js";
 import { gateFailurePrompt, gateStoppedSummary } from "./accept-gate-messages.js";
+import { startGateWatch, type GateWatch } from "./accept-gate-watch.js";
 import { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, removeGateSnapshot, verifyGateSnapshot, type GateSource } from "./accept-gate-source.js";
 import { existingTaskWorkspacePath } from "./task-workspace.js";
 export { acceptGateCommandOf, acceptGateRunOf, acceptGateState } from "./accept-gate-state.js";
@@ -77,8 +78,8 @@ type PendingStart = {
 };
 
 const pendingStarts = new Map<string, PendingStart>();
-// 正在跑的那条：超时闹钟只活在内存里（重启后由 recoverAcceptGates 收拾残留）。
-const live = new Map<string, { runId: string; timer: NodeJS.Timeout; pid: number; pidStartedAt: string | null }>();
+// 正在跑的那条：看门的（超时 + 静默）只活在内存里（重启后由 recoverAcceptGates 收拾残留）。
+const live = new Map<string, { runId: string; watch: GateWatch; pid: number; pidStartedAt: string | null }>();
 // runId → 这一次「跑完 + 跑完之后那一步（自动续验收 / 回流）」都做完了。只给回归用。
 const settlements = new Map<string, Promise<void>>();
 const outcomeWrites = new Map<string, Promise<void>>();
@@ -316,15 +317,18 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     const failed = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
     return failed ? gateView(failed) : null;
   }
-  const timer = setTimeout(() => void (async () => {
-    appendGateLog(logPath, `\n[ash] 超过 ${Math.round(ACCEPT_GATE_TIMEOUT_MS / 60_000)} 分钟，按超时处理，正在收掉它。\n`);
+  // 看门的管两条线：撞 ACCEPT_GATE_TIMEOUT_MS 上限，和「日志连着 ACCEPT_GATE_SILENCE_MS 不长」。它在叫我们
+  // 之前已经把现场写进日志末尾了（停在哪一行、静了多久、产出节奏），`note` 是那段的一句
+  // 话版本 —— 只写「超时」的话，事后分不出是某一步卡住还是整台机器在爬，而这两种的处置
+  // 完全相反（见 accept-gate-watch.ts 顶部）。
+  const watch = startGateWatch({ logPath, onVerdict: (verdict) => void (async () => {
+    appendGateLog(logPath, `\n[ash] ${verdict.failure === "stalled" ? "判定卡住" : `超过 ${Math.round(ACCEPT_GATE_TIMEOUT_MS / 60_000)} 分钟，按超时处理`}，正在收掉它。\n`);
     // **先认领终态、再动刀**（同取消那条路）：反过来的话，刀落下去触发的退出回调会先把
     // 这一次收成「命令被外人杀了」，连带把日志当成一条红交给 agent 去修 —— 而它其实是
     // 超时。占用不会因此漏空：stopAcceptGate 从进场就立起「还没确认退出」那条记号。
-    await settleGate(runId, { status: "failed", exitCode: null, failure: "timeout" });
-  })(), ACCEPT_GATE_TIMEOUT_MS);
-  timer.unref?.();
-  live.set(taskId, { runId, timer, pid: started.pid, pidStartedAt: started.startedAt });
+    await settleGate(runId, { status: "failed", exitCode: null, failure: verdict.failure, note: verdict.note });
+  })() });
+  live.set(taskId, { runId, watch, pid: started.pid, pidStartedAt: started.startedAt });
   attachGateProcess(runId, started.pid, started.startedAt);
 
   try {
@@ -344,8 +348,8 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
   // 期间收过它，由**我们**来把刚起的这条收掉（两边都查一次，谁后到谁负责，窗口就封住了）。
   if (row && row.status !== "running") {
     appendGateLog(logPath, `\n[ash] 这一次在起跑的同时就被收掉了（${row.status}），正在停掉刚起的进程。\n`);
-    const timerNow = live.get(taskId);
-    if (timerNow?.runId === runId) { clearTimeout(timerNow.timer); live.delete(taskId); }
+    const watching = live.get(taskId);
+    if (watching?.runId === runId) { watching.watch.stop(); live.delete(taskId); }
     await noteIfStillAlive(taskId, logPath, await stopGateRun(runId));
   }
   return row ? gateView(row) : null;
@@ -373,7 +377,9 @@ export function dropPendingAcceptGate(taskId: string): boolean {
  */
 async function settleGate(
   runId: string,
-  outcome: { status: Exclude<AcceptGateStatus, "running">; exitCode: number | null; failure: AcceptGateFailure | null },
+  outcome: { status: Exclude<AcceptGateStatus, "running">; exitCode: number | null; failure: AcceptGateFailure | null;
+    /** 这一条还能补一句「卡在哪」。只有看门的给得出（超时/静默），会一起落进任务时间线。 */
+    note?: string },
   waitForContinuation = true,
 ): Promise<void> {
   if (settling.has(runId)) return waitForContinuation ? settlements.get(runId) : outcomeWrites.get(runId);
@@ -393,7 +399,7 @@ async function settleGate(
     if (outcome.status === "passed" && !await verifyGateSnapshot(row.cwd, {
       commit: row.sourceCommit, fingerprint: row.sourceFingerprint ?? "", dependencies: [],
     })) outcome = { status: "failed", exitCode: outcome.exitCode, failure: "source_changed" };
-    const timer = live.get(row.taskId);
+    const watching = live.get(row.taskId);
     const finishedAt = now();
     await db.update(acceptGateRuns)
       .set({ status: outcome.status, exitCode: outcome.exitCode, failure: outcome.failure, finishedAt, processPending: !stopped })
@@ -402,10 +408,10 @@ async function settleGate(
     outcomeSaved = true;
     if (stopped) forgetGateProcess(runId);
     if (stopped) await cleanupGateSnapshot(row.taskId, runId);
-    if (timer?.runId === runId) { clearTimeout(timer.timer); live.delete(row.taskId); }
+    if (watching?.runId === runId) { watching.watch.stop(); live.delete(row.taskId); }
     const view = gateView({ ...row, ...outcome, finishedAt });
     appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`);
-    await appendTaskTimeline(row.taskId, `${summarizeAcceptGate(view)}。`);
+    await appendTaskTimeline(row.taskId, `${summarizeAcceptGate(view)}。${outcome.note ? ` ${outcome.note}` : ""}`);
     announceGate(row.taskId);
     finishOutcome();
     if (stopped && outcome.status === "passed") await continueAcceptance(row);
@@ -559,7 +565,7 @@ export function hasLiveAcceptGate(taskId: string): boolean {
  */
 export async function stopAcceptGatesForTask(taskId: string): Promise<boolean> {
   const running = live.get(taskId);
-  if (running) clearTimeout(running.timer);
+  if (running) running.watch.stop();
   // 这里**必须等**：紧接着就要删工作区，而它的 cwd 正在那儿。
   const stopped = await stopOwnedGateProcesses(taskId);
   if (stopped && running) live.delete(taskId);
@@ -615,7 +621,7 @@ export async function forceReleaseAcceptGate(taskId: string, runId: string) {
   const result = await releaseGateOwnership(taskId, runId);
   if (result.ok) {
     const active = live.get(taskId);
-    if (active?.runId === runId) { clearTimeout(active.timer); live.delete(taskId); }
+    if (active?.runId === runId) { active.watch.stop(); live.delete(taskId); }
     announceGate(taskId);
   }
   return result;
