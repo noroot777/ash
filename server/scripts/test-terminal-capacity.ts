@@ -185,7 +185,26 @@ try {
 
   const secondRecord = manager.listForProject(projectId).find((session) => session.commandId === "done-1")!;
   assert.deepEqual(await manager.destroy(secondRecord.id, projectId), { ok: true });
-  await assert.rejects(manager.createAsync(projectId, temporary, { shell: join(temporary, "missing-shell.exe") }));
+  // 起不来的 shell:两边的形状不一样,断言得各写一份(2026-10-26 实测)。
+  const brokenShell = join(temporary, "missing-shell.exe");
+  if (windows) {
+    // Windows 走隔离启动(windowsPty):进程起不来当场 reject,名额跟着退回去。
+    await assert.rejects(manager.createAsync(projectId, temporary, { shell: brokenShell }));
+  } else {
+    // POSIX 上 pty.spawn **不校验**可执行文件(node-pty 1.1.0 实测:fork 成功、pid 也有,
+    // 子进程 execvp 失败后带 exitCode=1 退出),所以这里拿到的是一条「生下来就死了」的
+    // 会话,而不是一个异常 —— 它照常占着名额,直到被回收。原先这里不分平台一律要求
+    // reject,在 macOS 上从写下那天(4c92aa33)就没绿过,而门禁只跑前端那套回归,
+    // 没人撞见(本轮发现)。真正要钉的是名额账:生下来就死的会话回收后名额必须回来。
+    const stillborn = await manager.createAsync(projectId, temporary, { shell: brokenShell });
+    const deadline = Date.now() + 15_000;
+    while (manager.get(stillborn.id, projectId)?.exitCode === null) {
+      assert.ok(Date.now() < deadline, "起不来的 shell 应当立刻退出,而不是挂着");
+      await delay(25);
+    }
+    assert.notEqual(manager.get(stillborn.id, projectId)?.exitCode, 0, "execvp 失败要带非零退出码");
+    assert.deepEqual(await manager.destroy(stillborn.id, projectId), { ok: true });
+  }
   assert.equal(manager.hasSlotForCommand(projectId, "after-failure"), true,
     "failed startup must release its reserved slot");
   assert.equal((await startCommand(projectId, temporary, { ...command, id: "after-failure" })).status, 201);
