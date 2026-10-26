@@ -66,7 +66,7 @@ const freshRepo = (name: string, ignore: string): string => {
 try {
   const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, removeGateSnapshot, verifyGateSnapshot } =
     await import("../src/accept-gate-source.js");
-  const { borrowDependency, borrowedLanding, copyTree, dependencyDigest } = await import("../src/accept-gate-deps.js");
+  const { borrowDependency, borrowMismatch, copyTree, dependencyDigest } = await import("../src/accept-gate-deps.js");
 
   // ── 1. 借用之后,快照里的命令必须真能跑起来。
   // tsx 那个形状:.bin 下的链指向包里的 cli,cli 再按**自身 realpath**找同胞模块。第 1 层(把链
@@ -247,15 +247,54 @@ try {
   // 没有可插入的时机去制造「链落在别处」)。
   const roundTrip = join(root, "round-trip");
   mkdirSync(roundTrip);
-  assert.equal(await borrowDependency(repo, roundTrip, "node_modules"), true);
-  assert.equal(await borrowedLanding(roundTrip, "node_modules"), realpathSync(join(repo, "node_modules")),
+  assert.equal(await borrowDependency(repo, roundTrip, "node_modules", [".venv", "node_modules"]), "link",
+    "没有 workspace 链接时就是一条链,O(1)");
+  assert.equal(await borrowMismatch(repo, roundTrip, "node_modules", [".venv", "node_modules"], "link"), null,
     "借用建出来的链,落点就是工作区那一份");
-  assert.equal(await borrowedLanding(roundTrip, "absent"), null);
-  await copyTree(join(repo, ".venv"), join(roundTrip, ".venv"));
-  assert.equal(await borrowedLanding(roundTrip, ".venv"), null, "走到深拷退路(不是链)时没有落点可对,交回调用方按老办法回算");
+  rmSync(join(roundTrip, "node_modules"));
+  await copyTree(join(repo, "node_modules"), join(roundTrip, "node_modules"));
+  assert.notEqual(await borrowMismatch(repo, roundTrip, "node_modules", [".venv", "node_modules"], "link"), null,
+    "不是链(深拷退路落在这个位置)时对不上账,调用方据此回到老办法");
   // 包管理器随时在改依赖树:读完目录到读条目之间文件被删掉不该崩掉整次快照。
   await copyTree(join(root, "never-existed"), join(root, "never-copied"));
   assert.equal(existsSync(join(root, "never-copied")), false);
 
-  console.log("accept-gate-borrow: launch-from-snapshot, cleanup safety, install-declaration identity, no-dependencies parity, link roots and the deep-copy fallback passed");
+  // ── 7. monorepo 的 workspace 链接:快照里跑到的必须是**快照自己**那份源码。
+  // 这是借用唯一一处不能整条借出去的落点:node_modules/@scope/pkg -> ../../packages/pkg 指着项目
+  // 自己的源码,相对原文按链真实所在的位置解析,所以整条借出去它就落在**活的工作区**上。那样的话
+  // 改了 workspace 包的导出会红(看着像门禁在工作),只改实现则静悄悄地绿——monorepo 里最常被改的
+  // 那部分恰好没被冻住。实测见 AMEPL4pvlx-S 的两份门禁日志。
+  const mono = freshRepo("monorepo", "node_modules\n");
+  mkdirSync(join(mono, "packages", "lib"), { recursive: true });
+  writeFileSync(join(mono, "packages", "lib", "package.json"), '{"name":"@demo/lib","version":"1.0.0","main":"index.mjs"}');
+  writeFileSync(join(mono, "packages", "lib", "index.mjs"), 'export const build = "certified";\n');
+  git(mono, "add", "-A");
+  git(mono, "commit", "-m", "workspace package");
+  mkdirSync(join(mono, "node_modules", "@demo"), { recursive: true });
+  linkDir(join("..", "..", "packages", "lib"), join(mono, "node_modules", "@demo", "lib"));
+  mkdirSync(join(mono, "node_modules", "plain"), { recursive: true });
+  writeFileSync(join(mono, "node_modules", "plain", "package.json"), '{"version":"3.0.0"}');
+  writeFileSync(join(mono, "node_modules", ".package-lock.json"), '{"packages":{"node_modules/plain":{"version":"3.0.0"}}}');
+  const monoSource = await readGateSource(mono);
+  const monoSnapshot = join(root, "monorepo-snapshot");
+  await createGateSnapshot(mono, monoSnapshot, monoSource);
+  assert.equal(lstatSync(join(monoSnapshot, "node_modules")).isSymbolicLink(), false,
+    "有 workspace 链接时依赖目录必须物化成真目录,不能整条借出去");
+  assert.equal(realpathSync(join(monoSnapshot, "node_modules", "@demo", "lib")), realpathSync(join(monoSnapshot, "packages", "lib")),
+    "workspace 链接重定向到快照自己那份源码");
+  assert.equal(realpathSync(join(monoSnapshot, "node_modules", "plain")), realpathSync(join(mono, "node_modules", "plain")),
+    "同一棵依赖树里的普通包照旧各借一条链,落在工作区那一份上");
+  assert.equal(readFileSync(join(monoSnapshot, "node_modules", ".package-lock.json"), "utf8"),
+    '{"packages":{"node_modules/plain":{"version":"3.0.0"}}}', "物化层里的文件(安装声明就在这层)照常拷进来");
+  // 这条是全节的判据:改了工作区的 workspace 源码,快照里跑到的还是被认证的那一版。
+  writeFileSync(join(mono, "packages", "lib", "index.mjs"), 'export const build = "live-workspace";\n');
+  assert.equal(readFileSync(join(monoSnapshot, "node_modules", "@demo", "lib", "index.mjs"), "utf8"),
+    'export const build = "certified";\n', "改了工作区的 workspace 源码,快照里读到的仍是冻住那一版");
+  writeFileSync(join(monoSnapshot, "probe.mjs"), 'import { build } from "@demo/lib";\nconsole.log(build);\n');
+  assert.equal(execFileSync(process.execPath, [join(monoSnapshot, "probe.mjs")], { encoding: "utf8" }).trim(), "certified",
+    "node 自己解析 @demo/lib 时也落在快照那一份上(不只是读文件,是真的 import)");
+  git(mono, "restore", "packages/lib/index.mjs");
+  assert.equal(await verifyGateSnapshot(monoSnapshot, monoSource), true, "物化之后快照照旧能自证");
+
+  console.log("accept-gate-borrow: launch-from-snapshot, cleanup safety, install-declaration identity, no-dependencies parity, link roots, workspace-link redirection and the deep-copy fallback passed");
 } finally { rmSync(root, { recursive: true, force: true }); }

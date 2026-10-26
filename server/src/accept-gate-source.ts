@@ -6,7 +6,8 @@ import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
 import { freezesAsSource, gateTreeDigest, insideTree as inside } from "./accept-gate-tree.js";
-import { borrowDependency, borrowedLanding, copyTree, DEPENDENCY_DIRS, dependencyDigest } from "./accept-gate-deps.js";
+import { borrowDependency, borrowMismatch, copyTree, DEPENDENCY_DIRS, dependencyDigest, type BorrowMode }
+  from "./accept-gate-deps.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 export type GateSource = { commit: string | null; fingerprint: string; dependencies: string[]; inputs?: SourceInput[] };
@@ -172,22 +173,23 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       // 身份由安装声明给出(dependencyDigest),不靠「冻住字节」来保证。
       // **顺序不能换**:那条检查必须在借用之前跑完。借用之后 join(target, path) 会穿过链看到
       // 工作区那一份,vendor/ 里被提交的软链就会被误判成「指向快照外」,而它其实没有问题。
+      const borrowed = new Map<string, BorrowMode>();
       for (const dep of source.dependencies) {
         // 被跟踪的依赖目录(Go 的 vendor 常被提交)checkout 已经写出来了,借用要把它换掉:测试
         // 真正会用的是工作区那一份,而两者内容一致由上面的 dirty 检查保证(工作树必须干净)。
         await rm(join(target, dep), { recursive: true, force: true });
-        if (!await borrowDependency(cwd, target, dep)) await copyTree(join(cwd, dep), join(target, dep));
+        const mode = await borrowDependency(cwd, target, dep, source.dependencies);
+        if (mode === false) await copyTree(join(cwd, dep), join(target, dep));
+        else borrowed.set(dep, mode);
       }
-      // 借用这一侧的对账是**落点**,不是摘要:借用之后两边读的是同一份文件,摘要恒等,它证明不了
-      // 任何事。落点能证明的恰好是那件要紧的事——这条链真的落在工作区那个依赖目录上,而不是别处。
-      // 深拷退路没有落点(不是链),那一支回到「重新读副本自己那份安装声明」。
+      // 借用这一侧的对账是**落点**,不是摘要(摘要在借用之后恒等,证明不了任何事);两种借用形态
+      // 各自要对的那件事写在 borrowMismatch 上方。深拷退路没有落点可对,那一支回到「重新读副本
+      // 自己那份安装声明」。
       const copiedHash = sourceHash().update(source.commit);
       for (const dep of source.dependencies) {
-        const landing = await borrowedLanding(target, dep);
-        const expected = await realpath(join(cwd, dep)).catch(() => null);
-        if (landing !== null && landing !== expected) {
-          throw new Error(`测试快照里的依赖借用没有落在工作区那一份上：${dep}`);
-        }
+        const mode = borrowed.get(dep);
+        const problem = mode && await borrowMismatch(cwd, target, dep, source.dependencies, mode);
+        if (problem) throw new Error(`测试快照里的依赖借用不对：${problem}`);
         copiedHash.update(dep).update(await dependencyDigest(target, dep));
       }
       copiedFingerprint = copiedHash.digest("hex");
@@ -196,7 +198,12 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       // ——inside 对目录自身也成立,所以依赖目录本身和它下面的一切都归借用负责。
       const borrowed = (source.inputs ?? []).filter(input => input.dependency).map(input => input.path);
       for (const dep of borrowed) {
-        if (!await borrowDependency(cwd, target, dep)) await copyTree(join(cwd, dep), join(target, dep));
+        const mode = await borrowDependency(cwd, target, dep, borrowed);
+        if (mode === false) await copyTree(join(cwd, dep), join(target, dep));
+        else {
+          const problem = await borrowMismatch(cwd, target, dep, borrowed, mode);
+          if (problem) throw new Error(`测试快照里的依赖借用不对：${problem}`);
+        }
       }
       const included = planFilter(cwd, excludedInputs(cwd));
       for (const name of await nonGitFiles(cwd)) {
