@@ -252,7 +252,7 @@ async function linkWhole(source: string, destination: string): Promise<boolean> 
  * 路，门禁不因此失败。
  */
 export async function provideDependency(root: string, target: string, dep: string,
-  isolate: boolean): Promise<DependencyMode | false> {
+  isolate: boolean, dirs: string[] = []): Promise<DependencyMode | false> {
   const destination = join(target, dep);
   await mkdir(dirname(destination), { recursive: true });
   const from = join(root, dep);
@@ -269,7 +269,7 @@ export async function provideDependency(root: string, target: string, dep: strin
   // 开始拷——否则副本里仍是一条指向外面的链，解析根照旧在快照外，三个入口一个都没修掉。
   if (!isolate) return await linkWhole(landing, destination) ? "link" : false;
   const realRoot = await realpath(root).catch(() => root);
-  await copyTree(landing, destination, { clone: true, rewrite: { realRoot, target } });
+  await copyTree(landing, destination, { clone: true, rewrite: { realRoot, target, dirs } });
   return "clone";
 }
 
@@ -315,14 +315,40 @@ export async function dependencyMismatch(root: string, target: string, dep: stri
 export type CopyOptions = {
   /** 数据块共享（macOS clonefile / Linux reflink）。内核在不支持的文件系统上自动退回整块复制。 */
   clone?: boolean;
-  /** 绝对原文指着项目内时，改写到快照里对应的位置。 */
-  rewrite?: { realRoot: string; target: string };
+  /** 绝对原文落在项目源码或任一声明的 workspace 包上时，改写到快照里对应的位置。 */
+  rewrite?: { realRoot: string; target: string; dirs: string[] };
 };
 
-// 绝对原文**指着项目内**时改写到快照里对应的位置：Windows 的 npm 给 workspace 包建的是绝对
-// junction，照抄会让快照里的包解析回活动工作区——正是克隆要防的那件事。相对原文一律照抄，它在
-// 快照里天然解析到快照自己那份。落在项目外的绝对原文（.venv/bin/python -> /opt/homebrew/…）也
-// 照抄：那是系统的东西，不是这次要冻的源码。
+/**
+ * 这条绝对落点在快照里对应哪个位置（不该改写就回 null）。
+ *
+ * 两条判据，第二条是 2026-10-26 在 Windows 真机上红出来的：依赖树借自**另一个检出**时（worktree
+ * 借主仓那份，本仓就是这个形状），那边的 workspace 链接指着**那个检出**的源码目录，它不在本项目
+ * 内，于是只认「落在项目内」就会把它照抄，快照接回别人的源码——`probe.mjs` 读到 old-main 而不是
+ * new-task。所以再按**声明的 workspace 包目录**反查落点的尾部：判据是包映射而不是物理前缀，无论
+ * 那条链出自哪个检出都落回快照自己那一份。
+ *
+ * 代价：一个第三方包的绝对链如果恰好以某个声明过的包目录结尾，会被一起改写。概率极低，而且方向
+ * 是「更隔离」而不是「更松」，所以接受。Windows 的路径大小写不敏感，匹配时按平台归一。
+ */
+function snapshotCounterpart(landing: string, rewrite: NonNullable<CopyOptions["rewrite"]>): string | null {
+  if (insideTree(rewrite.realRoot, landing)) return join(rewrite.target, relative(rewrite.realRoot, landing));
+  const fold = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
+  const folded = fold(landing);
+  // 长的先试:声明里若有 packages/lib 和 packages/lib/inner 这种嵌套,该取更具体的那个。
+  for (const dir of [...rewrite.dirs].sort((left, right) => right.length - left.length)) {
+    const marker = fold(`${sep}${dir.split("/").join(sep)}`);
+    const at = folded.endsWith(marker) ? folded.length - marker.length : folded.lastIndexOf(`${marker}${sep}`);
+    if (at >= 0) return join(rewrite.target, landing.slice(at + 1));
+  }
+  return null;
+}
+
+// 绝对原文落在项目源码或任一声明的 workspace 包上时改写到快照里对应的位置（判据见
+// snapshotCounterpart）：Windows 的 npm 给 workspace 包建的是绝对 junction，照抄会让快照里的包
+// 解析回活动工作区——正是克隆要防的那件事。相对原文一律照抄，它在快照里天然解析到快照自己那份。
+// 其余绝对原文（.venv/bin/python -> /opt/homebrew/…、/usr/local/bin 下的工具）也照抄：那是系统的
+// 东西，不是这次要冻的源码。
 async function rewritten(source: string, destination: string, options: CopyOptions): Promise<string> {
   const raw = await readlink(source);
   const rewrite = options.rewrite;
@@ -330,8 +356,8 @@ async function rewritten(source: string, destination: string, options: CopyOptio
   // 原文是字面路径、realRoot 是 realpath 过的：不把两边化到同一个口径，macOS 的
   // /var -> /private/var 这类别名会让 insideTree 永远判否。末段不解析——它可能本来就是悬空的。
   const landing = join(await realpath(dirname(raw)).catch(() => dirname(raw)), basename(raw));
-  if (!insideTree(rewrite.realRoot, landing)) return raw;
-  return relative(dirname(destination), join(rewrite.target, relative(rewrite.realRoot, landing)));
+  const counterpart = snapshotCounterpart(landing, rewrite);
+  return counterpart === null ? raw : relative(dirname(destination), counterpart);
 }
 
 /**

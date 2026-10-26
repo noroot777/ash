@@ -330,6 +330,11 @@ try {
   git(mainRepo, "add", "-A");
   git(mainRepo, "commit", "-m", "main checkout");
   monoInstall(mainRepo);
+  // 被借检出里的 workspace 链接用**绝对**原文:Windows 的 npm 建的就是绝对 junction,而这条链指着
+  // **那个检出**的源码目录——它不在本项目内,所以「绝对原文落在项目内才改写」这条判据会把它照抄,
+  // 快照于是接回别人的源码。这个组合 2026-10-26 在真机上红过一次,macOS 侧必须也走到它。
+  rmSync(join(mainRepo, "node_modules", "@demo", "lib"), { recursive: true, force: true });
+  linkDir(join(mainRepo, "packages", "lib"), join(mainRepo, "node_modules", "@demo", "lib"));
   const taskRepo = freshRepo("mono-task", "node_modules\n", monoPkg);
   monoSource7(taskRepo, "new-task");
   git(taskRepo, "add", "-A");

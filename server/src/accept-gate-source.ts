@@ -156,7 +156,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     const workspace = await workspacePackages(cwd);
     const provided = new Map<string, DependencyMode>();
     const provide = async (dep: string): Promise<void> => {
-      const mode = await provideDependency(cwd, target, dep, needsIsolation(dep, workspace));
+      const mode = await provideDependency(cwd, target, dep, needsIsolation(dep, workspace), workspace.dirs);
       if (mode === false) await copyTree(join(cwd, dep), join(target, dep));
       else provided.set(dep, mode);
     };
