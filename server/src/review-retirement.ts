@@ -15,8 +15,22 @@ import { withTurnPreflight } from "./turn-entry-guard.js";
 type TaskRow = typeof tasks.$inferSelect;
 type EvidenceRow = typeof regressionEvidence.$inferSelect;
 
+// 「这一轮已经收口了,别再开它」。两种形状都算:**有结算记录且不再 pending**,以及**压根
+// 没有待结算的记录**(证据行不存在,或存在但从没落过结算)—— 后者就是轮次目录这套东西
+// 上线之前跑完的那些老审查,它们一行证据都没留下。
+//
+// 漏掉后一种的代价实测过一次(2026-10-26):重启时的启动对账扫到全库 112 条历史审查任务,
+// 因为「没有证据行」被当成「还没结算」逐条退休 —— 107 条 done 改写成 failed、5 条
+// canceled 一并改写,updatedAt 全顶到当下。侧栏那头是双份后果:按更新时间倒序它们齐刷刷
+// 窜到最前,而 failed 又在 keepVisibleInPreview 的豁免名单里,24 小时年龄闸从此折不掉。
+// 对账里本来就有一道「没有证据行就跳过」的闸(regression-settlement.ts 的
+// `!task.verifyRound && !state`),只是退休扫描排在它前面,先一步把人收走了。
+//
+// 退休要拦的是**在飞**的旧轮次:缺少目标身份、却还能靠等待/检查点以审查权限续跑的那种。
+// 任务自己早已终态收尾、没有在飞的就地轮次(verifyRound)也没有检查点(resumePrompt)时,
+// 没有任何东西可退休,改写它的终态只是在销毁历史结论。
 function closedHistoricalReview(owner: TaskRow, state: EvidenceRow | undefined, free: boolean): boolean {
-  return !free && state?.settlement?.pending === false && !owner.verifyRound && !owner.resumePrompt
+  return !free && state?.settlement?.pending !== true && !owner.verifyRound && !owner.resumePrompt
     && ["done", "failed", "canceled"].includes(owner.status);
 }
 
