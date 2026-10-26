@@ -250,6 +250,10 @@ try {
   //   (第 2 轮审查发现 2)。停止按钮必须留着,让用户还能再按一次。
   await page.evaluate(() => { window.__service = "leftover"; });
   await reopen();
+  // **等文案自己变过来**:上一幕(daemon)头部也摆着「停止」,只等那颗按钮出现等不到任何东西,
+  // 读到的是上一幕的 DOM(第一次写这条用例就是这么拿到「运行中（启动脚本已退出）」的)。
+  await page.waitForFunction(() =>
+    /停止未完成/.test(document.querySelector(".cmd-pop__svc-state")?.textContent ?? ""));
   await pop.getByRole("button", { name: "停止", exact: true }).waitFor();
   assert.equal(
     await pop.getByRole("button", { name: "启动", exact: true }).count(),
@@ -258,8 +262,8 @@ try {
   );
   assert.match(
     await pop.locator(".cmd-pop__svc-state").innerText(),
-    /停止未完成/,
-    "照实说第三种状态,别让它冒充已停止",
+    /还剩 1 个进程核不到归属/,
+    "照实说第三种状态,并说清还剩几个",
   );
   await page.evaluate(() => { delete window.__service; });
   await page.keyboard.press("Escape");
