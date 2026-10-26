@@ -1,9 +1,11 @@
-// 常用命令的两件新能力,各自钉住:
+// 常用命令的几件事,各自钉住:
 //   ① 命令正文是 Shell 编辑器(多行):默认一行高、跟着内容长、到上限就在框里滚、
 //      拖底边能定高且记得住、双击恢复自适应;
 //   ② 命令里带 `{{占位符}}` 时,点执行先弹框收值,取值随请求发出去;没占位符的照旧直接跑;
 //   ③ 这颗 ▶ 只说当前项目的事:别的项目在跑不点亮它,连**切走后才落回来的旧会话事实**也不算
-//      (第 2 轮逻辑审查:晚返回的跨项目结果会赖到新项目头上)。
+//      (第 2 轮逻辑审查:晚返回的跨项目结果会赖到新项目头上);
+//   ④ 服务起着的时候,弹层头部那颗 ▶ 就地换成红框的停止;`docker compose up -d` 这类启动
+//      脚本自己退了的形状(配了停止命令才这么推断)照样是停止按钮,停过之后才回到 ▶。
 //
 // 跑法：npm -w web run test:command-placeholders
 import assert from "node:assert/strict";
@@ -47,14 +49,14 @@ try {
   const five = ["cd web", "npm ci", "npm run build", "cp -r dist ../out", "echo done"].join("\n");
   await buildEditor.fill(five);
   await page.waitForFunction(
-    (expected) => document.querySelectorAll(".shell-editor .cm-editor")[3]?.getBoundingClientRect().height === expected,
+    (expected) => document.querySelectorAll(".shell-editor .cm-editor")[4]?.getBoundingClientRect().height === expected,
     5 * LINE + PADDING,
   );
 
   // 长到上限就封顶,内容在框里滚 —— 一条命令不该把设置页顶成长卷。
   await buildEditor.fill(Array.from({ length: 40 }, (_, i) => `echo ${i}`).join("\n"));
   await page.waitForFunction(
-    (expected) => document.querySelectorAll(".shell-editor .cm-editor")[3]?.getBoundingClientRect().height === expected,
+    (expected) => document.querySelectorAll(".shell-editor .cm-editor")[4]?.getBoundingClientRect().height === expected,
     16 * LINE + PADDING,
   );
   assert.ok(
@@ -65,7 +67,7 @@ try {
   // ② 拖底边定高:拖完就钉住,刷新回来还是那么高;双击恢复自适应。
   await buildEditor.fill("echo one");
   await page.waitForFunction((expected) =>
-    document.querySelectorAll(".shell-editor .cm-editor")[3]?.getBoundingClientRect().height === expected, LINE + PADDING);
+    document.querySelectorAll(".shell-editor .cm-editor")[4]?.getBoundingClientRect().height === expected, LINE + PADDING);
   const foot = buildBox.locator(".shell-editor__foot");
   await foot.scrollIntoViewIfNeeded();
   const footBox = await foot.boundingBox();
@@ -84,7 +86,7 @@ try {
   const footAfter = page.locator(".shell-editor").filter({ has: page.getByRole("textbox", { name: "构建的命令" }) }).locator(".shell-editor__foot");
   await footAfter.dblclick();
   await page.waitForFunction((expected) =>
-    document.querySelectorAll(".shell-editor .cm-editor")[3]?.getBoundingClientRect().height === expected, LINE + PADDING);
+    document.querySelectorAll(".shell-editor .cm-editor")[4]?.getBoundingClientRect().height === expected, LINE + PADDING);
 
   // ③ 占位符在设置页就看得见,不用跑一遍才知道自己写没写对。
   const hints = page.locator(".project-commands__placeholders");
@@ -142,6 +144,61 @@ try {
   await pop.locator(".cmd-pop__row").filter({ hasText: "切分支" }).getByRole("button", { name: "执行 切分支" }).click();
   await dialog.waitFor();
   assert.equal(await dialog.locator("input").first().inputValue(), "release/1.2", "应当预填上次用过的取值");
+  await page.keyboard.press("Escape");
+
+  // ⑨ 服务起着的时候,头部那颗 ▶ **就地**换成红框的停止(用户 2026-10-26 点名)。
+  const reopen = async () => {
+    if (await pop.count()) await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".cmd-pop"));
+    await statusTrigger.click();
+    await pop.waitFor();
+  };
+  await page.evaluate(() => { window.__service = "live"; });
+  await reopen();
+  const stopButton = pop.getByRole("button", { name: "停止（跑停止命令）", exact: true });
+  await stopButton.waitFor();
+  assert.equal(
+    await pop.getByRole("button", { name: "启动", exact: true }).count(),
+    0,
+    "起着的时候不该还摆着启动按钮 —— 要的是同一个位置换一颗",
+  );
+  const stopLook = await stopButton.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return { color: style.color, shadow: style.boxShadow };
+  });
+  const channels = stopLook.color.match(/\d+/g).map(Number);
+  assert.ok(
+    channels[0] > channels[1] + 60 && channels[0] > channels[2] + 60,
+    `停止按钮应当是红色的，实际 ${stopLook.color}`,
+  );
+  assert.match(stopLook.shadow, /inset/, "要的是红色线框（inset 描边），不是实心块");
+  assert.match(await pop.locator(".cmd-pop__svc-state").innerText(), /运行中/);
+  await stopButton.click();
+  await page.waitForFunction(() => JSON.parse(document.getElementById("calls").textContent).length === 3);
+  assert.equal(
+    JSON.parse(await page.getByTestId("calls").innerText())[2].path,
+    "/api/projects/p-one/commands/service/stop",
+    "点停止就发 stop,默认停法(杀进程组)由服务端决定",
+  );
+
+  // ⑩ `docker compose up -d` 形状:启动脚本自己正常退了,服务活在 ash 的进程树之外。
+  //    配了停止命令才敢这么推断,否则那条停止命令永远按不到。
+  await page.evaluate(() => { window.__service = "detached"; });
+  await reopen();
+  await pop.getByRole("button", { name: "停止（跑停止命令）", exact: true }).waitFor();
+  assert.match(
+    await pop.locator(".cmd-pop__svc-state").innerText(),
+    /已启动/,
+    "退的是启动脚本,不是服务 —— 这里说「已退出」就把人骗了",
+  );
+
+  // ⑪ 停过之后回到 ▶:再点一次不会把停止脚本又跑一遍。
+  await page.evaluate(() => { window.__service = "stopped"; });
+  await reopen();
+  await pop.getByRole("button", { name: "启动", exact: true }).waitFor();
+  assert.equal(await pop.getByRole("button", { name: /^停止/ }).count(), 0);
+  assert.match(await pop.locator(".cmd-pop__svc-state").innerText(), /已停止/);
+  await page.evaluate(() => { delete window.__service; });
   await page.keyboard.press("Escape");
 
   // ⑧ 切项目那一刻,上一个项目的会话事实可能还在飞(启停成功后的那次 refresh 尤其容易赶上)。
