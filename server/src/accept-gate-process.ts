@@ -1,7 +1,7 @@
 // 验收前置命令的**进程**这一层：起它、看着它、收掉它。编排（什么时候该跑、跑完算什么）
 // 在 accept-gate.ts，这里一个业务判断都没有。
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ACCEPT_GATE_LOG_MAX_BYTES, ACCEPT_GATE_TAIL_BYTES } from "@ash/shared/accept-gate";
 import { augmentedEnv } from "./executors/spawn.js";
@@ -179,11 +179,39 @@ async function untilEmpty(empty: () => boolean, within: number): Promise<boolean
   }
 }
 
-export function appendGateLog(logPath: string, text: string): void {
+/** 往门禁日志追加一段。返回**有没有真写进去** —— 调用方要据此记账时不能想当然。 */
+export function appendGateLog(logPath: string, text: string): boolean {
   try {
     mkdirSync(dirname(logPath), { recursive: true });
     appendFileSync(logPath, text, "utf8");
-  } catch { /* 日志写不进去不该让门禁本身失败 */ }
+    return true;
+  } catch { return false; /* 日志写不进去不该让门禁本身失败 */ }
+}
+
+/**
+ * 「被收掉时的现场」存在日志**旁边**，不存在日志里面。
+ *
+ * 为什么必须单独存(第 2 轮审查 R2-F2):停不掉的进程是受支持的生产状态 —— 进程归属读不出、
+ * 停止信号没收敛,这些时候那个真实写入者还活着,它之后写的每一个字节都能把追加在日志末尾的
+ * 现场顶出可回显的那一段。「这一次 append 暂时在最后」不是不变量,谁最后写也不由我们说了算。
+ * 存成旁边一份冻结的文件,再由下面两个读口给它留固定位置,刷新多少次都还在。
+ */
+export function gateScenePath(logPath: string): string {
+  return `${logPath}.scene`;
+}
+
+export function writeGateScene(logPath: string, scene: string): void {
+  try {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(gateScenePath(logPath), scene, "utf8");
+  } catch { /* 现场写不下也不该让结算失败，日志本身仍在 */ }
+}
+
+function readGateScene(logPath: string): string {
+  try {
+    const path = gateScenePath(logPath);
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  } catch { return ""; }
 }
 
 /**
@@ -191,7 +219,12 @@ export function appendGateLog(logPath: string, text: string): void {
  * 一次验收检查要回这份数据，整份读进内存会把 ash 顶爆。
  */
 export function acceptGateLogTail(logPath: string, bytes = ACCEPT_GATE_TAIL_BYTES): string {
-  return readTail(logPath, bytes).text;
+  const scene = readGateScene(logPath);
+  if (!scene) return readTail(logPath, bytes).text;
+  // 现场**不跟原始输出抢位置**：先把它那一段留出来，剩下的才给日志尾巴。没能停下来的
+  // 进程继续写也挤不掉它（第 2 轮审查 R2-F2）。
+  const room = Math.max(400, bytes - Buffer.byteLength(scene));
+  return `${readTail(logPath, room).text}\n${scene}`;
 }
 
 /**
@@ -199,10 +232,12 @@ export function acceptGateLogTail(logPath: string, bytes = ACCEPT_GATE_TAIL_BYTE
  * 几十 MB 的回归输出会把两边都拖垮，而用户要看的永远是尾巴。截了就在开头说破。
  */
 export function acceptGateLogText(logPath: string): string {
+  const scene = readGateScene(logPath);
+  const suffix = scene ? `\n${scene}` : "";
   const { text, skipped } = readTail(logPath, ACCEPT_GATE_LOG_MAX_BYTES);
-  if (!skipped) return text;
+  if (!skipped) return `${text}${suffix}`;
   return `[ash] 这份日志有 ${Math.round((skipped + Buffer.byteLength(text)) / 1_000_000 * 10) / 10} MB，这里只给最后 `
-    + `${Math.round(ACCEPT_GATE_LOG_MAX_BYTES / 1000)} KB。完整文件在 ${logPath}\n\n${text}`;
+    + `${Math.round(ACCEPT_GATE_LOG_MAX_BYTES / 1000)} KB。完整文件在 ${logPath}\n\n${text}${suffix}`;
 }
 
 /**

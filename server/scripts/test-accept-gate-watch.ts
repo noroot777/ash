@@ -6,12 +6,13 @@
 // 同时钉住第 1 轮审查打回来的三条边界，别回退：
 //  F1 安静 ≠ 卡死：连续没输出只许在日志里喊一声，**不许**把命令收掉；结论也只摆证据和
 //     两种读法，不替人断言。
-//  F2 现场必须真的在**日志尾巴**里：停止期命令自己吐的清理输出、结算摘要都排在后面，
-//     谁最后写谁才回显得到。
-//  F3 谁写的日志按字节偏移认，不按 `[ash]` 前缀猜：被测命令也可以打印这个前缀。
+//  F2 现场必须**冻结存盘**：日志里谁最后写不由我们说了算（停止期的清理输出、结算摘要，
+//     尤其是没能停下来的那个进程），所以它存在日志旁边，由读口给它留固定位置。
+//  F3 谁写的日志按**自己的真实写入记录**认：既不按 `[ash]` 前缀猜（被测命令也能打这个
+//     前缀），也不靠两次 stat 推区间（跨进程交错时推出来的区间是错的）。
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -90,7 +91,46 @@ try {
     assert.match(verdict.scene, /停在这一行：`case-27 started`/);
   }
 
-  // ④ `stop()` 之后不该再有结论：命令自己退出、或被取消时走的就是这一条。
+  // ④ R2-F1：命令和我们**跨进程**交错写同一份日志。靠「写前写后两次 stat」推自己那几个
+  //    字节落在哪是不成立的 —— 命令插在两次 stat 中间，推出来的区间会把它的输出抹掉、
+  //    反倒漏出半行进度行，连「它到底有没有输出过」都会判反。
+  {
+    const logPath = join(root, "race.log");
+    writeFileSync(logPath, "[ash] $ racing-command\n", "utf8"); // 开跑前的启动说明
+    const rounds = 20;
+    const line = "ACTUAL_CHILD_CASE_STARTED\n"; // 26 字节 × 20 = 520B，故意压在 1KB 以内好精确比对
+    overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 20, sampleMs: 10, timeoutMs: 1_000 });
+    const verdict = await awaitScene((resolve) => {
+      startGateWatch({ logPath, onVerdict: resolve });
+      // 真·另一个进程在写，和看门狗的 stat/append 自然交错。
+      spawn(process.execPath, ["-e",
+        `const fs = require("node:fs"); let i = 0;`
+        + ` const t = setInterval(() => { fs.appendFileSync(process.argv[1], ${JSON.stringify(line)});`
+        + ` if (++i >= ${rounds}) clearInterval(t); }, 30);`,
+        logPath], { stdio: "ignore" }).unref();
+    });
+    const log = readFileSync(logPath, "utf8");
+    assert.equal(log.split("ACTUAL_CHILD_CASE_STARTED").length - 1, rounds, "子进程得在收场前写完，不然这条比不出什么");
+    assert.match(verdict.scene, /命令自己的输出累计 520B。/, "字节数要按「自己写了多少」记账，不受交错影响");
+    assert.match(verdict.scene, /停在这一行：`ACTUAL_CHILD_CASE_STARTED`/);
+    assert.doesNotMatch(verdict.scene, /停在这一行：`\[ash\] 进度/, "推错区间会漏出半行进度行");
+    assert.doesNotMatch(verdict.scene, /从头到尾没往门禁日志里写过东西/, "它明明写了 20 行");
+    assert.doesNotMatch(verdict.note, /一个字节都没往门禁日志里写过/);
+  }
+
+  // ④b R2-F1 的第二个实例：全程没有命令输出时，不许把**开跑前**的启动说明（里面有
+  //    `[ash] $ <命令原文>`）当成「停在这一行」，更不能一边说 0B 一边指着它。
+  {
+    const logPath = join(root, "baseline-only.log");
+    writeFileSync(logPath, "[ash] 2026-10-26T00:00:00Z 验收前置命令开跑\n[ash] $ quiet-command\n\n", "utf8");
+    overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 40, sampleMs: 10, timeoutMs: 250 });
+    const verdict = await awaitScene((resolve) => { startGateWatch({ logPath, onVerdict: resolve }); });
+    assert.doesNotMatch(verdict.scene, /停在这一行：`\[ash\] \$ quiet-command`/, "那是 ash 写的，不是命令写的");
+    assert.match(verdict.scene, /停在这一行：（这条命令没有往门禁日志里写过任何东西）/);
+    assert.match(verdict.scene, /命令自己的输出累计 0B。/);
+  }
+
+  // ⑤ `stop()` 之后不该再有结论：命令自己退出、或被取消时走的就是这一条。
   {
     const logPath = join(root, "stopped.log");
     writeFileSync(logPath, "quiet\n", "utf8");
@@ -101,7 +141,7 @@ try {
     assert.equal(fired, false, "撤掉的看门狗不许再叫，否则会把一条已经收好的门禁再收一遍");
   }
 
-  // ⑤ F1 反面：措辞只许给「更像」和另一种可能，不许下死判断 —— 卡死的进程一样会打心跳，
+  // ⑥ F1 反面：措辞只许给「更像」和另一种可能，不许下死判断 —— 卡死的进程一样会打心跳，
   //    安静的命令也可能只是把输出重定向到别处了。
   {
     const quiet = gateWatchReport({ elapsedMs: 90 * 60_000, silentMs: 45 * 60_000, limitMs: 90 * 60_000,
@@ -121,7 +161,7 @@ try {
     assert.match(mute.scene, /产出节奏（开跑第几分钟 \/ 累计输出）：（没跑够一个采样间隔）/);
   }
 
-  // ⑥ 整条链路。两台：一台安静但正常退出（必须绿），一台撞上限且在停止时吐一大堆清理
+  // ⑦ 整条链路。两台：一台安静但正常退出（必须绿），一台撞上限且在停止时吐一大堆清理
   //    输出（现场必须仍在日志尾巴里）。
   {
     const repo = join(root, "repo");
@@ -137,7 +177,7 @@ try {
     const { acceptGateRuns, projects, sessions, tasks } = await import("../src/db/schema.js");
     const { acceptTask } = await import("../src/task-accept.js");
     const { cancelAcceptGate, whenAcceptGateSettled } = await import("../src/accept-gate.js");
-    const { acceptGateLogTail } = await import("../src/accept-gate-process.js");
+    const { acceptGateLogText, acceptGateLogTail, gateScenePath } = await import("../src/accept-gate-process.js");
     const { sessionTranscriptPath } = await import("../src/transcript.js");
     const { isTurnClaimed } = await import("../src/turn-lock.js");
     await ensureSchema();
@@ -195,12 +235,20 @@ try {
         assert.equal(run.failure, "timeout");
         const full = readFileSync(run.logPath, "utf8");
         assert.match(full, /CLEANUP CLEANUP/, "这一条要的就是「停止时又吐了一大堆」这个舞台");
-        assert.ok(full.indexOf("被收掉时的现场") > full.lastIndexOf("CLEANUP CLEANUP"),
-          "现场要排在停止期输出之后");
+        assert.doesNotMatch(full, /被收掉时的现场/, "现场不再往日志里追加，它单独冻结一份");
+        assert.ok(existsSync(gateScenePath(run.logPath)), "现场要落成日志旁边那份冻结文件");
         const tail = acceptGateLogTail(run.logPath);
-        assert.match(tail, /被收掉时的现场/, "写在中间的现场会被清理输出顶出尾巴，等于没写（F2）");
+        assert.match(tail, /被收掉时的现场/, "回显的那一段必须给现场留着位置（F2）");
         assert.match(tail, /停在这一行：`REAL_GATE_LAST_STEP`/, "停在哪一行不能变成清理输出");
         assert.match(tail, /最后一次有输出在 \d+\.\d 分钟前/);
+        assert.match(acceptGateLogText(run.logPath), /被收掉时的现场/, "「看完整日志」也要看得到");
+
+        // R2-F2：停不掉的进程是受支持的生产状态，它之后写的每个字节都能把追加在日志末尾的
+        // 现场顶出去。现场冻结在日志**旁边**，所以这里再灌 20KB 进去也挤不掉它。
+        appendFileSync(run.logPath, "ZOMBIE-STILL-WRITING\n".repeat(1000), "utf8");
+        const later = acceptGateLogTail(run.logPath);
+        assert.match(later, /ZOMBIE-STILL-WRITING/, "这一条要的就是「结算之后还有人在写」这个舞台");
+        assert.match(later, /停在这一行：`REAL_GATE_LAST_STEP`/, "后来者不许把现场挤没（R2-F2）");
 
         const transcript = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
           .map((row) => { try { return readFileSync(sessionTranscriptPath(taskId, row.id), "utf8"); } catch { return ""; } })
@@ -215,7 +263,7 @@ try {
   }
 
   overrideGateWatchTimings(null);
-  console.log("✅ 门禁看门狗：静默只报不杀 / 现场落在日志真尾巴 / 来源按字节认不按前缀猜 通过");
+  console.log("✅ 门禁看门狗：静默只报不杀 / 现场冻结存盘不被后来者挤掉 / 来源按真实写入记录认 通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

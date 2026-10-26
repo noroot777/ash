@@ -29,7 +29,7 @@ import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import {
   acceptGateLogPath, appendGateLog,
-  spawnAcceptGate,
+  spawnAcceptGate, writeGateScene,
 } from "./accept-gate-process.js";
 import { isAncestor } from "./git-accept.js";
 import { commitAt, plannedMergeTarget } from "./task-branch-plan.js";
@@ -381,7 +381,7 @@ async function settleGate(
   outcome: { status: Exclude<AcceptGateStatus, "running">; exitCode: number | null; failure: AcceptGateFailure | null;
     /** 「卡在哪」的一句话版本，落进任务时间线。只有看门的（超时）给得出。 */
     note?: string;
-    /** 同一件事的完整现场，**最后**一个追加进日志，见下面写它那一段。 */
+    /** 同一件事的完整现场。单独冻结存盘，不追加进日志，见下面写它那一段。 */
     scene?: string },
   waitForContinuation = true,
 ): Promise<void> {
@@ -413,11 +413,13 @@ async function settleGate(
     if (stopped) await cleanupGateSnapshot(row.taskId, runId);
     if (watching?.runId === runId) { watching.watch.stop(); live.delete(row.taskId); }
     const settled = { ...row, ...outcome, finishedAt };
+    // 现场**不往日志里追加，单独冻结一份**：回显给界面和 agent 的只有最后
+    // ACCEPT_GATE_TAIL_BYTES 个字节，而排在它后面的每一位都能把它顶出去 —— 停止期命令自己
+    // 吐的清理输出、下面这行会回显整条命令（最长 4000 字符）的摘要，尤其是**没能停下来**的
+    // 那个进程之后还会一直写（第 1 轮审查 F2、第 2 轮 R2-F2 两次实测被顶掉）。存盘之后由
+    // acceptGateLogTail / acceptGateLogText 给它留固定位置，谁后面再写都挤不掉。
+    if (outcome.scene) writeGateScene(row.logPath, outcome.scene);
     appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(gateView(settled))}\n`);
-    // 现场**必须是最后一个写日志的人**：回显给界面和 agent 的只有最后 ACCEPT_GATE_TAIL_BYTES
-    // 个字节，而排在它后面的每一位都能把它顶出去 —— 停止期命令自己吐的清理输出、上面这行
-    // 会回显整条命令（最长 4000 字符）的摘要（第 1 轮审查 F2 实测 tailHasScene=false）。
-    if (outcome.scene) appendGateLog(row.logPath, outcome.scene);
     const view = gateView(settled);
     await appendTaskTimeline(row.taskId, `${summarizeAcceptGate(view)}。${outcome.note ? ` ${outcome.note}` : ""}`);
     announceGate(row.taskId);
