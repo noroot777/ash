@@ -288,8 +288,13 @@ try {
     '{"packages":{"node_modules/plain":{"version":"3.0.0"}}}', "物化层里的文件(安装声明就在这层)照常拷进来");
   // 这条是全节的判据:改了工作区的 workspace 源码,快照里跑到的还是被认证的那一版。
   writeFileSync(join(mono, "packages", "lib", "index.mjs"), 'export const build = "live-workspace";\n');
-  assert.equal(readFileSync(join(monoSnapshot, "node_modules", "@demo", "lib", "index.mjs"), "utf8"),
-    'export const build = "certified";\n', "改了工作区的 workspace 源码,快照里读到的仍是冻住那一版");
+  // 比内容时 trim:`git clone` 出来的快照仓库**不继承源仓库的 local config**,于是 fixture 上设的
+  // core.autocrlf=false 到快照那边失效,Windows 的全局 true 会把 checkout 的源码换成 CRLF。门禁的
+  // 保证不落在字节上(Git 分支的指纹取 commit,自证走 git diff,两边各按自己的配置判),所以这里
+  // 只比内容;真要让快照与工作区字节一致,得在 clone 之后把源仓库那几个转换项抄过去——那是另一
+  // 件事,本轮没有失败驱动它,写在这里是为了下一个人不必重新查一遍。
+  assert.equal(readFileSync(join(monoSnapshot, "node_modules", "@demo", "lib", "index.mjs"), "utf8").trim(),
+    'export const build = "certified";', "改了工作区的 workspace 源码,快照里读到的仍是冻住那一版");
   writeFileSync(join(monoSnapshot, "probe.mjs"), 'import { build } from "@demo/lib";\nconsole.log(build);\n');
   assert.equal(execFileSync(process.execPath, [join(monoSnapshot, "probe.mjs")], { encoding: "utf8" }).trim(), "certified",
     "node 自己解析 @demo/lib 时也落在快照那一份上(不只是读文件,是真的 import)");
