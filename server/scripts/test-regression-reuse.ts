@@ -184,6 +184,15 @@ try {
   assert.equal(absolute.exitCode, 0);
   assert.match(readFileSync(absolute.logPath, "utf8"), /ABSOLUTE_NODE_OK/);
 
+  const environmentScript = Buffer.from("console.log('COMMAND_ENV=' + JSON.stringify(Object.keys(process.env).filter(key => /^ASH_(?:DB|RUNS_DIR)$/i.test(key))))").toString("base64");
+  const environmentCommand = `${previewShell().quote(originalNode)} -e "eval(Buffer.from('${environmentScript}','base64').toString())"`;
+  const isolatedCommand = await prepareRegressionCommand(taskId, "isolated-environment", environmentCommand, repo, "single");
+  const isolatedLaunch = userShellLaunch(isolatedCommand);
+  execFileSync(isolatedLaunch.file, isolatedLaunch.args, { cwd: repo, windowsVerbatimArguments: isolatedLaunch.windowsVerbatimArguments, timeout: 30_000 });
+  const isolated = (await db.select().from(schema.regressionChecks).where(eq(schema.regressionChecks.monitorId, "isolated-environment")))[0]!;
+  assert.equal(isolated.exitCode, 0, "worker 保留自己的数据库连接并如实落库");
+  assert.match(readFileSync(isolated.logPath, "utf8"), /COMMAND_ENV=\[\]/, "被测命令使用自己的临时数据库与运行目录");
+
   const rejected = await startMonitor({ taskId, command, cwd: repo, regression: true, caller: { kind: "external" } });
   assert.equal(rejected.ok, false, "外部调用不能登记执行者回归");
   assert.equal((await startMonitor({ taskId, command, cwd: repo, regression: true, stopWhen: "DONE", caller })).ok, false);

@@ -191,9 +191,6 @@ export async function acceptGateCheck(
   }
 
   const previous = await latestRun(task.id);
-  // 同一棵树上的结论直接作数：通过就放行，没通过就把那次的红原样摆回去（不自动重跑——
-  // 一棵没变过的树多半还是同样的红，而用户点这一下的意思是「合」，不是「再烧十几分钟」）。
-  //
   const sameTree = !!previous && gateSourceMatches(previous, source)
     && previous.command === command && opts.intent !== "rerun";
   if (sameTree && previous!.status === "passed") {
@@ -205,17 +202,6 @@ export async function acceptGateCheck(
     recordBasis("passed", previous!.id);
     return null;
   }
-  // interrupted / canceled 不走这条:那两种**根本没有结论**(ash 重启打断、用户自己收掉),
-  // 没有红可以摆给用户看。这一按的意思就是「现在跑」,所以落到下面重新起一次。
-  if (sameTree && previous!.status === "failed") {
-    return {
-      accepted: false, httpStatus: 409, taskId: task.id, reason: "accept_gate_failed",
-      error: `${summarizeAcceptGate(gateView(previous!))}。代码自那次之后一个字没改，所以没有重跑，也没有合并。`
-        + `出路：改完再点验收（会自动重跑）、在验收台上点「重跑一次」、或者明确选择这次跳过门禁。`,
-      status: task.status, gate: gateView(previous!),
-    };
-  }
-
   const targetBranch = task.useWorktree ? await plannedMergeTarget(task, project.repoPath) : null;
   const targetCommit = targetBranch ? await commitAt(project.repoPath, targetBranch) : null;
   pendingStarts.set(task.id, {
@@ -493,6 +479,7 @@ async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = fa
   const sourceCwd = task && project ? await existingTaskWorkspacePath(task, project.repoPath) ?? project.repoPath : row.cwd;
   const prompt = gateFailurePrompt({
     command: row.command, summary: summarizeAcceptGate(view), logPath: row.logPath,
+    failure: view.failure,
     tail: view.logTail, cwd: row.cwd, sourceCwd, executionNotice: view.executionNotice,
   });
   if (authority) {

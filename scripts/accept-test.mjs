@@ -3,12 +3,17 @@ import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
+const environment = { ...process.env };
+for (const key of Object.keys(environment)) {
+  if (/^ASH_(?:DB|RUNS_DIR)$/i.test(key)) delete environment[key];
+}
 
 console.log("[accept-test] 运行前端全量回归…");
 const result = spawnSync(NPM, ["run", "test:web"], {
   ...NPM_SPAWN_OPTS,
   cwd: repo,
   stdio: "inherit",
+  env: environment,
 });
 
 if (result.error) console.error(`[accept-test] 无法启动回归：${result.error.message}`);

@@ -22,6 +22,7 @@ function fixture(context, script = "node regression.mjs") {
   writeFileSync(join(root, "regression.mjs"), `
     import { writeFileSync } from "node:fs";
     writeFileSync("ran.json", JSON.stringify({ cwd: process.cwd(), event: process.env.npm_lifecycle_event }));
+    writeFileSync("environment.json", JSON.stringify(Object.keys(process.env).filter(key => /^ASH_(?:DB|RUNS_DIR)$/i.test(key))));
     console.log("REGRESSION_STDOUT");
     console.error("REGRESSION_STDERR");
     process.exit(Number(process.env.ACCEPT_TEST_EXIT ?? 0));
@@ -63,6 +64,16 @@ test("旧推送开关和空 stdin 不会绕过验收测试", (context) => {
   const result = run(root, { SKIP_WEB_TEST: "1", ACCEPT_TEST_EXIT: "3" });
   assert.equal(result.status, 3, result.stdout + result.stderr);
   assert.equal(existsSync(join(root, "ran.json")), true);
+});
+
+test("验收子进程不继承宿主数据库与运行目录，包括大小写变体", (context) => {
+  const root = fixture(context);
+  const result = run(root, {
+    ASH_DB: join(root, "host.db"), ASH_RUNS_DIR: join(root, "host-runs"),
+    ash_db: join(root, "lower.db"), ash_runs_dir: join(root, "lower-runs"),
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, "environment.json"), "utf8")), []);
 });
 
 test("依赖缺失导致测试无法启动时拒绝放行", (context) => {

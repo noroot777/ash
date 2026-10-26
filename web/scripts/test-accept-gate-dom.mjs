@@ -200,6 +200,8 @@ try {
     const card = page.locator(".accept-gate-card");
     await card.waitFor();
     assert.match(await card.textContent(), /未通过/);
+    assert.match(await card.textContent(), /即使代码没有变化，也不会直接复用这次失败/);
+    assert.match(await card.locator('[aria-label="验收命令运行记录"]').textContent(), /run-1.*开始于.*结束于/);
     await card.getByRole("button", { name: "重跑一次" }).click();
     assert.equal(await page.locator("[aria-label='验收意图']").textContent(), "rerun");
     await card.getByRole("button", { name: "这次跳过它，直接合并" }).click();

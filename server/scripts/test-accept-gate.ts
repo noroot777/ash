@@ -4,8 +4,6 @@
 //  · 不设门禁 = 老行为，一个字节都不该变。
 //  · 设了门禁：第一按**不合并**，命令在任务工作区里跑；绿了系统自动把这次验收做完
 //    （用户只点一次），红了不合并、不清理、目标分支一动不动，日志回流给 agent。
-//  · 结果绑在**被测的那棵树**上：树没变就不重跑（红的那次也不重跑，免得白烧十几分钟）；
-//    树变了必须重跑。
 //  · 跳过只能是用户明确选的，而且要在时间线上留痕；取消/重启打断都落成看得见的终态。
 //
 // 每个用例自带一个临时仓库，checkout 和 ref 更新一律出不了临时目录。
@@ -138,7 +136,6 @@ try {
   }
 
   // 3. 门禁红了：不合并、不清理、目标分支一动不动，日志回流给 agent；
-  //    同一棵树再点一次**不重跑**，原样把那次的红摆回去。
   {
     const repo = makeRepo("gate-fail");
     const projectId = await seedProject("gate-fail", repo, "echo 这条回归故意红的 >&2; exit 3");
@@ -187,18 +184,27 @@ try {
     };
     await turnEnded();
 
-    // 代码一个字没改 → 不重跑，把上次的红原样摆回去。
-    const again = await acceptTask(taskId);
-    assert.equal(again.accepted, false);
-    if (again.accepted) throw new Error("红着的门禁不该放行");
-    assert.equal(again.reason, "accept_gate_failed");
-    assert.equal((await runsOf(taskId)).length, 1, "树没变就不许白烧一次");
+    for (const [index, failure] of ["exit_code", "timeout"].entries()) {
+      const previous = (await runsOf(taskId))[0]!;
+      if (failure === "timeout") {
+        await db.update(acceptGateRuns).set({ failure, exitCode: null }).where(eq(acceptGateRuns.id, previous.id));
+      }
+      const again = await acceptTask(taskId);
+      assert.equal(again.accepted, false);
+      if (again.accepted) throw new Error("红着的门禁不该放行");
+      assert.equal(again.reason, "accept_gate_running", `${failure} 后没改源码，再点验收也要真正重跑`);
+      await settled(taskId);
+      assert.equal((await runsOf(taskId)).length, index + 2);
+      assert.notEqual((await runsOf(taskId))[0]!.id, previous.id, "新一轮记录与旧失败分开保留");
+      assert.equal(git(repo, "rev-parse", "main"), before, "重跑失败仍不合并");
+      await turnEnded();
+    }
 
     // 明确要求重跑 → 真的再跑一次。
     const rerun = await acceptTask(taskId, "human", { acceptGate: "rerun" });
     assert.equal(rerun.accepted, false);
     await settled(taskId);
-    assert.equal((await runsOf(taskId)).length, 2, "点了「重跑一次」就要真的重跑");
+    assert.equal((await runsOf(taskId)).length, 4, "点了「重跑一次」就要真的重跑");
     await turnEnded(); // 又红了一次,又被叫醒了一轮
 
     // 「再交给智能体去修」：红了那次已经自动交过一次，这条是补救与再推一把。
@@ -210,7 +216,7 @@ try {
       const woken = async () => (await taskRow(taskId)).status === "running";
       for (let i = 0; i < 200 && !(await woken()); i++) await sleep(25);
       assert.equal(await woken(), true, "「再交一次」必须真的再起一轮，不能只写一句话");
-      assert.equal((await runsOf(taskId)).length, 2, "交给 agent 去修不等于重跑那条命令");
+      assert.equal((await runsOf(taskId)).length, 4, "交给 agent 去修不等于重跑那条命令");
       await turnEnded();
     }
 
@@ -224,7 +230,7 @@ try {
     // 明确跳过 → 直接合并，且时间线上留下「这是你自己选的」。
     const skipped = await acceptTask(taskId, "human", { acceptGate: "skip" });
     assert.equal(skipped.accepted, true, "跳过是用户的权利（门禁可能是 flake）");
-    assert.equal((await runsOf(taskId)).length, 2, "跳过不该再起一次命令");
+    assert.equal((await runsOf(taskId)).length, 4, "跳过不该再起一次命令");
     assert.notEqual(git(repo, "rev-parse", "main"), before);
     // 痕迹写在**当下最新**那条会话上(红了被叫醒会新开会话),所以全读一遍。
     const everything = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))

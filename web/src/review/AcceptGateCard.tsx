@@ -194,6 +194,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
             : idle
             ? "设一条之后，点「验收通过」会先在独立源码快照里跑它，rc=0 且进程监督收尾后才合并。"
             : detail(state, running, latest, receipt, settled)}</p>
+          {shown && <p aria-label="验收命令运行记录">运行记录：{shown.id} · 开始于 {new Date(shown.startedAt).toLocaleString()}{shown.finishedAt ? ` · 结束于 ${new Date(shown.finishedAt).toLocaleString()}` : ""}</p>}
           {shown?.executionNotice && <p role="note">{running ? "本次运行：" : settled ? "本次验收运行：" : "历史运行："}{shown.executionNotice}</p>}
           {!settled && !running && state.command && state.executionNotice && state.executionNotice !== shown?.executionNotice
             && <p role="note">下次运行：{state.executionNotice}</p>}
@@ -350,7 +351,7 @@ function detail(
         ? `已经试过把日志交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）——那条红现在没人在管。`
         : "日志已经交回这个任务的智能体去修了。";
   return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${handoff}`
-    + (latest.status === "failed" ? "改完再点验收会自动重跑；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
+    + (latest.status === "failed" ? "重新点「验收通过」会重新执行命令，即使代码没有变化，也不会直接复用这次失败；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
 }
 
 /** 已验收那张回执的正文：只陈述**本次验收那一按**的凭据，历史一律标清「不是凭据」。 */
