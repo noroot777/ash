@@ -1,39 +1,81 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { chmod, copyFile, lstat, mkdir, readdir, readlink, stat, symlink } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { createReadStream, type Stats } from "node:fs";
+import { chmod, copyFile, lstat, mkdir, readdir, readlink, realpath, stat, symlink } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-/** 源树一侧的遍历参照系：软链指向树内还是树外、以及树内链怎么映射到副本，全以 root 为参照。 */
-export type GateTree = { root: string; destinationRoot?: string; filter?: (path: string) => boolean };
-/** 副本一侧：root 是副本根，path 是当前条目在副本里的落点；两侧层级结构严格镜像。 */
+export type GateTree = {
+  /** 快照根（源树一侧）：软链落点在树内还是树外、以及树内链怎么映射到副本，全以它为参照。 */
+  root: string;
+  /** 给出就边摘要边拷贝；副本按 root→destinationRoot 镜像同一层级结构。 */
+  destinationRoot?: string;
+  filter?: (path: string) => boolean;
+  /**
+   * true：整棵树都是依赖输入（Git 项目登记的依赖目录），里面的外链一律原样重建。
+   * false：非 Git 项目的源码树，只有依赖目录（node_modules/.venv/vendor/target）内的外链按
+   * 依赖策略保留，其余外链按**源码**冻结——跟随并把目标内容拷进快照。
+   */
+  dependency: boolean;
+};
+/** landings 是这棵树里全部软链落在**树内**的位置，相对快照根、`/` 分隔，交给输入规划层补闭包。 */
+export type GateTreeResult = { digest: string; landings: string[] };
 type Copy = { root: string; path: string };
+type Walk = GateTree & { realRoot: string; landings: Set<string> };
 
+export const DEPENDENCY_DIRS = ["node_modules", ".venv", "vendor", "target"];
 export const insideTree = (root: string, path: string) => {
   const rel = relative(root, path);
   return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 };
+const portable = (path: string) => path.split(sep).join("/");
+const isDependencyPath = (rel: string) => portable(rel).split("/").some(part => DEPENDENCY_DIRS.includes(part));
+const treeRealPath = async (root: string) => await realpath(root).catch(() => root);
 
 // junction 的 readlink 回来是 \\?\D:\...\ 这种 Win32 长路径形式，不剥掉前缀和尾部分隔符，
 // path.relative 认不出它其实在树内（实测 relative("D:\\repo", "\\\\?\\D:\\repo\\nm") 原样返回长路径）。
+// 这个前缀同时是「原链接是 junction」的可靠标记：悬空目录 junction 的 stat 会失败，没有它就
+// 只能瞎猜链接种类。
 const longPath = /^\\\\\?\\(?=[A-Za-z]:\\)/;
-async function linkTarget(path: string): Promise<string> {
+async function linkTarget(path: string): Promise<{ target: string; junction: boolean }> {
   const raw = await readlink(path);
-  if (process.platform !== "win32") return raw;
+  if (process.platform !== "win32") return { target: raw, junction: false };
   const stripped = raw.replace(longPath, "");
-  return stripped.length > 3 && stripped.endsWith(sep) ? stripped.slice(0, -1) : stripped;
+  const target = stripped.length > 3 && stripped.endsWith(sep) ? stripped.slice(0, -1) : stripped;
+  return { target, junction: stripped !== raw };
 }
 
-async function copyLink(source: string, destination: string, target: string): Promise<void> {
+// 落点必须按**文件系统语义**逐段解析，不能用 path.resolve 消 `..`：中间段是目录软链时，
+// 「先跟随链接再解释 ..」与「先消掉 ..」落在两个不同的文件上（bridge -> store/deep 时
+// bridge/../entry.mjs 落在 store/entry.mjs，不是同级的 entry.mjs）。摘要身份和重定位都以
+// 落点为准，词法规范化会既漏判输入变化、又把链接重定向到别的文件。末段故意不解析，这样多级
+// 链的每一级都保留自己的身份。
+async function linkLanding(path: string, target: string): Promise<string> {
+  const full = isAbsolute(target) ? target : `${dirname(path)}${sep}${target}`;
+  try { return join(await realpath(dirname(full)), basename(full)); }
+  catch { return resolve(dirname(path), target); }
+}
+
+export async function freezesAsSource(root: string, path: string): Promise<boolean> {
+  if (isDependencyPath(relative(root, path))) return false;
+  const { target } = await linkTarget(path);
+  return !insideTree(await treeRealPath(root), await linkLanding(path, target));
+}
+
+async function copyLink(source: string, destination: string, target: string, junction: boolean): Promise<void> {
   if (process.platform !== "win32") return await symlink(target, destination);
   // Windows 有两种目录链：junction 不要权限、只认绝对路径，包管理器（pnpm 等）在那边就是用它把
   // 包连进 node_modules 的，所以目录链首选它（node 同样把 junction 报成 isSymbolicLink()，两侧
   // 摘要仍然对得上）；普通软链——包括所有文件链——要 SeCreateSymbolicLinkPrivilege，即开发者
   // 模式或管理员（实测 node 的 symlink 带 ALLOW_UNPRIVILEGED_CREATE，开发者模式下能建，而
   // PowerShell 的 New-Item 仍然要提权，别拿它的失败当本机结论）。
-  const directory = await stat(source).then(info => info.isDirectory(), () => false);
-  const attempts: [string, "junction" | "dir" | "file"][] = directory
+  // 种类要按**原链接**判，不能按「目标解析得开不开」判：悬空或成环的目录 junction 其 stat 必然
+  // 失败，当成文件链就把一条免权限的链接改成了要提权的那种，没开发者模式时整次快照直接失败。
+  const resolved = await stat(source).then(info => info.isDirectory() ? "dir" : "file", () => junction ? "dir" : null);
+  const attempts: [string, "junction" | "dir" | "file"][] = resolved === "dir"
     ? [[resolve(dirname(destination), target), "junction"], [target, "dir"]]
-    : [[target, "file"]];
+    : resolved === "file" ? [[target, "file"]]
+      // 目标不可解析又不是 junction：按文件链优先，失败再退 junction——宁可种类退让，也不让一条
+      // 悬空链拖垮整次快照（node_modules 里的断链很常见）。
+      : [[target, "file"], [resolve(dirname(destination), target), "junction"]];
   let failure: unknown;
   for (const [attempt, type] of attempts) {
     try { return await symlink(attempt, destination, type); }
@@ -45,40 +87,86 @@ async function copyLink(source: string, destination: string, target: string): Pr
     + "Windows 上请开启开发者模式或以管理员身份运行 ash，或改用不含文件软链的依赖安装方式");
 }
 
-async function walkTree(path: string, hash: ReturnType<typeof createHash>, tree: GateTree, copy?: Copy): Promise<boolean> {
-  if (tree.filter && !tree.filter(path)) return false;
-  let info: Awaited<ReturnType<typeof lstat>>;
-  try { info = await lstat(path); }
+async function entryStats(path: string): Promise<Stats | null> {
+  try { return await lstat(path); }
   catch (error) {
     // 读完目录到读条目之间文件被删掉（依赖树随时在被包管理器改）不该崩掉整次快照；
     // ELOOP 留着兜中间路径成分成环的极端情况。悬空软链不再走这条路——lstat 不解析末端成分。
+    if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+    throw error;
+  }
+}
+
+// 跟随语义（stat + copyFile）：只给「非 Git 项目的源码外链」用，整棵拷成真文件/真目录，所以
+// 目标里的软链也会被拍平。这是本次改动之前对所有输入的行为，这里把它保留给源码外链这一处，
+// 换来的是「改了项目外的源码仍然直接复用上次通过」「测试写穿到项目外」两件事都不会发生。
+// 只有跟随才会成环，所以环的防护也只留在这条路上。
+async function freezeTree(path: string, hash: ReturnType<typeof createHash>, walk: Walk, copy: Copy | undefined,
+  ancestors: Set<string>): Promise<boolean> {
+  if (walk.filter && !walk.filter(path)) return false;
+  let canonical: string;
+  try { canonical = await realpath(path); }
+  catch (error) {
     if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
     throw error;
   }
+  if (ancestors.has(canonical)) return false;
+  let info: Stats;
+  try { info = await stat(path); } catch { return false; }
+  if (info.isFile()) {
+    hash.update(`file:${info.mode & 0o111}:`);
+    if (copy) {
+      await copyFile(path, copy.path);
+      await chmod(copy.path, info.mode);
+    }
+    for await (const chunk of createReadStream(copy?.path ?? path)) hash.update(chunk);
+  } else if (info.isDirectory()) {
+    if (copy) await mkdir(copy.path, { recursive: true });
+    hash.update("directory:");
+    const next = new Set(ancestors).add(canonical);
+    for (const name of (await readdir(path)).sort()) {
+      const childHash = createHash("sha256");
+      const child = copy && { root: copy.root, path: join(copy.path, name) };
+      if (await freezeTree(join(path, name), childHash, walk, child, next)) {
+        hash.update(JSON.stringify(name)).update(childHash.digest());
+      }
+    }
+  } else throw new Error(`测试输入不是普通文件或目录：${path}`);
+  hash.update("\0");
+  return true;
+}
+
+async function walkTree(path: string, hash: ReturnType<typeof createHash>, walk: Walk, copy?: Copy): Promise<boolean> {
+  if (walk.filter && !walk.filter(path)) return false;
+  const info = await entryStats(path);
+  if (info === null) return false;
   if (info.isSymbolicLink()) {
-    const target = await linkTarget(path);
-    const resolved = resolve(dirname(path), target);
-    const within = insideTree(tree.root, resolved);
+    const { target, junction } = await linkTarget(path);
+    const landing = await linkLanding(path, target);
+    const within = insideTree(walk.realRoot, landing);
+    if (!within && !walk.dependency && !isDependencyPath(relative(walk.root, path))) {
+      return await freezeTree(path, hash, walk, copy, new Set());
+    }
     // 摘要只记落点、不记目标内容：落点在树内的话那条路径本身已经被摘要过，在树外的话它本就
     // 不是快照冻住的输入。树内落点一律归一成「相对快照根的路径」，所以原文写相对还是绝对，
     // 源树与副本都算出同一个值（createGateSnapshot 的回算对账要求两侧严格相等）。
-    hash.update(within ? `link:${relative(tree.root, resolved).split(sep).join("/")}` : `link-outside:${resolved}`);
+    if (within) walk.landings.add(portable(relative(walk.realRoot, landing)));
+    hash.update(within ? `link:${portable(relative(walk.realRoot, landing))}` : `link-outside:${landing}`);
     // 一律重建成软链、绝不跟随：拷成真文件会让「靠自身所在位置做相对解析」的运行时在快照里
     // 一启动就死（node_modules/.bin/tsx 找不到同胞 package-*.mjs、.venv/bin/python3 的
     // @executable_path 落到快照里没有的 ../lib）。不跟随之后目录软链成的环也自然消失了。
     if (copy) await copyLink(path, copy.path, within
       // 树内：相对原文照抄即可——副本层级一致，于是它自然指向副本自己那份（顺带修掉「worktree 里
-      // node_modules/@ash/shared 解析到主仓」那条老坑）；绝对原文必须改写到副本，否则测试会被
-      // 拉回活动工作区。树内链指向的那份内容没进快照时（比如被 filter 排掉）副本里会留一条悬空
-      // 链，这与「快照只装登记过的输入」一致，不另作补偿。
-      ? (isAbsolute(target) ? join(copy.root, relative(tree.root, resolved)) : target)
+      // node_modules/@ash/shared 解析到主仓」那条老坑），而且原文里的 `..` 继续按副本自己的链接
+      // 结构解析；绝对原文必须改写到副本，否则测试会被拉回活动工作区。
+      ? (isAbsolute(target) ? join(copy.root, relative(walk.realRoot, landing)) : target)
       // 树外：改写成绝对落点原样保留。相对原文照抄会因为快照与项目目录深度不同而指错地方
       // （worktree 借主仓 node_modules 就是这个形状）。保留而不是跳过或拒绝建快照，是因为
       // .venv/bin/python -> /opt/homebrew/... 这类链本身就是解释器，跳过等于把 venv 弄残、
       // 拒绝等于每台装了 homebrew/uv venv 的机器都过不了门禁；而被指向的 pnpm store、uv
       // cache、homebrew 前缀在实践中是内容寻址或只读的。代价是快照对这部分依赖不再是冻住的
       // 输入（git 跟踪的源码软链指向快照外仍然直接拒绝，见 createGateSnapshot）。
-      : resolved);
+      : landing, junction);
   } else if (info.isFile()) {
     hash.update(`file:${info.mode & 0o111}:`);
     if (copy) {
@@ -92,7 +180,7 @@ async function walkTree(path: string, hash: ReturnType<typeof createHash>, tree:
     for (const name of (await readdir(path)).sort()) {
       const childHash = createHash("sha256");
       const child = copy && { root: copy.root, path: join(copy.path, name) };
-      if (await walkTree(join(path, name), childHash, tree, child)) {
+      if (await walkTree(join(path, name), childHash, walk, child)) {
         hash.update(JSON.stringify(name)).update(childHash.digest());
       }
     }
@@ -101,12 +189,14 @@ async function walkTree(path: string, hash: ReturnType<typeof createHash>, tree:
   return true;
 }
 
-export async function gateTreeDigest(path: string, tree: GateTree): Promise<string | null> {
-  const hash = createHash("sha256");
+export async function gateTreeDigest(path: string, tree: GateTree): Promise<GateTreeResult | null> {
   if (!insideTree(tree.root, path)) throw new Error(`测试输入不在快照根内：${path}`);
+  const hash = createHash("sha256");
+  const walk: Walk = { ...tree, realRoot: await treeRealPath(tree.root), landings: new Set() };
   // 副本落点由两侧根推算，而不是由调用方再传一遍，这样「副本严格镜像源树层级」是结构上成立的
   // ——树内软链的原文照抄依赖这一点。
   const copy = tree.destinationRoot === undefined ? undefined
     : { root: tree.destinationRoot, path: join(tree.destinationRoot, relative(tree.root, path)) };
-  return await walkTree(path, hash, tree, copy) ? hash.digest("hex") : null;
+  if (!await walkTree(path, hash, walk, copy)) return null;
+  return { digest: hash.digest("hex"), landings: [...walk.landings] };
 }

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync,
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "ash-gate-source-"));
 process.env.ASH_RUNS_DIR = join(root, "runs");
@@ -95,6 +96,9 @@ try {
   mkdirSync(join(repo, "node_modules", "store", "pkg"), { recursive: true });
   writeFileSync(join(repo, "node_modules", "store", "pkg", "index.js"), "store copy");
   linkDir(join("store", "pkg"), join(repo, "node_modules", "linked-pkg"));
+  // 发现 5:目标暂时不存在的**目录**链。stat 解析不开不等于「原链接指向文件」——按文件链重建
+  // 在 Windows 上要提权,没开发者模式就整次快照失败,而它本来是免权限的 junction。
+  linkDir(join(root, "missing-dependency-dir"), join(repo, "node_modules", "dangling-dir"));
   const external = join(root, "external-runtime");
   mkdirSync(external);
   writeFileSync(join(external, "runtime.mjs"), 'console.log("external runtime");\n');
@@ -124,6 +128,12 @@ try {
     "指向树内的目录链在副本里指向副本自己那份,不能回指活动工作区");
   assert.equal((await readGateSource(linkSnapshot)).fingerprint, linkSource.fingerprint,
     "④ 源树与拷贝树必须算出同一个摘要");
+  const danglingDir = join(linkSnapshot, "node_modules", "dangling-dir");
+  assert.equal(lstatSync(danglingDir).isSymbolicLink(), true, "悬空目录链仍是链,不会拖垮整次快照");
+  if (process.platform === "win32") {
+    assert.equal(readlinkSync(danglingDir).startsWith("\\\\?\\"), true,
+      "发现5: Windows 上悬空的目录 junction 要按 junction 重建,不能改走要提权的文件软链");
+  }
   if (fileLinks) {
     const bin = join(linkSnapshot, "node_modules", ".bin", "cli.mjs");
     assert.equal(lstatSync(bin).isSymbolicLink(), true, "依赖树里的软链不能被拍平成真文件");
@@ -131,8 +141,8 @@ try {
     assert.equal(execFileSync(process.execPath, [bin], { encoding: "utf8" }).trim(), "sibling",
       "① 原样重建之后,按自身 realpath 解析同胞模块的 cli 才能在快照里真跑起来");
     assert.equal(readlinkSync(join(linkSnapshot, ".venv", "alias.mjs")), "runtime.mjs");
-    assert.equal(readlinkSync(join(linkSnapshot, ".venv", "runtime.mjs")), join(external, "runtime.mjs"),
-      "② 落在树外的末端链保留绝对落点");
+    assert.equal(readlinkSync(join(linkSnapshot, ".venv", "runtime.mjs")), join(realpathSync(external), "runtime.mjs"),
+      "② 落在树外的末端链保留绝对落点(按文件系统语义解析,不是词法拼接)");
     assert.equal(execFileSync(process.execPath, [join(linkSnapshot, ".venv", "alias.mjs")], { encoding: "utf8" }).trim(),
       "external runtime", "② 多级链逐级重建后整条仍可执行");
     assert.equal(readlinkSync(join(linkSnapshot, "node_modules", "absolute.mjs")),
@@ -141,9 +151,99 @@ try {
     assert.equal(existsSync(join(linkSnapshot, "node_modules", "dangling")), false, "③ 悬空链原样保留,且不崩掉整次快照");
   }
 
+  // 发现 1:链接身份不能用词法规范化证明。中间段是目录软链时,「先跟随链接再解释 ..」与「先消掉
+  // ..」落在两个不同的文件上,于是 path.resolve 会把两条行为不同的链算成同一个身份(换了实际执行
+  // 的脚本仍沿用上次通过),也会把树外链的重定位指到另一个文件上。
+  rmSync(join(repo, "node_modules"), { recursive: true });
+  mkdirSync(join(repo, "node_modules", "store", "deep"), { recursive: true });
+  writeFileSync(join(repo, "node_modules", "entry.mjs"), 'console.log("SIBLING");\n');
+  writeFileSync(join(repo, "node_modules", "store", "entry.mjs"), 'console.log("THROUGH-BRIDGE");\n');
+  linkDir(join("store", "deep"), join(repo, "node_modules", "bridge"));
+  // 这一段只在 POSIX 上跑:Win32 的路径解析器在碰文件系统之前就把 `..` 词法消掉了(这正是
+  // `\\?\` 前缀存在的理由),所以那边两条链真的落在同一个文件上,摘要相同是对的。本模块把落点
+  // 交给 realpath 判,于是两种平台各自拿到自己那套语义,不必分叉。
+  if (fileLinks && process.platform !== "win32") {
+    const cli = join(repo, "node_modules", "cli.mjs");
+    symlinkSync(["bridge", "..", "entry.mjs"].join(sep), cli);
+    const throughBridge = await readGateSource(repo);
+    // 用 readFileSync 走真正的 open 系统调用:node 的模块加载器会先把 `..` 词法消掉,
+    // 拿它当探针会把这条缺陷掩盖过去。
+    assert.equal(readFileSync(cli, "utf8").includes("THROUGH-BRIDGE"), true);
+    unlinkSync(cli);
+    symlinkSync("entry.mjs", cli);
+    const direct = await readGateSource(repo);
+    assert.equal(readFileSync(cli, "utf8").includes("SIBLING"), true);
+    assert.notEqual(direct.fingerprint, throughBridge.fingerprint, "发现1: 落点不同的两条链不能算出同一个身份");
+    assert.equal(gateSourceMatches({ sourceCommit: throughBridge.commit, sourceFingerprint: throughBridge.fingerprint }, direct),
+      false, "发现1: 换掉实际执行的脚本之后不能再沿用上次通过");
+    unlinkSync(cli);
+    symlinkSync(["bridge", "..", "entry.mjs"].join(sep), cli);
+    // 树外链 + 经过目录链的 ..:词法消 .. 会落在 <root>/right.mjs(WRONG),真正的落点是
+    // <outside>/right.mjs(RIGHT)。副本必须读出和源树一样的内容。
+    const outside = join(root, "outside");
+    mkdirSync(join(outside, "deep"), { recursive: true });
+    writeFileSync(join(root, "right.mjs"), "WRONG\n");
+    writeFileSync(join(outside, "right.mjs"), "RIGHT\n");
+    linkDir(join(outside, "deep"), join(root, "bridge"));
+    const escape = join(repo, "node_modules", "escape.mjs");
+    symlinkSync(["..", "..", "bridge", "..", "right.mjs"].join(sep), escape);
+    const escapeSource = await readGateSource(repo);
+    const escapeSnapshot = join(root, "escape-snapshot");
+    await createGateSnapshot(repo, escapeSnapshot, escapeSource);
+    assert.equal(readFileSync(escape, "utf8").trim(), "RIGHT");
+    assert.equal(readFileSync(join(escapeSnapshot, "node_modules", "escape.mjs"), "utf8").trim(), "RIGHT",
+      "发现1: 树外链的重定位必须落在真正的目标上,不能被词法规范化改写到另一个文件");
+    assert.equal((await readGateSource(escapeSnapshot)).fingerprint, escapeSource.fingerprint);
+  }
+
+  // 发现 2:「落点在项目目录之下」不等于「这份内容会出现在快照里」。项目把依赖装在别处再软链
+  // 过来时,落点既没被 Git 跟踪也不在任何登记的依赖里,照抄链接只会在快照里留一条断链,命令当场
+  // 不存在;落点内容变了也看不见。所以要按落点求闭包,把缺的落点补登记成输入。
+  rmSync(join(repo, "node_modules"), { recursive: true });
+  mkdirSync(join(repo, ".local-deps", "pkg"), { recursive: true });
+  writeFileSync(join(repo, ".local-deps", "pkg", "cli.mjs"), 'console.log("INSTALLED");\n');
+  linkDir(".local-deps", join(repo, "node_modules"));
+  const closureSource = await readGateSource(repo);
+  assert.equal(closureSource.dependencies.includes(".local-deps"), true, "发现2: 链接落点要补登记成快照输入");
+  const closureSnapshot = join(root, "closure-snapshot");
+  await createGateSnapshot(repo, closureSnapshot, closureSource);
+  assert.equal(lstatSync(join(closureSnapshot, "node_modules")).isSymbolicLink(), true);
+  assert.equal(readFileSync(join(closureSnapshot, "node_modules", "pkg", "cli.mjs"), "utf8"), 'console.log("INSTALLED");\n',
+    "发现2: 项目内装在别处的依赖必须跟着进快照,否则快照里只有一条断链");
+  assert.equal((await readGateSource(closureSnapshot)).fingerprint, closureSource.fingerprint,
+    "补登记的落点在源树与拷贝树上要算出同一个摘要");
+  writeFileSync(join(repo, ".local-deps", "pkg", "cli.mjs"), 'console.log("CHANGED");\n');
+  assert.equal(gateSourceMatches({ sourceCommit: closureSource.commit, sourceFingerprint: closureSource.fingerprint },
+    await readGateSource(repo)), false, "发现2: 落点内容变了不能再沿用上次通过");
+  writeFileSync(join(closureSnapshot, "node_modules", "pkg", "cli.mjs"), "test output");
+  assert.equal(readFileSync(join(repo, ".local-deps", "pkg", "cli.mjs"), "utf8"), 'console.log("CHANGED");\n',
+    "发现2: 补登记的落点同样是冻住的,测试写快照碰不到活动工作区");
+
+  // 发现 3:嵌套包的依赖目录已经被外层依赖整棵拷过一遍,再单独拷一遍会在同一路径上第二次
+  // symlink → EEXIST,整次快照在任何断言之前就废掉(软链重建不像 copyFile 那样幂等)。
+  rmSync(join(repo, "node_modules"), { recursive: true });
+  rmSync(join(repo, ".local-deps"), { recursive: true });
+  mkdirSync(join(repo, "vendor", "package", "node_modules", ".bin"), { recursive: true });
+  writeFileSync(join(repo, "vendor", "package", "package.json"), "{}");
+  writeFileSync(join(repo, "vendor", "package", "node_modules", "cli.mjs"), 'console.log("NESTED");\n');
+  linkDir(join("..", "node_modules"), join(repo, "vendor", "package", "node_modules", ".bin", "linked"));
+  git(repo, "add", "vendor/package/package.json");
+  git(repo, "commit", "-m", "nested manifest inside a dependency directory");
+  const overlapSource = await readGateSource(repo);
+  assert.equal(overlapSource.dependencies.includes(join("vendor", "package", "node_modules")), false,
+    "发现3: 被外层依赖包住的目录不再单独登记");
+  const overlapSnapshot = join(root, "overlap-snapshot");
+  await createGateSnapshot(repo, overlapSnapshot, overlapSource);
+  assert.equal(readFileSync(join(overlapSnapshot, "vendor", "package", "node_modules", "cli.mjs"), "utf8"),
+    'console.log("NESTED");\n', "发现3: 重叠输入去重之后,嵌套依赖照样完整进快照");
+  assert.equal(lstatSync(join(overlapSnapshot, "vendor", "package", "node_modules", ".bin", "linked")).isSymbolicLink(), true);
+  git(repo, "rm", "-q", "--cached", "vendor/package/package.json");
+  git(repo, "commit", "-m", "drop nested manifest");
+  rmSync(join(repo, "vendor", "package"), { recursive: true });
+
   // 依赖根自己就是软链(worktree 借主仓 node_modules 的形状):相对原文照抄会因为快照与项目目录
   // 深度不同而指错地方,所以改写成绝对落点。
-  rmSync(join(repo, "node_modules"), { recursive: true });
+  rmSync(join(repo, "node_modules"), { recursive: true, force: true });
   const borrowed = join(root, "borrowed-dependencies");
   mkdirSync(borrowed);
   writeFileSync(join(borrowed, "dep.js"), "borrowed v1");
@@ -166,18 +266,44 @@ try {
   mkdirSync(join(loose, "deep"));
   writeFileSync(join(loose, "deep", "nested.txt"), "nested");
   linkDir("deep", join(loose, "deep-link"));
+  const outsideSource = join(root, "outside-source");
+  mkdirSync(outsideSource);
+  writeFileSync(join(outsideSource, "main.py"), "print('v1')\n");
+  if (fileLinks) {
+    // 发现 4:非 Git 项目里指向项目外的**源码**链接必须按源码冻结(跟随并把内容拷进快照),否则
+    // 改了项目外的源码仍会沿用上次通过、测试写入还会穿到项目外。依赖目录里的外链不走这条:
+    // 那里的链本身就是解释器和包入口,冻结等于把它们拍平。
+    symlinkSync(join(outsideSource, "main.py"), join(loose, "main.py"));
+    mkdirSync(join(loose, ".venv", "bin"), { recursive: true });
+    symlinkSync(join(outsideSource, "main.py"), join(loose, ".venv", "bin", "runtime.py"));
+  }
   const looseSource = await readGateSource(loose);
   const looseSnapshot = join(root, "loose-snapshot");
   await createGateSnapshot(loose, looseSnapshot, looseSource);
   assert.equal(lstatSync(join(looseSnapshot, "deep-link")).isSymbolicLink(), true, "非 Git 项目的软链同样原样重建");
   assert.equal(realpathSync(join(looseSnapshot, "deep-link")), realpathSync(join(looseSnapshot, "deep")),
     "非 Git 项目里指向树内的链也必须落在副本自己那份上");
+  if (fileLinks) {
+    assert.equal(lstatSync(join(looseSnapshot, "main.py")).isSymbolicLink(), false,
+      "发现4: 非 Git 项目的源码外链在快照里是一份冻住的真文件");
+    assert.equal(readFileSync(join(looseSnapshot, "main.py"), "utf8"), "print('v1')\n");
+    assert.equal(lstatSync(join(looseSnapshot, ".venv", "bin", "runtime.py")).isSymbolicLink(), true,
+      "依赖目录内的外链仍按依赖策略原样保留");
+  }
   mkdirSync(join(looseSnapshot, "build"));
   writeFileSync(join(looseSnapshot, "build", "output.txt"), "generated output");
   assert.equal(await verifyGateSnapshot(looseSnapshot, looseSource), true);
   writeFileSync(join(looseSnapshot, "source.txt"), "changed by test");
   assert.equal(await verifyGateSnapshot(looseSnapshot, looseSource), false);
   assert.equal(readFileSync(join(loose, "source.txt"), "utf8"), "non-git source");
+  if (fileLinks) {
+    writeFileSync(join(outsideSource, "main.py"), "print('v2')\n");
+    assert.notEqual((await readGateSource(loose)).fingerprint, looseSource.fingerprint,
+      "发现4: 改了项目外的源码,门禁不能再沿用上次通过");
+    writeFileSync(join(looseSnapshot, "main.py"), "print('test output')\n");
+    assert.equal(readFileSync(join(outsideSource, "main.py"), "utf8"), "print('v2')\n",
+      "发现4: 测试写快照不会穿到项目外");
+  }
   const beforeGitlink = git(repo, "rev-parse", "HEAD");
   git(repo, "update-index", "--add", "--cacheinfo", `160000,${beforeGitlink},nested-submodule`);
   git(repo, "commit", "-m", "gitlink without gitmodules");
