@@ -49,6 +49,7 @@ import { prepareGateLaunch, readGateLaunch } from "./accept-gate-launch.js";
 import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
 import { releaseGateOwnership } from "./accept-gate-release.js";
 import { diagnoseGateFailure } from "./accept-gate-diagnosis.js";
+import { encodeGateEntryProbe, probeGateEntry } from "./accept-gate-entry.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type GateRow = typeof acceptGateRuns.$inferSelect;
@@ -290,6 +291,13 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
   let started: Awaited<ReturnType<typeof spawnAcceptGate>>;
   try {
     await createGateSnapshot(plan.cwd, snapshotCwd, plan.source);
+    // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里,连同判据一起落到这一行上。
+    // 位置不能动:跑完之后再核拿到的是跑完之后的状态,而「测试压根没启动」这个结论整副面孔
+    // (不要改代码 / 出路是合分支或跳过)都压在这份事实上(第 2 轮审查 F1)。核不出来就落 null,
+    // 下游按「不知道」处理。
+    await db.update(acceptGateRuns)
+      .set({ entryProbe: encodeGateEntryProbe(await probeGateEntry(snapshotCwd, plan.command).catch(() => null)) })
+      .where(eq(acceptGateRuns.id, runId));
     const prepared = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
     if (prepared?.status !== "running") {
       await cleanupGateSnapshot(taskId, runId);

@@ -31,6 +31,10 @@ export const acceptGateRuns = sqliteTable(
      * 那个结论了。
      */
     diagnosis: text("diagnosis"),
+    // 起跑**前**核到的入口事实(accept-gate-entry.ts 的 GateEntryProbe,JSON)。必须落盘:
+    // 结算可能发生在 server 重启之后,而跑完再核一次拿到的是跑完之后的状态 —— 第 2 轮
+    // 审查那条「打印启动提示、删掉自己、再报断言失败」的脚本就是这么被说成「没启动」的。
+    entryProbe: text("entry_probe"),
     pid: integer("pid"),
     /**
      * 那个 pid 的**启动时间**：重启之后拿它核对「这个号还是不是当初那条命令」。
@@ -93,6 +97,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN source_fingerprint TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

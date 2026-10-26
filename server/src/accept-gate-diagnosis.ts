@@ -11,15 +11,14 @@
 // 落盘；大仓或慢存储上一次 grep 就能卡住，取消/超时又在等这次结算。所以每条查询有超时、
 // 整段有总预算，超了就退成「没核对出来」那一档 —— 结论差一点，总比门禁停在「正在跑」好。
 import { eq } from "drizzle-orm";
-import { existsSync } from "node:fs";
-import { isAbsolute, join, normalize } from "node:path";
 import type { AcceptGateFailure } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
 import { acceptGateLogHead } from "./accept-gate-process.js";
-import { classifyGateLaunch, commandEntry, gateCommandMissNotice, missFailure, occursAsWord,
+import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
   type GateMissOrigin } from "./accept-gate-miss.js";
+import { decodeGateEntryProbe, gateEntryAsk, scriptDefinedIn, type GateEntryAsk } from "./accept-gate-entry.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 
@@ -112,6 +111,22 @@ async function blobExists(repo: string, commit: string, path: string, b: Budget)
   return result.stdout.split("\n").some(line => line.split(/\s+/)[1] === "blob");
 }
 
+/**
+ * 这个名字在那棵树里**有没有定义**。null = 核不出来。
+ *
+ * 这是第 2 轮审查 F2 换来的那条铁律的落点：存在性只认定义级判据（manifest 里的 scripts、
+ * 或那个文件本身在不在树里），文字检索的空结果什么都不证明 —— 基线 `description` 里提过
+ * 一句 `test:accept`，就足以让「出现这个名字的文件集合」差集为空。
+ */
+async function definitionOnTree(repo: string, commit: string, ask: GateEntryAsk, b: Budget): Promise<boolean | null> {
+  if (ask.kind === "path") return blobExists(repo, commit, ask.name.replace(/^\.\/+/, ""), b);
+  const manifest = await gitRun(repo, ["show", `${commit}:package.json`], b);
+  return manifest.ok ? scriptDefinedIn(manifest.stdout, ask.name) : null;
+}
+
+/** 这个名字在哪个文件里定义/落地。定义级那一档固定看 manifest。 */
+const askFile = (ask: GateEntryAsk) => ask.kind === "path" ? ask.name.replace(/^\.\/+/, "") : "package.json";
+
 /** 某个落点在目标分支上**最早**是哪一次提交写进去的（从新往旧列，取最后一行）。 */
 async function introducedBy(repo: string, targetCommit: string, sourceCommit: string | null, name: string | null,
   file: string, added: boolean, b: Budget): Promise<{ commit: string; date: string; subject: string } | null> {
@@ -131,7 +146,7 @@ async function introducedBy(repo: string, targetCommit: string, sourceCommit: st
  * 提交号就成立，是最低那一档也要给的事实（需求第 2 点允许退到这里）。
  */
 async function readOrigin(repo: string, targetBranch: string, sourceCommit: string | null,
-  name: string | null): Promise<GateMissOrigin | null> {
+  name: string | null, command: string): Promise<GateMissOrigin | null> {
   const b = budget();
   // `--verify --quiet` 对「没有这条分支」退 1，那是确定答案,不是读不出来。
   const resolved = await gitRun(repo, ["rev-parse", "--verify", "--quiet", `${targetBranch}^{commit}`], b, [1]);
@@ -140,44 +155,46 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
   const behindOut = sourceCommit ? await git(repo, ["rev-list", "--count", `${sourceCommit}..${targetCommit}`], b) : null;
   const behind = behindOut === null ? null : Number.parseInt(behindOut.trim(), 10);
   const origin: GateMissOrigin = { targetBranch, targetCommit,
-    behind: Number.isFinite(behind as number) ? behind as number : null, holders: [], unverified: true };
-  // 名字抽不出来（只凭入口文件或退出码认出来的那几档）：behind 这一条仍然算数，但「它在
-  // 目标分支上有没有」无从查起 —— 停在 unverified，由措辞那头说「没能核对出来」。
-  if (!name) return origin;
-  // 先按**路径**认一次：`./kb.sh test full` 这种命令，缺的就是那个文件本身，而文件在不在
-  // 一棵树里是 `cat-file -e` 一句话的事，比满树搜字串既准又便宜。
-  const asPath = name.replace(/^\.\/+/, "");
-  const onTargetTree = asPath ? await blobExists(repo, targetCommit, asPath, b) : null;
-  const inSnapshotTree = onTargetTree === true && sourceCommit
-    ? await blobExists(repo, sourceCommit, asPath, b) : null;
-  // 目标分支上有这个路径、快照里没有：**文件级**的确定事实，到此为止，不必再搜字串。
-  if (onTargetTree === true && inSnapshotTree === false) {
-    const where = await introducedBy(repo, targetCommit, sourceCommit, name, asPath, true, b);
-    if (where) origin.holders.push({ file: asPath, how: "path", ...where });
-    return { ...origin, unverified: !origin.holders.length && b.incomplete };
+    behind: Number.isFinite(behind as number) ? behind as number : null,
+    holders: [], absent: null, removedByTask: null, unverified: true };
+  // ── ① 定义级：命令形状认得出来，就能给出「有／没有」的确定答案 ──
+  const ask = gateEntryAsk(command);
+  if (ask) {
+    const onTarget = await definitionOnTree(repo, targetCommit, ask, b);
+    const inSnapshot = sourceCommit ? await definitionOnTree(repo, sourceCommit, ask, b) : null;
+    // 「没启动」推不出「不是你改的」（审查 F1）：基线上有、快照里没了 = 这次改动弄没的。
+    if (inSnapshot === false && sourceCommit) origin.removedByTask = await removedByTask(repo, sourceCommit, targetCommit, ask, b);
+    if (onTarget === true && inSnapshot !== true) {
+      const where = await introducedBy(repo, targetCommit, sourceCommit, name, askFile(ask), ask.kind === "path", b);
+      if (where) origin.holders.push({ file: askFile(ask), how: ask.kind === "path" ? "path" : "definition", ...where });
+      return { ...origin, unverified: !origin.holders.length && b.incomplete };
+    }
+    if (onTarget === false) return { ...origin, absent: ask.kind === "path" ? "path" : "definition", unverified: false };
+    // onTarget === null（manifest 读不动等）：落到底下的文字线索，但**不许**据此说「也没有」。
   }
-  // 其余情形（目标分支上也没这个路径、两棵树里都有、或没问出来）落到字串这一路：
-  // 那个名字多半压根不是文件名，而是个 script / target / recipe 名。
+  // ── ② 文字线索：只能给正面落点（带对冲），查空什么都不证明（审查 F2）──
+  if (!name) return origin;
   const onTarget = await holdersIn(repo, targetCommit, name, b);
   const inSnapshot = sourceCommit ? new Set(await holdersIn(repo, sourceCommit, name, b)) : new Set<string>();
   for (const file of onTarget.filter(hit => !inSnapshot.has(hit)).slice(0, MAX_HOLDERS)) {
     const where = await introducedBy(repo, targetCommit, sourceCommit, name, file, false, b);
     if (where) origin.holders.push({ file, how: "text", ...where });
   }
-  // 找到落点 = 正面证据，残不残都算数。一个都没找到时才要问「是真没有，还是没问全」——
-  // 没问全就只能说「不知道」，不能拿一份残清单去否定它的存在（审查 F4 的空头保证同源）。
-  return { ...origin, unverified: !origin.holders.length && b.incomplete };
+  // 找到落点 = 正面证据，残不残都算数。一个都没找到时**不是**「目标分支上没有」—— 文字
+  // 检索答不了那个问题，所以留在 unverified 这一档（absent 仍是 null）。
+  return { ...origin, unverified: !origin.holders.length };
 }
 
-/** 这条命令的入口文件在被测快照里在不在。不是路径、或快照已清理 → null（没法判）。 */
-function entryPresentIn(snapshotCwd: string, command: string): boolean | null {
-  const entry = commandEntry(command);
-  if (!entry || isAbsolute(entry) || !entry.includes("/")) return null;
-  if (!existsSync(snapshotCwd)) return null;
-  const resolved = normalize(join(snapshotCwd, entry));
-  // 别让 `../` 把判断引到快照外面去：那种命令的入口不在快照里是正常的，不构成证据。
-  if (!resolved.startsWith(normalize(snapshotCwd))) return null;
-  return existsSync(resolved);
+/**
+ * 它是不是**这次改动**弄没的：开工基线（任务与目标的共同祖先）上有定义，任务这份快照里
+ * 没有。null = 核不出来。
+ */
+async function removedByTask(repo: string, sourceCommit: string, targetCommit: string,
+  ask: GateEntryAsk, b: Budget): Promise<boolean | null> {
+  const base = (await git(repo, ["merge-base", sourceCommit, targetCommit], b))?.trim();
+  if (!base) return null;
+  const atBase = await definitionOnTree(repo, base, ask, b);
+  return atBase === null ? null : atBase;
 }
 
 /**
@@ -193,19 +210,24 @@ export async function diagnoseGateFailure(row: GateRow, outcome: { failure: Acce
   { failure: AcceptGateFailure | null; diagnosis: string } | null
 > {
   if (outcome.failure !== "exit_code") return null;
+  // **入口事实只从那一行读回来**：它是 spawn 之前核的（accept-gate-entry.ts），现在再去
+  // 看一眼快照只会拿到跑完之后的状态 —— 审查 F1 那条自删脚本就是这么被说成「没启动」的。
   const miss = classifyGateLaunch({ command: row.command, exitCode: outcome.exitCode,
     log: acceptGateLogHead(row.logPath, DIAGNOSIS_HEAD_BYTES),
-    entryPresent: entryPresentIn(row.cwd, row.command) });
+    entry: decodeGateEntryProbe(row.entryProbe) });
   if (!miss) return null;
   // inner 这一档不去核仓库：缺的是命令内部点名的东西（node 模块、python 包），「它在
   // 目标分支上有没有」对那种缺失既答不准也帮不上忙，查了只会给出一句误导的话。
   const repo = miss.kind === "entry"
     ? (await db.select().from(projects).where(eq(projects.id, row.projectId))).at(0)?.repoPath ?? null : null;
   const origin = repo && row.targetBranch
-    ? await readOrigin(repo, row.targetBranch, row.sourceCommit ?? null, miss.name).catch(() => null)
+    ? await readOrigin(repo, row.targetBranch, row.sourceCommit ?? null, miss.name, row.command).catch(() => null)
     : null;
+  // 这次改动自己把它删了/改名了 → 这条红**是**要改代码的那一种，不许改写成
+  // command_missing（那一档的整副面孔都是「不要动代码」）。结论正文仍然照实说明。
+  const failure = origin?.removedByTask === true ? outcome.failure : missFailure(miss) ?? outcome.failure;
   return {
-    failure: missFailure(miss) ?? outcome.failure,
+    failure,
     diagnosis: gateCommandMissNotice({ command: row.command, miss, sourceCommit: row.sourceCommit ?? null, origin }),
   };
 }

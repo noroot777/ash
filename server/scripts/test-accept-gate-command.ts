@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnAcceptGate, stopAcceptGate, type GateExit } from "../src/accept-gate-process.js";
 import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
-import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord } from "../src/accept-gate-miss.js";
+import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
+  type GateMissOrigin } from "../src/accept-gate-miss.js";
+import { gateEntryAsk, scriptDefinedIn, type GateEntryProbe } from "../src/accept-gate-entry.js";
 import { gateFailurePrompt } from "../src/accept-gate-messages.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-gate-process-"));
@@ -113,108 +115,94 @@ try {
   // ── 失败归类：「命令点名要跑的东西不在树里」≠「测试红了」────────────────────────
   //
   // 本机四次（2026-10-24/25，日志见 data/runs/*/accept-gate-*.log）门禁给出的全部信息
-  // 就是 npm 的原始报错 + rc=1，于是人和 agent 都读不出出路。这一组钉住的是：
-  //  · 那四条日志**那个形状**真能被认出来（第一条用例就是原文照抄）；
-  //  · 判定不写死在 npm 上 —— 一行一个 runner，shell/make/yarn/PowerShell 一并认；
-  //  · **嵌套缺失不许冒充顶层缺失**（第 1 轮审查 F1）：顶层已经跑起来、它内部某一步缺了
-  //    东西时，只许落 inner、不许改写 failure，更不许说「不是你的代码」；
-  //  · 一份真跑起来、真红了的测试日志**不许**被归成这一类。
+  // 就是 npm 的原始报错 + rc=1，于是人和 agent 都读不出出路。
+  //
+  // **这一组最硬的那条不变量**（第 2 轮审查 F1 两条反例换来的）：
+  //   `entry`（= 测试压根没启动，唯一会改写 failure 的那一档）**只能**由起跑前核到的那份
+  //   事实授权。日志措辞一个字都不授权它 —— 下面每一种 runner 的措辞都会被拿去跑两遍：
+  //   没有那份事实时必须退成 inner，核出来「入口在树里」时同样必须退成 inner。
+  const PROBE_BY = "被测快照 package.json 的 scripts";
   const MISS_CASES: { name: string; command: string; exitCode: number | null; log: string;
-    entryPresent?: boolean | null; kind: "entry" | "inner" | null; missing?: string | null }[] = [
+    entry?: GateEntryProbe | null; kind: "entry" | "inner" | null; missing?: string | null }[] = [
     {
       // data/runs/4n0946g2eW1e/accept-gate-MzYxZdGAyzhv.log 原文（四条一模一样）。
-      name: "npm Missing script（本机四次那一条）",
-      command: "npm run test:accept", exitCode: 1,
-      log: [
-        "[ash] 2026-10-24T11:27:37.845Z 验收前置命令开跑",
-        "[ash] source: /Users/fjh/code/harness/.worktrees/4n0946g2eW1e",
-        "[ash] snapshot: /Users/fjh/code/harness/data/runs/4n0946g2eW1e/accept-gate-MzYxZdGAyzhv.source",
-        "[ash] fingerprint: 2d287c27c0a75c0a76220f3050eeec3a0522d4f8116eb3f51e4574551472eedb",
-        "[ash] $ npm run test:accept",
-        "",
-        "[ash] macOS 兼容监督：实际执行验收命令，按进程组、已观察后代和继承标记收尾。",
-        'npm error Missing script: "test:accept"',
-        "npm error",
-        "npm error To see a list of scripts, run:",
-        "npm error   npm run",
-      ].join("\n"),
+      name: "原始事故（npm 10）", command: "npm run test:accept", exitCode: 1,
+      log: 'npm error Missing script: "test:accept"\nnpm error\nnpm error To see a list of scripts, run:\nnpm error   npm run\n',
+      entry: { ask: "test:accept", resolved: false, by: PROBE_BY },
       kind: "entry", missing: "test:accept",
     },
-    { name: "npm 6/8 老措辞", command: "npm run test:accept", exitCode: 1,
-      log: "npm ERR! missing script: test:accept", kind: "entry", missing: "test:accept" },
-    { name: "yarn 1", command: "yarn accept", exitCode: 1,
-      log: 'error Command "accept" not found.', kind: "entry", missing: "accept" },
+    // ── 各家 runner 的措辞：这里验的是「那个名字抽得出来」。没有起跑前的事实，一律 inner ──
+    { name: "npm 6/8", command: "npm run test:accept", exitCode: 1,
+      log: "npm ERR! missing script: test:accept", kind: "inner", missing: "test:accept" },
+    { name: "yarn 1", command: "yarn run accept", exitCode: 1,
+      log: 'error Command "accept" not found.', kind: "inner", missing: "accept" },
     { name: "yarn berry", command: "yarn run accept", exitCode: 1,
-      log: 'Usage Error: Couldn\'t find a script named "accept".', kind: "entry", missing: "accept" },
-    { name: "pnpm", command: "pnpm accept", exitCode: 1,
-      log: " ERR_PNPM_NO_SCRIPT  Missing script: accept", kind: "entry", missing: "accept" },
+      log: 'Usage Error: Couldn\'t find a script named "accept".', kind: "inner", missing: "accept" },
+    { name: "pnpm", command: "pnpm run accept", exitCode: 1,
+      log: " ERR_PNPM_NO_SCRIPT  Missing script: accept", kind: "inner", missing: "accept" },
     { name: "make", command: "make accept", exitCode: 2,
-      log: "make: *** No rule to make target 'accept'.  Stop.", kind: "entry", missing: "accept" },
+      log: "make: *** No rule to make target 'accept'.  Stop.", kind: "inner", missing: "accept" },
     { name: "just", command: "just accept", exitCode: 1,
-      log: "error: Justfile does not contain recipe `accept`.", kind: "entry", missing: "accept" },
+      log: "error: Justfile does not contain recipe `accept`.", kind: "inner", missing: "accept" },
     { name: "cargo", command: "cargo accept", exitCode: 101,
-      log: "error: no such command: `accept`", kind: "entry", missing: "accept" },
-    { name: "go", command: "go accept ./...", exitCode: 2,
-      log: 'go accept: unknown command "accept"', kind: "entry", missing: "accept" },
+      log: "error: no such command: `accept`", kind: "inner", missing: "accept" },
+    { name: "go", command: "go accept", exitCode: 2,
+      log: 'go accept: unknown command "accept"', kind: "inner", missing: "accept" },
     { name: "task", command: "task accept", exitCode: 1,
-      log: 'task: Task "accept" does not exist', kind: "entry", missing: "accept" },
+      log: 'task: Task "accept" does not exist', kind: "inner", missing: "accept" },
     { name: "gradle", command: "./gradlew accept", exitCode: 1,
-      log: "FAILURE: Task 'accept' not found in root project 'app'.", kind: "entry", missing: "accept" },
-    { name: "zsh 命令不存在", command: "kbtest full", exitCode: 127,
-      log: "zsh: command not found: kbtest", kind: "entry", missing: "kbtest" },
-    { name: "bash 命令不存在", command: "kbtest full", exitCode: 127,
-      log: "bash: line 1: kbtest: command not found", kind: "entry", missing: "kbtest" },
-    { name: "dash 命令不存在", command: "kbtest full", exitCode: 127,
-      log: "sh: 1: kbtest: not found", kind: "entry", missing: "kbtest" },
-    { name: "脚本文件不在这份快照里", command: "./run-accept.sh full", exitCode: 127,
-      log: "sh: ./run-accept.sh: No such file or directory", kind: "entry", missing: "./run-accept.sh" },
-    { name: "PowerShell", command: ".\\kb.ps1 test full", exitCode: 1,
-      log: ".\\kb.ps1 : The term '.\\kb.ps1' is not recognized as the name of a cmdlet, function, script file, or operable program.",
-      kind: "entry", missing: ".\\kb.ps1" },
-    { name: "cmd.exe", command: "kbtest full", exitCode: 9009,
-      log: "'kbtest' is not recognized as an internal or external command,", kind: "entry", missing: "kbtest" },
-    // 入口文件在快照里确实不在:这是硬证据,命令把输出全吞了也照样成立(审查 N1 那条
-    // 「只凭退出码的兜底在生产里走不到」的正解 —— 别再指望 127 去证明顶层缺失)。
-    { name: "入口文件不在快照里（输出被吞）", command: "./kb.sh test", exitCode: 1, log: "",
-      entryPresent: false, kind: "entry", missing: "./kb.sh" },
-    //
-    // ── 第 1 轮审查 F1：顶层**已经跑起来**，缺的是它内部点名的东西 ──
-    // 审查用真实 npm 复现：test:accept 存在且已输出，它内部调的 npm run helper-missing 缺了。
-    // 旧版本按「这条措辞天生是 runner 在说找不到」判成顶层缺失，于是对一条**可能正是这次
-    // 改动写错的**脚本名说「不是你的代码、不要修」。判据改成「那个名字是不是命令自己点名
-    // 的」之后，这些一律只落 inner。
-    { name: "F1 嵌套 npm：顶层跑起来了，内部脚本名缺了", command: "npm run test:accept", exitCode: 1,
-      log: ["", "> test:accept", "> node check.cjs", "", "ACCEPTANCE STARTED",
-        'npm error Missing script: "helper-missing"', "npm error"].join("\n"),
-      kind: "inner", missing: "helper-missing" },
-    { name: "F1 同类 make：缺的是 prerequisite，不是目标本身", command: "make test", exitCode: 2,
-      log: "make: *** No rule to make target 'fixture.json', needed by 'test'.  Stop.",
+      log: "FAILURE: Task 'accept' not found in root project 'app'.", kind: "inner", missing: "accept" },
+    { name: "zsh", command: "kbtest", exitCode: 127,
+      log: "zsh: command not found: kbtest", kind: "inner", missing: "kbtest" },
+    { name: "bash", command: "kbtest", exitCode: 127,
+      log: "bash: line 1: kbtest: command not found", kind: "inner", missing: "kbtest" },
+    { name: "dash", command: "kbtest", exitCode: 127,
+      log: "sh: 1: kbtest: not found", kind: "inner", missing: "kbtest" },
+    { name: "脚本文件不在树里", command: "./run-accept.sh", exitCode: 127,
+      log: "sh: ./run-accept.sh: No such file or directory", kind: "inner", missing: "./run-accept.sh" },
+    { name: "PowerShell", command: ".\\kb.ps1 test", exitCode: 1,
+      log: "The term '.\\kb.ps1' is not recognized as the name of a cmdlet, function, script file, or operable program.",
+      kind: "inner", missing: ".\\kb.ps1" },
+    { name: "cmd.exe", command: "kbtest", exitCode: 1,
+      log: "'kbtest' is not recognized as an internal or external command,", kind: "inner", missing: "kbtest" },
+
+    // ── 起跑前核到「入口在树里」：命令确实跑起来了，缺的是它内部那一层点名的东西 ──
+    { name: "同名嵌套（审查二 F1 反例①）", command: "npm run test:accept", exitCode: 1,
+      log: 'ACCEPTANCE STARTED\nnpm error Missing script: "test:accept"\n',
+      entry: { ask: "test:accept", resolved: true, by: PROBE_BY },
+      kind: "inner", missing: "test:accept" },
+    { name: "自删入口后报断言失败（审查二 F1 反例②）", command: "./verify.sh", exitCode: 1,
+      log: "ACCEPTANCE STARTED\nASSERTION FAILED\n",
+      entry: { ask: "./verify.sh", resolved: true, by: "被测快照里的文件" },
+      kind: null },
+    { name: "同名但起跑前没核到", command: "npm run test:accept", exitCode: 1,
+      log: 'npm error Missing script: "test:accept"\n', entry: null,
+      kind: "inner", missing: "test:accept" },
+    { name: "跑起来之后缺模块", command: "npm run test:accept", exitCode: 1,
+      log: "node:internal/modules: Error: Cannot find module 'playwright'",
+      entry: { ask: "test:accept", resolved: true, by: PROBE_BY }, kind: "inner", missing: "playwright" },
+    { name: "跑起来之后缺 python 包", command: "npm run test:accept", exitCode: 1,
+      log: "/usr/bin/python3: No module named pytest",
+      entry: { ask: "test:accept", resolved: true, by: PROBE_BY }, kind: "inner", missing: "pytest" },
+    { name: "make 缺 prerequisite", command: "make accept", exitCode: 2,
+      log: "KB START\nmake: *** No rule to make target 'fixture.json', needed by 'accept'.  Stop.",
       kind: "inner", missing: "fixture.json" },
-    { name: "F1 同类 shell：脚本跑起来了，它内部调的程序没装", command: "./kb.sh test", exitCode: 127,
-      log: "KB START\nsh: 1: legacy-tool: not found", entryPresent: true, kind: "inner", missing: "legacy-tool" },
-    { name: "F1 同类 yarn：顶层在跑，子 runner 的脚本名缺了", command: "yarn accept", exitCode: 1,
-      log: 'yarn run v1.22\n$ node ci.js\nerror Command "inner-step" not found.', kind: "inner", missing: "inner-step" },
-    // 命令内部要用的模块/包：本来就是 inner，出路不同，所以不改写 failure。
-    { name: "命令里一步缺模块", command: "npm run test:accept", exitCode: 1,
-      log: "node:internal/modules: Error: Cannot find module 'playwright'", kind: "inner", missing: "playwright" },
-    { name: "命令里一步缺 python 包", command: "./kb.sh test", exitCode: 1,
-      log: "/usr/bin/python3: No module named pytest", kind: "inner", missing: "pytest" },
-    // 只剩退出码:POSIX 说的是「shell 找不到要执行的东西」,可一个已经跑起来的脚本最后一步
-    // 撞上同样的事也会这么退 —— 所以**只够 inner**,不许据此宣称顶层没启动(审查 N1)。
+
+    // ── 只剩退出码：POSIX 约定说的是 shell 找不到东西，但跑起来的脚本也能这么退 ──
     { name: "只有退出码 127", command: "./kb.sh test", exitCode: 127, log: "（没有可读的输出）", kind: "inner", missing: null },
     { name: "只有退出码 126", command: "./kb.sh test", exitCode: 126, log: "", kind: "inner", missing: null },
-    // 真跑起来、真红了的：一个字都不许改写。
-    { name: "普通断言失败", command: "npm run test:accept", exitCode: 1,
-      log: ["1) auth > rejects expired token", "   AssertionError: expected 401 to equal 200", "", "1 failing"].join("\n"),
-      kind: null },
-    { name: "被测代码自己打出来的 not found（在几十行输出之后）", command: "npm run test:accept", exitCode: 1,
-      log: Array.from({ length: 60 }, (_, line) => `  ✓ case ${line}`).join("\n")
-        + "\n  ✗ shell fallback: expected \"sh: 1: legacy-tool: not found\" to be handled\n1 failing",
-      kind: null },
+
+    // ── 真跑起来、真红了：一个字都不许被改写 ──
+    { name: "真的断言失败", command: "npm run test:accept", exitCode: 1,
+      log: "KB START\n1) 登录态应当保留\n   AssertionError: expected 200 to equal 302\n  1 failing\n",
+      entry: { ask: "test:accept", resolved: true, by: PROBE_BY }, kind: null },
+    { name: "日志里只是提到过这些字", command: "npm run test:accept", exitCode: 1,
+      log: "KB START\n看文档: 如果报 missing script 就先 npm i\n  2 failing\n",
+      entry: { ask: "test:accept", resolved: true, by: PROBE_BY }, kind: null },
   ];
   for (const testCase of MISS_CASES) {
     const miss = classifyGateLaunch({ command: testCase.command, exitCode: testCase.exitCode, log: testCase.log,
-      entryPresent: testCase.entryPresent });
+      entry: testCase.entry });
     assert.equal(miss?.kind ?? null, testCase.kind, `${testCase.name}: 归类应为 ${testCase.kind}，实际 ${miss?.kind ?? "null"}（${miss?.by ?? "-"}）`);
     if (testCase.kind) assert.equal(miss!.name, testCase.missing ?? null, `${testCase.name}: 缺的那个名字抽错了`);
     // failure 只在 entry 这一档改写：inner 和「认不出」都必须原样留在 exit_code 上，
@@ -223,9 +211,64 @@ try {
     assert.ok(miss?.evidence?.trim() || !testCase.kind, `${testCase.name}: 认出来了就必须留下判据原文`);
   }
 
-  // 整词命中：子串会把 `test:accept-merge` 算成含 `test:accept`，而原始事故的仓库里恰好
-  // 两者都有 —— 按子串算，「目标分支有、快照没有」的落点就会把真正那个文件排除掉
-  // （第 1 轮审查 F3 实测）。
+  // 上面那张表的每一种措辞，都再跑两遍，钉住那条不变量（审查二 F1）：
+  //  · 起跑前核出来「入口不在树里」→ 才许落 entry；
+  //  · 核出来「在树里」、或压根没核到  → 一律不许落 entry，哪怕日志措辞一模一样。
+  for (const testCase of MISS_CASES.filter(one => one.missing)) {
+    const ask = testCase.missing!;
+    const absent = classifyGateLaunch({ ...testCase, entry: { ask, resolved: false, by: PROBE_BY } });
+    assert.equal(absent?.kind, "entry", `${testCase.name}: 起跑前核出「不在树里」就该落 entry`);
+    assert.equal(absent!.name, ask, `${testCase.name}: entry 的名字取起跑前核的那个`);
+    assert.match(absent!.evidence, /起跑前核过/, `${testCase.name}: entry 的判据必须是起跑前那份事实`);
+    for (const entry of [{ ask, resolved: true, by: PROBE_BY }, null]) {
+      const weaker = classifyGateLaunch({ ...testCase, entry });
+      assert.notEqual(weaker?.kind, "entry",
+        `${testCase.name}: ${entry ? "入口在树里" : "起跑前没核到"}时,日志措辞不许把它抬成 entry`);
+      assert.equal(missFailure(weaker), null, `${testCase.name}: 没有起跑前的事实,failure 不许被改写`);
+    }
+  }
+
+  // 「这条命令点名要跑的是什么」—— 认不出来必须交白卷（null），不许挑一个来充当那个入口。
+  for (const [command, expected] of [
+    ["npm run test:accept", { kind: "script", runner: "npm", name: "test:accept" }],
+    ["CI=1 npm run test:accept -- --ci", { kind: "script", runner: "npm", name: "test:accept" }],
+    ["npm run-script accept", { kind: "script", runner: "npm", name: "accept" }],
+    ["pnpm run accept", { kind: "script", runner: "pnpm", name: "accept" }],
+    ["yarn run accept", { kind: "script", runner: "yarn", name: "accept" }],
+    ["npm test", { kind: "script", runner: "npm", name: "test" }],
+    ["npm run test:accept > out.log 2>&1", { kind: "script", runner: "npm", name: "test:accept" }],
+    // 点名要跑的是那个**脚本文件**,不是传给它的参数 —— 参数在不在树里,这一层答不了。
+    ["./runner.sh test:accept", { kind: "path", name: "./runner.sh" }],
+    ["./only-on-target.sh 2>/dev/null", { kind: "path", name: "./only-on-target.sh" }],
+    ["scripts/verify.sh", { kind: "path", name: "scripts/verify.sh" }],
+    // 多步没有「一个入口」可言;裸程序名、绝对路径、命令替换也都核不了。
+    ["npm ci && npm run test:accept", null],
+    ["cd web; npm run test:accept", null],
+    ["npm run a | tee log", null],
+    ["kbtest", null],
+    ["make accept", null],
+    ["yarn accept", null],
+    ["/usr/local/bin/kb test", null],
+    ["$(cat cmd.txt)", null],
+  ] as const) {
+    assert.deepEqual(gateEntryAsk(command), expected, `入口解析错了：${command}`);
+  }
+
+  // package.json 的 scripts 是定义级判据：读不动/形状不对一律 null（「不知道」）。
+  for (const [manifest, name, expected] of [
+    ['{"scripts":{"test:accept":"node x"}}', "test:accept", true],
+    ['{"scripts":{"test:accept-merge":"node x"}}', "test:accept", false],
+    ['{"scripts":{}}', "test:accept", false],
+    ['{"description":"run test:accept"}', "test:accept", false],
+    ['{"scripts":null}', "test:accept", null],
+    ['{"scripts":{"test:accept":{}}}', "test:accept", false],
+    ["not json at all", "test:accept", null],
+  ] as const) {
+    assert.equal(scriptDefinedIn(manifest, name), expected, `scripts 判据算错了：${manifest}`);
+  }
+
+  // 整词命中（文字线索那一路用它）：子串会把 `test:accept-merge` 算成含 `test:accept`，
+  // 而原始事故的仓库里恰好两者都有（第 1 轮审查 F3 实测）。
   for (const [text, hit] of [
     ['{"scripts":{"test:accept":"node x"}}', true],
     ['{"scripts":{"test:accept-merge":"node x"}}', false],
@@ -237,81 +280,113 @@ try {
     assert.equal(occursAsWord(text, "test:accept"), hit, `整词判据算错了：${text}`);
   }
 
-  // 结论的措辞。三件事（没启动 / 目标分支上的情形 / 出路）要齐，而且**出路必须跟核实档位
-  // 对上**（第 1 轮审查 F4：旧版本连「目标分支上也没有」都照样保证「合进来就在树里了」）。
-  const entryMiss = { kind: "entry" as const, name: "test:accept", evidence: 'npm error Missing script: "test:accept"', by: "npm" };
-  const confirmed = gateCommandMissNotice({
+  // ── 结论的措辞：三件事（没启动 / 目标分支上的情形 / 出路）要齐,而且**出路必须跟核实
+  //    档位对上**。存在性只认定义级/文件级判据,文字命中只是线索（审查二 F2）。
+  const entryMiss = { kind: "entry" as const, name: "test:accept", entryResolved: false,
+    evidence: '起跑前核过：被测快照 package.json 的 scripts里没有 test:accept', by: PROBE_BY };
+  const origin = (patch: Partial<GateMissOrigin>): GateMissOrigin => ({
+    targetBranch: "main", targetCommit: "cf182e15bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", behind: 80,
+    holders: [], absent: null, removedByTask: null, unverified: false, ...patch });
+  const notice = (patch: Partial<Parameters<typeof gateCommandMissNotice>[0]>) => gateCommandMissNotice({
     command: "npm run test:accept", miss: entryMiss, sourceCommit: "de91d6c0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    origin: { targetBranch: "main", targetCommit: "cf182e15bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", behind: 80, unverified: false,
-      holders: [{ file: "package.json", how: "text", commit: "968c5de45ab4ebde5252f6cc0a5e16fc690d49a2",
-        date: "2026-10-24T17:24:52+08:00", subject: "Move frontend regression from push to acceptance" }] },
-  });
-  assert.match(confirmed, /一行都没跑到/, "① 命令点名要跑的东西没解析出来");
-  assert.match(confirmed, /Missing script/, "① 判据原文");
-  assert.match(confirmed, /package\.json/, "② 它在目标分支上的落点");
-  assert.match(confirmed, /968c5de4/, "② 最早写进那个文件的是哪次提交");
-  assert.match(confirmed, /落后 main 80 个提交/, "② 任务分支落后目标分支多少");
-  assert.match(confirmed, /文字命中，不等于它就是那条命令的定义/, "② 不许把文字命中冒充命令定义");
-  assert.match(confirmed, /把 main 合进任务分支/, "③ 核实过目标分支上有，才给合入建议");
-  assert.match(confirmed, /跳过前置命令/, "③ 出路之二：这次显式跳过");
-  assert.match(confirmed, /都要你自己定/, "两条出路都是用户的决定，ash 不许自己做");
-  assert.equal(/\*\*|`/.test(confirmed), false, "结论要纯文本：日志和 MCP 回执都不渲染 markdown（N4）");
+    origin: null, ...patch });
+  const holder = { commit: "968c5de45ab4ebde5252f6cc0a5e16fc690d49a2",
+    date: "2026-10-24T17:24:52+08:00", subject: "Move frontend regression from push to acceptance" };
 
-  // 路径模式那一档是**文件级的确定事实**，措辞不许套用文字命中的对冲（反过来也不许）。
+  // ① 定义级：读出目标分支那份 manifest 核过。这一档敢直说,也敢给合入建议。
+  const defined = notice({ origin: origin({ holders: [{ file: "package.json", how: "definition", ...holder }] }) });
+  assert.match(defined, /一行都没跑到/, "① 命令点名要跑的东西没解析出来");
+  assert.match(defined, /起跑前核过/, "① 判据是起跑前那份事实");
+  assert.match(defined, /是有定义的/, "② 定义级事实可以直说");
+  assert.match(defined, /968c5de4/, "② 最早写进那个文件的是哪次提交");
+  assert.match(defined, /落后 main 80 个提交/, "② 任务分支落后目标分支多少");
+  assert.match(defined, /把 main 合进任务分支/, "③ 核实过目标分支上有,才给合入建议");
+  assert.match(defined, /跳过前置命令/, "③ 出路之二：这次显式跳过");
+  assert.match(defined, /都要你自己定/, "两条出路都是用户的决定,ash 不许自己做");
+  assert.equal(/文字命中/.test(defined), false, "定义级不该退回文字命中那一档的对冲");
+  assert.equal(/\*\*|`/.test(defined), false, "结论要纯文本：日志和 MCP 回执都不渲染 markdown");
+
+  // ② 文字命中只是线索 —— 措辞必须说破,否则就是拿检索结果冒充命令定义（审查一 F3）。
+  const byText = notice({ origin: origin({ holders: [{ file: "docs/ci.md", how: "text", ...holder }] }) });
+  assert.match(byText, /文字命中，不等于它就是那条命令的定义/, "② 不许把文字命中冒充命令定义");
+  assert.match(byText, /把 main 合进任务分支/, "② 线索也算正面证据,出路照给但要带条件");
+  assert.match(byText, /合完仍然报同样的错/, "② 并且要说清合完可能还是不行");
+
+  // ③ 文件级（命令点名的就是个文件）：确定事实,不必对冲。
   const byPath = gateCommandMissNotice({
     command: "./kb.sh test full", sourceCommit: "de91d6c0",
-    miss: { kind: "entry", name: "./kb.sh", evidence: "被测快照里没有 ./kb.sh 这个文件", by: "entry-absent" },
-    origin: { targetBranch: "main", targetCommit: "cf182e15", behind: 4, unverified: false,
-      holders: [{ file: "kb.sh", how: "path", commit: "aaaa1111bbbb2222cccc3333dddd4444eeee5555",
-        date: "2026-10-25T09:00:00+08:00", subject: "add gate entry script" }] },
+    miss: { kind: "entry", name: "./kb.sh", entryResolved: false, by: "被测快照里的文件",
+      evidence: "起跑前核过：被测快照里的文件里没有 ./kb.sh" },
+    origin: origin({ behind: 4, holders: [{ file: "kb.sh", how: "path", ...holder }] }),
   });
   assert.match(byPath, /只有目标分支上有/, "文件级事实可以直说");
-  assert.match(byPath, /那时这个文件就在树里了/, "文件级事实的合入建议不必对冲");
+  assert.match(byPath, /那时它就在树里了/, "文件级事实的合入建议不必对冲");
   assert.equal(/文字命中/.test(byPath), false, "路径模式不许套用文字命中的对冲");
 
-  // 目标分支上也没有：合分支解决不了,**绝不许**给合入建议。
-  const absent = gateCommandMissNotice({
-    command: "npm run test:accept", miss: entryMiss, sourceCommit: "de91d6c0",
-    origin: { targetBranch: "main", targetCommit: "cf182e15", behind: 3, unverified: false, holders: [] },
-  });
+  // ④ 目标分支上**确实**也没有（定义级核出来的）：合分支解决不了,绝不许给合入建议。
+  const absent = notice({ origin: origin({ behind: 3, absent: "definition" }) });
   assert.match(absent, /上也找不到/, "如实说目标分支上也没有");
   assert.match(absent, /合目标分支进来也不会让它出现/, "要说破合分支解决不了");
   assert.match(absent, /核对项目设置里这条验收前置命令本身/, "换成真正的出路");
-  assert.equal(/合进任务分支/.test(absent), false, "目标分支上也没有时，不许保证合入能解决（F4）");
+  assert.equal(/合进任务分支/.test(absent), false, "目标分支上也没有时,不许保证合入能解决");
 
-  // 没核对出来（不是 git 任务 / 分支读不出 / 核对超了预算）：如实说不知道，同样不许保证。
-  for (const origin of [null, { targetBranch: "main", targetCommit: "cf182e15", behind: 3, unverified: true, holders: [] }]) {
-    const unknown = gateCommandMissNotice({ command: "npm run test:accept", miss: entryMiss, sourceCommit: null, origin });
+  // ⑤ 没核对出来。**文字检索查空也落在这一档**（审查二 F2：基线 description 里提过一句,
+  //    就足以让「出现这个名字的文件集合」差集为空,而定义明明在目标分支上）。
+  for (const unverifiedOrigin of [null, origin({ behind: 3, unverified: true }),
+    origin({ behind: 3, unverified: false, holders: [], absent: null })]) {
+    const unknown = notice({ origin: unverifiedOrigin });
     assert.match(unknown, /没能核对出来/, "如实说没核对出来");
     assert.match(unknown, /不能保证/, "明说不能保证合入就解决");
-    assert.equal(/把 main 合进任务分支/.test(unknown), false, "没核实过就不许给确定的合入建议（F4）");
+    assert.equal(/把 main 合进任务分支/.test(unknown), false, "没核实过就不许给确定的合入建议");
+    assert.equal(/上也找不到/.test(unknown), false, "更不许反过来说目标分支上也没有（审查二 F2）");
   }
 
-  // inner 那一档的措辞：既不敢说「测试没跑」，也不敢说「跟这次改动无关」，更不给出路保证。
-  const inner = gateCommandMissNotice({
+  // ⑥ 是**这次改动**把它弄没的：缺失推不出「与本次改动无关」（审查二 F1 末条）。
+  const mine = notice({ origin: origin({ behind: 2, removedByTask: true }) });
+  assert.match(mine, /开工基线上/, "要说清它在基线上是有的");
+  assert.match(mine, /删掉或改名/, "要指出最可能的原因");
+  assert.match(mine, /要改代码的一种/, "这一档的出路就是去改代码");
+  assert.equal(/都要你自己定/.test(mine), false, "这一档不该先摆成「用户拍板」那两条出路");
+
+  // ── inner 三种措辞：命令整体有没有跑起来,只许照起跑前那份事实说（审查二 F1）──
+  const innerOf = (patch: Partial<Parameters<typeof gateCommandMissNotice>[0]["miss"]>) => gateCommandMissNotice({
     command: "npm run test:accept", sourceCommit: "de91d6c0", origin: null,
-    miss: { kind: "inner", name: "./regressed-helper.cjs", evidence: "Cannot find module './regressed-helper.cjs'", by: "node" },
+    miss: { kind: "inner", name: "./regressed-helper.cjs", by: "node", entryResolved: null,
+      evidence: "Cannot find module './regressed-helper.cjs'", ...patch },
   });
-  assert.match(inner, /这条命令跑起来了/, "inner 要如实说命令启动了");
+  const inner = innerOf({ entryResolved: true });
+  assert.match(inner, /确实跑起来了/, "核过入口在树里,这一句才敢说");
   assert.match(inner, /也可能是这次改动把名字写错了/, "inner 不许排除「是你改出来的」");
-  assert.equal(/一行都没跑到|跳过前置命令|合进任务分支/.test(inner), false, "inner 不许摆那两条出路，也不许说测试没跑（F1/F4）");
+  assert.equal(/一行都没跑到|跳过前置命令|合进任务分支/.test(inner), false, "inner 不许摆那两条出路,也不许说测试没跑");
+
+  const unknownStart = innerOf({ entryResolved: null });
+  assert.match(unknownStart, /这一层核不出来/, "没核到就不许说它跑起来了");
+  assert.equal(/确实跑起来了/.test(unknownStart), false, "没核到就不许说它跑起来了");
+
+  const sameName = innerOf({ name: "test:accept", entryResolved: null, sameName: true,
+    evidence: 'npm error Missing script: "test:accept"' });
+  assert.match(sameName, /可能不是一回事/, "同名那一条必须说破两件事可能不是一回事");
+  assert.match(sameName, /不敢断定它有没有跑起来/, "没核实到就明说不敢断定");
+  assert.equal(/一行都没跑到/.test(sameName), false, "同名不等于顶层缺失（审查二 F1 反例①）");
 
   // 第 1 轮审查 F2：回流模板按**失败类型**分支,不拿「有没有诊断文字」代替类型。
-  // inner 的诊断（failure 仍是 exit_code）绝不能被交成「不要改任何代码」。
   const promptOf = (failure: "command_missing" | "exit_code", diagnosis: string) => gateFailurePrompt({
     command: "npm run test:accept", summary: "未通过", logPath: "/tmp/gate.log", tail: "…",
     cwd: "/tmp/snap", sourceCwd: "/tmp/ws", failure, diagnosis,
   });
   const innerPrompt = promptOf("exit_code", inner);
   assert.match(innerPrompt, /定位到底是哪一条红的/, "inner 走的是普通「去修」那一版");
-  assert.equal(innerPrompt.includes("不要为这件事改任何代码"), false, "inner 不许被交成「不许修」（F2）");
+  assert.equal(innerPrompt.includes("不要为这件事改任何代码"), false, "inner 不许被交成「不许修」");
   assert.ok(innerPrompt.includes(inner), "inner 的那段观察仍要附上去 —— 它是定位线索");
   assert.equal(innerPrompt.includes("没能启动"), false, "inner 不是「没能启动」");
-  const missingPrompt = promptOf("command_missing", confirmed);
+  const missingPrompt = promptOf("command_missing", defined);
   assert.match(missingPrompt, /不要为这件事改任何代码/, "command_missing 才换那副面孔");
   assert.match(missingPrompt, /转述给用户/);
+  assert.match(missingPrompt, /以上面那段结论为准/, "出路和核实档位都由结论说,模板不自己下判断");
+  assert.equal(/这条红跟你这次的改动无关/.test(missingPrompt), false,
+    "缺失推不出「与本次改动无关」（审查二 F1 末条）");
   assert.equal(missingPrompt.includes("定位到底是哪一条红的"), false, "普通红那一版的措辞不该出现在这一种上");
-  console.log("✅ 门禁失败归类（entry/inner 两档 29 种形状 + 嵌套不冒充顶层 + 整词命中 + 出路跟核实档位对上 + 回流按失败类型分支）通过");
+  console.log("✅ 门禁失败归类（entry 只由起跑前事实授权 + 27 种措辞各验三遍 + 入口解析 + 定义级判据 + 出路跟核实档位对上）通过");
 } finally {
   for (const launch of launches) {
     assert.equal(await stopAcceptGate("process-test", launch.pid, launch.startedAt, launch.logPath), true);
