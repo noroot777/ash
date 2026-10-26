@@ -7,12 +7,13 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-// 依赖这一层的回归。依赖**不**逐文件深拷,放法有两种,判据是项目有没有声明 workspace 包:没声明
-// 就借一条指向工作区那一份的链(O(1)),声明了就整棵克隆进快照(数据块共享)。为什么这么分、换掉了
-// 什么检测力、接受了什么代价,全写在 src/accept-gate-deps.ts 顶部。这里钉的是:快照里命令真能跑
-// 起来、清理绝不碰用户的依赖、换一次安装声明必须被认成「依赖变了」、没装依赖时行为和以前一样、
-// 依赖根自己是链的三种落点、深拷退路,以及 monorepo 的**三个运行时入口**都必须落在快照自己那份
-// 源码上(直接 import / 被借包的传递导入 / .bin 里的 CLI shim),和「依赖根不可达时不许拖垮快照」。
+// 依赖这一层的回归。依赖**不**逐文件深拷,放法有两种,判据是依赖树里有没有一条链落回项目自己的
+// 源码:没有就借一条指向工作区那一份的链(O(1)),有就整棵克隆进快照(数据块共享)。为什么这么分、
+// 换掉了什么检测力、接受了什么代价,全写在 src/accept-gate-deps.ts 顶部。这里钉的是:快照里命令
+// 真能跑起来、清理绝不碰用户的依赖、换一次安装声明必须被认成「依赖变了」、没装依赖时行为和以前
+// 一样、依赖根自己是链的三种落点、克隆遍历本身的保真度,以及 monorepo 的**三个运行时入口**都必须
+// 落在快照自己那份源码上(直接 import / 被借包的传递导入 / .bin 里的 CLI shim),和「依赖根不可达
+// 时不许拖垮快照」。
 const root = mkdtempSync(join(tmpdir(), "ash-gate-borrow-"));
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -216,7 +217,8 @@ try {
   await assert.rejects(readGateSource(loose), /未跟踪/,
     "依赖落点是个未跟踪也没忽略的目录:照未跟踪文件拒掉,不再默许");
 
-  // ── 6. 建不出链时的退路:copyTree 按链重建、绝不跟随(跟随会把 .venv 指向的整个解释器拷进来)。
+  // ── 6. 克隆遍历本身的保真度:copyTree 按链重建、绝不跟随(跟随会把 .venv 指向的整个解释器拷进
+  // 来)。克隆形态和「建不出链时的回落」走的都是这一个遍历,所以这几条断言覆盖两条路。
   const fallbackSource = join(root, "fallback-source");
   mkdirSync(join(fallbackSource, "pkg", "dist"), { recursive: true });
   writeFileSync(join(fallbackSource, "pkg", "dist", "sibling.mjs"), 'export const mark = "sibling";\n');
@@ -232,17 +234,17 @@ try {
   }
   const fallbackCopy = join(root, "fallback-copy");
   await copyTree(fallbackSource, fallbackCopy);
-  assert.equal(lstatSync(join(fallbackCopy, "linked-dist")).isSymbolicLink(), true, "退路里目录链不能被整棵拷成真目录");
+  assert.equal(lstatSync(join(fallbackCopy, "linked-dist")).isSymbolicLink(), true, "克隆里目录链不能被整棵拷成真目录");
   assert.equal(readFileSync(join(fallbackCopy, "linked-dist", "sibling.mjs"), "utf8"), 'export const mark = "sibling";\n');
   if (process.platform !== "win32") {
-    assert.equal((lstatSync(join(fallbackCopy, "executable.sh")).mode & 0o777).toString(8), "755", "退路里可执行位要保住");
+    assert.equal((lstatSync(join(fallbackCopy, "executable.sh")).mode & 0o777).toString(8), "755", "克隆里可执行位要保住");
   }
   if (fileLinks) {
     assert.equal(execFileSync(process.execPath, [join(fallbackCopy, "cli.mjs")], { encoding: "utf8" }).trim(), "sibling",
-      "退路里按自身 realpath 找同胞模块的 cli 仍跑得起来");
-    assert.equal(lstatSync(join(fallbackCopy, "dangling")).isSymbolicLink(), true, "退路不被悬空链崩掉");
+      "克隆里按自身 realpath 找同胞模块的 cli 仍跑得起来");
+    assert.equal(lstatSync(join(fallbackCopy, "dangling")).isSymbolicLink(), true, "克隆不被悬空链崩掉");
     assert.equal(lstatSync(join(fallbackCopy, "outward.mjs")).isSymbolicLink(), true,
-      "退路里树外链仍按链保留:跟随它会把 .venv 指向的整个解释器拷进快照");
+      "克隆里树外链仍按链保留:跟随它会把 .venv 指向的整个解释器拷进快照");
     assert.equal(readlinkSync(join(fallbackCopy, "outward.mjs")), join(external, "runtime.mjs"), "落点原文照抄");
   }
   // 对账只能按**落点**:借用之后两边读的是同一份文件,摘要恒等、证明不了任何事。这里把
@@ -254,14 +256,14 @@ try {
   assert.deepEqual(noWorkspace.names, [], "package.json 里没有 workspaces 就是没声明");
   assert.equal(noWorkspace.declared, false, "没有 workspaces 字段才算没声明");
   assert.equal(declaresWorkspace("node_modules", noWorkspace), false, "没声明 workspace 包:声明这一侧不要求独立(实际放法还要看落点扫描)");
-  assert.equal(await provideDependency(repo, roundTrip, "node_modules", false), "link",
-    "没声明 workspace 包时就是一条链,O(1)");
+  assert.equal(await provideDependency(repo, roundTrip, "node_modules", noWorkspace), "link",
+    "没声明 workspace 包、依赖树里也没有链落回源码时就是一条链,O(1)");
   assert.equal(await dependencyMismatch(repo, roundTrip, "node_modules", "link", noWorkspace), null,
     "借用建出来的链,落点就是工作区那一份");
   rmSync(join(roundTrip, "node_modules"));
   await copyTree(join(repo, "node_modules"), join(roundTrip, "node_modules"));
   assert.notEqual(await dependencyMismatch(repo, roundTrip, "node_modules", "link", noWorkspace), null,
-    "不是链(深拷退路落在这个位置)时对不上账,调用方据此回到老办法");
+    "不是链(克隆形态落在这个位置)时对不上账,调用方据此回到老办法");
   // 包管理器随时在改依赖树:读完目录到读条目之间文件被删掉不该崩掉整次快照。
   await copyTree(join(root, "never-existed"), join(root, "never-copied"));
   assert.equal(existsSync(join(root, "never-copied")), false);
@@ -421,5 +423,5 @@ try {
     realpathSync(join(looseMonoSnap, "packages", "lib")), "非 Git 项目同样解析到快照自己那份源码");
   assert.equal(runIn(join(looseMonoSnap, "probe.mjs")), "looseMono-certified");
 
-  console.log("accept-gate-borrow: launch-from-snapshot, cleanup safety, install-declaration identity, no-dependencies parity, link roots, workspace isolation across all four runtime entries, unreachable roots and the deep-copy fallback passed");
+  console.log("accept-gate-borrow: launch-from-snapshot, cleanup safety, install-declaration identity, no-dependencies parity, link roots, workspace isolation across all four runtime entries, unreachable roots and clone-traversal fidelity passed");
 } finally { rmSync(root, { recursive: true, force: true }); }
