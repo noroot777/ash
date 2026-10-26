@@ -54,8 +54,9 @@ export const regressionEvidence = sqliteTable("regression_evidence", {
   directory: text("directory").primaryKey(),
   taskId: text("task_id").notNull(),
   generation: text("generation").notNull(),
-  // 已退役(用户 2026-10-26 改回归口径):没有写入方也没有读取方,恒为 0。列和存量数据保留,
-  // 不做迁移 —— 退役原因见 `regression-evidence-lifecycle.ts` 的 `evidenceState`。
+  // 祖父标记(用户 2026-10-26 改回归口径):**没有写入方了,但读取方全在**。新轮次恒为 0;口径
+  // 切换前的存量行可能是 1,那些旧轮次的结论仍要附一份本轮真实执行依据。别按「恒为 0」化简
+  // 任何判据 —— 原委见 `regression-evidence-lifecycle.ts` 的 `evidenceState`。
   revoked: integer("revoked", { mode: "boolean" }).notNull().default(false),
   excludedMonitors: text("excluded_monitors", { mode: "json" }).$type<string[]>().notNull(),
   acceptedBasis: text("accepted_basis", { mode: "json" }).$type<IndependentVerificationBasis>(),

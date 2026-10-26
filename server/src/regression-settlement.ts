@@ -98,6 +98,8 @@ export async function completeRegressionSettlement(directory: string, checked: C
       if (!owner || await reviewContinuationPending(transaction, owner, state)) return false;
     }
     if (!state?.settlement?.pending || state.generation !== checked.generation || state.settlement.outcome !== checked.outcome) return false;
+    // 同上：存量 revoked=1 的旧轮次，没交依据就不许把通过结论落定（新轮次 revoked 恒为 0，这一支不触发）。
+    if (checked.target && checked.outcome === "done" && checked.conclusion === "verified" && state.revoked && !state.acceptedBasis) return false;
     const owner = (await transaction.select().from(tasks).where(eq(tasks.id, state.settlement.ownerTaskId)))[0];
     const ownsRound = owner && (await activeReviewScope(transaction, owner))?.directory === directory;
     const wait = ownsRound ? await reviewWaitForExit(transaction, owner, state) : undefined;

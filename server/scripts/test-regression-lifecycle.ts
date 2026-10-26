@@ -18,6 +18,7 @@ const { handleTaskSettlement } = await import("../src/review.js");
 const { replayUndeliveredMcpCalls } = await import("../src/mcp-handoff.js");
 const { detachedPathsFor } = await import("../src/executors/detached.js");
 const { evidenceState, refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
+const { REVIEWER_REGRESSION_CLAUSE } = await import("@ash/shared/free-workflow");
 
 try {
   const { taskId, task, repo, evidenceDir, manifest, run, wait } = await setupRegression();
@@ -45,7 +46,7 @@ try {
   stale(evidenceDir);
   const reminder = await verifyReminderFor(taskId, 1);
   assert.match(reminder, /regression-evidence\.json.*禁止自动复用/);
-  assert.match(reminder, /回归测试统一在验收时执行，你只核对执行者登记的结果、自己不跑/, "续跑提醒带新口径");
+  assert.ok(reminder.includes(REVIEWER_REGRESSION_CLAUSE), "续跑提醒经清单说明带上同一份审查者口径");
   refreshed(evidenceDir);
   stale(evidenceDir);
   assert.match(await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 }), /regression-evidence\.json/);
@@ -105,6 +106,25 @@ try {
     error: { message: "Transport closed" }, status: "failed",
   } }) + "\n");
   assert.equal(await replayUndeliveredMcpCalls({ taskId, sessId: "lost-preset-positive", turnStart: presetReplayAt, agentType: "codex" }), 1);
+
+  // 存量 `revoked=1`（口径切换前写下的行，改口径那天线上有 167 条）**仍然算数**：新轮次不再写
+  // 它，但读取方一个都没删 —— 删了那些旧轮次就被静默放行（第 1 轮审查发现 1 实测）。要的是
+  // 「一份本轮真实执行」，不是回归，拒收文案也得这么说。
+  await db.update(schema.regressionEvidence).set({ revoked: true, acceptedBasis: null })
+    .where(eq(schema.regressionEvidence.directory, evidenceDir));
+  await db.update(tasks).set({ stage: "verifying" }).where(eq(tasks.id, taskId));
+  const legacyRejected = await stage();
+  assert.equal(legacyRejected.status, 409, "存量撤销行没交依据，通过结论必须被拒");
+  const legacyError = (await legacyRejected.json() as { error: string }).error;
+  assert.match(legacyError, /口径切换前开的旧审查轮次/);
+  assert.match(legacyError, /不要为此去跑回归/, "拒收要的是一次真实执行，不是让审查者补跑回归");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!.stage, "verifying",
+    "被拒时结论一个字都没落下");
+  assert.equal((await db.select().from(schema.regressionEvidence)
+    .where(eq(schema.regressionEvidence.directory, evidenceDir)))[0]!.revoked, true, "拒收不会顺手把存量标记清掉");
+  assert.equal((await stage(presetBasis)).status, 200, "交了本轮真实执行依据，旧轮次照常放行");
+  await db.update(schema.regressionEvidence).set({ revoked: false })
+    .where(eq(schema.regressionEvidence.directory, evidenceDir));
 
   // 结算这一步在依据之后：它会把已接受的依据再核一遍（日志仍可读 → 通过），而「清单里有执行者
   // 登记结果」本身不再是降级理由。
@@ -224,6 +244,19 @@ try {
   const independent = (await db.select().from(schema.freeReviewRounds).where(eq(schema.freeReviewRounds.id, "independent-round")))[0]!;
   assert.equal(independent.status, "passed", "持久化的独立依据不依赖旧清单，结算可通过");
   assert.equal(independent.conclusion, "verified");
+
+  // 结算是第三层。把同一轮改回「存量撤销行 + 没交依据」再结算一次：基线语义是把通过结论
+  // **降级**成 verify_failed（不是静默放行、也不是留在原地），这一层跟着预检和事务内提交
+  // 一起保留，否则一个已经写进库的旧轮次只要绕过前两层就能把通过落定。
+  await db.update(schema.regressionEvidence).set({ revoked: true, acceptedBasis: null, settlement: null })
+    .where(eq(schema.regressionEvidence.directory, nextDir));
+  await db.update(schema.freeReviewRounds).set({ status: "reviewing", conclusion: "verified", endedAt: null })
+    .where(eq(schema.freeReviewRounds.id, "independent-round"));
+  await db.update(schema.freeReviewRuns).set({ status: "reviewing" }).where(eq(schema.freeReviewRuns.id, reviewRun.id));
+  await handleFreeWorkflowSettlement(taskId, "done", false, true, "reviewer");
+  const downgraded = (await db.select().from(schema.freeReviewRounds).where(eq(schema.freeReviewRounds.id, "independent-round")))[0]!;
+  assert.equal(downgraded.conclusion, "verify_failed", "存量撤销行没依据：结算把通过结论降级");
+  assert.equal(downgraded.status, "failed");
   console.log("✓ regression lifecycle: diagnostic-only manifest, conclusion gate independent of it, basis compat path, replay/restart/concurrent refresh, all settlements");
 } finally {
   await teardown();

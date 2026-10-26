@@ -34,7 +34,7 @@ server.registerTool(
         kind: z.literal("independent"),
         generation: z.string().min(1),
         monitorIds: z.array(z.string().min(1)).min(1),
-      }).optional().describe("已退役,正常情况不要传:回归测试统一在验收时执行,没有任何门禁会要求你补一份独立执行依据。只在重放旧回合那条未投递成功的 report_stage 时原样带回当时的值"),
+      }).optional().describe("正常情况不要传:回归测试统一在验收时执行,新开的审查轮次没有任何门禁会要求你补一份独立执行依据。两种例外——① 上报被拒、拒收说这是「口径切换前开的旧审查轮次」:按它说的交 monitorIds,**要的是一次本轮真实执行**(构建、接口冒烟、浏览器真实点检都算),不要为此去跑回归;② 重放旧回合那条未投递成功的 report_stage 时原样带回当时的值"),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },

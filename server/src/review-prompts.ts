@@ -55,7 +55,7 @@ function verifyRules(evidenceDir: string): string {
     // 而它挂的内置 Monitor 本来就活不过那一轮（它的进程在 agent 自己的进程树里）。现在
     // 那一下会被改道成 ash 哨兵（claude-monitor-hook.ts），但改道只换得掉进程归属，换不掉
     // 「回合就这么结束了」——所以这一句照样要说：挂完得用 pause_task 收尾。
-    `要等的那件事以分钟计（跑全量套件、长构建、长转码）时，别干等、也别就这么结束这一轮：` +
+    `要等的那件事以分钟计（长构建、接口冒烟、长转码）时，别干等、也别就这么结束这一轮：` +
     `用 ash 的 start_monitor 挂一条盯它的命令（过滤到你真会据此做事的那几行，成功与失败两类标记都要覆盖），` +
     `再用 pause_task 收尾本回合、写清「被叫醒后该干什么」——哨兵的进程由 ash 起，活得过你这一轮，` +
     `事件来了会把你这条会话重新叫醒，你当初写下的那段交代也会一起喂回来。` +
@@ -125,7 +125,7 @@ export async function verifyProtocolFor(
 export async function verifyReminderFor(taskId: string, round: number): Promise<string> {
   const dir = reviewRoundDir(taskId, round);
   const { reference } = await refreshRegressionEvidence(taskId, dir);
-  return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。验证须有真实执行依据；回归测试统一在验收时执行，你只核对执行者登记的结果、自己不跑。把报告写到 ${join(dir, "report.md")}，` +
+  return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。验证须有真实执行依据（回归口径见下面的清单说明）；把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     reference +
@@ -168,7 +168,7 @@ export async function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" 
   if (!review.reviewOf || !review.reviewRound) return "";
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
   const { reference } = await refreshRegressionEvidence(review.reviewOf, dir);
-  return `审查提醒:这是第 ${review.reviewRound} 轮审查；验证须有真实执行依据；回归测试统一在验收时执行，你只核对执行者登记的结果、自己不跑。把报告写到 ${join(dir, "report.md")}，` +
+  return `审查提醒:这是第 ${review.reviewRound} 轮审查；验证须有真实执行依据（回归口径见下面的清单说明）；把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     reference +

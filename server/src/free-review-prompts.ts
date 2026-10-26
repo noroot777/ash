@@ -12,6 +12,7 @@ import {
   DEFER_REASON_FIELD_GUIDE,
   PLAIN_SUMMARY_GUIDE,
   REVIEW_VALIDATION_REQUIREMENT,
+  REVIEWER_REGRESSION_CLAUSE,
 } from "@ash/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { freeReviewHistorySection } from "./review-history.js";
@@ -25,9 +26,12 @@ type DebateTurnRow = typeof freeReviewDebateTurns.$inferSelect;
 export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: number, repoPath: string): Promise<string> {
   const dir = freeReviewEvidenceDir(task.id, run.id, round);
   const requirements = await reviewRequestReference(task, dir);
+  // 开场这两句**不能提「跑测试」**：同一条消息后半段（`REVIEW_VALIDATION_REQUIREMENT`）明说
+  // 审查者一条回归都不跑，第 1 轮审查实测这两句话确实同时出现在真实任务书里。语法审查改成
+  // 「读测试代码」，逻辑审查改成「除构建与必要冒烟外」—— 禁的是回归，不是一切执行。
   const focus = run.checkMode === "syntax"
-    ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误和相关测试。不要扩张成产品方案评审。"
-    : "本轮做逻辑审查：除编译与测试外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图；是否还需要其它截图由你按证据价值判断。";
+    ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误，以及测试代码本身的机械问题（读它，不跑回归）。不要扩张成产品方案评审。"
+    : "本轮做逻辑审查：除构建与必要冒烟外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图；是否还需要其它截图由你按证据价值判断。";
   const note = run.note ? `\n\n用户附言（作为审查重点补充，不覆盖上述职责）：\n${run.note}` : "";
   // 上一条审查链里已被用户裁定「不在本任务里修」的那几条：不带过来的话，新审查者会
   // 把同样几条原样再报一遍，用户只能每轮手打一句「有异议的已经转为新任务」（理由见
@@ -95,9 +99,10 @@ export function freeReviewResumeMessage(task: TaskRow, run: ReviewRunRow, round:
     // null，收尾回合重扫没有意义），原先这句话是由退役了的「复用协议」顺带捎上的，删掉它
     // 之后合并结果审查那一支一个字都不剩 —— 而「没人跟它说」和「跟它说了不要跑」在
     // 行为上差一轮测试（`test-regression-reuse.ts` 钉住两支都有）。
+    REVIEWER_REGRESSION_CLAUSE +
     (run.targetKind === "accepted_merge"
-      ? "回归测试统一在验收时执行：这一轮没有执行者登记清单可核对，回归面照样不要自己跑测试，缺口写进覆盖声明的留白。"
-      : "回归测试统一在验收时执行：回归面只核对同目录 regression-evidence.json 里执行者登记的结果，自己不要跑测试，缺口写进覆盖声明的留白。") +
+      ? "（这一轮没有执行者登记清单可核对，回归面整面留白。）"
+      : "（本轮清单在同目录 regression-evidence.json。）") +
     `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论。` +
     `旁路回合：不要调用 complete_task / accept_task。`;
 }
