@@ -130,10 +130,11 @@ try {
     "④ 源树与拷贝树必须算出同一个摘要");
   const danglingDir = join(linkSnapshot, "node_modules", "dangling-dir");
   assert.equal(lstatSync(danglingDir).isSymbolicLink(), true, "悬空目录链仍是链,不会拖垮整次快照");
-  if (process.platform === "win32") {
-    assert.equal(readlinkSync(danglingDir).startsWith("\\\\?\\"), true,
-      "发现5: Windows 上悬空的目录 junction 要按 junction 重建,不能改走要提权的文件软链");
-  }
+  // 悬空链只保证「还是链 + 落点原样」。种类保不住:node 不暴露 reparse tag,Windows 上 junction、
+  // 目录软链、文件软链三种悬空链的 lstat/stat/readlink 完全一致(192.168.1.187 真机实测,见
+  // accept-gate-tree.ts linkTarget 上方注释),所以悬空的 junction 在开发者模式下会按文件链重建。
+  assert.equal(readlinkSync(danglingDir), join(realpathSync(root), "missing-dependency-dir"),
+    "发现5: 悬空链的落点必须原样保留,不能被改写或丢掉");
   if (fileLinks) {
     const bin = join(linkSnapshot, "node_modules", ".bin", "cli.mjs");
     assert.equal(lstatSync(bin).isSymbolicLink(), true, "依赖树里的软链不能被拍平成真文件");

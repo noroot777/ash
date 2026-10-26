@@ -30,17 +30,18 @@ const portable = (path: string) => path.split(sep).join("/");
 const isDependencyPath = (rel: string) => portable(rel).split("/").some(part => DEPENDENCY_DIRS.includes(part));
 const treeRealPath = async (root: string) => await realpath(root).catch(() => root);
 
-// junction 的 readlink 回来是 \\?\D:\...\ 这种 Win32 长路径形式，不剥掉前缀和尾部分隔符，
-// path.relative 认不出它其实在树内（实测 relative("D:\\repo", "\\\\?\\D:\\repo\\nm") 原样返回长路径）。
-// 这个前缀同时是「原链接是 junction」的可靠标记：悬空目录 junction 的 stat 会失败，没有它就
-// 只能瞎猜链接种类。
+// Win32 长路径形式（\\?\D:\...）剥掉前缀和尾部分隔符再用：path.relative 认不出它其实在树内
+// （实测 relative("D:\\repo", "\\\\?\\D:\\repo\\nm") 原样返回长路径），不规范化会让同一个落点
+// 在两种写法下摘出两个值。注意**不能**拿这个前缀当「原链接是 junction」的标记：192.168.1.187
+// 真机实测(node 22.20、2026-10-26)，junction 的 readlink 回来就是干净的 "D:\path\target"，
+// libuv 已经把 \??\ 前缀剥掉了；junction / 目录软链 / 文件软链三种悬空链的 lstat、stat、
+// readlink 结果完全一致，node 不暴露 reparse tag，**悬空链的种类无从得知**（copyLink 据此取舍）。
 const longPath = /^\\\\\?\\(?=[A-Za-z]:\\)/;
-async function linkTarget(path: string): Promise<{ target: string; junction: boolean }> {
+async function linkTarget(path: string): Promise<string> {
   const raw = await readlink(path);
-  if (process.platform !== "win32") return { target: raw, junction: false };
+  if (process.platform !== "win32") return raw;
   const stripped = raw.replace(longPath, "");
-  const target = stripped.length > 3 && stripped.endsWith(sep) ? stripped.slice(0, -1) : stripped;
-  return { target, junction: stripped !== raw };
+  return stripped.length > 3 && stripped.endsWith(sep) ? stripped.slice(0, -1) : stripped;
 }
 
 // 落点必须按**文件系统语义**逐段解析，不能用 path.resolve 消 `..`：中间段是目录软链时，
@@ -48,6 +49,13 @@ async function linkTarget(path: string): Promise<{ target: string; junction: boo
 // bridge/../entry.mjs 落在 store/entry.mjs，不是同级的 entry.mjs）。摘要身份和重定位都以
 // 落点为准，词法规范化会既漏判输入变化、又把链接重定向到别的文件。末段故意不解析，这样多级
 // 链的每一级都保留自己的身份。
+// 这里的 realpath 必须是 node:fs/promises 那个（原生 uv，POSIX 语义）：fs.realpathSync 是 JS
+// 实现，入口就 path.resolve 把 `..` 按字面消掉，拿它算落点等于又回到词法规范化（实测
+// promises.realpath("<t>/bridge/..") = <t>/store，realpathSync 同一个输入给 <t>）。
+// 两个平台各自正确，不用分支：Win32 的路径解析器本来就在碰文件系统之前按字面消 `..`，所以
+// 同一条 bridge/../entry.mjs 在那边读到的就是同级 entry.mjs（192.168.1.187 真机 node 22.20
+// 实测：read-through-link=SIBLING，macOS 同一份脚本=INSIDE-STORE），原生 realpath 跟着
+// 平台走，落点与运行时真正打开的那个文件始终一致。
 async function linkLanding(path: string, target: string): Promise<string> {
   const full = isAbsolute(target) ? target : `${dirname(path)}${sep}${target}`;
   try { return join(await realpath(dirname(full)), basename(full)); }
@@ -56,25 +64,25 @@ async function linkLanding(path: string, target: string): Promise<string> {
 
 export async function freezesAsSource(root: string, path: string): Promise<boolean> {
   if (isDependencyPath(relative(root, path))) return false;
-  const { target } = await linkTarget(path);
+  const target = await linkTarget(path);
   return !insideTree(await treeRealPath(root), await linkLanding(path, target));
 }
 
-async function copyLink(source: string, destination: string, target: string, junction: boolean): Promise<void> {
+async function copyLink(source: string, destination: string, target: string): Promise<void> {
   if (process.platform !== "win32") return await symlink(target, destination);
   // Windows 有两种目录链：junction 不要权限、只认绝对路径，包管理器（pnpm 等）在那边就是用它把
   // 包连进 node_modules 的，所以目录链首选它（node 同样把 junction 报成 isSymbolicLink()，两侧
   // 摘要仍然对得上）；普通软链——包括所有文件链——要 SeCreateSymbolicLinkPrivilege，即开发者
   // 模式或管理员（实测 node 的 symlink 带 ALLOW_UNPRIVILEGED_CREATE，开发者模式下能建，而
   // PowerShell 的 New-Item 仍然要提权，别拿它的失败当本机结论）。
-  // 种类要按**原链接**判，不能按「目标解析得开不开」判：悬空或成环的目录 junction 其 stat 必然
-  // 失败，当成文件链就把一条免权限的链接改成了要提权的那种，没开发者模式时整次快照直接失败。
-  const resolved = await stat(source).then(info => info.isDirectory() ? "dir" : "file", () => junction ? "dir" : null);
+  // 种类只能按「目标解析得开不开」判：node 不暴露 reparse tag，悬空链三种种类长得一模一样
+  // （见 linkTarget 上面那段真机实测）。所以悬空时先试文件链——node_modules 里的断链绝大多数
+  // 是 .bin 下的文件链——失败再退 junction：开发者模式下第一次就成，没开发者模式时退到免权限
+  // 的 junction，两种环境都不会让一条断链拖垮整次快照，代价只是悬空链的种类可能与原件不同。
+  const resolved = await stat(source).then(info => info.isDirectory() ? "dir" : "file", () => null);
   const attempts: [string, "junction" | "dir" | "file"][] = resolved === "dir"
     ? [[resolve(dirname(destination), target), "junction"], [target, "dir"]]
     : resolved === "file" ? [[target, "file"]]
-      // 目标不可解析又不是 junction：按文件链优先，失败再退 junction——宁可种类退让，也不让一条
-      // 悬空链拖垮整次快照（node_modules 里的断链很常见）。
       : [[target, "file"], [resolve(dirname(destination), target), "junction"]];
   let failure: unknown;
   for (const [attempt, type] of attempts) {
@@ -141,7 +149,7 @@ async function walkTree(path: string, hash: ReturnType<typeof createHash>, walk:
   const info = await entryStats(path);
   if (info === null) return false;
   if (info.isSymbolicLink()) {
-    const { target, junction } = await linkTarget(path);
+    const target = await linkTarget(path);
     const landing = await linkLanding(path, target);
     const within = insideTree(walk.realRoot, landing);
     if (!within && !walk.dependency && !isDependencyPath(relative(walk.root, path))) {
@@ -166,7 +174,7 @@ async function walkTree(path: string, hash: ReturnType<typeof createHash>, walk:
       // 拒绝等于每台装了 homebrew/uv venv 的机器都过不了门禁；而被指向的 pnpm store、uv
       // cache、homebrew 前缀在实践中是内容寻址或只读的。代价是快照对这部分依赖不再是冻住的
       // 输入（git 跟踪的源码软链指向快照外仍然直接拒绝，见 createGateSnapshot）。
-      : landing, junction);
+      : landing);
   } else if (info.isFile()) {
     hash.update(`file:${info.mode & 0o111}:`);
     if (copy) {
