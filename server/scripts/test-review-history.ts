@@ -81,6 +81,22 @@ try {
     console.log(`✓ ${mode}: old pending settlement is retried and releases the round`);
   }
 
+  {
+    // 轮次目录这套东西上线之前跑完的老审查:一行证据都没留下,任务自己早已终态收口。
+    // 启动对账扫到它必须原样放过 —— 2026-10-26 那次重启把全库 112 条这样的审查退休成
+    // failed 并把 updatedAt 顶到当下,侧栏于是被几个月前的旧行铺满(年龄闸对 failed 豁免)。
+    const closed = await historical("legacy", "entire-state");
+    runs.releaseTurn(closed.ownerTaskId);
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, closed.ownerTaskId));
+    const before = await row(closed.ownerTaskId);
+    await reconcileRegressionSettlements(closed.ownerTaskId);
+    assert.deepEqual(await row(closed.ownerTaskId), before, "a closed historical review keeps its own terminal status and updatedAt");
+    assert.equal((await db.select().from(schema.regressionEvidence)
+      .where(eq(schema.regressionEvidence.directory, closed.directory))).length, 0,
+      "nothing is revoked where no ledger ever existed");
+    console.log("✓ legacy: a long-closed review without any ledger is not reopened by startup recovery");
+  }
+
   for (const mode of ["preset", "legacy", "free", "accepted_merge"] as const) {
     for (const missing of ["identity", "entire-state"] as const) {
       const review = await historical(mode, missing);
