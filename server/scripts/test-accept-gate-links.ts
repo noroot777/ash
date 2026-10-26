@@ -220,6 +220,20 @@ try {
       }
       expectIdentity(readlinkSync(syntaxCli), content, broken.fingerprint);
     }
+    // 相对原文 + 末尾 `/`:Win32 真机实测(2026-10-26)它落盘成 entry.mjs\、stat 是 ENOENT,而**绝对**
+    // 原文那一种反而在创建时就被平台去掉了尾分隔符,所以只有相对这一种钉得住「不许替链规范化
+    // 原文」。期望值一律取磁盘上那条链的原文(readlink),不写我们自己拼的字符串——拼出来的那个
+    // 又是一个平台假设(`/` 在 Win32 上会落盘成 `\`)。
+    unlinkSync(syntaxCli);
+    symlinkSync("entry.mjs/", syntaxCli);
+    const trailing = await readGateSource(syntax);
+    const trailingSnapshot = join(root, "path-syntax-trailing-snapshot");
+    await createGateSnapshot(syntax, trailingSnapshot, trailing);
+    const trailingCopy = join(trailingSnapshot, "node_modules", "cli.mjs");
+    assert.equal(readlinkSync(trailingCopy), readlinkSync(syntaxCli),
+      "第2轮发现1: 副本里的原文要和磁盘上那条逐字一致,尾部分隔符不许替它规范化");
+    assert.equal(reads(trailingCopy), reads(syntaxCli),
+      "第2轮发现1: 副本读到的必须和源树一样(Win32 上 ENOENT、POSIX 上 ENOTDIR)");
     // 绝对原文 + 末尾 `/`:副本读到的必须和源树读到的一样。POSIX 上源树是 ENOTDIR,副本就不许
     // 读得到——重写掉那个 `/` 等于交付了一份与工作区行为相反的快照(实测过:源树 ENOTDIR、副本
     // 读得通),所以读不到的链一律逐字照抄;Win32 上这条原文原生读得通、落点又在树内,于是它该被
@@ -231,7 +245,7 @@ try {
     await createGateSnapshot(syntax, syntaxSnapshot, absoluteBroken);
     const syntaxCopy = join(syntaxSnapshot, "node_modules", "cli.mjs");
     if (reads(syntaxCli).startsWith("ERR:")) {
-      assert.equal(readlinkSync(syntaxCopy), `${syntaxEntry}/`, "第2轮发现1: 读不到的链逐字照抄,末尾那个 / 也不动");
+      assert.equal(readlinkSync(syntaxCopy), readlinkSync(syntaxCli), "第2轮发现1: 读不到的链逐字照抄,末尾那个分隔符也不动");
     } else {
       assert.equal(readlinkSync(syntaxCopy).startsWith(syntaxSnapshot), true,
         "第2轮发现1: 读得通的绝对原文要改写到副本自己那份,不能把测试拉回活动工作区");
