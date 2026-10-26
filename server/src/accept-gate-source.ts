@@ -94,6 +94,10 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
         registered.push(dep);
       }
     }
+    // 快照目录本身住在 runs 下。项目把 ash 的 runs 目录装在自己里面时(本仓库的 data/runs 就是),
+    // 复制计划一旦经由根落点把 data/ 带进来,复制就会递归进正在写入的那份快照。两侧(源树摘要+
+    // 复制、以及事后对账)用同一个过滤器,所以摘要仍然严格相等。
+    const gateInput = (path: string) => !runtimePath(cwd, path);
     const tracked = new Set(paths);
     const trackedDirs = new Set<string>();
     for (const path of paths) for (let dir = dirname(path); dir !== "."; dir = dirname(dir)) trackedDirs.add(dir);
@@ -124,14 +128,23 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
     // 落点是被跟踪的目录时,只补「Git 不会检出的那部分」——它下面被忽略的条目;未跟踪条目不在这里
     // 放行,继续由下面的脏树检查拦住。要补的不止落点:原样保留的相对链还需要原文路上的中间链
     // (gateTreeDigest 的 requires 两类都给),否则副本里链断在中途。悬空链不会进来(没有落点)。
+    // **落点正好是项目根**(node_modules/<自己> -> .. 这种自链)走的是同一条路,不能当成「检出已经
+    // 覆盖」直接跳过:检出只给跟踪的那部分,根下面被忽略的安装内容照样是副本里没有、工作区里却
+    // 能通过这条链读到的,于是改了它指纹纹丝不动。根在 requires 里是空串,给 git 的 pathspec 是
+    // "."。这一条同时把 runs 目录挡在外面(见下面的 filter):快照自己就落在 runs 里,把它纳进复制
+    // 计划等于让快照把自己复制进自己。
     const ignoredUnder = async (path: string): Promise<string[]> =>
       (await git(cwd, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory", "--", path]))
         .split("\0").filter(Boolean)
         .map(entry => (entry.endsWith("/") ? entry.slice(0, -1) : entry).split("/").join(sep));
+    // 预算要卡在**消重之后**,而且只计「闭包真正追加进来的条目」。拿计划总长去卡会把初始输入
+    // 的规模误判成成环:一个有 512 个登记依赖目录的大仓,第一条已被覆盖的树内链就会让它报
+    // 「落点过多…是否成环」,而那一条其实一个条目都没加。
+    let added = 0;
     for (let index = 0; index < plan.length; index += 1) {
       const dep = plan[index];
       if (digests.has(dep)) continue;
-      const tree = await gateTreeDigest(join(cwd, dep), { root: cwd, dependency: true });
+      const tree = await gateTreeDigest(join(cwd, dep), { root: cwd, dependency: true, filter: gateInput });
       if (!tree) {
         plan.splice(index, 1);
         index -= 1;
@@ -139,11 +152,19 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
       }
       digests.set(dep, tree.digest);
       for (const required of tree.requires) {
-        if (required === "" || tracked.has(required)) continue;
-        if (plan.length >= 512) throw new Error("依赖软链的落点过多，无法冻结测试输入；请检查项目内的软链是否成环");
-        const uncovered = trackedDirs.has(required) ? await ignoredUnder(required) : [required.split("/").join(sep)];
-        // 计划一旦变动就从头再扫:被吞掉的条目要重新摘要,新进来的条目要补摘要。
-        if (uncovered.map(entry => addPath(entry)).some(Boolean)) index = -1;
+        if (tracked.has(required)) continue;
+        const uncovered = required === "" || trackedDirs.has(required)
+          ? await ignoredUnder(required === "" ? "." : required)
+          : [required.split("/").join(sep)];
+        for (const entry of uncovered) {
+          if (!addPath(entry)) continue;
+          added += 1;
+          if (added > 512) {
+            throw new Error("依赖软链的落点越补越多，无法冻结测试输入；"
+              + "请检查项目内的软链是否成环，或是否有软链把大量被忽略的内容带进了测试输入");
+          }
+          index = -1; // 计划变动就从头再扫:被吞掉的条目要重新摘要,新进来的条目要补摘要。
+        }
       }
     }
     dependencies.push(...plan.sort());
@@ -174,13 +195,18 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       await git(target, ["checkout", "--detach", source.commit]);
       await git(target, ["remote", "remove", "origin"]);
       const paths = (await git(target, ["ls-tree", "-r", "--name-only", "-z", source.commit])).split("\0").filter(Boolean);
+      // 比较基准也必须规范化:落点是 realpath 出来的,拿没规范化的快照路径去比,只要路径祖先里有
+      // 一条软链(macOS 的 /var -> /private/var、用户把 repo 放在软链目录下都是),每一条合法的
+      // 跟踪软链都会被误判成「指向快照外」,整个门禁对带软链的仓库直接不可用。规则本身不变。
+      const snapshotRoot = await realpath(target);
       for (const path of paths) {
         if (!(await lstat(join(target, path))).isSymbolicLink()) continue;
-        if (!inside(resolve(target), await realpath(join(target, path)))) throw new Error(`源码符号链接指向快照外：${path}`);
+        if (!inside(snapshotRoot, await realpath(join(target, path)))) throw new Error(`源码符号链接指向快照外：${path}`);
       }
       for (const dep of source.dependencies) {
         await mkdir(dirname(join(target, dep)), { recursive: true });
-        await gateTreeDigest(join(cwd, dep), { root: cwd, destinationRoot: target, dependency: true });
+        await gateTreeDigest(join(cwd, dep),
+          { root: cwd, destinationRoot: target, dependency: true, filter: path => !runtimePath(cwd, path) });
       }
       // 对账要读**真实副本**。拿源树那一遍遍历的结果对账只能证明「计划照着做了」,证明不了
       // 「副本里这些输入真的解析得通」——缺了中间链或缺了安装内容的坏副本,源侧算出来的指纹
