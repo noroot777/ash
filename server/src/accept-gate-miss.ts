@@ -14,8 +14,29 @@
 //   · 跑完看文件在不在也不行 —— 一条先打印启动提示、`rm "$0"` 删掉自己、再报断言失败的
 //     脚本，事后看就是「入口不存在」。
 //
+// **而「起跑前核过它解析不出来」一件事也不够**（第 8 轮审查 F1 实测）。那一层现在是纯读的
+// （读文件系统、读一份 manifest 的文本，见 accept-gate-entry.ts），读出来的东西有两种错法：
+//   · **落点可能不是真要跑的那份**：`.npmrc` / 环境变量 / 自带 npm 包装器都能把 runner 指到
+//     别处（第 5、6、7 轮的三条反例）；
+//   · **状态可能在真跑那一刻才变**：审查那条反例给命令带了 `NODE_OPTIONS='--require
+//     ./preload.cjs'`，preload 只在 argv 里有 `test:accept` 时才生成那个脚本 —— 读的时候没有，
+//     真跑时有、跑了、报了断言失败。
+// 第 6、7 轮试过「起跑时问 npm 自己」（甚至插进同一次执行里问），第 8 轮判死：查询答的仍是
+// **查询那一次**的状态，而且替用户多跑了两次项目代码（F2）。
+//
+// 所以「测试一行都没跑到 + 不用你改代码」这副面孔，现在要**三件事同时成立**才给，另两件都
+// 来自**真跑那一次自己的输出**：
+//   ① 起跑前核过：那个名字在它该在的地方没有（必要条件，不是充分条件）；
+//   ② **runner 自己说了**它解析不出这个名字，且那个名字就是命令点名的那个（路径那一档可以
+//      由 127/126 顶上，那是 POSIX 的约定）—— 它要是解析到了别的东西，就不会这么说；
+//   ③ 这次日志里**除了门禁自己的记事和那家 runner 自己的报错，没有别的程序写过东西** ——
+//      任何被测程序一跑起来就会在这儿留下痕迹（npm 非 silent 时还会先回显 `> 包名@版本
+//      脚本名`）。这是「一行都没跑到」仅有的直接证据。
+// 三件缺一件就只报观察、不改 failure、不免修（`withheld` 记的就是缺了哪一件）。残余的那个
+// 口子写在 `foreignOutputIn` 的注释里。
+//
 // 所以三档：
-//   · `entry`：起跑前核过，它解析不出来。**唯一会改写 failure、唯一敢说「这不是断言失败」。**
+//   · `entry`：上面三件事同时成立。**唯一会改写 failure、唯一敢说「这不是断言失败」。**
 //   · `inner`：别的都归这儿 —— 日志里认出某个名字没解析出来，但谁点名的、命令整体有没有
 //     跑起来，这一层**都不敢断定**。只报观察，不改 failure，不给出路保证，不说「不用修」。
 //   · null：什么都认不出，照旧按 exit_code 处理。
@@ -28,10 +49,13 @@
 //
 // 本模块是纯函数：不碰 git、不碰库、不碰 fs，判据可以逐条点测。
 import type { AcceptGateFailure } from "@ash/shared/accept-gate";
-import type { GateEntryProbe } from "./accept-gate-entry.js";
+import { gateEntryAsk, type GateEntryProbe } from "./accept-gate-entry.js";
 
 /** 认出来的是哪一种，以及凭什么。两档的语义差别见文件头。 */
 export type MissKind = "entry" | "inner";
+
+/** 三件必要条件里缺的是哪一件（见文件头）。 */
+export type MissWithheld = "foreign-output" | "no-runner-claim" | "unreadable";
 
 export type GateLaunchMiss = {
   kind: MissKind;
@@ -50,6 +74,11 @@ export type GateLaunchMiss = {
   entryResolved: boolean | null;
   /** 日志里那个名字跟命令点名的那个同名，但起跑前没核实到。只影响 inner 的措辞。 */
   sameName?: boolean;
+  /**
+   * 起跑前核到「它不在」，但**另两件必要条件**没齐（见文件头），所以没给那副面孔。记下缺的
+   * 是哪一件，措辞照它说 —— 这是用户唯一能据以自己去看一眼的线索。
+   */
+  withheld?: MissWithheld;
 };
 
 type MissPattern = { runner: string; re: RegExp };
@@ -87,6 +116,63 @@ const MISS_PATTERNS: MissPattern[] = [
   { runner: "node", re: /Cannot find module '([^'\r\n]+)'/ },
 ];
 
+/** 门禁自己写进日志的那些行（`[ash] …`）—— 它不算「别的程序的输出」。 */
+const ASH_NOTE = /^\[ash\]/;
+
+/**
+ * 一家 runner / shell **报错时自己那几行**长什么样。
+ *
+ * 只给这台机器上实测过的两家。别家没有定义 = 这一道**核不出来**（返回 null），不是「没有
+ * 别人的输出」—— 外推错了要发出去的是「测试一行都没跑、不要改代码」。
+ */
+const RUNNER_SELF_OUTPUT: Record<string, RegExp> = {
+  npm: /^npm(?:\s|$)/,
+  shell: /^[^\s:]*(?:sh|bash|ksh|dash)(?:\[\d+\])?:/,
+  zsh: /^zsh(?::\d+)?:/,
+};
+
+/**
+ * 这次日志里有没有**别的程序**写过东西。`null` = 核不出来（日志被截断，或者认领这个名字的
+ * 那家 runner 的输出形状这台机器上没实测过 —— 没实测过就不敢替它豁免任何一行）。
+ *
+ * `false` 是「被测的东西一行都没跑到」仅有的直接证据（第 8 轮审查 F1）：npm 一旦真去跑某个
+ * 脚本，非 `--silent` 时会先把 `> 包名@版本 脚本名` 和脚本原文回显到 stdout，被测程序自己的
+ * 输出也落在同一份日志里；缺脚本那一次的日志里只有 `npm error …`。
+ *
+ * **残余的口子**（知情保留）：一个完全静默、什么都不打印的被测程序，配上 `--silent`，仍然
+ * 能让这一道通过。那时还有①②两道挡着（runner 得真说过它解析不出这个名字），三道同时被骗
+ * 需要「配置把落点改到别处 + 那边有同名脚本 + 它内部又调一个缺同名的 + 全程静默」。再往下
+ * 收就只能去执行点什么来观察，而那条路（多跑用户代码换一个答案）第 8 轮审查 F2 已经判死。
+ */
+export function foreignOutputIn(log: string, runner: string | null): boolean | null {
+  const lines = log.split("\n").map(line => line.trim())
+    .filter(line => line.length > 0 && !ASH_NOTE.test(line));
+  if (!lines.length) return false;
+  // 谁都没认领过这个名字解析不出来（runner=null）：那就没有哪一行可以拿「这是 runner 自己的
+  // 报错」豁免 —— 剩下的每一行都是别的程序写的。这时真有东西跑过，比「核不出来」硬得多，
+  // 也是更该告诉用户的那句（`.npmrc` 把落点改到子项目那一组对照就落在这里）。
+  if (!runner) return true;
+  const self = RUNNER_SELF_OUTPUT[runner];
+  if (!self) return null;  // 认领了，可这家 runner 的输出形状这台机器上没实测过
+  return !lines.every(line => self.test(line));
+}
+
+/**
+ * 这条命令自己把 runner 的嘴堵上了没有。命中就返回那个开关，写进措辞。
+ *
+ * 为什么要专门认它（第 8 轮审查 F1 之后的实测）：`npm run --silent nosuch` **一个字都不打印**
+ * （本机 npm 11.17.0），于是第二件必要条件（runner 自己说它解析不出这个名字）永远拿不到 ——
+ * 这一层只能降级成观察。那时最有用的一句话不是「核不出来」，而是**去掉它再跑一次**：那样
+ * runner 会自己说清它找不到哪个脚本，三件事就齐了。
+ */
+export function outputSilenced(command: string): string | null {
+  return ["--silent", "--quiet", "--loglevel=silent", "--loglevel silent", " -s "]
+    .find(flag => ` ${command} `.includes(` ${flag.trim()} `) || command.includes(flag)) ?? null;
+}
+
+/** 认措辞只在日志**开头**这一段里找：后面那些是跑起来之后的事（见 ANCHOR_LINES 同款判据）。 */
+const PATTERN_HEAD_CHARS = 16_000;
+
 /** 把一条 shell 命令拆成「词」。判「这个名字是不是命令自己点名的」只认整词相等。 */
 function commandWords(command: string): Set<string> {
   return new Set(command.split(/[\s;&|()<>`'"]+/).filter(Boolean));
@@ -119,22 +205,42 @@ function firstPatternHit(log: string): PatternHit | null {
 /**
  * 这一次红到底是哪一种。认不出来返回 null（照旧按 exit_code 处理）。
  *
- * `log` 要给**日志开头**那一段（不是尾巴）：inner 那一档的噪音过滤只在开头看得出来。
+ * `log` 要给**这一次日志的全文**（上限内），`logComplete` 说它是不是完整的 —— 第三件必要
+ * 条件（日志里没有别的程序写过东西）得看完整份，截断了就核不出来。认措辞仍只在开头那一段
+ * 里找（`PATTERN_HEAD_CHARS`）。
+ *
  * `entry` 是**起跑前**核到的那份事实（accept-gate-entry.ts）；没有它，这个函数**绝不会**
- * 返回 `entry` 档 —— 这是第 2 轮审查 F1 两条反例换来的硬约束，别再放宽。
+ * 返回 `entry` 档。三件必要条件和它们各自挡住的反例见文件头，别再放宽到一件。
  */
 export function classifyGateLaunch(opts: { command: string; exitCode: number | null; log: string;
-  entry?: GateEntryProbe | null }): GateLaunchMiss | null {
+  logComplete?: boolean; entry?: GateEntryProbe | null }): GateLaunchMiss | null {
   const entry = opts.entry ?? null;
   const entryResolved = entry ? entry.resolved : null;
-  const hit = firstPatternHit(opts.log);
-  // ① 起跑前核过、它解析不出来：命令点名要跑的东西不在这份树里，所以它一行都没跑到。
-  //    日志里正好有同名的那条措辞就把原文也带上当旁证，没有也不影响这个结论 —— 命令
-  //    可能把输出全吞了（`2>/dev/null`）。
+  const hit = firstPatternHit(opts.log.slice(0, PATTERN_HEAD_CHARS));
+  // ① 三件事同时成立才给那副面孔（见文件头）。
   if (entry && !entry.resolved) {
-    const corroborated = hit && hit.name === entry.ask ? `${hit.text}；` : "";
-    return { kind: "entry", name: entry.ask, by: entry.by, entryResolved: false,
-      evidence: `${corroborated}起跑前核过 ${entry.by}：没有 ${entry.ask}` };
+    // ② runner 自己说了它解析不出这个名字，而且就是命令点名的那个名字。
+    const claimed = hit && hit.name === entry.ask ? hit : null;
+    // 路径那一档可以由退出码顶上②：127/126 是「shell 找不到要执行的东西」的 POSIX 约定。
+    // 「已经跑起来的脚本最后一步也会这么退」那条反例（第 1 轮审查 N1）由③挡住。
+    const shellSaid = gateEntryAsk(opts.command)?.kind === "path"
+      && (opts.exitCode === 127 || opts.exitCode === 126);
+    // ③ 这次日志里除了它自己的报错，没有别的程序写过东西。
+    const foreign = opts.logComplete === true
+      ? foreignOutputIn(opts.log, claimed?.runner ?? (shellSaid ? "shell" : null))
+      : null;
+    if ((claimed || shellSaid) && foreign === false) {
+      const said = claimed ? claimed.text
+        : `退出码 ${opts.exitCode}（POSIX shell：${opts.exitCode === 127 ? "有东西没找到" : "找到了但不可执行"}）`;
+      return { kind: "entry", name: entry.ask, by: entry.by, entryResolved: false,
+        evidence: `${said}；起跑前核过 ${entry.by}：没有 ${entry.ask}；`
+          + "这一次的日志里除了它自己的报错，没有别的程序写过东西" };
+    }
+    // 缺一件就只报观察：如实说核到了什么、哪一件没过，**不**改写 failure，也不免修。
+    return { kind: "inner", name: entry.ask, by: entry.by, entryResolved: false,
+      sameName: !!claimed,
+      withheld: foreign === true ? "foreign-output" : foreign === null ? "unreadable" : "no-runner-claim",
+      evidence: `${claimed ? `${claimed.text}；` : ""}起跑前核过 ${entry.by}：没有 ${entry.ask}` };
   }
   // ② 日志里认出某个名字没解析出来。谁点名的、命令整体有没有跑起来，一律不推断。
   if (hit) {
@@ -224,14 +330,17 @@ export type GateMissOrigin = {
    */
   removedByTask: boolean | null;
   /**
-   * **合它进来能不能把这个定义带回来**。「目标分支上有」推不出这一条（第 7 轮审查 F3）：
-   * 共同祖先上本来就有、而任务这一侧把它删了的时候，合并会保留那个删除 —— 合进来不会恢复。
+   * 这个定义**是不是目标分支新加的**（共同祖先上没有）。`null` = 没核出来。
    *
-   *  - `true`  目标分支新引入的（共同祖先上没有）→ 合进来它就在树里了，这一档才敢给保证；
-   *  - `false` 不是新引入的 → **绝不许**给「合进来就有」那句话；
-   *  - `null`  没核出来 → 只能给条件句。
+   * 它只是两份内容事实，**推不出合并结果**（第 7、8 轮审查 F3）：
+   *  - `false`（共同祖先上就有、任务这一侧弄没的）：合并一般会保留这个删除，所以绝不许说
+   *    「合进来就有」；
+   *  - `true`（目标新加）：**也不许**说「合进来它就在树里了」—— 第 8 轮实测一个合法的
+   *    `.gitattributes` 自定义合并驱动让 `git merge` 退 0、不冲突，却保留了任务侧那份
+   *    manifest，合完照旧缺这条命令。合并策略/驱动/多共同祖先/冲突都能改掉结果。
+   * 所以这一档的措辞只能是「它是目标分支新加的，合完先核一眼它在不在树里，再点验收」。
    */
-  mergeRecovers: boolean | null;
+  targetAddedIt: boolean | null;
   /** 名字抽不出来、或核对没做完（读不出 / 超预算）：那时只有 behind 这一条算数。 */
   unverified: boolean;
 };
@@ -256,7 +365,7 @@ export function gateCommandMissNotice(opts: {
   const { miss, origin } = opts;
   const subject = miss.name ? `「${miss.name}」` : "它要跑的那个东西";
   const ran = `（这一次跑的是 ${opts.command}${opts.sourceCommit ? `，被测快照 ${short(opts.sourceCommit)}` : ""}）`;
-  if (miss.kind === "inner") return innerLines(miss, subject, ran).join("\n");
+  if (miss.kind === "inner") return innerLines(miss, subject, ran, opts.command).join("\n");
   // entry：起跑前核过、它解析不出来。这是唯一敢说「一行都没跑到」的一档。
   const lines = [
     `这条命令点名要跑的 ${subject} 在被测快照里解析不出来：它要测的东西一行都没跑到，这不是断言失败。`,
@@ -292,7 +401,7 @@ export function gateCommandMissNotice(opts: {
  *  - 什么都没核到     → 连启动都不提，只报那条观察。
  * 三种都不改写 failure、不给出路保证、不说「不用修」。
  */
-function innerLines(miss: GateLaunchMiss, subject: string, ran: string): string[] {
+function innerLines(miss: GateLaunchMiss, subject: string, ran: string, command: string): string[] {
   const tail = `这可能是环境缺件（依赖没装、机器上没这个程序），也可能是这次改动把名字写错了 —— `
     + `两种都要核一遍才知道，不能当成「不用修」。`;
   if (miss.entryResolved === true) {
@@ -301,6 +410,24 @@ function innerLines(miss: GateLaunchMiss, subject: string, ran: string): string[
         + `红的原因看起来是 ${subject} 没解析出来，不像是断言失败。`,
       `判据：${miss.evidence}${ran}。`,
       `它到底跑进去多少，这一层说不了（在树里不等于跑起来了：权限、解释器都可能挡在前面）。${tail}`,
+    ];
+  }
+  // 起跑前读到「它不在」，但另两件必要条件没齐（第 8 轮审查 F1）。说清缺的是哪一件 ——
+  // 那是用户唯一能据以自己去看一眼的线索。
+  if (miss.withheld) {
+    const why = miss.withheld === "foreign-output"
+      ? "可是这一次的日志里有别的程序写过东西 —— 有东西真的跑了，所以「它一行都没跑到」这句话不成立"
+      : miss.withheld === "unreadable"
+        ? "可是这一次的日志核不出来是谁写的（太大被截断了，或者那家 runner 的输出形状这台机器上没实测过）"
+        : "可是 runner 自己并没说它解析不出这个名字 —— 那它很可能解析到了别的东西：配置能把 runner 指到另一份 manifest，命令也能在跑的过程中把这个脚本生成出来";
+    // 嘴被命令自己堵上时，最有用的一句是「去掉它再跑一次」—— 那样 runner 会自己说清。
+    const silenced = miss.withheld === "no-runner-claim" ? outputSilenced(command) : null;
+    return [
+      `起跑前在 ${miss.by} 里没找到 ${subject}，${why}。`,
+      `判据：${miss.evidence}${ran}。`,
+      `所以这一层不敢说它没启动，更不敢说这条红不用你修。`
+        + (silenced ? `想拿到确切结论：把这条命令里的「${silenced.trim()}」去掉再点一次验收 —— 它把 runner 的报错一起吞了（实测带上它连「找不到哪个脚本」都不打印）。` : "")
+        + tail,
     ];
   }
   if (miss.sameName) {
@@ -347,20 +474,23 @@ function originLines(origin: GateMissOrigin | null, subject: string): string[] {
       byText.length ? `${subject} 在 ${origin.targetBranch} 上整词出现在这些文件里、而这份快照里没有：${byText.map(where).join("；")}。`
         + `这是文字命中，不等于它就是那条命令的定义，但这些提交确实都不在被测快照里。` : "",
     ].filter(Boolean).join("");
-    // 出路必须跟**合入能不能恢复**那件事对上（第 7 轮审查 F3）：源侧删除会被合并保留，那
-    // 时「合进来就有」是一句空头保证，照着做只会再撞同一个错。
-    const merge = origin.mergeRecovers === false
+    // 出路只许说核过的那两件事（目标上有、落后多少），**不许预测合并结果**（第 7、8 轮
+    // 审查 F3）：源侧删除会被合并保留，自定义合并驱动连「目标新加」也能挡掉 —— 实测
+    // `git merge` 退 0、不冲突，合完那条命令照旧不在树里。所以每一档都带上「合完先核一眼」。
+    const check = `合完先核一眼这条命令在不在树里（合并策略、仓库自己配的合并驱动、冲突都可能让它没进来），再点验收。`;
+    const merge = origin.targetAddedIt === false
       ? [`出路：`,
-        `1. 合 ${origin.targetBranch} 进来并不会把它带回来：它在两边的共同祖先上就有，是任务这一侧把它弄没的，`
-          + `合并会保留这个删除。要用它就得把那个定义取回来（从 ${origin.targetBranch} 上把那份文件或那条定义改回来）再点验收。`,
+        `1. 它在两边的共同祖先上就有，是任务这一侧把它弄没的 —— 合 ${origin.targetBranch} 进来一般保留这个删除，`
+          + `所以更直接的办法是把那个定义取回来（从 ${origin.targetBranch} 上把那份文件或那条定义改回来）再点验收。`,
         `2. ${skip}`]
       : [`出路：`,
-        `1. 把 ${origin.targetBranch} 合进任务分支（或以它为基线重建任务分支），再点验收 —— `
-          + (origin.mergeRecovers === true
-            ? `它是 ${origin.targetBranch} 上新加的（共同祖先上没有），所以合进来它就在树里了。`
+        `1. 把 ${origin.targetBranch} 合进任务分支（或以它为基线重建任务分支）—— `
+          + (origin.targetAddedIt === true
+            ? `它是 ${origin.targetBranch} 上新加的（共同祖先上没有）。`
             : byText.length
-              ? `如果上面那个落点就是它的定义，那时这条命令就在树里了；合完仍然报同样的错，说明定义不在那儿，按下面第 2 条或核对项目设置里这条命令。`
-              : `这次没核出它是目标分支新加的、还是任务这一侧删掉的，所以合完也可能仍然报同样的错 —— 那就说明是后者，得把那个定义取回来。`),
+              ? `如果上面那个落点就是它的定义，合进来这条命令就该在树里了；仍然报同样的错说明定义不在那儿，按下面第 2 条或核对项目设置里这条命令。`
+              : `这次没核出它是目标分支新加的、还是任务这一侧删掉的 —— 是后者的话合并保留那个删除，得把那个定义取回来。`)
+          + check,
         `2. ${skip}`];
     return [`${facts}${behind}`, ...merge, mine];
   }

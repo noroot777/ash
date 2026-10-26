@@ -15,6 +15,7 @@ import type { AcceptGateFailure, AcceptGateMissAttribution } from "@ash/shared/a
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
+import { statSync } from "node:fs";
 import { acceptGateLogHead } from "./accept-gate-process.js";
 import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
   type GateMissOrigin } from "./accept-gate-miss.js";
@@ -24,7 +25,14 @@ import { askManifest, decodeGateEntryProbe, gateEntryAsk, scriptDefinedIn,
 type GateRow = typeof acceptGateRuns.$inferSelect;
 
 /** 日志开头读多少字节做判定。命令没跑起来时整份日志也就几百字节，这是宽松的上界。 */
-const DIAGNOSIS_HEAD_BYTES = 16_000;
+/**
+ * 判「这次日志里有没有别的程序写过东西」要看**完整**那一份（accept-gate-miss.ts 的第三件
+ * 必要条件），所以这里按字节读整份、并把「是不是完整的」一起交出去。
+ *
+ * 仍然有上限：这段跑在结算里，几十 MB 的回归输出不该整份进内存。超限 = 那一道核不出来 →
+ * 不授权免修（而且真到那个量级，日志里几乎必然已经有别的程序的输出了）。
+ */
+const LOG_PROOF_BYTES = 1_000_000;
 
 /** 单条 git 查询的超时。只读查询，正常都是毫秒级；到这个数就是存储有事。 */
 const GIT_TIMEOUT_MS = 4_000;
@@ -192,11 +200,20 @@ async function definitionAbsentInParents(repo: string, commit: string, ask: Gate
 }
 
 /**
- * 合它进来到底能不能把这个定义带回来。
- *  - `true`  目标分支**新引入**的：共同祖先上没有、目标上有 → 合并会把它带进来；
- *  - `false` 不是新引入：共同祖先上就有，而这份快照里没有 —— 删除发生在**任务这一侧**，
- *            合并保留源侧删除，合进来不会恢复它；
- *  - `null`  没问出来 → 一个字都不许保证。
+ * 这个定义**是不是目标分支新加的**（共同祖先上没有、目标上有）。
+ *  - `true`  目标独有的新增；
+ *  - `false` 共同祖先上就有，而这份快照里没有 —— 删除发生在**任务这一侧**；
+ *  - `null`  没问出来。
+ *
+ * **它只是两份内容事实，推不出合并结果**（第 8 轮审查 F3 实测）：审查那条反例给仓库配了
+ * `.gitattributes` 里的 `package.json merge=keep-local` 自定义驱动，`git merge main` 退 0、
+ * 没有冲突、按项目这份合法配置保留了任务侧的 manifest —— 合完那条命令照旧不在树里。合并
+ * 策略、合并驱动、多个共同祖先、冲突都能改掉结果，而那些都不是读几个提交的内容能预测的。
+ * 所以 `true` 这一档**也不许**说「合进来它就在树里了」，只能说「它是目标分支新加的，合完
+ * 请先核一眼它在不在树里」（措辞在 accept-gate-miss.ts）。
+ *
+ * 要拿到可信的合并结果只能真去合一次 —— 那又是一次带副作用的额外执行，第 8 轮审查 F2 已经
+ * 判死那条路（诊断不许替用户多做事）。
  *
  * 第 7 轮审查 F3 实测的拓扑：共同祖先/目标 main 上有验收脚本，父分支删了它，任务从父分支那
  * 一版开工（自己没再删一次，所以归因是 not-mine），main 还停在祖先位置 —— 旧版同时说出
@@ -207,7 +224,7 @@ async function definitionAbsentInParents(repo: string, commit: string, ask: Gate
  * 任务自己记下的开工起点（第 4 轮审查 F2：共同祖先会把继承来的删除错判成 not-mine）；这里
  * 问的是「合并会把什么带进来」，而三方合并的语义本身就定义在共同祖先上。
  */
-async function mergeWouldRecover(repo: string, sourceCommit: string, targetCommit: string,
+async function targetAddedDefinition(repo: string, sourceCommit: string, targetCommit: string,
   ask: GateEntryAsk, b: Budget): Promise<boolean | null> {
   const base = await gitRun(repo, ["merge-base", sourceCommit, targetCommit], b);
   const at = base.ok ? base.stdout.trim().split("\n")[0]?.trim() : "";
@@ -246,7 +263,7 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
   const behind = behindOut === null ? null : Number.parseInt(behindOut.trim(), 10);
   const origin: GateMissOrigin = { targetBranch, targetCommit,
     behind: Number.isFinite(behind as number) ? behind as number : null,
-    holders: [], absent: null, removedByTask: null, mergeRecovers: null, unverified: true };
+    holders: [], absent: null, removedByTask: null, targetAddedIt: null, unverified: true };
   // ── ① 定义级：命令形状认得出来，就能给出「有／没有」的确定答案 ──
   const ask = gateEntryAsk(command);
   if (ask) {
@@ -260,9 +277,10 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
       const where = await definitionIntroducedBy(repo, targetCommit, sourceCommit, ask, b);
       origin.holders.push({ file: askFile(ask), how: ask.kind === "path" ? "path" : "definition",
         commit: where?.commit ?? null, date: where?.date ?? null, subject: where?.subject ?? null });
-      // 「目标上有」推不出「合它进来就有」（第 7 轮审查 F3）：源侧删除会被合并保留。
-      const recovers = sourceCommit ? await mergeWouldRecover(repo, sourceCommit, targetCommit, ask, b) : null;
-      return { ...origin, mergeRecovers: recovers, unverified: false };
+      // 「目标上有」推不出「合它进来就有」（第 7、8 轮审查 F3）：源侧删除会被合并保留，
+      // 而自定义合并驱动连「目标新加」也能挡掉。所以这里只取两份内容事实，不预测合并结果。
+      const added = sourceCommit ? await targetAddedDefinition(repo, sourceCommit, targetCommit, ask, b) : null;
+      return { ...origin, targetAddedIt: added, unverified: false };
     }
     if (onTarget === false) return { ...origin, absent: ask.kind === "path" ? "path" : "definition", unverified: false };
     // onTarget === null（manifest 读不动等）：落到底下的文字线索，但**不许**据此说「也没有」。
@@ -315,8 +333,10 @@ export async function diagnoseGateFailure(row: GateRow, outcome: { failure: Acce
   if (outcome.failure !== "exit_code") return null;
   // **入口事实只从那一行读回来**：它是 spawn 之前核的（accept-gate-entry.ts），现在再去
   // 看一眼快照只会拿到跑完之后的状态 —— 审查 F1 那条自删脚本就是这么被说成「没启动」的。
+  const logSize = (() => { try { return statSync(row.logPath).size; } catch { return null; } })();
   const miss = classifyGateLaunch({ command: row.command, exitCode: outcome.exitCode,
-    log: acceptGateLogHead(row.logPath, DIAGNOSIS_HEAD_BYTES),
+    log: acceptGateLogHead(row.logPath, LOG_PROOF_BYTES),
+    logComplete: logSize !== null && logSize <= LOG_PROOF_BYTES,
     entry: decodeGateEntryProbe(row.entryProbe) });
   if (!miss) return null;
   // inner 这一档不去核仓库：缺的是命令内部点名的东西（node 模块、python 包），「它在

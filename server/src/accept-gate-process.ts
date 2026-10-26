@@ -44,22 +44,17 @@ export async function spawnAcceptGate(opts: {
   logPath: string;
   onExit: (exit: GateExit) => void;
   hold?: boolean;
-  /**
-   * 插在用户命令**前面**的一段 shell（起跑前要问 runner 的那两问，见
-   * accept-gate-entry-npm.ts）。它必须跟用户命令同处一次执行：这样问的那个 runner 就是真
-   * 要跑的那一个（同一份 PATH、同一份 rc、同一个环境），而且它天然落在这一次的 pid 登记、
-   * confinement 凭据、取消与超时之内（第 7 轮审查 F1/F2）。
-   *
-   * 它自己的成败跟用户命令隔开（`{ …; } || true`），整条命令的退出码仍是用户命令那个。
-   */
-  prelude?: string | null;
 }): Promise<{ pid: number; startedAt: string | null; authorize: () => Promise<boolean> }> {
   mkdirSync(dirname(opts.logPath), { recursive: true });
   if (!existsSync(gateLaunchPath(opts.logPath))) prepareGateLaunch(opts.logPath);
   assertGateConfinementAvailable();
   const fd = openSync(opts.logPath, "a");
   try {
-    const launch = userShellLaunch(opts.prelude ? `${opts.prelude}\n${opts.command}` : opts.command);
+    // 这里**只跑用户那条命令**。第 7 轮曾把「先问一句 runner 认不认这个脚本」的两条 npm
+    // 查询插在它前面（同一次执行，为的是问的那个 npm 就是真要跑的那个），第 8 轮审查实测
+    // 撤掉：那两次查询会把项目自己的 preload / 包装器初始化动作各跑一遍（一次验收 = 3 次
+    // 项目代码，不插是 1 次），而诊断没有资格擅自增加用户代码的执行次数。
+    const launch = userShellLaunch(opts.command);
     const environment = gateBootstrapEnvironment(augmentedEnv());
     if (IS_MAC) environment.bootstrap[MAC_GATE_ENV] = macGateToken(opts.logPath);
     const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,
@@ -188,10 +183,25 @@ async function untilEmpty(empty: () => boolean, within: number): Promise<boolean
   }
 }
 
+/**
+ * ash 自己写进门禁日志的**每一行**都要带上 `[ash] ` 标记。
+ *
+ * 为什么非得逐行（第 8 轮审查 F1 之后被回归抓到的真 bug）：归类那一层的第三件必要条件是
+ * 「整份日志里除了 ash 的注记和 runner 自己的报错，没有别的程序写过东西」。可 ash 的注记
+ * 本身就有多行的 —— 结算时会把归类结论整段追加进去，`String(error)` 还会带着堆栈。只给
+ * 第一行打标记，结论的后续几行就会被**自己**当成「别的程序写的」，于是同一份日志重新归类
+ * （回流、重新交接都会）就从「它一行都没跑到」退成「只敢报观察」。
+ */
+export function stampAshNote(text: string): string {
+  return text.split("\n")
+    .map(line => line.trim().length === 0 || line.trimStart().startsWith("[ash]") ? line : `[ash] ${line}`)
+    .join("\n");
+}
+
 export function appendGateLog(logPath: string, text: string): void {
   try {
     mkdirSync(dirname(logPath), { recursive: true });
-    appendFileSync(logPath, text, "utf8");
+    appendFileSync(logPath, stampAshNote(text), "utf8");
   } catch { /* 日志写不进去不该让门禁本身失败 */ }
 }
 

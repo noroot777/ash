@@ -21,8 +21,23 @@
 // **而「runner 去哪儿找」压根不是这一层能解释完的**（第 5、6 轮审查 F1 实测：`--workspace=
 // child`、`npm_config_workspace=child`、`.npmrc` 里 `workspace=child`、再到数组写法
 // `workspace[]=child`）—— 四层配置、数组写法、别名都是 npm 的语义，逐条枚举补一个漏一个。
-// 所以那件事整块交给 npm 自己回答（`accept-gate-entry-npm.ts`），这一层只剩两件事：
-// **把 shell 读准**，以及**把重放那两问要带的东西（目录选项、前置赋值）原样交出去**。
+//
+// 为此第 6、7 轮试过「让 npm 自己回答」：先 execFile 起 npm，后来改成把 `npm run --json` /
+// `npm prefix` 插在用户命令前面、同一次 `sh -lc` 里跑。**这条路第 8 轮审查判死，别再走**：
+//  · 它答的是**查询那一次**的状态，不是**真跑那一次**的（F1 实测：命令带
+//    `NODE_OPTIONS='--require ./preload.cjs'`，preload 只在 argv 里有 `test:accept` 时才生成
+//    那个脚本。两问的 argv 里没有它 → 答「没有」；真跑那次生成了、跑了、报了断言失败 ——
+//    于是一次真的失败被说成「一行都没跑到、不要改代码」）。查询和执行之间的任何副作用都能
+//    把答案变成谎话，而「同一个 shell」只对齐了环境，对齐不了时点；
+//  · 它**替用户多跑了两次项目代码**（F2 实测：一次验收 = 3 次 preload，不带它是 1 次）。
+//    继承的 `NODE_OPTIONS`、前置赋值里的 preload、自带 npm 包装器的初始化动作都会跟着跑，
+//    「npm 列脚本不执行 script body」证明不了「整次查询没跑任何项目代码」。诊断没有资格
+//    擅自增加用户代码的执行次数。
+//
+// 所以这一层退回**纯读**：只看文件系统和那份 manifest 的文本，一个进程都不起。读出来的东西
+// 因此**只够当必要条件之一**——「测试没启动」那个结论由归类层（accept-gate-miss.ts）在三件
+// 事同时成立时才给，另两件都来自**真跑那一次自己的输出**。配置把落点改到别处时这一层会读错
+// 那份 manifest，但那种读错在归类层被另外两件事挡住（见那边的文件头）。
 //
 // 规矩是**证明不了就交白卷**。判据是「这条命令的执行目标我能不能完整解释」，不是「它像不像
 // 我见过的形状」：
@@ -43,30 +58,16 @@
 // 但没有执行权限的脚本退 126，正文一行没跑）。所以 true 这一档的措辞里不许出现「确实跑起来
 // 了」—— 那句话这一层给不出来。
 //
-// **而「问得出答案」还不等于「问的是真要跑的那一个」**（第 7 轮审查 F1 实测：命令的前置
-// `PATH=` 指向项目自带的 npm 启动器，真跑的是它、真报了断言失败，上一版却用 ash 这边 PATH
-// 解析出的系统 npm 作答，于是报「入口不存在」并发出免修令）。所以脚本那一档现在不自己起
-// 进程，而是生成一段 shell 交给门禁插在用户命令前面、跟它在同一次受监督执行里跑 —— 同一个
-// shell、同一份 PATH 和环境、同一组前置赋值。判据和取舍见 accept-gate-entry-npm.ts。
-//
-// 于是这一层的答案分两个时机落盘，但**两个都是「起跑那一刻」的事实**：
-//  · 路径那一档（`./runner.sh`）spawn 之前就能定 —— `gateEntryProbeNow`；
-//  · 脚本那一档由命令开跑时第一件事写进文件，结算时读回来 —— `gateEntryProbeAnswer`。
-//    「跑完之后读那份文件」跟「跑完之后再核一次」是两回事：文件内容是起跑那一刻写的。
-// 落到 accept_gate_runs.entryProbe 上，之后只许读它、不许重算。
-import { existsSync } from "node:fs";
+// 答案在 spawn 之前一次定下来，落到 accept_gate_runs.entryProbe 上，之后只许读它、不许重算
+// （跑完再核一次拿到的是跑完之后的状态，见上面②）。
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, normalize, relative } from "node:path";
-import { gateEntryAnswers, npmAskPrelude, readNpmScriptTable,
-  type GateEntryAnswers } from "./accept-gate-entry-npm.js";
 
 /** 这条命令点名要跑的东西，分能核实的两种。其余形状一律认不出（见文件头）。 */
 export type GateEntryAsk =
   | { kind: "path"; name: string }
-  /**
-   * `dir` = runner 真会读 manifest 的那个目录（相对被测树，默认 `.`，起跑前会跟 npm 自己说的
-   * 那个交叉核对）；`flags`/`env` = 重放「问 npm」那两问时要原样带上的东西。
-   */
-  | { kind: "script"; name: string; dir: string; flags: string[]; env: Record<string, string> };
+  /** `dir` = 按命令行解释出来的那个 manifest 目录（相对被测树，默认 `.`）。 */
+  | { kind: "script"; name: string; dir: string };
 
 export type GateEntryProbe = {
   /** 点名要跑的那个东西：脚本名，或相对这份树的路径。 */
@@ -173,13 +174,10 @@ function tokenize(command: string): string[] | null {
  *  · 未知选项可能吃掉后面那个词（`--loglevel warn`），所以不许按「以 `-` 开头就跳过」去
  *    猜位置参数。
  *
- * `flags` 里**只收换目录那一类**：`--silent` 一带上，`npm run --silent --json` 会把 JSON 一起
- * 吞掉（实测 stdout 空），而它本来就是「确定只影响输出」才进白名单的，不带不改答案。
  */
-function runnerArgs(words: string[]): { positional: string[]; dir: string; flags: string[] } | null {
+function runnerArgs(words: string[]): { positional: string[]; dir: string } | null {
   let dir = ".";
   const positional: string[] = [];
-  const flags: string[] = [];
   for (let at = 0; at < words.length; at++) {
     const word = words[at]!;
     if (word === "--") break;                      // 后面都是脚本的参数，入口身份到这儿定了
@@ -194,8 +192,7 @@ function runnerArgs(words: string[]): { positional: string[]; dir: string; flags
     if (DIR_FLAGS.has(flag)) {
       const value = inlineValue ?? words[++at];
       if (!value || value.startsWith("-")) return null;
-      dir = value;
-      flags.push(flag, value);                     // 规范成「选项 值」两词，重放时不必再管写法
+      dir = value;                     // 规范成「选项 值」两词，重放时不必再管写法
       continue;
     }
     if (SAFE_VALUED.has(flag)) { if (inlineValue === null) at++; continue; }
@@ -204,7 +201,7 @@ function runnerArgs(words: string[]): { positional: string[]; dir: string; flags
     // 脚本」，而旧版「`--x=y` 自带值就跳过」把它当成了无关选项（第 5 轮审查 F1 实测）。
     return null;
   }
-  return { positional, dir, flags };
+  return { positional, dir };
 }
 
 /**
@@ -216,30 +213,26 @@ function runnerArgs(words: string[]): { positional: string[]; dir: string; flags
 export function gateEntryAsk(command: string): GateEntryAsk | null {
   const words = tokenize(command);
   if (!words) return null;
-  // 前缀的环境变量赋值（`CI=1 npm run x`）不是入口，剥下来 —— 但要**原样带到那两问上**：
-  // runner 的配置也能这么传进来（实测 `npm_config_workspace=child npm run test:accept` 真让
-  // 它跑了子项目那个脚本），带上它，npm 自己就会把这份 scope 算进答案里。
-  const env: Record<string, string> = {};
-  while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) {
-    const assignment = words.shift()!;
-    const eq = assignment.indexOf("=");
-    env[assignment.slice(0, eq)] = assignment.slice(eq + 1);
-  }
+  // 前缀的环境变量赋值（`CI=1 npm run x`）不是入口，剥下来。它们也能换掉 runner 去哪儿找
+  // 脚本（实测 `npm_config_workspace=child npm run test:accept` 真让它跑了子项目那个脚本）
+  // 或者换掉 `npm` 本身（`PATH=bin`），所以这一层读出来的那份 manifest 可能不是真要跑的
+  // 那份 —— 那种读错由归类层的另两件事挡住（见 accept-gate-miss.ts 文件头）。
+  while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) words.shift();
   const head = words[0];
   if (!head) return null;
   if (head === "npm") {
     const args = runnerArgs(words.slice(1));
     if (!args) return null;
-    const { positional, dir, flags } = args;
+    const { positional, dir } = args;
     // 子命令必须在最前：`npm test run` 是「跑 test 这个生命周期」，不是「跑 run 这个脚本」。
     const sub = positional[0];
     if (sub === "run" || sub === "run-script") {
       const name = positional[1];
       // `run` 也绕不开默认行为：`npm run start` 缺 `scripts.start` 时照样跑 `node server.js`，
       // `npm run env` 跑的是 npm 的内建 env。
-      return !name || DEFAULTED_SCRIPTS.has(name) ? null : { kind: "script", name, dir, flags, env };
+      return !name || DEFAULTED_SCRIPTS.has(name) ? null : { kind: "script", name, dir };
     }
-    return sub && NPM_LIFECYCLE.has(sub) ? { kind: "script", name: sub, dir, flags, env } : null;
+    return sub && NPM_LIFECYCLE.has(sub) ? { kind: "script", name: sub, dir } : null;
   }
   // 相对路径形式的入口（`./runner.sh`、`scripts/verify.sh`）。绝对路径不算：那是机器上的
   // 东西，缺了跟「任务分支落后了」无关，给合分支的建议只会误导。pnpm/yarn 这类名字落不进
@@ -277,46 +270,31 @@ function manifestInTree(treeDir: string, ask: GateEntryAsk): string | null {
 }
 
 /**
- * **spawn 之前**能定下来的那一档：命令点名的就是个文件，看它在不在这棵树里。
+ * **spawn 之前**把这条命令点名要跑的东西核一眼。认不出的形状、读不动的 manifest 一律 null
+ * （交白卷）。
  *
- * 脚本那一档返回 null（还没问 —— 它的答案由 `gateEntryProbeAnswer` 在结算时读回来）。认不出
- * 的形状也是 null。两者对调用方一样：先落 null，之后有答案再补。
- */
-export function gateEntryProbeNow(treeDir: string, command: string): GateEntryProbe | null {
-  const ask = gateEntryAsk(command);
-  if (ask?.kind !== "path") return null;
-  const resolved = insideTree(treeDir, ask.name);
-  return resolved ? { ask: ask.name, resolved: existsSync(resolved), by: "被测快照里的文件" } : null;
-}
-
-/**
- * 要插在用户命令前面的那段查询。`null` = 这次不问（命令认不出、是路径那一档、或者这个平台
- * 上没法问），于是脚本那一档整个交白卷。
+ * 一个进程都不起：只 `existsSync` 和读一份 manifest 的文本。为什么不去问 npm（它才最知道自己
+ * 会读哪份 manifest）见文件头 —— 那条路第 8 轮被判死：它答的是**查询那一次**的状态，而且替
+ * 用户多跑了两次项目代码。
  *
- * **必须跟用户命令在同一次执行里**，否则问的就不是真要跑的那个 npm（第 7 轮审查 F1）。
+ * 所以这个答案**不是**「测试没启动」的充分条件，只是三件必要条件中的一件；另两件由归类层从
+ * 真跑那一次自己的输出里取（accept-gate-miss.ts 文件头）。
  */
-export function gateEntryProbeAsk(treeDir: string, command: string, logPath: string): string | null {
+export function probeGateEntry(treeDir: string, command: string): GateEntryProbe | null {
   const ask = gateEntryAsk(command);
-  if (ask?.kind !== "script" || !manifestInTree(treeDir, ask)) return null;
-  return npmAskPrelude(ask, gateEntryAnswers(logPath));
-}
-
-/**
- * 把那两问的答案读回来。读不到、形状不对、npm 说的目录跟这一层算的对不上，一律 null ——
- * 这一层宁可交白卷，也不能交一个推出来的答案：下游拿它去说「测试一行都没跑、不要改代码」。
- */
-export async function gateEntryProbeAnswer(treeDir: string, command: string,
-  logPath: string): Promise<GateEntryProbe | null> {
-  const ask = gateEntryAsk(command);
-  if (ask?.kind !== "script") return null;
+  if (!ask) return null;
+  if (ask.kind === "path") {
+    const resolved = insideTree(treeDir, ask.name);
+    return resolved ? { ask: ask.name, resolved: existsSync(resolved), by: "被测快照里的文件" } : null;
+  }
   const file = manifestInTree(treeDir, ask);
   if (!file) return null;
-  const table = await readNpmScriptTable(treeDir, ask, gateEntryAnswers(logPath));
-  return table ? { ask: ask.name, resolved: table.has(ask.name),
-    by: `被测快照 ${file} 的 scripts（npm 自己列的）` } : null;
+  let text: string;
+  try { text = readFileSync(join(treeDir, file), "utf8"); } catch { return null; }
+  const defined = scriptDefinedIn(text, ask.name);
+  return defined === null ? null
+    : { ask: ask.name, resolved: defined, by: `被测快照 ${file} 的 scripts` };
 }
-
-export type { GateEntryAnswers };
 
 /** 落盘与读回。字段形状变了就当没核过 —— 跨机接力和旧行都可能带着老形状。 */
 export const encodeGateEntryProbe = (probe: GateEntryProbe | null): string | null =>
