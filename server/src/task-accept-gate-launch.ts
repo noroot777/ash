@@ -17,11 +17,15 @@ export async function finishAcceptanceGate(taskId: string, result: AcceptTaskRes
     return gate.status === "running"
       ? { ...result, reason: "accept_gate_running", gate,
         error: `${result.error} 已经在跑了（日志 ${gate.logPath}）。跑完如果是绿的，这次验收会自动接着做完，不用再点。` }
-      // 归类出了结论就**只给结论**：这条回执是 MCP/HTTP 调用方（多半是个 agent）唯一
-      // 读到的东西，把 npm 的原始报错贴给它正是这次要修的那个毛病。
+      // 归类出了结论就**把结论也给上**：这条回执是 MCP/HTTP 调用方（多半是个 agent）唯一
+      // 读到的东西，只把 npm 的原始报错贴给它正是这次要修的那个毛病。
+      //
+      // 「没能启动」这句话只许在 command_missing 上说（审查 F2）：inner 那一档的诊断说的是
+      // 「命令跑起来了、它中途缺了东西」，照旧按没过处理，诊断只作线索附上。
       : { ...result, reason: "accept_gate_failed", gate,
-        error: gate.diagnosis
-          ? `${result.error} 但它没能启动：\n${gate.diagnosis}`
-          : `${result.error} 但这条命令没能跑起来：${gate.logTail.trim() || "详见任务时间线"}` };
+        error: gate.failure === "command_missing"
+          ? `${result.error} 但它没能启动：\n${gate.diagnosis ?? gate.logTail.trim()}`
+          : `${result.error} 但这条命令没能跑起来：${gate.logTail.trim() || "详见任务时间线"}`
+            + (gate.diagnosis ? `\n${gate.diagnosis}` : "") };
   } finally { if (!handedOff) dropPendingAcceptGate(taskId); }
 }

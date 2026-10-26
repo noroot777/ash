@@ -574,35 +574,38 @@ try {
     assert.equal((await runsOf(taskId)).at(0)!.status, "canceled");
   }
 
-  // 15. **命令在被测快照里压根不存在**：这不是「测试红了」，而是「测试没启动」。
+  // 15. **命令点名要跑的东西不在被测快照里**：这不是「测试红了」，而是它根本没跑到。
   //
   // 本机 2026-10-24/25 连撞四次（日志 data/runs/*/accept-gate-*.log）：项目把
   // `test:accept` 加进 package.json 的那次提交晚于任务的开工基线，于是门禁在任务那份
   // 快照里跑它，只拿到 npm 的原始报错 + rc=1。门禁照旧说一句「未通过：命令退出码非 0」，
   // 执行者于是把命令在两个提交上各复跑一遍，最后还是停下来问用户 —— 四次都这样。
   //
-  // 这里用一个自己写的 runner 复现**那个形状**（npm 原话 + rc=1 + 脚本名在 git 里查得
-  // 到），不依赖机器上装没装 npm。钉住三件事：归类不是 exit_code、结论里有目标分支上
-  // 的落点和出路、交回给 agent 的那份字明确不让它改代码。
+  // 用一个自己写的 runner 复现**那个形状**（npm 原话 + rc=1 + 脚本名在 git 里查得到），
+  // 不依赖机器上装没装 npm。夹具故意让基线里已经有一个**撞名**的 `test:accept-merge`：
+  // 第 1 轮审查 F3 实测，按子串算落点时它会把真正那个文件排除掉，于是结论反过来说
+  // 「目标分支上也找不到」。钉住四件事：归类不是 exit_code、结论里有核实过的落点和出路、
+  // 交回给 agent 的那份字明确不让它改代码、以及内部缺件那一档**不**走这副面孔。
   {
     const repo = makeRepo("gate-missing-command");
     // runner 本身在两棵树里都有；它照 npm 的措辞报「这个脚本名我找不到」。
     const runner = [
       "#!/bin/sh",
-      'grep -qx "$1" scripts.txt 2>/dev/null && exit 0',
+      'grep -qx "$1" scripts.json 2>/dev/null && exit 0',
       'printf \'npm error Missing script: "%s"\\n\' "$1"',
       "exit 1",
     ].join("\n");
     writeFileSync(join(repo, "runner.sh"), `${runner}\n`, { mode: 0o755 });
-    writeFileSync(join(repo, "scripts.txt"), "build\n");
+    // 基线里已经有一个撞名的（`test:accept-merge` 含 `test:accept` 这个子串）。
+    writeFileSync(join(repo, "scripts.json"), "build\ntest:accept-merge\n");
     git(repo, "add", "-A");
     git(repo, "commit", "-m", "baseline runner");
 
     const projectId = await seedProject("gate-missing-command", repo, "./runner.sh test:accept");
     const taskId = "gatemissing01";
-    await seedTask(projectId, repo, taskId, "missing.txt");
+    const wsPath = await seedTask(projectId, repo, taskId, "missing.txt");
     // 任务开工**之后**，目标分支才把这条命令加进去 —— 这正是本机那四次的形状。
-    writeFileSync(join(repo, "scripts.txt"), "build\ntest:accept\n");
+    writeFileSync(join(repo, "scripts.json"), "build\ntest:accept-merge\ntest:accept\n");
     git(repo, "add", "-A");
     git(repo, "commit", "-m", "Move frontend regression from push to acceptance");
     const introduced = git(repo, "rev-parse", "HEAD");
@@ -614,60 +617,105 @@ try {
     });
 
     const first = await acceptTask(taskId);
-    assert.equal(first.accepted, false, "命令没能启动，这一按一样不许合并");
+    assert.equal(first.accepted, false, "命令没跑到，这一按一样不许合并");
     await settled(taskId);
     const run = (await runsOf(taskId)).at(0)!;
     assert.equal(run.status, "failed");
     assert.equal(run.exitCode, 1, "测试自己的前提：这个形状的退出码就是 1，不是 127");
     // 核心那一条：跟普通测试红了**不是同一种** failure。
-    assert.equal(run.failure, "command_missing", "「命令在快照里不存在」不能还叫 exit_code");
+    assert.equal(run.failure, "command_missing", "「命令点名要跑的东西不在树里」不能还叫 exit_code");
     assert.equal(git(repo, "rev-parse", "main"), before, "归类不改变拦不拦：目标分支仍一动不动");
     assert.equal((await taskRow(taskId)).stage, "verified");
 
     // 结论要落盘（刷新后看得见），而且三件事齐全。
     assert.ok(run.diagnosis, "归类结论必须落在那一行上，不能只在这一次响应里说一句");
     const conclusion = run.diagnosis!;
-    assert.match(conclusion, /测试一行都没跑/, "① 命令没启动，不是代码红了");
+    assert.match(conclusion, /一行都没跑到/, "① 命令点名要跑的东西没解析出来");
     assert.match(conclusion, /Missing script/, "① 判据原文");
-    assert.match(conclusion, /scripts\.txt/, "② 它在目标分支上的落点");
-    assert.match(conclusion, new RegExp(introduced.slice(0, 8)), "② 是哪一次提交把它加进目标分支的");
+    // ② 撞名的 `test:accept-merge` 不许把真正的落点挤掉（F3 的那条反例走生产路径）。
+    assert.match(conclusion, /scripts\.json/, "② 它在目标分支上的落点（整词命中，不是子串）");
+    assert.match(conclusion, new RegExp(introduced.slice(0, 8)), "② 最早把它写进那个文件的是哪次提交");
     assert.match(conclusion, /落后 main 1 个提交/, "② 任务分支落后目标分支多少");
-    assert.match(conclusion, /合进任务分支/, "③ 出路一：合目标分支再验收");
+    assert.equal(/上也找不到/.test(conclusion), false, "撞名不许让结论反过来说「目标分支上也没有」（F3）");
+    // ③ 核实过目标分支上有，这一档才给合入建议。
+    assert.match(conclusion, /把 main 合进任务分支/, "③ 出路一：合目标分支再验收");
     assert.match(conclusion, /跳过前置命令/, "③ 出路二：这次显式跳过");
-    assert.match(readFileSync(run.logPath, "utf8"), /测试一行都没跑/, "结论也要写进这一次的日志");
+    assert.equal(/\*\*|`/.test(conclusion), false, "结论要纯文本：日志和 MCP 回执都不渲染 markdown（N4）");
+    assert.match(readFileSync(run.logPath, "utf8"), /一行都没跑到/, "结论也要写进这一次的日志");
     const timeline = () => readFileSync(sessionTranscriptPath(taskId, seededSession), "utf8");
-    for (let i = 0; i < 200 && !/测试一行都没跑/.test(timeline()); i++) await sleep(25);
-    assert.match(timeline(), /测试一行都没跑/, "结论要单独进时间线（用户刷新后唯一找得回的地方）");
+    for (let i = 0; i < 200 && !/一行都没跑到/.test(timeline()); i++) await sleep(25);
+    assert.match(timeline(), /一行都没跑到/, "结论要单独进时间线（用户刷新后唯一找得回的地方）");
 
     // 交回给 agent 的那份字：不许派「去修代码」这件它根本做不到的活。
     const { gateFailurePrompt } = await import("../src/accept-gate-messages.js");
-    const { summarizeAcceptGate } = await import("@ash/shared/accept-gate");
-    const view = { ...run, status: "failed" as const, failure: "command_missing" as const };
-    const prompt = gateFailurePrompt({
-      command: run.command, summary: summarizeAcceptGate({ ...view, stale: false, logTail: "", handoff: null,
-        exitCode: run.exitCode, startedAt: run.startedAt, finishedAt: run.finishedAt, id: run.id, taskId,
-        cwd: run.cwd, sourceCommit: run.sourceCommit, targetBranch: run.targetBranch,
-        targetCommit: run.targetCommit, fastForward: run.fastForward, logPath: run.logPath }),
-      logPath: run.logPath, tail: "", cwd: run.cwd, sourceCwd: repo, failure: "command_missing",
-      diagnosis: conclusion,
+    const promptOf = (failure: "command_missing" | "exit_code") => gateFailurePrompt({
+      command: run.command, summary: "未通过", logPath: run.logPath, tail: "",
+      cwd: run.cwd, sourceCwd: repo, failure, diagnosis: conclusion,
     });
+    const prompt = promptOf("command_missing");
     assert.match(prompt, /不要为这件事改任何代码/, "这一种不许让 agent 去改代码");
     assert.match(prompt, /不要为了确认而反复复跑/, "四次实测里烧掉的就是这几遍复跑");
     assert.match(prompt, /转述给用户/, "出路由用户拍板，agent 只负责转述");
     assert.equal(prompt.includes("定位到底是哪一条红的"), false, "普通红那一版的措辞不该出现在这一种上");
+    // F2：同一段诊断、失败类型不同，面孔必须跟着**类型**走而不是跟着「有没有诊断」走。
+    assert.equal(promptOf("exit_code").includes("不要为这件事改任何代码"), false,
+      "带着诊断但 failure 仍是 exit_code 的那一档，不许被交成「不许修」（审查 F2）");
 
-    // 对照组：同一个项目、真的跑起来并红了的命令，一个字都不许被改写。
+    // 对照组一：同一个项目、真的跑起来并红了的命令，一个字都不许被改写。
+    const again = async () => {
+      await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, taskId));
+      releaseTurn(taskId);
+      await acceptTask(taskId);
+      await settled(taskId);
+      return (await runsOf(taskId)).at(0)!;
+    };
     await db.update(projects).set({ acceptGateCommand: "echo 真断言失败 >&2; exit 4" }).where(eq(projects.id, projectId));
-    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, taskId));
-    releaseTurn(taskId);
-    await acceptTask(taskId);
-    await settled(taskId);
-    const real = (await runsOf(taskId)).at(0)!;
+    const real = await again();
     assert.equal(real.failure, "exit_code", "真跑起来、真红了的仍是 exit_code —— 归类不许吃掉真 bug");
     assert.equal(real.diagnosis, null, "普通的红没有「不是你的代码」这种结论可给");
+
+    // 对照组二（审查 F1 的生产路径）：顶层**跑起来了**，缺的是它内部点名的东西。
+    // 必须停在 inner —— failure 不改写，也不许摆那两条出路。
+    //
+    // 这个脚本必须提交进**任务自己那条分支**：门禁跑的是任务那份快照，提交到 repo 的 main
+    // 上它压根不在快照里，于是「入口文件缺失」那条硬证据会（正确地）把它判成 entry ——
+    // 第一次写这条用例就栽在这儿，夹具错了而生产是对的。
+    writeFileSync(join(wsPath, "nested.sh"), [
+      "#!/bin/sh",
+      'echo ACCEPTANCE STARTED',
+      './runner.sh helper-missing',
+    ].join("\n") + "\n", { mode: 0o755 });
+    git(wsPath, "add", "-A");
+    git(wsPath, "commit", "-m", "nested runner");
+    await db.update(projects).set({ acceptGateCommand: "./nested.sh" }).where(eq(projects.id, projectId));
+    const nested = await again();
+    assert.equal(nested.failure, "exit_code", "顶层跑起来了，内部缺件不许冒充顶层缺失（审查 F1）");
+    assert.match(nested.diagnosis ?? "", /这条命令跑起来了/, "inner 要如实说命令启动了");
+    assert.match(nested.diagnosis ?? "", /也可能是这次改动把名字写错了/, "inner 不许排除「是你改出来的」");
+    assert.equal(/一行都没跑到|跳过前置命令|合进任务分支/.test(nested.diagnosis ?? ""), false,
+      "inner 不许摆那两条出路，也不许说测试没跑");
+
+    // 对照组三：命令的**入口文件**不在这份快照里。这条硬证据跟日志里说了什么无关
+    // （命令可能把输出全吞了），是 127/126 降级成 inner 之后补上的那一路（审查 N1）。
+    await db.update(projects).set({ acceptGateCommand: "./only-on-target.sh 2>/dev/null" }).where(eq(projects.id, projectId));
+    writeFileSync(join(repo, "only-on-target.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "add gate entry script on target only");
+    const entryIntroduced = git(repo, "rev-parse", "HEAD");
+    const absent = await again();
+    assert.equal(absent.failure, "command_missing", "入口文件不在快照里 = 命令点名要跑的东西不在树里");
+    // 这一档的判据是**入口文件在不在**，跟日志里写了什么无关 —— 夹具的 stderr 被
+    // 2>/dev/null 丢干净了，一个字都没有，它照样能定性。
+    assert.match(absent.diagnosis ?? "", /被测快照里没有 \.\/only-on-target\.sh 这个文件/, "硬证据要出现在结论里");
+    // 这个名字就是个文件路径，而这个文件只有目标分支上有 —— 文件级的确定事实，
+    // 措辞不许退回「文字命中」那一档的对冲（反过来也不许，见纯函数那组）。
+    assert.match(absent.diagnosis ?? "", /只有目标分支上有/, "文件级事实可以直说");
+    assert.equal(/文字命中/.test(absent.diagnosis ?? ""), false, "路径模式不是文字命中");
+    assert.match(absent.diagnosis ?? "", new RegExp(entryIntroduced.slice(0, 8)), "要指出是哪次提交把它加到目标分支的");
+    assert.match(absent.diagnosis ?? "", /把 main 合进任务分支/, "核实过目标分支上有，才给合入建议");
   }
 
-  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 / 命令不存在≠测试红了 全部通过");
+  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 / 命令没跑到≠测试红了(含嵌套缺件只落 inner) 全部通过");
   await (await import("./test-accept-gate-lifecycle.js")).testGateLifecycle({
     root, makeRepo, seedProject, seedTask, taskRow, settled,
   });

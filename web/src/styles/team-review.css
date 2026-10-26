@@ -192,8 +192,10 @@
 .accept-gate-command dt { color: var(--faint); font-size: 10px; }
 .accept-gate-command dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
 .accept-gate-command code { white-space: pre-wrap; }
-/* 门禁归类结论：「这条命令在快照里不存在」那一类的出路。原文自带换行与序号，所以
-   pre-line —— 它是用户在这张卡上唯一能读到「不用我修、该怎么办」的地方，不折起来。 */
+/* 门禁归类结论：「这条命令在快照里不存在」那一类的出路。它是用户在这张卡上唯一能读到
+   「不用我修、该怎么办」的地方，所以不折起来。原文是**纯文本**（gateCommandMissNotice
+   不发 markdown：同一份字还要进门禁日志和 MCP 回执，星号反引号在那两处只会原样显示
+   —— 第 1 轮审查 N4），自带换行与序号，所以 pre-line。 */
 .accept-gate-diagnosis { border: 1px solid color-mix(in lch,var(--amber) 34%,var(--line)); border-radius: 7px; background: rgb(181 123 0 / 6%); padding: 7px 9px; color: var(--ink); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
 .accept-gate-diagnosis > span { display: block; margin-bottom: 3px; color: var(--amber); font-size: 9.5px; font-weight: 650; }
 .accept-gate-log > span { display: flex; align-items: center; justify-content: space-between; color: var(--faint); font-size: 9.5px; font-weight: 650; }

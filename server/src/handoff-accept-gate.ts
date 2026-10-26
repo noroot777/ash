@@ -8,7 +8,9 @@ import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 type GateRow = typeof acceptGateRuns.$inferSelect;
 export type HandoffGateRun = Pick<GateRow, "id" | "command" | "status" | "exitCode" | "failure" | "sourceCommit"
   | "targetBranch" | "targetCommit" | "fastForward" | "startedAt" | "finishedAt" | "handoffAt" | "handoffError">
-  & { executionMode?: GateRow["executionMode"] };
+  // diagnosis 可选：旧 manifest 没有这个字段，迁入后按 null 处理（没归类过）。不带上它的话
+  // 迁入页面仍说「出路见下面那段结论」而下面什么都没有（第 1 轮审查 N2）。
+  & { executionMode?: GateRow["executionMode"]; diagnosis?: GateRow["diagnosis"] };
 const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 
 export function validateGatePayload(manifest: HandoffManifest): void {
@@ -24,7 +26,7 @@ export function validateGatePayload(manifest: HandoffManifest): void {
       || typeof run.command !== "string" || typeof run.startedAt !== "string"
       || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived", "command_missing"].includes(run.failure)
       || (run.exitCode != null && !Number.isInteger(run.exitCode))) throw new HandoffError("acceptGateRuns 记录非法");
-    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError"] as const) {
+    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError", "diagnosis"] as const) {
       if (run[field] != null && typeof run[field] !== "string") throw new HandoffError(`acceptGateRuns.${field} 非法`);
     }
     if (run.fastForward != null && typeof run.fastForward !== "boolean") throw new HandoffError("acceptGateRuns.fastForward 非法");
@@ -45,7 +47,8 @@ export async function collectGateRuns(taskId: string): Promise<HandoffGateRun[]>
   return rows.map(row => ({ id: row.id, command: row.command, status: row.status, exitCode: row.exitCode,
     failure: row.failure, sourceCommit: row.sourceCommit, targetBranch: row.targetBranch, targetCommit: row.targetCommit,
     fastForward: row.fastForward, startedAt: row.startedAt, finishedAt: row.finishedAt,
-    handoffAt: row.handoffAt, handoffError: row.handoffError, executionMode: row.executionMode }));
+    handoffAt: row.handoffAt, handoffError: row.handoffError, executionMode: row.executionMode,
+    diagnosis: row.diagnosis }));
 }
 
 export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete" | "insert">,
@@ -60,6 +63,7 @@ export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete"
     ...row, taskId: manifest.task.id, projectId: manifest.targetProjectId,
     cwd: "（跨机迁入的历史快照，当前机器不可重跑）", logPath: acceptGateLogPath(manifest.task.id, row.id)
       + (manifest.files.some(file => file.kind === "run-artifact" && file.rel === `accept-gate-${row.id}.log`) ? "" : ".not-transferred"),
+    diagnosis: row.diagnosis ?? null,
     sourceFingerprint: null, pid: null, pidStartedAt: null, processPending: false, acceptOptions: null,
   })));
 }

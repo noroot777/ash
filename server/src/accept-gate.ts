@@ -397,7 +397,9 @@ async function settleGate(
     // rc≠0 的那一档再问一句「这到底是不是代码红了」：命令在被测快照里压根不存在时，
     // 测试一行都没跑，而出路（合目标分支 / 这次跳过）跟修代码毫无关系。认不出就是 null，
     // 照旧按 exit_code 处理。判据见 accept-gate-miss.ts。
-    const diagnosed = outcome.status === "failed" ? await diagnoseGateFailure(row, outcome.failure).catch(() => null) : null;
+    // 传 outcome 而不是 row：`row` 是结算**前**读出来的那一行，上面的 exitCode 还是插入时
+    // 的 null，照它判就永远走不到按退出码兜底那一档（第 1 轮审查 N1）。
+    const diagnosed = outcome.status === "failed" ? await diagnoseGateFailure(row, outcome).catch(() => null) : null;
     if (diagnosed) outcome = { ...outcome, failure: diagnosed.failure };
     const timer = live.get(row.taskId);
     const finishedAt = now();

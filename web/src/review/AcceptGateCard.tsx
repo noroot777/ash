@@ -118,7 +118,11 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
     try {
       await api.rehandOffAcceptGate(task.id);
       await reload();
-      notify("已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令");
+      // 提示要跟这一次的失败类型对上（第 1 轮审查 N3）：卡上明说「不许改代码」，提示却说
+      // 「已交回去修」，用户看到的是两句相反的话。
+      notify(latest?.failure === "command_missing"
+        ? "已把这条结论交回给智能体；它会把出路转述给你，不会为此改代码"
+        : "已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -377,8 +381,10 @@ function detail(
     const told = !latest.handoff ? "结论还没交给智能体。"
       : latest.handoff.error ? `已经试过把结论交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）。`
         : "结论已经交回这个任务的智能体了（它被明确要求不要为此改代码）。";
+    // **这里不摆出路**（第 1 轮审查 F4）：出路取决于「目标分支上到底有没有这条命令」，
+    // 而那件事只有下面那段结论核对过。在这儿补一句「合进来就行」，就是一句没核过的保证。
     return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${told}`
-      + "重跑不会变绿：这份快照里仍然没有这条命令。出路见下面那段结论 —— 把目标分支合进任务分支再验收，或者这次明确跳过它。";
+      + "重跑不会变绿：这份快照里仍然没有它。出路以下面那段结论为准（它核对过目标分支上的情形）。";
   }
   return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${handoff}`
     + (latest.status === "failed" ? "重新点「验收通过」会重新执行命令，即使代码没有变化，也不会直接复用这次失败；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
