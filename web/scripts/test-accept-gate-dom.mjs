@@ -4,6 +4,7 @@ import { chromium } from "playwright-core";
 import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
+import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
 
 // 验收台上那张「验收前置命令」卡。钉住的是四件在真实页面上才看得出来的事：
 //
@@ -144,6 +145,9 @@ try {
       return json(route, plan?.body ?? store.gate);
     });
     await page.goto(`${base}${query}`);
+    if (!query.includes("wait=1") && !query.includes("dots=1")) {
+      await page.locator('.accept-gate-card:not([aria-busy="true"])').waitFor();
+    }
     return { page, store };
   };
 
@@ -169,12 +173,13 @@ try {
     await page.close();
   }
 
-  // ② 成员（改不动项目设置）：没设命令时整张卡都不出现 —— 对他只是一句无关的话。
+  // ② 成员能看见未设置的状态，但没有修改项目配置的入口。
   {
     const { page } = await open({ gate: { command: null, running: null, latest: null }, role: "member" });
     await page.locator("h1").waitFor();
     await page.waitForTimeout(300);
-    assert.equal(await page.locator(".accept-gate-card").count(), 0, "没权限改的人不该看到这个入口");
+    assert.match(await page.locator(".accept-gate-command").innerText(), /未设置/);
+    assert.equal(await page.getByRole("button", { name: "设一条" }).count(), 0);
     await page.close();
   }
 
@@ -656,6 +661,7 @@ try {
     await page.close();
   }
   await testAcceptGateRecovery({ open, run, basis });
+  await testAcceptGateActions({ browser, base, run });
   console.log("accept gate card DOM regression passed");
 } finally {
   await browser?.close();
