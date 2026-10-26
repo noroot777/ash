@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync,
-  symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync,
+  rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -220,7 +220,7 @@ try {
   writeFileSync(join(fallbackSource, "pkg", "dist", "cli.mjs"),
     'import { mark } from "./sibling.mjs";\nconsole.log(mark);\n');
   writeFileSync(join(fallbackSource, "executable.sh"), "#!/bin/sh\necho ok\n");
-  execFileSync("chmod", ["755", join(fallbackSource, "executable.sh")]);
+  chmodSync(join(fallbackSource, "executable.sh"), 0o755); // Windows 没有 chmod 可执行文件,只能走 fs
   linkDir(join("pkg", "dist"), join(fallbackSource, "linked-dist"));
   if (fileLinks) {
     symlinkSync(join("pkg", "dist", "cli.mjs"), join(fallbackSource, "cli.mjs"));
