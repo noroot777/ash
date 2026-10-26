@@ -6,7 +6,7 @@ import { spawnAcceptGate, stopAcceptGate, type GateExit } from "../src/accept-ga
 import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
 import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
   type GateMissOrigin } from "../src/accept-gate-miss.js";
-import { gateEntryAsk, scriptDefinedIn, type GateEntryProbe } from "../src/accept-gate-entry.js";
+import { gateEntryAsk, probeGateEntry, scriptDefinedIn, type GateEntryProbe } from "../src/accept-gate-entry.js";
 import { gateFailurePrompt } from "../src/accept-gate-messages.js";
 import type { AcceptGateMissAttribution } from "@ash/shared/accept-gate";
 
@@ -273,10 +273,30 @@ try {
     ["npm run start", null],
     ["npm run restart", null],
     ["pnpm run start", null],
-    // 未知选项可能把后面那个词当成自己的值 —— 实测 `npm run --loglevel warn test:accept`
-    // 真跑的是 test:accept;按「以 - 开头就跳过」找位置参数会把 warn 当成脚本名。
-    ["npm run --loglevel warn test:accept", null],
+    // 未知选项可能把后面那个词当成自己的值。`--loglevel` 在白名单里(它只影响输出),所以这
+    // 条解释得了 —— 实测 npm 真跑的就是 test:accept,把 warn 当脚本名才是错的。
+    ["npm run --loglevel warn test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
     ["npm --userconfig /tmp/x run test:accept", null],
+    // ── 会把 runner 指到另一份 manifest 的三个入口（第 5 轮审查 F1，四条都本机实测）──
+    // ① 命令行:白名单之外一律白卷,**带等号的也一样**。旧版「`--x=y` 自带值就跳过」把
+    //    `--workspace=child` 当成了无关选项,于是去核根目录那份,把一次真跑起来、真报断言
+    //    失败的红说成「一行都没跑到、不要改代码」。
+    ["npm --workspace=child run test:accept", null],
+    ["npm --workspace child run test:accept", null],
+    ["npm --workspaces=true run test:accept", null],
+    ["npm --include-workspace-root run test:accept", null],
+    ["pnpm --filter=child run test:accept", null],
+    // ② 环境:runner 自己的配置能从前置赋值进来(实测 `npm_config_workspace=child` 真让它
+    //    跑了子项目那个脚本);无关的环境变量照旧剥掉。
+    ["npm_config_workspace=child npm run test:accept", null],
+    ["NPM_CONFIG_WORKSPACE=child npm run test:accept", null],
+    ["yarn_x=1 yarn run accept", null],
+    ["CI=1 TZ=UTC npm run test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    // ③ shell 注释按语义截断:注释里那个 `--prefix .` 不是真的目录(旧版拿它覆盖了 child)。
+    ["npm --prefix child run test:accept # --prefix .", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
+    ["npm run test:accept # 这后面写什么都不执行", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    // 子命令必须在最前:`npm test run` 是「跑 test 这个生命周期、把 run 当参数」。
+    ["npm test run", { kind: "script", runner: "npm", name: "test", dir: "." }],
     // 这些把「去哪儿找脚本」整个换掉,解析不了结果就别猜（反例③）。
     ["npm -w web run test", null],
     ["npm run test -w web", null],
@@ -313,6 +333,31 @@ try {
     ["not json at all", "test:accept", null],
   ] as const) {
     assert.equal(scriptDefinedIn(manifest, name), expected, `scripts 判据算错了：${manifest}`);
+  }
+
+  // ── 起跑前那一层:命令行解释得了,**配置来源**也得解释得了（第 5 轮审查 F1）──
+  //    判据要窄到只认实测会改掉查找路径的那一族:npm 跑脚本时会把自己的配置全量注入子进程
+  //    （本机实测注入了 prefix/userconfig/globalconfig/local_prefix 等 12 个 `npm_config_*`）,
+  //    把那些内省变量当成「配置被改过」,等于在任何由 npm 启动的环境里永远交白卷。
+  {
+    const tree = mkdtempSync(join(tmpdir(), "ash-gate-rc-"));
+    writeFileSync(join(tree, "package.json"), '{"scripts":{"build":"echo x"}}');
+    const probe = () => probeGateEntry(tree, "npm run test:accept");
+    const defined = { ask: "test:accept", resolved: false, by: "被测快照 package.json 的 scripts" };
+    // 这台机器上就有那一堆注入变量,所以这一条同时钉住「不许因它们白卷」。
+    assert.deepEqual(await probe(), defined, "没有改过配置时照常给确定答案");
+    writeFileSync(join(tree, ".npmrc"), "registry=https://example.com\naudit=false\n");
+    assert.deepEqual(await probe(), defined, "npmrc 里只有无关键,不影响去哪儿找脚本");
+    writeFileSync(join(tree, ".npmrc"), "; workspace=child\n# workspace=child\n");
+    assert.deepEqual(await probe(), defined, "注释掉的设置不算");
+    writeFileSync(join(tree, ".npmrc"), "workspace=child\n");
+    assert.equal(await probe(), null, "npmrc 把 runner 指到子项目:命令行上一个字都看不出来,交白卷");
+    writeFileSync(join(tree, ".npmrc"), "registry=https://example.com\n");
+    process.env.npm_config_workspace = "child";
+    assert.equal(await probe(), null, "环境里已经生效的 workspace 配置同样算");
+    delete process.env.npm_config_workspace;
+    assert.deepEqual(await probe(), defined, "撤掉之后恢复确定答案");
+    rmSync(tree, { recursive: true, force: true });
   }
 
   // 整词命中（文字线索那一路用它）：子串会把 `test:accept-merge` 算成含 `test:accept`，

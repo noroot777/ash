@@ -18,12 +18,31 @@
 //  · `npm start` —— 没有 `scripts.start` 时 npm **有默认行为**（有 `server.js` 就跑
 //    `node server.js`，实测如此），所以「manifest 里没有」推不出「没东西可跑」。
 //
-// 所以这一层的规矩是**证明不了就交白卷**：
+// **而命令行只是三个配置来源之一（第 5 轮审查 F1 实测四条）。** runner 去哪儿找 manifest，
+// 命令行、继承的环境、仓库里的 npmrc 都能改掉，三者任缺一环这份「缺失」就不成立：
+//  · `npm --workspace=child run test:accept` —— 带等号的 scope 选项（旧版「`--x=y` 自带值
+//    就跳过」把它当成了无关选项）；
+//  · `npm_config_workspace=child npm run test:accept` —— 配置从环境进来（旧版无条件剥掉
+//    所有前置赋值）；
+//  · `.npmrc` 里写着 `workspace=child` —— 配置从仓库进来，命令行上一个字都看不出来；
+//  · `npm --prefix child run test:accept # --prefix .` —— shell 注释，旧版把注释里那个
+//    `--prefix .` 当成了真的目录。
+// 四条里 runner 真跑的都是子项目那个脚本、真打了启动提示、真报了断言失败，却都被说成
+// 「一行都没跑到、不要改代码」。
+//
+// 所以这一层的规矩是**证明不了就交白卷**。判据是「这条命令的执行目标我能不能完整解释」，
+// 不是「它像不像我见过的形状」：
 //  · 命令里有任何我读不准的 shell 语义（多步、变量、命令替换、通配、转义、未闭合引号），
-//    返回 null；
-//  · 有任何会改变「去哪儿找脚本」的选项而我解析不了（workspace、递归、filter），返回 null；
+//    返回 null；注释按 shell 语义截断，不当成参数；
+//  · 选项**只认白名单**（换目录的、确定不吃词的开关、确定只影响输出的带值选项），其余一律
+//    返回 null —— 带不带等号都一样。靠黑名单逐条堵组合这条路已经证明走不通：补掉一个写法，
+//    换个写法又进来；
+//  · 前置环境赋值里出现 runner 自己的配置（`npm_config_*`/`yarn_*`/`pnpm_*`），返回 null；
+//    进程环境里已经生效的同类配置也一样查；
+//  · 会生效的 npmrc 里出现改掉查找路径的键（`prefix`/`workspace`/…），或者那份文件存在却
+//    读不动，返回 null；
 //  · 只认那些**绝对没有默认行为**的子命令（`npm run X`、`npm test`），`start`/`restart`
-//    一律不认；
+//    一律不认，而且子命令必须在最前（`npm test run` 不是「跑 run 这个脚本」）；
 //  · 查的 manifest 必须是 runner 真会读的那一份（跟着 `--prefix`/`-C`/`--dir`/`--cwd` 走）。
 //
 // 反方向也要说清：`resolved: true` **只证明它在树里，不证明它跑起来了**（审查实测：一个存在
@@ -33,6 +52,7 @@
 // 答案在 spawn 之前取一次，连同判据一起落到那一行上（accept_gate_runs.entryProbe），结算时
 // 只许读它、不许重算。
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative } from "node:path";
 
@@ -74,11 +94,33 @@ const NPM_LIFECYCLE = new Set(["test"]);
  */
 const DEFAULTED_SCRIPTS = new Set(["start", "restart", "stop"]);
 
-/** 出现任何一个就交白卷：它们会改变「去哪儿找脚本」，而我解析不了那个结果。 */
-const SCOPE_CHANGING = /^(-w|-ws|-r|-i|--workspace|--workspaces|--recursive|--filter|--if-present|--package|workspace|workspaces|exec|dlx)(=|$)/;
+/** 这些**子命令**把「跑什么」整个换掉，不是在跑本项目的脚本。 */
+const SCOPE_SUBCOMMANDS = new Set(["workspace", "workspaces", "exec", "dlx", "recursive"]);
 
 /** 告诉 runner 换目录的选项。值可以跟在后面，也可以 `=` 连写。 */
 const DIR_FLAGS = new Set(["--prefix", "-C", "--dir", "--cwd"]);
+
+/**
+ * runner 自己的配置也能从环境进来（实测 `npm_config_workspace=child npm run test:accept`
+ * 真去跑了子项目那个脚本）。前缀命中这些、键又落在 SCOPE_CONFIG_KEYS 里的，一律交白卷。
+ */
+const RUNNER_CONFIG_ENV = /^(npm_config_|yarn_|pnpm_)/i;
+
+/**
+ * **实测**会改掉「`npm run` 去哪儿找 manifest」的配置键。只有 workspace 这一族：
+ *  · `.npmrc` 写 `workspace=child`、或者环境给 `npm_config_workspace=child`，`npm run probe`
+ *    真的跑到了 child（本机实测两种都成立）；
+ *  · `prefix=child` 走 `.npmrc` 或走环境**都不改**（实测仍在根目录跑）—— 它是全局安装位置。
+ *
+ * 判据必须这么窄，否则会反过来废掉整个判定：`npm` 运行脚本时会把自己的配置全量注入子进程
+ * （本机实测注入了 prefix / userconfig / globalconfig / local_prefix / global_prefix 等 12 个
+ * `npm_config_*`），把那些内省变量算成「配置被改过」，等于在任何由 npm 启动的环境里永远
+ * 交白卷。workspace 不在注入清单里，只有用户显式设置时才出现。
+ *
+ * 命令行侧不靠这张表：那边是**白名单之外一律白卷**，`--workspace=child`、`--userconfig X`
+ * 之类自然都落进白卷，不需要逐个点名。
+ */
+const SCOPE_CONFIG_KEYS = new Set(["workspace", "workspaces", "include-workspace-root"]);
 
 /**
  * 确定**不吃下一个词**的开关。不在这张表里、又不是 `--x=y` 自带值的选项，一律交白卷：
@@ -90,6 +132,9 @@ const DIR_FLAGS = new Set(["--prefix", "-C", "--dir", "--cwd"]);
  */
 const SAFE_SWITCHES = new Set(["--silent", "-s", "--quiet", "--no-audit", "--no-fund",
   "--no-progress", "--no-color", "--ignore-workspace-root-check"]);
+
+/** 确定只影响**输出**、不影响「去哪儿找脚本」的带值选项。 */
+const SAFE_VALUED = new Set(["--loglevel", "--log-level"]);
 
 /**
  * 把命令切成词。**读不准就返回 null**，绝不猜。
@@ -105,6 +150,9 @@ function tokenize(command: string): string[] | null {
   let at = 0;
   while (at < command.length) {
     if (/\s/.test(command[at]!)) { at++; continue; }
+    // shell 注释：词首的 `#` 之后整条都不执行。旧版把它当普通词，于是注释里的
+    // `# --prefix .` 覆盖掉了真正的 `--prefix child`（第 5 轮审查 F1 实测）。
+    if (command[at] === "#") break;
     // 重定向整段跳过：它不是一个步骤，也不是入口。
     const redirect = /^\d*[<>]{1,2}\s*\S+/.exec(command.slice(at));
     if (redirect) { at += redirect[0].length; continue; }
@@ -143,22 +191,63 @@ function runnerArgs(words: string[]): { positional: string[]; dir: string } | nu
     const word = words[at]!;
     if (word === "--") break;                      // 后面都是脚本的参数，入口身份到这儿定了
     if (!word.startsWith("-")) {
-      if (SCOPE_CHANGING.test(word)) return null;  // `workspace` / `exec` / `dlx` 这类子命令
+      if (SCOPE_SUBCOMMANDS.has(word)) return null;
       positional.push(word);
       continue;
     }
     const eq = word.indexOf("=");
     const flag = eq > 0 ? word.slice(0, eq) : word;
+    const inlineValue = eq > 0 ? word.slice(eq + 1) : null;
     if (DIR_FLAGS.has(flag)) {
-      const value = eq > 0 ? word.slice(eq + 1) : words[++at];
+      const value = inlineValue ?? words[++at];
       if (!value || value.startsWith("-")) return null;
       dir = value;
       continue;
     }
-    if (eq > 0 || SAFE_SWITCHES.has(flag)) continue;
-    return null;                                   // 吃不吃下一个词,我说不准
+    if (SAFE_VALUED.has(flag)) { if (inlineValue === null) at++; continue; }
+    if (inlineValue === null && SAFE_SWITCHES.has(flag)) continue;
+    // 白名单之外一律白卷，**带等号的也一样**：`--workspace=child` 换掉的正是「去哪儿找
+    // 脚本」，而旧版「`--x=y` 自带值就跳过」把它当成了无关选项（第 5 轮审查 F1 实测）。
+    return null;
   }
   return { positional, dir };
+}
+
+/**
+ * 进程环境里**已经生效**的 runner 配置（门禁 spawn 继承它）。命中就交白卷。
+ *
+ * 命令行上看不出来的那一类：用户在 shell 里 export 过 `npm_config_workspace`，门禁跑的时候
+ * 它照样生效，而这一层若只读命令行就会去核错一份 manifest。
+ */
+const scopeChangingEnv = (): boolean => Object.keys(process.env).some(key => {
+  const prefix = RUNNER_CONFIG_ENV.exec(key);
+  return !!prefix && SCOPE_CONFIG_KEYS.has(key.slice(prefix[0].length).replace(/_/g, "-").toLowerCase());
+});
+
+/**
+ * 会生效的那几份 runner 配置文件里，有没有改掉「去哪儿找 manifest」的键。
+ *
+ *  · 有 → true（交白卷）；
+ *  · 文件不存在 → 不影响；
+ *  · **存在却读不动 → true** —— 读不出来不等于里面没有，这跟 git 那边同一条规矩。
+ *
+ * yarn 的 rc 文件不解析：那套语义我没实测过，存在就不敢下结论（只影响 yarn 这一路）。
+ */
+async function scopeChangingRc(treeDir: string, runner: "npm" | "pnpm" | "yarn"): Promise<boolean> {
+  if (runner === "yarn" && [".yarnrc", ".yarnrc.yml"].some(name => existsSync(join(treeDir, name)))) return true;
+  // 用户级那份读**生效的**那一个：npm 把它的位置注入成 `npm_config_userconfig`，默认就是
+  // `~/.npmrc`。拿这个变量去读，而不是因为它存在就交白卷（它是注入值，不是用户改过的证据）。
+  const userRc = process.env.npm_config_userconfig?.trim() || join(homedir(), ".npmrc");
+  for (const file of [join(treeDir, ".npmrc"), userRc]) {
+    if (!existsSync(file)) continue;
+    const text = await readFile(file, "utf8").catch(() => null);
+    if (text === null) return true;
+    for (const line of text.split("\n")) {
+      const key = line.split("=")[0]?.trim().toLowerCase();
+      if (key && !/^[;#/[]/.test(key) && SCOPE_CONFIG_KEYS.has(key)) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -171,7 +260,12 @@ export function gateEntryAsk(command: string): GateEntryAsk | null {
   const words = tokenize(command);
   if (!words) return null;
   // 前缀的环境变量赋值（`CI=1 npm run x`）不是入口，剥掉；后面出现的 `A=B` 是参数，留着。
-  while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) words.shift();
+  // 但 runner 自己的配置也能这么传进来（实测 `npm_config_workspace=child` 真让它去跑了子
+  // 项目那个脚本），那一类改掉的正是「去哪儿找脚本」—— 解释不了就交白卷。
+  while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) {
+    if (RUNNER_CONFIG_ENV.test(words[0]!)) return null;
+    words.shift();
+  }
   const head = words[0];
   if (!head) return null;
   const runner = /^(npm|pnpm|yarn)$/.exec(head)?.[1] as "npm" | "pnpm" | "yarn" | undefined;
@@ -179,7 +273,8 @@ export function gateEntryAsk(command: string): GateEntryAsk | null {
     const args = runnerArgs(words.slice(1));
     if (!args) return null;
     const { positional, dir } = args;
-    const at = positional.indexOf("run") >= 0 ? positional.indexOf("run") : positional.indexOf("run-script");
+    // 子命令必须在最前：`npm test run` 是「跑 test 这个生命周期」，不是「跑 run 这个脚本」。
+    const at = positional[0] === "run" || positional[0] === "run-script" ? 0 : -1;
     if (at >= 0) {
       const name = positional[at + 1];
       if (!name) return null;
@@ -231,6 +326,10 @@ export async function probeGateEntry(treeDir: string, command: string): Promise<
     const resolved = insideTree(treeDir, ask.name);
     return resolved ? { ask: ask.name, resolved: existsSync(resolved), by: "被测快照里的文件" } : null;
   }
+  // 命令行只是三个配置来源之一：环境和 npmrc 同样能把 runner 指到另一份 manifest
+  // （第 5 轮审查 F1 实测）。这两处解释不了就交白卷 —— 这一层的结论会被下游当成
+  // 「测试一行都没跑、不要改代码」。
+  if (scopeChangingEnv() || await scopeChangingRc(treeDir, ask.runner)) return null;
   const file = askManifest(ask);
   const resolved = insideTree(treeDir, file);
   if (!resolved) return null;

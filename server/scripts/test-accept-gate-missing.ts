@@ -340,5 +340,24 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   assert.match(unknownPrompt, /是不是你这次改动把它弄没的/, "要先去核归因");
   assert.match(unknownPrompt, /改回来或同步改配置/, "核下来是自己弄没的就该去改");
 
-  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 / 引入历史读不动 / 继承后删除 全部通过");
+  // 对照组十二（审查五 F1）：命令行上一个字都看不出来 —— `.npmrc` 里写着 workspace=child，
+  // runner 真跑的是子项目那个脚本。只核根目录那份 manifest，就会把一次真断言失败说成
+  // 「一行都没跑到、不要改代码」。本机实测过这条配置确实改了 npm run 的落点。
+  writeFileSync(join(wsPath, "package.json"), `${JSON.stringify({
+    name: "gate-fixture", private: true, workspaces: ["child"], scripts: { build: "echo build" } }, null, 2)}\n`);
+  writeFileSync(join(wsPath, "child", "package.json"), `${JSON.stringify({
+    name: "child", private: true,
+    scripts: { "test:accept": "echo ACCEPTANCE STARTED; echo ASSERTION FAILED >&2; exit 1" } }, null, 2)}\n`);
+  writeFileSync(join(wsPath, ".npmrc"), "workspace=child\n");
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "npmrc points npm run at the child workspace");
+  const viaRc = await again("npm run test:accept");
+  assert.match(readFileSync(viaRc.logPath, "utf8"), /ACCEPTANCE STARTED/,
+    "测试自己的前提：子项目那个脚本真跑起来了");
+  assert.equal(viaRc.entryProbe, null,
+    "配置能把 runner 指到另一份 manifest 时，起跑前这一层交白卷（审查五 F1）");
+  assert.equal(viaRc.failure, "exit_code", "一次真的断言失败，不许说成「没启动」");
+  assert.equal(viaRc.diagnosis, null, "也不许给出任何「不是你的代码」的结论");
+
+  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 / 引入历史读不动 / 继承后删除 / npmrc 换落点 全部通过");
 }
