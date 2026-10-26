@@ -289,9 +289,12 @@ try {
   //    这时认它开着就是猜。回到 ▶,并照实说退的是**启动脚本**。
   await page.evaluate(() => { window.__service = "detached"; });
   await reopen();
-  await pop.getByRole("button", { name: "启动", exact: true }).waitFor();
+  // 同 ⑬-中:**等文案自己变过来**。上一幕(unprovable)头部也摆着「启动」,只等那颗按钮
+  // 出现等不到任何东西,读到的是上一幕的 DOM(回归第一次跑就拿到了「已停止（没能确认停净）」)。
+  await page.waitForFunction(() =>
+    /启动脚本已退出/.test(document.querySelector(".cmd-pop__svc-state")?.textContent ?? ""));
   assert.equal(await pop.getByRole("button", { name: /^停止/ }).count(), 0);
-  assert.match(await pop.locator(".cmd-pop__svc-state").innerText(), /启动脚本已退出/);
+  await pop.getByRole("button", { name: "启动", exact: true }).waitFor();
   await page.evaluate(() => { delete window.__service; });
   await page.keyboard.press("Escape");
 
