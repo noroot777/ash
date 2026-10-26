@@ -261,7 +261,15 @@ async function killScriptRun(child: ChildProcess, confine: Confinement | null): 
     : "已经把它和它拉起的进程一起杀掉";
 }
 
-/** 残留核验:有就返回一句人话,没有返回 null。「问不出来」不算没有,如实说问不出来。 */
+/**
+ * 残留核验:有就返回一句人话,没有返回 null。「问不出来」不算没有,如实说问不出来。
+ *
+ * 两个平台手里的证据不一样。POSIX 有进程组,`groupAlive` 直接问内核;**Windows 一条都没有**
+ * —— `groupAlive`/`readProcessTableSync` 在那边全是短路,唯一的来源就是 Job Object。所以那边
+ * 圈没建起来(第一次 enroll 要等守圈进程启动,约 180 ms,比它短命的运行圈不住)或者查不出来
+ * 时,只能说「按 ppid 树杀过一遍,脱离了父子关系的后代核不到」。借 POSIX 那条路的沉默去说
+ * 「已经一起杀掉了」,跟把 lsof 失灵读成「端口空了」是同一类错(第 1 轮审查 E2)。
+ */
 async function verifyScriptGone(child: ChildProcess, confine: Confinement | null): Promise<string | null> {
   const deadline = Date.now() + CLEANUP_VERIFY_MS;
   for (;;) {
@@ -270,6 +278,10 @@ async function verifyScriptGone(child: ChildProcess, confine: Confinement | null
     const groupLeft = !IS_WINDOWS && child.pid !== undefined && groupAlive(child.pid);
     if (!members && !groupLeft) {
       if (read?.kind === "unqueryable") return `核不出它是不是真的清空了（${read.why}）`;
+      // 「集合为空」是内核给的权威答案,只有它算核过了;absent / 压根没圈都不算。
+      if (IS_WINDOWS && read?.kind !== "members") {
+        return "这次没圈起来（Job Object 不可用），只按 ppid 树杀过一遍 —— 脱离了父子关系的后代核不到";
+      }
       return null;
     }
     if (Date.now() >= deadline) {
