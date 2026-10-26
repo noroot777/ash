@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { chmod, copyFile, lstat, mkdir, readdir, readFile, readlink, realpath, symlink } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { lstat, mkdir, readdir, readFile, readlink, realpath, symlink } from "node:fs/promises";
+import { basename, dirname, join, sep } from "node:path";
 import { copyLink, insideTree } from "./accept-gate-tree.js";
+import { copyTree, linkMismatch, type Relocation } from "./accept-gate-relocate.js";
 
 // 门禁快照冻住的是**源码**；依赖是 lockfile 的产物，按产物对待。
 //
@@ -151,34 +151,71 @@ export async function dependencyDigest(root: string, dep: string): Promise<strin
  * 判据只认声明，不认「扫一遍依赖目录看哪些链指着源码」。理由见顶部：扫描漏一层就会把没隔离的
  * 副本判成合格，而声明是项目自己写下的、不随安装状态变化的那一份事实。
  */
-export type WorkspacePackages = { dirs: string[]; names: string[] };
+export type WorkspacePackages = {
+  /** 展开出来的包目录（相对项目根）。可能不完整——判据不靠它，见 declared。 */
+  dirs: string[];
+  /** 展开出来的包名。dependencyMismatch 用它证明隔离。 */
+  names: string[];
+  /** 目录 → 包名，用于改写前验证**目标身份**（后缀相同不等于就是那个包）。 */
+  identity: Record<string, string>;
+  /**
+   * 项目**声明过** workspace 包吗。
+   *
+   * 这是隔离决策唯一的判据，而不是 `names.length > 0`。2026-10-26 独立审查用真实 npm 离线安装打
+   * 回来过：`packages/*​/core` 这种中段带通配的声明 npm 认、照样装出 workspace 链，而上一版的
+   * 展开只处理末段通配，于是 names 为空 → 判成「没有 workspace」→ 整条借用 → 快照跑的是活的
+   * 工作区源码（快照文件本身是 FROZEN，执行输出却是 LIVE，而且验后自证照旧通过）。
+   *
+   * 「展开不出包名」绝不是「这个项目没有 workspace 包」的证明。所以三态要分开：没声明（借用）、
+   * 声明了（隔离，不管展开出多少）、声明坏了（也算声明了，往安全那一侧倒）。
+   */
+  declared: boolean;
+};
+
+const DECLARED_GLOB_DEPTH = 8;
 
 /**
- * glob 展开。只认 npm / yarn / pnpm 实际写得出的那几种：字面目录、`前缀/*`、`前缀/**`。
+ * glob 展开：按段匹配，`*` 吃一段内的任意字符，`**` 吃任意层数，两者都可出现在**任何位置**。
  *
- * `**` 往下找有 package.json 的目录，深度上限 6 层——再深的 monorepo 没见过，而无上限的递归会在
- * 手铺的奇怪目录上变成全盘遍历。路径中段带通配（`a/*​/c`）不支持：npm 文档里没有这种写法。
+ * 上一版只认末段通配（`packages/*`、`packages/**`），中段的 `packages/*​/core` 被当成字面路径 —— npm
+ * 实际接受这种写法，实测见 declared 上方。深度上限 DECLARED_GLOB_DEPTH 层：无上限的 `**` 递归会
+ * 在手铺的奇怪目录上变成全盘遍历。
  */
 async function expandPattern(root: string, pattern: string): Promise<string[]> {
-  const clean = pattern.replace(/\\/g, "/").replace(/\/+$/, "");
-  const match = /^(.*?)\/?(\*\*?)$/.exec(clean);
-  if (match === null) return (await exists(join(root, clean, "package.json"))) ? [clean] : [];
-  const [, prefix, stars] = match;
-  const found: string[] = [];
-  const walk = async (rel: string, depth: number): Promise<void> => {
-    for (const entry of await readdir(join(root, rel), { withFileTypes: true }).catch(() => [])) {
-      if (!entry.isDirectory() || entry.name.startsWith(".") || DEPENDENCY_DIRS.includes(entry.name)) continue;
-      const next = rel === "" ? entry.name : `${rel}/${entry.name}`;
-      if (await exists(join(root, next, "package.json"))) found.push(next);
-      else if (stars === "**" && depth < 6) await walk(next, depth + 1);
+  const segments = pattern.replace(/\\/g, "/").split("/").filter(part => part !== "" && part !== ".");
+  if (segments.length === 0) return [];
+  const found = new Set<string>();
+  const children = async (rel: string): Promise<string[]> =>
+    (await readdir(join(root, rel), { withFileTypes: true }).catch(() => []))
+      .filter(entry => entry.isDirectory() && !entry.name.startsWith(".") && !DEPENDENCY_DIRS.includes(entry.name))
+      .map(entry => entry.name);
+  const walk = async (rel: string, index: number, depth: number): Promise<void> => {
+    if (index === segments.length) {
+      if (rel !== "" && await exists(join(root, rel, "package.json"))) found.add(rel);
+      return;
+    }
+    const segment = segments[index];
+    if (segment === "**") {
+      // `**` 可以吃零层,所以先原地往后匹配,再逐层下探。
+      await walk(rel, index + 1, depth);
+      if (depth >= DECLARED_GLOB_DEPTH) return;
+      for (const name of await children(rel)) await walk(join(rel, name), index, depth + 1);
+      return;
+    }
+    if (!segment.includes("*")) return await walk(join(rel, segment), index + 1, depth);
+    const pieces = segment.split("*").map(piece => piece.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const matches = new RegExp(`^${pieces.join("[^/]*")}$`);
+    for (const name of await children(rel)) {
+      if (matches.test(name)) await walk(join(rel, name), index + 1, depth);
     }
   };
-  await walk(prefix, 0);
-  return found;
+  await walk("", 0, 0);
+  return [...found];
 }
 
 export async function workspacePackages(root: string): Promise<WorkspacePackages> {
   const patterns = new Set<string>();
+  let declared = false;
   const raw = await readFile(join(root, "package.json"), "utf8").catch(() => null);
   if (raw !== null) {
     try {
@@ -186,44 +223,62 @@ export async function workspacePackages(root: string): Promise<WorkspacePackages
       const list = Array.isArray(parsed.workspaces)
         ? parsed.workspaces
         : (parsed.workspaces as { packages?: unknown } | undefined)?.packages;
+      if (parsed.workspaces !== undefined && parsed.workspaces !== null) declared = true;
       for (const pattern of Array.isArray(list) ? list : []) {
         if (typeof pattern === "string" && !pattern.startsWith("!")) patterns.add(pattern);
       }
-    } catch { /* package.json 坏了不是门禁要管的事，当没声明处理 */ }
+    } catch {
+      // package.json 读不出来时**不能**当成「没声明」:那会把一个可能有 workspace 的项目降级成
+      // 借用。坏掉的 package.json 本来就跑不了测试,往隔离那一侧倒最多是多花一次克隆。
+      declared = true;
+    }
   }
-  // pnpm 的声明在单独一份 YAML 里。不引 YAML 解析器：这里只要列表项那几行，多解析出几条无害
-  // （下一步按「有没有 package.json」筛掉，pnpm-workspace.yaml 里别的键下面的列表项过不了这一
-  // 关），漏解析才有害。
+  // pnpm 的声明在单独一份 YAML 里。不引 YAML 解析器:这里只要列表项那几行,解析得全不全不影响
+  // 隔离决策(文件存在就算声明过),只影响 dirs 的完整度。
   const pnpm = await readFile(join(root, "pnpm-workspace.yaml"), "utf8").catch(() => null);
+  if (pnpm !== null) declared = true;
   for (const line of pnpm?.split(/\r?\n/) ?? []) {
     const item = /^\s*-\s*["']?([^"'#]+?)["']?\s*$/.exec(line);
     if (item !== null && !item[1].startsWith("!")) patterns.add(item[1]);
+    // 行内列表 `packages: ["a", "b"]`:同一行里把引号括起来的项都收进来。
+    const inline = /^\s*(?:packages)?\s*:\s*\[(.+)\]\s*$/.exec(line);
+    for (const piece of inline?.[1].split(",") ?? []) {
+      const value = piece.trim().replace(/^["']|["']$/g, "");
+      if (value !== "" && !value.startsWith("!")) patterns.add(value);
+    }
   }
   const dirs = new Set<string>();
   for (const pattern of patterns) {
     for (const dir of await expandPattern(root, pattern)) dirs.add(dir);
   }
-  const names = new Set<string>();
+  const identity: Record<string, string> = {};
   for (const dir of dirs) {
     const content = await readFile(join(root, dir, "package.json"), "utf8").catch(() => null);
     if (content === null) continue;
     try {
       const name = (JSON.parse(content) as { name?: unknown }).name;
-      if (typeof name === "string" && name !== "") names.add(name);
+      if (typeof name === "string" && name !== "") identity[dir] = name;
     } catch { /* 同上 */ }
   }
-  return { dirs: [...dirs].sort(), names: [...names].sort() };
+  return {
+    dirs: [...dirs].sort(),
+    names: [...new Set(Object.values(identity))].sort(),
+    identity,
+    declared,
+  };
 }
 
 /**
  * 这个依赖目录需要在快照里独立成一份吗。
+ *
+ * 判据是**声明过**，不是「展开出了包名」——理由写在 WorkspacePackages.declared 上方。
  *
  * 只有 node 生态把 workspace 包**连进**依赖树（node_modules/<包名> -> 源码目录），于是整条借出去
  * 就等于没隔离（三个入口见顶部）。Go 的 vendor 是实拷、Rust 的 target 是构建产物、Python 的
  * editable install 走文件内容（顶部「检不出的同类问题」），都没有这个形状，照旧 O(1) 借用。
  */
 export function needsIsolation(dep: string, workspace: WorkspacePackages): boolean {
-  return workspace.names.length > 0 && basename(dep) === "node_modules";
+  return workspace.declared && basename(dep) === "node_modules";
 }
 
 /** 副本的形态：整条借一条链、整棵克隆、或者源端本来就不可达。 */
@@ -240,24 +295,45 @@ async function linkWhole(source: string, destination: string): Promise<boolean> 
 }
 
 /**
+ * 搬迁这棵依赖树时的落点口径。**构造和对账必须共用这一份**，否则就是复制那一侧自己猜、对账那一
+ * 侧另一套判据——2026-10-26 独立审查打回的三处链接失败都是这么来的。
+ */
+export async function relocationFor(root: string, target: string, dep: string,
+  workspace: WorkspacePackages): Promise<Relocation | null> {
+  const treeRoot = await realpath(join(root, dep)).catch(() => null);
+  if (treeRoot === null) return null;
+  return {
+    realRoot: await realpath(root).catch(() => root),
+    target,
+    treeRoot,
+    treeDest: join(target, dep),
+    identity: workspace.identity,
+  };
+}
+
+/**
  * 在快照里放上这份依赖。
  *
  * **写入外溢**（只发生在借用形态，也就是没声明 workspace 包的项目）：门禁跑测试时写进依赖目录的
- * 东西落在**用户的工作区**里——vite 的 node_modules/.vite、各种 .cache、Rust 的 target 增量编译
+ * 东西落在**用户的工作区**里——vite 的 node_modules/.vite、各类 .cache、Rust 的 target 增量编译
  * 都会。这里选择接受并写明，因为另一头做不到：改权限变成只读等于动用户的工作区（而且 .bin 还要
  * 可执行），bind-mount 一类方案被明确排除。实践上这些写入与用户自己跑一次测试产生的是同一类
  * 东西。克隆形态没有这个问题——快照有自己的一棵树。
  *
- * 借用建不出来就回 false，由调用方退回深拷（copyTree）——权限、跨设备、文件系统不支持都走这条
- * 路，门禁不因此失败。
+ * `skip` 是源码侧那份排除计划，克隆和深拷退路都要用它：运行产物目录可配，它落在依赖目录内时遍历
+ * 会走进正在建的快照自己（见 copyTree 里那条「目标不进入输入闭包」）。
+ *
+ * 借用建不出来就回 false，由调用方退回深拷——权限、跨设备、文件系统不支持都走这条路，门禁不因此
+ * 失败。
  */
 export async function provideDependency(root: string, target: string, dep: string,
-  isolate: boolean, dirs: string[] = []): Promise<DependencyMode | false> {
+  isolate: boolean, workspace: WorkspacePackages,
+  skip?: (path: string) => boolean): Promise<DependencyMode | false> {
   const destination = join(target, dep);
   await mkdir(dirname(destination), { recursive: true });
   const from = join(root, dep);
-  const landing = await realpath(from).catch(() => null);
-  if (landing === null) {
+  const relocation = await relocationFor(root, target, dep, workspace);
+  if (relocation === null) {
     // 不可达的依赖根：没装的可选依赖、指向还没建起来的目录的悬空链、环。它在快照里**照原样**
     // 重建（是链就建同原文的一条悬空链，什么都没有就什么都不建），于是「本来跑不通」在副本里
     // 仍然跑不通——而不是让整次快照失败。悬空链不该拖垮一次快照，这条在上一层就定过。
@@ -267,9 +343,13 @@ export async function provideDependency(root: string, target: string, dep: strin
   }
   // 根自己是链时按**落点**来：借用要指到真正那棵树上（junction 只认真实路径），克隆更要从那棵树
   // 开始拷——否则副本里仍是一条指向外面的链，解析根照旧在快照外，三个入口一个都没修掉。
-  if (!isolate) return await linkWhole(landing, destination) ? "link" : false;
-  const realRoot = await realpath(root).catch(() => root);
-  await copyTree(landing, destination, { clone: true, rewrite: { realRoot, target, dirs } });
+  if (!isolate) return await linkWhole(relocation.treeRoot, destination) ? "link" : false;
+  await copyTree(relocation.treeRoot, destination, {
+    clone: true,
+    relocate: relocation,
+    skip,
+    snapshotRoot: await realpath(target).catch(() => target),
+  });
   return "clone";
 }
 
@@ -281,9 +361,9 @@ export async function provideDependency(root: string, target: string, dep: strin
  *   · link：那条链必须正好落在工作区那个依赖目录上；
  *   · absent：源端解析不出东西来，副本侧也必须解析不出来（而不是要求两边都非空，那会把一个合法
  *     状态判成复制失败，于是一个没装的可选依赖就能拖垮整次快照）；
- *   · clone：依赖根必须落在快照内（证明树真的独立了），**而且**每个声明过的 workspace 包在快照
- *     里都解析到快照自己那份源码。后半句是克隆的全部理由，对错了就等于 monorepo 没被隔离，而它
- *     不会以任何别的方式报出来。
+ *   · clone：依赖根落在快照内（树真的独立了）、每个声明过的 workspace 包都解析到快照自己那份
+ *     源码、**而且**整棵树的链闭包逐条落点等价（linkMismatch）。前两条都只看根和顶层，证不了
+ *     树里每条链还指得对——猜错包身份、吃掉尾部分隔符、把相对外链照抄到不同深度都能从那里漏过去。
  *
  * 调用方必须在源码和依赖**都构造完**之后才调：clone 形态要解析快照里的 workspace 包，那条路径
  * 要等源码落盘；非 Git 分支曾经在源码之前对账，于是任何 monorepo 都会在门禁开跑前就失败。
@@ -309,81 +389,10 @@ export async function dependencyMismatch(root: string, target: string, dep: stri
       return `${join(dep, name)} 在快照里解析到了 ${resolved}，不是快照自己那份源码`;
     }
   }
-  return null;
+  const relocation = await relocationFor(root, target, dep, workspace);
+  if (relocation === null) return `${dep} 在工作区里已经解析不出来了，无法核对副本的链落点`;
+  const problem = await linkMismatch(relocation);
+  return problem === null ? null : `${dep} 里 ${problem}`;
 }
 
-export type CopyOptions = {
-  /** 数据块共享（macOS clonefile / Linux reflink）。内核在不支持的文件系统上自动退回整块复制。 */
-  clone?: boolean;
-  /** 绝对原文落在项目源码或任一声明的 workspace 包上时，改写到快照里对应的位置。 */
-  rewrite?: { realRoot: string; target: string; dirs: string[] };
-};
-
-/**
- * 这条绝对落点在快照里对应哪个位置（不该改写就回 null）。
- *
- * 两条判据，第二条是 2026-10-26 在 Windows 真机上红出来的：依赖树借自**另一个检出**时（worktree
- * 借主仓那份，本仓就是这个形状），那边的 workspace 链接指着**那个检出**的源码目录，它不在本项目
- * 内，于是只认「落在项目内」就会把它照抄，快照接回别人的源码——`probe.mjs` 读到 old-main 而不是
- * new-task。所以再按**声明的 workspace 包目录**反查落点的尾部：判据是包映射而不是物理前缀，无论
- * 那条链出自哪个检出都落回快照自己那一份。
- *
- * 代价：一个第三方包的绝对链如果恰好以某个声明过的包目录结尾，会被一起改写。概率极低，而且方向
- * 是「更隔离」而不是「更松」，所以接受。Windows 的路径大小写不敏感，匹配时按平台归一。
- */
-function snapshotCounterpart(landing: string, rewrite: NonNullable<CopyOptions["rewrite"]>): string | null {
-  if (insideTree(rewrite.realRoot, landing)) return join(rewrite.target, relative(rewrite.realRoot, landing));
-  const fold = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
-  const folded = fold(landing);
-  // 长的先试:声明里若有 packages/lib 和 packages/lib/inner 这种嵌套,该取更具体的那个。
-  for (const dir of [...rewrite.dirs].sort((left, right) => right.length - left.length)) {
-    const marker = fold(`${sep}${dir.split("/").join(sep)}`);
-    const at = folded.endsWith(marker) ? folded.length - marker.length : folded.lastIndexOf(`${marker}${sep}`);
-    if (at >= 0) return join(rewrite.target, landing.slice(at + 1));
-  }
-  return null;
-}
-
-// 绝对原文落在项目源码或任一声明的 workspace 包上时改写到快照里对应的位置（判据见
-// snapshotCounterpart）：Windows 的 npm 给 workspace 包建的是绝对 junction，照抄会让快照里的包
-// 解析回活动工作区——正是克隆要防的那件事。相对原文一律照抄，它在快照里天然解析到快照自己那份。
-// 其余绝对原文（.venv/bin/python -> /opt/homebrew/…、/usr/local/bin 下的工具）也照抄：那是系统的
-// 东西，不是这次要冻的源码。
-async function rewritten(source: string, destination: string, options: CopyOptions): Promise<string> {
-  const raw = await readlink(source);
-  const rewrite = options.rewrite;
-  if (rewrite === undefined || !isAbsolute(raw)) return raw;
-  // 原文是字面路径、realRoot 是 realpath 过的：不把两边化到同一个口径，macOS 的
-  // /var -> /private/var 这类别名会让 insideTree 永远判否。末段不解析——它可能本来就是悬空的。
-  const landing = join(await realpath(dirname(raw)).catch(() => dirname(raw)), basename(raw));
-  const counterpart = snapshotCounterpart(landing, rewrite);
-  return counterpart === null ? raw : relative(dirname(destination), counterpart);
-}
-
-/**
- * 把一棵树复制一遍：克隆形态的实现，同时是借用建不出来时的退路。
- *
- * 不走 gateTreeDigest：那条路对**树外**的可达链是「跟随并把目标内容冻进快照」（源码外链该那么
- * 办），用在依赖目录上会把 .venv/bin/python -> /opt/homebrew/… 指向的整个解释器拷进来。这里
- * 一律按链重建、绝不跟随，原文照抄或按 rewritten 改写。
- *
- * 已知代价：依赖目录里那些指向**依赖目录之外**的树内链（node_modules -> ../.local-deps 这种形状）
- * 在副本里会断——借用模式下它们还在原地所以解析得通，复制就只覆盖了这一个目录。换句话说这里只
- * 保证「这棵树在快照里」，不保证它的树内链闭包。
- */
-export async function copyTree(source: string, destination: string, options: CopyOptions = {}): Promise<void> {
-  // 包管理器随时在改依赖树：读完目录到读条目之间文件被删掉不该崩掉整次快照。
-  const info = await lstat(source).catch(() => null);
-  if (info === null) return;
-  if (info.isSymbolicLink()) return await copyLink(source, destination, await rewritten(source, destination, options));
-  if (info.isDirectory()) {
-    await mkdir(destination, { recursive: true });
-    for (const name of (await readdir(source)).sort()) {
-      await copyTree(join(source, name), join(destination, name), options);
-    }
-    return;
-  }
-  if (!info.isFile()) return;
-  await copyFile(source, destination, options.clone === true ? constants.COPYFILE_FICLONE : 0);
-  await chmod(destination, info.mode);
-}
+export { copyTree } from "./accept-gate-relocate.js";

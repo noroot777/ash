@@ -155,10 +155,24 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     // 就整棵克隆进快照，没声明才借一条链。
     const workspace = await workspacePackages(cwd);
     const provided = new Map<string, DependencyMode>();
+    // 依赖这边的复制遍历与源码那边共用同一份排除计划:运行产物目录是可配的,它落在依赖目录内时,
+    // 不过滤就会把正在建的快照自己拷进来(见 copyTree 的「目标不进入输入闭包」)。深拷退路同样要
+    // 带上它——否则 fallback 一走就把刚挡住的东西放回来了。
+    // 排除项按**相对路径**记一次,但谓词要能认两种根:源码那一侧的遍历从调用方给的 cwd 出发,依赖
+    // 克隆却是从 realpath 过的树根出发(根自己可能就是一条链)。只按未解析的 cwd 拼前缀,在任何
+    // 路径祖先里有软链的机器上都对不上——macOS 的 /var -> /private/var 必然命中,于是运行产物在
+    // 依赖那一侧完全没被排除,遍历直接走进正在建的快照自己。
+    const excluded = excludedInputs(cwd);
+    const includedAsGiven = planFilter(cwd, excluded);
+    const includedPhysical = planFilter(await realpath(cwd).catch(() => cwd), excluded);
+    const included = (path: string) => includedAsGiven(path) && includedPhysical(path);
+    const snapshotRoot = await realpath(target).catch(() => target);
     const provide = async (dep: string): Promise<void> => {
-      const mode = await provideDependency(cwd, target, dep, needsIsolation(dep, workspace), workspace.dirs);
-      if (mode === false) await copyTree(join(cwd, dep), join(target, dep));
-      else provided.set(dep, mode);
+      const mode = await provideDependency(cwd, target, dep, needsIsolation(dep, workspace), workspace,
+        path => !included(path));
+      if (mode === false) {
+        await copyTree(join(cwd, dep), join(target, dep), { skip: path => !included(path), snapshotRoot });
+      } else provided.set(dep, mode);
     };
     let copiedFingerprint: string | null = null;
     if (source.commit) {
@@ -196,7 +210,6 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       // ——inside 对目录自身也成立,所以依赖目录本身和它下面的一切都归 provide 负责。
       const dependencies = (source.inputs ?? []).filter(input => input.dependency).map(input => input.path);
       for (const dep of dependencies) await provide(dep);
-      const included = planFilter(cwd, excludedInputs(cwd));
       for (const name of await nonGitFiles(cwd)) {
         await gateTreeDigest(join(cwd, name), {
           root: cwd,

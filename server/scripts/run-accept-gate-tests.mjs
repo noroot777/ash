@@ -12,7 +12,8 @@ for (const script of orchestrated) {
   const result = spawnSync(process.execPath, ["--import", "tsx", fileURLToPath(new URL(script, import.meta.url))], { env, stdio: "inherit" });
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
-for (const script of commandOnly ? [] : ["test-accept-gate-source.ts", "test-accept-gate-links.ts", "test-accept-gate-borrow.ts", "test-accept-gate-process.ts"]) {
+for (const script of commandOnly ? [] : ["test-accept-gate-source.ts", "test-accept-gate-links.ts", "test-accept-gate-borrow.ts",
+  "test-accept-gate-relocate.ts", "test-accept-gate-runs-inside.ts", "test-accept-gate-process.ts"]) {
   const result = spawnSync(process.execPath, ["--import", "tsx", fileURLToPath(new URL(script, import.meta.url))], { stdio: "inherit" });
   if (result.status !== 0) process.exit(result.status ?? 1);
 }

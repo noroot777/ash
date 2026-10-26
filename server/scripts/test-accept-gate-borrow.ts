@@ -252,8 +252,9 @@ try {
   mkdirSync(roundTrip);
   const noWorkspace = await workspacePackages(repo);
   assert.deepEqual(noWorkspace.names, [], "package.json 里没有 workspaces 就是没声明");
+  assert.equal(noWorkspace.declared, false, "没有 workspaces 字段才算没声明");
   assert.equal(needsIsolation("node_modules", noWorkspace), false, "没声明 workspace 包就不必独立成一份");
-  assert.equal(await provideDependency(repo, roundTrip, "node_modules", false), "link",
+  assert.equal(await provideDependency(repo, roundTrip, "node_modules", false, noWorkspace), "link",
     "没声明 workspace 包时就是一条链,O(1)");
   assert.equal(await dependencyMismatch(repo, roundTrip, "node_modules", "link", noWorkspace), null,
     "借用建出来的链,落点就是工作区那一份");
