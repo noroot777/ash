@@ -1,21 +1,17 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, sep } from "node:path";
 import { execFileText } from "./exec.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
-import { gateTreeDigest } from "./accept-gate-tree.js";
+import { gateTreeDigest, insideTree as inside } from "./accept-gate-tree.js";
 
 type SourceInput = { path: string; directory: boolean };
 export type GateSource = { commit: string | null; fingerprint: string; dependencies: string[]; inputs?: SourceInput[] };
 const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
 const git = async (cwd: string, args: string[]) =>
   (await execFileText("git", ["-C", cwd, ...args], { maxBuffer: 32 * 1024 * 1024 })).stdout;
-const inside = (root: string, path: string) => {
-  const rel = relative(root, path);
-  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`));
-};
 
 async function nonGitFiles(cwd: string): Promise<string[]> {
   return (await readdir(cwd)).filter(name => name !== ".git").sort();
@@ -26,24 +22,24 @@ const runtimePath = (cwd: string, path: string) => inside(physicalPath(cwd), phy
 
 async function listInputs(cwd: string): Promise<SourceInput[]> {
   const inputs: SourceInput[] = [];
-  const walk = async (path: string, ancestors: Set<string>) => {
+  const walk = async (path: string) => {
     if (runtimePath(cwd, join(cwd, path))) return;
-    let canonical: string;
-    try { canonical = await realpath(join(cwd, path)); }
+    let info: Awaited<ReturnType<typeof lstat>>;
+    try { info = await lstat(join(cwd, path)); }
     catch (error) {
-      if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")
-        && (await lstat(join(cwd, path))).isSymbolicLink()) return;
+      if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
       throw error;
     }
-    if (ancestors.has(canonical)) return;
-    const info = await stat(join(cwd, path));
-    if (!info.isDirectory() && !info.isFile()) throw new Error(`测试输入不是普通文件或目录：${path}`);
-    inputs.push({ path, directory: info.isDirectory() });
-    if (info.isDirectory()) for (const name of (await readdir(join(cwd, path))).sort()) {
-      await walk(join(path, name), new Set(ancestors).add(canonical));
+    // 软链按「链本身」登记,既不跟随也不递归进去,与 gateTreeDigest 的遍历语义保持一致:
+    // 跟随的话目录软链会被当成目录整棵拷成真文件。不跟随之后环也自然消失,无需 realpath 防护。
+    if (!info.isDirectory() && !info.isFile() && !info.isSymbolicLink()) {
+      throw new Error(`测试输入不是普通文件或目录：${path}`);
     }
+    const directory = info.isDirectory();
+    inputs.push({ path, directory });
+    if (directory) for (const name of (await readdir(join(cwd, path))).sort()) await walk(join(path, name));
   };
-  for (const name of await nonGitFiles(cwd)) await walk(name, new Set());
+  for (const name of await nonGitFiles(cwd)) await walk(name);
   return inputs;
 }
 
@@ -53,9 +49,9 @@ async function digestInputs(cwd: string, inputs: SourceInput[]): Promise<string>
     if (!inside(resolve(cwd), resolve(cwd, input.path))) throw new Error("源码输入路径不在快照内");
     hash.update(input.path);
     if (input.directory) {
-      if (!(await stat(join(cwd, input.path))).isDirectory()) throw new Error("源码输入目录已变化");
+      if (!(await lstat(join(cwd, input.path))).isDirectory()) throw new Error("源码输入目录已变化");
       hash.update("directory\0");
-    } else hash.update(await gateTreeDigest(join(cwd, input.path)) ?? "omitted-link");
+    } else hash.update(await gateTreeDigest(join(cwd, input.path), { root: cwd }) ?? "omitted-link");
   }
   return hash.digest("hex");
 }
@@ -89,7 +85,7 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
         }));
     if (dirty) throw new Error("任务工作区含未提交或未跟踪文件；请先提交或移走它们，再运行验收前置命令");
     for (const dep of [...dependencies]) {
-      const digest = await gateTreeDigest(join(cwd, dep));
+      const digest = await gateTreeDigest(join(cwd, dep), { root: cwd });
       if (digest === null) dependencies.splice(dependencies.indexOf(dep), 1);
       else hash.update(dep).update(digest);
     }
@@ -119,13 +115,13 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       const copiedHash = sourceHash().update(source.commit);
       for (const dep of source.dependencies) {
         await mkdir(dirname(join(target, dep)), { recursive: true });
-        const digest = await gateTreeDigest(join(cwd, dep), join(target, dep));
+        const digest = await gateTreeDigest(join(cwd, dep), { root: cwd, destinationRoot: target });
         if (digest !== null) copiedHash.update(dep).update(digest);
       }
       copiedFingerprint = copiedHash.digest("hex");
     } else {
       for (const name of await nonGitFiles(cwd)) {
-        await gateTreeDigest(join(cwd, name), join(target, name), path => !runtimePath(cwd, path));
+        await gateTreeDigest(join(cwd, name), { root: cwd, destinationRoot: target, filter: path => !runtimePath(cwd, path) });
       }
     }
     if ((await readGateSource(cwd)).fingerprint !== source.fingerprint
