@@ -189,19 +189,36 @@ try {
     symlinkSync("entry.mjs", syntaxCli);
     const readable = await readGateSource(syntax);
     assert.equal(reads(syntaxCli), "SIBLING");
-    // 末尾的 `/`、`/.` 是有意义的成分,不能当噪声滤掉:自己切分时把空段和 `.` 滤掉,三条写法不同
-    // 的链就摘出同一个身份,上一张绿结果被直接复用。**成不成功由平台说**——POSIX 上 entry.mjs/
-    // 是 ENOTDIR,Win32 的解析器容忍末尾的 `/`、`/.` 照样读到文件(真机实测),所以这里钉的是
-    // 「原文不同 ⟹ 身份不同」,不预设哪个平台读得通。
-    const identities = new Set([readable.fingerprint]);
+    // 末尾的 `/`、`/.` 是有语义的成分,不能当噪声滤掉:自己切分时把空段和 `.` 滤掉,三条写法不同
+    // 的链就摘出同一个身份,上一张绿结果被直接复用。**哪一种写法读得通由平台说**:POSIX 上
+    // entry.mjs/ 与 entry.mjs/. 都是 ENOTDIR;Win32 真机实测(2026-10-26)落盘成 entry.mjs\ 是
+    // ENOENT、entry.mjs\. 照样读到那个文件。所以按设计分两种钉法,两个平台都成立:
+    //  · 读得通的链身份认**落点**,读到同一个文件就必须同身份(Win32 上 entry.mjs\. 走这一支);
+    //  · 读不通的链身份认**原文**,原文不同必须不同身份,否则「改成另一种读不通的写法」会沿用
+    //    上一张绿结果。
+    const identities = new Map<string, string>([[`content:${reads(syntaxCli)}`, readable.fingerprint]]);
+    const expectIdentity = (raw: string, content: string, fingerprint: string) => {
+      const key = content.startsWith("ERR:") ? `raw:${raw}` : `content:${content}`;
+      const prior = identities.get(key);
+      if (prior !== undefined) {
+        assert.equal(fingerprint, prior, `第2轮发现1: ${key} 和之前那条读到的是一回事,身份必须相同`);
+        return;
+      }
+      for (const [other, fingerprinted] of identities) {
+        assert.notEqual(fingerprint, fingerprinted, `第2轮发现1: ${key} 与 ${other} 不是一回事,身份不能相同`);
+      }
+      identities.set(key, fingerprint);
+    };
     for (const target of ["entry.mjs/", "entry.mjs/."]) {
       unlinkSync(syntaxCli);
       symlinkSync(target, syntaxCli);
+      const content = reads(syntaxCli);
       const broken = await readGateSource(syntax);
-      assert.equal(gateSourceMatches({ sourceCommit: readable.commit, sourceFingerprint: readable.fingerprint }, broken),
-        false, `第2轮发现1: 原文改成 ${target} 之后不能再沿用上次通过`);
-      assert.equal(identities.has(broken.fingerprint), false, `第2轮发现1: ${target} 要有自己的身份`);
-      identities.add(broken.fingerprint);
+      if (content.startsWith("ERR:")) {
+        assert.equal(gateSourceMatches({ sourceCommit: readable.commit, sourceFingerprint: readable.fingerprint }, broken),
+          false, `第2轮发现1: 改成读不通的 ${target} 之后不能再沿用上次通过`);
+      }
+      expectIdentity(readlinkSync(syntaxCli), content, broken.fingerprint);
     }
     // 绝对原文 + 末尾 `/`:副本读到的必须和源树读到的一样。POSIX 上源树是 ENOTDIR,副本就不许
     // 读得到——重写掉那个 `/` 等于交付了一份与工作区行为相反的快照(实测过:源树 ENOTDIR、副本

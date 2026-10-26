@@ -41,18 +41,20 @@ const portable = (path: string) => path.split(sep).join("/");
 const isDependencyPath = (rel: string) => portable(rel).split("/").some(part => DEPENDENCY_DIRS.includes(part));
 const treeRealPath = async (root: string) => await realpath(root).catch(() => root);
 
-// Win32 长路径形式（\\?\D:\...）剥掉前缀和尾部分隔符再用：path.relative 认不出它其实在树内
-// （实测 relative("D:\\repo", "\\\\?\\D:\\repo\\nm") 原样返回长路径），不规范化会让同一个落点
-// 在两种写法下摘出两个值。注意**不能**拿这个前缀当「原链接是 junction」的标记：192.168.1.187
-// 真机实测(node 22.20、2026-10-26)，junction 的 readlink 回来就是干净的 "D:\path\target"，
-// libuv 已经把 \??\ 前缀剥掉了；junction / 目录软链 / 文件软链三种悬空链的 lstat、stat、
-// readlink 结果完全一致，node 不暴露 reparse tag，**悬空链的种类无从得知**（copyLink 据此取舍）。
+// Win32 长路径形式（\\?\D:\...）剥掉前缀再用：path.relative 认不出它其实在树内（实测
+// relative("D:\\repo", "\\\\?\\D:\\repo\\nm") 原样返回长路径），不规范化会让同一个落点在两种写法
+// 下摘出两个值。注意**不能**拿这个前缀当「原链接是 junction」的标记：192.168.1.187 真机实测
+// (node 22.20、2026-10-26)，junction 的 readlink 回来就是干净的 "D:\path\target"，libuv 已经把
+// \??\ 前缀剥掉了；junction / 目录软链 / 文件软链三种悬空链的 lstat、stat、readlink 结果完全
+// 一致，node 不暴露 reparse tag，**悬空链的种类无从得知**（copyLink 据此取舍）。
+// 尾部分隔符**必须原样留着**:它在 Win32 上是有语义的,同一台真机实测(2026-10-26) entry.mjs\
+// 是 ENOENT、entry.mjs\. 照样读到那个文件。曾经在这里一起剥掉,于是源树里读不到的那条链被照抄
+// 成副本里读得通的一条——交付的副本和工作区行为相反,正是本模块要防的那件事。落点不需要这层
+// 规范化:它由原生 realpath 给出(见 linkLanding ②),尾部语法在那条调用里各平台自行成立。
 const longPath = /^\\\\\?\\(?=[A-Za-z]:\\)/;
 async function linkTarget(path: string): Promise<string> {
   const raw = await readlink(path);
-  if (process.platform !== "win32") return raw;
-  const stripped = raw.replace(longPath, "");
-  return stripped.length > 3 && stripped.endsWith(sep) ? stripped.slice(0, -1) : stripped;
+  return process.platform === "win32" ? raw.replace(longPath, "") : raw;
 }
 
 // 可达性和落点都必须由**原生访问**给出,不能自己切分路径、也不能逐段 realpath 代替平台解析:
