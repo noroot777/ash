@@ -205,8 +205,12 @@ export type GateMissOrigin = {
    *  - `definition` 读出了目标分支上那份 manifest 并确认它定义了这个名字 —— 定义级事实；
    *  - `path` 那个名字就是个文件路径，而这个文件只有目标分支上有 —— 文件级事实；
    *  - `text` 只是这个名字在那份文件里整词出现过。**它不等于定义在这儿**，措辞里必须说破。
+   *
+   * `commit` 可以是 null：存在性核实了、但「哪次提交带进来的」追不出来时，**只丢时间、不丢
+   * 存在性**（第 3 轮审查 F3 末段：旧版本没有时间就整段退成「没能核对出来」）。
    */
-  holders: { file: string; how: "definition" | "path" | "text"; commit: string; date: string; subject: string }[];
+  holders: { file: string; how: "definition" | "path" | "text";
+    commit: string | null; date: string | null; subject: string | null }[];
   /**
    * 目标分支上**确实没有**，而且是定义级/文件级核出来的。文字检索的空结果**不许**写进
    * 这里（审查 F2）—— 只有这个字段非空，才敢说「合目标分支进来也不会让它出现」。
@@ -259,6 +263,12 @@ export function gateCommandMissNotice(opts: {
     );
     return lines.join("\n");
   }
+  // 归因未知也要说破（第 3 轮审查 F2）：「没证明是这次删的」不等于「证明不是这次删的」。
+  // 免修那副面孔由 attribution 决定（accept-gate-messages.ts），这里负责把话说清楚。
+  if (!origin || origin.removedByTask === null) {
+    lines.push(`这是不是这次改动把它弄没的（删掉、改名、或者改了项目设置里那条命令），ash 这次判不出来 —— `
+      + `先核一眼这件事：是的话就去改代码，不是的话再看下面。`);
+  }
   lines.push(...originLines(origin, subject));
   return lines.join("\n");
 }
@@ -266,9 +276,10 @@ export function gateCommandMissNotice(opts: {
 /**
  * inner 这一档能说的话。
  *
- * **命令整体有没有跑起来，只许照起跑前那份事实说**（审查 F1）：
- *  - 核过、入口在树里 → 它确实跑起来了，可以直说；
- *  - 同名但没核到     → 这正是上一轮判错的形状，必须明说「不敢断定它跑没跑起来」；
+ * **三种都不敢断定命令整体跑起来了**（第 3 轮审查 F1 反方向实测：一个存在但没有执行权限的
+ * 脚本退 126，正文一行没跑 —— 所以「它在树里」证明不了「它跑起来了」）。能说的只是：
+ *  - 核过、入口在树里 → 至少不是「不在树里」那一种；
+ *  - 同名但没核到     → 必须明说两件事可能不是一回事；
  *  - 什么都没核到     → 连启动都不提，只报那条观察。
  * 三种都不改写 failure、不给出路保证、不说「不用修」。
  */
@@ -277,9 +288,10 @@ function innerLines(miss: GateLaunchMiss, subject: string, ran: string): string[
     + `两种都要核一遍才知道，不能当成「不用修」。`;
   if (miss.entryResolved === true) {
     return [
-      `这条命令点名要跑的东西起跑前核过、在这份快照里是有的，所以它确实跑起来了；红的原因是中途点名的 ${subject} 没解析出来，不像是断言失败。`,
+      `这条命令点名要跑的东西起跑前核过、在这份快照里是有的，所以不是「它不在树里」那一种；`
+        + `红的原因看起来是 ${subject} 没解析出来，不像是断言失败。`,
       `判据：${miss.evidence}${ran}。`,
-      tail,
+      `它到底跑进去多少，这一层说不了（在树里不等于跑起来了：权限、解释器都可能挡在前面）。${tail}`,
     ];
   }
   if (miss.sameName) {
@@ -306,8 +318,11 @@ function originLines(origin: GateMissOrigin | null, subject: string): string[] {
       : `任务分支并不落后于 ${origin.targetBranch}（所以合它进来也不会多出什么）。`;
   // ① 核实了：目标分支上有落点、而快照里没有。只有这一档敢建议合分支。
   if (origin && origin.holders.length) {
-    const where = (holder: GateMissOrigin["holders"][number]) =>
-      `${holder.file}（最早写进它的是 ${short(holder.commit)}，${day(holder.date)}，${holder.subject}）`;
+    // 时间追不出来就只报文件：**存在性已经核实了**，不许因为缺个时间把它一起丢掉（F3）。
+    const where = (holder: GateMissOrigin["holders"][number]) => holder.commit
+      ? `${holder.file}（${holder.how === "path" ? "最早把它加进来的" : "最早把这个定义带进来的"}是 `
+        + `${short(holder.commit)}${holder.date ? `，${day(holder.date)}` : ""}${holder.subject ? `，${holder.subject}` : ""}）`
+      : `${holder.file}（哪次提交带进来的，这次没追出来）`;
     // 文件级那一档是确定事实，可以直说；文字命中那一档必须带上对冲（审查 F3）。
     const byDefinition = origin.holders.filter(holder => holder.how === "definition");
     const byPath = origin.holders.filter(holder => holder.how === "path");

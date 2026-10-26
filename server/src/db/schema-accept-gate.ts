@@ -35,6 +35,9 @@ export const acceptGateRuns = sqliteTable(
     // 结算可能发生在 server 重启之后,而跑完再核一次拿到的是跑完之后的状态 —— 第 2 轮
     // 审查那条「打印启动提示、删掉自己、再报断言失败」的脚本就是这么被说成「没启动」的。
     entryProbe: text("entry_probe"),
+    // 「命令没解析出来」是不是这次改动造成的(mine/not-mine/unknown)。跟 failure 分开存:
+    // 免修那副面孔只许由 not-mine 授权,未知时得允许 agent 去核、去改(第 3 轮审查 F2)。
+    missAttribution: text("miss_attribution"),
     pid: integer("pid"),
     /**
      * 那个 pid 的**启动时间**：重启之后拿它核对「这个号还是不是当初那条命令」。
@@ -98,6 +101,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

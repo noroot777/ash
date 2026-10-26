@@ -413,14 +413,15 @@ async function settleGate(
     const finishedAt = now();
     await db.update(acceptGateRuns)
       .set({ status: outcome.status, exitCode: outcome.exitCode, failure: outcome.failure, finishedAt, processPending: !stopped,
-        diagnosis: diagnosed?.diagnosis ?? null })
+        diagnosis: diagnosed?.diagnosis ?? null, missAttribution: diagnosed?.attribution ?? null })
       // 状态闸：上面那句读到的 running 和这一句之间隔着 await，只有真的还 running 才翻。
       .where(and(eq(acceptGateRuns.id, runId), eq(acceptGateRuns.status, "running")));
     outcomeSaved = true;
     if (stopped) forgetGateProcess(runId);
     if (stopped) await cleanupGateSnapshot(row.taskId, runId);
     if (timer?.runId === runId) { clearTimeout(timer.timer); live.delete(row.taskId); }
-    const view = gateView({ ...row, ...outcome, finishedAt, diagnosis: diagnosed?.diagnosis ?? null });
+    const view = gateView({ ...row, ...outcome, finishedAt, diagnosis: diagnosed?.diagnosis ?? null,
+      missAttribution: diagnosed?.attribution ?? null });
     appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`
       + (diagnosed ? `\n[ash] ${diagnosed.diagnosis}\n` : ""));
     // 归类结论要**单独进一条时间线**：它是用户刷新后唯一能找回「这条红不用我修」的地方，
@@ -500,7 +501,7 @@ async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = fa
   const sourceCwd = task && project ? await existingTaskWorkspacePath(task, project.repoPath) ?? project.repoPath : row.cwd;
   const prompt = gateFailurePrompt({
     command: row.command, summary: summarizeAcceptGate(view), logPath: row.logPath,
-    failure: view.failure, diagnosis: view.diagnosis ?? null,
+    failure: view.failure, diagnosis: view.diagnosis ?? null, missAttribution: view.missAttribution ?? null,
     tail: view.logTail, cwd: row.cwd, sourceCwd, executionNotice: view.executionNotice,
   });
   if (authority) {

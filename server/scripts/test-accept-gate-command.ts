@@ -8,6 +8,7 @@ import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
   type GateMissOrigin } from "../src/accept-gate-miss.js";
 import { gateEntryAsk, scriptDefinedIn, type GateEntryProbe } from "../src/accept-gate-entry.js";
 import { gateFailurePrompt } from "../src/accept-gate-messages.js";
+import type { AcceptGateMissAttribution } from "@ash/shared/accept-gate";
 
 const root = mkdtempSync(join(tmpdir(), "ash-gate-process-"));
 let runNumber = 0;
@@ -229,18 +230,46 @@ try {
   }
 
   // 「这条命令点名要跑的是什么」—— 认不出来必须交白卷（null），不许挑一个来充当那个入口。
+  // 判据是**runner 真会怎么做**,不是「字面像不像」（第 3 轮审查 F1：三条反例都实测过）。
   for (const [command, expected] of [
-    ["npm run test:accept", { kind: "script", runner: "npm", name: "test:accept" }],
-    ["CI=1 npm run test:accept -- --ci", { kind: "script", runner: "npm", name: "test:accept" }],
-    ["npm run-script accept", { kind: "script", runner: "npm", name: "accept" }],
-    ["pnpm run accept", { kind: "script", runner: "pnpm", name: "accept" }],
-    ["yarn run accept", { kind: "script", runner: "yarn", name: "accept" }],
-    ["npm test", { kind: "script", runner: "npm", name: "test" }],
-    ["npm run test:accept > out.log 2>&1", { kind: "script", runner: "npm", name: "test:accept" }],
+    ["npm run test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["CI=1 npm run test:accept -- --ci", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["npm run-script accept", { kind: "script", runner: "npm", name: "accept", dir: "." }],
+    ["pnpm run accept", { kind: "script", runner: "pnpm", name: "accept", dir: "." }],
+    ["yarn run accept", { kind: "script", runner: "yarn", name: "accept", dir: "." }],
+    ["npm test", { kind: "script", runner: "npm", name: "test", dir: "." }],
+    ["npm run test:accept > out.log 2>&1", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    // 引号是 shell 的,runner 拿到的名字不带它（实测）。
+    ["npm run 'test:accept'", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ['npm run "test:accept"', { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    // 换了目录就得去**那份** manifest 里核;核错一份,「没有这个脚本」就是假话（反例②）。
+    ["npm --prefix child run test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
+    ["npm --prefix=child run test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
+    ["npm run --prefix child test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
+    ["npm -C packages/kb run accept", { kind: "script", runner: "npm", name: "accept", dir: "packages/kb" }],
+    // 目录值本身读不出来 → 白卷,不许退回「当前目录」充数。
+    ["npm --prefix run test:accept", null],
     // 点名要跑的是那个**脚本文件**,不是传给它的参数 —— 参数在不在树里,这一层答不了。
     ["./runner.sh test:accept", { kind: "path", name: "./runner.sh" }],
     ["./only-on-target.sh 2>/dev/null", { kind: "path", name: "./only-on-target.sh" }],
     ["scripts/verify.sh", { kind: "path", name: "scripts/verify.sh" }],
+    // `npm start`/`restart` 缺脚本时有**默认行为**（实测：没有 scripts.start 时去跑
+    // node server.js）,所以「manifest 里没有」推不出「没东西可跑」（反例①）。
+    ["npm start", null],
+    ["npm restart", null],
+    ["npm stop", null],
+    // 这些把「去哪儿找脚本」整个换掉,解析不了结果就别猜（反例③）。
+    ["npm -w web run test", null],
+    ["npm run test -w web", null],
+    ["npm --workspaces run test", null],
+    ["npm exec kbtest", null],
+    ["pnpm -r run accept", null],
+    ["pnpm --filter kb run accept", null],
+    ["npm run test:accept --if-present", null],
+    // 引号没闭合、带通配:切不准就白卷。
+    ["npm run 'test:accept", null],
+    ["npm run 'test:*'", null],
+    ["npm run test:accept \\; echo done", null],
     // 多步没有「一个入口」可言;裸程序名、绝对路径、命令替换也都核不了。
     ["npm ci && npm run test:accept", null],
     ["cd web; npm run test:accept", null],
@@ -335,11 +364,19 @@ try {
   for (const unverifiedOrigin of [null, origin({ behind: 3, unverified: true }),
     origin({ behind: 3, unverified: false, holders: [], absent: null })]) {
     const unknown = notice({ origin: unverifiedOrigin });
-    assert.match(unknown, /没能核对出来/, "如实说没核对出来");
+    assert.match(unknown, /在目标分支上是什么情形，这次没能核对出来/, "如实说目标分支那件事没核对出来");
     assert.match(unknown, /不能保证/, "明说不能保证合入就解决");
     assert.equal(/把 main 合进任务分支/.test(unknown), false, "没核实过就不许给确定的合入建议");
     assert.equal(/上也找不到/.test(unknown), false, "更不许反过来说目标分支上也没有（审查二 F2）");
+    // 归因未知 ≠ 归因为「不是你删的」。结论里必须留着这一步,否则 agent 读到的是免修令
+    // （第 3 轮审查 F2：任务真把验收脚本删了、而目标 ref 又读不到时，它会被按住不许修）。
+    assert.match(unknown, /先核一眼这件事/, "归因没核出来,就得让它先去核");
   }
+
+  // ⑤' 核实过「不是这次改动弄没的」：这一档才不必再去核归因。
+  const notMine = notice({ origin: origin({ behind: 3, removedByTask: false,
+    holders: [{ file: "package.json", how: "definition", ...holder }] }) });
+  assert.equal(/先核一眼这件事/.test(notMine), false, "核过不是它删的,就不该再让它去核一遍");
 
   // ⑥ 是**这次改动**把它弄没的：缺失推不出「与本次改动无关」（审查二 F1 末条）。
   const mine = notice({ origin: origin({ behind: 2, removedByTask: true }) });
@@ -348,6 +385,18 @@ try {
   assert.match(mine, /要改代码的一种/, "这一档的出路就是去改代码");
   assert.equal(/都要你自己定/.test(mine), false, "这一档不该先摆成「用户拍板」那两条出路");
 
+  // ⑦ 存在性核实了、但「哪次提交带进来的」追不出来：**只丢时间,不丢那条事实**。旧版本
+  //    在这种情形下把整个 holder 丢掉,于是核实过的存在性退回到「没核对出来」那一档,
+  //    合入建议也一起消失了（第 3 轮审查 F3）。
+  const noTime = notice({ origin: origin({ behind: 5,
+    holders: [{ file: "package.json", how: "definition", commit: null, date: null, subject: null }] }) });
+  assert.match(noTime, /是有定义的/, "存在性已经核实了,不许因为缺个时间一起丢掉");
+  assert.match(noTime, /哪次提交带进来的，这次没追出来/, "追不出来就如实说,不许编一个");
+  assert.match(noTime, /把 main 合进任务分支/, "存在性这一档的出路照给");
+  // 这里要钉的是**第二件事**（目标分支上的情形）没退化成「没核对出来」。归因那句用的是同
+  // 一个词，所以断言得指名道姓 —— 这条 origin 的归因默认是未知的,归因那句本来就该在。
+  assert.equal(/在目标分支上是什么情形，这次没能核对出来/.test(noTime), false, "缺时间不等于没核对出来");
+
   // ── inner 三种措辞：命令整体有没有跑起来,只许照起跑前那份事实说（审查二 F1）──
   const innerOf = (patch: Partial<Parameters<typeof gateCommandMissNotice>[0]["miss"]>) => gateCommandMissNotice({
     command: "npm run test:accept", sourceCommit: "de91d6c0", origin: null,
@@ -355,7 +404,10 @@ try {
       evidence: "Cannot find module './regressed-helper.cjs'", ...patch },
   });
   const inner = innerOf({ entryResolved: true });
-  assert.match(inner, /确实跑起来了/, "核过入口在树里,这一句才敢说");
+  assert.match(inner, /不是「它不在树里」那一种/, "核过入口在树里,只敢排除这一种");
+  // 在树里 ≠ 跑起来了：权限位（126）、解释器缺失都挡在前面（第 3 轮审查 F1 实测）。
+  assert.match(inner, /这一层说不了/, "存在性推不出执行,这一句必须留着");
+  assert.equal(/确实跑起来了|跑起来了。/.test(inner), false, "存在性不许被抬成「它跑起来了」");
   assert.match(inner, /也可能是这次改动把名字写错了/, "inner 不许排除「是你改出来的」");
   assert.equal(/一行都没跑到|跳过前置命令|合进任务分支/.test(inner), false, "inner 不许摆那两条出路,也不许说测试没跑");
 
@@ -369,24 +421,49 @@ try {
   assert.match(sameName, /不敢断定它有没有跑起来/, "没核实到就明说不敢断定");
   assert.equal(/一行都没跑到/.test(sameName), false, "同名不等于顶层缺失（审查二 F1 反例①）");
 
-  // 第 1 轮审查 F2：回流模板按**失败类型**分支,不拿「有没有诊断文字」代替类型。
-  const promptOf = (failure: "command_missing" | "exit_code", diagnosis: string) => gateFailurePrompt({
+  // ── 回流模板三副面孔。两件事分开授权（第 1 轮审查 F2 + 第 3 轮审查 F2）：
+  //    ① 测试有没有启动 → 看 failure,不看「有没有诊断文字」;
+  //    ② 该不该让 agent 改代码 → 看归因。免修只许由**核实过**的 not-mine 授权。
+  const promptOf = (failure: "command_missing" | "exit_code", diagnosis: string,
+    missAttribution?: AcceptGateMissAttribution | null) => gateFailurePrompt({
     command: "npm run test:accept", summary: "未通过", logPath: "/tmp/gate.log", tail: "…",
-    cwd: "/tmp/snap", sourceCwd: "/tmp/ws", failure, diagnosis,
+    cwd: "/tmp/snap", sourceCwd: "/tmp/ws", failure, diagnosis, missAttribution,
   });
   const innerPrompt = promptOf("exit_code", inner);
   assert.match(innerPrompt, /定位到底是哪一条红的/, "inner 走的是普通「去修」那一版");
   assert.equal(innerPrompt.includes("不要为这件事改任何代码"), false, "inner 不许被交成「不许修」");
   assert.ok(innerPrompt.includes(inner), "inner 的那段观察仍要附上去 —— 它是定位线索");
   assert.equal(innerPrompt.includes("没能启动"), false, "inner 不是「没能启动」");
-  const missingPrompt = promptOf("command_missing", defined);
-  assert.match(missingPrompt, /不要为这件事改任何代码/, "command_missing 才换那副面孔");
+  // 即便带着一段 command_missing 的结论文字,归因是 exit_code 的那一种也不许换面孔。
+  assert.equal(promptOf("exit_code", defined, "not-mine").includes("不要为这件事改任何代码"), false,
+    "免修由失败类型 + 归因共同授权,光有结论文字不算");
+
+  const missingPrompt = promptOf("command_missing", defined, "not-mine");
+  assert.match(missingPrompt, /没能启动/, "① 这一种的标题是「没能启动」");
+  assert.match(missingPrompt, /不要为这件事改任何代码/, "核实过不是它删的,才给免修指令");
+  assert.match(missingPrompt, /在开工基线上也没有，这一条也核过了/, "免修的依据要写在面孔里");
   assert.match(missingPrompt, /转述给用户/);
   assert.match(missingPrompt, /以上面那段结论为准/, "出路和核实档位都由结论说,模板不自己下判断");
   assert.equal(/这条红跟你这次的改动无关/.test(missingPrompt), false,
     "缺失推不出「与本次改动无关」（审查二 F1 末条）");
   assert.equal(missingPrompt.includes("定位到底是哪一条红的"), false, "普通红那一版的措辞不该出现在这一种上");
-  console.log("✅ 门禁失败归类（entry 只由起跑前事实授权 + 27 种措辞各验三遍 + 入口解析 + 定义级判据 + 出路跟核实档位对上）通过");
+
+  // 归因没核出来：未启动这件事照说（它核过了），但**不许**给免修令 —— 任务自己把验收脚本
+  //    删了、而目标 ref 恰好读不到时，免修令会把 agent 按在原地（第 3 轮审查 F2）。
+  for (const attribution of [null, undefined, "unknown"] as const) {
+    const unknownPrompt = promptOf("command_missing", notice({ origin: null }), attribution);
+    assert.match(unknownPrompt, /没能启动/, "未启动这件事是核过的,照说");
+    assert.match(unknownPrompt, /解析不出来/, "照说它点名要跑的东西没解析出来");
+    assert.equal(unknownPrompt.includes("不要为这件事改任何代码"), false,
+      `归因=${attribution}：没核出来就不许发免修令`);
+    assert.match(unknownPrompt, /是不是你这次改动把它弄没的/, "要让它先去核归因");
+    assert.match(unknownPrompt, /改回来或同步改配置/, "核下来是自己弄没的,就该去改");
+    assert.match(unknownPrompt, /转述给用户/, "核下来无关,再转述给用户");
+    assert.equal(unknownPrompt.includes("定位到底是哪一条红的"), false, "它也不是普通红那一种");
+    assert.match(unknownPrompt, /别为了「让它跑起来」去凭空补一个脚本/, "补个空脚本是伪造放行条件");
+  }
+
+  console.log("✅ 门禁失败归类（entry 只由起跑前事实授权 + 27 种措辞各验三遍 + 入口解析跟 runner 语义对齐 + 定义级判据 + 出路跟核实档位对上 + 回流三副面孔）通过");
 } finally {
   for (const launch of launches) {
     assert.equal(await stopAcceptGate("process-test", launch.pid, launch.startedAt, launch.logPath), true);

@@ -13,6 +13,13 @@
 export type AcceptGateStatus = "running" | "passed" | "failed" | "interrupted" | "canceled";
 
 /** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
+/**
+ * 「命令没解析出来」这件事**是不是这次改动造成的**。跟 failure 分开存(第 3 轮审查 F2):
+ * failure 说的是「测试有没有启动」,这一条说的是「该不该由 agent 去改代码」——
+ * 「没证明是这次删的」不等于「证明不是这次删的」,未知时不许发免修指令。
+ */
+export type AcceptGateMissAttribution = "mine" | "not-mine" | "unknown";
+
 export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived" | "command_missing";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
@@ -70,6 +77,8 @@ export interface AcceptGateView {
    * 事实(目标分支当时是哪个提交)此后还会变 —— 现算出来的话,结论会跟着漂。
    */
   diagnosis?: string | null;
+  /** 见 AcceptGateMissAttribution。只有 command_missing 这一档才有值。 */
+  missAttribution?: AcceptGateMissAttribution | null;
   /**
    * 这一次的红交没交回给 agent 去修。null = 没交过(通过/取消/被打断都不交)。
    * `error` 非空 = 那一次没能叫醒它(回合被抢占、任务被归档之类),红还在那儿等人处理。

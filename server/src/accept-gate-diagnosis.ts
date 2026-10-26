@@ -11,14 +11,15 @@
 // 落盘；大仓或慢存储上一次 grep 就能卡住，取消/超时又在等这次结算。所以每条查询有超时、
 // 整段有总预算，超了就退成「没核对出来」那一档 —— 结论差一点，总比门禁停在「正在跑」好。
 import { eq } from "drizzle-orm";
-import type { AcceptGateFailure } from "@ash/shared/accept-gate";
+import type { AcceptGateFailure, AcceptGateMissAttribution } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
 import { acceptGateLogHead } from "./accept-gate-process.js";
 import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
   type GateMissOrigin } from "./accept-gate-miss.js";
-import { decodeGateEntryProbe, gateEntryAsk, scriptDefinedIn, type GateEntryAsk } from "./accept-gate-entry.js";
+import { askManifest, decodeGateEntryProbe, gateEntryAsk, scriptDefinedIn,
+  type GateEntryAsk } from "./accept-gate-entry.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 
@@ -34,6 +35,8 @@ const ORIGIN_BUDGET_MS = 12_000;
 /** 最多核几个候选文件 / 每份读多少字节。两道闸都是为了不让一次核对变成全仓扫描。 */
 const MAX_CANDIDATES = 20;
 const MAX_HOLDERS = 5;
+/** 沿历史往回核定义时最多看几次提交。每看一次就是一次 `git show`。 */
+const MAX_HISTORY = 10;
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
 
 /**
@@ -119,24 +122,55 @@ async function blobExists(repo: string, commit: string, path: string, b: Budget)
  * 一句 `test:accept`，就足以让「出现这个名字的文件集合」差集为空。
  */
 async function definitionOnTree(repo: string, commit: string, ask: GateEntryAsk, b: Budget): Promise<boolean | null> {
-  if (ask.kind === "path") return blobExists(repo, commit, ask.name.replace(/^\.\/+/, ""), b);
-  const manifest = await gitRun(repo, ["show", `${commit}:package.json`], b);
+  const file = askFile(ask);
+  if (ask.kind === "path") return blobExists(repo, commit, file, b);
+  const manifest = await gitRun(repo, ["show", `${commit}:${file}`], b);
   return manifest.ok ? scriptDefinedIn(manifest.stdout, ask.name) : null;
 }
 
-/** 这个名字在哪个文件里定义/落地。定义级那一档固定看 manifest。 */
-const askFile = (ask: GateEntryAsk) => ask.kind === "path" ? ask.name.replace(/^\.\/+/, "") : "package.json";
+/**
+ * 这个名字在哪个文件里定义/落地。
+ *
+ * 定义级那一档**跟着 runner 真会读的那个目录走**（`npm --prefix child run x` 读的是
+ * `child/package.json`，不是根目录那份 —— 第 3 轮审查 F1）。
+ */
+const askFile = (ask: GateEntryAsk) => ask.kind === "path"
+  ? ask.name.replace(/^\.\/+/, "") : askManifest(ask);
 
-/** 某个落点在目标分支上**最早**是哪一次提交写进去的（从新往旧列，取最后一行）。 */
-async function introducedBy(repo: string, targetCommit: string, sourceCommit: string | null, name: string | null,
-  file: string, added: boolean, b: Budget): Promise<{ commit: string; date: string; subject: string } | null> {
-  const log = await git(repo, ["log", "--format=%H%x09%cI%x09%s",
-    ...(added ? ["--diff-filter=A"] : [`-S${name}`]),
+/**
+ * 这个**定义**是哪一次提交带进来的：沿着改过那份文件的提交从旧往新走，第一次核出「定义在
+ * 了」的那一次就是它。核不出来返回 null —— 那时**只丢时间，不丢存在性**（见 readOrigin）。
+ *
+ * 为什么不能用 `git log -S<name>`（第 3 轮审查 F3 实测）：那问的是「这串字的出现次数什么
+ * 时候变了」。审查那条反例里，一次 `DOCUMENTATION ONLY mention command` 的提交只往
+ * `description` 里写了一句 `test:accept`，真正加 `scripts["test:accept"]` 的是再下一次提交 ——
+ * 按 `-S` 取最早，报出来的是那次改说明文字的提交，照着去找只会找到一处无关改动。
+ */
+async function definitionIntroducedBy(repo: string, targetCommit: string, sourceCommit: string | null,
+  ask: GateEntryAsk, b: Budget): Promise<Introduction | null> {
+  const log = await git(repo, ["log", "--format=%H%x09%cI%x09%s", "--reverse",
+    targetCommit, ...(sourceCommit ? ["--not", sourceCommit] : []), "--", askFile(ask)], b);
+  for (const row of (log ?? "").split("\n").filter(Boolean).slice(0, MAX_HISTORY)) {
+    const [commit, date, ...subject] = row.split("\t");
+    if (!commit) continue;
+    if (await definitionOnTree(repo, commit, ask, b) === true) {
+      return { commit, date: date ?? null, subject: subject.join("\t") || null };
+    }
+  }
+  return null;
+}
+
+type Introduction = { commit: string; date: string | null; subject: string | null };
+
+/** 这串**字**最早是哪一次提交写进那个文件的（只给文字线索那一档用）。 */
+async function textIntroducedBy(repo: string, targetCommit: string, sourceCommit: string | null,
+  name: string, file: string, b: Budget): Promise<Introduction | null> {
+  const log = await git(repo, ["log", "--format=%H%x09%cI%x09%s", `-S${name}`,
     targetCommit, ...(sourceCommit ? ["--not", sourceCommit] : []), "--", file], b);
   const oldest = (log ?? "").split("\n").filter(Boolean).at(-1);
   if (!oldest) return null;
   const [commit, date, ...subject] = oldest.split("\t");
-  return { commit: commit!, date: date ?? "", subject: subject.join("\t") };
+  return { commit: commit!, date: date ?? null, subject: subject.join("\t") || null };
 }
 
 /**
@@ -165,9 +199,12 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
     // 「没启动」推不出「不是你改的」（审查 F1）：基线上有、快照里没了 = 这次改动弄没的。
     if (inSnapshot === false && sourceCommit) origin.removedByTask = await removedByTask(repo, sourceCommit, targetCommit, ask, b);
     if (onTarget === true && inSnapshot !== true) {
-      const where = await introducedBy(repo, targetCommit, sourceCommit, name, askFile(ask), ask.kind === "path", b);
-      if (where) origin.holders.push({ file: askFile(ask), how: ask.kind === "path" ? "path" : "definition", ...where });
-      return { ...origin, unverified: !origin.holders.length && b.incomplete };
+      // 存在性已经核实了,时间核不出来**只丢时间**:旧版本在这儿没有 holder 就整段退成
+      // 「没能核对出来」,把已经拿到的正面事实一起丢掉（第 3 轮审查 F3 末段）。
+      const where = await definitionIntroducedBy(repo, targetCommit, sourceCommit, ask, b);
+      origin.holders.push({ file: askFile(ask), how: ask.kind === "path" ? "path" : "definition",
+        commit: where?.commit ?? null, date: where?.date ?? null, subject: where?.subject ?? null });
+      return { ...origin, unverified: false };
     }
     if (onTarget === false) return { ...origin, absent: ask.kind === "path" ? "path" : "definition", unverified: false };
     // onTarget === null（manifest 读不动等）：落到底下的文字线索，但**不许**据此说「也没有」。
@@ -177,8 +214,9 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
   const onTarget = await holdersIn(repo, targetCommit, name, b);
   const inSnapshot = sourceCommit ? new Set(await holdersIn(repo, sourceCommit, name, b)) : new Set<string>();
   for (const file of onTarget.filter(hit => !inSnapshot.has(hit)).slice(0, MAX_HOLDERS)) {
-    const where = await introducedBy(repo, targetCommit, sourceCommit, name, file, false, b);
-    if (where) origin.holders.push({ file, how: "text", ...where });
+    const where = await textIntroducedBy(repo, targetCommit, sourceCommit, name, file, b);
+    origin.holders.push({ file, how: "text",
+      commit: where?.commit ?? null, date: where?.date ?? null, subject: where?.subject ?? null });
   }
   // 找到落点 = 正面证据，残不残都算数。一个都没找到时**不是**「目标分支上没有」—— 文字
   // 检索答不了那个问题，所以留在 unverified 这一档（absent 仍是 null）。
@@ -207,7 +245,7 @@ async function removedByTask(repo: string, sourceCommit: string, targetCommit: s
  * exitCode 还是插入时的 null，所以只能由调用方把 outcome 里的真实值喂进来。
  */
 export async function diagnoseGateFailure(row: GateRow, outcome: { failure: AcceptGateFailure | null; exitCode: number | null }): Promise<
-  { failure: AcceptGateFailure | null; diagnosis: string } | null
+  { failure: AcceptGateFailure | null; diagnosis: string; attribution: AcceptGateMissAttribution | null } | null
 > {
   if (outcome.failure !== "exit_code") return null;
   // **入口事实只从那一行读回来**：它是 spawn 之前核的（accept-gate-entry.ts），现在再去
@@ -223,10 +261,17 @@ export async function diagnoseGateFailure(row: GateRow, outcome: { failure: Acce
   const origin = repo && row.targetBranch
     ? await readOrigin(repo, row.targetBranch, row.sourceCommit ?? null, miss.name, row.command).catch(() => null)
     : null;
-  // 这次改动自己把它删了/改名了 → 这条红**是**要改代码的那一种，不许改写成
-  // command_missing（那一档的整副面孔都是「不要动代码」）。结论正文仍然照实说明。
-  const failure = origin?.removedByTask === true ? outcome.failure : missFailure(miss) ?? outcome.failure;
+  // 「测试有没有启动」和「该不该由 agent 去改代码」是两件事，分开存（第 3 轮审查 F2）：
+  //  · mine     这次改动自己把它删了/改名了 → 这条红就是要改代码的那一种，连 failure 都不改写；
+  //  · not-mine 核实过基线上也没有 → 才许摆出那副「不要动代码、出路由用户定」的面孔；
+  //  · unknown  核不出来（目标 ref 读不到、非 git 快照、超预算…）→ 仍是「没启动」，但**不许**
+  //    据此免修。旧版本把 null 和 false 一起塞进免修分支，等于拿「没证明是你删的」当
+  //    「证明不是你删的」。
+  const attribution: AcceptGateMissAttribution | null = miss.kind !== "entry" ? null
+    : origin?.removedByTask === true ? "mine" : origin?.removedByTask === false ? "not-mine" : "unknown";
+  const failure = attribution === "mine" ? outcome.failure : missFailure(miss) ?? outcome.failure;
   return {
+    attribution,
     failure,
     diagnosis: gateCommandMissNotice({ command: row.command, miss, sourceCommit: row.sourceCommit ?? null, origin }),
   };

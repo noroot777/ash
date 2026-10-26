@@ -9,6 +9,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 门禁红了之后的归类结论(「命令在快照里不存在」那一类的出路)。旧行 NULL = 当初没归类过。
   "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
+  "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
   // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
   "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",

@@ -11,7 +11,7 @@ export type HandoffGateRun = Pick<GateRow, "id" | "command" | "status" | "exitCo
   // diagnosis 可选：旧 manifest 没有这个字段，迁入后按 null 处理（没归类过）。不带上它的话
   // 迁入页面仍说「出路见下面那段结论」而下面什么都没有（第 1 轮审查 N2）。
   & { executionMode?: GateRow["executionMode"]; diagnosis?: GateRow["diagnosis"];
-    entryProbe?: GateRow["entryProbe"] };
+    entryProbe?: GateRow["entryProbe"]; missAttribution?: GateRow["missAttribution"] };
 const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 
 export function validateGatePayload(manifest: HandoffManifest): void {
@@ -27,7 +27,7 @@ export function validateGatePayload(manifest: HandoffManifest): void {
       || typeof run.command !== "string" || typeof run.startedAt !== "string"
       || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived", "command_missing"].includes(run.failure)
       || (run.exitCode != null && !Number.isInteger(run.exitCode))) throw new HandoffError("acceptGateRuns 记录非法");
-    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError", "diagnosis", "entryProbe"] as const) {
+    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError", "diagnosis", "entryProbe", "missAttribution"] as const) {
       if (run[field] != null && typeof run[field] !== "string") throw new HandoffError(`acceptGateRuns.${field} 非法`);
     }
     if (run.fastForward != null && typeof run.fastForward !== "boolean") throw new HandoffError("acceptGateRuns.fastForward 非法");
@@ -49,7 +49,7 @@ export async function collectGateRuns(taskId: string): Promise<HandoffGateRun[]>
     failure: row.failure, sourceCommit: row.sourceCommit, targetBranch: row.targetBranch, targetCommit: row.targetCommit,
     fastForward: row.fastForward, startedAt: row.startedAt, finishedAt: row.finishedAt,
     handoffAt: row.handoffAt, handoffError: row.handoffError, executionMode: row.executionMode,
-    diagnosis: row.diagnosis, entryProbe: row.entryProbe }));
+    diagnosis: row.diagnosis, entryProbe: row.entryProbe, missAttribution: row.missAttribution }));
 }
 
 export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete" | "insert">,
@@ -66,6 +66,7 @@ export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete"
       + (manifest.files.some(file => file.kind === "run-artifact" && file.rel === `accept-gate-${row.id}.log`) ? "" : ".not-transferred"),
     diagnosis: row.diagnosis ?? null,
     entryProbe: row.entryProbe ?? null,
+    missAttribution: row.missAttribution ?? null,
     sourceFingerprint: null, pid: null, pidStartedAt: null, processPending: false, acceptOptions: null,
   })));
 }

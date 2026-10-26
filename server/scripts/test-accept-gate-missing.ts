@@ -15,6 +15,7 @@ import { db } from "../src/db/index.js";
 import { acceptGateRuns, projects, sessions, tasks } from "../src/db/schema.js";
 import { acceptTask } from "../src/task-accept.js";
 import { gateFailurePrompt } from "../src/accept-gate-messages.js";
+import { diagnoseGateFailure } from "../src/accept-gate-diagnosis.js";
 import { sessionTranscriptPath } from "../src/transcript.js";
 import { releaseTurn } from "../src/turn-lock.js";
 
@@ -59,6 +60,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   writeFileSync(join(repo, "package.json"), manifest(BASELINE_SCRIPTS));
   git(repo, "add", "-A");
   git(repo, "commit", "-m", "baseline manifest: mentions test:accept, does not define it");
+  const mentionOnly = git(repo, "rev-parse", "HEAD");
 
   const projectId = await ctx.seedProject("gate-missing-command", repo, "npm run test:accept");
   const taskId = "gatemissing01";
@@ -92,6 +94,9 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   assert.deepEqual(JSON.parse(run.entryProbe ?? "null"),
     { ask: "test:accept", resolved: false, by: "被测快照 package.json 的 scripts" },
     "起跑前核到的入口事实要原样落盘");
+  // 「未启动」和「该不该改代码」是两件事，分开存（第 3 轮审查 F2）。这一条核出来是
+  // not-mine：基线上没有定义、目标分支上有。
+  assert.equal(run.missAttribution, "not-mine", "归因要跟未启动分开落盘");
 
   assert.ok(run.diagnosis, "归类结论必须落在那一行上，不能只在这一次响应里说一句");
   const conclusion = run.diagnosis!;
@@ -102,6 +107,10 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   assert.match(conclusion, /是有定义的/, "② 读出目标分支那份 manifest 核过，这是定义级事实");
   assert.match(conclusion, /package\.json/, "② 它在目标分支上的落点");
   assert.match(conclusion, new RegExp(introduced.slice(0, 8)), "② 最早把它写进那个文件的是哪次提交");
+  // 基线那次提交的 package.json 里**整词**写着 test:accept（在 description 里），但没定义它。
+  // 按文字检索追引入提交会指到它身上（第 3 轮审查 F3），所以这一条得逐个提交核定义。
+  assert.equal(new RegExp(mentionOnly.slice(0, 8)).test(conclusion), false,
+    "② 只在文字里提过的那次提交不是定义的引入提交（审查三 F3）");
   assert.match(conclusion, /落后 main 1 个提交/, "② 任务分支落后目标分支多少");
   assert.equal(/上也找不到/.test(conclusion), false, "定义就在目标分支上，不许反过来说「也没有」（审查 F2）");
   assert.equal(/文字命中/.test(conclusion), false, "定义级事实不该退回文字命中那一档的对冲");
@@ -119,6 +128,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   const promptOf = (failure: "command_missing" | "exit_code") => gateFailurePrompt({
     command: run.command, summary: "未通过", logPath: run.logPath, tail: "",
     cwd: run.cwd, sourceCwd: repo, failure, diagnosis: conclusion,
+    missAttribution: run.missAttribution as "not-mine",
   });
   const prompt = promptOf("command_missing");
   assert.match(prompt, /不要为这件事改任何代码/, "这一种不许让 agent 去改代码");
@@ -169,8 +179,10 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
     "是这次改动把它弄没的，这条红要去改代码，不能摆成「不要动代码」（审查二 F1）");
   assert.match(mine.diagnosis ?? "", /开工基线上/, "要说清它在基线上是有的");
   assert.match(mine.diagnosis ?? "", /删掉或改名/, "要指出最可能的原因");
+  assert.equal(mine.missAttribution, "mine", "核出来是这次改动弄没的，归因要落盘");
   assert.equal(gateFailurePrompt({ command: mine.command, summary: "未通过", logPath: mine.logPath, tail: "",
-    cwd: mine.cwd, sourceCwd: repo, failure: mine.failure, diagnosis: mine.diagnosis })
+    cwd: mine.cwd, sourceCwd: repo, failure: mine.failure, diagnosis: mine.diagnosis,
+    missAttribution: mine.missAttribution as "mine" })
     .includes("不要为这件事改任何代码"), false, "这一种交回去要让它修");
 
   // 对照组四（审查二 F1 反例①）：顶层**跑起来了**，缺的是它内部那一层点名的**同名**脚本。
@@ -187,7 +199,10 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   assert.match(readFileSync(nested.logPath, "utf8"), /ACCEPTANCE STARTED/, "测试自己的前提：顶层确实跑起来了");
   assert.match(readFileSync(nested.logPath, "utf8"), /Missing script: "test:accept"/, "测试自己的前提：日志跟顶层缺失一模一样");
   assert.equal(nested.failure, "exit_code", "顶层跑起来了，内部同名缺件不许冒充顶层缺失（审查二 F1）");
-  assert.match(nested.diagnosis ?? "", /确实跑起来了/, "起跑前核过入口在树里，这一句才敢说");
+  assert.match(nested.diagnosis ?? "", /不是「它不在树里」那一种/, "核过入口在树里，只敢排除这一种");
+  assert.equal(/确实跑起来了/.test(nested.diagnosis ?? ""), false,
+    "在树里推不出跑起来了（审查三 F1：权限位、解释器都挡在前面）");
+  assert.equal(nested.missAttribution, null, "inner 这一档没有「谁把它弄没的」可言");
   assert.equal(/一行都没跑到|跳过前置命令|合进任务分支/.test(nested.diagnosis ?? ""), false,
     "inner 不许摆那两条出路，也不许说测试没跑");
 
@@ -212,5 +227,59 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   assert.equal(selfDeleted.failure, "exit_code", "一次真的断言失败，不许因为它删了自己就变成「没启动」");
   assert.equal(selfDeleted.diagnosis, null, "也不该给出任何「不是你的代码」的结论");
 
-  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 全部通过");
+  // 对照组七（审查三 F1 反例②）：命令换了目录,就得去 runner **真会读的那份** manifest 里
+  // 核。顶层没有这个名字、child 里有：按顶层核就会把一次真跑起来的红说成「没启动、不用修」。
+  writeFileSync(join(wsPath, "child", "package.json"),
+    `${JSON.stringify({ name: "child", private: true, scripts: { "test:accept": "echo CHILD RAN; exit 3" } })}\n`);
+  writeFileSync(join(wsPath, "package.json"), manifest({ build: "echo build" }));
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "child defines test:accept; top level does not");
+  const scoped = await again("npm --prefix child run test:accept");
+  assert.match(readFileSync(scoped.logPath, "utf8"), /CHILD RAN/, "测试自己的前提：child 里那条真跑起来了");
+  assert.deepEqual(JSON.parse(scoped.entryProbe ?? "null"),
+    { ask: "test:accept", resolved: true, by: "被测快照 child/package.json 的 scripts" },
+    "核的必须是 --prefix 指的那份 manifest");
+  assert.equal(scoped.failure, "exit_code", "真跑起来、真红了，不许因为顶层没这个名字就说它没启动");
+  assert.equal(scoped.missAttribution, null, "它不是「没解析出来」那一档");
+  assert.equal(/一行都没跑到/.test(scoped.diagnosis ?? ""), false, "更不许摆成免修那一档");
+
+  // 对照组八（审查三 F1）：入口**在树里**、但不可执行。存在性推不出执行 —— 这一条就是
+  // 「在树里 ≠ 跑起来了」的反例本身，所以那句对冲必须留着。
+  writeFileSync(join(wsPath, "noexec.sh"), "#!/bin/sh\necho SHOULD NOT RUN\n", { mode: 0o644 });
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "entry present but not executable");
+  const noexec = await again("./noexec.sh");
+  assert.equal(noexec.exitCode, 126, "测试自己的前提：在树里但不可执行时 shell 退 126");
+  assert.deepEqual(JSON.parse(noexec.entryProbe ?? "null"),
+    { ask: "./noexec.sh", resolved: true, by: "被测快照里的文件" }, "起跑前核到的是「在树里」");
+  assert.equal(noexec.failure, "exit_code", "在树里就不是「不在树里」那一种");
+  assert.match(noexec.diagnosis ?? "", /不是「它不在树里」那一种/, "核过的那一件照说");
+  assert.match(noexec.diagnosis ?? "", /这一层说不了/, "没核过的那一件不许替它说");
+  assert.equal(/确实跑起来了|一行都没跑到/.test(noexec.diagnosis ?? ""), false,
+    "它既没跑进去，也不是「不在树里」—— 两头都不许冒认");
+
+  // 对照组九（审查三 F2）：未启动这件事核出来了，但**归因**没核出来。旧版本把「核过、
+  // 基线上也没有」和「压根没核出来」塞进同一个 command_missing，于是任务真把验收脚本删了、
+  // 而目标 ref 又恰好读不到时，agent 被按住不许修。
+  //
+  // 这个条件真跑不出来：门禁的目标分支是验收那一刻从任务上解析的，实测把 mergeTargetBranch
+  // 指向一条不存在的分支时，那一按最后落在 exit_code 上，走不到归因这一层。所以这里拿主用例
+  // 那一行**真实落盘的记录**（真 npm 跑出来的日志 + 起跑前核过的入口事实），只把「目标分支
+  // 读不到」这一个条件换掉 —— 非 git 项目、目标 ref 被删、诊断超预算都落在这一档。
+  const unknown = await diagnoseGateFailure({ ...run, targetBranch: null, targetCommit: null },
+    { failure: "exit_code", exitCode: run.exitCode });
+  assert.equal(unknown?.failure, "command_missing", "未启动这件事是起跑前核过的，照旧成立");
+  assert.equal(unknown?.attribution, "unknown", "目标分支读不到，归因就是没核出来 —— 不许算成 not-mine");
+  assert.match(unknown?.diagnosis ?? "", /在目标分支上是什么情形，这次没能核对出来/,
+    "如实说目标分支那件事没核对出来");
+  assert.match(unknown?.diagnosis ?? "", /先核一眼这件事/, "归因未知时要让它先去核，不是免修");
+  const unknownPrompt = gateFailurePrompt({ command: run.command, summary: "未通过",
+    logPath: run.logPath, tail: "", cwd: run.cwd, sourceCwd: repo,
+    failure: unknown?.failure ?? null, diagnosis: unknown?.diagnosis ?? null,
+    missAttribution: unknown?.attribution ?? null });
+  assert.equal(unknownPrompt.includes("不要为这件事改任何代码"), false, "归因没核出来，不许发免修令");
+  assert.match(unknownPrompt, /是不是你这次改动把它弄没的/, "要先去核归因");
+  assert.match(unknownPrompt, /改回来或同步改配置/, "核下来是自己弄没的就该去改");
+
+  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 全部通过");
 }
