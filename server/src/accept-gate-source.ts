@@ -6,7 +6,7 @@ import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
 import { freezesAsSource, gateTreeDigest, insideTree as inside } from "./accept-gate-tree.js";
-import { copyTree, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch, needsIsolation,
+import { confineOwnPackages, copyTree, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch, needsIsolation,
   provideDependency, workspacePackages, type DependencyMode } from "./accept-gate-deps.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
@@ -168,7 +168,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     const included = (path: string) => includedAsGiven(path) && includedPhysical(path);
     const snapshotRoot = await realpath(target).catch(() => target);
     const provide = async (dep: string): Promise<void> => {
-      const mode = await provideDependency(cwd, target, dep, needsIsolation(dep, workspace), workspace,
+      const mode = await provideDependency(cwd, target, dep, needsIsolation(dep, workspace),
         path => !included(path));
       if (mode === false) {
         await copyTree(join(cwd, dep), join(target, dep), { skip: path => !included(path), snapshotRoot });
@@ -232,6 +232,16 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     if ((copiedFingerprint ?? (await readGateSource(target)).fingerprint) !== source.fingerprint) {
       throw new Error("测试快照没能按原样复现测试输入（副本里有软链解析不到它在源树里的目标），请重新验收");
     }
+    // 最后一道:让项目自己的包都解析到快照这份源码上。排在所有指纹核验**之后**,因为它可能往
+    // 快照里补一条链,而指纹问的是「复制对不对」,不该把这道加固算进去。
+    //
+    // 它和前面所有手段管的不是同一件事:克隆依赖树、改写树内落点都只能管快照里**已经有**的东西,
+    // 管不到 node 的向上查找。工作区没装依赖时(worktree 的常态)快照里压根没有依赖树,前面每一
+    // 条检查都「通过」,而 node 往上一级找到项目主检出那一份,顺着 workspace 链读到**活的**工作区
+    // 源码——快照自带 TASK_NEW、执行输出 MAIN_OLD,改一下工作区就变 MAIN_LIVE,自证全程为真。
+    // 理由与实测写在 confineOwnPackages 上方。
+    const unconfined = await confineOwnPackages(target);
+    if (unconfined) throw new Error(`测试快照没能隔离项目自己的包：${unconfined}`);
     if (source.inputs) await writeFile(`${target}.inputs.json`, JSON.stringify(source.inputs), { flag: "wx" });
   } catch (error) {
     await rm(target, { recursive: true, force: true });

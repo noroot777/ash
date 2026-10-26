@@ -254,7 +254,7 @@ try {
   assert.deepEqual(noWorkspace.names, [], "package.json 里没有 workspaces 就是没声明");
   assert.equal(noWorkspace.declared, false, "没有 workspaces 字段才算没声明");
   assert.equal(needsIsolation("node_modules", noWorkspace), false, "没声明 workspace 包就不必独立成一份");
-  assert.equal(await provideDependency(repo, roundTrip, "node_modules", false, noWorkspace), "link",
+  assert.equal(await provideDependency(repo, roundTrip, "node_modules", false), "link",
     "没声明 workspace 包时就是一条链,O(1)");
   assert.equal(await dependencyMismatch(repo, roundTrip, "node_modules", "link", noWorkspace), null,
     "借用建出来的链,落点就是工作区那一份");
@@ -289,7 +289,17 @@ try {
     writeFileSync(join(repo, "node_modules", "plain", "package.json"),
       '{"name":"plain","version":"3.0.0","type":"module","main":"index.mjs"}');
     writeFileSync(join(repo, "node_modules", "plain", "index.mjs"), 'export { build } from "@demo/lib";\n');
-    writeFileSync(join(repo, "node_modules", ".package-lock.json"), '{"packages":{"node_modules/plain":{"version":"3.0.0"}}}');
+    // 真实 npm 写下的形状:workspace 包记成 link + resolved(**项目内相对路径**),普通包记版本。
+    // resolved 是归属的唯一证据——同名同形状的第三方包(`file:` 依赖)的 resolved 指向项目外,门禁
+    // 据此区分「该接回快照自己那份」和「不许动」。手铺一份不含 link 条目的记录等于没有证据,那时
+    // 门禁一条链都不改写,跨检出借用会被对账当场判失败(本用例第④个入口就是那个形状)。
+    writeFileSync(join(repo, "node_modules", ".package-lock.json"), JSON.stringify({
+      packages: {
+        "node_modules/@demo/lib": { resolved: "packages/lib", link: true },
+        "node_modules/plain": { version: "3.0.0" },
+        "packages/lib": { name: "@demo/lib", version: "1.0.0" },
+      },
+    }));
     mkdirSync(join(repo, "node_modules", ".bin"), { recursive: true });
     if (fileLinks) symlinkSync(join("..", "@demo", "lib", "cli.mjs"), join(repo, "node_modules", ".bin", "demo-cli"));
   };
@@ -310,7 +320,8 @@ try {
   assert.equal(realpathSync(join(monoSnapshot, "node_modules", "plain")).startsWith(realpathSync(monoSnapshot)), true,
     "普通包也在快照内:它的 realpath 决定了它的传递导入按谁的包映射解析");
   assert.equal(readFileSync(join(monoSnapshot, "node_modules", ".package-lock.json"), "utf8"),
-    '{"packages":{"node_modules/plain":{"version":"3.0.0"}}}', "安装声明照常在副本里(身份就取它)");
+    readFileSync(join(mono, "node_modules", ".package-lock.json"), "utf8"),
+    "安装声明照常原样在副本里:依赖身份取它,改写归属的证据也取它");
   // 全节判据:改掉工作区的 workspace 源码,**三个入口**跑出来的都还是被认证那一版。
   writeFileSync(join(mono, "packages", "lib", "index.mjs"), 'export const build = "live-workspace";\n');
   const runIn = (path: string) => execFileSync(process.execPath, [path], { encoding: "utf8" }).trim();

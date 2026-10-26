@@ -36,7 +36,8 @@ const treeRealPath = async (root: string) => await realpath(root).catch(() => ro
 // 成副本里读得通的一条——交付的副本和工作区行为相反,正是本模块要防的那件事。落点不需要这层
 // 规范化:它由原生 realpath 给出(见 linkLanding ②),尾部语法在那条调用里各平台自行成立。
 const longPath = /^\\\\\?\\(?=[A-Za-z]:\\)/;
-async function linkTarget(path: string): Promise<string> {
+// 导出给 accept-gate-relocate 用:搬迁那一侧必须和登记/摘要/复制读同一个原文,否则又是一套语义。
+export async function linkTarget(path: string): Promise<string> {
   const raw = await readlink(path);
   return process.platform === "win32" ? raw.replace(longPath, "") : raw;
 }
@@ -65,13 +66,17 @@ async function linkTarget(path: string): Promise<string> {
 //     这条链,于是两侧都走这一支、拼出同一个身份——node_modules 里的断链是常态,它绝不能把整次
 //     快照判成「没能按原样复现」。原文不做任何归一:改成读不通的写法必须改掉身份,否则上一张绿
 //     结果会被直接复用。
-type LinkLanding = {
+export type LinkLanding = {
   /** 原生跟随这条链到不到得了一个东西。到不了就没有落点,身份改由原文承担。 */
   reachable: boolean;
   /** reachable 时是落点(末段不解析);否则是链自己所在的目录——源树与副本在结构上互为镜像。 */
   landing: string;
 };
-async function linkLanding(path: string, target: string): Promise<LinkLanding> {
+// 导出给 accept-gate-relocate 用。**依赖搬迁必须走这一个入口**:它曾经自己用 /[/\\]$/ 判尾部
+// 分隔符、用词法 resolve 算落点,于是 POSIX 上以字面 `\` 结尾的文件名被当成带分隔符剥掉、穿链
+// 之后的 `..` 被提前消掉——两条本地读得通的链在门禁里报「依赖没放对」,一个测试都没开始跑。
+// 一个平台语义只能有一个实现:谁要落点都从这里拿。
+export async function linkLanding(path: string, target: string): Promise<LinkLanding> {
   const unreachable = { reachable: false, landing: dirname(path) };
   if (!await stat(path).then(() => true, () => false)) return unreachable;
   const full = isAbsolute(target) ? target : `${dirname(path)}${sep}${target}`;
