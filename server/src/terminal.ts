@@ -711,6 +711,21 @@ export class TerminalSessionManager {
   }
 
   /**
+   * 把这条常用命令**最近一次**会话记成「用户停的」。停止命令跑完时用:`docker compose up -d`
+   * 这类启动脚本早就自己退了,没有活进程给 terminate 去标,但「我点过停止」必须留在会话事实里
+   * —— 否则刷新回来还显示着停止按钮(根 AGENTS.md:停止要留下持久可见的状态)。活会话不走这里,
+   * terminate 自己会标。
+   */
+  markCommandStopped(projectId: string, commandId: string): void {
+    let newest: TerminalSession | null = null;
+    for (const session of this.sessions.values()) {
+      if (session.projectId !== projectId || session.commandId !== commandId) continue;
+      if (!newest || session.startedAt > newest.startedAt) newest = session;
+    }
+    if (newest) newest.stoppedByUser = true;
+  }
+
+  /**
    * restart 的容量预检:排除同命令会话(活的会被 terminate、死的会被 create 清掉,
    * 都会让位)后还有没有槽。restart 的顺序是先杀旧再建新,若 create 注定因上限失败,
    * 必须在动手前拒绝 —— 「重启失败」绝不能落成「服务被停了」(第 1 轮审查实锤)。
