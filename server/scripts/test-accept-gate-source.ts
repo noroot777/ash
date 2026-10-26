@@ -183,7 +183,9 @@ try {
   git(repo, "commit", "-m", "gitlink without gitmodules");
   await assert.rejects(readGateSource(repo), /子模块/, "缺少 .gitmodules 的 gitlink 同样不能悄悄作为完整源码运行");
   git(repo, "reset", "--hard", beforeGitlink);
-  if (fileLinks) {
+  // 这一条只在 POSIX 上跑:Windows 的 git 在 core.symlinks=false(克隆时探测到建软链要提权就会
+  // 这么设)下把被跟踪的软链 checkout 成装着目标路径的普通文件,那道守卫根本无从触发。
+  if (process.platform !== "win32") {
     symlinkSync(join(root, "non-git", "source.txt"), join(repo, "external-link"));
     git(repo, "add", "external-link");
     git(repo, "commit", "-m", "external link");

@@ -25,19 +25,24 @@ async function linkTarget(path: string): Promise<string> {
 
 async function copyLink(source: string, destination: string, target: string): Promise<void> {
   if (process.platform !== "win32") return await symlink(target, destination);
+  // Windows 有两种目录链：junction 不要权限、只认绝对路径，包管理器（pnpm 等）在那边就是用它把
+  // 包连进 node_modules 的，所以目录链首选它（node 同样把 junction 报成 isSymbolicLink()，两侧
+  // 摘要仍然对得上）；普通软链——包括所有文件链——要 SeCreateSymbolicLinkPrivilege，即开发者
+  // 模式或管理员（实测 node 的 symlink 带 ALLOW_UNPRIVILEGED_CREATE，开发者模式下能建，而
+  // PowerShell 的 New-Item 仍然要提权，别拿它的失败当本机结论）。
   const directory = await stat(source).then(info => info.isDirectory(), () => false);
-  try { return await symlink(target, destination, directory ? "dir" : "file"); }
-  catch (error) {
-    // Windows 上建文件软链要 SeCreateSymbolicLinkPrivilege（开发者模式或管理员）；目录可以退到
-    // junction——它不要权限，只认绝对路径，而且 node 同样把它报成 isSymbolicLink()，于是
-    // 副本与源树的摘要仍然对得上。文件软链退不了：拷成真文件正是本模块要修的那个 bug
-    // （依赖自身位置做相对解析的运行时会当场死），所以宁可停在这里把原因说清楚。
-    if (!directory || !["EPERM", "EACCES", "UNKNOWN"].includes((error as NodeJS.ErrnoException).code ?? "")) {
-      throw new Error(`无法在测试快照中重建符号链接 ${source}（${(error as Error).message}）；`
-        + "Windows 上请开启开发者模式或以管理员身份运行 ash，或改用不含文件软链的依赖安装方式");
-    }
+  const attempts: [string, "junction" | "dir" | "file"][] = directory
+    ? [[resolve(dirname(destination), target), "junction"], [target, "dir"]]
+    : [[target, "file"]];
+  let failure: unknown;
+  for (const [attempt, type] of attempts) {
+    try { return await symlink(attempt, destination, type); }
+    catch (error) { failure = error; }
   }
-  await symlink(resolve(dirname(destination), target), destination, "junction");
+  // 文件链没有退路：拷成真文件正是本模块要修的那个 bug（靠自身位置做相对解析的运行时会当场
+  // 死），所以宁可停在这里把原因说清楚，而不是悄悄交出一份跑不起来的快照。
+  throw new Error(`无法在测试快照中重建符号链接 ${source}（${(failure as Error).message}）；`
+    + "Windows 上请开启开发者模式或以管理员身份运行 ash，或改用不含文件软链的依赖安装方式");
 }
 
 async function walkTree(path: string, hash: ReturnType<typeof createHash>, tree: GateTree, copy?: Copy): Promise<boolean> {
