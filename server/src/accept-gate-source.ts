@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { execFileText } from "./exec.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
@@ -17,13 +17,24 @@ async function nonGitFiles(cwd: string): Promise<string[]> {
   return (await readdir(cwd)).filter(name => name !== ".git").sort();
 }
 
-const runtimePath = (cwd: string, path: string) => inside(physicalPath(cwd), physicalPath(RUNS_DIR))
-  && inside(physicalPath(RUNS_DIR), physicalPath(path));
+// 运行目录(ash 的 runs)落在项目内时,它既不是测试输入、也不能跟着进副本——快照自己就住在那
+// 里面,复制它等于让快照把自己复制进自己。但排除**只在源侧做**不行:clone/checkout 会把运行目录
+// 里被跟踪的文件照样写进副本,副本回算再不过滤就必然看到源摘要里没有的输入,项目什么也没改也会
+// 被判「没能按原样复现」。所以排除项按**相对路径**记一次,源摘要、复制、副本回算各按自己的根
+// 解释同一份计划;**不能**把「在源 RUNS_DIR 之下」这个物理 predicate 生搬到副本上——副本自己就
+// 住在源的 RUNS_DIR 里,那个 predicate 在副本一侧永远为假,于是只有源侧被过滤掉。
+const excludedInputs = (root: string): string[] => {
+  const runs = physicalPath(RUNS_DIR);
+  return inside(physicalPath(root), runs) ? [relative(physicalPath(root), runs)] : [];
+};
+const planFilter = (root: string, excluded: string[]) => (path: string) =>
+  !excluded.some(rel => inside(join(root, rel), path));
 
 async function listInputs(cwd: string): Promise<SourceInput[]> {
   const inputs: SourceInput[] = [];
+  const included = planFilter(cwd, excludedInputs(cwd));
   const walk = async (path: string, ancestors: Set<string>) => {
-    if (runtimePath(cwd, join(cwd, path))) return;
+    if (!included(join(cwd, path))) return;
     let info: Awaited<ReturnType<typeof lstat>>;
     try { info = await lstat(join(cwd, path)); }
     catch (error) {
@@ -95,9 +106,9 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
       }
     }
     // 快照目录本身住在 runs 下。项目把 ash 的 runs 目录装在自己里面时(本仓库的 data/runs 就是),
-    // 复制计划一旦经由根落点把 data/ 带进来,复制就会递归进正在写入的那份快照。两侧(源树摘要+
-    // 复制、以及事后对账)用同一个过滤器,所以摘要仍然严格相等。
-    const gateInput = (path: string) => !runtimePath(cwd, path);
+    // 复制计划一旦经由根落点把 data/ 带进来,复制就会递归进正在写入的那份快照。源摘要、复制和
+    // 副本回算共用同一份排除计划(见 excludedInputs),所以三处算出的摘要严格相等。
+    const gateInput = planFilter(cwd, excludedInputs(cwd));
     const tracked = new Set(paths);
     const trackedDirs = new Set<string>();
     for (const path of paths) for (let dir = dirname(path); dir !== "."; dir = dirname(dir)) trackedDirs.add(dir);
@@ -203,24 +214,28 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
         if (!(await lstat(join(target, path))).isSymbolicLink()) continue;
         if (!inside(snapshotRoot, await realpath(join(target, path)))) throw new Error(`源码符号链接指向快照外：${path}`);
       }
+      // 同一份排除计划的三个解释:源侧按 cwd、副本回算按 target。checkout 已经把运行目录里被
+      // 跟踪的文件写进副本了,这里不删它(它属于那个提交),但回算必须和源摘要一样跳过它。
+      const excluded = excludedInputs(cwd);
       for (const dep of source.dependencies) {
         await mkdir(dirname(join(target, dep)), { recursive: true });
         await gateTreeDigest(join(cwd, dep),
-          { root: cwd, destinationRoot: target, dependency: true, filter: path => !runtimePath(cwd, path) });
+          { root: cwd, destinationRoot: target, dependency: true, filter: planFilter(cwd, excluded) });
       }
       // 对账要读**真实副本**。拿源树那一遍遍历的结果对账只能证明「计划照着做了」,证明不了
       // 「副本里这些输入真的解析得通」——缺了中间链或缺了安装内容的坏副本,源侧算出来的指纹
       // 一模一样,照样能交出去。重新遍历副本则会当场发现那条链在副本里落到了别处或解析不到。
       const copiedHash = sourceHash().update(source.commit);
       for (const dep of source.dependencies) {
-        const tree = await gateTreeDigest(join(target, dep), { root: target, dependency: true });
+        const tree = await gateTreeDigest(join(target, dep),
+          { root: target, dependency: true, filter: planFilter(target, excluded) });
         copiedHash.update(dep).update(tree?.digest ?? "");
       }
       copiedFingerprint = copiedHash.digest("hex");
     } else {
       for (const name of await nonGitFiles(cwd)) {
         await gateTreeDigest(join(cwd, name),
-          { root: cwd, destinationRoot: target, dependency: false, filter: path => !runtimePath(cwd, path) });
+          { root: cwd, destinationRoot: target, dependency: false, filter: planFilter(cwd, excludedInputs(cwd)) });
       }
     }
     if ((await readGateSource(cwd)).fingerprint !== source.fingerprint) {

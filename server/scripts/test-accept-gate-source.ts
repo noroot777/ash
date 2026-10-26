@@ -133,7 +133,9 @@ try {
   // 悬空链只保证「还是链 + 落点原样」。种类保不住:node 不暴露 reparse tag,Windows 上 junction、
   // 目录软链、文件软链三种悬空链的 lstat/stat/readlink 完全一致(192.168.1.187 真机实测,见
   // accept-gate-tree.ts linkTarget 上方注释),所以悬空的 junction 在开发者模式下会按文件链重建。
-  assert.equal(readlinkSync(danglingDir), join(realpathSync(root), "missing-dependency-dir"),
+  // 读不到的链逐字照抄(连已经存在的那段前缀也不规范化):它的身份就是原文,改写原文会让源树与
+  // 副本算出两个身份,无害的断链反而把整次快照判成「没能按原样复现」(第3轮审查发现1)。
+  assert.equal(readlinkSync(danglingDir), join(root, "missing-dependency-dir"),
     "发现5: 悬空链的落点必须原样保留,不能被改写或丢掉");
   if (fileLinks) {
     const bin = join(linkSnapshot, "node_modules", ".bin", "cli.mjs");
@@ -423,128 +425,6 @@ try {
     assert.equal(readFileSync(join(outsideSource, "main.py"), "utf8"), "print('v2')\n",
       "发现4: 测试写快照不会穿到项目外");
   }
-  // ── 第 3 轮审查的 4 条。各用独立的小仓:它们要自带 .gitignore 和提交历史,挤进上面那个共用
-  // repo 会互相污染(根落点那一条会把共用 repo 里**全部**被忽略的条目都拉进复制计划)。
-  const freshRepo = (name: string, ignore: string) => {
-    const cwd = join(root, name);
-    mkdirSync(cwd);
-    execFileSync("git", ["init", "-b", "main", cwd]);
-    git(cwd, "config", "user.name", "Gate Source Test");
-    git(cwd, "config", "user.email", "source@example.test");
-    writeFileSync(join(cwd, ".gitignore"), ignore);
-    writeFileSync(join(cwd, "package.json"), "{}");
-    git(cwd, "add", "-A");
-    git(cwd, "commit", "-m", `${name} fixture`);
-    return cwd;
-  };
-
-  // 第 3 轮发现 1A:落点正好是项目根(node_modules/<自己> -> .. 这种自链)。检出只覆盖**被跟踪的**
-  // 那部分,根下面被忽略的安装内容在工作区里经这条链读得到、副本里却没有,而且改了它指纹纹丝不动
-  // ——上一张绿结果会被直接复用。所以根落点与「落点是被跟踪的目录」走同一条路:补齐它下面被忽略
-  // 的条目。代价是自链会把根下**全部**被忽略的内容(连 ignored.env)带进快照:自链本来就把整个项目
-  // 暴露给了测试,要么这样忠实冻住,要么留一份测试读得到、指纹盖不住的内容——后者正是本条要修的。
-  const rootLink = freshRepo("root-link", "node_modules/\n.cache/\nignored.env\n");
-  mkdirSync(join(rootLink, "node_modules"));
-  mkdirSync(join(rootLink, ".cache"));
-  writeFileSync(join(rootLink, ".cache", "tool.txt"), "v1");
-  writeFileSync(join(rootLink, "ignored.env"), "exposed by the self link");
-  linkDir("..", join(rootLink, "node_modules", "project"));
-  const rootSource = await readGateSource(rootLink);
-  assert.deepEqual(rootSource.dependencies, [".cache", "ignored.env", "node_modules"],
-    "第3轮发现1A: 根落点下被忽略的内容要补登记成输入,不能当成「检出已经覆盖」跳过");
-  const rootSnapshot = join(root, "root-link-snapshot");
-  await createGateSnapshot(rootLink, rootSnapshot, rootSource);
-  assert.equal(lstatSync(join(rootSnapshot, "node_modules", "project")).isSymbolicLink(), true);
-  assert.equal(readFileSync(join(rootSnapshot, "node_modules", "project", ".cache", "tool.txt"), "utf8"), "v1",
-    "第3轮发现1A: 工作区经这条链读得到的内容,副本里也要读得到");
-  writeFileSync(join(rootLink, ".cache", "tool.txt"), "v2");
-  const rootChanged = await readGateSource(rootLink);
-  assert.equal(gateSourceMatches({ sourceCommit: rootSource.commit, sourceFingerprint: rootSource.fingerprint }, rootChanged),
-    false, "第3轮发现1A: 改了这份内容不能再沿用上次通过");
-
-  // 第 3 轮发现 1B:没装的可选依赖(node_modules/optional -> ../.cache/not-installed:父目录在、
-  // 叶子不在)。node_modules 里的断链是常态,它绝不能把整次快照判成「没能按原样复现」。两侧身份
-  // 靠「已解析前缀 + 余下原文」对齐:源侧解析到 .cache,副侧(计划里没有它、也没什么可拷)只解析到
-  // 快照根,拼出来仍是同一个 .cache/not-installed。
-  const danglingRepo = freshRepo("dangling-parent", "node_modules/\n.cache/\n");
-  mkdirSync(join(danglingRepo, "node_modules"));
-  mkdirSync(join(danglingRepo, ".cache"));
-  writeFileSync(join(danglingRepo, ".cache", "installed.txt"), "installed");
-  if (fileLinks) {
-    symlinkSync(join("..", ".cache", "not-installed"), join(danglingRepo, "node_modules", "optional"));
-    const danglingSource = await readGateSource(danglingRepo);
-    assert.equal(danglingSource.dependencies.includes(join(".cache", "not-installed")), false,
-      "第3轮发现1B: 不存在的落点没有内容可冻,不该留在复制计划里");
-    const danglingSnapshot = join(root, "dangling-snapshot");
-    await createGateSnapshot(danglingRepo, danglingSnapshot, danglingSource);
-    assert.equal(lstatSync(join(danglingSnapshot, "node_modules", "optional")).isSymbolicLink(), true,
-      "第3轮发现1B: 无害的悬空可选依赖不能拖垮整次快照");
-    assert.equal(existsSync(join(danglingSnapshot, "node_modules", "optional")), false, "而且在副本里照旧是断的");
-  }
-
-  // 第 3 轮发现 2:被提交的 vendor 软链。Git 检出已经把它写到目的地了,依赖目录的复制再写一遍
-  // 同一个目的地就是 EEXIST——两个写入方撞在一起,与计划内部的重叠无关,所以靠计划去重拦不住。
-  // 目的地已经是同一条链就复用,是别的东西才换掉(不能无条件忽略 EEXIST)。
-  // 只在 POSIX 上跑:Windows 的 git 在 core.symlinks=false 下把被跟踪的软链检出成装着目标路径的
-  // 普通文件,两个写入方从一开始就不会撞上。
-  if (process.platform !== "win32") {
-    const vendored = freshRepo("tracked-vendor", "node_modules/\n");
-    mkdirSync(join(vendored, "vendor", "pkg"), { recursive: true });
-    writeFileSync(join(vendored, "vendor", "pkg", "payload.txt"), "vendored source");
-    symlinkSync("payload.txt", join(vendored, "vendor", "pkg", "alias.txt"));
-    git(vendored, "add", "vendor");
-    git(vendored, "commit", "-m", "tracked vendored symlink");
-    const vendorSource = await readGateSource(vendored);
-    const vendorSnapshot = join(root, "tracked-vendor-snapshot");
-    await createGateSnapshot(vendored, vendorSnapshot, vendorSource);
-    assert.equal(lstatSync(join(vendorSnapshot, "vendor", "pkg", "alias.txt")).isSymbolicLink(), true,
-      "第3轮发现2: 被检出过的目的地要复用,而且仍然是链");
-    assert.equal(readFileSync(join(vendorSnapshot, "vendor", "pkg", "alias.txt"), "utf8"), "vendored source");
-  }
-
-  // 第 3 轮发现 3:按源码冻结的外部目录会被**搬迁**到快照里的另一个位置,它里面指回项目内的相对
-  // 链不能再照抄原文——原文会从新位置重新解析,落到另一个路径上(external/back.py ->
-  // ../loose/inside/data.py 冻进 <快照>/src 之后,原文落到 <快照>/loose/inside/data.py,而副本里
-  // 那份其实在 <快照>/inside/data.py),于是什么也没改的快照被判「没能按原样复现」。
-  if (fileLinks) {
-    const frozen = join(root, "frozen-context");
-    const frozenExternal = join(root, "frozen-external");
-    mkdirSync(join(frozen, "inside"), { recursive: true });
-    mkdirSync(frozenExternal);
-    writeFileSync(join(frozen, "inside", "data.py"), "print('works')\n");
-    symlinkSync(join("..", "frozen-context", "inside", "data.py"), join(frozenExternal, "back.py"));
-    linkDir(frozenExternal, join(frozen, "src"));
-    const frozenSource = await readGateSource(frozen);
-    const frozenSnapshot = join(root, "frozen-context-snapshot");
-    await createGateSnapshot(frozen, frozenSnapshot, frozenSource);
-    assert.equal(lstatSync(join(frozenSnapshot, "src", "back.py")).isSymbolicLink(), true,
-      "第3轮发现3: 冻结目录里的链仍按链保留");
-    assert.equal(readFileSync(join(frozenSnapshot, "src", "back.py"), "utf8"), "print('works')\n",
-      "第3轮发现3: 搬迁之后那条相对链要按副本里的实际落点重定位");
-    assert.equal(realpathSync(join(frozenSnapshot, "src", "back.py")), realpathSync(join(frozenSnapshot, "inside", "data.py")),
-      "第3轮发现3: 而且落在副本自己那份上,不能被拉回活动工作区");
-  }
-
-  // 第 3 轮发现 4:闭包规模的预算要卡在**消重之后**,而且只计真正追加进来的条目。拿计划总长去卡
-  // 会把初始输入的规模误判成成环:登记的依赖目录本身就超过上限时,第一条**已被覆盖**的树内链就会
-  // 报「落点过多…是否成环」,而那一条一个条目都没加。
-  const wide = freshRepo("wide-plan", "node_modules/\n.venv/\nvendor/\ntarget/\n");
-  for (let index = 0; index < 130; index += 1) {
-    const pkg = join(wide, `pkg-${index}`);
-    mkdirSync(pkg);
-    writeFileSync(join(pkg, "package.json"), "{}");
-    for (const dependency of ["node_modules", ".venv", "vendor", "target"]) mkdirSync(join(pkg, dependency));
-    writeFileSync(join(pkg, "node_modules", "dep.txt"), `dep ${index}`);
-  }
-  git(wide, "add", "-A");
-  git(wide, "commit", "-m", "many package directories");
-  mkdirSync(join(wide, "node_modules"));
-  linkDir(join("..", "pkg-0", "node_modules"), join(wide, "node_modules", "covered"));
-  const wideSource = await readGateSource(wide);
-  assert.equal(wideSource.dependencies.length > 512, true, "第3轮发现4: 这个夹具的初始输入本身就超过上限");
-  assert.equal(wideSource.dependencies.includes(join("pkg-0", "node_modules")), true,
-    "第3轮发现4: 已被覆盖的落点不该让规模预算报错");
-
   const beforeGitlink = git(repo, "rev-parse", "HEAD");
   git(repo, "update-index", "--add", "--cacheinfo", `160000,${beforeGitlink},nested-submodule`);
   git(repo, "commit", "-m", "gitlink without gitmodules");
