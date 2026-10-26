@@ -44,7 +44,7 @@ const project = (name: string, declaration: string, packageDir: string, value: s
 try {
   const { createGateSnapshot, gateSnapshotPath, readGateSource, verifyGateSnapshot } =
     await import("../src/accept-gate-source.js");
-  const { needsIsolation, workspacePackages } = await import("../src/accept-gate-deps.js");
+  const { declaresWorkspace, workspacePackages } = await import("../src/accept-gate-deps.js");
   let snapshots = 0;
   const snapshotOf = async (repo: string): Promise<string> => {
     const source = await readGateSource(repo);
@@ -63,7 +63,7 @@ try {
   const nestedDeclared = await workspacePackages(nested);
   assert.deepEqual(nestedDeclared.dirs, [join("packages", "team", "core")], "中段通配要能展开");
   assert.deepEqual(nestedDeclared.names, ["@demo/lib"]);
-  assert.equal(needsIsolation("node_modules", nestedDeclared), true);
+  assert.equal(declaresWorkspace("node_modules", nestedDeclared), true);
   const nestedSnapshot = await snapshotOf(nested);
   writeFileSync(join(nested, "packages", "team", "core", "index.mjs"), 'export const build = "live";\n');
   assert.equal(runIn(join(nestedSnapshot, "probe.mjs")), "certified",
@@ -77,11 +77,11 @@ try {
   const brokenDeclared = await workspacePackages(broken);
   assert.deepEqual(brokenDeclared.names, [], "坏掉的声明展开不出包名");
   assert.equal(brokenDeclared.declared, true, "但它仍然算声明过");
-  assert.equal(needsIsolation("node_modules", brokenDeclared), true, "展开不出包名时往隔离那一侧倒");
+  assert.equal(declaresWorkspace("node_modules", brokenDeclared), true, "展开不出包名时往隔离那一侧倒");
   const empty = join(root, "no-declaration");
   mkdirSync(empty, { recursive: true });
   writeFileSync(join(empty, "package.json"), '{"private":true}');
-  assert.equal(needsIsolation("node_modules", await workspacePackages(empty)), false,
+  assert.equal(declaresWorkspace("node_modules", await workspacePackages(empty)), false,
     "真的没声明才借用——否则每个单包项目都要白克隆一遍依赖树");
 
   // pnpm 的行内列表也要认(同一类「解析不全」,只影响 dirs 完整度,不影响隔离决策)。

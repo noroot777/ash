@@ -6,7 +6,7 @@ import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
 import { freezesAsSource, gateTreeDigest, insideTree as inside } from "./accept-gate-tree.js";
-import { confineOwnPackages, copyTree, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch, needsIsolation,
+import { confineOwnPackages, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
   provideDependency, workspacePackages, type DependencyMode } from "./accept-gate-deps.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
@@ -156,8 +156,8 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     const workspace = await workspacePackages(cwd);
     const provided = new Map<string, DependencyMode>();
     // 依赖这边的复制遍历与源码那边共用同一份排除计划:运行产物目录是可配的,它落在依赖目录内时,
-    // 不过滤就会把正在建的快照自己拷进来(见 copyTree 的「目标不进入输入闭包」)。深拷退路同样要
-    // 带上它——否则 fallback 一走就把刚挡住的东西放回来了。
+    // 不过滤就会把正在建的快照自己拷进来(见 copyTree 的「目标不进入输入闭包」)。克隆形态由 provideDependency
+    // 自己带上它(借用建不出来时它也走克隆,不再有「不对账的深拷」那条退路)。
     // 排除项按**相对路径**记一次,但谓词要能认两种根:源码那一侧的遍历从调用方给的 cwd 出发,依赖
     // 克隆却是从 realpath 过的树根出发(根自己可能就是一条链)。只按未解析的 cwd 拼前缀,在任何
     // 路径祖先里有软链的机器上都对不上——macOS 的 /var -> /private/var 必然命中,于是运行产物在
@@ -166,13 +166,8 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     const includedAsGiven = planFilter(cwd, excluded);
     const includedPhysical = planFilter(await realpath(cwd).catch(() => cwd), excluded);
     const included = (path: string) => includedAsGiven(path) && includedPhysical(path);
-    const snapshotRoot = await realpath(target).catch(() => target);
     const provide = async (dep: string): Promise<void> => {
-      const mode = await provideDependency(cwd, target, dep, needsIsolation(dep, workspace),
-        path => !included(path));
-      if (mode === false) {
-        await copyTree(join(cwd, dep), join(target, dep), { skip: path => !included(path), snapshotRoot });
-      } else provided.set(dep, mode);
+      provided.set(dep, await provideDependency(cwd, target, dep, workspace, path => !included(path)));
     };
     let copiedFingerprint: string | null = null;
     if (source.commit) {
@@ -199,6 +194,8 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       for (const dep of source.dependencies) {
         // 被跟踪的依赖目录(Go 的 vendor 常被提交)checkout 已经写出来了,放依赖要把它换掉:测试
         // 真正会用的是工作区那一份,而两者内容一致由上面的 dirty 检查保证(工作树必须干净)。
+        // 换掉之后快照里这些被跟踪的文件就是「已删除 + 一条未跟踪的链」——收尾核验必须认得出
+        // 这是**故意**的,理由写在 verifyGateSnapshot 里。
         await rm(join(target, dep), { recursive: true, force: true });
         await provide(dep);
       }
@@ -262,8 +259,15 @@ export async function verifyGateSnapshot(cwd: string, source: GateSource): Promi
       return await digestInputs(cwd, inputs) === source.fingerprint;
     }
     if (await commitAt(cwd, "HEAD") !== source.commit) return false;
-    await git(cwd, ["diff", "--no-ext-diff", "--exit-code", "HEAD", "--"]);
-    return true;
+    const changed = (await git(cwd, ["diff", "--no-ext-diff", "--name-only", "-z", "HEAD", "--"]))
+      .split("\0").filter(Boolean);
+    // 依赖目录不参与这道核验。它问的是「命令有没有改被测源码」,而依赖目录在快照里是**故意**被
+    // 换成借用链的(被 Git 跟踪的 vendor/ 更是如此:checkout 写出来的那份会被替换掉),于是
+    // `git diff HEAD` 看到的是一棵「删了一堆跟踪文件」的脏树——那是放法的形状,不是测试改了源码。
+    // 不豁免的后果是确定性的:把依赖目录一起提交的项目(Go 官方推荐做法)命令完整跑完、退出码 0,
+    // 界面随即翻成「测试修改了被测源码」,重试走同一条路同样失败,这类项目的验收永远过不去,而每
+    // 次重试都要把整套测试重跑一遍。依赖自己的身份由 dependencyDigest(安装声明)管,不靠这里。
+    return changed.every(path => path.split("/").some(part => DEPENDENCY_DIRS.includes(part)));
   } catch { return false; }
 }
 

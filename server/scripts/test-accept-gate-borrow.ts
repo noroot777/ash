@@ -68,7 +68,7 @@ const freshRepo = (name: string, ignore: string, pkg = "{}"): string => {
 try {
   const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, removeGateSnapshot, verifyGateSnapshot } =
     await import("../src/accept-gate-source.js");
-  const { copyTree, dependencyDigest, dependencyMismatch, needsIsolation, provideDependency, workspacePackages } =
+  const { copyTree, dependencyDigest, dependencyMismatch, declaresWorkspace, provideDependency, workspacePackages } =
     await import("../src/accept-gate-deps.js");
 
   // ── 1. 借用之后,快照里的命令必须真能跑起来。
@@ -253,7 +253,7 @@ try {
   const noWorkspace = await workspacePackages(repo);
   assert.deepEqual(noWorkspace.names, [], "package.json 里没有 workspaces 就是没声明");
   assert.equal(noWorkspace.declared, false, "没有 workspaces 字段才算没声明");
-  assert.equal(needsIsolation("node_modules", noWorkspace), false, "没声明 workspace 包就不必独立成一份");
+  assert.equal(declaresWorkspace("node_modules", noWorkspace), false, "没声明 workspace 包:声明这一侧不要求独立(实际放法还要看落点扫描)");
   assert.equal(await provideDependency(repo, roundTrip, "node_modules", false), "link",
     "没声明 workspace 包时就是一条链,O(1)");
   assert.equal(await dependencyMismatch(repo, roundTrip, "node_modules", "link", noWorkspace), null,
@@ -309,7 +309,7 @@ try {
   git(mono, "commit", "-m", "workspace package");
   monoInstall(mono);
   assert.deepEqual((await workspacePackages(mono)).names, ["@demo/lib"], "glob 展开后要认出声明的包名");
-  assert.equal(needsIsolation("node_modules", await workspacePackages(mono)), true);
+  assert.equal(declaresWorkspace("node_modules", await workspacePackages(mono)), true);
   const monoSnapshot = join(root, "monorepo-snapshot");
   const monoGateSource = await readGateSource(mono);
   await createGateSnapshot(mono, monoSnapshot, monoGateSource);

@@ -218,5 +218,32 @@ try {
     git(repo, "commit", "-m", "external link");
     await assert.rejects(createGateSnapshot(repo, join(root, "unsafe-link"), await readGateSource(repo)), /快照外/);
   }
-  console.log("accept-gate-source: isolated commits, dirty/index/untracked rejection, borrowed dependencies, outputs and non-Git identity passed");
+  // 依赖目录被 Git 跟踪(Go 的 vendor/ 是官方推荐做法,npm 项目偶尔也提交 node_modules)。它在快
+  // 照里被**故意**换成借用链,于是 `git diff HEAD` 看到一整棵「已删除」——命令跑完之后的收尾核验
+  // 要认得出那是放法留下的形状,不是测试改了被测源码。不豁免的话,这类项目一次验收也过不去。
+  {
+    const vendored = join(root, "vendored");
+    execFileSync("git", ["init", "-b", "main", vendored]);
+    git(vendored, "config", "user.name", "gate");
+    git(vendored, "config", "user.email", "gate@example.test");
+    git(vendored, "config", "core.hooksPath", "/dev/null");
+    writeFileSync(join(vendored, "go.mod"), "module example.test/app\n\ngo 1.22\n");
+    mkdirSync(join(vendored, "vendor", "example.test", "dep"), { recursive: true });
+    writeFileSync(join(vendored, "vendor", "modules.txt"), "# example.test/dep v1.0.0\n");
+    writeFileSync(join(vendored, "vendor", "example.test", "dep", "dep.go"), "package dep\n");
+    git(vendored, "add", "-A");
+    git(vendored, "commit", "-m", "commit the vendor directory");
+
+    const source = await readGateSource(vendored);
+    assert.deepEqual(source.dependencies, ["vendor"], "前提:vendor 被登记成依赖目录");
+    const target = join(root, "tracked-vendor");
+    await createGateSnapshot(vendored, target, source);
+    assert.equal(lstatSync(join(target, "vendor")).isSymbolicLink(), true, "前提:它被换成了借用链");
+    assert.equal(await verifyGateSnapshot(target, source), true,
+      "跟踪着的依赖目录被换成链,收尾核验不许把它判成「测试改了被测源码」");
+    // 同一棵树上,源码里的改动仍然要被抓住——豁免的是依赖目录,不是「有依赖目录就整棵不查了」。
+    writeFileSync(join(target, "go.mod"), "module example.test/app\n\ngo 1.23\n");
+    assert.equal(await verifyGateSnapshot(target, source), false, "源码被改动仍然必须判成不干净");
+  }
+  console.log("accept-gate-source: isolated commits, dirty/index/untracked rejection, borrowed dependencies, outputs non-Git identity and tracked dependency directories passed");
 } finally { rmSync(root, { recursive: true, force: true }); }
