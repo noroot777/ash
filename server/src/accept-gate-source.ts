@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { execFileText } from "./exec.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
-import { DEPENDENCY_DIRS, freezesAsSource, gateTreeDigest, insideTree as inside } from "./accept-gate-tree.js";
+import { freezesAsSource, gateTreeDigest, insideTree as inside } from "./accept-gate-tree.js";
+import { borrowDependency, borrowedLanding, copyTree, DEPENDENCY_DIRS, dependencyDigest } from "./accept-gate-deps.js";
 
-type SourceInput = { path: string; directory: boolean };
+type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 export type GateSource = { commit: string | null; fingerprint: string; dependencies: string[]; inputs?: SourceInput[] };
 const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
 const git = async (cwd: string, args: string[]) =>
@@ -41,6 +42,15 @@ async function listInputs(cwd: string): Promise<SourceInput[]> {
       if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
       throw error;
     }
+    // 依赖目录按**产物**登记:只记它自己、不递归进去,身份取安装声明(见 accept-gate-deps)。
+    // 放在软链判定**之前**:node_modules -> .store 这种把整个依赖目录做成一条链的布局,按依赖
+    // 借用才是这一层的意图,按链登记会让它继续走「原样重建 + 落点要在副本里」那条老路。非 Git
+    // 项目一视同仁,否则这一层的收益只有 Git 项目拿得到。
+    if (DEPENDENCY_DIRS.includes(basename(path))
+      && (await stat(join(cwd, path)).catch(() => null))?.isDirectory()) {
+      inputs.push({ path, directory: true, dependency: true });
+      return;
+    }
     // 会被原样重建的软链登记成叶子:既不跟随也不递归进去(跟随的话目录软链会被当目录整棵拷成
     // 真文件,正是本模块要修的 bug)。判定与 gateTreeDigest 同源,两边必须一致,否则副本里是
     // 真文件、清单里却按链登记,摘要立刻对不上。按源码冻结的外链沿用跟随语义——副本里它就是
@@ -72,12 +82,13 @@ async function digestInputs(cwd: string, inputs: SourceInput[]): Promise<string>
   for (const input of inputs) {
     if (!inside(resolve(cwd), resolve(cwd, input.path))) throw new Error("源码输入路径不在快照内");
     hash.update(input.path);
-    if (input.directory) {
+    if (input.dependency) {
+      hash.update("dependency\0").update(await dependencyDigest(cwd, input.path));
+    } else if (input.directory) {
       if (!(await stat(join(cwd, input.path))).isDirectory()) throw new Error("源码输入目录已变化");
       hash.update("directory\0");
     } else {
-      const tree = await gateTreeDigest(join(cwd, input.path), { root: cwd, dependency: false });
-      hash.update(tree?.digest ?? "omitted-link");
+      hash.update(await gateTreeDigest(join(cwd, input.path), { root: cwd }) ?? "omitted-link");
     }
   }
   return hash.digest("hex");
@@ -97,88 +108,24 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
     hash.update(commit);
     const manifests = /(?:^|\/)(?:package\.json|pyproject\.toml|Cargo\.toml|go\.mod|composer\.json|Gemfile)$/;
     const packageDirs = new Set([".", ...paths.filter(path => manifests.test(path)).map(path => dirname(path))]);
+    // 登记要借用的依赖目录。嵌套包各自那一份也登记，但被**已登记项包住**的要去掉：借用是在快照
+    // 里建一条链，父目录一旦换成链，子路径就落到工作区那一份里去了，再往那个位置建第二条链毫无
+    // 意义（也会 EEXIST）。"." 排在最前，所以父目录总是先登记。
     const registered: string[] = [];
     for (const directory of [...packageDirs].sort()) {
       for (const name of DEPENDENCY_DIRS) {
         const dep = join(directory, name);
         try { await lstat(join(cwd, dep)); } catch { continue; }
+        if (registered.some(other => inside(join(cwd, other), join(cwd, dep)))) continue;
         registered.push(dep);
       }
     }
-    // 快照目录本身住在 runs 下。项目把 ash 的 runs 目录装在自己里面时(本仓库的 data/runs 就是),
-    // 复制计划一旦经由根落点把 data/ 带进来,复制就会递归进正在写入的那份快照。源摘要、复制和
-    // 副本回算共用同一份排除计划(见 excludedInputs),所以三处算出的摘要严格相等。
-    const gateInput = planFilter(cwd, excludedInputs(cwd));
-    const tracked = new Set(paths);
-    const trackedDirs = new Set<string>();
-    for (const path of paths) for (let dir = dirname(path); dir !== "."; dir = dirname(dir)) trackedDirs.add(dir);
-    // 复制计划 = 登记的依赖目录 + 为了让保留下来的软链在副本里解析得通而必须一起冻结的路径。
-    // 消重必须在**最终计划**这一层成立,不能只在最初登记的那一批上成立(嵌套包 + vendor 只是其中
-    // 一种形状,闭包补进来的父子路径是另一种):软链重建不像 copyFile 那样幂等,计划里同时有父目录
-    // 和它的子路径时,第二遍 symlink 同一个目的地直接 EEXIST,整次快照在任何断言之前就废掉。所以
-    // plan 在每一次增删之后都维持「没有任何条目落在另一条之内」,而不是去忽略某一次 EEXIST。
-    const plan: string[] = [];
-    const digests = new Map<string, string>();
-    const addPath = (candidate: string): boolean => {
-      if (plan.some(other => inside(join(cwd, other), join(cwd, candidate)))) return false;
-      for (const other of plan.filter(other => inside(join(cwd, candidate), join(cwd, other)))) {
-        plan.splice(plan.indexOf(other), 1);
-        digests.delete(other); // 被父目录吞掉的条目要连摘要一起作废,由父目录那一遍重新算
-      }
-      plan.push(candidate);
-      return true;
-    };
-    for (const dep of registered) addPath(dep);
-    // 「落点在 cwd 之下」不等于「这份内容会出现在快照里」,而且「Git 跟踪着这个**目录**」更不等于
-    // 覆盖:
-    //  · node_modules -> .local-deps:落点既没被跟踪也不在任何登记的依赖里,照抄链接只会在副本里
-    //    留一条断链,命令当场不存在;
-    //  · node_modules -> .store,而 .store 里只有 README.md 被提交、真正的安装内容在被忽略的
-    //    .store/cache/ 下:Git 只检出 README.md,副本里命令照样不存在,改了安装内容指纹还纹丝不动。
-    // 所以覆盖只认两件事:落点正好是一个被跟踪的**文件**(检出即冻结),或者它已经在复制计划里。
-    // 落点是被跟踪的目录时,只补「Git 不会检出的那部分」——它下面被忽略的条目;未跟踪条目不在这里
-    // 放行,继续由下面的脏树检查拦住。要补的不止落点:原样保留的相对链还需要原文路上的中间链
-    // (gateTreeDigest 的 requires 两类都给),否则副本里链断在中途。悬空链不会进来(没有落点)。
-    // **落点正好是项目根**(node_modules/<自己> -> .. 这种自链)走的是同一条路,不能当成「检出已经
-    // 覆盖」直接跳过:检出只给跟踪的那部分,根下面被忽略的安装内容照样是副本里没有、工作区里却
-    // 能通过这条链读到的,于是改了它指纹纹丝不动。根在 requires 里是空串,给 git 的 pathspec 是
-    // "."。这一条同时把 runs 目录挡在外面(见下面的 filter):快照自己就落在 runs 里,把它纳进复制
-    // 计划等于让快照把自己复制进自己。
-    const ignoredUnder = async (path: string): Promise<string[]> =>
-      (await git(cwd, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory", "--", path]))
-        .split("\0").filter(Boolean)
-        .map(entry => (entry.endsWith("/") ? entry.slice(0, -1) : entry).split("/").join(sep));
-    // 预算要卡在**消重之后**,而且只计「闭包真正追加进来的条目」。拿计划总长去卡会把初始输入
-    // 的规模误判成成环:一个有 512 个登记依赖目录的大仓,第一条已被覆盖的树内链就会让它报
-    // 「落点过多…是否成环」,而那一条其实一个条目都没加。
-    let added = 0;
-    for (let index = 0; index < plan.length; index += 1) {
-      const dep = plan[index];
-      if (digests.has(dep)) continue;
-      const tree = await gateTreeDigest(join(cwd, dep), { root: cwd, dependency: true, filter: gateInput });
-      if (!tree) {
-        plan.splice(index, 1);
-        index -= 1;
-        continue;
-      }
-      digests.set(dep, tree.digest);
-      for (const required of tree.requires) {
-        if (tracked.has(required)) continue;
-        const uncovered = required === "" || trackedDirs.has(required)
-          ? await ignoredUnder(required === "" ? "." : required)
-          : [required.split("/").join(sep)];
-        for (const entry of uncovered) {
-          if (!addPath(entry)) continue;
-          added += 1;
-          if (added > 512) {
-            throw new Error("依赖软链的落点越补越多，无法冻结测试输入；"
-              + "请检查项目内的软链是否成环，或是否有软链把大量被忽略的内容带进了测试输入");
-          }
-          index = -1; // 计划变动就从头再扫:被吞掉的条目要重新摘要,新进来的条目要补摘要。
-        }
-      }
-    }
-    dependencies.push(...plan.sort());
+    dependencies.push(...registered.sort());
+    // 未跟踪内容只在**登记的依赖目录之内**被放过。这里有一处相对旧口径的**收窄**:以前靠闭包
+    // 把「node_modules -> .local-deps」那种落点补登记成输入,于是一个未跟踪、也没进 .gitignore
+    // 的目录被默许;现在它和任何未跟踪文件一样被拒。这是有意的——依赖是产物,产物本来就该在
+    // .gitignore 里;放过它等于让门禁在一个谁也没声明过的目录上运行,既不冻结也不登记它的内容。
+    // 钉在 test-accept-gate-borrow.ts「依赖根自己就是一条链」的第三种落点上。
     const dirty = (await git(cwd, ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]))
       .split("\0").filter(Boolean).some(row => row.slice(0, 2) !== "??"
         || !dependencies.some(dep => {
@@ -186,7 +133,11 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
           return row.slice(3) === portable || row.slice(3).startsWith(`${portable}/`);
         }));
     if (dirty) throw new Error("任务工作区含未提交或未跟踪文件；请先提交或移走它们，再运行验收前置命令");
-    for (const dep of dependencies) hash.update(dep).update(digests.get(dep) ?? "");
+    // 依赖的身份取**安装声明**，不取 4.5 万个文件的字节——口径、检得出什么、漏检什么，全写在
+    // accept-gate-deps 的 dependencyDigest 上方。这里一并换掉的是曾经那一整套为了「把依赖拷进
+    // 快照之后、它里面的链还解析得通」而存在的闭包机器：落点补齐、中间链收集、规模预算、父子
+    // 消重。依赖改成借用、根本不拷进来之后，它们一条理由都不剩了。
+    for (const dep of dependencies) hash.update(dep).update(await dependencyDigest(cwd, dep));
   } else {
     const inputs = await listInputs(cwd);
     return { commit, fingerprint: await digestInputs(cwd, inputs), dependencies, inputs };
@@ -214,28 +165,46 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
         if (!(await lstat(join(target, path))).isSymbolicLink()) continue;
         if (!inside(snapshotRoot, await realpath(join(target, path)))) throw new Error(`源码符号链接指向快照外：${path}`);
       }
-      // 同一份排除计划的三个解释:源侧按 cwd、副本回算按 target。checkout 已经把运行目录里被
-      // 跟踪的文件写进副本了,这里不删它(它属于那个提交),但回算必须和源摘要一样跳过它。
-      const excluded = excludedInputs(cwd);
+      // ── 依赖借用:上面那条「源码软链不许指向快照外」的**明确例外**,就写在它旁边。
+      // 快照里 node_modules 这类目录是一条**故意**落在快照外的链(指向工作区那一份)。两者判据
+      // 不同,所以这是例外而不是漏洞:上面那条管的是**被 Git 跟踪的源码**——源码指到快照外就
+      // 意味着「改了项目外的文件却能复用上次通过」,那正是门禁要拦的;依赖是 lockfile 的产物,
+      // 身份由安装声明给出(dependencyDigest),不靠「冻住字节」来保证。
+      // **顺序不能换**:那条检查必须在借用之前跑完。借用之后 join(target, path) 会穿过链看到
+      // 工作区那一份,vendor/ 里被提交的软链就会被误判成「指向快照外」,而它其实没有问题。
       for (const dep of source.dependencies) {
-        await mkdir(dirname(join(target, dep)), { recursive: true });
-        await gateTreeDigest(join(cwd, dep),
-          { root: cwd, destinationRoot: target, dependency: true, filter: planFilter(cwd, excluded) });
+        // 被跟踪的依赖目录(Go 的 vendor 常被提交)checkout 已经写出来了,借用要把它换掉:测试
+        // 真正会用的是工作区那一份,而两者内容一致由上面的 dirty 检查保证(工作树必须干净)。
+        await rm(join(target, dep), { recursive: true, force: true });
+        if (!await borrowDependency(cwd, target, dep)) await copyTree(join(cwd, dep), join(target, dep));
       }
-      // 对账要读**真实副本**。拿源树那一遍遍历的结果对账只能证明「计划照着做了」,证明不了
-      // 「副本里这些输入真的解析得通」——缺了中间链或缺了安装内容的坏副本,源侧算出来的指纹
-      // 一模一样,照样能交出去。重新遍历副本则会当场发现那条链在副本里落到了别处或解析不到。
+      // 借用这一侧的对账是**落点**,不是摘要:借用之后两边读的是同一份文件,摘要恒等,它证明不了
+      // 任何事。落点能证明的恰好是那件要紧的事——这条链真的落在工作区那个依赖目录上,而不是别处。
+      // 深拷退路没有落点(不是链),那一支回到「重新读副本自己那份安装声明」。
       const copiedHash = sourceHash().update(source.commit);
       for (const dep of source.dependencies) {
-        const tree = await gateTreeDigest(join(target, dep),
-          { root: target, dependency: true, filter: planFilter(target, excluded) });
-        copiedHash.update(dep).update(tree?.digest ?? "");
+        const landing = await borrowedLanding(target, dep);
+        const expected = await realpath(join(cwd, dep)).catch(() => null);
+        if (landing !== null && landing !== expected) {
+          throw new Error(`测试快照里的依赖借用没有落在工作区那一份上：${dep}`);
+        }
+        copiedHash.update(dep).update(await dependencyDigest(target, dep));
       }
       copiedFingerprint = copiedHash.digest("hex");
     } else {
+      // 非 Git 项目:依赖目录同样借用,源码逐条拷(软链按链重建)。源码那一遍必须避开借用的位置
+      // ——inside 对目录自身也成立,所以依赖目录本身和它下面的一切都归借用负责。
+      const borrowed = (source.inputs ?? []).filter(input => input.dependency).map(input => input.path);
+      for (const dep of borrowed) {
+        if (!await borrowDependency(cwd, target, dep)) await copyTree(join(cwd, dep), join(target, dep));
+      }
+      const included = planFilter(cwd, excludedInputs(cwd));
       for (const name of await nonGitFiles(cwd)) {
-        await gateTreeDigest(join(cwd, name),
-          { root: cwd, destinationRoot: target, dependency: false, filter: planFilter(cwd, excludedInputs(cwd)) });
+        await gateTreeDigest(join(cwd, name), {
+          root: cwd,
+          destinationRoot: target,
+          filter: path => included(path) && !borrowed.some(dep => inside(join(cwd, dep), path)),
+        });
       }
     }
     if ((await readGateSource(cwd)).fingerprint !== source.fingerprint) {
