@@ -73,10 +73,18 @@ function commandSummary(script: string): string {
  * text 为 null = **没什么可说**:从没跑过的命令旁边就摆着「执行」按钮、点也是灰的,
  * 再写一句「未启动」是把默认态当事件播报(用户 2026-09-18 点名删掉)。
  *
- * open = 会话已经退了,但我们仍认为服务开着(只有配了停止命令的 service 会这样,见
- * serviceOpen)。这时说「已退出」是错的 —— 退的是启动脚本,服务在 ash 的进程树之外跑着。
+ * open = 会话已经退了,但我们仍认为服务开着(端口还有人听,或配了停止命令;见 serviceOpen)。
+ * 这时说「已退出」是错的 —— 退的是启动脚本,服务在 ash 的进程树之外跑着。
+ *
+ * service = 这是项目级服务那一行。它正常退出时只说「启动脚本已退出」而不说「已退出」:
+ * ash 知道的只有**脚本**退了,服务是不是真停了它并不知道(守护化的服务既没留进程、这次又
+ * 没打印端口时,谁也说不准)。普通命令不走这一档 —— `npm run build` 退了就是退了。
  */
-function sessionState(session: TerminalSessionInfo | null, open = false): { tone: string; text: string | null } {
+function sessionState(
+  session: TerminalSessionInfo | null,
+  open = false,
+  service = false,
+): { tone: string; text: string | null } {
   if (session?.groupAlive) {
     return session.exitCode === null
       ? { tone: "on", text: "运行中" }
@@ -86,9 +94,8 @@ function sessionState(session: TerminalSessionInfo | null, open = false): { tone
     if (open) return { tone: "on", text: "已启动" };
     // 用户自己点的停止不是异常 —— 哪怕进程死于信号带回非零退出码。
     if (session.stoppedByUser) return { tone: "off", text: "已停止" };
-    return session.exitCode === 0
-      ? { tone: "off", text: "已退出" }
-      : { tone: "err", text: `已退出（${session.exitCode}）` };
+    if (session.exitCode === 0) return { tone: "off", text: service ? "启动脚本已退出" : "已退出" };
+    return { tone: "err", text: `已退出（${session.exitCode}）` };
   }
   return { tone: "off", text: null };
 }
@@ -182,10 +189,11 @@ export function CommandsLauncher({
   const serviceSession = currentProject ? bestSession(sessions, currentProject.id, SERVICE_COMMAND_ID) : null;
   // 「服务还开着」——▶ 要不要换成停止看它。**口径与服务端的 openSession 逐字对齐**
   // (server/src/terminal-commands.ts),两边不一致就会出现「按钮在那儿、点下去什么都没发生」。
-  // 活会话 = 确定在跑;配了停止命令时,正常退出又没被停过的那次启动也算开着 ——
-  // `docker compose up -d` 这类启动脚本跑完自己就退,服务在 ash 的进程树之外,会话死了
-  // 不代表它停了,否则那条停止命令永远按不到。
-  const serviceOpen = serviceSession && (serviceSession.groupAlive
+  // 三档:① 活会话 = 确定在跑;② 启动脚本退了但它打印过的端口还有人听 —— 真·守护化的服务
+  // (双 fork + setsid)从进程归属里全逃了,端口是仅剩的线索,顺着它能真杀到,所以这一档
+  // **不要求配停止命令**;③ 配了停止命令时,正常退出又没被停过的那次启动也算开着 ——
+  // `docker compose up -d` 这类连端口都未必打在本机,那条命令就是用户给的线索。
+  const serviceOpen = serviceSession && (serviceSession.groupAlive || serviceSession.portsAlive
     || (serviceConfig?.stopCommand && serviceSession.exitCode === 0 && !serviceSession.stoppedByUser))
     ? serviceSession
     : null;
@@ -193,7 +201,7 @@ export function CommandsLauncher({
     ? { projectId: currentProject.id, commandId: SERVICE_COMMAND_ID, name: "服务" }
     : null;
   const serviceKey = currentProject ? `${currentProject.id}:${SERVICE_COMMAND_ID}` : "";
-  const serviceState = serviceConfig || serviceSession ? sessionState(serviceSession, serviceOpen !== null) : null;
+  const serviceState = serviceConfig || serviceSession ? sessionState(serviceSession, serviceOpen !== null, true) : null;
 
   // 按钮亮不亮和每行的「活/死」都看 groupAlive,不看 exitCode:daemonize 形状
   // (启动脚本把服务放后台后自己退出)下组长退了、服务还在跑,那也是在跑;service 另按

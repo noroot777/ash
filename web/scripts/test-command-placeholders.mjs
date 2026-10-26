@@ -4,8 +4,9 @@
 //   ② 命令里带 `{{占位符}}` 时,点执行先弹框收值,取值随请求发出去;没占位符的照旧直接跑;
 //   ③ 这颗 ▶ 只说当前项目的事:别的项目在跑不点亮它,连**切走后才落回来的旧会话事实**也不算
 //      (第 2 轮逻辑审查:晚返回的跨项目结果会赖到新项目头上);
-//   ④ 服务起着的时候,弹层头部那颗 ▶ 就地换成红框的停止;`docker compose up -d` 这类启动
-//      脚本自己退了的形状(配了停止命令才这么推断)照样是停止按钮,停过之后才回到 ▶。
+//   ④ 服务起着的时候,弹层头部那颗 ▶ 就地换成红框的停止;启动脚本自己退了、但它打印过的
+//      端口还有人听(真·守护化)也算开着,**不要求配停止命令** —— 默认停法得自己立得住;
+//      进程和端口两条线索都够不着时才靠「配了停止命令」推断,停过之后回到 ▶。
 //
 // 跑法：npm -w web run test:command-placeholders
 import assert from "node:assert/strict";
@@ -198,6 +199,39 @@ try {
   await pop.getByRole("button", { name: "启动", exact: true }).waitFor();
   assert.equal(await pop.getByRole("button", { name: /^停止/ }).count(), 0);
   assert.match(await pop.locator(".cmd-pop__svc-state").innerText(), /已停止/);
+  await page.evaluate(() => { delete window.__service; });
+  await page.keyboard.press("Escape");
+
+  // ⑫ **真·守护化**且没配停止命令:启动脚本早退了,但它打印过的端口还有人听 —— 这就是开着,
+  //    ▶ 照样换成红框停止(用户 2026-10-26:「我不是说默认不填停止命令就是把启动起来的东西
+  //    杀掉吗」。默认停法由服务端的进程组 + 端口兜底负责,前端不能反过来要求先配一条脚本)。
+  await page.evaluate(() => { window.__service = "daemon"; });
+  await page.getByRole("button", { name: "去掉停止命令" }).click();
+  await page.waitForFunction(() =>
+    JSON.parse(document.querySelector('[data-testid="config"]').textContent)?.service?.stopCommand === null);
+  await reopen();
+  await pop.getByRole("button", { name: "停止", exact: true }).waitFor();
+  assert.equal(
+    await pop.getByRole("button", { name: "启动", exact: true }).count(),
+    0,
+    "端口还有人听就是开着 —— 没配停止命令也不该摆回启动按钮",
+  );
+  assert.match(await pop.locator(".cmd-pop__svc-state").innerText(), /已启动/);
+  await pop.getByRole("button", { name: "停止", exact: true }).click();
+  await page.waitForFunction(() => JSON.parse(document.getElementById("calls").textContent).length === 4);
+  assert.equal(
+    JSON.parse(await page.getByTestId("calls").innerText())[3].path,
+    "/api/projects/p-one/commands/service/stop",
+    "没配停止命令时点停止照样发 stop,怎么杀是服务端的事",
+  );
+
+  // ⑬ 反面:启动脚本退了、端口上也没人、又没配停止命令 —— 没有任何线索说它还活着,
+  //    这时认它开着就是猜。回到 ▶,并照实说退的是**启动脚本**。
+  await page.evaluate(() => { window.__service = "detached"; });
+  await reopen();
+  await pop.getByRole("button", { name: "启动", exact: true }).waitFor();
+  assert.equal(await pop.getByRole("button", { name: /^停止/ }).count(), 0);
+  assert.match(await pop.locator(".cmd-pop__svc-state").innerText(), /启动脚本已退出/);
   await page.evaluate(() => { delete window.__service; });
   await page.keyboard.press("Escape");
 

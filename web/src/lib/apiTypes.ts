@@ -688,6 +688,10 @@ export type TerminalSessionInfo = {
   stoppedByUser: boolean;
   /** 进程组里是否还有活进程。组长退了组不一定空（daemonize），判「还在跑」看它，别看 exitCode。 */
   groupAlive: boolean;
+  /** 这次启动自己打印过的本机端口（`http://127.0.0.1:8787`），停止时按它回去找人。 */
+  ports: number[];
+  /** 上面那些端口此刻还有人在听 = 服务还在后台跑着，哪怕启动脚本早退了。 */
+  portsAlive: boolean;
 };
 
 export type TerminalEvent =

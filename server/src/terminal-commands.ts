@@ -36,6 +36,7 @@ import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
 import { IS_WINDOWS } from "./platform.js";
+import { anyPortListening, stopByPorts } from "./service-ports.js";
 import { resolveTerminalDirectory, terminalSessions, type TerminalSessionInfo } from "./terminal.js";
 import { commandLaunch } from "./terminal-shell.js";
 
@@ -139,16 +140,36 @@ function latestSession(projectId: string, commandId: string): TerminalSessionInf
  * (web/src/workspace/CommandsLauncher.tsx 的 serviceOpen),两边必须一致,否则会出现
  * 「停止按钮摆在那儿、点下去什么都没发生」。
  *
- * 活会话 = 确定在跑。**配了停止命令**时,正常退出(exit 0)又没被停过的那次启动也算开着:
- * `docker compose up -d`、`pm2 start` 这类启动脚本跑完自己就退,服务活在 ash 的进程树之外,
- * 会话死了不代表它停了。没配停止命令就不作这个推断 —— 那条路只能杀进程,进程没了就是停了。
+ * 活会话 = 确定在跑。启动脚本退了但**它打印过的本机端口还有人在听**也算开着 —— 真·守护化
+ * 的服务(双 fork + setsid)从进程归属里全逃了,端口是仅剩的线索,而且顺着它能真杀到
+ * (service-ports.ts),所以这一档**不要求配停止命令**。再往下,**配了停止命令**时,正常退出
+ * (exit 0)又没被停过的那次启动也算开着:`docker compose up -d` 这类服务连端口都未必打在
+ * 本机(容器里、远端),会话死了不代表它停了,那条停止命令就是用户给的线索。三档都不沾边才
+ * 算真停了。
  */
 function openSession(projectId: string, commandId: string, stopScript: string | null): TerminalSessionInfo | null {
   const session = latestSession(projectId, commandId);
   if (!session) return null;
-  if (session.groupAlive) return session;
+  if (session.groupAlive || session.portsAlive) return session;
   if (!stopScript) return null;
   return session.exitCode === 0 && !session.stoppedByUser ? session : null;
+}
+
+/**
+ * 「停止命令留空 = 杀掉启动命令起来的东西」的最后一档:进程归属那三条线索断了之后,按这次
+ * 启动自己打印过的端口回去找人。杀不掉就**如实报错**——绝不把「我没杀掉」说成「已停止」
+ * (根 AGENTS.md「停止/暂停必须留下持久可见的状态」是同一个道理:界面上说停了,服务却还
+ * 听着端口,用户下次只会得出「按钮坏了」)。
+ */
+async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Promise<string | null> {
+  if (!open.ports.length) return null;
+  const result = await stopByPorts(open.ports, { cwd: open.cwd, since: open.startedAt, graceMs });
+  if (result.killed.length || !(await anyPortListening(open.ports))) return null;
+  const spared = result.spared[0];
+  const who = spared
+    ? `占着它的是 pid ${spared.holder.pid}（${spared.holder.command.slice(0, 60)}），${spared.reason}`
+    : "但查不到是谁占着";
+  return `端口 ${open.ports.join("、")} 上还有人在听，${who}。要停掉它，请在「管理常用命令」里给这个服务填一条停止命令。`;
 }
 
 /** 停止脚本失败时给用户看的那几行:有 stderr 就说 stderr,只留最后 3 行、封顶 300 字。 */
@@ -279,6 +300,8 @@ export function stopCommand(
   commandId: string,
   /** timeoutMs 缺省就是 STOP_SCRIPT_TIMEOUT_MS;回归拿它把一分钟缩成毫秒级,不必真等。 */
   stop: { script: string; cwd: string; timeoutMs?: number } | null = null,
+  /** 端口兜底那一档给进程留的收尾时间;回归同样拿它缩短等待。 */
+  options: { portGraceMs?: number } = {},
 ): Promise<CommandActionResult> {
   return withCommandLock(projectId, commandId, async () => {
     const open = openSession(projectId, commandId, stop?.script ?? null);
@@ -292,10 +315,15 @@ export function stopCommand(
     if (live) {
       const result = await terminalSessions.terminate(live.id, projectId);
       if (!result.ok) return { status: 502 as const, body: { error: `停止失败：${result.reason}` } };
-    } else {
-      // 启动脚本早就退了(服务在 ash 的进程树之外):没有进程可杀,但「我点过停止」要留下来。
-      terminalSessions.markCommandStopped(projectId, commandId);
     }
+    // 没配停止命令时:进程那条线索走完了,再按这次启动打印过的端口兜一次。配了停止命令的
+    // 不走这里 —— 用户写那段脚本正是不想让 ash 直接 kill,脚本停不干净该他改脚本。
+    if (!stop) {
+      const stuck = await stopLaunchPorts(open, options.portGraceMs);
+      if (stuck) return { status: 502 as const, body: { error: `停止失败：${stuck}` } };
+    }
+    // 启动脚本早就退了(服务在 ash 的进程树之外):没有进程可杀,但「我点过停止」要留下来。
+    if (!live) terminalSessions.markCommandStopped(projectId, commandId);
     return { status: 200 as const, body: { stopped: true } };
   });
 }
@@ -328,6 +356,13 @@ export function restartCommand(
         if (live) {
           const result = await terminalSessions.terminate(live.id, projectId);
           if (!result.ok) return { status: 502 as const, body: { error: `重启失败：旧进程停不下来（${result.reason}）` } };
+        }
+        // 没配停止命令时,旧服务可能是守护化的(进程树里早没了、端口还占着)。不先收掉它,
+        // 新的一起来就会因为端口被占而挂 —— 那种失败看起来像「重启按钮坏了」。
+        if (!command.stopCommand) {
+          const open = openSession(projectId, command.id, null);
+          const stuck = open ? await stopLaunchPorts(open) : null;
+          if (stuck) return { status: 502 as const, body: { error: `重启失败：旧服务没停下来（${stuck}）` } };
         }
         const session = await reservation.create(cwd, { name: resolved.name, script: resolved.script });
         return { status: 201 as const, body: { session } };

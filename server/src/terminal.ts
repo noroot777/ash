@@ -2,6 +2,7 @@ import { basename } from "node:path";
 import * as pty from "node-pty";
 import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import { IS_WINDOWS } from "./platform.js";
+import { anyPortListening, portsFromOutput } from "./service-ports.js";
 import { id } from "./util.js";
 import {
   containmentAvailable,
@@ -61,6 +62,17 @@ export type TerminalSessionInfo = {
    * 「这条命令还活着吗」一律看这个字段,别看 exitCode(第 4 轮审查实锤)。
    */
   groupAlive: boolean;
+  /**
+   * 这次启动自己打印过的本机端口(`http://127.0.0.1:8787` 这种)。真·守护化的服务
+   * (双 fork + setsid)从 ppid/ctty/pgid 三条线索里全逃了,这是仅剩的一条 ——
+   * 停止时按它回到端口上找人(server/src/service-ports.ts)。
+   */
+  ports: number[];
+  /**
+   * 上面那些端口此刻还有没有人在听(由后代扫描那一拍顺带探,不是每次 info() 都跑 lsof)。
+   * 「启动脚本退了、服务还在后台」就靠它认出来 —— groupAlive 在这种形状下是 false。
+   */
+  portsAlive: boolean;
 };
 
 type TerminalSession = TerminalSessionInfo & {
@@ -76,6 +88,11 @@ type TerminalSession = TerminalSessionInfo & {
    * (第 2 轮自由审查实锤)。见 terminal-process-tree.ts 顶部与 trackDescendants。
    */
   descendantPgids: Set<number>;
+  /**
+   * 累积这次启动打印过的本机端口。只对命令会话累积:交互 shell 里 `curl localhost:8080`
+   * 这种字样跟「我起了个服务」没关系,而停止按钮只长在命令会话上。
+   */
+  launchPorts: Set<number>;
   /**
    * pty slave 路径(/dev/ttysN)。leader(wrapper)活着时,按它枚举会话成员(ctty/sid
    * ∪ fd 持有者,见 terminal-process-tree.ts 文件头)就是**确定性**清单 —— 不依赖 ppid
@@ -117,6 +134,8 @@ export class TerminalSessionManager {
   private readonly descendantScanner: ReturnType<typeof setInterval>;
   private scanningDescendants = false;
   private rescanQueued = false;
+  /** 端口探测自成一把锁:它要跑 lsof,比 ps 慢得多,别让两拍叠在一起。 */
+  private scanningPorts = false;
   private scanTimer: ReturnType<typeof setTimeout> | null = null;
   private lastDescendantScanAt = 0;
   /**
@@ -144,7 +163,7 @@ export class TerminalSessionManager {
     this.sweeper = setInterval(() => this.sweepIdleSessions(), 60_000);
     this.sweeper.unref?.();
     this.descendantScanner = setInterval(
-      () => void this.trackDescendants(),
+      () => { void this.trackDescendants(); void this.trackServicePorts(); },
       options.descendantScanMs ?? DESCENDANT_SCAN_MS,
     );
     this.descendantScanner.unref?.();
@@ -303,6 +322,8 @@ export class TerminalSessionManager {
       exitCode: null,
       stoppedByUser: false,
       groupAlive: true,
+      ports: [],
+      portsAlive: false,
     };
     const session: TerminalSession = {
       ...info,
@@ -313,11 +334,15 @@ export class TerminalSessionManager {
       lastAccessedAt: Date.now(),
       listeners: new Set(),
       descendantPgids: new Set(),
+      launchPorts: new Set(),
       ttyPath: (processHandle as unknown as { ptsName?: string }).ptsName ?? null,
     };
     this.sessions.set(info.id, session);
     processHandle.onData((data) => {
       this.publish(session, { type: "data", data });
+      // 服务起来都会自报家门(`Local: http://127.0.0.1:5173`)。趁输出流过记下来 ——
+      // 守护化的服务退出进程树之后,这是唯一还指得到它的线索。
+      if (session.commandId !== null) for (const port of portsFromOutput(data)) session.launchPorts.add(port);
       // shell 产出输出 = 它还活着,且可能刚起了后台作业(job-control 会打印 `[1] pid`)。
       // 限流触发一次后代扫描,让新作业在毫秒级被记进 descendantPgids,而不必等满一个周期
       // —— 缩小「起作业后立刻退 shell」的漏记窗口(第 3 轮审查)。
@@ -590,6 +615,25 @@ export class TerminalSessionManager {
   }
 
   /**
+   * 刷新「启动脚本退了、但它起的服务还听着端口」这个事实。只问**启动脚本已退出、用户
+   * 又没点过停止**的命令会话 —— 组长还活着时 groupAlive 已经说明一切,不必再跑 lsof;
+   * 用户点过停止就别再把它说成开着。一次 tick 最多问这几条,量级跟会话数同阶。
+   */
+  private async trackServicePorts(): Promise<void> {
+    if (this.scanningPorts) return;
+    const candidates = [...this.sessions.values()]
+      .filter((session) => session.commandId !== null && session.launchPorts.size > 0);
+    if (!candidates.length) return;
+    this.scanningPorts = true;
+    try {
+      for (const session of candidates) {
+        if (session.exitCode === null || session.stoppedByUser) { session.portsAlive = false; continue; }
+        session.portsAlive = await anyPortListening(session.launchPorts);
+      }
+    } finally { this.scanningPorts = false; }
+  }
+
+  /**
    * 持续累积每个活会话见过的后代进程组 pgid。一次 ps 覆盖全部活 shell(命令会话也扫,
    * 无害)。由 constructor 的定时器每 DESCENDANT_SCAN_MS 调一次,外加 onData 的限流触发
    * (maybeScanFromData)。幂等只累积;正在扫时到达的请求**排队一次**扫完即补(不静默
@@ -754,6 +798,9 @@ export class TerminalSessionManager {
       id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode, stoppedByUser,
       // 即时探测,不是缓存值:组长退没退(exitCode)和组里有没有活人是两件事。
       groupAlive: this.sessionAlive(session),
+      ports: [...session.launchPorts],
+      // 这个只能是缓存值:问端口要跑 lsof,不能挂在每次 info() 上(列表接口一次几十条)。
+      portsAlive: session.portsAlive,
     };
   }
 

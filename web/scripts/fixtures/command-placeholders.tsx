@@ -30,8 +30,14 @@ const project = (commandsConfig: ProjectView["commandsConfig"], id = "p-one", na
 /** 每次启停调用都记下来,用例断言请求体里带的占位符取值。 */
 const calls: { path: string; body: unknown }[] = [];
 
+/** 命令列表两幕共用(切 service 配置时不该连带把列表换掉)。 */
+const COMMANDS = [
+  { id: "checkout", name: "切分支", command: "git checkout {{分支}}\ngit status" },
+  { id: "plain", name: "构建", command: "npm run build" },
+];
+
 /** 第一个项目自己在跑的一条常用命令:只在「晚返回」那一幕出现(见下面的 __slowFact)。 */
-const lateSession = { id: "s-late", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 3, exitCode: null, stoppedByUser: false, groupAlive: true };
+const lateSession = { id: "s-late", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 3, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false };
 
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -44,9 +50,10 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     // __slowFact:让**第一个项目**的这次查询慢 400ms 回来,并且带上它自己在跑的一条命令 ——
     // 用例借此重演「切走之后旧事实才落回来」。其余时候一如既往,立刻回同一份。
     const slow = (window as unknown as { __slowFact?: boolean }).__slowFact === true && listing[1] === "p-one";
-    // 服务会话:用例用 window.__service 切三种现场 —— 在跑 / 启动脚本自己退了(docker
-    // compose up -d 那种,服务在 ash 的进程树之外) / 已经被停过。
-    const service = (window as unknown as { __service?: "live" | "detached" | "stopped" }).__service;
+    // 服务会话:用例用 window.__service 切四种现场 —— 在跑 / 真·守护化(启动脚本退了,
+    // 但它打印过的端口还有人听) / 启动脚本自己退了而端口上也没人(docker compose up -d
+    // 那种,服务在本机进程与端口之外) / 已经被停过。
+    const service = (window as unknown as { __service?: "live" | "daemon" | "detached" | "stopped" }).__service;
     const sessions = [
       ...(service ? [{
         id: "s-svc", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "服务",
@@ -54,9 +61,13 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
         exitCode: service === "live" ? null : 0,
         stoppedByUser: service === "stopped",
         groupAlive: service === "live",
+        // 启动脚本自报的端口。守护化那一幕里它是唯一还指得到服务的线索 ——
+        // 进程归属(ppid / 会话 / pgid)一条都够不着(server/src/service-ports.ts)。
+        ports: [8787],
+        portsAlive: service === "daemon",
       }] : []),
-      { id: "s-shell", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "第一个项目", commandId: null, startedAt: 1, exitCode: null, stoppedByUser: false, groupAlive: true },
-      { id: "s-other", projectId: "p-two", cwd: "/workspace/p-two", shell: "/bin/zsh", name: "别家的 dev server", commandId: "dev", startedAt: 2, exitCode: null, stoppedByUser: false, groupAlive: true },
+      { id: "s-shell", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "第一个项目", commandId: null, startedAt: 1, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false },
+      { id: "s-other", projectId: "p-two", cwd: "/workspace/p-two", shell: "/bin/zsh", name: "别家的 dev server", commandId: "dev", startedAt: 2, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false },
       ...(slow ? [lateSession] : []),
     ];
     if (slow) await new Promise((done) => window.setTimeout(done, 400));
@@ -80,10 +91,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
 function Fixture() {
   const [current, setCurrent] = useState<ProjectView>(() => project({
     service: { command: "npm -w web run dev", restartCommand: null, stopCommand: "docker compose down" },
-    commands: [
-      { id: "checkout", name: "切分支", command: "git checkout {{分支}}\ngit status" },
-      { id: "plain", name: "构建", command: "npm run build" },
-    ],
+    commands: COMMANDS,
   }));
   const [notices, setNotices] = useState<string[]>([]);
   const notify = useCallback((message: string) => setNotices((all) => [...all, message]), []);
@@ -92,6 +100,11 @@ function Fixture() {
       <ProjectCommandsSettings project={current} onUpdated={setCurrent} notify={notify} />
       {/* 切到一个什么都没跑的项目:用来看「上一个项目的会话事实晚一步回来」会不会赖到它头上。 */}
       <button type="button" onClick={() => setCurrent(project({ service: null, commands: [] }, "p-solo", "另一个项目"))}>切项目</button>
+      {/* 没配停止命令的现场:默认停法(进程组 + 端口)得自己立得住,不能要求先配一条才敢认服务开着。 */}
+      <button type="button" onClick={() => setCurrent(project({
+        service: { command: "npm -w web run dev", restartCommand: null, stopCommand: null },
+        commands: COMMANDS,
+      }))}>去掉停止命令</button>
       <pre data-testid="notices">{JSON.stringify(notices)}</pre>
       <pre data-testid="config">{JSON.stringify(current.commandsConfig)}</pre>
     </main>
