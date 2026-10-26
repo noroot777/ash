@@ -249,6 +249,16 @@ try {
     ["npm -C packages/kb run accept", { kind: "script", runner: "npm", name: "accept", dir: "packages/kb" }],
     // 目录值本身读不出来 → 白卷,不许退回「当前目录」充数。
     ["npm --prefix run test:accept", null],
+    ["npm run -C", null],
+    // `--` 之后是**脚本的** argv,npm 自己不再解释（第 4 轮审查 F1 实测：跑的是根目录那个
+    // 脚本,`--prefix child` 只是它的参数）。照旧版本整条扫一遍,就会去读 child/package.json,
+    // 把一次真跑起来、真报断言失败的红说成「一行都没跑到、不要改代码」。
+    ["npm run test:accept -- --prefix child", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["npm run test:accept -- --ci --prefix=child", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["npm --prefix child run test:accept -- --prefix ..", { kind: "script", runner: "npm", name: "test:accept", dir: "child" }],
+    // 确定不吃下一个词的开关可以跳过;`--x=y` 自带值也一样。
+    ["npm run --silent test:accept", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
+    ["npm run test:accept --loglevel=warn", { kind: "script", runner: "npm", name: "test:accept", dir: "." }],
     // 点名要跑的是那个**脚本文件**,不是传给它的参数 —— 参数在不在树里,这一层答不了。
     ["./runner.sh test:accept", { kind: "path", name: "./runner.sh" }],
     ["./only-on-target.sh 2>/dev/null", { kind: "path", name: "./only-on-target.sh" }],
@@ -258,6 +268,15 @@ try {
     ["npm start", null],
     ["npm restart", null],
     ["npm stop", null],
+    // 换成 `run` 写法照样绕不开默认行为（第 4 轮审查 F1 实测:`npm run start` 真去跑了
+    // node server.js）。pnpm/yarn 没实测,一并保守。
+    ["npm run start", null],
+    ["npm run restart", null],
+    ["pnpm run start", null],
+    // 未知选项可能把后面那个词当成自己的值 —— 实测 `npm run --loglevel warn test:accept`
+    // 真跑的是 test:accept;按「以 - 开头就跳过」找位置参数会把 warn 当成脚本名。
+    ["npm run --loglevel warn test:accept", null],
+    ["npm --userconfig /tmp/x run test:accept", null],
     // 这些把「去哪儿找脚本」整个换掉,解析不了结果就别猜（反例③）。
     ["npm -w web run test", null],
     ["npm run test -w web", null],

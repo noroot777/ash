@@ -78,6 +78,11 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
     cwd: repo, startedAt: ctx.createdAt, turnStartedAt: ctx.createdAt, endedAt: ctx.createdAt, activeMs: 0,
   });
 
+  // 归因只认任务**自己记下的**开工起点（审查四 F2）。真实的 ash 开 worktree 时会冻结它，
+  // 共享夹具的 seedTask 没写，这里按真实语义补上 —— 否则下面每一条都只能落「归因未知」。
+  const taskStart = git(wsPath, "rev-parse", "HEAD");
+  await db.update(tasks).set({ worktreeStartCommit: taskStart }).where(eq(tasks.id, taskId));
+
   const latest = async () => (await ctx.runsOf(taskId) as GateRow[]).at(0)!;
   const first = await acceptTask(taskId);
   assert.equal(first.accepted, false, "命令没跑到，这一按一样不许合并");
@@ -258,6 +263,60 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   assert.equal(/确实跑起来了|一行都没跑到/.test(noexec.diagnosis ?? ""), false,
     "它既没跑进去，也不是「不在树里」—— 两头都不许冒认");
 
+  // 对照组十（审查四 F3）：目标分支上真正带进这个定义的那次提交**读不动**（manifest 超
+  // 过 2 MiB 上限），紧跟着一次只缩短说明文字的提交读得动。读不出来不等于「那时还没有」，
+  // 所以后者不许被冒认成「最早把这个定义带进来的」。
+  const scriptsWithF3 = { ...BASELINE_SCRIPTS, "test:accept": "echo real acceptance", "test:accept-f3": "echo f3" };
+  writeFileSync(join(repo, "package.json"), `${JSON.stringify({
+    name: "gate-fixture", private: true, description: "x".repeat(2_200_000), scripts: scriptsWithF3 }, null, 2)}\n`);
+  git(repo, "add", "-A");
+  git(repo, "commit", "-m", "add test:accept-f3 with a huge description");
+  writeFileSync(join(repo, "package.json"), `${JSON.stringify({
+    name: "gate-fixture", private: true, description: "short", scripts: scriptsWithF3 }, null, 2)}\n`);
+  git(repo, "add", "-A");
+  git(repo, "commit", "-m", "DESCRIPTION ONLY shortened; acceptance already existed");
+  const descriptionOnly = git(repo, "rev-parse", "HEAD");
+  const f3 = await again("npm run test:accept-f3");
+  assert.equal(f3.failure, "command_missing", "快照里没有这个脚本，这一条照旧成立");
+  assert.match(f3.diagnosis ?? "", /是有定义的/, "目标分支 HEAD 读得动，存在性照常核出来");
+  assert.match(f3.diagnosis ?? "", /哪次提交带进来的，这次没追出来/, "读不出来就说没追出来，不许编一个");
+  assert.equal(new RegExp(descriptionOnly.slice(0, 8)).test(f3.diagnosis ?? ""), false,
+    "只缩短说明文字那次不许被冒认成引入提交（审查四 F3）");
+  assert.match(f3.diagnosis ?? "", /把 main 合进任务分支/, "存在性这一档的出路照给");
+
+  // 对照组十一（审查四 F2）：任务从**父任务分支**开工，删掉继承来的验收脚本。Git 共同祖先
+  // 是更早的目标分支、上面本来就没有这个脚本，真实起点上却有 —— 按共同祖先判会得出
+  // 「不是你删的」并发一张免修令，而这时正确的出路恰恰是把它改回来。
+  writeFileSync(join(wsPath, "package.json"), manifest({ build: "echo build", "test:accept-inherited": "echo inherited" }));
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "parent task adds the inherited acceptance script");
+  const inheritedStart = git(wsPath, "rev-parse", "HEAD");
+  writeFileSync(join(wsPath, "package.json"), manifest({ build: "echo build" }));
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "this task deletes the inherited acceptance script");
+  // 测试自己的前提：共同祖先上没有它 —— 旧实现按 merge-base 判就会答错。
+  const mergeBase = git(wsPath, "merge-base", "HEAD", "main");
+  assert.equal(/test:accept-inherited/.test(git(wsPath, "show", `${mergeBase}:package.json`)), false,
+    "前提：共同祖先上没有这个脚本");
+  await db.update(tasks).set({ worktreeStartCommit: inheritedStart }).where(eq(tasks.id, taskId));
+  const inherited = await again("npm run test:accept-inherited");
+  assert.equal(inherited.missAttribution, "mine",
+    "真实起点上有、这份快照里没了 = 这次改动弄没的（审查四 F2）");
+  assert.equal(inherited.failure, "exit_code", "这条红要去改代码，不许摆成免修那一档");
+  assert.match(inherited.diagnosis ?? "", /开工基线上/, "要说清它在开工起点上是有的");
+  assert.equal(gateFailurePrompt({ command: inherited.command, summary: "未通过", logPath: inherited.logPath,
+    tail: "", cwd: inherited.cwd, sourceCwd: repo, failure: inherited.failure,
+    diagnosis: inherited.diagnosis, missAttribution: inherited.missAttribution as "mine" })
+    .includes("不要为这件事改任何代码"), false, "继承来的脚本被自己删掉，不许发免修令");
+  // 起点记不下来（旧任务、字段为空）就只能落未知 —— 不许退回共同祖先去补一个答案。
+  await db.update(tasks).set({ worktreeStartCommit: null }).where(eq(tasks.id, taskId));
+  const noStart = await again("npm run --silent test:accept-inherited");
+  assert.equal(noStart.missAttribution, "unknown", "没有起点就老实说未知");
+  assert.equal(noStart.failure, "command_missing", "未启动这件事照旧核得出来");
+  assert.match(noStart.diagnosis ?? "", /先核一眼这件事/, "未知时要让它先去核");
+  // 恢复真实起点：下一条要单独验证「目标分支读不到 → 未知」，起点不该同时缺着。
+  await db.update(tasks).set({ worktreeStartCommit: taskStart }).where(eq(tasks.id, taskId));
+
   // 对照组九（审查三 F2）：未启动这件事核出来了，但**归因**没核出来。旧版本把「核过、
   // 基线上也没有」和「压根没核出来」塞进同一个 command_missing，于是任务真把验收脚本删了、
   // 而目标 ref 又恰好读不到时，agent 被按住不许修。
@@ -281,5 +340,5 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   assert.match(unknownPrompt, /是不是你这次改动把它弄没的/, "要先去核归因");
   assert.match(unknownPrompt, /改回来或同步改配置/, "核下来是自己弄没的就该去改");
 
-  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 全部通过");
+  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 / 引入历史读不动 / 继承后删除 全部通过");
 }

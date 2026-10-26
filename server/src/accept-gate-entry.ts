@@ -64,11 +64,32 @@ export type GateEntryProbe = {
  */
 const NPM_LIFECYCLE = new Set(["test"]);
 
+/**
+ * 这几个名字**走 `run` 也一样**有默认行为：实测 `npm run start`（没有 `scripts.start`、
+ * 目录里有 `server.js`）真的去跑了 `node server.js` 并打出那个脚本的输出（第 4 轮审查 F1）。
+ * 旧版本只拦住了裸 `npm start`，于是同一件事换个写法就又被判成「没东西可跑」。
+ *
+ * 对 pnpm/yarn 一并保守对待：它们的默认行为我没有实测过，而这里多交一张白卷只是少下一个
+ * 结论，认错了却要发出「测试一行都没跑、不要改代码」。
+ */
+const DEFAULTED_SCRIPTS = new Set(["start", "restart", "stop"]);
+
 /** 出现任何一个就交白卷：它们会改变「去哪儿找脚本」，而我解析不了那个结果。 */
 const SCOPE_CHANGING = /^(-w|-ws|-r|-i|--workspace|--workspaces|--recursive|--filter|--if-present|--package|workspace|workspaces|exec|dlx)(=|$)/;
 
 /** 告诉 runner 换目录的选项。值可以跟在后面，也可以 `=` 连写。 */
 const DIR_FLAGS = new Set(["--prefix", "-C", "--dir", "--cwd"]);
+
+/**
+ * 确定**不吃下一个词**的开关。不在这张表里、又不是 `--x=y` 自带值的选项，一律交白卷：
+ * 我说不准它会不会把后面那个词当成自己的值。
+ *
+ * 旧版本按「以 `-` 开头就跳过」来找位置参数，于是 `npm run --loglevel warn test:accept`
+ * 里的 `warn`（其实是 `--loglevel` 的值）被当成了脚本名，报出「没有名为 warn 的脚本」——
+ * 而 npm 真跑的是 `test:accept`（第 4 轮审查 F1 同类，本机实测）。
+ */
+const SAFE_SWITCHES = new Set(["--silent", "-s", "--quiet", "--no-audit", "--no-fund",
+  "--no-progress", "--no-color", "--ignore-workspace-root-check"]);
 
 /**
  * 把命令切成词。**读不准就返回 null**，绝不猜。
@@ -104,19 +125,40 @@ function tokenize(command: string): string[] | null {
   return words;
 }
 
-/** runner 会去哪个目录读 manifest。解析不了那个值就返回 null（交白卷）。 */
-function runnerDir(words: string[]): string | null {
+/**
+ * 把 runner 自己的那段参数读出来：位置参数（`run` / 脚本名 / 子命令）+ 它会去哪个目录读
+ * manifest。**任何一个词解释不了就返回 null**（交白卷）。
+ *
+ * 两条都是实测来的（第 4 轮审查 F1）：
+ *  · `--` 之后的词是**传给脚本的**，npm 自己不再解释 —— `npm run x -- --prefix child` 跑的
+ *    是根目录那个 `x`，`--prefix child` 只是它的 argv。旧版本把整条命令扫一遍找 `--prefix`，
+ *    于是去读了 `child/package.json`，把一次真跑起来、真报断言失败的红说成「一行都没跑到」。
+ *  · 未知选项可能吃掉后面那个词（`--loglevel warn`），所以不许按「以 `-` 开头就跳过」去
+ *    猜位置参数。
+ */
+function runnerArgs(words: string[]): { positional: string[]; dir: string } | null {
   let dir = ".";
+  const positional: string[] = [];
   for (let at = 0; at < words.length; at++) {
     const word = words[at]!;
+    if (word === "--") break;                      // 后面都是脚本的参数，入口身份到这儿定了
+    if (!word.startsWith("-")) {
+      if (SCOPE_CHANGING.test(word)) return null;  // `workspace` / `exec` / `dlx` 这类子命令
+      positional.push(word);
+      continue;
+    }
     const eq = word.indexOf("=");
     const flag = eq > 0 ? word.slice(0, eq) : word;
-    if (!DIR_FLAGS.has(flag)) continue;
-    const value = eq > 0 ? word.slice(eq + 1) : words[at + 1];
-    if (!value || value.startsWith("-")) return null;
-    dir = value;
+    if (DIR_FLAGS.has(flag)) {
+      const value = eq > 0 ? word.slice(eq + 1) : words[++at];
+      if (!value || value.startsWith("-")) return null;
+      dir = value;
+      continue;
+    }
+    if (eq > 0 || SAFE_SWITCHES.has(flag)) continue;
+    return null;                                   // 吃不吃下一个词,我说不准
   }
-  return dir;
+  return { positional, dir };
 }
 
 /**
@@ -132,20 +174,17 @@ export function gateEntryAsk(command: string): GateEntryAsk | null {
   while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) words.shift();
   const head = words[0];
   if (!head) return null;
-  if (words.some(word => SCOPE_CHANGING.test(word))) return null;
   const runner = /^(npm|pnpm|yarn)$/.exec(head)?.[1] as "npm" | "pnpm" | "yarn" | undefined;
   if (runner) {
-    const dir = runnerDir(words);
-    if (dir === null) return null;
-    const flagValues = new Set<string>();
-    for (let at = 1; at < words.length; at++) {
-      if (DIR_FLAGS.has(words[at]!)) flagValues.add(words[at + 1] ?? "");
-    }
-    const positional = words.slice(1).filter(word => !word.startsWith("-") && !flagValues.has(word));
+    const args = runnerArgs(words.slice(1));
+    if (!args) return null;
+    const { positional, dir } = args;
     const at = positional.indexOf("run") >= 0 ? positional.indexOf("run") : positional.indexOf("run-script");
     if (at >= 0) {
       const name = positional[at + 1];
-      return name ? { kind: "script", runner, name, dir } : null;
+      if (!name) return null;
+      // `run` 也绕不开默认行为：`npm run start` 缺 `scripts.start` 时照样跑 `node server.js`。
+      return DEFAULTED_SCRIPTS.has(name) ? null : { kind: "script", runner, name, dir };
     }
     // 只认 npm 那几个「缺了就是报错」的子命令;yarn/pnpm 的裸子命令和脚本简写混在一起,
     // 分不清就不猜。

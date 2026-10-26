@@ -13,7 +13,7 @@
 import { eq } from "drizzle-orm";
 import type { AcceptGateFailure, AcceptGateMissAttribution } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
-import { acceptGateRuns, projects } from "./db/schema.js";
+import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
 import { acceptGateLogHead } from "./accept-gate-process.js";
 import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
@@ -153,9 +153,13 @@ async function definitionIntroducedBy(repo: string, targetCommit: string, source
   for (const row of (log ?? "").split("\n").filter(Boolean).slice(0, MAX_HISTORY)) {
     const [commit, date, ...subject] = row.split("\t");
     if (!commit) continue;
-    if (await definitionOnTree(repo, commit, ask, b) === true) {
-      return { commit, date: date ?? null, subject: subject.join("\t") || null };
-    }
+    const defined = await definitionOnTree(repo, commit, ask, b);
+    // 读不出来（blob 超上限、超时、对象损坏）**不等于「那时还没有」**。跳过它继续往后找，
+    // 就会把后面第一个读得动的提交冒认成「最早带进来的」—— 第 4 轮审查 F3 实测：一份 2 MiB
+    // 的 package.json 读不动，于是一次只缩短 description 的提交被报成了引入提交。
+    // 这里交白卷只丢「什么时候」，存在性和落后多少仍由 readOrigin 照常给出。
+    if (defined === null) return null;
+    if (defined) return { commit, date: date ?? null, subject: subject.join("\t") || null };
   }
   return null;
 }
@@ -180,7 +184,7 @@ async function textIntroducedBy(repo: string, targetCommit: string, sourceCommit
  * 提交号就成立，是最低那一档也要给的事实（需求第 2 点允许退到这里）。
  */
 async function readOrigin(repo: string, targetBranch: string, sourceCommit: string | null,
-  name: string | null, command: string): Promise<GateMissOrigin | null> {
+  name: string | null, command: string, startCommit: string | null): Promise<GateMissOrigin | null> {
   const b = budget();
   // `--verify --quiet` 对「没有这条分支」退 1，那是确定答案,不是读不出来。
   const resolved = await gitRun(repo, ["rev-parse", "--verify", "--quiet", `${targetBranch}^{commit}`], b, [1]);
@@ -197,7 +201,7 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
     const onTarget = await definitionOnTree(repo, targetCommit, ask, b);
     const inSnapshot = sourceCommit ? await definitionOnTree(repo, sourceCommit, ask, b) : null;
     // 「没启动」推不出「不是你改的」（审查 F1）：基线上有、快照里没了 = 这次改动弄没的。
-    if (inSnapshot === false && sourceCommit) origin.removedByTask = await removedByTask(repo, sourceCommit, targetCommit, ask, b);
+    if (inSnapshot === false && sourceCommit) origin.removedByTask = await removedByTask(repo, startCommit, ask, b);
     if (onTarget === true && inSnapshot !== true) {
       // 存在性已经核实了,时间核不出来**只丢时间**:旧版本在这儿没有 holder 就整段退成
       // 「没能核对出来」,把已经拿到的正面事实一起丢掉（第 3 轮审查 F3 末段）。
@@ -224,15 +228,22 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
 }
 
 /**
- * 它是不是**这次改动**弄没的：开工基线（任务与目标的共同祖先）上有定义，任务这份快照里
- * 没有。null = 核不出来。
+ * 它是不是**这次改动**弄没的：这个任务**真实的开工起点**上有定义、而任务这份快照里没有。
+ * null = 核不出来（没记起点、或者那个提交已经读不到了）。
+ *
+ * **不许用 merge-base 代替**（第 4 轮审查 F2 实测）：共同祖先只证明「两边都从这儿分出去
+ * 过」，证明不了这份任务从哪份代码开工。派生任务从父任务分支开工时，共同祖先往往是更早的
+ * 目标分支、上面本来就没有这个脚本 —— 于是「任务把继承来的验收脚本删了」会被判成 not-mine，
+ * 紧接着发一张免修令，而那时正确的出路恰恰是去把它改回来。起点读不出来就老实说未知。
  */
-async function removedByTask(repo: string, sourceCommit: string, targetCommit: string,
+async function removedByTask(repo: string, startCommit: string | null,
   ask: GateEntryAsk, b: Budget): Promise<boolean | null> {
-  const base = (await git(repo, ["merge-base", sourceCommit, targetCommit], b))?.trim();
-  if (!base) return null;
-  const atBase = await definitionOnTree(repo, base, ask, b);
-  return atBase === null ? null : atBase;
+  if (!startCommit) return null;
+  const resolved = await gitRun(repo, ["rev-parse", "--verify", "--quiet", `${startCommit}^{commit}`], b, [1]);
+  const start = resolved.ok ? resolved.stdout.trim() : "";
+  if (!start) return null;
+  const atStart = await definitionOnTree(repo, start, ask, b);
+  return atStart === null ? null : atStart;
 }
 
 /**
@@ -258,8 +269,12 @@ export async function diagnoseGateFailure(row: GateRow, outcome: { failure: Acce
   // 目标分支上有没有」对那种缺失既答不准也帮不上忙，查了只会给出一句误导的话。
   const repo = miss.kind === "entry"
     ? (await db.select().from(projects).where(eq(projects.id, row.projectId))).at(0)?.repoPath ?? null : null;
+  // 归因要的是**这个任务从哪儿开工**，库里记着（`tasks.worktree_start_commit`），不许拿
+  // 拓扑去推（第 4 轮审查 F2）。读不到就让 removedByTask 交白卷 → 归因落 unknown。
+  const startCommit = miss.kind === "entry"
+    ? (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0)?.worktreeStartCommit ?? null : null;
   const origin = repo && row.targetBranch
-    ? await readOrigin(repo, row.targetBranch, row.sourceCommit ?? null, miss.name, row.command).catch(() => null)
+    ? await readOrigin(repo, row.targetBranch, row.sourceCommit ?? null, miss.name, row.command, startCommit).catch(() => null)
     : null;
   // 「测试有没有启动」和「该不该由 agent 去改代码」是两件事，分开存（第 3 轮审查 F2）：
   //  · mine     这次改动自己把它删了/改名了 → 这条红就是要改代码的那一种，连 failure 都不改写；
