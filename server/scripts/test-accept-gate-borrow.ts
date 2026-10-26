@@ -54,9 +54,10 @@ const freshRepo = (name: string, ignore: string): string => {
   execFileSync("git", ["init", "-b", "main", repo]);
   git(repo, "config", "user.name", "Gate Borrow Test");
   git(repo, "config", "user.email", "borrow@example.test");
+  git(repo, "config", "core.autocrlf", "false");
   writeFileSync(join(repo, ".gitignore"), ignore);
   writeFileSync(join(repo, "package.json"), '{}');
-  writeFileSync(join(repo, "index.js"), 'require("pkg");\n');
+  writeFileSync(join(repo, "index.js"), 'require("pkg");');
   git(repo, "add", "-A");
   git(repo, "commit", "-m", `${name} source`);
   return repo;
@@ -92,6 +93,11 @@ try {
     // 悬空链在 node_modules 里很常见(没装的可选依赖),不能崩掉整次快照。
     symlinkSync(join(root, "missing-dependency"), join(repo, "node_modules", "dangling"));
   }
+  mkdirSync(join(repo, "node_modules", "store", "tool"), { recursive: true });
+  writeFileSync(join(repo, "node_modules", "store", "tool", "neighbour.mjs"), 'export const mark = "via-junction";\n');
+  writeFileSync(join(repo, "node_modules", "store", "tool", "run.mjs"),
+    'import { mark } from "./neighbour.mjs";\nconsole.log(mark);\n');
+  linkDir(join("store", "tool"), join(repo, "node_modules", "linked-tool"));
   const launchSource = await readGateSource(repo);
   assert.deepEqual(launchSource.dependencies, [".venv", "node_modules"], "两个依赖目录都要登记成借用项");
   // 清单在建快照**之前**取:这样它同时覆盖「建快照」和「清理快照」两个阶段,而不只是后者。
@@ -103,6 +109,10 @@ try {
     assert.equal(lstatSync(join(snapshot, dep)).isSymbolicLink(), true, `快照里 ${dep} 是一条借用链`);
     assert.equal(realpathSync(join(snapshot, dep)), realpathSync(join(repo, dep)), `而且落在工作区那一份上:${dep}`);
   }
+  assert.equal(lstatSync(join(snapshot, "node_modules", "linked-tool")).isSymbolicLink(), true,
+    "依赖目录内的目录链原地不动(借用之后快照读到的就是工作区那一条)");
+  assert.equal(execFileSync(process.execPath, [join(snapshot, "node_modules", "linked-tool", "run.mjs")], { encoding: "utf8" }).trim(),
+    "via-junction", "穿一条目录链(Win32 是 junction)执行,再按自身 realpath 找同胞模块,从快照里跑得起来");
   if (fileLinks) {
     assert.equal(execFileSync(process.execPath, [join(snapshot, "node_modules", ".bin", "cli.mjs")], { encoding: "utf8" }).trim(),
       "sibling", "借用之后,按自身 realpath 找同胞模块的 cli 从快照里真跑得起来");
@@ -158,7 +168,7 @@ try {
   const plainSnapshot = join(root, "plain-snapshot");
   await createGateSnapshot(plain, plainSnapshot, plainSource);
   assert.equal(existsSync(join(plainSnapshot, "node_modules")), false, "没装依赖就不该在快照里凭空造一条链");
-  assert.equal(readFileSync(join(plainSnapshot, "index.js"), "utf8"), 'require("pkg");\n');
+  assert.equal(readFileSync(join(plainSnapshot, "index.js"), "utf8"), 'require("pkg");');
   assert.equal(await verifyGateSnapshot(plainSnapshot, plainSource), true);
 
   // ── 5. 依赖根**自己**就是一条链:三种落点,三种结论。
