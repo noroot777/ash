@@ -390,5 +390,69 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   assert.equal(builtin.failure, "exit_code", "真跑起来、真红了，不许说成「没启动」");
   assert.equal(builtin.diagnosis, null, "也不许给出任何「不是你的代码」的结论");
 
-  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 / 引入历史读不动 / 继承后删除 / npmrc 换落点 / shell 分组 / npm 内建 env 全部通过");
+  // 对照组十五（审查七 F1）：命令自己挑了另一个启动器 —— 前置 `PATH=bin` 把 `npm` 指到项目
+  // 自带的那个脚本。起跑前这一问必须问**它**：上一版自己 execFile 起系统 npm，于是问的那个
+  // 和跑的那个不是一回事，一次真断言失败被说成「入口不存在、不要改代码」。
+  mkdirSync(join(wsPath, "bin"), { recursive: true });
+  writeFileSync(join(wsPath, "bin", "npm"),
+    "#!/bin/sh\necho ACCEPTANCE STARTED\necho ASSERTION FAILED >&2\nexit 1\n", { mode: 0o755 });
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "project ships its own npm launcher");
+  const ownNpm = await again("PATH=bin npm run test:accept");
+  assert.match(readFileSync(ownNpm.logPath, "utf8"), /ACCEPTANCE STARTED/,
+    "测试自己的前提：真跑的是项目自带那个启动器");
+  assert.equal(ownNpm.entryProbe, null,
+    "问的得是命令真会跑的那个 npm；它答不出这张表就交白卷（审查七 F1）");
+  assert.equal(ownNpm.failure, "exit_code", "一次真的断言失败，不许说成「没启动」");
+  assert.equal(ownNpm.diagnosis, null, "也不许给出任何「不是你的代码」的结论");
+
+  // 对照组十六（审查七 F3、F4 共用一个拓扑）：定义在**共同祖先**上就有，父任务分支把它删了，
+  // 本任务从那一版开工；目标分支这一侧只有一次「只改说明文字」的提交碰过那个文件。
+  //   · F3：这时「目标分支上有」推不出「合它进来就有」—— 合并会保留源侧那个删除。
+  //   · F4：`--not 快照` 剩下的最早一次提交只是「目标独有历史里最早看见它」，不是把它加
+  //     进来的那次。旧实现把那次只改 description 的提交报成了引入提交。
+  const f4Scripts = { ...scriptsWithF3, "test:accept-f4": "echo f4" };
+  const described = (description: string) => `${JSON.stringify({
+    name: "gate-fixture", private: true, description, scripts: f4Scripts }, null, 2)}\n`;
+  writeFileSync(join(repo, "package.json"), described("acceptance docs v1"));
+  git(repo, "add", "-A");
+  git(repo, "commit", "-m", "introduce test:accept-f4 on the shared history");
+  const f4Introduced = git(repo, "rev-parse", "HEAD");
+  // 任务这一侧先继承它（共同祖先因此落在上面那次提交上），再由父任务把它删掉。
+  git(wsPath, "merge", "--no-edit", "-X", "theirs", "main");
+  writeFileSync(join(wsPath, "package.json"), manifest(BASELINE_SCRIPTS));
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "parent task drops test:accept-f4");
+  const droppedAt = git(wsPath, "rev-parse", "HEAD");
+  // 目标分支这一侧：只改说明文字，定义一直在。
+  writeFileSync(join(repo, "package.json"), described("acceptance docs v2, wording only"));
+  git(repo, "add", "-A");
+  git(repo, "commit", "-m", "WORDING ONLY on the acceptance docs");
+  const wordingOnly = git(repo, "rev-parse", "HEAD");
+  await db.update(tasks).set({ worktreeStartCommit: droppedAt }).where(eq(tasks.id, taskId));
+  const kept = await again("npm run test:accept-f4");
+  assert.equal(kept.failure, "command_missing", "快照里没有这个脚本，这一条照旧成立");
+  assert.equal(kept.missAttribution, "not-mine", "开工起点上就没有了，不是本任务弄没的");
+  assert.match(kept.diagnosis ?? "", /是有定义的/, "目标分支上确实有，存在性照说");
+  // F4：引入提交只能是真正完成 absent→present 那一次,追不到就说追不到。
+  assert.equal(new RegExp(wordingOnly.slice(0, 8)).test(kept.diagnosis ?? ""), false,
+    "只改说明文字那次不许被报成「把这个定义加进去的」（审查七 F4）");
+  assert.equal(new RegExp(f4Introduced.slice(0, 8)).test(kept.diagnosis ?? ""), false,
+    "真正引入它的那次在共同历史上，不在目标分支独有的那段里,这次本来就追不到");
+  assert.match(kept.diagnosis ?? "", /哪次提交带进来的，这次没追出来/, "追不到就如实说");
+  // F3：合它进来恢复不了,就不许给那条出路。
+  assert.match(kept.diagnosis ?? "", /不会把它带回来/, "明说合进来恢复不了（审查七 F3）");
+  assert.match(kept.diagnosis ?? "", /共同祖先上就有/, "说清为什么：删除在任务这一侧");
+  assert.match(kept.diagnosis ?? "", /把那个定义取回来/, "给真正能解决的那条出路");
+  assert.equal(/合进任务分支（或以它为基线重建任务分支），再点验收/.test(kept.diagnosis ?? ""), false,
+    "恢复不了就不许摆出「合进来再点验收」那条出路");
+  assert.match(kept.diagnosis ?? "", /跳过前置命令/, "另一条出路照给");
+  assert.equal(/\*\*|`/.test(kept.diagnosis ?? ""), false,
+    "结论要纯文本:这一档的出路也走日志和 MCP 回执,两边都不渲染 markdown");
+  assert.equal(gateFailurePrompt({ command: kept.command, summary: "未通过", logPath: kept.logPath,
+    tail: "", cwd: kept.cwd, sourceCwd: repo, failure: kept.failure, diagnosis: kept.diagnosis,
+    missAttribution: kept.missAttribution as "not-mine" }).includes("不要为这件事改任何代码"), true,
+    "归因核出来不是本任务弄没的,这一档仍然是免修");
+
+  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 / 引入历史读不动 / 继承后删除 / npmrc 换落点 / shell 分组 / npm 内建 env / 自带启动器 / 合入恢复不了 + 引入提交 全部通过");
 }

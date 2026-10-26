@@ -223,6 +223,15 @@ export type GateMissOrigin = {
    * 改名了验收脚本，门禁一样报「命令不在树里」，而那时正确的出路恰恰是去改代码。
    */
   removedByTask: boolean | null;
+  /**
+   * **合它进来能不能把这个定义带回来**。「目标分支上有」推不出这一条（第 7 轮审查 F3）：
+   * 共同祖先上本来就有、而任务这一侧把它删了的时候，合并会保留那个删除 —— 合进来不会恢复。
+   *
+   *  - `true`  目标分支新引入的（共同祖先上没有）→ 合进来它就在树里了，这一档才敢给保证；
+   *  - `false` 不是新引入的 → **绝不许**给「合进来就有」那句话；
+   *  - `null`  没核出来 → 只能给条件句。
+   */
+  mergeRecovers: boolean | null;
   /** 名字抽不出来、或核对没做完（读不出 / 超预算）：那时只有 behind 这一条算数。 */
   unverified: boolean;
 };
@@ -319,8 +328,13 @@ function originLines(origin: GateMissOrigin | null, subject: string): string[] {
   // ① 核实了：目标分支上有落点、而快照里没有。只有这一档敢建议合分支。
   if (origin && origin.holders.length) {
     // 时间追不出来就只报文件：**存在性已经核实了**，不许因为缺个时间把它一起丢掉（F3）。
+    // 定义级/文件级那两档的提交是**核过 absent→present 这个转换**的（第 7 轮审查 F4：只核
+    // 「那次提交上有」会把一次只改说明文字的提交报成引入提交）。但核的范围是目标分支独有的
+    // 那段历史，所以措辞是「加进去的」而不是「最早」。文字档走的是 `-S`（这串字的出现次数
+    // 最早变化），那一档本来就只是线索。
     const where = (holder: GateMissOrigin["holders"][number]) => holder.commit
-      ? `${holder.file}（${holder.how === "path" ? "最早把它加进来的" : "最早把这个定义带进来的"}是 `
+      ? `${holder.file}（${holder.how === "path" ? "把它加进来的" : holder.how === "definition"
+        ? "把这个定义加进去的" : "这串字最早出现在"}是 `
         + `${short(holder.commit)}${holder.date ? `，${day(holder.date)}` : ""}${holder.subject ? `，${holder.subject}` : ""}）`
       : `${holder.file}（哪次提交带进来的，这次没追出来）`;
     // 文件级那一档是确定事实，可以直说；文字命中那一档必须带上对冲（审查 F3）。
@@ -333,16 +347,22 @@ function originLines(origin: GateMissOrigin | null, subject: string): string[] {
       byText.length ? `${subject} 在 ${origin.targetBranch} 上整词出现在这些文件里、而这份快照里没有：${byText.map(where).join("；")}。`
         + `这是文字命中，不等于它就是那条命令的定义，但这些提交确实都不在被测快照里。` : "",
     ].filter(Boolean).join("");
-    return [
-      `${facts}${behind}`,
-      `出路：`,
-      `1. 把 ${origin.targetBranch} 合进任务分支（或以它为基线重建任务分支），再点验收 —— `
-        + (byText.length
-          ? `如果上面那个落点就是它的定义，那时这条命令就在树里了；合完仍然报同样的错，说明定义不在那儿，按下面第 2 条或核对项目设置里这条命令。`
-          : `那时它就在树里了。`),
-      `2. ${skip}`,
-      mine,
-    ];
+    // 出路必须跟**合入能不能恢复**那件事对上（第 7 轮审查 F3）：源侧删除会被合并保留，那
+    // 时「合进来就有」是一句空头保证，照着做只会再撞同一个错。
+    const merge = origin.mergeRecovers === false
+      ? [`出路：`,
+        `1. 合 ${origin.targetBranch} 进来并不会把它带回来：它在两边的共同祖先上就有，是任务这一侧把它弄没的，`
+          + `合并会保留这个删除。要用它就得把那个定义取回来（从 ${origin.targetBranch} 上把那份文件或那条定义改回来）再点验收。`,
+        `2. ${skip}`]
+      : [`出路：`,
+        `1. 把 ${origin.targetBranch} 合进任务分支（或以它为基线重建任务分支），再点验收 —— `
+          + (origin.mergeRecovers === true
+            ? `它是 ${origin.targetBranch} 上新加的（共同祖先上没有），所以合进来它就在树里了。`
+            : byText.length
+              ? `如果上面那个落点就是它的定义，那时这条命令就在树里了；合完仍然报同样的错，说明定义不在那儿，按下面第 2 条或核对项目设置里这条命令。`
+              : `这次没核出它是目标分支新加的、还是任务这一侧删掉的，所以合完也可能仍然报同样的错 —— 那就说明是后者，得把那个定义取回来。`),
+        `2. ${skip}`];
+    return [`${facts}${behind}`, ...merge, mine];
   }
   // ② 核实了：目标分支上也没有。合分支解决不了 —— 这一档**绝不能**给合入建议。
   //    判据只认 `absent`（定义级/文件级）。文字检索查空不算（审查 F2）。

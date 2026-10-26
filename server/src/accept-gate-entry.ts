@@ -43,11 +43,21 @@
 // 但没有执行权限的脚本退 126，正文一行没跑）。所以 true 这一档的措辞里不许出现「确实跑起来
 // 了」—— 那句话这一层给不出来。
 //
-// 答案在 spawn 之前取一次，连同判据一起落到那一行上（accept_gate_runs.entryProbe），结算时
-// 只许读它、不许重算。
+// **而「问得出答案」还不等于「问的是真要跑的那一个」**（第 7 轮审查 F1 实测：命令的前置
+// `PATH=` 指向项目自带的 npm 启动器，真跑的是它、真报了断言失败，上一版却用 ash 这边 PATH
+// 解析出的系统 npm 作答，于是报「入口不存在」并发出免修令）。所以脚本那一档现在不自己起
+// 进程，而是生成一段 shell 交给门禁插在用户命令前面、跟它在同一次受监督执行里跑 —— 同一个
+// shell、同一份 PATH 和环境、同一组前置赋值。判据和取舍见 accept-gate-entry-npm.ts。
+//
+// 于是这一层的答案分两个时机落盘，但**两个都是「起跑那一刻」的事实**：
+//  · 路径那一档（`./runner.sh`）spawn 之前就能定 —— `gateEntryProbeNow`；
+//  · 脚本那一档由命令开跑时第一件事写进文件，结算时读回来 —— `gateEntryProbeAnswer`。
+//    「跑完之后读那份文件」跟「跑完之后再核一次」是两回事：文件内容是起跑那一刻写的。
+// 落到 accept_gate_runs.entryProbe 上，之后只许读它、不许重算。
 import { existsSync } from "node:fs";
 import { isAbsolute, join, normalize, relative } from "node:path";
-import { npmScriptTable } from "./accept-gate-entry-npm.js";
+import { gateEntryAnswers, npmAskPrelude, readNpmScriptTable,
+  type GateEntryAnswers } from "./accept-gate-entry-npm.js";
 
 /** 这条命令点名要跑的东西，分能核实的两种。其余形状一律认不出（见文件头）。 */
 export type GateEntryAsk =
@@ -259,28 +269,54 @@ export function insideTree(treeDir: string, name: string): string | null {
   return !inside || (!inside.startsWith("..") && !isAbsolute(inside)) ? resolved : null;
 }
 
-/**
- * 起跑前核这一次。**调用点只能是 spawn 之前**，否则这份答案就不再是「起跑那一刻」的。
- *
- * 核不出来（命令认不出、npm 答不上来、目录踩出树）一律返回 null：这一层宁可交白卷，也不能
- * 交一个推出来的答案 —— 下游拿它去说「测试一行都没跑、不要改代码」。
- */
-export async function probeGateEntry(treeDir: string, command: string): Promise<GateEntryProbe | null> {
-  const ask = gateEntryAsk(command);
-  if (!ask) return null;
-  if (ask.kind === "path") {
-    const resolved = insideTree(treeDir, ask.name);
-    return resolved ? { ask: ask.name, resolved: existsSync(resolved), by: "被测快照里的文件" } : null;
-  }
+/** 脚本那一档要核的那份 manifest；踩出树就没地方核（归因层还要拿它去查 git 历史）。 */
+function manifestInTree(treeDir: string, ask: GateEntryAsk): string | null {
+  if (ask.kind !== "script") return null;
   const file = askManifest(ask);
-  // 归因层要拿这个路径去 git 历史里查定义，踩出树就没地方查了。
-  if (!insideTree(treeDir, file)) return null;
-  // 「这个名字在不在」不自己解析 npm 的配置，让 npm 按它的全部有效配置回答，并跟这一层
-  // 解析出的目录交叉核对（见 accept-gate-entry-npm.ts）。
-  const table = await npmScriptTable(treeDir, ask);
+  return insideTree(treeDir, file) ? file : null;
+}
+
+/**
+ * **spawn 之前**能定下来的那一档：命令点名的就是个文件，看它在不在这棵树里。
+ *
+ * 脚本那一档返回 null（还没问 —— 它的答案由 `gateEntryProbeAnswer` 在结算时读回来）。认不出
+ * 的形状也是 null。两者对调用方一样：先落 null，之后有答案再补。
+ */
+export function gateEntryProbeNow(treeDir: string, command: string): GateEntryProbe | null {
+  const ask = gateEntryAsk(command);
+  if (ask?.kind !== "path") return null;
+  const resolved = insideTree(treeDir, ask.name);
+  return resolved ? { ask: ask.name, resolved: existsSync(resolved), by: "被测快照里的文件" } : null;
+}
+
+/**
+ * 要插在用户命令前面的那段查询。`null` = 这次不问（命令认不出、是路径那一档、或者这个平台
+ * 上没法问），于是脚本那一档整个交白卷。
+ *
+ * **必须跟用户命令在同一次执行里**，否则问的就不是真要跑的那个 npm（第 7 轮审查 F1）。
+ */
+export function gateEntryProbeAsk(treeDir: string, command: string, logPath: string): string | null {
+  const ask = gateEntryAsk(command);
+  if (ask?.kind !== "script" || !manifestInTree(treeDir, ask)) return null;
+  return npmAskPrelude(ask, gateEntryAnswers(logPath));
+}
+
+/**
+ * 把那两问的答案读回来。读不到、形状不对、npm 说的目录跟这一层算的对不上，一律 null ——
+ * 这一层宁可交白卷，也不能交一个推出来的答案：下游拿它去说「测试一行都没跑、不要改代码」。
+ */
+export async function gateEntryProbeAnswer(treeDir: string, command: string,
+  logPath: string): Promise<GateEntryProbe | null> {
+  const ask = gateEntryAsk(command);
+  if (ask?.kind !== "script") return null;
+  const file = manifestInTree(treeDir, ask);
+  if (!file) return null;
+  const table = await readNpmScriptTable(treeDir, ask, gateEntryAnswers(logPath));
   return table ? { ask: ask.name, resolved: table.has(ask.name),
     by: `被测快照 ${file} 的 scripts（npm 自己列的）` } : null;
 }
+
+export type { GateEntryAnswers };
 
 /** 落盘与读回。字段形状变了就当没核过 —— 跨机接力和旧行都可能带着老形状。 */
 export const encodeGateEntryProbe = (probe: GateEntryProbe | null): string | null =>

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { spawnAcceptGate, stopAcceptGate, type GateExit } from "../src/accept-ga
 import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
 import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
   type GateMissOrigin } from "../src/accept-gate-miss.js";
-import { gateEntryAsk, probeGateEntry, scriptDefinedIn,
+import { gateEntryAsk, gateEntryProbeAnswer, gateEntryProbeAsk, gateEntryProbeNow, scriptDefinedIn,
   type GateEntryAsk, type GateEntryProbe } from "../src/accept-gate-entry.js";
 import { gateFailurePrompt } from "../src/accept-gate-messages.js";
 import type { AcceptGateMissAttribution } from "@ash/shared/accept-gate";
@@ -373,24 +374,41 @@ try {
     assert.equal(scriptDefinedIn(manifest, name), expected, `scripts 判据算错了：${manifest}`);
   }
 
-  // ── 起跑前那一层：命令行解释得了，**runner 的有效配置**也得解释得了 ──
-  //    这一组真起 npm 进程。判据不是「我认得哪些配置键」而是「npm 自己怎么说」：前几轮逐条
-  //    枚举键名,`workspace=child` 拦住了、数组写法 `workspace[]=child` 照样放过去（第 6 轮
-  //    审查 F1 实测）。改成问它之后,四层配置、数组写法、大小写全归 npm 解释,这一层只看它
-  //    给的答案是**平铺**（单一包,名字在不在一看即知）还是**嵌套**（有 scope 生效,交白卷）。
-  {
+  // ── 起跑前那一层：问得出答案，还得问的是**真要跑的那一个** ──
+  //    这一组按门禁的真实方式跑：把 gateEntryProbeAsk 生成的那段查询插在用户命令前面，交给
+  //    同一个登录 shell 执行，再用 gateEntryProbeAnswer 把答案读回来。
+  //
+  //    为什么必须这么测（第 7 轮审查 F1 实测）：上一版自己 execFile 起 npm，于是「问的那个」
+  //    和「跑的那个」不是一回事 —— 审查把项目自带的 npm 启动器放进命令的前置 `PATH=`，真跑
+  //    的是它、真报了断言失败，探针问的却是系统 npm，于是报「入口不存在」并发出免修令。
+  if (!IS_WINDOWS) {
     const tree = mkdtempSync(join(tmpdir(), "ash-gate-rc-"));
+    const logPath = join(mkdtempSync(join(tmpdir(), "ash-gate-rc-log-")), "gate.log");
     mkdirSync(join(tree, "child"));
+    mkdirSync(join(tree, "bin"));
     writeFileSync(join(tree, "package.json"), JSON.stringify({ name: "root", private: true,
       workspaces: ["child"], scripts: { build: "echo x" } }));
     writeFileSync(join(tree, "child/package.json"), JSON.stringify({ name: "child", private: true,
       scripts: { "test:accept": "echo c" } }));
+    // 项目自带的那个「npm」：真跑它会打出启动提示再报断言失败。
+    writeFileSync(join(tree, "bin/npm"),
+      "#!/bin/sh\necho ACCEPTANCE STARTED\necho ASSERTION FAILED >&2\nexit 1\n", { mode: 0o755 });
     const rc = join(tree, ".npmrc");
-    const probe = (command = "npm run test:accept") => probeGateEntry(tree, command);
+    const probe = async (command = "npm run test:accept") => {
+      for (const suffix of [".entry-scripts.json", ".entry-prefix", ".entry-ask.err"]) {
+        rmSync(`${logPath}${suffix}`, { force: true });
+      }
+      const prelude = gateEntryProbeAsk(tree, command, logPath);
+      if (prelude === null) return gateEntryProbeNow(tree, command);
+      // 门禁就是这么发的：prelude 一行、用户命令一行，同一个 `sh -lc`（accept-gate-process.ts）。
+      const launch = userShellLaunch(`${prelude}\n${command}`);
+      try { execFileSync(launch.file, launch.args, { cwd: tree, stdio: "ignore" }); } catch { /* 红不红不影响这一层 */ }
+      return gateEntryProbeAnswer(tree, command, logPath);
+    };
     const defined = { ask: "test:accept", resolved: false, by: PROBE_BY };
-    // 这台机器上 npm 会把自己的配置全量注入子进程（实测 12 个 `npm_config_*`,含 prefix /
+    // 这台机器上 npm 会把自己的配置全量注入子进程（实测 12 个 `npm_config_*`，含 prefix /
     // userconfig / globalconfig）。这一条同时钉住「不许因那些内省变量白卷」—— 那等于在任何
-    // 由 npm 启动的环境里永远交白卷,整个判定作废。
+    // 由 npm 启动的环境里永远交白卷，整个判定作废。
     assert.deepEqual(await probe(), defined, "没有改过配置时照常给确定答案");
     writeFileSync(rc, "registry=https://example.com\naudit=false\n");
     assert.deepEqual(await probe(), defined, "npmrc 里只有无关键,不影响去哪儿找脚本");
@@ -405,6 +423,11 @@ try {
       assert.equal(await probe(`${key}=child npm run test:accept`), null,
         `前置赋值里的 scope 配置照样算（大小写 npm 都认）：${key}`);
     }
+    // ★ 本轮那条：命令自己选了另一个启动器。问的必须是它 —— 它不认 `run --json`，于是这一层
+    //   交白卷，而不是拿系统 npm 的答案去发免修令。
+    assert.equal(await probe("PATH=bin npm run test:accept"), null,
+      "命令用前置 PATH 选了项目自带的启动器:问的得是同一个,答不上来就交白卷（第 7 轮审查 F1）");
+    assert.deepEqual(await probe("CI=1 npm run test:accept"), defined, "无关的前置赋值不影响答案");
     assert.deepEqual(await probe("npm run --silent test:accept"), defined,
       "`--silent` 不许让这一层倒退成白卷:重放时不带它（实测带上会把 JSON 一起吞掉）");
     assert.deepEqual(await probe("npm --prefix child run test:accept"),
@@ -412,6 +435,10 @@ try {
       "换了目录就核那份 manifest,而且要跟 npm 自己说的目录对得上");
     assert.equal(await probe("npm --prefix nosuch run test:accept"), null,
       "目录对不上（npm 答不出那个 prefix）就交白卷,不许拿这一层算的目录硬下结论");
+    // 答案没写出来（命令起不来、被取消、这一问自己挂了）时也不许冒认。
+    rmSync(`${logPath}.entry-scripts.json`, { force: true });
+    assert.equal(await gateEntryProbeAnswer(tree, "npm run test:accept", `${logPath}.nope`), null,
+      "那两问的答案不在就交白卷");
     rmSync(tree, { recursive: true, force: true });
   }
 
@@ -434,7 +461,7 @@ try {
     evidence: '起跑前核过：被测快照 package.json 的 scripts里没有 test:accept', by: PROBE_BY };
   const origin = (patch: Partial<GateMissOrigin>): GateMissOrigin => ({
     targetBranch: "main", targetCommit: "cf182e15bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", behind: 80,
-    holders: [], absent: null, removedByTask: null, unverified: false, ...patch });
+    holders: [], absent: null, removedByTask: null, mergeRecovers: true, unverified: false, ...patch });
   const notice = (patch: Partial<Parameters<typeof gateCommandMissNotice>[0]>) => gateCommandMissNotice({
     command: "npm run test:accept", miss: entryMiss, sourceCommit: "de91d6c0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     origin: null, ...patch });
@@ -455,7 +482,8 @@ try {
   assert.equal(/\*\*|`/.test(defined), false, "结论要纯文本：日志和 MCP 回执都不渲染 markdown");
 
   // ② 文字命中只是线索 —— 措辞必须说破,否则就是拿检索结果冒充命令定义（审查一 F3）。
-  const byText = notice({ origin: origin({ holders: [{ file: "docs/ci.md", how: "text", ...holder }] }) });
+  // 文字线索那一档真跑时 mergeRecovers 必然是 null（它压根没走定义级那条查询）。
+  const byText = notice({ origin: origin({ mergeRecovers: null, holders: [{ file: "docs/ci.md", how: "text", ...holder }] }) });
   assert.match(byText, /文字命中，不等于它就是那条命令的定义/, "② 不许把文字命中冒充命令定义");
   assert.match(byText, /把 main 合进任务分支/, "② 线索也算正面证据,出路照给但要带条件");
   assert.match(byText, /合完仍然报同样的错/, "② 并且要说清合完可能还是不行");
@@ -468,7 +496,7 @@ try {
     origin: origin({ behind: 4, holders: [{ file: "kb.sh", how: "path", ...holder }] }),
   });
   assert.match(byPath, /只有目标分支上有/, "文件级事实可以直说");
-  assert.match(byPath, /那时它就在树里了/, "文件级事实的合入建议不必对冲");
+  assert.match(byPath, /就在树里了/, "文件级事实的合入建议不必对冲");
   assert.equal(/文字命中/.test(byPath), false, "路径模式不许套用文字命中的对冲");
 
   // ④ 目标分支上**确实**也没有（定义级核出来的）：合分支解决不了,绝不许给合入建议。
@@ -515,6 +543,29 @@ try {
   // 这里要钉的是**第二件事**（目标分支上的情形）没退化成「没核对出来」。归因那句用的是同
   // 一个词，所以断言得指名道姓 —— 这条 origin 的归因默认是未知的,归因那句本来就该在。
   assert.equal(/在目标分支上是什么情形，这次没能核对出来/.test(noTime), false, "缺时间不等于没核对出来");
+
+  // ⑧ 「目标分支上有」推不出「合它进来就有」（第 7 轮审查 F3）：共同祖先上本来就有、而任务
+  //    这一侧把它删了的时候，合并会保留那个删除 —— 那时给合入保证，照着做只会再撞同一个错。
+  const kept = notice({ origin: origin({ behind: 0, mergeRecovers: false, removedByTask: false,
+    holders: [{ file: "package.json", how: "definition", ...holder }] }) });
+  assert.match(kept, /是有定义的/, "存在性照说");
+  assert.match(kept, /并不会把它带回来/, "明说合进来恢复不了");
+  assert.match(kept, /共同祖先上就有/, "说清为什么：删除在任务这一侧");
+  assert.match(kept, /把那个定义取回来/, "给真正能解决的那条出路");
+  assert.match(kept, /跳过前置命令/, "另一条出路照给");
+  assert.equal(/合进任务分支（或以它为基线重建任务分支），再点验收/.test(kept), false,
+    "恢复不了就不许摆出「合进来再点验收」那条出路");
+  assert.equal(/就在树里了/.test(kept), false, "更不许给「那时它就在树里了」这种保证");
+
+  // ⑧' 合入能不能恢复**没核出来**：只能给条件句,不许保证。
+  const maybe = notice({ origin: origin({ mergeRecovers: null,
+    holders: [{ file: "package.json", how: "definition", ...holder }] }) });
+  assert.match(maybe, /把 main 合进任务分支/, "存在性核过了,出路照给");
+  assert.match(maybe, /合完也可能仍然报同样的错/, "但要说破:这次没核出合入能不能恢复");
+  assert.equal(/就在树里了/.test(maybe), false, "没核出来就不许给「合进来它就在树里了」那句保证");
+  for (const [what, text] of [["恢复不了", kept], ["没核出来", maybe]] as const) {
+    assert.equal(/\*\*|`/.test(text), false, `结论要纯文本:日志和 MCP 回执都不渲染 markdown（${what} 那一档）`);
+  }
 
   // ── inner 三种措辞：命令整体有没有跑起来,只许照起跑前那份事实说（审查二 F1）──
   const innerOf = (patch: Partial<Parameters<typeof gateCommandMissNotice>[0]["miss"]>) => gateCommandMissNotice({
@@ -582,7 +633,7 @@ try {
     assert.match(unknownPrompt, /别为了「让它跑起来」去凭空补一个脚本/, "补个空脚本是伪造放行条件");
   }
 
-  console.log("✅ 门禁失败归类（entry 只由起跑前事实授权 + 27 种措辞各验三遍 + 入口解析跟 runner 语义对齐 + 定义级判据 + 出路跟核实档位对上 + 回流三副面孔）通过");
+  console.log("✅ 门禁失败归类（entry 只由起跑前事实授权 + 27 种措辞各验三遍 + 入口解析跟 runner 语义对齐（问的就是真要跑的那个 npm） + 定义级判据 + 出路跟核实档位对上（含合入恢复不了） + 回流三副面孔）通过");
 } finally {
   for (const launch of launches) {
     assert.equal(await stopAcceptGate("process-test", launch.pid, launch.startedAt, launch.logPath), true);

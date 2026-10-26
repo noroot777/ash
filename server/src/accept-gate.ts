@@ -49,7 +49,8 @@ import { prepareGateLaunch, readGateLaunch } from "./accept-gate-launch.js";
 import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
 import { releaseGateOwnership } from "./accept-gate-release.js";
 import { diagnoseGateFailure } from "./accept-gate-diagnosis.js";
-import { encodeGateEntryProbe, probeGateEntry } from "./accept-gate-entry.js";
+import { encodeGateEntryProbe, gateEntryProbeAnswer, gateEntryProbeAsk,
+  gateEntryProbeNow } from "./accept-gate-entry.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type GateRow = typeof acceptGateRuns.$inferSelect;
@@ -291,13 +292,20 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
   let started: Awaited<ReturnType<typeof spawnAcceptGate>>;
   try {
     await createGateSnapshot(plan.cwd, snapshotCwd, plan.source);
-    // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里,连同判据一起落到这一行上。
-    // 位置不能动:跑完之后再核拿到的是跑完之后的状态,而「测试压根没启动」这个结论整副面孔
-    // (不要改代码 / 出路是合分支或跳过)都压在这份事实上(第 2 轮审查 F1)。核不出来就落 null,
-    // 下游按「不知道」处理。
+    // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里。「测试压根没启动」这个结论
+    // 整副面孔（不要改代码 / 出路是合分支或跳过）都压在这份事实上（第 2 轮审查 F1），所以
+    // 它只能是起跑那一刻的事实 —— 跑完之后再核拿到的是跑完之后的状态。
+    //
+    // 两档两个时机，但都是起跑那一刻：路径那一档现在就能看（下面这句）；脚本那一档要问
+    // runner 自己，而且必须问**真要跑的那个** —— 那段查询插进这一次执行的最前面，由它写进
+    // 文件，结算时读回来（第 7 轮审查 F1/F2，判据见 accept-gate-entry-npm.ts）。核不出来一律
+    // 落 null，下游按「不知道」处理。
     await db.update(acceptGateRuns)
-      .set({ entryProbe: encodeGateEntryProbe(await probeGateEntry(snapshotCwd, plan.command).catch(() => null)) })
+      .set({ entryProbe: encodeGateEntryProbe(gateEntryProbeNow(snapshotCwd, plan.command)) })
       .where(eq(acceptGateRuns.id, runId));
+    const entryAsk = gateEntryProbeAsk(snapshotCwd, plan.command, logPath);
+    if (entryAsk) appendGateLog(logPath, "[ash] 先问一句这条命令点名要跑的脚本在不在"
+      + "（跟它同一个 shell、同一份环境，只列不跑；答案写在同目录的 .entry-scripts.json）\n");
     const prepared = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
     if (prepared?.status !== "running") {
       await cleanupGateSnapshot(taskId, runId);
@@ -312,6 +320,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       cwd: snapshotCwd,
       logPath,
       hold: true,
+      prelude: entryAsk,
       onExit: (exit) => void settleGate(runId, exit.code === 0
         ? { status: "passed", exitCode: 0, failure: null }
         // 信号打死的那一条可能是取消/超时先发的刀 —— 那两条路自己会落更准的理由，
@@ -402,12 +411,22 @@ async function settleGate(
     if (outcome.status === "passed" && !await verifyGateSnapshot(row.cwd, {
       commit: row.sourceCommit, fingerprint: row.sourceFingerprint ?? "", dependencies: [],
     })) outcome = { status: "failed", exitCode: outcome.exitCode, failure: "source_changed" };
+    // 脚本那一档的入口事实在这儿落盘：它是**命令开跑时第一件事**写下的（prelude），读它
+    // 跟「跑完再核一次」是两回事。只在还没有答案时读，别盖掉路径那一档起跑前就定下的那个。
+    const settledRow = row.entryProbe === null
+      ? await (async () => {
+        const answered = encodeGateEntryProbe(await gateEntryProbeAnswer(row.cwd, row.command, row.logPath).catch(() => null));
+        if (!answered) return row;
+        await db.update(acceptGateRuns).set({ entryProbe: answered }).where(eq(acceptGateRuns.id, runId));
+        return { ...row, entryProbe: answered };
+      })()
+      : row;
     // rc≠0 的那一档再问一句「这到底是不是代码红了」：命令在被测快照里压根不存在时，
     // 测试一行都没跑，而出路（合目标分支 / 这次跳过）跟修代码毫无关系。认不出就是 null，
     // 照旧按 exit_code 处理。判据见 accept-gate-miss.ts。
     // 传 outcome 而不是 row：`row` 是结算**前**读出来的那一行，上面的 exitCode 还是插入时
     // 的 null，照它判就永远走不到按退出码兜底那一档（第 1 轮审查 N1）。
-    const diagnosed = outcome.status === "failed" ? await diagnoseGateFailure(row, outcome).catch(() => null) : null;
+    const diagnosed = outcome.status === "failed" ? await diagnoseGateFailure(settledRow, outcome).catch(() => null) : null;
     if (diagnosed) outcome = { ...outcome, failure: diagnosed.failure };
     const timer = live.get(row.taskId);
     const finishedAt = now();
@@ -524,10 +543,20 @@ async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = fa
   // 先把「这一次交接发起了」落盘再投递：投递是异步的，中间用户刷新页面的话，不落盘
   // 那张卡只能说「不知道」。失败由下面的 onError 补写原因（两件事都写同一行）。
   await markHandoff(row.id, { at: now(), error: null });
+  // 这条时间线是用户刷新之后唯一找得回「这次交回去是让它干什么」的地方，所以它必须跟交出去
+  // 的那副面孔一致（第 7 轮审查 N2）：免修那一档明确不许它改代码，这儿若还写「修完重新点
+  // 验收」就是两句相反的话。三副面孔的授权判据见 accept-gate-messages.ts。
+  const next = row.failure !== "command_missing"
+    ? "修完重新点验收即可，验收会自动再跑一遍。"
+    : row.missAttribution === "not-mine"
+      ? "结论说这不是这次改动的事，它不会为此改代码，会把出路转述给你 —— 出路（合目标分支 / 这次跳过）都要你自己定。"
+      : row.missAttribution === "mine"
+        ? "结论指向是这次改动把这条命令弄没的，它会去改回来，之后重新点验收。"
+        : "它要先核是不是这次改动把这条命令弄没的，再决定去改还是把出路转述给你。";
   await appendTaskTimeline(
     row.taskId,
-    `门禁交接：已叫醒该任务去看这条命令为什么红（日志 ${row.logPath}）。${
-      again ? "这是你在验收台上手动再交一次。" : ""}修完重新点验收即可，验收会自动再跑一遍。`,
+    `门禁交接：已叫醒该任务去看这条命令${row.failure === "command_missing" ? "为什么没跑起来" : "为什么红"}`
+      + `（日志 ${row.logPath}）。${again ? "这是你在验收台上手动再交一次。" : ""}${next}`,
   );
   // byBackend：占真人回合，但字是后端写的（同验收冲突交接）。
   continueWhenIdle(row.taskId, prompt, { byBackend: true }, async (why) => {

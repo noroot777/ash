@@ -44,13 +44,22 @@ export async function spawnAcceptGate(opts: {
   logPath: string;
   onExit: (exit: GateExit) => void;
   hold?: boolean;
+  /**
+   * 插在用户命令**前面**的一段 shell（起跑前要问 runner 的那两问，见
+   * accept-gate-entry-npm.ts）。它必须跟用户命令同处一次执行：这样问的那个 runner 就是真
+   * 要跑的那一个（同一份 PATH、同一份 rc、同一个环境），而且它天然落在这一次的 pid 登记、
+   * confinement 凭据、取消与超时之内（第 7 轮审查 F1/F2）。
+   *
+   * 它自己的成败跟用户命令隔开（`{ …; } || true`），整条命令的退出码仍是用户命令那个。
+   */
+  prelude?: string | null;
 }): Promise<{ pid: number; startedAt: string | null; authorize: () => Promise<boolean> }> {
   mkdirSync(dirname(opts.logPath), { recursive: true });
   if (!existsSync(gateLaunchPath(opts.logPath))) prepareGateLaunch(opts.logPath);
   assertGateConfinementAvailable();
   const fd = openSync(opts.logPath, "a");
   try {
-    const launch = userShellLaunch(opts.command);
+    const launch = userShellLaunch(opts.prelude ? `${opts.prelude}\n${opts.command}` : opts.command);
     const environment = gateBootstrapEnvironment(augmentedEnv());
     if (IS_MAC) environment.bootstrap[MAC_GATE_ENV] = macGateToken(opts.logPath);
     const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,

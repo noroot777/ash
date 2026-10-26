@@ -116,18 +116,21 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
     if (busy) return;
     setBusy(true);
     try {
-      await api.rehandOffAcceptGate(task.id);
+      // 通知要跟**后端实际交回的那一行**对上（第 7 轮审查 N1）：卡上这份 latest 是按下按钮
+      // 之前读到的，而后端是请求到达时才重新取最近一次 —— 中间若有另一轮真失败刚好结束，
+      // 交回去的是那一行，照旧版就会把一条真红说成「不会为此改代码」。
+      const handed = (await api.rehandOffAcceptGate(task.id)).gate;
       await reload();
       // 提示要跟这一次的失败类型对上（第 1 轮审查 N3）：卡上明说「不许改代码」，提示却说
       // 「已交回去修」，用户看到的是两句相反的话。
       //
       // 免修那句同样**只许由归因授权**，不能拿失败类别代替（第 4 轮审查 N1）：归因没核出来
       // 时交回去的模板要求它先核、该修就修，这儿若还说「不会为此改代码」，又是两句相反的话。
-      notify(latest?.failure !== "command_missing"
+      notify(handed.failure !== "command_missing"
         ? "已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令"
-        : latest?.missAttribution === "not-mine"
+        : handed.missAttribution === "not-mine"
           ? "已把这条结论交回给智能体；它会把出路转述给你，不会为此改代码"
-          : latest?.missAttribution === "mine"
+          : handed.missAttribution === "mine"
             ? "已把这条结论交回给智能体；结论指向是这次改动把命令弄没的，它会改回来"
             : "已把这条结论交回给智能体；它要先核是不是这次改动把命令弄没的，再决定改还是转述给你");
     } catch (reason) {

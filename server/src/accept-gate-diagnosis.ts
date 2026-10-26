@@ -159,9 +159,61 @@ async function definitionIntroducedBy(repo: string, targetCommit: string, source
     // 的 package.json 读不动，于是一次只缩短 description 的提交被报成了引入提交。
     // 这里交白卷只丢「什么时候」，存在性和落后多少仍由 readOrigin 照常给出。
     if (defined === null) return null;
-    if (defined) return { commit, date: date ?? null, subject: subject.join("\t") || null };
+    if (!defined) continue;
+    // **「那次提交上有定义」不等于「是那次加进来的」**（第 7 轮审查 F4 实测）：共同历史上
+    // 本来就有定义、父分支把它删了、任务从缺失那一版开工时，`--not source` 剩下的第一个
+    // 提交只是「目标独有历史里最早看见它」—— 审查那条反例里那是一次只改 description 的
+    // 提交，照它去找只会找到一处无关改动。所以要核出 absent→present 这个转换本身。
+    const introduced = await definitionAbsentInParents(repo, commit, ask, b);
+    if (introduced === null) return null;
+    if (introduced) return { commit, date: date ?? null, subject: subject.join("\t") || null };
   }
   return null;
+}
+
+/**
+ * 这次提交的**每个父提交**上这个定义都不存在吗 —— 即它是不是真的在这儿从「没有」变成
+ * 「有」。null = 没问出来（那时只丢时间，不丢存在性）。
+ *
+ * 合并提交上只要有一个父已经有定义，它就不是引入点（定义是从那条支线合过来的，真正的引入
+ * 在支线上）。根提交没有父，它本身就是起点。
+ */
+async function definitionAbsentInParents(repo: string, commit: string, ask: GateEntryAsk, b: Budget): Promise<boolean | null> {
+  const parents = await gitRun(repo, ["log", "--format=%P", "-1", commit], b);
+  if (!parents.ok) return null;
+  const list = parents.stdout.trim().split(/\s+/).filter(Boolean);
+  if (!list.length) return true;
+  for (const parent of list) {
+    const defined = await definitionOnTree(repo, parent, ask, b);
+    if (defined === null) return null;
+    if (defined) return false;
+  }
+  return true;
+}
+
+/**
+ * 合它进来到底能不能把这个定义带回来。
+ *  - `true`  目标分支**新引入**的：共同祖先上没有、目标上有 → 合并会把它带进来；
+ *  - `false` 不是新引入：共同祖先上就有，而这份快照里没有 —— 删除发生在**任务这一侧**，
+ *            合并保留源侧删除，合进来不会恢复它；
+ *  - `null`  没问出来 → 一个字都不许保证。
+ *
+ * 第 7 轮审查 F3 实测的拓扑：共同祖先/目标 main 上有验收脚本，父分支删了它，任务从父分支那
+ * 一版开工（自己没再删一次，所以归因是 not-mine），main 还停在祖先位置 —— 旧版同时说出
+ * 「合它进来也不会多出什么」和「把 main 合进来，那时它就在树里了」，而 `git merge main`
+ * 根本不会恢复源侧的删除。
+ *
+ * **这里用共同祖先是对的，跟归因那条规矩不冲突**：归因问「这个定义是谁弄没的」，那只能用
+ * 任务自己记下的开工起点（第 4 轮审查 F2：共同祖先会把继承来的删除错判成 not-mine）；这里
+ * 问的是「合并会把什么带进来」，而三方合并的语义本身就定义在共同祖先上。
+ */
+async function mergeWouldRecover(repo: string, sourceCommit: string, targetCommit: string,
+  ask: GateEntryAsk, b: Budget): Promise<boolean | null> {
+  const base = await gitRun(repo, ["merge-base", sourceCommit, targetCommit], b);
+  const at = base.ok ? base.stdout.trim().split("\n")[0]?.trim() : "";
+  if (!at) return null;
+  const atBase = await definitionOnTree(repo, at, ask, b);
+  return atBase === null ? null : !atBase;
 }
 
 type Introduction = { commit: string; date: string | null; subject: string | null };
@@ -194,7 +246,7 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
   const behind = behindOut === null ? null : Number.parseInt(behindOut.trim(), 10);
   const origin: GateMissOrigin = { targetBranch, targetCommit,
     behind: Number.isFinite(behind as number) ? behind as number : null,
-    holders: [], absent: null, removedByTask: null, unverified: true };
+    holders: [], absent: null, removedByTask: null, mergeRecovers: null, unverified: true };
   // ── ① 定义级：命令形状认得出来，就能给出「有／没有」的确定答案 ──
   const ask = gateEntryAsk(command);
   if (ask) {
@@ -208,7 +260,9 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
       const where = await definitionIntroducedBy(repo, targetCommit, sourceCommit, ask, b);
       origin.holders.push({ file: askFile(ask), how: ask.kind === "path" ? "path" : "definition",
         commit: where?.commit ?? null, date: where?.date ?? null, subject: where?.subject ?? null });
-      return { ...origin, unverified: false };
+      // 「目标上有」推不出「合它进来就有」（第 7 轮审查 F3）：源侧删除会被合并保留。
+      const recovers = sourceCommit ? await mergeWouldRecover(repo, sourceCommit, targetCommit, ask, b) : null;
+      return { ...origin, mergeRecovers: recovers, unverified: false };
     }
     if (onTarget === false) return { ...origin, absent: ask.kind === "path" ? "path" : "definition", unverified: false };
     // onTarget === null（manifest 读不动等）：落到底下的文字线索，但**不许**据此说「也没有」。
