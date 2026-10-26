@@ -245,7 +245,11 @@ try {
   assert.ok(registered.get("report_stage")?.description?.includes(REVIEW_VALIDATION_REQUIREMENT), "MCP 与审查 prompt 共用验证口径");
   assert.ok(registered.get("start_monitor")?.inputSchema?.regression, "MCP 注册了实际可用的回归记录入口");
   assert.match((registered.get("start_monitor")!.inputSchema!.timeoutMs as { description: string }).description, /regression=true.*上限 60 分钟/);
-  assert.match(EXECUTOR_REGRESSION_RECORDING, /未指定 timeoutMs.*60 分钟/);
+  // 「时限多久、日志怎么落、哪些回合不许登记」这些**机制**住在上面那两个字段说明里,
+  // 每轮前言只带口径加一句指针 —— 两处都写全文时,执行者每一轮都在为同一段机制付两份。
+  assert.doesNotMatch(EXECUTOR_REGRESSION_RECORDING, /60 分钟/,
+    "每轮前言不复述哨兵时限:它只在 start_monitor 的字段说明里(上一条断言钉着)");
+  assert.match(EXECUTOR_REGRESSION_RECORDING, /start_monitor\(regression=true\)/, "但前言要指得到那个入口");
   // 回归口径（用户 2026-10-26）只有一份源：执行者每回合那段、审查/验证那段、以及 MCP 的
   // start_monitor(regression) 说明全部引它或复述它。原先这三处各讲一套，执行者同时收到
   // 「一条都不要跑」和「需要跑回归时就用 start_monitor 登记」，连自己新写的测试都不跑。
@@ -261,7 +265,7 @@ try {
   const regressionArg = (registered.get("start_monitor")!.inputSchema!.regression as { description: string }).description;
   assert.match(regressionArg, /本轮自己新写或改动的测试文件/, "MCP 入口要讲清唯一例外是哪一种");
   assert.ok(regressionArg.includes(REGRESSION_POLICY), "MCP 的回归开关说明也引同一份单源，不手抄");
-  assert.match(regressionArg, /那一轮不跑回归——但构建、接口冒烟、浏览器真实点检这些该做的执行照做/,
+  assert.match(regressionArg, /那一轮不跑回归，但构建、接口冒烟、浏览器真实点检照做/,
     "旁路回合的 409 要交代口径，但不能把「不跑回归」扩成「不跑任何测试」");
   assert.doesNotMatch((registered.get("report_stage")!.inputSchema!.verificationBasis as { description: string }).description,
     /撤销/, "撤销机制已退役，verificationBasis 的说明不能再拿它当触发条件");

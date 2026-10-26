@@ -268,14 +268,17 @@ try {
   assert.match(nextPrompt, /已由用户裁定、不在本任务里修的意见/, "下一轮审查提示必须带上已裁定的那几条");
   assert.ok(nextPrompt.includes(derived.id), "要指名承接它们的那个独立任务，否则审查者无从核对");
   assert.ok(nextPrompt.includes("第 2、3 条成立"), "执行者当时逐条写的越界依据要带过去（哪几条靠它认）");
+  // 审查者那一侧内联依据正文，执行者那一侧只给一行摘要 + 全文路径：它要的只是「这几条
+  // 别在这里改、走哪个出口」这张清单，依据正文是它偶尔才翻的参考，而单条驳回依据实测
+  // 1000~3500 字，攒上几轮就是每一次修复交接都重发一遍一万字参考资料。
   assert.ok(nextPrompt.includes("这几条连同上一轮那个 helper 一起重写"), "用户裁定时写的要点也要带过去");
   assert.match(nextPrompt, /本轮\*\*不要再报\*\*/, "审查者那一侧的落点是「不要再报」");
   assert.match(nextPrompt, /新出现\*\*的问题不受此限/, "但不能把审查者的嘴封死：同一处的新问题照常报");
 
   const nextRepair = await freeRepairPrompt("f-defer", nextRun);
   assert.match(nextRepair, /已由用户裁定、不在本任务里修的意见/, "执行者那一侧也要知道，否则它会照新报告再改一遍");
-  assert.match(nextRepair, /不要在这里改，调用 dispute_review/, "执行者那一侧的落点是「走转出这个出口」而不是照改");
-  assert.ok(nextRepair.includes("在 deferReason 里指名承接它们的那个任务"),
+  assert.match(nextRepair, /不要在这里改，调 dispute_review/, "执行者那一侧的落点是「走转出这个出口」而不是照改");
+  assert.ok(nextRepair.includes("在 deferReason 里指名那个任务"),
     "转出过的那几条要指明走 deferReason 这个出口");
   assert.ok(!nextRepair.includes("已被裁定作废的那几条"), "这个任务没裁定过作废，就别讲作废那一档怎么办");
 
@@ -313,13 +316,13 @@ try {
   assert.ok(manyPrompt.includes(derived.id), "最早那次转出的承接任务同样不许消失");
   // 正文超预算时省的是**正文**，且必须说出来并给一个**真读得到全文**的去处。
   // 第 2 轮审查复现过一版假去处：那时指回 report.md，而裁定依据根本不在报告里。
-  assert.match(manyPrompt, /逐条依据没有内联/, "正文带不下时要明说，不能悄悄少一段");
+  assert.match(manyPrompt, /逐条依据与裁定要点没有内联/, "正文带不下时要明说，不能悄悄少一段");
   assert.ok(manyPrompt.includes(freeReviewReportPath("f-defer", "f-defer-hist-1", 1)),
     "被省掉正文的那条也要留下它那一轮的报告路径");
   const fullTextPath = join(freeReviewEvidenceDir("f-defer", "f-defer-run-3", 1), SETTLED_RULINGS_FILE);
   // 判在**那一行**上：整段提示里到处都有这个路径（截断处也指它），只断言「出现过」
   // 的话，去处退回 report.md 也照样绿。
-  const omission = manyPrompt.split("\n").find((line) => line.includes("逐条依据没有内联"))!;
+  const omission = manyPrompt.split("\n").find((line) => line.includes("逐条依据与裁定要点没有内联"))!;
   assert.ok(omission.includes(fullTextPath), "省掉正文那一行要指向落盘的全文文件");
   assert.ok(!omission.includes("report.md"), "去处不许是那一轮的报告：裁定依据根本不在报告里");
   assert.match(omission, /别去翻上面那份报告：裁定内容不在报告里/, "要写明报告里没有裁定内容，免得读者白跑一趟");
@@ -351,18 +354,25 @@ try {
   const mixedExec = await freeRepairPrompt("f-mixed", mixedRun);
   assert.match(mixedExec, /作废的是\*\*当时那份依据\*\*，不是永久豁免/,
     "执行者那一侧不能把 withdrawn 讲成永久豁免——审查者带着新依据重提时它得能改");
-  assert.match(mixedExec, /只有\*\*原样重提\*\*同一条才用 dispute_review/, "驳回只留给原样重提那一种");
+  assert.match(mixedExec, /只有\*\*原样重提\*\*才用 dispute_review/, "驳回只留给原样重提那一种");
   const mixedReview = await freeReviewPrompt(mixedSource, mixedRun, 1, repo);
   assert.match(mixedReview, /裁定之后才成立的新依据/, "审查者那一侧的口子照旧留着（两侧口径必须对得上）");
   // ② 用户这一轮已经裁定「接着改」时，这一节只能当背景：再指路去驳回就是跟开场白
   //    正面打架，而且那条路已经关了（同一轮只能驳一次，再调会被 409 一样地拒）。
   const upheldExec = await freeManualRepairPrompt("f-mixed", mixedRun, { disputeUpheld: true });
-  assert.ok(!upheldExec.includes("不要在这里改，调用 dispute_review"),
+  assert.ok(!upheldExec.includes("不要在这里改，调 dispute_review"),
     "用户已裁定接着改，这一节不能再指路去驳回（开场白刚说完「不要再驳回」）");
   assert.match(upheldExec, /以那条裁定为准/, "要写明以本轮裁定为准，而不是让执行者自己在两条指令间挑一个");
   assert.match(upheldExec, /这一轮不要再驳回：同一轮的驳回只能提一次/, "要说清那条路已经关了，别让它去撞 409");
   assert.match(upheldExec, /用 ask_question 问清楚/, "关掉一个出口就得给另一个，否则它只能自己猜");
-  assert.ok(upheldExec.includes("第 1 条读错了行号"), "降级成背景 ≠ 把事实删掉：旧裁定的依据仍要带着");
+  // 执行者那一侧不再内联依据正文（全文本来就落盘，见 free-review-settled.ts 的
+  // EXECUTOR_DETAIL_BUDGET）。所以「降级成背景 ≠ 把事实删掉」改钉三件事：这条裁定还在
+  // 清单里、出处写出来了、出处里真读得到当时那段依据。
+  assert.match(upheldExec, /第 1 轮 · 逻辑审查者 · 用户裁定/, "降级成背景 ≠ 把这条裁定从清单里删掉");
+  const upheldFullText = join(freeReviewEvidenceDir("f-mixed", "f-mixed-run-2", 1), SETTLED_RULINGS_FILE);
+  assert.ok(upheldExec.includes(upheldFullText), "不内联就必须给出处：全文文件的路径要写进这一节");
+  assert.ok(readFileSync(upheldFullText, "utf8").includes("第 1 条读错了行号"),
+    "出处必须真读得到当时那段依据——上一版栽过的就是「路径存在、内容不在」");
   assert.match(upheldExec, /此前已由用户裁定过的意见（背景）/, "标题也要跟着降级，否则整节仍读成「这几条不用改」");
 
   console.log("free review defer ok");

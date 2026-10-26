@@ -59,7 +59,7 @@ try {
   await ensureSchema();
 
   const freeAcceptanceReminder = ACCEPTANCE_REMINDER("free-task", false, false, true);
-  assert.match(freeAcceptanceReminder, /任务完成后由用户从统一验收页验收/, "自由任务完成协议应指向统一验收页");
+  assert.match(freeAcceptanceReminder, /派审、预览与验收都由用户触发/, "自由任务完成协议里这三件事都不归执行者");
   assert.doesNotMatch(freeAcceptanceReminder, /合并.?清理/, "自由任务完成协议不得再指向已删除的合并快捷操作");
 
   await db.insert(projects).values({ id: "p", name: "test", repoPath: root, apiKeys: null, workflowId: null, createdAt: new Date().toISOString() });
@@ -303,7 +303,7 @@ try {
   const manualRepair = await freeManualRepairPrompt("free-exhausted-task", exhaustedRun);
   assert.match(manualRepair, /自动复审已停止/);
   assert.match(manualRepair, /不会擅自增加审查轮数/);
-  assert.match(manualRepair, /预约了复审，执行回合正常结束后按预约开始/);
+  assert.match(manualRepair, /预约了复审，本回合正常结束后按预约开始/);
   assert.doesNotMatch(manualRepair, /随后会自动派同一位审查者复审/);
 
   // HTTP 修复入口与普通回合**原子互斥**（holdTurn 占位身份 dispatch）：普通回合已

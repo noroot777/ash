@@ -58,14 +58,18 @@ export async function restartRegressionEvidence(taskId: string, directory: strin
   }).where(eq(regressionEvidence.directory, directory));
 }
 
-export async function refreshRegressionEvidence(taskId: string, directory: string, acceptedMerge = false) {
+export async function refreshRegressionEvidence(
+  taskId: string, directory: string, acceptedMerge = false,
+  /** 见 `regressionEvidenceReference`：正文里已经有完整验证口径时传 false。 */
+  restatePolicy = true,
+) {
   await evidenceState(taskId, directory);
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
   const project = task && (await db.select().from(projects).where(eq(projects.id, task.projectId)))[0];
   let reference: string;
   try {
     if (!task) throw new Error("被审任务不存在");
-    reference = await regressionEvidenceReference(task, project?.repoPath ?? "", directory, acceptedMerge);
+    reference = await regressionEvidenceReference(task, project?.repoPath ?? "", directory, acceptedMerge, restatePolicy);
     await db.update(regressionEvidence).set({ unavailable: reference.startsWith("回归证据清单不可用") ? reference : null })
       .where(eq(regressionEvidence.directory, directory));
   } catch (error) {

@@ -40,7 +40,7 @@ try {
   const { freeManualRepairPrompt, freeRepairPrompt } = await import("../src/free-review-prompts.js");
   const {
     CLASS_PROBLEM_BOUNDARY, DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
-    MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE,
+    MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_EXAMPLE, PLAIN_SUMMARY_GUIDE,
   } = await import("@ash/shared/free-workflow");
   const { freeWorkflowState, startManualFreeReviewRepair } = await import("../src/free-workflow.js");
 
@@ -385,8 +385,15 @@ try {
   // 它填不进去，于是照改。这一步不会有任何运行期行为报错：链照跑、报告照落盘，只是那
   // 一型意见永远转不出去——所以判据只能靠措辞钉。
   //
-  // 钉的是**那一份共享源原样出现**，不是几个同名词碰巧都在：判据有两个运行时表面（修复
-  // 交接消息、MCP 工具注册元数据），各自手写时就漂过一次。
+  // 钉的是**那一份共享源原样出现**，不是几个同名词碰巧都在：各自手写时就漂过一次。
+  //
+  // 但「原样出现在两个表面」这条做法本身已经退役（2026-10-27）：同一段判据在一条修复
+  // 消息里要出现两三遍，而驳回这条支线的实际发生率只有约 6%（9-23 以来 1162 轮里 68 次）
+  // ——那是在为一个低频分支按每轮付费。现在改成**单源 + 指针**：判据全文只住在
+  // `dispute_review` 的工具说明里（它本来就随工具清单常驻每个回合），交接消息只负责
+  // 「这条路存在、默认仍是照改、判据去哪看」。所以这里改钉三件事：
+  //   ① 全文确实在那个唯一的落脚处；② 交接消息指得到它；③ 交接消息里没有第二份拷贝。
+  // 「全局只有这一处」由 `test-prompt-budget.ts` 的 PLACEMENT 表在渲染结果上兜底。
   const toolConfig = await (async () => {
     const { registerTaskTurnTools } = await import("../../mcp/src/tools/task-turn.js");
     const registered = new Map<string, { description?: string; inputSchema?: Record<string, { description?: string }> }>();
@@ -397,21 +404,32 @@ try {
     assert.ok(found, "dispute_review 必须真的注册出来——元数据断言只有拿到注册结果才算数");
     return found;
   })();
-  for (const [source, text] of [
+  // ① 判据全文的唯一落脚处：真正注册给执行者的那份工具说明。
+  assert.ok(
+    (toolConfig.description ?? "").includes(DEFER_BOUNDARY_CRITERION),
+    "dispute_review 工具说明必须原样带上那份共享判据（三种形态 + 反向误读防线），不是碰巧出现几个同名词",
+  );
+  const repairSurfaces = [
     ["自动修复交接", await freeRepairPrompt("d-closing", closingRun)],
     ["轮数用尽后的手动修复交接", await freeManualRepairPrompt("d-closing", closingRun)],
-    // 真正注册给执行者的工具说明：执行者**两边都读得到**，只改 server 消息一端解决不了
-    // 「指引互相打架」。这一条是第 1 轮审查 F1 实测出来的漏洞。
-    ["dispute_review 工具说明", toolConfig.description ?? ""],
-  ] as const) {
+  ] as const;
+  for (const [source, text] of repairSurfaces) {
+    // ② 指得到：三条出路、deferReason 填法、summary 写法都在工具说明里，这句话不能丢
+    //    ——丢了就只剩「可以驳回」而没有「按什么判据驳」，等于把判据删掉。
     assert.ok(
-      text.includes(DEFER_BOUNDARY_CRITERION),
-      `${source} 必须原样带上那份共享判据（三种形态 + 反向误读防线），不是碰巧出现几个同名词`,
+      text.includes("dispute_review") && /判据与各字段写法见该工具说明/.test(text),
+      `${source} 必须把判据的去处指出来：只说「可以驳回」而不说按什么判据，等于判据不存在`,
     );
-    assert.ok(
-      text.includes(DEFER_REASON_FIELD_GUIDE),
-      `${source} 必须原样带上 deferReason 的填法——写死成一种形态的填空等于把另两种挡在门外`,
-    );
+    // ③ 没有第二份拷贝。
+    for (const [name, full] of [
+      ["越界判据", DEFER_BOUNDARY_CRITERION],
+      ["deferReason 填法", DEFER_REASON_FIELD_GUIDE],
+    ] as const) {
+      assert.ok(!text.includes(full),
+        `${source} 里不该再内联一份${name}全文：它住在工具说明里，两处同文就是按轮次重复付费`);
+    }
+    // 类问题边界是**例外**：它归修复交接（预设/旧验证那条线共用，那边没有 dispute_review），
+    // 所以这里要的是原样出现，而工具说明里反过来不许有。
     assert.ok(
       text.includes(CLASS_PROBLEM_BOUNDARY),
       `${source} 必须原样带上类问题的边界口径，否则「类问题」标签会替掉内容判断`,
@@ -420,6 +438,10 @@ try {
       assert.ok(!text.includes(stale), `${source} 不许残留旧的单一形态措辞「${stale}」`);
     }
   }
+  assert.ok(
+    !(toolConfig.description ?? "").includes(CLASS_PROBLEM_BOUNDARY),
+    "类问题边界住在修复交接里，工具说明只留一句指针——两处同文时它在一条消息里会出现两遍",
+  );
   // 工具的 deferReason 字段说明同样走共享源：字段说明是执行者填那个格子时离得最近的一句。
   assert.ok(
     (toolConfig.inputSchema?.deferReason?.description ?? "").includes(DEFER_REASON_FIELD_GUIDE),
@@ -429,7 +451,7 @@ try {
   // 管线里的类问题仍会被判成界内（第 1 轮审查 F2）。
   assert.match(
     CLASS_PROBLEM_BOUNDARY,
-    /根因\*\*本身\*\*也落在与本任务目标无关的模块[^]*?整条意见都不属于本任务/,
+    /根因\*\*本身\*\*也落在[^\n]*无关模块[^]*?整条意见都不属于本任务/,
     "类问题口径必须覆盖「根因本身也在界外 → 整条转出」，不能只豁免外围实例",
   );
   // 这段口径被预设/旧验证那条线共用，那边没有 dispute_review —— 不许写死 free 的出口
@@ -457,16 +479,20 @@ try {
     } as never);
     return registered.get("debate_reply")!;
   })();
+  // 规范本体只挂**两个 summary 字段说明**——执行者真要动手填那个格子时离得最近的一句；
+  // 正反示范（比规范本体还长、只在「第一次写」那一刻有用）更进一步，只挂 dispute_review
+  // 那一处。消息那几处改为指针：少一处指针等于这一句可有可无，多一份全文等于按轮次付费。
   for (const [source, text] of [
-    ["自动修复交接里的驳回出路", await freeRepairPrompt("d-closing", closingRun)],
-    ["dispute_review 工具说明", toolConfig.description ?? ""],
     ["dispute_review 的 summary 字段说明", toolConfig.inputSchema?.summary?.description ?? ""],
-    ["debate_reply 工具说明", replyConfig.description ?? ""],
     ["debate_reply 的 summary 字段说明", replyConfig.inputSchema?.summary?.description ?? ""],
   ] as const) {
     assert.ok(text.includes(PLAIN_SUMMARY_GUIDE),
       `${source} 必须原样带上「写给用户的那一句话」该怎么写——两处各写一份必然漂成两套规范`);
   }
+  assert.ok((toolConfig.inputSchema?.summary?.description ?? "").includes(PLAIN_SUMMARY_EXAMPLE),
+    "正反示范挂在 dispute_review 的 summary 字段上：那是执行者第一次写这一句时离得最近的地方");
+  assert.ok(!(replyConfig.inputSchema?.summary?.description ?? "").includes(PLAIN_SUMMARY_EXAMPLE),
+    "示范只挂一处：七个表面各带一份，等于为一次性的示范付七份常驻上下文");
   // 辩论每一段的开场白也要带（审查者那几段同样是给用户看的）。
   const debateRow = (await db.select().from(freeReviewDebates)
     .where(eq(freeReviewDebates.id, "closing-debate"))).at(0)!;
@@ -478,7 +504,10 @@ try {
     run: closingRun, debate: debateRow, turn: debateTurnRow,
     disputeReason: "这条意见的依据不可复现", previous: [], repoPath: root,
   });
-  assert.ok(segmentPrompt.includes(PLAIN_SUMMARY_GUIDE), "辩论每一段的开场白也要带上那份写法规范");
+  assert.ok(!segmentPrompt.includes(PLAIN_SUMMARY_GUIDE),
+    "开场白不再内联写法规范：它随 debate_reply 的字段说明常驻，内联就是每一段各付一份");
+  assert.match(segmentPrompt, /\*\*summary 必填\*\*[^\n]*写法见该字段说明/,
+    "但必须指得到：少了这句指针，那一句人话就成了可有可无的东西");
   assert.ok(segmentPrompt.includes("summary"), "开场白里的调用示例要把 summary 摆出来");
 
   // 发给双方的那份「执行者到底说了什么」必须三段都带。只取 disputeReason 的话，「只提

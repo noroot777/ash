@@ -37,7 +37,12 @@ try {
   // 这三条断言是「口径没被改回去」的唯一硬保证——措辞全是提示词，丢了不会有运行期报错。
   assert.equal(SWEEP_RULES.some((rule) => rule.id === "执行者回归结果复用"), false,
     "「执行者回归结果复用」整节已随回归口径退役，不该再回到扫描义务表里");
-  assert.match(REVIEW_SWEEP_PROTOCOL, /回归面[^\n]*回归测试统一在验收时/, "回归面必须写明回归统一在验收时执行");
+  // 口径**全文**不在这一条里:它在同一条消息末段的 `REVIEW_VALIDATION_REQUIREMENT`，
+  // 这里只留「这一面该怎么做」加一句指针（三处各讲一遍，执行者每轮为同一段口径付三份）。
+  // 「组装出来的那条消息到底带没带口径」由 test-regression-reuse 的最终消息层断言钉着。
+  assert.doesNotMatch(REVIEW_SWEEP_PROTOCOL, /回归测试统一在验收时由项目的验收前置命令执行/,
+    "扫描义务里不该再复述一遍回归口径全文");
+  assert.match(REVIEW_SWEEP_PROTOCOL, /回归面[^\n]*口径全文见本条消息末段的验证义务/, "回归面要指得到口径全文在哪");
   assert.match(REVIEW_SWEEP_PROTOCOL, /自己一条都不要跑/, "回归面必须明确禁止审查者自己跑测试");
   assert.doesNotMatch(REVIEW_SWEEP_PROTOCOL, /回归面[^\n]*—— 跑测试/, "回归扫描义务不能再无条件要求重新跑测试");
   assert.doesNotMatch(REVIEW_SWEEP_PROTOCOL, /缺少适用的真实测试结果时补跑/, "不得再要求审查者补跑回归");

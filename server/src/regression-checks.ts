@@ -37,8 +37,12 @@ export async function prepareRegressionCommand(taskId: string, monitorId: string
 
 export async function regressionEvidenceReference(
   task: typeof tasks.$inferSelect, repoPath: string, evidenceDir: string, acceptedMerge = false,
+  // 同一条消息里已经有 `REVIEW_VALIDATION_REQUIREMENT`（派审正文、就地验证正文）时传 false：
+  // 口径只讲一遍。每回合提醒那两条消息里没有它，仍然要由这份清单说明把口径带上。
+  restatePolicy = true,
 ): Promise<string> {
-  if (acceptedMerge) return "合并结果审查没有执行者登记清单可核对。" + REVIEWER_REGRESSION_CLAUSE;
+  const clause = restatePolicy ? REVIEWER_REGRESSION_CLAUSE : "";
+  if (acceptedMerge) return "合并结果审查没有执行者登记清单可核对，回归面整面留白。" + clause;
   if (!(await safeRunDirectory(evidenceDir, true))) return "回归证据清单不可用：目录安全检查不通过；把回归面写成留白，不要自己跑测试去填。";
   const rows = acceptedMerge ? [] : await db.select().from(regressionChecks).where(eq(regressionChecks.taskId, task.id))
     .orderBy(desc(regressionChecks.generation));
@@ -68,9 +72,12 @@ export async function regressionEvidenceReference(
   if (!(await safeRunDirectory(evidenceDir))) return "回归证据清单不可用：写入前目录安全检查不通过；把回归面写成留白，不要自己跑测试去填。";
   await replaceEvidenceFile(path, JSON.stringify({ protocol: 2, inputPolicy: "immutable-closed-inputs-required",
     taskId: task.id, generatedAt: new Date().toISOString(), acceptedMerge, snapshot, records }, null, 2));
-  return `执行者回归证据清单：${path}。${REVIEWER_REGRESSION_CLAUSE}这份清单只供你**核对执行者登记过什么**——` +
-    "每条的 reusable 恒为 false（当前 runner 没有不可变且闭合的输入证明，前后 Git 树相等不构成证明），所以它既不能当你的验证结论，也不是让你去重跑或补跑的清单；禁止自动复用。" +
-    "后端以数据库中的执行者身份、原始命令、真实退出码和代码树为权威，并校验完整日志摘要；一条算通过必须同时满足 passed=true 且 exitCode=0，失败必须照实报告，不得给通过结论。" +
-    "generation 是数据库分配的单调登记代次，latest 标记同命令/目录的最新登记，旧失败仍完整保留，未完成的新代次也不能回退到旧通过。" +
-    "按 logPath 读取完整输出；清单为空、失效或没覆盖到你担心的那一面时，把缺口原样写进覆盖声明的回归面留白，不能用对话自述、被改写的 JSON 或旧审查结果代替。";
+  // 「为什么 reusable 恒为 false」「generation 怎么分配」「后端凭什么说自己是权威」这些
+  // **论证与实现说明**不进正文（它们是讲给维护者的，不是给模型的指令），留在本文件头与
+  // `regression-evidence-lifecycle.ts`。正文只留读这份清单时用得上的几条判据。
+  return `执行者回归证据清单：${path}。${clause}这份清单只供你**核对执行者登记过什么**：` +
+    "reusable 恒为 false，它既不是你的验证结论，也不是让你重跑或补跑的清单；" +
+    "一条算通过必须同时满足 passed=true 且 exitCode=0，失败照实报告，不得给通过结论；" +
+    "latest 标记同命令/目录的最新登记，旧失败完整保留，按 logPath 读完整输出。" +
+    "清单为空、失效或没覆盖到你担心的那一面时，把缺口原样写进覆盖声明的回归面留白，不能用对话自述或旧审查结果代替。";
 }

@@ -45,7 +45,7 @@ try {
   // ① 清单是**诊断件**：伪造它拿不到任何东西，而下一次刷新一定把它覆盖回数据库里的真相。
   stale(evidenceDir);
   const reminder = await verifyReminderFor(taskId, 1);
-  assert.match(reminder, /regression-evidence\.json.*禁止自动复用/);
+  assert.match(reminder, /regression-evidence\.json.*reusable 恒为 false/);
   assert.ok(reminder.includes(REVIEWER_REGRESSION_CLAUSE), "续跑提醒经清单说明带上同一份审查者口径");
   refreshed(evidenceDir);
   stale(evidenceDir);
