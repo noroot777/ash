@@ -367,32 +367,42 @@ try {
   );
   assert.ok(alive(strayPid));
 
-  // ── ③ 部分停止 ≠ 停止:一次启动打印了两个端口,只腾空一个就得报失败 ─────────────
+  // ── ③ 部分停止 ≠ 停止:一次启动打印了两个端口,**两份都得收掉**才叫停了 ────────────
+  //    E2 原来的反面现场是「第二个端口上坐着旁人」,那一版要求报 502。F3 推翻了这个读法:
+  //    旁人核实了不是这次起来的,这次启动在端口这条线索上就是不在了 —— 继续报 502 等于拿
+  //    一个一个字都不许动的进程把这条命令永久钉死(第 3 轮审查发现 3,那一幕现在是 ⑨)。
+  //    E2 真正要钉的是**「判成功的依据是终态,不是我杀掉了几个」**,所以现场换成两份都是
+  //    自己的:只收第一个就报成功的实现会在这里被抓住 —— 第二份还是 ours,核验当场 502,
+  //    而且那个 pid 还活着。
   const minePort = await freePort();
+  const mine2Port = await freePort();
   const minePidfile = join(cwd, "mine.pid");
+  const mine2Pidfile = join(cwd, "mine2.pid");
   assert.equal(
-    (await startCommand("ports2", cwd, service(daemonScript(minePort, minePidfile, [
-      `echo "[svc] 另一个入口 http://127.0.0.1:${strayPort}"`,
-    ])))).status,
+    (await startCommand("ports2", cwd, service(
+      `${daemonScript(minePort, minePidfile)}\n${daemonScript(mine2Port, mine2Pidfile)}`,
+    ))).status,
     201,
   );
   await waitFor("两个端口都记上了", () => (serviceSession("ports2")?.ports.length ?? 0) === 2);
-  await waitFor("它自己那个端口听上了", async () => (await listening(minePort)).length > 0);
+  await waitFor("两份都听上了", async () =>
+    (await listening(minePort)).length > 0 && (await listening(mine2Port)).length > 0);
   const minePid = pidIn(minePidfile);
+  const mine2Pid = pidIn(mine2Pidfile);
   strays.add(minePid);
+  strays.add(mine2Pid);
   await waitFor("启动脚本退出", () => serviceSession("ports2")?.exitCode !== null);
   await waitFor("它认为服务开着", () => serviceSession("ports2")?.portsAlive === true);
 
-  const partial = await stopCommand("ports2", SERVICE_COMMAND_ID, null, { portGraceMs: 500 });
-  assert.equal(partial.status, 502, "腾空一个、另一个还有人听 —— 这不叫已停止");
-  const partialError = (partial.body as { error: string }).error;
-  assert.match(partialError, /还有人在听/);
-  assert.match(partialError, /停止命令/, "要给出路:去配一条停止命令");
-  await waitFor("自己那份该杀的照样杀掉了", () => !alive(minePid));
+  const both = await stopCommand("ports2", SERVICE_COMMAND_ID, null, { portGraceMs: 500 });
+  assert.equal(both.status, 200, `两个端口上坐的都是这次起来的,全收掉才算停了:${JSON.stringify(both.body)}`);
+  await waitFor("第一份收掉了", () => !alive(minePid));
+  await waitFor("第二份也收掉了 —— 只腾空一个就报成功,正是 E2 那条", () => !alive(mine2Pid));
   strays.delete(minePid);
+  strays.delete(mine2Pid);
+  assert.equal(await probePorts([minePort, mine2Port]), "free", "两个端口都要真的让出来");
+  assert.equal(serviceSession("ports2")?.stoppedByUser, true);
   assert.ok(alive(strayPid), "别人的进程一根汗毛都不许动");
-  assert.notEqual(serviceSession("ports2")?.stoppedByUser, true, "没停成功就不许留下「已停止」");
-  assert.equal(serviceSession("ports2")?.portsAlive, true, "更不许把还在运行的事实抹掉");
 
   // ── ③ 停止脚本 exit 0 也不算停止:终态说话 ─────────────────────────────────────
   const scriptPort = await freePort();
@@ -403,10 +413,14 @@ try {
   const scriptPid = pidIn(scriptPidfile);
   strays.add(scriptPid);
   await waitFor("启动脚本退出", () => serviceSession("ports3")?.exitCode !== null);
+  await waitFor("它认为服务开着", () => serviceSession("ports3")?.portsAlive === true);
   const lied = await stopCommand("ports3", SERVICE_COMMAND_ID, { script: "true", cwd, timeoutMs: 5_000 }, { portGraceMs: 300 });
   assert.equal(lied.status, 502, "脚本说自己成功了,端口说服务还在 —— 听终态的");
   assert.match((lied.body as { error: string }).error, /服务没停下来/);
+  // 没停成功的那一路**什么都不许落账**:标了「已停止」刷新回来按钮就退回 ▶、服务还在跑;
+  // 把 portsAlive 抹掉同样是谎报(这两条原先挂在 ③ 的旁人现场上,那一幕已按 F3 改掉)。
   assert.notEqual(serviceSession("ports3")?.stoppedByUser, true);
+  assert.equal(serviceSession("ports3")?.portsAlive, true, "更不许把还在运行的事实抹掉");
   assert.ok(alive(scriptPid), "ash 不替用户强杀:他写那段脚本正是不想让 ash 直接 kill");
 
   // 换一条真能停的脚本,这时才允许报成功 —— 顺手把现场清掉。
