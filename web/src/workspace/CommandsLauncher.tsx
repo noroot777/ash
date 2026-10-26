@@ -60,11 +60,13 @@ type CommandRow = {
  * (server/src/terminal.ts):两边劈叉就会出现「停止按钮摆在那儿、点下去什么都没发生」,
  * 或者反过来「服务还听着端口,界面却摆着启动按钮、再点一次起第二份」。
  *
- * 进程归属(groupAlive:组长退了但后台子进程还在的 daemonize 形状也算)之外多一档:
- * **它打印过的端口还有人在听**。真·守护化的服务(双 fork + setsid)从进程归属里全逃了,
- * 端口是仅剩的线索。
+ * 进程归属(groupAlive:组长退了但后台子进程还在的 daemonize 形状也算)之外多两档:
+ * ① **它打印过的端口还有人在听** —— 真·守护化的服务(双 fork + setsid)从进程归属里全逃了,
+ * 端口是仅剩的线索;② **上次停止留下了没核销的号**(服务端只报还活着的那些):端口让出来了,
+ * 但同组还有核不上归属、没敢杀的进程,那次启动就还没了结,停止按钮得留在那儿让用户能再按。
  */
-const sessionRunning = (session: TerminalSessionInfo): boolean => session.groupAlive || session.portsAlive;
+const sessionRunning = (session: TerminalSessionInfo): boolean =>
+  session.groupAlive || session.portsAlive || session.unresolved.length > 0;
 
 // 同一条命令可能挂着「一条活会话」或「一条刚退出的」——一处只说一件事,活的优先。
 function bestSession(sessions: TerminalSessionInfo[], projectId: string, commandId: string): TerminalSessionInfo | null {
@@ -97,6 +99,11 @@ function sessionState(
   service = false,
 ): { tone: string; text: string | null } {
   if (session && sessionRunning(session)) {
+    // 监听已经让出来了、只剩几个核不上归属所以没敢杀的号:既不是「运行中」也不是「已停止」,
+    // 照实说第三种(第 2 轮审查发现 2 —— 这一档以前被静默并进「已停止」)。
+    if (!session.groupAlive && !session.portsAlive) {
+      return { tone: "on", text: `停止未完成（还剩 ${session.unresolved.length} 个进程核不到归属）` };
+    }
     return session.exitCode === null
       ? { tone: "on", text: "运行中" }
       : { tone: "on", text: "运行中（启动脚本已退出）" };
@@ -229,7 +236,7 @@ export function CommandsLauncher({
   const act = (target: CommandTarget, action: "start" | "stop" | "restart", values: Record<string, string> = {}) => {
     const key = `${target.projectId}:${target.commandId}`;
     setBusy(key);
-    const call: Promise<{ session?: TerminalSessionInfo; stopped?: boolean }> = action === "start"
+    const call: Promise<{ session?: TerminalSessionInfo; stopped?: boolean; notice?: string }> = action === "start"
       ? api.startProjectCommand(target.projectId, target.commandId, values)
       : action === "stop"
         ? api.stopProjectCommand(target.projectId, target.commandId)
@@ -237,6 +244,9 @@ export function CommandsLauncher({
     call
       .then((result) => {
         refresh();
+        // 「停下来了,但同组还有几个核不上归属、没敢杀的进程」—— 成功路径上的话,但必须说出来:
+        // 咽下去就等于拿「端口让出来了」冒充「这次启动起来的东西都停了」(第 2 轮审查发现 2)。
+        if (result.notice) notify(result.notice);
         // 启动/重启成功就把日志直接摆到眼前:关弹层、开终端抽屉并聚焦这条会话的 tab
         // (VSCode 跑任务的习惯 —— 点了「执行」却要自己再去找日志,等于没执行完这个动作)。
         // stop 没有新现场,留在弹层。

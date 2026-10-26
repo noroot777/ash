@@ -37,14 +37,14 @@ const COMMANDS = [
 ];
 
 /** 第一个项目自己在跑的一条常用命令:只在「晚返回」那一幕出现(见下面的 __slowFact)。 */
-const lateSession = { id: "s-late", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 3, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false };
+const lateSession = { id: "s-late", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 3, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false, unresolved: [], portsTruncated: false };
 
 /**
  * 守护化的**普通常用命令**(window.__plainDaemon):端口是服务,不是服务那一行的特权 ——
  * `npm run dev` 配在列表里照样会双 fork 跑成守护进程。这一幕用来钉住「行按钮与服务头部
  * 同一套判据」(第 1 轮审查发现 3:头部有停止,同形状的普通命令行却显示执行)。
  */
-const plainDaemonSession = { id: "s-plain-daemon", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 5, exitCode: 0, stoppedByUser: false, groupAlive: false, ports: [9191], portsAlive: true };
+const plainDaemonSession = { id: "s-plain-daemon", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 5, exitCode: 0, stoppedByUser: false, groupAlive: false, ports: [9191], portsAlive: true, unresolved: [], portsTruncated: false };
 
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -57,10 +57,13 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     // __slowFact:让**第一个项目**的这次查询慢 400ms 回来,并且带上它自己在跑的一条命令 ——
     // 用例借此重演「切走之后旧事实才落回来」。其余时候一如既往,立刻回同一份。
     const slow = (window as unknown as { __slowFact?: boolean }).__slowFact === true && listing[1] === "p-one";
-    // 服务会话:用例用 window.__service 切四种现场 —— 在跑 / 真·守护化(启动脚本退了,
+    // 服务会话:用例用 window.__service 切五种现场 —— 在跑 / 真·守护化(启动脚本退了,
     // 但它打印过的端口还有人听) / 启动脚本自己退了而端口上也没人(docker compose up -d
-    // 那种,服务在本机进程与端口之外) / 已经被停过。
-    const service = (window as unknown as { __service?: "live" | "daemon" | "detached" | "stopped" }).__service;
+    // 那种,服务在本机进程与端口之外) / 已经被停过 / 停过但**没停净**(端口让出来了,同组
+    // 还有核不上归属、ash 没敢杀的进程还活着 —— 第 2 轮审查发现 2)。
+    const service = (window as unknown as {
+      __service?: "live" | "daemon" | "detached" | "stopped" | "leftover";
+    }).__service;
     const sessions = [
       ...(service ? [{
         id: "s-svc", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "服务",
@@ -72,9 +75,13 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
         // 进程归属(ppid / 会话 / pgid)一条都够不着(server/src/service-ports.ts)。
         ports: [8787],
         portsAlive: service === "daemon",
+        // 「停了但没停净」:监听确实没了,可同组那个核不上归属的号还活着。这不是「已停止」,
+        // 停止按钮得留在那儿让用户还能再按一次。
+        unresolved: service === "leftover" ? [4242] : [],
+        portsTruncated: false,
       }] : []),
-      { id: "s-shell", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "第一个项目", commandId: null, startedAt: 1, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false },
-      { id: "s-other", projectId: "p-two", cwd: "/workspace/p-two", shell: "/bin/zsh", name: "别家的 dev server", commandId: "dev", startedAt: 2, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false },
+      { id: "s-shell", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "第一个项目", commandId: null, startedAt: 1, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false, unresolved: [], portsTruncated: false },
+      { id: "s-other", projectId: "p-two", cwd: "/workspace/p-two", shell: "/bin/zsh", name: "别家的 dev server", commandId: "dev", startedAt: 2, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false, unresolved: [], portsTruncated: false },
       ...(slow ? [lateSession] : []),
       ...((window as unknown as { __plainDaemon?: boolean }).__plainDaemon === true ? [plainDaemonSession] : []),
     ];

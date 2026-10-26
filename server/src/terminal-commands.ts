@@ -39,7 +39,7 @@ import { instanceAdminOnly } from "./auth/context.js";
 import { IS_WINDOWS } from "./platform.js";
 import { probePorts, stopByPorts, type PortState } from "./service-ports.js";
 import { openConfinement, type Confinement } from "./executors/kernel-confine.js";
-import { groupAlive } from "./terminal-process-tree.js";
+import { groupAlive, processAlive } from "./terminal-process-tree.js";
 import { resolveTerminalDirectory, terminalSessions, type TerminalSessionInfo } from "./terminal.js";
 import { id } from "./util.js";
 import { commandLaunch } from "./terminal-shell.js";
@@ -136,11 +136,15 @@ function sessionName(name: string, template: string, values: Record<string, stri
  * 这条命令最近一次会话(还在跑的优先,否则最后开的那条)。「还在跑」的口径与
  * terminal.ts 的 sessionRunning、弹层的 bestSession 逐字一致 —— 只认 groupAlive 会在
  * 守护化形状下挑中一条更早的死会话,于是停止落到错的现场上。
+ *
+ * **「还在跑的优先」不是排序偏好,是正确性**:同一条命令可能同时挂着一条还在跑的旧会话和
+ * 一条更新的死记录(旧会话的守护进程晚一步才把端口听上、而中间那次启动当场失败)。只看
+ * 「最后开的那条」就会放过那条还在跑的,start 于是起第二份(第 2 轮审查发现 1 的同一类)。
  */
 function latestSession(projectId: string, commandId: string): TerminalSessionInfo | null {
   const mine = terminalSessions.listCommandSessions()
     .filter((session) => session.projectId === projectId && session.commandId === commandId);
-  return mine.find((session) => session.groupAlive || session.portsAlive)
+  return mine.find((session) => session.groupAlive || session.portsAlive || session.unresolved.length > 0)
     ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
 }
 
@@ -151,10 +155,15 @@ function latestSession(projectId: string, commandId: string): TerminalSessionInf
  *
  * 活会话 = 确定在跑。启动脚本退了但**它打印过的本机端口还有人在听**也算开着 —— 真·守护化
  * 的服务(双 fork + setsid)从进程归属里全逃了,端口是仅剩的线索,而且顺着它能真杀到
- * (service-ports.ts),所以这一档**不要求配停止命令**。再往下,**配了停止命令**时,正常退出
- * (exit 0)又没被停过的那次启动也算开着:`docker compose up -d` 这类服务连端口都未必打在
- * 本机(容器里、远端),会话死了不代表它停了,那条停止命令就是用户给的线索。三档都不沾边才
- * 算真停了。
+ * (service-ports.ts),所以这一档**不要求配停止命令**。再往下,**上一次停止留下了没核销的号**
+ * (核不上归属所以没敢动,见 StopVerdict)也算这次启动还没了结。最后,**配了停止命令**时,
+ * 正常退出(exit 0)又没被停过的那次启动也算开着:`docker compose up -d` 这类服务连端口都
+ * 未必打在本机(容器里、远端),会话死了不代表它停了,那条停止命令就是用户给的线索。
+ * 四档都不沾边才算真停了。
+ *
+ * **这是唯一的权威判据** —— 启动幂等、停止、重启全走它(`startCommand` 曾经另问一个只认
+ * 缓存的同义函数,于是「停止接口认为它开着、启动接口认为它没开」,同一个服务被起第二份:
+ * 第 2 轮审查发现 1 实测两个独立 PID 同时活着)。函数名统一不算统一,**调用点统一才算**。
  */
 async function openSession(
   projectId: string,
@@ -164,40 +173,83 @@ async function openSession(
   const session = latestSession(projectId, commandId);
   if (!session) return null;
   if (session.groupAlive || session.portsAlive) return session;
-  // 缓存的 portsAlive 是按拍刷的(terminal-session-watch.ts),停止是用户动作、等得起一次
-  // lsof:**现问一遍**它打印过的端口。不现问就会出现「刚启动完、扫描还没跑到,点停止却
-  // 被当成没在跑」,那条守护化的服务从此脱管(第 1 轮审查发现 3)。
+  // 缓存的 portsAlive 是按拍刷的(terminal-session-watch.ts),这几个动作都是用户点出来的、
+  // 等得起一次 lsof:**现问一遍**它打印过的端口。不现问就会出现「刚启动完、扫描还没跑到,
+  // 点停止却被当成没在跑」,那条守护化的服务从此脱管(第 1 轮审查发现 3)。
   if (session.ports.length && (await probePorts(session.ports)) !== "free") return session;
+  if (session.unresolved.some((pid) => processAlive(pid))) return session;
   if (!stopScript) return null;
   return session.exitCode === 0 && !session.stoppedByUser ? session : null;
+}
+
+/**
+ * 一次停止动作的**三种**终态。两种不够用:早先只有「停了」和「没停下来」,于是
+ * 「这几个端口让出来了」被直接升级成「这次启动起来的东西都停了」(第 2 轮审查发现 2)。
+ *
+ *  · `stopped`    —— 核验过:端口全空,而且没留下没核销的号;
+ *  · `unresolved` —— 监听确实停了,但同组还有**核不上归属所以一个字都没动**的号活着。
+ *                    不杀它是对的(没有归属凭据),但也**不能顺手把它从账上划掉** ——
+ *                    如实报给用户,并把这几个号留在会话事实里(刷新回来还看得见);
+ *  · `stuck`      —— 端口还有人听,或者问不出来:不许宣称已停止,留着可重试的现场。
+ */
+type StopVerdict =
+  | { kind: "stopped" }
+  | { kind: "unresolved"; notice: string; leftovers: number[] }
+  | { kind: "stuck"; reason: string };
+
+/** 核不上归属的那几个号 → 一句给用户看的话。 */
+function leftoverNotice(where: string, leftovers: { pid: number; reason: string }[]): string {
+  const who = leftovers.slice(0, 3).map((one) => `pid ${one.pid}`).join("、");
+  const more = leftovers.length > 3 ? `等 ${leftovers.length} 个` : "";
+  return `${where}已经让出来了，但跟它同组的 ${who}${more} 还活着：${leftovers[0].reason}`
+    + ` —— 没有归属凭据，ash 不敢动它们，所以没法说这次启动起来的东西都停了。`
+    + `要连它们一起收，请在「管理常用命令」里给这个服务填一条停止命令。`;
 }
 
 /**
  * 「停止命令留空 = 杀掉启动命令起来的东西」的最后一档:进程归属那三条线索断了之后,按这次
  * 启动自己打印过的端口回去找人,归属靠环境里的启动记号核验(service-ports.ts 顶部)。
  *
- * **判成功的依据是端口的终态,不是「我杀掉了几个」**:同一次启动可能打印了多个端口,
- * 杀掉其中一个也会让 `killed` 非空 —— 早先据此直接报成功,于是「部分停止」被说成已停止、
- * 运行事实还被一并抹掉(第 1 轮审查 E2)。所以这里杀完一律回头再问一遍全部端口,只有
- * **确认全空**才算停净;还有人听、或者问不出来,都如实报错。
+ * **判成功的依据是终态,不是「我杀掉了几个」**:同一次启动可能打印了多个端口,杀掉其中一个
+ * 也会让 `killed` 非空 —— 早先据此直接报成功,于是「部分停止」被说成已停止、运行事实还被
+ * 一并抹掉(第 1 轮审查 E2)。所以杀完一律回头再问一遍全部端口;而且**端口全空也只说明
+ * 监听停了**,同组那些核不上归属的号要单独交代(发现 2)。
  */
-async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Promise<string | null> {
-  if (!open.ports.length) return null;
+async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Promise<StopVerdict> {
+  if (!open.ports.length) return { kind: "stopped" };
   const token = terminalSessions.launchTokenOf(open.id);
   const result = token ? await stopByPorts(open.ports, { launchToken: token, graceMs }) : null;
   const state = await probePorts(open.ports);
-  if (state === "free") return null;
   const where = `端口 ${open.ports.join("、")}`;
   if (state === "unknown") {
-    return `${where} 的状态查不出来（lsof 没答上来），没法确认服务已经停了。请稍后再点一次停止，或者在「管理常用命令」里给这个服务填一条停止命令。`;
+    return { kind: "stuck", reason: `${where} 的状态查不出来（lsof 没答上来），没法确认服务已经停了。请稍后再点一次停止，或者在「管理常用命令」里给这个服务填一条停止命令。` };
   }
-  const spared = result?.spared[0];
-  const who = spared
-    ? `占着它的是 pid ${spared.holder.pid}（${spared.holder.command.slice(0, 60)}），${spared.reason}`
-    : token
-      ? "但查不到是谁占着"
-      : "这条会话没有启动记号（多半是 ash 重启前起的），核不上归属所以没敢动它";
-  return `${where} 上还有人在听，${who}。要停掉它，请在「管理常用命令」里给这个服务填一条停止命令。`;
+  if (state === "listening") {
+    const spared = result?.spared[0];
+    const who = spared
+      ? `占着它的是 pid ${spared.holder.pid}（${spared.holder.command.slice(0, 60)}），${spared.reason}`
+      : token
+        ? "但查不到是谁占着"
+        : "这条会话没有启动记号（多半是 ash 重启前起的），核不上归属所以没敢动它";
+    return { kind: "stuck", reason: `${where} 上还有人在听，${who}。要停掉它，请在「管理常用命令」里给这个服务填一条停止命令。` };
+  }
+  const leftovers = (result?.leftovers ?? []).filter((one) => processAlive(one.pid));
+  if (leftovers.length) {
+    return { kind: "unresolved", notice: leftoverNotice(where, leftovers), leftovers: leftovers.map((one) => one.pid) };
+  }
+  // 线索本身不全:这次启动打印的端口超过了记录额度,第 9 个起没进账。记下的都空了,但
+  // 「自己 setsid 单开一组、只能从没记下的那个端口找到」的守护进程压根没被问过
+  // (terminal.ts 的 recordPorts)。这种情况下不许把「端口都空了」说成「全停了」。
+  if (open.portsTruncated) {
+    return {
+      kind: "unresolved",
+      leftovers: [],
+      notice: `${where}都让出来了，但这次启动打印的本机端口超过 ${open.ports.length} 个，`
+        + `多出来的没能记下来 —— 如果还有服务只听那些端口，ash 没问过它们。`
+        + `要确保停净，请在「管理常用命令」里给这个服务填一条停止命令。`,
+    };
+  }
+  return { kind: "stopped" };
 }
 
 /**
@@ -206,12 +258,12 @@ async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Pro
  * 「已停止」、停止按钮消失,服务还在听)。这里不替用户强杀(他写那段脚本正是不想让 ash
  * 直接 kill),只是**不许宣称已停止**:原地报失败、留着可重试的现场。
  */
-async function verifyStopScript(open: TerminalSessionInfo): Promise<string | null> {
-  if (!open.ports.length) return null;
+async function verifyStopScript(open: TerminalSessionInfo): Promise<StopVerdict> {
+  if (!open.ports.length) return { kind: "stopped" };
   const state: PortState = await probePorts(open.ports);
-  if (state === "free") return null;
-  if (state === "unknown") return `停止命令跑完了，但端口 ${open.ports.join("、")} 的状态查不出来（lsof 没答上来），没法确认服务已经停了`;
-  return `停止命令跑完了，但端口 ${open.ports.join("、")} 上还有人在听 —— 服务没停下来，去看看那段脚本`;
+  if (state === "free") return { kind: "stopped" };
+  if (state === "unknown") return { kind: "stuck", reason: `停止命令跑完了，但端口 ${open.ports.join("、")} 的状态查不出来（lsof 没答上来），没法确认服务已经停了` };
+  return { kind: "stuck", reason: `停止命令跑完了，但端口 ${open.ports.join("、")} 上还有人在听 —— 服务没停下来，去看看那段脚本` };
 }
 
 /**
@@ -247,13 +299,15 @@ const CLEANUP_VERIFY_MS = 5_000;
  * Windows 没有进程组,单发 `child.kill()` 只杀得到 PowerShell 这层壳 —— 它正在跑的原生
  * 清理程序(docker.exe 之类)会活下来,稍后还可能把用户刚重启的服务关掉,而那一刻我们已经
  * 释放了命令锁、还跟用户说「已经一起杀掉了」(第 1 轮审查发现 4;真机 192.168.1.187 实测:
- * 壳 11608 退了、它的子程序 880 仍存活)。那边改成两层一起上:
- *   ① **内核圈定**(executors/kernel-confine.ts 的 Job Object):spawn 之后立刻把壳圈进去,
- *      它此后 fork 的一切都继承这个归属,整圈下刀;
- *   ② `taskkill /T /F` 按 ppid 树补刀 —— 圈定是 spawn 之后才写的(`since-enroll`),
- *      理论上存在「fork 到那一笔写入之间」的窗口,这一发把那一类接住。
+ * 壳 11608 退了、它的子程序 880 仍存活)。那边两层一起上,**顺序要紧**:
+ *   ① `taskkill /T /F` **先**打:`/T` 是按 ppid 树走的,树根必须**还枚举得到**。反过来先
+ *      整圈下刀,根当场就没了,这一发就只剩「找不到 PID」,逃出圈的后代谁也不收
+ *      (第 2 轮审查发现 3 真机实测:根 14192 先被圈刀收掉,随后 taskkill 找不到根,
+ *      圈前出生的后代 27144 活下来,而读数照旧是「集合为空」);
+ *   ② **内核圈定**(executors/kernel-confine.ts 的 Job Object)补刀:ppid 树断掉的那一类
+ *      (Start-Process 之后根先退、或者被 reparent)由它按内核记下的归属收。
  *
- * 然后**核验**:圈里还有成员、或者进程组还活着,就如实说「还有残留」,不再嘴硬说杀干净了。
+ * 然后**核验**:圈里还有成员、进程组还活着、或者**这一问本来就答不全**,都如实说出来。
  */
 async function killScriptRun(child: ChildProcess, confine: Confinement | null): Promise<string> {
   const pid = child.pid;
@@ -261,12 +315,24 @@ async function killScriptRun(child: ChildProcess, confine: Confinement | null): 
     try { if (pid !== undefined) process.kill(-pid, "SIGKILL"); else child.kill("SIGKILL"); }
     catch { try { child.kill("SIGKILL"); } catch { /* 已经没了 */ } }
   } else {
-    confine?.killAll("SIGKILL");
+    // ① 树根还活着的时候走 ppid 树。退非零有两种:进程已经没了(128),或者这一发没打出去
+    // —— 后者要留着说,吞掉等于把一次失败做成静默。
+    let treeFailed: string | null = null;
     if (pid !== undefined) {
-      await runFile("taskkill", ["/T", "/F", "/PID", String(pid)], { timeout: CLEANUP_VERIFY_MS, windowsHide: true })
-        .catch(() => undefined); // 进程已经没了时 taskkill 退非零,不是故障
+      treeFailed = await runFile("taskkill", ["/T", "/F", "/PID", String(pid)], { timeout: CLEANUP_VERIFY_MS, windowsHide: true })
+        .then(() => null)
+        .catch((error: { code?: unknown; stderr?: string }) =>
+          error.code === 128 ? null : `taskkill 没能按进程树收掉它（${(error.stderr ?? "").trim() || `退出码 ${String(error.code)}`}）`);
     }
+    // ② 逃出 ppid 树的那一类交给圈。
+    confine?.killAll("SIGKILL");
     try { child.kill("SIGKILL"); } catch { /* 已经没了 */ }
+    const residue = await verifyScriptGone(child, confine);
+    confine?.dispose();
+    const left = [treeFailed, residue].filter(Boolean).join("；");
+    return left
+      ? `已经发了强杀，但${left} —— 它可能还在后台动作，必要时去系统里确认一下`
+      : "已经把它和它拉起的进程一起杀掉";
   }
   const residue = await verifyScriptGone(child, confine);
   confine?.dispose();
@@ -279,10 +345,17 @@ async function killScriptRun(child: ChildProcess, confine: Confinement | null): 
  * 残留核验:有就返回一句人话,没有返回 null。「问不出来」不算没有,如实说问不出来。
  *
  * 两个平台手里的证据不一样。POSIX 有进程组,`groupAlive` 直接问内核;**Windows 一条都没有**
- * —— `groupAlive`/`readProcessTableSync` 在那边全是短路,唯一的来源就是 Job Object。所以那边
- * 圈没建起来(第一次 enroll 要等守圈进程启动,约 180 ms,比它短命的运行圈不住)或者查不出来
- * 时,只能说「按 ppid 树杀过一遍,脱离了父子关系的后代核不到」。借 POSIX 那条路的沉默去说
- * 「已经一起杀掉了」,跟把 lsof 失灵读成「端口空了」是同一类错(第 1 轮审查 E2)。
+ * —— `groupAlive`/`readProcessTableSync` 在那边全是短路,唯一的来源就是 Job Object。
+ *
+ * 而圈的空集合**不能无条件当成「整次运行为空」**:`ConfineRead.coverage` 写明了这一问覆盖
+ * 到哪儿(kernel-confine.ts 顶部),`since-enroll` 只覆盖 assign **之后**出生的后代 ——
+ * 圈定那一笔是 spawn 之后才写的,它之前出生的后代从头到尾没进过集合,集合空也证明不了
+ * 它们没了(第 2 轮审查发现 3 真机实测:圈前出生的 27144 活着,读数仍是空集合)。
+ * `executors/cleanup-result.ts` 的 `confinedResidue` 早就是这么判的 —— 只有 `whole-run`
+ * 才许从空集合推出「扫净」。新调用者不能从旁边绕过同一条契约。
+ *
+ * Windows 上 `preExecEnv()` 返回 null(那条路只有 cgroup 有),所以那边**永远拿不到
+ * whole-run**:如实说清这一问覆盖到哪儿,而不是把 since-enroll 的空当成全净。
  */
 async function verifyScriptGone(child: ChildProcess, confine: Confinement | null): Promise<string | null> {
   const deadline = Date.now() + CLEANUP_VERIFY_MS;
@@ -292,9 +365,14 @@ async function verifyScriptGone(child: ChildProcess, confine: Confinement | null
     const groupLeft = !IS_WINDOWS && child.pid !== undefined && groupAlive(child.pid);
     if (!members && !groupLeft) {
       if (read?.kind === "unqueryable") return `核不出它是不是真的清空了（${read.why}）`;
-      // 「集合为空」是内核给的权威答案,只有它算核过了;absent / 压根没圈都不算。
-      if (IS_WINDOWS && read?.kind !== "members") {
+      // POSIX 的权威证据是进程组(上面的 groupLeft 已经问过内核),圈只是加一台设备。
+      if (!IS_WINDOWS) return null;
+      // Windows 只剩圈这一个来源,于是空集合必须连着 coverage 一起用。
+      if (read?.kind !== "members") {
         return "这次没圈起来（Job Object 不可用），只按 ppid 树杀过一遍 —— 脱离了父子关系的后代核不到";
+      }
+      if (read.coverage !== "whole-run") {
+        return "圈只覆盖到圈定之后出生的那些（这台平台拿不到全程覆盖），圈前就脱离父子关系的后代核不到";
       }
       return null;
     }
@@ -402,11 +480,15 @@ export function startCommand(
     if (terminalSessions.isProjectClosing(projectId)) {
       return { status: 500 as const, body: { error: "启动失败：项目正在删除" } };
     }
-    // 幂等门认的是**还有东西在跑吗**(runningCommandSession:进程归属 ∪ 端口还有人听),
-    // 不是「进程还在吗」。守护化的服务只剩端口这一条线索,照 liveCommandSession 判会得出
-    // 「没在跑」,于是同一个服务被起第二份 —— 两个实例抢一个端口(第 1 轮审查发现 3)。
-    const live = terminalSessions.runningCommandSession(projectId, command.id);
-    if (live) return { status: 200 as const, body: { session: live, alreadyRunning: true } };
+    // 幂等门认的是**这条命令还开着吗** —— 跟停止、重启用的是同一个 openSession,一个字
+    // 都不另算。它比「进程还在吗」多三档:端口还有人听(现问一次 lsof,不吃缓存)、上次
+    // 停止留下的没核销的号、以及「配了停止命令 + 上次正常退出又没被停过」。
+    //
+    // 这里曾经另问一个只认缓存的同义函数(runningCommandSession),于是出现:不打印网址的
+    // 守护服务 + 配了停止命令 —— 停止接口和界面都认它开着,启动接口认它没开,再点一次启动
+    // 就起了第二份(第 2 轮审查发现 1 实测:两个独立 PID 同时活着)。
+    const open = await openSession(projectId, command.id, command.stopCommand);
+    if (open) return { status: 200 as const, body: { session: open, alreadyRunning: true } };
     const resolved = resolveScript(command, command.command, values);
     if (!resolved.ok) return resolved.result;
     try {
@@ -452,11 +534,17 @@ export function stopCommand(
     // 走哪条路都要**核到终态**才敢说停了。没配停止命令:进程那条线索走完了,再按这次启动
     // 打印过的端口兜一次(连杀带核验)。配了停止命令:不替用户强杀,但它说自己成功了也得
     // 核一遍端口 —— 不然一条 `true` 就能把「已停止」骗出来。
-    const stuck = stop ? await verifyStopScript(open) : await stopLaunchPorts(open, options.portGraceMs);
-    if (stuck) return { status: 502 as const, body: { error: `停止失败：${stuck}` } };
-    // 启动脚本早就退了(服务在 ash 的进程树之外):没有进程可杀,但「我点过停止」要留下来。
-    if (!live) terminalSessions.markCommandStopped(projectId, commandId);
-    return { status: 200 as const, body: { stopped: true } };
+    const verdict = stop ? await verifyStopScript(open) : await stopLaunchPorts(open, options.portGraceMs);
+    if (verdict.kind === "stuck") return { status: 502 as const, body: { error: `停止失败：${verdict.reason}` } };
+    // 「我点过停止」要留下来 —— 启动脚本早就退了(服务在 ash 的进程树之外)时尤其:没有进程
+    // 可杀,但刷新回来还得看得出停过(根 AGENTS.md)。**无条件标**:活进程那条路里
+    // terminate 只标它自己那条会话,缓存的 portsAlive 还可能是旧的 true,于是紧接着点启动会
+    // 被幂等门拿一条已经退出的会话顶回去(第 2 轮审查发现 1)。
+    // 没核销的号一并落进会话事实:下次点停止还看得见,刷新也不丢。
+    terminalSessions.markCommandStopped(projectId, commandId, verdict.kind === "unresolved" ? verdict.leftovers : []);
+    return verdict.kind === "unresolved"
+      ? { status: 200 as const, body: { stopped: true, unresolved: verdict.leftovers, notice: verdict.notice } }
+      : { status: 200 as const, body: { stopped: true } };
   });
 }
 
@@ -496,15 +584,23 @@ export function restartCommand(
         // 旧服务可能是守护化的(进程树里早没了、端口还占着)。不先收掉它,新的一起来就会
         // 因为端口被占而挂 —— 那种失败看起来像「重启按钮坏了」。配了停止命令的同样要核:
         // 脚本说成功不等于端口让出来了(verifyStopScript)。
-        const stuck = before
+        const verdict: StopVerdict = before
           ? command.stopCommand ? await verifyStopScript(before) : await stopLaunchPorts(before)
-          : null;
-        if (stuck) return { status: 502 as const, body: { error: `重启失败：旧服务没停下来（${stuck}）` } };
+          : { kind: "stopped" };
+        if (verdict.kind === "stuck") {
+          return { status: 502 as const, body: { error: `重启失败：旧服务没停下来（${verdict.reason}）` } };
+        }
         // 核到终态了,把「这一份已经停了」落回会话事实 —— 否则它还会被当成「还在跑」,
         // 新会话的容量预留会撞上「旧命令会话尚未停止」。
-        if (before) terminalSessions.markCommandStopped(projectId, command.id);
+        if (before) {
+          terminalSessions.markCommandStopped(projectId, command.id, verdict.kind === "unresolved" ? verdict.leftovers : []);
+        }
         const session = await reservation.create(cwd, { name: resolved.name, script: resolved.script });
-        return { status: 201 as const, body: { session } };
+        // 旧服务的监听停了、新的起来了,但同组那几个核不上归属的号还活着 —— 照实说一句,
+        // 别让「重启成功」把它盖过去。
+        return verdict.kind === "unresolved"
+          ? { status: 201 as const, body: { session, notice: verdict.notice } }
+          : { status: 201 as const, body: { session } };
       } finally { reservation.release(); }
     } catch (error) {
       return { status: 500 as const, body: { error: `重启失败：${error instanceof Error ? error.message : String(error)}` } };

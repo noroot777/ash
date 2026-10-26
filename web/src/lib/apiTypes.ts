@@ -692,6 +692,13 @@ export type TerminalSessionInfo = {
   ports: number[];
   /** 上面那些端口此刻还有人在听 = 服务还在后台跑着，哪怕启动脚本早退了。 */
   portsAlive: boolean;
+  /**
+   * 上次停止**没能核销**的号：端口让出来了，但同组还有进程活着、又拿不出「是这次启动的」
+   * 的归属证据，于是没敢杀也不敢当成停净。非空 = 这条命令还没了结，照实说一句。
+   */
+  unresolved: number[];
+  /** 这次启动打印的本机端口超过了记录额度，多出来的没记下 = 端口这条线索本身不全。 */
+  portsTruncated: boolean;
 };
 
 export type TerminalEvent =

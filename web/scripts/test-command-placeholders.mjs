@@ -245,6 +245,25 @@ try {
   );
   await page.evaluate(() => { delete window.__plainDaemon; });
 
+  // ⑬-中 「停了但没停净」:端口让出来了,同组还有核不上归属、ash 没敢杀的进程还活着。
+  //   既不是「运行中」也不是「已停止」—— 混进「已停止」就是拿端口空闲核销了整次运行
+  //   (第 2 轮审查发现 2)。停止按钮必须留着,让用户还能再按一次。
+  await page.evaluate(() => { window.__service = "leftover"; });
+  await reopen();
+  await pop.getByRole("button", { name: "停止", exact: true }).waitFor();
+  assert.equal(
+    await pop.getByRole("button", { name: "启动", exact: true }).count(),
+    0,
+    "还有没核销的进程就不算停完,这时摆启动按钮等于说它已经停了",
+  );
+  assert.match(
+    await pop.locator(".cmd-pop__svc-state").innerText(),
+    /停止未完成/,
+    "照实说第三种状态,别让它冒充已停止",
+  );
+  await page.evaluate(() => { delete window.__service; });
+  await page.keyboard.press("Escape");
+
   // ⑬ 反面:启动脚本退了、端口上也没人、又没配停止命令 —— 没有任何线索说它还活着,
   //    这时认它开着就是猜。回到 ▶,并照实说退的是**启动脚本**。
   await page.evaluate(() => { window.__service = "detached"; });

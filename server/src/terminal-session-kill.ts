@@ -92,6 +92,11 @@ export async function terminateSession(
 
   const term = await freezeAndEnumerate(groupId, target.ttyPath, target.descendantPgids, memberPids);
   if (clearedBy(term.snapshot)) { term.thaw(); return { ok: true }; }
+  // 这一行记的是**「用户要求停止」**,不是「已经停净」—— 两件事必须分开:它在 TERM/KILL
+  // 之前就落下,后面每一轮都可能失败。「停净了吗」由停止动作层另算(terminal-commands.ts
+  // 的 StopVerdict:端口现场核验 + 没核销的号),stoppedByUser 只决定措辞(「已停止」而不是
+  // 「异常退出」)和回收策略。谁要是拿它当「服务已经不在了」的证据,就会得出
+  // 「我点过停止 ⇒ 它停了」(第 2 轮审查发现 2)。
   target.stoppedByUser = true;
   signalSessionTree(target, "SIGTERM", term.snapshot);
   // 交互 shell 只认挂断:zsh/bash 按 POSIX 惯例**忽略 SIGTERM**(交互模式下),于是

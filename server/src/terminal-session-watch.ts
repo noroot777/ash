@@ -20,6 +20,8 @@ export type WatchedSession = {
   readonly launchPorts: Set<number>;
   exitCode: number | null;
   portsAlive: boolean;
+  /** 端口事实的代次:停止路径核验完会 +1,这里据此丢掉取样早于它的那一拍。 */
+  readonly factsGeneration: number;
 };
 
 /** 后代累积扫描的间隔。构造可注入,回归用小间隔 + 真实 sleep 按真实定时器验证。 */
@@ -101,6 +103,11 @@ export class TerminalWatcher {
    * (第 1 轮审查发现 2:工具失灵被读成「端口空了 = 已经停净」,于是界面把还在跑的服务
    * 说成已停止)。同理这里**不看 stoppedByUser** —— 用户点过停止不等于真停下来了,那件事
    * 由停止路径自己核验后写(markCommandStopped)。
+   *
+   * 写回之前核对**代次**:一次 lsof 要跑几百毫秒,期间用户点了停止、停止路径核验完把
+   * portsAlive 落成 false 并推进了代次,此刻这一拍带着「停止之前取的样」落地就会把它复活成
+   * true —— 刷新回来停止按钮还在,等于那一下没按(第 2 轮审查发现 1 的同一类)。取样早于
+   * 当前代次的,结论整条丢掉。
    */
   async scanPorts(): Promise<void> {
     if (this.scanningPorts) return;
@@ -111,8 +118,10 @@ export class TerminalWatcher {
     try {
       for (const session of candidates) {
         if (session.exitCode === null) { session.portsAlive = false; continue; }
+        const sampledAt = session.factsGeneration;
         const state = await probePorts(session.launchPorts);
-        if (state !== "unknown") session.portsAlive = state === "listening";
+        if (state === "unknown" || session.factsGeneration !== sampledAt) continue;
+        session.portsAlive = state === "listening";
       }
     } finally { this.scanningPorts = false; }
   }

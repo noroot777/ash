@@ -7,6 +7,7 @@ import { id } from "./util.js";
 import {
   containmentAvailable,
   groupAlive,
+  processAlive,
   TTY_COMMAND_WRAPPER,
   TTY_REAPER_WRAPPER,
 } from "./terminal-process-tree.js";
@@ -14,9 +15,23 @@ import { killAllSessionTrees, killSessionTree, terminateSession } from "./termin
 import { TerminalWatcher } from "./terminal-session-watch.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
-import { TerminalCapacity, type TerminalReservation } from "./terminal-capacity.js";
+import { TerminalCapacity } from "./terminal-capacity.js";
 
 export { resolveTerminalDirectory } from "./terminal-shell.js";
+
+import {
+  type CreateOptions,
+  type TerminalCreation,
+  type TerminalEvent,
+  type TerminalEventInput,
+  type TerminalSession,
+  type TerminalSessionInfo,
+} from "./terminal-session-facts.js";
+
+// 会话事实的形状住在 terminal-session-facts.ts(连同「每条线索为什么存在」的说明)。
+// 这里原样对外转发:terminal-routes / terminal-commands 一直从 terminal.js 取它们。
+export type { TerminalEvent, TerminalSessionInfo };
+
 
 const MAX_BUFFER_BYTES = 512 * 1024;
 const MAX_SESSIONS = 16;
@@ -28,107 +43,6 @@ const IDLE_TTL_MS = 30 * 60 * 1000;
  */
 const MAX_LAUNCH_PORTS = 8;
 
-export type TerminalEvent =
-  | { seq: number; type: "data"; data: string }
-  | { seq: number; type: "exit"; exitCode: number; signal?: number };
-
-type TerminalEventInput =
-  | { type: "data"; data: string }
-  | { type: "exit"; exitCode: number; signal?: number };
-
-export type TerminalSessionInfo = {
-  id: string;
-  projectId: string;
-  cwd: string;
-  shell: string;
-  name: string;
-  /** 非空 = 这是「常用命令」的常驻会话（shared/src/project-commands.ts），不是交互 shell。 */
-  commandId: string | null;
-  startedAt: number;
-  /** null = 进程还活着。命令会话靠它区分「运行中」和「退了但日志还能回看」。 */
-  exitCode: number | null;
-  /** 用户主动停的（区别于自己崩了）：UI 显示「已停止」，不算异常退出、不亮红点。 */
-  stoppedByUser: boolean;
-  /**
-   * 进程组里是否还有活着的进程(info() 时即时探测)。组长退了组不一定空:启动脚本
-   * `cmd & …; exit 0` 这种 daemonize 形状下 exitCode 已落、后台子进程还在跑 ——
-   * 「这条命令还活着吗」一律看这个字段,别看 exitCode(第 4 轮审查实锤)。
-   */
-  groupAlive: boolean;
-  /**
-   * 这次启动自己打印过的本机端口(`http://127.0.0.1:8787` 这种)。真·守护化的服务
-   * (双 fork + setsid)从 ppid/ctty/pgid 三条线索里全逃了,这是仅剩的一条 ——
-   * 停止时按它回到端口上找人(server/src/service-ports.ts)。
-   */
-  ports: number[];
-  /**
-   * 上面那些端口此刻还有没有人在听(由后代扫描那一拍顺带探,不是每次 info() 都跑 lsof)。
-   * 「启动脚本退了、服务还在后台」就靠它认出来 —— groupAlive 在这种形状下是 false。
-   */
-  portsAlive: boolean;
-};
-
-type TerminalSession = TerminalSessionInfo & {
-  process: TerminalProcess;
-  events: TerminalEvent[];
-  bufferBytes: number;
-  nextSeq: number;
-  lastAccessedAt: number;
-  listeners: Set<(event: TerminalEvent) => void>;
-  /**
-   * 会话存续期见过的后代进程组 pgid(job-control 后台作业的独立组)。持续累积 ——
-   * shell 一 exit 树就断了、实时快照抓不到,只有这份内存记录能在结束/退出时杀到它们
-   * (第 2 轮自由审查实锤)。见 terminal-process-tree.ts 顶部与 terminal-session-watch.ts。
-   */
-  descendantPgids: Set<number>;
-  /**
-   * 累积这次启动打印过的本机端口。只对命令会话累积:交互 shell 里 `curl localhost:8080`
-   * 这种字样跟「我起了个服务」没关系,而停止按钮只长在命令会话上。
-   */
-  launchPorts: Set<number>;
-  /**
-   * 认端口的**增量**扫描器。pty 的输出是流,地址完全可能被切成两块送来,无状态正则会
-   * 整条漏掉、甚至把五位端口的前四位当成完整端口(第 1 轮审查发现 5)。见
-   * service-ports.ts 的 createPortScanner。
-   */
-  portScanner: { feed(chunk: string): number[]; flush(): number[] };
-  /**
-   * 这次启动独有的随机记号,注入进 pty 的环境(`ASH_LAUNCH_ID`)。它被这次启动 fork 出来
-   * 的每一个进程继承 —— 双 fork + setsid 的守护进程也带着 —— 于是「端口上坐着的是不是
-   * 这次起来的」有了**可核验**的归属证据,而不是时间窗口的推断。只给命令会话发
-   * (交互 shell 不长停止按钮,也就没有按端口动手的路);不进 DTO,服务端内部用。
-   */
-  launchToken: string | null;
-  /**
-   * pty slave 路径(/dev/ttysN)。leader(wrapper)活着时,按它枚举会话成员(ctty/sid
-   * ∪ fd 持有者,见 terminal-process-tree.ts 文件头)就是**确定性**清单 —— 不依赖 ppid
-   * 树与采样,disown、独立 PGID、stdio 全重定向都照样在列,terminate/close/shutdown
-   * 都用它补抓。node-pty 未暴露进公开类型,拿不到(理论上不会)就退回快照 + 累积。
-   */
-  ttyPath: string | null;
-};
-
-type CreateOptions = {
-  cols?: number;
-  rows?: number;
-  shell?: string;
-  shellArgs?: string[];
-  /**
-   * 常用命令模式：不开交互 shell，直接跑这条命令，进程退出会话就结束（exitCode 落在
-   * 会话上）。怎么起由 terminal-shell.ts 的 `commandLaunch` 定：POSIX 是
-   * `shell -lc <script>`（`-l` 保留 —— dev 命令的 PATH/nvm 全靠登录 shell），
-   * Windows 是 PowerShell `-EncodedCommand`。
-   */
-  command?: { id: string; name: string; script: string };
-};
-
-type TerminalCreation = {
-  projectId: string;
-  reservation: TerminalReservation;
-  controller: AbortController;
-  done: Promise<void>;
-  finish: () => void;
-};
 
 export class TerminalSessionManager {
   private stopped = false;
@@ -251,6 +165,13 @@ export class TerminalSessionManager {
     // tab(有订阅)也照清:订阅钉住退出记录会把 16 个会话槽慢慢吃光,反复重启后 create
     // 失败、restart 变成服务中断(第 1 轮审查实锤)。前端本来就只挂同命令最新会话的
     // tab,旧记录被替换是预期行为。
+    //
+    // 「死透」这里读的是**缓存**的端口事实(sessionRunning,下同;问端口要跑 lsof,不能挂在
+    // register 这条同步路径上)。这不是漏洞,因为**命令会话只有 start 和 restart 两个入口**,
+    // 两边在动手之前都已经过 openSession 现问一遍端口(terminal-commands.ts);走到这里时
+    // 「原来那次运行已经结束或被明确停止」已经核过了,这一层是兜底而不是判据。要再加第三个
+    // 创建命令会话的入口,**必须先过同一个门** —— 否则这里会把还开着的服务的记录连同它的
+    // launch token(唯一的归属凭据)一起删掉,那台服务从此没人能停(第 2 轮审查发现 1)。
     for (const sessionId of creation.reservation.replacedSessionIds) {
       const previous = this.sessions.get(sessionId);
       if (previous && this.sessionRunning(previous)) throw new Error("旧命令会话尚未停止，无法替换");
@@ -323,6 +244,8 @@ export class TerminalSessionManager {
       groupAlive: true,
       ports: [],
       portsAlive: false,
+      unresolved: [],
+      portsTruncated: false,
     };
     const session: TerminalSession = {
       ...info,
@@ -337,6 +260,7 @@ export class TerminalSessionManager {
       portScanner: createPortScanner(),
       launchToken,
       ttyPath: (processHandle as unknown as { ptsName?: string }).ptsName ?? null,
+      factsGeneration: 0,
     };
     this.sessions.set(info.id, session);
     processHandle.onData((data) => {
@@ -563,12 +487,17 @@ export class TerminalSessionManager {
   }
 
   /**
-   * 把这条常用命令**最近一次**会话记成「用户停的」。停止命令跑完时用:`docker compose up -d`
-   * 这类启动脚本早就自己退了,没有活进程给 terminate 去标,但「我点过停止」必须留在会话事实里
-   * —— 否则刷新回来还显示着停止按钮(根 AGENTS.md:停止要留下持久可见的状态)。活会话不走这里,
-   * terminate 自己会标。
+   * 把这条常用命令**最近一次**会话记成「用户停的」,并落下这次停止的核验结论。
+   *
+   * 停止路径一律调它,**不分活进程还是守护形状**:`docker compose up -d` 这类启动脚本早就
+   * 自己退了,没有活进程给 terminate 去标;而活进程那条路里 terminate 只标它自己那条会话,
+   * 缓存的 portsAlive 还可能是旧的 true。两种形状都要求「我点过停止」留在会话事实里 ——
+   * 否则刷新回来还显示着停止按钮(根 AGENTS.md:停止要留下持久可见的状态),紧接着点启动还会
+   * 被幂等门拿一条已经退出的会话顶回去(第 2 轮审查发现 1)。
+   *
+   * leftovers = 核不出归属、因此没敢杀也不敢当成停净的那几个 pid(空数组 = 这次核验干净)。
    */
-  markCommandStopped(projectId: string, commandId: string): void {
+  markCommandStopped(projectId: string, commandId: string, leftovers: number[] = []): void {
     let newest: TerminalSession | null = null;
     for (const session of this.sessions.values()) {
       if (session.projectId !== projectId || session.commandId !== commandId) continue;
@@ -580,6 +509,10 @@ export class TerminalSessionManager {
       // 所以这里把缓存的端口事实一并落回去 —— 否则下一拍扫描之前,这条会话还会被
       // sessionRunning 当成「还在跑」,start 的幂等门会拒绝重新启动。
       newest.portsAlive = false;
+      newest.unresolved = [...leftovers];
+      // 推进代次:此刻可能有一次 lsof 探测正飞在路上(取样早于这次停止),它写回来会把
+      // portsAlive 复活成 true。watcher 写之前核对代次,过期的那一拍直接丢掉。
+      newest.factsGeneration += 1;
     }
   }
 
@@ -607,15 +540,25 @@ export class TerminalSessionManager {
       ports: [...session.launchPorts],
       // 这个只能是缓存值:问端口要跑 lsof,不能挂在每次 info() 上(列表接口一次几十条)。
       portsAlive: session.portsAlive,
+      // 只报**还活着**的:这些号停止那刻核不出归属,但它们后来自己退了是常态,
+      // 不过滤就会把界面永久钉在「还没停完」。kill(pid,0) 很便宜,且这个数组几乎总是空的。
+      unresolved: session.unresolved.filter(processAlive),
+      portsTruncated: session.portsTruncated,
     };
   }
 
   /**
-   * 记下这次启动打印的端口(有上限)。只在命令会话上调。
+   * 记下这次启动打印的端口(有上限 —— 一条疯狂刷端口的输出不该把内存和每次停止的 lsof
+   * 预算吃光)。只在命令会话上调。
+   *
+   * **溢出要记账**:超额丢掉的那些是「没能收进来的线索」,不是「不存在的线索」。丢过就把
+   * portsTruncated 立起来,停止那一档据此拒绝从「记下的端口都空了」推出「全停了」
+   * (第 2 轮审查发现 2 的同一类:未核验的候选不许凭端口空闲核销)。
    */
   private recordPorts(session: TerminalSession, ports: number[]): void {
     for (const port of ports) {
-      if (session.launchPorts.size >= MAX_LAUNCH_PORTS) return;
+      if (session.launchPorts.has(port)) continue;
+      if (session.launchPorts.size >= MAX_LAUNCH_PORTS) { session.portsTruncated = true; continue; }
       session.launchPorts.add(port);
     }
   }
@@ -629,20 +572,7 @@ export class TerminalSessionManager {
    * 它开着、启动接口认为它没开」,于是同一个服务被起第二份(第 1 轮审查发现 3)。
    */
   private sessionRunning(session: TerminalSession): boolean {
-    return this.sessionAlive(session) || session.portsAlive;
-  }
-
-  /**
-   * 这条常用命令现在还在跑的会话(含只剩端口线索的守护形状)。start 的幂等门用它 ——
-   * liveCommandSession 只认进程,会把守护化的服务当成没在跑。
-   */
-  runningCommandSession(projectId: string, commandId: string): TerminalSessionInfo | null {
-    for (const session of this.sessions.values()) {
-      if (session.projectId === projectId && session.commandId === commandId && this.sessionRunning(session)) {
-        return this.info(session);
-      }
-    }
-    return null;
+    return this.sessionAlive(session) || session.portsAlive || session.unresolved.some(processAlive);
   }
 
   /**

@@ -43,9 +43,10 @@
  * `listening` / `free` / `unknown`,**unknown 不许当 free 用** —— 调用方据此拒绝宣称已停止。
  */
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { IS_WINDOWS } from "./platform.js";
-import { LSOF_PATH, PS_PATH, processAlive, readProcessTableSync } from "./terminal-process-tree.js";
+import { HAS_PROC, LSOF_PATH, PS_PATH, processAlive, readProcessTableSync } from "./terminal-process-tree.js";
 
 const run = promisify(execFile);
 
@@ -77,6 +78,15 @@ export type PortStopOutcome = {
   spared: { holder: PortHolder; reason: string }[];
   /** 探测没答上来的端口:既不能说它空了,也没人可杀。 */
   unknown: number[];
+  /**
+   * 动过手的进程组里**核不上归属、所以一个字都没动**的成员(此刻仍活着的那些)。
+   *
+   * 早先这些号是被 `filter` 静默丢掉的,于是「这几个端口让出来了」被升级成「这次启动起来
+   * 的东西都停了」(第 2 轮审查发现 2 实测:监听者被收掉、端口 free、界面显示已停止,而同组
+   * 那个 `env -i` 洗掉环境的采集 worker 还在跑)。不杀它是对的 —— 没有归属凭据;**但不能
+   * 顺手把它从账上划掉**:它是一笔没核销的责任,要原样报给用户。
+   */
+  leftovers: { pid: number; reason: string }[];
 };
 
 // ── 认端口 ────────────────────────────────────────────────────────────────────
@@ -105,23 +115,29 @@ export function portsFromOutput(text: string): number[] {
 /**
  * pty 的输出是**流**,不是一行一行的消息:`http://127.0.0.1:8787` 完全可能被拆成
  * `http://127.0.0.` + `1:8787` 两块送来(启动器分次 write,或底层按缓冲区切)。拿无状态
- * 正则逐块匹配,这种地址会整条漏掉;更坏的是五位端口先到四位 —— `\b` 把块尾当成合法
- * 结尾,于是记下一个**错的**四位端口,那个端口上住的是别人(第 1 轮审查发现 5)。
+ * 正则逐块匹配,这种地址会整条漏掉;更坏的是五位端口先到四位 —— 块尾被当成合法结尾,
+ * 于是记下一个**错的**四位端口,那个端口上住的是别人(第 1 轮审查发现 5)。
  *
- * 所以认端口要在流上做:每块前面接上一截尾巴再匹配,并且**只认已经看到右边界的端口**
- * (端口后面还得有一个非数字字符,或者这一块已经确定不会再接数字)。没看到边界的那一截
- * 留到下一块。实现上:先匹配,再把末尾 SCAN_TAIL_KEEP 个字符留作下一块的前缀,已经吐过的
- * 端口靠 `reported` 去重 —— 重叠区域不会把同一个端口报两遍。
+ * 所以认端口要在流上做,不变量是一句话:**无论怎么切,feed 串联 + flush 的结果必须与
+ * 把整条文本一次喂进 `portsFromOutput` 完全一致**。为此有两件事:
+ *
+ *  ① **只认已经看到右边界的端口**(端口后面还得有一个非数字字符,或者流已经到头),
+ *     没看到边界的那一截留给下一块;
+ *  ② 接尾巴时**只在尾巴确实被截断过时**才在最前面垫一个主机名字符。垫片是为了压住
+ *     「从词中间切出来的尾巴被 `^` 当成左边界」——`notlocalhost:8787` 切在 `notloc` /
+ *     `alhost:8787` 之间,拼回去必须仍然不是本机地址。但**尾巴就是流的起点**时,那个
+ *     `^` 是真的:无条件垫片反过来伪造了一个本来不存在的主机名前缀,于是启动脚本只打
+ *     `localhost:8787` 就整条漏掉(第 2 轮审查发现 4 实测:`portsFromOutput` 给
+ *     `[8787]`,同一段文本 feed+flush 给 `[]`;`127.0.0.1` / `0.0.0.0` / `[::1]` 同样)。
+ *     所以记一笔「尾巴前面有没有丢掉过字符」,丢过才垫。
  */
 export function createPortScanner(): { feed(chunk: string): number[]; flush(): number[] } {
+  /** 上一块留下的尾巴(**不含垫片**)。 */
   let tail = "";
+  /** 这截尾巴前面已经丢掉过字符吗 —— 丢过,它的开头就不是流的起点,`^` 不算左边界。 */
+  let truncated = false;
   const reported = new Set<number>();
-  /**
-   * 接尾巴时在最前面垫一个**主机名字符**。尾巴是从上一块中间切出来的,直接拿 `^` 当左
-   * 边界会把 `notlocalhost:8787` 这种切在词中间的字样认成 localhost;垫一个 `x` 之后,
-   * 切点落在词里就仍然粘着词,形不成左边界。真正跨块的地址不受影响 —— 地址最长 23 字、
-   * 尾巴留 32 字,它自己的左边界字符一定也在尾巴里。
-   */
+  /** 垫片:一个主机名字符,把假的左边界压掉(只在 truncated 时用)。 */
   const GLUE = "x";
   const scan = (text: string, final: boolean): number[] => {
     const fresh: number[] = [];
@@ -137,16 +153,23 @@ export function createPortScanner(): { feed(chunk: string): number[]; flush(): n
     }
     return fresh;
   };
+  /** 把尾巴接上这一块,顺手把「有没有丢过字符」更新到接完之后的状态。 */
+  const join = (chunk: string): string => {
+    const glue = truncated && tail ? GLUE : "";
+    const text = glue + tail + chunk;
+    const kept = Math.min(SCAN_TAIL_KEEP, text.length - glue.length);
+    truncated = truncated || text.length - glue.length > SCAN_TAIL_KEEP;
+    tail = text.slice(text.length - kept); // kept ≤ 真实长度,所以绝不会把垫片留进尾巴
+    return text;
+  };
   return {
     feed(chunk: string): number[] {
-      const text = (tail ? GLUE + tail : "") + chunk;
-      tail = text.slice(-SCAN_TAIL_KEEP);
-      return scan(text, false);
+      return scan(join(chunk), false);
     },
     /** 流到头了(会话退出):手里那截尾巴按终态再认一遍 —— 地址恰好是最后一个字时才用到。 */
     flush(): number[] {
       if (!tail) return [];
-      const text = GLUE + tail;
+      const text = (truncated ? GLUE : "") + tail;
       tail = "";
       return scan(text, true);
     },
@@ -245,17 +268,27 @@ async function processCwd(pid: number): Promise<string | null> {
 type Lineage = "ours" | "stranger" | "unknown";
 
 /**
- * 这些号带着这次启动的记号吗。`ps -E` 把**exec 时那份环境**一起打出来,所以双 fork +
- * setsid 的守护进程照样核得到(实测:PPID=1、自成 sid,记号仍在)。
+ * 这些号带着这次启动的记号吗。**按平台读环境** —— 这一问没有跨平台的统一写法:
  *
- * 只有当前用户自己的进程读得到环境;root 的进程 `ps -E` 只打命令 —— 那一档记 unknown,
- * 一样不动它。环境值里可能带换行,所以不以行号认记录:以「行首是号」开新记录,其余行
- * 并进上一条。
+ *  · **Linux**:直接读 `/proc/<pid>/environ`,NUL 分隔、逐项精确比对,没有任何边界启发式;
+ *    读得到就是权威答案(有记号 = 这次的,没有 = 不是这次的),`EACCES` 才是「核不上」。
+ *  · **macOS/BSD**:没有 `/proc`,只能 `ps -E`(把 exec 时那份环境一起打出来,所以双 fork
+ *    + setsid 的守护进程照样核得到:实测 PPID=1、自成 sid,记号仍在)。
+ *
+ * 原先这一问对**所有**非 Windows 平台都发 `ps -E`。那是 macOS/BSD 的写法,Linux 的
+ * procps-ng 直接拒绝它(第 2 轮审查发现 5 容器实测:procps-ng 4.0.2 退 1、stdout 空、
+ * stderr `unsupported SysV option`),于是整条归属核验在 Linux 上**恒为失败** —— 默认停止
+ * 永远报「核不上归属」,服务一个都停不掉。
  */
 async function readLineage(pids: number[], token: string): Promise<Map<number, Lineage>> {
   const lineage = new Map<number, Lineage>();
   if (!pids.length) return lineage;
-  if (IS_WINDOWS || !PS_PATH || !token) {
+  if (IS_WINDOWS || !token) {
+    for (const pid of pids) lineage.set(pid, "unknown");
+    return lineage;
+  }
+  if (HAS_PROC) return lineageFromProc(pids, token);
+  if (!PS_PATH) {
     for (const pid of pids) lineage.set(pid, "unknown");
     return lineage;
   }
@@ -294,6 +327,29 @@ async function readLineage(pids: number[], token: string): Promise<Map<number, L
   return lineage;
 }
 
+/**
+ * Linux:`/proc/<pid>/environ` 是**精确**的 —— NUL 分隔的 `KEY=VALUE` 列表,不用猜边界。
+ * 读失败分两档:`ENOENT` = 这个号已经退出了(不用管),其余(多半 `EACCES`,不是当前用户的
+ * 进程)= 核不上。读成功就是权威:有记号就是这次的,没有就**不是**这次的 ——
+ * 包括 `env -i` 洗成空环境的那一类(macOS 的 `ps -E` 分不出「空环境」和「不给看」,
+ * 只能一律记 unknown;`/proc` 分得出,但两档都不动它,只是说法更准)。
+ */
+function lineageFromProc(pids: number[], token: string): Map<number, Lineage> {
+  const lineage = new Map<number, Lineage>();
+  const needle = `${LAUNCH_ID_ENV}=${token}`;
+  for (const pid of pids) {
+    let environ: string;
+    try { environ = readFileSync(`/proc/${pid}/environ`, "utf8"); }
+    catch (error) {
+      if ((error as { code?: string }).code === "ENOENT") continue; // 已经退出了
+      lineage.set(pid, "unknown");
+      continue;
+    }
+    lineage.set(pid, environ.split("\0").includes(needle) ? "ours" : "stranger");
+  }
+  return lineage;
+}
+
 /** 跟这个号同进程组的全部号(含它自己)。进程表拿不到就只认它自己。 */
 function groupMembers(holder: PortHolder, selfPgid: number | null): number[] {
   if (holder.pgid <= 1 || holder.pgid === selfPgid) return [holder.pid];
@@ -314,19 +370,24 @@ export async function stopByPorts(
   ports: Iterable<number>,
   options: { launchToken: string; graceMs?: number },
 ): Promise<PortStopOutcome> {
-  const outcome: PortStopOutcome = { killed: [], spared: [], unknown: [] };
+  const outcome: PortStopOutcome = { killed: [], spared: [], unknown: [], leftovers: [] };
   if (IS_WINDOWS || !LSOF_PATH) return outcome;
   const selfPgid = readProcessTableSync()?.pgidOf.get(process.pid) ?? null;
+  // **整个动作共用一份预算**:逐端口、每个住户的 inspect/readLineage、TERM/KILL 的等待
+  // 全从这里扣。只在外层逐端口时看一眼的话,一个端口上坐着十个住户就能把标称总时限翻十倍
+  // (第 2 轮审查的非阻塞项)。
   const deadline = Date.now() + STOP_DEADLINE_MS;
+  const left = () => deadline - Date.now();
   const seen = new Set<number>();
   for (const port of ports) {
-    if (Date.now() > deadline) { outcome.unknown.push(port); continue; }
+    if (left() <= 0) { outcome.unknown.push(port); continue; }
     const found = await listeningPids(port);
     if (!found.ok) { outcome.unknown.push(port); continue; }
     for (const pid of found.pids) {
       if (seen.has(pid)) continue;
       seen.add(pid);
       if (pid === process.pid) continue; // 那是 ash 自己
+      if (left() <= 0) { outcome.unknown.push(port); break; }
       const holder = await inspectPid(pid);
       if (!holder) continue; // 刚才还在,现在没了 —— 不用管
       if (selfPgid !== null && holder.pgid === selfPgid) {
@@ -343,8 +404,16 @@ export async function stopByPorts(
       // 向量编码子进程),只杀监听者会留下一地孤儿。**没记号的同组成员不动** ——
       // 进程组不是血缘证据,它只是调度单位(第 1 轮审查)。
       const targets = members.filter((member) => lineage.get(member) === "ours");
-      if (await killPids(targets, options.graceMs ?? TERM_GRACE_MS)) outcome.killed.push(holder);
+      const grace = Math.max(0, Math.min(options.graceMs ?? TERM_GRACE_MS, left()));
+      if (await killPids(targets, grace)) outcome.killed.push(holder);
       else outcome.spared.push({ holder, reason: "发了 TERM 和 KILL 都没停下来" });
+      // **没核销的责任要留在账上**:同组里核不上归属的那几个,杀完之后还活着就记下来。
+      // 把它们静默丢掉,等于拿「端口空了」核销了「这次启动起来的东西都停了」。
+      for (const member of members) {
+        if (member === holder.pid || lineage.get(member) === "ours") continue;
+        if (!processAlive(member)) continue;
+        outcome.leftovers.push({ pid: member, reason: refusal(lineage.get(member)) });
+      }
     }
   }
   return outcome;
