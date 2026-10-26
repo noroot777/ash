@@ -112,15 +112,27 @@ try {
     assert.equal((await task(sample.taskId)).stage, "verified");
   }
   {
+    // 依赖变了就不能再沿用上一张绿结果。身份取的是**安装声明**（node_modules/.package-lock.json
+    // 这类，口径见 src/accept-gate-deps.ts 的 dependencyDigest）——装、删、升级任何一个包都会改到
+    // 它。这里换过一次口径：以前是把依赖目录整棵做字节摘要，所以手改包里一个文件也算「变了」。
     const sample = await fixture("dependencies", 'setTimeout(()=>{' + checksFixed + '},500)');
+    const installed = join(sample.cwd, "node_modules", ".package-lock.json");
     mkdirSync(join(sample.cwd, "node_modules", "dep"), { recursive: true });
     writeFileSync(join(sample.cwd, "node_modules", "dep", "value"), "v1");
+    writeFileSync(installed, '{"packages":{"node_modules/dep":{"version":"1.0.0"}}}');
     await acceptTask(sample.taskId);
     writeFileSync(join(sample.repo, "blocker.txt"), "late blocker");
     await settled(sample.taskId);
     assert.equal((await acceptGateState(sample.taskId)).latest?.stale, false);
+    // **已知漏检面**，钉成显式契约而不是留给下一个人去撞：手改依赖目录里的文件却没重装
+    // （patch-package 打完没提交、npm link 指到本地检出、进去改一行热修），安装声明不动，于是
+    // 依赖实际变了却会沿用上一张绿。这是换口径换来的检测力下降，代价与理由写在 dependencyDigest
+    // 上方；哪天要收回它，从这一条开始改。
     writeFileSync(join(sample.cwd, "node_modules", "dep", "value"), "v2");
-    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, true);
+    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, false,
+      "手改包内文件不动安装声明：已知漏检，不是 bug");
+    writeFileSync(installed, '{"packages":{"node_modules/dep":{"version":"2.0.0"}}}');
+    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, true, "改了安装声明就是依赖变了");
     assert.equal(await acceptGateWouldRun(await task(sample.taskId), await project(sample.projectId)), true);
   }
   {
