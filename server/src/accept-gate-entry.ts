@@ -73,6 +73,12 @@ export type GateEntryProbe = {
   /** 点名要跑的那个东西：脚本名，或相对这份树的路径。 */
   ask: string;
   /**
+   * 起跑前**真去读的那个文件**（相对被测树）：脚本那一档是那份 manifest，路径那一档就是它
+   * 自己。归因层核 git 历史时必须核**同一个文件**，否则两边各按自己的理解去解释命令行，
+   * 落点一挪就各说各话（第 9 轮审查 F2）。所以它是字段，不是从 `by` 那句话里抠出来的。
+   */
+  file: string;
+  /**
    * 起跑那一刻它解析得出来没有。
    *  - `false` 是「测试压根没启动」的**唯一**授权来源；
    *  - `true` 只说明它在树里 —— **不**说明它跑起来了（权限、解释器都可能挡在后面）。
@@ -240,6 +246,10 @@ export function gateEntryAsk(command: string): GateEntryAsk | null {
   return !isAbsolute(head) && head.includes("/") ? { kind: "path", name: head } : null;
 }
 
+/** 这条命令点名的东西落在哪个文件上：脚本那一档是 manifest，路径那一档是它自己。 */
+export const entryFile = (ask: GateEntryAsk): string =>
+  ask.kind === "path" ? ask.name.replace(/^\.\/+/, "") : askManifest(ask);
+
 /** runner 真会读的那份 manifest 的相对路径。 */
 export const askManifest = (ask: GateEntryAsk & { kind: "script" }): string =>
   ask.dir === "." ? "package.json" : `${ask.dir.replace(/\/+$/, "")}/package.json`;
@@ -285,7 +295,9 @@ export function probeGateEntry(treeDir: string, command: string): GateEntryProbe
   if (!ask) return null;
   if (ask.kind === "path") {
     const resolved = insideTree(treeDir, ask.name);
-    return resolved ? { ask: ask.name, resolved: existsSync(resolved), by: "被测快照里的文件" } : null;
+    return resolved
+      ? { ask: ask.name, file: entryFile(ask), resolved: existsSync(resolved), by: "被测快照里的文件" }
+      : null;
   }
   const file = manifestInTree(treeDir, ask);
   if (!file) return null;
@@ -293,7 +305,7 @@ export function probeGateEntry(treeDir: string, command: string): GateEntryProbe
   try { text = readFileSync(join(treeDir, file), "utf8"); } catch { return null; }
   const defined = scriptDefinedIn(text, ask.name);
   return defined === null ? null
-    : { ask: ask.name, resolved: defined, by: `被测快照 ${file} 的 scripts` };
+    : { ask: ask.name, file, resolved: defined, by: `被测快照 ${file} 的 scripts` };
 }
 
 /** 落盘与读回。字段形状变了就当没核过 —— 跨机接力和旧行都可能带着老形状。 */
@@ -304,7 +316,8 @@ export function decodeGateEntryProbe(raw: string | null | undefined): GateEntryP
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as Partial<GateEntryProbe>;
-    return typeof value.ask === "string" && typeof value.resolved === "boolean" && typeof value.by === "string"
-      ? { ask: value.ask, resolved: value.resolved, by: value.by } : null;
+    return typeof value.ask === "string" && typeof value.file === "string"
+      && typeof value.resolved === "boolean" && typeof value.by === "string"
+      ? { ask: value.ask, file: value.file, resolved: value.resolved, by: value.by } : null;
   } catch { return null; }
 }

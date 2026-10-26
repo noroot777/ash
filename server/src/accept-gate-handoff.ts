@@ -67,16 +67,23 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
   // 这条时间线是用户刷新之后唯一找得回「这次交回去是让它干什么」的地方，所以它必须跟交出去
   // 的那副面孔一致（第 7 轮审查 N2）：免修那一档明确不许它改代码，这儿若还写「修完重新点
   // 验收」就是两句相反的话。三副面孔的授权判据见 accept-gate-messages.ts。
-  const next = row.failure !== "command_missing"
+  //
+  // **读的必须是 `view`，不是 `row`**（第 9 轮审查 N1）：自动交接传进来的 row 是**结算前**
+  // 读出来的那一行，failure / missAttribution 还空着，照它分叉等于永远走「修完重新点验收」
+  // 那一句 —— 而同一次交出去的正式输入（上面用的是 view）写的是「不要为这件事改任何代码」。
+  // 手动再交那条路本来就传终态行投影出来的 view，两条路因此同解。
+  const failure = view.failure ?? null;
+  const attribution = view.missAttribution ?? null;
+  const next = failure !== "command_missing"
     ? "修完重新点验收即可，验收会自动再跑一遍。"
-    : row.missAttribution === "not-mine"
+    : attribution === "not-mine"
       ? "结论说这不是这次改动的事，它不会为此改代码，会把出路转述给你 —— 出路（合目标分支 / 这次跳过）都要你自己定。"
-      : row.missAttribution === "mine"
+      : attribution === "mine"
         ? "结论指向是这次改动把这条命令弄没的，它会去改回来，之后重新点验收。"
         : "它要先核是不是这次改动把这条命令弄没的，再决定去改还是把出路转述给你。";
   await appendTaskTimeline(
     row.taskId,
-    `门禁交接：已叫醒该任务去看这条命令${row.failure === "command_missing" ? "为什么没跑起来" : "为什么红"}`
+    `门禁交接：已叫醒该任务去看这条命令${failure === "command_missing" ? "为什么没跑起来" : "为什么红"}`
       + `（日志 ${row.logPath}）。${again ? "这是你在验收台上手动再交一次。" : ""}${next}`,
   );
   // byBackend：占真人回合，但字是后端写的（同验收冲突交接）。

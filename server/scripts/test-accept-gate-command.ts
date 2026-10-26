@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnAcceptGate, stampAshNote, stopAcceptGate, type GateExit } from "../src/accept-gate-process.js";
 import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
-import { classifyGateLaunch, foreignOutputIn, missFailure, occursAsWord } from "../src/accept-gate-miss.js";
-import { gateEntryAsk, probeGateEntry, scriptDefinedIn,
+import { classifyGateLaunch, foreignOutputIn, missFailure, occursAsWord,
+  runnerRanOrLookedElsewhere } from "../src/accept-gate-miss.js";
+import { decodeGateEntryProbe, encodeGateEntryProbe, gateEntryAsk, probeGateEntry, scriptDefinedIn,
   type GateEntryProbe } from "../src/accept-gate-entry.js";
 import { PROBE_BY, testGateNoticeWording } from "./test-accept-gate-notice.js";
 
@@ -132,7 +133,7 @@ try {
       // data/runs/4n0946g2eW1e/accept-gate-MzYxZdGAyzhv.log 原文（四条一模一样）。
       name: "原始事故（npm 10）", command: "npm run test:accept", exitCode: 1,
       log: 'npm error Missing script: "test:accept"\nnpm error\nnpm error To see a list of scripts, run:\nnpm error   npm run\n',
-      entry: { ask: "test:accept", resolved: false, by: PROBE_BY },
+      entry: { ask: "test:accept", file: "package.json", resolved: false, by: PROBE_BY },
       kind: "entry", missing: "test:accept", forced: "entry",
     },
     // ── 各家 runner 的措辞：这里验的是「那个名字抽得出来」。没有起跑前的事实，一律 inner ──
@@ -176,21 +177,21 @@ try {
     // ── 起跑前核到「入口在树里」：命令确实跑起来了，缺的是它内部那一层点名的东西 ──
     { name: "同名嵌套（审查二 F1 反例①）", command: "npm run test:accept", exitCode: 1,
       log: 'ACCEPTANCE STARTED\nnpm error Missing script: "test:accept"\n',
-      entry: { ask: "test:accept", resolved: true, by: PROBE_BY },
+      entry: { ask: "test:accept", file: "package.json", resolved: true, by: PROBE_BY },
       kind: "inner", missing: "test:accept", forced: "inner" },
     { name: "自删入口后报断言失败（审查二 F1 反例②）", command: "./verify.sh", exitCode: 1,
       log: "ACCEPTANCE STARTED\nASSERTION FAILED\n",
-      entry: { ask: "./verify.sh", resolved: true, by: "被测快照里的文件" },
+      entry: { ask: "./verify.sh", file: "verify.sh", resolved: true, by: "被测快照里的文件" },
       kind: null },
     { name: "同名但起跑前没核到", command: "npm run test:accept", exitCode: 1,
       log: 'npm error Missing script: "test:accept"\n', entry: null,
       kind: "inner", missing: "test:accept", forced: "entry" },
     { name: "跑起来之后缺模块", command: "npm run test:accept", exitCode: 1,
       log: "node:internal/modules: Error: Cannot find module 'playwright'",
-      entry: { ask: "test:accept", resolved: true, by: PROBE_BY }, kind: "inner", missing: "playwright", forced: "inner" },
+      entry: { ask: "test:accept", file: "package.json", resolved: true, by: PROBE_BY }, kind: "inner", missing: "playwright", forced: "inner" },
     { name: "跑起来之后缺 python 包", command: "npm run test:accept", exitCode: 1,
       log: "/usr/bin/python3: No module named pytest",
-      entry: { ask: "test:accept", resolved: true, by: PROBE_BY }, kind: "inner", missing: "pytest", forced: "inner" },
+      entry: { ask: "test:accept", file: "package.json", resolved: true, by: PROBE_BY }, kind: "inner", missing: "pytest", forced: "inner" },
     { name: "make 缺 prerequisite", command: "make accept", exitCode: 2,
       log: "KB START\nmake: *** No rule to make target 'fixture.json', needed by 'accept'.  Stop.",
       kind: "inner", missing: "fixture.json", forced: "inner" },
@@ -205,28 +206,36 @@ try {
     { name: "preload 在真跑那次把脚本生成出来（审查八 F1 反例）",
       command: "NODE_OPTIONS='--require ./preload.cjs' npm run test:accept", exitCode: 1,
       log: "ACCEPTANCE STARTED\nASSERTION FAILED\n",
-      entry: { ask: "test:accept", resolved: false, by: PROBE_BY },
+      entry: { ask: "test:accept", file: "package.json", resolved: false, by: PROBE_BY },
       kind: "inner", missing: "test:accept", forced: "inner" },
     { name: "配置把 runner 指到子项目、那边真跑了（审查五/六/八 F1）", command: "npm run test:accept", exitCode: 1,
       log: "> child@1.0.0 test:accept\n> echo ACCEPTANCE STARTED; exit 1\n\nACCEPTANCE STARTED\n",
-      entry: { ask: "test:accept", resolved: false, by: PROBE_BY },
+      entry: { ask: "test:accept", file: "package.json", resolved: false, by: PROBE_BY },
       kind: "inner", missing: "test:accept", forced: "inner" },
     { name: "日志太大被截断（第三件事核不出来）", command: "npm run test:accept", exitCode: 1,
       log: 'npm error Missing script: "test:accept"\n', logComplete: false,
-      entry: { ask: "test:accept", resolved: false, by: PROBE_BY },
+      entry: { ask: "test:accept", file: "package.json", resolved: false, by: PROBE_BY },
+      kind: "inner", missing: "test:accept", forced: "inner" },
+    // 本机实测 npm 11.17 的原文：workspace 配置把落点挪到子项目、那边缺同名脚本时，报错块
+    // 自带这几行；根目录缺脚本那一次一行都没有。这是第 9 轮审查两条反例唯一的分辨依据。
+    { name: "npm 自己交代它跑过脚本、读的是子项目那份（②′不成立）", command: "npm run test:accept", exitCode: 1,
+      log: "npm error Lifecycle script `test:accept` failed with error:\nnpm error workspace child\n"
+        + "npm error location /tmp/x/child\nnpm error Missing script: \"test:accept\"\n"
+        + "npm error\nnpm error To see a list of scripts, run:\nnpm error   npm run --workspace=child\n",
+      entry: { ask: "test:accept", file: "package.json", resolved: false, by: PROBE_BY },
       kind: "inner", missing: "test:accept", forced: "inner" },
     { name: "runner 自己没说它解析不出来（②不成立）", command: "npm run test:accept", exitCode: 1,
       log: "npm error code ELIFECYCLE\nnpm error errno 1\n",
-      entry: { ask: "test:accept", resolved: false, by: PROBE_BY },
+      entry: { ask: "test:accept", file: "package.json", resolved: false, by: PROBE_BY },
       kind: "inner", missing: "test:accept", forced: "inner" },
 
     // ── 真跑起来、真红了：一个字都不许被改写 ──
     { name: "真的断言失败", command: "npm run test:accept", exitCode: 1,
       log: "KB START\n1) 登录态应当保留\n   AssertionError: expected 200 to equal 302\n  1 failing\n",
-      entry: { ask: "test:accept", resolved: true, by: PROBE_BY }, kind: null },
+      entry: { ask: "test:accept", file: "package.json", resolved: true, by: PROBE_BY }, kind: null },
     { name: "日志里只是提到过这些字", command: "npm run test:accept", exitCode: 1,
       log: "KB START\n看文档: 如果报 missing script 就先 npm i\n  2 failing\n",
-      entry: { ask: "test:accept", resolved: true, by: PROBE_BY }, kind: null },
+      entry: { ask: "test:accept", file: "package.json", resolved: true, by: PROBE_BY }, kind: null },
   ];
   for (const testCase of MISS_CASES) {
     const miss = classifyGateLaunch({ command: testCase.command, exitCode: testCase.exitCode, log: testCase.log,
@@ -246,7 +255,7 @@ try {
   for (const testCase of MISS_CASES.filter(one => one.missing)) {
     const ask = testCase.missing!;
     const absent = classifyGateLaunch({ ...testCase, logComplete: testCase.logComplete ?? true,
-      entry: { ask, resolved: false, by: PROBE_BY } });
+      entry: { ask, file: "package.json", resolved: false, by: PROBE_BY } });
     const forced = testCase.forced ?? "entry";
     assert.equal(absent?.kind, forced, `${testCase.name}: 强行把①设成「不在树里」之后该落 ${forced}`);
     assert.equal(absent!.name, ask, `${testCase.name}: 名字取起跑前核的那个`);
@@ -259,7 +268,7 @@ try {
       assert.match(absent!.evidence, /没有别的程序写过东西/, `${testCase.name}: entry 的判据要把第三件事也写上`);
       assert.equal(missFailure(absent), "command_missing", `${testCase.name}: 三件齐了才改写 failure`);
     }
-    for (const entry of [{ ask, resolved: true, by: PROBE_BY }, null]) {
+    for (const entry of [{ ask, file: "package.json", resolved: true, by: PROBE_BY }, null]) {
       const weaker = classifyGateLaunch({ ...testCase, logComplete: testCase.logComplete ?? true, entry });
       assert.notEqual(weaker?.kind, "entry",
         `${testCase.name}: ${entry ? "入口在树里" : "起跑前没核到"}时,日志措辞不许把它抬成 entry`);
@@ -398,7 +407,7 @@ try {
       workspaces: ["child"], scripts: { build: "echo x" } }));
     writeFileSync(join(tree, "child/package.json"), JSON.stringify({ name: "child", private: true,
       scripts: { "test:accept": "echo c" } }));
-    const absent = { ask: "test:accept", resolved: false, by: PROBE_BY };
+    const absent = { ask: "test:accept", file: "package.json", resolved: false, by: PROBE_BY };
     assert.deepEqual(probeGateEntry(tree, "npm run test:accept"), absent, "读命令行解释出来的那份 manifest");
     // 历史反例原样留着：这几种都会让 runner 去读别处，而这一层读不出这件事。
     for (const rc of ["workspace=child\n", "workspace[]=child\n"]) {
@@ -412,7 +421,7 @@ try {
     }
     // 命令行上解释得了的那一档照核那份 manifest（第 3 轮审查 F1 反例②）。
     assert.deepEqual(probeGateEntry(tree, "npm --prefix child run test:accept"),
-      { ask: "test:accept", resolved: true, by: "被测快照 child/package.json 的 scripts" },
+      { ask: "test:accept", file: "child/package.json", resolved: true, by: "被测快照 child/package.json 的 scripts" },
       "换了目录就核那份 manifest");
     assert.deepEqual(probeGateEntry(tree, "npm run --silent test:accept"), absent,
       "`--silent` 这种确定只影响输出的开关不改答案");
@@ -422,7 +431,14 @@ try {
       "踩出这棵树的目录一律不判");
     assert.equal(probeGateEntry(tree, "(./grouped.sh)"), null, "读不准的 shell 语义照旧白卷");
     assert.deepEqual(probeGateEntry(tree, "./missing.sh"),
-      { ask: "./missing.sh", resolved: false, by: "被测快照里的文件" }, "路径那一档看文件在不在");
+      { ask: "./missing.sh", file: "missing.sh", resolved: false, by: "被测快照里的文件" }, "路径那一档看文件在不在");
+    // 落盘与读回：`file` 是归因层核 git 时要对齐的那个字段（第 9 轮审查 F2），所以它缺了
+    // 就当没核过 —— 旧行、跨机接力都可能带着老形状，照老形状去核 git 等于各说各话。
+    const probe = probeGateEntry(tree, "npm --prefix child run test:accept")!;
+    assert.deepEqual(decodeGateEntryProbe(encodeGateEntryProbe(probe)), probe, "新形状原样读回");
+    assert.equal(decodeGateEntryProbe(JSON.stringify({ ask: "test:accept", resolved: false, by: PROBE_BY })), null,
+      "老形状（没有 file）一律当没核过");
+    assert.equal(decodeGateEntryProbe("not json"), null, "读不动就当没核过");
     rmSync(tree, { recursive: true, force: true });
   }
 
@@ -448,6 +464,16 @@ try {
     "每一行都要打上标记，已经有的不许打第二遍，空行照旧留空");
   assert.equal(foreignOutputIn(stampAshNote(multiline), "npm"), false, "打完标记就不该再被当成别人的输出");
   assert.equal(foreignOutputIn(multiline, "npm"), true, "没逐行打标记的多行注记正是那个 bug 的样子");
+  // ②′ runner 自己交代的两件否决事项（第 9 轮审查 F1/F2 的根因）。实测原文见上面那一条用例。
+  const workspaceSaid = "npm error Lifecycle script `test:accept` failed with error:\n"
+    + "npm error workspace child\nnpm error location /tmp/x/child\nnpm error Missing script: \"test:accept\"\n";
+  assert.equal(runnerRanOrLookedElsewhere(workspaceSaid, "npm"), true, "它说了跑过脚本、读的是别处");
+  assert.equal(runnerRanOrLookedElsewhere('npm error Missing script: "test:accept"\nnpm error\n'
+    + "npm error To see a list of scripts, run:\nnpm error   npm run\n", "npm"), false,
+    "根目录缺脚本那一次它什么都没多说 —— 不许把普通缺失也否决掉");
+  assert.equal(runnerRanOrLookedElsewhere(workspaceSaid, "yarn"), false, "没实测过的 runner 不外推");
+  assert.equal(runnerRanOrLookedElsewhere(workspaceSaid, null), false, "没人认领就没有「它说过」这件事");
+
   // 谁都没认领过（runner=null）时：有输出就是别人写的 —— 没有哪一行能拿「runner 自己的报错」
   // 豁免。`.npmrc` 把落点改到子项目那一次真跑了脚本，靠的就是这一条才答对。
   assert.equal(foreignOutputIn("\n[ash] 开跑\nACCEPTANCE STARTED\nASSERTION FAILED\n", null), true,

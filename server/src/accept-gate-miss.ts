@@ -29,10 +29,15 @@
 //   ① 起跑前核过：那个名字在它该在的地方没有（必要条件，不是充分条件）；
 //   ② **runner 自己说了**它解析不出这个名字，且那个名字就是命令点名的那个（路径那一档可以
 //      由 127/126 顶上，那是 POSIX 的约定）—— 它要是解析到了别的东西，就不会这么说；
+//   ②′ **而且那家 runner 没说过反话**：它一旦自己交代「我把这条当脚本跑过了」或「我读的是
+//      另一份 manifest」（npm 的 `Lifecycle script` / `workspace` / `location` 那几行，实测
+//      见 `RUNNER_RAN_OR_ELSEWHERE`），①读的那份就不是它真去找的那份。第 9 轮审查的两条
+//      反例都从这儿穿过去：workspace 配置把落点挪到子项目，子项目缺同名脚本时 npm 照样打
+//      `Missing script`，项目自己的输出又被 `>` 引走，于是①②③全都成立；
 //   ③ 这次日志里**除了门禁自己的记事和那家 runner 自己的报错，没有别的程序写过东西** ——
 //      任何被测程序一跑起来就会在这儿留下痕迹（npm 非 silent 时还会先回显 `> 包名@版本
 //      脚本名`）。这是「一行都没跑到」仅有的直接证据。
-// 三件缺一件就只报观察、不改 failure、不免修（`withheld` 记的就是缺了哪一件）。残余的那个
+// 缺一件就只报观察、不改 failure、不免修（`withheld` 记的就是缺了哪一件）。残余的那个
 // 口子写在 `foreignOutputIn` 的注释里。
 //
 // 所以三档：
@@ -55,7 +60,7 @@ import { gateEntryAsk, type GateEntryProbe } from "./accept-gate-entry.js";
 export type MissKind = "entry" | "inner";
 
 /** 三件必要条件里缺的是哪一件（见文件头）。 */
-export type MissWithheld = "foreign-output" | "no-runner-claim" | "unreadable";
+export type MissWithheld = "ran-elsewhere" | "foreign-output" | "no-runner-claim" | "unreadable";
 
 export type GateLaunchMiss = {
   kind: MissKind;
@@ -130,6 +135,39 @@ const RUNNER_SELF_OUTPUT: Record<string, RegExp> = {
   shell: /^[^\s:]*(?:sh|bash|ksh|dash)(?:\[\d+\])?:/,
   zsh: /^zsh(?::\d+)?:/,
 };
+
+/**
+ * 一家 runner 自己说出来的**两件会一票否决的事**：它把这条当脚本跑过了、或者它读的是另一份
+ * manifest。只收这台机器上实测过的 npm 11.17。
+ *
+ * 为什么非得有这一道（第 9 轮审查 F1/F2 的根因）：起跑前那一层是纯读的，它读哪份 manifest
+ * 由命令行解释出来，而 **workspace 这一族配置能把 npm 的落点整个挪走**（实测四层都行：命令
+ * 里的前置赋值 `npm_config_workspace=child`、继承来的同名环境变量、仓库 `.npmrc` 里的
+ * `workspace=child`、`npm_config_workspaces=true`）。落点一挪，「根目录那份 manifest 里没有
+ * 这个名字」就跟「它没跑起来」没有关系了 —— 真跑那次可能在子项目里跑了、红了（F1），也可能
+ * 子项目那份定义正是这次改动删掉的（F2），两种都会被旧判据发成一张免修令。
+ *
+ * 要命的是光看那三件事分不出来：npm 在子项目里缺同名脚本时照样打 `Missing script: "x"`，
+ * 项目自己的输出又能被 `>` 引到文件里，于是「日志里只有 npm 自己的行」也成立。
+ *
+ * 但 npm **自己会说**（本机实测，根目录缺脚本那一次这几行一个都没有）：
+ *   npm error Lifecycle script `test:accept` failed with error:
+ *   npm error workspace child
+ *   npm error location /private/tmp/npm-cfg/child
+ *   npm error   npm run --workspace=child
+ * 所以这一道不去枚举 npm 的配置语义（枚举补一个漏一个，第 5、6 轮已经证明走不通），而是
+ * 听它自己交代：它一说「我跑了什么」或「我读的是别处」，起跑前那份读就作不了数。
+ */
+const RUNNER_RAN_OR_ELSEWHERE: Record<string, RegExp> = {
+  npm: /^npm (?:error|ERR!)\s+(?:Lifecycle script |workspace |location |npm run --workspace)/,
+};
+
+/** runner 自己有没有说「我跑了什么」或「我读的是别处那份」。没实测过的 runner 一律 false。 */
+export function runnerRanOrLookedElsewhere(log: string, runner: string | null): boolean {
+  const re = runner ? RUNNER_RAN_OR_ELSEWHERE[runner] : undefined;
+  if (!re) return false;
+  return log.split("\n").some(line => re.test(line.trim()));
+}
 
 /**
  * 这次日志里有没有**别的程序**写过东西。`null` = 核不出来（日志被截断，或者认领这个名字的
@@ -229,17 +267,24 @@ export function classifyGateLaunch(opts: { command: string; exitCode: number | n
     const foreign = opts.logComplete === true
       ? foreignOutputIn(opts.log, claimed?.runner ?? (shellSaid ? "shell" : null))
       : null;
-    if ((claimed || shellSaid) && foreign === false) {
+    // ②′ 同一个 runner 自己交代的两件否决事项：它跑过脚本、或者它读的是别处那份 manifest
+    //    （workspace 配置挪落点，第 9 轮审查 F1/F2 的根因，判据见 RUNNER_RAN_OR_ELSEWHERE）。
+    //    整份日志都看：这里只需要一个正面命中，截断与否不影响「它确实说过」。
+    const elsewhere = runnerRanOrLookedElsewhere(opts.log, claimed?.runner ?? null);
+    if ((claimed || shellSaid) && foreign === false && !elsewhere) {
       const said = claimed ? claimed.text
         : `退出码 ${opts.exitCode}（POSIX shell：${opts.exitCode === 127 ? "有东西没找到" : "找到了但不可执行"}）`;
       return { kind: "entry", name: entry.ask, by: entry.by, entryResolved: false,
         evidence: `${said}；起跑前核过 ${entry.by}：没有 ${entry.ask}；`
-          + "这一次的日志里除了它自己的报错，没有别的程序写过东西" };
+          + "这一次的日志里除了它自己的报错，没有别的程序写过东西，"
+          + "它也没说自己跑过什么、或者读的是别处那份 manifest" };
     }
     // 缺一件就只报观察：如实说核到了什么、哪一件没过，**不**改写 failure，也不免修。
     return { kind: "inner", name: entry.ask, by: entry.by, entryResolved: false,
       sameName: !!claimed,
-      withheld: foreign === true ? "foreign-output" : foreign === null ? "unreadable" : "no-runner-claim",
+      // 优先报最硬的那一件：runner 自己交代 > 日志里有别人的输出 > 它没认领 > 核不出来。
+      withheld: elsewhere ? "ran-elsewhere"
+        : foreign === true ? "foreign-output" : foreign === null ? "unreadable" : "no-runner-claim",
       evidence: `${claimed ? `${claimed.text}；` : ""}起跑前核过 ${entry.by}：没有 ${entry.ask}` };
   }
   // ② 日志里认出某个名字没解析出来。谁点名的、命令整体有没有跑起来，一律不推断。
@@ -415,18 +460,25 @@ function innerLines(miss: GateLaunchMiss, subject: string, ran: string, command:
   // 起跑前读到「它不在」，但另两件必要条件没齐（第 8 轮审查 F1）。说清缺的是哪一件 ——
   // 那是用户唯一能据以自己去看一眼的线索。
   if (miss.withheld) {
-    const why = miss.withheld === "foreign-output"
+    const why = miss.withheld === "ran-elsewhere"
+      ? "可是 runner 自己说了它把这条当脚本跑过、或者它读的是另一份 manifest —— 那起跑前读的那份就不是它真去找的那份，「它一行都没跑到」这句话也就立不住"
+      : miss.withheld === "foreign-output"
       ? "可是这一次的日志里有别的程序写过东西 —— 有东西真的跑了，所以「它一行都没跑到」这句话不成立"
       : miss.withheld === "unreadable"
         ? "可是这一次的日志核不出来是谁写的（太大被截断了，或者那家 runner 的输出形状这台机器上没实测过）"
         : "可是 runner 自己并没说它解析不出这个名字 —— 那它很可能解析到了别的东西：配置能把 runner 指到另一份 manifest，命令也能在跑的过程中把这个脚本生成出来";
     // 嘴被命令自己堵上时，最有用的一句是「去掉它再跑一次」—— 那样 runner 会自己说清。
     const silenced = miss.withheld === "no-runner-claim" ? outputSilenced(command) : null;
+    // 落点被挪走时，npm 自己在报错里写了挪到哪儿（workspace / location 那几行），那是用户
+    // 下一步唯一要看的东西 —— 真正缺的那个定义在那边，不在起跑前读的这一份里。
+    const elsewhere = miss.withheld === "ran-elsewhere"
+      ? "想拿到确切结论：看日志里 runner 自己那几行（npm 会写出 workspace 和 location）—— 它去的是那份 manifest，这条命令缺没缺、是谁删的都要在那边核。" : "";
     return [
       `起跑前在 ${miss.by} 里没找到 ${subject}，${why}。`,
       `判据：${miss.evidence}${ran}。`,
       `所以这一层不敢说它没启动，更不敢说这条红不用你修。`
         + (silenced ? `想拿到确切结论：把这条命令里的「${silenced.trim()}」去掉再点一次验收 —— 它把 runner 的报错一起吞了（实测带上它连「找不到哪个脚本」都不打印）。` : "")
+        + elsewhere
         + tail,
     ];
   }

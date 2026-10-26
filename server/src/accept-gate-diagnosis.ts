@@ -19,8 +19,8 @@ import { statSync } from "node:fs";
 import { acceptGateLogHead } from "./accept-gate-process.js";
 import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
   type GateMissOrigin } from "./accept-gate-miss.js";
-import { askManifest, decodeGateEntryProbe, gateEntryAsk, scriptDefinedIn,
-  type GateEntryAsk } from "./accept-gate-entry.js";
+import { decodeGateEntryProbe, entryFile, gateEntryAsk, scriptDefinedIn,
+  type GateEntryProbe, type GateEntryAsk } from "./accept-gate-entry.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 
@@ -142,8 +142,7 @@ async function definitionOnTree(repo: string, commit: string, ask: GateEntryAsk,
  * 定义级那一档**跟着 runner 真会读的那个目录走**（`npm --prefix child run x` 读的是
  * `child/package.json`，不是根目录那份 —— 第 3 轮审查 F1）。
  */
-const askFile = (ask: GateEntryAsk) => ask.kind === "path"
-  ? ask.name.replace(/^\.\/+/, "") : askManifest(ask);
+const askFile = entryFile;
 
 /**
  * 这个**定义**是哪一次提交带进来的：沿着改过那份文件的提交从旧往新走，第一次核出「定义在
@@ -253,7 +252,8 @@ async function textIntroducedBy(repo: string, targetCommit: string, sourceCommit
  * 提交号就成立，是最低那一档也要给的事实（需求第 2 点允许退到这里）。
  */
 async function readOrigin(repo: string, targetBranch: string, sourceCommit: string | null,
-  name: string | null, command: string, startCommit: string | null): Promise<GateMissOrigin | null> {
+  name: string | null, command: string, startCommit: string | null,
+  probe: GateEntryProbe | null): Promise<GateMissOrigin | null> {
   const b = budget();
   // `--verify --quiet` 对「没有这条分支」退 1，那是确定答案,不是读不出来。
   const resolved = await gitRun(repo, ["rev-parse", "--verify", "--quiet", `${targetBranch}^{commit}`], b, [1]);
@@ -265,8 +265,13 @@ async function readOrigin(repo: string, targetBranch: string, sourceCommit: stri
     behind: Number.isFinite(behind as number) ? behind as number : null,
     holders: [], absent: null, removedByTask: null, targetAddedIt: null, unverified: true };
   // ── ① 定义级：命令形状认得出来，就能给出「有／没有」的确定答案 ──
+  // **核的对象必须跟起跑前真核过的那个是同一个**（第 9 轮审查 F2）：这一层重新解释一遍命令行
+  // 只会再得到同一个静态答案，而那个答案可能压根不是 runner 真去找的那份 manifest。对不上
+  // （没核过、名字不同、落点那份文件不是同一个）就不走这一档 —— 不给 absent、不给
+  // removedByTask，于是归因只能落 unknown，不会变成一张免修令。
   const ask = gateEntryAsk(command);
-  if (ask) {
+  const sameObject = !!ask && !!probe && probe.ask === ask.name && probe.file === askFile(ask);
+  if (ask && sameObject) {
     const onTarget = await definitionOnTree(repo, targetCommit, ask, b);
     const inSnapshot = sourceCommit ? await definitionOnTree(repo, sourceCommit, ask, b) : null;
     // 「没启动」推不出「不是你改的」（审查 F1）：基线上有、快照里没了 = 这次改动弄没的。
@@ -334,10 +339,11 @@ export async function diagnoseGateFailure(row: GateRow, outcome: { failure: Acce
   // **入口事实只从那一行读回来**：它是 spawn 之前核的（accept-gate-entry.ts），现在再去
   // 看一眼快照只会拿到跑完之后的状态 —— 审查 F1 那条自删脚本就是这么被说成「没启动」的。
   const logSize = (() => { try { return statSync(row.logPath).size; } catch { return null; } })();
+  const probe = decodeGateEntryProbe(row.entryProbe);
   const miss = classifyGateLaunch({ command: row.command, exitCode: outcome.exitCode,
     log: acceptGateLogHead(row.logPath, LOG_PROOF_BYTES),
     logComplete: logSize !== null && logSize <= LOG_PROOF_BYTES,
-    entry: decodeGateEntryProbe(row.entryProbe) });
+    entry: probe });
   if (!miss) return null;
   // inner 这一档不去核仓库：缺的是命令内部点名的东西（node 模块、python 包），「它在
   // 目标分支上有没有」对那种缺失既答不准也帮不上忙，查了只会给出一句误导的话。
@@ -348,7 +354,8 @@ export async function diagnoseGateFailure(row: GateRow, outcome: { failure: Acce
   const startCommit = miss.kind === "entry"
     ? (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0)?.worktreeStartCommit ?? null : null;
   const origin = repo && row.targetBranch
-    ? await readOrigin(repo, row.targetBranch, row.sourceCommit ?? null, miss.name, row.command, startCommit).catch(() => null)
+    ? await readOrigin(repo, row.targetBranch, row.sourceCommit ?? null, miss.name, row.command, startCommit, probe)
+      .catch(() => null)
     : null;
   // 「测试有没有启动」和「该不该由 agent 去改代码」是两件事，分开存（第 3 轮审查 F2）：
   //  · mine     这次改动自己把它删了/改名了 → 这条红就是要改代码的那一种，连 failure 都不改写；

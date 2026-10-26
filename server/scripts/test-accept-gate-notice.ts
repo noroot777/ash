@@ -148,6 +148,7 @@ export function testGateNoticeWording(): void {
   // 第四种（第 8 轮审查 F1）：起跑前读到「它不在」，但另两件必要条件缺一件。措辞必须说清
   // **缺的是哪一件** —— 那是用户唯一能据以自己去看一眼的线索；三种都不许说「没启动」。
   for (const [withheld, expected] of [
+    ["ran-elsewhere", /读的是另一份 manifest/],
     ["foreign-output", /有别的程序写过东西/],
     ["no-runner-claim", /并没说它解析不出这个名字/],
     ["unreadable", /核不出来是谁写的/],
@@ -162,6 +163,7 @@ export function testGateNoticeWording(): void {
       `${withheld}: 不许摆出免修那一档的结论和出路`);
     assert.equal(/去掉再点一次验收/.test(held), false,
       `${withheld}: 命令里没有堵嘴的开关就别让人去掉什么`);
+    assert.equal(/\*\*|`/.test(held), false, `${withheld}: 结论要纯文本`);
   }
 
   // ②拿不到是**命令自己**造成的那一种（第 8 轮实测：`npm run --silent nosuch` 一个字都不打印）：
@@ -178,6 +180,8 @@ export function testGateNoticeWording(): void {
       `${flag}: 要指名是哪个开关堵的嘴`);
     assert.equal(/\*\*|`/.test(silenced), false, `${flag}: 结论要纯文本,开关名也不许裹反引号`);
     assert.match(silenced, /并没说它解析不出这个名字/, `${flag}: 缺的那一件照说`);
+    assert.equal(/workspace 和 location/.test(silenced), false,
+      `${flag}: 缺的不是落点那一件,别把别档的出路搬过来`);
     assert.match(silenced, /更不敢说这条红不用你修/, `${flag}: 判据不许因为给了出路就松一档`);
     const otherTier = gateCommandMissNotice({
       command: `npm run ${flag} test:accept`, sourceCommit: "de91d6c0", origin: null,

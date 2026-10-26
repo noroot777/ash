@@ -99,7 +99,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   // 起跑**前**那份事实必须落在这一行上：结算可能发生在重启之后，而跑完再核一次拿到的是
   // 跑完之后的状态（审查 F1 那条自删脚本就是这么被说成「没启动」的）。
   assert.deepEqual(JSON.parse(run.entryProbe ?? "null"),
-    { ask: "test:accept", resolved: false, by: "被测快照 package.json 的 scripts" },
+    { ask: "test:accept", file: "package.json", resolved: false, by: "被测快照 package.json 的 scripts" },
     "起跑前核到的入口事实要原样落盘");
   // 「未启动」和「该不该改代码」是两件事，分开存（第 3 轮审查 F2）。这一条核出来是
   // not-mine：基线上没有定义、目标分支上有。
@@ -142,6 +142,14 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   const timeline = () => readFileSync(sessionTranscriptPath(taskId, seededSession), "utf8");
   for (let i = 0; i < 200 && !/一行都没跑到/.test(timeline()); i++) await sleep(25);
   assert.match(timeline(), /一行都没跑到/, "结论要单独进时间线（用户刷新后唯一找得回的地方）");
+  // 自动交接那条时间线必须跟交出去的正式输入同解（第 9 轮审查 N1）：这一档的正式输入写的是
+  // 「不要为这件事改任何代码」，时间线若还写「修完重新点验收」就是两句相反的话。自动交接
+  // 拿到的 row 是结算**前**那一行，所以它只能读结算后的 view。
+  for (let i = 0; i < 200 && !/门禁交接/.test(timeline()); i++) await sleep(25);
+  assert.match(timeline(), /门禁交接：已叫醒该任务去看这条命令为什么没跑起来/, "交接这件事要落时间线");
+  assert.match(timeline(), /它不会为此改代码/, "免修那一档的时间线要跟正式输入同解");
+  assert.equal(/修完重新点验收即可/.test(timeline()), false,
+    "免修那一档不许在时间线上写「修完重新点验收」（审查九 N1）");
 
   // 交回给 agent 的那份字：不许派「去修代码」这件它根本做不到的活，也不许自己断言
   // 「跟本次改动无关」（审查二 F1 末条：那件事由诊断那一层去核，不由这份模板去推）。
@@ -243,7 +251,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   const selfDeleted = await again("./verify.sh");
   assert.match(readFileSync(selfDeleted.logPath, "utf8"), /ASSERTION FAILED/, "测试自己的前提：它报的是断言失败");
   assert.deepEqual(JSON.parse(selfDeleted.entryProbe ?? "null"),
-    { ask: "./verify.sh", resolved: true, by: "被测快照里的文件" }, "起跑那一刻它在树里");
+    { ask: "./verify.sh", file: "verify.sh", resolved: true, by: "被测快照里的文件" }, "起跑那一刻它在树里");
   assert.equal(selfDeleted.failure, "exit_code", "一次真的断言失败，不许因为它删了自己就变成「没启动」");
   assert.equal(selfDeleted.diagnosis, null, "也不该给出任何「不是你的代码」的结论");
 
@@ -257,7 +265,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   const scoped = await again("npm --prefix child run test:accept");
   assert.match(readFileSync(scoped.logPath, "utf8"), /CHILD RAN/, "测试自己的前提：child 里那条真跑起来了");
   assert.deepEqual(JSON.parse(scoped.entryProbe ?? "null"),
-    { ask: "test:accept", resolved: true, by: "被测快照 child/package.json 的 scripts" },
+    { ask: "test:accept", file: "child/package.json", resolved: true, by: "被测快照 child/package.json 的 scripts" },
     "核的必须是 --prefix 指的那份 manifest");
   assert.equal(scoped.failure, "exit_code", "真跑起来、真红了，不许因为顶层没这个名字就说它没启动");
   assert.equal(scoped.missAttribution, null, "它不是「没解析出来」那一档");
@@ -271,7 +279,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   const noexec = await again("./noexec.sh");
   assert.equal(noexec.exitCode, 126, "测试自己的前提：在树里但不可执行时 shell 退 126");
   assert.deepEqual(JSON.parse(noexec.entryProbe ?? "null"),
-    { ask: "./noexec.sh", resolved: true, by: "被测快照里的文件" }, "起跑前核到的是「在树里」");
+    { ask: "./noexec.sh", file: "noexec.sh", resolved: true, by: "被测快照里的文件" }, "起跑前核到的是「在树里」");
   assert.equal(noexec.failure, "exit_code", "在树里就不是「不在树里」那一种");
   assert.match(noexec.diagnosis ?? "", /不是「它不在树里」那一种/, "核过的那一件照说");
   assert.match(noexec.diagnosis ?? "", /这一层说不了/, "没核过的那一件不许替它说");
@@ -392,7 +400,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   // 第 8 轮之后这一层是纯读的：它读不出 `.npmrc` 这件事，于是会读出「根 manifest 里没有」。
   // **授权因此不在这一层** —— 真跑那次子项目的脚本往日志里写了东西，归类层第三件条件不成立。
   assert.deepEqual(JSON.parse(viaRc.entryProbe ?? "null"),
-    { ask: "test:accept", resolved: false, by: "被测快照 package.json 的 scripts" },
+    { ask: "test:accept", file: "package.json", resolved: false, by: "被测快照 package.json 的 scripts" },
     "这一层只报它读到的（命令行上解释出来的那份 manifest）");
   assert.equal(viaRc.failure, "exit_code", "一次真的断言失败，不许说成「没启动」（审查五/六/八 F1）");
   assert.equal(viaRc.missAttribution, null, "它不是「没解析出来」那一档");
@@ -444,7 +452,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
   // 同上：这一层读的是根 manifest（它看不出 `PATH=bin` 换掉了 npm 本身），挡住它的是日志里
   // 那两行 —— 启动器自己写的输出不属于 npm 的自有报错。
   assert.deepEqual(JSON.parse(ownNpm.entryProbe ?? "null"),
-    { ask: "test:accept", resolved: false, by: "被测快照 package.json 的 scripts" },
+    { ask: "test:accept", file: "package.json", resolved: false, by: "被测快照 package.json 的 scripts" },
     "这一层只报它读到的那份");
   assert.equal(ownNpm.failure, "exit_code", "一次真的断言失败，不许说成「没启动」（审查七 F1）");
   assert.match(ownNpm.diagnosis ?? "", /有别的程序写过东西/, "要说清凭什么不敢下那个结论");
@@ -551,7 +559,7 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
     "测试自己的前提：那个脚本真被生成出来并跑了");
   assert.match(readFileSync(grown.logPath, "utf8"), /ASSERTION FAILED/, "测试自己的前提：它报的是断言失败");
   assert.deepEqual(JSON.parse(grown.entryProbe ?? "null"),
-    { ask: "test:accept", resolved: false, by: "被测快照 package.json 的 scripts" },
+    { ask: "test:accept", file: "package.json", resolved: false, by: "被测快照 package.json 的 scripts" },
     "起跑前读那份 manifest 时它确实不在 —— 这一件成立也不够");
   assert.equal(grown.failure, "exit_code", "可它真跑了、真红了，不许说成「没启动」（审查八 F1）");
   assert.equal(grown.missAttribution, null, "它不是「没解析出来」那一档");
@@ -562,5 +570,78 @@ export async function testGateMissingCommand(ctx: Ctx): Promise<void> {
     missAttribution: grown.missAttribution as null }).includes("不要为这件事改任何代码"), false,
     "更不许发免修令");
 
-  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 / 引入历史读不动 / 继承后删除 / npmrc 换落点 / shell 分组 / npm 内建 env / 自带启动器 / 合入恢复不了 + 引入提交 / 只跑一次项目代码 / 真跑时才生成的脚本 全部通过");
+  // 对照组二十（第 9 轮审查 F1，照审查的反例 A 原样复现）：**workspace 配置把落点挪走**，
+  //   子项目那个脚本真跑了、真红了，而项目自己的输出被 `>` 引到别处 —— 于是旧判据的三件事
+  //   全都成立：起跑前读根 manifest「没有」①；子项目脚本内部又调了一个缺同名脚本的 npm，
+  //   日志里真有 `Missing script: "test:accept"`②；日志里剩下的全是 npm 自己的行③。
+  //   挡住它的是 npm 自己交代的那几行（Lifecycle script / workspace / location）。
+  mkdirSync(join(wsPath, "child"), { recursive: true });
+  mkdirSync(join(wsPath, "bare"), { recursive: true });
+  writeFileSync(join(wsPath, "bare", "package.json"), manifest({ build: "echo bare" }));
+  writeFileSync(join(wsPath, "fail.cjs"), [
+    'console.log("ACCEPTANCE STARTED");',
+    'require("node:assert").equal(1, 2, "ASSERTION FAILED");',
+    "",
+  ].join("\n"));
+  execFileSync(process.execPath, ["--check", join(wsPath, "fail.cjs")]);
+  // 子脚本把自己的 stderr 并进 stdout（跟着被 `>` 引走），只留嵌套那个 npm 的报错进日志 ——
+  // 审查反例就是这么构造的，少了这一步第三件条件自己就挡住了，反例也就不成立。
+  writeFileSync(join(wsPath, "child", "package.json"), `${JSON.stringify({
+    name: "child", private: true,
+    scripts: { "test:accept":
+      // `env -u` 是必须的：父进程那个 `npm_config_workspace=child` 会被嵌套的 npm 继承，
+      // 继承了它就先死在「No workspaces found」上，根本走不到同名缺失那一步（实测）。
+      "node ../fail.cjs 2>&1; env -u npm_config_workspace npm --prefix ../bare run test:accept" } },
+    null, 2)}\n`);
+  writeFileSync(join(wsPath, "package.json"), `${JSON.stringify({
+    name: "gate-fixture", private: true, workspaces: ["child", "bare"],
+    scripts: { build: "echo build" } }, null, 2)}\n`);
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "workspace child really runs and fails, output redirected away");
+  const moved = await again("npm_config_workspace=child npm run test:accept > /dev/null");
+  const movedLog = readFileSync(moved.logPath, "utf8");
+  // 测试自己的前提：三件事确实都成立，只有新加的那一道能挡住它。
+  assert.match(movedLog, /Missing script/, "前提②：嵌套那个 npm 真打了同名缺失");
+  assert.equal(/ACCEPTANCE STARTED/.test(movedLog), false, "前提③：项目自己的输出真被引走了");
+  assert.equal(foreignOutputIn(movedLog, "npm"), false, "前提③：日志里剩下的全是 npm 自己的行");
+  assert.deepEqual(JSON.parse(moved.entryProbe ?? "null"),
+    { ask: "test:accept", file: "package.json", resolved: false, by: "被测快照 package.json 的 scripts" },
+    "前提①：起跑前读的是根 manifest，那上面确实没有");
+  assert.match(movedLog, /npm error (?:workspace|location|Lifecycle script)/,
+    "前提：npm 自己交代了它跑过脚本、读的是子项目那份");
+  assert.equal(moved.failure, "exit_code", "真跑了、真红了，不许说成「没启动」（审查九 F1）");
+  assert.equal(moved.missAttribution, null, "更不许给归因");
+  assert.match(moved.diagnosis ?? "", /读的是另一份 manifest/, "要说清凭什么不敢下那个结论");
+  assert.match(moved.diagnosis ?? "", /workspace 和 location/, "给一条用户自己能核的出路");
+  assert.equal(gateFailurePrompt({ command: moved.command, summary: "未通过", logPath: moved.logPath, tail: "",
+    cwd: moved.cwd, sourceCwd: repo, failure: moved.failure, diagnosis: moved.diagnosis,
+    missAttribution: moved.missAttribution as null }).includes("不要为这件事改任何代码"), false,
+    "绝不许发免修令");
+
+  // 对照组二十一（第 9 轮审查 F2，照审查的反例 B 原样复现）：落点同样被挪到子项目，而**这次
+  //   改动把子项目那个定义删了**。根 manifest 上一直没有这个名字，于是按根目录去核会得出
+  //   「目标分支上也没有、开工基线上也没有」→ not-mine → 免修，可真正该做的恰恰是改回来。
+  writeFileSync(join(wsPath, "child", "package.json"), `${JSON.stringify({
+    name: "child", private: true, scripts: { "test:accept": "echo REAL_ACCEPTANCE" } }, null, 2)}\n`);
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "child has the acceptance script (baseline and target both)");
+  const childStart = git(wsPath, "rev-parse", "HEAD");
+  writeFileSync(join(wsPath, "child", "package.json"), `${JSON.stringify({
+    name: "child", private: true, scripts: { build: "echo child build" } }, null, 2)}\n`);
+  git(wsPath, "add", "-A");
+  git(wsPath, "commit", "-m", "this task deletes the child acceptance script");
+  await db.update(tasks).set({ worktreeStartCommit: childStart }).where(eq(tasks.id, taskId));
+  const childDeleted = await again("npm_config_workspace=child npm run test:accept");
+  assert.match(readFileSync(childDeleted.logPath, "utf8"), /npm error (?:workspace|location|Lifecycle script)/,
+    "前提：npm 自己说了它读的是子项目那份");
+  assert.equal(childDeleted.missAttribution, null, "核的对象对不上，就不许给归因（审查九 F2）");
+  assert.equal(childDeleted.failure, "exit_code", "也不许摆成「没启动」那一档");
+  assert.equal(/在目标分支.{0,6}上也找不到|上也找不到/.test(childDeleted.diagnosis ?? ""), false,
+    "不许拿根目录那份去断言「目标分支上也没有」");
+  assert.equal(gateFailurePrompt({ command: childDeleted.command, summary: "未通过", logPath: childDeleted.logPath,
+    tail: "", cwd: childDeleted.cwd, sourceCwd: repo, failure: childDeleted.failure,
+    diagnosis: childDeleted.diagnosis, missAttribution: childDeleted.missAttribution as null })
+    .includes("不要为这件事改任何代码"), false, "任务把它删了,绝不许发免修令");
+
+  console.log("accept gate missing-command: 定义级核实 / 入口文件 / 这次改动删的 / 同名嵌套 / 目标也没有 / 自删入口 / 换目录 / 不可执行 / 归因未知 / 引入历史读不动 / 继承后删除 / npmrc 换落点 / shell 分组 / npm 内建 env / 自带启动器 / 合入恢复不了 + 引入提交 / 只跑一次项目代码 / 真跑时才生成的脚本 / 落点被挪走后真跑了 / 落点被挪走后定义被删 全部通过");
 }
