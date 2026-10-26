@@ -7,25 +7,26 @@
 // 没有一个时间戳，没法知道那 27 条是均匀用掉 90 分钟，还是 10 分钟跑完之后干等了 80 分钟。
 //
 // 所以这一层只做一件事：**把时间轴补上**。
-//  · 每 ACCEPT_GATE_PROGRESS_MS 往日志里落一行进度（开跑第几分钟、产出多少、静了多久）
-//  · 连着 ACCEPT_GATE_SILENCE_MS 没有输出 → 在日志里喊一声（**只喊，不收掉它**）
+//  · 每 ACCEPT_GATE_PROGRESS_MS 记一行进度（开跑第几分钟、产出多少、静了多久）
+//  · 连着 ACCEPT_GATE_SILENCE_MS 没有输出 → 喊一声（**只喊，不收掉它**）
+//  （两样都落在日志**旁边**那份 .notes 里，回显给界面和 agent 的那一段仍然带着它们）
 //  · 撞上时限那一刻交出一段「现场」：停在哪一行、静了多久、产出节奏是什么样
 //
-// 两条边界，都是第 1 轮审查钉下来的，别回退：
-//  ① **不拿静默去掐命令**。日志长不长只能证明有没有在输出，证明不了有没有在前进；
-//     理由与出路写在 ACCEPT_GATE_SILENCE_MS 的注释里。同理，结论只摆证据和两种读法，
-//     不替人断言「就是卡住」或「就是在爬」—— 卡死的进程一样可以一直打心跳。
-//  ② **谁写的日志按自己的真实写入记录认**。既不能按 `[ash]` 前缀猜（被测命令也可以打印
-//     这个前缀），也不能靠「写之前/写之后两次 stat」去推自己那几个字节落在哪 —— 命令可能
-//     正好插在这两次 stat 中间，推出来的区间会把它的输出当成心跳抹掉（第 2 轮审查 R2-F1）。
-//     所以：字节数按「自己写了多少」直接记账，行按「自己写过哪几行」原文剔除，两者都不推断。
+// 两条边界，都是审查钉下来的，别回退：
+//  ① **不拿静默去掐命令**（第 1 轮 F1）。日志长不长只能证明有没有在输出，证明不了有没有
+//     在前进；理由与出路写在 ACCEPT_GATE_SILENCE_MS 的注释里。同理，结论只摆证据和两种
+//     读法，不替人断言「就是卡住」或「就是在爬」—— 卡死的进程一样可以一直打心跳。
+//  ② **这个文件一个字节都不往门禁日志里写**（第 3 轮 F2）。进度和提示走旁边那份 .notes，
+//     于是命令跑着的时候日志只有命令一个写入者，末行、字节数、更新时间直接取自它，中间
+//     没有「判断来源」这一步可错。三种判来源的猜法怎么被逐一推翻，见 accept-gate-diagnosis.ts
+//     的头部 —— 想在这儿「再加一道排除」之前先读那段。
 //
-// 现场交给调用方**冻结存盘**（见 accept-gate.ts 的 settleGate → writeGateScene）：日志里
-// 「谁最后写」不由我们说了算 —— 停不掉的进程之后写的每个字节都能把它顶出可回显的那一段，
-// 所以它存在日志旁边，由读口给它留固定位置。
+// 现场也不往日志里追加，在 accept-gate.ts 的 settleGate 里**第一时间冻结存盘**：日志里
+// 「谁最后写」不由我们说了算，停不掉的进程之后写的每个字节都能把它顶出可回显的那一段。
 import { statSync } from "node:fs";
 import { ACCEPT_GATE_PROGRESS_MS, ACCEPT_GATE_SILENCE_MS, ACCEPT_GATE_TIMEOUT_MS } from "@ash/shared/accept-gate";
-import { acceptGateLogTailBytes, appendGateLog } from "./accept-gate-process.js";
+import { appendGateNote } from "./accept-gate-diagnosis.js";
+import { acceptGateLogTailBytes } from "./accept-gate-process.js";
 
 /** 采样间隔。一次只是 `statSync` 一下；「最后一次输出」取的是文件 mtime，不是这个节拍。 */
 const SAMPLE_MS = 30_000;
@@ -62,13 +63,13 @@ function timingsNow(): GateWatchTimings {
 export type GateWatchScene = {
   elapsedMs: number;
   limitMs: number;
-  /** 距离命令**自己**最后一次有输出过了多久（我们写的进度行不算）。 */
+  /** 距离命令最后一次有输出过了多久。 */
   silentMs: number;
   /** 这条命令从头到尾有没有出过东西。全程安静和「出过、后来不出了」是两回事。 */
   everProduced: boolean;
   /** 命令最后吐出来的那一行；它写过东西但尾部读不出可用的一行时是 null（见 everProduced）。 */
   lastLine: string | null;
-  /** 命令自己产出的字节数（不含进度行，也不含开跑前就在的启动说明）。 */
+  /** 命令自己产出的字节数（不含开跑前就在的启动说明）。 */
   bytes: number;
   /** 产出节奏采样点，形如 `5.0m/4.1KB`。 */
   marks: string[];
@@ -77,12 +78,15 @@ export type GateWatchScene = {
 };
 
 export type GateWatchVerdict = {
-  /** 追加到日志**最后**的那一段。调用方负责在所有人写完之后再追加它。 */
+  /** 冻结存盘的那一段。调用方负责在任何可能失败的事情之前把它存下来。 */
   scene: string;
   /** 落进任务时间线的一句话。 */
   note: string;
 };
 export type GateWatch = { stop: () => void };
+
+/** 单调时钟。进程起来之后只增不减，系统时间被校正也不受影响。 */
+const now = (): number => performance.now();
 
 const minutes = (ms: number): string => (Math.max(0, ms) / 60_000).toFixed(1);
 const size = (bytes: number): string => bytes < 1024 ? `${bytes}B` : `${(bytes / 1024).toFixed(1)}KB`;
@@ -93,23 +97,20 @@ function fileStat(path: string): { size: number; mtimeMs: number } {
 }
 
 /**
- * 日志里命令**自己**最后吐的那一行。三道排除，每一道都是「记下来的事实」而不是推断：
+ * 日志里命令**自己**最后吐的那一行。不需要「排掉谁」：这份文件在它跑着的时候只有它一个
+ * 写入者。两道截断，都不是来源推断：
  *
  *  · `base` 之前的一概不看 —— 那是开跑前 ash 写的启动说明（命令原文、快照路径…）。
  *    不截断的话，全程没输出的命令会被报成「停在 `[ash] $ <命令>`」（第 2 轮审查 R2-F1）。
- *  · `own` 是我们自己写过的那几行**原文**。按原文剔除，不按 `[ash]` 前缀猜（命令也能打
- *    这个前缀），也不按「写前写后两次 stat」推区间（命令可能插在中间，推出来的区间会把
- *    它的输出抹掉、反倒漏出半行心跳）。O_APPEND 保证每次追加是整段落地，所以我们写过的
- *    行在文件里一定是完整的一行，原文比得上。
  *  · 空行和纯 ANSI 控制序列不算一行。
  */
-function lastCommandLine(logPath: string, base: number, own: Set<string>): string | null {
+function lastCommandLine(logPath: string, base: number): string | null {
   const { buf, start } = acceptGateLogTailBytes(logPath, LAST_LINE_SCAN_BYTES);
   const from = Math.max(0, base - start);
   if (buf.length <= from) return null;
   const lines = buf.subarray(from).toString("utf8").split(/[\r\n]+/)
     .map(line => line.replace(/\u001B\[[0-9;]*[A-Za-z]/g, "").trim())
-    .filter(line => line.length > 0 && !own.has(line));
+    .filter(line => line.length > 0);
   const last = lines.at(-1);
   if (!last) return null;
   return last.length > LAST_LINE_MAX ? `${last.slice(0, LAST_LINE_MAX)}…` : last;
@@ -163,74 +164,66 @@ export function gateWatchReport(scene: GateWatchScene): GateWatchVerdict {
 
 /**
  * 起一个看门的。`onVerdict` 只会被叫到一次（撞上时限），**它不负责收掉命令**，也不负责
- * 把现场写进日志 —— 现场得排在所有人后面写，由调用方在结算末尾追加。
+ * 存现场 —— 现场由调用方在结算的第一步冻结存盘（settleGate → freezeGateScene）。
  */
 export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: GateWatchVerdict) => void }): GateWatch {
   const timings = timingsNow();
-  const startedAt = Date.now();
-  // 三个量，两两不重叠，加起来就是文件长度：
-  //   base      开跑前就在那儿的启动说明（命令原文、快照路径…），一个字节都不算命令的
-  //   ownBytes  我们自己写进去的进度行/静默提示，**按真的写成功了多少记账**
-  //   命令产出  = 文件长度 - base - ownBytes
-  // 这样算出来的命令产出与写入先后无关：命令插在我们两次 stat 中间也不会算错（R2-F1）。
+  // 累计时长和两道时限走**单调时钟**：跑的过程中系统时间被校正（不是改时区）会让
+  // Date.now() 的差值凭空变长变短，90 分钟这条线跟着提前或延后（第 3 轮审查 N2）。
+  // 墙上时间只在一处用：把文件 mtime 换算回单调轴。
+  const startedMono = now();
+  // 日志长度只分两段，中间没有第三方：
+  //   base   开跑前就在那儿的启动说明（命令原文、快照路径…），一个字节都不算命令的
+  //   命令产出 = 文件长度 - base
+  // 成立的前提是这个文件在它跑着的时候只有命令一个写入者 —— 所以我们自己的进度行在旁边
+  // 那份 .notes 里，这里不写日志（第 3 轮审查 F2）。
   const base = fileStat(opts.logPath).size;
-  let ownBytes = 0;
-  const ownLines = new Set<string>();
   let producedSeen = 0;
-  let lastOutputAt = startedAt;
+  let lastOutputMono = startedMono;
   let everProduced = false;
   let noticedSilence = false;
-  let nextProgressAt = startedAt + timings.progressMs;
+  let nextProgressAt = startedMono + timings.progressMs;
   const marks: string[] = [];
   let finished = false;
 
-  /** 命令自己写了多少（排掉启动说明和我们自己的那些行）。 */
-  const producedBytes = (fileBytes: number): number => Math.max(0, fileBytes - base - ownBytes);
-
-  /** 自己往日志里写一行，并把这一笔**如实**记进账：写了多少字节、写的是哪一行。 */
-  const writeOwn = (line: string): void => {
-    // 命令可能停在一行的半中间（没写换行）。贴着它写会把两边粘成一行。
-    const tail = acceptGateLogTailBytes(opts.logPath, 1);
-    const glued = tail.buf.length > 0 && tail.buf.at(0) !== 0x0a;
-    const payload = `${glued ? "\n" : ""}${line}\n`;
-    if (!appendGateLog(opts.logPath, payload)) return; // 没写成就不记账，否则产出会被算少
-    ownBytes += Buffer.byteLength(payload);
-    ownLines.add(line);
-  };
+  /** 命令自己写了多少（排掉开跑前就在的启动说明）。 */
+  const producedBytes = (fileBytes: number): number => Math.max(0, fileBytes - base);
 
   const tick = (): void => {
     if (finished) return;
-    const at = Date.now();
+    const at = now();
     const info = fileStat(opts.logPath);
     const produced = producedBytes(info.size);
     if (produced > producedSeen) {
       producedSeen = produced;
       everProduced = true;
       // 取 mtime 而不是这一拍的时刻：命令可能在上一拍刚过就写完了，按节拍记会凭空多算
-      // 一个采样间隔的静默（第 1 轮审查 N3）。
-      lastOutputAt = Math.min(at, info.mtimeMs || at);
-      noticedSilence = false;
+      // 一个采样间隔的静默（第 1 轮审查 N3）。mtime 是墙上时间，它比现在早多少，就从
+      // 单调轴上的现在往回退多少。
+      const age = info.mtimeMs ? Math.max(0, Date.now() - info.mtimeMs) : 0;
+      lastOutputMono = at - age;
     }
-    const silentMs = at - lastOutputAt;
+    const silentMs = Math.max(0, at - lastOutputMono);
+    const elapsedMs = at - startedMono;
     if (at >= nextProgressAt) {
       nextProgressAt = at + timings.progressMs;
-      marks.push(`${minutes(at - startedAt)}m/${size(producedSeen)}`);
-      writeOwn(`[ash] 进度 · 开跑后 ${minutes(at - startedAt)} 分钟 · 已产出 ${size(producedSeen)}`
+      marks.push(`${minutes(elapsedMs)}m/${size(producedSeen)}`);
+      appendGateNote(opts.logPath, `[ash] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 已产出 ${size(producedSeen)}`
         + ` · 最近一次输出在 ${minutes(silentMs)} 分钟前`);
     }
     if (!noticedSilence && silentMs >= timings.silenceMs) {
       noticedSilence = true;
       // 只喊一声。要不要现在就收掉它由人决定（验收台上那颗「取消」），理由见
       // ACCEPT_GATE_SILENCE_MS 的注释。
-      writeOwn(`[ash] 注意 · 已经连续 ${minutes(silentMs)} 分钟没有任何输出；命令仍在跑，没有被收掉。`);
+      appendGateNote(opts.logPath, `[ash] 注意 · 已经连续 ${minutes(silentMs)} 分钟没有任何输出；命令仍在跑，没有被收掉。`);
     }
-    if (at - startedAt >= timings.timeoutMs) {
+    if (elapsedMs >= timings.timeoutMs) {
       finished = true;
       clearInterval(handle);
       opts.onVerdict(gateWatchReport({
-        elapsedMs: at - startedAt, limitMs: timings.timeoutMs, silentMs, everProduced,
+        elapsedMs, limitMs: timings.timeoutMs, silentMs, everProduced,
         silenceMs: timings.silenceMs,
-        lastLine: lastCommandLine(opts.logPath, base, ownLines),
+        lastLine: lastCommandLine(opts.logPath, base),
         bytes: producedBytes(fileStat(opts.logPath).size),
         marks: marks.length > MAX_MARKS ? ["…", ...marks.slice(-MAX_MARKS)] : marks,
       }));

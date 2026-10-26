@@ -85,7 +85,8 @@ export function acceptGateCancelMessage(result: AcceptGateCancelResult): string 
 export const ACCEPT_GATE_TIMEOUT_MS = 90 * 60_000;
 
 /**
- * 日志连着这么久一个字节都不长,就在日志里喊一声「这段时间没有任何输出」。
+ * 日志连着这么久一个字节都不长,就喊一声「这段时间没有任何输出」(落在日志旁边那份进度里,
+ * 界面和 agent 看到的回显带着它)。
  *
  * **只报不杀,这是有意的**(第 1 轮审查 F1):日志长不长只能证明「有没有在输出」,
  * 证明不了「有没有在前进」。门禁命令是用户自己填的任意 shell,安静地编译、等远端、

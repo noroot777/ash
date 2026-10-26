@@ -27,9 +27,10 @@ import type { AcceptBy } from "@ash/shared/workflow-policy";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
+import { freezeGateScene } from "./accept-gate-diagnosis.js";
 import {
   acceptGateLogPath, appendGateLog,
-  spawnAcceptGate, writeGateScene,
+  spawnAcceptGate,
 } from "./accept-gate-process.js";
 import { isAncestor } from "./git-accept.js";
 import { commitAt, plannedMergeTarget } from "./task-branch-plan.js";
@@ -381,7 +382,7 @@ async function settleGate(
   outcome: { status: Exclude<AcceptGateStatus, "running">; exitCode: number | null; failure: AcceptGateFailure | null;
     /** 「卡在哪」的一句话版本，落进任务时间线。只有看门的（超时）给得出。 */
     note?: string;
-    /** 同一件事的完整现场。单独冻结存盘，不追加进日志，见下面写它那一段。 */
+    /** 同一件事的完整现场。结算一开头就冻结存盘，不追加进日志，见下面写它那一段。 */
     scene?: string },
   waitForContinuation = true,
 ): Promise<void> {
@@ -396,6 +397,15 @@ async function settleGate(
     const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
     rowForFailure = row;
     if (!row || row.status !== "running") return;
+    // 现场**排在所有可能失败的事情前面**存盘（第 3 轮审查 F1）。两条理由，缺一条都不够：
+    //  · 下面任何一步抛出来（快照删不掉的 EACCES/EPERM 是实测发生过的）都会把这个 async
+    //    甩进 catch，而那时这一行已经写成 failed、processPending=false，recoverAcceptGates
+    //    不会再选中它 —— 只存在内存里的那份现场就**永久**没了；
+    //  · 它必须早于终态落库：结果一旦可见，用户下一步就是来找这段说明。
+    // 到这一句为止我们已经独占了这次结算（settling + 上面那句 running 核对），所以存下来的
+    // 现场不会是某个没赢的判定留下的。
+    const sceneFailure = outcome.scene ? freezeGateScene(row.logPath, outcome.scene) : null;
+    if (sceneFailure) appendGateLog(row.logPath, `\n[ash] ${sceneFailure}\n${outcome.scene}\n`);
     const stopped = await stopGateRun(runId, false);
     await noteIfStillAlive(row.taskId, row.logPath, stopped);
     if (outcome.status === "passed" && !stopped) outcome = { status: "failed", exitCode: outcome.exitCode, failure: "process_unconfirmed" };
@@ -410,18 +420,16 @@ async function settleGate(
       .where(and(eq(acceptGateRuns.id, runId), eq(acceptGateRuns.status, "running")));
     outcomeSaved = true;
     if (stopped) forgetGateProcess(runId);
-    if (stopped) await cleanupGateSnapshot(row.taskId, runId);
+    // 删不掉快照是磁盘上的事（EACCES/EPERM 实测会发生），不该把一条已经判完的门禁连同
+    // 它的结论、时间线、交接一起甩进 catch（第 3 轮审查 F1）。
+    if (stopped) await cleanupGateSnapshot(row.taskId, runId).catch((error) => appendGateLog(row.logPath,
+      `\n[ash] 快照没能删掉，它还留在 ${gateSnapshotPath(row.taskId, runId)}：${String(error)}\n`));
     if (watching?.runId === runId) { watching.watch.stop(); live.delete(row.taskId); }
     const settled = { ...row, ...outcome, finishedAt };
-    // 现场**不往日志里追加，单独冻结一份**：回显给界面和 agent 的只有最后
-    // ACCEPT_GATE_TAIL_BYTES 个字节，而排在它后面的每一位都能把它顶出去 —— 停止期命令自己
-    // 吐的清理输出、下面这行会回显整条命令（最长 4000 字符）的摘要，尤其是**没能停下来**的
-    // 那个进程之后还会一直写（第 1 轮审查 F2、第 2 轮 R2-F2 两次实测被顶掉）。存盘之后由
-    // acceptGateLogTail / acceptGateLogText 给它留固定位置，谁后面再写都挤不掉。
-    if (outcome.scene) writeGateScene(row.logPath, outcome.scene);
     appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(gateView(settled))}\n`);
     const view = gateView(settled);
-    await appendTaskTimeline(row.taskId, `${summarizeAcceptGate(view)}。${outcome.note ? ` ${outcome.note}` : ""}`);
+    await appendTaskTimeline(row.taskId,
+      `${summarizeAcceptGate(view)}。${outcome.note ? ` ${outcome.note}` : ""}${sceneFailure ? ` ${sceneFailure}` : ""}`);
     announceGate(row.taskId);
     finishOutcome();
     if (stopped && outcome.status === "passed") await continueAcceptance(row);
