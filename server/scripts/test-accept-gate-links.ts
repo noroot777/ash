@@ -189,28 +189,36 @@ try {
     symlinkSync("entry.mjs", syntaxCli);
     const readable = await readGateSource(syntax);
     assert.equal(reads(syntaxCli), "SIBLING");
-    // 末尾的 `/`、`/.` 是有意义的:原生读出来是错,不是 entry.mjs。自己切分时把空段和 `.` 滤掉,
-    // 一条读得通和两条读不通的链就摘出同一个身份,上一张绿结果被直接复用。
+    // 末尾的 `/`、`/.` 是有意义的成分,不能当噪声滤掉:自己切分时把空段和 `.` 滤掉,三条写法不同
+    // 的链就摘出同一个身份,上一张绿结果被直接复用。**成不成功由平台说**——POSIX 上 entry.mjs/
+    // 是 ENOTDIR,Win32 的解析器容忍末尾的 `/`、`/.` 照样读到文件(真机实测),所以这里钉的是
+    // 「原文不同 ⟹ 身份不同」,不预设哪个平台读得通。
     const identities = new Set([readable.fingerprint]);
     for (const target of ["entry.mjs/", "entry.mjs/."]) {
       unlinkSync(syntaxCli);
       symlinkSync(target, syntaxCli);
-      assert.equal(reads(syntaxCli).startsWith("ERR:"), true, `第2轮发现1: 原生读 ${target} 本来就是失败的`);
       const broken = await readGateSource(syntax);
       assert.equal(gateSourceMatches({ sourceCommit: readable.commit, sourceFingerprint: readable.fingerprint }, broken),
-        false, `第2轮发现1: 改成 ${target} 之后读不到了,不能再沿用上次通过`);
+        false, `第2轮发现1: 原文改成 ${target} 之后不能再沿用上次通过`);
       assert.equal(identities.has(broken.fingerprint), false, `第2轮发现1: ${target} 要有自己的身份`);
       identities.add(broken.fingerprint);
     }
-    // 绝对原文 + 末尾 `/`:源树读不到,副本也不许读得到。重写掉那个 `/` 等于交付了一份与工作区
-    // 行为相反的快照(实测过:源树 ENOTDIR,副本读得通)。所以读不到的链一律逐字照抄。
+    // 绝对原文 + 末尾 `/`:副本读到的必须和源树读到的一样。POSIX 上源树是 ENOTDIR,副本就不许
+    // 读得到——重写掉那个 `/` 等于交付了一份与工作区行为相反的快照(实测过:源树 ENOTDIR、副本
+    // 读得通),所以读不到的链一律逐字照抄;Win32 上这条原文原生读得通、落点又在树内,于是它该被
+    // 改写到副本自己那份,照抄绝对原文反而会把测试拉回活动工作区。两边都由「读到什么」决定。
     unlinkSync(syntaxCli);
     symlinkSync(`${syntaxEntry}/`, syntaxCli);
     const absoluteBroken = await readGateSource(syntax);
     const syntaxSnapshot = join(root, "path-syntax-snapshot");
     await createGateSnapshot(syntax, syntaxSnapshot, absoluteBroken);
     const syntaxCopy = join(syntaxSnapshot, "node_modules", "cli.mjs");
-    assert.equal(readlinkSync(syntaxCopy), `${syntaxEntry}/`, "第2轮发现1: 读不到的链逐字照抄,末尾那个 / 也不动");
+    if (reads(syntaxCli).startsWith("ERR:")) {
+      assert.equal(readlinkSync(syntaxCopy), `${syntaxEntry}/`, "第2轮发现1: 读不到的链逐字照抄,末尾那个 / 也不动");
+    } else {
+      assert.equal(readlinkSync(syntaxCopy).startsWith(syntaxSnapshot), true,
+        "第2轮发现1: 读得通的绝对原文要改写到副本自己那份,不能把测试拉回活动工作区");
+    }
     assert.equal(reads(syntaxCopy), reads(syntaxCli),
       "第2轮发现1: 副本必须读出和源树一样的结果(包括一样的失败)");
     // Win32 的路径解析器在碰文件系统之前就按字面消 `..`:bridge 是指向 store/deep 的 junction 时,
