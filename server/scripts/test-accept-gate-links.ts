@@ -31,8 +31,16 @@ const fileLinks = (() => {
   } catch { return false; }
 })();
 if (!fileLinks) console.log("accept-gate-links: 本机建不出文件软链(Windows 未开开发者模式),文件链用例跳过,目录 junction 用例仍跑");
+// 链接身份与重定位必须忠实于**本平台真实的文件访问**,不能由本模块自己解释路径语法(自己切分、
+// 逐段 realpath 都会和运行时打开的那个文件分叉,三处实测见 accept-gate-tree.ts linkLanding 上方)。
+// 多处用例钉的都是同一个不变量:**原生读到的结果相等 ⟺ 指纹相等**;读失败也算一种结果,所以错误
+// 码一并比,但不钉具体是哪个码(平台不同)。
+const reads = (path: string) => {
+  try { return readFileSync(path, "utf8"); }
+  catch (error) { return `ERR:${(error as NodeJS.ErrnoException).code}`; }
+};
 try {
-  const { createGateSnapshot, gateSourceMatches, readGateSource } = await import("../src/accept-gate-source.js");
+  const { createGateSnapshot, gateSourceMatches, readGateSource, verifyGateSnapshot } = await import("../src/accept-gate-source.js");
   // ── 第 3 轮审查的 4 条。各用独立的小仓:它们要自带 .gitignore 和提交历史,挤进上面那个共用
   // repo 会互相污染(根落点那一条会把共用 repo 里**全部**被忽略的条目都拉进复制计划)。
   const freshRepo = (name: string, ignore: string) => {
@@ -123,16 +131,30 @@ try {
     mkdirSync(frozenExternal);
     writeFileSync(join(frozen, "inside", "data.py"), "print('works')\n");
     symlinkSync(join("..", "frozen-context", "inside", "data.py"), join(frozenExternal, "back.py"));
+    symlinkSync(join("..", "frozen-nowhere", "gone.py"), join(frozenExternal, "missing.py"));
     linkDir(frozenExternal, join(frozen, "src"));
     const frozenSource = await readGateSource(frozen);
     const frozenSnapshot = join(root, "frozen-context-snapshot");
     await createGateSnapshot(frozen, frozenSnapshot, frozenSource);
     assert.equal(lstatSync(join(frozenSnapshot, "src", "back.py")).isSymbolicLink(), true,
       "第3轮发现3: 冻结目录里的链仍按链保留");
-    assert.equal(readFileSync(join(frozenSnapshot, "src", "back.py"), "utf8"), "print('works')\n",
-      "第3轮发现3: 搬迁之后那条相对链要按副本里的实际落点重定位");
-    assert.equal(realpathSync(join(frozenSnapshot, "src", "back.py")), realpathSync(join(frozenSnapshot, "inside", "data.py")),
-      "第3轮发现3: 而且落在副本自己那份上,不能被拉回活动工作区");
+    // 两个平台一句话钉死:副本里读到什么,必须和源树里读到什么一样。POSIX 上 `..` 穿过那条目录链
+    // 落回项目里,源树读得通,于是这一句要求副本重定位到自己那份(不重定位就会读到别的或读不到);
+    // Win32 的解析器在碰文件系统前就按字面消掉 `..`,src\..\ 折回项目自己而不是外部目录的父目录,
+    // 源树里这条链原生就读不到(真机实测 ERR:ENOENT),于是这一句要求副本照抄原文、同样读不到——
+    // 把它改写成一条能读通的路径,交付的副本就和工作区不是同一份行为了。
+    assert.equal(reads(join(frozenSnapshot, "src", "back.py")), reads(join(frozen, "src", "back.py")),
+      "第3轮发现3: 搬迁之后那条相对链在副本里要和源树读到同一个结果");
+    if (reads(join(frozen, "src", "back.py")) === "print('works')\n") {
+      assert.equal(realpathSync(join(frozenSnapshot, "src", "back.py")), realpathSync(join(frozenSnapshot, "inside", "data.py")),
+        "第3轮发现3: 而且落在副本自己那份上,不能被拉回活动工作区");
+    }
+    // 第 4 轮:被搬迁的子树里再放一条**两侧都读不到**的链,然后端到端对一次账——副本自己重新登记、
+    // 重新摘要之后必须和源树同身份。Win32 上这个夹具里**每一条**链都落到「读不到」那一支(`..` 被
+    // 词法消解),macOS 上靠这条悬空链覆盖同一支;读不到的链身份只认原文,原文被改写或位置被掺进
+    // 身份都会让什么也没改的快照判不符。
+    assert.equal(await verifyGateSnapshot(frozenSnapshot, frozenSource), true,
+      "第4轮: 搬迁进来的读不到的链,源树与副本必须算出同一个身份");
   }
 
   // 第 3 轮发现 4:闭包规模的预算要卡在**消重之后**,而且只计真正追加进来的条目。拿计划总长去卡
@@ -155,14 +177,8 @@ try {
   assert.equal(wideSource.dependencies.includes(join("pkg-0", "node_modules")), true,
     "第3轮发现4: 已被覆盖的落点不该让规模预算报错");
 
-  // 第 2 轮审查发现 1:链接身份与重定位必须忠实于**本平台真实的文件访问**,不能由本模块自己解释
-  // 路径语法(自己切分、逐段 realpath 都会和运行时打开的那个文件分叉,三处实测见 accept-gate-tree.ts
-  // linkLanding 上方)。这里钉的就是那个不变量:**原生读到的结果相等 ⟺ 指纹相等**;读失败也算一种
-  // 结果,所以错误码一并比,但不钉具体是哪个码(平台不同)。
-  const reads = (path: string) => {
-    try { return readFileSync(path, "utf8"); }
-    catch (error) { return `ERR:${(error as NodeJS.ErrnoException).code}`; }
-  };
+  // 第 2 轮审查发现 1:链接身份与重定位必须忠实于本平台真实的文件访问(不变量和三处实测见文件
+  // 顶部 reads 上方)。
   if (fileLinks) {
     const syntax = freshRepo("path-syntax", "node_modules/\n");
     mkdirSync(join(syntax, "node_modules", "store", "deep"), { recursive: true });
