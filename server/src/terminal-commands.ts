@@ -214,9 +214,23 @@ async function verifyStopScript(open: TerminalSessionInfo): Promise<string | nul
   return `停止命令跑完了，但端口 ${open.ports.join("、")} 上还有人在听 —— 服务没停下来，去看看那段脚本`;
 }
 
+/**
+ * PowerShell 的 stderr 被重定向时写的不是人话,是 CLIXML:开头一行 `#< CLIXML`,后面整坨
+ * `<Objs>` XML。原样塞进给用户看的那句话里就成了「已经一起杀掉：#< CLIXML」(真机
+ * 192.168.1.187 实测)。把真正的错误文字(`<S S="Error">…</S>`)抽出来,抽不到就当它没说话。
+ */
+function plainStderr(err: string): string {
+  if (!err.includes("#< CLIXML")) return err;
+  const said = [...err.matchAll(/<S S="Error">([\s\S]*?)<\/S>/g)]
+    .map((match) => match[1].replaceAll("_x000D__x000A_", "\n").replaceAll(/&[a-z]+;/g, " ").trim())
+    .filter(Boolean);
+  return said.join("\n");
+}
+
 /** 停止脚本失败时给用户看的那几行:有 stderr 就说 stderr,只留最后 3 行、封顶 300 字。 */
 function outputTail(out: string, err: string): string {
-  const tail = (err.trim() ? err : out)
+  const said = plainStderr(err);
+  const tail = (said.trim() ? said : out)
     .split("\n").map((line) => line.trim()).filter(Boolean).slice(-3).join(" / ");
   return tail.length > 300 ? `${tail.slice(0, 299)}…` : tail;
 }
