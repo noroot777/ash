@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProjectCommands } from "@ash/shared/project-commands";
+import { parseProjectCommands, SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import {
   fillCommandPlaceholders,
   missingCommandValues,
@@ -523,7 +523,7 @@ try {
 
   // ③ `docker compose up -d` 形状:启动脚本自己 exit 0,服务活在 ash 的进程树之外。
   const detached: RunnableCommand = {
-    id: "detached",
+    id: SERVICE_COMMAND_ID, // 清扫豁免按 service 认人,回归也得用真身份
     name: "detached",
     command: "exit 0",
     restartCommand: null,
@@ -533,15 +533,22 @@ try {
   assert.equal(detachedStart.status, 201);
   const detachedId = (detachedStart.body as { session: { id: string } }).session.id;
   const detachedGone = Date.now() + 8000;
-  while (terminalSessions.liveCommandSession("pcs", "detached")) {
+  while (terminalSessions.liveCommandSession("pcs", SERVICE_COMMAND_ID)) {
     if (Date.now() > detachedGone) throw new Error("detached 的启动脚本没有退出");
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+  // 这条退出记录**就是**「服务还开着」这件事本身,闲置清扫不能把它当纯退出日志收走 ——
+  // 收走了停止按钮当场退回 ▶,容器却还在跑(第 1 轮审查 E1)。
+  terminalSessions.sweepIdleSessions(Date.now() + 31 * 60 * 1000);
+  assert.ok(
+    terminalSessions.listCommandSessions().some((session) => session.id === detachedId),
+    "没被停过的 service 退出记录必须扛过闲置清扫,否则「服务开着」就没东西承载了",
+  );
   // 没配停止命令时不作任何推断:会话死透了就是停了。
-  assert.deepEqual((await stopCommand("pcs", "detached")).body, { stopped: false });
+  assert.deepEqual((await stopCommand("pcs", SERVICE_COMMAND_ID)).body, { stopped: false });
   // 配了停止命令:正常退出、又没被停过的那次启动仍算「开着」—— 否则那条停止命令永远按不到。
   rmSync(stopFlag, { force: true });
-  assert.deepEqual((await stopCommand("pcs", "detached", { script: detached.stopCommand!, cwd })).body, { stopped: true });
+  assert.deepEqual((await stopCommand("pcs", SERVICE_COMMAND_ID, { script: detached.stopCommand!, cwd })).body, { stopped: true });
   assert.equal(readFileSync(stopFlag, "utf8"), "down");
   assert.equal(
     terminalSessions.listCommandSessions().find((session) => session.id === detachedId)?.stoppedByUser,
@@ -550,8 +557,32 @@ try {
   );
   // ④ 停过之后就不再算开着:再点一次不会把停止脚本又跑一遍。
   rmSync(stopFlag, { force: true });
-  assert.deepEqual((await stopCommand("pcs", "detached", { script: detached.stopCommand!, cwd })).body, { stopped: false });
+  assert.deepEqual((await stopCommand("pcs", SERVICE_COMMAND_ID, { script: detached.stopCommand!, cwd })).body, { stopped: false });
   assert.equal(existsSync(stopFlag), false, "已经停过的服务不该再跑一遍停止脚本");
+  // 停过之后它就只是一份退出日志,该回收就回收 —— 豁免只给「可能还开着」的那一类。
+  terminalSessions.sweepIdleSessions(Date.now() + 31 * 60 * 1000);
+  assert.equal(
+    terminalSessions.listCommandSessions().some((session) => session.id === detachedId),
+    false,
+    "停过的 service 记录不再豁免清扫",
+  );
+
+  // ⑤ 停止脚本不认 TERM 时必须**自己收敛**:到点连它拉起的那一组一起 SIGKILL、502 落地,
+  //    锁跟着 promise 释放。否则这条命令的启停全部排队到死(第 1 轮审查 E2)。
+  const hungPid = join(cwd, "hung.pid");
+  assert.equal((await startCommand("pcs", cwd, graceful)).status, 201);
+  const hungAt = Date.now();
+  const hung = await stopCommand("pcs", "graceful", {
+    script: `trap '' TERM; sleep 300 & echo $! > ${hungPid}; wait`,
+    cwd,
+    timeoutMs: 1500,
+  });
+  assert.equal(hung.status, 502);
+  assert.match(String((hung.body as { error: string }).error), /没结束/);
+  assert.ok(Date.now() - hungAt < 10_000, "超时必须自己收敛,不能等一个不认 TERM 的脚本自愿退出");
+  await assertProcessGone(Number(readFileSync(hungPid, "utf8").trim()), "超时那一发要打在整个进程组上");
+  // promise 落地 = withCommandLock 释放:下一次启停不被上一次卡住。
+  assert.deepEqual((await stopCommand("pcs", "graceful")).body, { stopped: true });
 
   // 第 7 轮审查探针固化:TERM handler 在解冻窗口 fork 出新的独立 PGID。停止顺序是
   // 冻结→枚举→TERM→解冻(给收尾机会)→等待→升级 KILL;可捕获 TERM 的 shell 在解冻后

@@ -31,10 +31,11 @@ import {
   parseCommandValues,
   SERVICE_COMMAND_ID,
 } from "@ash/shared/project-commands";
+import { spawn, type ChildProcess } from "node:child_process";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
-import { execFileText } from "./exec.js";
+import { IS_WINDOWS } from "./platform.js";
 import { resolveTerminalDirectory, terminalSessions, type TerminalSessionInfo } from "./terminal.js";
 import { commandLaunch } from "./terminal-shell.js";
 
@@ -52,6 +53,8 @@ export type RunnableCommand = {
 
 /** 停止命令跑多久算卡住。优雅下线可能要十几秒(容器停、缓存落盘),但不能无限占着那把命令锁。 */
 const STOP_SCRIPT_TIMEOUT_MS = 60_000;
+/** 停止脚本的两路输出各留这么多,够回显最后几行就行(自己截,不靠 execFile 的 maxBuffer)。 */
+const STOP_OUTPUT_KEEP = 64 * 1024;
 /** 停止脚本跑完,再给启动会话这么久自己退场 —— 它刚被脚本停掉,多半正在收尾,不必急着补一发 TERM。 */
 const STOP_GRACE_MS = 3_000;
 
@@ -148,36 +151,83 @@ function openSession(projectId: string, commandId: string, stopScript: string | 
   return session.exitCode === 0 && !session.stoppedByUser ? session : null;
 }
 
-/** 停止脚本失败时给用户看的那几行:stderr 优先,只留最后 3 行、封顶 300 字。 */
-function outputTail(error: unknown): string {
-  const payload = (error ?? {}) as { stderr?: unknown; stdout?: unknown };
-  const text = [payload.stderr, payload.stdout].map((part) => typeof part === "string" ? part : "").join("\n");
-  const tail = text.split("\n").map((line) => line.trim()).filter(Boolean).slice(-3).join(" / ");
+/** 停止脚本失败时给用户看的那几行:有 stderr 就说 stderr,只留最后 3 行、封顶 300 字。 */
+function outputTail(out: string, err: string): string {
+  const tail = (err.trim() ? err : out)
+    .split("\n").map((line) => line.trim()).filter(Boolean).slice(-3).join(" / ");
   return tail.length > 300 ? `${tail.slice(0, 299)}…` : tail;
 }
 
+/** 超时那一发:POSIX 打在整个进程组(下面是 detached 起的组),Windows 没有进程组,只杀它自己。 */
+function killScriptGroup(child: ChildProcess): void {
+  try {
+    if (!IS_WINDOWS && child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+    else child.kill("SIGKILL");
+  } catch { try { child.kill("SIGKILL"); } catch { /* 已经没了 */ } }
+}
+
 /**
- * 跑用户配置的停止命令。方言跟启动同一套(commandLaunch:POSIX 是 `shell -lc`,Windows 是
- * PowerShell `-EncodedCommand`),但**不开 pty、不建会话**:停止没有「现场」可看,它只有成或
- * 不成 —— 新开一条会话只会搅乱会话表(那边按 commandId 认人),失败时把最后几行输出带回去就够。
+ * 跑用户配置的停止命令,**保证在时限内落地**。方言跟启动同一套(commandLaunch:POSIX 是
+ * `shell -lc`,Windows 是 PowerShell `-EncodedCommand`),但**不开 pty、不建会话**:停止没有
+ * 「现场」可看,它只有成或不成 —— 新开一条会话只会搅乱会话表(那边按 commandId 认人),
+ * 失败时把最后几行输出带回去就够。
+ *
+ * 自己计时、自己收敛,**不能用 execFile 的 timeout**:那一档到点只补发一次 SIGTERM,脚本
+ * 写了 `trap '' TERM` 就彻底拖住 —— 回调绑在 stdio 的 close 上,promise 永不落地,外面那把
+ * withCommandLock 跟着永远不释放,这条命令的启停全部排队到死(第 1 轮审查 E2 实锤)。
+ * 同理只等 `exit`、不等 `close`:脚本把服务拉到后台、子进程继承了管道时,close 要等那个
+ * 后台进程也退出才来(E3),而「停止脚本跑完了」说的是**脚本自己**退了。
+ * 到点那一发打在整个进程组上,否则只杀掉 shell、它拉起的东西继续跑;杀完立刻落地,不等
+ * 它的 exit —— 万一它卡在不可中断的系统调用里,那把锁不能跟着一起卡死。
  */
-async function runStopScript(cwd: string, script: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+function runStopScript(cwd: string, script: string, timeoutMs: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+  type Result = { ok: true } | { ok: false; reason: string };
   let launch: { shell: string; args: string[] };
   try { launch = commandLaunch(script); }
-  catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
-  try {
-    await execFileText(launch.shell, launch.args, { cwd, timeout: STOP_SCRIPT_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
-    return { ok: true };
-  } catch (error) {
-    const failure = (error ?? {}) as { code?: unknown; killed?: boolean; message?: string };
-    const why = failure.killed
-      ? `停止命令超过 ${Math.round(STOP_SCRIPT_TIMEOUT_MS / 1000)} 秒还没结束，已经把它中断`
-      : typeof failure.code === "number"
-        ? `停止命令退出码 ${failure.code}`
-        : `停止命令跑不起来（${failure.message ?? String(error)}）`;
-    const tail = outputTail(error);
-    return { ok: false, reason: tail ? `${why}：${tail}` : why };
-  }
+  catch (error) { return Promise.resolve({ ok: false, reason: error instanceof Error ? error.message : String(error) }); }
+  return new Promise<Result>((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(launch.shell, launch.args, {
+        cwd,
+        detached: !IS_WINDOWS, // 独立进程组:超时要连它拉起的东西一起收掉
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      resolve({ ok: false, reason: `停止命令跑不起来（${error instanceof Error ? error.message : String(error)}）` });
+      return;
+    }
+    let out = "";
+    let err = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (result: Result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolve(result);
+    };
+    const fail = (why: string) => {
+      const tail = outputTail(out, err);
+      settle({ ok: false, reason: tail ? `${why}：${tail}` : why });
+    };
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (text: string) => { out = (out + text).slice(-STOP_OUTPUT_KEEP); });
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (text: string) => { err = (err + text).slice(-STOP_OUTPUT_KEEP); });
+    child.on("error", (error) => fail(`停止命令跑不起来（${error.message}）`));
+    child.on("exit", (code, signal) => {
+      if (code === 0) { settle({ ok: true }); return; }
+      fail(code === null ? `停止命令被信号 ${signal} 中断` : `停止命令退出码 ${code}`);
+    });
+    timer = setTimeout(() => {
+      killScriptGroup(child);
+      fail(`停止命令超过 ${Math.round(timeoutMs / 1000)} 秒还没结束，已经把它和它拉起的进程一起杀掉`);
+    }, timeoutMs);
+  });
 }
 
 /** 停止脚本跑完后等启动会话自己退场(到点就算了,后面还有 terminate 兜底)。 */
@@ -227,13 +277,14 @@ export function startCommand(
 export function stopCommand(
   projectId: string,
   commandId: string,
-  stop: { script: string; cwd: string } | null = null,
+  /** timeoutMs 缺省就是 STOP_SCRIPT_TIMEOUT_MS;回归拿它把一分钟缩成毫秒级,不必真等。 */
+  stop: { script: string; cwd: string; timeoutMs?: number } | null = null,
 ): Promise<CommandActionResult> {
   return withCommandLock(projectId, commandId, async () => {
     const open = openSession(projectId, commandId, stop?.script ?? null);
     if (!open) return { status: 200 as const, body: { stopped: false } };
     if (stop) {
-      const ran = await runStopScript(stop.cwd, stop.script);
+      const ran = await runStopScript(stop.cwd, stop.script, stop.timeoutMs ?? STOP_SCRIPT_TIMEOUT_MS);
       if (!ran.ok) return { status: 502 as const, body: { error: `停止失败：${ran.reason}` } };
       await waitForSessionGone(projectId, commandId);
     }
@@ -269,7 +320,7 @@ export function restartCommand(
         // 配了停止命令:重启的前半程也走它 —— 否则同一个服务,点停止是优雅下线、点重启却被
         // 直接 kill,两颗按钮对不上。停不下来就别起新的(端口还占着,新的只会挂)。
         if (command.stopCommand && openSession(projectId, command.id, command.stopCommand)) {
-          const ran = await runStopScript(cwd, command.stopCommand);
+          const ran = await runStopScript(cwd, command.stopCommand, STOP_SCRIPT_TIMEOUT_MS);
           if (!ran.ok) return { status: 502 as const, body: { error: `重启失败：旧服务没停下来（${ran.reason}）` } };
           await waitForSessionGone(projectId, command.id);
         }

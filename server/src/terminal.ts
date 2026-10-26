@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import * as pty from "node-pty";
+import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import { IS_WINDOWS } from "./platform.js";
 import { id } from "./util.js";
 import {
@@ -677,6 +678,13 @@ export class TerminalSessionManager {
       // exit)。判「活」含 daemonize 形状(组长退了、子进程还在):回收会话就没人能停
       // 那些进程了。只有整组死透的(纯退出日志)才闲置半小时后回收。
       if (this.sessionAlive(session)) continue;
+      // 唯一的例外:service 的启动脚本**正常退出、又没被用户停过**。这条记录可能是
+      // 「服务还开着」仅存的凭据 —— `docker compose up -d`、`pm2 start` 这类服务跑在
+      // ash 的进程树之外,启动脚本跑完自己就退,把它当「纯退出日志」收走,停止按钮当场
+      // 退回 ▶、容器却还在跑(第 1 轮审查 E1 实锤)。GC 在这件事上必须保守:宁可多留
+      // 一条退出日志,也不能把「还有东西在跑」这个事实清掉。用户点过停止
+      // (stoppedByUser)或启动本身就失败(非 0 退出)时它就只是日志,照常回收。
+      if (session.commandId === SERVICE_COMMAND_ID && session.exitCode === 0 && !session.stoppedByUser) continue;
       if (this.close(session.id)) closed += 1;
     }
     return closed;
