@@ -2,21 +2,16 @@ import { basename } from "node:path";
 import * as pty from "node-pty";
 import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import { IS_WINDOWS } from "./platform.js";
-import { anyPortListening, portsFromOutput } from "./service-ports.js";
+import { createPortScanner, LAUNCH_ID_ENV } from "./service-ports.js";
 import { id } from "./util.js";
 import {
   containmentAvailable,
-  descendantsFromTable,
-  freezeAndEnumerate,
   groupAlive,
-  processAlive,
-  readProcessTable,
-  readProcessTableSync,
-  sessionMemberPidsSync,
   TTY_COMMAND_WRAPPER,
   TTY_REAPER_WRAPPER,
-  type DescendantSnapshot,
 } from "./terminal-process-tree.js";
+import { killAllSessionTrees, killSessionTree, terminateSession } from "./terminal-session-kill.js";
+import { TerminalWatcher } from "./terminal-session-watch.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
 import { TerminalCapacity, type TerminalReservation } from "./terminal-capacity.js";
@@ -26,14 +21,12 @@ export { resolveTerminalDirectory } from "./terminal-shell.js";
 const MAX_BUFFER_BYTES = 512 * 1024;
 const MAX_SESSIONS = 16;
 const IDLE_TTL_MS = 30 * 60 * 1000;
-// 后代累积扫描的间隔。采样是**第三道防线**,不承担正确性(第 4 轮审查实锤:毫秒级的
-// `disown; exit` 任何采样都赢不了):交互会话的独立组孤儿由 TTY_REAPER_WRAPPER 在 shell
-// 退出时确定性清杀,manager 结束/关服路径再用会话成员 + ppid 快照确定性补抓;累积只兜
-// 「leader 已退、枚举已不可用」的降级路径。构造可注入间隔,回归用小间隔 + 真实 sleep
-// 按真实定时器验证。
-const DESCENDANT_SCAN_MS = 1_500;
-// onData 触发扫描的限流窗口:shell 输出很密,别每帧都 ps。trailing edge,不丢触发。
-const DESCENDANT_DATA_THROTTLE_MS = 250;
+/**
+ * 一条会话最多记这么多个本机端口。停止那一档是逐个端口问 lsof 的,一条嘴碎的启动脚本
+ * (测试输出、日志回放)不该把那次停止拖成几十次外部调用。先到先记 —— 服务自报家门
+ * 几乎总在最前面。
+ */
+const MAX_LAUNCH_PORTS = 8;
 
 export type TerminalEvent =
   | { seq: number; type: "data"; data: string }
@@ -85,7 +78,7 @@ type TerminalSession = TerminalSessionInfo & {
   /**
    * 会话存续期见过的后代进程组 pgid(job-control 后台作业的独立组)。持续累积 ——
    * shell 一 exit 树就断了、实时快照抓不到,只有这份内存记录能在结束/退出时杀到它们
-   * (第 2 轮自由审查实锤)。见 terminal-process-tree.ts 顶部与 trackDescendants。
+   * (第 2 轮自由审查实锤)。见 terminal-process-tree.ts 顶部与 terminal-session-watch.ts。
    */
   descendantPgids: Set<number>;
   /**
@@ -93,6 +86,19 @@ type TerminalSession = TerminalSessionInfo & {
    * 这种字样跟「我起了个服务」没关系,而停止按钮只长在命令会话上。
    */
   launchPorts: Set<number>;
+  /**
+   * 认端口的**增量**扫描器。pty 的输出是流,地址完全可能被切成两块送来,无状态正则会
+   * 整条漏掉、甚至把五位端口的前四位当成完整端口(第 1 轮审查发现 5)。见
+   * service-ports.ts 的 createPortScanner。
+   */
+  portScanner: { feed(chunk: string): number[]; flush(): number[] };
+  /**
+   * 这次启动独有的随机记号,注入进 pty 的环境(`ASH_LAUNCH_ID`)。它被这次启动 fork 出来
+   * 的每一个进程继承 —— 双 fork + setsid 的守护进程也带着 —— 于是「端口上坐着的是不是
+   * 这次起来的」有了**可核验**的归属证据,而不是时间窗口的推断。只给命令会话发
+   * (交互 shell 不长停止按钮,也就没有按端口动手的路);不进 DTO,服务端内部用。
+   */
+  launchToken: string | null;
   /**
    * pty slave 路径(/dev/ttysN)。leader(wrapper)活着时,按它枚举会话成员(ctty/sid
    * ∪ fd 持有者,见 terminal-process-tree.ts 文件头)就是**确定性**清单 —— 不依赖 ppid
@@ -127,17 +133,12 @@ type TerminalCreation = {
 export class TerminalSessionManager {
   private stopped = false;
   private readonly sessions = new Map<string, TerminalSession>();
-  private readonly capacity = new TerminalCapacity(MAX_SESSIONS, () => this.sessions.values(), (session) => this.sessionAlive(session));
+  private readonly capacity = new TerminalCapacity(MAX_SESSIONS, () => this.sessions.values(), (session) => this.sessionRunning(session));
   private readonly creations = new Set<TerminalCreation>();
   private readonly windowsPty: typeof spawnWindowsPty;
   private readonly sweeper: ReturnType<typeof setInterval>;
-  private readonly descendantScanner: ReturnType<typeof setInterval>;
-  private scanningDescendants = false;
-  private rescanQueued = false;
-  /** 端口探测自成一把锁:它要跑 lsof,比 ps 慢得多,别让两拍叠在一起。 */
-  private scanningPorts = false;
-  private scanTimer: ReturnType<typeof setTimeout> | null = null;
-  private lastDescendantScanAt = 0;
+  /** 观测层(后代进程组累积 + 端口存活):实现与判据见 terminal-session-watch.ts。 */
+  private readonly watcher: TerminalWatcher;
   /**
    * 正在删除的项目:进入删除态后拒绝新建该项目的会话,直到删库完成。删成功后 projectId
    * 转入 deletedProjects **永久**留存(见下),删失败则撤销允许重试。没有它,清场被一个
@@ -162,11 +163,7 @@ export class TerminalSessionManager {
     this.windowsPty = options.windowsPty ?? spawnWindowsPty;
     this.sweeper = setInterval(() => this.sweepIdleSessions(), 60_000);
     this.sweeper.unref?.();
-    this.descendantScanner = setInterval(
-      () => { void this.trackDescendants(); void this.trackServicePorts(); },
-      options.descendantScanMs ?? DESCENDANT_SCAN_MS,
-    );
-    this.descendantScanner.unref?.();
+    this.watcher = new TerminalWatcher(() => this.sessions.values(), { scanMs: options.descendantScanMs });
   }
 
   async createAsync(projectId: string, cwd: string, options: CreateOptions = {}): Promise<TerminalSessionInfo> {
@@ -256,11 +253,11 @@ export class TerminalSessionManager {
     // tab,旧记录被替换是预期行为。
     for (const sessionId of creation.reservation.replacedSessionIds) {
       const previous = this.sessions.get(sessionId);
-      if (previous && this.sessionAlive(previous)) throw new Error("旧命令会话尚未停止，无法替换");
+      if (previous && this.sessionRunning(previous)) throw new Error("旧命令会话尚未停止，无法替换");
     }
     if (options.command) {
       for (const stale of [...this.sessions.values()]) {
-        if (stale.projectId === projectId && stale.commandId === options.command.id && !this.sessionAlive(stale)) {
+        if (stale.projectId === projectId && stale.commandId === options.command.id && !this.sessionRunning(stale)) {
           stale.listeners.clear();
           this.sessions.delete(stale.id);
         }
@@ -304,12 +301,14 @@ export class TerminalSessionManager {
     const spawnSpec = IS_WINDOWS
       ? { file: shell, args }
       : { file: "/bin/sh", args: ["-c", wrapper, "ash-terminal", shell, ...args] };
+    // 记号必须在 spawn **之前**生成:它要进这次启动的环境,才能被后代继承。
+    const launchToken = options.command ? id() : null;
     const processHandle = spawnProcess(spawnSpec.file, spawnSpec.args, {
       name: "xterm-256color",
       cols: terminalSize(options.cols, 100, 20, 400),
       rows: terminalSize(options.rows, 24, 5, 200),
       cwd,
-      env: ptyEnvironment(),
+      env: ptyEnvironment(launchToken ? { [LAUNCH_ID_ENV]: launchToken } : {}),
     });
     const info: TerminalSessionInfo = {
       id: id(),
@@ -335,21 +334,25 @@ export class TerminalSessionManager {
       listeners: new Set(),
       descendantPgids: new Set(),
       launchPorts: new Set(),
+      portScanner: createPortScanner(),
+      launchToken,
       ttyPath: (processHandle as unknown as { ptsName?: string }).ptsName ?? null,
     };
     this.sessions.set(info.id, session);
     processHandle.onData((data) => {
       this.publish(session, { type: "data", data });
       // 服务起来都会自报家门(`Local: http://127.0.0.1:5173`)。趁输出流过记下来 ——
-      // 守护化的服务退出进程树之后,这是唯一还指得到它的线索。
-      if (session.commandId !== null) for (const port of portsFromOutput(data)) session.launchPorts.add(port);
+      // 守护化的服务退出进程树之后,这是唯一还指得到它的线索。按流增量认,不按块认。
+      if (session.commandId !== null) this.recordPorts(session, session.portScanner.feed(data));
       // shell 产出输出 = 它还活着,且可能刚起了后台作业(job-control 会打印 `[1] pid`)。
       // 限流触发一次后代扫描,让新作业在毫秒级被记进 descendantPgids,而不必等满一个周期
       // —— 缩小「起作业后立刻退 shell」的漏记窗口(第 3 轮审查)。
-      this.maybeScanFromData();
+      this.watcher.nudge();
     });
     processHandle.onExit(({ exitCode, signal }) => {
       session.exitCode = exitCode;
+      // 流到头了:扫描器手里那截尾巴按终态再认一遍(地址恰好是最后一个字节时才用到)。
+      if (session.commandId !== null) this.recordPorts(session, session.portScanner.flush());
       this.publish(session, { type: "exit", exitCode, signal });
     });
     return this.info(session);
@@ -407,34 +410,13 @@ export class TerminalSessionManager {
     if (!session) return false;
     this.sessions.delete(sessionId);
     session.listeners.clear();
-    const table = readProcessTableSync();
-    const live = table ? descendantsFromTable(table, session.process.pid) : { pids: [], pgids: [] };
-    const members = sessionMemberPidsSync([session.process.pid], session.ttyPath ? [session.ttyPath] : []) ?? [];
-    const pids = new Set(live.pids);
-    const pgids = new Set([...session.descendantPgids, ...live.pgids]);
-    for (const member of members) {
-      if (member.pid === session.process.pid) continue;
-      pids.add(member.pid);
-      if (member.pgid > 1 && member.pgid !== session.process.pid) pgids.add(member.pgid);
-    }
-    this.signalTree(session, "SIGKILL", { pids: [...pids], pgids: [...pgids] });
+    killSessionTree(session);
     return true;
   }
 
   /**
-   * 停止一个会话但**保留现场**:会话不删、缓冲日志不丢,退出码照常经 onExit 落在会话上
-   * —— 停止是用户动作,刷新页面后要看得出「我停过」(根 AGENTS.md 的硬要求),所以它和
-   * close(关掉 tab、连日志一起丢)是两个动词。
-   *
-   * 杀的是**整个进程组 + 会话见过的全部后代**(pty 子进程 fork 后 setsid,组长就是它自己,
-   * dev server 派生的子进程都在组里;交互 shell 的 job control 会把后台作业挪进独立进程组,
-   * 靠「存续期累积 + 发信号前实时补抓」两份后代 pgid 覆盖):SIGTERM 给进程收尾的机会,等不到
-   * **整组+后代清空**再 SIGKILL 兜底;两轮都压不住(基本只剩 D 状态)就如实返回失败,绝不把
-   * 「没杀死」报成「已停」—— 会话还在,UI 可重试。交互会话的内层 shell 另加一发 SIGHUP
-   * (它忽略 TERM,只认挂断;理由见下面发信号处),整组的 TERM 收尾宽限不受影响。判定必须
-   * 是「组长退了 **且** 组里没人 **且** 已见后代组/进程全消失」:`cmd & wait`(或 shell
-   * 先 exit、独立组作业还在)这种形状下只看组长就会漏杀(第 2 轮审查实锤)。双 fork 后
-   * 立刻 setsid 逃逸、且从没被任一次扫描抓到的守护进程超出本方法能力,属已知边界。
+   * 停止一个会话的进程但保留现场(日志、退出码、「我停过」都留着)。实现与判据见
+   * terminal-session-kill.ts 的 terminateSession —— 那边只认进程事实,不碰会话表。
    */
   async terminate(
     sessionId: string,
@@ -443,99 +425,7 @@ export class TerminalSessionManager {
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     const session = this.session(sessionId, projectId);
     if (!session) return { ok: true };
-    const groupId = session.process.pid;
-    // 成员清单要在**发信号 + 早退判定之前**拿齐,且拿之前先**冻结**(freezeAndEnumerate):
-    // 枚举与发信号之间,组内 shell 可能正把新服务 fork 进新 PGID(实测 restart 后立即
-    // stop,nohup 服务恰好从快照缝里漏出去、stopped:true 却留下孤儿)。清单三份并集 ——
-    // ① ppid 树(leader 活着时完整);② 会话成员(ctty/sid ∪ fd 持有者,disown 离树的
-    // 独立组、stdio 全重定向的 nohup 服务都在列);③ 存续期累积的 pgid(leader 已退、
-    // ctty 已 revoke 时仅存的线索)。
-    //
-    // **两轮都要重新冻结枚举**:TERM 轮解冻是必须的(可捕获信号在 stopped 态挂起,得
-    // SIGCONT 才递送,进程才有机会收尾),但解冻窗口里进程的 TERM handler 可以再 fork
-    // 出新的独立 PGID(第 7 轮审查实锤);所以升级 KILL **之前**再冻结、再枚举到不动点、
-    // 更新快照,把 handler 新建的组一并纳管。SIGKILL 不可捕获,冻结态下发它进程没有
-    // 再 fork 的机会,这一轮的完整枚举就是终态判定的依据。
-    const memberPids = new Set<number>();
-    const clearedBy = (snapshot: DescendantSnapshot) => session.exitCode !== null && !groupAlive(groupId)
-      && snapshot.pgids.every((pgid) => !groupAlive(pgid))
-      && snapshot.pids.every((pid) => !processAlive(pid));
-
-    const term = await freezeAndEnumerate(groupId, session.ttyPath, session.descendantPgids, memberPids);
-    if (clearedBy(term.snapshot)) { term.thaw(); return { ok: true }; }
-    session.stoppedByUser = true;
-    this.signalTree(session, "SIGTERM", term.snapshot);
-    // 交互 shell 只认挂断:zsh/bash 按 POSIX 惯例**忽略 SIGTERM**(交互模式下),于是
-    // 「关 tab」的 TERM 轮必然空等满 termMs 才升级 KILL —— 实测一个什么都没跑的空闲 tab
-    // 也要 3.5s 才关掉,而这 3s 全花在等一个约定好不会发生的事件上(leader 自己也 trap 了
-    // TERM,成功判定的第一条却是 leader 的 exitCode 落地)。关 tab 的正确语义本来就是
-    // **终端挂断**,对应 SIGHUP:shell 收到即退出、并按自己的规矩通知作业(nohup/disown
-    // 的不动),wrapper 随后确定性清杀余党,TERM 轮在几百毫秒内自然满足退出条件。
-    // 只发给 leader 的直接子进程(那个内层 shell),不广播到整组:组里的服务/前台作业
-    // 该拿的仍是 TERM 那份**完整**收尾宽限,一秒都不缩短(命令会话的 stop 因此完全不受
-    // 影响 —— dev server 照旧优雅退出)。leader 自己 trap 了 HUP,shell 转发也杀不到它,
-    // tty 不会被提前 revoke,枚举能力全程在线。
-    if (session.commandId === null) {
-      for (const pid of term.innerShellPids) {
-        try { process.kill(pid, "SIGHUP"); } catch { /* 已死 */ }
-      }
-    }
-    term.thaw(); // 解冻:让 TERM handler 收尾(它也可能 fork —— 交给下面的 KILL 轮抓)
-    if (await this.waitForGroupExit(session, timeouts?.termMs ?? 3000, term.snapshot)) return { ok: true };
-
-    // KILL 轮:重新冻结 + 枚举到不动点,纳管 TERM handler 解冻期新建的独立 PGID。
-    const kill = await freezeAndEnumerate(groupId, session.ttyPath, session.descendantPgids, memberPids);
-    this.signalTree(session, "SIGKILL", kill.snapshot);
-    kill.thaw(); // KILL 已致命,CONT 只为不把万一没死透的留在 stopped(D 状态那种)
-    if (await this.waitForGroupExit(session, timeouts?.killMs ?? 2000, kill.snapshot)) return { ok: true };
-    return {
-      ok: false,
-      reason: session.exitCode === null
-        ? "进程连 SIGKILL 都没响应，可能卡在不可中断的系统调用里"
-        : "主进程已退出，但它派生的子进程杀不掉，可能卡在不可中断的系统调用里",
-    };
-  }
-
-  private signalTree(session: TerminalSession, signal: "SIGTERM" | "SIGKILL", descendants?: DescendantSnapshot): void {
-    try {
-      // Windows 没有进程组信号这一说,交给 node-pty 收 ConPTY —— 它按
-      // `GetConsoleProcessList` 把挂在这个伪控制台上的进程全部收掉,交互 shell 与
-      // 常用命令同一条路(那边的边界见 create 里 wrapper 那段注释)。
-      if (IS_WINDOWS) session.process.kill();
-      else process.kill(-session.process.pid, signal);
-    } catch {
-      // 整组已空(ESRCH):没人可杀,waitForGroupExit 会立刻确认。
-      try { session.process.kill(signal); } catch { /* already gone */ }
-    }
-    // job control 的后台作业在自己的组里,逐组、逐 pid 补刀(清单由调用方按 ppid 树 +
-    // 会话成员 + 累积拼出;逐 pid 是兜底 —— 覆盖 setpgid 到快照外新组的边角)。
-    for (const pgid of descendants?.pgids ?? []) {
-      try { process.kill(-pgid, signal); } catch { /* already gone */ }
-    }
-    for (const pid of descendants?.pids ?? []) {
-      try { process.kill(pid, signal); } catch { /* already gone */ }
-    }
-  }
-
-  /**
-   * 等「组长的 exitCode 落了 **且** 进程组里没有任何存活成员 **且** 快照里的后代
-   * 进程/进程组全部消失」;超时返回 false,由调用方决定升级还是报失败。组长先死不算完
-   * —— 组号还被子进程占着(kill(-pgid, 0) 探测),job control 的后台作业还占着自己的组。
-   */
-  private waitForGroupExit(session: TerminalSession, timeoutMs: number, descendants?: DescendantSnapshot): Promise<boolean> {
-    const groupId = session.process.pid;
-    return new Promise((resolve) => {
-      const deadline = Date.now() + timeoutMs;
-      const check = () => {
-        const cleared = session.exitCode !== null && !groupAlive(groupId)
-          && (descendants?.pgids ?? []).every((pgid) => !groupAlive(pgid))
-          && (descendants?.pids ?? []).every((pid) => !processAlive(pid));
-        if (cleared) return resolve(true);
-        if (Date.now() >= deadline) return resolve(false);
-        setTimeout(check, 50);
-      };
-      check();
-    });
+    return terminateSession(session, timeouts);
   }
 
   /**
@@ -604,111 +494,21 @@ export class TerminalSessionManager {
    * (第 4 轮审查:全局限流直接跳过会让另一终端的输出吃掉本终端的扫描名额)。它只是
    * 让累积兜底更快命中 —— 正确性主力是 wrapper 清杀 + 结束时的 lsof/ppid 快照。
    */
-  private maybeScanFromData(): void {
-    if (this.scanTimer) return;
-    const wait = Math.max(0, this.lastDescendantScanAt + DESCENDANT_DATA_THROTTLE_MS - Date.now());
-    this.scanTimer = setTimeout(() => {
-      this.scanTimer = null;
-      void this.trackDescendants();
-    }, wait);
-    this.scanTimer.unref?.();
-  }
-
   /**
-   * 刷新「启动脚本退了、但它起的服务还听着端口」这个事实。只问**启动脚本已退出、用户
-   * 又没点过停止**的命令会话 —— 组长还活着时 groupAlive 已经说明一切,不必再跑 lsof;
-   * 用户点过停止就别再把它说成开着。一次 tick 最多问这几条,量级跟会话数同阶。
-   */
-  private async trackServicePorts(): Promise<void> {
-    if (this.scanningPorts) return;
-    const candidates = [...this.sessions.values()]
-      .filter((session) => session.commandId !== null && session.launchPorts.size > 0);
-    if (!candidates.length) return;
-    this.scanningPorts = true;
-    try {
-      for (const session of candidates) {
-        if (session.exitCode === null || session.stoppedByUser) { session.portsAlive = false; continue; }
-        session.portsAlive = await anyPortListening(session.launchPorts);
-      }
-    } finally { this.scanningPorts = false; }
-  }
-
-  /**
-   * 持续累积每个活会话见过的后代进程组 pgid。一次 ps 覆盖全部活 shell(命令会话也扫,
-   * 无害)。由 constructor 的定时器每 DESCENDANT_SCAN_MS 调一次,外加 onData 的限流触发
-   * (maybeScanFromData)。幂等只累积;正在扫时到达的请求**排队一次**扫完即补(不静默
-   * 丢弃,第 4 轮审查)。它是第三道防线:交互会话的独立组孤儿由 wrapper 清杀(确定性)
-   * 与结束时 lsof/ppid 快照(leader 活着时确定性)负责,累积只兜「lsof 缺失的环境 +
-   * leader 已退」这类降级路径。
-   */
-  private async trackDescendants(): Promise<void> {
-    if (this.scanningDescendants) { this.rescanQueued = true; return; }
-    const shells = [...this.sessions.values()].filter((session) => session.exitCode === null);
-    if (!shells.length) return;
-    this.scanningDescendants = true;
-    try {
-      const table = await readProcessTable();
-      if (!table) return;
-      for (const session of shells) {
-        for (const pgid of descendantsFromTable(table, session.process.pid).pgids) {
-          session.descendantPgids.add(pgid);
-        }
-      }
-    } finally {
-      this.lastDescendantScanAt = Date.now();
-      this.scanningDescendants = false;
-      if (this.rescanQueued) {
-        this.rescanQueued = false;
-        void this.trackDescendants();
-      }
-    }
-  }
-
-  /**
-   * server 退出前的清场:对每个还活着的会话**整组 + 后代 pgid** SIGTERM+SIGKILL 连发。
-   * 必须同步('exit' 钩子里没有 await),但同步 ps/procfs 是可以的 —— 各一次读全表/
-   * 批量枚举全部会话的成员,给每个会话就地补实时快照,与存续期累积合并。不能只读
-   * 累积值:那会漏掉「起了作业但还没被任何一次扫描记下」的独立组(第 2、3 轮实锤)。
-   * 会话成员兜底封两类:第 4 轮竞态(内层 shell 刚退、wrapper 正在清杀,这一轮组信号
-   * 把 wrapper 打断的话,disown 的独立组既不在 ppid 树也不在累积里)和第 6 轮的
-   * stdio 全重定向 nohup 服务(不持 fd,只有 ctty/sid 能点到名)。
-   * 命令会话跑的是 dev server/watch 这类可随时重启的进程,强杀可接受;不杀的代价是它们
-   * 被 PID 1 收养成孤儿,ash 重启后 UI/API 失忆显示「未启动」、旧进程却还占着端口。
+   * server 退出前的清场:会话表清空,进程交给 killAllSessionTrees 同步连发 TERM+KILL
+   * (为什么必须同步、为什么不能只读累积快照,见 terminal-session-kill.ts 那边)。
    */
   shutdown(): void {
     this.stopped = true;
     this.cancelCreations();
     clearInterval(this.sweeper);
-    clearInterval(this.descendantScanner);
-    if (this.scanTimer) { clearTimeout(this.scanTimer); this.scanTimer = null; }
-    const table = readProcessTableSync();
-    const members = sessionMemberPidsSync(
-      [...this.sessions.values()].map((s) => s.process.pid),
-      [...this.sessions.values()].map((s) => s.ttyPath).filter((p): p is string => p !== null),
-    ) ?? [];
-    for (const session of [...this.sessions.values()]) {
+    this.watcher.stop();
+    const targets = [...this.sessions.values()];
+    for (const session of targets) {
       session.listeners.clear();
-      // 无条件连发,不按 exitCode 筛:组长退了组不一定空(daemonize 形状),而对已空的组
-      // 发信号只是 ESRCH,signalTree 兜得住 —— 少一个条件就少一类漏杀。
-      const live = table ? descendantsFromTable(table, session.process.pid) : { pids: [], pgids: [] };
-      const descendants: DescendantSnapshot = {
-        pids: live.pids,
-        pgids: [...new Set([...session.descendantPgids, ...live.pgids])],
-      };
-      this.signalTree(session, "SIGTERM", descendants);
-      this.signalTree(session, "SIGKILL", descendants);
       this.sessions.delete(session.id);
     }
-    // 会话成员(全会话并集)最后补刀:比 ppid 树多出来的就是已 disown 离树/已重定向
-    // 脱 fd 的余党。
-    for (const member of members) {
-      for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-        try { process.kill(member.pid, signal); } catch { /* already gone */ }
-        if (member.pgid > 1) {
-          try { process.kill(-member.pgid, signal); } catch { /* already gone */ }
-        }
-      }
-    }
+    killAllSessionTrees(targets);
   }
 
   sweepIdleSessions(now = Date.now()): number {
@@ -721,7 +521,7 @@ export class TerminalSessionManager {
       // 语义:关抽屉只是收起,回来还要原样在,结束它的只有 tab 上的关闭按钮和它自己
       // exit)。判「活」含 daemonize 形状(组长退了、子进程还在):回收会话就没人能停
       // 那些进程了。只有整组死透的(纯退出日志)才闲置半小时后回收。
-      if (this.sessionAlive(session)) continue;
+      if (this.sessionRunning(session)) continue;
       // 唯一的例外:service 的启动脚本**正常退出、又没被用户停过**。这条记录可能是
       // 「服务还开着」仅存的凭据 —— `docker compose up -d`、`pm2 start` 这类服务跑在
       // ash 的进程树之外,启动脚本跑完自己就退,把它当「纯退出日志」收走,停止按钮当场
@@ -774,7 +574,13 @@ export class TerminalSessionManager {
       if (session.projectId !== projectId || session.commandId !== commandId) continue;
       if (!newest || session.startedAt > newest.startedAt) newest = session;
     }
-    if (newest) newest.stoppedByUser = true;
+    if (newest) {
+      newest.stoppedByUser = true;
+      // 调用方是在**核实过端口已经空了**之后才来标的(terminal-commands.ts 的 stopCommand),
+      // 所以这里把缓存的端口事实一并落回去 —— 否则下一拍扫描之前,这条会话还会被
+      // sessionRunning 当成「还在跑」,start 的幂等门会拒绝重新启动。
+      newest.portsAlive = false;
+    }
   }
 
   /**
@@ -802,6 +608,49 @@ export class TerminalSessionManager {
       // 这个只能是缓存值:问端口要跑 lsof,不能挂在每次 info() 上(列表接口一次几十条)。
       portsAlive: session.portsAlive,
     };
+  }
+
+  /**
+   * 记下这次启动打印的端口(有上限)。只在命令会话上调。
+   */
+  private recordPorts(session: TerminalSession, ports: number[]): void {
+    for (const port of ports) {
+      if (session.launchPorts.size >= MAX_LAUNCH_PORTS) return;
+      session.launchPorts.add(port);
+    }
+  }
+
+  /**
+   * 这条会话名下**还有东西在跑吗** —— 整个生命周期(start 的幂等门、stop/restart、容量、
+   * 同命令旧记录清理、闲置回收、前端那颗按钮)都认这一个口径。
+   *
+   * 进程归属(sessionAlive)之外多一档:**它打印过的端口还有人在听**。真·守护化的服务从
+   * ppid/ctty/pgid 三条线索里全逃了,只剩端口这一条 —— 少了这一档就会出现「停止接口认为
+   * 它开着、启动接口认为它没开」,于是同一个服务被起第二份(第 1 轮审查发现 3)。
+   */
+  private sessionRunning(session: TerminalSession): boolean {
+    return this.sessionAlive(session) || session.portsAlive;
+  }
+
+  /**
+   * 这条常用命令现在还在跑的会话(含只剩端口线索的守护形状)。start 的幂等门用它 ——
+   * liveCommandSession 只认进程,会把守护化的服务当成没在跑。
+   */
+  runningCommandSession(projectId: string, commandId: string): TerminalSessionInfo | null {
+    for (const session of this.sessions.values()) {
+      if (session.projectId === projectId && session.commandId === commandId && this.sessionRunning(session)) {
+        return this.info(session);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 这条会话的启动记号(service-ports.ts 核归属用)。服务端内部接口,不进 DTO ——
+   * 它是一枚授权凭据,没有任何前端用途。
+   */
+  launchTokenOf(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.launchToken ?? null;
   }
 
   /**

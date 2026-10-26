@@ -72,7 +72,7 @@ const { dbClient } = await import("../src/db/index.js");
 const projectId = "terminal-capacity";
 const windows = process.platform === "win32";
 const keepAlive = windows ? "Start-Sleep -Seconds 120" : "sleep 120";
-const command = { id: "keep", name: "keep", command: keepAlive, restartCommand: null };
+const command = { id: "keep", name: "keep", command: keepAlive, restartCommand: null, stopCommand: null };
 
 async function waitExit(sessionId: string): Promise<void> {
   const deadline = Date.now() + 15_000;

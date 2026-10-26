@@ -39,6 +39,13 @@ const COMMANDS = [
 /** 第一个项目自己在跑的一条常用命令:只在「晚返回」那一幕出现(见下面的 __slowFact)。 */
 const lateSession = { id: "s-late", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 3, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false };
 
+/**
+ * 守护化的**普通常用命令**(window.__plainDaemon):端口是服务,不是服务那一行的特权 ——
+ * `npm run dev` 配在列表里照样会双 fork 跑成守护进程。这一幕用来钉住「行按钮与服务头部
+ * 同一套判据」(第 1 轮审查发现 3:头部有停止,同形状的普通命令行却显示执行)。
+ */
+const plainDaemonSession = { id: "s-plain-daemon", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 5, exitCode: 0, stoppedByUser: false, groupAlive: false, ports: [9191], portsAlive: true };
+
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -69,6 +76,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       { id: "s-shell", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "第一个项目", commandId: null, startedAt: 1, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false },
       { id: "s-other", projectId: "p-two", cwd: "/workspace/p-two", shell: "/bin/zsh", name: "别家的 dev server", commandId: "dev", startedAt: 2, exitCode: null, stoppedByUser: false, groupAlive: true, ports: [], portsAlive: false },
       ...(slow ? [lateSession] : []),
+      ...((window as unknown as { __plainDaemon?: boolean }).__plainDaemon === true ? [plainDaemonSession] : []),
     ];
     if (slow) await new Promise((done) => window.setTimeout(done, 400));
     return reply({ sessions });

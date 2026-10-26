@@ -216,7 +216,11 @@ try {
     0,
     "端口还有人听就是开着 —— 没配停止命令也不该摆回启动按钮",
   );
-  assert.match(await pop.locator(".cmd-pop__svc-state").innerText(), /已启动/);
+  assert.match(
+    await pop.locator(".cmd-pop__svc-state").innerText(),
+    /运行中（启动脚本已退出）/,
+    "端口还有人听 = 在跑;「已启动」那档留给「只配了停止命令所以姑且认它开着」的推断",
+  );
   await pop.getByRole("button", { name: "停止", exact: true }).click();
   await page.waitForFunction(() => JSON.parse(document.getElementById("calls").textContent).length === 4);
   assert.equal(
@@ -224,6 +228,22 @@ try {
     "/api/projects/p-one/commands/service/stop",
     "没配停止命令时点停止照样发 stop,怎么杀是服务端的事",
   );
+
+  // ⑬-前 同一套判据得管到**普通常用命令**那一行:它守护化之后(脚本退了、端口还有人听)
+  //   要摆停止,不能一边头部说运行中、一边同形状的行显示「执行」。
+  await page.evaluate(() => { window.__plainDaemon = true; });
+  await reopen();
+  await pop.getByRole("button", { name: "停止 构建", exact: true }).waitFor();
+  assert.equal(
+    await pop.getByRole("button", { name: "执行 构建", exact: true }).count(),
+    0,
+    "行按钮只认进程归属就会把守护化的服务说成已退出,再点一次起第二份",
+  );
+  assert.match(
+    await pop.locator(".cmd-pop__row-state").last().innerText(),
+    /运行中（启动脚本已退出）/,
+  );
+  await page.evaluate(() => { delete window.__plainDaemon; });
 
   // ⑬ 反面:启动脚本退了、端口上也没人、又没配停止命令 —— 没有任何线索说它还活着,
   //    这时认它开着就是猜。回到 ▶,并照实说退的是**启动脚本**。

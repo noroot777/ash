@@ -54,11 +54,22 @@ type CommandRow = {
   session: TerminalSessionInfo | null;
 };
 
+/**
+ * 这条会话名下**还有东西在跑吗** —— 弹层里每一个表面(头部按钮、每行的按钮与状态、外面
+ * 那颗 ▶ 亮不亮)都认这一个判据,**与服务端的 sessionRunning 逐字对齐**
+ * (server/src/terminal.ts):两边劈叉就会出现「停止按钮摆在那儿、点下去什么都没发生」,
+ * 或者反过来「服务还听着端口,界面却摆着启动按钮、再点一次起第二份」。
+ *
+ * 进程归属(groupAlive:组长退了但后台子进程还在的 daemonize 形状也算)之外多一档:
+ * **它打印过的端口还有人在听**。真·守护化的服务(双 fork + setsid)从进程归属里全逃了,
+ * 端口是仅剩的线索。
+ */
+const sessionRunning = (session: TerminalSessionInfo): boolean => session.groupAlive || session.portsAlive;
+
 // 同一条命令可能挂着「一条活会话」或「一条刚退出的」——一处只说一件事,活的优先。
-// 判「活」用 groupAlive:组长退了但后台子进程还在(daemonize)也算活,那正是要能停的现场。
 function bestSession(sessions: TerminalSessionInfo[], projectId: string, commandId: string): TerminalSessionInfo | null {
   const mine = sessions.filter((s) => s.projectId === projectId && s.commandId === commandId);
-  return mine.find((s) => s.groupAlive) ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
+  return mine.find(sessionRunning) ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
 }
 
 /** 命令可能是整段多行脚本,行里只摆得下一行:首行 + 还有几行,细节去设置里看。 */
@@ -85,7 +96,7 @@ function sessionState(
   open = false,
   service = false,
 ): { tone: string; text: string | null } {
-  if (session?.groupAlive) {
+  if (session && sessionRunning(session)) {
     return session.exitCode === null
       ? { tone: "on", text: "运行中" }
       : { tone: "on", text: "运行中（启动脚本已退出）" };
@@ -193,7 +204,7 @@ export function CommandsLauncher({
   // (双 fork + setsid)从进程归属里全逃了,端口是仅剩的线索,顺着它能真杀到,所以这一档
   // **不要求配停止命令**;③ 配了停止命令时,正常退出又没被停过的那次启动也算开着 ——
   // `docker compose up -d` 这类连端口都未必打在本机,那条命令就是用户给的线索。
-  const serviceOpen = serviceSession && (serviceSession.groupAlive || serviceSession.portsAlive
+  const serviceOpen = serviceSession && (sessionRunning(serviceSession)
     || (serviceConfig?.stopCommand && serviceSession.exitCode === 0 && !serviceSession.stoppedByUser))
     ? serviceSession
     : null;
@@ -203,10 +214,10 @@ export function CommandsLauncher({
   const serviceKey = currentProject ? `${currentProject.id}:${SERVICE_COMMAND_ID}` : "";
   const serviceState = serviceConfig || serviceSession ? sessionState(serviceSession, serviceOpen !== null, true) : null;
 
-  // 按钮亮不亮和每行的「活/死」都看 groupAlive,不看 exitCode:daemonize 形状
+  // 按钮亮不亮和每行的「活/死」都看 sessionRunning,不看 exitCode:daemonize 形状
   // (启动脚本把服务放后台后自己退出)下组长退了、服务还在跑,那也是在跑;service 另按
   // serviceOpen 算 —— 弹层里说它开着,外面那颗按钮就不该是灰的。
-  const live = sessions.some((session) => session.groupAlive) || serviceOpen !== null;
+  const live = sessions.some(sessionRunning) || serviceOpen !== null;
   const rows = rowsOf(currentProject, sessions);
 
   const rowState = (row: CommandRow) => sessionState(row.session);
@@ -328,7 +339,7 @@ export function CommandsLauncher({
                 {rows.map((row) => {
                   const state = rowState(row);
                   const key = `${row.projectId}:${row.commandId}`;
-                  const running = row.session?.groupAlive ? row.session : null;
+                  const running = row.session && sessionRunning(row.session) ? row.session : null;
                   return (
                     <div className="cmd-pop__row" key={key}>
                       <span className={`cmd-pop__row-dot is-${state.tone}`} aria-hidden="true" />

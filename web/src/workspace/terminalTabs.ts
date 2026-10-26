@@ -44,9 +44,14 @@ export function createTerminalTab(
   };
 }
 
-/** attach tab 的状态点表达**会话/服务的事实**(跑着/脚本退了服务在/死透),不是连接状态。 */
-export function attachStatusOf(session: { exitCode: number | null; groupAlive: boolean }): TerminalStatus {
-  return session.exitCode === null ? "ready" : session.groupAlive ? "detached" : "ended";
+/**
+ * attach tab 的状态点表达**会话/服务的事实**(跑着/脚本退了服务在/死透),不是连接状态。
+ * 「服务还在」的判据与常用命令弹层、服务端的 sessionRunning 一致 —— 进程归属之外,它打印
+ * 过的端口还有人听也算在跑(否则同一条守护化的服务,弹层说「运行中」、终端 tab 说「已结束」)。
+ */
+export function attachStatusOf(session: { exitCode: number | null; groupAlive: boolean; portsAlive?: boolean }): TerminalStatus {
+  if (session.exitCode === null) return "ready";
+  return session.groupAlive || session.portsAlive === true ? "detached" : "ended";
 }
 
 export function createAttachTab(
@@ -57,6 +62,7 @@ export function createAttachTab(
     commandId: string | null;
     exitCode: number | null;
     groupAlive: boolean;
+    portsAlive?: boolean;
     stoppedByUser: boolean;
   },
   /** 恢复的交互 shell 用项目名 + 序号做标签,跟新建 shell 一个排法;命令日志用会话名。 */
