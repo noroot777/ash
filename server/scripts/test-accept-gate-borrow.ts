@@ -343,6 +343,32 @@ try {
   assert.equal(runIn(join(taskSnapshot, "transitive.mjs")), "new-task", "传递导入同理");
   assert.equal(await verifyGateSnapshot(taskSnapshot, taskGateSource), true);
 
+  // 绝对原文:Windows 的 npm 给 workspace 包建的是**绝对 junction**,照抄会让快照里的包解析回活动
+  // 工作区。所以克隆时绝对原文指着项目内就改写到快照内对应位置,指着项目外(.venv/bin/python ->
+  // /opt/homebrew/…、/usr/local/bin 下的工具)照抄——那是系统的东西,不是这次要冻的源码。两条都在
+  // 这里显式建成绝对路径,否则 macOS 这一侧只会走到「照抄」那一支,改写分支要等上真机才第一次执行。
+  const absolute = freshRepo("monorepo-absolute", "node_modules\n", monoPkg);
+  monoSource7(absolute, "absolute-certified");
+  git(absolute, "add", "-A");
+  git(absolute, "commit", "-m", "workspace package");
+  mkdirSync(join(absolute, "node_modules", "@demo"), { recursive: true });
+  linkDir(join(absolute, "packages", "lib"), join(absolute, "node_modules", "@demo", "lib"));
+  const outsideTool = join(root, "outside-tool");
+  mkdirSync(outsideTool, { recursive: true });
+  writeFileSync(join(outsideTool, "runtime.mjs"), 'console.log("system tool");\n');
+  linkDir(outsideTool, join(absolute, "node_modules", "outside"));
+  const absoluteSource = await readGateSource(absolute);
+  const absoluteSnapshot = join(root, "monorepo-absolute-snapshot");
+  await createGateSnapshot(absolute, absoluteSnapshot, absoluteSource);
+  assert.equal(realpathSync(join(absoluteSnapshot, "node_modules", "@demo", "lib")),
+    realpathSync(join(absoluteSnapshot, "packages", "lib")), "绝对原文指着项目内:改写到快照里对应的位置");
+  assert.equal(realpathSync(join(absoluteSnapshot, "node_modules", "outside")), realpathSync(outsideTool),
+    "绝对原文指着项目外:照抄,不跟着搬进快照");
+  writeFileSync(join(absolute, "packages", "lib", "index.mjs"), 'export const build = "live-workspace";\n');
+  assert.equal(runIn(join(absoluteSnapshot, "probe.mjs")), "absolute-certified",
+    "改了工作区的 workspace 源码,快照里跑到的还是被认证那一版");
+  git(absolute, "restore", "packages/lib/index.mjs");
+
   // ── 8. 依赖根不可达:没装的可选依赖、指向还没建起来的目录的悬空链、环。
   // 登记它的条件只是 lstat 成功(悬空链也成立),所以这几种状态**会**进到依赖列表里。对账要求
   // 「两边都解析得出来」就会把它们全判成复制失败,于是一个没装的可选依赖足以拖垮整次验收——而
