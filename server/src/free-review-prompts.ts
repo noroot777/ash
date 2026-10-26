@@ -13,7 +13,7 @@ import {
   PLAIN_SUMMARY_GUIDE,
   REVIEW_VALIDATION_REQUIREMENT,
 } from "@ash/shared/free-workflow";
-import { CLASS_REPAIR_NOTE, reviewSweepProtocol, reviewSweepReminder } from "./review-sweep.js";
+import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { freeReviewHistorySection } from "./review-history.js";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 
@@ -47,8 +47,11 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
       "- 若未通过，只报告问题；Ash 会让用户另建独立修复任务。"
     : "";
   const reviewLocation = acceptedMerge ? "当前 detached 临时 worktree" : repoPath;
-  const allowReuse = run.targetKind !== "accepted_merge";
-  const { reference: regression } = await refreshRegressionEvidence(task.id, dir, !allowReuse);
+  // 扫描义务**不再分 workspace / accepted_merge 两份**：原先那个分叉存在的唯一理由是
+  // 「任务分支的回归结果能不能复用」，而回归复用这件事已经整体退役（回归统一在验收时跑，
+  // 审查者一条都不跑，口径见 `@ash/shared/free-workflow` 的 `REGRESSION_POLICY`）。
+  // 两种目标现在只差一句话，由 `refreshRegressionEvidence` 的清单说明自己交代。
+  const { reference: regression } = await refreshRegressionEvidence(task.id, dir, run.targetKind === "accepted_merge");
   return `【自由工作流 · 第 ${round} 轮审查】\n` +
     // 这里原先写「主动寻找能复现的缺陷」，跟下面扫描义务里的「做不到可复现也不许删掉这一条」
     // 直接打架 —— 同一段 prompt 里两句话冲突，它只能自己挑一个，挑错了没人看得出来。
@@ -57,7 +60,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     `任务：${task.id}\n${requirements}\n\n` +
     `${focus}${settled}${history}${note}${target}\n\n` +
     // 扫描义务摆在具体动作之前：先定「这一轮要扫到什么程度」，再说「先看 git status」。
-    reviewSweepProtocol(allowReuse) + regression + "\n\n" +
+    REVIEW_SWEEP_PROTOCOL + regression + "\n\n" +
     `先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
     // 浏览器策略**不在这里拼**:正文是提前生成的,这里拼死的只能是一份「默认未授权」的
     // 文本,而投递时读到的项目授权会被去重锚点挡在门外 —— 已经在项目设置里授权过的站点,
@@ -87,9 +90,14 @@ export function freeReviewResumeMessage(task: TaskRow, run: ReviewRunRow, round:
     REPORT_SUMMARY_REMINDER +
     // 续跑只带「收尾时仍然做得到」的那几条扫描义务（`short` 非 null 的）：这一轮的广度
     // 扫描已经过去了，再要求它重扫等于把续跑省下的 10M token 又烧一遍。
-    reviewSweepReminder(run.targetKind !== "accepted_merge") +
-    (run.targetKind === "accepted_merge" ? "" :
-      "重读同目录 regression-evidence.json，旧资格作废。") +
+    REVIEW_SWEEP_REMINDER +
+    // 回归口径在续跑路径上**两种目标都得说一句**：扫描义务的缩略版不带回归面（它 short 为
+    // null，收尾回合重扫没有意义），原先这句话是由退役了的「复用协议」顺带捎上的，删掉它
+    // 之后合并结果审查那一支一个字都不剩 —— 而「没人跟它说」和「跟它说了不要跑」在
+    // 行为上差一轮测试（`test-regression-reuse.ts` 钉住两支都有）。
+    (run.targetKind === "accepted_merge"
+      ? "回归测试统一在验收时执行：这一轮没有执行者登记清单可核对，回归面照样不要自己跑测试，缺口写进覆盖声明的留白。"
+      : "回归测试统一在验收时执行：回归面只核对同目录 regression-evidence.json 里执行者登记的结果，自己不要跑测试，缺口写进覆盖声明的留白。") +
     `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论。` +
     `旁路回合：不要调用 complete_task / accept_task。`;
 }

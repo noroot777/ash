@@ -62,7 +62,7 @@ export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
   const scope = await presetConclusionRound(task, db, opts.sourceTaskId);
   if (source.id !== taskId && scope?.reviewTaskId !== source.id) throw new RegressionConclusionRejected("当前来源不属于活动审查轮次");
   const checked = scope && (stage === "verified" || stage === "verify_failed")
-    ? await checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage, false, opts.verificationBasis)
+    ? await checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage, opts.verificationBasis)
     : undefined;
   const updatedAt = now();
   await commitRegressionConclusion(checked, async (transaction) => {

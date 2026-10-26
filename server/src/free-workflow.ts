@@ -56,7 +56,7 @@ import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-st
 import { claimTurn, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
-import { reviewSweepReminder } from "./review-sweep.js";
+import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { id, now } from "./util.js";
 import type { Actor } from "./auth/context.js";
 import { canUseOwned } from "./auth/owned.js";
@@ -135,7 +135,7 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
   return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
     `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +
     REPORT_SUMMARY_REMINDER +
-    reviewSweepReminder(run.targetKind !== "accepted_merge") +
+    REVIEW_SWEEP_REMINDER +
     reference +
     `结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
     `不要调用 complete_task 或 accept_task。`;
@@ -306,7 +306,7 @@ export async function reportFreeReviewConclusion(
     throw new Error(`审查结论必须先落报告：请把非空报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
   }
   const checked = await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
-    run.targetKind === "accepted_merge", opts.verificationBasis);
+    opts.verificationBasis);
   await commitRegressionConclusion(checked, async (transaction) => {
     await assertConclusionTask(transaction, task);
     const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];

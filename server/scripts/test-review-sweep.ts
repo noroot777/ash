@@ -33,18 +33,15 @@ try {
   assert.match(REVIEW_SWEEP_PROTOCOL, /这是类问题/, "完整版必须给出「报类」的固定说法");
   assert.match(REVIEW_SWEEP_REMINDER, /这是类问题/, "缩略版也必须留住「报类」那四个字");
 
-  const reuseRule = SWEEP_RULES.find((rule) => rule.id === "执行者回归结果复用");
-  assert.ok(reuseRule?.short, "执行者回归结果复用必须同时进入完整协议与续跑提醒");
-  assert.doesNotMatch(reuseRule.full, /read_task_transcript/, "不能依赖会截断且没有结果的对话记录");
-  for (const text of [reuseRule.full, reuseRule.short]) {
-    assert.match(text, /本轮后端证据清单.*reusable=true.*执行者结果/, "只复用后端核验的本轮执行者结果");
-    assert.match(text, /不再重复运行/, "不得要求审查者重复执行已有回归");
-    assert.match(text, /失败.*不得当作通过/, "已有失败结果不能被复用成通过");
-    assert.match(text, /缺失.*失效.*未覆盖.*补跑/, "缺失、失效或未覆盖时只补跑必要检查");
-    assert.match(text, /技术明细.*复用来源.*命令.*结果/, "技术明细必须列明复用依据");
-    assert.match(text, /不免除独立代码审查与必要的行为验证/, "续跑不能漏掉独立审查和行为验证");
-  }
+  // 回归口径（用户 2026-10-26）：审查者一条回归都不跑，只核对执行者登记的结果，缺口写留白。
+  // 这三条断言是「口径没被改回去」的唯一硬保证——措辞全是提示词，丢了不会有运行期报错。
+  assert.equal(SWEEP_RULES.some((rule) => rule.id === "执行者回归结果复用"), false,
+    "「执行者回归结果复用」整节已随回归口径退役，不该再回到扫描义务表里");
+  assert.match(REVIEW_SWEEP_PROTOCOL, /回归面[^\n]*回归测试统一在验收时/, "回归面必须写明回归统一在验收时执行");
+  assert.match(REVIEW_SWEEP_PROTOCOL, /自己一条都不要跑/, "回归面必须明确禁止审查者自己跑测试");
   assert.doesNotMatch(REVIEW_SWEEP_PROTOCOL, /回归面[^\n]*—— 跑测试/, "回归扫描义务不能再无条件要求重新跑测试");
+  assert.doesNotMatch(REVIEW_SWEEP_PROTOCOL, /缺少适用的真实测试结果时补跑/, "不得再要求审查者补跑回归");
+  assert.doesNotMatch(REVIEW_SWEEP_REMINDER, /复用/, "续跑提醒里不该再留「复用」那套退役协议");
 
   // ── ② 现象行抽取：全库真实报告只有两种形状 ──────────────────────────────────
   // 新格式（275 份）：摘要契约要求每条阻塞问题以「你会遇到」起头。

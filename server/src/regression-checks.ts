@@ -36,10 +36,9 @@ export async function prepareRegressionCommand(taskId: string, monitorId: string
 
 export async function regressionEvidenceReference(
   task: typeof tasks.$inferSelect, repoPath: string, evidenceDir: string, acceptedMerge = false,
-  verification?: { generation: string; independentRequired: boolean; acceptedMonitorIds: string[] },
 ): Promise<string> {
-  if (acceptedMerge) return "合并结果审查不得复用任务分支的回归结果，必须检查当前合并快照。";
-  if (!(await safeRunDirectory(evidenceDir, true))) return "回归证据清单不可用：目录安全检查不通过，禁止复用旧清单，请按缺口补跑。";
+  if (acceptedMerge) return "合并结果审查没有执行者登记清单可核对；回归测试统一在验收时执行，这一轮不要自己跑测试，回归面的缺口原样写进覆盖声明的留白。";
+  if (!(await safeRunDirectory(evidenceDir, true))) return "回归证据清单不可用：目录安全检查不通过；把回归面写成留白，不要自己跑测试去填。";
   const rows = acceptedMerge ? [] : await db.select().from(regressionChecks).where(eq(regressionChecks.taskId, task.id))
     .orderBy(desc(regressionChecks.generation));
   const workspace = rows.length ? await taskWorkspace(task, repoPath).catch(() => null) : null;
@@ -65,12 +64,12 @@ export async function regressionEvidenceReference(
       reason: `${result}；${reason}；${regressionInputRejection(record.inputIdentity)}` });
   }
   const path = join(evidenceDir, "regression-evidence.json");
-  if (!(await safeRunDirectory(evidenceDir))) return "回归证据清单不可用：写入前目录安全检查不通过，禁止复用旧清单，请按缺口补跑。";
+  if (!(await safeRunDirectory(evidenceDir))) return "回归证据清单不可用：写入前目录安全检查不通过；把回归面写成留白，不要自己跑测试去填。";
   await replaceEvidenceFile(path, JSON.stringify({ protocol: 2, inputPolicy: "immutable-closed-inputs-required",
-    taskId: task.id, generatedAt: new Date().toISOString(), acceptedMerge, snapshot, records, verification }, null, 2));
-  return `执行者回归证据清单：${path}。后端以数据库中的执行者身份、原始命令、真实退出码和代码树为权威，并校验完整日志摘要。` +
-    "reusable=true 只表示证据可引用，不代表测试通过；通过必须同时满足 passed=true 且 exitCode=0，失败必须照实报告，不得给通过结论。" +
-    "当前 runner 没有不可变且闭合的输入证明，所有记录均禁止自动复用；前后 Git 树相等不构成证明。" +
+    taskId: task.id, generatedAt: new Date().toISOString(), acceptedMerge, snapshot, records }, null, 2));
+  return `执行者回归证据清单：${path}。回归测试统一在验收时由项目的验收前置命令执行，这份清单只供你**核对执行者登记过什么**——` +
+    "每条的 reusable 恒为 false（当前 runner 没有不可变且闭合的输入证明，前后 Git 树相等不构成证明），所以它既不能当你的验证结论，也不是让你去重跑或补跑的清单；禁止自动复用。" +
+    "后端以数据库中的执行者身份、原始命令、真实退出码和代码树为权威，并校验完整日志摘要；一条算通过必须同时满足 passed=true 且 exitCode=0，失败必须照实报告，不得给通过结论。" +
     "generation 是数据库分配的单调登记代次，latest 标记同命令/目录的最新登记，旧失败仍完整保留，未完成的新代次也不能回退到旧通过。" +
-    "按 logPath 读取完整输出；清单为空或失效时按缺口补跑，不能用对话自述、被改写的 JSON 或旧审查结果代替。";
+    "按 logPath 读取完整输出；清单为空、失效或没覆盖到你担心的那一面时，把缺口原样写进覆盖声明的回归面留白，不能用对话自述、被改写的 JSON 或旧审查结果代替。";
 }

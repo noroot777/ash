@@ -156,8 +156,10 @@ try {
   const syntaxPrompt = await freeReviewPrompt(promptTask, { ...promptRun, checkMode: "syntax" }, 1, root);
   assertCarriesSweepProtocol(syntaxPrompt, "自由语法审查 prompt");
   for (const text of [skillPrompt, syntaxPrompt, freeReminder]) {
-    assert.match(text, /reusable=true.*执行者结果.*不再重复运行/, "自由审查只复用后端批准的执行者回归结果");
-    assert.doesNotMatch(text, /必须真实运行与风险相称的检查/, "自由审查不得无条件要求重复运行检查");
+    // 2026-10-26 改口径：自由审查也只**核对**执行者登记的结果，自己一条回归都不跑。
+    assert.match(text, /回归测试统一在验收时/, "自由审查的三个表面都带上统一的回归口径");
+    assert.doesNotMatch(text, /reusable=true.*可引用|可复用执行者|复用来源/, "不得再出现复用协议");
+    assert.doesNotMatch(text, /必须真实运行与风险相称的检查/, "也不得反过来无条件要求重复运行检查");
   }
 
   // 跨 run 的发现史：用户点「再审一轮」开的是**新 run**、第 1 轮、新开一条空会话，

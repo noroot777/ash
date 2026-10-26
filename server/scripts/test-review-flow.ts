@@ -295,8 +295,10 @@ const legacyReviewPrompt = await reviewProtocolFor(
 assertCarriesSweepProtocol(legacyReviewPrompt, "历史独立审查 prompt");
 for (const text of [reviewPrompt, legacyReviewPrompt, await verifyReminderFor(taskId, 1),
   await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })]) {
-  assert.match(text, /reusable=true.*执行者结果.*不再重复运行/, "各条审查路径只复用后端批准的执行者回归结果");
-  assert.doesNotMatch(text, /必须真实运行验证/, "不得用无条件重跑要求覆盖回归结果复用约定");
+  // 2026-10-26 改口径：四条审查路径都只**核对**执行者登记的结果，自己一条回归都不跑。
+  assert.match(text, /回归测试统一在验收时/, "各条审查路径都带上统一的回归口径");
+  assert.doesNotMatch(text, /reusable=true.*可引用|可复用执行者|复用来源/, "不得再出现复用协议");
+  assert.doesNotMatch(text, /必须真实运行验证/, "也不得反过来用无条件重跑要求覆盖新口径");
 }
 assert.doesNotMatch(reviewPrompt, /grill-me|原始需求里点名/, "自动验证 prompt 不得原样夹带被审需求里的技能名");
 assert.match(reviewPrompt, /request-context\.md/, "自动验证应通过文件交付需求上下文");
@@ -476,7 +478,7 @@ const readTask = async () =>
   (await db.select().from(tasks).where(eq(tasks.id, inlineId))).at(0)!;
 const initializeEvidence = async (rowId: string) => {
   const target = (await db.select().from(tasks).where(eq(tasks.id, rowId)))[0]!;
-  await (await import("../src/regression-evidence-lifecycle.js")).evidenceState(rowId, reviewRoundDir(rowId, target.verifyRound!), false, target);
+  await (await import("../src/regression-evidence-lifecycle.js")).evidenceState(rowId, reviewRoundDir(rowId, target.verifyRound!), target);
 };
 
 await db.insert(tasks).values({

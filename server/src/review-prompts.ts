@@ -38,7 +38,8 @@ function requiredChecks(target: TaskRow, at: string | null | undefined): string 
   const checks = workflowPolicy(taskWorkflowDef(target.workflow), at)?.verify?.p.checks ?? [];
   return checks.length
     ? `这条线上勾的验证项必须逐项过：${checks.map((c) => VERIFY_CHECK_LABELS[c]).join("、")}。` +
-      `发现别的风险照样报，但这几项不能跳；仅「回归测试」可引用本轮后端清单批准的结果，浏览器真实点检和其它勾选项必须实际执行。\n\n`
+      `发现别的风险照样报，但这几项不能跳；其中「回归测试」这一项你只核对本轮后端清单里执行者登记的结果（统一在验收时执行，你不跑），` +
+      `浏览器真实点检和其它勾选项必须实际执行。\n\n`
     : "";
 }
 
@@ -124,7 +125,7 @@ export async function verifyProtocolFor(
 export async function verifyReminderFor(taskId: string, round: number): Promise<string> {
   const dir = reviewRoundDir(taskId, round);
   const { reference } = await refreshRegressionEvidence(taskId, dir);
-  return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。验证须有真实执行依据，可复用执行者对本次改动的回归结果；把报告写到 ${join(dir, "report.md")}，` +
+  return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。验证须有真实执行依据；回归测试统一在验收时执行，你只核对执行者登记的结果、自己不跑。把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     reference +
@@ -167,7 +168,7 @@ export async function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" 
   if (!review.reviewOf || !review.reviewRound) return "";
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
   const { reference } = await refreshRegressionEvidence(review.reviewOf, dir);
-  return `审查提醒:这是第 ${review.reviewRound} 轮审查；验证须有真实执行依据，可复用执行者对本次改动的回归结果；把报告写到 ${join(dir, "report.md")}，` +
+  return `审查提醒:这是第 ${review.reviewRound} 轮审查；验证须有真实执行依据；回归测试统一在验收时执行，你只核对执行者登记的结果、自己不跑。把报告写到 ${join(dir, "report.md")}，` +
     REPORT_SUMMARY_REMINDER +
     REVIEW_SWEEP_REMINDER +
     reference +
