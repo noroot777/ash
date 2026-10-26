@@ -210,6 +210,18 @@ function parsePids(stdout: string): number[] {
 }
 
 /**
+ * 端口这一档**在这台机器上存不存在**。Windows 没有 lsof(也没有等价的「谁在听 + 按环境核
+ * 归属」组合),整档短路在 listeningPids 第一行;POSIX 上 lsof 没装也一样。
+ *
+ * **「这一档不存在」与「这一次问不出来」是两件事**:后者必须当成「可能还在跑」(第 1 轮
+ * 审查发现 2 —— 工具失灵被读成端口空了,界面把还在跑的服务说成已停止);前者只说明**这一档
+ * 给不出证据**,该让判断落回别的线索。混成一件,Windows 上每条打印过网址的命令就会永远
+ * 停不掉也起不动:probePorts 恒为 unknown,于是停止一律 502「状态查不出来」、启动一律
+ * alreadyRunning(真机 192.168.1.187 验证前自查发现)。
+ */
+export const PORT_TIER_AVAILABLE = !IS_WINDOWS && LSOF_PATH !== null;
+
+/**
  * 这些端口上现在还有没有人在听。三态合并的优先级是 **listening > unknown > free**:
  * 有人听就是开着;没人听但有端口没答上来,只能说「不知道」,绝不能报成已经停净。
  *

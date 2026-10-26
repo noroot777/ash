@@ -33,6 +33,7 @@ import { IS_WINDOWS } from "../src/platform.js";
 import {
   createPortScanner,
   listeningPids,
+  PORT_TIER_AVAILABLE,
   portsFromOutput,
   probePorts,
   stopByPorts,
@@ -159,9 +160,16 @@ if (!IS_WINDOWS) {
   assert.equal(await probePorts([1, 2], fake({ 1: empty, 2: dunno })), "unknown", "有一个问不出来就不能说停净了");
   assert.equal(await probePorts([1, 2], fake({ 1: dunno, 2: listening })), "listening", "有人听就是开着,没得商量");
   assert.equal(await probePorts([], fake({})), "free", "一个端口都没有,没什么可等的");
+  assert.equal(PORT_TIER_AVAILABLE, true, "装了 lsof 的 POSIX 机器上这一档就该启用");
 }
 
 if (IS_WINDOWS) {
+  // **「这一档不存在」不是「这一次问不出来」**:探测本身照旧如实说「没答上来」,但消费者
+  // (openSession / stopLaunchPorts / verifyStopScript)必须按「这一档没有证据」处理。混成
+  // 一件,Windows 上每条打印过网址的命令就永远停不掉也起不动:停止一律 502「状态查不出来」、
+  // 启动一律 alreadyRunning。
+  assert.equal(PORT_TIER_AVAILABLE, false, "Windows 上整档不启用");
+  assert.equal(await probePorts([8787]), "unknown", "探测层照实说没答上来,区别由消费者负责");
   // Windows 没有 lsof,这一档整档不启用(service-ports.ts 里直接短路),行为与改动前一致。
   assert.deepEqual(
     await stopByPorts([8787], { launchToken: "irrelevant" }),

@@ -37,7 +37,7 @@ import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
 import { IS_WINDOWS } from "./platform.js";
-import { probePorts, stopByPorts, type PortState } from "./service-ports.js";
+import { PORT_TIER_AVAILABLE, probePorts, stopByPorts, type PortState } from "./service-ports.js";
 import { openConfinement, type Confinement } from "./executors/kernel-confine.js";
 import { groupAlive, processAlive } from "./terminal-process-tree.js";
 import { resolveTerminalDirectory, terminalSessions, type TerminalSessionInfo } from "./terminal.js";
@@ -176,7 +176,9 @@ async function openSession(
   // 缓存的 portsAlive 是按拍刷的(terminal-session-watch.ts),这几个动作都是用户点出来的、
   // 等得起一次 lsof:**现问一遍**它打印过的端口。不现问就会出现「刚启动完、扫描还没跑到,
   // 点停止却被当成没在跑」,那条守护化的服务从此脱管(第 1 轮审查发现 3)。
-  if (session.ports.length && (await probePorts(session.ports)) !== "free") return session;
+  // 这一档在这台机器上不存在(Windows / 没装 lsof)时**整档跳过**:probePorts 在那种平台上
+  // 恒为 unknown,当成「可能还在跑」会让每条打印过网址的命令永远停不掉也起不动。
+  if (PORT_TIER_AVAILABLE && session.ports.length && (await probePorts(session.ports)) !== "free") return session;
   if (session.unresolved.some((pid) => processAlive(pid))) return session;
   if (!stopScript) return null;
   return session.exitCode === 0 && !session.stoppedByUser ? session : null;
@@ -216,7 +218,10 @@ function leftoverNotice(where: string, leftovers: { pid: number; reason: string 
  * 监听停了**,同组那些核不上归属的号要单独交代(发现 2)。
  */
 async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Promise<StopVerdict> {
-  if (!open.ports.length) return { kind: "stopped" };
+  // 这一档不存在就没有「它的结论」可言:前面 terminate 的三层击杀已经按它自己的口径核过,
+  // 这里不另加一条拿不到证据的断言(Windows 上完全脱离启动会话的服务仍不在覆盖范围内 ——
+  // 这是已知且已交代的边界,不是这一档失灵)。
+  if (!PORT_TIER_AVAILABLE || !open.ports.length) return { kind: "stopped" };
   const token = terminalSessions.launchTokenOf(open.id);
   const result = token ? await stopByPorts(open.ports, { launchToken: token, graceMs }) : null;
   const state = await probePorts(open.ports);
@@ -259,7 +264,8 @@ async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Pro
  * 直接 kill),只是**不许宣称已停止**:原地报失败、留着可重试的现场。
  */
 async function verifyStopScript(open: TerminalSessionInfo): Promise<StopVerdict> {
-  if (!open.ports.length) return { kind: "stopped" };
+  // 同 stopLaunchPorts:这一档在这台机器上不存在时,它给不出证据,也不该给出结论。
+  if (!PORT_TIER_AVAILABLE || !open.ports.length) return { kind: "stopped" };
   const state: PortState = await probePorts(open.ports);
   if (state === "free") return { kind: "stopped" };
   if (state === "unknown") return { kind: "stuck", reason: `停止命令跑完了，但端口 ${open.ports.join("、")} 的状态查不出来（lsof 没答上来），没法确认服务已经停了` };
