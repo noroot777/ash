@@ -68,7 +68,7 @@ try {
   for (const dependency of [".venv", "vendor", "target"]) {
     assert.equal(readFileSync(join(snapshot, dependency, "dependency.txt"), "utf8"), `${dependency} independent input`);
   }
-  // **写入外溢**是这一层明确接受的代价(只读做不到,见 borrowDependency 上方):门禁跑测试时写进
+  // **写入外溢**是借用形态明确接受的代价(只读做不到,见 provideDependency 上方):门禁跑测试时写进
   // 依赖目录的东西会落到用户的工作区里。钉成显式契约——哪天有人把它改回「独立副本」,这条立刻
   // 红,而不是让下一个人以为隔离还在。
   writeFileSync(join(snapshot, "target", "dependency.txt"), "test output");

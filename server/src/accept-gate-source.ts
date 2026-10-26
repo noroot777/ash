@@ -6,8 +6,8 @@ import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
 import { freezesAsSource, gateTreeDigest, insideTree as inside } from "./accept-gate-tree.js";
-import { borrowDependency, borrowMismatch, copyTree, DEPENDENCY_DIRS, dependencyDigest, type BorrowMode }
-  from "./accept-gate-deps.js";
+import { copyTree, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch, needsIsolation,
+  provideDependency, workspacePackages, type DependencyMode } from "./accept-gate-deps.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 export type GateSource = { commit: string | null; fingerprint: string; dependencies: string[]; inputs?: SourceInput[] };
@@ -151,6 +151,15 @@ export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR
 export async function createGateSnapshot(cwd: string, target: string, source: GateSource): Promise<void> {
   await mkdir(target, { recursive: true });
   try {
+    // 依赖怎么放由项目**声明**的 workspace 包决定（判据和理由见 accept-gate-deps 顶部）：声明了
+    // 就整棵克隆进快照，没声明才借一条链。
+    const workspace = await workspacePackages(cwd);
+    const provided = new Map<string, DependencyMode>();
+    const provide = async (dep: string): Promise<void> => {
+      const mode = await provideDependency(cwd, target, dep, needsIsolation(dep, workspace));
+      if (mode === false) await copyTree(join(cwd, dep), join(target, dep));
+      else provided.set(dep, mode);
+    };
     let copiedFingerprint: string | null = null;
     if (source.commit) {
       await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
@@ -166,53 +175,43 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
         if (!(await lstat(join(target, path))).isSymbolicLink()) continue;
         if (!inside(snapshotRoot, await realpath(join(target, path)))) throw new Error(`源码符号链接指向快照外：${path}`);
       }
-      // ── 依赖借用:上面那条「源码软链不许指向快照外」的**明确例外**,就写在它旁边。
-      // 快照里 node_modules 这类目录是一条**故意**落在快照外的链(指向工作区那一份)。两者判据
-      // 不同,所以这是例外而不是漏洞:上面那条管的是**被 Git 跟踪的源码**——源码指到快照外就
-      // 意味着「改了项目外的文件却能复用上次通过」,那正是门禁要拦的;依赖是 lockfile 的产物,
+      // ── 依赖:上面那条「源码软链不许指向快照外」的**明确例外**,就写在它旁边。
+      // 借用形态下 node_modules 这类目录是一条**故意**落在快照外的链(指向工作区那一份)。两者
+      // 判据不同,所以这是例外而不是漏洞:上面那条管的是**被 Git 跟踪的源码**——源码指到快照外
+      // 就意味着「改了项目外的文件却能复用上次通过」,那正是门禁要拦的;依赖是 lockfile 的产物,
       // 身份由安装声明给出(dependencyDigest),不靠「冻住字节」来保证。
-      // **顺序不能换**:那条检查必须在借用之前跑完。借用之后 join(target, path) 会穿过链看到
+      // **顺序不能换**:那条检查必须在放依赖之前跑完。借用之后 join(target, path) 会穿过链看到
       // 工作区那一份,vendor/ 里被提交的软链就会被误判成「指向快照外」,而它其实没有问题。
-      const borrowed = new Map<string, BorrowMode>();
       for (const dep of source.dependencies) {
-        // 被跟踪的依赖目录(Go 的 vendor 常被提交)checkout 已经写出来了,借用要把它换掉:测试
+        // 被跟踪的依赖目录(Go 的 vendor 常被提交)checkout 已经写出来了,放依赖要把它换掉:测试
         // 真正会用的是工作区那一份,而两者内容一致由上面的 dirty 检查保证(工作树必须干净)。
         await rm(join(target, dep), { recursive: true, force: true });
-        const mode = await borrowDependency(cwd, target, dep, source.dependencies);
-        if (mode === false) await copyTree(join(cwd, dep), join(target, dep));
-        else borrowed.set(dep, mode);
+        await provide(dep);
       }
-      // 借用这一侧的对账是**落点**,不是摘要(摘要在借用之后恒等,证明不了任何事);两种借用形态
-      // 各自要对的那件事写在 borrowMismatch 上方。深拷退路没有落点可对,那一支回到「重新读副本
-      // 自己那份安装声明」。
       const copiedHash = sourceHash().update(source.commit);
-      for (const dep of source.dependencies) {
-        const mode = borrowed.get(dep);
-        const problem = mode && await borrowMismatch(cwd, target, dep, source.dependencies, mode);
-        if (problem) throw new Error(`测试快照里的依赖借用不对：${problem}`);
-        copiedHash.update(dep).update(await dependencyDigest(target, dep));
-      }
+      for (const dep of source.dependencies) copiedHash.update(dep).update(await dependencyDigest(target, dep));
       copiedFingerprint = copiedHash.digest("hex");
     } else {
-      // 非 Git 项目:依赖目录同样借用,源码逐条拷(软链按链重建)。源码那一遍必须避开借用的位置
-      // ——inside 对目录自身也成立,所以依赖目录本身和它下面的一切都归借用负责。
-      const borrowed = (source.inputs ?? []).filter(input => input.dependency).map(input => input.path);
-      for (const dep of borrowed) {
-        const mode = await borrowDependency(cwd, target, dep, borrowed);
-        if (mode === false) await copyTree(join(cwd, dep), join(target, dep));
-        else {
-          const problem = await borrowMismatch(cwd, target, dep, borrowed, mode);
-          if (problem) throw new Error(`测试快照里的依赖借用不对：${problem}`);
-        }
-      }
+      // 非 Git 项目:依赖同样按声明放,源码逐条拷(软链按链重建)。源码那一遍必须避开依赖的位置
+      // ——inside 对目录自身也成立,所以依赖目录本身和它下面的一切都归 provide 负责。
+      const dependencies = (source.inputs ?? []).filter(input => input.dependency).map(input => input.path);
+      for (const dep of dependencies) await provide(dep);
       const included = planFilter(cwd, excludedInputs(cwd));
       for (const name of await nonGitFiles(cwd)) {
         await gateTreeDigest(join(cwd, name), {
           root: cwd,
           destinationRoot: target,
-          filter: path => included(path) && !borrowed.some(dep => inside(join(cwd, dep), path)),
+          filter: path => included(path) && !dependencies.some(dep => inside(join(cwd, dep), path)),
         });
       }
+    }
+    // 依赖这一侧的对账排在这里,而不是紧跟各自的构造:**源码和依赖都落盘之后**才有东西可对。
+    // 克隆形态要解析快照里的 workspace 包,那条路径由源码提供——非 Git 分支曾经在拷源码之前对
+    // 账,于是任何 monorepo 都在门禁开跑前就失败。对的是落点不是摘要(摘要在借用形态下恒等,
+    // 证明不了任何事);三种形态各自要对的那件事写在 dependencyMismatch 上方。
+    for (const [dep, mode] of provided) {
+      const problem = await dependencyMismatch(cwd, target, dep, mode, workspace);
+      if (problem) throw new Error(`测试快照里的依赖没放对：${problem}`);
     }
     if ((await readGateSource(cwd)).fingerprint !== source.fingerprint) {
       throw new Error("复制测试快照期间源码或依赖已变化，请重新验收");

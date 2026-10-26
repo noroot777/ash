@@ -7,10 +7,12 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-// 依赖借用这一层的回归:快照里的依赖目录是**一条指向工作区那一份的链**,不是逐文件拷进来的
-// 副本。为什么不拷、换掉了什么检测力、接受了什么代价,全写在 src/accept-gate-deps.ts 顶部。
-// 这里钉的是四件必须成立的事:快照里命令真能跑起来、清理绝不碰用户的依赖、换一次安装声明必须
-// 被认成「依赖变了」、没装依赖时行为和以前一样。
+// 依赖这一层的回归。依赖**不**逐文件深拷,放法有两种,判据是项目有没有声明 workspace 包:没声明
+// 就借一条指向工作区那一份的链(O(1)),声明了就整棵克隆进快照(数据块共享)。为什么这么分、换掉了
+// 什么检测力、接受了什么代价,全写在 src/accept-gate-deps.ts 顶部。这里钉的是:快照里命令真能跑
+// 起来、清理绝不碰用户的依赖、换一次安装声明必须被认成「依赖变了」、没装依赖时行为和以前一样、
+// 依赖根自己是链的三种落点、深拷退路,以及 monorepo 的**三个运行时入口**都必须落在快照自己那份
+// 源码上(直接 import / 被借包的传递导入 / .bin 里的 CLI shim),和「依赖根不可达时不许拖垮快照」。
 const root = mkdtempSync(join(tmpdir(), "ash-gate-borrow-"));
 process.env.ASH_RUNS_DIR = join(root, "runs");
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -49,14 +51,14 @@ const inventory = (base: string, prefix = ""): Entry[] => {
   return list;
 };
 
-const freshRepo = (name: string, ignore: string): string => {
+const freshRepo = (name: string, ignore: string, pkg = "{}"): string => {
   const repo = join(root, name);
   execFileSync("git", ["init", "-b", "main", repo]);
   git(repo, "config", "user.name", "Gate Borrow Test");
   git(repo, "config", "user.email", "borrow@example.test");
   git(repo, "config", "core.autocrlf", "false");
   writeFileSync(join(repo, ".gitignore"), ignore);
-  writeFileSync(join(repo, "package.json"), '{}');
+  writeFileSync(join(repo, "package.json"), pkg);
   writeFileSync(join(repo, "index.js"), 'require("pkg");');
   git(repo, "add", "-A");
   git(repo, "commit", "-m", `${name} source`);
@@ -66,7 +68,8 @@ const freshRepo = (name: string, ignore: string): string => {
 try {
   const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, removeGateSnapshot, verifyGateSnapshot } =
     await import("../src/accept-gate-source.js");
-  const { borrowDependency, borrowMismatch, copyTree, dependencyDigest } = await import("../src/accept-gate-deps.js");
+  const { copyTree, dependencyDigest, dependencyMismatch, needsIsolation, provideDependency, workspacePackages } =
+    await import("../src/accept-gate-deps.js");
 
   // ── 1. 借用之后,快照里的命令必须真能跑起来。
   // tsx 那个形状:.bin 下的链指向包里的 cli,cli 再按**自身 realpath**找同胞模块。第 1 层(把链
@@ -242,64 +245,138 @@ try {
       "退路里树外链仍按链保留:跟随它会把 .venv 指向的整个解释器拷进快照");
     assert.equal(readlinkSync(join(fallbackCopy, "outward.mjs")), join(external, "runtime.mjs"), "落点原文照抄");
   }
-  // 借用那一侧的对账只能按**落点**:借用之后两边读的是同一份文件,摘要恒等、证明不了任何事。
-  // 这里把 borrowDependency → borrowedLanding 的往返单独钉一遍(生产那条对账在建快照过程中间,
+  // 对账只能按**落点**:借用之后两边读的是同一份文件,摘要恒等、证明不了任何事。这里把
+  // provideDependency → dependencyMismatch 的往返单独钉一遍(生产那条对账在建快照过程中间,
   // 没有可插入的时机去制造「链落在别处」)。
   const roundTrip = join(root, "round-trip");
   mkdirSync(roundTrip);
-  assert.equal(await borrowDependency(repo, roundTrip, "node_modules", [".venv", "node_modules"]), "link",
-    "没有 workspace 链接时就是一条链,O(1)");
-  assert.equal(await borrowMismatch(repo, roundTrip, "node_modules", [".venv", "node_modules"], "link"), null,
+  const noWorkspace = await workspacePackages(repo);
+  assert.deepEqual(noWorkspace.names, [], "package.json 里没有 workspaces 就是没声明");
+  assert.equal(needsIsolation("node_modules", noWorkspace), false, "没声明 workspace 包就不必独立成一份");
+  assert.equal(await provideDependency(repo, roundTrip, "node_modules", false), "link",
+    "没声明 workspace 包时就是一条链,O(1)");
+  assert.equal(await dependencyMismatch(repo, roundTrip, "node_modules", "link", noWorkspace), null,
     "借用建出来的链,落点就是工作区那一份");
   rmSync(join(roundTrip, "node_modules"));
   await copyTree(join(repo, "node_modules"), join(roundTrip, "node_modules"));
-  assert.notEqual(await borrowMismatch(repo, roundTrip, "node_modules", [".venv", "node_modules"], "link"), null,
+  assert.notEqual(await dependencyMismatch(repo, roundTrip, "node_modules", "link", noWorkspace), null,
     "不是链(深拷退路落在这个位置)时对不上账,调用方据此回到老办法");
   // 包管理器随时在改依赖树:读完目录到读条目之间文件被删掉不该崩掉整次快照。
   await copyTree(join(root, "never-existed"), join(root, "never-copied"));
   assert.equal(existsSync(join(root, "never-copied")), false);
 
-  // ── 7. monorepo 的 workspace 链接:快照里跑到的必须是**快照自己**那份源码。
-  // 这是借用唯一一处不能整条借出去的落点:node_modules/@scope/pkg -> ../../packages/pkg 指着项目
-  // 自己的源码,相对原文按链真实所在的位置解析,所以整条借出去它就落在**活的工作区**上。那样的话
-  // 改了 workspace 包的导出会红(看着像门禁在工作),只改实现则静悄悄地绿——monorepo 里最常被改的
-  // 那部分恰好没被冻住。实测见 AMEPL4pvlx-S 的两份门禁日志。
-  const mono = freshRepo("monorepo", "node_modules\n");
-  mkdirSync(join(mono, "packages", "lib"), { recursive: true });
-  writeFileSync(join(mono, "packages", "lib", "package.json"), '{"name":"@demo/lib","version":"1.0.0","main":"index.mjs"}');
-  writeFileSync(join(mono, "packages", "lib", "index.mjs"), 'export const build = "certified";\n');
+  // ── 7. monorepo:三个运行时入口都必须落在**快照自己**那份源码上。
+  // 这一节是 2026-10-26 独立审查打回来的。借用整条 node_modules 时,这三条路全都解析回活的工作区
+  // (理由见 accept-gate-deps 顶部:node 的模块解析走 realpath,链那一侧的解析全发生在工作区),于是
+  // 改 workspace 包的导出会红、只改实现则静悄悄地绿。所以声明了 workspace 包的项目整棵克隆。
+  const monoPkg = '{"private":true,"workspaces":["packages/*"]}';
+  const monoSource7 = (repo: string, value: string): void => {
+    mkdirSync(join(repo, "packages", "lib"), { recursive: true });
+    writeFileSync(join(repo, "packages", "lib", "package.json"),
+      '{"name":"@demo/lib","version":"1.0.0","type":"module","main":"index.mjs","bin":{"demo-cli":"cli.mjs"}}');
+    writeFileSync(join(repo, "packages", "lib", "index.mjs"), `export const build = ${JSON.stringify(value)};\n`);
+    writeFileSync(join(repo, "packages", "lib", "cli.mjs"),
+      'import { build } from "./index.mjs";\nconsole.log(build);\n');
+    writeFileSync(join(repo, "probe.mjs"), 'import { build } from "@demo/lib";\nconsole.log(build);\n');
+    writeFileSync(join(repo, "transitive.mjs"), 'import { build } from "plain";\nconsole.log(build);\n');
+  };
+  // npm 装出来的形状:workspace 包连成链、普通包是真目录、普通包里**传递导入**那个 workspace 包。
+  const monoInstall = (repo: string): void => {
+    mkdirSync(join(repo, "node_modules", "@demo"), { recursive: true });
+    linkDir(join("..", "..", "packages", "lib"), join(repo, "node_modules", "@demo", "lib"));
+    mkdirSync(join(repo, "node_modules", "plain"), { recursive: true });
+    writeFileSync(join(repo, "node_modules", "plain", "package.json"),
+      '{"name":"plain","version":"3.0.0","type":"module","main":"index.mjs"}');
+    writeFileSync(join(repo, "node_modules", "plain", "index.mjs"), 'export { build } from "@demo/lib";\n');
+    writeFileSync(join(repo, "node_modules", ".package-lock.json"), '{"packages":{"node_modules/plain":{"version":"3.0.0"}}}');
+    mkdirSync(join(repo, "node_modules", ".bin"), { recursive: true });
+    if (fileLinks) symlinkSync(join("..", "@demo", "lib", "cli.mjs"), join(repo, "node_modules", ".bin", "demo-cli"));
+  };
+  const mono = freshRepo("monorepo", "node_modules\n", monoPkg);
+  monoSource7(mono, "certified");
   git(mono, "add", "-A");
   git(mono, "commit", "-m", "workspace package");
-  mkdirSync(join(mono, "node_modules", "@demo"), { recursive: true });
-  linkDir(join("..", "..", "packages", "lib"), join(mono, "node_modules", "@demo", "lib"));
-  mkdirSync(join(mono, "node_modules", "plain"), { recursive: true });
-  writeFileSync(join(mono, "node_modules", "plain", "package.json"), '{"version":"3.0.0"}');
-  writeFileSync(join(mono, "node_modules", ".package-lock.json"), '{"packages":{"node_modules/plain":{"version":"3.0.0"}}}');
-  const monoSource = await readGateSource(mono);
+  monoInstall(mono);
+  assert.deepEqual((await workspacePackages(mono)).names, ["@demo/lib"], "glob 展开后要认出声明的包名");
+  assert.equal(needsIsolation("node_modules", await workspacePackages(mono)), true);
   const monoSnapshot = join(root, "monorepo-snapshot");
-  await createGateSnapshot(mono, monoSnapshot, monoSource);
+  const monoGateSource = await readGateSource(mono);
+  await createGateSnapshot(mono, monoSnapshot, monoGateSource);
   assert.equal(lstatSync(join(monoSnapshot, "node_modules")).isSymbolicLink(), false,
-    "有 workspace 链接时依赖目录必须物化成真目录,不能整条借出去");
-  assert.equal(realpathSync(join(monoSnapshot, "node_modules", "@demo", "lib")), realpathSync(join(monoSnapshot, "packages", "lib")),
-    "workspace 链接重定向到快照自己那份源码");
-  assert.equal(realpathSync(join(monoSnapshot, "node_modules", "plain")), realpathSync(join(mono, "node_modules", "plain")),
-    "同一棵依赖树里的普通包照旧各借一条链,落在工作区那一份上");
+    "声明了 workspace 包时依赖树必须在快照里独立成一份,不能整条借出去");
+  assert.equal(realpathSync(join(monoSnapshot, "node_modules", "@demo", "lib")),
+    realpathSync(join(monoSnapshot, "packages", "lib")), "workspace 链接在快照里解析到快照自己那份源码");
+  assert.equal(realpathSync(join(monoSnapshot, "node_modules", "plain")).startsWith(realpathSync(monoSnapshot)), true,
+    "普通包也在快照内:它的 realpath 决定了它的传递导入按谁的包映射解析");
   assert.equal(readFileSync(join(monoSnapshot, "node_modules", ".package-lock.json"), "utf8"),
-    '{"packages":{"node_modules/plain":{"version":"3.0.0"}}}', "物化层里的文件(安装声明就在这层)照常拷进来");
-  // 这条是全节的判据:改了工作区的 workspace 源码,快照里跑到的还是被认证的那一版。
+    '{"packages":{"node_modules/plain":{"version":"3.0.0"}}}', "安装声明照常在副本里(身份就取它)");
+  // 全节判据:改掉工作区的 workspace 源码,**三个入口**跑出来的都还是被认证那一版。
   writeFileSync(join(mono, "packages", "lib", "index.mjs"), 'export const build = "live-workspace";\n');
-  // 比内容时 trim:`git clone` 出来的快照仓库**不继承源仓库的 local config**,于是 fixture 上设的
-  // core.autocrlf=false 到快照那边失效,Windows 的全局 true 会把 checkout 的源码换成 CRLF。门禁的
-  // 保证不落在字节上(Git 分支的指纹取 commit,自证走 git diff,两边各按自己的配置判),所以这里
-  // 只比内容;真要让快照与工作区字节一致,得在 clone 之后把源仓库那几个转换项抄过去——那是另一
-  // 件事,本轮没有失败驱动它,写在这里是为了下一个人不必重新查一遍。
-  assert.equal(readFileSync(join(monoSnapshot, "node_modules", "@demo", "lib", "index.mjs"), "utf8").trim(),
-    'export const build = "certified";', "改了工作区的 workspace 源码,快照里读到的仍是冻住那一版");
-  writeFileSync(join(monoSnapshot, "probe.mjs"), 'import { build } from "@demo/lib";\nconsole.log(build);\n');
-  assert.equal(execFileSync(process.execPath, [join(monoSnapshot, "probe.mjs")], { encoding: "utf8" }).trim(), "certified",
-    "node 自己解析 @demo/lib 时也落在快照那一份上(不只是读文件,是真的 import)");
+  const runIn = (path: string) => execFileSync(process.execPath, [path], { encoding: "utf8" }).trim();
+  assert.equal(runIn(join(monoSnapshot, "probe.mjs")), "certified", "入口①直接 import workspace 包");
+  assert.equal(runIn(join(monoSnapshot, "transitive.mjs")), "certified",
+    "入口②被借包的传递导入:plain 的 realpath 若还在工作区,它会按工作区的包映射解析到活的源码");
+  if (fileLinks) {
+    assert.equal(runIn(join(monoSnapshot, "node_modules", ".bin", "demo-cli")), "certified",
+      "入口③.bin 里的 CLI shim:workspace 包声明 bin 是最普通的形状");
+  }
   git(mono, "restore", "packages/lib/index.mjs");
-  assert.equal(await verifyGateSnapshot(monoSnapshot, monoSource), true, "物化之后快照照旧能自证");
+  assert.equal(await verifyGateSnapshot(monoSnapshot, monoGateSource), true, "克隆之后快照照旧能自证");
+  // 入口④:整个依赖根指向**另一个检出**(worktree 借主仓那份,本仓就是这个形状)。主仓的 workspace
+  // 链接落在主仓源码上,所以借用会让快照跑**主仓的旧代码**,而任务自己的源码明明已经 checkout 在
+  // 快照里了。这一条不需要任何并发修改就会把错的代码判成通过。
+  const mainRepo = freshRepo("mono-main", "node_modules\n", monoPkg);
+  monoSource7(mainRepo, "old-main");
+  git(mainRepo, "add", "-A");
+  git(mainRepo, "commit", "-m", "main checkout");
+  monoInstall(mainRepo);
+  const taskRepo = freshRepo("mono-task", "node_modules\n", monoPkg);
+  monoSource7(taskRepo, "new-task");
+  git(taskRepo, "add", "-A");
+  git(taskRepo, "commit", "-m", "task checkout");
+  linkDir(join(mainRepo, "node_modules"), join(taskRepo, "node_modules"));
+  const taskGateSource = await readGateSource(taskRepo);
+  const taskSnapshot = join(root, "mono-task-snapshot");
+  await createGateSnapshot(taskRepo, taskSnapshot, taskGateSource);
+  assert.equal(runIn(join(taskSnapshot, "probe.mjs")), "new-task",
+    "依赖根借的是另一个检出时,快照里跑到的必须是**本任务**的源码,不是那个检出的");
+  assert.equal(runIn(join(taskSnapshot, "transitive.mjs")), "new-task", "传递导入同理");
+  assert.equal(await verifyGateSnapshot(taskSnapshot, taskGateSource), true);
 
-  console.log("accept-gate-borrow: launch-from-snapshot, cleanup safety, install-declaration identity, no-dependencies parity, link roots, workspace-link redirection and the deep-copy fallback passed");
+  // ── 8. 依赖根不可达:没装的可选依赖、指向还没建起来的目录的悬空链、环。
+  // 登记它的条件只是 lstat 成功(悬空链也成立),所以这几种状态**会**进到依赖列表里。对账要求
+  // 「两边都解析得出来」就会把它们全判成复制失败,于是一个没装的可选依赖足以拖垮整次验收——而
+  // 那条命令可能根本不碰它。四个依赖目录逐个钉,防止只在 node_modules 上修掉。
+  for (const dep of ["node_modules", ".venv", "vendor", "target"]) {
+    const dangling = freshRepo(`dangling-${dep}`, `${dep}\n`);
+    linkDir(join(root, `never-installed-${dep}`), join(dangling, dep));
+    const danglingSource = await readGateSource(dangling);
+    assert.deepEqual(danglingSource.dependencies, [dep], `${dep} 悬空时照旧登记成依赖输入`);
+    const danglingSnapshot = join(root, `dangling-snapshot-${dep}`);
+    await createGateSnapshot(dangling, danglingSnapshot, danglingSource);
+    assert.equal(lstatSync(join(danglingSnapshot, dep)).isSymbolicLink(), true,
+      `${dep} 在快照里照原样重建成一条同样解析不通的链`);
+    assert.equal(existsSync(join(danglingSnapshot, dep)), false, "原样就是原样:它在副本里同样不可达");
+    assert.equal(readFileSync(join(danglingSnapshot, "index.js"), "utf8"), 'require("pkg");',
+      "源码照旧落盘:一个没装的依赖不该拖垮整次快照");
+    assert.equal(await verifyGateSnapshot(danglingSnapshot, danglingSource), true, "不可达也有稳定身份,自证照旧通过");
+  }
+
+  // ── 9. 非 Git 的 monorepo:对账必须排在**源码落盘之后**。
+  // 非 Git 分支的构造顺序是「先放依赖、再拷源码」,所以对账一旦紧跟依赖那一步,快照里的
+  // packages/lib 还不存在,任何声明了 workspace 包的非 Git 项目都会在门禁开跑前就失败。
+  const looseMono = join(root, "looseMono-monorepo");
+  mkdirSync(looseMono, { recursive: true });
+  writeFileSync(join(looseMono, "package.json"), monoPkg);
+  monoSource7(looseMono, "looseMono-certified");
+  mkdirSync(join(looseMono, "node_modules", "@demo"), { recursive: true });
+  linkDir(join("..", "..", "packages", "lib"), join(looseMono, "node_modules", "@demo", "lib"));
+  const looseMonoGate = await readGateSource(looseMono);
+  const looseMonoSnap = join(root, "looseMono-monorepo-snapshot");
+  await createGateSnapshot(looseMono, looseMonoSnap, looseMonoGate);
+  assert.equal(realpathSync(join(looseMonoSnap, "node_modules", "@demo", "lib")),
+    realpathSync(join(looseMonoSnap, "packages", "lib")), "非 Git 项目同样解析到快照自己那份源码");
+  assert.equal(runIn(join(looseMonoSnap, "probe.mjs")), "looseMono-certified");
+
+  console.log("accept-gate-borrow: launch-from-snapshot, cleanup safety, install-declaration identity, no-dependencies parity, link roots, workspace isolation across all four runtime entries, unreachable roots and the deep-copy fallback passed");
 } finally { rmSync(root, { recursive: true, force: true }); }
