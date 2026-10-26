@@ -20,6 +20,10 @@
 // 就是两个实例抢一个端口(第 2 轮审查用并发 restart 实锤)。锁内只有本条命令的操作,
 // 不同命令互不排队。路由层是这些服务函数的薄壳,回归测试直接调函数。
 //
+// 两段邻居:用户那条停止命令怎么跑(超时、整次运行清杀、输出回显)在
+// terminal-stop-script.ts;「上一次停止留下了什么责任」怎么记、怎么合并在
+// terminal-stop-facts.ts。这里只做动作与**终态判定**。
+//
 // 权限与终端同一道门(实例管理员/自用):这些命令是任意 shell,门禁理由见
 // terminal.ts mountTerminalRoutes 顶部。
 import type { Hono } from "hono";
@@ -31,18 +35,15 @@ import {
   parseCommandValues,
   SERVICE_COMMAND_ID,
 } from "@ash/shared/project-commands";
-import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { promisify } from "node:util";
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
-import { IS_WINDOWS } from "./platform.js";
-import { PORT_TIER_AVAILABLE, probePorts, stopByPorts, type PortState } from "./service-ports.js";
-import { openConfinement, type Confinement } from "./executors/kernel-confine.js";
-import { groupAlive, processAlive } from "./terminal-process-tree.js";
-import { resolveTerminalDirectory, terminalSessions, type TerminalSessionInfo } from "./terminal.js";
-import { id } from "./util.js";
-import { commandLaunch } from "./terminal-shell.js";
+import { PORT_TIER_AVAILABLE, probeOwnedPorts, stopByPorts } from "./service-ports.js";
+import { processAlive } from "./terminal-process-tree.js";
+import { resolveTerminalDirectory, terminalSessions, type StopFact, type TerminalSessionInfo } from "./terminal.js";
+import type { StopResolution } from "./terminal-session-facts.js";
+import { liveLeftovers } from "./terminal-stop-facts.js";
+import { runStopScript } from "./terminal-stop-script.js";
 
 /**
  * 会话层跑的一条命令。restartCommand / stopCommand 只有项目级 service 才有(配置见
@@ -58,8 +59,6 @@ export type RunnableCommand = {
 
 /** 停止命令跑多久算卡住。优雅下线可能要十几秒(容器停、缓存落盘),但不能无限占着那把命令锁。 */
 const STOP_SCRIPT_TIMEOUT_MS = 60_000;
-/** 停止脚本的两路输出各留这么多,够回显最后几行就行(自己截,不靠 execFile 的 maxBuffer)。 */
-const STOP_OUTPUT_KEEP = 64 * 1024;
 /** 停止脚本跑完,再给启动会话这么久自己退场 —— 它刚被脚本停掉,多半正在收尾,不必急着补一发 TERM。 */
 const STOP_GRACE_MS = 3_000;
 
@@ -144,7 +143,7 @@ function sessionName(name: string, template: string, values: Record<string, stri
 function latestSession(projectId: string, commandId: string): TerminalSessionInfo | null {
   const mine = terminalSessions.listCommandSessions()
     .filter((session) => session.projectId === projectId && session.commandId === commandId);
-  return mine.find((session) => session.groupAlive || session.portsAlive || session.unresolved.length > 0)
+  return mine.find((session) => session.groupAlive || session.portsAlive || liveLeftovers(session.stop).length > 0)
     ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
 }
 
@@ -176,10 +175,16 @@ async function openSession(
   // 缓存的 portsAlive 是按拍刷的(terminal-session-watch.ts),这几个动作都是用户点出来的、
   // 等得起一次 lsof:**现问一遍**它打印过的端口。不现问就会出现「刚启动完、扫描还没跑到,
   // 点停止却被当成没在跑」,那条守护化的服务从此脱管(第 1 轮审查发现 3)。
-  // 这一档在这台机器上不存在(Windows / 没装 lsof)时**整档跳过**:probePorts 在那种平台上
-  // 恒为 unknown,当成「可能还在跑」会让每条打印过网址的命令永远停不掉也起不动。
-  if (PORT_TIER_AVAILABLE && session.ports.length && (await probePorts(session.ports)) !== "free") return session;
-  if (session.unresolved.some((pid) => processAlive(pid))) return session;
+  // 这一档在这台机器上不存在(Windows / 没装 lsof)时**整档跳过**:probeOwnedPorts 在那种
+  // 平台上恒为 unknown,当成「可能还在跑」会让每条打印过网址的命令永远停不掉也起不动。
+  // 问的是**归属**:端口上坐着的核实了不是这次起来的(stranger),这次启动就是不在了 ——
+  // 把它读成「还开着」,一条只打印了网址的命令会被邻居的服务永久钉在「运行中」,而那个邻居
+  // 核不上归属、一个字都不许动,于是这条命令既起不动也停不掉(第 3 轮审查发现 3)。
+  if (PORT_TIER_AVAILABLE && session.ports.length) {
+    const { state } = await probeOwnedPorts(session.ports, terminalSessions.launchTokenOf(session.id));
+    if (state === "ours" || state === "unknown") return session;
+  }
+  if (liveLeftovers(session.stop).length > 0) return session;
   if (!stopScript) return null;
   return session.exitCode === 0 && !session.stoppedByUser ? session : null;
 }
@@ -224,37 +229,40 @@ async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Pro
   if (!PORT_TIER_AVAILABLE || !open.ports.length) return { kind: "stopped" };
   const token = terminalSessions.launchTokenOf(open.id);
   const result = token ? await stopByPorts(open.ports, { launchToken: token, graceMs }) : null;
-  const state = await probePorts(open.ports);
+  const probe = await probeOwnedPorts(open.ports, token);
   const where = `端口 ${open.ports.join("、")}`;
-  if (state === "unknown") {
-    return { kind: "stuck", reason: `${where} 的状态查不出来（lsof 没答上来），没法确认服务已经停了。请稍后再点一次停止，或者在「管理常用命令」里给这个服务填一条停止命令。` };
+  if (probe.state === "unknown") {
+    return { kind: "stuck", reason: `${probe.why}，没法确认服务已经停了。请稍后再点一次停止，或者在「管理常用命令」里给这个服务填一条停止命令。` };
   }
-  if (state === "listening") {
+  // 只有**核实是这次启动起来的**东西还在听才叫没停下来。端口上坐着别人的服务(stranger)
+  // 跟这次启动还在不在是两件事 —— 当成没停下来,这条命令就永远停不掉(发现 3)。
+  if (probe.state === "ours") {
     const spared = result?.spared[0];
     const who = spared
       ? `占着它的是 pid ${spared.holder.pid}（${spared.holder.command.slice(0, 60)}），${spared.reason}`
-      : token
-        ? "但查不到是谁占着"
-        : "这条会话没有启动记号（多半是 ash 重启前起的），核不上归属所以没敢动它";
-    return { kind: "stuck", reason: `${where} 上还有人在听，${who}。要停掉它，请在「管理常用命令」里给这个服务填一条停止命令。` };
+      : "TERM 和 KILL 都没让它停下来";
+    return { kind: "stuck", reason: `${where} 上还有这次启动起来的进程在听，${who}。要停掉它，请在「管理常用命令」里给这个服务填一条停止命令。` };
   }
   const leftovers = (result?.leftovers ?? []).filter((one) => processAlive(one.pid));
   if (leftovers.length) {
     return { kind: "unresolved", notice: leftoverNotice(where, leftovers), leftovers: leftovers.map((one) => one.pid) };
   }
-  // 线索本身不全:这次启动打印的端口超过了记录额度,第 9 个起没进账。记下的都空了,但
-  // 「自己 setsid 单开一组、只能从没记下的那个端口找到」的守护进程压根没被问过
-  // (terminal.ts 的 recordPorts)。这种情况下不许把「端口都空了」说成「全停了」。
-  if (open.portsTruncated) {
-    return {
-      kind: "unresolved",
-      leftovers: [],
-      notice: `${where}都让出来了，但这次启动打印的本机端口超过 ${open.ports.length} 个，`
-        + `多出来的没能记下来 —— 如果还有服务只听那些端口，ash 没问过它们。`
-        + `要确保停净，请在「管理常用命令」里给这个服务填一条停止命令。`,
-    };
-  }
+  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, false) };
   return { kind: "stopped" };
+}
+
+/**
+ * 线索本身不全时那句话:这次启动打印的端口超过了记录额度,第 9 个起没进账。记下的都空了,但
+ * 「自己 setsid 单开一组、只能从没记下的那个端口找到」的守护进程**压根没被问过**
+ * (terminal.ts 的 recordPorts)。这种情况下不许把「端口都空了」说成「全停了」—— 它是一笔
+ * 核销不掉的责任(StopFact 里 pids 为空的那种 unresolved),连下一次停止也核销不了它。
+ */
+function truncatedNotice(open: TerminalSessionInfo, hasStopScript: boolean): string {
+  return `端口 ${open.ports.join("、")}都让出来了，但这次启动打印的本机端口超过 ${open.ports.length} 个，`
+    + `多出来的没能记下来 —— 如果还有服务只听那些端口，ash 没问过它们。`
+    + (hasStopScript
+      ? `这次启动没法确认停净，要确认请自己去看一眼那几个端口。`
+      : `要确保停净，请在「管理常用命令」里给这个服务填一条停止命令。`);
 }
 
 /**
@@ -266,203 +274,22 @@ async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Pro
 async function verifyStopScript(open: TerminalSessionInfo): Promise<StopVerdict> {
   // 同 stopLaunchPorts:这一档在这台机器上不存在时,它给不出证据,也不该给出结论。
   if (!PORT_TIER_AVAILABLE || !open.ports.length) return { kind: "stopped" };
-  const state: PortState = await probePorts(open.ports);
-  if (state === "free") return { kind: "stopped" };
-  if (state === "unknown") return { kind: "stuck", reason: `停止命令跑完了，但端口 ${open.ports.join("、")} 的状态查不出来（lsof 没答上来），没法确认服务已经停了` };
-  return { kind: "stuck", reason: `停止命令跑完了，但端口 ${open.ports.join("、")} 上还有人在听 —— 服务没停下来，去看看那段脚本` };
-}
-
-/**
- * PowerShell 的 stderr 被重定向时写的不是人话,是 CLIXML:开头一行 `#< CLIXML`,后面整坨
- * `<Objs>` XML。原样塞进给用户看的那句话里就成了「已经一起杀掉：#< CLIXML」(真机
- * 192.168.1.187 实测)。把真正的错误文字(`<S S="Error">…</S>`)抽出来,抽不到就当它没说话。
- */
-function plainStderr(err: string): string {
-  if (!err.includes("#< CLIXML")) return err;
-  const said = [...err.matchAll(/<S S="Error">([\s\S]*?)<\/S>/g)]
-    .map((match) => match[1].replaceAll("_x000D__x000A_", "\n").replaceAll(/&[a-z]+;/g, " ").trim())
-    .filter(Boolean);
-  return said.join("\n");
-}
-
-/** 停止脚本失败时给用户看的那几行:有 stderr 就说 stderr,只留最后 3 行、封顶 300 字。 */
-function outputTail(out: string, err: string): string {
-  const said = plainStderr(err);
-  const tail = (said.trim() ? said : out)
-    .split("\n").map((line) => line.trim()).filter(Boolean).slice(-3).join(" / ");
-  return tail.length > 300 ? `${tail.slice(0, 299)}…` : tail;
-}
-
-const runFile = promisify(execFile);
-/** 超时收尾后核验残留的时限:只是读一眼,别让它反过来把那把命令锁又占住。 */
-const CLEANUP_VERIFY_MS = 5_000;
-
-/**
- * 超时那一发,打在**整次运行**上,而不是那层壳上。
- *
- * POSIX:spawn 时 `detached` 起的独立进程组,`kill(-pid)` 覆盖它拉起的一切。
- *
- * Windows 没有进程组,单发 `child.kill()` 只杀得到 PowerShell 这层壳 —— 它正在跑的原生
- * 清理程序(docker.exe 之类)会活下来,稍后还可能把用户刚重启的服务关掉,而那一刻我们已经
- * 释放了命令锁、还跟用户说「已经一起杀掉了」(第 1 轮审查发现 4;真机 192.168.1.187 实测:
- * 壳 11608 退了、它的子程序 880 仍存活)。那边两层一起上,**顺序要紧**:
- *   ① `taskkill /T /F` **先**打:`/T` 是按 ppid 树走的,树根必须**还枚举得到**。反过来先
- *      整圈下刀,根当场就没了,这一发就只剩「找不到 PID」,逃出圈的后代谁也不收
- *      (第 2 轮审查发现 3 真机实测:根 14192 先被圈刀收掉,随后 taskkill 找不到根,
- *      圈前出生的后代 27144 活下来,而读数照旧是「集合为空」);
- *   ② **内核圈定**(executors/kernel-confine.ts 的 Job Object)补刀:ppid 树断掉的那一类
- *      (Start-Process 之后根先退、或者被 reparent)由它按内核记下的归属收。
- *
- * 然后**核验**:圈里还有成员、进程组还活着、或者**这一问本来就答不全**,都如实说出来。
- */
-async function killScriptRun(child: ChildProcess, confine: Confinement | null): Promise<string> {
-  const pid = child.pid;
-  if (!IS_WINDOWS) {
-    try { if (pid !== undefined) process.kill(-pid, "SIGKILL"); else child.kill("SIGKILL"); }
-    catch { try { child.kill("SIGKILL"); } catch { /* 已经没了 */ } }
-  } else {
-    // ① 树根还活着的时候走 ppid 树。退非零有两种:进程已经没了(128),或者这一发没打出去
-    // —— 后者要留着说,吞掉等于把一次失败做成静默。
-    let treeFailed: string | null = null;
-    if (pid !== undefined) {
-      treeFailed = await runFile("taskkill", ["/T", "/F", "/PID", String(pid)], { timeout: CLEANUP_VERIFY_MS, windowsHide: true })
-        .then(() => null)
-        .catch((error: { code?: unknown; stderr?: string }) =>
-          error.code === 128 ? null : `taskkill 没能按进程树收掉它（${(error.stderr ?? "").trim() || `退出码 ${String(error.code)}`}）`);
-    }
-    // ② 逃出 ppid 树的那一类交给圈。
-    confine?.killAll("SIGKILL");
-    try { child.kill("SIGKILL"); } catch { /* 已经没了 */ }
-    const residue = await verifyScriptGone(child, confine);
-    confine?.dispose();
-    const left = [treeFailed, residue].filter(Boolean).join("；");
-    return left
-      ? `已经发了强杀，但${left} —— 它可能还在后台动作，必要时去系统里确认一下`
-      : "已经把它和它拉起的进程一起杀掉";
+  const probe = await probeOwnedPorts(open.ports, terminalSessions.launchTokenOf(open.id));
+  if (probe.state === "unknown") return { kind: "stuck", reason: `停止命令跑完了，但${probe.why}，没法确认服务已经停了` };
+  if (probe.state === "ours") {
+    return { kind: "stuck", reason: `停止命令跑完了，但端口 ${open.ports.join("、")} 上还有这次启动起来的进程在听 —— 服务没停下来，去看看那段脚本` };
   }
-  const residue = await verifyScriptGone(child, confine);
-  confine?.dispose();
-  return residue
-    ? `已经发了强杀，但${residue} —— 它可能还在后台动作，必要时去系统里确认一下`
-    : "已经把它和它拉起的进程一起杀掉";
+  // 监听这边核过了,但线索本身可能不全 —— 同 stopLaunchPorts:没记下的端口谁都没问过,
+  // 用户那段脚本到底收没收干净,这里给不出证据,于是不许宣称停净(第 3 轮审查发现 1)。
+  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, true) };
+  return { kind: "stopped" };
 }
 
-/**
- * 残留核验:有就返回一句人话,没有返回 null。「问不出来」不算没有,如实说问不出来。
- *
- * 两个平台手里的证据不一样。POSIX 有进程组,`groupAlive` 直接问内核;**Windows 一条都没有**
- * —— `groupAlive`/`readProcessTableSync` 在那边全是短路,唯一的来源就是 Job Object。
- *
- * 而圈的空集合**不能无条件当成「整次运行为空」**:`ConfineRead.coverage` 写明了这一问覆盖
- * 到哪儿(kernel-confine.ts 顶部),`since-enroll` 只覆盖 assign **之后**出生的后代 ——
- * 圈定那一笔是 spawn 之后才写的,它之前出生的后代从头到尾没进过集合,集合空也证明不了
- * 它们没了(第 2 轮审查发现 3 真机实测:圈前出生的 27144 活着,读数仍是空集合)。
- * `executors/cleanup-result.ts` 的 `confinedResidue` 早就是这么判的 —— 只有 `whole-run`
- * 才许从空集合推出「扫净」。新调用者不能从旁边绕过同一条契约。
- *
- * Windows 上 `preExecEnv()` 返回 null(那条路只有 cgroup 有),所以那边**永远拿不到
- * whole-run**:如实说清这一问覆盖到哪儿,而不是把 since-enroll 的空当成全净。
- */
-async function verifyScriptGone(child: ChildProcess, confine: Confinement | null): Promise<string | null> {
-  const deadline = Date.now() + CLEANUP_VERIFY_MS;
-  for (;;) {
-    const read = confine?.read();
-    const members = read?.kind === "members" ? read.members.length : 0;
-    const groupLeft = !IS_WINDOWS && child.pid !== undefined && groupAlive(child.pid);
-    if (!members && !groupLeft) {
-      if (read?.kind === "unqueryable") return `核不出它是不是真的清空了（${read.why}）`;
-      // POSIX 的权威证据是进程组(上面的 groupLeft 已经问过内核),圈只是加一台设备。
-      if (!IS_WINDOWS) return null;
-      // Windows 只剩圈这一个来源,于是空集合必须连着 coverage 一起用。
-      if (read?.kind !== "members") {
-        return "这次没圈起来（Job Object 不可用），只按 ppid 树杀过一遍 —— 脱离了父子关系的后代核不到";
-      }
-      if (read.coverage !== "whole-run") {
-        return "圈只覆盖到圈定之后出生的那些（这台平台拿不到全程覆盖），圈前就脱离父子关系的后代核不到";
-      }
-      return null;
-    }
-    if (Date.now() >= deadline) {
-      return members ? `圈里还剩 ${members} 个进程没退` : "它的进程组里还有人活着";
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-}
-
-/**
- * 跑用户配置的停止命令,**保证在时限内落地**。方言跟启动同一套(commandLaunch:POSIX 是
- * `shell -lc`,Windows 是 PowerShell `-EncodedCommand`),但**不开 pty、不建会话**:停止没有
- * 「现场」可看,它只有成或不成 —— 新开一条会话只会搅乱会话表(那边按 commandId 认人),
- * 失败时把最后几行输出带回去就够。
- *
- * 自己计时、自己收敛,**不能用 execFile 的 timeout**:那一档到点只补发一次 SIGTERM,脚本
- * 写了 `trap '' TERM` 就彻底拖住 —— 回调绑在 stdio 的 close 上,promise 永不落地,外面那把
- * withCommandLock 跟着永远不释放,这条命令的启停全部排队到死(第 1 轮审查 E2 实锤)。
- * 同理只等 `exit`、不等 `close`:脚本把服务拉到后台、子进程继承了管道时,close 要等那个
- * 后台进程也退出才来(E3),而「停止脚本跑完了」说的是**脚本自己**退了。
- * 到点那一发打在**整次运行**上(killScriptRun:POSIX 是整个进程组,Windows 是 Job Object +
- * taskkill /T),否则只杀掉 shell、它拉起的东西继续跑;杀完**核验一眼残留**再落地,核验自带
- * 5 秒上限 —— 既不嘴硬说「已经一起杀掉了」,也不让那把锁跟着一起卡死。不等它的 exit:
- * 万一它卡在不可中断的系统调用里,exit 可能永远不来。
- */
-function runStopScript(cwd: string, script: string, timeoutMs: number): Promise<{ ok: true } | { ok: false; reason: string }> {
-  type Result = { ok: true } | { ok: false; reason: string };
-  let launch: { shell: string; args: string[] };
-  try { launch = commandLaunch(script); }
-  catch (error) { return Promise.resolve({ ok: false, reason: error instanceof Error ? error.message : String(error) }); }
-  return new Promise<Result>((resolve) => {
-    let child: ChildProcess;
-    try {
-      child = spawn(launch.shell, launch.args, {
-        cwd,
-        detached: !IS_WINDOWS, // 独立进程组:超时要连它拉起的东西一起收掉
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (error) {
-      resolve({ ok: false, reason: `停止命令跑不起来（${error instanceof Error ? error.message : String(error)}）` });
-      return;
-    }
-    // 圈定只在 Windows 用:POSIX 那边 detached 起的进程组本身就是内核级的容器,而这台设备
-    // 在 macOS 上没有等价物(openConfinement 会返回 null 并打一句弃权)。
-    const confine = IS_WINDOWS && child.pid !== undefined ? openConfinement(`ash-stop-${id()}`) : null;
-    if (child.pid !== undefined) confine?.enroll(child.pid);
-    let out = "";
-    let err = "";
-    let settled = false;
-    let timedOut = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const settle = (result: Result) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-      resolve(result);
-    };
-    const fail = (why: string) => {
-      const tail = outputTail(out, err);
-      settle({ ok: false, reason: tail ? `${why}：${tail}` : why });
-    };
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (text: string) => { out = (out + text).slice(-STOP_OUTPUT_KEEP); });
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (text: string) => { err = (err + text).slice(-STOP_OUTPUT_KEEP); });
-    child.on("error", (error) => fail(`停止命令跑不起来（${error.message}）`));
-    child.on("exit", (code, signal) => {
-      // 超时那一路已经在收尾了:它要等残留核验完才落地,这里别抢着把结论写成「被信号中断」。
-      if (timedOut) return;
-      confine?.dispose();
-      if (code === 0) { settle({ ok: true }); return; }
-      fail(code === null ? `停止命令被信号 ${signal} 中断` : `停止命令退出码 ${code}`);
-    });
-    timer = setTimeout(() => {
-      timedOut = true;
-      void killScriptRun(child, confine).then((cleanup) => {
-        fail(`停止命令超过 ${Math.round(timeoutMs / 1000)} 秒还没结束，${cleanup}`);
-      });
-    }, timeoutMs);
-  });
+/** StopVerdict → 落进会话事实的那笔账(stuck 不走这里:它压根没核到终态)。 */
+function resolutionOf(verdict: Exclude<StopVerdict, { kind: "stuck" }>): StopResolution {
+  return verdict.kind === "unresolved"
+    ? { kind: "unresolved", pids: verdict.leftovers, why: verdict.notice }
+    : { kind: "verified" };
 }
 
 /** 停止脚本跑完后等启动会话自己退场(到点就算了,后面还有 terminate 兜底)。 */
@@ -546,10 +373,12 @@ export function stopCommand(
     // 可杀,但刷新回来还得看得出停过(根 AGENTS.md)。**无条件标**:活进程那条路里
     // terminate 只标它自己那条会话,缓存的 portsAlive 还可能是旧的 true,于是紧接着点启动会
     // 被幂等门拿一条已经退出的会话顶回去(第 2 轮审查发现 1)。
-    // 没核销的号一并落进会话事实:下次点停止还看得见,刷新也不丢。
-    terminalSessions.markCommandStopped(projectId, commandId, verdict.kind === "unresolved" ? verdict.leftovers : []);
-    return verdict.kind === "unresolved"
-      ? { status: 200 as const, body: { stopped: true, unresolved: verdict.leftovers, notice: verdict.notice } }
+    // 没核销的号一并落进会话事实:下次点停止还看得见,刷新也不丢。回给用户的是**落账之后**
+    // 的终态,不是这一次的结论 —— 上一次留下的责任还挂着时,这次停止也不该报「干净」
+    // (落账是单调的,见 terminal-stop-facts.ts 的 mergeStop)。
+    const settled = terminalSessions.markCommandStopped(projectId, commandId, resolutionOf(verdict));
+    return settled.kind === "unresolved"
+      ? { status: 200 as const, body: { stopped: true, unresolved: settled.pids, notice: settled.why } }
       : { status: 200 as const, body: { stopped: true } };
   });
 }
@@ -598,14 +427,14 @@ export function restartCommand(
         }
         // 核到终态了,把「这一份已经停了」落回会话事实 —— 否则它还会被当成「还在跑」,
         // 新会话的容量预留会撞上「旧命令会话尚未停止」。
-        if (before) {
-          terminalSessions.markCommandStopped(projectId, command.id, verdict.kind === "unresolved" ? verdict.leftovers : []);
-        }
+        const stop: StopFact = before
+          ? terminalSessions.markCommandStopped(projectId, command.id, resolutionOf(verdict))
+          : { kind: "verified" };
         const session = await reservation.create(cwd, { name: resolved.name, script: resolved.script });
-        // 旧服务的监听停了、新的起来了,但同组那几个核不上归属的号还活着 —— 照实说一句,
+        // 旧服务的监听停了、新的起来了,但旧账上那几个核不上归属的号还活着 —— 照实说一句,
         // 别让「重启成功」把它盖过去。
-        return verdict.kind === "unresolved"
-          ? { status: 201 as const, body: { session, notice: verdict.notice } }
+        return stop.kind === "unresolved"
+          ? { status: 201 as const, body: { session, notice: stop.why } }
           : { status: 201 as const, body: { session } };
       } finally { reservation.release(); }
     } catch (error) {

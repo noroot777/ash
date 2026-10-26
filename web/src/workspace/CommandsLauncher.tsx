@@ -61,12 +61,19 @@ type CommandRow = {
  * 或者反过来「服务还听着端口,界面却摆着启动按钮、再点一次起第二份」。
  *
  * 进程归属(groupAlive:组长退了但后台子进程还在的 daemonize 形状也算)之外多两档:
- * ① **它打印过的端口还有人在听** —— 真·守护化的服务(双 fork + setsid)从进程归属里全逃了,
- * 端口是仅剩的线索;② **上次停止留下了没核销的号**(服务端只报还活着的那些):端口让出来了,
- * 但同组还有核不上归属、没敢杀的进程,那次启动就还没了结,停止按钮得留在那儿让用户能再按。
+ * ① **它打印过的端口还有人在听**(而且核实是这次启动起来的) —— 真·守护化的服务
+ * (双 fork + setsid)从进程归属里全逃了,端口是仅剩的线索;② **上次停止留下了还活着的号**:
+ * 端口让出来了,但同组还有核不上归属、没敢杀的进程,那次启动就还没了结,停止按钮得留在那儿
+ * 让用户能再按。
+ *
+ * **只认活证据**:账上那种「一个号都举不出来」的没核销(端口超额,证据本身不全)不进这一问
+ * —— 它永远核销不掉,当成「还在跑」就等于这条命令再也起不动了。那句话由 sessionState 去说。
  */
+const leftoversOf = (session: TerminalSessionInfo): number[] =>
+  session.stop.kind === "unresolved" ? session.stop.pids : [];
+
 const sessionRunning = (session: TerminalSessionInfo): boolean =>
-  session.groupAlive || session.portsAlive || session.unresolved.length > 0;
+  session.groupAlive || session.portsAlive || leftoversOf(session).length > 0;
 
 // 同一条命令可能挂着「一条活会话」或「一条刚退出的」——一处只说一件事,活的优先。
 function bestSession(sessions: TerminalSessionInfo[], projectId: string, commandId: string): TerminalSessionInfo | null {
@@ -102,7 +109,7 @@ function sessionState(
     // 监听已经让出来了、只剩几个核不上归属所以没敢杀的号:既不是「运行中」也不是「已停止」,
     // 照实说第三种(第 2 轮审查发现 2 —— 这一档以前被静默并进「已停止」)。
     if (!session.groupAlive && !session.portsAlive) {
-      return { tone: "on", text: `停止未完成（还剩 ${session.unresolved.length} 个进程核不到归属）` };
+      return { tone: "on", text: `停止未完成（还剩 ${leftoversOf(session).length} 个进程核不到归属）` };
     }
     return session.exitCode === null
       ? { tone: "on", text: "运行中" }
@@ -110,6 +117,11 @@ function sessionState(
   }
   if (session) {
     if (open) return { tone: "on", text: "已启动" };
+    // 没有活证据了,但那次停止**没能证明停净**(端口超额:没记下的端口谁都没问过,或者
+    // 当时核不上归属的号后来才自己退掉)。「已停止」是谎报,这一句得留着 —— 刷新回来也在
+    // (根 AGENTS.md:停止要留下持久可见的状态;第 3 轮审查发现 1:这一档以前一个 PID
+    // 都举不出来,于是被整条读成「干净」)。
+    if (session.stop.kind === "unresolved") return { tone: "err", text: "已停止（没能确认停净）" };
     // 用户自己点的停止不是异常 —— 哪怕进程死于信号带回非零退出码。
     if (session.stoppedByUser) return { tone: "off", text: "已停止" };
     if (session.exitCode === 0) return { tone: "off", text: service ? "启动脚本已退出" : "已退出" };

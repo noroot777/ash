@@ -684,7 +684,10 @@ export type TerminalSessionInfo = {
   startedAt: number;
   /** null = 进程还活着；命令会话靠它区分「运行中」和「退了但日志可回看」。 */
   exitCode: number | null;
-  /** 用户主动停的（区别于自己崩了）：显示「已停止」，不算异常、不亮红点。 */
+  /**
+   * 有人要求停过（区别于自己崩了）：显示「已停止」，不算异常、不亮红点。服务端派生自
+   * `stop`——「有没有人要求停过」和「停净了吗」是两件事，一个布尔答不了第二问。
+   */
   stoppedByUser: boolean;
   /** 进程组里是否还有活进程。组长退了组不一定空（daemonize），判「还在跑」看它，别看 exitCode。 */
   groupAlive: boolean;
@@ -693,10 +696,21 @@ export type TerminalSessionInfo = {
   /** 上面那些端口此刻还有人在听 = 服务还在后台跑着，哪怕启动脚本早退了。 */
   portsAlive: boolean;
   /**
-   * 上次停止**没能核销**的号：端口让出来了，但同组还有进程活着、又拿不出「是这次启动的」
-   * 的归属证据，于是没敢杀也不敢当成停净。非空 = 这条命令还没了结，照实说一句。
+   * 上一次停止**留下的责任**（服务端 StopFact，口径与注释在
+   * server/src/terminal-session-facts.ts）：
+   *
+   *  · `none` / `requested` / `verified` —— 没人停过 / 停了但还没核到终态 / 核验过停净了；
+   *  · `unresolved` —— 停止动作跑完了，但**证明不到停净**。`pids` 是核不上归属所以一个字都
+   *    没敢动的号（只报此刻还活着的）；**可以为空** —— 那是「连该问谁都没问全」（端口超额），
+   *    不是「干净」。`why` 是原样给用户看的那句话。
+   *
+   * 界面读它说第三种状态；`pids` 非空才算「还有东西在跑」（空的那种不卡启动按钮）。
    */
-  unresolved: number[];
+  stop:
+    | { kind: "none" }
+    | { kind: "requested" }
+    | { kind: "verified" }
+    | { kind: "unresolved"; pids: number[]; why: string };
   /** 这次启动打印的本机端口超过了记录额度，多出来的没记下 = 端口这条线索本身不全。 */
   portsTruncated: boolean;
 };

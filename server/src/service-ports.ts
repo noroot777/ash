@@ -42,7 +42,7 @@
  * 于是「工具失灵」会被读成「端口空了 = 已经停净」(第 1 轮审查 E2)。所以探测一律三态:
  * `listening` / `free` / `unknown`,**unknown 不许当 free 用** —— 调用方据此拒绝宣称已停止。
  */
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { IS_WINDOWS } from "./platform.js";
@@ -240,6 +240,64 @@ export async function probePorts(
   return unknown ? "unknown" : "free";
 }
 
+/**
+ * 端口上坐着的**是不是这次启动起来的东西**。
+ *
+ * `PortState` 只回答「有没有人听」,而**生命周期该认的是归属** —— 这两件事被当成一件时,
+ * 一条只打印了一行网址的命令(`echo http://127.0.0.1:5173`)会因为别人的 vite 恰好听着
+ * 5173 而永远显示「运行中」:启动按钮不给起,停止按钮又停不掉它(那个监听者核不上归属,
+ * 一个字都不许动),于是这条命令从此卡死(第 3 轮审查发现 3)。
+ *
+ * 归属证据与 `stopByPorts` 用的是**同一份**(环境里的启动记号,见文件头):
+ *
+ *   · `ours`     —— 至少一个监听者带着这次启动的记号:确定还在跑;
+ *   · `unknown`  —— 有人听但核不上(lsof 没答上来 / 这条会话没有记号 / 读不到对方环境):
+ *                   **不许读成「没在跑」**,保持悲观(文件头那条「查不到不等于没人听」);
+ *   · `stranger` —— 有人听,而且**核实了不是这次起来的**:这次启动在端口这条线索上已经没了;
+ *   · `free`     —— 没人听。
+ *
+ * 优先级 **ours > unknown > stranger > free**:一个端口确认是别人的,不能把另一个端口上
+ * 核不上的那位一并核销掉。
+ */
+export type OwnedPortState = "ours" | "unknown" | "stranger" | "free";
+
+export type OwnedPortProbe = {
+  state: OwnedPortState;
+  /** `unknown` 的由来,原样进给用户看的那句话。其余档为 null。 */
+  why: string | null;
+};
+
+export async function probeOwnedPorts(
+  ports: Iterable<number>,
+  token: string | null,
+  probe: (port: number) => Promise<PortProbe> = listeningPids,
+): Promise<OwnedPortProbe> {
+  let ours = false;
+  let stranger = false;
+  let why: string | null = null;
+  for (const port of ports) {
+    const found = await probe(port);
+    if (!found.ok) { why ??= found.why; continue; }
+    const holders = found.pids.filter((pid) => pid !== process.pid);
+    if (!holders.length) continue;
+    if (!token) {
+      why ??= `端口 ${port} 上有人在听，但这条会话没有启动记号（多半是 ash 重启前起的），核不上归属`;
+      continue;
+    }
+    const lineage = await readLineage(holders, token);
+    for (const pid of holders) {
+      const who = lineage.get(pid);
+      if (who === undefined) continue; // 刚才还在,现在没了
+      if (who === "ours") ours = true;
+      else if (who === "stranger") stranger = true;
+      else why ??= `端口 ${port} 上的 pid ${pid} ${refusal(who)}`;
+    }
+  }
+  if (ours) return { state: "ours", why: null };
+  if (why !== null) return { state: "unknown", why };
+  return { state: stranger ? "stranger" : "free", why: null };
+}
+
 /** `[[dd-]hh:]mm:ss` → 毫秒。ps 的 etime 与地区无关,比 lstart 好解析(本机是中文 locale)。 */
 function elapsedToMs(etime: string): number | null {
   const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(etime.trim());
@@ -293,25 +351,55 @@ type Lineage = "ours" | "stranger" | "unknown";
  * 永远报「核不上归属」,服务一个都停不掉。
  */
 async function readLineage(pids: number[], token: string): Promise<Map<number, Lineage>> {
-  const lineage = new Map<number, Lineage>();
-  if (!pids.length) return lineage;
-  if (IS_WINDOWS || !token) {
-    for (const pid of pids) lineage.set(pid, "unknown");
-    return lineage;
-  }
-  if (HAS_PROC) return lineageFromProc(pids, token);
-  if (!PS_PATH) {
-    for (const pid of pids) lineage.set(pid, "unknown");
-    return lineage;
-  }
+  const shortcut = lineageWithoutPs(pids, token);
+  if (shortcut) return shortcut;
   let stdout = "";
   try {
-    ({ stdout } = await run(PS_PATH, ["-E", "-o", "pid=,command=", "-p", pids.join(",")], { timeout: PROBE_TIMEOUT_MS }));
+    ({ stdout } = await run(PS_PATH!, ["-E", "-o", "pid=,command=", "-p", pids.join(",")], { timeout: PROBE_TIMEOUT_MS }));
   } catch (error) {
     const failure = error as { code?: unknown; stdout?: string };
     // 名单里有号已经退出时 ps 退 1,活着的那几条照样打出来 —— 还能用。
     stdout = failure.stdout ?? "";
   }
+  return lineageFromPs(stdout, pids, token);
+}
+
+/**
+ * `readLineage` 的**同步**版。只服务 server 退出那一拍:`process.once("exit")` 里没有
+ * await 可用(terminal.ts 的 shutdown 因此整条是同步的),但同步 I/O 照样能跑 —— 判据、
+ * 平台分支、解析全与异步版共用一套,只有「怎么问 ps」这一步不同。
+ */
+function readLineageSync(pids: number[], token: string): Map<number, Lineage> {
+  const shortcut = lineageWithoutPs(pids, token);
+  if (shortcut) return shortcut;
+  let stdout = "";
+  try {
+    stdout = String(execFileSync(PS_PATH!, ["-E", "-o", "pid=,command=", "-p", pids.join(",")], {
+      timeout: PROBE_TIMEOUT_MS, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }));
+  } catch (error) {
+    stdout = String((error as { stdout?: unknown }).stdout ?? "");
+  }
+  return lineageFromPs(stdout, pids, token);
+}
+
+/** 这几个号一律记成「核不上」。 */
+function unknownLineage(pids: number[]): Map<number, Lineage> {
+  return new Map(pids.map((pid) => [pid, "unknown" as Lineage]));
+}
+
+/** 不用问 ps 就能给出的答案(含 Linux 的 /proc 权威档)。返回 null = 得去问 ps。 */
+function lineageWithoutPs(pids: number[], token: string): Map<number, Lineage> | null {
+  if (!pids.length) return new Map();
+  if (IS_WINDOWS || !token) return unknownLineage(pids);
+  if (HAS_PROC) return lineageFromProc(pids, token);
+  if (!PS_PATH) return unknownLineage(pids);
+  return null;
+}
+
+/** `ps -E` 那坨输出 → 逐号的归属结论。同步/异步两条路共用。 */
+function lineageFromPs(stdout: string, pids: number[], token: string): Map<number, Lineage> {
+  const lineage = new Map<number, Lineage>();
   const needle = `${LAUNCH_ID_ENV}=${token}`;
   let current: number | null = null;
   const text = new Map<number, string>();
@@ -363,12 +451,12 @@ function lineageFromProc(pids: number[], token: string): Map<number, Lineage> {
 }
 
 /** 跟这个号同进程组的全部号(含它自己)。进程表拿不到就只认它自己。 */
-function groupMembers(holder: PortHolder, selfPgid: number | null): number[] {
-  if (holder.pgid <= 1 || holder.pgid === selfPgid) return [holder.pid];
+function groupMembers(pid: number, pgid: number, selfPgid: number | null): number[] {
+  if (pgid <= 1 || pgid === selfPgid) return [pid];
   const table = readProcessTableSync();
-  if (!table) return [holder.pid];
-  const members = new Set<number>([holder.pid]);
-  for (const [pid, pgid] of table.pgidOf) if (pgid === holder.pgid) members.add(pid);
+  if (!table) return [pid];
+  const members = new Set<number>([pid]);
+  for (const [other, group] of table.pgidOf) if (group === pgid) members.add(other);
   return [...members];
 }
 
@@ -406,7 +494,7 @@ export async function stopByPorts(
         outcome.spared.push({ holder, reason: "那是 ash 自己所在的进程组" });
         continue;
       }
-      const members = groupMembers(holder, selfPgid);
+      const members = groupMembers(holder.pid, holder.pgid, selfPgid);
       const lineage = await readLineage(members, options.launchToken);
       if (lineage.get(holder.pid) !== "ours") {
         outcome.spared.push({ holder, reason: refusal(lineage.get(holder.pid)) });
@@ -457,5 +545,60 @@ async function waitGone(alive: () => boolean, graceMs: number): Promise<boolean>
     if (!alive()) return true;
     if (Date.now() >= deadline) return !alive();
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  }
+}
+
+/**
+ * 端口这一档的**同步**收口:只给 server 退出那一拍用。
+ *
+ * `process.once("exit")` 里不能 await(信号处理器直接 `process.exit()`,见 singleton.ts
+ * 的 installCleanup),所以关服清场整条是同步的 —— `killAllSessionTrees` 同步连发
+ * TERM+KILL 就是这个缘故。端口这一档被漏在外面时,关服会把会话表连 launchToken 一起丢掉,
+ * 而真·守护化的服务只认这一条线索:ash 再起来,它还听着那个端口、却**再没有任何把手能停
+ * 它**(第 3 轮审查发现 2)。
+ *
+ * 判据与异步版逐字一致(带记号的才动,没记号/核不上的一根汗毛都不碰),区别只有两处:
+ * 同步问 lsof/ps,以及**不等宽限** —— 退出那一拍没有「等 3 秒」这种预算,TERM 与 KILL
+ * 连发(同 killAllSessionTrees)。
+ */
+export function stopByPortsSync(
+  ports: Iterable<number>,
+  token: string,
+): { killed: number[]; spared: number[] } {
+  const result: { killed: number[]; spared: number[] } = { killed: [], spared: [] };
+  if (IS_WINDOWS || !LSOF_PATH || !token) return result;
+  const table = readProcessTableSync();
+  const selfPgid = table?.pgidOf.get(process.pid) ?? null;
+  const seen = new Set<number>();
+  for (const port of ports) {
+    if (port < MIN_PORT) continue;
+    for (const pid of listeningPidsSync(port)) {
+      if (seen.has(pid) || pid === process.pid) continue;
+      seen.add(pid);
+      const pgid = table?.pgidOf.get(pid) ?? 0;
+      if (selfPgid !== null && pgid === selfPgid) { result.spared.push(pid); continue; }
+      const members = groupMembers(pid, pgid, selfPgid);
+      const lineage = readLineageSync(members, token);
+      const targets = members.filter((member) => lineage.get(member) === "ours");
+      if (!targets.length) { result.spared.push(pid); continue; }
+      for (const target of targets) {
+        try { process.kill(target, "SIGTERM"); } catch { /* 已经走了 */ }
+        try { process.kill(target, "SIGKILL"); } catch { /* 已经走了 */ }
+      }
+      result.killed.push(...targets);
+    }
+  }
+  return result;
+}
+
+/** 同步版 lsof。问不出来就当空清单 —— 关服那一拍没有重试余地,也没有调用方可交代。 */
+function listeningPidsSync(port: number): number[] {
+  if (!LSOF_PATH) return [];
+  try {
+    return parsePids(String(execFileSync(LSOF_PATH, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
+      timeout: PROBE_TIMEOUT_MS, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    })));
+  } catch (error) {
+    return parsePids(String((error as { stdout?: unknown }).stdout ?? ""));
   }
 }

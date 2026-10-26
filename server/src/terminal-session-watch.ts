@@ -9,7 +9,7 @@
 //      (第 4 轮审查实锤:毫秒级的 `disown; exit`,任何采样都赢不了)。
 //   ② 端口存活(portsAlive):启动脚本退了、服务却还听着它打印过的端口 —— 真·守护化的
 //      服务只剩这一条线索(service-ports.ts)。lsof 比 ps 慢得多,所以自成一把锁、按拍跑。
-import { probePorts } from "./service-ports.js";
+import { probeOwnedPorts } from "./service-ports.js";
 import { descendantsFromTable, readProcessTable } from "./terminal-process-tree.js";
 
 /** 观测层只认会话的这几样事实(TerminalSession 结构上满足它)。 */
@@ -18,6 +18,8 @@ export type WatchedSession = {
   readonly commandId: string | null;
   readonly descendantPgids: Set<number>;
   readonly launchPorts: Set<number>;
+  /** 这次启动的记号。端口上坐着的是不是「这次起来的东西」,只有它能核(service-ports.ts)。 */
+  readonly launchToken: string | null;
   exitCode: number | null;
   portsAlive: boolean;
   /** 端口事实的代次:停止路径核验完会 +1,这里据此丢掉取样早于它的那一拍。 */
@@ -99,7 +101,11 @@ export class TerminalWatcher {
    * 刷新「启动脚本退了、但它起的服务还听着端口」这个事实。只问**启动脚本已退出**的命令
    * 会话 —— 组长还活着时进程归属已经说明一切,不必再跑 lsof。
    *
-   * **「问不出来」不许写成 false**:lsof 坏了/超时返回 unknown,这时保留上一次的事实
+   * 认的是**归属**而不是「有没有人听」(probeOwnedPorts):别人的服务恰好坐在同一个端口上,
+   * 跟这次启动还在不在是两件事 —— 混成一件,一条只打印了网址的命令会因为邻居的 vite 永远
+   * 显示「运行中」,停也停不掉(第 3 轮审查发现 3)。
+   *
+   * **「问不出来」不许写成 false**:lsof 坏了/超时/核不上归属返回 unknown,这时保留上一次的事实
    * (第 1 轮审查发现 2:工具失灵被读成「端口空了 = 已经停净」,于是界面把还在跑的服务
    * 说成已停止)。同理这里**不看 stoppedByUser** —— 用户点过停止不等于真停下来了,那件事
    * 由停止路径自己核验后写(markCommandStopped)。
@@ -119,9 +125,9 @@ export class TerminalWatcher {
       for (const session of candidates) {
         if (session.exitCode === null) { session.portsAlive = false; continue; }
         const sampledAt = session.factsGeneration;
-        const state = await probePorts(session.launchPorts);
+        const { state } = await probeOwnedPorts(session.launchPorts, session.launchToken);
         if (state === "unknown" || session.factsGeneration !== sampledAt) continue;
-        session.portsAlive = state === "listening";
+        session.portsAlive = state === "ours";
       }
     } finally { this.scanningPorts = false; }
   }

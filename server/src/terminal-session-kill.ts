@@ -5,6 +5,8 @@
 //
 // 判据与枚举能力的来龙去脉在 terminal-process-tree.ts 顶部;这里只放「怎么收尾」。
 import { IS_WINDOWS } from "./platform.js";
+import type { StopFact } from "./terminal-session-facts.js";
+import { requestStop } from "./terminal-stop-facts.js";
 import {
   descendantsFromTable,
   freezeAndEnumerate,
@@ -17,7 +19,7 @@ import {
 
 /**
  * 收尾只需要会话的这几样事实(TerminalSession 结构上满足它,不必互相 import 类型)。
- * `exitCode`/`stoppedByUser` 是读写的 —— 终止是用户动作,要留在会话事实里。
+ * `exitCode`/`stop` 是读写的 —— 终止是用户动作,要留在会话事实里。
  */
 export type KillTarget = {
   readonly process: { readonly pid: number; kill(signal?: string): void };
@@ -25,7 +27,7 @@ export type KillTarget = {
   readonly descendantPgids: Set<number>;
   readonly commandId: string | null;
   exitCode: number | null;
-  stoppedByUser: boolean;
+  stop: StopFact;
 };
 
 export type KillResult = { ok: true } | { ok: false; reason: string };
@@ -93,11 +95,11 @@ export async function terminateSession(
   const term = await freezeAndEnumerate(groupId, target.ttyPath, target.descendantPgids, memberPids);
   if (clearedBy(term.snapshot)) { term.thaw(); return { ok: true }; }
   // 这一行记的是**「用户要求停止」**,不是「已经停净」—— 两件事必须分开:它在 TERM/KILL
-  // 之前就落下,后面每一轮都可能失败。「停净了吗」由停止动作层另算(terminal-commands.ts
-  // 的 StopVerdict:端口现场核验 + 没核销的号),stoppedByUser 只决定措辞(「已停止」而不是
-  // 「异常退出」)和回收策略。谁要是拿它当「服务已经不在了」的证据,就会得出
-  // 「我点过停止 ⇒ 它停了」(第 2 轮审查发现 2)。
-  target.stoppedByUser = true;
+  // 之前就落下,后面每一轮都可能失败。「停净了吗」是账上另一档(StopFact 的 verified /
+  // unresolved,由停止动作层核验后落:terminal-commands.ts 的 StopVerdict),这一档只决定
+  // 措辞(「已停止」而不是「异常退出」)和回收策略。谁要是拿它当「服务已经不在了」的证据,
+  // 就会得出「我点过停止 ⇒ 它停了」(第 2 轮审查发现 2)。已经有核验结论时不覆盖它。
+  requestStop(target);
   signalSessionTree(target, "SIGTERM", term.snapshot);
   // 交互 shell 只认挂断:zsh/bash 按 POSIX 惯例**忽略 SIGTERM**(交互模式下),于是
   // 「关 tab」的 TERM 轮必然空等满 termMs 才升级 KILL —— 实测一个什么都没跑的空闲 tab

@@ -80,11 +80,15 @@ function TerminalPane({
       flags.ended = true;
       terminal.write(!isCommand
         ? `\r\n\x1b[90m进程已退出（${current.exitCode ?? 0}）\x1b[0m\r\n`
-        : current.stoppedByUser
-          ? "\r\n\x1b[90m服务已停止\x1b[0m\r\n"
-          : flags.detached
-            ? "\r\n\x1b[90m服务已退出\x1b[0m\r\n"
-            : `\r\n\x1b[90m进程已退出（${current.exitCode ?? 0}）\x1b[0m\r\n`);
+        : current.stop?.kind === "unresolved"
+          // 停过,但这次停止**证明不到**停净(端口超额:没记下的端口谁都没问过)。
+          // 写「服务已停止」就是拿一句谎话收尾 —— 照实说,并指一下还能去哪儿看。
+          ? "\r\n\x1b[90m已停止，但没能确认停净 —— 详情看状态栏的常用命令\x1b[0m\r\n"
+          : current.stoppedByUser
+            ? "\r\n\x1b[90m服务已停止\x1b[0m\r\n"
+            : flags.detached
+              ? "\r\n\x1b[90m服务已退出\x1b[0m\r\n"
+              : `\r\n\x1b[90m进程已退出（${current.exitCode ?? 0}）\x1b[0m\r\n`);
     }
   }, []);
 

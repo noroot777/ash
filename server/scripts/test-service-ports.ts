@@ -21,7 +21,14 @@
  *      以及超过记录额度没能收进来的端口,都要如实留在账上,不许被静默核销(发现 2);
  *   ⑦ 生命周期只有**一个**判据:启动幂等、停止、重启、容量、回收全认它。不打印网址的
  *      守护服务 + 配了停止命令,是「停止接口认为它开着、启动接口认为它没开」的那一刀
- *      (发现 1:实测两个独立 PID 同时活着)。
+ *      (发现 1:实测两个独立 PID 同时活着);
+ *   ⑧ 没核销的责任是**单调**的:一次范围更窄的核验(「我记下的这几个端口空了」)不许核销
+ *      一笔范围更宽的责任 —— 再点一次停止还得说「没停净」(第 3 轮审查发现 1);
+ *   ⑨ 生命周期认的是**归属**而不是「有没有人听」:端口上坐着的核实是别人,这次启动就是
+ *      不在了。混成一件,一条只打印了网址的命令会被邻居的服务永久钉在「运行中」,既起不动
+ *      也停不掉(发现 3);
+ *   ⑩ **关 tab / 删项目 / 关服也要收端口这一档**:会话记录是它唯一的把手(启动记号只活在
+ *      记录里),删掉就等于把一个还听着端口的守护进程变成永久孤儿(发现 2)。
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -245,6 +252,15 @@ const listening = async (port: number) => {
   const found = await listeningPids(port);
   return found.ok ? found.pids : [];
 };
+/**
+ * 账上还活着的号。**返回 null 表示这笔账根本不是 unresolved** —— 跟「号都退了、但那句
+ * 「没能确认停净」还得留着」是两回事(第 3 轮审查发现 1:空列表以前被读成「干净」)。
+ */
+const leftoversOf = (projectId: string): number[] | null => {
+  const stop = serviceSession(projectId)?.stop;
+  return stop && stop.kind === "unresolved" ? stop.pids : null;
+};
+
 const serviceSession = (projectId: string) => terminalSessions.listCommandSessions()
   .filter((session) => session.projectId === projectId && session.commandId === SERVICE_COMMAND_ID)
   .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
@@ -302,9 +318,25 @@ try {
   assert.deepEqual(washedBody.unresolved, [washedPid], "核不上归属、没敢杀的号要留在账上");
   assert.match(washedBody.notice ?? "", /还活着/, "必须有一句给用户看的交代");
   assert.match(washedBody.notice ?? "", /停止命令/, "并且给出路");
-  assert.deepEqual(serviceSession("ports1")?.unresolved, [washedPid], "刷新回来还看得见它没停净");
+  assert.deepEqual(leftoversOf("ports1"), [washedPid], "刷新回来还看得见它没停净");
+  // ⑧ 账是**单调**的:再点一次停止,这一次只核了端口(范围更窄),核销不了上一次留下的
+  //    责任。早先 markCommandStopped 是整条覆盖写,于是第二次停止一句「干净」把它抹平 ——
+  //    用户点两下就能让「还没停完」消失,而那个号还在跑(第 3 轮审查发现 1)。
+  const twice = await stopCommand("ports1", SERVICE_COMMAND_ID, null, { portGraceMs: 300 });
+  assert.equal(twice.status, 200);
+  const twiceBody = twice.body as { stopped: boolean; unresolved?: number[]; notice?: string };
+  assert.deepEqual(twiceBody.unresolved, [washedPid], "第二次停止不许拿「端口空了」核销掉上一次的责任");
+  assert.match(twiceBody.notice ?? "", /还活着/, "还得再说一次没停净");
+  assert.deepEqual(leftoversOf("ports1"), [washedPid], "账还在");
   process.kill(washedPid, "SIGKILL");
-  await waitFor("它走了之后,账也跟着销", () => (serviceSession("ports1")?.unresolved.length ?? 1) === 0);
+  await waitFor("它走了之后,活号跟着销", () => (leftoversOf("ports1")?.length ?? 1) === 0);
+  assert.deepEqual(leftoversOf("ports1"), [], "号退完了,但「这次停止没能核验干净」这件事不许跟着消失");
+  assert.equal(serviceSession("ports1")?.portsAlive, false);
+  assert.equal(
+    ((await stopCommand("ports1", SERVICE_COMMAND_ID, null, { portGraceMs: 300 })).body as { stopped: boolean }).stopped,
+    false,
+    "一个活号都没有了,这笔核销不掉的账不该再把停止按钮钉在那儿",
+  );
   strays.delete(washedPid);
   strays.delete(servicePid);
 
@@ -459,6 +491,7 @@ try {
   await waitFor("它那份该杀的照样杀掉了", () => !alive(truncPid));
   strays.delete(truncPid);
   assert.deepEqual(evidenceBody.unresolved, [], "没有具体的号可报 —— 缺的是线索,不是归属");
+  assert.deepEqual(leftoversOf("ports6"), [], "但这笔账必须落下来:空列表不是「干净」,是「连该问谁都没问全」");
   assert.match(
     evidenceBody.notice ?? "", /多出来的没能记下来/,
     "记下的端口都空了也证明不到「全停了」:只听没记下那些端口的守护进程压根没被问过",
@@ -502,17 +535,66 @@ try {
   await waitFor("收尾:新的那份也停掉", () => !alive(quietFresh));
   strays.delete(quietFresh);
 
+  // ── ⑨ 认归属,不认「有没有人听」:端口上坐着的核实是别人,这次启动就是不在了 ────────
+  //    发现 3 的实测形状:一条命令只打印了一行网址(`echo http://127.0.0.1:<port>`),而那个
+  //    端口上恰好坐着别人的服务。把「有人听」读成「我还在跑」,这条命令就被钉死 —— 启动按钮
+  //    不给起(幂等门认它开着),停止按钮也停不掉(那个监听者核不上归属,一个字都不许动)。
+  const echoOnly = service(`echo "[svc] 外面那个 http://127.0.0.1:${strayPort}"`);
+  assert.equal((await startCommand("ports9", cwd, echoOnly)).status, 201);
+  await waitFor("它打印完就退了", () => serviceSession("ports9")?.exitCode === 0);
+  assert.deepEqual(serviceSession("ports9")?.ports, [strayPort], "那行网址照旧被记下来 —— 线索该记,结论另算");
+  assert.ok(alive(strayPid), "端口上坐着的是别人的服务");
+  // 多等两拍:让观测层真的问过一遍,排除「只差第一拍扫描」这种解释。
+  await new Promise((resolve) => setTimeout(resolve, 1_800));
+  assert.equal(serviceSession("ports9")?.portsAlive, false, "别人的监听不是「这次启动还在跑」");
+  const strangerStop = await stopCommand("ports9", SERVICE_COMMAND_ID, null, { portGraceMs: 300 });
+  assert.equal(strangerStop.status, 200, `不该 502 把这条命令永久卡住,实际 ${JSON.stringify(strangerStop.body)}`);
+  assert.equal((strangerStop.body as { stopped: boolean }).stopped, false, "压根没有东西可停");
+  assert.ok(alive(strayPid), "别人的进程一根汗毛都不许动");
+  const echoAgain = await startCommand("ports9", cwd, echoOnly);
+  assert.equal(echoAgain.status, 201, "它从没被认成在跑,再点启动就该真起一次");
+  assert.notEqual((echoAgain.body as { alreadyRunning?: boolean }).alreadyRunning, true);
+  await waitFor("第二次也退了", () => serviceSession("ports9")?.exitCode === 0);
+
+  // ── ⑩ 关 tab / 关服也要收端口这一档 ───────────────────────────────────────────
+  //    会话记录是端口这一档唯一的把手:这次启动的记号只活在记录里,记录一删,守护进程既
+  //    核不上归属、也没人再去问它那个端口 —— 于是它成了永久孤儿(发现 2)。
+  const closePort = await freePort();
+  const closePidfile = join(cwd, "close.pid");
+  assert.equal((await startCommand("ports10", cwd, service(daemonScript(closePort, closePidfile)))).status, 201);
+  await waitFor("守护进程听上了端口", async () => (await listening(closePort)).length > 0);
+  const closePid = pidIn(closePidfile);
+  strays.add(closePid);
+  await waitFor("启动脚本退出", () => serviceSession("ports10")?.exitCode !== null);
+  const closeId = serviceSession("ports10")!.id;
+  const destroyed = await terminalSessions.destroy(closeId, "ports10");
+  assert.equal(destroyed.ok, true, `关 tab 应当成功,实际 ${JSON.stringify(destroyed)}`);
+  await waitFor("删记录之前它被收掉了", () => !alive(closePid));
+  assert.equal(await probePorts([closePort]), "free", "端口要真的让出来");
+  assert.equal(serviceSession("ports10"), null, "收干净了才允许把记录删掉");
+  strays.delete(closePid);
+
   // ── ⑧ 代次闸:飞行中的端口探测不许覆盖「刚刚核验过的停止」 ──────────────────────
   {
-    const net = await import("node:net");
     const guardPort = await freePort();
-    const holder = net.createServer();
-    await new Promise<void>((resolve) => holder.listen(guardPort, "127.0.0.1", () => resolve()));
+    const guardPidfile = join(cwd, "guard.pid");
+    const guardToken = "watch-token-0123456789";
+    // 监听者必须是**带着记号的真进程**:观测层问的是归属,不是「有没有人听」。(ash 自己
+    // 持的监听一律不算 —— probeOwnedPorts 把 process.pid 过滤掉,所以这里不能用同进程的
+    // net.createServer 顶替。)
+    const guard = spawn(process.execPath, [join(cwd, "serve.js"), String(guardPort), guardPidfile], {
+      cwd, detached: true, stdio: "ignore", env: { ...process.env, ASH_LAUNCH_ID: guardToken },
+    });
+    guard.unref();
+    await waitFor("带记号的监听者起来了", async () => (await listening(guardPort)).length > 0);
+    const guardPid = pidIn(guardPidfile);
+    strays.add(guardPid);
     const watched = {
       process: { pid: process.pid },
       commandId: "guard",
       descendantPgids: new Set<number>(),
       launchPorts: new Set([guardPort]),
+      launchToken: guardToken,
       exitCode: 0,
       portsAlive: false,
       factsGeneration: 0,
@@ -526,12 +608,36 @@ try {
       assert.equal(watched.portsAlive, false, "取样早于这次停止的那一拍必须丢掉 —— 否则「我点过停止」当场被覆盖");
       // 代次没变的那一拍照常写回,否则守护化的服务永远认不出来。
       await watcher.scanPorts();
-      assert.equal(watched.portsAlive, true, "没有并发停止时,端口还有人听就该如实翻成 true");
+      assert.equal(watched.portsAlive, true, "没有并发停止时,带记号的监听者就该如实翻成 true");
+      // ⑨ 的观测层那一半:同一个端口换成**核实不是这次起来的**住户,不许写成「我还在跑」。
+      const stranger = { ...watched, launchToken: "another-launch-entirely", factsGeneration: 0, portsAlive: false };
+      const strangerWatcher = new TerminalWatcher(() => [stranger], { scanMs: 10 * 60_000 });
+      try {
+        await strangerWatcher.scanPorts();
+        assert.equal(stranger.portsAlive, false, "端口上坐着的核实是别人,这次启动就是不在了");
+      } finally { strangerWatcher.stop(); }
     } finally {
       watcher.stop();
-      await new Promise<void>((resolve) => holder.close(() => resolve()));
+      process.kill(guardPid, "SIGKILL");
+      strays.delete(guardPid);
     }
   }
+
+  // ── ⑩-关服 那一拍的同步收口也要盖到端口这一档 ─────────────────────────────────────
+  //    `process.once("exit")` 里没有 await 可用(信号处理器直接 process.exit),所以这一步
+  //    必须是同步的。漏掉它,ash 重启后那个服务还听着端口、却再没有任何把手能停它。
+  //    **放在最后**:shutdown() 会把整个会话管理器停掉。
+  const exitPort = await freePort();
+  const exitPidfile = join(cwd, "exit.pid");
+  assert.equal((await startCommand("ports11", cwd, service(daemonScript(exitPort, exitPidfile)))).status, 201);
+  await waitFor("守护进程听上了端口", async () => (await listening(exitPort)).length > 0);
+  const exitPid = pidIn(exitPidfile);
+  strays.add(exitPid);
+  await waitFor("启动脚本退出", () => serviceSession("ports11")?.exitCode !== null);
+  terminalSessions.shutdown();
+  await waitFor("关服那一拍把它一起收掉了", () => !alive(exitPid));
+  assert.equal(await probePorts([exitPort]), "free", "端口要真的让出来");
+  strays.delete(exitPid);
 
   console.log("service ports test passed");
 } finally {

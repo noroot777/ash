@@ -268,6 +268,23 @@ try {
   await page.evaluate(() => { delete window.__service; });
   await page.keyboard.press("Escape");
 
+  // ⑬-后 「停了,但证明不到停净」:一个号都举不出来(端口超额,没记下的端口谁都没问过)。
+  //   两件事要同时成立:① 那句话必须还在 —— 刷新回来也在(根 AGENTS.md:停止要留下持久
+  //   可见的状态),说「已停止」就是谎报;② 它**不卡启动按钮** —— 这笔责任永远核销不掉,
+  //   当成「还在跑」这条命令就再也起不动了(第 3 轮审查发现 1)。
+  await page.evaluate(() => { window.__service = "unprovable"; });
+  await reopen();
+  await page.waitForFunction(() =>
+    /没能确认停净/.test(document.querySelector(".cmd-pop__svc-state")?.textContent ?? ""));
+  await pop.getByRole("button", { name: "启动", exact: true }).waitFor();
+  assert.equal(
+    await pop.getByRole("button", { name: /^停止/ }).count(),
+    0,
+    "没有活证据就不该摆停止按钮 —— 没东西可停,再按一次也只会得到同一句话",
+  );
+  await page.evaluate(() => { delete window.__service; });
+  await page.keyboard.press("Escape");
+
   // ⑬ 反面:启动脚本退了、端口上也没人、又没配停止命令 —— 没有任何线索说它还活着,
   //    这时认它开着就是猜。回到 ▶,并照实说退的是**启动脚本**。
   await page.evaluate(() => { window.__service = "detached"; });

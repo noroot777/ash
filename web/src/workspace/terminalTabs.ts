@@ -1,7 +1,12 @@
 // "detached":attach 的命令会话里启动脚本(PTY 组长)退了、它派生的服务还在进程组里跑
 // (daemonize 形状)。不能标成 ended —— 同屏状态栏正显示「运行中」,日志抽屉说「已退出」
 // 就是自相矛盾;整组死透才是 ended。
+import type { TerminalSessionInfo } from "../lib/api.ts";
+
 export type TerminalStatus = "starting" | "ready" | "reconnecting" | "detached" | "ended" | "error";
+
+/** 上一次停止留下的责任。口径在 lib/apiTypes.ts 的 TerminalSessionInfo.stop。 */
+type StopFactLike = TerminalSessionInfo["stop"];
 
 export type ProjectTerminalTab = {
   id: string;
@@ -25,6 +30,11 @@ export type ProjectTerminalTab = {
   attachSessionId?: string;
   /** attach tab:会话事实的镜像,由集中轮询维护,驱动状态点与正文说明的措辞。 */
   stoppedByUser?: boolean;
+  /**
+   * 上一次停止留下的责任。状态点只认活证据(见 attachStatusOf),但正文那句话要照实说 ——
+   * 「证明不到停净」的那一档如果照旧写「服务已停止」,就是拿一句谎话收尾(第 3 轮审查发现 1)。
+   */
+  stop?: StopFactLike;
   exitCode?: number | null;
 };
 
@@ -51,10 +61,13 @@ export function createTerminalTab(
  * 弹层说「运行中」、终端 tab 说「已结束」)。
  */
 export function attachStatusOf(
-  session: { exitCode: number | null; groupAlive: boolean; portsAlive?: boolean; unresolved?: number[] },
+  session: { exitCode: number | null; groupAlive: boolean; portsAlive?: boolean; stop?: StopFactLike },
 ): TerminalStatus {
   if (session.exitCode === null) return "ready";
-  const settled = !session.groupAlive && session.portsAlive !== true && !session.unresolved?.length;
+  // 「还没了结」只认**还活着的**号:端口超额那种「证据不全」的 unresolved 一个号都举不出来,
+  // 它该在状态点上说「已结束」(确实没东西在跑了),那句「没能确认停净」由文案层去说。
+  const leftovers = session.stop?.kind === "unresolved" ? session.stop.pids.length : 0;
+  const settled = !session.groupAlive && session.portsAlive !== true && leftovers === 0;
   return settled ? "ended" : "detached";
 }
 
@@ -67,7 +80,7 @@ export function createAttachTab(
     exitCode: number | null;
     groupAlive: boolean;
     portsAlive?: boolean;
-    unresolved?: number[];
+    stop?: StopFactLike;
     stoppedByUser: boolean;
   },
   /** 恢复的交互 shell 用项目名 + 序号做标签,跟新建 shell 一个排法;命令日志用会话名。 */
@@ -84,6 +97,7 @@ export function createAttachTab(
     sessionId: session.id,
     attachSessionId: session.id,
     stoppedByUser: session.stoppedByUser,
+    stop: session.stop,
     exitCode: session.exitCode,
   };
 }
