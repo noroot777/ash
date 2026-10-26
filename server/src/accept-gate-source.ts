@@ -94,36 +94,59 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
         registered.push(dep);
       }
     }
-    // 被另一条依赖包住的目录不再单独登记(嵌套包 + vendor 就是这个形状)。重复拷贝在旧实现里
-    // 只是重复 copyFile(覆盖,无害),软链重建却不是幂等的:第二遍 symlink 同一路径直接 EEXIST,
-    // 整次快照在任何断言之前就废掉。所以要在**复制计划**这一层消重,而不是去忽略某一次 EEXIST。
-    dependencies.push(...registered.filter(dep =>
-      !registered.some(other => other !== dep && inside(join(cwd, other), join(cwd, dep)))));
+    const tracked = new Set(paths);
     const trackedDirs = new Set<string>();
     for (const path of paths) for (let dir = dirname(path); dir !== "."; dir = dirname(dir)) trackedDirs.add(dir);
-    const tracked = new Set(paths);
+    // 复制计划 = 登记的依赖目录 + 为了让保留下来的软链在副本里解析得通而必须一起冻结的路径。
+    // 消重必须在**最终计划**这一层成立,不能只在最初登记的那一批上成立(嵌套包 + vendor 只是其中
+    // 一种形状,闭包补进来的父子路径是另一种):软链重建不像 copyFile 那样幂等,计划里同时有父目录
+    // 和它的子路径时,第二遍 symlink 同一个目的地直接 EEXIST,整次快照在任何断言之前就废掉。所以
+    // plan 在每一次增删之后都维持「没有任何条目落在另一条之内」,而不是去忽略某一次 EEXIST。
+    const plan: string[] = [];
     const digests = new Map<string, string>();
-    // 「落点在 cwd 之下」不等于「这份内容会出现在快照里」:项目把依赖装在别处再软链过来时
-    // (node_modules -> .local-deps),落点既没被 Git 跟踪也不在任何登记的依赖里,照抄链接只会在
-    // 快照里留一条断链,命令当场不存在。所以这里按落点求闭包:缺的落点补登记成输入,跟着一起
-    // 摘要和复制,链接重建后自然指向副本自己那份。本来就悬空的链接不会进来(lstat 就没过)。
-    for (let index = 0; index < dependencies.length; index += 1) {
-      const dep = dependencies[index];
+    const addPath = (candidate: string): boolean => {
+      if (plan.some(other => inside(join(cwd, other), join(cwd, candidate)))) return false;
+      for (const other of plan.filter(other => inside(join(cwd, candidate), join(cwd, other)))) {
+        plan.splice(plan.indexOf(other), 1);
+        digests.delete(other); // 被父目录吞掉的条目要连摘要一起作废,由父目录那一遍重新算
+      }
+      plan.push(candidate);
+      return true;
+    };
+    for (const dep of registered) addPath(dep);
+    // 「落点在 cwd 之下」不等于「这份内容会出现在快照里」,而且「Git 跟踪着这个**目录**」更不等于
+    // 覆盖:
+    //  · node_modules -> .local-deps:落点既没被跟踪也不在任何登记的依赖里,照抄链接只会在副本里
+    //    留一条断链,命令当场不存在;
+    //  · node_modules -> .store,而 .store 里只有 README.md 被提交、真正的安装内容在被忽略的
+    //    .store/cache/ 下:Git 只检出 README.md,副本里命令照样不存在,改了安装内容指纹还纹丝不动。
+    // 所以覆盖只认两件事:落点正好是一个被跟踪的**文件**(检出即冻结),或者它已经在复制计划里。
+    // 落点是被跟踪的目录时,只补「Git 不会检出的那部分」——它下面被忽略的条目;未跟踪条目不在这里
+    // 放行,继续由下面的脏树检查拦住。要补的不止落点:原样保留的相对链还需要原文路上的中间链
+    // (gateTreeDigest 的 requires 两类都给),否则副本里链断在中途。悬空链不会进来(没有落点)。
+    const ignoredUnder = async (path: string): Promise<string[]> =>
+      (await git(cwd, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--directory", "--", path]))
+        .split("\0").filter(Boolean)
+        .map(entry => (entry.endsWith("/") ? entry.slice(0, -1) : entry).split("/").join(sep));
+    for (let index = 0; index < plan.length; index += 1) {
+      const dep = plan[index];
+      if (digests.has(dep)) continue;
       const tree = await gateTreeDigest(join(cwd, dep), { root: cwd, dependency: true });
       if (!tree) {
-        dependencies.splice(index, 1);
+        plan.splice(index, 1);
         index -= 1;
         continue;
       }
       digests.set(dep, tree.digest);
-      for (const landing of tree.landings) {
-        const covered = landing === "" || tracked.has(landing) || trackedDirs.has(landing)
-          || dependencies.some(other => inside(join(cwd, other), join(cwd, landing)));
-        if (covered) continue;
-        if (dependencies.length >= 512) throw new Error("依赖软链的落点过多，无法冻结测试输入；请检查项目内的软链是否成环");
-        dependencies.push(landing.split("/").join(sep));
+      for (const required of tree.requires) {
+        if (required === "" || tracked.has(required)) continue;
+        if (plan.length >= 512) throw new Error("依赖软链的落点过多，无法冻结测试输入；请检查项目内的软链是否成环");
+        const uncovered = trackedDirs.has(required) ? await ignoredUnder(required) : [required.split("/").join(sep)];
+        // 计划一旦变动就从头再扫:被吞掉的条目要重新摘要,新进来的条目要补摘要。
+        if (uncovered.map(entry => addPath(entry)).some(Boolean)) index = -1;
       }
     }
+    dependencies.push(...plan.sort());
     const dirty = (await git(cwd, ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]))
       .split("\0").filter(Boolean).some(row => row.slice(0, 2) !== "??"
         || !dependencies.some(dep => {
@@ -155,11 +178,17 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
         if (!(await lstat(join(target, path))).isSymbolicLink()) continue;
         if (!inside(resolve(target), await realpath(join(target, path)))) throw new Error(`源码符号链接指向快照外：${path}`);
       }
-      const copiedHash = sourceHash().update(source.commit);
       for (const dep of source.dependencies) {
         await mkdir(dirname(join(target, dep)), { recursive: true });
-        const tree = await gateTreeDigest(join(cwd, dep), { root: cwd, destinationRoot: target, dependency: true });
-        if (tree) copiedHash.update(dep).update(tree.digest);
+        await gateTreeDigest(join(cwd, dep), { root: cwd, destinationRoot: target, dependency: true });
+      }
+      // 对账要读**真实副本**。拿源树那一遍遍历的结果对账只能证明「计划照着做了」,证明不了
+      // 「副本里这些输入真的解析得通」——缺了中间链或缺了安装内容的坏副本,源侧算出来的指纹
+      // 一模一样,照样能交出去。重新遍历副本则会当场发现那条链在副本里落到了别处或解析不到。
+      const copiedHash = sourceHash().update(source.commit);
+      for (const dep of source.dependencies) {
+        const tree = await gateTreeDigest(join(target, dep), { root: target, dependency: true });
+        copiedHash.update(dep).update(tree?.digest ?? "");
       }
       copiedFingerprint = copiedHash.digest("hex");
     } else {
@@ -168,9 +197,11 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
           { root: cwd, destinationRoot: target, dependency: false, filter: path => !runtimePath(cwd, path) });
       }
     }
-    if ((await readGateSource(cwd)).fingerprint !== source.fingerprint
-      || (copiedFingerprint ?? (await readGateSource(target)).fingerprint) !== source.fingerprint) {
+    if ((await readGateSource(cwd)).fingerprint !== source.fingerprint) {
       throw new Error("复制测试快照期间源码或依赖已变化，请重新验收");
+    }
+    if ((copiedFingerprint ?? (await readGateSource(target)).fingerprint) !== source.fingerprint) {
+      throw new Error("测试快照没能按原样复现测试输入（副本里有软链解析不到它在源树里的目标），请重新验收");
     }
     if (source.inputs) await writeFile(`${target}.inputs.json`, JSON.stringify(source.inputs), { flag: "wx" });
   } catch (error) {

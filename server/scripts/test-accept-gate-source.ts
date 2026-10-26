@@ -242,6 +242,109 @@ try {
   git(repo, "commit", "-m", "drop nested manifest");
   rmSync(join(repo, "vendor", "package"), { recursive: true });
 
+  // 第 2 轮发现 1:realpath 失败之后**不能**退回 path.resolve 的词法结果——那正是上面整段否掉
+  // 的判据。词法归一会把「原本能跑的链」和「改成跑不了的链」算成同一个身份,于是一条已经 ENOENT
+  // 的命令照样沿用上次通过。未解析的链只能以原文为身份,而且不算树内输入(不知道落在哪,也没有
+  // 内容可冻)。
+  rmSync(join(repo, "node_modules"), { recursive: true, force: true });
+  mkdirSync(join(repo, "node_modules"));
+  writeFileSync(join(repo, "node_modules", "entry.mjs"), 'console.log("WORKS");\n');
+  if (fileLinks) {
+    const cli = join(repo, "node_modules", "cli.mjs");
+    symlinkSync("entry.mjs", cli);
+    const working = await readGateSource(repo);
+    unlinkSync(cli);
+    // 中间整段都不存在:两个平台都解析不出落点。
+    symlinkSync(join("missing-dir", "entry.mjs"), cli);
+    const unresolved = await readGateSource(repo);
+    assert.notEqual(working.fingerprint, unresolved.fingerprint, "第2轮发现1: 解析不到的链不能和解析得到的链同一身份");
+    assert.equal(gateSourceMatches({ sourceCommit: working.commit, sourceFingerprint: working.fingerprint }, unresolved),
+      false, "第2轮发现1: 命令已经坏掉,不能沿用上次通过");
+    const unresolvedSnapshot = join(root, "unresolved-snapshot");
+    await createGateSnapshot(repo, unresolvedSnapshot, unresolved);
+    assert.equal(readlinkSync(join(unresolvedSnapshot, "node_modules", "cli.mjs")), join("missing-dir", "entry.mjs"),
+      "第2轮发现1: 解析不到的链按原文照抄重建,不猜它该指哪");
+    unlinkSync(cli);
+    // `..` 那种写法只在 POSIX 上是坏链:Win32 的路径解析器先按字面消掉 `..`,那边它真的能读到
+    // 同级 entry.mjs,摘要跟着解析结果走才是对的。
+    if (process.platform !== "win32") {
+      symlinkSync(["missing-dir", "..", "entry.mjs"].join(sep), cli);
+      assert.throws(() => readFileSync(cli), { code: "ENOENT" }, "POSIX 下中间段不存在就真的读不到");
+      assert.notEqual((await readGateSource(repo)).fingerprint, working.fingerprint,
+        "第2轮发现1: 词法消掉 .. 之后看着一样的链,身份必须不同");
+      unlinkSync(cli);
+    }
+  }
+
+  // 第 2 轮发现 2A:「Git 跟踪着这个**目录**」不等于「它的内容都会出现在快照里」。被忽略的安装
+  // 内容 Git 根本不会检出,副本里命令照样不存在,改了它指纹也纹丝不动。覆盖只能由复制计划证明。
+  rmSync(join(repo, "node_modules"), { recursive: true, force: true });
+  writeFileSync(join(repo, ".gitignore"), "node_modules\nignored.env\n.store/cache/\nbridge\n.actual/\n.cache/\n");
+  mkdirSync(join(repo, ".store"));
+  writeFileSync(join(repo, ".store", "README.md"), "tracked manifest");
+  git(repo, "add", ".gitignore", ".store/README.md");
+  git(repo, "commit", "-m", "tracked manifest with an ignored install payload");
+  mkdirSync(join(repo, ".store", "cache"));
+  writeFileSync(join(repo, ".store", "cache", "cli.mjs"), 'console.log("INSTALLED");\n');
+  linkDir(".store", join(repo, "node_modules"));
+  const payloadSource = await readGateSource(repo);
+  assert.equal(payloadSource.dependencies.includes(join(".store", "cache")), true,
+    "第2轮发现2A: 跟踪目录里被忽略的那部分要补登记成输入");
+  const payloadSnapshot = join(root, "payload-snapshot");
+  await createGateSnapshot(repo, payloadSnapshot, payloadSource);
+  assert.equal(readFileSync(join(payloadSnapshot, "node_modules", "cache", "cli.mjs"), "utf8"), 'console.log("INSTALLED");\n',
+    "第2轮发现2A: 被忽略的安装内容必须跟着进快照,否则副本里命令不存在");
+  assert.equal(readFileSync(join(payloadSnapshot, ".store", "README.md"), "utf8"), "tracked manifest",
+    "跟踪的那部分仍然由 Git 检出提供");
+  writeFileSync(join(repo, ".store", "cache", "cli.mjs"), 'console.log("CHANGED");\n');
+  assert.equal(gateSourceMatches({ sourceCommit: payloadSource.commit, sourceFingerprint: payloadSource.fingerprint },
+    await readGateSource(repo)), false, "第2轮发现2A: 改了安装内容不能再沿用上次通过");
+
+  // 第 2 轮发现 2B:原样保留的相对链在副本里还需要**原文路上的中间链**。只把最终落点拷进来,
+  // 副本里的 ../bridge/cli.mjs 依然断在中途(borrow 式本地安装布局就是这个形状)。
+  rmSync(join(repo, "node_modules"), { recursive: true, force: true });
+  if (fileLinks) {
+    mkdirSync(join(repo, "node_modules"));
+    mkdirSync(join(repo, ".actual"));
+    writeFileSync(join(repo, ".actual", "cli.mjs"), 'console.log("BORROWED");\n');
+    linkDir(".actual", join(repo, "bridge"));
+    symlinkSync(join("..", "bridge", "cli.mjs"), join(repo, "node_modules", "cli.mjs"));
+    const routeSource = await readGateSource(repo);
+    assert.equal(routeSource.dependencies.includes("bridge"), true, "第2轮发现2B: 原文路上的中间链要一起冻结");
+    const routeSnapshot = join(root, "route-snapshot");
+    await createGateSnapshot(repo, routeSnapshot, routeSource);
+    assert.equal(readFileSync(join(routeSnapshot, "node_modules", "cli.mjs"), "utf8"), 'console.log("BORROWED");\n',
+      "第2轮发现2B: 副本里这条命令必须解析得到");
+    assert.equal(realpathSync(join(routeSnapshot, "node_modules", "cli.mjs")), realpathSync(join(routeSnapshot, ".actual", "cli.mjs")),
+      "第2轮发现2B: 而且要落在副本自己那份上");
+    rmSync(join(repo, "bridge"));
+    rmSync(join(repo, ".actual"), { recursive: true });
+  }
+
+  // 第 2 轮发现 3:消重必须在**最终**复制计划上成立。闭包先补进来一个子路径、随后补进来它的
+  // 父目录时,第二遍 symlink 同一个目的地直接 EEXIST,整次快照在任何断言之前就废掉。
+  rmSync(join(repo, "node_modules"), { recursive: true, force: true });
+  rmSync(join(repo, ".venv"), { recursive: true, force: true });
+  mkdirSync(join(repo, "node_modules"));
+  mkdirSync(join(repo, ".venv"));
+  mkdirSync(join(repo, ".cache", "sub"), { recursive: true });
+  mkdirSync(join(repo, ".cache", "real"));
+  writeFileSync(join(repo, ".cache", "real", "payload.txt"), "payload");
+  linkDir(join("..", "real"), join(repo, ".cache", "sub", "tool"));
+  linkDir(join("..", ".cache", "sub", "tool"), join(repo, "node_modules", "a"));
+  linkDir(join("..", ".cache"), join(repo, ".venv", "payload"));
+  const closureOverlap = await readGateSource(repo);
+  assert.equal(closureOverlap.dependencies.includes(".cache"), true, "第2轮发现3: 父目录进了计划");
+  assert.equal(closureOverlap.dependencies.includes(join(".cache", "sub", "tool")), false,
+    "第2轮发现3: 被父目录包住的子路径不能同时留在计划里(软链重建不是幂等的)");
+  const closureOverlapSnapshot = join(root, "closure-overlap-snapshot");
+  await createGateSnapshot(repo, closureOverlapSnapshot, closureOverlap);
+  assert.equal(readFileSync(join(closureOverlapSnapshot, "node_modules", "a", "payload.txt"), "utf8"), "payload",
+    "第2轮发现3: 去重之后两条链在副本里都解析得到");
+  assert.equal(existsSync(join(closureOverlapSnapshot, ".venv", "payload", "sub", "tool", "payload.txt")), true);
+  rmSync(join(repo, ".venv", "payload"));
+  rmSync(join(repo, ".cache"), { recursive: true });
+
   // 依赖根自己就是软链(worktree 借主仓 node_modules 的形状):相对原文照抄会因为快照与项目目录
   // 深度不同而指错地方,所以改写成绝对落点。
   rmSync(join(repo, "node_modules"), { recursive: true, force: true });
@@ -278,6 +381,15 @@ try {
     mkdirSync(join(loose, ".venv", "bin"), { recursive: true });
     symlinkSync(join(outsideSource, "main.py"), join(loose, ".venv", "bin", "runtime.py"));
   }
+  // 第 2 轮发现 4:冻结一份项目外的源码**目录**时,它里面的依赖链不能被顺手拍平——登记、摘要和
+  // 复制必须对每一个逻辑输入选同一种语义。否则顶层一致、子项被拍平,副本重新登记得到的是真目录
+  // 而不是同一条叶子链,来源与副本指纹必然不等,快照在什么也没改的情况下就被判「已变化」。
+  const sharedDep = join(root, "shared-dependency");
+  mkdirSync(join(sharedDep, "pkg"), { recursive: true });
+  writeFileSync(join(sharedDep, "pkg", "index.js"), "shared dependency");
+  mkdirSync(join(outsideSource, "node_modules"));
+  linkDir(join(sharedDep, "pkg"), join(outsideSource, "node_modules", "pkg"));
+  linkDir(outsideSource, join(loose, "src"));
   const looseSource = await readGateSource(loose);
   const looseSnapshot = join(root, "loose-snapshot");
   await createGateSnapshot(loose, looseSnapshot, looseSource);
@@ -291,6 +403,12 @@ try {
     assert.equal(lstatSync(join(looseSnapshot, ".venv", "bin", "runtime.py")).isSymbolicLink(), true,
       "依赖目录内的外链仍按依赖策略原样保留");
   }
+  assert.equal(lstatSync(join(looseSnapshot, "src")).isSymbolicLink(), false,
+    "第2轮发现4: 指向项目外的源码目录整份冻进副本");
+  assert.equal(readFileSync(join(looseSnapshot, "src", "main.py"), "utf8"), "print('v1')\n");
+  assert.equal(lstatSync(join(looseSnapshot, "src", "node_modules", "pkg")).isSymbolicLink(), true,
+    "第2轮发现4: 冻结的源码目录里的依赖链仍按链保留,不能因为递归入口不同就被拍平");
+  assert.equal(readFileSync(join(looseSnapshot, "src", "node_modules", "pkg", "index.js"), "utf8"), "shared dependency");
   mkdirSync(join(looseSnapshot, "build"));
   writeFileSync(join(looseSnapshot, "build", "output.txt"), "generated output");
   assert.equal(await verifyGateSnapshot(looseSnapshot, looseSource), true);
