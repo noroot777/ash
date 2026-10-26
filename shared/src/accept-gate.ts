@@ -13,7 +13,7 @@
 export type AcceptGateStatus = "running" | "passed" | "failed" | "interrupted" | "canceled";
 
 /** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
-export type AcceptGateFailure = "exit_code" | "timeout" | "stalled" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
+export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -26,7 +26,6 @@ export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
 export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   exit_code: "命令退出码非 0",
   timeout: "超时",
-  stalled: "卡住了(长时间没有任何输出)",
   spawn_failed: "命令起不来",
   server_restarted: "ash 重启,这次没跑完",
   canceled: "你取消了这一次",
@@ -86,15 +85,16 @@ export function acceptGateCancelMessage(result: AcceptGateCancelResult): string 
 export const ACCEPT_GATE_TIMEOUT_MS = 90 * 60_000;
 
 /**
- * 日志连着这么久一个字节都不长,就不等满上限了,当场判「卡住了」。
+ * 日志连着这么久一个字节都不长,就在日志里喊一声「这段时间没有任何输出」。
  *
- * 为什么是 20 分钟(2026-10-26 的两份真日志):健康的一次 18 分钟打出 71 条脚本横幅,
- * 平均 15 秒一条;卡住的那次 90 分钟只走到第 27 条,而那一条还正常打了 `ok` —— 之后
- * 到被收掉为止没有任何输出。门禁命令跑的是 Node 进程、写的是文件 fd(对文件是同步写,
- * 不攒缓冲),所以「日志不长」就是真的没人在输出,不是缓冲没刷出来。20 分钟 ≈ 健康
- * 节奏的 80 倍,再慢的机器也不该有哪一条用例连续这么久一声不吭。
+ * **只报不杀,这是有意的**(第 1 轮审查 F1):日志长不长只能证明「有没有在输出」,
+ * 证明不了「有没有在前进」。门禁命令是用户自己填的任意 shell,安静地编译、等远端、
+ * 或者干脆 `cmd > its-own.log 2>&1` 把输出重定向到别处 —— 这些都长成「日志不长」的样子,
+ * 按静默把它们掐死,是把一套本来能跑完的配置直接判死。反过来也一样:卡死的进程完全
+ * 可以一直打心跳,所以「还在输出」也不能拿来断言它在前进。
  *
- * 判错的代价是对称的:误判就重新点一次验收,而不判就是白烧掉剩下的几十分钟。
+ * 要提前结束,出路是验收台上那颗「取消」;真想自动掐,得是用户按项目显式配一条,
+ * 外加一个比「有没有输出」更硬的进展协议,那是另一件事。
  */
 export const ACCEPT_GATE_SILENCE_MS = 20 * 60_000;
 

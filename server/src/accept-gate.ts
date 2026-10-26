@@ -317,16 +317,17 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     const failed = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
     return failed ? gateView(failed) : null;
   }
-  // 看门的管两条线：撞 ACCEPT_GATE_TIMEOUT_MS 上限，和「日志连着 ACCEPT_GATE_SILENCE_MS 不长」。它在叫我们
-  // 之前已经把现场写进日志末尾了（停在哪一行、静了多久、产出节奏），`note` 是那段的一句
-  // 话版本 —— 只写「超时」的话，事后分不出是某一步卡住还是整台机器在爬，而这两种的处置
-  // 完全相反（见 accept-gate-watch.ts 顶部）。
+  // 看门的只管一件事：撞上限时交出一段「现场」（停在哪一行、静了多久、产出节奏）。只写
+  // 一句「超时」的话，事后分不出是某一步卡住还是整台机器在爬，而这两种的处置完全相反。
+  // 它**不自己写日志**：现场必须排在所有人后面写，否则会被停止期的清理输出顶出尾巴
+  // （第 1 轮审查 F2）。它也不拿静默去掐命令，理由见 ACCEPT_GATE_SILENCE_MS。
   const watch = startGateWatch({ logPath, onVerdict: (verdict) => void (async () => {
-    appendGateLog(logPath, `\n[ash] ${verdict.failure === "stalled" ? "判定卡住" : `超过 ${Math.round(ACCEPT_GATE_TIMEOUT_MS / 60_000)} 分钟，按超时处理`}，正在收掉它。\n`);
+    appendGateLog(logPath, `\n[ash] 超过 ${Math.round(ACCEPT_GATE_TIMEOUT_MS / 60_000)} 分钟，按超时处理，正在收掉它。\n`);
     // **先认领终态、再动刀**（同取消那条路）：反过来的话，刀落下去触发的退出回调会先把
     // 这一次收成「命令被外人杀了」，连带把日志当成一条红交给 agent 去修 —— 而它其实是
     // 超时。占用不会因此漏空：stopAcceptGate 从进场就立起「还没确认退出」那条记号。
-    await settleGate(runId, { status: "failed", exitCode: null, failure: verdict.failure, note: verdict.note });
+    await settleGate(runId, { status: "failed", exitCode: null, failure: "timeout",
+      note: verdict.note, scene: verdict.scene });
   })() });
   live.set(taskId, { runId, watch, pid: started.pid, pidStartedAt: started.startedAt });
   attachGateProcess(runId, started.pid, started.startedAt);
@@ -378,8 +379,10 @@ export function dropPendingAcceptGate(taskId: string): boolean {
 async function settleGate(
   runId: string,
   outcome: { status: Exclude<AcceptGateStatus, "running">; exitCode: number | null; failure: AcceptGateFailure | null;
-    /** 这一条还能补一句「卡在哪」。只有看门的给得出（超时/静默），会一起落进任务时间线。 */
-    note?: string },
+    /** 「卡在哪」的一句话版本，落进任务时间线。只有看门的（超时）给得出。 */
+    note?: string;
+    /** 同一件事的完整现场，**最后**一个追加进日志，见下面写它那一段。 */
+    scene?: string },
   waitForContinuation = true,
 ): Promise<void> {
   if (settling.has(runId)) return waitForContinuation ? settlements.get(runId) : outcomeWrites.get(runId);
@@ -409,8 +412,13 @@ async function settleGate(
     if (stopped) forgetGateProcess(runId);
     if (stopped) await cleanupGateSnapshot(row.taskId, runId);
     if (watching?.runId === runId) { watching.watch.stop(); live.delete(row.taskId); }
-    const view = gateView({ ...row, ...outcome, finishedAt });
-    appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`);
+    const settled = { ...row, ...outcome, finishedAt };
+    appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(gateView(settled))}\n`);
+    // 现场**必须是最后一个写日志的人**：回显给界面和 agent 的只有最后 ACCEPT_GATE_TAIL_BYTES
+    // 个字节，而排在它后面的每一位都能把它顶出去 —— 停止期命令自己吐的清理输出、上面这行
+    // 会回显整条命令（最长 4000 字符）的摘要（第 1 轮审查 F2 实测 tailHasScene=false）。
+    if (outcome.scene) appendGateLog(row.logPath, outcome.scene);
+    const view = gateView(settled);
     await appendTaskTimeline(row.taskId, `${summarizeAcceptGate(view)}。${outcome.note ? ` ${outcome.note}` : ""}`);
     announceGate(row.taskId);
     finishOutcome();
