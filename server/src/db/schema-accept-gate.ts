@@ -21,8 +21,16 @@ export const acceptGateRuns = sqliteTable(
     /** running | passed | failed | interrupted | canceled */
     status: text("status").notNull(),
     exitCode: integer("exit_code"),
-    /** exit_code | timeout | spawn_failed | server_restarted | canceled */
+    /** exit_code | timeout | spawn_failed | server_restarted | canceled | command_missing | … */
     failure: text("failure"),
+    /**
+     * 这一次红了之后的归类结论（人话，见 accept-gate-miss.ts）。
+     *
+     * 为什么落盘：里面有几条**当时**的 git 事实（目标分支那会儿在哪个提交、落后几个），
+     * 而仓库此后还会动。现算会让一条已经结案的记录跟着漂，用户翻回来看到的就不是当时
+     * 那个结论了。
+     */
+    diagnosis: text("diagnosis"),
     pid: integer("pid"),
     /**
      * 那个 pid 的**启动时间**：重启之后拿它核对「这个号还是不是当初那条命令」。
@@ -84,6 +92,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN process_pending INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE accept_gate_runs ADD COLUMN source_fingerprint TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

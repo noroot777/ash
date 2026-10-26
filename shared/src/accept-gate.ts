@@ -13,7 +13,7 @@
 export type AcceptGateStatus = "running" | "passed" | "failed" | "interrupted" | "canceled";
 
 /** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
-export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
+export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived" | "command_missing";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -32,6 +32,9 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   source_changed: "测试修改了被测源码，不能用结果为原版本放行",
   process_unconfirmed: "尚未取得整次运行退出的证据",
   ownership_waived: "已确认风险并强制释放，未取得整次退出证据",
+  // rc≠0 的两种里**不是代码红了**的那一种:命令在被测快照里解析不出来,测试一行都没跑。
+  // 判据与出路见 server/src/accept-gate-miss.ts(那边也解释了为什么必须跟 exit_code 分开)。
+  command_missing: "这条命令在被测快照里不存在,测试没有启动",
 };
 
 export interface AcceptGateView {
@@ -59,6 +62,14 @@ export interface AcceptGateView {
   logAvailable?: boolean;
   /** 日志末尾若干行,够在界面上一眼看出红在哪 */
   logTail: string;
+  /**
+   * 这一次红了之后的**归类结论**:为什么它不是「代码红了」、目标分支上是什么情形、
+   * 出路有哪几条。null = 没有可归类的结论(普通的测试红、或认不出)。
+   *
+   * 必须落盘而不是现算:用户看到这张卡可能已经是几小时后、刷新过好几次,而那几条 git
+   * 事实(目标分支当时是哪个提交)此后还会变 —— 现算出来的话,结论会跟着漂。
+   */
+  diagnosis?: string | null;
   /**
    * 这一次的红交没交回给 agent 去修。null = 没交过(通过/取消/被打断都不交)。
    * `error` 非空 = 那一次没能叫醒它(回合被抢占、任务被归档之类),红还在那儿等人处理。

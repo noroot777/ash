@@ -214,6 +214,12 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
           <dd><code>{running?.command ?? state.command ?? (stale ? "当时未设置，当前配置待核对" : "未设置（验收时不运行前置命令）")}</code></dd>
         </dl>
       )}
+      {shown?.diagnosis && (
+        <div className="accept-gate-diagnosis" role="note">
+          <span>这条红是怎么来的</span>
+          {shown.diagnosis}
+        </div>
+      )}
       {shown?.logTail && (
         <div className="accept-gate-log">
           <span>日志末尾{receipt?.run ? "（本次验收凭据那一次）" : settled || idle ? "（历史记录，不是本次凭据）" : ""}</span>
@@ -264,7 +270,8 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
             {running && running.status !== "running" && running.processPending && <AcceptGateForceRelease key={running.id} taskId={task.id} runId={running.id} reload={reload} notify={notify} />}
             {state.command && latest?.status === "failed" && !running && !settled && !state.unavailable && (
               <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>
-                <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
+                <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次"
+                  : latest.failure === "command_missing" ? "把结论交给智能体" : "交给智能体去修"}
               </button>
             )}
             {shown && (
@@ -316,6 +323,9 @@ function heading(
     if (!latest.stale) return "验收前置命令已通过";
     return latest.command !== state.command ? "上次通过的不是现在这条命令" : "上次通过的不是现在这棵树";
   }
+  // 「命令在这份快照里不存在」跟「测试红了」在卡上必须是两句话：出路完全不同，而原先
+  // 两者都只写「验收前置命令未通过」，于是用户只能去翻 npm 的原始报错自己猜。
+  if (latest.failure === "command_missing") return "验收前置命令没能启动：这份快照里没有它";
   return `验收前置命令${ACCEPT_GATE_STATUS_LABELS[latest.status]}`;
 }
 
@@ -359,6 +369,17 @@ function detail(
       : latest.handoff.error
         ? `已经试过把日志交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）——那条红现在没人在管。`
         : "日志已经交回这个任务的智能体去修了。";
+  // 命令压根不在这份快照里的时候，「重跑一次」必然再红一次（树没变、命令没变）。把这点
+  // 说破，否则用户只会按着那颗按钮空转 —— 真正的出路在下面那段归类结论里。
+  if (latest.failure === "command_missing") {
+    // 这一种交过去的不是「去修」而是「把出路转述给用户」（见 accept-gate-messages.ts
+    // 的两副面孔），所以这句话也不能照抄「去修」那一版。
+    const told = !latest.handoff ? "结论还没交给智能体。"
+      : latest.handoff.error ? `已经试过把结论交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）。`
+        : "结论已经交回这个任务的智能体了（它被明确要求不要为此改代码）。";
+    return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${told}`
+      + "重跑不会变绿：这份快照里仍然没有这条命令。出路见下面那段结论 —— 把目标分支合进任务分支再验收，或者这次明确跳过它。";
+  }
   return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${handoff}`
     + (latest.status === "failed" ? "重新点「验收通过」会重新执行命令，即使代码没有变化，也不会直接复用这次失败；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
 }

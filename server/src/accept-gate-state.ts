@@ -28,6 +28,7 @@ export const gateView = (row: GateRow): AcceptGateView => ({
   status: row.status as AcceptGateStatus,
   exitCode: row.exitCode ?? null,
   failure: (row.failure as AcceptGateFailure | null) ?? null,
+  diagnosis: row.diagnosis ?? null,
   startedAt: row.startedAt,
   finishedAt: row.finishedAt ?? null,
   sourceCommit: row.sourceCommit ?? null,

@@ -1,19 +1,41 @@
+import type { AcceptGateFailure } from "@ash/shared/accept-gate";
+
 export const gateStoppedSummary = (executionMode: string | null): string => executionMode === "macos-observed"
   ? "已识别进程已收尾，快照保留；不代表未观察后代全部退出" : "残留进程已收掉";
 
-export const gateFailurePrompt = (details: { command: string; summary: string; logPath: string; tail: string;
-  cwd: string; sourceCwd: string; executionNotice?: string | null; failure?: AcceptGateFailure | null }) =>
-  `【验收未通过 · 验收前置命令没过】\n` +
+type GateFailureDetails = { command: string; summary: string; logPath: string; tail: string;
+  cwd: string; sourceCwd: string; executionNotice?: string | null; failure?: AcceptGateFailure | null;
+  /** 归类结论（accept-gate-miss.ts）。非空时这份 prompt 换一副面孔，见下。 */
+  diagnosis?: string | null };
+
+/**
+ * 红了之后交回给 agent 的那份 prompt。
+ *
+ * **两副面孔**，由归类结论决定（用户 2026-10-26）：
+ *  - 普通的红 → 老样子：去重跑、定位、修掉，或者拿出「跟本次改动无关」的依据；
+ *  - 命令在快照里不存在 → 让它去修代码是在派一件根本做不到的活（那条命令压根没启动，
+ *    被测代码跟这事无关）。本机四次实测：执行者为此把命令在两个提交上各复跑一遍，留下
+ *    两份一样的日志，最后还是停下来问用户。所以这一种明确告诉它**不要动代码**，
+ *    把结论和那两条出路转述给用户，让用户拍板。
+ */
+export const gateFailurePrompt = (details: GateFailureDetails) =>
+  `【验收未通过 · ${details.diagnosis ? "验收前置命令没能启动" : "验收前置命令没过"}】\n` +
   `本次验收触发了项目设置的验收前置命令，ash 在合并**之前**于独立快照 \`${details.cwd}\` 跑了它（${details.executionNotice ? "停止后快照保留，不自动删除" : "停止后快照会删除"}）。\n` +
   (details.executionNotice ? `${details.executionNotice}\n` : "") +
   `在当前任务工作区复现这条命令：\n\n    cd ${details.sourceCwd} && ${details.command}\n\n` +
   `结果：${details.summary}。所以**没有合并、没有清理**，目标分支一个字节都没动。\n\n` +
   (details.failure === "timeout" ? "这是整条命令超时，不是已经定位到某个断言失败。日志最后的成功提示只说明那一步的断言完成，不能证明浏览器、开发服务或测试进程已经退出；首次卡住的原因仍需核实。\n\n" : "") +
+  (details.diagnosis ? `${details.diagnosis}\n\n` : "") +
   `完整日志在 \`${details.logPath}\`，末尾是：\n\n\`\`\`\n${details.tail.trim() || "（日志为空）"}\n\`\`\`\n\n` +
-  `请你来处理：\n` +
-  `1. 在自己的工作目录里重跑这条命令，定位到底是哪一条红的；\n` +
-  `2. 确属本次改动引入 → 修掉并提交，然后告诉用户可以重新点验收（验收会自动再跑一遍这条命令）；\n` +
-  `3. 如果你判断它**跟本次改动无关**（基线既有的红、环境缺件、负载敏感的 flake），不要硬改：` +
-  `把依据写清楚（单跑复核的结果、基线上同样红的证据），让用户决定是这次跳过门禁，还是另立一个任务去修。\n\n` +
-  `不要自己去动目标分支，也不要绕过这条命令 —— 它是用户给这个项目定的放行条件。`;
-import type { AcceptGateFailure } from "@ash/shared/accept-gate";
+  (details.diagnosis
+    ? `请你来处理：\n` +
+      `1. **不要为这件事改任何代码**，也不要为了让它跑起来去补脚本、改项目配置 —— 测试一行都没跑，这条红跟你这次的改动无关；\n` +
+      `2. **不要为了确认而反复复跑**：上面那条结论已经是核对过的事实（在被测快照和目标分支上各核了一次）。要复核就只跑一次，别在多个提交上各来一遍；\n` +
+      `3. 把上面那段结论连同那两条出路**转述给用户**，由他决定是把目标分支合进来再验收、还是这一次显式跳过门禁。你自己既不要合分支，也不要跳过门禁 —— 那两件都是他的决定。\n\n` +
+      `如果你判断上面那条结论本身是错的（命令其实跑起来了、红的是真的断言），把依据写清楚再说，不要默认它对。`
+    : `请你来处理：\n` +
+      `1. 在自己的工作目录里重跑这条命令，定位到底是哪一条红的；\n` +
+      `2. 确属本次改动引入 → 修掉并提交，然后告诉用户可以重新点验收（验收会自动再跑一遍这条命令）；\n` +
+      `3. 如果你判断它**跟本次改动无关**（基线既有的红、环境缺件、负载敏感的 flake），不要硬改：` +
+      `把依据写清楚（单跑复核的结果、基线上同样红的证据），让用户决定是这次跳过门禁，还是另立一个任务去修。\n\n` +
+      `不要自己去动目标分支，也不要绕过这条命令 —— 它是用户给这个项目定的放行条件。`);

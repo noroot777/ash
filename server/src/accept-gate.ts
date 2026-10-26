@@ -48,6 +48,7 @@ import { abandonUnstartedGateProcess, attachGateProcess, claimGateProcess, hasOw
 import { prepareGateLaunch, readGateLaunch } from "./accept-gate-launch.js";
 import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
 import { releaseGateOwnership } from "./accept-gate-release.js";
+import { diagnoseGateFailure } from "./accept-gate-diagnosis.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type GateRow = typeof acceptGateRuns.$inferSelect;
@@ -393,19 +394,29 @@ async function settleGate(
     if (outcome.status === "passed" && !await verifyGateSnapshot(row.cwd, {
       commit: row.sourceCommit, fingerprint: row.sourceFingerprint ?? "", dependencies: [],
     })) outcome = { status: "failed", exitCode: outcome.exitCode, failure: "source_changed" };
+    // rc≠0 的那一档再问一句「这到底是不是代码红了」：命令在被测快照里压根不存在时，
+    // 测试一行都没跑，而出路（合目标分支 / 这次跳过）跟修代码毫无关系。认不出就是 null，
+    // 照旧按 exit_code 处理。判据见 accept-gate-miss.ts。
+    const diagnosed = outcome.status === "failed" ? await diagnoseGateFailure(row, outcome.failure).catch(() => null) : null;
+    if (diagnosed) outcome = { ...outcome, failure: diagnosed.failure };
     const timer = live.get(row.taskId);
     const finishedAt = now();
     await db.update(acceptGateRuns)
-      .set({ status: outcome.status, exitCode: outcome.exitCode, failure: outcome.failure, finishedAt, processPending: !stopped })
+      .set({ status: outcome.status, exitCode: outcome.exitCode, failure: outcome.failure, finishedAt, processPending: !stopped,
+        diagnosis: diagnosed?.diagnosis ?? null })
       // 状态闸：上面那句读到的 running 和这一句之间隔着 await，只有真的还 running 才翻。
       .where(and(eq(acceptGateRuns.id, runId), eq(acceptGateRuns.status, "running")));
     outcomeSaved = true;
     if (stopped) forgetGateProcess(runId);
     if (stopped) await cleanupGateSnapshot(row.taskId, runId);
     if (timer?.runId === runId) { clearTimeout(timer.timer); live.delete(row.taskId); }
-    const view = gateView({ ...row, ...outcome, finishedAt });
-    appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`);
+    const view = gateView({ ...row, ...outcome, finishedAt, diagnosis: diagnosed?.diagnosis ?? null });
+    appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`
+      + (diagnosed ? `\n[ash] ${diagnosed.diagnosis}\n` : ""));
+    // 归类结论要**单独进一条时间线**：它是用户刷新后唯一能找回「这条红不用我修」的地方，
+    // 跟在摘要那一行后面会被折进去（根 AGENTS.md「停止/暂停必须留下持久可见的状态」同款判据）。
     await appendTaskTimeline(row.taskId, `${summarizeAcceptGate(view)}。`);
+    if (diagnosed) await appendTaskTimeline(row.taskId, diagnosed.diagnosis);
     announceGate(row.taskId);
     finishOutcome();
     if (stopped && outcome.status === "passed") await continueAcceptance(row);
@@ -479,7 +490,7 @@ async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = fa
   const sourceCwd = task && project ? await existingTaskWorkspacePath(task, project.repoPath) ?? project.repoPath : row.cwd;
   const prompt = gateFailurePrompt({
     command: row.command, summary: summarizeAcceptGate(view), logPath: row.logPath,
-    failure: view.failure,
+    failure: view.failure, diagnosis: view.diagnosis ?? null,
     tail: view.logTail, cwd: row.cwd, sourceCwd, executionNotice: view.executionNotice,
   });
   if (authority) {

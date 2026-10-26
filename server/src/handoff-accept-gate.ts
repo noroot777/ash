@@ -22,7 +22,7 @@ export function validateGatePayload(manifest: HandoffManifest): void {
   for (const run of runs) {
     if (!run || !validId(run.id) || seen.has(run.id) || !["passed", "failed", "interrupted", "canceled"].includes(run.status)
       || typeof run.command !== "string" || typeof run.startedAt !== "string"
-      || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived"].includes(run.failure)
+      || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived", "command_missing"].includes(run.failure)
       || (run.exitCode != null && !Number.isInteger(run.exitCode))) throw new HandoffError("acceptGateRuns 记录非法");
     for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError"] as const) {
       if (run[field] != null && typeof run[field] !== "string") throw new HandoffError(`acceptGateRuns.${field} 非法`);

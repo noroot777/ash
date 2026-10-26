@@ -195,6 +195,22 @@ export function acceptGateLogTail(logPath: string, bytes = ACCEPT_GATE_TAIL_BYTE
 }
 
 /**
+ * 日志**开头**若干字节。失败归类问的是「命令有没有来得及干活」，那只在开头看得出来
+ * （accept-gate-miss.ts 的锚定判据）；尾巴那一份答不了这件事。
+ */
+export function acceptGateLogHead(logPath: string, bytes: number): string {
+  try {
+    if (!existsSync(logPath)) return "";
+    const fd = openSync(logPath, "r");
+    try {
+      const buf = Buffer.alloc(Math.min(bytes, statSync(logPath).size));
+      readSync(fd, buf, 0, buf.length, 0);
+      return buf.toString("utf8");
+    } finally { closeSync(fd); }
+  } catch { return ""; }
+}
+
+/**
  * 「看完整日志」那一份。**仍然有上限**：这一头整份读进内存、那一头整份塞进一个 `<pre>`，
  * 几十 MB 的回归输出会把两边都拖垮，而用户要看的永远是尾巴。截了就在开头说破。
  */

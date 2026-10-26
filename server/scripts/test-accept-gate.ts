@@ -574,7 +574,100 @@ try {
     assert.equal((await runsOf(taskId)).at(0)!.status, "canceled");
   }
 
-  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 全部通过");
+  // 15. **命令在被测快照里压根不存在**：这不是「测试红了」，而是「测试没启动」。
+  //
+  // 本机 2026-10-24/25 连撞四次（日志 data/runs/*/accept-gate-*.log）：项目把
+  // `test:accept` 加进 package.json 的那次提交晚于任务的开工基线，于是门禁在任务那份
+  // 快照里跑它，只拿到 npm 的原始报错 + rc=1。门禁照旧说一句「未通过：命令退出码非 0」，
+  // 执行者于是把命令在两个提交上各复跑一遍，最后还是停下来问用户 —— 四次都这样。
+  //
+  // 这里用一个自己写的 runner 复现**那个形状**（npm 原话 + rc=1 + 脚本名在 git 里查得
+  // 到），不依赖机器上装没装 npm。钉住三件事：归类不是 exit_code、结论里有目标分支上
+  // 的落点和出路、交回给 agent 的那份字明确不让它改代码。
+  {
+    const repo = makeRepo("gate-missing-command");
+    // runner 本身在两棵树里都有；它照 npm 的措辞报「这个脚本名我找不到」。
+    const runner = [
+      "#!/bin/sh",
+      'grep -qx "$1" scripts.txt 2>/dev/null && exit 0',
+      'printf \'npm error Missing script: "%s"\\n\' "$1"',
+      "exit 1",
+    ].join("\n");
+    writeFileSync(join(repo, "runner.sh"), `${runner}\n`, { mode: 0o755 });
+    writeFileSync(join(repo, "scripts.txt"), "build\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "baseline runner");
+
+    const projectId = await seedProject("gate-missing-command", repo, "./runner.sh test:accept");
+    const taskId = "gatemissing01";
+    await seedTask(projectId, repo, taskId, "missing.txt");
+    // 任务开工**之后**，目标分支才把这条命令加进去 —— 这正是本机那四次的形状。
+    writeFileSync(join(repo, "scripts.txt"), "build\ntest:accept\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "Move frontend regression from push to acceptance");
+    const introduced = git(repo, "rev-parse", "HEAD");
+    const before = git(repo, "rev-parse", "main");
+    const seededSession = "gate-missing-session";
+    await db.insert(sessions).values({
+      id: seededSession, taskId, role: "single", agentType: "claude", executor: "claude",
+      cwd: repo, startedAt: createdAt, turnStartedAt: createdAt, endedAt: createdAt, activeMs: 0,
+    });
+
+    const first = await acceptTask(taskId);
+    assert.equal(first.accepted, false, "命令没能启动，这一按一样不许合并");
+    await settled(taskId);
+    const run = (await runsOf(taskId)).at(0)!;
+    assert.equal(run.status, "failed");
+    assert.equal(run.exitCode, 1, "测试自己的前提：这个形状的退出码就是 1，不是 127");
+    // 核心那一条：跟普通测试红了**不是同一种** failure。
+    assert.equal(run.failure, "command_missing", "「命令在快照里不存在」不能还叫 exit_code");
+    assert.equal(git(repo, "rev-parse", "main"), before, "归类不改变拦不拦：目标分支仍一动不动");
+    assert.equal((await taskRow(taskId)).stage, "verified");
+
+    // 结论要落盘（刷新后看得见），而且三件事齐全。
+    assert.ok(run.diagnosis, "归类结论必须落在那一行上，不能只在这一次响应里说一句");
+    const conclusion = run.diagnosis!;
+    assert.match(conclusion, /测试一行都没跑/, "① 命令没启动，不是代码红了");
+    assert.match(conclusion, /Missing script/, "① 判据原文");
+    assert.match(conclusion, /scripts\.txt/, "② 它在目标分支上的落点");
+    assert.match(conclusion, new RegExp(introduced.slice(0, 8)), "② 是哪一次提交把它加进目标分支的");
+    assert.match(conclusion, /落后 main 1 个提交/, "② 任务分支落后目标分支多少");
+    assert.match(conclusion, /合进任务分支/, "③ 出路一：合目标分支再验收");
+    assert.match(conclusion, /跳过前置命令/, "③ 出路二：这次显式跳过");
+    assert.match(readFileSync(run.logPath, "utf8"), /测试一行都没跑/, "结论也要写进这一次的日志");
+    const timeline = () => readFileSync(sessionTranscriptPath(taskId, seededSession), "utf8");
+    for (let i = 0; i < 200 && !/测试一行都没跑/.test(timeline()); i++) await sleep(25);
+    assert.match(timeline(), /测试一行都没跑/, "结论要单独进时间线（用户刷新后唯一找得回的地方）");
+
+    // 交回给 agent 的那份字：不许派「去修代码」这件它根本做不到的活。
+    const { gateFailurePrompt } = await import("../src/accept-gate-messages.js");
+    const { summarizeAcceptGate } = await import("@ash/shared/accept-gate");
+    const view = { ...run, status: "failed" as const, failure: "command_missing" as const };
+    const prompt = gateFailurePrompt({
+      command: run.command, summary: summarizeAcceptGate({ ...view, stale: false, logTail: "", handoff: null,
+        exitCode: run.exitCode, startedAt: run.startedAt, finishedAt: run.finishedAt, id: run.id, taskId,
+        cwd: run.cwd, sourceCommit: run.sourceCommit, targetBranch: run.targetBranch,
+        targetCommit: run.targetCommit, fastForward: run.fastForward, logPath: run.logPath }),
+      logPath: run.logPath, tail: "", cwd: run.cwd, sourceCwd: repo, failure: "command_missing",
+      diagnosis: conclusion,
+    });
+    assert.match(prompt, /不要为这件事改任何代码/, "这一种不许让 agent 去改代码");
+    assert.match(prompt, /不要为了确认而反复复跑/, "四次实测里烧掉的就是这几遍复跑");
+    assert.match(prompt, /转述给用户/, "出路由用户拍板，agent 只负责转述");
+    assert.equal(prompt.includes("定位到底是哪一条红的"), false, "普通红那一版的措辞不该出现在这一种上");
+
+    // 对照组：同一个项目、真的跑起来并红了的命令，一个字都不许被改写。
+    await db.update(projects).set({ acceptGateCommand: "echo 真断言失败 >&2; exit 4" }).where(eq(projects.id, projectId));
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, taskId));
+    releaseTurn(taskId);
+    await acceptTask(taskId);
+    await settled(taskId);
+    const real = (await runsOf(taskId)).at(0)!;
+    assert.equal(real.failure, "exit_code", "真跑起来、真红了的仍是 exit_code —— 归类不许吃掉真 bug");
+    assert.equal(real.diagnosis, null, "普通的红没有「不是你的代码」这种结论可给");
+  }
+
+  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 / 命令不存在≠测试红了 全部通过");
   await (await import("./test-accept-gate-lifecycle.js")).testGateLifecycle({
     root, makeRepo, seedProject, seedTask, taskRow, settled,
   });
