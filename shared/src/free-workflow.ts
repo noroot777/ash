@@ -71,6 +71,46 @@ export const REVIEW_VALIDATION_REQUIREMENT =
  * 一句——三个表面同时缩，口径就没有任何一处讲全了。体积由 `test-prompt-budget.ts` 盯着。
  */
 
+/**
+ * 回归证据清单那一段的两半，**拆开是为了让去重分得清静态和动态**。
+ *
+ * 一条审查消息里这段话会出现两次：任务书正文一份、每回合提醒一份。原先整段当成一块
+ * 「重复的协议」，正文里有报告格式就把整条提醒丢掉 —— 连提醒里**这一轮才有的**状态
+ * （清单不可用、要把回归面写成留白）一起丢了（第 2 轮审查 F2 实测）。
+ *
+ * 所以分两半：
+ * - `regressionManifestEntry` 是**动态入口**（路径随轮次变，状态不可用时整句换成警告），
+ *   只有正文里出现**同一句**时才算重复；
+ * - `REGRESSION_MANIFEST_READING` 是**静态判据**（怎么算通过、latest 怎么读），正文讲过
+ *   就不必在提醒里再讲一遍。
+ *
+ * 去重判据住在 `server/src/turn-prompt.ts`，它只认这两个常量，不再拿「正文里有没有某段
+ * 任意文本」去推断整条提醒可删。
+ */
+export const REGRESSION_MANIFEST_PREFIX = "执行者回归证据清单：";
+
+export const regressionManifestEntry = (path: string): string =>
+  `${REGRESSION_MANIFEST_PREFIX}${path}。`;
+
+/** 从一段文字里切出那一句入口（去重时按它逐字比对）；没有就返回 null。 */
+export function regressionManifestEntryOf(text: string): string | null {
+  const at = text.indexOf(REGRESSION_MANIFEST_PREFIX);
+  if (at < 0) return null;
+  const end = text.indexOf("。", at + REGRESSION_MANIFEST_PREFIX.length);
+  return end < 0 ? null : text.slice(at, end + 1);
+}
+
+export const REGRESSION_MANIFEST_READING =
+  "这份清单只供你**核对执行者登记过什么**：" +
+  "reusable 恒为 false，它既不是你的验证结论，也不是让你重跑或补跑的清单；" +
+  "一条算通过必须同时满足 passed=true 且 exitCode=0，失败照实报告，不得给通过结论；" +
+  // 「只认最新那次」是**读清单的规则**，不是实现说明：同一条命令重跑、新一次还没跑完时，
+  // 清单里仍留着上一次 passed=true/exitCode=0 的记录，少了这句话它完全满足「算通过」的
+  // 判据，于是一次尚未结束的重跑会被旧的「通过」顶过去（第 1 轮审查 F4）。
+  "latest 标记同命令/目录的最新登记，**只按它核对**：最新那次没跑完（passed=null）就把这一面写成留白，" +
+  "不能回退用旧的通过结果顶替；旧失败完整保留，按 logPath 读完整输出。" +
+  "清单为空、失效或没覆盖到你担心的那一面时，把缺口原样写进覆盖声明的回归面留白，不能用对话自述或旧审查结果代替。";
+
 export const EXECUTOR_REGRESSION_RECORDING =
   REGRESSION_POLICY +
   "登记用 start_monitor(regression=true) 交未过滤的原始命令与实际 cwd（时限等细节见该工具说明），挂完用 pause_task 等结果。" +

@@ -6,7 +6,11 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { resolveAshDbFile } from "./db/path.js";
 import { monitors, regressionChecks, tasks } from "./db/schema.js";
-import { REVIEWER_REGRESSION_CLAUSE } from "@ash/shared/free-workflow";
+import {
+  REGRESSION_MANIFEST_READING,
+  REVIEWER_REGRESSION_CLAUSE,
+  regressionManifestEntry,
+} from "@ash/shared/free-workflow";
 import { RUNS_DIR } from "./paths.js";
 import { previewShell } from "./preview-shell.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -75,13 +79,8 @@ export async function regressionEvidenceReference(
   // 「为什么 reusable 恒为 false」「generation 怎么分配」「后端凭什么说自己是权威」这些
   // **论证与实现说明**不进正文（它们是讲给维护者的，不是给模型的指令），留在本文件头与
   // `regression-evidence-lifecycle.ts`。正文只留读这份清单时用得上的几条判据。
-  return `执行者回归证据清单：${path}。${clause}这份清单只供你**核对执行者登记过什么**：` +
-    "reusable 恒为 false，它既不是你的验证结论，也不是让你重跑或补跑的清单；" +
-    "一条算通过必须同时满足 passed=true 且 exitCode=0，失败照实报告，不得给通过结论；" +
-    // 「只认最新那次」是**读清单的规则**，不是实现说明：同一条命令重跑、新一次还没跑完时，
-    // 清单里仍留着上一次 passed=true/exitCode=0 的记录，少了这句话它完全满足「算通过」的
-    // 判据，于是一次尚未结束的重跑会被旧的「通过」顶过去（第 1 轮审查 F4）。
-    "latest 标记同命令/目录的最新登记，**只按它核对**：最新那次没跑完（passed=null）就把这一面写成留白，" +
-    "不能回退用旧的通过结果顶替；旧失败完整保留，按 logPath 读完整输出。" +
-    "清单为空、失效或没覆盖到你担心的那一面时，把缺口原样写进覆盖声明的回归面留白，不能用对话自述或旧审查结果代替。";
+  // 入口那一句（动态：路径随轮次变）和读法全文（静态判据）分开拼：每回合提醒里的这一份
+  // 要不要去重，判据不一样 —— 读法正文讲过就够，入口与**本轮状态**必须跟着提醒走
+  // （两者都在 `@ash/shared/free-workflow`，去重判据在 `turn-prompt.ts`）。
+  return regressionManifestEntry(path) + clause + REGRESSION_MANIFEST_READING;
 }

@@ -68,7 +68,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   mkdirSync(repo, { recursive: true });
 
   await db.insert(projects).values({ id: "pb-p", name: "budget", repoPath: repo, createdAt: at } as never);
-  for (const id of ["pb-task", "pb-bare", "pb-stress"]) {
+  for (const id of ["pb-task", "pb-bare", "pb-stress", "pb-heavy", "pb-nomanifest"]) {
     await db.insert(tasks).values({
       id, projectId: "pb-p", title: "示例任务", body: "把某个功能做出来，要点若干。",
       status: "running", mode: "single", workflowMode: "free", createdAt: at, updatedAt: at,
@@ -97,52 +97,44 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
 
   // ── 压力形状：**合法输入下这几节最大能长到多少** ──────────────────────────────
   //
-  // 预算表拿两条固定裁定作差，只能证明「这个夹具不超」，证明不了「生产渲染受预算约束」
-  // —— 第 1 轮审查 F1 用 20 条满额裁定和 24 条满额现象行实测到 21356B / 9326B，而声明
-  // 的上限是 5200B。所以这里种一份**撑满**的：裁定按单段上限灌满，历史发现按条数上限
-  // 铺够，让 `DYNAMIC_CAPS` 量的是真正的天花板。
-  const STRESS_RULINGS = 20;
-  const STRESS_ROUNDS = 26;
+  // 固定夹具只能证明「这个夹具不超」，证明不了「生产渲染受预算约束」—— 第 2 轮审查把
+  // 条数撑到 40/60/100 后复现：20 条通过的那一版，40 条起执行者那一侧就破顶，100 条时
+  // 两侧都到 6KB 以上。所以这里种两份：20 条（典型上限）和 100 条（条数压力），后者还
+  // 另有一份**落盘失败**（证据目录被普通文件占住，`full=null`）的变体。
   const filler = (word: string) => word.repeat(400);
-  for (let index = 1; index <= STRESS_RULINGS; index += 1) {
-    const stamp = `2026-09-${String(index).padStart(2, "0")}T00:00:00.000Z`;
-    await db.insert(freeReviewRuns).values({
-      id: `pb-stress-${index}`, taskId: "pb-stress", reviewerId: null, reviewerName: "逻辑审查者",
-      agentType: "codex", executorId: null, checkMode: "logic", retryLimit: 1, currentRound: 1,
-      status: "stopped", createdAt: stamp, updatedAt: stamp, finishedAt: stamp,
-    } as never);
-    await db.insert(freeReviewRounds).values({
-      id: `pb-stress-${index}-round`, runId: `pb-stress-${index}`, round: index, status: "failed",
-      conclusion: "verify_failed", reviewedCommit: "0".repeat(40),
-      disputeSummary: "这几条不该在这个任务里改。",
-      disputeReason: filler("不成立的依据"),
-      disputeDeferReason: filler("越界的依据"),
-      disputeResolutionNote: filler("裁定要点"),
-      disputeResolution: index % 2 ? "deferred" : "withdrawn",
-      disputeResolvedAt: stamp, startedAt: stamp, endedAt: stamp,
-      disputeDeferredTaskId: index % 2 ? `pb-stress-derived-${index}` : null,
-    } as never);
-    // 历史发现读的是**盘上的 report.md**，所以得真写出来。
-    const report = freeReviewReportPath("pb-stress", `pb-stress-${index}`, index);
-    mkdirSync(dirname(report), { recursive: true });
-    writeFileSync(report, `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
-  }
-  // 轮数也要撑到取样分支（> MAX_ITEMS）：上面 20 条裁定各算一轮，再补几轮纯发现。
-  for (let index = STRESS_RULINGS + 1; index <= STRESS_ROUNDS; index += 1) {
-    const stamp = `2026-09-${String(index).padStart(2, "0")}T00:00:00.000Z`;
-    await db.insert(freeReviewRuns).values({
-      id: `pb-stress-${index}`, taskId: "pb-stress", reviewerId: null, reviewerName: "逻辑审查者",
-      agentType: "codex", executorId: null, checkMode: "logic", retryLimit: 1, currentRound: 1,
-      status: "stopped", createdAt: stamp, updatedAt: stamp, finishedAt: stamp,
-    } as never);
-    await db.insert(freeReviewRounds).values({
-      id: `pb-stress-${index}-round`, runId: `pb-stress-${index}`, round: index, status: "failed",
-      conclusion: "verify_failed", reviewedCommit: "0".repeat(40), startedAt: stamp, endedAt: stamp,
-    } as never);
-    const report = freeReviewReportPath("pb-stress", `pb-stress-${index}`, index);
-    mkdirSync(dirname(report), { recursive: true });
-    writeFileSync(report, `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
-  }
+  const seedRulings = async (taskId: string, count: number, rounds: number): Promise<void> => {
+    for (let index = 1; index <= rounds; index += 1) {
+      const stamp = new Date(Date.UTC(2026, 8, 1) + index * 86_400_000).toISOString();
+      await db.insert(freeReviewRuns).values({
+        id: `${taskId}-${index}`, taskId, reviewerId: null, reviewerName: "逻辑审查者",
+        agentType: "codex", executorId: null, checkMode: "logic", retryLimit: 1, currentRound: 1,
+        status: "stopped", createdAt: stamp, updatedAt: stamp, finishedAt: stamp,
+      } as never);
+      const settled = index <= count;
+      await db.insert(freeReviewRounds).values({
+        id: `${taskId}-${index}-round`, runId: `${taskId}-${index}`, round: index, status: "failed",
+        conclusion: "verify_failed", reviewedCommit: "0".repeat(40), startedAt: stamp, endedAt: stamp,
+        ...(settled
+          ? {
+            disputeSummary: "这几条不该在这个任务里改。",
+            disputeReason: filler("不成立的依据"),
+            disputeDeferReason: filler("越界的依据"),
+            disputeResolutionNote: filler("裁定要点"),
+            disputeResolution: index % 2 ? "deferred" : "withdrawn",
+            disputeResolvedAt: stamp,
+            disputeDeferredTaskId: index % 2 ? `${taskId}-derived-${index}` : null,
+          }
+          : {}),
+      } as never);
+      // 历史发现读的是**盘上的 report.md**，所以得真写出来。
+      const report = freeReviewReportPath(taskId, `${taskId}-${index}`, index);
+      mkdirSync(dirname(report), { recursive: true });
+      writeFileSync(report, `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
+    }
+  };
+  // 20 条裁定 + 26 轮（轮数撑过 `MAX_ITEMS` 的取样分支），以及 100 条裁定 + 100 轮。
+  await seedRulings("pb-stress", 20, 26);
+  await seedRulings("pb-heavy", 100, 100);
 
   const run = {
     id: "pb-run", taskId: "pb-task", reviewerId: null, reviewerName: "逻辑审查者",
@@ -154,11 +146,19 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   // 投递态样本里的每回合提醒由 `freeReviewReminder` 现查「这个任务正在审哪一轮」，所以
   // 这一条 run 必须真的落库（上面那个字面量只够给渲染函数当参数）。
   await db.insert(freeReviewRuns).values({ ...(run as object), createdAt: "2026-10-27T01:00:00.000Z" } as never);
+  // 「这一轮的证据清单读不出来」那一路：目录被一个普通文件占住，`safeRunDirectory` 判否，
+  // 于是每回合提醒改说「清单不可用，把回归面写成留白」。第 2 轮审查 F2 实测这条**本轮才
+  // 出现**的警告被整条去重吞掉了，所以它必须进样本。
+  const noManifestRun = { ...(run as object), id: "pb-run-nomanifest", taskId: "pb-nomanifest" } as never;
+  await db.insert(freeReviewRuns).values({ ...(noManifestRun as object), createdAt: "2026-10-27T01:00:00.000Z" } as never);
 
   const {
     debatePrompt, freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt, freeReviewResumeMessage,
   } = await import("../src/free-review-prompts.js");
   const { freeReviewReminder } = await import("../src/free-workflow.js");
+  const { settledRulingsFor } = await import("../src/free-review-settled.js");
+  const { freeReviewHistorySection } = await import("../src/review-history.js");
+  const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
   const { assembleTurnPrompt } = await import("../src/turn-prompt.js");
   const { invitedTaskBrief } = await import("../src/invited-task-brief.js");
   const { COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER } =
@@ -219,11 +219,37 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   const stressRun = { ...(run as object), id: "pb-run-stress", taskId: "pb-stress" } as never;
   add("stress/review-dispatch", await freeReviewPrompt(stress as never, stressRun, 1, repo));
   add("stress/repair-auto", await freeRepairPrompt("pb-stress", stressRun));
+  const heavy = (await db.select().from(tasks)).find((row) => row.id === "pb-heavy")!;
+  const heavyRun = { ...(run as object), id: "pb-run-heavy", taskId: "pb-heavy" } as never;
+  add("stress/review-dispatch-100", await freeReviewPrompt(heavy as never, heavyRun, 1, repo));
+  add("stress/repair-auto-100", await freeRepairPrompt("pb-heavy", heavyRun));
+
+  // ── 分节样本：**最终渲染层**那两节各自的字节，和整条消息分开量 ────────────────
+  //
+  // 为什么要单独量而不是只拿整条消息作差：整条消息里还有需求引用、证据清单状态这些会跟着
+  // 夹具一起变的东西，作差量到的不只是这一节。闸要钉的是「这一节有上限」，那就直接量它。
+  // 落盘失败那一路（证据目录被普通文件占住 → `full=null`）同样要有界：第 2 轮审查实测它
+  // 会退回无界内联，100 条时 reviewer 6613B / executor 6686B。
+  const sectionFor = async (taskId: string, audience: "reviewer" | "executor", dir: string) =>
+    settledRulingsFor({ taskId, current: { runId: "pb-none", round: 1 }, audience, evidenceDir: dir });
+  const heavyDir = freeReviewEvidenceDir("pb-heavy", "pb-run-heavy", 1);
+  const brokenDir = join(root, "runs", "pb-heavy", "broken-evidence-dir");
+  mkdirSync(dirname(brokenDir), { recursive: true });
+  writeFileSync(brokenDir, "这不是目录：用来逼出落盘失败那一路。\n");
+  add("section/settled-reviewer-20", await sectionFor("pb-stress", "reviewer",
+    freeReviewEvidenceDir("pb-stress", "pb-run-stress", 1)));
+  add("section/settled-executor-20", await sectionFor("pb-stress", "executor",
+    freeReviewEvidenceDir("pb-stress", "pb-run-stress", 1)));
+  add("section/settled-reviewer-100", await sectionFor("pb-heavy", "reviewer", heavyDir));
+  add("section/settled-executor-100", await sectionFor("pb-heavy", "executor", heavyDir));
+  add("section/settled-reviewer-100-nofile", await sectionFor("pb-heavy", "reviewer", brokenDir));
+  add("section/settled-executor-100-nofile", await sectionFor("pb-heavy", "executor", brokenDir));
+  add("section/history-100", await freeReviewHistorySection("pb-heavy", { runId: "pb-none", round: 1 }));
 
   // ── 投递态：**真正发出去的那一条**。片段各自压着预算、拼起来翻倍，是这一摞里最贵的
   //    一种退步，而它只在这一层量得到（第 1 轮审查 F2）。走的是 orchestrator 用的同一个
   //    `assembleTurnPrompt`，不是它的拷贝 —— 拷贝迟早和真实投递路径分叉。
-  const deliver = (userText: string, reviewReminder: string) => withGlobalBrowserPolicy(
+  const deliver = (userText: string, reviewReminder: string, taskId = "pb-task") => withGlobalBrowserPolicy(
     assembleTurnPrompt({
       invite: COLLAB_INVITE,
       brief: invitedTaskBrief(task.body, true, true),
@@ -231,7 +257,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       peerNotice: "",
       userText,
       workspaceReset: "",
-      completion: COMPLETION_REMINDER("pb-task", false, true, true),
+      completion: COMPLETION_REMINDER(taskId, false, true, true),
       direction: DIRECTION_PROTOCOL("pb-token"),
       reviewReminder,
     }),
@@ -241,6 +267,17 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   const reviewReminder = await freeReviewReminder("pb-task");
   add("delivered/review-dispatch", deliver(await freeReviewPrompt(task as never, run, 2, repo), reviewReminder));
   add("delivered/review-resume", deliver(freeReviewResumeMessage(task as never, run, 2), reviewReminder));
+  // 证据清单不可用那一轮的两条投递消息：**本轮状态**必须活着出现在最终消息里。
+  const noManifestDir = freeReviewEvidenceDir("pb-nomanifest", "pb-run-nomanifest", 2);
+  mkdirSync(dirname(noManifestDir), { recursive: true });
+  writeFileSync(noManifestDir, "这不是目录：用来逼出「证据清单不可用」那一路。\n");
+  const noManifest = (await db.select().from(tasks)).find((row) => row.id === "pb-nomanifest")!;
+  const noManifestReminder = await freeReviewReminder("pb-nomanifest");
+  // 只有**续跑**那一路量得到：首次派审走 `reviewRequestReference`，目录不安全时它直接抛，
+  // 派审根本发不出去（这正确 —— 证据目录是审查的前提）。会带着坏目录继续跑的只有续跑和
+  // 中途提问后的那几个回合，而它们恰恰只靠这条提醒。
+  add("delivered/review-resume-nomanifest", deliver(
+    freeReviewResumeMessage(noManifest as never, noManifestRun, 2), noManifestReminder, "pb-nomanifest"));
   add("delivered/repair", withGlobalBrowserPolicy(
     assembleTurnPrompt({
       invite: "",

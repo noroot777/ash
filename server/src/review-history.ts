@@ -38,6 +38,17 @@ const MAX_ITEMS = 24;
 const MAX_BODY = 3_000;
 /** 路径清单最多列几条（真实数据里最多的一个任务有 32 轮）。 */
 const MAX_PATHS = 8;
+/**
+ * **整节**的字节上限（UTF-8）——条目清单之外，标题、路径清单、取样说明和末尾那几句
+ * 「这一节拿来干什么」也都算进去。
+ *
+ * 只钉条目正文是不够的：`MAX_BODY` 管住的只是中间那一摞 `- 〔第 N 轮〕…`，而第 2 轮
+ * 审查把轮数撑到 100 时整节量到 5025B —— 没有任何一处声明过这个数，也没有任何一处拦着
+ * 它继续长（再加一条兜底说明、路径再长一点都会直接加上去）。所以这一节也按**渲染结果**
+ * 收口：超了就缩条目预算重渲染，缩到底仍超就按字节截断（条目清单在前，截掉的是末尾的
+ * 说明，不是事实）。
+ */
+const SECTION_CAP = 4_000;
 
 /**
  * 一组路径的公共目录；没有公共前缀时退回根。只用于「另有 N 份在这儿」那句话。
@@ -240,7 +251,7 @@ type Entry = { round: PriorRound; text: string };
  * ③ 轮数本身就超过名额时，按轮次**均匀取样**并钉住首尾：首轮定义类，末轮是现状，中间
  *    等距取。等距比取尾好的理由同 ①。
  */
-function allocate(entries: Entry[]): { kept: Entry[]; silentRounds: PriorRound[]; mode: string } {
+function allocate(entries: Entry[], bodyBudget: number): { kept: Entry[]; silentRounds: PriorRound[]; mode: string } {
   const groups: Entry[][] = [];
   for (const entry of entries) {
     const last = groups.at(-1);
@@ -260,7 +271,7 @@ function allocate(entries: Entry[]): { kept: Entry[]; silentRounds: PriorRound[]
   let slots = Math.min(MAX_ITEMS, groups.length);
   let picked = slotsFor(slots);
   const headCost = (indexes: number[]) => indexes.reduce((sum, index) => sum + cost(groups[index]![0]!), 0);
-  while (slots > 1 && headCost(picked) > MAX_BODY) {
+  while (slots > 1 && headCost(picked) > bodyBudget) {
     slots -= 1;
     picked = slotsFor(slots);
   }
@@ -271,7 +282,7 @@ function allocate(entries: Entry[]): { kept: Entry[]; silentRounds: PriorRound[]
   if (!sampled) {
     outer: for (const group of [...groups].reverse()) {
       for (const entry of group.slice(1)) {
-        if (kept.size >= MAX_ITEMS || used + cost(entry) > MAX_BODY) break outer;
+        if (kept.size >= MAX_ITEMS || used + cost(entry) > bodyBudget) break outer;
         kept.add(entry);
         used += cost(entry);
       }
@@ -300,17 +311,42 @@ const labelList = (rounds: PriorRound[], limit = 6): string => {
 };
 
 export function priorFindingsSection(rounds: PriorRound[]): string {
+  const entries = entriesOf(rounds);
+  if (!entries.length) return "";
+  // 整节收口：条目预算一级级往下砍，取第一个装得下的。砍的是**条目预算**而不是直接截字符，
+  // 这样减掉的是最该减的那部分（早轮次的细节），不是末尾那几句说明。
+  for (let budget = MAX_BODY; budget >= 300; budget = Math.floor(budget * 0.75)) {
+    const text = renderPriorFindings(rounds, entries, budget);
+    if (Buffer.byteLength(text, "utf8") <= SECTION_CAP) return text;
+  }
+  const text = renderPriorFindings(rounds, entries, 300);
+  if (Buffer.byteLength(text, "utf8") <= SECTION_CAP) return text;
+  // 连最小正文都超（路径特别长、轮次标签特别长）：按字节截，不切坏多字节字符。
+  let out = "";
+  let used = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char, "utf8");
+    if (used + size > SECTION_CAP) break;
+    out += char;
+    used += size;
+  }
+  return out;
+}
+
+function entriesOf(rounds: PriorRound[]): Entry[] {
   // 抽不到现象行、但那一轮**确实没通过**的，仍要留一行指向报告：全库 1550 份里这类有 301
   // 份（抽到的是 518 份），整轮藏掉的话，最该让下一轮看见的恰恰是它们。只说「没抽出来 +
   // 报告在哪」，不编内容。
-  const entries: Entry[] = rounds.flatMap((round) =>
+  return rounds.flatMap((round) =>
     round.findings.length
       ? round.findings.map((text) => ({ round, text }))
       : round.conclusion === "verify_failed"
         ? [{ round, text: `现象行没抽出来，整份报告在 ${round.reportPath}` }]
         : []);
-  if (!entries.length) return "";
-  const { kept, silentRounds, mode } = allocate(entries);
+}
+
+function renderPriorFindings(rounds: PriorRound[], entries: Entry[], bodyBudget: number): string {
+  const { kept, silentRounds, mode } = allocate(entries, bodyBudget);
   const body = kept.map(lineOf).join("\n");
 
   // 路径清单里**一条都没内联到的那几轮排在最前**。
