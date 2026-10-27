@@ -254,6 +254,10 @@ try {
     git(named, "config", "user.name", "gate");
     git(named, "config", "user.email", "gate@example.test");
     git(named, "config", "core.hooksPath", "/dev/null");
+    // Windows 默认 core.autocrlf=true,checkout 会把 LF 写成 CRLF,于是「快照里的内容就是提交的
+    // 那一份」这条断言在那台机器上必然不成立。在断言里归一换行会把这条断言变成空话(它要问的恰恰
+    // 是字节),所以关掉 fixture 自己这个 repo 的转换,两个平台走同一条路。
+    git(named, "config", "core.autocrlf", "false");
     writeFileSync(join(named, "package.json"), '{"name":"named-file","version":"1.0.0"}');
     writeFileSync(join(named, "vendor"), "这是一个普通文件，不是依赖目录\n");
     writeFileSync(join(named, "target"), "同上\n");
