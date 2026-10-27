@@ -42,7 +42,7 @@ export type StopFact =
   | { kind: "none" }
   | { kind: "requested" }
   | { kind: "verified" }
-  | { kind: "unresolved"; pids: number[]; complete: boolean; why: string };
+  | { kind: "unresolved"; pids: number[]; complete: boolean; why: string; memberReasons?: Record<string, string>; incompleteReasons?: string[] };
 
 /** 一次停止动作**核验之后**的结论(mergeStop 的输入)。`requested` 不在其中:那是动手前落的。 */
 export type StopResolution = Extract<StopFact, { kind: "verified" } | { kind: "unresolved" }>;
@@ -82,6 +82,8 @@ export type TerminalSessionInfo = {
    * 「启动脚本退了、服务还在后台」就靠它认出来 —— groupAlive 在这种形状下是 false。
    */
   portsAlive: boolean;
+  portUncertain?: boolean;
+  running?: boolean;
   /**
    * 上一次停止留下的责任(见 StopFact)。界面照实说一句,下次点停止还看得见,刷新也不丢。
    * `unresolved.pids` 只报**此刻还活着**的号 —— 它们停止那刻核不出归属,但后来自己退了是

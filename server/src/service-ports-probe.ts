@@ -245,6 +245,10 @@ async function processCwd(pid: number, timeoutMs: number): Promise<string | null
  */
 export type Lineage = "ours" | "stranger" | "unknown" | "unverified";
 
+export function uncertainLineage(lineage: Lineage | undefined): boolean {
+  return lineage === "unknown" || lineage === "unverified";
+}
+
 /** 一次 ps 读取的结果。`trusted=false` = 这次问话本身不可信,它的沉默不构成任何结论。 */
 type PsRead = { stdout: string; trusted: boolean };
 
@@ -340,8 +344,7 @@ function lineageWithoutPs(pids: number[], token: string): Map<number, Lineage> |
  * 「查不到不等于没人听」是同一条判据,只是换了个工具(文件头第三节)。
  *
  * 所以缺这一行时再问一次内核:**它还活着就是「核不上」**(unverified),确认不在了才当它
- * 退了。`processAlive` 用 `kill(pid, 0)`,对别人家的进程会 EPERM → false;但那种号活着时
- * ps 一定打得出它的行(ps 不分用户),所以这个洞落不到这条路上。这次问话本身不可信
+ * 退了。这次问话本身不可信
  * (`trusted=false`)时更不必问 —— 它的沉默什么都证明不了。
  */
 function lineageFromPs(read: PsRead, pids: number[], token: string): Map<number, Lineage> {

@@ -9,7 +9,7 @@
 //      (第 4 轮审查实锤:毫秒级的 `disown; exit`,任何采样都赢不了)。
 //   ② 端口存活(portsAlive):启动脚本退了、服务却还听着它打印过的端口 —— 真·守护化的
 //      服务只剩这一条线索(service-ports.ts)。lsof 比 ps 慢得多,所以自成一把锁、按拍跑。
-import { probeOwnedPorts } from "./service-ports.js";
+import { PORT_TIER_AVAILABLE, probeOwnedPorts } from "./service-ports.js";
 import { descendantsFromTable, readProcessTable } from "./terminal-process-tree.js";
 
 /** 观测层只认会话的这几样事实(TerminalSession 结构上满足它)。 */
@@ -22,6 +22,7 @@ export type WatchedSession = {
   readonly launchToken: string | null;
   exitCode: number | null;
   portsAlive: boolean;
+  portUncertain?: boolean;
   /** 端口事实的代次:停止路径核验完会 +1,这里据此丢掉取样早于它的那一拍。 */
   readonly factsGeneration: number;
 };
@@ -116,6 +117,7 @@ export class TerminalWatcher {
    * 当前代次的,结论整条丢掉。
    */
   async scanPorts(): Promise<void> {
+    if (!PORT_TIER_AVAILABLE) return;
     if (this.scanningPorts) return;
     const candidates = [...this.sessions()]
       .filter((session) => session.commandId !== null && session.launchPorts.size > 0);
@@ -126,7 +128,8 @@ export class TerminalWatcher {
         if (session.exitCode === null) { session.portsAlive = false; continue; }
         const sampledAt = session.factsGeneration;
         const { state } = await probeOwnedPorts(session.launchPorts, session.launchToken);
-        if (state === "unknown" || session.factsGeneration !== sampledAt) continue;
+        if (session.factsGeneration !== sampledAt) continue;
+        session.portUncertain = state === "unknown";
         session.portsAlive = state === "ours";
       }
     } finally { this.scanningPorts = false; }

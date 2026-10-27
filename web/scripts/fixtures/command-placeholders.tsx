@@ -64,7 +64,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     // 出来但也证明不到停净**(端口超额:没记下的端口谁都没问过 —— 第 3 轮审查发现 1。
     // 这一幕没有活证据,所以它不该卡着启动按钮,但那句话必须还在)。
     const service = (window as unknown as {
-      __service?: "live" | "daemon" | "detached" | "stopped" | "leftover" | "unprovable" | "partial";
+      __service?: "live" | "daemon" | "detached" | "stopped" | "leftover" | "unprovable" | "partial" | "unknown";
     }).__service;
     const sessions = [
       ...(service ? [{
@@ -77,6 +77,8 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
         // 进程归属(ppid / 会话 / pgid)一条都够不着(server/src/service-ports.ts)。
         ports: [8787],
         portsAlive: service === "daemon" || service === "partial",
+        running: service === "unknown" ? true : undefined,
+        portUncertain: service === "unknown",
         // 「停了但没停净」的两种形状:leftover = 监听没了、同组那个核不上归属的号还活着
         // (有活证据 ⇒ 还没了结,停止按钮留着让用户再按一次);unprovable = 一个号都举不出来,
         // 但这次停止**证明不到**停净(证据本身不全 ⇒ 不卡按钮,只照实说一句)。

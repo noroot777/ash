@@ -24,6 +24,8 @@ export type TerminalSessionInfo = {
   ports: number[];
   /** 上面那些端口此刻还有人在听 = 服务还在后台跑着，哪怕启动脚本早退了。 */
   portsAlive: boolean;
+  portUncertain?: boolean;
+  running?: boolean;
   /**
    * 上一次停止**留下的责任**（服务端 StopFact，口径与注释在
    * server/src/terminal-session-facts.ts）：
@@ -39,7 +41,7 @@ export type TerminalSessionInfo = {
     | { kind: "none" }
     | { kind: "requested" }
     | { kind: "verified" }
-    | { kind: "unresolved"; pids: number[]; complete: boolean; why: string };
+    | { kind: "unresolved"; pids: number[]; complete: boolean; why: string; memberReasons?: Record<string, string>; incompleteReasons?: string[] };
   /** 这次启动打印的本机端口超过了记录额度，多出来的没记下 = 端口这条线索本身不全。 */
   portsTruncated: boolean;
 };

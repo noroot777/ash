@@ -146,7 +146,7 @@ function sessionName(name: string, template: string, values: Record<string, stri
 function latestSession(projectId: string, commandId: string): TerminalSessionInfo | null {
   const mine = terminalSessions.listCommandSessions()
     .filter((session) => session.projectId === projectId && session.commandId === commandId);
-  return mine.find((session) => session.groupAlive || session.portsAlive || liveLeftovers(session.stop).length > 0)
+  return mine.find((session) => session.running)
     ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
 }
 
@@ -185,7 +185,8 @@ async function openSession(
   // 核不上归属、一个字都不许动,于是这条命令既起不动也停不掉(第 3 轮审查发现 3)。
   if (PORT_TIER_AVAILABLE && session.ports.length) {
     const { state } = await probeOwnedPorts(session.ports, terminalSessions.launchTokenOf(session.id));
-    if (state === "ours" || state === "unknown") return session;
+    terminalSessions.recordCommandPortState(session.id, projectId, state);
+    if (state === "ours" || state === "unknown") return terminalSessions.get(session.id, projectId);
   }
   if (liveLeftovers(session.stop).length > 0) return session;
   if (!stopScript) return null;
@@ -504,7 +505,7 @@ export function stopCommand(
     // 没核销的号一并落进会话事实:下次点停止还看得见,刷新也不丢。回给用户的是**落账之后**
     // 的终态,不是这一次的结论 —— 上一次留下的责任还挂着时,这次停止也不该报「干净」
     // (落账是单调的,见 terminal-stop-facts.ts 的 mergeStop)。
-    const settled = terminalSessions.markCommandStopped(projectId, commandId, resolutionOf(verdict));
+    const settled = terminalSessions.markCommandStopped(open.id, projectId, resolutionOf(verdict));
     return settled.kind === "unresolved"
       ? { status: 200 as const, body: { stopped: true, unresolved: settled.pids, notice: settled.why } }
       : { status: 200 as const, body: { stopped: true } };
@@ -567,7 +568,7 @@ export function restartCommand(
         // 核到终态了,把「这一份已经停了」落回会话事实 —— 否则它还会被当成「还在跑」,
         // 新会话的容量预留会撞上「旧命令会话尚未停止」。
         const stop: StopFact = before
-          ? terminalSessions.markCommandStopped(projectId, command.id, resolutionOf(verdict))
+          ? terminalSessions.markCommandStopped(before.id, projectId, resolutionOf(verdict))
           : { kind: "verified" };
         const session = await reservation.create(cwd, { name: resolved.name, script: resolved.script });
         // 旧服务的监听停了、新的起来了,但旧账上那几个核不上归属的号还活着 —— 照实说一句,

@@ -51,7 +51,7 @@ import { IS_WINDOWS } from "./platform.js";
 import { processAlive, readProcessTableSync } from "./terminal-process-tree.js";
 import {
   groupMembers, inspectPid, LAUNCH_ID_ENV, listeningPids, listeningPidsSync,
-  membersOfGroup, PORT_TIER_AVAILABLE, readLineage, readLineageSync, refusal,
+  membersOfGroup, PORT_TIER_AVAILABLE, readLineage, readLineageSync, refusal, uncertainLineage,
 } from "./service-ports-probe.js";
 import type { Lineage, PortHolder } from "./service-ports-probe.js";
 // 认端口那一段(整条文本 + 流式)拆去 service-ports-scan.ts 了,调用点照旧从这儿引。
@@ -202,6 +202,7 @@ async function closeGroup(
 export async function stopByPorts(
   ports: Iterable<number>,
   options: { launchToken: string; graceMs?: number },
+  probe: typeof listeningPids = listeningPids,
 ): Promise<PortStopOutcome> {
   const outcome: PortStopOutcome = { killed: [], spared: [], unknown: [], leftovers: [], membersIncomplete: false };
   if (IS_WINDOWS || !PORT_TIER_AVAILABLE) return outcome;
@@ -215,7 +216,7 @@ export async function stopByPorts(
   const owed = new Map<number, LaunchMember>();
   for (const port of ports) {
     if (left() <= 0) { outcome.unknown.push(port); continue; }
-    const found = await listeningPids(port, undefined, left());
+    const found = await probe(port, undefined, left());
     if (!found.ok) { outcome.unknown.push(port); continue; }
     for (const pid of found.pids) {
       if (seen.has(pid)) continue;
@@ -240,7 +241,7 @@ export async function stopByPorts(
       }
       if (anchor !== "ours") {
         outcome.spared.push({ holder, reason: refusal(anchor) });
-        if (anchor !== "stranger") outcome.membersIncomplete = true;
+        if (uncertainLineage(anchor)) outcome.membersIncomplete = true;
         continue;
       }
       const group = groupMembers(holder.pid, holder.pgid, selfPgid);
@@ -277,6 +278,7 @@ export async function stopByPorts(
     }
   }
   outcome.leftovers.push(...owed.values());
+  if (outcome.unknown.length) outcome.membersIncomplete = true;
   return outcome;
 }
 
@@ -442,7 +444,12 @@ export function stopByPortsSync(
     for (const pid of listeningPidsSync(port)) {
       if (seen.has(pid) || pid === process.pid) continue;
       seen.add(pid);
-      if (readLineageSync([pid], token).get(pid) !== "ours") { result.spared.push(pid); continue; }
+      const anchor = readLineageSync([pid], token).get(pid);
+      if (anchor !== "ours") {
+        result.spared.push(pid);
+        if (uncertainLineage(anchor)) { result.membersIncomplete = true; owed.add(pid); }
+        continue;
+      }
       if (!table || !table.pgidOf.has(pid)) result.membersIncomplete = true;
       const pgid = table?.pgidOf.get(pid) ?? 0;
       if (selfPgid !== null && pgid === selfPgid) { result.spared.push(pid); continue; }

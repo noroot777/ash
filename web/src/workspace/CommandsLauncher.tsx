@@ -73,7 +73,7 @@ const leftoversOf = (session: TerminalSessionInfo): number[] =>
   session.stop.kind === "unresolved" ? session.stop.pids : [];
 
 const sessionRunning = (session: TerminalSessionInfo): boolean =>
-  session.groupAlive || session.portsAlive || leftoversOf(session).length > 0;
+  session.running ?? (session.groupAlive || session.portsAlive || leftoversOf(session).length > 0);
 
 // 同一条命令可能挂着「一条活会话」或「一条刚退出的」——一处只说一件事,活的优先。
 function bestSession(sessions: TerminalSessionInfo[], projectId: string, commandId: string): TerminalSessionInfo | null {
@@ -106,6 +106,7 @@ function sessionState(
   service = false,
 ): { tone: string; text: string | null } {
   if (session && sessionRunning(session)) {
+    if (session.portUncertain) return { tone: "err", text: "运行状态待确认（端口归属未核实）" };
     // 监听已经让出来了、只剩几个没能收掉的号:既不是「运行中」也不是「已停止」,照实说第三种
     // (第 2 轮审查发现 2 —— 这一档以前被静默并进「已停止」)。
     // **不在这儿写成因**:账上这几个号有两种来路 —— 核不上归属所以没敢动的,以及核实是这次

@@ -540,15 +540,19 @@ export class TerminalSessionManager {
    * 合并规则见 terminal-stop-facts.ts 的 mergeStop:一次范围更窄的核验不许核销一笔范围更宽的
    * 责任。返回落账后的终态,给调用方原样回给用户(「这次又没停净」要说得出口)。
    */
-  markCommandStopped(projectId: string, commandId: string, resolution: StopResolution): StopFact {
-    let newest: TerminalSession | null = null;
-    for (const session of this.sessions.values()) {
-      if (session.projectId !== projectId || session.commandId !== commandId) continue;
-      if (!newest || session.startedAt > newest.startedAt) newest = session;
-    }
-    if (!newest) return resolution;
-    applyStop(newest, resolution);
-    return projectStop(newest.stop);
+  markCommandStopped(sessionId: string, projectId: string, resolution: StopResolution): StopFact {
+    const session = this.session(sessionId, projectId);
+    if (!session) return resolution;
+    applyStop(session, resolution);
+    return projectStop(session.stop);
+  }
+
+  recordCommandPortState(sessionId: string, projectId: string, state: "ours" | "unknown" | "stranger" | "free"): void {
+    const session = this.session(sessionId, projectId);
+    if (!session) return;
+    session.portsAlive = state === "ours";
+    session.portUncertain = state === "unknown";
+    session.factsGeneration += 1;
   }
 
   /**
@@ -577,7 +581,8 @@ export class TerminalSessionManager {
       ports: [...session.launchPorts],
       // 这个只能是缓存值:问端口要跑 lsof,不能挂在每次 info() 上(列表接口一次几十条)。
       portsAlive: session.portsAlive,
-      // 只报**还活着**的号(kind 不变 —— 那句话仍然要说,见 projectStop)。
+      portUncertain: session.portUncertain ?? false,
+      running: this.sessionRunning(session),
       stop: projectStop(session.stop),
       portsTruncated: session.portsTruncated,
     };
@@ -608,7 +613,7 @@ export class TerminalSessionManager {
    * 它开着、启动接口认为它没开」,于是同一个服务被起第二份(第 1 轮审查发现 3)。
    */
   private sessionRunning(session: TerminalSession): boolean {
-    return this.sessionAlive(session) || session.portsAlive || liveLeftovers(session.stop).length > 0;
+    return this.sessionAlive(session) || session.portsAlive || session.portUncertain === true || liveLeftovers(session.stop).length > 0;
   }
 
   /**

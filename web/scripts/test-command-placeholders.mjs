@@ -248,6 +248,13 @@ try {
   // ⑬-中 「停了但没停净」:端口让出来了,同组还有核不上归属、ash 没敢杀的进程还活着。
   //   既不是「运行中」也不是「已停止」—— 混进「已停止」就是拿端口空闲核销了整次运行
   //   (第 2 轮审查发现 2)。停止按钮必须留着,让用户还能再按一次。
+  await page.evaluate(() => { window.__service = "unknown"; });
+  await reopen();
+  await page.waitForFunction(() =>
+    /运行状态待确认/.test(document.querySelector(".cmd-pop__svc-state")?.textContent ?? ""));
+  await pop.getByRole("button", { name: "停止", exact: true }).waitFor();
+  assert.equal(await pop.getByRole("button", { name: "启动", exact: true }).count(), 0);
+  await page.keyboard.press("Escape");
   await page.evaluate(() => { window.__service = "partial"; });
   await reopen();
   await page.waitForFunction(() =>

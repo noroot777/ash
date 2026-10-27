@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { IS_WINDOWS } from "../src/platform.js";
 import { processAlive } from "../src/terminal-process-tree.js";
 import { inspectPid } from "../src/service-ports-probe.js";
-import { mergeStop } from "../src/terminal-stop-facts.js";
+import { mergeStop, projectStop } from "../src/terminal-stop-facts.js";
 import type { StopFact } from "../src/terminal-session-facts.js";
 
 let incomplete: StopFact = mergeStop({ kind: "none" }, {
@@ -41,6 +41,14 @@ if (!IS_WINDOWS) {
       kind: "unresolved", pids: [], complete: false, why: "another enumeration failed",
     });
     assert.ok(unknownWithPid.kind === "unresolved" && !unknownWithPid.complete);
+    assert.match(unknownWithPid.why, /known member remains/);
+    assert.match(unknownWithPid.why, /another enumeration failed/);
+    const afterIncomplete = mergeStop(incomplete, {
+      kind: "unresolved", pids: [childPid], complete: true, why: `pid ${childPid}: KILL did not stop it`,
+    });
+    assert.ok(afterIncomplete.kind === "unresolved" && !afterIncomplete.complete);
+    assert.match(afterIncomplete.why, new RegExp(`pid ${childPid}: KILL`));
+    assert.match(afterIncomplete.why, /enumeration incomplete/);
     type InspectionExec = NonNullable<Parameters<typeof inspectPid>[2]>;
     const failures = [{ killed: true }, { code: "ENOENT" }, { code: "EACCES" }];
     for (const failure of failures) {
@@ -57,6 +65,8 @@ if (!IS_WINDOWS) {
     assert.deepEqual(afterExit.pids, []);
     assert.equal(afterExit.why, "enumeration incomplete");
     assert.deepEqual(mergeStop(complete, { kind: "verified" }), { kind: "verified" });
+    assert.deepEqual(projectStop(complete), { kind: "verified" });
+    assert.equal(projectStop(incomplete).kind, "unresolved");
     assert.equal(mergeStop(unknownWithPid, { kind: "verified" }).kind, "unresolved");
     assert.equal((await inspectPid(childPid, 100, malformed)).state, "gone");
   } finally {

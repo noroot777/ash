@@ -29,18 +29,23 @@ import { processAlive } from "./terminal-process-tree.js";
  */
 export function mergeStop(prev: StopFact, next: StopResolution): StopFact {
   const carried = prev.kind === "unresolved" ? prev.pids.filter(processAlive) : [];
-  if (next.kind === "unresolved") {
-    const incomplete = prev.kind === "unresolved" && !prev.complete;
-    return {
-      kind: "unresolved", pids: [...new Set([...carried, ...next.pids])],
-      complete: !incomplete && next.complete,
-      why: incomplete ? prev.why : next.why,
-    };
+  const complete = (prev.kind !== "unresolved" || prev.complete) && (next.kind !== "unresolved" || next.complete);
+  const pids = [...new Set([...carried, ...(next.kind === "unresolved" ? next.pids : [])])];
+  if (next.kind === "verified" && complete && pids.length === 0) return { kind: "verified" };
+  const memberReasons: Record<string, string> = {};
+  const incompleteReasons: string[] = [];
+  for (const fact of [prev, next]) {
+    if (fact.kind !== "unresolved") continue;
+    for (const pid of fact.pids) {
+      if (pids.includes(pid)) memberReasons[pid] = fact.memberReasons?.[pid] ?? fact.why;
+    }
+    if (!fact.complete) incompleteReasons.push(...(fact.incompleteReasons ?? [fact.why]));
   }
-  if (prev.kind === "unresolved" && (carried.length > 0 || !prev.complete)) {
-    return { ...prev, pids: carried };
-  }
-  return { kind: "verified" };
+  const missing = [...new Set(incompleteReasons)];
+  return {
+    kind: "unresolved", pids, complete, memberReasons, incompleteReasons: missing,
+    why: [...new Set([...Object.values(memberReasons), ...missing])].join("\n"),
+  };
 }
 
 /**
@@ -56,6 +61,7 @@ export function mergeStop(prev: StopFact, next: StopResolution): StopFact {
 export function applyStop(session: TerminalSession, next: StopResolution): void {
   session.stop = mergeStop(session.stop, next);
   session.portsAlive = false;
+  session.portUncertain = false;
   session.factsGeneration += 1;
 }
 
@@ -89,9 +95,8 @@ export function liveLeftovers(stop: StopFact): number[] {
   return stop.kind === "unresolved" ? stop.pids.filter(processAlive) : [];
 }
 
-/** 进 DTO 的投影:只报还活着的号。`pids` 空掉**不改 kind** —— 那句话仍然要说。 */
 export function projectStop(stop: StopFact): StopFact {
-  return stop.kind === "unresolved" ? { ...stop, pids: liveLeftovers(stop) } : stop;
+  return stop.kind === "unresolved" ? mergeStop(stop, { kind: "verified" }) : stop;
 }
 
 /**
