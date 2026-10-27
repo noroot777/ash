@@ -23,35 +23,55 @@
 // ⑥ **人工屏障三态**：没有未决记录 / 有有效记录 / 记录读不出来，是三种状态。第三种在计划
 //    层和写入入口**都**整盘拒绝 —— 空集合表达不了「不知道」。
 //
+// 第 3 轮（顶级）审查打回的三条**根因**钉在哪：
+// ⑦ 写集的真实落点、⑧ 在线登记与占有协议、⑨ 未知范围单调 —— 前两条连同 ④⑤ 一起搬去了
+//    `test-claude-usage-isolation.ts`（两边都快撞 700 行上限，分法按「归属/互斥」对「账与
+//    提交」切）；⑨ 留在本文件的 `barrier` 场景里。
+//
 // **每个场景一套独立的库 + runs**，所以用子进程跑：RUNS_DIR 在模块加载时就冻成常量了，
-// 一个进程里换不了。
+// 一个进程里换不了。隔离那几个场景的子进程跑的是另一个文件，见下面的派发表。
 //
 // Run: npm -w server run test:usage
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { dirname, join as joinPath } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TokenUsage } from "@ash/shared";
 
 const self = fileURLToPath(import.meta.url);
 const scenario = process.argv[2];
 
+/**
+ * 哪个场景归哪个文件跑 —— 隔离那一半搬出去了，但入口仍是这一个。
+ *
+ * 清单在这儿**抄**了一份而不是 import 过来：那个文件是个场景入口，模块一加载就按 argv[2]
+ * 跑场景，import 它等于在派发器里先跑一遍它的用法提示然后 exit 2。两边对不上的话下面那条
+ * 断言会当场报出来。
+ */
+const ISOLATION_SCENARIOS = ["binding", "lock", "claim", "online", "escape"] as const;
+const isolation = joinPath(dirname(self), "test-claude-usage-isolation.ts");
+const fileOf = (name: string) =>
+  (ISOLATION_SCENARIOS as readonly string[]).includes(name) ? isolation : self;
+
 if (!scenario) {
-  const scenarios = ["binding", "lock", "claim", "uncertain", "gate", "drift", "identity", "rollback",
+  const scenarios = [...ISOLATION_SCENARIOS, "uncertain", "gate", "drift", "identity", "rollback",
     "quarantine", "barrier", "recover"];
+  const declared = readFileSync(isolation, "utf8").match(/\bSCENARIOS = \[(.*?)\]/s)?.[1] ?? "";
+  for (const name of ISOLATION_SCENARIOS) {
+    assert.ok(declared.includes(`"${name}"`), `${isolation} 里没有场景 ${name} —— 两份清单漂了`);
+  }
   for (const name of scenarios) {
-    const child = spawnSync(process.execPath, [...process.execArgv, self, name], { stdio: "inherit" });
+    const child = spawnSync(process.execPath, [...process.execArgv, fileOf(name), name], { stdio: "inherit" });
     assert.ok(!child.error, `场景 ${name} 的子进程没起来：${child.error?.message ?? ""}`);
     assert.equal(child.status, 0, `场景 ${name} 没过`);
   }
-  console.log("claude 回填迁移协议验证通过：资源成套绑定且归属可证、路径规范化后再比、"
-    + "维护锁按资源键取满、取锁走原子占有协议、跳过项双重闸、人工屏障三态且不可读时整盘拒绝、"
-    + "中途失败整体回滚、硬杀可证明恢复、回滚失败明确拒绝重跑");
+  console.log("claude 回填迁移协议验证通过：资源成套绑定且归属可证、路径规范化后再比、写集按真实"
+    + "落点判、维护锁按资源键取满、取锁走原子占有协议且在线登记在临界区内复查、活着的占有者不按"
+    + "墙钟抢、跳过项双重闸、人工屏障三态且不可读时整盘拒绝、未知范围单调只有人能消、中途失败"
+    + "整体回滚、硬杀可证明恢复、回滚失败明确拒绝重跑");
   process.exit(0);
 }
 
@@ -66,247 +86,12 @@ const usage = (input: number): TokenUsage =>
 const at = (index: number) => `2026-10-20T10:00:${String(index).padStart(2, "0")}.000Z`;
 
 try {
-  if (scenario === "binding") await binding();
-  else if (scenario === "lock") await lock();
-  else if (scenario === "claim") await claim();
-  else await dataScenario(scenario);
+  await dataScenario(scenario);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
 
-// ── ① 资源归属：库和它的 runs 是一套，归属在绑定这一层显式决定 ──────────────────
-async function binding() {
-  const { resolveRepairResources } = await import("../src/claude-usage-resources.js");
-  const data = join(root, "repo-data");
-  const copy = join(root, "check", "ash.db");
-
-  // 这就是第 2 轮审查 F1 的根因：指了库、没指 runs，环境里那份指着正式 runs。
-  const derived = resolveRepairResources({
-    db: copy, apply: true, env: { ASH_RUNS_DIR: join(data, "runs") }, dataDir: data,
-  });
-  assert.equal(derived.runsDir, join(root, "check", "runs"), "runs 必须跟着库走，不许沿用环境里那份");
-  assert.equal(derived.refusal, null, "成套的拷贝可以 apply");
-
-  const crossed = resolveRepairResources({ db: copy, runs: join(data, "runs"), apply: true, dataDir: data });
-  assert.match(crossed.refusal!, /不是配套/, "可写的库指着别人的原始 runs，必须直接拒绝");
-  assert.match(crossed.refusal!, /cp -R/, "拒绝还得告诉人怎么做对");
-  assert.equal(
-    resolveRepairResources({ db: copy, runs: join(data, "runs"), apply: false, dataDir: data }).refusal,
-    null,
-    "dry-run 一个字节都不写，允许拿正式 runs 给拷贝库预览清单",
-  );
-
-  // 从 worktree 里跑时本检出的 data/ 不存在，而 --db 指着主检出那份真生产库 —— 这条最该
-  // 拦的用法，只跟本检出的 data/ash.db 比一个等号是拦不住的。
-  assert.match(
-    resolveRepairResources({ db: join(root, "another-checkout", "data", "ash.db"), apply: true, dataDir: data }).refusal!,
-    /生产库/,
-    "任何检出的 data/ash.db 都按生产库对待",
-  );
-  const production = resolveRepairResources({ apply: true, dataDir: data });
-  assert.equal(production.dbFile, join(data, "ash.db"));
-  assert.match(production.refusal!, /生产库/, "默认目标是生产库，没有 --force-production 一律拒");
-  const forced = resolveRepairResources({ apply: true, forceProduction: true, dataDir: data });
-  assert.equal(forced.refusal, null);
-  assert.equal(forced.runsDir, join(data, "runs"), "生产库配套的就是 data/runs");
-
-  // ── 第 1 轮审查 F1：同级只是必要条件，归属才是判据 ──────────────────────────
-  // 同一个目录里放第二份库，拿它 --apply：旧版过「同级」这一关，改写的却是 ash.db 的 trace。
-  const set = join(root, "copyset");
-  mkdirSync(join(set, "runs"), { recursive: true });
-  writeFileSync(join(set, "ash.db"), "");
-  writeFileSync(join(set, "check.db"), "");
-  const second = resolveRepairResources({ db: join(set, "check.db"), apply: true, dataDir: data });
-  assert.match(second.refusal!, /不是 .*runs 的主人/, "同目录的第二份库对那份 runs 没有写权");
-  assert.match(second.refusal!, /ash\.db/, "拒绝得说清主人是谁、该怎么拷");
-  assert.equal(
-    resolveRepairResources({ db: join(set, "check.db"), apply: false, dataDir: data }).refusal,
-    null,
-    "dry-run 不写东西，第二份库照样可以预览",
-  );
-
-  // 路径一律 realpath 之后再比：① 父目录别名指向同一套 → 放行，且锁键跟直连那次一模一样。
-  const real = realpathSync(set);
-  symlinkSync(set, join(root, "link"));
-  const viaAlias = resolveRepairResources({ db: join(root, "link", "ash.db"), apply: true, dataDir: data });
-  assert.equal(viaAlias.refusal, null, "经别名到达的同一套资源该放行");
-  assert.deepEqual(
-    viaAlias.lockKeys,
-    resolveRepairResources({ db: join(set, "ash.db"), apply: true, dataDir: data }).lockKeys,
-    "同一份资源经不同路径到达必须算出同一组锁键 —— 否则两把锁各锁一个名字，等于没锁",
-  );
-  assert.deepEqual(viaAlias.lockKeys, [join(real, "ash.db"), join(real, "runs")].sort());
-
-  // ② 名字对、落点不对（拷贝目录里的 runs 是条指向正式 runs 的软链）→ 必须拒。
-  const sneaky = join(root, "sneaky");
-  mkdirSync(sneaky, { recursive: true });
-  writeFileSync(join(sneaky, "ash.db"), "");
-  symlinkSync(join(set, "runs"), join(sneaky, "runs"));
-  const aliased = resolveRepairResources({ db: join(sneaky, "ash.db"), apply: true, dataDir: data });
-  assert.match(aliased.refusal!, /不是配套/, "软链到别人的 runs，名字是同级也不算配套");
-  assert.ok(
-    aliased.refusal!.includes(join(real, "runs")),
-    "拒绝信息要把规范化后的真实落点写出来，不然人看不出哪里不对",
-  );
-
-  // 测试台那种「两个环境变量成套给」照样放行；不成套则拒。
-  assert.equal(
-    resolveRepairResources({
-      apply: true, dataDir: data,
-      env: { ASH_DB: join(root, "x", "ash.db"), ASH_RUNS_DIR: join(root, "x", "runs") },
-    }).refusal,
-    null,
-  );
-  assert.match(
-    resolveRepairResources({
-      apply: true, dataDir: data,
-      env: { ASH_DB: join(root, "x", "ash.db"), ASH_RUNS_DIR: join(data, "runs") },
-    }).refusal!,
-    /不是配套/,
-  );
-}
-
-// ── ② 维护互斥：真取锁，两个方向都挡 ───────────────────────────────────────────
-async function lock() {
-  const maintenance = await import("../src/maintenance-lock.js");
-  const { acquireDbSingletonLock, SingletonConflictError } = await import("../src/singleton.js");
-  const dbFile = process.env.ASH_DB!;
-
-  const { canonicalResourceKey } = await import("../src/resource-claim.js");
-  const held = maintenance.acquireMaintenanceLock(dbFile, "test-migration");
-  assert.ok(maintenance.liveMaintenanceHolderForDb(dbFile), "取到锁就得看得见持有者");
-  assert.throws(
-    () => maintenance.acquireMaintenanceLock(dbFile, "another"),
-    maintenance.MaintenanceLockError,
-    "第二个维护进程不许同时动这份库",
-  );
-  // 这一条才是「真取锁」跟「只探活」的区别：探活只能回答「刚才有没有」。
-  assert.throws(
-    () => acquireDbSingletonLock({ port: null }),
-    (error: unknown) => error instanceof SingletonConflictError && /maintenance/i.test(error.message),
-    "迁移跑着的时候 ash 不许起来",
-  );
-
-  held.release();
-  assert.equal(maintenance.liveMaintenanceHolderForDb(dbFile), null);
-  const singleton = acquireDbSingletonLock({ port: null });
-  assert.ok(singleton, "锁放了之后服务就该起得来");
-  singleton.release();
-
-  // ── 第 1 轮审查 F1 的锁面：要改的文件在 runs 里，所以 runs 也得是一把锁 ──────
-  const runsKey = canonicalResourceKey(process.env.ASH_RUNS_DIR!);
-  const onRuns = maintenance.acquireMaintenanceLocks([runsKey], "test-runs-only");
-  assert.throws(
-    () => acquireDbSingletonLock({ port: null }),
-    (error: unknown) => error instanceof SingletonConflictError && /maintenance/i.test(error.message),
-    "只锁住 runs（别的库路径落到同一份 runs 上就是这种形状）也必须挡住服务启动",
-  );
-  // ASH_ALLOW_MULTI 的语义是「允许多个 ash 并存」，不是「允许踩正在迁移的库」。
-  process.env.ASH_ALLOW_MULTI = "1";
-  try {
-    assert.throws(
-      () => acquireDbSingletonLock({ port: null }),
-      (error: unknown) => error instanceof SingletonConflictError && /maintenance/i.test(error.message),
-      "ASH_ALLOW_MULTI=1 不是绕开维护锁的后门",
-    );
-  } finally {
-    delete process.env.ASH_ALLOW_MULTI;
-  }
-  onRuns.release();
-
-  // 同一份资源经不同路径到达 = 同一把锁（别名下各锁一个名字就等于没锁）。
-  const aliasRoot = join(root, "alias");
-  symlinkSync(root, aliasRoot);
-  const viaAlias = maintenance.acquireMaintenanceLocks([join(aliasRoot, "ash.db")], "test-alias");
-  assert.ok(
-    maintenance.liveMaintenanceHolderFor(canonicalResourceKey(dbFile)),
-    "经别名取的锁，规范化之后必须看得见",
-  );
-  assert.throws(
-    () => acquireDbSingletonLock({ port: null }),
-    SingletonConflictError,
-    "经别名取的维护锁照样挡住服务启动",
-  );
-  viaAlias.release();
-
-  // 多把一起取：中途有一把被人占着，已经取到的那几把必须全部放回去。
-  const other = maintenance.acquireMaintenanceLocks([runsKey], "占着 runs");
-  assert.throws(
-    () => maintenance.acquireMaintenanceLocks([dbFile, runsKey], "两把一起要"),
-    maintenance.MaintenanceLockError,
-  );
-  assert.equal(maintenance.liveMaintenanceHolderFor(canonicalResourceKey(dbFile)), null,
-    "取锁失败不许留下半套锁");
-  other.release();
-
-  // 脚本被强杀之后那把锁必须自动失效，否则服务永远起不来。
-  writeFileSync(maintenance.maintenanceLockFileForDb(dbFile), JSON.stringify({
-    pid: 999_999, processStartedAt: new Date().toISOString(), processStartedAtMs: Date.now(),
-    acquiredAt: new Date().toISOString(), note: "被强杀的脚本", token: "x", key: dbFile,
-  }));
-  assert.equal(maintenance.liveMaintenanceHolderForDb(dbFile), null, "pid 已经不在 = 陈旧锁");
-  const afterStale = acquireDbSingletonLock({ port: null });
-  assert.ok(afterStale, "陈旧的维护锁不许把服务永久挡在外面");
-  afterStale.release();
-}
-
-// ── ③ 占有协议：「查对方 + 建自己」是原子的，长命锁带着内容原子出现 ─────────────
-async function claim() {
-  const { atomicCreateWithContent, claimFileFor, canonicalResourceKey, withResourceClaim, ResourceClaimError } =
-    await import("../src/resource-claim.js");
-  const { acquireDbSingletonLock } = await import("../src/singleton.js");
-  const maintenance = await import("../src/maintenance-lock.js");
-  const dbFile = process.env.ASH_DB!;
-
-  // 锁文件必须**带着内容**出现：先建空文件再写的话，中间那一瞬别人读到一份读不懂的锁，
-  // 会把活锁判成陈旧锁删掉，而第一个进程手里的 fd 还在、照样返回成功。
-  const target = join(root, "atomic.lock");
-  assert.equal(atomicCreateWithContent(target, JSON.stringify({ a: 1 })), true);
-  assert.deepEqual(JSON.parse(readFileSync(target, "utf8")), { a: 1 });
-  assert.equal(atomicCreateWithContent(target, JSON.stringify({ a: 2 })), false, "已经存在就返回 false，不覆盖");
-  assert.deepEqual(JSON.parse(readFileSync(target, "utf8")), { a: 1 }, "也不许截断成半份");
-  assert.ok(existsSync(target) && readFileSync(target, "utf8").length > 0);
-  // 临时文件不许留。
-  assert.deepEqual(
-    readdirSync(root).filter((name) => name.endsWith(".tmp")), [],
-    "atomicCreateWithContent 不许留下临时文件",
-  );
-
-  const held = maintenance.acquireMaintenanceLocks([dbFile], "test-claim");
-  assert.ok(JSON.parse(readFileSync(maintenance.maintenanceLockFileForDb(dbFile), "utf8")).pid,
-    "维护锁落盘即完整可读");
-  held.release();
-
-  // 占有锁被别人拿着的时候，服务启动这一侧不许「照常继续」—— 它必须等不到就拒。
-  // 这就是审查用同步屏障复现的那个窗口：旧版两边各自先查后建，交错之后两边都通过。
-  const key = canonicalResourceKey(dbFile);
-  writeFileSync(claimFileFor(key), JSON.stringify({
-    pid: process.pid, note: "假装别人正在起手", token: "x", at: new Date().toISOString(),
-  }));
-  assert.throws(() => acquireDbSingletonLock({ port: null }), ResourceClaimError,
-    "占有锁在别人手里时，服务启动必须停下来，不许跟迁移交错");
-  assert.throws(() => maintenance.acquireMaintenanceLocks([dbFile], "迁移也一样"), ResourceClaimError,
-    "迁移那一侧用的是同一把占有锁");
-  rmSync(claimFileFor(key));
-
-  // 持有者已经不在了 = 陈旧占有锁，必须能回收，否则一次强杀就把两边永久挡住。
-  writeFileSync(claimFileFor(key), JSON.stringify({
-    pid: 999_999, note: "被强杀的起手动作", token: "x", at: new Date().toISOString(),
-  }));
-  const ok = acquireDbSingletonLock({ port: null });
-  assert.ok(ok, "陈旧占有锁不许把服务永久挡在外面");
-  ok.release();
-  assert.equal(existsSync(claimFileFor(key)), false, "占有锁用完即走，不留痕");
-
-  // 用完即放：同一把键可以接着被拿到（不是只能拿一次）。
-  let ran = 0;
-  withResourceClaim([dbFile], "第一次", () => { ran += 1; });
-  withResourceClaim([dbFile], "第二次", () => { ran += 1; });
-  assert.equal(ran, 2);
-  assert.equal(existsSync(claimFileFor(key)), false);
-}
-
-// ── ④~⑥ 需要库的那几个场景 ────────────────────────────────────────────────────
+// ── 账、提交协议、人工屏障：需要库的那几个场景 ─────────────────────────────────
 async function dataScenario(name: string) {
   const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
   const { sessions, appSettings, usageCumulativeSnapshots } = await import("../src/db/schema.js");
@@ -533,6 +318,9 @@ async function dataScenario(name: string) {
   if (name === "barrier") {
     // 第 1 轮审查 F3：人工屏障**自己**读不出来时，不许退化成「谁都不用挡」。
     await seed("b1", { thread: "t-b", values: [100, 200] });
+    // 口径判不出的那条线程:它这一轮唯一的写入动作是「留待建基线」的累计快照，用来钉住
+    // 「屏障点名了它，计划里又没有 update，闸还得拦住那张快照」（第 3 轮审查 F3 第三例）。
+    await seed("b2", { thread: "t-uncertain", values: [100, 200, 100, 200], dbInput: 400, offset: 4 });
     const file = unresolvedRepairFileForDb();
     const unreadable: [string, string, RegExp][] = [
       ["截断（上次写到一半）", '{"at":"2026-10-28T00:00:00.000Z","threads":["t-b"', /完整的 JSON/],
@@ -540,6 +328,10 @@ async function dataScenario(name: string) {
       ["threads 是空的", '{"at":"2026-10-28T00:00:00.000Z","threads":[],"reason":"x"}', /空的/],
       ["threads 里有非字符串", '{"threads":[1,2]}', /不是字符串/],
       ["顶层不是对象", '"just a string"', /顶层不是对象/],
+      // **类型对不等于身份有效**：空白身份匹配不上任何一条 CLI 线程，靠它代表「挡住了」
+      // 是假的 —— 第 3 轮审查实测这一份被读成 pending，随后 300 被改成了 200。
+      ["threads 里是空白身份", '{"threads":["  ","t-b"]}', /空白身份/],
+      ["unknownScope 字段坏了", '{"threads":["t-b"],"unknownScope":"坏了"}', /未知范围无法确认已消解/],
     ];
     for (const [label, text, detail] of unreadable) {
       writeFileSync(file, text);
@@ -571,25 +363,67 @@ async function dataScenario(name: string) {
     assert.equal(blocked.traces.files, 0);
     assert.equal(await inputOf("b1"), 300);
 
-    // 往读不懂的那份上写新记录：旧文件不许直接盖掉，先存档，位置写进新记录。
+    // ── 未知范围**单调**：追加别的失败记录不许缩小已有的阻止范围 ──────────────
+    // 上一版在这儿断言「存档之后只挡新线程、旧线程恢复 update」，那正是第 3 轮审查实测的
+    // 漏洞：读不懂的那份装着谁谁都不知道，新记录替它作不了证。旧文件照旧要存档（不丢证据），
+    // 但**状态仍然是 unreadable**，只有人删掉整份文件才算消解。
     const written = writeUnresolvedRepair({
       at: new Date().toISOString(), threads: ["t-other"], files: [], reason: "另一次失败",
     });
     assert.equal(written, file);
     const merged = readUnresolvedState();
-    assert.equal(merged.kind, "pending", "新记录必须是完整可读的（原子替换）");
-    assert.deepEqual(merged.kind === "pending" ? merged.record.threads : null, ["t-other"]);
-    const archived = (merged.kind === "pending" ? merged.record.files : []).find((item) => item.includes(".unreadable-"));
+    assert.equal(merged.kind, "unreadable", "写了一份漂亮的新记录不等于未知范围消解了");
+    assert.match(merged.kind === "unreadable" ? merged.detail : "", /未知范围|不可知/);
+    const record = JSON.parse(readFileSync(file, "utf8")) as {
+      threads: string[]; files: string[]; reason: string;
+      unknownScope?: { detail: string; archived: string | null };
+    };
+    assert.deepEqual(record.threads, ["t-other"], "新记录本身仍要如实写下它知道的那几条");
+    assert.ok(record.unknownScope, "未知范围标记必须留在文件里 —— 它就是那份持久拒绝标志");
+    const archived = record.files.find((item) => item.includes(".unreadable-"));
     assert.ok(archived && existsSync(archived), "读不懂的那份要存档下来，不能悄悄丢掉");
-    assert.match(merged.kind === "pending" ? merged.record.reason : "", /读不懂/);
+    assert.equal(record.unknownScope!.archived, archived, "存档位置要写进标记里，人才找得到");
+    assert.match(record.reason, /读不懂/);
+    const stillBlocked = await planClaudeUsageRepair();
+    assert.equal(stillBlocked.sessions.every((item) => item.action.kind === "skip"), true,
+      "带着未知范围时，计划层照旧一个可写动作都拿不出来");
+    assert.equal(stillBlocked.snapshots.length, 0);
+    assert.equal((await applyClaudeUsageRepair(stillBlocked)).committed, false);
+    assert.equal(await inputOf("b1"), 300, "库一个字节没改");
 
-    // 有效记录只挡它点名的线程 —— 屏障不许过宽。
+    // ── 人工消解之后 ①：被点名线程这一轮**只有快照**要写，闸也得拦住 ───────────
+    // 双重闸的第二面。b2 那条线程口径判不出，所以它这一轮唯一的写入动作是一张「留待建
+    // 基线」的累计快照 —— 计划是在屏障出现之前算的（计划层那一侧会整条 continue 掉，拿
+    // 不到这张快照），落地之前屏障才点名了它。闸只看 sessions 和 trace 的话，这张快照会
+    // 落进 usage_cumulative_snapshots，下一轮续聊就按它求差（第 3 轮审查 F3 第三例）。
+    rmSync(file); // 这一下代表人核对完备份、把文件删了
+    const beforeBarrier = await planClaudeUsageRepair();
+    assert.equal(planOf(beforeBarrier, "b2").action.kind, "skip", "它本来就判不出口径，没有 update");
+    assert.ok(beforeBarrier.snapshots.some((item) => item.sourceId === "claude:t-uncertain"),
+      "夹具：屏障还没出现时，计划里确实有这条线程的快照");
+    writeUnresolvedRepair({
+      at: new Date().toISOString(), threads: ["t-uncertain"], files: [], reason: "那条线程回滚失败过",
+    });
+    assert.equal(readUnresolvedState().kind, "pending", "干净起点上写出来的就是普通的 pending");
+    const snapshotRefused = await applyClaudeUsageRepair(beforeBarrier);
+    assert.equal(snapshotRefused.committed, false);
+    assert.match(snapshotRefused.refused.join("\n"), /不许写累计快照/,
+      "隔离的是整条线程，不是只有 sessions 那一行");
+    assert.equal(await snapshotCount(), 0, "一张快照都没落");
+    assert.equal(await inputOf("b1"), 300, "一条被挡住就整轮拒绝，别的线程也跟着不动");
+
+    // ── 人工消解之后 ②：有效记录只挡它点名的线程 —— 屏障不许过宽 ────────────────
+    rmSync(file);
+    writeUnresolvedRepair({
+      at: new Date().toISOString(), threads: ["t-other"], files: [], reason: "一条跟谁都不沾边的线程",
+    });
     const scoped = await planClaudeUsageRepair();
     assert.equal(scoped.unresolved.kind, "pending");
     assert.equal(planOf(scoped, "b1").action.kind, "update", "别的线程不在清单里，照常修");
     const done = await applyClaudeUsageRepair(scoped);
     assert.equal(done.committed, true);
     assert.equal(await inputOf("b1"), 200);
+    assert.equal(await snapshotCount(), 2, "没被挡住的两条线程各落一张基线快照（t-b 重算得出、t-uncertain 留待建）");
   }
 
   dbClient.close();

@@ -17,16 +17,19 @@
 // ② **按排好的顺序取多把**：一套资源包含库文件和 runs 目录两个键，所有角色都按字典序
 //    取，顺序一致就不会互相等成死锁。
 import { linkSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isPidAlive } from "./platform.js";
+import { inspectProcess } from "./proc.js";
 
 const CLAIM_SUFFIX = ".ash-claim.lock";
 /** 占有锁只在「查对方 + 建自己」那几毫秒里被持有，所以等 3 秒还拿不到就是真有人在抢。 */
 const BUDGET_MS = 3_000;
 const POLL_MS = 25;
-/** 比这更老的占有锁一定是持有者死在中途了（正常持有期是毫秒级）。 */
+/** 读不懂的残骸锁放这么久就清掉（活着的持有者**不**按时间判，见 `staleClaim`）。 */
 const STALE_MS = 30_000;
+/** 进程启动时刻的比较余量：ps 的精度到秒。 */
+const START_TIME_TOLERANCE_MS = 10_000;
 
 export class ResourceClaimError extends Error {
   constructor(public readonly claimFile: string, public readonly holder: string) {
@@ -71,8 +74,10 @@ export function resourceKeysFor(dbFile: string, runsDir: string): string[] {
  */
 export function atomicCreateWithContent(path: string, text: string, mode = 0o600): boolean {
   const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temp, text, { mode });
+  // 临时文件的写入也必须在 try 里:磁盘满 / I/O 错误会在 writeFileSync 中途抛，那时盘上
+  // 可能已经留了半份 .tmp。清理放 finally，覆盖「写一半就抛」和「link 完」两条出口。
   try {
+    writeFileSync(temp, text, { mode });
     linkSync(temp, path);
     return true;
   } catch (error) {
@@ -81,11 +86,27 @@ export function atomicCreateWithContent(path: string, text: string, mode = 0o600
   } finally {
     try {
       unlinkSync(temp);
-    } catch { /* 已经被 link 走或别人清了，无所谓 */ }
+    } catch { /* 已经被 link 走、或者压根没建起来 */ }
   }
 }
 
-type ClaimBody = { pid: number; note: string; token: string; at: string };
+/**
+ * `path` 规范化之后还在 `root`（规范化之后）里面吗。
+ *
+ * **为什么不能只比字符串前缀**：隔离资源集里随便一级目录是条软链，字符串上它仍在
+ * `root` 下，真实落点却在别人家 —— 第 3 轮审查 F1 就是用 `copy/runs/smoke ->
+ * source/runs/smoke` 复现的：根目录那一关全过了，写进去的是源库的历史。
+ *
+ * 文件本身可能还不存在（备份、临时文件），所以规范化走 `canonicalResourceKey`：它解析
+ * 得了就解析文件，解析不了就退一步解析父目录 —— 父目录是软链同样会被揭出来。
+ */
+export function withinResource(root: string, path: string): boolean {
+  const base = canonicalResourceKey(root);
+  const real = canonicalResourceKey(path);
+  return real === base || real.startsWith(base.endsWith(sep) ? base : `${base}${sep}`);
+}
+
+type ClaimBody = { pid: number; note: string; token: string; at: string; startedAtMs?: number };
 
 const sleep = (ms: number) => {
   // 同步等待:取锁这条路上下游全是同步代码(服务启动、CLI 起手),不能改成 await。
@@ -102,10 +123,29 @@ function readClaim(file: string): ClaimBody | null {
   }
 }
 
-/** 这把占有锁还有主吗。读不懂的只按「老得不合理」判陈旧，不当场抢。 */
+/**
+ * 这把占有锁还有主吗。
+ *
+ * **判据只有「持有者死了」，没有「它拿得太久了」**（第 3 轮审查 F2）：按墙钟抢锁等于
+ * 规定「超过 N 秒的临界区可以被别人掀桌」—— 进程被 SIGSTOP、文件系统卡住、机器换页，
+ * 都会让一个活得好好的持有者被判死，而它恢复之后还会接着跑完自己的回调，两边同时在写。
+ * 活着又一直不放的，宁可把 `ResourceClaimError` 抛给人（错误里写了删哪个文件）。
+ *
+ * 读不懂的那种才看时间：锁是**带着内容原子出现**的，所以「读不懂」不可能是「刚建好还没
+ * 写完」那一瞬，只可能是上一次留下的残骸；给点余量之后按残骸清掉。
+ */
 function staleClaim(file: string): boolean {
   const body = readClaim(file);
-  if (body && !isPidAlive(body.pid)) return true;
+  if (body) {
+    if (isPidAlive(body.pid)) {
+      // pid 可能被复用了:启动时刻对不上就说明原主早就没了。
+      if (typeof body.startedAtMs !== "number") return false;
+      const info = inspectProcess(body.pid);
+      if (info?.startedAtMs === null || info?.startedAtMs === undefined) return false;
+      return Math.abs(info.startedAtMs - body.startedAtMs) > START_TIME_TOLERANCE_MS;
+    }
+    return true;
+  }
   try {
     return Date.now() - statSync(file).mtimeMs > STALE_MS;
   } catch {
@@ -120,7 +160,13 @@ function describe(file: string): string {
 
 function take(file: string, note: string): () => void {
   const token = randomUUID();
-  const body: ClaimBody = { pid: process.pid, note, token, at: new Date().toISOString() };
+  const body: ClaimBody = {
+    pid: process.pid,
+    note,
+    token,
+    at: new Date().toISOString(),
+    startedAtMs: Date.now() - Math.round(process.uptime() * 1000),
+  };
   const deadline = Date.now() + BUDGET_MS;
   mkdirSync(dirname(file), { recursive: true });
   for (;;) {

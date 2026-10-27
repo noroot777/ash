@@ -29,9 +29,15 @@
  *   npx tsx server/scripts/repair-claude-usage.ts --db data/ash.db --apply --force-production
  *
  * **四道闸都要过**：路径像生产库要 `--force-production`；库和 runs 必须是配套的一套（且
- * 库是那份 runs 的主人）；库上**还有活着的 ash 实例**则一律拒绝（`liveAshHolderForDb`）；
- * 真跑之前还要**取到维护锁** —— 探活只能看见「现在有没有」，取锁才能挡住「我跑着的时候
- * 别人起来」：ash 启动时会检查这些锁并拒绝启动。
+ * 库是那份 runs 的主人）；这套资源上**还有活着的 ash** 则一律拒绝；真跑之前还要**取到维护
+ * 锁** —— 探活只能看见「现在有没有」，取锁才能挡住「我跑着的时候别人起来」：ash 启动时
+ * 会检查这些锁并拒绝启动。
+ *
+ * **探活那一关有两次，第二次在占有锁里面**：claim 之外探一次只能证明「那一刻没有」，
+ * 真实交错（第 3 轮审查实测：探完 → 服务起来 → 维护锁落下 → 两边同时活着）只能靠
+ * 「查对方 + 登记自己」同处一个临界区来排除，所以权威的那一次由 `acquireMaintenanceLocks`
+ * 在 claim 内做（它自己查在线登记，再加上这里传进去的单例锁探测，覆盖老 build 起的服务）。
+ * 外面那次只是为了早点给人一句好话。
  *
  * 锁**按资源键取满**：`<db>.maintenance.lock` 和 `<runs>.maintenance.lock` 两把，键都先
  * realpath。只锁库是不够的 —— 要改的文件在 runs 里，而另一个库路径（副本、软链、父目录
@@ -91,28 +97,36 @@ process.env.ASH_RUNS_DIR = binding.runsDir;
 
 const { RUNS_DIR } = await import("../src/paths.js");
 const { liveAshHolderForDb } = await import("../src/singleton.js");
-const { acquireMaintenanceLocks, MaintenanceLockError } = await import("../src/maintenance-lock.js");
+const { acquireMaintenanceLocks, AshOnlineError, MaintenanceLockError } =
+  await import("../src/maintenance-lock.js");
 const target = binding.dbFile;
 const productionDb = binding.productionDb;
 const pairedRuns = binding.pairedRuns;
-// 路径之外的那道闸：这份库现在有没有人在用。回填会改 sessions 和 trace 文件，跟运行中的
-// 回合抢同一条线程就会互相覆盖，所以这一条**没有放行开关**。
-const holder = apply ? liveAshHolderForDb(target) : null;
-if (holder) {
-  refuse(
-    `拒绝动手：这份库上还有活着的 ash（PID ${holder.pid}，起于 ${holder.startedAt ?? "不详"}）\n`
-    + `  ${holder.command ?? "命令不详"}\n`
-    + "先停掉它再回填 —— 跑着的回合会跟回填抢同一条线程的累计快照和同一份 trace 文件。",
-  );
-}
+// 路径之外的那道闸：这套资源现在有没有人在用。回填会改 sessions 和 trace 文件，跟运行中
+// 的回合抢同一条线程就会互相覆盖，所以这一条**没有放行开关**。
+//
+// 这里是**早一步的友好提示**，不是那道闸本身 —— 权威的一次在占有锁里（见下面的
+// onlineProbe）。老 build 起的服务只写单例锁、不写在线登记，所以单例锁这条线索要由这里
+// 传进去给 claim 内那次复查用。
+const legacyOnline = (): string | null => {
+  const holder = liveAshHolderForDb(target);
+  if (!holder) return null;
+  return `PID ${holder.pid}（起于 ${holder.startedAt ?? "不详"}）持有 ${target} 的单例锁：`
+    + `${holder.command ?? "命令不详"}`;
+};
+const early = apply ? legacyOnline() : null;
+if (early) refuse(`拒绝动手：这套资源上还有活着的 ash —— ${early}\n先停掉它再回填。`);
 // 真正取锁：挡住「我跑着的时候 ash 起来了」。ash 启动时会读这些锁并拒绝启动。
 // **键取满**：库 + runs 目录都要锁住 —— 要改的 trace 文件在 runs 里，而别的库路径可能
 // 落到同一份 runs 上（见 claude-usage-resources.ts 判据 ③）。
 let release: (() => void) | null = null;
 if (apply) {
   try {
-    release = acquireMaintenanceLocks(binding.lockKeys, "repair-claude-usage").release;
+    release = acquireMaintenanceLocks(binding.lockKeys, "repair-claude-usage", {
+      onlineProbe: legacyOnline,
+    }).release;
   } catch (error) {
+    if (error instanceof AshOnlineError) refuse(error.message);
     if (!(error instanceof MaintenanceLockError)) throw error;
     refuse(`拒绝动手：${error.message}`);
   }
@@ -176,6 +190,17 @@ if (rebased.length) {
   console.log(`补首轮        ${rebased.length} 条会话在改口径后的第一回合把整份累计值记成了增量（标记是 snapshot），已一并求差`);
 }
 console.log("");
+
+// 人工屏障读不出来 = 整盘拒绝。这一条要**单独先说**，否则下面那条「一份 trace 都读不到」
+// 会抢着给出一个完全错的病因（计划层整盘不动时本来就一条 trace 都不读）。
+if (plan.unresolved.kind === "unreadable") {
+  console.log("这一轮整盘不动：上一次回填留下的人工屏障读不出来，谁被挡住不可知。");
+  console.log(`  屏障文件 ${plan.unresolved.file}`);
+  console.log(`  读不出来的原因 ${plan.unresolved.detail}`);
+  console.log("收拾步骤：核对同目录的 .pre-usage-repair 备份 → 确认那几条线程的 trace 和账一致 →");
+  console.log("          删掉那份屏障文件 → 重跑。在那之前这个脚本一个字节都不会写。");
+  process.exit(apply ? 3 : 0);
+}
 
 // 一份都读不到 trace，几乎一定是「只拷了库、没拷 runs」。这时候 --apply 会把账改成
 // 「一条记录都没有」的样子，所以**大声拦下来**而不是安静地啥都不改。

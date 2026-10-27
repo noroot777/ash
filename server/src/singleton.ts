@@ -13,6 +13,7 @@ import {
 import { resolveAshDbFile, ensureAshDbDir } from "./db/path.js";
 import { liveMaintenanceHolderForAny, maintenanceLockFileFor } from "./maintenance-lock.js";
 import { resourceKeysFor, withResourceClaim } from "./resource-claim.js";
+import { type AshPresenceRegistration, registerAshPresence } from "./ash-presence.js";
 import { RUNS_DIR } from "./paths.js";
 import { IS_WINDOWS, isPidAlive, killPidsCommand } from "./platform.js";
 import { inspectProcess as inspectProcessInfo, type ProcessInfo } from "./proc.js";
@@ -169,42 +170,56 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
   // runs 里，而别的库路径（副本、软链）可能落到同一份 runs 上，只按库名锁挡不住。
   const keys = resourceKeysFor(dbFile, RUNS_DIR);
 
-  // 「查维护锁 + 落自己的锁」必须是一个原子动作:两边都「先查对方再建自己」的话，
-  // 存在一串两边都通过检查的合法交错（第 1 轮审查 F2 实测复现），所以整段放进占有锁里。
-  const ownLock = withResourceClaim(keys, `ash 启动 PID ${process.pid}`, () => {
-    // 离线维护（历史回填那类脚本）正在改这份库和它的 trace 时不许起服务:两边各写一半同一条
-    // CLI 线程的账，谁都不知道最后落下的是什么。它是独立的一把锁，判据只认 pid 存活 +
-    // 启动时刻（见 maintenance-lock.ts），所以脚本被强杀之后不会把服务永久挡在外面。
-    //
-    // **这一关排在 ASH_ALLOW_MULTI 前面**:那个开关的语义是「允许多个 ash 并存」，不是
-    // 「允许踩正在迁移的库」—— 放在它后面等于给迁移留了一个一句话就能绕开的后门。
-    const maintenance = liveMaintenanceHolderForAny(keys);
-    if (maintenance) {
-      throw new SingletonConflictError(
-        dbFile,
-        maintenanceLockFileFor(maintenance.key),
-        {
-          pid: maintenance.holder.pid,
-          startedAt: maintenance.holder.startedAt,
-          port: null,
-          command: maintenance.holder.note,
-        },
-        `database is being migrated by an offline maintenance process (resource ${maintenance.key})`,
-      );
-    }
-    if (process.env.ASH_ALLOW_MULTI === "1") {
-      console.warn(
-        `[ash] WARNING: ASH_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,
-      );
-      return null;
-    }
-    return writeOwnLock(dbFile, lockFile, port);
-  });
+  // 「查维护锁 + 登记自己」必须是一个原子动作:两边都「先查对方再建自己」的话，存在一串
+  // 两边都通过检查的合法交错（第 1 轮审查 F2 实测复现），所以整段放进占有锁里。
+  //
+  // **登记的不只是单例锁**:还要在每个资源键上留一份在线记录（ash-presence.ts）。单例锁
+  // 按库命名、而且 `ASH_ALLOW_MULTI=1` 压根不写它，于是「共享同一份 runs 的另一个库路径」
+  // 和「多实例模式」这两种在线写入，离线迁移都探不到（第 3 轮审查 F2）。
+  const acquired = withResourceClaim<{ lock: SingletonLock | null; presence: AshPresenceRegistration }>(
+    keys,
+    `ash 启动 PID ${process.pid}`,
+    () => {
+      // 离线维护（历史回填那类脚本）正在改这份库和它的 trace 时不许起服务:两边各写一半同一条
+      // CLI 线程的账，谁都不知道最后落下的是什么。它是独立的一把锁，判据只认 pid 存活 +
+      // 启动时刻（见 maintenance-lock.ts），所以脚本被强杀之后不会把服务永久挡在外面。
+      //
+      // **这一关排在 ASH_ALLOW_MULTI 前面**:那个开关的语义是「允许多个 ash 并存」，不是
+      // 「允许踩正在迁移的库」—— 放在它后面等于给迁移留了一个一句话就能绕开的后门。
+      const maintenance = liveMaintenanceHolderForAny(keys);
+      if (maintenance) {
+        throw new SingletonConflictError(
+          dbFile,
+          maintenanceLockFileFor(maintenance.key),
+          {
+            pid: maintenance.holder.pid,
+            startedAt: maintenance.holder.startedAt,
+            port: null,
+            command: maintenance.holder.note,
+          },
+          `database is being migrated by an offline maintenance process (resource ${maintenance.key})`,
+        );
+      }
+      if (process.env.ASH_ALLOW_MULTI === "1") {
+        console.warn(
+          `[ash] WARNING: ASH_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,
+        );
+        // 放弃排他不等于放弃「让别人看见我在线」:离线迁移据此拒绝开跑。
+        const shared = registerAshPresence(keys, { port, mode: "shared" });
+        installPresenceCleanup(shared);
+        return { lock: null, presence: shared };
+      }
+      const lock = writeOwnLock(dbFile, lockFile, port);
+      return { lock, presence: registerAshPresence(keys, { port, mode: "exclusive" }) };
+    },
+  );
+  const { lock: ownLock, presence } = acquired;
   if (!ownLock) return null;
 
   try {
     const holders = findLiveAshDbHolders(dbFile).filter((p) => p.pid !== process.pid);
     if (holders.length > 0) {
+      presence.release();
       ownLock.release();
       const holder = holders[0]!;
       throw new SingletonConflictError(
@@ -221,13 +236,36 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
     }
   } catch (e) {
     if (e instanceof SingletonConflictError) throw e;
+    presence.release();
     ownLock.release();
     throw e;
   }
 
-  installCleanup(ownLock);
+  // **放锁就等于下线**：`release()` 要是只删锁文件，在线登记就会一直留到进程退出，于是
+  // 「锁已经放了」和「还有 ash 在线占着这套资源」同时成立，离线回填被一份幽灵记录挡住。
+  // 退出清理照旧装（信号/崩溃那条路没人调 release），两边都幂等。
+  const lock = withPresenceRelease(ownLock, presence);
+  installCleanup(lock, presence);
   rotateExitLedger(dbFile);
-  return ownLock;
+  return lock;
+}
+
+/** 把在线登记的释放绑进锁的 `release()`：先下线，再放锁。 */
+function withPresenceRelease(lock: SingletonLock, presence: AshPresenceRegistration): SingletonLock {
+  return {
+    dbFile: lock.dbFile,
+    lockFile: lock.lockFile,
+    release: () => {
+      presence.release();
+      return lock.release();
+    },
+  };
+}
+
+/** ASH_ALLOW_MULTI 那条路没有锁对象可挂，所以在线登记单独装一次退出清理。 */
+function installPresenceCleanup(registration: AshPresenceRegistration): void {
+  process.once("exit", () => registration.release());
+  for (const signal of EXIT_SIGNALS) process.once(signal, () => registration.release());
 }
 
 function writeOwnLock(dbFile: string, lockFile: string, port: number | null): SingletonLock {
@@ -567,7 +605,7 @@ const SIGNAL_EXIT_CODE: Partial<Record<NodeJS.Signals, number>> = {
  * 释放结果不进账本:那是**释放之后**才知道的事,再补一条更晚的记录也证明不了终态
  * (标记之后还有窗口),它只进日志。
  */
-function installCleanup(lock: SingletonLock) {
+function installCleanup(lock: SingletonLock, presence: AshPresenceRegistration | null) {
   const startedAtMs = Date.now() - Math.round(process.uptime() * 1000);
   const runId = runIdOfToken(ownLockToken ?? "");
   let recorded = false;
@@ -585,6 +623,7 @@ function installCleanup(lock: SingletonLock) {
       code,
       uptimeMs: Date.now() - startedAtMs,
     });
+    presence?.release();
     lock.release();
   });
   for (const signal of EXIT_SIGNALS) {

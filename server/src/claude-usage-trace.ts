@@ -11,15 +11,23 @@
 // 这个文件只管单份文件的三件事：**算**（prepare，不落盘）、**写**（write）、**还原**
 // （restore）。「谁跟谁一起成败」是提交协议的事，归 claude-usage-apply.ts。
 //
-// 三条自保：
+// 四条自保：
 // ① 只动被判定要改的那几条 usage 行，其余行**原样保留**（按行处理，不整份重新序列化）；
 // ② 第一次改写前把原文件留一份 `.pre-usage-repair` 备份；
 // ③ **校验的是内容身份，不只是位置**：每条编辑都带着计划当时读到的原值，对不上就整份
 //    不动。只核对「第 n 条 usage 命中了」是不够的 —— 计划之后文件要是被追加或改过，
 //    同一个下标上很可能已经是另一份数字，照写就是拿陈旧计划盖掉新内容（第 2 轮审查 F2）。
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+// ④ **每一个真要落盘的路径都要落在本资源集的 runs 根里面**，按 realpath 判，不按名字判。
+//    绑定层只验到 runs 根是不够的：隔离副本里任意一级任务目录是条软链，根目录那一关全过
+//    得去，写进去的却是源库的历史（第 3 轮审查 F1 实测 `copy/runs/smoke ->
+//    source/runs/smoke`，源 trace 被改成 delta）。写集不止那份 trace —— 备份、临时文件、
+//    回滚文件都算，它们跟着同一个（可能是软链的）父目录走。
+import { existsSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { TokenUsage, UsageAccountingMark } from "@ash/shared";
 import { parseSessionTrace, readableRunPath, sessionTracePath } from "./transcript.js";
+import { RUNS_DIR } from "./paths.js";
+import { withinResource } from "./resource-claim.js";
 
 /** 落盘口径：undefined / incremental 都是「改口径之前的旧账」，见 shared 的 UsageAccountingMark。 */
 export type LegacyMark = UsageAccountingMark | undefined;
@@ -51,6 +59,53 @@ export type SessionTraceRewrite = {
 };
 
 export const TRACE_BACKUP_SUFFIX = ".pre-usage-repair";
+const TRACE_TEMP_SUFFIX = ".repair-tmp";
+const TRACE_ROLLBACK_SUFFIX = ".repair-rollback";
+
+/**
+ * 这份改写**实际会碰到的全部路径**。备份和两个临时文件一并算进来：它们跟 trace 共一个
+ * 父目录，父目录是软链的话它们一样会落到别人家。
+ */
+export function traceWriteSet(path: string): string[] {
+  return [
+    path,
+    `${path}${TRACE_BACKUP_SUFFIX}`,
+    `${path}${TRACE_TEMP_SUFFIX}`,
+    `${path}${TRACE_ROLLBACK_SUFFIX}`,
+  ];
+}
+
+/** 写集里真实落点跑到本资源集 runs 根外面的那些路径（空数组 = 都在里面）。 */
+export function escapedWritePaths(path: string): string[] {
+  return traceWriteSet(path).filter((item) => !withinResource(RUNS_DIR, item));
+}
+
+/**
+ * 这一份改写越界了吗 —— 越界就给出那句给人看的话（null = 没越界）。
+ *
+ * 调用点有两处，**故意重复**：apply 的独立闸拿它整轮拒绝（一条越界就一个字节都不写），
+ * 这个文件自己的 write/restore 再各判一次，所以绕过闸直接调写入函数也写不出去。
+ */
+export function traceEscapeReason(taskId: string, sessionId: string): string | null {
+  const path = sessionTracePath(taskId, sessionId);
+  const escaped = escapedWritePaths(path);
+  if (escaped.length === 0) return null;
+  return `${taskId}/${sessionId}：写入点不在本次隔离资源集里（runs 根 ${RUNS_DIR}）—— `
+    + `${escaped.map((item) => `${item} → ${canonicalOf(item)}`).join("；")}。`
+    + "多半是某一级目录是条指向别处的软链：改写、备份和临时文件都会落到那边去，整轮拒绝。";
+}
+
+const canonicalOf = (item: string): string => {
+  try {
+    return realpathSync(item);
+  } catch {
+    try {
+      return join(realpathSync(dirname(item)), basename(item));
+    } catch {
+      return item;
+    }
+  }
+};
 
 const TOKEN_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "reasoning", "turns"] as const;
 const sameReported = (a: TokenUsage, b: TokenUsage) =>
@@ -92,6 +147,8 @@ export function prepareTraceRewrite(rewrite: SessionTraceRewrite): PreparedTrace
   // 预览实例的 RUNS_FALLBACK_DIR 指着主仓的 data/runs；本实例没有这份文件时读会回退到
   // 那边，但写**绝不允许**落在别人的历史上。
   if (readableRunPath(path) !== path) return `${where}：trace 只存在于只读回退目录，不改写`;
+  const escaped = traceEscapeReason(rewrite.taskId, rewrite.sessionId);
+  if (escaped) return escaped;
   let original: string;
   try {
     original = readFileSync(path, "utf8");
@@ -128,27 +185,39 @@ export function prepareTraceRewrite(rewrite: SessionTraceRewrite): PreparedTrace
 /** 落盘（临时文件 + rename）。成功返回 null，失败返回说明。 */
 export function writePreparedTrace(item: PreparedTrace): string | null {
   const where = `${item.rewrite.taskId}/${item.rewrite.sessionId}`;
+  const escaped = traceEscapeReason(item.rewrite.taskId, item.rewrite.sessionId);
+  if (escaped) return escaped;
+  const temp = `${item.path}${TRACE_TEMP_SUFFIX}`;
   try {
     const backup = `${item.path}${TRACE_BACKUP_SUFFIX}`;
     if (!existsSync(backup)) writeFileSync(backup, item.original);
-    const temp = `${item.path}.repair-tmp`;
     writeFileSync(temp, item.next);
     renameSync(temp, item.path);
     return null;
   } catch (error) {
+    // 没发布出去的临时文件一律清掉:失败会被重试，攒一堆 .repair-tmp 只会让下一个人
+    // 分不清哪份是哪份（第 3 轮审查 N1）。
+    discard(temp);
     return `${where}：写回失败（${(error as Error).message}）`;
   }
+}
+
+function discard(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch { /* 没建起来、或者已经 rename 走了 */ }
 }
 
 /** 把已经写下去的那一份还原成原内容。成功返回 null，失败返回说明。 */
 export function restorePreparedTrace(item: PreparedTrace): string | null {
   const where = `${item.rewrite.taskId}/${item.rewrite.sessionId}`;
+  const temp = `${item.path}${TRACE_ROLLBACK_SUFFIX}`;
   try {
-    const temp = `${item.path}.repair-rollback`;
     writeFileSync(temp, item.original);
     renameSync(temp, item.path);
     return null;
   } catch (error) {
+    discard(temp);
     return `${where}：回滚失败，文件仍是改写后的内容（${(error as Error).message}）`;
   }
 }

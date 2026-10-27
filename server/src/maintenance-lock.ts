@@ -11,9 +11,13 @@
 // 两个方向都挡：
 // ① 维护脚本之间：原子建锁文件，已经有活着的持有者就直接拒。
 // ② 维护脚本和 ash 服务之间：`acquireDbSingletonLock` 起手会查这些锁（见 singleton.ts），
-//    迁移跑着的时候服务起不来，而服务跑着的时候脚本那边的 `liveAshHolderForDb` 会拒。
-//    **两边的「查对方 + 建自己」都包在同一把占有锁里**（resource-claim.ts），否则这两个
-//    合成动作可以交错成「谁都通过了检查」。
+//    迁移跑着的时候服务起不来；反方向则由**占有锁里的在线复查**负责 —— 下面取锁时会在
+//    claim 内重新查一遍 ash 的在线登记（ash-presence.ts）。
+//
+// **两边的「查对方 + 登记自己」必须都在同一把占有锁里**（resource-claim.ts）。只有一边
+// 包起来是不够的：第 3 轮审查 F2 用真实服务实测了剩下那条交错 —— 迁移在 claim 之外探了
+// 一次「没有 ash」，服务随后拿到 claim 起来并写下自己的锁，迁移再拿到 claim 写维护锁，
+// 两边同时活着（`BOTH_LIVE`，服务 /api/health 仍返回 200）。所以探活不能留在 claim 外面。
 //
 // **为什么不复用 ash 自己那把单例锁**：`staleLockReason` 要求持有者的命令行长得像
 // `node server/dist/index.js`，脚本的命令行对不上，于是服务会把脚本的锁判成陈旧锁直接
@@ -30,6 +34,7 @@ import { resolveAshDbFile } from "./db/path.js";
 import { isPidAlive } from "./platform.js";
 import { inspectProcess } from "./proc.js";
 import { atomicCreateWithContent, withResourceClaim } from "./resource-claim.js";
+import { describeAshPresence, liveAshPresenceForAny } from "./ash-presence.js";
 
 const SUFFIX = ".maintenance.lock";
 /** 进程启动时刻的比对容差，跟 singleton.ts 同一个量级。 */
@@ -60,6 +65,15 @@ export type MaintenanceHolder = {
   acquiredAt: string | null;
   note: string;
 };
+
+/** 取锁时在 claim 内发现这套资源上还有活着的 ash。 */
+export class AshOnlineError extends Error {
+  constructor(public readonly detail: string) {
+    super(`拒绝动手：这套资源上还有活着的 ash —— ${detail}\n`
+      + "先停掉它再回填 —— 跑着的回合会跟回填抢同一条线程的累计快照和同一份 trace 文件。");
+    this.name = "AshOnlineError";
+  }
+}
 
 export class MaintenanceLockError extends Error {
   constructor(public readonly holder: MaintenanceHolder, public readonly lockFile: string) {
@@ -129,54 +143,82 @@ export type MaintenanceLock = { lockFiles: string[]; release: () => void };
 export function acquireMaintenanceLocks(
   keys: readonly string[],
   note = process.argv.slice(1).join(" "),
+  options: {
+    /**
+     * 额外的在线探测，**在 claim 里**跑。默认那条只认新版的在线登记；老 build 起的服务
+     * 只写单例锁，调用方（CLI）把 `liveAshHolderForDb` 从这里补进来。返回非空 = 拒绝。
+     */
+    onlineProbe?: () => string | null;
+  } = {},
 ): MaintenanceLock {
   const unique = [...new Set(keys)];
   return withResourceClaim(unique, `维护取锁：${note}`, () => {
+    // ── claim 内复查在线服务 ────────────────────────────────────────────────
+    // claim 之外探一次只能证明「那一刻没有」。真正的互斥要求「查对方」和「登记自己」在
+    // 同一个临界区里，所以这一查必须在这儿，不能留在调用方的 claim 外面。
+    const online = liveAshPresenceForAny(unique);
+    if (online) throw new AshOnlineError(describeAshPresence(online));
+    const extra = options.onlineProbe?.();
+    if (extra) throw new AshOnlineError(extra);
+
     const taken: { file: string; token: string }[] = [];
     const rollback = () => {
       for (const item of [...taken].reverse()) releaseLock(item.file, item.token);
     };
-    for (const key of unique) {
-      const lockFile = maintenanceLockFileFor(key);
-      mkdirSync(dirname(lockFile), { recursive: true });
-      const processStartedAtMs = Date.now() - Math.round(process.uptime() * 1000);
-      const lock: LockFile = {
-        pid: process.pid,
-        processStartedAt: new Date(processStartedAtMs).toISOString(),
-        processStartedAtMs,
-        acquiredAt: new Date().toISOString(),
-        note,
-        token: randomUUID(),
-        key,
-      };
-      // 一次就够:占有锁已经把并发挡在外面了,这里剩下的只有「上一次留下的陈旧锁」。
-      if (!atomicCreateWithContent(lockFile, JSON.stringify(lock, null, 2))) {
-        const holder = liveMaintenanceHolderFor(key);
-        if (holder) {
-          rollback();
-          throw new MaintenanceLockError(holder, lockFile);
-        }
-        try {
-          unlinkSync(lockFile); // 陈旧锁，清掉再来
-        } catch { /* 别人同时清了 */ }
-        if (!atomicCreateWithContent(lockFile, JSON.stringify(lock, null, 2))) {
-          rollback();
-          throw new MaintenanceLockError(
-            liveMaintenanceHolderFor(key)
-              ?? { pid: -1, startedAt: null, acquiredAt: null, note: "锁文件反复被占" },
-            lockFile,
-          );
-        }
-      }
-      taken.push({ file: lockFile, token: lock.token });
+    try {
+      return takeAll(unique, note, taken);
+    } catch (error) {
+      // **任何**出口都要把已经取到的那几把放回去，不只是冲突那一条分支:第二个键的
+      // mkdir/write/link 抛个普通异常，第一把锁留在盘上会以活 PID 把服务挡在外面
+      // （第 3 轮审查 N2）。
+      rollback();
+      throw error;
     }
-    return {
-      lockFiles: taken.map((item) => item.file),
-      release: () => {
-        for (const item of [...taken].reverse()) releaseLock(item.file, item.token);
-      },
-    };
   });
+}
+
+/** 逐个键把长命锁落下来。已取到的都 push 进 `taken`，失败时由调用方统一回滚。 */
+function takeAll(
+  unique: string[],
+  note: string,
+  taken: { file: string; token: string }[],
+): MaintenanceLock {
+  for (const key of unique) {
+    const lockFile = maintenanceLockFileFor(key);
+    mkdirSync(dirname(lockFile), { recursive: true });
+    const processStartedAtMs = Date.now() - Math.round(process.uptime() * 1000);
+    const lock: LockFile = {
+      pid: process.pid,
+      processStartedAt: new Date(processStartedAtMs).toISOString(),
+      processStartedAtMs,
+      acquiredAt: new Date().toISOString(),
+      note,
+      token: randomUUID(),
+      key,
+    };
+    // 一次就够:占有锁已经把并发挡在外面了,这里剩下的只有「上一次留下的陈旧锁」。
+    if (!atomicCreateWithContent(lockFile, JSON.stringify(lock, null, 2))) {
+      const holder = liveMaintenanceHolderFor(key);
+      if (holder) throw new MaintenanceLockError(holder, lockFile);
+      try {
+        unlinkSync(lockFile); // 陈旧锁，清掉再来
+      } catch { /* 别人同时清了 */ }
+      if (!atomicCreateWithContent(lockFile, JSON.stringify(lock, null, 2))) {
+        throw new MaintenanceLockError(
+          liveMaintenanceHolderFor(key)
+            ?? { pid: -1, startedAt: null, acquiredAt: null, note: "锁文件反复被占" },
+          lockFile,
+        );
+      }
+    }
+    taken.push({ file: lockFile, token: lock.token });
+  }
+  return {
+    lockFiles: taken.map((item) => item.file),
+    release: () => {
+      for (const item of [...taken].reverse()) releaseLock(item.file, item.token);
+    },
+  };
 }
 
 /** 单键的便捷入口（测试和只改库的场景用）。 */

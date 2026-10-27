@@ -12,8 +12,10 @@
 //
 // 所以协议是三段，一段都不能省：
 //
-// ① **独立闸**（不写任何东西）：两件事。先自己读一遍人工屏障的状态 —— 读不出来就整盘拒绝
-//    （「不知道该挡谁」不是「谁都不用挡」，第 1 轮审查 F3）；再逐条复核计划的写入边界 ——
+// ① **独立闸**（不写任何东西）：三件事。先自己读一遍人工屏障的状态 —— 读不出来就整盘拒绝
+//    （「不知道该挡谁」不是「谁都不用挡」，第 1 轮审查 F3），有效记录点名的线程则连它的
+//    账、trace 和**累计快照**一起挡（快照曾漏在闸外，第 3 轮审查 F3）；再核对**整份写集的
+//    真实落点**都在本资源集的 runs 根里面（第 3 轮审查 F1）；最后逐条复核计划的写入边界 ——
 //    只有 `action.kind === "update"` 且口径是 cumulative 的条目才允许落账。这一整段**故意
 //    跟计划层重复**：跳过项不许落账是个不变量，不能只靠产出计划那一层自觉，上一版就是靠
 //    「after 非空」单点判断才让 uncertain 的条目落了账。有一条过不了就整轮不写。
@@ -35,6 +37,7 @@ import {
   type PreparedTrace,
   prepareTraceRewrite,
   restorePreparedTrace,
+  traceEscapeReason,
   writePreparedTrace,
 } from "./claude-usage-trace.js";
 import { CLAUDE_REPAIR_MARKER, type ClaudeUsageRepairPlan } from "./claude-usage-repair.js";
@@ -94,6 +97,18 @@ function refuseUnwritable(plan: ClaudeUsageRepairPlan): string[] {
         refused.push(`${rewrite.sessionId}：线程 ${rewrite.cliSessionId} 还在隔离记录里，不许改写 trace`);
       }
     }
+    // 快照也是写集的一部分:屏障是在计划算完之后才出现的那种情况下，计划层不会替这一闸
+    // 过滤掉它，而「待建基线」的快照照样是往表里写一行。
+    for (const snapshot of plan.snapshots) {
+      if (blocked.has(threadOf(snapshot.sourceId))) {
+        refused.push(`${snapshot.sourceId}：线程还在隔离记录里，不许写累计快照`);
+      }
+    }
+  }
+  // 写集的真实落点:一条越界就整轮拒绝（不是只跳过那一份）。
+  for (const rewrite of plan.traces) {
+    const escaped = traceEscapeReason(rewrite.taskId, rewrite.sessionId);
+    if (escaped) refused.push(escaped);
   }
   for (const item of plan.sessions) {
     if (item.action.kind !== "update") continue;
