@@ -38,6 +38,45 @@ export function gateScenePath(logPath: string): string {
   return `${logPath}.scene`;
 }
 
+/**
+ * 一份门禁日志**是一组文件**：命令自己的输出，加上 ash 的两个诊断附件。
+ *
+ * 由来（第 8 轮审查 F1）：上面把一份日志拆成三个文件之后，日志的**生成和读取**都跟着
+ * 改了，但「这份日志有没有、要不要带走」这类判断散在别处，还按「那个 `.log` 在不在」
+ * 一个文件算。于是接力打包静默丢掉现场（对端只剩命令原始输出）、原始日志被单独清掉时
+ * 接口直接 404（手上明明还存着「停在哪一条」）。所以凡是要整份地枚举、搬运、判断可用性
+ * 的地方，都从这里取，别再各自写 `existsSync(logPath)`。
+ *
+ * 传路径得路径、传文件名得文件名 —— 两个后缀都是纯拼接，同一个函数两边都能用。
+ */
+export function gateLogFileNames(log: string): string[] {
+  return [log, gateNotesPath(log), gateScenePath(log)];
+}
+
+/** 这份日志现在磁盘上还剩哪几个文件。全没了就是空数组。 */
+export function gateLogFiles(logPath: string): string[] {
+  return gateLogFileNames(logPath).filter(path => existsSync(path));
+}
+
+/**
+ * 还有没有东西可看。**不等于原始输出还在**：原始日志被单独清掉、现场还在的时候，
+ * 「停在哪一条、静了多久」照样读得出来，这时候把按钮置灰、接口回 404，等于把手上
+ * 攥着的那份证据藏起来。
+ */
+export function gateLogReadable(logPath: string): boolean {
+  return gateLogFiles(logPath).length > 0;
+}
+
+/**
+ * 这个**文件名**属不属于某份门禁日志（原始输出或诊断附件）。
+ *
+ * 精确放行，不许图省事泛化成 `accept-gate-*`：同一个目录下还住着开跑/停止/进程归属那几份
+ * 控制文件，它们跟着接力走只会在对端造出假的进程身份；写到一半的 `.scene.part` 也在外面。
+ */
+export function isGateLogFile(name: string): boolean {
+  return /^accept-gate-[A-Za-z0-9_-]+\.log(\.notes|\.scene)?$/.test(name);
+}
+
 /** 记一条 ash 自己的进度/提示。**不碰门禁日志**，所以它永远不会跟命令的输出粘在一起。 */
 export function appendGateNote(logPath: string, line: string): boolean {
   try {

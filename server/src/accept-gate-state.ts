@@ -1,10 +1,10 @@
 import { and, desc, eq, or } from "drizzle-orm";
-import { existsSync } from "node:fs";
 import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
 import { readGateLaunch } from "./accept-gate-launch.js";
 import { normalizeAcceptGateCommand, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateFailure, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
+import { gateLogReadable } from "./accept-gate-diagnosis.js";
 import { acceptGateLogTail } from "./accept-gate-process.js";
 import { commitAt } from "./task-branch-plan.js";
 import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
@@ -36,7 +36,7 @@ export const gateView = (row: GateRow): AcceptGateView => ({
   fastForward: row.fastForward ?? null,
   stale: false,
   logPath: row.logPath,
-  logAvailable: existsSync(row.logPath),
+  logAvailable: gateLogReadable(row.logPath),
   logTail: acceptGateLogTail(row.logPath),
   handoff: row.handoffAt ? { at: row.handoffAt, error: row.handoffError ?? null } : null,
   processPending: row.processPending,
