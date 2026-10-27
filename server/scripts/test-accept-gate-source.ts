@@ -254,9 +254,9 @@ try {
     git(named, "config", "user.name", "gate");
     git(named, "config", "user.email", "gate@example.test");
     git(named, "config", "core.hooksPath", "/dev/null");
-    // Windows 默认 core.autocrlf=true,checkout 会把 LF 写成 CRLF,于是「快照里的内容就是提交的
-    // 那一份」这条断言在那台机器上必然不成立。在断言里归一换行会把这条断言变成空话(它要问的恰恰
-    // 是字节),所以关掉 fixture 自己这个 repo 的转换,两个平台走同一条路。
+    // 让**提交里**存的字节两个平台一致(Windows 默认 core.autocrlf=true,git add 会把 LF 换成
+    // CRLF 再存)。注意它管不到快照那一侧:快照是 git clone 出来的新仓库,不继承这条 config,
+    // checkout 仍按那台机器的默认转换——所以下面比的是归一之后的内容,理由写在那里。
     git(named, "config", "core.autocrlf", "false");
     writeFileSync(join(named, "package.json"), '{"name":"named-file","version":"1.0.0"}');
     writeFileSync(join(named, "vendor"), "这是一个普通文件，不是依赖目录\n");
@@ -269,7 +269,12 @@ try {
     const target = join(root, "named-file-snapshot");
     await createGateSnapshot(named, target, source);
     assert.equal(lstatSync(join(target, "vendor")).isSymbolicLink(), false, "它必须按源码冻进快照");
-    assert.equal(readFileSync(join(target, "vendor"), "utf8"), "这是一个普通文件，不是依赖目录\n");
+    // 比的是归一之后的内容,不是原始字节。这条用例问的是「同名的普通文件有没有被当成依赖目录」,
+    // 而快照里的换行由 git 在那台机器上的 core.autocrlf 决定(快照是克隆出来的新仓库,不继承
+    // fixture 的 config)——那是另一层的事,拿这条用例去断言它,只会让同一条用例在两个平台上问
+    // 不同的问题。真正把这条缺陷钉住的是下面那句「改掉它必须判脏」:上一版会放行。
+    assert.equal(readFileSync(join(target, "vendor"), "utf8").replace(/\r\n/g, "\n"),
+      "这是一个普通文件，不是依赖目录\n", "它的内容必须是提交里那一份(换行按平台归一)");
     // 它既然是源码,命令改了它就必须被拦住——这正是上一版会放行的那条路。
     writeFileSync(join(target, "vendor"), "被命令改掉了\n");
     assert.equal(await verifyGateSnapshot(target, source), false, "改掉它必须判成「测试改了被测源码」");
