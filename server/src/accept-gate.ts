@@ -153,11 +153,11 @@ export async function acceptGateCheck(
 
   const cwd = await prepareGateCwd(task, project.repoPath);
   let source: GateSource;
-  try { source = await readGateSource(cwd); }
+  try { source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity")); }
   catch (error) {
     if (opts.intent !== "skip") return { accepted: false, httpStatus: 409, taskId: task.id,
       reason: "accept_gate_source_unavailable", error: String(error), status: task.status };
-    source = { commit: null, fingerprint: "", dependencies: [] };
+    source = { commit: null, fingerprint: "", dependencies: [], ambient: "" };
   }
   const head = source.commit;
 
@@ -259,7 +259,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       status: "running", exitCode: null, failure: null, pid: null, processPending: true, logPath,
       executionMode: gateExecutionNotice() ? "macos-observed" : null,
       sourceCommit: plan.sourceCommit, targetBranch: plan.targetBranch, targetCommit: plan.targetCommit,
-      sourceFingerprint: plan.source.fingerprint,
+      sourceFingerprint: plan.source.fingerprint, sourceAmbient: plan.source.ambient,
       fastForward: plan.fastForward, acceptOptions: JSON.stringify(plan.choices), startedAt, finishedAt: null,
     });
     inserted = true;
@@ -391,7 +391,10 @@ async function settleGate(
     await noteIfStillAlive(row.taskId, row.logPath, stopped);
     if (outcome.status === "passed" && !stopped) outcome = { status: "failed", exitCode: outcome.exitCode, failure: "process_unconfirmed" };
     if (outcome.status === "passed" && !await verifyGateSnapshot(row.cwd, {
+      // ambient 不参与收尾核验:那一项问的是「依赖输入还新不新鲜」(复用判据),这里问的是
+      // 「这份副本还是不是当初那一份」。原样带上 DB 里记的那一份，不另算一次。
       commit: row.sourceCommit, fingerprint: row.sourceFingerprint ?? "", dependencies: [],
+      ambient: row.sourceAmbient ?? "",
     })) outcome = { status: "failed", exitCode: outcome.exitCode, failure: "source_changed" };
     const timer = live.get(row.taskId);
     const finishedAt = now();
@@ -582,7 +585,7 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   if (await runningRun(task.id)) return true;
   const cwd = await existingTaskWorkspacePath(task, project.repoPath);
   if (!cwd) return true;
-  const source = await readGateSource(cwd).catch(() => null);
+  const source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity")).catch(() => null);
   if (!source) return false;
   const previous = await latestRun(task.id);
   return !(previous && previous.status === "passed"

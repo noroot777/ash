@@ -1,0 +1,254 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+const root = realpathSync(mkdtempSync(join(tmpdir(), "ash-gate-plan-")));
+process.env.ASH_RUNS_DIR = join(root, "execution", "data", "runs");
+const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, verifyGateSnapshot } =
+  await import("../src/accept-gate-source.js");
+const { resolutionInputs } = await import("../src/accept-gate-resolution.js");
+const { ambientDigest } = await import("../src/accept-gate-deps.js");
+const save = (path: string, content: string) => {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content);
+};
+const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args],
+  { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+const npm = (cwd: string, ...args: string[]) => execFileSync(
+  process.platform === "win32" ? "cmd.exe" : "npm",
+  process.platform === "win32" ? ["/d", "/s", "/c", `npm ${args.map(arg => JSON.stringify(arg.replace(/\\/g, "/"))).join(" ")}`] : args,
+  { cwd, encoding: "utf8", windowsVerbatimArguments: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+const install = (cwd: string, ...args: string[]) => npm(cwd, "install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", ...args);
+const commit = (cwd: string) => { git(cwd, "add", "-A"); git(cwd, "commit", "-qm", "fixture"); };
+const manifest = (cwd: string) => JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
+const project = (name: string, fields: object = {}) => {
+  const cwd = join(root, name);
+  mkdirSync(cwd, { recursive: true });
+  git(cwd, "init", "-b", "main");
+  git(cwd, "config", "user.name", "Gate Plan Test");
+  git(cwd, "config", "user.email", "gate@example.test");
+  git(cwd, "config", "core.autocrlf", "false");
+  save(join(cwd, ".gitignore"), "node_modules/\ndata/\n.worktrees/\n");
+  save(join(cwd, "package.json"), JSON.stringify({ name, version: "1.0.0", private: true, ...fields }));
+  return cwd;
+};
+const ownPackage = (cwd: string, directory: string, value: string) => {
+  save(join(cwd, directory, "package.json"), JSON.stringify({ name: "@demo/lib", version: "1.0.0", type: "module", main: "index.mjs" }));
+  save(join(cwd, directory, "index.mjs"), `export const value = ${JSON.stringify(value)};\n`);
+};
+const pack = (name: string, version: string, body: string) => {
+  const cwd = join(root, `pack-${name}-${version}`);
+  save(join(cwd, "package.json"), JSON.stringify({ name, version, type: "module", main: "index.mjs" }));
+  save(join(cwd, "index.mjs"), body);
+  return join(cwd, npm(cwd, "pack", "--offline", "--ignore-scripts", "--silent").split(/\r?\n/).pop()!);
+};
+const probe = (cwd: string, spec: string) => {
+  const script = `import(${JSON.stringify(spec)}).then(m=>console.log(m.value))`;
+  return execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd, encoding: "utf8" }).trim();
+};
+
+try {
+  const consumer = pack("plain-consumer", "1.0.0", 'export { value } from "@demo/lib";\n');
+  const host = project("shadowed", { workspaces: ["packages/*"], devDependencies: { "plain-consumer": `file:${consumer}` } });
+  ownPackage(host, "packages/lib", "MAIN_OLD");
+  install(host);
+  commit(host);
+  const task = join(host, ".worktrees", "task");
+  git(host, "worktree", "add", "--detach", task, "HEAD");
+  ownPackage(task, "packages/lib", "TASK_NEW");
+  commit(task);
+  npm(task, "ci", "--omit=dev", "--offline", "--ignore-scripts", "--no-audit", "--no-fund");
+  assert.equal(existsSync(join(task, "node_modules", "plain-consumer")), false);
+  assert.equal(probe(task, "@demo/lib"), "TASK_NEW");
+  assert.equal(probe(task, "plain-consumer"), "MAIN_OLD");
+  const hiddenTarget = join(host, "data", "runs", "hidden.source");
+  const hiddenSource = await readGateSource(task, hiddenTarget);
+  await assert.rejects(createGateSnapshot(task, hiddenTarget, hiddenSource), error => {
+    assert.match(String(error), /无法证明隔离/);
+    assert.ok(String(error).includes(join(host, "node_modules")));
+    assert.match(String(error), /安装提供 plain-consumer 的依赖/);
+    assert.match(String(error), /ASH_RUNS_DIR/);
+    return true;
+  });
+  assert.equal(existsSync(hiddenTarget), false);
+  assert.equal(probe(host, "plain-consumer"), "MAIN_OLD");
+  const isolatedTarget = join(root, "isolated-runs", "isolated.source");
+  await createGateSnapshot(task, isolatedTarget, await readGateSource(task, isolatedTarget));
+  assert.equal(probe(isolatedTarget, "@demo/lib"), "TASK_NEW");
+  npm(task, "ci", "--offline", "--ignore-scripts", "--no-audit", "--no-fund");
+  const alignedTarget = join(host, "data", "runs", "aligned.source");
+  await createGateSnapshot(task, alignedTarget, await readGateSource(task, alignedTarget));
+  assert.equal(probe(alignedTarget, "plain-consumer"), "TASK_NEW");
+  const leaf = project("external-leaf", { type: "module", main: "index.mjs" });
+  save(join(leaf, "index.mjs"), 'export const value = "LEAF";\n');
+  commit(leaf);
+  install(host, `external-only@file:${leaf}`);
+  const selectedTarget = join(host, "data", "runs", "selected.source");
+  await createGateSnapshot(task, selectedTarget, await readGateSource(task, selectedTarget));
+  const ancestor = (await resolutionInputs([selectedTarget])).find(input => input.path === join(host, "node_modules"))!;
+  assert.deepEqual(ancestor.selected.map(item => item.entry), ["external-only"]);
+  assert.ok(ancestor.entries.length > ancestor.selected.length);
+  assert.equal(probe(selectedTarget, "plain-consumer"), "TASK_NEW");
+  assert.equal(probe(selectedTarget, "external-only"), "LEAF");
+
+  for (const relocate of [false, true]) {
+    const built = project(`built-cli-${relocate}`, { workspaces: ["packages/*"] });
+    save(join(built, ".gitignore"), "node_modules/\ndata/\n.worktrees/\ndist/\n");
+    ownPackage(built, "packages/lib", "MAIN_OLD");
+    const builtManifest = manifest(join(built, "packages/lib"));
+    builtManifest.bin = { "build-cli": "dist/cli.mjs" };
+    builtManifest.main = "dist/index.mjs";
+    save(join(built, "packages/lib/package.json"), JSON.stringify(builtManifest));
+    save(join(built, "packages/lib/build.mjs"), 'import { mkdirSync, writeFileSync } from "node:fs";\n'
+      + 'const dist = new URL("./dist/", import.meta.url); mkdirSync(dist, { recursive: true });\n'
+      + 'writeFileSync(new URL("cli.mjs", dist), \'import { value } from "../index.mjs"; console.log(value);\\n\');\n'
+      + 'writeFileSync(new URL("index.mjs", dist), \'export { value } from "../index.mjs";\\n\');\n');
+    execFileSync(process.execPath, [join(built, "packages/lib/build.mjs")]);
+    install(built);
+    const installedCli = join(built, "node_modules", ".bin", "build-cli");
+    for (const suffix of ["", ".cmd", ".ps1"]) rmSync(installedCli + suffix, { force: true });
+    symlinkSync(join("..", "@demo", "lib", "dist", "cli.mjs"), installedCli, "file");
+    commit(built);
+    const builtTask = join(built, ".worktrees", "task");
+    git(built, "worktree", "add", "--detach", builtTask, "HEAD");
+    const packageDirectory = relocate ? "packages/relocated" : "packages/lib";
+    if (relocate) git(builtTask, "mv", "packages/lib", packageDirectory);
+    save(join(builtTask, packageDirectory, "index.mjs"), 'export const value = "TASK_BUILT";\n');
+    commit(builtTask);
+    const builtTarget = join(built, "data", "runs", "build.source");
+    const builtSource = await readGateSource(builtTask, builtTarget);
+    await createGateSnapshot(builtTask, builtTarget, builtSource);
+    const snapshotCli = join(builtTarget, "node_modules", ".bin", "build-cli");
+    assert.equal(lstatSync(snapshotCli).isSymbolicLink(), true);
+    assert.equal(existsSync(snapshotCli), false);
+    assert.equal(await verifyGateSnapshot(builtTarget, builtSource), true);
+    execFileSync(process.execPath, [join(builtTarget, packageDirectory, "build.mjs")]);
+    assert.equal(execFileSync(process.execPath, [snapshotCli], { encoding: "utf8" }).trim(), "TASK_BUILT");
+    assert.equal(probe(builtTarget, "@demo/lib"), "TASK_BUILT");
+    save(join(built, "packages/lib/dist/cli.mjs"), 'console.log("MAIN_LIVE");\n');
+    assert.equal(execFileSync(process.execPath, [snapshotCli], { encoding: "utf8" }).trim(), "TASK_BUILT");
+    assert.equal(await verifyGateSnapshot(builtTarget, builtSource), true);
+  }
+
+  const sourceParent = join(root, "source-parent");
+  const executionParent = join(root, "execution");
+  const versions = ["1.0.0", "2.0.0", "3.0.0"].map(version => pack("ambient-demo", version,
+    `export const value = ${JSON.stringify(version)};\n`));
+  for (const [cwd, tarball] of [[sourceParent, versions[0]], [executionParent, versions[1]]]) {
+    save(join(cwd, "package.json"), JSON.stringify({ private: true, dependencies: { "ambient-demo": `file:${tarball}` } }));
+    install(cwd);
+  }
+  const separated = project("source-parent/project");
+  commit(separated);
+  const actualTarget = gateSnapshotPath("different-ancestors", "first");
+  const before = await readGateSource(separated, actualTarget);
+  const receipt = { sourceCommit: before.commit, sourceFingerprint: before.fingerprint, sourceAmbient: before.ambient };
+  assert.equal(probe(separated, "ambient-demo"), "1.0.0");
+  await createGateSnapshot(separated, actualTarget, before);
+  assert.equal(probe(actualTarget, "ambient-demo"), "2.0.0");
+  assert.equal(await verifyGateSnapshot(actualTarget, before), true);
+  install(executionParent, `ambient-demo@file:${versions[2]}`);
+  const after = await readGateSource(separated, actualTarget);
+  assert.equal(before.fingerprint, after.fingerprint);
+  assert.notEqual(before.ambient, after.ambient);
+  assert.equal(gateSourceMatches(receipt, after), false);
+  assert.equal(await verifyGateSnapshot(actualTarget, before), false);
+  const otherLocation = join(sourceParent, "data", "runs", "different.source");
+  await assert.rejects(createGateSnapshot(separated, otherLocation, after), /实际依赖输入与登记计划不同/);
+  assert.equal(existsSync(otherLocation), false);
+
+  const foreign = project("foreign", { type: "module", main: "index.mjs", bin: { "external-cli": "cli.mjs" } });
+  save(join(foreign, "index.mjs"), 'export const value = "EXTERNAL_OK";\n');
+  save(join(foreign, "cli.mjs"), '#!/usr/bin/env node\nimport { value } from "./index.mjs"; console.log(value);\n');
+  commit(foreign);
+  for (const clone of [false, true]) {
+    const external = project(`external-${clone}`, { dependencies: { "tool-alias": "file:../foreign" },
+      ...(clone ? { workspaces: ["packages/*"] } : {}) });
+    if (clone) ownPackage(external, "packages/lib", "CERTIFIED");
+    install(external);
+    commit(external);
+    const target = join(external, "data", "runs", "external.source");
+    const source = await readGateSource(external, target);
+    await createGateSnapshot(external, target, source);
+    assert.equal(probe(target, "tool-alias"), "EXTERNAL_OK");
+    const command = join(target, "node_modules", ".bin", "external-cli");
+    const output = process.platform === "win32"
+      ? execFileSync("cmd.exe", ["/d", "/s", "/c", `""${command}.cmd""`], { encoding: "utf8", windowsVerbatimArguments: true })
+      : execFileSync(process.execPath, [command], { encoding: "utf8" });
+    assert.equal(output.trim(), "EXTERNAL_OK");
+    assert.equal(await verifyGateSnapshot(target, source), true);
+  }
+
+  const deleted = project("alias-sample", { workspaces: ["packages/*"], dependencies: { "sample-alias": "file:examples/lib" } });
+  ownPackage(deleted, "packages/lib", "ORIGINAL");
+  ownPackage(deleted, "examples/lib", "UNRELATED_SAMPLE");
+  install(deleted);
+  commit(deleted);
+  const deletedTask = join(deleted, ".worktrees", "task");
+  git(deleted, "worktree", "add", "--detach", deletedTask, "HEAD");
+  git(deletedTask, "rm", "-r", "packages/lib");
+  commit(deletedTask);
+  const deletedTarget = join(deleted, "data", "runs", "deleted.source");
+  const deletedSource = await readGateSource(deletedTask, deletedTarget);
+  await assert.rejects(createGateSnapshot(deletedTask, deletedTarget, deletedSource), /没有.*替代位置/);
+  assert.equal(existsSync(deletedTarget), false);
+  assert.equal(probe(deleted, "@demo/lib"), "ORIGINAL");
+
+  const moved = project("same-entry-move", { dependencies: { "own-alias": "file:packages/lib" } });
+  ownPackage(moved, "packages/lib", "ORIGINAL");
+  install(moved);
+  commit(moved);
+  const movedTask = join(moved, ".worktrees", "task");
+  git(moved, "worktree", "add", "--detach", movedTask, "HEAD");
+  git(movedTask, "mv", "packages/lib", "packages/relocated");
+  const movedManifest = manifest(movedTask);
+  movedManifest.dependencies["own-alias"] = "file:packages/relocated";
+  save(join(movedTask, "package.json"), JSON.stringify(movedManifest));
+  ownPackage(movedTask, "packages/relocated", "MOVED_NEW");
+  commit(movedTask);
+  const movedTarget = join(moved, "data", "runs", "moved.source");
+  await createGateSnapshot(movedTask, movedTarget, await readGateSource(movedTask, movedTarget));
+  assert.equal(probe(movedTarget, "own-alias"), "MOVED_NEW");
+
+  const deep = join(root, "deep");
+  let directory = deep;
+  for (let depth = 0; depth < 12; depth++) {
+    directory = join(directory, "node_modules", `consumer-${depth}`);
+    save(join(directory, "package.json"), JSON.stringify({ name: `consumer-${depth}`, version: "1.0.0" }));
+  }
+  const inputs = await resolutionInputs([deep]);
+  assert.equal(inputs.flatMap(input => input.entries).filter(item => item.entry.startsWith("consumer-")).length, 12);
+  assert.deepEqual(await resolutionInputs([deep]), inputs);
+  const malformed = join(root, "malformed");
+  const malformedProject = join(malformed, "project");
+  save(join(malformed, "node_modules", "@stray"), "not a scope directory");
+  save(join(malformed, "ordinary-file"), "not a bin directory");
+  symlinkSync(join(malformed, "ordinary-file"), join(malformed, "node_modules", ".bin"), "file");
+  symlinkSync(join(malformed, "missing"), join(malformed, "node_modules", "dangling"), "dir");
+  save(join(malformed, "node_modules", "valid", "package.json"), '{"name":"valid","version":"1.0.0"}');
+  save(join(malformedProject, "node_modules"), "not a dependency directory");
+  const malformedInputs = await resolutionInputs([malformedProject]);
+  assert.deepEqual(malformedInputs.find(input => input.path === join(malformed, "node_modules"))!.selected.map(item => item.entry), ["valid"]);
+  assert.equal(malformedInputs.some(input => input.path === join(malformedProject, "node_modules")), false);
+  assert.deepEqual(await resolutionInputs([malformedProject]), malformedInputs);
+  assert.equal(await ambientDigest(malformedProject, malformedProject), await ambientDigest(malformedProject, malformedProject));
+  if (process.platform !== "win32") {
+    for (const denied of [join(malformed, "node_modules", "@denied"), join(malformed, "node_modules", ".bin"),
+      join(malformed, "node_modules")]) {
+      if (denied.endsWith(".bin")) rmSync(denied);
+      mkdirSync(denied, { recursive: true });
+      chmodSync(denied, 0);
+      try {
+        assert.throws(() => readdirSync(denied), { code: "EACCES" });
+        await resolutionInputs([malformedProject]);
+        await ambientDigest(malformedProject, malformedProject);
+      } finally { chmodSync(denied, 0o755); }
+    }
+  } else console.log("accept-gate-plan: POSIX unreadable-directory fixture skipped on Windows (no ACL changes)");
+  console.log("accept-gate-plan: consumer selection/remediation, unbuilt/moved CLI, tolerant directory scans, execution identity and provenance passed");
+} finally {
+  rmSync(root, { recursive: true, force: true });
+  console.log("accept-gate-plan: cleanup=true");
+}
