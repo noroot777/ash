@@ -9,10 +9,10 @@ import { test } from "node:test";
 const repo = fileURLToPath(new URL("..", import.meta.url));
 
 // 验收入口是**按步骤列表**跑的（`scripts/accept-test.mjs` 的 STEPS），所以夹具也得长成
-// 真实仓库的形状：根包声明 workspaces，第二步那条命令住在 server 子包里。夹具只给
-// `test:web` 的那一版，第二步会直接「找不到 workspace」—— 两个本该成功的用例全红，
-// 而红的理由跟被测行为毫无关系（第 1 轮审查 F5）。
-function fixture(context, { web = "node regression.mjs", budget = "node budget.mjs" } = {}) {
+// 真实仓库的形状：根包声明 workspaces，后端那一步的命令住在 server 子包里。夹具只给
+// `test:web` 的那一版，后端那步会直接「找不到 workspace」—— 本该成功的用例全红，
+// 而红的理由跟被测行为毫无关系。
+function fixture(context, { backend = "node backend.mjs", web = "node regression.mjs" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "ash accept-test "));
   context.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(join(root, "scripts"));
@@ -28,7 +28,7 @@ function fixture(context, { web = "node regression.mjs", budget = "node budget.m
   writeFileSync(join(root, "server", "package.json"), JSON.stringify({
     name: "fixture-server",
     private: true,
-    scripts: { "test:prompt-budget": budget },
+    scripts: { "test:accept": backend },
   }));
   // 两步各自留下一份「我跑过了」的痕迹，外加一个**递增的序号**：只看两份文件都在，
   // 证明不了它们是按顺序跑的（STEPS 的意义一半在顺序：第一步红了就不该有第二步）。
@@ -46,8 +46,8 @@ function fixture(context, { web = "node regression.mjs", budget = "node budget.m
     console.error(${JSON.stringify(`${stdout}_STDERR`)});
     process.exit(Number(process.env[${JSON.stringify(exitVar)}] ?? 0));
   `;
+  writeFileSync(join(root, "server", "backend.mjs"), step("backend", "ACCEPT_TEST_BACKEND_EXIT", "BACKEND_STDOUT"));
   writeFileSync(join(root, "regression.mjs"), step("web", "ACCEPT_TEST_EXIT", "REGRESSION_STDOUT"));
-  writeFileSync(join(root, "server", "budget.mjs"), step("budget", "ACCEPT_TEST_BUDGET_EXIT", "BUDGET_STDOUT"));
   return root;
 }
 
@@ -77,43 +77,43 @@ test("从外部目录调用也在脚本所属项目跑完整回归，并透传�
   assert.equal(existsSync(join(root, "node_modules")), false);
 });
 
-test("提示词体积棘轮是第二步，在前端回归之后跑，两步都通过才放行", (context) => {
+test("后端核心回归是第一步，前端回归排在它之后，两步都通过才放行", (context) => {
   const root = fixture(context);
   const result = run(root);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.deepEqual(order(root), ["web", "budget"]);
-  const ran = JSON.parse(readFileSync(join(root, "budget.json"), "utf8"));
-  assert.equal(ran.event, "test:prompt-budget");
-  assert.match(result.stdout, /BUDGET_STDOUT/);
-  assert.match(result.stdout, /提示词渲染体积棘轮通过/);
+  assert.deepEqual(order(root), ["backend", "web"]);
+  const ran = JSON.parse(readFileSync(join(root, "backend.json"), "utf8"));
+  assert.equal(ran.event, "test:accept");
+  assert.match(result.stdout, /BACKEND_STDOUT/);
+  assert.match(result.stdout, /后端核心回归通过/);
   assert.match(result.stdout, /验收前置检查全部通过/);
 });
 
 test("第二步失败时退出码照样透传，且不报「全部通过」", (context) => {
   const root = fixture(context);
-  const result = run(root, { ACCEPT_TEST_BUDGET_EXIT: "5" });
+  const result = run(root, { ACCEPT_TEST_EXIT: "5" });
   assert.equal(result.status, 5, result.stdout + result.stderr);
-  assert.match(result.stdout, /前端全量回归通过/);
-  assert.match(result.stdout, /提示词渲染体积棘轮未通过/);
+  assert.match(result.stdout, /后端核心回归通过/);
+  assert.match(result.stdout, /前端全量回归未通过/);
   assert.doesNotMatch(result.stdout, /验收前置检查全部通过/);
 });
 
 test("第一步失败就不再跑第二步", (context) => {
   const root = fixture(context);
-  const result = run(root, { ACCEPT_TEST_EXIT: "7" });
+  const result = run(root, { ACCEPT_TEST_BACKEND_EXIT: "7" });
   assert.equal(result.status, 7, result.stdout + result.stderr);
-  assert.deepEqual(order(root), ["web"]);
-  assert.equal(existsSync(join(root, "budget.json")), false);
-  assert.match(result.stdout, /前端全量回归未通过/);
-  assert.doesNotMatch(result.stdout, /前端全量回归通过/);
-  assert.doesNotMatch(result.stdout, /提示词渲染体积棘轮/);
+  assert.deepEqual(order(root), ["backend"]);
+  assert.equal(existsSync(join(root, "web.json")), false);
+  assert.match(result.stdout, /后端核心回归未通过/);
+  assert.doesNotMatch(result.stdout, /后端核心回归通过/);
+  assert.doesNotMatch(result.stdout, /前端全量回归/);
 });
 
-test("第二步无法启动（脚本缺失）时拒绝放行", (context) => {
-  const root = fixture(context, { budget: "node missing-budget.mjs" });
+test("第一步无法启动（脚本缺失）时拒绝放行", (context) => {
+  const root = fixture(context, { backend: "node missing-backend.mjs" });
   const result = run(root);
   assert.notEqual(result.status, 0);
-  assert.match(result.stdout, /提示词渲染体积棘轮未通过/);
+  assert.match(result.stdout, /后端核心回归未通过/);
 });
 
 test("旧推送开关和空 stdin 不会绕过验收测试", (context) => {
@@ -130,8 +130,8 @@ test("验收子进程不继承宿主数据库与运行目录，包括大小写�
     ash_db: join(root, "lower.db"), ash_runs_dir: join(root, "lower-runs"),
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  // 两步都要干净：只检查第一步的话，新加的步骤可以带着宿主库跑而没人发现。
-  for (const name of ["web", "budget"]) {
+  // 两步都要干净：只检查其中一步的话，另一步可以带着宿主库跑而没人发现。
+  for (const name of ["backend", "web"]) {
     assert.deepEqual(JSON.parse(readFileSync(join(root, `${name}.json`), "utf8")).environment, []);
   }
 });
@@ -145,7 +145,7 @@ test("依赖缺失导致测试无法启动时拒绝放行", (context) => {
 test("npm 不可用时返回失败", (context) => {
   const result = run(fixture(context), { PATH: "" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stdout, /前端全量回归未通过/);
+  assert.match(result.stdout, /后端核心回归未通过/);
 });
 
 test("推送钩子已移除，验收命令指向独立入口", () => {

@@ -10,10 +10,11 @@ for (const key of Object.keys(environment)) {
 
 // 验收前置命令跑哪几条。加一条的判据：它拦的是**无声退化**——不跑就没有任何人会发现的
 // 那一类。提示词体积属于这一类：注入给模型的字数涨上去不会报任何错，只会在几个月后变成
-// 一张「每回合读 39.7M token」的账单（这一次的起因）。
+// 一张「每回合读 39.7M token」的账单；它现在由后端那一步带进来（test:accept → test:review
+// → test-prompt-budget），所以这里**不要**再单列一条，单列就是同一条跑两遍。
 const STEPS = [
+  { label: "后端核心回归", args: ["-w", "server", "run", "test:accept"] },
   { label: "前端全量回归", args: ["run", "test:web"] },
-  { label: "提示词渲染体积棘轮", args: ["-w", "server", "run", "test:prompt-budget"] },
 ];
 
 for (const { label, args } of STEPS) {
@@ -30,3 +31,4 @@ for (const { label, args } of STEPS) {
 }
 
 console.log("[accept-test] 验收前置检查全部通过。");
+process.exit(0);
