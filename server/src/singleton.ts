@@ -11,7 +11,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolveAshDbFile, ensureAshDbDir } from "./db/path.js";
-import { liveMaintenanceHolderForDb, maintenanceLockFileForDb } from "./maintenance-lock.js";
+import { liveMaintenanceHolderForAny, maintenanceLockFileFor } from "./maintenance-lock.js";
+import { resourceKeysFor, withResourceClaim } from "./resource-claim.js";
+import { RUNS_DIR } from "./paths.js";
 import { IS_WINDOWS, isPidAlive, killPidsCommand } from "./platform.js";
 import { inspectProcess as inspectProcessInfo, type ProcessInfo } from "./proc.js";
 import {
@@ -162,27 +164,43 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
   const lockFile = singletonLockFileForDb(dbFile);
   const port = options.port ?? null;
 
-  if (process.env.ASH_ALLOW_MULTI === "1") {
-    console.warn(
-      `[ash] WARNING: ASH_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,
-    );
-    return null;
-  }
-
   ensureAshDbDir(dbFile);
-  // 离线维护（历史回填那类脚本）正在改这份库和它的 trace 时不许起服务:两边各写一半同一条
-  // CLI 线程的账，谁都不知道最后落下的是什么。它是独立的一把锁，判据只认 pid 存活 +
-  // 启动时刻（见 maintenance-lock.ts），所以脚本被强杀之后不会把服务永久挡在外面。
-  const maintenance = liveMaintenanceHolderForDb(dbFile);
-  if (maintenance) {
-    throw new SingletonConflictError(
-      dbFile,
-      maintenanceLockFileForDb(dbFile),
-      { pid: maintenance.pid, startedAt: maintenance.startedAt, port: null, command: maintenance.note },
-      "database is being migrated by an offline maintenance process",
-    );
-  }
-  const ownLock = writeOwnLock(dbFile, lockFile, port);
+  // 这套资源的全部键:库文件 + 它的 runs 目录。两个都要查 —— 迁移要改的 trace 文件在
+  // runs 里，而别的库路径（副本、软链）可能落到同一份 runs 上，只按库名锁挡不住。
+  const keys = resourceKeysFor(dbFile, RUNS_DIR);
+
+  // 「查维护锁 + 落自己的锁」必须是一个原子动作:两边都「先查对方再建自己」的话，
+  // 存在一串两边都通过检查的合法交错（第 1 轮审查 F2 实测复现），所以整段放进占有锁里。
+  const ownLock = withResourceClaim(keys, `ash 启动 PID ${process.pid}`, () => {
+    // 离线维护（历史回填那类脚本）正在改这份库和它的 trace 时不许起服务:两边各写一半同一条
+    // CLI 线程的账，谁都不知道最后落下的是什么。它是独立的一把锁，判据只认 pid 存活 +
+    // 启动时刻（见 maintenance-lock.ts），所以脚本被强杀之后不会把服务永久挡在外面。
+    //
+    // **这一关排在 ASH_ALLOW_MULTI 前面**:那个开关的语义是「允许多个 ash 并存」，不是
+    // 「允许踩正在迁移的库」—— 放在它后面等于给迁移留了一个一句话就能绕开的后门。
+    const maintenance = liveMaintenanceHolderForAny(keys);
+    if (maintenance) {
+      throw new SingletonConflictError(
+        dbFile,
+        maintenanceLockFileFor(maintenance.key),
+        {
+          pid: maintenance.holder.pid,
+          startedAt: maintenance.holder.startedAt,
+          port: null,
+          command: maintenance.holder.note,
+        },
+        `database is being migrated by an offline maintenance process (resource ${maintenance.key})`,
+      );
+    }
+    if (process.env.ASH_ALLOW_MULTI === "1") {
+      console.warn(
+        `[ash] WARNING: ASH_ALLOW_MULTI=1 set; skipping single-instance guard for DB ${dbFile}`,
+      );
+      return null;
+    }
+    return writeOwnLock(dbFile, lockFile, port);
+  });
+  if (!ownLock) return null;
 
   try {
     const holders = findLiveAshDbHolders(dbFile).filter((p) => p.pid !== process.pid);

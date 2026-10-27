@@ -43,7 +43,7 @@ import { addUsage } from "@ash/shared/usage";
 import { db } from "./db/index.js";
 import { sessions, usageCumulativeSnapshots } from "./db/schema.js";
 import { type SessionTraceRewrite, isLegacyMark, readUsageTrace } from "./claude-usage-trace.js";
-import { readUnresolvedRepair, unresolvedRepairFileForDb } from "./claude-usage-quarantine.js";
+import { readUnresolvedState, type UnresolvedState } from "./claude-usage-quarantine.js";
 import { cumulativeUsageDelta, sessionUsage } from "./usage.js";
 
 export const CLAUDE_REPAIR_MARKER = "internal.claude-usage-cumulative-repair";
@@ -153,6 +153,8 @@ export type ClaudeUsageRepairPlan = {
   /** trace 里要改写成真实增量的那些 usage 条目。 */
   traces: SessionTraceRewrite[];
   warnings: string[];
+  /** 人工屏障的三态。`unreadable` 时上面全是 skip、零条 trace、零条快照。 */
+  unresolved: UnresolvedState;
 };
 
 const nonDecreasing = (previous: TokenUsage, current: TokenUsage) =>
@@ -247,8 +249,8 @@ export async function planClaudeUsageRepair(options: {
       .from(usageCumulativeSnapshots).where(like(usageCumulativeSnapshots.sourceId, "claude:%")))
       .map((row) => row.sourceId),
   );
-  const unresolved = readUnresolvedRepair();
-  const quarantined = new Set(unresolved?.threads ?? []);
+  const unresolved = readUnresolvedState();
+  const quarantined = new Set(unresolved.kind === "pending" ? unresolved.record.threads : []);
 
   const groups = new Map<string, Candidate[]>();
   const orphans: Candidate[] = [];
@@ -263,10 +265,35 @@ export async function planClaudeUsageRepair(options: {
   const warnings: string[] = [];
   const observedIncremental: string[] = [];
   const observedCumulative: string[] = [];
-  if (unresolved) {
-    warnings.push(`上一次回填有没结清的线程（${unresolved.threads.length} 条，记于 ${unresolved.at}）：`
-      + `${unresolved.reason}。这几条这一轮一律不动；人工核对 .pre-usage-repair 备份后删掉 `
-      + `${unresolvedRepairFileForDb()} 再重跑。`);
+  if (unresolved.kind === "pending") {
+    warnings.push(`上一次回填有没结清的线程（${unresolved.record.threads.length} 条，记于 ${unresolved.record.at}）：`
+      + `${unresolved.record.reason}。这几条这一轮一律不动；人工核对 .pre-usage-repair 备份后删掉 `
+      + `${unresolved.file} 再重跑。`);
+  }
+
+  // ── 人工屏障本身读不出来：整盘拒绝，一条动作都不生成 ────────────────────────
+  // 「不知道该挡谁」不能退化成「谁都不用挡」。这里**结构上**不产出任何可写动作（全是
+  // skip、零条 trace、零条快照），apply 那一侧还有一道独立的同判据闸（双重闸）。
+  if (unresolved.kind === "unreadable") {
+    const reason = `未决状态读不出来（${unresolved.detail}）：${unresolved.file}。`
+      + "上一次回填留下的人工屏障认不出该挡住哪几条线程，所以这一轮整盘不动 —— "
+      + "人工核对 .pre-usage-repair 备份后删掉那份文件再重跑。";
+    warnings.push(reason);
+    return {
+      boundary,
+      observed: { lastIncremental: null, firstCumulative: null },
+      sessions: candidates.map((candidate) => planFor(candidate, {
+        cliSessionId: candidate.cliSessionId,
+        regime: "quarantined",
+        evidence: "none",
+        straddlesCutoff: false,
+        rebasedFirstTurnAfterCutoff: false,
+      }, null, { kind: "skip", reason })).sort((a, b) => a.startedAt.localeCompare(b.startedAt)),
+      snapshots: [],
+      traces: [],
+      warnings,
+      unresolved,
+    };
   }
 
   for (const [cliSessionId, members] of groups) {
@@ -508,5 +535,6 @@ export async function planClaudeUsageRepair(options: {
     snapshots,
     traces,
     warnings,
+    unresolved,
   };
 }

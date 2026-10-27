@@ -12,9 +12,12 @@
  * 要改，所以**拷贝验证必须连 runs 一起拷**。只拷库的话，`--db` 换的是库、trace 还指着
  * 正式那份，一跑 `--apply` 就把真实历史改写了（第 2 轮审查实测）。
  *
- * 规矩因此写死在下面的闸里：**`--apply` 要求 runs 目录正好是目标库的同级 `runs/`**
- * （`--db <dir>/ash.db` ⇒ `<dir>/runs`），对不上一律拒绝，没有放行开关。dry-run 不写
- * 任何东西，所以允许 `--runs` 随便指（例如拿正式 runs 给拷贝库预览一份清单，不用拷 10G）。
+ * 规矩因此写死在下面的闸里：**`--apply` 要求 runs 目录正好是目标库的同级 `runs/`，而且
+ * 目标库必须是那份 runs 的主人（`<dir>/ash.db`）**。同级只是必要条件：同一个目录里可以
+ * 放第二份库（生产 `data/` 里就有 `harness.db`），拿它 `--apply` 改写的是 `ash.db` 的
+ * trace（第 1 轮审查实测）。两边路径都先 realpath 再比，软链不算配套。都没有放行开关。
+ * dry-run 不写任何东西，所以允许 `--runs` 随便指（例如拿正式 runs 给拷贝库预览一份清单，
+ * 不用拷 10G）。
  *
  * 用法：
  *   # ① 拷一套出来（库 + runs 一起），在拷贝上看前后对照（不加 --apply 永远不写）
@@ -25,11 +28,15 @@
  *   # ③ 生产库要先停 ash，再显式放行
  *   npx tsx server/scripts/repair-claude-usage.ts --db data/ash.db --apply --force-production
  *
- * **四道闸都要过**：路径像生产库要 `--force-production`；库和 runs 必须是配套的一套；
- * 库上**还有活着的 ash 实例**则一律拒绝（`liveAshHolderForDb`）；真跑之前还要**取到维护
- * 锁**（`<db>.maintenance.lock`）—— 探活只能看见「现在有没有」，取锁才能挡住「我跑着的
- * 时候别人起来」：ash 启动时会检查这把锁并拒绝启动。锁按库文件命名，而上面那条配套规矩
- * 已经把 runs 绑在同一个库上，所以一把锁覆盖了这次要写的全部资源。
+ * **四道闸都要过**：路径像生产库要 `--force-production`；库和 runs 必须是配套的一套（且
+ * 库是那份 runs 的主人）；库上**还有活着的 ash 实例**则一律拒绝（`liveAshHolderForDb`）；
+ * 真跑之前还要**取到维护锁** —— 探活只能看见「现在有没有」，取锁才能挡住「我跑着的时候
+ * 别人起来」：ash 启动时会检查这些锁并拒绝启动。
+ *
+ * 锁**按资源键取满**：`<db>.maintenance.lock` 和 `<runs>.maintenance.lock` 两把，键都先
+ * realpath。只锁库是不够的 —— 要改的文件在 runs 里，而另一个库路径（副本、软链、父目录
+ * 别名）可能落到同一份 runs 上，那时按库命名的锁根本不是同一把。取锁本身包在一把短命
+ * 占有锁里（`src/resource-claim.ts`），所以「查对方 + 建自己」对 ash 启动那一侧也是原子的。
  *
  * **推荐顺序是「停服务 → 回填 → 装新 build 重启」**，而不是反过来：回填会给还活着的 CLI
  * 线程写下累计基线，重启后它们的下一回合就有东西可求差。若先重启再回填，每条线程的第一
@@ -40,7 +47,7 @@
  *   --db <path>            要读/写的库文件（等价于 ASH_DB）。不给就用默认生产库，但那时
  *                          --apply 会被拒。
  *   --runs <path>          trace 所在的 runs 目录（等价于 ASH_RUNS_DIR）。缺省 = 目标库的
- *                          同级 `runs/`。--apply 时只接受这个缺省值。
+ *                          同级 `runs/`。--apply 时只接受这个缺省值（realpath 之后相等）。
  *   --apply                真写。缺省 dry-run。
  *   --force-production     允许对默认生产库 --apply。单独一道闸，因为这是不可逆的。
  *   --boundary <iso>       claude CLI 改成「线程累计」口径的时刻，用来判旧账的口径。缺省
@@ -84,7 +91,7 @@ process.env.ASH_RUNS_DIR = binding.runsDir;
 
 const { RUNS_DIR } = await import("../src/paths.js");
 const { liveAshHolderForDb } = await import("../src/singleton.js");
-const { acquireMaintenanceLock, MaintenanceLockError } = await import("../src/maintenance-lock.js");
+const { acquireMaintenanceLocks, MaintenanceLockError } = await import("../src/maintenance-lock.js");
 const target = binding.dbFile;
 const productionDb = binding.productionDb;
 const pairedRuns = binding.pairedRuns;
@@ -98,11 +105,13 @@ if (holder) {
     + "先停掉它再回填 —— 跑着的回合会跟回填抢同一条线程的累计快照和同一份 trace 文件。",
   );
 }
-// 真正取锁：挡住「我跑着的时候 ash 起来了」。ash 启动时会读这把锁并拒绝启动。
+// 真正取锁：挡住「我跑着的时候 ash 起来了」。ash 启动时会读这些锁并拒绝启动。
+// **键取满**：库 + runs 目录都要锁住 —— 要改的 trace 文件在 runs 里，而别的库路径可能
+// 落到同一份 runs 上（见 claude-usage-resources.ts 判据 ③）。
 let release: (() => void) | null = null;
 if (apply) {
   try {
-    release = acquireMaintenanceLock(target, "repair-claude-usage").release;
+    release = acquireMaintenanceLocks(binding.lockKeys, "repair-claude-usage").release;
   } catch (error) {
     if (!(error instanceof MaintenanceLockError)) throw error;
     refuse(`拒绝动手：${error.message}`);

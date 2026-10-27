@@ -12,10 +12,11 @@
 //
 // 所以协议是三段，一段都不能省：
 //
-// ① **独立闸**（不写任何东西）：逐条复核计划的写入边界 —— 只有 `action.kind === "update"`
-//    且口径是 cumulative 的条目才允许落账。这一条**故意跟计划层重复**：跳过项不许落账是
-//    个不变量，不能只靠产出计划那一层自觉，上一版就是靠「after 非空」单点判断才让
-//    uncertain 的条目落了账。有一条过不了就整轮不写，让人去看计划。
+// ① **独立闸**（不写任何东西）：两件事。先自己读一遍人工屏障的状态 —— 读不出来就整盘拒绝
+//    （「不知道该挡谁」不是「谁都不用挡」，第 1 轮审查 F3）；再逐条复核计划的写入边界 ——
+//    只有 `action.kind === "update"` 且口径是 cumulative 的条目才允许落账。这一整段**故意
+//    跟计划层重复**：跳过项不许落账是个不变量，不能只靠产出计划那一层自觉，上一版就是靠
+//    「after 非空」单点判断才让 uncertain 的条目落了账。有一条过不了就整轮不写。
 // ② **预检**（不落盘）：把每份 trace 的新内容在内存里算出来并逐条核对原值。哪条 CLI 线程
 //    有一份算不出来，这条线程的 trace、账、累计快照**整组**都不写（一个失败集，不是三个）。
 // ③ **提交**：先写 trace（原文留在内存里），再做库事务。**这一段里任何一步失败都整体回滚**
@@ -37,7 +38,7 @@ import {
   writePreparedTrace,
 } from "./claude-usage-trace.js";
 import { CLAUDE_REPAIR_MARKER, type ClaudeUsageRepairPlan } from "./claude-usage-repair.js";
-import { writeUnresolvedRepair } from "./claude-usage-quarantine.js";
+import { readUnresolvedState, writeUnresolvedRepair } from "./claude-usage-quarantine.js";
 
 const ZERO: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: null, turns: 1 };
 
@@ -67,10 +68,33 @@ const EMPTY_TRACES: TraceCommitReport = { files: 0, entries: 0, failures: [], fa
 const threadOf = (sourceId: string) => sourceId.replace(/^claude:/, "");
 
 /**
- * 独立闸：计划里有没有条目越过写入边界。**不读计划的自述，自己判一遍。**
+ * 独立闸：有没有东西越过写入边界。**不读计划的自述，自己判一遍。**
+ *
+ * 第一条就是人工屏障：`plan.unresolved` 是计划层读到的，这里**重新读一次磁盘** —— 计划到
+ * 落地之间屏障可能刚被写下（另一次回填失败了），而「读不出来」这一态必须在写入入口整体
+ * 拒绝，不能指望计划层已经把动作清成空。
  */
 function refuseUnwritable(plan: ClaudeUsageRepairPlan): string[] {
   const refused: string[] = [];
+  const unresolved = readUnresolvedState();
+  if (unresolved.kind === "unreadable") {
+    refused.push(`未决状态读不出来（${unresolved.detail}）：${unresolved.file} —— `
+      + "认不出该挡住哪几条线程，整盘拒绝写入；人工核对 .pre-usage-repair 备份后删掉那份文件再重跑");
+    return refused; // 后面逐条判也没意义了
+  }
+  if (unresolved.kind === "pending") {
+    const blocked = new Set(unresolved.record.threads);
+    for (const item of plan.sessions) {
+      if (item.action.kind === "update" && item.cliSessionId && blocked.has(item.cliSessionId)) {
+        refused.push(`${item.sessionId}：线程 ${item.cliSessionId} 还在隔离记录里，不许落账`);
+      }
+    }
+    for (const rewrite of plan.traces) {
+      if (blocked.has(rewrite.cliSessionId)) {
+        refused.push(`${rewrite.sessionId}：线程 ${rewrite.cliSessionId} 还在隔离记录里，不许改写 trace`);
+      }
+    }
+  }
   for (const item of plan.sessions) {
     if (item.action.kind !== "update") continue;
     if (item.regime !== "cumulative") {
@@ -145,13 +169,26 @@ export async function applyClaudeUsageRepair(
     }
     let unresolved: string | null = null;
     if (stuck.length > 0) {
-      unresolved = writeUnresolvedRepair({
+      const record = {
         at: new Date().toISOString(),
         threads: [...new Set(stuck.map((item) => item.rewrite.cliSessionId))],
         files: stuck.map((item) => item.path),
         reason: `${cause}；回滚时这几份 trace 没能还原回原内容，它们现在是改写后的真实增量、`
           + "而库里的账还是旧的（原文各有一份 .pre-usage-repair 备份）",
-      });
+      };
+      try {
+        unresolved = writeUnresolvedRepair(record);
+      } catch (error) {
+        // 屏障**自己**也写不下去:这是最坏的一档 —— 没有任何东西能在下一次重跑时挡住这几
+        // 条线程。绝不能静默,把该挡的线程和备份位置原样喊出来,交给人。
+        failures.push(`隔离记录写不下去：${(error as Error).message}
+`
+          + `  必须人工处理的线程：${record.threads.join("、")}
+`
+          + `  已改写、没还原回去的文件：${record.files.join("、")}
+`
+          + "  在这几条线程核对清楚之前不要再跑这个脚本（原文各有一份 .pre-usage-repair 备份）。");
+      }
     }
     return {
       sessions: 0,
