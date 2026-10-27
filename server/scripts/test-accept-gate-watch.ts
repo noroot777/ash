@@ -13,6 +13,8 @@
 //     看门狗一个字节都不写进门禁日志，所以这里钉的是**字节数一字不差**这个硬条件。
 //  第 3 轮 F1 现场必须排在所有可能失败的事情前面存盘：快照删不掉（EACCES）不许把它带走，
 //     存盘自己失败也必须说出来，不能吞掉。
+//  第 4 轮 F1 一拍只读一次日志：末行、字节数、写没写过必须出自**同一次有界观测**，否则
+//     会拼出「停在这一行 X、累计 26B」又「从头到尾没写过东西」这种自相矛盾的裁定。
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -43,6 +45,7 @@ async function awaitScene(start: (resolve: (verdict: { scene: string; note: stri
 try {
   const { gateWatchReport, overrideGateWatchTimings, startGateWatch } = await import("../src/accept-gate-watch.js");
   const { freezeGateScene, gateNotesPath, gateScenePath } = await import("../src/accept-gate-diagnosis.js");
+  const { sightGateLog } = await import("../src/accept-gate-observe.js");
   const { acceptGateLogTail } = await import("../src/accept-gate-process.js");
 
   // ① F1 正面：连续没输出只喊一声，命令照跑 —— 安静的编译/等远端/把输出重定向到别处，
@@ -138,6 +141,65 @@ try {
     assert.doesNotMatch(verdict.note, /一个字节都没往门禁日志里写过/);
   }
 
+  // ④c 第 4 轮 F1：命令的第一行正好落在看门狗读日志的那一拍里。老做法一拍读三次
+  //    （stat 定「写没写过」→ 再读一遍取末行 → 又 stat 一次取字节数），命令插在两次读中间
+  //    就能让同一份现场既指着它的输出、又说它从没输出过 —— 两个相反的排查方向。
+  //    这里不赌能不能撞上那个微秒级窗口，只钉**自洽**：三项要么一起有，要么一起没有。
+  {
+    for (let round = 0; round < 12; round++) {
+      const logPath = join(root, `first-write-${round}.log`);
+      writeFileSync(logPath, "[ash] $ racing-first-write\n", "utf8");
+      overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 10_000, sampleMs: 1, timeoutMs: 40 + round * 3 });
+      const verdict = await awaitScene((resolve) => {
+        startGateWatch({ logPath, onVerdict: resolve });
+        spawn(process.execPath, ["-e",
+          `setTimeout(() => require("node:fs").appendFileSync(process.argv[1], "ACTUAL_CHILD_CASE_STARTED\\n"), ${round});`,
+          logPath], { stdio: "ignore" }).unref();
+      });
+      const sawLine = /停在这一行：`ACTUAL_CHILD_CASE_STARTED`/.test(verdict.scene);
+      const sawBytes = /命令自己的输出累计 26B。/.test(verdict.scene);
+      const denied = /从头到尾没往门禁日志里写过东西/.test(verdict.scene);
+      assert.equal(sawLine, sawBytes, "末行和字节数必须出自同一次观测");
+      assert.equal(denied && (sawLine || sawBytes), false, "不许一边指着它的输出、一边说它没输出过");
+      assert.equal(/一个字节都没往门禁日志里写过/.test(verdict.note) && sawLine, false, "交接那句也不许自相矛盾");
+    }
+  }
+
+  // ⑨ 第 4 轮 F1 的机制本身（确定性那一半）：一次观测是**有界**的 —— 截止之后到的字节
+  //    属于下一次观测，换了一份文件就不是同一个身份，读不出来返回 null 而不是空文件。
+  {
+    const logPath = join(root, "bounded.log");
+    writeFileSync(logPath, "FIRST\n", "utf8");
+    const sight = sightGateLog(logPath, 8000);
+    assert.ok(sight, "文件在就该读得到");
+    appendFileSync(logPath, "SECOND\n", "utf8");
+    assert.equal(sight.length, 6, "截止是观测那一刻定下的，后来的字节不许回填进来");
+    assert.equal(sight.tail.toString("utf8"), "FIRST\n");
+    const next = sightGateLog(logPath, 8000);
+    assert.ok(next && next.length === 13, "下一次观测才看得见后来的那一段");
+    assert.equal(next.identity, sight.identity, "同一份文件身份不变");
+    rmSync(logPath);
+    writeFileSync(logPath, "NEW\n", "utf8");
+    assert.notEqual(sightGateLog(logPath, 8000)?.identity, sight.identity, "删了重建 = 换了一份日志");
+    assert.equal(sightGateLog(join(root, "never-written.log"), 8000), null,
+      "读不出来要如实返回 null，不许装成一份空文件（那会被说成「它没输出过」）");
+  }
+
+  // ⑩ 第 4 轮 N1：安静 → 恢复输出 → 再安静，第二段也得喊一声。只认一次的话，
+  //    「卡住前先安静过一阵」的命令后面再怎么静都没人提醒。
+  {
+    const logPath = join(root, "second-silence.log");
+    writeFileSync(logPath, "START\n", "utf8");
+    overrideGateWatchTimings({ silenceMs: 80, progressMs: 10_000, sampleMs: 10, timeoutMs: 600_000 });
+    const watch = startGateWatch({ logPath, onVerdict: () => {} });
+    await sleep(250);
+    appendFileSync(logPath, "RESUMED\n", "utf8");
+    await sleep(300);
+    watch.stop();
+    const notes = readFileSync(gateNotesPath(logPath), "utf8");
+    assert.equal(notes.match(/\[ash\] 注意 ·/g)?.length, 2, "恢复输出之后的第二段静默也要喊（N1）");
+  }
+
   // ④b R2-F1 的第二个实例：全程没有命令输出时，不许把**开跑前**的启动说明（里面有
   //    `[ash] $ <命令原文>`）当成「停在这一行」，更不能一边说 0B 一边指着它。
   {
@@ -164,21 +226,37 @@ try {
   // ⑥ F1 反面：措辞只许给「更像」和另一种可能，不许下死判断 —— 卡死的进程一样会打心跳，
   //    安静的命令也可能只是把输出重定向到别处了。
   {
-    const quiet = gateWatchReport({ elapsedMs: 90 * 60_000, silentMs: 45 * 60_000, limitMs: 90 * 60_000,
-      silenceMs: 20 * 60_000, everProduced: true, lastLine: "system-notices-dom ok", bytes: 12486, marks: ["5.0m/4.1KB"] });
+    const limits = { elapsedMs: 90 * 60_000, limitMs: 90 * 60_000, silenceMs: 20 * 60_000 };
+    const quiet = gateWatchReport({ ...limits, marks: ["5.0m/4.1KB"],
+      seen: { silentMs: 45 * 60_000, everProduced: true, lastLine: "system-notices-dom ok", bytes: 12486, agoMs: 0 } });
     assert.match(quiet.scene, /\*\*更像\*\*是停在上面那一行之后的某一步/);
     assert.match(quiet.scene, /日志只能证明有没有在输出/, "必须写出反面可能，否则是在给错误的排查方向");
 
-    const busy = gateWatchReport({ elapsedMs: 90 * 60_000, silentMs: 12_000, limitMs: 90 * 60_000,
-      silenceMs: 20 * 60_000, everProduced: true, lastLine: "step 9000", bytes: 31_000, marks: [] });
+    const busy = gateWatchReport({ ...limits, marks: [],
+      seen: { silentMs: 12_000, everProduced: true, lastLine: "step 9000", bytes: 31_000, agoMs: 0 } });
     assert.match(busy.scene, /\*\*更像\*\*是整条命令在爬/);
     assert.match(busy.scene, /卡死在打心跳也长这样/);
 
-    const mute = gateWatchReport({ elapsedMs: 90 * 60_000, silentMs: 90 * 60_000, limitMs: 90 * 60_000,
-      silenceMs: 20 * 60_000, everProduced: false, lastLine: null, bytes: 0, marks: [] });
+    const mute = gateWatchReport({ ...limits, marks: [],
+      seen: { silentMs: 90 * 60_000, everProduced: false, lastLine: null, bytes: 0, agoMs: 0 } });
     assert.match(mute.scene, /停在这一行：（这条命令没有往门禁日志里写过任何东西）/);
     assert.match(mute.scene, /可能是它把输出重定向到别处了/, "全程没输出和「出过、后来不出了」是两回事");
     assert.match(mute.scene, /产出节奏（开跑第几分钟 \/ 累计输出）：（没跑够一个采样间隔）/);
+
+    // 第 4 轮 F1：一次都没读成功 = **未知**。说成「它没输出过」会把人支去查「命令是不是
+    // 把输出写到别处了」，而真正该查的是这份日志为什么读不到。
+    const blind = gateWatchReport({ ...limits, marks: [], seen: null });
+    assert.match(blind.scene, /停在这一行：（读不到这份日志，说不出它停在哪）/);
+    assert.match(blind.scene, /\*\*都是未知\*\*/);
+    assert.match(blind.scene, /命令自己的输出累计（读不出来）。/);
+    assert.doesNotMatch(blind.scene, /没有往门禁日志里写过任何东西/, "读不到 ≠ 没写过");
+    assert.doesNotMatch(blind.note, /一个字节都没往门禁日志里写过/);
+
+    // 最后一次读到它是很久以前：数还给，但要说破它是那时候的。
+    const stale = gateWatchReport({ ...limits, marks: [],
+      seen: { silentMs: 30 * 60_000, everProduced: true, lastLine: "step 9000", bytes: 2048, agoMs: 20 * 60_000 } });
+    assert.match(stale.scene, /上面这几个数截至 20\.0 分钟前最后一次读到它/);
+    assert.match(stale.note, /（截至 20\.0 分钟前最后一次读到它。）/);
   }
 
   // ⑧ 第 3 轮 F1 的另一半：现场自己存不下去（磁盘满、权限拒绝）必须**说出来**。
@@ -195,6 +273,9 @@ try {
       assert.equal(existsSync(gateScenePath(logPath)), false);
     } finally { chmodSync(dir, 0o700); }
     assert.equal(freezeGateScene(join(root, "ok.log"), "[ash] 现场"), null, "存下了就不该报降级");
+    // 第 4 轮 N2：先写 .part 再改名，所以最终路径要么没有、要么是完整的一份。
+    assert.equal(readFileSync(gateScenePath(join(root, "ok.log")), "utf8"), "[ash] 现场");
+    assert.equal(existsSync(`${gateScenePath(join(root, "ok.log"))}.part`), false, "改完名不许留下半截临时文件");
   }
 
   // ⑦ 整条链路。两台：一台安静但正常退出（必须绿），一台撞上限且在停止时吐一大堆清理
@@ -335,7 +416,7 @@ try {
   }
 
   overrideGateWatchTimings(null);
-  console.log("✅ 门禁看门狗：静默只报不杀 / 现场先于一切可能失败的事存盘 / 命令日志里没有 ash 的字节 通过");
+  console.log("✅ 门禁看门狗：静默只报不杀 / 一拍一次有界观测、裁定自洽 / 现场先于一切可能失败的事存盘 / 命令日志里没有 ash 的字节 通过");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

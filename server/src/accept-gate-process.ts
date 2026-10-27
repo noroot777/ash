@@ -215,26 +215,6 @@ export function acceptGateLogText(logPath: string): string {
     + `${Math.round(ACCEPT_GATE_LOG_MAX_BYTES / 1000)} KB。完整文件在 ${logPath}\n\n${text}${suffix}`;
 }
 
-/**
- * 日志尾部的**原始字节**，外加它在文件里的起始偏移。
- *
- * 给需要按绝对偏移认领「这几段是我自己写的」的调用方用（accept-gate-watch.ts）：靠文本
- * 前缀猜来源是不成立的 —— 被测命令完全可以打印同样的前缀（第 1 轮审查 F3）。
- */
-export function acceptGateLogTailBytes(logPath: string, bytes: number): { buf: Buffer; start: number } {
-  try {
-    if (!existsSync(logPath)) return { buf: Buffer.alloc(0), start: 0 };
-    const size = statSync(logPath).size;
-    const start = Math.max(0, size - bytes);
-    const fd = openSync(logPath, "r");
-    try {
-      const buf = Buffer.alloc(size - start);
-      readSync(fd, buf, 0, buf.length, start);
-      return { buf, start };
-    } finally { closeSync(fd); }
-  } catch { return { buf: Buffer.alloc(0), start: 0 }; }
-}
-
 /** 日志尾部若干字节。`skipped` = 前面被略过了多少，0 表示这就是全文。 */
 function readTail(logPath: string, bytes: number): { text: string; skipped: number } {
   try {

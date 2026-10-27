@@ -21,7 +21,7 @@
 // 现场为什么必须单独冻结（第 2 轮审查 R2-F2）：停不掉的进程是受支持的生产状态，它之后写的
 // 每一个字节都能把追加在日志末尾的现场顶出可回显的那一段。「这一次 append 暂时在最后」不是
 // 不变量，谁最后写也不由我们说了算；存成旁边一份，刷新多少次、后面再写多少都挤不掉。
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 /** 回显的那一段尾巴里带最近几条进度。完整时间轴在现场的「产出节奏」里，不在这儿凑数。 */
@@ -51,13 +51,20 @@ export function appendGateNote(logPath: string, line: string): boolean {
  * 冻结现场。存成了返回 null，**没存成返回一句给人看的降级说明** —— 磁盘满、权限拒绝都
  * 是真会发生的，吞掉它就成了「界面上宣称有现场、文件里其实没有」（第 3 轮审查 F1）。
  * 调用方拿到这句话要把它写进日志和时间线，并自己把现场直接追加进日志兜底。
+ *
+ * **先写临时文件再改名**（第 4 轮审查 N2）：直接往最终路径写，写到一半撞上 ENOSPC/EDQUOT
+ * 就会在那儿留下半段现场 —— 它非空，读口会当成完整的一份优先回显，日志里的兜底反倒被
+ * 后来的输出顶掉。同目录内 rename 是原子的：要么没有这份文件，要么它是完整的。
  */
 export function freezeGateScene(logPath: string, scene: string): string | null {
+  const part = `${gateScenePath(logPath)}.part`;
   try {
     mkdirSync(dirname(logPath), { recursive: true });
-    writeFileSync(gateScenePath(logPath), scene, "utf8");
+    writeFileSync(part, scene, "utf8");
+    renameSync(part, gateScenePath(logPath));
     return null;
   } catch (error) {
+    try { rmSync(part, { force: true }); } catch { /* 清不掉也只是个 .part,读口不看它 */ }
     return `被收掉时的现场没能单独存下来（${error instanceof Error ? error.message : String(error)}）：`
       + `已改为直接写进日志，后面要是还有进程在写，它可能被顶出可回显的那一段。`;
   }
