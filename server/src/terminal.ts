@@ -14,6 +14,7 @@ import {
   applyStop,
   liveLeftovers,
   projectStop,
+  oweLeftovers,
   releaseLaunchPortsSync,
   releaseLaunchResponsibility,
 } from "./terminal-stop-facts.js";
@@ -508,6 +509,22 @@ export class TerminalSessionManager {
       }
     }
     return null;
+  }
+
+  /**
+   * **发现即落账**:停止/重启路径一发现「核不上归属、没敢动」的号(或者发现成员清单本身
+   * 不全),立刻把这笔责任并进那条会话的账 —— 不等这次动作有没有成功。
+   *
+   * 为什么不走 markCommandStopped:那一个落的是**结论**(verified/unresolved),会把 portsAlive
+   * 一并收口;而这里落的是**发现**,此刻端口可能还有人听、这次停止可能马上就要报失败。
+   * 失败分支原地返回、发现跟着丢掉,下一遍就再也发现不了它(第 5 轮审查发现 1)。
+   *
+   * 按**会话 id** 定位,不按「最近一次」:调用方手里的 open 就是它动手时的那条会话,中途可能
+   * 已经有新实例起来了,落错对象等于把责任记到无关的那次启动上。
+   */
+  oweCommandLeftovers(sessionId: string, projectId: string, pids: number[], why: string): void {
+    const session = this.session(sessionId, projectId);
+    if (session) oweLeftovers(session, pids, why);
   }
 
   /**

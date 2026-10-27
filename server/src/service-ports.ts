@@ -47,13 +47,15 @@ import { readFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { IS_WINDOWS } from "./platform.js";
 import { HAS_PROC, LSOF_PATH, PS_PATH, processAlive, readProcessTableSync } from "./terminal-process-tree.js";
+// 认端口那一段(整条文本 + 流式)拆去 service-ports-scan.ts 了,调用点照旧从这儿引。
+export { createPortScanner, portsFromOutput } from "./service-ports-scan.js";
+import { MIN_PORT } from "./service-ports-scan.js";
 
 const run = promisify(execFile);
 
 /** 这次启动的记号落在哪个环境变量里。命令会话的 env 由 terminal.ts 注入。 */
 export const LAUNCH_ID_ENV = "ASH_LAUNCH_ID";
 
-const MIN_PORT = 1024;
 const TERM_GRACE_MS = 3_000;
 const POLL_MS = 100;
 const PROBE_TIMEOUT_MS = 5_000;
@@ -79,6 +81,12 @@ export type PortStopOutcome = {
   /** 探测没答上来的端口:既不能说它空了,也没人可杀。 */
   unknown: number[];
   /**
+   * 同组成员**枚举全了没有**。进程表问不出来时 groupMembers 只能退回「只认它自己」,那说明
+   * 「这次启动还有谁」这份清单本身不全 —— 跟端口超额是同一种残缺,得向上交接,不能让
+   * 「端口空了」替它作结论(第 5 轮审查发现 1)。
+   */
+  membersIncomplete: boolean;
+  /**
    * 动过手的进程组里**核不上归属、所以一个字都没动**的成员(此刻仍活着的那些)。
    *
    * 早先这些号是被 `filter` 静默丢掉的,于是「这几个端口让出来了」被升级成「这次启动起来
@@ -88,93 +96,6 @@ export type PortStopOutcome = {
    */
   leftovers: { pid: number; reason: string }[];
 };
-
-// ── 认端口 ────────────────────────────────────────────────────────────────────
-
-/**
- * 本机地址 + 端口。主机名左边界必须是「非主机名字符」,否则 `notlocalhost:8787` 这种
- * 字样会被当成 localhost(第 1 轮审查)。协议可省 —— 很多脚本只打 `localhost:5173`。
- */
-const PORT_PATTERN = /(?:^|[^0-9a-z.-])(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d{4,5})(?![0-9])/gi;
-/**
- * 增量扫描时在手里留多长的尾巴:够装下「最长的本机地址前缀 + 5 位端口」就行
- * (`https://127.0.0.1:` 是 18 字,`[::1]` 那支更短)。
- */
-const SCAN_TAIL_KEEP = 32;
-
-/** 从一段**完整**文本里认出本机端口。只认 ≥1024 的,去重后返回。 */
-export function portsFromOutput(text: string): number[] {
-  const ports = new Set<number>();
-  for (const match of text.matchAll(PORT_PATTERN)) {
-    const port = Number(match[1]);
-    if (port >= MIN_PORT && port <= 65535) ports.add(port);
-  }
-  return [...ports];
-}
-
-/**
- * pty 的输出是**流**,不是一行一行的消息:`http://127.0.0.1:8787` 完全可能被拆成
- * `http://127.0.0.` + `1:8787` 两块送来(启动器分次 write,或底层按缓冲区切)。拿无状态
- * 正则逐块匹配,这种地址会整条漏掉;更坏的是五位端口先到四位 —— 块尾被当成合法结尾,
- * 于是记下一个**错的**四位端口,那个端口上住的是别人(第 1 轮审查发现 5)。
- *
- * 所以认端口要在流上做,不变量是一句话:**无论怎么切,feed 串联 + flush 的结果必须与
- * 把整条文本一次喂进 `portsFromOutput` 完全一致**。为此有两件事:
- *
- *  ① **只认已经看到右边界的端口**(端口后面还得有一个非数字字符,或者流已经到头),
- *     没看到边界的那一截留给下一块;
- *  ② 接尾巴时**只在尾巴确实被截断过时**才在最前面垫一个主机名字符。垫片是为了压住
- *     「从词中间切出来的尾巴被 `^` 当成左边界」——`notlocalhost:8787` 切在 `notloc` /
- *     `alhost:8787` 之间,拼回去必须仍然不是本机地址。但**尾巴就是流的起点**时,那个
- *     `^` 是真的:无条件垫片反过来伪造了一个本来不存在的主机名前缀,于是启动脚本只打
- *     `localhost:8787` 就整条漏掉(第 2 轮审查发现 4 实测:`portsFromOutput` 给
- *     `[8787]`,同一段文本 feed+flush 给 `[]`;`127.0.0.1` / `0.0.0.0` / `[::1]` 同样)。
- *     所以记一笔「尾巴前面有没有丢掉过字符」,丢过才垫。
- */
-export function createPortScanner(): { feed(chunk: string): number[]; flush(): number[] } {
-  /** 上一块留下的尾巴(**不含垫片**)。 */
-  let tail = "";
-  /** 这截尾巴前面已经丢掉过字符吗 —— 丢过,它的开头就不是流的起点,`^` 不算左边界。 */
-  let truncated = false;
-  const reported = new Set<number>();
-  /** 垫片:一个主机名字符,把假的左边界压掉(只在 truncated 时用)。 */
-  const GLUE = "x";
-  const scan = (text: string, final: boolean): number[] => {
-    const fresh: number[] = [];
-    for (const match of text.matchAll(PORT_PATTERN)) {
-      const port = Number(match[1]);
-      if (port < MIN_PORT || port > 65535) continue;
-      // 端口紧挨着文本末尾 = 右边界还没到:它可能是 8787 也可能是 87870,留给下一块。
-      // flush 时没有下一块了,末尾就是终态。
-      if (!final && (match.index ?? 0) + match[0].length >= text.length) continue;
-      if (reported.has(port)) continue; // 重叠的尾巴会再次匹配到同一个端口
-      reported.add(port);
-      fresh.push(port);
-    }
-    return fresh;
-  };
-  /** 把尾巴接上这一块,顺手把「有没有丢过字符」更新到接完之后的状态。 */
-  const join = (chunk: string): string => {
-    const glue = truncated && tail ? GLUE : "";
-    const text = glue + tail + chunk;
-    const kept = Math.min(SCAN_TAIL_KEEP, text.length - glue.length);
-    truncated = truncated || text.length - glue.length > SCAN_TAIL_KEEP;
-    tail = text.slice(text.length - kept); // kept ≤ 真实长度,所以绝不会把垫片留进尾巴
-    return text;
-  };
-  return {
-    feed(chunk: string): number[] {
-      return scan(join(chunk), false);
-    },
-    /** 流到头了(会话退出):手里那截尾巴按终态再认一遍 —— 地址恰好是最后一个字时才用到。 */
-    flush(): number[] {
-      if (!tail) return [];
-      const text = (truncated ? GLUE : "") + tail;
-      tail = "";
-      return scan(text, true);
-    },
-  };
-}
 
 // ── 探端口 ────────────────────────────────────────────────────────────────────
 
@@ -498,14 +419,71 @@ function lineageFromProc(pids: number[], token: string): Map<number, Lineage> {
   return lineage;
 }
 
-/** 跟这个号同进程组的全部号(含它自己)。进程表拿不到就只认它自己。 */
-function groupMembers(pid: number, pgid: number, selfPgid: number | null): number[] {
-  if (pgid <= 1 || pgid === selfPgid) return [pid];
+/**
+ * 跟这个号同进程组的全部号(含它自己)。**同时交接这份清单全不全** —— 退回「只认它自己」
+ * 有两种成因,不能都当成「它就是光杆一个」:
+ *
+ *  · 组号是 0/1 或者就是 ash 自己那组 → 这是**有意**不枚举:那不是血缘,组里坐着一堆无关
+ *    进程(文件头)。清单按设计就到这儿,算全的;
+ *  · 进程表问不出来(ps 失灵)→ 清单**不全**,「这次启动还有谁」这一问没答上来。把它当成
+ *    「没有别人」,同组那个工人就连进不了 leftovers,端口一空就被判停净(第 5 轮审查发现 1)。
+ */
+function groupMembers(pid: number, pgid: number, selfPgid: number | null): { members: number[]; complete: boolean } {
+  if (pgid <= 1 || pgid === selfPgid) return { members: [pid], complete: true };
   const table = readProcessTableSync();
-  if (!table) return [pid];
+  if (!table) return { members: [pid], complete: false };
   const members = new Set<number>([pid]);
   for (const [other, group] of table.pgidOf) if (group === pgid) members.add(other);
-  return [...members];
+  return { members: [...members], complete: true };
+}
+
+/** 停止**之前**的成员快照里的一个号。`ours` = 核实了是这次启动起来的。 */
+export type LaunchMember = { pid: number; ours: boolean; reason: string };
+
+/**
+ * 动手**之前**把「这次启动此刻都有谁」照一张相:这些端口上的住户 + 它们同组的成员,逐个
+ * 带着归属结论和一句给用户看的话。
+ *
+ * 只有**配了停止命令**的那条路需要它。默认停止是我们自己动手的,`stopByPorts` 枚举成员时
+ * 顺手就把「核不上归属所以没敢动」的那几个记下来了;而用户那段脚本我们不插手,跑完只能回头
+ * 问端口 —— 端口一空就判停净,于是「脚本只收掉了监听者、它 fork 的工人还在跑」这种从来
+ * 没进过账(第 5 轮审查发现 1)。要发现它,就得有一份停止前的清单可比。
+ *
+ * `complete=false` = 这张相本身没照全(lsof/进程表问不出来、或者这条会话压根没有启动记号),
+ * 那就不许拿它的「没人剩下」当证据。
+ */
+export async function launchMembers(
+  ports: Iterable<number>,
+  token: string | null,
+): Promise<{ members: LaunchMember[]; complete: boolean }> {
+  const members: LaunchMember[] = [];
+  if (IS_WINDOWS || !LSOF_PATH || !token) return { members, complete: false };
+  const selfPgid = readProcessTableSync()?.pgidOf.get(process.pid) ?? null;
+  const seen = new Set<number>();
+  let complete = true;
+  for (const port of ports) {
+    const found = await listeningPids(port);
+    if (!found.ok) { complete = false; continue; }
+    for (const pid of found.pids) {
+      if (pid === process.pid || seen.has(pid)) continue;
+      const holder = await inspectPid(pid);
+      if (!holder) continue; // 刚才还在,现在没了 —— 不用管
+      if (selfPgid !== null && holder.pgid === selfPgid) { seen.add(pid); continue; } // 那是 ash 自己
+      const group = groupMembers(holder.pid, holder.pgid, selfPgid);
+      if (!group.complete) complete = false;
+      const lineage = await readLineage(group.members, token);
+      for (const member of group.members) {
+        if (seen.has(member)) continue;
+        seen.add(member);
+        const who = lineage.get(member);
+        if (who === undefined) continue; // 它已经退了
+        members.push(who === "ours"
+          ? { pid: member, ours: true, reason: `它带着这次启动的记号（${LAUNCH_ID_ENV}），是这次起来的` }
+          : { pid: member, ours: false, reason: refusal(who) });
+      }
+    }
+  }
+  return { members, complete };
 }
 
 // ── 停 ────────────────────────────────────────────────────────────────────────
@@ -518,7 +496,7 @@ export async function stopByPorts(
   ports: Iterable<number>,
   options: { launchToken: string; graceMs?: number },
 ): Promise<PortStopOutcome> {
-  const outcome: PortStopOutcome = { killed: [], spared: [], unknown: [], leftovers: [] };
+  const outcome: PortStopOutcome = { killed: [], spared: [], unknown: [], leftovers: [], membersIncomplete: false };
   if (IS_WINDOWS || !LSOF_PATH) return outcome;
   const selfPgid = readProcessTableSync()?.pgidOf.get(process.pid) ?? null;
   // **整个动作共用一份预算**:逐端口、每个住户的 inspect/readLineage、TERM/KILL 的等待
@@ -542,7 +520,9 @@ export async function stopByPorts(
         outcome.spared.push({ holder, reason: "那是 ash 自己所在的进程组" });
         continue;
       }
-      const members = groupMembers(holder.pid, holder.pgid, selfPgid);
+      const group = groupMembers(holder.pid, holder.pgid, selfPgid);
+      if (!group.complete) outcome.membersIncomplete = true;
+      const members = group.members;
       const lineage = await readLineage(members, options.launchToken);
       if (lineage.get(holder.pid) !== "ours") {
         outcome.spared.push({ holder, reason: refusal(lineage.get(holder.pid)) });
@@ -613,8 +593,8 @@ async function waitGone(alive: () => boolean, graceMs: number): Promise<boolean>
 export function stopByPortsSync(
   ports: Iterable<number>,
   token: string,
-): { killed: number[]; spared: number[] } {
-  const result: { killed: number[]; spared: number[] } = { killed: [], spared: [] };
+): { killed: number[]; spared: number[]; leftovers: number[]; membersIncomplete: boolean } {
+  const result = { killed: [] as number[], spared: [] as number[], leftovers: [] as number[], membersIncomplete: false };
   if (IS_WINDOWS || !LSOF_PATH || !token) return result;
   const table = readProcessTableSync();
   const selfPgid = table?.pgidOf.get(process.pid) ?? null;
@@ -626,8 +606,17 @@ export function stopByPortsSync(
       seen.add(pid);
       const pgid = table?.pgidOf.get(pid) ?? 0;
       if (selfPgid !== null && pgid === selfPgid) { result.spared.push(pid); continue; }
-      const members = groupMembers(pid, pgid, selfPgid);
+      const group = groupMembers(pid, pgid, selfPgid);
+      if (!group.complete) result.membersIncomplete = true;
+      const members = group.members;
       const lineage = readLineageSync(members, token);
+      // 同组里核不上归属的那几个,这一拍**也是新发现的责任**。同步版早先只回 killed/spared,
+      // 于是关服那句交代只看得见账上原有的号,从没点过停止就直接关服时一个字都不会提
+      // (第 5 轮审查发现 1)。
+      for (const member of members) {
+        if (lineage.get(member) === "ours" || !processAlive(member)) continue;
+        result.leftovers.push(member);
+      }
       const targets = members.filter((member) => lineage.get(member) === "ours");
       if (!targets.length) { result.spared.push(pid); continue; }
       for (const target of targets) {

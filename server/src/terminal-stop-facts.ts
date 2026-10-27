@@ -55,6 +55,23 @@ export function applyStop(session: TerminalSession, next: StopResolution): void 
 }
 
 /**
+ * **发现即落账**:这一趟新发现的「没核销的责任」立刻并进账,不等这次动作成不成功。
+ *
+ * 为什么不能等到成功分支再落:停止这条路上,`stopByPorts` 枚举同组成员时就已经知道「这几个
+ * 核不上归属、我没敢动」,但那之后还要回头核一遍端口,核不出来就提前返回 stuck —— 发现
+ * 被原地丢掉。下一遍再点停止时监听者已经死了,同组那个工人**再也不会被发现**,于是端口一空
+ * 就判成 verified,刚加的销毁保护也跟着被绕过(第 5 轮审查发现 1 实测:第一次停止 502、
+ * 工人还活着、`stop` 仍是 none;第二次停止 200 verified,工人照旧活着)。
+ *
+ * 所以落账的时机是**发现的那一刻**,不是结论的那一刻。它只动账,不碰 portsAlive/代次 ——
+ * 此刻端口可能还有人听,运行事实该由核验分支去改。`pids` 允许为空:那是「清单本身不全」
+ * (进程表或 lsof 问不出来、端口超额),同样是一笔核销不掉的责任。
+ */
+export function oweLeftovers(session: { stop: StopFact }, pids: number[], why: string): void {
+  session.stop = mergeStop(session.stop, { kind: "unresolved", pids, why });
+}
+
+/**
  * 「用户要求停止」—— 动手**之前**就落下,它不表示停净了(terminateSession 的 TERM/KILL
  * 后面每一轮都可能失败)。只覆盖 `none`:已经有核验结论的账不许被降级回「刚请求」。
  */
@@ -148,7 +165,16 @@ export function releaseLaunchPortsSync(sessions: Iterable<TerminalSession>): { k
   for (const session of sessions) {
     if (session.commandId === null) continue;
     if (PORT_TIER_AVAILABLE && session.launchToken && session.launchPorts.size > 0) {
-      killed += stopByPortsSync(session.launchPorts, session.launchToken).killed.length;
+      const swept = stopByPortsSync(session.launchPorts, session.launchToken);
+      killed += swept.killed.length;
+      // 这一拍**新发现**的也要先落账,否则下面那句交代只说得出账上原有的号 —— 从没点过停止
+      // 就直接关服时,同组那个工人一个字都不会被提到(第 5 轮审查发现 1)。
+      if (swept.leftovers.length) {
+        oweLeftovers(session, swept.leftovers, "关服那一拍发现它们核不上归属,没敢动");
+      }
+      if (swept.membersIncomplete) {
+        oweLeftovers(session, [], "关服那一拍问不出进程表,同组还有谁没能枚举全");
+      }
     }
     // 补刀之后账上还活着的号:**没有一条路能把它停掉** —— 它们当初就是因为核不上归属才
     // 被放过的,关服这一拍不会突然多出凭据,扩大 kill 范围是明令禁止的(service-ports.ts

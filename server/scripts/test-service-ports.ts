@@ -30,6 +30,10 @@
  *      连同唯一的把手一起扔掉 —— 单调性保住了对象、对象却被整个删掉(第 4 轮审查发现 1);
  *   ⑫ **ps 问不出话时不许塌成「端口空了」**:缺那一行有两种成因,「它还活着」只能读成
  *      核不上(第 4 轮审查发现 2 实测:只让 `ps -E` 退非零,服务活着却被报成已停止)。
+ *   ⑬ **发现即落账**:这一趟发现的责任不许跟着失败分支一起消失。下一遍监听者已经死了,
+ *      同组那个工人再也不会被发现,端口一空就判停净(第 5 轮审查发现 1 实测);
+ *   ⑭ **停止命令只收掉监听者也不算停净**:端口空了只说明监听者走了,脚本这条路我们不插手,
+ *      所以要拿停止**之前**照的成员相去比(同上)。
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -60,12 +64,18 @@ const strays = new Set<number>();
 writeFileSync(join(cwd, "serve.js"), `
 const http = require("node:http");
 const fs = require("node:fs");
-const [port, pidfile, worker] = process.argv.slice(2);
+const [port, pidfile, worker, workerPort] = process.argv.slice(2);
 // worker:再 fork 一个**同进程组**的工人,但用 env -i 洗掉环境 —— 它是记号断掉的那一类
 // (service-ports.ts 顶部写明的已知空洞)。回归要钉住:这种成员宁可停不掉,也不许连坐。
+// workerPort 给了的话它**自己也听一个端口**:那样回头核端口时它核不上归属,整次停止落在
+// 「没法确认」那一档 —— ⑬ 要的就是这个失败分支。
 if (worker) {
   const { spawn } = require("node:child_process");
-  const child = spawn("/usr/bin/env", ["-i", process.argv[0], "-e", "fs=require('node:fs');fs.writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)", worker], { stdio: "ignore" });
+  const body = workerPort
+    ? "const h=require('node:http'),f=require('node:fs');const a=process.argv.slice(1);h.createServer((_,r)=>r.end('w')).listen(Number(a[1]),'127.0.0.1',()=>f.writeFileSync(a[0],String(process.pid)));"
+    : "fs=require('node:fs');fs.writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)";
+  const args = workerPort ? [worker, workerPort] : [worker];
+  const child = spawn("/usr/bin/env", ["-i", process.argv[0], "-e", body, ...args], { stdio: "ignore" });
   child.unref();
 }
 http.createServer((_, res) => res.end("ok")).listen(Number(port), "127.0.0.1", () => {
@@ -134,8 +144,9 @@ const serviceSession = (projectId: string) => terminalSessions.listCommandSessio
  * 一条守护化的启动脚本:双 fork(detached = setsid)+ stdio 全丢掉,父进程立刻退出,
  * 服务挂到 PID 1 名下 —— 与 kb.sh 的 daemonize() 同形。最后自报端口,那是唯一的线索。
  */
-function daemonScript(port: number, pidfile: string, extra: string[] = [], worker?: string): string {
-  const args = ["serve.js", String(port), pidfile, ...(worker ? [worker] : [])].map((arg) => `"${arg}"`).join(",");
+function daemonScript(port: number, pidfile: string, extra: string[] = [], worker?: string, workerPort?: number): string {
+  const tail = worker ? [worker, ...(workerPort ? [String(workerPort)] : [])] : [];
+  const args = ["serve.js", String(port), pidfile, ...tail].map((arg) => `"${arg}"`).join(",");
   return [
     `node -e 'const {spawn}=require("node:child_process");`
     + `const c=spawn(process.argv[1],[${args}],{detached:true,stdio:"ignore"});c.unref();'`
@@ -581,6 +592,79 @@ try {
     assert.ok(alive(failPid), "服务全程都活着 —— 这正是「被报成已停止」时的真实状态");
     process.kill(failPid, "SIGKILL");
     strays.delete(failPid);
+  }
+
+  // ── ⑬ 发现即落账:责任不许跟着失败分支一起消失 ──────────────────────────────────
+  //    现场:守护进程听 A,它 fork 的、env -i 洗掉环境的工人听 B,两个端口都被打印出来。点停止
+  //    → A 的监听者(带记号)被收掉、同组那个工人被发现但一个字都不敢动;回头核端口时 B 上还
+  //    坐着它、核不上归属 ⇒ 报失败。失败分支早先直接 return,这一趟的发现原地丢掉:下一遍
+  //    监听者已经死了,工人再也不会被枚举到,端口一空就判 verified(发现 1 实测)。
+  const pairPort = await freePort();
+  const pairWorkerPort = await freePort();
+  const pairPidfile = join(cwd, "pair.pid");
+  const pairWorkerPidfile = join(cwd, "pair-worker.pid");
+  {
+    const hint = [`echo "[svc] 工人在 http://127.0.0.1:${pairWorkerPort}"`];
+    const start = daemonScript(pairPort, pairPidfile, hint, pairWorkerPidfile, pairWorkerPort);
+    assert.equal((await startCommand("ports13", cwd, service(start))).status, 201);
+    await waitFor("两个端口都听上了", async () =>
+      (await listening(pairPort)).length > 0 && (await listening(pairWorkerPort)).length > 0);
+    const pairPid = pidIn(pairPidfile);
+    const pairWorker = pidIn(pairWorkerPidfile);
+    strays.add(pairPid);
+    strays.add(pairWorker);
+    await waitFor("启动脚本退出", () => serviceSession("ports13")?.exitCode !== null);
+    assert.deepEqual(serviceSession("ports13")?.ports, [pairPort, pairWorkerPort], "两个端口都要记下来");
+
+    const failed = await stopCommand("ports13", SERVICE_COMMAND_ID, null, { portGraceMs: 500 });
+    assert.equal(failed.status, 502, "工人占着的那个端口核不上归属 —— 这次停止不许宣称成功");
+    await waitFor("带记号的监听者确实被收掉了", () => !alive(pairPid));
+    assert.ok(alive(pairWorker), "核不上归属的那个一个字都不许动");
+    assert.deepEqual(
+      leftoversOf("ports13"),
+      [pairWorker],
+      "**这一条就是本轮的修复**:发现的那一刻就要落账,不能等到成功分支才交 —— 失败分支一 return,下一遍就再也发现不了它",
+    );
+    process.kill(pairWorker, "SIGKILL");
+    await waitFor("工人走了", () => !alive(pairWorker));
+    const settled = await stopCommand("ports13", SERVICE_COMMAND_ID, null, { portGraceMs: 300 });
+    assert.equal(settled.status, 200, "两个端口都空了,这次才算核到终态");
+    strays.delete(pairPid);
+    strays.delete(pairWorker);
+  }
+
+  // ── ⑭ 停止命令只收掉监听者,也不算这次启动停净了 ────────────────────────────────
+  //    脚本这条路 ash 不替用户强杀(他写那段脚本正是不想让 ash 直接 kill),于是默认停止那边
+  //    「枚举同组成员」的覆盖拿不到 —— 必须拿停止**之前**照的成员相来比:端口空了只说明
+  //    监听者走了,它 fork 的工人从来没进过账(发现 1)。
+  {
+    const scriptPort2 = await freePort();
+    const litePidfile = join(cwd, "lite.pid");
+    const liteWorker = join(cwd, "lite-worker.pid");
+    assert.equal(
+      (await startCommand("ports14", cwd, service(daemonScript(scriptPort2, litePidfile, [], liteWorker)))).status,
+      201,
+    );
+    await waitFor("守护进程听上了端口", async () => (await listening(scriptPort2)).length > 0);
+    const litePid = pidIn(litePidfile);
+    strays.add(litePid);
+    await waitFor("洗掉环境的工人也起来了", () => { try { return pidIn(liteWorker) > 0; } catch { return false; } });
+    const liteWorkerPid = pidIn(liteWorker);
+    strays.add(liteWorkerPid);
+    await waitFor("启动脚本退出", () => serviceSession("ports14")?.exitCode !== null);
+    // 一条**只收监听者**的停止命令:它 exit 0,端口也真的让出来了。
+    const partial = await stopCommand("ports14", SERVICE_COMMAND_ID, {
+      script: `kill -9 ${litePid}`, cwd, timeoutMs: 5_000,
+    }, { portGraceMs: 300 });
+    assert.equal(partial.status, 200);
+    await waitFor("监听者被脚本收掉了", () => !alive(litePid));
+    const partialBody = partial.body as { stopped: boolean; unresolved?: number[]; notice?: string };
+    assert.deepEqual(partialBody.unresolved, [liteWorkerPid], "停止前在跑、现在还活着的成员要落进账");
+    assert.match(partialBody.notice ?? "", /停止命令跑完了/, "要跟用户说清是他那条脚本没收干净");
+    assert.deepEqual(leftoversOf("ports14"), [liteWorkerPid], "刷新回来还看得见");
+    process.kill(liteWorkerPid, "SIGKILL");
+    strays.delete(litePid);
+    strays.delete(liteWorkerPid);
   }
 
   // ── ⑩-关服 那一拍的同步收口也要盖到端口这一档 ─────────────────────────────────────
