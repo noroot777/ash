@@ -342,7 +342,7 @@ export function settledRulingsSection(
   }
   // 逐级降完还是装不下：条数本身就超了。收进有界摘要 —— 逐条内容进 settled-rulings.md，
   // 提示里只留分档条数和那份文件的入口。
-  return digestSection(rulings, audience, full, disputeUpheld);
+  return digestSection(rulings, audience, full, disputeUpheld, cap);
 }
 
 /**
@@ -377,16 +377,22 @@ function* shapes(
 }
 
 /**
- * 末级：**与条数无关**的有界摘要 —— 固定指引 + 一个全文入口，再没有能随数据长的部分。
+ * 末级：有界摘要 —— 固定指引 + 一个全文入口，再没有能随**条数**长的部分。
  *
- * 全文入口写在最前面，而且这一级不再做任何截断：没有入口的摘要等于无声丢条目，固定指引
- * 被砍掉半句则是「字节达标、语义不成立」，两样都比超顶几百字节更坏。
+ * 「与条数无关」不等于「必然放得下」：入口是一条**绝对路径**，它随环境长。第 1 轮审查在
+ * Linux 真目录上实测，18 段目录下全文路径 1886B，执行者侧这一节 2806B > 声明的 2500B ——
+ * 前几级候选都按字节核对过，偏偏最后一级直接 return，于是声明的上限在这条路上不成立。
+ *
+ * 所以这一级也核对最终字节，超了**换入口的表达方式**，既不截路径也不删指引：改用和
+ * 「全文落盘失败」同一个去处（任务详情里的审查记录），它不含路径、长度恒定，所以这一步
+ * 之后整节的长度只由常量决定 —— 这才是真的有上限。
  */
 function digestSection(
   rulings: readonly SettledRuling[],
   audience: "reviewer" | "executor",
   full: FullText | null,
   disputeUpheld: boolean,
+  cap: number,
 ): string {
   const deferred = rulings.filter((item) => item.resolution === "deferred").length;
   const withdrawn = rulings.length - deferred;
@@ -394,24 +400,27 @@ function digestSection(
     deferred ? `${deferred} 条已转为独立任务` : "",
     withdrawn ? `${withdrawn} 条已被裁定作废` : "",
   ].filter(Boolean).join("、");
-  const text = `\n\n【${titleOfSection(disputeUpheld)}】\n` +
-    `逐条的轮次、承接任务与依据全文都在 ${full?.reference ?? "任务详情里那几轮的审查记录"}` +
-    `，动手前先读它。\n` +
+  const render = (reference: string) => `\n\n【${titleOfSection(disputeUpheld)}】\n` +
+    `逐条的轮次、承接任务与依据全文都在 ${reference}，动手前先读它。\n` +
     `这个任务上已经有 ${rulings.length} 条用户裁定（${kinds}），条数多到内联不下，这里只记一笔。\n\n` +
     guidanceLines(audience, deferred > 0, withdrawn > 0, disputeUpheld).join("\n");
-  // 这里**不做截断**：摘要的长度 = 固定指引 + 一个入口地址，已经与裁定条数无关，剩下能动
-  // 的只有指引本身和那个入口 —— 砍掉哪一半都会让这一节从「有界」变成「字节达标但读不懂」
-  // （`review-history.ts` 的 `PRIOR_FINDINGS_TAIL` 记的就是那个形态）。所以不再收 `cap`：
-  // 最终渲染层的不变量是「固定契约完整 + 入口完整 + 总字节有界」，不是「总字节有界」一条。
-  return text;
+  const text = render(full?.reference ?? SETTLED_FALLBACK_REFERENCE);
+  if (bytes(text) <= cap) return text;
+  // 路径本身就比整节上限长。**不截路径、不删指引**，换一个不含路径的完整去处：这一步之后
+  // 整节只剩常量，长度与环境无关。三条不变量（固定指引完整 / 入口完整可读 / 总字节有界）
+  // 同时成立，靠的是入口换表达，不是哪一条让步。
+  return render(`${SETTLED_FALLBACK_REFERENCE}（全文文件的路径比这一节的上限还长，写进来会把整节撑破）`);
 }
+
+/** 没有全文文件、或路径长到写不进来时的去处：不含路径，长度恒定。 */
+const SETTLED_FALLBACK_REFERENCE = "任务详情里那几轮的审查记录";
 
 function titleOfSection(disputeUpheld: boolean): string {
   return disputeUpheld ? "此前已由用户裁定过的意见（背景）" : "已由用户裁定、不在本任务里修的意见";
 }
 
 /** 这一节末尾那几句「所以你该怎么办」。两侧分叉，长度与条数无关。 */
-function guidanceLines(
+export function guidanceLines(
   audience: "reviewer" | "executor",
   deferred: boolean,
   withdrawn: boolean,

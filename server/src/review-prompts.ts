@@ -16,6 +16,7 @@ import { tasks } from "./db/schema.js";
 import { VERIFY_CHECK_LABELS } from "@ash/shared/workflow";
 import { workflowPolicy } from "@ash/shared/workflow-policy";
 import { taskWorkflowDef } from "./workflows.js";
+import { NO_REMINDER, type TurnReminder } from "./turn-prompt.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
@@ -124,18 +125,21 @@ export async function verifyProtocolFor(
 }
 
 /** 就地验证轮的每回合提醒（中途提问、被打断续跑时，只有它跟得到底）。 */
-export async function verifyReminderFor(taskId: string, round: number): Promise<string> {
+export async function verifyReminderFor(taskId: string, round: number): Promise<TurnReminder> {
   const dir = reviewRoundDir(taskId, round);
-  const { reference } = await refreshRegressionEvidence(taskId, dir);
-  return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。验证须有真实执行依据（回归口径见下面的清单说明）；把报告写到 ${join(dir, "report.md")}，` +
-    REPORT_SUMMARY_REMINDER +
-    REVIEW_SWEEP_REMINDER +
-    reference +
-    `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
-    `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
-    `验证完停掉自己启动的所有服务/进程；` +
-    `要等一件以分钟计的慢事就用 start_monitor 挂上、pause_task 收尾这一轮（别干等，也别不给结论就结束）；` +
-    `结束前调 report_stage(taskId="${taskId}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论，本回合不要调 complete_task。`;
+  const { reference, manifestEntry } = await refreshRegressionEvidence(taskId, dir);
+  return {
+    text: `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。验证须有真实执行依据（回归口径见下面的清单说明）；把报告写到 ${join(dir, "report.md")}，` +
+      REPORT_SUMMARY_REMINDER +
+      REVIEW_SWEEP_REMINDER +
+      reference +
+      `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
+      `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
+      `验证完停掉自己启动的所有服务/进程；` +
+      `要等一件以分钟计的慢事就用 start_monitor 挂上、pause_task 收尾这一轮（别干等，也别不给结论就结束）；` +
+      `结束前调 report_stage(taskId="${taskId}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论，本回合不要调 complete_task。`,
+    manifestEntry,
+  };
 }
 
 /** 历史做法：独立审查任务的协议正文。老任务身上还挂着这种任务，得能跑完。 */
@@ -168,19 +172,24 @@ export async function reviewProtocolFor(
 }
 
 /** 历史做法：独立审查任务的每回合提醒。 */
-export async function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "reviewRound">): Promise<string> {
-  if (!review.reviewOf || !review.reviewRound) return "";
+export async function reviewReminderFor(
+  review: Pick<TaskRow, "id" | "reviewOf" | "reviewRound">,
+): Promise<TurnReminder> {
+  if (!review.reviewOf || !review.reviewRound) return NO_REMINDER;
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
-  const { reference } = await refreshRegressionEvidence(review.reviewOf, dir);
-  return `审查提醒:这是第 ${review.reviewRound} 轮审查；验证须有真实执行依据（回归口径见下面的清单说明）；把报告写到 ${join(dir, "report.md")}，` +
-    REPORT_SUMMARY_REMINDER +
-    REVIEW_SWEEP_REMINDER +
-    reference +
-    `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
-    `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
-    `验证完停掉自己启动的所有服务/进程；` +
-    `结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
-    `再对审查任务自身 ${review.id} 调 complete_task。`;
+  const { reference, manifestEntry } = await refreshRegressionEvidence(review.reviewOf, dir);
+  return {
+    text: `审查提醒:这是第 ${review.reviewRound} 轮审查；验证须有真实执行依据（回归口径见下面的清单说明）；把报告写到 ${join(dir, "report.md")}，` +
+      REPORT_SUMMARY_REMINDER +
+      REVIEW_SWEEP_REMINDER +
+      reference +
+      `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
+      `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
+      `验证完停掉自己启动的所有服务/进程；` +
+      `结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
+      `再对审查任务自身 ${review.id} 调 complete_task。`,
+    manifestEntry,
+  };
 }
 
 /** 没过时交回原任务的修复提示。`reviewTaskId` 非空 = 历史那种独立审查任务给的结论。 */

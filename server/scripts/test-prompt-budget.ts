@@ -89,6 +89,8 @@ const BUDGETS: Record<string, number> = {
   "delivered/review-resume": 6750,
   // 证据清单读不出来那一轮：续跑正文里一个字都没有，全靠提醒把状态带到。
   "delivered/review-resume-nomanifest": 6150,
+  // 目录名含「。」：比普通续跑多出用户引的那条旧地址，本轮入口必须照样在。
+  "delivered/review-resume-dotdir": 7100,
   "delivered/repair": 6450,
   // ── MCP 工具清单：每一条都常驻执行者的每一个回合 ─────────────────────────────
   // 字段说明按 **SDK 真正发出去的那份 JSON Schema** 量（见采样器 `toolTexts`）。
@@ -212,10 +214,18 @@ const SECTION_CAPS: Array<{ id: string; cap: number; entry: string; what: string
  * 最近一轮时那句话会换成别的措辞（`review-history.ts` 的 `allocate`）；这里钉的是不变量
  * 而不是那个分支 —— 合法路径最长 1024B，走不到只剩一轮，但谁把上限调小了都会在这里红。
  */
-const CONTRACT: Array<{ id: string; cap: number; what: string }> = [
-  { id: "section/history-100", cap: 4_000, what: "历史发现清单（100 轮，短地址）" },
-  { id: "deep/history-free", cap: 4_000, what: "历史发现清单·自由工作流（40 轮，单条地址 300B+）" },
-  { id: "deep/history-verify", cap: 4_000, what: "历史发现清单·就地验证（40 轮，单条地址 290B+）" },
+/** 固定契约末句取哪一份。真正的文案由生产函数算（见下面 `tailOf`），这里只记属于哪一类。 */
+type TailKind = "history" | "settled-reviewer" | "settled-executor";
+
+const CONTRACT: Array<{ id: string; cap: number; tail: TailKind; what: string }> = [
+  { id: "section/history-100", cap: 4_000, tail: "history", what: "历史发现清单（100 轮，短地址）" },
+  { id: "deep/history-free", cap: 4_000, tail: "history", what: "历史发现清单·自由工作流（40 轮，单条地址 300B+）" },
+  { id: "deep/history-verify", cap: 4_000, tail: "history", what: "历史发现清单·就地验证（40 轮，单条地址 290B+）" },
+  // 入口地址本身超过整节上限的那一类（第 1 轮审查在 Linux 真目录上复现）。末级摘要当时
+  // 直接 return，于是「与条数无关」被当成了「必然放得下」—— 而入口是随环境变长的绝对路径。
+  { id: "deep/history-longpath", cap: 4_000, tail: "history", what: "历史发现清单（地址 3.7KB，超过整节上限）" },
+  { id: "deep/settled-reviewer-longref", cap: 5_000, tail: "settled-reviewer", what: "裁定重播·审查者侧（全文地址 4KB，合法路径的最坏情况）" },
+  { id: "deep/settled-executor-longref", cap: 2_500, tail: "settled-executor", what: "裁定重播·执行者侧（全文地址 2KB，超过整节上限）" },
 ];
 
 /**
@@ -226,12 +236,15 @@ const CONTRACT: Array<{ id: string; cap: number; what: string }> = [
  * 证据清单引用各两遍）。锚点取的是各段话的首句，同时断言它**在整个样本集里至少出现
  * 一次** —— 否则改个措辞就能让这条断言悄悄变成空转。
  */
-const DEDUP_ANCHORS = [
-  "报告开头必须",                  // 报告格式契约（完整版 / 缩略版共有）
-  "该扫的面扫完了",                // 六面扫描的覆盖声明锚点（协议 / 缩略版共有）
-  "执行者回归证据清单：",           // 回归证据清单说明
-  "passed=true 且 exitCode=0",     // 清单怎么读（只许由清单说明自己讲）
-  "浏览器验证必须按以下顺序选择通道", // 全局浏览器策略
+const DEDUP_ANCHORS: Array<{ anchor: string; twiceOk?: readonly string[] }> = [
+  { anchor: "报告开头必须" },                  // 报告格式契约（完整版 / 缩略版共有）
+  { anchor: "该扫的面扫完了" },                // 六面扫描的覆盖声明锚点（协议 / 缩略版共有）
+  // 回归证据清单入口。**只有一份样本里它该出现两次**：目录名含「。」那一条，用户消息里引着
+  // 上一轮的地址、提醒里是本轮的地址 —— 两条不同路径各算一个入口，正是那份样本要证明的事
+  //（上一版把它们当成同一个入口，删掉了本轮那一份）。其余样本一律至多一次。
+  { anchor: "执行者回归证据清单：", twiceOk: ["delivered/review-resume-dotdir"] },
+  { anchor: "passed=true 且 exitCode=0" },     // 清单怎么读（只许由清单说明自己讲）
+  { anchor: "浏览器验证必须按以下顺序选择通道" }, // 全局浏览器策略
 ];
 
 /**
@@ -324,7 +337,8 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
   // 有全文，再讲一遍就是同一条消息里两份。
   {
     name: "REVIEWER_REGRESSION_CLAUSE",
-    where: ["review/resume", "delivered/review-resume", "delivered/review-resume-nomanifest"],
+    where: ["review/resume", "delivered/review-resume", "delivered/review-resume-nomanifest",
+      "delivered/review-resume-dotdir"],
   },
   // 「这份清单怎么读」的全文：正文讲过就不在提醒里重讲（去重判据见 turn-prompt.ts），
   // 所以续跑那条**只有提醒带着它**，首次派审那条**只有正文带着它** —— 两边各一份。
@@ -332,7 +346,7 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
     name: "REGRESSION_MANIFEST_READING",
     where: ["review/dispatch-bare", "review/dispatch-logic", "review/dispatch-syntax",
       "stress/review-dispatch", "stress/review-dispatch-100",
-      "delivered/review-dispatch", "delivered/review-resume"],
+      "delivered/review-dispatch", "delivered/review-resume", "delivered/review-resume-dotdir"],
   },
   {
     name: "EXECUTOR_REGRESSION_RECORDING",
@@ -402,6 +416,13 @@ const dumpTo = process.argv.includes("--dump") ? process.argv[process.argv.index
 try {
   const { renderPromptSamples, sizeOf } = await import("./prompt-budget-samples.js");
   const { PRIOR_FINDINGS_TAIL } = await import("../src/review-history.js");
+  const { guidanceLines } = await import("../src/free-review-settled.js");
+  const { dedupeReminder } = await import("../src/turn-prompt.js");
+  // 两节各自的「固定契约最后一句」。取的是**生产函数算出来**的那一句，不在这里抄文案 ——
+  // 抄一份就等于再开一个会漂移的副本。裁定那两份夹具都是既有转出又有作废、未维持原意见。
+  const tailOf = (kind: TailKind): string => kind === "history"
+    ? PRIOR_FINDINGS_TAIL
+    : guidanceLines(kind === "settled-reviewer" ? "reviewer" : "executor", true, true, false).at(-1)!;
   const shared = (await import("@ash/shared/free-workflow")) as unknown as Record<string, string>;
   const samples = await renderPromptSamples(root);
   const size = new Map(samples.map((sample) => [sample.id, sizeOf(sample.text)]));
@@ -472,28 +493,29 @@ try {
 
   // ③″ 固定契约完整 + 入口真读得到。字节达标不等于剩下的文字还是份完整契约 —— 这一条
   //     量的是**没归一过**的那份正文（归一会把舞台根缩成 7 字节，路径压力恰好就量不到了）。
-  for (const { id, cap, what } of CONTRACT) {
+  for (const { id, cap, tail, what } of CONTRACT) {
     const sample = samples.find((item) => item.id === id);
     assert.ok(sample, `CONTRACT 指向了不存在的样本 ${id}`);
     const text = sample.raw;
     const actual = sizeOf(text);
     assert.ok(actual <= cap,
       `${what} 渲染出 ${actual}B，超过生产声明的整节上限 ${cap}B（超 ${actual - cap}B）`);
-    assert.ok(text.endsWith(PRIOR_FINDINGS_TAIL),
-      `${what} 没有以固定契约结尾 —— 末尾那两句（「报类不报个例」「还没修好／复发照样报」）` +
-      "是这一节的用处本身，被切掉就只剩一摞旧条目。整节不许盲截，装不下要降级成有界摘要");
+    assert.ok(text.endsWith(tailOf(tail)),
+      `${what} 没有以固定契约结尾 —— 末尾那几句是这一节的用处本身（历史说明是「报类不报` +
+      "个例」和「还没修好／复发照样报」，裁定重播是读者侧的处置指引），被切掉就只剩一摞" +
+      "旧条目。整节不许盲截，装不下要降级成有界摘要");
     // 预期入口由夹具**结构化给出**，不从正文里反解地址：反解只能靠「地址到哪儿为止」这种
     // 猜测，而任何猜测都会在合法输入上判错（上一版猜「到第一个空白为止」，含空格的舞台根
     // 就全军覆没）。这里只做两件与字符形状无关的事：原文里有没有这个**完整**地址、它读不读得到。
     const expected = sample.entries ?? [];
     assert.ok(expected.length > 0,
       `${what} 没有给出预期入口：CONTRACT 样本必须在采样器里声明它应当指得到哪几个地方`);
-    const present = expected.filter((path) => text.includes(path));
+    const present = expected.filter((entry) => text.includes(entry.text));
     assert.ok(present.length > 0,
-      `${what} 里一个完整报告入口都没有（预期的 ${expected.length} 个地址一个都没整串出现）：` +
+      `${what} 里一个完整入口都没有（预期的 ${expected.length} 个去处一个都没整串出现）：` +
       "省掉的条目必须留一个真读得到的去处，截在半条地址上的指路比不指路更坏");
-    for (const path of present) {
-      assert.ok(existsSync(path), `${what} 的入口 ${path} 在盘上不存在`);
+    for (const entry of present.filter((item) => item.onDisk)) {
+      assert.ok(existsSync(entry.text), `${what} 的入口 ${entry.text} 在盘上不存在`);
     }
     // 首轮的标签有两种形状：单链是「第 1 轮」，跨链是「第 1 条审查链第 1 轮」，都以
     // 「第 1 」起头（`freeReviewPriorRounds` 的 label）。
@@ -519,12 +541,13 @@ try {
   }
 
   // ⑤ 去重：同一条消息里同一段话只许讲一遍。
-  for (const anchor of DEDUP_ANCHORS) {
+  for (const { anchor, twiceOk } of DEDUP_ANCHORS) {
     const seen = samples.filter((sample) => sample.text.includes(anchor));
     assert.ok(seen.length > 0,
       `去重锚点「${anchor}」在所有样本里一次都没出现：它要么被改了措辞、要么那段话没了，` +
       "无论哪种，这条断言都已经空转——改锚点或删掉它，别留着");
-    const twice = seen.filter((sample) => sample.text.split(anchor).length - 1 > 1)
+    const twice = seen.filter((sample) => !twiceOk?.includes(sample.id))
+      .filter((sample) => sample.text.split(anchor).length - 1 > 1)
       .map((sample) => `${sample.id}×${sample.text.split(anchor).length - 1}`);
     assert.deepEqual(twice, [],
       `「${anchor}」在同一条消息里出现了不止一次：${twice.join("、")}。` +
@@ -545,6 +568,31 @@ try {
       assert.ok(!sample.text.includes(anchor),
         `${id} 这条投递消息里不该有${what}（出现了「${anchor}」）`);
     }
+  }
+
+  // ⑥′ 夹具声明的「这一份必须原样含有」。`REQUIRED` 只能写死字面量，而「本轮清单的**完整**
+  //     地址有没有活着出现在投递消息里」是随夹具变的事实 —— 第 1 轮审查复现的正是它被误删。
+  for (const { id, requires } of samples) {
+    for (const needed of requires ?? []) {
+      const sample = samples.find((item) => item.id === id)!;
+      assert.ok(sample.raw.includes(needed),
+        `${id} 里缺了夹具声明的必含内容：${needed}\n` +
+        "去重只许删**整串相同**的那一份，拿不准一律保留");
+    }
+  }
+
+  // ⑥″ 去重判据本身：整串相等才算重复。这一条直接打生产函数，因为三个提醒（自由审查、
+  //     就地验证、历史独立审查）共用它 —— 判据塌了就是三个入口一起塌。
+  {
+    const entryOf = (path: string) => `执行者回归证据清单：${path}。`;
+    const current = entryOf("/tmp/ash。runs/t/free-review/r/round-2/regression-evidence.json");
+    const older = entryOf("/tmp/ash。runs/t/free-review/r/round-1/regression-evidence.json");
+    const reminder = { text: `审查提醒：${current}清单读法若干。`, manifestEntry: current };
+    assert.ok(dedupeReminder(reminder, `上一轮的清单在 ${older}`).includes(current),
+      "目录名含「。」时，本轮清单入口被当成重复删掉了：两条路径只共享『第一个句号之前』" +
+      "的那一段，不是同一个入口。判据必须是整串相等");
+    assert.ok(!dedupeReminder(reminder, `正文里已经有 ${current}`).includes(current),
+      "正文里已经有一模一样的那一句，提醒里仍留了第二份：该去重的没去掉");
   }
 
   // ⑦ 用户追认的体积目标：硬断言，超过即红（棘轮防回弹）。

@@ -41,7 +41,7 @@ import { recordTurnStart } from "./turn-output.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { freeReviewReminder } from "./free-workflow.js";
-import { assembleTurnPrompt } from "./turn-prompt.js";
+import { NO_REMINDER, assembleTurnPrompt } from "./turn-prompt.js";
 import { withSkillInvocation } from "./skills.js";
 import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
@@ -400,7 +400,7 @@ export async function continueTask(
         ? await verifyReminderFor(task.id, task.verifyRound)
         : freeReviewTurn
           ? await freeReviewReminder(task.id)
-          : "";
+          : NO_REMINDER;
     // 「本任务里还有别人」的告知。触发条件是**有新面孔**（上一轮跑完之后才进来的
     // 同伴），不是 invited —— 挂在 invited 上恰好漏掉最需要它的那个：任务的原生
     // agent 第一轮走 runTask 直接起跑、从没被「召唤」过，于是后来 @ 进来的同伴它

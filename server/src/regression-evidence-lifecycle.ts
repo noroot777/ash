@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { monitors, projects, regressionEvidence, tasks } from "./db/schema.js";
-import { regressionEvidenceReference } from "./regression-checks.js";
+import { regressionEvidenceReference, regressionManifestPath } from "./regression-checks.js";
 import { independentVerificationBasis, recheckIndependentBasis } from "./regression-conclusion-basis.js";
 import { RegressionConclusionRejected } from "./regression-conclusion-errors.js";
-import { REVIEWER_REGRESSION_CLAUSE } from "@ash/shared/free-workflow";
+import { REVIEWER_REGRESSION_CLAUSE, regressionManifestEntry } from "@ash/shared/free-workflow";
 import type { IndependentVerificationBasis } from "./db/schema-regression-evidence.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir } from "./review-evidence.js";
@@ -79,7 +79,12 @@ export async function refreshRegressionEvidence(
     // 面），不说的话审查者拿不到「别自己跑」这条约束，只会自己补一轮测试。
     reference = `回归诊断清单不可用（不等于验证失败）：${unavailable}。` + REVIEWER_REGRESSION_CLAUSE;
   }
-  return { reference };
+  // 入口**构造出来**再比对，不从正文里反解：拼装层要判「这一句是不是正文里已有的那一句」，
+  // 判据必须是整串相等。按「第一个句号」去切会在目录名含「。」时切出半条路径，于是两条
+  // 不同路径被当成同一个入口（第 1 轮审查复现）。清单不可用那一路没有入口，返回 null ——
+  // 没有入口就永远不参与去重，本轮的状态警告一定发得出去。
+  const entry = regressionManifestEntry(regressionManifestPath(directory));
+  return { reference, manifestEntry: reference.includes(entry) ? entry : null };
 }
 
 export type CheckedConclusion = {

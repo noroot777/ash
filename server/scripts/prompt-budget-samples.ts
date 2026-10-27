@@ -35,7 +35,14 @@ export interface PromptSample {
    * 「整个地址都是非空白字符」根本不是存在性判据，所以这里改成**夹具给出预期**、闸只做
    * 「原文里有没有这个完整地址」和「这个地址读不读得到」两件事，与空白字符无关。
    */
-  entries?: readonly string[];
+  entries?: ReadonlyArray<{ text: string; onDisk: boolean }>;
+  /**
+   * 这份样本**必须原样含有**的那几段动态内容（路径由夹具构造，闸不反解）。
+   *
+   * 为什么要有这一栏：`REQUIRED` 那张表只能写死字面量，而「本轮清单的**完整**地址有没有
+   * 活着出现在投递消息里」是一条随夹具变的事实 —— 第 1 轮审查复现的正是它被去重误删。
+   */
+  requires?: readonly string[];
 }
 
 export const ROOT_TOKEN = "<ROOT>";
@@ -86,7 +93,9 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   mkdirSync(repo, { recursive: true });
 
   await db.insert(projects).values({ id: "pb-p", name: "budget", repoPath: repo, createdAt: at } as never);
-  for (const id of ["pb-task", "pb-bare", "pb-stress", "pb-heavy", "pb-nomanifest"]) {
+  // `pb-dot。task` 的 id 会原样成为 runs 下的目录名 —— 目录名里带一个「。」是合法的，
+  // 而它正是第 1 轮审查复现入口误删用的那个形状（见下面 delivered/review-resume-dotdir）。
+  for (const id of ["pb-task", "pb-bare", "pb-stress", "pb-heavy", "pb-nomanifest", "pb-dot。task"]) {
     await db.insert(tasks).values({
       id, projectId: "pb-p", title: "示例任务", body: "把某个功能做出来，要点若干。",
       status: "running", mode: "single", workflowMode: "free", createdAt: at, updatedAt: at,
@@ -173,18 +182,25 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   // 出现**的警告被整条去重吞掉了，所以它必须进样本。
   const noManifestRun = { ...(run as object), id: "pb-run-nomanifest", taskId: "pb-nomanifest" } as never;
   await db.insert(freeReviewRuns).values({ ...(noManifestRun as object), createdAt: "2026-10-27T01:00:00.000Z" } as never);
+  // 目录名含「。」那一路：清单入口照常产生，但用户消息里引着**上一轮**的地址，两条路径
+  // 共享「第一个句号之前」的那一段。上一版按句号切地址，于是本轮地址被当成重复删掉。
+  const dotRun = { ...(run as object), id: "pb-run-dot", taskId: "pb-dot。task" } as never;
+  await db.insert(freeReviewRuns).values({ ...(dotRun as object), createdAt: "2026-10-27T01:00:00.000Z" } as never);
 
   const {
     debatePrompt, freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt, freeReviewResumeMessage,
   } = await import("../src/free-review-prompts.js");
   const { freeReviewReminder } = await import("../src/free-workflow.js");
+  const { regressionManifestEntry } = await import("@ash/shared/free-workflow");
   const { settledRulingsFor } = await import("../src/free-review-settled.js");
   const { commonDirectory, freeReviewHistorySection } = await import("../src/review-history.js");
   // 一节历史说明可能把地址列全，也可能折成一个公共目录 —— 两种形态都是合法入口，所以
   // 预期清单两样都给，闸只要求「至少有一个完整地出现在正文里，且凡是出现的都读得到」。
-  const entryCandidates = (reports: string[]) => [...reports, commonDirectory(reports)];
+  const entryCandidates = (reports: string[]) =>
+    [...reports, commonDirectory(reports)].map((text) => ({ text, onDisk: true }));
   const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
   const { assembleTurnPrompt } = await import("../src/turn-prompt.js");
+  type TurnReminder = Parameters<typeof assembleTurnPrompt>[0]["reviewReminder"];
   const { invitedTaskBrief } = await import("../src/invited-task-brief.js");
   const { COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER } =
     await import("../src/run-prompts.js");
@@ -200,8 +216,11 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   }) as never;
 
   const samples: PromptSample[] = [];
-  const add = (id: string, text: string, entries?: readonly string[]) =>
-    samples.push({ id, text: text.split(root).join(ROOT_TOKEN), raw: text, entries });
+  const add = (
+    id: string,
+    text: string,
+    extra?: Pick<PromptSample, "entries" | "requires">,
+  ) => samples.push({ id, text: text.split(root).join(ROOT_TOKEN), raw: text, ...extra });
 
   // 「不含动态段」的那一版：同一条消息，但任务身上没有裁定、也没有历史发现。预算表靠
   // 这一对把**正文**和**动态段**分开盯——正文是改措辞改出来的，动态段是攒轮次攒出来的。
@@ -271,7 +290,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   add("section/settled-reviewer-100-nofile", await sectionFor("pb-heavy", "reviewer", brokenDir));
   add("section/settled-executor-100-nofile", await sectionFor("pb-heavy", "executor", brokenDir));
   add("section/history-100", await freeReviewHistorySection("pb-heavy", { runId: "pb-none", round: 1 }),
-    entryCandidates(heavyReports));
+    { entries: entryCandidates(heavyReports) });
 
   // ── 长路径形状：**合法但很深**的报告地址，两个生产消费者各一份 ────────────────
   //
@@ -309,7 +328,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     deepFreeReports.push(report);
   }
   add("deep/history-free", await freeReviewHistorySection(deepFree, { runId: "pb-none", round: 1 }),
-    entryCandidates(deepFreeReports));
+    { entries: entryCandidates(deepFreeReports) });
 
   const { reviewRoundDir } = await import("../src/review-evidence.js");
   const { verifyHistorySection } = await import("../src/review-history.js");
@@ -324,12 +343,57 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     deepVerifyReports.push(join(dir, "report.md"));
   }
   add("deep/history-verify", await verifyHistorySection(deepVerify, 41),
-    entryCandidates(deepVerifyReports));
+    { entries: entryCandidates(deepVerifyReports) });
+
+  // ── 超长地址形状：**入口地址本身比整节上限还长** ──────────────────────────────
+  //
+  // 第 1 轮审查在 Linux 真目录上复现：18 段目录下全文路径 1886B，执行者侧裁定重播 2806B >
+  // 声明的 2500B；34 段目录下历史说明 4078B > 声明的 4000B。两处的**末级摘要**当时都是直接
+  // return，只有前几级候选在按字节核对 —— 于是「与条数无关」被当成了「必然放得下」，而入口
+  // 是一条随环境变长的绝对路径。
+  //
+  // macOS 的 PATH_MAX 是 1024，这个长度在本机**建不出来**，所以这几份样本把路径直接喂给
+  // 生产渲染函数、不落盘；长度取 Linux（PATH_MAX 4096）上可创建的量级，不是凭空放大的数字。
+  // 到了这个长度，入口本来就已经降级成不含路径的表达，所以它们不做盘上存在性核对。
+  const longPath = (size: number, leaf: string) => {
+    const segment = "d".repeat(80);
+    const count = Math.max(1, Math.ceil((size - leaf.length) / (segment.length + 1)));
+    return `/${Array.from({ length: count }, () => segment).join("/")}/${leaf}`;
+  };
+  const { settledRulingsSection } = await import("../src/free-review-settled.js");
+  const { priorFindingsSection } = await import("../src/review-history.js");
+  const longRulings = Array.from({ length: 100 }, (_, index) => ({
+    runId: `pb-long-${index + 1}`, round: index + 1, reviewerName: "逻辑审查者",
+    resolution: index % 2 ? "deferred" : "withdrawn",
+    reason: filler("不成立的依据"), deferReason: filler("越界的依据"), note: filler("裁定要点"),
+    deferredTaskId: index % 2 ? `pb-long-derived-${index + 1}` : null,
+    deferredTaskTitle: index % 2 ? "承接这几条的独立任务" : null,
+    reportPath: longPath(1_200, "report.md"),
+  })) as never;
+  // 入口降级后那句话里的锚点：不含路径，长度恒定。
+  const settledFallback = { text: "任务详情里那几轮的审查记录", onDisk: false };
+  const historyFallback = { text: "报告全文在任务详情里那几轮的审查记录里", onDisk: false };
+  // 审查者侧 cap 5000 > Linux PATH_MAX 4096 + 指引，所以合法路径下它**永远**折不到兜底
+  // 入口；这一份量的正是「最长的合法路径」那个最坏情况。执行者侧 cap 2500 则会折。
+  for (const [audience, size] of [["reviewer", 4_000], ["executor", 2_000]] as const) {
+    const reference = longPath(size, "settled-rulings.md");
+    add(`deep/settled-${audience}-longref`,
+      settledRulingsSection(longRulings, audience, { reference, detailed: new Set() }, false),
+      { entries: [{ text: reference, onDisk: false }, settledFallback] });
+  }
+  const longReports = Array.from({ length: 40 }, (_, index) =>
+    longPath(3_700, `round-${index + 1}-report.md`));
+  add("deep/history-longpath", priorFindingsSection(longReports.map((reportPath, index) => ({
+    label: `第 ${index + 1} 轮`,
+    conclusion: "verify_failed",
+    reportPath,
+    findings: [`${"这一轮复现到的现象行".repeat(4)}`],
+  }))), { entries: [{ text: commonDirectory(longReports), onDisk: false }, historyFallback] });
 
   // ── 投递态：**真正发出去的那一条**。片段各自压着预算、拼起来翻倍，是这一摞里最贵的
   //    一种退步，而它只在这一层量得到（第 1 轮审查 F2）。走的是 orchestrator 用的同一个
   //    `assembleTurnPrompt`，不是它的拷贝 —— 拷贝迟早和真实投递路径分叉。
-  const deliver = (userText: string, reviewReminder: string, taskId = "pb-task") => withGlobalBrowserPolicy(
+  const deliver = (userText: string, reviewReminder: TurnReminder, taskId = "pb-task") => withGlobalBrowserPolicy(
     assembleTurnPrompt({
       invite: COLLAB_INVITE,
       brief: invitedTaskBrief(task.body, true, true),
@@ -358,6 +422,15 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   // 中途提问后的那几个回合，而它们恰恰只靠这条提醒。
   add("delivered/review-resume-nomanifest", deliver(
     freeReviewResumeMessage(noManifest as never, noManifestRun, 2), noManifestReminder, "pb-nomanifest"));
+  // 目录名含「。」：本轮清单的**完整**入口必须活着出现在投递消息里，哪怕用户消息里引着
+  // 一条只共享前缀的旧地址。`requires` 里放的就是本轮那一句完整入口。
+  const dotTask = (await db.select().from(tasks)).find((row) => row.id === "pb-dot。task")!;
+  const dotReminder = await freeReviewReminder("pb-dot。task");
+  const olderManifest = regressionManifestEntry(
+    join(freeReviewEvidenceDir("pb-dot。task", "pb-run-dot", 1), "regression-evidence.json"));
+  add("delivered/review-resume-dotdir", deliver(
+    `${freeReviewResumeMessage(dotTask as never, dotRun, 2)}\n上一轮的清单在 ${olderManifest}`,
+    dotReminder, "pb-dot。task"), { requires: [dotReminder.manifestEntry!] });
   add("delivered/repair", withGlobalBrowserPolicy(
     assembleTurnPrompt({
       invite: "",

@@ -91,14 +91,12 @@ export const REGRESSION_MANIFEST_PREFIX = "执行者回归证据清单：";
 
 export const regressionManifestEntry = (path: string): string =>
   `${REGRESSION_MANIFEST_PREFIX}${path}。`;
-
-/** 从一段文字里切出那一句入口（去重时按它逐字比对）；没有就返回 null。 */
-export function regressionManifestEntryOf(text: string): string | null {
-  const at = text.indexOf(REGRESSION_MANIFEST_PREFIX);
-  if (at < 0) return null;
-  const end = text.indexOf("。", at + REGRESSION_MANIFEST_PREFIX.length);
-  return end < 0 ? null : text.slice(at, end + 1);
-}
+// 这里**只有拼、没有拆**：曾经有过一个 `regressionManifestEntryOf`，从正文里按
+// 「前缀之后第一个『。』」把入口切出来给去重用。目录名里带一个「。」就塌了 —— 切出来的是
+// 路径的前半截，于是「两条不同路径共享前缀」会被判成同一个入口，当前这一轮的清单地址被
+// 当成重复删掉，留下的反而是用户消息里引的上一轮旧地址（第 1 轮审查用真实目录复现）。
+// 自然语言里的句号不是地址边界。所以入口一律**作为结构化数据**从产生它的那一层传到拼装层
+// （`refreshRegressionEvidence` → 三个提醒 → `assembleTurnPrompt`），拼装层只做整串比对。
 
 export const REGRESSION_MANIFEST_READING =
   "这份清单只供你**核对执行者登记过什么**：" +

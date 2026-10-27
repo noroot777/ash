@@ -12,7 +12,6 @@ import {
   REGRESSION_MANIFEST_READING,
   REVIEW_VALIDATION_REQUIREMENT,
   REVIEWER_REGRESSION_CLAUSE,
-  regressionManifestEntryOf,
 } from "@ash/shared/free-workflow";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
@@ -39,22 +38,47 @@ const DEDUPABLE: ReadonlyArray<{ what: string; text: string; coveredBy: readonly
 ];
 
 /**
+ * 由任务状态派生的每回合提醒，连同它里面那条**动态入口**。
+ *
+ * 入口单独作为字段传过来，不让拼装层从正文里去找：只有产生它的那一层才真知道路径到哪儿
+ * 为止。见 `manifestEntry` 的注释。
+ */
+export interface TurnReminder {
+  /** 提醒正文。空串 = 这一轮没有提醒。 */
+  text: string;
+  /**
+   * 这一轮清单入口**完整**的那一句（`执行者回归证据清单：<路径>。`）；没有清单就是 null。
+   *
+   * 为什么必须结构化传、不能从正文里反解：上一版用「前缀之后第一个『。』」把它切出来，
+   * 目录名里带一个「。」就塌 —— 切出来的是路径前半截，于是两条只共享前缀的不同路径被
+   * 判成同一个入口，当前这一轮的地址被当成重复删掉，留下的是用户消息里引的旧地址
+   * （第 1 轮审查在真实目录上复现，三个提醒入口全中）。自然语言里的句号不是地址边界。
+   */
+  manifestEntry: string | null;
+}
+
+/** 这一轮没有审查/验证提醒。 */
+export const NO_REMINDER: TurnReminder = { text: "", manifestEntry: null };
+
+/**
  * 去掉提醒里**正文已经逐字讲过**的那几段静态契约，其余一律留下。
  *
- * 清单入口那一句（`执行者回归证据清单：<路径>。`）单独判：它是**动态**的，路径一样才算
- * 重复 —— 状态变了（清单不可用）、轮次变了（路径变了）都必须跟着提醒发出去。
+ * 清单入口那一句单独判，判据是**整串相等**：路径一模一样才算重复 —— 状态变了（清单不
+ * 可用）、轮次变了（路径变了）都必须跟着提醒发出去。拿不准的一律保留。
  */
-export function dedupeReminder(reminder: string, userText: string): string {
-  if (!reminder) return "";
-  let out = reminder;
+export function dedupeReminder(reminder: TurnReminder, userText: string): string {
+  if (!reminder.text) return "";
+  let out = reminder.text;
   for (const { text, coveredBy } of DEDUPABLE) {
     if (!text || !out.includes(text)) continue;
     if (userText.includes(text) || coveredBy.some((full) => full && userText.includes(full))) {
       out = out.split(text).join("");
     }
   }
-  const entry = regressionManifestEntryOf(out);
-  if (entry && userText.includes(entry)) out = out.split(entry).join("");
+  const { manifestEntry } = reminder;
+  if (manifestEntry && out.includes(manifestEntry) && userText.includes(manifestEntry)) {
+    out = out.split(manifestEntry).join("");
+  }
   return out.trim() ? out : "";
 }
 
@@ -77,7 +101,7 @@ export interface TurnPromptParts {
   /** 当前方向身份。 */
   direction: string;
   /** 由任务状态派生的审查/验证提醒；正文已逐字讲过的那几段静态契约会被摘掉（见上）。 */
-  reviewReminder: string;
+  reviewReminder: TurnReminder;
 }
 
 export function assembleTurnPrompt(parts: TurnPromptParts): string {

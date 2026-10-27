@@ -44,12 +44,12 @@ try {
 
   // ① 清单是**诊断件**：伪造它拿不到任何东西，而下一次刷新一定把它覆盖回数据库里的真相。
   stale(evidenceDir);
-  const reminder = await verifyReminderFor(taskId, 1);
+  const reminder = (await verifyReminderFor(taskId, 1)).text;
   assert.match(reminder, /regression-evidence\.json.*reusable 恒为 false/);
   assert.ok(reminder.includes(REVIEWER_REGRESSION_CLAUSE), "续跑提醒经清单说明带上同一份审查者口径");
   refreshed(evidenceDir);
   stale(evidenceDir);
-  assert.match(await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 }), /regression-evidence\.json/);
+  assert.match((await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })).text, /regression-evidence\.json/);
   refreshed(evidenceDir);
   await Promise.all(Array.from({ length: 4 }, () => refreshRegressionEvidence(taskId, evidenceDir)));
   refreshed(evidenceDir);
@@ -184,7 +184,7 @@ try {
   await evidenceState(taskId, freeDir, (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
   await freeReviewPrompt(task, reviewRun, 1, repo);
   stale(freeDir);
-  assert.match(await freeReviewReminder(taskId), /regression-evidence\.json/);
+  assert.match((await freeReviewReminder(taskId)).text, /regression-evidence\.json/);
   refreshed(freeDir);
   writeFileSync(join(freeDir, "report.md"), "输入证明及验证结果已检查。\n");
   runs.releaseTurn(taskId);

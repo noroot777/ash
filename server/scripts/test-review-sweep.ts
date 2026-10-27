@@ -353,9 +353,9 @@ try {
   );
 
   // ── ④ 真的被塞进了各条 prompt ───────────────────────────────────────────────
-  assertCarriesSweepReminder(await verifyReminderFor("t-1", 2), "自动验证续跑提醒");
+  assertCarriesSweepReminder((await verifyReminderFor("t-1", 2)).text, "自动验证续跑提醒");
   assertCarriesSweepReminder(
-    await reviewReminderFor({ id: "legacy-review", reviewOf: "t-1", reviewRound: 2 }),
+    (await reviewReminderFor({ id: "legacy-review", reviewOf: "t-1", reviewRound: 2 })).text,
     "历史审查续跑提醒",
   );
   // 修复提示那一侧：不带这句话，「不要扩大原任务边界」会把报出来的类改回成一个补丁。

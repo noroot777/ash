@@ -354,15 +354,27 @@ export function priorFindingsSection(rounds: PriorRound[]): string {
 }
 
 /**
- * 最后一级：一条都不内联，只说清「多少条、分布在几轮、全文在哪个目录下」，后面接完整的
- * 固定契约。长度 = 契约 + 一个目录路径，与轮数、条数都无关，所以它是真的有界。
+ * 最后一级：一条都不内联，只说清「多少条、分布在几轮、去哪读」，后面接完整的固定契约。
+ *
+ * 与轮数、条数无关 —— 但**和环境有关**：那个公共目录是一条绝对路径。第 1 轮审查在 Linux
+ * 真目录上实测，34 段目录下这一节 4078B > 声明的 4000B：前几级候选都按字节核对过，偏偏
+ * 最后一级直接 return，于是声明的上限在这条路上不成立。
+ *
+ * 所以这一级也核对最终字节，超了**换入口的表达方式**，既不截路径也不删契约：改用不含
+ * 路径、长度恒定的那个去处。换完之后整节只剩常量，三条不变量（固定契约完整 / 入口完整
+ * 可读 / 总字节有界）同时成立，靠的是入口换表达，不是哪一条让步。
  */
 function digestPriorFindings(entries: Entry[]): string {
   const paths = [...new Set(entries.map(({ round }) => round.reportPath))];
-  return `\n\n【这个任务此前报过的发现（${entries.length} 条，分布在 ${paths.length} 轮）】\n` +
-    `条数或报告地址长到一条都内联不下，这里只记一笔：全文都在 ${commonDirectory(paths)} 下，` +
+  const render = (reference: string) =>
+    `\n\n【这个任务此前报过的发现（${entries.length} 条，分布在 ${paths.length} 轮）】\n` +
+    `条数或报告地址长到一条都内联不下，这里只记一笔：${reference}，` +
     `判「是不是同类」之前先去读它。\n` +
     PRIOR_FINDINGS_TAIL;
+  const text = render(`报告全文都在 ${commonDirectory(paths)} 下`);
+  return bytes(text) <= SECTION_CAP
+    ? text
+    : render("报告全文在任务详情里那几轮的审查记录里（地址比这一节的上限还长，写进来会把整节撑破）");
 }
 
 function entriesOf(rounds: PriorRound[]): Entry[] {

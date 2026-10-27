@@ -39,6 +39,15 @@ export async function prepareRegressionCommand(taskId: string, monitorId: string
   return `${shell.quote(process.execPath)} -e "eval(Buffer.from('${encoded}','base64').toString())"`;
 }
 
+/**
+ * 这份清单落在哪 —— 写它的人和「这一句入口是什么」的人共用这一处。
+ *
+ * 去重要拿**完整入口**整串比对（见 `turn-prompt.ts`），而完整入口 = 前缀 + 这个路径；
+ * 两边各拼一次路径就会漂移，所以路径只在这里拼一次。
+ */
+export const regressionManifestPath = (evidenceDir: string): string =>
+  join(evidenceDir, "regression-evidence.json");
+
 export async function regressionEvidenceReference(
   task: typeof tasks.$inferSelect, repoPath: string, evidenceDir: string, acceptedMerge = false,
   // 同一条消息里已经有 `REVIEW_VALIDATION_REQUIREMENT`（派审正文、就地验证正文）时传 false：
@@ -72,7 +81,7 @@ export async function regressionEvidenceReference(
     records.push({ ...record, reusable: false, passed, latest: supersededBy === null, supersededBy,
       reason: `${result}；${reason}；${regressionInputRejection(record.inputIdentity)}` });
   }
-  const path = join(evidenceDir, "regression-evidence.json");
+  const path = regressionManifestPath(evidenceDir);
   if (!(await safeRunDirectory(evidenceDir))) return "回归证据清单不可用：写入前目录安全检查不通过；把回归面写成留白，不要自己跑测试去填。";
   await replaceEvidenceFile(path, JSON.stringify({ protocol: 2, inputPolicy: "immutable-closed-inputs-required",
     taskId: task.id, generatedAt: new Date().toISOString(), acceptedMerge, snapshot, records }, null, 2));

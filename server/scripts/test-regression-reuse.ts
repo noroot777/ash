@@ -220,7 +220,7 @@ try {
   // 扫描义务不再分 workspace / accepted_merge 两份(复用协议整体退役),所以两种目标拿到的是
   // 同一份完整扫描义务;合并结果审查的差别只剩「没有执行者登记清单可核对」这一句。
   assert.equal(SWEEP_RULES.some((entry) => entry.id === "执行者回归结果复用"), false);
-  for (const text of [await freeReviewPrompt(task, run, 1, repo), freeReviewResumeMessage(task, run, 1), await freeReviewReminder(taskId)]) {
+  for (const text of [await freeReviewPrompt(task, run, 1, repo), freeReviewResumeMessage(task, run, 1), (await freeReviewReminder(taskId)).text]) {
     assert.doesNotMatch(text, /可复用|复用资格|reusable=true/, "合并后审查不携带任何复用协议");
     assert.match(text, /合并结果审查没有执行者登记清单可核对|回归测试统一在验收时/);
   }
@@ -232,7 +232,7 @@ try {
   assert.match(verification, /「回归测试」这一项你只核对本轮后端清单里执行者登记的结果（统一在验收时执行，你不跑）/);
   assert.match(verification, /浏览器真实点检和其它勾选项必须实际执行/);
   assert.ok(verification.includes(REVIEW_VALIDATION_REQUIREMENT));
-  for (const text of [await verifyReminderFor(taskId, 1), await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })]) {
+  for (const text of [(await verifyReminderFor(taskId, 1)).text, (await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })).text]) {
     assert.ok(text.includes(REVIEWER_REGRESSION_CLAUSE), "两条提醒都引同一份审查者口径，不再各手抄一句");
     assert.doesNotMatch(text, /可复用执行者对本次改动的回归结果/, "续跑提醒里不该再留退役的复用口径");
   }
@@ -279,10 +279,10 @@ try {
     ["自由审查 · 逻辑", await freeReviewPrompt(task, { ...run, targetKind: "workspace" }, 1, repo)],
     ["自由审查 · 合并结果", await freeReviewPrompt(task, run, 1, repo)],
     ["自由审查 · 续跑", freeReviewResumeMessage(task, { ...run, targetKind: "workspace" }, 1)],
-    ["自由审查 · 每回合提醒", await freeReviewReminder(taskId)],
+    ["自由审查 · 每回合提醒", (await freeReviewReminder(taskId)).text],
     ["就地验证 · 正文", verification],
-    ["就地验证 · 提醒", await verifyReminderFor(taskId, 1)],
-    ["历史独立审查 · 提醒", await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })],
+    ["就地验证 · 提醒", (await verifyReminderFor(taskId, 1)).text],
+    ["历史独立审查 · 提醒", (await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })).text],
   ];
   const contradictions: Array<[RegExp, string]> = [
     [/和相关测试/, "把跑测试写进审查者职责"],

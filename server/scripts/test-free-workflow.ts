@@ -150,7 +150,7 @@ try {
     checkMode: "logic", note: null, retryLimit: 1, currentRound: 2, status: "reviewing",
     createdAt: "2026-10-13T02:00:00.000Z", updatedAt: "2026-10-13T02:00:00.000Z", finishedAt: null,
   });
-  const freeReminder = await freeReviewReminder("free-reminder-task");
+  const freeReminder = (await freeReviewReminder("free-reminder-task")).text;
   assertCarriesSummaryReminder(freeReminder, "自由审查每回合提醒");
   assertCarriesSweepReminder(freeReminder, "自由审查每回合提醒");
   const syntaxPrompt = await freeReviewPrompt(promptTask, { ...promptRun, checkMode: "syntax" }, 1, root);
@@ -410,7 +410,7 @@ try {
   assert.deepEqual(triggeredState.reviews.map(({ status, checkMode, retryLimit, note }) => ({ status, checkMode, retryLimit, note })), [
     { status: "reviewing", checkMode: "logic", retryLimit: 2, note: "重点检查 Enter 快捷键" },
   ], "confirmed done 应按预约配置与附言自动派出且只派一份审查");
-  assertBrowserPolicy(await freeReviewReminder("free-reservation-task"), "自由审查续聊提醒", "reminder");
+  assertBrowserPolicy((await freeReviewReminder("free-reservation-task")).text, "自由审查续聊提醒", "reminder");
 
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
   await createTasks([{
