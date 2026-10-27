@@ -6,8 +6,11 @@
 // ② 「没报账」≠「花了 0」：不报账的 CLI / 本功能之前建的会话行必须读回 null，
 //    界面才能区分「这家不报」和「真没花」。费用同理——codex 不报价，它的回合
 //    不能被算成 $0 摊进总额。
-// ③ Claude 的 result 是本轮增量；Codex 的 turn.completed 是线程累计快照。前者
-//    逐轮加，后者先求差再加，不能拿同一种 SQL 对付两家。
+// ③ 两种口径不能拿同一种 SQL 对付：`incremental` 逐轮加，`cumulative` 先跟上一份
+//    快照求差再加。**哪家 CLI 算哪一种，不在这个文件里**——这里钉的是两条 SQL 路径
+//    本身，以及启动迁移 repairLegacyUsageAccounting（v3，按「claude 是增量」那版前提
+//    写的历史纠偏）仍照原样工作。claude 实际走累计口径这件事及其历史回填，见
+//    test-claude-usage-accounting.ts。
 // ④ **但上下文水位恰恰相反，是覆盖**：它是「此刻装了多少」，累加会得出一个没有
 //    物理意义的数（流水 18M 的会话水位可能才 12 万）。同一个文件里两种账并存，
 //    所以这条必须在测试里钉死。
@@ -520,7 +523,7 @@ try {
     "私有格式变化后必须发没采到哨兵，清掉旧值且不显示水位",
   );
 
-  console.log("Token 账本验证通过：Claude 增量、Codex 累计求差、历史纠偏、水位覆盖");
+  console.log("Token 账本验证通过：两条 SQL 路径、累计求差、v3 历史纠偏、水位覆盖");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

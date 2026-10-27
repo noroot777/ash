@@ -1,6 +1,12 @@
 // v1 把每条 usage 都当成单轮增量；Codex 实际报的是线程累计快照，于是续聊会重复
 // 计费。这里在升级启动时用已经落盘的逐轮 trace 重建一次：Codex 对同一 CLI 线程
 // 求差，Claude 继续逐轮相加。只有 trace 条数与数据库轮数完全吻合才动原账。
+//
+// **「Claude 继续逐轮相加」这条前提后来被证伪**：2026-09-28 那次 CLI 升级之后，claude 的
+// `result` 也变成了线程累计快照。写入侧已经改掉（usage.ts），claude 的历史账由手工脚本
+// scripts/repair-claude-usage.ts 单独回填 —— 刻意**不**并进这里：改几亿 token 的账不可逆，
+// 得先在库的拷贝上看前后对照，不该挂在启动流程上自动发生。这个文件保持原样，只负责它
+// 当年那一笔 Codex 纠偏；已经跑过 v3 的实例不会再执行它。
 import { readFileSync } from "node:fs";
 import { eq, isNotNull } from "drizzle-orm";
 import type { TokenUsage } from "@ash/shared";

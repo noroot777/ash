@@ -1,6 +1,8 @@
-// Token 用量的落库单点。Claude 的 result 是本轮增量，直接加；Codex 的
-// turn.completed 是整条 CLI 线程的累计快照，必须先跟上一份快照求差再加。两者如果
-// 混成一种语义，续聊越多账就会越虚高。归一后的单轮用量也由这里返回给 trace/UI。
+// Token 用量的落库单点。**claude 的 result 和 codex 的 turn.completed 都是整条 CLI
+// 线程的累计快照**，必须先跟上一份快照求差再加；直接相加的话，续聊第 N 回合会把前
+// N 回合的总和当成本轮增量入账，账面随回合数二次方虚高（实测会话 au43oEY7kLkf 账面
+// 46.5 亿 token、真实累计 1.78 亿，虚高 26 倍）。归一后的单轮用量也由这里返回给
+// trace/UI。
 //
 // **这个文件里还住着上下文水位（setSessionContext），它是覆盖式的**——两组列摆在
 // 一起是为了让下一个人一眼看见「有两种账，加法只适用于其中一种」。
@@ -25,7 +27,15 @@ const roundedUsage = (usage: TokenUsage): TokenUsage => ({
   turns: Math.max(1, Math.round(usage.turns)),
 });
 
-/** 累计计数器回退表示 CLI 换了线程/重置了账本；此时整份当前值都是新增。 */
+/**
+ * 累计计数器回退表示 CLI 换了线程/重置了账本；此时整份当前值都是新增。
+ *
+ * 这一条同时是 claude 侧两件事的处理方式，都不需要额外机关：
+ * ① **压缩/续聊换了线程 id**：`single-run` 在 `session` 事件里当场把 cliSessionId 换成
+ *    新的（并写回会话行），于是 sourceId 也跟着换 —— 新 sourceId 没有快照，这一轮整份
+ *    入账，正是新线程第一轮该有的结果。
+ * ② **CLI 在同一个 id 上重置了计数器**：值比上一份小，走这里的 reset 分支整份入账。
+ */
 export function cumulativeUsageDelta(current: TokenUsage, previous: TokenUsage | null): TokenUsage {
   const now = roundedUsage(current);
   const reset = !!previous && (
@@ -51,9 +61,37 @@ export function cumulativeUsageDelta(current: TokenUsage, previous: TokenUsage |
   };
 }
 
+/**
+ * 哪些执行器报的是**线程累计快照**。
+ *
+ * claude 和 codex 都在这张表里，判据是实测而不是文档：同一条 CLI 会话连续若干回合的
+ * `result` 行单调递增、`total_cost_usd` 一路累加（$155.69 → $158.99 → $161.10），而
+ * 相邻两条的**差值**才等于那一回合真实打出去的几个请求。
+ *
+ * **claude 不是一直这样**：2026-09-28 那次 CLI 升级之前，每次 `claude -p --resume`
+ * 的 `result` 只结算本次进程内的用量（库里 2026-09-27 之前的 108 条多轮会话无一例外
+ * 可以看到序列上下起伏），升级之后才变成跨 resume 的线程累计。所以按累计口径跑在那种
+ * 老 CLI 上会**少记**（上升的那几轮只记差值），但不会再像现在这样虚高几十倍——两种
+ * 错里这是可接受的那一种，何况那条路已经是一年前的历史。真要回到老 CLI，看 reset 分支
+ * 下面那段说明。
+ *
+ * **claude 的 fork（copilot / cursor / gemini / qwen… 走 claudeStreamJsonParser 那批）
+ * 刻意不在表里**：它们继承的是输出 schema，不等于继承这版累计语义，而库里这些执行器
+ * 一条报账记录都没有（`claudeUsage` 要 `result` 里真有 usage/modelUsage 才发事件）。
+ * 没有证据就不改口径——哪天它们真开始报账，再按同样的方法测一遍再加进来。
+ */
+const CUMULATIVE_RESULT_CLIS: ReadonlySet<AgentType> = new Set<AgentType>(["claude", "codex"]);
+
+/**
+ * sourceId 按 **CLI 自己的线程 id** 而不是 ash 会话行分组：同一条 CLI 线程可能跨多个
+ * ash 行（讨论模式的各声部、审查旁路回合），只有按线程才算得出正确的本轮差值。
+ *
+ * 拿不到 cliSessionId 时退回逐轮相加 —— 没有线程身份就没有「上一份快照」可言，求差
+ * 会把别人的账算到自己头上。
+ */
 export function usageAccountingFor(agentType: AgentType, cliSessionId: string | null | undefined): UsageAccounting {
-  return agentType === "codex" && cliSessionId
-    ? { kind: "cumulative", sourceId: `codex:${cliSessionId}` }
+  return cliSessionId && CUMULATIVE_RESULT_CLIS.has(agentType)
+    ? { kind: "cumulative", sourceId: `${agentType}:${cliSessionId}` }
     : { kind: "incremental" };
 }
 

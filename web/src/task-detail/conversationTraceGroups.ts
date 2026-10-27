@@ -12,14 +12,10 @@ export function groupedTrace(trace: SessionTraceEntry[]): Map<string, SessionTra
   return groups;
 }
 
-function legacyCodexUsageDelta(current: TokenUsage, previous: TokenUsage | null): TokenUsage {
-  const reset = !!previous && (
-    current.input < previous.input
-    || current.output < previous.output
-    || current.cacheRead < previous.cacheRead
-    || current.cacheWrite < previous.cacheWrite
-    || current.reasoning < previous.reasoning
-  );
+const USAGE_TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"] as const;
+
+function legacyCumulativeDelta(current: TokenUsage, previous: TokenUsage | null): TokenUsage {
+  const reset = !!previous && USAGE_TOKEN_KEYS.some((key) => current[key] < previous[key]);
   if (!previous || reset) return { ...current, turns: 1 };
   return {
     input: current.input - previous.input,
@@ -32,17 +28,61 @@ function legacyCodexUsageDelta(current: TokenUsage, previous: TokenUsage | null)
   };
 }
 
-// 7c274c0 之前的 Codex trace 保存的是 turn.completed 的线程累计快照。sessions 汇总
-// 已由启动迁移校正；旧气泡仍需在读侧求差，新 trace 的 accounting 恒为 incremental。
-export function normalizedPersistedTrace(trace: SessionTraceEntry[], session: Session): SessionTraceEntry[] {
-  if (session.agentType !== "codex") return trace;
+function rederive(
+  trace: SessionTraceEntry[],
+  isLegacy: (entry: SessionTraceEntry & { event: { kind: "usage" } }) => boolean,
+): SessionTraceEntry[] {
   let previous: TokenUsage | null = null;
   return trace.map((entry) => {
-    if (entry.event.kind !== "usage" || entry.event.accounting === "incremental") return entry;
-    const usage = legacyCodexUsageDelta(entry.event.usage, previous);
-    previous = entry.event.usage;
+    if (entry.event.kind !== "usage") return entry;
+    const usageEntry = entry as SessionTraceEntry & { event: { kind: "usage"; usage: TokenUsage } };
+    if (!isLegacy(usageEntry)) return entry;
+    const usage = legacyCumulativeDelta(usageEntry.event.usage, previous);
+    previous = usageEntry.event.usage;
     return { ...entry, event: { ...entry.event, usage, accounting: "incremental" } };
   });
+}
+
+/**
+ * 这条 **claude** 会话落盘的 usage 事件到底是「本轮增量」还是「线程累计快照」。
+ *
+ * 为什么不能像 codex 那样看 `accounting` 字段：claude 的旧 trace 一条不缺地都标着
+ * `incremental`（当时服务端认为它本来就是增量，归一是个空操作），标记在这里没有分辨力。
+ *
+ * 所以改看两个**数据自身**的特征，两个都成立才认：
+ * ① 整串在五项 token 上都不下降 —— 累计快照的形状，逐轮增量会上下起伏；
+ * ② **最后一条的五项正好等于会话行的汇总** —— 这一条才是决定性的。累计口径下
+ *    「各轮增量之和 = 最后一份累计值」是恒等式，所以回填修好会话行之后，二者必然相等；
+ *    而真·增量序列的汇总等于**全部之和**，跟最后一条差着好几倍。
+ *
+ * 这个判据顺带把两类不该动的情形自己排除了：回填还没跑（汇总仍是累计值之和 ≠ 最后一条）、
+ * 以及一条会话横跨「改口径」那一刻（后半截已经是真增量，汇总也对不上最后一条）—— 两种
+ * 都维持原样，宁可气泡上的数字还是旧的，也不把一个已经对的数字改错。
+ */
+function claudeTraceIsCumulative(trace: SessionTraceEntry[], session: Session): boolean {
+  const series = trace.flatMap((entry) => (entry.event.kind === "usage" ? [entry.event.usage] : []));
+  if (series.length < 2 || !session.usage) return false;
+  const monotonic = series.every((usage, index) =>
+    index === 0 || USAGE_TOKEN_KEYS.every((key) => usage[key] >= series[index - 1]![key]));
+  const last = series.at(-1)!;
+  return monotonic && USAGE_TOKEN_KEYS.every((key) => last[key] === session.usage![key]);
+}
+
+/**
+ * 旧 trace 里存的是「线程累计快照」而不是本轮增量，读侧要先求差，否则每个气泡上的
+ * 「本轮」都会显示成从开场到此刻的总和（实测一例：真实 63 万被显示成 70.13M）。
+ *
+ * 两家各有各的判据，原因见 `claudeTraceIsCumulative`：
+ * - **codex**：7c274c0 之前的 trace 没有 `accounting` 标记，有标记的就是新的，照标记分。
+ * - **claude**：旧 trace 全都标着 `incremental`，只能按数据形状判，而且是整条会话一起判。
+ *
+ * 两边的 sessions 汇总都另有去处校正（codex 走启动迁移 usage-repair.ts，claude 走手工
+ * 回填 scripts/repair-claude-usage.ts）；这里只管每回合气泡上那个数。
+ */
+export function normalizedPersistedTrace(trace: SessionTraceEntry[], session: Session): SessionTraceEntry[] {
+  if (session.agentType === "codex") return rederive(trace, (entry) => entry.event.accounting !== "incremental");
+  if (session.agentType === "claude" && claudeTraceIsCumulative(trace, session)) return rederive(trace, () => true);
+  return trace;
 }
 
 function traceGroupKey(
