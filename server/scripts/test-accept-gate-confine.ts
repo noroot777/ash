@@ -43,7 +43,31 @@ const npmInstall = (cwd: string) => execFileSync(
     : ["install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund"],
   { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
+// 造一个**真实的** npm 包:手铺目录证明不了「它是装进来的」,而这几条用例要钉的正是「正式装进来
+// 的第三方包」与「本项目自己的源码」的区别,所以走 npm pack + npm install 的真实路径。
+const packTarball = (name: string, body: string) => {
+  const directory = join(root, `pack-${name}`);
+  save(join(directory, "package.json"),
+    JSON.stringify({ name, version: "1.0.0", type: "module", main: "index.mjs" }));
+  save(join(directory, "index.mjs"), body);
+  const file = execFileSync(
+    process.platform === "win32" ? "cmd.exe" : "npm",
+    process.platform === "win32"
+      ? ["/d", "/s", "/c", "npm pack --offline --ignore-scripts --silent"]
+      : ["pack", "--offline", "--ignore-scripts", "--silent"],
+    { cwd: directory, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim().split(/\r?\n/).pop()!;
+  return join(directory, file);
+};
+const dependOn = (directory: string, dependencies: Record<string, string>) => {
+  const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as Record<string, unknown>;
+  manifest.dependencies = { ...(manifest.dependencies as object ?? {}), ...dependencies };
+  save(join(directory, "package.json"), JSON.stringify(manifest));
+};
+
 let sequence = 0;
+// 快照必须落在**被测项目自己**内部,否则 node 的向上查找走不到它那棵依赖树:gateSnapshotPath 用的
+// ASH_RUNS_DIR 在模块加载时就固定在 host 项目里,只对前面那些以 host 为被测项目的用例成立。
+const targetIn = (directory: string) => join(directory, "data", "runs", `case${++sequence}.source`);
 const snapshotOf = async (cwd: string) => {
   const source = await readGateSource(cwd);
   const target = gateSnapshotPath("confine", `case${++sequence}`);
@@ -508,8 +532,93 @@ try {
     "改主检出之后同一份快照的 CLI 输出不许跟着变");
   assert.equal(await verifyGateSnapshot(borrowedTarget, borrowedSource), true);
 
+  // ── 16. **消费者那一侧的解析边**。祖先树里正式装着一个第三方包,它传递导入本项目的包;任务
+  // worktree 没装依赖。往 `<快照>/node_modules/@demo/lib` 补一条绑定只对「从快照根出发」的解析
+  // 有效,而那个第三方包是从**它自己在祖先树里的位置**向上解析的,先命中祖先树里的原入口。
+  // 2026-10-27 第三轮独立审查在两台机器上实测:同一份快照里直接 import 得到 TASK_NEW、经那个第
+  // 三方包间接 import 得到 MAIN_OLD,随后改主检出的源码它跟着变成 MAIN_LIVE,而快照自证与工作区
+  // 新鲜度全程为真。判据是**可证事实**:那棵树上除了本项目自己的包之外还有没有别的入口。
+  const consumed = project("consumed", ["packages/*"], "MAIN_OLD");
+  dependOn(consumed, { "plain-consumer": `file:${packTarball("plain-consumer", 'export { value } from "@demo/lib";\n')}` });
+  npmInstall(consumed);
+  save(join(consumed, "transitive.mjs"), 'import { value } from "plain-consumer"; console.log(value);\n');
+  git(consumed, "add", "-A");
+  git(consumed, "commit", "-qm", "install a third-party consumer");
+  const consumedTask = join(consumed, ".worktrees", "task");
+  git(consumed, "worktree", "add", "--detach", consumedTask, "HEAD");
+  save(join(consumedTask, "packages", "lib", "index.mjs"), 'export const value = "TASK_NEW";\n');
+  git(consumedTask, "add", "-A");
+  git(consumedTask, "commit", "-qm", "task");
+
+  const consumedSource = await readGateSource(consumedTask);
+  assert.deepEqual(consumedSource.dependencies, [], "前提:任务工作区没有任何已安装的依赖根");
+  const consumedTarget = targetIn(consumed);
+  await assert.rejects(createGateSnapshot(consumedTask, consumedTarget, consumedSource),
+    /既摆着本项目自己的包、又摆着 plain-consumer 这样不属于本项目的入口/,
+    "祖先树里有第三方消费者时,根上的绑定证明不了闭包,必须拒绝");
+  assert.equal(existsSync(consumedTarget), false, "拒绝的那条路上快照整个丢掉");
+  assert.equal(run(join(consumed, "transitive.mjs")), "MAIN_OLD",
+    "用户工作区的解析结果一个字节都没被动过");
+
+  // ── 17. 原目录在本次提交里被**删掉**,仓库里另留着一份同名副本。安装记录证明了「这个入口是
+  // 自有包」,但它证明不了「提交里那个同名目录就是它搬过去的新位置」——`examples/`、`patches/`
+  // 里留一份同名副本是常见布局,绑过去等于把被测代码换成另一份还报绿(第三轮审查按代码指出)。
+  // 真正的搬迁一定同步改过声明(用例 9 就是那条正例),所以候选必须由本次提交的声明指向。
+  const deleted = project("deleted", ["packages/*"], "CERTIFIED");
+  save(join(deleted, "examples", "lib", "package.json"),
+    JSON.stringify({ name: "@demo/lib", version: "0.0.0", type: "module", main: "index.mjs" }));
+  save(join(deleted, "examples", "lib", "index.mjs"), 'export const value = "UNRELATED_SAMPLE";\n');
+  npmInstall(deleted);
+  git(deleted, "add", "-A");
+  git(deleted, "commit", "-qm", "a same-name sample lives in the repo");
+  const deletedTask = join(deleted, ".worktrees", "task");
+  git(deleted, "worktree", "add", "--detach", deletedTask, "HEAD");
+  git(deletedTask, "rm", "-r", "-q", join("packages", "lib"));
+  git(deletedTask, "commit", "-qm", "drop the package, keep the sample");
+
+  const deletedSource = await readGateSource(deletedTask);
+  const deletedTarget = targetIn(deleted);
+  await assert.rejects(createGateSnapshot(deletedTask, deletedTarget, deletedSource),
+    /没有「声明过、而且同名唯一」的替代位置/,
+    "包被删掉、仓库里剩一份同名副本时必须拒绝,不许把安装入口绑到那份无关副本上");
+
+  // ── 18. **已知外部来源**。项目正常 `npm install` 一个住在另一个独立 Git 仓库里的 `file:` 包:
+  // 安装记录明确记下它装自项目外,那是一个**已知来源**,不是「来源不明」。第三轮独立审查两平台
+  // 实测:只保留「自有包 / 未知」两格时,这种合法布局会被当成未隔离的源码拒掉,门禁报「安装记录
+  // 里没有这个入口、请重新安装依赖」,而重装只会得到同一份合法记录——项目永久过不去。外部包由
+  // 不由 Git 管理,不改变它是明确外部来源这个事实。
+  const vendorRepo = join(root, "vendor-repo");
+  mkdirSync(vendorRepo, { recursive: true });
+  git(vendorRepo, "init", "-b", "main");
+  git(vendorRepo, "config", "user.name", "gate");
+  git(vendorRepo, "config", "user.email", "gate@example.test");
+  git(vendorRepo, "config", "core.hooksPath", "/dev/null");
+  save(join(vendorRepo, "package.json"),
+    JSON.stringify({ name: "external-tool", version: "1.0.0", type: "module", main: "index.mjs" }));
+  save(join(vendorRepo, "index.mjs"), 'export const value = "EXTERNAL_OK";\n');
+  git(vendorRepo, "add", "-A");
+  git(vendorRepo, "commit", "-qm", "external package");
+
+  const consumer = project("consumer", ["packages/*"], "CERTIFIED");
+  dependOn(consumer, { "external-tool": "file:../vendor-repo" });
+  npmInstall(consumer);
+  save(join(consumer, "external-probe.mjs"), 'import { value } from "external-tool"; console.log(value);\n');
+  git(consumer, "add", "-A");
+  git(consumer, "commit", "-qm", "depend on the external package");
+
+  assert.equal(run(join(consumer, "external-probe.mjs")), "EXTERNAL_OK", "前提:工作区本来就跑得通");
+  const consumerSource = await readGateSource(consumer);
+  const consumerSnapshot = { source: consumerSource, target: targetIn(consumer) };
+  await createGateSnapshot(consumer, consumerSnapshot.target, consumerSource);
+  assert.equal(run(join(consumerSnapshot.target, "external-probe.mjs")), "EXTERNAL_OK",
+    "记录认下的外部 file 包照既定外链策略原样留着,不是「来源不明」");
+  assert.equal(run(join(consumerSnapshot.target, "probe.mjs")), "CERTIFIED",
+    "同一棵树上本项目自己的包照旧解析到快照里的源码");
+  assert.equal(await verifyGateSnapshot(consumerSnapshot.target, consumerSnapshot.source), true);
+
   console.log("accept-gate-confine: ambient resolution, declaration-independent isolation, "
     + "aliased local packages, same-name third-party provenance, refusal to write through a "
     + "borrowed tree, partial installs, relocated packages, dangling trunks, native link semantics, "
-    + "scope-link write ownership, ancestor-install provenance and CLI entry closure passed");
+    + "scope-link write ownership, ancestor-install provenance, CLI entry closure, consumer "
+    + "resolution edges, deleted-package same-name samples and known external file sources passed");
 } finally { rmSync(root, { recursive: true, force: true }); }

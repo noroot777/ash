@@ -2,7 +2,7 @@ import { lstat, mkdir, readdir, readFile, realpath, rm, stat } from "node:fs/pro
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { copyLink, insideTree } from "./accept-gate-tree.js";
 import { DEPENDENCY_DIRS } from "./accept-gate-dirs.js";
-import { ownedLinks } from "./accept-gate-deps.js";
+import { declaredPackageDirs, recordedLinks } from "./accept-gate-deps.js";
 import type { OwnedPackage } from "./accept-gate-relocate.js";
 
 // 源码隔离的**收口**:快照里跑的每一个本项目自有源码入口,都必须解析到快照里那份被认证的源码。
@@ -36,6 +36,17 @@ import type { OwnedPackage } from "./accept-gate-relocate.js";
 //    落点上:落在**那棵树所属检出之外**的入口(系统工具、外部 `file:` 包、手铺的 vendor 链)本来就
 //    不是本项目这次要冻的源码,不需要隔离、也不该因为来源无从证明把整次验收拦掉。
 //
+//    2026-10-27 第三轮独立审查又在这一条上实测到两个代价,都已收进来:
+//    · **来源要三态,不是两态**。记录认下的「装自项目外」(`file:../另一个仓库`)是一个**已知**来源。
+//      只留「自有包 / 未知」两格时,一个正常 `npm install` 装好的外部 file 包落在独立 Git 仓库里,
+//      于是被当成「未知的活源码」拒掉:门禁说「安装记录里没有这个入口、请重新安装依赖」,而重装只
+//      会得到同一份合法记录——项目永久过不去(两平台实测)。外部包由不由 Git 管理不改变它是明确外
+//      部来源这个事实,所以三态由 recordedLinks 带出来,不在这里按路径加例外。
+//    · **「唯一同名」不是搬迁的证明**。安装来源在本次提交里消失后按包名兜底时,原目录被**删掉**、
+//      仓库里另留一份同名副本(`examples/lib`、`patches/lib`)的布局会让安装入口绑到那份无关副本上
+//      ——等于把被测代码换成另一份还报绿。真正的搬迁一定同步改过声明(不改 npm 装不出来),所以候
+//      选还必须由本次提交的声明指向(declaredPackageDirs),见 sourceFor。
+//
 // ③ **运行入口闭包**:要校验的不只是「包名 import」,而是这棵树上所有会被快照里的命令用到的入口
 //    ——包入口、`@scope/包`、`.bin/<命令>`、别名目录项、以及嵌套在包里的那一层 node_modules。
 //    上一版只按包名从快照根往上查一次。实测反例:任务借用主检出的依赖树、树里没有 npm 的隐藏安装
@@ -44,6 +55,16 @@ import type { OwnedPackage } from "./accept-gate-relocate.js";
 //    源码,它跟着变成 MAIN_LIVE,而快照自证与工作区新鲜度全程为真。「根 import 修好了」和「命令
 //    实际跑的是本次提交」可以同时一真一假,所以入口必须成闭包。元数据缺失只说明**来源尚未证明**,
 //    不是「可以跳过证明」的理由。
+//
+//    闭包还有**消费者**那一半,2026-10-27 第三轮独立审查实测补上:往 `<快照>/node_modules/<入口>`
+//    补一条绑定,只对「从快照根出发」的解析有效。快照之外那棵树里的第三方包是从**它自己的位置**
+//    向上解析的,先命中那棵树里的原入口。实测形状(真实 npm 离线安装):主检出有 workspace 包
+//    @demo/lib,另装了第三方包 plain-consumer 传递导入它,任务 worktree 没装依赖——同一份快照里直接
+//    import 得到 TASK_NEW、经 plain-consumer 间接 import 得到 MAIN_OLD,改主检出源码后变 MAIN_LIVE。
+//    判据仍是可证事实:那棵树上除了自有包入口**还有没有别的入口**。没有(整棵树只摆着本项目自己的
+//    包)时根上的绑定就是全部解析路径;有别的入口时它们都是潜在消费者,「它会不会 import 我的包」要
+//    静态分析整个包才知道,证明不了就拒绝。树**在快照里**(依赖整棵克隆进来)不受这条约束:消费者的
+//    副本也在快照里,它向上解析先命中快照这棵树里被改写过的入口。
 //
 // **这一版覆盖不到的**(写在这里是为了别让下一个人以为已经包住了):
 //   · Windows 上 npm 生成的 `.bin/*.cmd` / `*.ps1` 是**真文件**,相对路径写在文件内容里。它和
@@ -75,8 +96,13 @@ type Entry = {
   nested: boolean;
 };
 
-/** 一棵树的安装记录。`usable=false` 表示无从证明任何入口的来源。 */
-type InstallRecord = { usable: boolean; owned: OwnedPackage[] };
+/**
+ * 一棵树的安装记录。`usable=false` 表示无从证明任何入口的来源。
+ *
+ * **三态**（②要求的那件事）:`owned` 是记录说装自项目内的，`external` 是记录说装自项目外的，
+ * 两者都没认下的才是「来源不明」。合成两态的代价见 recordedLinks 上方。
+ */
+type InstallRecord = { usable: boolean; owned: OwnedPackage[]; external: Set<string> };
 
 /** 入口的来源归属：安装记录认下的那个自有包，以及入口落在那个包**内部**的哪一段。 */
 type Ownership = {
@@ -143,14 +169,14 @@ async function provenInside(target: string, realTarget: string, destination: str
  * 「记录读到了，它说这棵树里一个自有包都没有」（纯第三方树，正常布局），后者是「无从证明」。
  */
 async function installRecord(tree: string): Promise<InstallRecord> {
+  const unusable = (): InstallRecord => ({ usable: false, owned: [], external: new Set() });
   const raw = await readFile(join(tree, ".package-lock.json"), "utf8").catch(() => null);
-  if (raw === null) return { usable: false, owned: [] };
+  if (raw === null) return unusable();
   try {
-    if (typeof (JSON.parse(raw) as { packages?: unknown }).packages !== "object") {
-      return { usable: false, owned: [] };
-    }
-  } catch { return { usable: false, owned: [] }; }
-  return { usable: true, owned: await ownedLinks(tree, "node_modules") };
+    if (typeof (JSON.parse(raw) as { packages?: unknown }).packages !== "object") return unusable();
+  } catch { return unusable(); }
+  const links = await recordedLinks(tree, "node_modules");
+  return { usable: true, owned: links.owned, external: new Set(links.external) };
 }
 
 /** 嵌套层的递归上限，和声明展开那一侧一致：病态布局下无上限递归会变成全盘遍历。 */
@@ -295,11 +321,16 @@ async function sourcePackages(target: string): Promise<Map<string, string[]>> {
  * 它在快照里不存在时才按**包名**在快照源码里兜底找一次：包在本次提交里搬过位置（`packages/lib`
  * → `libs/lib`）而依赖没重装，是一次合法重构，不该让验收不可用。这里用名字是安全的，和 ② 批评
  * 的「按名字认来源」不是一回事：**此刻「这个入口是自有包」已经由安装记录证明过了**，名字只用来
- * 回答「它搬到哪了」，而且候选集限定在快照源码内（全是本次被认证的那一份），还要求**唯一命中**
- * ——同名多份时宁可拒绝，也不猜一个。包名从工作区那个包目录读（它可达），所以别名入口也对得上。
+ * 回答「它搬到哪了」。包名从工作区那个包目录读（它可达），所以别名入口也对得上。
+ *
+ * 但光有「唯一同名」不够——那是 2026-10-27 第三轮独立审查按代码指出的缺口：原目录在本次提交里
+ * 被**删掉**、仓库里另留着一份同名副本（`examples/lib`、`patches/lib`）时，唯一同名命中的是那份
+ * 无关副本，于是安装入口被绑到它身上，等于把被测代码换成另一份还报绿。真正的搬迁一定同步改过
+ * 声明（不改 npm 装不出来），所以候选还必须**由本次提交的声明指向**（declaredPackageDirs）：
+ * 删除 + 同名残留没有这份声明，证明不了，按拒绝走。
  */
 async function sourceFor(target: string, ownership: Ownership,
-  packages: Map<string, string[]>): Promise<string | null> {
+  packages: Map<string, string[]>, declaredDirs: string[]): Promise<string | null> {
   const { owned, within } = ownership;
   // 入口落在包内部时要连那一段一起证明:包目录在、而包里那个文件被本次提交删掉了,绑过去就是一条
   // 悬空入口——那同样是「证明不了」,不是「绑定成功」。
@@ -310,7 +341,8 @@ async function sourceFor(target: string, ownership: Ownership,
   const declared = await reachable(join(target, owned.inside));
   if (declared !== null) return declared;
   const name = await manifestName(owned.landing);
-  const candidates = name === null ? [] : packages.get(name) ?? [];
+  const candidates = (name === null ? [] : packages.get(name) ?? [])
+    .filter(dir => declaredDirs.includes(dir.split(sep).join("/")));
   return candidates.length === 1 ? await reachable(join(target, candidates[0])) : null;
 }
 
@@ -345,10 +377,14 @@ function ownerOf(item: Entry, owned: OwnedPackage[]): Ownership | null {
  */
 export async function confineOwnPackages(target: string): Promise<string | null> {
   const realTarget = await realpath(target).catch(() => target);
+  const entries = await resolutionEntries(realTarget);
   const records = new Map<string, InstallRecord>();
   const plan: Binding[] = [];
+  /** 快照**之外**、而且摆着本项目源码入口的那些树。消费者闭包要在这些树上证明，见循环后那一段。 */
+  const exposed = new Set<string>();
   let packages: Map<string, string[]> | null = null;
-  for (const item of await resolutionEntries(realTarget)) {
+  let declaredDirs: string[] | null = null;
+  for (const item of entries) {
     // 落点在快照里:已经指着本次被认证的那份源码(或者是快照自己那棵树里的第三方包)。
     if (insideTree(realTarget, item.landing)) continue;
     // 落点在它自己那棵树里:这是一个普通的第三方包(真实目录,或指向树内另一处的链),它在哪解析都
@@ -360,6 +396,9 @@ export async function confineOwnPackages(target: string): Promise<string | null>
     // 三类分开判(②要求的那件事),不共用一个判据:记录认下的是自有包;记录读到了却没认下、而落点
     // 又是活源码的,是「装出来的东西和记录不一致」;落点压根不在任何检出里的,不是这次要冻的源码。
     if (ownership === null) {
+      // 记录明确说这个入口装自项目**外**（`file:../另一个仓库`）：已知来源，不是未证明。它不是
+      // 这次要冻的源码，照既定外链策略原样留着。丢掉这一态的代价见 recordedLinks 上方。
+      if (record.external.has(portable(item.entry))) continue;
       if (!await liveSource(item.landing)) continue;
       return record.usable
         // 记录读到了,它既没把这个入口认成项目内的包、又没法解释一条指着活源码的入口:那就是记录
@@ -371,16 +410,21 @@ export async function confineOwnPackages(target: string): Promise<string | null>
           + `（${item.tree}）没有 npm 的安装记录 .package-lock.json，无从证明它是本项目自己的包`
           + `还是第三方包 —— 依赖布局无法证明隔离，请在标准安装布局下（重新安装依赖）验收`;
     }
+    // 这棵树上摆着本项目的源码入口。树落在快照之外时，往快照根补绑定只覆盖「从快照根出发」的
+    // 解析，覆盖不到这棵树**内部**的消费者——判据与实测见循环之后那一段。
+    if (!insideTree(realTarget, item.tree)) exposed.add(item.tree);
     if (item.nested) {
       return `${item.entry} 在依赖树内层解析到 ${item.landing}（快照之外的活源码），而内层这一级`
         + `没法从快照遮蔽（node 从那个包内部解析时先看它自己那层 node_modules）—— 请重新安装依赖，`
         + `让依赖树落在任务自己的工作区里，再验收`;
     }
     packages ??= await sourcePackages(target);
-    const source = await sourceFor(target, ownership, packages);
+    declaredDirs ??= await declaredPackageDirs(target);
+    const source = await sourceFor(target, ownership, packages, declaredDirs);
     if (source === null) {
       return `安装记录说 ${item.entry} 来自 ${join(ownership.owned.inside, ownership.within)}，但本次`
-        + `提交里没有这个位置，按包名也找不到唯一的替代位置 —— 包目录大概搬过位置而依赖没有重装，`
+        + `提交里没有这个位置，也没有「声明过、而且同名唯一」的替代位置 —— 这个包要么搬过位置而`
+        + `依赖没有重装，要么已经从本次提交里删掉（仓库里剩的同名目录证明不了是它搬过去的），`
         + `请重新安装依赖后验收`;
     }
     plan.push({ entry: item.entry, landing: item.landing, destination: join(target, "node_modules", item.entry), source });
@@ -393,6 +437,33 @@ export async function confineOwnPackages(target: string): Promise<string | null>
       return `要把 ${binding.entry}（现在解析到 ${binding.landing}）绑回快照里那份被认证的源码，`
         + `得写到 ${binding.destination}，但${refusal} —— 门禁不会往快照之外写，`
         + `请在标准安装布局下（重新安装依赖）验收`;
+    }
+  }
+  // ── 不变量 ③ 的另一半:**消费者**那一侧的解析边。排在 ① 之后:① 保护的是「别改坏用户工作区」,
+  // 比这一条更基础,先确认「能不能安全地写」,再确认「写了够不够」。
+  //
+  // 往 `<快照>/node_modules/<入口>` 补一条绑定,只对「从快照根出发」的解析有效。快照之外那棵树里
+  // 的第三方包是从**它自己的位置**向上解析的,先命中那棵树里的原入口,补的那条对它没有效力。
+  // 2026-10-27 第三轮独立审查在两台机器上实测到这个代价(用真实 npm 离线安装,不是伪造记录):主
+  // 检出有 workspace 包 @demo/lib,另装了一个第三方包 plain-consumer 传递导入它;任务 worktree 没
+  // 装依赖。同一份快照里,直接 import 得到本次提交(TASK_NEW),经 plain-consumer 间接 import 得到
+  // MAIN_OLD,随后改主检出的源码它跟着变成 MAIN_LIVE,而快照自证与工作区新鲜度全程为真。
+  //
+  // 判据是**可证事实**而不是「这棵树里大概没人 import 我的包」:那棵树上除了自有包入口之外**还有
+  // 没有别的入口**。没有(整棵树只摆着本项目自己的包)时,根上的绑定就是全部解析路径,闭包成立;有
+  // 别的入口时,它们都是潜在消费者——「它会不会 import 本项目的包」要静态分析整个包才知道,证明
+  // 不了,按拒绝走。树**在快照里**的那种(依赖整棵克隆进来了)不受这条约束:消费者的副本也在快照
+  // 里,它向上解析先命中快照这棵树里被改写过的入口。
+  for (const tree of exposed) {
+    const record = records.get(tree);
+    const outsider = entries.find(item => item.tree === tree
+      && (record === undefined || ownerOf(item, record.owned) === null));
+    if (outsider !== undefined) {
+      return `依赖树 ${tree} 落在快照之外，里面既摆着本项目自己的包、又摆着 ${outsider.entry} 这样`
+        + `不属于本项目的入口：往快照里补的绑定只对「从快照根出发」的解析有效，而那些入口是从它们`
+        + `自己在那棵树里的位置向上解析的，会先命中那棵树里的原入口、读到活工作区的源码 —— `
+        + `无法证明隔离。请在任务工作区安装依赖（或让依赖目录成为任务工作区自己的一条链，门禁会把`
+        + `它整棵克隆进快照）后验收`;
     }
   }
   for (const binding of plan) {

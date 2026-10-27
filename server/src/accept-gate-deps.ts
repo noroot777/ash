@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, readlink, realpath, symlink } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { copyLink, insideTree } from "./accept-gate-tree.js";
 import { DEPENDENCY_DIRS } from "./accept-gate-dirs.js";
 import { copyTree, linkMismatch, type OwnedPackage, type Relocation } from "./accept-gate-relocate.js";
@@ -150,6 +150,40 @@ export async function dependencyDigest(root: string, dep: string): Promise<strin
   }
   hash.update("packages\0");
   for (const entry of await packageList(path, kind)) hash.update(entry).update("\0");
+  return hash.digest("hex");
+}
+
+/**
+ * 任务**向上继承**的那些依赖树的安装声明摘要。
+ *
+ * node 对每个包名分别一级级往上找 `node_modules/<name>`，所以除了工作区自己那棵（已经登记在
+ * `dependencies` 里、借用或克隆都只处理那些），**祖先每一棵都是这次测试的实际输入**：工作区没装
+ * 依赖时它们就是全部输入。它们从来不在 `dependencies` 里——那份清单只登记工作区自己有的目录。
+ *
+ * 2026-10-27 第三轮独立审查实测到漏掉它的代价（真实 `npm install` 升级，不是伪造）：任务自己没装
+ * 依赖、用主检出装好的 ambient-dep@1.0.0；把它正常升级到 2.0.0 之后，重新建的快照执行输出已经是
+ * INSTALLED_V2，而源码指纹一个字节没变，于是上一次的绿结果仍被判成「同一份输入」继续沿用。改变的
+ * 是**安装版本与安装声明**，不是「同版本包内部被手改字节却没重装」那条已知取舍。
+ *
+ * **不混进 fingerprint 而单独成一项**：fingerprint 还要被「副本是否按原样复现」那道对账拿快照自己
+ * 重算一遍，而快照住在 runs 目录下、向上继承的是另一条链，混进去会让每一次快照都判成没复现。
+ * 它只进复用判据（gateSourceMatches），换口径之后存量绿结果一律失效、各重跑一次，这是预期的。
+ */
+export async function ambientDigest(cwd: string): Promise<string> {
+  const hash = createHash("sha256").update("gate-ambient-v1\0");
+  const seen = new Set<string>();
+  let directory = dirname(await realpath(cwd).catch(() => cwd));
+  for (;;) {
+    const tree = await realpath(join(directory, "node_modules")).catch(() => null);
+    if (tree !== null && !seen.has(tree)) {
+      seen.add(tree);
+      // 摘要按「近到远」的顺序累加（hash 对顺序敏感），所以同一组树换了层级也算换了输入。
+      hash.update(await dependencyDigest(directory, "node_modules"));
+    }
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
   return hash.digest("hex");
 }
 
@@ -370,29 +404,80 @@ export async function relocationFor(root: string, target: string, dep: string): 
  * 住了，不靠这里。这里要管的是落点在项目**外**的那种：依赖树借自另一个检出（Windows 的 npm 把
  * workspace 链建成绝对 junction，指的就是那个检出的源码）。
  */
-export async function ownedLinks(treeRoot: string, dep: string): Promise<OwnedPackage[]> {
+export type RecordedLinks = {
+  /** 记录说装自**项目内**某个目录的入口。来源身份的唯一出处。 */
+  owned: OwnedPackage[];
+  /** 记录说装自**项目外**的入口（`file:../foreign` 这种），入口路径（POSIX 分隔符）。 */
+  external: string[];
+};
+
+export async function recordedLinks(treeRoot: string, dep: string): Promise<RecordedLinks> {
   const raw = await readFile(join(treeRoot, ".package-lock.json"), "utf8").catch(() => null);
-  if (raw === null) return [];
+  if (raw === null) return { owned: [], external: [] };
   let packages: Record<string, unknown> = {};
   try {
     packages = (JSON.parse(raw) as { packages?: Record<string, unknown> }).packages ?? {};
-  } catch { return []; }
+  } catch { return { owned: [], external: [] }; }
   const projectRoot = await realpath(dirname(treeRoot)).catch(() => dirname(treeRoot));
   // 键前缀取**登记名**而不是 realpath 后的 basename:依赖根自己是条链时(pnpm 的
   // `node_modules -> .store` 就是这个形状)realpath 后的 basename 是 `.store`,拼出来的前缀
   // 匹配不上记录里的 `node_modules/…`,整棵树的归属改写会一声不响地全部失效。
   const prefix = `${basename(dep).split(sep).join("/")}/`;
   const owned: OwnedPackage[] = [];
+  const external: string[] = [];
   for (const [key, value] of Object.entries(packages)) {
     const record = value as { link?: unknown; resolved?: unknown };
     if (record.link !== true || typeof record.resolved !== "string" || !key.startsWith(prefix)) continue;
+    const entry = key.slice(prefix.length);
     const where = resolve(projectRoot, record.resolved);
-    if (!insideTree(projectRoot, where) || where === projectRoot) continue;
+    // 记录说它装自项目**外**:那是一个明确的已知来源(`file:../另一个仓库`),不是自有包、也不是
+    // 「来源不明」。这一态必须单独带出去——丢掉它的调用方只剩「自有包」和「未知」两格,于是一个
+    // 正常 `npm install` 装好的外部 file 包会被当成未证明的源码,整次验收在合法布局上被拦掉
+    // (2026-10-27 第三轮独立审查实测,两平台一致)。外部包由不由 Git 管理不改变这个事实。
+    if (!insideTree(projectRoot, where) || where === projectRoot) {
+      if (where !== projectRoot) external.push(entry);
+      continue;
+    }
     const landing = await realpath(where).catch(() => null);
     if (landing === null) continue;
-    owned.push({ entry: key.slice(prefix.length), inside: record.resolved.split("/").join(sep), landing });
+    owned.push({ entry, inside: record.resolved.split("/").join(sep), landing });
   }
-  return owned;
+  return { owned, external };
+}
+
+/** 只要自有包那一格的调用方（搬运改写）用这个。 */
+export async function ownedLinks(treeRoot: string, dep: string): Promise<OwnedPackage[]> {
+  return (await recordedLinks(treeRoot, dep)).owned;
+}
+
+/**
+ * 本次提交**声明过**的本地包目录（相对项目根，POSIX 分隔符）。
+ *
+ * 用途只有一处:安装记录里的原目录在本次提交里消失后,`sourceFor` 要按包名兜底找「它搬到哪了」,
+ * 而候选必须由这份声明指向。「仓库里恰好只有一个同名目录」证明不了它是原包搬过去的——
+ * `examples/`、`patches/`、`vendor/` 里留一份同名副本是常见布局,把安装入口绑到那份副本上等于
+ * 把被测代码换成另一份还报绿(2026-10-27 第三轮独立审查按代码指出)。声明(workspaces glob、
+ * `file:`/`link:` 依赖规格)是项目自己写下的「这个位置有我的一个包」,而真正的搬迁必须同步改它
+ * ——不改 npm 根本装不出来。
+ */
+export async function declaredPackageDirs(root: string): Promise<string[]> {
+  const dirs = new Set((await workspacePackages(root)).dirs.map(dir => dir.split(sep).join("/")));
+  const raw = await readFile(join(root, "package.json"), "utf8").catch(() => null);
+  let parsed: Record<string, unknown> = {};
+  try { parsed = raw === null ? {} : JSON.parse(raw) as Record<string, unknown>; } catch { parsed = {}; }
+  for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
+    const table = parsed[field];
+    if (typeof table !== "object" || table === null) continue;
+    for (const spec of Object.values(table as Record<string, unknown>)) {
+      if (typeof spec !== "string") continue;
+      const local = /^(?:file|link):(.+)$/.exec(spec);
+      if (local === null) continue;
+      const where = resolve(root, local[1]);
+      if (!insideTree(root, where) || where === root) continue;
+      dirs.add(relative(root, where).split(sep).join("/"));
+    }
+  }
+  return [...dirs];
 }
 
 /**

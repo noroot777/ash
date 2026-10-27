@@ -7,7 +7,7 @@ import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
 import { freezesAsSource, gateTreeDigest, insideTree as inside } from "./accept-gate-tree.js";
 import { confineOwnPackages } from "./accept-gate-confine.js";
-import { DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
+import { ambientDigest, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
   provideDependency, workspacePackages, type DependencyMode } from "./accept-gate-deps.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
@@ -27,7 +27,14 @@ async function readSidecar(target: string): Promise<GateSidecar | null> {
     return Array.isArray(parsed) ? { inputs: parsed } : parsed;
   } catch { return null; }
 }
-export type GateSource = { commit: string | null; fingerprint: string; dependencies: string[]; inputs?: SourceInput[] };
+export type GateSource = {
+  commit: string | null;
+  fingerprint: string;
+  dependencies: string[];
+  /** 向上继承的那些依赖树的安装声明摘要。只进复用判据，不进对账——理由见 ambientDigest 上方。 */
+  ambient: string;
+  inputs?: SourceInput[];
+};
 const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
 const git = async (cwd: string, args: string[]) =>
   (await execFileText("git", ["-C", cwd, ...args], { maxBuffer: 32 * 1024 * 1024 })).stdout;
@@ -166,9 +173,10 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
     for (const dep of dependencies) hash.update(dep).update(await dependencyDigest(cwd, dep));
   } else {
     const inputs = await listInputs(cwd);
-    return { commit, fingerprint: await digestInputs(cwd, inputs), dependencies, inputs };
+    return { commit, fingerprint: await digestInputs(cwd, inputs), dependencies, inputs,
+      ambient: await ambientDigest(cwd) };
   }
-  return { commit, fingerprint: hash.digest("hex"), dependencies };
+  return { commit, fingerprint: hash.digest("hex"), dependencies, ambient: await ambientDigest(cwd) };
 }
 
 export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR, taskId, `accept-gate-${runId}.source`);
@@ -314,6 +322,17 @@ export async function verifyGateSnapshot(cwd: string, source: GateSource): Promi
   } catch { return false; }
 }
 
-export function gateSourceMatches(row: { sourceFingerprint?: string | null; sourceCommit: string | null }, source: GateSource | null): boolean {
-  return !!source && !!row.sourceFingerprint && row.sourceFingerprint === source.fingerprint && row.sourceCommit === source.commit;
+/**
+ * 这一行通过记录，还算不算「当前这棵树」的结果。
+ *
+ * 三项都要相等:提交、源码与自有依赖的指纹、**向上继承的安装声明**（ambient）。第三项是
+ * 2026-10-27 第三轮独立审查实测补上的——工作区没装依赖时祖先那棵树就是全部依赖输入，把它升级
+ * 之后执行输出已经变了，而前两项一个字节没动。旧行没有这一列（null），于是存量绿结果一律失效、
+ * 各重跑一次：换身份口径的预期代价，宁可多跑一次，也不拿「换过依赖」的旧绿放行一次验收。
+ */
+export function gateSourceMatches(
+  row: { sourceFingerprint?: string | null; sourceCommit: string | null; sourceAmbient?: string | null },
+  source: GateSource | null): boolean {
+  return !!source && !!row.sourceFingerprint && row.sourceFingerprint === source.fingerprint
+    && row.sourceCommit === source.commit && (row.sourceAmbient ?? null) === source.ambient;
 }
