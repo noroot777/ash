@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -248,6 +248,12 @@ try {
   save(join(live, "node_modules", "left-pad", "package.json"),
     JSON.stringify({ name: "left-pad", version: "1.3.0", type: "module", main: "index.mjs" }));
   save(join(live, "node_modules", "left-pad", "index.mjs"), 'export const value = "REGISTRY_1_3_0";\n');
+  // 安装记录认下 @demo/lib 来自 packages/lib。**这一条是本用例的前提**:收口只对「安装记录证明
+  // 得了来源」的入口做绑定,没有记录时它在更早一步就以「来源无从证明」拒绝(那条路钉在用例 13)。
+  // 补上它,这里要钉的才是「要写的位置落在快照外 → 不许往那头写」那道闸本身。
+  save(join(live, "node_modules", ".package-lock.json"), JSON.stringify({
+    packages: { "node_modules/@demo/lib": { link: true, resolved: "packages/lib" } },
+  }));
 
   const frozen = join(root, "frozen");
   save(join(frozen, "packages", "lib", "package.json"),
@@ -256,7 +262,7 @@ try {
   linkDir(join("..", "live", "node_modules"), join(frozen, "node_modules"));
 
   const refused = await confineOwnPackages(frozen);
-  assert.match(String(refused), /快照之外.*拒绝/s,
+  assert.match(String(refused), /快照之外.*不会往快照之外写/s,
     "快照的依赖树是一条借到工作区的链时,收口必须拒绝,不许往那头写");
   assert.equal(realpathSync(join(live, "node_modules", "@demo", "lib")), realpathSync(join(live, "packages", "lib")),
     "工作区里的本地包还得指着工作区自己的源码");
@@ -324,8 +330,186 @@ try {
   await assert.rejects(createGateSnapshot(dangling, danglingTarget, danglingSource), /解析不通|拒绝/,
     "主干是一条解析不通的链时必须明确拒绝,不许穿着断链往用户工作区写");
 
+
+  // ── 11. **写入所有权**:scope 目录是一条指向另一处安装存储的链。项目声明 workspace(整棵克隆),
+  // 安装记录认下自有包 @demo/lib,所以收口确实要把它绑回快照里那份源码——而要写的那个位置
+  // `node_modules/@demo` 落在快照之外。
+  //
+  // 上一版只验 `<快照>/node_modules` 这个根(真目录,通过),随后 `rm(<快照>/node_modules/@demo/lib)`
+  // 穿过 scope 链,把用户原安装存储里那个包目录**整个删掉**,再在原存储上建链。2026-10-27 第二轮
+  // 独立审查两台机器实测:macOS 上最后那道写后核对报错(相对链在外部 scope 下解析不通),破坏已经
+  // 发生且不可逆;Windows 的 junction 用绝对落点,写后核对照样解析进快照,**连错都不报**。
+  // 字面路径在快照内、根主干在快照内,都证明不了实际写入目的地在快照内——只有逐段验父链能证明。
+  const scoped = project("scoped", ["packages/*"], "LOCAL_SOURCE");
+  const store = join(root, "scope-store");
+  save(join(store, "lib", "package.json"),
+    JSON.stringify({ name: "@demo/lib", version: "9.0.0", type: "module", main: "index.mjs" }));
+  save(join(store, "lib", "index.mjs"), 'export const value = "INSTALLED_REGISTRY";\n');
+  save(join(store, "lib", "installed-payload.txt"), "USER_INSTALLED_FILE\n");
+  mkdirSync(join(scoped, "node_modules"), { recursive: true });
+  linkDir(store, join(scoped, "node_modules", "@demo"));
+  save(join(scoped, "node_modules", ".package-lock.json"), JSON.stringify({
+    packages: { "node_modules/@demo/lib": { link: true, resolved: "packages/lib" } },
+  }));
+  // 依赖树在 .gitignore 里,所以上面这几步不产生新提交——project() 那一次就是本次被认证的源码。
+
+  const scopedSource = await readGateSource(scoped);
+  const scopedTarget = gateSnapshotPath("confine", `case${++sequence}`);
+  await assert.rejects(createGateSnapshot(scoped, scopedTarget, scopedSource),
+    /快照之外.*不会往快照之外写/s,
+    "要写的位置的父链落在快照外时必须拒绝,不许穿着 scope 链删掉用户装好的包");
+  assert.equal(readFileSync(join(store, "lib", "installed-payload.txt"), "utf8"), "USER_INSTALLED_FILE\n",
+    "用户原安装存储里的文件必须一个字节都没动");
+  assert.equal(lstatSync(join(store, "lib")).isDirectory(), true,
+    "原安装条目必须还是目录,没被换成一条指回快照的链");
+  assert.match(readFileSync(join(store, "lib", "index.mjs"), "utf8"), /INSTALLED_REGISTRY/,
+    "原安装的那份代码必须原样留着");
+
+  // ── 12. **来源身份**:项目正式依赖一个第三方包、从**祖先**安装目录解析,仓库里另存了一份同名
+  // 的补丁目录(patches/left-pad 这种形状很常见)。
+  //
+  // 上一版扫快照源码里的 package.json.name 当来源身份,于是补丁副本被算成自有包、在快照里建了一条
+  // 更近的绑定,**遮蔽了项目实际使用的正式包**。两台机器实测输出一致:工作区 REGISTRY_1_3_0、快照
+  // PATCH_COPY,而快照自证为真——换掉被测代码还报绿。名字从来不是来源,同名两个包是合法的。
+  const ancestor = join(root, "ancestor");
+  save(join(ancestor, "node_modules", "left-pad", "package.json"),
+    JSON.stringify({ name: "left-pad", version: "1.3.0", type: "module", main: "index.mjs" }));
+  save(join(ancestor, "node_modules", "left-pad", "index.mjs"), 'export const value = "REGISTRY_1_3_0";\n');
+  save(join(ancestor, "node_modules", ".package-lock.json"),
+    JSON.stringify({ packages: { "node_modules/left-pad": { version: "1.3.0" } } }));
+  const patched = join(ancestor, "task");
+  mkdirSync(patched, { recursive: true });
+  git(patched, "init", "-b", "main");
+  git(patched, "config", "user.name", "gate");
+  git(patched, "config", "user.email", "gate@example.test");
+  git(patched, "config", "core.hooksPath", "/dev/null");
+  save(join(patched, ".gitignore"), "node_modules\ndata\n");
+  save(join(patched, "package.json"),
+    JSON.stringify({ name: "patched-app", version: "1.0.0", dependencies: { "left-pad": "1.3.0" } }));
+  save(join(patched, "patches", "left-pad", "package.json"),
+    JSON.stringify({ name: "left-pad", version: "0.0.0", type: "module", main: "index.mjs" }));
+  save(join(patched, "patches", "left-pad", "index.mjs"), 'export const value = "PATCH_COPY";\n');
+  save(join(patched, "probe.mjs"), 'import { value } from "left-pad"; console.log(value);\n');
+  git(patched, "add", "-A");
+  git(patched, "commit", "-qm", "patched copy in source");
+
+  assert.equal(run(join(patched, "probe.mjs")), "REGISTRY_1_3_0", "前提:工作区用的是祖先装下来那一份");
+  const patchedSource = await readGateSource(patched);
+  // 快照必须落在 ancestor **内部**,否则向上查找根本走不到那棵祖先树(RUNS_DIR 固定在 host 下)。
+  const patchedTarget = join(ancestor, "data", "runs", "patched.source");
+  await createGateSnapshot(patched, patchedTarget, patchedSource);
+  assert.equal(run(join(patchedTarget, "probe.mjs")), "REGISTRY_1_3_0",
+    "仓库里有一份同名的补丁目录,不许据此遮蔽项目实际使用的正式包");
+  assert.equal(existsSync(join(patchedTarget, "node_modules", "left-pad")), false,
+    "也不许为它在快照里建任何绑定条目");
+  assert.equal(await verifyGateSnapshot(patchedTarget, patchedSource), true);
+
+  // 13~15 共用:`.bin/<命令>` 是一条相对链,落点穿过包入口那条链之后落在活源码上。
+  // Windows 没开发者模式时文件软链要提权(审查者在真机上踩到 EPERM),退成指向包目录的 junction
+  // ——入口形状变成 `.bin/<命令>/cli.mjs`,但「落点在快照之外的活源码」这件事一样,要钉的不变量照样
+  // 走到。返回入口相对依赖树根的路径。
+  const binEntry = (tree: string, command: string, packageDir: string): string => {
+    const path = join(tree, ".bin", command);
+    mkdirSync(dirname(path), { recursive: true });
+    try {
+      symlinkSync(join("..", "@demo", "lib", "cli.mjs"), path, "file");
+      return join(".bin", command);
+    } catch (error) {
+      if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      linkDir(packageDir, path);
+      return join(".bin", command, "cli.mjs");
+    }
+  };
+  const cliProject = (name: string, value: string) => {
+    const directory = project(name, ["packages/*"], value);
+    save(join(directory, "packages", "lib", "cli.mjs"), `console.log(${JSON.stringify(value)});\n`);
+    git(directory, "add", "-A");
+    git(directory, "commit", "-qm", "cli entry");
+    const tree = join(directory, "node_modules");
+    mkdirSync(join(tree, "@demo"), { recursive: true });
+    linkDir(join("..", "..", "packages", "lib"), join(tree, "@demo", "lib"));
+    return { directory, tree, entry: binEntry(tree, "demo-cli", join(directory, "packages", "lib")) };
+  };
+  const taskOf = (directory: string, value: string) => {
+    const task = join(directory, ".worktrees", "task");
+    git(directory, "worktree", "add", "--detach", task, "HEAD");
+    save(join(task, "packages", "lib", "index.mjs"), `export const value = ${JSON.stringify(value)};\n`);
+    save(join(task, "packages", "lib", "cli.mjs"), `console.log(${JSON.stringify(value)});\n`);
+    git(task, "add", "-A");
+    git(task, "commit", "-qm", "task");
+    return task;
+  };
+
+  // ── 13. **运行入口闭包 · 来源证明不了**:任务借用主检出的依赖树,树里有 workspace 链和
+  // `.bin/demo-cli -> ../@demo/lib/cli.mjs`,但**没有** npm 的隐藏安装记录(手铺的、非 npm 装的、
+  // 记录被删掉的都是这个形状)。
+  //
+  // 上一版把 CLI 落点当成「未知外部路径」原样保留成主检出的绝对地址。两台机器实测:根 import 已经
+  // 是 TASK_NEW,同一份快照里那个 CLI 跑出来是 MAIN_OLD,随后改主检出的源码它跟着变成 MAIN_LIVE,
+  // 而快照自证与工作区新鲜度全程为真——「根 import 修好了」和「命令实际跑的是本次提交」可以同时
+  // 一真一假。元数据缺失只说明**来源尚未证明**,不是跳过证明的理由:绝不静默保留一个指向活动主检出
+  // 的入口,所以这里必须拒绝。
+  const bare = cliProject("bare-cli", "MAIN_OLD");
+  const bareTask = taskOf(bare.directory, "TASK_NEW");
+  linkDir(bare.tree, join(bareTask, "node_modules"));
+  const bareSource = await readGateSource(bareTask);
+  await assert.rejects(
+    createGateSnapshot(bareTask, join(bare.directory, "data", "runs", "bare.source"), bareSource),
+    /没有 npm 的安装记录/,
+    "依赖树没有安装记录时,运行入口的来源无从证明,必须拒绝而不是保留指向主检出的那条入口");
+  assert.match(readFileSync(join(bare.directory, "packages", "lib", "cli.mjs"), "utf8"), /MAIN_OLD/,
+    "拒绝的那条路上,主检出的源码一个字节都没动");
+  assert.equal(realpathSync(join(bare.tree, bare.entry)),
+    realpathSync(join(bare.directory, "packages", "lib", "cli.mjs")),
+    "工作区那条 CLI 入口也必须原样指着工作区自己的源码");
+
+  // ── 14. **运行入口闭包 · 证明得了就得绑**:同一个布局,依赖树**有** npm 的安装记录,而任务自己
+  // 没装依赖(worktree 的常态)。此时「这个入口是本项目自己的包」证明得了,于是 CLI 入口必须和包入口
+  // 一样被绑回快照里那份源码——不是「根 import 修好就算隔离成立」。
+  //
+  // 这条是 F3 真正修好的正面证明:`.bin/demo-cli` 的入口路径和包名毫无关系(`.bin/demo-cli` ≠
+  // `@demo/lib`),身份只能由「落点落在哪个自有包**内部**」给出,而绑定要连包内那一段相对路径一起带
+  // 过去,否则 CLI 入口会指着一个目录。
+  const owned = cliProject("owned-cli", "MAIN_OLD");
+  save(join(owned.tree, ".package-lock.json"), JSON.stringify({
+    packages: { "node_modules/@demo/lib": { link: true, resolved: "packages/lib" } },
+  }));
+  const ownedTask = taskOf(owned.directory, "TASK_NEW");
+  const ownedSource = await readGateSource(ownedTask);
+  assert.deepEqual(ownedSource.dependencies, [], "前提:任务自己没装依赖,快照里压根没有依赖树");
+  const ownedTarget = join(owned.directory, "data", "runs", "owned.source");
+  await createGateSnapshot(ownedTask, ownedTarget, ownedSource);
+  assert.equal(run(join(ownedTarget, "probe.mjs")), "TASK_NEW", "包入口要解析到快照自己那份源码");
+  assert.equal(run(join(ownedTarget, "node_modules", owned.entry)), "TASK_NEW",
+    "CLI 入口同样要解析到快照自己那份源码,不许还跑着主检出的旧代码");
+  save(join(owned.directory, "packages", "lib", "cli.mjs"), 'console.log("MAIN_LIVE");\n');
+  assert.equal(run(join(ownedTarget, "node_modules", owned.entry)), "TASK_NEW",
+    "快照建好之后改主检出的源码,同一份快照里那个 CLI 的输出不许跟着变");
+  assert.equal(await verifyGateSnapshot(ownedTarget, ownedSource), true);
+  git(owned.directory, "restore", "packages/lib/cli.mjs");
+
+  // ── 15. 同样有安装记录,但任务**借了**主检出那棵树(本仓 worktree 借主仓依赖的日常形状)。放法
+  // 那一侧会整棵克隆,克隆时就按安装记录把包入口和 CLI 入口一起改写进快照;收口这时无事可做。
+  // 钉它是为了防止哪天改动把克隆那一侧的 CLI 改写弄丢,而收口因为「落点已在快照内」也不再过问。
+  const borrowed = cliProject("borrowed-cli", "MAIN_OLD");
+  save(join(borrowed.tree, ".package-lock.json"), JSON.stringify({
+    packages: { "node_modules/@demo/lib": { link: true, resolved: "packages/lib" } },
+  }));
+  const borrowedTask = taskOf(borrowed.directory, "TASK_NEW");
+  linkDir(borrowed.tree, join(borrowedTask, "node_modules"));
+  const borrowedSource = await readGateSource(borrowedTask);
+  assert.deepEqual(borrowedSource.dependencies, ["node_modules"], "前提:任务借了主检出那棵树");
+  const borrowedTarget = join(borrowed.directory, "data", "runs", "borrowed.source");
+  await createGateSnapshot(borrowedTask, borrowedTarget, borrowedSource);
+  assert.equal(run(join(borrowedTarget, "node_modules", borrowed.entry)), "TASK_NEW",
+    "借用布局下 CLI 入口也必须落在快照里那份源码上");
+  save(join(borrowed.directory, "packages", "lib", "cli.mjs"), 'console.log("MAIN_LIVE");\n');
+  assert.equal(run(join(borrowedTarget, "node_modules", borrowed.entry)), "TASK_NEW",
+    "改主检出之后同一份快照的 CLI 输出不许跟着变");
+  assert.equal(await verifyGateSnapshot(borrowedTarget, borrowedSource), true);
+
   console.log("accept-gate-confine: ambient resolution, declaration-independent isolation, "
     + "aliased local packages, same-name third-party provenance, refusal to write through a "
-    + "borrowed tree, partial installs, relocated packages, dangling trunks "
-    + "and native link semantics passed");
+    + "borrowed tree, partial installs, relocated packages, dangling trunks, native link semantics, "
+    + "scope-link write ownership, ancestor-install provenance and CLI entry closure passed");
 } finally { rmSync(root, { recursive: true, force: true }); }

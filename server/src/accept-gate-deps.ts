@@ -162,7 +162,13 @@ export async function dependencyDigest(root: string, dep: string): Promise<strin
 export type WorkspacePackages = {
   /** 展开出来的包目录（相对项目根）。可能不完整——判据不靠它，见 declared。 */
   dirs: string[];
-  /** 展开出来的包名。dependencyMismatch 用它证明隔离。 */
+  /**
+   * 展开出来的包名。**不是任何判据**，只是声明展开的产物（有测试盯着展开器认不认各种 glob 写法）。
+   *
+   * 曾经由 dependencyMismatch 拿它「证明隔离」，那一遍已经删掉：判据比收口弱（别名包、`npm link`、
+   * pnpm 的 `link:` 都展开不出来），而且它排在收口**之前**，而收口才是补绑定的那一步。源码隔离整
+   * 个归 accept-gate-confine，那里的身份只认安装记录，一个判据只留一处实现。
+   */
   names: string[];
   /**
    * 项目**声明过** workspace 包吗。
@@ -455,9 +461,13 @@ export async function provideDependency(root: string, target: string, dep: strin
  *   · link：那条链必须正好落在工作区那个依赖目录上；
  *   · absent：源端解析不出东西来，副本侧也必须解析不出来（而不是要求两边都非空，那会把一个合法
  *     状态判成复制失败，于是一个没装的可选依赖就能拖垮整次快照）；
- *   · clone：依赖根落在快照内（树真的独立了）、每个声明过的 workspace 包都解析到快照自己那份
- *     源码、**而且**整棵树的链闭包逐条落点等价（linkMismatch）。前两条都只看根和顶层，证不了
- *     树里每条链还指得对——猜错包身份、吃掉尾部分隔符、把相对外链照抄到不同深度都能从那里漏过去。
+ *   · clone：依赖根落在快照内（树真的独立了）、**而且**整棵树的链闭包逐条落点等价
+ *     （linkMismatch）。只看根证不了树里每条链还指得对——猜错包身份、吃掉尾部分隔符、把相对外链
+ *     照抄到不同深度都能从那里漏过去。
+ *
+ * 这里**不**核对「每个声明过的 workspace 包都解析到快照自己那份源码」：那一遍已经删掉，源码隔离
+ * 整个归 accept-gate-confine（理由同 WorkspacePackages.names 上方）。所以别把这里当成第二道独立
+ * 校验——它管的是「副本放得对不对」，不管「跑起来解析到谁」。
  *
  * 调用方必须在源码和依赖**都构造完**之后才调：clone 形态要解析快照里的 workspace 包，那条路径
  * 要等源码落盘；非 Git 分支曾经在源码之前对账，于是任何 monorepo 都会在门禁开跑前就失败。
