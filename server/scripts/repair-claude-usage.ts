@@ -14,6 +14,11 @@
  *   # ③ 生产库要先停 ash（避免跟运行中的回合抢同一条线程的快照），再显式放行
  *   npx tsx server/scripts/repair-claude-usage.ts --db data/ash.db --apply --force-production
  *
+ * **推荐顺序是「停服务 → 回填 → 装新 build 重启」**，而不是反过来：回填会给 270 条还活着
+ * 的 CLI 线程写下累计基线，重启后它们的下一回合就有东西可求差。若先重启再回填，每条线程
+ * 的第一回合会把整份累计值记成增量（几千万）—— 脚本认得出那一笔并顺手补掉（计划里的
+ * `rebasedFirstTurnAfterCutoff`），但多绕一圈，没必要。
+ *
  * 选项：
  *   --db <path>            要读/写的库文件（等价于 ASH_DB）。不给就用默认生产库，但那时
  *                          --apply 会被拒。
@@ -90,6 +95,10 @@ console.log(`账面 token    ${num(beforeTotal)} → ${num(afterTotal)}`
 console.log(`累计快照      新建 ${plan.snapshots.length} 条（${plan.snapshots.filter((s) => s.baselineReady).length} 条可直接求差、${plan.snapshots.filter((s) => !s.baselineReady).length} 条待建基线）`);
 if (straddling.length) {
   console.log(`跨 cutoff     ${straddling.length} 条会话的 trace 一半旧口径一半新口径，已按 cutoff 分段处理`);
+}
+const rebased = plan.sessions.filter((item) => item.rebasedFirstTurnAfterCutoff);
+if (rebased.length) {
+  console.log(`补首轮        ${rebased.length} 条会话在改口径后的第一回合把整份累计值记成了增量（快照还没建起来），已一并求差`);
 }
 console.log("");
 

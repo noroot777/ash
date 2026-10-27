@@ -49,6 +49,11 @@ export type ClaudeSessionPlan = {
   evidence: "strong" | "weak-date" | "weak-monotonic" | "single-turn" | "none";
   /** 这条会话的 trace 跨了「改口径」那一刻：前半截是旧口径、后半截已经是增量。 */
   straddlesCutoff: boolean;
+  /**
+   * 改口径之后那条线程的第一回合把整份累计值记成了增量（快照还没建起来），这次顺手补掉。
+   * 它是「先重启、后回填」留下的痕迹；按推荐顺序（先停服务、先回填、再重启）则一条都不会有。
+   */
+  rebasedFirstTurnAfterCutoff: boolean;
   skipped: string | null;
 };
 
@@ -198,6 +203,7 @@ export async function planClaudeUsageRepair(options: {
           after: null,
           regime: "unknown",
           evidence: "none",
+          rebasedFirstTurnAfterCutoff: false,
           skipped: member.entries
             ? `trace 里 ${member.entries.length} 条 usage，库里记 ${member.turns} 轮，对不上`
             : "读不到 trace 文件",
@@ -234,21 +240,33 @@ export async function planClaudeUsageRepair(options: {
       evidence = "weak-monotonic";
     }
 
-    // 累计口径：pre 按线程求差；post 已经是增量，原样计入。
+    // 累计口径：pre 按线程求差；post 原则上已经是增量，原样计入。
     const booked = new Map<string, TokenUsage>();
     const add = (sessionId: string, usage: TokenUsage) => {
       booked.set(sessionId, booked.has(sessionId) ? addUsage(booked.get(sessionId)!, usage) : usage);
     };
+    let wholeSnapshotAfterCutoff = false;
     if (regime === "cumulative") {
       let previous: TokenUsage | null = null;
       for (const entry of pre) {
         add(entry.sessionId, cumulativeUsageDelta(entry.usage, previous));
         previous = entry.usage;
       }
+      // **「先重启、后回填」会留下的那一轮**：改口径之后这条线程的第一回合，快照还没建
+      // 起来，修好的代码照样会把整份累计值当成增量记一次（几千万，不是几十万）。它在
+      // trace 里就是一份完整累计快照 —— 跟上一份一比，五项全不降就认得出来，顺手补掉。
+      //
+      // 只可能是 post 的**第一条**：从第二条起快照已经在了，运行期自己就求差了。真·增量
+      // 跟那份累计值差着几十倍，比不过这一关，所以不会误伤。
+      for (const [index, entry] of post.entries()) {
+        const whole = index === 0 && !!previous && nonDecreasing(previous, entry.usage);
+        if (whole) wholeSnapshotAfterCutoff = true;
+        add(entry.sessionId, whole ? cumulativeUsageDelta(entry.usage, previous) : { ...entry.usage, turns: 1 });
+        if (whole) previous = entry.usage;
+      }
     } else {
-      for (const entry of pre) add(entry.sessionId, { ...entry.usage, turns: 1 });
+      for (const entry of [...pre, ...post]) add(entry.sessionId, { ...entry.usage, turns: 1 });
     }
-    for (const entry of post) add(entry.sessionId, { ...entry.usage, turns: 1 });
 
     for (const member of members) {
       const after = booked.get(member.sessionId) ?? null;
@@ -262,6 +280,7 @@ export async function planClaudeUsageRepair(options: {
         after: after && !sameUsage(member.before, after) ? after : null,
         regime,
         evidence,
+        rebasedFirstTurnAfterCutoff: wholeSnapshotAfterCutoff,
         skipped: null,
       });
     }
@@ -300,6 +319,7 @@ export async function planClaudeUsageRepair(options: {
       regime: "unknown",
       evidence: "none",
       straddlesCutoff: false,
+      rebasedFirstTurnAfterCutoff: false,
       skipped: "会话行没有 cli_session_id，归不到线程，求差会把别人的账算进来",
     });
   }

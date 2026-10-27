@@ -292,10 +292,24 @@ try {
     usageTotal(REAL[3]!) + 7 + 11 + 13 + 17,
     "cutoff 之前按累计求差（之和 = 最后一份累计），之后原样计入",
   );
+  assert.equal(straddle.rebasedFirstTurnAfterCutoff, false, "后半截是真增量，不该被当成累计快照再求一次差");
   assert.equal(
     straddlePlan.snapshots.some((item) => item.sourceId === "claude:thread-straddle"),
     false,
     "这条线程改口径之后已经跑过回合，快照归运行期维护",
+  );
+
+  // 「先重启、后回填」留下的那一轮：改口径之后这条线程的第一回合没有快照可比，修好的代码
+  // 也会把整份累计值记一次。它在 trace 里就是一份完整累计快照，必须认出来并补掉。
+  const rebaseSeries = [REAL[0]!, REAL[1]!, REAL[2]!, REAL[3]!, REAL[4]!];
+  await seed("hist-rebase", "hist-i", "thread-rebase", rebaseSeries, { startedAt: at(2) });
+  const rebasePlan = await planClaudeUsageRepair({ cutoff: at(4) });
+  const rebase = rebasePlan.sessions.find((item) => item.sessionId === "hist-rebase")!;
+  assert.equal(rebase.rebasedFirstTurnAfterCutoff, true);
+  assert.equal(
+    usageTotal(rebase.after!),
+    usageTotal(REAL[4]!),
+    "补掉那一轮之后，整条会话仍收敛到最后一份累计值",
   );
 
   console.log("claude 账本验证通过：线程累计求差、真实连续回合换算、历史回填与幂等、cutoff 分段");
