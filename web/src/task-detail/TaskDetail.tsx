@@ -540,7 +540,9 @@ export function TaskDetail({
                           monitorWait={(
                             <MonitorWaitCard
                               // 切任务时折叠回去:上一个任务展开过,不代表这一个也该展开。
-                              key={task.id}
+                              // 带上角色前缀:这两张卡是 rail 里的兄弟,光用 task.id 会跟
+                              // 下面那张门禁卡撞成同一个 key(后果见 TaskReplyRail 里那段)。
+                              key={`monitor-wait:${task.id}`}
                               monitors={liveMonitors}
                               builtinCount={liveBuiltinCount}
                               status={task.status}
@@ -554,7 +556,7 @@ export function TaskDetail({
                           // 上就完全看不出有东西在跑(时间轴那行很快被顶走)。
                           gateWait={(
                             <AcceptGateWaitCard
-                              key={task.id}
+                              key={`accept-gate:${task.id}`}
                               taskId={task.id}
                               expected={!!task.acceptGateRunning}
                               notify={notify}
