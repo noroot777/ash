@@ -37,7 +37,8 @@ const { db, ensureSchema } = await import("../src/db/index.js");
 const { sessions, usageCumulativeSnapshots } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { recordSessionUsageEvent, sessionUsage, usageAccountingFor } = await import("../src/usage.js");
-const { planClaudeUsageRepair, applyClaudeUsageRepair, CLI_CUMULATIVE_SINCE, shapeRegime } = await import("../src/claude-usage-repair.js");
+const { planClaudeUsageRepair, plannedAfter, skipReason, CLI_CUMULATIVE_SINCE, shapeRegime } = await import("../src/claude-usage-repair.js");
+const { applyClaudeUsageRepair } = await import("../src/claude-usage-apply.js");
 const { readUsageTrace, TRACE_BACKUP_SUFFIX } = await import("../src/claude-usage-trace.js");
 const { sessionTracePath } = await import("../src/transcript.js");
 const { appendSessionTrace } = await import("../src/transcript.js");
@@ -287,33 +288,39 @@ try {
 
   const plan = await planClaudeUsageRepair();
   assert.equal(plan.boundary, CLI_CUMULATIVE_SINCE);
-  assert.deepEqual(plan.warnings, [], "强证据的两侧都落在界的正确一侧，不该报分歧");
+  // 交叉核对必须**看得见分歧**：观察值只统计「形状足够强」的读数，而且不管它跟日期界合不
+  // 合 —— 只记一致的那些，这两条警告就成了不可达代码（第 2 轮审查的非拦截项）。
+  // hist-rising-old 正是那种分歧：4 轮真·增量碰巧一路上升，形状读成累计、日期在界之前。
   assert.equal(plan.observed.lastIncremental, OLD(1), "库里观察到的最后一条强证据增量线程");
-  assert.equal(plan.observed.firstCumulative, NEW(0), "最早一条强证据累计线程（hist-drift 的 4 条旧账）");
+  assert.equal(plan.observed.firstCumulative, OLD(2),
+    "最早一条形状读成累计的强证据线程 —— 它跟日期界不一致，正因如此才要报出来");
+  assert.equal(plan.warnings.length, 1, "有分歧就必须报，不能只统计同意自己的那些");
+  assert.match(plan.warnings[0]!, /形状读成「线程累计」的线程起于 2026-09-12/);
+  assert.match(plan.warnings[0]!, /--boundary/, "报出来还要说清怎么校准");
 
   const planOf = (id: string) => plan.sessions.find((item) => item.sessionId === id)!;
   assert.equal(planOf("hist-cumulative").regime, "cumulative");
   assert.equal(planOf("hist-cumulative").evidence, "strong");
   assert.equal(
-    usageTotal(planOf("hist-cumulative").after!),
+    usageTotal(plannedAfter(planOf("hist-cumulative"))!),
     usageTotal(SERIES[6]!),
     "累计口径的会话重算后 = 最后一份累计快照（各轮增量之和的恒等式）",
   );
   assert.ok(
-    usageTotal(inflated) / usageTotal(planOf("hist-cumulative").after!) > 4,
+    usageTotal(inflated) / usageTotal(plannedAfter(planOf("hist-cumulative"))!) > 4,
     "原账面确实是几倍虚高，不然这个用例就什么都没在测",
   );
   assert.equal(planOf("hist-incremental").regime, "incremental");
   assert.equal(planOf("hist-incremental").evidence, "strong");
-  assert.equal(planOf("hist-incremental").after, null, "逐轮增量口径的历史账本来就是对的，不许动");
+  assert.equal(plannedAfter(planOf("hist-incremental")), null, "逐轮增量口径的历史账本来就是对的，不许动");
   assert.equal(planOf("hist-weak-new").regime, "cumulative");
   assert.equal(planOf("hist-weak-new").evidence, "weak-agreed");
-  assert.equal(usageTotal(planOf("hist-weak-new").after!), usageTotal(SERIES[1]!));
+  assert.equal(usageTotal(plannedAfter(planOf("hist-weak-new"))!), usageTotal(SERIES[1]!));
   assert.equal(planOf("hist-single").evidence, "single-turn");
-  assert.equal(planOf("hist-single").after, null, "一轮的会话两种口径同值，也不该写一遍");
+  assert.equal(plannedAfter(planOf("hist-single")), null, "一轮的会话两种口径同值，也不该写一遍");
   assert.equal(planOf("hist-broken").regime, "unreadable");
-  assert.match(planOf("hist-broken").skipped!, /对不上/);
-  assert.equal(planOf("hist-broken").after, null);
+  assert.match(skipReason(planOf("hist-broken"))!, /对不上/);
+  assert.equal(plannedAfter(planOf("hist-broken")), null);
   assert.equal(plan.sessions.some((item) => item.sessionId === "hist-codex"), false, "codex 会话不该进 claude 的计划");
 
   // ── 判不出的那三条：一律不动账，而且必须明说判不出 ──────────────────────────
@@ -321,11 +328,11 @@ try {
     ["hist-weak-old", "两轮递增但日期在界之前"]] as const) {
     assert.equal(planOf(id).regime, "uncertain", `${note}(${id}) 必须判不出`);
     assert.equal(planOf(id).evidence, "none");
-    assert.equal(planOf(id).after, null, `${note} 不许改账`);
-    assert.ok(planOf(id).skipped, `${note} 必须留下「判不出」的说明，不能静默不动`);
+    assert.equal(plannedAfter(planOf(id)), null, `${note} 不许改账`);
+    assert.ok(skipReason(planOf(id)), `${note} 必须留下「判不出」的说明，不能静默不动`);
   }
-  assert.match(planOf("hist-reset").skipped!, /不到一半/);
-  assert.match(planOf("hist-rising-old").skipped!, /两个信号不一致/);
+  assert.match(skipReason(planOf("hist-reset"))!, /不到一半/);
+  assert.match(skipReason(planOf("hist-rising-old"))!, /两个信号不一致/);
   assert.equal(
     snapshotPlanOf(plan, "claude:thread-reset").baselineReady,
     false,
@@ -337,7 +344,7 @@ try {
   assert.equal(settled.straddlesCutoff, true);
   assert.equal(settled.rebasedFirstTurnAfterCutoff, false, "标记是 delta 就是已结算，哪怕五项全不降也不许动");
   assert.equal(
-    usageTotal(settled.after!),
+    usageTotal(plannedAfter(settled)!),
     usageTotal(SERIES[3]!) + usageTotal(settledDelta),
     "旧账那 4 条求差(之和 = 第 4 份累计) + 已结算那条原样计入",
   );
@@ -349,7 +356,7 @@ try {
   // ── 补首轮：只有 snapshot 标记才补 ──────────────────────────────────────────
   const rebase = planOf("hist-rebase");
   assert.equal(rebase.rebasedFirstTurnAfterCutoff, true);
-  assert.equal(usageTotal(rebase.after!), usageTotal(SERIES[4]!), "补掉那一轮之后整条会话收敛到最后一份累计值");
+  assert.equal(usageTotal(plannedAfter(rebase)!), usageTotal(SERIES[4]!), "补掉那一轮之后整条会话收敛到最后一份累计值");
 
   // ── F1：分界不随续聊漂移 ────────────────────────────────────────────────────
   const drift = planOf("hist-drift");
@@ -358,12 +365,12 @@ try {
   assert.equal(drift.straddlesCutoff, true);
   assert.equal(drift.rebasedFirstTurnAfterCutoff, true, "改口径后那条线程的第一回合是 snapshot，要补求差");
   assert.equal(
-    usageTotal(drift.after!),
+    usageTotal(plannedAfter(drift)!),
     usageTotal(SERIES[6]!),
     "整条线程(4 条旧账 + 3 个真实新回合)收敛到最后一份累计值 28,486,599；"
     + "上一版在这里会判成 incremental 并留着 1 亿多的虚高账面",
   );
-  assert.ok(usageTotal(drift.after!) < usageTotal((await readUsage("hist-drift"))!) / 3, "原账面确实虚高 3 倍以上");
+  assert.ok(usageTotal(plannedAfter(drift)!) < usageTotal((await readUsage("hist-drift"))!) / 3, "原账面确实虚高 3 倍以上");
 
   // ── 落地 + trace 改写 ───────────────────────────────────────────────────────
   const applied = await applyClaudeUsageRepair(plan);
@@ -385,7 +392,7 @@ try {
   );
 
   assert.deepEqual(rewritten.failures, [], "改写 trace 不该有失败项");
-  assert.equal(rewritten.failedThreads.size, 0);
+  assert.equal(rewritten.failedThreads.length, 0);
   assert.ok(rewritten.files >= 5, "每条重算过的会话都要把 trace 里的累计值改成真实增量");
   assert.ok(
     existsSync(`${sessionTracePath("hist-c", "hist-cumulative")}${TRACE_BACKUP_SUFFIX}`),
@@ -416,7 +423,7 @@ try {
 
   // ── 幂等：再跑一次什么都不该变（手工脚本没有一次性闸，必须自身幂等）────────────
   const again = await planClaudeUsageRepair();
-  assert.equal(again.sessions.filter((item) => item.after).length, 0, "回填必须幂等");
+  assert.equal(again.sessions.filter((item) => plannedAfter(item)).length, 0, "回填必须幂等");
   assert.equal(again.snapshots.length, 0, "快照已经建好，第二遍不该再建");
   assert.equal(again.traces.length, 0, "trace 已经是真实增量，第二遍不该再改");
   assert.equal(
@@ -441,11 +448,11 @@ try {
     legacyOf(SERIES.slice(3, 6)), { startedAt: NEW(9), role: "reviewer", sideTurn: true }, 3, 3);
   const gatePlan = await planClaudeUsageRepair();
   assert.equal(gatePlan.sessions.find((item) => item.sessionId === "hist-gate-a")!.regime, "cumulative");
-  assert.ok(gatePlan.sessions.find((item) => item.sessionId === "hist-gate-a")!.after, "本来是要改账的");
-  assert.ok(gatePlan.sessions.find((item) => item.sessionId === "hist-gate-b")!.after);
+  assert.ok(plannedAfter(gatePlan.sessions.find((item) => item.sessionId === "hist-gate-a")!), "本来是要改账的");
+  assert.ok(plannedAfter(gatePlan.sessions.find((item) => item.sessionId === "hist-gate-b")!));
   rmSync(sessionTracePath("hist-m", "hist-gate-b"));
   const gated = await applyClaudeUsageRepair(gatePlan);
-  assert.equal(gated.traces.failedThreads.has("thread-gate"), true);
+  assert.equal(gated.traces.failedThreads.includes("thread-gate"), true);
   assert.match(gated.traces.failures.join("\n"), /读不到 trace/);
   assert.match(gated.traces.failures.join("\n"), /同一条 CLI 线程里有别的 trace 验不过/);
   assert.equal(usageTotal((await readUsage("hist-gate-a"))!), usageTotal(gateA), "整条线程的账都不许动");

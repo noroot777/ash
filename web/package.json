@@ -92,7 +92,7 @@
     "test:conversation-system-note": "node --experimental-strip-types scripts/test-conversation-system-note.mjs",
     "test:settlement-note": "node --experimental-strip-types scripts/test-settlement-note.mjs",
     "test:turn-fold": "node --experimental-strip-types scripts/test-turn-fold.mjs",
-    "//test:claude-trace-accounting": "claude 旧 trace 存的是线程累计快照，气泡上的「本轮」要在读侧求差；判据是「最后一条 == 会话汇总」这条恒等式，钉住什么时候敢动、什么时候必须原样返回。",
+    "//test:claude-trace-accounting": "气泡上的「本轮」只认逐条的 accounting 标记，读侧不许按数据形状猜口径：没标记的旧 codex trace 才在读侧求差，claude 旧 trace 由历史回填逐条改写成真实增量。钉住「有标记的一律原样显示」和那条被证伪的恒等式不许回来。",
     "test:claude-trace-accounting": "node --experimental-strip-types scripts/test-claude-trace-accounting.mjs",
     "test:turn-fold-dom": "node scripts/test-turn-fold-dom.mjs",
     "test:conversation-continuation": "tsx scripts/test-conversation-continuation.tsx",

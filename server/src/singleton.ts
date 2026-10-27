@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolveAshDbFile, ensureAshDbDir } from "./db/path.js";
+import { liveMaintenanceHolderForDb, maintenanceLockFileForDb } from "./maintenance-lock.js";
 import { IS_WINDOWS, isPidAlive, killPidsCommand } from "./platform.js";
 import { inspectProcess as inspectProcessInfo, type ProcessInfo } from "./proc.js";
 import {
@@ -169,6 +170,18 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
   }
 
   ensureAshDbDir(dbFile);
+  // 离线维护（历史回填那类脚本）正在改这份库和它的 trace 时不许起服务:两边各写一半同一条
+  // CLI 线程的账，谁都不知道最后落下的是什么。它是独立的一把锁，判据只认 pid 存活 +
+  // 启动时刻（见 maintenance-lock.ts），所以脚本被强杀之后不会把服务永久挡在外面。
+  const maintenance = liveMaintenanceHolderForDb(dbFile);
+  if (maintenance) {
+    throw new SingletonConflictError(
+      dbFile,
+      maintenanceLockFileForDb(dbFile),
+      { pid: maintenance.pid, startedAt: maintenance.startedAt, port: null, command: maintenance.note },
+      "database is being migrated by an offline maintenance process",
+    );
+  }
   const ownLock = writeOwnLock(dbFile, lockFile, port);
 
   try {

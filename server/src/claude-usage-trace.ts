@@ -1,5 +1,5 @@
 // 历史回填的 trace 那一半：把旧 claude 会话 trace 里那几条 usage 事件读出来、改写成真实
-// 增量。账那一半在 claude-usage-repair.ts。
+// 增量。账那一半在 claude-usage-repair.ts，提交协议在 claude-usage-apply.ts。
 //
 // **为什么非得改数据、不能在读侧算**：气泡上的「本轮」读的就是 trace 里这条事件。旧
 // claude trace 存的是整条线程的累计快照，而它们一条不缺地都标着 `incremental`（当时的
@@ -8,15 +8,15 @@
 // 成立，随便续一轮，整条历史的气泡就集体弹回累计值；跨 ash 会话行的线程更是永远凑不出。
 // **一条旧记录的含义不能随「以后会不会续聊」改变** —— 所以真实增量必须逐条写回数据里。
 //
-// 改写的四条自保：
+// 这个文件只管单份文件的三件事：**算**（prepare，不落盘）、**写**（write）、**还原**
+// （restore）。「谁跟谁一起成败」是提交协议的事，归 claude-usage-apply.ts。
+//
+// 三条自保：
 // ① 只动被判定要改的那几条 usage 行，其余行**原样保留**（按行处理，不整份重新序列化）；
 // ② 第一次改写前把原文件留一份 `.pre-usage-repair` 备份；
-// ③ **先把所有文件验一遍、再动手写**：读不到、索引对不上、只存在于只读回退目录的，
-//    在验的那一遍就被挑出来，不会写到一半才发现；
-// ④ **按 CLI 线程整组成败**：一条线程里只要有一份 trace 验不过，这条线程的 trace 一份
-//    都不改（它的账也跟着不改，见 claude-usage-repair 的 applyClaudeUsageRepair）。
-//    理由是「一半改过一半没改」比「都没改」坏得多：剩下那半截累计值的上一份基线已经
-//    被改成增量了，下一次回填再也算不回真实增量。
+// ③ **校验的是内容身份，不只是位置**：每条编辑都带着计划当时读到的原值，对不上就整份
+//    不动。只核对「第 n 条 usage 命中了」是不够的 —— 计划之后文件要是被追加或改过，
+//    同一个下标上很可能已经是另一份数字，照写就是拿陈旧计划盖掉新内容（第 2 轮审查 F2）。
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { TokenUsage, UsageAccountingMark } from "@ash/shared";
 import { parseSessionTrace, readableRunPath, sessionTracePath } from "./transcript.js";
@@ -34,23 +34,27 @@ export type UsageTraceEntry = {
   mark: LegacyMark;
 };
 
-export type TraceUsageEdit = { index: number; usage: TokenUsage; accounting: UsageAccountingMark };
+export type TraceUsageEdit = {
+  index: number;
+  /** 计划当时在这个位置读到的原值 —— 写之前要逐项核对，防止拿陈旧计划盖掉新内容。 */
+  expected: TokenUsage;
+  expectedMark: LegacyMark;
+  usage: TokenUsage;
+  accounting: UsageAccountingMark;
+};
 export type SessionTraceRewrite = {
   taskId: string;
   sessionId: string;
-  /** 这条会话属于哪条 CLI 线程 —— 成败按线程整组算，见文件头第 ④ 条。 */
+  /** 这条会话属于哪条 CLI 线程 —— 成败按线程整组算，见 claude-usage-apply.ts。 */
   cliSessionId: string;
   edits: TraceUsageEdit[];
 };
-export type TraceRewriteResult = {
-  files: number;
-  entries: number;
-  failures: string[];
-  /** 这些 CLI 线程的 trace 一份都没改，它们的账也不许改。 */
-  failedThreads: Set<string>;
-};
 
 export const TRACE_BACKUP_SUFFIX = ".pre-usage-repair";
+
+const TOKEN_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "reasoning", "turns"] as const;
+const sameReported = (a: TokenUsage, b: TokenUsage) =>
+  TOKEN_FIELDS.every((key) => a[key] === b[key]) && (a.costUsd ?? null) === (b.costUsd ?? null);
 
 /**
  * 从一条会话的 trace 里把 usage 事件按顺序取回来。**读不到文件返回 null（≠ 空数组）**：
@@ -72,20 +76,17 @@ export function readUsageTrace(taskId: string, sessionId: string): UsageTraceEnt
   return entries;
 }
 
-/** 把一行 trace 里的 usage 换成真实增量。认不出 / 不是 usage 的行原样返回。 */
-function rewriteLine(line: string, edit: TraceUsageEdit): string | null {
-  const parsed = parseSessionTrace(line)[0];
-  if (!parsed || parsed.event.kind !== "usage") return null;
-  return JSON.stringify({
-    ...parsed,
-    event: { ...parsed.event, usage: edit.usage, accounting: edit.accounting },
-  });
-}
+/** 算好但没落盘的一份改写。`original` 留着是为了失败时还原。 */
+export type PreparedTrace = {
+  rewrite: SessionTraceRewrite;
+  path: string;
+  original: string;
+  next: string;
+  applied: number;
+};
 
-type Prepared = { rewrite: SessionTraceRewrite; path: string; original: string; next: string; applied: number };
-
-/** 把一份 trace 的新内容算出来，但不落盘。认不出就返回失败说明。 */
-function prepare(rewrite: SessionTraceRewrite): Prepared | string {
+/** 把一份 trace 的新内容算出来，但不落盘。认不出就返回失败说明（string）。 */
+export function prepareTraceRewrite(rewrite: SessionTraceRewrite): PreparedTrace | string {
   const path = sessionTracePath(rewrite.taskId, rewrite.sessionId);
   const where = `${rewrite.taskId}/${rewrite.sessionId}`;
   // 预览实例的 RUNS_FALLBACK_DIR 指着主仓的 data/runs；本实例没有这份文件时读会回退到
@@ -108,61 +109,46 @@ function prepare(rewrite: SessionTraceRewrite): Prepared | string {
     cursor += 1;
     const edit = byIndex.get(cursor);
     if (!edit) return line;
-    const next = rewriteLine(line, edit);
-    if (next === null) {
-      broken = `${where}：第 ${cursor} 条 usage 行改写不了`;
+    const event = parsed.event as { kind: "usage"; usage: TokenUsage; accounting?: UsageAccountingMark };
+    if (!sameReported(event.usage, edit.expected) || event.accounting !== edit.expectedMark) {
+      broken = `${where}：第 ${cursor} 条 usage 跟计划当时读到的不一样（文件在这期间变过），整份不动`;
       return line;
     }
     applied += 1;
-    return next;
+    return JSON.stringify({ ...parsed, event: { ...event, usage: edit.usage, accounting: edit.accounting } });
   });
   if (broken) return broken;
-  // 索引对不上说明这份 trace 跟计划读到的不是同一份（文件变过，或计划读的是回退目录里
-  // 的另一份）。半份改写比不改写坏得多，整份跳过。
+  // 命中数对不上说明这份 trace 跟计划读到的不是同一份。半份改写比不改写坏得多，整份跳过。
   if (applied !== rewrite.edits.length) {
     return `${where}：计划改 ${rewrite.edits.length} 条 usage，文件里只对上 ${applied} 条，整份不动`;
   }
   return { rewrite, path, original, next: lines.join("\n"), applied };
 }
 
-export function applyTraceRewrites(rewrites: readonly SessionTraceRewrite[]): TraceRewriteResult {
-  const failures: string[] = [];
-  const failedThreads = new Set<string>();
-  const prepared: Prepared[] = [];
-  // 第一遍：只验不写。
-  for (const rewrite of rewrites) {
-    if (rewrite.edits.length === 0) continue;
-    const result = prepare(rewrite);
-    if (typeof result === "string") {
-      failures.push(result);
-      failedThreads.add(rewrite.cliSessionId);
-      continue;
-    }
-    prepared.push(result);
+/** 落盘（临时文件 + rename）。成功返回 null，失败返回说明。 */
+export function writePreparedTrace(item: PreparedTrace): string | null {
+  const where = `${item.rewrite.taskId}/${item.rewrite.sessionId}`;
+  try {
+    const backup = `${item.path}${TRACE_BACKUP_SUFFIX}`;
+    if (!existsSync(backup)) writeFileSync(backup, item.original);
+    const temp = `${item.path}.repair-tmp`;
+    writeFileSync(temp, item.next);
+    renameSync(temp, item.path);
+    return null;
+  } catch (error) {
+    return `${where}：写回失败（${(error as Error).message}）`;
   }
-  // 第二遍：只写「整条线程都验过」的那些。
-  let files = 0;
-  let entries = 0;
-  for (const item of prepared) {
-    if (failedThreads.has(item.rewrite.cliSessionId)) {
-      failures.push(`${item.rewrite.taskId}/${item.rewrite.sessionId}：同一条 CLI 线程里有别的 trace 验不过，整条线程都不改`);
-      continue;
-    }
-    try {
-      const backup = `${item.path}${TRACE_BACKUP_SUFFIX}`;
-      if (!existsSync(backup)) writeFileSync(backup, item.original);
-      const temp = `${item.path}.repair-tmp`;
-      writeFileSync(temp, item.next);
-      renameSync(temp, item.path);
-    } catch (error) {
-      // 走到这里说明磁盘出了问题。这条线程已经写下的那几份只能靠 .pre-usage-repair
-      // 备份人工回滚 —— 把它报出来，别让它看起来像成功。
-      failures.push(`${item.rewrite.taskId}/${item.rewrite.sessionId}：写回失败（${(error as Error).message}）`);
-      failedThreads.add(item.rewrite.cliSessionId);
-      continue;
-    }
-    files += 1;
-    entries += item.applied;
+}
+
+/** 把已经写下去的那一份还原成原内容。成功返回 null，失败返回说明。 */
+export function restorePreparedTrace(item: PreparedTrace): string | null {
+  const where = `${item.rewrite.taskId}/${item.rewrite.sessionId}`;
+  try {
+    const temp = `${item.path}.repair-rollback`;
+    writeFileSync(temp, item.original);
+    renameSync(temp, item.path);
+    return null;
+  } catch (error) {
+    return `${where}：回滚失败，文件仍是改写后的内容（${(error as Error).message}）`;
   }
-  return { files, entries, failures, failedThreads };
 }
