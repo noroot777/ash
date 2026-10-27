@@ -265,7 +265,7 @@ export async function releaseSuspectTurn(
     return { ok: false, why: "not-suspect", reason: "这个回合占位刚刚换了主人，已经有新的一轮接手了" };
   }
   const detail = `占位身份 ${released.role}、已持有约 ${held(suspect.heldMs)}`;
-  console.warn(`[ash] 用户主动放开回合占位 task=${taskId}（${detail}）`);
+  console.warn(`[ash] 显式请求放开回合占位 task=${taskId}（${detail}）`);
   // 核对后置条件(理由见 `runnable`)。排在释放之后 —— 释放那两行一个 await 都不能隔。
   const after = await runnableAfterRelease(taskId);
   if (!after.runnable) {
@@ -275,7 +275,7 @@ export async function releaseSuspectTurn(
     taskId,
     `released-turn:${suspect.claimedAt}:${suspect.seq}`,
     "回合占位已放开",
-    `这个任务的回合占位已由你手动放开（${detail}）。`
+    `这个任务的回合占位已通过显式请求放开（${detail}）。`
     + (after.runnable ? "现在可以继续运行了。" : `但它还点不动运行：${after.nextStep ?? "请刷新查看当前状态"}。`)
     + SIDE_EFFECT,
   );

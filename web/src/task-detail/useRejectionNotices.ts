@@ -56,8 +56,8 @@ export function useRejectionNotices(taskId: string, revision = 0): {
 function noticeText(notice: { action: string; outcome: string; reason: string }): string {
   if (notice.outcome === "system") return `〔系统〕${notice.reason}`;
   return notice.outcome === "incomplete"
-    ? `你点的「${notice.action}」生效了，但还没到位：${notice.reason}`
-    : `你点的「${notice.action}」没有执行：${notice.reason}`;
+    ? `「${notice.action}」生效了，但还没到位：${notice.reason}`
+    : `「${notice.action}」没有执行：${notice.reason}`;
 }
 
 /**
