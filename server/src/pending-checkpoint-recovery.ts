@@ -10,8 +10,8 @@ const undeliveredCheckpoint = () => and(
   isNotNull(scheduledMessages.checkpointTaken),
 );
 
-export async function recoverPendingCheckpoints(taskId?: string): Promise<Set<string>> {
-  const failed = new Set<string>();
+export async function recoverPendingCheckpoints(taskId?: string): Promise<Map<string, "read" | "restore">> {
+  const failed = new Map<string, "read" | "restore">();
   if (dbClient.closed) return failed;
   let receipts: (typeof scheduledMessages.$inferSelect)[];
   try {
@@ -22,7 +22,7 @@ export async function recoverPendingCheckpoints(taskId?: string): Promise<Set<st
   } catch (error) {
     console.error(`[ash] 未送达续跑交代读取失败 task=${taskId ?? "all"}:`, error);
     if (!taskId) throw error;
-    failed.add(taskId);
+    failed.set(taskId, "read");
     return failed;
   }
   for (const receipt of receipts) {
@@ -30,7 +30,7 @@ export async function recoverPendingCheckpoints(taskId?: string): Promise<Set<st
     try {
       await restoreMonitorCheckpoint(receipt);
     } catch {
-      failed.add(receipt.taskId);
+      failed.set(receipt.taskId, "restore");
     }
   }
   return failed;
@@ -54,6 +54,7 @@ export async function preparePendingCheckpointStart(taskId: string): Promise<str
   try {
     if (dbClient.closed) return "数据库正在关闭，续跑交代尚未交接";
     const failed = await recoverPendingCheckpoints(taskId);
+    if (failed.get(taskId) === "read") return "暂时无法确认续跑交代的持久归属，请稍后重试";
     if (failed.has(taskId)) return "续跑交代归还失败，原文仍保存在消息账本中，请稍后重试";
     return await pendingCheckpointBlockReason(taskId);
   } catch (error) {

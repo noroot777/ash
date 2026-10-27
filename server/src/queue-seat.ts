@@ -26,9 +26,10 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
 import { manualStartBlockers } from "./queues.js";
-import { isTurnClaimed, whenTurnIdle } from "./runs.js";
-import { setTaskStatus } from "./status.js";
+import { isTurnClaimed, releaseTurn, turnIdentity, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
+import { waitForStartReceipt } from "./task-start-receipt.js";
 
 export type QueueSeat = {
   taskId: string;
@@ -116,9 +117,12 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
       taskId,
     );
     if (blockers.length) return { ok: false, blockers };
-    const prevStatus = rows.find((r) => r.id === taskId)?.status ?? "backlog";
+    const current = rows.find((row) => row.id === taskId);
+    if (!current) return { ok: false, blockers: ["任务已删除"] };
+    const reservation = taskQueueReservation(current);
+    const prevStatus = reservation.prevStatus;
     try {
-      await setTaskStatus(taskId, "queued");
+      await reserveQueuedTask(reservation);
     } catch (err) {
       // 占位写入失败 ≠ 肯定没写入:setTaskStatus 写完 status 还要读 sessions 广播,
       // UPDATE 已提交、附带读取才超时的话任务已经是 queued(第 7 轮审查同款)。这里
@@ -135,18 +139,19 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
       console.error(`[ash] 队列占位写入失败(${taskId}),按认领失败返回并安排遗留回收:`, err);
       void import("./scheduler.js").then(({ reclaimStrandedSeat }) => {
         const timer = setTimeout(
-          () => void reclaimStrandedSeat(taskId, item.queueId, prevStatus as Parameters<typeof reclaimStrandedSeat>[2], { repush: "never" }),
+          () => void reclaimStrandedSeat(taskId, item.queueId, prevStatus, { repush: "never", reservation }),
           1_000,
         );
         timer.unref?.();
       });
       return { ok: false, transient: true, blockers: ["队列占位写入失败，请稍后重试"] };
     }
-    return { ok: true, seat: makeSeat(taskId, prevStatus) };
+    return { ok: true, seat: makeSeat(reservation) };
   });
 }
 
-function makeSeat(taskId: string, prevStatus: string): QueueSeat {
+function makeSeat(reservation: TaskQueueReservation): QueueSeat {
+  const { taskId, prevStatus } = reservation;
   let released = false;
   return {
     taskId,
@@ -159,10 +164,7 @@ function makeSeat(taskId: string, prevStatus: string): QueueSeat {
       // 反而造出双跑。
       if (isTurnClaimed(taskId)) return;
       try {
-        const cur = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-        if (cur?.status === "queued") {
-          await setTaskStatus(taskId, prevStatus as Parameters<typeof setTaskStatus>[1]);
-        }
+        await restoreQueuedTask(reservation);
       } catch {
         /* 回滚失败只能留给重启 reconcile */
       }
@@ -190,11 +192,18 @@ export async function seatThenStart(
   }
   if (!claim.ok) return claim;
   const seat = claim.seat;
-  void start(seat)
-    .catch(async (err) => {
+  const owner = turnIdentity(taskId);
+  const started = await waitForStartReceipt(taskId, async () => {
+    try {
+      await start(seat);
+    } catch (err) {
       console.error(`[ash] 任务 ${taskId} 启动异常:`, err);
       await appendTaskTimeline(taskId, `本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`);
-    })
-    .finally(() => { if (seat) void seat.release(); });
-  return { ok: true };
+    } finally {
+      if (owner && turnIdentity(taskId) === owner) releaseTurn(taskId);
+      await seat?.release();
+    }
+  });
+  return started ? { ok: true }
+    : { ok: false, transient: true, blockers: ["任务未通过启动检查，尚未启动，请稍后重试"] };
 }

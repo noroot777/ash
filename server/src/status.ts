@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, type SQL } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -59,11 +59,13 @@ async function writeTaskStatus(
   cur: typeof tasks.$inferSelect | undefined,
   rerun: boolean,
   quietAdvance?: boolean,
-): Promise<void> {
+  guard?: SQL,
+  queueSeatToken?: string | null,
+): Promise<boolean> {
   const updatedAt = now();
   let startedAt = cur?.startedAt ?? null;
   let endedAt = cur?.endedAt ?? null;
-  const patch: Record<string, unknown> = { status, updatedAt };
+  const patch: Record<string, unknown> = { status, updatedAt, queueSeatToken: queueSeatToken ?? null };
 
   if (status === "running") {
     if (!startedAt) patch.startedAt = startedAt = updatedAt;
@@ -90,7 +92,8 @@ async function writeTaskStatus(
     Object.assign(patch, directionIdentityCleared());
   }
 
-  await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
+  const changed = await db.update(tasks).set(patch).where(and(eq(tasks.id, taskId), guard)).returning({ id: tasks.id });
+  if (!changed.length) return false;
   // 这一行落库了 ⇒ 结算那一关置的闩可以撤了(见 task-complete.ts 的 `beginTerminalLanding`):
   // 它护的就是「核完阻塞物」到「这一笔写进库」之间那条缝。从这一刻起,库里这一行自己就答得了
   // 「还能不能挂哨兵」—— 终态由 `monitorSourceGate` 挡住,非终态本来就该放行。
@@ -151,4 +154,11 @@ async function writeTaskStatus(
   if (status !== "running" && status !== "queued" && status !== "awaiting_review") {
     void import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId));
   }
+  return true;
+}
+
+export async function writeGuardedTaskStatus(taskId: string, status: TaskStatus, guard: SQL,
+  queueSeatToken: string | null = null): Promise<boolean> {
+  const current = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+  return writeTaskStatus(taskId, status, current, false, true, guard, queueSeatToken);
 }

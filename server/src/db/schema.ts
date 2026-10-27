@@ -233,6 +233,7 @@ export const tasks = sqliteTable("tasks", {
    */
   resumePromptGeneration: integer("resume_prompt_generation").notNull().default(0),
   waitOwnership: text("wait_ownership", { mode: "json" }).$type<TaskWaitOwnership>(),
+  queueSeatToken: text("queue_seat_token"),
   // 提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
   // 等 answer_question 清空并带答复 resume（见 scheduler.pickNextLaunchable 的挡板）。
   question: text("question"),

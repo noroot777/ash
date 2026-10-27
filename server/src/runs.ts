@@ -3,6 +3,7 @@ import type { AgentType } from "@ash/shared";
 import type { SteerText } from "./executors/types.js";
 import type { CliCommand, CliGoal } from "@ash/shared/cli-commands";
 import { RECONCILE_TURN_ROLE, claimNonTurn, whenTurnIdle } from "./turn-lock.js";
+import { acknowledgeStartReceipt, registerStartReceipt } from "./task-start-receipt.js";
 
 // 回合占位锁那一半(单飞锁、几种不是回合的预占、起跑冻结、等这一轮跑完再续跑)住在
 // turn-lock.ts —— 两摊各自的使用方几乎不重叠,挤在一个文件里已经过了 700 行上限
@@ -62,6 +63,7 @@ export function trackRun(taskId: string, h: Killable): void {
   let set = handles.get(taskId);
   if (!set) handles.set(taskId, (set = new Set()));
   set.add(h);
+  registerStartReceipt(taskId, h);
 }
 
 export function nativeCommandRun(taskId: string): Killable | null {
@@ -101,6 +103,7 @@ const discardedRuns = new WeakSet<Killable>();
 /** ②:消费循环已经真正接手这个 handle,之后的回收由它的 finally 负责。 */
 export function adoptRun(h: Killable): void {
   adoptedRuns.add(h);
+  acknowledgeStartReceipt(h);
 }
 
 /**

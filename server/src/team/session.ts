@@ -38,6 +38,7 @@ import { bus } from "../bus.js";
 import { id, now, attachmentsPrompt } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { trackRun, discardStartingRun, stopTask } from "../runs.js";
+import { acknowledgeTaskStart } from "../task-start-receipt.js";
 import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
@@ -125,10 +126,10 @@ export async function sendInbound(taskId: string, text: string): Promise<void> {
 // 当唤醒语);已经在线就只当一次唤醒,绝不开第二个进程。
 export async function startTeam(taskId: string): Promise<void> {
   if (teamIsLive(taskId)) {
-    await deliver(taskId, LEAD_NUDGE, "inbound");
+    if (await deliver(taskId, LEAD_NUDGE, "inbound")) acknowledgeTaskStart(taskId);
     return;
   }
-  await deliver(taskId, "", "start");
+  if (await deliver(taskId, "", "start")) acknowledgeTaskStart(taskId);
 }
 
 // 「停止全组」:调度台进程 + 所有执行者一起停。执行者走分组暂停(落 paused,占住
