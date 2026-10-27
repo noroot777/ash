@@ -614,7 +614,12 @@ try {
     strays.add(pairPid);
     strays.add(pairWorker);
     await waitFor("启动脚本退出", () => serviceSession("ports13")?.exitCode !== null);
-    assert.deepEqual(serviceSession("ports13")?.ports, [pairPort, pairWorkerPort], "两个端口都要记下来");
+    // 记录顺序跟的是**打印顺序**(工人那句 echo 排在「已启动」之前),所以这里只核集合。
+    assert.deepEqual(
+      [...(serviceSession("ports13")?.ports ?? [])].sort((a, b) => a - b),
+      [pairPort, pairWorkerPort].sort((a, b) => a - b),
+      "两个端口都要记下来",
+    );
 
     const failed = await stopCommand("ports13", SERVICE_COMMAND_ID, null, { portGraceMs: 500 });
     assert.equal(failed.status, 502, "工人占着的那个端口核不上归属 —— 这次停止不许宣称成功");
