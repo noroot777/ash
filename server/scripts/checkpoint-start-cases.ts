@@ -118,7 +118,7 @@ export async function checkpointStartCases(): Promise<void> {
       return execute.call(dbClient, statement);
     };
     try {
-      await assert.rejects(runGroup(groupId), /续跑交代/);
+      await runGroup(groupId);
       assert.equal(stopped, true);
       assert.equal((await taskOf(test.taskId)).status, "canceled");
       assert.equal((await taskOf(test.taskId)).queueSeatToken, null);

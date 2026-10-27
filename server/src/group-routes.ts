@@ -9,7 +9,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { groups, projects, queueItems } from "./db/schema.js";
 import { repoKey } from "./git.js";
-import { pauseGroup, runGroup } from "./scheduler.js";
+import { pauseGroup, runGroupInBackground } from "./scheduler.js";
 import { createTasks } from "./task-store.js";
 import { id, now, taskBody } from "./util.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -57,7 +57,7 @@ api.post("/groups/:id/run", async (c) => {
   const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
   if (!g) return c.json({ error: "not found" }, 404);
   if (g.paused) await db.update(groups).set({ paused: false }).where(eq(groups.id, gid));
-  void runGroup(gid);
+  void runGroupInBackground(gid);
   return c.json({ started: true }, 202);
 });
 
@@ -252,7 +252,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     throw error;
   }
 
-  if (b.run) void runGroup(groupId);
+  if (b.run) void runGroupInBackground(groupId);
   return c.json(
     { groupId, run: !!b.run, tasks: created },
     201,

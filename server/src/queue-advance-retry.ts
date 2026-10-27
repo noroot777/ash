@@ -7,7 +7,9 @@ import { writeGuardedTaskStatus } from "./status.js";
 
 type Task = typeof tasks.$inferSelect;
 export type QueueAdvanceRequest = NonNullable<Task["queueAdvanceRequest"]> & { taskId: string };
-const deferred = new Map<string, ReturnType<typeof setTimeout>>();
+const deferred = new Map<string, {
+  timer: ReturnType<typeof setTimeout>; retries: Set<() => Promise<void>>;
+}>();
 const canceling = new Map<string, number>();
 
 export const isQueueAdvanceCanceling = (taskId: string): boolean => canceling.has(taskId);
@@ -73,15 +75,25 @@ export async function replayQueueAdvances(queueId?: string): Promise<void> {
   }
 }
 
-export function deferQueueAdvance(queueId: string): void {
-  if (dbClient.closed || deferred.has(queueId)) return;
+export function deferQueueAdvance(queueId: string, retry?: () => Promise<void>): void {
+  if (dbClient.closed) return;
+  const existing = deferred.get(queueId);
+  if (existing) {
+    if (retry) existing.retries.add(retry);
+    return;
+  }
+  const retries = new Set(retry ? [retry] : []);
   const timer = setTimeout(() => {
     deferred.delete(queueId);
-    void replayQueueAdvances(queueId).catch((error) => {
+    void (async () => {
+      for (const attempt of retries) await attempt();
+      await replayQueueAdvances(queueId);
+    })().catch((error) => {
       console.error(`[ash] 续跑交接请求读取失败 queue=${queueId}:`, error);
       deferQueueAdvance(queueId);
+      for (const attempt of retries) deferQueueAdvance(queueId, attempt);
     });
   }, 1_000);
   timer.unref?.();
-  deferred.set(queueId, timer);
+  deferred.set(queueId, { timer, retries });
 }

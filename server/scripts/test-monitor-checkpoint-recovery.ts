@@ -22,6 +22,8 @@ import { checkpointQueueCases } from "./checkpoint-queue-cases.js";
 import { checkpointStopCases } from "./checkpoint-stop-cases.js";
 import { checkpointAdmissionCases } from "./checkpoint-admission-cases.js";
 import { checkpointAdvanceAdmissionCases } from "./checkpoint-advance-admission-cases.js";
+import { checkpointAdvanceFailureCases } from "./checkpoint-advance-failure-cases.js";
+import { checkpointGroupFailureCases } from "./checkpoint-group-failure-cases.js";
 
 function owner(mode: string, taskId: string, messageId = ""): void {
   const child = spawnSync(process.execPath, [
@@ -46,6 +48,8 @@ async function resultsDelivered(test: Awaited<ReturnType<typeof scenario>>): Pro
 }
 
 try {
+  await checkpointAdvanceFailureCases();
+  await checkpointGroupFailureCases();
   await checkpointAdmissionCases();
   await checkpointAdvanceAdmissionCases();
   await checkpointStopCases();
