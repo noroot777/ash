@@ -21,7 +21,7 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
     setBusy(true);
     setResult(null);
     try {
-      const r = await api.reclaimTurn(taskId);
+      const r = await api.reclaimTurn(taskId, true);
       setResult(r.note);
       setReleased(r.reclaimed);
       // **锁放开了不等于任务点得动了。** 放开只撤内存里那把锁,库里的状态归另一个人负责,

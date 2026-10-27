@@ -9,7 +9,7 @@
 // 3 换到 4 之后旧回滚也照样把后来者的占位撤回终态。
 //
 // 覆盖:
-//   ① `setTaskStatus` 的条件写本身(expectStatus / owns 的语义、以及**过期的写一个副作用
+//   ① `setTaskStatus` 的条件写本身(expectStatus / commitGuard 的语义、以及**过期的写一个副作用
 //      都不发布**);
 //   ② 真实窄缝里的两种后来者 —— 在「整行已读出、CAS 还没发出」的那一瞬注入停止 /
 //      注入一次完整的重新认领,断言 seat 的 rollback 与 scheduler 的守卫都不提交;
@@ -36,13 +36,18 @@ const { projects, queueItems, tasks } = await import("../src/db/schema.js");
 const { createTasks } = await import("../src/task-store.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
 const { setTaskStatus } = await import("../src/status.js");
+const { bus } = await import("../src/bus.js");
 const { claimQueueSeat, queueClaimError, seatGeneration } = await import("../src/queue-seat.js");
 const { reclaimStrandedSeat } = await import("../src/scheduler.js");
 const { releaseSuspectTurn } = await import("../src/turn-lock-reclaim.js");
 const { noteUserActionOutcome, recentRejectionNotices } = await import("../src/user-action-rejection.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { personalWriteGate, isHumanOnlyPath } = await import("../src/auth/personal-gate.js");
-const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
+const { actorOf } = await import("../src/auth/context.js");
+const { authGate } = await import("../src/auth/middleware.js");
+const { resourceGate } = await import("../src/auth/resource-gate.js");
+const { writeSystemSetting } = await import("../src/app-settings.js");
+const { invalidateInstanceConfig } = await import("../src/auth/mode.js");
 
 await ensureSchema();
 const stamp = new Date().toISOString();
@@ -66,7 +71,7 @@ const post = (path: string, body?: unknown) =>
   api.request(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? {}),
+    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true } : {})),
   });
 
 const statusOf = async (taskId: string): Promise<string | undefined> =>
@@ -79,10 +84,16 @@ const statusOf = async (taskId: string): Promise<string | undefined> =>
 // 那一瞬。生产代码一个字没改。
 const realExecute = dbClient.execute.bind(dbClient);
 let inject: null | (() => Promise<unknown>) = null;
+let onTaskWrite: null | (() => void) = null;
 type Executor = typeof dbClient.execute;
 dbClient.execute = ((stmt: Parameters<Executor>[0]) => {
   const sql = String(typeof stmt === "string" ? stmt : (stmt as { sql?: string }).sql ?? "");
   const out = realExecute(stmt);
+  if (onTaskWrite && /^\s*update\s+"tasks"/i.test(sql)) {
+    const notify = onTaskWrite;
+    onTaskWrite = null;
+    notify();
+  }
   if (inject && /^\s*select/i.test(sql) && sql.includes('"tasks"')) {
     const run = inject;
     inject = null;
@@ -113,15 +124,15 @@ await createTasks([
 }
 
 {
-  // `owns` 补的是另一种过期:状态**恰好还是**期望值,但那已经是后来者重新占下的同一个
+  // 提交守卫补的是另一种过期:状态**恰好还是**期望值,但那已经是后来者重新占下的同一个
   // 状态(队列占位换了代次)。谓词说「不归我」就不许写。
   const committed = await setTaskStatus("t-owns", "failed", {
     expectStatus: "queued",
-    owns: () => false,
+    commitGuard: async () => false,
   });
   assert.equal(committed, false, "归属谓词否证时不许提交");
   assert.equal(await statusOf("t-owns"), "queued", "不归我的那一代状态一个字都不许动");
-  assert.equal(await setTaskStatus("t-owns", "failed", { expectStatus: "queued", owns: () => true }), true);
+  assert.equal(await setTaskStatus("t-owns", "failed", { expectStatus: "queued", commitGuard: (commit) => commit() }), true);
 }
 
 // ── ② 真实窄缝:停止抢在回滚的 CAS 之前落库 ──────────────────────────────────
@@ -205,7 +216,7 @@ await db.insert(queueItems).values({ id: "qi-guard2", queueId: "q-guard2", taskI
 
 {
   // (b) 状态**恰好还是** queued,但窗口里已经有 seat 认领了它 —— 守卫收的是「无主的
-  // queued」,这一具已经有主,一个字都不许动。这正是 owns 谓词在生产里要挡的那一种。
+  // queued」,这一具已经有主,一个字都不许动。
   let claimed: Awaited<ReturnType<typeof claimQueueSeat>> | null = null;
   inject = async () => { claimed = await claimQueueSeat("t-guard2"); };
   await reclaimStrandedSeat("t-guard2", "q-guard2", "failed", { repush: "never" });
@@ -217,7 +228,7 @@ await db.insert(queueItems).values({ id: "qi-guard2", queueId: "q-guard2", taskI
   // 所以它的 release 是空转:任务仍停在 queued,号码清掉。这是对的 —— seat 的回滚目标
   // 定义就是「我占位之前库里是什么」,它不该替别人留下的遗留猜一个终态。真正持有正确
   // 回滚目标的是 `reclaimStrandedSeat`(prevStatus 由欠下这次启动的那一方传进来),
-  // 号码一清它下一趟就接得上。本节要钉的是 owns:**守卫那一笔没有写进去**。
+  // 号码一清它下一趟就接得上。本节要钉的是**守卫那一笔没有写进去**。
   await (claimed as { seat: { release(): Promise<void> } }).seat.release();
   assert.equal(await statusOf("t-guard2"), "queued");
   assert.equal(seatGeneration("t-guard2"), 0, "号码必须清掉,否则守卫永远在读库之前让位");
@@ -236,11 +247,11 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
 
 {
   const gated = new Hono();
-  let actorKind = "agent";
+  let authenticatedAs = "";
+  gated.use("*", authGate());
+  gated.use("*", resourceGate());
   gated.use("*", async (c, next) => {
-    setActor(c, actorKind === "agent"
-      ? { kind: "agent", userId: "u1", role: "member", taskId: "other", name: "agent" }
-      : SINGLE_ACTOR);
+    authenticatedAs = actorOf(c).kind;
     return next();
   });
   gated.use("*", personalWriteGate());
@@ -250,21 +261,54 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   mountTaskRunRoutes(inner);
   gated.route("/api", inner);
 
-  await createTasks([{ ...baseTask, id: "t-gate", title: "gate", status: "queued" }]);
+  await createTasks([
+    { ...baseTask, id: "t-gate", title: "gate", status: "queued" },
+    { ...baseTask, id: "source-agent", title: "source", status: "running", activeTurnToken: "valid-turn" },
+  ]);
   assert.equal(claimTurn("t-gate"), true);
   await new Promise((r) => setTimeout(r, 40)); // 过了可疑阈值
 
-  const asAgent = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+  for (const mode of ["multi", "single"]) {
+    await writeSystemSetting("instanceMode", mode);
+    invalidateInstanceConfig();
+    const asAgent = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-ash-source-task-id": "source-agent", "x-ash-turn-token": "valid-turn" },
+      body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    });
+    assert.equal(authenticatedAs, "agent", `${mode} 模式必须保留真实的任务身份`);
+    assert.equal(asAgent.status, 403, "agent 的回合凭证不许按这个开关");
+    assert.match((await asAgent.json() as { error: string }).error, /只有账号本人/);
+    assert.equal(claimTurn("t-gate"), false, "403 之后那把锁必须还在");
+  }
+
+  const invalidCredentials: Record<string, string>[] = [
+    { "x-ash-source-task-id": "source-agent", "x-ash-turn-token": "expired" },
+    { "x-ash-source-task-id": "source-agent" },
+    { "x-ash-turn-token": "valid-turn" },
+  ];
+  for (const headers of invalidCredentials) {
+    const invalid = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST", headers, body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    });
+    assert.equal(invalid.status, 401, "无效或不完整凭证不许降级为本机用户");
+  }
+
+  const noConsent = await gated.request("/api/tasks/t-gate/reclaim-turn", {
     method: "POST", headers: { "content-type": "application/json" }, body: "{}",
   });
-  assert.equal(asAgent.status, 403, "agent 的回合凭证不许按这个开关");
-  assert.match((await asAgent.json() as { error: string }).error, /只有账号本人/);
-  assert.equal(claimTurn("t-gate"), false, "403 之后那把锁必须还在");
+  assert.equal(noConsent.status, 400, "默认本机身份不等于确认风险");
+  const crossSite = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+    method: "POST", headers: { origin: "https://other.example" },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(crossSite.status, 403, "跨站请求不能冒充用户确认");
+  assert.equal(claimTurn("t-gate"), false, "授权失败不能释放锁");
 
   // 同一条路,真人(自用模式的隐式本地用户)照常放行。
-  actorKind = "user";
   const asHuman = await gated.request("/api/tasks/t-gate/reclaim-turn", {
-    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
   });
   assert.equal(asHuman.status, 200, "账号本人该按得动");
   assert.equal((await asHuman.json() as { reclaimed: boolean }).reclaimed, true);
@@ -300,6 +344,8 @@ await createTasks([
   const run = await post("/tasks/t-stuck/run");
   assert.equal(run.status, 409);
   assert.equal((await run.json() as { status: string }).status, "queued");
+  assert.equal((await post("/tasks/t-stuck/stop")).status, 200);
+  assert.equal(await statusOf("t-stuck"), "canceled", "提示中的停止动作必须真的把任务恢复到可运行状态");
 }
 
 {
@@ -333,7 +379,44 @@ await createTasks([{ ...baseTask, id: "t-outcome", title: "outcome" }]);
   assert.equal(await noteUserActionOutcome("t-outcome", "运行", "incomplete", "同队还有在跑的"), true);
 }
 
+for (const firstWriter of ["claim", "reclaim"]) {
+  const taskId = `write-gate-${firstWriter}`;
+  await createTasks([{ ...baseTask, id: taskId, title: taskId, status: firstWriter === "claim" ? "failed" : "queued" }]);
+  await db.insert(queueItems).values({ queueId: taskId, taskId, position: 0, createdAt: stamp });
+  const published: string[] = [];
+  const unsubscribe = bus.subscribe((event) => {
+    if (event.type === "task.status" && event.taskId === taskId) published.push(event.status);
+  });
+  const transaction = await dbClient.transaction();
+  const writeStarted = new Promise<void>((resolve) => { onTaskWrite = resolve; });
+  let claim: ReturnType<typeof claimQueueSeat>;
+  let reclaim: ReturnType<typeof reclaimStrandedSeat>;
+  try {
+    if (firstWriter === "claim") {
+      claim = claimQueueSeat(taskId);
+      await writeStarted;
+      assert.equal(seatGeneration(taskId), 0, "认领写门被占时尚未发号");
+      reclaim = reclaimStrandedSeat(taskId, taskId, "failed", { repush: "never" });
+    } else {
+      reclaim = reclaimStrandedSeat(taskId, taskId, "failed", { repush: "never" });
+      await writeStarted;
+      claim = claimQueueSeat(taskId);
+    }
+  } finally {
+    await transaction.commit();
+  }
+  const claimed = await claim!;
+  await reclaim!;
+  assert.ok(claimed.ok && claimed.seat, "两个合法提交次序中认领都必须成功");
+  assert.equal(await statusOf(taskId), "queued", "补偿不能撤销刚认领成功的 queued");
+  assert.notEqual(seatGeneration(taskId), 0);
+  assert.deepEqual(published, firstWriter === "claim" ? ["queued"] : ["failed", "queued"], "过期补偿不能发布终态副作用");
+  unsubscribe();
+  await claimed.seat!.release();
+}
+
 for (const id of ["t-gate", "t-free"]) releaseTurn(id);
 dbClient.execute = realExecute as Executor;
+await new Promise<void>((resolve) => setImmediate(resolve));
 await dbClient.close?.();
 console.log("seat-ownership regressions ok");

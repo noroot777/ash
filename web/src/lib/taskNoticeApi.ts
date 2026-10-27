@@ -47,6 +47,6 @@ export const taskNoticeApi = {
     request(`/tasks/${id(taskId)}/notices`),
   // 放开一把占着不动的回合占位。**判据在服务端,不因为是人点的就放宽**;而且只有账号
   // 本人按得动 —— agent 的回合凭证会被 403 挡掉(server/src/auth/personal-gate.ts)。
-  reclaimTurn: (taskId: string): Promise<ReclaimTurnResult> =>
-    request(`/tasks/${id(taskId)}/reclaim-turn`, json("POST", {})),
+  reclaimTurn: (taskId: string, acknowledgeDuplicateRisk: boolean): Promise<ReclaimTurnResult> =>
+    request(`/tasks/${id(taskId)}/reclaim-turn`, json("POST", { acknowledgeDuplicateRisk })),
 };

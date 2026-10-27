@@ -41,6 +41,7 @@ function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger
       disabled: true,
     };
   }
+  if (task.status === "queued") return { kind: "stop", label: "停止排队", danger: true };
   if (task.stage === "accepted") return { kind: null, label: "已验收", disabled: true };
   // 就地验证轮还没出结论、或有待答复的提问：任务的 status 是它原来的终态（旁路回合
   // 不改 status，提问停在 paused/done 上也一样），所以光看 status 会给出一个「验收」
@@ -61,7 +62,6 @@ function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger
   if (task.status === "failed") return { kind: "retry", label: "重试" };
   if (task.status === "backlog" || task.status === "canceled") return { kind: "run", label: "运行" };
   if (task.status === "paused") return { kind: "run", label: "继续" };
-  if (task.status === "queued") return { kind: null, label: "排队中", disabled: true };
   if (task.status === "awaiting_review") return { kind: null, label: "等待裁决", disabled: true };
   return { kind: null, label: task.status === "idle" ? "待命" : "进行中", disabled: true };
 }

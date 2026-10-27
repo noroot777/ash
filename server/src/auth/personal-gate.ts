@@ -22,7 +22,7 @@
 // 被这道闸挡在外面。
 import type { MiddlewareHandler } from "hono";
 import { actorOf, isAccountHolder } from "./context.js";
-import { WRITE_METHODS } from "./middleware.js";
+import { crossSiteRejection, WRITE_METHODS } from "./middleware.js";
 import { isMultiUser } from "./mode.js";
 
 /**
@@ -78,8 +78,8 @@ const PERSONAL_PATHS = [
  *    用户能点的开关**,而它在自用模式下一模一样地成立:同项目另一条任务只凭
  *    `x-ash-source-task-id` + `x-ash-turn-token` 就按得动(第 1 轮审查 F2 实测:
  *    `kind:"agent"` 的请求拿到 200、目标任务的锁被放开,日志还记成「用户主动放开」)。
- * ② **判据是 `isAccountHolder`,不是「不是 agent」。** 自用模式的隐式本地用户
- *    (`kind:"single"`)就是真人,anonymous 则连 authGate 都过不去,一视同仁地拒。
+ * ② 回合身份不能代替人工授权。自用模式没有账号鉴权边界,本机默认身份本身不证明
+ *    用户同意;入口仍核验来源,路由另要求显式确认风险。
  *
  * 为什么这类动作必须这样收:`reclaim-turn` 解除的是**互斥本身**。判据(没句柄、没令牌、
  * 占得久)证不了原持有者已经结束,按错一次就是同一个任务两个回合并行改同一个工作区。
@@ -114,8 +114,14 @@ export function personalWriteGate(): MiddlewareHandler {
     if (!c.req.path.startsWith("/api/")) return next();
     if (!WRITE_METHODS.has(c.req.method)) return next();
     // 真人专属动作先判:它**不看单人/多人**(理由见 HUMAN_ONLY_PATHS)。
-    if (!isAccountHolder(actorOf(c)) && isHumanOnlyPath(c.req.path)) {
-      return c.json({ error: AGENT_HUMAN_ONLY_REFUSAL }, 403);
+    if (isHumanOnlyPath(c.req.path)) {
+      if (!isAccountHolder(actorOf(c))) return c.json({ error: AGENT_HUMAN_ONLY_REFUSAL }, 403);
+      const rejection = crossSiteRejection({
+        secFetchSite: c.req.header("sec-fetch-site"),
+        origin: c.req.header("origin"),
+        host: new URL(c.req.url).host,
+      });
+      if (rejection) return c.json({ error: rejection }, 403);
     }
     if (!(await isMultiUser())) return next();
     // 只拦 agent:真人(cookie / Bearer)本来就是账号本人,匿名早被 authGate 拦掉了。

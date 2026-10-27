@@ -8,7 +8,7 @@ import {
   SEAT_ROLLBACK_ROLE, claimNonTurn, claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn,
   stopTask, whenTurnIdle,
 } from "./runs.js";
-import { noteMissedAdvance, seatGeneration, serializeQueueClaims } from "./queue-seat.js";
+import { noteMissedAdvance, seatGeneration, serializeQueueClaims, writeOwnedSeatStatus } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 
 const MAX_PARALLEL = 4;
@@ -219,10 +219,8 @@ export async function reclaimStrandedSeat(
     // 条件写,和 queue-seat 的 rollback 同一条理由(见那个模块头「回滚的所有权」):回合锁
     // 只挡得住走 claimTurn 的人,而用户点停止(直接写 canceled)和下一次占位认领(走自己
     // 那条认领链、换一代号却仍是 queued)都不走它。所以把「还得是 queued」和「还得没有
-    // 活着的 seat」一起交给紧贴 UPDATE 的那次核验,过期就一个副作用都不发布。
-    const stranded = await setTaskStatus(taskId, prevStatus, {
-      expectStatus: "queued",
-      owns: () => seatGeneration(taskId) === 0,
+    // 活着的 seat」一起交给共用认领链,核验、等待写门和提交不会与发号交错。
+    const stranded = await writeOwnedSeatStatus(taskId, 0, prevStatus, {
       ...(prevStatus === "paused" ? { quietAdvance: true } : {}),
     });
     if (!stranded) {

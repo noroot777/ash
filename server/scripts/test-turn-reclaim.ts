@@ -69,7 +69,7 @@ const post = (path: string, body?: unknown) =>
   api.request(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? {}),
+    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true } : {})),
   });
 
 /** 给任务造一条会话行 —— appendTaskTimeline 只往已有会话里写,没有会话的任务只留日志。 */

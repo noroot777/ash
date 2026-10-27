@@ -283,6 +283,10 @@ api.post("/tasks/:id/reclaim-turn", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  const consent = await c.req.json().catch(() => null);
+  if (consent?.acknowledgeDuplicateRisk !== true) {
+    return c.json(await noted(taskId, "放开回合占位", { error: "请先确认：放开互斥可能导致同一个任务的两个回合并行修改工作区" }), 400);
+  }
   const outcome = await releaseSuspectTurn(taskId);
   if (!outcome.ok) {
     await noteRejectedUserAction(taskId, "放开回合占位", outcome.reason);

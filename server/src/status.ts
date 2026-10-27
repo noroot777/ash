@@ -41,14 +41,11 @@ export async function setTaskStatus(
      */
     expectStatus?: TaskStatus | TaskStatus[];
     /**
-     * 紧贴 UPDATE 之前再同步问一句「这次写还归我吗」。
-     *
-     * 补的是 `expectStatus` 看不见的那一种过期:状态**恰好还是**期望值,但那已经是
-     * 后来者重新占下的同一个状态(队列占位换了代次 —— `claimQueueSeat` 走自己那条认领链,
-     * 不需要回合锁,所以回合锁拦不住它)。谓词必须同步:中间一旦有 await,求值结果到
-     * 写入之间就又有了窗口。
+     * 由所有权层包住实际数据库提交,失去所有权时返回 false。
+     * 数据库驱动可能等待写门,同步谓词不能覆盖这个窗口。队列占位通过共用认领链,
+     * 把核验、等待写门、提交及广播串在一起;队列推进异步排到链尾,不在这里等待重入。
      */
-    owns?: () => boolean;
+    commitGuard?: (commit: () => Promise<boolean>) => Promise<boolean>;
     /**
      * 这次写 paused 是续聊/旁路回合**恢复原状态**,不是「刚跑到检查点落位」——别触发
      * 队列推进钩子。推进会把一个本就静静等着的 paused 成员(典型:队列 head 上带
@@ -68,7 +65,8 @@ export async function setTaskStatus(
   const rerun = status === "running" && !!cur && cur.status !== "running";
   if (rerun) beginRerunGate(taskId);
   try {
-    return await writeTaskStatus(taskId, status, cur, rerun, opts);
+    const commit = () => writeTaskStatus(taskId, status, cur, rerun, opts);
+    return await (opts?.commitGuard ? opts.commitGuard(commit) : commit());
   } finally {
     if (rerun) endRerunGate(taskId);
   }
@@ -85,7 +83,6 @@ async function writeTaskStatus(
   const expect = opts?.expectStatus === undefined
     ? null
     : (Array.isArray(opts.expectStatus) ? opts.expectStatus : [opts.expectStatus]);
-  const owns = opts?.owns;
   const updatedAt = now();
   let startedAt = cur?.startedAt ?? null;
   let endedAt = cur?.endedAt ?? null;
@@ -117,9 +114,6 @@ async function writeTaskStatus(
   }
 
   // ── 条件写的那一条语句 ───────────────────────────────────────────────────────
-  // `owns()` 到这条 UPDATE 之间**不许出现 await**:谓词答的是「此刻还归我吗」,隔一个
-  // await 它就又变成了一次过期的快照(理由见 setTaskStatus 的 `owns`)。
-  if (owns && !owns()) return false;
   const written = await db
     .update(tasks)
     .set(patch)

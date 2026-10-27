@@ -43,8 +43,8 @@
 // (`seat-window.json`)。
 //
 // 所以第二道是**条件写**:提交那一笔带上「库里还得是 queued」(`expectStatus`)和
-// 「代次还得是我这一代」(`owns`),两者都由 `setTaskStatus` 在紧贴 UPDATE 的位置核验,
-// 核验与写之间没有窗口。不命中就什么都不做 —— 连终态发布、停哨兵、队列推进都不触发。
+// 「代次还得是我这一代」:认领与补偿共用 `serializeQueueClaims`,覆盖等待写门、实际提交
+// 和发号。状态条件由 SQL 核验,代次在链内核验;失效时不发布终态、停哨兵或推进队列。
 // 这才是「认领、停止、回滚争同一份可原子核验的状态」,查几次都不是。
 //
 // ## 占位有世代,回滚只撤自己那一代
@@ -177,6 +177,20 @@ export function serializeQueueClaims<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
+export function writeOwnedSeatStatus(
+  taskId: string,
+  generation: number,
+  status: Parameters<typeof setTaskStatus>[1],
+  opts?: { quietAdvance?: boolean },
+): Promise<boolean> {
+  return setTaskStatus(taskId, status, {
+    ...opts,
+    expectStatus: "queued",
+    commitGuard: (commit) => serializeQueueClaims(async () =>
+      seatGeneration(taskId) === generation && await commit()),
+  });
+}
+
 /**
  * 为 taskId 认领它所在队列的执行占位。认领到 = 任务已落 queued,调用方随后真正拉起它;
  * 被挡 = 返回挡路成员,调用方按自己的语义处理(路由 409 / 扫描按「等」记账)。
@@ -284,12 +298,12 @@ function makeSeat(taskId: string, queueId: string, prevStatus: string, gen: numb
       // 条件写(理由见模块头「回滚的所有权」):
       //   · `expectStatus: "queued"` —— 库里已经不是 queued 就是有权威后来者改过了
       //     (真实结算覆盖、用户点停止),这一笔过期;
-      //   · `owns: mine` —— 状态恰好还是 queued,但那已经是后来者重新认领的那一代。
-      // 两条都在紧贴 UPDATE 的位置核验,不命中则一个副作用都不发布。
-      const committed = await setTaskStatus(
+      //   · 代次在共用认领链内核验,互斥覆盖实际提交而不只是同步读取 Map。
+      // 广播与提交在同一临界区;队列推进异步排在后面,不等待重入认领链。
+      const committed = await writeOwnedSeatStatus(
         taskId,
+        gen,
         prevStatus as Parameters<typeof setTaskStatus>[1],
-        { expectStatus: "queued", owns: mine },
       );
       // 没提交也要清号:要么这具占位已经不是我的(clearGen 自带 mine() 保护,不会误清
       // 后来者的号),要么它已被别人收走 —— 两种都意味着我这一代不再需要负责人。留着
