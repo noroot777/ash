@@ -18,7 +18,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, 
 const npm = (cwd: string, ...args: string[]) => execFileSync(
   process.platform === "win32" ? "cmd.exe" : "npm",
   process.platform === "win32" ? ["/d", "/s", "/c", `npm ${args.map(arg => JSON.stringify(arg.replace(/\\/g, "/"))).join(" ")}`] : args,
-  { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  { cwd, encoding: "utf8", windowsVerbatimArguments: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
 const install = (cwd: string, ...args: string[]) => npm(cwd, "install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", ...args);
 const commit = (cwd: string) => { git(cwd, "add", "-A"); git(cwd, "commit", "-qm", "fixture"); };
 const manifest = (cwd: string) => JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
@@ -111,7 +111,7 @@ try {
     assert.equal(probe(target, "tool-alias"), "EXTERNAL_OK");
     const command = join(target, "node_modules", ".bin", "external-cli");
     const output = process.platform === "win32"
-      ? execFileSync("cmd.exe", ["/d", "/s", "/c", `"${command}.cmd"`], { encoding: "utf8" })
+      ? execFileSync("cmd.exe", ["/d", "/s", "/c", `""${command}.cmd""`], { encoding: "utf8", windowsVerbatimArguments: true })
       : execFileSync(process.execPath, [command], { encoding: "utf8" });
     assert.equal(output.trim(), "EXTERNAL_OK");
     assert.equal(await verifyGateSnapshot(target, source), true);
