@@ -342,7 +342,7 @@ export function settledRulingsSection(
   }
   // 逐级降完还是装不下：条数本身就超了。收进有界摘要 —— 逐条内容进 settled-rulings.md，
   // 提示里只留分档条数和那份文件的入口。
-  return digestSection(rulings, audience, full, disputeUpheld, cap);
+  return digestSection(rulings, audience, full, disputeUpheld);
 }
 
 /**
@@ -377,17 +377,16 @@ function* shapes(
 }
 
 /**
- * 末级：**与条数无关**的有界摘要。
+ * 末级：**与条数无关**的有界摘要 —— 固定指引 + 一个全文入口，再没有能随数据长的部分。
  *
- * 全文入口写在最前面：万一连这一段都超顶（路径长到病态），下面那个按字节截断也不会
- * 把入口截掉 —— 没有入口的摘要等于无声丢条目，那是这一节最不能犯的错。
+ * 全文入口写在最前面，而且这一级不再做任何截断：没有入口的摘要等于无声丢条目，固定指引
+ * 被砍掉半句则是「字节达标、语义不成立」，两样都比超顶几百字节更坏。
  */
 function digestSection(
   rulings: readonly SettledRuling[],
   audience: "reviewer" | "executor",
   full: FullText | null,
   disputeUpheld: boolean,
-  cap: number,
 ): string {
   const deferred = rulings.filter((item) => item.resolution === "deferred").length;
   const withdrawn = rulings.length - deferred;
@@ -400,7 +399,11 @@ function digestSection(
     `，动手前先读它。\n` +
     `这个任务上已经有 ${rulings.length} 条用户裁定（${kinds}），条数多到内联不下，这里只记一笔。\n\n` +
     guidanceLines(audience, deferred > 0, withdrawn > 0, disputeUpheld).join("\n");
-  return bytes(text) <= cap ? text : clipped(text, cap) ?? text;
+  // 这里**不做截断**：摘要的长度 = 固定指引 + 一个入口地址，已经与裁定条数无关，剩下能动
+  // 的只有指引本身和那个入口 —— 砍掉哪一半都会让这一节从「有界」变成「字节达标但读不懂」
+  // （`review-history.ts` 的 `PRIOR_FINDINGS_TAIL` 记的就是那个形态）。所以不再收 `cap`：
+  // 最终渲染层的不变量是「固定契约完整 + 入口完整 + 总字节有界」，不是「总字节有界」一条。
+  return text;
 }
 
 function titleOfSection(disputeUpheld: boolean): string {

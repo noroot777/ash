@@ -18,6 +18,14 @@ export interface PromptSample {
   id: string;
   /** 已经把舞台路径归一成 `<ROOT>` 的正文。 */
   text: string;
+  /**
+   * **没归一过**的那一份。
+   *
+   * 归一会把舞台根缩成 7 个字节，于是「路径长到撑破整节」这类形态在归一之后恰好量不到 ——
+   * 而那正是第 1 轮审查复现盲截用的输入。所以「固定契约完整 + 入口完整 + 总字节」那张表
+   * 量的是这一份，顺带还能拿路径去盘上核实入口是不是真读得到。
+   */
+  raw: string;
 }
 
 export const ROOT_TOKEN = "<ROOT>";
@@ -175,7 +183,8 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   }) as never;
 
   const samples: PromptSample[] = [];
-  const add = (id: string, text: string) => samples.push({ id, text: text.split(root).join(ROOT_TOKEN) });
+  const add = (id: string, text: string) =>
+    samples.push({ id, text: text.split(root).join(ROOT_TOKEN), raw: text });
 
   // 「不含动态段」的那一版：同一条消息，但任务身上没有裁定、也没有历史发现。预算表靠
   // 这一对把**正文**和**动态段**分开盯——正文是改措辞改出来的，动态段是攒轮次攒出来的。
@@ -245,6 +254,53 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   add("section/settled-reviewer-100-nofile", await sectionFor("pb-heavy", "reviewer", brokenDir));
   add("section/settled-executor-100-nofile", await sectionFor("pb-heavy", "executor", brokenDir));
   add("section/history-100", await freeReviewHistorySection("pb-heavy", { runId: "pb-none", round: 1 }));
+
+  // ── 长路径形状：**合法但很深**的报告地址，两个生产消费者各一份 ────────────────
+  //
+  // 第 1 轮审查复现到的那一类：任务目录 + run 目录 + 轮次目录拼出 300B 量级的单条地址，
+  // 几十轮下来光地址清单就撑破整节 —— 旧版末级对拼完的整节做盲截，于是最后一句话停在
+  // 「另有 32 份没有列出，在 …」处，指着一个不存在的目录，末尾那两句固定契约一起没了。
+  // 两个消费者都要有样本：它们走同一个 `priorFindingsSection`，但地址形状不同（自由
+  // 工作流多一层 run 目录，就地验证是平铺的 round-N）。
+  //
+  // 名字长度写死在这里，所以**单条地址的长度与机器无关**（`mkdtemp` 的根只是额外加长）；
+  // 单段 240 字符仍在文件名 255 字节的限内，是真能在盘上建出来的形状。
+  //
+  // 这一族的**字节数**随舞台根长短逐机不同，进不了棘轮预算表（棘轮盯不住一个随机数），
+  // 所以 `deep/` 这个前缀在闸里单列，由「契约完整 + 入口可读 + 不超生产上限」那张表盯。
+  const deepName = (prefix: string) => prefix + "d".repeat(240 - prefix.length);
+  const deepFree = deepName("pb-deep-free-");
+  const deepFreeRun = `${deepFree}-run`;
+  for (let index = 1; index <= 40; index += 1) {
+    const stamp = new Date(Date.UTC(2026, 9, 1) + index * 3_600_000).toISOString();
+    if (index === 1) {
+      await db.insert(freeReviewRuns).values({
+        id: deepFreeRun, taskId: deepFree, reviewerId: null, reviewerName: "逻辑审查者",
+        agentType: "codex", executorId: null, checkMode: "logic", retryLimit: 1, currentRound: index,
+        status: "stopped", createdAt: stamp, updatedAt: stamp, finishedAt: stamp,
+      } as never);
+    }
+    await db.insert(freeReviewRounds).values({
+      id: `${deepFreeRun}-${index}`, runId: deepFreeRun, round: index, status: "failed",
+      conclusion: "verify_failed", reviewedCommit: "0".repeat(40), startedAt: stamp, endedAt: stamp,
+    } as never);
+    const report = freeReviewReportPath(deepFree, deepFreeRun, index);
+    mkdirSync(dirname(report), { recursive: true });
+    writeFileSync(report, `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
+  }
+  add("deep/history-free", await freeReviewHistorySection(deepFree, { runId: "pb-none", round: 1 }));
+
+  const { reviewRoundDir } = await import("../src/review-evidence.js");
+  const { verifyHistorySection } = await import("../src/review-history.js");
+  const deepVerify = deepName("pb-deep-verify-");
+  for (let index = 1; index <= 40; index += 1) {
+    const dir = reviewRoundDir(deepVerify, index);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "report.md"),
+      `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
+    writeFileSync(join(dir, "conclusion.json"), JSON.stringify({ conclusion: "verify_failed" }));
+  }
+  add("deep/history-verify", await verifyHistorySection(deepVerify, 41));
 
   // ── 投递态：**真正发出去的那一条**。片段各自压着预算、拼起来翻倍，是这一摞里最贵的
   //    一种退步，而它只在这一层量得到（第 1 轮审查 F2）。走的是 orchestrator 用的同一个

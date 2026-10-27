@@ -20,7 +20,7 @@
 //   tsx server/scripts/test-prompt-budget.ts            # 跑闸
 //   tsx server/scripts/test-prompt-budget.ts --dump DIR # 把金样写进 DIR，供改动前后肉眼对比
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -63,9 +63,13 @@ const BUDGETS: Record<string, number> = {
   // ── 动态段撑满的那一版（`STRESS`）：量的是**天花板**，不是典型流量 ───────────
   //    20 条是「典型上限」，100 条是「条数压力」。两个都要：第 2 轮审查就是靠 40/60/100
   //    复现出「20 条通过 ≠ 有上限」的。
-  "stress/review-dispatch": 14600,
+  //    这三条在第 4 轮**各涨了两三百字节**，涨的不是措辞：历史发现那一节改成「地址清单
+  //    先让位、条目按余量分配」（第 1 轮审查裁定的修法），于是同样的 4000B 上限下内联的
+  //    轮次从 7 轮变成 13 轮，省掉的那摞地址折成一个公共目录入口。换来的是覆盖面，花掉的
+  //    是这点字节。
+  "stress/review-dispatch": 14900,
   "stress/repair-auto": 3400,
-  "stress/review-dispatch-100": 14500,
+  "stress/review-dispatch-100": 14800,
   "stress/repair-auto-100": 2900,
   // ── 分节（`SECTION`）：两节动态段自己的字节，和整条消息分开量 ─────────────────
   //    `-nofile` = 全文落盘失败（`full=null`）那一路：它同样必须有界。
@@ -75,7 +79,7 @@ const BUDGETS: Record<string, number> = {
   "section/settled-executor-100": 1050,
   "section/settled-reviewer-100-nofile": 4750,
   "section/settled-executor-100-nofile": 1050,
-  "section/history-100": 2700,
+  "section/history-100": 3100,
   // ── 投递态（`DELIVERED`）：真正发出去的那一条，片段相加之后的样子 ─────────────
   "delivered/review-dispatch": 14500,
   "delivered/review-resume": 6750,
@@ -120,9 +124,17 @@ const BUDGETS: Record<string, number> = {
   "mcp/stop_task": 480,
 };
 
-/** 这三族是**同一批文字的派生视图**，算进总量就是把同一段话数两遍。 */
+/** 这几族是**同一批文字的派生视图**，算进总量就是把同一段话数两遍。 */
 const DERIVED = (id: string): boolean =>
-  id.startsWith("stress/") || id.startsWith("delivered/") || id.startsWith("section/");
+  id.startsWith("stress/") || id.startsWith("delivered/") || id.startsWith("section/")
+  || LONG_PATH(id);
+
+/**
+ * 长路径那一族：字节数里含着 `mkdtemp` 的舞台根，**逐机不同**，棘轮盯不住一个随机数。
+ * 所以它们不进 `BUDGETS`，改由 `CONTRACT` 那张表盯 —— 盯的也不是具体数字，而是
+ * 「不管地址多长，整节都要以固定契约结尾、带一个真读得到的入口、且不超生产上限」。
+ */
+const LONG_PATH = (id: string): boolean => id.startsWith("deep/");
 
 /** 片段集合加起来的顶。单条都压着、总量却靠「多加几份样本」涨回去，也算退步。 */
 const TOTAL_BUDGET = 89_000;
@@ -173,6 +185,31 @@ const SECTION_CAPS: Array<{ id: string; cap: number; entry: string; what: string
   { id: "section/settled-reviewer-100-nofile", cap: 5_000, entry: "审查记录", what: "裁定重播·审查者侧（100 条，全文落盘失败）" },
   { id: "section/settled-executor-100-nofile", cap: 2_500, entry: "审查记录", what: "裁定重播·执行者侧（100 条，全文落盘失败）" },
   { id: "section/history-100", cap: 4_000, entry: "报告全文", what: "历史发现清单（100 轮）" },
+];
+
+/**
+ * **最终渲染层的不变量：固定契约完整 + 入口完整 + 总字节有界 —— 三条一起，缺一不可。**
+ *
+ * 只钉字节是不够的。第 1 轮审查复现到的形态恰好是「4000B 整」：整节在
+ * 「另有 32 份没有列出，在 …」这半句话处被切断，指着一个不存在的目录，末尾那两句
+ * 固定契约（「报类不报个例」和「还没修好／复发照样报」）一起消失 —— 闸全绿，而剩下的
+ * 文字已经不是一份能执行的契约了，读的人只会得出「上面这些别再报」。
+ *
+ * 所以这张表量三件事：
+ * ① 不超生产声明的整节上限；
+ * ② 以 `PRIOR_FINDINGS_TAIL` **结尾**（任何盲截都会先吃掉它，所以这一条就是「没被盲截」
+ *    的直接证据）；
+ * ③ 正文里每一个报告地址／公共目录都**在盘上真的存在** —— 入口被截掉半截时，它指向的
+ *    路径必然不存在，这一条把「入口完整」变成一个可机验的事实，而不是一句形容。
+ *
+ * 另外钉一条**取样声明的真实性**：说了「含首轮」，第 1 轮就必须真在正文里。降级到只剩
+ * 最近一轮时那句话会换成别的措辞（`review-history.ts` 的 `allocate`）；这里钉的是不变量
+ * 而不是那个分支 —— 合法路径最长 1024B，走不到只剩一轮，但谁把上限调小了都会在这里红。
+ */
+const CONTRACT: Array<{ id: string; cap: number; what: string }> = [
+  { id: "section/history-100", cap: 4_000, what: "历史发现清单（100 轮，短地址）" },
+  { id: "deep/history-free", cap: 4_000, what: "历史发现清单·自由工作流（40 轮，单条地址 300B+）" },
+  { id: "deep/history-verify", cap: 4_000, what: "历史发现清单·就地验证（40 轮，单条地址 290B+）" },
 ];
 
 /**
@@ -358,6 +395,7 @@ const dumpTo = process.argv.includes("--dump") ? process.argv[process.argv.index
 
 try {
   const { renderPromptSamples, sizeOf } = await import("./prompt-budget-samples.js");
+  const { PRIOR_FINDINGS_TAIL } = await import("../src/review-history.js");
   const shared = (await import("@ash/shared/free-workflow")) as unknown as Record<string, string>;
   const samples = await renderPromptSamples(root);
   const size = new Map(samples.map((sample) => [sample.id, sizeOf(sample.text)]));
@@ -377,8 +415,13 @@ try {
   // ① 预算表与样本集必须**严丝合缝**：新加一份样本忘了给预算，等于这份没人盯；预算表里
   //    留着一个已经不存在的 id，等于一条看着在生效、其实什么都没约束的规则。
   assert.deepEqual(
-    samples.map((sample) => sample.id).filter((id) => !(id in BUDGETS)), [],
+    samples.map((sample) => sample.id).filter((id) => !(id in BUDGETS) && !LONG_PATH(id)), [],
     "有样本没有预算：在 BUDGETS 里给它一个数，别让它裸奔",
+  );
+  assert.deepEqual(
+    samples.map((sample) => sample.id).filter(LONG_PATH)
+      .filter((id) => !CONTRACT.some((item) => item.id === id)), [],
+    "长路径样本既不在 BUDGETS 也不在 CONTRACT：它现在什么都没约束",
   );
   assert.deepEqual(
     Object.keys(BUDGETS).filter((id) => !size.has(id)), [],
@@ -388,6 +431,7 @@ try {
   // ② 逐份量。报错里直接给出「超了多少」和当前值，省得人再跑一遍 --dump。
   const over: string[] = [];
   for (const { id } of samples) {
+    if (LONG_PATH(id)) continue;
     const actual = size.get(id)!;
     const budget = BUDGETS[id]!;
     if (actual > budget) over.push(`${id}: ${actual}B > ${budget}B（超 ${actual - budget}B）`);
@@ -418,6 +462,36 @@ try {
     assert.ok(sample.text.includes(entry),
       `${what} 里找不到「${entry}」：折叠省掉的逐条内容必须留一个真读得到的去处，` +
       "没有入口的摘要等于无声丢条目");
+  }
+
+  // ③″ 固定契约完整 + 入口真读得到。字节达标不等于剩下的文字还是份完整契约 —— 这一条
+  //     量的是**没归一过**的那份正文（归一会把舞台根缩成 7 字节，路径压力恰好就量不到了）。
+  for (const { id, cap, what } of CONTRACT) {
+    const sample = samples.find((item) => item.id === id);
+    assert.ok(sample, `CONTRACT 指向了不存在的样本 ${id}`);
+    const text = sample.raw;
+    const actual = sizeOf(text);
+    assert.ok(actual <= cap,
+      `${what} 渲染出 ${actual}B，超过生产声明的整节上限 ${cap}B（超 ${actual - cap}B）`);
+    assert.ok(text.endsWith(PRIOR_FINDINGS_TAIL),
+      `${what} 没有以固定契约结尾 —— 末尾那两句（「报类不报个例」「还没修好／复发照样报」）` +
+      "是这一节的用处本身，被切掉就只剩一摞旧条目。整节不许盲截，装不下要降级成有界摘要");
+    const listed = [...text.matchAll(/^ {2}(\S+report\.md)$/gm)].map((hit) => hit[1]!);
+    const folded = [...text.matchAll(/在 (\S+) 下/g)].map((hit) => hit[1]!);
+    const entries = [...listed, ...folded];
+    assert.ok(entries.length > 0,
+      `${what} 里一个报告入口都没有：省掉的条目必须留一个真读得到的去处`);
+    for (const path of entries) {
+      assert.ok(existsSync(path),
+        `${what} 的入口 ${path} 在盘上不存在 —— 多半是整节被截在半条地址上，` +
+        "指路指到一个不存在的地方比不指路更坏");
+    }
+    // 首轮的标签有两种形状：单链是「第 1 轮」，跨链是「第 1 条审查链第 1 轮」，都以
+    // 「第 1 」起头（`freeReviewPriorRounds` 的 label）。
+    if (text.includes("含首轮和最近一轮")) {
+      assert.ok(text.includes("〔第 1 "),
+        `${what} 声称取样「含首轮和最近一轮」，正文里却没有第 1 轮：取样说明不许说假话`);
+    }
   }
 
   // ④ 单源。

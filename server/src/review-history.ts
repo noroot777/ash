@@ -45,8 +45,11 @@ const MAX_PATHS = 8;
  * 只钉条目正文是不够的：`MAX_BODY` 管住的只是中间那一摞 `- 〔第 N 轮〕…`，而第 2 轮
  * 审查把轮数撑到 100 时整节量到 5025B —— 没有任何一处声明过这个数，也没有任何一处拦着
  * 它继续长（再加一条兜底说明、路径再长一点都会直接加上去）。所以这一节也按**渲染结果**
- * 收口：超了就缩条目预算重渲染，缩到底仍超就按字节截断（条目清单在前，截掉的是末尾的
- * 说明，不是事实）。
+ * 收口。
+ *
+ * 收口的次序是**先契约后内容**，不是按字节截尾：固定契约（`PRIOR_FINDINGS_TAIL`）和一个
+ * 完整入口先占住位置，条目清单与报告地址按余量分配；都装不下就落到 `digestPriorFindings`
+ * 的有界摘要。**不许对拼完的整节做盲截** —— 字节数达标不代表剩下的文字还是份完整契约。
  */
 const SECTION_CAP = 4_000;
 
@@ -293,8 +296,12 @@ function allocate(entries: Entry[], bodyBudget: number): { kept: Entry[]; silent
     silentRounds: sampled
       ? groups.filter((_, index) => !picked.includes(index)).map((group) => group[0]!.round)
       : [],
+    // 砍到只剩一个名额时 `slotsFor` 留的是**最近一轮**，首轮并不在里头；这句话照抄
+    // 「含首轮和最近一轮」就成了假的取样声明，读的人会以为定义那个类的首轮已经在上面了。
     mode: sampled
-      ? "轮数或体积超过内联上限，按轮次均匀取样（含首轮和最近一轮），每轮只列最严重的一条"
+      ? picked.length <= 1
+        ? "轮数或体积超过内联上限，只列得下最近一轮最严重的那一条，更早的轮次一条都没列"
+        : "轮数或体积超过内联上限，按轮次均匀取样（含首轮和最近一轮），每轮只列最严重的一条"
       : "每轮至少列最严重的一条，名额和体积剩下的给最近几轮",
   };
 }
@@ -310,27 +317,49 @@ const labelList = (rounds: PriorRound[], limit = 6): string => {
     : labels.join("、");
 };
 
+/**
+ * 这一节末尾的固定契约：说清它拿来干什么，以及旧条目什么情况下照样该报。
+ *
+ * 单独拎成常量，是为了在最终渲染层**给它预留字节**。第 1 轮审查复现到的形态：报告路径深到
+ * 一定程度（任务目录 + run 目录 + 轮次目录，单条 350B 量级）时，整节会在「另有 32 份没有
+ * 列出，在 …」这半句话处被截断 —— 字节数达标，可剩下的文字指着一个不存在的目录，
+ * 「报类不报个例」和「还没修好／修完又复发照样报」两句话一起消失。那等于把「补上下文」
+ * 变成了消音，正是文件头第 16 行那条分寸的反面。所以契约和入口先占位，条目与地址按余量分配。
+ */
+export const PRIOR_FINDINGS_TAIL =
+  `这一节**不是**让你重报上面这些，它只用来判一件事：你这一轮要报的东西，` +
+  `是不是上面某一条**同一个判据下的第 N 个触发组合**？是的话别再报第 N 个实例 ——` +
+  `按「报类不报个例」写成类问题，指出该在哪一层加不变量。\n` +
+  `例外有两个，照样报，并写明它是旧条目：上面某一条**还没修好**，或者**修完又复发了**。`;
+
+const bytes = (text: string) => Buffer.byteLength(text, "utf8");
+
 export function priorFindingsSection(rounds: PriorRound[]): string {
   const entries = entriesOf(rounds);
   if (!entries.length) return "";
-  // 整节收口：条目预算一级级往下砍，取第一个装得下的。砍的是**条目预算**而不是直接截字符，
-  // 这样减掉的是最该减的那部分（早轮次的细节），不是末尾那几句说明。
-  for (let budget = MAX_BODY; budget >= 300; budget = Math.floor(budget * 0.75)) {
-    const text = renderPriorFindings(rounds, entries, budget);
-    if (Buffer.byteLength(text, "utf8") <= SECTION_CAP) return text;
+  // 候选从大到小，取**第一个装得下的**。次序是「先折地址清单、再缩条目预算」：地址折成
+  // 一个公共目录仍然指得到（读的人多翻一层就是了），条目砍掉就真没了。
+  for (const maxPaths of [MAX_PATHS, 4, 2, 1, 0]) {
+    const text = renderPriorFindings(rounds, entries, MAX_BODY, maxPaths);
+    if (bytes(text) <= SECTION_CAP) return text;
   }
-  const text = renderPriorFindings(rounds, entries, 300);
-  if (Buffer.byteLength(text, "utf8") <= SECTION_CAP) return text;
-  // 连最小正文都超（路径特别长、轮次标签特别长）：按字节截，不切坏多字节字符。
-  let out = "";
-  let used = 0;
-  for (const char of text) {
-    const size = Buffer.byteLength(char, "utf8");
-    if (used + size > SECTION_CAP) break;
-    out += char;
-    used += size;
+  for (let budget = Math.floor(MAX_BODY * 0.75); budget >= 300; budget = Math.floor(budget * 0.75)) {
+    const text = renderPriorFindings(rounds, entries, budget, 0);
+    if (bytes(text) <= SECTION_CAP) return text;
   }
-  return out;
+  return digestPriorFindings(entries);
+}
+
+/**
+ * 最后一级：一条都不内联，只说清「多少条、分布在几轮、全文在哪个目录下」，后面接完整的
+ * 固定契约。长度 = 契约 + 一个目录路径，与轮数、条数都无关，所以它是真的有界。
+ */
+function digestPriorFindings(entries: Entry[]): string {
+  const paths = [...new Set(entries.map(({ round }) => round.reportPath))];
+  return `\n\n【这个任务此前报过的发现（${entries.length} 条，分布在 ${paths.length} 轮）】\n` +
+    `条数或报告地址长到一条都内联不下，这里只记一笔：全文都在 ${commonDirectory(paths)} 下，` +
+    `判「是不是同类」之前先去读它。\n` +
+    PRIOR_FINDINGS_TAIL;
 }
 
 function entriesOf(rounds: PriorRound[]): Entry[] {
@@ -345,7 +374,12 @@ function entriesOf(rounds: PriorRound[]): Entry[] {
         : []);
 }
 
-function renderPriorFindings(rounds: PriorRound[], entries: Entry[], bodyBudget: number): string {
+function renderPriorFindings(
+  rounds: PriorRound[],
+  entries: Entry[],
+  bodyBudget: number,
+  maxPaths: number,
+): string {
   const { kept, silentRounds, mode } = allocate(entries, bodyBudget);
   const body = kept.map(lineOf).join("\n");
 
@@ -363,24 +397,27 @@ function renderPriorFindings(rounds: PriorRound[], entries: Entry[], bodyBudget:
     entries.some((entry) => entry.round === round && !keptTexts.has(entry)));
   const omittedPaths = [...new Set(omittedRounds.map((round) => round.reportPath))];
   const keptPaths = [...new Set(kept.map(({ round }) => round.reportPath))];
-  const paths = [...new Set([...omittedPaths, ...keptPaths.slice(-MAX_PATHS)])].slice(0, MAX_PATHS);
+  const paths = [...new Set([...omittedPaths, ...keptPaths.slice(-MAX_PATHS)])].slice(0, maxPaths);
   const unlisted = omittedPaths.filter((path) => !paths.includes(path));
+  const allPaths = [...new Set([...omittedPaths, ...keptPaths])];
   const dropped = entries.length - kept.length;
+  // `maxPaths` 归零 = 地址一条都列不下（路径本身太长）。这时折成**一个**公共目录入口：
+  // 它是完整的、翻得到的，比列半条绝对路径有用。
+  const pathLines = paths.length
+    ? `报告全文${omittedRounds.length ? "（有条目没列出的那几轮排在最前）" : ""}：\n  ${paths.join("\n  ")}\n` +
+      (unlisted.length > 0
+        // 连这几轮的路径都列不下时，说清还有几份、都在哪个目录下，而不是让它以为上面就是全部。
+        ? `  另有 ${unlisted.length} 份没有列出，在 ${commonDirectory(unlisted)} 下\n`
+        : "")
+    : `报告全文共 ${allPaths.length} 份，地址太长列不下，都在 ${commonDirectory(allPaths)} 下\n`;
   return `\n\n【这个任务此前报过的发现（${entries.length} 条，按轮次先后）】\n${body}\n` +
     (dropped > 0
       ? `（${mode}；另外 ${dropped} 条没有内联` +
         (silentRounds.length ? `，其中 ${labelList(silentRounds)} 一条都没列出` : "") +
         `，都在各轮报告里）\n`
       : "") +
-    `报告全文${omittedRounds.length ? "（有条目没列出的那几轮排在最前）" : ""}：\n  ${paths.join("\n  ")}\n` +
-    (unlisted.length > 0
-      // 连这几轮的路径都列不下时，说清还有几份、都在哪个目录下，而不是让它以为上面就是全部。
-      ? `  另有 ${unlisted.length} 份没有列出，在 ${commonDirectory(unlisted)} 下\n`
-      : "") +
-    `这一节**不是**让你重报上面这些，它只用来判一件事：你这一轮要报的东西，` +
-    `是不是上面某一条**同一个判据下的第 N 个触发组合**？是的话别再报第 N 个实例 ——` +
-    `按「报类不报个例」写成类问题，指出该在哪一层加不变量。\n` +
-    `例外有两个，照样报，并写明它是旧条目：上面某一条**还没修好**，或者**修完又复发了**。`;
+    pathLines +
+    PRIOR_FINDINGS_TAIL;
 }
 
 /** 自由工作流：同一个任务**所有** run 的更早轮次（不只是本条链）。 */
