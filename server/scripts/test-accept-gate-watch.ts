@@ -15,6 +15,8 @@
 //     存盘自己失败也必须说出来，不能吞掉。
 //  第 4 轮 F1 一拍只读一次日志：末行、字节数、写没写过必须出自**同一次有界观测**，否则
 //     会拼出「停在这一行 X、累计 26B」又「从头到尾没写过东西」这种自相矛盾的裁定。
+//  第 7 轮 F1 故障要**验证它真的发生了**再断言：`chmod` 没报错不等于读/写真被拒（见下面
+//     `denyRead` / `denyDirWrite`）。造不出来的舞台整段跳过并报出来，不许判成产品的错。
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -41,6 +43,47 @@ async function awaitScene(start: (resolve: (verdict: { scene: string; note: stri
   try { return await new Promise<{ scene: string; note: string }>(start); }
   finally { clearInterval(keepAlive); }
 }
+
+// ── 故障注入层：**chmod 没报错 ≠ 故障已经造出来** ────────────────────────────────
+//
+// 由来（第 7 轮审查 F1，192.168.1.187 真机实测）：Windows 上 `chmod(file, 0o200)` 返回成功、
+// 文件照样读得出原文；`chmod(dir, 0o500)` 返回成功、目录里照样建得出 `.part`。于是「权限被
+// 拒」这一类舞台在那台机器上压根没搭起来 —— 产品行为完全正常，断言却按「应该失败」去对，
+// 把绿的判成红的；而 `run-accept-gate-tests.mjs` 里任何一个子进程非零就整组门禁红。
+//
+// 所以权限设完要**当场拿目标操作探一下**：真被拒才算舞台成立；没拒就恢复原状、返回 false，
+// 由调用方整段跳过并在收尾处列出来。在那台机器上少跑一条、并且说清少跑了哪一条，好过把
+// 「这台机器造不出这个故障」冒充成「产品没处理好这个故障」。
+const unstaged: string[] = [];
+function skipStage(label: string, why: string): void {
+  unstaged.push(`${label}：${why}`);
+  console.log(`⚠️  舞台搭不起来，跳过 ${label}：${why}`);
+}
+/** 让 `path` 真的读不出来。探出来没拦住就恢复原状并返回 false。 */
+function denyRead(path: string): boolean {
+  try { chmodSync(path, 0o200); } catch { return false; }
+  try { readFileSync(path); } catch { return true; }
+  try { chmodSync(path, 0o600); } catch { /* 本来就没拦住，恢复失败也不影响判断 */ }
+  return false;
+}
+/** 让 `dir` 真的写不进去（建文件、删文件都要父目录可写）。没拦住就恢复原状并返回 false。 */
+function denyDirWrite(dir: string): boolean {
+  try { chmodSync(dir, 0o500); } catch { return false; }
+  const probe = join(dir, ".deny-probe");
+  try { writeFileSync(probe, "x", "utf8"); } catch { return true; }
+  try { rmSync(probe, { force: true }); chmodSync(dir, 0o700); } catch { /* 同上 */ }
+  return false;
+}
+// ⑦ 那条要先建仓库、跑完一整轮验收才摸得到快照目录，到那儿再发现锁不住就晚了（任务已经
+// 落库、门禁已经起跑）。所以拿一个一次性目录先问一句这台机器做不做得到。
+const canDenyDirWrite = (() => {
+  const probe = join(root, "deny-capability");
+  mkdirSync(probe, { recursive: true });
+  const denied = denyDirWrite(probe);
+  try { chmodSync(probe, 0o700); } catch { /* 下面整个删掉 */ }
+  rmSync(probe, { recursive: true, force: true });
+  return denied;
+})();
 
 try {
   const { gateWatchReport, overrideGateWatchTimings, startGateWatch } = await import("../src/accept-gate-watch.js");
@@ -233,20 +276,24 @@ try {
     mkdirSync(dir);
     const logPath = join(dir, "blind-start.log");
     writeFileSync(logPath, "[ash] $ blind-start-command\n", "utf8");
-    chmodSync(logPath, 0o200); // 只写不可读：看门狗这段时间什么都看不见
-    overrideGateWatchTimings({ silenceMs: 150, progressMs: 120, sampleMs: 10, timeoutMs: 900 });
-    const verdict = await awaitScene((resolve) => {
-      startGateWatch({ logPath, onVerdict: resolve });
-      setTimeout(() => appendFileSync(logPath, "OUTPUT_WHILE_BLIND\n", "utf8"), 120);
-      setTimeout(() => chmodSync(logPath, 0o600), 300); // 到这儿才接上
-    });
-    const notes = readFileSync(gateNotesPath(logPath), "utf8");
-    assert.doesNotMatch(notes, /已经连续 \d+\.\d 分钟没有任何输出/,
-      "接上之前那段看不见，不许算进「连续没有任何输出」（第 6 轮 F1）");
-    assert.match(notes, /接上这份日志起/, "该说的是「自接上起没有新增」，这才是能确认的那部分");
-    assert.match(verdict.scene, /最后一次有输出在什么时候：未知/, "没亲眼见过输出就没有这个时刻");
-    assert.doesNotMatch(verdict.scene, /最后一次有输出在 \d+\.\d 分钟前/);
-    assert.match(verdict.scene, /才接上这份日志/);
+    // 只写不可读：看门狗这段时间什么都看不见。探不出「读被拒」就没有「看不见」这个舞台。
+    if (!denyRead(logPath)) {
+      skipStage("⑩d 开跑时读不到日志", "这台机器上只写权限拦不住读（Windows 实测如此）");
+    } else {
+      overrideGateWatchTimings({ silenceMs: 150, progressMs: 120, sampleMs: 10, timeoutMs: 900 });
+      const verdict = await awaitScene((resolve) => {
+        startGateWatch({ logPath, onVerdict: resolve });
+        setTimeout(() => appendFileSync(logPath, "OUTPUT_WHILE_BLIND\n", "utf8"), 120);
+        setTimeout(() => chmodSync(logPath, 0o600), 300); // 到这儿才接上
+      });
+      const notes = readFileSync(gateNotesPath(logPath), "utf8");
+      assert.doesNotMatch(notes, /已经连续 \d+\.\d 分钟没有任何输出/,
+        "接上之前那段看不见，不许算进「连续没有任何输出」（第 6 轮 F1）");
+      assert.match(notes, /接上这份日志起/, "该说的是「自接上起没有新增」，这才是能确认的那部分");
+      assert.match(verdict.scene, /最后一次有输出在什么时候：未知/, "没亲眼见过输出就没有这个时刻");
+      assert.doesNotMatch(verdict.scene, /最后一次有输出在 \d+\.\d 分钟前/);
+      assert.match(verdict.scene, /才接上这份日志/);
+    }
   }
 
   // ⑩c 第 5 轮 N1：开跑那一刻日志读不到，后来可读了要能接上，不许哑一整场。
@@ -379,12 +426,15 @@ try {
     mkdirSync(dir);
     const logPath = join(dir, "frozen.log");
     writeFileSync(logPath, "x\n", "utf8");
-    chmodSync(dir, 0o500);
-    try {
-      const failure = freezeGateScene(logPath, "[ash] 现场");
-      assert.ok(failure && /没能单独存下来/.test(failure), "存不下要给一句人话的降级说明，不许无声吞掉");
-      assert.equal(existsSync(gateScenePath(logPath)), false);
-    } finally { chmodSync(dir, 0o700); }
+    if (!denyDirWrite(dir)) {
+      skipStage("⑧ 现场存不下去", "这台机器上只读目录拦不住建文件（Windows 实测如此）");
+    } else {
+      try {
+        const failure = freezeGateScene(logPath, "[ash] 现场");
+        assert.ok(failure && /没能单独存下来/.test(failure), "存不下要给一句人话的降级说明，不许无声吞掉");
+        assert.equal(existsSync(gateScenePath(logPath)), false);
+      } finally { chmodSync(dir, 0o700); }
+    }
     assert.equal(freezeGateScene(join(root, "ok.log"), "[ash] 现场"), null, "存下了就不该报降级");
     // 第 4 轮 N2：先写 .part 再改名，所以最终路径要么没有、要么是完整的一份。
     assert.equal(readFileSync(gateScenePath(join(root, "ok.log")), "utf8"), "[ash] 现场");
@@ -494,7 +544,9 @@ try {
 
     // 撞上限 + 快照删不掉：清理是磁盘上的事，不许把结论、现场、时间线一起甩进 catch
     // （第 3 轮审查 F1 实测：EACCES 之后整行已是 failed，重启也补不回只在内存里的现场）。
-    {
+    if (!canDenyDirWrite) {
+      skipStage("⑦ 快照删不掉", "这台机器上只读目录拦不住删改，造不出 EACCES（Windows 实测如此）");
+    } else {
       overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 400, sampleMs: 40, timeoutMs: 2_500 });
       const taskId = await seed("cleanup-eacces",
         `"${process.execPath}" -e "console.log('CLEANUP_CASE_LAST_STEP'); setInterval(() => {}, 1000)"`);
@@ -507,7 +559,9 @@ try {
         if (!snapshot || !existsSync(snapshot)) await sleep(25);
       }
       assert.ok(snapshot && existsSync(snapshot), "没等到快照落地，这一条就不是在测清理失败");
-      chmodSync(snapshot, 0o500);
+      // 上面已经确认这台机器锁得住目录，这儿再探一次是对**这个**目录的确认：锁不住就不是在
+      // 测清理失败，直接红掉比继续往下对断言诚实。
+      assert.ok(denyDirWrite(snapshot), "快照目录没真的锁住，这一条就不是在测清理失败");
       try {
         const run = await settled(taskId);
         assert.equal(run.status, "failed");
@@ -529,6 +583,7 @@ try {
   }
 
   overrideGateWatchTimings(null);
+  if (unstaged.length) console.log(`ℹ️  这台机器造不出的故障（上面已跳过 ${unstaged.length} 段）：\n   - ${unstaged.join("\n   - ")}`);
   console.log("✅ 门禁看门狗：静默只报不杀 / 一拍一次有界观测、裁定自洽 / 现场先于一切可能失败的事存盘 / 命令日志里没有 ash 的字节 通过");
 } finally {
   await releaseTmpDb();
