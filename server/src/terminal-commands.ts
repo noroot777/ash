@@ -245,10 +245,7 @@ function leftoverNotice(where: string, left: LaunchMember[]): string {
  * 监听停了**,同组那些核不上归属的号要单独交代(发现 2)。
  */
 async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Promise<StopVerdict> {
-  // 这一档不存在就没有「它的结论」可言:前面 terminate 的三层击杀已经按它自己的口径核过,
-  // 这里不另加一条拿不到证据的断言(Windows 上完全脱离启动会话的服务仍不在覆盖范围内 ——
-  // 这是已知且已交代的边界,不是这一档失灵)。
-  if (!PORT_TIER_AVAILABLE || !open.ports.length) return { kind: "stopped" };
+  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, false);
   const token = terminalSessions.launchTokenOf(open.id);
   const result = token ? await stopByPorts(open.ports, { launchToken: token, graceMs }) : null;
   const where = `端口 ${open.ports.join("、")}`;
@@ -311,6 +308,13 @@ function membersNotice(open: TerminalSessionInfo, hasStopScript: boolean): strin
     + (hasStopScript ? `所以没法确认你那条停止命令收干净了。` : `所以没法说这次启动起来的东西都停了。`);
 }
 
+function processStopVerdict(open: TerminalSessionInfo, scripted: boolean): StopVerdict {
+  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, scripted), complete: false };
+  if (open.groupAlive && terminalSessions.get(open.id, open.projectId)?.groupAlive === false) return { kind: "stopped" };
+  const missing = PORT_TIER_AVAILABLE ? "这次启动没有留下可核验的进程或本机端口线索" : "当前平台无法核验本机端口，且没有可确认已退出的启动进程";
+  return { kind: "unresolved", leftovers: [], complete: false, notice: `${missing}，ash 没法确认是否停净。${scripted ? "停止命令已执行，但退出码为零不代表服务已经停止。" : "请检查服务是否仍在运行，或配置实际停止服务的命令。"}` };
+}
+
 /** 停止命令只收掉了监听者、停止前在跑的成员还活着时那句话。 */
 function scriptLeftoverNotice(left: LaunchMember[]): string {
   return `停止命令跑完了，但停止前在跑的 ${who(left)} 还活着：${left[0].reason}。`
@@ -331,8 +335,7 @@ async function verifyStopScript(
   /** 跑脚本**之前**照的成员相(launchMembers)。null = 这条路没照相(没有停止脚本)。 */
   snapshot: LaunchSnapshot | null,
 ): Promise<StopVerdict> {
-  // 同 stopLaunchPorts:这一档在这台机器上不存在时,它给不出证据,也不该给出结论。
-  if (!PORT_TIER_AVAILABLE || !open.ports.length) return { kind: "stopped" };
+  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, true);
   const survived = await surviveCheck(open, snapshot);
   const probe = await probeOwnedPorts(open.ports, terminalSessions.launchTokenOf(open.id));
   if (probe.state === "ours") {

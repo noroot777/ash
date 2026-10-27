@@ -12,6 +12,7 @@ export class TerminalCapacity<Session extends CapacitySession> {
     private readonly limit: number,
     private readonly sessions: () => Iterable<Session>,
     private readonly alive: (session: Session) => boolean,
+    private readonly retained: (session: Session) => boolean = () => false,
   ) {}
 
   hasSlot(projectId: string, commandId: string | null, replaceLive = false): boolean {
@@ -33,6 +34,7 @@ export class TerminalCapacity<Session extends CapacitySession> {
 
   validate(reservation: TerminalReservation): void {
     if (!this.reservations.has(reservation) || !reservation.started) throw new Error("终端容量预留已失效");
+    if (this.occupied(new Set()) > this.limit) throw new Error("终端会话数量已达上限");
   }
 
   release(reservation: TerminalReservation): void {
@@ -43,7 +45,7 @@ export class TerminalCapacity<Session extends CapacitySession> {
     const replaced = new Set<string>();
     if (commandId === null) return replaced;
     for (const session of this.sessions()) {
-      if (session.projectId === projectId && session.commandId === commandId && (replaceLive || !this.alive(session))) {
+      if (session.projectId === projectId && session.commandId === commandId && !this.retained(session) && (replaceLive || !this.alive(session))) {
         replaced.add(session.id);
       }
     }
@@ -51,14 +53,15 @@ export class TerminalCapacity<Session extends CapacitySession> {
   }
 
   private occupied(replaced: ReadonlySet<string>): number {
+    const sessions = [...this.sessions()];
     const covered = new Set<string>();
     const replacementGroups = [replaced, ...Array.from(this.reservations, (reservation) => reservation.replacedSessionIds)];
     for (const replacementIds of replacementGroups) {
-      const sessionId = replacementIds.values().next().value;
+      const sessionId = [...replacementIds].find((candidate) => sessions.some((session) => session.id === candidate && !this.retained(session)));
       if (sessionId !== undefined) covered.add(sessionId);
     }
     let occupied = this.reservations.size;
-    for (const session of this.sessions()) {
+    for (const session of sessions) {
       if (!covered.has(session.id)) occupied++;
     }
     return occupied;

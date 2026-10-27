@@ -73,7 +73,7 @@ const leftoversOf = (session: TerminalSessionInfo): number[] =>
   session.stop.kind === "unresolved" ? session.stop.pids : [];
 
 const sessionRunning = (session: TerminalSessionInfo): boolean =>
-  session.running ?? (session.groupAlive || session.portsAlive || leftoversOf(session).length > 0);
+  session.running ?? (session.groupAlive || session.portsAlive || session.portUncertain === true || leftoversOf(session).length > 0);
 
 // 同一条命令可能挂着「一条活会话」或「一条刚退出的」——一处只说一件事,活的优先。
 function bestSession(sessions: TerminalSessionInfo[], projectId: string, commandId: string): TerminalSessionInfo | null {

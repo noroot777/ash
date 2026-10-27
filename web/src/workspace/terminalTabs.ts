@@ -61,14 +61,14 @@ export function createTerminalTab(
  * 弹层说「运行中」、终端 tab 说「已结束」)。
  */
 export function attachStatusOf(
-  session: { exitCode: number | null; groupAlive: boolean; portsAlive?: boolean; stop?: StopFactLike },
+  session: { exitCode: number | null; groupAlive: boolean; portsAlive?: boolean; portUncertain?: boolean; running?: boolean; stop?: StopFactLike },
 ): TerminalStatus {
   if (session.exitCode === null) return "ready";
   // 「还没了结」只认**还活着的**号:端口超额那种「证据不全」的 unresolved 一个号都举不出来,
   // 它该在状态点上说「已结束」(确实没东西在跑了),那句「没能确认停净」由文案层去说。
   const leftovers = session.stop?.kind === "unresolved" ? session.stop.pids.length : 0;
-  const settled = !session.groupAlive && session.portsAlive !== true && leftovers === 0;
-  return settled ? "ended" : "detached";
+  const running = session.running ?? (session.groupAlive || session.portsAlive === true || session.portUncertain === true || leftovers > 0);
+  return running ? "detached" : "ended";
 }
 
 export function createAttachTab(
@@ -80,6 +80,8 @@ export function createAttachTab(
     exitCode: number | null;
     groupAlive: boolean;
     portsAlive?: boolean;
+    portUncertain?: boolean;
+    running?: boolean;
     stop?: StopFactLike;
     stoppedByUser: boolean;
   },

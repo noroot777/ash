@@ -56,7 +56,7 @@ const MAX_LAUNCH_PORTS = 8;
 export class TerminalSessionManager {
   private stopped = false;
   private readonly sessions = new Map<string, TerminalSession>();
-  private readonly capacity = new TerminalCapacity(MAX_SESSIONS, () => this.sessions.values(), (session) => this.sessionRunning(session));
+  private readonly capacity = new TerminalCapacity(MAX_SESSIONS, () => this.sessions.values(), (session) => this.sessionRunning(session), (session) => this.retainHistory(session));
   private readonly creations = new Set<TerminalCreation>();
   private readonly windowsPty: typeof spawnWindowsPty;
   private readonly sweeper: ReturnType<typeof setInterval>;
@@ -187,7 +187,7 @@ export class TerminalSessionManager {
     }
     if (options.command) {
       for (const stale of [...this.sessions.values()]) {
-        if (stale.projectId === projectId && stale.commandId === options.command.id && !this.sessionRunning(stale)) {
+        if (stale.projectId === projectId && stale.commandId === options.command.id && !this.sessionRunning(stale) && !this.retainHistory(stale)) {
           stale.listeners.clear();
           this.sessions.delete(stale.id);
         }
@@ -334,9 +334,10 @@ export class TerminalSessionManager {
    * 基本是空跑;但 sweeper 直接 close 一个「shell 退了、独立组作业还赖着」的会话时,这次
    * 同步清场就是最后的兜底 —— 否则回收会话会连把手一起丢(第 3 轮审查)。
    */
-  close(sessionId: string, projectId?: string): boolean {
+  close(sessionId: string, projectId?: string, released = false): boolean {
     const session = this.session(sessionId, projectId);
     if (!session) return false;
+    if (!released && this.retainHistory(session)) return false;
     this.sessions.delete(sessionId);
     session.listeners.clear();
     killSessionTree(session);
@@ -380,7 +381,7 @@ export class TerminalSessionManager {
       const left = await releaseLaunchResponsibility(session);
       if (left) return { ok: false, reason: left };
     }
-    this.close(sessionId, projectId);
+    this.close(sessionId, projectId, true);
     return result;
   }
 
@@ -475,8 +476,7 @@ export class TerminalSessionManager {
       // 「服务还开着」仅存的凭据 —— `docker compose up -d`、`pm2 start` 这类服务跑在
       // ash 的进程树之外,启动脚本跑完自己就退,把它当「纯退出日志」收走,停止按钮当场
       // 退回 ▶、容器却还在跑(第 1 轮审查 E1 实锤)。GC 在这件事上必须保守:宁可多留
-      // 一条退出日志,也不能把「还有东西在跑」这个事实清掉。用户点过停止
-      // (stop 已经不是 none)或启动本身就失败(非 0 退出)时它就只是日志,照常回收。
+      // 一条退出日志,也不能把「还有东西在跑」这个事实清掉。
       if (session.commandId === SERVICE_COMMAND_ID && session.exitCode === 0 && session.stop.kind === "none") continue;
       if (this.close(session.id)) closed += 1;
     }
@@ -614,6 +614,10 @@ export class TerminalSessionManager {
    */
   private sessionRunning(session: TerminalSession): boolean {
     return this.sessionAlive(session) || session.portsAlive || session.portUncertain === true || liveLeftovers(session.stop).length > 0;
+  }
+
+  private retainHistory(session: TerminalSession): boolean {
+    return projectStop(session.stop).kind === "unresolved";
   }
 
   /**
