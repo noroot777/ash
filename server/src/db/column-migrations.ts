@@ -10,6 +10,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
+  // 上面那两个结论是哪一代判据生成的。旧行 NULL = 旧代,读侧不拿它当当前事实(第 2 轮审查 F1)。
+  "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
   // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
   "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",

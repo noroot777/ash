@@ -230,6 +230,19 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
           {shown.diagnosis}
         </div>
       )}
+      {/*
+        旧判据那一代的结论。**不能当当前事实摆**（第 2 轮审查 F1）：它当时可能把一条真跑过
+        的红说成「一行都没跑到、不用改代码」。原文保留是为了让人核对当时到底说了什么，所以
+        标题和第一句都先把失效说破，再给原文。
+      */}
+      {shown?.legacyDiagnosis && (
+        <div className="accept-gate-diagnosis is-obsolete" role="note">
+          <span>历史结论（已失效，不是当前判断）</span>
+          {`这段是旧版本按已经撤回的判据写的，它可能把真跑过的红说成「没跑起来、不用改代码」。只留着给你核对当时的说法，请以日志为准。
+
+${shown.legacyDiagnosis}`}
+        </div>
+      )}
       {shown?.logTail && (
         <div className="accept-gate-log">
           <span>日志末尾{receipt?.run ? "（本次验收凭据那一次）" : settled || idle ? "（历史记录，不是本次凭据）" : ""}</span>

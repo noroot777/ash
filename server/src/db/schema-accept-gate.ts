@@ -39,6 +39,10 @@ export const acceptGateRuns = sqliteTable(
     // (mine/unknown,两档都是「去核」)。**非空就等于起跑前核到它不在**,卡片据此分叉。
     // 旧记录里可能还有 not-mine —— 那一档撤掉了(第 10 轮审查 F2),读的那几处都按 unknown 待。
     missAttribution: text("miss_attribution"),
+    // 上面那两个结论(diagnosis / miss_attribution)是**哪一代判据**生成的,代号本体与为什么
+    // 需要它见 shared/src/accept-gate.ts 的 ACCEPT_GATE_DIAGNOSIS_GENERATION。空 = 旧代:
+    // 读侧一律不拿它当当前事实,只当历史原文摆出来(第 2 轮审查 F1)。
+    diagnosisGeneration: text("diagnosis_generation"),
     pid: integer("pid"),
     /**
      * 那个 pid 的**启动时间**：重启之后拿它核对「这个号还是不是当初那条命令」。
@@ -103,6 +107,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

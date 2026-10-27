@@ -14,6 +14,7 @@
 // 一个任务同时只会有一条门禁在跑（库里 running 行 + 进程表双保险）。
 import { and, eq, or } from "drizzle-orm";
 import {
+  ACCEPT_GATE_DIAGNOSIS_GENERATION,
   ACCEPT_GATE_TIMEOUT_MS,
   summarizeAcceptGate,
   type AcceptGateBasisMode,
@@ -415,7 +416,10 @@ async function settleGate(
     const finishedAt = now();
     await db.update(acceptGateRuns)
       .set({ status: outcome.status, exitCode: outcome.exitCode, failure: outcome.failure, finishedAt, processPending: !stopped,
-        diagnosis: diagnosed?.diagnosis ?? null, missAttribution: diagnosed?.attribution ?? null })
+        diagnosis: diagnosed?.diagnosis ?? null, missAttribution: diagnosed?.attribution ?? null,
+        // 结论连**代号**一起落盘：判据下次再撤回时，这一代的结论就自动不再当事实用
+        // （第 2 轮审查 F1，闸在 gateView）。
+        diagnosisGeneration: diagnosed ? ACCEPT_GATE_DIAGNOSIS_GENERATION : null })
       // 状态闸：上面那句读到的 running 和这一句之间隔着 await，只有真的还 running 才翻。
       .where(and(eq(acceptGateRuns.id, runId), eq(acceptGateRuns.status, "running")));
     outcomeSaved = true;
@@ -423,7 +427,8 @@ async function settleGate(
     if (stopped) await cleanupGateSnapshot(row.taskId, runId);
     if (timer?.runId === runId) { clearTimeout(timer.timer); live.delete(row.taskId); }
     const view = gateView({ ...row, ...outcome, finishedAt, diagnosis: diagnosed?.diagnosis ?? null,
-      missAttribution: diagnosed?.attribution ?? null });
+      missAttribution: diagnosed?.attribution ?? null,
+      diagnosisGeneration: diagnosed ? ACCEPT_GATE_DIAGNOSIS_GENERATION : null });
     appendGateLog(row.logPath, `\n[ash] ${finishedAt} ${summarizeAcceptGate(view)}\n`
       + (diagnosed ? `\n[ash] ${diagnosed.diagnosis}\n` : ""));
     // 归类结论要**单独进一条时间线**：它是用户刷新后唯一能找回「这条红不用我修」的地方，

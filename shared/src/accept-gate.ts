@@ -56,6 +56,31 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   ownership_waived: "已确认风险并强制释放，未取得整次退出证据",
 };
 
+/**
+ * 归类结论(`diagnosis` / `missAttribution`)是**哪一代判据**生成的。
+ *
+ * 为什么要这个东西(第 2 轮审查 F1):第 10 轮撤回了「这条命令一行都没跑到、不要为它改代码」
+ * 那个结论,可**撤回只管得住生成侧** —— 撤回之前已经落盘的那些结论,刷新页面、再交一次给
+ * agent、跨机迁入时照旧原样端出来,一句已经被证伪的话继续当今天的事实用。
+ *
+ * 所以结论落盘时把代号一起记下,读侧只认当代那一份:代号不匹配(含旧行的 null)一律**不承担
+ * 当前结论**,原文只作为历史放进 `legacyDiagnosis`,界面上带失效说明给人查证。
+ *
+ * **改了结论的授权判据,就要把这个代号往前挪** —— 它是让旧结论自动失效的唯一机关。
+ */
+export const ACCEPT_GATE_DIAGNOSIS_GENERATION = "2026-10-27-clue";
+
+/**
+ * 把存下来的 failure 归一到**当前**的联合里。认不出的(撤掉的 `command_missing`、将来再撤的
+ * 任何一档)一律 null = 「未通过,没有具体分类」 —— 旧类别本身就是旧判据下的结论,不能靠
+ * 字段还在就继续当事实(第 2 轮审查 F1)。exit_code / timeout 这些是真实观测,照旧保留。
+ */
+export function normalizeAcceptGateFailure(value: unknown): AcceptGateFailure | null {
+  // `Object.hasOwn` 而不是 `in`:`in` 连原型链一起认,`"toString"` 这种会被当成合法类别。
+  return typeof value === "string" && Object.hasOwn(ACCEPT_GATE_FAILURE_LABELS, value)
+    ? value as AcceptGateFailure : null;
+}
+
 export interface AcceptGateView {
   executionNotice?: string | null;
   id: string;
@@ -89,6 +114,14 @@ export interface AcceptGateView {
    * 事实(目标分支当时是哪个提交)此后还会变 —— 现算出来的话,结论会跟着漂。
    */
   diagnosis?: string | null;
+  /**
+   * **旧代号那一版**生成的结论原文(见 ACCEPT_GATE_DIAGNOSIS_GENERATION)。
+   *
+   * 非空就等于「这一次名下存着一段已经失效的结论」:它不是当前事实,不进交给 agent 的正式
+   * 输入,界面上只能带失效说明摆出来给人查证 —— 原文和日志都保留,但一个字都不许再承担
+   * 当前诊断或指导执行的作用(第 2 轮审查 F1)。
+   */
+  legacyDiagnosis?: string | null;
   /**
    * 见 AcceptGateMissAttribution。**非空就等于「起跑前核到那个名字不在这份快照里」**
    * （归类落在 entry 那一档才会写它），卡片和交接拿它当这件事的信号。

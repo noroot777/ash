@@ -198,6 +198,9 @@
    —— 第 1 轮审查 N4），自带换行与序号，所以 pre-line。 */
 .accept-gate-diagnosis { border: 1px solid color-mix(in lch,var(--amber) 34%,var(--line)); border-radius: 7px; background: rgb(181 123 0 / 6%); padding: 7px 9px; color: var(--ink); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
 .accept-gate-diagnosis > span { display: block; margin-bottom: 3px; color: var(--amber); font-size: 9.5px; font-weight: 650; }
+/* 已失效的历史结论:虚线 + 灰调,一眼看出它跟上面那块当前结论不是同一回事。 */
+.accept-gate-diagnosis.is-obsolete { border-style: dashed; border-color: var(--line2); background: var(--panel); color: var(--muted); }
+.accept-gate-diagnosis.is-obsolete > span { color: var(--faint); }
 .accept-gate-log > span { display: flex; align-items: center; justify-content: space-between; color: var(--faint); font-size: 9.5px; font-weight: 650; }
 .accept-gate-log > span > button { border: 0; background: transparent; padding: 0; color: var(--accent); font-size: 9.5px; }
 .accept-gate-log pre { max-height: 180px; overflow: auto; margin: 4px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }

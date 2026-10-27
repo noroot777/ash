@@ -588,6 +588,9 @@ try {
   await (await import("./test-accept-gate-forwarded.js")).testGateForwardedRunner({
     makeRepo, seedProject, seedTask, settled, runsOf, createdAt,
   });
+  // 15″. 撤回之后的另一半：**撤回之前已经落盘的那些结论**不许在读取边界重新变成事实
+  //      （第 2 轮审查 F1 用上一轮两条真实诊断实测：卡片和交接照旧端出「一行都没跑到」）。
+  await (await import("./test-accept-gate-legacy.js")).testGateLegacyDiagnosis({ makeRepo, createdAt });
 
   console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 / 命令没跑到≠测试红了 全部通过");
   await (await import("./test-accept-gate-lifecycle.js")).testGateLifecycle({
