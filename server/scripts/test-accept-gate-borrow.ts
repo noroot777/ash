@@ -142,7 +142,10 @@ try {
     "sibling", "清理之后工作区的依赖照样可用");
 
   // ── 3. 换一次安装声明必须被认成「依赖变了」,各生态各自的声明都要认。
-  const pinned = { sourceCommit: launchSource.commit, sourceFingerprint: launchSource.fingerprint };
+  // 三项身份都要带:漏掉继承的安装声明那一项,下面每条 gateSourceMatches 都恒为 false,
+  // 「改了声明就是依赖变了」会变成恒真。
+  const pinned = { sourceCommit: launchSource.commit, sourceFingerprint: launchSource.fingerprint,
+    sourceAmbient: launchSource.ambient };
   assert.equal(gateSourceMatches(pinned, await readGateSource(repo)), true, "什么都没动的时候可以沿用上次通过");
   const lock = join(repo, "node_modules", ".package-lock.json");
   const lockBefore = readFileSync(lock, "utf8");

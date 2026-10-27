@@ -83,11 +83,13 @@ try {
   writeFileSync(join(snapshot, "value.txt"), "fixed");
   assert.equal(await verifyGateSnapshot(snapshot, source), false, "test-modified source cannot certify the original commit");
   git(repo, "restore", "value.txt");
-  assert.equal(gateSourceMatches({ sourceCommit: source.commit, sourceFingerprint: source.fingerprint }, await readGateSource(repo)), true);
+  // 手工构造的通过记录要带**全部三项**身份(提交、源码+自有依赖指纹、继承的安装声明):漏一项
+  // 这里恒为 false,下面「改了声明就是依赖变了」那条会变成恒真、什么都没测到。
+  assert.equal(gateSourceMatches({ sourceCommit: source.commit, sourceFingerprint: source.fingerprint, sourceAmbient: source.ambient }, await readGateSource(repo)), true);
   // 依赖的身份取**安装声明**:装/删/升级任何一个包都会改到它,所以换一次就必须被认成「依赖变了」。
   const installed = join(repo, "node_modules", ".package-lock.json");
   writeFileSync(installed, '{"packages":{"node_modules/dep":{"version":"2.0.0"}}}');
-  assert.equal(gateSourceMatches({ sourceCommit: source.commit, sourceFingerprint: source.fingerprint }, await readGateSource(repo)), false,
+  assert.equal(gateSourceMatches({ sourceCommit: source.commit, sourceFingerprint: source.fingerprint, sourceAmbient: source.ambient }, await readGateSource(repo)), false,
     "改了安装声明就是依赖变了");
   // 建快照期间源码或依赖变了必须拒绝(拿安装声明制造漂移:它才是依赖的身份)。
   await assert.rejects(createGateSnapshot(repo, join(root, "drift"), source), /已变化/);
@@ -97,7 +99,7 @@ try {
   // 换口径换来的检测力下降,钉在这里是为了让它成为**写明的设计**而不是意外;哪天要收回这个代价,
   // 从这一条开始。注意借用之后快照跑的就是工作区那一份,所以后果不是「副本和工作区不一致」。
   writeFileSync(join(repo, "node_modules", "dep", "index.js"), "dependency v2");
-  assert.equal(gateSourceMatches({ sourceCommit: source.commit, sourceFingerprint: source.fingerprint }, await readGateSource(repo)), true,
+  assert.equal(gateSourceMatches({ sourceCommit: source.commit, sourceFingerprint: source.fingerprint, sourceAmbient: source.ambient }, await readGateSource(repo)), true,
     "手改包内文件不动安装声明:已知漏检,不是 bug");
   assert.equal(gateSourceMatches({ sourceCommit: source.commit }, source), false, "legacy HEAD-only passes are stale");
   mkdirSync(join(repo, "packages", "app", "node_modules", "nested"), { recursive: true });

@@ -133,7 +133,7 @@ try {
       const content = reads(syntaxCli);
       const broken = await readGateSource(syntax);
       if (content.startsWith("ERR:")) {
-        assert.equal(gateSourceMatches({ sourceCommit: readable.commit, sourceFingerprint: readable.fingerprint }, broken),
+        assert.equal(gateSourceMatches({ sourceCommit: readable.commit, sourceFingerprint: readable.fingerprint, sourceAmbient: readable.ambient }, broken),
           false, `第2轮发现1: 改成读不通的 ${target} 之后不能再沿用上次通过`);
       }
       expectIdentity(readlinkSync(syntaxCli), content, broken.fingerprint);
@@ -200,8 +200,8 @@ try {
     symlinkSync("literal/file.txt", alias);
     assert.equal(reads(alias), "NESTED");
     const nestedSource = await readGateSource(literal);
-    assert.equal(gateSourceMatches({ sourceCommit: literalSource.commit, sourceFingerprint: literalSource.fingerprint },
-      nestedSource), false, "第2轮发现1: POSIX 上切到另一个真实文件,身份必须跟着变");
+    assert.equal(gateSourceMatches({ sourceCommit: literalSource.commit, sourceFingerprint: literalSource.fingerprint,
+      sourceAmbient: literalSource.ambient }, nestedSource), false, "第2轮发现1: POSIX 上切到另一个真实文件,身份必须跟着变");
   }
 
   // 第 2 轮发现 2:项目把 ash 的运行目录装在自己里面时,排除项只在源侧生效不行——clone/checkout 会
