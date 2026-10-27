@@ -4,7 +4,8 @@ import { copyLink, insideTree } from "./accept-gate-tree.js";
 import { DEPENDENCY_DIRS } from "./accept-gate-dirs.js";
 import { declaredPackageDirs, recordedLinks } from "./accept-gate-deps.js";
 import type { OwnedPackage } from "./accept-gate-relocate.js";
-import { resolutionInputs } from "./accept-gate-resolution.js";
+import { resolutionInputs, type ResolutionEntry } from "./accept-gate-resolution.js";
+import { projectSources, type ProjectSources } from "./accept-gate-project.js";
 
 // 源码隔离的**收口**:快照里跑的每一个本项目自有源码入口,都必须解析到快照里那份被认证的源码。
 //
@@ -88,14 +89,7 @@ type Binding = {
 };
 
 /** 枚举出来的一个运行入口。 */
-type Entry = {
-  entry: string;
-  landing: string;
-  /** 它在哪棵树上（realpath 过的树根）。 */
-  tree: string;
-  /** 它是不是嵌套在某个包里的那一层 node_modules 的条目——那一层没法从快照遮蔽。 */
-  nested: boolean;
-};
+type Entry = ResolutionEntry;
 
 /**
  * 一棵树的安装记录。`usable=false` 表示无从证明任何入口的来源。
@@ -169,24 +163,23 @@ async function provenInside(target: string, realTarget: string, destination: str
  * `usable=true, owned=[]` 和 `usable=false` 是**两件不同的事**，不能合成一个空数组：前者是
  * 「记录读到了，它说这棵树里一个自有包都没有」（纯第三方树，正常布局），后者是「无从证明」。
  */
-async function installRecord(tree: string, origin = tree): Promise<InstallRecord> {
+async function installRecord(tree: string, project: ProjectSources, origin = tree): Promise<InstallRecord> {
   const unusable = (): InstallRecord => ({ usable: false, owned: [], external: [] });
   const raw = await readFile(join(tree, ".package-lock.json"), "utf8").catch(() => null);
   if (raw === null) return unusable();
   try {
     if (typeof (JSON.parse(raw) as { packages?: unknown }).packages !== "object") return unusable();
   } catch { return unusable(); }
-  const links = await recordedLinks(tree, "node_modules", origin);
+  const links = await recordedLinks(tree, "node_modules", project, origin);
   return { usable: true, owned: links.owned, external: links.external };
 }
 
 
 /**
- * 这个落点是某个 Git 检出里的**活工作区源码**吗。
+ * 这个落点是被冻结项目的**活工作区源码**吗。
  *
- * 判据是从它往上能不能找到 `.git`（普通仓库是目录，worktree 的是文件，两种都算）—— 这是个物理
- * 事实，而门禁冻的就是 Git 提交，所以「落点是某个检出的工作区文件」正好等于「快照跑它就等于跑了
- * 一份活源码」。
+ * 来源以被冻结项目的 Git common directory 为准；同仓不同 worktree 是自有源码，别的仓库不是。
+ * 没有安装记录只意味着来源未认证，不能用安装树所在的检出代替被冻结项目身份。
  *
  * **不能**按「落点在哪个目录下」判：依赖树被克隆进快照之后，它的所属目录变成了快照根，而树里的
  * 链还指着原检出的源码。按目录归属判会把那条链算成「检出之外」放过去，而那正是 F3 的 CLI 入口。
@@ -195,15 +188,13 @@ async function installRecord(tree: string, origin = tree): Promise<InstallRecord
  * 的 vendor 目录）本来就不是这次要冻的源码，不需要隔离，更不该因为「来源无从证明」把整次验收拦
  * 掉 —— 那会让一个手铺依赖树、带一条系统工具链的项目永久过不去（这条有定点回归）。
  */
-async function liveSource(landing: string): Promise<boolean> {
-  let directory = landing;
-  for (;;) {
-    if (await lstat(join(directory, ".git")).catch(() => null) !== null) return true;
-    const parent = dirname(directory);
-    if (parent === directory) return false;
-    directory = parent;
-  }
+async function liveSource(landing: string, project: ProjectSources): Promise<boolean> {
+  return (await project.locate(landing)).kind !== "external";
 }
+
+const commandRemedy = (item: Entry) => `命令入口 ${join(item.tree, item.entry)} 不是包名。请检查这条入口：`
+  + `若为遗留或损坏项，删除该入口后重试；若仍需使用，在任务工作区重新安装提供该命令的工具`
+  + `并使入口被就近遮蔽，或将 ASH_RUNS_DIR 移出 ${item.tree} 的解析祖先链`;
 
 
 /**
@@ -305,7 +296,8 @@ function ownerOf(item: Entry, owned: OwnedPackage[]): Ownership | null {
  * 返回第一处证明不了的说明（调用方据此让门禁失败，快照整个丢掉）；全都收住就回 null。
  * **校验全部走完才动手写**，所以拒绝的那条路上快照之外一个字节都没动。
  */
-export async function confineOwnPackages(target: string, origins = new Map<string, string>()): Promise<string | null> {
+export async function confineOwnPackages(target: string, sourceRoot: string, origins = new Map<string, string>()): Promise<string | null> {
+  const project = await projectSources(sourceRoot);
   const realTarget = await realpath(target).catch(() => target);
   const inputs = await resolutionInputs([realTarget]);
   const entries = inputs.flatMap(input => input.selected);
@@ -322,7 +314,7 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
   for (const item of entries) {
     const origin = [...origins].find(([tree]) => insideTree(tree, item.tree));
     const originTree = origin ? join(origin[1], relative(origin[0], item.tree)) : item.tree;
-    const record = records.get(item.tree) ?? await installRecord(item.tree, originTree);
+    const record = records.get(item.tree) ?? await installRecord(item.tree, project, originTree);
     records.set(item.tree, record);
     const ownership = record.usable ? ownerOf(item, record.owned) : null;
     if (ownership !== null && !insideTree(realTarget, item.tree)) exposed.add(item.tree);
@@ -337,7 +329,10 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
       // 记录明确说这个入口装自项目**外**（`file:../另一个仓库`）：已知来源，不是未证明。它不是
       // 这次要冻的源码，照既定外链策略原样留着。丢掉这一态的代价见 recordedLinks 上方。
       if (ownerOf(item, record.external) !== null) continue;
-      if (!await liveSource(item.landing)) continue;
+      if (!await liveSource(item.landing, project)) continue;
+      if (item.kind === "command") return `${item.entry} 指向本项目的活源码 ${item.landing}，`
+        + `${record.usable ? "安装记录没有这个入口" : "没有 npm 的安装记录 .package-lock.json"}，无法证明安装来源。`
+        + commandRemedy(item);
       return record.usable
         // 记录读到了,它既没把这个入口认成项目内的包、又没法解释一条指着活源码的入口:那就是记录
         // 和实际装出来的东西不一致(装完之后手加过链),同样是**证明不了**。
@@ -403,8 +398,9 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
       return `依赖树 ${tree} 落在快照之外，里面既摆着本项目自己的包、又摆着 ${outsider.entry} 这样`
         + `不属于本项目的入口：往快照里补的绑定只对「从快照根出发」的解析有效，而那些入口是从它们`
         + `自己在那棵树里的位置向上解析的，会先命中那棵树里的原入口、读到活工作区的源码 —— `
-        + `无法证明隔离。请在任务工作区安装提供 ${outsider.entry} 的依赖，使该入口被快照就近遮蔽；`
-        + `或将 ASH_RUNS_DIR 移到解析祖先链不经过 ${tree} 的目录后验收`;
+        + `无法证明隔离。` + (outsider.kind === "command" ? commandRemedy(outsider)
+          : `请在任务工作区安装提供 ${outsider.entry} 的依赖，使该入口被快照就近遮蔽；`
+            + `或将 ASH_RUNS_DIR 移到解析祖先链不经过 ${tree} 的目录后验收`);
     }
   }
   for (const binding of plan) {

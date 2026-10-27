@@ -5,6 +5,7 @@ import { copyLink, insideTree } from "./accept-gate-tree.js";
 import { DEPENDENCY_DIRS } from "./accept-gate-dirs.js";
 import { copyTree, linkMismatch, type OwnedPackage, type Relocation } from "./accept-gate-relocate.js";
 import { resolutionInputs } from "./accept-gate-resolution.js";
+import { projectSources, type ProjectSources } from "./accept-gate-project.js";
 
 // 门禁快照冻住的是**源码**；依赖是 lockfile 的产物，按产物对待。
 //
@@ -376,7 +377,7 @@ export async function relocationFor(root: string, target: string, dep: string): 
     target,
     treeRoot,
     treeDest: join(target, dep),
-    owned: await ownedLinks(treeRoot, dep),
+    owned: await ownedLinks(treeRoot, dep, await projectSources(root)),
   };
 }
 
@@ -385,8 +386,9 @@ export async function relocationFor(root: string, target: string, dep: string): 
  *
  * 这是**来源身份**的唯一出处。npm 把 workspace 包和 `file:` 依赖都装成链，两者在路径形状和
  * package.json.name 上可以完全一样（实测反例见 accept-gate-relocate 顶部①），区别只在这一处：
- * workspace 包的 resolved 是项目内相对路径（`packages/lib`），`file:` 依赖的 resolved 指向项目
- * 外。所以判据是 resolved 落在项目内，而不是路径后缀或包名。
+ * resolved 按安装器原位置解读，再把来源与被冻结项目的仓库身份比较。同仓不同 worktree 通过 Git
+ * common directory 对齐到同一相对源码位置；其它仓库的 workspace 也归外部，不因快照恰好放在
+ * 那个仓库下面而变成自有包。路径后缀和包名都不是仓库身份。
  *
  * 读不到记录就回空：那时一条都不改写。「不改写」在隔离失效时会被 linkMismatch 当场抓住并让门禁
  * 失败，而「改错」是把被测代码换成另一份还报绿——两种错的代价差着一个量级。
@@ -402,14 +404,14 @@ export type RecordedLinks = {
   external: OwnedPackage[];
 };
 
-export async function recordedLinks(treeRoot: string, dep: string, originRoot = treeRoot): Promise<RecordedLinks> {
+export async function recordedLinks(treeRoot: string, dep: string, project: ProjectSources, originRoot = treeRoot): Promise<RecordedLinks> {
   const raw = await readFile(join(treeRoot, ".package-lock.json"), "utf8").catch(() => null);
   if (raw === null) return { owned: [], external: [] };
   let packages: Record<string, unknown> = {};
   try {
     packages = (JSON.parse(raw) as { packages?: Record<string, unknown> }).packages ?? {};
   } catch { return { owned: [], external: [] }; }
-  const projectRoot = await realpath(dirname(originRoot)).catch(() => dirname(originRoot));
+  const installationRoot = await realpath(dirname(originRoot)).catch(() => dirname(originRoot));
   // 键前缀取**登记名**而不是 realpath 后的 basename:依赖根自己是条链时(pnpm 的
   // `node_modules -> .store` 就是这个形状)realpath 后的 basename 是 `.store`,拼出来的前缀
   // 匹配不上记录里的 `node_modules/…`,整棵树的归属改写会一声不响地全部失效。
@@ -420,24 +422,24 @@ export async function recordedLinks(treeRoot: string, dep: string, originRoot = 
     const record = value as { link?: unknown; resolved?: unknown };
     if (record.link !== true || typeof record.resolved !== "string" || !key.startsWith(prefix)) continue;
     const entry = key.slice(prefix.length);
-    const where = resolve(projectRoot, record.resolved);
+    const where = resolve(installationRoot, record.resolved);
     // 记录说它装自项目**外**:那是一个明确的已知来源(`file:../另一个仓库`),不是自有包、也不是
     // 「来源不明」。这一态必须单独带出去——丢掉它的调用方只剩「自有包」和「未知」两格,于是一个
     // 正常 `npm install` 装好的外部 file 包会被当成未证明的源码,整次验收在合法布局上被拦掉
     // (2026-10-27 第三轮独立审查实测,两平台一致)。外部包由不由 Git 管理不改变这个事实。
     const landing = await realpath(where).catch(() => null);
     if (landing === null) continue;
-    const source = { entry, inside: record.resolved.split("/").join(sep), landing };
-    if (!insideTree(projectRoot, where) || where === projectRoot) {
-      if (where !== projectRoot) external.push(source);
-    } else owned.push(source);
+    const location = await project.locate(landing);
+    const source = { entry, inside: location.kind === "owned" ? location.inside : record.resolved.split("/").join(sep), landing };
+    if (location.kind === "external") external.push(source);
+    else if (location.kind === "owned") owned.push(source);
   }
   return { owned, external };
 }
 
 /** 只要自有包那一格的调用方（搬运改写）用这个。 */
-export async function ownedLinks(treeRoot: string, dep: string): Promise<OwnedPackage[]> {
-  return (await recordedLinks(treeRoot, dep)).owned;
+export async function ownedLinks(treeRoot: string, dep: string, project: ProjectSources): Promise<OwnedPackage[]> {
+  return (await recordedLinks(treeRoot, dep, project)).owned;
 }
 
 /**
@@ -511,7 +513,7 @@ export async function provideDependency(root: string, target: string, dep: strin
   // 开始拷——否则副本里仍是一条指向外面的链，解析根照旧在快照外，三个入口一个都没修掉。
   // 放法的判据是**落点**:这棵树里只要有一条链落在项目源码上,借出去就等于没隔离(理由与实测
   // 见 linksIntoSource)。声明过 workspace 的仍然直接克隆——那是项目自己写明的意图,不必等扫描。
-  // 判据的第一道是**安装记录认下的自有包**(relocation.owned,归属以树自己所属的那个检出为准)。
+  // 判据的第一道是**安装记录认下的自有包**(relocation.owned,以被冻结项目的仓库身份为准)。
   // 落点扫描只认「落回**本检出**源码」的链,所以借来另一个检出的树时它一条都扫不出来:worktree
   // 借主仓那一份、几个检出共用一个安装目录,里面的 workspace 链落在**那个**检出的活源码上。上一版
   // 因此决定借用,随后收口发现自有包解析到快照外、要重绑定,而主干是一条落在别人工作区的链——只能

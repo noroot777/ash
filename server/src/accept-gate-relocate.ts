@@ -24,7 +24,7 @@ import { copyLink, insideTree, linkLanding, linkTarget } from "./accept-gate-tre
 export type OwnedPackage = {
   /** 相对依赖树根的入口路径,如 `@demo/lib`。 */
   entry: string;
-  /** 相对项目根的包目录,如 `packages/lib`。**安装器自己记下的那一个**,不是猜的。 */
+  /** 相对被冻结项目根的包目录，由安装来源与仓库身份对齐，不按包名猜。 */
   inside: string;
   /** 工作区里这个入口的真实落点。改写只认它。 */
   landing: string;

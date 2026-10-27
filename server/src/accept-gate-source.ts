@@ -280,7 +280,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       if (mode === "absent") continue;
       origins.set(await realpath(join(target, dep)), await realpath(join(cwd, dep)));
     }
-    const unconfined = await confineOwnPackages(target, origins);
+    const unconfined = await confineOwnPackages(target, cwd, origins);
     if (unconfined) throw new Error(`测试快照没能隔离项目自己的包：${unconfined}`);
     const sidecar: GateSidecar = {
       sourceCwd: cwd, ambient: source.ambient,

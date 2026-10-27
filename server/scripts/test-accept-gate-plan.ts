@@ -10,6 +10,8 @@ const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource,
   await import("../src/accept-gate-source.js");
 const { resolutionInputs } = await import("../src/accept-gate-resolution.js");
 const { ambientDigest } = await import("../src/accept-gate-deps.js");
+const { projectSources } = await import("../src/accept-gate-project.js");
+const { stat, realpath, readdir } = await import("node:fs/promises");
 const save = (path: string, content: string) => {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
@@ -212,6 +214,102 @@ try {
   await createGateSnapshot(movedTask, movedTarget, await readGateSource(movedTask, movedTarget));
   assert.equal(probe(movedTarget, "own-alias"), "MOVED_NEW");
 
+  const identityHost = project("identity-A", { workspaces: ["packages/*"] });
+  ownPackage(identityHost, "packages/mcp", "ASH_EXTERNAL");
+  const hostPackage = manifest(join(identityHost, "packages/mcp"));
+  hostPackage.name = "@ash/mcp";
+  save(join(identityHost, "packages/mcp/package.json"), JSON.stringify(hostPackage));
+  save(join(identityHost, "loose/cli.mjs"), 'console.log("ORPHAN_SOURCE");\n');
+  install(identityHost);
+  const commandDirectory = join(identityHost, "node_modules", ".bin");
+  mkdirSync(commandDirectory, { recursive: true });
+  symlinkSync(commandDirectory, join(commandDirectory, ".bin"), process.platform === "win32" ? "junction" : "dir");
+  symlinkSync("cycle", join(commandDirectory, "cycle"), "file");
+  const orphanCommand = join(commandDirectory, "orphan");
+  symlinkSync(join(identityHost, "loose", "cli.mjs"), orphanCommand, "file");
+  commit(identityHost);
+  const hostEntries = (await resolutionInputs([identityHost])).flatMap(input => input.entries);
+  assert.equal(hostEntries.some(item => item.entry === join(".bin", ".bin")), false);
+  assert.equal(hostEntries.some(item => item.entry === join(".bin", "cycle")), false);
+  assert.equal(hostEntries.find(item => item.entry === join(".bin", "orphan"))?.kind, "command");
+  for (const installed of [false, true]) {
+    const independent = project(`identity-B-${installed}`, installed ? { workspaces: ["packages/*"] } : {});
+    if (installed) {
+      ownPackage(independent, "packages/mcp", "B_CERTIFIED");
+      const independentPackage = manifest(join(independent, "packages/mcp"));
+      independentPackage.name = "@ash/mcp";
+      save(join(independent, "packages/mcp/package.json"), JSON.stringify(independentPackage));
+      install(independent);
+    }
+    commit(independent);
+    const identitySource = await projectSources(independent);
+    assert.equal((await identitySource.locate(join(identityHost, "packages/mcp"))).kind, "external");
+    const independentTarget = join(identityHost, "data", "runs", `foreign-${installed}.source`);
+    const independentSource = await readGateSource(independent, independentTarget);
+    await createGateSnapshot(independent, independentTarget, independentSource);
+    assert.equal(probe(independentTarget, "@ash/mcp"), installed ? "B_CERTIFIED" : "ASH_EXTERNAL");
+    assert.equal(await verifyGateSnapshot(independentTarget, independentSource), true);
+    assert.equal(lstatSync(orphanCommand).isSymbolicLink(), true);
+  }
+  const identityTask = join(identityHost, ".worktrees", "task");
+  git(identityHost, "worktree", "add", "--detach", identityTask, "HEAD");
+  const ownIdentity = await projectSources(identityTask);
+  assert.deepEqual(await ownIdentity.locate(join(identityHost, "packages/mcp")), { kind: "owned", inside: join("packages", "mcp") });
+  const orphanTarget = join(identityHost, "data", "runs", "orphan.source");
+  await assert.rejects(createGateSnapshot(identityTask, orphanTarget, await readGateSource(identityTask, orphanTarget)), error => {
+    assert.match(String(error), /命令入口.*不是包名/);
+    assert.match(String(error), /无法证明安装来源/);
+    assert.match(String(error), /删除该入口/);
+    assert.ok(String(error).includes(orphanCommand));
+    return true;
+  });
+  assert.equal(existsSync(orphanTarget), false);
+  assert.equal(lstatSync(orphanCommand).isSymbolicLink(), true);
+  rmSync(orphanCommand);
+  const garbageTarget = join(identityHost, "data", "runs", "garbage.source");
+  await createGateSnapshot(identityTask, garbageTarget, await readGateSource(identityTask, garbageTarget));
+  assert.equal(probe(garbageTarget, "@ash/mcp"), "ASH_EXTERNAL");
+
+  const memoRoot = join(root, "memo");
+  for (let index = 0; index < 48; index++) {
+    save(join(memoRoot, "node_modules", `pkg-${index}`, "package.json"), JSON.stringify({ name: `pkg-${index}`, version: "1.0.0" }));
+  }
+  const reads = { stat: new Map<string, number>(), realpath: new Map<string, number>(), readdir: new Map<string, number>() };
+  const count = <Value>(counts: Map<string, number>, path: string, read: () => Promise<Value>) => {
+    counts.set(path, (counts.get(path) ?? 0) + 1);
+    return read();
+  };
+  const memoInputs = await resolutionInputs([memoRoot], {
+    stat: path => count(reads.stat, path, () => stat(path)),
+    realpath: path => count(reads.realpath, path, () => realpath(path)),
+    readdir: path => count(reads.readdir, path, () => readdir(path)),
+  });
+  assert.equal(memoInputs.find(input => input.path === join(memoRoot, "node_modules"))!.selected.length, 48);
+  for (const counts of Object.values(reads)) assert.ok([...counts.values()].every(calls => calls === 1));
+  for (let index = 0; index < 48; index++) assert.equal(reads.stat.get(join(memoRoot, "node_modules", `pkg-${index}`)), 1);
+  assert.deepEqual(await resolutionInputs([memoRoot]), memoInputs);
+
+  const failedRoot = join(memoRoot, "project");
+  save(join(failedRoot, "node_modules", "pkg-0", "package.json"), '{"name":"pkg-0","version":"2.0.0"}');
+  const failedPath = join(failedRoot, "node_modules", "pkg-0");
+  for (const code of ["ENAMETOOLONG", "EIO", "UNKNOWN"]) {
+    const injectedReads = new Map<string, number>();
+    const faultInputs = await resolutionInputs([failedRoot], { realpath, readdir, stat: path => {
+      injectedReads.set(path, (injectedReads.get(path) ?? 0) + 1);
+      if (path === failedPath) throw Object.assign(new Error(code), { code, errno: -1, syscall: "stat", path });
+      return stat(path);
+    } });
+    assert.equal(injectedReads.get(failedPath), 1);
+    assert.equal(faultInputs.find(input => input.path === join(failedRoot, "node_modules"))!.entries.length, 0);
+    assert.ok(faultInputs.find(input => input.path === join(memoRoot, "node_modules"))!.selected.some(item => item.entry === "pkg-0"));
+  }
+  const recovered = await resolutionInputs([failedRoot]);
+  assert.equal(recovered.find(input => input.path === join(failedRoot, "node_modules"))!.entries.length, 1);
+  for (const error of [new TypeError("invalid argument"), Object.assign(new Error("bug"), { code: "ERR_INVALID_ARG_TYPE" })]) {
+    await assert.rejects(resolutionInputs([failedRoot], { realpath, readdir, stat: async () => { throw error; } }), actual => actual === error);
+  }
+  await resolutionInputs([join(root, "long-" + "x".repeat(1024))]);
+
   const deep = join(root, "deep");
   let directory = deep;
   for (let depth = 0; depth < 12; depth++) {
@@ -247,7 +345,7 @@ try {
       } finally { chmodSync(denied, 0o755); }
     }
   } else console.log("accept-gate-plan: POSIX unreadable-directory fixture skipped on Windows (no ACL changes)");
-  console.log("accept-gate-plan: consumer selection/remediation, unbuilt/moved CLI, tolerant directory scans, execution identity and provenance passed");
+  console.log("accept-gate-plan: frozen-project identity, orphan commands, per-path read counts, filesystem failures and prior provenance cases passed");
 } finally {
   rmSync(root, { recursive: true, force: true });
   console.log("accept-gate-plan: cleanup=true");
