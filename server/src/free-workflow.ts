@@ -45,6 +45,7 @@ import {
   reviewingRun,
 } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
+import { NO_REMINDER, type TurnReminder } from "./turn-prompt.js";
 import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
@@ -56,7 +57,7 @@ import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-st
 import { claimTurn, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
-import { reviewSweepReminder } from "./review-sweep.js";
+import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { id, now } from "./util.js";
 import type { Actor } from "./auth/context.js";
 import { canUseOwned } from "./auth/owned.js";
@@ -123,22 +124,25 @@ export async function freeReviewResumeOptions(taskId: string): Promise<ReviewRes
   };
 }
 
-export async function freeReviewReminder(taskId: string): Promise<string> {
+export async function freeReviewReminder(taskId: string): Promise<TurnReminder> {
   const run = await reviewingRun(taskId);
-  if (!run) return "";
-  const { reference } = await refreshRegressionEvidence(taskId,
+  if (!run) return NO_REMINDER;
+  const { reference, manifestEntry } = await refreshRegressionEvidence(taskId,
     freeReviewEvidenceDir(taskId, run.id, run.currentRound), run.targetKind === "accepted_merge");
   // 中途提问后续跑那条路上，只有这条提醒还在重贴要求（崩掉重拉走 freeReviewResumeMessage，
   // 两条路各带一份），所以报告格式和扫描义务两份契约都得在 —— 原先这里只有浏览器提醒，
   // 而就地验证那侧的 `verifyReminderFor` 一直带着摘要契约：两个对称端点只做了一个。
   // 浏览器提醒由投递点统一贴(带项目授权),这里不内嵌 —— 理由同 review-prompts.ts。
-  return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
-    `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +
-    REPORT_SUMMARY_REMINDER +
-    reviewSweepReminder(run.targetKind !== "accepted_merge") +
-    reference +
-    `结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
-    `不要调用 complete_task 或 accept_task。`;
+  return {
+    text: `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
+      `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +
+      REPORT_SUMMARY_REMINDER +
+      REVIEW_SWEEP_REMINDER +
+      reference +
+      `结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
+      `不要调用 complete_task 或 accept_task。`,
+    manifestEntry,
+  };
 }
 
 // 预约在下一次执行回合正常结束时消费；任务完成确认仍由 complete_task 单独记账。
@@ -306,7 +310,7 @@ export async function reportFreeReviewConclusion(
     throw new Error(`审查结论必须先落报告：请把非空报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
   }
   const checked = await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
-    run.targetKind === "accepted_merge", opts.verificationBasis);
+    opts.verificationBasis);
   await commitRegressionConclusion(checked, async (transaction) => {
     await assertConclusionTask(transaction, task);
     const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];

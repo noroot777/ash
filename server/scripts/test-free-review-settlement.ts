@@ -102,7 +102,7 @@ try {
       await db.insert(freeReviewRounds).values({
         id: `${runId}-round`, runId, round: 1, status: "reviewing", startedAt: at,
       });
-      await evidenceState(id, freeReviewEvidenceDir(id, runId, 1), false, (await db.select().from(tasks).where(eq(tasks.id, id)))[0]!);
+      await evidenceState(id, freeReviewEvidenceDir(id, runId, 1), (await db.select().from(tasks).where(eq(tasks.id, id)))[0]!);
       if (options.reviewConclusion) {
         const report = freeReviewReportPath(id, runId, 1);
         mkdirSync(dirname(report), { recursive: true });

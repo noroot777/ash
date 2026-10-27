@@ -115,7 +115,17 @@
   box-shadow: inset 0 0 0 1px var(--line);
   cursor: default;
 }
-.cmd-pop__svc-btn.is-stop { color: var(--red); }
+/* 服务起着的时候 ▶ 就地换成它:红色线框 + 红色方块(用户 2026-10-26 点名)。旁边两颗是
+   中性按钮,只靠一个填色方块太像「又一颗普通按钮」—— 线框才让人一眼看出这是要停掉东西。 */
+.cmd-pop__svc-btn.is-stop {
+  color: var(--red);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 55%, transparent);
+}
+.cmd-pop__svc-btn.is-stop:hover {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  box-shadow: inset 0 0 0 1px var(--red);
+}
 
 /* ── 正文:命令行列表 ──────────────────────────────────── */
 .cmd-pop__body {
