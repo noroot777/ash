@@ -28,6 +28,7 @@ import { queueItems, tasks } from "./db/schema.js";
 import { manualStartBlockers } from "./queues.js";
 import { isTurnClaimed, whenTurnIdle } from "./runs.js";
 import { setTaskStatus } from "./status.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 
 export type QueueSeat = {
   taskId: string;
@@ -190,7 +191,10 @@ export async function seatThenStart(
   if (!claim.ok) return claim;
   const seat = claim.seat;
   void start(seat)
-    .catch((err) => console.error(`[ash] 任务 ${taskId} 启动异常:`, err))
+    .catch(async (err) => {
+      console.error(`[ash] 任务 ${taskId} 启动异常:`, err);
+      await appendTaskTimeline(taskId, `本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`);
+    })
     .finally(() => { if (seat) void seat.release(); });
   return { ok: true };
 }

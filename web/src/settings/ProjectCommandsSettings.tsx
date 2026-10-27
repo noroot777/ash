@@ -19,7 +19,8 @@ import { ShellScriptEditor, useShellScriptWrapping } from "./ShellScriptEditor.t
 import "./project-commands.css";
 
 // 项目「常用命令」配置节。操作面在全局状态栏(workspace/StatusBar.tsx):
-//   启动/重启 —— 项目级一对命令,对应弹层头部的 ▶/⟳ 图标按钮(没配置就置灰);
+//   启动/停止/重启 —— 项目级一组命令,对应弹层头部的图标按钮(没配置就置灰;服务起着的
+//   时候 ▶ 就地换成红框的停止)。停止命令可以不填 —— 默认就是杀掉启动会话的整个进程组;
 //   常用命令 —— 名称 + 命令的普通条目,重启一律「杀掉进程再跑一遍」,所以**不逐条**
 //   配重启命令(用户点名去掉那个输入框)。
 // 命令正文是完整脚本(多行/缩进/`{{占位符}}`),编辑面与预览启动脚本共用 ShellScriptEditor:
@@ -50,6 +51,7 @@ export function ProjectCommandsSettings({ project, onUpdated, notify }: {
   const stored = project.commandsConfig ?? null;
   const [service, setService] = useState(() => ({
     command: stored?.service?.command ?? "",
+    stopCommand: stored?.service?.stopCommand ?? "",
     restartCommand: stored?.service?.restartCommand ?? "",
   }));
   const [commands, setCommands] = useState<ProjectCommandConfig[]>(() => stored?.commands ?? []);
@@ -61,8 +63,12 @@ export function ProjectCommandsSettings({ project, onUpdated, notify }: {
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
 
   const draft = (): unknown => ({
-    service: service.command.trim() || service.restartCommand.trim()
-      ? { command: service.command, restartCommand: service.restartCommand || null }
+    service: service.command.trim() || service.stopCommand.trim() || service.restartCommand.trim()
+      ? {
+        command: service.command,
+        restartCommand: service.restartCommand || null,
+        stopCommand: service.stopCommand || null,
+      }
       : null,
     commands,
   });
@@ -85,7 +91,11 @@ export function ProjectCommandsSettings({ project, onUpdated, notify }: {
       const result = await api.updateProject(project.id, { commandsConfig: validated });
       if (!active.current) return;
       const next = result.commandsConfig ?? null;
-      setService({ command: next?.service?.command ?? "", restartCommand: next?.service?.restartCommand ?? "" });
+      setService({
+        command: next?.service?.command ?? "",
+        stopCommand: next?.service?.stopCommand ?? "",
+        restartCommand: next?.service?.restartCommand ?? "",
+      });
       setCommands(next?.commands ?? []);
       setSaved(JSON.stringify(next));
       onUpdated(result);
@@ -108,8 +118,12 @@ export function ProjectCommandsSettings({ project, onUpdated, notify }: {
 
     <div className="project-commands__service">
       <div className="project-commands__service-head">
-        <b>启动 / 重启</b>
-        <small>项目的 dev server：配置后，状态栏「常用命令」弹层顶部的启动 / 重启按钮即可一键启停（G C 快速打开）。</small>
+        <b>启动 / 停止 / 重启</b>
+        <small>项目的 dev server：配置后，「常用命令」弹层顶部的按钮即可一键启停（G C 快速打开）；服务起着的时候，启动按钮就地变成停止。</small>
+        <small>
+          停止默认是杀掉启动命令的整个进程组。<code>docker compose up -d</code>、<code>pm2 start</code> 这类
+          服务跑在 ash 的进程树之外（启动脚本跑完自己就退了），得填一条停止命令才停得掉。
+        </small>
       </div>
       <div className="project-commands__service-fields">
         <div className="project-commands__field">
@@ -126,6 +140,21 @@ export function ProjectCommandsSettings({ project, onUpdated, notify }: {
             onWrapChange={onWrapChange}
           />
           <PlaceholderHint script={service.command} action="启动" />
+        </div>
+        <div className="project-commands__field">
+          <span>停止命令</span>
+          <ShellScriptEditor
+            label="停止命令"
+            value={service.stopCommand}
+            onChange={(stopCommand) => setService((current) => ({ ...current, stopCommand }))}
+            readOnly={!canManage || busy}
+            maxLength={MAX_PROJECT_COMMAND_LENGTH}
+            heightKey={`commands:${project.id}:service-stop`}
+            placeholder="留空 = 杀掉启动命令的整个进程组"
+            wrap={wrap}
+            onWrapChange={onWrapChange}
+          />
+          {/* 停止不弹收值框(停的是已经起来的那一份),所以这条不支持占位符 —— 写了会在保存时拦下。 */}
         </div>
         <div className="project-commands__field">
           <span>重启命令</span>

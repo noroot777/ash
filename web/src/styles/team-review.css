@@ -31,6 +31,7 @@
 .team-accept-failure-heading b { display: block; color: color-mix(in lch,var(--red) 76%,var(--ink)); font-size: 11px; }
 .team-accept-failure.is-handed-off .team-accept-failure-heading b { color: color-mix(in lch,var(--amber) 76%,var(--ink)); }
 .team-accept-failure p { margin: 3px 0 0; color: var(--muted); line-height: 1.5; white-space: pre-wrap; }
+.team-accept-failure > .pending-merge-actions { margin: 9px 0 0 32px; }
 .team-accept-failure .team-accept-handoff-message { color: color-mix(in lch,var(--amber) 62%,var(--ink)); font-weight: 600; }
 .team-accept-failure .team-accept-failure-guidance { color: color-mix(in lch,var(--red) 60%,var(--muted)); }
 .team-accept-failure.is-handed-off .team-accept-failure-guidance { color: color-mix(in lch,var(--amber) 66%,var(--muted)); }
@@ -187,6 +188,10 @@
 .accept-gate-card b { display: block; color: var(--ink); font-size: 11px; }
 .accept-gate-card p { margin: 3px 0 0; color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
 .accept-gate-card .pending-merge-actions { margin-top: 1px; }
+.accept-gate-command { display: grid; gap: 4px; margin: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 9px; }
+.accept-gate-command dt { color: var(--faint); font-size: 10px; }
+.accept-gate-command dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.accept-gate-command code { white-space: pre-wrap; }
 .accept-gate-log > span { display: flex; align-items: center; justify-content: space-between; color: var(--faint); font-size: 9.5px; font-weight: 650; }
 .accept-gate-log > span > button { border: 0; background: transparent; padding: 0; color: var(--accent); font-size: 9.5px; }
 .accept-gate-log pre { max-height: 180px; overflow: auto; margin: 4px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }

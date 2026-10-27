@@ -16,6 +16,7 @@
 // V1 明确不做:team/duet 模式。跨机器的身份与鉴权见 handoff-identity.ts(本机身份)、
 // handoff-peer-client.ts(出站核对对端)、handoff-peers.ts(入站审批)。
 import { hostname } from "node:os";
+import { exportHandoffMessage } from "./handoff-messages.js";
 import { existsSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { win32 } from "node:path";
@@ -58,6 +59,7 @@ import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
+import { exportWaitOrigins } from "./handoff-wait.js";
 import { collectGateRuns } from "./handoff-accept-gate.js";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
@@ -482,6 +484,7 @@ export async function exportHandoff(
           reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
           verifyCompletedSteps: task.verifyCompletedSteps,
           resumePrompt: task.resumePrompt, resumePromptAuto: task.resumePromptAuto, question: task.question,
+          waitOrigins: await exportWaitOrigins(task),
           questionOptions: task.questionOptions, questionItems: task.questionItems,
           questionHistory: task.questionHistory,
           acceptedTargetBranch: task.acceptedTargetBranch,
@@ -511,11 +514,7 @@ export async function exportHandoff(
         acceptGateRuns: await collectGateRuns(task.id),
         git: gitState,
         uploads,
-        messages: pendingMsgs.map((x) => ({
-          text: x.text, attachments: x.attachments, agent: x.agent, model: x.model,
-          reasoningEffort: x.reasoningEffort, sessionRole: x.sessionRole,
-          mode: x.mode, sendAt: x.sendAt, createdAt: x.createdAt,
-        })),
+        messages: pendingMsgs.map(exportHandoffMessage),
         schedule: scheduleRow
           ? {
               kind: scheduleRow.kind, at: scheduleRow.at, cron: scheduleRow.cron,

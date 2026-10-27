@@ -15,11 +15,21 @@
 // 送达的通知把一个已经结束的任务拉起来),只是下游没有那个大 try 可以托管占位,所以它把
 // 「送完要还的那把锁」当返回值交出去。两个入口的判据(验收互斥、唤醒资格、读失败的退避
 // 语义)必须逐字一致 —— 分家一次就是第 6 轮审查那两条:单飞这侧全部修好,团队那侧照旧。
-import { claimTurn, claimWakeTurn, reclaimTurn, releaseTurn, turnSourceRole, turnSourceReview } from "./runs.js";
+import { claimTurn, claimWakeTurn, reclaimTurn, releaseTurn, turnIdentity, turnSourceRole, turnSourceReview } from "./runs.js";
 import type { TurnSource } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { pendingCheckpointBlockReason } from "./pending-checkpoint-recovery.js";
+
+export async function withTurnPreflight<Result>(taskId: string, turnHeld: boolean | undefined,
+  prepare: () => Promise<Result>): Promise<Result> {
+  const held = turnHeld ? turnIdentity(taskId) : null;
+  try { return await prepare(); }
+  catch (error) {
+    if (held && turnIdentity(taskId) === held) releaseTurn(taskId);
+    throw error;
+  }
+}
 
 export type TurnEntryInput = {
   taskId: string;

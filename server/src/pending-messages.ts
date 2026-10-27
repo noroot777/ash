@@ -42,6 +42,7 @@ import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { deliveryOptions, deliveryVerdict, isDueForDelivery, pendingExecutionIntent } from "./pending-verdict.js";
+import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { dispatchPendingMessage } from "./pending-dispatch.js";
@@ -49,6 +50,7 @@ import { pendingMessageOrder } from "./pending-monitor-batch.js";
 import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
 import { CHECKPOINT_RUN_ORIGIN, recoverPendingCheckpoints, preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { id, now } from "./util.js";
+import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 
 // 判定与投递参数的无状态部分拆在 pending-verdict.ts(本文件顶过 700 行上限);
 // 外部引用保持原路径不动。
@@ -247,11 +249,10 @@ export async function beginDelivery(messageId: string): Promise<Row | null> {
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
 // 消息不该被这一步复活。
-export async function markSent(message: Row | Row[]): Promise<void> {
+export async function markSent(message: Row | Row[], transaction?: ConclusionTransaction): Promise<void> {
   const messages = Array.isArray(message) ? message : [message];
   if (!messages.length) return;
-  for (const current of messages) forgetDeliveryBookkeeping(current.id);
-  await db
+  await (transaction ?? db)
     .update(scheduledMessages)
     .set({ status: "sent", sentAt: now(), deliveringSince: null })
     .where(and(
@@ -264,7 +265,10 @@ export async function markSent(message: Row | Row[]): Promise<void> {
         ),
       ),
     ));
-  publishPendingMessages(messages[0]!.taskId);
+  if (!transaction) {
+    for (const current of messages) forgetDeliveryBookkeeping(current.id);
+    publishPendingMessages(messages[0]!.taskId);
+  }
 }
 
 // 开机时清空所有租约(startScheduler 在第一次 tick 之前调)。**不需要超时启发式**:
@@ -335,6 +339,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       // paused 翻成 queued,orchestrator 误判成执行回合:消费继续指令、无确认结算
       // failed(第 ll7XKsu_ps0n 链第 1 轮:定时追问与连续追问实测,直接回复对照正常)。
       const checkpointFollowUp =
+        reviewDeliveryFrom(m)?.kind === "answer" ||
         t != null && t.mode === "single" && !m.execution && t.status === "paused" && !!t.resumePrompt;
       // paused/backlog 的单任务、以及执行型消息(不论任务状态)才需要问队列;执行型
       // 还要问分组暂停。其余状态别白查几张表。
@@ -353,7 +358,9 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       const monitorSource = t != null && monitorIdFromOrigin(m.origin) !== null
         ? await monitorEventSourceState(m.origin)
         : undefined;
-      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource } : null, at);
+      const reviewBlocked = await reviewDeliveryBlocked(reviewDeliveryFrom(m), m.taskId);
+      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
+        reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
       if (verdict.action === "wait") {
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。

@@ -48,6 +48,7 @@ export function useAcceptGate(taskId: string): {
   const activeTask = useRef<string | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCount = useRef(0);
+  const pendingRead = useRef<AbortController | null>(null);
 
   const reload = useCallback(async (retry = false): Promise<void> => {
     if (activeTask.current !== taskId) return;
@@ -55,9 +56,15 @@ export function useAcceptGate(taskId: string): {
     retryTimer.current = null;
     if (!retry) retryCount.current = 0;
     const mine = ++issued.current;
+    pendingRead.current?.abort();
+    const controller = new AbortController();
+    pendingRead.current = controller;
+    const timeout = setTimeout(() => {
+      controller.abort(new Error("读取验收前置命令超时（15 秒），可刷新重试"));
+    }, 15000);
     setChecking(taskId);
     try {
-      const next = await api.acceptGate(taskId);
+      const next = await api.acceptGate(taskId, controller.signal);
       if (issued.current !== mine) return;
       setSnap({ taskId, state: next, readAt: Date.now() });
       setFailure(null);
@@ -71,6 +78,9 @@ export function useAcceptGate(taskId: string): {
         const delay = Math.min(1000 * 2 ** retryCount.current++, 10000);
         retryTimer.current = setTimeout(() => { void reload(true); }, delay);
       }
+    } finally {
+      clearTimeout(timeout);
+      if (pendingRead.current === controller) pendingRead.current = null;
     }
   }, [taskId]);
 
@@ -81,6 +91,8 @@ export function useAcceptGate(taskId: string): {
     return () => {
       activeTask.current = null;
       issued.current += 1;
+      pendingRead.current?.abort();
+      pendingRead.current = null;
       if (retryTimer.current) clearTimeout(retryTimer.current);
       retryTimer.current = null;
     };

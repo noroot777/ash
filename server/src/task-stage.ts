@@ -1,7 +1,7 @@
 import { recordBranchReceipt } from "./task-branch-receipts.js";
 import type { TaskStage } from "@ash/shared";
 import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@ash/shared";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -32,7 +32,10 @@ export async function setTaskStage(
           : eq(tasks.activeDirectionToken, currentTurn.directionToken),
       )
     : eq(tasks.id, taskId);
-  const updated = await db.update(tasks).set({ stage, updatedAt }).where(where).returning({ id: tasks.id });
+  const updated = await db.update(tasks).set({ stage, updatedAt,
+    ...(["accepted", "merged"].includes(stage)
+      ? { waitOwnership: sql`json_remove(${tasks.waitOwnership}, '$.acceptedFinalization')` } : {}),
+  }).where(where).returning({ id: tasks.id });
   if (!updated.length) return null;
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
   const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);
@@ -59,7 +62,7 @@ export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
   const scope = await presetConclusionRound(task, db, opts.sourceTaskId);
   if (source.id !== taskId && scope?.reviewTaskId !== source.id) throw new RegressionConclusionRejected("当前来源不属于活动审查轮次");
   const checked = scope && (stage === "verified" || stage === "verify_failed")
-    ? await checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage, false, opts.verificationBasis)
+    ? await checkRegressionConclusion(taskId, reviewRoundDir(taskId, scope.round), stage, opts.verificationBasis)
     : undefined;
   const updatedAt = now();
   await commitRegressionConclusion(checked, async (transaction) => {

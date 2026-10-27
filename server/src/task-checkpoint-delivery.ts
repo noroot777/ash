@@ -12,10 +12,11 @@ import { id, now } from "./util.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
 
-export async function claimCheckpointForRun(taskId: string, expected: string): Promise<Row | null> {
+export async function claimCheckpointForRun(taskId: string, expected: string, generation?: number): Promise<Row | null> {
   const receipt = await db.transaction(async (transaction) => {
     const task = (await transaction.select().from(tasks).where(and(
       eq(tasks.id, taskId), eq(tasks.resumePrompt, expected),
+      generation === undefined ? undefined : eq(tasks.resumePromptGeneration, generation),
     ))).at(0);
     if (!task) return null;
     const taken = await transaction.update(tasks).set(resumePromptTakePatch()).where(and(

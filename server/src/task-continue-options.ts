@@ -19,6 +19,7 @@ export type ResumeReason = "group" | "run" | "retry" | "wake" | "queue";
  * 这一份——`runs.ts` 那种按 `Parameters<typeof continueTask>[2]` 取类型的调用方照旧成立。
  */
 export type ContinueTaskOptions = {
+  reviewDelivery?: import("./review-ownership.js").ReviewDelivery;
   agent?: AgentType;
   executorId?: string | null;
   model?: string | null;

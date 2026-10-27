@@ -2,6 +2,7 @@
 // 每条独立执行、"column already exists" 一律吞掉 —— 顺序只在**同表同列有依赖**时才要紧,
 // 列的语义注释全部住在这里,改列先读上下文。真正的一次性数据搬运在 migrations.ts。
 export const COLUMN_MIGRATIONS: string[] = [
+  "ALTER TABLE tasks ADD COLUMN wait_ownership TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN process_pending INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE accept_gate_runs ADD COLUMN source_fingerprint TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",

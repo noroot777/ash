@@ -54,6 +54,8 @@ import { advanceWorkflowFrom, settleFrom } from "./workflow-advance.js";
 import { applyRunFailPolicy } from "./workflow-steps.js";
 import { now } from "./util.js";
 import { completedInlineVerificationSteps } from "./review-execution.js";
+import { withReviewAuthority, ReviewSuperseded, type ReviewAuthority } from "./review-ownership.js";
+import { evidenceState, restartRegressionEvidence } from "./regression-evidence-lifecycle.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -140,7 +142,7 @@ export async function reviewRoundsOf(target: TaskRow): Promise<number> {
 export async function startVerifyRound(
   targetId: string,
   override: ReviewDispatchInput = {},
-  opts: { holdTurn?: boolean } = {},
+  opts: { holdTurn?: boolean; reviewAuthority?: ReviewAuthority } = {},
 ): Promise<{ round: number }> {
   // HTTP 手动派验证与自由派审同级的原子互斥：普通回合已 claim、status 尚未落 running
   // 时，只看 DB status 会先永久写下 verifyRound/stage=verifying/时间线，再把验证消息排
@@ -187,19 +189,24 @@ export async function startVerifyRound(
   // 协议/证据目录准备（可失败：目录被 symlink 换掉等）必须在**任何状态提交之前**——
   // 先写 verifyRound/stage=verifying 再抛错会留下「已有一轮验证正在进行」的半轮状态，
   // 任务永久无法再派验证（审查实测复现）。
+  const directory = reviewRoundDir(targetId, round);
+  await evidenceState(targetId, directory);
+  await withReviewAuthority(opts.reviewAuthority, (transaction) => restartRegressionEvidence(targetId, directory, transaction));
   const protocol = await verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station);
 
-  await db
-    .update(tasks)
-    .set({
-      verifyRound: round,
-      verifyCompletedSteps: JSON.stringify([...completedInlineVerificationSteps(target)]),
-      reviewStep: station,
-      verifyStationRounds: target.reviewStep === station ? (target.verifyStationRounds ?? 0) : 0,
-      updatedAt: now(),
-    })
-    .where(eq(tasks.id, targetId));
-  await setTaskStage(targetId, "verifying");
+  await withReviewAuthority(opts.reviewAuthority, async (transaction) => {
+    await transaction.update(tasks)
+      .set({
+        verifyRound: round,
+        verifyCompletedSteps: JSON.stringify([...completedInlineVerificationSteps(target)]),
+        reviewStep: station,
+        verifyStationRounds: target.reviewStep === station ? (target.verifyStationRounds ?? 0) : 0,
+        updatedAt: now(),
+      })
+      .where(eq(tasks.id, targetId));
+    if (opts.reviewAuthority) await transaction.update(tasks).set({ stage: "verifying", updatedAt: now() }).where(eq(tasks.id, targetId));
+  });
+  if (!opts.reviewAuthority) await setTaskStage(targetId, "verifying");
   await appendTaskTimeline(targetId, `第 ${round} 轮验证开始：就在这个任务的工作目录里跑，不另起审查任务。`);
   bus.publish({ type: "task.review", taskId: targetId });
 
@@ -209,12 +216,31 @@ export async function startVerifyRound(
     {
       system: "run",
       sideTurn: true,
+      ...(opts.reviewAuthority ? { wakeGuard: async () => {
+        try { await withReviewAuthority(opts.reviewAuthority, async () => {}); return null; }
+        catch (error) { return String(error); }
+      } } : {}),
       agent: execution.agentType,
       executorId: execution.executorId,
       model: execution.model,
       reasoningEffort: execution.reasoningEffort,
     },
     async (error) => {
+      if (opts.reviewAuthority) {
+        try {
+          await withReviewAuthority(opts.reviewAuthority, async (transaction) => {
+            const current = (await transaction.select().from(tasks).where(eq(tasks.id, targetId)))[0]!;
+            if (current.verifyRound !== round) return;
+            await transaction.update(tasks).set({ verifyRound: null, reviewStep: target.reviewStep,
+              verifyCompletedSteps: target.verifyCompletedSteps, verifyStationRounds: target.verifyStationRounds,
+              stage: current.stage === "verifying" ? target.stage : current.stage, updatedAt: now(),
+            }).where(eq(tasks.id, targetId));
+          });
+        } catch (failure) { if (failure instanceof ReviewSuperseded) return; throw failure; }
+        await appendTaskTimeline(targetId, `第 ${round} 轮验证启动失败：${error}`);
+        bus.publish({ type: "task.review", taskId: targetId });
+        return;
+      }
       // 对称回滚：验证没起来，这一轮写下的**全部**状态恢复原值——只清 verifyRound 会
       // 留下 stage=verifying（taskDisplayStatus 里 stage 优先），UI 永久显示「验证中」
       // 而轮数为空（审查实测：释放点被竞争 waiter 抢先后永久卡住）。
@@ -246,7 +272,16 @@ export async function startVerifyRound(
 // **只动 stage 不动 status** —— status 是调度用的（改成 awaiting_review 会顺带停住这个
 // 任务所在的队列），而这条线只描述这一个任务干完之后怎么走，不该外溢到队列/分组。
 // 显示上也不需要动 status：taskDisplayStatus 里 stage 优先，列表那一格就是「待验收」。
-export async function enterHumanGate(taskId: string): Promise<void> {
+export async function enterHumanGate(taskId: string, authority?: ReviewAuthority): Promise<void> {
+  if (authority) {
+    const updatedAt = now();
+    await withReviewAuthority(authority, async (transaction) => {
+      await transaction.update(tasks).set({ stage: "awaiting_acceptance", updatedAt }).where(eq(tasks.id, taskId));
+    });
+    bus.publish({ type: "task.stage", taskId, stage: "awaiting_acceptance", updatedAt });
+    await appendTaskTimeline(taskId, "这条线走到「等我点头」，停在待验收等你决定。");
+    return;
+  }
   const row = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!row || row.stage === "merged" || row.stage === "accepted") return;
   // stage 早就是 awaiting_acceptance 也照样往下走。那个 stage 可能是**别处写的**——agent

@@ -239,9 +239,17 @@ Restart 不是盲目的 kill + start。它会先问服务端「重启会真正�
 |---|---|
 | 无任务 / 全部可接管 | 直接重启，全程无感 |
 | 有会被打断的任务 | **拒绝重启**，列出受影响任务 |
-| `WAIT=1` | 等所有任务跑完再重启 |
-| `FORCE=1` | 强制重启，被打断的标 failed |
+| `node scripts/restart.mjs --wait` | 等会被打断的任务排空再重启，可接管任务不阻塞 |
+| `node scripts/restart.mjs --force` | 强制重启，被打断的标 failed；也会强制刷新 MCP |
 | MCP 通道被占 | 默认跳过 MCP 刷新，不掐断交卷 |
+
+以上 Node 命令在 PowerShell、cmd、Bash 和 zsh 中通用；`node scripts/restart.mjs --help` 查看完整选项。
+使用 npm 启动时，Windows 用 `npm.cmd run restart -- --force`，macOS/Linux 用 `npm run restart -- --force`（其它选项同理）。
+PowerShell 可能将裸 `npm` 解析为会吞掉 `--` 的 `npm.ps1`，带选项时可显式用 `npm.cmd` 或上面的 Node 命令。
+`--skip-mcp` 跳过 MCP 刷新，`--force-mcp` 强制刷新（会掐断在跑的 agent 的 MCP 通道）。
+`--force --skip-mcp` 只强制重启服务端，不刷新 MCP。
+仍兼容原环境变量；PowerShell 不支持 `FORCE=1 npm run restart`，旧版本可用
+`$env:FORCE='1'; npm run restart`（该变量会保留在当前 PowerShell 会话，之后可用 `Remove-Item Env:FORCE` 清除）。
 
 前端修改后仅需 `npm run build`，server 从磁盘读取 `web/dist`，**无需重启**。
 
@@ -298,6 +306,13 @@ MCP 未接入，agent 无法调用 `complete_task`。运行 `claude mcp list` �
 1. **换非 root 用户跑 ash**（推荐）
 2. 启动环境设 `IS_SANDBOX=1`（代价：agent 以 root 无确认地操作整台机器）
 3. 在 bubblewrap 沙箱中跑 ash
+
+</details>
+
+<details>
+<summary>Windows 常用命令提示无法识别项目里的 kb.cmd 等脚本</summary>
+
+常用命令使用 PowerShell，不会自动搜索当前目录。项目目录里的脚本写为 `.\kb.cmd restart`；路径带空格时用 `& '.\my tool.cmd' restart`。启动和重启命令分别保存，两个字段都要检查。环境变量用 `$env:NAME='value'`，而不是 POSIX 的 `export NAME=value`。
 
 </details>
 

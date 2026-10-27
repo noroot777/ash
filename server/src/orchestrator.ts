@@ -13,6 +13,12 @@ import type { ContinueTaskOptions } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceRole } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
+import { assertReviewTurnStart, beginReviewContinuation, commitReviewTurnDelivery } from "./review-continuation.js";
+import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
+import { recordReviewStartNotLaunched } from "./guarded-turn-start.js";
+import { ReviewSuperseded } from "./review-ownership.js";
+import { withdrawReviewStart, type ReviewStartReceipt } from "./review-start-withdrawal.js";
+import { retireHistoricalReview } from "./review-retirement.js";
 import { consumeSingleRun } from "./single-run.js";
 import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
 import type { Workspace } from "./git.js";
@@ -35,6 +41,7 @@ import { recordTurnStart } from "./turn-output.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { freeReviewReminder } from "./free-workflow.js";
+import { NO_REMINDER, assembleTurnPrompt } from "./turn-prompt.js";
 import { withSkillInvocation } from "./skills.js";
 import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
@@ -42,7 +49,7 @@ import { cliGoalSessionCandidates } from "./task-cli-goal-scopes.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
-import { enterLeadDelivery, enterTurn } from "./turn-entry-guard.js";
+import { enterLeadDelivery, enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
 import { isDiagnosticSession } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
@@ -103,8 +110,14 @@ export async function continueTask(
   // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下
   // 上下文」既会被打成 failed,也会顺手把已验收的牌子摘掉——旁路回合不拍工作目录快照,
   // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
-  const { head, nativeCommand, slash, goalExecution, options } = await prepareContinuationEntry(taskId, userText, opts);
+  const { head, nativeCommand, slash, goalExecution, options, retired } = await withTurnPreflight(taskId, opts.turnHeld, async () => {
+    const prepared = await prepareContinuationEntry(taskId, userText, opts);
+    const retired = prepared.head?.mode === "single" && await retireHistoricalReview(prepared.head,
+      prepared.options.turnSource, prepared.options.reviewDelivery, prepared.options.turnHeld);
+    return { ...prepared, retired };
+  });
   opts = options;
+  if (retired) return false;
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
   // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的
@@ -163,9 +176,12 @@ export async function continueTask(
   let baseFallbackTold = false;
   // FrozenTurn(spawn 前被冻结闸撤回)= 输入没送出去,函数尾据此返回 false。
   let frozenBeforeSpawn = false;
+  let reviewStart: ReviewStartReceipt | undefined;
+  let checkingReviewStart = false;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
+    if (task.waitOwnership?.start?.phase === "uncertain") return false;
     if (task.mode !== "single") throw new Error("reply is for single tasks");
     const startStatus = taskStartStatus(task);
     goalStartFrom = goalExecution && !["running", "queued"].includes(startStatus) ? startStatus : null;
@@ -219,11 +235,14 @@ export async function continueTask(
     // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
     const turnToken = id();
     const directionToken = id();
-    await db
-      .update(tasks)
-      // 方向身份那几列同 task-run.ts:走 `turnDirectionStart`,世代跟着这一次起跑一起前进。
-      .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
-      .where(eq(tasks.id, taskId));
+    reviewStart = await db.transaction(async (transaction) => {
+      const reviewStart = await beginReviewContinuation(transaction, task, opts.turnSource ?? { role: "single" }, turnToken, directionToken, opts.reviewDelivery);
+      await transaction.update(tasks)
+        // 方向身份那几列同 task-run.ts:走 `turnDirectionStart`,世代跟着这一次起跑一起前进。
+        .set({ followUpFrom, nativeTurn: !!nativeCommand, goalTurn: goalExecution, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
+        .where(eq(tasks.id, taskId));
+      return reviewStart;
+    }, { behavior: "immediate" });
     // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
     // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
     bindTurnToken(taskId, turnToken);
@@ -346,14 +365,14 @@ export async function continueTask(
     // 崩在中间快照就永久丢了。纯询问的挂回同样吃这份基线(turn-baseline.ts)。
     // 只认真人消息(!opts.system),旁路回合(sideTurn:就地验证/审查轮)也不摘——
     // 那些回合的约定就是「维持原状」,摘了牌又不落基线,挂回机制够不着。
-    const reopened = opts.system || sideTurn ? null : await peekAcceptedStage(taskId);
+    const reopened = opts.system || sideTurn || reviewStart?.acceptedRepair ? null : await peekAcceptedStage(taskId);
     // 起跑前给工作目录拍一张照，**并当场把上一版的验证/验收记录清掉**：新指令一到，
     // 上一版的成绩就作废，线退回「让 AI 干活」那一站（不然这几十分钟里线路图还写着
     // 「已过关口、停在验证站」，那两颗会真合并的按钮此刻就能点）。结算时再拍一张比对，
     // 这一轮要是一个字节都没改，刚才清掉的原样放回 —— 纯询问不该重置任何东西。
     // 只给真人消息拍 —— 系统续跑、队列推进、验证打回后叫 agent 修，那些轮次改代码是
     // 本分，清账反而打断正在跑的流程。详见 turn-baseline.ts。
-    if (!opts.system && !sideTurn) {
+    if (!opts.system && !sideTurn && !reviewStart?.acceptedRepair) {
       const recorded = await recordTurnBaseline(taskId, cwd, freshWorkspace, reopened);
       // 基线内的清账已把 stage 摘下并广播；这里收掉同生命周期的合并快照列——且**只在
       // 基线确实落盘后**才清（失败关闭：快照没持久化就不动验收事实）。
@@ -373,13 +392,17 @@ export async function continueTask(
     const freeWorkflow = task.workflowMode === "free";
     // 每回合都重贴一遍「你现在在干什么」：验证轮可能中途提问、被打断再续跑，
     // 那些回合都不带最初那段协议，只有从任务状态派生的提醒能跟到底。
+    // 照常算（这三条提醒顺带刷新本轮的回归证据清单，少刷一次就是清单停在上一轮）；
+    // 正文已经逐字讲过的那几段**静态契约**由 `assembleTurnPrompt` 摘掉，本轮的证据状态、
+    // 清单入口和正文没覆盖到的读法一律留着。去重放在拼装那一层，不放在这里：放这里就成了
+    // 每个投递点各判一次，漏判一次就是一条双份消息（或者少一条本轮才有的警告）。
     const reviewReminder = reviewTask
       ? await reviewReminderFor(task)
       : task.verifyRound
         ? await verifyReminderFor(task.id, task.verifyRound)
         : freeReviewTurn
           ? await freeReviewReminder(task.id)
-          : "";
+          : NO_REMINDER;
     // 「本任务里还有别人」的告知。触发条件是**有新面孔**（上一轮跑完之后才进来的
     // 同伴），不是 invited —— 挂在 invited 上恰好漏掉最需要它的那个：任务的原生
     // agent 第一轮走 runTask 直接起跑、从没被「召唤」过，于是后来 @ 进来的同伴它
@@ -402,17 +425,19 @@ export async function continueTask(
     const promptBody = nativeCommand
       ? promptedUserTurnText
       : planning ? `${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`
-      : (invited ? COLLAB_INVITE : "") +
-        invitedTaskBrief(task.body, invited, verifying) +
-        (handoffNotice ? `${handoffNotice}\n\n` : "") +
-        peerNotice +
-        promptedUserTurnText +
-        (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
-        (followUpFrom
+      : assembleTurnPrompt({
+        invite: invited ? COLLAB_INVITE : "",
+        brief: invitedTaskBrief(task.body, invited, verifying),
+        handoffNotice,
+        peerNotice,
+        userText: promptedUserTurnText,
+        workspaceReset: workspaceReset ? WORKSPACE_RESET(cwd) : "",
+        completion: followUpFrom
           ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
-          : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
-        DIRECTION_PROTOCOL(directionToken) +
-        (reviewReminder ? `\n${reviewReminder}` : "");
+          : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow),
+        direction: DIRECTION_PROTOCOL(directionToken),
+        reviewReminder,
+      });
     const promptLevel = planning || resuming ? "reminder" as const : "full" as const;
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
@@ -429,6 +454,10 @@ export async function continueTask(
     // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
     const browserGrant = await browserGrantForProject(task.projectId);
+    checkingReviewStart = true;
+    await assertReviewTurnStart(taskId, turnToken, directionToken, opts.reviewDelivery,
+      !!reviewStart || (!nativeCommand && (!!task.verifyRound || freeReviewTurn || !!task.reviewOf)));
+    checkingReviewStart = false;
     // ↓ 这里往下到 `trackRun` 全同步(撤回那条岔路除外,它不起进程):暂停请求要么在
     // takeFreeze 被消费、要么之后才到 —— 那时已有 handle 可杀。
     const freeze = takeFreeze(taskId, frozen);
@@ -461,87 +490,92 @@ export async function continueTask(
     trackRun(taskId, handle);
     // 前言已经随 prompt 交到 agent 手上，这一刻起就该划掉（放在 spawn 之后：起跑前
     // 还有 takeFreeze 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
-    if (handoffNotice) await clearHandoffNotice(taskId);
 
     // Reuse the agent's session row when resuming; otherwise open a fresh line,
     // inheriting the task's worktree/branch from its first session.
     let cliSessionId = resuming ? prev!.cliSessionId! : handle.sessionId;
-    if (resuming) {
-      // New turn on the same session row: mark it live (clear the prior turn's
-      // end) and stamp this turn's start, so execution-time accounting and the
-      // live 用时 both track the turn actually running now. commandLine must also
-      // reflect this invocation because task-level model/effort can change between turns.
-      await db
-        .update(sessions)
-        .set({
-          // 回合三件套（起点 / 计数 / 清掉上一轮的收尾）一起来自 helper——见
-          // session-turns.ts 顶部：八个起跑入口手写就一定会漏掉其中一处。
-          ...resumedTurnFields(turnStart),
-          exitStatus: null,
-          commandLine: handle.commandLine,
+    const runningHandle = handle;
+    const persistRunner = async (store: Pick<typeof db, "insert" | "update">) => {
+      if (resuming) {
+        // New turn on the same session row: mark it live (clear the prior turn's
+        // end) and stamp this turn's start, so execution-time accounting and the
+        // live 用时 both track the turn actually running now. commandLine must also
+        // reflect this invocation because task-level model/effort can change between turns.
+        await store
+          .update(sessions)
+          .set({
+            // 回合三件套（起点 / 计数 / 清掉上一轮的收尾）一起来自 helper——见
+            // session-turns.ts 顶部：八个起跑入口手写就一定会漏掉其中一处。
+            ...resumedTurnFields(turnStart),
+            exitStatus: null,
+            commandLine: runningHandle.commandLine,
+            executor: ex.label,
+            // 这一轮跑在谁名下 —— 跨人续聊会换人(runOwner 上面刚算过),而 CLI 的会话
+            // 文件跟着这个人的配置目录走。不刷新,接力就会去上一个人的目录里找。
+            runOwnerUserId: runOwner ?? null,
+            // 目录本身跟着一起刷新。走到这一支说明它与记下来的那个相同(不同的话
+            // resumableHere 早把这条会话排除了),刷新只是不让这一列停在老值上。
+            cliConfigDir: await cliConfigDirColumn(runOwner, agent),
+            // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
+            // 思考强度都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
+            executorId: profileId,
+            executorFingerprint: profileFingerprint,
+            turnModel: ex.model ?? null,
+            turnReasoningEffort: ex.reasoningEffort ?? null,
+            sideTurn,
+            // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
+            // 恢复不了的恢复命令,见 ResumeFields。
+            ...ex.resumeFields(cwd, cliSessionId),
+            // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
+            // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
+            agentPid: runningHandle.detached?.pid ?? null,
+            agentStartedAt: runningHandle.detached ? inspectProcess(runningHandle.detached.pid)?.startedAt ?? null : null,
+            agentOutPath: runningHandle.detached ? detach.out : null,
+            agentErrPath: runningHandle.detached ? detach.err : null,
+            agentRcPath: runningHandle.detached ? detach.rc : null,
+            agentOffset: 0,
+            // 跟 pid 同组刷新:沿用上一轮的记号会让清理去找上一轮那批后代。
+            agentUnitToken: runningHandle.detached?.unitToken ?? null,
+          })
+          .where(eq(sessions.id, sessId));
+      } else {
+        const base = all[0];
+        await store.insert(sessions).values({
+          id: sessId,
+          taskId,
+          role: sessionRole,
+          agentType: agent,
           executor: ex.label,
-          // 这一轮跑在谁名下 —— 跨人续聊会换人(runOwner 上面刚算过),而 CLI 的会话
-          // 文件跟着这个人的配置目录走。不刷新,接力就会去上一个人的目录里找。
           runOwnerUserId: runOwner ?? null,
-          // 目录本身跟着一起刷新。走到这一支说明它与记下来的那个相同(不同的话
-          // resumableHere 早把这条会话排除了),刷新只是不让这一列停在老值上。
           cliConfigDir: await cliConfigDirColumn(runOwner, agent),
-          // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
-          // 思考强度都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
           executorId: profileId,
           executorFingerprint: profileFingerprint,
           turnModel: ex.model ?? null,
           turnReasoningEffort: ex.reasoningEffort ?? null,
           sideTurn,
-          // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
-          // 恢复不了的恢复命令,见 ResumeFields。
+          worktreePath: base?.worktreePath ?? null,
+          branch: base?.branch ?? null,
+          cwd,
+          cliSessionId,
           ...ex.resumeFields(cwd, cliSessionId),
-          // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
-          // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
-          agentPid: handle.detached?.pid ?? null,
-          agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
-          agentOutPath: handle.detached ? detach.out : null,
-          agentErrPath: handle.detached ? detach.err : null,
-          agentRcPath: handle.detached ? detach.rc : null,
+          commandLine: runningHandle.commandLine,
+          startedAt: turnStart,
+          ...freshTurnFields(turnStart),
+          activeMs: 0,
+          exitStatus: null,
+          agentPid: runningHandle.detached?.pid ?? null,
+          agentStartedAt: runningHandle.detached ? inspectProcess(runningHandle.detached.pid)?.startedAt ?? null : null,
+          agentOutPath: runningHandle.detached ? detach.out : null,
+          agentErrPath: runningHandle.detached ? detach.err : null,
+          agentRcPath: runningHandle.detached ? detach.rc : null,
           agentOffset: 0,
-          // 跟 pid 同组刷新:沿用上一轮的记号会让清理去找上一轮那批后代。
-          agentUnitToken: handle.detached?.unitToken ?? null,
-        })
-        .where(eq(sessions.id, sessId));
-    } else {
-      const base = all[0];
-      await db.insert(sessions).values({
-        id: sessId,
-        taskId,
-        role: sessionRole,
-        agentType: agent,
-        executor: ex.label,
-        runOwnerUserId: runOwner ?? null,
-        cliConfigDir: await cliConfigDirColumn(runOwner, agent),
-        executorId: profileId,
-        executorFingerprint: profileFingerprint,
-        turnModel: ex.model ?? null,
-        turnReasoningEffort: ex.reasoningEffort ?? null,
-        sideTurn,
-        worktreePath: base?.worktreePath ?? null,
-        branch: base?.branch ?? null,
-        cwd,
-        cliSessionId,
-        ...ex.resumeFields(cwd, cliSessionId),
-        commandLine: handle.commandLine,
-        startedAt: turnStart,
-        ...freshTurnFields(turnStart),
-        activeMs: 0,
-        exitStatus: null,
-        agentPid: handle.detached?.pid ?? null,
-        agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
-        agentOutPath: handle.detached ? detach.out : null,
-        agentErrPath: handle.detached ? detach.err : null,
-        agentRcPath: handle.detached ? detach.rc : null,
-        agentOffset: 0,
-        agentUnitToken: handle.detached?.unitToken ?? null,
-      });
-    }
+          agentUnitToken: runningHandle.detached?.unitToken ?? null,
+        });
+      }
+    };
+    if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner);
+    else await persistRunner(db);
+    if (handoffNotice) await clearHandoffNotice(taskId);
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
     await openTurn({ sessionId: sessId, taskId, cwd, startedAt: turnStart });
 
@@ -606,6 +640,10 @@ export async function continueTask(
   } catch (err) {
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
+    if (err instanceof ReviewSuperseded) {
+      await withdrawReviewStart(taskId, reviewStart, priorStatus);
+      return false;
+    }
     const steered = await takeSteered(taskId);
     const stopped = takeStopped(taskId);
     if (steered && !stopped) return true;
@@ -614,8 +652,13 @@ export async function continueTask(
     // 暂停撤回一次、指定继续内容永久丢失,恢复分组后只剩通用「继续」(第 7 轮审查)。
     // 状态结算(落回 paused)仍由失败恢复完成,只是返回值改说实话。
     frozenBeforeSpawn = err instanceof FrozenTurn;
+    if (!handle && (frozenBeforeSpawn || checkingReviewStart)) {
+      await recordReviewStartNotLaunched(taskId, reviewStart);
+      if (await restoreUndeliveredReviewStart(taskId, reviewStart, true)) return false;
+    }
     // 失败交代 + 基线对账 + 状态恢复,整段住在 turn-start-failure.ts(顺序讲究见其顶部)。
     await recoverFailedTurnStart({
+      startReceipt: reviewStart,
       taskId,
       message: String(err instanceof Error ? err.message : err),
       sessionRole, agentType,

@@ -3,7 +3,9 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { stopPreviewAtAccept } from "./preview.js";
-import { setTaskStage } from "./task-stage.js";
+import { commitAcceptanceStage } from "./review-acceptance.js";
+import type { ReviewAuthority } from "./review-ownership.js";
+import { bus } from "./bus.js";
 import { hasAcceptedTail } from "./task-accept-tail.js";
 import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage, type SharedWorkerAcceptance } from "./task-accept-shared-workers.js";
 import type { AcceptFailure } from "./task-accept-guard.js";
@@ -11,7 +13,6 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { now } from "./util.js";
 import type { AcceptGateSnapshot } from "./accept-gate.js";
-import { bus } from "./bus.js";
 
 type Finalization = { sharedWorkers: SharedWorkerAcceptance | null; failure?: never }
   | { failure: AcceptFailure; sharedWorkers?: never };
@@ -21,6 +22,7 @@ export async function finalizeAcceptance(
   message: string,
   removesWorktree: boolean,
   completed: Pick<AcceptFailure, "completedMerge" | "completedTag"> = {},
+  authority?: ReviewAuthority,
   basis: AcceptGateSnapshot | null = null,
 ): Promise<Finalization> {
   // 预览回收可能因记录权限失败，放在 accepted 落章前使重试仍能到达收尾。
@@ -35,17 +37,14 @@ export async function finalizeAcceptance(
   if (!preview.stopped) {
     await appendTaskTimeline(task.id, `本次验收保留工作区，继续完成验收。${preview.message}停止记录已保留。`);
   }
-  if (basis) {
-    const updatedAt = now();
-    await db.update(tasks).set({ ...basis, stage: "accepted", updatedAt }).where(eq(tasks.id, task.id));
-    bus.publish({ type: "task.stage", taskId: task.id, stage: "accepted", updatedAt });
-    await appendTaskTimeline(task.id, "验收阶段更新：已验收（accepted）");
-  } else await setTaskStage(task.id, "accepted");
+  await commitAcceptanceStage(task.id, "accepted", basis ?? {}, authority);
+  bus.publish({ type: "task.stage", taskId: task.id, stage: "accepted", updatedAt: now() });
+  await appendTaskTimeline(task.id, "验收阶段更新：已验收（accepted）");
   bus.publish({ type: "task.acceptGate", taskId: task.id });
   // 尾段 durable 进度：stage=accepted 先落、尾段后跑，进程死在中间的话重试会走
   // already_accepted 快路——不留痕迹，发布步骤就被静默永久漏掉。置位在这里、清零在
   // 尾段真正跑完之后，重试发现它还挂着就补跑。
-  if (hasAcceptedTail(task)) {
+  if (!authority?.finalization && hasAcceptedTail(task)) {
     await db.update(tasks).set({ acceptedTailPending: true, acceptedTailDone: "[]", updatedAt: now() }).where(eq(tasks.id, task.id));
   }
   // 自由工作流：验收即终局，挂着的复审预约一并注销 —— 否则它会在任务日后被唤醒的

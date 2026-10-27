@@ -54,7 +54,8 @@ type GateRow = typeof acceptGateRuns.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
 
 /** 用户在确认框里做的那几个选择：门禁绿了之后要**原样**替他接着做完。 */
-export type AcceptGateChoices = { by: AcceptBy; commit?: boolean; confirmUnverified?: boolean };
+export type AcceptGateChoices = { by: AcceptBy; commit?: boolean; confirmUnverified?: boolean;
+  reviewAuthority?: import("./review-ownership.js").ReviewAuthority };
 
 /** 这一按对门禁的额外指令。undefined = 照常（有就复用、没有就跑）。 */
 export type AcceptGateIntent = "skip" | "rerun";
@@ -190,9 +191,6 @@ export async function acceptGateCheck(
   }
 
   const previous = await latestRun(task.id);
-  // 同一棵树上的结论直接作数：通过就放行，没通过就把那次的红原样摆回去（不自动重跑——
-  // 一棵没变过的树多半还是同样的红，而用户点这一下的意思是「合」，不是「再烧十几分钟」）。
-  //
   const sameTree = !!previous && gateSourceMatches(previous, source)
     && previous.command === command && opts.intent !== "rerun";
   if (sameTree && previous!.status === "passed") {
@@ -204,17 +202,6 @@ export async function acceptGateCheck(
     recordBasis("passed", previous!.id);
     return null;
   }
-  // interrupted / canceled 不走这条:那两种**根本没有结论**(ash 重启打断、用户自己收掉),
-  // 没有红可以摆给用户看。这一按的意思就是「现在跑」,所以落到下面重新起一次。
-  if (sameTree && previous!.status === "failed") {
-    return {
-      accepted: false, httpStatus: 409, taskId: task.id, reason: "accept_gate_failed",
-      error: `${summarizeAcceptGate(gateView(previous!))}。代码自那次之后一个字没改，所以没有重跑，也没有合并。`
-        + `出路：改完再点验收（会自动重跑）、在验收台上点「重跑一次」、或者明确选择这次跳过门禁。`,
-      status: task.status, gate: gateView(previous!),
-    };
-  }
-
   const targetBranch = task.useWorktree ? await plannedMergeTarget(task, project.repoPath) : null;
   const targetCommit = targetBranch ? await commitAt(project.repoPath, targetBranch) : null;
   pendingStarts.set(task.id, {
@@ -307,6 +294,10 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       await cleanupGateSnapshot(taskId, runId);
       return prepared ? gateView(prepared) : null;
     }
+    if (plan.choices.reviewAuthority) {
+      const { withReviewAuthority } = await import("./review-ownership.js");
+      await withReviewAuthority(plan.choices.reviewAuthority, async () => {});
+    }
     started = await spawnAcceptGate({
       command: plan.command,
       cwd: snapshotCwd,
@@ -338,7 +329,10 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
 
   try {
     await db.update(acceptGateRuns).set({ pid: started.pid, pidStartedAt: started.startedAt }).where(eq(acceptGateRuns.id, runId));
-    await started.authorize();
+    if (plan.choices.reviewAuthority) {
+      const { withReviewAuthority } = await import("./review-ownership.js");
+      await withReviewAuthority(plan.choices.reviewAuthority, async () => { await started.authorize(); });
+    } else await started.authorize();
   } catch (error) {
     appendGateLog(logPath, `\n[ash] 启动握手失败，命令未获放行：${String(error)}\n`);
     await settleGate(runId, { status: "failed", exitCode: null, failure: "spawn_failed" });
@@ -447,6 +441,7 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     commit: choices.commit,
     confirmUnverified: choices.confirmUnverified,
     acceptGatePassedRunId: row.id,
+    reviewAuthority: choices.reviewAuthority,
   }).catch((error) => ({ accepted: false as const, error: error instanceof Error ? error.message : String(error) }));
   if (!result.accepted) {
     const reason = "reason" in result ? result.reason : null;
@@ -472,18 +467,38 @@ async function continueAcceptance(row: GateRow): Promise<void> {
 function parseChoices(raw: string | null): AcceptGateChoices {
   try {
     const parsed = JSON.parse(raw ?? "{}") as AcceptGateChoices;
-    return { by: parsed.by === "workflow" ? "workflow" : "human", commit: parsed.commit, confirmUnverified: parsed.confirmUnverified };
+    return { by: parsed.by === "workflow" ? "workflow" : "human", commit: parsed.commit,
+      confirmUnverified: parsed.confirmUnverified, reviewAuthority: parsed.reviewAuthority };
   } catch { return { by: "human" }; }
 }
 
 async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = false): Promise<void> {
+  const authority = !again ? parseChoices(row.acceptOptions).reviewAuthority : undefined;
   const task = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
   const project = (await db.select().from(projects).where(eq(projects.id, row.projectId))).at(0);
   const sourceCwd = task && project ? await existingTaskWorkspacePath(task, project.repoPath) ?? project.repoPath : row.cwd;
   const prompt = gateFailurePrompt({
     command: row.command, summary: summarizeAcceptGate(view), logPath: row.logPath,
+    failure: view.failure,
     tail: view.logTail, cwd: row.cwd, sourceCwd, executionNotice: view.executionNotice,
   });
+  if (authority) {
+    try {
+      const { enqueueFinalizationRepair } = await import("./regression-finalization.js");
+      await enqueueFinalizationRepair(authority.directory, authority.generation, row.taskId, prompt, authority.target!,
+        async (transaction) => {
+          await transaction.update(acceptGateRuns).set({ handoffAt: now(), handoffError: null }).where(eq(acceptGateRuns.id, row.id));
+        }, `gate-${row.id}`);
+      bus.publish({ type: "task.acceptGate", taskId: row.taskId });
+      await appendTaskTimeline(row.taskId, `门禁交接：修复输入已持久入队，按原审查权限等待投递（日志 ${row.logPath}）。`);
+      await (await import("./pending-messages.js")).deliverPendingMessages(row.taskId);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await markHandoff(row.id, { at: now(), error: reason });
+      await appendTaskTimeline(row.taskId, `门禁交接失败：${reason}。日志在 ${row.logPath}，可核对后手动再交。`);
+    }
+    return;
+  }
   // 先把「这一次交接发起了」落盘再投递：投递是异步的，中间用户刷新页面的话，不落盘
   // 那张卡只能说「不知道」。失败由下面的 onError 补写原因（两件事都写同一行）。
   await markHandoff(row.id, { at: now(), error: null });

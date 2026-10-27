@@ -8,7 +8,7 @@ import { makeStep } from "@ash/shared/workflow";
 import { db, inTurnCaller, makeTask, runs, schema, startMonitor, tasks, teardown } from "./monitors-fixture.js";
 import { setupRegression } from "./regression-fixture.js";
 
-const { refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
+const { evidenceState, refreshRegressionEvidence } = await import("../src/regression-evidence-lifecycle.js");
 const { mountTaskStageRoutes } = await import("../src/task-stage.js");
 const { handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
 const { handleTaskSettlement } = await import("../src/review.js");
@@ -35,9 +35,10 @@ try {
     runs.releaseTurn(taskId);
     assert(runs.claimTurn(taskId, "reviewer", { run: runId, round: 1 }));
     const directory = freeReviewEvidenceDir(taskId, runId, 1);
+    await evidenceState(taskId, directory, (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
     mkdirSync(directory, { recursive: true });
     const initial = await refreshRegressionEvidence(taskId, directory, targetKind === "accepted_merge");
-    assert.equal(initial.revoked, false);
+    assert.match(initial.reference, /回归测试统一在验收时|合并结果审查没有执行者登记清单可核对/, "清单说明带新口径");
     independentlyVerify();
     writeFileSync(join(directory, "report.md"), "独立检查当前内容通过，无任何历史回归引用。\n");
     assert.equal((await stage()).status, 200);
@@ -46,13 +47,12 @@ try {
     assert.throws(() => writeFileSync(join(directory, "write-probe"), "blocked"),
       (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES", "真实文件系统权限失败，而非伪造异常");
     const refresh = await refreshRegressionEvidence(taskId, directory, targetKind === "accepted_merge");
-    assert.equal(refresh.revoked, false, "清单写入失败不是撤销旧引用");
     const state = (await db.select().from(schema.regressionEvidence).where(eq(schema.regressionEvidence.directory, directory)))[0]!;
     if (targetKind === "workspace") {
       assert.match(refresh.reference, /EACCES/);
       assert.match(state.unavailable!, /EACCES/);
     } else {
-      assert.match(refresh.reference, /合并结果审查不得复用/);
+      assert.match(refresh.reference, /合并结果审查没有执行者登记清单可核对/);
       assert.equal(existsSync(join(directory, "regression-evidence.json")), false, "合并结果无需写空诊断清单");
     }
     assert.equal((await stage()).status, 200, "真实独立验证不被诊断清单写入故障拒绝");
@@ -69,6 +69,7 @@ try {
   await db.update(tasks).set({ workflowMode: "preset", verifyRound: 1, stage: "verifying", workflowAt: "verify",
     workflow: JSON.stringify({ workspace: "shared", steps: [makeStep("run", "run"), makeStep("verify", "verify")] }),
   }).where(eq(tasks.id, taskId));
+  await evidenceState(taskId, evidenceDir, (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
   await refreshRegressionEvidence(taskId, evidenceDir);
   independentlyVerify();
   writeFileSync(join(evidenceDir, "report.md"), "独立验证通过。\n");

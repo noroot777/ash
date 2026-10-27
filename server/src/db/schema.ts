@@ -2,6 +2,7 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-or
 import type { ProjectPreviewConfig } from "@ash/shared/preview";
 import type { ProjectCommandsConfig } from "@ash/shared/project-commands";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
+import type { TaskWaitOwnership } from "./schema-task-wait.js";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -231,6 +232,7 @@ export const tasks = sqliteTable("tasks", {
    * 复活（见 task-resume-prompt.ts 的 `ResumePromptReceipt`）。
    */
   resumePromptGeneration: integer("resume_prompt_generation").notNull().default(0),
+  waitOwnership: text("wait_ownership", { mode: "json" }).$type<TaskWaitOwnership>(),
   // 提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
   // 等 answer_question 清空并带答复 resume（见 scheduler.pickNextLaunchable 的挡板）。
   question: text("question"),

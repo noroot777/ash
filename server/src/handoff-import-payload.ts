@@ -6,6 +6,7 @@
 // ref 名、相对路径、解码后的体积各有一道闸,任何一条不过就跳过并留注记,而不是把它
 // 写到本机文件系统上某个算出来的位置。
 import { mkdirSync, rmSync } from "node:fs";
+import { validateMessageOrigin } from "./handoff-messages.js";
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { claudeProjectDir } from "./handoff-collect.js";
@@ -24,6 +25,7 @@ import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome } from "./executors/codex-rollout.js";
 import { assertWorktreeHeadCanAdvance, untrackedOverwriteConflicts } from "./handoff-worktree-safety.js";
 import { execFileText as exec } from "./exec.js";
+import { validateWaitOrigins } from "./handoff-wait.js";
 import { validateGatePayload } from "./handoff-accept-gate.js";
 
 // 导入只接受**已结算**的状态;running/queued 混进来(理论上不该有)一律落 canceled,
@@ -64,6 +66,7 @@ export function validate(input: unknown): HandoffManifest {
   if (!t || !isStr(t.id) || !/^[A-Za-z0-9_-]{6,64}$/.test(t.id)) throw new HandoffError("task.id 非法");
   validateGatePayload(m);
   if (!isStr(t.title) || !isStr(t.body) || !isStr(t.createdAt)) throw new HandoffError("task 关键字段缺失");
+  validateWaitOrigins(t.waitOrigins);
   if (!Array.isArray(m.sessions) || m.sessions.length > 200) throw new HandoffError("sessions 非法");
   if (!Array.isArray(m.files) || m.files.length > 500) throw new HandoffError("files 非法(最多 500 个)");
   for (const f of m.files) {
@@ -84,6 +87,7 @@ export function validate(input: unknown): HandoffManifest {
   if (msgs != null) {
     if (!Array.isArray(msgs) || msgs.length > 200) throw new HandoffError("messages 非法(最多 200 条)");
     for (const x of msgs as HandoffMessagePayload[]) {
+      validateMessageOrigin(x);
       if (!isStr(x.text) || !isStr(x.attachments) || !isStr(x.mode) || !isStr(x.sendAt) || !isStr(x.createdAt)) {
         throw new HandoffError("message 载荷字段缺失");
       }
