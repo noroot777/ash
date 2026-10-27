@@ -232,12 +232,11 @@ try {
   // **借用链**——落在用户工作区上。往那里写就是改用户的工作区:同名的第三方包会被换成项目自己那
   // 份,`file:` 来的外部依赖会被改写到快照里,用户下次跑自己的东西才发现被动过,且改动不可逆。
   //
-  // 端到端路径上这个组合现在不出现:放法按落点决定,`localPackages` 认的条目是 `linksIntoSource`
-  // 认的条目的子集(判据相同、后者遍历全深度),所以一旦有本地包,依赖树必然是克隆形态、收口第一步
-  // 就返回了。这一条因此**直接调收口函数**把那道闸钉住:放法那侧哪天放宽(只扫顶层、加白名单),
-  // 结果必须是「拒绝」而不是「静默改坏工作区」。
+  // 这一条**直接调收口函数**,因为端到端路径上这个组合很难凑出来:放法那一侧(安装记录认下自有包
+  // 就克隆、认不下再扫落点)已经把「主干是借用链、同时快照里有自有包要绑」这个组合基本挡掉了。
+  // 直接调是为了把那道闸本身钉住——放法那侧哪天放宽,结果必须是「拒绝」而不是「静默改坏工作区」。
   const { confineOwnPackages } = await import(
-    pathToFileURL(join(import.meta.dirname, "..", "src", "accept-gate-deps.ts")).href);
+    pathToFileURL(join(import.meta.dirname, "..", "src", "accept-gate-confine.ts")).href);
   const live = join(root, "live");
   save(join(live, "package.json"),
     JSON.stringify({ name: "live-root", version: "1.0.0", private: true, workspaces: ["packages/*"] }));
@@ -264,7 +263,69 @@ try {
   assert.equal(JSON.parse(readFileSync(join(live, "node_modules", "left-pad", "package.json"), "utf8")).version,
     "1.3.0", "工作区里装好的第三方包必须一个字节都没动");
 
+  // ── 8. **部分安装**:任务自己装了依赖(树在快照里就有),但缺掉本项目某个自有包的条目。
+  // node 不是「先选一棵树、再在树里找所有包」,而是**按每个包名分别**一级级往上找 `node_modules/
+  // <name>`:缺掉的那个会继续往祖先找,落在主检出的活源码上。上一版的收口找到第一棵树、树在快照内
+  // 就认为隔离完成,于是这条路一个字都没拦——2026-10-27 独立审查在 macOS 与 Windows 两台机器上实测
+  // 到的就是它:快照自带 TASK_NEW、执行输出 MAIN_OLD,随后改主检出的源码,同一份快照跟着变成
+  // MAIN_LIVE,而快照自证与工作区新鲜度全程为真。
+  const partial = join(host, ".worktrees", "partial");
+  git(host, "worktree", "add", "--detach", partial, "HEAD");
+  save(join(partial, "packages", "lib", "index.mjs"), 'export const value = "PARTIAL_NEW";\n');
+  git(partial, "add", "-A");
+  git(partial, "commit", "-qm", "partial task");
+  // 只装了一个工具包:树存在,但没有 @demo/lib 这个条目。这是部分安装的常态形状,不是伪造。
+  save(join(partial, "node_modules", "tool", "package.json"),
+    JSON.stringify({ name: "tool", version: "1.0.0", type: "module", main: "index.mjs" }));
+  save(join(partial, "node_modules", "tool", "index.mjs"), 'export const tool = 1;\n');
+  save(join(partial, "node_modules", ".package-lock.json"),
+    JSON.stringify({ packages: { "node_modules/tool": { version: "1.0.0" } } }));
+
+  const partialSnapshot = await snapshotOf(partial);
+  assert.deepEqual(partialSnapshot.source.dependencies, ["node_modules"], "前提:任务自己有一棵依赖树");
+  assert.equal(run(join(partialSnapshot.target, "probe.mjs")), "PARTIAL_NEW",
+    "树在快照里**不等于**树里装齐了本项目的包:缺掉的那个不许继续往祖先找到活源码");
+  save(join(host, "packages", "lib", "index.mjs"), 'export const value = "MAIN_LIVE";\n');
+  assert.equal(run(join(partialSnapshot.target, "probe.mjs")), "PARTIAL_NEW",
+    "快照建好之后改主检出的源码,同一份快照的执行输出不许跟着变");
+  assert.equal(await verifyGateSnapshot(partialSnapshot.target, partialSnapshot.source), true);
+  git(host, "restore", "packages/lib/index.mjs");
+
+  // ── 9. 包在任务里**搬了位置**:主检出是 `packages/lib`,任务重构成 `libs/lib`,任务没装依赖。
+  // 「自有包有哪些、在哪」只能从**快照自己的源码**读——它就是本次被认证的那一份。上一版从主检出
+  // 那棵树的条目反推相对路径、再把同一个相对路径套到快照上,于是快照的 `packages/lib` 上没有包,
+  // 门禁在开跑前就失败:一个合法的重构让验收不可用。
+  const moved = join(host, ".worktrees", "moved");
+  git(host, "worktree", "add", "--detach", moved, "HEAD");
+  mkdirSync(join(moved, "libs"), { recursive: true }); // git mv 不会替你建目标父目录
+  git(moved, "mv", join("packages", "lib"), join("libs", "lib"));
+  save(join(moved, "libs", "lib", "index.mjs"), 'export const value = "MOVED_NEW";\n');
+  save(join(moved, "package.json"),
+    JSON.stringify({ name: "fixture-host", version: "1.0.0", private: true, workspaces: ["libs/*"] }));
+  git(moved, "add", "-A");
+  git(moved, "commit", "-qm", "move the package");
+
+  const movedSnapshot = await snapshotOf(moved);
+  assert.equal(run(join(movedSnapshot.target, "probe.mjs")), "MOVED_NEW",
+    "包搬了位置,收口要从快照自己的源码找到它,不能拿主检出的旧相对路径去套");
+
+  // ── 10. 任务的依赖根是一条**悬空链**,而祖先那棵树里有本项目的包。收口要绑定,但主干解析不通:
+  // 往那里 mkdir 会在断链的落点上把目录造出来,而那个落点在用户工作区里。上一版只判「落点在快照
+  // 外」,解析不出落点时直接放过,随后穿着断链写——用户看到的是裸 ENOTDIR/ENOENT。
+  const dangling = join(host, ".worktrees", "dangling");
+  git(host, "worktree", "add", "--detach", dangling, "HEAD");
+  save(join(dangling, "packages", "lib", "index.mjs"), 'export const value = "DANGLING_NEW";\n');
+  git(dangling, "add", "-A");
+  git(dangling, "commit", "-qm", "dangling task");
+  linkDir(join(dangling, "never-installed"), join(dangling, "node_modules"));
+
+  const danglingSource = await readGateSource(dangling);
+  const danglingTarget = gateSnapshotPath("confine", `case${++sequence}`);
+  await assert.rejects(createGateSnapshot(dangling, danglingTarget, danglingSource), /解析不通|拒绝/,
+    "主干是一条解析不通的链时必须明确拒绝,不许穿着断链往用户工作区写");
+
   console.log("accept-gate-confine: ambient resolution, declaration-independent isolation, "
     + "aliased local packages, same-name third-party provenance, refusal to write through a "
-    + "borrowed tree and native link semantics passed");
+    + "borrowed tree, partial installs, relocated packages, dangling trunks "
+    + "and native link semantics passed");
 } finally { rmSync(root, { recursive: true, force: true }); }

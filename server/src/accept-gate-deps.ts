@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readdir, readFile, readlink, realpath, symlink } from "node:fs/promises";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { copyLink, insideTree } from "./accept-gate-tree.js";
+import { DEPENDENCY_DIRS } from "./accept-gate-dirs.js";
 import { copyTree, linkMismatch, type OwnedPackage, type Relocation } from "./accept-gate-relocate.js";
 
 // 门禁快照冻住的是**源码**；依赖是 lockfile 的产物，按产物对待。
@@ -50,7 +51,7 @@ import { copyTree, linkMismatch, type OwnedPackage, type Relocation } from "./ac
 // site-packages 里一个 .pth / .egg-link 的**文件内容**（绝对路径），不是软链。克隆照抄文件内容
 // = 照抄那条绝对路径，所以它仍然指回工作区；深拷**也一样**，这不是这一层引入的。要修得重写文件
 // 内容，属于另一类工程，这一层不碰，写在这里是为了别让下一个人以为它已经被覆盖了。
-export const DEPENDENCY_DIRS = ["node_modules", ".venv", "vendor", "target"];
+export { DEPENDENCY_DIRS } from "./accept-gate-dirs.js";
 
 // 各生态的**安装声明**。身份取它，不取 4 万个文件的字节：装、删、升级任何一个包都会改到这里。
 // node_modules/.package-lock.json 是 npm 7+ 自己写的已安装树（本仓 353 条，含每个包的 version、
@@ -421,7 +422,17 @@ export async function provideDependency(root: string, target: string, dep: strin
   // 开始拷——否则副本里仍是一条指向外面的链，解析根照旧在快照外，三个入口一个都没修掉。
   // 放法的判据是**落点**:这棵树里只要有一条链落在项目源码上,借出去就等于没隔离(理由与实测
   // 见 linksIntoSource)。声明过 workspace 的仍然直接克隆——那是项目自己写明的意图,不必等扫描。
-  const offender = await linksIntoSource(relocation.treeRoot, relocation.realRoot);
+  // 判据的第一道是**安装记录认下的自有包**(relocation.owned,归属以树自己所属的那个检出为准)。
+  // 落点扫描只认「落回**本检出**源码」的链,所以借来另一个检出的树时它一条都扫不出来:worktree
+  // 借主仓那一份、几个检出共用一个安装目录,里面的 workspace 链落在**那个**检出的活源码上。上一版
+  // 因此决定借用,随后收口发现自有包解析到快照外、要重绑定,而主干是一条落在别人工作区的链——只能
+  // 拒绝,于是一个本来能跑的共享安装布局在门禁开跑前就被永久卡死(2026-10-27 独立审查按代码推断)。
+  // 判据不能换成「树在本检出之外就克隆」:纯粹的共享安装目录(里面全是第三方包、没有任何自有包)
+  // 借用是安全的,而克隆要多拷整棵树——那条用例在 test-accept-gate-borrow「依赖根自己就是一条链」
+  // 的第一种落点上。两者的分界正是安装记录:认下自有包就克隆,认不下再扫落点兜底。
+  const offender = relocation.owned.length > 0
+    ? relocation.owned[0].entry
+    : await linksIntoSource(relocation.treeRoot, relocation.realRoot);
   if (offender === null && !declaresWorkspace(dep, workspace)
     && await linkWhole(relocation.treeRoot, destination)) return "link";
   // 借用建不出来(权限、跨设备、文件系统不支持)时同样走克隆,而不是退回一条「不对账的深拷」:
@@ -452,7 +463,7 @@ export async function provideDependency(root: string, target: string, dep: strin
  * 要等源码落盘；非 Git 分支曾经在源码之前对账，于是任何 monorepo 都会在门禁开跑前就失败。
  */
 export async function dependencyMismatch(root: string, target: string, dep: string,
-  mode: DependencyMode, workspace: WorkspacePackages): Promise<string | null> {
+  mode: DependencyMode): Promise<string | null> {
   const copy = join(target, dep);
   const landing = await realpath(copy).catch(() => null);
   if (mode === "absent") {
@@ -466,12 +477,10 @@ export async function dependencyMismatch(root: string, target: string, dep: stri
   if (landing === null || !insideTree(realTarget, landing)) {
     return `${dep} 没有在快照里落成独立的一份（落点 ${landing ?? "解析不出来"}）`;
   }
-  for (const name of workspace.names) {
-    const resolved = await realpath(join(copy, name)).catch(() => null);
-    if (resolved !== null && !insideTree(realTarget, resolved)) {
-      return `${join(dep, name)} 在快照里解析到了 ${resolved}，不是快照自己那份源码`;
-    }
-  }
+  // 源码隔离**不在这里**对。这里曾按声明展开出的包名核对一遍,两个问题:判据比收口弱(别名包、
+  // `npm link`、pnpm 的 link: 都展开不出来),而且这一遍排在收口**之前**——收口才是补绑定的那一步,
+  // 在它之前要求「每个包都解析到快照」只会把正常布局判成失败。一个判据只留一处实现:对账管副本的
+  // 链落点对不对(放法的保真度),源码隔离整个归 confineOwnPackages。
   const relocation = await relocationFor(root, target, dep);
   if (relocation === null) return `${dep} 在工作区里已经解析不出来了，无法核对副本的链落点`;
   const problem = await linkMismatch(relocation);
@@ -479,112 +488,3 @@ export async function dependencyMismatch(root: string, target: string, dep: stri
 }
 
 export { copyTree } from "./accept-gate-relocate.js";
-
-/** 这个目录上摆的包叫什么。读不出来（没有、坏了、没有 name）就回 null。 */
-async function manifestName(root: string): Promise<string | null> {
-  const raw = await readFile(join(root, "package.json"), "utf8").catch(() => null);
-  if (raw === null) return null;
-  try {
-    const name = (JSON.parse(raw) as { name?: unknown }).name;
-    return typeof name === "string" && name !== "" ? name : null;
-  } catch { return null; }
-}
-
-/** node 会用哪棵依赖树：从这里一级级往上，第一个真实存在的 `node_modules`。 */
-async function nearestTree(start: string): Promise<string | null> {
-  let directory = start;
-  for (;;) {
-    const trunk = await realpath(join(directory, "node_modules")).catch(() => null);
-    if (trunk !== null) return trunk;
-    const parent = dirname(directory);
-    if (parent === directory) return null;
-    directory = parent;
-  }
-}
-
-/**
- * 一棵依赖树里「属于它自己那个检出的本地包」有哪些：遍历解析入口（顶层 + 一层 scope，workspace
- * 链都在这两层），挑出**落点指回那个检出的源码**的条目。回 `目录项名 → 相对检出根的路径`。
- *
- * 判据是落点，和 linksIntoSource 同一条。不认名字（同名不等于同源，registry 下来的包和项目里
- * 一份同名副本可以并存）、也不扫源码树里的 package.json（源码树里摆着一份同名的包，不等于依赖
- * 树里那个名字就该解析到它）。
- */
-async function localPackages(trunk: string, owner: string): Promise<Map<string, string>> {
-  const found = new Map<string, string>();
-  const scan = async (sub: string, depth: number): Promise<void> => {
-    for (const entry of await readdir(join(trunk, sub), { withFileTypes: true }).catch(() => [])) {
-      const name = sub === "" ? entry.name : `${sub}/${entry.name}`;
-      if (entry.isSymbolicLink()) {
-        const landing = await realpath(join(trunk, name)).catch(() => null);
-        if (landing !== null && insideTree(owner, landing) && !insideTree(trunk, landing)) {
-          found.set(name, relative(owner, landing));
-        }
-      } else if (entry.isDirectory() && depth === 0 && entry.name.startsWith("@")) {
-        await scan(entry.name, depth + 1);
-      }
-    }
-  };
-  await scan("", 0);
-  return found;
-}
-
-/**
- * 让项目自己的包都解析到快照里那份冻结的源码。返回第一处收不住的说明，全都收住就回 null。
- *
- * 这是源码隔离的**收口**：克隆依赖树、改写树内落点都只管快照里已经有的东西，管不到 node 的
- * **向上查找**。快照建在 ash 的运行产物目录里、那个目录通常就在项目内，于是工作区没装依赖时
- * （worktree 的常态）node 从快照一级级往上找，用的是项目主检出那棵树——里面的 workspace 链指着
- * **活的**工作区源码。实测：快照自带 TASK_NEW、执行输出 MAIN_OLD，把工作区改成 MAIN_LIVE 同一份
- * 快照的输出也跟着变，而自证全程为真。
- *
- * 出发点是**那棵树里指回源码的条目**，不是源码树里有哪些 package.json。这个方向上一版搞反了，
- * 代价是两个：
- *   · 工作区装着 registry 下来的 `left-pad`、项目里另有一份 `patches/left-pad` 也叫 left-pad 时，
- *     按名字认会把装好的那个 `rm -r` 删掉换成指向补丁副本的链——**改坏用户的工作区**，而且重装
- *     之前恢复不了；
- *   · 这类项目的门禁一次也过不去：registry 包解析到工作区依赖树本来就是正常的（依赖按安装声明
- *     计身份），把它当成「没隔离的自有包」就只能报错。
- * 按落点认则两条都不成立：registry 包的落点就在那棵树里（不是指回源码），`file:` 外部依赖的落点
- * 在那个检出之外，两者都不是本地包，一个字都不动。
- *
- * 往快照里写之前还要证明落点：`join(target, "node_modules", …)` 是**字面拼接**，而借用形态下
- * `<快照>/node_modules` 本身就是一条指向工作区的链，`rm` 和建链会直接落到用户的工作区里去。
- * 所以先 realpath 那条主干、确认它在快照内（不存在则由我们 mkdir 出一个真目录），证不出来就让
- * 门禁失败。核验全部做完才开始写，不留「改了一半又失败」的状态。
- */
-export async function confineOwnPackages(target: string): Promise<string | null> {
-  const realTarget = await realpath(target).catch(() => target);
-  const trunk = await nearestTree(realTarget);
-  // 没有任何依赖树，或者 node 用的就是快照自己那棵（克隆形态）：树内落点由搬迁那一侧负责。
-  if (trunk === null || insideTree(realTarget, trunk)) return null;
-  const owner = dirname(trunk);
-  const plan: { name: string; source: string }[] = [];
-  for (const [name, rel] of await localPackages(trunk, owner)) {
-    const source = join(target, rel);
-    const inSnapshot = await manifestName(source);
-    if (inSnapshot === null) {
-      return `${name} 会解析到 ${join(owner, rel)}（快照之外的活动源码），而快照里 ${rel} 上没有包，`
-        + "无法把它接到被认证的那一份源码上";
-    }
-    plan.push({ name, source });
-  }
-  if (plan.length === 0) return null;
-  const trunkInSnapshot = join(target, "node_modules");
-  const landed = await realpath(trunkInSnapshot).catch(() => null);
-  if (landed !== null && !insideTree(realTarget, landed)) {
-    return `需要在快照里重新绑定 ${plan.map(item => item.name).join("、")}，`
-      + `但快照的 node_modules 落在 ${landed}（快照之外）——往那里写会改到工作区，拒绝`;
-  }
-  for (const { name, source } of plan) {
-    const entry = join(trunkInSnapshot, name);
-    await mkdir(dirname(entry), { recursive: true });
-    await rm(entry, { recursive: true, force: true });
-    await copyLink(source, entry, relative(dirname(entry), source));
-    const bound = await realpath(entry).catch(() => null);
-    if (bound === null || !insideTree(realTarget, bound)) {
-      return `${name} 仍然解析到 ${bound ?? "解析不出来"}，不是快照自己那份源码`;
-    }
-  }
-  return null;
-}

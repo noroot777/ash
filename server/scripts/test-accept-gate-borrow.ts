@@ -258,12 +258,35 @@ try {
   assert.equal(declaresWorkspace("node_modules", noWorkspace), false, "没声明 workspace 包:声明这一侧不要求独立(实际放法还要看落点扫描)");
   assert.equal(await provideDependency(repo, roundTrip, "node_modules", noWorkspace), "link",
     "没声明 workspace 包、依赖树里也没有链落回源码时就是一条链,O(1)");
-  assert.equal(await dependencyMismatch(repo, roundTrip, "node_modules", "link", noWorkspace), null,
+  assert.equal(await dependencyMismatch(repo, roundTrip, "node_modules", "link"), null,
     "借用建出来的链,落点就是工作区那一份");
   rmSync(join(roundTrip, "node_modules"));
   await copyTree(join(repo, "node_modules"), join(roundTrip, "node_modules"));
-  assert.notEqual(await dependencyMismatch(repo, roundTrip, "node_modules", "link", noWorkspace), null,
+  assert.notEqual(await dependencyMismatch(repo, roundTrip, "node_modules", "link"), null,
     "不是链(克隆形态落在这个位置)时对不上账,调用方据此回到老办法");
+  // 借来**另一个检出**那棵树,而里面装着那个检出的自有包(未声明 workspaces 的 `file:` 别名依赖
+  // 就是这个形状)。落点扫描只认「落回**本检出**源码」的链,对这种形状一条都扫不出来,于是上一版
+  // 决定借用;随后收口发现自有包解析到快照外、要重绑定,而主干是一条落在别人工作区的链,只能拒绝
+  // ——一个本来能跑的共享安装布局在门禁开跑前被永久卡死(2026-10-27 独立审查按代码推断)。判据因此
+  // 取**安装记录**(归属以树自己所属的那个检出为准):认下自有包就克隆,收口也就有地方可写。
+  const ownerCheckout = join(root, "alias-owner");
+  mkdirSync(join(ownerCheckout, "packages", "lib"), { recursive: true });
+  writeFileSync(join(ownerCheckout, "package.json"),
+    JSON.stringify({ name: "alias-owner", version: "1.0.0", dependencies: { aliased: "file:./packages/lib" } }));
+  writeFileSync(join(ownerCheckout, "packages", "lib", "package.json"),
+    JSON.stringify({ name: "@demo/lib", version: "1.0.0" }));
+  mkdirSync(join(ownerCheckout, "node_modules"), { recursive: true });
+  linkDir(join("..", "packages", "lib"), join(ownerCheckout, "node_modules", "aliased"));
+  writeFileSync(join(ownerCheckout, "node_modules", ".package-lock.json"),
+    JSON.stringify({ packages: { "node_modules/aliased": { resolved: "packages/lib", link: true } } }));
+  const consumer = freshRepo("alias-consumer", "node_modules/\n");
+  linkDir(join(ownerCheckout, "node_modules"), join(consumer, "node_modules"));
+  const consumerTarget = join(root, "alias-consumer-snapshot");
+  mkdirSync(consumerTarget, { recursive: true });
+  assert.equal(await provideDependency(consumer, consumerTarget, "node_modules", await workspacePackages(consumer)),
+    "clone", "借来的树里有安装记录认下的自有包时必须克隆,否则收口无处可写、这类布局永远过不去");
+  assert.equal(lstatSync(join(consumerTarget, "node_modules")).isSymbolicLink(), false, "克隆形态不是链");
+
   // 包管理器随时在改依赖树:读完目录到读条目之间文件被删掉不该崩掉整次快照。
   await copyTree(join(root, "never-existed"), join(root, "never-copied"));
   assert.equal(existsSync(join(root, "never-copied")), false);

@@ -245,5 +245,30 @@ try {
     writeFileSync(join(target, "go.mod"), "module example.test/app\n\ngo 1.23\n");
     assert.equal(await verifyGateSnapshot(target, source), false, "源码被改动仍然必须判成不干净");
   }
-  console.log("accept-gate-source: isolated commits, dirty/index/untracked rejection, borrowed dependencies, outputs non-Git identity and tracked dependency directories passed");
+  // 名字不证明类型:提交一个叫 `vendor`/`target` 的**普通文件**,上一版靠 lstat 成功就把它登记成
+  // 依赖目录,随后借用会把它重建成一条指向原文件的链——那份源码不再冻结,往快照这条路径写就写到了
+  // 工作区。(2026-10-27 独立审查按代码推断;非 Git 分支一直有这道判断,Git 分支漏了。)
+  {
+    const named = join(root, "named-file");
+    execFileSync("git", ["init", "-b", "main", named]);
+    git(named, "config", "user.name", "gate");
+    git(named, "config", "user.email", "gate@example.test");
+    git(named, "config", "core.hooksPath", "/dev/null");
+    writeFileSync(join(named, "package.json"), '{"name":"named-file","version":"1.0.0"}');
+    writeFileSync(join(named, "vendor"), "这是一个普通文件，不是依赖目录\n");
+    writeFileSync(join(named, "target"), "同上\n");
+    git(named, "add", "-A");
+    git(named, "commit", "-m", "commit files named like dependency directories");
+
+    const source = await readGateSource(named);
+    assert.deepEqual(source.dependencies, [], "同名的普通文件不是依赖目录,不许登记成借用项");
+    const target = join(root, "named-file-snapshot");
+    await createGateSnapshot(named, target, source);
+    assert.equal(lstatSync(join(target, "vendor")).isSymbolicLink(), false, "它必须按源码冻进快照");
+    assert.equal(readFileSync(join(target, "vendor"), "utf8"), "这是一个普通文件，不是依赖目录\n");
+    // 它既然是源码,命令改了它就必须被拦住——这正是上一版会放行的那条路。
+    writeFileSync(join(target, "vendor"), "被命令改掉了\n");
+    assert.equal(await verifyGateSnapshot(target, source), false, "改掉它必须判成「测试改了被测源码」");
+  }
+  console.log("accept-gate-source: isolated commits, dirty/index/untracked rejection, borrowed dependencies, outputs non-Git identity, tracked dependency directories and files named like them passed");
 } finally { rmSync(root, { recursive: true, force: true }); }

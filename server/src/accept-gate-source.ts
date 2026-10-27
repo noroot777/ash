@@ -6,10 +6,27 @@ import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
 import { physicalPath } from "./git-worktree-state.js";
 import { freezesAsSource, gateTreeDigest, insideTree as inside } from "./accept-gate-tree.js";
-import { confineOwnPackages, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
+import { confineOwnPackages } from "./accept-gate-confine.js";
+import { DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
   provideDependency, workspacePackages, type DependencyMode } from "./accept-gate-deps.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
+// 快照的 sidecar。非 Git 项目一直靠它把输入清单交给收尾核验,现在**依赖放置计划**也走这里:
+// 收尾要判「命令有没有改被测源码」,而依赖目录在快照里是故意被换掉的,必须豁免——豁免范围只能来自
+// 本次真实登记并放置的那几条路径。生产收尾(accept-gate.ts)是从 DB 的 commit/fingerprint 重建
+// GateSource 的,`dependencies` 固定为空,所以计划不落盘就根本传不回去,重启恢复更拿不到。
+type GatePlacement = { path: string; mode: DependencyMode };
+type GateSidecar = { inputs?: SourceInput[]; dependencies?: GatePlacement[] };
+
+async function readSidecar(target: string): Promise<GateSidecar | null> {
+  const raw = await readFile(`${target}.inputs.json`, "utf8").catch(() => null);
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as GateSidecar | SourceInput[];
+    // 旧格式是裸的输入数组。只会在跨版本重启时读到正在跑的那一次,按「有输入、无依赖计划」收下。
+    return Array.isArray(parsed) ? { inputs: parsed } : parsed;
+  } catch { return null; }
+}
 export type GateSource = { commit: string | null; fingerprint: string; dependencies: string[]; inputs?: SourceInput[] };
 const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
 const git = async (cwd: string, args: string[]) =>
@@ -116,7 +133,15 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
     for (const directory of [...packageDirs].sort()) {
       for (const name of DEPENDENCY_DIRS) {
         const dep = join(directory, name);
-        try { await lstat(join(cwd, dep)); } catch { continue; }
+        const info = await lstat(join(cwd, dep)).catch(() => null);
+        if (info === null) continue;
+        // 名字不证明类型。在 Git 根提交一个叫 `vendor`/`target` 的**普通文件**,上一版靠 lstat 成功
+        // 就把它登记成依赖目录:随后 linkWhole 把它重建成一条借用原文件的链,那份源码不再冻结,往
+        // 快照这条路径写就写到了工作区。非 Git 分支一直有这道判断,Git 分支漏了,两边对齐。
+        // 判的是**落点**而不是 lstat 的类型:依赖根自己是一条链是合法形状(node_modules -> .store),
+        // 落点读不出来的悬空根也照旧登记——provideDependency 要按原样把它重建成同样解析不通的一条。
+        const landing = await stat(join(cwd, dep)).catch(() => null);
+        if (landing === null ? !info.isSymbolicLink() : !landing.isDirectory()) continue;
         if (registered.some(other => inside(join(cwd, other), join(cwd, dep)))) continue;
         registered.push(dep);
       }
@@ -220,7 +245,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     // 账,于是任何 monorepo 都在门禁开跑前就失败。对的是落点不是摘要(摘要在借用形态下恒等,
     // 证明不了任何事);三种形态各自要对的那件事写在 dependencyMismatch 上方。
     for (const [dep, mode] of provided) {
-      const problem = await dependencyMismatch(cwd, target, dep, mode, workspace);
+      const problem = await dependencyMismatch(cwd, target, dep, mode);
       if (problem) throw new Error(`测试快照里的依赖没放对：${problem}`);
     }
     if ((await readGateSource(cwd)).fingerprint !== source.fingerprint) {
@@ -239,7 +264,13 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     // 理由与实测写在 confineOwnPackages 上方。
     const unconfined = await confineOwnPackages(target);
     if (unconfined) throw new Error(`测试快照没能隔离项目自己的包：${unconfined}`);
-    if (source.inputs) await writeFile(`${target}.inputs.json`, JSON.stringify(source.inputs), { flag: "wx" });
+    const sidecar: GateSidecar = {
+      ...(source.inputs ? { inputs: source.inputs } : {}),
+      // 路径按 POSIX 分隔符落盘:登记用的是 path.join(Windows 上是 `\`),而收尾比对的 `git diff
+      // --name-only` 一律吐 `/`。不归一的话 Windows 上每条嵌套依赖路径都对不上,豁免整个失效。
+      dependencies: [...provided].map(([path, mode]) => ({ path: path.split(sep).join("/"), mode })),
+    };
+    await writeFile(`${target}.inputs.json`, JSON.stringify(sidecar), { flag: "wx" });
   } catch (error) {
     await rm(target, { recursive: true, force: true });
     throw error;
@@ -255,19 +286,31 @@ export async function removeGateSnapshot(taskId: string, runId: string): Promise
 export async function verifyGateSnapshot(cwd: string, source: GateSource): Promise<boolean> {
   try {
     if (!source.commit) {
-      const inputs = source.inputs ?? JSON.parse(await readFile(`${cwd}.inputs.json`, "utf8")) as SourceInput[];
+      const inputs = source.inputs ?? (await readSidecar(cwd))?.inputs;
+      if (!inputs) return false;
       return await digestInputs(cwd, inputs) === source.fingerprint;
     }
     if (await commitAt(cwd, "HEAD") !== source.commit) return false;
     const changed = (await git(cwd, ["diff", "--no-ext-diff", "--name-only", "-z", "HEAD", "--"]))
       .split("\0").filter(Boolean);
-    // 依赖目录不参与这道核验。它问的是「命令有没有改被测源码」,而依赖目录在快照里是**故意**被
-    // 换成借用链的(被 Git 跟踪的 vendor/ 更是如此:checkout 写出来的那份会被替换掉),于是
-    // `git diff HEAD` 看到的是一棵「删了一堆跟踪文件」的脏树——那是放法的形状,不是测试改了源码。
-    // 不豁免的后果是确定性的:把依赖目录一起提交的项目(Go 官方推荐做法)命令完整跑完、退出码 0,
-    // 界面随即翻成「测试修改了被测源码」,重试走同一条路同样失败,这类项目的验收永远过不去,而每
-    // 次重试都要把整套测试重跑一遍。依赖自己的身份由 dependencyDigest(安装声明)管,不靠这里。
-    return changed.every(path => path.split("/").some(part => DEPENDENCY_DIRS.includes(part)));
+    if (changed.length === 0) return true;
+    // 依赖目录不参与这道核验:它问的是「命令有没有改被测源码」,而依赖目录在快照里是**故意**被换掉
+    // 的(被 Git 跟踪的 vendor/ 更是如此——checkout 写出来的那份会被替换成一条链),于是
+    // `git diff HEAD` 看到一棵「删了一堆跟踪文件」的脏树,那是放法的形状,不是测试改了源码。不豁免
+    // 的后果是确定性的:把依赖目录一起提交的项目(Go 官方推荐做法)命令完整跑完、退出码 0,界面随即
+    // 翻成「测试修改了被测源码」,重试走同一条路同样失败。
+    //
+    // 但豁免范围只能是**本次真实登记并放置的那几条路径**。上一版按「路径里出现过依赖目录名」放行,
+    // 2026-10-27 的独立审查在两台机器上实测了它的代价:一个压根没有依赖目录的项目(dependencies
+    // 为空),命令改掉 `web/src/vendor/lib.js`、`docs/target/spec.md`、`examples/node_modules/spec.txt`、
+    // `fixtures/.venv/spec.txt` 这几条**按提交冻结的普通源码**,收尾一律判成「没变」,验收照样放行;
+    // 改 `app.js` 才会被正确拦住。登记只覆盖项目根与已提交包清单旁边的依赖目录,收尾却对整个仓库
+    // 任意深度的同名路径放行——名字不能证明某条路径是本次的依赖输入。
+    //
+    // 读不到计划时**不扩大豁免**:宁可判脏让用户重新验收,也不放行一次可能改过源码的通过。
+    const placements = (await readSidecar(cwd))?.dependencies;
+    if (!placements) return false;
+    return changed.every(path => placements.some(dep => path === dep.path || path.startsWith(`${dep.path}/`)));
   } catch { return false; }
 }
 
