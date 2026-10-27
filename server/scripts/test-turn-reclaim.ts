@@ -261,7 +261,7 @@ releaseTurn("t-ghost");
   const released = notices.find((notice) => notice.action === "回合占位已放开");
   assert.ok(released, "没有会话的人工放开也必须持久留痕");
   assert.equal(released.outcome, "system");
-  assert.match(released.reason, /已通过显式请求放开/);
+  assert.match(released.reason, /已放开，请求来源无法确认/);
   assert.doesNotMatch(released.reason, /由你|手动放开/, "没有独立的人类身份凭据时不得把请求归因给用户");
   assert.match(released.reason, /互斥就没了/, "痕迹里必须明示副作用,别让用户以为只是清了个垃圾");
 }
@@ -282,7 +282,7 @@ assert.equal(claimTurn("t-token"), false, "t-token 的锁还占着(它有令牌)
 {
   const refused = await releaseSuspectTurn("t-handle");
   assert.equal(refused.ok, false, "真有 CLI 在跑时不许拔锁");
-  assert.match(refused.ok === false ? refused.reason : "", /进程在跑/);
+  assert.match(refused.ok === false ? refused.reason : "", /CLI 进程在运行/);
 }
 {
   const refused = await releaseSuspectTurn("t-fresh", 60_000);

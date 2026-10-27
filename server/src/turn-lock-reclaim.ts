@@ -109,11 +109,21 @@ export type SuspectTurn = {
  */
 export function suspectTurns(at = Date.now(), thresholdMs = SUSPECT_TURN_MS): SuspectTurn[] {
   return heldTurns()
-    .filter((held) => !UNBOUNDED_WAIT_ROLES.has(held.role))
-    .filter((held) => held.token === null)
-    .filter((held) => !isRunning(held.taskId))
-    .filter((held) => at - held.claimedAt > thresholdMs)
+    .filter((current) => notSuspectReason(current, at, thresholdMs) === null)
     .map((held) => ({ taskId: held.taskId, role: held.role, seq: held.seq, claimedAt: held.claimedAt, heldMs: at - held.claimedAt }));
+}
+
+export type TurnReclaimStatus =
+  | { kind: "absent" }
+  | { kind: "eligible"; turn: SuspectTurn }
+  | { kind: "blocked"; turn: SuspectTurn; reason: string };
+
+export function turnReclaimStatus(taskId: string, at = Date.now(), thresholdMs = SUSPECT_TURN_MS): TurnReclaimStatus {
+  const current = heldTurns().find((entry) => entry.taskId === taskId);
+  if (!current) return { kind: "absent" };
+  const turn = { taskId, role: current.role, seq: current.seq, claimedAt: current.claimedAt, heldMs: at - current.claimedAt };
+  const reason = notSuspectReason(current, at, thresholdMs);
+  return reason === null ? { kind: "eligible", turn } : { kind: "blocked", turn, reason };
 }
 
 // 不满一分钟就按秒说 —— 阈值被调低时(回归测试、临时排查)「约 0 分钟」读起来像没发生。
@@ -251,21 +261,18 @@ export async function releaseSuspectTurn(
   taskId: string,
   thresholdMs = SUSPECT_TURN_MS,
 ): Promise<ReleaseSuspectResult> {
-  const now = Date.now();
-  const current = heldTurns().find((h) => h.taskId === taskId);
-  if (!current) return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
+  const status = turnReclaimStatus(taskId, Date.now(), thresholdMs);
+  if (status.kind === "absent") return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
   // 重算判据 → 条件释放,这中间一个 await 都没有。
-  const suspect = suspectTurns(now, thresholdMs).find((s) => s.taskId === taskId);
-  if (!suspect) {
-    return { ok: false, why: "not-suspect", reason: notSuspectReason(current, now, thresholdMs) };
-  }
+  if (status.kind === "blocked") return { ok: false, why: "not-suspect", reason: status.reason };
+  const suspect = status.turn;
   const released = forceReleaseTurn(suspect);
   if (!released) {
     // 号码对不上 = 判定到这一行之间换了主人。这是条件释放该有的样子,不是错误。
     return { ok: false, why: "not-suspect", reason: "这个回合占位刚刚换了主人，已经有新的一轮接手了" };
   }
   const detail = `占位身份 ${released.role}、已持有约 ${held(suspect.heldMs)}`;
-  console.warn(`[ash] 显式请求放开回合占位 task=${taskId}（${detail}）`);
+  console.warn(`[ash] 来源无法确认的请求放开回合占位 task=${taskId}（${detail}）`);
   // 核对后置条件(理由见 `runnable`)。排在释放之后 —— 释放那两行一个 await 都不能隔。
   const after = await runnableAfterRelease(taskId);
   if (!after.runnable) {
@@ -275,7 +282,7 @@ export async function releaseSuspectTurn(
     taskId,
     `released-turn:${suspect.claimedAt}:${suspect.seq}`,
     "回合占位已放开",
-    `这个任务的回合占位已通过显式请求放开（${detail}）。`
+    `这个任务的回合占位已放开，请求来源无法确认（${detail}）。`
     + (after.runnable ? "现在可以继续运行了。" : `但它还点不动运行：${after.nextStep ?? "请刷新查看当前状态"}。`)
     + SIDE_EFFECT,
   );
@@ -287,12 +294,15 @@ function notSuspectReason(
   current: { taskId: string; role: string; token: string | null; claimedAt: number },
   now: number,
   thresholdMs: number,
-): string {
+): string | null {
   if (UNBOUNDED_WAIT_ROLES.has(current.role)) {
     return `这个回合占位的身份是 ${current.role}，它正常就会长时间持有（等人工裁决、等仓库锁、等打包传输），`
-      + "系统无法按「占了多久」判断它是不是卡住了。确认那一侧确实不动了，用停止任务来收它";
+      + "系统无法按「占了多久」判断它是不是卡住了，不提供手动放开；请等待原持有者结束，长期不结束时查看对应流程的日志";
   }
   if (current.token !== null) return "这一轮已经绑过回合令牌，它有正常的结算路径，不该从旁边拔掉";
-  if (isRunning(current.taskId)) return "这个任务此刻真有 CLI 进程在跑，要收掉它请用停止任务";
-  return `这个回合占位才持有了 ${held(now - current.claimedAt)}，还在正常起跑的时间范围内（阈值 ${held(thresholdMs)}），再等一会儿`;
+  if (isRunning(current.taskId)) return "这个任务此刻仍有 CLI 进程在运行，不能从旁边拔掉它的回合占位";
+  if (now - current.claimedAt <= thresholdMs) {
+    return `这个回合占位才持有了 ${held(now - current.claimedAt)}，还在正常起跑的时间范围内（阈值 ${held(thresholdMs)}），再等一会儿`;
+  }
+  return null;
 }
