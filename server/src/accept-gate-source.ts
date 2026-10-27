@@ -16,7 +16,7 @@ type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 // 本次真实登记并放置的那几条路径。生产收尾(accept-gate.ts)是从 DB 的 commit/fingerprint 重建
 // GateSource 的,`dependencies` 固定为空,所以计划不落盘就根本传不回去,重启恢复更拿不到。
 type GatePlacement = { path: string; mode: DependencyMode };
-type GateSidecar = { inputs?: SourceInput[]; dependencies?: GatePlacement[] };
+type GateSidecar = { inputs?: SourceInput[]; dependencies?: GatePlacement[]; sourceCwd?: string; ambient?: string };
 
 async function readSidecar(target: string): Promise<GateSidecar | null> {
   const raw = await readFile(`${target}.inputs.json`, "utf8").catch(() => null);
@@ -31,8 +31,9 @@ export type GateSource = {
   commit: string | null;
   fingerprint: string;
   dependencies: string[];
-  /** 向上继承的那些依赖树的安装声明摘要。只进复用判据，不进对账——理由见 ambientDigest 上方。 */
+  /** 源码和实际执行位置的依赖计划身份；不混入源码复制对账。 */
   ambient: string;
+  executionCwd?: string;
   inputs?: SourceInput[];
 };
 const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
@@ -119,7 +120,7 @@ async function digestInputs(cwd: string, inputs: SourceInput[]): Promise<string>
   return hash.digest("hex");
 }
 
-export async function readGateSource(cwd: string): Promise<GateSource> {
+export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, "identity.source")): Promise<GateSource> {
   if (physicalPath(cwd) === physicalPath(RUNS_DIR)) throw new Error("项目目录不能与 ash 运行产物目录相同");
   const commit = await commitAt(cwd, "HEAD");
   const hash = sourceHash();
@@ -174,9 +175,9 @@ export async function readGateSource(cwd: string): Promise<GateSource> {
   } else {
     const inputs = await listInputs(cwd);
     return { commit, fingerprint: await digestInputs(cwd, inputs), dependencies, inputs,
-      ambient: await ambientDigest(cwd) };
+      ambient: await ambientDigest(cwd, executionCwd), executionCwd };
   }
-  return { commit, fingerprint: hash.digest("hex"), dependencies, ambient: await ambientDigest(cwd) };
+  return { commit, fingerprint: hash.digest("hex"), dependencies, ambient: await ambientDigest(cwd, executionCwd), executionCwd };
 }
 
 export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR, taskId, `accept-gate-${runId}.source`);
@@ -184,6 +185,9 @@ export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR
 export async function createGateSnapshot(cwd: string, target: string, source: GateSource): Promise<void> {
   await mkdir(target, { recursive: true });
   try {
+    if (await ambientDigest(cwd, target) !== source.ambient) {
+      throw new Error("测试快照的实际依赖输入与登记计划不同，请按快照执行位置重新登记后验收");
+    }
     // 依赖怎么放由项目**声明**的 workspace 包决定（判据和理由见 accept-gate-deps 顶部）：声明了
     // 就整棵克隆进快照，没声明才借一条链。
     const workspace = await workspacePackages(cwd);
@@ -256,7 +260,8 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       const problem = await dependencyMismatch(cwd, target, dep, mode);
       if (problem) throw new Error(`测试快照里的依赖没放对：${problem}`);
     }
-    if ((await readGateSource(cwd)).fingerprint !== source.fingerprint) {
+    const current = await readGateSource(cwd, target);
+    if (current.fingerprint !== source.fingerprint || current.ambient !== source.ambient) {
       throw new Error("复制测试快照期间源码或依赖已变化，请重新验收");
     }
     if ((copiedFingerprint ?? (await readGateSource(target)).fingerprint) !== source.fingerprint) {
@@ -270,9 +275,15 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     // 条检查都「通过」,而 node 往上一级找到项目主检出那一份,顺着 workspace 链读到**活的**工作区
     // 源码——快照自带 TASK_NEW、执行输出 MAIN_OLD,改一下工作区就变 MAIN_LIVE,自证全程为真。
     // 理由与实测写在 confineOwnPackages 上方。
-    const unconfined = await confineOwnPackages(target);
+    const origins = new Map<string, string>();
+    for (const [dep, mode] of provided) {
+      if (mode === "absent") continue;
+      origins.set(await realpath(join(target, dep)), await realpath(join(cwd, dep)));
+    }
+    const unconfined = await confineOwnPackages(target, origins);
     if (unconfined) throw new Error(`测试快照没能隔离项目自己的包：${unconfined}`);
     const sidecar: GateSidecar = {
+      sourceCwd: cwd, ambient: source.ambient,
       ...(source.inputs ? { inputs: source.inputs } : {}),
       // 路径按 POSIX 分隔符落盘:登记用的是 path.join(Windows 上是 `\`),而收尾比对的 `git diff
       // --name-only` 一律吐 `/`。不归一的话 Windows 上每条嵌套依赖路径都对不上,豁免整个失效。
@@ -293,6 +304,8 @@ export async function removeGateSnapshot(taskId: string, runId: string): Promise
 
 export async function verifyGateSnapshot(cwd: string, source: GateSource): Promise<boolean> {
   try {
+    const sidecar = await readSidecar(cwd);
+    if (sidecar?.sourceCwd && await ambientDigest(sidecar.sourceCwd, cwd) !== sidecar.ambient) return false;
     if (!source.commit) {
       const inputs = source.inputs ?? (await readSidecar(cwd))?.inputs;
       if (!inputs) return false;

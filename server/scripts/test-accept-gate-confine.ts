@@ -69,8 +69,8 @@ let sequence = 0;
 // ASH_RUNS_DIR 在模块加载时就固定在 host 项目里,只对前面那些以 host 为被测项目的用例成立。
 const targetIn = (directory: string) => join(directory, "data", "runs", `case${++sequence}.source`);
 const snapshotOf = async (cwd: string) => {
-  const source = await readGateSource(cwd);
   const target = gateSnapshotPath("confine", `case${++sequence}`);
+  const source = await readGateSource(cwd, target);
   await createGateSnapshot(cwd, target, source);
   return { source, target };
 };
@@ -418,9 +418,9 @@ try {
   git(patched, "commit", "-qm", "patched copy in source");
 
   assert.equal(run(join(patched, "probe.mjs")), "REGISTRY_1_3_0", "前提:工作区用的是祖先装下来那一份");
-  const patchedSource = await readGateSource(patched);
   // 快照必须落在 ancestor **内部**,否则向上查找根本走不到那棵祖先树(RUNS_DIR 固定在 host 下)。
   const patchedTarget = join(ancestor, "data", "runs", "patched.source");
+  const patchedSource = await readGateSource(patched, patchedTarget);
   await createGateSnapshot(patched, patchedTarget, patchedSource);
   assert.equal(run(join(patchedTarget, "probe.mjs")), "REGISTRY_1_3_0",
     "仓库里有一份同名的补丁目录,不许据此遮蔽项目实际使用的正式包");
@@ -476,9 +476,10 @@ try {
   const bare = cliProject("bare-cli", "MAIN_OLD");
   const bareTask = taskOf(bare.directory, "TASK_NEW");
   linkDir(bare.tree, join(bareTask, "node_modules"));
-  const bareSource = await readGateSource(bareTask);
+  const bareTarget = join(bare.directory, "data", "runs", "bare.source");
+  const bareSource = await readGateSource(bareTask, bareTarget);
   await assert.rejects(
-    createGateSnapshot(bareTask, join(bare.directory, "data", "runs", "bare.source"), bareSource),
+    createGateSnapshot(bareTask, bareTarget, bareSource),
     /没有 npm 的安装记录/,
     "依赖树没有安装记录时,运行入口的来源无从证明,必须拒绝而不是保留指向主检出的那条入口");
   assert.match(readFileSync(join(bare.directory, "packages", "lib", "cli.mjs"), "utf8"), /MAIN_OLD/,
@@ -499,9 +500,9 @@ try {
     packages: { "node_modules/@demo/lib": { link: true, resolved: "packages/lib" } },
   }));
   const ownedTask = taskOf(owned.directory, "TASK_NEW");
-  const ownedSource = await readGateSource(ownedTask);
-  assert.deepEqual(ownedSource.dependencies, [], "前提:任务自己没装依赖,快照里压根没有依赖树");
   const ownedTarget = join(owned.directory, "data", "runs", "owned.source");
+  const ownedSource = await readGateSource(ownedTask, ownedTarget);
+  assert.deepEqual(ownedSource.dependencies, [], "前提:任务自己没装依赖,快照里压根没有依赖树");
   await createGateSnapshot(ownedTask, ownedTarget, ownedSource);
   assert.equal(run(join(ownedTarget, "probe.mjs")), "TASK_NEW", "包入口要解析到快照自己那份源码");
   assert.equal(run(join(ownedTarget, "node_modules", owned.entry)), "TASK_NEW",
@@ -521,9 +522,9 @@ try {
   }));
   const borrowedTask = taskOf(borrowed.directory, "TASK_NEW");
   linkDir(borrowed.tree, join(borrowedTask, "node_modules"));
-  const borrowedSource = await readGateSource(borrowedTask);
-  assert.deepEqual(borrowedSource.dependencies, ["node_modules"], "前提:任务借了主检出那棵树");
   const borrowedTarget = join(borrowed.directory, "data", "runs", "borrowed.source");
+  const borrowedSource = await readGateSource(borrowedTask, borrowedTarget);
+  assert.deepEqual(borrowedSource.dependencies, ["node_modules"], "前提:任务借了主检出那棵树");
   await createGateSnapshot(borrowedTask, borrowedTarget, borrowedSource);
   assert.equal(run(join(borrowedTarget, "node_modules", borrowed.entry)), "TASK_NEW",
     "借用布局下 CLI 入口也必须落在快照里那份源码上");
@@ -550,9 +551,9 @@ try {
   git(consumedTask, "add", "-A");
   git(consumedTask, "commit", "-qm", "task");
 
-  const consumedSource = await readGateSource(consumedTask);
-  assert.deepEqual(consumedSource.dependencies, [], "前提:任务工作区没有任何已安装的依赖根");
   const consumedTarget = targetIn(consumed);
+  const consumedSource = await readGateSource(consumedTask, consumedTarget);
+  assert.deepEqual(consumedSource.dependencies, [], "前提:任务工作区没有任何已安装的依赖根");
   await assert.rejects(createGateSnapshot(consumedTask, consumedTarget, consumedSource),
     /既摆着本项目自己的包、又摆着 plain-consumer 这样不属于本项目的入口/,
     "祖先树里有第三方消费者时,根上的绑定证明不了闭包,必须拒绝");
@@ -576,8 +577,8 @@ try {
   git(deletedTask, "rm", "-r", "-q", join("packages", "lib"));
   git(deletedTask, "commit", "-qm", "drop the package, keep the sample");
 
-  const deletedSource = await readGateSource(deletedTask);
   const deletedTarget = targetIn(deleted);
+  const deletedSource = await readGateSource(deletedTask, deletedTarget);
   await assert.rejects(createGateSnapshot(deletedTask, deletedTarget, deletedSource),
     /没有「声明过、而且同名唯一」的替代位置/,
     "包被删掉、仓库里剩一份同名副本时必须拒绝,不许把安装入口绑到那份无关副本上");
@@ -607,8 +608,9 @@ try {
   git(consumer, "commit", "-qm", "depend on the external package");
 
   assert.equal(run(join(consumer, "external-probe.mjs")), "EXTERNAL_OK", "前提:工作区本来就跑得通");
-  const consumerSource = await readGateSource(consumer);
-  const consumerSnapshot = { source: consumerSource, target: targetIn(consumer) };
+  const consumerTarget = targetIn(consumer);
+  const consumerSource = await readGateSource(consumer, consumerTarget);
+  const consumerSnapshot = { source: consumerSource, target: consumerTarget };
   await createGateSnapshot(consumer, consumerSnapshot.target, consumerSource);
   assert.equal(run(join(consumerSnapshot.target, "external-probe.mjs")), "EXTERNAL_OK",
     "记录认下的外部 file 包照既定外链策略原样留着,不是「来源不明」");

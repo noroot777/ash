@@ -8,7 +8,7 @@ import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { acceptGateLogTail } from "./accept-gate-process.js";
 import { commitAt } from "./task-branch-plan.js";
 import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
-import { gateSourceMatches, readGateSource } from "./accept-gate-source.js";
+import { gateSnapshotPath, gateSourceMatches, readGateSource } from "./accept-gate-source.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -112,7 +112,8 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
     : project ? await gateHead(task, project.repoPath) : null;
   const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
   let sourceError: string | null = null;
-  const source = cwd && !unavailable ? await readGateSource(cwd).catch(error => { sourceError = String(error); return null; }) : null;
+  const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity"))
+    .catch(error => { sourceError = String(error); return null; }) : null;
   const stale = latestRow.command !== command || (frozen ? !head || head !== latestRow.sourceCommit
     : !gateSourceMatches(latestRow, source));
   return { command, running: null, latest: { ...view, stale }, basis, unavailable, sourceError, executionNotice };

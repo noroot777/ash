@@ -153,7 +153,7 @@ export async function acceptGateCheck(
 
   const cwd = await prepareGateCwd(task, project.repoPath);
   let source: GateSource;
-  try { source = await readGateSource(cwd); }
+  try { source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity")); }
   catch (error) {
     if (opts.intent !== "skip") return { accepted: false, httpStatus: 409, taskId: task.id,
       reason: "accept_gate_source_unavailable", error: String(error), status: task.status };
@@ -585,7 +585,7 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   if (await runningRun(task.id)) return true;
   const cwd = await existingTaskWorkspacePath(task, project.repoPath);
   if (!cwd) return true;
-  const source = await readGateSource(cwd).catch(() => null);
+  const source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity")).catch(() => null);
   if (!source) return false;
   const previous = await latestRun(task.id);
   return !(previous && previous.status === "passed"
