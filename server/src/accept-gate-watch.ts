@@ -26,7 +26,8 @@
 //  ④ **一份观测只能证明它自己那一刻的事**（第 5 轮 F1）。日志后来读不到了，末尾那一段里
 //     有没有输出就是未知 —— 「读不到」推不出「没有」。所以 scene、note、进度行、静默提醒
 //     共用同一条有效性：绝对断言（「全程没写过」「到最后还在出东西」）只有从头看到尾才
-//     说得出口，其余一律降成「截至某时」加一句未知。
+//     说得出口，其余一律降成「截至某时」加一句未知。**不可观测的区间也不许进静默计量**
+//     （第 6 轮 F1）：「接上之前的 70 分钟看不到」不等于「那 70 分钟它没输出」。
 //
 // 现场也不往日志里追加，在 accept-gate.ts 的 settleGate 里**第一时间冻结存盘**：日志里
 // 「谁最后写」不由我们说了算，停不掉的进程之后写的每个字节都能把它顶出可回显的那一段。
@@ -72,9 +73,16 @@ function timingsNow(): GateWatchTimings {
 export type GateSeen = {
   /** 命令自己产出的字节数（截止长度减掉开跑前就在的启动说明）。 */
   bytes: number;
-  /** **截至这次观测**它写没写过。注意它证不了后面那段读不到的区间里有没有写。 */
+  /**
+   * **截至这次观测**，我们**亲眼见过**它输出没有。没见过有两种：真的没写，和那段我们
+   * 看不见 —— 后者由 sinceMs/agoMs 区分。它证不了读不到的区间里有没有写。
+   */
   everProduced: boolean;
-  /** 到这次观测为止，距命令最后一次有输出过了多久。 */
+  /**
+   * **已确认**的静默时长。见过输出就是「距最后一次输出多久」；一次都没见过就是
+   * 「从开始能确认起到现在多久」—— 接入之前那段不可观测的时间**一个毫秒都不许算进来**
+   * （第 6 轮审查 F1：命令在第 69 分钟刚输出过，第 70 分钟才接上，不能报「连续静默 70 分钟」）。
+   */
   silentMs: number;
   /** 命令最后吐出来的那一行；它写过东西但尾部读不出可用的一行时是 null。 */
   lastLine: string | null;
@@ -178,8 +186,8 @@ export function gateWatchReport(scene: GateWatchScene): GateWatchVerdict {
         ? `它从头到尾没往门禁日志里写过东西 —— 可能是它把输出重定向到别处了，也可能真的一步都没走成。`
           + `先确认这条命令平时会不会往 stdout 打东西，再决定是查它的另一份日志还是查它卡在哪。`
         : !seen.everProduced
-          ? `开跑那一刻读不到这份日志，是开跑后第 ${minutes(seen.sinceMs)} 分钟才接上的：从接上到现在它一个字节都没写过，`
-            + `**更早的那段写没写过是未知的**。先确认开跑那会儿日志为什么读不到。`
+          ? `开跑那一刻读不到这份日志，是开跑后第 ${minutes(seen.sinceMs)} 分钟才接上的：接上之后这 ${minutes(seen.silentMs)} 分钟`
+            + `它一个字节都没写过，**更早的那段写没写过是未知的**（那段不算在静默时长里）。先确认开跑那会儿日志为什么读不到。`
           : quiet
             ? `最后 ${minutes(seen.silentMs)} 分钟一个字节都没有。**更像**是停在上面那一行之后的某一步 `
               + `（它的断言可能早跑完了，是进程 —— 浏览器、开发服务 —— 没退出）；但日志只能证明有没有在输出，`
@@ -198,9 +206,16 @@ export function gateWatchReport(scene: GateWatchScene): GateWatchVerdict {
     "",
     "[ash] ──── 被收掉时的现场 ────",
     `[ash] 跑了 ${minutes(scene.elapsedMs)} 分钟（上限 ${minutes(scene.limitMs)} 分钟），命令自己的输出累计${bytesText}。`,
-    seen
-      ? `[ash] 最后一次有输出在 ${minutes(confirmedAgoMs)} 分钟前，即开跑后第 ${minutes(scene.elapsedMs - confirmedAgoMs)} 分钟。`
-      : `[ash] 最后一次有输出在什么时候：读不出来。`,
+    // 没亲眼见过输出时**不存在**「最后一次输出」这个时刻：拿开跑时刻顶上去就是凭空造了
+    // 一个事件时间（第 6 轮审查 F1）。只有从头看到尾才敢说「一次都没有过」。
+    !seen ? `[ash] 最后一次有输出在什么时候：读不出来。`
+      : seen.everProduced
+        ? `[ash] 最后一次有输出在 ${minutes(confirmedAgoMs)} 分钟前，即开跑后第 ${minutes(scene.elapsedMs - confirmedAgoMs)} 分钟。`
+        : late || blind
+          ? `[ash] 最后一次有输出在什么时候：未知。能确认的只有 —— `
+            + `${late ? `开跑后第 ${minutes(seen.sinceMs)} 分钟才接上这份日志，接上之后` : "从开跑起"}`
+            + `那 ${minutes(seen.silentMs)} 分钟没有新增输出${blind ? `，再往后 ${minutes(seen.agoMs)} 分钟读不到` : ""}。`
+          : `[ash] 最后一次有输出：从开跑到被收掉都没有过。`,
     `[ash] 停在这一行：${stoppedAt}`,
     ...(blind ? [`[ash] 注意：末尾 ${minutes(seen.agoMs)} 分钟读不到这份日志，上面这几个数都只到那之前；`
       + `那一段里有没有输出是未知的。`] : []),
@@ -245,8 +260,10 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
   const first = sightGateLog(opts.logPath, LAST_LINE_SCAN_BYTES);
   let base = first?.length ?? null;
   let identity = first?.identity ?? null;
+  // baseMono 同时是**静默计量的起点**：在它之前我们看不见这份日志，看不见就什么都证不了。
   let baseMono = startedMono;
-  let lastOutputMono = startedMono;
+  // 亲眼见过输出才有「最后一次输出时刻」；没见过就是 null，不拿开跑时刻冒充（第 6 轮 F1）。
+  let lastOutputMono: number | null = null;
   let lastSightMono = startedMono;
   let seen: (Omit<GateSeen, "agoMs"> & { atMono: number }) | null = null;
   let noticedSilence = false;
@@ -275,15 +292,18 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
         // 「距上次观测多久」之内**，系统时间在这中间被校正也折不进来（第 4 轮审查 N3）。
         const age = Math.min(sight.mtimeMs ? Math.max(0, Date.now() - sight.mtimeMs) : 0,
           Math.max(0, at - lastSightMono));
-        lastOutputMono = at - age;
+        // 再夹一道：静默起点不许早于「开始能确认」那一刻 —— 更早的事我们没资格作证。
+        lastOutputMono = Math.max(baseMono, at - age);
         // 又出东西了：下一段静默还得再喊一声，否则「安静 → 恢复 → 再安静」只提醒第一次
         //（第 4 轮审查 N1）。
         noticedSilence = false;
       }
       lastSightMono = at;
       seen = {
-        atMono: at, bytes, everProduced: bytes > 0 || (seen?.everProduced ?? false),
-        silentMs: Math.max(0, at - lastOutputMono), lastLine: lastCommandLine(sight, base),
+        // 见没见过输出只有一个来源:lastOutputMono 有没有被置过。两套记法会漂。
+        atMono: at, bytes, everProduced: lastOutputMono !== null, lastLine: lastCommandLine(sight, base),
+        // 静默从「最后一次见到输出」起算；一次都没见过就从「开始能确认」起算,不可观测的那段不计。
+        silentMs: Math.max(0, at - (lastOutputMono ?? baseMono)),
         sinceMs: Math.max(0, baseMono - startedMono),
       };
     }
@@ -294,8 +314,10 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
       nextProgressAt = at + timings.progressMs;
       marks.push(`${minutes(elapsedMs)}m/${ok && seen ? size(seen.bytes) : "?"}`);
       appendGateNote(opts.logPath, ok && seen
-        ? `[ash] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 已产出 ${size(seen.bytes)}`
-          + ` · 最近一次输出在 ${minutes(seen.silentMs)} 分钟前`
+        ? `[ash] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 已产出 ${size(seen.bytes)} · `
+          + (seen.everProduced ? `最近一次输出在 ${minutes(seen.silentMs)} 分钟前`
+            : seen.sinceMs > 0 ? `接上日志之后这 ${minutes(seen.silentMs)} 分钟没见过新增输出`
+              : `到现在还没见过它输出`)
         : `[ash] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 读不到这份日志，产出和静默时长都看不到`);
     }
     if (ok) {
@@ -304,8 +326,11 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
         noticedSilence = true;
         // 只喊一声。要不要现在就收掉它由人决定（验收台上那颗「取消」），理由见
         // ACCEPT_GATE_SILENCE_MS 的注释。
-        appendGateNote(opts.logPath,
-          `[ash] 注意 · 已经连续 ${minutes(seen.silentMs)} 分钟没有任何输出；命令仍在跑，没有被收掉。`);
+        appendGateNote(opts.logPath, !seen.everProduced && seen.sinceMs > 0
+          // 接上之前那段看不见,不能算进「连续没有任何输出」—— 它可能正好在那会儿输出过。
+          ? `[ash] 注意 · 自开跑后第 ${minutes(seen.sinceMs)} 分钟接上这份日志起，连续 ${minutes(seen.silentMs)} 分钟`
+            + `没有新增输出（更早的看不到）；命令仍在跑，没有被收掉。`
+          : `[ash] 注意 · 已经连续 ${minutes(seen.silentMs)} 分钟没有任何输出；命令仍在跑，没有被收掉。`);
       }
     } else if (!noticedBlind) {
       noticedBlind = true;

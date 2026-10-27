@@ -225,6 +225,30 @@ try {
     assert.match(notes, /读不到这份日志，产出和静默时长都看不到/, "进度行也得跟着失效，不许报旧数字");
   }
 
+  // ⑩d 第 6 轮 F1：开跑那会儿日志读不到，命令**正是在那段里**输出的。接上之后不许把
+  //    那段未知时间算进静默 —— 产品实测里它变成了「已经连续 70 分钟没有任何输出」，
+  //    而命令在第 69 分钟刚打过东西。
+  {
+    const dir = join(root, "blind-start");
+    mkdirSync(dir);
+    const logPath = join(dir, "blind-start.log");
+    writeFileSync(logPath, "[ash] $ blind-start-command\n", "utf8");
+    chmodSync(logPath, 0o200); // 只写不可读：看门狗这段时间什么都看不见
+    overrideGateWatchTimings({ silenceMs: 150, progressMs: 120, sampleMs: 10, timeoutMs: 900 });
+    const verdict = await awaitScene((resolve) => {
+      startGateWatch({ logPath, onVerdict: resolve });
+      setTimeout(() => appendFileSync(logPath, "OUTPUT_WHILE_BLIND\n", "utf8"), 120);
+      setTimeout(() => chmodSync(logPath, 0o600), 300); // 到这儿才接上
+    });
+    const notes = readFileSync(gateNotesPath(logPath), "utf8");
+    assert.doesNotMatch(notes, /已经连续 \d+\.\d 分钟没有任何输出/,
+      "接上之前那段看不见，不许算进「连续没有任何输出」（第 6 轮 F1）");
+    assert.match(notes, /接上这份日志起/, "该说的是「自接上起没有新增」，这才是能确认的那部分");
+    assert.match(verdict.scene, /最后一次有输出在什么时候：未知/, "没亲眼见过输出就没有这个时刻");
+    assert.doesNotMatch(verdict.scene, /最后一次有输出在 \d+\.\d 分钟前/);
+    assert.match(verdict.scene, /才接上这份日志/);
+  }
+
   // ⑩c 第 5 轮 N1：开跑那一刻日志读不到，后来可读了要能接上，不许哑一整场。
   {
     const logPath = join(root, "late-start.log");
@@ -323,7 +347,8 @@ try {
 
     // 同一条的另一半：旧观测里它还没写过东西 —— 这**不等于**全程没写过。
     const staleMute = gateWatchReport({ ...limits, marks: [],
-      seen: { silentMs: 60_000, everProduced: false, lastLine: null, bytes: 0, agoMs: 40 * 60_000, sinceMs: 0 } });
+      seen: { silentMs: 50 * 60_000, everProduced: false, lastLine: null, bytes: 0, agoMs: 40 * 60_000, sinceMs: 0 } });
+    assert.match(staleMute.scene, /能确认的只有 —— 从开跑起那 50\.0 分钟没有新增输出，再往后 40\.0 分钟读不到。/);
     assert.match(staleMute.scene, /停在这一行：（截至读得到的那一刻，它还没往门禁日志里写过东西）/);
     assert.match(staleMute.scene, /这不等于全程没写过/);
     assert.doesNotMatch(staleMute.scene, /它从头到尾没往门禁日志里写过东西/, "后面 40 分钟没看见，断言不了全程");
@@ -331,12 +356,20 @@ try {
     assert.match(staleMute.note, /到读得到的那一刻为止它还没写过东西/);
 
     // 第 5 轮 N1：开跑那一刻读不到日志、后来才接上的，更早那段同样是未知。
+    // 第 6 轮 F1：接上之前那 7 分钟不可观测 —— 既不许算进静默时长（83 不是 90），
+    // 也不许凭空给出一个「最后一次输出」的时刻。
     const late = gateWatchReport({ ...limits, marks: [],
-      seen: { silentMs: 90 * 60_000, everProduced: false, lastLine: null, bytes: 0, agoMs: 0, sinceMs: 7 * 60_000 } });
+      seen: { silentMs: 83 * 60_000, everProduced: false, lastLine: null, bytes: 0, agoMs: 0, sinceMs: 7 * 60_000 } });
     assert.match(late.scene, /开跑后第 7\.0 分钟才接上的/);
     assert.match(late.scene, /\*\*更早的那段写没写过是未知的\*\*/);
+    assert.match(late.scene, /最后一次有输出在什么时候：未知。能确认的只有 —— 开跑后第 7\.0 分钟才接上这份日志，接上之后那 83\.0 分钟没有新增输出。/,
+      "没亲眼见过输出就没有「最后一次输出」这个时刻，更不能拿开跑时刻顶上去");
+    assert.doesNotMatch(late.scene, /最后一次有输出在 \d+\.\d 分钟前/);
     assert.doesNotMatch(late.scene, /它从头到尾没往门禁日志里写过东西/);
     assert.doesNotMatch(late.note, /期间它一个字节都没往门禁日志里写过/);
+
+    // 全程看得见、确实一个字节都没有：这一句才说得出口。
+    assert.match(mute.scene, /最后一次有输出：从开跑到被收掉都没有过。/);
   }
 
   // ⑧ 第 3 轮 F1 的另一半：现场自己存不下去（磁盘满、权限拒绝）必须**说出来**。
