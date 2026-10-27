@@ -230,7 +230,8 @@ try {
   save(join(malformed, "node_modules", "valid", "package.json"), '{"name":"valid","version":"1.0.0"}');
   save(join(malformedProject, "node_modules"), "not a dependency directory");
   const malformedInputs = await resolutionInputs([malformedProject]);
-  assert.deepEqual(malformedInputs.flatMap(input => input.selected.map(item => item.entry)), ["valid"]);
+  assert.deepEqual(malformedInputs.find(input => input.path === join(malformed, "node_modules"))!.selected.map(item => item.entry), ["valid"]);
+  assert.equal(malformedInputs.some(input => input.path === join(malformedProject, "node_modules")), false);
   assert.deepEqual(await resolutionInputs([malformedProject]), malformedInputs);
   assert.equal(await ambientDigest(malformedProject, malformedProject), await ambientDigest(malformedProject, malformedProject));
   if (process.platform !== "win32") {
