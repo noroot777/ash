@@ -139,7 +139,6 @@ api.post("/tasks/:id/run", async (c) => {
       ? runDuet(taskId, { turnHeld: true, actingUserId: acting })
       : resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: acting }));
   if (!started.ok) {
-    releaseTurn(taskId);
     return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
   }
   return c.json({ started: true }, 202);
@@ -199,7 +198,6 @@ api.post("/tasks/:id/fire", async (c) => {
       ? runDuet(taskId, { turnHeld: true, actingUserId: firedBy })
       : runTask(taskId, { turnHeld: true, actingUserId: firedBy })); // 全新一轮,永不 resume
   if (!fired.ok) {
-    releaseTurn(taskId);
     return c.json({ error: queueClaimError(fired), blockedBy: fired.blockers }, 409);
   }
   return c.json({ started: true, fresh: true }, 202);
@@ -493,7 +491,6 @@ api.post("/tasks/:id/retry", async (c) => {
       ? resumeDuet(taskId, { turnHeld: true, actingUserId: acting })
       : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting }));
   if (!started.ok) {
-    releaseTurn(taskId);
     return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
   }
   return c.json({ started: true }, 202);

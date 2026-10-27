@@ -180,19 +180,23 @@ export async function seatThenStart(
   taskId: string,
   start: (seat: QueueSeat | null) => Promise<unknown>,
 ): Promise<{ ok: true } | { ok: false; blockers: string[]; transient?: boolean }> {
+  const owner = turnIdentity(taskId);
   let claim: QueueSeatClaim;
   try {
     claim = await claimQueueSeat(taskId);
   } catch (err) {
     // 临界区里的读也可能撞锁:异常传出去就是手动入口 claimTurn 之后的 500 + 锁泄漏
-    // (调用方的「认领失败 → releaseTurn」分支走不到)。读失败没有写入遗留,按失败
+    // (调用方的「认领失败」分支走不到)。读失败没有写入遗留,按失败
     // 认领返回即可,下一次点运行就是干净的重试。
     console.error(`[ash] 队列占位认领读取失败(${taskId}):`, err);
+    releaseTurn(taskId, owner);
     return { ok: false, transient: true, blockers: ["队列占位读写失败，请稍后重试"] };
   }
-  if (!claim.ok) return claim;
+  if (!claim.ok) {
+    releaseTurn(taskId, owner);
+    return claim;
+  }
   const seat = claim.seat;
-  const owner = turnIdentity(taskId);
   const started = await waitForStartReceipt(taskId, async () => {
     try {
       await start(seat);
@@ -200,7 +204,7 @@ export async function seatThenStart(
       console.error(`[ash] 任务 ${taskId} 启动异常:`, err);
       await appendTaskTimeline(taskId, `本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`);
     } finally {
-      if (owner && turnIdentity(taskId) === owner) releaseTurn(taskId);
+      releaseTurn(taskId, owner);
       await seat?.release();
     }
   });

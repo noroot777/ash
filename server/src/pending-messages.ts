@@ -197,6 +197,7 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
     .where(eq(scheduledMessages.id, message.id));
   publishPendingMessages(message.taskId);
   await recoverPendingCheckpoints(message.taskId);
+  if (message.origin === CHECKPOINT_RUN_ORIGIN) return;
   const label = message.mode === "queued" ? "排队消息" : "定时消息";
   const when = message.mode === "queued" ? "" : `（原定 ${message.sendAt}）`;
   // 原文必须一起留下:这条消息取消之后就从托盘里消失了,不把用户打的字抄进时间线,

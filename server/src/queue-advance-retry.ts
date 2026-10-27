@@ -37,11 +37,9 @@ export async function cancelQueueAdvance(taskId: string): Promise<boolean> {
 }
 
 export async function requestQueueAdvance(queueId: string, candidate: Task): Promise<QueueAdvanceRequest | null> {
-  if (isQueueAdvanceCanceling(candidate.id)) return null;
   return db.transaction(async (transaction) => {
     const [task] = await transaction.select().from(tasks).where(eq(tasks.id, candidate.id));
-    if (!task || task.archived || ["done", "failed", "canceled"].includes(task.status)
-      || task.resumePromptGeneration !== candidate.resumePromptGeneration) return null;
+    if (!task || task.archived || ["done", "failed", "canceled"].includes(task.status)) return null;
     if (task.groupId) {
       const [group] = await transaction.select().from(groups).where(eq(groups.id, task.groupId));
       if (group?.paused) return null;
@@ -49,7 +47,6 @@ export async function requestQueueAdvance(queueId: string, candidate: Task): Pro
     const previous = task.queueAdvanceRequest;
     const request = previous?.queueId === queueId && previous.resumePromptGeneration === task.resumePromptGeneration
       ? previous : { id: id(), queueId, resumePromptGeneration: task.resumePromptGeneration, prevStatus: candidate.status };
-    if (isQueueAdvanceCanceling(task.id)) return null;
     await transaction.update(tasks).set({ queueAdvanceRequest: request }).where(eq(tasks.id, task.id));
     return { ...request, taskId: task.id };
   }, { behavior: "immediate" });

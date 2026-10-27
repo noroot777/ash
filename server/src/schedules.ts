@@ -100,7 +100,6 @@ async function fire(taskId: string): Promise<boolean> {
   const started = await seatThenStart(taskId, () =>
     t.mode === "duet" ? runDuet(taskId, { turnHeld: true }) : runTask(taskId, { turnHeld: true }));
   if (!started.ok) {
-    releaseTurn(taskId);
     return false;
   }
   return true;
