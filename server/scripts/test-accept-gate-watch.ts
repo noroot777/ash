@@ -185,6 +185,60 @@ try {
       "读不出来要如实返回 null，不许装成一份空文件（那会被说成「它没输出过」）");
   }
 
+  // ⑨b 第 5 轮 F1 的采集端：fstat 看见 24MB、真读的时候被截成 0B。老做法把截止收窄成
+  //    「长度 2000、尾巴 0 字节」交出去 —— 那个截止从来没有真实存在过，调用方也识别不了。
+  //    要么是完整的那一份，要么作废。
+  {
+    const logPath = join(root, "truncated.log");
+    const big = Buffer.alloc(12 * 1024 * 1024, 0x61);
+    const ready = join(root, "truncate-ready");
+    for (let round = 0; round < 4; round++) {
+      writeFileSync(logPath, big);
+      rmSync(ready, { force: true });
+      spawn(process.execPath, ["-e",
+        `const fs = require("node:fs"); fs.writeFileSync(process.argv[2], "1");`
+        + ` setTimeout(() => { try { fs.truncateSync(process.argv[1], 0); } catch {} }, 8);`,
+        logPath, ready], { stdio: "ignore" }).unref();
+      for (let i = 0; i < 400 && !existsSync(ready); i++) await sleep(2);
+      const sight = sightGateLog(logPath, big.length);
+      assert.ok(sight === null || sight.length === big.length,
+        "合成一个介于两者之间的截止 = 凭空造了一份事实；只许「完整」或「作废」");
+      await sleep(20);
+    }
+  }
+
+  // ⑩b 第 5 轮 F1 的提醒端：日志读不到的那段时间，**不许**把时间流逝说成「连续没有任何
+  //    输出」，也不许把上一拍的字节数当成现在的产出。
+  {
+    const logPath = join(root, "went-blind.log");
+    writeFileSync(logPath, "BLIND_CASE_STARTED\n", "utf8");
+    overrideGateWatchTimings({ silenceMs: 150, progressMs: 120, sampleMs: 10, timeoutMs: 600_000 });
+    const watch = startGateWatch({ logPath, onVerdict: () => {} });
+    await sleep(40);
+    rmSync(logPath);
+    await sleep(500);
+    watch.stop();
+    const notes = readFileSync(gateNotesPath(logPath), "utf8");
+    assert.match(notes, /\[ash\] 注意 · 这份日志读不到了/, "读不到要如实说一声，这正是该查的事");
+    assert.equal(notes.match(/这份日志读不到了/g)?.length, 1, "一段瞎掉只喊一次，不要刷屏");
+    assert.doesNotMatch(notes, /连续 \d+\.\d 分钟没有任何输出/, "读不到推不出没有输出（第 5 轮 F1）");
+    assert.match(notes, /读不到这份日志，产出和静默时长都看不到/, "进度行也得跟着失效，不许报旧数字");
+  }
+
+  // ⑩c 第 5 轮 N1：开跑那一刻日志读不到，后来可读了要能接上，不许哑一整场。
+  {
+    const logPath = join(root, "late-start.log");
+    overrideGateWatchTimings({ silenceMs: 100_000, progressMs: 10_000, sampleMs: 10, timeoutMs: 600 });
+    const verdict = await awaitScene((resolve) => {
+      startGateWatch({ logPath, onVerdict: resolve });
+      setTimeout(() => writeFileSync(logPath, "LATE_HEADER\n", "utf8"), 120);
+      setTimeout(() => appendFileSync(logPath, "LATE_OUTPUT_LINE\n", "utf8"), 300);
+    });
+    assert.match(verdict.scene, /停在这一行：`LATE_OUTPUT_LINE`/, "后来读到了就得接上，不能一直报未知");
+    assert.match(verdict.scene, /自开跑后第 \d+\.\d 分钟起算/, "接上之前的产出算不进来，这要说破");
+    assert.doesNotMatch(verdict.scene, /它从头到尾没往门禁日志里写过东西/);
+  }
+
   // ⑩ 第 4 轮 N1：安静 → 恢复输出 → 再安静，第二段也得喊一声。只认一次的话，
   //    「卡住前先安静过一阵」的命令后面再怎么静都没人提醒。
   {
@@ -228,17 +282,17 @@ try {
   {
     const limits = { elapsedMs: 90 * 60_000, limitMs: 90 * 60_000, silenceMs: 20 * 60_000 };
     const quiet = gateWatchReport({ ...limits, marks: ["5.0m/4.1KB"],
-      seen: { silentMs: 45 * 60_000, everProduced: true, lastLine: "system-notices-dom ok", bytes: 12486, agoMs: 0 } });
+      seen: { silentMs: 45 * 60_000, everProduced: true, lastLine: "system-notices-dom ok", bytes: 12486, agoMs: 0, sinceMs: 0 } });
     assert.match(quiet.scene, /\*\*更像\*\*是停在上面那一行之后的某一步/);
     assert.match(quiet.scene, /日志只能证明有没有在输出/, "必须写出反面可能，否则是在给错误的排查方向");
 
     const busy = gateWatchReport({ ...limits, marks: [],
-      seen: { silentMs: 12_000, everProduced: true, lastLine: "step 9000", bytes: 31_000, agoMs: 0 } });
+      seen: { silentMs: 12_000, everProduced: true, lastLine: "step 9000", bytes: 31_000, agoMs: 0, sinceMs: 0 } });
     assert.match(busy.scene, /\*\*更像\*\*是整条命令在爬/);
     assert.match(busy.scene, /卡死在打心跳也长这样/);
 
     const mute = gateWatchReport({ ...limits, marks: [],
-      seen: { silentMs: 90 * 60_000, everProduced: false, lastLine: null, bytes: 0, agoMs: 0 } });
+      seen: { silentMs: 90 * 60_000, everProduced: false, lastLine: null, bytes: 0, agoMs: 0, sinceMs: 0 } });
     assert.match(mute.scene, /停在这一行：（这条命令没有往门禁日志里写过任何东西）/);
     assert.match(mute.scene, /可能是它把输出重定向到别处了/, "全程没输出和「出过、后来不出了」是两回事");
     assert.match(mute.scene, /产出节奏（开跑第几分钟 \/ 累计输出）：（没跑够一个采样间隔）/);
@@ -252,11 +306,37 @@ try {
     assert.doesNotMatch(blind.scene, /没有往门禁日志里写过任何东西/, "读不到 ≠ 没写过");
     assert.doesNotMatch(blind.note, /一个字节都没往门禁日志里写过/);
 
-    // 最后一次读到它是很久以前：数还给，但要说破它是那时候的。
-    const stale = gateWatchReport({ ...limits, marks: [],
-      seen: { silentMs: 30 * 60_000, everProduced: true, lastLine: "step 9000", bytes: 2048, agoMs: 20 * 60_000 } });
-    assert.match(stale.scene, /上面这几个数截至 20\.0 分钟前最后一次读到它/);
-    assert.match(stale.note, /（截至 20\.0 分钟前最后一次读到它。）/);
+    // 第 5 轮 F1：一份过去的观测只能证明它自己那一刻的事。末尾有读不到的一段时，
+    // 既不许拿当时的 silentMs 冒充现在，也不许用它去下「全程没有 / 到最后还在出东西」。
+    const staleBusy = gateWatchReport({ ...limits, marks: [],
+      seen: { silentMs: 60_000, everProduced: true, lastLine: "step 9000", bytes: 2048, agoMs: 40 * 60_000, sinceMs: 0 } });
+    assert.match(staleBusy.scene, /最后一次有输出在 41\.0 分钟前，即开跑后第 49\.0 分钟。/,
+      "参照点只有一个：最后一次**确认**有输出距今多久（当时静 1 分钟 + 之后瞎了 40 分钟）");
+    assert.match(staleBusy.scene, /末尾 40\.0 分钟读不到这份日志/);
+    assert.match(staleBusy.scene, /都是未知/, "读不到推不出没有");
+    assert.doesNotMatch(staleBusy.scene, /到被收掉它都还在出东西/, "40 分钟没看见了，凭什么说它还在出东西");
+    assert.doesNotMatch(staleBusy.scene, /\*\*更像\*\*/, "不可观测的一段里卡住和在爬都可能，别选边");
+    assert.match(staleBusy.scene, /累计 2.0KB（只算到 40\.0 分钟前）/);
+    assert.match(staleBusy.note, /最后一次确认有输出在 41\.0 分钟前/);
+    assert.match(staleBusy.note, /末尾 40\.0 分钟读不到这份日志，那一段是未知的。/);
+    assert.doesNotMatch(staleBusy.note, /到最后都还在出东西/);
+
+    // 同一条的另一半：旧观测里它还没写过东西 —— 这**不等于**全程没写过。
+    const staleMute = gateWatchReport({ ...limits, marks: [],
+      seen: { silentMs: 60_000, everProduced: false, lastLine: null, bytes: 0, agoMs: 40 * 60_000, sinceMs: 0 } });
+    assert.match(staleMute.scene, /停在这一行：（截至读得到的那一刻，它还没往门禁日志里写过东西）/);
+    assert.match(staleMute.scene, /这不等于全程没写过/);
+    assert.doesNotMatch(staleMute.scene, /它从头到尾没往门禁日志里写过东西/, "后面 40 分钟没看见，断言不了全程");
+    assert.doesNotMatch(staleMute.note, /一个字节都没往门禁日志里写过/, "交接那句同样不许下绝对断言");
+    assert.match(staleMute.note, /到读得到的那一刻为止它还没写过东西/);
+
+    // 第 5 轮 N1：开跑那一刻读不到日志、后来才接上的，更早那段同样是未知。
+    const late = gateWatchReport({ ...limits, marks: [],
+      seen: { silentMs: 90 * 60_000, everProduced: false, lastLine: null, bytes: 0, agoMs: 0, sinceMs: 7 * 60_000 } });
+    assert.match(late.scene, /开跑后第 7\.0 分钟才接上的/);
+    assert.match(late.scene, /\*\*更早的那段写没写过是未知的\*\*/);
+    assert.doesNotMatch(late.scene, /它从头到尾没往门禁日志里写过东西/);
+    assert.doesNotMatch(late.note, /期间它一个字节都没往门禁日志里写过/);
   }
 
   // ⑧ 第 3 轮 F1 的另一半：现场自己存不下去（磁盘满、权限拒绝）必须**说出来**。

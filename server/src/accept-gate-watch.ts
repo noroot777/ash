@@ -12,7 +12,7 @@
 //  （两样都落在日志**旁边**那份 .notes 里，回显给界面和 agent 的那一段仍然带着它们）
 //  · 撞上时限那一刻交出一段「现场」：停在哪一行、静了多久、产出节奏是什么样
 //
-// 三条边界，都是审查钉下来的，别回退：
+// 四条边界，都是审查钉下来的，别回退：
 //  ① **不拿静默去掐命令**（第 1 轮 F1）。日志长不长只能证明有没有在输出，证明不了有没有
 //     在前进；理由与出路写在 ACCEPT_GATE_SILENCE_MS 的注释里。同理，结论只摆证据和两种
 //     读法，不替人断言「就是卡住」或「就是在爬」—— 卡死的进程一样可以一直打心跳。
@@ -23,6 +23,10 @@
 //  ③ **一拍只读一次日志**（第 4 轮 F1）。末行、字节数、写没写过、静了多久全部出自同一次
 //     有界观测（accept-gate-observe.ts），后到的字节只能进下一拍。分几次读就会拼出
 //     「停在这一行 X、累计 26B」又「从头到尾没写过东西」这种自相矛盾的裁定。
+//  ④ **一份观测只能证明它自己那一刻的事**（第 5 轮 F1）。日志后来读不到了，末尾那一段里
+//     有没有输出就是未知 —— 「读不到」推不出「没有」。所以 scene、note、进度行、静默提醒
+//     共用同一条有效性：绝对断言（「全程没写过」「到最后还在出东西」）只有从头看到尾才
+//     说得出口，其余一律降成「截至某时」加一句未知。
 //
 // 现场也不往日志里追加，在 accept-gate.ts 的 settleGate 里**第一时间冻结存盘**：日志里
 // 「谁最后写」不由我们说了算，停不掉的进程之后写的每个字节都能把它顶出可回显的那一段。
@@ -41,9 +45,6 @@ const LAST_LINE_SCAN_BYTES = 8000;
 
 /** 最近一次输出在这个数以内，才好意思说它「还在出东西」。 */
 const RECENT_OUTPUT_MS = 2 * 60_000;
-
-/** 最后一次读到日志超过这个数，现场就要说破「下面这些数是那时候的」。 */
-const STALE_SIGHT_MS = 60_000;
 
 /** 产出节奏最多列多少个采样点，多了从最早的开始省略。 */
 const MAX_MARKS = 24;
@@ -71,14 +72,22 @@ function timingsNow(): GateWatchTimings {
 export type GateSeen = {
   /** 命令自己产出的字节数（截止长度减掉开跑前就在的启动说明）。 */
   bytes: number;
-  /** 截止之内它到底写没写过。全程安静和「出过、后来不出了」是两回事。 */
+  /** **截至这次观测**它写没写过。注意它证不了后面那段读不到的区间里有没有写。 */
   everProduced: boolean;
-  /** 距命令最后一次有输出过了多久。 */
+  /** 到这次观测为止，距命令最后一次有输出过了多久。 */
   silentMs: number;
   /** 命令最后吐出来的那一行；它写过东西但尾部读不出可用的一行时是 null。 */
   lastLine: string | null;
-  /** 这次观测离被收掉有多久。大于 0 说明之后日志就读不到了，上面几项是那时候的样子。 */
+  /**
+   * 这次观测离被收掉有多久。**大于 0 = 末尾这一段日志读不到**，这份观测只能证明它自己
+   * 那一刻的事，不能拿来说「全程没有」「到最后还在出东西」（第 5 轮审查 F1）。
+   */
   agoMs: number;
+  /**
+   * 基线是开跑后第几毫秒定下的。大于 0 = 开跑那一刻读不到日志，是后来才接上的，
+   * 接上之前的产出算不进来，于是「它没写过东西」只能降级成未知（第 5 轮审查 N1）。
+   */
+  sinceMs: number;
 };
 
 /** 撞上时限那一刻的现场。`gateWatchReport` 把它翻译成人话。 */
@@ -138,53 +147,80 @@ function lastCommandLine(sight: GateLogSighting, base: number): string | null {
  */
 export function gateWatchReport(scene: GateWatchScene): GateWatchVerdict {
   const seen = scene.seen;
-  const quiet = !!seen && seen.silentMs >= scene.silenceMs;
-  const stale = !!seen && seen.agoMs >= STALE_SIGHT_MS;
-  // null 有三种事实，别混成一句话：读不到这份日志 / 从没写过 / 写过但尾部读不出可用的一行。
+  // 全篇只有一个参照点：**最后一次确认有输出距今多久**。观测本身可能是几十分钟前的，
+  // 把那时候的 silentMs 直接说成「最近一次在 1 分钟前」，就是拿旧量冒充现在（第 5 轮 F1）。
+  const confirmedAgoMs = seen ? seen.silentMs + seen.agoMs : 0;
+  // 末尾这一段读不到：里面它有没有继续出东西、停没停，一概未知 —— 「读不到」推不出「没有」。
+  const blind = !!seen && seen.agoMs > 0;
+  // 开跑那一刻没读到日志，基线是后来才接上的：接上之前写没写过同样未知。
+  const late = !!seen && seen.sinceMs > 0;
+  // 只有「收场那一刻还读得到」才敢给这两种读法：不可观测的区间里卡住和在爬都可能发生。
+  const quiet = !!seen && !blind && seen.silentMs >= scene.silenceMs;
+  const running = !!seen && !blind && seen.silentMs < RECENT_OUTPUT_MS;
+  // 「没写过」是一句绝对断言，只有**从头看到尾**才说得出口。
+  const neverWrote = !!seen && !seen.everProduced && !blind && !late;
   const stoppedAt = !seen ? "（读不到这份日志，说不出它停在哪）"
     : seen.lastLine ? `\`${seen.lastLine}\``
       : seen.everProduced ? "（它写过东西，但日志尾部读不出可用的一行）"
-        : "（这条命令没有往门禁日志里写过任何东西）";
+        : neverWrote ? "（这条命令没有往门禁日志里写过任何东西）"
+          : "（截至读得到的那一刻，它还没往门禁日志里写过东西）";
   const reading = !seen
     ? `这份日志一次都没读成功（被删掉、没权限、路径被换过都长这样），所以它写没写过、停在哪**都是未知** —— `
       + `别当成它没输出。先确认日志文件还在不在，再看命令是不是把输出写到了别处。`
-    : !seen.everProduced
-      ? `它从头到尾没往门禁日志里写过东西 —— 可能是它把输出重定向到别处了，也可能真的一步都没走成。`
-        + `先确认这条命令平时会不会往 stdout 打东西，再决定是查它的另一份日志还是查它卡在哪。`
-      : quiet
-        ? `最后 ${minutes(seen.silentMs)} 分钟一个字节都没有。**更像**是停在上面那一行之后的某一步 `
-          + `（它的断言可能早跑完了，是进程 —— 浏览器、开发服务 —— 没退出）；但日志只能证明有没有在输出，`
-          + `安静地编译/等远端的命令也长这样。`
-        : seen.silentMs < RECENT_OUTPUT_MS
-          ? `直到被收掉它都还在出东西（最近一次 ${minutes(seen.silentMs)} 分钟前）。**更像**是整条命令在爬 `
-            + `（对着产出节奏看它是一直这么慢，还是从某个点起慢下来 —— 后者多半是那时有别的活在抢机器）；`
-            + `但一直在打印不等于在前进，卡死在打心跳也长这样。`
-          // 停在「安静了十几分钟、但还没到该喊一声的程度」这一档：两种可能都没被排除，就别选边。
-          : `最近一次输出是 ${minutes(seen.silentMs)} 分钟前，既不算一直在出东西，也还没静到该喊一声。`
-            + `对着产出节奏看它是一路慢下来，还是在上面那一行之后就基本停了。`;
+    : blind
+      ? `末尾这 ${minutes(seen.agoMs)} 分钟读不到这份日志（被删掉、没权限、路径被换过都长这样），`
+        + `这段里它有没有继续出东西、有没有停下来，**都是未知** —— 读不到推不出没有。`
+        + (seen.everProduced
+          ? `能确认的只有：最后一次见到它出东西是 ${minutes(confirmedAgoMs)} 分钟前。`
+          : `能确认的只有：到读得到的那一刻为止它还没写过东西，这不等于全程没写过。`)
+        + `先确认日志文件还在不在，再回头判它是卡住还是在爬。`
+      : neverWrote
+        ? `它从头到尾没往门禁日志里写过东西 —— 可能是它把输出重定向到别处了，也可能真的一步都没走成。`
+          + `先确认这条命令平时会不会往 stdout 打东西，再决定是查它的另一份日志还是查它卡在哪。`
+        : !seen.everProduced
+          ? `开跑那一刻读不到这份日志，是开跑后第 ${minutes(seen.sinceMs)} 分钟才接上的：从接上到现在它一个字节都没写过，`
+            + `**更早的那段写没写过是未知的**。先确认开跑那会儿日志为什么读不到。`
+          : quiet
+            ? `最后 ${minutes(seen.silentMs)} 分钟一个字节都没有。**更像**是停在上面那一行之后的某一步 `
+              + `（它的断言可能早跑完了，是进程 —— 浏览器、开发服务 —— 没退出）；但日志只能证明有没有在输出，`
+              + `安静地编译/等远端的命令也长这样。`
+            : running
+              ? `直到被收掉它都还在出东西（最近一次 ${minutes(seen.silentMs)} 分钟前）。**更像**是整条命令在爬 `
+                + `（对着产出节奏看它是一直这么慢，还是从某个点起慢下来 —— 后者多半是那时有别的活在抢机器）；`
+                + `但一直在打印不等于在前进，卡死在打心跳也长这样。`
+              // 停在「安静了十几分钟、但还没到该喊一声的程度」这一档：两种可能都没被排除，就别选边。
+              : `最近一次输出是 ${minutes(seen.silentMs)} 分钟前，既不算一直在出东西，也还没静到该喊一声。`
+                + `对着产出节奏看它是一路慢下来，还是在上面那一行之后就基本停了。`;
+  const bytesText = !seen ? "（读不出来）"
+    : ` ${size(seen.bytes)}${blind ? `（只算到 ${minutes(seen.agoMs)} 分钟前）` : ""}`
+      + `${late ? `（自开跑后第 ${minutes(seen.sinceMs)} 分钟起算）` : ""}`;
   const log = [
     "",
     "[ash] ──── 被收掉时的现场 ────",
-    `[ash] 跑了 ${minutes(scene.elapsedMs)} 分钟（上限 ${minutes(scene.limitMs)} 分钟），`
-      // 空格是给数字留的，「（读不出来）」自带全角括号，再留一个就成了 `累计 （读不出来）`。
-      + `命令自己的输出累计${seen ? ` ${size(seen.bytes)}` : "（读不出来）"}。`,
+    `[ash] 跑了 ${minutes(scene.elapsedMs)} 分钟（上限 ${minutes(scene.limitMs)} 分钟），命令自己的输出累计${bytesText}。`,
     seen
-      ? `[ash] 最后一次有输出在 ${minutes(seen.silentMs)} 分钟前，即开跑后第 ${minutes(scene.elapsedMs - seen.silentMs - seen.agoMs)} 分钟。`
+      ? `[ash] 最后一次有输出在 ${minutes(confirmedAgoMs)} 分钟前，即开跑后第 ${minutes(scene.elapsedMs - confirmedAgoMs)} 分钟。`
       : `[ash] 最后一次有输出在什么时候：读不出来。`,
     `[ash] 停在这一行：${stoppedAt}`,
-    ...(stale ? [`[ash] 注意：上面这几个数截至 ${minutes(seen.agoMs)} 分钟前最后一次读到它，之后这份日志就读不出来了。`] : []),
+    ...(blind ? [`[ash] 注意：末尾 ${minutes(seen.agoMs)} 分钟读不到这份日志，上面这几个数都只到那之前；`
+      + `那一段里有没有输出是未知的。`] : []),
     `[ash] 产出节奏（开跑第几分钟 / 累计输出）：${scene.marks.length ? scene.marks.join(" ") : "（没跑够一个采样间隔）"}`,
     `[ash] 怎么读：${reading}`,
     "",
   ].join("\n");
+  const ran = `跑满 ${minutes(scene.elapsedMs)} 分钟被收掉`;
   const note = !seen
-    ? `跑满 ${minutes(scene.elapsedMs)} 分钟被收掉；这份日志读不出来，它写没写过、停在哪都没法说。`
-    : !seen.everProduced
-      ? `跑满 ${minutes(scene.elapsedMs)} 分钟被收掉，期间它一个字节都没往门禁日志里写过。`
-      : `跑满 ${minutes(scene.elapsedMs)} 分钟被收掉，停在 ${stoppedAt}，最近一次输出在 ${minutes(seen.silentMs)} 分钟前、`
-        + `累计产出 ${size(seen.bytes)}${quiet ? "，最后那段是完全静止的。"
-          : seen.silentMs < RECENT_OUTPUT_MS ? "，到最后都还在出东西。" : "。"}`
-        + (stale ? `（截至 ${minutes(seen.agoMs)} 分钟前最后一次读到它。）` : "");
+    ? `${ran}；这份日志读不出来，它写没写过、停在哪都没法说。`
+    : blind
+      ? `${ran}；${seen.everProduced
+        ? `最后一次确认有输出在 ${minutes(confirmedAgoMs)} 分钟前，停在 ${stoppedAt}、累计产出 ${size(seen.bytes)}`
+        : "到读得到的那一刻为止它还没写过东西"}；末尾 ${minutes(seen.agoMs)} 分钟读不到这份日志，那一段是未知的。`
+      : neverWrote
+        ? `${ran}，期间它一个字节都没往门禁日志里写过。`
+        : !seen.everProduced
+          ? `${ran}；开跑后第 ${minutes(seen.sinceMs)} 分钟才接上这份日志，从那以后它一个字节都没写过，更早的未知。`
+          : `${ran}，停在 ${stoppedAt}，最近一次输出在 ${minutes(seen.silentMs)} 分钟前、`
+            + `累计产出 ${size(seen.bytes)}${quiet ? "，最后那段是完全静止的。" : running ? "，到最后都还在出东西。" : "。"}`;
   return { scene: log, note };
 }
 
@@ -203,14 +239,18 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
   //   命令产出 = 截止长度 - base
   // 成立的前提是这个文件在它跑着的时候只有命令一个写入者 —— 所以我们自己的进度行在旁边
   // 那份 .notes 里，这里不写日志（第 3 轮审查 F2）。
+  // base/identity 在**第一次读成功**时定下，不一定是开跑那一刻：日志当时读不到（权限、
+  // 文件系统抖动）不该让这个看门狗哑一整场（第 5 轮审查 N1）。代价是接上之前的产出分不出
+  // 哪些是启动说明，所以那种情况下「它没写过东西」一律降级成未知，由 sinceMs 带给措辞。
   const first = sightGateLog(opts.logPath, LAST_LINE_SCAN_BYTES);
-  const base = first?.length ?? 0;
-  // 身份一变就不是同一份日志了（被轮转/删了重建），长度没法跟 base 比，这拍整个不要。
-  const identity = first?.identity ?? null;
+  let base = first?.length ?? null;
+  let identity = first?.identity ?? null;
+  let baseMono = startedMono;
   let lastOutputMono = startedMono;
   let lastSightMono = startedMono;
   let seen: (Omit<GateSeen, "agoMs"> & { atMono: number }) | null = null;
   let noticedSilence = false;
+  let noticedBlind = false;
   let nextProgressAt = startedMono + timings.progressMs;
   const marks: string[] = [];
   let finished = false;
@@ -219,10 +259,14 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
     if (finished) return;
     const at = now();
     const sight = sightGateLog(opts.logPath, LAST_LINE_SCAN_BYTES);
+    if (sight && (base === null || identity === null)) {
+      base = sight.length; identity = sight.identity; baseMono = at;
+    }
     // 读成功、还是那份文件、长度没倒退 —— 三条都满足才拿它整块换掉 `seen`。任何一条不满足
-    // 就**原样留着上一次读成功的那一份**（现场会说破它是多久以前的）：交出一份旧但自洽的
-    // 事实，好过把新读数拼进旧结论（第 4 轮审查 F1）。
-    if (sight && sight.identity === identity && sight.length - base >= (seen?.bytes ?? 0)) {
+    // 就**原样留着上一次读成功的那一份**（现场会说破它是多久以前的、那一段是未知的）：
+    // 交出一份旧但自洽的事实，好过把新读数拼进旧结论（第 4 轮审查 F1）。
+    const ok = !!sight && base !== null && sight.identity === identity && sight.length - base >= (seen?.bytes ?? 0);
+    if (ok && sight && base !== null) {
       const bytes = Math.max(0, sight.length - base);
       if (bytes > (seen?.bytes ?? 0)) {
         // 取 mtime 而不是这一拍的时刻：命令可能在上一拍刚过就写完了，按节拍记会凭空多算
@@ -240,22 +284,33 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
       seen = {
         atMono: at, bytes, everProduced: bytes > 0 || (seen?.everProduced ?? false),
         silentMs: Math.max(0, at - lastOutputMono), lastLine: lastCommandLine(sight, base),
+        sinceMs: Math.max(0, baseMono - startedMono),
       };
     }
-    const silentMs = Math.max(0, at - lastOutputMono);
     const elapsedMs = at - startedMono;
-    const produced = seen ? size(seen.bytes) : "（读不到日志）";
+    // 进度、静默提醒跟现场共用同一条有效性：**这一拍读不到日志，就不许拿上一拍的数字
+    // 当现在的事实，也不许把「时间在流逝」说成「它没有任何输出」**（第 5 轮审查 F1）。
     if (at >= nextProgressAt) {
       nextProgressAt = at + timings.progressMs;
-      marks.push(`${minutes(elapsedMs)}m/${seen ? size(seen.bytes) : "?"}`);
-      appendGateNote(opts.logPath, `[ash] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 已产出 ${produced}`
-        + ` · 最近一次输出在 ${minutes(silentMs)} 分钟前`);
+      marks.push(`${minutes(elapsedMs)}m/${ok && seen ? size(seen.bytes) : "?"}`);
+      appendGateNote(opts.logPath, ok && seen
+        ? `[ash] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 已产出 ${size(seen.bytes)}`
+          + ` · 最近一次输出在 ${minutes(seen.silentMs)} 分钟前`
+        : `[ash] 进度 · 开跑后 ${minutes(elapsedMs)} 分钟 · 读不到这份日志，产出和静默时长都看不到`);
     }
-    if (!noticedSilence && silentMs >= timings.silenceMs) {
-      noticedSilence = true;
-      // 只喊一声。要不要现在就收掉它由人决定（验收台上那颗「取消」），理由见
-      // ACCEPT_GATE_SILENCE_MS 的注释。
-      appendGateNote(opts.logPath, `[ash] 注意 · 已经连续 ${minutes(silentMs)} 分钟没有任何输出；命令仍在跑，没有被收掉。`);
+    if (ok) {
+      noticedBlind = false;
+      if (!noticedSilence && seen && seen.silentMs >= timings.silenceMs) {
+        noticedSilence = true;
+        // 只喊一声。要不要现在就收掉它由人决定（验收台上那颗「取消」），理由见
+        // ACCEPT_GATE_SILENCE_MS 的注释。
+        appendGateNote(opts.logPath,
+          `[ash] 注意 · 已经连续 ${minutes(seen.silentMs)} 分钟没有任何输出；命令仍在跑，没有被收掉。`);
+      }
+    } else if (!noticedBlind) {
+      noticedBlind = true;
+      appendGateNote(opts.logPath, `[ash] 注意 · 这份日志读不到了（被删掉、没权限、路径被换过都长这样）；`
+        + `命令仍在跑，但它之后有没有输出都看不到了。`);
     }
     if (elapsedMs >= timings.timeoutMs) {
       finished = true;
@@ -263,7 +318,7 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
       opts.onVerdict(gateWatchReport({
         elapsedMs, limitMs: timings.timeoutMs, silenceMs: timings.silenceMs,
         seen: seen ? { bytes: seen.bytes, everProduced: seen.everProduced, silentMs: seen.silentMs,
-          lastLine: seen.lastLine, agoMs: Math.max(0, at - seen.atMono) } : null,
+          lastLine: seen.lastLine, sinceMs: seen.sinceMs, agoMs: Math.max(0, at - seen.atMono) } : null,
         marks: marks.length > MAX_MARKS ? ["…", ...marks.slice(-MAX_MARKS)] : marks,
       }));
     }

@@ -34,8 +34,8 @@ export type GateLogSighting = {
 /**
  * 观测一次。`tailBytes` 是这次要捎带读回来的尾巴长度（末行就从它里面找）。
  *
- * 读的时候文件可能正被截短，于是 `readSync` 会早早返回 0；这时**把截止一起收窄**到真读到
- * 的位置，而不是留着一个比 `tail` 长的 `length` —— 那就又是两个时刻的事实混在一起了。
+ * 要么交出一份**完整覆盖 `[tailStart, length)` 的观测**，要么返回 null。中间状态（fstat
+ * 看见 10000B、真读的时候只剩 0B）不许拼成一份「小一点但看着正常」的观测交出去。
  */
 export function sightGateLog(logPath: string, tailBytes: number): GateLogSighting | null {
   let fd: number | null = null;
@@ -48,10 +48,13 @@ export function sightGateLog(logPath: string, tailBytes: number): GateLogSightin
     let read = 0;
     while (read < buf.length) {
       const got = readSync(fd, buf, read, buf.length - read, tailStart + read);
-      if (got <= 0) break;
+      // 读不满 = 文件在 fstat 之后被截短了。**这一拍整个作废**，不许把截止收窄成一份
+      // 「长度 2000、尾巴 0 字节」的合成观测交出去（第 5 轮审查 F1 采集端）：那个截止从来
+      // 没有真实存在过，调用方拿它跟 base 比长度也识别不出来，于是一份凭空的事实就进了裁定。
+      if (got <= 0) return null;
       read += got;
     }
-    return { length: tailStart + read, identity, mtimeMs: info.mtimeMs, tail: buf.subarray(0, read), tailStart };
+    return { length: info.size, identity, mtimeMs: info.mtimeMs, tail: buf, tailStart };
   } catch { return null; }
   finally { if (fd !== null) { try { closeSync(fd); } catch { /* 关不上也只是个 fd */ } } }
 }
