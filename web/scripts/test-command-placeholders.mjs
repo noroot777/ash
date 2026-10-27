@@ -248,6 +248,14 @@ try {
   // ⑬-中 「停了但没停净」:端口让出来了,同组还有核不上归属、ash 没敢杀的进程还活着。
   //   既不是「运行中」也不是「已停止」—— 混进「已停止」就是拿端口空闲核销了整次运行
   //   (第 2 轮审查发现 2)。停止按钮必须留着,让用户还能再按一次。
+  await page.evaluate(() => { window.__service = "partial"; });
+  await reopen();
+  await page.waitForFunction(() =>
+    /运行中（启动脚本已退出）/.test(document.querySelector(".cmd-pop__svc-state")?.textContent ?? ""));
+  await pop.getByRole("button", { name: "停止", exact: true }).waitFor();
+  assert.equal(await pop.getByRole("button", { name: "启动", exact: true }).count(), 0);
+  assert.doesNotMatch(await pop.locator(".cmd-pop__svc-state").innerText(), /已停止/);
+  await page.keyboard.press("Escape");
   await page.evaluate(() => { window.__service = "leftover"; });
   await reopen();
   // **等文案自己变过来**:上一幕(daemon)头部也摆着「停止」,只等那颗按钮出现等不到任何东西,

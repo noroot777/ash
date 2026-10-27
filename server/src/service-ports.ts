@@ -222,19 +222,30 @@ export async function stopByPorts(
       seen.add(pid);
       if (pid === process.pid) continue; // 那是 ash 自己
       if (left() <= 0) { outcome.unknown.push(port); break; }
-      const holder = await inspectPid(pid, left());
-      if (!holder) continue; // 刚才还在,现在没了 —— 不用管
+      const anchor = (await readLineage([pid], options.launchToken, left())).get(pid);
+      if (anchor === undefined) continue;
+      const inspected = await inspectPid(pid, left());
+      if (inspected.state === "gone") continue;
+      if (inspected.state === "unknown") {
+        if (anchor === "stranger") continue;
+        outcome.unknown.push(port);
+        outcome.membersIncomplete = true;
+        owed.set(pid, { pid, ours: anchor === "ours", reason: inspected.why });
+        continue;
+      }
+      const holder = inspected.holder;
       if (selfPgid !== null && holder.pgid === selfPgid) {
         outcome.spared.push({ holder, reason: "那是 ash 自己所在的进程组" });
+        continue;
+      }
+      if (anchor !== "ours") {
+        outcome.spared.push({ holder, reason: refusal(anchor) });
+        if (anchor !== "stranger") outcome.membersIncomplete = true;
         continue;
       }
       const group = groupMembers(holder.pid, holder.pgid, selfPgid);
       if (!group.complete) outcome.membersIncomplete = true;
       const lineage = await readLineage(group.members, options.launchToken, left());
-      if (lineage.get(holder.pid) !== "ours") {
-        outcome.spared.push({ holder, reason: refusal(lineage.get(holder.pid)) });
-        continue;
-      }
       // 带记号的同组成员一起收:守护进程常带着自己 fork 的工人(kb-web 里跑着采集器和
       // 向量编码子进程),只杀监听者会留下一地孤儿。**没记号的同组成员不动** ——
       // 进程组不是血缘证据,它只是调度单位(第 1 轮审查)。
@@ -287,6 +298,7 @@ export async function stopByPorts(
 export async function launchMembers(
   ports: Iterable<number>,
   token: string | null,
+  inspect: typeof inspectPid = inspectPid,
 ): Promise<LaunchSnapshot> {
   const members: LaunchMember[] = [];
   const groups = new Set<number>();
@@ -299,8 +311,23 @@ export async function launchMembers(
     if (!found.ok) { complete = false; continue; }
     for (const pid of found.pids) {
       if (pid === process.pid || seen.has(pid)) continue;
-      const holder = await inspectPid(pid);
-      if (!holder) continue; // 刚才还在,现在没了 —— 不用管
+      const anchor = (await readLineage([pid], token)).get(pid);
+      if (anchor === undefined || anchor === "stranger") { seen.add(pid); continue; }
+      if (anchor !== "ours") {
+        seen.add(pid);
+        members.push({ pid, ours: false, reason: refusal(anchor) });
+        complete = false;
+        continue;
+      }
+      const inspected = await inspect(pid);
+      if (inspected.state === "gone") { seen.add(pid); continue; }
+      if (inspected.state === "unknown") {
+        seen.add(pid);
+        members.push({ pid, ours: true, reason: inspected.why });
+        complete = false;
+        continue;
+      }
+      const holder = inspected.holder;
       if (selfPgid !== null && holder.pgid === selfPgid) { seen.add(pid); continue; } // 那是 ash 自己
       groups.add(holder.pgid);
       const group = groupMembers(holder.pid, holder.pgid, selfPgid);
@@ -415,6 +442,8 @@ export function stopByPortsSync(
     for (const pid of listeningPidsSync(port)) {
       if (seen.has(pid) || pid === process.pid) continue;
       seen.add(pid);
+      if (readLineageSync([pid], token).get(pid) !== "ours") { result.spared.push(pid); continue; }
+      if (!table || !table.pgidOf.has(pid)) result.membersIncomplete = true;
       const pgid = table?.pgidOf.get(pid) ?? 0;
       if (selfPgid !== null && pgid === selfPgid) { result.spared.push(pid); continue; }
       const group = groupMembers(pid, pgid, selfPgid);

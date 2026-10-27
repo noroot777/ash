@@ -30,8 +30,8 @@ export type TerminalSessionInfo = {
    *
    *  · `none` / `requested` / `verified` —— 没人停过 / 停了但还没核到终态 / 核验过停净了；
    *  · `unresolved` —— 停止动作跑完了，但**证明不到停净**。`pids` 是核不上归属所以一个字都
-   *    没敢动的号（只报此刻还活着的）；**可以为空** —— 那是「连该问谁都没问全」（端口超额），
-   *    不是「干净」。`why` 是原样给用户看的那句话。
+   *    没敢动或仍存活的号（只报此刻还活着的）；`complete` 独立记录证据是否完整。
+   *    `why` 是原样给用户看的那句话。
    *
    * 界面读它说第三种状态；`pids` 非空才算「还有东西在跑」（空的那种不卡启动按钮）。
    */
@@ -39,7 +39,7 @@ export type TerminalSessionInfo = {
     | { kind: "none" }
     | { kind: "requested" }
     | { kind: "verified" }
-    | { kind: "unresolved"; pids: number[]; why: string };
+    | { kind: "unresolved"; pids: number[]; complete: boolean; why: string };
   /** 这次启动打印的本机端口超过了记录额度，多出来的没记下 = 端口这条线索本身不全。 */
   portsTruncated: boolean;
 };

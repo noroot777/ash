@@ -199,9 +199,8 @@ try {
   const lied = await stopCommand("ports3", SERVICE_COMMAND_ID, { script: "true", cwd, timeoutMs: 5_000 }, { portGraceMs: 300 });
   assert.equal(lied.status, 502, "脚本说自己成功了,端口说服务还在 —— 听终态的");
   assert.match((lied.body as { error: string }).error, /服务没停下来/);
-  // 没停成功的那一路**什么都不许落账**:标了「已停止」刷新回来按钮就退回 ▶、服务还在跑;
-  // 把 portsAlive 抹掉同样是谎报(这两条原先挂在 ③ 的旁人现场上,那一幕已按 F3 改掉)。
-  assert.notEqual(serviceSession("ports3")?.stoppedByUser, true);
+  assert.equal(serviceSession("ports3")?.stop.kind, "unresolved", "运行中的成员也要保存责任，不等于核验停净");
+  assert.deepEqual(leftoversOf("ports3"), [scriptPid]);
   assert.equal(serviceSession("ports3")?.portsAlive, true, "更不许把还在运行的事实抹掉");
   assert.ok(alive(scriptPid), "ash 不替用户强杀:他写那段脚本正是不想让 ash 直接 kill");
 

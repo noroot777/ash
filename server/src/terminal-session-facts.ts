@@ -31,8 +31,8 @@ export type TerminalEventInput =
  *                    这一档:TERM/KILL 之前就得记下「用户要求停止」,后面每一轮都可能失败);
  *  · `verified`   —— 核验过:这次启动起来的东西都不在了;
  *  · `unresolved` —— 停止动作跑完了,但**证明不到停净**。`pids` 是核不上归属所以一个字都没
- *                    动的那几个号(可以为空 —— 空数组的意思是「连该问谁都没问全」,不是
- *                    「干净」),`why` 是原样给用户看的那句话。
+ *                    动的或仍存活的号。`complete` 独立记录证据是否完整,不随 PID 列表变化;
+ *                    `why` 是原样给用户看的那句话。
  *
  * **这一档是单调的**:只有逐项确认消失了才能被 `verified` 覆盖,一次范围更窄的核验
  * (「我记下的这几个端口空了」)不许核销一笔范围更宽的责任。合并规则见
@@ -42,7 +42,7 @@ export type StopFact =
   | { kind: "none" }
   | { kind: "requested" }
   | { kind: "verified" }
-  | { kind: "unresolved"; pids: number[]; why: string };
+  | { kind: "unresolved"; pids: number[]; complete: boolean; why: string };
 
 /** 一次停止动作**核验之后**的结论(mergeStop 的输入)。`requested` 不在其中:那是动手前落的。 */
 export type StopResolution = Extract<StopFact, { kind: "verified" } | { kind: "unresolved" }>;

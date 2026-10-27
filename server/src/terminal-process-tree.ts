@@ -52,7 +52,8 @@ export function groupAlive(groupId: number): boolean {
 /** 单个进程还在不在:信号 0 探测,已死抛 ESRCH。 */
 export function processAlive(pid: number): boolean {
   if (IS_WINDOWS) return false;
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 
 function parseProcessTable(stdout: string): ProcessTable {

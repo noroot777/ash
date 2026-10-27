@@ -204,7 +204,7 @@ async function openSession(
  */
 type StopVerdict =
   | { kind: "stopped" }
-  | { kind: "unresolved"; notice: string; leftovers: number[] }
+  | { kind: "unresolved"; notice: string; leftovers: number[]; complete: boolean }
   | { kind: "stuck"; reason: string };
 
 /** 一串没核销的号 → 「pid 1、pid 2 等 5 个」。 */
@@ -221,7 +221,7 @@ function who(left: LaunchMember[]): string {
 function leftoverNotice(where: string, left: LaunchMember[]): string {
   const stubborn = left.filter((one) => one.ours);
   const strangers = left.filter((one) => !one.ours);
-  const parts = [`${where}已经让出来了，但`];
+  const parts = [`${where}的停止核验尚未完成：`];
   if (stubborn.length) {
     parts.push(`这次启动起来的 ${who(stubborn)} 发了 TERM 和 KILL 都没停下来`);
     if (strangers.length) parts.push("；");
@@ -260,7 +260,10 @@ async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Pro
     terminalSessions.oweCommandLeftovers(open.id, open.projectId, pids, leftoverNotice(where, found));
   }
   if (result?.membersIncomplete) {
-    terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], membersNotice(open, false));
+    terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], membersNotice(open, false), false);
+  }
+  if (open.portsTruncated) {
+    terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], truncatedNotice(open, false), false);
   }
   const probe = await probeOwnedPorts(open.ports, token);
   if (probe.state === "unknown") {
@@ -276,10 +279,10 @@ async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Pro
     return { kind: "stuck", reason: `${where} 上还有这次启动起来的进程在听，${who}。要停掉它，请在「管理常用命令」里给这个服务填一条停止命令。` };
   }
   if (found.length) {
-    return { kind: "unresolved", notice: leftoverNotice(where, found), leftovers: found.map((one) => one.pid) };
+    return { kind: "unresolved", notice: leftoverNotice(where, found), leftovers: found.map((one) => one.pid), complete: !open.portsTruncated && !result?.membersIncomplete };
   }
-  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, false) };
-  if (result?.membersIncomplete) return { kind: "unresolved", leftovers: [], notice: membersNotice(open, false) };
+  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, false), complete: false };
+  if (result?.membersIncomplete) return { kind: "unresolved", leftovers: [], notice: membersNotice(open, false), complete: false };
   return { kind: "stopped" };
 }
 
@@ -290,7 +293,7 @@ async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Pro
  * 核销不掉的责任(StopFact 里 pids 为空的那种 unresolved),连下一次停止也核销不了它。
  */
 function truncatedNotice(open: TerminalSessionInfo, hasStopScript: boolean): string {
-  return `端口 ${open.ports.join("、")}都让出来了，但这次启动打印的本机端口超过 ${open.ports.length} 个，`
+  return `这次启动记录了端口 ${open.ports.join("、")}，但打印的本机端口超过 ${open.ports.length} 个，`
     + `多出来的没能记下来 —— 如果还有服务只听那些端口，ash 没问过它们。`
     + (hasStopScript
       ? `这次启动没法确认停净，要确认请自己去看一眼那几个端口。`
@@ -302,7 +305,7 @@ function truncatedNotice(open: TerminalSessionInfo, hasStopScript: boolean): str
  * 所以同样落成 pids 为空的那种 unresolved —— 不卡生命周期,但这次启动到死都带着这句话。
  */
 function membersNotice(open: TerminalSessionInfo, hasStopScript: boolean): string {
-  return `端口 ${open.ports.join("、")}都让出来了，但这次没能把同组成员列全（进程表或端口查询没答上来）`
+  return `这次启动记录了端口 ${open.ports.join("、")}，但没能把同组成员列全（进程表或端口查询没答上来）`
     + ` —— 跟它一起起来的还有谁，ash 这一趟没问到，`
     + (hasStopScript ? `所以没法确认你那条停止命令收干净了。` : `所以没法说这次启动起来的东西都停了。`);
 }
@@ -329,28 +332,21 @@ async function verifyStopScript(
 ): Promise<StopVerdict> {
   // 同 stopLaunchPorts:这一档在这台机器上不存在时,它给不出证据,也不该给出结论。
   if (!PORT_TIER_AVAILABLE || !open.ports.length) return { kind: "stopped" };
+  const survived = await surviveCheck(open, snapshot);
   const probe = await probeOwnedPorts(open.ports, terminalSessions.launchTokenOf(open.id));
-  // **只有这一路什么都不落账。** 端口上还坐着这次启动起来的进程,它自己就是那条线索 ——
-  // 下一趟照样顺着端口找到它和它同组的成员,不存在「再也发现不了」的风险。反过来,在这儿
-  // 记一笔账会让 stoppedByUser 变真(它是 stop.kind !== "none" 的投影),于是「已停止」压过
-  // 还在运行的事实 —— 那是第 5 轮 F3 钉死的反面:标了已停止、服务却还在跑。
   if (probe.state === "ours") {
     return { kind: "stuck", reason: `停止命令跑完了，但端口 ${open.ports.join("、")} 上还有这次启动起来的进程在听 —— 服务没停下来，去看看那段脚本` };
   }
-  // 到这儿端口这条线索要么空了、要么问不出来,**两种都意味着下一趟可能再也找不到人**:
-  // 所以这一趟的发现必须当场落账,不能留到判断末尾(第 6 轮审查 E1 —— 脚本收掉监听者之后
-  // 工人就脱离了端口线索,这一笔不记,下一遍端口一空就判停净)。
-  const survived = await surviveCheck(open, snapshot);
   const left = survived.members;
   if (probe.state === "unknown") return { kind: "stuck", reason: `停止命令跑完了，但${probe.why}，没法确认服务已经停了` };
   if (left.length) {
-    return { kind: "unresolved", leftovers: left.map((one) => one.pid), notice: scriptLeftoverNotice(left) };
+    return { kind: "unresolved", leftovers: left.map((one) => one.pid), notice: scriptLeftoverNotice(left), complete: survived.complete && !open.portsTruncated };
   }
   // 监听这边核过了,但线索本身可能不全 —— 同 stopLaunchPorts:没记下的端口谁都没问过,
   // 相也可能没照全,用户那段脚本到底收没收干净,这里给不出证据,于是不许宣称停净
   // (第 3 轮审查发现 1 / 第 5 轮发现 1)。
-  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, true) };
-  if (!survived.complete) return { kind: "unresolved", leftovers: [], notice: membersNotice(open, true) };
+  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, true), complete: false };
+  if (!survived.complete) return { kind: "unresolved", leftovers: [], notice: membersNotice(open, true), complete: false };
   return { kind: "stopped" };
 }
 
@@ -374,14 +370,9 @@ async function verifyStopScript(
  * verified(第 6 轮审查 E1 实测:首次 502 而 stop.kind 仍是 none;再点一次 200 stopped、
  * 停止按钮消失,工人照旧活着)。
  *
- * 判据跟 `verifyStopScript` 逐字一致,包括那条例外:**端口上还坐着这次启动起来的进程时
- * 什么都不记** —— 它自己就是线索,下一趟找得到它,而记一笔账会让「已停止」压过还在运行的
- * 事实。
  */
 async function oweOnFailedStop(open: TerminalSessionInfo, snapshot: LaunchSnapshot | null): Promise<void> {
   if (!snapshot || !PORT_TIER_AVAILABLE || !open.ports.length) return;
-  const probe = await probeOwnedPorts(open.ports, terminalSessions.launchTokenOf(open.id));
-  if (probe.state === "ours") return; // 线索还在,留着可重试的现场就够
   await surviveCheck(open, snapshot);
 }
 
@@ -399,7 +390,10 @@ async function surviveCheck(
     );
   }
   if (!survived.complete) {
-    terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], membersNotice(open, true));
+    terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], membersNotice(open, true), false);
+  }
+  if (open.portsTruncated) {
+    terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], truncatedNotice(open, true), false);
   }
   return survived;
 }
@@ -407,7 +401,7 @@ async function surviveCheck(
 /** StopVerdict → 落进会话事实的那笔账(stuck 不走这里:它压根没核到终态)。 */
 function resolutionOf(verdict: Exclude<StopVerdict, { kind: "stuck" }>): StopResolution {
   return verdict.kind === "unresolved"
-    ? { kind: "unresolved", pids: verdict.leftovers, why: verdict.notice }
+    ? { kind: "unresolved", pids: verdict.leftovers, why: verdict.notice, complete: verdict.complete }
     : { kind: "verified" };
 }
 

@@ -22,7 +22,7 @@ import { processAlive } from "./terminal-process-tree.js";
  *  · 新结论是 `verified`:
  *      - 旧账挂着的号**逐个确认已经不在了** → 这笔责任真的核销了,落 `verified`;
  *      - 还有活着的 → 继续挂着,保留原来那句话;
- *      - 旧账是「一个号都举不出来」的那种 unresolved(端口超额:证据本身不全)→ **永远**
+ *      - 旧账是 `complete=false` 的 unresolved(端口超额等:证据本身不全)→ **永远**
  *        不能被核销。再跑一百次 lsof 也只是把「记下的那几个端口」问了一百遍,没记下的那些
  *        压根没被问过。它不卡生命周期(没有活号 ⇒ 不占「还在跑」),但这次启动到死都得带着
  *        「没能确认停净」这句话 —— 这正是发现 1 实测出来的那条路。
@@ -30,10 +30,15 @@ import { processAlive } from "./terminal-process-tree.js";
 export function mergeStop(prev: StopFact, next: StopResolution): StopFact {
   const carried = prev.kind === "unresolved" ? prev.pids.filter(processAlive) : [];
   if (next.kind === "unresolved") {
-    return { kind: "unresolved", pids: [...new Set([...carried, ...next.pids])], why: next.why };
+    const incomplete = prev.kind === "unresolved" && !prev.complete;
+    return {
+      kind: "unresolved", pids: [...new Set([...carried, ...next.pids])],
+      complete: !incomplete && next.complete,
+      why: incomplete ? prev.why : next.why,
+    };
   }
-  if (prev.kind === "unresolved" && (carried.length > 0 || prev.pids.length === 0)) {
-    return { kind: "unresolved", pids: carried, why: prev.why };
+  if (prev.kind === "unresolved" && (carried.length > 0 || !prev.complete)) {
+    return { ...prev, pids: carried };
   }
   return { kind: "verified" };
 }
@@ -67,8 +72,8 @@ export function applyStop(session: TerminalSession, next: StopResolution): void 
  * 此刻端口可能还有人听,运行事实该由核验分支去改。`pids` 允许为空:那是「清单本身不全」
  * (进程表或 lsof 问不出来、端口超额),同样是一笔核销不掉的责任。
  */
-export function oweLeftovers(session: { stop: StopFact }, pids: number[], why: string): void {
-  session.stop = mergeStop(session.stop, { kind: "unresolved", pids, why });
+export function oweLeftovers(session: { stop: StopFact }, pids: number[], why: string, complete = true): void {
+  session.stop = mergeStop(session.stop, { kind: "unresolved", pids, why, complete });
 }
 
 /**
@@ -129,6 +134,9 @@ export async function releaseLaunchResponsibility(session: TerminalSession): Pro
  */
 async function releaseLaunchPorts(session: TerminalSession): Promise<string | null> {
   if (!PORT_TIER_AVAILABLE || session.commandId === null || session.launchPorts.size === 0) return null;
+  if (session.portsTruncated) {
+    oweLeftovers(session, [], "这次启动打印的本机端口超过了记录额度，多出来的端口没能核验", false);
+  }
   const ports = [...session.launchPorts];
   const token = session.launchToken;
   if (token) {
@@ -146,7 +154,7 @@ async function releaseLaunchPorts(session: TerminalSession): Promise<string | nu
     // 残缺(该问的没问全),同样落成 pids 为空的那种 unresolved:不卡删除(没有活号可举,
     // 拦着也多停不掉一个进程),但这次启动到死都带着「没能确认停净」(第 6 轮审查 F1)。
     if (outcome.membersIncomplete) {
-      oweLeftovers(session, [], "这次没能把同组成员列全（进程表或端口查询没答上来）—— 跟它一起起来的还有谁，ash 这一趟没问到");
+      oweLeftovers(session, [], "这次没能把同组成员列全（进程表或端口查询没答上来）—— 跟它一起起来的还有谁，ash 这一趟没问到", false);
     }
   }
   const probe = await probeOwnedPorts(ports, token);
@@ -181,7 +189,7 @@ export function releaseLaunchPortsSync(sessions: Iterable<TerminalSession>): { k
         oweLeftovers(session, swept.leftovers, "关服那一拍发现它们核不上归属,没敢动");
       }
       if (swept.membersIncomplete) {
-        oweLeftovers(session, [], "关服那一拍问不出进程表,同组还有谁没能枚举全");
+        oweLeftovers(session, [], "关服那一拍问不出进程表,同组还有谁没能枚举全", false);
       }
     }
     // 补刀之后账上还活着的号:**没有一条路能把它停掉** —— 它们当初就是因为核不上归属才

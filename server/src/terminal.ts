@@ -522,9 +522,9 @@ export class TerminalSessionManager {
    * 按**会话 id** 定位,不按「最近一次」:调用方手里的 open 就是它动手时的那条会话,中途可能
    * 已经有新实例起来了,落错对象等于把责任记到无关的那次启动上。
    */
-  oweCommandLeftovers(sessionId: string, projectId: string, pids: number[], why: string): void {
+  oweCommandLeftovers(sessionId: string, projectId: string, pids: number[], why: string, complete = true): void {
     const session = this.session(sessionId, projectId);
-    if (session) oweLeftovers(session, pids, why);
+    if (session) oweLeftovers(session, pids, why, complete);
   }
 
   /**

@@ -183,21 +183,43 @@ function elapsedToMs(etime: string): number | null {
   return ((((Number(days ?? 0) * 24 + Number(hours ?? 0)) * 60) + Number(minutes)) * 60 + Number(seconds)) * 1000;
 }
 
-export async function inspectPid(pid: number, timeoutMs: number = PROBE_TIMEOUT_MS): Promise<PortHolder | null> {
-  if (IS_WINDOWS || !PS_PATH) return null;
+export type PidInspection =
+  | { state: "found"; holder: PortHolder }
+  | { state: "gone" }
+  | { state: "unknown"; why: string };
+
+function failedInspection(pid: number, why: string): PidInspection {
+  try { process.kill(pid, 0); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return { state: "gone" };
+  }
+  return { state: "unknown", why: `pid ${pid} 的进程组没能查清（${why}）` };
+}
+
+export async function inspectPid(
+  pid: number,
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+  exec: typeof run = run,
+): Promise<PidInspection> {
+  if (IS_WINDOWS || !PS_PATH) return failedInspection(pid, "这台机器上没有可用的 ps");
   try {
-    const { stdout } = await run(PS_PATH, ["-o", "pgid=,etime=,command=", "-p", String(pid)], { timeout: budgeted(timeoutMs) });
+    const { stdout } = await exec(PS_PATH, ["-o", "pgid=,etime=,command=", "-p", String(pid)], { timeout: budgeted(timeoutMs) });
     const match = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(stdout.split("\n")[0] ?? "");
-    if (!match) return null;
+    if (!match) return failedInspection(pid, "ps 没有返回可识别的进程信息");
     const elapsed = elapsedToMs(match[2]);
     return {
-      pid,
-      pgid: Number(match[1]),
-      command: match[3].trim(),
+      state: "found",
+      holder: {
+        pid,
+        pgid: Number(match[1]),
+        command: match[3].trim(),
         cwd: await processCwd(pid, timeoutMs),
-      startedAt: elapsed === null ? null : Date.now() - elapsed,
+        startedAt: elapsed === null ? null : Date.now() - elapsed,
+      },
     };
-  } catch { return null; }
+  } catch (error) {
+    return failedInspection(pid, error instanceof Error ? error.message : "ps 查询失败");
+  }
 }
 
 async function processCwd(pid: number, timeoutMs: number): Promise<string | null> {

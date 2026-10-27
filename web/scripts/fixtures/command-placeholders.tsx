@@ -64,26 +64,26 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     // 出来但也证明不到停净**(端口超额:没记下的端口谁都没问过 —— 第 3 轮审查发现 1。
     // 这一幕没有活证据,所以它不该卡着启动按钮,但那句话必须还在)。
     const service = (window as unknown as {
-      __service?: "live" | "daemon" | "detached" | "stopped" | "leftover" | "unprovable";
+      __service?: "live" | "daemon" | "detached" | "stopped" | "leftover" | "unprovable" | "partial";
     }).__service;
     const sessions = [
       ...(service ? [{
         id: "s-svc", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "服务",
         commandId: "service", startedAt: 4,
         exitCode: service === "live" ? null : 0,
-        stoppedByUser: service === "stopped" || service === "leftover" || service === "unprovable",
+        stoppedByUser: service === "stopped" || service === "leftover" || service === "unprovable" || service === "partial",
         groupAlive: service === "live",
         // 启动脚本自报的端口。守护化那一幕里它是唯一还指得到服务的线索 ——
         // 进程归属(ppid / 会话 / pgid)一条都够不着(server/src/service-ports.ts)。
         ports: [8787],
-        portsAlive: service === "daemon",
+        portsAlive: service === "daemon" || service === "partial",
         // 「停了但没停净」的两种形状:leftover = 监听没了、同组那个核不上归属的号还活着
         // (有活证据 ⇒ 还没了结,停止按钮留着让用户再按一次);unprovable = 一个号都举不出来,
         // 但这次停止**证明不到**停净(证据本身不全 ⇒ 不卡按钮,只照实说一句)。
-        stop: service === "leftover"
-          ? { kind: "unresolved" as const, pids: [4242], why: "端口 8787 已经让出来了，但跟它同组的 pid 4242 还活着" }
+        stop: service === "leftover" || service === "partial"
+          ? { kind: "unresolved" as const, pids: [4242], complete: true, why: "端口 8787 已经让出来了，但跟它同组的 pid 4242 还活着" }
           : service === "unprovable"
-            ? { kind: "unresolved" as const, pids: [], why: "这次启动打印的本机端口超过 1 个，多出来的没能记下来" }
+            ? { kind: "unresolved" as const, pids: [], complete: false, why: "这次启动打印的本机端口超过 1 个，多出来的没能记下来" }
             : { kind: (service === "stopped" ? "verified" : "none") as const },
         portsTruncated: service === "unprovable",
       }] : []),
