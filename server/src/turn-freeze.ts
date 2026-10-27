@@ -18,10 +18,14 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { groups, tasks } from "./db/schema.js";
-import { markStopped, takeStartFreeze, type StopSettle } from "./runs.js";
+import { markStopped, takeStartFreeze } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
-export type TurnFreeze = { reason: string; settle: StopSettle };
+export type TurnFreeze = { reason: string } & (
+  | { source: "stop"; settle: "canceled"; overrideRestorable: true }
+  | { source: "group-pause"; settle: "paused"; overrideRestorable: false }
+  | { source: "archive" | "delete"; settle: "canceled"; overrideRestorable: false }
+);
 
 export class FrozenTurn extends Error {
   constructor(reason: string) {
@@ -44,14 +48,14 @@ export async function freezeFacts(taskId: string, checkFacts = false): Promise<T
     .select({ archived: tasks.archived, groupId: tasks.groupId })
     .from(tasks)
     .where(eq(tasks.id, taskId))).at(0);
-  if (!task) return { reason: "任务已删除", settle: "canceled" };
-  if (task.archived) return { reason: "任务已归档", settle: "canceled" };
+  if (!task) return { reason: "任务已删除", source: "delete", settle: "canceled", overrideRestorable: false };
+  if (task.archived) return { reason: "任务已归档", source: "archive", settle: "canceled", overrideRestorable: false };
   if (task.groupId) {
     const group = (await db
       .select({ paused: groups.paused })
       .from(groups)
       .where(eq(groups.id, task.groupId))).at(0);
-    if (group?.paused) return { reason: "所在分组已暂停", settle: "paused" };
+    if (group?.paused) return { reason: "所在分组已暂停", source: "group-pause", settle: "paused", overrideRestorable: false };
   }
   return null;
 }
@@ -68,7 +72,9 @@ export async function freezeFacts(taskId: string, checkFacts = false): Promise<T
 export function takeFreeze(taskId: string, facts: TurnFreeze | null = null): TurnFreeze | null {
   const marked = takeStartFreeze(taskId);
   if (marked) {
-    return { reason: marked === "paused" ? "所在分组已暂停" : "这一轮已被停止", settle: marked };
+    return marked === "canceled"
+      ? { reason: "这一轮已被停止", source: "stop", settle: marked, overrideRestorable: true }
+      : { reason: "所在分组已暂停", source: "group-pause", settle: marked, overrideRestorable: false };
   }
   return facts;
 }
@@ -88,7 +94,7 @@ export async function abortFrozen(
   opts: { restorable?: boolean } = {},
 ): Promise<never> {
   await appendTaskTimeline(taskId, `这一轮在启动前被撤回：${freeze.reason}。`).catch(() => false);
-  if (!opts.restorable || freeze.settle === "canceled") markStopped(taskId, freeze.settle);
+  if (!opts.restorable || freeze.overrideRestorable) markStopped(taskId, freeze.settle);
   throw new FrozenTurn(freeze.reason);
 }
 

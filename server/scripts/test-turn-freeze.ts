@@ -18,10 +18,10 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
-  const { groups, projects, sessions: sessionsTable, tasks } = await import("../src/db/schema.js");
+  const { freeReviewRounds, freeReviewRuns, groups, projects, regressionEvidence, sessions: sessionsTable, tasks } = await import("../src/db/schema.js");
   const { claimTurn, continueWhenIdle, freezeStartingTurn, isTurnClaimed, releaseTurn, takeStopped, trackRun, untrackRun } =
     await import("../src/runs.js");
-  const { abortIfFrozen, FrozenTurn, turnFreezeReason } = await import("../src/turn-freeze.js");
+  const { abortFrozen, abortIfFrozen, freezeFacts, FrozenTurn, takeFreeze, turnFreezeReason } = await import("../src/turn-freeze.js");
   const { pauseGroup } = await import("../src/scheduler.js");
   await ensureSchema();
 
@@ -72,6 +72,35 @@ try {
   await assert.rejects(() => abortIfFrozen("t1"), (e: unknown) => e instanceof FrozenTurn);
   assert.equal(takeStopped("t1"), "paused", "没有原终态时必须标停止落位，否则落成 failed");
   await abortIfFrozen("t1", { checkFacts: true });
+  await db.update(tasks).set({ archived: true }).where(eq(tasks.id, "t1"));
+  const archived = await freezeFacts("t1", true);
+  await db.update(tasks).set({ archived: false }).where(eq(tasks.id, "t1"));
+  await db.update(groups).set({ paused: true }).where(eq(groups.id, "g"));
+  const paused = await freezeFacts("t1", true);
+  await db.update(groups).set({ paused: false }).where(eq(groups.id, "g"));
+  freezeStartingTurn("t1", "canceled");
+  const explicitStop = takeFreeze("t1", archived);
+  freezeStartingTurn("t1", "paused");
+  const markedPause = takeFreeze("t1", archived);
+  const freezes = [
+    { value: archived, source: "archive", settle: "canceled", override: false },
+    { value: await freezeFacts("不存在", true), source: "delete", settle: "canceled", override: false },
+    { value: paused, source: "group-pause", settle: "paused", override: false },
+    { value: markedPause, source: "group-pause", settle: "paused", override: false },
+    { value: explicitStop, source: "stop", settle: "canceled", override: true },
+  ];
+  for (const restorable of [false, true]) {
+    for (const expected of freezes) {
+      const freeze = expected.value;
+      assert.ok(freeze);
+      assert.equal(freeze.source, expected.source);
+      assert.equal(freeze.settle, expected.settle);
+      assert.equal(freeze.overrideRestorable, expected.override);
+      await assert.rejects(() => abortFrozen("t1", freeze, { restorable }), FrozenTurn);
+      assert.equal(takeStopped("t1"), !restorable || expected.override ? expected.settle : null);
+    }
+  }
+  console.log("✓ freeze source and restoration policy remain distinct for stop, archive, delete and group pause");
   releaseTurn("t1");
 
   // ── 暂停分组：正在起跑（已 claim、没 handle）的那一轮也得冻住 ────────────────
@@ -141,6 +170,21 @@ try {
   {
     await db.update(groups).set({ paused: false }).where(eq(groups.id, "g"));
     const before = (await db.select().from(tasks).where(eq(tasks.id, "t1"))).at(0);
+    assert.ok(before);
+    const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
+    await db.insert(freeReviewRuns).values({
+      id: "freeze-run", taskId: "t1", reviewerName: "freeze reviewer", agentType: "claude",
+      checkMode: "logic", status: "reviewing", currentRound: 1, createdAt: at, updatedAt: at,
+    });
+    await db.insert(freeReviewRounds).values({
+      id: "freeze-round", runId: "freeze-run", round: 1, status: "reviewing", startedAt: at,
+    });
+    await db.insert(regressionEvidence).values({
+      directory: freeReviewEvidenceDir("t1", "freeze-run", 1), taskId: "t1", generation: "freeze-generation",
+      excludedMonitors: [], targetIdentity: {
+        turnToken: before.activeTurnToken, directionToken: before.activeDirectionToken, directionEpoch: before.directionEpoch,
+      },
+    });
 
     assert.ok(claimTurn("t1", "dispatch"), "派活方先占位");
     const reported: string[] = [];
@@ -186,6 +230,8 @@ try {
   }
 
   console.log("✓ dispatch 占位期间的暂停传到了接管的那一轮");
+  const { freezeArchiveCases } = await import("./turn-freeze-archive-cases.js");
+  await freezeArchiveCases(root);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
