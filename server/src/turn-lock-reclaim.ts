@@ -54,7 +54,10 @@
 // 是一个判据:**持有者的等待有没有时长上界**。没有上界 → ① 在它身上不携带任何信息,
 // 报出来纯是噪音(每个等裁决的 duet 任务都会收到一条「可疑」)。清单漏了谁的代价也只是
 // 一条多余的提示 —— 上面那条不变量兜着。
-import { isRunning } from "./runs.js";
+import { eq } from "drizzle-orm";
+import { db } from "./db/index.js";
+import { tasks } from "./db/schema.js";
+import { isRunning, isTurnClaimed } from "./runs.js";
 import { forceReleaseTurn, heldTurns } from "./turn-lock.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
@@ -171,8 +174,67 @@ export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise
 
 /** `releaseSuspectTurn` 的结果。`ok:false` 带 `why` 给路由映射状态码与话术。 */
 export type ReleaseSuspectResult =
-  | { ok: true; role: string; heldMs: number }
+  | {
+    ok: true;
+    role: string;
+    heldMs: number;
+    /**
+     * **锁放开了,这个任务现在真的点得动吗。**
+     *
+     * 这两件事不是一件:放开只撤掉内存里那把锁,库里的状态是另一个人的责任 —— 正常
+     * 路径上由那把锁的持有者在 finally 里回滚(seat.release / reclaimStrandedSeat),
+     * 而本入口要救的恰恰是**再没有人会来回滚**的那种遗留。于是任务停在 queued、
+     * `/run` 继续 409「任务当前状态不可运行」,开关却因为锁已经空了而从界面上消失
+     * (第 1 轮审查 F3 实测:POST reclaim 回 200「现在可以继续运行」,紧接着 POST run
+     * 回 409 `status:"queued"`)。
+     *
+     * 所以成功的定义收紧成「**恢复了可运行状态,或确实有新回合接手了**」。没恢复不是
+     * 错误、也不回滚这次放开(锁确实该放),但响应和留痕都得说真话并给出下一步。
+     */
+    runnable: boolean;
+    /** 放开之后库里的状态(给话术用;读不到时为 null)。 */
+    status: string | null;
+    /** 没恢复时,用户接着该做的那一步;恢复了为 null。 */
+    nextStep: string | null;
+  }
   | { ok: false; why: "no-lock" | "not-suspect"; reason: string };
+
+/**
+ * 锁放开之后,这个任务还卡着吗。
+ *
+ * **判据不是「点运行能不能起」**:`canSingleRun` 对 `done` 也返回 false(终态要续聊、
+ * 不走 /run),而一个 done 的任务放开占位之后本来就该是 done —— 那不是卡住,报出来只是
+ * 噪音(实测日志:`放开了回合占位但任务仍不可运行 task=t-ghost（状态 done）`)。
+ * `awaiting_review` 同理,它是明确的「等人」语义。
+ *
+ * 要答的是**「它还停在刚放开的那一轮留下的状态里吗」**。只有 `queued` / `running` 是
+ * 「有一轮在跑」的状态,而那一轮已经被我们放开了,没人会再来把它改回去 —— 这两种才是
+ * 残留,也只有这两种需要告诉用户下一步。
+ */
+async function runnableAfterRelease(taskId: string): Promise<{ runnable: boolean; status: string | null; nextStep: string | null }> {
+  // 新回合已经接手 = 这把锁空出来之后立刻有人占上了,状态由那一轮自己负责,不该再说
+  // 「你还要去停一次」。
+  if (isTurnClaimed(taskId)) {
+    return { runnable: true, status: null, nextStep: null };
+  }
+  let row: { status: string } | undefined;
+  try {
+    row = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  } catch (error) {
+    console.warn(`[ash] 放开回合占位后读状态失败 task=${taskId}:`, error);
+    return { runnable: false, status: null, nextStep: "刷新一下页面看它现在的状态；要是还停在「排队中」，点一次停止把它收成「已取消」，然后就能重新运行" };
+  }
+  if (!row) return { runnable: false, status: null, nextStep: null };
+  if (row.status !== "queued" && row.status !== "running") {
+    return { runnable: true, status: row.status, nextStep: null };
+  }
+  return {
+    runnable: false,
+    status: row.status,
+    nextStep: `任务还停在「${row.status === "queued" ? "排队中" : "运行中"}」—— 那是刚放开的那一轮留下的，`
+      + "没有人会再来把它改回去了。点一次停止把它收成「已取消」，之后就能重新运行",
+  };
+}
 
 /**
  * **用户主动点的放开。** 判据不因为「是人点的」就放宽 —— 人看到的那条提示也只是「可疑」,
@@ -201,11 +263,18 @@ export async function releaseSuspectTurn(
   }
   const detail = `占位身份 ${released.role}、已持有约 ${held(suspect.heldMs)}`;
   console.warn(`[ash] 用户主动放开回合占位 task=${taskId}（${detail}）`);
+  // 核对后置条件(理由见 `runnable`)。排在释放之后 —— 释放那两行一个 await 都不能隔。
+  const after = await runnableAfterRelease(taskId);
+  if (!after.runnable) {
+    console.warn(`[ash] 放开了回合占位但任务仍不可运行 task=${taskId}（状态 ${after.status ?? "读不到"}）`);
+  }
   await appendTaskTimeline(
     taskId,
-    `〔系统〕这个任务的回合占位已由你手动放开（${detail}）。现在可以继续运行了。` + SIDE_EFFECT,
+    `〔系统〕这个任务的回合占位已由你手动放开（${detail}）。`
+    + (after.runnable ? "现在可以继续运行了。" : `但它还点不动运行：${after.nextStep ?? "请刷新查看当前状态"}。`)
+    + SIDE_EFFECT,
   );
-  return { ok: true, role: released.role, heldMs: suspect.heldMs };
+  return { ok: true, role: released.role, heldMs: suspect.heldMs, ...after };
 }
 
 /** 没过判据时说清是哪一条没过 —— 否则 409 只是一句「不行」,用户无从判断下一步。 */

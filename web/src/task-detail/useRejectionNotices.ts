@@ -33,7 +33,7 @@ export function useRejectionNotices(taskId: string, revision = 0): {
           // 用库里那行的 id:合进时间线之后它要能被稳定地认出来(排序、去重、key)。
           id: `notice:${notice.id}`,
           at: notice.occurredAt,
-          text: `你点的「${notice.action}」没有执行：${notice.reason}`,
+          text: noticeText(notice),
           tone: "notice" as const,
           // 这是任务时间线的一条记录,不是会话里的一个回合 —— 不许当回合边界用。
           aside: true,
@@ -45,6 +45,18 @@ export function useRejectionNotices(taskId: string, revision = 0): {
   }, [taskId, revision, tick]);
 
   return { items, remedy, reload };
+}
+
+/**
+ * 这一条该怎么说。**两种结果不是同一句话的两种语气**:`incomplete` 是「按下去了、生效了,
+ * 只是没达到你要的那个效果」(放开了回合占位,任务却还停在排队中点不动),把它也写成
+ * 「没有执行」是假话,而那句「接着该做什么」恰恰就装在它的 reason 里 —— 开关一从界面上
+ * 消失,它就是用户唯一还看得见的下一步(第 1 轮审查 F3)。
+ */
+function noticeText(notice: { action: string; outcome: string; reason: string }): string {
+  return notice.outcome === "incomplete"
+    ? `你点的「${notice.action}」生效了，但还没到位：${notice.reason}`
+    : `你点的「${notice.action}」没有执行：${notice.reason}`;
 }
 
 /**

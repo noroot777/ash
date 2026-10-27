@@ -421,9 +421,13 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           if (!claim.ok) {
             noteBusyAgain(m.id, at.getTime());
             // 同 wait 分支:认领不到执行占位也是一种「一直发不出去」,久了要说出来。
+            // 三档各说各的真话:套用「同队有人在跑」会让用户去等一个不存在的前项
+            // (第 ll7XKsu_ps0n 链第 2 轮指出的同一个毛病)。
             noteStalledPending(m, claim.transient
               ? "队列占位读写失败，正在重试"
-              : "同一队列里还有未完成或正在运行的任务", at.getTime());
+              : claim.self
+                ? "这个任务已经有另一条启动路径占着执行位"
+                : "同一队列里还有未完成或正在运行的任务", at.getTime());
             continue;
           }
           seat = claim.seat ?? undefined;

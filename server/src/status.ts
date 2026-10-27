@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -29,6 +29,27 @@ export async function setTaskStatus(
   status: TaskStatus,
   opts?: {
     /**
+     * **条件写**:只有库里当前状态仍是这里列的值之一,这一笔才提交。
+     *
+     * 为什么需要它:本函数自己内部就隔着 await(先整行 SELECT 再 UPDATE),所以调用方
+     * 「先查一次归属、紧接着调我」是挡不住交错的 —— 真正的权威后来者(用户点停止写
+     * canceled)能在那段窗口里落库,随后这一笔照样把它盖掉,还连带发布终态、停哨兵、
+     * 推进队列(本轮审查 F1 实测:停止回 200 且库里是 canceled,旧回滚结束后变成 failed)。
+     *
+     * 给了它之后,「核验」和「写」争的是同一条 UPDATE 语句(WHERE 里带状态),没有窗口。
+     * 不命中 = 这一笔过期了:**一个副作用都不触发**,返回 false 让调用方自己收场。
+     */
+    expectStatus?: TaskStatus | TaskStatus[];
+    /**
+     * 紧贴 UPDATE 之前再同步问一句「这次写还归我吗」。
+     *
+     * 补的是 `expectStatus` 看不见的那一种过期:状态**恰好还是**期望值,但那已经是
+     * 后来者重新占下的同一个状态(队列占位换了代次 —— `claimQueueSeat` 走自己那条认领链,
+     * 不需要回合锁,所以回合锁拦不住它)。谓词必须同步:中间一旦有 await,求值结果到
+     * 写入之间就又有了窗口。
+     */
+    owns?: () => boolean;
+    /**
      * 这次写 paused 是续聊/旁路回合**恢复原状态**,不是「刚跑到检查点落位」——别触发
      * 队列推进钩子。推进会把一个本就静静等着的 paused 成员(典型:队列 head 上带
      * resumePrompt 的检查点)当作新到位的立即续跑:检查点被一句「怎么样了」间接消费、
@@ -39,7 +60,7 @@ export async function setTaskStatus(
      */
     quietAdvance?: boolean;
   },
-): Promise<void> {
+): Promise<boolean> {
   const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   // 又开跑了:这一段里不许有新的自由工作流动作(起预览、验收、派审…)。**同步竖起来、
   // 状态落库之后才放下**——收预览和写 running 是两步,中间那条缝里库里那行还是 `done`,
@@ -47,7 +68,7 @@ export async function setTaskStatus(
   const rerun = status === "running" && !!cur && cur.status !== "running";
   if (rerun) beginRerunGate(taskId);
   try {
-    await writeTaskStatus(taskId, status, cur, rerun, opts?.quietAdvance);
+    return await writeTaskStatus(taskId, status, cur, rerun, opts);
   } finally {
     if (rerun) endRerunGate(taskId);
   }
@@ -58,8 +79,13 @@ async function writeTaskStatus(
   status: TaskStatus,
   cur: typeof tasks.$inferSelect | undefined,
   rerun: boolean,
-  quietAdvance?: boolean,
-): Promise<void> {
+  opts: Parameters<typeof setTaskStatus>[2],
+): Promise<boolean> {
+  const quietAdvance = opts?.quietAdvance;
+  const expect = opts?.expectStatus === undefined
+    ? null
+    : (Array.isArray(opts.expectStatus) ? opts.expectStatus : [opts.expectStatus]);
+  const owns = opts?.owns;
   const updatedAt = now();
   let startedAt = cur?.startedAt ?? null;
   let endedAt = cur?.endedAt ?? null;
@@ -90,7 +116,22 @@ async function writeTaskStatus(
     Object.assign(patch, directionIdentityCleared());
   }
 
-  await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
+  // ── 条件写的那一条语句 ───────────────────────────────────────────────────────
+  // `owns()` 到这条 UPDATE 之间**不许出现 await**:谓词答的是「此刻还归我吗」,隔一个
+  // await 它就又变成了一次过期的快照(理由见 setTaskStatus 的 `owns`)。
+  if (owns && !owns()) return false;
+  const written = await db
+    .update(tasks)
+    .set(patch)
+    .where(expect ? and(eq(tasks.id, taskId), inArray(tasks.status, expect)) : eq(tasks.id, taskId))
+    .returning({ id: tasks.id });
+  // 一行都没改到 = 状态在我读到它之后被别人改了,这一笔过期。**就此收手**:下面每一件事
+  // (撤落地闩、记状态、停哨兵、广播、推进队列、flush 待发送)都是「状态真的变了」的后果,
+  // 过期的写发布它们就等于用一次没发生的变更去驱动整条链(本轮审查 F1)。
+  //
+  // 只在调用方给了条件时才短路:无条件的调用方(绝大多数)从来不检查返回值,也不该因为
+  // 任务行恰好不存在就少走一遍既有的广播与钩子。
+  if (expect && !written.length) return false;
   // 这一行落库了 ⇒ 结算那一关置的闩可以撤了(见 task-complete.ts 的 `beginTerminalLanding`):
   // 它护的就是「核完阻塞物」到「这一笔写进库」之间那条缝。从这一刻起,库里这一行自己就答得了
   // 「还能不能挂哨兵」—— 终态由 `monitorSourceGate` 挡住,非终态本来就该放行。
@@ -151,4 +192,5 @@ async function writeTaskStatus(
   if (status !== "running" && status !== "queued" && status !== "awaiting_review") {
     void import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId));
   }
+  return true;
 }

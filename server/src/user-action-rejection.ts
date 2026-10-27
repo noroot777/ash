@@ -44,6 +44,15 @@ export type RejectedAction =
   | "派审查" | "运行" | "触发新一轮" | "重跑上一回合" | "停止" | "放开回合占位";
 
 /**
+ * 这一下的结果。**不是同一句话的两种语气,是两件不同的事**,所以存下来而不是让前端去猜:
+ *   · `rejected`   点了没执行(409 挡回);
+ *   · `incomplete` 执行了但没到位 —— 「放开回合占位」成功放开了锁、任务却还停在 queued
+ *     点不动的那一档(第 1 轮审查 F3)。把它也记成「没有执行」是假话,而不记就等于开关
+ *     一从界面上消失,那句「接着该做什么」也跟着没了。
+ */
+export type ActionOutcome = "rejected" | "incomplete";
+
+/**
  * 一次取回多少条。**没有时间窗** —— 这是任务历史的一部分,不是「刚才那一下」的提示:
  * 上一版砍到最近 24 小时,窗口之外的记录还在库里却无法从界面追溯(第 2 轮审查 F4)。
  * 上限只防一个任务被连点出几百条时把列表撑爆,取够大的值。
@@ -52,18 +61,34 @@ const NOTICE_LIMIT = 200;
 
 const lastNoted = new Map<string, number>();
 
-export type RejectionNotice = { id: string; action: string; reason: string; occurredAt: string };
+export type RejectionNotice = {
+  id: string;
+  action: string;
+  outcome: ActionOutcome;
+  reason: string;
+  occurredAt: string;
+};
 
-/**
- * 记下「用户点了什么、被什么挡回」。**不抛**:留痕失败绝不能把那条 409 响应也带翻
- * (用户至少还看得见 toast)。返回是否真的留下了持久痕迹。
- */
-export async function noteRejectedUserAction(
+/** 记下「用户点了什么、被什么挡回」(`rejected` 那一档的薄封装)。 */
+export function noteRejectedUserAction(
   taskId: string,
   action: RejectedAction,
   reason: string,
 ): Promise<boolean> {
-  const key = `${taskId}\u0000${action}\u0000${reason}`;
+  return noteUserActionOutcome(taskId, action, "rejected", reason);
+}
+
+/**
+ * 记下「用户点了什么、结果是什么」。**不抛**:留痕失败绝不能把那条响应也带翻
+ * (用户至少还看得见 toast)。返回是否真的留下了持久痕迹。
+ */
+export async function noteUserActionOutcome(
+  taskId: string,
+  action: RejectedAction,
+  outcome: ActionOutcome,
+  reason: string,
+): Promise<boolean> {
+  const key = `${taskId}\u0000${action}\u0000${outcome}\u0000${reason}`;
   const at = Date.now();
   const previous = lastNoted.get(key);
   if (previous !== undefined && at - previous < DEDUPE_MS) return false;
@@ -73,13 +98,13 @@ export async function noteRejectedUserAction(
     if (at - when >= DEDUPE_MS) lastNoted.delete(existing);
   }
   try {
-    await db.insert(taskNotices).values({ id: newId(), taskId, action, reason, occurredAt: now() });
+    await db.insert(taskNotices).values({ id: newId(), taskId, action, outcome, reason, occurredAt: now() });
     return true;
   } catch (error) {
     // 去重记账要撤回,否则这条挡回会被静默吞掉整个 DEDUPE_MS。
     lastNoted.delete(key);
-    console.warn(`[ash] 被挡回的用户操作写表失败 task=${taskId}（${action}）:`, error);
-    console.warn(`[ash] 用户操作被挡回（${action}）task=${taskId}：${reason}`);
+    console.warn(`[ash] 用户操作留痕写表失败 task=${taskId}（${action}/${outcome}）:`, error);
+    console.warn(`[ash] 用户操作${outcome === "rejected" ? "被挡回" : "没到位"}（${action}）task=${taskId}：${reason}`);
     return false;
   }
 }
@@ -92,10 +117,11 @@ export async function recentRejectionNotices(
   taskId: string,
   limit = NOTICE_LIMIT,
 ): Promise<RejectionNotice[]> {
-  return db
+  const rows = await db
     .select({
       id: taskNotices.id,
       action: taskNotices.action,
+      outcome: taskNotices.outcome,
       reason: taskNotices.reason,
       occurredAt: taskNotices.occurredAt,
     })
@@ -103,4 +129,7 @@ export async function recentRejectionNotices(
     .where(eq(taskNotices.taskId, taskId))
     .orderBy(desc(taskNotices.occurredAt))
     .limit(limit);
+  // 列是 TEXT,旧行(补列之前写的)读出来是默认值。认不出的一律当 rejected —— 多一档
+  // 新语气要前端配合,认错方向不如退回最保守的那一句。
+  return rows.map((row) => ({ ...row, outcome: row.outcome === "incomplete" ? "incomplete" as const : "rejected" as const }));
 }

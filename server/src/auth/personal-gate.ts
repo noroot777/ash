@@ -21,7 +21,7 @@
 // 「拿得到 key」。真正花掉 key 的动作(`POST /llm-providers/models`、`…/test`)是写方法,
 // 被这道闸挡在外面。
 import type { MiddlewareHandler } from "hono";
-import { actorOf } from "./context.js";
+import { actorOf, isAccountHolder } from "./context.js";
 import { WRITE_METHODS } from "./middleware.js";
 import { isMultiUser } from "./mode.js";
 
@@ -70,6 +70,36 @@ const PERSONAL_PATHS = [
   /^\/api\/tasks\/[^/]+\/handoff$/,
 ];
 
+/**
+ * **只有账号本人按得动的危险动作。** 跟上面那两段的差别有两处,都是刻意的:
+ *
+ * ① **不看单人/多人。** 上面那张清单防的是「别人家的 agent 动了我的私产」,自用模式下
+ *    没有「别人」,所以整道闸放行。这里防的是另一件事 —— **agent 替用户点了那个只有
+ *    用户能点的开关**,而它在自用模式下一模一样地成立:同项目另一条任务只凭
+ *    `x-ash-source-task-id` + `x-ash-turn-token` 就按得动(第 1 轮审查 F2 实测:
+ *    `kind:"agent"` 的请求拿到 200、目标任务的锁被放开,日志还记成「用户主动放开」)。
+ * ② **判据是 `isAccountHolder`,不是「不是 agent」。** 自用模式的隐式本地用户
+ *    (`kind:"single"`)就是真人,anonymous 则连 authGate 都过不去,一视同仁地拒。
+ *
+ * 为什么这类动作必须这样收:`reclaim-turn` 解除的是**互斥本身**。判据(没句柄、没令牌、
+ * 占得久)证不了原持有者已经结束,按错一次就是同一个任务两个回合并行改同一个工作区。
+ * 它之所以存在,全部理由就是「系统判不了,所以让知情的人来判」(AGENTS.md 对这类不可逆
+ * 又外溢操作的口径)。那么把一次 agent 发来的 HTTP 请求当成「用户知情同意」,等于把这个
+ * 设计的唯一前提抽掉 —— 界面上那段风险说明也就只是说给没在看的人听。
+ */
+const HUMAN_ONLY_PATHS = [
+  /^\/api\/tasks\/[^/]+\/reclaim-turn$/,
+];
+
+/** 导出给回归测试直接钉住:哪几条只有真人按得动。 */
+export function isHumanOnlyPath(path: string): boolean {
+  return HUMAN_ONLY_PATHS.some((p) => p.test(path));
+}
+
+export const AGENT_HUMAN_ONLY_REFUSAL =
+  "这个动作只有账号本人按得动：它解除的是回合互斥，系统判不了原来那一位死没死才交给人来判，"
+  + "回合凭证不能代替用户知情同意";
+
 export const AGENT_PERSONAL_REFUSAL =
   "个人资源与账号设置只对账号本人开放：回合凭证代表的是那一条任务，不是这个账号";
 
@@ -83,6 +113,10 @@ export function personalWriteGate(): MiddlewareHandler {
   return async (c, next) => {
     if (!c.req.path.startsWith("/api/")) return next();
     if (!WRITE_METHODS.has(c.req.method)) return next();
+    // 真人专属动作先判:它**不看单人/多人**(理由见 HUMAN_ONLY_PATHS)。
+    if (!isAccountHolder(actorOf(c)) && isHumanOnlyPath(c.req.path)) {
+      return c.json({ error: AGENT_HUMAN_ONLY_REFUSAL }, 403);
+    }
     if (!(await isMultiUser())) return next();
     // 只拦 agent:真人(cookie / Bearer)本来就是账号本人,匿名早被 authGate 拦掉了。
     if (actorOf(c).kind !== "agent") return next();

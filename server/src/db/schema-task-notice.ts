@@ -19,7 +19,15 @@ export const taskNotices = sqliteTable(
     taskId: text("task_id").notNull(),
     /** 用户点的是什么(`RejectedAction`,例如「运行」「派审查」)。 */
     action: text("action").notNull(),
-    /** 为什么没执行 —— 原样存那句给人看的话。 */
+    /**
+     * 这一下的结果。两种,措辞完全不同,所以不能靠 reason 的字面去猜:
+     *   · `rejected`   点了,系统没执行(409 挡回);
+     *   · `incomplete` 执行了,但没达到用户要的那个效果 —— 典型是「放开回合占位」:
+     *     锁确实放开了,任务却还停在 queued 点不动(第 1 轮审查 F3)。这一档同样要留痕,
+     *     否则开关一消失,那句「接着该做什么」就跟着没了,刷新后一个字都看不到。
+     */
+    outcome: text("outcome").notNull().default("rejected"),
+    /** 为什么没执行 / 差在哪 —— 原样存那句给人看的话。 */
     reason: text("reason").notNull(),
     occurredAt: text("occurred_at").notNull(),
   },
@@ -31,8 +39,13 @@ export async function ensureTaskNoticeSchema(client: Client): Promise<void> {
   await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS task_notices (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, action TEXT NOT NULL,
+      outcome TEXT NOT NULL DEFAULT 'rejected',
       reason TEXT NOT NULL, occurred_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS task_notices_task_idx ON task_notices (task_id, occurred_at);
   `);
+  // 这张表在上一版就建过(只有 rejected 一档),所以补列要幂等:已经有了就吞掉。
+  await client
+    .executeMultiple("ALTER TABLE task_notices ADD COLUMN outcome TEXT NOT NULL DEFAULT 'rejected';")
+    .catch(() => undefined);
 }

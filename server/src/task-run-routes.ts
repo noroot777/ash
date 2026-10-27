@@ -30,7 +30,7 @@ import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimTurn, freezeStartingTurn, releaseTurn, stopTask, waitForTurnIdle } from "./runs.js";
-import { noteRejectedUserAction, type RejectedAction } from "./user-action-rejection.js";
+import { noteRejectedUserAction, noteUserActionOutcome, type RejectedAction } from "./user-action-rejection.js";
 import { releaseSuspectTurn } from "./turn-lock-reclaim.js";
 
 /**
@@ -288,12 +288,25 @@ api.post("/tasks/:id/reclaim-turn", async (c) => {
     await noteRejectedUserAction(taskId, "放开回合占位", outcome.reason);
     return c.json({ error: outcome.reason, reclaimed: false }, 409);
   }
+  // 明示副作用:这一下解除的是互斥本身,不是「清理了一个垃圾」。
+  const effect = "；如果原来那一位其实还活着，互斥就没了，同一个任务可能有两个回合并行改同一个工作区";
+  // **锁放开了 ≠ 任务点得动了**(判据见 turn-lock-reclaim.ts 的 `runnable`)。没恢复的那一档
+  // 要留痕:它只有一次性的响应文案的话,开关随 remedy 变 null 一起从界面上消失,用户刷新
+  // 后既看不到自己按过、也看不到接着该做什么(第 1 轮审查 F3)。
+  const note = outcome.runnable
+    ? "已放开这个任务的回合占位，现在可以继续运行" + effect
+    : `已放开这个任务的回合占位，但它还点不动运行：${outcome.nextStep ?? "请刷新查看当前状态"}` + effect;
+  if (!outcome.runnable) {
+    await noteUserActionOutcome(taskId, "放开回合占位", "incomplete", note);
+  }
   return c.json({
     reclaimed: true,
     role: outcome.role,
     heldMs: outcome.heldMs,
-    // 明示副作用:这一下解除的是互斥本身,不是「清理了一个垃圾」。
-    note: "已放开这个任务的回合占位，现在可以继续运行；如果原来那一位其实还活着，互斥就没了，同一个任务可能有两个回合并行改同一个工作区",
+    runnable: outcome.runnable,
+    status: outcome.status,
+    nextStep: outcome.nextStep,
+    note,
   });
 });
 

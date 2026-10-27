@@ -114,9 +114,9 @@ api.get("/tasks/:id", async (c) => {
   return c.json((await enrichTasks([r]))[0]);
 });
 
-// 这个任务最近被挡回的用户操作。前端在**对话流空态**里读它 —— 从没跑过的任务没有会话
-// 时间线可写,点运行被同队前项挡回那一下原本一个字都留不下,用户只看见一闪而过的 toast
-// (本轮审查 F4)。判据见 user-action-rejection.ts 文件头。
+// 这个任务被挡回/没做到位的那些用户操作。前端**无条件**读它,按时间合进同一条任务历史 ——
+// 不去问「对话流有没有正文」:从没跑过的任务没有会话时间线可写,而「有正文就不显示」会让
+// 那条已经入库的记录再也显示不出来(第 2 轮审查 F4)。判据见 user-action-rejection.ts 文件头。
 api.get("/tasks/:id/notices", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);

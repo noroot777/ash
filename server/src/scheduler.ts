@@ -216,11 +216,17 @@ export async function reclaimStrandedSeat(
     return;
   }
   try {
-    const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    const stranded = row?.status === "queued";
-    // 锁在手里,这一写不可能被新一轮插进来。
-    if (stranded) {
-      await setTaskStatus(taskId, prevStatus, prevStatus === "paused" ? { quietAdvance: true } : undefined);
+    // 条件写,和 queue-seat 的 rollback 同一条理由(见那个模块头「回滚的所有权」):回合锁
+    // 只挡得住走 claimTurn 的人,而用户点停止(直接写 canceled)和下一次占位认领(走自己
+    // 那条认领链、换一代号却仍是 queued)都不走它。所以把「还得是 queued」和「还得没有
+    // 活着的 seat」一起交给紧贴 UPDATE 的那次核验,过期就一个副作用都不发布。
+    const stranded = await setTaskStatus(taskId, prevStatus, {
+      expectStatus: "queued",
+      owns: () => seatGeneration(taskId) === 0,
+      ...(prevStatus === "paused" ? { quietAdvance: true } : {}),
+    });
+    if (!stranded) {
+      console.warn(`[ash] 队列占位守卫未提交(${taskId}):库里不再是无主的 queued`);
     }
     if (repush === "never" || (repush === "stranded" && !stranded)) return;
     const timer = setTimeout(() => noteMissedAdvance(taskId, queueId), 1_000);
