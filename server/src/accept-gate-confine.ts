@@ -62,7 +62,7 @@ import { resolutionInputs } from "./accept-gate-resolution.js";
 //    向上解析的,先命中那棵树里的原入口。实测形状(真实 npm 离线安装):主检出有 workspace 包
 //    @demo/lib,另装了第三方包 plain-consumer 传递导入它,任务 worktree 没装依赖——同一份快照里直接
 //    import 得到 TASK_NEW、经 plain-consumer 间接 import 得到 MAIN_OLD,改主检出源码后变 MAIN_LIVE。
-//    判据仍是可证事实:那棵树上除了自有包入口**还有没有别的入口**。没有(整棵树只摆着本项目自己的
+//    判据仍是可证事实:那棵树上除了自有包入口**还有没有实际可解析的别的入口**。没有(只有本项目自己的
 //    包)时根上的绑定就是全部解析路径;有别的入口时它们都是潜在消费者,「它会不会 import 我的包」要
 //    静态分析整个包才知道,证明不了就拒绝。树**在快照里**(依赖整棵克隆进来)不受这条约束:消费者的
 //    副本也在快照里,它向上解析先命中快照这棵树里被改写过的入口。
@@ -250,18 +250,30 @@ async function sourcePackages(target: string): Promise<Map<string, string[]>> {
 async function sourceFor(target: string, ownership: Ownership,
   packages: Map<string, string[]>, declaredDirs: Map<string, string[]>): Promise<string | null> {
   const { owned, within } = ownership;
-  // 入口落在包内部时要连那一段一起证明:包目录在、而包里那个文件被本次提交删掉了,绑过去就是一条
-  // 悬空入口——那同样是「证明不了」,不是「绑定成功」。
-  const reachable = async (directory: string): Promise<string | null> => {
-    const path = join(directory, within);
-    return await lstat(path).catch(() => null) === null ? null : path;
+  // 安装来源证明到包目录；包内的 dist 等输出可以尚未构建，绑定保留同一相对路径，让测试自己的
+  // 构建步骤生成它。包目录本身不存在才需要寻找经同入口声明认证的搬迁位置。
+  const located = async (directory: string): Promise<string | null> => {
+    return (await stat(directory).catch(() => null))?.isDirectory() === true ? join(directory, within) : null;
   };
-  const declared = await reachable(join(target, owned.inside));
+  const declared = await located(join(target, owned.inside));
   if (declared !== null) return declared;
   const name = await manifestName(owned.landing);
   const candidates = (name === null ? [] : packages.get(name) ?? [])
     .filter(dir => (declaredDirs.get(portable(owned.entry)) ?? []).includes(portable(dir)));
-  return candidates.length === 1 ? await reachable(join(target, candidates[0])) : null;
+  return candidates.length === 1 ? await located(join(target, candidates[0])) : null;
+}
+
+const missingSource = async (source: string): Promise<boolean> => await lstat(source).then(() => false,
+  error => (error as NodeJS.ErrnoException).code === "ENOENT");
+
+async function sourceInside(target: string, realTarget: string, source: string): Promise<boolean> {
+  if (source === target) return await realpath(source).then(path => insideTree(realTarget, path), () => false);
+  if (await provenInside(target, realTarget, source) !== null) return false;
+  try { return insideTree(realTarget, await realpath(source)); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+    return await missingSource(source);
+  }
 }
 
 /** 入口路径归一成 `/`：安装记录里的键来自 JSON（永远是 `/`），这边是 path.join（Win32 上是 `\`）。 */
@@ -296,10 +308,10 @@ function ownerOf(item: Entry, owned: OwnedPackage[]): Ownership | null {
 export async function confineOwnPackages(target: string, origins = new Map<string, string>()): Promise<string | null> {
   const realTarget = await realpath(target).catch(() => target);
   const inputs = await resolutionInputs([realTarget]);
-  const entries = inputs.filter(input => input.selected.length > 0).flatMap(input => input.entries);
+  const entries = inputs.flatMap(input => input.selected);
   const visible = new Map<string, Entry>();
   for (const input of inputs.filter(input => input.inherited)) {
-    for (const item of input.entries) if (!visible.has(item.entry)) visible.set(item.entry, item);
+    for (const item of input.selected) if (!visible.has(item.entry)) visible.set(item.entry, item);
   }
   const records = new Map<string, InstallRecord>();
   const plan: Binding[] = [];
@@ -338,7 +350,6 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
     }
     // 这棵树上摆着本项目的源码入口。树落在快照之外时，往快照根补绑定只覆盖「从快照根出发」的
     // 解析，覆盖不到这棵树**内部**的消费者——判据与实测见循环之后那一段。
-    if (!insideTree(realTarget, item.tree)) exposed.add(item.tree);
     if (!item.nested && visible.get(item.entry) !== item) continue;
     if (item.nested) {
       return `${item.entry} 在依赖树内层解析到 ${item.landing}（快照之外的活源码），而内层这一级`
@@ -364,6 +375,9 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
         + `得写到 ${binding.destination}，但${refusal} —— 门禁不会往快照之外写，`
         + `请在标准安装布局下（重新安装依赖）验收`;
     }
+    if (!await sourceInside(target, realTarget, binding.source)) {
+      return `${binding.entry} 对应的源码位置 ${binding.source} 无法证明在快照内，门禁不会绑定到快照之外`;
+    }
   }
   // ── 不变量 ③ 的另一半:**消费者**那一侧的解析边。排在 ① 之后:① 保护的是「别改坏用户工作区」,
   // 比这一条更基础,先确认「能不能安全地写」,再确认「写了够不够」。
@@ -376,28 +390,31 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
   // MAIN_OLD,随后改主检出的源码它跟着变成 MAIN_LIVE,而快照自证与工作区新鲜度全程为真。
   //
   // 判据是**可证事实**而不是「这棵树里大概没人 import 我的包」:那棵树上除了自有包入口之外**还有
-  // 没有别的入口**。没有(整棵树只摆着本项目自己的包)时,根上的绑定就是全部解析路径,闭包成立;有
+  // 没有实际可解析的别的入口**。完全被近处遮蔽的条目不算消费者；从仍可见的消费者自身出发能解析
+  // 到的入口则也在 selected 中，不会因根遮蔽而漏掉。没有别的入口时，根上的绑定使闭包成立；有
   // 别的入口时,它们都是潜在消费者——「它会不会 import 本项目的包」要静态分析整个包才知道,证明
   // 不了,按拒绝走。树**在快照里**的那种(依赖整棵克隆进来了)不受这条约束:消费者的副本也在快照
   // 里,它向上解析先命中快照这棵树里被改写过的入口。
   for (const tree of exposed) {
-    const record = records.get(tree);
+    const record = records.get(tree)!;
     const outsider = entries.find(item => item.tree === tree
-      && (record === undefined || ownerOf(item, record.owned) === null));
+      && ownerOf(item, record.owned) === null);
     if (outsider !== undefined) {
       return `依赖树 ${tree} 落在快照之外，里面既摆着本项目自己的包、又摆着 ${outsider.entry} 这样`
         + `不属于本项目的入口：往快照里补的绑定只对「从快照根出发」的解析有效，而那些入口是从它们`
         + `自己在那棵树里的位置向上解析的，会先命中那棵树里的原入口、读到活工作区的源码 —— `
-        + `无法证明隔离。请在任务工作区安装依赖（或让依赖目录成为任务工作区自己的一条链，门禁会把`
-        + `它整棵克隆进快照）后验收`;
+        + `无法证明隔离。请在任务工作区安装提供 ${outsider.entry} 的依赖，使该入口被快照就近遮蔽；`
+        + `或将 ASH_RUNS_DIR 移到解析祖先链不经过 ${tree} 的目录后验收`;
     }
   }
   for (const binding of plan) {
     await mkdir(dirname(binding.destination), { recursive: true });
     await rm(binding.destination, { recursive: true, force: true });
-    await copyLink(binding.source, binding.destination, relative(dirname(binding.destination), binding.source));
+    await copyLink(binding.landing, binding.destination, relative(dirname(binding.destination), binding.source));
     const bound = await realpath(binding.destination).catch(() => null);
-    if (bound === null || !insideTree(realTarget, bound)) {
+    const pendingBuild = bound === null && await missingSource(binding.source)
+      && await sourceInside(target, realTarget, binding.source);
+    if (!pendingBuild && (bound === null || !insideTree(realTarget, bound))) {
       return `${binding.entry} 仍然解析到 ${bound ?? "解析不出来"}，不是快照自己那份源码`;
     }
   }

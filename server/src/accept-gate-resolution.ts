@@ -5,15 +5,22 @@ import { physicalPath } from "./git-worktree-state.js";
 export type ResolutionEntry = { entry: string; landing: string; tree: string; nested: boolean };
 export type ResolutionTree = { path: string; entries: ResolutionEntry[]; selected: ResolutionEntry[]; inherited: boolean };
 
-async function reachable(path: string): Promise<string | null> {
+async function available<Value>(read: () => Promise<Value>): Promise<Value | null> {
   try {
-    await stat(path);
-    return await realpath(path);
+    return await read();
   } catch (error) {
-    if (["ENOENT", "ELOOP", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+    if (["ENOENT", "ELOOP", "ENOTDIR", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
     throw error;
   }
 }
+
+async function reachable(path: string, directory = false): Promise<string | null> {
+  const info = await available(() => stat(path));
+  if (info === null || (directory && !info.isDirectory())) return null;
+  return await available(() => realpath(path));
+}
+
+const children = async (path: string) => (await available(() => readdir(path)))?.sort() ?? [];
 
 export async function resolutionInputs(roots: string[]): Promise<ResolutionTree[]> {
   const trees = new Map<string, ResolutionTree>();
@@ -25,7 +32,7 @@ export async function resolutionInputs(roots: string[]): Promise<ResolutionTree[
     searched.add(directory);
     const visible = new Set<string>();
     for (;;) {
-      const tree = await reachable(join(directory, "node_modules"));
+      const tree = await reachable(join(directory, "node_modules"), true);
       if (tree !== null && !trees.has(tree)) {
         const input: ResolutionTree = { path: tree, entries: [], selected: [], inherited };
         trees.set(tree, input);
@@ -34,24 +41,25 @@ export async function resolutionInputs(roots: string[]): Promise<ResolutionTree[
           if (landing === null) return;
           input.entries.push({ entry, landing, tree, nested: !inherited });
         };
-        for (const item of (await readdir(tree, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
-          if (item.name === ".bin" || item.name.startsWith("@")) {
-            if (await reachable(join(tree, item.name)) === null) continue;
-            for (const child of (await readdir(join(tree, item.name))).sort()) {
-              await add(join(item.name, child));
+        for (const item of await children(tree)) {
+          if (item === ".bin" || item.startsWith("@")) {
+            if (await reachable(join(tree, item), true) === null) continue;
+            for (const child of await children(join(tree, item))) {
+              await add(join(item, child));
             }
-          } else if (!item.name.startsWith(".")) {
-            await add(item.name);
+          } else if (!item.startsWith(".")) {
+            await add(item);
           }
         }
       }
       const input = tree === null ? undefined : trees.get(tree);
       for (const item of input?.entries ?? []) {
         if (visible.has(item.entry)) continue;
+        const info = await available(() => stat(item.landing));
+        if (info === null) continue;
         visible.add(item.entry);
         if (!input!.selected.includes(item)) {
           input!.selected.push(item);
-          const info = await stat(item.landing);
           pending.push({ directory: info.isDirectory() ? item.landing : dirname(item.landing), inherited: false });
         }
       }
