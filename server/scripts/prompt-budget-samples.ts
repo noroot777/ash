@@ -26,6 +26,16 @@ export interface PromptSample {
    * 量的是这一份，顺带还能拿路径去盘上核实入口是不是真读得到。
    */
   raw: string;
+  /**
+   * 这一节**应当指得到的那几个地方**（绝对路径），由夹具自己说出来，不从正文里反解。
+   *
+   * 第 2 轮审查复现的就是「反解」那条路的死法：上一版用 `\S+` 从自然语言里抠地址，
+   * 舞台根一旦含空格（含空格的 `TMPDIR` 是合法的），完整可读的地址被当成「没有入口」，
+   * 而 `test:prompt-budget` 挂在验收前置 —— 于是验收被一条假红挡住。
+   * 「整个地址都是非空白字符」根本不是存在性判据，所以这里改成**夹具给出预期**、闸只做
+   * 「原文里有没有这个完整地址」和「这个地址读不读得到」两件事，与空白字符无关。
+   */
+  entries?: readonly string[];
 }
 
 export const ROOT_TOKEN = "<ROOT>";
@@ -110,7 +120,9 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   // 两侧都到 6KB 以上。所以这里种两份：20 条（典型上限）和 100 条（条数压力），后者还
   // 另有一份**落盘失败**（证据目录被普通文件占住，`full=null`）的变体。
   const filler = (word: string) => word.repeat(400);
-  const seedRulings = async (taskId: string, count: number, rounds: number): Promise<void> => {
+  /** 返回这一批真写到盘上的报告路径：样本拿它声明「这一节应当指得到哪几个地方」。 */
+  const seedRulings = async (taskId: string, count: number, rounds: number): Promise<string[]> => {
+    const reports: string[] = [];
     for (let index = 1; index <= rounds; index += 1) {
       const stamp = new Date(Date.UTC(2026, 8, 1) + index * 86_400_000).toISOString();
       await db.insert(freeReviewRuns).values({
@@ -138,11 +150,13 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       const report = freeReviewReportPath(taskId, `${taskId}-${index}`, index);
       mkdirSync(dirname(report), { recursive: true });
       writeFileSync(report, `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
+      reports.push(report);
     }
+    return reports;
   };
   // 20 条裁定 + 26 轮（轮数撑过 `MAX_ITEMS` 的取样分支），以及 100 条裁定 + 100 轮。
   await seedRulings("pb-stress", 20, 26);
-  await seedRulings("pb-heavy", 100, 100);
+  const heavyReports = await seedRulings("pb-heavy", 100, 100);
 
   const run = {
     id: "pb-run", taskId: "pb-task", reviewerId: null, reviewerName: "逻辑审查者",
@@ -165,7 +179,10 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   } = await import("../src/free-review-prompts.js");
   const { freeReviewReminder } = await import("../src/free-workflow.js");
   const { settledRulingsFor } = await import("../src/free-review-settled.js");
-  const { freeReviewHistorySection } = await import("../src/review-history.js");
+  const { commonDirectory, freeReviewHistorySection } = await import("../src/review-history.js");
+  // 一节历史说明可能把地址列全，也可能折成一个公共目录 —— 两种形态都是合法入口，所以
+  // 预期清单两样都给，闸只要求「至少有一个完整地出现在正文里，且凡是出现的都读得到」。
+  const entryCandidates = (reports: string[]) => [...reports, commonDirectory(reports)];
   const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
   const { assembleTurnPrompt } = await import("../src/turn-prompt.js");
   const { invitedTaskBrief } = await import("../src/invited-task-brief.js");
@@ -183,8 +200,8 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   }) as never;
 
   const samples: PromptSample[] = [];
-  const add = (id: string, text: string) =>
-    samples.push({ id, text: text.split(root).join(ROOT_TOKEN), raw: text });
+  const add = (id: string, text: string, entries?: readonly string[]) =>
+    samples.push({ id, text: text.split(root).join(ROOT_TOKEN), raw: text, entries });
 
   // 「不含动态段」的那一版：同一条消息，但任务身上没有裁定、也没有历史发现。预算表靠
   // 这一对把**正文**和**动态段**分开盯——正文是改措辞改出来的，动态段是攒轮次攒出来的。
@@ -253,7 +270,8 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   add("section/settled-executor-100", await sectionFor("pb-heavy", "executor", heavyDir));
   add("section/settled-reviewer-100-nofile", await sectionFor("pb-heavy", "reviewer", brokenDir));
   add("section/settled-executor-100-nofile", await sectionFor("pb-heavy", "executor", brokenDir));
-  add("section/history-100", await freeReviewHistorySection("pb-heavy", { runId: "pb-none", round: 1 }));
+  add("section/history-100", await freeReviewHistorySection("pb-heavy", { runId: "pb-none", round: 1 }),
+    entryCandidates(heavyReports));
 
   // ── 长路径形状：**合法但很深**的报告地址，两个生产消费者各一份 ────────────────
   //
@@ -271,6 +289,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   const deepName = (prefix: string) => prefix + "d".repeat(240 - prefix.length);
   const deepFree = deepName("pb-deep-free-");
   const deepFreeRun = `${deepFree}-run`;
+  const deepFreeReports: string[] = [];
   for (let index = 1; index <= 40; index += 1) {
     const stamp = new Date(Date.UTC(2026, 9, 1) + index * 3_600_000).toISOString();
     if (index === 1) {
@@ -287,20 +306,25 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     const report = freeReviewReportPath(deepFree, deepFreeRun, index);
     mkdirSync(dirname(report), { recursive: true });
     writeFileSync(report, `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
+    deepFreeReports.push(report);
   }
-  add("deep/history-free", await freeReviewHistorySection(deepFree, { runId: "pb-none", round: 1 }));
+  add("deep/history-free", await freeReviewHistorySection(deepFree, { runId: "pb-none", round: 1 }),
+    entryCandidates(deepFreeReports));
 
   const { reviewRoundDir } = await import("../src/review-evidence.js");
   const { verifyHistorySection } = await import("../src/review-history.js");
   const deepVerify = deepName("pb-deep-verify-");
+  const deepVerifyReports: string[] = [];
   for (let index = 1; index <= 40; index += 1) {
     const dir = reviewRoundDir(deepVerify, index);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "report.md"),
       `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
     writeFileSync(join(dir, "conclusion.json"), JSON.stringify({ conclusion: "verify_failed" }));
+    deepVerifyReports.push(join(dir, "report.md"));
   }
-  add("deep/history-verify", await verifyHistorySection(deepVerify, 41));
+  add("deep/history-verify", await verifyHistorySection(deepVerify, 41),
+    entryCandidates(deepVerifyReports));
 
   // ── 投递态：**真正发出去的那一条**。片段各自压着预算、拼起来翻倍，是这一摞里最贵的
   //    一种退步，而它只在这一层量得到（第 1 轮审查 F2）。走的是 orchestrator 用的同一个

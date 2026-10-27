@@ -24,7 +24,11 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = mkdtempSync(join(tmpdir(), "ash-prompt-budget-"));
+// 舞台根**故意含一个空格**：含空白的 `TMPDIR` 是合法环境（宿主给的临时目录就可能带空格），
+// 而第 2 轮审查正是在这种根下复现出「完整可读的地址被判成没有入口」—— 一条挡住验收的假红。
+// 路径里有空白是所有样本都该扛住的输入边界，所以整摞样本都在这种根下渲染一遍，而不是给
+// 某个样本加特判。归一化按整串 `root` 替换，与里面有没有空格无关。
+const root = mkdtempSync(join(tmpdir(), "ash prompt budget "));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 
@@ -199,8 +203,10 @@ const SECTION_CAPS: Array<{ id: string; cap: number; entry: string; what: string
  * ① 不超生产声明的整节上限；
  * ② 以 `PRIOR_FINDINGS_TAIL` **结尾**（任何盲截都会先吃掉它，所以这一条就是「没被盲截」
  *    的直接证据）；
- * ③ 正文里每一个报告地址／公共目录都**在盘上真的存在** —— 入口被截掉半截时，它指向的
- *    路径必然不存在，这一条把「入口完整」变成一个可机验的事实，而不是一句形容。
+ * ③ 夹具声明的那几个报告地址／公共目录里，**至少有一个整串出现在正文里，且它在盘上真的
+ *    存在** —— 入口被截掉半截时整串就匹配不上，这一条把「入口完整」变成一个可机验的事实。
+ *    预期地址由采样器给出，闸**不从自然语言里反解地址**：第 2 轮审查复现过反解那条路的
+ *    死法（按「不含空白」切地址，舞台根含空格就把完整地址判成不存在，挡住验收）。
  *
  * 另外钉一条**取样声明的真实性**：说了「含首轮」，第 1 轮就必须真在正文里。降级到只剩
  * 最近一轮时那句话会换成别的措辞（`review-history.ts` 的 `allocate`）；这里钉的是不变量
@@ -476,15 +482,18 @@ try {
     assert.ok(text.endsWith(PRIOR_FINDINGS_TAIL),
       `${what} 没有以固定契约结尾 —— 末尾那两句（「报类不报个例」「还没修好／复发照样报」）` +
       "是这一节的用处本身，被切掉就只剩一摞旧条目。整节不许盲截，装不下要降级成有界摘要");
-    const listed = [...text.matchAll(/^ {2}(\S+report\.md)$/gm)].map((hit) => hit[1]!);
-    const folded = [...text.matchAll(/在 (\S+) 下/g)].map((hit) => hit[1]!);
-    const entries = [...listed, ...folded];
-    assert.ok(entries.length > 0,
-      `${what} 里一个报告入口都没有：省掉的条目必须留一个真读得到的去处`);
-    for (const path of entries) {
-      assert.ok(existsSync(path),
-        `${what} 的入口 ${path} 在盘上不存在 —— 多半是整节被截在半条地址上，` +
-        "指路指到一个不存在的地方比不指路更坏");
+    // 预期入口由夹具**结构化给出**，不从正文里反解地址：反解只能靠「地址到哪儿为止」这种
+    // 猜测，而任何猜测都会在合法输入上判错（上一版猜「到第一个空白为止」，含空格的舞台根
+    // 就全军覆没）。这里只做两件与字符形状无关的事：原文里有没有这个**完整**地址、它读不读得到。
+    const expected = sample.entries ?? [];
+    assert.ok(expected.length > 0,
+      `${what} 没有给出预期入口：CONTRACT 样本必须在采样器里声明它应当指得到哪几个地方`);
+    const present = expected.filter((path) => text.includes(path));
+    assert.ok(present.length > 0,
+      `${what} 里一个完整报告入口都没有（预期的 ${expected.length} 个地址一个都没整串出现）：` +
+      "省掉的条目必须留一个真读得到的去处，截在半条地址上的指路比不指路更坏");
+    for (const path of present) {
+      assert.ok(existsSync(path), `${what} 的入口 ${path} 在盘上不存在`);
     }
     // 首轮的标签有两种形状：单链是「第 1 轮」，跨链是「第 1 条审查链第 1 轮」，都以
     // 「第 1 」起头（`freeReviewPriorRounds` 的 label）。

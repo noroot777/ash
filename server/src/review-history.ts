@@ -60,8 +60,11 @@ const SECTION_CAP = 4_000;
  * 于是这句话退化成「另有 8 份没有列出，在 / 下」—— 一句指不到任何地方的指路（第 1 轮审查
  * 用 win32 形状路径实测到的）。按两种分隔符一起切，再用这组路径自己用的那个拼回去。
  * 这是纯字符串处理，没有平台分支，所以喂 win32 形状的字符串就能验到底（回归用例里有）。
+ *
+ * 导出是给体积闸的采样器用的：它要**结构化地**声明「这一节应当指得到哪几个地方」，再由闸
+ * 去核对原文里有没有这个完整地址。自己再实现一遍就会和这里的分隔符规则漂移。
  */
-function commonDirectory(paths: string[]): string {
+export function commonDirectory(paths: string[]): string {
   const separator = paths.some((path) => path.includes("\\")) && !paths.some((path) => path.includes("/"))
     ? "\\"
     : "/";
