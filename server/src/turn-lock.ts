@@ -119,6 +119,18 @@ const WAKE_TURN_ROLE = "lead-wake";
 export const RECONCILE_TURN_ROLE = "reconcile";
 
 /**
+ * 队列占位回滚**提交状态时**占的位(`queue-seat` 的 rollback、`scheduler` 的
+ * `reclaimStrandedSeat`)。同样不是一个回合。
+ *
+ * 为什么回滚非得占这把锁:它要把任务从 queued 写回占位前的状态,而 `setTaskStatus` **自己
+ * 内部就有 await**(先整行 SELECT 再 UPDATE)。「写之前再查一次所有权」挡不住那段窗口 ——
+ * 新持有者可以在那次 SELECT 期间占锁、绑令牌、落 running,旧回滚随后照样把它写回终态,
+ * 还连带触发结算与队列推进(第 2 轮审查 F1 实测:新锁仍在而状态已被翻成 failed)。
+ * 占着锁写就没有这段窗口:任何新持有者都 claim 不进来,提交期间不可能有人开始新一轮。
+ */
+export const SEAT_ROLLBACK_ROLE = "seat-rollback";
+
+/**
  * 冻结一个**正在起跑**的回合：已 claim、还没 spawn，所以没有 handle 可杀。
  * 返回 false = 这个任务根本没有回合在起跑（调用方无事可做）。
  *
@@ -134,6 +146,7 @@ export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"
   const role = turns.get(taskId)?.role;
   if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
   if (role === RECONCILE_TURN_ROLE) return false; // 残留结算也不是回合,理由同上
+  if (role === SEAT_ROLLBACK_ROLE) return false; // 占位回滚也不是回合,理由同上
   startFreeze.set(taskId, settle);
   return true;
 }
@@ -367,6 +380,36 @@ export function forceReleaseTurn(expected: { taskId: string; seq: number }): Tur
   startFreeze.delete(expected.taskId);
   endTurn(expected.taskId);
   return held;
+}
+
+/**
+ * **等这个任务的回合锁空出来**,最多等 `timeoutMs`。true = 真的空了;false = 等到超时它还占着。
+ *
+ * 给「停止」用,而且是它唯一能拿到的**证据**:停止在没有进程可杀时会竖一个起跑冻结标记,
+ * 但标记本身证明不了有人会来消费它 —— `freezeStartingTurn` 只要看见一个非预占身份就返回
+ * true,活着的起跑流程和一把没人管的锁在它眼里一模一样(第 2 轮审查 F3)。真正的区别是
+ * **会不会有人来还锁**:活着的起跑流程走到 spawn 前那道闸会消费掉标记、撤回这一轮、在
+ * 自己的 catch 里 releaseTurn;没有主的锁则一直占着。所以等一会儿看锁空不空,是唯一不靠
+ * 年龄猜测、而是靠**观察到释放**的判据。等不到也不猜 —— 如实说还占着,把放开交给用户。
+ */
+export function waitForTurnIdle(taskId: string, timeoutMs: number): Promise<boolean> {
+  if (!turns.has(taskId)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+    // **不 unref**:有一条 HTTP 响应在等这个 Promise。unref 掉的话,进程只剩它时事件循环
+    // 会直接空转退出,那条响应永远发不出去(回归里实测到「unsettled top-level await」)。
+    whenTurnIdle(taskId, () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 /** 任务空着就立刻执行，正在跑就排到它这一轮退出之后。 */

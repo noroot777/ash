@@ -29,7 +29,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_SUSPECT_TURN_MS = "20";
 
 const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
-const { projects, sessions, tasks, queueItems, scheduledMessages } = await import("../src/db/schema.js");
+const { projects, sessions, tasks, taskNotices, queueItems, scheduledMessages } = await import("../src/db/schema.js");
 const { createTasks } = await import("../src/task-store.js");
 const {
   bindTurnToken, claimReconcileTurn, claimTurn, claimWorkspaceTurn, isTurnClaimed, releaseTurn,
@@ -46,6 +46,7 @@ const { setTaskStatus } = await import("../src/status.js");
 const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { sessionTranscriptPath } = await import("../src/transcript.js");
+const { takeFreeze } = await import("../src/turn-freeze.js");
 
 await ensureSchema();
 const stamp = new Date().toISOString();
@@ -271,8 +272,10 @@ await sleep(SUSPECT_TURN_MS * 3);
 assert.equal(isTurnClaimed("t-http"), false, "人工放开后锁必须放开");
 assert.equal((await post("/tasks/t-http/reclaim-turn")).status, 409, "放开过了再点应如实 409");
 // 挡回也要留痕 —— 这条 409 本身就是一次「用户点了、没执行」
-assert.match(await timelineOf("t-http", "s-t-http"), /你点的「放开回合占位」/,
-  "被挡回的放开操作必须留下持久可见的痕迹");
+assert.ok(
+  (await recentRejectionNotices("t-http")).some((n) => n.action === "放开回合占位"),
+  "被挡回的放开操作必须留下持久可见的痕迹",
+);
 
 // ── ⑦ 队列占位:不永久放弃,但只撤自己那一代 ─────────────────────────────────
 // 旧版 seat.release() / reclaimStrandedSeat 都以 `if (isTurnClaimed) return` 开头,于是
@@ -360,53 +363,163 @@ const statusOf = async (taskId: string): Promise<string | undefined> =>
   assert.equal(await statusOf("t-strand"), "done", "锁释放之后遗留占位必须被收拾");
 }
 
+// ── ⑦b 提交期间锁在回滚手里 ──────────────────────────────────────────────────
+// **第 2 轮审查 F1 的回归。** `setTaskStatus` 自己内部就有 await(先整行 SELECT 再 UPDATE),
+// 所以「写之前再查一次所有权」挡不住那段窗口:新持有者能在那次 SELECT 期间占锁、绑令牌、
+// 落 running,旧回滚随后照样把它写回终态,还连带触发结算与队列推进(审查者实测新锁仍在
+// 而状态已被翻成 failed)。改成**占着锁提交**之后,提交期间就不可能有人占进来。
+await createTasks([{ ...baseTask, id: "t-commit", title: "commit under lock", status: "failed" }]);
+await db.insert(queueItems).values([{ queueId: "q4", taskId: "t-commit", position: 0, createdAt: stamp }]);
+{
+  const claim = await claimQueueSeat("t-commit");
+  assert.ok(claim.ok && claim.seat, "应认领到执行占位");
+  // 不 await:release() 同步走到 claimNonTurn 才遇到第一个 await,此刻锁必须已在它手里
+  const committing = claim.seat!.release();
+  assert.equal(claimTurn("t-commit", "single"), false,
+    "回滚提交期间不许有人占到锁 —— 那正是新一轮能插进 setTaskStatus 内部 await 的入口");
+  await committing;
+  assert.equal(isTurnClaimed("t-commit"), false, "提交完必须把锁还回去");
+  assert.equal(await statusOf("t-commit"), "failed", "没人接手的占位照常回滚");
+}
+{
+  // 对称点:scheduler 的兜底补偿同患同一个毛病,所以同样要占着锁提交
+  await createTasks([{ ...baseTask, id: "t-commit2", title: "guard commits under lock", status: "done" }]);
+  await db.insert(queueItems).values([{ queueId: "q4", taskId: "t-commit2", position: 1, createdAt: stamp }]);
+  await setTaskStatus("t-commit2", "queued");
+  const committing = reclaimStrandedSeat("t-commit2", "q4", "done"); // 不 await
+  assert.equal(claimTurn("t-commit2", "single"), false, "守卫提交期间同样不许有人占到锁");
+  await committing;
+  assert.equal(isTurnClaimed("t-commit2"), false, "提交完必须把锁还回去");
+  assert.equal(await statusOf("t-commit2"), "done", "遗留占位照常被收拾");
+}
+
+// ── ⑦c 责任交回:幽灵锁压着的占位,放开之后要被收拾 ─────────────────────────
+// **第 2 轮审查 F2 的回归。** 回滚被一把没人还的锁挡住时,责任仍在这个 seat 手上(世代
+// 号非 0),scheduler 的兜底据此让位。问题出在「放弃时留着号码」—— 那就成了谁都不来收。
+// 现在放弃路径会清号并交接;而正常的恢复路径是:用户手动放开那把锁,被冻住的回滚跟着放走。
+await createTasks([{ ...baseTask, id: "t-ghostseat", title: "seat under ghost lock", status: "failed" }]);
+await db.insert(queueItems).values([{ queueId: "q5", taskId: "t-ghostseat", position: 0, createdAt: stamp }]);
+{
+  const claim = await claimQueueSeat("t-ghostseat");
+  assert.ok(claim.ok && claim.seat, "应认领到执行占位");
+  assert.equal(claimTurn("t-ghostseat", "single"), true, "一把没人会来还的锁压在上面");
+  await claim.seat!.release();
+  assert.equal(await statusOf("t-ghostseat"), "queued", "锁占着,回滚只能排队等");
+  assert.notEqual(seatGeneration("t-ghostseat"), 0, "责任还在这个 seat 手上,兜底该让位");
+  await reclaimStrandedSeat("t-ghostseat", "q5", "failed");
+  assert.equal(await statusOf("t-ghostseat"), "queued", "有活着的 seat 负责时兜底不插手");
+  // 恢复:用户手动放开那把锁 → afterTurn 回调放走 → 回滚跑完 → 号码交回
+  await sleep(SUSPECT_TURN_MS * 3);
+  assert.ok((await releaseSuspectTurn("t-ghostseat")).ok, "满足判据时人工放开应成功");
+  await sleep(30);
+  assert.equal(await statusOf("t-ghostseat"), "failed",
+    "锁一放开,被它冻住的占位回滚必须跑完 —— 否则任务永久停在「排队中」");
+  assert.equal(seatGeneration("t-ghostseat"), 0, "责任交回后号码要清掉,不能永久屏蔽兜底");
+}
+
+// ── ⑦d 停止:等到真的释放才说「可以重新运行」 ────────────────────────────────
+// **第 2 轮审查 F3 的回归。** `freezeStartingTurn` 只要看见一个非预占身份就返回 true ——
+// 活着的起跑流程和一把没人管的锁在它眼里一模一样。上一版拿它的返回值当「已撤回启动」,
+// 于是真正泄漏的锁也被说成撤回了,用户据此去点运行,仍是 409。现在改成**观察释放**。
+await createTasks([
+  { ...baseTask, id: "t-stoplive", title: "stop with live starter", status: "queued" },
+  { ...baseTask, id: "t-stopghost", title: "stop with ghost lock", status: "queued" },
+]);
+{
+  // 活着的起跑流程:占着位,稍后走到 spawn 前那道闸,消费冻结标记并撤回这一轮
+  assert.equal(claimTurn("t-stoplive", "single"), true);
+  // 不 unref:停止那一侧正等着这个回调把锁还回去
+  setTimeout(() => {
+    if (takeFreeze("t-stoplive")) releaseTurn("t-stoplive"); // 闸命中 → 撤回 → 还锁
+  }, 20);
+  const res = await post("/tasks/t-stoplive/stop");
+  assert.equal(res.status, 200);
+  const body = await res.json() as { strandedTurn: boolean; note: string };
+  assert.equal(body.strandedTurn, false, "活着的起跑流程会消费冻结并还锁,停止该等到");
+  assert.match(body.note, /现在可以重新运行/);
+  assert.equal(isTurnClaimed("t-stoplive"), false, "等到的就是锁真的空了");
+}
+{
+  // 没人会还的锁:等不到就如实说,不猜、更不强拔
+  assert.equal(claimTurn("t-stopghost", "single"), true);
+  const res = await post("/tasks/t-stopghost/stop");
+  assert.equal(res.status, 200);
+  const body = await res.json() as { strandedTurn: boolean; note: string };
+  assert.equal(body.strandedTurn, true, "等不到释放要如实说,不许谎称已撤回启动");
+  assert.match(body.note, /放开回合占位/, "要告诉用户那个开关在哪");
+  assert.doesNotMatch(body.note, /现在可以重新运行/, "没等到就不许说可以重新运行了");
+  assert.equal(isTurnClaimed("t-stopghost"), true, "停止不许强拔锁 —— 证不了原持有者已结束");
+  assert.ok((await recentRejectionNotices("t-stopghost")).length > 0, "没等到释放要留下持久痕迹");
+  releaseTurn("t-stopghost");
+}
+
 // ── ⑧ 被挡回的用户操作留下持久可见的痕迹 ─────────────────────────────────────
 // 只弹一次 toast 的话,刷新页面之后用户看不出「点过、没成、为什么」—— 2026-10-26 他
 // 因此两次误判(以为按钮坏了 / 以为任务已经跑完)。
+//
+// **落点只有一处**(第 2 轮审查 F4):上一版同时写表和会话正文、前端只在对话流为空时读表,
+// 于是任务一跑出正文,第一次被拒的记录还在库里却再也显示不出来。「有没有正文」跟「这段
+// 历史该不该可见」没有关系,所以改成只写表、由前端无条件合进同一条历史。
 await createTasks([{ ...baseTask, id: "t-note", title: "rejection note" }]);
 const noteSession = await seedSession("t-note");
 {
   assert.equal(await noteRejectedUserAction("t-note", "派审查", "任务正等待答复或续跑，处理后再派审"), true);
-  const timeline = await timelineOf("t-note", noteSession);
-  assert.match(timeline, /你点的「派审查」这一次没有执行/, "被挡回的操作必须写进任务时间线");
-  assert.match(timeline, /任务正等待答复或续跑/, "痕迹里必须带上挡回的理由");
-  // 去重:按钮没反应时用户会连点,一次一条会把时间线刷满、把真正的进展埋掉
+  const notices = await recentRejectionNotices("t-note");
+  assert.equal(notices.length, 1, "被挡回的操作必须留下持久记录");
+  assert.ok(notices[0]!.id, "记录要有稳定身份 —— 前端靠它合进时间线并去重");
+  assert.equal(notices[0]!.action, "派审查");
+  assert.match(notices[0]!.reason, /任务正等待答复或续跑/, "痕迹里必须带上挡回的理由");
+  // **有会话也不写会话正文**:两份记录就会出现「只有一份写成」的半可见状态
+  assert.equal(await timelineOf("t-note", noteSession), "",
+    "通知只有表这一处落点,不许再往会话正文写第二份");
+  // 去重:按钮没反应时用户会连点,一次一条会把历史刷满、把真正的进展埋掉
   assert.equal(await noteRejectedUserAction("t-note", "派审查", "任务正等待答复或续跑，处理后再派审"), false,
     "同一条挡回在去重窗口内只记一次");
   assert.equal(await noteRejectedUserAction("t-note", "派审查", "任务回合正在进行，结束后再派审"), true,
     "换了理由就是新事实,照记");
 }
 {
-  // **本轮审查 F4 的回归:从没跑过的任务也必须留下痕迹。**
-  // appendTaskTimeline 要往某条会话的 transcript 文件里写,没有会话就只会 return false
-  // 加一行 warn —— 而「点运行被同队前项挡回」最常发生的正是一个刚排进队列、还没跑过的
-  // 任务,最该留痕的那一档原本一个字都留不下。
+  // 从没跑过的任务也必须留下痕迹 —— 「点运行被同队前项挡回」最常发生的正是这一档。
   await createTasks([{ ...baseTask, id: "t-nosession", title: "never ran", status: "backlog" }]);
   assert.equal(
     await noteRejectedUserAction("t-nosession", "运行", "同一队列里还有未完成或正在运行的任务"),
     true,
-    "没有会话的任务也必须留下持久痕迹(写进不依赖会话的任务通知表)",
+    "没有会话的任务同样要留下持久痕迹",
   );
   const notices = await recentRejectionNotices("t-nosession");
   assert.equal(notices.length, 1, "通知表里应有这一条");
   assert.equal(notices[0]!.action, "运行");
-  assert.match(notices[0]!.reason, /同一队列/, "痕迹里必须带上挡回的理由");
-  // 有会话的那一条也要进表 —— 表是权威记录,会话正文只是顺带的就地展示
-  assert.ok((await recentRejectionNotices("t-note")).length >= 2,
-    "有会话的挡回同样要落进通知表");
+  assert.match(notices[0]!.reason, /同一队列/);
 }
 {
-  // 路由层:验收锁下点运行 409,痕迹要落在时间线上
+  // **不按时间窗砍历史。** 上一版只回看 24 小时,窗口之外的记录还在库里却无法从界面
+  // 追溯(第 2 轮审查 F4)—— 这是任务历史的一部分,不是「刚才那一下」的提示。
+  await createTasks([{ ...baseTask, id: "t-old", title: "old notice", status: "backlog" }]);
+  const longAgo = new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString();
+  await db.insert(taskNotices).values({
+    id: "n-old", taskId: "t-old", action: "运行", reason: "很久以前被挡回的那一次", occurredAt: longAgo,
+  });
+  const notices = await recentRejectionNotices("t-old");
+  assert.equal(notices.length, 1, "一个月前的挡回仍要能读出来");
+  assert.equal(notices[0]!.id, "n-old");
+}
+{
+  // 删任务要连它的通知一起删,别留下指着已删任务、再也打不开的孤儿行。
+  await db.delete(taskNotices).where(eq(taskNotices.taskId, "t-old"));
+  assert.equal((await recentRejectionNotices("t-old")).length, 0);
+}
+{
+  // 路由层:验收锁下点运行 409,痕迹要落下来
   // status 必须是**可运行**的那一档:done 任务会先被「当前状态不可运行」挡掉,而那一类
   // 挡板刻意不留痕(用户在界面上一眼就能看出任务已经完成)。
   await createTasks([{ ...baseTask, id: "t-run409", title: "run rejected", status: "failed" }]);
-  const runSession = await seedSession("t-run409");
   assert.equal(beginAccepting("t-run409"), true);
   const res = await post("/tasks/t-run409/run");
   assert.equal(res.status, 409);
   endAccepting("t-run409");
-  assert.match(await timelineOf("t-run409", runSession), /你点的「运行」这一次没有执行.*验收/s,
-    "/run 的状态性 409 必须留下持久可见的痕迹");
+  const notices = await recentRejectionNotices("t-run409");
+  assert.equal(notices.length, 1, "/run 的状态性 409 必须留下持久可见的痕迹");
+  assert.match(notices[0]!.reason, /验收/, "痕迹里要说清是被什么挡的");
   assert.equal(isTurnClaimed("t-run409"), false, "挡回不许留下占着的回合锁");
 }
 

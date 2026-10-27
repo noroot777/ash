@@ -29,9 +29,18 @@ import { mountTaskSteerRoutes } from "./task-steer.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
-import { claimTurn, freezeStartingTurn, releaseTurn, stopTask } from "./runs.js";
+import { claimTurn, freezeStartingTurn, releaseTurn, stopTask, waitForTurnIdle } from "./runs.js";
 import { noteRejectedUserAction, type RejectedAction } from "./user-action-rejection.js";
-import { releaseSuspectTurn, suspectTurns } from "./turn-lock-reclaim.js";
+import { releaseSuspectTurn } from "./turn-lock-reclaim.js";
+
+/**
+ * 停止在没有进程可杀时,等这个任务的回合锁空出来等多久。
+ *
+ * 取 3 秒的理由:活着的起跑流程从占位到 spawn 前那道闸,正常只隔几次库读加一个事务
+ * (毫秒级);留宽到秒级是为了兜住准备工作目录那一段。等不到不代表泄漏 —— 大仓库的
+ * worktree 准备可以更久,所以超时后的话术只说「到现在还占着」,不下「没有主」的结论。
+ */
+const STOP_RELEASE_WAIT_MS = 3_000;
 import { handoffBlockReason } from "./handoff-guard.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
@@ -234,19 +243,25 @@ api.post("/tasks/:id/stop", async (c) => {
     // 的 queued)。那一档既没有句柄可杀、也不会被状态写入拦住,所以补一个起跑冻结标记,
     // 由 spawn 前的最后一道闸消费 —— 与 pauseGroup 同一口径(scheduler.ts)。不补的话
     // 这条 200「已停止」是假话:CLI 随后照样被拉起来,而界面显示 canceled。
-    const freezing = freezeStartingTurn(taskId, "canceled");
-    // 锁还被占着、却既没有句柄也没有令牌 = 这个任务点运行会一律 409,而库里
-    // active_turn_token 是空的(2026-10-26 那次卡死的形态)。如实说出来 —— 别让用户
-    // 以为按钮坏了。**不许说它会自动恢复**:系统证不了原持有者已经结束,所以不会自动
-    // 放开,只能告诉用户那个开关在哪(判据与理由见 turn-lock-reclaim.ts)。
-    const stranded = !freezing && suspectTurns(Date.now(), 0).some((t) => t.taskId === taskId);
-    const note = freezing
-      ? "没有存活的 agent 进程（这一轮还没启动起来），已标记为 canceled 并撤回它的启动"
-      : stranded
-        ? "没有存活的 agent 进程，已标记为 canceled；但这个任务的回合占位仍被占着，期间点运行会被挡回「任务回合正在进行」。系统无法确认占着它的那一位是否真的已经结束，所以不会自动放开；确认它不动了就调 POST /api/tasks/:id/reclaim-turn 手动放开"
-        : "没有存活的 agent 进程,已直接标记为 canceled";
-    if (stranded) await noteRejectedUserAction(taskId, "停止", note);
-    return c.json({ stopped: true, note, strandedTurn: stranded });
+    //
+    // **但「标记竖起来了」不等于「这一轮撤回了」。** `freezeStartingTurn` 只要看见一个
+    // 非预占身份就返回 true —— 活着的起跑流程和一把没人管的锁在它眼里一模一样,它证明
+    // 不了有谁会来消费这个标记(第 2 轮审查 F3:真正泄漏的锁也被说成「已撤回它的启动」,
+    // 用户据此去点运行,仍是 409)。
+    //
+    // 真正的区别是**会不会有人来还锁**:活着的起跑流程走到 spawn 前那道闸会消费掉标记、
+    // 撤回这一轮、在自己的 catch 里 releaseTurn。所以这里等一会儿,看锁空不空 —— 这是
+    // 停止唯一能拿到的证据,而且它不靠年龄猜测,靠的是**观察到释放**。等到了就如实说
+    // 「可以重新运行了」;等不到也不猜、更不强拔,如实说它还占着并把放开交给用户。
+    freezeStartingTurn(taskId, "canceled");
+    const released = await waitForTurnIdle(taskId, STOP_RELEASE_WAIT_MS);
+    const note = released
+      ? "没有存活的 agent 进程（这一轮还没启动起来），已标记为 canceled 并撤回它的启动，现在可以重新运行"
+      : "没有存活的 agent 进程，已标记为 canceled；但这个任务的回合占位到现在还占着，期间点运行会被挡回「任务回合正在进行」。系统无法确认占着它的那一位是不是还在做很慢的准备，所以不会自动放开；再等一会儿仍然不动，就用「放开回合占位」手动解开";
+    // 没等到释放的那一种要留痕:只弹一次 toast 的话,用户刷新之后看不出自己停过、
+    // 也看不出为什么点运行还是不行(AGENTS.md「停止/暂停必须留下持久可见的状态」)。
+    if (!released) await noteRejectedUserAction(taskId, "停止", note);
+    return c.json({ stopped: true, note, strandedTurn: !released });
   }
   return c.json({ error: "任务没有在运行的进程可停止", status: r.status }, 409);
 });

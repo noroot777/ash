@@ -29,6 +29,7 @@ import { inheritOwner } from "./auth/run-env.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
 import { recentRejectionNotices } from "./user-action-rejection.js";
+import { suspectTurns } from "./turn-lock-reclaim.js";
 
 export function mountTaskRoutes(api: Hono): void {
   // 删除那一族(连带关联行 + DELETE 本体)住在 task-delete-routes.ts —— 只是为了行数,
@@ -120,7 +121,10 @@ api.get("/tasks/:id/notices", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
-  return c.json({ notices: await recentRejectionNotices(taskId) });
+  // `remedy` 是**此刻**算出来的,不是存下来的:它回答的是「现在按那个开关有没有用」。
+  // 存进库就会出现「当时卡着、现在早好了,按钮还挂在那里」的死按钮。
+  const remedy = suspectTurns().some((t) => t.taskId === taskId) ? "reclaim-turn" as const : null;
+  return c.json({ notices: await recentRejectionNotices(taskId), remedy });
 });
 
 api.get("/tasks/:id/question-history", async (c) => {

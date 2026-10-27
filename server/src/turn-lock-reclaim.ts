@@ -153,7 +153,8 @@ export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise
         suspect.taskId,
         `〔系统〕这个任务的回合占位占着不动（${detail}），期间点运行会被挡回「任务回合正在进行」。`
         + "没有进程在册、也没有绑过回合令牌，但系统**无法确认**原来那一位是否真的已经结束，"
-        + `所以不会自动放开。确认它确实不动了，可以手动放开（任务详情页的运行入口，或 POST /api/tasks/${suspect.taskId}/reclaim-turn）。`
+        + "所以不会自动放开。确认它确实不动了，用任务详情页上的「放开回合占位」手动解开"
+        + `（或 POST /api/tasks/${suspect.taskId}/reclaim-turn）——**点运行是解不开的**，那条路只会继续被挡回。`
         + SIDE_EFFECT,
         { eventKey: `suspect-turn:${suspect.taskId}:${suspect.seq}` },
       );

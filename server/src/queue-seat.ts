@@ -23,6 +23,17 @@
 // ⚠ release() 不许在 serializeQueueClaims 的临界区里调:回滚到终态会触发
 // advanceQueueFromTask → advanceQueue,后者也要进同一条链,届时会死等自己。
 //
+// ## 回滚要**占着回合锁**提交,不是写之前再查一次
+//
+// `setTaskStatus` 自己内部就有 await:先整行 SELECT,再按 taskId UPDATE。所以「最后检查
+// 一次所有权、紧接着调它」是挡不住的 —— 新持有者能在那次 SELECT 期间占锁、绑令牌、落
+// running,旧回滚随后照样把它写回终态,还连带触发结算与队列推进(第 2 轮审查 F1 实测:
+// 新锁仍在而状态已被翻成 failed,下一项还可能因此提前开跑)。
+//
+// 所以回滚**把回合锁占在手里**再提交(`SEAT_ROLLBACK_ROLE`):占住期间任何新持有者都
+// claim 不进来,提交窗口里不可能有人开始新一轮。占不到 = 有人正拿着这个占位起跑,排到
+// 它释放之后再看一眼。两件事用的是同一个原子对象,这才是所有权,查几次都不是。
+//
 // ## 占位有世代,回滚只撤自己那一代
 //
 // 回滚可能**延期**执行(锁被占着时排到释放之后),而延期意味着「我当初占下的那个 queued」
@@ -31,16 +42,21 @@
 // `{"newTurnStillHeld":{"role":"single"},"statusAfterOldRollback":"failed"}`,因为 `endTurn`
 // 按注册顺序跑回调,排在前面的那个合法回调已经抢到新锁、落了新占位,我这个后到的回滚照样写。
 //
-// 所以每次认领发一个号(`seatGen`),回滚三道闸:① 我这一代还是当前那一代吗;② 回合锁现在
-// 有没有人占着(**回调入口也要查**,不能只在注册时查);③ 异步读之后、紧挨着写之前再核一遍
-// ①②。锁被人接手时**不是放弃,而是再排一次** —— 直接 return 就又回到了「占位永远没人回滚」
-// 那个形态(2026-10-26 实测 70+ 分钟),而真的被接手时第二次检查会看到状态已不是 queued,
-// 自然 no-op。
+// 所以每次认领发一个号(`seatGen`),回滚只在「我这一代还是当前那一代」时才撤。占不到锁时
+// **不是放弃,而是再排一次** —— 直接 return 就又回到了「占位永远没人回滚」那个形态
+// (2026-10-26 实测 70+ 分钟)。
+//
+// ## 号码不许在没人接手时留着
+//
+// 世代号同时是 scheduler 兜底的让位判据(非 0 = 有活着的 seat 负责,外人别插手)。所以凡是
+// 本 seat **放弃责任**的出口 —— 重排到顶、读写异常 —— 都必须「清号 + 把补偿交给 scheduler」,
+// 一步都不能少。少了就是:号码留着、谁都不来收,兜底在读库之前就 return,任务永久「排队中」
+// (第 2 轮审查 F2 实测 `afterUnlockAndGuard: {status:"queued", turn:null, seatGen:2}`)。
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
 import { manualStartBlockers } from "./queues.js";
-import { isTurnClaimed, whenTurnIdle } from "./runs.js";
+import { SEAT_ROLLBACK_ROLE, claimNonTurn, isTurnClaimed, whenTurnIdle } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
@@ -174,47 +190,61 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
     }
     const gen = (nextSeatGen += 1);
     seatGen.set(taskId, gen); // 发号要在临界区里:出了这段就可能有人认领下一代
-    return { ok: true, seat: makeSeat(taskId, prevStatus, gen) };
+    return { ok: true, seat: makeSeat(taskId, item.queueId, prevStatus, gen) };
   });
 }
 
 /**
  * 延期回滚最多再排几次。每一次重排都要等一个完整的「占锁 → 放锁」周期,所以现实里它本就
- * 收敛;这个上限只为挡住病态的来回(两个入口在同一个释放点上反复互相接手),到顶就如实
- * 留一行日志,别让它无声地转下去。
+ * 收敛;这个上限只为挡住病态的来回(两个入口在同一个释放点上反复互相接手)。到顶**不是
+ * 撒手**:清掉号码并把补偿交给 scheduler,见模块头「号码不许在没人接手时留着」。
  */
 const MAX_ROLLBACK_DEFERRALS = 5;
 
-function makeSeat(taskId: string, prevStatus: string, gen: number): QueueSeat {
+function makeSeat(taskId: string, queueId: string, prevStatus: string, gen: number): QueueSeat {
   let released = false;
   const mine = () => seatGen.get(taskId) === gen;
   const clearGen = () => { if (mine()) seatGen.delete(taskId); };
 
+  /**
+   * 本 seat 不再为这具占位负责了。**清号和交接必须成对**:只清号,没人会来收;只交接,
+   * scheduler 看见非零号码会在读库之前就让位(第 2 轮审查 F2)。
+   */
+  const handOff = (why: string): void => {
+    clearGen();
+    console.warn(`[ash] 队列占位回滚交给 scheduler 兜底(${taskId}):${why}`);
+    // 动态 import:scheduler 静态依赖本模块。repush:"never" —— 本模块的调用方全是带自身
+    // 语义的入口,补办重推会把 /fire 的「全新一轮」偷换成续跑旧会话(见 claimQueueSeat)。
+    void import("./scheduler.js").then(({ reclaimStrandedSeat }) =>
+      reclaimStrandedSeat(taskId, queueId, prevStatus as Parameters<typeof reclaimStrandedSeat>[2], { repush: "never" }),
+    ).catch((err) => console.error(`[ash] 队列占位回滚交接失败(${taskId}):`, err));
+  };
+
   const rollback = async (deferrals: number): Promise<void> => {
-    // ① 换代了 = 后面又有人认领过占位,库里那个 queued 是**他的**,不是我当初占的那个。
+    // 换代了 = 后面又有人认领过占位,库里那个 queued 是**他的**,不是我当初占的那个。
+    // 这一代已经不归我管,交接也不该做(新 seat 自己负责)。
     if (!mine()) return;
-    // ② 回合锁被人占着 = 有人正拿着占位真正起跑,它的结算会覆盖状态,现在不能动。
-    //    **延期回调入口也必须查这一条**:回调是 endTurn 按注册顺序跑的,排在我前面的那个
-    //    合法回调完全可以在同一个释放点上抢到新锁(本轮审查 F3 复现)。
-    //    而且这里不是放弃,是再排一次 —— 直接 return 就又回到「占位永远没人回滚」。
-    if (isTurnClaimed(taskId)) {
-      if (deferrals >= MAX_ROLLBACK_DEFERRALS) {
-        console.warn(`[ash] 队列占位回滚重排已达上限(${taskId}),交给 scheduler 的守卫兜底`);
-        return;
-      }
+    // **占住回合锁再提交**(理由见模块头):占不到 = 有人正拿着这个占位起跑,排到它释放
+    // 之后再看。注意 endTurn 是按注册顺序跑回调的,排在我前面的合法回调会先抢到锁 ——
+    // 那正是对的,我重排就是了。
+    const releaseLock = claimNonTurn(taskId, SEAT_ROLLBACK_ROLE);
+    if (!releaseLock) {
+      if (deferrals >= MAX_ROLLBACK_DEFERRALS) { handOff("重排已达上限"); return; }
       whenTurnIdle(taskId, () => void rollback(deferrals + 1));
       return;
     }
     try {
       const cur = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-      if (cur?.status !== "queued") { clearGen(); return; } // 已被真实结算覆盖,无事可做
-      // ③ 上面那次读隔着 await,这期间新一轮可以整个起来并落下自己的占位。写之前紧挨着
-      //    再核一遍 ①②,别把后来者的 queued 覆盖成我这一代的 prevStatus。
-      if (!mine() || isTurnClaimed(taskId)) return;
+      // 已被真实结算覆盖 = 这具占位有人接手并跑完了,无事可做。
+      if (cur?.status !== "queued") { clearGen(); return; }
+      // 锁在手里,这一写不可能被新一轮插进来。
       await setTaskStatus(taskId, prevStatus as Parameters<typeof setTaskStatus>[1]);
       clearGen();
-    } catch {
-      /* 回滚失败只能留给重启 reconcile */
+    } catch (err) {
+      // 读或写失败:号码留着就没人会来收了,交给 scheduler 带重试的那条路。
+      handOff(`回滚出错(${err instanceof Error ? err.message : String(err)})`);
+    } finally {
+      releaseLock();
     }
   };
 

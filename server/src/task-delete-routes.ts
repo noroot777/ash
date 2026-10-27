@@ -8,7 +8,7 @@ import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
+import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, tasks, teamInbound, taskBranchReceipts, taskNotices} from "./db/schema.js";
 import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
 import { stopMonitorsForTask } from "./monitor-reclaim.js";
@@ -87,6 +87,8 @@ async function deleteTaskRows(taskId: string): Promise<void> {
     .where(eq(freeReviewDebates.taskId, taskId));
   await db.batch([
     db.delete(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, taskId)),
+    // 被挡回的用户操作:不删就是一堆指着已删任务、再也打不开的孤儿行。
+    db.delete(taskNotices).where(eq(taskNotices.taskId, taskId)),
     // 验收前置命令的执行记录:不删就是一堆指着已删任务的孤儿行(还带着 pid 和日志路径)。
     db.delete(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId)),
     db.delete(freeReviewDebateTurns).where(inArray(freeReviewDebateTurns.debateId, debates)),

@@ -10,7 +10,8 @@ import { RECONCILE_TURN_ROLE, claimNonTurn, whenTurnIdle } from "./turn-lock.js"
 export {
   bindTurnToken, claimIdleWorkspaceTurns, claimTurn, claimWakeTurn, claimWorkspaceTurn,
   continueWhenIdle, freezeStartingTurn, isTurnClaimed, reclaimTurn, releaseTurn,
-  takeStartFreeze, turnIdentity, turnRole, turnSourceReview, turnSourceRole, whenTurnIdle,
+  SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, turnIdentity, turnRole, turnSourceReview,
+  turnSourceRole, waitForTurnIdle, whenTurnIdle,
 } from "./turn-lock.js";
 export type { TurnIdentity, TurnReview, TurnSource } from "./turn-lock.js";
 

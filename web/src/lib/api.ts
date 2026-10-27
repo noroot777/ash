@@ -245,8 +245,15 @@ export const api = {
     request(`/tasks/${id(taskId)}/question-history`),
   // 最近被挡回的用户操作。对话流空态才调 —— 从没跑过的任务没有会话时间线,这是它唯一的
   // 痕迹来源(server/src/user-action-rejection.ts)。
-  taskNotices: (taskId: string): Promise<{ notices: { action: string; reason: string; occurredAt: string }[] }> =>
-    request(`/tasks/${id(taskId)}/notices`),
+  taskNotices: (taskId: string): Promise<{
+    notices: { id: string; action: string; reason: string; occurredAt: string }[];
+    /** 非空 = 此刻这个任务的回合占位可疑,界面该给出「放开回合占位」那个开关。 */
+    remedy: "reclaim-turn" | null;
+  }> => request(`/tasks/${id(taskId)}/notices`),
+  // 放开一把占着不动的回合占位。**判据在服务端,不因为是人点的就放宽**;成功时返回的
+  // note 里写着副作用(server/src/turn-lock-reclaim.ts)。
+  reclaimTurn: (taskId: string): Promise<{ reclaimed: boolean; role: string; heldMs: number; note: string }> =>
+    request(`/tasks/${id(taskId)}/reclaim-turn`, json("POST", {})),
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
   followUps: (taskIds: string[]): Promise<TaskFollowUp[]> =>
     request("/tasks/follow-ups", json("POST", { taskIds })),
