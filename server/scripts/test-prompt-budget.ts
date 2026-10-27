@@ -37,18 +37,17 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 const BUDGETS: Record<string, number> = {
   // ── 审查任务书 ───────────────────────────────────────────────────────────────
   // `-bare` = 同一条消息、但任务身上没有已裁定意见也没有历史发现，量的是**正文**。
-  // 剩下的 7.3KB 几乎全是审查契约本身（六面扫描 + 报告格式 + 验证义务），再压就是删规则。
-  "review/dispatch-bare": 7500,
-  "review/dispatch-logic": 12400,
-  "review/dispatch-syntax": 12400,
+  "review/dispatch-bare": 7600,
+  "review/dispatch-logic": 11400,
+  "review/dispatch-syntax": 11400,
   "review/resume": 2700,
   // ── 修复交接 ─────────────────────────────────────────────────────────────────
   // 正文里最大的一块是 `CLASS_PROBLEM_BOUNDARY`（三种处置，673B）。驳回那条路只留指针，
   // 判据全文在 `dispute_review` 工具说明里（它本来就常驻每个回合的上下文）。
   "repair/auto-bare": 1900,
-  "repair/auto": 3000,
-  "repair/manual": 3100,
-  "repair/manual-upheld": 3150,
+  "repair/auto": 2950,
+  "repair/manual": 3050,
+  "repair/manual-upheld": 3100,
   "debate/segment": 1500,
   "debate/final": 1600,
   // ── 每回合都要发的那几段 ─────────────────────────────────────────────────────
@@ -61,15 +60,23 @@ const BUDGETS: Record<string, number> = {
   "browser/full-granted": 2300,
   "browser/reminder-granted": 1100,
   "accept/gate-failure": 1450,
+  // ── 动态段撑满的那一版（`STRESS`）：量的是**天花板**，不是典型流量 ───────────
+  "stress/review-dispatch": 15800,
+  "stress/repair-auto": 3450,
+  // ── 投递态（`DELIVERED`）：真正发出去的那一条，片段相加之后的样子 ─────────────
+  "delivered/review-dispatch": 14500,
+  "delivered/review-resume": 5800,
+  "delivered/repair": 6600,
   // ── MCP 工具清单：每一条都常驻执行者的每一个回合 ─────────────────────────────
+  // 字段说明按 **SDK 真正发出去的那份 JSON Schema** 量（见采样器 `toolTexts`）。
   "mcp/accept_task": 1750,
   "mcp/answer_question": 600,
   "mcp/ask_question": 1750,
-  "mcp/batch_create_tasks": 3100,
+  "mcp/batch_create_tasks": 2300,
   "mcp/complete_task": 1450,
   "mcp/create_group": 400,
   "mcp/create_queue": 220,
-  "mcp/create_task_chain": 3350,
+  "mcp/create_task_chain": 2550,
   "mcp/debate_reply": 1400,
   "mcp/dispatch": 2100,
   // 三块判据全文的唯一落脚处（见 PLACEMENT），所以它理应是工具里偏大的一条。
@@ -93,23 +100,47 @@ const BUDGETS: Record<string, number> = {
   "mcp/run_task": 340,
   // 「怎么登记回归」的机制住在这里而不在每轮前言（见 mcp/src/tools/monitor.ts 文件头）：
   // 一份工具说明换掉每一轮都重发一遍，所以它大得有理由，但仍然要有个顶。
-  "mcp/start_monitor": 5200,
+  "mcp/start_monitor": 5100,
   "mcp/stop_monitor": 850,
   "mcp/stop_task": 480,
 };
 
-/** 全部样本加起来的顶。单条都压着、总量却靠「多加几份样本」涨回去，也算退步。 */
-const TOTAL_BUDGET = 94_000;
+/** 这两族是**同一批文字的派生视图**，算进总量就是把同一段话数两遍。 */
+const DERIVED = (id: string): boolean => id.startsWith("stress/") || id.startsWith("delivered/");
+
+/** 片段集合加起来的顶。单条都压着、总量却靠「多加几份样本」涨回去，也算退步。 */
+const TOTAL_BUDGET = 89_000;
 
 /**
- * 动态段的上限：`<完整样本> - <同名 -bare 样本>`。
+ * 动态段的上限：`<撑满的那一版> - <同名 -bare 样本>`。
  *
- * 它随「这个任务攒了多少轮裁定 / 多少条历史发现」涨，跟措辞长短无关，所以单独量。
- * 样本里种了两条已裁定意见 + 两条历史发现，是个偏多但真实会出现的形状。
+ * **必须拿撑满的那一版作差**，不能拿一个固定夹具：夹具通过只证明「这个夹具不超」。
+ * 第 1 轮审查 F1 用 20 条满额裁定和 24 条满额现象行实测到 21356B / 9326B，而当时声明的
+ * 上限是 5200B —— 闸是绿的，生产渲染根本不受它约束。现在 `stress/*` 就是按合法输入的
+ * 边界种出来的（满额单段、撑到条数上限、撑过轮次取样分支），这个差值才是天花板。
+ *
+ * 真正拦住增长的是渲染层的那两个整节预算（`free-review-settled.ts` 的 `SECTION_BUDGET`、
+ * `review-history.ts` 的 `MAX_BODY`）；这张表只负责在它们被调松时红掉。
  */
 const DYNAMIC_CAPS: Array<{ full: string; bare: string; cap: number; what: string }> = [
-  { full: "review/dispatch-logic", bare: "review/dispatch-bare", cap: 5200, what: "审查任务书的裁定重播 + 历史发现" },
-  { full: "repair/auto", bare: "repair/auto-bare", cap: 1200, what: "修复交接的裁定重播（执行者侧只给一行摘要 + 全文路径）" },
+  { full: "stress/review-dispatch", bare: "review/dispatch-bare", cap: 8200, what: "审查任务书的裁定重播 + 历史发现（撑满）" },
+  { full: "stress/repair-auto", bare: "repair/auto-bare", cap: 1600, what: "修复交接的裁定重播（撑满；执行者侧只给分档清单 + 全文路径）" },
+];
+
+/**
+ * **同一条消息里，这几段话各自至多出现一次。**
+ *
+ * 片段各自压着预算，拼成一条投递消息之后翻倍 —— 这是这一摞里最贵的一种退步，而它只在
+ * `delivered/*` 这一层量得到（第 1 轮审查 F2：首次派审 13407B，报告格式、回归口径、
+ * 证据清单引用各两遍）。锚点取的是各段话的首句，同时断言它**在整个样本集里至少出现
+ * 一次** —— 否则改个措辞就能让这条断言悄悄变成空转。
+ */
+const DEDUP_ANCHORS = [
+  "报告开头必须",                  // 报告格式契约（完整版 / 缩略版共有）
+  "该扫的面扫完了",                // 六面扫描的覆盖声明锚点（协议 / 缩略版共有）
+  "执行者回归证据清单：",           // 回归证据清单说明
+  "passed=true 且 exitCode=0",     // 清单怎么读（只许由清单说明自己讲）
+  "浏览器验证必须按以下顺序选择通道", // 全局浏览器策略
 ];
 
 /**
@@ -117,6 +148,8 @@ const DYNAMIC_CAPS: Array<{ full: string; bare: string; cap: number; what: strin
  *
  * 多一份、少一份、或者在同一份里出现两次，都红。`REGRESSION_POLICY` 这类「口径」允许
  * 多处出现（执行者面和审查者面本来就是两条消息），但同一条消息里只许讲一遍。
+ * `stress/*` 与 `delivered/*` 是 `review/*`、`repair/*` 的派生视图，所以凡是出现在母本
+ * 里的判据，也要在这里把派生那几份列上 —— 列不全就说明派生路径上多拼了或少拼了一份。
  */
 const PLACEMENT: Array<{ name: string; where: string[] }> = [
   { name: "DEFER_BOUNDARY_CRITERION", where: ["mcp/dispute_review"] },
@@ -125,27 +158,57 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
   { name: "PLAIN_SUMMARY_GUIDE", where: ["mcp/debate_reply", "mcp/dispute_review"] },
   {
     name: "CLASS_PROBLEM_BOUNDARY",
-    where: ["repair/auto-bare", "repair/auto", "repair/manual", "repair/manual-upheld"],
+    where: ["repair/auto-bare", "repair/auto", "repair/manual", "repair/manual-upheld",
+      "stress/repair-auto", "delivered/repair"],
   },
   { name: "GATE_FAILURE_REGRESSION_CARVE_OUT", where: ["accept/gate-failure"] },
   {
     name: "REVIEW_VALIDATION_REQUIREMENT",
-    where: ["review/dispatch-bare", "review/dispatch-logic", "review/dispatch-syntax", "mcp/report_stage"],
+    where: ["review/dispatch-bare", "review/dispatch-logic", "review/dispatch-syntax",
+      "stress/review-dispatch", "delivered/review-dispatch", "mcp/report_stage"],
   },
   // 审查者面的一句话口径：**只**在没有完整验证义务的那条消息里出现（续跑）。派审正文里
   // 有全文，再讲一遍就是同一条消息里两份。
-  { name: "REVIEWER_REGRESSION_CLAUSE", where: ["review/resume"] },
+  { name: "REVIEWER_REGRESSION_CLAUSE", where: ["review/resume", "delivered/review-resume"] },
   {
     name: "EXECUTOR_REGRESSION_RECORDING",
     where: ["turn/completion-protocol-free", "turn/completion-protocol-normal",
-      "turn/completion-reminder-free", "turn/follow-up-reminder-free"],
+      "turn/completion-reminder-free", "turn/follow-up-reminder-free",
+      // 审查/验证那两条投递消息里没有它：那一轮的完成协议走 `verifying` 分支，执行者
+      // 回归登记本来就不是审查者的事。
+      "delivered/repair"],
   },
   {
     name: "REGRESSION_POLICY",
     where: ["review/dispatch-bare", "review/dispatch-logic", "review/dispatch-syntax",
+      "stress/review-dispatch",
       "turn/completion-protocol-free", "turn/completion-protocol-normal",
       "turn/completion-reminder-free", "turn/follow-up-reminder-free",
+      // 续跑那条只带审查者面的一句话口径（`REVIEWER_REGRESSION_CLAUSE`），不带全文
+      // —— 这是 `freeReviewResumeMessage` 一贯的分寸：续跑不重发任务书。
+      "delivered/review-dispatch", "delivered/repair",
       "mcp/report_stage", "mcp/start_monitor"],
+  },
+];
+
+/**
+ * 需求里写死的**量化目标**，跟预算是两件事。
+ *
+ * 预算是「别再涨了」的棘轮，必然等于当前实测值加余量；把它当成目标达成，就是用一个
+ * 自动跟着产物走的数字宣布自己达标了（第 1 轮审查 F3）。所以目标单独列：没打到不红
+ * （改不改目标是用户的事，不是闸的事），但**每次运行都打印差距**，并且要求预算高于
+ * 目标时必须写下 `waiver` —— 一句「为什么到此为止」会进 diff，被人看见、被问一句。
+ */
+const TARGETS: Array<{ id: string; target: number; what: string; waiver: string }> = [
+  {
+    id: "repair/auto", target: 2_040, what: "修复交接 −80%（改前 10202B）",
+    waiver: "剩下的正文里 CLASS_PROBLEM_BOUNDARY 占 673B：三种处置各一行，少一支就会把" +
+      "「根因本身也落在界外」那一型重新判成界内。再砍是删规则，不是删废话。",
+  },
+  {
+    id: "review/dispatch-bare", target: 3_000, what: "审查任务书正文 ≤3KB",
+    waiver: "剩下的是审查契约本体（六面扫描约 2.6KB、报告格式约 1.6KB、验证义务 717B、" +
+      "清单说明约 700B），而「审查制度本身不在本任务范围内」。事故叙事已全部迁进代码注释。",
   },
 ];
 
@@ -189,8 +252,9 @@ try {
   }
   assert.deepEqual(over, [], `这些消息超预算了，先问「是多了一条规则还是多了一段论证」：\n${over.join("\n")}`);
 
-  const total = [...size.values()].reduce((sum, bytes) => sum + bytes, 0);
-  assert.ok(total <= TOTAL_BUDGET, `全部样本合计 ${total}B 超过 ${TOTAL_BUDGET}B`);
+  const total = samples.filter(({ id }) => !DERIVED(id))
+    .reduce((sum, { id }) => sum + size.get(id)!, 0);
+  assert.ok(total <= TOTAL_BUDGET, `片段样本合计 ${total}B 超过 ${TOTAL_BUDGET}B`);
 
   // ③ 动态段：和正文分开量，否则「攒了十轮裁定」和「措辞写胖了」在同一个数字里分不开。
   for (const { full, bare, cap, what } of DYNAMIC_CAPS) {
@@ -214,7 +278,34 @@ try {
     }
   }
 
-  console.log(`prompt budget ok：${samples.length} 份样本，合计 ${total}B / ${TOTAL_BUDGET}B`);
+  // ⑤ 去重：同一条消息里同一段话只许讲一遍。
+  for (const anchor of DEDUP_ANCHORS) {
+    const seen = samples.filter((sample) => sample.text.includes(anchor));
+    assert.ok(seen.length > 0,
+      `去重锚点「${anchor}」在所有样本里一次都没出现：它要么被改了措辞、要么那段话没了，` +
+      "无论哪种，这条断言都已经空转——改锚点或删掉它，别留着");
+    const twice = seen.filter((sample) => sample.text.split(anchor).length - 1 > 1)
+      .map((sample) => `${sample.id}×${sample.text.split(anchor).length - 1}`);
+    assert.deepEqual(twice, [],
+      `「${anchor}」在同一条消息里出现了不止一次：${twice.join("、")}。` +
+      "片段各自压着预算、拼起来翻倍，正是这张表要拦的那一种");
+  }
+
+  // ⑥ 量化目标：没打到不红，但每次都报出来；预算高于目标必须写下理由。
+  const missed = TARGETS.filter(({ id, target }) => size.get(id)! > target);
+  for (const item of TARGETS) {
+    assert.ok(size.has(item.id), `TARGETS 指向了不存在的样本 ${item.id}`);
+    if (BUDGETS[item.id]! > item.target) {
+      assert.ok(item.waiver.trim().length > 0,
+        `${item.id} 的预算（${BUDGETS[item.id]}B）高于需求目标（${item.target}B），` +
+        "必须在 TARGETS 里写下 waiver：一句「为什么到此为止」要进 diff，不能让预算数字自己宣布达标");
+    }
+  }
+
+  console.log(`prompt budget ok：${samples.length} 份样本，片段合计 ${total}B / ${TOTAL_BUDGET}B`);
+  for (const { id, target, what } of missed) {
+    console.log(`  ⚠ 未达需求目标 ${what}：实测 ${size.get(id)}B > ${target}B（已在 TARGETS 里记了理由）`);
+  }
 } finally {
   await import("../src/db/index.js").then(({ dbClient }) => dbClient.close()).catch(() => undefined);
   rmSync(root, { recursive: true, force: true });

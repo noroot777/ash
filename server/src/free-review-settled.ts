@@ -23,11 +23,15 @@ import { freeReviewReportPath } from "./free-review-files.js";
 import { replaceEvidenceFile, safeRunDirectory } from "./review-evidence.js";
 
 /**
- * 每段自由文本**内联**进提示的上限：够看出「争的是哪几条」，又不至于把整份报告灌进
- * 下一轮 prompt。只截内联的那一份，`SettledRuling` 和落盘的全文文件里存的都是原文——
- * 否则「全文在 settled-rulings.md」这句话自己又是假的。
+ * 每段自由文本**内联**进提示的上限（**UTF-8 字节**）：够看出「争的是哪几条」，又不至于
+ * 把整份报告灌进下一轮 prompt。只截内联的那一份，`SettledRuling` 和落盘的全文文件里存的
+ * 都是原文——否则「全文在 settled-rulings.md」这句话自己又是假的。
+ *
+ * 按字节而不是按字符：原先是 400 **字符**，中文一字三字节，一条裁定三个满额字段就能内联
+ * 3.6KB 进去 —— 第 1 轮审查 F1 用两条满额裁定实测到审查任务书的动态段 9521B，而声明的
+ * 上限是 5200B。预算表量的是字节，这里就得按字节收。
  */
-const MAX_TEXT = 400;
+const MAX_TEXT = 600;
 
 /**
  * 所有裁定的逐条依据加起来的总预算（**审查者那一侧**；执行者那一侧见下面的 0 预算）。
@@ -39,6 +43,36 @@ const MAX_TEXT = 400;
  * 又得手写那句话，正好是这一节要消灭的东西。
  */
 const MAX_DETAIL = 2_400;
+
+/**
+ * **整节**的字节上限（UTF-8）。
+ *
+ * 上面两个预算只管「内联多少正文」，管不住**条数**：裁定一轮轮攒下来，光是每条一行的
+ * 清单也会一直涨（20 条实测 3.4KB），而这一节在每一条交接里都重发一遍。超了按这个顺序
+ * 降级，每一级都说得出口：
+ * ① 先砍内联正文（从最早那条起）—— 正文是参考资料，清单才是事实；
+ * ② 还超，就把最早那几条收进一行计数，写明还有几条、是哪几轮、去哪读全文。
+ *
+ * **绝不无声丢条目**：界面按全部条数告诉用户「这些会自动讲给下一轮」，少讲一条他就得
+ * 重新手写那句话 —— 那正是这一节存在的理由（见文件头）。
+ */
+const SECTION_BUDGET = { reviewer: 5_000, executor: 2_500 } as const;
+
+const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
+
+/** 按**字节**截断，不切坏多字节字符。没超返回 null（调用方据此决定要不要加「截断」那句）。 */
+function clipped(text: string, limit: number): string | null {
+  if (bytes(text) <= limit) return null;
+  let out = "";
+  let used = 0;
+  for (const char of text) {
+    const size = bytes(char);
+    if (used + size > limit) break;
+    out += char;
+    used += size;
+  }
+  return out;
+}
 
 /**
  * **执行者那一侧一律不内联正文**（全文已经落在 settled-rulings.md 里）。
@@ -134,8 +168,10 @@ export interface FullText {
 
 /** 内联进提示的那一份：超长就截，并说清去哪读没截的那份。 */
 function inlined(text: string | null, reference: string | null): string | null {
-  if (!text || text.length <= MAX_TEXT) return text;
-  return `${text.slice(0, MAX_TEXT)}…（截断，全文见 ${reference ?? "任务详情里那一轮的审查记录"}）`;
+  if (!text) return text;
+  const cut = clipped(text, MAX_TEXT);
+  return cut === null ? text
+    : `${cut}…（截断，全文见 ${reference ?? "任务详情里那一轮的审查记录"}）`;
 }
 
 function verdictOf(ruling: SettledRuling): string {
@@ -145,19 +181,40 @@ function verdictOf(ruling: SettledRuling): string {
 }
 
 /**
- * 执行者那一侧的**一行摘要**：它要的只是「这几条别在这里改」这张清单，逐条依据与各轮
- * 报告路径统一由下面那句指向 settled-rulings.md（全文本来就落盘）。原来每条三四行、
- * 每条各带一句「全文在 …」，攒上几轮光是这一节就压过交接正文本身。
+ * 执行者那一侧的紧凑清单：**按裁定分档，一档一行**，每条只留轮次和承接任务 id。
+ *
+ * 它要的只是「这几条别在这里改、哪条另有任务在做」；逐条依据与各轮报告路径统一由下面
+ * 那句指向 settled-rulings.md（全文本来就落盘）。原来每条三四行、各带一句「全文在 …」，
+ * 后来压成每条一行仍有约 170B/条 —— 攒到二十轮还是 3.4KB，而这一节每条交接都重发。
+ * 分档之后每条约 30B，**条目一个不少**：轮次和承接任务 id 全都还在。
  */
-function compactEntry(ruling: SettledRuling): string {
-  const target = ruling.resolution === "deferred"
-    ? ` → 承接任务 ${ruling.deferredTaskId ?? "(裁定时未记下 id)"}` +
-      (ruling.deferredTaskTitle ? `「${ruling.deferredTaskTitle}」` : "")
+function compactList(rulings: readonly SettledRuling[]): string {
+  const bucket = (label: string, picked: readonly SettledRuling[], target: boolean) => picked.length
+    ? `- ${label}：` + picked.map((ruling) => `第 ${ruling.round} 轮` + (target
+        ? `→${ruling.deferredTaskId ?? "(裁定时未记下 id)"}` + titleOf(ruling)
+        : "")).join("、")
     : "";
-  return `- 第 ${ruling.round} 轮 · ${ruling.reviewerName} · 用户裁定：${verdictOf(ruling)}${target}`;
+  return [
+    bucket("已转为独立任务（另有任务在做，在这里再修一遍就是两处各改一版）",
+      rulings.filter((ruling) => ruling.resolution === "deferred"), true),
+    bucket("已被裁定作废（采纳了执行者当时的说法）",
+      rulings.filter((ruling) => ruling.resolution === "withdrawn"), false),
+  ].filter(Boolean).join("\n");
 }
 
-function entryOf(ruling: SettledRuling, index: number, full: FullText | null): string {
+function titleOf(ruling: SettledRuling): string {
+  const title = ruling.deferredTaskTitle;
+  if (!title) return "";
+  return `「${clipped(title, 60) ?? title}」`;
+}
+
+/** 「第 1、2、5 轮」；太多就只说头几轮加总数。 */
+function roundList(rulings: readonly SettledRuling[], limit = 8): string {
+  const rounds = rulings.map((ruling) => `第 ${ruling.round} 轮`);
+  return rounds.length > limit ? `${rounds.slice(0, limit).join("、")} 等 ${rounds.length} 轮` : rounds.join("、");
+}
+
+function entryOf(ruling: SettledRuling, index: number, full: FullText | null, detail: ReadonlySet<number>): string {
   const verdict = verdictOf(ruling);
   const target = ruling.resolution === "deferred"
     ? `\n承接它们的独立任务：${ruling.deferredTaskId ?? "(裁定时未记下 id)"}` +
@@ -165,12 +222,14 @@ function entryOf(ruling: SettledRuling, index: number, full: FullText | null): s
     : "";
   const head = `〔第 ${ruling.round} 轮 · ${ruling.reviewerName} · 用户裁定：${verdict}〕${target}\n` +
     `那一轮的报告：${ruling.reportPath}`;
-  if (full && !full.detailed.has(index)) {
+  if (!detail.has(index)) {
     // 有正文却没带上时必须说出来，并给一个**真的读得到全文**的去处。指回那一轮的
     // report.md 是错的：那是裁定**之前**审查者写的意见，驳回依据和用户裁定要点根本
-    // 不在里面（第 2 轮审查复现）。去处只能是那份现写的全文文件。
+    // 不在里面（第 2 轮审查复现）。去处只能是那份现写的全文文件；落盘失败那一路没有
+    // 这份文件，就说去任务详情里翻那一轮的审查记录（跟 `inlined` 的截断提示同一个去处）
+    // —— 那条路同样要受整节预算约束，不能因为「没地方指」就把二十条正文全塞进来。
     return head + (hasDetail(ruling)
-      ? `\n（逐条依据与裁定要点没有内联，全文在 ${full.reference}，裁定攒得多、正文只带得下最近几条，需要时读它。别去翻上面那份报告：裁定内容不在报告里。）`
+      ? `\n（逐条依据与裁定要点没有内联，全文在 ${full?.reference ?? "任务详情里那一轮的审查记录"}，裁定攒得多、正文只带得下最近几条，需要时读它。别去翻上面那份报告：裁定内容不在报告里。）`
       : "");
   }
   const reference = full?.reference ?? null;
@@ -200,7 +259,7 @@ function detailed(rulings: readonly SettledRuling[], budget: number): Set<number
   for (let index = rulings.length - 1; index >= 0; index -= 1) {
     const ruling = rulings[index]!;
     const cost = [ruling.deferReason, ruling.reason, ruling.note]
-      .reduce((sum, text) => sum + Math.min(text?.length ?? 0, MAX_TEXT), 0);
+      .reduce((sum, text) => sum + Math.min(text ? bytes(text) : 0, MAX_TEXT), 0);
     if (picked.size && spent + cost > budget) break;
     spent += cost;
     picked.add(index);
@@ -260,6 +319,47 @@ export function settledRulingsSection(
   disputeUpheld = false,
 ): string {
   if (!rulings.length) return "";
+  const cap = SECTION_BUDGET[audience];
+  // 降级两级（理由见 SECTION_BUDGET）。注意**量的是渲染结果的字节**，不是「几条裁定、
+  // 每条几个字段」那种推算 —— 推算正是上一版漏掉标题、路径、截断提示的地方。
+  const detail = new Set(full ? full.detailed : rulings.map((_, index) => index));
+  let from = 0;
+  const render = () => buildSection(rulings, audience, full, disputeUpheld, detail, from);
+  let text = render();
+  // ① 砍内联正文，从最早那条起，但**留住最近一条**：越新的裁定越可能正对着这一轮的
+  //    代码，整节压成只剩标题就没法判「我这一条是不是原样重提」了。
+  for (const index of [...detail].sort((a, b) => a - b).slice(0, -1)) {
+    if (bytes(text) <= cap) break;
+    detail.delete(index);
+    text = render();
+  }
+  // ② 还超：把最早那几条降级成分档清单（轮次与承接任务 id 仍在，见 buildSection）。
+  //    **降不下来就停手**——执行者那一侧本来就是分档清单，再折一层只是多一个带路径的
+  //    标题行，越折越长。那种形状已经是最小忠实形式（一条 30B：轮次 + 承接任务 id），
+  //    真要再短就只能丢掉承接任务 id，而那个不能丢（见 buildSection 的注释）。
+  while (bytes(text) > cap && from < rulings.length - 1) {
+    const next = buildSection(rulings, audience, full, disputeUpheld, detail, from + 1);
+    if (bytes(next) >= bytes(text)) break;
+    from += 1;
+    text = next;
+  }
+  // ③ 连「最近一条带正文」都塞不下——落盘失败那一路会把全部正文内联进来，最后才动它。
+  if (bytes(text) > cap && detail.size) {
+    detail.clear();
+    text = render();
+  }
+  return text;
+}
+
+/** `from` = 前面这几条收进一行计数（0 = 全部逐条渲染）。 */
+function buildSection(
+  rulings: readonly SettledRuling[],
+  audience: "reviewer" | "executor",
+  full: FullText | null,
+  disputeUpheld: boolean,
+  detail: ReadonlySet<number>,
+  from: number,
+): string {
   const deferred = rulings.some((item) => item.resolution === "deferred");
   const withdrawn = rulings.some((item) => item.resolution === "withdrawn");
   // 只写命中的那几档：一条 withdrawn 都没有时还讲「已被裁定作废的那几条怎么办」，
@@ -292,15 +392,24 @@ export function settledRulingsSection(
           "（报告会写明裁定之后它为什么仍然成立）就照常修；只有**原样重提**才用 dispute_review，在 reason 里指明哪一轮裁的。",
         "- 报告里**除此之外**的意见照常修。",
       ];
+  const shown = rulings.slice(from);
+  const where = full?.reference ?? "任务详情里那几轮的审查记录";
+  // 收进来的那几条**降级成分档清单，不是删掉**：轮次和承接任务 id 一个不少，省掉的只有
+  // 逐条依据和各轮报告路径（那两样在全文文件里）。只留一行计数是不行的 —— 承接任务 id
+  // 一旦从提示里消失，执行者再遇到同一条意见就不知道该指向哪个任务（第 2 轮审查钉过）。
+  const folded = from > 0
+    ? `- 更早的 ${from} 条（${roundList(rulings.slice(0, from))}）只记一笔，逐条依据与那几轮的报告路径见 ${where}：\n` +
+      compactList(rulings.slice(0, from)).split("\n").map((line) => `  ${line}`).join("\n") + "\n"
+    : "";
   // 执行者侧一条正文都没内联时走紧凑清单；只要有一条内联了，就仍按逐条块渲染
   // （混排两种形状只会让人分不清哪几条是省掉的）。
-  const compact = audience === "executor" && !!full && rulings.every((_, index) => !full.detailed.has(index));
+  const compact = audience === "executor" && !!full && shown.every((_, index) => !detail.has(from + index));
   const body = compact
-    ? rulings.map(compactEntry).join("\n") +
-      `\n（逐条依据、裁定要点与各轮报告路径都在 ${full.reference}，要核对就读它。）`
-    : rulings.map((ruling, index) => entryOf(ruling, index, full)).join("\n\n");
+    ? compactList(shown) +
+      `\n（逐条依据、裁定要点与各轮报告路径都在 ${where}，要核对就读它。）`
+    : shown.map((ruling, index) => entryOf(ruling, from + index, full, detail)).join("\n\n");
   const title = disputeUpheld ? "此前已由用户裁定过的意见（背景）" : "已由用户裁定、不在本任务里修的意见";
-  return `\n\n【${title}】\n${body}\n\n${lines.filter(Boolean).join("\n")}`;
+  return `\n\n【${title}】\n${folded}${body}\n\n${lines.filter(Boolean).join("\n")}`;
 }
 
 /**

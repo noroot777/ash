@@ -57,8 +57,10 @@ export const GATE_FAILURE_REGRESSION_CARVE_OUT =
 export const REVIEW_VALIDATION_REQUIREMENT =
   "验证必须有真实执行依据，不能只读代码或只过编译。" +
   REGRESSION_POLICY +
-  "所以这一轮你**一条回归都不要跑、也不要补跑**：只核对执行者登记的结果（本轮证据清单），" +
-  "passed=true 且 exitCode=0 才算通过，失败照实报告；" +
+  // 「怎么读那份清单」（passed / exitCode / latest / 旧通过不许顶替）住在清单说明自己
+  // 那一份里（`regression-checks.ts` 的 `regressionEvidenceReference`），这里只留口径和
+  // 一句指针 —— 两处都写全，同一条消息里这几句判据就各出现两遍（实测派审正文就是）。
+  "所以这一轮你**一条回归都不要跑、也不要补跑**：只核对执行者登记的结果（怎么读见同一条消息里的证据清单说明），" +
   "没覆盖到的缺口原样写进覆盖声明的「回归面」留白，别拿跑一遍去填。" +
   "回归之外一条不减：构建、接口冒烟、浏览器真实点检照做，web 改动必须起服务用浏览器确认行为。" +
   "技术明细写明核对了哪几条、留白是什么。";

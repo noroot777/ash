@@ -8,8 +8,10 @@
 // 量之前都把舞台根路径替换成 `<ROOT>`**，否则同一份代码在两台机器上算出两个字节数。
 //
 // 调用方负责在 import 之前设好 `ASH_DB` / `ASH_RUNS_DIR`（都得在临时目录里）。
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { z } from "zod";
+import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 
 export interface PromptSample {
   /** 预算表里的键，也是金样文件名。 */
@@ -25,39 +27,48 @@ export function sizeOf(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
-/** MCP 工具的 description 与**全部**字段说明——两者都随工具一起进每个回合的上下文。 */
+/**
+ * MCP 工具的 description 与**全部**字段说明——两者都随工具一起进每个回合的上下文。
+ *
+ * 字段说明必须从 **SDK 真正发给客户端的那份 JSON Schema** 上摘，不能自己遍历 zod 的
+ * `_def`：手写遍历会把包装类型（`.optional()` / `.default()`）继承到的说明和内层原类型的
+ * 说明各算一遍，而 SDK 序列化后只出现一次；同一个 schema 对象被两处引用时（`WORKFLOW_MODE`
+ * 同时挂在 `taskShape` 和顶层）序列化器会折成 `$ref`，手写遍历又算了两份。第 1 轮审查用
+ * 真实 `tools/list` 比对，`batch_create_tasks` / `create_task_chain` 各多算 798B。
+ *
+ * 这里调的 `toJsonSchemaCompat` 就是 `server/mcp.js` 列工具时调的那一个（同参数），所以
+ * 量到的是真实注入量，不是一份近似。
+ */
 function toolTexts(config: {
   description?: string;
-  inputSchema?: Record<string, unknown>;
+  inputSchema?: Record<string, never>;
 }): { description: string; fields: string } {
-  const walk = (node: unknown): string => {
-    const def = (node as { _def?: Record<string, unknown> } | undefined)?._def;
-    if (!def) return "";
-    const own = typeof def.description === "string" ? def.description : "";
-    // 嵌套的 object / array 里还挂着字段说明（questionItems、tasks…），它们一样会被渲染
-    // 进工具清单。只摘说明文本，不碰校验逻辑。
-    const inner = def.innerType ?? def.type ?? def.schema ?? null;
-    const shape = typeof def.shape === "function" ? def.shape() : null;
-    return own
-      + (inner ? walk(inner) : "")
-      + (shape ? Object.values(shape).map(walk).join("") : "");
+  const json = toJsonSchemaCompat(z.object(config.inputSchema ?? {}), {
+    strictUnions: true, pipeStrategy: "input",
+  });
+  const found: string[] = [];
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    const record = node as Record<string, unknown>;
+    if (typeof record.description === "string") found.push(record.description);
+    for (const [key, value] of Object.entries(record)) if (key !== "description") walk(value);
   };
-  return {
-    description: config.description ?? "",
-    fields: Object.values(config.inputSchema ?? {}).map(walk).join(""),
-  };
+  walk(json);
+  return { description: config.description ?? "", fields: found.join("") };
 }
 
 export async function renderPromptSamples(root: string): Promise<PromptSample[]> {
   const { ensureSchema, db } = await import("../src/db/index.js");
   await ensureSchema();
   const { tasks, projects, freeReviewRuns, freeReviewRounds } = await import("../src/db/schema.js");
+  const { freeReviewReportPath } = await import("../src/free-review-files.js");
   const at = "2026-10-27T00:00:00.000Z";
   const repo = join(root, "repo");
   mkdirSync(repo, { recursive: true });
 
   await db.insert(projects).values({ id: "pb-p", name: "budget", repoPath: repo, createdAt: at } as never);
-  for (const id of ["pb-task", "pb-bare"]) {
+  for (const id of ["pb-task", "pb-bare", "pb-stress"]) {
     await db.insert(tasks).values({
       id, projectId: "pb-p", title: "示例任务", body: "把某个功能做出来，要点若干。",
       status: "running", mode: "single", workflowMode: "free", createdAt: at, updatedAt: at,
@@ -84,6 +95,55 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     } as never);
   }
 
+  // ── 压力形状：**合法输入下这几节最大能长到多少** ──────────────────────────────
+  //
+  // 预算表拿两条固定裁定作差，只能证明「这个夹具不超」，证明不了「生产渲染受预算约束」
+  // —— 第 1 轮审查 F1 用 20 条满额裁定和 24 条满额现象行实测到 21356B / 9326B，而声明
+  // 的上限是 5200B。所以这里种一份**撑满**的：裁定按单段上限灌满，历史发现按条数上限
+  // 铺够，让 `DYNAMIC_CAPS` 量的是真正的天花板。
+  const STRESS_RULINGS = 20;
+  const STRESS_ROUNDS = 26;
+  const filler = (word: string) => word.repeat(400);
+  for (let index = 1; index <= STRESS_RULINGS; index += 1) {
+    const stamp = `2026-09-${String(index).padStart(2, "0")}T00:00:00.000Z`;
+    await db.insert(freeReviewRuns).values({
+      id: `pb-stress-${index}`, taskId: "pb-stress", reviewerId: null, reviewerName: "逻辑审查者",
+      agentType: "codex", executorId: null, checkMode: "logic", retryLimit: 1, currentRound: 1,
+      status: "stopped", createdAt: stamp, updatedAt: stamp, finishedAt: stamp,
+    } as never);
+    await db.insert(freeReviewRounds).values({
+      id: `pb-stress-${index}-round`, runId: `pb-stress-${index}`, round: index, status: "failed",
+      conclusion: "verify_failed", reviewedCommit: "0".repeat(40),
+      disputeSummary: "这几条不该在这个任务里改。",
+      disputeReason: filler("不成立的依据"),
+      disputeDeferReason: filler("越界的依据"),
+      disputeResolutionNote: filler("裁定要点"),
+      disputeResolution: index % 2 ? "deferred" : "withdrawn",
+      disputeResolvedAt: stamp, startedAt: stamp, endedAt: stamp,
+      disputeDeferredTaskId: index % 2 ? `pb-stress-derived-${index}` : null,
+    } as never);
+    // 历史发现读的是**盘上的 report.md**，所以得真写出来。
+    const report = freeReviewReportPath("pb-stress", `pb-stress-${index}`, index);
+    mkdirSync(dirname(report), { recursive: true });
+    writeFileSync(report, `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
+  }
+  // 轮数也要撑到取样分支（> MAX_ITEMS）：上面 20 条裁定各算一轮，再补几轮纯发现。
+  for (let index = STRESS_RULINGS + 1; index <= STRESS_ROUNDS; index += 1) {
+    const stamp = `2026-09-${String(index).padStart(2, "0")}T00:00:00.000Z`;
+    await db.insert(freeReviewRuns).values({
+      id: `pb-stress-${index}`, taskId: "pb-stress", reviewerId: null, reviewerName: "逻辑审查者",
+      agentType: "codex", executorId: null, checkMode: "logic", retryLimit: 1, currentRound: 1,
+      status: "stopped", createdAt: stamp, updatedAt: stamp, finishedAt: stamp,
+    } as never);
+    await db.insert(freeReviewRounds).values({
+      id: `pb-stress-${index}-round`, runId: `pb-stress-${index}`, round: index, status: "failed",
+      conclusion: "verify_failed", reviewedCommit: "0".repeat(40), startedAt: stamp, endedAt: stamp,
+    } as never);
+    const report = freeReviewReportPath("pb-stress", `pb-stress-${index}`, index);
+    mkdirSync(dirname(report), { recursive: true });
+    writeFileSync(report, `## 结论\n\n### 发现 ${index}：${"这一轮复现到的现象行".repeat(12)}\n\n正文。\n`);
+  }
+
   const run = {
     id: "pb-run", taskId: "pb-task", reviewerId: null, reviewerName: "逻辑审查者",
     agentType: "codex", executorId: null, model: null, reasoningEffort: null,
@@ -91,11 +151,18 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     targetKind: "workspace", targetBranch: null, targetBaseCommit: null, targetCommit: null,
     repairTaskId: null, createdAt: at, updatedAt: at, finishedAt: null,
   } as never;
+  // 投递态样本里的每回合提醒由 `freeReviewReminder` 现查「这个任务正在审哪一轮」，所以
+  // 这一条 run 必须真的落库（上面那个字面量只够给渲染函数当参数）。
+  await db.insert(freeReviewRuns).values({ ...(run as object), createdAt: "2026-10-27T01:00:00.000Z" } as never);
 
   const {
     debatePrompt, freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt, freeReviewResumeMessage,
   } = await import("../src/free-review-prompts.js");
-  const { COMPLETION_PROTOCOL, COMPLETION_REMINDER, FOLLOW_UP_REMINDER } = await import("../src/run-prompts.js");
+  const { freeReviewReminder } = await import("../src/free-workflow.js");
+  const { assembleTurnPrompt } = await import("../src/turn-prompt.js");
+  const { invitedTaskBrief } = await import("../src/invited-task-brief.js");
+  const { COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER } =
+    await import("../src/run-prompts.js");
   const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
   const { gateFailurePrompt } = await import("../src/accept-gate-messages.js");
   const task = (await db.select().from(tasks)).find((row) => row.id === "pb-task")!;
@@ -146,6 +213,49 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     command: "npm run test:accept", summary: "退出码 1", logPath: join(root, "gate.log"),
     tail: "1 failing", cwd: join(root, "snapshot"), sourceCwd: repo,
   }));
+
+  // ── 压力样本：动态段的天花板。不计入 TOTAL（它不是「一条典型消息」，是上限证明）。
+  const stress = (await db.select().from(tasks)).find((row) => row.id === "pb-stress")!;
+  const stressRun = { ...(run as object), id: "pb-run-stress", taskId: "pb-stress" } as never;
+  add("stress/review-dispatch", await freeReviewPrompt(stress as never, stressRun, 1, repo));
+  add("stress/repair-auto", await freeRepairPrompt("pb-stress", stressRun));
+
+  // ── 投递态：**真正发出去的那一条**。片段各自压着预算、拼起来翻倍，是这一摞里最贵的
+  //    一种退步，而它只在这一层量得到（第 1 轮审查 F2）。走的是 orchestrator 用的同一个
+  //    `assembleTurnPrompt`，不是它的拷贝 —— 拷贝迟早和真实投递路径分叉。
+  const deliver = (userText: string, reviewReminder: string) => withGlobalBrowserPolicy(
+    assembleTurnPrompt({
+      invite: COLLAB_INVITE,
+      brief: invitedTaskBrief(task.body, true, true),
+      handoffNotice: "",
+      peerNotice: "",
+      userText,
+      workspaceReset: "",
+      completion: COMPLETION_REMINDER("pb-task", false, true, true),
+      direction: DIRECTION_PROTOCOL("pb-token"),
+      reviewReminder,
+    }),
+    "full",
+    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
+  );
+  const reviewReminder = await freeReviewReminder("pb-task");
+  add("delivered/review-dispatch", deliver(await freeReviewPrompt(task as never, run, 2, repo), reviewReminder));
+  add("delivered/review-resume", deliver(freeReviewResumeMessage(task as never, run, 2), reviewReminder));
+  add("delivered/repair", withGlobalBrowserPolicy(
+    assembleTurnPrompt({
+      invite: "",
+      brief: "",
+      handoffNotice: "",
+      peerNotice: "",
+      userText: await freeRepairPrompt("pb-task", run),
+      workspaceReset: "",
+      completion: FOLLOW_UP_REMINDER("pb-task", "done", false, false, "", true),
+      direction: DIRECTION_PROTOCOL("pb-token"),
+      reviewReminder: "",
+    }),
+    "full",
+    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
+  ));
 
   const registered = new Map<string, Parameters<typeof toolTexts>[0]>();
   const sink = { registerTool(name: string, config: never) { registered.set(name, config); } } as never;

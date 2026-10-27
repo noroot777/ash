@@ -28,6 +28,14 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 const MAX_LINE = 110;
 /** 最多内联多少条。超了**保留最近的**：早几轮多半已经修掉，活着的类在后面。 */
 const MAX_ITEMS = 24;
+/**
+ * 条目清单那几行**整体**的字节上限（UTF-8）。
+ *
+ * 只有条数上限是不够的：24 条 × 单条 110 字符，中文一字三字节，光这一节就能到 9.3KB
+ * （第 1 轮审查 F1 用 24 条满额现象行实测），而它每一条派审消息里都重发。条数管「覆盖
+ * 几轮」，字节管「这一节总共多大」，两个都要。
+ */
+const MAX_BODY = 3_000;
 /** 路径清单最多列几条（真实数据里最多的一个任务有 32 轮）。 */
 const MAX_PATHS = 8;
 
@@ -233,37 +241,56 @@ type Entry = { round: PriorRound; text: string };
  *    等距取。等距比取尾好的理由同 ①。
  */
 function allocate(entries: Entry[]): { kept: Entry[]; silentRounds: PriorRound[]; mode: string } {
-  if (entries.length <= MAX_ITEMS) return { kept: entries, silentRounds: [], mode: "" };
   const groups: Entry[][] = [];
   for (const entry of entries) {
     const last = groups.at(-1);
     if (last && last[0]!.round === entry.round) last.push(entry);
     else groups.push([entry]);
   }
-  if (groups.length > MAX_ITEMS) {
-    const step = (groups.length - 1) / (MAX_ITEMS - 1);
-    const picked = new Set<number>();
-    for (let slot = 0; slot < MAX_ITEMS; slot += 1) picked.add(Math.round(slot * step));
-    return {
-      kept: [...picked].sort((a, b) => a - b).map((index) => groups[index]![0]!),
-      silentRounds: groups.filter((_, index) => !picked.has(index)).map((group) => group[0]!.round),
-      mode: `轮数超过内联上限，按轮次均匀取样（含首轮和最近一轮），每轮只列最严重的一条`,
-    };
+  const cost = (entry: Entry) => Buffer.byteLength(lineOf(entry), "utf8") + 1;
+  // ① 先定「这一节装得下几轮」。名额是 `min(MAX_ITEMS, 轮数)`，但字节放不下就再往下减
+  //    —— 减的是**轮数**不是条数：这一节的用处是判「同一个判据的第 N 个触发组合」，
+  //    定义那个类的是轮次覆盖面，所以宁可每轮只剩一条，也不要只剩最近几轮的全部细节。
+  const slotsFor = (count: number): number[] => {
+    if (count >= groups.length) return groups.map((_, index) => index);
+    if (count <= 1) return [groups.length - 1];
+    const step = (groups.length - 1) / (count - 1);
+    return [...new Set(Array.from({ length: count }, (_, slot) => Math.round(slot * step)))].sort((a, b) => a - b);
+  };
+  let slots = Math.min(MAX_ITEMS, groups.length);
+  let picked = slotsFor(slots);
+  const headCost = (indexes: number[]) => indexes.reduce((sum, index) => sum + cost(groups[index]![0]!), 0);
+  while (slots > 1 && headCost(picked) > MAX_BODY) {
+    slots -= 1;
+    picked = slotsFor(slots);
   }
-  const kept = new Set(groups.map((group) => group[0]!));
-  for (const group of [...groups].reverse()) {
-    for (const entry of group.slice(1)) {
-      if (kept.size >= MAX_ITEMS) break;
-      kept.add(entry);
+  const sampled = picked.length < groups.length;
+  const kept = new Set(picked.map((index) => groups[index]![0]!));
+  let used = headCost(picked);
+  // ② 每轮都覆盖到了，名额和字节还有剩，才从**最近**那几轮往回补它们剩下的条目。
+  if (!sampled) {
+    outer: for (const group of [...groups].reverse()) {
+      for (const entry of group.slice(1)) {
+        if (kept.size >= MAX_ITEMS || used + cost(entry) > MAX_BODY) break outer;
+        kept.add(entry);
+        used += cost(entry);
+      }
     }
-    if (kept.size >= MAX_ITEMS) break;
   }
   return {
     kept: entries.filter((entry) => kept.has(entry)),
-    silentRounds: [],
-    mode: "每轮至少列最严重的一条，名额剩下的给最近几轮",
+    silentRounds: sampled
+      ? groups.filter((_, index) => !picked.includes(index)).map((group) => group[0]!.round)
+      : [],
+    mode: sampled
+      ? "轮数或体积超过内联上限，按轮次均匀取样（含首轮和最近一轮），每轮只列最严重的一条"
+      : "每轮至少列最严重的一条，名额和体积剩下的给最近几轮",
   };
 }
+
+/** 条目清单里的一行。分配算字节和正文渲染必须用**同一份**，否则量的和发的不是一回事。 */
+const lineOf = ({ round, text }: Entry): string =>
+  `- 〔${round.label}${round.conclusion ? ` · ${round.conclusion}` : ""}〕${text}`;
 
 const labelList = (rounds: PriorRound[], limit = 6): string => {
   const labels = [...new Set(rounds.map((round) => round.label))];
@@ -284,8 +311,7 @@ export function priorFindingsSection(rounds: PriorRound[]): string {
         : []);
   if (!entries.length) return "";
   const { kept, silentRounds, mode } = allocate(entries);
-  const body = kept.map(({ round, text }) =>
-    `- 〔${round.label}${round.conclusion ? ` · ${round.conclusion}` : ""}〕${text}`).join("\n");
+  const body = kept.map(lineOf).join("\n");
 
   // 路径清单里**一条都没内联到的那几轮排在最前**。
   //

@@ -368,7 +368,8 @@ try {
   // 执行者那一侧不再内联依据正文（全文本来就落盘，见 free-review-settled.ts 的
   // EXECUTOR_DETAIL_BUDGET）。所以「降级成背景 ≠ 把事实删掉」改钉三件事：这条裁定还在
   // 清单里、出处写出来了、出处里真读得到当时那段依据。
-  assert.match(upheldExec, /第 1 轮 · 逻辑审查者 · 用户裁定/, "降级成背景 ≠ 把这条裁定从清单里删掉");
+  assert.match(upheldExec, /已被裁定作废（采纳了执行者当时的说法）：第 1 轮/,
+    "降级成背景 ≠ 把这条裁定从清单里删掉：轮次和它属于哪一档都得还在");
   const upheldFullText = join(freeReviewEvidenceDir("f-mixed", "f-mixed-run-2", 1), SETTLED_RULINGS_FILE);
   assert.ok(upheldExec.includes(upheldFullText), "不内联就必须给出处：全文文件的路径要写进这一节");
   assert.ok(readFileSync(upheldFullText, "utf8").includes("第 1 条读错了行号"),
