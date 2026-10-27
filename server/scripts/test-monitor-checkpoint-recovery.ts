@@ -19,6 +19,7 @@ import { monitorWakeCheckpoint } from "../src/monitor-checkpoint-handoff.js";
 import { id } from "../src/util.js";
 import { checkpointStartCases } from "./checkpoint-start-cases.js";
 import { checkpointQueueCases } from "./checkpoint-queue-cases.js";
+import { checkpointStopCases } from "./checkpoint-stop-cases.js";
 
 function owner(mode: string, taskId: string, messageId = ""): void {
   const child = spawnSync(process.execPath, [
@@ -43,6 +44,7 @@ async function resultsDelivered(test: Awaited<ReturnType<typeof scenario>>): Pro
 }
 
 try {
+  await checkpointStopCases();
   await checkpointQueueCases();
   await checkpointStartCases();
   for (const size of [1, 2]) {

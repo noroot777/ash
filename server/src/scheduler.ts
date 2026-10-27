@@ -9,7 +9,7 @@ import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
-import { clearQueueAdvance, deferQueueAdvance, requestQueueAdvance, type QueueAdvanceRequest } from "./queue-advance-retry.js";
+import { clearQueueAdvance, deferQueueAdvance, isQueueAdvanceCanceling, requestQueueAdvance, type QueueAdvanceRequest } from "./queue-advance-retry.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
 
 const MAX_PARALLEL = 4;
@@ -122,6 +122,7 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
     if (await preparePendingCheckpointStart(candidate.id)) {
       return "paused";
     }
+    if (isQueueAdvanceCanceling(candidate.id)) return "paused";
     // 观察空闲 ≠ 取得所有权:上一版先 isTurnClaimed 再 setQueued,检查与落位之间的
     // await 窗口里 checkpoint 追问这类合法入口照样抢走回合 —— 推进把追问的 running
     // 覆盖成 queued、续跑被旧 reply 占的锁挡回、追问结算恢复 paused,交接蒸发
@@ -129,7 +130,7 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
     // **认领**所有权:抢到才落 queued,续跑带 turnHeld 进场;抢不到(占用方多半是
     // 刚进来的旁路追问)记账,等它 releaseTurn 后回调补办这次推进。
     if (!claimTurn(candidate.id)) {
-      noteMissedAdvance(candidate.id, queueId);
+      deferQueueAdvance(queueId);
       return null;
     }
     // 认领与接管之间的每个异常出口都要收口:setQueued 一旦写失败(典型:并发写锁把
@@ -137,7 +138,7 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
     // 就没人释放,任务从此 /run 一律 409「回合正在进行」,人工也救不回(第 6 轮审查:
     // 真实 SQLite 写锁 7 秒注入,一次可恢复的超时变成永久停滞)。失败即释放锁、延迟
     // 一拍记账重推:数据库恢复可写后自动续上这次交接。
-    const reservation = taskQueueReservation(candidate);
+    const reservation = taskQueueReservation(candidate, advanceRequest);
     try {
       await reserveQueuedTask(reservation);
     } catch (err) {
@@ -221,12 +222,18 @@ export async function reclaimStrandedSeat(
   if (isTurnClaimed(taskId)) return;
   try {
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    const reservation = opts?.reservation ?? (row ? {
+    const reservation: TaskQueueReservation | undefined = opts?.reservation ?? (row ? {
       taskId, prevStatus, token: row.queueSeatToken, epoch: row.directionEpoch,
     } : undefined);
+    if (reservation?.advanceRequest && (row?.queueAdvanceRequest?.id !== reservation.advanceRequest.id
+      || row.resumePromptGeneration !== reservation.advanceRequest.resumePromptGeneration)) return;
     const stranded = !!reservation && await restoreQueuedTask(reservation);
     if (repush === "never" || (repush === "stranded" && !stranded)) return;
     if (row && !stranded && (row.status !== prevStatus || row.directionEpoch !== reservation?.epoch)) return;
+    if (reservation?.advanceRequest) {
+      deferQueueAdvance(queueId);
+      return;
+    }
     const timer = setTimeout(() => noteMissedAdvance(taskId, queueId), 1_000);
     timer.unref?.();
   } catch (err) {

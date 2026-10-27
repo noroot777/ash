@@ -21,6 +21,7 @@ import { resolveGate } from "./duet/gates.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart, recoverPendingCheckpoints } from "./pending-checkpoint-recovery.js";
+import { cancelQueueAdvance } from "./queue-advance-retry.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
 import { confirmTaskComplete } from "./task-complete.js";
 import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
@@ -212,6 +213,7 @@ api.post("/tasks/:id/stop", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  if (await cancelQueueAdvance(taskId)) return c.json({ stopped: true, note: "已撤销待启动的队列运行请求" });
   if (stopTask(taskId)) return c.json({ stopped: true });
   if (r.status === "queued" || r.status === "running") {
     await setTaskStatus(taskId, "canceled");

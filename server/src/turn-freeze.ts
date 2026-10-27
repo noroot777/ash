@@ -79,8 +79,8 @@ export function takeFreeze(taskId: string, facts: TurnFreeze | null = null): Tur
  *
  * @param restorable 这一轮有原终态可回（续聊的 `followUpFrom`）。两条 catch 都是
  *   `takeStopped() ?? followUpFrom ?? "failed"`，takeStopped 优先 —— 所以有原终态时
- *   **不能**标停止落位（标了就把一个 done 的任务写成 paused），没有原终态时必须标
- *   （不标就落成 failed，一次暂停看着像崩了）。
+ *   分组暂停不标停止落位，避免把原终态改成 paused；没有原终态时标记，避免落成 failed。
+ *   显式取消则覆盖原状态，防止已取消的待启动活动被旁路收尾恢复成 paused。
  */
 export async function abortFrozen(
   taskId: string,
@@ -88,7 +88,7 @@ export async function abortFrozen(
   opts: { restorable?: boolean } = {},
 ): Promise<never> {
   await appendTaskTimeline(taskId, `这一轮在启动前被撤回：${freeze.reason}。`).catch(() => false);
-  if (!opts.restorable) markStopped(taskId, freeze.settle);
+  if (!opts.restorable || freeze.settle === "canceled") markStopped(taskId, freeze.settle);
   throw new FrozenTurn(freeze.reason);
 }
 

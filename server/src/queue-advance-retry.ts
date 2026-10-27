@@ -1,13 +1,43 @@
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { groups, tasks } from "./db/schema.js";
 import { id } from "./util.js";
+import { freezeStartingTurn, stopTask } from "./runs.js";
+import { writeGuardedTaskStatus } from "./status.js";
 
 type Task = typeof tasks.$inferSelect;
 export type QueueAdvanceRequest = NonNullable<Task["queueAdvanceRequest"]> & { taskId: string };
 const deferred = new Map<string, ReturnType<typeof setTimeout>>();
+const canceling = new Map<string, number>();
+
+export const isQueueAdvanceCanceling = (taskId: string): boolean => canceling.has(taskId);
+
+export async function cancelQueueAdvance(taskId: string): Promise<boolean> {
+  canceling.set(taskId, (canceling.get(taskId) ?? 0) + 1);
+  try {
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
+    const request = task?.queueAdvanceRequest;
+    if (!task || !request || request.resumePromptGeneration !== task.resumePromptGeneration
+      || !["paused", "backlog", "queued", "running"].includes(task.status)) return false;
+    freezeStartingTurn(taskId, "canceled");
+    if (stopTask(taskId)) {
+      await clearQueueAdvance({ ...request, taskId });
+      return true;
+    }
+    return await writeGuardedTaskStatus(taskId, "canceled", and(
+      sql`json_extract(${tasks.queueAdvanceRequest}, '$.id') = ${request.id}`,
+      eq(tasks.resumePromptGeneration, request.resumePromptGeneration),
+      inArray(tasks.status, ["paused", "backlog", "queued", "running"]),
+    )!);
+  } finally {
+    const count = canceling.get(taskId)! - 1;
+    if (count) canceling.set(taskId, count);
+    else canceling.delete(taskId);
+  }
+}
 
 export async function requestQueueAdvance(queueId: string, candidate: Task): Promise<QueueAdvanceRequest | null> {
+  if (isQueueAdvanceCanceling(candidate.id)) return null;
   return db.transaction(async (transaction) => {
     const [task] = await transaction.select().from(tasks).where(eq(tasks.id, candidate.id));
     if (!task || task.archived || ["done", "failed", "canceled"].includes(task.status)
@@ -19,6 +49,7 @@ export async function requestQueueAdvance(queueId: string, candidate: Task): Pro
     const previous = task.queueAdvanceRequest;
     const request = previous?.queueId === queueId && previous.resumePromptGeneration === task.resumePromptGeneration
       ? previous : { id: id(), queueId, resumePromptGeneration: task.resumePromptGeneration, prevStatus: candidate.status };
+    if (isQueueAdvanceCanceling(task.id)) return null;
     await transaction.update(tasks).set({ queueAdvanceRequest: request }).where(eq(tasks.id, task.id));
     return { ...request, taskId: task.id };
   }, { behavior: "immediate" });

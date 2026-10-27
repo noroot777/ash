@@ -48,10 +48,10 @@ try {
       dbClient.batch = batch;
     }
     assert.ok(failures > 0);
-    assert.equal((await taskOf()).status, "paused");
+    assert.equal((await taskOf()).status, options.entry === "stopped-backlog" ? "backlog" : "paused");
     assert.ok((await taskOf()).queueAdvanceRequest?.id);
     assert.equal(hits(options.checkpoint), 0);
-    if (options.entry === "queued" || options.entry === "stopped") {
+    if (options.entry === "queued") {
       const { reserveQueuedTask, taskQueueReservation } = await import("../src/task-queue-reservation.js");
       await reserveQueuedTask(taskQueueReservation(await taskOf()));
     }

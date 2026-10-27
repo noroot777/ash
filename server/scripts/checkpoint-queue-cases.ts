@@ -26,8 +26,9 @@ function owner(phase: string, options: object): void {
 
 export async function checkpointQueueCases(): Promise<void> {
   const untouched = await scenario(0);
-  for (const entry of ["queue", "serial-group", "queued", "paused-group", "stopped", "new-checkpoint"]) {
+  for (const entry of ["queue", "serial-group", "queued", "paused-group", "stopped", "stopped-backlog", "new-checkpoint"]) {
     const test = await scenario(1);
+    if (entry === "stopped-backlog") await db.update(tasks).set({ status: "backlog" }).where(eq(tasks.id, test.taskId));
     const expectedRun = ["queue", "serial-group", "queued"].includes(entry);
     const follower = expectedRun ? await scenario(0) : null;
     const queueId = id();
@@ -48,7 +49,7 @@ export async function checkpointQueueCases(): Promise<void> {
       await pauseGroup(groupId);
       assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
       await db.update(schema.groups).set({ paused: false }).where(eq(schema.groups.id, groupId));
-    } else if (entry === "stopped") {
+    } else if (entry === "stopped" || entry === "stopped-backlog") {
       const response = await api.request(`/tasks/${test.taskId}/stop`, { method: "POST" });
       assert.equal(response.status, 200);
       assert.equal((await taskOf(test.taskId)).status, "canceled");

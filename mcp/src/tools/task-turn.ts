@@ -183,7 +183,7 @@ server.registerTool(
   {
     title: "停止/取消任务(杀进程树)",
     description:
-      "停止一个 running/queued 的任务:终止它整棵 agent 进程树,由 run loop 结算为 canceled(可重试,从中断处续跑);queued 还没拉起进程的直接落 canceled。**取消运行中的任务必须用这个,严禁 patch_task(status=canceled)**——那样只改库不停进程,会把队列提前推进(串行变并行)、让活着的 agent 调 complete_task 吃 409、结算再把 canceled 覆盖成 failed。",
+      "停止任务的执行活动：杀掉存活进程树，由 run loop 结算 canceled；尚未启动的 queued 或 paused/backlog 上的有效持久推进请求，原子撤销并落 canceled。可重试续跑。**取消运行中的任务必须用这个，严禁 patch_task(status=canceled)**，后者只改库不停进程，会提前推进队列并破坏结算。",
     inputSchema: { taskId: z.string() },
   },
   async ({ taskId }) => {
