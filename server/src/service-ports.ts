@@ -334,8 +334,20 @@ async function processCwd(pid: number): Promise<string | null> {
 
 // ── 归属:环境里的那枚记号 ─────────────────────────────────────────────────────
 
-/** 一个号跟这次启动的关系。`unknown` = 环境读不出来(多半不是当前用户的进程)。 */
-type Lineage = "ours" | "stranger" | "unknown";
+/**
+ * 一个号跟这次启动的关系。**两档「核不上」是分开的** —— 它们的成因完全不同,给用户的
+ * 说法也不该一样:
+ *
+ *  · `unknown`    —— 问到了答案,但那份环境读不出来(多半不是当前用户的进程);
+ *  · `unverified` —— **根本没问出答案**:ps 超时/起不来,或者它没打出这个号的那一行而这个号
+ *    还活着。查询失灵不是「它已经退了」(第 4 轮审查发现 2),所以单独一档。
+ *
+ * 两档都不动它,也都不许折叠成「不在了」。
+ */
+type Lineage = "ours" | "stranger" | "unknown" | "unverified";
+
+/** 一次 ps 读取的结果。`trusted=false` = 这次问话本身不可信,它的沉默不构成任何结论。 */
+type PsRead = { stdout: string; trusted: boolean };
 
 /**
  * 这些号带着这次启动的记号吗。**按平台读环境** —— 这一问没有跨平台的统一写法:
@@ -353,15 +365,29 @@ type Lineage = "ours" | "stranger" | "unknown";
 async function readLineage(pids: number[], token: string): Promise<Map<number, Lineage>> {
   const shortcut = lineageWithoutPs(pids, token);
   if (shortcut) return shortcut;
-  let stdout = "";
+  let read: PsRead = { stdout: "", trusted: true };
   try {
-    ({ stdout } = await run(PS_PATH!, ["-E", "-o", "pid=,command=", "-p", pids.join(",")], { timeout: PROBE_TIMEOUT_MS }));
+    const { stdout } = await run(PS_PATH!, ["-E", "-o", "pid=,command=", "-p", pids.join(",")], { timeout: PROBE_TIMEOUT_MS });
+    read = { stdout, trusted: true };
   } catch (error) {
-    const failure = error as { code?: unknown; stdout?: string };
-    // 名单里有号已经退出时 ps 退 1,活着的那几条照样打出来 —— 还能用。
-    stdout = failure.stdout ?? "";
+    read = { stdout: psStdout(error), trusted: psAnswered(error) };
   }
-  return lineageFromPs(stdout, pids, token);
+  return lineageFromPs(read, pids, token);
+}
+
+/**
+ * 这次 ps **算不算答上话了**。名单里有号已经退出时 ps 退 1、把活着的那几条照样打出来,
+ * 那是它的正常行为,结论可信;超时被杀、进程起不来(`ENOENT`/`EACCES`,错误码是字符串)
+ * 则是这次问话本身失灵 —— 它一个字都没说,不能据此宣称任何号「已经退了」。
+ */
+function psAnswered(error: unknown): boolean {
+  const failure = error as { code?: unknown; killed?: boolean; signal?: unknown };
+  if (failure.killed || failure.signal) return false;
+  return typeof failure.code === "number";
+}
+
+function psStdout(error: unknown): string {
+  return String((error as { stdout?: unknown }).stdout ?? "");
 }
 
 /**
@@ -372,15 +398,18 @@ async function readLineage(pids: number[], token: string): Promise<Map<number, L
 function readLineageSync(pids: number[], token: string): Map<number, Lineage> {
   const shortcut = lineageWithoutPs(pids, token);
   if (shortcut) return shortcut;
-  let stdout = "";
+  let read: PsRead = { stdout: "", trusted: true };
   try {
-    stdout = String(execFileSync(PS_PATH!, ["-E", "-o", "pid=,command=", "-p", pids.join(",")], {
-      timeout: PROBE_TIMEOUT_MS, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-    }));
+    read = {
+      stdout: String(execFileSync(PS_PATH!, ["-E", "-o", "pid=,command=", "-p", pids.join(",")], {
+        timeout: PROBE_TIMEOUT_MS, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      })),
+      trusted: true,
+    };
   } catch (error) {
-    stdout = String((error as { stdout?: unknown }).stdout ?? "");
+    read = { stdout: psStdout(error), trusted: psAnswered(error) };
   }
-  return lineageFromPs(stdout, pids, token);
+  return lineageFromPs(read, pids, token);
 }
 
 /** 这几个号一律记成「核不上」。 */
@@ -397,13 +426,27 @@ function lineageWithoutPs(pids: number[], token: string): Map<number, Lineage> |
   return null;
 }
 
-/** `ps -E` 那坨输出 → 逐号的归属结论。同步/异步两条路共用。 */
-function lineageFromPs(stdout: string, pids: number[], token: string): Map<number, Lineage> {
+/**
+ * `ps -E` 那坨输出 → 逐号的归属结论。同步/异步两条路共用。
+ *
+ * **「名单里没有这一行」有两种成因,不能都读成「它已经退了」。** 早先这里是一句
+ * `continue`,于是 ps 本身失灵(超时、退非零且一个字没打、输出被截断)时整张表是空的,
+ * 上游 `probeOwnedPorts` 把「一个归属都没拿到」读成 free,默认停止于是对着一个还在听
+ * 端口的服务返回「已停止」并落 verified —— 第 4 轮审查发现 2 用一个只让 `ps -E` 退非零的
+ * 包装器实测到了这条路(服务活着、HTTP 照样应答,界面退回启动按钮)。这跟 lsof 那边
+ * 「查不到不等于没人听」是同一条判据,只是换了个工具(文件头第三节)。
+ *
+ * 所以缺这一行时再问一次内核:**它还活着就是「核不上」**(unverified),确认不在了才当它
+ * 退了。`processAlive` 用 `kill(pid, 0)`,对别人家的进程会 EPERM → false;但那种号活着时
+ * ps 一定打得出它的行(ps 不分用户),所以这个洞落不到这条路上。这次问话本身不可信
+ * (`trusted=false`)时更不必问 —— 它的沉默什么都证明不了。
+ */
+function lineageFromPs(read: PsRead, pids: number[], token: string): Map<number, Lineage> {
   const lineage = new Map<number, Lineage>();
   const needle = `${LAUNCH_ID_ENV}=${token}`;
   let current: number | null = null;
   const text = new Map<number, string>();
-  for (const line of stdout.split("\n")) {
+  for (const line of read.stdout.split("\n")) {
     const head = /^\s*(\d+)\s+(.*)$/.exec(line);
     if (head && pids.includes(Number(head[1]))) {
       current = Number(head[1]);
@@ -414,7 +457,12 @@ function lineageFromPs(stdout: string, pids: number[], token: string): Map<numbe
   }
   for (const pid of pids) {
     const body = text.get(pid);
-    if (body === undefined) continue; // 已经退出了,不用管
+    if (body === undefined) {
+      // 没打出这一行:确认不在了才算退出,否则这一问就是没答上来。
+      if (read.trusted && !processAlive(pid)) continue;
+      lineage.set(pid, "unverified");
+      continue;
+    }
     const at = body.indexOf(needle);
     if (at >= 0 && (at + needle.length === body.length || /\s/.test(body[at + needle.length]))) {
       lineage.set(pid, "ours");
@@ -521,6 +569,7 @@ export async function stopByPorts(
 
 function refusal(lineage: Lineage | undefined): string {
   if (lineage === "stranger") return `它的环境里没有这次启动的记号（${LAUNCH_ID_ENV}），不是这次起来的`;
+  if (lineage === "unverified") return `问不出它的进程环境（ps 没给出这一行，而这个号还活着），核不上是不是这次起来的`;
   return `读不到它的环境（多半不是当前用户的进程），核不上是不是这次起来的`;
 }
 

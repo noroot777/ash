@@ -14,8 +14,8 @@ import {
   applyStop,
   liveLeftovers,
   projectStop,
-  releaseLaunchPorts,
   releaseLaunchPortsSync,
+  releaseLaunchResponsibility,
 } from "./terminal-stop-facts.js";
 import { killAllSessionTrees, killSessionTree, terminateSession } from "./terminal-session-kill.js";
 import { TerminalWatcher } from "./terminal-session-watch.js";
@@ -362,9 +362,10 @@ export class TerminalSessionManager {
    * 的后台作业会被 PID 1 收养、而控制把手已被删掉(第 1 轮自由审查实锤)——所以
    * 「关 tab = 结束会话」必须走这里;杀不净时会话保留在 Map 里,失败如实回给调用方。
    *
-   * 进程那三条线索走完之后**还要收端口这一档**:这条记录是它唯一的把手(这次启动的记号只
-   * 活在记录里),删掉就等于把一个还听着端口的守护进程变成永久孤儿 —— 关 tab、删项目都会
-   * 走到这儿(第 3 轮审查发现 2)。收不干净同样保留记录、如实报失败。
+   * 进程那三条线索走完之后**还要清这次启动的整笔账**:这条记录是它唯一的把手(记号、端口、
+   * 没核销的责任全只活在记录里),删掉就等于把还在跑的东西变成永久孤儿 —— 关 tab、删项目都
+   * 会走到这儿(第 3 轮审查发现 2;只补端口不看账的漏洞见第 4 轮发现 1)。清不干净同样保留
+   * 记录、如实报失败。
    */
   async destroy(
     sessionId: string,
@@ -375,7 +376,7 @@ export class TerminalSessionManager {
     const result = await this.terminate(sessionId, projectId, timeouts);
     if (!result.ok) return result;
     if (session) {
-      const left = await releaseLaunchPorts(session);
+      const left = await releaseLaunchResponsibility(session);
       if (left) return { ok: false, reason: left };
     }
     this.close(sessionId, projectId);
@@ -452,7 +453,10 @@ export class TerminalSessionManager {
       this.sessions.delete(session.id);
     }
     killAllSessionTrees(targets);
-    releaseLaunchPortsSync(targets);
+    const { owed } = releaseLaunchPortsSync(targets);
+    if (owed.length) {
+      console.warn(`[terminal] 关服时这些进程核不上归属、没敢停,重启后已无把手可停它们：${owed.join("；")}`);
+    }
   }
 
   sweepIdleSessions(now = Date.now()): number {

@@ -73,20 +73,57 @@ export function projectStop(stop: StopFact): StopFact {
 }
 
 /**
- * 删会话**之前**的端口收口:把这次启动起来的、还听着端口的东西收掉,收不掉就如实说。
+ * 删会话**之前**的最后一道门:这次启动的责任清完了吗。返回非 null = 没清完,调用方据此
+ * **保留记录**、拒绝这次删除。
  *
- * 为什么非得有这一步:会话记录是端口这一档**唯一**的把手 —— 这次启动的记号
- * (launchToken)只活在这条记录里,记录一删,那枚记号跟着没,真·守护化的服务从此既核不上
- * 归属也没人去问它那个端口。于是「关 tab」和「删项目」会把一个还在跑的服务变成**永久孤儿**
- * (第 3 轮审查发现 2)。返回非 null = 没收干净,调用方据此**保留记录**、拒绝这次删除。
+ * 为什么非得有这一步:会话记录是这次启动**唯一**的把手 —— 那枚记号(launchToken)、那几个
+ * 端口、那笔没核销的账全只活在这条记录里。记录一删,还在跑的东西就既核不上归属、也没人
+ * 再去问它那个端口,变成**永久孤儿**(第 3 轮审查发现 2:关 tab、删项目都走这儿)。
  *
- * 判「没收干净」只认归属(probeOwnedPorts):端口上坐着别人的服务不该拦着用户关 tab。
+ * 判据是**完整责任集合**,不是只有端口那一档。第 3 轮只补了端口,于是第 4 轮审查发现 1
+ * 实测到同一条路还开着:默认停止已经如实报了「还剩 1 个进程核不上归属」,紧接着删项目
+ * 返回 ok、会话列表清空,那个采集 worker 还活着 —— 账本的单调性保住了对象,对象却被整个
+ * 删掉了,单调性因此没有保护到生命周期。所以这里的顺序是:
+ *
+ *   ① 端口这一档先补刀(顺带把补刀新发现的责任记进账);
+ *   ② 再看账上**此刻还活着**的号 —— 有一个都不许删。
+ *
+ * **唯一的例外**是「一个号都举不出来」的那种 unresolved(端口超额:证据本身不全)。它按
+ * 设计永远核销不掉(terminal-session-facts.ts 的类型注释),拿它拦删除等于让这条 tab 永远
+ * 关不掉、这个项目永远删不掉 —— 而且也没有任何把手可用,拦着并不能让用户多停掉一个进程。
+ * 所以它不卡生命周期,只卡「能不能说停净了」。
  */
-export async function releaseLaunchPorts(session: TerminalSession): Promise<string | null> {
+export async function releaseLaunchResponsibility(session: TerminalSession): Promise<string | null> {
+  const stuck = await releaseLaunchPorts(session);
+  if (stuck) return stuck;
+  const owed = liveLeftovers(session.stop);
+  if (!owed.length) return null;
+  const why = session.stop.kind === "unresolved" ? `${session.stop.why}；` : "";
+  return `这次启动还有 ${owed.length} 个进程在跑（pid ${owed.join("、")}）：${why}没敢把会话记录删掉（删了这笔账和停止入口就一起没了）`;
+}
+
+/**
+ * 上面那道门的**端口**那一档:把这次启动起来的、还听着端口的东西收掉,收不掉就如实说。
+ * 补刀过程中发现的「核不上归属所以一个字没动」的同组成员要**记进账**(`stopByPorts` 的
+ * leftovers),否则这一趟新发现的责任会随着返回值一起被丢掉。
+ *
+ * 判「端口没收干净」只认归属(probeOwnedPorts):端口上坐着**别人**的服务不该拦着用户关
+ * tab(第 3 轮审查发现 3)。
+ */
+async function releaseLaunchPorts(session: TerminalSession): Promise<string | null> {
   if (!PORT_TIER_AVAILABLE || session.commandId === null || session.launchPorts.size === 0) return null;
   const ports = [...session.launchPorts];
   const token = session.launchToken;
-  if (token) await stopByPorts(ports, { launchToken: token });
+  if (token) {
+    const outcome = await stopByPorts(ports, { launchToken: token });
+    if (outcome.leftovers.length) {
+      applyStop(session, {
+        kind: "unresolved",
+        pids: outcome.leftovers.map((left) => left.pid),
+        why: outcome.leftovers.map((left) => `pid ${left.pid} ${left.reason}`).join("；"),
+      });
+    }
+  }
   const probe = await probeOwnedPorts(ports, token);
   const where = `端口 ${ports.join("、")}`;
   if (probe.state === "ours") {
@@ -105,12 +142,23 @@ export async function releaseLaunchPorts(session: TerminalSession): Promise<stri
  * 判据与异步版一致(只动带记号的),区别只有「不等宽限」:TERM/KILL 连发,同
  * killAllSessionTrees。
  */
-export function releaseLaunchPortsSync(sessions: Iterable<TerminalSession>): number {
-  if (!PORT_TIER_AVAILABLE) return 0;
+export function releaseLaunchPortsSync(sessions: Iterable<TerminalSession>): { killed: number; owed: string[] } {
+  const owed: string[] = [];
   let killed = 0;
   for (const session of sessions) {
-    if (session.commandId === null || !session.launchToken || session.launchPorts.size === 0) continue;
-    killed += stopByPortsSync(session.launchPorts, session.launchToken).killed.length;
+    if (session.commandId === null) continue;
+    if (PORT_TIER_AVAILABLE && session.launchToken && session.launchPorts.size > 0) {
+      killed += stopByPortsSync(session.launchPorts, session.launchToken).killed.length;
+    }
+    // 补刀之后账上还活着的号:**没有一条路能把它停掉** —— 它们当初就是因为核不上归属才
+    // 被放过的,关服这一拍不会突然多出凭据,扩大 kill 范围是明令禁止的(service-ports.ts
+    // 文件头)。能做的是**别让这笔账无声无息地消失**:记录随进程一起没了,用户重启 ash
+    // 之后既看不到提示、也没有把手,只有靠这行日志才知道机器上还留着什么(第 4 轮审查发现 1)。
+    const left = liveLeftovers(session.stop);
+    if (left.length) {
+      const where = session.launchPorts.size ? `端口 ${[...session.launchPorts].join("、")}` : "没有记下端口";
+      owed.push(`「${session.name}」pid ${left.join("、")}（${where}）`);
+    }
   }
-  return killed;
+  return { killed, owed };
 }
