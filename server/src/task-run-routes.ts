@@ -260,7 +260,7 @@ api.post("/tasks/:id/stop", async (c) => {
       : "没有存活的 agent 进程，已标记为 canceled；但这个任务的回合占位到现在还占着，期间点运行会被挡回「任务回合正在进行」。系统无法确认占着它的那一位是不是还在做很慢的准备，所以不会自动放开；再等一会儿仍然不动，就用「放开回合占位」手动解开";
     // 没等到释放的那一种要留痕:只弹一次 toast 的话,用户刷新之后看不出自己停过、
     // 也看不出为什么点运行还是不行(AGENTS.md「停止/暂停必须留下持久可见的状态」)。
-    if (!released) await noteRejectedUserAction(taskId, "停止", note);
+    if (!released) await noteUserActionOutcome(taskId, "停止", "incomplete", note);
     return c.json({ stopped: true, note, strandedTurn: !released });
   }
   return c.json({ error: "任务没有在运行的进程可停止", status: r.status }, 409);

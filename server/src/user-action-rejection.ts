@@ -27,10 +27,7 @@
 // `DEDUPE_MS` 内只记一条 —— 换了理由(挡板变了)或者隔得足够久(用户过一会儿又试了一次)
 // 都算新事实,照记。
 //
-// ## 不记什么
-//
-// 只记**用户主动操作被挡回**。程序化路径(队列推进、消息补投、定时班次)被挡是正常退避,
-// 它们自己会重试,记进时间线只会变成噪音 —— 那些的可观察性归日志和托盘。
+import { createHash } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { taskNotices } from "./db/schema.js";
@@ -64,7 +61,7 @@ const lastNoted = new Map<string, number>();
 export type RejectionNotice = {
   id: string;
   action: string;
-  outcome: ActionOutcome;
+  outcome: ActionOutcome | "system";
   reason: string;
   occurredAt: string;
 };
@@ -109,6 +106,23 @@ export async function noteUserActionOutcome(
   }
 }
 
+export async function noteSystemNotice(
+  taskId: string,
+  eventKey: string,
+  action: string,
+  reason: string,
+): Promise<boolean> {
+  const id = `system:${createHash("sha256").update(JSON.stringify([taskId, eventKey])).digest("hex")}`;
+  try {
+    await db.insert(taskNotices).values({ id, taskId, action, outcome: "system", reason, occurredAt: now() })
+      .onConflictDoNothing({ target: taskNotices.id });
+    return true;
+  } catch (error) {
+    console.warn(`[ash] 系统诊断留痕写表失败 task=${taskId}（${action}）:`, error);
+    return false;
+  }
+}
+
 /**
  * 这个任务被挡回过的那些操作(新的在前)。前端把它合进任务历史 —— **不按「有没有正文」
  * 取舍**,那正是上一版把历史弄丢的判据(见文件头)。
@@ -131,5 +145,8 @@ export async function recentRejectionNotices(
     .limit(limit);
   // 列是 TEXT,旧行(补列之前写的)读出来是默认值。认不出的一律当 rejected —— 多一档
   // 新语气要前端配合,认错方向不如退回最保守的那一句。
-  return rows.map((row) => ({ ...row, outcome: row.outcome === "incomplete" ? "incomplete" as const : "rejected" as const }));
+  return rows.map((row): RejectionNotice => ({
+    ...row,
+    outcome: row.outcome === "incomplete" || row.outcome === "system" ? row.outcome : "rejected",
+  }));
 }

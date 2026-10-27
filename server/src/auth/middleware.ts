@@ -179,7 +179,7 @@ export function crossSiteRejection(headers: {
  * 光有 taskId 谁都能填。
  *
  * **导出是给自用模式下的回调端点用的**(claude 的 PreToolUse hook,见 monitor-routes.ts):
- * 自用模式也保留回合身份,没有任务凭证的请求才使用 `SINGLE_ACTOR`。
+ * 自用模式也保留有效回合身份,其余请求的回合凭证由各路由核验。
  */
 export async function agentActor(c: Context): Promise<Actor | null> {
   const taskId = c.req.header("x-ash-source-task-id")?.trim();
@@ -238,11 +238,7 @@ export function authGate(): MiddlewareHandler {
     const path = new URL(c.req.url).pathname;
 
     if (!(await isMultiUser())) {
-      const delegated = c.req.header("x-ash-source-task-id") !== undefined
-        || c.req.header("x-ash-turn-token") !== undefined;
-      const actor = delegated ? await agentActor(c) : null;
-      if (delegated && !actor) return c.json({ error: "任务回合凭证无效或已过期" }, 401);
-      setActor(c, actor ?? SINGLE_ACTOR);
+      setActor(c, (await agentActor(c)) ?? SINGLE_ACTOR);
       return next();
     }
 

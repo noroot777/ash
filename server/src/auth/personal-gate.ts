@@ -115,7 +115,11 @@ export function personalWriteGate(): MiddlewareHandler {
     if (!WRITE_METHODS.has(c.req.method)) return next();
     // 真人专属动作先判:它**不看单人/多人**(理由见 HUMAN_ONLY_PATHS)。
     if (isHumanOnlyPath(c.req.path)) {
-      if (!isAccountHolder(actorOf(c))) return c.json({ error: AGENT_HUMAN_ONLY_REFUSAL }, 403);
+      if (!isAccountHolder(actorOf(c))
+        || c.req.header("x-ash-source-task-id") !== undefined
+        || c.req.header("x-ash-turn-token") !== undefined) {
+        return c.json({ error: AGENT_HUMAN_ONLY_REFUSAL }, 403);
+      }
       const rejection = crossSiteRejection({
         secFetchSite: c.req.header("sec-fetch-site"),
         origin: c.req.header("origin"),

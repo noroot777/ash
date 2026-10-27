@@ -13,7 +13,7 @@ import { id, json, request } from "./apiClient.ts";
 export type TaskNotice = {
   id: string;
   action: string;
-  outcome: "rejected" | "incomplete";
+  outcome: "rejected" | "incomplete" | "system";
   reason: string;
   occurredAt: string;
 };

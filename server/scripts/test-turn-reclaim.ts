@@ -40,11 +40,12 @@ const { SUSPECT_TURN_MS, releaseSuspectTurn, reportSuspectTurns, suspectTurns } 
   await import("../src/turn-lock-reclaim.js");
 const { claimQueueSeat, seatGeneration } = await import("../src/queue-seat.js");
 const { reclaimStrandedSeat } = await import("../src/scheduler.js");
-const { noteRejectedUserAction, recentRejectionNotices } = await import("../src/user-action-rejection.js");
-const { noteStalledPending } = await import("../src/pending-delivery-timing.js");
+const { noteRejectedUserAction, noteSystemNotice, recentRejectionNotices } = await import("../src/user-action-rejection.js");
+const { forgetStalled, noteStalledPending } = await import("../src/pending-delivery-timing.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
+const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { sessionTranscriptPath } = await import("../src/transcript.js");
 const { takeFreeze } = await import("../src/turn-freeze.js");
 
@@ -65,6 +66,7 @@ const baseTask = {
 
 const api = new Hono();
 mountTaskRunRoutes(api);
+mountTaskRoutes(api);
 const post = (path: string, body?: unknown) =>
   api.request(path, {
     method: "POST",
@@ -88,6 +90,25 @@ const timelineOf = async (taskId: string, sessionId: string): Promise<string> =>
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const past = () => Date.now() + SUSPECT_TURN_MS * 100; // 「已经过了很久」的观察时刻
+
+async function failNextNoticeWrite(run: () => Promise<unknown>): Promise<void> {
+  const execute = dbClient.execute.bind(dbClient);
+  let injected = false;
+  dbClient.execute = ((statement: Parameters<typeof execute>[0]) => {
+    const sql = String(typeof statement === "string" ? statement : statement.sql);
+    if (!injected && /^\s*insert\s+into\s+"task_notices"/i.test(sql)) {
+      injected = true;
+      return Promise.reject(new Error("injected notice write failure"));
+    }
+    return execute(statement);
+  }) as typeof dbClient.execute;
+  try {
+    await run();
+    assert.equal(injected, true, "测试必须真的命中一次通知写失败");
+  } finally {
+    dbClient.execute = execute;
+  }
+}
 
 // ── ① 三条判据缺一不可 ───────────────────────────────────────────────────────
 // 瞬时快照分不出「卡住了」和「正常起跑中」,所以判据是 (超时 ∧ 无句柄 ∧ 无令牌)。任一否证
@@ -161,10 +182,12 @@ releaseTurn("t-status");
 await createTasks([
   { ...baseTask, id: "t-duet", title: "duet gate", mode: "duet" },
   { ...baseTask, id: "t-report", title: "reported only" },
+  { ...baseTask, id: "t-report-empty", title: "never ran", status: "queued" },
 ]);
 await seedSession("t-report");
 assert.equal(claimTurn("t-duet", "duet"), true, "duet 占住它自己这把锁");
 assert.equal(claimTurn("t-report"), true);
+assert.equal(claimTurn("t-report-empty"), true);
 await sleep(SUSPECT_TURN_MS * 3);
 {
   const suspect = suspectTurns(past()).map((t) => t.taskId);
@@ -174,15 +197,37 @@ await sleep(SUSPECT_TURN_MS * 3);
   // 关键断言:报过之后两把锁都必须**还在**
   assert.equal(isTurnClaimed("t-duet"), true, "巡检绝不许碰 duet 的锁 —— 它的持有者还活着");
   assert.equal(isTurnClaimed("t-report"), true, "巡检只报告,连可疑的那把也不许自动放开");
-  // 持久可见:报告要落到任务时间线,并说清「不会自动放开、该按哪里」
-  const timeline = await timelineOf("t-report", "s-t-report");
-  assert.match(timeline, /回合占位占着不动/, "可疑的占位必须留下持久可见的说明");
-  assert.match(timeline, /不会自动放开/, "说明里必须讲清系统不会自己动手");
-  assert.match(timeline, /reclaim-turn/, "说明里必须给出那个开关");
+  for (const taskId of ["t-report", "t-report-empty"]) {
+    const response = await api.request(`/tasks/${taskId}/notices`);
+    assert.equal(response.status, 200);
+    const { notices } = await response.json() as { notices: { outcome: string; reason: string }[] };
+    assert.equal(notices.length, 1, "有无会话都应从通知接口读回一条诊断");
+    assert.equal(notices[0]!.outcome, "system");
+    assert.match(notices[0]!.reason, /回合占位占着不动/);
+    assert.match(notices[0]!.reason, /不会自动放开/);
+    assert.match(notices[0]!.reason, /reclaim-turn/);
+  }
+  assert.equal(await timelineOf("t-report", "s-t-report"), "", "诊断不应再写一份会话正文");
   // 同一把锁不许每 30 秒报一次
   assert.equal(await reportSuspectTurns(), 0, "同一次占用只报一次");
 }
 releaseTurn("t-duet");
+releaseTurn("t-report-empty");
+assert.equal(claimTurn("t-report-empty"), true);
+await sleep(SUSPECT_TURN_MS * 3);
+assert.equal(await reportSuspectTurns(), 1, "换了一把锁应形成一条新诊断");
+assert.equal((await recentRejectionNotices("t-report-empty")).length, 2);
+releaseTurn("t-report-empty");
+await createTasks([{ ...baseTask, id: "t-report-retry", title: "write retry", status: "queued" }]);
+assert.equal(claimTurn("t-report-retry"), true);
+await sleep(SUSPECT_TURN_MS * 3);
+await failNextNoticeWrite(async () => {
+  assert.equal(await reportSuspectTurns(), 0, "写失败不能冒报已持久化");
+});
+assert.equal((await recentRejectionNotices("t-report-retry")).length, 0);
+assert.equal((await Promise.all([reportSuspectTurns(), reportSuspectTurns()])).reduce((sum, count) => sum + count), 1);
+assert.equal((await recentRejectionNotices("t-report-retry")).length, 1, "失败后重试且并发扫描不能重复写");
+releaseTurn("t-report-retry");
 
 // ── ④ 条件释放:换了主人就一个字节都不动 ──────────────────────────────────────
 // **本轮审查 F2 的回归。** 判定要读进程登记册、写时间线,中间全是 await;按任务 id 删锁
@@ -200,7 +245,6 @@ releaseTurn("t-duet");
 // ── ⑤ 人工放开:判据不放宽,放开时连交接一起放走 ──────────────────────────────
 // 占着不动的锁底下往往压着一串「等这一轮跑完再送」的交接(排队消息投递、队列补推),
 // 它们跟着这把锁一起被冻住了 —— 拔锁而不放它们走,任务照旧停在原地。
-const ghostSession = await seedSession("t-ghost");
 let thawed = 0;
 whenTurnIdle("t-ghost", () => { thawed += 1; });
 assert.equal(thawed, 0, "锁还占着时,交接必须排在队里等");
@@ -213,9 +257,12 @@ assert.equal(thawed, 1, "被冻住的交接必须随放开一起放走");
 assert.equal(claimTurn("t-ghost"), true, "放开之后新回合必须能正常占到锁");
 releaseTurn("t-ghost");
 {
-  const timeline = await timelineOf("t-ghost", ghostSession);
-  assert.match(timeline, /已由你手动放开/, "人工放开必须往任务时间线写一条");
-  assert.match(timeline, /互斥就没了/, "痕迹里必须明示副作用,别让用户以为只是清了个垃圾");
+  const notices = await recentRejectionNotices("t-ghost");
+  const released = notices.find((notice) => notice.action === "回合占位已放开");
+  assert.ok(released, "没有会话的人工放开也必须持久留痕");
+  assert.equal(released.outcome, "system");
+  assert.match(released.reason, /已由你手动放开/);
+  assert.match(released.reason, /互斥就没了/, "痕迹里必须明示副作用,别让用户以为只是清了个垃圾");
 }
 // 锁已经不在了:再放一次必须如实说没有,不许误报成功
 {
@@ -449,7 +496,11 @@ await createTasks([
   assert.match(body.note, /放开回合占位/, "要告诉用户那个开关在哪");
   assert.doesNotMatch(body.note, /现在可以重新运行/, "没等到就不许说可以重新运行了");
   assert.equal(isTurnClaimed("t-stopghost"), true, "停止不许强拔锁 —— 证不了原持有者已结束");
-  assert.ok((await recentRejectionNotices("t-stopghost")).length > 0, "没等到释放要留下持久痕迹");
+  const notices = await recentRejectionNotices("t-stopghost");
+  assert.equal(notices.length, 1, "没等到释放要留下持久痕迹");
+  assert.equal(notices[0]!.action, "停止");
+  assert.equal(notices[0]!.outcome, "incomplete", "已经取消但锁还占着是生效未到位,不是拒绝");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "t-stopghost"))).at(0)?.status, "canceled");
   releaseTurn("t-stopghost");
 }
 
@@ -526,7 +577,11 @@ const noteSession = await seedSession("t-note");
 // ── ⑨ 久久发不出去的待发送消息会出声 ────────────────────────────────────────
 // 上面那套分段计时只在**送成之后**结算,所以「一直没送成」正好落在它的盲区里:现场那条
 // 消息躺了 70+ 分钟,日志从头到尾一声不吭。
-await createTasks([{ ...baseTask, id: "t-stall", title: "stalled message" }]);
+await createTasks([
+  { ...baseTask, id: "t-stall", title: "stalled message" },
+  { ...baseTask, id: "t-stall-empty", title: "never ran", status: "queued" },
+  { ...baseTask, id: "t-stall-retry", title: "retry notice", status: "queued" },
+]);
 const stallSession = await seedSession("t-stall");
 {
   const longAgo = new Date(Date.now() - 45 * 60_000).toISOString();
@@ -538,20 +593,38 @@ const stallSession = await seedSession("t-stall");
     attachments: "[]", agent: null, executorId: null, model: null, reasoningEffort: null,
     origin: null, execution: false, sessionRole: null,
   };
-  await db.insert(scheduledMessages).values(row as never);
-  noteStalledPending(row, "任务停在「排队中」，但队列里没有别的任务在跑");
-  await sleep(40); // 时间线是 fire-and-forget 写的
-  const timeline = await timelineOf("t-stall", stallSession);
-  assert.match(timeline, /还没发出去/, "久久发不出去的消息必须留下持久可见的说明");
-  assert.match(timeline, /排队中/, "说明里要带上「在等什么」");
-  assert.match(timeline, /不会丢/, "必须告诉用户原话还在托盘里");
+  for (const taskId of ["t-stall", "t-stall-empty"]) {
+    const message = { ...row, id: `m-${taskId}`, taskId };
+    await db.insert(scheduledMessages).values(message as never);
+    const reason = "任务停在「排队中」，但队列里没有别的任务在跑";
+    await Promise.all([noteStalledPending(message, reason), noteStalledPending(message, reason)]);
+    const response = await api.request(`/tasks/${taskId}/notices`);
+    assert.equal(response.status, 200);
+    const { notices } = await response.json() as { notices: { id: string; outcome: string; reason: string }[] };
+    assert.equal(notices.length, 1, "有无会话的滞留消息都应有持久诊断");
+    assert.equal(notices[0]!.outcome, "system");
+    assert.match(notices[0]!.reason, /还没发出去/);
+    assert.match(notices[0]!.reason, /排队中/);
+    assert.match(notices[0]!.reason, /不会丢/);
+    forgetStalled(message.id);
+    await noteStalledPending(message, "重扫时的新理由");
+    assert.deepEqual(await recentRejectionNotices(taskId), notices, "内存去重丢失后也不能重复写或改旧事实");
+    assert.equal(await noteSystemNotice(taskId, `stalled-message:${message.id}`, "重扫", "重复诊断"), true);
+    assert.deepEqual(await recentRejectionNotices(taskId), notices, "持久事件键应让独立写入也保持幂等");
+  }
+  assert.equal(await timelineOf("t-stall", stallSession), "", "诊断不能依赖会话正文或重复写正文");
+  const retry = { ...row, id: "m-stall-retry", taskId: "t-stall-retry" };
+  await db.insert(scheduledMessages).values(retry as never);
+  await failNextNoticeWrite(() => noteStalledPending(retry, "写失败后应重试"));
+  assert.equal((await recentRejectionNotices(retry.taskId)).length, 0);
+  await noteStalledPending(retry, "写失败后应重试");
+  assert.equal((await recentRejectionNotices(retry.taskId)).length, 1, "写失败不能永久压住后续扫描");
 
   // 定时消息按 sendAt 起算:排在一小时后的那条「还没发出去」是本意,不是卡住
   const future = { ...row, id: "m-future", mode: "timed", sendAt: soon };
   await db.insert(scheduledMessages).values(future as never);
-  noteStalledPending(future, "还没到发送时间");
-  await sleep(40);
-  assert.doesNotMatch(await timelineOf("t-stall", stallSession), /还没到发送时间/,
+  await noteStalledPending(future, "还没到发送时间");
+  assert.doesNotMatch(JSON.stringify(await recentRejectionNotices("t-stall")), /还没到发送时间/,
     "定时消息在 sendAt 之前不算滞留,不该报警");
 }
 

@@ -59,7 +59,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { isRunning, isTurnClaimed } from "./runs.js";
 import { forceReleaseTurn, heldTurns } from "./turn-lock.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { noteSystemNotice } from "./user-action-rejection.js";
 
 /**
  * 一把「无句柄、无令牌」的锁占多久开始报可疑。
@@ -98,6 +98,7 @@ export type SuspectTurn = {
    * 换了主人就对不上号、什么都不会发生(见 turn-lock.ts `TurnIdentity.seq`)。
    */
   seq: number;
+  claimedAt: number;
   /** 这把锁已经占了多久(毫秒),写进日志与时间线。 */
   heldMs: number;
 };
@@ -112,7 +113,7 @@ export function suspectTurns(at = Date.now(), thresholdMs = SUSPECT_TURN_MS): Su
     .filter((held) => held.token === null)
     .filter((held) => !isRunning(held.taskId))
     .filter((held) => at - held.claimedAt > thresholdMs)
-    .map((held) => ({ taskId: held.taskId, role: held.role, seq: held.seq, heldMs: at - held.claimedAt }));
+    .map((held) => ({ taskId: held.taskId, role: held.role, seq: held.seq, claimedAt: held.claimedAt, heldMs: at - held.claimedAt }));
 }
 
 // 不满一分钟就按秒说 —— 阈值被调低时(回归测试、临时排查)「约 0 分钟」读起来像没发生。
@@ -127,6 +128,7 @@ const SIDE_EFFECT =
  * 的 tick,不去重就是每半分钟一条。换一把新锁(新号)会重新报。
  */
 const told = new Set<string>();
+const reporting = new Set<string>();
 
 /**
  * 巡检:把可疑的锁如实报出来。**一把都不碰**(理由见文件头)。返回这一趟新报了几把。
@@ -143,8 +145,8 @@ export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise
   let reported = 0;
   for (const suspect of suspects) {
     const key = `${suspect.taskId}:${suspect.seq}`;
-    if (told.has(key)) continue;
-    told.add(key);
+    if (told.has(key) || reporting.has(key)) continue;
+    reporting.add(key);
     const detail = `占位身份 ${suspect.role}、已持有约 ${held(suspect.heldMs)}`;
     console.warn(
       `[ash] 回合占位占着不动 task=${suspect.taskId}（${detail}）`
@@ -152,22 +154,23 @@ export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise
       + `需要时走 POST /api/tasks/${suspect.taskId}/reclaim-turn`,
     );
     try {
-      await appendTaskTimeline(
+      const persisted = await noteSystemNotice(
         suspect.taskId,
-        `〔系统〕这个任务的回合占位占着不动（${detail}），期间点运行会被挡回「任务回合正在进行」。`
+        `suspect-turn:${suspect.claimedAt}:${suspect.seq}`,
+        "回合占位占着不动",
+        `这个任务的回合占位占着不动（${detail}），期间点运行会被挡回「任务回合正在进行」。`
         + "没有进程在册、也没有绑过回合令牌，但系统**无法确认**原来那一位是否真的已经结束，"
         + "所以不会自动放开。确认它确实不动了，用任务详情页上的「放开回合占位」手动解开"
         + `（或 POST /api/tasks/${suspect.taskId}/reclaim-turn）——**点运行是解不开的**，那条路只会继续被挡回。`
         + SIDE_EFFECT,
-        { eventKey: `suspect-turn:${suspect.taskId}:${suspect.seq}` },
       );
-    } catch (error) {
-      // 报告失败不该让这一把永久失声:把去重记账撤回,下一趟再报一次。
-      told.delete(key);
-      console.error(`[ash] 回合占位可疑的留痕写失败 task=${suspect.taskId}:`, error);
-      continue;
+      if (persisted) {
+        told.add(key);
+        reported += 1;
+      }
+    } finally {
+      reporting.delete(key);
     }
-    reported += 1;
   }
   return reported;
 }
@@ -268,9 +271,11 @@ export async function releaseSuspectTurn(
   if (!after.runnable) {
     console.warn(`[ash] 放开了回合占位但任务仍不可运行 task=${taskId}（状态 ${after.status ?? "读不到"}）`);
   }
-  await appendTaskTimeline(
+  await noteSystemNotice(
     taskId,
-    `〔系统〕这个任务的回合占位已由你手动放开（${detail}）。`
+    `released-turn:${suspect.claimedAt}:${suspect.seq}`,
+    "回合占位已放开",
+    `这个任务的回合占位已由你手动放开（${detail}）。`
     + (after.runnable ? "现在可以继续运行了。" : `但它还点不动运行：${after.nextStep ?? "请刷新查看当前状态"}。`)
     + SIDE_EFFECT,
   );

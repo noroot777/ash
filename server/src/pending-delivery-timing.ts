@@ -93,6 +93,7 @@ const STALLED_MS = 600_000;
 
 /** 已经出过声的,不再刷屏(时间线那条另有 eventKey 兜持久幂等)。 */
 const stalledTold = new Set<string>();
+const stalledWriting = new Set<string>();
 
 export function forgetStalled(messageId: string): void {
   stalledTold.delete(messageId);
@@ -104,11 +105,11 @@ export function forgetStalled(messageId: string): void {
  * 在投递扫描判「这一轮还不能发」的那个分支上调(pending-messages)。`why` 是这一轮的
  * 判定理由 —— 它就是用户想知道的那句话,所以照原样带进时间线。
  */
-export function noteStalledPending(
+export async function noteStalledPending(
   message: { id: string; taskId: string; mode: string; createdAt: string; sendAt: string | null },
   why: string,
   at = Date.now(),
-): void {
+): Promise<void> {
   // 「本该发出去的那一刻」:排队消息是它被排下的时候,定时消息是 sendAt(两者取晚的那个 ——
   // 一条排在未来的定时消息,创建得再早也不算等待)。
   const createdAt = new Date(message.createdAt).getTime();
@@ -118,8 +119,8 @@ export function noteStalledPending(
     : Math.max(createdAt, sendAt);
   const age = at - dueFrom;
   if (!Number.isFinite(age) || age < STALLED_MS) return;
-  if (stalledTold.has(message.id)) return;
-  stalledTold.add(message.id);
+  if (stalledTold.has(message.id) || stalledWriting.has(message.id)) return;
+  stalledWriting.add(message.id);
   const label = message.mode === "queued" ? "排队消息" : "定时消息";
   const waited = `${Math.round(age / 60_000)} 分钟`;
   console.warn(
@@ -128,10 +129,19 @@ export function noteStalledPending(
   );
   // 持久可见:用户刷新页面后也要能看出「我那句话还没送到、卡在什么上」。eventKey 让它
   // 每条消息最多写一次,重启后重扫也不会写出第二条。
-  void import("./task-timeline.js").then(({ appendTaskTimeline }) => appendTaskTimeline(
-    message.taskId,
-    `〔系统〕你的${label}已经等了约 ${waited} 还没发出去：${why}。`
-    + "原话仍在待发送托盘里（不会丢），任务恢复空闲后会自动送出；也可以在托盘里取消它。",
-    { eventKey: `stalled-message:${message.id}` },
-  )).catch(() => { /* 留痕失败不影响投递本身 */ });
+  try {
+    const { noteSystemNotice } = await import("./user-action-rejection.js");
+    const persisted = await noteSystemNotice(
+      message.taskId,
+      `stalled-message:${message.id}`,
+      `${label}滞留`,
+      `你的${label}已经等了约 ${waited} 还没发出去：${why}。`
+      + "原话仍在待发送托盘里（不会丢），任务恢复空闲后会自动送出；也可以在托盘里取消它。",
+    );
+    if (persisted) stalledTold.add(message.id);
+  } catch (error) {
+    console.warn(`[ash] 滞留消息留痕失败 task=${message.taskId} message=${message.id}:`, error);
+  } finally {
+    stalledWriting.delete(message.id);
+  }
 }

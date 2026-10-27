@@ -42,6 +42,7 @@ const { reclaimStrandedSeat } = await import("../src/scheduler.js");
 const { releaseSuspectTurn } = await import("../src/turn-lock-reclaim.js");
 const { noteUserActionOutcome, recentRejectionNotices } = await import("../src/user-action-rejection.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
+const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { personalWriteGate, isHumanOnlyPath } = await import("../src/auth/personal-gate.js");
 const { actorOf } = await import("../src/auth/context.js");
 const { authGate } = await import("../src/auth/middleware.js");
@@ -259,11 +260,13 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   // 不带的话路由能通、闸却一句 `startsWith("/api/")` 就放行了,等于什么都没测。
   const inner = new Hono();
   mountTaskRunRoutes(inner);
+  mountTaskRoutes(inner);
   gated.route("/api", inner);
 
   await createTasks([
     { ...baseTask, id: "t-gate", title: "gate", status: "queued" },
     { ...baseTask, id: "source-agent", title: "source", status: "running", activeTurnToken: "valid-turn" },
+    { ...baseTask, id: "source-team", title: "resident lead", mode: "team", status: "idle", activeTurnToken: null, workflowMode: "preset" },
   ]);
   assert.equal(claimTurn("t-gate"), true);
   await new Promise((r) => setTimeout(r, 40)); // 过了可疑阈值
@@ -286,13 +289,54 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
     { "x-ash-source-task-id": "source-agent", "x-ash-turn-token": "expired" },
     { "x-ash-source-task-id": "source-agent" },
     { "x-ash-turn-token": "valid-turn" },
+    { "x-ash-source-task-id": "source-team" },
+    { "x-ash-source-task-id": "", "x-ash-turn-token": "" },
   ];
   for (const headers of invalidCredentials) {
     const invalid = await gated.request("/api/tasks/t-gate/reclaim-turn", {
       method: "POST", headers, body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
     });
-    assert.equal(invalid.status, 401, "无效或不完整凭证不许降级为本机用户");
+    assert.equal(invalid.status, 403, "真人专属闸必须拒绝无效或不完整的任务凭证");
   }
+
+  for (const headers of invalidCredentials) {
+    const read = await gated.request("/api/tasks/t-gate", { headers });
+    assert.equal(read.status, 200, "自用模式的普通请求不应被全局身份闸抢先拒绝");
+    assert.equal(authenticatedAs, "single");
+  }
+  const staleCreation = await gated.request("/api/tasks", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-ash-source-task-id": "source-agent", "x-ash-turn-token": "expired" },
+    body: JSON.stringify({ projectId: "p1", title: "expired creation", useWorktree: false }),
+  });
+  assert.equal(staleCreation.status, 409, "过期回合应由业务路由按原语义拒绝");
+  assert.match((await staleCreation.json() as { error: string }).error, /创建来源的回合身份已过期/);
+  for (const status of ["idle", "running"]) {
+    await db.update(tasks).set({ status, activeTurnToken: null }).where(eq(tasks.id, "source-team"));
+    const headers = { "content-type": "application/json", "x-ash-source-task-id": "source-team" };
+    const created = await gated.request("/api/tasks", {
+      method: "POST", headers,
+      body: JSON.stringify({ projectId: "p1", title: `resident ${status}`, useWorktree: false }),
+    });
+    assert.equal(created.status, 201, "常驻调度台没有回合令牌也应按既有来源判据创建任务");
+    const child = await created.json() as { id: string; creationOrigin: { kind: string; taskId: string } };
+    assert.equal(child.creationOrigin.kind, "agent");
+    assert.equal(child.creationOrigin.taskId, "source-team");
+    const read = await gated.request(`/api/tasks/${child.id}`, { headers });
+    assert.equal(read.status, 200, "调度台可读取任务信息");
+    const patched = await gated.request("/api/tasks/t-gate", {
+      method: "PATCH", headers, body: JSON.stringify({ title: `lead patched ${status}` }),
+    });
+    assert.equal(patched.status, 200, "调度台可修改在运行/排队的执行者任务");
+  }
+  await writeSystemSetting("instanceMode", "multi");
+  invalidateInstanceConfig();
+  const unauthenticated = await gated.request("/api/tasks/t-gate", {
+    headers: { "x-ash-source-task-id": "source-team" },
+  });
+  assert.equal(unauthenticated.status, 401, "来源头不能绕过多人登录边界");
+  await writeSystemSetting("instanceMode", "single");
+  invalidateInstanceConfig();
 
   const noConsent = await gated.request("/api/tasks/t-gate/reclaim-turn", {
     method: "POST", headers: { "content-type": "application/json" }, body: "{}",
