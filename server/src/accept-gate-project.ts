@@ -3,10 +3,15 @@ import { dirname, join, relative, resolve } from "node:path";
 import { available, filesystemFailure } from "./accept-gate-fs.js";
 import { insideTree } from "./accept-gate-tree.js";
 
-type Repository = { root: string; common: string | null };
-type SourceLocation = { kind: "owned"; inside: string } | { kind: "external" | "unknown" };
+export type UnknownSource = { kind: "unknown"; directory: string; metadata: string; reason: string };
+type Repository = { root: string; common: string } | { root: string; issue: UnknownSource };
+type SourceLocation = { kind: "owned"; inside: string } | { kind: "external" } | UnknownSource;
 export type ProjectSources = { locate: (path: string) => Promise<SourceLocation> };
 const identity = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
+
+export const identityProblem = (issue: UnknownSource) => `目录 ${issue.directory} 的版本库身份无法读取：`
+  + `元数据 ${issue.metadata} ${issue.reason}。无法证明它与被冻结项目的关系；`
+  + `请修复该元数据及其指向的 Git 目录，使其可读取后重试（重新安装依赖不会修复这份元数据）`;
 
 export async function projectSources(root: string): Promise<ProjectSources> {
   const projectRoot = await realpath(root);
@@ -16,11 +21,13 @@ export async function projectSources(root: string): Promise<ProjectSources> {
     if (cached) return cached;
     const result = (async (): Promise<Repository | null> => {
       const marker = join(directory, ".git");
+      const failed = (metadata: string, reason: string): Repository => ({ root: directory,
+        issue: { kind: "unknown", directory, metadata, reason } });
       let markerInfo;
       try { markerInfo = await stat(marker); }
       catch (error) {
         if (!filesystemFailure(error)) throw error;
-        if (error.code !== "ENOENT" && error.code !== "ENOTDIR") return { root: directory, common: null };
+        if (error.code !== "ENOENT" && error.code !== "ENOTDIR") return failed(marker, `读取失败（${error.code}）`);
         const parent = dirname(directory);
         return parent === directory ? null : await repositoryAt(parent);
       }
@@ -28,33 +35,39 @@ export async function projectSources(root: string): Promise<ProjectSources> {
       if (!markerInfo.isDirectory()) {
         const pointer = await available(() => readFile(marker, "utf8"));
         const match = pointer?.match(/^gitdir:\s*(.+)\s*$/m);
-        if (!match) return { root: directory, common: null };
+        if (!match) return failed(marker, "无法读取有效的 gitdir 指针");
         gitDirectory = resolve(directory, match[1].trim());
       }
       let common = gitDirectory;
       try { common = resolve(gitDirectory, (await readFile(join(gitDirectory, "commondir"), "utf8")).trim()); }
       catch (error) {
         if (!filesystemFailure(error)) throw error;
-        if (error.code !== "ENOENT") return { root: directory, common: null };
+        if (error.code !== "ENOENT") return failed(join(gitDirectory, "commondir"), `读取失败（${error.code}）`);
       }
-      return { root: directory, common: await available(() => realpath(common)) };
+      const canonical = await available(() => realpath(common));
+      return canonical === null ? failed(marker, `指向不可读取的 Git 目录 ${common}`) : { root: directory, common: canonical };
     })();
     repositories.set(directory, result);
     return result;
   };
   const project = await repositoryAt(projectRoot);
   return { locate: async path => {
-    const repository = await repositoryAt(path);
-    if (project?.common === null || repository?.common === null) return { kind: "unknown" };
-    if (project === null) {
-      return repository === null && insideTree(projectRoot, path)
-        ? { kind: "owned", inside: relative(projectRoot, path) }
-        : { kind: "external" };
+    if (insideTree(projectRoot, path)) return { kind: "owned", inside: relative(projectRoot, path) };
+    if (project !== null && "issue" in project) return project.issue;
+    let directory = path;
+    let issue: UnknownSource | null = null;
+    for (;;) {
+      const repository = await repositoryAt(directory);
+      if (repository === null) break;
+      if ("issue" in repository) issue ??= repository.issue;
+      else if (project !== null && identity(repository.common) === identity(project.common)) {
+        const checkoutRoot = join(repository.root, relative(project.root, projectRoot));
+        if (insideTree(checkoutRoot, path)) return { kind: "owned", inside: relative(checkoutRoot, path) };
+      }
+      const parent = dirname(repository.root);
+      if (parent === repository.root) break;
+      directory = parent;
     }
-    if (repository === null || identity(repository.common!) !== identity(project.common!)) return { kind: "external" };
-    const checkoutRoot = join(repository.root, relative(project.root, projectRoot));
-    return insideTree(checkoutRoot, path)
-      ? { kind: "owned", inside: relative(checkoutRoot, path) }
-      : { kind: "external" };
+    return issue ?? { kind: "external" };
   } };
 }

@@ -5,14 +5,15 @@ import { physicalPath } from "./git-worktree-state.js";
 import { available } from "./accept-gate-fs.js";
 
 export type ResolutionEntry = { entry: string; landing: string; tree: string; nested: boolean; kind: "package" | "command" };
-export type ResolutionTree = { path: string; entries: ResolutionEntry[]; selected: ResolutionEntry[]; inherited: boolean };
+export type ResolutionTree = { path: string; entries: ResolutionEntry[]; selected: ResolutionEntry[]; direct: ResolutionEntry[]; inherited: boolean };
 export type ResolutionIO = {
   stat: (path: string) => Promise<Stats>;
   realpath: (path: string) => Promise<string>;
   readdir: (path: string) => Promise<string[]>;
 };
 
-export async function resolutionInputs(roots: string[], io: ResolutionIO = { stat, realpath, readdir }): Promise<ResolutionTree[]> {
+export async function resolutionInputs(roots: string[], io: ResolutionIO = { stat, realpath, readdir },
+  consumerLanding?: (entry: ResolutionEntry) => Promise<string | null>): Promise<ResolutionTree[]> {
   const stats = new Map<string, Promise<Stats | null>>();
   const paths = new Map<string, Promise<string | null>>();
   const contents = new Map<string, Promise<string[] | null>>();
@@ -30,6 +31,7 @@ export async function resolutionInputs(roots: string[], io: ResolutionIO = { sta
   const trees = new Map<string, ResolutionTree>();
   const searched = new Set<string>();
   const selected = new Set<ResolutionEntry>();
+  const direct = new Set<ResolutionEntry>();
   const pending = roots.map(root => ({ directory: physicalPath(root), inherited: true }));
   for (let index = 0; index < pending.length; index++) {
     let { directory, inherited } = pending[index];
@@ -39,7 +41,7 @@ export async function resolutionInputs(roots: string[], io: ResolutionIO = { sta
     for (;;) {
       const tree = await reachable(join(directory, "node_modules"), true);
       if (tree !== null && !trees.has(tree)) {
-        const input: ResolutionTree = { path: tree, entries: [], selected: [], inherited };
+        const input: ResolutionTree = { path: tree, entries: [], selected: [], direct: [], inherited };
         trees.set(tree, input);
         const add = async (entry: string, kind: ResolutionEntry["kind"]): Promise<void> => {
           const landing = await reachable(join(tree, entry));
@@ -64,10 +66,18 @@ export async function resolutionInputs(roots: string[], io: ResolutionIO = { sta
         const info = await infoAt(item.landing);
         if (info === null) continue;
         visible.add(item.entry);
+        if (inherited && !direct.has(item)) { direct.add(item); input!.direct.push(item); }
         if (!selected.has(item)) {
           selected.add(item);
           input!.selected.push(item);
-          pending.push({ directory: info.isDirectory() ? item.landing : dirname(item.landing), inherited: false });
+          if (item.kind === "package") {
+            const planned = consumerLanding ? await consumerLanding(item) : item.landing;
+            const landing = planned === null ? null : await reachable(planned);
+            const consumerInfo = landing === null ? null : await infoAt(landing);
+            if (landing !== null && consumerInfo !== null) {
+              pending.push({ directory: consumerInfo.isDirectory() ? landing : dirname(landing), inherited: false });
+            }
+          }
         }
       }
       const parent = dirname(directory);

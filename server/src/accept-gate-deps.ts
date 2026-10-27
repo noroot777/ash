@@ -5,7 +5,7 @@ import { copyLink, insideTree } from "./accept-gate-tree.js";
 import { DEPENDENCY_DIRS } from "./accept-gate-dirs.js";
 import { copyTree, linkMismatch, type OwnedPackage, type Relocation } from "./accept-gate-relocate.js";
 import { resolutionInputs } from "./accept-gate-resolution.js";
-import { projectSources, type ProjectSources } from "./accept-gate-project.js";
+import { projectSources, type ProjectSources, type UnknownSource } from "./accept-gate-project.js";
 
 // 门禁快照冻住的是**源码**；依赖是 lockfile 的产物，按产物对待。
 //
@@ -335,13 +335,14 @@ export function declaresWorkspace(dep: string, workspace: WorkspacePackages): bo
  * 本仓 47501 条目 / 1975 目录 / 37 条链，实测 166 ms，对照旧的全量字节摘要一遍 6892 ms。
  */
 export async function linksIntoSource(treeRoot: string, realRoot: string): Promise<string | null> {
+  const project = await projectSources(realRoot);
   const walk = async (sub: string): Promise<string | null> => {
     for (const entry of await readdir(join(treeRoot, sub), { withFileTypes: true }).catch(() => [])) {
       const path = sub === "" ? entry.name : join(sub, entry.name);
       if (entry.isSymbolicLink()) {
         const landing = await realpath(join(treeRoot, path)).catch(() => null);
         // 落在树内部的链是正常的（包之间互相引用）；落在项目源码上的才是「借出去就等于没隔离」。
-        if (landing !== null && insideTree(realRoot, landing) && !insideTree(treeRoot, landing)) return path;
+        if (landing !== null && !insideTree(treeRoot, landing) && (await project.locate(landing)).kind !== "external") return path;
       } else if (entry.isDirectory()) {
         const found = await walk(path);
         if (found !== null) return found;
@@ -386,9 +387,9 @@ export async function relocationFor(root: string, target: string, dep: string): 
  *
  * 这是**来源身份**的唯一出处。npm 把 workspace 包和 `file:` 依赖都装成链，两者在路径形状和
  * package.json.name 上可以完全一样（实测反例见 accept-gate-relocate 顶部①），区别只在这一处：
- * resolved 按安装器原位置解读，再把来源与被冻结项目的仓库身份比较。同仓不同 worktree 通过 Git
- * common directory 对齐到同一相对源码位置；其它仓库的 workspace 也归外部，不因快照恰好放在
- * 那个仓库下面而变成自有包。路径后缀和包名都不是仓库身份。
+ * resolved 按安装器原位置解读。来源落在被冻结项目内时即是自有源码，目录自己带 .git 不改变来源；
+ * Git common directory 只用来对齐其它 worktree 中的同一源码位置。无关仓库的 workspace 归外部，
+ * 不因快照恰好放在那里而变成自有包。读不出的身份单独保留元数据位置，不伪装成安装记录缺项。
  *
  * 读不到记录就回空：那时一条都不改写。「不改写」在隔离失效时会被 linkMismatch 当场抓住并让门禁
  * 失败，而「改错」是把被测代码换成另一份还报绿——两种错的代价差着一个量级。
@@ -402,15 +403,16 @@ export type RecordedLinks = {
   owned: OwnedPackage[];
   /** 记录说装自项目外的包入口及其真实包根；派生命令通过包内落点共享来源身份。 */
   external: OwnedPackage[];
+  unknown: (OwnedPackage & { location: UnknownSource })[];
 };
 
 export async function recordedLinks(treeRoot: string, dep: string, project: ProjectSources, originRoot = treeRoot): Promise<RecordedLinks> {
   const raw = await readFile(join(treeRoot, ".package-lock.json"), "utf8").catch(() => null);
-  if (raw === null) return { owned: [], external: [] };
+  if (raw === null) return { owned: [], external: [], unknown: [] };
   let packages: Record<string, unknown> = {};
   try {
     packages = (JSON.parse(raw) as { packages?: Record<string, unknown> }).packages ?? {};
-  } catch { return { owned: [], external: [] }; }
+  } catch { return { owned: [], external: [], unknown: [] }; }
   const installationRoot = await realpath(dirname(originRoot)).catch(() => dirname(originRoot));
   // 键前缀取**登记名**而不是 realpath 后的 basename:依赖根自己是条链时(pnpm 的
   // `node_modules -> .store` 就是这个形状)realpath 后的 basename 是 `.store`,拼出来的前缀
@@ -418,6 +420,7 @@ export async function recordedLinks(treeRoot: string, dep: string, project: Proj
   const prefix = `${basename(dep).split(sep).join("/")}/`;
   const owned: OwnedPackage[] = [];
   const external: OwnedPackage[] = [];
+  const unknown: RecordedLinks["unknown"] = [];
   for (const [key, value] of Object.entries(packages)) {
     const record = value as { link?: unknown; resolved?: unknown };
     if (record.link !== true || typeof record.resolved !== "string" || !key.startsWith(prefix)) continue;
@@ -433,8 +436,9 @@ export async function recordedLinks(treeRoot: string, dep: string, project: Proj
     const source = { entry, inside: location.kind === "owned" ? location.inside : record.resolved.split("/").join(sep), landing };
     if (location.kind === "external") external.push(source);
     else if (location.kind === "owned") owned.push(source);
+    else unknown.push({ ...source, location });
   }
-  return { owned, external };
+  return { owned, external, unknown };
 }
 
 /** 只要自有包那一格的调用方（搬运改写）用这个。 */
