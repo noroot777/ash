@@ -34,7 +34,21 @@ import type { StopSettle } from "./runs.js";
  *    (`bindTurnToken`),所以「库里的令牌」和「内存里的这一轮」说的是同一件事。
  */
 export type TurnReview = { run: string; round: number };
-export type TurnIdentity = { role: string; review: TurnReview | null; token: string | null };
+export type TurnIdentity = {
+  role: string;
+  review: TurnReview | null;
+  token: string | null;
+  /**
+   * 这把锁是**哪一刻**占下的（`Date.now()`）。占位转正(`reclaimTurn`)沿用原值 —— 转正不是
+   * 重新占一次,把它刷新会让一把已经占了十分钟的锁每次转正都显得崭新。
+   *
+   * 它只有一个用途:判「这把锁还有没有主」。幽灵锁(占着、却再没有任何人会来释放)在瞬时
+   * 快照里和「正常起跑中」长得一模一样 —— `handles` 是空的(claim 排在 trackRun 之前)、
+   * 令牌也还没绑(`bindTokenTurn` 排在它之后),两者的唯一区别就是**这个状态持续了多久**。
+   * 回收判据与阈值住在 turn-lock-reclaim.ts。
+   */
+  claimedAt: number;
+};
 
 /**
  * **起这一轮的人是谁、为哪一次审查而起** —— 一个对象,不是两个各自可缺的字段。
@@ -124,7 +138,7 @@ export function takeStartFreeze(taskId: string): StopSettle | null {
  */
 export function claimTurn(taskId: string, role = "single", review: TurnReview | null = null): boolean {
   if (turns.has(taskId)) return false;
-  turns.set(taskId, { role, review, token: null });
+  turns.set(taskId, { role, review, token: null, claimedAt: Date.now() });
   return true;
 }
 
@@ -177,7 +191,8 @@ export function reclaimTurn(taskId: string, role: string, review?: TurnReview | 
   const held = turns.get(taskId);
   if (!held) throw new Error(`reclaimTurn(${taskId}) without holding the turn`);
   // `review` 省略 = 沿用占位时交代的那一份(占位转正不该把它抹掉);显式传 null 才是清掉。
-  turns.set(taskId, { role, review: review === undefined ? held.review : review, token: held.token });
+  // `claimedAt` 沿用:转正接的是同一把锁,不是新占一次(见 `TurnIdentity.claimedAt`)。
+  turns.set(taskId, { role, review: review === undefined ? held.review : review, token: held.token, claimedAt: held.claimedAt });
 }
 
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
@@ -288,6 +303,38 @@ function endTurn(taskId: string): void {
       console.error(`[ash] after-turn hook failed for ${taskId}:`, error);
     }
   }
+}
+
+/**
+ * 此刻所有被占着的回合锁的**只读快照**(含占用时刻与角色)。
+ *
+ * 给幽灵锁巡检用(turn-lock-reclaim.ts)。导出快照而不是导出那张 Map:回收方只许按判据
+ * 读与释放,不许顺手改别人这一轮的身份。
+ */
+export function heldTurns(): Array<TurnIdentity & { taskId: string }> {
+  return [...turns].map(([taskId, identity]) => ({ taskId, ...identity }));
+}
+
+/**
+ * **强制**放掉一把回合锁 —— 给「这把锁已经没有主了」那一种(幽灵锁)收尾用。
+ *
+ * 和 `releaseTurn` 的差别只在调用者的身份:`releaseTurn` 是**持有者自己**在 finally 里还锁;
+ * 这一条是**旁人**判定「原持有者已经不存在了」之后替它还。所以它返回被拔掉的那份身份 ——
+ * 回收方要把「拔掉的是谁、占了多久」如实写进日志和任务时间线,不许静默。
+ *
+ * ⚠ 判据不在这里。这个函数不问「该不该拔」,拔错一把正在起跑的锁 = 同一个任务起两个回合。
+ * 判据与阈值只许住在 turn-lock-reclaim.ts 那一处(它要同时问进程登记册,依赖方向不许反过来)。
+ *
+ * 和 `releaseTurn` 一样会跑 `afterTurn` 回调:幽灵锁底下往往正压着一串
+ * 「等这一轮跑完再送」的交接(排队消息投递、队列补推),它们跟着这把锁一起被冻住了 ——
+ * 拔锁而不放它们走,任务照旧停在原地。
+ */
+export function forceReleaseTurn(taskId: string): TurnIdentity | null {
+  const held = turns.get(taskId);
+  if (!held) return null;
+  startFreeze.delete(taskId);
+  endTurn(taskId);
+  return held;
 }
 
 /** 任务空着就立刻执行，正在跑就排到它这一轮退出之后。 */

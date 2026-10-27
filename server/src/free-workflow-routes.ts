@@ -11,6 +11,7 @@ import {
   startManualFreeReviewRepair,
 } from "./free-workflow.js";
 import { startFreeReviewDebate, submitDebateStatement } from "./free-review-debate.js";
+import { noteRejectedUserAction } from "./user-action-rejection.js";
 import {
   disputeFreeReview,
   disputeInputOf,
@@ -89,7 +90,13 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
     try { return c.json(await startFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>(), { holdTurn: true, actor: actorOf(c) }), 201); }
-    catch (error) { return c.json(errorBody(error), 409); }
+    catch (error) {
+      // 挡回的那一刻往时间线写一条:只弹 toast 的话,用户刷新页面后看不出「点过、没成、
+      // 为什么」—— 2026-10-26 他因此两次误判(以为按钮坏了 / 以为任务已经跑完)。
+      const body = errorBody(error);
+      await noteRejectedUserAction(c.req.param("id"), "派审查", body.error);
+      return c.json(body, 409);
+    }
   });
   api.post("/tasks/:id/free-workflow/post-merge-review", async (c) => {
     const blocked = await blockedByHandoff(c);

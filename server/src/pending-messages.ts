@@ -36,7 +36,7 @@ import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { releaseTurn, turnSourceReview, whenTurnIdle } from "./runs.js";
 import type { TurnSource } from "./runs.js";
-import { forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, settleBusyAgain } from "./pending-delivery-timing.js";
+import { forgetStalled, forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, noteStalledPending, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
@@ -174,6 +174,7 @@ const inFlight = new Set<string>();
 function forgetDeliveryBookkeeping(messageId: string): void {
   forgetRedelivery(messageId);
   forgetTiming(messageId);
+  forgetStalled(messageId);
 }
 
 // 抢下之后最终没能送出去:把租约还回去(托盘里它压根没消失过),下一次触发再送。
@@ -291,6 +292,27 @@ export function deliverPendingMessages(taskId?: string): Promise<void> {
   return next;
 }
 
+// 判了「等」的那一轮,到底在等什么 —— 给滞留告警组装一句用户读得懂的话。
+// `deliveryVerdict` 的 wait 分支刻意不带 reason(它是纯判定,不负责措辞),而这几样正是
+// 调用处刚刚查出来的,顺手拼起来比让判定多返回一个字段便宜。
+function waitReason(
+  task: { status: string; mode: string | null } | null,
+  blockers: { queueBlocked: boolean; groupPaused: boolean },
+): string {
+  if (!task) return "读不到任务当前状态";
+  if (blockers.groupPaused) return "任务所在分组已暂停";
+  if (task.status === "running") return "任务正在运行，等它这一轮结束";
+  // queued 单独说:它既可能是正常排队,也可能是一具没人回滚的占位遗留 —— 后者正是
+  // 2026-10-26 那次卡死的形态,所以措辞里要给出下一步该看哪里。
+  if (task.status === "queued") {
+    return blockers.queueBlocked
+      ? "任务排队中，前面还有未完成或正在运行的任务"
+      : "任务停在「排队中」，但队列里没有别的任务在跑；如果它长时间不动，多半是回合占位没人回滚";
+  }
+  if (blockers.queueBlocked) return "同一队列里还有未完成或正在运行的任务";
+  return `任务当前状态（${task.status}）还不适合投递`;
+}
+
 async function scanPendingMessages(taskId?: string): Promise<void> {
   // 进程正在收尾(测试关库、server 退出)时直接收手。这条链路有好几个 fire-and-forget
   // 的触发源(验收锁放开那一推、重投定时器),关库之后它们照样会醒一次,然后刷一串
@@ -352,6 +374,10 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。
         noteBusyAgain(m.id, at.getTime());
+        // 「等」是正常的,**一直等**不是:久久发不出去要出声并留痕,否则它和「根本没这条
+        // 消息」在日志与界面上长得一模一样(见 noteStalledPending)。判定本身不带 reason,
+        // 在这里按刚查到的那几样组装一句人话 —— 用户想知道的就是「在等什么」。
+        noteStalledPending(m, waitReason(t, { queueBlocked, groupPaused }), at.getTime());
         continue;
       }
       if (verdict.action === "cancel") {
@@ -394,6 +420,10 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
           const claim = await claimQueueSeat(m.taskId);
           if (!claim.ok) {
             noteBusyAgain(m.id, at.getTime());
+            // 同 wait 分支:认领不到执行占位也是一种「一直发不出去」,久了要说出来。
+            noteStalledPending(m, claim.transient
+              ? "队列占位读写失败，正在重试"
+              : "同一队列里还有未完成或正在运行的任务", at.getTime());
             continue;
           }
           seat = claim.seat ?? undefined;

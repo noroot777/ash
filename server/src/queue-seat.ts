@@ -148,6 +148,16 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
 
 function makeSeat(taskId: string, prevStatus: string): QueueSeat {
   let released = false;
+  const rollback = async (): Promise<void> => {
+    try {
+      const cur = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+      if (cur?.status === "queued") {
+        await setTaskStatus(taskId, prevStatus as Parameters<typeof setTaskStatus>[1]);
+      }
+    } catch {
+      /* 回滚失败只能留给重启 reconcile */
+    }
+  };
   return {
     taskId,
     prevStatus,
@@ -157,15 +167,21 @@ function makeSeat(taskId: string, prevStatus: string): QueueSeat {
       // 回合锁被人占着 = 有人正拿着这个占位真正起跑,它的结算会覆盖状态,这里不动;
       // 锁空着才查状态回滚 —— 把别人正要跑的任务翻回终态,结算钩子会放行下一个成员,
       // 反而造出双跑。
-      if (isTurnClaimed(taskId)) return;
-      try {
-        const cur = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-        if (cur?.status === "queued") {
-          await setTaskStatus(taskId, prevStatus as Parameters<typeof setTaskStatus>[1]);
-        }
-      } catch {
-        /* 回滚失败只能留给重启 reconcile */
+      //
+      // **但「这一刻不动」不等于「从此不管」。** 旧版这里直接 return,于是只要释放那一瞬
+      // 恰好有人占着锁(哪怕是 PATCH status 那种几毫秒的预占,更别说一把幽灵锁),这个
+      // queued 占位就**永远没人回滚了**:任务停在「排队中」,投递判定永远是「等它空下来」,
+      // 用户那句话静静躺在托盘里(2026-10-26 实测 70+ 分钟,日志一声不吭)。所以改成排到
+      // 锁释放之后再看一眼 —— 那时要么状态已被真实结算覆盖(回滚自然是 no-op),要么它确实
+      // 还孤零零停在 queued,正是该收拾的那一种。
+      //
+      // `void` 不 await:本函数可能在队列认领的临界区内被调用,await 一个会触发
+      // advanceQueue 的回滚就会死等自己(见模块头的 ⚠)。
+      if (isTurnClaimed(taskId)) {
+        whenTurnIdle(taskId, () => void rollback());
+        return;
       }
+      await rollback();
     },
   };
 }

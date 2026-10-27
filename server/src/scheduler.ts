@@ -4,7 +4,7 @@ import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
+import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask, whenTurnIdle } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 
@@ -185,7 +185,16 @@ export async function reclaimStrandedSeat(
   opts?: { repush?: "always" | "stranded" | "never" },
 ): Promise<void> {
   const repush = opts?.repush ?? "stranded";
-  if (isTurnClaimed(taskId)) return;
+  // 锁被人占着 = 有人正拿着这个占位真正起跑,它的结算会覆盖状态,现在不能动。**但也不能
+  // 就此不管**:旧版这里直接 return,于是释放那一瞬恰好有人占锁(或者占着它的是一把幽灵锁)
+  // 时,这具 queued 遗留就永远没人收 —— 任务永久「排队中」,正是 2026-10-26 那次卡死的
+  // 下游一环。排到锁释放之后再看一眼:那时状态要么已被真实结算覆盖(本函数自然是 no-op),
+  // 要么确实还孤零零停在 queued。幂等 + 收敛(锁总会释放,或被 turn-lock-reclaim 的巡检
+  // 回收),多挂几次最多多跑几次空转判定。
+  if (isTurnClaimed(taskId)) {
+    whenTurnIdle(taskId, () => void reclaimStrandedSeat(taskId, queueId, prevStatus, opts));
+    return;
+  }
   try {
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     const stranded = row?.status === "queued";
