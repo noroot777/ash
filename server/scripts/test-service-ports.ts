@@ -7,13 +7,17 @@
  * 形状(用户 2026-10-26 报的「启动了按钮却没变成停止」),ash 按进程归属一个线索都找不到,
  * 只剩服务自己打印的那句 `http://127.0.0.1:<port>`。
  *
+ * 这个文件管**ash 自己动手**那条路(停止命令留空)。用户自己写了停止命令的那条路在
+ * test-service-ports-script.ts,真进程夹具两边共用 test-service-ports-fixtures.ts
+ * (全局约定:单文件不超过 700 行)。
+ *
  * 下面这些都必须成立 —— 除了 ① 之外,每一条背后都有一次自由审查的实锤:
  *   ① 那句话被记下来、端口还听着就等于「服务开着」(按钮该是停止),点停止真能杀掉它;
  *   ② **端口只是「上哪儿找」,不是「可以杀」** —— 授权靠环境里那枚启动记号(ASH_LAUNCH_ID)。
  *      没记号的住户一根汗毛都不许动,哪怕它就坐在同一个进程组里(E1:pgid 不是血缘证据);
  *   ③ **停止结果必须与终态一致** —— 杀掉了一部分不算停止,脚本 exit 0 也不算停止(E2);
  *   ④⑤ 认端口(含流式切块等价)和探测三态**不需要真进程**,按行数拆去
- *      test-service-ports-scan.ts 了(全局约定:单文件不超过 700 行),断言一字未改;
+ *      test-service-ports-scan.ts 了,断言一字未改;
  *   ⑥ **「端口都让出来了」不等于「这次启动起来的东西都停了」**:同组里核不上归属的号、
  *      以及超过记录额度没能收进来的端口,都要如实留在账上,不许被静默核销(发现 2);
  *   ⑦ 生命周期只有**一个**判据:启动幂等、停止、重启、容量、回收全认它。不打印网址的
@@ -32,21 +36,26 @@
  *      核不上(第 4 轮审查发现 2 实测:只让 `ps -E` 退非零,服务活着却被报成已停止)。
  *   ⑬ **发现即落账**:这一趟发现的责任不许跟着失败分支一起消失。下一遍监听者已经死了,
  *      同组那个工人再也不会被发现,端口一空就判停净(第 5 轮审查发现 1 实测);
- *   ⑭ **停止命令只收掉监听者也不算停净**:端口空了只说明监听者走了,脚本这条路我们不插手,
- *      所以要拿停止**之前**照的成员相去比(同上)。
+ *   ⑯ **一张相不够用**:TERM 的 handler 可以现 fork 一个新成员再退出监听,那个号出生在
+ *      照相之后。只认第一张相的话端口一空就判停净,而它还在跑(第 6 轮审查 E2 实测:
+ *      ppid=1、pgid 仍是原来那组、带着这次启动的记号)。所以动手之后必须**重新收集**,
+ *      收到不动点为止。
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import { IS_WINDOWS } from "../src/platform.js";
-import { listeningPids, probeOwnedPorts, probePorts, stopByPorts } from "../src/service-ports.js";
+import { probeOwnedPorts, probePorts, stopByPorts } from "../src/service-ports.js";
 import { HAS_PROC } from "../src/terminal-process-tree.js";
 import { terminalSessions } from "../src/terminal.js";
 import { TerminalWatcher } from "../src/terminal-session-watch.js";
 import { restartCommand, startCommand, stopCommand, type RunnableCommand } from "../src/terminal-commands.js";
+import {
+  alive, cleanup, cwd, daemonScript, freePort, leftoversOf, listening, outside, pidIn,
+  service, serviceSession, strays, waitFor,
+} from "./test-service-ports-fixtures.js";
 
 if (IS_WINDOWS) {
   // 端口这一档在 Windows 上整档不启用(断言在 test-service-ports-scan.ts),所以下面这些
@@ -55,111 +64,8 @@ if (IS_WINDOWS) {
   process.exit(0);
 }
 
-const cwd = realpathSync(mkdtempSync(join(tmpdir(), "ash-ports-")));
-const outside = realpathSync(mkdtempSync(join(tmpdir(), "ash-outside-")));
-/** 整场跑完都要确认没留下任何活口。 */
-const strays = new Set<number>();
-
-/** 一个只管听端口、把自己 pid 写进文件的小服务。 */
-writeFileSync(join(cwd, "serve.js"), `
-const http = require("node:http");
-const fs = require("node:fs");
-const [port, pidfile, worker, workerPort] = process.argv.slice(2);
-// worker:再 fork 一个**同进程组**的工人,但用 env -i 洗掉环境 —— 它是记号断掉的那一类
-// (service-ports.ts 顶部写明的已知空洞)。回归要钉住:这种成员宁可停不掉,也不许连坐。
-// workerPort 给了的话它**自己也听一个端口**:那样回头核端口时它核不上归属,整次停止落在
-// 「没法确认」那一档 —— ⑬ 要的就是这个失败分支。
-if (worker) {
-  const { spawn } = require("node:child_process");
-  const body = workerPort
-    ? "const h=require('node:http'),f=require('node:fs');const a=process.argv.slice(1);h.createServer((_,r)=>r.end('w')).listen(Number(a[1]),'127.0.0.1',()=>f.writeFileSync(a[0],String(process.pid)));"
-    : "fs=require('node:fs');fs.writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)";
-  const args = workerPort ? [worker, workerPort] : [worker];
-  const child = spawn("/usr/bin/env", ["-i", process.argv[0], "-e", body, ...args], { stdio: "ignore" });
-  child.unref();
-}
-http.createServer((_, res) => res.end("ok")).listen(Number(port), "127.0.0.1", () => {
-  fs.writeFileSync(pidfile, String(process.pid));
-});
-`);
-
-/**
- * 一个什么都不打印、也不听端口的常驻进程:detached + stdio ignore,父进程立刻退出。
- * ash 手里**一条线索都没有** —— 进程归属断了、端口也没有。这一类只能靠「配了停止命令 +
- * 上次正常退出又没被停过」认它还开着(openSession 的第四档)。
- */
-writeFileSync(join(cwd, "quiet.js"), `
-const { spawn } = require("node:child_process");
-const [pidfile] = process.argv.slice(2);
-const child = spawn(process.argv[0], [
-  "-e",
-  "const fs=require('node:fs');fs.writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)",
-  pidfile,
-], { detached: true, stdio: "ignore" });
-child.unref();
-`);
-
-/** 没人用的端口:先听一下再让开,拿到号码。 */
-async function freePort(): Promise<number> {
-  const net = await import("node:net");
-  return await new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.on("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const port = (probe.address() as { port: number }).port;
-      probe.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitFor(label: string, check: () => boolean | Promise<boolean>, ms = 15_000): Promise<void> {
-  const deadline = Date.now() + ms;
-  for (;;) {
-    if (await check()) return;
-    if (Date.now() > deadline) throw new Error(`等不到:${label}`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-}
-
-const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const pidIn = (file: string) => Number(readFileSync(file, "utf8").trim());
-const listening = async (port: number) => {
-  const found = await listeningPids(port);
-  return found.ok ? found.pids : [];
-};
-/**
- * 账上还活着的号。**返回 null 表示这笔账根本不是 unresolved** —— 跟「号都退了、但那句
- * 「没能确认停净」还得留着」是两回事(第 3 轮审查发现 1:空列表以前被读成「干净」)。
- */
-const leftoversOf = (projectId: string): number[] | null => {
-  const stop = serviceSession(projectId)?.stop;
-  return stop && stop.kind === "unresolved" ? stop.pids : null;
-};
-
-const serviceSession = (projectId: string) => terminalSessions.listCommandSessions()
-  .filter((session) => session.projectId === projectId && session.commandId === SERVICE_COMMAND_ID)
-  .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
-
-/**
- * 一条守护化的启动脚本:双 fork(detached = setsid)+ stdio 全丢掉,父进程立刻退出,
- * 服务挂到 PID 1 名下 —— 与 kb.sh 的 daemonize() 同形。最后自报端口,那是唯一的线索。
- */
-function daemonScript(port: number, pidfile: string, extra: string[] = [], worker?: string, workerPort?: number): string {
-  const tail = worker ? [worker, ...(workerPort ? [String(workerPort)] : [])] : [];
-  const args = ["serve.js", String(port), pidfile, ...tail].map((arg) => `"${arg}"`).join(",");
-  return [
-    `node -e 'const {spawn}=require("node:child_process");`
-    + `const c=spawn(process.argv[1],[${args}],{detached:true,stdio:"ignore"});c.unref();'`
-    + ` ${process.execPath}`,
-    ...extra,
-    `echo "[svc] 已启动 http://127.0.0.1:${port}"`,
-  ].join("\n");
-}
-
-const service = (command: string, stopScript: string | null = null): RunnableCommand =>
-  ({ id: SERVICE_COMMAND_ID, name: "服务", command, restartCommand: null, stopCommand: stopScript });
-
 try {
+
   // ── ① 守护化的服务:启动脚本退了,端口还听着 = 开着,而且真能停掉 ───────────────
   const port = await freePort();
   const pidfile = join(cwd, "service.pid");
@@ -638,39 +544,58 @@ try {
     strays.delete(pairWorker);
   }
 
-  // ── ⑭ 停止命令只收掉监听者,也不算这次启动停净了 ────────────────────────────────
-  //    脚本这条路 ash 不替用户强杀(他写那段脚本正是不想让 ash 直接 kill),于是默认停止那边
-  //    「枚举同组成员」的覆盖拿不到 —— 必须拿停止**之前**照的成员相来比:端口空了只说明
-  //    监听者走了,它 fork 的工人从来没进过账(发现 1)。
-  {
-    const scriptPort2 = await freePort();
-    const litePidfile = join(cwd, "lite.pid");
-    const liteWorker = join(cwd, "lite-worker.pid");
-    assert.equal(
-      (await startCommand("ports14", cwd, service(daemonScript(scriptPort2, litePidfile, [], liteWorker)))).status,
-      201,
-    );
-    await waitFor("守护进程听上了端口", async () => (await listening(scriptPort2)).length > 0);
-    const litePid = pidIn(litePidfile);
-    strays.add(litePid);
-    await waitFor("洗掉环境的工人也起来了", () => { try { return pidIn(liteWorker) > 0; } catch { return false; } });
-    const liteWorkerPid = pidIn(liteWorker);
-    strays.add(liteWorkerPid);
-    await waitFor("启动脚本退出", () => serviceSession("ports14")?.exitCode !== null);
-    // 一条**只收监听者**的停止命令:它 exit 0,端口也真的让出来了。
-    const partial = await stopCommand("ports14", SERVICE_COMMAND_ID, {
-      script: `kill -9 ${litePid}`, cwd, timeoutMs: 5_000,
-    }, { portGraceMs: 300 });
-    assert.equal(partial.status, 200);
-    await waitFor("监听者被脚本收掉了", () => !alive(litePid));
-    const partialBody = partial.body as { stopped: boolean; unresolved?: number[]; notice?: string };
-    assert.deepEqual(partialBody.unresolved, [liteWorkerPid], "停止前在跑、现在还活着的成员要落进账");
-    assert.match(partialBody.notice ?? "", /停止命令跑完了/, "要跟用户说清是他那条脚本没收干净");
-    assert.deepEqual(leftoversOf("ports14"), [liteWorkerPid], "刷新回来还看得见");
-    process.kill(liteWorkerPid, "SIGKILL");
-    strays.delete(litePid);
-    strays.delete(liteWorkerPid);
-  }
+
+  // ── ⑯ 一张相不够用:TERM 的 handler 现 fork 的新成员也要收掉 ───────────────────────
+  //    第 6 轮审查 E2 实测的形状:服务收到 TERM 后**先 fork 一个同组工人**再退出监听。
+  //    那个号出生在我们照相之后,所以只认第一张相的话它一辈子进不了账 —— 端口随即空了,
+  //    于是落 verified、界面退回启动按钮,而它还在跑(ppid=1、pgid 仍是原来那组、带着这次
+  //    启动的记号,也就是说**归属核得出来**,不是「不敢动」那一档)。
+  //    修法与 terminateSession 同判据:动手之后**重新收集**,收到不动点(closeGroup)。
+  writeFileSync(join(cwd, "fork-on-term.js"), `
+const http = require("node:http");
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+const [port, pidfile, heirfile] = process.argv.slice(2);
+http.createServer((_, res) => res.end("ok")).listen(Number(port), "127.0.0.1", () => {
+  fs.writeFileSync(pidfile, String(process.pid));
+});
+process.on("SIGTERM", () => {
+  // 不传 detached:它**留在同一个进程组**里(父退出后 ppid 变 1、pgid 不变),而且
+  // 继承环境 —— 带着这次启动的记号,属于「核得出归属、可以动手」那一类。
+  const heir = spawn(process.argv[0], [
+    "-e",
+    "const fs=require('node:fs');fs.writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)",
+    heirfile,
+  ], { stdio: "ignore" });
+  heir.unref();
+  // 等它把 pid 写出来再退,好让用例拿到号码(真实服务里这一步是「交接给接班进程」)。
+  setTimeout(() => process.exit(0), 400);
+});
+`);
+  const termPort = await freePort();
+  const termPidfile = join(cwd, "fork-on-term.pid");
+  const heirPidfile = join(cwd, "heir.pid");
+  assert.equal(
+    (await startCommand("ports16", cwd, service(
+      daemonScript(termPort, termPidfile, [], heirPidfile, undefined, "fork-on-term.js"),
+    ))).status,
+    201,
+  );
+  await waitFor("守护进程听上了端口", async () => (await listening(termPort)).length > 0);
+  const termPid = pidIn(termPidfile);
+  strays.add(termPid);
+  await waitFor("启动脚本自己退出(守护化形状)", () => serviceSession("ports16")?.exitCode !== null);
+  // 默认停止(没配停止命令)。宽限要够那 400ms,否则 TERM 还没来得及生出接班进程就被 KILL 了,
+  // 那样这个用例就什么都没在验。
+  const closed = await stopCommand("ports16", SERVICE_COMMAND_ID, null, { portGraceMs: 1_500 });
+  assert.equal(closed.status, 200, "停止要成功");
+  assert.deepEqual(closed.body, { stopped: true }, "收到不动点了就该是干干净净的「已停止」");
+  await waitFor("TERM 期间新生的接班进程也被收掉了", () => { try { return !alive(pidIn(heirPidfile)); } catch { return false; } });
+  const heirPid = pidIn(heirPidfile);
+  assert.ok(!alive(heirPid), `接班进程 ${heirPid} 必须被重新收集那一轮收掉`);
+  assert.equal(leftoversOf("ports16"), null, "都收干净了,账上不该挂着没核销的责任");
+  assert.equal(await probePorts([termPort]), "free", "端口要真的让出来");
+  strays.delete(termPid);
 
   // ── ⑩-关服 那一拍的同步收口也要盖到端口这一档 ─────────────────────────────────────
   //    `process.once("exit")` 里没有 await 可用(信号处理器直接 process.exit),所以这一步
@@ -690,8 +615,5 @@ try {
 
   console.log("service ports test passed");
 } finally {
-  terminalSessions.shutdown();
-  for (const pid of strays) { try { process.kill(pid, "SIGKILL"); } catch { /* 已经走了 */ } }
-  rmSync(cwd, { recursive: true, force: true });
-  rmSync(outside, { recursive: true, force: true });
+  cleanup();
 }

@@ -41,38 +41,42 @@
  * lsof 查无此人(退 1、空输出)和 lsof 自己坏了/超时是两件事,早先全被 catch 成空数组,
  * 于是「工具失灵」会被读成「端口空了 = 已经停净」(第 1 轮审查 E2)。所以探测一律三态:
  * `listening` / `free` / `unknown`,**unknown 不许当 free 用** —— 调用方据此拒绝宣称已停止。
+ *
+ * ── 这个文件只装「动手」 ─────────────────────────────────────────────────────────
+ *
+ * 「怎么问」(lsof / ps / `/proc`、三态探测、归属解析)在 `service-ports-probe.ts`,两边加
+ * 起来早超了单文件上限。判据仍以这篇文件头为准。
  */
-import { execFile, execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { promisify } from "node:util";
 import { IS_WINDOWS } from "./platform.js";
-import { HAS_PROC, LSOF_PATH, PS_PATH, processAlive, readProcessTableSync } from "./terminal-process-tree.js";
+import { processAlive, readProcessTableSync } from "./terminal-process-tree.js";
+import {
+  groupMembers, inspectPid, LAUNCH_ID_ENV, listeningPids, listeningPidsSync,
+  membersOfGroup, PORT_TIER_AVAILABLE, readLineage, readLineageSync, refusal,
+} from "./service-ports-probe.js";
+import type { Lineage, PortHolder } from "./service-ports-probe.js";
 // 认端口那一段(整条文本 + 流式)拆去 service-ports-scan.ts 了,调用点照旧从这儿引。
 export { createPortScanner, portsFromOutput } from "./service-ports-scan.js";
+// 「怎么问」那一半同理:调用点一律从这个文件引,不必知道它分了几个文件。
+export {
+  inspectPid, LAUNCH_ID_ENV, listeningPids, PORT_TIER_AVAILABLE, probeOwnedPorts, probePorts,
+} from "./service-ports-probe.js";
+export type {
+  OwnedPortProbe, OwnedPortState, PortHolder, PortProbe, PortState,
+} from "./service-ports-probe.js";
 import { MIN_PORT } from "./service-ports-scan.js";
-
-const run = promisify(execFile);
-
-/** 这次启动的记号落在哪个环境变量里。命令会话的 env 由 terminal.ts 注入。 */
-export const LAUNCH_ID_ENV = "ASH_LAUNCH_ID";
 
 const TERM_GRACE_MS = 3_000;
 const POLL_MS = 100;
-const PROBE_TIMEOUT_MS = 5_000;
 /** 一次 stopByPorts 的总时限:端口是逐个问 lsof 的,不能让一次停止无上限地拖着那把命令锁。 */
 const STOP_DEADLINE_MS = 30_000;
-
-/** 端口此刻的状态。**unknown 是独立一档**,不能折叠成 free(见文件头)。 */
-export type PortState = "listening" | "free" | "unknown";
-
-export type PortHolder = {
-  pid: number;
-  pgid: number;
-  command: string;
-  cwd: string | null;
-  /** 进程启动时刻(由 etime 反推,epoch ms)。只用于回显,不参与授权。 */
-  startedAt: number | null;
-};
+/**
+ * 「动手 → 重新收集」最多转几圈。
+ *
+ * 要有上限,因为**对面可以比我们快**:一个被杀就重生的看护进程(supervisor)能让这个循环
+ * 永远收不到不动点,而我们握着那把命令锁。转满还在冒新号就停手,如实记一笔「没能收到
+ * 不动点」—— 那是**没核销的责任**,不是成功。
+ */
+const MAX_CLOSE_ROUNDS = 3;
 
 export type PortStopOutcome = {
   killed: PortHolder[];
@@ -81,373 +85,201 @@ export type PortStopOutcome = {
   /** 探测没答上来的端口:既不能说它空了,也没人可杀。 */
   unknown: number[];
   /**
-   * 同组成员**枚举全了没有**。进程表问不出来时 groupMembers 只能退回「只认它自己」,那说明
-   * 「这次启动还有谁」这份清单本身不全 —— 跟端口超额是同一种残缺,得向上交接,不能让
-   * 「端口空了」替它作结论(第 5 轮审查发现 1)。
+   * 同组成员**枚举全了没有**。进程表问不出来、或者动手之后那一组还在冒新号(转满
+   * `MAX_CLOSE_ROUNDS` 也没收住),都说明「这次启动还有谁」这份清单不全 —— 跟端口超额是
+   * 同一种残缺,得向上交接,不能让「端口空了」替它作结论(第 5 轮审查发现 1)。
    */
   membersIncomplete: boolean;
   /**
-   * 动过手的进程组里**核不上归属、所以一个字都没动**的成员(此刻仍活着的那些)。
+   * 动过手之后**还活着、而这次启动的责任没核销**的那些号。两种成因,各自带着自己那句话:
    *
-   * 早先这些号是被 `filter` 静默丢掉的,于是「这几个端口让出来了」被升级成「这次启动起来
-   * 的东西都停了」(第 2 轮审查发现 2 实测:监听者被收掉、端口 free、界面显示已停止,而同组
-   * 那个 `env -i` 洗掉环境的采集 worker 还在跑)。不杀它是对的 —— 没有归属凭据;**但不能
-   * 顺手把它从账上划掉**:它是一笔没核销的责任,要原样报给用户。
+   *  · `ours=false` —— 核不上归属,所以一个字都没动。早先这些号是被 `filter` 静默丢掉的,
+   *    于是「这几个端口让出来了」被升级成「这次启动起来的东西都停了」(第 2 轮审查发现 2
+   *    实测:监听者被收掉、端口 free、界面显示已停止,而同组那个 `env -i` 洗掉环境的采集
+   *    worker 还在跑)。不杀它是对的 —— 没有归属凭据;**但不能顺手把它从账上划掉**。
+   *  · `ours=true`  —— 核实了是这次起来的,但 TERM 和 KILL 都没让它停下来。早先只有监听者
+   *    那一个号会进 `spared`,同组其它杀不掉的成员既不在 `killed` 也不在 `spared`,**从账上
+   *    整个消失了**(第 6 轮审查 F1)。
    */
-  leftovers: { pid: number; reason: string }[];
+  leftovers: LaunchMember[];
 };
 
-// ── 探端口 ────────────────────────────────────────────────────────────────────
-
-/** 端口探测的结果。`ok:false` = **没答上来**,与「没人听」是两件事(见文件头)。 */
-export type PortProbe = { ok: true; pids: number[] } | { ok: false; why: string };
-
-/**
- * 谁在听这个端口(只问 LISTEN,不管已建立的连接 —— 那些是客户端)。
- *
- * `exec` 只为回归留的注入口:真实 lsof 没法按需制造「超时」「用法错」这两种失灵,而
- * 「失灵不许读成端口空了」正是第 1 轮审查 E2 的根因,必须有用例钉住。生产调用一律用默认值。
- */
-export async function listeningPids(port: number, exec: typeof run = run): Promise<PortProbe> {
-  if (IS_WINDOWS) return { ok: false, why: "Windows 上不做端口兜底" };
-  if (!LSOF_PATH) return { ok: false, why: "这台机器上找不到 lsof" };
-  try {
-    const { stdout } = await exec(LSOF_PATH, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { timeout: PROBE_TIMEOUT_MS });
-    return { ok: true, pids: parsePids(String(stdout)) };
-  } catch (error) {
-    // lsof 查无此人时退 1 且不吭声 —— 那是「没人听」,不是故障。被超时杀掉(killed)、
-    // 起不来(ENOENT)、或者退 1 还带着 stderr(用法/权限错)都算**没答上来**。
-    const failure = error as { code?: unknown; killed?: boolean; stderr?: string; stdout?: string; message?: string };
-    if (failure.killed) return { ok: false, why: `lsof 查端口 ${port} 超时` };
-    if (failure.code === 1 && !(failure.stderr ?? "").trim()) return { ok: true, pids: parsePids(failure.stdout ?? "") };
-    return { ok: false, why: `lsof 查端口 ${port} 失败（${failure.stderr?.trim() || failure.message || "未知原因"}）` };
-  }
-}
-
-function parsePids(stdout: string): number[] {
-  return [...new Set(stdout.split("\n")
-    .map((line) => Number(line.trim()))
-    .filter((pid) => Number.isInteger(pid) && pid > 1))];
-}
-
-/**
- * 端口这一档**在这台机器上存不存在**。Windows 没有 lsof(也没有等价的「谁在听 + 按环境核
- * 归属」组合),整档短路在 listeningPids 第一行;POSIX 上 lsof 没装也一样。
- *
- * **「这一档不存在」与「这一次问不出来」是两件事**:后者必须当成「可能还在跑」(第 1 轮
- * 审查发现 2 —— 工具失灵被读成端口空了,界面把还在跑的服务说成已停止);前者只说明**这一档
- * 给不出证据**,该让判断落回别的线索。混成一件,Windows 上每条打印过网址的命令就会永远
- * 停不掉也起不动:probePorts 恒为 unknown,于是停止一律 502「状态查不出来」、启动一律
- * alreadyRunning(真机 192.168.1.187 验证前自查发现)。
- */
-export const PORT_TIER_AVAILABLE = !IS_WINDOWS && LSOF_PATH !== null;
-
-/**
- * 这些端口上现在还有没有人在听。三态合并的优先级是 **listening > unknown > free**:
- * 有人听就是开着;没人听但有端口没答上来,只能说「不知道」,绝不能报成已经停净。
- *
- * `probe` 同样只为回归留的注入口(见 listeningPids),生产调用用默认值。
- */
-export async function probePorts(
-  ports: Iterable<number>,
-  probe: (port: number) => Promise<PortProbe> = listeningPids,
-): Promise<PortState> {
-  let unknown = false;
-  for (const port of ports) {
-    const found = await probe(port);
-    if (!found.ok) { unknown = true; continue; }
-    if (found.pids.length) return "listening";
-  }
-  return unknown ? "unknown" : "free";
-}
-
-/**
- * 端口上坐着的**是不是这次启动起来的东西**。
- *
- * `PortState` 只回答「有没有人听」,而**生命周期该认的是归属** —— 这两件事被当成一件时,
- * 一条只打印了一行网址的命令(`echo http://127.0.0.1:5173`)会因为别人的 vite 恰好听着
- * 5173 而永远显示「运行中」:启动按钮不给起,停止按钮又停不掉它(那个监听者核不上归属,
- * 一个字都不许动),于是这条命令从此卡死(第 3 轮审查发现 3)。
- *
- * 归属证据与 `stopByPorts` 用的是**同一份**(环境里的启动记号,见文件头):
- *
- *   · `ours`     —— 至少一个监听者带着这次启动的记号:确定还在跑;
- *   · `unknown`  —— 有人听但核不上(lsof 没答上来 / 这条会话没有记号 / 读不到对方环境):
- *                   **不许读成「没在跑」**,保持悲观(文件头那条「查不到不等于没人听」);
- *   · `stranger` —— 有人听,而且**核实了不是这次起来的**:这次启动在端口这条线索上已经没了;
- *   · `free`     —— 没人听。
- *
- * 优先级 **ours > unknown > stranger > free**:一个端口确认是别人的,不能把另一个端口上
- * 核不上的那位一并核销掉。
- */
-export type OwnedPortState = "ours" | "unknown" | "stranger" | "free";
-
-export type OwnedPortProbe = {
-  state: OwnedPortState;
-  /** `unknown` 的由来,原样进给用户看的那句话。其余档为 null。 */
-  why: string | null;
-};
-
-export async function probeOwnedPorts(
-  ports: Iterable<number>,
-  token: string | null,
-  probe: (port: number) => Promise<PortProbe> = listeningPids,
-): Promise<OwnedPortProbe> {
-  let ours = false;
-  let stranger = false;
-  let why: string | null = null;
-  for (const port of ports) {
-    const found = await probe(port);
-    if (!found.ok) { why ??= found.why; continue; }
-    const holders = found.pids.filter((pid) => pid !== process.pid);
-    if (!holders.length) continue;
-    if (!token) {
-      why ??= `端口 ${port} 上有人在听，但这条会话没有启动记号（多半是 ash 重启前起的），核不上归属`;
-      continue;
-    }
-    const lineage = await readLineage(holders, token);
-    for (const pid of holders) {
-      const who = lineage.get(pid);
-      if (who === undefined) continue; // 刚才还在,现在没了
-      if (who === "ours") ours = true;
-      else if (who === "stranger") stranger = true;
-      else why ??= `端口 ${port} 上的 pid ${pid} ${refusal(who)}`;
-    }
-  }
-  if (ours) return { state: "ours", why: null };
-  if (why !== null) return { state: "unknown", why };
-  return { state: stranger ? "stranger" : "free", why: null };
-}
-
-/** `[[dd-]hh:]mm:ss` → 毫秒。ps 的 etime 与地区无关,比 lstart 好解析(本机是中文 locale)。 */
-function elapsedToMs(etime: string): number | null {
-  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(etime.trim());
-  if (!match) return null;
-  const [, days, hours, minutes, seconds] = match;
-  return ((((Number(days ?? 0) * 24 + Number(hours ?? 0)) * 60) + Number(minutes)) * 60 + Number(seconds)) * 1000;
-}
-
-export async function inspectPid(pid: number): Promise<PortHolder | null> {
-  if (IS_WINDOWS || !PS_PATH) return null;
-  try {
-    const { stdout } = await run(PS_PATH, ["-o", "pgid=,etime=,command=", "-p", String(pid)], { timeout: PROBE_TIMEOUT_MS });
-    const match = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(stdout.split("\n")[0] ?? "");
-    if (!match) return null;
-    const elapsed = elapsedToMs(match[2]);
-    return {
-      pid,
-      pgid: Number(match[1]),
-      command: match[3].trim(),
-      cwd: await processCwd(pid),
-      startedAt: elapsed === null ? null : Date.now() - elapsed,
-    };
-  } catch { return null; }
-}
-
-async function processCwd(pid: number): Promise<string | null> {
-  if (!LSOF_PATH) return null;
-  try {
-    const { stdout } = await run(LSOF_PATH, ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], { timeout: PROBE_TIMEOUT_MS });
-    const line = stdout.split("\n").find((row) => row.startsWith("n"));
-    return line ? line.slice(1) : null;
-  } catch { return null; }
-}
-
-// ── 归属:环境里的那枚记号 ─────────────────────────────────────────────────────
-
-/**
- * 一个号跟这次启动的关系。**两档「核不上」是分开的** —— 它们的成因完全不同,给用户的
- * 说法也不该一样:
- *
- *  · `unknown`    —— 问到了答案,但那份环境读不出来(多半不是当前用户的进程);
- *  · `unverified` —— **根本没问出答案**:ps 超时/起不来,或者它没打出这个号的那一行而这个号
- *    还活着。查询失灵不是「它已经退了」(第 4 轮审查发现 2),所以单独一档。
- *
- * 两档都不动它,也都不许折叠成「不在了」。
- */
-type Lineage = "ours" | "stranger" | "unknown" | "unverified";
-
-/** 一次 ps 读取的结果。`trusted=false` = 这次问话本身不可信,它的沉默不构成任何结论。 */
-type PsRead = { stdout: string; trusted: boolean };
-
-/**
- * 这些号带着这次启动的记号吗。**按平台读环境** —— 这一问没有跨平台的统一写法:
- *
- *  · **Linux**:直接读 `/proc/<pid>/environ`,NUL 分隔、逐项精确比对,没有任何边界启发式;
- *    读得到就是权威答案(有记号 = 这次的,没有 = 不是这次的),`EACCES` 才是「核不上」。
- *  · **macOS/BSD**:没有 `/proc`,只能 `ps -E`(把 exec 时那份环境一起打出来,所以双 fork
- *    + setsid 的守护进程照样核得到:实测 PPID=1、自成 sid,记号仍在)。
- *
- * 原先这一问对**所有**非 Windows 平台都发 `ps -E`。那是 macOS/BSD 的写法,Linux 的
- * procps-ng 直接拒绝它(第 2 轮审查发现 5 容器实测:procps-ng 4.0.2 退 1、stdout 空、
- * stderr `unsupported SysV option`),于是整条归属核验在 Linux 上**恒为失败** —— 默认停止
- * 永远报「核不上归属」,服务一个都停不掉。
- */
-async function readLineage(pids: number[], token: string): Promise<Map<number, Lineage>> {
-  const shortcut = lineageWithoutPs(pids, token);
-  if (shortcut) return shortcut;
-  let read: PsRead = { stdout: "", trusted: true };
-  try {
-    const { stdout } = await run(PS_PATH!, ["-E", "-o", "pid=,command=", "-p", pids.join(",")], { timeout: PROBE_TIMEOUT_MS });
-    read = { stdout, trusted: true };
-  } catch (error) {
-    read = { stdout: psStdout(error), trusted: psAnswered(error) };
-  }
-  return lineageFromPs(read, pids, token);
-}
-
-/**
- * 这次 ps **算不算答上话了**。名单里有号已经退出时 ps 退 1、把活着的那几条照样打出来,
- * 那是它的正常行为,结论可信;超时被杀、进程起不来(`ENOENT`/`EACCES`,错误码是字符串)
- * 则是这次问话本身失灵 —— 它一个字都没说,不能据此宣称任何号「已经退了」。
- */
-function psAnswered(error: unknown): boolean {
-  const failure = error as { code?: unknown; killed?: boolean; signal?: unknown };
-  if (failure.killed || failure.signal) return false;
-  return typeof failure.code === "number";
-}
-
-function psStdout(error: unknown): string {
-  return String((error as { stdout?: unknown }).stdout ?? "");
-}
-
-/**
- * `readLineage` 的**同步**版。只服务 server 退出那一拍:`process.once("exit")` 里没有
- * await 可用(terminal.ts 的 shutdown 因此整条是同步的),但同步 I/O 照样能跑 —— 判据、
- * 平台分支、解析全与异步版共用一套,只有「怎么问 ps」这一步不同。
- */
-function readLineageSync(pids: number[], token: string): Map<number, Lineage> {
-  const shortcut = lineageWithoutPs(pids, token);
-  if (shortcut) return shortcut;
-  let read: PsRead = { stdout: "", trusted: true };
-  try {
-    read = {
-      stdout: String(execFileSync(PS_PATH!, ["-E", "-o", "pid=,command=", "-p", pids.join(",")], {
-        timeout: PROBE_TIMEOUT_MS, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-      })),
-      trusted: true,
-    };
-  } catch (error) {
-    read = { stdout: psStdout(error), trusted: psAnswered(error) };
-  }
-  return lineageFromPs(read, pids, token);
-}
-
-/** 这几个号一律记成「核不上」。 */
-function unknownLineage(pids: number[]): Map<number, Lineage> {
-  return new Map(pids.map((pid) => [pid, "unknown" as Lineage]));
-}
-
-/** 不用问 ps 就能给出的答案(含 Linux 的 /proc 权威档)。返回 null = 得去问 ps。 */
-function lineageWithoutPs(pids: number[], token: string): Map<number, Lineage> | null {
-  if (!pids.length) return new Map();
-  if (IS_WINDOWS || !token) return unknownLineage(pids);
-  if (HAS_PROC) return lineageFromProc(pids, token);
-  if (!PS_PATH) return unknownLineage(pids);
-  return null;
-}
-
-/**
- * `ps -E` 那坨输出 → 逐号的归属结论。同步/异步两条路共用。
- *
- * **「名单里没有这一行」有两种成因,不能都读成「它已经退了」。** 早先这里是一句
- * `continue`,于是 ps 本身失灵(超时、退非零且一个字没打、输出被截断)时整张表是空的,
- * 上游 `probeOwnedPorts` 把「一个归属都没拿到」读成 free,默认停止于是对着一个还在听
- * 端口的服务返回「已停止」并落 verified —— 第 4 轮审查发现 2 用一个只让 `ps -E` 退非零的
- * 包装器实测到了这条路(服务活着、HTTP 照样应答,界面退回启动按钮)。这跟 lsof 那边
- * 「查不到不等于没人听」是同一条判据,只是换了个工具(文件头第三节)。
- *
- * 所以缺这一行时再问一次内核:**它还活着就是「核不上」**(unverified),确认不在了才当它
- * 退了。`processAlive` 用 `kill(pid, 0)`,对别人家的进程会 EPERM → false;但那种号活着时
- * ps 一定打得出它的行(ps 不分用户),所以这个洞落不到这条路上。这次问话本身不可信
- * (`trusted=false`)时更不必问 —— 它的沉默什么都证明不了。
- */
-function lineageFromPs(read: PsRead, pids: number[], token: string): Map<number, Lineage> {
-  const lineage = new Map<number, Lineage>();
-  const needle = `${LAUNCH_ID_ENV}=${token}`;
-  let current: number | null = null;
-  const text = new Map<number, string>();
-  for (const line of read.stdout.split("\n")) {
-    const head = /^\s*(\d+)\s+(.*)$/.exec(line);
-    if (head && pids.includes(Number(head[1]))) {
-      current = Number(head[1]);
-      text.set(current, head[2]);
-      continue;
-    }
-    if (current !== null) text.set(current, `${text.get(current) ?? ""}\n${line}`);
-  }
-  for (const pid of pids) {
-    const body = text.get(pid);
-    if (body === undefined) {
-      // 没打出这一行:确认不在了才算退出,否则这一问就是没答上来。
-      if (read.trusted && !processAlive(pid)) continue;
-      lineage.set(pid, "unverified");
-      continue;
-    }
-    const at = body.indexOf(needle);
-    if (at >= 0 && (at + needle.length === body.length || /\s/.test(body[at + needle.length]))) {
-      lineage.set(pid, "ours");
-      continue;
-    }
-    // 一个 `KEY=` 都没有 = 这条根本没打出环境(不是当前用户的进程),那是「核不上」而不是
-    // 「不是我们的」。两种都不动它,但说法要诚实。
-    lineage.set(pid, /\s[A-Z_][A-Z0-9_]*=/.test(body) ? "stranger" : "unknown");
-  }
-  return lineage;
-}
-
-/**
- * Linux:`/proc/<pid>/environ` 是**精确**的 —— NUL 分隔的 `KEY=VALUE` 列表,不用猜边界。
- * 读失败分两档:`ENOENT` = 这个号已经退出了(不用管),其余(多半 `EACCES`,不是当前用户的
- * 进程)= 核不上。读成功就是权威:有记号就是这次的,没有就**不是**这次的 ——
- * 包括 `env -i` 洗成空环境的那一类(macOS 的 `ps -E` 分不出「空环境」和「不给看」,
- * 只能一律记 unknown;`/proc` 分得出,但两档都不动它,只是说法更准)。
- */
-function lineageFromProc(pids: number[], token: string): Map<number, Lineage> {
-  const lineage = new Map<number, Lineage>();
-  const needle = `${LAUNCH_ID_ENV}=${token}`;
-  for (const pid of pids) {
-    let environ: string;
-    try { environ = readFileSync(`/proc/${pid}/environ`, "utf8"); }
-    catch (error) {
-      if ((error as { code?: string }).code === "ENOENT") continue; // 已经退出了
-      lineage.set(pid, "unknown");
-      continue;
-    }
-    lineage.set(pid, environ.split("\0").includes(needle) ? "ours" : "stranger");
-  }
-  return lineage;
-}
-
-/**
- * 跟这个号同进程组的全部号(含它自己)。**同时交接这份清单全不全** —— 退回「只认它自己」
- * 有两种成因,不能都当成「它就是光杆一个」:
- *
- *  · 组号是 0/1 或者就是 ash 自己那组 → 这是**有意**不枚举:那不是血缘,组里坐着一堆无关
- *    进程(文件头)。清单按设计就到这儿,算全的;
- *  · 进程表问不出来(ps 失灵)→ 清单**不全**,「这次启动还有谁」这一问没答上来。把它当成
- *    「没有别人」,同组那个工人就连进不了 leftovers,端口一空就被判停净(第 5 轮审查发现 1)。
- */
-function groupMembers(pid: number, pgid: number, selfPgid: number | null): { members: number[]; complete: boolean } {
-  if (pgid <= 1 || pgid === selfPgid) return { members: [pid], complete: true };
-  const table = readProcessTableSync();
-  if (!table) return { members: [pid], complete: false };
-  const members = new Set<number>([pid]);
-  for (const [other, group] of table.pgidOf) if (group === pgid) members.add(other);
-  return { members: [...members], complete: true };
-}
-
-/** 停止**之前**的成员快照里的一个号。`ours` = 核实了是这次启动起来的。 */
+/** 成员清单里的一个号。`ours` = 核实了是这次启动起来的。 */
 export type LaunchMember = { pid: number; ours: boolean; reason: string };
+
+/** 一次成员闭合的结果。 */
+type GroupClose = {
+  /** 这一组收干净了吗(所有带记号的成员都退了,而且不再冒新的)。 */
+  cleared: boolean;
+  /** 核不上归属、一个字没动的号 → 那句话。 */
+  strangers: Map<number, string>;
+  /** 是这次起来的,但 TERM+KILL 都没停下来的号。 */
+  stuckOurs: number[];
+  /** 这一问本身答不全(进程表失灵),或者转满了圈还在冒新号。 */
+  incomplete: boolean;
+};
+
+/**
+ * 动手 → **重新收集** → 再动手,收到不动点。这是「停」这一侧的核心:
+ *
+ * 一张相不够用。TERM 是可捕获信号,它的 handler 可以在收尾时**现 fork 一个新工人**;那个号
+ * 出生在我们照相之后,只认第一张相的话它一辈子不会进账 —— 第 6 轮审查 E2 实测:服务的 TERM
+ * handler 新建同组工人再退出监听,端口随即空了,于是落 `verified`、界面退回启动按钮,工人
+ * 还在跑(ppid=1、pgid 仍是原来那个组、带着这次启动的记号)。
+ *
+ * 这跟 `terminal-session-kill.ts` 的 `terminateSession` 是**同一条判据**:那边 TERM 轮和
+ * KILL 轮各自重新冻结、重新枚举到不动点,理由逐字相同(第 7 轮审查实锤)。端口这一档早先
+ * 没有等价的闭合保证,现在补上 —— 区别只有「没有冻结」:端口这条路上我们不是 pty 的主人,
+ * 拿不到 SIGSTOP 那种确定性窗口,所以靠**多转一圈**代替冻结。
+ *
+ * 两条硬闸一寸不让:
+ *  · 新收集到的号**照样要核归属**,只收带记号的 —— 进程组不是血缘证据,同组陌生进程一根
+ *    汗毛都不许动(文件头);
+ *  · 转数有上限(`MAX_CLOSE_ROUNDS`),收不住就如实说「没收到不动点」,不许无限转下去。
+ */
+async function closeGroup(
+  /** 第一轮已经枚举并核过归属的成员。 */
+  first: { members: number[]; lineage: Map<number, Lineage> },
+  pgid: number,
+  token: string,
+  selfPgid: number | null,
+  graceMs: number,
+  /** 还剩多少总预算(毫秒)。 */
+  left: () => number,
+): Promise<GroupClose> {
+  const targets = new Set<number>();
+  const strangers = new Map<number, string>();
+  const judged = new Set<number>(first.members);
+  for (const member of first.members) {
+    const who = first.lineage.get(member);
+    if (who === undefined) continue; // 它已经退了
+    if (who === "ours") targets.add(member);
+    else strangers.set(member, refusal(who));
+  }
+  let incomplete = false;
+  let unsettled = false;
+  for (let round = 1; ; round++) {
+    const alive = [...targets].filter(processAlive);
+    if (alive.length) await killPids(alive, Math.max(0, Math.min(graceMs, left())));
+    // 重新收集。注意**组长这会儿多半已经死了**,所以按组号直接问进程表,不能再 inspectPid
+    // 回去问它(membersOfGroup 的注释)。
+    const again = membersOfGroup(pgid, selfPgid);
+    if (!again.complete) incomplete = true;
+    const fresh = again.members.filter((pid) => pid !== process.pid && !judged.has(pid));
+    if (!fresh.length) break; // 不动点:组里没有新面孔了
+    // 预算或轮数见底:新面孔**没来得及核归属**,那就按「核不上」记进账 —— 有号可举总比
+    // 只留一句「清单不全」强,用户至少知道去看哪几个。
+    if (round >= MAX_CLOSE_ROUNDS || left() <= 0) {
+      for (const pid of fresh) {
+        if (processAlive(pid)) strangers.set(pid, "停止的总时限用完了，没来得及核它是不是这次启动起来的");
+      }
+      unsettled = true;
+      break;
+    }
+    const lineage = await readLineage(fresh, token, left());
+    let added = false;
+    for (const pid of fresh) {
+      const who = lineage.get(pid);
+      if (who === undefined) continue; // 它已经退了
+      judged.add(pid);
+      if (who === "ours") { targets.add(pid); added = true; }
+      else strangers.set(pid, refusal(who));
+    }
+    // 新面孔全是外人(或者都已经退了):不是我们的事,收手 —— 再转一圈也只会把同一批
+    // 陌生进程重新核一遍。
+    if (!added) break;
+  }
+  const stuckOurs = [...targets].filter(processAlive);
+  return { cleared: !unsettled && stuckOurs.length === 0, strangers, stuckOurs, incomplete: incomplete || unsettled };
+}
+
+/**
+ * 停掉占着这些端口、**且带着这次启动记号**的进程。记号核不上的一律不动,原样回给调用方
+ * 去告诉用户 —— 宁可停不掉,也不许杀错。
+ *
+ * 「收干净了」的判据是 `closeGroup` 的不动点,不是「我发过几发信号」。
+ */
+export async function stopByPorts(
+  ports: Iterable<number>,
+  options: { launchToken: string; graceMs?: number },
+): Promise<PortStopOutcome> {
+  const outcome: PortStopOutcome = { killed: [], spared: [], unknown: [], leftovers: [], membersIncomplete: false };
+  if (IS_WINDOWS || !PORT_TIER_AVAILABLE) return outcome;
+  const selfPgid = readProcessTableSync()?.pgidOf.get(process.pid) ?? null;
+  // **整个动作共用一份预算**:逐端口、每个住户的 inspect/readLineage、TERM/KILL 的等待
+  // 全从这里扣,连那几个外部命令自己的 timeout 也从这儿取(budgeted)。只在外层逐端口时
+  // 看一眼的话,一个端口上坐着十个住户就能把标称总时限翻十倍(第 2、6 轮审查的非阻塞项)。
+  const deadline = Date.now() + STOP_DEADLINE_MS;
+  const left = () => deadline - Date.now();
+  const seen = new Set<number>();
+  const owed = new Map<number, LaunchMember>();
+  for (const port of ports) {
+    if (left() <= 0) { outcome.unknown.push(port); continue; }
+    const found = await listeningPids(port, undefined, left());
+    if (!found.ok) { outcome.unknown.push(port); continue; }
+    for (const pid of found.pids) {
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      if (pid === process.pid) continue; // 那是 ash 自己
+      if (left() <= 0) { outcome.unknown.push(port); break; }
+      const holder = await inspectPid(pid, left());
+      if (!holder) continue; // 刚才还在,现在没了 —— 不用管
+      if (selfPgid !== null && holder.pgid === selfPgid) {
+        outcome.spared.push({ holder, reason: "那是 ash 自己所在的进程组" });
+        continue;
+      }
+      const group = groupMembers(holder.pid, holder.pgid, selfPgid);
+      if (!group.complete) outcome.membersIncomplete = true;
+      const lineage = await readLineage(group.members, options.launchToken, left());
+      if (lineage.get(holder.pid) !== "ours") {
+        outcome.spared.push({ holder, reason: refusal(lineage.get(holder.pid)) });
+        continue;
+      }
+      // 带记号的同组成员一起收:守护进程常带着自己 fork 的工人(kb-web 里跑着采集器和
+      // 向量编码子进程),只杀监听者会留下一地孤儿。**没记号的同组成员不动** ——
+      // 进程组不是血缘证据,它只是调度单位(第 1 轮审查)。
+      const closed = await closeGroup(
+        { members: group.members, lineage },
+        holder.pgid, options.launchToken, selfPgid, options.graceMs ?? TERM_GRACE_MS, left,
+      );
+      if (closed.incomplete) outcome.membersIncomplete = true;
+      if (closed.cleared) outcome.killed.push(holder);
+      else {
+        outcome.spared.push({
+          holder,
+          reason: closed.stuckOurs.includes(holder.pid)
+            ? "发了 TERM 和 KILL 都没停下来"
+            : "它那一组在停止期间还在冒出新进程，没能收到不动点",
+        });
+      }
+      // **没核销的责任要留在账上**,两种都要:核不上归属所以没敢动的,以及核实是这次起来
+      // 的、却怎么都杀不掉的。把它们静默丢掉,等于拿「端口空了」核销了「这次启动起来的
+      // 东西都停了」(第 2 轮审查发现 2、第 6 轮 F1)。
+      for (const [member, reason] of closed.strangers) {
+        if (member === holder.pid || !processAlive(member)) continue;
+        owed.set(member, { pid: member, ours: false, reason });
+      }
+      for (const member of closed.stuckOurs) {
+        if (member === holder.pid) continue; // 它已经进 spared 了
+        owed.set(member, { pid: member, ours: true, reason: "它是这次启动起来的，但发了 TERM 和 KILL 都没停下来" });
+      }
+    }
+  }
+  outcome.leftovers.push(...owed.values());
+  return outcome;
+}
 
 /**
  * 动手**之前**把「这次启动此刻都有谁」照一张相:这些端口上的住户 + 它们同组的成员,逐个
- * 带着归属结论和一句给用户看的话。
+ * 带着归属结论和一句给用户看的话,另外记下**涉及哪几个进程组**(`groups`)。
  *
- * 只有**配了停止命令**的那条路需要它。默认停止是我们自己动手的,`stopByPorts` 枚举成员时
- * 顺手就把「核不上归属所以没敢动」的那几个记下来了;而用户那段脚本我们不插手,跑完只能回头
- * 问端口 —— 端口一空就判停净,于是「脚本只收掉了监听者、它 fork 的工人还在跑」这种从来
- * 没进过账(第 5 轮审查发现 1)。要发现它,就得有一份停止前的清单可比。
+ * 只有**配了停止命令**的那条路需要它。默认停止是我们自己动手的,`stopByPorts` 连杀带闭合
+ * 一趟做完;而用户那段脚本我们不插手,跑完只能回头问 —— 端口一空就判停净,于是「脚本只收掉
+ * 了监听者、它 fork 的工人还在跑」这种从来没进过账(第 5 轮审查发现 1)。
+ *
+ * `groups` 是给**停止之后重新收集**用的(survivingMembers):用户脚本 kill 监听者时,那个
+ * handler 同样会现 fork 一个新工人 —— 它不在这张相里,只能靠组号找回来(第 6 轮审查 E2 在
+ * 脚本路径上的同形)。
  *
  * `complete=false` = 这张相本身没照全(lsof/进程表问不出来、或者这条会话压根没有启动记号),
  * 那就不许拿它的「没人剩下」当证据。
@@ -455,9 +287,10 @@ export type LaunchMember = { pid: number; ours: boolean; reason: string };
 export async function launchMembers(
   ports: Iterable<number>,
   token: string | null,
-): Promise<{ members: LaunchMember[]; complete: boolean }> {
+): Promise<LaunchSnapshot> {
   const members: LaunchMember[] = [];
-  if (IS_WINDOWS || !LSOF_PATH || !token) return { members, complete: false };
+  const groups = new Set<number>();
+  if (IS_WINDOWS || !PORT_TIER_AVAILABLE || !token) return { members, groups: [], complete: false };
   const selfPgid = readProcessTableSync()?.pgidOf.get(process.pid) ?? null;
   const seen = new Set<number>();
   let complete = true;
@@ -469,6 +302,7 @@ export async function launchMembers(
       const holder = await inspectPid(pid);
       if (!holder) continue; // 刚才还在,现在没了 —— 不用管
       if (selfPgid !== null && holder.pgid === selfPgid) { seen.add(pid); continue; } // 那是 ash 自己
+      groups.add(holder.pgid);
       const group = groupMembers(holder.pid, holder.pgid, selfPgid);
       if (!group.complete) complete = false;
       const lineage = await readLineage(group.members, token);
@@ -483,74 +317,49 @@ export async function launchMembers(
       }
     }
   }
-  return { members, complete };
+  return { members, groups: [...groups], complete };
 }
 
-// ── 停 ────────────────────────────────────────────────────────────────────────
+/** 停止**之前**照的那张相。`groups` 留着给停止之后的重新收集用。 */
+export type LaunchSnapshot = { members: LaunchMember[]; groups: number[]; complete: boolean };
 
 /**
- * 停掉占着这些端口、**且带着这次启动记号**的进程。记号核不上的一律不动,原样回给调用方
- * 去告诉用户 —— 宁可停不掉,也不许杀错。
+ * 用户那条停止脚本跑完之后,**谁还活着**。
+ *
+ * 两份并集,少一份都不行:
+ *  · 停止前那张相里**还活着**的 —— 脚本常常只 kill 掉监听者,它 fork 的工人原样留着;
+ *  · 停止前记下的那几个组里**新冒出来的** —— 脚本 kill 监听者时,handler 可以现 fork 一个
+ *    工人,那个号出生在照相之后(第 6 轮审查 E2 的脚本路径同形)。新号照样要核归属才敢往
+ *    「是这次起来的」里记,核不上的也要记,只是说法不同。
+ *
+ * 这里**一个 kill 都不发**:用户写那段脚本正是不想让 ash 直接动手。只负责把事实说清楚。
  */
-export async function stopByPorts(
-  ports: Iterable<number>,
-  options: { launchToken: string; graceMs?: number },
-): Promise<PortStopOutcome> {
-  const outcome: PortStopOutcome = { killed: [], spared: [], unknown: [], leftovers: [], membersIncomplete: false };
-  if (IS_WINDOWS || !LSOF_PATH) return outcome;
+export async function survivingMembers(snapshot: LaunchSnapshot, token: string | null): Promise<{ members: LaunchMember[]; complete: boolean }> {
+  const left = snapshot.members.filter((one) => processAlive(one.pid));
+  if (IS_WINDOWS || !PORT_TIER_AVAILABLE || !token) return { members: left, complete: snapshot.complete };
   const selfPgid = readProcessTableSync()?.pgidOf.get(process.pid) ?? null;
-  // **整个动作共用一份预算**:逐端口、每个住户的 inspect/readLineage、TERM/KILL 的等待
-  // 全从这里扣。只在外层逐端口时看一眼的话,一个端口上坐着十个住户就能把标称总时限翻十倍
-  // (第 2 轮审查的非阻塞项)。
-  const deadline = Date.now() + STOP_DEADLINE_MS;
-  const left = () => deadline - Date.now();
-  const seen = new Set<number>();
-  for (const port of ports) {
-    if (left() <= 0) { outcome.unknown.push(port); continue; }
-    const found = await listeningPids(port);
-    if (!found.ok) { outcome.unknown.push(port); continue; }
-    for (const pid of found.pids) {
-      if (seen.has(pid)) continue;
-      seen.add(pid);
-      if (pid === process.pid) continue; // 那是 ash 自己
-      if (left() <= 0) { outcome.unknown.push(port); break; }
-      const holder = await inspectPid(pid);
-      if (!holder) continue; // 刚才还在,现在没了 —— 不用管
-      if (selfPgid !== null && holder.pgid === selfPgid) {
-        outcome.spared.push({ holder, reason: "那是 ash 自己所在的进程组" });
-        continue;
-      }
-      const group = groupMembers(holder.pid, holder.pgid, selfPgid);
-      if (!group.complete) outcome.membersIncomplete = true;
-      const members = group.members;
-      const lineage = await readLineage(members, options.launchToken);
-      if (lineage.get(holder.pid) !== "ours") {
-        outcome.spared.push({ holder, reason: refusal(lineage.get(holder.pid)) });
-        continue;
-      }
-      // 带记号的同组成员一起收:守护进程常带着自己 fork 的工人(kb-web 里跑着采集器和
-      // 向量编码子进程),只杀监听者会留下一地孤儿。**没记号的同组成员不动** ——
-      // 进程组不是血缘证据,它只是调度单位(第 1 轮审查)。
-      const targets = members.filter((member) => lineage.get(member) === "ours");
-      const grace = Math.max(0, Math.min(options.graceMs ?? TERM_GRACE_MS, left()));
-      if (await killPids(targets, grace)) outcome.killed.push(holder);
-      else outcome.spared.push({ holder, reason: "发了 TERM 和 KILL 都没停下来" });
-      // **没核销的责任要留在账上**:同组里核不上归属的那几个,杀完之后还活着就记下来。
-      // 把它们静默丢掉,等于拿「端口空了」核销了「这次启动起来的东西都停了」。
-      for (const member of members) {
-        if (member === holder.pid || lineage.get(member) === "ours") continue;
-        if (!processAlive(member)) continue;
-        outcome.leftovers.push({ pid: member, reason: refusal(lineage.get(member)) });
-      }
+  const known = new Set(snapshot.members.map((one) => one.pid));
+  let complete = snapshot.complete;
+  const fresh: number[] = [];
+  for (const pgid of snapshot.groups) {
+    const again = membersOfGroup(pgid, selfPgid);
+    if (!again.complete) complete = false;
+    for (const pid of again.members) {
+      if (pid === process.pid || known.has(pid)) continue;
+      known.add(pid);
+      fresh.push(pid);
     }
   }
-  return outcome;
-}
-
-function refusal(lineage: Lineage | undefined): string {
-  if (lineage === "stranger") return `它的环境里没有这次启动的记号（${LAUNCH_ID_ENV}），不是这次起来的`;
-  if (lineage === "unverified") return `问不出它的进程环境（ps 没给出这一行，而这个号还活着），核不上是不是这次起来的`;
-  return `读不到它的环境（多半不是当前用户的进程），核不上是不是这次起来的`;
+  if (!fresh.length) return { members: left, complete };
+  const lineage = await readLineage(fresh, token);
+  for (const pid of fresh) {
+    const who = lineage.get(pid);
+    if (who === undefined) continue; // 它已经退了
+    left.push(who === "ours"
+      ? { pid, ours: true, reason: `它带着这次启动的记号（${LAUNCH_ID_ENV}），是停止期间新起来的` }
+      : { pid, ours: false, reason: refusal(who) });
+  }
+  return { members: left, complete };
 }
 
 /** TERM → 等 → KILL → 等。逐个号发,不打整组 —— 组里可能坐着与这次启动无关的进程。 */
@@ -586,19 +395,21 @@ async function waitGone(alive: () => boolean, graceMs: number): Promise<boolean>
  * 而真·守护化的服务只认这一条线索:ash 再起来,它还听着那个端口、却**再没有任何把手能停
  * 它**(第 3 轮审查发现 2)。
  *
- * 判据与异步版逐字一致(带记号的才动,没记号/核不上的一根汗毛都不碰),区别只有两处:
- * 同步问 lsof/ps,以及**不等宽限** —— 退出那一拍没有「等 3 秒」这种预算,TERM 与 KILL
- * 连发(同 killAllSessionTrees)。
+ * 判据与异步版逐字一致(带记号的才动,没记号/核不上的一根汗毛都不碰),区别有两处:同步问
+ * lsof/ps,以及**不等宽限** —— 退出那一拍没有「等 3 秒」这种预算,TERM 与 KILL 连发(同
+ * killAllSessionTrees)。闭合也照做,只是**只转一圈**:连发之后立刻重新枚举一次,把 handler
+ * 刚 fork 出来的号纳管(异步版靠 MAX_CLOSE_ROUNDS 转到不动点,这里没有等待的余地)。
  */
 export function stopByPortsSync(
   ports: Iterable<number>,
   token: string,
 ): { killed: number[]; spared: number[]; leftovers: number[]; membersIncomplete: boolean } {
   const result = { killed: [] as number[], spared: [] as number[], leftovers: [] as number[], membersIncomplete: false };
-  if (IS_WINDOWS || !LSOF_PATH || !token) return result;
+  if (IS_WINDOWS || !PORT_TIER_AVAILABLE || !token) return result;
   const table = readProcessTableSync();
   const selfPgid = table?.pgidOf.get(process.pid) ?? null;
   const seen = new Set<number>();
+  const owed = new Set<number>();
   for (const port of ports) {
     if (port < MIN_PORT) continue;
     for (const pid of listeningPidsSync(port)) {
@@ -608,35 +419,47 @@ export function stopByPortsSync(
       if (selfPgid !== null && pgid === selfPgid) { result.spared.push(pid); continue; }
       const group = groupMembers(pid, pgid, selfPgid);
       if (!group.complete) result.membersIncomplete = true;
-      const members = group.members;
-      const lineage = readLineageSync(members, token);
+      const lineage = readLineageSync(group.members, token);
       // 同组里核不上归属的那几个,这一拍**也是新发现的责任**。同步版早先只回 killed/spared,
       // 于是关服那句交代只看得见账上原有的号,从没点过停止就直接关服时一个字都不会提
       // (第 5 轮审查发现 1)。
-      for (const member of members) {
+      for (const member of group.members) {
         if (lineage.get(member) === "ours" || !processAlive(member)) continue;
-        result.leftovers.push(member);
+        owed.add(member);
       }
-      const targets = members.filter((member) => lineage.get(member) === "ours");
+      const targets = group.members.filter((member) => lineage.get(member) === "ours");
       if (!targets.length) { result.spared.push(pid); continue; }
-      for (const target of targets) {
-        try { process.kill(target, "SIGTERM"); } catch { /* 已经走了 */ }
-        try { process.kill(target, "SIGKILL"); } catch { /* 已经走了 */ }
-      }
+      killSync(targets);
       result.killed.push(...targets);
+      // 只转一圈的闭合:连发之后组里新冒出来的号(TERM handler 的手笔)照样要核归属 ——
+      // 带记号的连发收掉,核不上的记进账。不转这一圈,关服就会把它们彻底丢掉。
+      const again = membersOfGroup(pgid, selfPgid);
+      if (!again.complete) result.membersIncomplete = true;
+      const fresh = again.members.filter((member) => member !== process.pid && !group.members.includes(member));
+      if (!fresh.length) continue;
+      const freshLineage = readLineageSync(fresh, token);
+      const freshOurs: number[] = [];
+      for (const member of fresh) {
+        const who = freshLineage.get(member);
+        if (who === undefined) continue; // 它已经退了
+        if (who === "ours") freshOurs.push(member);
+        else if (processAlive(member)) owed.add(member);
+      }
+      if (freshOurs.length) {
+        killSync(freshOurs);
+        result.killed.push(...freshOurs);
+      }
     }
   }
+  // 连发之后仍然活着的才算遗留 —— 刚被收掉的不该出现在账上。
+  for (const member of owed) if (processAlive(member)) result.leftovers.push(member);
   return result;
 }
 
-/** 同步版 lsof。问不出来就当空清单 —— 关服那一拍没有重试余地,也没有调用方可交代。 */
-function listeningPidsSync(port: number): number[] {
-  if (!LSOF_PATH) return [];
-  try {
-    return parsePids(String(execFileSync(LSOF_PATH, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
-      timeout: PROBE_TIMEOUT_MS, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-    })));
-  } catch (error) {
-    return parsePids(String((error as { stdout?: unknown }).stdout ?? ""));
+/** 关服那一拍的连发:没有宽限可等,TERM 与 KILL 一起下去(同 killAllSessionTrees)。 */
+function killSync(pids: number[]): void {
+  for (const pid of pids) {
+    try { process.kill(pid, "SIGTERM"); } catch { /* 已经走了 */ }
+    try { process.kill(pid, "SIGKILL"); } catch { /* 已经走了 */ }
   }
 }

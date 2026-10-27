@@ -106,10 +106,13 @@ function sessionState(
   service = false,
 ): { tone: string; text: string | null } {
   if (session && sessionRunning(session)) {
-    // 监听已经让出来了、只剩几个核不上归属所以没敢杀的号:既不是「运行中」也不是「已停止」,
-    // 照实说第三种(第 2 轮审查发现 2 —— 这一档以前被静默并进「已停止」)。
+    // 监听已经让出来了、只剩几个没能收掉的号:既不是「运行中」也不是「已停止」,照实说第三种
+    // (第 2 轮审查发现 2 —— 这一档以前被静默并进「已停止」)。
+    // **不在这儿写成因**:账上这几个号有两种来路 —— 核不上归属所以没敢动的,以及核实是这次
+    // 起来的、却连 KILL 都没停下来的(第 6 轮审查 F1 之后后者也会进账)。前端只拿到号码,
+    // 分不出是哪一种;成因在服务端那句 `why` 里逐个说清,这里只报个数。
     if (!session.groupAlive && !session.portsAlive) {
-      return { tone: "on", text: `停止未完成（还剩 ${leftoversOf(session).length} 个进程核不到归属）` };
+      return { tone: "on", text: `停止未完成（还剩 ${leftoversOf(session).length} 个进程没能收掉）` };
     }
     return session.exitCode === null
       ? { tone: "on", text: "运行中" }

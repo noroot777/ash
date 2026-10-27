@@ -262,8 +262,8 @@ try {
   );
   assert.match(
     await pop.locator(".cmd-pop__svc-state").innerText(),
-    /还剩 1 个进程核不到归属/,
-    "照实说第三种状态,并说清还剩几个",
+    /还剩 1 个进程没能收掉/,
+    "照实说第三种状态,并说清还剩几个(成因有两种,前端只报数,成因在服务端那句 why 里)",
   );
   await page.evaluate(() => { delete window.__service; });
   await page.keyboard.press("Escape");

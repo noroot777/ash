@@ -38,7 +38,10 @@ import {
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
-import { launchMembers, PORT_TIER_AVAILABLE, probeOwnedPorts, stopByPorts, type LaunchMember } from "./service-ports.js";
+import {
+  launchMembers, PORT_TIER_AVAILABLE, probeOwnedPorts, stopByPorts, survivingMembers,
+  type LaunchMember, type LaunchSnapshot,
+} from "./service-ports.js";
 import { processAlive } from "./terminal-process-tree.js";
 import { resolveTerminalDirectory, terminalSessions, type StopFact, type TerminalSessionInfo } from "./terminal.js";
 import type { StopResolution } from "./terminal-session-facts.js";
@@ -204,13 +207,31 @@ type StopVerdict =
   | { kind: "unresolved"; notice: string; leftovers: number[] }
   | { kind: "stuck"; reason: string };
 
-/** 核不上归属的那几个号 → 一句给用户看的话。 */
-function leftoverNotice(where: string, leftovers: { pid: number; reason: string }[]): string {
-  const who = leftovers.slice(0, 3).map((one) => `pid ${one.pid}`).join("、");
-  const more = leftovers.length > 3 ? `等 ${leftovers.length} 个` : "";
-  return `${where}已经让出来了，但跟它同组的 ${who}${more} 还活着：${leftovers[0].reason}`
-    + ` —— 没有归属凭据，ash 不敢动它们，所以没法说这次启动起来的东西都停了。`
-    + `要连它们一起收，请在「管理常用命令」里给这个服务填一条停止命令。`;
+/** 一串没核销的号 → 「pid 1、pid 2 等 5 个」。 */
+function who(left: LaunchMember[]): string {
+  const head = left.slice(0, 3).map((one) => `pid ${one.pid}`).join("、");
+  return `${head}${left.length > 3 ? `等 ${left.length} 个` : ""}`;
+}
+
+/**
+ * 账上这几个号 → 一句给用户看的话。**两种成因混在一起时要分开说**:核不上归属所以没敢动
+ * 的,和核实是这次起来的、却怎么都杀不掉的 —— 后者早先压根进不了账(第 6 轮审查 F1),
+ * 混成一句会把「ash 不敢动」说到一个它已经发过 KILL 的进程头上。
+ */
+function leftoverNotice(where: string, left: LaunchMember[]): string {
+  const stubborn = left.filter((one) => one.ours);
+  const strangers = left.filter((one) => !one.ours);
+  const parts = [`${where}已经让出来了，但`];
+  if (stubborn.length) {
+    parts.push(`这次启动起来的 ${who(stubborn)} 发了 TERM 和 KILL 都没停下来`);
+    if (strangers.length) parts.push("；");
+  }
+  if (strangers.length) {
+    parts.push(`跟它同组的 ${who(strangers)} 还活着：${strangers[0].reason}`
+      + ` —— 没有归属凭据，ash 不敢动它们`);
+  }
+  return `${parts.join("")}，所以没法说这次启动起来的东西都停了。`
+    + (strangers.length ? `要连它们一起收，请在「管理常用命令」里给这个服务填一条停止命令。` : ``);
 }
 
 /**
@@ -287,11 +308,8 @@ function membersNotice(open: TerminalSessionInfo, hasStopScript: boolean): strin
 }
 
 /** 停止命令只收掉了监听者、停止前在跑的成员还活着时那句话。 */
-function scriptLeftoverNotice(open: TerminalSessionInfo, left: LaunchMember[]): string {
-  const who = left.slice(0, 3).map((one) => `pid ${one.pid}`).join("、");
-  const more = left.length > 3 ? `等 ${left.length} 个` : "";
-  return `停止命令跑完了，端口 ${open.ports.join("、")}也让出来了，但停止前在跑的 ${who}${more} 还活着：`
-    + `${left[0].reason}。`
+function scriptLeftoverNotice(left: LaunchMember[]): string {
+  return `停止命令跑完了，但停止前在跑的 ${who(left)} 还活着：${left[0].reason}。`
     + (left.some((one) => one.ours)
       ? `它们是这次启动起来的，但 ash 不替你那条脚本强杀（你写它正是不想让 ash 直接 kill）——`
         + `要连它们一起收，请在脚本里也收掉它们。`
@@ -307,34 +325,83 @@ function scriptLeftoverNotice(open: TerminalSessionInfo, left: LaunchMember[]): 
 async function verifyStopScript(
   open: TerminalSessionInfo,
   /** 跑脚本**之前**照的成员相(launchMembers)。null = 这条路没照相(没有停止脚本)。 */
-  snapshot: { members: LaunchMember[]; complete: boolean } | null,
+  snapshot: LaunchSnapshot | null,
 ): Promise<StopVerdict> {
   // 同 stopLaunchPorts:这一档在这台机器上不存在时,它给不出证据,也不该给出结论。
   if (!PORT_TIER_AVAILABLE || !open.ports.length) return { kind: "stopped" };
   const probe = await probeOwnedPorts(open.ports, terminalSessions.launchTokenOf(open.id));
-  if (probe.state === "unknown") return { kind: "stuck", reason: `停止命令跑完了，但${probe.why}，没法确认服务已经停了` };
+  // **只有这一路什么都不落账。** 端口上还坐着这次启动起来的进程,它自己就是那条线索 ——
+  // 下一趟照样顺着端口找到它和它同组的成员,不存在「再也发现不了」的风险。反过来,在这儿
+  // 记一笔账会让 stoppedByUser 变真(它是 stop.kind !== "none" 的投影),于是「已停止」压过
+  // 还在运行的事实 —— 那是第 5 轮 F3 钉死的反面:标了已停止、服务却还在跑。
   if (probe.state === "ours") {
     return { kind: "stuck", reason: `停止命令跑完了，但端口 ${open.ports.join("、")} 上还有这次启动起来的进程在听 —— 服务没停下来，去看看那段脚本` };
   }
-  // **端口空了只说明监听者走了。** 用户那段脚本常常只 kill 掉监听者,它 fork 的工人还在跑 ——
-  // 默认停止那条路有 stopByPorts 枚举成员顺手把这几个记下来,脚本这条路我们不插手,所以得拿
-  // 停止**之前**照的那张相来比:还活着的就是没收掉的(第 5 轮审查发现 1)。
-  const left = (snapshot?.members ?? []).filter((one) => processAlive(one.pid));
+  // 到这儿端口这条线索要么空了、要么问不出来,**两种都意味着下一趟可能再也找不到人**:
+  // 所以这一趟的发现必须当场落账,不能留到判断末尾(第 6 轮审查 E1 —— 脚本收掉监听者之后
+  // 工人就脱离了端口线索,这一笔不记,下一遍端口一空就判停净)。
+  const survived = await surviveCheck(open, snapshot);
+  const left = survived.members;
+  if (probe.state === "unknown") return { kind: "stuck", reason: `停止命令跑完了，但${probe.why}，没法确认服务已经停了` };
   if (left.length) {
-    const pids = left.map((one) => one.pid);
-    const notice = scriptLeftoverNotice(open, left);
-    terminalSessions.oweCommandLeftovers(open.id, open.projectId, pids, notice);
-    return { kind: "unresolved", leftovers: pids, notice };
+    return { kind: "unresolved", leftovers: left.map((one) => one.pid), notice: scriptLeftoverNotice(left) };
   }
   // 监听这边核过了,但线索本身可能不全 —— 同 stopLaunchPorts:没记下的端口谁都没问过,
   // 相也可能没照全,用户那段脚本到底收没收干净,这里给不出证据,于是不许宣称停净
   // (第 3 轮审查发现 1 / 第 5 轮发现 1)。
   if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, true) };
-  if (snapshot && !snapshot.complete) {
-    terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], membersNotice(open, true));
-    return { kind: "unresolved", leftovers: [], notice: membersNotice(open, true) };
-  }
+  if (!survived.complete) return { kind: "unresolved", leftovers: [], notice: membersNotice(open, true) };
   return { kind: "stopped" };
+}
+
+/**
+ * 用户那条停止脚本动过手之后,**谁还活着** —— 并且当场落账。
+ *
+ * 「还活着」是两份并集(survivingMembers):停止前那张相里没被收掉的,加上停止期间那几个组里
+ * **新冒出来的**。后一份不能省:脚本 kill 监听者时,监听者的 TERM handler 可以现 fork 一个
+ * 工人,它出生在照相之后,只比旧相就永远发现不了它(第 6 轮审查 E2 在脚本路径上的同形)。
+ *
+ * 落账放在这儿而不是各个判断分支里,是为了让**每一条出口都已经落过账** —— 包括脚本自己
+ * 失败、探测失败这些提前返回的分支。那正是 E1 实测到的洞:首次停止 502、工人还活着,而
+ * `stop.kind` 仍是 none;再点一次,监听者早没了、端口一空就判 verified,工人照旧活着。
+ */
+/**
+ * 一次停止动作**失败收场**时的落账。
+ *
+ * 脚本自己失败、或者进程杀不动,都不等于「什么都没做成」:脚本的典型形状是「先收掉监听者,
+ * 再做别的收尾,然后某一步挂了」—— 监听者这会儿已经死了,而它 fork 的工人还在跑。这一笔不
+ * 当场记下,下一遍再点停止时端口已经空了,那个工人**再也不会被发现**,于是端口一空就判
+ * verified(第 6 轮审查 E1 实测:首次 502 而 stop.kind 仍是 none;再点一次 200 stopped、
+ * 停止按钮消失,工人照旧活着)。
+ *
+ * 判据跟 `verifyStopScript` 逐字一致,包括那条例外:**端口上还坐着这次启动起来的进程时
+ * 什么都不记** —— 它自己就是线索,下一趟找得到它,而记一笔账会让「已停止」压过还在运行的
+ * 事实。
+ */
+async function oweOnFailedStop(open: TerminalSessionInfo, snapshot: LaunchSnapshot | null): Promise<void> {
+  if (!snapshot || !PORT_TIER_AVAILABLE || !open.ports.length) return;
+  const probe = await probeOwnedPorts(open.ports, terminalSessions.launchTokenOf(open.id));
+  if (probe.state === "ours") return; // 线索还在,留着可重试的现场就够
+  await surviveCheck(open, snapshot);
+}
+
+async function surviveCheck(
+  open: TerminalSessionInfo,
+  snapshot: LaunchSnapshot | null,
+): Promise<{ members: LaunchMember[]; complete: boolean }> {
+  if (!snapshot) return { members: [], complete: true };
+  const survived = await survivingMembers(snapshot, terminalSessions.launchTokenOf(open.id));
+  if (survived.members.length) {
+    terminalSessions.oweCommandLeftovers(
+      open.id, open.projectId,
+      survived.members.map((one) => one.pid),
+      scriptLeftoverNotice(survived.members),
+    );
+  }
+  if (!survived.complete) {
+    terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], membersNotice(open, true));
+  }
+  return survived;
 }
 
 /** StopVerdict → 落进会话事实的那笔账(stuck 不走这里:它压根没核到终态)。 */
@@ -411,13 +478,25 @@ export function stopCommand(
     const snapshot = stop ? await launchMembers(open.ports, terminalSessions.launchTokenOf(open.id)) : null;
     if (stop) {
       const ran = await runStopScript(stop.cwd, stop.script, stop.timeoutMs ?? STOP_SCRIPT_TIMEOUT_MS);
-      if (!ran.ok) return { status: 502 as const, body: { error: `停止失败：${ran.reason}` } };
+      if (!ran.ok) {
+        // **脚本自己失败了,它已经做成的那部分照样要落账。** 脚本的典型形状是「先收掉监听者,
+        // 再做别的收尾,然后某一步失败」:监听者这会儿已经死了,而它 fork 的工人还在跑。这一趟
+        // 不落账,下一遍再点停止时端口已经空了,那个工人**再也不会被发现**,于是端口一空就判
+        // verified(第 6 轮审查 E1 实测:首次 502 而 stop.kind 仍是 none;再点一次 200
+        // verified、停止按钮消失,工人照旧活着)。
+        await oweOnFailedStop(open, snapshot);
+        return { status: 502 as const, body: { error: `停止失败：${ran.reason}` } };
+      }
       await waitForSessionGone(projectId, commandId);
     }
     const live = terminalSessions.liveCommandSession(projectId, commandId);
     if (live) {
       const result = await terminalSessions.terminate(live.id, projectId);
-      if (!result.ok) return { status: 502 as const, body: { error: `停止失败：${result.reason}` } };
+      // 同上:杀不动也不能把这一趟已经发现的责任丢掉。
+      if (!result.ok) {
+        await oweOnFailedStop(open, snapshot);
+        return { status: 502 as const, body: { error: `停止失败：${result.reason}` } };
+      }
     }
     // 走哪条路都要**核到终态**才敢说停了。没配停止命令:进程那条线索走完了,再按这次启动
     // 打印过的端口兜一次(连杀带核验)。配了停止命令:不替用户强杀,但它说自己成功了也得
@@ -466,13 +545,21 @@ export function restartCommand(
           : null;
         if (command.stopCommand && before) {
           const ran = await runStopScript(cwd, command.stopCommand, STOP_SCRIPT_TIMEOUT_MS);
-          if (!ran.ok) return { status: 502 as const, body: { error: `重启失败：旧服务没停下来（${ran.reason}）` } };
+          // 重启跟停止是同一条停法,于是同一个洞也在这儿(第 6 轮审查 F1 点明「不是只修停止
+          // 按钮就够」):失败出口先落账,再报错。
+          if (!ran.ok) {
+            await oweOnFailedStop(before, snapshot);
+            return { status: 502 as const, body: { error: `重启失败：旧服务没停下来（${ran.reason}）` } };
+          }
           await waitForSessionGone(projectId, command.id);
         }
         const live = terminalSessions.liveCommandSession(projectId, command.id);
         if (live) {
           const result = await terminalSessions.terminate(live.id, projectId);
-          if (!result.ok) return { status: 502 as const, body: { error: `重启失败：旧进程停不下来（${result.reason}）` } };
+          if (!result.ok) {
+            if (before) await oweOnFailedStop(before, snapshot);
+            return { status: 502 as const, body: { error: `重启失败：旧进程停不下来（${result.reason}）` } };
+          }
         }
         // 旧服务可能是守护化的(进程树里早没了、端口还占着)。不先收掉它,新的一起来就会
         // 因为端口被占而挂 —— 那种失败看起来像「重启按钮坏了」。配了停止命令的同样要核:

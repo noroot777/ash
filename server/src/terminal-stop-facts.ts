@@ -133,12 +133,20 @@ async function releaseLaunchPorts(session: TerminalSession): Promise<string | nu
   const token = session.launchToken;
   if (token) {
     const outcome = await stopByPorts(ports, { launchToken: token });
+    // 只动账,不碰 portsAlive/代次:此刻端口可能还有人听,运行事实由下面的 probe 作结论。
     if (outcome.leftovers.length) {
-      applyStop(session, {
-        kind: "unresolved",
-        pids: outcome.leftovers.map((left) => left.pid),
-        why: outcome.leftovers.map((left) => `pid ${left.pid} ${left.reason}`).join("；"),
-      });
+      oweLeftovers(
+        session,
+        outcome.leftovers.map((left) => left.pid),
+        outcome.leftovers.map((left) => `pid ${left.pid} ${left.reason}`).join("；"),
+      );
+    }
+    // **清单不全也是一笔账。** 早先这儿只吸收 leftovers,于是「同组成员没能枚举全」整档被
+    // 漏掉,紧接着下面那句 applyStop(verified) 就把这次启动核销了 —— 它跟端口超额是同一种
+    // 残缺(该问的没问全),同样落成 pids 为空的那种 unresolved:不卡删除(没有活号可举,
+    // 拦着也多停不掉一个进程),但这次启动到死都带着「没能确认停净」(第 6 轮审查 F1)。
+    if (outcome.membersIncomplete) {
+      oweLeftovers(session, [], "这次没能把同组成员列全（进程表或端口查询没答上来）—— 跟它一起起来的还有谁，ash 这一趟没问到");
     }
   }
   const probe = await probeOwnedPorts(ports, token);
