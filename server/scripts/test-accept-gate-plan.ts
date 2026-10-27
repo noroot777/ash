@@ -9,7 +9,7 @@ process.env.ASH_RUNS_DIR = join(root, "execution", "data", "runs");
 const { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, verifyGateSnapshot } =
   await import("../src/accept-gate-source.js");
 const { resolutionInputs } = await import("../src/accept-gate-resolution.js");
-const { ambientDigest, recordedLinks, linksIntoSource } = await import("../src/accept-gate-deps.js");
+const { ambientDigest, recordedLinks, linksIntoSource, provideDependency, workspacePackages } = await import("../src/accept-gate-deps.js");
 const { projectSources } = await import("../src/accept-gate-project.js");
 const { stat, realpath, readdir } = await import("node:fs/promises");
 const save = (path: string, content: string) => {
@@ -100,6 +100,33 @@ try {
   assert.equal(probe(selectedTarget, "plain-consumer"), "TASK_NEW");
   assert.equal(probe(selectedTarget, "external-only"), "LEAF");
 
+  const removedTask = join(host, ".worktrees", "removed-consumer");
+  git(host, "worktree", "add", "--detach", removedTask, git(task, "rev-parse", "HEAD"));
+  const removedManifest = manifest(removedTask);
+  delete removedManifest.devDependencies;
+  save(join(removedTask, "package.json"), JSON.stringify(removedManifest));
+  install(removedTask);
+  commit(removedTask);
+  assert.equal(existsSync(join(removedTask, "node_modules", "plain-consumer")), false);
+  const rawLayout = join(host, "data", "runs", "direct-only-layout.source");
+  save(join(rawLayout, "package.json"), JSON.stringify(removedManifest));
+  ownPackage(rawLayout, "packages/lib", "TASK_NEW");
+  assert.equal(await provideDependency(removedTask, rawLayout, "node_modules", await workspacePackages(removedTask)), "clone");
+  const rawAncestor = (await resolutionInputs([rawLayout])).find(input => input.path === join(host, "node_modules"))!;
+  assert.equal(rawAncestor.direct.some(item => item.entry === join("@demo", "lib")), false);
+  assert.equal(rawAncestor.direct.some(item => item.entry === "plain-consumer"), true);
+  assert.equal(rawAncestor.selected.some(item => item.entry === join("@demo", "lib")), true);
+  assert.equal(probe(rawLayout, "@demo/lib"), "TASK_NEW");
+  assert.equal(probe(rawLayout, "plain-consumer"), "MAIN_OLD");
+  save(join(host, "packages/lib/index.mjs"), 'export const value = "MAIN_LIVE";\n');
+  assert.equal(probe(rawLayout, "plain-consumer"), "MAIN_LIVE");
+  assert.equal(probe(rawLayout, "@demo/lib"), "TASK_NEW");
+  save(join(host, "packages/lib/index.mjs"), 'export const value = "MAIN_OLD";\n');
+  const removedTarget = join(host, "data", "runs", "removed-consumer.source");
+  await assert.rejects(createGateSnapshot(removedTask, removedTarget, await readGateSource(removedTask, removedTarget)), /无法证明隔离/);
+  assert.equal(existsSync(removedTarget), false);
+  console.log("accept-gate-plan: deleted dependency counterexample: direct own entry hidden; indirect MAIN_OLD -> MAIN_LIVE; production refuses without residue");
+
   for (const relocate of [false, true]) {
     const built = project(`built-cli-${relocate}`, { workspaces: ["packages/*"],
       dependencies: { "plain-consumer": `file:${consumer}` } });
@@ -168,7 +195,18 @@ try {
       assert.equal(installed.owned.find(item => item.entry === "@demo/lib")?.inside, join("vendor", "lib"));
       assert.notEqual(await linksIntoSource(join(nested, "node_modules"), sourceRoot), null);
       const target = join(nested, "data", "runs", `nested-${sourceRoot === nested}.source`);
-      await assert.rejects(createGateSnapshot(sourceRoot, target, await readGateSource(sourceRoot, target)), /没有这个位置|没有.*替代位置|无法证明在快照内/);
+      await assert.rejects(createGateSnapshot(sourceRoot, target, await readGateSource(sourceRoot, target)), error => {
+        const message = String(error);
+        if (sourceRoot === nested) {
+          assert.match(message, /无法证明在快照内/);
+          assert.ok(message.includes(join(target, "vendor")));
+          assert.ok(message.includes(join(nested, "vendor")));
+          assert.match(message, /快照之外.*链/);
+        } else assert.match(message, /没有这个位置.*替代位置/);
+        assert.match(message, /纳入 Git 并提交/);
+        assert.match(message, /停止将该目录作为本项目自有包的安装来源/);
+        return true;
+      });
       assert.equal(existsSync(target), false);
       assert.equal(probe(nested, "@demo/lib"), "NESTED_LIVE");
     }

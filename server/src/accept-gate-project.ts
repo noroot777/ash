@@ -1,6 +1,6 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import { available, filesystemFailure } from "./accept-gate-fs.js";
+import { available, readResult, requiredRead } from "./accept-gate-fs.js";
 import { insideTree } from "./accept-gate-tree.js";
 
 export type UnknownSource = { kind: "unknown"; directory: string; metadata: string; reason: string };
@@ -14,7 +14,7 @@ export const identityProblem = (issue: UnknownSource) => `目录 ${issue.directo
   + `请修复该元数据及其指向的 Git 目录，使其可读取后重试（重新安装依赖不会修复这份元数据）`;
 
 export async function projectSources(root: string): Promise<ProjectSources> {
-  const projectRoot = await realpath(root);
+  const projectRoot = await requiredRead(root, () => realpath(root));
   const repositories = new Map<string, Promise<Repository | null>>();
   const repositoryAt = (directory: string): Promise<Repository | null> => {
     const cached = repositories.get(directory);
@@ -23,27 +23,24 @@ export async function projectSources(root: string): Promise<ProjectSources> {
       const marker = join(directory, ".git");
       const failed = (metadata: string, reason: string): Repository => ({ root: directory,
         issue: { kind: "unknown", directory, metadata, reason } });
-      let markerInfo;
-      try { markerInfo = await stat(marker); }
-      catch (error) {
-        if (!filesystemFailure(error)) throw error;
-        if (error.code !== "ENOENT" && error.code !== "ENOTDIR") return failed(marker, `读取失败（${error.code}）`);
+      const markerRead = await readResult(() => stat(marker));
+      if (markerRead.kind !== "value") {
+        if (markerRead.kind === "unreadable") return failed(marker, `读取失败（${markerRead.error.code}）`);
         const parent = dirname(directory);
         return parent === directory ? null : await repositoryAt(parent);
       }
       let gitDirectory = marker;
-      if (!markerInfo.isDirectory()) {
+      if (!markerRead.value.isDirectory()) {
         const pointer = await available(() => readFile(marker, "utf8"));
         const match = pointer?.match(/^gitdir:\s*(.+)\s*$/m);
         if (!match) return failed(marker, "无法读取有效的 gitdir 指针");
         gitDirectory = resolve(directory, match[1].trim());
       }
       let common = gitDirectory;
-      try { common = resolve(gitDirectory, (await readFile(join(gitDirectory, "commondir"), "utf8")).trim()); }
-      catch (error) {
-        if (!filesystemFailure(error)) throw error;
-        if (error.code !== "ENOENT") return failed(join(gitDirectory, "commondir"), `读取失败（${error.code}）`);
-      }
+      const commonRead = await readResult(() => readFile(join(gitDirectory, "commondir"), "utf8"));
+      if (commonRead.kind === "value") common = resolve(gitDirectory, commonRead.value.trim());
+      else if (commonRead.error.code !== "ENOENT")
+        return failed(join(gitDirectory, "commondir"), `读取失败（${commonRead.error.code}）`);
       const canonical = await available(() => realpath(common));
       return canonical === null ? failed(marker, `指向不可读取的 Git 目录 ${common}`) : { root: directory, common: canonical };
     })();
