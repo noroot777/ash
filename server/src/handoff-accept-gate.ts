@@ -25,6 +25,8 @@ export function validateGatePayload(manifest: HandoffManifest): void {
   for (const run of runs) {
     if (!run || !validId(run.id) || seen.has(run.id) || !["passed", "failed", "interrupted", "canceled"].includes(run.status)
       || typeof run.command !== "string" || typeof run.startedAt !== "string"
+      // `command_missing` 这个类别已经撤掉了(第 10 轮审查 F1),但**旧机器导出的 payload 里
+      // 可能还有**:读得进来、不许卡住导入;产生端再也不会写它。
       || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived", "command_missing"].includes(run.failure)
       || (run.exitCode != null && !Number.isInteger(run.exitCode))) throw new HandoffError("acceptGateRuns 记录非法");
     for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError", "diagnosis", "entryProbe", "missAttribution"] as const) {

@@ -14,13 +14,28 @@ export type AcceptGateStatus = "running" | "passed" | "failed" | "interrupted" |
 
 /** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
 /**
- * 「命令没解析出来」这件事**是不是这次改动造成的**。跟 failure 分开存(第 3 轮审查 F2):
- * failure 说的是「测试有没有启动」,这一条说的是「该不该由 agent 去改代码」——
- * 「没证明是这次删的」不等于「证明不是这次删的」,未知时不许发免修指令。
+ * 起跑前核到「这条命令点名的东西不在这份快照里」之后,**这件事看起来是不是这次改动造成的**。
+ *
+ * 只有两档,而且**两档都不免修**(第 10 轮审查 F2):
+ *  - `mine`    起跑前核的那份定义,开工基线上有、这份快照里没了 → 线索指向这次改动,去核、去改;
+ *  - `unknown` 其余全部(基线上也没有、目标 ref 读不到、非 git 快照、超预算…)→ 先核归因。
+ *
+ * **没有 not-mine 这一档**:它曾经用来授权「不要为这件事改任何代码」,而授权它的是**静态读**
+ * 出来的那份定义 —— 两次静态读到同一个对象,证明不了 runner 真去找的就是那一份(PATH 上的
+ * 同名包装器、`.npmrc`、workspace 配置都能把落点挪走)。证明不了就不许免修,所以这一档整个
+ * 撤掉了:存在性只当线索,责任保留为未知。经过见 server/src/accept-gate-miss.ts 的文件头。
  */
-export type AcceptGateMissAttribution = "mine" | "not-mine" | "unknown";
+export type AcceptGateMissAttribution = "mine" | "unknown";
 
-export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived" | "command_missing";
+/**
+ * 没通过时具体是哪一种没通过。
+ *
+ * **没有「命令不存在」这一档**(第 10 轮审查 F1):真跑那一次有没有启动,得有能绑到这次执行
+ * 身份上的证据才敢说,而起跑前的纯读 + 日志形状都给不出来。命令解析不出来仍然会得到一段
+ * 结论(`diagnosis`),但失败类别照实留在它真实的那一档上(多半是 `exit_code`)。
+ * 旧记录里可能还存着 `command_missing`,读的那几处都做了兜底。
+ */
+export type AcceptGateFailure = "exit_code" | "timeout" | "spawn_failed" | "server_restarted" | "canceled" | "source_changed" | "process_unconfirmed" | "ownership_waived";
 
 export const ACCEPT_GATE_STATUS_LABELS: Record<AcceptGateStatus, string> = {
   running: "正在跑",
@@ -39,9 +54,6 @@ export const ACCEPT_GATE_FAILURE_LABELS: Record<AcceptGateFailure, string> = {
   source_changed: "测试修改了被测源码，不能用结果为原版本放行",
   process_unconfirmed: "尚未取得整次运行退出的证据",
   ownership_waived: "已确认风险并强制释放，未取得整次退出证据",
-  // rc≠0 的两种里**不是代码红了**的那一种:命令在被测快照里解析不出来,测试一行都没跑。
-  // 判据与出路见 server/src/accept-gate-miss.ts(那边也解释了为什么必须跟 exit_code 分开)。
-  command_missing: "这条命令在被测快照里不存在,测试没有启动",
 };
 
 export interface AcceptGateView {
@@ -77,7 +89,10 @@ export interface AcceptGateView {
    * 事实(目标分支当时是哪个提交)此后还会变 —— 现算出来的话,结论会跟着漂。
    */
   diagnosis?: string | null;
-  /** 见 AcceptGateMissAttribution。只有 command_missing 这一档才有值。 */
+  /**
+   * 见 AcceptGateMissAttribution。**非空就等于「起跑前核到那个名字不在这份快照里」**
+   * （归类落在 entry 那一档才会写它），卡片和交接拿它当这件事的信号。
+   */
   missAttribution?: AcceptGateMissAttribution | null;
   /**
    * 这一次的红交没交回给 agent 去修。null = 没交过(通过/取消/被打断都不交)。
@@ -135,7 +150,10 @@ export function summarizeAcceptGate(gate: AcceptGateView): string {
   const head = `验收前置命令 \`${gate.command}\``;
   if (gate.status === "running") return `${head} 正在跑`;
   if (gate.status === "passed") return `${head} 通过（rc=0）`;
-  const why = gate.failure ? ACCEPT_GATE_FAILURE_LABELS[gate.failure] : "未通过";
+  // 旧记录可能带着已经撤掉的类别(`command_missing`),查不到标签就照实说「未通过」,
+  // 不能让一条历史记录在界面上显示成 undefined。
+  const why = (gate.failure
+    ? (ACCEPT_GATE_FAILURE_LABELS as Record<string, string | undefined>)[gate.failure] : null) ?? "未通过";
   return `${head} ${ACCEPT_GATE_STATUS_LABELS[gate.status]}：${why}${
     gate.exitCode !== null && gate.failure === "exit_code" ? `（rc=${gate.exitCode}）` : ""
   }`;

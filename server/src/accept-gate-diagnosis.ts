@@ -17,7 +17,7 @@ import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
 import { statSync } from "node:fs";
 import { acceptGateLogHead } from "./accept-gate-process.js";
-import { classifyGateLaunch, gateCommandMissNotice, missFailure, occursAsWord,
+import { classifyGateLaunch, gateCommandMissNotice, occursAsWord,
   type GateMissOrigin } from "./accept-gate-miss.js";
 import { decodeGateEntryProbe, entryFile, gateEntryAsk, scriptDefinedIn,
   type GateEntryProbe, type GateEntryAsk } from "./accept-gate-entry.js";
@@ -357,18 +357,22 @@ export async function diagnoseGateFailure(row: GateRow, outcome: { failure: Acce
     ? await readOrigin(repo, row.targetBranch, row.sourceCommit ?? null, miss.name, row.command, startCommit, probe)
       .catch(() => null)
     : null;
-  // 「测试有没有启动」和「该不该由 agent 去改代码」是两件事，分开存（第 3 轮审查 F2）：
-  //  · mine     这次改动自己把它删了/改名了 → 这条红就是要改代码的那一种，连 failure 都不改写；
-  //  · not-mine 核实过基线上也没有 → 才许摆出那副「不要动代码、出路由用户定」的面孔；
-  //  · unknown  核不出来（目标 ref 读不到、非 git 快照、超预算…）→ 仍是「没启动」，但**不许**
-  //    据此免修。旧版本把 null 和 false 一起塞进免修分支，等于拿「没证明是你删的」当
-  //    「证明不是你删的」。
+  // 归因只有两档，**两档都是「你去核」**（第 10 轮审查 F2）：
+  //  · mine     起跑前核的那份定义，开工基线上有、这份快照里没了 → 线索指向这次改动；
+  //  · unknown  其余全部（基线上也没有、目标 ref 读不到、非 git 快照、超预算…）。
+  //
+  // 曾经有第三档 not-mine，由「基线上也没有」授权，交出去的是一张免修令。它撤掉了：核的是
+  // **起跑前静态读到的那个对象**，而 runner 真去找的是不是它，这一层核不到（PATH 上的同名
+  // 包装器、`.npmrc`、workspace 配置都能把落点挪走）。两次静态读到同一个对象 ≠ 对象身份已
+  // 核实，所以存在性只当线索、责任保留为未知。
+  //
+  // failure 同理：**一律照实**留在 outcome 那一档。「测试没有启动」这句话没有能绑到这次执行
+  // 身份上的证据（第 10 轮审查 F1），所以 `command_missing` 这个类别整个撤掉了。
   const attribution: AcceptGateMissAttribution | null = miss.kind !== "entry" ? null
-    : origin?.removedByTask === true ? "mine" : origin?.removedByTask === false ? "not-mine" : "unknown";
-  const failure = attribution === "mine" ? outcome.failure : missFailure(miss) ?? outcome.failure;
+    : origin?.removedByTask === true ? "mine" : "unknown";
   return {
     attribution,
-    failure,
+    failure: outcome.failure,
     diagnosis: gateCommandMissNotice({ command: row.command, miss, sourceCommit: row.sourceCommit ?? null, origin }),
   };
 }

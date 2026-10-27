@@ -582,6 +582,12 @@ try {
   await (await import("./test-accept-gate-missing.js")).testGateMissingCommand({
     makeRepo, seedProject, seedTask, taskRow, settled, runsOf, createdAt,
   });
+  // 15'. 同一档的另一组反例：**PATH 上有个同名包装器把 runner 的落点整个挪走**。第 10 轮审查
+  //      就是靠它证明「起跑前的纯读 + 日志形状」永远推不出「它一行都没跑到」的（那次被测程序
+  //      真跑了、真报了断言失败，三件旧判据却全都成立）。
+  await (await import("./test-accept-gate-forwarded.js")).testGateForwardedRunner({
+    makeRepo, seedProject, seedTask, settled, runsOf, createdAt,
+  });
 
   console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 / 命令没跑到≠测试红了 全部通过");
   await (await import("./test-accept-gate-lifecycle.js")).testGateLifecycle({

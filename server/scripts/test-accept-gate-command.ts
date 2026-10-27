@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnAcceptGate, stampAshNote, stopAcceptGate, type GateExit } from "../src/accept-gate-process.js";
 import { IS_WINDOWS, userShellLaunch } from "../src/platform.js";
-import { classifyGateLaunch, foreignOutputIn, missFailure, occursAsWord,
+import { classifyGateLaunch, foreignOutputIn, occursAsWord,
   runnerRanOrLookedElsewhere } from "../src/accept-gate-miss.js";
 import { decodeGateEntryProbe, encodeGateEntryProbe, gateEntryAsk, probeGateEntry, scriptDefinedIn,
   type GateEntryProbe } from "../src/accept-gate-entry.js";
@@ -242,16 +242,16 @@ try {
       logComplete: testCase.logComplete ?? true, entry: testCase.entry });
     assert.equal(miss?.kind ?? null, testCase.kind, `${testCase.name}: 归类应为 ${testCase.kind}，实际 ${miss?.kind ?? "null"}（${miss?.by ?? "-"}）`);
     if (testCase.kind) assert.equal(miss!.name, testCase.missing ?? null, `${testCase.name}: 缺的那个名字抽错了`);
-    // failure 只在 entry 这一档改写：inner 和「认不出」都必须原样留在 exit_code 上，
-    // 否则一次误判会把一条真的红说成「不是你的代码」。
-    assert.equal(missFailure(miss), testCase.kind === "entry" ? "command_missing" : null, `${testCase.name}: failure 归类错了`);
     assert.ok(miss?.evidence?.trim() || !testCase.kind, `${testCase.name}: 认出来了就必须留下判据原文`);
   }
 
-  // 上面那张表的每一种措辞，都再跑三遍，钉住那条不变量（审查二 F1、审查八 F1）：
-  //  · 起跑前核出「入口不在树里」**且**②③也齐 → 才许落 entry；
-  //  · ①成立而②③缺一件 → 只报观察（`forced: "inner"`），failure 一个字不许改；
+  // 上面那张表的每一种措辞，都再跑三遍，钉住档位怎么分（审查二 F1、审查八 F1）：
+  //  · 起跑前核出「入口不在树里」而日志里也没有反证 → 落 entry（线索最硬那一档）；
+  //  · 起跑前核到「不在」但日志里有反证 → 落 inner 并记下是哪一条（`forced: "inner"`）；
   //  · ①说「在树里」、或压根没核到 → 一律不许落 entry，哪怕日志措辞一模一样。
+  //
+  // **这三档都不改写 failure、都不免修**（第 10 轮审查 F1）：`missFailure` 整个撤掉了，
+  // `command_missing` 也从 shared 的联合类型里撤掉了 —— 想接回来得先改类型，拦在编译这一档。
   for (const testCase of MISS_CASES.filter(one => one.missing)) {
     const ask = testCase.missing!;
     const absent = classifyGateLaunch({ ...testCase, logComplete: testCase.logComplete ?? true,
@@ -261,18 +261,15 @@ try {
     assert.equal(absent!.name, ask, `${testCase.name}: 名字取起跑前核的那个`);
     assert.match(absent!.evidence, /起跑前核过/, `${testCase.name}: 判据里必须有起跑前那份事实`);
     if (forced === "inner") {
-      assert.ok(absent!.withheld, `${testCase.name}: ②③没齐就得记下缺的是哪一件`);
-      assert.equal(missFailure(absent), null, `${testCase.name}: ②③没齐,failure 不许被改写`);
+      assert.ok(absent!.withheld, `${testCase.name}: 日志里有反证就得记下是哪一条`);
     } else {
-      assert.equal(absent!.withheld, undefined, `${testCase.name}: 三件都齐了就没有「缺哪一件」`);
-      assert.match(absent!.evidence, /没有别的程序写过东西/, `${testCase.name}: entry 的判据要把第三件事也写上`);
-      assert.equal(missFailure(absent), "command_missing", `${testCase.name}: 三件齐了才改写 failure`);
+      assert.equal(absent!.withheld, undefined, `${testCase.name}: 没有反证时就没有「哪一条挡着」`);
+      assert.match(absent!.evidence, /没有别的程序写过东西/, `${testCase.name}: entry 的判据要把这条线索也写上`);
     }
     for (const entry of [{ ask, file: "package.json", resolved: true, by: PROBE_BY }, null]) {
       const weaker = classifyGateLaunch({ ...testCase, logComplete: testCase.logComplete ?? true, entry });
       assert.notEqual(weaker?.kind, "entry",
         `${testCase.name}: ${entry ? "入口在树里" : "起跑前没核到"}时,日志措辞不许把它抬成 entry`);
-      assert.equal(missFailure(weaker), null, `${testCase.name}: 没有起跑前的事实,failure 不许被改写`);
     }
   }
 
@@ -484,7 +481,7 @@ try {
 
   testGateNoticeWording();
 
-  console.log("✅ 门禁失败归类（entry 要三件事同时成立 + 31 种措辞各验三遍 + 入口解析跟 runner 语义对齐"
+  console.log("✅ 门禁失败归类（档位只定措辞、永不改写 failure + 31 种措辞各验三遍 + 入口解析跟 runner 语义对齐"
     + " + 入口那一层纯读、读错也不发免修令 + 整词判据）通过");
 } finally {
   for (const launch of launches) {

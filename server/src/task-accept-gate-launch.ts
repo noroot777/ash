@@ -11,9 +11,9 @@ export async function discardPendingAcceptanceGate(taskId: string, error: unknow
 /**
  * 这条回执里「它怎么了」那一句。
  *
- * **按真实的 status/failure 说**（第 2 轮审查 N2）：旧版本除了 command_missing 一律写
- * 「但这条命令没能跑起来」,于是超时、被取消、真跑完红了全被说成没启动 —— 而紧跟其后附的
- * 诊断可能正写着「这条命令跑起来了」,同一句话里自己打自己。
+ * **按真实的 status/failure 说**（第 2 轮审查 N2）：旧版本一律写「但这条命令没能跑起来」,
+ * 于是超时、被取消、真跑完红了全被说成没启动 —— 而紧跟其后附的诊断可能正写着「这条命令
+ * 跑起来了」,同一句话里自己打自己。
  *
  * 这条路是**快速收尾**那一支：命令在 startPendingAcceptGate 返回前就已经退了,所以这里能
  * 看到任何一种终态,不是只有「红了」。
@@ -23,8 +23,6 @@ function gateOutcomeClause(gate: AcceptGateView): string {
   if (gate.status === "passed") return `它已经跑完而且是绿的，这次验收会自动接着做完，不用再点。`;
   if (gate.status === "canceled") return `但它被取消了（没有结论）：${tail}`;
   switch (gate.failure) {
-    // 这一档的正文就是下面那段结论;万一没归类出结论,别留一个光秃秃的冒号。
-    case "command_missing": return gate.diagnosis ? `但它没能启动：` : `但它没能启动：${tail}`;
     case "timeout": return `但它整条超时了（不是定位到某个断言失败）：${tail}`;
     case "spawn_failed": return `但它起不来：${tail}`;
     case "source_changed": return `但跑动期间被测的那棵树变了，这次结果不算数：${tail}`;

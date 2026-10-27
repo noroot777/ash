@@ -29,7 +29,9 @@ export const gateView = (row: GateRow): AcceptGateView => ({
   exitCode: row.exitCode ?? null,
   failure: (row.failure as AcceptGateFailure | null) ?? null,
   diagnosis: row.diagnosis ?? null,
-  missAttribution: (row.missAttribution ?? null) as AcceptGateView["missAttribution"],
+  // 归因在**读这一侧归一**：旧记录里可能存着已经撤掉的 `not-mine`（第 10 轮审查 F2），
+  // 认不出的值一律当 unknown —— 那一档的意思正是「先核一眼」，跟撤掉它的理由同向。
+  missAttribution: row.missAttribution === "mine" ? "mine" : row.missAttribution ? "unknown" : null,
   startedAt: row.startedAt,
   finishedAt: row.finishedAt ?? null,
   sourceCommit: row.sourceCommit ?? null,

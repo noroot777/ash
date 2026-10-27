@@ -21,7 +21,7 @@ export const acceptGateRuns = sqliteTable(
     /** running | passed | failed | interrupted | canceled */
     status: text("status").notNull(),
     exitCode: integer("exit_code"),
-    /** exit_code | timeout | spawn_failed | server_restarted | canceled | command_missing | … */
+    /** exit_code | timeout | spawn_failed | server_restarted | canceled | …(旧记录可能还有 command_missing) */
     failure: text("failure"),
     /**
      * 这一次红了之后的归类结论（人话，见 accept-gate-miss.ts）。
@@ -35,8 +35,9 @@ export const acceptGateRuns = sqliteTable(
     // 结算可能发生在 server 重启之后,而跑完再核一次拿到的是跑完之后的状态 —— 第 2 轮
     // 审查那条「打印启动提示、删掉自己、再报断言失败」的脚本就是这么被说成「没启动」的。
     entryProbe: text("entry_probe"),
-    // 「命令没解析出来」是不是这次改动造成的(mine/not-mine/unknown)。跟 failure 分开存:
-    // 免修那副面孔只许由 not-mine 授权,未知时得允许 agent 去核、去改(第 3 轮审查 F2)。
+    // 起跑前核到「这条命令点名的东西不在这份快照里」之后,这件事看起来是不是这次改动造成的
+    // (mine/unknown,两档都是「去核」)。**非空就等于起跑前核到它不在**,卡片据此分叉。
+    // 旧记录里可能还有 not-mine —— 那一档撤掉了(第 10 轮审查 F2),读的那几处都按 unknown 待。
     missAttribution: text("miss_attribution"),
     pid: integer("pid"),
     /**

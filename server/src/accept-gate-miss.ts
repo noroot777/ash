@@ -1,65 +1,56 @@
-// 门禁红了，而红的原因**不是断言失败**：有东西没解析出来。
+// 门禁红了，而红的原因**看起来不是断言失败**：有东西没解析出来。这一层把 npm 那串原始
+// 报错变成一段能直接行动的话：那个名字是什么、起跑前核到它在哪儿缺、目标分支上是什么情形、
+// 出路有哪几条。
 //
-// 为什么要跟 rc≠0 分开（用户 2026-10-26）：`exit_code` 把两件出路完全不同的事混成一句
-// 「未通过：命令退出码非 0」——
-//   · 测试真跑了、红了   → 出路是 agent 去修代码；
-//   · 命令点名要跑的东西不在这份快照里 → 那条命令一行都没跑到，出路跟修代码无关。本机
-//     四次都是后者（命令都是 `npm run test:accept`），而门禁只把 npm 的原始报错扔出来。
+// **这一层只给线索，不给判决**（第 10 轮审查 F1/F2 定的死线）。它曾经敢说「那条命令一行都
+// 没跑到，这不是断言失败，不要为这件事改任何代码」，授权是「起跑前纯读到它不在 + runner
+// 自己报了同名缺失 + 日志里没有别的程序写过东西」三件事同时成立。那个授权**不成立**：
 //
-// **「测试压根没启动」这句话只有一个授权来源：起跑前核过的那份事实**
-// （accept-gate-entry.ts，第 2 轮审查 F1）。日志里的措辞和跑完之后的文件状态都不行：
-//   · 日志不说是哪一层在喊 —— 顶层 `test:accept` 已经在跑、它内部的 `npm --prefix child
-//     run test:accept` 缺了**同名**脚本，日志长得和顶层缺失一模一样。第 1 轮把判据收紧到
-//     「这个名字是不是命令自己点名的那个词」，这条反例正好从那个口子穿过去；
-//   · 跑完看文件在不在也不行 —— 一条先打印启动提示、`rm "$0"` 删掉自己、再报断言失败的
-//     脚本，事后看就是「入口不存在」。
+//   · 起跑前那一层是纯读的（accept-gate-entry.ts），它读哪份 manifest 由命令行文本解释出来。
+//     而**真跑那一次落在哪儿由 runner 决定**：`PATH` 上一个同名包装器（审查的反例就是一个
+//     `bin/npm`，里面只有 `exec /opt/homebrew/bin/npm --prefix child "$@"`，透明转发、不打印
+//     任何自己的东西）、仓库 `.npmrc`、`npm_config_workspace` 一族环境变量，都能把落点整个
+//     挪走。挪走之后「根目录那份 manifest 里没有这个名字」跟「它没跑起来」再没有关系。
+//   · 日志也绑不住身份：子项目里缺一个**同名**脚本时 npm 照样打 `Missing script: "x"`，而项目
+//     自己的输出能被 `>` 引到别的文件里。于是「日志里只有 npm 自己的报错」照样成立 ——
+//     审查那条反例里被测程序真跑了、真报了 `ASSERTION FAILED`，三件事却全都成立。
 //
-// **而「起跑前核过它解析不出来」一件事也不够**（第 8 轮审查 F1 实测）。那一层现在是纯读的
-// （读文件系统、读一份 manifest 的文本，见 accept-gate-entry.ts），读出来的东西有两种错法：
-//   · **落点可能不是真要跑的那份**：`.npmrc` / 环境变量 / 自带 npm 包装器都能把 runner 指到
-//     别处（第 5、6、7 轮的三条反例）；
-//   · **状态可能在真跑那一刻才变**：审查那条反例给命令带了 `NODE_OPTIONS='--require
-//     ./preload.cjs'`，preload 只在 argv 里有 `test:accept` 时才生成那个脚本 —— 读的时候没有，
-//     真跑时有、跑了、报了断言失败。
-// 第 6、7 轮试过「起跑时问 npm 自己」（甚至插进同一次执行里问），第 8 轮判死：查询答的仍是
-// **查询那一次**的状态，而且替用户多跑了两次项目代码（F2）。
+// 能把那句话说实的证据只有一种：把日志里那句报错**绑到 ash 这一次真启动的那个进程身上**。
+// 现在没有这种证据，所以结论只能降到线索这一档：
 //
-// 所以「测试一行都没跑到 + 不用你改代码」这副面孔，现在要**三件事同时成立**才给，另两件都
-// 来自**真跑那一次自己的输出**：
-//   ① 起跑前核过：那个名字在它该在的地方没有（必要条件，不是充分条件）；
-//   ② **runner 自己说了**它解析不出这个名字，且那个名字就是命令点名的那个（路径那一档可以
-//      由 127/126 顶上，那是 POSIX 的约定）—— 它要是解析到了别的东西，就不会这么说；
-//   ②′ **而且那家 runner 没说过反话**：它一旦自己交代「我把这条当脚本跑过了」或「我读的是
-//      另一份 manifest」（npm 的 `Lifecycle script` / `workspace` / `location` 那几行，实测
-//      见 `RUNNER_RAN_OR_ELSEWHERE`），①读的那份就不是它真去找的那份。第 9 轮审查的两条
-//      反例都从这儿穿过去：workspace 配置把落点挪到子项目，子项目缺同名脚本时 npm 照样打
-//      `Missing script`，项目自己的输出又被 `>` 引走，于是①②③全都成立；
-//   ③ 这次日志里**除了门禁自己的记事和那家 runner 自己的报错，没有别的程序写过东西** ——
-//      任何被测程序一跑起来就会在这儿留下痕迹（npm 非 silent 时还会先回显 `> 包名@版本
-//      脚本名`）。这是「一行都没跑到」仅有的直接证据。
-// 缺一件就只报观察、不改 failure、不免修（`withheld` 记的就是缺了哪一件）。残余的那个
-// 口子写在 `foreignOutputIn` 的注释里。
+//   · **永不改写 failure**（`command_missing` 这个类别已经从 shared 的联合类型里撤掉了，
+//     再想接回来得先改类型），失败类别照实留在 exit_code 等真实那一档；
+//   · **永不免修**：归因只有 mine / unknown 两档，都是「你去核」，没有「不要动代码」那一档；
+//   · 存在性（目标分支上有没有、哪次提交带进来的）照旧核、照旧说，但措辞是线索加对冲。
 //
-// 所以三档：
-//   · `entry`：上面三件事同时成立。**唯一会改写 failure、唯一敢说「这不是断言失败」。**
-//   · `inner`：别的都归这儿 —— 日志里认出某个名字没解析出来，但谁点名的、命令整体有没有
-//     跑起来，这一层**都不敢断定**。只报观察，不改 failure，不给出路保证，不说「不用修」。
+// 已经走死的路，别再试：
+//   · 起跑时**问 runner 自己**（第 6、7 轮，甚至插进同一次执行里问）→ 查询答的是查询那一次
+//     的状态，还替用户多跑了两次项目代码（第 8 轮审查 F2 判死）；
+//   · **枚举 runner 的配置语义**（`.npmrc`、workspace、自带包装器…）→ 第 5、6、7 轮各补一种、
+//     各被下一轮一条新反例穿过去；
+//   · **再加一种包装器识别或日志否决模式**（第 10 轮审查明确否掉）→ 补的是形状，缺的是身份。
+//
+// 所以归类只剩「这段话该说多具体」三档：
+//   · `entry`：起跑前核过、那个名字在它该在的地方没有，而这次日志里也没有反证（runner 自己
+//     报了同名缺失、而且除了它自己的报错没有别的程序写过东西）。**线索最硬的一档**，但它
+//     照样不改 failure、不免修。
+//   · `inner`：其余全部 —— 日志里认出某个名字没解析出来，但谁点名的、命令整体跑到哪儿，
+//     这一层都不敢断定；起跑前核到「它不在」而日志里有反证的那几种（`withheld` 记的就是
+//     哪一种：runner 说它读的是别处那份、日志里有别人的输出、日志核不出来、runner 没认领）
+//     也落这儿，反证本身就是用户下一步要看的线索。
 //   · null：什么都认不出，照旧按 exit_code 处理。
 //
-// 日志措辞表（MISS_PATTERNS）因此降格成**线索**：它提供那个名字，让 inner 那段话说得具体，
-// 并在 entry 成立时充当旁证。加一行只是多认一种措辞，不会多授权任何断言。
-//
-// 退出码 127/126 同样只够判 inner：POSIX 约定是「shell 找不到要执行的东西」，可一个已经
-// 跑起来的脚本最后一步撞上这种事，自己也会以 127 退出（第 1 轮审查 N1）。
+// 日志措辞表（MISS_PATTERNS）因此只是**线索源**：它提供那个名字，让话说得具体。加一行只是
+// 多认一种措辞，不会多授权任何断言。退出码 127/126 同理（第 1 轮审查 N1：一个已经跑起来的
+// 脚本最后一步撞上这种事，自己也会以 127 退出）。
 //
 // 本模块是纯函数：不碰 git、不碰库、不碰 fs，判据可以逐条点测。
-import type { AcceptGateFailure } from "@ash/shared/accept-gate";
 import { gateEntryAsk, type GateEntryProbe } from "./accept-gate-entry.js";
 
 /** 认出来的是哪一种，以及凭什么。两档的语义差别见文件头。 */
 export type MissKind = "entry" | "inner";
 
-/** 三件必要条件里缺的是哪一件（见文件头）。 */
+/** 起跑前核到「它不在」之后，日志这边是哪一条反证挡着（见文件头）。 */
 export type MissWithheld = "ran-elsewhere" | "foreign-output" | "no-runner-claim" | "unreadable";
 
 export type GateLaunchMiss = {
@@ -71,17 +62,17 @@ export type GateLaunchMiss = {
   /** 认出它的是哪一路判据，只用于措辞。 */
   by: string;
   /**
-   * 起跑前核到的那份事实（accept-gate-entry.ts）。
-   *  - `false` → 它解析不出来。这是 `entry` 的**唯一**授权来源。
-   *  - `true`  → 它在树里。那么命令确实跑起来了，inner 的措辞才敢这么说。
+   * 起跑前核到的那份事实（accept-gate-entry.ts）。它是**线索**，不是授权（见文件头）。
+   *  - `false` → 读那份的时候它不在。
+   *  - `true`  → 读那份的时候它在，所以至少不是「不在树里」那一种。
    *  - `null`  → 没核出来（命令形状认不了、manifest 读不动）。**这时一个字都不许推断。**
    */
   entryResolved: boolean | null;
   /** 日志里那个名字跟命令点名的那个同名，但起跑前没核实到。只影响 inner 的措辞。 */
   sameName?: boolean;
   /**
-   * 起跑前核到「它不在」，但**另两件必要条件**没齐（见文件头），所以没给那副面孔。记下缺的
-   * 是哪一件，措辞照它说 —— 这是用户唯一能据以自己去看一眼的线索。
+   * 起跑前核到「它不在」，但这次日志里有**反证**（见文件头三档）。记下是哪一种，措辞照它说
+   * —— 那条反证就是用户下一步该去看的东西。
    */
   withheld?: MissWithheld;
 };
@@ -173,14 +164,11 @@ export function runnerRanOrLookedElsewhere(log: string, runner: string | null): 
  * 这次日志里有没有**别的程序**写过东西。`null` = 核不出来（日志被截断，或者认领这个名字的
  * 那家 runner 的输出形状这台机器上没实测过 —— 没实测过就不敢替它豁免任何一行）。
  *
- * `false` 是「被测的东西一行都没跑到」仅有的直接证据（第 8 轮审查 F1）：npm 一旦真去跑某个
- * 脚本，非 `--silent` 时会先把 `> 包名@版本 脚本名` 和脚本原文回显到 stdout，被测程序自己的
- * 输出也落在同一份日志里；缺脚本那一次的日志里只有 `npm error …`。
- *
- * **残余的口子**（知情保留）：一个完全静默、什么都不打印的被测程序，配上 `--silent`，仍然
- * 能让这一道通过。那时还有①②两道挡着（runner 得真说过它解析不出这个名字），三道同时被骗
- * 需要「配置把落点改到别处 + 那边有同名脚本 + 它内部又调一个缺同名的 + 全程静默」。再往下
- * 收就只能去执行点什么来观察，而那条路（多跑用户代码换一个答案）第 8 轮审查 F2 已经判死。
+ * `true` 是**最硬的那条反证**：有东西真的跑了，所以「它一行都没跑到」这句话当场就不成立 ——
+ * 这也是用户最该先看到的一句。`false` 只是条线索（npm 一旦真去跑某个脚本，非 `--silent` 时
+ * 会先把 `> 包名@版本 脚本名` 和脚本原文回显到 stdout，被测程序自己的输出也落在同一份日志
+ * 里），**不能**反过来当「没启动」的证明：被测程序可以把自己的输出 `>` 引到别的文件里，
+ * 也可以完全静默（第 10 轮审查 F1 的反例就是前者）。
  */
 export function foreignOutputIn(log: string, runner: string | null): boolean | null {
   const lines = log.split("\n").map(line => line.trim())
@@ -241,35 +229,33 @@ function firstPatternHit(log: string): PatternHit | null {
 }
 
 /**
- * 这一次红到底是哪一种。认不出来返回 null（照旧按 exit_code 处理）。
+ * 这一次红到底该怎么说。认不出来返回 null（照旧按 exit_code 处理）。
  *
- * `log` 要给**这一次日志的全文**（上限内），`logComplete` 说它是不是完整的 —— 第三件必要
- * 条件（日志里没有别的程序写过东西）得看完整份，截断了就核不出来。认措辞仍只在开头那一段
- * 里找（`PATTERN_HEAD_CHARS`）。
+ * `log` 要给**这一次日志的全文**（上限内），`logComplete` 说它是不是完整的 —— 「日志里没有
+ * 别的程序写过东西」这条线索得看完整份，截断了就核不出来。认措辞仍只在开头那一段里找
+ * （`PATTERN_HEAD_CHARS`）。
  *
- * `entry` 是**起跑前**核到的那份事实（accept-gate-entry.ts）；没有它，这个函数**绝不会**
- * 返回 `entry` 档。三件必要条件和它们各自挡住的反例见文件头，别再放宽到一件。
+ * `entry` 是**起跑前**核到的那份事实（accept-gate-entry.ts）；没有它，这个函数不会返回
+ * `entry` 档。**三档的差别只在措辞敢说多具体**：没有哪一档会改写 failure 或免修（文件头）。
  */
 export function classifyGateLaunch(opts: { command: string; exitCode: number | null; log: string;
   logComplete?: boolean; entry?: GateEntryProbe | null }): GateLaunchMiss | null {
   const entry = opts.entry ?? null;
   const entryResolved = entry ? entry.resolved : null;
   const hit = firstPatternHit(opts.log.slice(0, PATTERN_HEAD_CHARS));
-  // ① 三件事同时成立才给那副面孔（见文件头）。
+  // 起跑前读到「它不在」：线索最硬的那一档，但也只是线索（见文件头）。
   if (entry && !entry.resolved) {
-    // ② runner 自己说了它解析不出这个名字，而且就是命令点名的那个名字。
+    // 日志这边有没有跟它一致的那句话：runner 自己报了同名缺失。
     const claimed = hit && hit.name === entry.ask ? hit : null;
-    // 路径那一档可以由退出码顶上②：127/126 是「shell 找不到要执行的东西」的 POSIX 约定。
-    // 「已经跑起来的脚本最后一步也会这么退」那条反例（第 1 轮审查 N1）由③挡住。
+    // 路径那一档由退出码顶上：127/126 是「shell 找不到要执行的东西」的 POSIX 约定。
     const shellSaid = gateEntryAsk(opts.command)?.kind === "path"
       && (opts.exitCode === 127 || opts.exitCode === 126);
-    // ③ 这次日志里除了它自己的报错，没有别的程序写过东西。
+    // 日志里有没有别的程序写过东西。有 → 有东西真跑了，这是最该告诉用户的那条反证。
     const foreign = opts.logComplete === true
       ? foreignOutputIn(opts.log, claimed?.runner ?? (shellSaid ? "shell" : null))
       : null;
-    // ②′ 同一个 runner 自己交代的两件否决事项：它跑过脚本、或者它读的是别处那份 manifest
-    //    （workspace 配置挪落点，第 9 轮审查 F1/F2 的根因，判据见 RUNNER_RAN_OR_ELSEWHERE）。
-    //    整份日志都看：这里只需要一个正面命中，截断与否不影响「它确实说过」。
+    // runner 自己交代的两件反证：它把这条当脚本跑过了、或者它读的是别处那份 manifest
+    // （workspace 配置挪落点，判据见 RUNNER_RAN_OR_ELSEWHERE）。整份日志都看。
     const elsewhere = runnerRanOrLookedElsewhere(opts.log, claimed?.runner ?? null);
     if ((claimed || shellSaid) && foreign === false && !elsewhere) {
       const said = claimed ? claimed.text
@@ -279,7 +265,7 @@ export function classifyGateLaunch(opts: { command: string; exitCode: number | n
           + "这一次的日志里除了它自己的报错，没有别的程序写过东西，"
           + "它也没说自己跑过什么、或者读的是别处那份 manifest" };
     }
-    // 缺一件就只报观察：如实说核到了什么、哪一件没过，**不**改写 failure，也不免修。
+    // 日志里有反证：如实说核到了什么、哪一条反证挡着（两档都不改 failure、都不免修）。
     return { kind: "inner", name: entry.ask, by: entry.by, entryResolved: false,
       sameName: !!claimed,
       // 优先报最硬的那一件：runner 自己交代 > 日志里有别人的输出 > 它没认领 > 核不出来。
@@ -324,11 +310,6 @@ export function occursAsWord(text: string, name: string): boolean {
     if ((!before || !edge.test(before)) && (!after || !edge.test(after))) return true;
   }
   return false;
-}
-
-/** 只有 `entry` 这一档改写 failure；`inner` 和「认不出」一律原样留在 exit_code 上。 */
-export function missFailure(miss: GateLaunchMiss | null): AcceptGateFailure | null {
-  return miss?.kind === "entry" ? "command_missing" : null;
 }
 
 /**
@@ -411,12 +392,15 @@ export function gateCommandMissNotice(opts: {
   const subject = miss.name ? `「${miss.name}」` : "它要跑的那个东西";
   const ran = `（这一次跑的是 ${opts.command}${opts.sourceCommit ? `，被测快照 ${short(opts.sourceCommit)}` : ""}）`;
   if (miss.kind === "inner") return innerLines(miss, subject, ran, opts.command).join("\n");
-  // entry：起跑前核过、它解析不出来。这是唯一敢说「一行都没跑到」的一档。
+  // entry：起跑前核过、读那一份的时候它不在。线索最硬的一档 —— 但也只是线索（见文件头）。
   const lines = [
-    `这条命令点名要跑的 ${subject} 在被测快照里解析不出来：它要测的东西一行都没跑到，这不是断言失败。`,
+    `这条命令点名要跑的 ${subject} 在被测快照里解析不出来（起跑前核过）：多半就是它起不来，而不是某条断言失败。`,
     `判据：${miss.evidence}${ran}。`,
+    `这句话到此为止：ash 证明不了它一行都没跑到。这个名字最终落在哪儿由真跑那一次的 runner 定 —— `
+      + `PATH 上可能有个同名的包装器，.npmrc 和 workspace 那一族配置也能把落点整个挪走；`
+      + `把日志里那句报错绑到这一次执行身上的证据，ash 手里没有。所以这条红照旧要你去核，不是「不用修」。`,
   ];
-  // 但「没启动」推不出「不是你改的」（审查 F1）：先核一眼是不是这次改动把它弄没的。
+  // 「它不在」推不出「不是你改的」（审查 F1）：先核一眼是不是这次改动把它弄没的。
   if (origin?.removedByTask === true) {
     lines.push(
       `注意：它在任务分支的开工基线上是有的，是开工之后在任务这边没了 —— 看起来就是这次改动`
@@ -426,8 +410,14 @@ export function gateCommandMissNotice(opts: {
     );
     return lines.join("\n");
   }
+  // 核出「基线上也没有」时，那仍然只是**起跑前读的那一份**上的事实（第 10 轮审查 F2）：
+  // 据它免修，等于拿「两次静态读到同一个对象」当「runner 真选了这个对象」。所以照实说这份
+  // 读到了什么，再把结论留在未知上。
+  if (origin?.removedByTask === false) {
+    lines.push(`起跑前核的那一份（${miss.by}）在这个任务的开工基线上也没有这个名字，所以看起来不是这次改动删的 —— `
+      + `但 runner 真去找的是不是这一份，ash 核不到，所以这件事仍然算未知：还是先核一眼再说。`);
+  }
   // 归因未知也要说破（第 3 轮审查 F2）：「没证明是这次删的」不等于「证明不是这次删的」。
-  // 免修那副面孔由 attribution 决定（accept-gate-messages.ts），这里负责把话说清楚。
   if (!origin || origin.removedByTask === null) {
     lines.push(`这是不是这次改动把它弄没的（删掉、改名、或者改了项目设置里那条命令），ash 这次判不出来 —— `
       + `先核一眼这件事：是的话就去改代码，不是的话再看下面。`);
@@ -546,14 +536,17 @@ function originLines(origin: GateMissOrigin | null, subject: string): string[] {
         `2. ${skip}`];
     return [`${facts}${behind}`, ...merge, mine];
   }
-  // ② 核实了：目标分支上也没有。合分支解决不了 —— 这一档**绝不能**给合入建议。
-  //    判据只认 `absent`（定义级/文件级）。文字检索查空不算（审查 F2）。
+  // ② 目标分支上那一份里也没有。**这一档只给线索、不下判决**（第 10 轮审查 F2）：核的是
+  //    起跑前读的那个对象，而 runner 真选的是不是它，ash 核不到 —— 所以「合进来也没用」只能
+  //    是条件句。判据仍只认 `absent`（定义级/文件级），文字检索查空什么都不算（审查 F2）。
   if (origin?.absent) {
     return [
-      `${origin.targetBranch}${origin.targetCommit ? `（${short(origin.targetCommit)}）` : ""} 上也找不到 ${subject}。`
-        + `${behind}所以这不是「任务分支落后了」—— 合目标分支进来也不会让它出现。`,
+      `${origin.targetBranch}${origin.targetCommit ? `（${short(origin.targetCommit)}）` : ""} 上那一份里也没有 ${subject}`
+        + `（核的是起跑前读的同一个对象）。${behind}如果 runner 真去找的就是这一份，那合目标分支进来也不会让它出现；`
+        + `它实际选的是哪一份 ash 核不到，所以这只是条线索。`,
       `出路：`,
-      `1. 核对项目设置里这条验收前置命令本身：名字是不是拼错了，或者它只装在某台机器上、从没进过仓库。`,
+      `1. 核对项目设置里这条验收前置命令本身：名字是不是拼错了，或者它只装在某台机器上、从没进过仓库；`
+        + `再核一眼 runner 的有效配置（.npmrc、workspace、PATH 上有没有同名包装器）把它指到了哪儿。`,
       `2. ${skip}`,
       mine,
     ];

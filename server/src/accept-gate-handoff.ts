@@ -41,7 +41,7 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
   const sourceCwd = task && project ? await existingTaskWorkspacePath(task, project.repoPath) ?? project.repoPath : row.cwd;
   const prompt = gateFailurePrompt({
     command: row.command, summary: summarizeAcceptGate(view), logPath: row.logPath,
-    failure: view.failure, diagnosis: view.diagnosis ?? null, missAttribution: view.missAttribution ?? null,
+    failure: view.failure, diagnosis: view.diagnosis ?? null,
     tail: view.logTail, cwd: row.cwd, sourceCwd, executionNotice: view.executionNotice,
   });
   if (authority) {
@@ -65,26 +65,22 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
   // 那张卡只能说「不知道」。失败由下面的 onError 补写原因（两件事都写同一行）。
   await markHandoff(row.id, { at: now(), error: null });
   // 这条时间线是用户刷新之后唯一找得回「这次交回去是让它干什么」的地方，所以它必须跟交出去
-  // 的那副面孔一致（第 7 轮审查 N2）：免修那一档明确不许它改代码，这儿若还写「修完重新点
-  // 验收」就是两句相反的话。三副面孔的授权判据见 accept-gate-messages.ts。
+  // 的那份正式输入同解（第 7 轮审查 N2）。交出去的面孔现在只有一副（去定位、去修，或者拿出
+  // 无关的依据，见 accept-gate-messages.ts），所以这儿只按归因补一句「它第一步会先看什么」。
   //
   // **读的必须是 `view`，不是 `row`**（第 9 轮审查 N1）：自动交接传进来的 row 是**结算前**
-  // 读出来的那一行，failure / missAttribution 还空着，照它分叉等于永远走「修完重新点验收」
-  // 那一句 —— 而同一次交出去的正式输入（上面用的是 view）写的是「不要为这件事改任何代码」。
-  // 手动再交那条路本来就传终态行投影出来的 view，两条路因此同解。
-  const failure = view.failure ?? null;
+  // 读出来的那一行，failure / missAttribution 还空着，照它分叉会跟正式输入对不上。手动再交
+  // 那条路本来就传终态行投影出来的 view，两条路因此同解。
   const attribution = view.missAttribution ?? null;
-  const next = failure !== "command_missing"
-    ? "修完重新点验收即可，验收会自动再跑一遍。"
-    : attribution === "not-mine"
-      ? "结论说这不是这次改动的事，它不会为此改代码，会把出路转述给你 —— 出路（合目标分支 / 这次跳过）都要你自己定。"
-      : attribution === "mine"
-        ? "结论指向是这次改动把这条命令弄没的，它会去改回来，之后重新点验收。"
-        : "它要先核是不是这次改动把这条命令弄没的，再决定去改还是把出路转述给你。";
+  const next = attribution === "mine"
+    ? "结论指向是这次改动把这条命令弄没的，它会先核这件事；修完重新点验收即可。"
+    : attribution === "unknown"
+      ? "结论说这条命令起跑前就解析不出来（但证明不了它一行都没跑到），它会先核这件事；修完重新点验收即可。"
+      : "修完重新点验收即可，验收会自动再跑一遍。";
   await appendTaskTimeline(
     row.taskId,
-    `门禁交接：已叫醒该任务去看这条命令${failure === "command_missing" ? "为什么没跑起来" : "为什么红"}`
-      + `（日志 ${row.logPath}）。${again ? "这是你在验收台上手动再交一次。" : ""}${next}`,
+    `门禁交接：已叫醒该任务去看这条命令为什么红（日志 ${row.logPath}）。`
+      + `${again ? "这是你在验收台上手动再交一次。" : ""}${next}`,
   );
   // byBackend：占真人回合，但字是后端写的（同验收冲突交接）。
   continueWhenIdle(row.taskId, prompt, { byBackend: true }, async (why) => {
@@ -124,4 +120,3 @@ export async function rehandOffAcceptGate(taskId: string): Promise<
   const fresh = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, row.id))).at(0);
   return { ok: true, gate: gateView(fresh ?? row) };
 }
-

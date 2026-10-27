@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { gateCommandMissNotice, type GateMissOrigin } from "../src/accept-gate-miss.js";
 import { gateFailurePrompt } from "../src/accept-gate-messages.js";
-import type { AcceptGateMissAttribution } from "@ash/shared/accept-gate";
 
 /** 起跑前那一层核过的**是什么**：措辞里到处要引它,所以由这里导出给命令级那份用。 */
 export const PROBE_BY = "被测快照 package.json 的 scripts";
@@ -27,8 +26,15 @@ export function testGateNoticeWording(): void {
 
   // ① 定义级：读出目标分支那份 manifest 核过。这一档敢直说,也敢给合入建议。
   const defined = notice({ origin: origin({ holders: [{ file: "package.json", how: "definition", ...holder }] }) });
-  assert.match(defined, /一行都没跑到/, "① 命令点名要跑的东西没解析出来");
+  assert.match(defined, /解析不出来（起跑前核过）/, "① 命令点名要跑的东西没解析出来");
   assert.match(defined, /起跑前核过/, "① 判据是起跑前那份事实");
+  // 「它一行都没跑到」这句话**必须是被否掉的那一句**（第 10 轮审查 F1）：授权它的证据绑不到
+  // 真跑那一次的执行身份上 —— 审查反例里被测程序真跑了、真报了断言失败。
+  assert.match(defined, /证明不了它一行都没跑到/, "① 明说这一层证明不了它没启动");
+  assert.match(defined, /由真跑那一次的 runner 定/, "① 说清为什么证明不了");
+  assert.equal(/它要测的东西一行都没跑到/.test(defined), false, "不许把「没启动」当事实说（审查十 F1）");
+  assert.equal(/这不是断言失败。/.test(defined), false, "更不许据此排除断言失败");
+  assert.match(defined, /不是「不用修」/, "① 结论要落回「你去核」");
   assert.match(defined, /是有定义的/, "② 定义级事实可以直说");
   assert.match(defined, /968c5de4/, "② 最早写进那个文件的是哪次提交");
   assert.match(defined, /落后 main 80 个提交/, "② 任务分支落后目标分支多少");
@@ -64,10 +70,14 @@ export function testGateNoticeWording(): void {
 
   // ④ 目标分支上**确实**也没有（定义级核出来的）：合分支解决不了,绝不许给合入建议。
   const absent = notice({ origin: origin({ behind: 3, absent: "definition" }) });
-  assert.match(absent, /上也找不到/, "如实说目标分支上也没有");
-  assert.match(absent, /合目标分支进来也不会让它出现/, "要说破合分支解决不了");
+  assert.match(absent, /上那一份里也没有/, "如实说目标分支那一份里也没有");
+  // 核的是**起跑前静态读到的那个对象**,而 runner 真选的是不是它这一层核不到（第 10 轮审查
+  // F2）—— 所以「合进来也没用」只能是条件句,不能是判决。
+  assert.match(absent, /如果 runner 真去找的就是这一份/, "存在性只给条件句");
+  assert.match(absent, /只是条线索/, "要说破它只是线索");
   assert.match(absent, /核对项目设置里这条验收前置命令本身/, "换成真正的出路");
-  assert.equal(/合进任务分支/.test(absent), false, "目标分支上也没有时,不许保证合入能解决");
+  assert.match(absent, /PATH 上有没有同名包装器/, "出路里要点出落点可能被挪走");
+  assert.equal(/合进任务分支/.test(absent), false, "目标分支那一份里也没有时,不许保证合入能解决");
 
   // ⑤ 没核对出来。**文字检索查空也落在这一档**（审查二 F2：基线 description 里提过一句,
   //    就足以让「出现这个名字的文件集合」差集为空,而定义明明在目标分支上）。
@@ -77,16 +87,22 @@ export function testGateNoticeWording(): void {
     assert.match(unknown, /在目标分支上是什么情形，这次没能核对出来/, "如实说目标分支那件事没核对出来");
     assert.match(unknown, /不能保证/, "明说不能保证合入就解决");
     assert.equal(/把 main 合进任务分支/.test(unknown), false, "没核实过就不许给确定的合入建议");
-    assert.equal(/上也找不到/.test(unknown), false, "更不许反过来说目标分支上也没有（审查二 F2）");
+    assert.equal(/上那一份里也没有/.test(unknown), false, "更不许反过来说目标分支上也没有（审查二 F2）");
     // 归因未知 ≠ 归因为「不是你删的」。结论里必须留着这一步,否则 agent 读到的是免修令
     // （第 3 轮审查 F2：任务真把验收脚本删了、而目标 ref 又读不到时，它会被按住不许修）。
     assert.match(unknown, /先核一眼这件事/, "归因没核出来,就得让它先去核");
   }
 
-  // ⑤' 核实过「不是这次改动弄没的」：这一档才不必再去核归因。
+  // ⑤' 读到「开工基线上也没有」：照实说读到了什么,**但结论留在未知上**（第 10 轮审查 F2）。
+  //     这一档曾经授权免修，而它核的是起跑前静态读到的那个对象 —— 两次静态读到同一个对象
+  //     不等于 runner 真选了它。
   const notMine = notice({ origin: origin({ behind: 3, removedByTask: false,
     holders: [{ file: "package.json", how: "definition", ...holder }] }) });
-  assert.equal(/先核一眼这件事/.test(notMine), false, "核过不是它删的,就不该再让它去核一遍");
+  assert.match(notMine, /开工基线上也没有这个名字/, "读到的那件事照说");
+  assert.match(notMine, /看起来不是这次改动删的/, "线索的方向照说");
+  assert.match(notMine, /仍然算未知/, "但结论必须留在未知上");
+  assert.match(notMine, /还是先核一眼再说/, "所以照样要它先核一眼");
+  assert.equal(/不要为这件事改任何代码|不用你修/.test(notMine), false, "绝不许据此免修（审查十 F2）");
 
   // ⑥ 是**这次改动**把它弄没的：缺失推不出「与本次改动无关」（审查二 F1 末条）。
   const mine = notice({ origin: origin({ behind: 2, removedByTask: true }) });
@@ -203,46 +219,27 @@ export function testGateNoticeWording(): void {
   assert.match(sameName, /不敢断定它有没有跑起来/, "没核实到就明说不敢断定");
   assert.equal(/一行都没跑到/.test(sameName), false, "同名不等于顶层缺失（审查二 F1 反例①）");
 
-  // ── 回流模板三副面孔。两件事分开授权（第 1 轮审查 F2 + 第 3 轮审查 F2）：
-  //    ① 测试有没有启动 → 看 failure,不看「有没有诊断文字」;
-  //    ② 该不该让 agent 改代码 → 看归因。免修只许由**核实过**的 not-mine 授权。
-  const promptOf = (failure: "command_missing" | "exit_code", diagnosis: string,
-    missAttribution?: AcceptGateMissAttribution | null) => gateFailurePrompt({
+  // ── 回流模板只剩一副面孔（第 10 轮审查 F1）：去定位、去修，或者拿出「跟本次改动无关」
+  //    的依据。免修那一副和「先核归因」那一副都撤掉了 —— 授权它们的是起跑前的纯读加日志
+  //    形状，而那两样绑不到真跑那一次的执行身份上。
+  const promptOf = (failure: "exit_code" | "timeout", diagnosis: string) => gateFailurePrompt({
     command: "npm run test:accept", summary: "未通过", logPath: "/tmp/gate.log", tail: "…",
-    cwd: "/tmp/snap", sourceCwd: "/tmp/ws", failure, diagnosis, missAttribution,
+    cwd: "/tmp/snap", sourceCwd: "/tmp/ws", failure, diagnosis,
   });
-  const innerPrompt = promptOf("exit_code", inner);
-  assert.match(innerPrompt, /定位到底是哪一条红的/, "inner 走的是普通「去修」那一版");
-  assert.equal(innerPrompt.includes("不要为这件事改任何代码"), false, "inner 不许被交成「不许修」");
-  assert.ok(innerPrompt.includes(inner), "inner 的那段观察仍要附上去 —— 它是定位线索");
-  assert.equal(innerPrompt.includes("没能启动"), false, "inner 不是「没能启动」");
-  // 即便带着一段 command_missing 的结论文字,归因是 exit_code 的那一种也不许换面孔。
-  assert.equal(promptOf("exit_code", defined, "not-mine").includes("不要为这件事改任何代码"), false,
-    "免修由失败类型 + 归因共同授权,光有结论文字不算");
-
-  const missingPrompt = promptOf("command_missing", defined, "not-mine");
-  assert.match(missingPrompt, /没能启动/, "① 这一种的标题是「没能启动」");
-  assert.match(missingPrompt, /不要为这件事改任何代码/, "核实过不是它删的,才给免修指令");
-  assert.match(missingPrompt, /在开工基线上也没有，这一条也核过了/, "免修的依据要写在面孔里");
-  assert.match(missingPrompt, /转述给用户/);
-  assert.match(missingPrompt, /以上面那段结论为准/, "出路和核实档位都由结论说,模板不自己下判断");
-  assert.equal(/这条红跟你这次的改动无关/.test(missingPrompt), false,
-    "缺失推不出「与本次改动无关」（审查二 F1 末条）");
-  assert.equal(missingPrompt.includes("定位到底是哪一条红的"), false, "普通红那一版的措辞不该出现在这一种上");
-
-  // 归因没核出来：未启动这件事照说（它核过了），但**不许**给免修令 —— 任务自己把验收脚本
-  //    删了、而目标 ref 恰好读不到时，免修令会把 agent 按在原地（第 3 轮审查 F2）。
-  for (const attribution of [null, undefined, "unknown"] as const) {
-    const unknownPrompt = promptOf("command_missing", notice({ origin: null }), attribution);
-    assert.match(unknownPrompt, /没能启动/, "未启动这件事是核过的,照说");
-    assert.match(unknownPrompt, /解析不出来/, "照说它点名要跑的东西没解析出来");
-    assert.equal(unknownPrompt.includes("不要为这件事改任何代码"), false,
-      `归因=${attribution}：没核出来就不许发免修令`);
-    assert.match(unknownPrompt, /是不是你这次改动把它弄没的/, "要让它先去核归因");
-    assert.match(unknownPrompt, /改回来或同步改配置/, "核下来是自己弄没的,就该去改");
-    assert.match(unknownPrompt, /转述给用户/, "核下来无关,再转述给用户");
-    assert.equal(unknownPrompt.includes("定位到底是哪一条红的"), false, "它也不是普通红那一种");
-    assert.match(unknownPrompt, /别为了「让它跑起来」去凭空补一个脚本/, "补个空脚本是伪造放行条件");
+  for (const [what, text] of [
+    ["inner 的观察", promptOf("exit_code", inner)],
+    ["起跑前核过它不在", promptOf("exit_code", defined)],
+    ["整条超时", promptOf("timeout", "")],
+  ] as const) {
+    assert.match(text, /定位到底是哪一条红的/, `${what}: 一律走「去定位、去修」那一版`);
+    assert.equal(text.includes("不要为这件事改任何代码"), false, `${what}: 绝不许发免修令（审查十 F1）`);
+    assert.equal(/没能启动/.test(text), false, `${what}: 不许把红说成「没能启动」`);
+    assert.match(text, /跟本次改动无关/, `${what}: 留着「拿依据说它无关」这条路`);
+    assert.match(text, /命令不在树里/, `${what}: 把「命令不在树里」列进无关的依据里`);
   }
-  console.log("✅ 门禁结论措辞（存在性档位 / inner 四种 / 出路不预测合并结果 / 回流三副面孔）通过");
+  // 归类结论照旧原样附上去 —— 它是定位的线索，不是免修的理由。
+  assert.ok(promptOf("exit_code", inner).includes(inner), "inner 的那段观察要附上去");
+  assert.ok(promptOf("exit_code", defined).includes(defined), "起跑前核到的那段结论也要附上去");
+
+  console.log("✅ 门禁结论措辞（存在性档位 / inner 四种 / 出路不预测合并结果 / 回流只剩一副面孔）通过");
 }

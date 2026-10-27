@@ -121,18 +121,14 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
       // 交回去的是那一行，照旧版就会把一条真红说成「不会为此改代码」。
       const handed = (await api.rehandOffAcceptGate(task.id)).gate;
       await reload();
-      // 提示要跟这一次的失败类型对上（第 1 轮审查 N3）：卡上明说「不许改代码」，提示却说
-      // 「已交回去修」，用户看到的是两句相反的话。
-      //
-      // 免修那句同样**只许由归因授权**，不能拿失败类别代替（第 4 轮审查 N1）：归因没核出来
-      // 时交回去的模板要求它先核、该修就修，这儿若还说「不会为此改代码」，又是两句相反的话。
-      notify(handed.failure !== "command_missing"
+      // 提示要跟这一次交回去的那份输入对上（第 1 轮审查 N3）：两边说反了，用户看到的是两句
+      // 相反的话。「不会为此改代码」这句**已经没有了**（第 10 轮审查 F1 撤掉了免修那副面孔），
+      // 所以这里只按归因说它第一步会先看什么。归因非空 = 起跑前核到那个名字不在这份快照里。
+      notify(handed.missAttribution === null
         ? "已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令"
-        : handed.missAttribution === "not-mine"
-          ? "已把这条结论交回给智能体；它会把出路转述给你，不会为此改代码"
-          : handed.missAttribution === "mine"
-            ? "已把这条结论交回给智能体；结论指向是这次改动把命令弄没的，它会改回来"
-            : "已把这条结论交回给智能体；它要先核是不是这次改动把命令弄没的，再决定改还是转述给你");
+        : handed.missAttribution === "mine"
+          ? "已把这条结论交回给智能体；结论指向是这次改动把命令弄没的，它会先核这件事"
+          : "已把这条结论交回给智能体；结论说这条命令起跑前就解析不出来，它会先核这件事");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -285,7 +281,7 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
             {state.command && latest?.status === "failed" && !running && !settled && !state.unavailable && (
               <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>
                 <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次"
-                  : latest.failure === "command_missing" ? "把结论交给智能体" : "交给智能体去修"}
+                  : latest.missAttribution ? "把结论交给智能体" : "交给智能体去修"}
               </button>
             )}
             {shown && (
@@ -337,9 +333,12 @@ function heading(
     if (!latest.stale) return "验收前置命令已通过";
     return latest.command !== state.command ? "上次通过的不是现在这条命令" : "上次通过的不是现在这棵树";
   }
-  // 「命令在这份快照里不存在」跟「测试红了」在卡上必须是两句话：出路完全不同，而原先
+  // 「起跑前核到这份快照里没有它」跟「某条断言红了」在卡上要分开说：出路完全不同，而原先
   // 两者都只写「验收前置命令未通过」，于是用户只能去翻 npm 的原始报错自己猜。
-  if (latest.failure === "command_missing") return "验收前置命令没能启动：这份快照里没有它";
+  //
+  // **但不说「没能启动」**（第 10 轮审查 F1）：那句话需要能绑到真跑那一次执行身份上的证据，
+  // ash 没有。所以这儿只陈述起跑前读到的那件事，归因非空就是它。
+  if (latest.missAttribution) return "验收前置命令没过：起跑前核到这份快照里没有它";
   return `验收前置命令${ACCEPT_GATE_STATUS_LABELS[latest.status]}`;
 }
 
@@ -383,19 +382,14 @@ function detail(
       : latest.handoff.error
         ? `已经试过把日志交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）——那条红现在没人在管。`
         : "日志已经交回这个任务的智能体去修了。";
-  // 命令压根不在这份快照里的时候，「重跑一次」必然再红一次（树没变、命令没变）。把这点
-  // 说破，否则用户只会按着那颗按钮空转 —— 真正的出路在下面那段归类结论里。
-  if (latest.failure === "command_missing") {
-    // 这一种交过去的不是一律「去修」（见 accept-gate-messages.ts 的三副面孔），所以这句
-    // 话得跟着归因走。免修那句**只许**在归因核实为「不是这次改动弄没的」时说：归因未知时
-    // 模板给的是「先去核归因、该修就修」，这儿替它说成「被要求不要改代码」，等于拿一件没
-    // 核过的事作保。mine 那支在新记录上走不到（归因到自己时 failure 落回 exit_code），
-    // 留着是为了旧记录和将来可能的口径变化不至于掉进「未知」那句。
-    const charge = latest.missAttribution === "not-mine"
-      ? "（它被明确要求不要为此改代码）"
-      : latest.missAttribution === "mine"
-        ? "（结论指向是这次改动把它弄没的，它该改回来）"
-        : "（归因这次没核出来，它要先核是不是这次改动弄没的）";
+  // 起跑前核到这份快照里没有它的时候，用户最容易做的事是去按「重跑一次」。那一问的答案
+  // 这儿**不预测**（见下面那段注释），但要把「出路在结论里」说破，否则他只会按着按钮空转。
+  if (latest.missAttribution) {
+    // 交过去的面孔只有一副（去定位、去修，见 accept-gate-messages.ts），所以这句话只说
+    // 它第一步会先核什么。「被要求不要改代码」那句已经撤掉了（第 10 轮审查 F1）。
+    const charge = latest.missAttribution === "mine"
+      ? "（结论指向是这次改动把它弄没的，它会先核这件事）"
+      : "（它会先核这件事：结论证明不了这条命令一行都没跑到）";
     const told = !latest.handoff ? "结论还没交给智能体。"
       : latest.handoff.error ? `已经试过把结论交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）。`
         : `结论已经交回这个任务的智能体了${charge}。`;
