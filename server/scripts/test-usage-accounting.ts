@@ -8,9 +8,8 @@
 //    不能被算成 $0 摊进总额。
 // ③ 两种口径不能拿同一种 SQL 对付：`incremental` 逐轮加，`cumulative` 先跟上一份
 //    快照求差再加。**哪家 CLI 算哪一种，不在这个文件里**——这里钉的是两条 SQL 路径
-//    本身，以及启动迁移 repairLegacyUsageAccounting（v3，按「claude 是增量」那版前提
-//    写的历史纠偏）仍照原样工作。claude 实际走累计口径这件事及其历史回填，见
-//    test-claude-usage-accounting.ts。
+//    本身，以及启动迁移 repairLegacyUsageAccounting（v3）**只管 codex、一个字节都不碰
+//    claude**。claude 实际走累计口径这件事及其历史回填，见 test-claude-usage-accounting.ts。
 // ④ **但上下文水位恰恰相反，是覆盖**：它是「此刻装了多少」，累加会得出一个没有
 //    物理意义的数（流水 18M 的会话水位可能才 12 万）。同一个文件里两种账并存，
 //    所以这条必须在测试里钉死。
@@ -154,7 +153,9 @@ try {
     { input: 1_000, output: 380, cacheRead: 3_000, cacheWrite: 0, reasoning: 160, costUsd: null, turns: 1 },
     "Codex 第二轮只能把累计快照的差值写进 trace/UI",
   );
-  assert.equal(normalizedCodexEvent.accounting, "incremental", "新 trace 必须标明已经归一，读侧不能再求一次差");
+  // 落盘标记要说清这一份**怎么来的**：有基线 → delta。读侧见了 delta 就不再求差，
+  // 历史回填见了 delta 就不再当旧账动它。
+  assert.equal(normalizedCodexEvent.accounting, "delta", "有基线时求差得到的那一份，标记必须是 delta");
   const after = await db.select().from(sessions).where(eq(sessions.id, sessId)).get();
   const total = sessionUsage(after!);
   assert.ok(total);
@@ -245,17 +246,21 @@ try {
   const repaired = await repairLegacyUsageAccounting();
   assert.equal(repaired.alreadyApplied, false, "跑过 v2 的实例仍要执行 v3 缺失基线补救");
   assert.equal(repaired.repairedCodexSessions, 1);
-  assert.equal(repaired.repairedClaudeSessions, 1);
+  assert.equal(repaired.repairedClaudeSessions, 0, "v3 不再动 claude：它归手工回填脚本");
   assert.ok(repaired.skippedSessions >= 1, "不完整 Codex trace 必须走跳过 + 待建基线路径");
   assert.deepEqual(
     sessionUsage((await db.select().from(sessions).where(eq(sessions.id, legacyCodexId)).get())!),
     { ...cumulative2, turns: 2 },
     "Codex 旧账应恢复成最后一份累计快照，而不是两份快照相加",
   );
+  // **v3 必须一个字节都不碰 claude**，哪怕这条会话的账面(1/1/1/1)跟它 trace 里那两轮
+  // 明显对不上 —— 这个口子一开，claude 历史回填改好的账会被下一次启动按 trace 里的
+  // 累计值重新求和吹回去（回填若没能改写某份 trace，或跑了 --skip-traces，trace 里仍是
+  // 累计值）。claude 的账只许由 scripts/repair-claude-usage.ts 动。
   assert.deepEqual(
     sessionUsage((await db.select().from(sessions).where(eq(sessions.id, legacyClaudeId)).get())!),
-    addUsage(claudeTurn1, claudeTurn2),
-    "Claude 旧账仍按每轮增量重建",
+    { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, reasoning: 0, costUsd: null, turns: 2 },
+    "v3 不碰 claude 的账，原样留着",
   );
   const incompleteNext = { ...cumulative2, input: 24, output: 12, cacheRead: 200, reasoning: 7 };
   const baselineOnly = await recordSessionUsageEvent(

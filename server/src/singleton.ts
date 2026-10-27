@@ -134,6 +134,28 @@ export function liveLockToken(): string | null {
   return ownLockToken;
 }
 
+/**
+ * 这份库文件现在有没有**活着的** ash 实例在用。给离线维护脚本当安全闸用：历史回填会直接
+ * 改 `sessions` 和 trace 文件，跟运行中的回合抢同一条线程的快照就会互相覆盖，所以那类
+ * 脚本必须能在动手之前问一句「服务停了吗」，而不是只比对路径像不像生产库。
+ *
+ * 判据跟取锁时同一套 `staleLockReason`（pid 存活 + 命令形状 + 启动时刻一致），**不看
+ * 心跳**：心跳停只说明事件循环被同步活儿堵住，不说明进程死了。
+ *
+ * 没有锁文件就返回 null —— 包括 `ASH_ALLOW_MULTI=1` 起的实例（它压根不写锁）。那种
+ * 情况下这条闸给不出答案，调用方别把 null 读成「保证没人在用」。
+ */
+export function liveAshHolderForDb(dbFile = resolveAshDbFile()): {
+  pid: number;
+  startedAt: string | null;
+  command: string | null;
+} | null {
+  const lockFile = singletonLockFileForDb(dbFile);
+  if (!existsSync(lockFile)) return null;
+  if (staleLockReason(readLock(lockFile)) !== null) return null;
+  return holderFromLock(lockFile);
+}
+
 export function acquireDbSingletonLock(options: { port?: number | null } = {}): SingletonLock | null {
   const dbFile = resolveAshDbFile();
   const lockFile = singletonLockFileForDb(dbFile);

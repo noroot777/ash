@@ -5,16 +5,26 @@
 // 是哪一边。
 //
 // ① **口径**：claude 和 codex 都按 CLI 线程求差；拿不到线程 id 退回逐轮相加；claude 的
-//    那些 fork（走同一套 stream-json 的 opencode/grok…）刻意**不**跟着改。
+//    那些 fork（走同一套 stream-json 的 opencode/grok…）刻意**不**跟着改。落盘要带上
+//    「这一份怎么来的」那个标记（delta / snapshot / incremental）。
 // ② **换算**：数字不是编的，用的是实测会话 wkfsPOl_xgRe 连续回合的真 `result` 行
 //    （data/runs/r3Ef3onEym4s/*.agent-out.jsonl）。任务书点名那一对的差值是 627,096 —— 那
 //    一回合只有 2 次工具调用，63 万才是真实用量，而账本原先记的是 70,134,875。
-// ③ **回填**：历史重算只动 claude、只动能证明是累计口径的那些；证据不足就不动并留一条
+// ③ **回填**：历史重算只动 claude、只动能证明是累计口径的那些；判不出就明确跳过并留一条
 //    待建基线，免得下一次续聊把整条线程再加一遍。
+//
+// ③ 下面这几条是第 1 轮审查打回的那几个洞，各自一条用例，别删：
+//    - **分界不看时间戳**：线程的快照 `updated_at` 每回合都被覆盖，拿它当分界会随续聊
+//      往后漂，已归一的新记录被塞回旧账堆里，整条线程被判成「本来就是增量」而原样留着
+//      虚高的账。现在分界是逐条的落盘标记（hist-drift）。
+//    - **不凭数值大小改首轮**：只有标记是 `snapshot`（累计口径 + 当时没有基线）才补求差；
+//      一个已归一的大增量哪怕「五项全不降」也不许再减一次（hist-settled / hist-rebase）。
+//    - **形状判不出就跳过**：累计序列中途重置（A,B,A,B）既不是「全不降」也不是「隔轮下降」，
+//      不许当成铁证判成增量；真·增量序列碰巧全升同理（hist-reset / hist-rising-old）。
 //
 // Run: npm -w server run test:usage
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TokenUsage } from "@ash/shared";
@@ -27,7 +37,9 @@ const { db, ensureSchema } = await import("../src/db/index.js");
 const { sessions, usageCumulativeSnapshots } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { recordSessionUsageEvent, sessionUsage, usageAccountingFor } = await import("../src/usage.js");
-const { planClaudeUsageRepair, applyClaudeUsageRepair } = await import("../src/claude-usage-repair.js");
+const { planClaudeUsageRepair, applyClaudeUsageRepair, CLI_CUMULATIVE_SINCE, shapeRegime } = await import("../src/claude-usage-repair.js");
+const { readUsageTrace, TRACE_BACKUP_SUFFIX } = await import("../src/claude-usage-trace.js");
+const { sessionTracePath } = await import("../src/transcript.js");
 const { appendSessionTrace } = await import("../src/transcript.js");
 const { usageTotal } = await import("@ash/shared/usage");
 
@@ -84,6 +96,11 @@ try {
 
   const first = await recordSessionUsageEvent("live-1", { kind: "usage", usage: REAL[0]! }, "claude", thread);
   assert.equal(
+    first.accounting,
+    "snapshot",
+    "没有基线时整份入账，标记必须说出这件事 —— 历史回填凭它(而不是凭数值大小)判要不要补求差",
+  );
+  assert.equal(
     usageTotal(first.usage),
     69_507_779,
     "线程还没有快照（fresh run 首轮）时整份就是增量，两种口径在这一轮本来相同",
@@ -101,7 +118,7 @@ try {
     Math.abs(second.usage.costUsd! - (158.99187249999994 - 155.68560549999995)) < 1e-9,
     "费用同样是累计值，要跟着求差（$158.99 - $155.69 ≈ $3.31，不是 $158.99）",
   );
-  assert.equal(second.accounting, "incremental", "落 trace 的必须是已归一的增量，读侧不能再求一次差");
+  assert.equal(second.accounting, "delta", "有基线、求过差 → 标记必须是 delta，读侧和回填都认它");
 
   const third = await recordSessionUsageEvent("live-1", { kind: "usage", usage: REAL[2]! }, "claude", thread);
   assert.equal(usageTotal(third.usage), 71_666_911 - 70_134_875);
@@ -147,17 +164,48 @@ try {
     "拿不到线程身份只能逐轮加，求差会把别人的账算进来",
   );
 
+
+  // 没有线程身份的 claude 回合，标记也得如实说「这是执行器报的单轮值」。
+  const orphan = await recordSessionUsageEvent("live-4", { kind: "usage", usage: REAL[2]! }, "claude", null);
+  assert.equal(orphan.accounting, "incremental");
+
   // ── ③ 回填 ───────────────────────────────────────────────────────────────
-  // 四类历史会话 + 一条 codex 对照，各自落一份真形状的 trace。
+  // 另一条真实序列：同一条 CLI 线程连续 7 个回合的 `result`（审查复现用的就是这 7 个数，
+  // 合计 16,444,888 → 28,486,599）。累计口径下「各轮增量之和 = 最后一份累计值」。
+  const SERIES: TokenUsage[] = [
+    { input: 3311, output: 119_470, cacheRead: 14_987_796, cacheWrite: 1_334_311, reasoning: 0, costUsd: 37.67329350000002, turns: 1 },
+    { input: 3325, output: 127_198, cacheRead: 15_769_197, cacheWrite: 1_364_737, reasoning: 0, costUsd: 39.22155950000002, turns: 1 },
+    { input: 3386, output: 169_744, cacheRead: 20_858_547, cacheWrite: 1_439_542, reasoning: 0, costUsd: 47.373882, turns: 1 },
+    { input: 3400, output: 180_410, cacheRead: 22_133_472, cacheWrite: 1_664_239, reasoning: 0, costUsd: 51.990959499999995, turns: 1 },
+    { input: 3408, output: 184_785, cacheRead: 23_048_420, cacheWrite: 1_671_956, reasoning: 0, costUsd: 53.221199999999996, turns: 1 },
+    { input: 3424, output: 195_334, cacheRead: 24_780_277, cacheWrite: 1_929_225, reasoning: 0, costUsd: 58.6965295, turns: 1 },
+    { input: 3436, output: 200_163, cacheRead: 26_088_990, cacheWrite: 2_194_010, reasoning: 0, costUsd: 63.556625, turns: 1 },
+  ];
+  assert.equal(usageTotal(SERIES[0]!), 16_444_888);
+  assert.equal(usageTotal(SERIES[6]!), 28_486_599);
+
+  /** 口径日期界之前（旧 CLI，`result` 是本次进程内的用量）。 */
+  const OLD = (day: number) => `2026-09-${String(10 + day).padStart(2, "0")}T10:00:00.000Z`;
+  /** 之后（新 CLI，`result` 是整条线程的累计）。 */
+  const NEW = (day: number) => `2026-10-${String(10 + day).padStart(2, "0")}T10:00:00.000Z`;
+  assert.ok(OLD(9) < CLI_CUMULATIVE_SINCE && NEW(0) > CLI_CUMULATIVE_SINCE, "测试用的两组日期要落在界的两侧");
+
+  type SeedEntry = { usage: TokenUsage; mark: "incremental" | "delta" | "snapshot" };
+  const legacyOf = (series: TokenUsage[]): SeedEntry[] =>
+    series.map((usage) => ({ usage, mark: "incremental" as const }));
+
+  /** 按「账面 = 各条目逐轮相加」(也就是改口径之前 v1 的行为)建一条历史会话。 */
   const seed = async (
     id: string,
     taskId: string,
     cli: string | null,
-    series: TokenUsage[],
+    entries: SeedEntry[],
     over: Partial<typeof sessions.$inferInsert> = {},
-    traceCount = series.length,
+    traceCount = entries.length,
+    /** 同一条线程的第二条 ash 会话要排在后面，否则两截 trace 按时间交错，形状就乱了。 */
+    turnOffset = 0,
   ) => {
-    const booked = series.reduce((sum, usage) => ({
+    const booked = entries.reduce((sum, { usage }) => ({
       input: sum.input + usage.input,
       output: sum.output + usage.output,
       cacheRead: sum.cacheRead + usage.cacheRead,
@@ -170,62 +218,85 @@ try {
       id,
       taskId,
       cliSessionId: cli,
-      startedAt: at(0),
       usageInput: booked.input,
       usageOutput: booked.output,
       usageCacheRead: booked.cacheRead,
       usageCacheWrite: booked.cacheWrite,
       usageReasoning: booked.reasoning,
       usageCostUsd: booked.costUsd,
-      usageTurns: series.length,
+      usageTurns: entries.length,
       ...over,
     });
-    series.slice(0, traceCount).forEach((usage, index) => {
-      appendSessionTrace(taskId, id, at(index), { kind: "usage", usage, accounting: "incremental" }, at(index));
+    entries.slice(0, traceCount).forEach(({ usage, mark }, index) => {
+      const when = at(index + turnOffset);
+      appendSessionTrace(taskId, id, when, { kind: "usage", usage, accounting: mark }, when);
     });
     return booked;
   };
 
-  // 时间顺序照着真实历史摆：旧 CLI 的逐轮增量在前，升级后的线程累计在后。
-  // (a) 逐轮增量口径（旧 CLI，序列上下起伏）→ 强证据。
-  const bumpy = [REAL[2]!, REAL[0]!, REAL[3]!, REAL[1]!, REAL[4]!];
-  const bumpyBooked = await seed("hist-incremental", "hist-a", "thread-incremental", bumpy, { startedAt: at(0) });
-  // (b) 只有两轮、恰好递增：单调性在这里没有分辨力（实测 45 条两轮会话里 6 条会误判），
-  //     要靠日期落到分界线之前 → 仍按逐轮增量，不许动它的账。
-  const weakOld = await seed("hist-weak-old", "hist-b", "thread-weak-old", [REAL[0]!, REAL[1]!], { startedAt: at(1) });
-  // (c) 累计口径、强证据（5 轮全不降）→ 它的起始时刻就是分界线。
-  const inflated = await seed("hist-cumulative", "hist-c", "thread-cumulative", REAL, { startedAt: at(2) });
-  // (d) 同样两轮递增，但落在分界线之后 → 按累计口径重算。
-  await seed("hist-weak-new", "hist-d", "thread-weak-new", [REAL[0]!, REAL[1]!], { startedAt: at(3) });
-  // (e) 只有一轮：两种口径数值相同，不该被改。
-  const single = await seed("hist-single", "hist-e", "thread-single", [REAL[0]!], { startedAt: at(4) });
-  // (f) trace 条数与库里轮数对不上：重算不了。
-  await seed("hist-broken", "hist-f", "thread-broken", REAL, { startedAt: at(5) }, 3);
-  // (g) codex 对照：这个脚本一行都不许碰它。
-  const codexBooked = await seed("hist-codex", "hist-g", "thread-codex", REAL, {
-    agentType: "codex", executor: "codex", startedAt: at(6),
+  // (a) 旧 CLI 的逐轮增量：序列隔轮下降 + 日期在界之前，两个信号一致 → 强证据，账不动。
+  const bumpy = legacyOf([SERIES[2]!, SERIES[0]!, SERIES[3]!, SERIES[1]!, SERIES[4]!]);
+  const bumpyBooked = await seed("hist-incremental", "hist-a", "thread-incremental", bumpy, { startedAt: OLD(1) });
+  // (b) **F3 的一支**：4 轮真·增量碰巧一路上升。形状说「累计」、日期说「增量」—— 不一致，
+  //     必须判不出并原样留着，绝不能照形状把一笔对的账减掉。
+  const risingOld = await seed("hist-rising-old", "hist-b", "thread-rising-old",
+    legacyOf(SERIES.slice(0, 4)), { startedAt: OLD(2) });
+  // (c) 累计口径、7 轮全不降、日期在界之后 → 强证据，重算成最后一份累计值。
+  const inflated = await seed("hist-cumulative", "hist-c", "thread-cumulative",
+    legacyOf(SERIES), { startedAt: NEW(1) });
+  // (d) 只有两轮递增，但两个信号一致 → 弱一档的证据，照样重算。
+  await seed("hist-weak-new", "hist-d", "thread-weak-new", legacyOf(SERIES.slice(0, 2)), { startedAt: NEW(2) });
+  // (e) 同样两轮递增，日期落在界之前 → 信号不一致，判不出，账不动。
+  const weakOld = await seed("hist-weak-old", "hist-e", "thread-weak-old",
+    legacyOf(SERIES.slice(0, 2)), { startedAt: OLD(3) });
+  // (f) 只有一轮：两种口径数值相同，不该被改。
+  const single = await seed("hist-single", "hist-f", "thread-single", legacyOf([SERIES[0]!]), { startedAt: NEW(3) });
+  // (g) trace 条数与库里轮数对不上：重算不了。
+  await seed("hist-broken", "hist-g", "thread-broken", legacyOf(SERIES), { startedAt: NEW(4) }, 3);
+  // (h) codex 对照：这个脚本一行都不许碰它。
+  const codexBooked = await seed("hist-codex", "hist-h", "thread-codex", legacyOf(SERIES), {
+    agentType: "codex", executor: "codex", startedAt: NEW(5),
   });
+  // (i) **F3 的主支**：累计线程中途重置了计数器(A,B,A,B)。4 轮里只降了 1 次 —— 既不是
+  //     「全不降」也不是「隔轮下降」，形状说不出，必须判不出并原样留着。
+  const resetHistory = await seed("hist-reset", "hist-i", "thread-reset",
+    legacyOf([SERIES[0]!, SERIES[1]!, SERIES[0]!, SERIES[1]!]), { startedAt: NEW(6) });
+  // (j) **F2**：前 4 条是旧账的累计快照，第 5 条是修好的代码已经结算过的 delta，而且它
+  //     恰好五项全不降(真·大增量就长这样)。只认标记 → 原样计入，绝不再减一次。
+  const settledDelta = { ...SERIES[5]!, costUsd: 5.5 };
+  await seed("hist-settled", "hist-j", "thread-settled",
+    [...legacyOf(SERIES.slice(0, 4)), { usage: settledDelta, mark: "delta" }], { startedAt: NEW(7) });
+  // (k) 「先重启、后回填」留下的那一轮：标记是 snapshot(累计口径 + 当时没有基线)，
+  //     整份累计值被记成了增量，这次凭标记补掉。
+  await seed("hist-rebase", "hist-k", "thread-rebase",
+    [...legacyOf(SERIES.slice(0, 4)), { usage: SERIES[4]!, mark: "snapshot" }], { startedAt: NEW(8) });
 
-  const plan = await planClaudeUsageRepair({ cutoff: null });
-  assert.equal(
-    plan.boundary.lastIncremental,
-    at(0),
-    "分界线的下沿 = 最后一条「强证据是逐轮增量」的会话",
-  );
-  assert.equal(
-    plan.boundary.firstCumulative,
-    at(2),
-    "分界线的上沿 = 最早一条「强证据是线程累计」的会话；证据不足的会话靠它分档",
-  );
-  assert.equal(plan.boundary.clean, true);
-  assert.deepEqual(plan.warnings, []);
+  // (l) **F1**：这条线程在改口径之后真的又跑了 3 个回合，于是它的累计快照 `updated_at`
+  //     是「刚刚」。上一版拿 claude 快照的最早 updated_at 当分界，于是这 4 条旧账被塞进
+  //     「已归一」那一侧，整条线程被判成 incremental 并原样留着虚高的账。现在分界逐条看
+  //     标记，跟任何时间戳无关。
+  const driftLegacy = legacyOf(SERIES.slice(0, 4));
+  await seed("hist-drift", "hist-l", "thread-drift", driftLegacy, { startedAt: NEW(0) });
+  for (const usage of SERIES.slice(4)) {
+    const event = await recordSessionUsageEvent("hist-drift", { kind: "usage", usage }, "claude", "thread-drift");
+    appendSessionTrace("hist-l", "hist-drift", at(9), event, new Date().toISOString());
+  }
+  const driftSnapshot = await db.select().from(usageCumulativeSnapshots)
+    .where(eq(usageCumulativeSnapshots.sourceId, "claude:thread-drift")).get();
+  assert.ok(driftSnapshot && driftSnapshot.updatedAt > NEW(9), "这条线程的快照刚被运行期写过（分界绝不能看它）");
+
+  const plan = await planClaudeUsageRepair();
+  assert.equal(plan.boundary, CLI_CUMULATIVE_SINCE);
+  assert.deepEqual(plan.warnings, [], "强证据的两侧都落在界的正确一侧，不该报分歧");
+  assert.equal(plan.observed.lastIncremental, OLD(1), "库里观察到的最后一条强证据增量线程");
+  assert.equal(plan.observed.firstCumulative, NEW(0), "最早一条强证据累计线程（hist-drift 的 4 条旧账）");
 
   const planOf = (id: string) => plan.sessions.find((item) => item.sessionId === id)!;
   assert.equal(planOf("hist-cumulative").regime, "cumulative");
   assert.equal(planOf("hist-cumulative").evidence, "strong");
   assert.equal(
     usageTotal(planOf("hist-cumulative").after!),
-    usageTotal(REAL[4]!),
+    usageTotal(SERIES[6]!),
     "累计口径的会话重算后 = 最后一份累计快照（各轮增量之和的恒等式）",
   );
   assert.ok(
@@ -233,39 +304,78 @@ try {
     "原账面确实是几倍虚高，不然这个用例就什么都没在测",
   );
   assert.equal(planOf("hist-incremental").regime, "incremental");
+  assert.equal(planOf("hist-incremental").evidence, "strong");
   assert.equal(planOf("hist-incremental").after, null, "逐轮增量口径的历史账本来就是对的，不许动");
-  assert.equal(planOf("hist-weak-old").regime, "incremental");
-  assert.equal(planOf("hist-weak-old").evidence, "weak-date");
-  assert.equal(
-    planOf("hist-weak-old").after,
-    null,
-    "两轮递增不足以证明是累计口径：它落在分界线之前，按日期判成逐轮增量，账不动",
-  );
   assert.equal(planOf("hist-weak-new").regime, "cumulative");
-  assert.equal(planOf("hist-weak-new").evidence, "weak-date");
-  assert.equal(usageTotal(planOf("hist-weak-new").after!), usageTotal(REAL[1]!));
-  assert.equal(planOf("hist-single").regime, "cumulative");
+  assert.equal(planOf("hist-weak-new").evidence, "weak-agreed");
+  assert.equal(usageTotal(planOf("hist-weak-new").after!), usageTotal(SERIES[1]!));
   assert.equal(planOf("hist-single").evidence, "single-turn");
   assert.equal(planOf("hist-single").after, null, "一轮的会话两种口径同值，也不该写一遍");
+  assert.equal(planOf("hist-broken").regime, "unreadable");
   assert.match(planOf("hist-broken").skipped!, /对不上/);
   assert.equal(planOf("hist-broken").after, null);
   assert.equal(plan.sessions.some((item) => item.sessionId === "hist-codex"), false, "codex 会话不该进 claude 的计划");
 
-  const snapshotOf = (sourceId: string) => plan.snapshots.find((item) => item.sourceId === sourceId)!;
-  assert.deepEqual(snapshotOf("claude:thread-cumulative").usage, REAL[4]!, "续聊这条线程要靠这份累计基线求差");
-  assert.equal(snapshotOf("claude:thread-cumulative").baselineReady, true);
-  assert.equal(snapshotOf("claude:thread-incremental").baselineReady, false,
-    "旧口径的数字拼不出累计基线，只能留待建基线，不许猜一个");
-  assert.equal(snapshotOf("claude:thread-broken").baselineReady, false);
-  assert.equal(plan.snapshots.some((item) => item.sourceId.startsWith("codex:")), false);
-  // 运行期已经维护着快照的线程（上面 live-1 那条）不许被计划覆盖。
-  assert.equal(plan.snapshots.some((item) => item.sourceId === `claude:${thread}`), false);
+  // ── 判不出的那三条：一律不动账，而且必须明说判不出 ──────────────────────────
+  for (const [id, note] of [["hist-reset", "中途重置的累计"], ["hist-rising-old", "碰巧全升的增量"],
+    ["hist-weak-old", "两轮递增但日期在界之前"]] as const) {
+    assert.equal(planOf(id).regime, "uncertain", `${note}(${id}) 必须判不出`);
+    assert.equal(planOf(id).evidence, "none");
+    assert.equal(planOf(id).after, null, `${note} 不许改账`);
+    assert.ok(planOf(id).skipped, `${note} 必须留下「判不出」的说明，不能静默不动`);
+  }
+  assert.match(planOf("hist-reset").skipped!, /不到一半/);
+  assert.match(planOf("hist-rising-old").skipped!, /两个信号不一致/);
+  assert.equal(
+    snapshotPlanOf(plan, "claude:thread-reset").baselineReady,
+    false,
+    "口径判不出就拼不出可信基线：留待建基线，免得续聊时整条线程再加一遍",
+  );
 
+  // ── F2：已结算的大增量不许被再减一次 ────────────────────────────────────────
+  const settled = planOf("hist-settled");
+  assert.equal(settled.straddlesCutoff, true);
+  assert.equal(settled.rebasedFirstTurnAfterCutoff, false, "标记是 delta 就是已结算，哪怕五项全不降也不许动");
+  assert.equal(
+    usageTotal(settled.after!),
+    usageTotal(SERIES[3]!) + usageTotal(settledDelta),
+    "旧账那 4 条求差(之和 = 第 4 份累计) + 已结算那条原样计入",
+  );
+  assert.ok(
+    usageTotal(settledDelta) > usageTotal(SERIES[3]!) / 2,
+    "这条用例要有意义，那个已结算的增量就得大到「看着像累计快照」",
+  );
+
+  // ── 补首轮：只有 snapshot 标记才补 ──────────────────────────────────────────
+  const rebase = planOf("hist-rebase");
+  assert.equal(rebase.rebasedFirstTurnAfterCutoff, true);
+  assert.equal(usageTotal(rebase.after!), usageTotal(SERIES[4]!), "补掉那一轮之后整条会话收敛到最后一份累计值");
+
+  // ── F1：分界不随续聊漂移 ────────────────────────────────────────────────────
+  const drift = planOf("hist-drift");
+  assert.equal(drift.regime, "cumulative", "4 条旧账 + 日期在界之后 → 强证据判成累计");
+  assert.equal(drift.evidence, "strong");
+  assert.equal(drift.straddlesCutoff, true);
+  assert.equal(drift.rebasedFirstTurnAfterCutoff, true, "改口径后那条线程的第一回合是 snapshot，要补求差");
+  assert.equal(
+    usageTotal(drift.after!),
+    usageTotal(SERIES[6]!),
+    "整条线程(4 条旧账 + 3 个真实新回合)收敛到最后一份累计值 28,486,599；"
+    + "上一版在这里会判成 incremental 并留着 1 亿多的虚高账面",
+  );
+  assert.ok(usageTotal(drift.after!) < usageTotal((await readUsage("hist-drift"))!) / 3, "原账面确实虚高 3 倍以上");
+
+  // ── 落地 + trace 改写 ───────────────────────────────────────────────────────
   const applied = await applyClaudeUsageRepair(plan);
-  assert.equal(applied.sessions, 2, "该改的只有 hist-cumulative 与 hist-weak-new 两条");
-  assert.equal(usageTotal((await readUsage("hist-cumulative"))!), usageTotal(REAL[4]!));
-  assert.equal(usageTotal((await readUsage("hist-incremental"))!), usageTotal(bumpyBooked));
+  const rewritten = applied.traces;
+  assert.equal(applied.sessions, 5,
+    "该改的 5 条：hist-cumulative / hist-weak-new / hist-settled / hist-rebase / hist-drift");
+  assert.equal(usageTotal((await readUsage("hist-cumulative"))!), usageTotal(SERIES[6]!));
+  assert.equal(usageTotal((await readUsage("hist-drift"))!), usageTotal(SERIES[6]!));
+  assert.equal(usageTotal((await readUsage("hist-incremental"))!), usageTotal(bumpyBooked), "判成增量的账不动");
+  assert.equal(usageTotal((await readUsage("hist-rising-old"))!), usageTotal(risingOld), "判不出的账不动");
   assert.equal(usageTotal((await readUsage("hist-weak-old"))!), usageTotal(weakOld));
+  assert.equal(usageTotal((await readUsage("hist-reset"))!), usageTotal(resetHistory));
   assert.equal(usageTotal((await readUsage("hist-single"))!), usageTotal(single));
   assert.equal(usageTotal((await readUsage("hist-codex"))!), usageTotal(codexBooked), "codex 的账一个字节都不许动");
   assert.equal(
@@ -274,45 +384,93 @@ try {
     "运行期那条快照必须还是运行期写的那一份",
   );
 
-  // 再跑一次：历史已经对了，计划应该是空的（手工脚本没有一次性闸，必须自身幂等）。
-  const again = await planClaudeUsageRepair({ cutoff: null });
+  assert.deepEqual(rewritten.failures, [], "改写 trace 不该有失败项");
+  assert.equal(rewritten.failedThreads.size, 0);
+  assert.ok(rewritten.files >= 5, "每条重算过的会话都要把 trace 里的累计值改成真实增量");
+  assert.ok(
+    existsSync(`${sessionTracePath("hist-c", "hist-cumulative")}${TRACE_BACKUP_SUFFIX}`),
+    "改写前必须留一份原文件备份",
+  );
+  // 这才是 F4 的根治：气泡读的那条事件本身已经是真实增量，而且逐条带着 delta 标记，
+  // 含义不再随「以后会不会续聊」改变。
+  const rewrittenTrace = readUsageTrace("hist-c", "hist-cumulative")!;
+  assert.equal(rewrittenTrace.length, SERIES.length);
+  assert.ok(rewrittenTrace.every((entry) => entry.mark === "delta"), "改写后每条都带 delta 标记");
+  assert.equal(usageTotal(rewrittenTrace[0]!.usage), usageTotal(SERIES[0]!), "首轮没有上一份快照，整份就是增量");
+  assert.equal(
+    usageTotal(rewrittenTrace[1]!.usage),
+    usageTotal(SERIES[1]!) - usageTotal(SERIES[0]!),
+    "第 2 个气泡显示的是真实增量，不再是从开场到此刻的累计",
+  );
+  assert.equal(
+    rewrittenTrace.reduce((sum, entry) => sum + usageTotal(entry.usage), 0),
+    usageTotal((await readUsage("hist-cumulative"))!),
+    "各气泡之和 = 会话汇总(页面底部与右侧不再互相矛盾)",
+  );
+  // 不该改的那几份 trace 一个字节都没动。
+  assert.ok(
+    readUsageTrace("hist-i", "hist-reset")!.every((entry) => entry.mark === "incremental"),
+    "判不出的会话，trace 也不许动",
+  );
+  assert.ok(!existsSync(`${sessionTracePath("hist-i", "hist-reset")}${TRACE_BACKUP_SUFFIX}`));
+
+  // ── 幂等：再跑一次什么都不该变（手工脚本没有一次性闸，必须自身幂等）────────────
+  const again = await planClaudeUsageRepair();
   assert.equal(again.sessions.filter((item) => item.after).length, 0, "回填必须幂等");
   assert.equal(again.snapshots.length, 0, "快照已经建好，第二遍不该再建");
-
-  // 跨 cutoff：前四条还是累计快照，第五条已经是修好的代码写下的真增量。
-  const liveDelta = { ...REAL[0]!, input: 7, output: 11, cacheRead: 13, cacheWrite: 17, costUsd: 0.5 };
-  const straddleSeries = [REAL[0]!, REAL[1]!, REAL[2]!, REAL[3]!, liveDelta];
-  await seed("hist-straddle", "hist-h", "thread-straddle", straddleSeries, { startedAt: at(2) });
-  const straddlePlan = await planClaudeUsageRepair({ cutoff: at(4) });
-  const straddle = straddlePlan.sessions.find((item) => item.sessionId === "hist-straddle")!;
-  assert.equal(straddle.straddlesCutoff, true);
-  assert.equal(straddle.evidence, "strong", "cutoff 之前仍有 4 条，够强证据");
+  assert.equal(again.traces.length, 0, "trace 已经是真实增量，第二遍不该再改");
   assert.equal(
-    usageTotal(straddle.after!),
-    usageTotal(REAL[3]!) + 7 + 11 + 13 + 17,
-    "cutoff 之前按累计求差（之和 = 最后一份累计），之后原样计入",
-  );
-  assert.equal(straddle.rebasedFirstTurnAfterCutoff, false, "后半截是真增量，不该被当成累计快照再求一次差");
-  assert.equal(
-    straddlePlan.snapshots.some((item) => item.sourceId === "claude:thread-straddle"),
-    false,
-    "这条线程改口径之后已经跑过回合，快照归运行期维护",
+    again.sessions.find((item) => item.sessionId === "hist-cumulative")!.evidence,
+    "settled",
+    "改写之后这条线程一条旧账都没有了，口径无须再判",
   );
 
-  // 「先重启、后回填」留下的那一轮：改口径之后这条线程的第一回合没有快照可比，修好的代码
-  // 也会把整份累计值记一次。它在 trace 里就是一份完整累计快照，必须认出来并补掉。
-  const rebaseSeries = [REAL[0]!, REAL[1]!, REAL[2]!, REAL[3]!, REAL[4]!];
-  await seed("hist-rebase", "hist-i", "thread-rebase", rebaseSeries, { startedAt: at(2) });
-  const rebasePlan = await planClaudeUsageRepair({ cutoff: at(4) });
-  const rebase = rebasePlan.sessions.find((item) => item.sessionId === "hist-rebase")!;
-  assert.equal(rebase.rebasedFirstTurnAfterCutoff, true);
-  assert.equal(
-    usageTotal(rebase.after!),
-    usageTotal(REAL[4]!),
-    "补掉那一轮之后，整条会话仍收敛到最后一份累计值",
-  );
+  // ── --boundary 覆盖：别的机器上升级时刻不同 ─────────────────────────────────
+  const shifted = await planClaudeUsageRepair({ boundary: OLD(0) });
+  const shiftedBumpy = shifted.sessions.find((item) => item.sessionId === "hist-incremental")!;
+  assert.equal(shiftedBumpy.regime, "uncertain",
+    "把界挪到所有会话之前，形状(增量)就跟日期(累计)对不上了 —— 该判不出，而不是照日期改账");
+  assert.ok(shifted.warnings.length === 0 || shifted.warnings.every((text) => text.includes("日期界")));
 
-  console.log("claude 账本验证通过：线程累计求差、真实连续回合换算、历史回填与幂等、cutoff 分段");
+  // ── trace 当闸：一条线程里有一份 trace 改不了，这条线程的账也不许改 ──────────
+  // 「账已经是真实增量、trace 里还是累计值」是最坏的半成品：那半截的上一份基线已经没了，
+  // 下一次回填再也算不回真实增量，v3 那条老分支还会按累计值把账吹回去。
+  const gateSeries = legacyOf(SERIES.slice(0, 3));
+  const gateA = await seed("hist-gate-a", "hist-m", "thread-gate", gateSeries, { startedAt: NEW(9) });
+  const gateB = await seed("hist-gate-b", "hist-m", "thread-gate",
+    legacyOf(SERIES.slice(3, 6)), { startedAt: NEW(9), role: "reviewer", sideTurn: true }, 3, 3);
+  const gatePlan = await planClaudeUsageRepair();
+  assert.equal(gatePlan.sessions.find((item) => item.sessionId === "hist-gate-a")!.regime, "cumulative");
+  assert.ok(gatePlan.sessions.find((item) => item.sessionId === "hist-gate-a")!.after, "本来是要改账的");
+  assert.ok(gatePlan.sessions.find((item) => item.sessionId === "hist-gate-b")!.after);
+  rmSync(sessionTracePath("hist-m", "hist-gate-b"));
+  const gated = await applyClaudeUsageRepair(gatePlan);
+  assert.equal(gated.traces.failedThreads.has("thread-gate"), true);
+  assert.match(gated.traces.failures.join("\n"), /读不到 trace/);
+  assert.match(gated.traces.failures.join("\n"), /同一条 CLI 线程里有别的 trace 验不过/);
+  assert.equal(usageTotal((await readUsage("hist-gate-a"))!), usageTotal(gateA), "整条线程的账都不许动");
+  assert.equal(usageTotal((await readUsage("hist-gate-b"))!), usageTotal(gateB));
+  assert.ok(
+    readUsageTrace("hist-m", "hist-gate-a")!.every((entry) => entry.mark === "incremental"),
+    "同组里另一份 trace 也必须保持原样（验过了也不写）",
+  );
+  assert.equal(gated.sessions, 0, "这一轮一条账都没落");
+
+  // ── 形状判据本身 ───────────────────────────────────────────────────────────
+  assert.equal(shapeRegime([]), null);
+  assert.equal(shapeRegime([SERIES[0]!]), null, "一条谈不上形状");
+  assert.equal(shapeRegime(SERIES), "cumulative");
+  assert.equal(shapeRegime([SERIES[2]!, SERIES[0]!, SERIES[3]!, SERIES[1]!, SERIES[4]!]), "incremental");
+  assert.equal(shapeRegime([SERIES[0]!, SERIES[1]!, SERIES[0]!, SERIES[1]!]), null, "中途重置：形状说不出");
+  assert.equal(shapeRegime([SERIES[1]!, SERIES[0]!]), "incremental", "两条里降了一次 = 一半");
+
+  console.log("claude 账本验证通过：线程累计求差、真实连续回合换算、逐条口径标记、"
+    + "判不出就跳过、trace 改写与幂等");
 } finally {
   rmSync(root, { recursive: true, force: true });
+}
+
+function snapshotPlanOf(plan: { snapshots: { sourceId: string }[] }, sourceId: string) {
+  return plan.snapshots.find((item) => item.sourceId === sourceId) as
+    { sourceId: string; baselineReady: boolean };
 }

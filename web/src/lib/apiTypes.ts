@@ -9,6 +9,7 @@ import type {
   TaskWorkspaceDiscardResult,
   TaskWorkspaceLeftover,
   TokenUsage,
+  UsageAccountingMark,
 } from "@ash/shared";
 
 export type ChildWorkspaceLeftover = TaskWorkspaceLeftover & { taskId: string; title?: string };
@@ -82,7 +83,7 @@ export type SessionTraceEntry = {
     | { kind: "run"; model: string | null; reasoningEffort: string | null; verifyRound?: number | null }
     // 这一回合的 token 账（服务端每轮至多写一条）。它不是执行过程里的一步，渲染时
     // 要单独摘出去，别混进「执行过程」那串事件。
-    | { kind: "usage"; usage: TokenUsage; accounting?: "incremental" };
+    | { kind: "usage"; usage: TokenUsage; accounting?: UsageAccountingMark };
 };
 
 export type GitOverview = {
