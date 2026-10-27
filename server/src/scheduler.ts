@@ -9,7 +9,8 @@ import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
-import { deferQueueAdvance, type QueueAdvanceRequest } from "./queue-advance-retry.js";
+import { clearQueueAdvance, deferQueueAdvance, requestQueueAdvance, type QueueAdvanceRequest } from "./queue-advance-retry.js";
+import { waitForStartReceipt } from "./task-start-receipt.js";
 
 const MAX_PARALLEL = 4;
 
@@ -23,7 +24,10 @@ const MAX_PARALLEL = 4;
 // pause 会 200 返回、CLI 随后照样被拉起来（第 1 轮审查复现 20/20）。所以扫描时**只要
 // 杀不到就补一个起跑冻结标记**，由 spawn 前的最后一道闸消费（turn-freeze.ts）。
 export async function pauseGroup(groupId: string): Promise<void> {
-  await db.update(groups).set({ paused: true }).where(eq(groups.id, groupId));
+  await db.transaction(async (transaction) => {
+    await transaction.update(groups).set({ paused: true }).where(eq(groups.id, groupId));
+    await transaction.update(tasks).set({ queueAdvanceRequest: null }).where(eq(tasks.groupId, groupId));
+  }, { behavior: "immediate" });
   const members = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
   for (const t of members) {
     // status 可能在队列推进/续聊交错时短暂失真；只要有活 handle，先杀进程永远优先。
@@ -75,12 +79,25 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
   // 消息补投同一条链):分开的话,读完成员快照到落库之间的 await 窗口里,另一个入口
   // 刚认领的占位在这里看不见,按旧快照再拉起一个就是同队双跑(第 7 轮审查:跨入口
   // 竞争)。临界区里只做挑选与占位,真正拉起(resumeOrRunTask)在链外。
-  const next = await serializeQueueClaims<(typeof tasks.$inferSelect & { reservation: TaskQueueReservation }) | "paused" | null>(async () => {
+  const next = await serializeQueueClaims<(typeof tasks.$inferSelect & {
+    reservation: TaskQueueReservation; advanceRequest: QueueAdvanceRequest;
+  }) | "paused" | null>(async () => {
     const rows = await queueMembers(queueId);
     const candidate = selectNextInQueue(rows);
-    if (request && (!candidate || candidate.id !== request.taskId
-      || candidate.directionEpoch !== request.directionEpoch
-      || candidate.resumePromptGeneration !== request.resumePromptGeneration)) return "paused";
+    if (request) {
+      const target = rows.find((task) => task.id === request.taskId);
+      if (!target || target.queueAdvanceRequest?.id !== request.id
+        || target.resumePromptGeneration !== request.resumePromptGeneration || target.archived
+        || ["done", "failed", "canceled"].includes(target.status) || target.question || hasCliGoalHold(target.cliState)
+        || (target.groupId && await isPaused(target.groupId))) {
+        await clearQueueAdvance(request);
+        return "paused";
+      }
+      if (!candidate || candidate.id !== request.taskId) {
+        deferQueueAdvance(queueId);
+        return "paused";
+      }
+    }
     if (!candidate) {
       // 挑不出人,而冻结源里有旁路/续聊回合(followUpFrom 非终态)的活跃回合:这次
       // 让位会被它结算时的 quiet 恢复吞掉(setTaskStatus 的 quietAdvance),给它记一笔
@@ -99,9 +116,10 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
     // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
     // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
     if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
+    const advanceRequest = request ?? await requestQueueAdvance(queueId, candidate);
+    if (!advanceRequest) return "paused";
+    deferQueueAdvance(queueId);
     if (await preparePendingCheckpointStart(candidate.id)) {
-      deferQueueAdvance(queueId, { taskId: candidate.id, directionEpoch: candidate.directionEpoch,
-        resumePromptGeneration: candidate.resumePromptGeneration });
       return "paused";
     }
     // 观察空闲 ≠ 取得所有权:上一版先 isTurnClaimed 再 setQueued,检查与落位之间的
@@ -133,12 +151,12 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
       scheduleSeatReclaim(candidate.id, queueId, candidate.status as TaskStatus, 1_000, { reservation });
       return null;
     }
-    return { ...candidate, reservation };
+    return { ...candidate, reservation, advanceRequest };
   });
   if (next === "paused") return;
   if (next && typeof next === "object") {
     const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
-    void resumeOrRunTask(next.id, { reason: "queue", turnHeld: true })
+    void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { reason: "queue", turnHeld: true })
       .catch((err) => {
         console.error(`[ash] 队列推进续跑(${next.id})失败:`, err);
         // 接管前就抛了(读库/取指令那串 await):turnHeld 的锁还挂在我们头上 —— 占着
@@ -146,7 +164,14 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
         // 接管后的异常由 continueTask 自己吸收并在 finally 释放,不会走到这里。
         if (isTurnClaimed(next.id)) releaseTurn(next.id);
       })
-      .finally(() => void reclaimStrandedSeat(next.id, queueId, prevStatus, { reservation: next.reservation }));
+      .finally(() => reclaimStrandedSeat(next.id, queueId, prevStatus, { reservation: next.reservation })))
+      .then(async (started) => {
+        if (started) await clearQueueAdvance(next.advanceRequest);
+        else deferQueueAdvance(queueId);
+      }).catch((error) => {
+        console.error(`[ash] 队列启动回执确认失败(${next.id}):`, error);
+        deferQueueAdvance(queueId);
+      });
     return;
   }
   if (!next) {

@@ -18,6 +18,7 @@ import { enterLeadDelivery, enterTurn } from "../src/turn-entry-guard.js";
 import { monitorWakeCheckpoint } from "../src/monitor-checkpoint-handoff.js";
 import { id } from "../src/util.js";
 import { checkpointStartCases } from "./checkpoint-start-cases.js";
+import { checkpointQueueCases } from "./checkpoint-queue-cases.js";
 
 function owner(mode: string, taskId: string, messageId = ""): void {
   const child = spawnSync(process.execPath, [
@@ -42,6 +43,7 @@ async function resultsDelivered(test: Awaited<ReturnType<typeof scenario>>): Pro
 }
 
 try {
+  await checkpointQueueCases();
   await checkpointStartCases();
   for (const size of [1, 2]) {
     for (const route of ["run", "retry"] as const) {

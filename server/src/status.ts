@@ -83,6 +83,7 @@ async function writeTaskStatus(
     }
   } else if (TERMINAL.includes(status)) {
     patch.endedAt = endedAt = updatedAt;
+    patch.queueAdvanceRequest = null;
   }
   if (status !== "running") {
     // 回合内的身份随回合结束作废。**`direction_epoch` 不在此列,那不是漏写**:它正是为了

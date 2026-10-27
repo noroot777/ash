@@ -9,6 +9,7 @@ import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
 import { deliverPendingMessages, reclaimStaleDeliveries } from "./pending-messages.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
+import { replayQueueAdvances } from "./queue-advance-retry.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
 // Supports *, n, a-b, */n, and comma lists. No seconds, no names.
@@ -133,6 +134,7 @@ export async function tick() {
   // 任务原来那个会话(continueTask)。判定与投递单点在 pending-messages.ts ——
   // 排队消息的正常触发源是任务落终态时的钩子,这里是定时消息的到期路径兼兜底。
   await deliverPendingMessages();
+  await replayQueueAdvances();
 }
 
 // Catch-up on startup: missed one-shots (at < now, never fired) fire once via the
