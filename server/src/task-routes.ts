@@ -28,6 +28,7 @@ import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
+import { recentRejectionNotices } from "./user-action-rejection.js";
 
 export function mountTaskRoutes(api: Hono): void {
   // 删除那一族(连带关联行 + DELETE 本体)住在 task-delete-routes.ts —— 只是为了行数,
@@ -110,6 +111,16 @@ api.get("/tasks/:id", async (c) => {
   // 只是不是我的项目」。
   if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
   return c.json((await enrichTasks([r]))[0]);
+});
+
+// 这个任务最近被挡回的用户操作。前端在**对话流空态**里读它 —— 从没跑过的任务没有会话
+// 时间线可写,点运行被同队前项挡回那一下原本一个字都留不下,用户只看见一闪而过的 toast
+// (本轮审查 F4)。判据见 user-action-rejection.ts 文件头。
+api.get("/tasks/:id/notices", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
+  return c.json({ notices: await recentRejectionNotices(taskId) });
 });
 
 api.get("/tasks/:id/question-history", async (c) => {

@@ -5,7 +5,7 @@ import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
 import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask, whenTurnIdle } from "./runs.js";
-import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
+import { noteMissedAdvance, seatGeneration, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 
 const MAX_PARALLEL = 4;
@@ -182,9 +182,16 @@ export async function reclaimStrandedSeat(
   taskId: string,
   queueId: string,
   prevStatus: TaskStatus,
-  opts?: { repush?: "always" | "stranded" | "never" },
+  opts?: { repush?: "always" | "stranded" | "never"; deferrals?: number },
 ): Promise<void> {
   const repush = opts?.repush ?? "stranded";
+  const deferrals = opts?.deferrals ?? 0;
+  // 本函数收的是「**没有任何活着的 seat 认领**的 queued 遗留」:advanceQueue 自己
+  // setQueued 落的那种,以及 claimQueueSeat 写失败留下的那种(两者都不发号)。非 0 就说明
+  // 这具 queued 是某个活着的 seat 的 —— 回滚它等于撤掉别人的占位,任务被翻回终态、结算
+  // 钩子放行下一个成员,反而造出双跑(本轮审查 F3 是 seat 自己那一侧的同一个形态)。
+  // 那种该由它自己的 release() 负责,外人不插手。
+  if (seatGeneration(taskId) !== 0) return;
   // 锁被人占着 = 有人正拿着这个占位真正起跑,它的结算会覆盖状态,现在不能动。**但也不能
   // 就此不管**:旧版这里直接 return,于是释放那一瞬恰好有人占锁(或者占着它的是一把幽灵锁)
   // 时,这具 queued 遗留就永远没人收 —— 任务永久「排队中」,正是 2026-10-26 那次卡死的
@@ -192,13 +199,22 @@ export async function reclaimStrandedSeat(
   // 要么确实还孤零零停在 queued。幂等 + 收敛(锁总会释放,或被 turn-lock-reclaim 的巡检
   // 回收),多挂几次最多多跑几次空转判定。
   if (isTurnClaimed(taskId)) {
-    whenTurnIdle(taskId, () => void reclaimStrandedSeat(taskId, queueId, prevStatus, opts));
+    // 重排有上限,理由同 queue-seat 的 MAX_ROLLBACK_DEFERRALS:每次重排都要等一个完整的
+    // 占锁→放锁周期,现实里本就收敛,上限只挡病态来回,到顶如实留一行日志。
+    if (deferrals >= 5) {
+      console.warn(`[ash] 队列占位守卫重排已达上限(${taskId}),这具遗留留给下一个队列事件`);
+      return;
+    }
+    whenTurnIdle(taskId, () => void reclaimStrandedSeat(taskId, queueId, prevStatus, { ...opts, repush, deferrals: deferrals + 1 }));
     return;
   }
   try {
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     const stranded = row?.status === "queued";
     if (stranded) {
+      // 上面那次读隔着 await:这期间新一轮可以整个起来、落下自己的占位。写之前紧挨着再核
+      // 一遍,别把后来者的 queued 覆盖成我们手里这份旧 prevStatus。
+      if (seatGeneration(taskId) !== 0 || isTurnClaimed(taskId)) return;
       await setTaskStatus(taskId, prevStatus, prevStatus === "paused" ? { quietAdvance: true } : undefined);
     }
     if (repush === "never" || (repush === "stranded" && !stranded)) return;

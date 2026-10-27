@@ -48,6 +48,19 @@ export type TurnIdentity = {
    * 回收判据与阈值住在 turn-lock-reclaim.ts。
    */
   claimedAt: number;
+  /**
+   * **这一次占用的身份号** —— 全进程单调递增,`turns` 里删掉之后也绝不复用。
+   *
+   * 它只服务一件事:让「替别人还锁」变成**条件释放**。判定一把锁可疑要读进程登记册、
+   * 要写时间线,中间全是 await;而按任务 id 删锁的写法在那段间隙里认不出换了主人 ——
+   * 原持有者自己还了锁、一个正常回合随即占上,拔的就是**后来者**那把,同一个任务从此
+   * 两个回合并跑(本轮审查 F2 按批量快照复现)。所以 `forceReleaseTurn` 只收快照、
+   * 核对号码,对不上就什么都不做。
+   *
+   * 占位转正(`reclaimTurn`)沿用原号:转正接的是同一把锁,换号会让判定时拿到的快照
+   * 凭空失效,可疑锁反而永远拔不掉。
+   */
+  seq: number;
 };
 
 /**
@@ -75,6 +88,8 @@ export const turnSourceReview = (source?: TurnSource | null): TurnReview | null 
   source && source.role === "reviewer" && source.review !== "unbound" ? source.review : null;
 
 const turns = new Map<string, TurnIdentity>();
+/** 占用身份号的发号器。只增不减、删掉不回收(见 `TurnIdentity.seq`)。 */
+let nextTurnSeq = 1;
 const afterTurn = new Map<string, Array<() => void>>();
 
 // 「回合已占位、进程还没起来」时收到的冻结请求。这一段窗口里 `handles` 是空的、
@@ -138,7 +153,7 @@ export function takeStartFreeze(taskId: string): StopSettle | null {
  */
 export function claimTurn(taskId: string, role = "single", review: TurnReview | null = null): boolean {
   if (turns.has(taskId)) return false;
-  turns.set(taskId, { role, review, token: null, claimedAt: Date.now() });
+  turns.set(taskId, { role, review, token: null, claimedAt: Date.now(), seq: nextTurnSeq++ });
   return true;
 }
 
@@ -192,7 +207,13 @@ export function reclaimTurn(taskId: string, role: string, review?: TurnReview | 
   if (!held) throw new Error(`reclaimTurn(${taskId}) without holding the turn`);
   // `review` 省略 = 沿用占位时交代的那一份(占位转正不该把它抹掉);显式传 null 才是清掉。
   // `claimedAt` 沿用:转正接的是同一把锁,不是新占一次(见 `TurnIdentity.claimedAt`)。
-  turns.set(taskId, { role, review: review === undefined ? held.review : review, token: held.token, claimedAt: held.claimedAt });
+  turns.set(taskId, {
+    role,
+    review: review === undefined ? held.review : review,
+    token: held.token,
+    claimedAt: held.claimedAt,
+    seq: held.seq, // 同一把锁,不换号(见 `TurnIdentity.seq`)
+  });
 }
 
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
@@ -316,24 +337,35 @@ export function heldTurns(): Array<TurnIdentity & { taskId: string }> {
 }
 
 /**
- * **强制**放掉一把回合锁 —— 给「这把锁已经没有主了」那一种(幽灵锁)收尾用。
+ * **条件释放**一把回合锁 —— 给「旁人判定原持有者已经不在了」那一种收尾用。
  *
  * 和 `releaseTurn` 的差别只在调用者的身份:`releaseTurn` 是**持有者自己**在 finally 里还锁;
- * 这一条是**旁人**判定「原持有者已经不存在了」之后替它还。所以它返回被拔掉的那份身份 ——
- * 回收方要把「拔掉的是谁、占了多久」如实写进日志和任务时间线,不许静默。
+ * 这一条是旁人替它还。所以它返回被拔掉的那份身份 —— 回收方要把「拔掉的是谁、占了多久」
+ * 如实写进日志和任务时间线,不许静默。
  *
- * ⚠ 判据不在这里。这个函数不问「该不该拔」,拔错一把正在起跑的锁 = 同一个任务起两个回合。
+ * **参数是一份快照,不是一个任务 id**,这是故意的:
+ * 判定「这把锁可疑」要读进程登记册、读库、写时间线,中间全是 await。按 id 删锁的签名
+ * 在那段间隙里**没有任何办法**认出锁已经换了主人 —— 原持有者自己还了锁、一个正常回合随即
+ * 占上,拔的就是后来者那把,同一个任务从此两个回合并跑。本轮审查 F2 就是按批量快照复现的:
+ * 一轮巡检先判定 N 把,逐把处理时第 2 把已经换了主。
+ *
+ * 所以类型上就不给「释放任务 X 上随便哪一把」这种说法:只收 `{ taskId, seq }`,`seq` 全进程
+ * 不复用(见 `TurnIdentity.seq`),号码对不上就返回 null、一个字节都不动。调用方要保证的只剩
+ * 一件事:**快照和这次调用之间不许隔 await**(判据自己也要重新算一次,见
+ * turn-lock-reclaim.ts `releaseSuspectTurn`)。
+ *
+ * ⚠ 该不该拔不在这里判。拔错一把正在起跑的锁 = 同一个任务起两个回合,比卡住严重得多;
  * 判据与阈值只许住在 turn-lock-reclaim.ts 那一处(它要同时问进程登记册,依赖方向不许反过来)。
  *
- * 和 `releaseTurn` 一样会跑 `afterTurn` 回调:幽灵锁底下往往正压着一串
+ * 和 `releaseTurn` 一样会跑 `afterTurn` 回调:卡住的锁底下往往正压着
  * 「等这一轮跑完再送」的交接(排队消息投递、队列补推),它们跟着这把锁一起被冻住了 ——
  * 拔锁而不放它们走,任务照旧停在原地。
  */
-export function forceReleaseTurn(taskId: string): TurnIdentity | null {
-  const held = turns.get(taskId);
-  if (!held) return null;
-  startFreeze.delete(taskId);
-  endTurn(taskId);
+export function forceReleaseTurn(expected: { taskId: string; seq: number }): TurnIdentity | null {
+  const held = turns.get(expected.taskId);
+  if (!held || held.seq !== expected.seq) return null;
+  startFreeze.delete(expected.taskId);
+  endTurn(expected.taskId);
   return held;
 }
 

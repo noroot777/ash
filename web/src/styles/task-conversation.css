@@ -290,6 +290,11 @@
 .task-event-line p { margin: 0; }
 .task-event-line.is-error { color: var(--red); }
 
+/* 空态里的「你点过、它没成」(RejectionNotices):靠左读,不跟着空态居中。 */
+.task-conversation-notices { display: grid; gap: 4px; margin-top: 10px; max-width: 46ch; text-align: left; }
+.task-conversation-notices p { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--warn, #b4690e); font-size: 12px; line-height: 1.5; }
+.task-conversation-notices svg { flex: none; margin-top: 2px; }
+
 .task-conversation-empty { display: grid; min-height: 150px; place-content: center; justify-items: center; color: var(--faint); }
 .task-conversation-empty p,
 .task-conversation-note,

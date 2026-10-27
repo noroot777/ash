@@ -29,9 +29,9 @@ import { mountTaskSteerRoutes } from "./task-steer.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
-import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
+import { claimTurn, freezeStartingTurn, releaseTurn, stopTask } from "./runs.js";
 import { noteRejectedUserAction, type RejectedAction } from "./user-action-rejection.js";
-import { reclaimStaleTurn, staleTurns } from "./turn-lock-reclaim.js";
+import { releaseSuspectTurn, suspectTurns } from "./turn-lock-reclaim.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
@@ -235,14 +235,15 @@ api.post("/tasks/:id/stop", async (c) => {
     // 由 spawn 前的最后一道闸消费 —— 与 pauseGroup 同一口径(scheduler.ts)。不补的话
     // 这条 200「已停止」是假话:CLI 随后照样被拉起来,而界面显示 canceled。
     const freezing = freezeStartingTurn(taskId, "canceled");
-    // 锁还被占着、却既没有句柄也没有令牌 = 多半是一把无主的回合锁(2026-10-26 那次
-    // 卡死:stop 之后 /run 一律 409,而库里 active_turn_token 是空的)。如实说出来,
-    // 并说明它会自动回收 —— 别让用户以为按钮坏了。巡检与阈值见 turn-lock-reclaim.ts。
-    const stranded = !freezing && staleTurns(Date.now(), 0).some((t) => t.taskId === taskId);
+    // 锁还被占着、却既没有句柄也没有令牌 = 这个任务点运行会一律 409,而库里
+    // active_turn_token 是空的(2026-10-26 那次卡死的形态)。如实说出来 —— 别让用户
+    // 以为按钮坏了。**不许说它会自动恢复**:系统证不了原持有者已经结束,所以不会自动
+    // 放开,只能告诉用户那个开关在哪(判据与理由见 turn-lock-reclaim.ts)。
+    const stranded = !freezing && suspectTurns(Date.now(), 0).some((t) => t.taskId === taskId);
     const note = freezing
       ? "没有存活的 agent 进程（这一轮还没启动起来），已标记为 canceled 并撤回它的启动"
       : stranded
-        ? "没有存活的 agent 进程，已标记为 canceled；这个任务的回合占位仍被占着且没有主，系统会在约一分钟内自动回收，也可以调用 POST /api/tasks/:id/reclaim-turn 立刻回收"
+        ? "没有存活的 agent 进程，已标记为 canceled；但这个任务的回合占位仍被占着，期间点运行会被挡回「任务回合正在进行」。系统无法确认占着它的那一位是否真的已经结束，所以不会自动放开；确认它不动了就调 POST /api/tasks/:id/reclaim-turn 手动放开"
         : "没有存活的 agent 进程,已直接标记为 canceled";
     if (stranded) await noteRejectedUserAction(taskId, "停止", note);
     return c.json({ stopped: true, note, strandedTurn: stranded });
@@ -250,30 +251,35 @@ api.post("/tasks/:id/stop", async (c) => {
   return c.json({ error: "任务没有在运行的进程可停止", status: r.status }, 409);
 });
 
-// 人工回收一把**无主的回合锁**。
+// 用户主动放开一把**占着不动的回合锁**。
 //
-// 为什么需要一个显式入口:这种锁占着的任务点运行一律 409「任务回合正在进行」,而
-// `stop` 只杀进程、碰不到它 —— 2026-10-26 实测,全仓当时没有任何入口能救,唯一解法是
-// 重启整个 server。巡检会在约一分钟内自动收(turn-lock-reclaim.ts),这个入口是给
-// 「我现在就要它动」的那一下。
+// 为什么需要这个入口:这种锁占着的任务点运行一律 409「任务回合正在进行」,而 `stop` 只杀
+// 进程、碰不到它 —— 2026-10-26 实测,全仓当时没有任何入口能救,唯一解法是重启整个 server。
 //
-// **判据不放宽**:仍然要求「没有句柄在册、没有绑过回合令牌、且已持有超过阈值」。
-// 拔掉一把正在起跑的锁 = 同一个任务起两个回合,比多等一分钟严重得多;所以不满足判据时
-// 如实回 409 说明它还有主,而不是迁就这一次点击。
+// **为什么只有这一条路,没有自动回收**:判据(没句柄、没令牌、占得久)证不了原持有者已经
+// 结束 —— duet 等人工裁决门可以等几小时,dispatch 等仓库锁建 worktree 也没有时长上界,
+// 两者在判据眼里和卡死一模一样。拔错一把 = 解除互斥,同一个任务两个回合并跑。所以照
+// AGENTS.md 对这类不可逆又外溢操作的口径:巡检只如实上报,放开由用户自己按,响应里明示
+// 副作用(理由与判据见 turn-lock-reclaim.ts)。
+//
+// **判据不因为「是人点的」就放宽**:用户看到的也只是「可疑」,他同样不知道原持有者死没死。
+// 不满足判据时如实 409 并说清是哪一条没过,而不是迁就这一次点击。
 api.post("/tasks/:id/reclaim-turn", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  const stale = staleTurns().find((t) => t.taskId === taskId);
-  if (!stale) {
-    return c.json({
-      error: isTurnClaimed(taskId)
-        ? "这个任务的回合占位仍有主（有进程在册、或刚占下还不到回收阈值），不能强行回收"
-        : "这个任务此刻没有被占着的回合占位，无需回收",
-      reclaimed: false,
-    }, 409);
+  const outcome = await releaseSuspectTurn(taskId);
+  if (!outcome.ok) {
+    await noteRejectedUserAction(taskId, "放开回合占位", outcome.reason);
+    return c.json({ error: outcome.reason, reclaimed: false }, 409);
   }
-  return c.json({ reclaimed: await reclaimStaleTurn(stale, "人工"), heldMs: stale.heldMs, role: stale.role });
+  return c.json({
+    reclaimed: true,
+    role: outcome.role,
+    heldMs: outcome.heldMs,
+    // 明示副作用:这一下解除的是互斥本身,不是「清理了一个垃圾」。
+    note: "已放开这个任务的回合占位，现在可以继续运行；如果原来那一位其实还活着，互斥就没了，同一个任务可能有两个回合并行改同一个工作区",
+  });
 });
 
 // 检查点续跑：agent 在执行中调用，写下「下次继续时该喂给我的指令」。任务这一回合

@@ -43,6 +43,7 @@ import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
 import { canForkReply } from "./conversationFork.ts";
 import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
 import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
+import { RejectionNotices } from "./RejectionNotices.tsx";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -404,6 +405,9 @@ export function ConversationFeed({
             <div className="task-conversation-empty">
               <File size={20} aria-hidden="true" />
               <p>点击「运行」开始，执行输出会实时显示在这里。</p>
+              {/* 「我点过运行，怎么什么都没发生」——挡回的痕迹只能落在这里:这个任务还没有
+                  会话,写不进会话时间线(见 RejectionNotices)。 */}
+              <RejectionNotices taskId={task.id} />
             </div>
           )}
           {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}

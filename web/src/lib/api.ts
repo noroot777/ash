@@ -243,6 +243,10 @@ export const api = {
   task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
   taskQuestionHistory: (taskId: string): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
     request(`/tasks/${id(taskId)}/question-history`),
+  // 最近被挡回的用户操作。对话流空态才调 —— 从没跑过的任务没有会话时间线,这是它唯一的
+  // 痕迹来源(server/src/user-action-rejection.ts)。
+  taskNotices: (taskId: string): Promise<{ notices: { action: string; reason: string; occurredAt: string }[] }> =>
+    request(`/tasks/${id(taskId)}/notices`),
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
   followUps: (taskIds: string[]): Promise<TaskFollowUp[]> =>
     request("/tasks/follow-ups", json("POST", { taskIds })),

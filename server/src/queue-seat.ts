@@ -22,6 +22,20 @@
 //
 // ⚠ release() 不许在 serializeQueueClaims 的临界区里调:回滚到终态会触发
 // advanceQueueFromTask → advanceQueue,后者也要进同一条链,届时会死等自己。
+//
+// ## 占位有世代,回滚只撤自己那一代
+//
+// 回滚可能**延期**执行(锁被占着时排到释放之后),而延期意味着「我当初占下的那个 queued」
+// 和「现在库里这个 queued」可能已经不是同一个。只看状态等于 queued 就回滚,撤掉的就是
+// 后来者的占位:任务被翻回终态,结算钩子放行下一个成员,反而造出双跑 —— 本轮审查 F3 实测
+// `{"newTurnStillHeld":{"role":"single"},"statusAfterOldRollback":"failed"}`,因为 `endTurn`
+// 按注册顺序跑回调,排在前面的那个合法回调已经抢到新锁、落了新占位,我这个后到的回滚照样写。
+//
+// 所以每次认领发一个号(`seatGen`),回滚三道闸:① 我这一代还是当前那一代吗;② 回合锁现在
+// 有没有人占着(**回调入口也要查**,不能只在注册时查);③ 异步读之后、紧挨着写之前再核一遍
+// ①②。锁被人接手时**不是放弃,而是再排一次** —— 直接 return 就又回到了「占位永远没人回滚」
+// 那个形态(2026-10-26 实测 70+ 分钟),而真的被接手时第二次检查会看到状态已不是 queued,
+// 自然 no-op。
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
@@ -52,6 +66,22 @@ export type QueueSeat = {
 // 期间没有任何推进事件的静止检查点依然无账,不会被一句追问续跑(第 2 轮语义保留)。
 // 回调里的 advanceQueue 进同一条认领链,幂等:多记几笔最多多跑几次空转判定。
 const missedAdvances = new Map<string, string>(); // 占着回合锁的成员 taskId → 它的 queueId
+
+// ── 占位世代 ─────────────────────────────────────────────────────────────────
+// taskId → 它当前那一代占位的号。认领成功时发号,回滚落地后清掉(理由见模块头)。
+const seatGen = new Map<string, number>();
+let nextSeatGen = 0;
+
+/**
+ * 这个任务此刻有没有**活着的**执行占位,有的话是哪一代。0 = 没有。
+ *
+ * 给 scheduler 的 `reclaimStrandedSeat` 用:它收的是「没有任何 seat 认领的 queued 遗留」
+ * (advanceQueue 自己 setQueued 的那种、以及占位写失败留下的那种)。非 0 就说明这具 queued
+ * 是某个活着的 seat 的,该由那个 seat 自己的 release() 负责,外人不许替它回滚。
+ */
+export function seatGeneration(taskId: string): number {
+  return seatGen.get(taskId) ?? 0;
+}
 
 export function noteMissedAdvance(taskId: string, queueId: string): void {
   const pending = missedAdvances.has(taskId);
@@ -142,46 +172,67 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
       });
       return { ok: false, transient: true, blockers: ["队列占位写入失败，请稍后重试"] };
     }
-    return { ok: true, seat: makeSeat(taskId, prevStatus) };
+    const gen = (nextSeatGen += 1);
+    seatGen.set(taskId, gen); // 发号要在临界区里:出了这段就可能有人认领下一代
+    return { ok: true, seat: makeSeat(taskId, prevStatus, gen) };
   });
 }
 
-function makeSeat(taskId: string, prevStatus: string): QueueSeat {
+/**
+ * 延期回滚最多再排几次。每一次重排都要等一个完整的「占锁 → 放锁」周期,所以现实里它本就
+ * 收敛;这个上限只为挡住病态的来回(两个入口在同一个释放点上反复互相接手),到顶就如实
+ * 留一行日志,别让它无声地转下去。
+ */
+const MAX_ROLLBACK_DEFERRALS = 5;
+
+function makeSeat(taskId: string, prevStatus: string, gen: number): QueueSeat {
   let released = false;
-  const rollback = async (): Promise<void> => {
+  const mine = () => seatGen.get(taskId) === gen;
+  const clearGen = () => { if (mine()) seatGen.delete(taskId); };
+
+  const rollback = async (deferrals: number): Promise<void> => {
+    // ① 换代了 = 后面又有人认领过占位,库里那个 queued 是**他的**,不是我当初占的那个。
+    if (!mine()) return;
+    // ② 回合锁被人占着 = 有人正拿着占位真正起跑,它的结算会覆盖状态,现在不能动。
+    //    **延期回调入口也必须查这一条**:回调是 endTurn 按注册顺序跑的,排在我前面的那个
+    //    合法回调完全可以在同一个释放点上抢到新锁(本轮审查 F3 复现)。
+    //    而且这里不是放弃,是再排一次 —— 直接 return 就又回到「占位永远没人回滚」。
+    if (isTurnClaimed(taskId)) {
+      if (deferrals >= MAX_ROLLBACK_DEFERRALS) {
+        console.warn(`[ash] 队列占位回滚重排已达上限(${taskId}),交给 scheduler 的守卫兜底`);
+        return;
+      }
+      whenTurnIdle(taskId, () => void rollback(deferrals + 1));
+      return;
+    }
     try {
       const cur = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-      if (cur?.status === "queued") {
-        await setTaskStatus(taskId, prevStatus as Parameters<typeof setTaskStatus>[1]);
-      }
+      if (cur?.status !== "queued") { clearGen(); return; } // 已被真实结算覆盖,无事可做
+      // ③ 上面那次读隔着 await,这期间新一轮可以整个起来并落下自己的占位。写之前紧挨着
+      //    再核一遍 ①②,别把后来者的 queued 覆盖成我这一代的 prevStatus。
+      if (!mine() || isTurnClaimed(taskId)) return;
+      await setTaskStatus(taskId, prevStatus as Parameters<typeof setTaskStatus>[1]);
+      clearGen();
     } catch {
       /* 回滚失败只能留给重启 reconcile */
     }
   };
+
   return {
     taskId,
     prevStatus,
     async release() {
       if (released) return;
       released = true;
-      // 回合锁被人占着 = 有人正拿着这个占位真正起跑,它的结算会覆盖状态,这里不动;
-      // 锁空着才查状态回滚 —— 把别人正要跑的任务翻回终态,结算钩子会放行下一个成员,
-      // 反而造出双跑。
-      //
-      // **但「这一刻不动」不等于「从此不管」。** 旧版这里直接 return,于是只要释放那一瞬
-      // 恰好有人占着锁(哪怕是 PATCH status 那种几毫秒的预占,更别说一把幽灵锁),这个
-      // queued 占位就**永远没人回滚了**:任务停在「排队中」,投递判定永远是「等它空下来」,
-      // 用户那句话静静躺在托盘里(2026-10-26 实测 70+ 分钟,日志一声不吭)。所以改成排到
-      // 锁释放之后再看一眼 —— 那时要么状态已被真实结算覆盖(回滚自然是 no-op),要么它确实
-      // 还孤零零停在 queued,正是该收拾的那一种。
+      // 锁空着就当场回滚,被占着就排到它释放之后(判据与理由都在 rollback 里)。
       //
       // `void` 不 await:本函数可能在队列认领的临界区内被调用,await 一个会触发
       // advanceQueue 的回滚就会死等自己(见模块头的 ⚠)。
       if (isTurnClaimed(taskId)) {
-        whenTurnIdle(taskId, () => void rollback());
+        whenTurnIdle(taskId, () => void rollback(1));
         return;
       }
-      await rollback();
+      await rollback(0);
     },
   };
 }
