@@ -69,7 +69,7 @@ export async function retireHistoricalReview(expected: TaskRow, source: TurnSour
       if (state?.settlement && (state.settlement.ownerTaskId !== current.id || state.settlement.round !== scope.round
         || state.settlement.freeRoundId !== freeRound?.id)) return;
       if (!state) await transaction.insert(regressionEvidence).values({ directory: scope.directory, taskId: scope.taskId,
-        generation: randomUUID(), revoked: true, excludedMonitors: [], targetIdentity: null });
+        generation: randomUUID(), excludedMonitors: [], targetIdentity: null });
       const settlement = state?.settlement ?? { outcome: "failed" as const, conclusion: null,
         round: scope.round, ownerTaskId: current.id, pending: true, target: null,
         ...(freeRound ? { freeRoundId: freeRound.id } : {}),

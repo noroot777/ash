@@ -44,7 +44,17 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
     // __slowFact:让**第一个项目**的这次查询慢 400ms 回来,并且带上它自己在跑的一条命令 ——
     // 用例借此重演「切走之后旧事实才落回来」。其余时候一如既往,立刻回同一份。
     const slow = (window as unknown as { __slowFact?: boolean }).__slowFact === true && listing[1] === "p-one";
+    // 服务会话:用例用 window.__service 切三种现场 —— 在跑 / 启动脚本自己退了(docker
+    // compose up -d 那种,服务在 ash 的进程树之外) / 已经被停过。
+    const service = (window as unknown as { __service?: "live" | "detached" | "stopped" }).__service;
     const sessions = [
+      ...(service ? [{
+        id: "s-svc", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "服务",
+        commandId: "service", startedAt: 4,
+        exitCode: service === "live" ? null : 0,
+        stoppedByUser: service === "stopped",
+        groupAlive: service === "live",
+      }] : []),
       { id: "s-shell", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "第一个项目", commandId: null, startedAt: 1, exitCode: null, stoppedByUser: false, groupAlive: true },
       { id: "s-other", projectId: "p-two", cwd: "/workspace/p-two", shell: "/bin/zsh", name: "别家的 dev server", commandId: "dev", startedAt: 2, exitCode: null, stoppedByUser: false, groupAlive: true },
       ...(slow ? [lateSession] : []),
@@ -69,7 +79,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
 
 function Fixture() {
   const [current, setCurrent] = useState<ProjectView>(() => project({
-    service: { command: "npm -w web run dev", restartCommand: null },
+    service: { command: "npm -w web run dev", restartCommand: null, stopCommand: "docker compose down" },
     commands: [
       { id: "checkout", name: "切分支", command: "git checkout {{分支}}\ngit status" },
       { id: "plain", name: "构建", command: "npm run build" },

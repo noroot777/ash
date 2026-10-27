@@ -173,18 +173,17 @@ server.registerTool(
   {
     title: "读某条任务的对话",
     description:
-      "读**另一条任务**（或自己)已经说过的话:用户的指令、agent 的回复、系统的结算说明,按时间顺序拼成一份可读的对话,跟界面上看到的是同一份语料。" +
-      "拿到一个任务 id、想知道「它当时得出了什么结论/做过什么」时用这个——不要去翻 ~/.claude/projects 或 codex 的 rollout 文件,那条路只对单一执行器成立。" +
-      "任务有多条会话时(duet 的 voiceA/voiceB/implementer、重试新建的会话、就地验证的旁路回合)默认全读,按**最后活动时间**排序(续聊会复用老会话,它的创建时间不代表内容新旧);用 sessionId 可只读一条。" +
-      "团队任务的执行者是各自独立的任务,先用 list_tasks(parentId=团队 id) 拿到 id 再逐个读。" +
-      "默认不含工具调用明细(includeTrace 打开,最多列最近 80 次)。超长时按会话分别裁剪,**每条会话都保留它最近的部分**——不是把全文拼起来砍尾巴,那样整条会话都可能一个字不剩。",
+      "读**另一条任务**(或自己)已经说过的话:用户的指令、agent 的回复、系统的结算说明,按时间顺序拼成一份可读的对话,跟界面上看到的是同一份语料。" +
+      "拿到一个任务 id、想知道「它当时得出了什么结论/做过什么」时用这个——别去翻 ~/.claude/projects 或 codex 的 rollout 文件,那条路只对单一执行器成立。" +
+      "一个任务有多条会话时(duet 各声部、重试新建的、旁路回合)默认全读,按**最后活动时间**排序(续聊复用老会话,创建时间不代表内容新旧);sessionId 可只读一条。" +
+      "团队任务的执行者是各自独立的任务,先用 list_tasks(parentId=团队 id) 拿 id 再逐个读。超长时按会话分摊裁剪、各保末尾。",
     inputSchema: {
       taskId: z.string().describe("要读的任务 id"),
       sessionId: z.string().optional().describe("只读这一条会话;缺省读该任务的全部会话"),
       maxChars: z.number().int().min(MIN_MAX_CHARS).optional().describe(
         `正文上限,缺省 ${DEFAULT_MAX_CHARS} 字,不得低于 ${MIN_MAX_CHARS}。超了按会话分摊、各保末尾;`
         + "摊不开时会明说哪几条没读,不会只回标题冒充读过"),
-      includeTrace: z.boolean().optional().describe("附上每条会话的工具调用清单(按回合分组),缺省 false"),
+      includeTrace: z.boolean().optional().describe(`附上每条会话的工具调用清单(按回合分组,最多最近 ${TRACE_MAX_LINES} 次),缺省 false`),
     },
   },
   async ({ taskId, sessionId, maxChars, includeTrace }) => {

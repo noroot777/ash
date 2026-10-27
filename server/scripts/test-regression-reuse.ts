@@ -14,7 +14,9 @@ const { freeReviewPrompt, freeReviewResumeMessage } = await import("../src/free-
 const { verifyProtocolFor, verifyReminderFor, reviewReminderFor } = await import("../src/review-prompts.js");
 const { freeReviewReminder } = await import("../src/free-workflow.js");
 const { SWEEP_RULES } = await import("../src/review-sweep.js");
-const { EXECUTOR_REGRESSION_RECORDING, REVIEW_VALIDATION_REQUIREMENT } = await import("@ash/shared/free-workflow");
+const { EXECUTOR_REGRESSION_RECORDING, GATE_FAILURE_REGRESSION_CARVE_OUT, REGRESSION_POLICY,
+  REVIEW_VALIDATION_REQUIREMENT, REVIEWER_REGRESSION_CLAUSE } = await import("@ash/shared/free-workflow");
+const { gateFailurePrompt } = await import("../src/accept-gate-messages.js");
 const { ACCEPTANCE_REMINDER } = await import("../src/run-prompts.js");
 const { MONITOR_DEFAULT_TIMEOUT_MS, MONITOR_MAX_TIMEOUT_MS } = await import("@ash/shared/monitor");
 const { previewShell } = await import("../src/preview-shell.js");
@@ -108,7 +110,12 @@ try {
   assert.equal(manifest().records[0]?.reusable, false, "失败如实展示，但缺少输入证明同样禁止自动复用");
   assert.equal(manifest().records[0]?.passed, false);
   assert.match(manifest().records[0]!.reason, /失败.*exitCode=1/);
-  assert.match(await regressionEvidenceReference(task, repo, evidenceDir), /reusable=true 只表示证据可引用.*passed=true 且 exitCode=0/);
+  const reference = await regressionEvidenceReference(task, repo, evidenceDir);
+  assert.match(reference, /回归测试统一在验收时.*只供你\*\*核对执行者登记过什么\*\*/, "清单只供核对,不是复用授权");
+  assert.match(reference, /reusable 恒为 false/);
+  assert.match(reference, /passed=true 且 exitCode=0/);
+  assert.match(reference, /把缺口原样写进覆盖声明的回归面留白/, "缺口的出路是留白,不是补跑");
+  assert.doesNotMatch(reference, /按缺口补跑/, "不得再要求审查者补跑");
   rmSync(manifest().records[0]!.logPath);
   await regressionEvidenceReference(task, repo, evidenceDir);
   assert.equal(manifest().records[0]?.reusable, false, "缺少完整日志时不能复用");
@@ -210,21 +217,24 @@ try {
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   });
   const run = (await db.select().from(schema.freeReviewRuns).where(eq(schema.freeReviewRuns.id, "merge-review")))[0]!;
-  const rule = SWEEP_RULES.find((entry) => entry.id === "执行者回归结果复用")!;
-  for (const text of [await freeReviewPrompt(task, run, 1, repo), freeReviewResumeMessage(task, run, 1), await freeReviewReminder(taskId)]) {
-    assert.equal(text.includes(rule.full), false, "合并后审查不携带任务分支复用协议");
-    assert.equal(text.includes(rule.short!), false, "合并后审查续跑也不携带复用协议");
-    assert.match(text, /合并结果审查.*不得复用|合并结果审查不得复用/);
+  // 扫描义务不再分 workspace / accepted_merge 两份(复用协议整体退役),所以两种目标拿到的是
+  // 同一份完整扫描义务;合并结果审查的差别只剩「没有执行者登记清单可核对」这一句。
+  assert.equal(SWEEP_RULES.some((entry) => entry.id === "执行者回归结果复用"), false);
+  for (const text of [await freeReviewPrompt(task, run, 1, repo), freeReviewResumeMessage(task, run, 1), (await freeReviewReminder(taskId)).text]) {
+    assert.doesNotMatch(text, /可复用|复用资格|reusable=true/, "合并后审查不携带任何复用协议");
+    assert.match(text, /合并结果审查没有执行者登记清单可核对|回归测试统一在验收时/);
   }
 
   const verification = await verifyProtocolFor({ ...task, workflowAt: "verify", workflow: JSON.stringify({
     workspace: "shared", steps: [{ id: "run", kind: "run", p: {}, fail: null }, { id: "verify", kind: "verify", fail: null,
       p: { executorId: null, model: null, reasoningEffort: null, checks: ["build", "tests", "browser"] } }],
   }) }, 1, repo);
-  assert.match(verification, /仅「回归测试」可引用.*浏览器真实点检和其它勾选项必须实际执行/);
+  assert.match(verification, /「回归测试」这一项你只核对本轮后端清单里执行者登记的结果（统一在验收时执行，你不跑）/);
+  assert.match(verification, /浏览器真实点检和其它勾选项必须实际执行/);
   assert.ok(verification.includes(REVIEW_VALIDATION_REQUIREMENT));
-  for (const text of [await verifyReminderFor(taskId, 1), await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })]) {
-    assert.match(text, /不免除独立代码审查与必要的行为验证/);
+  for (const text of [(await verifyReminderFor(taskId, 1)).text, (await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })).text]) {
+    assert.ok(text.includes(REVIEWER_REGRESSION_CLAUSE), "两条提醒都引同一份审查者口径，不再各手抄一句");
+    assert.doesNotMatch(text, /可复用执行者对本次改动的回归结果/, "续跑提醒里不该再留退役的复用口径");
   }
   const registered = new Map<string, { description?: string; inputSchema?: Record<string, unknown> }>();
   const server = { registerTool(name: string, configuration: never) { registered.set(name, configuration); } };
@@ -235,7 +245,71 @@ try {
   assert.ok(registered.get("report_stage")?.description?.includes(REVIEW_VALIDATION_REQUIREMENT), "MCP 与审查 prompt 共用验证口径");
   assert.ok(registered.get("start_monitor")?.inputSchema?.regression, "MCP 注册了实际可用的回归记录入口");
   assert.match((registered.get("start_monitor")!.inputSchema!.timeoutMs as { description: string }).description, /regression=true.*上限 60 分钟/);
-  assert.match(EXECUTOR_REGRESSION_RECORDING, /未指定 timeoutMs.*60 分钟/);
+  // 「时限多久、日志怎么落、哪些回合不许登记」这些**机制**住在上面那两个字段说明里,
+  // 每轮前言只带口径加一句指针 —— 两处都写全文时,执行者每一轮都在为同一段机制付两份。
+  assert.doesNotMatch(EXECUTOR_REGRESSION_RECORDING, /60 分钟/,
+    "每轮前言不复述哨兵时限:它只在 start_monitor 的字段说明里(上一条断言钉着)");
+  assert.match(EXECUTOR_REGRESSION_RECORDING, /start_monitor\(regression=true\)/, "但前言要指得到那个入口");
+  // 回归口径（用户 2026-10-26）只有一份源：执行者每回合那段、审查/验证那段、以及 MCP 的
+  // start_monitor(regression) 说明全部引它或复述它。原先这三处各讲一套，执行者同时收到
+  // 「一条都不要跑」和「需要跑回归时就用 start_monitor 登记」，连自己新写的测试都不跑。
+  for (const text of [EXECUTOR_REGRESSION_RECORDING, REVIEW_VALIDATION_REQUIREMENT]) {
+    assert.ok(text.includes(REGRESSION_POLICY), "两个表面都必须原样带上回归口径单源");
+  }
+  assert.match(REGRESSION_POLICY, /统一在验收时由项目的验收前置命令执行/);
+  assert.match(REGRESSION_POLICY, /唯一例外：\*\*本轮自己新写或改动的测试文件\*\*必须自己跑绿/);
+  assert.match(EXECUTOR_REGRESSION_RECORDING, /整套回归不要在本轮跑/);
+  assert.match(REVIEW_VALIDATION_REQUIREMENT, /一条回归都不要跑、也不要补跑/);
+  assert.match(REVIEW_VALIDATION_REQUIREMENT, /覆盖声明的「回归面」留白/);
+  assert.doesNotMatch(REVIEW_VALIDATION_REQUIREMENT, /复用/, "审查口径里不该再出现退役的「复用」");
+  const regressionArg = (registered.get("start_monitor")!.inputSchema!.regression as { description: string }).description;
+  assert.match(regressionArg, /本轮自己新写或改动的测试文件/, "MCP 入口要讲清唯一例外是哪一种");
+  assert.ok(regressionArg.includes(REGRESSION_POLICY), "MCP 的回归开关说明也引同一份单源，不手抄");
+  assert.match(regressionArg, /那一轮不跑回归，但构建、接口冒烟、浏览器真实点检照做/,
+    "旁路回合的 409 要交代口径，但不能把「不跑回归」扩成「不跑任何测试」");
+  assert.doesNotMatch((registered.get("report_stage")!.inputSchema!.verificationBasis as { description: string }).description,
+    /撤销/, "撤销机制已退役，verificationBasis 的说明不能再拿它当触发条件");
+  // ── 最终消息层的不变量（第 1 轮审查发现 2）───────────────────────────────────
+  // 「每个表面都含新常量」证不出口径统一：真实任务书里完全可以前半句引了新常量、后半句还留着
+  // 一句相反的旧要求（实测：语法审查开场「和相关测试」、逻辑审查「除编译与测试外」、审查者长任务
+  // 示例「跑全量套件」，三句都和同一条消息里的「一条回归都不要跑」打架）。所以这里钉的是
+  // **组装出来的那条消息**：既要带上单源口径，也不许出现任何一句反向要求。
+  const reviewerFacing: Array<[string, string]> = [
+    ["自由审查 · 语法", await freeReviewPrompt(task, { ...run, checkMode: "syntax", targetKind: "workspace" }, 1, repo)],
+    ["自由审查 · 逻辑", await freeReviewPrompt(task, { ...run, targetKind: "workspace" }, 1, repo)],
+    ["自由审查 · 合并结果", await freeReviewPrompt(task, run, 1, repo)],
+    ["自由审查 · 续跑", freeReviewResumeMessage(task, { ...run, targetKind: "workspace" }, 1)],
+    ["自由审查 · 每回合提醒", (await freeReviewReminder(taskId)).text],
+    ["就地验证 · 正文", verification],
+    ["就地验证 · 提醒", (await verifyReminderFor(taskId, 1)).text],
+    ["历史独立审查 · 提醒", (await reviewReminderFor({ id: "legacy", reviewOf: taskId, reviewRound: 1 })).text],
+  ];
+  const contradictions: Array<[RegExp, string]> = [
+    [/和相关测试/, "把跑测试写进审查者职责"],
+    [/除编译与测试外/, "预设审查者自己跑测试"],
+    [/跑全量套件/, "拿整套回归当慢活示例"],
+    [/缺少适用的真实测试结果时补跑/, "退役的补跑要求"],
+    [/一条测试都不该跑/, "把禁回归扩成禁一切测试"],
+    [/可复用|复用资格|reusable=true/, "退役的复用协议"],
+  ];
+  for (const [label, text] of reviewerFacing) {
+    assert.ok(text.includes(REVIEWER_REGRESSION_CLAUSE) || text.includes(REGRESSION_POLICY),
+      `${label}：最终消息必须带上回归口径单源`);
+    for (const [pattern, why] of contradictions) {
+      assert.doesNotMatch(text, pattern, `${label}：最终消息里还留着「${why}」，与同一条消息的新口径冲突`);
+    }
+  }
+  // 验收门禁失败交接与完成协议会落进同一个修复回合：「整套回归不要在本轮跑」和「跑这条命令」
+  // 必须由同一份例外把话说开，否则修复者只能靠猜。
+  const gateRepair = EXECUTOR_REGRESSION_RECORDING + "\n\n" + gateFailurePrompt({
+    command: "npm -w server run test:review", summary: "exit 1", logPath: join(root, "gate.log"),
+    tail: "AssertionError", cwd: join(root, "snapshot"), sourceCwd: repo,
+  });
+  assert.ok(gateRepair.includes(GATE_FAILURE_REGRESSION_CARVE_OUT), "门禁失败交接要带上那条例外");
+  assert.match(gateRepair, /整套回归不要在本轮跑/);
+  assert.match(gateRepair, /这一轮跑它是允许的/, "例外必须正面解掉与完成协议的冲突");
+  assert.doesNotMatch(gateRepair, /重跑这条命令/, "不留「整套重跑」这种与新口径冲突的说法");
+
   for (const [shared, free] of [[false, true], [false, false], [true, false]]) {
     assert.ok(ACCEPTANCE_REMINDER(taskId, shared!, false, free!).includes(EXECUTOR_REGRESSION_RECORDING));
   }

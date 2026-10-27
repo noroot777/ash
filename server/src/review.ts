@@ -190,7 +190,7 @@ export async function startVerifyRound(
   // 先写 verifyRound/stage=verifying 再抛错会留下「已有一轮验证正在进行」的半轮状态，
   // 任务永久无法再派验证（审查实测复现）。
   const directory = reviewRoundDir(targetId, round);
-  await evidenceState(targetId, directory, false);
+  await evidenceState(targetId, directory);
   await withReviewAuthority(opts.reviewAuthority, (transaction) => restartRegressionEvidence(targetId, directory, transaction));
   const protocol = await verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station);
 

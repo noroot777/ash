@@ -57,7 +57,7 @@ export async function setupRegressionReviews() {
     runs.releaseTurn(taskId);
     assert(runs.claimTurn(ownerTaskId, free ? "reviewer" : "single", free ? { run: runId, round } : undefined));
     const directory = free ? freeReviewEvidenceDir(taskId, runId, round) : reviewRoundDir(taskId, round);
-    await evidenceState(taskId, directory, mode === "accepted_merge", (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
+    await evidenceState(taskId, directory, (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!);
     await refreshRegressionEvidence(taskId, directory, mode === "accepted_merge");
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, "report.md"), "Independent current-input check passed.\n");

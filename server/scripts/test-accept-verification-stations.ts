@@ -76,7 +76,7 @@ const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js
 
   // 真实收轮写记录，跨站及重复结算后仍能证明两站都跑过。
   await make("stations-finished", { workflowAt: "v1", reviewStep: "v1", verifyRound: 1, stage: "verified" });
-  await evidenceState("stations-finished", reviewRoundDir("stations-finished", 1), false, await row("stations-finished"));
+  await evidenceState("stations-finished", reviewRoundDir("stations-finished", 1), await row("stations-finished"));
   await handleTaskSettlement("stations-finished", "done", false, true);
   assert.equal((await row("stations-finished")).workflowAt, "h1");
   assert.deepEqual(JSON.parse((await row("stations-finished")).verifyCompletedSteps), ["v1"]);
@@ -88,7 +88,7 @@ const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js
   assert.notEqual((await row("stations-finished")).stage, "accepted");
   await db.update(tasks).set({ reviewStep: "v2", verifyStationRounds: 0, verifyRound: 2, stage: "verified" })
     .where(eq(tasks.id, "stations-finished"));
-  await evidenceState("stations-finished", reviewRoundDir("stations-finished", 2), false, await row("stations-finished"));
+  await evidenceState("stations-finished", reviewRoundDir("stations-finished", 2), await row("stations-finished"));
   await handleTaskSettlement("stations-finished", "done", false, true);
   await handleTaskSettlement("stations-finished", "done", false, true);
   assert.equal((await row("stations-finished")).verifyRounds, 2);

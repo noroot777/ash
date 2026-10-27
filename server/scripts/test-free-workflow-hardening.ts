@@ -375,7 +375,7 @@ try {
   });
   const { evidenceState } = await import("../src/regression-evidence-lifecycle.js");
   const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
-  await evidenceState("free-legacy-task", freeReviewEvidenceDir("free-legacy-task", "orphan-reviewing", 1), false,
+  await evidenceState("free-legacy-task", freeReviewEvidenceDir("free-legacy-task", "orphan-reviewing", 1),
     (await db.select().from(tasks).where(eq(tasks.id, "free-legacy-task")))[0]!);
   await (await import("../src/task-question.js")).setTaskQuestion({ taskId: "free-legacy-task", question: "请确认边界" });
   await reconcileFreeReviews();
