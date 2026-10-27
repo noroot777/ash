@@ -20,7 +20,7 @@
   color: var(--ink);
 }
 
-/* 项目级「启动 / 重启」:一对命令,独立于下面的命令列表。 */
+/* 项目级「启动 / 停止 / 重启」:一组命令,独立于下面的命令列表。 */
 .project-commands__service {
   display: flex;
   flex-direction: column;
@@ -38,6 +38,15 @@
 .project-commands__service-head b { font-size: 12.5px; font-weight: 650; }
 .project-commands__service-head small { color: var(--muted); font-size: 12px; line-height: 1.6; }
 .project-commands__service-head svg { vertical-align: -1px; }
+/* 说明里的命令例子。这一节的底色是 --raised,所以 code 用 --panel 才看得出是一块。 */
+.project-commands__service-head code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--panel);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11.5px;
+  color: var(--ink);
+}
 .project-commands__service-fields {
   display: flex;
   flex-direction: column;

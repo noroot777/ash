@@ -19,6 +19,10 @@ const recover = () => execFileSync(process.execPath, ["--import", "tsx/esm", "--
 try {
   const { open, repo } = await setupRegressionReviews();
   for (const scenario of ["normal", "gate", "failure", "interrupted", "archive", "direction", "external"] as const) {
+    // 门禁只认干净已提交的源码树（accept_gate_source_unavailable）：上一场景的工作流命令
+    // 会在共享仓库里留下未跟踪的 marker/count 文件，先提交掉，否则 gate 场景起不了快照。
+    execFileSync("git", ["-C", repo, "add", "-A"], { stdio: "pipe" });
+    execFileSync("git", ["-C", repo, "commit", "--allow-empty", "-m", `housekeeping before ${scenario}`], { stdio: "pipe" });
     const review = await open("preset");
     const marker = `tail-${scenario}.txt`, ready = `ready-${scenario}.txt`;
     const count = `count-${scenario}.txt`;

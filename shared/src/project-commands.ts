@@ -2,8 +2,9 @@
 // 启动/停止/重启，运行载体是项目终端会话（server/src/terminal.ts，带 commandId 的那类）。
 //
 // 配置分两块：
-//   service  —— 项目的「启动 / 重启」：一对命令，操作面是状态栏弹层头部的 ▶/⟳ 图标按钮
-//               （没配置就置灰）。整个项目只有这一对,不跟着普通命令逐条长。
+//   service  —— 项目的「启动 / 停止 / 重启」：一组命令，操作面是状态栏弹层头部的图标按钮
+//               （没配置就置灰；服务起着的时候 ▶ 就地换成红框的停止）。整个项目只有这一组,
+//               不跟着普通命令逐条长。停止命令可以不填 —— 默认就是杀掉启动会话的整个进程组。
 //   commands —— 普通常用命令：只有名称 + 命令,重启一律「杀掉进程再跑一遍」。
 //
 // 跟预览（preview.ts）的分界：预览 = 临时、借 $PORT、跑在任务工作区；常用命令 = 常驻、
@@ -55,6 +56,15 @@ export interface ProjectServiceConfig {
    * 「重新启动用什么命令」，不是「不杀进程的原地重载」。
    */
   restartCommand: string | null;
+  /**
+   * 停止命令。空/null = 默认:杀掉启动会话的整个进程组(TERM→KILL,见 server/src/terminal.ts
+   * 的 terminate)。填了它就改成「先跑这段脚本,再确认启动会话退了」—— `docker compose up -d`、
+   * `pm2 start` 这类服务活在 ash 的进程树之外(启动脚本跑完自己就退了),光杀进程停不掉它。
+   *
+   * **不支持占位符**:停的是已经起来的那一份,再弹一次收值框只会让人停错东西,所以这里直接拦
+   * (parseServiceConfig),而不是等点停止时才 400。
+   */
+  stopCommand: string | null;
 }
 
 export interface ProjectCommandsConfig {
@@ -76,16 +86,24 @@ function parseScript(value: unknown, label: string): string {
 
 function parseServiceConfig(value: unknown): ProjectServiceConfig | null {
   if (value === null || value === undefined) return null;
-  if (typeof value !== "object") throw new Error("启动/重启配置格式不正确");
+  if (typeof value !== "object") throw new Error("启动/停止/重启配置格式不正确");
   const s = value as Record<string, unknown>;
-  const restartRaw = s.restartCommand ?? null;
-  const hasRestart = typeof restartRaw === "string" && restartRaw.trim().length > 0;
-  const startRaw = s.command;
-  if ((typeof startRaw !== "string" || !startRaw.trim()) && !hasRestart) return null; // 两个都空 = 没配置
-  if (typeof startRaw !== "string" || !startRaw.trim()) throw new Error("填了重启命令就必须先填启动命令");
+  const filled = (raw: unknown): boolean => typeof raw === "string" && raw.trim().length > 0;
+  const hasRestart = filled(s.restartCommand);
+  const hasStop = filled(s.stopCommand);
+  if (!filled(s.command) && !hasRestart && !hasStop) return null; // 全空 = 没配置
+  // 停止和重启都以「已经起来的那一份」为前提,起点必须有启动命令。
+  if (!filled(s.command)) throw new Error(`填了${hasRestart ? "重启" : "停止"}命令就必须先填启动命令`);
+  const stopCommand = hasStop ? parseScript(s.stopCommand, "停止命令") : null;
+  // 停止不弹收值框(理由见 ProjectServiceConfig.stopCommand),占位符拦在保存这一步 ——
+  // 等到点停止时才报错,那会儿服务正开着,用户手上只剩一个停不掉的按钮。
+  if (stopCommand && parseCommandPlaceholders(stopCommand).length) {
+    throw new Error("停止命令不支持占位符：停的是已经启动的那一份，不会再弹框问取值");
+  }
   return {
-    command: parseScript(startRaw, "启动命令"),
-    restartCommand: hasRestart ? parseScript(restartRaw, "重启命令") : null,
+    command: parseScript(s.command, "启动命令"),
+    restartCommand: hasRestart ? parseScript(s.restartCommand, "重启命令") : null,
+    stopCommand,
   };
 }
 

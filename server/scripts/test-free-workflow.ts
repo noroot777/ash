@@ -59,7 +59,7 @@ try {
   await ensureSchema();
 
   const freeAcceptanceReminder = ACCEPTANCE_REMINDER("free-task", false, false, true);
-  assert.match(freeAcceptanceReminder, /任务完成后由用户从统一验收页验收/, "自由任务完成协议应指向统一验收页");
+  assert.match(freeAcceptanceReminder, /派审、预览与验收都由用户触发/, "自由任务完成协议里这三件事都不归执行者");
   assert.doesNotMatch(freeAcceptanceReminder, /合并.?清理/, "自由任务完成协议不得再指向已删除的合并快捷操作");
 
   await db.insert(projects).values({ id: "p", name: "test", repoPath: root, apiKeys: null, workflowId: null, createdAt: new Date().toISOString() });
@@ -150,14 +150,16 @@ try {
     checkMode: "logic", note: null, retryLimit: 1, currentRound: 2, status: "reviewing",
     createdAt: "2026-10-13T02:00:00.000Z", updatedAt: "2026-10-13T02:00:00.000Z", finishedAt: null,
   });
-  const freeReminder = await freeReviewReminder("free-reminder-task");
+  const freeReminder = (await freeReviewReminder("free-reminder-task")).text;
   assertCarriesSummaryReminder(freeReminder, "自由审查每回合提醒");
   assertCarriesSweepReminder(freeReminder, "自由审查每回合提醒");
   const syntaxPrompt = await freeReviewPrompt(promptTask, { ...promptRun, checkMode: "syntax" }, 1, root);
   assertCarriesSweepProtocol(syntaxPrompt, "自由语法审查 prompt");
   for (const text of [skillPrompt, syntaxPrompt, freeReminder]) {
-    assert.match(text, /reusable=true.*执行者结果.*不再重复运行/, "自由审查只复用后端批准的执行者回归结果");
-    assert.doesNotMatch(text, /必须真实运行与风险相称的检查/, "自由审查不得无条件要求重复运行检查");
+    // 2026-10-26 改口径：自由审查也只**核对**执行者登记的结果，自己一条回归都不跑。
+    assert.match(text, /回归测试统一在验收时/, "自由审查的三个表面都带上统一的回归口径");
+    assert.doesNotMatch(text, /reusable=true.*可引用|可复用执行者|复用来源/, "不得再出现复用协议");
+    assert.doesNotMatch(text, /必须真实运行与风险相称的检查/, "也不得反过来无条件要求重复运行检查");
   }
 
   // 跨 run 的发现史：用户点「再审一轮」开的是**新 run**、第 1 轮、新开一条空会话，
@@ -301,7 +303,7 @@ try {
   const manualRepair = await freeManualRepairPrompt("free-exhausted-task", exhaustedRun);
   assert.match(manualRepair, /自动复审已停止/);
   assert.match(manualRepair, /不会擅自增加审查轮数/);
-  assert.match(manualRepair, /预约了复审，执行回合正常结束后按预约开始/);
+  assert.match(manualRepair, /预约了复审，本回合正常结束后按预约开始/);
   assert.doesNotMatch(manualRepair, /随后会自动派同一位审查者复审/);
 
   // HTTP 修复入口与普通回合**原子互斥**（holdTurn 占位身份 dispatch）：普通回合已
@@ -408,7 +410,7 @@ try {
   assert.deepEqual(triggeredState.reviews.map(({ status, checkMode, retryLimit, note }) => ({ status, checkMode, retryLimit, note })), [
     { status: "reviewing", checkMode: "logic", retryLimit: 2, note: "重点检查 Enter 快捷键" },
   ], "confirmed done 应按预约配置与附言自动派出且只派一份审查");
-  assertBrowserPolicy(await freeReviewReminder("free-reservation-task"), "自由审查续聊提醒", "reminder");
+  assertBrowserPolicy((await freeReviewReminder("free-reservation-task")).text, "自由审查续聊提醒", "reminder");
 
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
   await createTasks([{

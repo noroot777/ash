@@ -41,6 +41,7 @@ import { recordTurnStart } from "./turn-output.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { freeReviewReminder } from "./free-workflow.js";
+import { NO_REMINDER, assembleTurnPrompt } from "./turn-prompt.js";
 import { withSkillInvocation } from "./skills.js";
 import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
@@ -389,13 +390,17 @@ export async function continueTask(
     const freeWorkflow = task.workflowMode === "free";
     // 每回合都重贴一遍「你现在在干什么」：验证轮可能中途提问、被打断再续跑，
     // 那些回合都不带最初那段协议，只有从任务状态派生的提醒能跟到底。
+    // 照常算（这三条提醒顺带刷新本轮的回归证据清单，少刷一次就是清单停在上一轮）；
+    // 正文已经逐字讲过的那几段**静态契约**由 `assembleTurnPrompt` 摘掉，本轮的证据状态、
+    // 清单入口和正文没覆盖到的读法一律留着。去重放在拼装那一层，不放在这里：放这里就成了
+    // 每个投递点各判一次，漏判一次就是一条双份消息（或者少一条本轮才有的警告）。
     const reviewReminder = reviewTask
       ? await reviewReminderFor(task)
       : task.verifyRound
         ? await verifyReminderFor(task.id, task.verifyRound)
         : freeReviewTurn
           ? await freeReviewReminder(task.id)
-          : "";
+          : NO_REMINDER;
     // 「本任务里还有别人」的告知。触发条件是**有新面孔**（上一轮跑完之后才进来的
     // 同伴），不是 invited —— 挂在 invited 上恰好漏掉最需要它的那个：任务的原生
     // agent 第一轮走 runTask 直接起跑、从没被「召唤」过，于是后来 @ 进来的同伴它
@@ -418,17 +423,19 @@ export async function continueTask(
     const promptBody = nativeCommand
       ? promptedUserTurnText
       : planning ? `${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`
-      : (invited ? COLLAB_INVITE : "") +
-        invitedTaskBrief(task.body, invited, verifying) +
-        (handoffNotice ? `${handoffNotice}\n\n` : "") +
-        peerNotice +
-        promptedUserTurnText +
-        (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
-        (followUpFrom
+      : assembleTurnPrompt({
+        invite: invited ? COLLAB_INVITE : "",
+        brief: invitedTaskBrief(task.body, invited, verifying),
+        handoffNotice,
+        peerNotice,
+        userText: promptedUserTurnText,
+        workspaceReset: workspaceReset ? WORKSPACE_RESET(cwd) : "",
+        completion: followUpFrom
           ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
-          : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
-        DIRECTION_PROTOCOL(directionToken) +
-        (reviewReminder ? `\n${reviewReminder}` : "");
+          : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow),
+        direction: DIRECTION_PROTOCOL(directionToken),
+        reviewReminder,
+      });
     const promptLevel = planning || resuming ? "reminder" as const : "full" as const;
     const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });

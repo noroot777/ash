@@ -9,20 +9,18 @@ export const gateFailurePrompt = (details: { command: string; summary: string; l
   `在当前任务工作区复现这条命令：\n\n    cd ${details.sourceCwd} && ${details.command}\n\n` +
   `结果：${details.summary}。所以**没有合并、没有清理**，目标分支一个字节都没动。\n\n` +
   (details.failure === "timeout"
-    ? "这不是某个断言红了，是整条命令没能在时限内跑完。下面这段回显**最末尾**的「被收掉时的现场」给了停在哪一行、"
-      + "最后一次有输出是多久以前、以及整段时间的产出节奏；那一段还写了这些数该怎么读（长时间零输出和持续输出各有两种可能，"
-      + "日志只能证明有没有在输出、证明不了有没有在前进）。先照它缩小范围，再决定去查那条用例还是去查机器负载。"
-      + "日志最后的成功提示只说明那一步的断言完成，不能证明浏览器、开发服务或测试进程已经退出。\n\n"
+    ? "这是整条命令超时，不是定位到了某个断言失败。回显末尾的「被收掉时的现场」给了停在哪一行、多久没输出、"
+      + "整段的产出节奏：日志只证明在输出，不证明在前进；最后那句成功提示只说明那一步断言完成，"
+      + "不代表浏览器、开发服务或测试进程已经退出。\n\n"
     : "") +
-  `完整日志在 \`${details.logPath}\`。那份文件里**只有命令自己的输出** —— ash 的进度时间轴在 ` +
-  `\`${gateNotesPath(details.logPath)}\`，被收掉时的现场在 \`${gateScenePath(details.logPath)}\`（分开存是为了` +
-  `「这一行是谁写的」不靠猜，也为了没能停下来的进程继续写时挤不掉它）。下面这段回显是三者合起来的尾巴：\n\n` +
+  `完整日志在 \`${details.logPath}\`，末尾（含同名 \`.notes\` 进度、\`.scene\` 现场）：\n\n` +
   `\`\`\`\n${details.tail.trim() || "（日志为空）"}\n\`\`\`\n\n` +
+  `${GATE_FAILURE_REGRESSION_CARVE_OUT}\n\n` +
   `请你来处理：\n` +
-  `1. 在自己的工作目录里重跑这条命令，定位到底是哪一条红的；\n` +
+  `1. 在自己的工作目录里跑这条命令，定位到底是哪一条红的；\n` +
   `2. 确属本次改动引入 → 修掉并提交，然后告诉用户可以重新点验收（验收会自动再跑一遍这条命令）；\n` +
   `3. 如果你判断它**跟本次改动无关**（基线既有的红、环境缺件、负载敏感的 flake），不要硬改：` +
-  `把依据写清楚（单跑复核的结果、基线上同样红的证据），让用户决定是这次跳过门禁，还是另立一个任务去修。\n\n` +
+  `把依据写清楚（只跑那一条的复核结果、基线上同样红的证据），让用户决定是这次跳过门禁，还是另立一个任务去修。\n\n` +
   `不要自己去动目标分支，也不要绕过这条命令 —— 它是用户给这个项目定的放行条件。`;
-import { gateNotesPath, gateScenePath } from "./accept-gate-diagnosis.js";
+import { GATE_FAILURE_REGRESSION_CARVE_OUT } from "@ash/shared/free-workflow";
 import type { AcceptGateFailure } from "@ash/shared/accept-gate";

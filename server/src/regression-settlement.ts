@@ -35,7 +35,7 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
   freeRoundId?: string;
   acceptedMerge?: boolean;
 }): Promise<CheckedSettlement | null> {
-  await evidenceState(taskId, directory, input.acceptedMerge ?? false);
+  await evidenceState(taskId, directory);
   const stored = await db.transaction(async (transaction) => {
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0]!;
     const owner = (await transaction.select().from(tasks).where(eq(tasks.id, input.ownerTaskId ?? taskId)))[0];
@@ -74,7 +74,7 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
   if (stored.unknown) await appendTaskTimeline(taskId, "审查缺少持久保存的真实退出结果，不能因已有通过结论推定正常结束；本轮按异常结束处理。");
   if (outcome !== "done" || !checked.target) return checked;
   try {
-    await checkRegressionConclusion(taskId, directory, conclusion ?? "", input.acceptedMerge, undefined, true);
+    await checkRegressionConclusion(taskId, directory, conclusion ?? "", undefined, true);
     return checked;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -98,6 +98,7 @@ export async function completeRegressionSettlement(directory: string, checked: C
       if (!owner || await reviewContinuationPending(transaction, owner, state)) return false;
     }
     if (!state?.settlement?.pending || state.generation !== checked.generation || state.settlement.outcome !== checked.outcome) return false;
+    // 同上：存量 revoked=1 的旧轮次，没交依据就不许把通过结论落定（新轮次 revoked 恒为 0，这一支不触发）。
     if (checked.target && checked.outcome === "done" && checked.conclusion === "verified" && state.revoked && !state.acceptedBasis) return false;
     const owner = (await transaction.select().from(tasks).where(eq(tasks.id, state.settlement.ownerTaskId)))[0];
     const ownsRound = owner && (await activeReviewScope(transaction, owner))?.directory === directory;
@@ -128,7 +129,7 @@ export async function recordInterruptedRegressionReview(task: typeof tasks.$infe
   const taskId = task.reviewOf ?? task.id, round = task.reviewOf ? task.reviewRound : task.verifyRound;
   if (!round) return false;
   const directory = reviewRoundDir(taskId, round);
-  const state = await evidenceState(taskId, directory, false);
+  const state = await evidenceState(taskId, directory);
   if (!state.settlement) await regressionSettlementConclusion(taskId, directory, { round, ownerTaskId: task.id, outcome: "failed" });
   return false;
 }

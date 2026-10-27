@@ -22,9 +22,11 @@ export async function commitRegressionConclusion<Result>(checked: CheckedConclus
     if (checked) {
       const state = (await transaction.select().from(regressionEvidence)
         .where(eq(regressionEvidence.directory, checked.directory)))[0];
+      // `revoked` 只剩存量（新轮次不再写，见 `regression-evidence-lifecycle.ts` 的 `evidenceState`），
+      // 但这一支**不能跟着删**：口径切换前开的旧轮次库里确实是 1，删了它们就被静默放行。
       if (!state || state.taskId !== checked.taskId || state.generation !== checked.generation
         || (checked.stage === "verified" && state.revoked && !checked.basis)) {
-        throw new RegressionConclusionRejected("审查证据代次或撤销状态已变化，结论与依据均未提交");
+        throw new RegressionConclusionRejected("审查证据代次或旧轮次依据状态已变化，结论与依据均未提交");
       }
       if (state.settlement && JSON.stringify(state.acceptedBasis) !== JSON.stringify(checked.basis)) {
         throw new RegressionConclusionRejected("本轮已进入结算，不能替换结论依据");
