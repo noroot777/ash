@@ -246,9 +246,10 @@ async function initializeServer() {
     const { reconcileFreeReviewDebates } = await import("./free-review-debate.js");
     await reconcileFreeReviewDebates().catch((err) => console.error("[ash] 审查辩论对账失败（不影响启动）:", err));
   }
-  // 个人 CLI 配置目录里的 ash MCP 登记（隔离档专属的一位）。放在这里是因为它跟任务
-  // 能不能交卷直接相关：缺了它 agent 干完活也记 failed，而这一趟能在第一个任务起跑
-  // 之前就补好。best-effort，出错只出声不拦启动。
+  // ash MCP 登记自检。放在这里是因为它跟任务能不能交卷直接相关：缺了它 agent 干完活
+  // 也记 failed，而这一趟能在第一个任务起跑之前就说出来。两档各做一件事：隔离档的目录
+  // 是 ash 自己建的，缺了直接补上；自用/共用档读的是用户自己的 CLI 配置，**一个字节都
+  // 不改**，只把缺口点名到文件路径。best-effort，出错只出声不拦启动。
   if (!IS_PREVIEW_INSTANCE) {
     const { sweepPersonalAshMcp } = await import("./auth/user-cli.js");
     await sweepPersonalAshMcp().catch((err) => console.error("[ash] 个人 CLI 的 ash MCP 自检失败（不影响启动）:", err));
