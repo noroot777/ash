@@ -23,6 +23,9 @@
 //      整段参数拆词），以及「宿主启动诊断仍是默认上下文」这条边界
 //  14. B2 同类：诊断读 init 事件也按集合判，不取第一项
 //  15. B3 超时之后不准把自己起的进程留在机器上（壳进程 + 孙进程）
+//  16. 探测层三条：包装先退出时的回收、被信号终止 ≠ 成功答案、UTF-8 跨块解码
+// 另：codex 探测原样带整份 extraArgs（紧贴写法 `-cKEY=VAL` 真实 CLI 认），
+//     并用结构断言挡住「再挑一个子集」和「把回收判据挂回 close」。
 // 跑：npm -w server run test:ash-mcp-reach
 //
 // 第 8 条（CLI 不在）会在装了 codex 的机器上**明确跳过**：resolveBin 还扫
@@ -359,6 +362,24 @@ try {
       .split("\n").filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line)).join("\n");
     assert.ok(!/\b(?:execFile|spawn|spawnSync|execFileSync)\b/.test(judge),
       "判据层不准自己起进程：超时和整棵进程树的生命周期只归 ash-mcp-probe.ts 管（B3）");
+    // 不准再长出「挑哪些参数跟 MCP 有关」的投影层：整份 argv 原样交给 CLI 自己判，
+    // 认不得就让它非零退出（→ 问不出来 → 放行）。补正则只会等下一种写法（B1）。
+    assert.match(judge, /probeCli\(bin, \[\.\.\.extraArgs, "mcp", "list", "--json"\]/,
+      "codex 探测必须原样带上整份归一后的 extraArgs，不准再挑子集");
+  }
+  // 回收判据必须是**执行单元**，close 只是问不出来时的退路。
+  //
+  // 为什么这条只能结构性地钉：下面第 16 条那个「包装先退出」的行为用例**在 POSIX 上
+  // 对 B2 没有鉴别力** —— 进程组本来就不依赖组长活着，`killTree` 打 `-pgid` 照样杀得到，
+  // close 也就跟着来了，退回「只认 close」的实现同样能过。真正会分出高下的是 Windows：
+  // 那边 `taskkill /T` 走父子树，根一死就打空，得靠内核圈定的 Job Object。本机
+  // （macOS）圈定如实弃权，所以那条路在这里跑不出来。
+  {
+    const probe = readFileSync(new URL("../src/ash-mcp-probe.ts", import.meta.url), "utf8")
+      .split("\n").filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line)).join("\n");
+    assert.match(probe, /openConfinement\(/, "探测层必须接内核圈定 —— Windows 上它才是不依赖父存活的那个执行单元");
+    assert.match(probe, /return gone \?\? byClose/,
+      "收干净没有先问执行单元（圈的成员 / 进程组还有没有人），答不出来才退回 close");
   }
 
   // ── 13. B1:预检必须消费**运行时那份**有效执行上下文 ─────────────────────
@@ -397,6 +418,16 @@ try {
     assert.equal(
       (await reach()).reachable, true,
       "B1:整段参数要按 normalizeProfileExtraArgs 拆词后再问",
+    );
+
+    // **紧贴写法**:真实 codex 吃 `-cKEY=VAL`(实测 rc=0 且列出 ash),上一版的子集筛选
+    // 只认 `-c VALUE` / `--config VALUE` / 带等号那三种,把这条整个丢掉,于是探测问的是
+    // 另一份配置,再拿那份的「没有」去拒真实执行器(第 4 轮审查 B1)。
+    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-cmcp_servers.ash.command=node"]) })
+      .where(eqOp(agentsTable.id, "b1-default"));
+    assert.equal(
+      (await reach()).reachable, true,
+      "B1:紧贴写法 -cKEY=VAL 真实 codex 认,预检必须跟着认",
     );
 
     // 边界:宿主启动诊断问的是**默认上下文**,不能被任务默认 profile 带偏
@@ -466,6 +497,85 @@ try {
     try { process.kill(hungPid, 0); } catch { alive = false; }
     if (alive) { try { process.kill(hungPid, "SIGKILL"); } catch { /* 清场 */ } }
     assert.equal(alive, false, "B3:超时返回时,探测自己起的孙进程必须已经被回收");
+
+    process.env.PATH = pathWas;
+  }
+
+  // ── 16. 探测层自己的三条：执行单元回收 / 信号 / 跨块解码 ─────────────────
+  // 都直接打在 probeCli 上 —— 它是两种 CLI、派审与启动诊断共用的那一层。
+  {
+    const { probeCli } = await import("../src/ash-mcp-probe.js");
+    const dir = join(stage, "probe-cases");
+    mkdirSync(dir, { recursive: true });
+    const pathWas = process.env.PATH;
+    process.env.PATH = `${dir}${delimiter}${pathWas ?? ""}`;
+    /** 按平台写一个叫 codex 的壳；body 是壳自己的脚本内容。 */
+    const shim = (posix: string, windows: string): void => {
+      if (process.platform === "win32") writeFileSync(join(dir, "codex.cmd"), windows);
+      else { const f = join(dir, "codex"); writeFileSync(f, posix); chmodSync(f, 0o755); }
+    };
+    const ask = (ms: number) => probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, ms);
+
+    // ① B2：**包装进程先退出**，它起的查询还在。真机上这正是两轮 taskkill 都打空的形状
+    // （第 4 轮审查：wrapperStillAlive=false、childStillAlive=true）。判据必须是执行单元
+    // 还有没有成员，而不是根进程的 close —— 后代持着管道时 close 根本不会来。
+    //
+    // **这条在 POSIX 上过了不等于 B2 修好了**：进程组不依赖组长活着，退回「只认 close」
+    // 的旧实现在这里同样能过（实测反向验证不红）。它在这边的作用是守住「这个形状别再
+    // 退化成收不回」；真正分得出高下的是 Windows（Job Object vs taskkill 打空），本机
+    // 圈定弃权，跑不出来。判据本身由上面那条结构断言钉。
+    const pidFile = join(dir, "hang.pid");
+    const hang = join(dir, "hang.mjs");
+    writeFileSync(hang,
+      'import { writeFileSync } from "node:fs";\n'
+      + `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n`
+      + 'setInterval(() => {}, 1000);\n');
+    shim(
+      `#!/bin/sh\n"${process.execPath}" "${hang}" &\nexit 3\n`,
+      `@echo off\r\nstart /b "" "${process.execPath}" "${hang}"\r\nexit /b 3\r\n`,
+    );
+    const warned: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
+    let res: unknown;
+    try { res = await ask(1_200); } finally { console.warn = realWarn; }
+    assert.equal(res, null, "B2：超时仍回到「问不出来」");
+    const hungPid = Number(readFileSync(pidFile, "utf8").trim());
+    let alive = true;
+    try { process.kill(hungPid, 0); } catch { alive = false; }
+    if (alive) { try { process.kill(hungPid, "SIGKILL"); } catch { /* 清场 */ } }
+    assert.equal(alive, false, "B2：包装先退出了，它起的查询照样必须被回收");
+    assert.ok(!warned.some((w) => w.includes("没能确认回收")),
+      "B2：执行单元已经空了就该当场确认 —— 等满两轮宽限再喊收不回，说明判据还挂在 close 上");
+
+    // ② N1：被信号打断的不是一份答案。壳先写出一份**看着像有效答案**的 stdout，再把
+    // 自己杀掉；上一版 `code ?? 0` 会把它读成「成功退出 rc=0、列表为空」→ 据此硬拒。
+    shim(
+      `#!/bin/sh\necho '[]'\nkill -TERM $$\n`,
+      `@echo off\r\necho []\r\ntaskkill /PID %^errorlevel% >nul 2>&1\r\nexit /b 1\r\n`,
+    );
+    if (process.platform === "win32") {
+      console.log("⚠ 跳过 N1 一条：Windows 上没有自杀信号的等价写法，这条只在 POSIX 判");
+    } else {
+      assert.equal(await ask(8_000), null, "N1：被信号终止 → 问不出来，不准当成 rc=0 的空列表");
+    }
+
+    // ③ N2：UTF-8 字符跨在两个 data 块边界上。逐块 String(chunk) 会解出替换字符，
+    // 中文路径和中文停用原因都会糊掉。
+    const split = join(dir, "split.mjs");
+    writeFileSync(split,
+      'const buf = Buffer.from("[{\\"disabled_reason\\":\\"配置里没有这一项\\"}]", "utf8");\n'
+      + 'process.stdout.write(buf.subarray(0, 25));\n'
+      + 'setTimeout(() => { process.stdout.write(buf.subarray(25)); }, 80);\n');
+    shim(
+      `#!/bin/sh\nexec "${process.execPath}" "${split}"\n`,
+      `@echo off\r\n"${process.execPath}" "${split}"\r\n`,
+    );
+    const got = await ask(8_000);
+    assert.ok(got, "N2：这条该正常退出");
+    assert.ok(!got!.stdout.includes("\uFFFD"),
+      "N2：跨块的多字节字符不准解成替换字符（两个输出通道都按流设编码）");
+    assert.match(got!.stdout, /配置里没有这一项/, "N2：拼回来的文本要和原文一致");
 
     process.env.PATH = pathWas;
   }

@@ -20,8 +20,8 @@
 // 命令行覆盖、TOML 语义这些全交给它:
 //   · claude → `claude mcp get ash`(有登记 rc=0;没有 rc=1 且说 No MCP server named)
 //   · codex  → `codex mcp list --json`(直接给 `enabled` 布尔和 `disabled_reason`)
-// 两条都带上**这一轮真正要用的** env(含注入的 CLAUDE_CONFIG_DIR / CODEX_HOME)、cwd
-// 和 mcp 相关的 `-c` 覆盖参数,与真实起跑同源。
+// 两条都带上**这一轮真正要用的** env(含注入的 CLAUDE_CONFIG_DIR / CODEX_HOME)和 cwd;
+// codex 还把归一后的 extraArgs **整份**带上去(为什么不是挑一个子集,见 askCodex 上面那段)。
 //
 // ── 目录:问一组,不猜哪一个 ─────────────────────────────────────────────────
 //
@@ -91,31 +91,21 @@ type Verdict =
   | { state: "disabled"; detail: string };
 
 /**
- * extraArgs 里跟 mcp 登记有关的 `-c` / `--config` 覆盖，原样带给探测命令。
- * codex 的 `mcp list` 吃同一批 `-c`（实测：`-c mcp_servers.ash.command="node"` 之后
- * `mcp list --json` 就列出 ash），所以带上它们，探测结果才跟真实起跑一致。
+ * 探测命令**原样带上这一轮的 extraArgs**，不再自己挑「哪些跟 MCP 有关」。
+ *
+ * 上一版挑了一份子集（只认 `-c VALUE`、`--config VALUE` 和带等号的形式），第 4 轮审查
+ * 用真实 CLI 打穿：codex 接受紧贴写法 `-cmcp_servers.ash.command=node`，被这份子集直接
+ * 丢掉，于是探测问的是**另一份配置**，再拿那份配置的「没有」去拒真实执行器（B1）。
+ * 病根不是漏了哪一种拼法，是「投影」这件事本身——补一条正则只会等下一种写法。
+ *
+ * 所以 codex 这边把归一后的 argv 整份传过去：认得的照常生效（实测紧贴/分开/等号三种
+ * 写法 `mcp list --json` 都吃），认不得的会让它非零退出，而那正好落进「问不出来 →
+ * 放行」。两头都不需要我们理解参数的含义。
+ *
+ * claude 这边做不到：实测 `claude --mcp-config x.json mcp get ash` 里 `--mcp-config`
+ * 是 variadic，会把 `mcp`、`get`、`ash` 当成它自己的值吃掉，子命令就没了。既然没法保证
+ * 「探测用的配置 = 运行时的配置」，就不下硬结论 —— 带了额外参数一律放行（见 reachWith）。
  */
-function codexMcpOverrides(extraArgs: string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < extraArgs.length; i++) {
-    const arg = extraArgs[i]!;
-    const inline = /^(?:-c|--config)=(.*)$/.exec(arg);
-    if (inline) {
-      if (inline[1]!.startsWith("mcp_servers")) out.push(arg);
-      continue;
-    }
-    if (arg !== "-c" && arg !== "--config") continue;
-    const value = extraArgs[i + 1];
-    if (value === undefined) continue;
-    i++;
-    if (value.startsWith("mcp_servers")) out.push(arg, value);
-  }
-  return out;
-}
-
-/** claude 这边没有「把覆盖参数也带上去问」的办法，只能认出来然后放行。 */
-const CLAUDE_MCP_OVERRIDE = /^--(?:mcp-config|strict-mcp-config)(?:=|$)/;
-
 /**
  * claude：`mcp get <name>` 有登记 rc=0、没有 rc=1 并写明 `No MCP server named`。
  * 刻意不用 `mcp list` —— 它会**真的去连每一个** server（实测含远程 HTTP 的那种），
@@ -138,11 +128,11 @@ async function askClaude(bin: string, env: NodeJS.ProcessEnv, cwd: string | unde
 /** codex：`mcp list --json` 的 `enabled` / `disabled_reason` 就是它自己的结论。 */
 async function askCodex(
   bin: string,
-  overrides: string[],
+  extraArgs: string[],
   env: NodeJS.ProcessEnv,
   cwd: string | undefined,
 ): Promise<Verdict> {
-  const res = await probeCli(bin, [...overrides, "mcp", "list", "--json"], env, cwd, PROBE_TIMEOUT_MS);
+  const res = await probeCli(bin, [...extraArgs, "mcp", "list", "--json"], env, cwd, PROBE_TIMEOUT_MS);
   if (!res || res.code !== 0) return { state: "unknown" };
   // **只解析 stdout**：stderr 的警告不是答案的一部分（第 2 位审查者 F3）。
   let parsed: unknown;
@@ -214,7 +204,9 @@ async function reachWith(
   ownerUserId: string | null,
 ): Promise<AshMcpReach> {
   if (agentType !== "claude" && agentType !== "codex") return ok();
-  if (agentType === "claude" && extraArgs.some((a) => CLAUDE_MCP_OVERRIDE.test(a))) return ok();
+  // claude 的子命令带不动这些参数（上面那段说明：`--mcp-config` 是 variadic，会把子命令
+  // 本身吃掉）。保证不了「探测用的配置 = 运行时的配置」，就不下硬结论。
+  if (agentType === "claude" && extraArgs.length) return ok();
 
   let bin: string | null = null;
   let env: NodeJS.ProcessEnv;
@@ -235,10 +227,9 @@ async function reachWith(
   const { dirs, complete } = probeDirs(cwdCandidates);
 
   // 逐个问:present / unknown 任一出现就放行,只有**全都**说拿不到才往下走。
-  const overrides = agentType === "codex" ? codexMcpOverrides(extraArgs) : [];
   let worst: Verdict = { state: "absent" };
   for (const dir of dirs) {
-    const v = agentType === "claude" ? await askClaude(bin, env, dir) : await askCodex(bin, overrides, env, dir);
+    const v = agentType === "claude" ? await askClaude(bin, env, dir) : await askCodex(bin, extraArgs, env, dir);
     if (v.state === "present" || v.state === "unknown") return ok();
     if (v.state === "disabled") worst = v;            // 比 absent 更具体,留它来说话
   }
