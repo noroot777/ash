@@ -48,7 +48,10 @@ import { bindUploadsToTask } from "./uploads.js";
 import { dispatchPendingMessage } from "./pending-dispatch.js";
 import { pendingMessageOrder } from "./pending-monitor-batch.js";
 import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
-import { CHECKPOINT_RUN_ORIGIN, recoverPendingCheckpoints, preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
+import {
+  CHECKPOINT_RUN_ORIGIN, preparePendingCheckpointStart, recoverPendingCheckpoints,
+  reconcileCheckpointDeliveries,
+} from "./pending-checkpoint-recovery.js";
 import { id, now } from "./util.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 
@@ -278,10 +281,23 @@ export async function markSent(message: Row | Row[], transaction?: ConclusionTra
 // 唯一的代价方向是安全的那一边:万一进程死在「原话已落盘、sent 还没写」的毫秒缝里,
 // 结果是**重发一次**,而不是丢一句话。
 export async function reclaimStaleDeliveries(): Promise<number> {
+  // **续跑交代那几张凭证先单独对账。** 它们的租约不只有「上一个进程正在送」这一个意思:
+  // 送达已经发生、只差 `markSent` 那一笔时,租约是唯一能把这两种分开的凭据(判据见
+  // pending-checkpoint-recovery.ts 的 checkpointDelivered)。跟着下面这一把全清掉,
+  // 紧接着的 recoverPendingCheckpoints 就会把一段**已经喂给 agent 的交代**回填成待执行
+  // 输入,下一次启动再送一遍 —— 上面那句「代价方向是重发一次而不是丢一句话」对用户打的字
+  // 成立,对 agent 自己的流水线交接不成立(第 1 轮审查必须修 3 的另一半)。
+  await reconcileCheckpointDeliveries()
+    .catch((error) => console.error("[ash] 在途续跑交代对账失败（不影响开机）:", error));
   const reclaimed = await db
     .update(scheduledMessages)
     .set({ deliveringSince: null })
-    .where(and(ne(scheduledMessages.status, "sent"), isNotNull(scheduledMessages.deliveringSince)))
+    .where(and(
+      ne(scheduledMessages.status, "sent"), isNotNull(scheduledMessages.deliveringSince),
+      // 对账之后还带着租约的续跑凭证 = 判定「已送达、确认还没写成」(或者库还病着、这一趟
+      // 没判出来)。清掉它的租约就是上面那段注释说的误重放,所以这一把不碰它们。
+      or(isNull(scheduledMessages.origin), ne(scheduledMessages.origin, CHECKPOINT_RUN_ORIGIN)),
+    ))
     .returning({ id: scheduledMessages.id });
   if (reclaimed.length) console.log(`[ash] 回收 ${reclaimed.length} 条中断的待发送消息投递`);
   await recoverPendingCheckpoints();

@@ -9,7 +9,9 @@ import {
 import { resumeOrRunTask } from "../src/task-resume.js";
 import { continueTask, runTask } from "../src/orchestrator.js";
 import { hasPendingDeliveryRecovery } from "../src/pending-delivery-recovery.js";
-import { checkpointReadyTask, preparePendingCheckpointStart } from "../src/pending-checkpoint-recovery.js";
+import {
+  checkpointReadyTask, forgetCheckpointDelivering, preparePendingCheckpointStart,
+} from "../src/pending-checkpoint-recovery.js";
 import { occupyResumePrompt, writeResumePrompt } from "../src/task-resume-prompt.js";
 import { cancelPendingMonitorEvents } from "../src/monitor-events.js";
 import { advanceQueue, runGroup } from "../src/scheduler.js";
@@ -24,6 +26,7 @@ import { checkpointAdmissionCases } from "./checkpoint-admission-cases.js";
 import { checkpointAdvanceAdmissionCases } from "./checkpoint-advance-admission-cases.js";
 import { checkpointAdvanceFailureCases } from "./checkpoint-advance-failure-cases.js";
 import { checkpointGroupFailureCases } from "./checkpoint-group-failure-cases.js";
+import { checkpointAckFailureCases } from "./checkpoint-ack-failure-cases.js";
 
 function owner(mode: string, taskId: string, messageId = ""): void {
   const child = spawnSync(process.execPath, [
@@ -48,6 +51,7 @@ async function resultsDelivered(test: Awaited<ReturnType<typeof scenario>>): Pro
 }
 
 try {
+  await checkpointAckFailureCases();
   await checkpointAdvanceFailureCases();
   await checkpointGroupFailureCases();
   await checkpointAdmissionCases();
@@ -176,7 +180,12 @@ try {
     const test = await scenario(0);
     owner("run-owner", test.taskId);
     assert.equal((await taskOf(test.taskId)).resumePrompt, null);
-    assert.ok(await preparePendingCheckpointStart(test.taskId));
+    // 所有者进程已经退了,库里只剩那张带租约的凭证 —— 而它只取走了交代,一个字都没送出去。
+    // **不必等重启**:启动前检查这一趟就会对账(租约之后一个回合都没开过 ⇒ 一定没送出去),
+    // 当场归还。第 1 轮审查必须修 3 之前这里只回得出一句「仍由消息账本保管」,而清租约的
+    // reclaimStaleDeliveries 只在开机跑一次,于是「只有重启能解」。
+    assert.equal(await preparePendingCheckpointStart(test.taskId), null);
+    assert.equal((await taskOf(test.taskId)).resumePrompt, test.checkpoint);
     await pending.reclaimStaleDeliveries();
     assert.equal((await taskOf(test.taskId)).resumePrompt, test.checkpoint);
     assert.equal((await checkpointReadyTask(test.taskId))?.resumePrompt, test.checkpoint);
@@ -211,6 +220,12 @@ try {
     }
     const receipt = await claimCheckpointForRun(test.taskId, test.checkpoint);
     assert.ok(receipt);
+    // 这张凭证登记着「本进程正在送它」,开机那一把不许碰 —— 送它那条路自己会把 sent 或者
+    // 归还做完,插手只会把一条正在送的交代归还回去、送完再送一遍。
+    await pending.reclaimStaleDeliveries();
+    assert.equal((await taskOf(test.taskId)).resumePrompt, null, "在途登记里的凭证不许被别人接管");
+    // 进程换过一次:在途登记按定义是空的,这时才轮到对账 —— 它一个回合都没开过,归还安全。
+    forgetCheckpointDelivering(receipt.id);
     await pending.reclaimStaleDeliveries();
     assert.equal((await taskOf(test.taskId)).resumePrompt, test.checkpoint);
     console.log("PASS: manual checkpoint transfer rolls back atomically and releases the caller's turn on insert failure");
