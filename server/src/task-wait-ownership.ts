@@ -91,7 +91,12 @@ export async function expireTaskWait(transaction: ConclusionTransaction, owner: 
   const question = current.waitOwnership?.question;
   const clearQuestion = belongsTo(question?.origin, state) && questionWaitMatches(current, question);
   const checkpoint = current.waitOwnership?.checkpoint;
-  const clearCheckpoint = belongsTo(checkpoint?.origin, state) && checkpoint?.generation === current.resumePromptGeneration;
+  // 系统替任务自己写的那一格(resumePromptAuto:名下还有没了结的哨兵)**不是审查的遗留**,
+  // 一轮审查结束不许把它作废 —— 作废了这个任务就再也不会被哨兵结果叫醒,而那条等待跟审查
+  // 没有半点关系。审查自己挂的检查点走 pause_task(auto=false),照旧在这里收口。判据与
+  // review-continuation.ts 的 ownsWait 那一侧同源。
+  const clearCheckpoint = !current.resumePromptAuto && belongsTo(checkpoint?.origin, state)
+    && checkpoint?.generation === current.resumePromptGeneration;
   return expireFields(transaction, current, !!clearQuestion, !!clearCheckpoint);
 }
 

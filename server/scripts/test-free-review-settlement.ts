@@ -19,11 +19,13 @@ try {
   const { createTasks } = await import("../src/task-store.js");
   const { consumeSingleRun } = await import("../src/single-run.js");
   const { pendingMessageRow } = await import("../src/pending-messages.js");
-  const { freeWorkflowState, handleFreeWorkflowSettlement, reportFreeReviewConclusion, reserveFreeReview } = await import("../src/free-workflow.js");
+  const { freeWorkflowState, handleFreeWorkflowSettlement, reconcileFreeReviews, reportFreeReviewConclusion,
+    reserveFreeReview } = await import("../src/free-workflow.js");
   const { freeReviewEvidenceDir, freeReviewReportPath } = await import("../src/free-review-files.js");
   const { evidenceState } = await import("../src/regression-evidence-lifecycle.js");
-  const { claimTurn, markStopped } = await import("../src/runs.js");
+  const { claimTurn, markStopped, releaseTurn } = await import("../src/runs.js");
   const { confirmDone } = await import("../src/task-confirmation.js");
+  const { writeResumePrompt } = await import("../src/task-resume-prompt.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { FOLLOW_UP_REMINDER } = await import("../src/run-prompts.js");
   await ensureSchema();
@@ -50,6 +52,10 @@ try {
     /** 托盘里排着的待发送消息（结算时要给它让路）。 */
     pending?: { mode: "queued" | "timed"; sendAt?: string };
     reviewConclusion?: "verified" | "verify_failed" | null;
+    /** 交卷之后、结算之前,**执行者**自己挂下的一段检查点(走生产 writer,带上它的连带写入)。 */
+    checkpointDuringReview?: string;
+    /** 审查**自己**以 pause_task 收尾挂下的那一段(auto=false):这一份才是「审查在等续跑」。 */
+    reviewerPause?: string;
   } = {}) {
     const role = options.role ?? "single";
     await createTasks([{
@@ -109,6 +115,15 @@ try {
         writeFileSync(report, "审查证据已核实。\n");
         await reportFreeReviewConclusion(id, options.reviewConclusion);
       }
+    }
+    // 执行者在审查窗口里挂检查点:走生产 writer,连带的 recordReviewWait 原样发生
+    // (它会把审查的 continuation 相位按「有人在等」翻成 waiting —— D6 的现场就是这一下)。
+    if (options.checkpointDuringReview) {
+      assert.equal(await writeResumePrompt(id, options.checkpointDuringReview, true), true);
+    }
+    // 审查自己 pause_task 收尾:同一格、同一个 writer,只差 auto —— 结算必须按这一位分开待遇。
+    if (options.reviewerPause) {
+      assert.equal(await writeResumePrompt(id, options.reviewerPause, false), true);
     }
     if (options.confirmed === "persisted") {
       await db.update(tasks).set({ completeConfirmedAt: at }).where(eq(tasks.id, id));
@@ -275,6 +290,87 @@ try {
   assert.equal(due.state.reviews.length, 0, "已经到点的定时消息同样要先发完");
   assert.equal(due.state.reviewReservation.armed, true);
 
+  // ── 交卷之后不许被「有人在等」挡住结算(D6 现场) ──
+  // 现场:执行者挂哨兵、pause_task 收尾,预约审查随即起跑;审查写完报告与结论、正常退出。
+  // 结算这一拍读到「owner 还挂着检查点 + continuation 相位是 waiting」,判成「审查在等续跑」,
+  // 于是 round 永远挂 reviewing —— 验收 409、自动复审不开、修复交接不发,只有重启能救。
+  // 判据:**结论已经写在 round 上、这一轮的 reviewer 回合已经死了**,那就只能往前结算;
+  // 「在等」只保护审查**自己**挂的那一份(下一条用例),别人的等待不归它管。
+  for (const conclusion of ["verified", "verify_failed"] as const) {
+    const id = `stalled-${conclusion}`;
+    const stalled = await runTurn(id, {
+      followUp: true, role: "reviewer", reserve: false, reviewConclusion: conclusion,
+      checkpointDuringReview: "继续:收哨兵结果再往下做",
+    });
+    const review = stalled.state.reviews[0]!;
+    assert.equal(review.rounds[0]?.status, conclusion === "verified" ? "passed" : "failed",
+      "执行者的检查点不许把一轮已交卷的审查永久挂在 reviewing");
+    assert.equal(review.rounds[0]?.conclusion, conclusion);
+    assert.equal(review.status, conclusion === "verified" ? "passed" : "stopped");
+    assert.equal(stalled.task.resumePrompt, "继续:收哨兵结果再往下做", "结算不许动执行者那一格");
+    assert.equal(stalled.state.reviewReservation.armed, conclusion === "verify_failed",
+      "未通过的结论照常挂自动复审预约");
+  }
+
+  // 反面:审查**自己**以 pause_task 收尾、还没给结论 —— 这一份等待照旧挡住结算,round 留在
+  // reviewing 等它续跑回来交卷。丢掉这一条,审查刚挂起就会被判成异常结束。
+  const pausedReview = await runTurn("review-paused-no-conclusion", {
+    followUp: true, role: "reviewer", reserve: false, reviewConclusion: null,
+    reviewerPause: "继续:把第 3 条意见核完再交卷",
+  });
+  assert.equal(pausedReview.state.reviews[0]?.rounds[0]?.status, "reviewing",
+    "审查自己挂的检查点必须挡住结算(它会续跑回来交卷)");
+  assert.equal(pausedReview.state.reviews[0]?.status, "reviewing");
+  assert.equal(pausedReview.task.resumePrompt, "继续:把第 3 条意见核完再交卷");
+
+  // ── 运行时自愈:conclusion 已写、round 挂 reviewing、reviewer 回合早死(D6 ②)──
+  // 现场的 owner 一直 running:哨兵结果把执行者叫醒去跑**实现回合**。旧判据按「任务忙」一路
+  // 跳过,于是只有重启那一次对账能救,链挂了一整天。判据改成读**回合身份**:在跑的不是
+  // reviewer 自己那一轮,就说明没人会来替它收尾。
+  // 自愈只能判「异常结束」——这一轮没有持久保存的真实退出结果,不许凭已有结论推定正常退出
+  // (regression-settlement.ts 那条时间线原话)。要点是链不再挂死:验收能过、用户可再派一轮。
+  async function stuckRound(id: string): Promise<string> {
+    await createTasks([{
+      id, projectId: "p", title: id, body: "test", mode: "single", status: "running",
+      agentType: "codex", executorId: "ex", autoTitle: false, workflowMode: "free",
+      useWorktree: false, createdAt: at, updatedAt: at,
+    }]);
+    const runId = `${id}-review`;
+    await db.insert(freeReviewRuns).values({
+      id: runId, taskId: id, reviewerId: "reviewer", reviewerName: "reviewer", agentType: "codex",
+      executorId: "ex", checkMode: "logic", retryLimit: 1, currentRound: 1, status: "reviewing",
+      createdAt: at, updatedAt: at,
+    });
+    await db.insert(freeReviewRounds).values({
+      id: `${runId}-round`, runId, round: 1, status: "reviewing", conclusion: "verify_failed", startedAt: at,
+    });
+    await evidenceState(id, freeReviewEvidenceDir(id, runId, 1), (await db.select().from(tasks).where(eq(tasks.id, id)))[0]!);
+    // 执行者那一格是在审查窗口里写下的(系统代写,auto=true),归属推断正是在这里把它记到审查头上。
+    assert.equal(claimTurn(id, "reviewer", { run: runId, round: 1 }), true);
+    assert.equal(await writeResumePrompt(id, "继续:收哨兵结果再往下做", true), true);
+    releaseTurn(id);
+    return runId;
+  }
+
+  const healId = "stuck-executor-running";
+  await stuckRound(healId);
+  assert.equal(claimTurn(healId, "single"), true); // 执行者正在跑实现回合
+  await reconcileFreeReviews(healId);
+  releaseTurn(healId);
+  const healed = await freeWorkflowState(healId);
+  assert.equal(healed.reviews[0]?.rounds[0]?.status, "error", "执行者在跑实现回合不等于审查还活着");
+  assert.equal(healed.reviews[0]?.status, "failed");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, healId)))[0]?.resumePrompt,
+    "继续:收哨兵结果再往下做", "自愈不许动执行者那一格");
+
+  const liveId = "stuck-reviewer-alive";
+  const liveRun = await stuckRound(liveId);
+  assert.equal(claimTurn(liveId, "reviewer", { run: liveRun, round: 1 }), true); // reattach 把审查回合接回来了
+  await reconcileFreeReviews(liveId);
+  releaseTurn(liveId);
+  assert.equal((await freeWorkflowState(liveId)).reviews[0]?.rounds[0]?.status, "reviewing",
+    "reviewer 自己那一轮还活着,不许替它补结算(错误结论将再也撤不掉)");
+
   const noReservation = await runTurn("no-reservation", { followUp: true, reserve: false });
   assert.equal(noReservation.state.reviews.length, 0, "没有用户预约不自动开审");
   const confirmed = await runTurn("confirmed", { confirmed: true });
@@ -283,7 +379,7 @@ try {
   const prompt = FOLLOW_UP_REMINDER("free", "done", false, false, "", true);
   assert.match(prompt, /已预约的审查会在执行回合正常结束后独立触发/);
   assert.doesNotMatch(prompt, /不确认它们就一直停在原地/);
-  console.log("✓ 真实单任务收流：漏确认仍派预约审查，完成协议不变；排队消息先发完再开审；中断、等待、原生命令与审查回合不消费预约");
+  console.log("✓ 真实单任务收流：漏确认仍派预约审查，完成协议不变；排队消息先发完再开审；中断、等待、原生命令与审查回合不消费预约；交卷后不被他人的等待挡住结算，reviewer 回合死掉的 round 由对账自愈");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

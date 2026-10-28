@@ -27,9 +27,29 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
   const ownsWait = (origin: WaitOrigin | undefined) =>
     origin?.kind === "review" && origin.directory === state.directory && origin.generation === state.generation;
   const question = owner.question && questionWaitMatches(owner) && ownsWait(owner.waitOwnership?.question?.origin);
-  const checkpoint = owner.resumePrompt && owner.waitOwnership?.checkpoint?.generation === owner.resumePromptGeneration
+  // `resumePromptAuto` = 这一格是**系统替任务自己写的**(task-complete.ts 的 landCheckpoint:
+  // 名下还有没了结的哨兵,这一轮只能按暂停收尾)。它是实现侧的记账,不是任何一轮审查的等待
+  // —— 可它偏偏常常写在审查窗口里,于是归属推断(task-wait-ownership.ts 的 writerOrigin 那会儿
+  // 读到的活回合身份已经是审查的)把它记到了审查头上。审查**自己**挂的检查点一律走 pause_task
+  // (auto=false),所以这一条分得开:auto 的那种不算审查在等,也不许在结算时被当成审查的遗留
+  // 作废掉(expireTaskWait 同一条判据)。
+  const checkpoint = owner.resumePrompt && !owner.resumePromptAuto
+    && owner.waitOwnership?.checkpoint?.generation === owner.resumePromptGeneration
     && ownsWait(owner.waitOwnership.checkpoint.origin);
-  if ((question || checkpoint) && (!hasConclusion || state?.continuation?.phase === "waiting")) return true;
+  // 「owner 还挂着东西在等」只能挡住**还没交卷**的那一轮。
+  //
+  // 早先这里还有一条 `|| state.continuation.phase === "waiting"` 的后门,于是:执行者挂哨兵、
+  // pause_task 收尾,预约审查随即起跑;审查写完报告、落了 conclusion、正常退出 —— 结算这一拍
+  // 读到「owner 挂着检查点 + 相位 waiting」(那个相位正是执行者那次 pause 由 recordReviewWait
+  // 翻回去的),判成「审查在等续跑」,preserveReviewWait 之后直接 return。round 从此挂在
+  // reviewing:验收 409、自动复审不开、修复交接不发,只有重启时的 reconcileFreeReviews 能救。
+  // (本任务自己的第 1 轮审查就卡在这上面,现场见 docs/incidents.md「审查交卷后 round 挂死」。)
+  //
+  // 判据回到这个文件本来就写着的那一句(free-workflow.ts 审查旁路分支):**reviewer 已交卷
+  // 就必须结算**。执行者的等待不归这一轮审查管 —— 消费它的是实现会话的续跑,不会有任何人
+  // 回来替这一轮审查落账。交卷之前的等待照旧挡住(下一行的 hasConclusion),审查自己以提问/
+  // 检查点收尾、还没给结论的那种场景一个字都没变。
+  if ((question || checkpoint) && !hasConclusion) return true;
   const pending = await transaction.select().from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, owner.id), eq(scheduledMessages.status, "pending")));
   return pending.some((message) => message.origin === `review-answer:${state?.generation}`
