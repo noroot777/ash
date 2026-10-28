@@ -8,7 +8,7 @@ import { continueTask, runTask, type ResumeReason } from "./orchestrator.js";
 import { handDuePendingMessageToRun } from "./pending-messages.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
-import { acknowledgeCheckpointRun, claimCheckpointForRun, returnCheckpointRun } from "./task-checkpoint-delivery.js";
+import { acknowledgeCheckpointRun, claimCheckpointForRun, settleStrandedCheckpointRun } from "./task-checkpoint-delivery.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { activeReviewEvidence } from "./review-continuation.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
@@ -80,7 +80,10 @@ async function resumeOrRunClaimedTask(taskId: string,
           },
         });
       } finally {
-        if (!delivered) await returnCheckpointRun(receipt);
+        // 没走到送达回调 ≠ 没送出去:spawn 排在 persistRunner 与 onDelivered **之前**,崩在
+        // 中间那条缝里时这段话已经在 agent 手上了。三态判定与三条出路统一在
+        // settleStrandedCheckpointRun(第 1 轮审查 F1:这里原先一律归还)。
+        if (!delivered) await settleStrandedCheckpointRun(receipt, "本轮续跑交代未走到送达确认");
       }
       return;
     }

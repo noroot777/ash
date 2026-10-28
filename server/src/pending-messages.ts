@@ -48,6 +48,7 @@ import { bindUploadsToTask } from "./uploads.js";
 import { dispatchPendingMessage } from "./pending-dispatch.js";
 import { pendingMessageOrder } from "./pending-monitor-batch.js";
 import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
+import { forgetDeliveryCrossing } from "./delivery-crossing.js";
 import {
   CHECKPOINT_RUN_ORIGIN, preparePendingCheckpointStart, recoverPendingCheckpoints,
   reconcileCheckpointDeliveries,
@@ -271,6 +272,9 @@ export async function markSent(message: Row | Row[], transaction?: ConclusionTra
     ));
   if (!transaction) {
     for (const current of messages) forgetDeliveryBookkeeping(current.id);
+    // 这几条已经有定论了,spawn 前写下的越线记号留着只是垃圾(delivery-crossing.ts)。
+    // **只在非事务那一支清**:事务还可能回滚,记号先删了就等于把「越过线」这个事实抹掉。
+    for (const current of messages) forgetDeliveryCrossing(current.taskId, [current.id]);
     publishPendingMessages(messages[0]!.taskId);
   }
 }
@@ -283,7 +287,7 @@ export async function markSent(message: Row | Row[], transaction?: ConclusionTra
 export async function reclaimStaleDeliveries(): Promise<number> {
   // **续跑交代那几张凭证先单独对账。** 它们的租约不只有「上一个进程正在送」这一个意思:
   // 送达已经发生、只差 `markSent` 那一笔时,租约是唯一能把这两种分开的凭据(判据见
-  // pending-checkpoint-recovery.ts 的 checkpointDelivered)。跟着下面这一把全清掉,
+  // pending-checkpoint-recovery.ts 的 checkpointDeliveryVerdict)。跟着下面这一把全清掉,
   // 紧接着的 recoverPendingCheckpoints 就会把一段**已经喂给 agent 的交代**回填成待执行
   // 输入,下一次启动再送一遍 —— 上面那句「代价方向是重发一次而不是丢一句话」对用户打的字
   // 成立,对 agent 自己的流水线交接不成立(第 1 轮审查必须修 3 的另一半)。

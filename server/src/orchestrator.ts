@@ -28,6 +28,7 @@ import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
+import { noteDeliveryCrossing } from "./delivery-crossing.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { deliverToLead } from "./team/session.js";
@@ -475,6 +476,12 @@ export async function continueTask(
     // 一半是 resume 回合，全都还挂在匿名管道上）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
+    // **交出 prompt 之前**把「这几条输入即将越线」同步落到磁盘。下面这一句就是不可逆的那一刻:
+    // 它之后的 persistRunner / onDelivered 都只是记账,崩在中间时「没有会话行」只证明记账没
+    // 做完 —— 不证明输入没出去(delivery-crossing.ts 的文件头有跨进程实测)。
+    if (opts.pendingMessageIds?.length) {
+      noteDeliveryCrossing(taskId, opts.pendingMessageIds, { sessionId: sessId, turnStart });
+    }
     handle = run({
       prompt,
       ...cli,

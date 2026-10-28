@@ -1,6 +1,7 @@
 import { and, eq, gte, isNotNull, ne } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, sessions, tasks } from "./db/schema.js";
+import { deliveryCrossed } from "./delivery-crossing.js";
 import { restoreMonitorCheckpoint } from "./monitor-checkpoint-handoff.js";
 
 export const CHECKPOINT_RUN_ORIGIN = "checkpoint:resume";
@@ -24,34 +25,42 @@ export const noteCheckpointDelivering = (messageId: string): void => void delive
 export const forgetCheckpointDelivering = (messageId: string): void => void deliveringNow.delete(messageId);
 
 /**
- * 这张**带着在途租约**的凭证,到底送出去没有。
+ * 这张**带着在途租约**的凭证,到底送出去没有 —— 三态,不是布尔。
  *
- * 判据是一条可证伪的因果:送达回调(`onDelivered`)排在 orchestrator 的 `persistRunner`
- * 之后,而那一步必定把这一轮的起点刷进 `sessions.turn_started_at`(新建走
- * `freshTurnFields`、复用走 `resumedTurnFields`,两条分支都从 session-turns.ts 的 helper 取)。
- * 于是
+ *  · `not-started` —— **证明**这段输入还没越过 spawn 那条线:归还安全。
+ *  · `delivered`   —— **证明**它已经到了 agent 手里:只能往前走(标 sent),永不归还。
+ *  · `uncertain`   —— 越了线,但这一轮的记账没做完:**既不能归还也拿不到确认**。
  *
- *     送达 ⟹ 租约时刻之后有回合开起来过。
+ * 为什么必须有第三态:早先这一问只有两态,判据是「租约时刻之后有没有回合开起来过」
+ * (`sessions.turn_started_at`)—— 而那一列是在 **spawn 之后**才写的,于是「没有会话行」被
+ * 当成了「一定没送出去」。真正不可逆的外部效果是 spawn/投喂,会话行只是事后记账;两者之间
+ * 那条缝里进程被换掉,同一段交代就会被归还、重投、执行两遍(第 1 轮审查 F1 跨进程实测,
+ * 现场与判据见 delivery-crossing.ts 的文件头)。
  *
- * 能拿来用的是它的**逆否**:这之后一个回合都没开过 ⇒ 一定没送出去 ⇒ 归还安全。反方向不成立
- * (那个回合也可能是别的入口开的),所以另一侧一律按「已送达」处理 —— 这是**故意偏向**的那
- * 一边:多卡一会儿只是晚一点能启动(确认会被补记上去),误归还却会把已经喂给 agent 的那段话
- * 重新变成待执行输入,同一段交代执行两遍(第 1 轮审查必须修 3 明确点了这条约束)。
+ * 顺序就是证据强度:**回合开起来过**是最强的正面证据(它蕴含 spawn 发生过),所以先问它;
+ * 其次问越线记号 —— 有记号而没有回合行,正是那条缝;两样都没有才是真的还没启动。
+ *
+ * 偏向仍然是明的:宁可多卡一会儿(确认会被补记上去)也不误归还,因为误归还会把已经喂给
+ * agent 的那段话重新变成待执行输入。
  */
-export async function checkpointDelivered(
-  receipt: { taskId: string; deliveringSince: string | null },
-): Promise<boolean> {
-  if (!receipt.deliveringSince) return false;
+export type CheckpointDelivery = "not-started" | "delivered" | "uncertain";
+
+export async function checkpointDeliveryVerdict(
+  receipt: { id: string; taskId: string; deliveringSince: string | null },
+): Promise<CheckpointDelivery> {
+  if (!receipt.deliveringSince) return "not-started";
   const opened = await db.select({ id: sessions.id }).from(sessions).where(and(
     eq(sessions.taskId, receipt.taskId),
     isNotNull(sessions.turnStartedAt),
     gte(sessions.turnStartedAt, receipt.deliveringSince),
   ));
-  return opened.length > 0;
+  if (opened.length > 0) return "delivered";
+  return deliveryCrossed(receipt.taskId, receipt.id) ? "uncertain" : "not-started";
 }
 
 /**
- * 在途租约的**对账**:把「送达已经发生、只差一笔确认」和「压根没送出去」分开,各走各的出路。
+ * 在途租约的**对账**:把「送达已经发生、只差一笔确认」「压根没越过 spawn」「越了线却没落下
+ * 会话行」三种分开,各走各的出路(判定 `checkpointDeliveryVerdict`,出路 `settleStrandedCheckpointRun`)。
  *
  * 为什么非得有这一步:`onDelivered` 里 `delivered = true` 排在 `await markSent` 之前
  * (task-resume.ts),所以 `markSent` 抛错时既不落 sent、也不走归还,而那个异常又被
@@ -94,15 +103,7 @@ async function reconcileLeasedCheckpoints(rows: (typeof scheduledMessages.$infer
   const delivery = await import("./task-checkpoint-delivery.js");
   for (const receipt of stranded) {
     try {
-      if (await checkpointDelivered(receipt)) {
-        console.warn(`[ash] 接管在途续跑交代 task=${receipt.taskId} message=${receipt.id}：`
-          + `原文已送达（租约之后有回合开起来过），补记这一笔确认`);
-        await delivery.acknowledgeCheckpointRun(receipt);
-      } else {
-        console.warn(`[ash] 接管在途续跑交代 task=${receipt.taskId} message=${receipt.id}：`
-          + `租约之后一个回合都没开过（一定没送出去），归还给任务`);
-        await delivery.returnCheckpointRun(receipt);
-      }
+      await delivery.settleStrandedCheckpointRun(receipt, "接管在途续跑交代");
     } catch (error) {
       console.error(`[ash] 在途续跑交代对账失败 task=${receipt.taskId} message=${receipt.id}:`, error);
     }
@@ -156,9 +157,17 @@ export async function pendingCheckpointBlockReason(
   // 都看不到(那张凭证不在待发送托盘里),只有重启服务能解。这一句就是那条缝的**可见状态**。
   for (const receipt of blocking) {
     if (receipt.origin !== CHECKPOINT_RUN_ORIGIN || !receipt.deliveringSince) continue;
-    if (await checkpointDelivered(receipt)) {
+    const verdict = await checkpointDeliveryVerdict(receipt);
+    if (verdict === "delivered") {
       return "这一轮的续跑交代已经送到 agent 手里，只差系统把「已送达」记上账（正在自动补记）"
         + " —— 补记成功后就能再启动；它不会被归还，否则同一段交代会被执行两遍";
+    }
+    // 交付不明:这一句只会在「对账还没跑到 / 刚才那趟对账自己失败了」的窗口里出现 ——
+    // 对账会把它就地了结成一条交付不明的可见交代(settleStrandedCheckpointRun),不留死局。
+    if (verdict === "uncertain") {
+      return "这一轮的续跑交代已经交给 agent 进程，但「送达」那一笔没来得及记下，系统分不清它"
+        + "到底执行了没有 —— 正在把它结成一条交付不明的记录（原文会留在任务时间线里，由你决定"
+        + "要不要再送一遍）；它不会被自动重投，否则同一段交代可能被执行两遍";
     }
   }
   return "未送达的续跑交代仍由消息账本保管，归还或完成交接后才能启动";
