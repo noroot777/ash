@@ -162,4 +162,57 @@ export async function checkpointGroupFailureCases(): Promise<void> {
     }
     console.log("PASS: background group failure reaches only this run's launch targets and the owner, never bystanders");
   }
+  {
+    // 成员全部**成功起跑**之后、收尾那几步(parkQueued / 推队列)才抛的那一档。
+    // 第 1 轮审查发现 4:名单此刻正该是空的,早先却在这里回头按 `groupId` 重算一遍,
+    // 等于把一批正在跑(或已跑完)的任务重新算成「这一轮没能起跑」。上面那个
+    // background-error 用例只证明了**静态旁观者**不连坐 —— 它们从头到尾没被挑中;
+    // 这里要证的是另一半:**本次挑中且确实起来了**的成员也必须退出名单。
+    const members = [];
+    for (let index = 0; index < 2; index++) {
+      const test = await scenario(0);
+      const body = `LAUNCHED_MEMBER_${id()}`;
+      await takeResumePrompt(test.taskId, test.checkpoint);
+      await db.update(tasks).set({ status: "backlog", body }).where(eq(tasks.id, test.taskId));
+      members.push({ ...test, body });
+    }
+    const first = await taskOf(members[0]!.taskId);
+    const groupId = id();
+    await db.insert(schema.groups).values({ id: groupId, projectId: first.projectId, name: "after-launch-error", mode: "parallel", createdAt: now() });
+    const owner = await scenario(0);
+    await db.update(tasks).set({ status: "idle" }).where(eq(tasks.id, owner.taskId));
+    await db.update(schema.groups).set({ ownerTaskId: owner.taskId }).where(eq(schema.groups.id, groupId));
+    for (const member of [...members, owner]) {
+      await db.update(tasks).set({ groupId }).where(eq(tasks.id, member.taskId));
+    }
+    const execute = dbClient.execute;
+    let injected = false;
+    // 全员都已到达执行器之后的第一次「按 group_id 捞成员」—— 那就是收尾的 parkQueued。
+    // 用「到过执行器」而不是数第几次读,是为了让注入点无条件落在起跑之后。
+    dbClient.execute = async function (statement) {
+      if (!injected && typeof statement !== "string" && /from "tasks" where/i.test(statement.sql)
+        && Array.isArray(statement.args) && statement.args.includes(groupId)
+        && members.every((member) => hits(member.body) > 0)) {
+        injected = true;
+        throw new Error("INJECT_GROUP_TEARDOWN_FAILURE");
+      }
+      return execute.call(dbClient, statement);
+    };
+    try {
+      assert.equal((await groupApi.request(`/groups/${groupId}/run`, { method: "POST" })).status, 202);
+      await until("收尾失败交代给发起这次启动的调度台", async () => /INJECT_GROUP_TEARDOWN_FAILURE/.test(await transcript(owner.taskId)));
+      assert.equal(injected, true);
+      for (const member of members) {
+        await settled(member.taskId);
+        assert.ok(hits(member.body) > 0, "成员这一轮确实起跑了");
+        assert.equal(/分组本次启动未完成/.test(await transcript(member.taskId)), false,
+          "已经拿到启动回执的成员不该收到「这一轮没能起跑」");
+        const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.taskId, member.taskId));
+        assert.equal(sessions.some(isDiagnosticSession), false, "起跑成功的成员不该为收尾失败多出一条诊断会话行");
+      }
+    } finally {
+      dbClient.execute = execute;
+    }
+    console.log("PASS: post-launch group teardown failure tells only the owner, never the members that already started");
+  }
 }

@@ -124,7 +124,7 @@ export async function checkpointAdvanceFailureCases(): Promise<void> {
   // 闭包 + 一个 unref 定时器),请求此刻一个字都还没落库 —— 进程一消失这件事就没人记得,
   // 三条恢复入口没有一条看得见它。跨进程复现见审查目录的 restart-loses-retry.mts;这里钉
   // 的是补上的那条入口本身,以及**它的边界**。
-  for (const shape of ["in-flight", "never-started"] as const) {
+  for (const shape of ["in-flight", "accepted-first-item", "never-started"] as const) {
     const queueId = id();
     if (shape === "in-flight") {
       // 前一个已经跑完、队首还停着 = 丢掉那次推进之后的现场。
@@ -139,6 +139,20 @@ export async function checkpointAdvanceFailureCases(): Promise<void> {
       await until("重启恢复把丢掉的那次队列推进补回来", async () => hits(head.checkpoint) === 1);
       await settled(head.taskId);
       console.log("PASS: restart recovery re-drives a queue whose advance was lost before it reached the database");
+    } else if (shape === "accepted-first-item") {
+      // **只有队首的队列**:候选前面什么都没有,旧判据(「前驱已落终态」)在这种形状上永远
+      // 不成立,于是丢掉的那次推进再也补不回来,链永久停住(第 1 轮审查发现 3 跨进程复现)。
+      // 现在读的是落了库的**推进意图**——它说的正是「有一次推进被接受过、没人把它做完」。
+      // 这里直接写那一行,就是在扮演「上一个进程记下了意图,随后死掉」。
+      const head = await scenario(0);
+      await db.insert(schema.queueItems).values({ taskId: head.taskId, queueId, position: 0, createdAt: now() });
+      await db.insert(schema.queueAdvanceIntents).values({ queueId, acceptedAt: now() });
+      await recoverQueueAdvances();
+      await until("已接受的推进意图在重启后把单项队列推起来", async () => hits(head.checkpoint) === 1);
+      await settled(head.taskId);
+      assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+        .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "补办完就该把意图了结");
+      console.log("PASS: restart recovery re-drives a first-item queue from the durable advance intent");
     } else {
       // 建好还没点过运行的链(batch_create_tasks 的 run:false):全员 backlog、候选就是第一位、
       // 它前面什么都没落终态 —— 一个字都不许碰,否则重启会把用户压根没点过运行的任务拉起来。
@@ -151,9 +165,23 @@ export async function checkpointAdvanceFailureCases(): Promise<void> {
         assert.equal((await taskOf(taskId)).status, "backlog", "没点过运行的链不许被重启恢复拉起来");
         assert.equal(runs.isTurnClaimed(taskId), false);
       }
+      assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+        .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [],
+        "没人请求过推进的链不许凭空多出一条意图");
       console.log("PASS: restart recovery leaves a never-started queue alone");
     }
     await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
+    await db.delete(schema.queueAdvanceIntents).where(eq(schema.queueAdvanceIntents.queueId, queueId));
+  }
+
+  {
+    // 意图还挂着、队列却已经空了(成员被删光/全归档):留着只会让每次重启白扫一遍,就地了结。
+    const queueId = id();
+    await db.insert(schema.queueAdvanceIntents).values({ queueId, acceptedAt: now() });
+    await recoverQueueAdvances();
+    assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "推不出人的意图要就地了结");
+    console.log("PASS: restart recovery retires an advance intent whose queue has no candidate left");
   }
 
   {
