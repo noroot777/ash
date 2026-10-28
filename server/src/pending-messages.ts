@@ -25,7 +25,7 @@
 // 消失 = 用户那句话凭空蒸发,连「我发过」都无从证明(2026-08-07 事故,见
 // docs/incidents.md「排队消息凭空消失」)。做法是把「有人正在送」拆成一个**独立的租约字段**
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
-import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db, dbClient } from "./db/index.js";
@@ -48,6 +48,7 @@ import { bindUploadsToTask } from "./uploads.js";
 import { dispatchPendingMessage } from "./pending-dispatch.js";
 import { pendingMessageOrder } from "./pending-monitor-batch.js";
 import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
+import { CHECKPOINT_RUN_ORIGIN, recoverPendingCheckpoints, preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { id, now } from "./util.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 
@@ -195,6 +196,8 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
     .set({ status: "canceled", sentAt: null, deliveringSince: null })
     .where(eq(scheduledMessages.id, message.id));
   publishPendingMessages(message.taskId);
+  await recoverPendingCheckpoints(message.taskId);
+  if (message.origin === CHECKPOINT_RUN_ORIGIN) return;
   const label = message.mode === "queued" ? "排队消息" : "定时消息";
   const when = message.mode === "queued" ? "" : `（原定 ${message.sendAt}）`;
   // 原文必须一起留下:这条消息取消之后就从托盘里消失了,不把用户打的字抄进时间线,
@@ -253,7 +256,16 @@ export async function markSent(message: Row | Row[], transaction?: ConclusionTra
   await (transaction ?? db)
     .update(scheduledMessages)
     .set({ status: "sent", sentAt: now(), deliveringSince: null })
-    .where(and(inArray(scheduledMessages.id, messages.map((current) => current.id)), eq(scheduledMessages.status, "pending")));
+    .where(and(
+      inArray(scheduledMessages.id, messages.map((current) => current.id)),
+      or(
+        eq(scheduledMessages.status, "pending"),
+        and(
+          eq(scheduledMessages.origin, CHECKPOINT_RUN_ORIGIN), eq(scheduledMessages.status, "canceled"),
+          isNotNull(scheduledMessages.deliveringSince), isNotNull(scheduledMessages.checkpointTaken),
+        ),
+      ),
+    ));
   if (!transaction) {
     for (const current of messages) forgetDeliveryBookkeeping(current.id);
     publishPendingMessages(messages[0]!.taskId);
@@ -269,9 +281,10 @@ export async function reclaimStaleDeliveries(): Promise<number> {
   const reclaimed = await db
     .update(scheduledMessages)
     .set({ deliveringSince: null })
-    .where(and(eq(scheduledMessages.status, "pending"), isNotNull(scheduledMessages.deliveringSince)))
+    .where(and(ne(scheduledMessages.status, "sent"), isNotNull(scheduledMessages.deliveringSince)))
     .returning({ id: scheduledMessages.id });
   if (reclaimed.length) console.log(`[ash] 回收 ${reclaimed.length} 条中断的待发送消息投递`);
+  await recoverPendingCheckpoints();
   return reclaimed.length;
 }
 
@@ -296,6 +309,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
   // 的触发源(验收锁放开那一推、重投定时器),关库之后它们照样会醒一次,然后刷一串
   // 「database is not open」的 stack trace —— 读到的人只会以为验收自己炸了。
   if (dbClient.closed) return;
+  const checkpointFailures = await recoverPendingCheckpoints(taskId);
   const at = new Date();
   // 带租约的行 = 本进程另一条路径正在送它,跳过(开机时 reclaimStaleDeliveries 已经把
   // 上一个进程留下的租约全清了,所以这里看到的租约一定是活的)。
@@ -308,7 +322,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
   const fired = new Set<string>();
   for (const m of pending) {
     try {
-      if (fired.has(m.taskId) || inFlight.has(m.taskId) || hasPendingDeliveryRecovery(m.taskId)
+      if (checkpointFailures.has(m.taskId) || fired.has(m.taskId) || inFlight.has(m.taskId) || hasPendingDeliveryRecovery(m.taskId)
         || cooling(m.taskId, at.getTime())) continue;
       // 下一次允许重试的时刻没到就不碰:退避只写在重投定时器上管不住别的触发源 ——
       // 失败结算钩子、队列唤醒触发的扫描会绕过它,形成「失败→结算唤醒→再失败」的
@@ -443,6 +457,20 @@ export async function handDuePendingMessageToRun(
   opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null } = {},
 ): Promise<boolean> {
   if (dbClient.closed) return false;
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) {
+    if (opts.turnHeld) releaseTurn(taskId);
+    throw new Error(checkpointBlocked);
+  }
+  const checkpoint = await db.select({ prompt: tasks.resumePrompt }).from(tasks)
+    .where(eq(tasks.id, taskId)).then((rows) => rows.at(0)?.prompt).catch((error) => {
+      if (opts.turnHeld) releaseTurn(taskId);
+      throw error;
+    });
+  if (checkpoint) {
+    if (opts.turnHeld) releaseTurn(taskId);
+    throw new Error("任务仍有续跑交代，先交付检查点再交接普通输入");
+  }
   // 已有投递在途:它自己会开回合,这里再开默认「继续」就是同一任务两路起跑。
   if (inFlight.has(taskId)) return true;
   const at = new Date();

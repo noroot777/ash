@@ -49,6 +49,7 @@ import { claimQueueSeat, queueClaimError, type QueueSeat } from "./queue-seat.js
 import { claimTurn, releaseTurn } from "./runs.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { resumeOrRunTask } from "./task-resume.js";
+import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { readableRunPath, sessionTranscriptPath } from "./transcript.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
@@ -278,6 +279,8 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
   api.post("/tasks/:id/retry-turn", async (c) => {
     const taskId = c.req.param("id");
     const body = await c.req.json<{ sessionId?: string }>().catch(() => ({} as { sessionId?: string }));
+    const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+    if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
     const first = await readFacts(taskId, body.sessionId);
     if (!first) return c.json({ error: "not found" }, 404);
     const rejection = retryTurnRejection(first.facts);

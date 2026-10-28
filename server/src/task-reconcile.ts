@@ -36,18 +36,21 @@ export async function reconcileInterrupted(): Promise<void> {
   const teamIds: string[] = [];
   let failed = 0;
   let followUps = 0;
+  let pendingAdvances = 0;
   // 批量入口不自己写一份结算,一律走单条入口 —— 两份判据只要漂移一次,漂的那条就是会把
   // 正在干活的任务写成 failed 的那条（第 1 轮审查 F3）。
   for (const t of orphaned) {
     if (!(await reconcileInterruptedTask(t.id))) continue; // 已经有人在跑/正在起跑 → 归他
     if (t.mode === "team") teamIds.push(t.id);
     else if (t.followUpFrom) followUps++;
+    else if (t.queueAdvanceRequest?.resumePromptGeneration === t.resumePromptGeneration) pendingAdvances++;
     else failed++;
   }
-  if (!failed && !followUps && !teamIds.length) return;
+  if (!failed && !followUps && !pendingAdvances && !teamIds.length) return;
   console.log(
     `[ash] reconciled ${failed} interrupted task(s) → failed` +
       (followUps ? `, ${followUps} follow-up turn(s) → 原终态` : "") +
+      (pendingAdvances ? `, ${pendingAdvances} pending advance(s) → 起跑前状态` : "") +
       (teamIds.length ? `, ${teamIds.length} team task(s) → idle` : ""),
   );
   wakeInterruptedLeads(teamIds);
@@ -58,6 +61,9 @@ export async function reconcileInterrupted(): Promise<void> {
 async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void> {
   if (await (await import("./regression-settlement.js")).recordInterruptedRegressionReview(t)) return;
   let back = (t.followUpFrom as TaskStatus | null) ?? (t.goalTurn ? "paused" : "failed");
+  const advance = t.queueAdvanceRequest;
+  const pendingAdvance = advance && advance.resumePromptGeneration === t.resumePromptGeneration;
+  if (pendingAdvance) back = advance.prevStatus as TaskStatus;
   if (t.nativeTurn && !t.goalTurn) {
     const [session] = await db.select().from(sessions).where(eq(sessions.taskId, t.id)).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
     await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");
@@ -83,7 +89,7 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
   // 只恢复 status 的话，基线躺在磁盘上等下一个真人回合 recordTurnBaseline 直接覆盖，
   // 已验收事实从「暂时不显示」变成永久丢失（审查实测复现）。
   await reconcileTurnBaseline(t.id, false);
-  await setTaskStatus(t.id, back);
+  await setTaskStatus(t.id, back, pendingAdvance ? { quietAdvance: true } : undefined);
 }
 
 // 单个任务的「被打断」结算。给**接管成功之后才暴露出来**的那种中断用:

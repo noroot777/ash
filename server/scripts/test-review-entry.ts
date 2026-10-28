@@ -45,6 +45,7 @@ try {
       const review = await open("preset");
       await db.update(tasks).set({ status: route === "run" ? "paused" : "failed" }).where(eq(tasks.id, review.taskId));
       await occupyResumePrompt(review.taskId, "Continue this review", false);
+      const checkpoint = await row(review.taskId);
       runs.releaseTurn(review.taskId);
       const sessionId = `entry-${review.taskId}`;
       await db.insert(schema.sessions).values({ id: sessionId, taskId: review.taskId, role: "single", agentType: "codex",
@@ -63,16 +64,21 @@ try {
       };
       try {
         const first = await api.request(`/tasks/${review.taskId}/${route}`, { method: "POST" });
-        assert.equal(first.status, 202);
+        assert.equal(first.status, 409, "a failed preflight must not acknowledge an unstarted review");
+        assert.match((await first.json()).error, /尚未启动/);
         await until("HTTP preflight fails once and publishes a durable retry notice", async () => injected
           && !runs.isTurnClaimed(review.taskId) && existsSync(transcript) && readFileSync(transcript, "utf8").includes(message));
       } finally { db.transaction = original; }
-      assert.equal((await row(review.taskId)).status, route === "run" ? "paused" : "failed");
+      const rejected = await row(review.taskId);
+      assert.equal(rejected.status, route === "run" ? "paused" : "failed");
+      assert.equal(rejected.resumePrompt, checkpoint.resumePrompt);
+      assert.equal(rejected.resumePromptGeneration, checkpoint.resumePromptGeneration);
+      assert.equal(runs.isRunning(review.taskId), false);
       const second = await api.request(`/tasks/${review.taskId}/${route}`, { method: "POST" });
       assert.equal(second.status, 202, "a recovered database must not leave /run or /retry permanently blocked");
       await until("retried review releases its test-only turn", async () => !runs.isTurnClaimed(review.taskId)
         && (await row(review.taskId)).verifyRound === null);
-      console.log(`✓ HTTP /${route} ${fault}: transient preflight failure is visible and the next request starts`);
+      console.log(`✓ HTTP /${route} ${fault}: rejected startup preserves the checkpoint, reports failure and the next request starts`);
     }
   }
 
