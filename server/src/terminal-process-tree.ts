@@ -40,7 +40,20 @@ const PS_SESSION_ARGS = ["-axo", "pid=,pgid=,tty="];
 export const HAS_PROC = !IS_WINDOWS && existsSync("/proc/self/stat");
 
 export type DescendantSnapshot = { pids: number[]; pgids: number[] };
-export type ProcessTable = { children: Map<number, number[]>; pgidOf: Map<number, number> };
+export type ProcessTable = {
+  children: Map<number, number[]>;
+  pgidOf: Map<number, number>;
+  /**
+   * **这张表列全了吗**。`false` = 有号活着却没能读出它那一行(Linux 逐项读 `/proc` 时单个
+   * stat 读失败,而再探一次它还在)。整表读不出来走的是 `null`,这一位说的是**局部**漏行。
+   *
+   * 为什么要专门带出来:按这张表枚举候选的那一问(terminal-launch-survivors.ts)拿漏了行的
+   * 表照样能跑完,然后把「我没看见」答成「没有」。漏的那一行可能正好是收养了真后代的那个
+   * 祖先(第 5 轮自由审查按代码推断提出,未实测)。大多数消费者(杀进程、枚举子树)不看它
+   * —— 它们本来就只对看得见的那些动手。
+   */
+  complete: boolean;
+};
 export type SessionMember = { pid: number; pgid: number };
 
 /** 进程组里还有没有活人:信号 0 只探测不打扰,整组已空时抛 ESRCH。Windows 没有进程组。 */
@@ -67,7 +80,7 @@ function parseProcessTable(stdout: string): ProcessTable {
     siblings.push(pid);
     children.set(ppid, siblings);
   }
-  return { children, pgidOf };
+  return { children, pgidOf, complete: true };
 }
 
 /** /proc/<pid>/stat 括号后的字段:0=state 1=ppid 2=pgrp 3=session。comm 可含空格/括号,
@@ -80,6 +93,7 @@ function procStatFields(stat: string): string[] {
 function procProcessTable(): ProcessTable | null {
   const children = new Map<number, number[]>();
   const pgidOf = new Map<number, number>();
+  let complete = true;
   try {
     for (const entry of readdirSync("/proc")) {
       if (!/^\d+$/.test(entry)) continue;
@@ -93,12 +107,16 @@ function procProcessTable(): ProcessTable | null {
         const siblings = children.get(ppid) ?? [];
         siblings.push(pid);
         children.set(ppid, siblings);
-      } catch { /* 进程在读表途中退出,跳过 */ }
+      } catch {
+        // 读表途中退出的跳过就行;**还活着却读不出来**是另一回事 —— 这张表从此是残的,
+        // 据它判「没有」的那一问必须知道这件事。
+        if (processAlive(pid)) complete = false;
+      }
     }
   } catch {
     return null;
   }
-  return { children, pgidOf };
+  return { children, pgidOf, complete };
 }
 
 /**

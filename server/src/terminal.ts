@@ -17,6 +17,7 @@ import {
   releaseLaunchResponsibility,
 } from "./terminal-stop-facts.js";
 import { killAllSessionTrees, killSessionTree, terminateSession, type KillResult } from "./terminal-session-kill.js";
+import type { LaunchIdentity } from "./terminal-launch-survivors.js";
 import { TerminalWatcher } from "./terminal-session-watch.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
@@ -242,6 +243,8 @@ export class TerminalSessionManager {
       name: options.command ? options.command.name : basename(cwd) || cwd,
       commandId: options.command?.id ?? null,
       startedAt: Date.now(),
+      // 墙上钟那一份给用户看,单调那一份给「谁出生在这次启动之前」那道收窄用(见字段说明)。
+      startedUptimeMs: Math.round(process.uptime() * 1000),
       exitCode: null,
       groupAlive: true,
       ports: [],
@@ -619,6 +622,19 @@ export class TerminalSessionManager {
    */
   launchTokenOf(sessionId: string): string | null {
     return this.sessions.get(sessionId)?.launchToken ?? null;
+  }
+
+  /**
+   * 这次启动的**完整身份**:记号 + 两条收窄规则各自的参照(单调起跑时刻、启动目录)。
+   *
+   * 为什么要攒成一个方法而不是让调用方从 `TerminalSessionInfo` 上拼:那份 DTO 里只有墙上钟
+   * 的 `startedAt`,拿它当年龄上界就是第 5 轮自由审查实测到的那个错。身份只能从会话表这一处
+   * 取,拼不出来 —— 会话没了就是 `null`,那一问落 `unavailable`。
+   */
+  launchIdentityOf(sessionId: string): LaunchIdentity | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    return { token: session.launchToken, startedUptimeMs: session.startedUptimeMs, cwd: session.cwd };
   }
 
   private publish(session: TerminalSession, event: TerminalEventInput): void {

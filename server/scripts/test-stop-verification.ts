@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { startCommand, stopCommand, restartCommand } from "../src/terminal-commands.js";
 import { launchClosureSealed, portStopVerdict, processStopVerdict } from "../src/terminal-stop-notices.js";
-import { candidateBounds, launchSurvivors } from "../src/terminal-launch-survivors.js";
+import { candidateBounds, candidateRoots, launchSurvivors } from "../src/terminal-launch-survivors.js";
 import type { TerminalSessionInfo } from "../src/terminal-session-facts.js";
 import { TerminalCapacity } from "../src/terminal-capacity.js";
 import { processAlive } from "../src/terminal-process-tree.js";
@@ -201,7 +201,7 @@ try {
     const original = terminalSessions.listForProject(projectId)[0];
     assert.deepEqual(original.ports, [], "夹具前提:这条命令一个端口都没打印,只剩记号这一条线索");
     // 扫描这一层先单独问一遍:那个空环境的号必须落进「没问出答案」,而不是被当成陌生人跳过。
-    const scan = await launchSurvivors(terminalSessions.launchTokenOf(original.id), original);
+    const scan = await launchSurvivors(terminalSessions.launchIdentityOf(original.id));
     assert.equal(scan.evidence, "incomplete",
       "同用户、这次启动之后出生、工作目录也对得上,而记号没命中 = 这一问没答上来");
     assert.equal(launchClosureSealed(scan), false, "没答上来就不算封口");
@@ -248,7 +248,7 @@ try {
     pids.push(pid);
     const original = terminalSessions.listForProject(projectId)[0];
     assert.deepEqual(original.ports, [], "夹具前提:只剩记号这一条线索");
-    const scan = await launchSurvivors(terminalSessions.launchTokenOf(original.id), original);
+    const scan = await launchSurvivors(terminalSessions.launchIdentityOf(original.id));
     assert.ok(scan.pids.includes(pid),
       `带着这次记号的号必须被点名,换没换工作目录都一样（实得：${scan.pids.join("、")}）`);
     const result = await stopCommand(projectId, "service", { script: noop, cwd: home });
@@ -283,9 +283,9 @@ try {
     pids.push(pid);
     const original = terminalSessions.listForProject(projectId)[0];
     assert.deepEqual(original.ports, [], "夹具前提:只剩记号这一条线索");
-    const token = terminalSessions.launchTokenOf(original.id);
-    assert.notEqual(token, foreign, "夹具前提:这次启动的记号跟工人带着的那枚不是同一个");
-    const scan = await launchSurvivors(token, original);
+    const identity = terminalSessions.launchIdentityOf(original.id)!;
+    assert.notEqual(identity.token, foreign, "夹具前提:这次启动的记号跟工人带着的那枚不是同一个");
+    const scan = await launchSurvivors(identity);
     assert.ok(scan.unanswered.includes(pid),
       `带着别次记号的号也只是「没问出来」，必须留在这个集合里（实得：${scan.unanswered.join("、")}）`);
     assert.equal(scan.evidence, "incomplete", "记号指向别处不是否证 —— 这一趟没问全");
@@ -306,22 +306,34 @@ try {
   // 候选集会膨胀到读不动 —— 但那一趟**说不出漏没漏**,所以 `unanswered` 可以是空的而结论仍
   // 然是 `incomplete`。这里用「这次启动的时刻记在未来」把这条路走通(钟被改过的等价形状)。
   {
-    // 两条前提直接问(整趟扫描的结论受这台机器此刻还跑着什么影响,这条不变量不能靠那种现场
-    // 去钉):时刻正常 = 前提立得住;记在未来 = 两端的钟对不上,这一趟的收窄不可靠。
-    assert.equal(candidateBounds({ startedAt: Date.now() - 1000, cwd }).proven, true);
-    const broken = candidateBounds({ startedAt: Date.now() + 60 * 60 * 1000, cwd });
-    assert.notEqual(broken.proven, true, "前提立不住就得记下来,不能照常当「问全了」");
-    assert.match(String(broken.proven), /记在未来/, "那句话要说出是哪个前提没立住");
-    // 收窄本身照旧发生(否则候选集会膨胀到读不动),只是这一趟不许封口。
-    assert.equal(broken.oldest, 5000, "前提立不住不等于不收窄:上界照常给出");
+    // **年龄上界只能按单调参照给**(第 5 轮自由审查 F1)。上一版拿墙上钟算:`startedAt` 是
+    // 启动那一刻用 `Date.now()` 记的,年龄上界 = 现在 − 它。启动那一刻把钟前拨 10 秒、记完
+    // 立刻校准回来,上界就比真工人的年龄小 10 秒,那个**带着这次记号**的工人连 readLineage
+    // 都走不到就被筛掉,stop 报 verified、页面「已停止」而它还活着。两个端点此刻偏移一样,
+    // 推不出中间那一刻也一样 —— 所以这条上界此后一个字都不碰墙上钟。
+    const upNow = Math.round(process.uptime() * 1000);
+    const normal = candidateBounds({ token: "t", startedUptimeMs: upNow - 1000, cwd });
+    assert.equal(normal.proven, true, "有单调参照 = 这条前提立得住");
+    const twelve = candidateBounds({ token: "t", startedUptimeMs: upNow - 12_000, cwd });
+    assert.ok(twelve.oldest >= 17_000,
+      `上界要按单调参照给(12 秒 + 宽限),不是按那条可能被拨过的墙上钟（实得：${twelve.oldest}）`);
+    // 拿不到单调参照(身份不是从会话表取的)= 证不出来:照旧收窄,但这一趟不许封口。
+    const blind = candidateBounds({ token: "t", startedUptimeMs: null, cwd });
+    assert.notEqual(blind.proven, true, "没有单调参照就不能照常当「问全了」");
+    assert.match(String(blind.proven), /单调的起跑时刻/, "那句话要说出是哪个前提没立住");
+    assert.equal(blind.oldest, 5000, "前提立不住不等于不收窄:上界照常给出");
   }
-  if (process.platform !== "win32") {
-    const earlier = terminalSessions.listForProject("no-port-stop")[0];
-    const future = await launchSurvivors(terminalSessions.launchTokenOf(earlier.id),
-      { ...earlier, startedAt: Date.now() + 60 * 60 * 1000 });
-    assert.equal(future.evidence, "incomplete", "前提立不住的那一趟,扫描这一层也必须如实交代");
-    assert.equal(launchClosureSealed(future), false);
-    assert.match(String(future.why), /记在未来/, "理由要带到措辞里");
+  {
+    // 枚举这一侧的完整性(同一条 F1 的另一半,按代码推断):ash 的祖先链走不到 PID 1,或者
+    // 进程表自己漏了活着的行,收养目标就可能漏 —— 漏掉的那一行可能正好收养着真后代。
+    // 这两种在这台机器上造不出来,只能给合成的表。
+    const reachable = { children: new Map([[1, [process.pid]]]), pgidOf: new Map<number, number>(), complete: true };
+    assert.equal(candidateRoots(reachable).complete, true, "走到 PID 1 就算看全了");
+    assert.equal(candidateRoots({ ...reachable, complete: false }).complete, false,
+      "进程表自己漏了活着的行,这一趟的枚举就不算全");
+    const severed = { children: new Map([[2, [3]]]), pgidOf: new Map<number, number>(), complete: true };
+    assert.equal(candidateRoots(severed).complete, false,
+      "祖先链断在半路:断点以上那些收养目标压根没进集合");
   }
 
   // 裁定层本身的不变量(纯函数,直接问):**任何必要证据未知都只能保留未知**。

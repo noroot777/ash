@@ -47,7 +47,7 @@ function scopeOf(info: TerminalSessionInfo): string[] {
  */
 export async function launchResidue(info: TerminalSessionInfo): Promise<LaunchAbandonment> {
   const token = terminalSessions.launchTokenOf(info.id);
-  const scan = await launchSurvivors(token, info);
+  const scan = await launchSurvivors(terminalSessions.launchIdentityOf(info.id));
   const taggedPids = scan.pids;
   const probe = info.ports.length && PORT_TIER_AVAILABLE
     ? await probeOwnedPorts(info.ports, token)

@@ -27,7 +27,18 @@
 // **② 这两条各自有前提,前提不成立时照样收窄、但这一趟不许封口**。收窄是为了把搜索控制在
 // 读得动的范围内(不收窄就得给整张进程表读环境,`ps -E` 的输出能到几 MB,撞 execFile 的
 // maxBuffer 之后这一问整条静默失灵);封口要的是证明,两件事不能互相顶替。前提分别是:
-// ash 不是 root(root 的后代能 setuid 换掉属主),以及墙上钟在这段时间里没被改过。
+// ash 不是 root(root 的后代能 setuid 换掉属主),以及这次启动留下了**单调**的起跑时刻。
+//
+// 后一条曾经写成「墙上钟此刻的偏移跟 ash 起跑那一刻一样」。第 5 轮自由审查实测那不成立:
+// 启动那一刻把钟前拨 10 秒、记完 `startedAt` 立刻校准回来 —— 两个端点的偏移都是 0、
+// `span` 也已转正,前提于是判「立得住」,而年龄上界比真工人的年龄小了 10 秒,那个**带着这次
+// 记号**的工人连 readLineage 都没走到就被筛掉了,stop 报 `{"kind":"verified"}`、页面
+// 「已停止」、`WORKER_ALIVE_AFTER_STOP true`。**两个端点一样推不出中间没变过。**
+//
+// 所以年龄这条收窄不再碰墙上钟:启动那一刻在会话表里记一份 `process.uptime()`
+// (terminal-session-facts.ts 的 `startedUptimeMs`),上界 = 现在的 uptime − 那一份。它跟候选
+// 的进程年龄是同一种量(「跑了多久」),中间怎么拨钟都不影响这个差。拿不到那份参照(身份不
+// 从会话表取)就是**证不出来**,照旧收窄、但不许封口。
 //
 // **③ 其余一切只能「辅助找人」,不能排除人**。记号没命中(`unmarked`)、环境读不出来
 // (`unknown`)、工作目录对不上 —— 都只是没有证据,不是反证。**带着另一次启动记号
@@ -45,7 +56,8 @@
 // 干净地答「没有」。收养目标必定是**死掉那个进程的某个祖先**,而它是 ash 的后代,所以目标
 // 必在 `{1} ∪ ash 的祖先链` 之内 —— 按这个集合枚举,前提就不依赖任何平台特性了
 // (ash 自己不在其中:Node 不设 subreaper 标志,而 ash 还活着的直接子进程由会话自己的
-// pid/进程组那条线索负责,不归这一问)。
+// pid/进程组那条线索负责,不归这一问)。**这条链走不到头,或者进程表自己就漏了行,同样是
+// 「枚举证不全」**,一并进②那道闸 —— 漏掉的那一行可能正好是收养了真后代的那个祖先。
 //
 // **只负责点出来,不扩大 kill 范围**:默认停法该杀到哪儿是另一个判断(service-ports.ts 文件头
 // 明令禁止扩大 kill 范围),这里的产出是「谁还活着」这个事实,交给停止路径落账并如实告诉用户。
@@ -66,16 +78,17 @@ const SELF_UID: number | null = typeof process.getuid === "function" ? process.g
  *  保守),绝不能把真残留筛掉。 */
 const BIRTH_GRACE_MS = 5_000;
 
-/** 墙上钟被改动的容差。`process.uptime()` 是单调的,所以「现在换算出的 ash 起跑墙上时刻」
- *  只会随钟本身被改而漂 —— 两次换算差得超过这个数,就是钟在 ash 活着这段时间里动过。 */
-const CLOCK_MOVED_TOLERANCE_MS = 2_000;
-
-/** 按**当前**墙上钟换算出的「ash 这个进程起跑的时刻」。 */
-const ashStartWall = () => Date.now() - Math.round(process.uptime() * 1000);
-const ASH_START_WALL = ashStartWall();
-
-/** 这次启动的身份:记号 + 两件跟记号无关的继承事实。 */
-export type LaunchIdentity = { startedAt: number; cwd: string };
+/**
+ * 这次启动的身份:记号 + 两条收窄规则各自的参照。**只能从会话表取**
+ * (`TerminalSessionManager.launchIdentityOf`)—— 从 DTO 上拼得出 `startedAt`,而那是墙上钟,
+ * 拿它当年龄上界正是第 5 轮自由审查实测到的那个错(见文件头②)。
+ *
+ *  · `token`           —— 这次启动的记号;`null` = 这条线索在这次启动上不存在(交互会话);
+ *  · `startedUptimeMs` —— 起跑那一刻的 `process.uptime()` 毫秒数;`null` = 没留下单调参照,
+ *                         年龄这条收窄这一趟**证不出来**;
+ *  · `cwd`             —— 启动目录。**不参与筛选**,只用来把最可疑的号排在措辞前面。
+ */
+export type LaunchIdentity = { token: string | null; startedUptimeMs: number | null; cwd: string };
 
 /**
  * 这一问的**结果**。空集有三种完全不同的成因,早先全折成 `[]`,于是「没答上来」被当成
@@ -136,18 +149,16 @@ export type CandidateBounds = { uid: number | null; oldest: number; proven: true
 /** 导出只为让回归能**直接问这两条前提**:整趟扫描的结论受这台机器此刻还跑着什么影响,
  *  「前提立不住就不许封口」这条不变量不能靠那种现场去钉。 */
 export function candidateBounds(launch: LaunchIdentity): CandidateBounds {
-  const span = Date.now() - launch.startedAt;
   const unmet: string[] = [];
   // root 的后代一句 setuid 就换掉属主,那时「属主跟 ash 不同」不再是不可能性。
   if (SELF_UID === 0) unmet.push("ash 以 root 在跑，后代能 setuid 换掉属主");
-  // 两端比的是两个钟:`startedAt` 是墙上钟记的,进程年龄是单调钟量的。钟被往回拨过,这次
-  // 启动就会显得比实际年轻,于是真后代被当成「出生在启动之前」筛掉。
-  if (Math.abs(ashStartWall() - ASH_START_WALL) > CLOCK_MOVED_TOLERANCE_MS) {
-    unmet.push("墙上钟在 ash 这个进程活着期间被改过");
-  }
-  if (span < 0) unmet.push("这次启动的时刻记在未来");
+  // 年龄上界只认单调参照:它跟候选的进程年龄是同一种量。墙上钟一个字都不参与 —— 它在启动
+  // 那一刻是不是准的,事后无从查证(文件头②)。
+  if (launch.startedUptimeMs === null) unmet.push("这次启动没留下单调的起跑时刻");
+  const elapsed = launch.startedUptimeMs === null ? 0
+    : Math.max(Math.round(process.uptime() * 1000) - launch.startedUptimeMs, 0);
   return {
-    uid: SELF_UID, oldest: Math.max(span, 0) + BIRTH_GRACE_MS,
+    uid: SELF_UID, oldest: elapsed + BIRTH_GRACE_MS,
     proven: unmet.length ? `${unmet.join("，")}，候选集这一趟收窄得不可靠` : true,
   };
 }
@@ -157,44 +168,54 @@ export function candidateBounds(launch: LaunchIdentity): CandidateBounds {
  * subreaper 祖先;链上的每一环都是 ash 的后代或祖先,所以目标必在 `{1} ∪ ash 的祖先链` 里。
  * 走不动(表里没有 ash 这一行)就退回 `{1}` —— 少枚举只会让下面少几个候选,不会伪造结论。
  */
-function reparentTargets(table: ProcessTable): number[] {
+function reparentTargets(table: ProcessTable): { targets: number[]; complete: boolean } {
   const parentOf = new Map<number, number>();
   for (const [parent, kids] of table.children) for (const kid of kids) parentOf.set(kid, parent);
   const targets = new Set<number>([1]);
   const walked = new Set<number>([SELF]);
   let walker = parentOf.get(SELF);
+  // 走到 PID 1 才算这条链看全了。**中途断掉就是没看全**:断点以上那些祖先没能进收养目标集,
+  // 而真后代可能正挂在其中一个底下(漏了还照样封口,就是把「我没看见」答成「没有」)。
   while (walker !== undefined && walker > 1 && !walked.has(walker)) {
     targets.add(walker);
     walked.add(walker);
     walker = parentOf.get(walker);
   }
-  return [...targets];
+  return { targets: [...targets], complete: walker === 1 };
 }
 
-function candidateRoots(table: ProcessTable): number[] {
+/** 导出只为让回归能**直接问枚举的完整性**:祖先链断在半路、进程表自己漏了活着的行,
+ *  这两种都没法在这台机器上现造,只能给合成的表。 */
+export function candidateRoots(table: ProcessTable): { roots: number[]; complete: boolean } {
+  const walk = reparentTargets(table);
   const roots = new Set<number>();
-  for (const target of reparentTargets(table)) {
+  for (const target of walk.targets) {
     for (const pid of table.children.get(target) ?? []) if (pid > 1 && pid !== SELF) roots.add(pid);
   }
-  return [...roots];
+  return { roots: [...roots], complete: walk.complete && table.complete };
 }
 
 /**
- * 按启动记号找出这次启动的存活进程。`token` 为空(交互会话、没有记号的旧记录)不是
- * 「问过了,没有」—— 它落 `unavailable`,由调用方按既有那几档判。
- *
- * `launch.startedAt` 是这次启动的时刻(`TerminalSessionInfo.startedAt`),`launch.cwd` 是它的
- * 工作目录。前者是收窄规则之一(前提见 `candidateBounds`),后者**不参与筛选**,只用来在
- * 「这几个号问不出归属」那句话里把最可疑的排在前面。
+ * 按启动记号找出这次启动的存活进程。身份整个为 `null`(会话已经不在了)或者它的 `token` 为空
+ * (交互会话)都不是「问过了,没有」—— 它落 `unavailable`,由调用方按既有那几档判。
  */
-export async function launchSurvivors(token: string | null, launch: LaunchIdentity): Promise<LaunchScan> {
-  if (token === null || IS_WINDOWS) return { pids: [], unanswered: [], evidence: "unavailable", why: null };
+export async function launchSurvivors(launch: LaunchIdentity | null): Promise<LaunchScan> {
+  if (launch === null || launch.token === null || IS_WINDOWS) {
+    return { pids: [], unanswered: [], evidence: "unavailable", why: null };
+  }
+  const token = launch.token;
   const table = await readProcessTable();
   if (!table) {
     return { pids: [], unanswered: [], evidence: "incomplete", why: "进程表读不出来，这次启动的记号没问出去" };
   }
-  const roots = candidateRoots(table);
+  const enumeration = candidateRoots(table);
+  const roots = enumeration.roots;
   const bounds = candidateBounds(launch);
+  // 枚举没看全跟收窄前提没立住是同一类:都只能说「这一趟证不出完整」,不能改成「没有」。
+  if (!enumeration.complete) {
+    bounds.proven = `${bounds.proven === true ? "" : `${bounds.proven}；另外，`}`
+      + "进程表或 ash 的祖先链这一趟没看全，收养目标可能漏了";
+  }
   if (!roots.length) return sealable([], [], bounds, launch);
   const facts = await readProcessFacts(roots);
   if (!facts) {
