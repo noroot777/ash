@@ -6,6 +6,7 @@
 //
 // 账怎么记、怎么合并在 terminal-stop-facts.ts;这里只决定「这一次敢说到哪一步」。
 import { PORT_TIER_AVAILABLE, type LaunchMember } from "./service-ports.js";
+import type { LaunchScan } from "./terminal-launch-survivors.js";
 import type { TerminalSessionInfo } from "./terminal-session-facts.js";
 
 /**
@@ -124,12 +125,74 @@ function survivorNotice(pids: number[], hasStopScript: boolean): string {
  * ③ 都不成立 → unresolved,`complete=false`:按设计不卡生命周期(没有活号可举,拦着也多停不掉
  *    一个进程),只卡「能不能说停净了」。前因分三种说法,结论那半句是固定措辞。
  */
+/**
+ * 按启动记号那一问**没答全**时那句话。跟 truncatedNotice / membersNotice 同一种残缺:
+ * 该问的没问全,所以不许宣称停净。这一档此前被折进空集里(第 1 轮审查发现 1)。
+ */
+export function scanIncompleteNotice(scan: LaunchScan, scripted: boolean): string {
+  return `${scan.why ?? "按这次启动的记号那一问没答全"} —— `
+    + (scan.pids.length
+      ? `点到名的 ${scan.pids.map((pid) => `pid ${pid}`).join("、")} 已经如实记下，但漏没漏别的说不了。`
+      : "所以没法说这次启动起来的东西都停了。")
+    + (scripted
+      ? "停止命令已执行，但这不构成停净的证据；要确认请自己去看一眼。"
+      : "请稍后再点一次停止，或者在「管理常用命令」里给这个服务填一条停止命令。");
+}
+
+/** ash 这一趟的成员清单没列全(`killed.complete === false`)时,端口那条道上那句话。 */
+export function killedIncompleteNotice(open: TerminalSessionInfo, scripted: boolean): string {
+  return `端口 ${open.ports.join("、")} 让出来了，但 ash 这一趟连成员清单都没列全`
+    + `（进程表或端口查询没答上来），收掉的只是问出来的那些 —— `
+    + (scripted ? "所以没法确认你那条停止命令收干净了。" : "所以没法说这次启动起来的东西都停了。");
+}
+
+/**
+ * **端口那条道**的收口。此前这条道整个绕过记号扫描、也不看 `killed.complete`,于是
+ * 「这几个端口空了」被直接升级成「这次启动起来的东西都停了」—— 第 1 轮审查发现 1 在真实
+ * 页面上实测到:19442 的监听者退了、界面报「已停止」、刷新仍然如此,而那个双 fork 出去的
+ * 工人(PPID=1、自成一组)还在跑。
+ *
+ * 顺序就是证据强度:**已知残留优先,任何必要证据未知都只能保留未知**,端口空只证明监听停了。
+ */
+export function portStopVerdict(
+  open: TerminalSessionInfo, scripted: boolean, killed: Enumeration, scan: LaunchScan,
+  /** 端口那一趟发现的号 */ found: LaunchMember[],
+  /** 端口那一趟的线索全不全(成员清单 / 停止前那张相) */ portsComplete: boolean,
+): StopVerdict {
+  // 这一趟的全部必要证据有一条未知吗。端口那趟、ash 的收尾枚举、记号扫描,三条取与。
+  const complete = portsComplete && !open.portsTruncated
+    && killed.complete !== false && scan.evidence !== "incomplete";
+  // ① 记号点到名的:直接反证,压倒端口那边的任何结论。
+  if (scan.pids.length) {
+    return { kind: "unresolved", leftovers: scan.pids, complete, notice: survivorNotice(scan.pids, scripted) };
+  }
+  // ② 端口那趟自己发现的号。
+  if (found.length) {
+    return { kind: "unresolved", leftovers: found.map((one) => one.pid), complete, notice: leftoverNotice(`端口 ${open.ports.join("、")}`, found) };
+  }
+  // ③ 没有活号可举,但证据不全 —— 不卡生命周期,只卡「能不能说停净」。
+  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, scripted), complete: false };
+  if (!portsComplete) return { kind: "unresolved", leftovers: [], notice: membersNotice(open, scripted), complete: false };
+  if (killed.complete === false) return { kind: "unresolved", leftovers: [], notice: killedIncompleteNotice(open, scripted), complete: false };
+  if (scan.evidence === "incomplete") return { kind: "unresolved", leftovers: [], notice: scanIncompleteNotice(scan, scripted), complete: false };
+  return { kind: "stopped" };
+}
+
 export function processStopVerdict(open: TerminalSessionInfo, scripted: boolean, killed: Enumeration,
-  survivors: number[]): StopVerdict {
+  scan: LaunchScan): StopVerdict {
   if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, scripted), complete: false };
   // 记号点到名的那些**压倒一切**:这是直接证据(它的环境里带着这次启动的记号),不是推论。
-  if (survivors.length) {
-    return { kind: "unresolved", leftovers: survivors, complete: true, notice: survivorNotice(survivors, scripted) };
+  if (scan.pids.length) {
+    return {
+      kind: "unresolved", leftovers: scan.pids, notice: survivorNotice(scan.pids, scripted),
+      // 这一问没答全时,这笔账核销不掉:下一次停止看见这几个号死了,也不知道还漏没漏。
+      complete: scan.evidence !== "incomplete",
+    };
+  }
+  // 这一问没答全 = 可能有漏。**不许跟「组探不到了」组成停净的证明** —— 组那一趟成功
+  // 证明不了记号扫描遗漏的部分(第 1 轮审查发现 1)。
+  if (scan.evidence === "incomplete") {
+    return { kind: "unresolved", leftovers: [], complete: false, notice: scanIncompleteNotice(scan, scripted) };
   }
   // 正面判据:停止前组还活着、现在探不到了,**而且没有「枚举过但没列全」这回事**。
   // `complete === null`(ash 这一趟没动手、用户那条停止命令收的)不算不全 —— 它要是没收掉,

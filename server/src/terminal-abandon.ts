@@ -47,7 +47,8 @@ function scopeOf(info: TerminalSessionInfo): string[] {
  */
 export async function launchResidue(info: TerminalSessionInfo): Promise<LaunchAbandonment> {
   const token = terminalSessions.launchTokenOf(info.id);
-  const taggedPids = await launchSurvivors(token);
+  const scan = await launchSurvivors(token);
+  const taggedPids = scan.pids;
   const probe = info.ports.length && PORT_TIER_AVAILABLE
     ? await probeOwnedPorts(info.ports, token)
     : { state: info.ports.length ? "unavailable" as const : "free" as const, why: null };
@@ -71,6 +72,9 @@ export async function launchResidue(info: TerminalSessionInfo): Promise<LaunchAb
   }
   if (info.groupAlive) parts.push("这次启动的进程组里还有活着的进程");
   if (info.portsTruncated) parts.push("这次启动打印的端口超过了记录额度，多出来的那些 ash 压根没问过");
+  // 清单里**必须有这一句**:这一问没答全时,上面那份「还活着什么」本身就可能漏人,
+  // 而用户正要在它上面签字(第 1 轮审查发现 1 的同一条不变量)。
+  if (scan.evidence === "incomplete") parts.push(scan.why ?? "按启动记号那一问没答全，这份清单可能有漏");
   return {
     at: Date.now(), owedPids, taggedPids, ports: info.ports, portState: probe.state,
     notice: parts.length

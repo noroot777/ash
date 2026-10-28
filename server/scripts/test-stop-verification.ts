@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { startCommand, stopCommand, restartCommand } from "../src/terminal-commands.js";
+import { portStopVerdict, processStopVerdict } from "../src/terminal-stop-notices.js";
+import type { TerminalSessionInfo } from "../src/terminal-session-facts.js";
 import { TerminalCapacity } from "../src/terminal-capacity.js";
 import { processAlive } from "../src/terminal-process-tree.js";
 
@@ -26,6 +28,14 @@ const daemon = join(cwd, "daemon.cjs");
 writeFileSync(launcher, `const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(broker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
 writeFileSync(broker, `const fs=require('node:fs'),prefix=process.argv[2];const timer=setInterval(()=>{if(!fs.existsSync(prefix+'.gate'))return;clearInterval(timer);const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(daemon)},prefix],{detached:true,stdio:'ignore'});child.unref();},20);`);
 writeFileSync(daemon, `require('node:fs').writeFileSync(process.argv[2]+'.pid',String(process.pid));setInterval(()=>{},1000);`);
+// 带端口的那一份:自己在前台听一个端口并把网址打出来(ash 据此记端口),同时经中转双 fork
+// 出一个**不听任何端口**的守护。端口那条道永远点不到它 —— 发现 1 的实测形状。
+const portLauncher = join(cwd, "port-launcher.cjs");
+writeFileSync(portLauncher, `const fs=require('node:fs'),prefix=process.argv[2];`
+  + `const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(broker)},prefix],{detached:true,stdio:'ignore'});child.unref();`
+  + `const server=require('node:http').createServer((_,res)=>res.end('ok'));`
+  + `server.listen(0,'127.0.0.1',()=>{const port=server.address().port;fs.writeFileSync(prefix+'.port',String(port));`
+  + `process.stdout.write('listening on http://127.0.0.1:'+port+' \\n')});`);
 
 try {
   for (const action of ["stop", "restart"] as const) {
@@ -61,6 +71,55 @@ try {
     assert.ok(fact.kind === "unresolved" && fact.complete && fact.pids.includes(pid));
     terminalSessions.sweepIdleSessions(Date.now() + 31 * 60 * 1000);
     assert.ok(terminalSessions.get(original.id), "名下还有活物的记录不许被闲置回收:那是触达它的唯一把手");
+  }
+
+  {
+    // **有端口记录也必须扫记号**。第 1 轮审查发现 1 在真实页面上实测:前台监听者停了、
+    // 端口让出来了,界面报「已停止」、停止按钮消失、刷新仍然如此 —— 而那个双 fork 出去、
+    // 自成一组、不听任何端口的工人还在跑。端口空只能证明**监听**停了。
+    const projectId = "with-port";
+    const prefix = join(cwd, "with-port");
+    const command = { id: "service", name: "with port", command: runNode(portLauncher, prefix), stopCommand: null, restartCommand: null };
+    assert.equal((await startCommand(projectId, cwd, command)).status, 201);
+    await waitFor(() => existsSync(prefix + ".port") && terminalSessions.listForProject(projectId)[0]?.ports.length === 1);
+    const port = Number(readFileSync(prefix + ".port", "utf8"));
+    assert.deepEqual(terminalSessions.listForProject(projectId)[0]?.ports, [port],
+      "端口得真被记下来,否则这个用例会退化成无端口那条道");
+    writeFileSync(prefix + ".gate", "go");
+    await waitFor(() => existsSync(prefix + ".pid"));
+    const pid = Number(readFileSync(prefix + ".pid", "utf8"));
+    pids.push(pid);
+    const original = terminalSessions.listForProject(projectId)[0];
+    const result = await stopCommand(projectId, "service", null, { portGraceMs: 50 });
+    assert.equal(result.status, 200);
+    assert.equal(processAlive(pid), true, "夹具前提:那个工人还活着");
+    assert.match(String(result.body.notice), /按这次启动的记号还点到/,
+      "端口空了不等于停净 —— 记号点到名的那个必须被报出来");
+    assert.ok(String(result.body.notice).includes(`pid ${pid}`));
+    assert.deepEqual(result.body.unresolved, [pid]);
+    const fact = terminalSessions.get(original.id)!.stop;
+    assert.ok(fact.kind === "unresolved" && fact.complete && fact.pids.includes(pid),
+      "反证到手:号留在账上,它死了之后下一次停止才核销得掉");
+  }
+
+  // 裁定层本身的不变量(纯函数,直接问):**任何必要证据未知都只能保留未知**。
+  {
+    const open = { id: "x", projectId: "p", ports: [41234], portsTruncated: false, groupAlive: true } as TerminalSessionInfo;
+    const answered = { pids: [], evidence: "answered" as const, why: null };
+    const silent = { pids: [], evidence: "incomplete" as const, why: "ps 没答上话" };
+    assert.equal(portStopVerdict(open, false, { complete: true, groupGone: true }, answered, [], true).kind, "stopped");
+    // ① 端口让出来了,但 ash 这一趟连成员清单都没列全 —— 收掉的只是问出来的那些。
+    assert.equal(portStopVerdict(open, false, { complete: false, groupGone: true }, answered, [], true).kind, "unresolved");
+    // ② 端口让出来了,但记号那一问没答上话 —— 端口那趟成功证明不了它遗漏的部分。
+    assert.equal(portStopVerdict(open, false, { complete: true, groupGone: true }, silent, [], true).kind, "unresolved");
+    // ③ 无端口那条道上同一条:`complete === null`(这一趟压根没枚举)不许跟「扫描没答上来」
+    //    组成停净的证明。
+    assert.equal(processStopVerdict(open, false, { complete: null, groupGone: true }, silent).kind, "unresolved");
+    assert.equal(processStopVerdict(open, false, { complete: null, groupGone: true }, answered).kind, "stopped");
+    // ④ 记号点到名、同时这一问又没答全:号照旧报出来,但这笔账核销不掉(还可能漏别人)。
+    const partial = processStopVerdict(open, false, { complete: true, groupGone: true },
+      { pids: [999999], evidence: "incomplete", why: "ps 没答上话" });
+    assert.ok(partial.kind === "unresolved" && partial.leftovers.includes(999999) && !partial.complete);
   }
 
   const history = await manager.createAsync("history", cwd, { command: { id: "job", name: "history", script: "exit 0" } });
@@ -106,7 +165,7 @@ try {
   sessions[0].alive = true;
   assert.equal(capacity.hasSlot("capacity", "job", true), false, "保留且还活着 = 真占着一个槽");
   assert.throws(() => capacity.reserve("capacity", "job", true), /数量已达上限/);
-  console.log("stop verification passed: no-port stop/restart uncertainty, retained history, newest-only history, capacity accounting");
+  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, unified verdict completeness, retained history, newest-only history, capacity accounting");
 } finally {
   for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
   manager.shutdown();

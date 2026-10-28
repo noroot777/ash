@@ -38,12 +38,14 @@ import {
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
-import { launchSurvivors } from "./terminal-launch-survivors.js";
+import { launchSurvivors, type LaunchScan } from "./terminal-launch-survivors.js";
 import { mountLaunchAbandonRoutes } from "./terminal-abandon.js";
 import {
   leftoverNotice,
   membersNotice,
+  portStopVerdict,
   processStopVerdict,
+  scanIncompleteNotice,
   scriptLeftoverNotice,
   truncatedNotice,
   type Enumeration,
@@ -224,18 +226,25 @@ async function openSession(
  * 不当场记下,下一遍再点停止时这个号**再也不会被发现**,端口一空就会判成停净
  * (第 5、6 轮审查在端口那条道上实测过同一个形状)。
  */
-async function owedSurvivors(open: TerminalSessionInfo): Promise<number[]> {
-  const survivors = await launchSurvivors(terminalSessions.launchTokenOf(open.id));
-  if (survivors.length) {
-    terminalSessions.oweCommandLeftovers(open.id, open.projectId, survivors,
-      `这次启动起来的 pid ${survivors.join("、")} 还活着（环境里带着这次启动的记号），`
-      + "它们已经脱离了进程组和会话，默认停法点不到它们");
+async function owedSurvivors(open: TerminalSessionInfo, scripted: boolean): Promise<LaunchScan> {
+  const scan = await launchSurvivors(terminalSessions.launchTokenOf(open.id));
+  if (scan.pids.length) {
+    terminalSessions.oweCommandLeftovers(open.id, open.projectId, scan.pids,
+      `这次启动起来的 pid ${scan.pids.join("、")} 还活着（环境里带着这次启动的记号），`
+      + "它们已经脱离了进程组和会话，默认停法点不到它们",
+      // 这一问没答全时这笔账核销不掉:那几个号死了也不代表没漏别人。
+      scan.evidence !== "incomplete");
   }
-  return survivors;
+  // 「没答全」本身也是一笔账,而且**必须当场记**:下一遍再点停止,监听者和组长都没了,
+  // 这一趟的留白就再也没人提起(同 oweOnFailedStop 的理由)。
+  if (scan.evidence === "incomplete") {
+    terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], scanIncompleteNotice(scan, scripted), false);
+  }
+  return scan;
 }
 
 async function stopLaunchPorts(open: TerminalSessionInfo, killed: Enumeration, graceMs?: number): Promise<StopVerdict> {
-  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, false, killed, await owedSurvivors(open));
+  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, false, killed, await owedSurvivors(open, false));
   const token = terminalSessions.launchTokenOf(open.id);
   const result = token ? await stopByPorts(open.ports, { launchToken: token, graceMs }) : null;
   const where = `端口 ${open.ports.join("、")}`;
@@ -253,6 +262,9 @@ async function stopLaunchPorts(open: TerminalSessionInfo, killed: Enumeration, g
   if (open.portsTruncated) {
     terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], truncatedNotice(open, false), false);
   }
+  // **有端口记录也要扫记号**。端口只能证明监听停了:实测那一位双 fork 出去、自成一组、
+  // 不听任何端口,端口这趟永远点不到它(第 1 轮审查发现 1 在真实页面上拍到「已停止」)。
+  const scan = await owedSurvivors(open, false);
   const probe = await probeOwnedPorts(open.ports, token);
   if (probe.state === "unknown") {
     return { kind: "stuck", reason: `${probe.why}，没法确认服务已经停了。请稍后再点一次停止，或者在「管理常用命令」里给这个服务填一条停止命令。` };
@@ -266,12 +278,7 @@ async function stopLaunchPorts(open: TerminalSessionInfo, killed: Enumeration, g
       : "TERM 和 KILL 都没让它停下来";
     return { kind: "stuck", reason: `${where} 上还有这次启动起来的进程在听，${who}。要停掉它，请在「管理常用命令」里给这个服务填一条停止命令。` };
   }
-  if (found.length) {
-    return { kind: "unresolved", notice: leftoverNotice(where, found), leftovers: found.map((one) => one.pid), complete: !open.portsTruncated && !result?.membersIncomplete };
-  }
-  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, false), complete: false };
-  if (result?.membersIncomplete) return { kind: "unresolved", leftovers: [], notice: membersNotice(open, false), complete: false };
-  return { kind: "stopped" };
+  return portStopVerdict(open, false, killed, scan, found, !result?.membersIncomplete);
 }
 
 async function verifyStopScript(
@@ -280,23 +287,29 @@ async function verifyStopScript(
   snapshot: LaunchSnapshot | null,
   killed: Enumeration,
 ): Promise<StopVerdict> {
-  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, true, killed, await owedSurvivors(open));
+  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, true, killed, await owedSurvivors(open, true));
   const survived = await surviveCheck(open, snapshot);
+  // 同 stopLaunchPorts:用户那条脚本收没收掉自己 fork 出去的守护进程,端口这趟证明不了。
+  const scan = await owedSurvivors(open, true);
   const probe = await probeOwnedPorts(open.ports, terminalSessions.launchTokenOf(open.id));
   if (probe.state === "ours") {
     return { kind: "stuck", reason: `停止命令跑完了，但端口 ${open.ports.join("、")} 上还有这次启动起来的进程在听 —— 服务没停下来，去看看那段脚本` };
   }
   const left = survived.members;
   if (probe.state === "unknown") return { kind: "stuck", reason: `停止命令跑完了，但${probe.why}，没法确认服务已经停了` };
+  // 停止前那张相里活下来的号,措辞跟端口那趟发现的不一样(那是用户的脚本该收的),所以
+  // 这一档自己收口;其余全交给统一裁定(记号优先、任何必要证据未知都保留未知)。
   if (left.length) {
-    return { kind: "unresolved", leftovers: left.map((one) => one.pid), notice: scriptLeftoverNotice(left), complete: survived.complete && !open.portsTruncated };
+    return {
+      kind: "unresolved", leftovers: left.map((one) => one.pid), notice: scriptLeftoverNotice(left),
+      complete: survived.complete && !open.portsTruncated
+        && killed.complete !== false && scan.evidence !== "incomplete",
+    };
   }
   // 监听这边核过了,但线索本身可能不全 —— 同 stopLaunchPorts:没记下的端口谁都没问过,
   // 相也可能没照全,用户那段脚本到底收没收干净,这里给不出证据,于是不许宣称停净
   // (第 3 轮审查发现 1 / 第 5 轮发现 1)。
-  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, true), complete: false };
-  if (!survived.complete) return { kind: "unresolved", leftovers: [], notice: membersNotice(open, true), complete: false };
-  return { kind: "stopped" };
+  return portStopVerdict(open, true, killed, scan, [], survived.complete);
 }
 
 /**

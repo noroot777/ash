@@ -28,26 +28,62 @@ import { descendantsFromTable, processAlive, readProcessTable } from "./terminal
 const SELF = process.pid;
 
 /**
- * 按启动记号找出这次启动的存活进程。`token` 为空(交互会话、没有记号的旧记录)返回空集 ——
- * 没有记号就没有这一问,**不是**「问过了,没有」。
+ * 这一问的**结果**。空集有三种完全不同的成因,早先全折成 `[]`,于是「没答上来」被当成
+ * 「问过了,没有」(第 1 轮审查发现 1 点的 :40/:46)。
  *
- * 进程表读不出来同样返回空集:这一问没答上话,它的沉默不构成「都停了」。调用方那一侧另有
- * 枚举完整性这档判据,不靠这里的空集下结论。
+ *  · `answered`    —— 问全了,活着的带记号进程就是 `pids` 这些(可能为空);
+ *  · `unavailable` —— 这条线索**在这次启动上不存在**:交互会话没有记号,Windows 读不到别人的
+ *                     环境。不是「没答上来」,是没有这一问 —— 这一档照旧交给进程树/端口那几档
+ *                     判(改它等于反转 Windows 的既有停止判定,而本轮没有 Windows 真机证据,
+ *                     根 AGENTS.md 要求碰 win32 分支必须上真机跑);
+ *  · `incomplete`  —— 问了,但**可能有漏**:进程表读不出来,或者候选里有号 ps 根本没答上话。
+ *                     调用方必须据此拒绝宣称停净。
+ *
+ * `unknown` 血缘(ps 答上话了、那份环境不给看)**不进 incomplete**:这次启动起来的进程跟 ash
+ * 同一个用户,`ps -E` 一定打得出它的环境,读不到的必然是别人家的号。只有 `unverified`
+ * (ps 超时/起不来/压根没打出这一行而号还活着)才是真的「没问出来」。
  */
-export async function launchSurvivors(token: string | null): Promise<number[]> {
-  if (token === null || IS_WINDOWS) return [];
+export type LaunchScan = {
+  pids: number[];
+  evidence: "answered" | "unavailable" | "incomplete";
+  /** `incomplete` 的前因,进措辞;其余两档为 null。 */
+  why: string | null;
+};
+
+/**
+ * 按启动记号找出这次启动的存活进程。`token` 为空(交互会话、没有记号的旧记录)不是
+ * 「问过了,没有」—— 它落 `unavailable`,由调用方按既有那几档判。
+ */
+export async function launchSurvivors(token: string | null): Promise<LaunchScan> {
+  if (token === null || IS_WINDOWS) return { pids: [], evidence: "unavailable", why: null };
   const table = await readProcessTable();
-  if (!table) return [];
+  if (!table) {
+    return { pids: [], evidence: "incomplete", why: "进程表读不出来，这次启动的记号没问出去" };
+  }
   const orphans = (table.children.get(1) ?? []).filter((pid) => pid > 1 && pid !== SELF);
-  if (!orphans.length) return [];
+  if (!orphans.length) return { pids: [], evidence: "answered", why: null };
   const lineage = await readLineage(orphans, token);
   const found = new Set<number>();
+  // 「ps 没答上这个号」的那几个。它们可能正是逃出去的那一位,所以这一问就得算没问全。
+  const silent: number[] = [];
   for (const orphan of orphans) {
-    if (lineage.get(orphan) !== "ours") continue;
+    const relation = lineage.get(orphan);
+    // `unknown`(环境不给看 = 别人家的号)不算没答上来,理由见上面的类型注释;
+    // `unverified` 才是这一问本身失灵。
+    if (relation === "unverified") { silent.push(orphan); continue; }
+    if (relation !== "ours") continue;
     found.add(orphan);
     // 顶上那个确认是这次的,它底下整棵子树也是:子树里每一个都继承了同一份环境,再逐个
     // 读一遍环境只是把同一个答案问 N 遍。
     for (const pid of descendantsFromTable(table, orphan).pids) found.add(pid);
   }
-  return [...found].filter(processAlive).sort((left, right) => left - right);
+  const pids = [...found].filter(processAlive).sort((left, right) => left - right);
+  if (!silent.length) return { pids, evidence: "answered", why: null };
+  const head = silent.slice(0, 3).map((pid) => `pid ${pid}`).join("、");
+  return {
+    pids,
+    evidence: "incomplete",
+    why: `孤儿进程 ${head}${silent.length > 3 ? ` 等 ${silent.length} 个` : ""} 的环境没问出答案`
+      + "（ps 超时或没打出这一行，而它们还活着），所以记号这一趟可能有漏",
+  };
 }
