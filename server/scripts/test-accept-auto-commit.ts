@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -16,6 +16,8 @@ try {
   const { createTasks } = await import("../src/task-store.js");
   const { taskWorkspace } = await import("../src/task-workspace.js");
   const { autoCommitAcceptanceWorkspace } = await import("../src/accept-workspace-commit.js");
+  const { acceptanceWorkspaceCommitBlock } = await import("../src/accept-workspace-ownership.js");
+  const { resolveWorkspaceContext } = await import("../src/workspace-write-gate.js");
   const { acceptTask } = await import("../src/task-accept.js");
   const { mountProjectRoutes } = await import("../src/project-routes.js");
   const { mountScmRoutes } = await import("../src/scm-routes.js");
@@ -48,6 +50,65 @@ try {
   };
   const manualCommit = (taskId: string) => app.request(`/tasks/${taskId}/scm/acceptance-commit`, { method: "POST",
     headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "chore: manual task commit", stagePaths: ["tracked.txt", "untracked.txt"] }) });
+  const sessionFor = async (value: { taskId: string; workspace: { path: string } }) => {
+    const sessionId = `session-${value.taskId}`;
+    await db.insert(sessions).values({ id: sessionId, taskId: value.taskId, role: "executor", agentType: "codex",
+      executor: "test", cwd: value.workspace.path, startedAt: new Date().toISOString() });
+    return () => readFileSync(sessionTranscriptPath(value.taskId, sessionId), "utf8");
+  };
+  for (const state of ["removed", "detached", "other-branch"]) {
+    const value = await setup(`clean-${state}`);
+    const transcript = await sessionFor(value);
+    git(value.workspace.path, "add", "-A");
+    git(value.workspace.path, "commit", "-qm", "task changes already committed");
+    if (state === "removed") git(value.repo, "worktree", "remove", value.workspace.path);
+    else if (state === "detached") git(value.workspace.path, "checkout", "--detach", "-q");
+    else git(value.workspace.path, "checkout", "-qb", "other-clean-branch");
+    await db.update(projects).set({ acceptAutoCommit: true }).where(eq(projects.id, value.projectId));
+    const result = await acceptTask(value.taskId);
+    assert.equal(result.accepted, true, `${state}: ${JSON.stringify(result)}`);
+    assert.equal(readFileSync(join(value.repo, "tracked.txt"), "utf8"), "changed\n");
+    assert.equal(readFileSync(join(value.repo, "untracked.txt"), "utf8"), "new\n");
+    assert.equal(git(value.repo, "status", "--porcelain"), "");
+    assert.doesNotMatch(git(value.repo, "log", "--format=%s"), /chore: 改动/);
+    assert.match(transcript(), /已跳过自动提交.*没有待提交改动/);
+  }
+  {
+    const value = await setup("missing-dirty");
+    const transcript = await sessionFor(value);
+    git(value.workspace.path, "add", "-A");
+    git(value.workspace.path, "commit", "-qm", "ready");
+    git(value.repo, "worktree", "remove", value.workspace.path);
+    writeFileSync(join(value.repo, "USER-SCRATCH.md"), "private draft\n");
+    const before = git(value.repo, "rev-parse", "HEAD");
+    assert.equal(await autoCommitAcceptanceWorkspace(await value.row(), true), null);
+    const overview = await (await app.request(`/tasks/${value.taskId}/scm`)).json();
+    assert.match(overview.acceptanceCommitBlock, /还没|尚未|不存在/);
+    assert.doesNotMatch(overview.acceptanceCommitBlock, /不在待验收的任务分支/);
+    assert.match(transcript(), /已跳过自动提交/);
+    assert.equal(git(value.repo, "rev-parse", "HEAD"), before);
+    assert.match(git(value.repo, "status", "--porcelain"), /USER-SCRATCH/);
+  }
+  {
+    const value = await setup("partial-failure");
+    const hooks = join(root, "failing-hooks");
+    mkdirSync(hooks);
+    writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(hooks, "pre-commit"), 0o755);
+    git(value.repo, "config", "core.hooksPath", hooks);
+    const before = git(value.workspace.path, "rev-parse", "HEAD");
+    const result = await autoCommitAcceptanceWorkspace(await value.row(), true);
+    assert.equal(result?.reason, "auto_commit_failed");
+    assert.match(result!.error, /已经暂存|未继续验收/);
+    assert.equal(git(value.workspace.path, "rev-parse", "HEAD"), before);
+    assert.ok(git(value.workspace.path, "diff", "--cached", "--name-only"));
+  }
+  {
+    const value = await setup("missing-project");
+    const context = await resolveWorkspaceContext(value.taskId);
+    assert.ok(!("error" in context));
+    assert.match((await acceptanceWorkspaceCommitBlock({ ...context, task: { ...context.task, projectId: "missing-project-id" } }))!, /项目不存在/);
+  }
   for (const detached of [false, true]) {
     const value = await setup(`shared-${detached}`, false);
     if (detached) git(value.repo, "checkout", "--detach", "-q");
@@ -92,29 +153,34 @@ try {
   }
   {
     const value = await setup("running");
+    const transcript = await sessionFor(value);
     await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, value.taskId));
     const before = git(value.workspace.path, "rev-parse", "HEAD");
     const result = await autoCommitAcceptanceWorkspace(await value.row(), true);
-    assert.equal(result?.reason, "auto_commit_failed");
-    assert.match(result!.error, /运行|不能自动提交/);
+    assert.equal(result, null);
+    assert.match(transcript(), /已跳过自动提交.*运行/);
     assert.equal(git(value.workspace.path, "rev-parse", "HEAD"), before);
   }
   {
     const value = await setup("archived");
+    const transcript = await sessionFor(value);
     await db.update(tasks).set({ archived: true }).where(eq(tasks.id, value.taskId));
     const result = await autoCommitAcceptanceWorkspace(await value.row(), true);
-    assert.equal(result?.reason, "auto_commit_failed");
-    assert.match(result!.error, /归档/);
+    assert.equal(result, null);
+    assert.match(transcript(), /已跳过自动提交.*归档/);
   }
   {
     const value = await setup("wrong-branch");
+    const transcript = await sessionFor(value);
     git(value.workspace.path, "checkout", "-qb", "unexpected");
     const before = git(value.workspace.path, "rev-parse", "HEAD");
+    const dirty = git(value.workspace.path, "status", "--porcelain");
     const result = await autoCommitAcceptanceWorkspace(await value.row(), true);
-    assert.equal(result?.reason, "auto_commit_failed");
-    assert.match(result!.error, /任务分支/);
+    assert.equal(result, null);
+    assert.match(transcript(), /已跳过自动提交.*任务分支/);
     assert.equal((await manualCommit(value.taskId)).status, 409);
     assert.equal(git(value.workspace.path, "rev-parse", "HEAD"), before);
+    assert.equal(git(value.workspace.path, "status", "--porcelain"), dirty);
   }
   {
     const value = await setup("foreign");
@@ -122,11 +188,13 @@ try {
     await db.insert(sessions).values({ id: "foreign-session", taskId: value.taskId, role: "executor", agentType: "codex",
       executor: "test", cwd: foreign.workspace.path, startedAt: new Date().toISOString() });
     const before = git(foreign.workspace.path, "rev-parse", "HEAD");
+    const dirty = git(foreign.workspace.path, "status", "--porcelain");
     const result = await autoCommitAcceptanceWorkspace(await value.row(), true);
-    assert.equal(result?.reason, "auto_commit_failed");
-    assert.match(result!.error, /不属于项目仓库/);
+    assert.equal(result, null);
+    assert.match(readFileSync(sessionTranscriptPath(value.taskId, "foreign-session"), "utf8"), /已跳过自动提交.*不属于项目仓库/);
     assert.equal((await manualCommit(value.taskId)).status, 409);
     assert.equal(git(foreign.workspace.path, "rev-parse", "HEAD"), before);
+    assert.equal(git(foreign.workspace.path, "status", "--porcelain"), dirty);
   }
   {
     const value = await setup("endtoend");
@@ -145,7 +213,7 @@ try {
     assert.equal(git(value.repo, "status", "--porcelain"), "");
     assert.equal((await value.row()).stage, "accepted");
   }
-  console.log("accept auto commit: shared/detached workspaces unchanged, common manual/auto ownership guards, default off, persistence and real acceptance passed");
+  console.log("accept auto commit: clean removed/detached/switched workspaces accept, pre-write refusals skip with evidence, partial failures block, manual ownership guards and real acceptance passed");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

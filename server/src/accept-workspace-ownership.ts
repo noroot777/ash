@@ -3,15 +3,18 @@ import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { repoKey, resolveWorktreeBranchName, symbolicBranch } from "./git.js";
 import { ScmOperationError } from "./git-workspace-ops.js";
-import { resolveWorkspaceContext, type WorkspaceWriteContext } from "./workspace-write-gate.js";
+import { resolveWorkspaceContext, workspaceReadOnlyReason, type WorkspaceWriteContext } from "./workspace-write-gate.js";
 
 export const SHARED_WORKSPACE_COMMIT_BLOCK = "此任务共用项目目录，无法区分任务改动与用户文件；不能自动或一键全量提交。请到源代码管理中按文件选择提交。";
 
 export async function acceptanceWorkspaceCommitBlock(context: WorkspaceWriteContext): Promise<string | null> {
   const { task, root } = context;
   if (!task.useWorktree) return SHARED_WORKSPACE_COMMIT_BLOCK;
+  const readOnly = await workspaceReadOnlyReason(task, root);
+  if (readOnly) return readOnly;
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-  if (!project || repoKey(root.repo) !== repoKey(project.repoPath)) {
+  if (!project) return "任务所属项目不存在，无法确认工作目录归属";
+  if (repoKey(root.repo) !== repoKey(project.repoPath)) {
     return "任务当前工作目录不属于项目仓库，请先核对目录，不能提交任务改动";
   }
   const [branch, expected] = await Promise.all([
