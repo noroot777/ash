@@ -22,7 +22,7 @@
 //
 // 两段邻居:用户那条停止命令怎么跑(超时、整次运行清杀、输出回显)在
 // terminal-stop-script.ts;「上一次停止留下了什么责任」怎么记、怎么合并在
-// terminal-stop-facts.ts。这里只做动作与**终态判定**。
+// terminal-stop-facts.ts;终态判定与那几句话在 terminal-stop-notices.ts。这里只做动作。
 //
 // 权限与终端同一道门(实例管理员/自用):这些命令是任意 shell,门禁理由见
 // terminal.ts mountTerminalRoutes 顶部。
@@ -38,6 +38,16 @@ import {
 import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
+import { launchSurvivors } from "./terminal-launch-survivors.js";
+import {
+  leftoverNotice,
+  membersNotice,
+  processStopVerdict,
+  scriptLeftoverNotice,
+  truncatedNotice,
+  type Enumeration,
+  type StopVerdict,
+} from "./terminal-stop-notices.js";
 import {
   launchMembers, PORT_TIER_AVAILABLE, probeOwnedPorts, stopByPorts, survivingMembers,
   type LaunchMember, type LaunchSnapshot,
@@ -194,48 +204,6 @@ async function openSession(
 }
 
 /**
- * 一次停止动作的**三种**终态。两种不够用:早先只有「停了」和「没停下来」,于是
- * 「这几个端口让出来了」被直接升级成「这次启动起来的东西都停了」(第 2 轮审查发现 2)。
- *
- *  · `stopped`    —— 核验过:端口全空,而且没留下没核销的号;
- *  · `unresolved` —— 监听确实停了,但同组还有**核不上归属所以一个字都没动**的号活着。
- *                    不杀它是对的(没有归属凭据),但也**不能顺手把它从账上划掉** ——
- *                    如实报给用户,并把这几个号留在会话事实里(刷新回来还看得见);
- *  · `stuck`      —— 端口还有人听,或者问不出来:不许宣称已停止,留着可重试的现场。
- */
-type StopVerdict =
-  | { kind: "stopped" }
-  | { kind: "unresolved"; notice: string; leftovers: number[]; complete: boolean }
-  | { kind: "stuck"; reason: string };
-
-/** 一串没核销的号 → 「pid 1、pid 2 等 5 个」。 */
-function who(left: LaunchMember[]): string {
-  const head = left.slice(0, 3).map((one) => `pid ${one.pid}`).join("、");
-  return `${head}${left.length > 3 ? `等 ${left.length} 个` : ""}`;
-}
-
-/**
- * 账上这几个号 → 一句给用户看的话。**两种成因混在一起时要分开说**:核不上归属所以没敢动
- * 的,和核实是这次起来的、却怎么都杀不掉的 —— 后者早先压根进不了账(第 6 轮审查 F1),
- * 混成一句会把「ash 不敢动」说到一个它已经发过 KILL 的进程头上。
- */
-function leftoverNotice(where: string, left: LaunchMember[]): string {
-  const stubborn = left.filter((one) => one.ours);
-  const strangers = left.filter((one) => !one.ours);
-  const parts = [`${where}的停止核验尚未完成：`];
-  if (stubborn.length) {
-    parts.push(`这次启动起来的 ${who(stubborn)} 发了 TERM 和 KILL 都没停下来`);
-    if (strangers.length) parts.push("；");
-  }
-  if (strangers.length) {
-    parts.push(`跟它同组的 ${who(strangers)} 还活着：${strangers[0].reason}`
-      + ` —— 没有归属凭据，ash 不敢动它们`);
-  }
-  return `${parts.join("")}，所以没法说这次启动起来的东西都停了。`
-    + (strangers.length ? `要连它们一起收，请在「管理常用命令」里给这个服务填一条停止命令。` : ``);
-}
-
-/**
  * 「停止命令留空 = 杀掉启动命令起来的东西」的最后一档:进程归属那三条线索断了之后,按这次
  * 启动自己打印过的端口回去找人,归属靠环境里的启动记号核验(service-ports.ts 顶部)。
  *
@@ -244,8 +212,25 @@ function leftoverNotice(where: string, left: LaunchMember[]): string {
  * 一并抹掉(第 1 轮审查 E2)。所以杀完一律回头再问一遍全部端口;而且**端口全空也只说明
  * 监听停了**,同组那些核不上归属的号要单独交代(发现 2)。
  */
-async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Promise<StopVerdict> {
-  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, false);
+/**
+ * 按启动记号扫一遍,**发现即落账**。
+ *
+ * 落账放在这儿而不是判定分支里,理由同 `oweOnFailedStop`:这一趟之后监听者/组长就没了,
+ * 不当场记下,下一遍再点停止时这个号**再也不会被发现**,端口一空就会判成停净
+ * (第 5、6 轮审查在端口那条道上实测过同一个形状)。
+ */
+async function owedSurvivors(open: TerminalSessionInfo): Promise<number[]> {
+  const survivors = await launchSurvivors(terminalSessions.launchTokenOf(open.id));
+  if (survivors.length) {
+    terminalSessions.oweCommandLeftovers(open.id, open.projectId, survivors,
+      `这次启动起来的 pid ${survivors.join("、")} 还活着（环境里带着这次启动的记号），`
+      + "它们已经脱离了进程组和会话，默认停法点不到它们");
+  }
+  return survivors;
+}
+
+async function stopLaunchPorts(open: TerminalSessionInfo, killed: Enumeration, graceMs?: number): Promise<StopVerdict> {
+  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, false, killed, await owedSurvivors(open));
   const token = terminalSessions.launchTokenOf(open.id);
   const result = token ? await stopByPorts(open.ports, { launchToken: token, graceMs }) : null;
   const where = `端口 ${open.ports.join("、")}`;
@@ -284,58 +269,13 @@ async function stopLaunchPorts(open: TerminalSessionInfo, graceMs?: number): Pro
   return { kind: "stopped" };
 }
 
-/**
- * 线索本身不全时那句话:这次启动打印的端口超过了记录额度,第 9 个起没进账。记下的都空了,但
- * 「自己 setsid 单开一组、只能从没记下的那个端口找到」的守护进程**压根没被问过**
- * (terminal.ts 的 recordPorts)。这种情况下不许把「端口都空了」说成「全停了」—— 它是一笔
- * 核销不掉的责任(StopFact 里 pids 为空的那种 unresolved),连下一次停止也核销不了它。
- */
-function truncatedNotice(open: TerminalSessionInfo, hasStopScript: boolean): string {
-  return `这次启动记录了端口 ${open.ports.join("、")}，但打印的本机端口超过 ${open.ports.length} 个，`
-    + `多出来的没能记下来 —— 如果还有服务只听那些端口，ash 没问过它们。`
-    + (hasStopScript
-      ? `这次启动没法确认停净，要确认请自己去看一眼那几个端口。`
-      : `要确保停净，请在「管理常用命令」里给这个服务填一条停止命令。`);
-}
-
-/**
- * 成员清单没列全时那句话。跟端口超额(truncatedNotice)是同一种残缺:都是「该问的没问全」,
- * 所以同样落成 pids 为空的那种 unresolved —— 不卡生命周期,但这次启动到死都带着这句话。
- */
-function membersNotice(open: TerminalSessionInfo, hasStopScript: boolean): string {
-  return `这次启动记录了端口 ${open.ports.join("、")}，但没能把同组成员列全（进程表或端口查询没答上来）`
-    + ` —— 跟它一起起来的还有谁，ash 这一趟没问到，`
-    + (hasStopScript ? `所以没法确认你那条停止命令收干净了。` : `所以没法说这次启动起来的东西都停了。`);
-}
-
-function processStopVerdict(open: TerminalSessionInfo, scripted: boolean): StopVerdict {
-  if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, scripted), complete: false };
-  if (open.groupAlive && terminalSessions.get(open.id, open.projectId)?.groupAlive === false) return { kind: "stopped" };
-  const missing = PORT_TIER_AVAILABLE ? "这次启动没有留下可核验的进程或本机端口线索" : "当前平台无法核验本机端口，且没有可确认已退出的启动进程";
-  return { kind: "unresolved", leftovers: [], complete: false, notice: `${missing}，ash 没法确认是否停净。${scripted ? "停止命令已执行，但退出码为零不代表服务已经停止。" : "请检查服务是否仍在运行，或配置实际停止服务的命令。"}` };
-}
-
-/** 停止命令只收掉了监听者、停止前在跑的成员还活着时那句话。 */
-function scriptLeftoverNotice(left: LaunchMember[]): string {
-  return `停止命令跑完了，但停止前在跑的 ${who(left)} 还活着：${left[0].reason}。`
-    + (left.some((one) => one.ours)
-      ? `它们是这次启动起来的，但 ash 不替你那条脚本强杀（你写它正是不想让 ash 直接 kill）——`
-        + `要连它们一起收，请在脚本里也收掉它们。`
-      : `没有归属凭据，ash 不敢动它们，所以没法说这次启动起来的东西都停了。`);
-}
-
-/**
- * 停止命令跑完之后的**终态核验**:它说自己成功了(exit 0)不等于服务真的停了 ——
- * 一条 `true` 也会 exit 0(第 1 轮审查 E2:填一条返回零但什么都不做的脚本,界面照样报
- * 「已停止」、停止按钮消失,服务还在听)。这里不替用户强杀(他写那段脚本正是不想让 ash
- * 直接 kill),只是**不许宣称已停止**:原地报失败、留着可重试的现场。
- */
 async function verifyStopScript(
   open: TerminalSessionInfo,
   /** 跑脚本**之前**照的成员相(launchMembers)。null = 这条路没照相(没有停止脚本)。 */
   snapshot: LaunchSnapshot | null,
+  killed: Enumeration,
 ): Promise<StopVerdict> {
-  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, true);
+  if (!PORT_TIER_AVAILABLE || !open.ports.length) return processStopVerdict(open, true, killed, await owedSurvivors(open));
   const survived = await surviveCheck(open, snapshot);
   const probe = await probeOwnedPorts(open.ports, terminalSessions.launchTokenOf(open.id));
   if (probe.state === "ours") {
@@ -488,6 +428,9 @@ export function stopCommand(
       await waitForSessionGone(projectId, commandId);
     }
     const live = terminalSessions.liveCommandSession(projectId, commandId);
+    // `killed` = terminate 那一趟的成员枚举全不全。没有活会话可杀时它是 null:这一趟压根
+    // 没枚举过,不能跟「问全了」混成一个值(processStopVerdict 据此决定措辞)。
+    let enumerated: boolean | null = null;
     if (live) {
       const result = await terminalSessions.terminate(live.id, projectId);
       // 同上:杀不动也不能把这一趟已经发现的责任丢掉。
@@ -495,11 +438,15 @@ export function stopCommand(
         await oweOnFailedStop(open, snapshot);
         return { status: 502 as const, body: { error: `停止失败：${result.reason}` } };
       }
+      enumerated = result.complete;
     }
+    // `groupGone` 必须在收尾动作**之后**读:动手前那张现场里它当然还活着。
+    const killed: Enumeration = { complete: enumerated,
+      groupGone: terminalSessions.get(open.id, projectId)?.groupAlive === false };
     // 走哪条路都要**核到终态**才敢说停了。没配停止命令:进程那条线索走完了,再按这次启动
     // 打印过的端口兜一次(连杀带核验)。配了停止命令:不替用户强杀,但它说自己成功了也得
     // 核一遍端口 —— 不然一条 `true` 就能把「已停止」骗出来。
-    const verdict = stop ? await verifyStopScript(open, snapshot) : await stopLaunchPorts(open, options.portGraceMs);
+    const verdict = stop ? await verifyStopScript(open, snapshot, killed) : await stopLaunchPorts(open, killed, options.portGraceMs);
     if (verdict.kind === "stuck") return { status: 502 as const, body: { error: `停止失败：${verdict.reason}` } };
     // 「我点过停止」要留下来 —— 启动脚本早就退了(服务在 ash 的进程树之外)时尤其:没有进程
     // 可杀,但刷新回来还得看得出停过(根 AGENTS.md)。**无条件标**:活进程那条路里
@@ -552,18 +499,22 @@ export function restartCommand(
           await waitForSessionGone(projectId, command.id);
         }
         const live = terminalSessions.liveCommandSession(projectId, command.id);
+        let enumerated: boolean | null = null;
         if (live) {
           const result = await terminalSessions.terminate(live.id, projectId);
           if (!result.ok) {
             if (before) await oweOnFailedStop(before, snapshot);
             return { status: 502 as const, body: { error: `重启失败：旧进程停不下来（${result.reason}）` } };
           }
+          enumerated = result.complete;
         }
+        const killed: Enumeration = { complete: enumerated,
+          groupGone: before !== null && terminalSessions.get(before.id, projectId)?.groupAlive === false };
         // 旧服务可能是守护化的(进程树里早没了、端口还占着)。不先收掉它,新的一起来就会
         // 因为端口被占而挂 —— 那种失败看起来像「重启按钮坏了」。配了停止命令的同样要核:
         // 脚本说成功不等于端口让出来了(verifyStopScript)。
         const verdict: StopVerdict = before
-          ? command.stopCommand ? await verifyStopScript(before, snapshot) : await stopLaunchPorts(before)
+          ? command.stopCommand ? await verifyStopScript(before, snapshot, killed) : await stopLaunchPorts(before, killed)
           : { kind: "stopped" };
         if (verdict.kind === "stuck") {
           return { status: 502 as const, body: { error: `重启失败：旧服务没停下来（${verdict.reason}）` } };
@@ -573,6 +524,13 @@ export function restartCommand(
         const stop: StopFact = before
           ? terminalSessions.markCommandStopped(before.id, projectId, resolutionOf(verdict))
           : { kind: "verified" };
+        // 旧账上还有**确认活着**的号时不许起第二份:那几个进程还端着端口和状态,再起一份
+        // 只会撞上去(看起来像「重启按钮坏了」),而旧那条记录是触达它们的唯一把手、删不得
+        // (terminal.ts 的 register 为此拦着替换)。直接在这里以 502 + 那句话退出,比让
+        // register 抛一句「旧命令会话尚未停止」(500,且不说是谁还活着)诚实得多。
+        // pids 为空的那种 unresolved(证据不全)不走这条路:没有活号可举,照旧起新的。
+        const alive = liveLeftovers(stop);
+        if (alive.length) return { status: 502 as const, body: { error: `重启失败：${stop.kind === "unresolved" ? stop.why : ""}` } };
         const session = await reservation.create(cwd, { name: resolved.name, script: resolved.script });
         // 旧服务的监听停了、新的起来了,但旧账上那几个核不上归属的号还活着 —— 照实说一句,
         // 别让「重启成功」把它盖过去。

@@ -18,7 +18,7 @@ import {
   releaseLaunchPortsSync,
   releaseLaunchResponsibility,
 } from "./terminal-stop-facts.js";
-import { killAllSessionTrees, killSessionTree, terminateSession } from "./terminal-session-kill.js";
+import { killAllSessionTrees, killSessionTree, terminateSession, type KillResult } from "./terminal-session-kill.js";
 import { TerminalWatcher } from "./terminal-session-watch.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
@@ -352,9 +352,11 @@ export class TerminalSessionManager {
     sessionId: string,
     projectId?: string,
     timeouts?: { termMs?: number; killMs?: number },
-  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  ): Promise<KillResult> {
     const session = this.session(sessionId, projectId);
-    if (!session) return { ok: true };
+    // 记录已经不在了:这一趟什么都没枚举过,`complete` 只能是 false —— 把「没问过」说成
+    // 「问全了」,下游那条「敢不敢说收干净了」的判断就建在空气上。
+    if (!session) return { ok: true, complete: false };
     return terminateSession(session, timeouts);
   }
 
@@ -373,7 +375,7 @@ export class TerminalSessionManager {
     sessionId: string,
     projectId?: string,
     timeouts?: { termMs?: number; killMs?: number },
-  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  ): Promise<KillResult> {
     const session = this.session(sessionId, projectId);
     const result = await this.terminate(sessionId, projectId, timeouts);
     if (!result.ok) return result;
@@ -390,6 +392,7 @@ export class TerminalSessionManager {
    * 杀不净都如实报失败,由调用方**拒绝删项目**——项目行一删,这些会话就再没有任何
    * UI/API 把手,只能占着全局会话槽等 server 重启(第 1 轮自由审查实锤)。
    */
+  // 项目级没有「清单全不全」这一问(逐条会话各有各的),所以这里不透传 KillResult 的 complete。
   async destroyProject(projectId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
     const alreadyClosing = this.closingProjects.has(projectId);
     this.beginProjectShutdown(projectId);
@@ -544,7 +547,32 @@ export class TerminalSessionManager {
     const session = this.session(sessionId, projectId);
     if (!session) return resolution;
     applyStop(session, resolution);
+    this.pruneStoppedHistory(session);
     return projectStop(session.stop);
+  }
+
+  /**
+   * 同一条命令只留**最新那条**「没能确认停净」的记录。
+   *
+   * 这类记录按设计永远核销不掉(`mergeStop` 对 `complete=false` 的单调性),于是既不被
+   * `close()` 回收、也不被同命令新会话替换(`register` 的 stale 清理放过它们),而界面上根本
+   * 没有释放它们的入口 —— 命令日志标签的 ✕ 只是「收起」,同一条命令又只有最新那条会进标签。
+   * 容量那一侧已经不把纯历史算进活会话预算(terminal-capacity 的 `pureHistory`),这一侧负责
+   * 它们不会无界堆积:更早的那些 pids 和端口都是空的,除了那句话之外不提供任何把手,留着
+   * 只会占地方(第 2 轮审查必须修 1 的建议修法)。
+   *
+   * **名下还有活物的一条都不动**(`sessionRunning`):那种记录是触达残留进程的唯一把手,删掉
+   * 就等于把还在跑的东西变成永久孤儿。所以这里只删「保留 且 不活」的那些。
+   */
+  private pruneStoppedHistory(latest: TerminalSession): void {
+    if (latest.commandId === null || !this.retainHistory(latest)) return;
+    for (const session of [...this.sessions.values()]) {
+      if (session.id === latest.id || session.projectId !== latest.projectId) continue;
+      if (session.commandId !== latest.commandId) continue;
+      if (this.sessionRunning(session) || !this.retainHistory(session)) continue;
+      session.listeners.clear();
+      this.sessions.delete(session.id);
+    }
   }
 
   recordCommandPortState(sessionId: string, projectId: string, state: "ours" | "unknown" | "stranger" | "free"): void {

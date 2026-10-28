@@ -458,7 +458,12 @@ export async function freezeAndEnumerate(
   ttyPath: string | null,
   accPgids: Set<number>,
   memberPids: Set<number>,
-): Promise<{ snapshot: DescendantSnapshot; innerShellPids: number[]; thaw: () => void }> {
+): Promise<{ snapshot: DescendantSnapshot; innerShellPids: number[]; complete: boolean; thaw: () => void }> {
+  // 这一趟的清单**全不全**。跟 groupMembers/membersOfGroup 同一个口径(那边的文件头):
+  // 「问不出来」不许跟「确实没有别人」混成一个值。三种不全 —— 进程表没答上话(ppid 树整条
+  // 缺)、会话成员那一问没答上话(ctty/sid ∪ fd 持有者整条缺)、以及迭代到上限还在冒新成员
+  // (封口没封住)。调用方据此决定敢不敢把「看得见的都收了」说出口。
+  let complete = true;
   const frozenGroups = new Set<number>();
   const frozenPids = new Set<number>();
   const freezeGroup = (pgid: number) => {
@@ -476,6 +481,7 @@ export async function freezeAndEnumerate(
   for (const pid of memberPids) freezePid(pid);
   for (const pgid of accPgids) freezeGroup(pgid);
   const table = await readProcessTable();
+  if (!table) complete = false;
   const tree = table ? descendantsFromTable(table, groupId) : { pids: [], pgids: [] };
   // leader 的**直接**子进程 = wrapper 用 "$@" 起的那个内层 shell(交互会话是用户 shell,
   // 命令会话是 `shell -lc`)。单拎出来是给挂断用的:交互 shell 按 POSIX 惯例忽略 TERM,
@@ -483,9 +489,10 @@ export async function freezeAndEnumerate(
   const innerShellPids = (table?.children.get(groupId) ?? []).filter((pid) => pid > 1);
   for (const pid of tree.pids) { if (!memberPids.has(pid)) { memberPids.add(pid); freezePid(pid); } }
   for (const pgid of tree.pgids) { if (!accPgids.has(pgid)) { accPgids.add(pgid); freezeGroup(pgid); } }
+  let converged = false;
   for (let pass = 0; pass < 5; pass++) {
     const members = await sessionMemberPids([groupId], ttyPath ? [ttyPath] : []);
-    if (!members) break;
+    if (!members) { complete = false; break; }
     let discovered = false;
     for (const member of members) {
       if (member.pid === groupId) continue;
@@ -500,12 +507,14 @@ export async function freezeAndEnumerate(
         discovered = true;
       }
     }
-    if (!discovered) break;
+    if (!discovered) { converged = true; break; }
   }
+  // 跑满 5 轮还在冒新成员 = 没到不动点,这份快照不是封口的那一份。
+  if (!converged && complete) complete = false;
   const snapshot: DescendantSnapshot = { pids: [...memberPids], pgids: [...accPgids] };
   const thaw = () => {
     for (const pgid of frozenGroups) { try { process.kill(-pgid, "SIGCONT"); } catch { /* 已空 */ } }
     for (const pid of frozenPids) { try { process.kill(pid, "SIGCONT"); } catch { /* 已死 */ } }
   };
-  return { snapshot, innerShellPids, thaw };
+  return { snapshot, innerShellPids, complete, thaw };
 }
