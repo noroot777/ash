@@ -30,6 +30,25 @@ import type { TerminalSessionInfo } from "./terminal-session-facts.js";
  */
 export type Enumeration = { complete: boolean | null; groupGone: boolean };
 
+/**
+ * **这一趟的启动闭包封住了吗** —— 整套停止结论共用的一条判据,四个调用点(端口那条道、
+ * 无端口那条道、停止脚本核验、发现即落账时「这笔账核销得掉吗」)全走这里。
+ *
+ * 为什么必须是一处而不是四处各写一遍 `scan.evidence !== "incomplete"`:这一条的内容被实测
+ * 改过两次。第一次是「空集不等于问全了」(第 1 轮审查发现 1),第二次是「读不到环境不等于
+ * 不是这次的」—— 后者的实例落在扫描内部,但**判据本身**属于停止结论层:
+ * **「记号一个都没命中」只说明这一路证据没命中,不证明不存在。** 只有扫描自己把候选集枚举
+ * 得出来、而且每个候选的归属都问出了答案(`answered`),这一路才算封了口。
+ *
+ * `unavailable` 是**另一回事**,不走这道闸:那是「这台机器/这次启动上没有这一问」
+ * (Windows 读不到别人的环境、交互会话与老记录没有记号),结论由进程树与端口那几档承担。
+ * 它是一道已知边界而不是本轮回归 —— 把它也算成没封口,等于反转 Windows 的既有停止判定,
+ * 而根 AGENTS.md 要求碰 win32 分支必须上真机跑,本轮没有那份证据。
+ */
+export function launchClosureSealed(scan: LaunchScan): boolean {
+  return scan.evidence !== "incomplete";
+}
+
 export type StopVerdict =
   | { kind: "stopped" }
   | { kind: "unresolved"; notice: string; leftovers: number[]; complete: boolean }
@@ -161,7 +180,7 @@ export function portStopVerdict(
 ): StopVerdict {
   // 这一趟的全部必要证据有一条未知吗。端口那趟、ash 的收尾枚举、记号扫描,三条取与。
   const complete = portsComplete && !open.portsTruncated
-    && killed.complete !== false && scan.evidence !== "incomplete";
+    && killed.complete !== false && launchClosureSealed(scan);
   // ① 记号点到名的:直接反证,压倒端口那边的任何结论。
   if (scan.pids.length) {
     return { kind: "unresolved", leftovers: scan.pids, complete, notice: survivorNotice(scan.pids, scripted) };
@@ -174,7 +193,7 @@ export function portStopVerdict(
   if (open.portsTruncated) return { kind: "unresolved", leftovers: [], notice: truncatedNotice(open, scripted), complete: false };
   if (!portsComplete) return { kind: "unresolved", leftovers: [], notice: membersNotice(open, scripted), complete: false };
   if (killed.complete === false) return { kind: "unresolved", leftovers: [], notice: killedIncompleteNotice(open, scripted), complete: false };
-  if (scan.evidence === "incomplete") return { kind: "unresolved", leftovers: [], notice: scanIncompleteNotice(scan, scripted), complete: false };
+  if (!launchClosureSealed(scan)) return { kind: "unresolved", leftovers: [], notice: scanIncompleteNotice(scan, scripted), complete: false };
   return { kind: "stopped" };
 }
 
@@ -186,12 +205,12 @@ export function processStopVerdict(open: TerminalSessionInfo, scripted: boolean,
     return {
       kind: "unresolved", leftovers: scan.pids, notice: survivorNotice(scan.pids, scripted),
       // 这一问没答全时,这笔账核销不掉:下一次停止看见这几个号死了,也不知道还漏没漏。
-      complete: scan.evidence !== "incomplete",
+      complete: launchClosureSealed(scan),
     };
   }
   // 这一问没答全 = 可能有漏。**不许跟「组探不到了」组成停净的证明** —— 组那一趟成功
   // 证明不了记号扫描遗漏的部分(第 1 轮审查发现 1)。
-  if (scan.evidence === "incomplete") {
+  if (!launchClosureSealed(scan)) {
     return { kind: "unresolved", leftovers: [], complete: false, notice: scanIncompleteNotice(scan, scripted) };
   }
   // 正面判据:停止前组还活着、现在探不到了,**而且没有「枚举过但没列全」这回事**。

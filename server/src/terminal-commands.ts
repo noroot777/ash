@@ -43,6 +43,7 @@ import { mountLaunchAbandonRoutes } from "./terminal-abandon.js";
 import {
   leftoverNotice,
   membersNotice,
+  launchClosureSealed,
   portStopVerdict,
   processStopVerdict,
   scanIncompleteNotice,
@@ -227,17 +228,17 @@ async function openSession(
  * (第 5、6 轮审查在端口那条道上实测过同一个形状)。
  */
 async function owedSurvivors(open: TerminalSessionInfo, scripted: boolean): Promise<LaunchScan> {
-  const scan = await launchSurvivors(terminalSessions.launchTokenOf(open.id));
+  const scan = await launchSurvivors(terminalSessions.launchTokenOf(open.id), open.startedAt);
   if (scan.pids.length) {
     terminalSessions.oweCommandLeftovers(open.id, open.projectId, scan.pids,
       `这次启动起来的 pid ${scan.pids.join("、")} 还活着（环境里带着这次启动的记号），`
       + "它们已经脱离了进程组和会话，默认停法点不到它们",
       // 这一问没答全时这笔账核销不掉:那几个号死了也不代表没漏别人。
-      scan.evidence !== "incomplete");
+      launchClosureSealed(scan));
   }
   // 「没答全」本身也是一笔账,而且**必须当场记**:下一遍再点停止,监听者和组长都没了,
   // 这一趟的留白就再也没人提起(同 oweOnFailedStop 的理由)。
-  if (scan.evidence === "incomplete") {
+  if (!launchClosureSealed(scan)) {
     terminalSessions.oweCommandLeftovers(open.id, open.projectId, [], scanIncompleteNotice(scan, scripted), false);
   }
   return scan;
@@ -303,7 +304,7 @@ async function verifyStopScript(
     return {
       kind: "unresolved", leftovers: left.map((one) => one.pid), notice: scriptLeftoverNotice(left),
       complete: survived.complete && !open.portsTruncated
-        && killed.complete !== false && scan.evidence !== "incomplete",
+        && killed.complete !== false && launchClosureSealed(scan),
     };
   }
   // 监听这边核过了,但线索本身可能不全 —— 同 stopLaunchPorts:没记下的端口谁都没问过,

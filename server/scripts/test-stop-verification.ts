@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { startCommand, stopCommand, restartCommand } from "../src/terminal-commands.js";
-import { portStopVerdict, processStopVerdict } from "../src/terminal-stop-notices.js";
+import { launchClosureSealed, portStopVerdict, processStopVerdict } from "../src/terminal-stop-notices.js";
+import { launchSurvivors } from "../src/terminal-launch-survivors.js";
 import type { TerminalSessionInfo } from "../src/terminal-session-facts.js";
 import { TerminalCapacity } from "../src/terminal-capacity.js";
 import { processAlive } from "../src/terminal-process-tree.js";
@@ -28,6 +29,17 @@ const daemon = join(cwd, "daemon.cjs");
 writeFileSync(launcher, `const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(broker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
 writeFileSync(broker, `const fs=require('node:fs'),prefix=process.argv[2];const timer=setInterval(()=>{if(!fs.existsSync(prefix+'.gate'))return;clearInterval(timer);const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(daemon)},prefix],{detached:true,stdio:'ignore'});child.unref();},20);`);
 writeFileSync(daemon, `require('node:fs').writeFileSync(process.argv[2]+'.pid',String(process.pid));setInterval(()=>{},1000);`);
+// **空环境**那一份:中转用 `env:{}` 把守护进程起出来 —— 同一个用户、PPID=1、自成一组,但
+// `ps -E` 一个变量都不打。macOS 分不出「环境本来是空的」和「环境不给看」,早先的判据因此把
+// 它当成「别人家的号」跳过,停止报了「已停止」而它还在跑(第 2 轮自由审查 F2 真实复现)。
+const envBroker = join(cwd, "env-broker.cjs");
+writeFileSync(envBroker, `const fs=require('node:fs'),prefix=process.argv[2];`
+  + `const timer=setInterval(()=>{if(!fs.existsSync(prefix+'.gate'))return;clearInterval(timer);`
+  + `const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(daemon)},prefix],`
+  + `{detached:true,stdio:'ignore',env:{}});child.unref();},20);`);
+const envLauncher = join(cwd, "env-launcher.cjs");
+writeFileSync(envLauncher, `const child=require('node:child_process').spawn(process.execPath,`
+  + `[${JSON.stringify(envBroker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
 // 带端口的那一份:自己在前台听一个端口并把网址打出来(ash 据此记端口),同时经中转双 fork
 // 出一个**不听任何端口**的守护。端口那条道永远点不到它 —— 发现 1 的实测形状。
 const portLauncher = join(cwd, "port-launcher.cjs");
@@ -102,6 +114,41 @@ try {
       "反证到手:号留在账上,它死了之后下一次停止才核销得掉");
   }
 
+  // 空环境那一位(POSIX 专有:Windows 上记号这一问整档 unavailable,见 LaunchScan 的注释)。
+  // 这里钉的是「读不到环境」**不等于**「不是这次启动的」:那个工人跟 ash 同一个用户、出生在
+  // 这次启动之后,凭据上就是「可能是这次的」,环境读不出来只说明这一问没答上来。所以停止
+  // 这一趟必须如实报未确认 —— 不许因为「记号一个都没命中」就升级成停净。
+  if (process.platform !== "win32") {
+    const projectId = "silent-env";
+    const prefix = join(cwd, "silent-env");
+    const command = { id: "service", name: "silent env", command: runNode(envLauncher, prefix), stopCommand: noop, restartCommand: null };
+    assert.equal((await startCommand(projectId, cwd, command)).status, 201);
+    await waitFor(() => terminalSessions.listForProject(projectId)[0]?.exitCode === 0);
+    writeFileSync(prefix + ".gate", "go");
+    await waitFor(() => existsSync(prefix + ".pid") && terminalSessions.listForProject(projectId)[0]?.groupAlive === false);
+    const pid = Number(readFileSync(prefix + ".pid", "utf8"));
+    pids.push(pid);
+    const original = terminalSessions.listForProject(projectId)[0];
+    assert.deepEqual(original.ports, [], "夹具前提:这条命令一个端口都没打印,只剩记号这一条线索");
+    // 扫描这一层先单独问一遍:那个空环境的号必须落进「没问出答案」,而不是被当成陌生人跳过。
+    const scan = await launchSurvivors(terminalSessions.launchTokenOf(original.id), original.startedAt);
+    assert.equal(scan.evidence, "incomplete", "同用户、这次启动之后出生、环境读不出来 = 这一问没答上来");
+    assert.equal(launchClosureSealed(scan), false, "没答上来就不算封口");
+    assert.ok(String(scan.why).includes(`pid ${pid}`), `那句话要点出是哪个号（实得：${scan.why}）`);
+    const result = await stopCommand(projectId, "service", { script: noop, cwd });
+    assert.equal(result.status, 200);
+    assert.equal(processAlive(pid), true, "夹具前提:那个工人还活着");
+    // 这一档点不到名(记号本来就读不出来),所以它交的是「证据不全」那句固定措辞,而不是
+    // 「点到了谁」—— 关键是**不许**沉默地判停净。
+    assert.deepEqual(result.body.unresolved, [], "读不出环境只是没答上来,不构成点名");
+    assert.match(String(result.body.notice), /没问出答案/);
+    assert.match(String(result.body.notice), /所以没法说这次启动起来的东西都停了/);
+    assert.ok(String(result.body.notice).includes(`pid ${pid}`), "那句话要点出是哪个号没答上来");
+    const fact = terminalSessions.get(original.id)!.stop;
+    assert.ok(fact.kind === "unresolved" && !fact.complete,
+      "证据不全那一档:刷新回来仍然看得出「这次没能确认停净」,而且这笔账核销不掉");
+  }
+
   // 裁定层本身的不变量(纯函数,直接问):**任何必要证据未知都只能保留未知**。
   {
     const open = { id: "x", projectId: "p", ports: [41234], portsTruncated: false, groupAlive: true } as TerminalSessionInfo;
@@ -165,7 +212,7 @@ try {
   sessions[0].alive = true;
   assert.equal(capacity.hasSlot("capacity", "job", true), false, "保留且还活着 = 真占着一个槽");
   assert.throws(() => capacity.reserve("capacity", "job", true), /数量已达上限/);
-  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, unified verdict completeness, retained history, newest-only history, capacity accounting");
+  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env candidate stays unanswered, unified verdict completeness, retained history, newest-only history, capacity accounting");
 } finally {
   for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
   manager.shutdown();

@@ -9,7 +9,7 @@
  * 这里一个 `kill` 都不发。动手那一半在 `service-ports.ts`。
  */
 import { execFile, execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { promisify } from "node:util";
 import { IS_WINDOWS } from "./platform.js";
 import { HAS_PROC, LSOF_PATH, PS_PATH, processAlive, readProcessTableSync } from "./terminal-process-tree.js";
@@ -229,6 +229,87 @@ async function processCwd(pid: number, timeoutMs: number): Promise<string | null
     const line = stdout.split("\n").find((row) => row.startsWith("n"));
     return line ? line.slice(1) : null;
   } catch { return null; }
+}
+
+// ── 候选闭包:属主与年龄 ───────────────────────────────────────────────────────
+
+/**
+ * 一个号的**非环境**事实。
+ *
+ * 为什么要单独问这两样:记号那一问(`readLineage`)在 macOS 上有一处天生的盲区 —— `ps -E`
+ * 分不出「这份环境本来就是空的」和「这份环境不给你看」,两种都只打出一行光杆命令。早先据
+ * 此断言「读不到环境的必然是别人家的号」,被自由审查用一个同用户、`env:{}` + setsid 的工人
+ * 当场证伪(uid 跟 ash 相同、PPID=1,`ps -E` 一个变量都不打),于是那个工人被当成陌生人跳
+ * 过,停止报了「已停止」而它还在跑。
+ *
+ * 补救不能靠猜环境,得换**跟环境无关**的两条事实先把候选圈小:
+ *
+ *  · `uid`   —— 子进程继承属主。属主跟 ash 不同的号不可能是这次启动直接创造的;
+ *  · `ageMs` —— 这次启动之前就活着的号不可能带这次的记号:那枚记号是启动时现生成的,它
+ *               那会儿还不存在,一个已经在跑的进程也无从把它塞进自己的环境。
+ *
+ * 圈完之后再读环境,读不出来的就是**真的没问出来**,必须算这一趟没问全。本机实测:同用户
+ * 的 PID 1 孤儿有四百多个,其中读不到环境的只有 `loginwindow` 和一个 ssh 复用进程(它把
+ * argv/env 区域改写成了自己的标题),两个都远早于任何一次启动 —— 不先按年龄筛,这台机器
+ * 上每一次停止都会永远停在「没问全」。
+ */
+export type ProcessFact = { uid: number; ageMs: number };
+
+/**
+ * 查这些号的属主与年龄。
+ *
+ * 返回 `null` = **这一问本身没答上来**(这台机器上没有可用的 ps、`/proc/uptime` 读不动、
+ * ps 超时或起不来)。调用方必须据此判「没问全」,**不许**当成「这些号都不是候选」——
+ * 那正是把查询失灵读成否定结论的老毛病。映射里缺某个号 = ps 没打出它那一行;跟
+ * `lineageFromPs` 同一个判据:再探一次活,还活着就同样是「没答上来」。
+ */
+export async function readProcessFacts(
+  pids: number[],
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+): Promise<Map<number, ProcessFact> | null> {
+  if (!pids.length) return new Map();
+  if (IS_WINDOWS) return null;
+  if (HAS_PROC) return procProcessFacts(pids);
+  if (!PS_PATH) return null;
+  let read: PsRead;
+  try {
+    read = { stdout: (await run(PS_PATH, ["-o", "pid=,uid=,etime=", "-p", pids.join(",")], { timeout: budgeted(timeoutMs) })).stdout, trusted: true };
+  } catch (error) {
+    read = { stdout: psStdout(error), trusted: psAnswered(error) };
+  }
+  if (!read.trusted) return null;
+  const facts = new Map<number, ProcessFact>();
+  for (const line of read.stdout.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
+    if (!match) continue;
+    const ageMs = elapsedToMs(match[3]);
+    if (ageMs === null) continue;
+    facts.set(Number(match[1]), { uid: Number(match[2]), ageMs });
+  }
+  return facts;
+}
+
+/**
+ * Linux 版:属主取 `/proc/<pid>` 这个目录的属主,年龄 = 开机已跑的时长 − stat 的第 22 项
+ * (进程启动时刻,单位 USER_HZ —— 内核 ABI 把它固定成 100,不随 CONFIG_HZ 变)。
+ * `/proc/uptime` 读不动就是这一问没答上来;单个号读不动一律当它已经退了(stat 是全局可读的,
+ * 活着的号不会读不出来)。
+ */
+function procProcessFacts(pids: number[]): Map<number, ProcessFact> | null {
+  let uptimeMs: number;
+  try { uptimeMs = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]) * 1000; }
+  catch { return null; }
+  if (!Number.isFinite(uptimeMs)) return null;
+  const facts = new Map<number, ProcessFact>();
+  for (const pid of pids) {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const ticks = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]);
+      if (!Number.isFinite(ticks)) continue;
+      facts.set(pid, { uid: statSync(`/proc/${pid}`).uid, ageMs: Math.max(0, uptimeMs - ticks * 10) });
+    } catch { /* 这个号已经退了 */ }
+  }
+  return facts;
 }
 
 // ── 归属:环境里的那枚记号 ─────────────────────────────────────────────────────
