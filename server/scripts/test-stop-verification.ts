@@ -49,6 +49,31 @@ writeFileSync(freshBroker, `const fs=require('node:fs'),prefix=process.argv[2];`
 const freshLauncher = join(cwd, "fresh-launcher.cjs");
 writeFileSync(freshLauncher, `const child=require('node:child_process').spawn(process.execPath,`
   + `[${JSON.stringify(freshBroker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
+// **换了工作目录**的两份(第 3 轮自由审查 F1)。第 2 轮曾拿「cwd 跟启动目录不一样就跳过」
+// 当第三道筛子,于是这两个号在读环境之前就被丢掉、剩下的问全了就报「问全了」——
+// 审查用同一个工人、只把 cwd 换成 `/` 实测到 stop 200、`stop={"kind":"verified"}`、页面显示
+// 「已停止」,而 `WORKER_ALIVE_AFTER_STOP true`。两份分别钉住那个筛子的两种后果:
+//
+//  · `moved-marked` —— 工人**带着这次启动的记号**,只是换了目录:它本该被**点名**,
+//    却被目录筛子先丢掉了,于是整条线索彻底消失(审查当时记为代码推断,这里补上实测);
+//  · `moved-fresh`  —— 工人既换了目录又现搭了环境:这一档点不到名,但必须如实报「证不出来」。
+const movedBroker = join(cwd, "moved-broker.cjs");
+writeFileSync(movedBroker, `const fs=require('node:fs'),prefix=process.argv[2];`
+  + `const timer=setInterval(()=>{if(!fs.existsSync(prefix+'.gate'))return;clearInterval(timer);`
+  + `const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(daemon)},prefix],`
+  + `{detached:true,stdio:'ignore',cwd:'/'});child.unref();},20);`);
+const movedLauncher = join(cwd, "moved-launcher.cjs");
+writeFileSync(movedLauncher, `const child=require('node:child_process').spawn(process.execPath,`
+  + `[${JSON.stringify(movedBroker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
+const movedFreshBroker = join(cwd, "moved-fresh-broker.cjs");
+writeFileSync(movedFreshBroker, `const fs=require('node:fs'),prefix=process.argv[2];`
+  + `const timer=setInterval(()=>{if(!fs.existsSync(prefix+'.gate'))return;clearInterval(timer);`
+  + `const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(daemon)},prefix],`
+  + `{detached:true,stdio:'ignore',cwd:'/',env:{PATH:process.env.PATH,WORKER_KIND:'moved-fresh-environment'}});`
+  + `child.unref();},20);`);
+const movedFreshLauncher = join(cwd, "moved-fresh-launcher.cjs");
+writeFileSync(movedFreshLauncher, `const child=require('node:child_process').spawn(process.execPath,`
+  + `[${JSON.stringify(movedFreshBroker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
 const envLauncher = join(cwd, "env-launcher.cjs");
 writeFileSync(envLauncher, `const child=require('node:child_process').spawn(process.execPath,`
   + `[${JSON.stringify(envBroker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
@@ -90,9 +115,13 @@ try {
     if (action === "stop") assert.deepEqual(result.body.unresolved, [pid]);
     const fact = terminalSessions.get(original.id)!.stop;
     assert.equal(fact.kind, "unresolved");
-    // 这一档是**反证到手**,不是证据不全:清单齐全(complete),而且号留在账上 ——
-    // 它们死了之后下一次停止能把这笔账核销掉。
-    assert.ok(fact.kind === "unresolved" && fact.complete && fact.pids.includes(pid));
+    // 这一档是**反证到手**:号留在账上,刷新回来还看得见,用户有下手的地方。
+    //
+    // 这里**不断言 `complete`**:封不封口要看「这台机器此刻还有没有问不出归属的孤儿」,而那
+    // 取决于 macOS 这一刻恰好起了几个 mdworker,不是本用例要钉的不变量(第 3 轮 F1 之后
+    // 候选集只按属主和出生时刻收窄,不再拿工作目录把它们筛掉)。`complete` 那条不变量由
+    // 下面「裁定层本身的不变量」那段用合成 LaunchScan 直接问。
+    assert.ok(fact.kind === "unresolved" && fact.pids.includes(pid));
     terminalSessions.sweepIdleSessions(Date.now() + 31 * 60 * 1000);
     assert.ok(terminalSessions.get(original.id), "名下还有活物的记录不许被闲置回收:那是触达它的唯一把手");
   }
@@ -122,8 +151,8 @@ try {
     assert.ok(String(result.body.notice).includes(`pid ${pid}`));
     assert.deepEqual(result.body.unresolved, [pid]);
     const fact = terminalSessions.get(original.id)!.stop;
-    assert.ok(fact.kind === "unresolved" && fact.complete && fact.pids.includes(pid),
-      "反证到手:号留在账上,它死了之后下一次停止才核销得掉");
+    assert.ok(fact.kind === "unresolved" && fact.pids.includes(pid),
+      "反证到手:号留在账上,刷新回来仍然看得见(封不封口见上一段的说明)");
   }
 
   // 记号没命中的两个现场(POSIX 专有:Windows 上记号这一问整档 unavailable,见 LaunchScan
@@ -135,14 +164,17 @@ try {
   //    第一轮修复只把前者纳进来,后者仍被当成「别人家的号」跳过,于是真实页面照旧显示
   //    「已停止」而它还在跑(第 2 轮自由审查 F2)。
   //
-  // 两个工人都跟 ash 同属主、出生在这次启动之后、工作目录也是从启动那一刻继承下来的 ——
-  // 三道跟记号无关的筛子都对得上,所以停止这一趟必须如实报未确认。
-  for (const [mode, script] of [["silent-env", envLauncher], ["fresh-env", freshLauncher]] as const) {
+  //  · `moved-fresh` —— 再加一道:工人**换了工作目录**(cwd 换成 `/`)。第 2 轮拿 cwd 当第三道
+  //    筛子,于是它在读环境之前就被丢掉、剩下的问全了就报「问全了」(第 3 轮自由审查 F1
+  //    实测:stop 200、stop={"kind":"verified"}、页面「已停止」,工人还活着)。
+  //
+  // 三个工人都跟 ash 同属主、出生在这次启动之后 —— 两道**否证**筛子都对不上它们,所以停止
+  // 这一趟必须如实报未确认。工作目录从此不参与筛选(它可变),只决定先点谁的名。
+  for (const [mode, script] of [["silent-env", envLauncher], ["fresh-env", freshLauncher],
+    ["moved-fresh", movedFreshLauncher]] as const) {
     if (process.platform === "win32") break;
     const projectId = mode;
     const prefix = join(cwd, mode);
-    // **每个现场一个自己的工作目录**:cwd 是这一趟的筛子之一,两个现场共用一个目录时
-    // 另一边留下的工人会成为这一边的候选,断言就分不清是哪个号把结论顶成「证据不全」的。
     const home = join(cwd, `${mode}-home`);
     mkdirSync(home, { recursive: true });
     const command = { id: "service", name: mode, command: runNode(script, prefix), stopCommand: noop, restartCommand: null };
@@ -159,10 +191,15 @@ try {
     assert.equal(scan.evidence, "incomplete",
       "同用户、这次启动之后出生、工作目录也对得上,而记号没命中 = 这一问没答上来");
     assert.equal(launchClosureSealed(scan), false, "没答上来就不算封口");
-    assert.ok(String(scan.why).includes(`pid ${pid}`), `那句话要点出是哪个号（实得：${scan.why}）`);
+    assert.ok(scan.unanswered.includes(pid),
+      `那个工人必须被算进「问不出归属」的集合（实得：${scan.unanswered.join("、")}）`);
     assert.equal(scan.pids.length, 0, "记号没命中就点不到名,这一档交的是「证据不全」而不是点名");
-    assert.deepEqual([...new Set(String(scan.why).match(/pid \d+/g) ?? [])], [`pid ${pid}`],
-      "这个现场只该有那一个号核不上 —— 多出来的说明筛子没拦住无关进程");
+    // 同目录那两档:工人的工作目录是从启动那一刻继承下来的,所以它是最可疑的那几个之一,
+    // 必须被点进措辞里。换了目录的那一档不要求(它排在同目录的嫌疑之后,前三名可能排不上),
+    // 但上面 `unanswered` 那一问已经把它钉死了。
+    if (mode !== "moved-fresh") {
+      assert.ok(String(scan.why).includes(`pid ${pid}`), `那句话要点出是哪个号（实得：${scan.why}）`);
+    }
     const result = await stopCommand(projectId, "service", { script: noop, cwd: home });
     assert.equal(result.status, 200);
     assert.equal(processAlive(pid), true, "夹具前提:那个工人还活着");
@@ -171,17 +208,50 @@ try {
     assert.deepEqual(result.body.unresolved, [], "读不出环境只是没答上来,不构成点名");
     assert.match(String(result.body.notice), /核不上/);
     assert.match(String(result.body.notice), /所以没法说这次启动起来的东西都停了/);
-    assert.ok(String(result.body.notice).includes(`pid ${pid}`), "那句话要点出是哪个号没答上来");
+    if (mode !== "moved-fresh") {
+      assert.ok(String(result.body.notice).includes(`pid ${pid}`), "那句话要点出是哪个号没答上来");
+    }
     const fact = terminalSessions.get(original.id)!.stop;
     assert.ok(fact.kind === "unresolved" && !fact.complete,
       "证据不全那一档:刷新回来仍然看得出「这次没能确认停净」,而且这笔账核销不掉");
   }
 
+  // **换了工作目录、但记号还在**(第 3 轮自由审查 F1 的另一半)。第 2 轮那道 cwd 筛子排在读
+  // 环境**之前**,所以这个号连被问的机会都没有:它明明带着这次启动的记号、本该被点名,结果
+  // 整条线索彻底消失、停止干净地报「已停止」。审查当时把这半边记为代码推断,这里补成实测。
+  // 筛子撤掉之后它该回到第一条道上 —— 被点名,并给出 pid。
+  if (process.platform !== "win32") {
+    const projectId = "moved-marked";
+    const prefix = join(cwd, "moved-marked");
+    const home = join(cwd, "moved-marked-home");
+    mkdirSync(home, { recursive: true });
+    const command = { id: "service", name: "moved-marked", command: runNode(movedLauncher, prefix), stopCommand: noop, restartCommand: null };
+    assert.equal((await startCommand(projectId, home, command)).status, 201);
+    await waitFor(() => terminalSessions.listForProject(projectId)[0]?.exitCode === 0);
+    writeFileSync(prefix + ".gate", "go");
+    await waitFor(() => existsSync(prefix + ".pid") && terminalSessions.listForProject(projectId)[0]?.groupAlive === false);
+    const pid = Number(readFileSync(prefix + ".pid", "utf8"));
+    pids.push(pid);
+    const original = terminalSessions.listForProject(projectId)[0];
+    assert.deepEqual(original.ports, [], "夹具前提:只剩记号这一条线索");
+    const scan = await launchSurvivors(terminalSessions.launchTokenOf(original.id), original);
+    assert.ok(scan.pids.includes(pid),
+      `带着这次记号的号必须被点名,换没换工作目录都一样（实得：${scan.pids.join("、")}）`);
+    const result = await stopCommand(projectId, "service", { script: noop, cwd: home });
+    assert.equal(result.status, 200);
+    assert.equal(processAlive(pid), true, "夹具前提:那个工人还活着");
+    assert.match(String(result.body.notice), /按这次启动的记号还点到/);
+    assert.ok(String(result.body.notice).includes(`pid ${pid}`), "那句话必须给出 pid");
+    assert.ok((result.body.unresolved as number[]).includes(pid), "账上要留着这个号");
+    const fact = terminalSessions.get(original.id)!.stop;
+    assert.ok(fact.kind === "unresolved" && fact.pids.includes(pid), "刷新回来仍然看得见这个号");
+  }
+
   // 裁定层本身的不变量(纯函数,直接问):**任何必要证据未知都只能保留未知**。
   {
     const open = { id: "x", projectId: "p", ports: [41234], portsTruncated: false, groupAlive: true } as TerminalSessionInfo;
-    const answered = { pids: [], evidence: "answered" as const, why: null };
-    const silent = { pids: [], evidence: "incomplete" as const, why: "ps 没答上话" };
+    const answered = { pids: [], unanswered: [], evidence: "answered" as const, why: null };
+    const silent = { pids: [], unanswered: [4242], evidence: "incomplete" as const, why: "ps 没答上话" };
     assert.equal(portStopVerdict(open, false, { complete: true, groupGone: true }, answered, [], true).kind, "stopped");
     // ① 端口让出来了,但 ash 这一趟连成员清单都没列全 —— 收掉的只是问出来的那些。
     assert.equal(portStopVerdict(open, false, { complete: false, groupGone: true }, answered, [], true).kind, "unresolved");
@@ -193,7 +263,7 @@ try {
     assert.equal(processStopVerdict(open, false, { complete: null, groupGone: true }, answered).kind, "stopped");
     // ④ 记号点到名、同时这一问又没答全:号照旧报出来,但这笔账核销不掉(还可能漏别人)。
     const partial = processStopVerdict(open, false, { complete: true, groupGone: true },
-      { pids: [999999], evidence: "incomplete", why: "ps 没答上话" });
+      { pids: [999999], unanswered: [4242], evidence: "incomplete", why: "ps 没答上话" });
     assert.ok(partial.kind === "unresolved" && partial.leftovers.includes(999999) && !partial.complete);
   }
 
@@ -240,7 +310,7 @@ try {
   sessions[0].alive = true;
   assert.equal(capacity.hasSlot("capacity", "job", true), false, "保留且还活着 = 真占着一个槽");
   assert.throws(() => capacity.reserve("capacity", "job", true), /数量已达上限/);
-  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env and rebuilt-env candidates stay unanswered, unified verdict completeness, retained history, newest-only history, capacity accounting");
+  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env/rebuilt-env/moved-cwd candidates stay unanswered, a moved-but-marked worker is still named, unified verdict completeness, retained history, newest-only history, capacity accounting");
 } finally {
   for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
   manager.shutdown();
