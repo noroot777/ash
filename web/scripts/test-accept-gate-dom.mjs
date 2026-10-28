@@ -5,6 +5,7 @@ import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
+import { stopwatchSeconds, waitForStopwatchTick } from "./accept-gate-stopwatch.mjs";
 
 // 验收台上那张「验收前置命令」卡。钉住的是四件在真实页面上才看得出来的事：
 //
@@ -398,7 +399,11 @@ try {
     const text = await bar.innerText();
     assert.match(text, /验收前置命令在跑/);
     assert.match(text, /\.\/kb\.sh test full/, "折叠那一行要说清在跑的是哪条命令");
-    assert.match(text, /已经 1 分 30 秒/, "秒表要自己走，不能定在点下去那一刻");
+    // 秒表要自己走，不能定在点下去那一刻 —— 两条读数一起证，容差与理由见 stopwatchSeconds。
+    const first = stopwatchSeconds(text);
+    assert.ok(first >= 90,
+      `秒表要从开跑那一刻（startedAt 是 90 秒前）起算，不能定在点下去那一刻：读到 ${first} 秒`);
+    await waitForStopwatchTick(page, bar, first);
     // 折叠态不许把出路摆出来占地方，但点开就得有。
     assert.equal(await bar.getByRole("button", { name: /不等了/ }).count(), 0);
     await bar.locator(".wait-bar__bar").click();

@@ -186,7 +186,21 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
   await mkdir(target, { recursive: true });
   try {
     if (await ambientDigest(cwd, target) !== source.ambient) {
-      throw new Error("测试快照的实际依赖输入与登记计划不同，请按快照执行位置重新登记后验收");
+      // 对不上一律拒绝（这一条不打折），但**说法得对得上**，因为出路不是同一条：
+      //
+      // · 登记位置上**现在**也已经对不上 → 登记之后依赖输入自己变了（装/删/升级了包、改了安装
+      //   声明）。那是漂移，跟快照放在哪儿无关，换个位置重登一次救不了它，只能重新验收。
+      // · 登记位置上仍然对得上、只有这个 target 对不上 → 计划真的登记在别处：两条祖先链上的依赖
+      //   树不同（test-accept-gate-plan 的 otherLocation 钉着这一条），按实际执行位置重登才作数。
+      //
+      // 不分这一下的话，漂移会穿着「换个位置重登」的外衣报出来。门禁快照里再跑门禁自测这种嵌套
+      // 场面上尤其显眼：漂移是夹具自己造的，报出来的却是位置不对。`executionCwd` 缺失（跨版本重启
+      // 读到的旧计划）时归不了因，照旧按位置那一条报——归因不了就不编一个更具体的理由。
+      const drifted = source.executionCwd !== undefined
+        && await ambientDigest(cwd, source.executionCwd) !== source.ambient;
+      throw new Error(drifted
+        ? "登记之后依赖输入已变化，请重新验收"
+        : "测试快照的实际依赖输入与登记计划不同，请按快照执行位置重新登记后验收");
     }
     // 依赖怎么放由项目**声明**的 workspace 包决定（判据和理由见 accept-gate-deps 顶部）：声明了
     // 就整棵克隆进快照，没声明才借一条链。
