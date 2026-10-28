@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./accept-workspace": {
+      "types": "./src/accept-workspace.ts",
+      "default": "./src/accept-workspace.ts"
+    },
     "./monitor-wake": {
       "types": "./src/monitor-wake.ts",
       "default": "./src/monitor-wake.ts"

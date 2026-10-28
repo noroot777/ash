@@ -23,7 +23,8 @@ import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { ACCEPT_GATE_STATUS_LABELS } from "@ash/shared/accept-gate";
 import { AcceptGateCardView } from "../review/AcceptGateCard.tsx";
 import { useAcceptGate } from "../review/useAcceptGate.ts";
-import { AcceptanceWorkspaceCommit } from "../review/AcceptanceWorkspaceCommit.tsx";
+import { AcceptanceWorkspaceCommit, AutoCommitOutcomeNotice } from "../review/AcceptanceWorkspaceCommit.tsx";
+import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 import { useWorkspaceCommitVersion } from "../review/workspaceCommit.ts";
 
 type ReviewData = {
@@ -197,6 +198,7 @@ export function AcceptanceControls({
   const [busy, setBusy] = useState(false);
   const confirmExecutorSwap = useExecutorGate();
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
+  const [autoCommit, setAutoCommit] = useState<{ taskId: string; outcome: AcceptanceAutoCommitOutcome } | null>(null);
   const gateFailure = failure?.taskId === task.id && failure.reason === "accept_gate_failed"
     && task.stage !== "accepted" && task.stage !== "merged";
   const gateFallback = gateFailure && !gate.running && (!gate.state || !!gate.error || !gate.latest);
@@ -253,6 +255,7 @@ export function AcceptanceControls({
         canChooseCommit ? commitChoice ?? commitDefault.value ?? undefined : undefined,
         gateIntent ?? undefined,
       );
+      setAutoCommit(result.autoCommit ? { taskId: task.id, outcome: result.autoCommit } : null);
       if (!result.accepted) {
         const gateReason = result.reason.startsWith("accept_gate");
         setFailure(gateReason && result.reason !== "accept_gate_failed" ? null : result);
@@ -290,7 +293,8 @@ export function AcceptanceControls({
           // 而改动其实还躺在他的工作区里没提交。
           : result.merge === "no_commit"
             ? "验收通过：改动已合进目标分支工作区并暂存，还没提交"
-            : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过") + stale);
+            : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过")
+        + (result.autoCommit ? `；${acceptanceAutoCommitMessage(result.autoCommit)}` : "") + stale);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -354,6 +358,7 @@ export function AcceptanceControls({
       {/* 「合并后不提交」那一档的常驻状态与出路。它自己判要不要出现（不适用就渲染 null），
           所以每个有验收动作的表面都自动带上，不用各处再判一遍。 */}
       <PendingMergeCard task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
+      {autoCommit?.taskId === task.id && <AutoCommitOutcomeNotice outcome={autoCommit.outcome} />}
       {!midGate && task.stage !== "accepted" && task.stage !== "merged" && <AcceptanceWorkspaceCommit key={task.id} task={task} notify={notify} disabled={archived || inFlight || busy} />}
       {!gateFallback && <AcceptGateCardView
         task={task}

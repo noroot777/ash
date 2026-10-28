@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowClockwise, GitCommit, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import type { TaskListItem } from "@ash/shared";
+import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 import { api, type ScmOverview } from "../lib/api.ts";
 import { announceWorkspaceCommit, workspaceCommitBlock, workspaceCommitPaths } from "./workspaceCommit.ts";
 
-export function WorkspaceCommitNotice({ overview, autoCommit, busy, disabled = false, error, onCommit, onRefresh }: {
+export function AutoCommitOutcomeNotice({ outcome }: { outcome: AcceptanceAutoCommitOutcome }) {
+  return <p role="status" aria-label="验收自动提交结果">{acceptanceAutoCommitMessage(outcome)}</p>;
+}
+
+export function WorkspaceCommitNotice({ overview, busy, disabled = false, error, onCommit, onRefresh }: {
   overview: ScmOverview;
-  autoCommit: boolean | null;
   busy: boolean;
   disabled?: boolean;
   error: string | null;
@@ -22,10 +26,9 @@ export function WorkspaceCommitNotice({ overview, autoCommit, busy, disabled = f
     <div><b>{count ? `任务工作区有 ${count} 个文件尚未提交` : "正在核对提交结果"}</b>
       <p>{overview.taskRunning ? "任务仍在运行，工作区出现未提交改动是正常现象；结束后再核对与提交。"
         : "未提交的改动不在当前提交记录中，也不会随任务分支合入。请先提交，避免遗漏。"}</p>
-      <small>{overview.acceptanceCommitBlock || overview.acceptanceCommitBlock === undefined
-        ? "此目录尚未确认为任务独占工作区，不会自动提交，也不能一键全量提交。"
-        : autoCommit === null ? "自动提交设置尚未读取；可手动提交，或到项目设置 → 验收查看。"
-        : autoCommit ? "项目已开启验收前自动提交；点击验收时会先提交这些改动。" : "项目未开启自动提交；可一键提交，或到项目设置 → 验收开启。"}</small>
+      <small>{overview.acceptanceAutoCommit
+        ? `${overview.acceptanceAutoCommit.action === "skip" ? "验收时将跳过自动提交：" : ""}${overview.acceptanceAutoCommit.reason}`
+        : "服务端尚未提供自动提交预检结果，不能确认验收时是否会提交；请刷新或手动核对。"}</small>
       <small>一键提交包含此任务工作目录内全部已暂存、未暂存及未跟踪文件，不推送远端。</small>
       <small className="mono">{overview.root.path}</small>
       {block && <p>{block}</p>}
@@ -46,21 +49,11 @@ export function AcceptanceWorkspaceCommit({ task, notify, disabled = false }: {
   disabled?: boolean;
 }) {
   const [state, setState] = useState<{ taskId: string; overview: ScmOverview | null; error: string | null }>({ taskId: task.id, overview: null, error: null });
-  const [autoCommit, setAutoCommit] = useState<boolean | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [commitError, setCommitError] = useState<{ taskId: string; message: string } | null>(null);
   const activeTask = useRef(task.id);
   activeTask.current = task.id;
-  useEffect(() => {
-    let alive = true;
-    setAutoCommit(null);
-    api.projects().then(projects => {
-      const project = projects.find(project => project.id === task.projectId);
-      if (alive && project) setAutoCommit(project.acceptAutoCommit === true);
-    }).catch(() => {});
-    return () => { alive = false; };
-  }, [task.projectId, attempt]);
   useEffect(() => {
     let alive = true;
     const refresh = () => api.taskScm(task.id).then(
@@ -102,7 +95,7 @@ export function AcceptanceWorkspaceCommit({ task, notify, disabled = false }: {
   if (!current?.overview) return current?.error ? <section className="accept-workspace-commit" role="alert">
     <div><b>未能检查未提交改动</b><p>{current.error}</p></div><button type="button" onClick={() => setAttempt(value => value + 1)}>重试</button>
   </section> : null;
-  return <WorkspaceCommitNotice overview={current.overview} autoCommit={autoCommit} busy={busy} disabled={disabled}
+  return <WorkspaceCommitNotice overview={current.overview} busy={busy} disabled={disabled}
     error={commitError?.taskId === task.id ? commitError.message : current.error}
     onCommit={() => void commit()} onRefresh={() => setAttempt(value => value + 1)} />;
 }

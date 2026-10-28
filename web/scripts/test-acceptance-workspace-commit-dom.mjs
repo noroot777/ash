@@ -11,6 +11,7 @@ try {
   await server.listen();
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" }));
   page.setDefaultTimeout(5000);
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -24,9 +25,21 @@ try {
     assert.equal(await card.locator(".is-spinning").count(), 0, "禁用不是正在提交");
     assert.equal(await card.getByRole("button", { name: "刷新未提交改动" }).isEnabled(), true);
     assert.doesNotMatch(await card.innerText(), /提交中…/);
-    if (scenario === "running") assert.match(await card.innerText(), /正常现象/);
+    if (scenario === "running") {
+      assert.match(await card.innerText(), /正常现象/);
+      assert.match(await card.innerText(), /验收时将跳过自动提交：任务正在运行/);
+      assert.doesNotMatch(await card.innerText(), /会先提交|预检通过/);
+    }
     if (scenario === "shared") assert.match(await card.innerText(), /共用项目目录/);
   }
+  await page.goto(`${fixture}?scenario=outcome`);
+  await page.getByRole("button", { name: "验收通过", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
+  const outcome = page.getByRole("status", { name: "验收自动提交结果" });
+  await outcome.waitFor();
+  assert.match(await outcome.innerText(), /已跳过验收前自动提交：此任务共用项目目录/);
+  await page.getByTestId("result").filter({ hasText: "已跳过验收前自动提交" }).waitFor();
+  assert.match(await page.getByTestId("result").innerText(), /验收通过；已跳过验收前自动提交/);
   await page.clock.install();
   await page.goto(`${fixture}?scenario=failure`);
   await submit.waitFor();

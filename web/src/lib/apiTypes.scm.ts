@@ -3,6 +3,7 @@
 // 从 `apiTypes.ts` 拆出来的：那份原本把「文件 / 产物 / SCM / 验收 / 终端」全装在一起，涨到
 // 701 行、过了 700 行上限。调用点照旧从 `api.ts` 引（那边整份再导出），拆分对调用方透明。
 import type { FileWorkspaceRoot } from "./apiTypes.ts";
+import type { AcceptanceAutoCommitDecision } from "@ash/shared/accept-workspace";
 // ── 工作区源代码管理（SCM 面板）─────────────────────────────────────────────
 // 跟 `TaskDiffResult` 是两回事：那个是任务分支 vs 合入目标的只读 diff（给审查用），
 // 这里是**工作目录此刻**的暂存区/未暂存/未跟踪/冲突。字段与服务端 `git-status.ts`
@@ -135,6 +136,7 @@ export type ScmOverview = {
    */
   readOnly: string | null;
   acceptanceCommitBlock?: string | null;
+  acceptanceAutoCommit?: AcceptanceAutoCommitDecision;
   status: ScmStatus;
   commits: ScmCommit[];
   /** 仅含远端名；URL 可能带凭据，不下发。旧服务端响应可能暂时缺少这个字段。 */

@@ -19,6 +19,7 @@ import {
 } from "./git-workspace-ops.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { acceptanceWorkspaceCommitBlock, assertAcceptanceWorkspaceCommit } from "./accept-workspace-ownership.js";
+import { acceptanceAutoCommitDecision } from "./accept-workspace-decision.js";
 import { assertInsideRoot, assertPathShape, gateScmPaths, scmNestedPaths } from "./scm-paths.js";
 import {
   ARCHIVED_REFUSAL,
@@ -113,6 +114,7 @@ export function mountScmRoutes(api: Hono) {
         // 和「按钮坏了」在用户那儿是同一件事。
         readOnly,
         acceptanceCommitBlock,
+        acceptanceAutoCommit: await acceptanceAutoCommitDecision(context, status, undefined, acceptanceCommitBlock),
         status,
         commits,
         remotes,

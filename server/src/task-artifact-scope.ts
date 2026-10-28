@@ -59,7 +59,7 @@ export interface ArtifactScope {
  * 整组汇总。审查任务跟到被审任务（单飞）不受影响：那个目录里值得看的东西本来就全是被审
  * 任务做的，1 对 1，没有兄弟。
  */
-async function isExclusiveRoot(task: ArtifactTask, root: WorkspaceRoot, lens: PathLens): Promise<boolean> {
+export async function isExclusiveRoot(task: ArtifactTask, root: WorkspaceRoot, lens: PathLens = pathLens()): Promise<boolean> {
   const owner = await isolatedWorkspaceOwner(task);
   if (!owner || !root.repo) return false;
   if (!(await lens.sameDir(worktreePathFor(root.repo, owner), root.path))) return false;
