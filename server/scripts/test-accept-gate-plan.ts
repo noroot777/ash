@@ -484,15 +484,43 @@ try {
   assert.deepEqual(await resolutionInputs([malformedProject]), malformedInputs);
   assert.equal(await ambientDigest(malformedProject, malformedProject), await ambientDigest(malformedProject, malformedProject));
   if (process.platform !== "win32") {
-    for (const denied of [join(malformed, "node_modules", "@denied"), join(malformed, "node_modules", ".bin"),
-      join(malformed, "node_modules")]) {
+    // 读不出来的依赖目录**倒向拒绝**,不许摘成「空目录」那个值。
+    //
+    // 这里原先钉的是「别崩」（5b06c9eb 顺手加的畸形布局夹具，那时还没有 accept-gate-fs 的
+    // 三态口径）。可是 `ambientDigest` 的下游就是「这次的输入跟登记那次是不是同一份」:把
+    // EACCES 摘成空目录，等于宣布目录里什么都没有、而且摘出来的值跟「真的空」撞在一起 ——
+    // 那棵树里装、删、升级任何一个包都不会改摘要，上一张绿结果照旧沿用。所以读不出来必须
+    // 拒绝，并且说清是哪一条路读不出来（判据与 test-accept-gate-proof.ts 对 optionalRead
+    // 钉的那条一致：只有 ENOENT/ENOTDIR 算「不存在」）。
+    // `.bin` 这一条是**真·可选输入**,所以口径相反:`packageList` 按名字就把点开头的条目
+    // 跳掉了（`.bin`/`.cache`/`.vite` 不是包），它读不出来并没有任何东西被摸黑摘成空 ——
+    // 这里钉「摘要一个字节都不变」,好让「跳过它」这件事本身不会哪天被悄悄改掉。
+    for (const [denied, isInput] of [[join(malformed, "node_modules", "@denied"), true],
+      [join(malformed, "node_modules", ".bin"), false],
+      [join(malformed, "node_modules"), true]] as const) {
       if (denied.endsWith(".bin")) rmSync(denied);
       mkdirSync(denied, { recursive: true });
+      const before = await ambientDigest(malformedProject, malformedProject);
       chmodSync(denied, 0);
       try {
         assert.throws(() => readdirSync(denied), { code: "EACCES" });
-        await resolutionInputs([malformedProject]);
-        await ambientDigest(malformedProject, malformedProject);
+        const refusal = await ambientDigest(malformedProject, malformedProject)
+          .then((digest) => { assert.equal(isInput, false,
+            `${denied} 读不出来时,ambientDigest 必须拒绝而不是摘成空目录`); return digest; },
+          (error: Error) => error.message);
+        if (!isInput) {
+          assert.equal(refusal, before, `${denied} 压根不是摘要输入,它读不出来不该动摘要`);
+          continue;
+        }
+        // root 已经 realpath 过,所以 denied 本身就是拒绝说明里会出现的那个名字。
+        assert.match(refusal, /不能据此认定路径不存在/);
+        assert.ok(refusal.includes(denied), `拒绝要点明是哪条路读不出来:${refusal}`);
+        // 消费者枚举读到它才有话可说;读不到就不强求（它按解析链逐级往上找，不下探作用域目录）。
+        const enumerated = await resolutionInputs([malformedProject]).then(() => null, (error: Error) => error.message);
+        if (enumerated !== null) {
+          assert.match(enumerated, /不能据此认定路径不存在/, `${denied}: 枚举这一层也只能倒向拒绝`);
+          assert.ok(enumerated.includes(denied), `枚举的拒绝也要点明路径:${enumerated}`);
+        }
       } finally { chmodSync(denied, 0o755); }
     }
   } else console.log("accept-gate-plan: POSIX unreadable-directory fixture skipped on Windows (no ACL changes)");
