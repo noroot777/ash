@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import {
   bestSession, leftoversOf, managedOpen, needsHandoff, sessionRunning, sessionState,
 } from "../src/workspace/commandSessionState.ts";
+import { attachStatusOf } from "../src/workspace/terminalTabs.ts";
 
 const residue = (extra = {}) => ({
   at: 1, owedPids: [4321], taggedPids: [4321], ports: [8787], portState: "ours",
@@ -77,5 +78,16 @@ const picked = bestSession([
 ], "p1", "service");
 assert.equal(picked.id, "abandoned", "最新那条仍然是它(历史要看得见)");
 assert.equal(managedOpen(picked, "npm stop"), null, "但它不该再被当成还被管着");
+
+// ⑥ 同一份事实的另一个表面:底部终端坞那颗状态点。它自己也有一份「还在跑吗」的推导
+//    (服务端给了 running 就用那个,没给才自推导),放弃这一档同样要排在最前面 ——
+//    否则弹层说「已放弃管理」、坞里的 tab 还标着 detached,同屏两句话打架。
+assert.equal(attachStatusOf({ exitCode: null, groupAlive: true, abandoned: residue() }), "ended",
+  "放弃之后坞里那颗点也该说「已结束」");
+assert.equal(attachStatusOf({
+  exitCode: 0, groupAlive: false, stop: { kind: "unresolved", pids: [4321], complete: true, why: "核不上归属" },
+  abandoned: residue(),
+}), "ended", "账上还挂着号也一样 —— 放弃解除的正是这些悲观判据造成的死局");
+assert.equal(attachStatusOf({ exitCode: 0, groupAlive: true }), "detached", "没放弃过的照旧");
 
 console.log("PASS: abandoned launches are never managed-open on any surface, and the residue facts survive");

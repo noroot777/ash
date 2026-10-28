@@ -61,8 +61,16 @@ export function createTerminalTab(
  * 弹层说「运行中」、终端 tab 说「已结束」)。
  */
 export function attachStatusOf(
-  session: { exitCode: number | null; groupAlive: boolean; portsAlive?: boolean; portUncertain?: boolean; running?: boolean; stop?: StopFactLike },
+  session: {
+    exitCode: number | null; groupAlive: boolean; portsAlive?: boolean; portUncertain?: boolean;
+    running?: boolean; stop?: StopFactLike; abandoned?: unknown;
+  },
 ): TerminalStatus {
+  // 用户显式放弃管理之后一律按「已结束」:ash 不再把这条记录当「还在跑」(服务端
+  // sessionRunning / openSession 都把这一档放在所有兜底之前)。服务端算好的 running 本来
+  // 就是这样,这里补的是它缺省时那条自推导的退路 —— 判据只许有一份,劈叉的后果见
+  // commandSessionState.ts 的 managedOpen(第 1 轮审查 F3)。
+  if (session.abandoned) return "ended";
   if (session.exitCode === null) return "ready";
   // 「还没了结」只认**还活着的**号:端口超额那种「证据不全」的 unresolved 一个号都举不出来,
   // 它该在状态点上说「已结束」(确实没东西在跑了),那句「没能确认停净」由文案层去说。
@@ -84,6 +92,7 @@ export function createAttachTab(
     running?: boolean;
     stop?: StopFactLike;
     stoppedByUser: boolean;
+    abandoned?: unknown;
   },
   /** 恢复的交互 shell 用项目名 + 序号做标签,跟新建 shell 一个排法;命令日志用会话名。 */
   shellLabel?: { label: string; ordinal: number },
