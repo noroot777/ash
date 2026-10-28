@@ -28,7 +28,15 @@
 //    `.repair-tmp` 是指向目录外既有文件的硬链接时，realpath 本来就落在 runs 内，普通写入直接重写
 //    同一个 inode，目录外的旧历史一起被改掉）。独占创建（`O_EXCL` + `link`）两种别名都挡得住：
 //    目标名已经存在（哪怕是条悬空软链）就 EEXIST，一个字节都不写。备份另加这一条的另一半 ——
-//    **先写满再以正式名字出现**，所以「备份文件在」就等于「它是完整的」（同一轮 F3）。
+//    **先写满再以正式名字出现**，所以本版本写下的备份，「文件在」就等于「它是完整的」（同一轮 F3）。
+// ⑥ **「文件在」只对本版本写下的那些成立**，所以备份要自带一份可核验的发布凭据
+//    （`.pre-usage-repair.seal`：字节数 + sha256 + 归属 + 代次），复用之前逐项核过才算数。
+//    旧版本是直接以正式名字开写的，磁盘满会在盘上留下一份只有开头几十字节、名字却完全
+//    正式的半成品 —— 升级上来的用户盘上就带着它，`existsSync` 一看就跳过，于是第二次迁移
+//    改账成功、而承诺过的完整原文已经永久丢了（第 1 轮审查发现 2 走真实 apply 全链路实测：
+//    库值 300 → 200、trace 被改写，恢复材料仍只有 20/460 字节）。没有有效凭据的那一份
+//    **既不信也不删**：挪到一边留着，另写一份带凭据的（见 setAsideBackup）。
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { TokenUsage, UsageAccountingMark } from "@ash/shared";
@@ -68,6 +76,13 @@ export type SessionTraceRewrite = {
 export const TRACE_BACKUP_SUFFIX = ".pre-usage-repair";
 const TRACE_TEMP_SUFFIX = ".repair-tmp";
 const TRACE_ROLLBACK_SUFFIX = ".repair-rollback";
+/** 备份的发布凭据,**接在备份名后面**(`<trace>.pre-usage-repair.seal`)。 */
+const TRACE_SEAL_SUFFIX = ".seal";
+/**
+ * 凭据的代次。**不是版本号摆设** —— 以后换校验算法或加字段时,旧凭据会在这一关落
+ * 「认不了」,走挪开重写那条路,而不是被当成校验通过。
+ */
+const SEAL_GENERATION = 1;
 
 /**
  * 这份改写**实际会碰到的全部路径**。备份和两个临时文件一并算进来：它们跟 trace 共一个
@@ -77,6 +92,7 @@ export function traceWriteSet(path: string): string[] {
   return [
     path,
     `${path}${TRACE_BACKUP_SUFFIX}`,
+    `${path}${TRACE_BACKUP_SUFFIX}${TRACE_SEAL_SUFFIX}`,
     `${path}${TRACE_TEMP_SUFFIX}`,
     `${path}${TRACE_ROLLBACK_SUFFIX}`,
   ];
@@ -211,6 +227,107 @@ export function prepareTraceRewrite(rewrite: SessionTraceRewrite): PreparedTrace
   return { rewrite, path, original, next: lines.join("\n"), applied };
 }
 
+// ── 原文备份的发布凭据 ────────────────────────────────────────────────────────
+
+/**
+ * 跟备份一起落盘的那张凭据。四样都要核:
+ *
+ *  · `of`         —— 这份备份是谁的(整条凭据从别处抄过来就在这一关露出来);
+ *  · `bytes`/`sha256` —— 内容完整性(半成品、被截断、被改过都在这一关露出来);
+ *  · `generation` —— 凭据本身的代次(认不了的一律不算核过)。
+ */
+type BackupSeal = { generation: number; of: string; bytes: number; sha256: string; at: string };
+
+type BackupState = { kind: "absent" } | { kind: "sealed" } | { kind: "untrusted"; why: string };
+
+/**
+ * 盘上那份备份**信得过吗**。「不信」跟「没有」严格分开:前者说明盘上有东西、但它不能
+ * 算作已经履行过的恢复材料,必须挪开再重写;后者才是正常的第一次。
+ */
+function inspectBackup(backup: string, where: string): BackupState {
+  const seal = `${backup}${TRACE_SEAL_SUFFIX}`;
+  let content: Buffer;
+  try {
+    content = readFileSync(backup);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") return { kind: "untrusted", why: `备份本体读不出来（${code}）` };
+    // 只剩一张凭据:它描述的那份备份已经不在了,不能让它给下一次写入背书。
+    return existsSync(seal) ? { kind: "untrusted", why: "只剩发布凭据，备份本体已经不在了" } : { kind: "absent" };
+  }
+  let mark: BackupSeal;
+  try {
+    mark = JSON.parse(readFileSync(seal, "utf8")) as BackupSeal;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return {
+      kind: "untrusted",
+      why: code === "ENOENT"
+        ? "它没有发布凭据（多半是旧版本直接以正式名字开写留下的，完整性无从核验）"
+        : `发布凭据读不出来（${(error as Error).message}）`,
+    };
+  }
+  if (mark.generation !== SEAL_GENERATION) {
+    return { kind: "untrusted", why: `发布凭据的代次是 ${mark.generation}，这个版本认不了` };
+  }
+  if (mark.of !== where) return { kind: "untrusted", why: `发布凭据说它是 ${mark.of} 的，不是这一份的` };
+  if (mark.bytes !== content.byteLength) {
+    return { kind: "untrusted", why: `凭据说 ${mark.bytes} 字节，盘上是 ${content.byteLength} 字节` };
+  }
+  const digest = createHash("sha256").update(content).digest("hex");
+  if (mark.sha256 !== digest) return { kind: "untrusted", why: "内容的校验值跟凭据不符" };
+  return { kind: "sealed" };
+}
+
+/**
+ * 信不过的那一份:**挪到一边,不删**。
+ *
+ * 为什么不直接覆盖:它可能是这条 trace 更早那一版的唯一残片,哪怕残缺也不该由 ash 替用户
+ * 销毁(第 1 轮审查发现 2:「不能静默覆盖或直接信任」)。为什么不原地拒绝整轮迁移:那会让
+ * 盘上带着这种半成品的用户永远迁不动,而挪开之后这一轮照样能留下一份**可核验**的完整原文。
+ */
+function setAsideBackup(backup: string, why: string, where: string): string | null {
+  const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
+  const seal = `${backup}${TRACE_SEAL_SUFFIX}`;
+  const moves: [string, string][] = [];
+  for (const from of [backup, seal]) {
+    if (!existsSync(from)) continue;
+    const to = `${from}.untrusted-${stamp}`;
+    // 挪到的那个名字跟来源同一个父目录,所以归属跟写集里那几项是同一个答案 —— 但判一次
+    // 不费什么,④ 那条自保不靠「应该是同一个答案」立着。
+    if (!withinResource(RUNS_DIR, to)) {
+      return `${where}：原文备份信不过（${why}），而挪开它的落点 ${to} 不在本次隔离资源集里 —— 整份不动`;
+    }
+    moves.push([from, to]);
+  }
+  try {
+    for (const [from, to] of moves) renameSync(from, to);
+  } catch (error) {
+    return `${where}：原文备份信不过（${why}），挪开它又失败了（${(error as Error).message}）—— `
+      + "整份不动。要继续,请自己确认那份 .pre-usage-repair 是什么再处理它。";
+  }
+  console.warn(`[ash] ${where}：原文备份信不过（${why}）—— 已挪到 ${moves[0]?.[1] ?? "（已不在）"} 留着，`
+    + "这一轮另写一份带发布凭据的。");
+  return null;
+}
+
+/** 先把备份写满(fsync)、再发布它的凭据。两步都独占创建,中途死掉留下的就是「不信」那一档。 */
+function publishBackup(backup: string, text: string, mode: number, where: string): string | null {
+  const refused = createExclusive(backup, text, mode, { fsync: true });
+  if (refused) return `${where}：留不下原文备份 —— ${refused}`;
+  const seal: BackupSeal = {
+    generation: SEAL_GENERATION, of: where, bytes: Buffer.byteLength(text),
+    sha256: createHash("sha256").update(text).digest("hex"), at: new Date().toISOString(),
+  };
+  const sealed = createExclusive(`${backup}${TRACE_SEAL_SUFFIX}`, `${JSON.stringify(seal)}\n`, mode, { fsync: true });
+  // 凭据没发出去 = 这份备份核验不了。刚写下的那份自己收掉,别在盘上再添一个半成品。
+  if (sealed) {
+    discard(backup);
+    return `${where}：原文备份的发布凭据写不出来 —— ${sealed}`;
+  }
+  return null;
+}
+
 /** 落盘（临时文件 + rename）。成功返回 null，失败返回说明。 */
 export function writePreparedTrace(item: PreparedTrace): string | null {
   const where = `${item.rewrite.taskId}/${item.rewrite.sessionId}`;
@@ -223,9 +340,16 @@ export function writePreparedTrace(item: PreparedTrace): string | null {
     // 留下一份已经存在、却只有开头几十个字节的文件；重跑只看 existsSync 就跳过它，于是第二次迁移
     // 改账成功、而承诺过的那份完整原文恢复材料已经永久丢了（第 3 轮复核 F3 实测 460 → 40 字节）。
     const backup = `${item.path}${TRACE_BACKUP_SUFFIX}`;
-    if (!existsSync(backup)) {
-      const refused = createExclusive(backup, item.original, mode, { fsync: true });
-      if (refused) return `${where}：留不下原文备份 —— ${refused}`;
+    // **「文件在」不等于「它完整」**:只有带着有效发布凭据的那一份才算已经履行过
+    // (第 1 轮审查发现 2)。信不过的挪开留着,再写一份带凭据的。
+    const seen = inspectBackup(backup, where);
+    if (seen.kind === "untrusted") {
+      const refused = setAsideBackup(backup, seen.why, where);
+      if (refused) return refused;
+    }
+    if (seen.kind !== "sealed") {
+      const refused = publishBackup(backup, item.original, mode, where);
+      if (refused) return refused;
     }
     const occupied = createExclusive(temp, item.next, mode);
     if (occupied) return `${where}：写不出临时文件 —— ${occupied}`;

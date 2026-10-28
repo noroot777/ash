@@ -34,10 +34,11 @@
 // Run: npm -w server run test:usage
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dirname, join as joinPath } from "node:path";
+import { basename, dirname, join as joinPath } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TokenUsage } from "@ash/shared";
 
@@ -58,7 +59,7 @@ const fileOf = (name: string) =>
 
 if (!scenario) {
   const scenarios = [...ISOLATION_SCENARIOS, "uncertain", "gate", "drift", "identity", "rollback",
-    "quarantine", "barrier", "recover"];
+    "quarantine", "barrier", "recover", "stale-backup"];
   const declared = readFileSync(isolation, "utf8").match(/\bSCENARIOS = \[(.*?)\]/s)?.[1] ?? "";
   for (const name of ISOLATION_SCENARIOS) {
     assert.ok(declared.includes(`"${name}"`), `${isolation} 里没有场景 ${name} —— 两份清单漂了`);
@@ -71,7 +72,7 @@ if (!scenario) {
   console.log("claude 回填迁移协议验证通过：资源成套绑定且归属可证、路径规范化后再比、写集按真实"
     + "落点判、维护锁按资源键取满、取锁走原子占有协议且在线登记在临界区内复查、活着的占有者不按"
     + "墙钟抢、跳过项双重闸、人工屏障三态且不可读时整盘拒绝、未知范围单调只有人能消、中途失败"
-    + "整体回滚、硬杀可证明恢复、回滚失败明确拒绝重跑");
+    + "整体回滚、硬杀可证明恢复、回滚失败明确拒绝重跑、信不过的旧备份挪开留着再重写");
   process.exit(0);
 }
 
@@ -313,6 +314,61 @@ async function dataScenario(name: string) {
     assert.equal(final.committed, true);
     assert.equal(await inputOf("q1"), 200);
     assert.equal(await inputOf("q2"), 200);
+  }
+
+  if (name === "stale-backup") {
+    // 第 1 轮审查发现 2:旧版本直接以正式名字开写备份,磁盘满会在盘上留下一份名字完全正式、
+    // 内容只有开头几十字节的半成品。升级上来的用户盘上就带着它,而 `existsSync` 一看就跳过
+    // —— 于是迁移照旧成功、库值被改,承诺过的那份完整原文却永久丢了(审查走真实 apply 实测
+    // 460 字节原文只剩 20 字节)。判据改成「有发布凭据、且逐项核得过」才算已经履行。
+    const { TRACE_BACKUP_SUFFIX } = await import("../src/claude-usage-trace.js");
+    const sealOf = (id: string) => `${tracePath(id)}${TRACE_BACKUP_SUFFIX}.seal`;
+    const backupOf = (id: string) => `${tracePath(id)}${TRACE_BACKUP_SUFFIX}`;
+    const asideOf = (id: string) => readdirSync(dirname(tracePath(id)))
+      .filter((entry) => entry.startsWith(`${basename(tracePath(id))}${TRACE_BACKUP_SUFFIX}`) && entry.includes(".untrusted-"));
+
+    await seed("s1", { thread: "t-s1", values: [100, 200] });
+    await seed("s3", { thread: "t-s3", values: [100, 200], offset: 2 });
+    await seed("s4", { thread: "t-s4", values: [100, 200], offset: 4 });
+    const before = new Map(["s1", "s3", "s4"].map((id) => [id, readFileSync(tracePath(id), "utf8")]));
+    // ① 旧版本留下的半成品:正式名字、没有凭据。
+    const stump = before.get("s1")!.slice(0, 20);
+    writeFileSync(backupOf("s1"), stump);
+    // ② 本版本写下的那种:凭据核得过 —— 它必须被**继承**,内容一个字节都不许被这一轮盖掉
+    //    (已经成功迁移过的历史备份可以合法地早于当前内容)。
+    const earlier = "EARLIER-ORIGINAL\n";
+    writeFileSync(backupOf("s3"), earlier);
+    writeFileSync(sealOf("s3"), `${JSON.stringify({
+      generation: 1, of: `${task}/s3`, bytes: Buffer.byteLength(earlier),
+      sha256: createHash("sha256").update(earlier).digest("hex"), at: at(0),
+    })}\n`);
+    // ③ 有凭据、但内容跟它说的不符(写完凭据之后被截断/被改过)—— 跟没凭据同一档。
+    writeFileSync(backupOf("s4"), before.get("s4")!.slice(0, 30));
+    writeFileSync(sealOf("s4"), `${JSON.stringify({
+      generation: 1, of: `${task}/s4`, bytes: Buffer.byteLength(before.get("s4")!),
+      sha256: createHash("sha256").update(before.get("s4")!).digest("hex"), at: at(0),
+    })}\n`);
+
+    const result = await applyClaudeUsageRepair(await planClaudeUsageRepair());
+    assert.equal(result.committed, true, "信不过的旧备份不该把整轮迁移卡死 —— 挪开它照样能留下完整原文");
+    for (const id of ["s1", "s3", "s4"]) assert.equal(await inputOf(id), 200, `${id} 的账该改成增量`);
+
+    for (const id of ["s1", "s4"]) {
+      const aside = asideOf(id);
+      assert.equal(aside.length, id === "s1" ? 1 : 2,
+        `${id}：信不过的那一份(连同它那张凭据)要挪到一边留着,不许被静默覆盖`);
+      const kept = readFileSync(join(dirname(tracePath(id)), aside.find((one) => !one.includes(".seal"))!), "utf8");
+      assert.equal(kept, before.get(id)!.slice(0, id === "s1" ? 20 : 30), "挪走的那份原封不动");
+      // 这一轮另写的那份:内容是真原文,而且凭据逐项核得过。
+      assert.equal(readFileSync(backupOf(id), "utf8"), before.get(id), `${id}：新备份必须是完整原文`);
+      const seal = JSON.parse(readFileSync(sealOf(id), "utf8")) as Record<string, unknown>;
+      assert.equal(seal.generation, 1);
+      assert.equal(seal.of, `${task}/${id}`);
+      assert.equal(seal.bytes, Buffer.byteLength(before.get(id)!));
+      assert.equal(seal.sha256, createHash("sha256").update(before.get(id)!).digest("hex"));
+    }
+    assert.deepEqual(asideOf("s3"), [], "凭据核得过的那一份不该被挪动");
+    assert.equal(readFileSync(backupOf("s3"), "utf8"), earlier, "核得过就继承,一个字节都不许重写");
   }
 
   if (name === "barrier") {
