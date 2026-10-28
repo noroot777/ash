@@ -21,7 +21,7 @@ import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync
 import { join } from "node:path";
 import type { AgentType, PersonalCliEnv, PersonalSkill } from "@ash/shared";
 import { DATA_DIR } from "../paths.js";
-import { ensureAshMcp } from "./user-cli-mcp.js";
+import { ensureAshMcp, hostAshMcpGaps } from "./user-cli-mcp.js";
 
 /** 个人配置目录的根。刻意放 data/ 下 —— 见文件顶部。 */
 export const USER_CLI_ROOT = join(DATA_DIR, "user-cli");
@@ -184,6 +184,23 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
 }
 
 /**
+ * 共用宿主 CLI 的那一档（含自用模式）：宿主配置里缺 ash MCP 时**出声，但一个字节都不改**。
+ *
+ * 边界见 `user-cli-mcp.ts` 开头那条：那些是用户自己的配置文件。但「不该改」不等于
+ * 「不该说」—— 2026-10-28 现场正是一台 `~/.codex/config.toml` 里从来没有过
+ * `[mcp_servers.ash]` 的机器：codex 任务干完活交不了卷、一律记 failed，一轮审查更是
+ * 跑满 35 分钟写完报告，最后才发现没有 `report_stage` 可调，而 ash 全程一言不发。
+ */
+function warnHostAshMcp(): void {
+  const gaps = hostAshMcpGaps();
+  if (!gaps.length) return;
+  console.warn("[ash] 这些 CLI 的宿主机配置里没有 ash MCP 登记，它们的 agent 交不了卷"
+    + "（没有 complete_task，干完的活会记 failed；派出去的审查跑完也给不出结论）：");
+  for (const line of gaps) console.warn(`  · ${line}`);
+  console.warn("  接法见 docs/install.md，或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
+}
+
+/**
  * 启动自检:隔离档下把每个人的个人配置目录补齐 ash MCP,补不上的**在日志里点名**。
  *
  * 为什么补做之外还要单独扫一趟:`ensureUserCliDir` 只在「有人起任务 / 打开设置页」时
@@ -196,7 +213,7 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
 export async function sweepPersonalAshMcp(): Promise<void> {
   // 动态 import:mode.ts / db 都在 auth 这一圈里绕回来,顶层导入会绕出一个环。
   const { isHostCliIsolated } = await import("./mode.js");
-  if (!(await isHostCliIsolated())) return;
+  if (!(await isHostCliIsolated())) return warnHostAshMcp();
   const { db } = await import("../db/index.js");
   const { users } = await import("../db/schema.js");
   const rows = await db.select({ id: users.id, name: users.name }).from(users);

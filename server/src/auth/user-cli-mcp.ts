@@ -123,6 +123,38 @@ export function hostAshMcp(agentType: string, hostHome: string = homedir()): Per
   return fail(`${agentType} 没有宿主级配置目录，这一问不适用`);
 }
 
+/** 宿主机上这两个 CLI 的用户级配置文件各在哪。 */
+const HOST_CLI_CONFIG: Record<string, (home: string) => string> = {
+  claude: (home) => join(home, ".claude.json"),
+  codex: (home) => join(home, ".codex", "config.toml"),
+};
+
+/**
+ * 宿主机上**用过、却没接 ash MCP** 的 CLI，返回给调用方去出声。
+ *
+ * 2026-10-28 现场：一台机器的 `~/.codex/config.toml` 里从来没有过 `[mcp_servers.ash]`
+ * （`codex mcp list` 只有 Codex 自带的四个）。于是那台 ash 上**每一个 codex 任务**都是
+ * 「活干完、交不了卷、记 failed」，而一轮审查更贵 —— 跑满 35 分钟、报告写完，最后一句
+ * 才是「当前未提供 report_stage 工具」。ash 从头到尾一个字都没说过。
+ *
+ * `sweepPersonalAshMcp` 早就为隔离档做了这件事（那一档的目录是 ash 自己建的，缺了直接
+ * 补）。宿主档缺的是**另一半**：那些文件是用户自己的，`user-cli-mcp.ts` 开头那条边界说得
+ * 很清楚，一个字节都不该动 —— 但「不该改」不等于「不该说」。
+ *
+ * 判据是**文件存在、里面没有** ——「这台机器上压根没装过 codex」不该报，不然每台只用
+ * claude 的机器启动都要看一行假警报。
+ */
+export function hostAshMcpGaps(hostHome: string = homedir()): string[] {
+  const gaps: string[] = [];
+  for (const [agentType, pathOf] of Object.entries(HOST_CLI_CONFIG)) {
+    const file = pathOf(hostHome);
+    if (!existsSync(file)) continue;                       // 这个 CLI 没在这台机器上用过
+    if (hostAshMcp(agentType, hostHome).configured) continue;
+    gaps.push(`${agentType}（${file}）`);
+  }
+  return gaps;
+}
+
 // ── claude:~/.claude.json 的 mcpServers ────────────────────────────────────
 
 function ensureClaudeAshMcp(dir: string, hostHome: string): PersonalAshMcp {
