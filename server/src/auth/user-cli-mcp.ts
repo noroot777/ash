@@ -65,21 +65,49 @@ export function ensureAshMcp(dir: string, agentType: string, hostHome: string = 
  * 而宿主那份 `~/.claude.json` 是用户自己的配置 —— 检查可以,写一个字都不行。
  */
 export function readAshMcp(dir: string, agentType: string): PersonalAshMcp {
+  const found = ashMcpRegistration(dir, agentType);
+  return found.state === "present" ? ok(found.serverName!) : fail(found.detail);
+}
+
+export type AshMcpRegistration = {
+  /** present=登记在 / absent=确实没有 / unknown=读不出来，别据此下结论 */
+  state: "present" | "absent" | "unknown";
+  serverName: string | null;
+  detail: string;
+};
+
+/**
+ * 同一个问题的**三态**版本。
+ *
+ * 为什么 `PersonalAshMcp` 那两态不够用：它把「确实没有登记」和「文件读不出来」一起记成
+ * `configured:false`，只有文案能把它们分开。设置页拿它显示没问题 —— 两种都该提示用户去看
+ * 一眼。但起跑前的预检要据此**拦下一整轮审查**，而拦错的代价是一条根本跑不起来的链，
+ * 所以这两种必须分得开，由调用方自己决定向哪边开（预检一律向放行开，见
+ * `ash-mcp-reachability.ts`）。
+ */
+export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegistration {
+  const none = (detail: string): AshMcpRegistration => ({ state: "absent", serverName: null, detail });
+  const dunno = (detail: string): AshMcpRegistration => ({ state: "unknown", serverName: null, detail });
   try {
     if (agentType === "claude") {
       const file = join(dir, ".claude.json");
       const doc = readJsonObject(file);
-      if (!doc) return fail(`${file} 解析不了`);
+      // 解析不了 ≠ 没登记：文件可能正被 CLI 写到一半，也可能是用户手工改坏了一个花括号。
+      if (!doc) return dunno(`${file} 解析不了`);
       const name = claudeServerName(doc);
-      return name ? ok(name) : fail("这个配置目录里没有 ash MCP 登记");
+      return name
+        ? { state: "present", serverName: name, detail: "" }
+        : none("这个配置目录里没有 ash MCP 登记");
     }
     if (agentType === "codex") {
       const name = codexAshMcpServerName(dir);
-      return name ? ok(name) : fail("这个配置目录里没有 ash MCP 登记");
+      return name
+        ? { state: "present", serverName: name, detail: "" }
+        : none("这个配置目录里没有 ash MCP 登记");
     }
-    return fail(`${agentType} 没有个人配置目录，这一问不适用`);
+    return dunno(`${agentType} 没有个人配置目录，这一问不适用`);
   } catch (e) {
-    return fail(`读 ash MCP 登记失败：${(e as Error).message}`);
+    return dunno(`读 ash MCP 登记失败：${(e as Error).message}`);
   }
 }
 

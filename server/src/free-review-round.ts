@@ -6,6 +6,7 @@
 // 本文件），`task-retry-turn.ts` 直接从这里取重跑入口，不用绕回去。
 import type { AgentType } from "@ash/shared";
 import { and, desc, eq } from "drizzle-orm";
+import { ashMcpReachability } from "./ash-mcp-reachability.js";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, projects, sessions, tasks } from "./db/schema.js";
@@ -126,6 +127,13 @@ export async function launchReviewRound(
   // 且必须关掉 freshSession —— 第 1 轮崩了的话它本来会新开一条空会话。
   opts: { resumeSessionId?: string; retry?: boolean } = {},
 ): Promise<{ resumed: boolean }> {
+  // 审查者交卷靠 ash MCP 的 report_stage，而那条登记在**它自己的 CLI 配置目录**里，
+  // ash 只能读、不能替它注入。缺了的话这一轮会完整跑完、报告也写得好好的，最后一步
+  // 才发现没有工具可调 —— 一轮审查动辄几十分钟、几百万 token（2026-10-28 现场）。
+  // 这一问起跑前就答得出来，所以在这儿拦，抛出去由三个调用点统一走 failReviewStart。
+  // 判据刻意保守（见 ash-mcp-reachability.ts）：只有确定拿不到才拦。
+  const reach = await ashMcpReachability(task.ownerUserId, run.agentType);
+  if (!reach.reachable) throw new Error(`审查者交不了卷：${reach.problem}`);
   await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   let cwd: string | undefined;

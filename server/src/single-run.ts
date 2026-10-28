@@ -35,6 +35,7 @@ import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./fre
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
+import { noteReviewerChannelGap } from "./review-channel-gap.js";
 import { afterSettlement, settleTaskStatus } from "./settle-status.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 import { markCliGoalStarted, persistRunGoal } from "./task-cli-state.js";
@@ -460,6 +461,14 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       !!doneEvent,
       executionFailed,
     );
+  }
+  // 审查旁路回合收尾了，却一次 ash MCP 都没调过：把原因说出来（review-channel-gap.ts）。
+  // **排在 afterSettlement 之后** —— 那一步里自由工作流才写下「未能正常给出结论，已停止
+  // 自动链」，这一句紧跟其后才读得通（先结果、后原因）。说不出来就什么都不说，绝不因此
+  // 影响这一轮的落位。
+  if (role === "reviewer") {
+    await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped })
+      .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
   }
   if (settled.note) {
     // 结算说明落成**会话旁注**（持久 system 行 + SSE），跟会话轮换旁注同一条道：
