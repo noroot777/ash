@@ -219,7 +219,7 @@ if (IS_WINDOWS) {
 
     // ④ 跨平台契约:start 幂等、restart 先杀旧再起新、stop 落地。走的是真实服务函数
     //    (全局 terminalSessions),不是上面的 manager。
-    const keep: RunnableCommand = { id: "keep", name: "keep alive", command: "Start-Sleep -Seconds 60", restartCommand: null };
+    const keep: RunnableCommand = { id: "keep", name: "keep alive", command: "Start-Sleep -Seconds 60", restartCommand: null, stopCommand: null };
     const liveKeep = () => terminalSessions.listCommandSessions()
       .filter((session) => session.projectId === "pcw" && session.commandId === "keep" && session.exitCode === null);
     const started = await startCommand("pcw", cwd, keep);
@@ -236,7 +236,7 @@ if (IS_WINDOWS) {
     assert.equal(liveKeep().length, 0);
 
     // ⑤ 占位符:取值由**服务端**填进脚本再跑;必填缺失原地 400 且不留会话。
-    const holder: RunnableCommand = { id: "holder", name: "带参命令", command: "Start-Sleep -Seconds {{秒=60}}", restartCommand: null };
+    const holder: RunnableCommand = { id: "holder", name: "带参命令", command: "Start-Sleep -Seconds {{秒=60}}", restartCommand: null, stopCommand: null };
     const req: RunnableCommand = { ...holder, command: "Start-Sleep -Seconds {{秒}}" };
     const missing = await startCommand("pcw2", cwd, req);
     assert.equal(missing.status, 400, "必填占位符没填就该原地拒绝");

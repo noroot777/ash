@@ -57,9 +57,13 @@ export interface ProjectServiceConfig {
    */
   restartCommand: string | null;
   /**
-   * 停止命令。空/null = 默认:杀掉启动会话的整个进程组(TERM→KILL,见 server/src/terminal.ts
-   * 的 terminate)。填了它就改成「先跑这段脚本,再确认启动会话退了」—— `docker compose up -d`、
-   * `pm2 start` 这类服务活在 ash 的进程树之外(启动脚本跑完自己就退了),光杀进程停不掉它。
+   * 停止命令。空/null = 默认**杀掉这次启动起来的进程**,两档:① 整个进程组(TERM→KILL,
+   * 见 server/src/terminal.ts 的 terminate);② 组空了就回到启动时打印过的本机端口上找人
+   * (server/src/service-ports.ts)—— 真·守护化的服务(双 fork + setsid)把 ppid/ctty/pgid
+   * 三条线索全切了,端口是它自报的、也是仅剩能杀到它的那条。
+   *
+   * 填了它就改成「先跑这段脚本,再确认启动会话退了」。两档都够不着的服务才需要它 ——
+   * `docker compose up -d` 这类连端口都未必打在本机(容器里、远端),ash 无从下手。
    *
    * **不支持占位符**:停的是已经起来的那一份,再弹一次收值框只会让人停错东西,所以这里直接拦
    * (parseServiceConfig),而不是等点停止时才 400。

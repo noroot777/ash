@@ -127,12 +127,18 @@ function withExitCodeBoundary(script: string): string {
   ].join("\n");
 }
 
-export function ptyEnvironment(): Record<string, string> {
+/**
+ * pty 的环境。`extra` 是**这一条会话**自己的记号(命令会话的 `ASH_LAUNCH_ID`):它会被这次
+ * 启动 fork 出来的每一个进程继承,双 fork + setsid 也洗不掉 —— 停止时据此核验「端口上坐着
+ * 的到底是不是这次起来的」(service-ports.ts 顶部)。
+ */
+export function ptyEnvironment(extra: Record<string, string> = {}): Record<string, string> {
   const env = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
   return {
     ...env,
+    ...extra,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
     ASH_TERMINAL: "1",

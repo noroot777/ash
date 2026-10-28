@@ -205,9 +205,11 @@ export const api = {
   // 跑什么永远以库里存的那条命令为准。
   startProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo; alreadyRunning?: boolean }> =>
     request(`/projects/${id(projectId)}/commands/${id(commandId)}/start`, json("POST", { values })),
-  stopProjectCommand: (projectId: string, commandId: string): Promise<{ stopped: boolean }> =>
+  // notice = 停下来了,但同组还有核不上归属、没敢杀的进程(服务端 StopVerdict 的 unresolved)。
+  // 不是报错(端口确实让出来了),但必须说一句 —— 不然「这次启动起来的东西都停了」就是谎报。
+  stopProjectCommand: (projectId: string, commandId: string): Promise<{ stopped: boolean; notice?: string }> =>
     request(`/projects/${id(projectId)}/commands/${id(commandId)}/stop`, json("POST", {})),
-  restartProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo }> =>
+  restartProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo; notice?: string }> =>
     request(`/projects/${id(projectId)}/commands/${id(commandId)}/restart`, json("POST", { values })),
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     request("/projects/check", json("POST", { repoPath })),

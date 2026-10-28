@@ -1,7 +1,12 @@
 // "detached":attach 的命令会话里启动脚本(PTY 组长)退了、它派生的服务还在进程组里跑
 // (daemonize 形状)。不能标成 ended —— 同屏状态栏正显示「运行中」,日志抽屉说「已退出」
 // 就是自相矛盾;整组死透才是 ended。
+import type { TerminalSessionInfo } from "../lib/api.ts";
+
 export type TerminalStatus = "starting" | "ready" | "reconnecting" | "detached" | "ended" | "error";
+
+/** 上一次停止留下的责任。口径在 lib/apiTypes.ts 的 TerminalSessionInfo.stop。 */
+type StopFactLike = TerminalSessionInfo["stop"];
 
 export type ProjectTerminalTab = {
   id: string;
@@ -25,6 +30,11 @@ export type ProjectTerminalTab = {
   attachSessionId?: string;
   /** attach tab:会话事实的镜像,由集中轮询维护,驱动状态点与正文说明的措辞。 */
   stoppedByUser?: boolean;
+  /**
+   * 上一次停止留下的责任。状态点只认活证据(见 attachStatusOf),但正文那句话要照实说 ——
+   * 「证明不到停净」的那一档如果照旧写「服务已停止」,就是拿一句谎话收尾(第 3 轮审查发现 1)。
+   */
+  stop?: StopFactLike;
   exitCode?: number | null;
 };
 
@@ -44,9 +54,21 @@ export function createTerminalTab(
   };
 }
 
-/** attach tab 的状态点表达**会话/服务的事实**(跑着/脚本退了服务在/死透),不是连接状态。 */
-export function attachStatusOf(session: { exitCode: number | null; groupAlive: boolean }): TerminalStatus {
-  return session.exitCode === null ? "ready" : session.groupAlive ? "detached" : "ended";
+/**
+ * attach tab 的状态点表达**会话/服务的事实**(跑着/脚本退了服务在/死透),不是连接状态。
+ * 「服务还在」的判据与常用命令弹层、服务端的 sessionRunning 一致 —— 进程归属之外,它打印
+ * 过的端口还有人听、或者上次停止留下了没核销的号,都算还没了结(否则同一条守护化的服务,
+ * 弹层说「运行中」、终端 tab 说「已结束」)。
+ */
+export function attachStatusOf(
+  session: { exitCode: number | null; groupAlive: boolean; portsAlive?: boolean; portUncertain?: boolean; running?: boolean; stop?: StopFactLike },
+): TerminalStatus {
+  if (session.exitCode === null) return "ready";
+  // 「还没了结」只认**还活着的**号:端口超额那种「证据不全」的 unresolved 一个号都举不出来,
+  // 它该在状态点上说「已结束」(确实没东西在跑了),那句「没能确认停净」由文案层去说。
+  const leftovers = session.stop?.kind === "unresolved" ? session.stop.pids.length : 0;
+  const running = session.running ?? (session.groupAlive || session.portsAlive === true || session.portUncertain === true || leftovers > 0);
+  return running ? "detached" : "ended";
 }
 
 export function createAttachTab(
@@ -57,6 +79,10 @@ export function createAttachTab(
     commandId: string | null;
     exitCode: number | null;
     groupAlive: boolean;
+    portsAlive?: boolean;
+    portUncertain?: boolean;
+    running?: boolean;
+    stop?: StopFactLike;
     stoppedByUser: boolean;
   },
   /** 恢复的交互 shell 用项目名 + 序号做标签,跟新建 shell 一个排法;命令日志用会话名。 */
@@ -73,6 +99,7 @@ export function createAttachTab(
     sessionId: session.id,
     attachSessionId: session.id,
     stoppedByUser: session.stoppedByUser,
+    stop: session.stop,
     exitCode: session.exitCode,
   };
 }
