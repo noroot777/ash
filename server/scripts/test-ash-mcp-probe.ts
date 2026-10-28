@@ -105,14 +105,23 @@ try {
     const warned: string[] = [];
     const realWarn = console.warn;
     console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
-    let res: unknown;
-    try { res = await ask(1_200); } finally { console.warn = realWarn; }
-    assert.equal(res, null, "B2：超时仍回到「问不出来」");
-    const hungPid = Number(readFileSync(pidFile, "utf8").trim());
-    let alive = true;
-    try { process.kill(hungPid, 0); } catch { alive = false; }
-    if (alive) { try { process.kill(hungPid, "SIGKILL"); } catch { /* 清场 */ } }
-    assert.equal(alive, false, "B2：包装先退出了，它起的查询照样必须被回收");
+    let res: Awaited<ReturnType<typeof probeCli>> = null;
+    let gone = false;
+    let hungPid = 0;
+    try {
+      res = await ask(1_200);
+      // 收尾走后台（不挡住返回），所以轮询等它做完。
+      hungPid = Number(readFileSync(pidFile, "utf8").trim());
+      for (let i = 0; i < 80 && !gone; i++) {
+        try { process.kill(hungPid, 0); await pause(100); } catch { gone = true; }
+      }
+    } finally { console.warn = realWarn; }
+    // 壳自己 `exit 3` 是一份**真实的结束状态**（`exit` 事件立刻就有），不是「问不出来」。
+    // 判据层对非零退出同样放行（askCodex：`res.code !== 0` → unknown），所以对外结论不变；
+    // 但这一层不该把一份真实的非零退出伪装成 null —— 那是第 4 轮 N1 反过来的那一半。
+    assert.ok(res !== null && res.code === 3, "包装自己的退出码要如实带回，非零交给判据层去解释");
+    if (!gone) { try { process.kill(hungPid, "SIGKILL"); } catch { /* 清场 */ } }
+    assert.ok(gone, "B2：包装先退出了，它起的查询照样必须被回收");
     assert.ok(!warned.some((w) => w.includes("收不干净")),
       "B2：执行单元已经空了就该当场确认 —— 收干净了还喊收不干净，说明判据或宽限有问题");
 
@@ -209,7 +218,58 @@ try {
     process.env.PATH = pathWas;
   }
 
-  // ── 4. ConfineRead 三档照既有消费者解释，「不说话」不等于「空」 ─────────────
+  // ── 4. 后代攥着输出管道：close 永远不来，答案不能因此丢掉 ──────────────────
+  // 第 6 轮真机诊断打出来的形状：垫片 `start /b` 起的后代继承了那两个管道并一直攥着，
+  // 于是 CLI 早就 rc=0 正常退出、stdout 也完整了，`close` 却永远不来 —— 上一版拿 close
+  // 当「结束了」，白白等到超时、把一份拿得到的答案当成「问不出来」放行（COLD_result=null
+  // 而 elapsedMs=10308 > timeout=8000）。判据因此换成 `exit`（进程退出），close 只用来
+  // 给输出收尾，来不来都不等。
+  {
+    const dir = join(stage, "pipe-held");
+    mkdirSync(dir, { recursive: true });
+    const pathWas = process.env.PATH;
+    process.env.PATH = `${dir}${delimiter}${pathWas ?? ""}`;
+    const pidFile = join(dir, "holder.pid");
+    const hang = join(dir, "hang.mjs");
+    writeFileSync(hang,
+      'import { writeFileSync } from "node:fs";\n'
+      + `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n`
+      + 'setInterval(() => {}, 1000);\n');
+    // 后代**不重定向**：它继承壳的 stdout/stderr 并一直活着，close 因此被无限推迟。
+    if (process.platform === "win32") {
+      writeFileSync(join(dir, "codex.cmd"),
+        `@echo off\r\nstart /b "" "${process.execPath}" "${hang}"\r\n`
+        + `:wait\r\nif not exist "${pidFile}" (ping -n 2 127.0.0.1 >nul & goto wait)\r\n`
+        + 'echo []\r\nexit /b 0\r\n');
+    } else {
+      const f = join(dir, "codex");
+      writeFileSync(f,
+        `#!/bin/sh\n"${process.execPath}" "${hang}" &\n`
+        + `while [ ! -f "${pidFile}" ]; do sleep 0.05; done\n`
+        + "echo '[]'\nexit 0\n");
+      chmodSync(f, 0o755);
+    }
+    const t0 = Date.now();
+    const res = await probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, 6_000);
+    const took = Date.now() - t0;
+    assert.ok(res, "进程退出了、答案也写完了，不能因为 close 不来就把它当成「问不出来」");
+    assert.equal(res!.code, 0, "退出码要带回来");
+    assert.match(res!.stdout, /\[\]/, "答案要完整");
+    assert.ok(took < 5_000, `不该等到超时才返回（${took}ms）—— close 被攥着管道的后代推迟了`);
+
+    // 收尾照旧要把那个攥管道的后代收掉。
+    const holder = Number(readFileSync(pidFile, "utf8").trim());
+    let gone = false;
+    for (let i = 0; i < 80 && !gone; i++) {
+      try { process.kill(holder, 0); await pause(100); } catch { gone = true; }
+    }
+    if (!gone) { try { process.kill(holder, "SIGKILL"); } catch { /* 清场 */ } }
+    assert.ok(gone, "攥着管道的后代同样要被收掉");
+
+    process.env.PATH = pathWas;
+  }
+
+  // ── 5. ConfineRead 三档照既有消费者解释，「不说话」不等于「空」 ─────────────
   // 判据抄的是 cleanup-result.ts 的 confinedResidue：absent 不说话、unqueryable 不说话、
   // 只有 whole-run 的空才构成证明。上一版把 absent 和 since-enroll 的空都读成「已回收」，
   // 于是 Windows 冷启动那次泄漏连警告都没打（第 5 轮 B1）。
@@ -239,7 +299,7 @@ try {
       "成员还活着就是还有残留");
   }
 
-  // ── 5. 门闩：归属没建成之前，CLI 一条指令都不准执行 ────────────────────────
+  // ── 6. 门闩：归属没建成之前，CLI 一条指令都不准执行 ────────────────────────
   // 这是第 6 轮审查 B1 的根因修复点，也是**本机唯一能真正鉴别**它的地方：门闩壳是跨平台的
   // node 代码，Windows 真机那条路（Job Object 建不成 → 收壳 → 不探测）在 macOS 上跑不出来
   // （圈定如实弃权），但「没开门就不准启动目标」这条不变量在哪都一样硬。
@@ -322,7 +382,23 @@ try {
 
     assert.match(code, /if \(!confine\) return null;/,
       "Windows 上圈开不出来必须直接回「问不出来」，不准退回直接起 CLI（第 6 轮 B1）");
-    assert.match(code, /confine\.read\(\)\.kind === "members"/,
+    // **钉函数体里有哪几件事，不钉它们写成什么样。** 这一轮和上一轮各被形状断言咬过一次：
+    // 钉 `return gone ?? byClose`、钉 `confine.read().kind === …` 的那两条，实现一换写法就
+    // 恒红，而恒红的断言钉不住任何东西。
+    const fnBody = (src: string, head: string): string => {
+      const at = src.indexOf(head);
+      assert.ok(at >= 0, `${head} 不见了`);
+      const end = src.indexOf("\n}", at);
+      return src.slice(at, end > 0 ? end : undefined);
+    };
+    assert.match(code, /confirmHeld\(/, "开门之前必须确认归属，不能直接 open");
+    const confirm = fnBody(code, "async function confirmHeld");
+    assert.match(confirm, /enroll\(pid\)/, "确认归属要先 enroll");
+    // enroll 写的是 Node stream，read() 内部 Atomics.wait 会把事件循环堵死 —— 中间不把那次
+    // 写等出去，hold 请求根本发不出去（真机实测：第一次碰巧成功，之后是 absent）。
+    assert.match(confirm, /await wait\(HOLD_FLUSH_MS\)/,
+      "enroll 之后必须把那次异步写等出去（第 6 轮真机）");
+    assert.match(confirm, /kind === "members"/,
       "enroll 答 true 只说明请求发出去了 —— 必须读到 members 才算圈真的建成");
     assert.match(code, /await settleUnit\([^)]*"timeout"\)/,
       "超时路径必须**等**收尾做完才说「问不出来」");

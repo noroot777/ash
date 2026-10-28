@@ -60,12 +60,48 @@ export interface ProbeResult {
 
 /** 单次探测最多收这么多输出。只读子命令的正常输出远小于此，超了说明问错了东西。 */
 const MAX_OUTPUT = 8 * 1024 * 1024;
-/** 下刀之后给它多久咽气。两轮都没咽就如实上报，不再干等。 */
+/** 下刀之后给它多久咽气。预算用完还证不了空就如实上报，不再干等。 */
 const REAP_GRACE_MS = 3_000;
+/**
+ * 进程退出之后，再给输出这么久到齐。
+ *
+ * **判「结束了」用 `exit`，不用 `close`** —— `close` 等的是所有管道都关闭，而垫片
+ * `start /b` 起的后代会继承那两个管道、把它们一直攥着：那时进程早退出了、答案也早写完了，
+ * close 却永远不来。第 6 轮真机诊断里这条形状让一次本来成功的探测（CLI rc=0、stdout 完整）
+ * 白白等到超时、被当成「问不出来」。所以 exit 之后只给输出一个短窗口，不赌 close 会来。
+ */
+const OUTPUT_DRAIN_MS = 150;
 /** 开门前收壳时，确认它真的死了的轮询上限。壳没有后代，这一步很快。 */
 const SHELL_REAP_MS = 2_000;
+/**
+ * `enroll` 之后、问「圈建成没有」之前，先等这么久。
+ *
+ * **这段等待是在等一次异步写落地，不是保险起见的 sleep。** `Confinement.enroll` 在 Windows
+ * 上是往常驻守圈进程的 stdin 写一行 —— Node stream 的写入真正进管道发生在事件循环的 poll
+ * 阶段，而 `setTimeout(0)` 的回调在 timers 阶段，**可能还赶在那次 pending write 前面**
+ * （真机实测：`wait(0)` 不够，`sleep(400)` 就成）。而紧跟其后的 `read()` 内部用
+ * `Atomics.wait` 同步等就绪文件，一旦进去就把事件循环整段堵死，那一行再也发不出去。
+ *
+ * 基线那一侧没有「请求已送达」的回执（`enroll` 的 true 只代表 `stdin.write` 没抛），所以
+ * 这边只能用时间兜，并给一次重试 —— **这一条因此是时序敏感的**，真机上 300ms 有时够有时
+ * 不够（`read()` 自己又会同步起一次 PowerShell 把事件循环堵上 1~1.5 秒）。彻底解掉要给
+ * `enroll` 加一个可 await 的送达回执，那是基线那一侧的改动。
+ *
+ * 等够一点反而更快：ready 凭据先落地的话，`read()` 内部的 `settleHeld` 当场就返回，省掉
+ * 它那 2.5 秒的等待。门闩壳就在等开门，这段等待不占任何别的东西。
+ */
+const HOLD_FLUSH_MS = 500;
 
+/** 赛跑用的等待：**unref** —— 这个 timer 不该把 server 的事件循环拖住不退。 */
 const delay = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms).unref?.(); });
+/**
+ * 收尾用的等待：**不 unref**，因为收尾必须真的走完。
+ *
+ * 用 unref 的那个会漏：被探测的进程一被收掉，它的 handle 全部释放、事件循环当场就空了，
+ * unref 的 timer 从此永不触发 —— 收尾卡在半路，连那句「收不干净」都喊不出来
+ * （实测：回归跑出 `unsettled top-level await`）。
+ */
+const wait = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
 
 /**
  * 这个执行单元此刻的残留读数。**`null` = 这几台设备都没给出结论**，不是「空」。
@@ -121,14 +157,14 @@ export function unitResidue(
  *     （`dispose` 的契约是「调用方已经判空」，它自己只交还句柄、不杀成员；成员还在时撤掉
  *     身份等于把唯一还能查回去的线索丢了）。
  *
- * **`close` 不再是任何一条路上的证据**（第 6 轮审查第 4 点）：后代不持有管道时它来得更早，
- * 持有时它根本不来。它只用来决定「还要不要再等一轮宽限」。
+ * **`close` 不参与任何一条路**（第 6 轮审查第 4 点）：后代不持有管道时它来得更早，持有时它
+ * 根本不来。这里连「提前醒来」都只认 `exit`（进程退出），close 一次都不问。
  */
 async function settleUnit(
   child: ChildProcess,
   confine: Confinement | null,
   gated: boolean,
-  closed: Promise<unknown>,
+  exited: Promise<unknown>,
   why: "timeout" | "ended",
 ): Promise<void> {
   const pid = child.pid;
@@ -160,7 +196,7 @@ async function settleUnit(
   const deadline = Date.now() + REAP_GRACE_MS * 2;
   let first = true;
   while (Date.now() < deadline) {
-    await (first ? Promise.race([closed, delay(step)]) : delay(step));
+    await (first ? Promise.race([exited, wait(step)]) : wait(step));
     first = false;
     if (unitResidue(pid, confine, gated) === "gone") { confine?.dispose(); return; }
     killTree(pid, "SIGKILL");
@@ -189,12 +225,35 @@ async function discardShell(pid: number | undefined, confine: Confinement | null
   killTree(pid, "SIGKILL");
   for (let waited = 0; waited < SHELL_REAP_MS; waited += 50) {
     if (!isPidRunning(pid)) { confine?.dispose(); return; }
-    await delay(50);
+    await wait(50);
   }
   // 壳自己都收不掉（极少见）：按契约不撤身份，交给上面那段警告的同一条规矩。
   console.warn(
     `[ash] ash MCP 预检的门闩壳（pid=${pid}）没收掉；这次的执行单元身份保留着`,
   );
+}
+
+/**
+ * 圈到底建成没有。**唯一算数的凭据是读到 `members`**（那说明 `OpenJobObject` 查得到这个
+ * 名字，也就是守圈进程真的 `CreateJobObject` + `Assign` 成功了）；`enroll` 答 true 只表示
+ * hold 请求写进了它的 stdin。
+ *
+ * **enroll 之后必须先把那次写等出去再问**，为什么见 `HOLD_FLUSH_MS`。真机实测（第 6 轮）：
+ * 不等的话一个进程里第一次碰巧成功（管道刚建，写入走同步路径），之后每一次都是 `absent`,
+ * 于是 Windows 上第二次及以后的预检全都退化成「不探测、直接放行」。
+ */
+async function confirmHeld(confine: Confinement, pid: number): Promise<boolean> {
+  if (!confine.enroll(pid)) return false;
+  for (let round = 0; round < 2; round++) {
+    await wait(HOLD_FLUSH_MS);
+    const read = confine.read();
+    if (process.env.ASH_PROBE_DIAG) {
+      console.warn(`[diag] id=${confine.id} round=${round} kind=${read.kind}`
+        + (read.kind === "members" ? `:${read.members.length}` : `/${read.why}`));
+    }
+    if (read.kind === "members") return true;
+  }
+  return false;
 }
 
 /**
@@ -262,19 +321,18 @@ export async function probeCli(
   child.stderr?.on("data", (c: string) => { stderr = take(stderr, c); });
 
   let spawnFailed = false;
-  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+  // **`exit` 是「它结束了」，`close` 是「管道都关了」** —— 后者会被攥着管道的后代无限推迟
+  // （见 OUTPUT_DRAIN_MS 那段）。判据一律用前者。
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("error", () => { spawnFailed = true; resolve({ code: null, signal: null }); });
-    child.once("close", (code, signal) => { resolve({ code, signal }); });
+    child.once("exit", (code, signal) => { resolve({ code, signal }); });
   });
+  const piped = new Promise<void>((resolve) => { child.once("close", () => { resolve(); }); });
 
   // ── 门闩：确认归属建成之后才开门 ─────────────────────────────────────────
   let gated = false;
   if (gate && confine) {
-    // `enroll` 的 true 只说明 hold 请求发出去了；真凭据是 `read()` 读到 `members`
-    // ——那一步内部会等守圈进程 assign 成功后写下的 ready 文件（`settleHeld`）。
-    const held = child.pid !== undefined
-      && confine.enroll(child.pid)
-      && confine.read().kind === "members";
+    const held = child.pid !== undefined && await confirmHeld(confine, child.pid);
     if (!held) {
       await discardShell(child.pid, confine);
       gate.cleanup();
@@ -286,16 +344,19 @@ export async function probeCli(
 
   // 计时从**开门**算起：timeoutMs 是给 CLI 的，不该被确认归属那一步（起一次 PowerShell）吃掉。
   const raced = await Promise.race([
-    closed.then((end) => ({ timedOut: false as const, end })),
+    exited.then((end) => ({ timedOut: false as const, end })),
     delay(timeoutMs).then(() => ({ timedOut: true as const, end: null })),
   ]);
 
   // 超时：**等收尾做完**才说「问不出来」。
   if (raced.timedOut) {
-    await settleUnit(child, confine, gated, closed, "timeout");
+    await settleUnit(child, confine, gated, exited, "timeout");
     gate?.cleanup();
     return null;
   }
+
+  // 进程已经结束，给输出一个短窗口到齐。close 来了就提前走，不来也不等（后代可能攥着管道）。
+  await Promise.race([piped, wait(OUTPUT_DRAIN_MS)]);
 
   // 结束状态：门闩之下壳的退出码恒 0，CLI 的真实结果在盘上（见 ash-mcp-gate.ts 的说明）。
   // **被信号打断的不是一份答案**：上一版 `code ?? 0` 把「被杀」读成「成功退出 rc=0」，
@@ -313,7 +374,7 @@ export async function probeCli(
   // **不挡住返回**：Windows 那边圈的读数和下刀是同步 PowerShell，摆在派审请求的等待路径上
   // 会把主服务拖住（第 5 轮审查 N1）。放到后台只解决「不拖住这次请求」这一半；它仍然占着
   // 事件循环，彻底解决要挪进 worker（第 6 轮审查 N1 仍挂着，本轮没做）。
-  void settleUnit(child, confine, gated, closed, "ended")
+  void settleUnit(child, confine, gated, exited, "ended")
     .catch(() => { /* 收尾自己会喊 */ })
     .finally(() => { gate?.cleanup(); });
 
