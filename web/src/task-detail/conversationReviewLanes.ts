@@ -2,6 +2,7 @@ import { LEGACY_SYS_MARKER } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import { verifyNoteOf, type VerifyNoteMark } from "./conversationNotes.ts";
+import { monitorWakeInput } from "./monitorWakeModel.ts";
 
 export type ReviewLaneConclusion = "verified" | "verify_failed" | "inconclusive" | null;
 export type ReviewLaneSource = VerifyNoteMark["kind"];
@@ -74,7 +75,11 @@ export function reviewLaneMessageRoles(lane: ConversationReviewLane): Map<string
   return roles;
 }
 
-type ActiveLane = ConversationReviewLane & { reviewerSpoke: boolean };
+type ActiveLane = ConversationReviewLane & {
+  reviewerSpoke: boolean;
+  /** 这一轮的审查者在哪条会话上说话。自由派审是另开的 reviewer 会话，就地验证就是任务自己那条。 */
+  reviewerSessionId: string | null;
+};
 
 const STAGE_CONCLUSION = /验收阶段更新：.*（(verified|verify_failed)）/;
 const FREE_REVIEW_REPAIR_HANDOFF = /^【自由工作流审查未通过(?:\s*·[^】]+)?】/;
@@ -136,7 +141,22 @@ function matchingEnd(item: ConversationItem, lane: ActiveLane): boolean {
 }
 
 function closeBefore(lane: ActiveLane, item: ConversationItem): boolean {
-  if (item.kind === "user") return !item.bySystem && !item.isAnswer;
+  if (item.kind === "user") {
+    // 哨兵自动输入（系统代写）是**一次新输入**，不是旁注。它可能喂给审查者自己（审查者挂
+    // 回归哨兵 + pause_task 是常规做法，那一段必须留在卡里），也可能喂给执行者（审查已交卷、
+    // 哨兵结果把执行者叫醒）—— 后者一旦被折进卡里就跟着默认收起、彻底藏掉，而紧随的执行者
+    // 回合落在主流上还会标着「回复这次自动输入」，于是用户读到的是「回合说在回复一条看不见
+    // 的输入」（现场实测：本任务 06:52:37 那条投喂就藏在「第 1 轮审查」卡的展开区里）。
+    //
+    // 判据按**喂进了哪条会话**，跟 applyVerifySpans 的收口判据同一份：自由派审另开一条
+    // reviewer 会话，不是那条就是别人的输入；就地验证跟执行者共用会话，同一条就是审查者
+    // 自己在续跑，照旧留在卡里。两头都说不清时（审查者还没开口、或旧数据没有会话号）宁可
+    // 留在卡里：收错卡的代价是审查者后续的发言整段掉出卡外，比晚收一拍更难看懂。
+    if (monitorWakeInput(item) !== null) {
+      return !!lane.reviewerSessionId && !!item.sessionId && item.sessionId !== lane.reviewerSessionId;
+    }
+    return !item.bySystem && !item.isAnswer;
+  }
   if (item.kind === "agent") {
     // 就地验证搭在被验任务自己的会话上，区间内说话的就是审查者；轮次徽标要等 run 事件
     // 或旁注区间补上，所以在审查者开口前先放行（reviewerSpoke 门禁）。
@@ -166,6 +186,7 @@ function addToLane(lane: ActiveLane, item: ConversationItem): void {
   if (conclusion) lane.conclusion = conclusion;
   if (item.kind !== "agent" || item.reviewer?.round !== lane.round) return;
   lane.reviewerSpoke = true;
+  lane.reviewerSessionId ??= item.sessionId;
   lane.reviewerLabel ??= item.label;
   lane.reviewerModel ??= item.run?.model ?? null;
   lane.reviewerEffort ??= item.run?.reasoningEffort ?? null;
@@ -183,7 +204,7 @@ function finishLane(
     lane.reportAvailable = lane.complete && lane.reviewerSpoke;
     if (lane.reportAvailable && lane.round !== null) lane.report = { kind: "inline", round: lane.round };
   }
-  const { reviewerSpoke: _reviewerSpoke, ...finished } = lane;
+  const { reviewerSpoke: _reviewerSpoke, reviewerSessionId: _reviewerSessionId, ...finished } = lane;
   return { ...finished, items: finished.items.filter(visibleLaneItem) };
 }
 
@@ -320,6 +341,7 @@ export function conversationFeedRows(
         report: null,
         defaultCollapsed: false,
         reviewerSpoke: false,
+        reviewerSessionId: null,
       };
     }
     if (!active) {

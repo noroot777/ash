@@ -120,6 +120,7 @@ const USER_SIZE: SizeTable<UserItem> = {
   kind: () => 0,
   id: () => 0,
   at: () => 0,
+  sessionId: () => 0,
   isAnswer: () => 0,
   bySystem: () => 0,
   monitorWake: (value) => value ? JSON.stringify(value).length : 0,

@@ -103,7 +103,7 @@
     "test:conversation-notes-dom": "node scripts/test-conversation-notes-dom.mjs",
     "test:copy-feedback-dom": "node scripts/test-copy-feedback-dom.mjs",
     "test:system-notices-dom": "node scripts/test-system-notices-dom.mjs",
-    "test:reviewer-turn": "node --experimental-strip-types scripts/test-reviewer-turn.mjs && tsx scripts/test-review-presentation.tsx",
+    "test:reviewer-turn": "node --experimental-strip-types scripts/test-reviewer-turn.mjs && tsx scripts/test-review-presentation.tsx && node --experimental-strip-types scripts/test-review-lane-monitor-wake.mjs",
     "test:reviewer-turn-dom": "node scripts/test-reviewer-turn-dom.mjs",
     "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",
     "test:task-tree-preview": "node scripts/test-task-tree-preview.mjs",

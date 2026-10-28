@@ -262,6 +262,7 @@ export function useConversation(
           isAnswer: event.text.startsWith(ANSWER_PREFIX),
           bySystem: event.bySystem,
           monitorWake: event.monitorWake,
+          sessionId: event.sessionId,
           source: "server",
         });
         refreshSessions();

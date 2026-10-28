@@ -5,6 +5,7 @@ import { LEGACY_SYS_MARKER } from "@ash/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { verifyNoteOf, type VerifyNoteMark } from "./conversationNotes.ts";
 import type { ConversationItem } from "./conversationModel.ts";
+import { monitorWakeInput } from "./monitorWakeModel.ts";
 
 export type ReviewerMark = { round: number | null };
 
@@ -76,10 +77,25 @@ export function applyVerifySpans(items: ConversationItem[]): void {
   let span: (VerifyNoteMark & { sessionId?: string }) | null = null;
   let spoke = false;
   let concluded = false;
-  const close = () => { span = null; spoke = false; concluded = false; };
+  // 这一段里**最后说话的是哪条会话**：inline 是被验任务自己那条，自由派审是 reviewer 那条。
+  // 哨兵自动输入靠它分收件人（见下面 user 那一支）。
+  let lastSpeaker: string | undefined;
+  const close = () => { span = null; spoke = false; concluded = false; lastSpeaker = undefined; };
   for (const item of items) {
     // 【答复】是审查者提问的回答，答完还是这一轮；真人另起话头才算接管。
-    if (item.kind === "user") { if (!item.isAnswer) close(); continue; }
+    //
+    // 哨兵自动输入（系统代写）是同一类事：审查者挂 start_monitor + pause_task、等结果回来
+    // 续跑，是审查里跑回归的常规做法，服务端照样算在这一轮里（sessionRole=reviewer 回到当前
+    // round）。拿它收口，用户看到的就是徽标从「审查者 · 第 N 轮」退回「审查者」，自由派审
+    // 续跑后的那段结论还会整段掉出审查卡。
+    // 判据是**喂给了谁**：喂给这一段里正在说话的那条会话 → 还是这一轮；喂给别人（审查已
+    // 交卷、哨兵结果把执行者叫醒）→ 这一段确实走完了，照旧收口。
+    if (item.kind === "user") {
+      const resumesSpeaker = !!lastSpeaker && item.sessionId === lastSpeaker
+        && monitorWakeInput(item) !== null;
+      if (!item.isAnswer && !resumesSpeaker) close();
+      continue;
+    }
     if (item.kind === "event") {
       const mark = verifyNoteOf(item.text);
       if (mark) {
@@ -98,6 +114,7 @@ export function applyVerifySpans(items: ConversationItem[]): void {
     if (item.kind !== "agent" || !span) continue;
     if (span.kind === "inline" && span.sessionId && item.sessionId !== span.sessionId) { close(); continue; }
     spoke = true;
+    lastSpeaker = item.sessionId;
     if (!item.reviewer) {
       if (span.kind === "inline") item.reviewer = { round: span.round };
       continue;
