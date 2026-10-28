@@ -155,7 +155,7 @@ export function ScheduledMessageTray(props: TrayProps) {
       {error && <p role="alert">待发送消息：{error}</p>}
       {hasMessages && <section className={`scheduled-message-card${open ? " is-expanded" : ""}${ordered.length > 1 ? " has-stack" : ""}`} aria-label="排队输入">
         <header className="scheduled-message-summary">
-          <span className="scheduled-message-stack"><Stack size={17} aria-hidden="true" /></span>
+          <span className="scheduled-message-stack"><Stack size={15} aria-hidden="true" /></span>
           <div className="scheduled-message-summary-copy"><strong>排队输入 <span>{ordered.length}</span></strong>
             <small>{sources}<span> · </span>{timed === ordered.length ? "按设定时间发送" : "等待当前一轮结束"}</small></div>
           {counts.attention > 0 && <button type="button" className="scheduled-message-attention" onClick={() => {
