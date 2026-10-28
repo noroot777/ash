@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { BranchPlanView, TaskListItem } from "@ash/shared";
 import { api } from "../lib/api.ts";
+import { useWorkspaceCommitVersion } from "./workspaceCommit.ts";
 
 /**
  * `loading` = 还不知道（手上没有可显示的 view）；`refreshing` = 手上有 view，正在做一次
@@ -65,6 +66,7 @@ function load(taskId: string, entry: Entry, mode: "background" | "explicit" = "b
 }
 
 export function useBranchPlan(task: TaskListItem, enabled = true) {
+  const commitVersion = useWorkspaceCommitVersion(task.id);
   const active = enabled && !!task.useWorktree;
   const [state, setState] = useState<{ taskId: string; snapshot: Snapshot }>({ taskId: task.id, snapshot: empty });
   useEffect(() => {
@@ -91,10 +93,11 @@ export function useBranchPlan(task: TaskListItem, enabled = true) {
   }, [task.id, active]);
   useEffect(() => {
     const entry = active && entries.get(task.id);
-    if (!entry || (entry.sequence > 0 && entry.version === task.updatedAt)) return;
-    entry.version = task.updatedAt;
+    const version = `${task.updatedAt}:${commitVersion}`;
+    if (!entry || (entry.sequence > 0 && entry.version === version)) return;
+    entry.version = version;
     void load(task.id, entry, "explicit");
-  }, [task.id, task.updatedAt, active]);
+  }, [task.id, task.updatedAt, active, commitVersion]);
   const refresh = useCallback(async () => {
     const entry = active && entries.get(task.id);
     if (entry) await load(task.id, entry, "explicit");

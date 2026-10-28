@@ -55,10 +55,10 @@ for (const count of [1, 2]) {
 }
 const folded = renderTray(samples);
 assert.equal((folded.match(/class="scheduled-message-card/g) ?? []).length, 1);
-assert.equal((folded.match(/class="scheduled-message-row"/g) ?? []).length, 2);
+assert.equal((folded.match(/class="scheduled-message-row"/g) ?? []).length, 3);
 assert.match(folded, /展开全部 3 条/);
-assert.match(folded, /另有 1 条已收起/);
-assert.doesNotMatch(folded, /输入-2|scheduled-message-popover/);
+assert.doesNotMatch(folded, /另有|scheduled-message-popover/);
+assert.match(folded, /输入-2/, "所有用户消息都能不展开直接撤回");
 assert.match(renderTray([{ ...samples[0], sessionRole: "reviewer", attachments: ["/tmp/review-notes.txt"] }]), /查看完整输入：输入-0/);
 const equalTime = [samples[1], { ...samples[0], id: "z", sendAt: samples[1].sendAt }, { ...samples[0], sendAt: samples[1].sendAt }];
 assert.deepEqual(bySendTime(equalTime).map((message) => message.id), ["sample-0", "z", "sample-1"]);

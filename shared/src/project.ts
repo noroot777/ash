@@ -30,6 +30,7 @@ export interface Project {
   // 分支的工作区并暂存，目标分支 ref 一动不动，提交与否由人自己决定。这是**项目默认**，
   // 每次验收都能单独覆盖（验收确认框里那个勾）。
   acceptCommit: boolean;
+  acceptAutoCommit?: boolean;
   // 「验收前置命令」：点下验收通过之后、动 git 之前要跑的那条命令，rc=0 才合并。
   // null = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻而不是每轮收尾，
   // 见 shared/src/accept-gate.ts 顶部。

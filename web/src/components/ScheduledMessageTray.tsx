@@ -47,7 +47,7 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
     {message.agent && <span className="scheduled-message-agent">@{message.agent}</span>}
     <b>{onInspect ? <button type="button" className="scheduled-message-inspect" onClick={onInspect} aria-label={`查看完整输入：${summary}`}>{summary}</button> : summary}</b>
     {previewIndex !== undefined && exitCode !== null && <span className={`scheduled-message-preview-exit${exitCode !== 0 ? " is-attention" : ""}`}>exit {exitCode}</span>}
-    {!fromMonitor && steerable && onSteer && <button type="button" className="scheduled-message-guide" disabled={busy}
+    {!fromMonitor && !message.sessionRole && steerable && onSteer && <button type="button" className="scheduled-message-guide" disabled={busy}
       aria-label={`用最早的排队消息“${displayText || "附件"}”引导会话`} onClick={() => onSteer(message.id)}>
       {steering ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <ChatsCircle size={13} weight="duotone" aria-hidden="true" />}
       <span>{steering ? "引导中" : "引导会话"}</span>
@@ -75,6 +75,7 @@ export function ScheduledMessageTray(props: TrayProps) {
   const toggleRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
   const ordered = bySendTime(messages);
+  const previews = ordered.filter((message, index) => index < 2 || (!message.origin && !message.sessionRole));
   const counts = scheduledMessageCounts(ordered);
   const hasMessages = ordered.length > 0;
   const open = hasMessages && expanded;
@@ -184,8 +185,8 @@ export function ScheduledMessageTray(props: TrayProps) {
             {!ordered.some((message) => scheduledMessageMatches(message, filter)) && <p className="scheduled-message-empty">这个分类下没有待发送输入。</p>}
           </div>
           <footer className="scheduled-message-footer">按发送时间和入队顺序处理；筛选不改变顺序。</footer>
-        </div> : <div id={listId} className="scheduled-message-previews">{ordered.slice(0, 2).map((message, index) => row(message, index))}
-          {ordered.length > 2 && <small>另有 {ordered.length - 2} 条已收起 · 按原顺序等待处理</small>}</div>}
+        </div> : <div id={listId} className="scheduled-message-previews">{previews.map(message => row(message, ordered.indexOf(message)))}
+          {ordered.length > previews.length && <small>另有 {ordered.length - previews.length} 条系统输入已收起 · 按原顺序等待处理</small>}</div>}
       </section>}
       <span className="scheduled-message-announcement" role="status">{ordered.length} 条待发送消息{counts.attention > 0 && `，${counts.attention} 条需留意`}</span>
     </div>

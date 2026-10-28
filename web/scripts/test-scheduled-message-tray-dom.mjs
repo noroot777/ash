@@ -75,7 +75,8 @@ try {
   const expand = async () => { await page.getByRole("button", { name: /^展开全部/ }).click(); await list.waitFor(); await settle(); };
   await page.getByRole("button", { name: "展开全部 10 条" }).waitFor();
   assert.equal(await card.count(), 1);
-  assert.equal(await card.locator(".scheduled-message-row").count(), 2);
+  assert.equal(await card.locator(".scheduled-message-row").count(), 5);
+  assert.equal(await card.locator(".scheduled-message-withdraw").count(), 4, "哨兵不应挡住后面的用户消息操作");
   assert.doesNotMatch(await card.locator(".scheduled-message-previews").innerText(), /monitorId=|REGRESSION_FINISHED|@codex/);
   assert.match(await card.innerText(), /我的消息 4 · 哨兵 4 · 审查答复 2 · 含 2 条定时/);
   const collapsed = await geometry();

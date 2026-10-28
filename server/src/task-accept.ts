@@ -33,6 +33,7 @@ import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
+import { autoCommitAcceptanceWorkspace } from "./accept-workspace-commit.js";
 import { mergePreflight } from "./task-accept-merge-preflight.js";
 import { gateMergeSource } from "./accept-gate-state.js";
 import { acceptGateCheck, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
@@ -179,6 +180,12 @@ async function acceptTaskUnlocked(
   const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const cheap = await mergePreflight(task, gateProject, by, commitOverride);
   if (cheap) return cheap;
+  if (gateProject?.acceptAutoCommit) {
+    const autoCommitFailure = await autoCommitAcceptanceWorkspace(task, true);
+    if (autoCommitFailure) return autoCommitFailure;
+    const afterCommit = await mergePreflight(task, gateProject, by, commitOverride);
+    if (afterCommit) return afterCommit;
+  }
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority },

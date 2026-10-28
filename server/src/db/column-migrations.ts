@@ -313,6 +313,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE projects ADD COLUMN commands_config TEXT",
   // 验收合并完落不落提交（1 = 老行为，落提交）。见 db/schema.ts 同名列。
   "ALTER TABLE projects ADD COLUMN accept_commit INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE projects ADD COLUMN accept_auto_commit INTEGER NOT NULL DEFAULT 0",
   // 验收前置命令（点验收之后、动 git 之前跑，rc=0 才合并）。null = 不设门禁 = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_command TEXT",
   // 那一按**实际**拿什么当凭据放的行（passed / skipped / unset + 真的跑绿的那一次）。

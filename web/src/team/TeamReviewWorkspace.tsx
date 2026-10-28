@@ -23,6 +23,8 @@ import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { ACCEPT_GATE_STATUS_LABELS } from "@ash/shared/accept-gate";
 import { AcceptGateCardView } from "../review/AcceptGateCard.tsx";
 import { useAcceptGate } from "../review/useAcceptGate.ts";
+import { AcceptanceWorkspaceCommit } from "../review/AcceptanceWorkspaceCommit.tsx";
+import { useWorkspaceCommitVersion } from "../review/workspaceCommit.ts";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -352,6 +354,7 @@ export function AcceptanceControls({
       {/* 「合并后不提交」那一档的常驻状态与出路。它自己判要不要出现（不适用就渲染 null），
           所以每个有验收动作的表面都自动带上，不用各处再判一遍。 */}
       <PendingMergeCard task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
+      {!midGate && task.stage !== "accepted" && task.stage !== "merged" && <AcceptanceWorkspaceCommit key={task.id} task={task} notify={notify} disabled={archived || inFlight || busy} />}
       {!gateFallback && <AcceptGateCardView
         task={task}
         notify={notify}
@@ -431,6 +434,7 @@ export function AcceptanceControls({
 }
 
 function useReviewChanges(task: TaskListItem) {
+  const commitVersion = useWorkspaceCommitVersion(task.id);
   const [data, setData] = useState<ReviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -446,7 +450,7 @@ function useReviewChanges(task: TaskListItem) {
       (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
     ).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [task.id, task.updatedAt]);
+  }, [task.id, task.updatedAt, commitVersion]);
   return { data, loading, error };
 }
 

@@ -29,6 +29,7 @@ export const projects = sqliteTable("projects", {
   // 合进目标分支的工作区并暂存，目标分支的 ref 一个字节都不动，由人自己提交或丢弃。
   // 单次验收可以覆盖它（POST /tasks/:id/accept 的 commit 参数），这里只是默认值。
   acceptCommit: integer("accept_commit", { mode: "boolean" }).notNull().default(true),
+  acceptAutoCommit: integer("accept_auto_commit", { mode: "boolean" }).notNull().default(false),
   // 「验收前置命令」：点下验收通过之后、动 git 之前跑的那条命令，rc=0 才合并。
   // null/空 = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻，见
   // shared/src/accept-gate.ts 顶部；执行与判定在 server/src/accept-gate.ts。

@@ -281,7 +281,7 @@ export function CreateProjectDialog({ projects, reason = null, onClose, onCreate
 
         {/* 私有仓库的凭证得在**这一刻**给：项目设置页里那份要等项目建出来才有，而克隆
             正是最先撞上鉴权的一步。公开仓库留空即可。 */}
-        {httpsUrl && <>
+        {httpsUrl && <details className="create-project-advanced"><summary>私有仓库凭证（可选）</summary>
           <div className="create-project-row">
             <label><span>用户名（可选）</span><input
               value={cloneUser}
@@ -301,17 +301,11 @@ export function CreateProjectDialog({ projects, reason = null, onClose, onCreate
             填了就在克隆时用上，并存到新项目的 Git 凭证里，之后的拉取和推送都跟着用；只存在
             ash 自己的库里，不写进仓库。
           </p>
-        </>}
+        </details>}
       </>}
 
-      <label><span>项目名称</span><input
-        autoFocus={mode === "local"}
-        value={name}
-        onChange={(event) => applyName(event.target.value)}
-        placeholder="如 ash"
-      /></label>
-
       {mode === "local" && <>
+        <p className="create-project-mode-hint">先选择或填写工作目录，项目名称会自动填好。已有目录直接使用，新目录会在创建时建立。</p>
         <label><span>工作目录</span>{scopedHome
           ? <ScopedPathField
             home={scopedHome}
@@ -323,15 +317,25 @@ export function CreateProjectDialog({ projects, reason = null, onClose, onCreate
             notify={notify}
           />
           : <span className="path-field"><input
+            autoFocus
             className="mono"
             value={repoPath}
+            disabled={busy}
             onChange={(event) => applyPickedLocal(event.target.value)}
             placeholder={hostSamplePath(host, ["code", "project"])}
-          /><DirectoryPickerButton startIn={repoPath} onPick={applyPickedLocal} disabled={busy} notify={notify} /></span>}</label>
+          /><DirectoryPickerButton startIn={repoPath || projects[0]?.repoPath || host?.home || ""} onPick={applyPickedLocal} disabled={busy} notify={notify} /></span>}</label>
         {/* 拼出来的完整路径给一眼结果 —— 前缀那一截可能被输入框挤到省略号里，别让人猜。 */}
         {scopedHome && localPath && <p className="create-project-target"><span>创建在</span><code>{localPath}</code></p>}
         {homeDir && isAdmin && <FreePathToggle free={freePath} onToggle={toggleFreePath} disabled={busy} />}
       </>}
+
+      <label><span>项目名称</span><input
+        autoFocus={mode === "local" && !!scopedHome}
+        value={name}
+        disabled={busy}
+        onChange={(event) => applyName(event.target.value)}
+        placeholder="根据目录自动填写，也可以自定义"
+      /></label>
 
       {/* 地址不合法就先说地址 —— 路径体检那句在地址还没成形时说不出有用的话。
           克隆那侧路径已被项目占着时也只说这一条：磁盘那句（「这里已经是个仓库」）和它
@@ -358,7 +362,14 @@ export function CreateProjectDialog({ projects, reason = null, onClose, onCreate
         {mode === "clone"
           ? `这个目录已经登记为项目「${takenBy.name}」了；换个目录名`
           : `这个目录已经登记为项目「${takenBy.name}」了；继续创建会得到两个指向同一目录的项目`}
+        {mode === "local" && <Button variant="ghost" disabled={busy} onClick={() => onCreated(takenBy)}>打开已有项目</Button>}
       </div>}
+
+      {!canSubmit && !busy && !urlProblem && !verdict.blocked && !takenBy && <p className="create-project-mode-hint" role="status">
+        {mode === "clone" && !url.trim() ? "先填写 Git 仓库地址，再选择保存位置。"
+          : !probePath.trim() || (mode === "clone" && !parentPath.trim()) ? "请选择或填写工作目录。"
+            : !name.trim() ? "请填写项目名称。" : "请填写目录名。"}
+      </p>}
 
       {busy && mode === "clone" && <p className="create-project-note">正在克隆…大仓库可能要几分钟，别关这个窗口。</p>}
       {error && <div className="create-project-error" role="alert">{error}</div>}
