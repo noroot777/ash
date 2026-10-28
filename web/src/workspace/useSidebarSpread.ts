@@ -3,7 +3,7 @@ import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import type { TaskMemoDigest } from "@ash/shared/task-memo";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
-import { onTaskMemoWrite } from "../task-memos/taskMemoStore.ts";
+import { onTaskMemoWrite, taskMemoWrites } from "../task-memos/taskMemoStore.ts";
 import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type WorkerIndex } from "../lib/taskAttention.ts";
 import { scopeHasFilters, scopeTasks, visibleInScope, type TaskScope } from "./taskScope.ts";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
@@ -88,16 +88,29 @@ function fillByBatch<Row extends { taskId: string }, Value>(
   pick: (row: Row) => Value,
   write: (apply: (current: Map<string, Value>) => Map<string, Value>) => void,
   alive: () => boolean,
+  /**
+   * 这一格的「写入版本」。给了的话每批**发出前**逐任务记下，应答回来时某个任务的版本
+   * 已经变了就跳过那一格 —— 那次写一定已经推了一发只问它的新请求（onTaskMemoWrite），
+   * 等那一发才是真的新。少了这道边界，迟到的 bulk 应答会把界面倒退回旧摘要：第 3 轮
+   * 审查 N1 实测「显示第三版 → 旧 bulk 一到退回第二版，而库里仍是第三版」。
+   * 口径与 taskMemoStore 的读写边界同源（那边是整份快照，这里要逐任务）。
+   */
+  version?: (taskId: string) => number,
 ): void {
   write(() => new Map());
   void (async () => {
     for (let at = 0; at < ids.length; at += TASK_BATCH_LIMIT) {
-      const rows = await load(ids.slice(at, at + TASK_BATCH_LIMIT)).catch((): Row[] => []);
+      const batch = ids.slice(at, at + TASK_BATCH_LIMIT);
+      const sentAt = version && new Map(batch.map((taskId) => [taskId, version(taskId)]));
+      const rows = await load(batch).catch((): Row[] => []);
       if (!alive()) return;
       if (!rows.length) continue;
       write((current) => {
         const next = new Map(current);
-        for (const row of rows) next.set(row.taskId, pick(row));
+        for (const row of rows) {
+          if (sentAt && version && version(row.taskId) !== sentAt.get(row.taskId)) continue;
+          next.set(row.taskId, pick(row));
+        }
         return next;
       });
     }
@@ -192,7 +205,7 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
     // 任务的那个）。它是一次按索引的库查询，不摸盘，没有理由套追问的首批上限。
     //
     // 三列各走各的：谁先回来谁先填上，一列挂了不耽误另一列。
-    fillByBatch(ids, api.taskMemoDigests, (row) => row, setMemos, () => alive);
+    fillByBatch(ids, api.taskMemoDigests, (row) => row, setMemos, () => alive, taskMemoWrites);
     fillByBatch(ids, api.taskBodies, (row) => row.body, setBodies, () => alive);
     return () => { alive = false; };
   }, [idsKey, open, revision]);
@@ -204,9 +217,11 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
     if (!open) return;
     let alive = true;
     const stop = onTaskMemoWrite((taskId) => {
+      // 同一道版本边界：两次写各推一发，应答逆序返回时先发那一发带的是旧摘要。
+      const sentAt = taskMemoWrites(taskId);
       void api.taskMemoDigests([taskId])
         .then((rows) => {
-          if (!alive) return;
+          if (!alive || taskMemoWrites(taskId) !== sentAt) return;
           setMemos((current) => {
             const next = new Map(current);
             // 删到一条不剩的任务不在返回里（跟 /tasks/follow-ups 同一条规矩），那一格要跟着清掉。

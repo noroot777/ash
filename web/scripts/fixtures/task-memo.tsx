@@ -13,6 +13,8 @@ import type { TaskListItem, TaskFollowUp } from "@ash/shared";
 import type { TaskMemoDigest } from "@ash/shared/task-memo";
 import { InspectorHost, type InspectorDescriptor } from "../../src/inspector/index.ts";
 import { MemoSelectionScope } from "../../src/task-memos/MemoSelectionScope.tsx";
+import { setMemoEditDraft } from "../../src/task-memos/taskMemoDrafts.ts";
+import { addTaskMemo, editTaskMemo, useTaskMemos } from "../../src/task-memos/taskMemoStore.ts";
 import { TaskMemoInspector } from "../../src/task-memos/TaskMemoInspector.tsx";
 import { useTaskMemoTab } from "../../src/task-memos/useTaskMemoTab.tsx";
 import { SpreadPeekCard, SpreadRowCells, type SpreadRowContext } from "../../src/workspace/TaskSpread.tsx";
@@ -36,6 +38,60 @@ const DESCRIPTORS: readonly InspectorDescriptor<{ taskId: string }>[] = [
     render: (context) => <TaskMemoInspector taskId={context.taskId} notify={notice} />,
   },
 ];
+
+/** 绕过界面写进草稿的那几个字。测试脚本（mjs，没法 import 这份 TSX）里照抄同一串。 */
+const POKED = "第二版：绕开界面写进来的那几个字";
+
+/**
+ * 在途保存期间从**别的入口**改草稿。
+ *
+ * 界面上那个框这会儿是禁用的，但 store 的写入口不止面板一处（会话浮条也直接进 store），
+ * 所以「清草稿要带版本号」是独立的第二道防线 —— 只靠 disabled 的话，任何绕过界面的改动
+ * 都会在旧那一发回来时被清掉。这颗按钮就是那个绕过界面的入口。
+ */
+function DraftPoker() {
+  const { memos } = useTaskMemos(TASK_ID);
+  const first = memos.at(0);
+  if (!first) return null;
+  return (
+    <button
+      type="button"
+      data-testid="poke-draft"
+      onClick={() => setMemoEditDraft(TASK_ID, first.id, POKED)}
+    >
+      绕开界面改草稿
+    </button>
+  );
+}
+
+/** 连发两发编辑时各自的正文。测试脚本里照抄同一串。 */
+const RACE_A = "先发那一发：只过严格增长门";
+const RACE_B = "后发那一发：严格增长门和回归一起过";
+
+/**
+ * 绕开界面对同一条备忘连发两发编辑。
+ *
+ * 界面上发不出来（在途期间那颗按钮是禁用的，store 的占位也会拒第二发），但 store 的 API
+ * 是公开的 —— 这颗按钮测的是**应答逆序返回时谁赢**：后发的那一发先落地、先发的后到，
+ * 晚到那份带的是旧正文，不许拿它盖回去（第 3 轮审查 F1 的并发伴随项）。
+ */
+function RaceWriter() {
+  const { memos } = useTaskMemos(TASK_ID);
+  const first = memos.at(0);
+  if (!first) return null;
+  return (
+    <button
+      type="button"
+      data-testid="race-edits"
+      onClick={() => {
+        void editTaskMemo(TASK_ID, first.id, RACE_A).catch(() => undefined);
+        void editTaskMemo(TASK_ID, first.id, RACE_B).catch(() => undefined);
+      }}
+    >
+      绕开界面连发两发编辑
+    </button>
+  );
+}
 
 function PanelFixture() {
   const inspectors = useTaskMemoTab(DESCRIPTORS, TASK_ID);
@@ -61,6 +117,8 @@ function PanelFixture() {
             <MemoSelectionScope taskId={TASK_ID} openTab={openTab} notify={notice}>
               <p data-testid="team-said">调度台这一轮为什么把活拆成三份</p>
             </MemoSelectionScope>
+            <DraftPoker />
+            <RaceWriter />
           </nav>
         )}
       </InspectorHost>
@@ -72,16 +130,26 @@ function PanelFixture() {
 
 /** 比 TASK_BATCH_LIMIT(200) 多一个：最后那个排在第 201 位，只有真分批才问得到它。 */
 const FETCH_COUNT = 201;
+
+/** 写入按钮存的那条备忘。同上，测试脚本里照抄同一串。 */
+const FETCHED_MEMO = "第三版：刚刚存上的那条备忘";
 const FETCH_SCOPE: TaskScope = { kind: "project", projectId: "p" };
 
-function FetchFixture() {
+/**
+ * `?fetch=1` 的任务数可以用 `&n=` 调小。
+ *
+ * 默认 201 是为了「第 201 个也问得到」那条；而「迟到的旧批量摘要不许倒退」那条要的恰好
+ * 相反 —— 得让 bulk **一批就问完**，否则按批大小分不出哪一发是 bulk、哪一发是写入之后
+ * 只问一个任务的补发。
+ */
+function FetchFixture({ count }: { count: number }) {
   // updatedAt 递减 → hook 按它排序，`old-tail` 稳定落在最后一位。
   const tasks = useMemo<TaskListItem[]>(
-    () => Array.from({ length: FETCH_COUNT }, (_, at) => ({
-      ...task(at === FETCH_COUNT - 1 ? "old-tail" : `t${at}`),
+    () => Array.from({ length: count }, (_, at) => ({
+      ...task(at === count - 1 ? "old-tail" : `t${at}`),
       updatedAt: new Date(Date.parse(NEW) - at * 60_000).toISOString(),
     })),
-    [],
+    [count],
   );
   const spread = useSidebarSpread(tasks, FETCH_SCOPE, 0);
   // 铺开一次就行。`toggle` 是取反，StrictMode 把 effect 跑两遍就正好翻回收起态
@@ -92,7 +160,7 @@ function FetchFixture() {
     opened.current = true;
     spread.toggle();
   }, [spread]);
-  const tail = tasks[FETCH_COUNT - 1];
+  const tail = tasks[count - 1];
   const ctx: SpreadRowContext = { spread, peekAt: () => undefined, peekOut: () => undefined };
   return (
     <main style={{ padding: 16 }}>
@@ -100,9 +168,14 @@ function FetchFixture() {
       <div data-testid="row-old-tail" style={{ display: "flex", width: 560, gap: 8 }}>
         <SpreadRowCells task={tail} ctx={ctx} onOpen={() => undefined} />
       </div>
+      {/* 真写一条进 store：这一下推动写入版本，那一列据此补发只问这个任务的摘要。 */}
+      <button type="button" data-testid="write-memo" onClick={() => void addTaskMemo(tail.id, FETCHED_MEMO)}>
+        写一条备忘
+      </button>
     </main>
   );
 }
+
 
 // ── 侧边栏铺开那一格 ─────────────────────────────────────────────────────────
 
@@ -175,6 +248,10 @@ const query = new URLSearchParams(window.location.search);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {query.has("spread") ? <SpreadFixture /> : query.has("fetch") ? <FetchFixture /> : <PanelFixture />}
+    {query.has("spread")
+      ? <SpreadFixture />
+      : query.has("fetch")
+        ? <FetchFixture count={Number(query.get("n")) || FETCH_COUNT} />
+        : <PanelFixture />}
   </StrictMode>,
 );

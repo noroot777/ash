@@ -179,6 +179,45 @@ for (const id of ["t1", "t2"]) {
   assert.equal((await db.select().from(taskMemos).where(eq(taskMemos.taskId, "t1"))).length, 1);
 }
 
+// ── 正文还在上传时任务被删掉：那一行不许留下来 ──────────────────────────────
+{
+  await db.insert(tasks).values({
+    id: "t-gone", projectId: "p1", title: "t-gone", body: "",
+    status: "done", mode: "single", createdAt: now(), updatedAt: now(),
+  });
+  // 请求正文切成两段送。第一段送出之后 handler 已经过了「这个任务存在吗」那道检查、正停
+  // 在 `await bodyOf(c)` 上；这时把任务删掉（连它的备忘一起清，跟删任务那条路一样），再
+  // 把剩下半段送完。「先查后插」那种写法会在这里插进一行孤儿并回 201 —— 任务已经没了，
+  // 界面上再也打不开它（第 3 轮审查 N2）。
+  const payload = JSON.stringify({ body: "任务已经没了，这条不该留下" });
+  const encoder = new TextEncoder();
+  let push: (chunk: string) => void = () => undefined;
+  let done: () => void = () => undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      push = (chunk) => controller.enqueue(encoder.encode(chunk));
+      done = () => controller.close();
+    },
+  });
+  const pending = call("/tasks/t-gone/memos", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: stream,
+    // 流式请求体必须声明它（undici 的要求），否则 Request 根本构造不出来。
+    duplex: "half",
+  } as RequestInit);
+  push(payload.slice(0, 10));
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  await db.delete(taskMemos).where(eq(taskMemos.taskId, "t-gone"));
+  await db.delete(tasks).where(eq(tasks.id, "t-gone"));
+  push(payload.slice(10));
+  done();
+  const late = await pending;
+  assert.equal(late.status, 404, `任务没了就不该留下这条备忘：${JSON.stringify(late.body)}`);
+  const left = await db.select().from(taskMemos).where(eq(taskMemos.taskId, "t-gone"));
+  assert.equal(left.length, 0, `孤儿行必须当场收走，库里还剩 ${left.length} 条`);
+}
+
 await releaseTmpDb();
 rmSync(root, { recursive: true, force: true });
 console.log("✓ task memos");

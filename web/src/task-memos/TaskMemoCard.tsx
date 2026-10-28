@@ -25,8 +25,12 @@ export function TaskMemoCard({ memo, busy, highlight, draft, onDraft, onSave, on
    */
   draft: string | null;
   onDraft: (next: string | null) => void;
-  /** 存这条的新正文。**回 false = 没存上** —— 那时必须留在编辑态（见 save）。 */
-  onSave: (body: string) => Promise<boolean>;
+  /**
+   * 存这条的新正文。**退出编辑态不由这里决定** —— 草稿由共享层在写入收尾时按版本清掉
+   * （存上了、而且草稿还是提交那一版才清）。所以失败会留在框里，而在这一发飞着的时候
+   * 新写的那一版也不会被它顺手清走（第 3 轮 F1）。
+   */
+  onSave: (body: string) => Promise<void>;
   onDelete: () => void;
 }) {
   const editing = draft !== null;
@@ -65,12 +69,13 @@ export function TaskMemoCard({ memo, busy, highlight, draft, onDraft, onSave, on
     // 只在进/出编辑态时跑：打字途中重设选区会把光标踢到末尾。
   }, [editing]);
 
-  // 存上了才退出编辑态。断网 / 503 / 后端拒绝时继续留在框里，草稿一个字不动 ——
-  // 这一格的正文动辄几百字，把失败当成功退出去，effect 会立刻用旧正文覆盖掉它们。
+  // 存上了才退出编辑态（断网 / 503 / 后端拒绝时继续留在框里，草稿一个字不动 —— 这一格
+  // 的正文动辄几百字）。这里只管「没改动就直接退出」那条捷径：不发请求，也就不占在途
+  // 位置；真发出去的那一发，退不退出由共享层按草稿版本判（见 onSave）。
   const save = async () => {
     const text = (draft ?? "").trim();
     if (!text || text === memo.body) { onDraft(null); return; }
-    if (await onSave(text)) onDraft(null);
+    await onSave(text);
   };
 
   const edited = memo.updatedAt !== memo.createdAt;

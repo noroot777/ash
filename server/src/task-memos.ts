@@ -89,6 +89,8 @@ export function mountTaskMemoRoutes(api: Hono): void {
     const actor = actorOf(c);
     const taskId = c.req.param("id");
     // 横切闸只在多人模式下拦,而「往一个不存在的任务上写备忘」在哪种模式下都该 404。
+    // 这一下只是**快速否决**(省掉读正文和插入):它和下面的插入之间隔着 `await bodyOf`,
+    // 任务可以在这期间被删掉,所以真正的保证在那个 batch 里(见下)。
     const task = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) return c.json({ error: "任务不存在" }, 404);
     const parsed = readBody((await bodyOf<MemoBody>(c)).body);
@@ -102,14 +104,27 @@ export function mountTaskMemoRoutes(api: Hono): void {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    // 条数与插入在**同一个 batch** 里。「先 select count 再 insert」那种写法两步之间有
-    // 一个 await,并发两发都能读到 499、然后都插进去(第 2 轮审查 N3)。`db.batch` 在一个
-    // BEGIN…COMMIT 里同步跑完,中间没有让出点:第二条在插入**之后**数,超了就把刚插的
-    // 那行当场收走 —— 净效果是「没超才留得下」。范式同 claude-monitor-write.ts 的
-    // `writeIfTaskAlive`(那里也解释了为什么不用 `db.transaction`:它的函数体里每个 await
-    // 都会把同一条连接上别人的语句卷进来)。
-    const [, overflow] = await db.batch([
+    // 任务还在不在、条数有没有超,都跟插入在**同一个 batch** 里。
+    //
+    // 「先查再插」那种写法两步之间有 await,两种并发都漏:条数上并发两发都读到 499、
+    // 然后都插进去(第 2 轮审查 N3);存在性上**正文还在上传**的时候任务被删掉、清理也
+    // 跑完了,这一发随后照样插进去并回 201,那行就成了没有任何界面入口的孤儿(第 3 轮
+    // 审查 N2)。`db.batch` 在一个 BEGIN…COMMIT 里同步跑完,中间没有让出点:后两条在
+    // 插入**之后**判,不成立就把刚插的那行当场收走 —— 净效果是「两条都过才留得下」。
+    // 范式同 claude-monitor-write.ts 的 `writeIfTaskAlive`(那里也解释了为什么不用
+    // `db.transaction`:它的函数体里每个 await 都会把同一条连接上别人的语句卷进来)。
+    //
+    // 为什么不靠外键/级联:这个库一张表都没有声明外键(`grep -c 'references(' db/schema.ts`
+    // = 0,DDL 里也没有),sqlite 还默认 `foreign_keys=off`。为备忘一张表单开这条路,等于
+    // 让约束只在「记得开 pragma」时成立 —— 条件写入是和现状一致、且当场生效的那一种。
+    const [, orphan, overflow] = await db.batch([
       db.insert(taskMemos).values(row),
+      db.delete(taskMemos)
+        .where(and(
+          eq(taskMemos.id, row.id),
+          sql`not exists (select 1 from ${tasks} where ${tasks.id} = ${taskId})`,
+        ))
+        .returning({ id: taskMemos.id }),
       db.delete(taskMemos)
         .where(and(
           eq(taskMemos.id, row.id),
@@ -118,6 +133,8 @@ export function mountTaskMemoRoutes(api: Hono): void {
         // 回执就是「有没有被收走」——不 returning 的话还得再查一发才知道。
         .returning({ id: taskMemos.id }),
     ]);
+    // 任务没了那一条排在前面:它先把行收走,配额那条的 count 里也就不含它,不会再多报一个 400。
+    if (orphan.length) return c.json({ error: "任务不存在" }, 404);
     if (overflow.length) {
       return c.json({ error: `一个任务最多 ${TASK_MEMO_MAX_COUNT} 条备忘,先删几条再加` }, 400);
     }

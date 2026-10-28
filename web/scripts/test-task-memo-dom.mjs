@@ -8,6 +8,10 @@
 //  ⑤ 保存失败时草稿**留在框里**（几百字一条，把失败当成功退出去等于直接删掉它们）；
 //  ⑥ 写入成功之后一发更早的 GET 到达，不许把那条抹掉、也不许让它出现两次；
 //  ⑦ 第 201 个任务（首批之外）也拿得到备忘摘要 —— 真 hook 自己去取，批次是它内部的事。
+//  ⑧ 保存还没结束时切走再回来：框子仍然禁用（在途状态活得过面板卸载）。
+//  ⑨ 旧保存回来只许清自己提交的那一版草稿，不许清掉这期间新写的。
+//  ⑩ 铺开那一列：迟到的旧批量摘要不许把已经显示的新摘要顶回去。
+//  ⑪ 同一条备忘的两发写逆序返回时，晚到的旧回执不许盖掉后发那一版。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -40,6 +44,26 @@ function backend() {
     release() { return Promise.all(this.held.splice(0).map((send) => send())); },
     /** 真 = PATCH 一律 503（注入保存失败）。 */
     failPatch: false,
+    /**
+     * 真 = 把写（PATCH）的回执按住不发：库里已经改好了，只是回执还在路上 —— 真服务上
+     * 「保存还没结束」就是这个样子。
+     */
+    holdWrites: false,
+    heldWrites: [],
+    releaseWrites() { return Promise.all(this.heldWrites.splice(0).map((send) => send())); },
+    /** 只放行第 index 发（从 0 数）。「应答逆序返回」就靠它：先放后发的那一发。 */
+    releaseWrite(index) {
+      const [send] = this.heldWrites.splice(index, 1);
+      return send ? send() : Promise.resolve();
+    },
+    /**
+     * 真 = 把**批量**摘要（问多于一个任务的那种）的应答按住不发。只按住批量那种，是为了
+     * 跟「写入之后只问一个任务的补发」分得开 —— 后者必须照常回，才复现得出「新的先到、
+     * 旧的后到」。
+     */
+    holdBulkDigests: false,
+    heldDigests: [],
+    releaseDigests() { return Promise.all(this.heldDigests.splice(0).map((send) => send())); },
     async route(route) {
       const request = route.request();
       const url = new URL(request.url());
@@ -50,11 +74,20 @@ function backend() {
       if (url.pathname === "/api/tasks/memos" && method === "POST") {
         const ids = JSON.parse(request.postData() ?? "{}").taskIds ?? [];
         this.digestBatches.push(ids);
-        // 跟真后端同一条规矩：没有备忘的任务**不在返回里**。
-        return route.fulfill({ json: ids.flatMap((taskId) => {
+        // 跟真后端同一条规矩：没有备忘的任务**不在返回里**。快照在这一刻定下来。
+        const digests = ids.flatMap((taskId) => {
           const digest = this.digestOf.get(taskId);
           return digest ? [{ taskId, count: 1, truncated: false, ...digest }] : [];
-        }) });
+        });
+        if (this.holdBulkDigests && ids.length > 1) {
+          return new Promise((resolve) => {
+            this.heldDigests.push(async () => {
+              await route.fulfill({ json: digests });
+              resolve();
+            });
+          });
+        }
+        return route.fulfill({ json: digests });
       }
       // 铺开那一下另外两列也会发请求，给它们空清单，别让 route 落到 500 兜底上。
       if (url.pathname === "/api/tasks/follow-ups" || url.pathname === "/api/tasks/bodies") {
@@ -78,6 +111,8 @@ function backend() {
         const at = new Date(Date.now() + ++seq * 1000).toISOString();
         const memo = { id: `m${seq}`, taskId: list[1], body, createdAt: at, updatedAt: at };
         rows.unshift(memo);
+        // 摘要跟着写入走（真后端是从同一张表算的），否则「写完那一列该显示新的」测不出来。
+        this.digestOf.set(list[1], { text: body, at });
         return route.fulfill({ status: 201, json: memo });
       }
       if (one && method === "PATCH") {
@@ -85,6 +120,16 @@ function backend() {
         const memo = rows.find((row) => row.id === one[2]);
         memo.body = JSON.parse(request.postData() ?? "{}").body;
         memo.updatedAt = new Date(Date.now() + ++seq * 1000).toISOString();
+        this.digestOf.set(one[1], { text: memo.body, at: memo.updatedAt });
+        if (this.holdWrites) {
+          const sent = { ...memo };
+          return new Promise((resolve) => {
+            this.heldWrites.push(async () => {
+              await route.fulfill({ json: sent });
+              resolve();
+            });
+          });
+        }
         return route.fulfill({ json: memo });
       }
       if (one && method === "DELETE") {
@@ -117,10 +162,13 @@ async function openPage(origin, api, query = "") {
 const bodyShowing = (panel, text) =>
   panel.locator(".task-memo-card__body").filter({ hasText: text }).first().waitFor();
 
-/** 等一个 **Node 侧**的条件成真 —— 用来等后端桩收到某一发请求，页面侧的 waitFor 看不到它。 */
+/**
+ * 等一个 **Node 侧**的条件成真 —— 用来等后端桩收到某一发请求，页面侧的 waitFor 看不到它。
+ * `check` 可以是 async（比如还要顺带问一眼 DOM）。
+ */
 async function waitFor(check, what, timeout = 8000) {
   const deadline = Date.now() + timeout;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() > deadline) throw new Error(`等不到：${what}`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -371,6 +419,154 @@ try {
     });
     assert.ok(order.ask >= 0 && order.memo > order.ask, `悬浮卡里备忘要排在追问下面：${JSON.stringify(order)}`);
     assert.match(await peek.textContent(), /共 3 条/, "悬浮卡要说清一共几条");
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
+  // ── ⑧ 保存还没结束时切走再回来：框子仍然禁用，不许让人写出白写的第二版 ──────
+  {
+    const api = backend();
+    const { page, errors } = await openPage(origin, api);
+    await page.getByRole("tab", { name: /^备忘/ }).click();
+    const panel = page.getByLabel("任务备忘");
+    await page.getByRole("button", { name: "写一条备忘" }).click();
+    await panel.locator("textarea").fill("第一版：验收时先过严格增长门");
+    await panel.getByRole("button", { name: "保存" }).click();
+    await bodyShowing(panel, "第一版：验收时先过严格增长门");
+
+    // 改成几百字，按住回执再点保存 —— 这发 PATCH 就停在「库里改好了、回执在路上」。
+    await panel.getByRole("button", { name: "编辑这条备忘" }).click();
+    const first = `第一版长正文：${LONG}`;
+    await panel.locator("textarea").fill(first);
+    api.holdWrites = true;
+    await panel.getByRole("button", { name: "保存" }).click();
+
+    // 切到「信息」再回来。面板真的卸载过（locator 等它 detach 才算），所以这一步测的是
+    // 「在途状态活得过卸载」：草稿还在，而且**还是禁用的**。禁用随卸载归零的话，用户
+    // 在这儿写下的几百字会在旧那一发回来时被清掉，而且没有恢复入口（第 3 轮审查 F1）。
+    await page.getByRole("tab", { name: "信息" }).click();
+    await panel.waitFor({ state: "detached" });
+    await page.getByRole("tab", { name: /^备忘/ }).click();
+    const editor = panel.locator("textarea");
+    await editor.waitFor();
+    assert.equal(await editor.inputValue(), first, "切走再回来，编辑草稿还在");
+    assert.equal(await editor.isDisabled(), true, "那一发保存还在飞，这个框必须还是禁用的");
+
+    api.holdWrites = false;
+    await api.releaseWrites();
+    // 存上了才退出编辑态。
+    await editor.waitFor({ state: "detached" });
+    await bodyShowing(panel, /第一版长正文/);
+    assert.equal(api.rows[0].body, first);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
+  // ── ⑨ 旧保存回来，不许清掉这期间新写的那一版草稿 ──────────────────────────
+  {
+    const api = backend();
+    const { page, errors } = await openPage(origin, api);
+    await page.getByRole("tab", { name: /^备忘/ }).click();
+    const panel = page.getByLabel("任务备忘");
+    await page.getByRole("button", { name: "写一条备忘" }).click();
+    await panel.locator("textarea").fill("第一版：验收时先过严格增长门");
+    await panel.getByRole("button", { name: "保存" }).click();
+    await bodyShowing(panel, "第一版：验收时先过严格增长门");
+
+    await panel.getByRole("button", { name: "编辑这条备忘" }).click();
+    await panel.locator("textarea").fill("第一版改动：先过严格增长门再看回归");
+    api.holdWrites = true;
+    await panel.getByRole("button", { name: "保存" }).click();
+
+    // 这会儿从**别的入口**把草稿改掉（界面上那个框是禁用的，但 store 的写入口不止面板
+    // 一处）。旧那一发回来时只许清自己提交的那一版 —— 照抄 fixture 里的 POKED。
+    const poked = "第二版：绕开界面写进来的那几个字";
+    await page.getByTestId("poke-draft").click();
+    assert.equal(await panel.locator("textarea").inputValue(), poked);
+
+    api.holdWrites = false;
+    await api.releaseWrites();
+    // 那一发收尾跑完的证据有两种形态：占位交还（框子重新可用）= 对的那种；草稿被清掉
+    // （编辑框整个消失）= 回归的那种。两种都等，才能把失败报在断言上而不是等待超时。
+    await page.waitForFunction(() => {
+      const node = document.querySelector(".task-memo-card__edit textarea");
+      return !node || !node.disabled;
+    });
+    const editor = panel.locator(".task-memo-card__edit textarea");
+    assert.equal(await editor.count(), 1, "旧保存清掉了这期间新写的那一版，编辑态跟着没了");
+    assert.equal(await editor.inputValue(), poked, "旧保存不许清掉后写的那一版");
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
+  // ── ⑩ 铺开那一列：迟到的旧批量摘要不许把已经显示的新摘要顶回去 ──────────────
+  {
+    const api = backend();
+    api.digestOf.set("old-tail", { text: "第二版：列表先读到的那条", at: "2026-10-26T02:00:00.000Z" });
+    // 两个任务 → 批量一发就问完，跟写入之后只问一个任务的补发分得开。
+    api.holdBulkDigests = true;
+    const { page, errors } = await openPage(origin, api, "?fetch=1&n=2");
+    const cell = page.getByTestId("row-old-tail").locator(".workspace-spread-cell--last");
+    await cell.waitFor();
+    await waitFor(() => api.heldDigests.length >= 1, "批量摘要那一发已经按在手里");
+
+    // 写一条：store 推一版写入版本，那一列据此补发只问这个任务的摘要（不按住，照常回）。
+    await page.getByTestId("write-memo").click();
+    await cell.getByText("第三版：刚刚存上的那条备忘").waitFor();
+
+    // 放行按住的那一发批量摘要：它带的是写入之前的快照。
+    api.holdBulkDigests = false;
+    await api.releaseDigests();
+    // 再等一会儿让它真的落到 setState 上 —— 没有版本边界的话这一格就在这里倒退回第二版
+    // （第 3 轮审查 N1 实测：显示第三版、旧应答一到退回第二版，而库里仍是第三版）。
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const text = await cell.textContent();
+    assert.match(text, /第三版：刚刚存上的那条备忘/, `迟到的旧批量摘要不许顶掉新的：${text}`);
+    assert.doesNotMatch(text, /第二版/, `那一格不许倒退：${text}`);
+    assert.equal(api.rows[0].body, "第三版：刚刚存上的那条备忘");
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
+  // ── ⑪ 同一条备忘的两发写逆序返回：晚到的旧回执不许盖掉后发那一版 ────────────
+  {
+    const api = backend();
+    const { page, errors } = await openPage(origin, api);
+    await page.getByRole("tab", { name: /^备忘/ }).click();
+    const panel = page.getByLabel("任务备忘");
+    await page.getByRole("button", { name: "写一条备忘" }).click();
+    await panel.locator("textarea").fill("原来那一版");
+    await panel.getByRole("button", { name: "保存" }).click();
+    await bodyShowing(panel, "原来那一版");
+
+    // 照抄 fixture 里的 RACE_A / RACE_B。
+    const a = "先发那一发：只过严格增长门";
+    const b = "后发那一发：严格增长门和回归一起过";
+    api.holdWrites = true;
+    await page.getByTestId("race-edits").click();
+    await waitFor(() => api.heldWrites.length >= 2, "两发 PATCH 都按在手里");
+
+    // 先放后发的那一发（它是最新的），再放先发的 —— 后者带的是旧正文。
+    api.holdWrites = false;
+    await api.releaseWrite(1);
+    await bodyShowing(panel, b);
+    const reads = () => api.requests.filter((line) => line === "GET /api/tasks/task-a/memos").length;
+    const before = reads();
+    const showsOld = () => panel.locator(".task-memo-card__body").filter({ hasText: a }).count();
+    await api.releaseWrite(0);
+    // 晚到那份一律不拿来改本地状态，改为重拉一发让后端定胜负 —— 补发的那一发出现就是
+    // 走了这条分支的证据（不然「正文还是 b」在放行之前就已经成立，这用例等于没验）。
+    // 回归时的形态是另一种：它直接写进本地状态，正文当场变回 a。两种都等，失败才报在
+    // 断言上而不是等待超时。
+    await waitFor(
+      async () => reads() > before || (await showsOld()) > 0,
+      "旧回执要么作废重拉、要么（回归时）把正文盖回去",
+    );
+    assert.ok(reads() > before, "晚到的旧回执必须作废重拉，不能直接写进本地状态");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await bodyShowing(panel, b);
+    assert.equal(await showsOld(), 0, "晚到的旧回执把正文盖回了先发那一版");
+    assert.equal(api.rows[0].body, b, "后端那边本来就是后发那一版");
     assert.deepEqual(errors, []);
     await page.close();
   }

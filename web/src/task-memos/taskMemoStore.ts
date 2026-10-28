@@ -97,6 +97,27 @@ function confirmWrite(taskId: string): void {
   for (const watcher of writeWatchers) watcher(taskId);
 }
 
+/**
+ * 这个任务**已确认写入**的次数。导出给另一份缓存（侧栏铺开那一列的摘要）当同一道
+ * 版本边界用：它自己发的读取也必须「发出前记下、回来时比对」，否则迟到的旧摘要会把
+ * 刚存上的那条倒退回旧正文（第 3 轮审查 N1 实测）。
+ */
+export function taskMemoWrites(taskId: string): number {
+  return writes.get(taskId) ?? 0;
+}
+
+/**
+ * 「这一发写飞着的时候，别的写先落地了吗」。
+ *
+ * 是的话手里这份应答可能比本地旧（同一条备忘的两发写逆序返回，先发那一发的正文会把后
+ * 发那一发盖回去；删掉之后到达的编辑应答还会把条目补回来）。那就不拿它改本地状态，
+ * 重拉一发让后端定胜负 —— 跟读取侧同一道边界。判据是「只有我自己那一下」：
+ * `confirmWrite` 在这之前刚把计数 +1。
+ */
+function onlyMine(taskId: string, writtenAt: number): boolean {
+  return (writes.get(taskId) ?? 0) === writtenAt + 1;
+}
+
 export async function reloadTaskMemos(taskId: string): Promise<void> {
   const token = (reads.get(taskId) ?? 0) + 1;
   reads.set(taskId, token);
@@ -119,6 +140,9 @@ export async function reloadTaskMemos(taskId: string): Promise<void> {
 /**
  * 写进这个任务的备忘。会话选文浮条上的「添加到备忘」直接调它 —— 它不在面板那棵子树里，
  * 拿不到面板的 hook，而这条写入必须落进同一份缓存，否则切过去看不见刚加的那条。
+ *
+ * **不需要 `onlyMine` 那道仲裁**：它加的是一行新的，没有「谁覆盖谁」—— 期间别的写落地
+ * 了也只是让 `current.memos` 更新，把新行并进去仍然对。
  */
 export async function addTaskMemo(taskId: string, body: string): Promise<TaskMemo> {
   const memo = await api.createTaskMemo(taskId, body);
@@ -130,8 +154,13 @@ export async function addTaskMemo(taskId: string, body: string): Promise<TaskMem
 }
 
 export async function editTaskMemo(taskId: string, memoId: string, body: string): Promise<TaskMemo> {
+  const writtenAt = writes.get(taskId) ?? 0;
   const memo = await api.updateTaskMemo(taskId, memoId, body);
   confirmWrite(taskId);
+  if (!onlyMine(taskId, writtenAt)) {
+    void reloadTaskMemos(taskId);
+    return memo;
+  }
   const current = snapshot(taskId);
   // 列表里还没有这条（比如先在别处改的）就补进去，别把这次改动丢掉。
   const rows = current.memos.some((row) => row.id === memo.id)
@@ -142,8 +171,10 @@ export async function editTaskMemo(taskId: string, memoId: string, body: string)
 }
 
 export async function removeTaskMemo(taskId: string, memoId: string): Promise<void> {
+  const writtenAt = writes.get(taskId) ?? 0;
   await api.deleteTaskMemo(taskId, memoId);
   confirmWrite(taskId);
+  if (!onlyMine(taskId, writtenAt)) return void reloadTaskMemos(taskId);
   const current = snapshot(taskId);
   set(taskId, {
     memos: current.memos.filter((row) => row.id !== memoId),
