@@ -82,17 +82,24 @@ export function claudeMcpEvidence(text: string): Evidence {
     if (!Array.isArray(servers)) continue;
     const rows = servers.map(asRecord);
     const names = rows.map((s) => s.name).filter((n): n is string => typeof n === "string");
-    const ash = rows.find((s) => typeof s.name === "string" && wanted.has(s.name));
-    if (!ash) {
+    // **集合判据，不是第一项**：两个名字是同一个东西的新旧叫法，一条会话里可能同时
+    // 登记着两份。只看排在前面那一份，就会在「新名那份没连上、旧名那份连着」时给出
+    // 偏掉的诊断 —— 跟派审门禁上那条是同一类（第 3 轮审查 B2）。
+    const mine = rows.filter((s) => typeof s.name === "string" && wanted.has(s.name));
+    if (!mine.length) {
       return { connected: false, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 ash。` };
     }
+    const ash = mine.find((s) => s.status === "connected") ?? mine[0]!;
     const status = typeof ash.status === "string" ? ash.status : "";
+    const others = mine.length > 1
+      ? `（这条会话里有 ${mine.length} 份兼容登记：${mine.map((s) => `${String(s.name)}=${typeof s.status === "string" ? s.status : "未知"}`).join("、")}）`
+      : "";
     return status === "connected"
       // **只说连上了，别替它断言工具在手**：init 事件写的是「server 连上没有」，不是
       // 「report_stage 暴露了没有」—— 执行器的工具白/黑名单能把具体工具挡掉，那时说
       // 「多半是它自己漏了上报」就是把限制归咎于审查者（第 2 位审查者 N2）。
-      ? { connected: true, detail: `这条会话启动时 ash MCP 是连上的。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
-      : { connected: false, detail: `这条会话启动时 ash MCP（${ash.name}）的状态是「${status || "未知"}」，不是 connected。` };
+      ? { connected: true, detail: `这条会话启动时 ash MCP 是连上的${others}。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
+      : { connected: false, detail: `这条会话启动时 ash MCP（${String(ash.name)}）的状态是「${status || "未知"}」，不是 connected${others}。` };
   }
   return null;
 }

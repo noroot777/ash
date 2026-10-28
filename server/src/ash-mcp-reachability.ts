@@ -38,18 +38,15 @@
 // 放过一轮,最差也只是回到今天的样子(跑完没结论,由 `review-channel-gap.ts` 如实说明
 // 原因)。所以只有 CLI 自己明确说「没有这个 server」「它被禁用了」才拦 —— 命令跑不起来、
 // 超时、输出看不懂、执行器带了判不了的覆盖参数,一律放行。
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { promisify } from "node:util";
-import { eq } from "drizzle-orm";
+import type { AgentType } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { probeCli } from "./ash-mcp-probe.js";
+import { executorOwnerScope } from "./auth/dispatch-gate.js";
 import { runEnvForOwner } from "./auth/run-env.js";
-import { db } from "./db/index.js";
-import { agents } from "./db/schema.js";
 import { cliSpec } from "./executors/catalog/index.js";
+import { effectiveExecutorContext } from "./executors/index.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
-
-const exec = promisify(execFile);
 
 /** 探测是只读子命令（claude 实测 ~0.8s、codex ~0.01s）；超时一律按「问不出来」放行。 */
 const PROBE_TIMEOUT_MS = 15_000;
@@ -94,22 +91,6 @@ type Verdict =
   | { state: "disabled"; detail: string };
 
 /**
- * 这个 profile 的 extraArgs。**解析不了就回 null**（= 判不了，放行）—— 这里拿它只为
- * 回答「有没有东西会改写 MCP 登记」，猜错的代价是拦掉一轮本来能跑的审查。
- */
-async function profileExtraArgs(executorId: string | null | undefined): Promise<string[] | null> {
-  if (!executorId) return [];
-  try {
-    const row = (await db.select({ extraArgs: agents.extraArgs }).from(agents).where(eq(agents.id, executorId))).at(0);
-    if (!row) return [];                             // 悬空 id：按 agentType 默认执行器降级，没有额外参数
-    const parsed: unknown = JSON.parse(row.extraArgs);
-    return Array.isArray(parsed) && parsed.every((a) => typeof a === "string") ? (parsed as string[]) : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * extraArgs 里跟 mcp 登记有关的 `-c` / `--config` 覆盖，原样带给探测命令。
  * codex 的 `mcp list` 吃同一批 `-c`（实测：`-c mcp_servers.ash.command="node"` 之后
  * `mcp list --json` 就列出 ash），所以带上它们，探测结果才跟真实起跑一致。
@@ -136,44 +117,6 @@ function codexMcpOverrides(extraArgs: string[]): string[] {
 const CLAUDE_MCP_OVERRIDE = /^--(?:mcp-config|strict-mcp-config)(?:=|$)/;
 
 /**
- * 跑一条只读子命令。
- *
- * 两件事都是**踩过的**：
- *  ① **必须走 `resolveLaunch`**，不能把 `resolveBin` 的结果直接交给 `execFile`。
- *     `bin-resolve.ts` 的文件头写得很清楚：那个函数「只回答在不在，不回答怎么起」——
- *     Windows 上 npm 装的 CLI 是 `.cmd` 垫片，`execFile` 直接起它拿到的是 `EINVAL`
- *     （第 2 位审查者 F2，真机实测 `…\\codex.cmd` → EINVAL → 被当成「问不出来」放行）。
- *  ② **两个输出通道分开回**。codex 成功退出、stdout 是完整 JSON，stderr 却可能同时有
- *     一句无关警告（实测：创建 PATH 别名失败）。拼在一起再 `JSON.parse` 就把一份有效
- *     答案解析成了「看不懂」（第 2 位审查者 F3）。
- */
-async function probe(
-  bin: string,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  cwd: string | undefined,
-): Promise<{ code: number; stdout: string; stderr: string } | null> {
-  const plan = resolveLaunch(bin, args);
-  if (!plan) return null;
-  try {
-    const { stdout, stderr } = await exec(plan.file, plan.args, {
-      env,
-      cwd,
-      timeout: PROBE_TIMEOUT_MS,
-      maxBuffer: 8 * 1024 * 1024,
-      windowsHide: true,
-      ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-    });
-    return { code: 0, stdout, stderr };
-  } catch (error) {
-    const e = error as { code?: unknown; stdout?: string; stderr?: string; killed?: boolean };
-    // 超时被杀 / 压根起不来：没有答案可用。
-    if (e.killed || typeof e.code !== "number") return null;
-    return { code: e.code, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
-  }
-}
-
-/**
  * claude：`mcp get <name>` 有登记 rc=0、没有 rc=1 并写明 `No MCP server named`。
  * 刻意不用 `mcp list` —— 它会**真的去连每一个** server（实测含远程 HTTP 的那种），
  * 一次预检不该有这种副作用。
@@ -181,7 +124,7 @@ async function probe(
 async function askClaude(bin: string, env: NodeJS.ProcessEnv, cwd: string | undefined): Promise<Verdict> {
   let sawNoSuchServer = false;
   for (const name of WANTED) {
-    const res = await probe(bin, ["mcp", "get", name], env, cwd);
+    const res = await probeCli(bin, ["mcp", "get", name], env, cwd, PROBE_TIMEOUT_MS);
     if (!res) return { state: "unknown" };
     if (res.code === 0) return { state: "present" };
     // 文本判定两个通道都看：这句话落在哪一路由 CLI 版本决定，而它只是「有没有这个
@@ -199,22 +142,27 @@ async function askCodex(
   env: NodeJS.ProcessEnv,
   cwd: string | undefined,
 ): Promise<Verdict> {
-  const res = await probe(bin, [...overrides, "mcp", "list", "--json"], env, cwd);
+  const res = await probeCli(bin, [...overrides, "mcp", "list", "--json"], env, cwd, PROBE_TIMEOUT_MS);
   if (!res || res.code !== 0) return { state: "unknown" };
   // **只解析 stdout**：stderr 的警告不是答案的一部分（第 2 位审查者 F3）。
   let parsed: unknown;
   try { parsed = JSON.parse(res.stdout.trim()); } catch { return { state: "unknown" }; }
   if (!Array.isArray(parsed)) return { state: "unknown" };
   const rows = parsed.filter((r): r is Record<string, unknown> => !!r && typeof r === "object");
-  const found = rows.find((r) => typeof r.name === "string" && WANTED.includes(r.name));
-  if (!found) return { state: "absent" };
-  if (found.enabled === false) {
-    const why = typeof found.disabled_reason === "string" && found.disabled_reason.trim()
-      ? found.disabled_reason.trim()
+  const mine = rows.filter((r) => typeof r.name === "string" && WANTED.includes(r.name));
+  if (!mine.length) return { state: "absent" };
+  // **任一兼容登记能用，就不算拿不到**。两个名字是同一个东西的新旧叫法，codex 会把两份
+  // 都列出来、都接起来。上一版只看排在前面的那一份，于是「新名那份被关掉、旧名那份还
+  // 连着」会被整轮拒掉 —— 第 3 轮审查在真机上让 codex app-server 列出了 harness 的
+  // report_stage，派审仍然 409。所以结论必须下在**集合**上，不是第一项上。
+  if (mine.some((r) => r.enabled !== false)) return { state: "present" };
+  const detail = mine.map((r) => {
+    const why = typeof r.disabled_reason === "string" && r.disabled_reason.trim()
+      ? r.disabled_reason.trim()
       : "enabled = false";
-    return { state: "disabled", detail: `codex 自己报告 [mcp_servers.${String(found.name)}] 没启用（${why}）` };
-  }
-  return { state: "present" };
+    return `[mcp_servers.${String(r.name)}]（${why}）`;
+  }).join("、");
+  return { state: "disabled", detail: `codex 自己报告这些 ash MCP 登记都没启用：${detail}` };
 }
 
 /** 一次预检最多问几个目录。见 `probeDirs` 里为什么截断是安全的。 */
@@ -250,12 +198,22 @@ function probeDirs(candidates: string[]): { dirs: (string | undefined)[]; comple
  * 只认 claude / codex：别的执行器的 MCP 登记不经 ash 的手（`scripts/setup.mjs` 也只管
  * 这两个加 kimi），对它们一律放行 —— 「ash 不知道」不等于「它没有」。
  */
-export async function ashMcpReachability(q: AshMcpReachQuery): Promise<AshMcpReach> {
-  const { agentType } = q;
+/**
+ * 判据本体：给定**一份已经确定下来的**执行上下文（类型 + 归一后的 extraArgs + 可能的
+ * 目录），问 CLI 自己够不够得着 ash MCP。
+ *
+ * 上下文从哪来由调用方决定，而那正是两种语义的分界：派审门禁给的是**这条任务的有效
+ * 执行器**（走 `effectiveExecutorContext`），启动诊断给的是**宿主默认上下文**（什么都
+ * 不带）。第 3 轮审查特别要求别把后者偷偷改成前者 —— 启动日志说的是「这台机器默认
+ * 配置下」，它不该因为某个默认 profile 带了 `-c mcp_servers.…` 就改口。
+ */
+async function reachWith(
+  agentType: string,
+  extraArgs: string[],
+  cwdCandidates: string[],
+  ownerUserId: string | null,
+): Promise<AshMcpReach> {
   if (agentType !== "claude" && agentType !== "codex") return ok();
-
-  const extraArgs = await profileExtraArgs(q.executorId);
-  if (!extraArgs) return ok();                       // profile 读不出来 = 判不了
   if (agentType === "claude" && extraArgs.some((a) => CLAUDE_MCP_OVERRIDE.test(a))) return ok();
 
   let bin: string | null = null;
@@ -268,13 +226,13 @@ export async function ashMcpReachability(q: AshMcpReachQuery): Promise<AshMcpRea
     }
     // 起跑要用的那一份 env（隔离档下带 CLAUDE_CONFIG_DIR / CODEX_HOME）。宿主机自己
     // 设的那两个变量由 process.env 原样继承 —— 真实 spawn 也是这么继承的。
-    env = { ...process.env, ...(await runEnvForOwner(q.ownerUserId ?? null, agentType)) };
+    env = { ...process.env, ...(await runEnvForOwner(ownerUserId, agentType)) };
   } catch {
     return ok();
   }
   if (!bin) return ok();                             // CLI 都不在这台机器上，派审会以别的方式失败
 
-  const { dirs, complete } = probeDirs(q.cwdCandidates ?? []);
+  const { dirs, complete } = probeDirs(cwdCandidates);
 
   // 逐个问:present / unknown 任一出现就放行,只有**全都**说拿不到才往下走。
   const overrides = agentType === "codex" ? codexMcpOverrides(extraArgs) : [];
@@ -286,22 +244,37 @@ export async function ashMcpReachability(q: AshMcpReachQuery): Promise<AshMcpRea
   }
   // 超集没问全(目录太多被截断)时,「全都说没有」不再是个确定的结论 —— 放行。
   if (!complete) return ok();
-  const verdict = worst;
 
-  if (verdict.state === "absent") {
+  if (worst.state === "disabled") {
     return {
       reachable: false,
-      problem: `${agentType} 自己报告没有 ash MCP 登记，这一轮跑完也上报不了结论`
-        + `（自查：${HOW_TO_CHECK[agentType]}；接法见 docs/install.md，或在仓库根跑一次 npm run setup）`,
+      problem: `${worst.detail}，这一轮跑完也上报不了结论（自查：${HOW_TO_CHECK.codex}）`,
     };
   }
-  if (verdict.state === "disabled") {
-    return {
-      reachable: false,
-      problem: `${verdict.detail}，这一轮跑完也上报不了结论（自查：${HOW_TO_CHECK.codex}）`,
-    };
+  return {
+    reachable: false,
+    problem: `${agentType} 自己报告没有 ash MCP 登记，这一轮跑完也上报不了结论`
+      + `（自查：${HOW_TO_CHECK[agentType]}；接法见 docs/install.md，或在仓库根跑一次 npm run setup）`,
+  };
+}
+
+export async function ashMcpReachability(q: AshMcpReachQuery): Promise<AshMcpReach> {
+  // 这一轮**真正会用**的执行器和参数。默认 profile 的选择、悬空 id 的降级、归属收窄、
+  // 整段参数的拆词,全在 executors 那一层,这里只消费结果 —— 上一版自己读 `agents.extraArgs`,
+  // 第 3 轮审查用真实 HTTP 打穿:接好的**默认**执行器(extraArgs 里带着
+  // `-c mcp_servers.ash.command=node`)被判成没有登记,派审 409(B1)。
+  let ctx: Awaited<ReturnType<typeof effectiveExecutorContext>>;
+  try {
+    ctx = await effectiveExecutorContext({
+      executorId: q.executorId ?? null,
+      type: q.agentType as AgentType,
+      ...(await executorOwnerScope(q.ownerUserId ?? null)),
+    });
+  } catch {
+    return ok();                                     // 解析不了 = 判不了
   }
-  return ok();
+  if (!ctx) return ok();                             // profile 的 extraArgs 坏了,真起跑也会炸
+  return await reachWith(ctx.type, ctx.extraArgs, q.cwdCandidates ?? [], q.ownerUserId ?? null);
 }
 
 /**
@@ -313,6 +286,9 @@ export async function ashMcpReachability(q: AshMcpReachQuery): Promise<AshMcpRea
  * 于是启动时刷一行假告警。判据只留一份，漂不了。
  */
 export async function hostAshMcpMissing(agentType: string): Promise<boolean> {
-  const reach = await ashMcpReachability({ agentType });
+  // 刻意**不**走 `effectiveExecutorContext`：这里问的是宿主默认上下文，不带任何
+  // profile 参数、不指定目录。跟派审门禁是两种语义，混了启动日志就会开始说一件
+  // 它其实没查过的事（第 3 轮审查 B1 末尾那条边界）。
+  const reach = await reachWith(agentType, [], [], null);
   return !reach.reachable;
 }

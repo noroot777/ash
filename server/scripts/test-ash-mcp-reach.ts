@@ -18,8 +18,16 @@
 //   9. 候选目录是 orchestrator 可能选中目录的**超集**（形状 + 它凭什么是超集的不变量）
 //  10. claude 项目级登记：超集里**任一**目录有登记就放行，全都没有才准拦
 //  11. F3 两个输出通道分开；超集问不全（被截断）时不准拦；重复目录去重
-//  12. F2 预检只准走启动计划层（依赖方向的结构性断言）
+//  12. F2 判据层与探测层都只准走启动计划层；判据层不准自己起进程（依赖方向）
+//  13. B1 预检必须消费**运行时那份**有效执行上下文（空 id / 悬空 id 落默认 profile、
+//      整段参数拆词），以及「宿主启动诊断仍是默认上下文」这条边界
+//  14. B2 同类：诊断读 init 事件也按集合判，不取第一项
+//  15. B3 超时之后不准把自己起的进程留在机器上（壳进程 + 孙进程）
 // 跑：npm -w server run test:ash-mcp-reach
+//
+// 第 8 条（CLI 不在）会在装了 codex 的机器上**明确跳过**：resolveBin 还扫
+// `extraPaths()` 里 /opt/homebrew/bin 这类固定目录，环境变量隔离不掉（第 3 轮审查 N1）。
+// 跳过时会打印原因 —— 宁可不跑，也不让它在不同安装布局上随机变红。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -33,7 +41,8 @@ process.env.HARNESS_DB = process.env.ASH_DB;
 // **判存在性也必须走 resolveLaunch**：Windows 上 npm 装的 CLI 是 `.cmd` 垫片，直接
 // `execFile` 起它拿到 EINVAL —— 那会让整批 CLI 用例在真机上被静默跳过，于是这份登记
 // 根本不能算「真机预检通过」（第 2 位审查者在覆盖声明里点出的）。
-const { resolveLaunch } = await import("../src/executors/bin-resolve.js");
+const { resolveLaunch, extraPaths } = await import("../src/executors/bin-resolve.js");
+const { cliSpec } = await import("../src/executors/catalog/index.js");
 const has = (bin: string): boolean => !!resolveLaunch(bin, []);
 
 /** 同理,**跑**一条真实 CLI 命令也得走启动计划层,不能 `execFileSync("claude", …)`。 */
@@ -125,6 +134,10 @@ try {
       (await reach({ executorId: "ex-codex-broken" })).reachable, true,
       "profile 的 extraArgs 读不出来 → 放行",
     );
+    // 用完即清:这些 profile 会成为 codex 的默认 profile(defaultProfile 没有 isDefault
+    // 时回退 rows[0]),留着就会把后面「不带 executorId」的断言带偏 —— B1 修好之后,
+    // 空 id 走的就是默认 profile 那条路。
+    await db.delete(agents);
   }
 
   // ── 6/7. claude ───────────────────────────────────────────────────────────
@@ -156,6 +169,7 @@ try {
       (await asClaude({ executorId: "ex-claude-mcpcfg" })).reachable, true,
       "带 --mcp-config 时判不了 → 放行",
     );
+    await db.delete(agents);                         // 同上:别让它成为后面用例的默认 profile
     delete process.env.CLAUDE_CONFIG_DIR;
   }
 
@@ -300,6 +314,25 @@ try {
       false, "重复目录去重后没超上限 → 照常拦(一条任务的会话常常都在同一个目录)",
     );
 
+    // ── B2:两个兼容名是**集合**,不是「取第一个」──────────────────────────
+    // 真机实测过的形状:新名那份被关掉、旧名那份还连着,codex app-server 确实列出了
+    // harness 的 report_stage,派审却因为第一份被禁用而整轮 409(第 3 轮审查 B2)。
+    fake('[{"name":"ash","enabled":false,"disabled_reason":"turned off"},{"name":"harness","enabled":true}]');
+    assert.equal(
+      (await ashMcpReachability({ agentType: "codex" })).reachable, true,
+      "B2:新名那份被禁用,但旧名那份还启用 → 工具拿得到,必须放行",
+    );
+    fake('[{"name":"harness","enabled":true},{"name":"ash","enabled":false}]');
+    assert.equal(
+      (await ashMcpReachability({ agentType: "codex" })).reachable, true,
+      "B2:换个顺序结论必须一样(说明判的是集合,不是第一项)",
+    );
+    fake('[{"name":"ash","enabled":false,"disabled_reason":"a"},{"name":"harness","enabled":false,"disabled_reason":"b"}]');
+    const bothOff = await ashMcpReachability({ agentType: "codex" });
+    assert.equal(bothOff.reachable, false, "B2:两份都禁用才是确定拿不到");
+    assert.match(bothOff.problem ?? "", /ash/, "拦人时要说清是哪几份登记");
+    assert.match(bothOff.problem ?? "", /harness/, "两份都要点名,否则用户只关掉一份还是跑不通");
+
     process.env.PATH = pathWas;
   }
 
@@ -308,27 +341,162 @@ try {
   // 缺陷恰恰只在那边发作：直接 execFile 一个 `.cmd` 得到 EINVAL，被当成「问不出来」
   // 放行（第 2 位审查者 F2，真机实测）。所以这里钉的是**依赖方向** —— 它只准用
   // resolveLaunch。bin-resolve.ts 的文件头写着 resolveBin「只回答在不在，不回答怎么起」。
-  {
-    const src = readFileSync(new URL("../src/ash-mcp-reachability.ts", import.meta.url), "utf8");
-    assert.match(src, /import \{ resolveLaunch \} from "\.\/executors\/bin-resolve\.js"/,
-      "预检必须从 bin-resolve 取 resolveLaunch");
+  // 判据层和探测层都要钉：真正 spawn 的那一行现在住在 ash-mcp-probe.ts。
+  for (const file of ["../src/ash-mcp-reachability.ts", "../src/ash-mcp-probe.ts"]) {
+    const src = readFileSync(new URL(file, import.meta.url), "utf8");
+    assert.match(src, /import \{ resolveLaunch \} from "[^"]*bin-resolve\.js"/,
+      `${file} 必须从 bin-resolve 取 resolveLaunch`);
     // 只看代码行 —— 注释里当然会提到 resolveBin（那段说明讲的就是为什么不能用它）。
     const code = src.split("\n")
       .filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line))
       .join("\n");
     assert.ok(!/\bresolveBin\b/.test(code),
-      "预检不准碰 resolveBin —— 它只回答「在不在」，Windows 上据此 spawn 会 EINVAL");
+      `${file} 不准碰 resolveBin —— 它只回答「在不在」，Windows 上据此 spawn 会 EINVAL`);
+  }
+  // 超时与进程回收只准有一份实现：判据层不许自己再起进程。
+  {
+    const judge = readFileSync(new URL("../src/ash-mcp-reachability.ts", import.meta.url), "utf8")
+      .split("\n").filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line)).join("\n");
+    assert.ok(!/\b(?:execFile|spawn|spawnSync|execFileSync)\b/.test(judge),
+      "判据层不准自己起进程：超时和整棵进程树的生命周期只归 ash-mcp-probe.ts 管（B3）");
+  }
+
+  // ── 13. B1:预检必须消费**运行时那份**有效执行上下文 ─────────────────────
+  // 第 3 轮审查用真实 HTTP 打穿的形状:接好的**默认**执行器(extraArgs 里带着
+  // `-c mcp_servers.ash.command=node`)被预检判成没有登记,派审当场 409。病根是预检
+  // 自己读 `agents.extraArgs`:空 id 和悬空 id 它都当「没有额外参数」,而运行时的
+  // pickProfile 这两种都会落到该类型当前默认 profile;整段参数它也没拆词。
+  if (!has("codex")) console.log("⚠ 跳过 B1 各条：这台机器上没有 codex CLI");
+  else {
+    const home = join(stage, "codex-b1");
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.toml"), "");     // 配置里什么都没有
+    process.env.CODEX_HOME = home;
+    const { agents: agentsTable } = await import("../src/db/schema.js");
+    const { eq: eqOp } = await import("drizzle-orm");
+
+    assert.equal((await reach()).reachable, false, "基准:配置和参数里都没有 ash → 拦");
+
+    // 唯一的 ash 来源是这条默认 profile 的 extraArgs(分词形态)
+    await db.insert(agentsTable).values({
+      id: "b1-default", name: "codex-default", type: "codex", isDefault: true,
+      extraArgs: JSON.stringify(["-c", "mcp_servers.ash.command=node"]),
+    });
+    assert.equal(
+      (await reach({ executorId: null })).reachable, true,
+      "B1:空 executorId 必须跟运行时一样落到默认 profile",
+    );
+    assert.equal(
+      (await reach({ executorId: "no-such-profile" })).reachable, true,
+      "B1:悬空 id 同样降级到默认 profile,不是「没有额外参数」",
+    );
+
+    // 整段参数:库里是**一个元素**,运行时 normalizeProfileExtraArgs 会拆成两个 token
+    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-c mcp_servers.ash.command=node"]) })
+      .where(eqOp(agentsTable.id, "b1-default"));
+    assert.equal(
+      (await reach()).reachable, true,
+      "B1:整段参数要按 normalizeProfileExtraArgs 拆词后再问",
+    );
+
+    // 边界:宿主启动诊断问的是**默认上下文**,不能被任务默认 profile 带偏
+    const { hostAshMcpMissing } = await import("../src/ash-mcp-reachability.js");
+    assert.equal(
+      await hostAshMcpMissing("codex"), true,
+      "B1 边界:profile 里的 -c 覆盖不属于「这台机器默认配置」,启动诊断仍该报缺失",
+    );
+
+    await db.delete(agentsTable).where(eqOp(agentsTable.id, "b1-default"));
+    delete process.env.CODEX_HOME;
+  }
+
+  // ── 14. B2 同类:诊断读 init 事件也要按集合判,不取第一项 ────────────────
+  {
+    const { claudeMcpEvidence } = await import("../src/review-channel-gap.js");
+    const init = (servers: string) =>
+      `{"type":"system","subtype":"init","mcp_servers":${servers}}`;
+    const mixed = claudeMcpEvidence(init(
+      '[{"name":"ash","status":"failed"},{"name":"harness","status":"connected"}]',
+    ));
+    assert.equal(mixed?.connected, true, "B2 同类:旧名那份连上了,就不能说通道没连上");
+    assert.match(mixed?.detail ?? "", /2 份兼容登记/, "要如实说明这条会话里有两份登记");
+    const bothBad = claudeMcpEvidence(init(
+      '[{"name":"ash","status":"failed"},{"name":"harness","status":"failed"}]',
+    ));
+    assert.equal(bothBad?.connected, false, "两份都没连上才算没连上");
+    const none = claudeMcpEvidence(init('[{"name":"linear","status":"connected"}]'));
+    assert.equal(none?.connected, false, "一份兼容登记都没有 → 照旧如实说没有");
+  }
+
+  // ── 15. B3:超时之后不准把自己起的进程留在机器上 ─────────────────────────
+  // Windows 真机实测:15 秒超时到点、预检已放行,底下那个 node 查询进程还活着
+  // (`hungPid=6024, childStillAlive=true`),因为 execFile 的 timeout 只向 cmd.exe 这层
+  // 包装发信号。这里用一个**挂住的假 CLI**在本平台复现同一结构:壳进程 + 它起的孙进程,
+  // 断言超时返回后孙进程已经不在。
+  {
+    const { probeCli } = await import("../src/ash-mcp-probe.js");
+    const hangDir = join(stage, "hang-cli");
+    mkdirSync(hangDir, { recursive: true });
+    const pidFile = join(hangDir, "grandchild.pid");
+    const hang = join(hangDir, "hang.mjs");
+    writeFileSync(hang,
+      'import { writeFileSync } from "node:fs";\n'
+      + `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n`
+      + 'setInterval(() => {}, 1000);\n');
+    if (process.platform === "win32") {
+      writeFileSync(join(hangDir, "codex.cmd"),
+        `@echo off\r\nstart /b "" "${process.execPath}" "${hang}"\r\n`
+        + ':wait\r\nping -n 3 127.0.0.1 >nul\r\ngoto wait\r\n');
+    } else {
+      const shim = join(hangDir, "codex");
+      writeFileSync(shim, `#!/bin/sh\n"${process.execPath}" "${hang}" &\nwait\n`);
+      chmodSync(shim, 0o755);
+    }
+    const pathWas = process.env.PATH;
+    process.env.PATH = `${hangDir}${delimiter}${pathWas ?? ""}`;
+
+    const started = Date.now();
+    const res = await probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, 1_200);
+    assert.equal(res, null, "B3:超时必须回到「问不出来」(向放行开的结论不变)");
+    assert.ok(Date.now() - started < 20_000, "B3:不能一直干等下去");
+
+    const hungPid = Number(readFileSync(pidFile, "utf8").trim());
+    assert.ok(Number.isInteger(hungPid) && hungPid > 1, "假 CLI 应该已经写下孙进程的 pid");
+    let alive = true;
+    try { process.kill(hungPid, 0); } catch { alive = false; }
+    if (alive) { try { process.kill(hungPid, "SIGKILL"); } catch { /* 清场 */ } }
+    assert.equal(alive, false, "B3:超时返回时,探测自己起的孙进程必须已经被回收");
+
+    process.env.PATH = pathWas;
   }
 
   // ── 8. CLI 压根不在 ───────────────────────────────────────────────────────
-  // PATH 清空 + 把候选目录指到一个空 home，resolveBin 一个都找不到。
+  // 「CLI 不在」这个**前提**得先成立：resolveBin 扫的是 PATH **加** `extraPaths()`，
+  // 而后者在 POSIX 上有 `/opt/homebrew/bin`、`/usr/local/bin` 这种**固定**目录，在
+  // Windows 上还看 USERPROFILE / APPDATA / LOCALAPPDATA —— 第 3 轮审查 N1 指出上一版
+  // 只清 PATH+HOME，那台机器的 codex 就住在 `C:\Users\…\.local\bin`，照样解析得到，
+  // 于是这条「应放行」的断言会在别的安装布局上随机变红。
+  //
+  // 所以：能隔离的环境变量全部指到空目录，然后**按同一份候选目录核对前提**；前提不
+  // 成立就明确跳过并说明原因，而不是让断言去赌机器怎么装的。
   const emptyHome = join(stage, "empty-home");
   mkdirSync(emptyHome, { recursive: true });
   process.env.PATH = join(stage, "nothing-here");
-  process.env.HOME = emptyHome;
+  for (const key of ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ChocolateyInstall"]) {
+    process.env[key] = join(emptyHome, key.toLowerCase());
+  }
   process.env.CODEX_HOME = join(emptyHome, ".codex");
-  assert.equal((await reach()).reachable, true, "CLI 不在这台机器上 → 放行，不拦人");
-  Object.assign(process.env, { PATH: baseEnv.PATH, HOME: baseEnv.HOME });
+  const stillThere = cliSpec("codex").bins.filter((b) => resolveLaunch(b, []));
+  if (stillThere.length) {
+    console.log(`⚠ 跳过「CLI 不在」一条：隔离后仍解析得到 ${stillThere.join("/")}`
+      + `（${extraPaths().filter((d) => d.startsWith("/")).join("、")} 这类固定候选目录不受环境变量控制）`);
+  } else {
+    assert.equal((await reach()).reachable, true, "CLI 不在这台机器上 → 放行，不拦人");
+  }
+  Object.assign(process.env, {
+    PATH: baseEnv.PATH, HOME: baseEnv.HOME, USERPROFILE: baseEnv.USERPROFILE,
+    APPDATA: baseEnv.APPDATA, LOCALAPPDATA: baseEnv.LOCALAPPDATA,
+  });
 
   console.log("✅ ash MCP 预检（真实 CLI 对照 F1/F2 全部形状）通过");
 } finally {
