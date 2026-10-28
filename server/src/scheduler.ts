@@ -107,9 +107,15 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
   }) | "paused" | null>(async () => {
     const rows = await queueMembers(queueId);
     const candidate = selectNextInQueue(rows);
-    if (attempt.candidate) {
-      const target = rows.find((task) => task.id === attempt.candidate!.taskId);
-      if (!target || target.resumePromptGeneration !== attempt.candidate.generation) return "paused";
+    // 上一次挑中的那位**换人了或换了交代**(有人点「暂停」、agent 自己写下新的等待、
+    // 任务被移出队列)。作废的只是「上一次挑的那位 + 那枚旧凭证」,**不是「这条队列该推进」
+    // 这件事** —— 早先这里直接 `return "paused"`,而此刻请求还没落库、也不再安排下一次,
+    // 链就此断掉:同一个外部事件,写入成功那条路会带着最新代次继续
+    // (checkpoint-advance-admission-cases.ts),写入失败这条路却永久停住(第 2 轮审查
+    // 必须修 3)。所以这里只把钉死的身份松开,接着用这一刻重新挑出来的候选往下走。
+    if (attempt.candidate && !rows.some((task) => task.id === attempt.candidate!.taskId
+      && task.resumePromptGeneration === attempt.candidate!.generation)) {
+      attempt.candidate = undefined;
     }
     if (candidate?.groupId && (groupPauses.get(candidate.groupId) ?? 0) > attempt.pauseGeneration) return "paused";
     if (request) {
@@ -361,7 +367,7 @@ export async function queueMembers(queueId: string): Promise<(typeof tasks.$infe
 // serial mode:找该 group 关联的 queue,调用 advanceQueue 推进一次
 // (后续推进靠 advanceQueueFromTask 终态钩子自动链式触发,不再 while-loop)。
 // A paused group starts nothing;pausing mid-run 不会取消已在跑的,但不会启动新的。
-export async function runGroup(groupId: string): Promise<void> {
+export async function runGroup(groupId: string, attempted?: Set<string>): Promise<void> {
   const group = (await db.select().from(groups).where(eq(groups.id, groupId))).at(0);
   if (!group) throw new Error("group not found");
   if (group.paused) return;
@@ -379,7 +385,7 @@ export async function runGroup(groupId: string): Promise<void> {
       // 异常:serial group 却没 queue。可能是 group 后来才被设成 serial、
       // 或者迁移漏了。退化按 parallel 跑(用户至少能看见任务在动)。
       console.warn(`[scheduler] serial group ${groupId} 没有 queue,退化按 parallel 启动`);
-      return runParallel(groupId);
+      return runParallel(groupId, attempted);
     }
     if (queueIds.length > 1) {
       // 违反不变量:同 group 多 queue。打 warn,仍尝试推进每个 queue。
@@ -390,12 +396,73 @@ export async function runGroup(groupId: string): Promise<void> {
   }
 
   // parallel
-  await runParallel(groupId);
+  await runParallel(groupId, attempted);
 }
 
 export async function runGroupInBackground(groupId: string): Promise<void> {
-  try { await runGroup(groupId); }
-  catch (error) { await reportGroupStartFailure(groupId, error); }
+  // 失败交代的扇出范围 = **这一次挑中要启动的那些成员**(必须修 2)。`runParallel` 一挑出
+  // launchable 就往这个集合里记,所以抛在半路时名单已经有了;抛在挑之前(典型:读 group /
+  // 读成员那几句撞上数据库占用)就再算一次 —— 算得出来只告诉「本该起跑、结果没起」的那几位,
+  // 算不出来就只剩日志,也绝不退回「按 groupId 全捞」那种连坐。
+  const attempted = new Set<string>();
+  try { await runGroup(groupId, attempted); }
+  catch (error) {
+    if (!attempted.size) {
+      for (const taskId of await groupLaunchTargets(groupId).catch(() => [])) attempted.add(taskId);
+    }
+    await reportGroupStartFailure(groupId, error, { attempted: [...attempted] });
+  }
+}
+
+/**
+ * 这一次启动**本该拉起谁**:parallel 那一档的 launchable,加上本组每条队列此刻的队首候选。
+ * 判据跟真正启动时用的是同一把尺子(`launchableMembers` / `selectNextInQueue`),所以不会
+ * 把已完成、已归档、团队调度台、以及排在队列里还没轮到的成员算进来。
+ */
+export async function groupLaunchTargets(groupId: string): Promise<string[]> {
+  const groupRows = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
+  if (!groupRows.length) return [];
+  const items = await db.select().from(queueItems)
+    .where(inArray(queueItems.taskId, groupRows.map((t) => t.id)));
+  const inQueue = new Set(items.map((i) => i.taskId));
+  const targets = new Set(launchableMembers(groupRows, inQueue).map((t) => t.id));
+  for (const queueId of new Set(items.map((i) => i.queueId))) {
+    const candidate = selectNextInQueue(await queueMembers(queueId));
+    if (candidate) targets.add(candidate.id);
+  }
+  return [...targets];
+}
+
+/**
+ * 重启恢复:把**撞在故障窗口里丢掉的那次队列推进**补回来。
+ *
+ * 为什么非得有这一步:推进请求那一笔写失败时,补办责任只活在进程内存里
+ * (`deferQueueAdvance` 的闭包 + 一个 `unref` 的定时器),而请求此刻一个字都还没落库。
+ * 进程一消失这份责任就蒸发,三条恢复入口没有一条看得见它 —— `reattachRunningTasks` 看活
+ * handle、`reconcileInterrupted` 只扫 running/queued、`replayQueueAdvances` 只扫已落库的
+ * 请求。实测后果:前一个刚跑完、下一个本该自动开跑,这一瞬间数据库被占着、你随后几秒重启了
+ * ash,这条队列就永久停住,界面上没有任何报错(第 2 轮审查必须修 1 跨进程复现)。
+ *
+ * **只推「已经在动」的队列**,不是见队列就推。判据是「候选前面已经有成员落了终态」——
+ * 那正是「前一个跑完了、下一个该起跑」这件事本身,而它只能由一次真实的终态转换产生。
+ * 反过来,一条建好还没点运行的链(`run:false`)全员 backlog,候选就是第一位、前面什么都没有,
+ * 于是一个字都不碰 —— 否则重启会把用户压根没点过运行的任务拉起来。
+ *
+ * 必须排在 `reconcileInterrupted` **之后**:被打断的 running/queued 要先落到 failed,
+ * 这里读到的才是结算完的现场。推进本身是幂等的(临界区 + `selectNextInQueue` 会判)。
+ */
+export async function recoverQueueAdvances(): Promise<void> {
+  const queueIds = [...new Set((await db.select().from(queueItems)).map((item) => item.queueId))];
+  for (const queueId of queueIds) {
+    const rows = await queueMembers(queueId);
+    const candidate = selectNextInQueue(rows);
+    if (!candidate) continue;
+    const live = rows.filter((t) => !t.archived && t.mode !== "team");
+    const ahead = live.slice(0, live.findIndex((t) => t.id === candidate.id));
+    if (!ahead.some((t) => ["done", "failed", "canceled"].includes(queueStatus(t)))) continue;
+    console.log(`[ash] 重启恢复:队列 ${queueId} 的推进补办一次(队首 ${candidate.id})`);
+    await advanceQueue(queueId);
+  }
 }
 
 // parallel mode 的执行:扫所有 backlog 任务并行启动,限流 MAX_PARALLEL。
@@ -409,14 +476,12 @@ export async function runGroupInBackground(groupId: string): Promise<void> {
 // 挂着 queue(混合形态:queue 表达完成顺序,mode 表达初始启动方式,两者正交,
 // 见 migrateQueues),并行拉起会破坏队列顺序;统一交给末尾的 advanceQueue
 // 按位置逐个拉起。
-async function runParallel(groupId: string): Promise<void> {
-  const groupRows = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
-  const items = await db
-    .select()
-    .from(queueItems)
-    .where(inArray(queueItems.taskId, groupRows.map((t) => t.id)));
-  const inQueue = new Set(items.map((i) => i.taskId));
-  const launchable = groupRows.filter(
+// 「这一次该被 parallel 拉起」的判据。抽成函数是为了让失败交代的扇出范围
+// (groupLaunchTargets)跟真正启动用的是同一把尺子,不会各自漂。
+function launchableMembers(
+  groupRows: (typeof tasks.$inferSelect)[], inQueue: ReadonlySet<string>,
+): (typeof tasks.$inferSelect)[] {
+  return groupRows.filter(
     (t) =>
       !t.archived &&
       t.mode !== "team" && // 防御:团队任务不进组,也不该被分组批量拉起
@@ -424,6 +489,17 @@ async function runParallel(groupId: string): Promise<void> {
       (t.status === "backlog" ||
         (t.status === "paused" && !t.resumePrompt && !t.question && !hasCliGoalHold(t.cliState))),
   );
+}
+
+async function runParallel(groupId: string, attempted?: Set<string>): Promise<void> {
+  const groupRows = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
+  const items = await db
+    .select()
+    .from(queueItems)
+    .where(inArray(queueItems.taskId, groupRows.map((t) => t.id)));
+  const inQueue = new Set(items.map((i) => i.taskId));
+  const launchable = launchableMembers(groupRows, inQueue);
+  for (const t of launchable) attempted?.add(t.id);
 
   if (launchable.length) {
     const pending = [...launchable];
@@ -445,7 +521,7 @@ async function runParallel(groupId: string): Promise<void> {
           await restoreQueuedTask(reservation);
         }
       } catch (error) {
-        await reportGroupStartFailure(groupId, error, taskId);
+        await reportGroupStartFailure(groupId, error, { taskId });
       }
     };
 

@@ -154,6 +154,12 @@ async function initializeServer() {
     await reattachRunningTasks();
     await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
 
+    // 撞在故障窗口里丢掉的那次队列推进补回来(判据与边界见 scheduler.ts 的
+    // recoverQueueAdvances)。**必须排在 reconcileInterrupted 之后**:被打断的
+    // running/queued 要先落 failed,这里读到的才是结算完的现场。
+    await (await import("./scheduler.js")).recoverQueueAdvances()
+      .catch((err) => console.error("[ash] 队列推进补办失败（不影响启动）:", err));
+
     // 哨兵接回来。它们的进程本来就没跟着死（那是整件事的全部意义），这里只是把 tail
     // 和定时器重新挂上；认不出来的落 lost，不冒充还在盯。
     const { reattachMonitors } = await import("./monitors.js");
