@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, type Stats } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, readdir, readlink, realpath, stat, symlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { optionalRead, requiredRead } from "./accept-gate-fs.js";
 
 export type GateTree = {
   /** 快照根（源树一侧）：软链落点在树内还是树外、以及树内链怎么映射到副本，全以它为参照。 */
@@ -23,7 +24,9 @@ export const insideTree = (root: string, path: string) => {
   return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
 };
 const portable = (path: string) => path.split(sep).join("/");
-const treeRealPath = async (root: string) => await realpath(root).catch(() => root);
+// 树根的落点。**不许退回未解析的字面路径**:树内/树外全以它为参照,算错一次就是「树外的链被当成
+// 树内」或反过来,登记、摘要、复制三处还会各算一遍。读不动就明确失败。
+const treeRealPath = async (root: string) => await requiredRead(root, () => realpath(root));
 
 // Win32 长路径形式（\\?\D:\...）剥掉前缀再用：path.relative 认不出它其实在树内（实测
 // relative("D:\\repo", "\\\\?\\D:\\repo\\nm") 原样返回长路径），不规范化会让同一个落点在两种写法
@@ -77,13 +80,18 @@ export type LinkLanding = {
 // 之后的 `..` 被提前消掉——两条本地读得通的链在门禁里报「依赖没放对」,一个测试都没开始跑。
 // 一个平台语义只能有一个实现:谁要落点都从这里拿。
 export async function linkLanding(path: string, target: string): Promise<LinkLanding> {
+  // 「不可达」是这条链的一个合法答案(悬空链、环、经过普通文件的路径),但只有 ENOENT/ENOTDIR/ELOOP
+  // 能证明它;读不动(EACCES/EIO/句柄耗尽)说明这一问**没答上来**,当成「不可达」会让树外的链被登记成
+  // 树内链、副本里再照抄一遍原文,两侧行为相反。
+  const absent = ["ENOENT", "ENOTDIR", "ELOOP"];
   const unreachable = { reachable: false, landing: dirname(path) };
-  if (!await stat(path).then(() => true, () => false)) return unreachable;
+  if (await optionalRead(path, () => stat(path), absent) === null) return unreachable;
   const full = isAbsolute(target) ? target : `${dirname(path)}${sep}${target}`;
   const tail = basename(full);
   const landing = tail === "." || tail === ".."
-    ? await realpath(full).catch(() => null)
-    : await realpath(dirname(full)).then(parent => join(parent, tail), () => null);
+    ? await optionalRead(full, () => realpath(full), absent)
+    : await optionalRead(dirname(full), () => realpath(dirname(full)), absent)
+      .then(parent => parent === null ? null : join(parent, tail));
   return landing === null ? unreachable : { reachable: true, landing };
 }
 

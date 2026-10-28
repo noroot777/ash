@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { copyLink, insideTree, linkLanding, linkTarget } from "./accept-gate-tree.js";
+import { optionalRead, requiredRead } from "./accept-gate-fs.js";
 
 // 把一棵依赖树搬进快照时,**每一条软链都得重新决定指向哪里**。这个模块只做这件事,判据统一在
 // counterpart 一处,复制和对账都从它出来。
@@ -119,8 +120,10 @@ export type CopyOptions = {
  */
 export async function copyTree(source: string, destination: string, options: CopyOptions = {}): Promise<void> {
   if (options.skip?.(source) === true) return;
-  // 包管理器随时在改依赖树：读完目录到读条目之间文件被删掉不该崩掉整次快照。
-  const info = await lstat(source).catch(() => null);
+  // 包管理器随时在改依赖树：读完目录到读条目之间文件被删掉不该崩掉整次快照。放过的只有「真的
+  // 没了」(ENOENT/ENOTDIR)这一种；读不动(EACCES/EIO/句柄耗尽)必须明确失败，否则这一棵子树被
+  // 静默跳过，副本里缺了那个包，快照跑起来向上解析就落回工作区那一份活依赖 —— 又是报绿跑活源码。
+  const info = await optionalRead(source, () => lstat(source));
   if (info === null) return;
   if (info.isSymbolicLink()) {
     const target = options.relocate === undefined
@@ -134,8 +137,11 @@ export async function copyTree(source: string, destination: string, options: Cop
     // 还没开始跑。按**落点**判而不是按字面路径，因为中间任意一层都可能是链。只在目录上做，文件
     // 不可能是谁的祖先。
     if (options.snapshotRoot !== undefined) {
-      const real = await realpath(source).catch(() => null);
-      if (real !== null && (real === options.snapshotRoot || insideTree(options.snapshotRoot, real))) return;
+      // 这里**不许**退让：lstat 刚说过它是真目录，realpath 还失败就说明读不动，而这一问的答案
+      // 决定「要不要走进正在建的那个快照」。当成「不在快照里」继续遍历，就是一层层把快照自己拷
+      // 进自己，直到路径过长为止。
+      const real = await requiredRead(source, () => realpath(source));
+      if (real === options.snapshotRoot || insideTree(options.snapshotRoot, real)) return;
     }
     await mkdir(destination, { recursive: true });
     for (const name of (await readdir(source)).sort()) {
@@ -164,8 +170,13 @@ export async function linkMismatch(relocation: Relocation): Promise<string | nul
   // 「原文带尾部分隔符却指向普通文件」照样解析得出东西来（macOS 实测 stat=ENOTDIR 而
   // realpath=.../f.mjs），只用它判就会把一条两侧都读不通的链判成「副本放错了」，门禁在一个合法
   // 项目上直接不可用。
+  // 「解析不出东西来」只认 ENOENT/ENOTDIR/ELOOP。读不动一律抛:这一趟是**核验**,两侧都读不动会
+  // 一起落 null、被判成「没有不一致」,等于把整条链的对账静默跳过 —— 对账放过的代价是副本里的链
+  // 指着工作区还报绿。
+  const absent = ["ENOENT", "ENOTDIR", "ELOOP"];
   const landingOf = async (path: string): Promise<string | null> =>
-    await stat(path).then(() => realpath(path).catch(() => null), () => null);
+    await optionalRead(path, () => stat(path), absent) === null
+      ? null : await optionalRead(path, () => realpath(path), absent);
   const check = async (path: string): Promise<string | null> => {
     const from = await landingOf(join(relocation.treeRoot, path));
     const to = await landingOf(join(relocation.treeDest, path));
@@ -173,14 +184,15 @@ export async function linkMismatch(relocation: Relocation): Promise<string | nul
       return to === null ? null : `${path} 在工作区里解析不出东西来，副本里却落在了 ${to}`;
     }
     const want = counterpart(from, relocation);
-    const real = await realpath(want).catch(() => null);
+    const real = await optionalRead(want, () => realpath(want), absent);
     if (to === real) return null;
     return `${path} 在工作区落在 ${from}，副本里却落在 ${to ?? "解析不出来"}（应当对应 ${want}）`;
   };
   const walk = async (sub: string): Promise<string | null> => {
-    for (const entry of await readdir(join(relocation.treeDest, sub), { withFileTypes: true }).catch(() => [])) {
+    const directory = join(relocation.treeDest, sub);
+    for (const entry of await optionalRead(directory, () => readdir(directory, { withFileTypes: true })) ?? []) {
       const path = sub === "" ? entry.name : join(sub, entry.name);
-      const problem = entry.isSymbolicLink() ? await check(path)
+      const problem: string | null = entry.isSymbolicLink() ? await check(path)
         : entry.isDirectory() ? await walk(path) : null;
       if (problem !== null) return problem;
     }

@@ -432,6 +432,8 @@ async function settleGate(
     // null，照旧按 exit_code 处理。判据见 accept-gate-miss.ts，I/O 在 accept-gate-attribution.ts。
     // 传 outcome 而不是 row：`row` 是结算**前**读出来的那一行，上面的 exitCode 还是插入时
     // 的 null，照它判就永远走不到按退出码兜底那一档（第 1 轮审查 N1）。
+    // 这一处的 catch **留着**：看门的结论已经落下来了（`outcome` 就是它），归因只是往上面再贴一句
+    // 「卡在哪」。它自己读不出来时正确的答案就是「不贴」—— 失败方向是少一句线索，不是放过一次验收。
     const diagnosed = outcome.status === "failed" ? await diagnoseGateFailure(row, outcome).catch(() => null) : null;
     // 展开保留 main 侧的 note / scene：看门的给出的「卡在哪」不能被这一步顶掉。
     if (diagnosed) outcome = { ...outcome, failure: diagnosed.failure };
@@ -560,6 +562,11 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   if (await runningRun(task.id)) return true;
   const cwd = await existingTaskWorkspacePath(task, project.repoPath);
   if (!cwd) return true;
+  // 这一处的 catch **留着**，而且必须倒向 `false`：`readGateSource` 抛出来的主干就是「源码不可用」
+  // （工作区有未提交/未跟踪文件、读不到提交），而那一档的既定语义是**验收在门禁之前就被拒**
+  // （`acceptTask` 回 `accept_gate_source_unavailable`，一条运行记录都不建）。倒向 `true` 会让批量
+  // 预判说「这一按要跑门禁」，而真按下去压根不会跑 —— `test-accept-gate-readonly.ts` 的
+  // source-unavailable 夹具把这两边钉在一起。
   const source = await readGateSource(cwd, gateSnapshotPath(task.id, "identity")).catch(() => null);
   if (!source) return false;
   const previous = await latestRun(task.id);

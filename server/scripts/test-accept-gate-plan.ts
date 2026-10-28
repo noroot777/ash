@@ -75,6 +75,10 @@ try {
     assert.ok(String(error).includes(join(host, "node_modules")));
     assert.match(String(error), /安装提供 plain-consumer 的依赖/);
     assert.match(String(error), /ASH_RUNS_DIR/);
+    // 出路必须包含「去那棵树所属的检出里重装/清理」这一条：本次提交删掉过依赖的场合，另两条出路
+    // 分别是「把刚删掉的装回来」和「改一个全局目录配置」，都不是这次改动该干的事。
+    assert.match(String(error), /npm install \/ npm prune/);
+    assert.ok(String(error).includes(join(host, "node_modules") + " 所属的那个检出"));
     assert.doesNotMatch(String(error), /删除|遗留|损坏项/);
     return true;
   });
@@ -123,7 +127,15 @@ try {
   assert.equal(probe(rawLayout, "@demo/lib"), "TASK_NEW");
   save(join(host, "packages/lib/index.mjs"), 'export const value = "MAIN_OLD";\n');
   const removedTarget = join(host, "data", "runs", "removed-consumer.source");
-  await assert.rejects(createGateSnapshot(removedTask, removedTarget, await readGateSource(removedTask, removedTarget)), /无法证明隔离/);
+  // 证人必须是**住在那棵树里**的那个消费者。这条断言连着上面三行集合断言一起钉住「消费者闭包按
+  // selected 判」：那个自有包入口只在 selected 里、不在 direct 里，改读 direct 就会放过上面刚实测
+  // 出来的 MAIN_LIVE 泄漏（判据的完整说明在 accept-gate-confine.ts 的 exposed 上方）。
+  await assert.rejects(createGateSnapshot(removedTask, removedTarget, await readGateSource(removedTask, removedTarget)), error => {
+    assert.match(String(error), /无法证明隔离/);
+    assert.ok(String(error).includes(join(host, "node_modules")));
+    assert.match(String(error), /摆着 (plain-consumer|external-only) 这样/);
+    return true;
+  });
   assert.equal(existsSync(removedTarget), false);
   console.log("accept-gate-plan: deleted dependency counterexample: direct own entry hidden; indirect MAIN_OLD -> MAIN_LIVE; production refuses without residue");
 
