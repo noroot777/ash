@@ -1,10 +1,11 @@
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { monitors, regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
+import { regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import type { WaitOrigin } from "./db/schema-task-wait.js";
 import { dirname } from "node:path";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
+import { unsettledMonitorResponsibility } from "./monitor-responsibility.js";
 import { isTurnClaimed, type TurnSource } from "./runs.js";
 import { activeReviewEvidence, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded,
   reviewTargetIdentity, type ReviewDelivery } from "./review-ownership.js";
@@ -46,13 +47,13 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
   // 第三态 `unknown`(升级前的存量行,或者补记时不在回合里)在这一侧**不能**按「不是审查的」
   // 算:那正是「还不知道」被读成「确定不是」。但也不能一律当成审查的 —— 执行者遗留的那一格
   // 同样可能没记 writer,那样就退回 D6 之前「交卷被别人的等待挡住」。所以 unknown 这一档去问
-  // 一个**跟字段无关的运行时事实**:这一轮审查自己挂的哨兵还在跑吗(monitors 的
-  // source_review_run/round 就是为这个记的)。还在跑 = 确有人在等,别结;没有 = 没人等它,
+  // 一个**跟字段无关的运行时事实**:这一轮审查名下还欠着哨兵结果吗(monitors 的
+  // source_review_run/round 就是为这个记的)。还欠着 = 确有人在等,别结;不欠了 = 没人等它,
   // 按老规矩结算。第 2 轮自由审查 F3 的现场正是「旧等待 + 这一轮的哨兵仍 running」。
   const autoOwner = owner.resumePromptAuto
     ? autoCheckpointOwner(owner.waitOwnership?.checkpoint, state) : "review";
   const checkpointMine = autoOwner === "review"
-    || (autoOwner === "unknown" && await roundStillWatching(transaction, owner.id, state));
+    || (autoOwner === "unknown" && await roundOwesResult(transaction, owner.id, state));
   const checkpoint = owner.resumePrompt && checkpointMine
     && owner.waitOwnership?.checkpoint?.generation === owner.resumePromptGeneration
     && ownsWait(owner.waitOwnership.checkpoint.origin);
@@ -70,6 +71,16 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
   // 回来替这一轮审查落账。交卷之前的等待照旧挡住(下一行的 hasConclusion),审查自己以提问/
   // 检查点收尾、还没给结论的那种场景一个字都没变。
   if ((question || checkpoint) && !hasConclusion) return true;
+  // **一格等待都没留下、而这一轮自己的哨兵结果还排在托盘里**:同一类伤害的另一个入口(第 3 轮
+  // 自由审查 F2 的旁证)。上面那三格全靠 `wait_ownership` 记着「有人在等」,可回合是会直接死的
+  // (崩溃/被杀,landCheckpoint 那一笔没落成),此时等待格为空,而结果仍确凿地欠着。下面那条
+  // pending 检查只认 `review-answer:*` 和无 origin 的排队消息 —— 来源身份完全正确的
+  // `monitor:<id>` 消息在它眼里不存在,于是这一轮照旧落 error、那条结果照旧被作废。
+  //
+  // **只在还没交卷时拦**:交卷之后那一轮必须结算(D6 / docs/incidents.md「审查交卷后 round 挂
+  // 死」),哪怕结果还排着也一样 —— 结论已经写定,那条结果不再影响任何判断,作废它是 D6 明说
+  // 的取舍。所以这里跟上一行同一道 `!hasConclusion` 闸,绝不把保护扩到交卷之后。
+  if (!hasConclusion && await roundOwesResult(transaction, owner.id, state)) return true;
   const pending = await transaction.select().from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, owner.id), eq(scheduledMessages.status, "pending")));
   return pending.some((message) => message.origin === `review-answer:${state?.generation}`
@@ -79,22 +90,34 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
 }
 
 /**
- * **这一轮审查自己挂的哨兵还在跑吗** —— 归属字段缺失时的替代事实。
+ * **这一轮审查名下还有没了结的哨兵责任吗** —— 归属字段缺失时的替代事实。
  *
  * `monitors.source_review_run/round` 是哨兵创建时就落库的身份(见 schema-monitors.ts),
  * 跟 `wait_ownership.writer` 是两套独立记录,所以存量等待缺 writer 时它照样答得上来。
  * 旧哨兵行可能没记轮次,那就退到「同一次 run 的任何一轮」—— 宁可多挡一会儿。
+ *
+ * **问的是「责任」不是「进程」**(第 3 轮自由审查 F2)。上一版只查 `status="running"`,于是:
+ * 哨兵的命令自己跑完了(exited)、结果已经排进待发送托盘、审查者一个字都没看到 —— 这一问答
+ * 「没有」,round 以 `status:"error"`、`conclusion:null` 提前结账,那条 pending 随即被
+ * `cancelPendingMonitorEvents` 作废(实测:WRITER_PENDING origin="monitor:m" →
+ * PENDING_AFTER_RECOVERY status="canceled")。**进程结束推不出等待结束**:结果从产出到
+ * 真正递到手上,中间整段都还是「有人在等」。所以改用完成闸那份同样的三类集合
+ * (`unsettledMonitorResponsibility`:在跑 / 已排队未消费 / 结局已定待交接),一条语句读齐,
+ * 且跟本次结算读任务行、证据行同一个事务快照。
+ *
+ * 轮次归属两边任一命中都算:哨兵行自己记的那对,和**那条待发送消息入队时抄下来的**那对
+ * (`scheduled_messages.review_run/round`)。后者是为哨兵行已经被删掉的情形留的 —— 行没了
+ * 责任还在。
  */
-async function roundStillWatching(transaction: ConclusionTransaction, taskId: string,
+async function roundOwesResult(transaction: ConclusionTransaction, taskId: string,
   state: EvidenceRow): Promise<boolean> {
-  const live = await transaction.select().from(monitors).where(and(
-    eq(monitors.taskId, taskId), eq(monitors.status, "running"), eq(monitors.kind, "ash"),
-    isNotNull(monitors.sourceReviewRun),
-  ));
+  const owed = await unsettledMonitorResponsibility(transaction, taskId);
   const runDir = (run: string) => dirname(freeReviewEvidenceDir(taskId, run, 1));
-  return live.some((row) => row.sourceReviewRound === null
-    ? runDir(row.sourceReviewRun!) === dirname(state.directory)
-    : freeReviewEvidenceDir(taskId, row.sourceReviewRun!, row.sourceReviewRound) === state.directory);
+  const thisRound = (run: string | null, round: number | null) => run !== null && (round === null
+    ? runDir(run) === dirname(state.directory)
+    : freeReviewEvidenceDir(taskId, run, round) === state.directory);
+  return owed.some((row) => thisRound(row.reviewRun, row.reviewRound)
+    || thisRound(row.messageReviewRun, row.messageReviewRound));
 }
 
 export async function preserveReviewWait(owner: TaskRow): Promise<void> {

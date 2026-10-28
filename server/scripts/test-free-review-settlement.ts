@@ -416,7 +416,18 @@ try {
   // 在跑吗(`monitors.source_review_run/round`,创建时就落库)。两种现场都得钉住,因为这一档
   // 往两边倒都有代价:一律当成「不是审查的」= 上面那条提前结账;一律当成「是审查的」= 退回
   // D6 之前「执行者遗留的那一格把审查交卷永久挡住」。
-  async function legacyWaitRound(id: string, watching: boolean): Promise<string> {
+  //
+  // ── 同一个入口的**第三轮**形态(第 3 轮自由审查 F2)──
+  // 「这一轮审查还欠着哨兵结果吗」上一版问成了「它的哨兵进程还在跑吗」。进程结束推不出等待
+  // 结束:真实收尾是先把结果入待发送托盘(origin=`monitor:<id>`)、哨兵行随后才落 exited,
+  // 中间还有一档「结局已写定、通知还没入队」(`result_handoff_at` 还挂着)。于是哨兵一 exited
+  // 这一问就答「不欠了」,round 落 error、来源审查失效,那条排着的结果随即被作废 —— 审查者实
+  // 测 WRITER_PENDING origin="monitor:m" → SOURCE_ACTIVE false → PENDING_AFTER_RECOVERY
+  // status="canceled"。改成跟完成闸同一份三类责任集合(在跑 / 已排队未消费 / 待交接),所以这
+  // 四种「欠着」的形态都得钉住,外加一个「一格等待都没留下」的旁路入口。
+  type Owed = "running" | "none" | "pending-result" | "message-only" | "handoff" | "crashed-pending";
+
+  async function legacyWaitRound(id: string, owed: Owed): Promise<string> {
     await createTasks([{
       id, projectId: "p", title: id, body: "test", mode: "single", status: "running",
       agentType: "codex", executorId: "ex", autoTitle: false, workflowMode: "free",
@@ -445,12 +456,36 @@ try {
     assert.ok(checkpoint?.writer, "夹具前提:生产 writer 本来是记下了落笔回合的");
     await db.update(tasks).set({ waitOwnership: { ...row.waitOwnership,
       checkpoint: { generation: checkpoint.generation, origin: checkpoint.origin } } }).where(eq(tasks.id, id));
-    if (watching) await db.insert(monitors).values({
-      id: `${id}-sentinel`, taskId: id, command: "npm run build", cwd: root, status: "running",
-      logPath: join(root, `${id}-sentinel.log`), startedAt: at,
+    const sentinel = `${id}-sentinel`;
+    const sentinelRow = {
+      id: sentinel, taskId: id, command: "npm run build", cwd: root,
+      logPath: join(root, `${sentinel}.log`), startedAt: at,
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
       sourceReviewRun: runId, sourceReviewRound: 1,
+    };
+    // 结果已经排进待发送托盘的那两种:消息自己也带着来源身份(入队时从哨兵行抄下来),所以
+    // **哨兵行还在**(pending-result)和**哨兵行已经被清掉**(message-only)都得认出来。
+    const queueResult = async () => {
+      await db.insert(scheduledMessages).values(pendingMessageRow({
+        taskId: id, text: "BUILD OK", origin: `monitor:${sentinel}`,
+        turnSource: { role: "reviewer", review: { run: runId, round: 1 } },
+      }));
+    };
+    if (owed === "running") await db.insert(monitors).values({ ...sentinelRow, status: "running" });
+    if (owed === "pending-result" || owed === "handoff") await db.insert(monitors).values({
+      ...sentinelRow, status: "exited", endedAt: at, endedReason: "exited",
+      // handoff:结局写定、【哨兵结束】还没入队那一瞬 —— 凭证跟终态是同一条 UPDATE 落的。
+      ...(owed === "handoff" ? { resultHandoffAt: at } : {}),
     });
+    if (owed === "pending-result" || owed === "message-only") await queueResult();
+    // 旁路入口:回合直接死了(崩溃/被杀),landCheckpoint 那一笔没落成,一格等待都没留下,
+    // 而结果仍确凿地排在托盘里。三格归属全空,只有责任集合这一问答得上来。
+    if (owed === "crashed-pending") {
+      await queueResult();
+      const held = (await db.select().from(tasks).where(eq(tasks.id, id)))[0]!;
+      await db.update(tasks).set({ resumePrompt: null, resumePromptAuto: false,
+        waitOwnership: { ...held.waitOwnership, checkpoint: undefined } }).where(eq(tasks.id, id));
+    }
     // 执行者正在跑实现回合:对账据此判定「在跑的不是 reviewer 自己那一轮」,于是往下走到
     // 归属这一问 —— 跟上面 D6 ② 同一个入口。
     assert.equal(claimTurn(id, "single"), true);
@@ -460,7 +495,7 @@ try {
   }
 
   const legacyWatchedId = "legacy-wait-still-watched";
-  await legacyWaitRound(legacyWatchedId, true);
+  await legacyWaitRound(legacyWatchedId, "running");
   const legacyWatched = await freeWorkflowState(legacyWatchedId);
   assert.equal(legacyWatched.reviews[0]?.rounds[0]?.status, "reviewing",
     "旧行没记下是谁落的笔,而这一轮自己的哨兵还在盯 —— 不许提前结账");
@@ -470,11 +505,30 @@ try {
     "继续:哨兵把构建结果送来之后再交卷", "它自己那一格也不许被作废掉");
 
   const legacyDoneId = "legacy-wait-no-sentinel";
-  await legacyWaitRound(legacyDoneId, false);
+  await legacyWaitRound(legacyDoneId, "none");
   assert.equal((await freeWorkflowState(legacyDoneId)).reviews[0]?.rounds[0]?.status, "error",
     "同样一张来路不明的旧行,这一轮名下一条在盯的哨兵都没有 —— 没有任何事实支持「审查还在等」,照旧结账(D6)");
   assert.equal((await db.select().from(tasks).where(eq(tasks.id, legacyDoneId)))[0]?.resumePrompt,
     "继续:哨兵把构建结果送来之后再交卷", "结算照旧不许作废这一格 —— 不知道是谁的就别动它");
+
+  // 欠着结果的另外四种形态:**进程都已经不在跑了**,一条都不许据此提前结账。
+  for (const [owed, why] of [
+    ["pending-result", "命令跑完了,结果还排在待发送托盘里 —— 审查者一个字都没看到"],
+    ["message-only", "哨兵行已经被清掉,只有那条排着的消息自己记着是哪一轮的 —— 行没了责任还在"],
+    ["handoff", "结局已写定、【哨兵结束】还没入队那一瞬(交接凭证还挂着)"],
+    ["crashed-pending", "回合直接死了没留下任何等待格,而结果仍排在托盘里"],
+  ] as [Owed, string][]) {
+    const owedId = `legacy-wait-${owed}`;
+    await legacyWaitRound(owedId, owed);
+    const state = await freeWorkflowState(owedId);
+    assert.equal(state.reviews[0]?.rounds[0]?.status, "reviewing", `${why} —— 不许提前结账`);
+    assert.equal(state.reviews[0]?.rounds[0]?.conclusion, null, `${owed}:也不许凭空给它一个结论`);
+    assert.equal(state.reviews[0]?.status, "reviewing", `${owed}:来源审查不许失效 —— 失效之后那条结果就被作废了`);
+    const queued = await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, owedId));
+    for (const message of queued) {
+      assert.equal(message.status, "pending", `${owed}:排着的那条结果必须原样留着`);
+    }
+  }
 
   const noReservation = await runTurn("no-reservation", { followUp: true, reserve: false });
   assert.equal(noReservation.state.reviews.length, 0, "没有用户预约不自动开审");
