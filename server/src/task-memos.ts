@@ -154,8 +154,17 @@ export function mountTaskMemoRoutes(api: Hono): void {
     const parsed = readBody((await bodyOf<MemoBody>(c)).body);
     if ("error" in parsed) return c.json({ error: parsed.error }, 400);
     const updated = { body: parsed.body, updatedAt: now() };
-    await db.update(taskMemos).set(updated).where(eq(taskMemos.id, memoId));
-    return c.json(toMemo({ ...existing, ...updated }));
+    // 回执必须以**真的改到了那一行**为准,不能拿请求开始时读到的 `existing` 拼一个成功
+    // 出来:这两步之间隔着 `await bodyOf`,正文上传期间这条备忘(或它挂的那个任务)可以被
+    // 另一个窗口删掉,UPDATE 于是零行命中。回 200 的后果实测过 —— 前端按「存上了」退出
+    // 编辑态、清掉草稿,刷新之后整条没了,刚写的几百字也找不回来(独立审查第 3 位第 1 轮
+    // F1)。判据跟 POST 那边同源(「请求开始时查到过」不等于「写的时候还在」),只是那边靠
+    // batch 里的条件删除,这边靠 `.returning()` 拿回真正命中的那一行。
+    const [row] = await db.update(taskMemos).set(updated)
+      .where(and(eq(taskMemos.id, memoId), eq(taskMemos.taskId, taskId)))
+      .returning();
+    if (!row) return c.json({ error: "备忘不存在" }, 404);
+    return c.json(toMemo(row));
   });
 
   api.delete("/tasks/:id/memos/:memoId", async (c) => {
@@ -165,7 +174,13 @@ export function mountTaskMemoRoutes(api: Hono): void {
       .from(taskMemos)
       .where(and(eq(taskMemos.id, c.req.param("memoId")), eq(taskMemos.taskId, c.req.param("id"))))).at(0);
     if (!existing || !(await canUseOwned(existing, actor))) return c.json({ error: "备忘不存在" }, 404);
-    await db.delete(taskMemos).where(eq(taskMemos.id, existing.id));
+    const [row] = await db.delete(taskMemos)
+      .where(and(eq(taskMemos.id, existing.id), eq(taskMemos.taskId, existing.taskId)))
+      .returning({ id: taskMemos.id });
+    // 同一条判据(见 PATCH 那段):零行 = 这期间已经没了。删除这一侧的终态跟删成功一样,
+    // 所以它不是丢数据的缺口;但回执照样要说实话 —— 「删过的再删是 404」这条规矩对并发
+    // 也该成立,而不是只对「一前一后两发」成立。
+    if (!row) return c.json({ error: "备忘不存在" }, 404);
     return c.json({ deleted: true });
   });
 

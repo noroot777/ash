@@ -39,6 +39,39 @@ const call = async (path: string, init?: RequestInit) => {
 };
 const post = (path: string, body: unknown) =>
   call(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+/**
+ * 把一发请求的正文**切成两段**送，中间留一个真实的 await 窗口给 `between` 跑。
+ *
+ * 这是「先查后写」那类缺口唯一的真复现方式：第一段送出之后 handler 已经过了开头那几道
+ * 检查、正停在 `await bodyOf(c)` 上，`between` 这时才改库（删备忘、删任务），然后剩下
+ * 半段才送完。普通的 `post`/`patch` 一次性把正文给齐，handler 根本没有停下来的时机。
+ */
+async function sendSplit(path: string, method: string, body: unknown, between: () => Promise<void>) {
+  const payload = JSON.stringify(body);
+  const encoder = new TextEncoder();
+  let push: (chunk: string) => void = () => undefined;
+  let done: () => void = () => undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      push = (chunk) => controller.enqueue(encoder.encode(chunk));
+      done = () => controller.close();
+    },
+  });
+  const pending = call(path, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: stream,
+    // 流式请求体必须声明它（undici 的要求），否则 Request 根本构造不出来。
+    duplex: "half",
+  } as RequestInit);
+  push(payload.slice(0, 10));
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  await between();
+  push(payload.slice(10));
+  done();
+  return pending;
+}
 const patch = (path: string, body: unknown) =>
   call(path, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
@@ -185,37 +218,50 @@ for (const id of ["t1", "t2"]) {
     id: "t-gone", projectId: "p1", title: "t-gone", body: "",
     status: "done", mode: "single", createdAt: now(), updatedAt: now(),
   });
-  // 请求正文切成两段送。第一段送出之后 handler 已经过了「这个任务存在吗」那道检查、正停
-  // 在 `await bodyOf(c)` 上；这时把任务删掉（连它的备忘一起清，跟删任务那条路一样），再
-  // 把剩下半段送完。「先查后插」那种写法会在这里插进一行孤儿并回 201 —— 任务已经没了，
-  // 界面上再也打不开它（第 3 轮审查 N2）。
-  const payload = JSON.stringify({ body: "任务已经没了，这条不该留下" });
-  const encoder = new TextEncoder();
-  let push: (chunk: string) => void = () => undefined;
-  let done: () => void = () => undefined;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      push = (chunk) => controller.enqueue(encoder.encode(chunk));
-      done = () => controller.close();
-    },
+  // 正文上传期间把任务删掉（连它的备忘一起清，跟删任务那条路一样）。「先查后插」那种
+  // 写法会在这里插进一行孤儿并回 201 —— 任务已经没了，界面上再也打不开它（第 2 位审查者
+  // 第 2 轮 N2）。
+  const late = await sendSplit("/tasks/t-gone/memos", "POST", { body: "任务已经没了，这条不该留下" }, async () => {
+    await db.delete(taskMemos).where(eq(taskMemos.taskId, "t-gone"));
+    await db.delete(tasks).where(eq(tasks.id, "t-gone"));
   });
-  const pending = call("/tasks/t-gone/memos", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: stream,
-    // 流式请求体必须声明它（undici 的要求），否则 Request 根本构造不出来。
-    duplex: "half",
-  } as RequestInit);
-  push(payload.slice(0, 10));
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  await db.delete(taskMemos).where(eq(taskMemos.taskId, "t-gone"));
-  await db.delete(tasks).where(eq(tasks.id, "t-gone"));
-  push(payload.slice(10));
-  done();
-  const late = await pending;
   assert.equal(late.status, 404, `任务没了就不该留下这条备忘：${JSON.stringify(late.body)}`);
   const left = await db.select().from(taskMemos).where(eq(taskMemos.taskId, "t-gone"));
   assert.equal(left.length, 0, `孤儿行必须当场收走，库里还剩 ${left.length} 条`);
+}
+
+// ── 正文还在上传时这条备忘被删掉：回执不许谎称存上了 ─────────────────────────
+{
+  const created = await post("/tasks/t2/memos", { body: "原来那一版" });
+  const memoId = created.body.id;
+  // 这是另一个窗口按下的删除。改动端点开头查到过这条，不等于写下去的时候它还在。
+  const late = await sendSplit(`/tasks/t2/memos/${memoId}`, "PATCH", { body: "改到一半的那几百字" }, async () => {
+    assert.equal((await call(`/tasks/t2/memos/${memoId}`, { method: "DELETE" })).status, 200);
+  });
+  assert.equal(late.status, 404, `零行更新不许回 200：${JSON.stringify(late.body)}`);
+  const rows = await db.select().from(taskMemos).where(eq(taskMemos.id, memoId));
+  assert.equal(rows.length, 0, "不许把已经删掉的那条又写回来");
+}
+
+// ── 同一个缺口的另一条触发路径：正文还在上传时**父任务**被删掉 ───────────────
+{
+  await db.insert(tasks).values({
+    id: "t-drop", projectId: "p1", title: "t-drop", body: "",
+    status: "done", mode: "single", createdAt: now(), updatedAt: now(),
+  });
+  const created = await post("/tasks/t-drop/memos", { body: "父任务待删" });
+  const late = await sendSplit(
+    `/tasks/t-drop/memos/${created.body.id}`,
+    "PATCH",
+    { body: "父任务已经没了，这一版不该算存上" },
+    async () => {
+      // 删任务那条路会连着清备忘（task-delete-routes.ts），这里照它的效果来。
+      await db.delete(taskMemos).where(eq(taskMemos.taskId, "t-drop"));
+      await db.delete(tasks).where(eq(tasks.id, "t-drop"));
+    },
+  );
+  assert.equal(late.status, 404, `父任务没了也不许回 200：${JSON.stringify(late.body)}`);
+  assert.equal((await db.select().from(taskMemos).where(eq(taskMemos.taskId, "t-drop"))).length, 0);
 }
 
 await releaseTmpDb();
