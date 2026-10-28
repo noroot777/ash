@@ -23,8 +23,18 @@ import { cmdExeLaunch } from "./win-command.js";
 
 // server 从 GUI / 预览启动(不是登录 shell)时,PATH 常常缺 CLI 所在的目录,
 // 症状是 `spawn claude ENOENT`。补上各平台常见的安装位置。
-function extraPaths(): string[] {
-  const home = homedir();
+//
+// **`scripts/platform.mjs` 的 `extraPaths` 必须给出同一个列表**:装机脚本要在构建之前
+// 跑(那时 `server/dist` 还不存在、`src` 又只有 TypeScript),所以那边只能复刻一份。
+// 两份漂移的代价是实测过的 —— 2026-10-28 一台机器上 `setup.mjs` 的 `which("codex")`
+// 只扫 PATH、判成「没装 codex CLI,跳过它的 MCP 注册」,而 ash 自己靠这里的候选目录
+// 照样派得出 codex 任务:于是**每个 codex 任务都是活干完、交不了卷、记 failed**,
+// 一轮审查更是跑满 35 分钟才在最后一句说「未提供 report_stage 工具」。
+// 靠 `server/scripts/test-win-launch.ts` 最后一节钉住(两个平台分支都比)。
+//
+// `env` / `home` 可注入**只为**让那条回归在单一平台上翻转着比两份实现;生产路径一律
+// 用默认值。
+export function extraPaths(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string[] {
   if (!IS_WINDOWS) {
     return [
       "/opt/homebrew/bin",
@@ -33,15 +43,15 @@ function extraPaths(): string[] {
       `${home}/.local/bin`,
       `${home}/.bun/bin`,
       `${home}/.deno/bin`,
-      join(process.env.KIMI_INSTALL_DIR || join(home, ".kimi-code"), "bin"),
+      join(env.KIMI_INSTALL_DIR || join(home, ".kimi-code"), "bin"),
     ];
   }
-  const { APPDATA, LOCALAPPDATA, ProgramFiles, ChocolateyInstall } = process.env;
+  const { APPDATA, LOCALAPPDATA, ProgramFiles, ChocolateyInstall } = env;
   // `Program Files` 在 Windows 上不止一个:ARM64 机器上原生 ARM 程序在 `Program Files`、
   // x64 程序在 `Program Files (x86)`、32 位 ARM 在 `Program Files (Arm)`,而 `%ProgramFiles%`
   // 只指向**与当前进程架构相同**的那一个 —— 一个 x64 版 node 起的 ash,看不见装在
   // 原生 ARM 目录里的 node/CLI。三个都扫,不存在的目录 resolveBin 自会跳过。
-  const programFiles = [ProgramFiles, process.env["ProgramFiles(x86)"], process.env["ProgramFiles(Arm)"]];
+  const programFiles = [ProgramFiles, env["ProgramFiles(x86)"], env["ProgramFiles(Arm)"]];
   return [
     APPDATA && join(APPDATA, "npm"), // npm -g 的垫片就装在这里
     LOCALAPPDATA && join(LOCALAPPDATA, "pnpm"),

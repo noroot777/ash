@@ -11,9 +11,13 @@
 //   · 多摘（把**本项目的** .bin 也摘了）= 在 ash 自己仓库里干活的任务突然找不到 tsx /
 //     vite，一个本来好好的预览变成「起不来」。
 //
+// 本文件还顺带钉住一条**跨目录的一致性**：CLI 候选目录（extraPaths）在 server 与
+// scripts 两侧必须给出同一个列表。它跟摘 .bin 不是一回事，但同住 bin-resolve.ts、
+// 也同样是「漂了不报错、只是行为静默变样」，放在一起跑最省事。
+//
 // 跑法：npm -w server run test:foreign-bins
 import { sep } from "node:path";
-import { withoutForeignNodeBins } from "../src/executors/bin-resolve.js";
+import { extraPaths, withoutForeignNodeBins } from "../src/executors/bin-resolve.js";
 import { PATH_DELIMITER } from "../src/platform.js";
 
 let failures = 0;
@@ -87,6 +91,31 @@ check("空 PATH 不炸", kept("", WORKTREE), []);
 check("PATH 缺失时给空串", withoutForeignNodeBins({}, WORKTREE).PATH, "");
 // 环境里的其它变量原样带走：这个函数只碰 PATH。
 check("只改 PATH", withoutForeignNodeBins({ PATH: "", FOO: "bar" }, WORKTREE).FOO, "bar");
+
+// —— CLI 候选目录:两份实现必须一致(本文件在**真实平台**下跑,所以钉的是当前平台那个
+// 分支;Windows 分支由 test-win-launch.ts 第 10 节钉,它把 platform 翻成了 win32) ——
+//
+// 为什么非钉不可:`scripts/platform.mjs` 要在构建之前跑,只能复刻一份候选目录。漂了的
+// 症状不是报错而是**装机脚本把「装了」判成「没装」** —— 2026-10-28 一台机器上
+// setup.mjs 的 `which("codex")` 只扫 PATH、于是跳过 codex 的 MCP 注册,而 ash 自己靠
+// bin-resolve 的候选目录照样派得出 codex 任务:每个任务活干完、交不了卷、记 failed。
+{
+  const { extraPaths: fromScripts } = await import("../../scripts/platform.mjs");
+  const env = {
+    KIMI_INSTALL_DIR: p("", "opt", "kimi"),
+    APPDATA: p("", "A"),
+    LOCALAPPDATA: p("", "L"),
+    ProgramFiles: p("", "PF"),
+    ChocolateyInstall: p("", "C"),
+  };
+  const home = p("", "Users", "someone");
+  check("候选目录两份一致（注入 env/home）", fromScripts(env, home), extraPaths(env, home));
+  // 默认参数那条路也要比:生产代码走的是它,而它读 process.env / homedir()。
+  check("候选目录两份一致（默认参数）", fromScripts(), extraPaths());
+  // 真相在 bin-resolve 那边,顺带确认它确实把 KIMI_INSTALL_DIR 算进去了 ——
+  // 上面那条「两份一致」如果两边一起漏掉同一项，是比不出来的。
+  check("KIMI_INSTALL_DIR 进了候选目录", extraPaths(env, home).includes(p("", "opt", "kimi", "bin")), true);
+}
 
 console.log(failures ? `\n${failures} 条没过` : "\n全过");
 process.exit(failures ? 1 : 0);

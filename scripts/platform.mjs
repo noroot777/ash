@@ -8,6 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { request } from "node:http";
+import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
 
@@ -34,10 +35,51 @@ function candidates(cmd) {
   return [cmd, ...exts.map((ext) => cmd + ext.toLowerCase())];
 }
 
-/** `command -v` 的跨平台版本：在 PATH 里找可执行文件，找不到返回 null。 */
+/**
+ * CLI 常见安装目录。**与 `server/src/executors/bin-resolve.ts` 的 `extraPaths` 必须
+ * 一字不差**（那边是真相,理由和事故经过都写在它头上;两份由
+ * `server/scripts/test-win-launch.ts` 最后一节钉住）。
+ *
+ * `env` / `home` 可注入只为让那条回归翻转着比两份实现,生产路径一律用默认值。
+ */
+export function extraPaths(env = process.env, home = homedir()) {
+  if (!IS_WINDOWS) {
+    return [
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      `${home}/.local/bin`,
+      `${home}/.bun/bin`,
+      `${home}/.deno/bin`,
+      join(env.KIMI_INSTALL_DIR || join(home, ".kimi-code"), "bin"),
+    ];
+  }
+  const { APPDATA, LOCALAPPDATA, ProgramFiles, ChocolateyInstall } = env;
+  const programFiles = [ProgramFiles, env["ProgramFiles(x86)"], env["ProgramFiles(Arm)"]];
+  return [
+    APPDATA && join(APPDATA, "npm"),
+    LOCALAPPDATA && join(LOCALAPPDATA, "pnpm"),
+    LOCALAPPDATA && join(LOCALAPPDATA, "Microsoft", "WindowsApps"),
+    join(home, ".bun", "bin"),
+    join(home, ".deno", "bin"),
+    join(home, ".local", "bin"),
+    join(home, "scoop", "shims"),
+    ...programFiles.map((dir) => dir && join(dir, "nodejs")),
+    ChocolateyInstall ? join(ChocolateyInstall, "bin") : "C:\\ProgramData\\chocolatey\\bin",
+  ].filter(Boolean);
+}
+
+/**
+ * `command -v` 的跨平台版本：找不到返回 null。
+ *
+ * **扫 PATH 之后接着扫 `extraPaths()`** —— 跟 ash 自己派活时用的 `resolveBin` 同一套
+ * 候选目录。少了这一截,装机脚本会把「装了、只是不在这个 shell 的 PATH 里」判成
+ * 「没装」:`setup.mjs` 据此跳过 MCP 注册,而 ash 照样派得出任务,结果是每个任务都
+ * 交不了卷(见 bin-resolve.ts 的 extraPaths 头部)。
+ */
 export function which(cmd) {
   if (cmd.includes("/") || cmd.includes("\\")) return executable(cmd) ? cmd : null;
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+  for (const dir of [...(process.env.PATH ?? "").split(delimiter), ...extraPaths()]) {
     if (!dir) continue;
     for (const name of candidates(cmd)) {
       const full = join(dir, name);
