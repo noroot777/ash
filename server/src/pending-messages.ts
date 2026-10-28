@@ -136,6 +136,9 @@ export function pendingMessageRow(input: {
     // 普通消息不承载续跑交代,所以凭证两列一起空着(账本在 monitor-session.ts 里才写)。
     checkpointAuto: null,
     checkpointGeneration: null,
+    // 普通待发送消息走的是「宁可重发」那一档,不受越线凭据前置保护,所以不标协议代次
+    // —— 标上就等于宣称「记号不在」对它构成否证,而它那一档本来就允许记号缺失。
+    crossingProtocol: null,
   };
 }
 

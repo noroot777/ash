@@ -490,6 +490,14 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 不适用,于是同一条结束通知变成两条消息、把 agent 叫醒两次。身份跟入队写在同一笔里,所以
   // 「送过没有」这一问有一个原子的答案:库里找得到这个 token ⇒ 已经送过,只补销凭证。
   handoffToken: text("handoff_token"),
+  // 这张凭证**是在哪一代投递协议下开出来的**(delivery-crossing.ts 的 CROSSING_PROTOCOL)。
+  //
+  // 为什么非得落库:恢复侧用「越线记号不在」当否证,而那个否证只有在写记号是**硬前置**
+  // (写不成就不 spawn)的那一代里才成立。`crossingRequired` 只活在当时那个调用栈里,
+  // 旧凭证和新凭证在库里长得一模一样 —— 升级之后拿新代码的判据去读旧代开的凭证,等于
+  // 把旧协议当时根本没给过的证明力追认给它(第 2 轮自由审查 F1 跨进程实测:同一段交代
+  // 在升级后被执行了两遍)。null = 旧代开的,它的沉默什么都不证明,只能按交付不明处理。
+  crossingProtocol: text("crossing_protocol"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one

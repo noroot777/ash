@@ -334,4 +334,37 @@ export async function checkpointAckFailureCases(): Promise<void> {
     assert.equal(hits(test.checkpoint), 0, "整个过程系统一次都没再送");
     console.log("PASS: an uncertain settlement keeps the recovery credential until the visible record publishes");
   }
+
+  // ⑪ 跟 ③ **同一个现场,只差这张凭证是哪一代开出来的**(第 2 轮自由审查 F1)。
+  //    「记号不在 ⇒ 一定没送出去」这句话只在**强制前置**存在的那一代成立:凭据写不下来就
+  //    当场抛、一个字都不许 spawn(⑧/⑧b),所以那一代的记号缺失是真否证。旧代开出来的凭证
+  //    身上没有这层保护 —— 当时越线记号是尽力而为的,写不下来照样 spawn。拿当前代码已经变
+  //    严格来追认旧凭证也受保护,就是用「现在的规矩」去给「当时的事实」作证:审查者跨进程
+  //    实测到同一段交代被执行两遍(OLD_BEFORE_CRASH_INPUT_COUNT 1 → NEW_VERDICT not-started
+  //    → NEW_AFTER_RETRY_INPUT_COUNT 2)。
+  //
+  //    所以否证的效力**跟着凭证走**:这一行的协议代次是 null(或任何不认得的代次)时,记号
+  //    不在只能归到交付不明,就地结成一条带原文的可见记录,由人裁定要不要再送。
+  {
+    const test = await scenario(0);
+    const generation = (await taskOf(test.taskId)).resumePromptGeneration;
+    const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
+    // 把它改回旧代开出来的样子 —— 认领那一步现在会盖上 CROSSING_PROTOCOL。
+    await db.update(scheduledMessages).set({ crossingProtocol: null })
+      .where(eq(scheduledMessages.id, receipt.id));
+    assert.equal(deliveryCrossing(test.taskId, receipt.id), "absent",
+      "夹具前提:记号确实不在 —— ③ 那一档正是靠这一点归还的");
+    forgetCheckpointDelivering(receipt.id);
+    await pending.reclaimStaleDeliveries();
+    await until("旧代凭证归到交付不明", async () => (await rowOf(receipt.id)).status === "sent");
+    assert.equal((await taskOf(test.taskId)).resumePrompt, null,
+      "旧代的记号缺失不构成否证 —— 按否证归还就是把可能已经执行过的交代再投一遍");
+    assert.equal((await rowOf(receipt.id)).deliveringSince, null, "也不许永久挂着");
+    assert.equal(await preparePendingCheckpointStart(test.taskId), null, "了结之后这个任务能再启动");
+    assert.equal(hits(test.checkpoint), 0, "系统自己一次都没再送");
+    const told = await transcript(test.taskId);
+    assert.match(told, /不会自动再送一遍/);
+    assert.match(told, new RegExp(test.checkpoint), "原文必须留在用户看得见的地方");
+    console.log("PASS: a legacy receipt minted before the pre-spawn guard is settled as uncertain, never returned");
+  }
 }

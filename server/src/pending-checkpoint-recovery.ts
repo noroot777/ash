@@ -1,7 +1,7 @@
 import { and, eq, gte, isNotNull, ne } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, sessions, tasks } from "./db/schema.js";
-import { deliveryCrossing } from "./delivery-crossing.js";
+import { crossingProvesAbsence, deliveryCrossing } from "./delivery-crossing.js";
 import { restoreMonitorCheckpoint } from "./monitor-checkpoint-handoff.js";
 
 export const CHECKPOINT_RUN_ORIGIN = "checkpoint:resume";
@@ -52,7 +52,7 @@ export const forgetCheckpointDelivering = (messageId: string): void => void deli
 export type CheckpointDelivery = "not-started" | "delivered" | "uncertain";
 
 export async function checkpointDeliveryVerdict(
-  receipt: { id: string; taskId: string; deliveringSince: string | null },
+  receipt: { id: string; taskId: string; deliveringSince: string | null; crossingProtocol: string | null },
 ): Promise<CheckpointDelivery> {
   if (!receipt.deliveringSince) return "not-started";
   const opened = await db.select({ id: sessions.id }).from(sessions).where(and(
@@ -61,6 +61,11 @@ export async function checkpointDeliveryVerdict(
     gte(sessions.turnStartedAt, receipt.deliveringSince),
   ));
   if (opened.length > 0) return "delivered";
+  // 否证的效力**跟着凭证走**,不跟着当前代码走:只有在「写记号是硬前置」的那一代里开出来的
+  // 票据,才有资格拿「目录在、这一条不在」当「没送出去」。旧代的凭证长得一模一样,但它当时
+  // 允许记号写失败后照常 spawn —— 升级之后用新判据读它,就是把它当时没有的证明力追认给它
+  // (第 2 轮自由审查 F1:同一段交代在升级后被执行两遍)。不认得的代次按旧代处理。
+  if (!crossingProvesAbsence(receipt.crossingProtocol)) return "uncertain";
   return deliveryCrossing(receipt.taskId, receipt.id) === "absent" ? "not-started" : "uncertain";
 }
 

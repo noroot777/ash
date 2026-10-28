@@ -30,6 +30,32 @@ import { closeSync, fsyncSync, mkdirSync, openSync, rmSync, statSync, writeSync 
 import { join } from "node:path";
 import { RUNS_DIR } from "./paths.js";
 
+/**
+ * **这一代投递协议的名字**,随凭证一起落库(`scheduled_messages.crossing_protocol`)。
+ *
+ * 记号「不在」能不能当否证,取决于开那张凭证的**那一代代码**有没有把写记号当硬前置。
+ * 这一代(`required-v1`)是:`ensureCrossingDir` 在认领时建目录,`requireDeliveryCrossing`
+ * 在 spawn 前写文件,任何一步失败都当场撤回。所以「目录在、这一条不在」=「没送出去」。
+ *
+ * 旧代(列为 null)只告警不拦:记号写失败照样 spawn,于是同一个现场在旧代里意味着
+ * 「可能已经送出去了」。判据必须跟着凭证走,不能跟着当前代码走 —— 升级那一刻库里那些
+ * 在途行是旧代开的,拿新判据读它们就是把它们当时没有的证明力追认给它们。
+ *
+ * 往后再改协议就换一个新名字,旧名字留在这里的 `PROVEN_BY` 里按当时的语义处理。
+ */
+export const CROSSING_PROTOCOL = "required-v1";
+
+/** 哪几代协议的「记号不在」算否证。 */
+const PROVEN_BY = new Set<string>([CROSSING_PROTOCOL]);
+
+/**
+ * 这张凭证的「记号不在」可以当否证吗。null / 不认识的代次一律否 —— 不认识意味着它是
+ * 更新或更旧的某一代,两种都不该由这一代的判据替它背书。
+ */
+export function crossingProvesAbsence(protocol: string | null | undefined): boolean {
+  return !!protocol && PROVEN_BY.has(protocol);
+}
+
 const crossingDir = (taskId: string): string => join(RUNS_DIR, taskId, "crossed");
 const crossingPath = (taskId: string, messageId: string): string =>
   join(crossingDir(taskId), `${messageId}.json`);

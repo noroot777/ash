@@ -341,6 +341,9 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 投递时按显式的「不绑」处理,不退回「查最新那一轮」(本轮审查 F2)。
   "ALTER TABLE scheduled_messages ADD COLUMN review_run TEXT",
   "ALTER TABLE scheduled_messages ADD COLUMN review_round INTEGER",
+  // 这张凭证开出来时走的是哪一代投递协议。旧行 NULL = 强制前置还不存在的那一代,
+  // 「越线记号不在」对它不构成否证(第 2 轮自由审查 F1)。
+  "ALTER TABLE scheduled_messages ADD COLUMN crossing_protocol TEXT",
   // 这一轮实际跑在谁名下(= 注入 CLAUDE_CONFIG_DIR/CODEX_HOME 的那个人)。接力搬会话
   // 文件按它找,不按任务归属人 —— 跨人回合两者不是一回事(见 db/schema.ts 同名列)。
   "ALTER TABLE sessions ADD COLUMN run_owner_user_id TEXT",

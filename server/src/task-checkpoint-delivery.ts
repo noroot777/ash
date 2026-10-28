@@ -6,7 +6,7 @@ import { recoverPendingDelivery } from "./pending-delivery-recovery.js";
 import {
   CHECKPOINT_RUN_ORIGIN, checkpointDeliveryVerdict, forgetCheckpointDelivering, noteCheckpointDelivering,
 } from "./pending-checkpoint-recovery.js";
-import { ensureCrossingDir, forgetDeliveryCrossing } from "./delivery-crossing.js";
+import { CROSSING_PROTOCOL, ensureCrossingDir, forgetDeliveryCrossing } from "./delivery-crossing.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { freshRunFailureTarget } from "./turn-failure.js";
 import { markSent } from "./pending-messages.js";
@@ -44,6 +44,8 @@ export async function claimCheckpointForRun(taskId: string, expected: string, ge
       origin: CHECKPOINT_RUN_ORIGIN, sendAt: stamp, createdAt: stamp, deliveringSince: stamp,
       checkpointTaken: expected, checkpointAuto: task.resumePromptAuto,
       checkpointGeneration: task.resumePromptGeneration,
+      // 跟凭证同一笔落库:这张票据受哪一代协议保护,以后谁来读都看得见(F1)。
+      crossingProtocol: CROSSING_PROTOCOL,
     }).returning();
     return logged[0]!;
   });
