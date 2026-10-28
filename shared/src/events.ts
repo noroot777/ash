@@ -8,7 +8,7 @@
 // 编译期就被抹掉,所以安全 —— 下面对 ./index.js 的反向 type import 同理。
 import type { AgentType, DuetConsensusBy, QuestionItem, Task, TaskStage, TaskStatus } from "./index.ts";
 import type { SessionRole } from "./session.ts";
-import type { ContextUsage, TokenUsage } from "./usage.ts";
+import type { ContextUsage, TokenUsage, UsageAccountingMark } from "./usage.ts";
 import type { NativeWorkEvent } from "./native-work.ts";
 import type { MonitorWakeData } from "./monitor-wake.ts";
 
@@ -58,9 +58,10 @@ export type AgentEvent =
   // 本回合的 token 用量,由执行器从 CLI 的收尾事件(claude 的 result / codex 的
   // turn.completed)解析。每回合至多一条,恒在该回合的 turnEnd/done 之前。拿不到
   // 用量的 CLI 一条都不发 —— 展示端据此判断「这家报不报账」。
-  // accounting 缺省只存在于旧 trace：Claude 旧账本来就是单轮值；Codex 旧账是累计
-  // 快照，读取侧要先求差。新事件经过服务端归一后恒标 incremental。
-  | { kind: "usage"; usage: TokenUsage; accounting?: "incremental" }
+  // accounting 记的是这个数字**怎么来的**(见下面 UsageAccountingMark)。读侧和历史
+  // 回填都靠这一条逐事件的标记判口径,不靠数值形状去猜 —— 形状会骗人:续聊一轮就能让
+  // 整串历史改变含义。
+  | { kind: "usage"; usage: TokenUsage; accounting?: UsageAccountingMark }
   // 上下文**水位**(不是流水,区别见 shared/src/usage.ts 的 ContextUsage)。每回合至多
   // 一条,恒在该回合的 turnEnd/done 之前。落库是**覆盖**不是累加。
   | { kind: "context"; context: ContextUsage }
