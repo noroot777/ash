@@ -99,6 +99,12 @@ try {
   // 归因口径写在 accept-gate-source.ts 那道闸旁边,另一头钉在 test-accept-gate-plan.ts 的
   // otherLocation 上;这条断言**不许**放宽到两种形态都收。
   await assert.rejects(createGateSnapshot(repo, join(root, "drift"), source), /已变化/);
+  // 归因不了的那一支:跨版本重启读到的旧计划没有 executionCwd。照旧拒绝,只是说法退回「位置」那一条
+  // ——「证明不了就拒绝」三条支路上一条都不打折,不许因为归不了因就放行。
+  const legacyPlan = { ...source };
+  delete legacyPlan.executionCwd;
+  await assert.rejects(createGateSnapshot(repo, join(root, "drift-legacy"), legacyPlan), /重新登记/,
+    "没有登记位置就归不了因,但依然是一次拒绝");
   rmSync(installed);
   // **已知漏检面**:手改依赖目录里的文件却没重装(patch-package 打完没提交、npm link 指到本地
   // 检出、进去改一行热修),安装声明和包清单都不动,于是依赖实际变了却会沿用上一张绿结果。这是
