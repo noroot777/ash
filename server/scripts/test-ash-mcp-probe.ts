@@ -14,6 +14,8 @@
 //   6. 门闩：归属没建成之前 CLI 一条指令都不准执行（第 6 轮 B1）
 //   7. **离组后代**：换了进程组、被 init 收养的查询照样要收掉 —— 原组的 ESRCH 推不出
 //      整次运行干净（第 1 轮 B1，macOS 真机实测）
+//   8. **下刀谎报成功**：`killAll` 的返回值表达不了「整圈都终止了」，核销只认读数
+//      （第 2 轮 B1）
 //
 // 跑：npm -w server run test:ash-mcp-probe
 import assert from "node:assert/strict";
@@ -45,9 +47,13 @@ try {
   const pgroupStand = (token: string) => {
     let root = 0;
     // **要真的枚举组成员**，不能只报 root：门闩壳跑完就退出了，那时组里剩下的恰恰是它起的
-    // 那些后代 —— 只报一个已死的 root，`unitResidue` 会把组读成空。`ps -eo pid=,pgid=` 两个
-    // 平台都认。
-    const members = (): { pid: number; gen: null }[] => {
+    // 那些后代 —— 只报一个已死的 root，`unitResidue` 会把组读成空。`ps -eo pid=,pgid=` 在
+    // 两个 POSIX 平台上都认。
+    //
+    // 返回 `null` = **这一问没答出来**，不是「空」。第 2 轮审查 N3 点的就是这里：上一版
+    // `catch { return [] }`，把「没有 ps 可用」伪装成「圈里一个人都没有」—— 跟生产那条
+    // 「不把问不出当空」的标准正好反着。
+    const members = (): { pid: number; gen: null }[] | null => {
       if (!root) return [];
       try {
         return execFileSync("ps", ["-eo", "pid=,pgid="], { encoding: "utf8" })
@@ -55,26 +61,36 @@ try {
           .map((l) => l.trim().split(/\s+/).map(Number))
           .filter(([pid, pgid]) => pgid === root && Number.isInteger(pid) && pid > 1)
           .map(([pid]) => ({ pid, gen: null }));
-      } catch { return []; }
+      } catch { return null; }
     };
     return {
       id: token,
       enroll: (pid: number) => { root = pid; return true; },
       preExecEnv: () => null,
-      read: () => (root
-        ? { kind: "members" as const, coverage: "since-enroll" as const, members: members() }
-        : { kind: "absent" as const, why: "还没 enroll" }),
+      read: () => {
+        if (!root) return { kind: "absent" as const, why: "还没 enroll" };
+        const ms = members();
+        if (!ms) return { kind: "unqueryable" as const, why: "ps 这一刻问不出成员" };
+        return { kind: "members" as const, coverage: "since-enroll" as const, members: ms };
+      },
       killAll: (sig: NodeJS.Signals) => {
-        try { process.kill(-root, sig); return 1; } catch { return 0; }
+        try { process.kill(-root, sig); return 1; } catch { return -1; }
       },
       dispose: () => {},
     } as unknown as NonNullable<ReturnType<NonNullable<Parameters<typeof probeCli>[5]>>>;
   };
-  /** 第 1~4 块共用：带替身的探测（本机也能把结束路径跑完）。 */
+
+  // **替身只在真实设备弃权的平台上用**（第 2 轮审查 N3）。Windows/Linux 上圈定不弃权，
+  // 那边就该拿真实的 Job Object / cgroup 跑这几块 —— 替身在 Windows 上压根不成立（没有
+  // POSIX 的 `ps`、也没有负 PID 的组语义），拿它去跑等于用一个假设备冒充验证。
+  const { confineAbstention } = await import("../src/executors/kernel-confine.js");
+  const abstains = !!confineAbstention();
+  /** 第 1~4 块共用：弃权平台上挂替身，否则走真实设备。 */
   const probeStood = (
     args: string[], cwd: string | undefined, timeoutMs: number,
-  ): ReturnType<typeof probeCli> =>
-    probeCli("codex", args, process.env, cwd, timeoutMs, pgroupStand);
+  ): ReturnType<typeof probeCli> => (abstains
+    ? probeCli("codex", args, process.env, cwd, timeoutMs, pgroupStand)
+    : probeCli("codex", args, process.env, cwd, timeoutMs));
 
   // ── 1. 超时之后不准把自己起的进程留在机器上 ──────────────────────────────
   // Windows 真机实测:15 秒超时到点、预检已放行,底下那个 node 查询进程还活着
@@ -315,66 +331,37 @@ try {
     process.env.PATH = pathWas;
   }
 
-  // ── 5. 归属读数：两台设备各自答得了什么，「不说话」不等于「空」 ───────────
-  // 判据抄的是既有消费者：内核圈定那档照 cleanup-result.ts 的 confinedResidue（absent
-  // 不说话、unqueryable 不说话、只有 whole-run 的空才构成证明），追踪 fd 那档直接接
-  // residueFromProbe。上一版把 absent 和 since-enroll 的空都读成「已回收」，于是 Windows
-  // 冷启动那次泄漏连警告都没打（第 5 轮 B1）。
+  // ── 5. 归属读数：这台设备答得了什么，「不说话」不等于「空」 ─────────────────
+  // 判据抄的是既有消费者 cleanup-result.ts 的 confinedResidue：absent 不说话、unqueryable
+  // 不说话、只有 whole-run（或门闩关掉了空窗）的空才构成证明。上一版把 absent 和
+  // since-enroll 的空都读成「已回收」，于是 Windows 冷启动那次泄漏连警告都没打（第 5 轮 B1）。
   {
     const fake = (read: unknown) => ({
       id: "fake", enroll: () => true, preExecEnv: () => null,
       read: () => read, killAll: () => 1, dispose: () => {},
     });
-    const unit = (confine: unknown, gated: boolean, track: string | null = null) =>
-      ({ confine, gated, track }) as Parameters<typeof unitResidue>[0];
+    const unit = (confine: unknown, gated: boolean) =>
+      ({ confine, gated }) as Parameters<typeof unitResidue>[0];
     const members = (ms: number[], coverage: string) =>
       fake({ kind: "members", members: ms.map((pid) => ({ pid, gen: null })), coverage });
 
-    assert.equal(await unitResidue(unit(fake({ kind: "absent", why: "圈没建起来" }), true)), null,
+    assert.equal(unitResidue(unit(fake({ kind: "absent", why: "圈没建起来" }), true)), null,
       "absent = 这台设备弃权，**不是**「已经回收」；门闩也不能让它说话（圈都没有，门闩无从谈起）");
-    assert.equal(await unitResidue(unit(fake({ kind: "unqueryable", why: "这一刻问不到" }), true)), null,
+    assert.equal(unitResidue(unit(fake({ kind: "unqueryable", why: "这一刻问不到" }), true)), null,
       "问不出来也不是空");
-    assert.equal(await unitResidue(unit(members([], "since-enroll"), false)), null,
+    assert.equal(unitResidue(unit(members([], "since-enroll"), false)), null,
       "没门闩时 since-enroll 的空不构成证明 —— 空窗里出生又脱离的后代不在集合里");
-    assert.equal(await unitResidue(unit(members([], "whole-run"), false)), "gone",
+    assert.equal(unitResidue(unit(members([], "whole-run"), false)), "gone",
       "设备自己说覆盖整次运行时，空就是证明");
     // 第 6 轮审查第 3 点：`cut >= 0` 当时绕过了 coverage 判据。现在反过来 —— 判据是
     // **门闩有没有把窗口关掉**，而不是设备自报的那一档。门闩之下被 spawn 的是不生后代的
     // 壳，CLI 在圈建成之后才出生，所以这个集合对 CLI 这棵树是确定的，空构成证明。
-    assert.equal(await unitResidue(unit(members([], "since-enroll"), true)), "gone",
+    assert.equal(unitResidue(unit(members([], "since-enroll"), true)), "gone",
       "门闩关掉了空窗：集合对 CLI 这棵树是确定的，空算证明");
-    assert.equal(await unitResidue(unit(members([process.pid], "since-enroll"), true)), "remaining",
+    assert.equal(unitResidue(unit(members([process.pid], "since-enroll"), true)), "remaining",
       "成员还活着就是还有残留");
-
-    // 追踪 fd 那一档（Windows 上没有反查手段，那边这台设备压根不开）：**只给正面证据**。
-    if (process.platform !== "win32") {
-      const nobody = join(stage, "track-nobody");
-      writeFileSync(nobody, "");
-      // 本轮实测钉在这里：wrapper 用 `spawn(detached, stdio:"ignore")` 起查询之后，lsof 对
-      // 追踪文件返回空，而那个查询 PPID=1 活得好好的 —— Node 把 fd3 CLOEXEC 掉了。所以
-      // 「没人握着」在这一层**不构成核销**，它只能是「不说话」。
-      assert.equal(await unitResidue(unit(null, false, nobody)), null,
-        "没人握着**不**等于收干净了：Node spawn 的孙进程压根不继承 fd3（本轮实测）");
-      // 持有者必须是**别的进程**：`parseHolders` 刻意把自己(`pid === process.pid`)排除在外，
-      // 因为父进程那份 fd 在 `registerTrackFd` 里当场就关掉了，算进来只会凭空落一笔。
-      const held = join(stage, "track-held");
-      writeFileSync(held, "");
-      const ready = join(stage, "track-held.ready");
-      const holder = spawn(process.execPath, ["-e",
-        'const fs = require("node:fs");'
-        + `fs.openSync(${JSON.stringify(held)}, "r+");`
-        + `fs.writeFileSync(${JSON.stringify(ready)}, "1");`
-        + "setInterval(() => {}, 1000);"], { stdio: "ignore" });
-      try {
-        for (let i = 0; i < 60 && !existsSync(ready); i++) await pause(50);
-        assert.ok(existsSync(ready), "持有者进程应该已经把文件打开了");
-        assert.equal(await unitResidue(unit(null, false, held)), "remaining",
-          "有活着的写模式持有者 ⇒ 还有残留");
-      } finally { holder.kill("SIGKILL"); }
-      // 一台设备都没有 ⇒ 没有任何人能作答。这一档不许退回进程组（第 1 轮 B1）。
-      assert.equal(await unitResidue(unit(null, false, null)), null,
-        "一台设备都没有时只能答「不说话」");
-    }
+    // 一台设备都没有 ⇒ 没人能作答。这一档不许退回进程组（第 1 轮 B1）。
+    assert.equal(unitResidue(unit(null, false)), null, "没有归属设备时只能答「不说话」");
   }
 
   // ── 6. 门闩：归属没建成之前，CLI 一条指令都不准执行 ────────────────────────
@@ -458,7 +445,8 @@ try {
   //
   // 跟第 3 块的区别就在**离组**那一下：那边的后代是 `&` 起的，仍留在原组里，组刀打得到，
   // 所以旧实现也能过。这一块的鉴别力全靠「原组已经空了」那条断言 —— 没有它，这个用例
-  // 对旧实现同样是绿的。归属改由追踪 fd 提供（fork 那一刻就装上，换组和被收养都追得到）。
+  // 对旧实现同样是绿的。归属改由**内核圈定**提供（cgroup/Job 的成员资格逃不掉，换组和
+  // 被收养都还在圈里）；圈拿不到的平台不启动，所以这一块按 `abstains` 分两支。
   if (process.platform !== "win32") {
     const escDir = join(stage, "escape-cli");
     mkdirSync(escDir, { recursive: true });
@@ -483,10 +471,6 @@ try {
     const shim = join(escDir, "codex");
     writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" "${wrapper}" "$@"\n`);
     chmodSync(shim, 0o755);
-
-    // 这台机器上内核圈定弃不弃权，决定这条用例该断言哪一支（macOS 弃权、Linux 不弃权）。
-    const { confineAbstention } = await import("../src/executors/kernel-confine.js");
-    const abstains = !!confineAbstention();
 
     const pathWas = process.env.PATH;
     process.env.PATH = `${escDir}${delimiter}${pathWas ?? ""}`;
@@ -538,7 +522,75 @@ try {
     }
   }
 
-  // ── 8. 结构约束：Windows 那条路本机跑不出来，用不变量兜住 ──────────────────
+  // ── 8. 下刀谎报成功：核销只认读数，不认 killAll 的返回值 ───────────────────
+  // 第 2 轮审查 B1。`killAll` 的两条实现返回值**分辨不出来**：`cgroup.kill` 那条是真原子
+  // 圈刀，返回 1；<5.14 的降级路径枚举成员逐个 `killOne`，失败被咽掉照样 `sent += 1`，
+  // 返回的是**尝试数**，也是 1。上一版有一句「cut >= 0 且门闩成立 ⇒ 核销」，落在降级路径
+  // 上就是「一个都没杀成也当收干净了」—— 身份跟着交还，残留从此查不回去。
+  //
+  // 这里拿一台**谎报的设备**把它摆出来：`killAll` 恒答成功，`read()` 一直报一个真活着的
+  // 成员。要的行为是两件：不核销（身份保留住，还查得回去）+ 如实喊一句「收不干净」。
+  // 这条不分平台 —— 它验的是共同核销层的不变量，不是某个平台的设备。
+  {
+    const liar = { kills: 0, disposed: 0 };
+    const liarStand = (token: string) => {
+      let root = 0;
+      return {
+        id: token,
+        enroll: (pid: number) => { root = pid; return true; },
+        preExecEnv: () => null,
+        // 恒报一个**真活着**的成员（这个测试进程自己），所以读数一直是 remaining。
+        read: () => (root
+          ? {
+            kind: "members" as const,
+            coverage: "since-enroll" as const,
+            members: [{ pid: process.pid, gen: null }],
+          }
+          : { kind: "absent" as const, why: "还没 enroll" }),
+        // ← 谎报：一个都没杀，照样答「成功」。这正是降级路径的返回值长相。
+        killAll: () => { liar.kills++; return 1; },
+        dispose: () => { liar.disposed++; },
+      } as unknown as NonNullable<ReturnType<NonNullable<Parameters<typeof probeCli>[5]>>>;
+    };
+
+    const dir = join(stage, "liar-cli");
+    mkdirSync(dir, { recursive: true });
+    if (process.platform === "win32") {
+      writeFileSync(join(dir, "codex.cmd"), "@echo off\r\n<nul set /p=[]\r\nexit /b 0\r\n");
+    } else {
+      const f = join(dir, "codex");
+      writeFileSync(f, "#!/bin/sh\nprintf '[]'\n");
+      chmodSync(f, 0o755);
+    }
+
+    const pathWas = process.env.PATH;
+    process.env.PATH = `${dir}${delimiter}${pathWas ?? ""}`;
+    const warned: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
+    let res: Awaited<ReturnType<typeof probeCli>> = null;
+    try {
+      // 这一块**必须**挂替身（哪个平台都挂）：谎报是替身的全部意义，真实设备不会谎报。
+      res = await probeCli(
+        "codex", ["mcp", "list", "--json"], process.env, undefined, 8_000, liarStand,
+      );
+      // 收尾在后台跑（`void settleUnit`），复核预算 REAP_GRACE_MS*2 ≈ 6 s —— 等它把话说完。
+      for (let i = 0; i < 160 && !warned.some((w) => w.includes("收不干净")); i++) await pause(100);
+    } finally {
+      console.warn = realWarn;
+      process.env.PATH = pathWas;
+    }
+
+    assert.ok(res, "答案照样要拿回来 —— 收尾的事不该影响这一问");
+    assert.match(res!.stdout, /\[\]/, "答案要完整");
+    assert.ok(liar.kills > 0, "该下的刀还是要下 —— 不看返回值不等于不下刀");
+    assert.equal(liar.disposed, 0,
+      "读数一直报着活成员 ⇒ 一次都不准核销：killAll 答的「成功」在降级路径上只是尝试数（第 2 轮 B1）");
+    assert.ok(warned.some((w) => w.includes("收不干净")),
+      `收不干净必须如实喊出来，否则残留连线索都不剩：${warned.join(" | ")}`);
+  }
+
+  // ── 9. 结构约束：Windows 那条路本机跑不出来，用不变量兜住 ──────────────────
   // macOS 上圈定如实弃权，所以「圈建不成 → 不启动」「整圈刀 → 核销」这两条只能在真机上
   // 跑。断言刻意写成**否定式**（危险形状不存在）而不是某一种写法 —— 上一轮钉
   // `return gone ?? byClose` 的表达式形状，实现一换就恒红，而恒红的断言钉不住任何东西。
@@ -566,13 +618,28 @@ try {
     // 拿进程组**探活**的写法。
     assert.ok(!/kill\(-\s*\w+\s*,\s*0\s*\)/.test(code),
       "原组的 ESRCH 不是「整次运行已清理」的证据（第 1 轮 B1，macOS 真机实测）");
-    const residueBody = fnBody(code, "export async function unitResidue");
-    assert.match(residueBody, /residueFromProbe/,
-      "追踪 fd 那一档的判据接既有消费者，不在这里新造一份");
-    // 追踪 fd 的「空」不许再变成核销：Node 的 spawn 把 fd3 CLOEXEC 掉，隔一层包装这条
-    // 线索就断，而断了之后它答的正是「没人握着」（本轮实测）。
-    assert.ok(!/verdict\.kind === "empty"/.test(residueBody),
-      "追踪 fd 只给正面证据 —— 它答的「空」不构成核销");
+    // **追踪 fd 整台设备已经撤掉**（第 2 轮 N4/N5）。两条理由各自独立成立：
+    //  · 它到不了 CLI —— 门闩那一跳是 `spawnSync(stdio: "inherit")`，只转发 0/1/2，
+    //    Node 的 spawn 又把非 stdio 的 fd 都 CLOEXEC 掉（本轮实测：`lsof` 答空，而 `ps`
+    //    明明看得见那个后代）。断了之后它答的正是「没人握着」—— 一个假的核销。
+    //  · 就算接通也是冗余的 —— 在「圈定不完整就不启动」之下，能被 lsof 看见的后代必然
+    //    已经在圈里，圈的读数本来就覆盖它。
+    assert.ok(!/TrackFd|trackHolders|probeFileHolders|residueFromProbe|holdersMayExist/.test(code),
+      "追踪 fd 在这条链上只会答出一个假的「空」，而且冗余 —— 不准再接回来（第 2 轮 N4/N5）");
+
+    // **下刀的返回值不构成核销**（第 2 轮 B1）：Linux <5.14 那条降级路径枚举成员逐个
+    // `killOne`，失败被咽掉照样 `sent += 1`，返回的是**尝试数** —— 跟 `cgroup.kill` 那条
+    // 真原子路径返回的 1 长得一模一样，调用方分辨不出来。所以不准据它判事。
+    const settleBody = fnBody(code, "async function settleUnit");
+    assert.ok(!/(?:const|let|var)\s+\w+\s*=\s*[\w.?]*killAll\(/.test(settleBody),
+      "killAll 的返回值不准存下来 —— 存下来就是打算拿它判事（第 2 轮 B1）");
+    assert.ok(!/(?:if|while|\?\?|&&|\|\|)\s*\(?[\w.?]*killAll\(/.test(settleBody),
+      "killAll 的返回值不准参与判断（降级路径返回的是尝试数，第 2 轮 B1）");
+    // 正面那半：下刀之后必须回到**读数**上去证。
+    assert.ok(!/killAll\([^)]*\);\s*killTree\([^)]*\);\s*discharge\(/.test(settleBody),
+      "不准杀完就核销 —— 中间必须有一次读数（第 2 轮 B1）");
+    assert.match(settleBody, /while \([\s\S]*?unitResidue\(unit\)[\s\S]*?\}/,
+      "复核要成环地问，直到证空或者预算用完");
     // **钉函数体里有哪几件事，不钉它们写成什么样。** 这一轮和上一轮各被形状断言咬过一次：
     // 钉 `return gone ?? byClose`、钉 `confine.read().kind === …` 的那两条，实现一换写法就
     // 恒红，而恒红的断言钉不住任何东西。
@@ -594,8 +661,6 @@ try {
       "close 不准再当证据：后代不持管道时它来得更早，持管道时它根本不来（第 6 轮第 4 点）");
     assert.ok(!/finally\s*\{[\s\S]{0,200}?dispose\(/.test(code),
       "finally 里不准撤销身份：dispose 的契约是「调用方已经判空」，它自己不杀成员");
-    assert.ok(!/cut >= 0\)\s*\{\s*confine\?\.dispose/.test(code),
-      "整圈刀的成功只在门闩成立时等于整棵树终止 —— 不准单凭 cut 就核销（第 6 轮第 3 点）");
   }
 
   console.log("✅ ash MCP 探测层（结束路径 / 回收判据 / 输出解码）通过");

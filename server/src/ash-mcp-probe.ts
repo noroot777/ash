@@ -20,23 +20,22 @@
 // 证据，而且证据不依赖后代的配合。拿不到这种归属就宁可不做这次探测，直接回「问不出来」
 // 放行（判据层对 null 一律放行，见 `ash-mcp-reachability.ts` 的 `reachWith`）。
 //
-// 按这个门槛，基线手上有两台设备，这里**两台都接**：
-//
-//  · **内核圈定**（`kernel-confine.ts`）—— Linux 的 cgroup v2、Windows 的 Job Object。
-//    成员归属由内核记着，`setsid` / `env -i` / close fd 一条都洗不掉。macOS 没有等价物，
-//    那边这台设备如实弃权（`openConfinement()` 返回 null）。
-//  · **追踪 fd**（`track-evidence.ts`）—— spawn 时把一个本次运行专属文件挂在 `stdio[3]`，
-//    shell 起的后代（`bash` / `nohup` / `&`）不关高位 fd，所以换组、被收养都还能按文件名
-//    `lsof` 反查得到。**但它只算半台设备**：`lsof` 答的「没人握着」在这里**不构成核销**，
-//    因为 Node 的 `spawn` 对非 stdio fd 设 CLOEXEC —— 中间隔一层 Node 包装，这条线索当场
-//    就断（本轮实测：wrapper 用 `spawn(detached, stdio:"ignore")` 起查询后，`lsof` 对追踪
-//    文件返回空，而那个查询 PPID=1 活得好好的）。所以它在这一层只干两件事：**提供正面
-//    证据**（发现活着的写手 ⇒ 确证还有残留）和**多一把刀**（按文件名反查到谁就收谁）。
-//    Windows 上没有零依赖的反查手段（理由见 track-evidence.ts 顶部），那边这台不开。
-//
-// 于是**能核销的只有内核圈定这一台**，规矩随之变成：
+// 按这个门槛，能用的只有一台：**内核圈定**（`kernel-confine.ts`）—— Linux 的 cgroup v2、
+// Windows 的 Job Object。成员归属由内核记着，`setsid` / `env -i` / close fd 一条都洗不掉。
+// macOS 没有等价物，那边如实弃权（`openConfinement()` 返回 null）。规矩随之是：
 //
 //     拿不到内核圈定 ⇒ 这次探测不做，直接回「问不出来」放行。
+//
+// **基线那台「追踪 fd」在这一层刻意不接**（第 2 轮审查 N4/N5）。第 1 轮本来接上了它，
+// 两个实测把它的价值削到零：
+//  · 它到不了真正的 CLI —— 门闩那一跳是 `spawnSync(..., stdio:"inherit")`，inherit 只转发
+//    0/1/2，fd3 在门闩处就断了；
+//  · 就算转发过去也没用 —— Node 的 `spawn` 对非 stdio fd 设 CLOEXEC，隔一层 Node 包装这条
+//    线索当场就断（第 1 轮实测：wrapper 用 `spawn(detached, stdio:"ignore")` 起查询后
+//    `lsof` 对追踪文件返回空，而那个查询 PPID=1 活得好好的）。
+// 而**在「必须完整圈定才启动」这个前提下它本来就是冗余的**：cgroup 和 Job 的成员归属都不
+// 可逃离，圈里的后代逃不出去，所以 `lsof` 能看到的号必然也在圈里。留着它只多两样东西：
+// 一条到不了目的地的线索，和一把按裸号下刀、没法复核代次的补刀（号复用窗口，N5）。
 //
 // 代价如实写在这里：**macOS 上这条预检因此整个不工作**（那边没有等价物，基线如实弃权）。
 // 这是拿「功能在那个平台上失效」换「绝不留下收不回来的后台查询」—— 方向由第 1 轮审查
@@ -59,10 +58,9 @@
 // 所以**进程组从核销判据里整条撤掉**，只留它当下刀的一个目标集：`killTree` 的
 // `kill(-pgid)` 能一次打到还留在组里的那些，这个能力照留，但它答的「空」不算证明。
 //
-// 这个形状**追踪 fd 也救不回来**（上面那段：那一层包装是 Node，fd3 被 CLOEXEC 切断），
-// 所以 macOS 上剩不下任何能核销的设备 —— 那边的出路只能是「不启动」。基线
-// `kernel-confine.ts` 顶部早写明了这一类（`close` 掉继承 fd + `setsid` 的后代）在没有
-// 内核圈定的平台上无解，内核圈定要解的正是它。
+// 这个形状**追踪 fd 也救不回来**（上面那段），所以 macOS 上剩不下任何能核销的设备 ——
+// 那边的出路只能是「不启动」。基线 `kernel-confine.ts` 顶部早写明了这一类（`close` 掉继承
+// fd + `setsid` 的后代）在没有内核圈定的平台上无解，内核圈定要解的正是它。
 //
 // ── Windows：归属必须在 CLI 跑起来**之前**就建成 ────────────────────────────
 //
@@ -87,15 +85,10 @@
 // 压根没有要补的窗口。
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, unlinkSync } from "node:fs";
-import { IS_WINDOWS, isPidAlive, isPidRunning, killOne, killTree } from "./platform.js";
+import { IS_WINDOWS, isPidRunning, killTree } from "./platform.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
 import { prepareGate } from "./ash-mcp-gate.js";
 import { openConfinement, type Confinement } from "./executors/kernel-confine.js";
-import { residueFromProbe } from "./executors/cleanup-result.js";
-import {
-  holderMayOwn, openTrackFd, probeFileHolders, registerTrackFd, releaseTrackEvidence, trackPathOf,
-} from "./executors/track-evidence.js";
 
 export interface ProbeResult {
   code: number;
@@ -155,22 +148,17 @@ const wait = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, m
  * （见文件头「不启动自己收不回来的查询」）。
  */
 export type ProbeUnit = {
-  /** 内核圈定。`null` = 这台机器没有（macOS）或被显式关掉。 */
+  /** 内核圈定。`null` = 这台机器没有（macOS）或被显式关掉 ⇒ 这次探测压根不该启动。 */
   confine: Confinement | null;
-  /** 门闩确认过圈建成、且目标出生在圈内。只对 `confine` 有意义。 */
+  /** 门闩确认过圈建成、且目标出生在圈内。 */
   gated: boolean;
-  /** 追踪文件的路径。`null` = Windows，或者这次没开成。 */
-  track: string | null;
 };
 
 /**
- * 这个执行单元此刻的残留读数。**`null` = 这几台设备都没给出结论**，不是「空」。
+ * 这个执行单元此刻的残留读数。**`null` = 这台设备没给出结论**，不是「空」。
  *
- * **判据一个字都不在这里新造**：内核圈定那档的三种读数照抄既有消费者
- * `cleanup-result.ts` 的 `confinedResidue`，追踪 fd 那档接 `residueFromProbe`，但**只取
- * 它的正面证据**（见下面那段）—— 能答「空」的只有内核圈定这一台。
- *
- * 内核圈定那档：
+ * **判据一个字都不在这里新造**：三种读数照抄既有消费者 `cleanup-result.ts` 的
+ * `confinedResidue`。
  *  · `absent`      —— 圈压根没建起来、或者句柄已经交还 ⇒ 这台设备**不说话**。上一版把它
  *    读成「已经回收」，于是 Windows 冷启动那次泄漏连警告都没打（第 5 轮审查实测）。
  *  · `unqueryable` —— 这一刻问不到 ⇒ 不说话（留着下一轮再问）。
@@ -185,51 +173,21 @@ export type ProbeUnit = {
  * **进程组不在这里面**（第 1 轮审查 B1，理由见文件头）：它只覆盖「还留在原组里」的后代，
  * 一个 `setsid` 就能出圈，所以原组的 `ESRCH` 推不出整次运行干净。
  */
-export async function unitResidue(unit: ProbeUnit): Promise<"remaining" | "gone" | null> {
-  if (unit.confine) {
-    const read = unit.confine.read();
-    if (read.kind === "members") {
-      if (read.members.some((m) => isPidRunning(m.pid))) return "remaining";
-      if (unit.gated || read.coverage === "whole-run") return "gone";
-    }
-    // absent / unqueryable / `since-enroll` 的空：这台设备不说话，换下一台问。
-  }
-  if (unit.track) {
-    // **只取它的正面证据那一半。** `residueFromProbe` 的「问全了、没人握着 ⇒ empty」在它
-    // 自己那条多设备合议的链上是对的，但在这里单独拿来核销就错了：Node 的 `spawn` 会把
-    // fd3 关掉，隔一层 Node 包装这条线索就断，而断了之后它答的正是「没人握着」。
-    const verdict = residueFromProbe("探测单元的追踪文件", await probeFileHolders(unit.track));
-    if (verdict.kind === "remaining") return "remaining";
-  }
-  return null;
+export function unitResidue(unit: ProbeUnit): "remaining" | "gone" | null {
+  if (!unit.confine) return null;
+  const read = unit.confine.read();
+  if (read.kind !== "members") return null;          // absent / unqueryable：都不说话
+  if (read.members.some((m) => isPidRunning(m.pid))) return "remaining";
+  return unit.gated || read.coverage === "whole-run" ? "gone" : null;
 }
 
 /**
- * 给**逃出原进程组**的后代下刀：按追踪文件反查持有者，只杀写模式的那些。
- *
- * 门槛跟基线 `escapees.ts` 授权破坏性操作的那条同源（`holderMayOwn`：只认写模式）——
- * 追踪文件是以 `"w"` 打开的，后代继承到的是写端，只读打开同一路径的看客两条都不满足。
- *
- * **号复用那个窗口如实记下**：基线那边为此做了两次取证夹代次（`stillSameGeneration`），
- * 这里没有照搬 —— 探测是秒级的只读子命令、不进债表，而 `probeFileHolders` 返回到
- * `killOne` 之间没有 `await`，窗口只有几微秒。拿这个窗口换一整套代次账本不值，但它不是零。
+ * 判空之后把这次运行的身份交还。**只有在真的证明了空之后才能调** —— `dispose` 的契约是
+ * 「调用方已经判空」，它自己只交还句柄、不杀成员；成员还在时撤掉身份等于把唯一还能查回去
+ * 的线索丢了。
  */
-async function cutEscapees(unit: ProbeUnit): Promise<number> {
-  if (!unit.track) return 0;
-  const probe = await probeFileHolders(unit.track);
-  const targets = probe.found.filter((h) => holderMayOwn(h) && isPidAlive(h.pid));
-  for (const holder of targets) killOne(holder.pid, "SIGKILL");
-  return targets.length;
-}
-
-/**
- * 判空之后把两台设备的证据交还。**只有在真的证明了空之后才能调** —— `dispose` 的契约是
- * 「调用方已经判空」，它自己只交还句柄、不杀成员；`releaseTrackEvidence` 同理（它排的那截
- * 尾巴到点还要再确认一次无人持有才真删文件）。
- */
-function discharge(child: ChildProcess, unit: ProbeUnit): void {
+function discharge(unit: ProbeUnit): void {
   unit.confine?.dispose();
-  releaseTrackEvidence(child);
 }
 
 /**
@@ -239,63 +197,71 @@ function discharge(child: ChildProcess, unit: ProbeUnit): void {
  * `detached + stdio=ignore` 起出去、自己正常退出，3.6 秒就返回了结论，查询还活着。
  * 根进程的 close 从来不代表它的后代结束了。
  *
- * 判据分三层，强的先用：
- *  ① 能当场证空就什么都不用做。
- *  ② **整圈刀 + 组刀 + 逃逸者刀**：`TerminateJobObject` 是内核级的「这个集合全部终止」，
- *     门闩之下 CLI 整棵树都在集合里，所以这一刀下成了就是整棵树的终止（这点很要紧，因为
- *     那边的读数要起 PowerShell，能少起一次就少起一次）。**没有门闩就不能这么推**，那时
- *     这一刀只是「尽力」，仍要回到读数上去证。`killTree` 打还在原组里的，`cutEscapees`
- *     打换了组、被 init 收养的 —— 后者正是第 1 轮审查 B1 那个形状。
- *  ③ 都不成：退回读数，等到预算用完。仍然证不了空就**披露，并且不交还证据**（身份和追踪
- *     文件都留着 —— 它们是唯一还能查回去的线索）。
+ * ── **下刀的返回值不是证明**（第 2 轮审查 B1）────────────────────────────────
+ *
+ * `Confinement.killAll` 的契约只是「这一刀发给了几个号」。Linux 上 `cgroup.kill` 那条路
+ * 返回 1，那**确实**是一次原子整圈终止；可同一个方法在内核 <5.14 上退回「枚举成员逐个发
+ * 信号」，返回的是**尝试数** —— `killOne` 把失败吞掉之后照样 +1。两条路的返回值长得一模
+ * 一样，调用方分不出来。
+ *
+ * 审查者在真实 cgroup 里把 `cgroup.kill` 用只读挂载遮掉、再让击杀以无权限的 UID 执行，
+ * 内核如实回 EPERM：
+ *
+ *     UNPRIVILEGED_HELPER  DIRECT_KILL_ERROR 32 EPERM / KILL_COUNT 1
+ *     LINUX_PROBE  liveMembers:["32"]  groupStillExists:true
+ *     /proc/32/stat → 「32 (node) S 1 32 32」          ← 状态 S，不是僵尸；PPID 已是 1
+ *
+ * 上一版据 `cut >= 0 && gated` 当场核销、连那句「收不干净」都没打。所以这条快捷路**整条
+ * 删掉**：下刀之后一律回到读数上去证。门闩能补齐出生归属，但它让不了一次失败的发送变成
+ * 成功，也让不了逐个枚举变成原子整圈终止。
+ *
+ * 判据因此只剩两层：
+ *  ① 能当场证空就什么都不用做（正常结束的绝大多数情况走这条，只花一次读数）。
+ *  ② 下刀，然后**复核到证明为止**；证不了就披露，并且**不交还身份**（`dispose` 的契约是
+ *     「调用方已经判空」，成员还在时撤掉身份等于把唯一还能查回去的线索丢了）。
  *
  * **`close` 不参与任何一条路**（第 6 轮审查第 4 点）：后代不持有管道时它来得更早，持有时它
- * 根本不来。这里连「提前醒来」都只认 `exit`（进程退出），close 一次都不问。
+ * 根本不来。这里一次都不问它。
  */
 async function settleUnit(
   child: ChildProcess,
   unit: ProbeUnit,
-  exited: Promise<unknown>,
   why: "timeout" | "ended",
 ): Promise<void> {
   const pid = child.pid;
-  if (!pid) { discharge(child, unit); return; }
+  if (!pid) { discharge(unit); return; }
 
-  if (why === "ended" && await unitResidue(unit) === "gone") { discharge(child, unit); return; }
+  if (why === "ended" && unitResidue(unit) === "gone") { discharge(unit); return; }
 
-  const cut = unit.confine ? unit.confine.killAll("SIGKILL") : -1;
+  // ② 下刀。**返回值刻意不看**（上面那段）—— 它表达不了「整圈都终止了」。
+  unit.confine?.killAll("SIGKILL");
   killTree(pid, "SIGKILL");
-  await cutEscapees(unit);
-  if (cut >= 0 && unit.gated) { discharge(child, unit); return; }
 
-  // ③ 退回读数：等到预算用完为止。
+  // 复核：**步长递增**地问，直到证明空或者预算用完。
   //
-  // **宽限必须真的等**。上一版写的是 `race([closed, delay(宽限)])` —— 根进程早就 close 了
-  // 的时候（正常退出路径一律如此）那个 race 当场就 resolve，于是「两轮宽限」其实是两次
-  // 零延迟空转：刚被 SIGKILL 的后代还没被 reap，读数对僵尸照旧成功，于是明明收干净了却
-  // 喊出「收不干净」。`exited` 不参与判据（它什么都证明不了），只在根还没退出时用来提前
-  // 醒来一次。
+  // 为什么不密集问：Windows 上每次读数要同步起一个 PowerShell（N2 那条，实测单次能把事件
+  // 循环堵上 1~1.7 秒），所以第一问给内核一个短窗口（SIGKILL 通常当场生效，一问就完），
+  // 问不出来才翻倍拉长。为什么不能不问：见上面那段 —— 下刀的返回值什么都不证明。
   //
-  // 读数的代价分平台：POSIX 一次 `lsof`，Windows 每次要起一次同步 PowerShell，所以那边
-  // 按整段宽限只读两次。
-  const step = IS_WINDOWS ? REAP_GRACE_MS : 150;
+  // 等待一律用不 unref 的 `wait`：被探测的进程一被收掉事件循环当场就空，unref 的 timer
+  // 从此永不触发，收尾会卡在半路连警告都喊不出来（实测跑出 `unsettled top-level await`）。
+  let step = IS_WINDOWS ? 400 : 100;
   const deadline = Date.now() + REAP_GRACE_MS * 2;
-  let first = true;
   while (Date.now() < deadline) {
-    await (first ? Promise.race([exited, wait(step)]) : wait(step));
-    first = false;
-    if (await unitResidue(unit) === "gone") { discharge(child, unit); return; }
+    await wait(Math.min(step, deadline - Date.now()));
+    if (unitResidue(unit) === "gone") { discharge(unit); return; }
+    unit.confine?.killAll("SIGKILL");
     killTree(pid, "SIGKILL");
-    await cutEscapees(unit);
+    step *= 2;
   }
 
   const left = unit.confine?.read();
   const who = left?.kind === "members" && left.members.length
     ? `：还剩 ${left.members.map((m) => m.pid).join("、")}`
-    : "";
+    : left?.kind === "unqueryable" ? `：这一刻问不出成员（${left.why}）` : "";
   console.warn(
     `[ash] ash MCP 预检的探测单元（根 pid=${pid}）收不干净${who}`
-    + "；这次的执行单元身份和追踪文件**都保留**着（没有交还），它们是唯一还能查回去的线索"
+    + "；这次的执行单元身份**保留**着（没有交还），它是唯一还能查回去的线索"
     + "（这条探测不属于任何任务，停止任务找不回它）",
   );
 }
@@ -309,10 +275,10 @@ async function settleUnit(
  */
 async function discardShell(child: ChildProcess, unit: ProbeUnit): Promise<void> {
   const pid = child.pid;
-  if (pid === undefined) { discharge(child, unit); return; }
+  if (pid === undefined) { discharge(unit); return; }
   killTree(pid, "SIGKILL");
   for (let waited = 0; waited < SHELL_REAP_MS; waited += 50) {
-    if (!isPidRunning(pid)) { discharge(child, unit); return; }
+    if (!isPidRunning(pid)) { discharge(unit); return; }
     await wait(50);
   }
   // 壳自己都收不掉（极少见）：按契约不交还证据，交给上面那段警告的同一条规矩。
@@ -340,12 +306,6 @@ async function confirmHeld(confine: Confinement, pid: number): Promise<boolean> 
     if (read.kind === "members") return true;
   }
   return false;
-}
-
-/** 追踪文件开出来了却没能交给任何子进程：fd 和文件都别留着。 */
-function dropTrack(track: { fd: number | null; path: string | null }): void {
-  if (track.fd !== null) { try { closeSync(track.fd); } catch { /* 已关 */ } }
-  if (track.path) { try { unlinkSync(track.path); } catch { /* 没建成 */ } }
 }
 
 /**
@@ -389,10 +349,9 @@ export async function probeCli(
   // 后台查询。
   const confine = openUnit(`ash-mcp-probe-${randomUUID()}`);
   if (!confine) return null;
-  const track = openTrackFd();                       // Windows 上恒空（那边没有反查手段）
   // 门闩给圈补上 fork→enroll 那个空窗：壳先出生、圈建成核实之后目标才出生。
   const gate = prepareGate(plan);
-  if (!gate) { confine.dispose(); dropTrack(track); return null; }
+  if (!gate) { confine.dispose(); return null; }
   const launch = gate.plan;
 
   let child: ChildProcess;
@@ -405,22 +364,15 @@ export async function probeCli(
       // 孙进程里**还留在组里**的那些正是靠这条收回来的）。它只是一把刀，不是归属证明 ——
       // 核销判据里没有它（第 1 轮审查 B1）。Windows 走门闩 + Job，不需要也不能用 detached。
       detached: !IS_WINDOWS,
-      // `stdio[3]` 就是追踪 fd（形状照 `executors/spawn.ts` 那条路）：后代继承它，收尾时
-      // 按文件名 `lsof` 反查，换组和被收养都追得到。
-      stdio: track.fd === null
-        ? ["ignore", "pipe", "pipe"]
-        : ["ignore", "pipe", "pipe", track.fd],
+      stdio: ["ignore", "pipe", "pipe"],
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
   } catch {
     gate.cleanup();
     confine.dispose();                               // 一个进程都没起来，圈里必然是空的
-    dropTrack(track);
     return null;                                     // cwd 不存在之类的同步失败
   }
-  // 子进程已经持有副本，父进程这份由它关掉，并建立租约（到点还要确认无人持有才删文件）。
-  registerTrackFd(child, track);
-  const unit: ProbeUnit = { confine, gated: false, track: trackPathOf(child) };
+  const unit: ProbeUnit = { confine, gated: false };
 
   let stdout = "";
   let stderr = "";
@@ -463,7 +415,7 @@ export async function probeCli(
 
   // 超时：**等收尾做完**才说「问不出来」。
   if (timedOut) {
-    await settleUnit(child, unit, exited, "timeout");
+    await settleUnit(child, unit, "timeout");
     gate.cleanup();
     return null;
   }
@@ -484,7 +436,7 @@ export async function probeCli(
   // **不挡住返回**：圈的读数和下刀是同步 PowerShell，摆在派审请求的等待路径上会把主服务
   // 拖住（第 5 轮审查 N1）。放到后台只解决「不拖住这次请求」这一半；它仍然占着事件循环，
   // 彻底解决要挪进 worker（第 6 轮审查 N1 仍挂着，本轮没做）。
-  void settleUnit(child, unit, exited, "ended")
+  void settleUnit(child, unit, "ended")
     .catch(() => { /* 收尾自己会喊 */ })
     .finally(() => { gate.cleanup(); });
 
