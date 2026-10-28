@@ -89,6 +89,31 @@ function checkpointWriter(taskId: string): NonNullable<TaskWaitOwnership["checkp
 }
 
 /**
+ * 系统代写的那一格(`resumePromptAuto`)归谁 —— **三态**。
+ *
+ *  · `review`  —— 写它的回合就是这一轮审查(role=reviewer,且绑的 run/round 对得上);
+ *  · `other`   —— 写它的回合是别人(执行者,或者另一轮审查);
+ *  · `unknown` —— **没记下是谁写的**:升级前那一代的存量行,或者补记时根本不在回合里。
+ *
+ * 三态不能折叠成两态。`unknown` 塌到 `other` 看着保守,其实只在「作废别人的等待」那一侧
+ * 保守,在「提前结算一轮审查」那一侧恰好相反:升级那一刻库里那些旧等待全是 unknown,
+ * 于是「还不知道谁写的」被读成「这不是审查自己的等待」,一轮还在等构建结果的审查被结成
+ * `status:"error"`(第 2 轮自由审查 F3 跨版本实测)。两侧各自决定 unknown 怎么处理。
+ */
+export type AutoCheckpointOwner = "review" | "other" | "unknown";
+
+export function autoCheckpointOwner(checkpoint: TaskWaitOwnership["checkpoint"],
+  state: EvidenceRow): AutoCheckpointOwner {
+  const writer = checkpoint?.writer;
+  if (!writer) return "unknown";
+  if (writer.role !== "reviewer") return "other";
+  // 没绑轮次 = 就地验证那种旁路回合(一个任务同时只有一轮),绑了就得对上这一轮。
+  return !writer.review
+    || freeReviewEvidenceDir(state.taskId, writer.review.run, writer.review.round) === state.directory
+    ? "review" : "other";
+}
+
+/**
  * 系统代写的那一格(`resumePromptAuto`)是**这一轮审查自己**挂下的吗。
  *
  * 为什么要这一问:`beginTerminalLanding` 名下还有没了结的哨兵时会替**当前这一轮**自动写一格
@@ -102,11 +127,7 @@ function checkpointWriter(taskId: string): NonNullable<TaskWaitOwnership["checkp
  */
 export function reviewOwnsAutoCheckpoint(checkpoint: TaskWaitOwnership["checkpoint"],
   state: EvidenceRow): boolean {
-  const writer = checkpoint?.writer;
-  if (writer?.role !== "reviewer") return false;
-  // 没绑轮次 = 就地验证那种旁路回合(一个任务同时只有一轮),绑了就得对上这一轮。
-  return !writer.review
-    || freeReviewEvidenceDir(state.taskId, writer.review.run, writer.review.round) === state.directory;
+  return autoCheckpointOwner(checkpoint, state) === "review";
 }
 
 const belongsTo = (origin: WaitOrigin | undefined, state: EvidenceRow) => origin && origin.kind !== "ordinary"
@@ -127,6 +148,9 @@ export async function expireTaskWait(transaction: ConclusionTransaction, owner: 
   // 的」答不了「是不是这一轮审查的」:审查旁路回合自己也会被代写这么一格。所以这一档按
   // **哪个回合写的**判(reviewOwnsAutoCheckpoint),非 auto 的那种本来就没这层歧义,照旧只看
   // 归属。判据与 review-continuation.ts 那一侧同源。
+  // 这一侧 unknown 按**不作废**处理(reviewOwnsAutoCheckpoint 只认 `review`):作废是破坏性的,
+  // 不知道是谁的就别动它。另一侧(review-continuation 的提前结算)对 unknown 的处理相反,
+  // 理由见 autoCheckpointOwner 的注释。
   const clearCheckpoint = (!current.resumePromptAuto || reviewOwnsAutoCheckpoint(checkpoint, state))
     && belongsTo(checkpoint?.origin, state)
     && checkpoint?.generation === current.resumePromptGeneration;

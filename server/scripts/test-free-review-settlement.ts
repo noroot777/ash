@@ -15,7 +15,7 @@ delete process.env.ASH_LAX_DONE;
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, reviewerProfiles, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, monitors, projects, reviewerProfiles, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { consumeSingleRun } = await import("../src/single-run.js");
   const { pendingMessageRow } = await import("../src/pending-messages.js");
@@ -405,6 +405,76 @@ try {
   releaseTurn(liveId);
   assert.equal((await freeWorkflowState(liveId)).reviews[0]?.rounds[0]?.status, "reviewing",
     "reviewer 自己那一轮还活着,不许替它补结算(错误结论将再也撤不掉)");
+
+  // ── 同一个反面的**跨版本**形态(第 2 轮自由审查 F3)──
+  // 升级前那一代写下的等待身上没有 `writer`,「哪个回合写的」这一问在存量行上答不上来。把
+  // 「答不上来」折成「不是审查的」,升级那一刻库里每一条还在等哨兵结果的审查都会被对账整批
+  // 提前结账 —— 审查者跨版本实测 VERSION legacy / NEW_REVIEW_WAIT false /
+  // ROUND_AFTER_RECOVERY status:"error",而那条哨兵仍然 running、结果再也没人接。
+  //
+  // 所以 unknown 这一档要去问一件**独立于那个字段**的运行时事实:这一轮审查自己挂的哨兵还
+  // 在跑吗(`monitors.source_review_run/round`,创建时就落库)。两种现场都得钉住,因为这一档
+  // 往两边倒都有代价:一律当成「不是审查的」= 上面那条提前结账;一律当成「是审查的」= 退回
+  // D6 之前「执行者遗留的那一格把审查交卷永久挡住」。
+  async function legacyWaitRound(id: string, watching: boolean): Promise<string> {
+    await createTasks([{
+      id, projectId: "p", title: id, body: "test", mode: "single", status: "running",
+      agentType: "codex", executorId: "ex", autoTitle: false, workflowMode: "free",
+      useWorktree: false, createdAt: at, updatedAt: at,
+    }]);
+    const runId = `${id}-review`;
+    await db.insert(freeReviewRuns).values({
+      id: runId, taskId: id, reviewerId: "reviewer", reviewerName: "reviewer", agentType: "codex",
+      executorId: "ex", checkMode: "logic", retryLimit: 1, currentRound: 1, status: "reviewing",
+      createdAt: at, updatedAt: at,
+    });
+    // 还没交卷(conclusion 为空):交卷之后那一档由 hasConclusion 直接放行,不走归属这一问。
+    await db.insert(freeReviewRounds).values({
+      id: `${runId}-round`, runId, round: 1, status: "reviewing", startedAt: at,
+    });
+    await evidenceState(id, freeReviewEvidenceDir(id, runId, 1), (await db.select().from(tasks).where(eq(tasks.id, id)))[0]!);
+    // 这一格是**审查自己那一轮**被系统代写的(哨兵还在盯),所以先按审查的回合身份落笔 ——
+    // 走的是生产 writer,连带写入原样发生。
+    assert.equal(claimTurn(id, "reviewer", { run: runId, round: 1 }), true);
+    assert.equal(await writeResumePrompt(id, "继续:哨兵把构建结果送来之后再交卷", true), true);
+    releaseTurn(id);
+    // 然后把 `writer` 抹掉 = 升级前那一代写下来的样子(那一代压根没有这个字段)。归属
+    // (origin/generation)照旧在 —— 旧版本记得「这一格属于这一轮」,只是不记得是谁落的笔。
+    const row = (await db.select().from(tasks).where(eq(tasks.id, id)))[0]!;
+    const checkpoint = row.waitOwnership?.checkpoint;
+    assert.ok(checkpoint?.writer, "夹具前提:生产 writer 本来是记下了落笔回合的");
+    await db.update(tasks).set({ waitOwnership: { ...row.waitOwnership,
+      checkpoint: { generation: checkpoint.generation, origin: checkpoint.origin } } }).where(eq(tasks.id, id));
+    if (watching) await db.insert(monitors).values({
+      id: `${id}-sentinel`, taskId: id, command: "npm run build", cwd: root, status: "running",
+      logPath: join(root, `${id}-sentinel.log`), startedAt: at,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      sourceReviewRun: runId, sourceReviewRound: 1,
+    });
+    // 执行者正在跑实现回合:对账据此判定「在跑的不是 reviewer 自己那一轮」,于是往下走到
+    // 归属这一问 —— 跟上面 D6 ② 同一个入口。
+    assert.equal(claimTurn(id, "single"), true);
+    await reconcileFreeReviews(id);
+    releaseTurn(id);
+    return runId;
+  }
+
+  const legacyWatchedId = "legacy-wait-still-watched";
+  await legacyWaitRound(legacyWatchedId, true);
+  const legacyWatched = await freeWorkflowState(legacyWatchedId);
+  assert.equal(legacyWatched.reviews[0]?.rounds[0]?.status, "reviewing",
+    "旧行没记下是谁落的笔,而这一轮自己的哨兵还在盯 —— 不许提前结账");
+  assert.equal(legacyWatched.reviews[0]?.rounds[0]?.conclusion, null);
+  assert.equal(legacyWatched.reviews[0]?.status, "reviewing");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, legacyWatchedId)))[0]?.resumePrompt,
+    "继续:哨兵把构建结果送来之后再交卷", "它自己那一格也不许被作废掉");
+
+  const legacyDoneId = "legacy-wait-no-sentinel";
+  await legacyWaitRound(legacyDoneId, false);
+  assert.equal((await freeWorkflowState(legacyDoneId)).reviews[0]?.rounds[0]?.status, "error",
+    "同样一张来路不明的旧行,这一轮名下一条在盯的哨兵都没有 —— 没有任何事实支持「审查还在等」,照旧结账(D6)");
+  assert.equal((await db.select().from(tasks).where(eq(tasks.id, legacyDoneId)))[0]?.resumePrompt,
+    "继续:哨兵把构建结果送来之后再交卷", "结算照旧不许作废这一格 —— 不知道是谁的就别动它");
 
   const noReservation = await runTurn("no-reservation", { followUp: true, reserve: false });
   assert.equal(noReservation.state.reviews.length, 0, "没有用户预约不自动开审");

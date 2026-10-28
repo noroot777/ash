@@ -1,14 +1,15 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
+import { monitors, regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import type { WaitOrigin } from "./db/schema-task-wait.js";
+import { dirname } from "node:path";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
 import { isTurnClaimed, type TurnSource } from "./runs.js";
 import { activeReviewEvidence, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded,
   reviewTargetIdentity, type ReviewDelivery } from "./review-ownership.js";
 import { recordReviewWait, reviewWaitAuthorized, reviewWaitAtTurnStart, snapshotReviewWait } from "./review-wait.js";
-import { questionWaitMatches, questionWaitOrigin, reviewOwnsAutoCheckpoint, reviewWaitOrigin,
+import { autoCheckpointOwner, questionWaitMatches, questionWaitOrigin, reviewWaitOrigin,
   startTaskWaitTurn } from "./task-wait-ownership.js";
 import { rememberGuardedStart, clearGuardedStart } from "./guarded-turn-start.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
@@ -41,8 +42,18 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
   // 判据改成**哪个回合写的**(reviewOwnsAutoCheckpoint:写它的回合 role 是 reviewer、而且绑的
   // 正是这一轮):执行者遗留的那一格照旧不挡审查交卷,审查自己还没交卷的等待照旧挡得住。
   // 非 auto 的那种本来就没这层歧义(真人/agent 自己挂的),只看归属。expireTaskWait 同源。
-  const checkpoint = owner.resumePrompt
-    && (!owner.resumePromptAuto || reviewOwnsAutoCheckpoint(owner.waitOwnership?.checkpoint, state))
+  //
+  // 第三态 `unknown`(升级前的存量行,或者补记时不在回合里)在这一侧**不能**按「不是审查的」
+  // 算:那正是「还不知道」被读成「确定不是」。但也不能一律当成审查的 —— 执行者遗留的那一格
+  // 同样可能没记 writer,那样就退回 D6 之前「交卷被别人的等待挡住」。所以 unknown 这一档去问
+  // 一个**跟字段无关的运行时事实**:这一轮审查自己挂的哨兵还在跑吗(monitors 的
+  // source_review_run/round 就是为这个记的)。还在跑 = 确有人在等,别结;没有 = 没人等它,
+  // 按老规矩结算。第 2 轮自由审查 F3 的现场正是「旧等待 + 这一轮的哨兵仍 running」。
+  const autoOwner = owner.resumePromptAuto
+    ? autoCheckpointOwner(owner.waitOwnership?.checkpoint, state) : "review";
+  const checkpointMine = autoOwner === "review"
+    || (autoOwner === "unknown" && await roundStillWatching(transaction, owner.id, state));
+  const checkpoint = owner.resumePrompt && checkpointMine
     && owner.waitOwnership?.checkpoint?.generation === owner.resumePromptGeneration
     && ownsWait(owner.waitOwnership.checkpoint.origin);
   // 「owner 还挂着东西在等」只能挡住**还没交卷**的那一轮。
@@ -65,6 +76,25 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
     || (!message.origin && message.mode === "queued" && (owner.verifyRound || owner.reviewOf
       ? message.sessionRole !== "reviewer"
       : message.sessionRole === "reviewer" && state?.directory === freeReviewEvidenceDir(owner.id, message.reviewRun ?? "", message.reviewRound ?? 0))));
+}
+
+/**
+ * **这一轮审查自己挂的哨兵还在跑吗** —— 归属字段缺失时的替代事实。
+ *
+ * `monitors.source_review_run/round` 是哨兵创建时就落库的身份(见 schema-monitors.ts),
+ * 跟 `wait_ownership.writer` 是两套独立记录,所以存量等待缺 writer 时它照样答得上来。
+ * 旧哨兵行可能没记轮次,那就退到「同一次 run 的任何一轮」—— 宁可多挡一会儿。
+ */
+async function roundStillWatching(transaction: ConclusionTransaction, taskId: string,
+  state: EvidenceRow): Promise<boolean> {
+  const live = await transaction.select().from(monitors).where(and(
+    eq(monitors.taskId, taskId), eq(monitors.status, "running"), eq(monitors.kind, "ash"),
+    isNotNull(monitors.sourceReviewRun),
+  ));
+  const runDir = (run: string) => dirname(freeReviewEvidenceDir(taskId, run, 1));
+  return live.some((row) => row.sourceReviewRound === null
+    ? runDir(row.sourceReviewRun!) === dirname(state.directory)
+    : freeReviewEvidenceDir(taskId, row.sourceReviewRun!, row.sourceReviewRound) === state.directory);
 }
 
 export async function preserveReviewWait(owner: TaskRow): Promise<void> {
