@@ -97,7 +97,8 @@ try {
   // 而这里的树确实变了,重登救不了。两种混同的代价在门禁快照里跑门禁自测时实测过一次(日志
   // data/runs/4KC4US4jVfon/accept-gate-mHvQ_5_bZebi.log):漂移穿着「换个位置重登」的外衣报出来。
   // 归因口径写在 accept-gate-source.ts 那道闸旁边,另一头钉在 test-accept-gate-plan.ts 的
-  // otherLocation 上;这条断言**不许**放宽到两种形态都收。
+  // otherLocation 上。当前实现把两种形态分开报,所以这条只收漂移那一种:它和那一头互为对照,
+  // 合起来才说明「这次拒绝到底是哪一种」——两条都收的话,这组对照就什么也说明不了了。
   await assert.rejects(createGateSnapshot(repo, join(root, "drift"), source), /已变化/);
   // 归因不了的那一支:跨版本重启读到的旧计划没有 executionCwd。照旧拒绝,只是说法退回「位置」那一条
   // ——「证明不了就拒绝」三条支路上一条都不打折,不许因为归不了因就放行。

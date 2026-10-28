@@ -71,13 +71,36 @@ const basis = (mode, runRow = null) => ({ mode, run: runRow });
  * （实证日志 data/runs/Pj2BhkaYHduS/accept-gate-Jt5981iUk1rU.log）。
  *
  * 原来那条要钉的事一点没少，而且拆成了两条更强的（见场景 ⑮）：① 读数不小于「startedAt 到现在」
- * 这一段 —— 证明它从开跑那一刻起算，不是定在点下去那一刻的 0 秒；② 隔一秒再读必须严格变大 ——
- * 证明它真的在走，不是渲染一次就冻在那儿（这一条整秒断言压根测不出来）。
+ * 这一段 —— 证明它从开跑那一刻起算，不是定在点下去那一刻的 0 秒；② 读数会往前走 ——
+ * 证明它真的在走，不是渲染一次就冻在那儿（这一条整秒断言压根测不出来），由 waitForStopwatchTick 负责。
  */
 const stopwatchSeconds = (text) => {
   const shown = /已经 (?:(\d+) 分 )?(\d+) 秒/.exec(text);
   assert(shown, `折叠那一行要带一只走着的秒表，读到的却是：${text}`);
   return Number(shown[1] ?? 0) * 60 + Number(shown[2]);
+};
+
+/**
+ * 等到那只秒表真的往前走了一格（有界），返回新读数。
+ *
+ * **不是「睡 1.2 秒读一次」**：每秒那一跳只是 `setInterval` 排了一次 React 状态更新，真正的提交
+ * 还要过浏览器和 React 的调度 —— 主线程上压一个长任务（慢环境、整套回归排在前面、门禁快照冷启动）
+ * 就能把它挤到那一刻之后，于是一只走得好好的秒表被判成冻住。第 1 轮独立审查实测复现过：在计时文案
+ * 出现后 900ms 处插一个 700ms 的长任务，1.2 秒那一刻读到的还是旧文案（驱动端实测 1580ms），而 3 秒
+ * 处已经是「1 分 32 秒」—— 秒表没问题，是断言在替浏览器猜它什么时候渲染完。
+ *
+ * 换成「读到变大就过、预算用尽还没变才红」：驱动端不再猜，而真冻住的秒表照旧会红（变异测试：摘掉
+ * 每秒心跳 → 这里等满预算失败）。
+ */
+const waitForStopwatchTick = async (page, bar, from, budgetMs = 10_000) => {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    const shown = stopwatchSeconds(await bar.innerText());
+    if (shown > from) return shown;
+    assert.ok(Date.now() < deadline,
+      `秒表要自己走：等了 ${budgetMs} 毫秒，读数一直停在 ${from} 秒没往前`);
+    await page.waitForTimeout(100);
+  }
 };
 
 let browser;
@@ -420,9 +443,7 @@ try {
     const first = stopwatchSeconds(text);
     assert.ok(first >= 90,
       `秒表要从开跑那一刻（startedAt 是 90 秒前）起算，不能定在点下去那一刻：读到 ${first} 秒`);
-    await page.waitForTimeout(1200);
-    const second = stopwatchSeconds(await bar.innerText());
-    assert.ok(second > first, `秒表要自己走：隔了 1.2 秒，两次读数 ${first} → ${second} 没往前`);
+    await waitForStopwatchTick(page, bar, first);
     // 折叠态不许把出路摆出来占地方，但点开就得有。
     assert.equal(await bar.getByRole("button", { name: /不等了/ }).count(), 0);
     await bar.locator(".wait-bar__bar").click();
