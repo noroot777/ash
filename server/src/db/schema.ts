@@ -113,6 +113,25 @@ export const noteTasks = sqliteTable(
   }),
 );
 
+// 任务备忘(shared/src/task-memo.ts 写了它跟随手记、跟追问各自的分界)。挂在任务上、
+// 不进任何 prompt,所以能改能删。时间戳用 TEXT ISO(跟 tasks 一致,不是 notes 那种 epoch
+// 毫秒)——侧边栏那一列要拿它跟追问的 `at` 比新旧,两边同一种形状才不用在读侧转来转去。
+export const taskMemos = sqliteTable(
+  "task_memos",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id").notNull(),
+    body: text("body").notNull(),
+    // 跟随手记同一条:备忘是**私有**的个人批注(§八),归属列是可见性判据本身。
+    ownerUserId: text("owner_user_id"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => ({
+    taskIdx: index("task_memos_task_idx").on(t.taskId),
+  }),
+);
+
 export const groups = sqliteTable("groups", {
   id: text("id").primaryKey(),
   projectId: text("project_id").notNull(),

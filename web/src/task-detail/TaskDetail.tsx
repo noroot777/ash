@@ -4,8 +4,6 @@ import type { Group, Task, TaskListItem } from "@ash/shared";
 import { isUserFollowUp } from "@ash/shared";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { PreviewWorkspace } from "../preview-workspace/PreviewWorkspace.tsx";
-import { useSubagents } from "./useSubagents.tsx";
-import { useMonitorInspector } from "../monitors/useMonitorInspector.tsx";
 import { MonitorWaitCard } from "../monitors/MonitorWaitCard.tsx";
 import { AcceptGateWaitCard } from "../review/AcceptGateWaitCard.tsx";
 import { InspectorHost } from "../inspector/index.ts";
@@ -47,11 +45,10 @@ import { freeReviewRetryable } from "./turnRetry.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
-import { TASK_INSPECTORS } from "./taskInspectors.tsx";
-import { ConversationSelection } from "../side-chat/ConversationSelection.tsx";
+import { useTaskInspectorStack } from "./useTaskInspectorStack.ts";
+import { MemoSelectionScope } from "../task-memos/MemoSelectionScope.tsx";
 import { useAddReplyQuote } from "./replyQuote.ts";
 
-const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
 
 export function TaskDetail({
   task,
@@ -107,30 +104,9 @@ export function TaskDetail({
   const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
-  // 子智能体：列表在 Inspector 里，执行详情从左侧抽屉推出来（与团队模式点执行者同一套外壳）。
-  const subagents = useSubagents(TASK_INSPECTORS, {
-    taskId: task.id,
-    items: conversation.items,
-    status: task.status,
-    loading: conversation.refreshing,
-    error: conversation.error ?? conversation.traceError,
-    onRetry: conversation.refetch,
-  });
-  // 哨兵那一格：数据在这一层拉（看的是别的面板时也要知道有几个在盯着，图标条上那点活信号靠它）。
-  const monitorTab = useMonitorInspector(subagents.inspectors, task.id);
-  // 会话区那张卡把两种来源**分开**数（同 MonitorInspector 的分段）：ash 那几个才是「在等」
-  // —— claude 内置 Monitor 的只读投影就算还显示 running 也唤不醒任何人（它的通知只注回那
-  // 条已经结束的会话）。但内置那几个也不能当不存在：agent 明明在对话里说了「已挂监听」，
-  // 卡片要替它说清那句话到底成不成立。
-  const liveMonitors = useMemo(
-    () => monitorTab.monitors.monitors.filter((m) => m.kind === "ash" && m.status === "running"),
-    [monitorTab.monitors.monitors],
-  );
-  const liveBuiltinCount = useMemo(
-    () => monitorTab.monitors.monitors.filter((m) => m.kind === "claude" && m.status === "running").length,
-    [monitorTab.monitors.monitors],
-  );
-  const inspectors = monitorTab.inspectors;
+  // Inspector 栈（哪几格存在、默认开哪几格）整块在 useTaskInspectorStack.ts。
+  const { subagents, monitorTab, inspectors, inspectorPolicy, liveMonitors, liveBuiltinCount } =
+    useTaskInspectorStack(task, allTasks, conversation);
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const followUps = useMemo(
@@ -165,25 +141,6 @@ export function TaskDetail({
   // 空的时候不能给 ReplyBox 挂 has-top-rail(那会白留一条内边距)。
   const freeToolbarVisible = task.workflowMode === "free" && task.mode === "single"
     && !task.parentId && !task.reviewOf;
-  const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
-    || allTasks.some((candidate) => candidate.reviewOf === task.id);
-  const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:all-tabs-v6:${task.status}:${reviewFocused ? "review" : "info"}`,
-    requiredTabId: "info",
-    preserveActiveTabIds: ["side-chat"],
-    // 顺序由 TASK_INSPECTORS 定，这里只说「默认哪几格开着」。
-    //
-    // 子智能体和哨兵**故意不在这张表里**：那两格走「用过才浮现」（inspector/usedTabs.tsx），
-    // 开合由各自的 hook 按本任务用没用过翻 `defaultOpen`，再由 InspectorHost 冒上来。写进
-    // 这张表会让它们在每次语义换挡时被无条件并集回去，等于把那条规矩拆了。
-    //
-    // 新增一格只加进这张表是不够的：存量用户的 `openTabs` 躺在 localStorage 里，
-    // `applyTabPolicy` 只在 `stateKey` 变过一次时才拿这张表去并集。所以**加面板要连
-    // 带把 `all-tabs-vN` 往上跳一版**，否则老用户永远看不到它（生成物那一格就是这么
-    // 差点漏掉的）。
-    defaultOpenTabIds: ["info", "files", "artifacts", "scm", "side-chat", "workflow", "review", "preview"],
-    defaultActiveTabId: reviewFocused ? "review" : "info",
-  }), [reviewFocused, task.status]);
 
   // 这一轮由哪个执行器跑,`/` 就补它自己装的技能(ReplyBox 里 @ 召唤别人时列表
   // 不跟着变——那是「本回合换人」,而技能清单按任务常设执行器给,够用且不闪)。
@@ -464,7 +421,13 @@ export function TaskDetail({
             ) : (
               <div className="task-detail-body">
                 <section className="task-detail-main" aria-label="任务会话">
-                  <ConversationSelection key={task.id} taskId={task.id} onAsk={() => openTab("side-chat")} onAddToReply={handedOut ? undefined : addToReply}>
+                  <MemoSelectionScope
+                    taskId={task.id}
+                    openTab={openTab}
+                    notify={notify}
+                    onAsk={() => openTab("side-chat")}
+                    onAddToReply={handedOut ? undefined : addToReply}
+                  >
                   <ConversationFeed
                     task={task}
                     questionHistory={task.questionHistory}
@@ -521,7 +484,7 @@ export function TaskDetail({
                       />
                     ) : undefined}
                   />
-                  </ConversationSelection>
+                  </MemoSelectionScope>
                   <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
                   {!handedOut && <ReplyBox
                     task={task}

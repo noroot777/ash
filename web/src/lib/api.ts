@@ -44,10 +44,12 @@ import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, req
 import { readSettings, writeSettings } from "./settingsSync.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
+import { taskMemoApi } from "./apiTaskMemos.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
 import { fileApi } from "./fileApi.ts";
 import { pendingMergeApi } from "./pendingMergeApi.ts";
+import { scmApi } from "./apiScm.ts";
 export type { TaskScopedHandoffPreflightResult } from "./handoffApi.ts";
 
 import type {
@@ -65,12 +67,6 @@ import type {
   ProjectGitState,
   PullStrategy,
   ReplyTaskResult,
-  ScmCommitResult,
-  ScmDiffSource,
-  ScmFileDiff,
-  ScmOverview,
-  ScmPushResult,
-  ScmWriteResult,
   SessionTraceEntry,
   TaskCommit,
   TaskDiffResult,
@@ -471,36 +467,9 @@ export const api = {
   // 整份 spread 进来，`api.taskFiles()` 这类调用点一字不动。
   ...fileApi,
 
-  // 工作区源代码管理。写操作在任务运行中会被后端拦成 409（body 带 needsForce），
-  // 由调用点弹确认框后带 force 重试——别在这一层偷偷补 force。
-  taskScm: (taskId: string): Promise<ScmOverview> =>
-    request(`/tasks/${id(taskId)}/scm`),
-  taskScmDiff: (
-    taskId: string,
-    path: string,
-    source: ScmDiffSource,
-    origPath?: string | null,
-  ): Promise<ScmFileDiff> =>
-    request(`/tasks/${id(taskId)}/scm/diff?path=${id(path)}&source=${source}${origPath ? `&origPath=${id(origPath)}` : ""}`),
-  scmStage: (taskId: string, paths: string[], force = false): Promise<ScmWriteResult> =>
-    request(`/tasks/${id(taskId)}/scm/stage`, json("POST", { paths, force })),
-  scmUnstage: (taskId: string, paths: string[], force = false): Promise<ScmWriteResult> =>
-    request(`/tasks/${id(taskId)}/scm/unstage`, json("POST", { paths, force })),
-  scmDiscard: (
-    taskId: string,
-    paths: string[],
-    deleteUntracked: string[] = [],
-    force = false,
-  ): Promise<ScmWriteResult> =>
-    request(`/tasks/${id(taskId)}/scm/discard`, json("POST", { paths, deleteUntracked, force })),
-  scmCommit: (
-    taskId: string,
-    message: string,
-    options: { stagePaths?: string[]; amend?: boolean; force?: boolean } = {},
-  ): Promise<ScmCommitResult> =>
-    request(`/tasks/${id(taskId)}/scm/commit`, json("POST", { message, ...options })),
-  scmPush: (taskId: string, remote: string | null, force = false): Promise<ScmPushResult> =>
-    request(`/tasks/${id(taskId)}/scm/push`, json("POST", { remote, force })),
+  // 工作区源代码管理那一族住在 `apiScm.ts`（同样是为了守住 700 行），整份 spread
+  // 进来，`api.taskScm()` / `api.scmCommit()` 这类调用点一字不动。
+  ...scmApi,
 
   notes: (projectId?: string): Promise<Note[]> =>
     request(`/notes${projectId ? `?projectId=${id(projectId)}` : ""}`),
@@ -677,6 +646,8 @@ export const api = {
   ...llmApi,
   // 预览的「AI 协助」同理，住在 apiPreviewAssist.ts。
   ...previewAssistApi,
+  // 任务备忘同理，住在 apiTaskMemos.ts。
+  ...taskMemoApi,
 
   queue: (queueId: string): Promise<{
     queueId: string;

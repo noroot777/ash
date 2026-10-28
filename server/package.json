@@ -18,6 +18,8 @@
     "postinstall": "node scripts/prepare-node-pty.mjs",
     "dev": "tsx watch src/index.ts",
     "build": "node ../scripts/check-cleanup-evidence.mjs && tsc -p tsconfig.json",
+    "//test:task-memos": "任务备忘的后端:增删改、空白/超长/不存在任务的校验、单条端点一律挂在任务 id 下(换成全局 /memos/:id 就漏在横切闸外)、批量摘要的条数与「最新那条」。",
+    "test:task-memos": "tsx scripts/test-task-memos.ts",
     "test:monitor-wake-data": "tsx scripts/test-monitor-wake-data.ts",
     "test:monitor-delivery-batch": "tsx scripts/test-monitor-delivery-batch.ts",
     "test:monitor-checkpoint-recovery": "tsx scripts/test-monitor-checkpoint-recovery.ts",

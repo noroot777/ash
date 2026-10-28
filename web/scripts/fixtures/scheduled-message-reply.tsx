@@ -2,7 +2,7 @@ import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { DraftProvider, useTaskReplyDraft } from "../../src/lib/DraftStore.tsx";
 import { ReplyBox } from "../../src/task-detail/ReplyBox.tsx";
-import { TeamReplyBox } from "../../src/team/TeamView.tsx";
+import { TeamReplyBox } from "../../src/team/TeamReplyBox.tsx";
 import { attachmentsFromPaths } from "../../src/task-detail/withdrawDraft.ts";
 import "../../src/styles/global.css";
 

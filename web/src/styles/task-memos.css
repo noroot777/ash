@@ -1,0 +1,70 @@
+/* 任务备忘面板。宿主外壳在 inspector.css，这里只管这一格自己的东西。
+
+   每一级都要 min-width:0：备忘里常常粘进一条长得没有空格的路径或 URL，少任何一级都会
+   把 Grid 子项按内容撑宽，340px 的默认侧栏下卡片右边的删除按钮会被推出面板（哨兵那一格
+   踩过同一个坑，见 monitors.css 顶部）。 */
+.task-memo-inspector { min-width: 0; padding: 11px 12px 16px; }
+
+.task-memo-inspector__add { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--muted); }
+.task-memo-inspector__add:hover { background: var(--raised); color: var(--ink); }
+.task-memo-inspector__add[aria-expanded="true"] { border-color: color-mix(in lch, var(--accent) 45%, var(--line2)); background: color-mix(in lch, var(--accent) 10%, var(--panel)); color: var(--accent); }
+
+.task-memo-inspector__error { margin: 0 0 9px; color: var(--red); font-size: 10.5px; line-height: 1.6; }
+
+.task-memo-inspector__empty { color: var(--faint); font-size: 10.5px; line-height: 1.7; }
+.task-memo-inspector__empty > p { margin: 0 0 8px; }
+.task-memo-inspector__empty > p:first-child { color: var(--muted); font-weight: 600; }
+.task-memo-inspector__empty svg { vertical-align: -1px; margin-right: 3px; }
+
+.task-memo-inspector__list { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+
+/* ── 写一条 ───────────────────────────────────────────────────────────────── */
+
+.task-memo-composer { display: grid; min-width: 0; gap: 8px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in lch, var(--panel) 80%, var(--canvas)); padding: 10px; }
+.task-memo-composer textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 8px; color: var(--ink); font: inherit; font-size: 11.5px; line-height: 1.75; outline: 0; resize: vertical; }
+.task-memo-composer textarea:focus { border-color: var(--accent); }
+.task-memo-composer__actions { display: flex; justify-content: flex-end; gap: 6px; }
+.task-memo-composer__actions button { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 10px; color: var(--muted); font-size: 10.5px; }
+.task-memo-composer__actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.task-memo-composer__actions button.is-primary { border-color: transparent; background: var(--accent); color: white; font-weight: 650; }
+.task-memo-composer__actions button.is-primary:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 88%, black); color: white; }
+.task-memo-composer__actions button:disabled { cursor: not-allowed; opacity: .48; }
+
+/* ── 一条备忘 ─────────────────────────────────────────────────────────────── */
+
+.task-memo-card { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); padding: 9px 10px; }
+
+/* 刚加进来的那条：从会话切过来时列表可能已经很长，不指一下没人知道落在哪儿。
+   一次性的提示，面板两秒多后自己撤掉（见 TaskMemoInspector 的 clearTaskMemoHighlight）。 */
+.task-memo-card.is-new { border-color: color-mix(in lch, var(--accent) 42%, var(--line)); background: color-mix(in lch, var(--accent) 7%, var(--panel)); }
+
+.task-memo-card > header { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.task-memo-card > header > time { flex: 0 0 auto; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; }
+.task-memo-card__edited { flex: 0 0 auto; color: var(--faint); font-size: 9px; opacity: .85; }
+/* 动作推到右边：时间在左、按钮在右，跟面板里别的卡片同一条读法。 */
+.task-memo-card__actions { display: flex; margin-left: auto; gap: 2px; }
+.task-memo-card__actions button { display: grid; width: 21px; height: 21px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--faint); }
+.task-memo-card__actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.task-memo-card__actions button.is-danger:hover:not(:disabled) { color: var(--red); }
+.task-memo-card__actions button:disabled { opacity: .48; }
+
+/* 正文：保留用户自己排的版（换行、缩进），长单词/长路径强制断开，不许撑宽卡片。
+   折叠靠内联的 max-height（行数写在 TaskMemoCard 里），这里只负责把裁口做得不突兀。 */
+.task-memo-card__body { overflow: hidden; overflow-wrap: anywhere; margin: 6px 0 0; color: var(--ink); font-size: 11.5px; line-height: 1.75; white-space: pre-wrap; }
+
+.task-memo-card__more { margin-top: 4px; border: 0; border-radius: 6px; background: transparent; padding: 2px 4px 2px 0; color: var(--accent); font-size: 10px; }
+.task-memo-card__more:hover { text-decoration: underline; }
+
+.task-memo-card__edit { display: grid; gap: 7px; margin-top: 7px; }
+.task-memo-card__edit textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 7px; background: color-mix(in lch, var(--panel) 80%, var(--canvas)); padding: 7px 8px; color: var(--ink); font: inherit; font-size: 11.5px; line-height: 1.75; outline: 0; resize: vertical; }
+.task-memo-card__edit textarea:focus { border-color: var(--accent); }
+.task-memo-card__edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.task-memo-card__edit-actions button { display: inline-flex; min-height: 25px; align-items: center; gap: 4px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 10px; }
+.task-memo-card__edit-actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.task-memo-card__edit-actions button.is-primary { border-color: transparent; background: var(--accent); color: white; font-weight: 650; }
+.task-memo-card__edit-actions button.is-primary:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 88%, black); color: white; }
+.task-memo-card__edit-actions button:disabled { cursor: not-allowed; opacity: .48; }
+
+/* 图标条上那一格：这个任务有备忘时带底色（跟子智能体/哨兵「用过才浮现」那套同一个记号，
+   见 inspector.css 的 .inspector-rail-icon--used）。这里只补一句备忘自己的强调色。 */
+.task-memo-rail-icon--has { color: var(--accent); }
