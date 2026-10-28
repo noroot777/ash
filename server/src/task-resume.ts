@@ -70,10 +70,14 @@ async function resumeOrRunClaimedTask(taskId: string,
     const receipt = await claimCheckpointForRun(taskId, rp, task.resumePromptGeneration);
     if (receipt) {
       let delivered = false;
+      // `continueTask` 返回 false = 这一轮**一个字都没送出去**(起跑前被冻结闸撤回,或者越线
+      // 凭据写不下来而原地撤回)。抛错那条路不给这个结论,所以初值按「不知道」算。
+      let launched = true;
       try {
-        await continueTask(taskId, rp, {
+        launched = await continueTask(taskId, rp, {
           system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
-          actingUserId: acting, ...(reviewerRoute ?? {}), pendingMessageIds: [receipt.id],
+          actingUserId: acting, ...(reviewerRoute ?? {}),
+          pendingMessageIds: [receipt.id], crossingRequired: true,
           onDelivered: async () => {
             delivered = true;
             await acknowledgeCheckpointRun(receipt);
@@ -83,7 +87,7 @@ async function resumeOrRunClaimedTask(taskId: string,
         // 没走到送达回调 ≠ 没送出去:spawn 排在 persistRunner 与 onDelivered **之前**,崩在
         // 中间那条缝里时这段话已经在 agent 手上了。三态判定与三条出路统一在
         // settleStrandedCheckpointRun(第 1 轮审查 F1:这里原先一律归还)。
-        if (!delivered) await settleStrandedCheckpointRun(receipt, "本轮续跑交代未走到送达确认");
+        if (!delivered) await settleStrandedCheckpointRun(receipt, "本轮续跑交代未走到送达确认", !launched);
       }
       return;
     }

@@ -1,7 +1,7 @@
 import { and, eq, gte, isNotNull, ne } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, sessions, tasks } from "./db/schema.js";
-import { deliveryCrossed } from "./delivery-crossing.js";
+import { deliveryCrossing } from "./delivery-crossing.js";
 import { restoreMonitorCheckpoint } from "./monitor-checkpoint-handoff.js";
 
 export const CHECKPOINT_RUN_ORIGIN = "checkpoint:resume";
@@ -38,7 +38,13 @@ export const forgetCheckpointDelivering = (messageId: string): void => void deli
  * 现场与判据见 delivery-crossing.ts 的文件头)。
  *
  * 顺序就是证据强度:**回合开起来过**是最强的正面证据(它蕴含 spawn 发生过),所以先问它;
- * 其次问越线记号 —— 有记号而没有回合行,正是那条缝;两样都没有才是真的还没启动。
+ * 其次问越线记号 —— 有记号而没有回合行,正是那条缝;**只有记号这一问给出否证**(目录在、
+ * 这一条确实没写过)才是真的还没启动。
+ *
+ * 记号读不出来(目录没了、权限没了、I/O 错)**不是否证**:第 2 轮自由审查实测,凭据写入
+ * 失败只告警的那一版里,`existsSync` 的失败方向同样是 false,两头一夹,一段已经喂给 agent
+ * 的交代被归还重投、执行了两遍。现在写入是硬前置(delivery-crossing.ts 的文件头),读取
+ * 这一侧也必须把「没有」和「没问出来」分开 —— 后者归到交付不明,由人裁定。
  *
  * 偏向仍然是明的:宁可多卡一会儿(确认会被补记上去)也不误归还,因为误归还会把已经喂给
  * agent 的那段话重新变成待执行输入。
@@ -55,7 +61,7 @@ export async function checkpointDeliveryVerdict(
     gte(sessions.turnStartedAt, receipt.deliveringSince),
   ));
   if (opened.length > 0) return "delivered";
-  return deliveryCrossed(receipt.taskId, receipt.id) ? "uncertain" : "not-started";
+  return deliveryCrossing(receipt.taskId, receipt.id) === "absent" ? "not-started" : "uncertain";
 }
 
 /**
@@ -165,9 +171,10 @@ export async function pendingCheckpointBlockReason(
     // 交付不明:这一句只会在「对账还没跑到 / 刚才那趟对账自己失败了」的窗口里出现 ——
     // 对账会把它就地了结成一条交付不明的可见交代(settleStrandedCheckpointRun),不留死局。
     if (verdict === "uncertain") {
-      return "这一轮的续跑交代已经交给 agent 进程，但「送达」那一笔没来得及记下，系统分不清它"
-        + "到底执行了没有 —— 正在把它结成一条交付不明的记录（原文会留在任务时间线里，由你决定"
-        + "要不要再送一遍）；它不会被自动重投，否则同一段交代可能被执行两遍";
+      return "这一轮的续跑交代可能已经交给 agent 进程了（越线记号还在，或者读不出来），但"
+        + "「送达」那一笔没来得及记下，系统分不清它到底执行了没有 —— 正在把它结成一条交付不明的"
+        + "记录（原文会留在任务时间线里，由你决定要不要再送一遍）；它不会被自动重投，否则同一段"
+        + "交代可能被执行两遍";
     }
   }
   return "未送达的续跑交代仍由消息账本保管，归还或完成交接后才能启动";

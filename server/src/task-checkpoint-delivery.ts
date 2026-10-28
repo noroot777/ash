@@ -1,12 +1,12 @@
 import { and, eq } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
-import { scheduledMessages, tasks } from "./db/schema.js";
+import { scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { restoreMonitorCheckpoint } from "./monitor-checkpoint-handoff.js";
 import { recoverPendingDelivery } from "./pending-delivery-recovery.js";
 import {
   CHECKPOINT_RUN_ORIGIN, checkpointDeliveryVerdict, forgetCheckpointDelivering, noteCheckpointDelivering,
 } from "./pending-checkpoint-recovery.js";
-import { forgetDeliveryCrossing } from "./delivery-crossing.js";
+import { ensureCrossingDir, forgetDeliveryCrossing } from "./delivery-crossing.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { freshRunFailureTarget } from "./turn-failure.js";
 import { markSent } from "./pending-messages.js";
@@ -17,7 +17,15 @@ import { id, now } from "./util.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
 
+/**
+ * 认领这段续跑交代,换一张**带在途租约**的凭证。
+ *
+ * 第一句先建好越线记号的目录:那是整条协议的凭据落点,而且必须赶在产生任何外部效果之前 ——
+ * 恢复侧要靠「目录在、这一条不在」构成否证(delivery-crossing.ts 的文件头),目录自己不在时
+ * 它什么都证明不了。建不起来就抛:凭据系统坏了,这一轮根本不该开始,交代原样留在任务上。
+ */
 export async function claimCheckpointForRun(taskId: string, expected: string, generation?: number): Promise<Row | null> {
+  ensureCrossingDir(taskId);
   const receipt = await db.transaction(async (transaction) => {
     const task = (await transaction.select().from(tasks).where(and(
       eq(tasks.id, taskId), eq(tasks.resumePrompt, expected),
@@ -105,29 +113,59 @@ export async function returnCheckpointRun(receipt: Row): Promise<void> {
  *
  * `eventKey` 按消息 id 定死:对账在开机那一拍和每次启动前都会跑,这条交代只该出现一次。
  */
-export async function settleUncertainCheckpointRun(receipt: Row): Promise<void> {
+export async function settleUncertainCheckpointRun(receipt: Row, attempts = 0): Promise<void> {
+  try {
+    // **发布成功是消费凭证的前提。** `appendTaskTimeline` 是尽力而为的:它把异常 catch 掉、
+    // 返回 false(task-timeline.ts)。早先这里只看第一次的返回值、补办那一次的返回值压根没
+    // 接,于是对话文件写不下去(目录不可写、配额满)时,那条带原文的裁定记录一个字都没发布
+    // 出去,而 markSent + 删记号已经把恢复责任永久消费掉 —— 用户再也看不到原文,对账也不会
+    // 再扫到它(第 2 轮自由审查 F4)。`eventKey` 只保证去重,不保证发布成功。
+    if (!await publishUncertainRecord(receipt)) throw new Error("带原文的交付不明记录没有发布成功");
+    await markSent(receipt);
+    forgetCheckpointDelivering(receipt.id);
+    forgetDeliveryCrossing(receipt.taskId, [receipt.id]);
+    console.warn(`[ash] 续跑交代交付不明 task=${receipt.taskId} message=${receipt.id}：`
+      + `越过 spawn 但没落下会话行，已就地结成可见记录，不自动重投${attempts ? `（第 ${attempts + 1} 次尝试）` : ""}`);
+  } catch (error) {
+    if (dbClient.closed) return;
+    // 一个字都不消费:租约留着(它是「这张凭证还没了结」的唯一凭据)、记号留着(它是
+    // 「越过线了」的唯一凭据)。退避重试;进程要是在重试中被换掉,开机那一拍与每次启动前的
+    // 对账会按同一判据接着办(verdict 仍是 uncertain)。
+    const delay = Math.min(200 * 2 ** Math.min(attempts, 8), 30_000);
+    console.warn(`[ash] 续跑交代交付不明的可见记录没发布成功 task=${receipt.taskId} message=${receipt.id}`
+      + `（凭证原样留着，${delay}ms 后重试第 ${attempts + 2} 次）:`, error);
+    const timer = setTimeout(() => void settleUncertainCheckpointRun(receipt, attempts + 1), delay);
+    timer.unref?.();
+  }
+}
+
+/**
+ * 那条**带原文**的可见记录。返回值 = 它到底有没有发布出去。
+ *
+ * 写不进去有两种成因,得分开:**这个任务一条会话都没有**(交代是在它从没跑过时写上去的)
+ * 要先开一行诊断会话再写;**对话文件这会儿写不下去**(目录不可写、配额满)则只能如实回
+ * false 等重试 —— 不能每重试一次就新开一行诊断会话,那会在任务里堆出一串空会话。
+ *
+ * 任务行本身都没了是唯一的例外:那时既没有「用户看得见的地方」,这张凭证也不再挡着谁 ——
+ * 原文打进日志后就地了结,不做无意义的无限重试。
+ */
+async function publishUncertainRecord(receipt: Row): Promise<boolean> {
   const text = receipt.checkpointTaken ?? receipt.text;
-  const note = "〔系统〕这一轮的续跑交代已经交给 agent 进程，但「已送达」那一笔没来得及记下"
-    + "（进程在交出输入和落账之间被换掉了）。系统分不清它到底执行了没有，所以**不会自动再送"
-    + "一遍** —— 同一段交代执行两遍的代价比晚一点更大。原文留在下面，要不要再送由你决定：\n\n"
+  const note = "〔系统〕这一轮的续跑交代**可能已经**交给 agent 进程了（越线记号还在，或者那张"
+    + "记号这会儿读不出来），而「已送达」那一笔没来得及记下（进程在交出输入和落账之间被换掉了）。"
+    + "系统分不清它到底执行了没有，所以**不会自动再送一遍** —— 同一段交代执行两遍的代价比晚一点"
+    + "更大。原文留在下面，要不要再送由你决定：\n\n"
     + `> ${text.split("\n").join("\n> ")}`;
   const target = { eventKey: `checkpoint-uncertain:${receipt.id}` };
-  // 原文**必须落到用户看得见的地方**,这是这一档的全部出路。一条会话都没有(交代是在任务
-  // 从没跑过时被写上去的)就先开一行诊断会话再写 —— 否则 markSent 之后这段话就真没了。
-  if (!await appendTaskTimeline(receipt.taskId, note, target)) {
-    const task = (await db.select().from(tasks).where(eq(tasks.id, receipt.taskId))).at(0);
-    if (task) {
-      await appendTaskTimeline(receipt.taskId, note,
-        { ...await freshRunFailureTarget(task, null), ...target });
-    } else {
-      console.error(`[ash] 续跑交代交付不明、又无处落账 task=${receipt.taskId}，原文:`, text);
-    }
+  if (await appendTaskTimeline(receipt.taskId, note, target)) return true;
+  const opened = await db.select({ id: sessions.id }).from(sessions).where(eq(sessions.taskId, receipt.taskId));
+  if (opened.length) return false;
+  const task = (await db.select().from(tasks).where(eq(tasks.id, receipt.taskId))).at(0);
+  if (!task) {
+    console.error(`[ash] 续跑交代交付不明、又无处落账 task=${receipt.taskId}，原文:`, text);
+    return true;
   }
-  await markSent(receipt);
-  forgetCheckpointDelivering(receipt.id);
-  forgetDeliveryCrossing(receipt.taskId, [receipt.id]);
-  console.warn(`[ash] 续跑交代交付不明 task=${receipt.taskId} message=${receipt.id}：`
-    + "越过 spawn 但没落下会话行，已就地结成可见记录，不自动重投");
+  return appendTaskTimeline(receipt.taskId, note, { ...await freshRunFailureTarget(task, null), ...target });
 }
 
 /**
@@ -137,7 +175,15 @@ export async function settleUncertainCheckpointRun(receipt: Row): Promise<void> 
  * (pending-checkpoint-recovery.ts)。早先各处自己写「送到了吗」的布尔判断,于是同一条缝在
  * 四个地方各错一遍(第 1 轮审查 F1 点名的同类入口)。
  */
-export async function settleStrandedCheckpointRun(receipt: Row, why: string): Promise<void> {
+export async function settleStrandedCheckpointRun(receipt: Row, why: string,
+  /** 调用方**确知**这一轮一个字都没送出去(continueTask 返回 false:起跑前被冻结闸撤回、
+   *  或者越线凭据根本写不下来)。那是比任何事后读取都强的否证,直接归还。 */
+  notLaunched = false): Promise<void> {
+  if (notLaunched) {
+    console.warn(`[ash] ${why} task=${receipt.taskId} message=${receipt.id}：这一轮在 spawn 之前就撤回了，归还给任务`);
+    await returnCheckpointRun(receipt);
+    return;
+  }
   const verdict = await checkpointDeliveryVerdict(receipt);
   const head = `[ash] ${why} task=${receipt.taskId} message=${receipt.id}：`;
   if (verdict === "delivered") {
@@ -146,10 +192,10 @@ export async function settleStrandedCheckpointRun(receipt: Row, why: string): Pr
     return;
   }
   if (verdict === "uncertain") {
-    console.warn(`${head}原文已越过 spawn、这一轮却没落下会话行 —— 交付不明，就地结成可见记录`);
+    console.warn(`${head}越线记号没能给出否证、这一轮又没落下会话行 —— 交付不明，就地结成可见记录`);
     await settleUncertainCheckpointRun(receipt);
     return;
   }
-  console.warn(`${head}越线记号与回合行都没有（证明没送出去），归还给任务`);
+  console.warn(`${head}越线记号给出否证、回合行也没有（证明没送出去），归还给任务`);
   await returnCheckpointRun(receipt);
 }

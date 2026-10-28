@@ -28,7 +28,7 @@ import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
-import { noteDeliveryCrossing } from "./delivery-crossing.js";
+import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { deliverToLead } from "./team/session.js";
@@ -476,11 +476,11 @@ export async function continueTask(
     // 一半是 resume 回合，全都还挂在匿名管道上）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
-    // **交出 prompt 之前**把「这几条输入即将越线」同步落到磁盘。下面这一句就是不可逆的那一刻:
-    // 它之后的 persistRunner / onDelivered 都只是记账,崩在中间时「没有会话行」只证明记账没
-    // 做完 —— 不证明输入没出去(delivery-crossing.ts 的文件头有跨进程实测)。
+    // **交出 prompt 之前**把「这几条输入即将越线」同步落到磁盘:下面这一句 run(...) 才是不可逆
+    // 的那一刻,它之后的 persistRunner / onDelivered 都只是记账。两档策略(凭据档写不成当场抛,
+    // 走下面 catch 的「一个字都没送出去」那一支)与跨进程实测都在 delivery-crossing.ts 的文件头。
     if (opts.pendingMessageIds?.length) {
-      noteDeliveryCrossing(taskId, opts.pendingMessageIds, { sessionId: sessId, turnStart });
+      recordDeliveryCrossing(taskId, opts.pendingMessageIds, { sessionId: sessId, turnStart }, opts.crossingRequired);
     }
     handle = run({
       prompt,
@@ -658,7 +658,9 @@ export async function continueTask(
     // 调用方就是「没送出去」—— 返回 true 会让 resumePrompt 那路把检查点当已消费,
     // 暂停撤回一次、指定继续内容永久丢失,恢复分组后只剩通用「继续」(第 7 轮审查)。
     // 状态结算(落回 paused)仍由失败恢复完成,只是返回值改说实话。
-    frozenBeforeSpawn = err instanceof FrozenTurn;
+    // 越线凭据写不下来(DeliveryCrossingUnwritable)同属这一类:它也只在 spawn 之前抛,
+    // 而且**必须**说实话 —— 调用方据此确知「没投喂」,直接归还,不必再去读那张读不出来的记号。
+    frozenBeforeSpawn = err instanceof FrozenTurn || err instanceof DeliveryCrossingUnwritable;
     if (!handle && (frozenBeforeSpawn || checkingReviewStart)) {
       await recordReviewStartNotLaunched(taskId, reviewStart);
       if (await restoreUndeliveredReviewStart(taskId, reviewStart, true)) return false;

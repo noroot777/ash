@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import {
   api, db, dbClient, failCheckpointAck, hits, pending, rowOf, scenario, scheduledMessages,
   schema, settled, taskOf, until,
 } from "./checkpoint-recovery-fixture.js";
-import { deliveryCrossed, noteDeliveryCrossing } from "../src/delivery-crossing.js";
+import { deliveryCrossing, ensureCrossingDir, noteDeliveryCrossing } from "../src/delivery-crossing.js";
+import { RUNS_DIR } from "../src/paths.js";
 import { sessionTranscriptPath } from "../src/transcript.js";
 import { claimCheckpointForRun, returnCheckpointRun } from "../src/task-checkpoint-delivery.js";
 import {
@@ -186,7 +188,7 @@ export async function checkpointAckFailureCases(): Promise<void> {
     assert.equal(settledRow.deliveringSince, null, "不许永久挂着:租约留着就等于这个任务此后一律起不来");
     assert.equal((await taskOf(test.taskId)).resumePrompt, null, "交付不明不许被回填成待执行输入");
     assert.equal(await preparePendingCheckpointStart(test.taskId), null, "了结之后这个任务能再启动");
-    assert.equal(deliveryCrossed(test.taskId, settledRow.id), false, "有了定论,越线记号就该收走");
+    assert.equal(deliveryCrossing(test.taskId, settledRow.id), "absent", "有了定论,越线记号就该收走");
     const told = await transcript(test.taskId);
     assert.match(told, /不会自动再送一遍/, "交付不明必须留下可见交代");
     assert.match(told, new RegExp(test.checkpoint), "原文必须留在用户看得见的地方 —— 要不要再送由他判断");
@@ -215,7 +217,121 @@ export async function checkpointAckFailureCases(): Promise<void> {
     assert.match(told, /不会自动再送一遍/);
     assert.match(told, new RegExp(test.checkpoint), "原文必须留在用户看得见的地方");
     assert.equal(hits(test.checkpoint), 0, "系统自己一次都没再送");
-    assert.equal(deliveryCrossed(test.taskId, receipt.id), false, "有了定论,越线记号就该收走");
+    assert.equal(deliveryCrossing(test.taskId, receipt.id), "absent", "有了定论,越线记号就该收走");
     console.log("PASS: a crossed-but-unrecorded handoff survives a restart as a visible uncertain record, never a replay");
+  }
+
+  // ⑧ **凭据写不下来就不许产生外部效果**(第 2 轮自由审查 F1)。
+  //    早先 `noteDeliveryCrossing` 吞掉 mkdir/open/write/fsync 的失败,调用方紧接着照常 spawn:
+  //    输入出去了、凭据没留下,恢复侧又把「记号不存在」读成否证 —— 审查者用「拿普通文件占住
+  //    runs/<task>/crossed」造出真实 EEXIST,跨进程实测到同一段交代被执行两遍。
+  //    现在目录在**认领凭证那一步**就建,建不起来当场抛:交代原样留在任务上,一个字都没送出去。
+  {
+    const test = await scenario(0);
+    const occupied = join(RUNS_DIR, test.taskId, "crossed");
+    mkdirSync(join(RUNS_DIR, test.taskId), { recursive: true });
+    rmSync(occupied, { recursive: true, force: true });
+    writeFileSync(occupied, "拿一个普通文件占住这个名字");
+    try {
+      const generation = (await taskOf(test.taskId)).resumePromptGeneration;
+      await assert.rejects(() => claimCheckpointForRun(test.taskId, test.checkpoint, generation),
+        /投递越线记号写不下来/, "凭据落不下来时不许认领,更不许往下走到 spawn");
+      assert.equal((await taskOf(test.taskId)).resumePrompt, test.checkpoint, "交代原样留在任务上");
+      assert.equal((await db.select().from(scheduledMessages)
+        .where(eq(scheduledMessages.taskId, test.taskId))).length, 0, "没有凭证就没有在途投递");
+      // 走真实启动路径同样如此:它不会把这段话交出去。
+      const refused = await api.request(`/tasks/${test.taskId}/run`, { method: "POST" });
+      assert.notEqual(refused.status, 202, `凭据坏了时 /run 不许按已启动返回（实得 ${refused.status}）`);
+      assert.equal(hits(test.checkpoint), 0, "凭据写不下来时绝不许产生外部效果");
+      assert.equal((await taskOf(test.taskId)).resumePrompt, test.checkpoint);
+    } finally {
+      rmSync(occupied, { force: true });
+    }
+    console.log("PASS: an unwritable crossing credential aborts before spawn instead of delivering unprovably");
+  }
+
+  // ⑧b 同一条不变量的**另一半**:目录好好的,倒在**写文件**那一步(报告点名的 EACCES /
+  //    ENOSPC / EIO 一类)。⑧ 那个形状在认领凭证时就被 `ensureCrossingDir` 挡住了,这一条
+  //    只有 spawn 前那张记号挡得住 —— 撤掉 `requireDeliveryCrossing` 的抛错,这段交代就会在
+  //    没有凭据的情况下真的交出去。这里把目录置成只读造出真实 EACCES(root 下权限位不生效,
+  //    那种环境整条跳过)。
+  if (process.getuid?.() !== 0) {
+    const test = await scenario(0);
+    const dir = join(RUNS_DIR, test.taskId, "crossed");
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o555); // 目录建得起来也 fsync 得了,只是往里写文件会被拒
+    try {
+      ensureCrossingDir(test.taskId); // ⑧ 那道闸这次放行:目录本身是好的
+      const refused = await api.request(`/tasks/${test.taskId}/run`, { method: "POST" });
+      assert.notEqual(refused.status, 202, `凭据写不下来时 /run 不许按已启动返回（实得 ${refused.status}）`);
+      await until("凭据写不下来 → 原地撤回,交代退回任务",
+        async () => (await taskOf(test.taskId)).resumePrompt === test.checkpoint);
+      assert.equal(hits(test.checkpoint), 0, "凭据写不下来时一个字都不许送出去");
+      assert.ok((await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, test.taskId)))
+        .every((row) => row.status !== "sent"), "没送出去的东西不许被记成已送达");
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    console.log("PASS: a write-stage credential failure returns the checkpoint instead of delivering it unprovably");
+  }
+
+  // ⑨ 跟 ③ 同一个现场,只差「记号这一问读不出来」:上一个进程越过线之后被换掉,随后那棵树
+  //    被谁清掉了。`existsSync` 的失败方向是 false,于是读不出来被当成否证、交代被归还重投 ——
+  //    这正是 F1 的另一半。读不出来只能归到交付不明,由人裁定。
+  {
+    const test = await scenario(0);
+    const generation = (await taskOf(test.taskId)).resumePromptGeneration;
+    const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
+    noteDeliveryCrossing(test.taskId, [receipt.id], { sessionId: `sess-${receipt.id}`, turnStart: now() });
+    rmSync(join(RUNS_DIR, test.taskId, "crossed"), { recursive: true, force: true });
+    assert.equal(deliveryCrossing(test.taskId, receipt.id), "unreadable", "目录都不在了,这一问没答上来");
+    forgetCheckpointDelivering(receipt.id);
+    await pending.reclaimStaleDeliveries();
+    await until("读不出来归到交付不明", async () => (await rowOf(receipt.id)).status === "sent");
+    assert.equal((await taskOf(test.taskId)).resumePrompt, null,
+      "记号读不出来不是否证 —— 按否证归还就是把可能已经执行过的交代再投一遍");
+    assert.equal(hits(test.checkpoint), 0, "系统自己一次都没再送");
+    const told = await transcript(test.taskId);
+    assert.match(told, /不会自动再送一遍/);
+    assert.match(told, new RegExp(test.checkpoint), "原文必须留在用户看得见的地方");
+    console.log("PASS: an unreadable crossing credential settles as uncertain instead of being replayed");
+  }
+
+  // ⑩ **可见发布成功是消费凭据的前提**(第 2 轮自由审查 F4)。
+  //    `appendTaskTimeline` 是尽力而为的(异常被 catch、返回 false)。早先补办那一次的返回值
+  //    压根没接,于是对话文件写不下去时:带原文的裁定记录一个字都没发布,而 markSent + 删记号
+  //    已经把恢复责任永久消费掉 —— 用户再也看不到原文,对账也不会再扫到它。
+  {
+    const test = await scenario(0);
+    const generation = (await taskOf(test.taskId)).resumePromptGeneration;
+    const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
+    noteDeliveryCrossing(test.taskId, [receipt.id], { sessionId: `sess-${receipt.id}`, turnStart: now() });
+    forgetCheckpointDelivering(receipt.id);
+    const taskDir = join(RUNS_DIR, test.taskId);
+    // 对话文件写不下去:用一个普通文件占住这个任务的 runs 目录(mkdirSync 当场 EEXIST)。
+    rmSync(taskDir, { recursive: true, force: true });
+    writeFileSync(taskDir, "对话目录此刻写不下去");
+    try {
+      await pending.reclaimStaleDeliveries();
+      // 发布没成功 ⇒ 一个字都不许消费:租约留着、记号那一侧也不动,任务照旧不许起跑。
+      await until("至少试过一次发布", async () => (await rowOf(receipt.id)).status === "canceled");
+      const held = await rowOf(receipt.id);
+      assert.equal(held.status, "canceled", "发布失败时不许标 sent");
+      assert.ok(held.deliveringSince, "租约是「这张凭证还没了结」的唯一凭据,不许提前清掉");
+      assert.equal(held.checkpointTaken, test.checkpoint);
+      assert.match(String(await preparePendingCheckpointStart(test.taskId)), /交付不明/,
+        "没发布出去的时候,准入这一侧也得照实说还没了结");
+      assert.equal((await taskOf(test.taskId)).resumePrompt, null, "交付不明照旧不许回填成待执行输入");
+    } finally {
+      rmSync(taskDir, { force: true });
+    }
+    // 目录恢复之后,退避重试自己把它办完 —— 恢复责任一直留着。
+    await until("恢复之后补办成功", async () => (await rowOf(receipt.id)).status === "sent");
+    assert.equal((await rowOf(receipt.id)).deliveringSince, null);
+    const told = await transcript(test.taskId);
+    assert.match(told, /不会自动再送一遍/, "补办之后那条带原文的记录必须真的在");
+    assert.match(told, new RegExp(test.checkpoint));
+    assert.equal(hits(test.checkpoint), 0, "整个过程系统一次都没再送");
+    console.log("PASS: an uncertain settlement keeps the recovery credential until the visible record publishes");
   }
 }
