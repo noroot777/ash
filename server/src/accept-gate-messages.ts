@@ -8,8 +8,13 @@ export const gateFailurePrompt = (details: { command: string; summary: string; l
   (details.executionNotice ? `${details.executionNotice}\n` : "") +
   `在当前任务工作区复现这条命令：\n\n    cd ${details.sourceCwd} && ${details.command}\n\n` +
   `结果：${details.summary}。所以**没有合并、没有清理**，目标分支一个字节都没动。\n\n` +
-  (details.failure === "timeout" ? "这是整条命令超时，不是已经定位到某个断言失败。日志最后的成功提示只说明那一步的断言完成，不能证明浏览器、开发服务或测试进程已经退出；首次卡住的原因仍需核实。\n\n" : "") +
-  `完整日志在 \`${details.logPath}\`，末尾是：\n\n\`\`\`\n${details.tail.trim() || "（日志为空）"}\n\`\`\`\n\n` +
+  (details.failure === "timeout"
+    ? "这是整条命令超时，不是定位到了某个断言失败。回显末尾的「被收掉时的现场」给了停在哪一行、多久没输出、"
+      + "整段的产出节奏：日志只证明在输出，不证明在前进；最后那句成功提示只说明那一步断言完成，"
+      + "不代表浏览器、开发服务或测试进程已经退出。\n\n"
+    : "") +
+  `完整日志在 \`${details.logPath}\`，末尾（含同名 \`.notes\` 进度、\`.scene\` 现场）：\n\n` +
+  `\`\`\`\n${details.tail.trim() || "（日志为空）"}\n\`\`\`\n\n` +
   `${GATE_FAILURE_REGRESSION_CARVE_OUT}\n\n` +
   `请你来处理：\n` +
   `1. 在自己的工作目录里跑这条命令，定位到底是哪一条红的；\n` +
