@@ -7,6 +7,30 @@ import { ScheduledMessageTray } from "../src/components/ScheduledMessageTray.tsx
 import { AutoCommitOutcomeNotice, WorkspaceCommitNotice } from "../src/review/AcceptanceWorkspaceCommit.tsx";
 import { workspaceCommitBlock, workspaceCommitPaths } from "../src/review/workspaceCommit.ts";
 import type { ScmOverview, ScmChange } from "../src/lib/api.ts";
+import { api } from "../src/lib/api.ts";
+
+const originalFetch = globalThis.fetch;
+const requests: { path: string; init?: RequestInit }[] = [];
+globalThis.fetch = async (input, init) => {
+  requests.push({ path: String(input), init });
+  return Response.json({ sha: "test-commit" });
+};
+try {
+  const taskId = "task / with spaces";
+  await api.scmCommit(taskId, "normal commit");
+  await api.scmCommit(taskId, "acceptance commit", { acceptance: true, stagePaths: ["task.txt"] });
+  await api.scmCommit(taskId, "amend commit", { acceptance: false, amend: true, force: true });
+  const root = `/api/tasks/${encodeURIComponent(taskId)}/scm`;
+  assert.deepEqual(requests.map(request => request.path), [`${root}/commit`, `${root}/acceptance-commit`, `${root}/commit`]);
+  assert.ok(requests.every(request => request.init?.method === "POST"));
+  assert.deepEqual(requests.map(request => JSON.parse(String(request.init?.body))), [
+    { message: "normal commit" },
+    { message: "acceptance commit", acceptance: true, stagePaths: ["task.txt"] },
+    { message: "amend commit", acceptance: false, amend: true, force: true },
+  ]);
+} finally {
+  globalThis.fetch = originalFetch;
+}
 
 const change = (path: string, origPath: string | null = null): ScmChange => ({ path, origPath, kind: "modified", nested: false, conflict: null });
 const overview: ScmOverview = {
@@ -76,4 +100,4 @@ assert.match(monitorFirst, /scheduled-message-guide/);
 assert.match(monitorFirst, /scheduled-message-withdraw/);
 const css = readFileSync(new URL("../src/styles/scheduled-message-tray.css", import.meta.url), "utf8");
 assert.doesNotMatch(css, /\.scheduled-message-previews[^{}]*> button[^{}]*\{[^{}]*display:\s*none/);
-console.log("page interactions: commit safety, collapsed user actions, monitor and review message compatibility passed");
+console.log("page interactions: extracted SCM API routing, commit safety, collapsed user actions, monitor and review message compatibility passed");

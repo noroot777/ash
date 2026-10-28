@@ -50,6 +50,8 @@ check("快照搬任务，也搬它的分组与队列",
   ["groups", "tasks", "sessions", "queue_items"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
 check("快照会连 Codex 累计基线一起搬",
   (SNAPSHOT_TABLES as readonly string[]).includes("usage_cumulative_snapshots"), true);
+check("快照搬任务时连它的备忘一起搬（这张白名单是显式的，新表不加就只搬任务）",
+  (SNAPSHOT_TABLES as readonly string[]).includes("task_memos"), true);
 check("快照会带上自由工作流实际记录",
   ["free_workflow_states", "free_workflow_events", "free_review_runs", "free_review_rounds"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
 

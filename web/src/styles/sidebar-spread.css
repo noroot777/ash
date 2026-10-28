@@ -163,6 +163,10 @@
 
 .workspace-spread-who.is-you { color: var(--accent); }
 
+/* 「备忘」跟「你说」占同一个位置，所以必须一眼分得开：换一种颜色（琥珀，跟「轮到你处理」
+   那层底色同族），不靠读字。两者是互斥的——那一格此刻显示的只能是其中一条。 */
+.workspace-spread-who.is-memo { color: var(--amber); }
+
 .workspace-spread-cell--time {
   padding-right: 8px;
   color: var(--faint);
@@ -385,6 +389,16 @@
   white-space: pre-wrap;
 }
 
+/* 悬浮卡里追问下面那一段备忘。上面一道分隔线：两段都是「我自己写的字」，不隔开的话
+   会被读成同一条的下半截。 */
+.workspace-spread-peek-memo {
+  margin-top: 11px;
+  border-top: 1px solid var(--line);
+  padding-top: 9px;
+}
+
+.workspace-spread-peek-memo .workspace-spread-peek-head b { color: var(--amber); }
+
 .workspace-spread-peek-tip {
   margin-top: 9px;
   color: var(--faint);
@@ -419,4 +433,11 @@
     transition: none;
   }
   .workspace-spread-peek { animation: none; }
+}
+
+/* 「追问还没读到」那句限定：比正文弱一档，别抢备忘内容的注意力。 */
+.workspace-spread-peek-caveat {
+  margin-top: 6px;
+  color: var(--faint);
+  font-size: 10.5px;
 }
