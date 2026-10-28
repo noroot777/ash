@@ -37,6 +37,7 @@ import { initialTaskObjective } from "./invited-task-brief.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
@@ -57,6 +58,12 @@ export async function runTask(
   taskId: string,
   opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null } = {},
 ): Promise<void> {
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) {
+    if (opts.turnHeld) releaseTurn(taskId);
+    console.warn(`[ash] 任务 ${taskId} 未启动：${checkpointBlocked}`);
+    return;
+  }
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
   const head = (await db

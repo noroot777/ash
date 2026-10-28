@@ -20,6 +20,7 @@ import { db, dbClient } from "./db/index.js";
 import { monitors, scheduledMessages, tasks } from "./db/schema.js";
 import { monitorTurnSource, monitorWakeExecutor, monitorWakeGate } from "./monitor-session.js";
 import { enqueueMessage, flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
+import { recoverPendingCheckpoints } from "./pending-checkpoint-recovery.js";
 
 type Row = typeof monitors.$inferSelect;
 
@@ -294,4 +295,5 @@ export async function cancelPendingMonitorEvents(
       ...(origins.keep.length ? [notInArray(scheduledMessages.origin, origins.keep)] : []),
     ));
   publishPendingMessages(taskId);
+  await recoverPendingCheckpoints(taskId);
 }

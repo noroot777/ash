@@ -20,6 +20,8 @@ import { readDuetTurns } from "./duet/transcript-reads.js";
 import { resolveGate } from "./duet/gates.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
+import { preparePendingCheckpointStart, recoverPendingCheckpoints } from "./pending-checkpoint-recovery.js";
+import { cancelQueueAdvance } from "./queue-advance-retry.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
 import { confirmTaskComplete } from "./task-complete.js";
 import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
@@ -93,6 +95,8 @@ api.post("/tasks/:id/run", async (c) => {
       ? !["running", "queued", "awaiting_review"].includes(r.status)
       : canSingleRun(r.status as TaskStatus);
   if (!runnable) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
@@ -135,7 +139,6 @@ api.post("/tasks/:id/run", async (c) => {
       ? runDuet(taskId, { turnHeld: true, actingUserId: acting })
       : resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: acting }));
   if (!started.ok) {
-    releaseTurn(taskId);
     return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
   }
   return c.json({ started: true }, 202);
@@ -167,6 +170,8 @@ api.post("/tasks/:id/fire", async (c) => {
     return c.json({ error: `第 ${r.verifyRound} 轮就地验证还没出结论，等它结束再触发新一轮`, status: r.status }, 409);
   if (r.question)
     return c.json({ error: "任务有待答复的提问，先答复再触发新一轮", status: r.status }, 409);
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   // runTask 遇验收锁/单飞锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
   if (isAcceptingTask(taskId))
     return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
@@ -193,7 +198,6 @@ api.post("/tasks/:id/fire", async (c) => {
       ? runDuet(taskId, { turnHeld: true, actingUserId: firedBy })
       : runTask(taskId, { turnHeld: true, actingUserId: firedBy })); // 全新一轮,永不 resume
   if (!fired.ok) {
-    releaseTurn(taskId);
     return c.json({ error: queueClaimError(fired), blockedBy: fired.blockers }, 409);
   }
   return c.json({ started: true, fresh: true }, 202);
@@ -207,6 +211,7 @@ api.post("/tasks/:id/stop", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  if (await cancelQueueAdvance(taskId)) return c.json({ stopped: true, note: "已撤销待启动的队列运行请求" });
   if (stopTask(taskId)) return c.json({ stopped: true });
   if (r.status === "queued" || r.status === "running") {
     await setTaskStatus(taskId, "canceled");
@@ -448,6 +453,7 @@ api.delete("/scheduled-messages/:mid", async (c) => {
     return c.json({ error: "消息刚被开始投递或已发送，本次取消未生效" }, 409);
   }
   publishPendingMessages(m.taskId);
+  await recoverPendingCheckpoints(m.taskId);
   return c.json({ canceled: true });
 });
 
@@ -463,6 +469,8 @@ api.post("/tasks/:id/retry", async (c) => {
     if (blocked) return c.json({ error: blocked, handoff: true }, 409);
   }
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   // 同 /run:原子占位,并发重试只有一个能 202;duet 走同一把锁。
   if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
     return c.json({ error: "任务回合正在进行，结束后再重试", status: r.status }, 409);
@@ -483,7 +491,6 @@ api.post("/tasks/:id/retry", async (c) => {
       ? resumeDuet(taskId, { turnHeld: true, actingUserId: acting })
       : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting }));
   if (!started.ok) {
-    releaseTurn(taskId);
     return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
   }
   return c.json({ started: true }, 202);

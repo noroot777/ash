@@ -20,7 +20,8 @@ import "./project-commands.css";
 
 // 项目「常用命令」配置节。操作面在全局状态栏(workspace/StatusBar.tsx):
 //   启动/停止/重启 —— 项目级一组命令,对应弹层头部的图标按钮(没配置就置灰;服务起着的
-//   时候 ▶ 就地换成红框的停止)。停止命令可以不填 —— 默认就是杀掉启动会话的整个进程组;
+//   时候 ▶ 就地换成红框的停止)。停止命令可以不填 —— 默认是杀掉启动起来的进程:先整个
+//   进程组,组空了再按启动时打印过的本机端口回去找(server/src/service-ports.ts);
 //   常用命令 —— 名称 + 命令的普通条目,重启一律「杀掉进程再跑一遍」,所以**不逐条**
 //   配重启命令(用户点名去掉那个输入框)。
 // 命令正文是完整脚本(多行/缩进/`{{占位符}}`),编辑面与预览启动脚本共用 ShellScriptEditor:
@@ -121,8 +122,10 @@ export function ProjectCommandsSettings({ project, onUpdated, notify }: {
         <b>启动 / 停止 / 重启</b>
         <small>项目的 dev server：配置后，「常用命令」弹层顶部的按钮即可一键启停（G C 快速打开）；服务起着的时候，启动按钮就地变成停止。</small>
         <small>
-          停止默认是杀掉启动命令的整个进程组。<code>docker compose up -d</code>、<code>pm2 start</code> 这类
-          服务跑在 ash 的进程树之外（启动脚本跑完自己就退了），得填一条停止命令才停得掉。
+          停止默认是杀掉启动命令起来的进程：先杀整个进程组，进程组空了就回到启动时打印过的
+          本机端口（<code>http://127.0.0.1:8787</code> 这种）上找人——守护化的服务脚本跑完就退，
+          只有端口还指得到它。两条都够不着时（<code>docker compose up -d</code> 这类服务连端口
+          都未必在本机）才需要填一条停止命令。
         </small>
       </div>
       <div className="project-commands__service-fields">
@@ -150,7 +153,7 @@ export function ProjectCommandsSettings({ project, onUpdated, notify }: {
             readOnly={!canManage || busy}
             maxLength={MAX_PROJECT_COMMAND_LENGTH}
             heightKey={`commands:${project.id}:service-stop`}
-            placeholder="留空 = 杀掉启动命令的整个进程组"
+            placeholder="留空 = 杀掉启动起来的进程（进程组 + 它打印的端口）"
             wrap={wrap}
             onWrapChange={onWrapChange}
           />

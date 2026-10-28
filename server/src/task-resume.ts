@@ -8,8 +8,10 @@ import { continueTask, runTask, type ResumeReason } from "./orchestrator.js";
 import { handDuePendingMessageToRun } from "./pending-messages.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
+import { acknowledgeCheckpointRun, claimCheckpointForRun, returnCheckpointRun } from "./task-checkpoint-delivery.js";
+import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { activeReviewEvidence } from "./review-continuation.js";
-import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
+import { takeResumePrompt } from "./task-resume-prompt.js";
 import { withTurnPreflight } from "./turn-entry-guard.js";
 import { checkpointWaitOrigin } from "./task-wait-ownership.js";
 import { releaseTurn, turnIdentity } from "./runs.js";
@@ -31,6 +33,8 @@ export async function resumeOrRunTask(
 
 async function resumeOrRunClaimedTask(taskId: string,
   opts: { reason?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null }): Promise<void> {
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) throw new Error(checkpointBlocked);
   // `actingUserId` 一路原样往下传:它决定这一轮烧谁的 key(§八)。这里只是个中转,
   // 不给默认值 —— 后端触发的那几路本来就该退回任务归属人。
   const acting = opts.actingUserId ?? undefined;
@@ -63,20 +67,20 @@ async function resumeOrRunClaimedTask(taskId: string,
       if (!started) await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId);
       return;
     }
-    // 取走这段 checkpoint 指令要 CAS(`resume_prompt = rp`)：读到 rp 之后到清空之间隔着
-    // 至少一个 await，两路触发(HTTP /run 与队列推进)会双双读到同一段、双双清空、于是
-    // 一路送出、另一路把它当「没送出去」回填，下次触发再送一遍(审查实测:同一段指令投递两次)。
-    // CAS 与整行广播都在 takeResumePrompt/restoreResumePrompt 里（见那个文件顶部：这一列
-    // 是前端的门禁，改了不广播，长开的页面会一直把任务读成「在等续跑」）。
-    // 凭证随身（见 task-resume-prompt.ts 文件头）：取走拿到 `{text, auto, generation}`，没送
-    // 出去就原样带着它退回去 —— 只填回同一次占用腾出的那个空。
-    const receipt = await takeResumePrompt(taskId, rp, task.resumePromptGeneration);
+    const receipt = await claimCheckpointForRun(taskId, rp, task.resumePromptGeneration);
     if (receipt) {
-      const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting, ...(reviewerRoute ?? {}) });
-      if (!started) {
-        // 回合被别人抢了（典型：上一回合的 turn 还没 release）：checkpoint 指令一个字都没
-        // 送出去，必须放回原位等下一次触发——清了不回写就是永久丢失（审查实测复现）。
-        await restoreResumePrompt(taskId, receipt);
+      let delivered = false;
+      try {
+        await continueTask(taskId, rp, {
+          system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
+          actingUserId: acting, ...(reviewerRoute ?? {}), pendingMessageIds: [receipt.id],
+          onDelivered: async () => {
+            delivered = true;
+            await acknowledgeCheckpointRun(receipt);
+          },
+        });
+      } finally {
+        if (!delivered) await returnCheckpointRun(receipt);
       }
       return;
     }

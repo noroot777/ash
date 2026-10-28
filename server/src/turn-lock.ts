@@ -181,7 +181,10 @@ export function reclaimTurn(taskId: string, role: string, review?: TurnReview | 
 }
 
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
-export function releaseTurn(taskId: string): void {
+export function releaseTurn(taskId: string): void;
+export function releaseTurn(taskId: string, owner: TurnIdentity | null): void;
+export function releaseTurn(taskId: string, owner?: TurnIdentity | null): void {
+  if (owner !== undefined && (!owner || turns.get(taskId) !== owner)) return;
   // 起跑冻结标记只属于刚结束的这一回合（没被消费 = 那一轮已经自己结束了）。留着它，
   // 下一次运行会在起跑前被上一次的暂停莫名冻掉。
   startFreeze.delete(taskId);

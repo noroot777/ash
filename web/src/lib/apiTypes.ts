@@ -475,26 +475,7 @@ export type TeamCuaStatus = {
   };
 };
 
-export type TerminalSessionInfo = {
-  id: string;
-  projectId: string;
-  cwd: string;
-  shell: string;
-  name: string;
-  /** 非空 = 常用命令的常驻会话（server/src/terminal-commands.ts），不是交互 shell。 */
-  commandId: string | null;
-  startedAt: number;
-  /** null = 进程还活着；命令会话靠它区分「运行中」和「退了但日志可回看」。 */
-  exitCode: number | null;
-  /** 用户主动停的（区别于自己崩了）：显示「已停止」，不算异常、不亮红点。 */
-  stoppedByUser: boolean;
-  /** 进程组里是否还有活进程。组长退了组不一定空（daemonize），判「还在跑」看它，别看 exitCode。 */
-  groupAlive: boolean;
-};
-
-export type TerminalEvent =
-  | { seq: number; type: "data"; data: string }
-  | { seq: number; type: "exit"; exitCode: number; signal?: number };
+export type { TerminalSessionInfo, TerminalEvent } from "./apiTerminalTypes.ts";
 
 export type ReplyTaskResult =
   | { started: true }

@@ -32,6 +32,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { handoffActorId } from "./auth/handoff-outbound.js";
 import { resolveTargetsFor, toPublicTarget } from "./auth/handoff-scope.js";
 import { id, now } from "./util.js";
+import { checkpointReadyTask, preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import type {
   HandoffExportResult, HandoffPreflightResult, HandoffPeerIdentity, TaskHandoff,
 } from "@ash/shared";
@@ -401,6 +402,11 @@ export async function exportHandoff(
     // 占住回合:导出期间队列/调度器不能再把它拉起来;占不到 = 有回合在收尾,让用户重试。
     if (!claimTurn(taskId, "handoff")) throw new HandoffError("任务回合还在收尾,稍等几秒再试", 409);
     try {
+      const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+      if (checkpointBlocked) throw new HandoffError(checkpointBlocked, 409);
+      const ready = await checkpointReadyTask(taskId);
+      if (!ready) throw new HandoffError("续跑交代正在交接或任务已删除，请稍后重试接力", 409);
+      task = ready;
       const notes: string[] = [];
       if (returnContext && !taskScopedReturn) {
         notes.push("原机任务存档已删除，本次经整机审批通道重新导入原项目");

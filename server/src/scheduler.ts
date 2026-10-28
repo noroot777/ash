@@ -4,11 +4,23 @@ import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
+import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask, turnIdentity } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
+import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
+import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
+import { clearQueueAdvance, deferQueueAdvance, isQueueAdvanceCanceling, requestQueueAdvance, type QueueAdvanceRequest } from "./queue-advance-retry.js";
+import { waitForStartReceipt } from "./task-start-receipt.js";
+import { reportGroupStartFailure } from "./group-start-failure.js";
 
 const MAX_PARALLEL = 4;
+let pauseGeneration = 0;
+const groupPauses = new Map<string, number>();
+type QueueAdvanceAttempt = {
+  request?: QueueAdvanceRequest;
+  candidate?: { taskId: string; generation: number };
+  pauseGeneration: number;
+};
 
 // 暂停整组(POST /groups/:id/pause 与团队的「停止全组」共用这一份):置 paused、
 // 把还没起跑的 queued 退回 backlog、把正在跑的杀掉并**结算 paused**(不是
@@ -20,7 +32,11 @@ const MAX_PARALLEL = 4;
 // pause 会 200 返回、CLI 随后照样被拉起来（第 1 轮审查复现 20/20）。所以扫描时**只要
 // 杀不到就补一个起跑冻结标记**，由 spawn 前的最后一道闸消费（turn-freeze.ts）。
 export async function pauseGroup(groupId: string): Promise<void> {
-  await db.update(groups).set({ paused: true }).where(eq(groups.id, groupId));
+  await db.transaction(async (transaction) => {
+    await transaction.update(groups).set({ paused: true }).where(eq(groups.id, groupId));
+    await transaction.update(tasks).set({ queueAdvanceRequest: null }).where(eq(tasks.groupId, groupId));
+  }, { behavior: "immediate" });
+  groupPauses.set(groupId, ++pauseGeneration);
   const members = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
   for (const t of members) {
     // status 可能在队列推进/续聊交错时短暂失真；只要有活 handle，先杀进程永远优先。
@@ -28,10 +44,6 @@ export async function pauseGroup(groupId: string): Promise<void> {
     if (t.status === "queued") await setTaskStatus(t.id, "backlog");
     else freezeStartingTurn(t.id, "paused");
   }
-}
-
-async function setQueued(taskId: string) {
-  await setTaskStatus(taskId, "queued");
 }
 
 // Re-read the live paused flag each tick (the pause endpoint flips it mid-run).
@@ -71,14 +83,49 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
 //   - backlog → 拉起新 agent
 //   - paused → 用 resumePrompt 续跑(resumeOrRunTask 内部按 status 分流)
 // 每次推进只启动 head 一项;它跑完触发 advanceQueueFromTask 再推下一个。
-export async function advanceQueue(queueId: string): Promise<void> {
+export async function advanceQueue(queueId: string, request?: QueueAdvanceRequest): Promise<void> {
+  await retryableQueueAdvance(queueId, { request, pauseGeneration });
+}
+
+async function retryableQueueAdvance(queueId: string, attempt: QueueAdvanceAttempt): Promise<void> {
+  try {
+    await advanceQueueAttempt(queueId, attempt);
+  } catch (error) {
+    console.error(`[ash] 队列推进临界区失败 queue=${queueId}，稍后重试:`, error);
+    deferQueueAdvance(queueId, () => retryableQueueAdvance(queueId, attempt));
+  }
+}
+
+async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt): Promise<void> {
+  const request = attempt.request;
   // 「挑下一个」与「落 queued」收进队列认领临界区(queue-seat.ts,与手动运行/重跑/
   // 消息补投同一条链):分开的话,读完成员快照到落库之间的 await 窗口里,另一个入口
   // 刚认领的占位在这里看不见,按旧快照再拉起一个就是同队双跑(第 7 轮审查:跨入口
   // 竞争)。临界区里只做挑选与占位,真正拉起(resumeOrRunTask)在链外。
-  const next = await serializeQueueClaims<typeof tasks.$inferSelect | "paused" | null>(async () => {
+  const next = await serializeQueueClaims<(typeof tasks.$inferSelect & {
+    reservation: TaskQueueReservation; advanceRequest: QueueAdvanceRequest;
+  }) | "paused" | null>(async () => {
     const rows = await queueMembers(queueId);
     const candidate = selectNextInQueue(rows);
+    if (attempt.candidate) {
+      const target = rows.find((task) => task.id === attempt.candidate!.taskId);
+      if (!target || target.resumePromptGeneration !== attempt.candidate.generation) return "paused";
+    }
+    if (candidate?.groupId && (groupPauses.get(candidate.groupId) ?? 0) > attempt.pauseGeneration) return "paused";
+    if (request) {
+      const target = rows.find((task) => task.id === request.taskId);
+      if (!target || target.queueAdvanceRequest?.id !== request.id
+        || target.resumePromptGeneration !== request.resumePromptGeneration || target.archived
+        || ["done", "failed", "canceled"].includes(target.status) || target.question || hasCliGoalHold(target.cliState)
+        || (target.groupId && await isPaused(target.groupId))) {
+        await clearQueueAdvance(request);
+        return "paused";
+      }
+      if (!candidate || candidate.id !== request.taskId) {
+        deferQueueAdvance(queueId);
+        return "paused";
+      }
+    }
     if (!candidate) {
       // 挑不出人,而冻结源里有旁路/续聊回合(followUpFrom 非终态)的活跃回合:这次
       // 让位会被它结算时的 quiet 恢复吞掉(setTaskStatus 的 quietAdvance),给它记一笔
@@ -97,6 +144,15 @@ export async function advanceQueue(queueId: string): Promise<void> {
     // 任何一个入口漏检都会撤销用户的暂停意图(第 1 轮审查实测:暂停组里入队,
     // 前驱当场被拉起)。成员同组是本文件的不变量,看 next 的 groupId 就够。
     if (candidate.groupId && (await isPaused(candidate.groupId))) return "paused";
+    attempt.candidate ??= { taskId: candidate.id, generation: candidate.resumePromptGeneration };
+    const advanceRequest = request ?? await requestQueueAdvance(queueId, candidate);
+    if (!advanceRequest) return "paused";
+    attempt.request = advanceRequest;
+    deferQueueAdvance(queueId);
+    if (await preparePendingCheckpointStart(candidate.id)) {
+      return "paused";
+    }
+    if (isQueueAdvanceCanceling(candidate.id)) return "paused";
     // 观察空闲 ≠ 取得所有权:上一版先 isTurnClaimed 再 setQueued,检查与落位之间的
     // await 窗口里 checkpoint 追问这类合法入口照样抢走回合 —— 推进把追问的 running
     // 覆盖成 queued、续跑被旧 reply 占的锁挡回、追问结算恢复 paused,交接蒸发
@@ -104,7 +160,7 @@ export async function advanceQueue(queueId: string): Promise<void> {
     // **认领**所有权:抢到才落 queued,续跑带 turnHeld 进场;抢不到(占用方多半是
     // 刚进来的旁路追问)记账,等它 releaseTurn 后回调补办这次推进。
     if (!claimTurn(candidate.id)) {
-      noteMissedAdvance(candidate.id, queueId);
+      deferQueueAdvance(queueId);
       return null;
     }
     // 认领与接管之间的每个异常出口都要收口:setQueued 一旦写失败(典型:并发写锁把
@@ -112,8 +168,9 @@ export async function advanceQueue(queueId: string): Promise<void> {
     // 就没人释放,任务从此 /run 一律 409「回合正在进行」,人工也救不回(第 6 轮审查:
     // 真实 SQLite 写锁 7 秒注入,一次可恢复的超时变成永久停滞)。失败即释放锁、延迟
     // 一拍记账重推:数据库恢复可写后自动续上这次交接。
+    const reservation = taskQueueReservation(candidate, advanceRequest);
     try {
-      await setQueued(candidate.id);
+      await reserveQueuedTask(reservation);
     } catch (err) {
       releaseTurn(candidate.id);
       console.error(`[ash] 队列推进占位写入失败(${candidate.id}),释放预认领并稍后补偿:`, err);
@@ -122,15 +179,15 @@ export async function advanceQueue(queueId: string): Promise<void> {
       // 会被这具遗留占位冻结,单纯重推救不回(第 7 轮审查:短暂锁故障后整队永久
       // 「排队中」)。按持久结果补偿:延迟交给 reclaimStrandedSeat 守卫式收拾(queued
       // 遗留就回滚,没写进去就只记账重推),它自己失败会再重试,数据库恢复后交接续上。
-      scheduleSeatReclaim(candidate.id, queueId, candidate.status as TaskStatus, 1_000);
+      scheduleSeatReclaim(candidate.id, queueId, candidate.status as TaskStatus, 1_000, { reservation });
       return null;
     }
-    return candidate;
+    return { ...candidate, reservation, advanceRequest };
   });
   if (next === "paused") return;
   if (next && typeof next === "object") {
     const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
-    void resumeOrRunTask(next.id, { reason: "queue", turnHeld: true })
+    void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { reason: "queue", turnHeld: true })
       .catch((err) => {
         console.error(`[ash] 队列推进续跑(${next.id})失败:`, err);
         // 接管前就抛了(读库/取指令那串 await):turnHeld 的锁还挂在我们头上 —— 占着
@@ -138,7 +195,14 @@ export async function advanceQueue(queueId: string): Promise<void> {
         // 接管后的异常由 continueTask 自己吸收并在 finally 释放,不会走到这里。
         if (isTurnClaimed(next.id)) releaseTurn(next.id);
       })
-      .finally(() => void reclaimStrandedSeat(next.id, queueId, prevStatus));
+      .finally(() => reclaimStrandedSeat(next.id, queueId, prevStatus, { reservation: next.reservation })))
+      .then(async (started) => {
+        if (started) await clearQueueAdvance(next.advanceRequest);
+        else deferQueueAdvance(queueId);
+      }).catch((error) => {
+        console.error(`[ash] 队列启动回执确认失败(${next.id}):`, error);
+        deferQueueAdvance(queueId);
+      });
     return;
   }
   if (!next) {
@@ -182,24 +246,31 @@ export async function reclaimStrandedSeat(
   taskId: string,
   queueId: string,
   prevStatus: TaskStatus,
-  opts?: { repush?: "always" | "stranded" | "never" },
+  opts?: { repush?: "always" | "stranded" | "never"; reservation?: TaskQueueReservation },
 ): Promise<void> {
   const repush = opts?.repush ?? "stranded";
   if (isTurnClaimed(taskId)) return;
   try {
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    const stranded = row?.status === "queued";
-    if (stranded) {
-      await setTaskStatus(taskId, prevStatus, prevStatus === "paused" ? { quietAdvance: true } : undefined);
-    }
+    const reservation: TaskQueueReservation | undefined = opts?.reservation ?? (row ? {
+      taskId, prevStatus, token: row.queueSeatToken, epoch: row.directionEpoch,
+    } : undefined);
+    if (reservation?.advanceRequest && (row?.queueAdvanceRequest?.id !== reservation.advanceRequest.id
+      || row.resumePromptGeneration !== reservation.advanceRequest.resumePromptGeneration)) return;
+    const stranded = !!reservation && await restoreQueuedTask(reservation);
     if (repush === "never" || (repush === "stranded" && !stranded)) return;
+    if (row && !stranded && (row.status !== prevStatus || row.directionEpoch !== reservation?.epoch)) return;
+    if (reservation?.advanceRequest) {
+      deferQueueAdvance(queueId);
+      return;
+    }
     const timer = setTimeout(() => noteMissedAdvance(taskId, queueId), 1_000);
     timer.unref?.();
   } catch (err) {
     // 补偿自己也可能撞上还没放开的写锁:不放弃,退避后重试 —— 这正是「数据库恢复后
     // 再补办交接」的那一等(第 7 轮审查:一次短暂锁故障不许变成永久停滞)。
     console.error(`[ash] 队列占位补偿失败(${taskId}),5s 后重试:`, err);
-    scheduleSeatReclaim(taskId, queueId, prevStatus, 5_000, { repush });
+    scheduleSeatReclaim(taskId, queueId, prevStatus, 5_000, { repush, reservation: opts?.reservation });
   }
 }
 
@@ -208,9 +279,9 @@ function scheduleSeatReclaim(
   queueId: string,
   prevStatus: TaskStatus,
   delayMs: number,
-  opts?: { repush?: "always" | "stranded" | "never" },
+  opts?: { repush?: "always" | "stranded" | "never"; reservation?: TaskQueueReservation },
 ): void {
-  const timer = setTimeout(() => void reclaimStrandedSeat(taskId, queueId, prevStatus, opts ?? { repush: "always" }), delayMs);
+  const timer = setTimeout(() => void reclaimStrandedSeat(taskId, queueId, prevStatus, { repush: "always", ...opts }), delayMs);
   timer.unref?.();
 }
 
@@ -322,6 +393,11 @@ export async function runGroup(groupId: string): Promise<void> {
   await runParallel(groupId);
 }
 
+export async function runGroupInBackground(groupId: string): Promise<void> {
+  try { await runGroup(groupId); }
+  catch (error) { await reportGroupStartFailure(groupId, error); }
+}
+
 // parallel mode 的执行:扫所有 backlog 任务并行启动,限流 MAX_PARALLEL。
 // **不**主动唤起检查点 paused(带 resumePrompt)/提问 paused(带 question)任务
 // ——那些得靠队列推进按顺序 resume / 等答复(否则同链上所有 paused task 一起跑
@@ -354,8 +430,23 @@ async function runParallel(groupId: string): Promise<void> {
     const inflight = new Map<string, Promise<void>>();
 
     const launch = async (taskId: string): Promise<void> => {
-      await setQueued(taskId);
-      await resumeOrRunTask(taskId, { reason: "group" });
+      try {
+        if (await preparePendingCheckpointStart(taskId)) return;
+        const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+        if (!before || (before.status === "paused" && before.resumePrompt)) return;
+        if (!claimTurn(taskId)) return;
+        const owner = turnIdentity(taskId);
+        const reservation = taskQueueReservation(before);
+        try {
+          await reserveQueuedTask(reservation);
+          await resumeOrRunTask(taskId, { reason: "group", turnHeld: true });
+        } finally {
+          releaseTurn(taskId, owner);
+          await restoreQueuedTask(reservation);
+        }
+      } catch (error) {
+        await reportGroupStartFailure(groupId, error, taskId);
+      }
     };
 
     while (pending.length || inflight.size) {
