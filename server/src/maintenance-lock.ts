@@ -34,7 +34,7 @@ import { resolveAshDbFile } from "./db/path.js";
 import { isPidAlive } from "./platform.js";
 import { inspectProcess } from "./proc.js";
 import { atomicCreateWithContent, withResourceClaim } from "./resource-claim.js";
-import { describeAshPresence, liveAshPresenceForAny } from "./ash-presence.js";
+import { AshPresenceUnknownError, describeAshPresence, liveAshPresenceForAny } from "./ash-presence.js";
 
 const SUFFIX = ".maintenance.lock";
 /** 进程启动时刻的比对容差，跟 singleton.ts 同一个量级。 */
@@ -156,7 +156,15 @@ export function acquireMaintenanceLocks(
     // ── claim 内复查在线服务 ────────────────────────────────────────────────
     // claim 之外探一次只能证明「那一刻没有」。真正的互斥要求「查对方」和「登记自己」在
     // 同一个临界区里，所以这一查必须在这儿，不能留在调用方的 claim 外面。
-    const online = liveAshPresenceForAny(unique);
+    // 「证明不了没人在线」和「有人在线」在这里是同一个结论:维护会改 sessions 和 trace,跟一个还活着
+    // 的写入者抢同一条线程就互相覆盖,所以这一关只接受**证明得了的否**。
+    let online;
+    try {
+      online = liveAshPresenceForAny(unique);
+    } catch (error) {
+      if (error instanceof AshPresenceUnknownError) throw new AshOnlineError(error.message);
+      throw error;
+    }
     if (online) throw new AshOnlineError(describeAshPresence(online));
     const extra = options.onlineProbe?.();
     if (extra) throw new AshOnlineError(extra);

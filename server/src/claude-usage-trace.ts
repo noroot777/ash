@@ -22,12 +22,19 @@
 //    得去，写进去的却是源库的历史（第 3 轮审查 F1 实测 `copy/runs/smoke ->
 //    source/runs/smoke`，源 trace 被改成 delta）。写集不止那份 trace —— 备份、临时文件、
 //    回滚文件都算，它们跟着同一个（可能是软链的）父目录走。
-import { existsSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+// ⑤ **路径字符串不是实体归属证明**，所以每一个新文件都**独占创建**（第 3 轮复核 F1 实测两种绕过：
+//    `.repair-tmp` 是指向目录外不存在文件的软链时，realpath 失败后退回「父目录 + 名字」，④ 判它
+//    仍在 runs 内，writeFileSync 跟着软链在目录外造出文件，rename 之后正式 trace 就是那条越界链；
+//    `.repair-tmp` 是指向目录外既有文件的硬链接时，realpath 本来就落在 runs 内，普通写入直接重写
+//    同一个 inode，目录外的旧历史一起被改掉）。独占创建（`O_EXCL` + `link`）两种别名都挡得住：
+//    目标名已经存在（哪怕是条悬空软链）就 EEXIST，一个字节都不写。备份另加这一条的另一半 ——
+//    **先写满再以正式名字出现**，所以「备份文件在」就等于「它是完整的」（同一轮 F3）。
+import { existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { TokenUsage, UsageAccountingMark } from "@ash/shared";
 import { parseSessionTrace, readableRunPath, sessionTracePath } from "./transcript.js";
 import { RUNS_DIR } from "./paths.js";
-import { withinResource } from "./resource-claim.js";
+import { atomicCreateWithContent, withinResource } from "./resource-claim.js";
 
 /** 落盘口径：undefined / incremental 都是「改口径之前的旧账」，见 shared 的 UsageAccountingMark。 */
 export type LegacyMark = UsageAccountingMark | undefined;
@@ -86,6 +93,24 @@ export function escapedWritePaths(path: string): string[] {
  * 调用点有两处，**故意重复**：apply 的独立闸拿它整轮拒绝（一条越界就一个字节都不写），
  * 这个文件自己的 write/restore 再各判一次，所以绕过闸直接调写入函数也写不出去。
  */
+/** 独占创建一个新文件；目标名已经被占（含悬空软链、硬链接）就给出那句给人看的话。 */
+function createExclusive(path: string, text: string, mode: number, options: { fsync?: boolean } = {}): string | null {
+  // atomicCreateWithContent 自己那份 `.<pid>.<uuid>.tmp` 落在同一个父目录里，所以它的归属跟
+  // 下面这几个声明过的写入点是同一个答案，不另判一次。
+  if (atomicCreateWithContent(path, text, mode, options)) return null;
+  return `${path} 这个名字已经被占着（可能是上一次被强杀留下的残骸，也可能是一条指向别处的软链`
+    + "或硬链接）：门禁式的独占创建不会覆盖它，也不会跟着它写到别处去。确认那份文件没用之后删掉它再重跑。";
+}
+
+/** 把现有文件的权限位抄过来，让 rename 发布之后 trace 的权限不变（读不到就退到 0600）。 */
+function modeOf(path: string): number {
+  try {
+    return statSync(path).mode & 0o777;
+  } catch {
+    return 0o600;
+  }
+}
+
 export function traceEscapeReason(taskId: string, sessionId: string): string | null {
   const path = sessionTracePath(taskId, sessionId);
   const escaped = escapedWritePaths(path);
@@ -98,11 +123,15 @@ export function traceEscapeReason(taskId: string, sessionId: string): string | n
 const canonicalOf = (item: string): string => {
   try {
     return realpathSync(item);
-  } catch {
+  } catch (error) {
+    if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      return `落点读不出来（${(error as NodeJS.ErrnoException).code}）`;
+    }
     try {
-      return join(realpathSync(dirname(item)), basename(item));
-    } catch {
-      return item;
+      return `${join(realpathSync(dirname(item)), basename(item))}（尚不存在）`;
+    } catch (parent) {
+      return parent instanceof Error && "code" in parent
+        ? `父目录落点也读不出来（${(parent as NodeJS.ErrnoException).code}）` : item;
     }
   }
 };
@@ -188,10 +217,18 @@ export function writePreparedTrace(item: PreparedTrace): string | null {
   const escaped = traceEscapeReason(item.rewrite.taskId, item.rewrite.sessionId);
   if (escaped) return escaped;
   const temp = `${item.path}${TRACE_TEMP_SUFFIX}`;
+  const mode = modeOf(item.path);
   try {
+    // 备份**先写满再以正式名字出现**:直接以 `.pre-usage-repair` 开写的话，磁盘满/I-O 错误会在盘上
+    // 留下一份已经存在、却只有开头几十个字节的文件；重跑只看 existsSync 就跳过它，于是第二次迁移
+    // 改账成功、而承诺过的那份完整原文恢复材料已经永久丢了（第 3 轮复核 F3 实测 460 → 40 字节）。
     const backup = `${item.path}${TRACE_BACKUP_SUFFIX}`;
-    if (!existsSync(backup)) writeFileSync(backup, item.original);
-    writeFileSync(temp, item.next);
+    if (!existsSync(backup)) {
+      const refused = createExclusive(backup, item.original, mode, { fsync: true });
+      if (refused) return `${where}：留不下原文备份 —— ${refused}`;
+    }
+    const occupied = createExclusive(temp, item.next, mode);
+    if (occupied) return `${where}：写不出临时文件 —— ${occupied}`;
     renameSync(temp, item.path);
     return null;
   } catch (error) {
@@ -211,9 +248,16 @@ function discard(path: string): void {
 /** 把已经写下去的那一份还原成原内容。成功返回 null，失败返回说明。 */
 export function restorePreparedTrace(item: PreparedTrace): string | null {
   const where = `${item.rewrite.taskId}/${item.rewrite.sessionId}`;
+  // 回滚也要**重新复核一次归属**:准备之后父目录可能已经变成一条指向别处的软链，照着旧字符串
+  // 落盘就把原文写到了别人家的历史上。写入那一侧判了、回滚这一侧不判，等于只锁了一半的门。
+  const escaped = traceEscapeReason(item.rewrite.taskId, item.rewrite.sessionId);
+  // 三条失败出口一律以「回滚失败」开头:上游只凭这几个字判「回滚本身也没成」从而落隔离记录
+  // (test-claude-usage-migration.ts 场景 quarantine 钉着它),后半句才说清是哪一种失败。
+  if (escaped) return `${where}：回滚失败 —— 回滚点已经不在本次隔离资源集里，文件仍是改写后的内容：${escaped}`;
   const temp = `${item.path}${TRACE_ROLLBACK_SUFFIX}`;
   try {
-    writeFileSync(temp, item.original);
+    const occupied = createExclusive(temp, item.original, modeOf(item.path));
+    if (occupied) return `${where}：回滚失败 —— 写不出临时文件，文件仍是改写后的内容：${occupied}`;
     renameSync(temp, item.path);
     return null;
   } catch (error) {

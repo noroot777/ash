@@ -9,8 +9,13 @@
 // 所以登记和单例锁是两件事：**登记是存在证明，不是排他锁**。允许同时有多份（ALLOW_MULTI
 // 就会有），所以一个实例一份文件（名字带 pid），读的时候扫同目录。
 //
-// 判「还活着」只认两条硬事实：pid 还在 + 进程启动时刻对得上（pid 被复用就不算）。读不懂
-// 或者主人已死的记录顺手清掉 —— 留着只会让下一次迁移永远被一份残骸挡在外面。
+// 判「还活着」只认两条硬事实：pid 还在 + 进程启动时刻对得上（pid 被复用就不算）。主人已死的记录
+// 顺手清掉 —— 留着只会让下一次迁移永远被一份残骸挡在外面。
+//
+// **「读不出来」不等于「没人在线」**（第 3 轮复核 F2 的同类出口）：枚举目录失败、某份登记读不动或
+// 解析不了，都只说明这一问没答上来。那时既不许清掉它、也不许回「没人」—— 这一问的下游是「要不要
+// 开始改别人正在写的历史」，答不上来还放行就是两个写入者同时落账。所以这种情况抛
+// `AshPresenceUnknownError`，由调用方按拒绝处理。
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { isPidAlive } from "./platform.js";
@@ -37,13 +42,39 @@ export type AshPresence = {
 export const presenceFileFor = (key: string, pid = process.pid): string =>
   `${key}${PREFIX}${pid}${SUFFIX}`;
 
-function readPresence(file: string): AshPresence | null {
+/** 这套资源上「有没有人在线」没答上来。调用方必须按「可能有」处理。 */
+export class AshPresenceUnknownError extends Error {
+  constructor(public readonly target: string, reason: string) {
+    super(`无法确认 ${target} 上还有没有活着的 ash（${reason}）：`
+      + "不能据此认定没人在线，请恢复该路径可读取（或删掉读不懂的那份登记）后重试");
+    this.name = "AshPresenceUnknownError";
+  }
+}
+
+type PresenceRead =
+  | { kind: "record"; record: AshPresence }
+  /** 文件确实没了（ENOENT/ENOTDIR）—— 这是正常形态。 */
+  | { kind: "absent" }
+  /** 读不动或解析不了：**不是**「没人」。 */
+  | { kind: "unreadable"; reason: string };
+
+function readPresence(file: string): PresenceRead {
+  let text: string;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<AshPresence>;
-    if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0) return null;
-    return parsed as AshPresence;
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { kind: "absent" };
+    return { kind: "unreadable", reason: `读取失败（${code}）` };
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<AshPresence>;
+    if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0) {
+      return { kind: "unreadable", reason: "登记里没有可用的 pid" };
+    }
+    return { kind: "record", record: parsed as AshPresence };
   } catch {
-    return null;
+    return { kind: "unreadable", reason: "登记内容不是可解析的 JSON" };
   }
 }
 
@@ -63,16 +94,22 @@ export function liveAshPresenceFor(key: string): AshPresence | null {
   let names: string[];
   try {
     names = readdirSync(dir);
-  } catch {
-    return null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // 目录不在 = 这套资源压根没建起来过，没人在线是**证明得了**的。其余（权限、I/O）没答上来。
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw new AshPresenceUnknownError(dir, `枚举目录失败（${code}）`);
   }
   for (const name of names) {
     if (!name.startsWith(head) || !name.endsWith(SUFFIX)) continue;
     const file = join(dir, name);
-    const record = readPresence(file);
-    if (record && alive(record)) return record;
+    const read = readPresence(file);
+    // 读不懂的那份**既不清也不放过**:清掉它等于把一个可能活着的写入者抹成不存在。
+    if (read.kind === "unreadable") throw new AshPresenceUnknownError(file, read.reason);
+    if (read.kind === "absent") continue;
+    if (alive(read.record)) return read.record;
     try {
-      unlinkSync(file); // 没主的残骸
+      unlinkSync(file); // 主人已死，是残骸
     } catch { /* 别人同时清了 */ }
   }
   return null;
@@ -100,38 +137,47 @@ export function registerAshPresence(
 ): AshPresenceRegistration {
   const processStartedAtMs = Date.now() - Math.round(process.uptime() * 1000);
   const files: string[] = [];
-  for (const key of [...new Set(keys.map(canonicalResourceKey))]) {
-    const file = presenceFileFor(key);
-    const record: AshPresence = {
-      pid: process.pid,
-      startedAt: new Date(processStartedAtMs).toISOString(),
-      processStartedAtMs,
-      port: info.port,
-      command: process.argv.join(" "),
-      key,
-      mode: info.mode,
-    };
-    mkdirSync(dirname(file), { recursive: true });
-    if (!atomicCreateWithContent(file, JSON.stringify(record, null, 2))) {
-      // 同一个 pid 的旧记录（上一个同号进程留下的残骸）：清掉再登记。
+  const drop = (): void => {
+    for (const file of [...files].reverse()) {
+      const read = readPresence(file);
+      if (read.kind !== "record" || read.record.pid !== process.pid) continue; // 不是自己那份就别删
       try {
         unlinkSync(file);
-      } catch { /* 别人清了 */ }
-      atomicCreateWithContent(file, JSON.stringify(record, null, 2));
+      } catch { /* 已经没了 */ }
     }
-    files.push(file);
-  }
-  return {
-    files,
-    release: () => {
-      for (const file of files) {
-        if (readPresence(file)?.pid !== process.pid) continue; // 不是自己那份就别删
+  };
+  // **一组键要么全登记上、要么一个都不留**（第 3 轮复核 N1）：第二个键的 mkdir/写入/link 因权限或
+  // 配额抛出来时，第一份登记留在盘上就会按活 PID 一直把离线回填挡在外面 —— 而这个进程多半压根没
+  // 起来。部分登记不算成功占用。
+  try {
+    for (const key of [...new Set(keys.map(canonicalResourceKey))]) {
+      const file = presenceFileFor(key);
+      const record: AshPresence = {
+        pid: process.pid,
+        startedAt: new Date(processStartedAtMs).toISOString(),
+        processStartedAtMs,
+        port: info.port,
+        command: process.argv.join(" "),
+        key,
+        mode: info.mode,
+      };
+      mkdirSync(dirname(file), { recursive: true });
+      if (!atomicCreateWithContent(file, JSON.stringify(record, null, 2))) {
+        // 同一个 pid 的旧记录（上一个同号进程留下的残骸）：清掉再登记。
         try {
           unlinkSync(file);
-        } catch { /* 已经没了 */ }
+        } catch { /* 别人清了 */ }
+        if (!atomicCreateWithContent(file, JSON.stringify(record, null, 2))) {
+          throw new Error(`在线登记写不下去：${file} 这个名字反复被占`);
+        }
       }
-    },
-  };
+      files.push(file);
+    }
+  } catch (error) {
+    drop();
+    throw error;
+  }
+  return { files, release: drop };
 }
 
 /** 给人看的一句话。 */

@@ -51,7 +51,7 @@ const scenario = process.argv[2];
  * 跑场景，import 它等于在派发器里先跑一遍它的用法提示然后 exit 2。两边对不上的话下面那条
  * 断言会当场报出来。
  */
-const ISOLATION_SCENARIOS = ["binding", "lock", "claim", "online", "escape"] as const;
+const ISOLATION_SCENARIOS = ["binding", "lock", "claim", "online", "escape", "alias"] as const;
 const isolation = joinPath(dirname(self), "test-claude-usage-isolation.ts");
 const fileOf = (name: string) =>
   (ISOLATION_SCENARIOS as readonly string[]).includes(name) ? isolation : self;
