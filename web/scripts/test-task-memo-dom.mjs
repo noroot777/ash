@@ -4,7 +4,10 @@
 //  ② 几百字一条时折到几行、溢出才给「展开全文」（要量 scrollHeight，静态渲染量不到）；
 //  ③ 会话里选中一段 →「添加到备忘」→ 面板**切过去**并指出刚进来的是哪条（切面板的是
 //     InspectorHost，写入的是模块级 store，两边不在同一棵子树里）；
-//  ④ 侧边栏铺开那一格「追问和备忘哪个新显示哪个」，以及悬浮卡里备忘排在追问正文下面。
+//  ④ 侧边栏铺开那一格「追问和备忘哪个新显示哪个」，以及悬浮卡里备忘排在追问正文下面；
+//  ⑤ 保存失败时草稿**留在框里**（几百字一条，把失败当成功退出去等于直接删掉它们）；
+//  ⑥ 写入成功之后一发更早的 GET 到达，不许把那条抹掉、也不许让它出现两次；
+//  ⑦ 第 201 个任务（首批之外）也拿得到备忘摘要 —— 真 hook 自己去取，批次是它内部的事。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -16,13 +19,24 @@ const LONG = "几百字一条的备忘：".repeat(40);
 let server;
 let browser;
 
-/** 这一页的后端：一份内存清单 + 四条端点。返回的对象能让用例直接读/改它。 */
+/** 这一页的后端：一份内存清单 + 几条端点。返回的对象能让用例直接读/改它。 */
 function backend() {
   const rows = [];
   let seq = 0;
   return {
     rows,
     requests: [],
+    /** 批量摘要每一发问了哪些 taskId（钉「第 201 个也问到了」用）。 */
+    digestBatches: [],
+    /** 这个任务有备忘（批量摘要据此作答）。 */
+    digestOf: new Map(),
+    /** 真 = 把 GET 的应答按住不发（手里那份快照就此变旧）。 */
+    holdReads: false,
+    held: [],
+    /** 放行被按住的那几发：它们带的是按住当时的快照。 */
+    release() { for (const send of this.held.splice(0)) send(); },
+    /** 真 = PATCH 一律 503（注入保存失败）。 */
+    failPatch: false,
     async route(route) {
       const request = route.request();
       const url = new URL(request.url());
@@ -30,7 +44,29 @@ function backend() {
       this.requests.push(`${method} ${url.pathname}`);
       const list = /^\/api\/tasks\/([^/]+)\/memos$/.exec(url.pathname);
       const one = /^\/api\/tasks\/([^/]+)\/memos\/([^/]+)$/.exec(url.pathname);
-      if (list && method === "GET") return route.fulfill({ json: rows });
+      if (url.pathname === "/api/tasks/memos" && method === "POST") {
+        const ids = JSON.parse(request.postData() ?? "{}").taskIds ?? [];
+        this.digestBatches.push(ids);
+        // 跟真后端同一条规矩：没有备忘的任务**不在返回里**。
+        return route.fulfill({ json: ids.flatMap((taskId) => {
+          const digest = this.digestOf.get(taskId);
+          return digest ? [{ taskId, count: 1, truncated: false, ...digest }] : [];
+        }) });
+      }
+      // 铺开那一下另外两列也会发请求，给它们空清单，别让 route 落到 500 兜底上。
+      if (url.pathname === "/api/tasks/follow-ups" || url.pathname === "/api/tasks/bodies") {
+        return route.fulfill({ json: [] });
+      }
+      if (list && method === "GET") {
+        // 快照在**这一刻**定下来：按住期间写进去的东西不在里面，这正是要复现的那种旧应答。
+        const snapshot = [...rows];
+        if (this.holdReads) {
+          return new Promise((resolve) => {
+            this.held.push(() => resolve(route.fulfill({ json: snapshot })));
+          });
+        }
+        return route.fulfill({ json: snapshot });
+      }
       if (list && method === "POST") {
         const body = JSON.parse(request.postData() ?? "{}").body;
         const at = new Date(Date.now() + ++seq * 1000).toISOString();
@@ -39,6 +75,7 @@ function backend() {
         return route.fulfill({ status: 201, json: memo });
       }
       if (one && method === "PATCH") {
+        if (this.failPatch) return route.fulfill({ status: 503, json: { error: "保存失败（503）" } });
         const memo = rows.find((row) => row.id === one[2]);
         memo.body = JSON.parse(request.postData() ?? "{}").body;
         memo.updatedAt = new Date(Date.now() + ++seq * 1000).toISOString();
@@ -63,6 +100,16 @@ async function openPage(origin, api, query = "") {
   await page.goto(`${origin}/scripts/fixtures/task-memo.html${query}`);
   return { page, errors };
 }
+
+/**
+ * 等某条备忘的**读态正文**出现。
+ *
+ * 不要图省事写 `panel.getByText(...)`：Playwright 的文字匹配把 textarea 的 value 也算
+ * 进去，于是「刚打进编辑框里的字」会被当成「已经存好了」，断言在请求还在飞的时候就
+ * 提前通过 —— 这正是本轮调试掉进去的那个坑。
+ */
+const bodyShowing = (panel, text) =>
+  panel.locator(".task-memo-card__body").filter({ hasText: text }).first().waitFor();
 
 /** 会话里选中一段话，跟真人拖选一样把事件补齐（照 test-side-chat-selection-browser.mjs）。 */
 async function selectContents(locator) {
@@ -103,7 +150,7 @@ try {
     await page.getByRole("button", { name: "写一条备忘" }).click();
     await panel.locator("textarea").fill("验收时记得查严格增长门");
     await panel.getByRole("button", { name: "保存" }).click();
-    await panel.getByText("验收时记得查严格增长门").waitFor();
+    await bodyShowing(panel, "验收时记得查严格增长门");
     assert.equal(api.rows.length, 1, "保存要真的落到后端，不是只画在界面上");
     // 有几条要写进图标条的标题：扫一眼就知道这个任务记过东西。
     await page.getByRole("tab", { name: /^备忘（1）/ }).waitFor();
@@ -111,7 +158,7 @@ try {
     await panel.getByRole("button", { name: "编辑这条备忘" }).click();
     await panel.locator("textarea").fill("改过的备忘");
     await panel.getByRole("button", { name: "保存" }).click();
-    await panel.getByText("改过的备忘").waitFor();
+    await bodyShowing(panel, "改过的备忘");
     assert.equal(api.rows[0].body, "改过的备忘");
     assert.ok(api.requests.some((line) => line.startsWith("PATCH ")), "改一条走 PATCH");
     await panel.getByText("已编辑").waitFor();
@@ -152,7 +199,7 @@ try {
     await page.getByRole("button", { name: "写一条备忘" }).click();
     await panel.locator("textarea").fill("一句话");
     await panel.getByRole("button", { name: "保存" }).click();
-    await panel.getByText("一句话").waitFor();
+    await bodyShowing(panel, "一句话");
     assert.equal(await panel.getByRole("button", { name: "展开全文" }).count(), 1, "只有长的那条带展开");
     assert.deepEqual(errors, []);
     await page.close();
@@ -173,9 +220,112 @@ try {
     await action.click();
     const panel = page.getByLabel("任务备忘");
     await panel.waitFor();
-    await panel.getByText(/严格增长门/).waitFor();
+    await bodyShowing(panel, /严格增长门/);
     assert.equal(api.rows.length, 1, "选文那条要真的存下来");
     await panel.locator(".task-memo-card.is-new").waitFor();
+
+    // 团队调度台那种形态（没有侧聊格，onAsk 不传）：浮条上只该剩「添加到备忘」。
+    await selectContents(page.getByTestId("team-said"));
+    await page.getByRole("button", { name: "添加到备忘" }).waitFor();
+    assert.deepEqual(
+      await page.locator(".conversation-selection-action button").allTextContents(),
+      ["添加到备忘"],
+      "没有侧聊的那一页不该出现点了没地方去的「在侧聊中提问」",
+    );
+    await page.getByRole("button", { name: "添加到备忘" }).click();
+    await bodyShowing(panel, /拆成三份/);
+    assert.equal(api.rows.length, 2);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
+  // ── ⑤ 保存失败：留在编辑态，草稿一个字不动 ────────────────────────────────
+  {
+    const api = backend();
+    const { page, errors } = await openPage(origin, api);
+    await page.getByRole("tab", { name: /^备忘/ }).click();
+    const panel = page.getByLabel("任务备忘");
+    await page.getByRole("button", { name: "写一条备忘" }).click();
+    await panel.locator("textarea").fill("先存下来的那一版");
+    await panel.getByRole("button", { name: "保存" }).click();
+    await bodyShowing(panel, "先存下来的那一版");
+
+    const long = `改到一半的长正文：${"这段话很长，几百字一条是常态。".repeat(12)}`;
+    api.failPatch = true;
+    await panel.getByRole("button", { name: "编辑这条备忘" }).click();
+    await panel.locator("textarea").fill(long);
+    await panel.getByRole("button", { name: "保存" }).click();
+    // 失败要说出来，但**不能把编辑框收掉** —— 收掉就等于把这几百字删了。
+    await page.waitForFunction(() => window.__notices.some((line) => line.includes("503")));
+    assert.equal(await panel.locator("textarea").count(), 1, "保存失败要留在编辑态");
+    assert.equal(await panel.locator("textarea").inputValue(), long, "草稿一个字都不许动");
+    assert.equal(api.rows[0].body, "先存下来的那一版", "后端那条当然还是旧的");
+
+    // 恢复之后同一份草稿按一下就能存上（不必让用户重打一遍）。
+    api.failPatch = false;
+    await panel.getByRole("button", { name: "保存" }).click();
+    // 成功才退出编辑态 —— 等编辑框自己消失，别等文字（它在编辑框里本来就在）。
+    await panel.locator("textarea").waitFor({ state: "detached" });
+    await bodyShowing(panel, /改到一半的长正文/);
+    assert.equal(api.rows[0].body, long);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
+  // ── ⑥ 旧读取不许撤回已确认的写入，也不许让它出现两次 ──────────────────────
+  {
+    const api = backend();
+    api.holdReads = true;
+    const { page, errors } = await openPage(origin, api);
+    await page.getByRole("tab", { name: /^备忘/ }).click();
+    const panel = page.getByLabel("任务备忘");
+    await panel.getByText("正在读备忘…").waitFor();
+
+    // 首发 GET 还按在手里（它的快照是空的），这期间写一条。
+    await page.getByRole("button", { name: "写一条备忘" }).click();
+    await panel.locator("textarea").fill("按住读取时写进来的那条");
+    await panel.getByRole("button", { name: "保存" }).click();
+    await bodyShowing(panel, "按住读取时写进来的那条");
+    assert.equal(api.rows.length, 1);
+
+    // 放行那发旧应答：它不含刚写的那条，但不许据此把界面抹回去。
+    api.holdReads = false;
+    await api.release();
+    // 作废之后会自己重拉一发，拉回来的是含那条的最新快照。
+    await page.waitForFunction(
+      () => document.querySelectorAll(".task-memo-card").length === 1,
+      undefined,
+      { timeout: 8000 },
+    );
+    await bodyShowing(panel, "按住读取时写进来的那条");
+    assert.equal(
+      await panel.locator(".task-memo-card").count(),
+      1,
+      "既不能被旧快照抹掉，也不能因为两边都有而出现两条",
+    );
+    await page.getByRole("tab", { name: /^备忘（1）/ }).waitFor();
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
+  // ── ⑦ 首批之外的任务也拿得到备忘摘要（真 hook 自己去取） ──────────────────
+  {
+    const api = backend();
+    api.digestOf.set("old-tail", { text: "旧任务上记的那条备忘", at: "2026-10-26T02:00:00.000Z" });
+    const { page, errors } = await openPage(origin, api, "?fetch=1");
+    const cell = page.getByTestId("row-old-tail").locator(".workspace-spread-cell--last");
+    await cell.waitFor();
+    // 201 个任务 → 两发（200 + 1）。只问头一批的那种写法下，第二发根本不存在，
+    // 这一格就永远停在「—」上（旧任务记了备忘却看不到）。
+    await cell.getByText("旧任务上记的那条备忘").waitFor();
+    const asked = api.digestBatches.flat();
+    assert.ok(api.digestBatches.length >= 2, `摘要要分批问完：${api.digestBatches.map((b) => b.length)}`);
+    assert.ok(asked.includes("old-tail"), "排在首批之外的那个任务也必须被问到");
+    assert.ok(
+      api.digestBatches.every((batch) => batch.length <= 200),
+      "每一批都不许超过 TASK_BATCH_LIMIT（后端对超限是 400，不是截断）",
+    );
+    assert.match(await cell.textContent(), /^备忘/);
     assert.deepEqual(errors, []);
     await page.close();
   }

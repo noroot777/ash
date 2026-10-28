@@ -30,6 +30,13 @@ const store = new Map<string, TaskMemoState>();
 const listeners = new Map<string, Set<() => void>>();
 /** 每个任务最近一次读取的代号：迟到的旧应答不许覆盖新结果。 */
 const reads = new Map<string, number>();
+/**
+ * 每个任务**已确认写入**的次数。读取和写入必须共用这一道版本边界，光防「旧读取覆盖
+ * 新读取」是不够的：一发在写入之前发出的 GET，回来时带的是还没有那条新备忘的快照，
+ * 照样会把刚存上的那条从界面上抹掉（独立审查第 1 轮按住 GET 应答实测：条目先出现、
+ * 随后自己消失，刷新整页才回来）。同理还有「编辑后回退成旧正文」「删掉的又冒出来」。
+ */
+const writes = new Map<string, number>();
 
 function emit(taskId: string) {
   for (const listener of listeners.get(taskId) ?? []) listener();
@@ -56,21 +63,39 @@ function subscribe(taskId: string, listener: () => void): () => void {
 
 const message = (reason: unknown) => (reason instanceof Error ? reason.message : String(reason));
 
-/** 新的排前面：列表按 updatedAt 倒序，改过的一条会自己浮到最上面。 */
+/**
+ * 新的排前面：列表按 updatedAt 倒序，改过的一条会自己浮到最上面。
+ *
+ * 顺手**按 id 去重**：读取快照和本地刚写进来的那条可以是同一条（GET 已经含它、POST 的
+ * 应答随后才到），不去重就是同一条备忘在列表里出现两次、计数也多一个。撞上时留先遇到
+ * 的那份 —— 调用点一律把更权威的那份排在前面（写入应答 > 读取快照）。
+ */
 function sorted(rows: readonly TaskMemo[]): TaskMemo[] {
-  return [...rows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const byId = new Map<string, TaskMemo>();
+  for (const row of rows) if (!byId.has(row.id)) byId.set(row.id, row);
+  return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** 写成功了就推一版：在这之前发出的读取，回来时一律作废重拉。 */
+function confirmWrite(taskId: string): void {
+  writes.set(taskId, (writes.get(taskId) ?? 0) + 1);
 }
 
 export async function reloadTaskMemos(taskId: string): Promise<void> {
   const token = (reads.get(taskId) ?? 0) + 1;
   reads.set(taskId, token);
+  // 发请求**之前**记下写入版本：应答回来时它变过，说明这期间有一条写成功了，
+  // 手里这份快照比本地旧 —— 不能拿它覆盖，重拉一发（loading 一直挂着不留空档）。
+  const writtenAt = writes.get(taskId) ?? 0;
   set(taskId, { loading: true, error: null });
   try {
     const rows = await api.taskMemos(taskId);
     if (reads.get(taskId) !== token) return;
+    if ((writes.get(taskId) ?? 0) !== writtenAt) return void reloadTaskMemos(taskId);
     set(taskId, { memos: sorted(rows), loaded: true, loading: false, error: null });
   } catch (reason) {
     if (reads.get(taskId) !== token) return;
+    // 只收 loading / error：读失败不该把本地已确认的那几条也一起清掉。
     set(taskId, { loading: false, error: message(reason) });
   }
 }
@@ -81,22 +106,34 @@ export async function reloadTaskMemos(taskId: string): Promise<void> {
  */
 export async function addTaskMemo(taskId: string, body: string): Promise<TaskMemo> {
   const memo = await api.createTaskMemo(taskId, body);
+  confirmWrite(taskId);
   const current = snapshot(taskId);
+  // 新的那条排在最前：撞 id 时（读取快照已经含它）sorted 留的就是这份权威应答。
   set(taskId, { memos: sorted([memo, ...current.memos]), loaded: current.loaded, justAddedId: memo.id });
   return memo;
 }
 
 export async function editTaskMemo(taskId: string, memoId: string, body: string): Promise<TaskMemo> {
   const memo = await api.updateTaskMemo(taskId, memoId, body);
+  confirmWrite(taskId);
   const current = snapshot(taskId);
-  set(taskId, { memos: sorted(current.memos.map((row) => (row.id === memo.id ? memo : row))) });
+  // 列表里还没有这条（比如先在别处改的）就补进去，别把这次改动丢掉。
+  const rows = current.memos.some((row) => row.id === memo.id)
+    ? current.memos.map((row) => (row.id === memo.id ? memo : row))
+    : [memo, ...current.memos];
+  set(taskId, { memos: sorted(rows) });
   return memo;
 }
 
 export async function removeTaskMemo(taskId: string, memoId: string): Promise<void> {
   await api.deleteTaskMemo(taskId, memoId);
+  confirmWrite(taskId);
   const current = snapshot(taskId);
-  set(taskId, { memos: current.memos.filter((row) => row.id !== memoId) });
+  set(taskId, {
+    memos: current.memos.filter((row) => row.id !== memoId),
+    // 删掉的正好是刚高亮那条时把记号也撤掉，免得它指着一条已经没了的备忘。
+    ...(current.justAddedId === memoId ? { justAddedId: null } : {}),
+  });
 }
 
 /** 高亮是一次性的提示，不是状态：面板认完就撤，免得下次再打开这一格它还亮着。 */

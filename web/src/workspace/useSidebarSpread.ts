@@ -78,6 +78,31 @@ export function spreadVisibleTasks(tasks: TaskListItem[], scope: TaskScope, filt
   ).filter((task) => matchesSpreadFilter(task, filter, workersFrom(workers, task.id)));
 }
 
+// 分批把一列填满：一批到一批、边到边显示，读不到的那批留白（铺开是「扫一眼」的动作，
+// 为它弹错误提示更吵）。正文和备忘都是按主键 / 索引的库查询，不摸盘，所以**取完整批** ——
+// 只有追问那一列每条都要摸一次盘，才有理由只问头一批。
+function fillByBatch<Row extends { taskId: string }, Value>(
+  ids: readonly string[],
+  load: (batch: string[]) => Promise<Row[]>,
+  pick: (row: Row) => Value,
+  write: (apply: (current: Map<string, Value>) => Map<string, Value>) => void,
+  alive: () => boolean,
+): void {
+  write(() => new Map());
+  void (async () => {
+    for (let at = 0; at < ids.length; at += TASK_BATCH_LIMIT) {
+      const rows = await load(ids.slice(at, at + TASK_BATCH_LIMIT)).catch((): Row[] => []);
+      if (!alive()) return;
+      if (!rows.length) continue;
+      write((current) => {
+        const next = new Map(current);
+        for (const row of rows) next.set(row.taskId, pick(row));
+        return next;
+      });
+    }
+  })();
+}
+
 export type SidebarSpread = {
   open: boolean;
   // 铺开态的排版是否生效（open，或者收起动画还没跑完）。
@@ -89,7 +114,7 @@ export type SidebarSpread = {
   setFilter: (filter: SpreadFilter) => void;
   followUps: Map<string, TaskFollowUp>;
   // 备忘跟追问**合用那一格**（用户 2026-10-28）：两者哪个新显示哪个，悬浮卡里追问在上、
-  // 备忘在下。跟追问同一批取（下面那个 `asked`），所以「还没读到」的口径两列一致。
+  // 备忘在下。但**取法跟正文那一列一样**（分批取完整批），不跟追问走 —— 理由见下面。
   memos: Map<string, TaskMemoDigest>;
   // 「原始需求」列的正文。列表接口不带正文，铺开时才按需批量取（见 api.taskBodies）。
   bodies: Map<string, string>;
@@ -159,29 +184,15 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
       })
       // 读不到就让那一列留白。铺开是个扫一眼的动作，为它弹一条错误提示更吵。
       .catch(() => {});
-    // 备忘共用那一格，所以问的是同一批任务。它是一次按索引的库查询（不摸盘），跟追问
-    // 各走各的：谁先回来谁先填上，一边挂了不耽误另一边。
-    setMemos(new Map());
-    api.taskMemoDigests(asked)
-      .then((rows) => { if (alive) setMemos(new Map(rows.map((row) => [row.taskId, row]))); })
-      .catch(() => {});
-    // 正文与追问各走各的（一个查库、一个摸盘），谁先回来谁先填上，互不拖累。
+    // 备忘虽然跟追问合用那一格，取法却跟**正文**一样：分批取完整批。按 `asked` 问
+    // （本轮第一版）会让第 TASK_BATCH_LIMIT 行之后的任务永远显示不出备忘 —— 而
+    // 写备忘只动 task_memos.updated_at、不动 tasks 行的排序时间，给一个旧任务记一条
+    // 新备忘也不会把它挪进头一批，于是「记了却永远看不到」（独立审查第 1 轮实测 201 个
+    // 任务的那个）。它是一次按索引的库查询，不摸盘，没有理由套追问的首批上限。
     //
-    // 正文**分批取完整批**：它只是一次按主键的查询，不摸盘，所以没有理由让第
-    // TASK_BATCH_LIMIT 行之后的任务永远显示「还没读到」。一批填一次，边到边显示。
-    setBodies(new Map());
-    void (async () => {
-      for (let at = 0; at < ids.length; at += TASK_BATCH_LIMIT) {
-        const rows = await api.taskBodies(ids.slice(at, at + TASK_BATCH_LIMIT)).catch(() => []);
-        if (!alive) return;
-        if (!rows.length) continue;
-        setBodies((current) => {
-          const next = new Map(current);
-          for (const row of rows) next.set(row.taskId, row.body);
-          return next;
-        });
-      }
-    })();
+    // 三列各走各的：谁先回来谁先填上，一列挂了不耽误另一列。
+    fillByBatch(ids, api.taskMemoDigests, (row) => row, setMemos, () => alive);
+    fillByBatch(ids, api.taskBodies, (row) => row.body, setBodies, () => alive);
     return () => { alive = false; };
   }, [idsKey, open, revision]);
 

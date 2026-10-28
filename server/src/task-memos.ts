@@ -24,6 +24,16 @@ import { visibleTaskIds } from "./auth/visibility.js";
 
 type MemoBody = { body?: unknown };
 
+/**
+ * 请求体,一律当成一个对象读。`.json().catch(() => ({}))` 只兜得住**解析失败** ——
+ * 字面量 `null`(以及 `3`、`"x"`、`[]`)都是合法 JSON、解析得出来,随后访问 `.body`
+ * 就在 null 上取属性,一条输入形状错误被报成 500(独立审查第 1 轮)。
+ */
+async function bodyOf<T extends object>(c: { req: { json: <R>() => Promise<R> } }): Promise<Partial<T>> {
+  const raw = await c.req.json<unknown>().catch(() => null);
+  return raw && typeof raw === "object" ? (raw as Partial<T>) : {};
+}
+
 function toMemo(row: typeof taskMemos.$inferSelect): TaskMemo {
   return {
     id: row.id,
@@ -69,7 +79,7 @@ export function mountTaskMemoRoutes(api: Hono): void {
     // 横切闸只在多人模式下拦,而「往一个不存在的任务上写备忘」在哪种模式下都该 404。
     const task = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) return c.json({ error: "任务不存在" }, 404);
-    const parsed = readBody((await c.req.json<MemoBody>().catch((): MemoBody => ({}))).body);
+    const parsed = readBody((await bodyOf<MemoBody>(c)).body);
     if ("error" in parsed) return c.json({ error: parsed.error }, 400);
     const mine = await ownMemos(taskId, actor);
     if (mine.length >= TASK_MEMO_MAX_COUNT) {
@@ -98,7 +108,7 @@ export function mountTaskMemoRoutes(api: Hono): void {
       .where(and(eq(taskMemos.id, memoId), eq(taskMemos.taskId, taskId)))).at(0);
     // 不存在与不是我的回同一句话:否则挨个 id 试一遍就能问出「这条存在但不是我的」。
     if (!existing || !(await canUseOwned(existing, actor))) return c.json({ error: "备忘不存在" }, 404);
-    const parsed = readBody((await c.req.json<MemoBody>().catch((): MemoBody => ({}))).body);
+    const parsed = readBody((await bodyOf<MemoBody>(c)).body);
     if ("error" in parsed) return c.json({ error: parsed.error }, 400);
     const updated = { body: parsed.body, updatedAt: now() };
     await db.update(taskMemos).set(updated).where(eq(taskMemos.id, memoId));
@@ -121,10 +131,18 @@ export function mountTaskMemoRoutes(api: Hono): void {
   // 区分「这个任务没有备忘」和「这一批我压根没问过」。
   api.post("/tasks/memos", async (c) => {
     const actor = actorOf(c);
-    const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: undefined }));
+    const body = await bodyOf<{ taskIds?: unknown }>(c);
     if (!Array.isArray(body.taskIds)) return c.json({ error: "taskIds must be an array" }, 400);
-    const unique = [...new Set(body.taskIds.filter((value): value is string => typeof value === "string" && !!value))]
-      .slice(0, TASK_BATCH_LIMIT);
+    const unique = [...new Set(body.taskIds.filter((value): value is string => typeof value === "string" && !!value))];
+    // **超了返 400,不截断** —— 跟 `/tasks/follow-ups`、`/tasks/bodies` 同一条规矩
+    // (task-routes.ts 的 overBatchLimit):静默少返几行会被前端渲染成「还没读到」,
+    // 一条永远不会消失的假状态。请求方分批才是对的做法。
+    if (unique.length > TASK_BATCH_LIMIT) {
+      return c.json(
+        { error: `一次最多问 ${TASK_BATCH_LIMIT} 个任务,请分批`, limit: TASK_BATCH_LIMIT, requested: unique.length },
+        400,
+      );
+    }
     if (!unique.length) return c.json([]);
     // 可见性在这条路上没有横切闸兜底(第二段是字面量),所以自己过一遍。
     const visible = new Set(await visibleTaskIds(actor, unique));

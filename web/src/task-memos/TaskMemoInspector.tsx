@@ -37,13 +37,17 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
     return () => window.clearTimeout(timer);
   }, [justAddedId, taskId]);
 
-  const guard = async (run: () => Promise<void>) => {
+  // 接住失败并提示，**并把成败回给调用点**。返回 void 的话（本轮第一版）错误就被包成了
+  // 「成功」：保存失败照样退出编辑态，effect 再把草稿换回旧正文，几百字一条当场丢光
+  // （独立审查第 1 轮注入 503 实测）。所以这里的返回值不是可选的礼貌。
+  const guard = async (run: () => Promise<void>): Promise<boolean> => {
     setBusy(true);
-    try { await run(); }
-    catch (reason) { notify(message(reason)); }
+    try { await run(); return true; }
+    catch (reason) { notify(message(reason)); return false; }
     finally { setBusy(false); }
   };
 
+  // 清空草稿和收起 composer 都排在 await **之后**：写失败时那几百字还留在框里。
   const submit = () => guard(async () => {
     const text = draft.trim();
     if (!text) return;

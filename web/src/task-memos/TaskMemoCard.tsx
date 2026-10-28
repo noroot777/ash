@@ -19,7 +19,8 @@ export function TaskMemoCard({ memo, busy, highlight, onSave, onDelete }: {
   busy: boolean;
   /** 刚加进来的那条：扫一眼就知道落在哪儿了（切过来的时候列表可能已经有十几条）。 */
   highlight: boolean;
-  onSave: (body: string) => Promise<void>;
+  /** 存这条的新正文。**回 false = 没存上** —— 那时必须留在编辑态（见 save）。 */
+  onSave: (body: string) => Promise<boolean>;
   onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -65,11 +66,12 @@ export function TaskMemoCard({ memo, busy, highlight, onSave, onDelete }: {
     });
   };
 
+  // 存上了才退出编辑态。断网 / 503 / 后端拒绝时继续留在框里，草稿一个字不动 ——
+  // 这一格的正文动辄几百字，把失败当成功退出去，effect 会立刻用旧正文覆盖掉它们。
   const save = async () => {
     const text = draft.trim();
     if (!text || text === memo.body) { setEditing(false); return; }
-    await onSave(text);
-    setEditing(false);
+    if (await onSave(text)) setEditing(false);
   };
 
   const edited = memo.updatedAt !== memo.createdAt;

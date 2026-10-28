@@ -15,11 +15,12 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("task-memos");
 
-const [{ db, ensureSchema }, schema, memoRoutes, { TASK_MEMO_MAX_LEN }] = await Promise.all([
+const [{ db, ensureSchema }, schema, memoRoutes, { TASK_MEMO_MAX_LEN }, { TASK_BATCH_LIMIT }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/task-memos.js"),
   import("@ash/shared/task-memo"),
+  import("@ash/shared"),
 ]);
 const { projects, taskMemos, tasks } = schema;
 
@@ -104,6 +105,35 @@ for (const id of ["t1", "t2"]) {
   assert.ok(byTask.get("t2").text.endsWith("…"));
   assert.equal((await post("/tasks/memos", { taskIds: "t1" })).status, 400, "taskIds 必须是数组");
   assert.deepEqual((await post("/tasks/memos", { taskIds: [] })).body, []);
+
+  // 超批量上限**返 400，不截断** —— 跟 /tasks/follow-ups、/tasks/bodies 同一条规矩
+  // (task-routes.ts overBatchLimit)。静默少返几行会被前端渲染成「还没读到」，一条
+  // 永远不会消失的假状态：第 201 个任务明明记了备忘，列表里却永远空着。
+  const over = await post("/tasks/memos", {
+    taskIds: Array.from({ length: TASK_BATCH_LIMIT + 1 }, (_, at) => `x${at}`),
+  });
+  assert.equal(over.status, 400, "超限要拒绝而不是悄悄截断");
+  assert.equal(over.body.limit, TASK_BATCH_LIMIT);
+  assert.equal(over.body.requested, TASK_BATCH_LIMIT + 1);
+  // 刚好压线的那一批照常受理。
+  assert.equal(
+    (await post("/tasks/memos", { taskIds: Array.from({ length: TASK_BATCH_LIMIT }, (_, at) => `x${at}`) })).status,
+    200,
+  );
+}
+
+// ── 请求体形状：合法 JSON 但不是对象 ────────────────────────────────────────
+{
+  // `null`(以及 3 / "x" / [])都是合法 JSON，解析得出来 —— 只兜 catch 的话随后在 null 上
+  // 取属性，一条输入形状错误会被报成 500。四个入口都该是 400。
+  const raw = (path: string, method: string, body: string) =>
+    call(path, { method, headers: { "content-type": "application/json" }, body });
+  const memo = (await call("/tasks/t1/memos")).body[0];
+  for (const body of ["null", "3", '"x"', "[]"]) {
+    assert.equal((await raw("/tasks/t1/memos", "POST", body)).status, 400, `POST ${body}`);
+    assert.equal((await raw(`/tasks/t1/memos/${memo.id}`, "PATCH", body)).status, 400, `PATCH ${body}`);
+    assert.equal((await raw("/tasks/memos", "POST", body)).status, 400, `摘要 ${body}`);
+  }
 }
 
 // ── 删 ──────────────────────────────────────────────────────────────────────

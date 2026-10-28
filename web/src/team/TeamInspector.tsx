@@ -190,7 +190,8 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
   },
   {
     // 跟单飞任务同一格（同一个组件、同一张表）：调度台也是一条任务，「这一轮为什么这么派」
-    // 一样要有地方记。团队会话上没有选文浮条，所以这里只有手写这一条路。
+    // 一样要有地方记。两个入口也一样齐：头带上手写，以及团队会话里选中一段（浮条挂在
+    // TeamView 的 TeamFeed 外面）。
     id: "memos",
     title: "备忘",
     icon: <NotePencil size={14} />,

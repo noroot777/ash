@@ -11,7 +11,8 @@ const elementOf = (node: Node) => node instanceof Element ? node : node.parentEl
 
 export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo, children }: {
   taskId: string;
-  onAsk: () => void;
+  /** 不传 = 这一页没有侧聊那一格（团队调度台就没有），浮条上就不出现「在侧聊中提问」。 */
+  onAsk?: () => void;
   /** 不传 = 这个任务没有可用的对话框（比如已交接出去），浮条上就不出现「添加到对话」。 */
   onAddToReply?: (text: string) => void;
   /**
@@ -102,10 +103,10 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
     {selected && createPortal(<div className="conversation-selection-action" ref={toolbar} style={{ left, top: selected.top }}>
       {onAddToReply && <button type="button" onPointerDown={(event) => event.preventDefault()}
         onClick={take(onAddToReply)}><Quotes size={13} />添加到对话</button>}
-      <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={take((text) => {
+      {onAsk && <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={take((text) => {
         stageSideChatQuote(taskId, text);
         onAsk();
-      })}><Chats size={13} />在侧聊中提问</button>
+      })}><Chats size={13} />在侧聊中提问</button>}
       {onAddToMemo && <button type="button" onPointerDown={(event) => event.preventDefault()}
         onClick={take(onAddToMemo)}><NotePencil size={13} />添加到备忘</button>}
     </div>, document.body)}
