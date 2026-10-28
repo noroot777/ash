@@ -13,23 +13,43 @@
 // 底下真正干活的那个进程没人管。而这个进程不在任何任务的 RunHandle 里，停止任务也找不回
 // 它，重复超时就重复累积。
 //
-// 所以超时自己管，而且判据是**执行单元**，不是根进程：
+// 所以超时自己管，而且判据是**执行单元**，不是根进程。两个平台的执行单元不是同一台设备：
 //
-//  · POSIX：`detached` 让它自成进程组。进程组本来就不依赖组长活着 —— 根先退出，
-//    `kill(-pgid)` 照样打得到剩下的成员，`kill(-pgid, 0)` 也照样答得出「还有没有人」。
-//  · Windows：没有进程组这回事，`taskkill /T` 走的是**父子树**，根一死这棵树就断了。
-//    第 4 轮审查在真机上造出了这个形状（包装用 `start /b` 起查询后自己退出）：两轮
-//    `taskkill /T /F` 都按那个已死的 PID 发，查询进程活得好好的。所以这边接**内核圈定**
-//    （`kernel-confine.ts` 的 Job Object，整台机器一个常驻守圈进程）—— 成员归属由内核
-//    记着，不靠父子边。建不出圈时如实退回原路，并在收不回时喊出来。
+//  · **POSIX**：`detached` 让它自成进程组。进程组在 `spawn` 那一刻由内核建立、覆盖这次
+//    运行的全程，而且**不依赖组长活着** —— 根先退出，`kill(-pgid)` 照样打得到剩下的成员，
+//    `kill(-pgid, 0)` 也照样答得出「还有没有人」。对「起一条只读子命令」这个场景，这就是
+//    一份完整归属，不需要再叠一台设备（所以这边**不开圈**）。
+//  · **Windows**：没有进程组这回事，`taskkill /T` 走的是**父子树**，根一死这棵树就断了。
+//    第 4 轮审查在真机上造出了这个形状（垫片用 `start /b` 起查询后自己退出）：两轮
+//    `taskkill /T /F` 都按那个已死的 PID 发，查询进程活得好好的。那边唯一的归属设备是
+//    **内核圈定**（`kernel-confine.ts` 的 Job Object）—— 成员归属由内核记着，不靠父子边。
 //
-// 「收干净了」的依据也跟着换成执行单元的读数（圈的成员集合 / 进程组还有没有人），不再
-// 拿根进程的 `close` 当证据：后代不持有管道时 close 来得更早，持有时 close 根本不来 ——
-// 两种偏差都是第 4 轮审查点出来的同一条（B2）。
+// ── Windows：归属必须在 CLI 跑起来**之前**就建成 ────────────────────────────
+//
+// 第 5 轮改成「spawn 之后紧跟 enroll」仍然漏：`AssignProcessToJobObject` 拿不到
+// `CREATE_SUSPENDED`，fork 到 assign 之间那个窗口里出生又脱离父树的后代进不了集合，
+// 而守圈进程**首次**启动要 ~180 ms。第 6 轮审查在真机上打中了它 —— 等来 assign 时根已经
+// 没了，`OpenProcess` 失败、刚建的空 Job 被关掉，圈从头到尾没建成：
+//
+//     COLD_TREE parent=24796 parentAlive=false child=25704 childAlive=true
+//     readyMarkersSeen=[]
+//
+// 那一刻补刀补不回来（要查的集合压根不存在），`enroll` 的 true 也证明不了什么（它只代表
+// hold 请求写进了守圈进程的 stdin）。所以 Windows 上改成**门闩式启动**（`ash-mcp-gate.ts`）：
+//
+//   spawn 的是一层壳 → 壳同步等 go 文件（期间必然活着、一个后代都不生）
+//   → 父进程 enroll + **读到 `members` 才算圈建成**（`read()` 内部会等守圈进程的 ready 凭据）
+//   → 开门 → CLI 这才出生，它和它的后代继承这个 Job
+//
+// 于是 CLI 这棵树**整体**在圈内：窗口里没有能脱离的进程，`members` 的空因此构成证明
+// （见 `unitResidue` 的 `gated`），`TerminateJobObject` 的成功也因此是整棵树的终止。
+// **归属建不起来就不启动 CLI**，直接回「问不出来」放行 —— 宁可这一条预检不做，也不留
+// 一个谁都查不回去的后台查询（第 6 轮审查原话：无法建立时直接返回未知而不启动不受控查询）。
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { IS_WINDOWS, isPidRunning, killTree } from "./platform.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
+import { prepareGate, type Gate } from "./ash-mcp-gate.js";
 import { openConfinement, type Confinement } from "./executors/kernel-confine.js";
 
 export interface ProbeResult {
@@ -42,30 +62,36 @@ export interface ProbeResult {
 const MAX_OUTPUT = 8 * 1024 * 1024;
 /** 下刀之后给它多久咽气。两轮都没咽就如实上报，不再干等。 */
 const REAP_GRACE_MS = 3_000;
+/** 开门前收壳时，确认它真的死了的轮询上限。壳没有后代，这一步很快。 */
+const SHELL_REAP_MS = 2_000;
 
 const delay = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms).unref?.(); });
 
 /**
  * 这个执行单元此刻的残留读数。**`null` = 这几台设备都没给出结论**，不是「空」。
  *
- * 三档的解释**照抄既有消费者** `cleanup-result.ts` 的 `confinedResidue`，一个字不改：
- *  · `absent`      —— 圈压根没建起来（平台弃权、冷启动时根比守圈进程还短命）⇒ 这台设备
- *    **不说话**。上一版把它读成「已经回收」，于是 Windows 冷启动那次泄漏连警告都没打
- *    （第 5 轮审查实测 `readyMarkersSeen:[]`、`childAlive:true`、无警告）。
+ * 三档的解释**照抄既有消费者** `cleanup-result.ts` 的 `confinedResidue`：
+ *  · `absent`      —— 圈压根没建起来、或者句柄已经交还 ⇒ 这台设备**不说话**。上一版把它
+ *    读成「已经回收」，于是 Windows 冷启动那次泄漏连警告都没打（第 5 轮审查实测）。
  *  · `unqueryable` —— 这一刻问不到 ⇒ 不说话（留着下一轮再问）。
- *  · `members`     —— 非空就是**还有残留**（僵尸不算，跟那边同一条判据）；空**只有在
- *    `whole-run` 档才构成证明**。`since-enroll` 是「spawn 之后才圈的」，窗口里出生又
- *    脱离的后代不在集合里 —— 而 **Windows 恒在这一档**，所以那边的空永远不算证明。
+ *  · `members`     —— 非空就是**还有残留**（僵尸不算，跟那边同一条判据）。
  *
- * 没有圈的 POSIX 退回进程组：它在 `spawn` 那一刻就建好了（`detached`），覆盖整次运行，
- * 所以这里的「空」(ESRCH) 算证明。
+ * **`gated` 才是「空算不算证明」的依据，不是设备自报的 `coverage`。** 设备在 Windows 上恒
+ * 报 `since-enroll`，说的是「enroll 发生在 spawn 之后」这件**时序**事实；而门闩之下被 spawn
+ * 的是一层**不生后代**的壳，CLI 是在圈建成并核实之后才出生的 —— 对 CLI 这棵树来说没有任何
+ * 空窗，集合是确定的，所以空构成证明。这不是放松设备的语义（它那句话对它自己仍然成立），
+ * 是调用方在它之上**自己把窗口关掉了**；关不掉的时候（没门闩）就老老实实只认 `coverage`。
  */
-export function unitResidue(pid: number, confine: Confinement | null): "remaining" | "gone" | null {
+export function unitResidue(
+  pid: number,
+  confine: Confinement | null,
+  gated: boolean,
+): "remaining" | "gone" | null {
   if (confine) {
     const read = confine.read();
     if (read.kind === "members") {
       if (read.members.some((m) => isPidRunning(m.pid))) return "remaining";
-      return read.coverage === "whole-run" ? "gone" : null;
+      return gated || read.coverage === "whole-run" ? "gone" : null;
     }
     return null;                                      // absent / unqueryable：都不说话
   }
@@ -82,21 +108,26 @@ export function unitResidue(pid: number, confine: Confinement | null): "remainin
  * 收尾：把这次探测自己起的东西收干净，**每条结束路径都要走一遍**。
  *
  * 上一版只在超时分支收，正常 `close` 直接返回 —— 第 5 轮审查实测：包装把查询用
- * `detached + stdio=ignore` 起出去、自己正常退出，3.6 秒就返回了结论，查询还活着
- * （`NORMAL_TREE childAlive:true`）。根进程的 close 从来不代表它的后代结束了。
+ * `detached + stdio=ignore` 起出去、自己正常退出，3.6 秒就返回了结论，查询还活着。
+ * 根进程的 close 从来不代表它的后代结束了。
  *
  * 判据分三层，强的先用：
  *  ① 能当场证空就什么都不用做（POSIX 常走这条：一次 `kill(-pgid, 0)` 而已）。
- *  ② **整圈刀**：`TerminateJobObject` / `cgroup.kill` 是内核级的「这个集合全部终止」，
- *     下成了就是确定结论，不必再读数证空 —— 这点很要紧，因为 Windows 恒在 since-enroll
- *     档，读数**永远**证不了空，只认读数的话那边就没有能走通的收尾路径了。
- *  ③ 都不成：退回 `killTree` + 读数/close，两轮。仍然证不了空就**披露，并且不撤销身份**
+ *  ② **整圈刀**：`TerminateJobObject` 是内核级的「这个集合全部终止」。门闩之下 CLI 整棵树
+ *     都在集合里，所以这一刀下成了就是整棵树的终止 —— 这点很要紧，因为那边的读数要起
+ *     PowerShell，能少起一次就少起一次。**没有门闩就不能这么推**（集合可能缺了空窗里
+ *     跑掉的那些），那时这一刀只是「尽力」，仍要回到读数上去证。
+ *  ③ 都不成：退回 `killTree` + 读数，两轮。仍然证不了空就**披露，并且不撤销身份**
  *     （`dispose` 的契约是「调用方已经判空」，它自己只交还句柄、不杀成员；成员还在时撤掉
  *     身份等于把唯一还能查回去的线索丢了）。
+ *
+ * **`close` 不再是任何一条路上的证据**（第 6 轮审查第 4 点）：后代不持有管道时它来得更早，
+ * 持有时它根本不来。它只用来决定「还要不要再等一轮宽限」。
  */
 async function settleUnit(
   child: ChildProcess,
   confine: Confinement | null,
+  gated: boolean,
   closed: Promise<unknown>,
   why: "timeout" | "ended",
 ): Promise<void> {
@@ -104,26 +135,34 @@ async function settleUnit(
   if (!pid) { confine?.dispose(); return; }
 
   // ① 正常结束 + 能当场证空。只在 POSIX 走：Windows 的读数要起一次 PowerShell，比直接
-  //    下刀还贵，而且那边读了也证不了空。
-  if (why === "ended" && !IS_WINDOWS && unitResidue(pid, confine) === "gone") {
+  //    下刀还贵。
+  if (why === "ended" && !IS_WINDOWS && unitResidue(pid, confine, gated) === "gone") {
     confine?.dispose();
     return;
   }
 
-  // ② 整圈刀（圈弃权/没建起来时 killTree 就是全部）。
+  // ② 整圈刀。门闩成立时这一刀的成功就是整棵树的终止，可以直接核销。
   const cut = confine ? confine.killAll("SIGKILL") : -1;
   killTree(pid, "SIGKILL");
-  if (cut >= 0) { confine?.dispose(); return; }       // 内核保证的整集合终止
+  if (cut >= 0 && gated) { confine?.dispose(); return; }
 
-  // ③ 退回原路：两轮。
-  for (let round = 0; round < 2; round++) {
-    const byClose = await Promise.race([
-      closed.then(() => true),
-      delay(REAP_GRACE_MS).then(() => false),
-    ]);
-    const residue = unitResidue(pid, confine);
-    if (residue === "gone") { confine?.dispose(); return; }
-    if (residue === null && byClose && !confine) return;  // 没有圈可问，根也确实走了：退回既有线索
+  // ③ 退回读数：等到预算用完为止。
+  //
+  // **宽限必须真的等**。上一版写的是 `race([closed, delay(宽限)])` —— 根进程早就 close 了
+  // 的时候（正常退出路径一律如此）那个 race 当场就 resolve，于是「两轮宽限」其实是两次
+  // 零延迟空转：刚被 SIGKILL 的后代还没被 reap，`kill(-pgid, 0)` 对僵尸照旧成功，于是
+  // 明明收干净了却喊出「收不干净」。`closed` 不参与判据（它什么都证明不了），只在根还
+  // 没退出时用来提前醒来一次。
+  //
+  // 读数的代价分平台：POSIX 一次 `kill(-pgid, 0)` 便宜，密一点收敛快；Windows 每次读要
+  // 起一次同步 PowerShell，所以那边按整段宽限只读两次。
+  const step = IS_WINDOWS ? REAP_GRACE_MS : 100;
+  const deadline = Date.now() + REAP_GRACE_MS * 2;
+  let first = true;
+  while (Date.now() < deadline) {
+    await (first ? Promise.race([closed, delay(step)]) : delay(step));
+    first = false;
+    if (unitResidue(pid, confine, gated) === "gone") { confine?.dispose(); return; }
     killTree(pid, "SIGKILL");
   }
 
@@ -139,7 +178,28 @@ async function settleUnit(
 }
 
 /**
- * 跑一条只读 CLI 子命令。返回 null = **问不出来**（起不来、超时、被杀），调用方一律放行。
+ * 开门之前就得放弃这次探测时，把门闩壳收掉。
+ *
+ * 壳从出生到这一刻**没有 fork 过任何东西**（它的代码只有「轮询 go 文件 + 启动 CLI」，
+ * go 没写就永不启动）。所以「壳已经死了」⇒ 这个圈里没有活着的成员 ⇒ 这时 `dispose`
+ * 是合法的，不违反「调用方已经判空」那条契约。
+ */
+async function discardShell(pid: number | undefined, confine: Confinement | null): Promise<void> {
+  if (pid === undefined) { confine?.dispose(); return; }
+  killTree(pid, "SIGKILL");
+  for (let waited = 0; waited < SHELL_REAP_MS; waited += 50) {
+    if (!isPidRunning(pid)) { confine?.dispose(); return; }
+    await delay(50);
+  }
+  // 壳自己都收不掉（极少见）：按契约不撤身份，交给上面那段警告的同一条规矩。
+  console.warn(
+    `[ash] ash MCP 预检的门闩壳（pid=${pid}）没收掉；这次的执行单元身份保留着`,
+  );
+}
+
+/**
+ * 跑一条只读 CLI 子命令。返回 null = **问不出来**（起不来、超时、被杀、归属建不起来），
+ * 调用方一律放行。
  *
  * 两件事是踩过的：
  *  ① **必须走 `resolveLaunch`**，不能把 `resolveBin` 的结果直接交给 spawn。
@@ -160,37 +220,33 @@ export async function probeCli(
   const plan = resolveLaunch(bin, args);
   if (!plan) return null;
 
-  // **先开圈再 spawn**：Windows 那边开圈顺手预热常驻守圈进程（首次要 ~180ms 起 PowerShell），
-  // 放在这里就跟 CLI 自己的启动并行跑掉了；enroll 必须紧跟 spawn，见下。
-  const confine = openConfinement(`ash-mcp-probe-${randomUUID()}`);
+  // Windows：先把归属铺好。**顺序是硬的** —— 圈开不出来 / 门闩铺不出来，就一条指令都不起。
+  let confine: Confinement | null = null;
+  let gate: Gate | null = null;
+  if (IS_WINDOWS) {
+    confine = openConfinement(`ash-mcp-probe-${randomUUID()}`);
+    if (!confine) return null;                       // 这台机器没有归属设备 ⇒ 不做这次探测
+    gate = prepareGate(plan);
+    if (!gate) { confine.dispose(); return null; }   // 临时目录都写不了，圈里还没有人
+  }
+  const launch = gate?.plan ?? plan;
 
   let child: ChildProcess;
   try {
-    child = spawn(plan.file, plan.args, {
+    child = spawn(launch.file, launch.args, {
       env,
       cwd,
       windowsHide: true,
-      // POSIX：自成进程组，killTree 的 `process.kill(-pid)` 才打得到整组（垫片脚本
-      // 起的孙进程正是靠这条收得回来）。Windows 没有进程组这回事，taskkill /T 按
-      // 父子树走，不需要也不能用 detached。
+      // POSIX：自成进程组，`killTree` 的 `process.kill(-pid)` 才打得到整组（垫片脚本
+      // 起的孙进程正是靠这条收得回来）。Windows 走门闩 + Job，不需要也不能用 detached。
       detached: !IS_WINDOWS,
       stdio: ["ignore", "pipe", "pipe"],
-      ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+      ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
   } catch {
+    gate?.cleanup();
     confine?.dispose();                              // 一个进程都没起来，圈里必然是空的
     return null;                                     // cwd 不存在之类的同步失败
-  }
-  // 圈定发生在 spawn **之后**，所以这一档是 `since-enroll`：此后它 fork 的一切都归这个
-  // 圈，中间那个极短的窗口按 kernel-confine 的契约不算证明（那边写得很清楚）。
-  //
-  // `enroll` 答 true 只表示**请求发出去了**，不表示 assign 已经成功（Windows 上真正的
-  // 凭据是守圈进程写的 ready 文件）。所以 true 这边不敢多想，false 这边则直接把这台设备
-  // 放下 —— 省掉后面每次读数都去起一次 PowerShell，结论照旧由 `absent` 那一档兜着。
-  let unit = confine;
-  if (!child.pid || !unit?.enroll(child.pid)) {
-    unit?.dispose();                                 // 没圈住，圈里必然没有我们的人
-    unit = null;
   }
 
   let stdout = "";
@@ -211,6 +267,24 @@ export async function probeCli(
     child.once("close", (code, signal) => { resolve({ code, signal }); });
   });
 
+  // ── 门闩：确认归属建成之后才开门 ─────────────────────────────────────────
+  let gated = false;
+  if (gate && confine) {
+    // `enroll` 的 true 只说明 hold 请求发出去了；真凭据是 `read()` 读到 `members`
+    // ——那一步内部会等守圈进程 assign 成功后写下的 ready 文件（`settleHeld`）。
+    const held = child.pid !== undefined
+      && confine.enroll(child.pid)
+      && confine.read().kind === "members";
+    if (!held) {
+      await discardShell(child.pid, confine);
+      gate.cleanup();
+      return null;                                   // 归属没建成 ⇒ CLI 一次都没起
+    }
+    gated = true;
+    gate.open();
+  }
+
+  // 计时从**开门**算起：timeoutMs 是给 CLI 的，不该被确认归属那一步（起一次 PowerShell）吃掉。
   const raced = await Promise.race([
     closed.then((end) => ({ timedOut: false as const, end })),
     delay(timeoutMs).then(() => ({ timedOut: true as const, end: null })),
@@ -218,26 +292,30 @@ export async function probeCli(
 
   // 超时：**等收尾做完**才说「问不出来」。
   if (raced.timedOut) {
-    await settleUnit(child, unit, closed, "timeout");
+    await settleUnit(child, confine, gated, closed, "timeout");
+    gate?.cleanup();
     return null;
   }
-  // 其余每一条结束路径（正常 close / spawn 失败 / 被信号打断）也都要收尾 —— 根进程走了
-  // 不代表它的后代走了（第 5 轮审查 B1 实测）。但**不挡住返回**：Windows 那边圈的读数和
-  // 下刀是同步 PowerShell，摆在派审请求的等待路径上会把主服务拖住（第 5 轮审查 N1）。
-  // 放到后台只解决「不拖住这次请求」这一半；它仍然占着事件循环，彻底解决要挪进 worker。
-  void settleUnit(child, unit, closed, "ended").catch(() => { /* 收尾自己会喊 */ });
 
-  try {
-    if (spawnFailed) return null;
-    // **被信号打断的不是一份答案**。上一版 `code ?? 0` 把「被杀」读成了「成功退出 rc=0」：
-    // claude 那边任意残缺输出会被当成「有登记」，codex 那边一份写了一半的 JSON 可能被当成
-    // 「确实没有」而硬拒 —— 两个方向都错（第 4 轮审查 N1）。约定是「被杀 → 问不出来」。
-    if (raced.end.signal) return null;
-    if (raced.end.code === null) return null;
-    return { code: raced.end.code, stdout, stderr };
-  } finally {
-    // **这里不碰 confine**。撤销身份只能发生在确认收干净之后，那个判断在 settleUnit 里
-    // （`dispose` 的实现只交还句柄、不杀成员，所以它的契约是「调用方已经判空」）。
-    // 上一版在 finally 里无条件 dispose，等于成员还活着就把唯一能查回去的线索丢了。
+  // 结束状态：门闩之下壳的退出码恒 0，CLI 的真实结果在盘上（见 ash-mcp-gate.ts 的说明）。
+  // **被信号打断的不是一份答案**：上一版 `code ?? 0` 把「被杀」读成「成功退出 rc=0」，
+  // claude 那边残缺输出会被当成「有登记」，codex 那边写了一半的 JSON 可能被当成「确实没有」
+  // 而硬拒 —— 两个方向都错（第 4 轮审查 N1）。约定是「被杀 → 问不出来」。
+  let code: number | null = null;
+  if (gate) {
+    const out = gate.outcome();
+    if (out && !out.failed && !out.signal) code = out.status;
+  } else if (!spawnFailed && !raced.end.signal) {
+    code = raced.end.code;
   }
+
+  // 其余每一条结束路径也都要收尾 —— 根进程走了不代表它的后代走了（第 5 轮审查实测）。
+  // **不挡住返回**：Windows 那边圈的读数和下刀是同步 PowerShell，摆在派审请求的等待路径上
+  // 会把主服务拖住（第 5 轮审查 N1）。放到后台只解决「不拖住这次请求」这一半；它仍然占着
+  // 事件循环，彻底解决要挪进 worker（第 6 轮审查 N1 仍挂着，本轮没做）。
+  void settleUnit(child, confine, gated, closed, "ended")
+    .catch(() => { /* 收尾自己会喊 */ })
+    .finally(() => { gate?.cleanup(); });
+
+  return code === null ? null : { code, stdout, stderr };
 }
