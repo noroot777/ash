@@ -106,32 +106,45 @@ export async function failReviewStart(run: ReviewRunRow, message: string): Promi
 }
 
 
-/** `launchReviewRound` 传给预检的候选目录。见下面那段注释，顺序必须跟 orchestrator 一致。 */
-export type ReviewCwdSession = { id: string; cwd: string | null; worktreePath: string | null };
+/** `launchReviewRound` 传给预检的候选目录。见下面那段注释。 */
+export type ReviewCwdSession = { cwd: string | null; worktreePath: string | null };
 
 /**
- * 「这一轮会在哪跑」的候选目录，**顺序照抄 orchestrator 的 `recorded`**
- * （`orchestrator.ts`：`opts.cwd || prev?.cwd || prev?.worktreePath || all[0]?.cwd
- * || all[0]?.worktreePath`），末尾再补上任务工作区 —— 那是它兜底 materialize 的那个。
+ * 这一轮**可能**跑在哪些目录里 —— 给预检用的**超集**，不是「哪一个」。
  *
- * 单独提出来是为了能被回归钉住：预检只有拿到**这一轮真正会用的目录**才问得对，而第 1 版
- * 传的 `cwd` 在普通工作区分支一直是 undefined，于是 `execFile` 继承了 server 进程的目录，
- * 任务目录里接好的 claude 被判成「没有登记」，派审当场失败（第 2 位审查者 F1）。
- * `sessions` 必须按 `startedAt` 倒序传进来（跟 orchestrator 的 `all` 同序）。
+ * ── 为什么是超集而不是复刻 orchestrator ─────────────────────────────────────
+ *
+ * 前两轮都栽在「再维护一份近似的目录选择」上：第 1 版压根没传目录，第 2 版照抄了
+ * `recorded` 那条 `||` 链，仍跟真货有三处分歧（诊断会话没过滤、没有显式 resumeSessionId
+ * 时的 prev 选择规则、失效目录的回退方式）—— 每一处都够拦掉一轮本来能跑的审查。
+ *
+ * 而真正的解析没法共用：它跟 prev 的选择绑在一起（`cliGoalSessionCandidates`、
+ * `sessionResumableHere`、codex 版本守卫），中途还会写库、往旧会话里写说明。预检必须
+ * **只读**，也必须排在起跑之前，拿不到那份结果。
+ *
+ * 所以换个角度：预检的职责是「**确定**拿不到才拦」，它不需要知道是哪一个目录，只需要
+ * 一个能论证的超集 —— orchestrator 的 `recorded` 必然取自
+ * `opts.cwd / prev?.cwd / prev?.worktreePath / all[*]?.cwd / all[*]?.worktreePath`，
+ * 失效时回退 `taskWorkspace`，而 `prev` 和 `all[0]` 都来自这条任务的会话集合。把**全部**
+ * 会话的那两个字段加上显式 cwd 和任务工作区都收进来，就一定罩得住它最终选中的那个。
+ *
+ * 配上预检那边「任一目录有登记就放行」，误拦就不可能发生：它选中的目录若有登记，那个
+ * 目录一定在这张表里，一定会被问到。orchestrator 以后改选法也不会把这条打破。
+ * 代价是「确实没有登记」时要多问几次 —— 而那时本来就要拦人。
  */
 export function reviewCwdCandidates(
   explicitCwd: string | undefined,
-  resumeSessionId: string | undefined,
-  sessionsDesc: ReviewCwdSession[],
+  sessionsOfTask: ReviewCwdSession[],
   workspacePath: string | undefined,
-): (string | null | undefined)[] {
-  const prev = resumeSessionId ? sessionsDesc.find((s) => s.id === resumeSessionId) : undefined;
-  return [
-    explicitCwd,
-    prev?.cwd, prev?.worktreePath,
-    sessionsDesc[0]?.cwd, sessionsDesc[0]?.worktreePath,
-    workspacePath,
-  ];
+): string[] {
+  const out: string[] = [];
+  const push = (dir: string | null | undefined) => {
+    if (dir && !out.includes(dir)) out.push(dir);
+  };
+  push(explicitCwd);
+  for (const s of sessionsOfTask) { push(s.cwd); push(s.worktreePath); }
+  push(workspacePath);
+  return out;
 }
 
 /**
@@ -188,13 +201,13 @@ export async function launchReviewRound(
   // 显式 cwd → 要续的那条会话 → 最近一条会话 → 任务工作区。只传单个 `cwd` 不够 ——
   // 普通工作区分支的 `cwd` 一直是 undefined，于是预检在 **server 进程**的目录里问，
   // 任务目录里接好的 claude 被判成没登记（第 2 位审查者 F1）。
-  const sess = await db.select({ id: sessions.id, cwd: sessions.cwd, worktreePath: sessions.worktreePath })
+  const sess = await db.select({ cwd: sessions.cwd, worktreePath: sessions.worktreePath })
     .from(sessions).where(eq(sessions.taskId, task.id)).orderBy(desc(sessions.startedAt));
   const reach = await ashMcpReachability({
     ownerUserId: task.ownerUserId,
     agentType: run.agentType,
     executorId: run.executorId,
-    cwdCandidates: reviewCwdCandidates(cwd, opts.resumeSessionId, sess, workspacePath),
+    cwdCandidates: reviewCwdCandidates(cwd, sess, workspacePath),
   });
   if (!reach.reachable) throw new Error(`审查者交不了卷：${reach.problem}`);
   const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");

@@ -15,12 +15,16 @@
 //   6. claude F1：`CLAUDE_CONFIG_DIR` 指到哪就问哪
 //   7. claude：带 `--mcp-config` 这类判不了的覆盖参数 → 放行
 //   8. CLI 不在这台机器上 → 放行
+//   9. 候选目录是 orchestrator 可能选中目录的**超集**（形状 + 它凭什么是超集的不变量）
+//  10. claude 项目级登记：超集里**任一**目录有登记就放行，全都没有才准拦
+//  11. F3 两个输出通道分开；超集问不全（被截断）时不准拦；重复目录去重
+//  12. F2 预检只准走启动计划层（依赖方向的结构性断言）
 // 跑：npm -w server run test:ash-mcp-reach
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-mcp-reach-"));
 process.env.ASH_DB = join(stage, "t.db");
@@ -31,6 +35,16 @@ process.env.HARNESS_DB = process.env.ASH_DB;
 // 根本不能算「真机预检通过」（第 2 位审查者在覆盖声明里点出的）。
 const { resolveLaunch } = await import("../src/executors/bin-resolve.js");
 const has = (bin: string): boolean => !!resolveLaunch(bin, []);
+
+/** 同理,**跑**一条真实 CLI 命令也得走启动计划层,不能 `execFileSync("claude", …)`。 */
+const runCli = (bin: string, args: string[], opts: { cwd?: string; env: NodeJS.ProcessEnv }): void => {
+  const plan = resolveLaunch(bin, args);
+  assert.ok(plan, `${bin} 必须解析出启动计划`);
+  execFileSync(plan!.file, plan!.args, {
+    ...opts, stdio: "ignore", timeout: 60_000,
+    ...(plan!.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  });
+};
 
 try {
   const { ensureSchema } = await import("../src/db/index.js");
@@ -127,9 +141,8 @@ try {
     assert.equal(none.reachable, false, "CLAUDE_CONFIG_DIR 里没有 ash → 拦");
 
     // F1.1：登记写进**这个**目录，预检就该看见它（旧版写死 homedir()，这条必挂）
-    execFileSync("claude", ["mcp", "add", "ash", "--scope", "user", "--", "node", "/tmp/x.js"], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir }, stdio: "ignore", timeout: 60_000,
-    });
+    runCli("claude", ["mcp", "add", "ash", "--scope", "user", "--", "node", "/tmp/x.js"],
+      { env: { ...process.env, CLAUDE_CONFIG_DIR: claudeDir } });
     assert.equal((await asClaude()).reachable, true, "F1：CLAUDE_CONFIG_DIR 里的登记必须算数");
 
     // 7. 判不了的覆盖参数 → 放行
@@ -146,29 +159,43 @@ try {
     delete process.env.CLAUDE_CONFIG_DIR;
   }
 
-  // ── 9. F1:候选目录链必须跟 orchestrator 挑目录的顺序一致 ──────────────────
-  // 预检拿不到「这一轮真正会用的目录」就问不对。第 1 版在普通工作区分支压根没给 cwd
-  // 赋值，于是 execFile 继承了 server 进程的目录。
+  // ── 9. F1:候选目录是 orchestrator 可能选中目录的**超集** ──────────────────
+  // 前两轮都栽在「再维护一份近似的目录选择」上(第 1 版压根不传目录;第 2 版照抄 recorded
+  // 那条 || 链,仍跟真货差三处)。这一版不猜哪一个,只保证罩得住 —— 所以这里钉两件事:
+  // 超集本身的形状,以及它凭什么是超集(orchestrator 的取值来源没变)。
   {
     const { reviewCwdCandidates } = await import("../src/free-review-round.js");
     const sessionsDesc = [
-      { id: "s-new", cwd: "/w/new", worktreePath: "/wt/new" },
-      { id: "s-old", cwd: "/w/old", worktreePath: "/wt/old" },
+      { cwd: null, worktreePath: null },                 // 诊断会话:最新、两个字段都空(本轮 F1 的形状)
+      { cwd: "/w/new", worktreePath: "/wt/new" },
+      { cwd: "/w/old", worktreePath: "/wt/old" },
+      { cwd: "/w/new", worktreePath: null },             // 跟上面重复
     ];
     assert.deepEqual(
-      reviewCwdCandidates("/explicit", undefined, sessionsDesc, "/workspace"),
-      ["/explicit", undefined, undefined, "/w/new", "/wt/new", "/workspace"],
-      "显式 cwd 排第一，其后是最近一条会话，最后兜底任务工作区",
+      reviewCwdCandidates("/explicit", sessionsDesc, "/workspace"),
+      ["/explicit", "/w/new", "/wt/new", "/w/old", "/wt/old", "/workspace"],
+      "超集:**所有**会话的两个目录字段都要在里面,去重、丢空值",
     );
     assert.deepEqual(
-      reviewCwdCandidates(undefined, "s-old", sessionsDesc, "/workspace"),
-      [undefined, "/w/old", "/wt/old", "/w/new", "/wt/new", "/workspace"],
-      "要续某条会话时，那条会话的目录必须排在最近一条之前",
+      reviewCwdCandidates(undefined, [], "/workspace"),
+      ["/workspace"],
+      "一条会话都没有时也要有任务工作区兜底(第 1 版在普通分支就是全空)",
     );
+
+    // 不变量:超集之所以成立,靠的是 orchestrator 只从这几处取运行目录。哪天它多一个
+    // 来源(比如直接用 project.repoPath),这条就该红 —— 否则预检又会悄悄开始误拦。
+    const orch = readFileSync(new URL("../src/orchestrator.ts", import.meta.url), "utf8");
+    const line = /const recorded = (opts\.cwd[^;]*);/.exec(orch)?.[1];
+    assert.ok(line, "orchestrator 里 `const recorded = opts.cwd || …` 那行必须找得到");
     assert.deepEqual(
-      reviewCwdCandidates(undefined, undefined, [], "/workspace"),
-      [undefined, undefined, undefined, undefined, undefined, "/workspace"],
-      "一条会话都没有时也要有任务工作区兜底（普通分支过去就是全空）",
+      line!.split("||").map((x) => x.trim()),
+      ["opts.cwd", "prev?.cwd", "prev?.worktreePath", "all[0]?.cwd", "all[0]?.worktreePath", '""'],
+      "recorded 的取值来源变了:要么把新来源也收进 reviewCwdCandidates 的超集,要么预检会误拦",
+    );
+    assert.match(
+      orch.slice(orch.indexOf("const recorded = opts.cwd")),
+      /if \(!existsSync\(cwd\)\)[\s\S]{0,400}?taskWorkspace\(/,
+      "失效目录的唯一回退必须还是 taskWorkspace() —— 超集末尾那个工作区正是据此放的",
     );
   }
 
@@ -181,10 +208,8 @@ try {
     writeFileSync(join(userDir, ".claude.json"), "{}\n");
     process.env.CLAUDE_CONFIG_DIR = userDir;
     // 只在**这个项目目录**里登记（--scope local 落在 projects[cwd].mcpServers）
-    execFileSync("claude", ["mcp", "add", "ash", "--scope", "local", "--", "node", "/tmp/x.js"], {
-      cwd: projectDir, env: { ...process.env, CLAUDE_CONFIG_DIR: userDir },
-      stdio: "ignore", timeout: 60_000,
-    });
+    runCli("claude", ["mcp", "add", "ash", "--scope", "local", "--", "node", "/tmp/x.js"],
+      { cwd: projectDir, env: { ...process.env, CLAUDE_CONFIG_DIR: userDir } });
     const withDir = await ashMcpReachability({ agentType: "claude", cwdCandidates: [projectDir] });
     assert.equal(withDir.reachable, true, "F1：传了任务目录，项目级登记必须算数");
     const noDir = await ashMcpReachability({ agentType: "claude", cwdCandidates: [] });
@@ -194,6 +219,21 @@ try {
       agentType: "claude", cwdCandidates: [join(stage, "gone"), projectDir],
     });
     assert.equal(ghost.reachable, true, "候选里的失效目录要跳过，接着问下一个");
+
+    // **本轮 F1 的形状**：超集里既有没登记的目录、也有有登记的,而「真实会跑哪一个」
+    // 预检不知道(实测现场:诊断会话排最新、cwd 为 null,orchestrator 用的是旧会话那个
+    // 目录)。所以判据不是「问对了那一个」,而是「任一有登记就放行」—— 顺序、诊断行过滤、
+    // prev 怎么选,全都不再影响结论。两个方向都钉:命中要放行,全不命中才准拦。
+    const bare = join(stage, "no-registration-here");
+    mkdirSync(bare, { recursive: true });
+    assert.equal(
+      (await ashMcpReachability({ agentType: "claude", cwdCandidates: [bare, projectDir] })).reachable,
+      true, "F1：超集里任一目录有登记就必须放行（哪怕排在后面）",
+    );
+    assert.equal(
+      (await ashMcpReachability({ agentType: "claude", cwdCandidates: [bare] })).reachable,
+      false, "反向:超集里全都没有登记,才是那个能拦人的确定结论",
+    );
     delete process.env.CLAUDE_CONFIG_DIR;
   }
 
@@ -202,16 +242,30 @@ try {
   // 警告要靠占住它内部某个缓存路径才能逼出来（版本一变就没了），拿假的来测「通道分离」
   // 这件事本身更确定 —— 拼接实现在这里必挂：JSON.parse("[]\nWARNING…") 抛错 → unknown
   // → 放行，而正确答案是「空列表 = 没有 ash」。
+  //
+  // 壳按平台写（第 2 位审查者 N1）：POSIX 下是 `codex` + `#!/bin/sh`，Windows 下必须是
+  // `codex.cmd`（那边 resolveBin 的候选名不含裸名，`#!/bin/sh` 也起不来），干活的逻辑
+  // 两边共用同一个 .mjs，PATH 也按 path.delimiter 拼 —— 否则这批用例在真机上静默跳过。
   {
     const fakeDir = join(stage, "fake-cli");
     mkdirSync(fakeDir, { recursive: true });
-    const fake = (stdout: string) => {
-      const file = join(fakeDir, "codex");
-      writeFileSync(file, `#!/bin/sh\ncat <<'JSON'\n${stdout}\nJSON\necho 'WARNING: proceeding, even though we could not create PATH aliases: File exists (os error 17)' >&2\nexit 0\n`);
-      chmodSync(file, 0o755);
-    };
+    const payload = join(fakeDir, "payload.json");
+    const brain = join(fakeDir, "fake-codex.mjs");
+    writeFileSync(brain,
+      'import { readFileSync } from "node:fs";\n'
+      + `process.stdout.write(readFileSync(${JSON.stringify(payload)}, "utf8"));\n`
+      + 'process.stderr.write("WARNING: proceeding, even though we could not create PATH aliases:'
+      + ' File exists (os error 17)\\n");\n');
+    if (process.platform === "win32") {
+      writeFileSync(join(fakeDir, "codex.cmd"), `@echo off\r\n"${process.execPath}" "${brain}" %*\r\n`);
+    } else {
+      const shim = join(fakeDir, "codex");
+      writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" "${brain}" "$@"\n`);
+      chmodSync(shim, 0o755);
+    }
+    const fake = (stdout: string) => writeFileSync(payload, stdout);
     const pathWas = process.env.PATH;
-    process.env.PATH = `${fakeDir}:${pathWas ?? ""}`;
+    process.env.PATH = `${fakeDir}${delimiter}${pathWas ?? ""}`;
 
     fake("[]");
     const empty = await ashMcpReachability({ agentType: "codex" });
@@ -225,6 +279,26 @@ try {
     fake('[{"name":"ash","enabled":true}]');
     const on = await ashMcpReachability({ agentType: "codex" });
     assert.equal(on.reachable, true, "F3：正常登记照样放行");
+
+    // 超集太大时的收口:问不全就不准拦(拿假 CLI 测,每次 ~10ms,真 claude 要 800ms×2×N)。
+    fake("[]");
+    const many = Array.from({ length: 9 }, (_, i) => {
+      const d = join(stage, `many-${i}`);
+      mkdirSync(d, { recursive: true });
+      return d;
+    });
+    assert.equal(
+      (await ashMcpReachability({ agentType: "codex", cwdCandidates: many.slice(0, 8) })).reachable,
+      false, "8 个目录问得全,全说没有 → 这是确定结论,拦",
+    );
+    assert.equal(
+      (await ashMcpReachability({ agentType: "codex", cwdCandidates: many })).reachable,
+      true, "目录多到问不全时,「都说没有」不再确定 → 放行",
+    );
+    assert.equal(
+      (await ashMcpReachability({ agentType: "codex", cwdCandidates: Array(12).fill(many[0]!) })).reachable,
+      false, "重复目录去重后没超上限 → 照常拦(一条任务的会话常常都在同一个目录)",
+    );
 
     process.env.PATH = pathWas;
   }

@@ -23,6 +23,17 @@
 // 两条都带上**这一轮真正要用的** env(含注入的 CLAUDE_CONFIG_DIR / CODEX_HOME)、cwd
 // 和 mcp 相关的 `-c` 覆盖参数,与真实起跑同源。
 //
+// ── 目录:问一组,不猜哪一个 ─────────────────────────────────────────────────
+//
+// claude 的项目级登记只在特定目录下可见,所以探测得在「这一轮会跑的那个目录」里做。
+// 第 2 版去照抄 orchestrator 挑目录的那条 `||` 链,又被第 2 轮审查打穿(F1):那条链跟真货
+// 还有三处分歧(诊断会话没过滤、没有显式 `resumeSessionId` 时的 prev 选择、失效目录的
+// 回退方式),每一处都够拦掉一轮本来能跑的审查。而真正的解析没法共用 —— 它跟 prev 的
+// 选择绑在一起,中途还写库,预检必须只读且排在它前面。
+//
+// 所以这一版不猜了:**把它可能选中的目录全问一遍,任一有登记就放行**。拦人只发生在
+// 「整个超集都说没有」时,那才是个确定的结论,也跟 orchestrator 以后怎么改选法无关。
+//
 // 判据只有一条硬规矩:**向放行开**。拦错一轮审查,用户得到的是一条根本跑不起来的链;
 // 放过一轮,最差也只是回到今天的样子(跑完没结论,由 `review-channel-gap.ts` 如实说明
 // 原因)。所以只有 CLI 自己明确说「没有这个 server」「它被禁用了」才拦 —— 命令跑不起来、
@@ -56,16 +67,15 @@ export interface AshMcpReachQuery {
   /** 这一轮要用的执行器 profile（`agents.id`）。它的 extraArgs 可能改写 MCP 登记。 */
   executorId?: string | null;
   /**
-   * 这一轮**真正会在哪跑**，按 orchestrator 挑目录的那条优先级链给（见
-   * `orchestrator.ts` 的 `recorded`：显式 cwd → 要续的那条会话 → 最近一条会话 →
-   * 任务工作区）。取第一个真实存在的。
+   * 这一轮**可能**跑在哪些目录里 —— 要的是**超集**，不是「哪一个」。每个都会被问一遍,
+   * 任一说有登记就放行(见 `probeDirs` 那段)。调用方怎么凑出这个超集见
+   * `free-review-round.ts` 的 `reviewCwdCandidates`。
    *
-   * 为什么是一串而不是一个：claude 的**项目级**登记（`--scope local`）只在那个目录下
-   * 看得见，而「这一轮会在哪跑」在起跑前只有这条链能回答。第 1 版传单个 `cwd`，普通
-   * 工作区分支压根没给它赋值，于是 `execFile` 继承了 **server 进程**的目录 ——
-   * 在任务目录里接好的 claude 被判成「没有登记」，派审当场失败（第 2 位审查者 F1）。
+   * 为什么要给目录:claude 的**项目级**登记(`--scope local`)只在那个目录下看得见。
+   * 第 1 版压根没传,`execFile` 继承了 **server 进程**的目录,在任务目录里接好的 claude
+   * 被判成「没有登记」,派审当场失败(第 2 位审查者 F1)。
    */
-  cwdCandidates?: (string | null | undefined)[];
+  cwdCandidates?: string[];
 }
 
 const ok = (): AshMcpReach => ({ reachable: true, problem: null });
@@ -207,6 +217,33 @@ async function askCodex(
   return { state: "present" };
 }
 
+/** 一次预检最多问几个目录。见 `probeDirs` 里为什么截断是安全的。 */
+const MAX_PROBE_DIRS = 8;
+
+/**
+ * 把候选超集收成「真要去问的那几个目录」。
+ *
+ * **滤掉不存在的目录不会漏掉真实运行目录**，这点要能论证：orchestrator 的 `recorded`
+ * 取第一个**非空**候选（不是第一个存在的），紧接着 `if (!existsSync(cwd))` 就回退
+ * `taskWorkspace()`，而 `launchReviewRound` 在预检之前已经 `await taskWorkspace(...)`
+ * 把工作区 materialize 出来、把它的 path 放进了候选 —— 所以它一定活着、一定在这张表里。
+ * 换句话说：真实运行目录 ∈ {存在的候选}，不存在的那些 orchestrator 自己也不会用。
+ *
+ * `complete=false` 表示这张表没问全（目录多到被截断）。那时「全都说没有」不再是确定
+ * 的结论，调用方必须放行 —— 宁可回到「跑完没结论、由 review-channel-gap 说明原因」。
+ *
+ * 一个都不剩时问一次「不指定目录」（execFile 继承 server 的目录，只看得见用户级登记）：
+ * 启动自检 `hostAshMcpMissing` 走的就是这条，它问的本来就是宿主默认配置。
+ */
+function probeDirs(candidates: string[]): { dirs: (string | undefined)[]; complete: boolean } {
+  const alive: string[] = [];
+  for (const dir of candidates) {
+    if (!alive.includes(dir) && existsSync(dir)) alive.push(dir);
+  }
+  if (!alive.length) return { dirs: [undefined], complete: true };
+  return { dirs: alive.slice(0, MAX_PROBE_DIRS), complete: alive.length <= MAX_PROBE_DIRS };
+}
+
 /**
  * 这条任务下一轮起跑时，它的 agent 够不够得着 ash MCP。
  *
@@ -237,14 +274,19 @@ export async function ashMcpReachability(q: AshMcpReachQuery): Promise<AshMcpRea
   }
   if (!bin) return ok();                             // CLI 都不在这台机器上，派审会以别的方式失败
 
-  // 第一个真实存在的目录。一个都不存在就不传 —— execFile 会继承 server 的目录，而那
-  // 正是 F1 的病根，所以宁可让 claude 在默认目录下只看用户级登记（结论偏向 absent 的
-  // 那一半由下面「只有明确说没有才拦」兜住），也不假装我们知道它会在哪跑。
-  const cwd = (q.cwdCandidates ?? []).find((d): d is string => !!d && existsSync(d));
+  const { dirs, complete } = probeDirs(q.cwdCandidates ?? []);
 
-  const verdict = agentType === "claude"
-    ? await askClaude(bin, env, cwd)
-    : await askCodex(bin, codexMcpOverrides(extraArgs), env, cwd);
+  // 逐个问:present / unknown 任一出现就放行,只有**全都**说拿不到才往下走。
+  const overrides = agentType === "codex" ? codexMcpOverrides(extraArgs) : [];
+  let worst: Verdict = { state: "absent" };
+  for (const dir of dirs) {
+    const v = agentType === "claude" ? await askClaude(bin, env, dir) : await askCodex(bin, overrides, env, dir);
+    if (v.state === "present" || v.state === "unknown") return ok();
+    if (v.state === "disabled") worst = v;            // 比 absent 更具体,留它来说话
+  }
+  // 超集没问全(目录太多被截断)时,「全都说没有」不再是个确定的结论 —— 放行。
+  if (!complete) return ok();
+  const verdict = worst;
 
   if (verdict.state === "absent") {
     return {

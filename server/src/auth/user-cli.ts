@@ -207,7 +207,12 @@ async function warnHostAshMcp(): Promise<void> {
     gaps.push(`${agentType}（${file}）`);
   }
   if (!gaps.length) return;
-  console.warn("[ash] 这些 CLI 自己报告没有 ash MCP 登记，它们的 agent 交不了卷"
+  // 措辞里的「这台机器的默认配置下」不是客套：这里问的是**宿主默认上下文** ——
+  // `hostAshMcpMissing` 没有任务目录、没有执行器 profile，而 claude 的项目级登记
+  // (`--scope local`)和 codex 的 `-c mcp_servers.…` 覆盖都能让某条具体任务照样有工具。
+  // 派审那道门禁(`ashMcpReachability`)才问得到那些,所以这行启动日志只敢说默认配置。
+  console.warn("[ash] 这些 CLI 在这台机器的默认配置下自己报告没有 ash MCP 登记，"
+    + "这么跑起来的 agent 交不了卷"
     + "（没有 complete_task，干完的活会记 failed；派出去的审查跑完也给不出结论）：");
   for (const line of gaps) console.warn(`  · ${line}`);
   console.warn("  自查：claude mcp get ash / codex mcp list --json。接法见 docs/install.md，"
