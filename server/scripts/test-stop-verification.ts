@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { startCommand, stopCommand, restartCommand } from "../src/terminal-commands.js";
 import { launchClosureSealed, portStopVerdict, processStopVerdict } from "../src/terminal-stop-notices.js";
-import { launchSurvivors } from "../src/terminal-launch-survivors.js";
+import { candidateBounds, launchSurvivors } from "../src/terminal-launch-survivors.js";
 import type { TerminalSessionInfo } from "../src/terminal-session-facts.js";
 import { TerminalCapacity } from "../src/terminal-capacity.js";
 import { processAlive } from "../src/terminal-process-tree.js";
@@ -74,6 +74,20 @@ writeFileSync(movedFreshBroker, `const fs=require('node:fs'),prefix=process.argv
 const movedFreshLauncher = join(cwd, "moved-fresh-launcher.cjs");
 writeFileSync(movedFreshLauncher, `const child=require('node:child_process').spawn(process.execPath,`
   + `[${JSON.stringify(movedFreshBroker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
+// **带着另一次启动的记号**那一份(第 4 轮自由审查 F1)。中转给工人塞的环境里有一枚**真的**
+// ash 启动记号,只不过是**上一次**启动那一枚 —— 启动脚本把上次存下的环境原样拿来派工人,
+// 现实里这就是一行 `env` 文件。早先这一档被当成唯一的「否证」直接跳过候选集,于是剩下的问全
+// 了就报「问全了」:审查用真实 API + 真实进程实测到 stop 报 `{"kind":"verified"}`、页面
+// 「已停止」,`WORKER_ALIVE_AFTER_STOP true`。环境是**可复制**的,记号指向别处推不出它不是
+// 这次创造的。记号从哪儿来由 argv 传进来,这样夹具里那枚是真 ash 生成的、不是手编的。
+const cachedBroker = join(cwd, "cached-broker.cjs");
+writeFileSync(cachedBroker, `const fs=require('node:fs'),prefix=process.argv[2],mark=process.argv[3];`
+  + `const timer=setInterval(()=>{if(!fs.existsSync(prefix+'.gate'))return;clearInterval(timer);`
+  + `const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(daemon)},prefix],`
+  + `{detached:true,stdio:'ignore',env:{PATH:process.env.PATH,ASH_LAUNCH_ID:mark}});child.unref();},20);`);
+const cachedLauncher = join(cwd, "cached-launcher.cjs");
+writeFileSync(cachedLauncher, `const child=require('node:child_process').spawn(process.execPath,`
+  + `[${JSON.stringify(cachedBroker)},process.argv[2],process.argv[3]],{detached:true,stdio:'ignore'});child.unref();`);
 const envLauncher = join(cwd, "env-launcher.cjs");
 writeFileSync(envLauncher, `const child=require('node:child_process').spawn(process.execPath,`
   + `[${JSON.stringify(envBroker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
@@ -247,6 +261,69 @@ try {
     assert.ok(fact.kind === "unresolved" && fact.pids.includes(pid), "刷新回来仍然看得见这个号");
   }
 
+  // **工人带着上一次启动的记号**(第 4 轮自由审查 F1)。这是「可复制属性不能当否证」的最后
+  // 一件外衣:前三轮分别拿空环境、现搭环境、工作目录试过,这一轮换成「环境里确实有一枚 ash
+  // 记号,只是不是这次的」。它曾是候选集里唯一保留的那道归属筛子,于是这个号连被算进「没问
+  // 出来」的机会都没有,停止干净地报停净。
+  if (process.platform !== "win32") {
+    const projectId = "cached-marker";
+    const prefix = join(cwd, "cached-marker");
+    const home = join(cwd, "cached-marker-home");
+    mkdirSync(home, { recursive: true });
+    // 真·上一次启动的那枚记号:夹具不手编 token,拿本文件最前面那次(已经停过的)启动的。
+    const earlier = terminalSessions.listForProject("no-port-stop")[0];
+    const foreign = terminalSessions.launchTokenOf(earlier.id);
+    assert.ok(foreign, "夹具前提:上一次启动真的留下了记号,工人带的才是一枚真 ash 记号");
+    const command = { id: "service", name: "cached-marker", command: runNode(cachedLauncher, prefix, foreign!), stopCommand: noop, restartCommand: null };
+    assert.equal((await startCommand(projectId, home, command)).status, 201);
+    await waitFor(() => terminalSessions.listForProject(projectId)[0]?.exitCode === 0);
+    writeFileSync(prefix + ".gate", "go");
+    await waitFor(() => existsSync(prefix + ".pid") && terminalSessions.listForProject(projectId)[0]?.groupAlive === false);
+    const pid = Number(readFileSync(prefix + ".pid", "utf8"));
+    pids.push(pid);
+    const original = terminalSessions.listForProject(projectId)[0];
+    assert.deepEqual(original.ports, [], "夹具前提:只剩记号这一条线索");
+    const token = terminalSessions.launchTokenOf(original.id);
+    assert.notEqual(token, foreign, "夹具前提:这次启动的记号跟工人带着的那枚不是同一个");
+    const scan = await launchSurvivors(token, original);
+    assert.ok(scan.unanswered.includes(pid),
+      `带着别次记号的号也只是「没问出来」，必须留在这个集合里（实得：${scan.unanswered.join("、")}）`);
+    assert.equal(scan.evidence, "incomplete", "记号指向别处不是否证 —— 这一趟没问全");
+    assert.equal(launchClosureSealed(scan), false, "没问全就不算封口");
+    assert.ok(!scan.pids.includes(pid), "也点不到它的名:正面归属一样要凭这次的记号");
+    const result = await stopCommand(projectId, "service", { script: noop, cwd: home });
+    assert.equal(result.status, 200);
+    assert.equal(processAlive(pid), true, "夹具前提:那个工人还活着");
+    assert.match(String(result.body.notice), /核不上/);
+    assert.match(String(result.body.notice), /所以没法说这次启动起来的东西都停了/);
+    const fact = terminalSessions.get(original.id)!.stop;
+    assert.ok(fact.kind === "unresolved" && !fact.complete,
+      "刷新回来仍然看得出「这次没能确认停净」,而且这笔账核销不掉");
+  }
+
+  // **收窄规则的前提立不住时,一个核不上的号都没有也不许封口**。候选集只能按属主和出生时刻
+  // 收窄,而这两条各自有前提(ash 不是 root、墙上钟没被改过)。前提不成立时照样收窄 —— 否则
+  // 候选集会膨胀到读不动 —— 但那一趟**说不出漏没漏**,所以 `unanswered` 可以是空的而结论仍
+  // 然是 `incomplete`。这里用「这次启动的时刻记在未来」把这条路走通(钟被改过的等价形状)。
+  {
+    // 两条前提直接问(整趟扫描的结论受这台机器此刻还跑着什么影响,这条不变量不能靠那种现场
+    // 去钉):时刻正常 = 前提立得住;记在未来 = 两端的钟对不上,这一趟的收窄不可靠。
+    assert.equal(candidateBounds({ startedAt: Date.now() - 1000, cwd }).proven, true);
+    const broken = candidateBounds({ startedAt: Date.now() + 60 * 60 * 1000, cwd });
+    assert.notEqual(broken.proven, true, "前提立不住就得记下来,不能照常当「问全了」");
+    assert.match(String(broken.proven), /记在未来/, "那句话要说出是哪个前提没立住");
+    // 收窄本身照旧发生(否则候选集会膨胀到读不动),只是这一趟不许封口。
+    assert.equal(broken.oldest, 5000, "前提立不住不等于不收窄:上界照常给出");
+  }
+  if (process.platform !== "win32") {
+    const earlier = terminalSessions.listForProject("no-port-stop")[0];
+    const future = await launchSurvivors(terminalSessions.launchTokenOf(earlier.id),
+      { ...earlier, startedAt: Date.now() + 60 * 60 * 1000 });
+    assert.equal(future.evidence, "incomplete", "前提立不住的那一趟,扫描这一层也必须如实交代");
+    assert.equal(launchClosureSealed(future), false);
+    assert.match(String(future.why), /记在未来/, "理由要带到措辞里");
+  }
+
   // 裁定层本身的不变量(纯函数,直接问):**任何必要证据未知都只能保留未知**。
   {
     const open = { id: "x", projectId: "p", ports: [41234], portsTruncated: false, groupAlive: true } as TerminalSessionInfo;
@@ -310,7 +387,7 @@ try {
   sessions[0].alive = true;
   assert.equal(capacity.hasSlot("capacity", "job", true), false, "保留且还活着 = 真占着一个槽");
   assert.throws(() => capacity.reserve("capacity", "job", true), /数量已达上限/);
-  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env/rebuilt-env/moved-cwd candidates stay unanswered, a moved-but-marked worker is still named, unified verdict completeness, retained history, newest-only history, capacity accounting");
+  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env/rebuilt-env/moved-cwd/foreign-marker candidates stay unanswered, a moved-but-marked worker is still named, an unprovable narrowing bound blocks sealing, unified verdict completeness, retained history, newest-only history, capacity accounting");
 } finally {
   for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
   manager.shutdown();

@@ -66,7 +66,7 @@ export async function launchResidue(info: TerminalSessionInfo): Promise<LaunchAb
   if (info.ports.length) {
     const where = `端口 ${info.ports.join("、")}`;
     if (probe.state === "ours") parts.push(`${where} 上还有这次启动起来的进程在听`);
-    else if (probe.state === "stranger") parts.push(`${where} 上坐着的核实不是这次起来的`);
+    else if (probe.state === "stranger") parts.push(`${where} 上坐着的核不上是这次起来的（没有动它的归属凭据）`);
     else if (probe.state === "unknown") parts.push(`${where}：${probe.why ?? "归属核不上来"}`);
     else if (probe.state === "unavailable") parts.push(`${where} 在这台机器上没法核验（没有 lsof）`);
   }

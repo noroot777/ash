@@ -130,7 +130,10 @@ export async function probePorts(
  *   · `ours`     —— 至少一个监听者带着这次启动的记号:确定还在跑;
  *   · `unknown`  —— 有人听但核不上(lsof 没答上来 / 这条会话没有记号 / 读不到对方环境):
  *                   **不许读成「没在跑」**,保持悲观(文件头那条「查不到不等于没人听」);
- *   · `stranger` —— 有人听,而且**核实了不是这次起来的**:这次启动在端口这条线索上已经没了;
+ *   · `stranger` —— 有人听,但那个号**核不上是这次的**(带着别次启动的记号,或者一枚记号
+ *                   都没有):这次启动在端口这条线索上已经没了 —— 注意这只是**端口这条**
+ *                   线索上的结论,不是「已经证明它不是这次的后代」(那是启动闭包那一问,
+ *                   环境可复制,见 Lineage 的 `stranger`);
  *   · `free`     —— 没人听。
  *
  * 优先级 **ours > unknown > stranger > free**:一个端口确认是别人的,不能把另一个端口上
@@ -376,8 +379,12 @@ export async function readProcessCwd(
  *
  * 两档都不动它,也都不许折叠成「不在了」。
  *
- * `stranger` 现在收窄成**真正的否证**:环境读出来了,里面带着**另一次** ash 启动的记号。
- * 那枚记号是 ash 自己现生成的,别人编不出来,所以它确凿地属于另一次启动。
+ *  · `stranger`   —— 环境读出来了,里面带着**另一次** ash 启动的记号。那枚号码确实是 ash 生成
+ *    的,但**环境是可复制的**:启动脚本把上一次启动时存下的环境原样拿来派工人,这个号就带着
+ *    旧记号、却确凿是这次创造的(第 4 轮自由审查真实复现)。所以它跟 `unmarked` 一样**只是
+ *    没有证据,不是反证** —— 端口那一档据它拒绝动手(没有杀它的凭据),启动闭包那一档据它判
+ *    「没问出来」(terminal-launch-survivors.ts 文件头③)。两处都别把它读成「已经证明不是
+ *    这次的」。
  */
 export type Lineage = "ours" | "stranger" | "unmarked" | "unknown" | "unverified";
 
@@ -595,7 +602,7 @@ export function membersOfGroup(pgid: number, selfPgid: number | null): { members
 }
 
 export function refusal(lineage: Lineage | undefined): string {
-  if (lineage === "stranger") return `它的环境里带着另一次启动的记号（${LAUNCH_ID_ENV}），不是这次起来的`;
+  if (lineage === "stranger") return `它的环境里带着另一次启动的记号（${LAUNCH_ID_ENV}），没有杀它的归属凭据`;
   if (lineage === "unmarked") return `它的环境里没有这次启动的记号（${LAUNCH_ID_ENV}）`;
   if (lineage === "unverified") return `问不出它的进程环境（ps 没给出这一行，而这个号还活着），核不上是不是这次起来的`;
   return `读不到它的环境（多半不是当前用户的进程），核不上是不是这次起来的`;
