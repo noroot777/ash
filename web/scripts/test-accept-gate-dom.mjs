@@ -62,6 +62,24 @@ const run = (over = {}) => ({
 /** 已验收那张回执的凭据。`passed` 要指着真的跑绿的那一次，不是「最近一次」。 */
 const basis = (mode, runRow = null) => ({ mode, run: runRow });
 
+/**
+ * 折叠条上那只秒表此刻读出来多少秒。
+ *
+ * **不钉某个整数**：那一行是真秒表 —— 从 `run()` 的 `startedAt`（90 秒前）起算、每秒自己加一，
+ * 所以读到它的那一刻是 30 秒还是 31 秒完全取决于页面加载有多快。整秒钉死过一次，慢环境（门禁
+ * 快照冷启动、整套 web 回归排在前面）读到的是「已经 1 分 31 秒」，于是一条跟秒表毫无关系的误红
+ * （实证日志 data/runs/Pj2BhkaYHduS/accept-gate-Jt5981iUk1rU.log）。
+ *
+ * 原来那条要钉的事一点没少，而且拆成了两条更强的（见场景 ⑮）：① 读数不小于「startedAt 到现在」
+ * 这一段 —— 证明它从开跑那一刻起算，不是定在点下去那一刻的 0 秒；② 隔一秒再读必须严格变大 ——
+ * 证明它真的在走，不是渲染一次就冻在那儿（这一条整秒断言压根测不出来）。
+ */
+const stopwatchSeconds = (text) => {
+  const shown = /已经 (?:(\d+) 分 )?(\d+) 秒/.exec(text);
+  assert(shown, `折叠那一行要带一只走着的秒表，读到的却是：${text}`);
+  return Number(shown[1] ?? 0) * 60 + Number(shown[2]);
+};
+
 let browser;
 try {
   await server.listen();
@@ -398,7 +416,13 @@ try {
     const text = await bar.innerText();
     assert.match(text, /验收前置命令在跑/);
     assert.match(text, /\.\/kb\.sh test full/, "折叠那一行要说清在跑的是哪条命令");
-    assert.match(text, /已经 1 分 30 秒/, "秒表要自己走，不能定在点下去那一刻");
+    // 秒表要自己走，不能定在点下去那一刻 —— 两条读数一起证，容差与理由见 stopwatchSeconds。
+    const first = stopwatchSeconds(text);
+    assert.ok(first >= 90,
+      `秒表要从开跑那一刻（startedAt 是 90 秒前）起算，不能定在点下去那一刻：读到 ${first} 秒`);
+    await page.waitForTimeout(1200);
+    const second = stopwatchSeconds(await bar.innerText());
+    assert.ok(second > first, `秒表要自己走：隔了 1.2 秒，两次读数 ${first} → ${second} 没往前`);
     // 折叠态不许把出路摆出来占地方，但点开就得有。
     assert.equal(await bar.getByRole("button", { name: /不等了/ }).count(), 0);
     await bar.locator(".wait-bar__bar").click();

@@ -92,6 +92,12 @@ try {
   assert.equal(gateSourceMatches({ sourceCommit: source.commit, sourceFingerprint: source.fingerprint, sourceAmbient: source.ambient }, await readGateSource(repo)), false,
     "改了安装声明就是依赖变了");
   // 建快照期间源码或依赖变了必须拒绝(拿安装声明制造漂移:它才是依赖的身份)。
+  // 盯的是**漂移**那一条拒绝,不是「任何报错都算过」:createGateSnapshot 开头那道 ambient 闸还有
+  // 另一种拒绝形态(「请按快照执行位置重新登记」),它说的是计划登记在别处、换个位置重登就好 ——
+  // 而这里的树确实变了,重登救不了。两种混同的代价在门禁快照里跑门禁自测时实测过一次(日志
+  // data/runs/4KC4US4jVfon/accept-gate-mHvQ_5_bZebi.log):漂移穿着「换个位置重登」的外衣报出来。
+  // 归因口径写在 accept-gate-source.ts 那道闸旁边,另一头钉在 test-accept-gate-plan.ts 的
+  // otherLocation 上;这条断言**不许**放宽到两种形态都收。
   await assert.rejects(createGateSnapshot(repo, join(root, "drift"), source), /已变化/);
   rmSync(installed);
   // **已知漏检面**:手改依赖目录里的文件却没重装(patch-package 打完没提交、npm link 指到本地
