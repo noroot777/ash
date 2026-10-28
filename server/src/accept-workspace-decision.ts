@@ -12,11 +12,6 @@ export async function acceptanceAutoCommitDecision(
   enabled?: boolean,
   ownershipBlock?: string | null,
 ): Promise<AcceptanceAutoCommitDecision> {
-  if (enabled === undefined) {
-    enabled = (await db.select({ enabled: projects.acceptAutoCommit }).from(projects)
-      .where(eq(projects.id, context.task.projectId))).at(0)?.enabled === true;
-  }
-  if (!enabled) return { action: "disabled", reason: "项目未开启验收前自动提交；可手动提交，或到项目设置 → 验收开启。" };
   const skip = (reason: string): AcceptanceAutoCommitDecision => ({ action: "skip", reason });
   if (context.task.stage === "merged" || context.task.stage === "accepted") return skip("任务已合并或验收，不再自动提交工作区改动");
   if (!context.root.gitRepo) return skip("当前工作目录不是 Git 仓库");
@@ -24,6 +19,11 @@ export async function acceptanceAutoCommitDecision(
   if (!changes.length) return skip("工作目录没有待提交改动");
   const ownership = ownershipBlock === undefined ? await acceptanceWorkspaceCommitBlock(context) : ownershipBlock;
   if (ownership) return skip(ownership);
+  if (enabled === undefined) {
+    enabled = (await db.select({ enabled: projects.acceptAutoCommit }).from(projects)
+      .where(eq(projects.id, context.task.projectId))).at(0)?.enabled === true;
+  }
+  if (!enabled) return { action: "disabled", reason: "项目未开启验收前自动提交；可手动提交，或到项目设置 → 验收开启。" };
   if (context.busy) return skip(`${workspaceBusyLabel(context.task.id, context.busy)}，不能自动提交`);
   if (status.merge.length) return skip("存在冲突，请先在源代码管理中处理");
   if (status.operation) return skip("存在未完成的 Git 操作，请先在源代码管理中处理");

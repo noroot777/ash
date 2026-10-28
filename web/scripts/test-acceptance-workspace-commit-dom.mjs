@@ -30,7 +30,10 @@ try {
       assert.match(await card.innerText(), /验收时将跳过自动提交：任务正在运行/);
       assert.doesNotMatch(await card.innerText(), /会先提交|预检通过/);
     }
-    if (scenario === "shared") assert.match(await card.innerText(), /共用项目目录/);
+    if (scenario === "shared") {
+      assert.match(await card.innerText(), /共用项目目录/);
+      assert.doesNotMatch(await card.innerText(), /设置.*开启|预检通过/);
+    }
   }
   await page.goto(`${fixture}?scenario=outcome`);
   await page.getByRole("button", { name: "验收通过", exact: true }).click();

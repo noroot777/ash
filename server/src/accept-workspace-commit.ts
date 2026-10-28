@@ -1,5 +1,5 @@
 import { readScmStatus } from "./git-status.js";
-import { commitWorkspace, ScmOperationError, ScmPartialError } from "./git-workspace-ops.js";
+import { commitWorkspace, ScmOperationError } from "./git-workspace-ops.js";
 import { claimWorkspaceWrite, resolveWorkspaceContext } from "./workspace-write-gate.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import type { tasks } from "./db/schema.js";
@@ -19,6 +19,7 @@ export async function autoCommitAcceptanceWorkspace(
     await appendTaskTimeline(task.id, `验收前已跳过自动提交，继续按原流程验收：${reason}`);
     return null;
   };
+  let commitRequired = false;
   try {
     const context = await resolveWorkspaceContext(task.id);
     if ("error" in context) return skip(context.error);
@@ -26,6 +27,7 @@ export async function autoCommitAcceptanceWorkspace(
     const status = await readScmStatus(context.root.path);
     const decision = await acceptanceAutoCommitDecision(context, status, enabled);
     if (decision.action !== "commit") return skip(decision.reason);
+    commitRequired = true;
     const changes = [...status.staged, ...status.unstaged, ...status.untracked, ...status.merge];
     const result = await commitWorkspace(context.root.path, context.root.repo, {
       message: `chore: ${task.title.replace(/[\r\n]+/g, " ")}`,
@@ -45,8 +47,8 @@ export async function autoCommitAcceptanceWorkspace(
     await appendTaskTimeline(task.id, `验收前已按项目设置自动提交任务改动：${result.sha?.slice(0, 8) ?? result.subject}。${result.warning ?? ""}`);
     return null;
   } catch (error) {
-    if (!(error instanceof ScmPartialError)) return skip(error instanceof Error ? error.message : String(error));
-    onOutcome?.({ status: "failed", reason: error.message });
+    if (!commitRequired) return skip(error instanceof Error ? error.message : String(error));
+    onOutcome?.({ status: "failed", reason: error instanceof Error ? error.message : String(error) });
     return { accepted: false, httpStatus: 409, taskId: task.id, reason: "auto_commit_failed",
       error: `验收前自动提交未完成：${error instanceof Error ? error.message : String(error)}。未继续验收。` };
   }

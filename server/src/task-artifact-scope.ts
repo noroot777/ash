@@ -3,10 +3,9 @@ import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { execFileText as exec } from "./exec.js";
 import type { WorkspaceRoot } from "./file-browser.js";
-import { worktreePathFor } from "./git.js";
 import { pathLens, type PathLens } from "./task-artifact-paths.js";
 import { runWindows, type RunWindow } from "./task-artifact-windows.js";
-import { isolatedWorkspaceOwner } from "./task-workspace.js";
+import { existingTaskWorkspacePath, isolatedWorkspaceOwner } from "./task-workspace.js";
 import { isDiagnosticSession } from "./turn-failure.js";
 
 // 「这个文件是这个任务弄出来的」凭什么成立——产物面板的**归属证据**都在这里。
@@ -62,7 +61,8 @@ export interface ArtifactScope {
 export async function isExclusiveRoot(task: ArtifactTask, root: WorkspaceRoot, lens: PathLens = pathLens()): Promise<boolean> {
   const owner = await isolatedWorkspaceOwner(task);
   if (!owner || !root.repo) return false;
-  if (!(await lens.sameDir(worktreePathFor(root.repo, owner), root.path))) return false;
+  const workspace = await existingTaskWorkspacePath(task, root.repo);
+  if (!workspace || !(await lens.sameDir(workspace, root.path))) return false;
   if (owner === task.id) return true;
   const ownerRow = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, owner))).at(0);
   return ownerRow?.mode !== "team";

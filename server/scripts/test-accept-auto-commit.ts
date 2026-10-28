@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { releaseTmpDb } from "./tmp-db.js";
 import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
@@ -60,6 +60,77 @@ try {
     return () => readFileSync(sessionTranscriptPath(value.taskId, sessionId), "utf8");
   };
   {
+    const value = await setup("index-locked");
+    git(value.workspace.path, "add", "-A");
+    git(value.workspace.path, "commit", "-qm", "committed milestone");
+    writeFileSync(join(value.workspace.path, "tracked.txt"), "unfinished task change\n");
+    writeFileSync(join(value.workspace.path, "last-output.txt"), "last task output\n");
+    await db.update(projects).set({ acceptAutoCommit: true }).where(eq(projects.id, value.projectId));
+    const before = git(value.repo, "rev-parse", "main");
+    const sourceBefore = git(value.workspace.path, "rev-parse", "HEAD");
+    const dirty = git(value.workspace.path, "status", "--porcelain");
+    const overview = await (await app.request(`/tasks/${value.taskId}/scm`)).json();
+    assert.equal(overview.acceptanceAutoCommit.action, "commit");
+    const lock = resolve(value.workspace.path, git(value.workspace.path, "rev-parse", "--git-path", "index.lock"));
+    writeFileSync(lock, "test lock\n");
+    try {
+      const result = await acceptTask(value.taskId);
+      assert.ok(!result.accepted, JSON.stringify(result));
+      assert.equal(result.reason, "auto_commit_failed");
+      assert.equal(result.autoCommit?.status, "failed");
+      assert.match(result.error, /index.lock.*|未继续验收/);
+      assert.equal(git(value.repo, "rev-parse", "main"), before);
+      assert.equal(git(value.workspace.path, "rev-parse", "HEAD"), sourceBefore);
+      assert.equal(git(value.workspace.path, "status", "--porcelain"), dirty);
+      assert.equal(git(value.workspace.path, "diff", "--cached", "--name-only"), "");
+      assert.notEqual((await value.row()).stage, "merged");
+      assert.equal(readFileSync(join(value.workspace.path, "last-output.txt"), "utf8"), "last task output\n");
+    } finally { rmSync(lock, { force: true }); }
+  }
+  {
+    const value = await setup("shell-worktree");
+    git(value.workspace.path, "add", "-A");
+    git(value.workspace.path, "commit", "-qm", "task output");
+    git(value.repo, "worktree", "remove", value.workspace.path);
+    mkdirSync(value.workspace.path, { recursive: true });
+    writeFileSync(join(value.workspace.path, "build-cache.txt"), "not a worktree\n");
+    git(value.repo, "checkout", "-q", value.workspace.branch!);
+    await sessionFor(value);
+    writeFileSync(join(value.repo, "tracked.txt"), "user unfinished edit\n");
+    writeFileSync(join(value.repo, "USER-SCRATCH.md"), "private draft\n");
+    const before = git(value.repo, "rev-parse", "HEAD");
+    const dirty = git(value.repo, "status", "--porcelain");
+    const index = readFileSync(join(value.repo, ".git", "index"));
+    const context = await resolveWorkspaceContext(value.taskId);
+    assert.ok(!("error" in context));
+    const { isExclusiveRoot } = await import("../src/task-artifact-scope.js");
+    assert.equal(await isExclusiveRoot(context.task, context.root), false);
+    for (const enabled of [false, true]) {
+      await db.update(projects).set({ acceptAutoCommit: enabled }).where(eq(projects.id, value.projectId));
+      const overview = await (await app.request(`/tasks/${value.taskId}/scm`)).json();
+      assert.match(overview.acceptanceCommitBlock, /不是此任务独占/);
+      assert.equal(overview.acceptanceAutoCommit.action, "skip");
+      assert.equal(overview.acceptanceAutoCommit.reason, overview.acceptanceCommitBlock);
+      assert.doesNotMatch(overview.acceptanceAutoCommit.reason, /预检通过|设置.*开启/);
+    }
+    let outcome: AcceptanceAutoCommitOutcome | undefined;
+    assert.equal(await autoCommitAcceptanceWorkspace(await value.row(), true, result => { outcome = result; }), null);
+    assert.equal(outcome?.status, "skipped");
+    assert.match(outcome!.reason, /不是此任务独占/);
+    assert.equal((await manualCommit(value.taskId)).status, 409);
+    assert.equal(git(value.repo, "rev-parse", "HEAD"), before);
+    assert.deepEqual(readFileSync(join(value.repo, ".git", "index")), index);
+    assert.equal(git(value.repo, "status", "--porcelain"), dirty);
+    assert.equal(readFileSync(join(value.repo, "USER-SCRATCH.md"), "utf8"), "private draft\n");
+  }
+  {
+    const value = await setup("shared-default-off", false);
+    const overview = await (await app.request(`/tasks/${value.taskId}/scm`)).json();
+    assert.equal(overview.acceptanceAutoCommit.action, "skip");
+    assert.equal(overview.acceptanceAutoCommit.reason, overview.acceptanceCommitBlock);
+    assert.doesNotMatch(overview.acceptanceAutoCommit.reason, /设置.*开启/);
+  }
+  {
     const value = await setup("main-checkout-trap");
     git(value.workspace.path, "add", "-A");
     git(value.workspace.path, "commit", "-qm", "task output");
@@ -107,6 +178,7 @@ try {
     assert.ok(!("error" in context));
     const status = await readScmStatus(context.root.path);
     assert.equal((await acceptanceAutoCommitDecision(context, status, true)).action, "commit");
+    assert.equal((await acceptanceAutoCommitDecision(context, status, false)).action, "disabled");
     for (const [unsafe, reason] of [
       [{ ...status, merge: [status.unstaged[0]!] }, /冲突/],
       [{ ...status, operation: "rebase" as const }, /Git 操作/],
@@ -303,7 +375,7 @@ try {
     assert.equal(git(value.repo, "status", "--porcelain"), "");
     assert.equal((await value.row()).stage, "accepted");
   }
-  console.log("accept auto commit: clean removed/detached/switched workspaces accept, pre-write refusals skip with evidence, partial failures block, manual ownership guards and real acceptance passed");
+  console.log("accept auto commit: preflight skips, post-decision failures block merging, shell workspace rejection, shared disabled guidance and real acceptance passed");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
