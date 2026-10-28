@@ -285,7 +285,7 @@ try {
   save(join(frozen, "packages", "lib", "index.mjs"), 'export const value = "FROZEN";\n');
   linkDir(join("..", "live", "node_modules"), join(frozen, "node_modules"));
 
-  const refused = await confineOwnPackages(frozen);
+  const refused = await confineOwnPackages(frozen, live);
   assert.match(String(refused), /快照之外.*不会往快照之外写/s,
     "快照的依赖树是一条借到工作区的链时,收口必须拒绝,不许往那头写");
   assert.equal(realpathSync(join(live, "node_modules", "@demo", "lib")), realpathSync(join(live, "packages", "lib")),

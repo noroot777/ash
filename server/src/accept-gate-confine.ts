@@ -2,9 +2,11 @@ import { lstat, mkdir, readdir, readFile, realpath, rm, stat } from "node:fs/pro
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { copyLink, insideTree } from "./accept-gate-tree.js";
 import { DEPENDENCY_DIRS } from "./accept-gate-dirs.js";
-import { declaredPackageDirs, recordedLinks } from "./accept-gate-deps.js";
+import { declaredPackageDirs, recordedLinks, type RecordedLinks } from "./accept-gate-deps.js";
 import type { OwnedPackage } from "./accept-gate-relocate.js";
-import { resolutionInputs } from "./accept-gate-resolution.js";
+import { resolutionInputs, type ResolutionEntry } from "./accept-gate-resolution.js";
+import { identityProblem, projectSources, type ProjectSources } from "./accept-gate-project.js";
+import { inputFailure, optionalRead, readResult, requiredRead } from "./accept-gate-fs.js";
 
 // 源码隔离的**收口**:快照里跑的每一个本项目自有源码入口,都必须解析到快照里那份被认证的源码。
 //
@@ -34,8 +36,8 @@ import { resolutionInputs } from "./accept-gate-resolution.js";
 //    台机器输出一致:工作区 REGISTRY_1_3_0、快照 PATCH_COPY,而快照自证为真。名字从来不是来源,
 //    同名两个包是合法的。注册表包(树内真实目录)、外部 `file:` 包(记录里 resolved 指向项目外)、
 //    项目内真实包(resolved 指向项目内)三类分开判,不共用一个按名字的判据。「分开判」还有一层在
-//    落点上:落在**那棵树所属检出之外**的入口(系统工具、外部 `file:` 包、手铺的 vendor 链)本来就
-//    不是本项目这次要冻的源码,不需要隔离、也不该因为来源无从证明把整次验收拦掉。
+//    落点上:安装来源落在被冻结项目内即是自有源码，目录自带 .git 也一样；其它 worktree 通过仓库
+//    身份对齐。无关仓库的包与系统工具不是本次要冻的源码，读不出的身份另给元数据修复说明。
 //
 //    2026-10-27 第三轮独立审查又在这一条上实测到两个代价,都已收进来:
 //    · **来源要三态,不是两态**。记录认下的「装自项目外」(`file:../另一个仓库`)是一个**已知**来源。
@@ -88,33 +90,26 @@ type Binding = {
 };
 
 /** 枚举出来的一个运行入口。 */
-type Entry = {
-  entry: string;
-  landing: string;
-  /** 它在哪棵树上（realpath 过的树根）。 */
-  tree: string;
-  /** 它是不是嵌套在某个包里的那一层 node_modules 的条目——那一层没法从快照遮蔽。 */
-  nested: boolean;
-};
+type Entry = ResolutionEntry;
 
 /**
  * 一棵树的安装记录。`usable=false` 表示无从证明任何入口的来源。
  *
- * **三态**（②要求的那件事）:`owned` 是记录说装自项目内的，`external` 是记录说装自项目外的，
- * 两者都没认下的才是「来源不明」。合成两态的代价见 recordedLinks 上方。
+ * `owned` 是记录说装自项目内的，`external` 是记录说装自项目外的，`unknown` 保留读取失败的
+ * 仓库身份及元数据位置。身份读不出来与「安装记录没有这条入口」不是同一种失败。
  */
-type InstallRecord = { usable: boolean; owned: OwnedPackage[]; external: OwnedPackage[] };
+type InstallRecord = RecordedLinks & { usable: boolean };
 
 /** 入口的来源归属：安装记录认下的那个自有包，以及入口落在那个包**内部**的哪一段。 */
-type Ownership = {
-  owned: OwnedPackage;
+type Ownership<Source extends OwnedPackage = OwnedPackage> = {
+  owned: Source;
   /** 包内相对路径。入口就是包本身时是空串（`.bin/demo-cli` 这种则是 `cli.mjs`）。 */
   within: string;
 };
 
 /** 这个目录上摆的包叫什么。读不出来（没有、坏了、没有 name）就回 null。 */
 async function manifestName(root: string): Promise<string | null> {
-  const raw = await readFile(join(root, "package.json"), "utf8").catch(() => null);
+  const raw = await optionalRead(join(root, "package.json"), () => readFile(join(root, "package.json"), "utf8"));
   if (raw === null) return null;
   try {
     const name = (JSON.parse(raw) as { name?: unknown }).name;
@@ -143,15 +138,15 @@ async function provenInside(target: string, realTarget: string, destination: str
   let walked = target;
   for (const segment of segments.slice(0, -1)) {
     walked = join(walked, segment);
-    if (await lstat(walked).catch(() => null) === null) return null; // 还不存在：下面是新建
-    const landing = await realpath(walked).catch(() => null);
+    if (await optionalRead(walked, () => lstat(walked), ["ENOENT"]) === null) return null;
+    const landing = await optionalRead(walked, () => realpath(walked));
     if (landing === null) {
       return `${walked} 是一条解析不通的链（往里写会在它落点那头造目录）`;
     }
     if (!insideTree(realTarget, landing)) {
       return `${walked} 是一条落在 ${landing}（快照之外）的链`;
     }
-    if ((await stat(walked).catch(() => null))?.isDirectory() !== true) {
+    if ((await optionalRead(walked, () => stat(walked)))?.isDirectory() !== true) {
       return `${walked} 不是目录`;
     }
   }
@@ -169,41 +164,20 @@ async function provenInside(target: string, realTarget: string, destination: str
  * `usable=true, owned=[]` 和 `usable=false` 是**两件不同的事**，不能合成一个空数组：前者是
  * 「记录读到了，它说这棵树里一个自有包都没有」（纯第三方树，正常布局），后者是「无从证明」。
  */
-async function installRecord(tree: string, origin = tree): Promise<InstallRecord> {
-  const unusable = (): InstallRecord => ({ usable: false, owned: [], external: [] });
-  const raw = await readFile(join(tree, ".package-lock.json"), "utf8").catch(() => null);
+async function installRecord(tree: string, project: ProjectSources, origin = tree): Promise<InstallRecord> {
+  const unusable = (): InstallRecord => ({ usable: false, owned: [], external: [], unknown: [] });
+  const raw = await optionalRead(join(tree, ".package-lock.json"), () => readFile(join(tree, ".package-lock.json"), "utf8"));
   if (raw === null) return unusable();
   try {
     if (typeof (JSON.parse(raw) as { packages?: unknown }).packages !== "object") return unusable();
   } catch { return unusable(); }
-  const links = await recordedLinks(tree, "node_modules", origin);
-  return { usable: true, owned: links.owned, external: links.external };
+  const links = await recordedLinks(tree, "node_modules", project, origin);
+  return { usable: true, ...links };
 }
 
-
-/**
- * 这个落点是某个 Git 检出里的**活工作区源码**吗。
- *
- * 判据是从它往上能不能找到 `.git`（普通仓库是目录，worktree 的是文件，两种都算）—— 这是个物理
- * 事实，而门禁冻的就是 Git 提交，所以「落点是某个检出的工作区文件」正好等于「快照跑它就等于跑了
- * 一份活源码」。
- *
- * **不能**按「落点在哪个目录下」判：依赖树被克隆进快照之后，它的所属目录变成了快照根，而树里的
- * 链还指着原检出的源码。按目录归属判会把那条链算成「检出之外」放过去，而那正是 F3 的 CLI 入口。
- *
- * 落在任何检出之外的东西（系统工具 `.venv/bin/python -> /opt/homebrew/…`、外部 `file:` 包、手铺
- * 的 vendor 目录）本来就不是这次要冻的源码，不需要隔离，更不该因为「来源无从证明」把整次验收拦
- * 掉 —— 那会让一个手铺依赖树、带一条系统工具链的项目永久过不去（这条有定点回归）。
- */
-async function liveSource(landing: string): Promise<boolean> {
-  let directory = landing;
-  for (;;) {
-    if (await lstat(join(directory, ".git")).catch(() => null) !== null) return true;
-    const parent = dirname(directory);
-    if (parent === directory) return false;
-    directory = parent;
-  }
-}
+const commandRemedy = (item: Entry) => `命令入口 ${join(item.tree, item.entry)} 不是包名。请检查这条入口：`
+  + `若为遗留或损坏项，删除该入口后重试；若仍需使用，在任务工作区重新安装提供该命令的工具`
+  + `并使入口被就近遮蔽，或将 ASH_RUNS_DIR 移出 ${item.tree} 的解析祖先链`;
 
 
 /**
@@ -219,7 +193,7 @@ async function sourcePackages(target: string): Promise<Map<string, string[]>> {
   if (rootName !== null) add(rootName, ".");
   const walk = async (sub: string, depth: number): Promise<void> => {
     if (depth > 8) return;
-    for (const item of await readdir(join(target, sub), { withFileTypes: true }).catch(() => [])) {
+    for (const item of await optionalRead(join(target, sub), () => readdir(join(target, sub), { withFileTypes: true })) ?? []) {
       if (!item.isDirectory() || item.name === ".git" || DEPENDENCY_DIRS.includes(item.name)) continue;
       const path = sub === "" ? item.name : join(sub, item.name);
       const name = await manifestName(join(target, path));
@@ -253,7 +227,7 @@ async function sourceFor(target: string, ownership: Ownership,
   // 安装来源证明到包目录；包内的 dist 等输出可以尚未构建，绑定保留同一相对路径，让测试自己的
   // 构建步骤生成它。包目录本身不存在才需要寻找经同入口声明认证的搬迁位置。
   const located = async (directory: string): Promise<string | null> => {
-    return (await stat(directory).catch(() => null))?.isDirectory() === true ? join(directory, within) : null;
+    return (await optionalRead(directory, () => stat(directory)))?.isDirectory() === true ? join(directory, within) : null;
   };
   const declared = await located(join(target, owned.inside));
   if (declared !== null) return declared;
@@ -263,24 +237,26 @@ async function sourceFor(target: string, ownership: Ownership,
   return candidates.length === 1 ? await located(join(target, candidates[0])) : null;
 }
 
-const missingSource = async (source: string): Promise<boolean> => await lstat(source).then(() => false,
-  error => (error as NodeJS.ErrnoException).code === "ENOENT");
+const missingSource = async (source: string): Promise<boolean> =>
+  await optionalRead(source, () => lstat(source), ["ENOENT"]) === null;
 
-async function sourceInside(target: string, realTarget: string, source: string): Promise<boolean> {
-  if (source === target) return await realpath(source).then(path => insideTree(realTarget, path), () => false);
-  if (await provenInside(target, realTarget, source) !== null) return false;
-  try { return insideTree(realTarget, await realpath(source)); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
-    return await missingSource(source);
+async function sourceProblem(target: string, realTarget: string, source: string): Promise<string | null> {
+  if (source !== target) {
+    const refusal = await provenInside(target, realTarget, source);
+    if (refusal !== null) return refusal;
   }
+  const result = await readResult(() => realpath(source));
+  if (result.kind === "value") return insideTree(realTarget, result.value)
+    ? null : `${source} 实际解析到 ${result.value}（快照之外）`;
+  if (result.error.code !== "ENOENT") throw inputFailure(source, result.error);
+  return await missingSource(source) ? null : `${source} 是一条解析不通的链`;
 }
 
 /** 入口路径归一成 `/`：安装记录里的键来自 JSON（永远是 `/`），这边是 path.join（Win32 上是 `\`）。 */
 const portable = (path: string) => path.split(sep).join("/");
 
 /** 这个入口的落点，是安装记录认下的某个自有包、或它内部的某个文件吗。 */
-function ownerOf(item: Entry, owned: OwnedPackage[]): Ownership | null {
+function ownerOf<Source extends OwnedPackage>(item: Entry, owned: Source[]): Ownership<Source> | null {
   // 长的先试：packages/lib 与 packages/lib/inner 各自成包时取更具体的那个。
   const sorted = [...owned].sort((left, right) => right.landing.length - left.landing.length);
   const key = portable(item.entry);
@@ -305,27 +281,46 @@ function ownerOf(item: Entry, owned: OwnedPackage[]): Ownership | null {
  * 返回第一处证明不了的说明（调用方据此让门禁失败，快照整个丢掉）；全都收住就回 null。
  * **校验全部走完才动手写**，所以拒绝的那条路上快照之外一个字节都没动。
  */
-export async function confineOwnPackages(target: string, origins = new Map<string, string>()): Promise<string | null> {
-  const realTarget = await realpath(target).catch(() => target);
-  const inputs = await resolutionInputs([realTarget]);
+export async function confineOwnPackages(target: string, sourceRoot: string, origins = new Map<string, string>()): Promise<string | null> {
+  const project = await projectSources(sourceRoot);
+  const realTarget = await requiredRead(target, () => realpath(target));
+  const records = new Map<string, InstallRecord>();
+  const recordFor = async (item: Entry): Promise<InstallRecord> => {
+    const origin = [...origins].find(([tree]) => insideTree(tree, item.tree));
+    const originTree = origin ? join(origin[1], relative(origin[0], item.tree)) : item.tree;
+    const record = records.get(item.tree) ?? await installRecord(item.tree, project, originTree);
+    records.set(item.tree, record);
+    return record;
+  };
+  let packages: Map<string, string[]> | null = null;
+  let declaredDirs: Map<string, string[]> | null = null;
+  const sources = new Map<Entry, Promise<string | null>>();
+  const sourceOf = (item: Entry, ownership: Ownership): Promise<string | null> => {
+    if (!sources.has(item)) sources.set(item, (async () => {
+      packages ??= await sourcePackages(target);
+      declaredDirs ??= await declaredPackageDirs(target);
+      return await sourceFor(target, ownership, packages, declaredDirs);
+    })());
+    return sources.get(item)!;
+  };
+  const inputs = await resolutionInputs([realTarget], undefined, async item => {
+    if (insideTree(realTarget, item.landing) || insideTree(item.tree, item.landing)) return item.landing;
+    const ownership = ownerOf(item, (await recordFor(item)).owned);
+    if (ownership === null) return item.landing;
+    const source = await sourceOf(item, ownership);
+    return source !== null && await sourceProblem(target, realTarget, source) === null ? source : null;
+  });
   const entries = inputs.flatMap(input => input.selected);
   const visible = new Map<string, Entry>();
-  for (const input of inputs.filter(input => input.inherited)) {
-    for (const item of input.selected) if (!visible.has(item.entry)) visible.set(item.entry, item);
+  for (const input of inputs) {
+    for (const item of input.direct) if (!visible.has(item.entry)) visible.set(item.entry, item);
   }
-  const records = new Map<string, InstallRecord>();
   const plan: Binding[] = [];
   /** 快照**之外**、而且摆着本项目源码入口的那些树。消费者闭包要在这些树上证明，见循环后那一段。 */
   const exposed = new Set<string>();
-  let packages: Map<string, string[]> | null = null;
-  let declaredDirs: Map<string, string[]> | null = null;
   for (const item of entries) {
-    const origin = [...origins].find(([tree]) => insideTree(tree, item.tree));
-    const originTree = origin ? join(origin[1], relative(origin[0], item.tree)) : item.tree;
-    const record = records.get(item.tree) ?? await installRecord(item.tree, originTree);
-    records.set(item.tree, record);
+    const record = await recordFor(item);
     const ownership = record.usable ? ownerOf(item, record.owned) : null;
-    if (ownership !== null && !insideTree(realTarget, item.tree)) exposed.add(item.tree);
     // 落点在快照里:已经指着本次被认证的那份源码(或者是快照自己那棵树里的第三方包)。
     if (insideTree(realTarget, item.landing)) continue;
     // 落点在它自己那棵树里:这是一个普通的第三方包(真实目录,或指向树内另一处的链),它在哪解析都
@@ -337,7 +332,14 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
       // 记录明确说这个入口装自项目**外**（`file:../另一个仓库`）：已知来源，不是未证明。它不是
       // 这次要冻的源码，照既定外链策略原样留着。丢掉这一态的代价见 recordedLinks 上方。
       if (ownerOf(item, record.external) !== null) continue;
-      if (!await liveSource(item.landing)) continue;
+      const uncertain = ownerOf(item, record.unknown);
+      if (uncertain !== null) return `${item.entry} 的安装来源已登记，但${identityProblem(uncertain.owned.location)}`;
+      const location = await project.locate(item.landing);
+      if (location.kind === "unknown") return `${item.entry}：${identityProblem(location)}`;
+      if (location.kind === "external") continue;
+      if (item.kind === "command") return `${item.entry} 指向本项目的活源码 ${item.landing}，`
+        + `${record.usable ? "安装记录没有这个入口" : "没有 npm 的安装记录 .package-lock.json"}，无法证明安装来源。`
+        + commandRemedy(item);
       return record.usable
         // 记录读到了,它既没把这个入口认成项目内的包、又没法解释一条指着活源码的入口:那就是记录
         // 和实际装出来的东西不一致(装完之后手加过链),同样是**证明不了**。
@@ -350,20 +352,20 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
     }
     // 这棵树上摆着本项目的源码入口。树落在快照之外时，往快照根补绑定只覆盖「从快照根出发」的
     // 解析，覆盖不到这棵树**内部**的消费者——判据与实测见循环之后那一段。
+    if (item.kind === "package" && !insideTree(realTarget, item.tree)) exposed.add(item.tree);
     if (!item.nested && visible.get(item.entry) !== item) continue;
     if (item.nested) {
       return `${item.entry} 在依赖树内层解析到 ${item.landing}（快照之外的活源码），而内层这一级`
         + `没法从快照遮蔽（node 从那个包内部解析时先看它自己那层 node_modules）—— 请重新安装依赖，`
         + `让依赖树落在任务自己的工作区里，再验收`;
     }
-    packages ??= await sourcePackages(target);
-    declaredDirs ??= await declaredPackageDirs(target);
-    const source = await sourceFor(target, ownership, packages, declaredDirs);
+    const source = await sourceOf(item, ownership);
     if (source === null) {
       return `安装记录说 ${item.entry} 来自 ${join(ownership.owned.inside, ownership.within)}，但本次`
         + `提交里没有这个位置，也没有「声明过、而且同名唯一」的替代位置 —— 这个包要么搬过位置而`
         + `依赖没有重装，要么已经从本次提交里删掉（仓库里剩的同名目录证明不了是它搬过去的），`
-        + `请重新安装依赖后验收`;
+        + `若仍使用该源码，请将安装来源目录纳入 Git 并提交；否则停止将该目录作为本项目自有包的安装来源，`
+        + `更新依赖声明并重新安装依赖后验收`;
     }
     plan.push({ entry: item.entry, landing: item.landing, destination: join(target, "node_modules", item.entry), source });
   }
@@ -375,8 +377,11 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
         + `得写到 ${binding.destination}，但${refusal} —— 门禁不会往快照之外写，`
         + `请在标准安装布局下（重新安装依赖）验收`;
     }
-    if (!await sourceInside(target, realTarget, binding.source)) {
-      return `${binding.entry} 对应的源码位置 ${binding.source} 无法证明在快照内，门禁不会绑定到快照之外`;
+    const sourceRefusal = await sourceProblem(target, realTarget, binding.source);
+    if (sourceRefusal !== null) {
+      return `${binding.entry} 对应的源码位置 ${binding.source} 无法证明在快照内：${sourceRefusal}。`
+        + `本次提交没有提供可在快照内独立解析的该源码目录；请将安装来源及其父目录纳入 Git 并提交，`
+        + `或停止将该目录作为本项目自有包的安装来源。门禁不会绑定到快照之外`;
     }
   }
   // ── 不变量 ③ 的另一半:**消费者**那一侧的解析边。排在 ① 之后:① 保护的是「别改坏用户工作区」,
@@ -390,14 +395,15 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
   // MAIN_OLD,随后改主检出的源码它跟着变成 MAIN_LIVE,而快照自证与工作区新鲜度全程为真。
   //
   // 判据是**可证事实**而不是「这棵树里大概没人 import 我的包」:那棵树上除了自有包入口之外**还有
-  // 没有实际可解析的别的入口**。完全被近处遮蔽的条目不算消费者；从仍可见的消费者自身出发能解析
-  // 到的入口则也在 selected 中，不会因根遮蔽而漏掉。没有别的入口时，根上的绑定使闭包成立；有
+  // 没有实际可解析的别的包入口**。根遮蔽表 direct 与真正消费者的 selected 分开；按计划绑定后的
+  // 源码位置播种消费者，不再从将被替换的旧落点展开。命令参与重绑但不是模块入口，不能当消费者
+  // 的证人。仍可见第三方包自身能解析到的入口仍在 selected 中。没有别的入口时闭包成立；有
   // 别的入口时,它们都是潜在消费者——「它会不会 import 本项目的包」要静态分析整个包才知道,证明
   // 不了,按拒绝走。树**在快照里**的那种(依赖整棵克隆进来了)不受这条约束:消费者的副本也在快照
   // 里,它向上解析先命中快照这棵树里被改写过的入口。
   for (const tree of exposed) {
     const record = records.get(tree)!;
-    const outsider = entries.find(item => item.tree === tree
+    const outsider = entries.find(item => item.tree === tree && item.kind === "package"
       && ownerOf(item, record.owned) === null);
     if (outsider !== undefined) {
       return `依赖树 ${tree} 落在快照之外，里面既摆着本项目自己的包、又摆着 ${outsider.entry} 这样`
@@ -411,9 +417,9 @@ export async function confineOwnPackages(target: string, origins = new Map<strin
     await mkdir(dirname(binding.destination), { recursive: true });
     await rm(binding.destination, { recursive: true, force: true });
     await copyLink(binding.landing, binding.destination, relative(dirname(binding.destination), binding.source));
-    const bound = await realpath(binding.destination).catch(() => null);
+    const bound = await optionalRead(binding.destination, () => realpath(binding.destination));
     const pendingBuild = bound === null && await missingSource(binding.source)
-      && await sourceInside(target, realTarget, binding.source);
+      && await sourceProblem(target, realTarget, binding.source) === null;
     if (!pendingBuild && (bound === null || !insideTree(realTarget, bound))) {
       return `${binding.entry} 仍然解析到 ${bound ?? "解析不出来"}，不是快照自己那份源码`;
     }

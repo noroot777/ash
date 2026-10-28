@@ -5,6 +5,8 @@ import { copyLink, insideTree } from "./accept-gate-tree.js";
 import { DEPENDENCY_DIRS } from "./accept-gate-dirs.js";
 import { copyTree, linkMismatch, type OwnedPackage, type Relocation } from "./accept-gate-relocate.js";
 import { resolutionInputs } from "./accept-gate-resolution.js";
+import { projectSources, type ProjectSources, type UnknownSource } from "./accept-gate-project.js";
+import { optionalRead, requiredRead } from "./accept-gate-fs.js";
 
 // 门禁快照冻住的是**源码**；依赖是 lockfile 的产物，按产物对待。
 //
@@ -223,7 +225,7 @@ async function expandPattern(root: string, pattern: string): Promise<string[]> {
   if (segments.length === 0) return [];
   const found = new Set<string>();
   const children = async (rel: string): Promise<string[]> =>
-    (await readdir(join(root, rel), { withFileTypes: true }).catch(() => []))
+    (await optionalRead(join(root, rel), () => readdir(join(root, rel), { withFileTypes: true })) ?? [])
       .filter(entry => entry.isDirectory() && !entry.name.startsWith(".") && !DEPENDENCY_DIRS.includes(entry.name))
       .map(entry => entry.name);
   const walk = async (rel: string, index: number, depth: number): Promise<void> => {
@@ -253,7 +255,7 @@ async function expandPattern(root: string, pattern: string): Promise<string[]> {
 export async function workspacePackages(root: string): Promise<WorkspacePackages> {
   const patterns = new Set<string>();
   let declared = false;
-  const raw = await readFile(join(root, "package.json"), "utf8").catch(() => null);
+  const raw = await optionalRead(join(root, "package.json"), () => readFile(join(root, "package.json"), "utf8"));
   if (raw !== null) {
     try {
       const parsed = JSON.parse(raw) as { workspaces?: unknown };
@@ -272,7 +274,7 @@ export async function workspacePackages(root: string): Promise<WorkspacePackages
   }
   // pnpm 的声明在单独一份 YAML 里。不引 YAML 解析器:这里只要列表项那几行,解析得全不全不影响
   // 隔离决策(文件存在就算声明过),只影响 dirs 的完整度。
-  const pnpm = await readFile(join(root, "pnpm-workspace.yaml"), "utf8").catch(() => null);
+  const pnpm = await optionalRead(join(root, "pnpm-workspace.yaml"), () => readFile(join(root, "pnpm-workspace.yaml"), "utf8"));
   if (pnpm !== null) declared = true;
   for (const line of pnpm?.split(/\r?\n/) ?? []) {
     const item = /^\s*-\s*["']?([^"'#]+?)["']?\s*$/.exec(line);
@@ -292,7 +294,7 @@ export async function workspacePackages(root: string): Promise<WorkspacePackages
   // 走安装记录(ownedLinks)。
   const identity: Record<string, string> = {};
   for (const dir of dirs) {
-    const content = await readFile(join(root, dir, "package.json"), "utf8").catch(() => null);
+    const content = await optionalRead(join(root, dir, "package.json"), () => readFile(join(root, dir, "package.json"), "utf8"));
     if (content === null) continue;
     try {
       const name = (JSON.parse(content) as { name?: unknown }).name;
@@ -334,13 +336,14 @@ export function declaresWorkspace(dep: string, workspace: WorkspacePackages): bo
  * 本仓 47501 条目 / 1975 目录 / 37 条链，实测 166 ms，对照旧的全量字节摘要一遍 6892 ms。
  */
 export async function linksIntoSource(treeRoot: string, realRoot: string): Promise<string | null> {
+  const project = await projectSources(realRoot);
   const walk = async (sub: string): Promise<string | null> => {
-    for (const entry of await readdir(join(treeRoot, sub), { withFileTypes: true }).catch(() => [])) {
+    for (const entry of await optionalRead(join(treeRoot, sub), () => readdir(join(treeRoot, sub), { withFileTypes: true })) ?? []) {
       const path = sub === "" ? entry.name : join(sub, entry.name);
       if (entry.isSymbolicLink()) {
-        const landing = await realpath(join(treeRoot, path)).catch(() => null);
+        const landing = await optionalRead(join(treeRoot, path), () => realpath(join(treeRoot, path)), ["ENOENT", "ENOTDIR", "ELOOP"]);
         // 落在树内部的链是正常的（包之间互相引用）；落在项目源码上的才是「借出去就等于没隔离」。
-        if (landing !== null && insideTree(realRoot, landing) && !insideTree(treeRoot, landing)) return path;
+        if (landing !== null && !insideTree(treeRoot, landing) && (await project.locate(landing)).kind !== "external") return path;
       } else if (entry.isDirectory()) {
         const found = await walk(path);
         if (found !== null) return found;
@@ -369,14 +372,14 @@ async function linkWhole(source: string, destination: string): Promise<boolean> 
  * 侧另一套判据——2026-10-26 独立审查打回的三处链接失败都是这么来的。
  */
 export async function relocationFor(root: string, target: string, dep: string): Promise<Relocation | null> {
-  const treeRoot = await realpath(join(root, dep)).catch(() => null);
+  const treeRoot = await optionalRead(join(root, dep), () => realpath(join(root, dep)), ["ENOENT", "ENOTDIR", "ELOOP"]);
   if (treeRoot === null) return null;
   return {
-    realRoot: await realpath(root).catch(() => root),
+    realRoot: await requiredRead(root, () => realpath(root)),
     target,
     treeRoot,
     treeDest: join(target, dep),
-    owned: await ownedLinks(treeRoot, dep),
+    owned: await ownedLinks(treeRoot, dep, await projectSources(root)),
   };
 }
 
@@ -385,10 +388,11 @@ export async function relocationFor(root: string, target: string, dep: string): 
  *
  * 这是**来源身份**的唯一出处。npm 把 workspace 包和 `file:` 依赖都装成链，两者在路径形状和
  * package.json.name 上可以完全一样（实测反例见 accept-gate-relocate 顶部①），区别只在这一处：
- * workspace 包的 resolved 是项目内相对路径（`packages/lib`），`file:` 依赖的 resolved 指向项目
- * 外。所以判据是 resolved 落在项目内，而不是路径后缀或包名。
+ * resolved 按安装器原位置解读。来源落在被冻结项目内时即是自有源码，目录自己带 .git 不改变来源；
+ * Git common directory 只用来对齐其它 worktree 中的同一源码位置。无关仓库的 workspace 归外部，
+ * 不因快照恰好放在那里而变成自有包。读不出的身份单独保留元数据位置，不伪装成安装记录缺项。
  *
- * 读不到记录就回空：那时一条都不改写。「不改写」在隔离失效时会被 linkMismatch 当场抓住并让门禁
+ * 记录不存在就回空；读取失败拒绝，不把未能读取当成没有自有包。「不改写」在隔离失效时会被 linkMismatch 当场抓住并让门禁
  * 失败，而「改错」是把被测代码换成另一份还报绿——两种错的代价差着一个量级。
  *
  * pnpm/yarn 的 workspace 链是相对链、落点就在项目内，counterpart 的「项目源码」那一支本来就接
@@ -400,44 +404,47 @@ export type RecordedLinks = {
   owned: OwnedPackage[];
   /** 记录说装自项目外的包入口及其真实包根；派生命令通过包内落点共享来源身份。 */
   external: OwnedPackage[];
+  unknown: (OwnedPackage & { location: UnknownSource })[];
 };
 
-export async function recordedLinks(treeRoot: string, dep: string, originRoot = treeRoot): Promise<RecordedLinks> {
-  const raw = await readFile(join(treeRoot, ".package-lock.json"), "utf8").catch(() => null);
-  if (raw === null) return { owned: [], external: [] };
+export async function recordedLinks(treeRoot: string, dep: string, project: ProjectSources, originRoot = treeRoot): Promise<RecordedLinks> {
+  const raw = await optionalRead(join(treeRoot, ".package-lock.json"), () => readFile(join(treeRoot, ".package-lock.json"), "utf8"));
+  if (raw === null) return { owned: [], external: [], unknown: [] };
   let packages: Record<string, unknown> = {};
   try {
     packages = (JSON.parse(raw) as { packages?: Record<string, unknown> }).packages ?? {};
-  } catch { return { owned: [], external: [] }; }
-  const projectRoot = await realpath(dirname(originRoot)).catch(() => dirname(originRoot));
+  } catch { return { owned: [], external: [], unknown: [] }; }
+  const installationRoot = await requiredRead(dirname(originRoot), () => realpath(dirname(originRoot)));
   // 键前缀取**登记名**而不是 realpath 后的 basename:依赖根自己是条链时(pnpm 的
   // `node_modules -> .store` 就是这个形状)realpath 后的 basename 是 `.store`,拼出来的前缀
   // 匹配不上记录里的 `node_modules/…`,整棵树的归属改写会一声不响地全部失效。
   const prefix = `${basename(dep).split(sep).join("/")}/`;
   const owned: OwnedPackage[] = [];
   const external: OwnedPackage[] = [];
+  const unknown: RecordedLinks["unknown"] = [];
   for (const [key, value] of Object.entries(packages)) {
     const record = value as { link?: unknown; resolved?: unknown };
     if (record.link !== true || typeof record.resolved !== "string" || !key.startsWith(prefix)) continue;
     const entry = key.slice(prefix.length);
-    const where = resolve(projectRoot, record.resolved);
+    const where = resolve(installationRoot, record.resolved);
     // 记录说它装自项目**外**:那是一个明确的已知来源(`file:../另一个仓库`),不是自有包、也不是
     // 「来源不明」。这一态必须单独带出去——丢掉它的调用方只剩「自有包」和「未知」两格,于是一个
     // 正常 `npm install` 装好的外部 file 包会被当成未证明的源码,整次验收在合法布局上被拦掉
     // (2026-10-27 第三轮独立审查实测,两平台一致)。外部包由不由 Git 管理不改变这个事实。
-    const landing = await realpath(where).catch(() => null);
+    const landing = await optionalRead(where, () => realpath(where));
     if (landing === null) continue;
-    const source = { entry, inside: record.resolved.split("/").join(sep), landing };
-    if (!insideTree(projectRoot, where) || where === projectRoot) {
-      if (where !== projectRoot) external.push(source);
-    } else owned.push(source);
+    const location = await project.locate(landing);
+    const source = { entry, inside: location.kind === "owned" ? location.inside : record.resolved.split("/").join(sep), landing };
+    if (location.kind === "external") external.push(source);
+    else if (location.kind === "owned") owned.push(source);
+    else unknown.push({ ...source, location });
   }
-  return { owned, external };
+  return { owned, external, unknown };
 }
 
 /** 只要自有包那一格的调用方（搬运改写）用这个。 */
-export async function ownedLinks(treeRoot: string, dep: string): Promise<OwnedPackage[]> {
-  return (await recordedLinks(treeRoot, dep)).owned;
+export async function ownedLinks(treeRoot: string, dep: string, project: ProjectSources): Promise<OwnedPackage[]> {
+  return (await recordedLinks(treeRoot, dep, project)).owned;
 }
 
 /**
@@ -454,13 +461,13 @@ export async function declaredPackageDirs(root: string): Promise<Map<string, str
   const dirs = new Map<string, string[]>();
   const add = (entry: string, directory: string) => dirs.set(entry, [...(dirs.get(entry) ?? []), directory]);
   for (const directory of (await workspacePackages(root)).dirs) {
-    const raw = await readFile(join(root, directory, "package.json"), "utf8").catch(() => "{}");
+    const raw = await optionalRead(join(root, directory, "package.json"), () => readFile(join(root, directory, "package.json"), "utf8")) ?? "{}";
     try {
       const name = (JSON.parse(raw) as { name?: unknown }).name;
       if (typeof name === "string") add(name, directory.split(sep).join("/"));
     } catch { continue; }
   }
-  const raw = await readFile(join(root, "package.json"), "utf8").catch(() => null);
+  const raw = await optionalRead(join(root, "package.json"), () => readFile(join(root, "package.json"), "utf8"));
   let parsed: Record<string, unknown> = {};
   try { parsed = raw === null ? {} : JSON.parse(raw) as Record<string, unknown>; } catch { parsed = {}; }
   for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
@@ -503,7 +510,7 @@ export async function provideDependency(root: string, target: string, dep: strin
     // 不可达的依赖根：没装的可选依赖、指向还没建起来的目录的悬空链、环。它在快照里**照原样**
     // 重建（是链就建同原文的一条悬空链，什么都没有就什么都不建），于是「本来跑不通」在副本里
     // 仍然跑不通——而不是让整次快照失败。悬空链不该拖垮一次快照，这条在上一层就定过。
-    const info = await lstat(from).catch(() => null);
+    const info = await optionalRead(from, () => lstat(from));
     if (info !== null && info.isSymbolicLink()) await copyLink(from, destination, await readlink(from));
     return "absent";
   }
@@ -511,7 +518,7 @@ export async function provideDependency(root: string, target: string, dep: strin
   // 开始拷——否则副本里仍是一条指向外面的链，解析根照旧在快照外，三个入口一个都没修掉。
   // 放法的判据是**落点**:这棵树里只要有一条链落在项目源码上,借出去就等于没隔离(理由与实测
   // 见 linksIntoSource)。声明过 workspace 的仍然直接克隆——那是项目自己写明的意图,不必等扫描。
-  // 判据的第一道是**安装记录认下的自有包**(relocation.owned,归属以树自己所属的那个检出为准)。
+  // 判据的第一道是**安装记录认下的自有包**(relocation.owned,以被冻结项目的仓库身份为准)。
   // 落点扫描只认「落回**本检出**源码」的链,所以借来另一个检出的树时它一条都扫不出来:worktree
   // 借主仓那一份、几个检出共用一个安装目录,里面的 workspace 链落在**那个**检出的活源码上。上一版
   // 因此决定借用,随后收口发现自有包解析到快照外、要重绑定,而主干是一条落在别人工作区的链——只能
@@ -531,7 +538,7 @@ export async function provideDependency(root: string, target: string, dep: strin
     clone: true,
     relocate: relocation,
     skip,
-    snapshotRoot: await realpath(target).catch(() => target),
+    snapshotRoot: await requiredRead(target, () => realpath(target)),
   });
   return "clone";
 }
@@ -558,15 +565,15 @@ export async function provideDependency(root: string, target: string, dep: strin
 export async function dependencyMismatch(root: string, target: string, dep: string,
   mode: DependencyMode): Promise<string | null> {
   const copy = join(target, dep);
-  const landing = await realpath(copy).catch(() => null);
+  const landing = await optionalRead(copy, () => realpath(copy), ["ENOENT", "ENOTDIR", "ELOOP"]);
   if (mode === "absent") {
     return landing === null ? null : `${dep} 在工作区里解析不出东西来，快照里却落在了 ${landing}`;
   }
   if (mode === "link") {
-    const expected = await realpath(join(root, dep)).catch(() => null);
+    const expected = await optionalRead(join(root, dep), () => realpath(join(root, dep)), ["ENOENT", "ENOTDIR", "ELOOP"]);
     return landing !== null && landing === expected ? null : `${dep} 的借用链没有落在工作区那一份上`;
   }
-  const realTarget = await realpath(target).catch(() => target);
+  const realTarget = await requiredRead(target, () => realpath(target));
   if (landing === null || !insideTree(realTarget, landing)) {
     return `${dep} 没有在快照里落成独立的一份（落点 ${landing ?? "解析不出来"}）`;
   }
