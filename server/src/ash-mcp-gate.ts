@@ -117,6 +117,11 @@ export function prepareGate(target: LaunchPlan): Gate | null {
     mkdirSync(dir, { recursive: true });
     writeFileSync(script, GATE_SCRIPT, "utf8");
   } catch {
+    // 目录建出来了、脚本没写进去(配额/磁盘满/权限变化)时,这个目录就此没人管得到了 ——
+    // 调用方这时拿不到 Gate,也就调不到下面那个 cleanup。反复失败会在 tmpdir 里积目录,
+    // 所以在这里顺手收掉自己这一次的(第 1 轮审查 N2)。失败方向不变:照旧返回 null,
+    // 不启动目标。
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* 收不掉就算了 */ }
     return null;
   }
   return {

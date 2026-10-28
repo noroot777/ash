@@ -57,6 +57,25 @@ const runCli = (bin: string, args: string[], opts: { cwd?: string; env: NodeJS.P
   });
 };
 
+// ── 先问一句：这道闸在这台机器上工作吗 ─────────────────────────────────────
+// 探测层的规矩是「拿不到可核销的归属设备就不启动查询」(第 1 轮审查 B1)。macOS 上内核圈定
+// 如实弃权 ⇒ 一次 CLI 都不跑 ⇒ 每个问法都答「问不出来」⇒ 判据层一律放行。
+// **所以这道闸在这个平台上整个不工作**，它的判据自然也测不出来。
+//
+// 写成整份跳过、而不是把那十几条「该拦」的断言改成「恒放行」：后者会让这个文件看着还在
+// 守着什么，实际上一条都没守。跳过是刺眼的，而它**应该**刺眼 —— 回归保护在开发机上整个
+// 消失，正是「宁可不做这次预检，也不留一个收不回来的后台查询」这个取舍的代价之一。
+// 哪天 macOS 上补回了一条不起进程的判据（或者补上了可核销的归属设备），把这段删掉即可。
+const { confineAbstention } = await import("../src/executors/kernel-confine.js");
+const abstention = confineAbstention();
+if (abstention) {
+  console.log(`⚠ 整份跳过 ash MCP 预检判据用例：${abstention}`);
+  console.log("  ⇒ 探测层据此一条查询都不起，判据层一律放行 —— 这道闸在这台机器上不工作，");
+  console.log("    不是测试跳过了它，是它本身没在守（第 1 轮审查 B1 的代价）。");
+  rmSync(stage, { recursive: true, force: true });
+  process.exit(0);
+}
+
 try {
   const { ensureSchema } = await import("../src/db/index.js");
   await ensureSchema();

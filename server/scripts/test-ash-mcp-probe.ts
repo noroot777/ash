@@ -10,10 +10,14 @@
 //   3. **正常退出也要收尾**：后代不持输出管道时，根 close 跟它没关系（第 5 轮 B1）
 //   4. `ConfineRead` 三档语义照既有消费者解释：absent / unqueryable / since-enroll 的空
 //      都**不构成**「已回收」（第 5 轮 B1）
+//   5. 后代攥着输出管道时 close 永远不来，一份拿得到的答案不准丢（第 6 轮第 4 点）
+//   6. 门闩：归属没建成之前 CLI 一条指令都不准执行（第 6 轮 B1）
+//   7. **离组后代**：换了进程组、被 init 收养的查询照样要收掉 —— 原组的 ESRCH 推不出
+//      整次运行干净（第 1 轮 B1，macOS 真机实测）
 //
 // 跑：npm -w server run test:ash-mcp-probe
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from "node:fs";
@@ -29,6 +33,48 @@ try {
   const { probeCli, unitResidue } = await import("../src/ash-mcp-probe.js");
   const { resolveLaunch } = await import("../src/executors/bin-resolve.js");
   if (!resolveLaunch("node", [])) throw new Error("这台机器上连 node 都解析不到？");
+
+  /**
+   * **测试替身**：拿进程组冒充一台归属设备，好让结束路径在本机（macOS 上圈定弃权）也能
+   * 一条条跑出来 —— 否则它们只能等 Windows/Linux 真机，而前几轮正是这么漏掉问题的。
+   *
+   * 它**故意是弱的**：进程组一个 `setsid` 就能逃出去，正是第 1 轮 B1 点掉的那台「设备」。
+   * 所以它只用来驱动「后代还在组里」的那几条路（第 1~4 块）；真正要验「离组」的第 7 块
+   * 不传它，走真实的 `openConfinement`。生产代码里没有这种弱实现。
+   */
+  const pgroupStand = (token: string) => {
+    let root = 0;
+    // **要真的枚举组成员**，不能只报 root：门闩壳跑完就退出了，那时组里剩下的恰恰是它起的
+    // 那些后代 —— 只报一个已死的 root，`unitResidue` 会把组读成空。`ps -eo pid=,pgid=` 两个
+    // 平台都认。
+    const members = (): { pid: number; gen: null }[] => {
+      if (!root) return [];
+      try {
+        return execFileSync("ps", ["-eo", "pid=,pgid="], { encoding: "utf8" })
+          .split("\n")
+          .map((l) => l.trim().split(/\s+/).map(Number))
+          .filter(([pid, pgid]) => pgid === root && Number.isInteger(pid) && pid > 1)
+          .map(([pid]) => ({ pid, gen: null }));
+      } catch { return []; }
+    };
+    return {
+      id: token,
+      enroll: (pid: number) => { root = pid; return true; },
+      preExecEnv: () => null,
+      read: () => (root
+        ? { kind: "members" as const, coverage: "since-enroll" as const, members: members() }
+        : { kind: "absent" as const, why: "还没 enroll" }),
+      killAll: (sig: NodeJS.Signals) => {
+        try { process.kill(-root, sig); return 1; } catch { return 0; }
+      },
+      dispose: () => {},
+    } as unknown as NonNullable<ReturnType<NonNullable<Parameters<typeof probeCli>[5]>>>;
+  };
+  /** 第 1~4 块共用：带替身的探测（本机也能把结束路径跑完）。 */
+  const probeStood = (
+    args: string[], cwd: string | undefined, timeoutMs: number,
+  ): ReturnType<typeof probeCli> =>
+    probeCli("codex", args, process.env, cwd, timeoutMs, pgroupStand);
 
   // ── 1. 超时之后不准把自己起的进程留在机器上 ──────────────────────────────
   // Windows 真机实测:15 秒超时到点、预检已放行,底下那个 node 查询进程还活着
@@ -57,7 +103,7 @@ try {
     process.env.PATH = `${hangDir}${delimiter}${pathWas ?? ""}`;
 
     const started = Date.now();
-    const res = await probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, 1_200);
+    const res = await probeStood(["mcp", "list", "--json"], undefined, 1_200);
     assert.equal(res, null, "B3:超时必须回到「问不出来」(向放行开的结论不变)");
     assert.ok(Date.now() - started < 20_000, "B3:不能一直干等下去");
 
@@ -82,7 +128,7 @@ try {
       if (process.platform === "win32") writeFileSync(join(dir, "codex.cmd"), windows);
       else { const f = join(dir, "codex"); writeFileSync(f, posix); chmodSync(f, 0o755); }
     };
-    const ask = (ms: number) => probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, ms);
+    const ask = (ms: number) => probeStood(["mcp", "list", "--json"], undefined, ms);
 
     // ① B2：**包装进程先退出**，它起的查询还在。真机上这正是两轮 taskkill 都打空的形状
     // （第 4 轮审查：wrapperStillAlive=false、childStillAlive=true）。判据必须是执行单元
@@ -196,7 +242,7 @@ try {
     let gone = false;
     let orphan = 0;
     try {
-      res = await probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, 8_000);
+      res = await probeStood(["mcp", "list", "--json"], undefined, 8_000);
       // 收尾刻意放在后台（不拖住派审请求，第 5 轮 N1），所以这里轮询等它做完。
       orphan = Number(readFileSync(pidFile, "utf8").trim());
       for (let i = 0; i < 80 && !gone; i++) {
@@ -250,7 +296,7 @@ try {
       chmodSync(f, 0o755);
     }
     const t0 = Date.now();
-    const res = await probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, 6_000);
+    const res = await probeStood(["mcp", "list", "--json"], undefined, 6_000);
     const took = Date.now() - t0;
     assert.ok(res, "进程退出了、答案也写完了，不能因为 close 不来就把它当成「问不出来」");
     assert.equal(res!.code, 0, "退出码要带回来");
@@ -269,34 +315,66 @@ try {
     process.env.PATH = pathWas;
   }
 
-  // ── 5. ConfineRead 三档照既有消费者解释，「不说话」不等于「空」 ─────────────
-  // 判据抄的是 cleanup-result.ts 的 confinedResidue：absent 不说话、unqueryable 不说话、
-  // 只有 whole-run 的空才构成证明。上一版把 absent 和 since-enroll 的空都读成「已回收」，
-  // 于是 Windows 冷启动那次泄漏连警告都没打（第 5 轮 B1）。
+  // ── 5. 归属读数：两台设备各自答得了什么，「不说话」不等于「空」 ───────────
+  // 判据抄的是既有消费者：内核圈定那档照 cleanup-result.ts 的 confinedResidue（absent
+  // 不说话、unqueryable 不说话、只有 whole-run 的空才构成证明），追踪 fd 那档直接接
+  // residueFromProbe。上一版把 absent 和 since-enroll 的空都读成「已回收」，于是 Windows
+  // 冷启动那次泄漏连警告都没打（第 5 轮 B1）。
   {
     const fake = (read: unknown) => ({
       id: "fake", enroll: () => true, preExecEnv: () => null,
       read: () => read, killAll: () => 1, dispose: () => {},
-    }) as unknown as Parameters<typeof unitResidue>[1];
-
+    });
+    const unit = (confine: unknown, gated: boolean, track: string | null = null) =>
+      ({ confine, gated, track }) as Parameters<typeof unitResidue>[0];
     const members = (ms: number[], coverage: string) =>
       fake({ kind: "members", members: ms.map((pid) => ({ pid, gen: null })), coverage });
 
-    assert.equal(unitResidue(12345, fake({ kind: "absent", why: "圈没建起来" }), true), null,
+    assert.equal(await unitResidue(unit(fake({ kind: "absent", why: "圈没建起来" }), true)), null,
       "absent = 这台设备弃权，**不是**「已经回收」；门闩也不能让它说话（圈都没有，门闩无从谈起）");
-    assert.equal(unitResidue(12345, fake({ kind: "unqueryable", why: "这一刻问不到" }), true), null,
+    assert.equal(await unitResidue(unit(fake({ kind: "unqueryable", why: "这一刻问不到" }), true)), null,
       "问不出来也不是空");
-    assert.equal(unitResidue(12345, members([], "since-enroll"), false), null,
+    assert.equal(await unitResidue(unit(members([], "since-enroll"), false)), null,
       "没门闩时 since-enroll 的空不构成证明 —— 空窗里出生又脱离的后代不在集合里");
-    assert.equal(unitResidue(12345, members([], "whole-run"), false), "gone",
+    assert.equal(await unitResidue(unit(members([], "whole-run"), false)), "gone",
       "设备自己说覆盖整次运行时，空就是证明");
     // 第 6 轮审查第 3 点：`cut >= 0` 当时绕过了 coverage 判据。现在反过来 —— 判据是
     // **门闩有没有把窗口关掉**，而不是设备自报的那一档。门闩之下被 spawn 的是不生后代的
     // 壳，CLI 在圈建成之后才出生，所以这个集合对 CLI 这棵树是确定的，空构成证明。
-    assert.equal(unitResidue(12345, members([], "since-enroll"), true), "gone",
+    assert.equal(await unitResidue(unit(members([], "since-enroll"), true)), "gone",
       "门闩关掉了空窗：集合对 CLI 这棵树是确定的，空算证明");
-    assert.equal(unitResidue(12345, members([process.pid], "since-enroll"), true), "remaining",
+    assert.equal(await unitResidue(unit(members([process.pid], "since-enroll"), true)), "remaining",
       "成员还活着就是还有残留");
+
+    // 追踪 fd 那一档（Windows 上没有反查手段，那边这台设备压根不开）：**只给正面证据**。
+    if (process.platform !== "win32") {
+      const nobody = join(stage, "track-nobody");
+      writeFileSync(nobody, "");
+      // 本轮实测钉在这里：wrapper 用 `spawn(detached, stdio:"ignore")` 起查询之后，lsof 对
+      // 追踪文件返回空，而那个查询 PPID=1 活得好好的 —— Node 把 fd3 CLOEXEC 掉了。所以
+      // 「没人握着」在这一层**不构成核销**，它只能是「不说话」。
+      assert.equal(await unitResidue(unit(null, false, nobody)), null,
+        "没人握着**不**等于收干净了：Node spawn 的孙进程压根不继承 fd3（本轮实测）");
+      // 持有者必须是**别的进程**：`parseHolders` 刻意把自己(`pid === process.pid`)排除在外，
+      // 因为父进程那份 fd 在 `registerTrackFd` 里当场就关掉了，算进来只会凭空落一笔。
+      const held = join(stage, "track-held");
+      writeFileSync(held, "");
+      const ready = join(stage, "track-held.ready");
+      const holder = spawn(process.execPath, ["-e",
+        'const fs = require("node:fs");'
+        + `fs.openSync(${JSON.stringify(held)}, "r+");`
+        + `fs.writeFileSync(${JSON.stringify(ready)}, "1");`
+        + "setInterval(() => {}, 1000);"], { stdio: "ignore" });
+      try {
+        for (let i = 0; i < 60 && !existsSync(ready); i++) await pause(50);
+        assert.ok(existsSync(ready), "持有者进程应该已经把文件打开了");
+        assert.equal(await unitResidue(unit(null, false, held)), "remaining",
+          "有活着的写模式持有者 ⇒ 还有残留");
+      } finally { holder.kill("SIGKILL"); }
+      // 一台设备都没有 ⇒ 没有任何人能作答。这一档不许退回进程组（第 1 轮 B1）。
+      assert.equal(await unitResidue(unit(null, false, null)), null,
+        "一台设备都没有时只能答「不说话」");
+    }
   }
 
   // ── 6. 门闩：归属没建成之前，CLI 一条指令都不准执行 ────────────────────────
@@ -372,7 +450,95 @@ try {
     }
   }
 
-  // ── 7. 结构约束：Windows 那条路本机跑不出来，用不变量兜住 ──────────────────
+  // ── 7. 离组后代：换了进程组、被 init 收养的查询也必须收掉 ──────────────────
+  // 第 1 轮审查 B1 在 macOS 上实测的形状：包装用 `detached + stdio=ignore` 起查询、自己
+  // 正常退出 —— 原进程组**整个消失**（wrapperGroupPresent=false），查询 PPID=1、自成一组
+  // 活着。上一版据「原组 ESRCH」答 `gone`、连一句警告都没打，最后是审查脚本拿自己记下的
+  // pid 收的。
+  //
+  // 跟第 3 块的区别就在**离组**那一下：那边的后代是 `&` 起的，仍留在原组里，组刀打得到，
+  // 所以旧实现也能过。这一块的鉴别力全靠「原组已经空了」那条断言 —— 没有它，这个用例
+  // 对旧实现同样是绿的。归属改由追踪 fd 提供（fork 那一刻就装上，换组和被收养都追得到）。
+  if (process.platform !== "win32") {
+    const escDir = join(stage, "escape-cli");
+    mkdirSync(escDir, { recursive: true });
+    const pidFile = join(escDir, "query.pid");
+    const wrapperFile = join(escDir, "wrapper.pid");
+    const query = join(escDir, "query.mjs");
+    const wrapper = join(escDir, "wrapper.mjs");
+    writeFileSync(query,
+      'import { writeFileSync } from "node:fs";\n'
+      + `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n`
+      + 'setInterval(() => {}, 1000);\n');
+    // `detached: true` = setsid：它从此自成进程组，组刀和父子树都追不到它。
+    writeFileSync(wrapper,
+      'import { spawn } from "node:child_process";\n'
+      + 'import { writeFileSync, existsSync } from "node:fs";\n'
+      + `writeFileSync(${JSON.stringify(wrapperFile)}, String(process.pid));\n`
+      + `const q = spawn(process.execPath, [${JSON.stringify(query)}], `
+      + '{ detached: true, stdio: "ignore" });\n'
+      + 'q.unref();\n'
+      + `const poll = setInterval(() => { if (existsSync(${JSON.stringify(pidFile)})) `
+      + '{ clearInterval(poll); process.stdout.write("[]"); } }, 25);\n');
+    const shim = join(escDir, "codex");
+    writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" "${wrapper}" "$@"\n`);
+    chmodSync(shim, 0o755);
+
+    // 这台机器上内核圈定弃不弃权，决定这条用例该断言哪一支（macOS 弃权、Linux 不弃权）。
+    const { confineAbstention } = await import("../src/executors/kernel-confine.js");
+    const abstains = !!confineAbstention();
+
+    const pathWas = process.env.PATH;
+    process.env.PATH = `${escDir}${delimiter}${pathWas ?? ""}`;
+    const warned: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
+    let res: Awaited<ReturnType<typeof probeCli>>;
+    let queryPid = 0;
+    let gone = false;
+    let groupGone = false;
+    try {
+      res = await // **刻意不传替身**：这一块验的就是真实设备弃权时该不该启动。
+      probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, 8_000);
+      if (existsSync(wrapperFile)) {
+        const wrapperPid = Number(readFileSync(wrapperFile, "utf8").trim());
+        // **这条才是鉴别力所在**：包装那一组必须已经整个没了 —— 旧实现正是在这一刻把
+        // 「原组 ESRCH」读成「整次运行已清理」的。
+        try { process.kill(-wrapperPid, 0); } catch { groupGone = true; }
+      }
+      if (existsSync(pidFile)) {
+        queryPid = Number(readFileSync(pidFile, "utf8").trim());
+        for (let i = 0; i < 100 && !gone; i++) {
+          try { process.kill(queryPid, 0); await pause(100); } catch { gone = true; }
+        }
+      }
+    } finally { console.warn = realWarn; }
+
+    if (!gone && queryPid > 1) { try { process.kill(queryPid, "SIGKILL"); } catch { /* 清场 */ } }
+    process.env.PATH = pathWas;
+
+    if (abstains) {
+      // 这台机器没有内核圈定（macOS）⇒ **一条指令都不该起**。旧实现会照常起、答 gone、
+      // 把那个离组查询留在机器上，所以这一支对旧实现是红的。
+      assert.equal(res, null, "拿不到能核销的归属设备就不探测，直接回「问不出来」（第 1 轮 B1）");
+      assert.ok(!existsSync(wrapperFile),
+        "假 CLI 一次都不该被执行 —— 起了就等于留下一个谁都查不回去的后台查询");
+      assert.equal(queryPid, 0, "查询进程压根不该存在");
+    } else {
+      // 有圈（Linux 的 cgroup）：照常探测，离组后代由整圈刀收掉。
+      assert.ok(res, "答案照样要拿回来 —— 收尾的事不该影响这一问");
+      assert.match(res!.stdout, /\[\]/, "答案要完整");
+      assert.ok(groupGone,
+        "包装的进程组应该已经整个消失 —— 没有这一条，这个用例对旧实现同样是绿的");
+      assert.ok(Number.isInteger(queryPid) && queryPid > 1, "假 CLI 应该写下了那个离组查询的 pid");
+      assert.ok(gone,
+        "离组后代必须由探测层自己收掉：原组的 ESRCH 推不出整次运行干净（第 1 轮 B1）");
+      assert.ok(!warned.some((w) => w.includes("收不干净")),
+        `收干净了就不准喊收不干净：${warned.join(" | ")}`);
+    }
+  }
+
+  // ── 8. 结构约束：Windows 那条路本机跑不出来，用不变量兜住 ──────────────────
   // macOS 上圈定如实弃权，所以「圈建不成 → 不启动」「整圈刀 → 核销」这两条只能在真机上
   // 跑。断言刻意写成**否定式**（危险形状不存在）而不是某一种写法 —— 上一轮钉
   // `return gone ?? byClose` 的表达式形状，实现一换就恒红，而恒红的断言钉不住任何东西。
@@ -380,17 +546,36 @@ try {
     const src = readFileSync(new URL("../src/ash-mcp-probe.ts", import.meta.url), "utf8");
     const code = src.split("\n").filter((l) => !/^\s*(?:\/\/|\/?\*)/.test(l)).join("\n");
 
-    assert.match(code, /if \(!confine\) return null;/,
-      "Windows 上圈开不出来必须直接回「问不出来」，不准退回直接起 CLI（第 6 轮 B1）");
+    const fnBody = (body: string, head: string): string => {
+      const at = body.indexOf(head);
+      assert.ok(at >= 0, `${head} 不见了`);
+      const end = body.indexOf("\n}", at);
+      return body.slice(at, end > 0 ? end : undefined);
+    };
+
+    // **一台归属设备都拿不到时，一条指令都不准起。** 写成位置关系而不是某一句的形状：
+    // 要的不变量是「这道闸在 spawn 之前」。
+    const probeBody = fnBody(code, "export async function probeCli");
+    const guardAt = probeBody.search(/if \(!confine\) return null;/);
+    const spawnAt = probeBody.indexOf("spawn(launch.file");
+    assert.ok(guardAt >= 0 && spawnAt > guardAt,
+      "拿不到能核销的归属设备就不做这次探测 —— 不准退回直接起 CLI（第 6 轮 B1 / 第 1 轮 B1）");
+
+    // **进程组不准再参与核销**（第 1 轮 B1）：后代一个 setsid 就出圈，原组的 ESRCH 推不出
+    // 整次运行干净。组刀照留（killTree 内部那一刀在 platform.ts），但这个文件里不准再出现
+    // 拿进程组**探活**的写法。
+    assert.ok(!/kill\(-\s*\w+\s*,\s*0\s*\)/.test(code),
+      "原组的 ESRCH 不是「整次运行已清理」的证据（第 1 轮 B1，macOS 真机实测）");
+    const residueBody = fnBody(code, "export async function unitResidue");
+    assert.match(residueBody, /residueFromProbe/,
+      "追踪 fd 那一档的判据接既有消费者，不在这里新造一份");
+    // 追踪 fd 的「空」不许再变成核销：Node 的 spawn 把 fd3 CLOEXEC 掉，隔一层包装这条
+    // 线索就断，而断了之后它答的正是「没人握着」（本轮实测）。
+    assert.ok(!/verdict\.kind === "empty"/.test(residueBody),
+      "追踪 fd 只给正面证据 —— 它答的「空」不构成核销");
     // **钉函数体里有哪几件事，不钉它们写成什么样。** 这一轮和上一轮各被形状断言咬过一次：
     // 钉 `return gone ?? byClose`、钉 `confine.read().kind === …` 的那两条，实现一换写法就
     // 恒红，而恒红的断言钉不住任何东西。
-    const fnBody = (src: string, head: string): string => {
-      const at = src.indexOf(head);
-      assert.ok(at >= 0, `${head} 不见了`);
-      const end = src.indexOf("\n}", at);
-      return src.slice(at, end > 0 ? end : undefined);
-    };
     assert.match(code, /confirmHeld\(/, "开门之前必须确认归属，不能直接 open");
     const confirm = fnBody(code, "async function confirmHeld");
     assert.match(confirm, /enroll\(pid\)/, "确认归属要先 enroll");
