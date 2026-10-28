@@ -34,6 +34,10 @@
       "types": "./src/accept-pending.ts",
       "default": "./src/accept-pending.ts"
     },
+    "./task-memo": {
+      "types": "./src/task-memo.ts",
+      "default": "./src/task-memo.ts"
+    },
     "./task-origin": {
       "types": "./src/task-origin.ts",
       "default": "./src/task-origin.ts"

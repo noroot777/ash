@@ -39,6 +39,7 @@ import { mountSkillRoutes } from "./skill-routes.js";
 import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic-context-1m.js";
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
+import { mountTaskMemoRoutes } from "./task-memos.js";
 import { detachTaskRefs } from "./task-refs.js";
 import { mountGroupRoutes } from "./group-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
@@ -489,6 +490,8 @@ api.post("/groups/resolve", async (c) => {
 });
 
 mountTaskRoutes(api);
+// 任务备忘:挂在任务上、不进任何 prompt 的手写条目(见 shared/src/task-memo.ts)。
+mountTaskMemoRoutes(api);
 // 分组(批次容器)路由:列表/运行/暂停/批量建任务(从 task-routes.ts 拆出)。
 mountGroupRoutes(api);
 mountTaskRunRoutes(api);

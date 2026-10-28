@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Chats, Quotes } from "@phosphor-icons/react";
+import { Chats, NotePencil, Quotes } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { stageSideChatQuote } from "./sideChatQuote.ts";
 import "./conversation-selection.css";
@@ -9,11 +9,16 @@ type Selected = { text: string; left: number; top: number };
 const controls = "button, input, textarea, select, [contenteditable]:not([contenteditable=false])";
 const elementOf = (node: Node) => node instanceof Element ? node : node.parentElement;
 
-export function ConversationSelection({ taskId, onAsk, onAddToReply, children }: {
+export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo, children }: {
   taskId: string;
   onAsk: () => void;
   /** 不传 = 这个任务没有可用的对话框（比如已交接出去），浮条上就不出现「添加到对话」。 */
   onAddToReply?: (text: string) => void;
+  /**
+   * 选中这段存进任务备忘（不传就不出这颗按钮）。跟前两颗的分界：那两颗都是「把这段话
+   * 再说给某个 agent 听」，这颗是「留给我自己回头看」，不进任何 prompt。
+   */
+  onAddToMemo?: (text: string) => void;
   children: ReactNode;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -101,6 +106,8 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, children }:
         stageSideChatQuote(taskId, text);
         onAsk();
       })}><Chats size={13} />在侧聊中提问</button>
+      {onAddToMemo && <button type="button" onPointerDown={(event) => event.preventDefault()}
+        onClick={take(onAddToMemo)}><NotePencil size={13} />添加到备忘</button>}
     </div>, document.body)}
   </div>;
 }

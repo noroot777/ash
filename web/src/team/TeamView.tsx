@@ -358,16 +358,16 @@ export function TeamView({
     && workers.length > 0
     && workers.every((worker) => worker.status === "done");
   const inspectorPolicy = useMemo(() => ({
-    // `-v3`：生成物那一格是后加的，存量用户的 `openTabs` 躺在 localStorage 里，
+    // `-v4`：生成物、备忘那两格是后加的，存量用户的 `openTabs` 躺在 localStorage 里，
     // 只有 `stateKey` 变过一次才会拿下面这张表去并集。加面板要连带跳一版（同 TaskDetail）。
     //
     // 哨兵和子智能体**故意不在这张表里**：那两格走「用过才浮现」（inspector/usedTabs.tsx），
     // 开合由各自的 hook 翻 `defaultOpen`，写进这里会被每次语义换挡无条件并集回去。
-    stateKey: `team:timeline-v3:${allWorkersComplete ? "complete" : "active"}`,
+    stateKey: `team:timeline-v4:${allWorkersComplete ? "complete" : "active"}`,
     requiredTabId: "info",
     defaultOpenTabIds: allWorkersComplete
-      ? ["info", "review", "artifacts", "timeline"]
-      : ["info", "workers", "artifacts", "timeline"],
+      ? ["info", "review", "artifacts", "memos", "timeline"]
+      : ["info", "workers", "artifacts", "memos", "timeline"],
     defaultActiveTabId: allWorkersComplete ? "review" : "workers",
   }), [allWorkersComplete]);
   const selectWorker = useCallback((taskId: string) => {

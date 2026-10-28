@@ -49,6 +49,8 @@ import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
 import { TASK_INSPECTORS } from "./taskInspectors.tsx";
 import { ConversationSelection } from "../side-chat/ConversationSelection.tsx";
+import { useTaskMemoTab } from "../task-memos/useTaskMemoTab.tsx";
+import { addTaskMemo } from "../task-memos/taskMemoStore.ts";
 import { useAddReplyQuote } from "./replyQuote.ts";
 
 const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
@@ -130,7 +132,9 @@ export function TaskDetail({
     () => monitorTab.monitors.monitors.filter((m) => m.kind === "claude" && m.status === "running").length,
     [monitorTab.monitors.monitors],
   );
-  const inspectors = monitorTab.inspectors;
+  // 备忘那一格只改标题/图标（有几条），开合仍按 TASK_INSPECTORS 的 defaultOpen —— 理由
+  // 见 task-memos/useTaskMemoTab.tsx：手写第一条的入口只在那一格里。
+  const inspectors = useTaskMemoTab(monitorTab.inspectors, task.id);
   // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const followUps = useMemo(
@@ -168,7 +172,7 @@ export function TaskDetail({
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:all-tabs-v6:${task.status}:${reviewFocused ? "review" : "info"}`,
+    stateKey: `single:all-tabs-v7:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
     preserveActiveTabIds: ["side-chat"],
     // 顺序由 TASK_INSPECTORS 定，这里只说「默认哪几格开着」。
@@ -181,7 +185,7 @@ export function TaskDetail({
     // `applyTabPolicy` 只在 `stateKey` 变过一次时才拿这张表去并集。所以**加面板要连
     // 带把 `all-tabs-vN` 往上跳一版**，否则老用户永远看不到它（生成物那一格就是这么
     // 差点漏掉的）。
-    defaultOpenTabIds: ["info", "files", "artifacts", "scm", "side-chat", "workflow", "review", "preview"],
+    defaultOpenTabIds: ["info", "files", "artifacts", "scm", "memos", "side-chat", "workflow", "review", "preview"],
     defaultActiveTabId: reviewFocused ? "review" : "info",
   }), [reviewFocused, task.status]);
 
@@ -464,7 +468,22 @@ export function TaskDetail({
             ) : (
               <div className="task-detail-body">
                 <section className="task-detail-main" aria-label="任务会话">
-                  <ConversationSelection key={task.id} taskId={task.id} onAsk={() => openTab("side-chat")} onAddToReply={handedOut ? undefined : addToReply}>
+                  <ConversationSelection
+                    key={task.id}
+                    taskId={task.id}
+                    onAsk={() => openTab("side-chat")}
+                    onAddToReply={handedOut ? undefined : addToReply}
+                    // 先存下来再切面板：存失败时不该把人甩到一个什么都没多出来的面板上，
+                    // 只留一句 toast 让他自己猜。几十毫秒的事，换的是「切过去就看得见」。
+                    onAddToMemo={(text) => void (async () => {
+                      try {
+                        await addTaskMemo(task.id, text);
+                        openTab("memos");
+                      } catch (reason) {
+                        notify(reason instanceof Error ? reason.message : String(reason));
+                      }
+                    })()}
+                  >
                   <ConversationFeed
                     task={task}
                     questionHistory={task.questionHistory}

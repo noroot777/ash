@@ -1,8 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { TaskFollowUp, TaskListItem } from "@ash/shared";
+import type { TaskMemoDigest } from "@ash/shared/task-memo";
+import { memoIsNewer } from "@ash/shared/task-memo";
 import { parseAttachmentText } from "@ash/shared/attachments";
-import { Image as ImageIcon } from "@phosphor-icons/react";
+import { Image as ImageIcon, NotePencil } from "@phosphor-icons/react";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import type { SidebarSpread } from "./useSidebarSpread.ts";
@@ -53,6 +55,20 @@ function firstLine(text: string): string {
 
 type Peeked = { title: string; subtitle: string; text: string; paths: string[] };
 
+/**
+ * 追问那一格此刻该显示哪一样（用户 2026-10-28：「哪个的日期新就显示哪个」）。
+ *
+ * 追问的时间可能缺（老会话没写围栏），显示上一直是拿任务的 updatedAt 兜底的，比新旧也用
+ * 同一份兜底——否则一条没时间戳的追问会被任何一条备忘无条件顶掉。
+ */
+function followUpInstant(task: TaskListItem, last: TaskFollowUp | undefined): string | null {
+  return last ? last.at ?? task.updatedAt : null;
+}
+
+function memoWins(task: TaskListItem, last: TaskFollowUp | undefined, memo: TaskMemoDigest | undefined): boolean {
+  return !!memo && memoIsNewer(memo.at, followUpInstant(task, last));
+}
+
 // 这一列只放**我自己**发的话（判据是 shared 的 isUserFollowUp，跟详情页 Inspector
 // 那个「后续追问」列表同一份）：agent 说了什么、系统代发的继续提示，都不进来。
 const NO_FOLLOW_UP = "还没追问过";
@@ -79,6 +95,18 @@ function peekContent(
   };
 }
 
+// 备忘不止一条时在右端标一下：这一格只放得下最新那条，不标的话「还有别的」这件事
+// 只有把鼠标停上去才知道。
+function MemoMark({ count }: { count: number }) {
+  if (count < 2) return null;
+  return (
+    <i className="workspace-spread-clip" aria-label={`共 ${count} 条备忘`}>
+      <NotePencil size={10} weight="bold" aria-hidden="true" />
+      {count}
+    </i>
+  );
+}
+
 function ClipMark({ count }: { count: number }) {
   if (!count) return null;
   return (
@@ -93,8 +121,11 @@ function ClipMark({ count }: { count: number }) {
 // 行高仍然是 34px，上方也不新增任何一行 —— 铺开是「露出右边」，不是「重排」。
 export function SpreadRowCells({ task, ctx, onOpen }: { task: TaskListItem; ctx: SpreadRowContext; onOpen: () => void }) {
   const last = ctx.spread.followUps.get(task.id);
+  const memo = ctx.spread.memos.get(task.id);
   // 没问过后端的行（比如别的项目）只留一个破折号，不能写「还没追问过」——那是在编。
   const known = ctx.spread.loaded.has(task.id);
+  // 存成「要显示的那条备忘」而不是一个布尔：JSX 里直接用它，省掉一次非空断言。
+  const showMemo = memoWins(task, last, memo) ? memo : undefined;
   const { body, paths } = parseAttachmentText(ctx.spread.bodies.get(task.id) ?? "");
   const cell = (kind: PeekKind) => ({
     onClick: onOpen,
@@ -108,11 +139,16 @@ export function SpreadRowCells({ task, ctx, onOpen }: { task: TaskListItem; ctx:
         <ClipMark count={paths.length} />
       </span>
       <span className="workspace-spread-cell workspace-spread-cell--last" {...cell("last")}>
-        {/* 没有列名行，列的含义只能靠内容自己认：这一格开头永远挂着「你说」，
-            对面那一列（原始需求）是更淡的那一列。 */}
-        {last && <em className="workspace-spread-who is-you">你说</em>}
-        <p className={last ? "" : "is-empty"}>{last ? firstLine(last.text) : (known ? NO_FOLLOW_UP : "—")}</p>
-        <ClipMark count={last?.attachments.length ?? 0} />
+        {/* 没有列名行，列的含义只能靠内容自己认：这一格开头挂着一个来源标，
+            「你说」= 我发的追问，「备忘」= 我自己记的那条；对面那一列（原始需求）是更淡的那一列。
+            两样都有时**显示新的那条**，另一样仍在悬浮卡里（用户 2026-10-28）。 */}
+        {showMemo
+          ? <em className="workspace-spread-who is-memo">备忘</em>
+          : last && <em className="workspace-spread-who is-you">你说</em>}
+        {showMemo
+          ? <p>{firstLine(showMemo.text)}</p>
+          : <p className={last ? "" : "is-empty"}>{last ? firstLine(last.text) : (known ? NO_FOLLOW_UP : "—")}</p>}
+        {showMemo ? <MemoMark count={showMemo.count} /> : <ClipMark count={last?.attachments.length ?? 0} />}
       </span>
       <span className="workspace-spread-cell workspace-spread-cell--time" onClick={onOpen}>{compactAge(task.updatedAt)}</span>
     </>
@@ -165,6 +201,7 @@ export function useSpreadPeek(enabled: boolean) {
 export function SpreadPeekCard({
   peek,
   last,
+  memo,
   known,
   body,
   onHold,
@@ -173,6 +210,8 @@ export function SpreadPeekCard({
 }: {
   peek: Peek;
   last: TaskFollowUp | undefined;
+  /** 最近更新的那条备忘；undefined = 这个任务没有备忘（或者这一批没问过）。 */
+  memo: TaskMemoDigest | undefined;
   known: boolean;
   /** 正文；undefined = 还没读到。 */
   body: string | undefined;
@@ -216,6 +255,17 @@ export function SpreadPeekCard({
         <span>{subtitle}</span>
       </div>
       <p>{text}</p>
+      {/* 备忘排在追问**下面**（用户 2026-10-28 指定的位置）：两样都在这一张卡里，谁新
+          只决定外面那一格显示哪条，不决定这里的先后 —— 先后固定，读起来才不会每次都变。 */}
+      {peek.kind === "last" && memo && (
+        <div className="workspace-spread-peek-memo">
+          <div className="workspace-spread-peek-head">
+            <b>备忘</b>
+            <span>{memo.count > 1 ? `共 ${memo.count} 条 · 最近 ${compactAge(memo.at)}` : `只有这一条 · ${compactAge(memo.at)}`}</span>
+          </div>
+          <p>{memo.text}</p>
+        </div>
+      )}
       {paths.length > 0 && (
         <>
           <MessageAttachments paths={paths} />
@@ -239,6 +289,7 @@ export function SpreadPeekLayer({ peek, spread, onHold, onLeave, onDismiss }: {
     <SpreadPeekCard
       peek={peek}
       last={spread.followUps.get(peek.task.id)}
+      memo={spread.memos.get(peek.task.id)}
       known={spread.loaded.has(peek.task.id)}
       body={spread.bodies.get(peek.task.id)}
       onHold={onHold}

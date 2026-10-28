@@ -44,6 +44,7 @@ import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, req
 import { readSettings, writeSettings } from "./settingsSync.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
+import { taskMemoApi } from "./apiTaskMemos.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
 import { fileApi } from "./fileApi.ts";
@@ -677,6 +678,8 @@ export const api = {
   ...llmApi,
   // 预览的「AI 协助」同理，住在 apiPreviewAssist.ts。
   ...previewAssistApi,
+  // 任务备忘同理，住在 apiTaskMemos.ts。
+  ...taskMemoApi,
 
   queue: (queueId: string): Promise<{
     queueId: string;
