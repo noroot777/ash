@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import {
   db, dbClient, hits, now, runs, scenario, schema, settled, taskOf, tasks, until,
@@ -8,7 +9,30 @@ import { requestQueueAdvance } from "../src/queue-advance-retry.js";
 import { occupyResumePrompt } from "../src/task-resume-prompt.js";
 import { setTaskStatus } from "../src/status.js";
 import { makeTask } from "./monitors-fixture.js";
+import { sessionTranscriptPath } from "../src/transcript.js";
 import { id } from "../src/util.js";
+
+async function transcript(taskId: string): Promise<string> {
+  const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.taskId, taskId));
+  return rows.map((row) => {
+    const path = sessionTranscriptPath(taskId, row.id);
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  }).join("\n");
+}
+
+/** 落不下任何持久凭据:推进意图那一笔整条写不进去(库里某几笔写不了,不是整库挂掉)。 */
+function failIntentWrites() {
+  const execute = dbClient.execute;
+  let failures = 0;
+  dbClient.execute = async function (statement) {
+    if (typeof statement !== "string" && /insert into "queue_advance_intents"/i.test(statement.sql)) {
+      failures++;
+      throw new Error("INJECT_ADVANCE_INTENT_WRITE_FAILURE");
+    }
+    return execute.call(dbClient, statement);
+  };
+  return { count: () => failures, restore: () => { dbClient.execute = execute; } };
+}
 
 function failRequestWrites(taskId: string, limit = 1) {
   const transaction = dbClient.transaction;
@@ -212,5 +236,45 @@ export async function checkpointAdvanceFailureCases(): Promise<void> {
     assert.equal(hits("KEEP_NEW_CHECKPOINT_PAUSED"), 0);
     await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
     console.log("PASS: failed stale-request cleanup replays the same identity, not a fresh unscoped queue advance");
+  }
+
+  // 第 1 轮审查 F2:**两笔持久写入一起失败** —— 推进意图落不下去,推进请求也落不下去。
+  // 旧代码两笔都是尽力而为,于是 advanceQueue 正常返回(等于告诉发起者「已接受」),而补办
+  // 责任只剩内存里那个退避闭包;进程一消失就没人记得,而只有队首的队列连「前驱已落终态」
+  // 这条存量兜底都不成立 —— 那条链从此永久停住(跨进程复现:那一轮审查目录的
+  // queue-smoke.mjs)。已经落住意图的那几档由上面的用例钉着,它们反证不了这条路。
+  //
+  // 现在的口径(queue-advance-admission.ts):拿不出可恢复的凭据、这一趟又没当场走完 =
+  // **未接受**。抛给发起者,并在候选任务上留一条持久可见的交代。内存退避照旧登记 ——
+  // 它在同一个进程里还救得回来,只是不许拿它当「已接受」的凭据。
+  {
+    const test = await scenario(0);
+    const queueId = id();
+    await db.insert(schema.queueItems).values({ taskId: test.taskId, queueId, position: 0, createdAt: now() });
+    const intent = failIntentWrites();
+    const fault = failRequestWrites(test.taskId, 1);
+    try {
+      await assert.rejects(advanceQueue(queueId), /队列推进未接受/,
+        "两笔持久写入都没落住时,不许按「已接受推进」正常返回");
+      assert.ok(intent.count() > 0, "这一趟确实试过记下推进意图");
+      assert.equal(fault.count(), 1);
+      assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+        .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "凭据确实一个字都没落住");
+      assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
+      assert.equal(hits(test.checkpoint), 0, "没被接受的推进不许把交代送出去");
+      assert.match(await transcript(test.taskId), /队列推进未接受/,
+        "未接受必须留下持久可见的交代 —— 后台动作没人在等返回值,只打日志对用户等于没发生");
+    } finally {
+      fault.restore();
+      intent.restore();
+    }
+    // 内存退避仍在:同一个进程里数据库恢复可写之后,这次推进自己接着走完。
+    await until("库恢复可写后内存退避把这次推进走完", async () => hits(test.checkpoint) === 1);
+    await settled(test.taskId);
+    assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
+    assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "走完之后不许留着意图");
+    await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
+    console.log("PASS: a queue advance with no durable intent and a failed attempt is refused, not reported as accepted");
   }
 }

@@ -12,7 +12,7 @@ import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQu
 import { clearQueueAdvance, deferQueueAdvance, isQueueAdvanceCanceling, requestQueueAdvance, type QueueAdvanceRequest } from "./queue-advance-retry.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
-import { now } from "./util.js";
+import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
 
 const MAX_PARALLEL = 4;
 let pauseGeneration = 0;
@@ -88,25 +88,50 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
   // **先把「这条队列该推进」这件事落下来,再开始推**。往下走的每一步都可能抛(推进请求那一笔
   // 尤其典型:它写在候选任务那一行上),而抛出去之后补办责任就只剩进程内存里的一个重试闭包 ——
   // 进程一消失,重启后没有任何现场能把它推断回来(见 `queueAdvanceIntents` 的说明)。
-  // 这一笔自己失败时不拦路:记不下就记不下,行为退回改动之前那样,不能让记账本身把推进挡住。
-  await db.insert(queueAdvanceIntents).values({ queueId, acceptedAt: now() }).onConflictDoNothing()
-    .catch((error) => console.error(`[ash] 队列推进意图落库失败 queue=${queueId}:`, error));
-  await retryableQueueAdvance(queueId, { request, pauseGeneration });
+  //
+  // 落不下来时**仍然试这一趟**:库只是某一笔写不进去时,这次推进当场做完就不需要任何人来
+  // 补办。但那一趟的结果此刻就是全部 —— 走不完就**不许按「已接受」收场**:发起者拿到的是
+  // 一次正常返回,而责任只活在这个进程的内存里(第 1 轮审查 F2 跨进程实测:同库两笔持久
+  // 写入一起失败,推进责任彻底蒸发;准入口径见 queue-advance-admission.ts)。
+  const durable = await recordQueueAdvanceIntent(queueId);
+  const attempt: QueueAdvanceAttempt = { request, pauseGeneration };
+  const done = await retryableQueueAdvance(queueId, attempt, durable);
+  if (durable || done.ok) return;
+  // 候选是临界区里挑出来的,挑到了才知道该把这句话写给谁(没挑到就只剩日志与抛出)。
+  throw await refuseQueueAdvance(queueId, attempt.candidate?.taskId ?? null, done.error);
 }
 
-async function retryableQueueAdvance(queueId: string, attempt: QueueAdvanceAttempt): Promise<void> {
+type AdvanceOutcome = { ok: true } | { ok: false; error: unknown };
+
+async function retryableQueueAdvance(
+  queueId: string, attempt: QueueAdvanceAttempt, durable = true,
+): Promise<AdvanceOutcome> {
   try {
     await advanceQueueAttempt(queueId, attempt);
   } catch (error) {
+    // 退避重试照旧登记:它在**同一个进程里**还救得回来,只是不能拿它当「已接受」的凭据
+    // (那正是 F2 的错)。凭据在不在由 durable 说,这里只负责把这一趟的结果如实报上去。
     console.error(`[ash] 队列推进临界区失败 queue=${queueId}，稍后重试:`, error);
-    deferQueueAdvance(queueId, () => retryableQueueAdvance(queueId, attempt));
-    return;
+    deferQueueAdvance(queueId, async () => { await retryableQueueAdvance(queueId, attempt, durable); });
+    return { ok: false, error };
   }
   // 这一趟自己走完了(起了下一位、或者判定此刻没什么可推)。意图到此了结 —— 留着它只会让
   // 下一次重启平白再推一遍。抛出去的那条路**不删**:那正是要活过重启的那一份。
   // 同一条队列上并发的两趟会互相删掉对方的那一行:无妨,删的前提是确实有一趟完整走完了。
-  await db.delete(queueAdvanceIntents).where(eq(queueAdvanceIntents.queueId, queueId))
-    .catch((error) => console.error(`[ash] 队列推进意图清理失败 queue=${queueId}:`, error));
+  if (durable) await clearQueueAdvanceIntent(queueId);
+  return { ok: true };
+}
+
+/**
+ * 后台推一下某条队列(没人等它的返回值)。
+ *
+ * **后台入口一律经过这里**:`advanceQueue` 现在会在「这次推进没被接受」时抛,裸
+ * `void advanceQueue()` 会让它变成 unhandled rejection(Node 默认直接终止进程),而把
+ * `.catch` 散在十来个调用点上迟早漏一个。持久交代由 `refuseQueueAdvance` 写在候选任务上,
+ * 这里只负责别让它静默。
+ */
+export function advanceQueueInBackground(queueId: string): void {
+  void advanceQueue(queueId).catch((error) => console.error(`[ash] 后台队列推进失败 queue=${queueId}:`, error));
 }
 
 async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt): Promise<void> {
