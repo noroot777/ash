@@ -20,17 +20,38 @@
 
 .monitor-wake-input.is-team { padding-left: 42px; }
 .monitor-wake-input.is-team .monitor-wake-message { width: min(660px, 100%); }
-.monitor-wake-meta { display: flex; min-height: 24px; align-items: center; gap: 7px; padding: 12px 16px 0; color: var(--faint); font-size: 10px; }
+/* 折叠态就是这颗 <summary>：身份行 + 一行摘要。展开后它退回成原来那条身份行
+   （摘要让位给正文里的标题），所以同一段标记在两个状态下都成立。 */
+.monitor-wake-head { display: flex; align-items: flex-start; gap: 7px; padding: 12px 16px; list-style: none; cursor: pointer; }
+.monitor-wake-head::-webkit-details-marker { display: none; }
+.monitor-wake-head:hover { background: var(--wake-tint); }
+.monitor-wake-fold[open] > .monitor-wake-head { padding-bottom: 0; }
+.monitor-wake-fold[open] > .monitor-wake-head:hover { background: transparent; }
+.monitor-wake-head-main { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.monitor-wake-meta { display: flex; min-height: 24px; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--faint); font-size: 10px; }
 .monitor-wake-mark { display: grid; width: 24px; height: 24px; flex: none; place-items: center; border-radius: 7px; color: var(--accent); background: var(--wake-tint); }
 .monitor-wake-meta b { color: var(--ink); font-size: 11px; font-weight: 650; }
 .monitor-wake-label { border-radius: 4px; padding: 2px 5px; color: var(--accent); background: var(--wake-tint); font-size: 9px; line-height: 1.4; }
 .monitor-wake-meta time { margin-left: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.monitor-wake-meta button { display: grid; width: 24px; height: 24px; flex: none; place-items: center; margin-left: auto; border: 0; border-radius: 5px; color: var(--faint); background: transparent; cursor: pointer; }
-.monitor-wake-meta time + button { margin-left: 0; }
+.monitor-wake-copy { display: inline-flex; flex: none; margin-left: auto; }
+.monitor-wake-meta time ~ .monitor-wake-copy { margin-left: 0; }
+.monitor-wake-meta button { display: grid; width: 24px; height: 24px; flex: none; place-items: center; border: 0; border-radius: 5px; color: var(--faint); background: transparent; cursor: pointer; }
 .monitor-wake-meta button:hover { color: var(--ink); background: var(--raised); }
 .monitor-wake-meta button.is-copied { color: var(--green); }
 .monitor-wake-meta button.is-copy-failed { color: var(--red); }
-.monitor-wake-meta button:focus-visible, .monitor-wake-raw summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.monitor-wake-meta button:focus-visible, .monitor-wake-head:focus-visible, .monitor-wake-raw summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.monitor-wake-fold-action { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; transition: color 140ms ease; }
+.monitor-wake-head:hover .monitor-wake-fold-action { color: var(--accent); }
+.monitor-wake-fold-action svg { flex: none; transition: transform 140ms ease; }
+.monitor-wake-fold[open] .monitor-wake-fold-action svg { transform: rotate(180deg); }
+.monitor-wake-fold-close { display: none; }
+.monitor-wake-fold[open] .monitor-wake-fold-open { display: none; }
+.monitor-wake-fold[open] .monitor-wake-fold-close { display: inline; }
+.monitor-wake-brief { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; color: var(--muted); font-size: 11.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.monitor-wake-fold[open] .monitor-wake-brief { display: none; }
+/* 「发生了什么」和「哪个哨兵送来的」是两件事，一行里靠深浅分开，别读成一句话。 */
+.monitor-wake-brief-source { color: var(--faint); }
+.monitor-wake-brief-source::before { content: " · "; }
 .monitor-wake-body { padding: 11px 16px 12px; }
 .monitor-wake-body h3 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.6; }
 .monitor-wake-source { display: flex; align-items: baseline; gap: 7px; margin: 5px 0 12px; color: var(--muted); font-size: 10.5px; line-height: 1.65; }
@@ -65,7 +86,11 @@
 
 @media (max-width: 560px) {
   .monitor-wake-input, .monitor-wake-input.is-team { padding-left: 10px; }
-  .monitor-wake-meta { gap: 6px; padding: 10px 12px 0; font-size: 9px; }
+  .monitor-wake-head { gap: 6px; padding: 10px 12px; }
+  .monitor-wake-meta { gap: 6px; font-size: 9px; }
+  .monitor-wake-brief { font-size: 11px; }
+  .monitor-wake-fold-open, .monitor-wake-fold-close { display: none; }
+  .monitor-wake-fold[open] .monitor-wake-fold-close { display: none; }
   .monitor-wake-body { padding: 10px 12px; }
   .monitor-wake-body h3 { font-size: 12px; }
   .monitor-wake-source { gap: 6px; margin-bottom: 10px; font-size: 10px; }
@@ -78,5 +103,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .monitor-wake-expand, .monitor-wake-expand svg { transition: none; }
+  .monitor-wake-expand, .monitor-wake-expand svg,
+  .monitor-wake-fold-action, .monitor-wake-fold-action svg { transition: none; }
 }
