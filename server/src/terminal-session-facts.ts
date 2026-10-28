@@ -47,6 +47,23 @@ export type StopFact =
 /** 一次停止动作**核验之后**的结论(mergeStop 的输入)。`requested` 不在其中:那是动手前落的。 */
 export type StopResolution = Extract<StopFact, { kind: "verified" } | { kind: "unresolved" }>;
 
+/**
+ * 一次**显式放弃**留下的事实。全是「放弃那一刻」的快照 —— 事后再探一遍只会得到一个不断
+ * 变化的现场,而用户按下那颗按钮时看到的就是这一份,交代必须跟他看到的对得上。
+ */
+export type LaunchAbandonment = {
+  at: number;
+  /** 账上此刻还活着的号(核不上归属没敢动的,或者 TERM/KILL 都没停下来的)。 */
+  owedPids: number[];
+  /** 按这次启动的记号还点到名的号 —— 确凿是这次起来的。 */
+  taggedPids: number[];
+  /** 这次启动记下的端口,以及放弃那一刻问出来的归属。 */
+  ports: number[];
+  portState: "ours" | "stranger" | "free" | "unknown" | "unavailable";
+  /** 原样给用户看的那一段残留交代(弹层里显示的就是它)。 */
+  notice: string;
+};
+
 export type TerminalSessionInfo = {
   id: string;
   projectId: string;
@@ -90,6 +107,15 @@ export type TerminalSessionInfo = {
    * 常态,不过滤就会把界面永久钉在「还没停完」。
    */
   stop: StopFact;
+  /**
+   * 用户**显式放弃**了这次启动的管理责任(「我自己处理了」)。非 null = 他已经看过残留事实、
+   * 按过那颗带风险确认的按钮:ash 从此不再把这条记录当「还在跑」,删除保护一并解除。
+   *
+   * **它不是核销。** 这次启动停没停净的结论仍然原样留在 `stop` 账上(`unresolved` 不会被改成
+   * `verified`),这一格另记「放弃那一刻还有什么活着」—— 刷新回来仍看得出「我放过手」以及
+   * 当时的残留,而不是界面上凭空多出一句「已停止」。判据与范围写在 terminal-abandon.ts。
+   */
+  abandoned?: LaunchAbandonment | null;
   /**
    * 这次启动打印的本机端口**超过了记录额度**(MAX_LAUNCH_PORTS),第 9 个起没记下来。
    * 于是「记下的端口全空了」就证明不到「这次起来的东西都停了」—— 自己 setsid 单开一组、

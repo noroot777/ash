@@ -42,8 +42,41 @@ export type TerminalSessionInfo = {
     | { kind: "requested" }
     | { kind: "verified" }
     | { kind: "unresolved"; pids: number[]; complete: boolean; why: string; memberReasons?: Record<string, string>; incompleteReasons?: string[] };
+  /**
+   * 用户**显式放弃**了这次启动的管理责任（「我自己处理了」）。非 null = 他已经看过残留事实、
+   * 按过那颗带风险确认的按钮：ash 不再把这条记录当「还在跑」，删除保护一并解除。
+   *
+   * **它不是核销** —— 停没停净的结论仍原样留在 `stop` 上，这一格另记「放弃那一刻还有什么
+   * 活着」。界面照实说「已放弃管理」，不说「已停止」（判据在 server/src/terminal-abandon.ts）。
+   */
+  abandoned?: LaunchAbandonment | null;
   /** 这次启动打印的本机端口超过了记录额度，多出来的没记下 = 端口这条线索本身不全。 */
   portsTruncated: boolean;
+};
+
+/** 一次显式放弃留下的事实（放弃**那一刻**的快照，不是现在再探一遍的结果）。 */
+export type LaunchAbandonment = {
+  at: number;
+  /** 账上此刻还活着、没能核销的号。 */
+  owedPids: number[];
+  /** 按这次启动的记号还点到名的号 —— 确凿是它起来的。 */
+  taggedPids: number[];
+  ports: number[];
+  portState: "ours" | "stranger" | "free" | "unknown" | "unavailable";
+  /** 原样显示给用户的那一段残留交代。 */
+  notice: string;
+};
+
+/** 放弃前那个弹层要的全部材料：残留事实 + 解除范围 + 它针对的那条会话 id。 */
+export type LaunchResidueView = {
+  sessionId: string;
+  name: string;
+  startedAt: number;
+  residue: LaunchAbandonment;
+  /** 放弃之后 ash **不再做**哪几件事，原样逐条显示 —— 用户按之前就该读到。 */
+  scope: string[];
+  /** 非 null = 已经放弃过，弹层直接显示当时那一份。 */
+  abandoned: LaunchAbandonment | null;
 };
 
 export type TerminalEvent =

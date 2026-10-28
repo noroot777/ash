@@ -185,6 +185,9 @@ export function releaseLaunchPortsSync(sessions: Iterable<TerminalSession>): { k
   let killed = 0;
   for (const session of sessions) {
     if (session.commandId === null) continue;
+    // 用户显式放弃过的这次启动:ash 关服时不再按它的端口和记号去收人,退出交代里也不再提它
+    // (那正是放弃的解除范围里写明的一条,terminal-abandon.ts)。
+    if (session.abandoned) continue;
     if (PORT_TIER_AVAILABLE && session.launchToken && session.launchPorts.size > 0) {
       const swept = stopByPortsSync(session.launchPorts, session.launchToken);
       killed += swept.killed.length;

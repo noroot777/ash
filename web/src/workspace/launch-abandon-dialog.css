@@ -1,0 +1,49 @@
+/* 显式放弃启动管理责任的确认框(workspace/LaunchAbandonDialog.tsx),壳是 task-detail/ConfirmDialog。 */
+.launch-abandon {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 2px 0 4px;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.launch-abandon__error { color: var(--amber); margin: 0; }
+.launch-abandon__loading { color: var(--faint); margin: 0; }
+
+.launch-abandon__notice {
+  margin: 0;
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--control-shadow);
+  padding: 8px 10px;
+  line-height: 1.55;
+}
+
+.launch-abandon__facts,
+.launch-abandon__scope {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.5;
+}
+.launch-abandon__facts { color: var(--faint); font-size: 12px; }
+.launch-abandon__facts li { font-family: var(--font-mono, ui-monospace, Consolas, monospace); }
+
+.launch-abandon__scope-title {
+  margin: 4px 0 0;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.launch-abandon__ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.launch-abandon__ack input { margin-top: 2px; }

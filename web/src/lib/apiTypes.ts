@@ -475,7 +475,9 @@ export type TeamCuaStatus = {
   };
 };
 
-export type { TerminalSessionInfo, TerminalEvent } from "./apiTerminalTypes.ts";
+export type {
+  LaunchAbandonment, LaunchResidueView, TerminalSessionInfo, TerminalEvent,
+} from "./apiTerminalTypes.ts";
 
 export type ReplyTaskResult =
   | { started: true }

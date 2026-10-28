@@ -59,6 +59,8 @@ import type {
   FreeWorkflowApiState,
   GitOverview,
   HostInfo,
+  LaunchAbandonment,
+  LaunchResidueView,
   ProjectGitConfig,
   ProjectGitConfigPatch,
   ProjectGitResult,
@@ -211,6 +213,15 @@ export const api = {
     request(`/projects/${id(projectId)}/commands/${id(commandId)}/stop`, json("POST", {})),
   restartProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo; notice?: string }> =>
     request(`/projects/${id(projectId)}/commands/${id(commandId)}/restart`, json("POST", { values })),
+  // 「我自己处理了」那个显式出口。residue 是**只读**的(点开看看不改任何状态);abandon 必须
+  // 带上刚看过的那条 sessionId —— 期间又起了一份就回 409,不许拿旧弹层上的「是」放过新的启动
+  // (server/src/terminal-abandon.ts 文件头)。
+  launchResidue: (projectId: string, commandId: string): Promise<LaunchResidueView> =>
+    request(`/projects/${id(projectId)}/commands/${id(commandId)}/residue`),
+  abandonLaunch: (projectId: string, commandId: string, sessionId: string): Promise<{
+    abandoned: LaunchAbandonment; alreadyAbandoned?: boolean;
+  }> =>
+    request(`/projects/${id(projectId)}/commands/${id(commandId)}/abandon`, json("POST", { sessionId })),
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     request("/projects/check", json("POST", { repoPath })),
   discardTaskWorkspace: (

@@ -39,6 +39,7 @@ import { db } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import { instanceAdminOnly } from "./auth/context.js";
 import { launchSurvivors } from "./terminal-launch-survivors.js";
+import { mountLaunchAbandonRoutes } from "./terminal-abandon.js";
 import {
   leftoverNotice,
   membersNotice,
@@ -184,6 +185,10 @@ async function openSession(
 ): Promise<TerminalSessionInfo | null> {
   const session = latestSession(projectId, commandId);
   if (!session) return null;
+  // 用户已经显式接手了这次启动的管理责任:这条记录从此只是历史,幂等门不许再拿它顶回
+  // 启动请求,停止也不许再拿它当「有东西可停」(terminal-abandon.ts 文件头)。放在最前面
+  // —— 下面每一档都可能回「还开着」,而放弃的全部用途就是解除那几档造成的死局。
+  if (session.abandoned) return null;
   if (session.groupAlive || session.portsAlive) return session;
   // 缓存的 portsAlive 是按拍刷的(terminal-session-watch.ts),这几个动作都是用户点出来的、
   // 等得起一次 lsof:**现问一遍**它打印过的端口。不现问就会出现「刚启动完、扫描还没跑到,
@@ -595,6 +600,10 @@ export function mountProjectCommandRoutes(api: Hono): void {  api.use("/projects
     const result = await restartCommand(projectId, target.cwd, target.command, values.values);
     return c.json(result.body, result.status);
   });
+
+  // 「我自己处理了」那个显式出口(看残留 + 签字放弃):实现与判据在 terminal-abandon.ts。
+  // 挂在这里是为了共用上面那条 instanceAdminOnly 中间件 —— 解除删除保护是管理动作。
+  mountLaunchAbandonRoutes(api);
 
   // 全局汇总(所有项目的命令会话,含刚退出还没回收的):状态栏「运行中 N」和它的弹层
   // 都吃这一个端点 —— 任务模式(G T)下没有锚定项目,徽标必须是跨项目的总数才不撒谎。

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowsClockwise, CircleNotch, Play, Scroll, Square } from "@phosphor-icons/react";
+import { ArrowsClockwise, CircleNotch, HandPalm, Play, Scroll, Square } from "@phosphor-icons/react";
 import type { ProjectView } from "@ash/shared";
 import { parseCommandPlaceholders, SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import { api, type TerminalSessionInfo } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { CommandArgsDialog } from "./CommandArgsDialog.tsx";
+import { LaunchAbandonDialog } from "./LaunchAbandonDialog.tsx";
 import { COMMANDS_SHORTCUT_LABEL } from "./goChord.ts";
 
 // 常用命令的启动入口:侧栏顶行、项目名和分支胶囊右边那颗 ▶。点开是项目级「运行现场」——
@@ -75,6 +76,19 @@ const leftoversOf = (session: TerminalSessionInfo): number[] =>
 const sessionRunning = (session: TerminalSessionInfo): boolean =>
   session.running ?? (session.groupAlive || session.portsAlive || session.portUncertain === true || leftoversOf(session).length > 0);
 
+/**
+ * 这条启动**卡死在 ash 管不动的状态**上了吗 —— 那颗「我自己处理了」要不要出现看它。
+ *
+ * 两种形状:① 端口归属核不上(`portUncertain`):启动认为它还开着、停止永远 502、删项目也
+ * 被它拦下,而 ash 手里压根没有能动它的凭据;② 上次停止没能确认停净(`unresolved`):账上
+ * 挂着的号同样永远核销不掉。两种都是**悲观判据的终点**,拦着也多停不掉一个进程 ——
+ * 必须配一个用户够得着的出口(server/src/terminal-abandon.ts 文件头)。
+ *
+ * 放弃过的不再显示入口:那时状态文案已经在说「已放弃管理」,点日志还能回看当时那份残留。
+ */
+const needsHandoff = (session: TerminalSessionInfo): boolean =>
+  !session.abandoned && (session.portUncertain === true || session.stop.kind === "unresolved");
+
 // 同一条命令可能挂着「一条活会话」或「一条刚退出的」——一处只说一件事,活的优先。
 function bestSession(sessions: TerminalSessionInfo[], projectId: string, commandId: string): TerminalSessionInfo | null {
   const mine = sessions.filter((s) => s.projectId === projectId && s.commandId === commandId);
@@ -105,6 +119,12 @@ function sessionState(
   open = false,
   service = false,
 ): { tone: string; text: string | null } {
+  // 用户显式放弃过:**不说「已停止」**(那是谎报 —— 放弃不杀进程),照实说「我放过手了」。
+  // 这一档排在最前面:放弃之后服务端的 running 已经是 false,但这条记录的 stop 账原样留着,
+  // 落到下面就会被说成「已停止（没能确认停净）」,把用户自己的决定讲成了 ash 的结论。
+  if (session?.abandoned) {
+    return { tone: "off", text: `已放弃管理（${session.abandoned.notice.includes("探不到任何残留") ? "当时无残留" : "残留自理"}）` };
+  }
   if (session && sessionRunning(session)) {
     if (session.portUncertain) return { tone: "err", text: "运行状态待确认（端口归属未核实）" };
     // 监听已经让出来了、只剩几个没能收掉的号:既不是「运行中」也不是「已停止」,照实说第三种
@@ -175,6 +195,8 @@ export function CommandsLauncher({
     action: "start" | "restart";
     script: string;
   } | null>(null);
+  /** 开着的「我自己处理了」确认框打在哪条命令上。 */
+  const [handoff, setHandoff] = useState<CommandTarget | null>(null);
   const root = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   // 挂载时把当前信号记成基准:只有**挂载之后**再按的 G C 才算数。
@@ -341,6 +363,14 @@ export function CommandsLauncher({
                         onClick={() => serviceTarget && serviceConfig && requestRun(serviceTarget, "start", serviceConfig.command)}
                       ><Play size={14} /></button>
                     )}
+                    {serviceSession && needsHandoff(serviceSession) && serviceTarget && (
+                      <button
+                        type="button"
+                        className="cmd-pop__svc-btn is-stop"
+                        aria-label="这次启动 ash 停不掉也删不掉：我自己处理，放弃管理责任"
+                        onClick={() => setHandoff(serviceTarget)}
+                      ><HandPalm size={13} /></button>
+                    )}
                     <button
                       type="button"
                       className="cmd-pop__svc-btn"
@@ -380,11 +410,17 @@ export function CommandsLauncher({
                             <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(running); }} aria-label={`查看 ${row.name} 日志`}><Scroll size={13} />日志</button>
                             <button type="button" onClick={() => requestRun(row, "restart", row.command)} aria-label={`重启 ${row.name}`}><ArrowsClockwise size={13} />重启</button>
                             <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>
+                            {needsHandoff(running) && (
+                              <button type="button" onClick={() => setHandoff(row)} aria-label={`${row.name} ash 停不掉也删不掉：我自己处理`}><HandPalm size={13} />我自己处理…</button>
+                            )}
                           </>
                         ) : (
                           <>
                             {row.session && <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(row.session!); }} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
                             <button type="button" className="is-primary" onClick={() => requestRun(row, "start", row.command)} aria-label={`执行 ${row.name}`}><Play size={12} weight="fill" />执行</button>
+                            {row.session && needsHandoff(row.session) && (
+                              <button type="button" onClick={() => setHandoff(row)} aria-label={`${row.name} 上次停止没能确认停净：我自己处理`}><HandPalm size={13} />我自己处理…</button>
+                            )}
                           </>
                         )}
                       </div>
@@ -403,6 +439,16 @@ export function CommandsLauncher({
             </div>
           )}
         </div>
+      )}
+
+      {handoff && (
+        <LaunchAbandonDialog
+          projectId={handoff.projectId}
+          commandId={handoff.commandId}
+          notify={notify}
+          onDone={refresh}
+          onClose={() => setHandoff(null)}
+        />
       )}
 
       {pendingRun && (
