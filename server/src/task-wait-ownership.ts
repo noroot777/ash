@@ -7,7 +7,7 @@ import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { activeReviewScope, reviewIdentityMatches, reviewTargetIdentity, ReviewSuperseded } from "./review-ownership.js";
 import { resumePromptVoidPatch } from "./task-resume-prompt.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
-import { isTurnClaimed } from "./runs.js";
+import { isTurnClaimed, turnIdentity } from "./runs.js";
 import { now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -32,6 +32,8 @@ export async function captureTaskWait(transaction: ConclusionTransaction, owner:
   if (!ownership.question && owner.question) ownership.question = {
     occupancy: randomUUID(), origin, text: owner.question, options: owner.questionOptions, items: owner.questionItems,
   };
+  // 这里是**补记**一格早已挂着的等待(回合开始时照一张相),写它的那个回合早过去了 ——
+  // 所以 `writer` 一律留空(= 不知道是谁写的),不许拿当下这个回合冒充。
   if (!ownership.checkpoint) ownership.checkpoint = { generation: owner.resumePromptGeneration, origin };
   await transaction.update(tasks).set({ waitOwnership: ownership }).where(eq(tasks.id, owner.id));
   return ownership;
@@ -74,8 +76,37 @@ export async function recordTaskWait(transaction: ConclusionTransaction, owner: 
   if (field === "question" && owner.question) ownership.question = {
     occupancy: randomUUID(), origin, text: owner.question, options: owner.questionOptions, items: owner.questionItems,
   };
-  if (field === "checkpoint") ownership.checkpoint = { generation: owner.resumePromptGeneration, origin };
+  if (field === "checkpoint") ownership.checkpoint = {
+    generation: owner.resumePromptGeneration, origin, writer: checkpointWriter(owner.id),
+  };
   await transaction.update(tasks).set({ waitOwnership: ownership }).where(eq(tasks.id, owner.id));
+}
+
+/** 此刻占着这个任务回合的是谁。没人占着(不在回合里写的)= 不知道。 */
+function checkpointWriter(taskId: string): NonNullable<TaskWaitOwnership["checkpoint"]>["writer"] {
+  const identity = turnIdentity(taskId);
+  return identity ? { role: identity.role, review: identity.review } : undefined;
+}
+
+/**
+ * 系统代写的那一格(`resumePromptAuto`)是**这一轮审查自己**挂下的吗。
+ *
+ * 为什么要这一问:`beginTerminalLanding` 名下还有没了结的哨兵时会替**当前这一轮**自动写一格
+ * 检查点,而它对回合身份一视同仁 —— 执行者那一轮会写,审查旁路那一轮也会写。早先这里拿
+ * 「是不是系统代写的」当「是不是执行者的」用,于是审查自己还在等构建结果、却被判成「没有人
+ * 在等」:round 以 `status:"error"`、`conclusion:null` 提前结账(自由审查实测复现)。
+ *
+ * 真正分得开的是**哪个回合写的**:审查旁路回合的 role 是 `reviewer`,而且绑着它那一轮的
+ * run/round。不知道是谁写的(旧行、或者写入时没占着回合)一律按「不是这一轮的」算 ——
+ * 两处调用点上这都是保守方向:不挡审查交卷,也不作废别人的等待。
+ */
+export function reviewOwnsAutoCheckpoint(checkpoint: TaskWaitOwnership["checkpoint"],
+  state: EvidenceRow): boolean {
+  const writer = checkpoint?.writer;
+  if (writer?.role !== "reviewer") return false;
+  // 没绑轮次 = 就地验证那种旁路回合(一个任务同时只有一轮),绑了就得对上这一轮。
+  return !writer.review
+    || freeReviewEvidenceDir(state.taskId, writer.review.run, writer.review.round) === state.directory;
 }
 
 const belongsTo = (origin: WaitOrigin | undefined, state: EvidenceRow) => origin && origin.kind !== "ordinary"
@@ -91,11 +122,13 @@ export async function expireTaskWait(transaction: ConclusionTransaction, owner: 
   const question = current.waitOwnership?.question;
   const clearQuestion = belongsTo(question?.origin, state) && questionWaitMatches(current, question);
   const checkpoint = current.waitOwnership?.checkpoint;
-  // 系统替任务自己写的那一格(resumePromptAuto:名下还有没了结的哨兵)**不是审查的遗留**,
-  // 一轮审查结束不许把它作废 —— 作废了这个任务就再也不会被哨兵结果叫醒,而那条等待跟审查
-  // 没有半点关系。审查自己挂的检查点走 pause_task(auto=false),照旧在这里收口。判据与
-  // review-continuation.ts 的 ownsWait 那一侧同源。
-  const clearCheckpoint = !current.resumePromptAuto && belongsTo(checkpoint?.origin, state)
+  // 系统替任务自己写的那一格(resumePromptAuto:名下还有没了结的哨兵)**多半不是审查的遗留**,
+  // 一轮审查结束不许把它作废 —— 作废了这个任务就再也不会被哨兵结果叫醒。但「是不是系统代写
+  // 的」答不了「是不是这一轮审查的」:审查旁路回合自己也会被代写这么一格。所以这一档按
+  // **哪个回合写的**判(reviewOwnsAutoCheckpoint),非 auto 的那种本来就没这层歧义,照旧只看
+  // 归属。判据与 review-continuation.ts 那一侧同源。
+  const clearCheckpoint = (!current.resumePromptAuto || reviewOwnsAutoCheckpoint(checkpoint, state))
+    && belongsTo(checkpoint?.origin, state)
     && checkpoint?.generation === current.resumePromptGeneration;
   return expireFields(transaction, current, !!clearQuestion, !!clearCheckpoint);
 }

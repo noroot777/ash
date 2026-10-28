@@ -56,6 +56,9 @@ try {
     checkpointDuringReview?: string;
     /** 审查**自己**以 pause_task 收尾挂下的那一段(auto=false):这一份才是「审查在等续跑」。 */
     reviewerPause?: string;
+    /** 审查**自己**那一轮被系统代写的检查点(auto=true,名下还有没了结的哨兵)。它跟上一条
+     *  一样是「审查在等续跑」—— 区别只在落笔的是系统还是 agent 自己。 */
+    reviewerAutoCheckpoint?: string;
   } = {}) {
     const role = options.role ?? "single";
     await createTasks([{
@@ -118,12 +121,26 @@ try {
     }
     // 执行者在审查窗口里挂检查点:走生产 writer,连带的 recordReviewWait 原样发生
     // (它会把审查的 continuation 相位按「有人在等」翻成 waiting —— D6 的现场就是这一下)。
+    //
+    // **必须按执行者那一轮的身份落笔**:这一格的归属按「哪个回合写的」记账
+    // (task-wait-ownership.ts 的 reviewOwnsAutoCheckpoint),拿审查的占位去写执行者的那一格,
+    // 这条用例测的就不再是它要测的那件事了。真实时序本来也是这样:执行者那一轮先结算,审查
+    // 回合之后才起跑。
     if (options.checkpointDuringReview) {
+      releaseTurn(id);
+      assert.equal(claimTurn(id, "single"), true);
       assert.equal(await writeResumePrompt(id, options.checkpointDuringReview, true), true);
+      releaseTurn(id);
+      assert.equal(claimTurn(id, role), true);
     }
-    // 审查自己 pause_task 收尾:同一格、同一个 writer,只差 auto —— 结算必须按这一位分开待遇。
+    // 审查自己 pause_task 收尾:同一格、同一个回合,只差 auto —— 两种都是「审查在等续跑」。
     if (options.reviewerPause) {
       assert.equal(await writeResumePrompt(id, options.reviewerPause, false), true);
+    }
+    // 审查自己那一轮被系统代写的检查点(哨兵还在盯着):落笔的回合就是这一轮审查,所以它
+    // 同样算「审查在等续跑」—— 拿 auto 当「执行者的」用,审查就会被提前记成异常结束。
+    if (options.reviewerAutoCheckpoint) {
+      assert.equal(await writeResumePrompt(id, options.reviewerAutoCheckpoint, true), true);
     }
     if (options.confirmed === "persisted") {
       await db.update(tasks).set({ completeConfirmedAt: at }).where(eq(tasks.id, id));
@@ -323,6 +340,23 @@ try {
   assert.equal(pausedReview.state.reviews[0]?.status, "reviewing");
   assert.equal(pausedReview.task.resumePrompt, "继续:把第 3 条意见核完再交卷");
 
+  // 同一个反面,只差**落笔的是系统**:审查挂了哨兵等后台构建,交卷之前这一轮被
+  // `beginTerminalLanding` 代写成检查点暂停(auto=true)。拿 auto 当「执行者的」用时,结算读成
+  // 「没有人在等」,round 以 status:"error"、conclusion:null 提前结账,而构建结果还没回来 ——
+  // 第 2 轮自由审查 F3 用真实 beginTerminalLanding + handleFreeWorkflowSettlement 实测复现。
+  // 归属按**哪个回合写的**判之后,这一份照旧挡得住。
+  const autoPausedReview = await runTurn("review-auto-checkpoint-no-conclusion", {
+    followUp: true, role: "reviewer", reserve: false, reviewConclusion: null,
+    reviewerAutoCheckpoint: "继续:哨兵把构建结果送来之后再交卷",
+  });
+  assert.equal(autoPausedReview.task.resumePromptAuto, true, "这一格确实是系统代写的");
+  assert.equal(autoPausedReview.state.reviews[0]?.rounds[0]?.status, "reviewing",
+    "审查自己那一轮的等待不许被提前结算 —— 构建结果还没回来");
+  assert.equal(autoPausedReview.state.reviews[0]?.rounds[0]?.conclusion, null);
+  assert.equal(autoPausedReview.state.reviews[0]?.status, "reviewing");
+  assert.equal(autoPausedReview.task.resumePrompt, "继续:哨兵把构建结果送来之后再交卷",
+    "它自己那一格也不许被这一轮结算作废掉");
+
   // ── 运行时自愈:conclusion 已写、round 挂 reviewing、reviewer 回合早死(D6 ②)──
   // 现场的 owner 一直 running:哨兵结果把执行者叫醒去跑**实现回合**。旧判据按「任务忙」一路
   // 跳过,于是只有重启那一次对账能救,链挂了一整天。判据改成读**回合身份**:在跑的不是
@@ -345,8 +379,9 @@ try {
       id: `${runId}-round`, runId, round: 1, status: "reviewing", conclusion: "verify_failed", startedAt: at,
     });
     await evidenceState(id, freeReviewEvidenceDir(id, runId, 1), (await db.select().from(tasks).where(eq(tasks.id, id)))[0]!);
-    // 执行者那一格是在审查窗口里写下的(系统代写,auto=true),归属推断正是在这里把它记到审查头上。
-    assert.equal(claimTurn(id, "reviewer", { run: runId, round: 1 }), true);
+    // 执行者那一格是在审查窗口里写下的(系统代写,auto=true),归属推断正是在这里把它记到审查
+    // 头上 —— 但落笔的回合是**执行者**那一轮,所以这一格不归这一轮审查管。
+    assert.equal(claimTurn(id, "single"), true);
     assert.equal(await writeResumePrompt(id, "继续:收哨兵结果再往下做", true), true);
     releaseTurn(id);
     return runId;

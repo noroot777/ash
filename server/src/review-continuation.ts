@@ -8,7 +8,8 @@ import { isTurnClaimed, type TurnSource } from "./runs.js";
 import { activeReviewEvidence, assertReviewAuthority, reviewDeliveryAuthority, reviewIdentityMatches, ReviewSuperseded,
   reviewTargetIdentity, type ReviewDelivery } from "./review-ownership.js";
 import { recordReviewWait, reviewWaitAuthorized, reviewWaitAtTurnStart, snapshotReviewWait } from "./review-wait.js";
-import { questionWaitMatches, questionWaitOrigin, reviewWaitOrigin, startTaskWaitTurn } from "./task-wait-ownership.js";
+import { questionWaitMatches, questionWaitOrigin, reviewOwnsAutoCheckpoint, reviewWaitOrigin,
+  startTaskWaitTurn } from "./task-wait-ownership.js";
 import { rememberGuardedStart, clearGuardedStart } from "./guarded-turn-start.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { now } from "./util.js";
@@ -28,12 +29,20 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
     origin?.kind === "review" && origin.directory === state.directory && origin.generation === state.generation;
   const question = owner.question && questionWaitMatches(owner) && ownsWait(owner.waitOwnership?.question?.origin);
   // `resumePromptAuto` = 这一格是**系统替任务自己写的**(task-complete.ts 的 landCheckpoint:
-  // 名下还有没了结的哨兵,这一轮只能按暂停收尾)。它是实现侧的记账,不是任何一轮审查的等待
-  // —— 可它偏偏常常写在审查窗口里,于是归属推断(task-wait-ownership.ts 的 writerOrigin 那会儿
-  // 读到的活回合身份已经是审查的)把它记到了审查头上。审查**自己**挂的检查点一律走 pause_task
-  // (auto=false),所以这一条分得开:auto 的那种不算审查在等,也不许在结算时被当成审查的遗留
-  // 作废掉(expireTaskWait 同一条判据)。
-  const checkpoint = owner.resumePrompt && !owner.resumePromptAuto
+  // 名下还有没了结的哨兵,这一轮只能按暂停收尾)。它常常写在审查窗口里,而归属推断
+  // (task-wait-ownership.ts 的 writerOrigin)会把它记到审查头上,所以 `origin` 这一问单独
+  // 不够用。
+  //
+  // 但「是不是系统代写的」**答不了**「是不是执行者的」—— 那道闸对回合身份一视同仁,审查旁路
+  // 回合自己也会被代写这么一格。早先拿 auto 当执行者的同义词,于是审查还在等后台构建、系统
+  // 也已经把这一轮改成检查点暂停,结算却读成「没有人在等」,round 以 status:"error"、
+  // conclusion:null 提前结账(自由审查实测复现)。
+  //
+  // 判据改成**哪个回合写的**(reviewOwnsAutoCheckpoint:写它的回合 role 是 reviewer、而且绑的
+  // 正是这一轮):执行者遗留的那一格照旧不挡审查交卷,审查自己还没交卷的等待照旧挡得住。
+  // 非 auto 的那种本来就没这层歧义(真人/agent 自己挂的),只看归属。expireTaskWait 同源。
+  const checkpoint = owner.resumePrompt
+    && (!owner.resumePromptAuto || reviewOwnsAutoCheckpoint(owner.waitOwnership?.checkpoint, state))
     && owner.waitOwnership?.checkpoint?.generation === owner.resumePromptGeneration
     && ownsWait(owner.waitOwnership.checkpoint.origin);
   // 「owner 还挂着东西在等」只能挡住**还没交卷**的那一轮。
