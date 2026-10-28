@@ -1,14 +1,14 @@
 import { and, desc, eq, or } from "drizzle-orm";
-import { existsSync } from "node:fs";
 import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
 import { readGateLaunch } from "./accept-gate-launch.js";
 import { ACCEPT_GATE_DIAGNOSIS_GENERATION, normalizeAcceptGateCommand, normalizeAcceptGateFailure, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
+import { gateLogReadable } from "./accept-gate-diagnosis.js";
 import { acceptGateLogTail } from "./accept-gate-process.js";
 import { commitAt } from "./task-branch-plan.js";
 import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
-import { gateSourceMatches, readGateSource } from "./accept-gate-source.js";
+import { gateSnapshotPath, gateSourceMatches, readGateSource } from "./accept-gate-source.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -59,12 +59,13 @@ export function gateView(row: GateRow): AcceptGateView {
     fastForward: row.fastForward ?? null,
     stale: false,
     logPath: row.logPath,
-    logAvailable: existsSync(row.logPath),
+    logAvailable: gateLogReadable(row.logPath),
     logTail: acceptGateLogTail(row.logPath),
     handoff: row.handoffAt ? { at: row.handoffAt, error: row.handoffError ?? null } : null,
     processPending: row.processPending,
   };
 }
+
 
 export async function latestRun(taskId: string): Promise<GateRow | null> {
   return (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.taskId, taskId))
@@ -136,7 +137,8 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
     : project ? await gateHead(task, project.repoPath) : null;
   const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
   let sourceError: string | null = null;
-  const source = cwd && !unavailable ? await readGateSource(cwd).catch(error => { sourceError = String(error); return null; }) : null;
+  const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity"))
+    .catch(error => { sourceError = String(error); return null; }) : null;
   const stale = latestRow.command !== command || (frozen ? !head || head !== latestRow.sourceCommit
     : !gateSourceMatches(latestRow, source));
   return { command, running: null, latest: { ...view, stale }, basis, unavailable, sourceError, executionNotice };

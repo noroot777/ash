@@ -9,7 +9,7 @@ import type { HandoffAudit, TaskHandoff } from "./handoff.ts";
 export type { Session, SessionNotice, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
-export type { ContextUsage, TokenUsage } from "./usage.ts";
+export type { ContextUsage, TokenUsage, UsageAccountingMark } from "./usage.ts";
 export type {
   ReviewConclusion,
   ReviewDispatchInput,

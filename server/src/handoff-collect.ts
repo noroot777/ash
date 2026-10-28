@@ -9,6 +9,7 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
 import type { sessions, tasks } from "./db/schema.js";
+import { isGateLogFile } from "./accept-gate-diagnosis.js";
 import { execFileText } from "./exec.js";
 import { expandHome, isGitRepo, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -147,7 +148,9 @@ async function enumerateRunArtifacts(taskId: string, notes: string[]): Promise<{
   const out: { abs: string; rel: string }[] = [];
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith("accept-gate-") && !/^accept-gate-[A-Za-z0-9_-]+\.log$/.test(entry.name)) continue;
+      // 门禁那一摊只放行「一份日志」的那组文件（原始输出 + .notes/.scene 诊断附件）,
+      // 控制文件和保留快照一律留在本机 —— 判据在 accept-gate-diagnosis.ts 一处。
+      if (entry.name.startsWith("accept-gate-") && !isGateLogFile(entry.name)) continue;
       const abs = join(dir, entry.name);
       if (entry.isDirectory()) { await walk(abs); continue; }
       if (!entry.isFile()) continue;

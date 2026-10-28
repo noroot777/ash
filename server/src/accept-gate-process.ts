@@ -9,6 +9,7 @@ import { RUNS_DIR } from "./paths.js";
 import { inspectProcessSync, isPidAlive, IS_MAC, userShellLaunch } from "./platform.js";
 import { assertGateConfinementAvailable, gateSupervisorBootstrap } from "./accept-gate-confinement.js";
 import { MAC_GATE_ENV, macGateToken } from "./accept-gate-confinement-macos.js";
+import { gateDiagnosisFull, gateDiagnosisTail } from "./accept-gate-diagnosis.js";
 import { gateBootstrapEnvironment } from "./accept-gate-process-env.js";
 import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, gateConfinement,
   gateGoPath, gateLaunchOf, gateLaunchPath, migrateGateLaunch, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
@@ -184,13 +185,16 @@ async function untilEmpty(empty: () => boolean, within: number): Promise<boolean
 }
 
 /**
- * ash 自己写进门禁日志的**每一行**都要带上 `[ash] ` 标记。
+ * 把 ash 自己写的一段文本**逐行**打上 `[ash] ` 标记。
  *
- * 为什么非得逐行（第 8 轮审查 F1 之后被回归抓到的真 bug）：归类那一层的第三件必要条件是
- * 「整份日志里除了 ash 的注记和 runner 自己的报错，没有别的程序写过东西」。可 ash 的注记
- * 本身就有多行的 —— 结算时会把归类结论整段追加进去，`String(error)` 还会带着堆栈。只给
- * 第一行打标记，结论的后续几行就会被**自己**当成「别的程序写的」，于是同一份日志重新归类
- * （回流、重新交接都会）就从「它一行都没跑到」退成「只敢报观察」。
+ * 不塞进 appendGateLog 里统一做（合并 main 时的决定）：main 那一侧往日志里内联「被收掉时
+ * 的现场」走的是同一个函数，而现场要的就是原貌，替它加前缀等于改证据。所以这件事只由
+ * **归类那一层自己写结论时**调用。
+ *
+ * 为什么归类那段非得逐行（第 8 轮审查 F1 之后被回归抓到的真 bug）：归类的第三件必要条件是
+ * 「整份日志里除了 ash 的注记和 runner 自己的报错，没有别的程序写过东西」。可结论本身就是
+ * 多行的（`String(error)` 还会带堆栈）。只给第一行打标记，后面几行就会被**自己**当成「别的
+ * 程序写的」，于是同一份日志再归类一次就从「核到那个名字不在」退成「只敢报观察」。
  */
 export function stampAshNote(text: string): string {
   return text.split("\n")
@@ -198,11 +202,13 @@ export function stampAshNote(text: string): string {
     .join("\n");
 }
 
-export function appendGateLog(logPath: string, text: string): void {
+/** 往门禁日志追加一段。返回**有没有真写进去** —— 调用方要据此记账时不能想当然。 */
+export function appendGateLog(logPath: string, text: string): boolean {
   try {
     mkdirSync(dirname(logPath), { recursive: true });
-    appendFileSync(logPath, stampAshNote(text), "utf8");
-  } catch { /* 日志写不进去不该让门禁本身失败 */ }
+    appendFileSync(logPath, text, "utf8");
+    return true;
+  } catch { return false; /* 日志写不进去不该让门禁本身失败 */ }
 }
 
 /**
@@ -210,7 +216,13 @@ export function appendGateLog(logPath: string, text: string): void {
  * 一次验收检查要回这份数据，整份读进内存会把 ash 顶爆。
  */
 export function acceptGateLogTail(logPath: string, bytes = ACCEPT_GATE_TAIL_BYTES): string {
-  return readTail(logPath, bytes).text;
+  // 这份文件里只有命令自己的输出，ash 的进度和现场住在旁边（accept-gate-diagnosis.ts）。
+  // 它们**不跟原始输出抢位置**：先把那一段留出来，剩下的才给日志尾巴 —— 没能停下来的
+  // 进程继续写也挤不掉已经存好的现场（第 2 轮审查 R2-F2）。
+  const extra = gateDiagnosisTail(logPath);
+  if (!extra) return readTail(logPath, bytes).text;
+  const room = Math.max(400, bytes - Buffer.byteLength(extra));
+  return `${readTail(logPath, room).text}\n${extra}`;
 }
 
 /**
@@ -234,10 +246,11 @@ export function acceptGateLogHead(logPath: string, bytes: number): string {
  * 几十 MB 的回归输出会把两边都拖垮，而用户要看的永远是尾巴。截了就在开头说破。
  */
 export function acceptGateLogText(logPath: string): string {
+  const suffix = gateDiagnosisFull(logPath);
   const { text, skipped } = readTail(logPath, ACCEPT_GATE_LOG_MAX_BYTES);
-  if (!skipped) return text;
+  if (!skipped) return `${text}${suffix}`;
   return `[ash] 这份日志有 ${Math.round((skipped + Buffer.byteLength(text)) / 1_000_000 * 10) / 10} MB，这里只给最后 `
-    + `${Math.round(ACCEPT_GATE_LOG_MAX_BYTES / 1000)} KB。完整文件在 ${logPath}\n\n${text}`;
+    + `${Math.round(ACCEPT_GATE_LOG_MAX_BYTES / 1000)} KB。完整文件在 ${logPath}\n\n${text}${suffix}`;
 }
 
 /** 日志尾部若干字节。`skipped` = 前面被略过了多少，0 表示这就是全文。 */

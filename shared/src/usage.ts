@@ -22,6 +22,25 @@ export interface TokenUsage {
   turns: number;
 }
 
+/**
+ * 一条 usage 事件的数字**是怎么来的**。判口径只许读这个标记,不许看数值形状 ——
+ * 「整串不下降就是累计」这种形状判据会骗人:同一串历史,续聊一轮就能改变判定结果
+ * (审查实测:第 2 个气泡从正确的 81.9 万弹回 1726 万)。
+ *
+ * - **缺省**:标记出现之前落盘的旧 trace。codex 的旧账是线程累计快照(读侧要先求差),
+ *   claude 的旧账是「那一次进程内的用量」。
+ * - `incremental`:执行器报的本来就是单轮值,原样入账。**claude 2026-09-28 口径修正
+ *   之前的旧 trace 也全都标着这个**(当时的代码认为 claude 本来就是增量,归一是空操作),
+ *   所以它只能说明「不是 codex 那种没标记的旧累计」,不足以证明「已按累计口径结算过」。
+ * - `delta`:累计口径下**有可用基线**时的入账值。正常是跟上一份线程快照求差的结果;
+ *   计数器重置(值变小)和「待建基线那一轮记 0」也归这里 —— 共同点是运行期已经按累计
+ *   口径结算过,这一份就是账上该记的那一份,谁都不该再动它。
+ * - `snapshot`:累计口径但**当时没有基线**,入账值等于这条线程此刻的**整份累计值**。
+ *   新线程第一轮本该如此;但若这条线程在口径修正之前就有历史,它就是把整条线程又记了
+ *   一遍 —— 历史回填凭这个标记(而不是凭数值大小)把它改回真实增量。
+ */
+export type UsageAccountingMark = "incremental" | "delta" | "snapshot";
+
 export const EMPTY_USAGE: Readonly<TokenUsage> = Object.freeze({
   input: 0,
   output: 0,
@@ -72,6 +91,11 @@ export function isTokenUsage(value: unknown): value is TokenUsage {
   if (!["input", "output", "cacheRead", "cacheWrite", "reasoning", "turns"].every(counted)) return false;
   return usage.costUsd === null
     || (typeof usage.costUsd === "number" && Number.isFinite(usage.costUsd) && usage.costUsd >= 0);
+}
+
+/** 认不出的 accounting 值一律按坏行丢掉 —— 判别联合加一支,这里就得跟着加一支。 */
+export function isUsageAccountingMark(value: unknown): value is UsageAccountingMark {
+  return value === "incremental" || value === "delta" || value === "snapshot";
 }
 
 /**

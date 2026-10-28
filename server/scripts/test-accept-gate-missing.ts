@@ -16,7 +16,7 @@ import { db } from "../src/db/index.js";
 import { acceptGateRuns, projects, sessions, tasks } from "../src/db/schema.js";
 import { acceptTask } from "../src/task-accept.js";
 import { gateFailurePrompt } from "../src/accept-gate-messages.js";
-import { diagnoseGateFailure } from "../src/accept-gate-diagnosis.js";
+import { diagnoseGateFailure } from "../src/accept-gate-attribution.js";
 import { foreignOutputIn } from "../src/accept-gate-miss.js";
 import { sessionTranscriptPath } from "../src/transcript.js";
 import { releaseTurn } from "../src/turn-lock.js";

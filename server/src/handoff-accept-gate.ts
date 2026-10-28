@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { acceptGateRuns } from "./db/schema.js";
+import { gateLogFileNames } from "./accept-gate-diagnosis.js";
 import { acceptGateLogPath } from "./accept-gate-process.js";
 import { hasOwnedGateProcess, reconcileGateProcesses } from "./accept-gate-ownership.js";
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
@@ -59,6 +60,20 @@ export async function collectGateRuns(taskId: string): Promise<HandoffGateRun[]>
     diagnosisGeneration: row.diagnosisGeneration }));
 }
 
+/**
+ * 这一次接力把这份日志的文件带过来没有。
+ *
+ * 判据是**整组产物**而不是那个 `.log`（第 8 轮审查 F1）：现场和进度是单独的文件，只有
+ * 它们到了也照样看得出「停在哪一条、静了多久」，这时候给路径挂上 `.not-transferred`
+ * 等于把到手的证据判成没来，连带 `.notes`/`.scene` 的路径也一起拼歪。一个都没到才标。
+ */
+function transferredLogPath(manifest: HandoffManifest, runId: string): string {
+  const path = acceptGateLogPath(manifest.task.id, runId);
+  const names = new Set(gateLogFileNames(`accept-gate-${runId}.log`));
+  const arrived = manifest.files.some(file => file.kind === "run-artifact" && names.has(file.rel));
+  return arrived ? path : `${path}.not-transferred`;
+}
+
 export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete" | "insert">,
   manifest: HandoffManifest): Promise<void> {
   const rows = manifest.acceptGateRuns ?? [];
@@ -69,8 +84,7 @@ export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete"
   await store.delete(acceptGateRuns).where(eq(acceptGateRuns.taskId, manifest.task.id));
   if (rows.length) await store.insert(acceptGateRuns).values(rows.map(row => ({
     ...row, taskId: manifest.task.id, projectId: manifest.targetProjectId,
-    cwd: "（跨机迁入的历史快照，当前机器不可重跑）", logPath: acceptGateLogPath(manifest.task.id, row.id)
-      + (manifest.files.some(file => file.kind === "run-artifact" && file.rel === `accept-gate-${row.id}.log`) ? "" : ".not-transferred"),
+    cwd: "（跨机迁入的历史快照，当前机器不可重跑）", logPath: transferredLogPath(manifest, row.id),
     diagnosis: row.diagnosis ?? null,
     entryProbe: row.entryProbe ?? null,
     missAttribution: row.missAttribution ?? null,

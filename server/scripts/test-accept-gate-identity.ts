@@ -112,15 +112,54 @@ try {
     assert.equal((await task(sample.taskId)).stage, "verified");
   }
   {
+    // 依赖变了就不能再沿用上一张绿结果。身份取的是**安装声明**（node_modules/.package-lock.json
+    // 这类，口径见 src/accept-gate-deps.ts 的 dependencyDigest）——装、删、升级任何一个包都会改到
+    // 它。这里换过一次口径：以前是把依赖目录整棵做字节摘要，所以手改包里一个文件也算「变了」。
     const sample = await fixture("dependencies", 'setTimeout(()=>{' + checksFixed + '},500)');
+    const installed = join(sample.cwd, "node_modules", ".package-lock.json");
     mkdirSync(join(sample.cwd, "node_modules", "dep"), { recursive: true });
     writeFileSync(join(sample.cwd, "node_modules", "dep", "value"), "v1");
+    writeFileSync(installed, '{"packages":{"node_modules/dep":{"version":"1.0.0"}}}');
     await acceptTask(sample.taskId);
     writeFileSync(join(sample.repo, "blocker.txt"), "late blocker");
     await settled(sample.taskId);
     assert.equal((await acceptGateState(sample.taskId)).latest?.stale, false);
+    // **已知漏检面**，钉成显式契约而不是留给下一个人去撞：手改依赖目录里的文件却没重装
+    // （patch-package 打完没提交、npm link 指到本地检出、进去改一行热修），安装声明不动，于是
+    // 依赖实际变了却会沿用上一张绿。这是换口径换来的检测力下降，代价与理由写在 dependencyDigest
+    // 上方；哪天要收回它，从这一条开始改。
     writeFileSync(join(sample.cwd, "node_modules", "dep", "value"), "v2");
-    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, true);
+    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, false,
+      "手改包内文件不动安装声明：已知漏检，不是 bug");
+    writeFileSync(installed, '{"packages":{"node_modules/dep":{"version":"2.0.0"}}}');
+    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, true, "改了安装声明就是依赖变了");
+    assert.equal(await acceptGateWouldRun(await task(sample.taskId), await project(sample.projectId)), true);
+  }
+  {
+    // **祖先**那棵树的安装声明。任务自己没装依赖(worktree 的常态)时,node 对每个包名一级级往上
+    // 找,主检出那棵树就是这次测试的**全部**依赖输入——而它从来不在 dependencies 清单里:那份只
+    // 登记工作区自己有的目录,借用和克隆也只处理那些。
+    //
+    // 2026-10-27 第三轮独立审查用真实 `npm install` 升级实测到漏掉它的代价:祖先树里的包从 1.0.0
+    // 正常升到 2.0.0 之后,重新建的快照执行输出已经是新版,而源码指纹一个字节没变,于是上一张绿被
+    // 判成「同一份输入」继续沿用。它和上面那条「手改包内文件不动安装声明」不是一回事:这里改的
+    // 正是安装声明本身。身份单独成一项(source_ambient),不混进 fingerprint——理由见 ambientDigest。
+    const sample = await fixture("ambient", 'setTimeout(()=>{' + checksFixed + '},500)');
+    const inherited = join(sample.repo, "node_modules", ".package-lock.json");
+    mkdirSync(join(sample.repo, "node_modules", "dep"), { recursive: true });
+    writeFileSync(inherited, '{"packages":{"node_modules/dep":{"version":"1.0.0"}}}');
+    await acceptTask(sample.taskId);
+    // 迟到的合并阻塞:让门禁跑绿、但自动验收做不完,任务留在 verified,于是下面问的是「这张绿还
+    // 算不算数」而不是已验收任务的冻结分支。
+    writeFileSync(join(sample.repo, "blocker.txt"), "late blocker");
+    await settled(sample.taskId);
+    const inheritedRow = (await runs(sample.taskId))[0]!;
+    assert.equal(inheritedRow.status, "passed");
+    assert.notEqual(inheritedRow.sourceAmbient, null, "祖先安装声明进了这一行的身份");
+    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, false, "前提:这张绿是当前输入的");
+    writeFileSync(inherited, '{"packages":{"node_modules/dep":{"version":"2.0.0"}}}');
+    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, true,
+      "任务自己没装依赖时,祖先那棵树的安装声明变了就是依赖变了,不许沿用上一张绿");
     assert.equal(await acceptGateWouldRun(await task(sample.taskId), await project(sample.projectId)), true);
   }
   {
@@ -151,5 +190,5 @@ try {
     assert.equal((await runs(taskId))[0]?.sourceCommit, null);
     assert.equal(existsSync(join(repo, "generated.txt")), false);
   }
-  console.log("accept-gate-identity: original counterexample, immutable execution, automatic/manual reuse, batch/state freshness, late/early blockers and pinned merge source passed");
+  console.log("accept-gate-identity: original counterexample, immutable execution, automatic/manual reuse, batch/state freshness, inherited install declarations, late/early blockers and pinned merge source passed");
 } finally { await releaseTmpDb(); await sleep(100); rmSync(root, { recursive: true, force: true }); }

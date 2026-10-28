@@ -5,6 +5,9 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE tasks ADD COLUMN wait_ownership TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN process_pending INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE accept_gate_runs ADD COLUMN source_fingerprint TEXT",
+  // 当时向上继承的依赖树安装声明摘要(第 3 轮审查 F2)。旧行 NULL = 换口径之前记的,一律当作
+  // 不匹配、各重跑一次 —— 那时「依赖没换过」证明不了。
+  "ALTER TABLE accept_gate_runs ADD COLUMN source_ambient TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",
   // 门禁红了之后的归类结论(「命令在快照里不存在」那一类的出路)。旧行 NULL = 当初没归类过。
   "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",

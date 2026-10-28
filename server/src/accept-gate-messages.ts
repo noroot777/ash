@@ -26,6 +26,10 @@ type GateFailureDetails = { command: string; summary: string; logPath: string; t
  *
  * 归类结论（`diagnosis`）照旧附上去：它是定位的线索（那个名字在哪儿缺、目标分支上是什么
  * 情形、出路有哪几条），不是免修的理由。
+ *
+ * 第 3 条那个括号里**不列举「命令不在树里」**：真碰上那一档时，上面的 `diagnosis` 会把它
+ * 连线索带出路讲完，而括号是每一次红都要付的字节（体积闸 accept/gate-failure 的余量只有
+ * 个位数）。该说的话在它真的适用的那一次说。
  */
 export const gateFailurePrompt = (details: GateFailureDetails) =>
   `【验收未通过 · 验收前置命令没过】\n` +
@@ -33,15 +37,20 @@ export const gateFailurePrompt = (details: GateFailureDetails) =>
   (details.executionNotice ? `${details.executionNotice}\n` : "") +
   `在当前任务工作区复现这条命令：\n\n    cd ${details.sourceCwd} && ${details.command}\n\n` +
   `结果：${details.summary}。所以**没有合并、没有清理**，目标分支一个字节都没动。\n\n` +
-  (details.failure === "timeout" ? "这是整条命令超时，不是已经定位到某个断言失败。日志最后的成功提示只说明那一步的断言完成，不能证明浏览器、开发服务或测试进程已经退出；首次卡住的原因仍需核实。\n\n" : "") +
+  (details.failure === "timeout"
+    ? "这是整条命令超时，不是定位到了某个断言失败。回显末尾的「被收掉时的现场」给了停在哪一行、多久没输出、"
+      + "整段的产出节奏：日志只证明在输出，不证明在前进；最后那句成功提示只说明那一步断言完成，"
+      + "不代表浏览器、开发服务或测试进程已经退出。\n\n"
+    : "") +
   (details.diagnosis ? `${details.diagnosis}\n\n` : "") +
   (details.obsoleteDiagnosis ? "这一次名下还有一段旧版本的归类结论（时间线/日志里能翻到）：判据已撤回，别照它判断，按日志自己核。\n\n" : "") +
-  `完整日志在 \`${details.logPath}\`，末尾是：\n\n\`\`\`\n${details.tail.trim() || "（日志为空）"}\n\`\`\`\n\n` +
+  `完整日志在 \`${details.logPath}\`，末尾（含同名 \`.notes\` 进度、\`.scene\` 现场）：\n\n` +
+  `\`\`\`\n${details.tail.trim() || "（日志为空）"}\n\`\`\`\n\n` +
   `${GATE_FAILURE_REGRESSION_CARVE_OUT}\n\n` +
   `请你来处理：\n` +
   `1. 在自己的工作目录里跑这条命令，定位到底是哪一条红的；\n` +
   `2. 确属本次改动引入 → 修掉并提交，然后告诉用户可以重新点验收（验收会自动再跑一遍这条命令）；\n` +
-  `3. 如果你判断它**跟本次改动无关**（基线既有的红、环境缺件、负载敏感的 flake、命令不在树里），不要硬改：` +
+  `3. 如果你判断它**跟本次改动无关**（基线既有的红、环境缺件、负载敏感的 flake），不要硬改：` +
   `把依据写清楚（只跑那一条的复核结果、基线上同样红的证据），让用户决定是这次跳过门禁，还是另立一个任务去修。\n\n` +
   `不要自己去动目标分支，也不要绕过这条命令 —— 它是用户给这个项目定的放行条件。`;
 
