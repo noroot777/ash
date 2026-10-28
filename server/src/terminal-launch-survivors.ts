@@ -18,14 +18,19 @@
 // 不必对整张进程表读环境(那样 `ps -E` 的输出能到几 MB,撞 execFile 的 maxBuffer 之后这一问
 // 整条静默失灵)。
 //
-// 孤儿表还要再筛一道,但**只许用跟环境无关的事实筛**(属主、出生时刻,见
-// service-ports-probe.ts 的 `readProcessFacts`):筛掉的那些是**证明**了不可能是这次的,
-// 剩下的才去读环境,读不出来就必须算「没问全」。这一道的由来见下面 `LaunchScan` 的注释。
+// 孤儿表还要再筛一道,筛子**只用继承/因果这类跟记号无关的事实**(属主、出生时刻、工作
+// 目录,见 service-ports-probe.ts 的 `readProcessFacts` / `readProcessCwd`),剩下的才去读
+// 环境。**记号本身只提供正面归属**:读出来带着这次的记号 = 是这次的;没有记号**不等于**
+// 不是这次的 —— 启动脚本给自己 fork 出去的工人现搭一份环境,记号就不跟过去了(第 2 轮
+// 自由审查 F2 真实复现:页面「已停止」、刷新仍然如此,工人还在跑)。唯一的例外是环境里
+// 带着**另一次** ash 启动的记号:那枚号码是 ash 自己生成的,别人编不出来,所以它确凿属于
+// 另一次启动(`stranger`)。这一道的由来见下面 `LaunchScan` 的注释。
 //
 // **只负责点出来,不扩大 kill 范围**:默认停法该杀到哪儿是另一个判断(service-ports.ts 文件头
 // 明令禁止扩大 kill 范围),这里的产出是「谁还活着」这个事实,交给停止路径落账并如实告诉用户。
 import { IS_WINDOWS } from "./platform.js";
-import { readLineage, readProcessFacts } from "./service-ports-probe.js";
+import { realpathSync } from "node:fs";
+import { readLineage, readProcessCwd, readProcessFacts } from "./service-ports-probe.js";
 import { descendantsFromTable, processAlive, readProcessTable } from "./terminal-process-tree.js";
 
 /** ash 自己这条进程树不进候选集:它的环境里没有任何一次启动的记号,但没必要白问一遍。 */
@@ -39,6 +44,9 @@ const SELF_UID: number | null = typeof process.getuid === "function" ? process.g
  *  跟 ash 记下的 `startedAt` 之间也有毫秒级先后 —— 宁可多收几个候选(多收只会让这一趟更
  *  保守),绝不能把真残留筛掉。 */
 const BIRTH_GRACE_MS = 5_000;
+
+/** 这次启动的身份:记号 + 两件跟记号无关的继承事实。 */
+export type LaunchIdentity = { startedAt: number; cwd: string };
 
 /**
  * 这一问的**结果**。空集有三种完全不同的成因,早先全折成 `[]`,于是「没答上来」被当成
@@ -59,9 +67,13 @@ const BIRTH_GRACE_MS = 5_000;
  * 给看」),于是被当成陌生人跳过 —— 真实 HTTP、真实进程、真实页面都显示「已停止」,那个
  * 工人还在跑。
  *
- * 所以 `unknown` 和 `unverified` 一律算没答上来。为了不让这条判据把每一次停止都钉死在
- * 「没问全」(本机同用户孤儿四百多个,其中两个天生读不到环境),候选集先按属主与出生时刻
- * 筛过一道 —— 筛掉的是**证明**了不可能是这次的。
+ * 所以 `unknown` 和 `unverified` 一律算没答上来。**第 2 轮自由审查又把 `unmarked`(环境
+ * 读出来了、一枚 ash 记号都没有)并了进来**:启动脚本可以给工人现搭环境,那个号是这次
+ * 启动创造的,只是记号没跟过去 —— 当时它被当成陌生人跳过,停止于是报了「已停止」。
+ *
+ * 为了不让这条判据把每一次停止都钉死在「没问全」(本机同用户孤儿四百多个,10 分钟内新生的
+ * 就有 10 个),候选集先按**属主、出生时刻、工作目录**三道跟记号无关的筛子过一遍 —— 筛掉的
+ * 是**证明**了不可能是这次的(属主、出生时刻),或者继承链上对不上的(工作目录)。
  */
 export type LaunchScan = {
   pids: number[];
@@ -74,10 +86,13 @@ export type LaunchScan = {
  * 按启动记号找出这次启动的存活进程。`token` 为空(交互会话、没有记号的旧记录)不是
  * 「问过了,没有」—— 它落 `unavailable`,由调用方按既有那几档判。
  *
- * `startedAt` 是这次启动的时刻(`TerminalSessionInfo.startedAt`):比它更早出生的号带不上
- * 这次的记号 —— 那枚记号是启动时现生成的,一个已经在跑的进程无从把它塞进自己的环境。
+ * `launch.startedAt` 是这次启动的时刻(`TerminalSessionInfo.startedAt`):比它更早出生的号
+ * 带不上这次的记号 —— 那枚记号是启动时现生成的,一个已经在跑的进程无从把它塞进自己的环境。
+ * `launch.cwd` 是这次启动的工作目录:cwd 跟环境是两条独立的继承线,记号被现搭的环境冲掉时
+ * 它照旧传了下来,所以它能把这次启动目录下的孤儿跟系统自己那一堆守护进程分开。它同样是
+ * **可变**的(后代 chdir 出去就筛不住),所以只用来收窄候选,从不用来宣称「问全了」。
  */
-export async function launchSurvivors(token: string | null, startedAt: number): Promise<LaunchScan> {
+export async function launchSurvivors(token: string | null, launch: LaunchIdentity): Promise<LaunchScan> {
   if (token === null || IS_WINDOWS) return { pids: [], evidence: "unavailable", why: null };
   const table = await readProcessTable();
   if (!table) {
@@ -96,7 +111,8 @@ export async function launchSurvivors(token: string | null, startedAt: number): 
   // 以及它进了候选集、环境那一问却没给出答案。
   const silent: number[] = [];
   const candidates: number[] = [];
-  const oldest = Date.now() - startedAt + BIRTH_GRACE_MS;
+  const oldest = Date.now() - launch.startedAt + BIRTH_GRACE_MS;
+  const nearby: number[] = [];
   for (const orphan of orphans) {
     const fact = facts.get(orphan);
     if (!fact) {
@@ -107,15 +123,27 @@ export async function launchSurvivors(token: string | null, startedAt: number): 
     // 启动直接创造的;出生在这次启动之前 = 那会儿这枚记号还不存在。
     if (SELF_UID !== null && fact.uid !== SELF_UID) continue;
     if (fact.ageMs > oldest) continue;
-    candidates.push(orphan);
+    nearby.push(orphan);
+  }
+  // 第三道筛子:工作目录。这一道**问不出来就不筛**(少筛只会让这一趟更保守),逐号拿不到
+  // 答案的也留着 —— 它跟记号是两条独立的继承线,拿它当筛子是为了不让系统自己那一堆
+  // PID-1 守护进程把每一次停止都钉死在「没问全」。
+  const cwds = await readProcessCwd(nearby);
+  const home = launchCwd(launch.cwd);
+  for (const pid of nearby) {
+    const where = cwds?.get(pid);
+    if (home !== null && where !== undefined && where !== home) continue;
+    candidates.push(pid);
   }
   const lineage = await readLineage(candidates, token);
   const found = new Set<number>();
   for (const pid of candidates) {
     const relation = lineage.get(pid);
     if (relation === undefined) continue;    // 这个号已经退了(readLineage 的约定)
-    if (relation === "stranger") continue;   // 权威否证:环境读出来了,里面没有这次的记号
-    if (relation !== "ours") { silent.push(pid); continue; }  // unknown / unverified
+    // **唯一的否证**:它的环境里带着另一次 ash 启动的记号。那串号码是 ash 现生成的,
+    // 没有别的来路。「一枚记号都没有」(unmarked)不在此列 —— 见文件头。
+    if (relation === "stranger") continue;
+    if (relation !== "ours") { silent.push(pid); continue; }  // unmarked / unknown / unverified
     found.add(pid);
     // 顶上那个确认是这次的,它底下整棵子树也是:子树里每一个都继承了同一份环境,再逐个
     // 读一遍环境只是把同一个答案问 N 遍。
@@ -127,7 +155,17 @@ export async function launchSurvivors(token: string | null, startedAt: number): 
   return {
     pids,
     evidence: "incomplete",
-    why: `孤儿进程 ${head}${silent.length > 3 ? ` 等 ${silent.length} 个` : ""} 没问出答案`
-      + "（属主、出生时刻、环境里的记号，有一样 ps 没给出来，而它还活着），所以记号这一趟可能有漏",
+    why: `孤儿进程 ${head}${silent.length > 3 ? ` 等 ${silent.length} 个` : ""} 核不上`
+      + "（它跟这次启动同属主、出生在这次启动之后、工作目录也对得上，而环境里既没有这次的记号、"
+      + "也没有别次启动的记号——没有记号不等于不是这次的），所以这一趟可能有漏",
   };
+}
+
+/**
+ * 启动目录的比较形态。cwd 那一问给的是内核解析过的真实路径,而会话行里存的是用户当初填的
+ * 那一串(可能经过软链,比如 macOS 上的 `/tmp` → `/private/tmp`),不先拉平就会**每个号都
+ * 对不上**,筛子等于没装。解析不了(目录已经不在了)返回 null = 这一道不筛。
+ */
+function launchCwd(cwd: string): string | null {
+  try { return realpathSync(cwd); } catch { return null; }
 }

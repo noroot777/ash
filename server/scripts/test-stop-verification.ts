@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
@@ -37,6 +37,18 @@ writeFileSync(envBroker, `const fs=require('node:fs'),prefix=process.argv[2];`
   + `const timer=setInterval(()=>{if(!fs.existsSync(prefix+'.gate'))return;clearInterval(timer);`
   + `const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(daemon)},prefix],`
   + `{detached:true,stdio:'ignore',env:{}});child.unref();},20);`);
+// **现搭环境**那一份:中转给工人塞一份自己拼的环境(有变量、没有 ash 的记号)。macOS 的
+// `ps -E` 把它打得明明白白 —— 早先的判据因此判成「带着别人的环境 = 不是这次的」,停止报
+// 「已停止」而它还在跑(第 2 轮自由审查 F2 真实复现)。
+const freshBroker = join(cwd, "fresh-broker.cjs");
+writeFileSync(freshBroker, `const fs=require('node:fs'),prefix=process.argv[2];`
+  + `const timer=setInterval(()=>{if(!fs.existsSync(prefix+'.gate'))return;clearInterval(timer);`
+  + `const child=require('node:child_process').spawn(process.execPath,[${JSON.stringify(daemon)},prefix],`
+  + `{detached:true,stdio:'ignore',env:{PATH:process.env.PATH,WORKER_KIND:'explicit-fresh-environment'}});`
+  + `child.unref();},20);`);
+const freshLauncher = join(cwd, "fresh-launcher.cjs");
+writeFileSync(freshLauncher, `const child=require('node:child_process').spawn(process.execPath,`
+  + `[${JSON.stringify(freshBroker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
 const envLauncher = join(cwd, "env-launcher.cjs");
 writeFileSync(envLauncher, `const child=require('node:child_process').spawn(process.execPath,`
   + `[${JSON.stringify(envBroker)},process.argv[2]],{detached:true,stdio:'ignore'});child.unref();`);
@@ -114,15 +126,27 @@ try {
       "反证到手:号留在账上,它死了之后下一次停止才核销得掉");
   }
 
-  // 空环境那一位(POSIX 专有:Windows 上记号这一问整档 unavailable,见 LaunchScan 的注释)。
-  // 这里钉的是「读不到环境」**不等于**「不是这次启动的」:那个工人跟 ash 同一个用户、出生在
-  // 这次启动之后,凭据上就是「可能是这次的」,环境读不出来只说明这一问没答上来。所以停止
-  // 这一趟必须如实报未确认 —— 不许因为「记号一个都没命中」就升级成停净。
-  if (process.platform !== "win32") {
-    const projectId = "silent-env";
-    const prefix = join(cwd, "silent-env");
-    const command = { id: "service", name: "silent env", command: runNode(envLauncher, prefix), stopCommand: noop, restartCommand: null };
-    assert.equal((await startCommand(projectId, cwd, command)).status, 201);
+  // 记号没命中的两个现场(POSIX 专有:Windows 上记号这一问整档 unavailable,见 LaunchScan
+  // 的注释)。两边钉的是同一条:**记号只提供正面归属,没命中不构成否证**。
+  //
+  //  · `silent-env` —— 工人的环境是空的,`ps -E` 一个变量都不打(macOS 分不出「本来是空的」
+  //    和「不给看」);
+  //  · `fresh-env`  —— 工人的环境是中转现搭的:读得出来、有变量、就是没有 ash 的记号。
+  //    第一轮修复只把前者纳进来,后者仍被当成「别人家的号」跳过,于是真实页面照旧显示
+  //    「已停止」而它还在跑(第 2 轮自由审查 F2)。
+  //
+  // 两个工人都跟 ash 同属主、出生在这次启动之后、工作目录也是从启动那一刻继承下来的 ——
+  // 三道跟记号无关的筛子都对得上,所以停止这一趟必须如实报未确认。
+  for (const [mode, script] of [["silent-env", envLauncher], ["fresh-env", freshLauncher]] as const) {
+    if (process.platform === "win32") break;
+    const projectId = mode;
+    const prefix = join(cwd, mode);
+    // **每个现场一个自己的工作目录**:cwd 是这一趟的筛子之一,两个现场共用一个目录时
+    // 另一边留下的工人会成为这一边的候选,断言就分不清是哪个号把结论顶成「证据不全」的。
+    const home = join(cwd, `${mode}-home`);
+    mkdirSync(home, { recursive: true });
+    const command = { id: "service", name: mode, command: runNode(script, prefix), stopCommand: noop, restartCommand: null };
+    assert.equal((await startCommand(projectId, home, command)).status, 201);
     await waitFor(() => terminalSessions.listForProject(projectId)[0]?.exitCode === 0);
     writeFileSync(prefix + ".gate", "go");
     await waitFor(() => existsSync(prefix + ".pid") && terminalSessions.listForProject(projectId)[0]?.groupAlive === false);
@@ -131,17 +155,21 @@ try {
     const original = terminalSessions.listForProject(projectId)[0];
     assert.deepEqual(original.ports, [], "夹具前提:这条命令一个端口都没打印,只剩记号这一条线索");
     // 扫描这一层先单独问一遍:那个空环境的号必须落进「没问出答案」,而不是被当成陌生人跳过。
-    const scan = await launchSurvivors(terminalSessions.launchTokenOf(original.id), original.startedAt);
-    assert.equal(scan.evidence, "incomplete", "同用户、这次启动之后出生、环境读不出来 = 这一问没答上来");
+    const scan = await launchSurvivors(terminalSessions.launchTokenOf(original.id), original);
+    assert.equal(scan.evidence, "incomplete",
+      "同用户、这次启动之后出生、工作目录也对得上,而记号没命中 = 这一问没答上来");
     assert.equal(launchClosureSealed(scan), false, "没答上来就不算封口");
     assert.ok(String(scan.why).includes(`pid ${pid}`), `那句话要点出是哪个号（实得：${scan.why}）`);
-    const result = await stopCommand(projectId, "service", { script: noop, cwd });
+    assert.equal(scan.pids.length, 0, "记号没命中就点不到名,这一档交的是「证据不全」而不是点名");
+    assert.deepEqual([...new Set(String(scan.why).match(/pid \d+/g) ?? [])], [`pid ${pid}`],
+      "这个现场只该有那一个号核不上 —— 多出来的说明筛子没拦住无关进程");
+    const result = await stopCommand(projectId, "service", { script: noop, cwd: home });
     assert.equal(result.status, 200);
     assert.equal(processAlive(pid), true, "夹具前提:那个工人还活着");
     // 这一档点不到名(记号本来就读不出来),所以它交的是「证据不全」那句固定措辞,而不是
     // 「点到了谁」—— 关键是**不许**沉默地判停净。
     assert.deepEqual(result.body.unresolved, [], "读不出环境只是没答上来,不构成点名");
-    assert.match(String(result.body.notice), /没问出答案/);
+    assert.match(String(result.body.notice), /核不上/);
     assert.match(String(result.body.notice), /所以没法说这次启动起来的东西都停了/);
     assert.ok(String(result.body.notice).includes(`pid ${pid}`), "那句话要点出是哪个号没答上来");
     const fact = terminalSessions.get(original.id)!.stop;
@@ -212,7 +240,7 @@ try {
   sessions[0].alive = true;
   assert.equal(capacity.hasSlot("capacity", "job", true), false, "保留且还活着 = 真占着一个槽");
   assert.throws(() => capacity.reserve("capacity", "job", true), /数量已达上限/);
-  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env candidate stays unanswered, unified verdict completeness, retained history, newest-only history, capacity accounting");
+  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env and rebuilt-env candidates stay unanswered, unified verdict completeness, retained history, newest-only history, capacity accounting");
 } finally {
   for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
   manager.shutdown();

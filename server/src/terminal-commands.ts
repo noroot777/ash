@@ -228,7 +228,7 @@ async function openSession(
  * (第 5、6 轮审查在端口那条道上实测过同一个形状)。
  */
 async function owedSurvivors(open: TerminalSessionInfo, scripted: boolean): Promise<LaunchScan> {
-  const scan = await launchSurvivors(terminalSessions.launchTokenOf(open.id), open.startedAt);
+  const scan = await launchSurvivors(terminalSessions.launchTokenOf(open.id), open);
   if (scan.pids.length) {
     terminalSessions.oweCommandLeftovers(open.id, open.projectId, scan.pids,
       `这次启动起来的 pid ${scan.pids.join("、")} 还活着（环境里带着这次启动的记号），`
