@@ -88,9 +88,18 @@ export type AshMcpRegistration = {
 export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegistration {
   const none = (detail: string): AshMcpRegistration => ({ state: "absent", serverName: null, detail });
   const dunno = (detail: string): AshMcpRegistration => ({ state: "unknown", serverName: null, detail });
+  const file = agentType === "claude" ? join(dir, ".claude.json")
+    : agentType === "codex" ? join(dir, "config.toml")
+    : null;
+  if (!file) return dunno(`${agentType} 没有个人配置目录，这一问不适用`);
+  // **先分清「没有这个文件」和「有但读不动」**：下面两条读取路径都把所有异常吞成
+  // 「空」，于是一次 EACCES / EIO 会被说成「没有登记」（第 1 轮审查 N1）。absent 是个
+  // 会被用来拦人的结论，只有确实没有文件才配得上它。
+  const probe = fileState(file);
+  if (probe === "unreadable") return dunno(`${file} 读不出来`);
+  if (probe === "missing") return none(`${file} 还不存在`);
   try {
     if (agentType === "claude") {
-      const file = join(dir, ".claude.json");
       const doc = readJsonObject(file);
       // 解析不了 ≠ 没登记：文件可能正被 CLI 写到一半，也可能是用户手工改坏了一个花括号。
       if (!doc) return dunno(`${file} 解析不了`);
@@ -99,15 +108,22 @@ export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegist
         ? { state: "present", serverName: name, detail: "" }
         : none("这个配置目录里没有 ash MCP 登记");
     }
-    if (agentType === "codex") {
-      const name = codexAshMcpServerName(dir);
-      return name
-        ? { state: "present", serverName: name, detail: "" }
-        : none("这个配置目录里没有 ash MCP 登记");
-    }
-    return dunno(`${agentType} 没有个人配置目录，这一问不适用`);
+    const name = codexAshMcpServerName(dir);
+    return name
+      ? { state: "present", serverName: name, detail: "" }
+      : none("这个配置目录里没有 ash MCP 登记");
   } catch (e) {
     return dunno(`读 ash MCP 登记失败：${(e as Error).message}`);
+  }
+}
+
+/** 「没有这个文件」/「有但读不动」/「读得动」。判 absent 之前必须先过这一关（N1）。 */
+function fileState(file: string): "missing" | "readable" | "unreadable" {
+  try {
+    readFileSync(file);
+    return "readable";
+  } catch (e) {
+    return (e as { code?: string }).code === "ENOENT" ? "missing" : "unreadable";
   }
 }
 
@@ -118,15 +134,36 @@ export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegist
  * `~/.codex/config.toml`;两条路径差一层,所以这里不能拿 home 当 dir 直接问。
  */
 export function hostAshMcp(agentType: string, hostHome: string = homedir()): PersonalAshMcp {
-  if (agentType === "claude") return readAshMcp(hostHome, "claude");
-  if (agentType === "codex") return readAshMcp(join(hostHome, ".codex"), "codex");
-  return fail(`${agentType} 没有宿主级配置目录，这一问不适用`);
+  const dir = hostCliConfigDir(agentType, hostHome);
+  return dir ? readAshMcp(dir, agentType) : fail(`${agentType} 没有宿主级配置目录，这一问不适用`);
 }
 
-/** 宿主机上这两个 CLI 的用户级配置文件各在哪。 */
-const HOST_CLI_CONFIG: Record<string, (home: string) => string> = {
-  claude: (home) => join(home, ".claude.json"),
-  codex: (home) => join(home, ".codex", "config.toml"),
+/**
+ * 宿主机上这个 CLI 真正读的配置目录。
+ *
+ * **必须尊重 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`**：那两个变量由 ash 进程原样继承给
+ * 子进程，CLI 认的就是它们。写死 `homedir()` 会两头都错（第 1 轮审查 F1 的同类位置）——
+ * 实际目录有登记却报缺失，默认目录有登记而实际目录没有时又漏报。
+ *
+ * 两个 CLI 的路径差一层：claude 的用户级配置是配置目录**根**下的 `.claude.json`，
+ * codex 的是 `$CODEX_HOME/config.toml`。
+ */
+export function hostCliConfigDir(agentType: string, hostHome: string = homedir()): string | null {
+  if (agentType === "claude") return process.env.CLAUDE_CONFIG_DIR?.trim() || hostHome;
+  if (agentType === "codex") return process.env.CODEX_HOME?.trim() || join(hostHome, ".codex");
+  return null;
+}
+
+/** 宿主机上这两个 CLI 的用户级配置文件各在哪（跟着上面那个目录走）。 */
+const HOST_CLI_CONFIG: Record<string, (home: string) => string | null> = {
+  claude: (home) => {
+    const dir = hostCliConfigDir("claude", home);
+    return dir && join(dir, ".claude.json");
+  },
+  codex: (home) => {
+    const dir = hostCliConfigDir("codex", home);
+    return dir && join(dir, "config.toml");
+  },
 };
 
 /**
@@ -148,8 +185,11 @@ export function hostAshMcpGaps(hostHome: string = homedir()): string[] {
   const gaps: string[] = [];
   for (const [agentType, pathOf] of Object.entries(HOST_CLI_CONFIG)) {
     const file = pathOf(hostHome);
-    if (!existsSync(file)) continue;                       // 这个 CLI 没在这台机器上用过
-    if (hostAshMcp(agentType, hostHome).configured) continue;
+    if (!file || !existsSync(file)) continue;              // 这个 CLI 没在这台机器上用过
+    const dir = hostCliConfigDir(agentType, hostHome);
+    // **只认「文件在、里面确实没有」**：读不出来、解析不了一律不报（第 1 轮审查 N1）——
+    // 启动时刷一行假警报，比不说更坏。
+    if (!dir || ashMcpRegistration(dir, agentType).state !== "absent") continue;
     gaps.push(`${agentType}（${file}）`);
   }
   return gaps;

@@ -194,10 +194,12 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
 function warnHostAshMcp(): void {
   const gaps = hostAshMcpGaps();
   if (!gaps.length) return;
-  console.warn("[ash] 这些 CLI 的宿主机配置里没有 ash MCP 登记，它们的 agent 交不了卷"
-    + "（没有 complete_task，干完的活会记 failed；派出去的审查跑完也给不出结论）：");
+  console.warn("[ash] 这些 CLI 的**用户级**配置里没有 ash MCP 登记。如果它们也没有项目级登记或"
+    + "命令行覆盖，那它们的 agent 就交不了卷（没有 complete_task，干完的活会记 failed；"
+    + "派出去的审查跑完也给不出结论）：");
   for (const line of gaps) console.warn(`  · ${line}`);
-  console.warn("  接法见 docs/install.md，或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
+  console.warn("  自查：claude mcp get ash / codex mcp list --json。接法见 docs/install.md，"
+    + "或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
 }
 
 /**

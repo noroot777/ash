@@ -127,13 +127,6 @@ export async function launchReviewRound(
   // 且必须关掉 freshSession —— 第 1 轮崩了的话它本来会新开一条空会话。
   opts: { resumeSessionId?: string; retry?: boolean } = {},
 ): Promise<{ resumed: boolean }> {
-  // 审查者交卷靠 ash MCP 的 report_stage，而那条登记在**它自己的 CLI 配置目录**里，
-  // ash 只能读、不能替它注入。缺了的话这一轮会完整跑完、报告也写得好好的，最后一步
-  // 才发现没有工具可调 —— 一轮审查动辄几十分钟、几百万 token（2026-10-28 现场）。
-  // 这一问起跑前就答得出来，所以在这儿拦，抛出去由三个调用点统一走 failReviewStart。
-  // 判据刻意保守（见 ash-mcp-reachability.ts）：只有确定拿不到才拦。
-  const reach = await ashMcpReachability(task.ownerUserId, run.agentType);
-  if (!reach.reachable) throw new Error(`审查者交不了卷：${reach.problem}`);
   await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   let cwd: string | undefined;
@@ -152,6 +145,21 @@ export async function launchReviewRound(
         .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
     }
   }
+  // 审查者交卷靠 ash MCP 的 report_stage，而那条登记在**它自己的 CLI 配置里**，ash 只能
+  // 问、不能替它注入。缺了的话这一轮会完整跑完、报告也写得好好的，最后一步才发现没有
+  // 工具可调 —— 一轮审查动辄几十分钟、几百万 token（2026-10-28 现场）。所以在这儿拦，
+  // 抛出去由三个调用点统一走 failReviewStart。
+  //
+  // **排在 cwd 算出来之后**：claude 的项目级登记（`--scope local`）只在那个目录下看得见，
+  // 在它之前问等于拿「别的目录没有」去拦这一轮（第 1 轮审查 F1）。判据刻意保守 ——
+  // 问的是 CLI 自己，而且只有它明确说「没有」才拦，见 ash-mcp-reachability.ts。
+  const reach = await ashMcpReachability({
+    ownerUserId: task.ownerUserId,
+    agentType: run.agentType,
+    executorId: run.executorId,
+    cwd,
+  });
+  if (!reach.reachable) throw new Error(`审查者交不了卷：${reach.problem}`);
   const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
   // 重跑分两档，差别不在按钮而在**送进去的那句话**：上下文还在就只说「接着做」（一条崩在
   // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。

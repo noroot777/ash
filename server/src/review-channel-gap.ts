@@ -128,6 +128,13 @@ export async function noteReviewerChannelGap(a: {
   const next = evidence?.connected
     ? "点「继续本轮审查」可以让它接着上一次的上下文把结论补上，不用重跑这一轮。"
     : `修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。`;
-  await appendTaskTimeline(a.taskId, `这一轮的审查报告可能已经写完了，只是结论没能上报到 ash。${why}${next}`);
+  // **显式绑定刚结束那条审查会话**：缺省会按 `sessions.startedAt` 挑最新建的那条，而一条
+  // 任务上常有比它更新的别的会话（「继续本轮审查」复用的是**较早**那条审查会话），于是这句
+  // 说明会落到另一位智能体名下 —— 看记录的人在审查者那边什么也看不到（第 1 轮审查 N3）。
+  await appendTaskTimeline(
+    a.taskId,
+    `这一轮的审查报告可能已经写完了，只是结论没能上报到 ash。${why}${next}`,
+    { sessionId: a.sessId },
+  );
   return true;
 }

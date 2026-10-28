@@ -28,11 +28,16 @@ export function capture(file, args, opts = {}) {
   }
 }
 
-function candidates(cmd) {
+export function candidates(cmd) {
   if (!IS_WINDOWS || /\.[a-z0-9]+$/i.test(cmd)) return [cmd];
   // Windows 上 `npm` 这种名字实际是 `npm.cmd`，不展开 PATHEXT 就一个都找不到。
+  //
+  // **不含裸名**：跟 `bin-resolve.ts` 的 `candidatesIn` 一致。npm 全局目录里同名的
+  // 无后缀文件是给 POSIX shell 用的脚本，Windows 的 CreateProcess 起不来它 —— 把它
+  // 排在前面，`which` 会返回那一个、`run` 据此 spawn，拿到 ENOENT（第 1 轮审查 N2，
+  // Windows 真机实测：which 给 `ash-review-cli`、resolveBin 给 `ash-review-cli.cmd`）。
   const exts = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
-  return [cmd, ...exts.map((ext) => cmd + ext.toLowerCase())];
+  return exts.map((ext) => cmd + ext.toLowerCase());
 }
 
 /**

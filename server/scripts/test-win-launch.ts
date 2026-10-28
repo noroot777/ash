@@ -319,6 +319,21 @@ try {
   assert.deepEqual(scriptExtraPaths({}, winHome), binExtraPaths({}, winHome),
     "env 全空时两份也必须一致");
 
+  // 候选**文件名**也必须一致:目录一样不代表挑中同一个文件。npm 全局目录里同时躺着
+  // 无后缀的 POSIX 脚本和 `.cmd` 垫片,scripts 侧原先把裸名排在最前,于是 which 返回
+  // 它、run 据此 spawn,拿到 ENOENT(第 1 轮审查 N2,Windows 真机实测)。
+  const { candidates: scriptCandidates } = await import("../../scripts/platform.mjs");
+  const { candidatesIn } = await import("../src/executors/bin-resolve.js");
+  const dir = "C:\\Users\\u\\AppData\\Roaming\\npm";
+  for (const name of ["ash-review-cli", "claude", "node.exe"]) {
+    assert.deepEqual(
+      scriptCandidates(name).map((c) => join(dir, c)),
+      candidatesIn(dir, name),
+      `${name} 的候选文件名两份必须一致`,
+    );
+  }
+  assert.ok(!scriptCandidates("claude").includes("claude"), "Windows 上不能把无后缀名当候选");
+
   console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行/常用命令/壳记号/候选目录）全部通过");
 } finally {
   rmSync(stage, { recursive: true, force: true });

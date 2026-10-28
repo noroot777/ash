@@ -154,8 +154,14 @@ function splitDir(bin: string): { dir: string; base: string } {
   return idx < 0 ? { dir: ".", base: bin } : { dir: bin.slice(0, idx) || bin.slice(0, idx + 1), base: bin.slice(idx + 1) };
 }
 
-/** 一个目录下这个命令名的所有候选文件名,按优先级排。 */
-function candidatesIn(dir: string, bin: string): string[] {
+/**
+ * 一个目录下这个命令名的所有候选文件名,按优先级排。
+ *
+ * **导出只为让回归比对 `scripts/platform.mjs` 的 `candidates`**(两份实现的理由见
+ * `extraPaths` 头部)。Windows 上刻意**不含裸名** —— 那种无后缀文件是给 POSIX shell
+ * 用的脚本,CreateProcess 起不来它。
+ */
+export function candidatesIn(dir: string, bin: string): string[] {
   if (!IS_WINDOWS) return [join(dir, bin)];
   const exts = pathExts();
   const own = extname(bin).toLowerCase();
