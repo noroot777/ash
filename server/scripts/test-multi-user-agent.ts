@@ -391,6 +391,36 @@ const AS_ALICE = { authorization: `Bearer ${aliceKey}` };
   }
 }
 
+// ── ⑨ 任务备忘:人写给自己看的私产,回合凭证改不动 ─────────────────────────
+// 备忘不进任何 prompt,agent 压根读不到它,自然也没有理由改得动。而 owned.ts 那条私有轴
+// 判的是 `ownerUserId` 相等 —— 回合凭证身上恰好挂着 owner 的归属戳,不接上 personalWriteGate
+// 的话,只凭这两个头就能改写、删掉用户自己记的东西(第 2 轮审查 F2 实测:对照
+// `POST /api/notes` 返 403,备忘那三条却 201/200/200)。
+{
+  // 先由 alice 本人记一条(真人凭证照常写得进去 —— 拦的是凭证种类,不是这个账号)。
+  const mine = await call("/api/tasks/t-source/memos", "POST", AS_ALICE, { body: "验收时记得查严格增长门" });
+  assert.equal(mine.status, 201, `alice 本人该写得进备忘:${mine.text}`);
+  const memoId = String(mine.body.id);
+
+  for (const [what, method, path, body] of [
+    ["新增", "POST", "/api/tasks/t-source/memos", { body: "agent 偷偷加的" }],
+    ["改写", "PATCH", `/api/tasks/t-source/memos/${memoId}`, { body: "agent 偷偷改的" }],
+    ["删除", "DELETE", `/api/tasks/t-source/memos/${memoId}`, undefined],
+  ] as const) {
+    const denied = await call(path, method, AS_AGENT, body);
+    assert.equal(denied.status, 403, `回合凭证${what}备忘必须 403:${denied.text}`);
+  }
+
+  // 那条备忘必须**一个字都没动**,也还在。
+  const after = await call("/api/tasks/t-source/memos", "GET", AS_ALICE);
+  assert.equal(after.list.length, 1, `被拒之后不该多出也不该少掉:${after.text}`);
+  assert.equal(after.list[0].body, "验收时记得查严格增长门", `正文不许被改:${after.text}`);
+
+  // 别收过头:批量摘要是**只读集合查询**(POST 只因为要带一批 taskId),不在闸内。
+  const digests = await call("/api/tasks/memos", "POST", AS_AGENT, { taskIds: ["t-source"] });
+  assert.notEqual(digests.status, 403, `摘要端点不该被当成写入拦掉:${digests.text}`);
+}
+
 console.log("multi-user agent turn-token scope ok");
 await releaseTmpDb();
 rmSync(stage, { recursive: true, force: true });

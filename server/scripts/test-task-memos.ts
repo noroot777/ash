@@ -15,7 +15,9 @@ process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 requireTmpDb("task-memos");
 
-const [{ db, ensureSchema }, schema, memoRoutes, { TASK_MEMO_MAX_LEN }, { TASK_BATCH_LIMIT }] = await Promise.all([
+const [
+  { db, ensureSchema }, schema, memoRoutes, { TASK_MEMO_MAX_LEN, TASK_MEMO_MAX_COUNT }, { TASK_BATCH_LIMIT },
+] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/task-memos.js"),
@@ -88,6 +90,9 @@ for (const id of ["t1", "t2"]) {
 
 // ── 批量摘要：几条、哪条最新、超长截断 ──────────────────────────────────────
 {
+  // 时间戳只到毫秒,而上面那次 PATCH 可能跟下面这条新增落在同一刻 —— 那样「谁最新」就
+  // 轮到按 id 定(服务端的确定性 tie-break),而 id 是随机的,这条用例会时绿时红。
+  await new Promise((resolve) => setTimeout(resolve, 5));
   await post("/tasks/t1/memos", { body: "第二条，更新" });
   await post("/tasks/t2/memos", { body: "另一个任务的" });
   // 时间戳只到毫秒：连着两发可能落在同一刻，而这条用例要的是「后写的那条赢」。
@@ -134,6 +139,35 @@ for (const id of ["t1", "t2"]) {
     assert.equal((await raw(`/tasks/t1/memos/${memo.id}`, "PATCH", body)).status, 400, `PATCH ${body}`);
     assert.equal((await raw("/tasks/memos", "POST", body)).status, 400, `摘要 ${body}`);
   }
+}
+
+// ── 条数上限:并发也不许越过 ─────────────────────────────────────────────────
+{
+  await db.insert(tasks).values({
+    id: "t-cap", projectId: "p1", title: "cap", body: "", status: "done", mode: "single",
+    createdAt: now(), updatedAt: now(),
+  });
+  // 先灌到离上限一条。直接写库(不走端点)是为了快,判据只在最后那几发上。
+  const ts = now();
+  await db.insert(taskMemos).values(Array.from({ length: TASK_MEMO_MAX_COUNT - 1 }, (_, at) => ({
+    id: `cap-${at}`, taskId: "t-cap", body: `第 ${at} 条`, createdAt: ts, updatedAt: ts,
+  })));
+
+  // **并发**发两条:上限检查和插入要在同一个语句批里,否则两发都读到 499 然后都插进去。
+  const [first, second] = await Promise.all([
+    post("/tasks/t-cap/memos", { body: "压线那条" }),
+    post("/tasks/t-cap/memos", { body: "越线那条" }),
+  ]);
+  const codes = [first.status, second.status].sort();
+  assert.deepEqual(codes, [201, 400], `一条进一条拒:${JSON.stringify(codes)}`);
+  const rows = await db.select().from(taskMemos).where(eq(taskMemos.taskId, "t-cap"));
+  assert.equal(rows.length, TASK_MEMO_MAX_COUNT, `库里不许超过上限:${rows.length}`);
+  // 被拒那条要**一个字都没留下**(不是先插进去再报错)。
+  const bodies = new Set(rows.map((row) => row.body));
+  assert.equal([...bodies].filter((body) => body === "压线那条" || body === "越线那条").length, 1);
+
+  // 满了之后再发照常 400。
+  assert.equal((await post("/tasks/t-cap/memos", { body: "再来一条" })).status, 400);
 }
 
 // ── 删 ──────────────────────────────────────────────────────────────────────

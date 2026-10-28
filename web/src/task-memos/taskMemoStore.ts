@@ -76,9 +76,25 @@ function sorted(rows: readonly TaskMemo[]): TaskMemo[] {
   return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-/** 写成功了就推一版：在这之前发出的读取，回来时一律作废重拉。 */
+/**
+ * 「这个任务的备忘动过了」。订阅者是**另一份缓存**：侧边栏铺开那一列的摘要由
+ * `useSidebarSpread` 自己存一份，不订阅的话本页刚存上的那条在那边要等收起重开才出现
+ * （第 2 轮审查 N1 实测）。
+ *
+ * 为什么不叫它去读这个 store：那一列要的是「共几条 + 最近那条的摘要」，口径在服务端
+ * （taskMemoDigestText 的截断），而且它关心的任务远不止当前打开的那一个。
+ */
+const writeWatchers = new Set<(taskId: string) => void>();
+
+export function onTaskMemoWrite(listener: (taskId: string) => void): () => void {
+  writeWatchers.add(listener);
+  return () => { writeWatchers.delete(listener); };
+}
+
+/** 写成功了就推一版：在这之前发出的读取，回来时一律作废重拉；顺带通知别的缓存。 */
 function confirmWrite(taskId: string): void {
   writes.set(taskId, (writes.get(taskId) ?? 0) + 1);
+  for (const watcher of writeWatchers) watcher(taskId);
 }
 
 export async function reloadTaskMemos(taskId: string): Promise<void> {

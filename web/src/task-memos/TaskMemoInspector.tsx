@@ -12,23 +12,23 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import type { Notify } from "../lib/notify.ts";
 import { TaskMemoCard } from "./TaskMemoCard.tsx";
 import { addTaskMemo, clearTaskMemoHighlight, editTaskMemo, removeTaskMemo, useTaskMemos } from "./taskMemoStore.ts";
+import { setMemoComposerDraft, setMemoEditDraft, useTaskMemoDrafts } from "./taskMemoDrafts.ts";
 
 const message = (reason: unknown) => (reason instanceof Error ? reason.message : String(reason));
 
 export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: Notify }) {
   const { memos, loaded, loading, error, justAddedId } = useTaskMemos(taskId);
-  const [composing, setComposing] = useState(false);
-  const [draft, setDraft] = useState("");
+  // 草稿（新建那条、每条的编辑态）住在 taskMemoDrafts.ts：面板会被自动切走（任务 status
+  // 一变 stateKey 就变），放本地 state 的话几百字跟着卸载一起没。按任务分开存，所以也
+  // 不会漂到下一条任务的面板上。
+  const { composing, edits } = useTaskMemoDrafts(taskId);
+  const draft = composing ?? "";
+  const setDraft = (text: string) => setMemoComposerDraft(taskId, text);
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<TaskMemo | null>(null);
 
-  // 换任务就把本地那点临时状态清干净：上一条任务没写完的草稿漂到下一条任务的面板上，
-  // 看着像「这个任务里有一条我写过的东西」，而它其实属于别处。
-  useEffect(() => {
-    setComposing(false);
-    setDraft("");
-    setDeleting(null);
-  }, [taskId]);
+  // 换任务只清「删哪条」这种一次性意图 —— 草稿按任务存，本来就不会串台。
+  useEffect(() => { setDeleting(null); }, [taskId]);
 
   // 高亮认完就撤（下次再打开这一格不该还亮着）。延一拍，让那条先滚进视野、亮一下再褪。
   useEffect(() => {
@@ -47,13 +47,12 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
     finally { setBusy(false); }
   };
 
-  // 清空草稿和收起 composer 都排在 await **之后**：写失败时那几百字还留在框里。
+  // 收起 composer 排在 await **之后**：写失败时那几百字还留在框里。
   const submit = () => guard(async () => {
     const text = draft.trim();
     if (!text) return;
     await addTaskMemo(taskId, text);
-    setDraft("");
-    setComposing(false);
+    setMemoComposerDraft(taskId, null);
   });
 
   return (
@@ -63,11 +62,8 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
           type="button"
           className="task-memo-inspector__add"
           aria-label="写一条备忘"
-          aria-expanded={composing}
-          onClick={() => {
-            setComposing((value) => !value);
-            setDraft("");
-          }}
+          aria-expanded={composing !== null}
+          onClick={() => setMemoComposerDraft(taskId, composing === null ? "" : null)}
         >
           <Plus size={13} weight="bold" aria-hidden="true" />
         </button>
@@ -75,7 +71,7 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
 
       {error && <p className="task-memo-inspector__error" role="alert">{error}</p>}
 
-      {composing && (
+      {composing !== null && (
         <div className="task-memo-composer">
           <textarea
             autoFocus
@@ -86,11 +82,11 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
             disabled={busy}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Escape") { event.stopPropagation(); setComposing(false); setDraft(""); }
+              if (event.key === "Escape") { event.stopPropagation(); setMemoComposerDraft(taskId, null); }
             }}
           />
           <div className="task-memo-composer__actions">
-            <button type="button" disabled={busy} onClick={() => { setComposing(false); setDraft(""); }}>取消</button>
+            <button type="button" disabled={busy} onClick={() => setMemoComposerDraft(taskId, null)}>取消</button>
             <button type="button" className="is-primary" disabled={busy || !draft.trim()} onClick={() => void submit()}>
               保存
             </button>
@@ -106,12 +102,14 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
               memo={memo}
               busy={busy}
               highlight={memo.id === justAddedId}
+              draft={memo.id in edits ? edits[memo.id] : null}
+              onDraft={(next) => setMemoEditDraft(taskId, memo.id, next)}
               onSave={(body) => guard(async () => { await editTaskMemo(taskId, memo.id, body); })}
               onDelete={() => setDeleting(memo)}
             />
           ))}
         </div>
-      ) : !composing && (
+      ) : composing === null && (
         <div className="task-memo-inspector__empty">
           {/* 读不到的时候说「还在读」，别把读取中伪装成「没有备忘」。 */}
           <p>{loaded ? "这个任务还没有备忘。" : loading ? "正在读备忘…" : "还没读到这个任务的备忘。"}</p>

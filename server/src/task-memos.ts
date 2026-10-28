@@ -13,7 +13,7 @@
 import { TASK_MEMO_MAX_COUNT, TASK_MEMO_MAX_LEN, taskMemoDigestText } from "@ash/shared/task-memo";
 import type { TaskMemo, TaskMemoDigest } from "@ash/shared/task-memo";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { taskMemos, tasks } from "./db/schema.js";
@@ -57,6 +57,18 @@ function readBody(raw: unknown): { body: string } | { error: string } {
   return { body: raw.trim() };
 }
 
+/**
+ * 「我自己名下、这个任务的那些备忘」—— 配额算的就是这一堆（判据与 `ownerStamp` 决定
+ * 新行记在谁名下的那个值对齐）。自用模式下归属列恒为 null,`isNull` 正好等于全部。
+ *
+ * 跟 `filterOwned` 的唯一偏差:多人模式下的**实例管理员**在那边还能算上无主行(转多人
+ * 之前留下的),这里不算 —— 方向是让配额更松一点,不会把谁挡在外面。
+ */
+const mineOn = (taskId: string, ownerUserId: string | null) => and(
+  eq(taskMemos.taskId, taskId),
+  ownerUserId === null ? isNull(taskMemos.ownerUserId) : eq(taskMemos.ownerUserId, ownerUserId),
+);
+
 async function ownMemos(taskId: string, actor: Actor) {
   const rows = await db
     .select()
@@ -81,10 +93,6 @@ export function mountTaskMemoRoutes(api: Hono): void {
     if (!task) return c.json({ error: "任务不存在" }, 404);
     const parsed = readBody((await bodyOf<MemoBody>(c)).body);
     if ("error" in parsed) return c.json({ error: parsed.error }, 400);
-    const mine = await ownMemos(taskId, actor);
-    if (mine.length >= TASK_MEMO_MAX_COUNT) {
-      return c.json({ error: `一个任务最多 ${TASK_MEMO_MAX_COUNT} 条备忘,先删几条再加` }, 400);
-    }
     const timestamp = now();
     const row: typeof taskMemos.$inferInsert = {
       id: id(),
@@ -94,7 +102,25 @@ export function mountTaskMemoRoutes(api: Hono): void {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    await db.insert(taskMemos).values(row);
+    // 条数与插入在**同一个 batch** 里。「先 select count 再 insert」那种写法两步之间有
+    // 一个 await,并发两发都能读到 499、然后都插进去(第 2 轮审查 N3)。`db.batch` 在一个
+    // BEGIN…COMMIT 里同步跑完,中间没有让出点:第二条在插入**之后**数,超了就把刚插的
+    // 那行当场收走 —— 净效果是「没超才留得下」。范式同 claude-monitor-write.ts 的
+    // `writeIfTaskAlive`(那里也解释了为什么不用 `db.transaction`:它的函数体里每个 await
+    // 都会把同一条连接上别人的语句卷进来)。
+    const [, overflow] = await db.batch([
+      db.insert(taskMemos).values(row),
+      db.delete(taskMemos)
+        .where(and(
+          eq(taskMemos.id, row.id),
+          sql`(select count(*) from ${taskMemos} where ${mineOn(taskId, row.ownerUserId ?? null)}) > ${TASK_MEMO_MAX_COUNT}`,
+        ))
+        // 回执就是「有没有被收走」——不 returning 的话还得再查一发才知道。
+        .returning({ id: taskMemos.id }),
+    ]);
+    if (overflow.length) {
+      return c.json({ error: `一个任务最多 ${TASK_MEMO_MAX_COUNT} 条备忘,先删几条再加` }, 400);
+    }
     return c.json(toMemo(row as typeof taskMemos.$inferSelect), 201);
   });
 

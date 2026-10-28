@@ -65,8 +65,21 @@ function followUpInstant(task: TaskListItem, last: TaskFollowUp | undefined): st
   return last ? last.at ?? task.updatedAt : null;
 }
 
-function memoWins(task: TaskListItem, last: TaskFollowUp | undefined, memo: TaskMemoDigest | undefined): boolean {
-  return !!memo && memoIsNewer(memo.at, followUpInstant(task, last));
+/**
+ * `known` = 这个任务的追问**问过后端**。追问那一列只读头一批（每条都要摸一次盘），所以
+ * 第 TASK_BATCH_LIMIT 行之后的行里 `last === undefined` 的含义是「不知道」而不是「没有」。
+ * 那种行上比不出新旧：有备忘就显示备忘（取到了却画一个破折号更差），但那一格**不等于
+ * 「备忘比追问新」** —— 悬浮卡里会把这个限定说出来（第 2 轮审查 N2）。
+ */
+function memoWins(
+  task: TaskListItem,
+  last: TaskFollowUp | undefined,
+  memo: TaskMemoDigest | undefined,
+  known: boolean,
+): boolean {
+  if (!memo) return false;
+  if (!known) return true;
+  return memoIsNewer(memo.at, followUpInstant(task, last));
 }
 
 // 这一列只放**我自己**发的话（判据是 shared 的 isUserFollowUp，跟详情页 Inspector
@@ -125,7 +138,7 @@ export function SpreadRowCells({ task, ctx, onOpen }: { task: TaskListItem; ctx:
   // 没问过后端的行（比如别的项目）只留一个破折号，不能写「还没追问过」——那是在编。
   const known = ctx.spread.loaded.has(task.id);
   // 存成「要显示的那条备忘」而不是一个布尔：JSX 里直接用它，省掉一次非空断言。
-  const showMemo = memoWins(task, last, memo) ? memo : undefined;
+  const showMemo = memoWins(task, last, memo, known) ? memo : undefined;
   const { body, paths } = parseAttachmentText(ctx.spread.bodies.get(task.id) ?? "");
   const cell = (kind: PeekKind) => ({
     onClick: onOpen,
@@ -264,6 +277,9 @@ export function SpreadPeekCard({
             <span>{memo.count > 1 ? `共 ${memo.count} 条 · 最近 ${compactAge(memo.at)}` : `只有这一条 · ${compactAge(memo.at)}`}</span>
           </div>
           <p>{memo.text}</p>
+          {/* 追问还没读到的那些行（只读头一批）：外面那一格显示的是备忘，但那不是
+              「它更新」的结论 —— 没读到的东西不能拿来比（第 2 轮审查 N2）。 */}
+          {!known && <p className="workspace-spread-peek-caveat">这个任务的追问还没读到，所以不确定哪一条更新。</p>}
         </div>
       )}
       {paths.length > 0 && (

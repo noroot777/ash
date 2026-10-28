@@ -50,7 +50,11 @@ export function useTaskInspectorStack(
   const inspectorPolicy = useMemo(() => ({
     stateKey: `single:all-tabs-v7:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
-    preserveActiveTabIds: ["side-chat"],
+    // 停在这几格上时**不要**被自动切走。判据是「用户主动打开它在干活」：侧聊在跟人对话，
+    // 备忘可能正编辑着一条几百字的。stateKey 含 status，任务一跑完就换挡，于是「写到一半
+    // 任务结束了，右边自己跳回信息」—— 草稿本身已经挪进 taskMemoDrafts.ts 不会丢，但人
+    // 被甩走一次仍然是错的（独立审查第 2 轮 F1）。
+    preserveActiveTabIds: ["side-chat", "memos"],
     // 顺序由 TASK_INSPECTORS 定，这里只说「默认哪几格开着」。
     //
     // 子智能体和哨兵**故意不在这张表里**：那两格走「用过才浮现」（inspector/usedTabs.tsx），

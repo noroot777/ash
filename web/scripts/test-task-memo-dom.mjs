@@ -33,8 +33,11 @@ function backend() {
     /** 真 = 把 GET 的应答按住不发（手里那份快照就此变旧）。 */
     holdReads: false,
     held: [],
-    /** 放行被按住的那几发：它们带的是按住当时的快照。 */
-    release() { for (const send of this.held.splice(0)) send(); },
+    /**
+     * 放行被按住的那几发（它们带的是按住当时的快照），并**等到真的发出去**。
+     * 不等的话，紧跟其后的断言会在旧应答还没被页面收下时就跑完（第 2 轮审查 N5）。
+     */
+    release() { return Promise.all(this.held.splice(0).map((send) => send())); },
     /** 真 = PATCH 一律 503（注入保存失败）。 */
     failPatch: false,
     async route(route) {
@@ -62,7 +65,10 @@ function backend() {
         const snapshot = [...rows];
         if (this.holdReads) {
           return new Promise((resolve) => {
-            this.held.push(() => resolve(route.fulfill({ json: snapshot })));
+            this.held.push(async () => {
+              await route.fulfill({ json: snapshot });
+              resolve();
+            });
           });
         }
         return route.fulfill({ json: snapshot });
@@ -110,6 +116,15 @@ async function openPage(origin, api, query = "") {
  */
 const bodyShowing = (panel, text) =>
   panel.locator(".task-memo-card__body").filter({ hasText: text }).first().waitFor();
+
+/** 等一个 **Node 侧**的条件成真 —— 用来等后端桩收到某一发请求，页面侧的 waitFor 看不到它。 */
+async function waitFor(check, what, timeout = 8000) {
+  const deadline = Date.now() + timeout;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`等不到：${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
 
 /** 会话里选中一段话，跟真人拖选一样把事件补齐（照 test-side-chat-selection-browser.mjs）。 */
 async function selectContents(locator) {
@@ -289,14 +304,18 @@ try {
     assert.equal(api.rows.length, 1);
 
     // 放行那发旧应答：它不含刚写的那条，但不许据此把界面抹回去。
+    const reads = () => api.requests.filter((line) => line === "GET /api/tasks/task-a/memos").length;
+    assert.equal(reads(), 1, "按住的就是首发那一发");
     api.holdReads = false;
     await api.release();
-    // 作废之后会自己重拉一发，拉回来的是含那条的最新快照。
-    await page.waitForFunction(
-      () => document.querySelectorAll(".task-memo-card").length === 1,
-      undefined,
-      { timeout: 8000 },
-    );
+    // **等到补发那一发 GET 出现**才算旧应答真的被收下并判了废：补发只写在作废那条分支
+    // 里，它出现就是证据。少了这道屏障，「卡片仍是 1 条」在放行之前就已经成立，这个
+    // 用例等于什么都没验（第 2 轮审查 N5）。
+    await waitFor(() => reads() >= 2, "旧快照作废后补发一发 GET");
+    // 再等一会儿让补发的应答落地：它拉回的是含那条的最新快照，所以处理完**仍是** 1 条，
+    // 而且不该再触发下一发（那会是重拉死循环）。
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(reads(), 2, "补发那一发自己不该再引出一发");
     await bodyShowing(panel, "按住读取时写进来的那条");
     assert.equal(
       await panel.locator(".task-memo-card").count(),

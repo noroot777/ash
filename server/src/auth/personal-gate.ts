@@ -68,6 +68,15 @@ const PERSONAL_PATHS = [
   // 是一条待审批通知,而是任务正文、会话历史和仓库状态**直接迁移**过去(第 3 轮审查 P1)。
   // 精确到末尾:`/handoff/preflight` 只探路不动任务,派活要用,留给它。
   /^\/api\/tasks\/[^/]+\/handoff$/,
+  //  · 任务备忘是**人写给自己看的私有批注**(shared/src/task-memo.ts 顶部那份分界):它不进
+  //    任何 prompt,agent 压根读不到,自然也没有任何理由改得动。而 `canUseOwned` 判的是
+  //    `ownerUserId` 相等 —— 回合凭证身上恰好挂着 owner 的归属戳,于是只凭
+  //    `x-ash-source-task-id` + `x-ash-turn-token` 就能改写、删掉用户自己记的东西
+  //    (第 2 轮审查 F2 实测:对照 `POST /api/notes` 返 403,备忘这三条却 201/200/200)。
+  //    随手记走的是第一段(PERSONAL_COLLECTIONS 里的 "notes"),备忘挂在任务下面所以在这里。
+  //    **末尾那条摘要端点不在内**:`/api/tasks/memos` 是只读集合查询(POST 只因为要带一批
+  //    taskId),下面这条正则要求中间那段是任务 id,正好不会误伤它。
+  /^\/api\/tasks\/[^/]+\/memos(?:\/|$)/,
 ];
 
 export const AGENT_PERSONAL_REFUSAL =

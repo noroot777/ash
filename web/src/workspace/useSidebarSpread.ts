@@ -3,6 +3,7 @@ import type { TaskFollowUp, TaskListItem } from "@ash/shared";
 import type { TaskMemoDigest } from "@ash/shared/task-memo";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
+import { onTaskMemoWrite } from "../task-memos/taskMemoStore.ts";
 import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type WorkerIndex } from "../lib/taskAttention.ts";
 import { scopeHasFilters, scopeTasks, visibleInScope, type TaskScope } from "./taskScope.ts";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
@@ -195,6 +196,29 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
     fillByBatch(ids, api.taskBodies, (row) => row.body, setBodies, () => alive);
     return () => { alive = false; };
   }, [idsKey, open, revision]);
+
+  // 本页动了某个任务的备忘，就只补那一个任务的摘要。这一列自己存一份缓存、也不订阅
+  // 那个 store（口径在服务端，而且它关心的任务远不止当前打开的那一个），不接这根线的话
+  // 刚存上的那条要等收起重开才出现（第 2 轮审查 N1 实测）。
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    const stop = onTaskMemoWrite((taskId) => {
+      void api.taskMemoDigests([taskId])
+        .then((rows) => {
+          if (!alive) return;
+          setMemos((current) => {
+            const next = new Map(current);
+            // 删到一条不剩的任务不在返回里（跟 /tasks/follow-ups 同一条规矩），那一格要跟着清掉。
+            if (rows.length) next.set(taskId, rows[0]);
+            else next.delete(taskId);
+            return next;
+          });
+        })
+        .catch(() => {});
+    });
+    return () => { alive = false; stop(); };
+  }, [open]);
 
   const toggle = useCallback(() => setOpen((value) => !value), []);
   const close = useCallback(() => setOpen(false), []);

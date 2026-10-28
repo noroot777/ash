@@ -145,6 +145,9 @@ export function TeamView({
     // 开合由各自的 hook 翻 `defaultOpen`，写进这里会被每次语义换挡无条件并集回去。
     stateKey: `team:timeline-v4:${allWorkersComplete ? "complete" : "active"}`,
     requiredTabId: "info",
+    // 停在备忘上时不要被自动切走：执行者一个个收工就会换挡（stateKey 含
+    // allWorkersComplete），而那一格里可能正编辑着一条没保存的（同 TaskDetail 那份）。
+    preserveActiveTabIds: ["memos"],
     defaultOpenTabIds: allWorkersComplete
       ? ["info", "review", "artifacts", "memos", "timeline"]
       : ["info", "workers", "artifacts", "memos", "timeline"],
