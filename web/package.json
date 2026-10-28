@@ -174,7 +174,7 @@
     "test:settings-path-jump": "node scripts/test-settings-path-jump.mjs",
     "test:settings-card-fit": "node scripts/test-settings-card-fit.mjs",
     "test:reply-standing-executor": "node scripts/test-reply-standing-executor.mjs",
-    "test:branch-acceptance": "tsx scripts/test-page-interactions.tsx && node scripts/test-branch-acceptance.mjs",
+    "test:branch-acceptance": "tsx scripts/test-page-interactions.tsx && node scripts/test-acceptance-workspace-commit-dom.mjs && node scripts/test-branch-acceptance.mjs",
   "//test:accept-gate-dom": "验收台上那张「验收前置命令」卡:没设时它是个入口(保存发的是项目级 PATCH 且说破这一点)、没权限的人看不到入口、跑着不给改命令、红了那两条出路只上报意图。",
   "test:accept-gate-dom": "node scripts/test-accept-gate-dom.mjs",
   "//test:reply-rail-dom": "回复框上方那条 rail 重渲染不许留下孤儿节点（任务 z2lq7MAWeKx7 实测:「在等 N 个哨兵」一张张变多而数据只有 1 条）。真浏览器才看得见:fiber 树里始终只有一张。",

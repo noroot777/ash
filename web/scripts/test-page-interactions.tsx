@@ -9,14 +9,16 @@ import { workspaceCommitBlock, workspaceCommitPaths } from "../src/review/worksp
 import type { ScmOverview, ScmChange } from "../src/lib/api.ts";
 
 const change = (path: string, origPath: string | null = null): ScmChange => ({ path, origPath, kind: "modified", nested: false, conflict: null });
-const overview = {
-  root: { path: "/tmp/task", source: "worktree", isRepo: true }, taskRunning: false, readOnly: null,
+const overview: ScmOverview = {
+  root: { path: "/tmp/task", source: "worktree", branch: "task", gitRepo: true }, taskRunning: false, readOnly: null, acceptanceCommitBlock: null,
   status: { branch: { head: "task", detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
     staged: [change("both.txt")], unstaged: [change("both.txt"), change("new.txt", "old.txt")],
     untracked: [change("untracked.txt")], merge: [], operation: null, truncated: false }, commits: [],
-} as ScmOverview;
+};
 assert.deepEqual(workspaceCommitPaths(overview.status), ["both.txt", "new.txt", "old.txt", "untracked.txt"]);
 assert.equal(workspaceCommitBlock(overview), null);
+assert.match(workspaceCommitBlock({ ...overview, acceptanceCommitBlock: undefined })!, /尚未确认/);
+assert.match(workspaceCommitBlock({ ...overview, acceptanceCommitBlock: "共用项目目录，不属于任务独占工作区" })!, /共用项目目录/);
 assert.match(workspaceCommitBlock({ ...overview, taskRunning: true })!, /运行/);
 assert.match(workspaceCommitBlock({ ...overview, readOnly: "已归档" })!, /归档/);
 assert.match(workspaceCommitBlock({ ...overview, status: { ...overview.status, operation: "rebase" } })!, /Git 操作/);
@@ -29,6 +31,14 @@ assert.match(notice(overview), /一键提交改动/);
 assert.match(notice(overview), /项目未开启自动提交/);
 assert.match(notice(overview, true), /点击验收时会先提交/);
 assert.match(notice({ ...overview, taskRunning: true }), /disabled=""/);
+assert.doesNotMatch(notice({ ...overview, taskRunning: true }), /提交中…|is-spinning|请先提交/);
+const disabledNotice = renderToStaticMarkup(<WorkspaceCommitNotice overview={overview} autoCommit={false} busy={false}
+  disabled error={null} onCommit={() => {}} onRefresh={() => {}} />);
+assert.match(disabledNotice, /disabled=""/);
+assert.doesNotMatch(disabledNotice, /提交中…|is-spinning/);
+const busyNotice = renderToStaticMarkup(<WorkspaceCommitNotice overview={overview} autoCommit={false} busy
+  error={null} onCommit={() => {}} onRefresh={() => {}} />);
+assert.match(busyNotice, /提交中…/);
 assert.equal(notice({ ...overview, status: { ...overview.status, staged: [], unstaged: [], untracked: [] } }), "");
 
 const message = (id: string): ScheduledMessage => ({ id, taskId: "task", text: id, attachments: [], agent: null,

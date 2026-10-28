@@ -134,6 +134,7 @@ export type ScmOverview = {
    * 跟 `taskRunning` 不是一回事：那个是「确认一下就能干」，这个是冻结，force 也不解。
    */
   readOnly: string | null;
+  acceptanceCommitBlock?: string | null;
   status: ScmStatus;
   commits: ScmCommit[];
   /** 仅含远端名；URL 可能带凭据，不下发。旧服务端响应可能暂时缺少这个字段。 */

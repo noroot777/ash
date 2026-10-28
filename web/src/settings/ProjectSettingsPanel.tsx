@@ -185,7 +185,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
       <ProjectBrowserAccessSettings key={`browser-${project.id}`} project={project} onUpdated={onUpdated} notify={notify} canManage={canManage} />
       <section className="settings-section"><h2>验收</h2><div className="settings-card">
         <div className="settings-row">
-          <div><b>验收前自动提交任务改动</b><small>默认关闭。开启后，点击验收会先提交任务工作区内尚未提交的改动，再运行验收前置命令和合并；不会推送远端。存在冲突或仍有任务运行时不会提交。</small></div>
+          <div><b>验收前自动提交任务改动</b><small>默认关闭。开启后，点击验收会先提交独立任务工作区内尚未提交的改动，再运行验收前置命令和合并；不会推送远端。共用项目目录的任务会跳过自动提交，需在源代码管理中按文件选择；存在冲突或仍有任务运行时不会提交。</small></div>
           <Toggle label={project.acceptAutoCommit ? "已开启" : "已关闭"} checked={project.acceptAutoCommit === true}
             disabled={busy || !canManage} onChange={(checked) => void setAcceptAutoCommit(checked)} />
         </div>

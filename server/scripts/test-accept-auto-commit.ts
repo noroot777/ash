@@ -18,11 +18,14 @@ try {
   const { autoCommitAcceptanceWorkspace } = await import("../src/accept-workspace-commit.js");
   const { acceptTask } = await import("../src/task-accept.js");
   const { mountProjectRoutes } = await import("../src/project-routes.js");
+  const { mountScmRoutes } = await import("../src/scm-routes.js");
+  const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { Hono } = await import("hono");
   await ensureSchema();
   const app = new Hono();
   mountProjectRoutes(app);
-  const setup = async (suffix: string) => {
+  mountScmRoutes(app);
+  const setup = async (suffix: string, isolated = true) => {
     const repo = join(root, suffix);
     execFileSync("git", ["init", "-q", "-b", "main", repo]);
     git(repo, "config", "user.name", "Acceptance Test");
@@ -36,13 +39,45 @@ try {
     const at = new Date().toISOString();
     await db.insert(projects).values({ id: projectId, name: suffix, repoPath: repo, createdAt: at });
     await createTasks([{ id: taskId, projectId, title: `改动 ${suffix}`, status: "done", mode: "single", body: "test",
-      useWorktree: true, worktreeBase: "main", workflowMode: "free", createdAt: at, updatedAt: at }]);
+      useWorktree: isolated, worktreeBase: "main", workflowMode: "free", createdAt: at, updatedAt: at }]);
     const row = async () => (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
     const workspace = await taskWorkspace(await row(), repo);
     writeFileSync(join(workspace.path, "tracked.txt"), "changed\n");
     writeFileSync(join(workspace.path, "untracked.txt"), "new\n");
     return { repo, projectId, taskId, workspace, row };
   };
+  const manualCommit = (taskId: string) => app.request(`/tasks/${taskId}/scm/acceptance-commit`, { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ message: "chore: manual task commit", stagePaths: ["tracked.txt", "untracked.txt"] }) });
+  for (const detached of [false, true]) {
+    const value = await setup(`shared-${detached}`, false);
+    if (detached) git(value.repo, "checkout", "--detach", "-q");
+    writeFileSync(join(value.repo, "USER-SCRATCH.md"), "private draft\n");
+    const sessionId = `session-${value.taskId}`;
+    await db.insert(sessions).values({ id: sessionId, taskId: value.taskId, role: "executor", agentType: "codex",
+      executor: "test", cwd: value.repo, startedAt: new Date().toISOString() });
+    await db.update(projects).set({ acceptAutoCommit: true }).where(eq(projects.id, value.projectId));
+    const before = git(value.repo, "rev-parse", "HEAD");
+    const dirty = git(value.repo, "status", "--porcelain");
+    const overview = await (await app.request(`/tasks/${value.taskId}/scm`)).json();
+    assert.match(overview.acceptanceCommitBlock, /共用项目目录/);
+    assert.equal(await autoCommitAcceptanceWorkspace(await value.row(), true), null);
+    assert.equal((await manualCommit(value.taskId)).status, 409);
+    const result = await acceptTask(value.taskId);
+    assert.equal(result.accepted, true, JSON.stringify(result));
+    assert.equal(git(value.repo, "rev-parse", "HEAD"), before);
+    assert.equal(git(value.repo, "status", "--porcelain"), dirty);
+    assert.match(readFileSync(sessionTranscriptPath(value.taskId, sessionId), "utf8"), /已跳过自动提交/);
+  }
+  {
+    const value = await setup("manual-route");
+    const before = git(value.repo, "rev-parse", "HEAD");
+    const overview = await (await app.request(`/tasks/${value.taskId}/scm`)).json();
+    assert.equal(overview.acceptanceCommitBlock, null);
+    const response = await manualCommit(value.taskId);
+    assert.equal(response.status, 200, JSON.stringify(await response.json()));
+    assert.equal(git(value.workspace.path, "status", "--porcelain"), "");
+    assert.equal(git(value.repo, "rev-parse", "HEAD"), before);
+  }
   {
     const value = await setup("manual");
     const before = git(value.workspace.path, "rev-parse", "HEAD");
@@ -78,6 +113,7 @@ try {
     const result = await autoCommitAcceptanceWorkspace(await value.row(), true);
     assert.equal(result?.reason, "auto_commit_failed");
     assert.match(result!.error, /任务分支/);
+    assert.equal((await manualCommit(value.taskId)).status, 409);
     assert.equal(git(value.workspace.path, "rev-parse", "HEAD"), before);
   }
   {
@@ -89,6 +125,7 @@ try {
     const result = await autoCommitAcceptanceWorkspace(await value.row(), true);
     assert.equal(result?.reason, "auto_commit_failed");
     assert.match(result!.error, /不属于项目仓库/);
+    assert.equal((await manualCommit(value.taskId)).status, 409);
     assert.equal(git(foreign.workspace.path, "rev-parse", "HEAD"), before);
   }
   {
@@ -108,7 +145,7 @@ try {
     assert.equal(git(value.repo, "status", "--porcelain"), "");
     assert.equal((await value.row()).stage, "accepted");
   }
-  console.log("accept auto commit: default off, persistence, manual safety, busy/archive guards and real acceptance passed");
+  console.log("accept auto commit: shared/detached workspaces unchanged, common manual/auto ownership guards, default off, persistence and real acceptance passed");
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

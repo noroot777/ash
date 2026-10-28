@@ -8,8 +8,11 @@ import { CreateProjectDialog } from "../../src/overlays/CreateProjectDialog.tsx"
 import { AuthContext } from "../../src/auth/authContext.ts";
 import "../../src/styles/global.css";
 
+const scenario = new URLSearchParams(location.search).get("scenario");
+let commitAttempts = 0;
 let overview: ScmOverview = {
-  root: { path: "/workspace/demo/.worktrees/task", source: "worktree", gitRepo: true }, taskRunning: false, readOnly: null,
+  root: { path: "/workspace/demo/.worktrees/task", branch: "task", source: "worktree", gitRepo: true }, taskRunning: scenario === "running", readOnly: null,
+  acceptanceCommitBlock: scenario === "shared" ? "此任务共用项目目录，不能一键全量提交。请到源代码管理中按文件选择提交。" : null,
   status: { branch: { head: "task", detached: false, oid: "abc", upstream: null, ahead: null, behind: null },
     staged: [], unstaged: [{ path: "src/app.tsx", kind: "modified", origPath: null, conflict: null, nested: false }],
     untracked: [{ path: "notes.md", kind: "untracked", origPath: null, conflict: null, nested: false }], merge: [], operation: null, truncated: false }, commits: [],
@@ -30,7 +33,9 @@ window.fetch = async (input, init) => {
   }
   if (url.pathname === "/api/projects") return response([project]);
   if (url.pathname === "/api/projects/clone") return response({ ...project, name: "cloned", id: "cloned" }, 201);
-  if (url.pathname === "/api/tasks/demo/scm/commit") {
+  if (url.pathname === "/api/tasks/demo/scm/acceptance-commit") {
+    commitAttempts += 1;
+    if (scenario === "failure" && commitAttempts === 1) return response({ error: "提交失败：请配置 Git 用户信息后重试" }, 409);
     overview = { ...overview, status: { ...overview.status, staged: [], unstaged: [], untracked: [] } };
     return response({ ok: true, sha: "abc123456789", subject: "示例提交", status: overview.status });
   }
@@ -59,7 +64,7 @@ function Fixture() {
         onSteer={() => setNotice("不应引导系统消息")}
         onCancel={() => setNotice("仅取消这次哨兵唤醒，不停止哨兵")} />
       <h2>验收 · 未提交改动</h2>
-      <AcceptanceWorkspaceCommit task={{ id: "demo", projectId: "demo", title: "改进页面交互", updatedAt: "1" } as TaskListItem} notify={setNotice} />
+      <AcceptanceWorkspaceCommit task={{ id: "demo", projectId: "demo", title: "改进页面交互", updatedAt: "1" } as TaskListItem} notify={setNotice} disabled={scenario === "disabled"} />
       <p role="status" data-testid="result">{notice}</p>
       {dialog && <CreateProjectDialog projects={[]} onClose={() => setDialog(false)} notify={setNotice}
         onCreated={created => { setDialog(false); setNotice(`已创建项目：${created.name} · ${created.repoPath}`); }} />}

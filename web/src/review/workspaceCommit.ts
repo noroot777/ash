@@ -9,6 +9,8 @@ export function workspaceCommitPaths(status: ScmStatus): string[] {
 }
 
 export function workspaceCommitBlock(overview: ScmOverview): string | null {
+  if (overview.acceptanceCommitBlock === undefined) return "服务端尚未确认任务工作区归属，请到源代码管理中按文件选择提交。";
+  if (overview.acceptanceCommitBlock) return overview.acceptanceCommitBlock;
   if (overview.readOnly) return overview.readOnly;
   if (overview.taskRunning) return "还有任务正在这个工作目录中运行，请结束后再提交。";
   if (overview.status.merge.length || overview.status.operation) return "存在冲突或未完成的 Git 操作，请先在源代码管理中处理。";
