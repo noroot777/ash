@@ -17,7 +17,7 @@
 //
 // 证据尽力取，取不到也照说不误：claude 的 init 事件里直接写着每个 MCP server 连上没有，
 // 那是最硬的一手；codex 没有等价事件，只能从 stderr 里把跟 MCP 有关的报错行挑出来。
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
@@ -26,8 +26,34 @@ import { RUNS_DIR } from "./paths.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { turnProducedWork } from "./transcript.js";
 
-const read = (path: string): string => {
-  try { return readFileSync(path, "utf8"); } catch { return ""; }
+/**
+ * 日志**限量读**，不整读。
+ *
+ * 这条路径恰好只在「审查跑了很久、最后没给出结论」时触发 —— 也就是日志最可能很大的
+ * 那一刻，而整读 + `split("\n")` 是在服务主线程上同步做的（第 2 位审查者 N3）。
+ * 两边要的东西都在边上：claude 的 init 是**第一条**事件，codex 的诊断取**最后两行**。
+ */
+const BUDGET = 256 * 1024;
+
+const readEdge = (path: string, edge: "head" | "tail"): string => {
+  let fd: number | null = null;
+  try {
+    const size = statSync(path).size;
+    if (size <= BUDGET) return readFileSync(path, "utf8");
+    fd = openSync(path, "r");
+    const buf = Buffer.allocUnsafe(BUDGET);
+    const position = edge === "head" ? 0 : size - BUDGET;
+    const got = readSync(fd, buf, 0, BUDGET, position);
+    // 截断处可能切在一个多字节字符或半行中间：按行边界再裁一次，别把半行喂给解析。
+    const text = buf.subarray(0, got).toString("utf8");
+    const cut = edge === "head" ? text.lastIndexOf("\n") : text.indexOf("\n");
+    if (cut < 0) return text;
+    return edge === "head" ? text.slice(0, cut) : text.slice(cut + 1);
+  } catch {
+    return "";
+  } finally {
+    if (fd !== null) try { closeSync(fd); } catch { /* 关不上就算了 */ }
+  }
 };
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -62,7 +88,10 @@ export function claudeMcpEvidence(text: string): Evidence {
     }
     const status = typeof ash.status === "string" ? ash.status : "";
     return status === "connected"
-      ? { connected: true, detail: `这条会话启动时 ash MCP 是连上的，工具就在它手里 —— 多半是审查者自己漏了上报这一步。` }
+      // **只说连上了，别替它断言工具在手**：init 事件写的是「server 连上没有」，不是
+      // 「report_stage 暴露了没有」—— 执行器的工具白/黑名单能把具体工具挡掉，那时说
+      // 「多半是它自己漏了上报」就是把限制归咎于审查者（第 2 位审查者 N2）。
+      ? { connected: true, detail: `这条会话启动时 ash MCP 是连上的。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
       : { connected: false, detail: `这条会话启动时 ash MCP（${ash.name}）的状态是「${status || "未知"}」，不是 connected。` };
   }
   return null;
@@ -119,14 +148,14 @@ export async function noteReviewerChannelGap(a: {
   if (!(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) return false;
   const paths = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
   const evidence = a.agentType === "claude"
-    ? claudeMcpEvidence(read(paths.out))
-    : a.agentType === "codex" ? codexMcpEvidence(read(paths.err)) : null;
+    ? claudeMcpEvidence(readEdge(paths.out, "head"))      // init 是第一条事件
+    : a.agentType === "codex" ? codexMcpEvidence(readEdge(paths.err, "tail")) : null;  // 诊断取末两行
   const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
   const why = evidence
     ? evidence.detail
     : `常见原因是审查者手上根本没有 report_stage 这个工具（自查：${check}）：报告照样写得完整，只有最后一步上报做不到。`;
   const next = evidence?.connected
-    ? "点「继续本轮审查」可以让它接着上一次的上下文把结论补上，不用重跑这一轮。"
+    ? "可以先点「继续本轮审查」让它接着上一次的上下文补上报（不用重跑这一轮）；要是它说仍然没有这个工具，就去查执行器有没有限制工具清单。"
     : `修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。`;
   // **显式绑定刚结束那条审查会话**：缺省会按 `sessions.startedAt` 挑最新建的那条，而一条
   // 任务上常有比它更新的别的会话（「继续本轮审查」复用的是**较早**那条审查会话），于是这句

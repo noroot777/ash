@@ -18,7 +18,7 @@
 // 跑：npm -w server run test:ash-mcp-reach
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,10 +26,11 @@ const stage = mkdtempSync(join(tmpdir(), "ash-mcp-reach-"));
 process.env.ASH_DB = join(stage, "t.db");
 process.env.HARNESS_DB = process.env.ASH_DB;
 
-const has = (bin: string): boolean => {
-  try { execFileSync(bin, ["--version"], { stdio: "ignore", timeout: 20_000 }); return true; }
-  catch { return false; }
-};
+// **判存在性也必须走 resolveLaunch**：Windows 上 npm 装的 CLI 是 `.cmd` 垫片，直接
+// `execFile` 起它拿到 EINVAL —— 那会让整批 CLI 用例在真机上被静默跳过，于是这份登记
+// 根本不能算「真机预检通过」（第 2 位审查者在覆盖声明里点出的）。
+const { resolveLaunch } = await import("../src/executors/bin-resolve.js");
+const has = (bin: string): boolean => !!resolveLaunch(bin, []);
 
 try {
   const { ensureSchema } = await import("../src/db/index.js");
@@ -143,6 +144,106 @@ try {
       "带 --mcp-config 时判不了 → 放行",
     );
     delete process.env.CLAUDE_CONFIG_DIR;
+  }
+
+  // ── 9. F1:候选目录链必须跟 orchestrator 挑目录的顺序一致 ──────────────────
+  // 预检拿不到「这一轮真正会用的目录」就问不对。第 1 版在普通工作区分支压根没给 cwd
+  // 赋值，于是 execFile 继承了 server 进程的目录。
+  {
+    const { reviewCwdCandidates } = await import("../src/free-review-round.js");
+    const sessionsDesc = [
+      { id: "s-new", cwd: "/w/new", worktreePath: "/wt/new" },
+      { id: "s-old", cwd: "/w/old", worktreePath: "/wt/old" },
+    ];
+    assert.deepEqual(
+      reviewCwdCandidates("/explicit", undefined, sessionsDesc, "/workspace"),
+      ["/explicit", undefined, undefined, "/w/new", "/wt/new", "/workspace"],
+      "显式 cwd 排第一，其后是最近一条会话，最后兜底任务工作区",
+    );
+    assert.deepEqual(
+      reviewCwdCandidates(undefined, "s-old", sessionsDesc, "/workspace"),
+      [undefined, "/w/old", "/wt/old", "/w/new", "/wt/new", "/workspace"],
+      "要续某条会话时，那条会话的目录必须排在最近一条之前",
+    );
+    assert.deepEqual(
+      reviewCwdCandidates(undefined, undefined, [], "/workspace"),
+      [undefined, undefined, undefined, undefined, undefined, "/workspace"],
+      "一条会话都没有时也要有任务工作区兜底（普通分支过去就是全空）",
+    );
+  }
+
+  // ── 10. F1:传了目录,项目级登记才看得见;不传就只剩用户级 ───────────────────
+  if (has("claude")) {
+    const userDir = join(stage, "claude-user-empty");
+    const projectDir = join(stage, "task-workspace");
+    mkdirSync(userDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(join(userDir, ".claude.json"), "{}\n");
+    process.env.CLAUDE_CONFIG_DIR = userDir;
+    // 只在**这个项目目录**里登记（--scope local 落在 projects[cwd].mcpServers）
+    execFileSync("claude", ["mcp", "add", "ash", "--scope", "local", "--", "node", "/tmp/x.js"], {
+      cwd: projectDir, env: { ...process.env, CLAUDE_CONFIG_DIR: userDir },
+      stdio: "ignore", timeout: 60_000,
+    });
+    const withDir = await ashMcpReachability({ agentType: "claude", cwdCandidates: [projectDir] });
+    assert.equal(withDir.reachable, true, "F1：传了任务目录，项目级登记必须算数");
+    const noDir = await ashMcpReachability({ agentType: "claude", cwdCandidates: [] });
+    assert.equal(noDir.reachable, false, "没有目录时只剩用户级，这里确实没有 → 拦");
+    // 不存在的目录不能被当成有效答案的来源（orchestrator 那边会重建，这里只负责别乱问）
+    const ghost = await ashMcpReachability({
+      agentType: "claude", cwdCandidates: [join(stage, "gone"), projectDir],
+    });
+    assert.equal(ghost.reachable, true, "候选里的失效目录要跳过，接着问下一个");
+    delete process.env.CLAUDE_CONFIG_DIR;
+  }
+
+  // ── 11. F3:成功命令的 stderr 警告不能污染 stdout 的 JSON 答案 ──────────────
+  // 用一个**假 codex**：退出 0、stdout 给完整 JSON、stderr 同时写一句警告。真 codex 那条
+  // 警告要靠占住它内部某个缓存路径才能逼出来（版本一变就没了），拿假的来测「通道分离」
+  // 这件事本身更确定 —— 拼接实现在这里必挂：JSON.parse("[]\nWARNING…") 抛错 → unknown
+  // → 放行，而正确答案是「空列表 = 没有 ash」。
+  {
+    const fakeDir = join(stage, "fake-cli");
+    mkdirSync(fakeDir, { recursive: true });
+    const fake = (stdout: string) => {
+      const file = join(fakeDir, "codex");
+      writeFileSync(file, `#!/bin/sh\ncat <<'JSON'\n${stdout}\nJSON\necho 'WARNING: proceeding, even though we could not create PATH aliases: File exists (os error 17)' >&2\nexit 0\n`);
+      chmodSync(file, 0o755);
+    };
+    const pathWas = process.env.PATH;
+    process.env.PATH = `${fakeDir}:${pathWas ?? ""}`;
+
+    fake("[]");
+    const empty = await ashMcpReachability({ agentType: "codex" });
+    assert.equal(empty.reachable, false, "F3：stderr 有警告时，stdout 的空列表仍是有效答案 → 拦");
+
+    fake('[{"name":"ash","enabled":false,"disabled_reason":"turned off"}]');
+    const off = await ashMcpReachability({ agentType: "codex" });
+    assert.equal(off.reachable, false, "F3：禁用的答案也不能被 stderr 冲掉");
+    assert.match(off.problem ?? "", /turned off/, "要把 CLI 给的停用原因带出来");
+
+    fake('[{"name":"ash","enabled":true}]');
+    const on = await ashMcpReachability({ agentType: "codex" });
+    assert.equal(on.reachable, true, "F3：正常登记照样放行");
+
+    process.env.PATH = pathWas;
+  }
+
+  // ── 12. F2:预检必须走启动计划层,不能直接起 resolveBin 找到的文件 ───────────
+  // Windows 的真实行为在 macOS 上测不出来（`.cmd` 垫片要 cmd.exe 才起得来），而这条
+  // 缺陷恰恰只在那边发作：直接 execFile 一个 `.cmd` 得到 EINVAL，被当成「问不出来」
+  // 放行（第 2 位审查者 F2，真机实测）。所以这里钉的是**依赖方向** —— 它只准用
+  // resolveLaunch。bin-resolve.ts 的文件头写着 resolveBin「只回答在不在，不回答怎么起」。
+  {
+    const src = readFileSync(new URL("../src/ash-mcp-reachability.ts", import.meta.url), "utf8");
+    assert.match(src, /import \{ resolveLaunch \} from "\.\/executors\/bin-resolve\.js"/,
+      "预检必须从 bin-resolve 取 resolveLaunch");
+    // 只看代码行 —— 注释里当然会提到 resolveBin（那段说明讲的就是为什么不能用它）。
+    const code = src.split("\n")
+      .filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line))
+      .join("\n");
+    assert.ok(!/\bresolveBin\b/.test(code),
+      "预检不准碰 resolveBin —— 它只回答「在不在」，Windows 上据此 spawn 会 EINVAL");
   }
 
   // ── 8. CLI 压根不在 ───────────────────────────────────────────────────────

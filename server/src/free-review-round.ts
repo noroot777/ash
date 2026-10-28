@@ -105,6 +105,35 @@ export async function failReviewStart(run: ReviewRunRow, message: string): Promi
   bus.publish({ type: "task.review", taskId: run.taskId });
 }
 
+
+/** `launchReviewRound` 传给预检的候选目录。见下面那段注释，顺序必须跟 orchestrator 一致。 */
+export type ReviewCwdSession = { id: string; cwd: string | null; worktreePath: string | null };
+
+/**
+ * 「这一轮会在哪跑」的候选目录，**顺序照抄 orchestrator 的 `recorded`**
+ * （`orchestrator.ts`：`opts.cwd || prev?.cwd || prev?.worktreePath || all[0]?.cwd
+ * || all[0]?.worktreePath`），末尾再补上任务工作区 —— 那是它兜底 materialize 的那个。
+ *
+ * 单独提出来是为了能被回归钉住：预检只有拿到**这一轮真正会用的目录**才问得对，而第 1 版
+ * 传的 `cwd` 在普通工作区分支一直是 undefined，于是 `execFile` 继承了 server 进程的目录，
+ * 任务目录里接好的 claude 被判成「没有登记」，派审当场失败（第 2 位审查者 F1）。
+ * `sessions` 必须按 `startedAt` 倒序传进来（跟 orchestrator 的 `all` 同序）。
+ */
+export function reviewCwdCandidates(
+  explicitCwd: string | undefined,
+  resumeSessionId: string | undefined,
+  sessionsDesc: ReviewCwdSession[],
+  workspacePath: string | undefined,
+): (string | null | undefined)[] {
+  const prev = resumeSessionId ? sessionsDesc.find((s) => s.id === resumeSessionId) : undefined;
+  return [
+    explicitCwd,
+    prev?.cwd, prev?.worktreePath,
+    sessionsDesc[0]?.cwd, sessionsDesc[0]?.worktreePath,
+    workspacePath,
+  ];
+}
+
 /**
  * 崩掉的那一轮能不能**从中断处接着做**：那条 CLI 会话在崩掉的那一回合里干过活吗。
  *
@@ -130,6 +159,7 @@ export async function launchReviewRound(
   await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   let cwd: string | undefined;
+  let workspacePath: string | undefined;
   // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，
   // 全靠它跟当前 HEAD 比，不靠任何状态字段。取不到（工作区缺失）就留 null。
   if (run.targetKind === "accepted_merge") {
@@ -139,6 +169,7 @@ export async function launchReviewRound(
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
   } else if (project) {
     const workspace = await taskWorkspace(task, project.repoPath).catch(() => null);
+    workspacePath = workspace?.path;
     const head = workspace ? await headCommit(workspace.path) : null;
     if (head) {
       await db.update(freeReviewRounds).set({ reviewedCommit: head })
@@ -153,11 +184,17 @@ export async function launchReviewRound(
   // **排在 cwd 算出来之后**：claude 的项目级登记（`--scope local`）只在那个目录下看得见，
   // 在它之前问等于拿「别的目录没有」去拦这一轮（第 1 轮审查 F1）。判据刻意保守 ——
   // 问的是 CLI 自己，而且只有它明确说「没有」才拦，见 ash-mcp-reachability.ts。
+  // 候选目录按 orchestrator 挑目录的**同一条链**给（`orchestrator.ts` 的 `recorded`）：
+  // 显式 cwd → 要续的那条会话 → 最近一条会话 → 任务工作区。只传单个 `cwd` 不够 ——
+  // 普通工作区分支的 `cwd` 一直是 undefined，于是预检在 **server 进程**的目录里问，
+  // 任务目录里接好的 claude 被判成没登记（第 2 位审查者 F1）。
+  const sess = await db.select({ id: sessions.id, cwd: sessions.cwd, worktreePath: sessions.worktreePath })
+    .from(sessions).where(eq(sessions.taskId, task.id)).orderBy(desc(sessions.startedAt));
   const reach = await ashMcpReachability({
     ownerUserId: task.ownerUserId,
     agentType: run.agentType,
     executorId: run.executorId,
-    cwd,
+    cwdCandidates: reviewCwdCandidates(cwd, opts.resumeSessionId, sess, workspacePath),
   });
   if (!reach.reachable) throw new Error(`审查者交不了卷：${reach.problem}`);
   const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");

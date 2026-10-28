@@ -28,6 +28,7 @@
 // 原因)。所以只有 CLI 自己明确说「没有这个 server」「它被禁用了」才拦 —— 命令跑不起来、
 // 超时、输出看不懂、执行器带了判不了的覆盖参数,一律放行。
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
@@ -35,7 +36,7 @@ import { runEnvForOwner } from "./auth/run-env.js";
 import { db } from "./db/index.js";
 import { agents } from "./db/schema.js";
 import { cliSpec } from "./executors/catalog/index.js";
-import { resolveBin } from "./executors/bin-resolve.js";
+import { resolveLaunch } from "./executors/bin-resolve.js";
 
 const exec = promisify(execFile);
 
@@ -54,8 +55,17 @@ export interface AshMcpReachQuery {
   agentType: string;
   /** 这一轮要用的执行器 profile（`agents.id`）。它的 extraArgs 可能改写 MCP 登记。 */
   executorId?: string | null;
-  /** 这一轮的工作目录 —— claude 的**项目级**登记只在它下面看得见。 */
-  cwd?: string;
+  /**
+   * 这一轮**真正会在哪跑**，按 orchestrator 挑目录的那条优先级链给（见
+   * `orchestrator.ts` 的 `recorded`：显式 cwd → 要续的那条会话 → 最近一条会话 →
+   * 任务工作区）。取第一个真实存在的。
+   *
+   * 为什么是一串而不是一个：claude 的**项目级**登记（`--scope local`）只在那个目录下
+   * 看得见，而「这一轮会在哪跑」在起跑前只有这条链能回答。第 1 版传单个 `cwd`，普通
+   * 工作区分支压根没给它赋值，于是 `execFile` 继承了 **server 进程**的目录 ——
+   * 在任务目录里接好的 claude 被判成「没有登记」，派审当场失败（第 2 位审查者 F1）。
+   */
+  cwdCandidates?: (string | null | undefined)[];
 }
 
 const ok = (): AshMcpReach => ({ reachable: true, problem: null });
@@ -115,26 +125,41 @@ function codexMcpOverrides(extraArgs: string[]): string[] {
 /** claude 这边没有「把覆盖参数也带上去问」的办法，只能认出来然后放行。 */
 const CLAUDE_MCP_OVERRIDE = /^--(?:mcp-config|strict-mcp-config)(?:=|$)/;
 
+/**
+ * 跑一条只读子命令。
+ *
+ * 两件事都是**踩过的**：
+ *  ① **必须走 `resolveLaunch`**，不能把 `resolveBin` 的结果直接交给 `execFile`。
+ *     `bin-resolve.ts` 的文件头写得很清楚：那个函数「只回答在不在，不回答怎么起」——
+ *     Windows 上 npm 装的 CLI 是 `.cmd` 垫片，`execFile` 直接起它拿到的是 `EINVAL`
+ *     （第 2 位审查者 F2，真机实测 `…\\codex.cmd` → EINVAL → 被当成「问不出来」放行）。
+ *  ② **两个输出通道分开回**。codex 成功退出、stdout 是完整 JSON，stderr 却可能同时有
+ *     一句无关警告（实测：创建 PATH 别名失败）。拼在一起再 `JSON.parse` 就把一份有效
+ *     答案解析成了「看不懂」（第 2 位审查者 F3）。
+ */
 async function probe(
   bin: string,
   args: string[],
   env: NodeJS.ProcessEnv,
   cwd: string | undefined,
-): Promise<{ code: number; out: string } | null> {
+): Promise<{ code: number; stdout: string; stderr: string } | null> {
+  const plan = resolveLaunch(bin, args);
+  if (!plan) return null;
   try {
-    const { stdout, stderr } = await exec(bin, args, {
+    const { stdout, stderr } = await exec(plan.file, plan.args, {
       env,
       cwd,
       timeout: PROBE_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024,
       windowsHide: true,
+      ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
-    return { code: 0, out: `${stdout}\n${stderr}` };
+    return { code: 0, stdout, stderr };
   } catch (error) {
     const e = error as { code?: unknown; stdout?: string; stderr?: string; killed?: boolean };
     // 超时被杀 / 压根起不来：没有答案可用。
     if (e.killed || typeof e.code !== "number") return null;
-    return { code: e.code, out: `${e.stdout ?? ""}\n${e.stderr ?? ""}` };
+    return { code: e.code, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
   }
 }
 
@@ -149,7 +174,9 @@ async function askClaude(bin: string, env: NodeJS.ProcessEnv, cwd: string | unde
     const res = await probe(bin, ["mcp", "get", name], env, cwd);
     if (!res) return { state: "unknown" };
     if (res.code === 0) return { state: "present" };
-    if (/No MCP server named/i.test(res.out)) { sawNoSuchServer = true; continue; }
+    // 文本判定两个通道都看：这句话落在哪一路由 CLI 版本决定，而它只是「有没有这个
+    // server」的证词，不像 JSON 那样会被别的输出带坏。
+    if (/No MCP server named/i.test(`${res.stdout}\n${res.stderr}`)) { sawNoSuchServer = true; continue; }
     return { state: "unknown" };                     // rc≠0 但不是「没有这个 server」：另有问题，不归这里答
   }
   return sawNoSuchServer ? { state: "absent" } : { state: "unknown" };
@@ -164,8 +191,9 @@ async function askCodex(
 ): Promise<Verdict> {
   const res = await probe(bin, [...overrides, "mcp", "list", "--json"], env, cwd);
   if (!res || res.code !== 0) return { state: "unknown" };
+  // **只解析 stdout**：stderr 的警告不是答案的一部分（第 2 位审查者 F3）。
   let parsed: unknown;
-  try { parsed = JSON.parse(res.out.trim()); } catch { return { state: "unknown" }; }
+  try { parsed = JSON.parse(res.stdout.trim()); } catch { return { state: "unknown" }; }
   if (!Array.isArray(parsed)) return { state: "unknown" };
   const rows = parsed.filter((r): r is Record<string, unknown> => !!r && typeof r === "object");
   const found = rows.find((r) => typeof r.name === "string" && WANTED.includes(r.name));
@@ -196,9 +224,10 @@ export async function ashMcpReachability(q: AshMcpReachQuery): Promise<AshMcpRea
   let bin: string | null = null;
   let env: NodeJS.ProcessEnv;
   try {
+    // 命令名交给 resolveLaunch 去解析（它内部走 resolveBin，再决定怎么起）——
+    // 这里只负责挑出「这台机器上有的那个候选名」。
     for (const candidate of cliSpec(agentType).bins) {
-      bin = resolveBin(candidate);
-      if (bin) break;
+      if (resolveLaunch(candidate, [])) { bin = candidate; break; }
     }
     // 起跑要用的那一份 env（隔离档下带 CLAUDE_CONFIG_DIR / CODEX_HOME）。宿主机自己
     // 设的那两个变量由 process.env 原样继承 —— 真实 spawn 也是这么继承的。
@@ -208,9 +237,14 @@ export async function ashMcpReachability(q: AshMcpReachQuery): Promise<AshMcpRea
   }
   if (!bin) return ok();                             // CLI 都不在这台机器上，派审会以别的方式失败
 
+  // 第一个真实存在的目录。一个都不存在就不传 —— execFile 会继承 server 的目录，而那
+  // 正是 F1 的病根，所以宁可让 claude 在默认目录下只看用户级登记（结论偏向 absent 的
+  // 那一半由下面「只有明确说没有才拦」兜住），也不假装我们知道它会在哪跑。
+  const cwd = (q.cwdCandidates ?? []).find((d): d is string => !!d && existsSync(d));
+
   const verdict = agentType === "claude"
-    ? await askClaude(bin, env, q.cwd)
-    : await askCodex(bin, codexMcpOverrides(extraArgs), env, q.cwd);
+    ? await askClaude(bin, env, cwd)
+    : await askCodex(bin, codexMcpOverrides(extraArgs), env, cwd);
 
   if (verdict.state === "absent") {
     return {
@@ -226,4 +260,17 @@ export async function ashMcpReachability(q: AshMcpReachQuery): Promise<AshMcpRea
     };
   }
   return ok();
+}
+
+/**
+ * 宿主默认配置下，这个 CLI **自己**说没有 ash MCP 吗。启动自检（`user-cli.ts` 的
+ * `warnHostAshMcp`）用：它没有 profile、没有 cwd，问的就是「这台机器的用户级配置」。
+ *
+ * 返回 true 只在 CLI 明确说没有时 —— 跟派审那道门禁同一条规矩。软告警也走这里，是因为
+ * 第 2 位审查者 N1：用正则判 TOML 会把合法的 `[mcp_servers."ash"]`、缩进表头判成缺失，
+ * 于是启动时刷一行假告警。判据只留一份，漂不了。
+ */
+export async function hostAshMcpMissing(agentType: string): Promise<boolean> {
+  const reach = await ashMcpReachability({ agentType });
+  return !reach.reachable;
 }

@@ -21,7 +21,7 @@ import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync
 import { join } from "node:path";
 import type { AgentType, PersonalCliEnv, PersonalSkill } from "@ash/shared";
 import { DATA_DIR } from "../paths.js";
-import { ensureAshMcp, hostAshMcpGaps } from "./user-cli-mcp.js";
+import { ensureAshMcp, ashMcpRegistration, hostCliConfigDir, hostCliConfigFile } from "./user-cli-mcp.js";
 
 /** 个人配置目录的根。刻意放 data/ 下 —— 见文件顶部。 */
 export const USER_CLI_ROOT = join(DATA_DIR, "user-cli");
@@ -191,31 +191,33 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
  * `[mcp_servers.ash]` 的机器：codex 任务干完活交不了卷、一律记 failed，一轮审查更是
  * 跑满 35 分钟写完报告，最后才发现没有 `report_stage` 可调，而 ash 全程一言不发。
  */
-function warnHostAshMcp(): void {
-  const gaps = hostAshMcpGaps();
+async function warnHostAshMcp(): Promise<void> {
+  const gaps: string[] = [];
+  for (const agentType of ["claude", "codex"]) {
+    const file = hostCliConfigFile(agentType);
+    if (!file || !existsSync(file)) continue;              // 这个 CLI 没在这台机器上用过
+    const dir = hostCliConfigDir(agentType);
+    // 两道判据，顺序有意：**先用配置文件快速放过**（已经接好的机器零开销），只有它说
+    // 「确实没有」才花一次子进程去问 CLI 自己确认。正则读 TOML 会把合法的
+    // `[mcp_servers."ash"]`、缩进表头判成缺失（第 2 位审查者 N1），所以**结论不归它下**，
+    // 它只负责省掉那次子进程。
+    if (!dir || ashMcpRegistration(dir, agentType).state !== "absent") continue;
+    const { hostAshMcpMissing } = await import("../ash-mcp-reachability.js");
+    if (!(await hostAshMcpMissing(agentType))) continue;
+    gaps.push(`${agentType}（${file}）`);
+  }
   if (!gaps.length) return;
-  console.warn("[ash] 这些 CLI 的**用户级**配置里没有 ash MCP 登记。如果它们也没有项目级登记或"
-    + "命令行覆盖，那它们的 agent 就交不了卷（没有 complete_task，干完的活会记 failed；"
-    + "派出去的审查跑完也给不出结论）：");
+  console.warn("[ash] 这些 CLI 自己报告没有 ash MCP 登记，它们的 agent 交不了卷"
+    + "（没有 complete_task，干完的活会记 failed；派出去的审查跑完也给不出结论）：");
   for (const line of gaps) console.warn(`  · ${line}`);
   console.warn("  自查：claude mcp get ash / codex mcp list --json。接法见 docs/install.md，"
     + "或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
 }
 
-/**
- * 启动自检:隔离档下把每个人的个人配置目录补齐 ash MCP,补不上的**在日志里点名**。
- *
- * 为什么补做之外还要单独扫一趟:`ensureUserCliDir` 只在「有人起任务 / 打开设置页」时
- * 才跑到,而缺这条登记的表现是**任务照跑、干完记 failed** —— 等第一个任务白跑一轮才
- * 发现,已经晚了一轮。启动时扫一遍,机器起来就是好的;补不上(没 build 过 mcp、配置
- * 文件坏了)则必须出声,否则用户只会看到一堆莫名其妙的失败任务。
- *
- * best-effort:任何一步出错都不许影响启动。
- */
 export async function sweepPersonalAshMcp(): Promise<void> {
   // 动态 import:mode.ts / db 都在 auth 这一圈里绕回来,顶层导入会绕出一个环。
   const { isHostCliIsolated } = await import("./mode.js");
-  if (!(await isHostCliIsolated())) return warnHostAshMcp();
+  if (!(await isHostCliIsolated())) return await warnHostAshMcp();
   const { db } = await import("../db/index.js");
   const { users } = await import("../db/schema.js");
   const rows = await db.select({ id: users.id, name: users.name }).from(users);
