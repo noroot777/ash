@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-mcp-file-"));
 process.env.ASH_DB = join(stage, "t.db");
@@ -239,5 +240,6 @@ try {
   process.env.PATH = pathWas;
   console.log("✅ ash MCP 预检的配置文件那一档（扫描器 / 文件判据 / 端到端 / 启动自检 / 起法提示）通过");
 } finally {
+  await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
 }

@@ -35,6 +35,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-mcp-reach-"));
 process.env.ASH_DB = join(stage, "t.db");
@@ -493,5 +494,6 @@ try {
 
   console.log("✅ ash MCP 预检（真实 CLI 对照 F1/F2 全部形状）通过");
 } finally {
+  await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
 }
