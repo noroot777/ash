@@ -325,10 +325,31 @@ try {
       (await ashMcpReachability({ agentType: "codex", cwdCandidates: many.slice(0, 8) })).reachable,
       false, "8 个目录问得全,全说没有 → 这是确定结论,拦",
     );
+    // 目录多到问不全时,「CLI 都说没有」不再确定 → 交给配置文件那一档用全部目录再判一次
+    // (新链第 3 轮第 2 条:上一版直接放行)。文件里有登记就放行,确定没有就拦、并注明证据来源。
+    useCodexHome();
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\n');
     assert.equal(
       (await ashMcpReachability({ agentType: "codex", cwdCandidates: many })).reachable,
-      true, "目录多到问不全时,「都说没有」不再确定 → 放行",
+      true, "问不全 + 配置里有登记 → 放行",
     );
+    writeCodex('model = "x"\n');
+    const truncated = await ashMcpReachability({ agentType: "codex", cwdCandidates: many });
+    assert.equal(truncated.reachable, false, "问不全 + 配置里确定没有 → 拦");
+    assert.match(truncated.problem ?? "", /读配置文件得出[\s\S]*只问了前 8 个/, "文案写明证据来源和为什么没问全");
+
+    // CLI 给了答案、但看不懂(以及超时、被打断、预算用完,同一条路):同样先过配置文件那一档。
+    fake("这不是 JSON");
+    const garbled = await ashMcpReachability({ agentType: "codex" });
+    assert.equal(garbled.reachable, false, "看不懂 + 配置里确定没有 → 拦，不再一律放行");
+    assert.match(garbled.problem ?? "", /输出看不懂/);
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\n');
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true,
+      "看不懂 + 配置里有登记 → 放行");
+    writeCodex('note = """\n[mcp_servers.ash]\n"""\n');
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true,
+      "看不懂 + 配置也判不了 → 两档都说不出来才放行");
+    delete process.env.CODEX_HOME;
     assert.equal(
       (await ashMcpReachability({ agentType: "codex", cwdCandidates: Array(12).fill(many[0]!) })).reachable,
       false, "重复目录去重后没超上限 → 照常拦(一条任务的会话常常都在同一个目录)",

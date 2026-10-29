@@ -36,8 +36,8 @@
 //
 // 判据只有一条硬规矩:**向放行开**。拦错一轮审查,用户得到的是一条根本跑不起来的链;
 // 放过一轮,最差也只是回到今天的样子(跑完没结论,由 `review-channel-gap.ts` 如实说明
-// 原因)。所以只有 CLI 自己明确说「没有这个 server」「它被禁用了」才拦 —— 命令跑不起来、
-// 超时、输出看不懂、执行器带了判不了的覆盖参数,一律放行。
+// 原因)。所以只有「确定没有」才拦:CLI 自己明确说「没有这个 server」「它被禁用了」,或者
+// 问不出 CLI 时配置文件那一档确定没有(下一节)。执行器带了判不了的覆盖参数,一律放行。
 //
 // ── 问不了 CLI 时:退到配置文件,而不是整条放行 ───────────────────────────────
 //
@@ -47,7 +47,13 @@
 // 在报事故的那类机器上整个不工作。所以问不了时换成读配置文件那一档(`ash-mcp-file.ts`,
 // 不起任何进程),它只在「确定没有」时说没有,文案里写明证据来源和问不了 CLI 的原因。
 //
-// **「问不了」认的是这次探测自己的收场(`not-started`),不是一句预判。** 上一版先问
+// **CLI 本人给出一份能解释的答案,是直接下结论的唯一途径;其余一切收场都先过这一档。**
+// 没启动、起了没问出来(超时/被打断/盘上没有结束状态)、输出看不懂、预算用完、候选目录被
+// 截断 —— 上一版只给「没启动」接上了这一档,其余直接放行,而 Windows 上一问 4~6 秒、总预算
+// 20 秒,三个候选目录就必然落进「预算用完 ⇒ 放行」(新链第 3 轮审查第 2 条)。这一档不起
+// 进程、读得完全部候选目录,它也说不出来才放行。
+//
+// **「问不了」认的是这次探测自己的收场,不是一句预判。** 上一版先问
 // `confineAbstention()` 再决定走哪一档,而那句预判跟探测真实的失败面对不上(Windows 上恒说
 // 「能」,Linux 上只试一次 cgroup 可写):预判说能、真起不来时落成「问不出来 ⇒ 放行」,文件档
 // 再也接不上(新链第 2 轮审查第 1 条)。所以判据层不再引用那句预判。
@@ -127,15 +133,19 @@ const HOW_TO_CHECK: Record<string, string> = {
 const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
 
 /**
- * CLI 自己给的答案。`unknown` = 起了、问不出来，调用方必须放行；`not-started` = 一条指令都
- * 没起（`ProbeOutcome` 同名那一种），调用方退到配置文件那一档。
+ * CLI 自己给的答案。`unknown` = 没拿到一份能解释的答案（没启动、问不出来、看不懂、预算用完），
+ * `why` 写进配置文件那一档的文案 —— 调用方据此退到那一档，而不是直接放行。
  */
 type Verdict =
   | { state: "present"; hint?: string | null }
-  | { state: "unknown" }
-  | { state: "not-started"; why: string }
+  | { state: "unknown"; why: string }
   | { state: "absent" }
   | { state: "disabled"; detail: string };
+
+const OUT_OF_BUDGET: Verdict = { state: "unknown", why: "预检的时限用完了，没问完" };
+/** 探测层的两种「没答案」收场，统一成判据层的 unknown。 */
+const noAnswer = (res: { kind: "unqueryable" } | { kind: "not-started"; why: string }, what: string): Verdict =>
+  ({ state: "unknown", why: res.kind === "not-started" ? res.why : `${what} 没给出结果（超时或被打断）` });
 
 /**
  * 探测命令**原样带上这一轮的 extraArgs**，不再自己挑「哪些跟 MCP 有关」。
@@ -167,17 +177,17 @@ async function askClaude(
   let sawNoSuchServer = false;
   for (const name of WANTED) {
     const timeout = probeTimeout(budget);
-    if (timeout === null) return { state: "unknown" };
+    if (timeout === null) return OUT_OF_BUDGET;
     const res = await probeCli(bin, ["mcp", "get", name], env, cwd, timeout);
-    if (res.kind === "not-started") return { state: "not-started", why: res.why };
-    if (res.kind === "unqueryable") return { state: "unknown" };
+    if (res.kind !== "answer") return noAnswer(res, `claude mcp get ${name}`);
     if (res.code === 0) return { state: "present", hint: claudeStatusHint(res.stdout) };
     // 文本判定两个通道都看：这句话落在哪一路由 CLI 版本决定，而它只是「有没有这个
     // server」的证词，不像 JSON 那样会被别的输出带坏。
     if (/No MCP server named/i.test(`${res.stdout}\n${res.stderr}`)) { sawNoSuchServer = true; continue; }
-    return { state: "unknown" };                     // rc≠0 但不是「没有这个 server」：另有问题，不归这里答
+    // rc≠0 但不是「没有这个 server」：另有问题，CLI 这一问的答案解释不了。
+    return { state: "unknown", why: `claude mcp get ${name} 退出码 ${res.code}，也没说「没有这个 server」` };
   }
-  return sawNoSuchServer ? { state: "absent" } : { state: "unknown" };
+  return sawNoSuchServer ? { state: "absent" } : { state: "unknown", why: "claude 一问都没答" };
 }
 
 /**
@@ -202,14 +212,15 @@ async function askCodex(
   budget: Budget,
 ): Promise<Verdict> {
   const timeout = probeTimeout(budget);
-  if (timeout === null) return { state: "unknown" };
+  if (timeout === null) return OUT_OF_BUDGET;
   const res = await probeCli(bin, [...extraArgs, "mcp", "list", "--json"], env, cwd, timeout);
-  if (res.kind === "not-started") return { state: "not-started", why: res.why };
-  if (res.kind === "unqueryable" || res.code !== 0) return { state: "unknown" };
+  if (res.kind !== "answer") return noAnswer(res, "codex mcp list --json");
+  if (res.code !== 0) return { state: "unknown", why: `codex mcp list --json 退出码 ${res.code}` };
   // **只解析 stdout**：stderr 的警告不是答案的一部分（第 2 位审查者 F3）。
   let parsed: unknown;
-  try { parsed = JSON.parse(res.stdout.trim()); } catch { return { state: "unknown" }; }
-  if (!Array.isArray(parsed)) return { state: "unknown" };
+  const unreadable: Verdict = { state: "unknown", why: "codex mcp list --json 的输出看不懂" };
+  try { parsed = JSON.parse(res.stdout.trim()); } catch { return unreadable; }
+  if (!Array.isArray(parsed)) return unreadable;
   const rows = parsed.filter((r): r is Record<string, unknown> => !!r && typeof r === "object");
   const mine = rows.filter((r) => typeof r.name === "string" && WANTED.includes(r.name));
   if (!mine.length) return { state: "absent" };
@@ -254,19 +265,24 @@ const MAX_PROBE_DIRS = 8;
  * 把工作区 materialize 出来、把它的 path 放进了候选 —— 所以它一定活着、一定在这张表里。
  * 换句话说：真实运行目录 ∈ {存在的候选}，不存在的那些 orchestrator 自己也不会用。
  *
- * `complete=false` 表示这张表没问全（目录多到被截断）。那时「全都说没有」不再是确定
- * 的结论，调用方必须放行 —— 宁可回到「跑完没结论、由 review-channel-gap 说明原因」。
+ * `dirs` 是 CLI 那一档要问的（问一次要起进程，所以截断）；`all` 是全部活着的候选，给配置
+ * 文件那一档（读文件不花钱，一个都不截）。截断过的时候「CLI 全都说没有」不再是确定的结论，
+ * 调用方退到配置文件那一档用 `all` 再判一次。
  *
  * 一个都不剩时问一次「不指定目录」（execFile 继承 server 的目录，只看得见用户级登记）：
  * 启动自检 `hostAshMcpGap` 走的就是这条，它问的本来就是宿主默认配置。
  */
-function probeDirs(candidates: string[]): { dirs: (string | undefined)[]; complete: boolean } {
+function probeDirs(candidates: string[]): {
+  dirs: (string | undefined)[];
+  all: (string | undefined)[];
+  complete: boolean;
+} {
   const alive: string[] = [];
   for (const dir of candidates) {
     if (!alive.includes(dir) && existsSync(dir)) alive.push(dir);
   }
-  if (!alive.length) return { dirs: [undefined], complete: true };
-  return { dirs: alive.slice(0, MAX_PROBE_DIRS), complete: alive.length <= MAX_PROBE_DIRS };
+  if (!alive.length) return { dirs: [undefined], all: [undefined], complete: true };
+  return { dirs: alive.slice(0, MAX_PROBE_DIRS), all: alive, complete: alive.length <= MAX_PROBE_DIRS };
 }
 
 /**
@@ -313,23 +329,24 @@ async function reachWith(
   }
   if (!bin) return ok();                             // CLI 都不在这台机器上，派审会以别的方式失败
 
-  const { dirs, complete } = probeDirs(cwdCandidates);
+  const { dirs, all, complete } = probeDirs(cwdCandidates);
 
-  // 逐个问:present / unknown 任一出现就放行,只有**全都**说拿不到才往下走。
-  // 哪一问没启动起来(拿不到能核销那次查询的内核圈定、门闩铺不出来……),CLI 本人就没说过话
-  // ⇒ 整次退到配置文件那一档(见文件头「问不了 CLI 时」),前面几问的结论不拿来拼。
+  // 逐个问:present 出现就放行,只有**全都**说拿不到才往下走。
+  // 哪一问没拿到能解释的答案(没启动、问不出来、看不懂、预算用完),CLI 本人对这个目录就没
+  // 表过态 ⇒ 整次退到配置文件那一档(见文件头「问不了 CLI 时」),前面几问的结论不拿来拼。
   let worst: Verdict = { state: "absent" };
   for (const dir of dirs) {
     const v = agentType === "claude"
       ? await askClaude(bin, env, dir, budget)
       : await askCodex(bin, extraArgs, env, dir, budget);
-    if (v.state === "not-started") return fromFiles(agentType, extraArgs, env, dirs, complete, v.why);
     if (v.state === "present") return ok(v.hint ?? null);
-    if (v.state === "unknown") return ok();
+    if (v.state === "unknown") return fromFiles(agentType, extraArgs, env, all, v.why);
     if (v.state === "disabled") worst = v;            // 比 absent 更具体,留它来说话
   }
-  // 超集没问全(目录太多被截断)时,「全都说没有」不再是个确定的结论 —— 放行。
-  if (!complete) return ok();
+  // 超集没问全(目录太多被截断)时,「CLI 全都说没有」不再是个确定的结论 —— 剩下的交给文件档。
+  if (!complete) {
+    return fromFiles(agentType, extraArgs, env, all, `候选目录超过 ${MAX_PROBE_DIRS} 个，CLI 只问了前 ${MAX_PROBE_DIRS} 个`);
+  }
 
   if (worst.state === "disabled") {
     return {
@@ -353,7 +370,8 @@ async function reachWith(
  *
  *  · 带了 extraArgs 一律放行 —— 文件里看不到命令行覆盖(`-c mcp_servers.…`),跟 claude 那条
  *    「带了参数就不下硬结论」同一个理由,不去挑哪些参数跟 MCP 有关(第 4 轮审查 B1 那个病根);
- *  · 目录没问全(截断)放行;读不出、写法判不了放行(`fileAshMcpVerdict` 里那几种 unknown)。
+ *  · 读不出、写法判不了放行(`fileAshMcpVerdict` 里那几种 unknown)。目录不截断:读文件
+ *    不花钱,全部活着的候选都看。
  *
  * 说「没有」时文案里写明**这是读配置得出的、没经 CLI 确认**,以及为什么问不了 CLI ——
  * 用户拿到 409 的时候至少知道这一次的证据是什么。
@@ -363,13 +381,12 @@ function fromFiles(
   extraArgs: string[],
   env: NodeJS.ProcessEnv,
   dirs: (string | undefined)[],
-  complete: boolean,
   whyNotAsked: string,
 ): AshMcpReach {
   if (extraArgs.length) return ok();
   const v = fileAshMcpVerdict(agentType, env, dirs);
   if (v.state === "present") return ok(v.hint);
-  if (v.state === "unknown" || !complete) return ok();
+  if (v.state === "unknown") return ok();
   const basis = `（这是读配置文件得出的，没经 ${agentType} 本人确认 —— 这一次问不了它：${whyNotAsked}）`;
   return {
     reachable: false,

@@ -16,8 +16,8 @@
 // 第 1 版就是读配置文件，被审查用真实 CLI 打穿过（见 reachability 顶部那三个反例 + TOML
 // 正则判不准）。这一档照样要面对那些反例，处置一律是**向放行开**：
 //
-//  · claude 的项目级登记（`--scope local`）：读 `.claude.json` 的 `projects[<目录>]`，
-//    目录及其祖先都看；
+//  · claude 的项目级登记（`--scope local`）：读 `.claude.json` 的 `projects[<键>]`，键按
+//    claude 自己的规则算（主仓的 git 根，或不在仓库里时目录本身，见 `claudeProjectKeys`）；
 //  · claude 的 `.mcp.json`（`--scope project`）：启用与否取决于审批状态，判不了 ⇒ unknown；
 //  · 企业托管的 `managed-mcp.json`：存在即 unknown；
 //  · codex 的 `-c mcp_servers.…` 覆盖：调用方带了 extraArgs 就不进这一档（同 claude 那条）；
@@ -27,9 +27,9 @@
 //
 // 结论也要如实标出来源：这一档说「没有」时，文案里写明「读配置得出、未经 CLI 确认」，
 // 并带上问不了 CLI 的原因 —— 用户至少知道这一次的证据是什么。
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { boundListeningPort } from "./listening-port.js";
@@ -93,16 +93,26 @@ function claudeVerdict(env: NodeJS.ProcessEnv, dirs: (string | undefined)[]): Fi
   // 用户级（`--scope user`）。
   const user = pickServer(doc.mcpServers);
   if (user) return { state: "present", hint: launchHint(claudeSpec(user)) };
-  // 项目级（`--scope local`）住在 `projects[<绝对路径>]` —— 键是哪一层目录由 CLI 决定，
-  // 所以每个候选目录连同它的祖先都看一遍。
+  // 项目级（`--scope local`）住在 `projects[<键>]`，键只有一个，见 `claudeProjectKeys`。
+  // 上一版把每个候选目录的**全部祖先**都当键，于是仓库外面某个上层目录的登记（claude 根本
+  // 不认）会让下面所有任务放行（新链第 3 轮审查第 3 条）。
   const projects = doc.projects && typeof doc.projects === "object"
     ? doc.projects as Record<string, unknown> : {};
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const keys = claudeProjectKeys(dir);
+    if (!keys) return { state: "unknown", why: `${dir} 的 git 结构读不懂，算不出 claude 把项目级登记挂在哪` };
+    for (const key of keys) {
+      const entry = projects[key];
+      const local = entry && typeof entry === "object"
+        ? pickServer((entry as Record<string, unknown>).mcpServers) : null;
+      if (local) return { state: "present", hint: launchHint(claudeSpec(local)) };
+    }
+  }
+  // `--scope project` 的 `.mcp.json`：用不用得上要看用户批没批过，这一档判不了。**这一份要
+  // 一路看到文件系统根** —— 跟项目级登记不一样，claude 2.1 实测会读 git 根外面上层目录里的
+  // `.mcp.json`（`claude mcp get` 报 Project config / Pending approval）。
   for (const dir of withAncestors(dirs)) {
-    const entry = projects[dir];
-    const local = entry && typeof entry === "object"
-      ? pickServer((entry as Record<string, unknown>).mcpServers) : null;
-    if (local) return { state: "present", hint: launchHint(claudeSpec(local)) };
-    // `--scope project` 的 `.mcp.json`：用不用得上要看用户批没批过，这一档判不了。
     const shared = join(dir, ".mcp.json");
     if (existsSync(shared) && mentionsAsh(readText(shared))) {
       return { state: "unknown", why: `${shared} 里有登记，启用与否取决于审批状态` };
@@ -180,9 +190,10 @@ export type CodexTomlScan = {
  *   mcp_servers.ash.command = "node"                       （根上的点号键）
  *   [mcp_servers]  ash = { command = "node", enabled = false }   （内联表）
  *
- * **兜底**：扫描器没认出任何登记、可文本里明明有 `ash`/`harness` 出现在表头或行首键的
- * 位置 —— 说明写法超出了它认得的范围（多行字符串里的假表头、它没跟上的嵌套等）。那时
- * 不说「没有」，答 doubt。拦人只能落在「确定没有」上。
+ * **兜底**：扫描器没认出任何登记、可文本里明明有 `mcp_servers.ash` / `mcp_servers.harness`
+ * 出现在表头或行首键的位置 —— 说明写法超出了它认得的范围（多行字符串里的假表头、它没跟上的
+ * 嵌套等）。那时不说「没有」，答 doubt。拦人只能落在「确定没有」上。别处出现这两个词（路径
+ * 型表头、注释、值里）不算信号。
  */
 export function scanCodexToml(text: string): CodexTomlScan {
   const servers = new Map<string, { enabled: boolean; spec: LaunchSpec }>();
@@ -236,11 +247,14 @@ export function scanCodexToml(text: string): CodexTomlScan {
     }
   }
   if (!servers.size && !doubt) {
-    const names = WANTED.join("|");
-    const suspicious = new RegExp(
-      `^\\s*\\[[^\\]]*\\b(?:${names})\\b|^\\s*["']?(?:${names})["']?\\s*[.=]`, "m",
-    );
-    if (/mcp_servers/.test(text) && suspicious.test(text)) {
+    // **只认「mcp_servers 底下的 ash」那个位置**：表头或点号键的第一段是 `mcp_servers`、
+    // 第二段是兼容名。上一版拿「行首是 `[` 且行内有 ash/harness」当信号，codex 自己记项目
+    // 信任的 `[projects."/Users/x/code/harness"]` 正好命中 —— 跑过这个仓库的机器上整份配置
+    // 都成了「看不准」，预检放行、启动自检闭嘴（新链第 3 轮审查第 1 条）。
+    const name = `["']?(?:${WANTED.join("|")})["']?`;
+    const head = `["']?mcp_servers["']?\\s*\\.\\s*${name}`;
+    const suspicious = new RegExp(`^\\s*\\[\\[?\\s*${head}\\s*[.\\]]|^\\s*${head}\\s*[.=]`, "m");
+    if (suspicious.test(text)) {
       doubt = "文本里有像是 ash 登记的写法，但扫描器没认出来";
     }
   }
@@ -425,6 +439,46 @@ function mentionsAsh(read: TextRead): boolean {
 }
 
 /** 候选目录连同它们的全部祖先（去重）。`undefined` = 宿主默认上下文，没有目录可看。 */
+/**
+ * claude 把项目级（`--scope local`）登记挂在哪个键上。claude 2.1.283 实测：
+ *  · 在 git 仓库里，键是**主仓**的根 —— 从子目录、从 worktree 里跑，认的都是主仓那一条；
+ *    子目录自己的键、worktree 自己路径的键、git 根外面祖先的键，一概不认；
+ *  · 不在 git 仓库里，键就是这个目录本身（它的祖先也不认）。
+ * 符号链接两种写法都给（`/tmp` 与 `/private/tmp`），多认一个只会偏向放行。
+ *
+ * 返回 null = git 结构读不懂（子模块、bare 仓库、gitdir 指向说不清的地方），调用方判不了。
+ */
+function claudeProjectKeys(dir: string): string[] | null {
+  let cur = resolve(dir);
+  let key: string | null = null;
+  for (;;) {
+    const dotGit = join(cur, ".git");
+    if (existsSync(dotGit)) { key = mainRepoRoot(cur, dotGit); if (!key) return null; break; }
+    const up = dirname(cur);
+    if (up === cur) { key = resolve(dir); break; }
+    cur = up;
+  }
+  const keys = [key];
+  try { const real = realpathSync(key); if (real !== key) keys.push(real); } catch { /* 留原样 */ }
+  return keys;
+}
+
+/** `.git` 是目录 ⇒ 这里就是主仓；是文件（worktree）⇒ 顺着 `gitdir` → `commondir` 找回主仓。 */
+function mainRepoRoot(top: string, dotGit: string): string | null {
+  try {
+    if (statSync(dotGit).isDirectory()) return top;
+    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1]?.trim();
+    if (!gitdir) return null;
+    const own = resolve(top, gitdir);
+    const commondir = join(own, "commondir");
+    if (!existsSync(commondir)) return null;           // 子模块之类：没有 commondir，不去猜
+    const common = resolve(own, readFileSync(commondir, "utf8").trim());
+    return basename(common) === ".git" ? dirname(common) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 每个目录往上走到（含）最近的 git 根为止；一路没有 git 根就走到文件系统根。 */
 function upToGitRoot(dirs: (string | undefined)[]): string[] {
   const seen = new Set<string>();

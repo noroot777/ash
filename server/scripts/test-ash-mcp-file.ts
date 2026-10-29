@@ -10,10 +10,12 @@
 //
 // 覆盖：
 //   1. TOML 扫描器：引号名 / 缩进 / 行尾注释 / 点号键 / 内联表 / 多行字符串里的假表头 /
-//      多行数组 / 两个兼容名一开一关 / 挂在别的表底下 / 整个内联 —— 判不了的一律 doubt
+//      多行数组 / 两个兼容名一开一关 / 挂在别的表底下 / 整个内联 —— 判不了的一律 doubt；
+//      路径型表头（`[projects."…/harness"]`）不算信号
 //   2. codex 文件判据：absent / disabled / present / 没有文件 / 读不动 / 项目内 .codex
 //      （只到 git 根、不把宿主默认那份当项目配置）
-//   3. claude 文件判据：用户级 / 项目级（目录及祖先）/ `.mcp.json` / 解析不了
+//   3. claude 文件判据：用户级 / 项目级（键是主仓 git 根或目录本身）/ `.mcp.json`（一路往上）/
+//      解析不了
 //   4. 端到端：派审预检在问不了 CLI 时按文件判，**一个进程都不起**；带 extraArgs 放行；
 //      409 文案写明证据来源与问不了的原因
 //   5. 启动自检：`enabled = false` 不再被快速通道放过（第 2 条），措辞随证据来源降档
@@ -67,6 +69,15 @@ try {
       "多行字符串里像表头的东西：扫描器不认、兜底也不许说「没有」");
     assert.equal(scan('mcp_servers = { ash = { command = "node" } }\n').doubt, true, "整个 mcp_servers 写成内联");
     assert.equal(scan('[profiles.p.mcp_servers.ash]\ncommand = "node"\n').doubt, true, "挂在别的表底下");
+    // codex 自己记项目信任就是路径型表头；路径里有 harness/ash 不是登记（新链第 3 轮第 1 条：
+    // 上一版兜底拿「行首 `[` + 行内有这两个词」当信号，跑过这个仓库的机器整份配置都成了「看不准」）。
+    for (const path of ["/Users/champion/code/harness", "/Users/x/ash/y", "C:\\\\ash"]) {
+      assert.deepEqual(
+        scan(`[mcp_servers.kb]\ncommand = "uv"\n[projects."${path}"]\ntrust_level = "trusted"\n`),
+        { names: {}, doubt: false }, `路径型表头不算信号：${path}`);
+    }
+    assert.equal(scan('note = """\nmcp_servers.harness.command = "x"\n"""\n').doubt, true,
+      "多行字符串里的点号键登记：照旧判不了");
   }
 
   // ── 2. codex 文件判据 ────────────────────────────────────────────────────
@@ -84,6 +95,13 @@ try {
     assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "present");
     writeCodex('note = """\n[mcp_servers.ash]\n"""\n');
     assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "unknown", "扫描器没把握 ⇒ 判不了");
+    // 审查复现的原样配置：接过别的 MCP、codex 记过这个仓库的信任。ash 一条都没有 ⇒ 确定没有，
+    // 派审和启动自检两个出口都要说出来（新链第 3 轮第 1 条）。
+    writeCodex('model = "gpt-5"\n\n[mcp_servers.kb]\ncommand = "uv"\nargs = ["run", "kb-mcp"]\n\n'
+      + '[projects."/Users/champion/code/harness"]\ntrust_level = "trusted"\n');
+    assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "absent", "路径型表头不让整份配置失明");
+    const { ashMcpRegistration: quickReg } = await import("../src/auth/user-cli-mcp.js");
+    assert.equal(quickReg(codexHome, "codex").state, "absent", "启动自检的快速通道同样要说「没有」");
 
     // 项目里的 .codex/config.toml 提到 mcp_servers：合并规则不复刻，判不了。祖先目录也算。
     writeCodex('model = "x"\n');
@@ -141,14 +159,45 @@ try {
     assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "absent", "没有 .claude.json = 没有登记");
     writeClaude({ mcpServers: { ash: { command: "node" } } });
     assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "present", "用户级");
-    writeClaude({ mcpServers: { other: {} }, projects: { [proj]: { mcpServers: { harness: { command: "node" } } } } });
-    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "present",
-      "项目级登记挂在祖先目录上也算（键是哪一层由 CLI 定）");
+    // 项目级登记的键按 claude 自己的规则算（2.1.283 实测，新链第 3 轮第 3 条）。
+    const local = (key: string) =>
+      writeClaude({ mcpServers: { other: {} }, projects: { [key]: { mcpServers: { harness: { command: "node" } } } } });
+    local(proj);
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "absent",
+      "不在 git 仓库里时键就是目录本身，祖先目录的登记 claude 不认");
+    assert.equal(fileAshMcpVerdict("claude", env, [proj]).state, "present", "目录本身的键");
     assert.equal(fileAshMcpVerdict("claude", env, [undefined]).state, "absent", "宿主默认上下文看不到项目级");
+    mkdirSync(join(proj, ".git"));
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "present", "在仓库里，键是 git 根");
+    local(deep);
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "absent", "子目录自己的键 claude 不认");
+    local(stage);
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "absent", "git 根外面祖先的键也不认");
+    // worktree：认的是主仓那一条，worktree 自己路径的键不认（ash 的任务正是跑在 worktree 里）。
+    const main = join(stage, "wt-main");
+    const wt = join(stage, "wt-task");
+    mkdirSync(join(main, ".git", "worktrees", "t"), { recursive: true });
+    writeFileSync(join(main, ".git", "worktrees", "t", "commondir"), "../..\n");
+    mkdirSync(join(wt, "sub"), { recursive: true });
+    writeFileSync(join(wt, ".git"), `gitdir: ${join(main, ".git", "worktrees", "t")}\n`);
+    local(main);
+    assert.equal(fileAshMcpVerdict("claude", env, [join(wt, "sub")]).state, "present", "worktree 认主仓的键");
+    local(wt);
+    assert.equal(fileAshMcpVerdict("claude", env, [join(wt, "sub")]).state, "absent", "worktree 自己路径的键不认");
+    // git 结构读不懂（子模块那种没有 commondir 的 gitdir）：算不出键，判不了。
+    const odd = join(stage, "odd-sub");
+    mkdirSync(odd, { recursive: true });
+    writeFileSync(join(odd, ".git"), "gitdir: ../nowhere/modules/x\n");
+    assert.equal(fileAshMcpVerdict("claude", env, [odd]).state, "unknown", "算不出键时不说「没有」");
     writeClaude({ mcpServers: {} });
     writeFileSync(join(proj, ".mcp.json"), JSON.stringify({ mcpServers: { ash: { command: "node" } } }));
     assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "unknown", ".mcp.json 要看审批状态，判不了");
     rmSync(join(proj, ".mcp.json"));
+    // `.mcp.json` 跟项目级登记不同：git 根外面上层目录里的那份 claude 也读（实测 Pending
+    // approval），所以这一份照旧一路看上去。
+    writeFileSync(join(stage, ".mcp.json"), JSON.stringify({ mcpServers: { ash: { command: "node" } } }));
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "unknown", "git 根外面的 .mcp.json 也算");
+    rmSync(join(stage, ".mcp.json"));
     writeFileSync(join(claudeDir, ".claude.json"), "{ 半截");
     assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "unknown", "解析不了 ≠ 没有");
     writeClaude({});

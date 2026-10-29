@@ -90,8 +90,14 @@ export function checkProbeStructure(): void {
     .split("\n").filter((l) => !/^\s*(?:\/\/|\/?\*)/.test(l)).join("\n");
   assert.ok(!/confineAbstention/.test(reach),
     "判据层不准引用 confineAbstention —— 分支依据必须是这次探测的收场");
-  assert.match(reach, /state === "not-started"\) return fromFiles\(/,
-    "没启动起来的那一问要退到配置文件那一档，不是放行");
+  // **只有 CLI 本人给出能解释的答案才直接下结论**（新链第 3 轮第 2 条）：没启动、问不出来、
+  // 看不懂、预算用完都是 unknown，一律先过配置文件那一档；目录被截断同理。
+  // 只看 CLI 那一档（`reachWith`）：配置文件那一档自己的 unknown 放行是对的，那是两档都说不出来。
+  const cliTier = fnBody(reach, "async function reachWith");
+  assert.match(cliTier, /state === "unknown"\) return fromFiles\(/,
+    "没拿到答案的那一问要退到配置文件那一档，不是放行");
+  assert.ok(!/state === "unknown"\) return ok\(/.test(cliTier), "unknown 不准直接放行");
+  assert.ok(!/if \(!complete\) return ok\(/.test(cliTier), "目录被截断时不准直接放行");
 }
 
 /**
