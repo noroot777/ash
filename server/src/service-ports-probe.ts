@@ -261,25 +261,41 @@ async function processCwd(pid: number, timeoutMs: number): Promise<string | null
 export type ProcessFact = { uid: number; ageMs: number };
 
 /**
- * 这批年龄是**哪个钟**量出来的,以及读的那一刻那个钟读数是多少。
+ * 这批年龄是**哪个钟**量出来的,读的那一刻那个钟读数是多少,以及读的那一小段时间里这个钟
+ * 有没有被拨过。
  *
  * 为什么年龄必须连钟一起交出去(第 6 轮自由审查 F1):「它出生在这次启动之前」要拿候选的年龄
- * 跟「这次启动到现在过了多久」比,两边不是同一个钟,这一比就不构成证明。上一轮把启动那一侧
- * 换成了单调钟,可 macOS 这一侧的 `ps etime` 是 `gettimeofday() − p_starttime`(Apple
- * adv_cmds `print.c` 的 get_etime;`p_starttime` 是 fork 那一刻的墙上钟)—— 启动之后把钟往前
- * 拨 60 秒,真后代的年龄就凭空多出 60 秒,而上界只按真实经过的时长涨,那个**带着这次记号**
- * 的工人于是在读环境之前就被筛掉(审查用协议夹具实测:stop 报 verified,工人还活着)。
- * 量纲都是「毫秒」推不出同钟。
+ * 跟「这次启动到现在过了多久」比,两边不是同一个钟,这一比就不构成证明。
  *
  *  · `boot` —— Linux:`/proc/<pid>/stat` 第 22 项与 `/proc/uptime` 都是 CLOCK_BOOTTIME(开机
- *              以来,含休眠,不受校时影响),两边是同一个钟,`nowMs` 就是那次 `/proc/uptime`;
- *  · `wall` —— 其余 POSIX(macOS 的 ps):墙上钟。**没有**与之同钟、又不受校时影响的启动参照
- *              —— `p_start` 旁边那份单调时刻(`ps_start`)只有 libproc 的 `proc_pid_rusage`
- *              给得出来,Node 不带 FFI 就够不着。所以这一档的年龄只能用来**找人**,不能用来
- *              **排除人**(terminal-launch-survivors.ts 的 `candidateBounds`)。
+ *              以来,含休眠,不受校时影响),`nowMs` 就是那次 `/proc/uptime`;
+ *  · `wall` —— 其余 POSIX(macOS 的 ps):墙上钟。`ps etime` = `gettimeofday() − p_starttime`
+ *              (Apple adv_cmds `print.c` 的 get_etime;`p_starttime` 是 fork 那一刻的墙上钟),
+ *              跟启动那一刻取的 `Date.now()` **是同一个钟**,`nowMs` 是 ps 跑完之后的墙上钟。
+ *
+ * 墙上钟会被拨,可拨在启动之后、扫描之前的那一下对两边同增同减,约掉之后比的就是「出生是否
+ * 早于启动取样」(复审第 1 轮指出,上一版把它判成了不同钟,macOS 上每次停止都封不了口)。
+ * 拨在**读数之间**的那一下才约不掉:ps 读钟和 `nowMs` 不是同一刻。`steady` 就是那一段量出来
+ * 的结论(`wallInStep`),`boot` 恒为 true。
  */
-export type FactClock = { domain: "boot" | "wall"; nowMs: number };
+export type FactClock = { domain: "boot" | "wall"; nowMs: number; steady: boolean };
 export type ProcessFacts = { facts: Map<number, ProcessFact>; clock: FactClock };
+
+/** 墙上钟与单调钟在同一段时间里各走了多少,差出这么多就算这一段里钟被拨过。etime 只有秒级、
+ *  起进程还有几十毫秒的停顿,都远小于这个数;而它又远小于停止扫描的出生宽限(5 秒)。 */
+export const CLOCK_STEP_TOLERANCE_MS = 1_000;
+
+/** 本进程的单调钟(毫秒)。 */
+export function monoNowMs(): number {
+  return process.uptime() * 1000;
+}
+
+/** 从 (`wallFrom`, `monoFrom`) 那一刻到现在,墙上钟有没有跟着单调钟一起走 —— 不一致就是这段
+ *  时间里钟被拨过(或者机器睡过,单调钟不计休眠),两边的读数之间这一段就配不上。 */
+export function wallInStep(wallFrom: number, monoFrom: number): boolean {
+  const drift = (Date.now() - wallFrom) - (monoNowMs() - monoFrom);
+  return Math.abs(drift) <= CLOCK_STEP_TOLERANCE_MS;
+}
 
 /**
  * Linux 的开机时钟此刻读数(毫秒)。给启动那一刻取样用:跟 `/proc/<pid>/stat` 的出生时刻是
@@ -308,11 +324,12 @@ export async function readProcessFacts(
 ): Promise<ProcessFacts | null> {
   if (IS_WINDOWS) return null;
   if (HAS_PROC) return procProcessFacts(pids);
-  if (!pids.length) return { facts: new Map(), clock: { domain: "wall", nowMs: Date.now() } };
+  if (!pids.length) return { facts: new Map(), clock: { domain: "wall", nowMs: Date.now(), steady: true } };
   if (!PS_PATH) return null;
-  // 墙上钟的「现在」在 ps 跑之前取:ps 自己的 gettimeofday 只会更晚,用这个读数给出的上界
-  // 只会偏紧一点 —— 而这一档的上界本来就只用来找人,不用来证明。
-  const nowMs = Date.now();
+  // ps 读钟的那一刻夹在这两次取样之间。「现在」取**跑完之后**那一份:ps 自己的 gettimeofday
+  // 不会比它更晚,上界只会偏宽;两次取样之间钟被拨过,ps 那一刻就跟哪份都对不上(`steady`)。
+  const wallFrom = Date.now();
+  const monoFrom = monoNowMs();
   let read: PsRead;
   try {
     read = { stdout: (await run(PS_PATH, ["-o", "pid=,uid=,etime=", "-p", pids.join(",")], { timeout: budgeted(timeoutMs) })).stdout, trusted: true };
@@ -328,7 +345,7 @@ export async function readProcessFacts(
     if (ageMs === null) continue;
     facts.set(Number(match[1]), { uid: Number(match[2]), ageMs });
   }
-  return { facts, clock: { domain: "wall", nowMs } };
+  return { facts, clock: { domain: "wall", nowMs: Date.now(), steady: wallInStep(wallFrom, monoFrom) } };
 }
 
 /**
@@ -349,7 +366,7 @@ function procProcessFacts(pids: number[]): ProcessFacts | null {
       facts.set(pid, { uid: statSync(`/proc/${pid}`).uid, ageMs: Math.max(0, uptimeMs - ticks * 10) });
     } catch { /* 这个号已经退了 */ }
   }
-  return { facts, clock: { domain: "boot", nowMs: uptimeMs } };
+  return { facts, clock: { domain: "boot", nowMs: uptimeMs, steady: true } };
 }
 
 /**

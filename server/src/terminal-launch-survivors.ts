@@ -27,7 +27,8 @@
 // **② 这两条各自有前提,前提不成立时照样收窄、但这一趟不许封口**。收窄是为了把搜索控制在
 // 读得动的范围内(不收窄就得给整张进程表读环境,`ps -E` 的输出能到几 MB,撞 execFile 的
 // maxBuffer 之后这一问整条静默失灵);封口要的是证明,两件事不能互相顶替。前提分别是:
-// ash 不是 root(root 的后代能 setuid 换掉属主),以及这次启动留下了**单调**的起跑时刻。
+// ash 不是 root(root 的后代能 setuid 换掉属主),以及候选年龄跟启动参照是**同一个钟**、而且
+// 两次读数之间这个钟没被拨过。
 //
 // 后一条曾经写成「墙上钟此刻的偏移跟 ash 起跑那一刻一样」。第 5 轮自由审查实测那不成立:
 // 启动那一刻把钟前拨 10 秒、记完 `startedAt` 立刻校准回来 —— 两个端点的偏移都是 0、
@@ -40,13 +41,20 @@
 // 把钟往前拨 60 秒,真后代就凭空老了 60 秒,照样在读记号之前被筛掉(协议夹具实测:stop 报
 // verified,工人还活着)。**量纲都是毫秒推不出同钟。**
 //
-// 所以这条前提现在写成:**候选年龄跟启动参照必须是同一个钟量的,而且这个钟不受校时影响**。
-// 年龄连同它的钟一起交出来(service-ports-probe.ts 的 `FactClock`),启动那一刻**在 spawn 之前**
-// 把各个钟都取样一份(`sampleLaunchClocks`,事后补取会把 spawn 那段停顿算漏)。能凑成同钟的
-// 只有 Linux:`/proc/<pid>/stat` 的出生时刻和 `/proc/uptime` 都是 CLOCK_BOOTTIME。macOS 这边
-// 没有 —— 跟 `p_start` 同时写下的单调时刻只有 libproc 给得出来,Node 不带 FFI 够不着 —— 所以
-// macOS 上按年龄排除掉的那些号**一律证不出不是这次的**。上界照旧给(取墙上钟与单调钟两种
-// 「过了多久」里大的那个,任一个钟被拨都尽量不漏掉带记号的真后代),只是那一趟不许封口。
+// 第 6 轮的修法把年龄连同它的钟一起交出来(service-ports-probe.ts 的 `FactClock`),启动那一刻
+// **在 spawn 之前**把各个钟都取样一份(`sampleLaunchClocks`),同钟才算证明 —— 可那一版接着把
+// macOS 判成「没有同钟的参照」,于是一次干干净净的停止也永远封不了口(复审第 1 轮实测:进程
+// 已没了,stop 仍是 unresolved,理由是按出生时刻跳过的 427 个号)。**那是判错了前提**:`ps etime`
+// 是墙上钟,启动那一刻取的 `wallMs` 也是墙上钟,两边就是同一个钟。启动之后、扫描之前拨的
+// 那一下让「现在的墙上钟」与候选的 etime 同增同减,约掉之后比的是「出生是否早于启动取样」
+// —— 这件事不随之后怎么拨钟而翻转。第 6 轮的复现(启动后把钟往前拨 60 秒)之所以成立,是因为
+// 当时上界只按单调钟涨;上界现在取墙上钟与单调钟两种「过了多久」里大的那个,两件事都兜住了。
+//
+// 约不掉的只有**两个窗口**:启动取样到 fork 之间(`p_starttime` 跟 `wallMs` 不在同一段里),
+// 以及 ps 读钟到扫描取「现在」之间。两段都是毫秒级,而且都**量得出来**:各在两头取一次墙上钟和
+// 单调钟,增量对得上就是这段里没被拨过(`wallInStep`,启动那一侧见 `settleLaunchClocks`、扫描
+// 那一侧见 `FactClock.steady`)。对不上才判证不出来。Linux 的开机时钟不会被拨,这两个窗口
+// 在那里本来就不存在。
 //
 // **前提只在它真的排除了人的时候才要证**:一个号都没被按属主/年龄筛掉,这两条前提立不立得住
 // 跟结论无关。所以 root 的 ash、macOS 的墙上钟年龄,都只在「确实有号因此被跳过」时才让这一趟
@@ -75,7 +83,9 @@
 // 明令禁止扩大 kill 范围),这里的产出是「谁还活着」这个事实,交给停止路径落账并如实告诉用户。
 import { IS_WINDOWS } from "./platform.js";
 import { realpathSync } from "node:fs";
-import { bootClockMs, readLineage, readProcessCwd, readProcessFacts, type FactClock } from "./service-ports-probe.js";
+import {
+  bootClockMs, monoNowMs, readLineage, readProcessCwd, readProcessFacts, wallInStep, type FactClock,
+} from "./service-ports-probe.js";
 import { descendantsFromTable, processAlive, readProcessTable, type ProcessTable } from "./terminal-process-tree.js";
 
 /** ash 自己这条进程树不进候选集:它的环境里没有任何一次启动的记号,但没必要白问一遍。 */
@@ -94,14 +104,22 @@ const BIRTH_GRACE_MS = 5_000;
  * 启动那一刻各个钟的读数,**在 spawn 之前**取(第 6 轮自由审查:事后补取时,创建子进程到取样
  * 之间的停顿会让真工人比上界更老)。
  *
- *  · `uptimeMs` —— 本进程的单调钟(`process.uptime()`);
- *  · `bootMs`   —— Linux 的开机时钟(`/proc/uptime`),跟候选的出生时刻同钟;别处为 null;
- *  · `wallMs`   —— 墙上钟。只用来给 macOS 那一档的上界兜底,从不当证明。
+ *  · `uptimeMs`   —— 本进程的单调钟;
+ *  · `bootMs`     —— Linux 的开机时钟(`/proc/uptime`),跟 `/proc` 给的出生时刻同钟;别处为 null;
+ *  · `wallMs`     —— 墙上钟,跟 macOS `ps etime` 同钟;
+ *  · `wallSteady` —— 从取样到 spawn 返回,墙上钟有没有跟着单调钟走(`settleLaunchClocks` 填)。
+ *                    fork 落在这一段里,这段被拨过,`p_starttime` 就跟 `wallMs` 配不上。
+ *                    刚取样还没核过时是 false —— 忘了核就是证不出来,不是证明成立。
  */
-export type LaunchClocks = { uptimeMs: number; bootMs: number | null; wallMs: number };
+export type LaunchClocks = { uptimeMs: number; bootMs: number | null; wallMs: number; wallSteady: boolean };
 
 export function sampleLaunchClocks(): LaunchClocks {
-  return { uptimeMs: Math.round(process.uptime() * 1000), bootMs: bootClockMs(), wallMs: Date.now() };
+  return { uptimeMs: monoNowMs(), bootMs: bootClockMs(), wallMs: Date.now(), wallSteady: false };
+}
+
+/** spawn 返回之后调:核一遍取样以来墙上钟跟单调钟走得一不一致(文件头②末两段)。 */
+export function settleLaunchClocks(clocks: LaunchClocks): LaunchClocks {
+  return { ...clocks, wallSteady: wallInStep(clocks.wallMs, clocks.uptimeMs) };
 }
 
 /**
@@ -194,18 +212,20 @@ export function candidateBounds(launch: LaunchIdentity, clock: FactClock): Candi
       oldest: Math.max(clock.nowMs - clocks.bootMs, 0) + BIRTH_GRACE_MS, ageProven: true,
     };
   }
-  // 不同钟:上界取两种「过了多久」里大的那个。墙上钟被往前拨 / 休眠过 = 候选的 etime 跟着变大,
-  // 墙上钟那一份也跟着变大;被往回拨 = 墙上钟那一份变小,单调那一份不受影响。取大的那个让
-  // 带记号的真后代尽量不在读记号之前被跳过 —— 但这只是**找人**,不是证明。
+  // 墙上钟那一档(macOS 的 ps):跟 `wallMs` 同钟。上界取两种「过了多久」里大的那个 —— 墙上钟
+  // 被往前拨 / 休眠过,候选的 etime 跟着变大,墙上钟那一份也同样变大;被往回拨,单调那一份兜底。
+  // 取大的只会让上界更宽,不影响证明:证明靠的是墙上钟那一份,大的那个只会更不容易排除人。
   const wallElapsed = clock.domain === "wall" ? clock.nowMs - clocks.wallMs : 0;
-  const monoElapsed = Math.round(process.uptime() * 1000) - clocks.uptimeMs;
-  return {
-    uid: SELF_UID, uidProven,
-    oldest: Math.max(wallElapsed, monoElapsed, 0) + BIRTH_GRACE_MS,
-    ageProven: clock.domain === "wall"
-      ? "这台机器给出的进程年龄是按墙上钟量的（ps 的 etime），跟这次启动的参照不是同一个钟"
-      : "这次启动没留下跟进程年龄同钟的起跑时刻",
-  };
+  const monoElapsed = monoNowMs() - clocks.uptimeMs;
+  const oldest = Math.round(Math.max(wallElapsed, monoElapsed, 0)) + BIRTH_GRACE_MS;
+  if (clock.domain !== "wall") {
+    return { uid: SELF_UID, uidProven, oldest, ageProven: "这次启动没留下跟进程年龄同一种计时的起跑时刻" };
+  }
+  // 约不掉的只有两个读数窗口(文件头②):启动取样到 fork、ps 读钟到这次扫描取「现在」。
+  const ageProven = !clocks.wallSteady
+    ? "这次启动的那一刻系统时间被调过"
+    : !clock.steady ? "核对进程年龄的那一刻系统时间被调过" : true;
+  return { uid: SELF_UID, uidProven, oldest, ageProven };
 }
 
 /**
@@ -287,8 +307,12 @@ export async function launchSurvivors(launch: LaunchIdentity | null): Promise<La
     candidates.push(root);
   }
   // 前提只在它真的排除了人的时候才要证(文件头②末段)。
-  if (byUid && bounds.uidProven !== true) gaps.push(`${bounds.uidProven}，按属主跳过的 ${byUid} 个号证不出不是这次的`);
-  if (byAge && bounds.ageProven !== true) gaps.push(`${bounds.ageProven}，按出生时刻跳过的 ${byAge} 个号证不出不是这次的`);
+  if (byUid && bounds.uidProven !== true) {
+    gaps.push(`${bounds.uidProven}，因为「属于别的用户」而略过的 ${byUid} 个进程没法确认跟这次无关`);
+  }
+  if (byAge && bounds.ageProven !== true) {
+    gaps.push(`${bounds.ageProven}，因为「比这次启动更早」而略过的 ${byAge} 个进程没法确认跟这次无关`);
+  }
   const lineage = await readLineage(candidates, token);
   const found = new Set<number>();
   for (const pid of candidates) {

@@ -17,7 +17,7 @@ import {
   releaseLaunchResponsibility,
 } from "./terminal-stop-facts.js";
 import { killAllSessionTrees, killSessionTree, terminateSession, type KillResult } from "./terminal-session-kill.js";
-import { sampleLaunchClocks, type LaunchIdentity } from "./terminal-launch-survivors.js";
+import { sampleLaunchClocks, settleLaunchClocks, type LaunchIdentity } from "./terminal-launch-survivors.js";
 import { TerminalWatcher } from "./terminal-session-watch.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
@@ -247,7 +247,8 @@ export class TerminalSessionManager {
       commandId: options.command?.id ?? null,
       startedAt: Date.now(),
       // `startedAt` 给用户看;`launchClocks` 给「谁出生在这次启动之前」那道收窄用(见字段说明)。
-      launchClocks,
+      // spawn 一返回就核一遍:fork 落在取样到这里之间,这段钟被拨过,那份墙上钟就配不上。
+      launchClocks: settleLaunchClocks(launchClocks),
       exitCode: null,
       groupAlive: true,
       ports: [],

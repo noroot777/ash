@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { startCommand, stopCommand, restartCommand } from "../src/terminal-commands.js";
 import { launchClosureSealed, portStopVerdict, processStopVerdict } from "../src/terminal-stop-notices.js";
-import { candidateBounds, candidateRoots, launchSurvivors } from "../src/terminal-launch-survivors.js";
+import {
+  candidateBounds, candidateRoots, launchSurvivors, sampleLaunchClocks, settleLaunchClocks,
+} from "../src/terminal-launch-survivors.js";
+import { monoNowMs, readProcessFacts, wallInStep } from "../src/service-ports-probe.js";
 import type { TerminalSessionInfo } from "../src/terminal-session-facts.js";
 import { TerminalCapacity } from "../src/terminal-capacity.js";
 import { processAlive } from "../src/terminal-process-tree.js";
@@ -302,48 +305,71 @@ try {
   }
 
   // **收窄规则的前提立不住时,一个核不上的号都没有也不许封口**。候选集只能按属主和出生时刻
-  // 收窄,而这两条各自有前提(ash 不是 root、墙上钟没被改过)。前提不成立时照样收窄 —— 否则
-  // 候选集会膨胀到读不动 —— 但那一趟**说不出漏没漏**,所以 `unanswered` 可以是空的而结论仍
-  // 然是 `incomplete`。这里用「这次启动的时刻记在未来」把这条路走通(钟被改过的等价形状)。
+  // 收窄,而这两条各自有前提(ash 不是 root;候选年龄跟启动参照同一个钟、读数之间没被拨过)。
+  // 前提不成立时照样收窄 —— 否则候选集会膨胀到读不动 —— 但那一趟**说不出漏没漏**,所以
+  // `unanswered` 可以是空的而结论仍然是 `incomplete`。
   {
     // **年龄上界跟候选年龄必须是同一个钟量的**(第 5、6 轮自由审查 F1)。第 5 轮:启动那一刻用
-    // 墙上钟记、随后校时,上界就比真工人小 10 秒。第 6 轮:启动那一侧换成单调钟,可 macOS 候选的
-    // `ps etime` 是墙上钟(`gettimeofday() − p_starttime`)—— 启动之后把钟往前拨 60 秒,真工人
-    // 凭空老 60 秒,照样在读记号之前被跳过,stop 报 verified 而它还活着。**量纲都是毫秒推不出
-    // 同钟**,所以这条前提按「候选年龄实际用的那个钟」配对,配不上就是证不出来。
-    const upNow = Math.round(process.uptime() * 1000);
-    const clocks = { uptimeMs: upNow - 1000, bootMs: 50_000, wallMs: Date.now() - 1000 };
+    // 墙上钟记、随后校时,上界就比真工人小 10 秒。第 6 轮:上界只按单调钟涨,启动之后把钟往前拨
+    // 60 秒,macOS 上墙上钟量的 `ps etime` 让真工人凭空老 60 秒。复审第 1 轮:可 `ps etime` 跟
+    // 启动取的 `wallMs` **本来就是同一个墙上钟** —— 上一版把它判成不同钟,一次干净的停止也永远
+    // 封不了口。所以证明的前提是「同钟 + 两个读数窗口里没被拨过」,不是「整台机器证不出来」。
+    const clocks = { uptimeMs: monoNowMs() - 1000, bootMs: 50_000, wallMs: Date.now() - 1000, wallSteady: true };
+    const wall = (nowMs: number, steady = true) => ({ domain: "wall" as const, nowMs, steady });
     // ① 同钟(Linux 的开机时钟):上界按那个钟的差给,前提立得住。
-    const boot = candidateBounds({ token: "t", clocks, cwd }, { domain: "boot", nowMs: 62_000 });
+    const boot = candidateBounds({ token: "t", clocks, cwd }, { domain: "boot", nowMs: 62_000, steady: true });
     assert.equal(boot.ageProven, true, "候选年龄跟启动参照同是开机时钟 = 这条前提立得住");
     assert.equal(boot.oldest, 12_000 + 5000, "上界 = 同一个钟上的差 + 宽限,跟单调钟/墙上钟都无关");
-    // ② 墙上钟量的候选年龄(macOS 的 ps):**证不出来**。上界照旧给,而且取两种「过了多久」里
-    //    大的那个 —— 墙上钟被往前拨 60 秒时,带记号的真后代不该在读记号之前就被跳过。
-    const forward = candidateBounds({ token: "t", clocks, cwd }, { domain: "wall", nowMs: Date.now() + 60_000 });
-    assert.notEqual(forward.ageProven, true, "墙上钟的年龄跟单调参照不是一个钟 —— 不许当成证明");
-    assert.match(String(forward.ageProven), /墙上钟/, "那句话要说出是哪个前提没立住");
+    // ② 墙上钟(macOS 的 ps),两个读数窗口都稳:同钟,证明成立。
+    const quiet = candidateBounds({ token: "t", clocks, cwd }, wall(Date.now()));
+    assert.equal(quiet.ageProven, true, "ps etime 跟启动取的 wallMs 同是墙上钟 —— 窗口稳就是证明");
+    // 启动之后往前拨 60 秒:候选的 etime 跟「现在的墙上钟」同增,上界跟着墙上钟那一份走,
+    // 带记号的真后代不会在读记号之前被跳过 —— 所以这一下不影响证明。
+    const forward = candidateBounds({ token: "t", clocks, cwd }, wall(Date.now() + 60_000));
+    assert.equal(forward.ageProven, true, "启动之后拨的那一下两边同增同减,约得掉");
     assert.ok(forward.oldest >= 61_000,
       `钟往前拨了 60 秒:上界要跟着墙上钟那一份走,否则带记号的真工人会被先跳过（实得：${forward.oldest}）`);
     // 往回拨:墙上钟那一份变小,单调那一份不受影响 —— 上界取大的那个。
-    const backward = candidateBounds({ token: "t", clocks, cwd }, { domain: "wall", nowMs: Date.now() - 60_000 });
+    const backward = candidateBounds({ token: "t", clocks, cwd }, wall(Date.now() - 60_000));
     assert.ok(backward.oldest >= 1000 + 5000, "钟往回拨了:上界退到单调钟那一份,不许跟着缩成负数");
-    // ③ Linux 上声称是开机时钟、启动那一刻却没取到开机时钟读数:同样配不上。
-    const unpaired = candidateBounds({ token: "t", clocks: { ...clocks, bootMs: null }, cwd }, { domain: "boot", nowMs: 62_000 });
+    // ③ 约不掉的两个窗口:启动取样到 fork、ps 读钟到扫描取「现在」。这两段里被拨过就证不出来。
+    const launchStep = candidateBounds({ token: "t", clocks: { ...clocks, wallSteady: false }, cwd }, wall(Date.now()));
+    assert.notEqual(launchStep.ageProven, true, "取样到 spawn 之间钟被拨过,p_starttime 就跟 wallMs 配不上");
+    assert.match(String(launchStep.ageProven), /启动的那一刻系统时间被调过/, "那句话要说出是哪个前提没立住");
+    const scanStep = candidateBounds({ token: "t", clocks, cwd }, wall(Date.now(), false));
+    assert.notEqual(scanStep.ageProven, true, "ps 读钟到取「现在」之间钟被拨过,etime 跟上界就配不上");
+    assert.match(String(scanStep.ageProven), /核对进程年龄的那一刻系统时间被调过/);
+    // 窗口是真量出来的,不是默认成立:墙上钟比单调钟多走 / 少走 60 秒都判被拨过;刚取样、还没
+    // 在 spawn 之后核过的那份读数不算稳。
+    assert.equal(wallInStep(Date.now() - 60_000, monoNowMs()), false, "墙上钟多走了 60 秒 = 这段里往前拨过");
+    assert.equal(wallInStep(Date.now() + 60_000, monoNowMs()), false, "墙上钟少走了 60 秒 = 这段里往回拨过");
+    assert.equal(sampleLaunchClocks().wallSteady, false, "忘了核就是证不出来,不是证明成立");
+    assert.equal(settleLaunchClocks(sampleLaunchClocks()).wallSteady, true, "没拨钟时核得过");
+    // ④ Linux 上声称是开机时钟、启动那一刻却没取到开机时钟读数:同样配不上。
+    const unpaired = candidateBounds({ token: "t", clocks: { ...clocks, bootMs: null }, cwd },
+      { domain: "boot", nowMs: 62_000, steady: true });
     assert.notEqual(unpaired.ageProven, true, "一边有开机时钟、另一边没有,不是同钟");
-    // ④ 根本没留下起跑读数:证不出来,上界照常给(否则候选集会膨胀到读不动)。
-    const blind = candidateBounds({ token: "t", clocks: null, cwd }, { domain: "boot", nowMs: 62_000 });
+    // ⑤ 根本没留下起跑读数:证不出来,上界照常给(否则候选集会膨胀到读不动)。
+    const blind = candidateBounds({ token: "t", clocks: null, cwd }, { domain: "boot", nowMs: 62_000, steady: true });
     assert.notEqual(blind.ageProven, true, "没有起跑读数就不能照常当「问全了」");
     assert.equal(blind.oldest, 5000, "前提立不住不等于不收窄:上界照常给出");
   }
-  // 扫描这一层:**前提只在它真的排除了人时才要证**,而 macOS 上按年龄排除人是常态(同属主、
-  // 比这次启动更早出生的 PID-1 孤儿 —— loginwindow 就是一个)。所以 macOS 上这一趟必须如实
-  // 说「按出生时刻跳过的那些证不出不是这次的」,不许封口。
-  if (process.platform === "darwin") {
+  // 扫描这一层,真启动、真进程表:**一次没拨钟的停止扫描不许因为年龄那条而封不了口**(复审
+  // 第 1 轮:macOS 上同属主、比这次启动更早的常驻进程有几百个,上一版每一趟都因为它们落
+  // incomplete)。核不上的孤儿照旧可能让这一趟落 incomplete —— 那是另一条理由,所以只在一个
+  // 都没有时才断言封口。
+  if (process.platform !== "win32") {
     const earlier = terminalSessions.listForProject("no-port-stop")[0];
-    const scan = await launchSurvivors(terminalSessions.launchIdentityOf(earlier.id));
-    assert.equal(scan.evidence, "incomplete", "macOS 的候选年龄是墙上钟量的,按它跳过的号证不出不是这次的");
-    assert.equal(launchClosureSealed(scan), false);
-    assert.match(String(scan.why), /按出生时刻跳过的 \d+ 个号证不出不是这次的/, "理由要说到措辞里");
+    const identity = terminalSessions.launchIdentityOf(earlier.id);
+    assert.equal(identity?.clocks?.wallSteady, true, "真启动:取样到 spawn 返回之间钟没被拨过");
+    const facts = await readProcessFacts([process.pid]);
+    assert.equal(facts?.clock.steady, true, "真扫描:ps 前后钟没被拨过");
+    const scan = await launchSurvivors(identity);
+    assert.doesNotMatch(String(scan.why ?? ""), /比这次启动更早/, `年龄那条不该成为缺口（实得：${scan.why}）`);
+    if (!scan.unanswered.length) {
+      assert.equal(scan.evidence, "answered", `没有核不上的号、钟也没拨过,这一趟就该封口（实得：${scan.why}）`);
+      assert.equal(launchClosureSealed(scan), true);
+    }
   }
   {
     // 枚举这一侧的完整性(同一条 F1 的另一半,按代码推断):ash 的祖先链走不到 PID 1,或者
@@ -421,7 +447,7 @@ try {
   sessions[0].alive = true;
   assert.equal(capacity.hasSlot("capacity", "job", true), false, "保留且还活着 = 真占着一个槽");
   assert.throws(() => capacity.reserve("capacity", "job", true), /数量已达上限/);
-  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env/rebuilt-env/moved-cwd/foreign-marker candidates stay unanswered, a moved-but-marked worker is still named, an age bound measured on a different clock blocks sealing, unified verdict completeness, retained history, newest-only history, capacity accounting");
+  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env/rebuilt-env/moved-cwd/foreign-marker candidates stay unanswered, a moved-but-marked worker is still named, an age bound only seals on the same clock with steady read windows, unified verdict completeness, retained history, newest-only history, capacity accounting");
 } finally {
   for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
   manager.shutdown();
