@@ -38,7 +38,7 @@ export function LaunchAbandonDialog({ projectId, commandId, onClose, onDone, not
     setError(null);
     api.launchResidue(projectId, commandId)
       .then(setView)
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "残留事实读不出来"));
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "这次启动的现场读不出来"));
   };
   useEffect(load, [projectId, commandId]);
 
@@ -49,7 +49,7 @@ export function LaunchAbandonDialog({ projectId, commandId, onClose, onDone, not
       .then((result) => {
         notify(result.alreadyAbandoned
           ? `「${view.name}」这次启动早先已经放弃过，这次没有改动那份记录`
-          : `已放弃「${view.name}」这次启动的管理责任——上面列出的残留从此由你自己处理`);
+          : `已放弃「${view.name}」这次启动的管理责任——上面列出的进程和端口从此由你自己处理`);
         onDone();
         onClose();
       })
@@ -66,8 +66,8 @@ export function LaunchAbandonDialog({ projectId, commandId, onClose, onDone, not
   return <ConfirmDialog
     title={view ? `放弃「${view.name}」这次启动的管理责任` : "放弃这次启动的管理责任"}
     message={done
-      ? `这次启动的管理责任已经在 ${when(done.at)} 放弃过了。下面是当时记下的残留事实。`
-      : "ash 不再把这次启动当「还在跑」的东西管，删除保护一并解除。它不杀任何进程，也不代表服务停了——下面这些残留从此由你自己处理。"}
+      ? `这次启动的管理责任已经在 ${when(done.at)} 放弃过了。下面是当时记下的情况。`
+      : "ash 不再把这次启动当「还在跑」的东西管，删除保护一并解除。它不杀任何进程，也不代表服务停了——下面列出的情况从此由你自己处理。"}
     eyebrow="ABANDON LAUNCH"
     icon={<HandPalm size={18} weight="fill" />}
     danger
@@ -78,7 +78,7 @@ export function LaunchAbandonDialog({ projectId, commandId, onClose, onDone, not
     onClose={onClose}
   >
     <div className="launch-abandon">
-      {error && <p className="launch-abandon__error">残留事实读不出来：{error}（没看清现场就不该签字）</p>}
+      {error && <p className="launch-abandon__error">这次启动的现场读不出来：{error}（没看清现场就不该签字）</p>}
       {!view && !error && <p className="launch-abandon__loading">正在问一遍此刻还有什么活着…</p>}
       {view && (
         <>
@@ -108,7 +108,7 @@ export function LaunchAbandonDialog({ projectId, commandId, onClose, onDone, not
                   disabled={busy}
                   onChange={(event) => setAcknowledged(event.target.checked)}
                 />
-                <span>我已经看过上面的残留，这些进程/端口由我自己处理</span>
+                <span>我已经看过上面列出的进程和端口，由我自己处理</span>
               </label>
             </>
           )}

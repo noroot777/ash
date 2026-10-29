@@ -21,7 +21,7 @@ const temporary = realpathSync(mkdtempSync(join(tmpdir(), "ash-launch-abandon-")
 process.env.ASH_DB = join(temporary, "test.db");
 const { terminalSessions } = await import("../src/terminal.js");
 const { startCommand } = await import("../src/terminal-commands.js");
-const { launchResidue, mountLaunchAbandonRoutes } = await import("../src/terminal-abandon.js");
+const { launchResidue, mountLaunchAbandonRoutes, residueNotice } = await import("../src/terminal-abandon.js");
 const { dbClient } = await import("../src/db/index.js");
 
 const windows = process.platform === "win32";
@@ -77,6 +77,16 @@ try {
   assert.equal(view.abandoned, null);
   assert.equal(terminalSessions.get(sessionId, projectId)!.abandoned, null, "看一眼不许改状态");
   console.log("PASS: 残留事实只读可查，那个没核销的号和解除范围都摆在签字之前");
+
+  // ②b 两类事实分开说:确定是这次留下的才叫「得你自己处理」,分不清来路的只交代、不让人替它签字。
+  assert.match(view.residue.notice, /得你自己处理/, "账上没核销的号是这次留下的那一类");
+  const mixed = residueNotice(["pid 1 还活着"], ["pid 2 分不清是不是这次启动的"]);
+  assert.match(mixed, /^下面这些是这次启动留下的.*得你自己处理：pid 1 还活着。另外，pid 2 分不清/);
+  const onlyUnsure = residueNotice([], ["pid 2 分不清是不是这次启动的"]);
+  assert.doesNotMatch(onlyUnsure, /得你自己处理|残留/, "只剩分不清来路的那类时不许说成残留");
+  assert.match(onlyUnsure, /没找到能确认是这次启动留下的进程.*pid 2.*一个都没动过/);
+  assert.match(residueNotice([], []), /探不到任何残留/);
+  console.log("PASS: 确定留下的和分不清来路的分开交代，后者不被说成残留");
 
   // ③ 签字必须针对**刚看过的那一条**。
   assert.equal((await post("/abandon", {})).status, 400);

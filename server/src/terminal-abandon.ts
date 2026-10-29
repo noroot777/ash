@@ -53,34 +53,56 @@ export async function launchResidue(info: TerminalSessionInfo): Promise<LaunchAb
     ? await probeOwnedPorts(info.ports, token)
     : { state: info.ports.length ? "unavailable" as const : "free" as const, why: null };
   const owedPids = liveLeftovers(info.stop);
-  const parts: string[] = [];
+  // 两类事实分开说(用户 2026-10-29 选定「停止判据保持诚实」时一并要求):**确定是这次启动
+  // 留下的**,和 **ash 分不清是不是这次的**。后者多半是系统自己的后台进程(Spotlight 的索引
+  // 进程之类),早先跟前者混成一句「这些残留得你自己处理」,用户看到的就是要他替十几个无关的
+  // 系统进程签字。
+  const owned: string[] = [];
+  const unsure: string[] = [];
   if (taggedPids.length) {
-    parts.push(`按这次启动的记号还点到 ${taggedPids.map((pid) => `pid ${pid}`).join("、")} 活着`
-      + "（环境里带着这次启动的记号，确凿是它起来的）");
+    owned.push(`${pidList(taggedPids)} 还活着（环境里带着这次启动的记号，确凿是它起来的）`);
   }
   const strays = owedPids.filter((pid) => !taggedPids.includes(pid));
   if (strays.length) {
-    parts.push(`账上还挂着 ${strays.map((pid) => `pid ${pid}`).join("、")} 没核销`
-      + `${info.stop.kind === "unresolved" ? `：${info.stop.why}` : ""}`);
+    owned.push(`停止时记下没收掉的 ${pidList(strays)} 还活着`
+      + `${info.stop.kind === "unresolved" && info.stop.why ? `（当时的说明：${info.stop.why}）` : ""}`);
   }
+  if (info.groupAlive) owned.push("这次启动的进程组里还有活着的进程");
   if (info.ports.length) {
     const where = `端口 ${info.ports.join("、")}`;
-    if (probe.state === "ours") parts.push(`${where} 上还有这次启动起来的进程在听`);
-    else if (probe.state === "stranger") parts.push(`${where} 上坐着的核不上是这次起来的（没有动它的归属凭据）`);
-    else if (probe.state === "unknown") parts.push(`${where}：${probe.why ?? "归属核不上来"}`);
-    else if (probe.state === "unavailable") parts.push(`${where} 在这台机器上没法核验（没有 lsof）`);
+    if (probe.state === "ours") owned.push(`${where} 上还有这次启动起来的进程在听`);
+    else if (probe.state === "stranger") unsure.push(`${where} 上有进程在听，但核不上是这次启动起来的`);
+    else if (probe.state === "unknown") unsure.push(`${where}：${probe.why ?? "上面是谁在听核不上来"}`);
+    else if (probe.state === "unavailable") unsure.push(`${where} 在这台机器上没法核验（没有 lsof）`);
   }
-  if (info.groupAlive) parts.push("这次启动的进程组里还有活着的进程");
-  if (info.portsTruncated) parts.push("这次启动打印的端口超过了记录额度，多出来的那些 ash 压根没问过");
-  // 清单里**必须有这一句**:这一问没答全时,上面那份「还活着什么」本身就可能漏人,
-  // 而用户正要在它上面签字(第 1 轮审查发现 1 的同一条不变量)。
-  if (scan.evidence === "incomplete") parts.push(scan.why ?? "按启动记号那一问没答全，这份清单可能有漏");
+  if (info.portsTruncated) unsure.push("这次启动打印的端口超过了记录额度，多出来的那些 ash 压根没问过");
+  // 这一句**必须有**:按启动记号那一问没答全时,上面那份「确定留下的」本身就可能漏人,而用户
+  // 正要在它上面签字(第 1 轮审查发现 1 的同一条不变量)。
+  if (scan.evidence === "incomplete") {
+    unsure.push(scan.unanswered.length
+      ? `${pidList(scan.unanswered)} 分不清是不是这次启动的：它们跟这次启动同一个用户、在它之后出生，`
+        + "身上却没有这次启动的记号 —— 多半是系统自己的后台进程，但 ash 证明不了"
+      : scan.why ?? "按启动记号那一问没答全，上面那份清单可能有漏");
+  }
   return {
     at: Date.now(), owedPids, taggedPids, ports: info.ports, portState: probe.state,
-    notice: parts.length
-      ? `放弃这次启动的管理责任之后，下面这些 ash 不再管，得你自己处理：${parts.join("；")}。`
-      : "此刻探不到任何残留 —— 放弃之后这条记录就只是一条历史了。",
+    notice: residueNotice(owned, unsure),
   };
+}
+
+const pidList = (pids: number[]): string =>
+  `${pids.slice(0, 5).map((pid) => `pid ${pid}`).join("、")}${pids.length > 5 ? ` 等 ${pids.length} 个进程` : ""}`;
+
+/** 弹层上那段话。导出只为让回归直接钉住「两类分开说」,不必现造一个分不清来路的进程。 */
+export function residueNotice(owned: string[], unsure: string[]): string {
+  const doubt = unsure.length
+    ? `${unsure.join("；")}。这些 ash 一个都没动过，放弃之后也不再替你盯着。` : "";
+  if (owned.length) {
+    return `下面这些是这次启动留下的，放弃之后 ash 不再管，得你自己处理：${owned.join("；")}。`
+      + (doubt ? `另外，${doubt}` : "");
+  }
+  if (doubt) return `ash 没找到能确认是这次启动留下的进程。不过，${doubt}`;
+  return "此刻探不到任何残留 —— 放弃之后这条记录就只是一条历史了。";
 }
 
 /** 弹层要的那一份:残留事实 + 解除范围 + 它针对的那条会话 id(确认时要带回来)。 */

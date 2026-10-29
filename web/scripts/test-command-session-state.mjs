@@ -61,6 +61,10 @@ assert.deepEqual(leftoversOf(owed), [4321, 4322], "放弃不等于核销,账上�
 assert.deepEqual(owed.abandoned.ports, [8787], "放弃那一刻的端口快照不许被抹掉");
 assert.equal(sessionState(session({ abandoned: residue({ notice: "探不到任何残留" }) })).text,
   "已放弃管理（当时无残留）", "当时确实干净的那种要说清,别一律说成残留自理");
+assert.equal(sessionState(session({ abandoned: residue({
+  owedPids: [], taggedPids: [], ports: [],
+  notice: "ash 没找到能确认是这次启动留下的进程。不过，pid 901 分不清是不是这次启动的",
+}) })).text, "已放弃管理（有分不清来路的进程，未动）", "只剩分不清来路的那类,不能说成要你自理的残留");
 
 // ④ 反向:没放弃过的时候,那几档兜底一个都不能跟着被砍掉 —— 否则守护化的服务会脱管,
 //    再点一次启动就起第二份(第 2 轮审查发现 1 的老账)。
