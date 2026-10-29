@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./accept-workspace": {
+      "types": "./src/accept-workspace.ts",
+      "default": "./src/accept-workspace.ts"
+    },
     "./monitor-wake": {
       "types": "./src/monitor-wake.ts",
       "default": "./src/monitor-wake.ts"
@@ -33,6 +37,10 @@
     "./accept-pending": {
       "types": "./src/accept-pending.ts",
       "default": "./src/accept-pending.ts"
+    },
+    "./task-memo": {
+      "types": "./src/task-memo.ts",
+      "default": "./src/task-memo.ts"
     },
     "./task-origin": {
       "types": "./src/task-origin.ts",

@@ -12,6 +12,7 @@ import type {
   UsageAccountingMark,
 } from "@ash/shared";
 import type { ScmChange, ScmDiffSource } from "./apiTypes.scm.ts";
+import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 
 export type ChildWorkspaceLeftover = TaskWorkspaceLeftover & { taskId: string; title?: string };
 
@@ -375,6 +376,7 @@ export type AcceptTaskWarning = {
 };
 
 export type AcceptTaskSuccess = {
+  autoCommit?: AcceptanceAutoCommitOutcome;
   accepted: true;
   taskId: string;
   status: string;
@@ -394,6 +396,7 @@ export type AcceptTaskSuccess = {
 };
 
 export type AcceptTaskFailure = {
+  autoCommit?: AcceptanceAutoCommitOutcome;
   accepted: false;
   taskId: string;
   reason: string;

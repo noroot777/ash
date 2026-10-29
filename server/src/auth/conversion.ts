@@ -17,6 +17,7 @@ import {
   projects,
   reviewerProfiles,
   schedules,
+  taskMemos,
   tasks,
   teamPresets,
   workflows,
@@ -93,6 +94,9 @@ export async function claimExistingDataFor(userId: string): Promise<Record<strin
     db.update(tasks).set({ ownerUserId: userId }).where(isNull(tasks.ownerUserId)));
   await take("notes", () =>
     db.update(notes).set({ ownerUserId: userId }).where(isNull(notes.ownerUserId)));
+  // 任务备忘跟随手记同一条轴:它是私有的个人批注,存量那几条也归初始管理员。
+  await take("taskMemos", () =>
+    db.update(taskMemos).set({ ownerUserId: userId }).where(isNull(taskMemos.ownerUserId)));
   await take("executors", () =>
     db.update(agents).set({ ownerUserId: userId }).where(isNull(agents.ownerUserId)));
   await take("providers", () =>
@@ -124,7 +128,8 @@ export async function unownedRowCount(): Promise<number> {
     SELECT
       (SELECT COUNT(*) FROM projects WHERE owner_user_id IS NULL)
       + (SELECT COUNT(*) FROM tasks WHERE owner_user_id IS NULL)
-      + (SELECT COUNT(*) FROM notes WHERE owner_user_id IS NULL) AS n
+      + (SELECT COUNT(*) FROM notes WHERE owner_user_id IS NULL)
+      + (SELECT COUNT(*) FROM task_memos WHERE owner_user_id IS NULL) AS n
   `);
   return rows.at(0)?.n ?? 0;
 }

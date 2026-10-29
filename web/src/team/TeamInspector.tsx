@@ -1,6 +1,6 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
 import { agentMix } from "@ash/shared/team";
-import { Clock, FolderOpen, Images, Info, MagnifyingGlass, Pulse, Robot, UsersThree } from "@phosphor-icons/react";
+import { Clock, FolderOpen, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, UsersThree } from "@phosphor-icons/react";
 import { NativeWorkInspector, type NativeWorkInspectorProps } from "../task-detail/NativeWorkInspector.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -19,6 +19,7 @@ import { TeamReviewInspector } from "./TeamReviewInspector.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
 import { monitorBlockedReason } from "@ash/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
+import { TaskMemoInspector } from "../task-memos/TaskMemoInspector.tsx";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 import {
   teamLeadLabel,
@@ -186,6 +187,17 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     defaultOpen: true,
     shortcut: "i",
     render: (context) => <TeamInfoPanel {...context} />,
+  },
+  {
+    // 跟单飞任务同一格（同一个组件、同一张表）：调度台也是一条任务，「这一轮为什么这么派」
+    // 一样要有地方记。两个入口也一样齐：头带上手写，以及团队会话里选中一段（浮条挂在
+    // TeamView 的 TeamFeed 外面）。
+    id: "memos",
+    title: "备忘",
+    icon: <NotePencil size={14} />,
+    defaultOpen: true,
+    shortcut: "b",
+    render: (context) => <TaskMemoInspector taskId={context.task.id} notify={context.notify} />,
   },
   {
     id: "timeline",

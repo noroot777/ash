@@ -1,22 +1,24 @@
-.scheduled-message-card { --queue-line: color-mix(in lch, var(--accent) 12%, var(--line)); --queue-soft: color-mix(in lch, var(--accent) 10%, var(--panel)); position: relative; isolation: isolate; margin-bottom: 8px; border: 1px solid var(--queue-line); border-radius: 10px; background: var(--panel); box-shadow: 0 3px 9px #32244e03; }
+.scheduled-message-card { --queue-icon: 24px; --queue-line: color-mix(in lch, var(--accent) 12%, var(--line)); --queue-soft: color-mix(in lch, var(--accent) 10%, var(--panel)); position: relative; isolation: isolate; margin-bottom: 8px; border: 1px solid var(--queue-line); border-radius: 10px; background: var(--panel); box-shadow: 0 3px 9px #32244e03; }
 .scheduled-message-card.has-stack:not(.is-expanded)::before, .scheduled-message-card.has-stack:not(.is-expanded)::after { position: absolute; z-index: -1; right: 5px; bottom: -4px; left: 5px; height: 5px; border: 1px solid var(--queue-line); border-radius: 0 0 7px 7px; background: color-mix(in lch, var(--accent) 3%, var(--panel)); content: ""; }
 .scheduled-message-card.has-stack:not(.is-expanded)::after { right: 10px; bottom: -7px; left: 10px; z-index: -2; }
 .scheduled-message-card.is-expanded { border-color: color-mix(in lch, var(--accent) 30%, var(--line)); }
-.scheduled-message-summary { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 11px 13px; }
-.scheduled-message-stack { display: grid; width: 29px; height: 29px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--queue-soft); color: var(--accent); }
-.scheduled-message-summary-copy { min-width: 0; flex: 1; }
+.scheduled-message-summary { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 7px 12px; }
+.scheduled-message-stack { display: grid; width: var(--queue-icon); height: var(--queue-icon); flex: 0 0 auto; place-items: center; border-radius: 8px; background: var(--queue-soft); color: var(--accent); }
+.scheduled-message-summary-copy { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 1px 8px; }
 .scheduled-message-summary-copy strong { display: flex; align-items: center; gap: 7px; color: var(--ink); font-size: 12px; font-weight: 600; }
 .scheduled-message-summary-copy strong span { border-radius: 4px; background: var(--queue-soft); padding: 2px 5px; color: var(--accent); font: 10px var(--font-mono); }
-.scheduled-message-summary-copy small { display: block; margin-top: 4px; color: var(--faint); font-size: 10px; line-height: 1.5; }
+.scheduled-message-summary-copy small { min-width: 0; color: var(--faint); font-size: 10px; line-height: 1.5; }
 .scheduled-message-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 6px 0 6px 6px; color: var(--accent); font-size: 10px; white-space: nowrap; }
 .scheduled-message-attention { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: color-mix(in lch, var(--amber) 10%, var(--panel)); padding: 4px 6px; color: var(--amber); font-size: 9px; white-space: nowrap; }
-.scheduled-message-previews { padding: 0 12px 4px; }
+.scheduled-message-previews { max-height: min(130px, 22dvh); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0 12px 4px; }
 .scheduled-message-previews > .scheduled-message-row { min-height: 33px; gap: 8px; border: 0; border-top: 1px solid color-mix(in lch, var(--queue-line) 55%, var(--panel)); border-radius: 0; background: transparent; padding: 0 0 0 2px; }
 .scheduled-message-previews .scheduled-message-position { width: 13px; color: var(--faint); font: 9px var(--font-mono); }
 .scheduled-message-previews .scheduled-message-row > svg { flex-shrink: 0; color: var(--faint); }
 .scheduled-message-previews .scheduled-message-row > em, .scheduled-message-previews .scheduled-message-row > time { color: var(--faint); font-size: 9px; }
 .scheduled-message-previews .scheduled-message-row > b { color: var(--muted); font-size: 11px; font-weight: 500; }
-.scheduled-message-previews .scheduled-message-row > button, .scheduled-message-previews .scheduled-message-agent, .scheduled-message-previews .scheduled-message-managed { display: none; }
+.scheduled-message-previews .scheduled-message-agent { display: none; }
+.scheduled-message-previews .scheduled-message-row > button { flex-shrink: 0; }
+.scheduled-message-previews .scheduled-message-managed { max-width: 120px; white-space: normal; }
 .scheduled-message-previews .scheduled-message-preview-exit { margin-left: auto; color: var(--faint); font: 8px var(--font-mono); }
 .scheduled-message-previews .scheduled-message-preview-exit.is-attention { color: var(--amber); }
 .scheduled-message-previews > small { display: block; padding: 5px 2px 5px; color: var(--faint); font-size: 9px; }
@@ -44,11 +46,14 @@
 .scheduled-message-cancel-text { max-height: 150px; overflow: auto; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; white-space: pre-wrap; }
 .scheduled-message-card :is(button, summary, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @container (max-width: 520px) {
+  .scheduled-message-previews .scheduled-message-row { flex-wrap: wrap; padding-block: 5px; }
+  .scheduled-message-previews .scheduled-message-row > b { flex-basis: calc(100% - 95px); }
+  .scheduled-message-previews .scheduled-message-guide { margin-left: auto; }
   .scheduled-message-summary { flex-wrap: wrap; gap: 7px; padding: 10px; }
-  .scheduled-message-summary-copy { flex-basis: calc(100% - 36px); }
+  .scheduled-message-summary-copy { flex-basis: calc(100% - var(--queue-icon) - 7px); }
   .scheduled-message-summary-copy strong { font-size: 11px; }
   .scheduled-message-summary-copy small { font-size: 9px; }
-  .scheduled-message-attention { margin-left: 36px; }
+  .scheduled-message-attention { margin-left: calc(var(--queue-icon) + 7px); }
   .scheduled-message-toggle { margin-left: auto; }
   .scheduled-message-previews { padding-right: 10px; padding-left: 10px; }
   .scheduled-message-previews > .scheduled-message-row { flex-wrap: nowrap; gap: 6px; }

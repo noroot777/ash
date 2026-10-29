@@ -29,6 +29,7 @@ export const projects = sqliteTable("projects", {
   // 合进目标分支的工作区并暂存，目标分支的 ref 一个字节都不动，由人自己提交或丢弃。
   // 单次验收可以覆盖它（POST /tasks/:id/accept 的 commit 参数），这里只是默认值。
   acceptCommit: integer("accept_commit", { mode: "boolean" }).notNull().default(true),
+  acceptAutoCommit: integer("accept_auto_commit", { mode: "boolean" }).notNull().default(false),
   // 「验收前置命令」：点下验收通过之后、动 git 之前跑的那条命令，rc=0 才合并。
   // null/空 = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻，见
   // shared/src/accept-gate.ts 顶部；执行与判定在 server/src/accept-gate.ts。
@@ -110,6 +111,25 @@ export const noteTasks = sqliteTable(
   (t) => ({
     noteTaskIdx: uniqueIndex("note_tasks_note_task_idx").on(t.noteId, t.taskId),
     taskIdx: index("note_tasks_task_idx").on(t.taskId),
+  }),
+);
+
+// 任务备忘(shared/src/task-memo.ts 写了它跟随手记、跟追问各自的分界)。挂在任务上、
+// 不进任何 prompt,所以能改能删。时间戳用 TEXT ISO(跟 tasks 一致,不是 notes 那种 epoch
+// 毫秒)——侧边栏那一列要拿它跟追问的 `at` 比新旧,两边同一种形状才不用在读侧转来转去。
+export const taskMemos = sqliteTable(
+  "task_memos",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id").notNull(),
+    body: text("body").notNull(),
+    // 跟随手记同一条:备忘是**私有**的个人批注(§八),归属列是可见性判据本身。
+    ownerUserId: text("owner_user_id"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => ({
+    taskIdx: index("task_memos_task_idx").on(t.taskId),
   }),
 );
 

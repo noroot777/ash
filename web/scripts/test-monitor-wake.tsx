@@ -103,6 +103,14 @@ for (const render of [renderTask, renderTeam]) {
   assert.match(html, /2 条消息 → 1 次输入/);
   assert.match(html, /复制完整自动输入/);
   assert.match(html, /<details class="monitor-wake-raw"><summary>/);
+  // 整张卡默认折叠：外层 details 不带 open，摘要那一行把「是什么 · 哪来的」说完,
+  // 展开/收起两套字都在 DOM 里由 CSS 按状态挑（静态标记两句都看得见）。
+  assert.match(html, /<details class="monitor-wake-fold">/);
+  assert.doesNotMatch(html, /class="monitor-wake-fold" open|monitor-wake-fold" open=/);
+  assert.match(html, /monitor-wake-brief">收到 2 条哨兵消息，合并为一次输入。<span class="monitor-wake-brief-source">[^<]*等 2 个哨兵</);
+  assert.match(html, /monitor-wake-fold-open">展开<\/span><span class="monitor-wake-fold-close">收起</);
+  // 复制按钮裹在自己那一格里：summary 里的点击默认连带开合，那一格负责把它掐掉。
+  assert.match(html, /class="monitor-wake-copy"><button/);
   assert.match(html, /monitor-wake-mark/);
   assert.match(html, /monitor-wake-source-label">来自哨兵/);
   assert.match(html, /monitor-wake-expand">查看完整输入与来源/);
@@ -123,6 +131,7 @@ for (const render of [renderTask, renderTeam]) {
   assert.match(spoofedHtml, /退出码 1/);
   const legacyHtml = render([user({ text: spoofed.text })]);
   assert.match(legacyHtml, /历史来源未记录/);
+  assert.match(legacyHtml, /monitor-wake-brief">系统消息已作为新输入写入会话。</);
   assert.doesNotMatch(legacyHtml, /哨兵触发 \/|哨兵消息已作为/);
   assert.doesNotMatch(legacyHtml, /含续跑交代|\d+ 条消息 →/);
   const hostile = render([user(wakePayload([{ ...outputEvent, body: '<img src=x onerror="alert(1)">' }]))]);
@@ -147,4 +156,4 @@ for (const items of [persisted, live]) {
   assert.equal(monitorWakeReplyIds(items).size, 1);
   assert.match(renderTask(items), /monitor-wake-reply/);
 }
-console.log("monitor wake: structured provenance, hostile logs, legacy fallback, task/team, live/reload passed");
+console.log("monitor wake: structured provenance, hostile logs, legacy fallback, default-collapsed card, task/team, live/reload passed");
