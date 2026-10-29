@@ -192,29 +192,38 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
  * 跑满 35 分钟写完报告，最后才发现没有 `report_stage` 可调，而 ash 全程一言不发。
  */
 async function warnHostAshMcp(): Promise<void> {
-  const gaps: string[] = [];
+  const gaps: { line: string; basis: "cli" | "file" }[] = [];
   for (const agentType of ["claude", "codex"]) {
     const file = hostCliConfigFile(agentType);
     if (!file || !existsSync(file)) continue;              // 这个 CLI 没在这台机器上用过
     const dir = hostCliConfigDir(agentType);
     // 两道判据，顺序有意：**先用配置文件快速放过**（已经接好的机器零开销），只有它说
-    // 「确实没有」才花一次子进程去问 CLI 自己确认。正则读 TOML 会把合法的
-    // `[mcp_servers."ash"]`、缩进表头判成缺失（第 2 位审查者 N1），所以**结论不归它下**，
-    // 它只负责省掉那次子进程。
-    if (!dir || ashMcpRegistration(dir, agentType).state !== "absent") continue;
-    const { hostAshMcpMissing } = await import("../ash-mcp-reachability.js");
-    if (!(await hostAshMcpMissing(agentType))) continue;
-    gaps.push(`${agentType}（${file}）`);
+    // 「没有」或「关着」才去确认。快速通道**只许省掉那次确认，不许替它下「没问题」的结论**：
+    // 上一版只看「不是 absent」就放过，`enabled = false` 的登记读出来是「在」，于是那道
+    // 本来算得出「没启用」的 CLI 确认被跳过（新链第 1 轮审查第 2 条）。所以只有明确的
+    // present 才放过；读不出来（unknown）也放过 —— 那时确认那一道同样问不出结论。
+    const quick = dir ? ashMcpRegistration(dir, agentType).state : "unknown";
+    if (quick === "present" || quick === "unknown") continue;
+    const { hostAshMcpGap } = await import("../ash-mcp-reachability.js");
+    const gap = await hostAshMcpGap(agentType);
+    if (!gap) continue;
+    gaps.push({ line: `${agentType}（${file}）：${gap.problem}`, basis: gap.basis });
   }
   if (!gaps.length) return;
   // 措辞里的「这台机器的默认配置下」不是客套：这里问的是**宿主默认上下文** ——
-  // `hostAshMcpMissing` 没有任务目录、没有执行器 profile，而 claude 的项目级登记
+  // `hostAshMcpGap` 没有任务目录、没有执行器 profile，而 claude 的项目级登记
   // (`--scope local`)和 codex 的 `-c mcp_servers.…` 覆盖都能让某条具体任务照样有工具。
   // 派审那道门禁(`ashMcpReachability`)才问得到那些,所以这行启动日志只敢说默认配置。
-  console.warn("[ash] 这些 CLI 在这台机器的默认配置下自己报告没有 ash MCP 登记，"
+  //
+  // 证据来源也要说实话：问不了 CLI 本人的机器上（macOS 等，见 ash-mcp-reachability.ts
+  // 「问不了 CLI 时」）结论来自配置文件，措辞降一档成「看配置像是没登记」。
+  const fromCli = gaps.every((g) => g.basis === "cli");
+  console.warn((fromCli
+    ? "[ash] 这些 CLI 在这台机器的默认配置下自己报告没有可用的 ash MCP 登记，"
+    : "[ash] 看这台机器的默认配置，这些 CLI 像是没有可用的 ash MCP 登记（读配置得出，没经 CLI 本人确认），")
     + "这么跑起来的 agent 交不了卷"
     + "（没有 complete_task，干完的活会记 failed；派出去的审查跑完也给不出结论）：");
-  for (const line of gaps) console.warn(`  · ${line}`);
+  for (const g of gaps) console.warn(`  · ${g.line}`);
   console.warn("  自查：claude mcp get ash / codex mcp list --json。接法见 docs/install.md，"
     + "或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
 }

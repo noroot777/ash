@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { scanCodexToml } from "../ash-mcp-file.js";
 import { codexAshMcpServerName } from "../executors/codex-mcp.js";
 import { currentListeningPort } from "../listening-port.js";
 import { REPO_DIR } from "../paths.js";
@@ -70,8 +71,11 @@ export function readAshMcp(dir: string, agentType: string): PersonalAshMcp {
 }
 
 export type AshMcpRegistration = {
-  /** present=登记在 / absent=确实没有 / unknown=读不出来，别据此下结论 */
-  state: "present" | "absent" | "unknown";
+  /**
+   * present=登记在且没关 / absent=确实没有 / disabled=登记在但写着 `enabled = false` /
+   * unknown=读不出来，别据此下结论
+   */
+  state: "present" | "absent" | "disabled" | "unknown";
   serverName: string | null;
   detail: string;
 };
@@ -108,10 +112,23 @@ export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegist
         ? { state: "present", serverName: name, detail: "" }
         : none("这个配置目录里没有 ash MCP 登记");
     }
-    const name = codexAshMcpServerName(dir);
-    return name
-      ? { state: "present", serverName: name, detail: "" }
-      : none("这个配置目录里没有 ash MCP 登记");
+    // **不用 `codexAshMcpServerName`**：它是执行器注入 `env_vars` 用的严格行首正则，
+    // 认不出 `[mcp_servers."ash"]`、缩进表头，也看不见 `enabled = false` —— 禁用的登记被
+    // 它报成「在」，启动自检的快速通道于是直接放过，那道本来算得出「没启用」的 CLI 确认
+    // 被跳过（新链第 1 轮审查第 2 条）。这里要的是三态判断，交给按表头/键路径认的扫描器。
+    const scan = scanCodexToml(readFileSync(file, "utf8"));
+    if (scan.doubt) return dunno(scan.doubt);
+    const names = [...scan.servers.keys()];
+    const live = names.find((n) => scan.servers.get(n)!.enabled);
+    if (live) return { state: "present", serverName: live, detail: "" };
+    if (names.length) {
+      return {
+        state: "disabled",
+        serverName: names[0]!,
+        detail: `${names.map((n) => `[mcp_servers.${n}]`).join("、")} 写着 enabled = false`,
+      };
+    }
+    return none("这个配置目录里没有 ash MCP 登记");
   } catch (e) {
     return dunno(`读 ash MCP 登记失败：${(e as Error).message}`);
   }

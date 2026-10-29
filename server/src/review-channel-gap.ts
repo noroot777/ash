@@ -25,6 +25,7 @@ import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { turnProducedWork } from "./transcript.js";
+import type { TurnReview } from "./turn-lock.js";
 
 /**
  * 日志**限量读**，不整读。
@@ -127,9 +128,26 @@ const HOW_TO_CHECK: Record<string, string> = {
   codex: "codex mcp list --json（看 ash 在不在、enabled 是不是 true）",
 };
 
-/** 刚刚那一轮审查是不是**判成了无结论**（round 落 error、conclusion 为空）。 */
-async function concludedNothing(taskId: string): Promise<boolean> {
+/**
+ * 刚刚那一轮审查是不是**判成了无结论**（round 落 error、conclusion 为空）。
+ *
+ * **按这一回合自己绑定的那一轮去查**，不按「这条任务最新的那次审查」：结算到这里之前，
+ * 用户可能已经开出了下一轮（或者别的入口新建了一次审查），那时 `latestRun` 指的是新的
+ * 那一次，它还没落 error，这句说明就悄悄不出现了（新链第 1 轮审查）。绑定拿不到的回合
+ * （接回的老会话等）才退回 `latestRun`。
+ */
+async function concludedNothing(taskId: string, review: TurnReview | null): Promise<boolean> {
   const { latestRun, roundOf } = await import("./free-review-round.js");
+  if (review) {
+    const { db } = await import("./db/index.js");
+    const { freeReviewRounds } = await import("./db/schema.js");
+    const { and, eq } = await import("drizzle-orm");
+    const round = (await db.select().from(freeReviewRounds).where(and(
+      eq(freeReviewRounds.runId, review.run),
+      eq(freeReviewRounds.round, review.round),
+    ))).at(0);
+    return !!round && round.status === "error" && !round.conclusion;
+  }
   const run = await latestRun(taskId);
   if (!run) return false;
   const round = await roundOf(run);
@@ -148,9 +166,11 @@ export async function noteReviewerChannelGap(a: {
   turnStart: string;
   agentType: AgentType;
   stopped: boolean;
+  /** 这一回合为哪一次审查的哪一轮而起（回合身份里那份）。拿不到给 null。 */
+  review: TurnReview | null;
 }): Promise<boolean> {
   if (a.stopped) return false;
-  if (!(await concludedNothing(a.taskId))) return false;
+  if (!(await concludedNothing(a.taskId, a.review))) return false;
   // 干过活才算数：CLI 没起来、起来就崩的那种另有诊断，这里插一句只会误导。
   if (!(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) return false;
   const paths = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
@@ -160,7 +180,8 @@ export async function noteReviewerChannelGap(a: {
   const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
   const why = evidence
     ? evidence.detail
-    : `常见原因是审查者手上根本没有 report_stage 这个工具（自查：${check}）：报告照样写得完整，只有最后一步上报做不到。`;
+    // 没有证据时只能推断，措辞就得是推断：「最可能」而不是陈述一个原因。
+    : `这一轮没查到直接证据；最可能的原因是审查者手上根本没有 report_stage 这个工具（自查：${check}）：报告照样写得完整，只有最后一步上报做不到。`;
   const next = evidence?.connected
     ? "可以先点「继续本轮审查」让它接着上一次的上下文补上报（不用重跑这一轮）；要是它说仍然没有这个工具，就去查执行器有没有限制工具清单。"
     : `修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。`;

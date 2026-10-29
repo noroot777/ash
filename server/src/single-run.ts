@@ -16,7 +16,7 @@ import { bus } from "./bus.js";
 import { closeSessionTurns, recordTurnSpan } from "./session-turns.js";
 import { scanForTitle } from "./auto-title.js";
 import {
-  adoptRun, bindNativeSteer, finalizeAbandonedRun, takeSteered, takeStopped,
+  adoptRun, bindNativeSteer, finalizeAbandonedRun, takeSteered, takeStopped, turnIdentity,
 } from "./runs.js";
 import { now } from "./util.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
@@ -467,7 +467,10 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 自动链」，这一句紧跟其后才读得通（先结果、后原因）。说不出来就什么都不说，绝不因此
   // 影响这一轮的落位。
   if (role === "reviewer") {
-    await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped })
+    // 回合身份在结算期间还占着（orchestrator 在 consumeSingleRun 之后才 releaseTurn），
+    // 这一轮绑的是哪一次审查就从那里整份读。
+    const review = turnIdentity(taskId)?.review ?? null;
+    await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped, review })
       .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
   }
   if (settled.note) {

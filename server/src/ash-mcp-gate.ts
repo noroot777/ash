@@ -90,8 +90,11 @@ while (!existsSync(goFile)) {
   if (Date.now() > deadline) process.exit(0);
   nap(25);
 }
+// windowsHide:壳自己是被 windowsHide 起的,可它再起的 CLI(.cmd 垫片走 cmd.exe)不继承这一项,
+// 不带的话 Windows 上每次预检都可能闪一个控制台窗口(新链第 1 轮审查)。
 const r = spawnSync(file, args, {
   stdio: "inherit",
+  windowsHide: true,
   ...(verbatim === "1" ? { windowsVerbatimArguments: true } : {}),
 });
 try {

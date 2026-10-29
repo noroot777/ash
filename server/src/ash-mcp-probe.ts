@@ -37,10 +37,11 @@
 // 可逃离，圈里的后代逃不出去，所以 `lsof` 能看到的号必然也在圈里。留着它只多两样东西：
 // 一条到不了目的地的线索，和一把按裸号下刀、没法复核代次的补刀（号复用窗口，N5）。
 //
-// 代价如实写在这里：**macOS 上这条预检因此整个不工作**（那边没有等价物，基线如实弃权）。
-// 这是拿「功能在那个平台上失效」换「绝不留下收不回来的后台查询」—— 方向由第 1 轮审查
-// 定死：探测不属于任何任务、UI 上看不见、停止任务也找不到它，泄漏会随每次派审静默累积，
-// 而漏放一次预检只是退回到没有这道闸之前的状态。
+// 代价如实写在这里：**macOS 上这一层一次都不探测**（那边没有等价物，基线如实弃权）。
+// 方向由第 1 轮审查定死：探测不属于任何任务、UI 上看不见、停止任务也找不到它，泄漏会随每次
+// 派审静默累积。判据层在这种机器上不再整条放行，而是退到读配置文件那一档
+// （`ash-mcp-file.ts`，不起任何进程；新链第 1 轮审查第 1 条）—— 这一层只管「起了进程就得
+// 收得回来」，问不了的时候怎么判是判据层的事。
 //
 // ── 进程组**不是**归属设备（第 1 轮审查 B1，macOS 真机实测）──────────────────
 //
@@ -80,15 +81,21 @@
 //   → 开门 → CLI 这才出生，它和它的后代继承这个圈
 //
 // 于是 CLI 这棵树**整体**在圈内：窗口里没有能脱离的进程，`members` 的空因此构成证明
-// （见 `unitResidue` 的 `gated`），`TerminateJobObject` 的成功也因此是整棵树的终止。
-// **门闩只有在要给圈补窗口时才需要** —— 只有追踪 fd 的平台（macOS）不用它，因为那台设备
-// 压根没有要补的窗口。
+// （见 `unitResidue` 的 `gated`）。下刀成功**不**构成证明 —— 见 `settleUnit` 上面那段。
+// 有圈的平台一律走门闩；没圈的平台（macOS）压根不启动，也就用不上它。
+//
+// ── 读数和下刀走异步版（新链第 1 轮审查第 4 条）─────────────────────────────
+//
+// Windows 上每读一次 Job 成员、每下一刀都要起一个 PowerShell（实测 1~1.7 秒）。同步跑的话
+// 派审请求处理期间整个 server 的事件循环被堵住 —— 别的请求、SSE、别的任务时间线一起卡。
+// 所以这里一律走 `readAsync` / `killAllAsync`（设备没实现就退回同步版：Linux 读的是
+// cgroupfs，本来就不起进程）。
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { IS_WINDOWS, isPidRunning, killTree } from "./platform.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
 import { prepareGate } from "./ash-mcp-gate.js";
-import { openConfinement, type Confinement } from "./executors/kernel-confine.js";
+import { openConfinement, type ConfineRead, type Confinement } from "./executors/kernel-confine.js";
 
 export interface ProbeResult {
   code: number;
@@ -122,8 +129,10 @@ const SHELL_REAP_MS = 2_000;
  *
  * 基线那一侧没有「请求已送达」的回执（`enroll` 的 true 只代表 `stdin.write` 没抛），所以
  * 这边只能用时间兜，并给一次重试 —— **这一条因此是时序敏感的**，真机上 300ms 有时够有时
- * 不够（`read()` 自己又会同步起一次 PowerShell 把事件循环堵上 1~1.5 秒）。彻底解掉要给
- * `enroll` 加一个可 await 的送达回执，那是基线那一侧的改动。
+ * 不够。读数改走 `readAsync` 之后（它等就绪文件时不再 `Atomics.wait`、也不再同步起
+ * PowerShell），那次写在等待期间照常落地，这段等待从「必需」降成了「保险」；留着是因为
+ * 设备没实现异步版时退回的仍是同步 `read()`。彻底解掉要给 `enroll` 加一个可 await 的送达
+ * 回执，那是基线那一侧的改动。
  *
  * 等够一点反而更快：ready 凭据先落地的话，`read()` 内部的 `settleHeld` 当场就返回，省掉
  * 它那 2.5 秒的等待。门闩壳就在等开门，这段等待不占任何别的东西。
@@ -144,8 +153,7 @@ const wait = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, m
 /**
  * 这一次探测的**执行单元**：手上有哪几台归属设备，以及它们各自答得了什么。
  *
- * `confine` 和 `track` 至少有一个非空 —— 两个都拿不到时 `probeCli` 压根不启动目标
- * （见文件头「不启动自己收不回来的查询」）。
+ * 能核销的只有内核圈定这一台，拿不到它 `probeCli` 压根不启动目标（见文件头）。
  */
 export type ProbeUnit = {
   /** 内核圈定。`null` = 这台机器没有（macOS）或被显式关掉 ⇒ 这次探测压根不该启动。 */
@@ -173,9 +181,9 @@ export type ProbeUnit = {
  * **进程组不在这里面**（第 1 轮审查 B1，理由见文件头）：它只覆盖「还留在原组里」的后代，
  * 一个 `setsid` 就能出圈，所以原组的 `ESRCH` 推不出整次运行干净。
  */
-export function unitResidue(unit: ProbeUnit): "remaining" | "gone" | null {
+export async function unitResidue(unit: ProbeUnit): Promise<"remaining" | "gone" | null> {
   if (!unit.confine) return null;
-  const read = unit.confine.read();
+  const read = await readUnit(unit.confine);
   if (read.kind !== "members") return null;          // absent / unqueryable：都不说话
   if (read.members.some((m) => isPidRunning(m.pid))) return "remaining";
   return unit.gated || read.coverage === "whole-run" ? "gone" : null;
@@ -189,6 +197,17 @@ export function unitResidue(unit: ProbeUnit): "remaining" | "gone" | null {
 function discharge(unit: ProbeUnit): void {
   unit.confine?.dispose();
 }
+
+/** 读数 / 下刀：有异步版就走异步版（见文件头「读数和下刀走异步版」）。 */
+const readUnit = (c: Confinement): Promise<ConfineRead> =>
+  c.readAsync ? c.readAsync() : Promise.resolve(c.read());
+const cutUnit = async (unit: ProbeUnit): Promise<void> => {
+  const c = unit.confine;
+  if (!c) return;
+  // **返回值刻意不看**（`settleUnit` 上面那段）—— 它表达不了「整圈都终止了」。
+  if (c.killAllAsync) await c.killAllAsync("SIGKILL");
+  else c.killAll("SIGKILL");
+};
 
 /**
  * 收尾：把这次探测自己起的东西收干净，**每条结束路径都要走一遍**。
@@ -231,17 +250,17 @@ async function settleUnit(
   const pid = child.pid;
   if (!pid) { discharge(unit); return; }
 
-  if (why === "ended" && unitResidue(unit) === "gone") { discharge(unit); return; }
+  if (why === "ended" && await unitResidue(unit) === "gone") { discharge(unit); return; }
 
   // ② 下刀。**返回值刻意不看**（上面那段）—— 它表达不了「整圈都终止了」。
-  unit.confine?.killAll("SIGKILL");
+  await cutUnit(unit);
   killTree(pid, "SIGKILL");
 
   // 复核：**步长递增**地问，直到证明空或者预算用完。
   //
-  // 为什么不密集问：Windows 上每次读数要同步起一个 PowerShell（N2 那条，实测单次能把事件
-  // 循环堵上 1~1.7 秒），所以第一问给内核一个短窗口（SIGKILL 通常当场生效，一问就完），
-  // 问不出来才翻倍拉长。为什么不能不问：见上面那段 —— 下刀的返回值什么都不证明。
+  // 为什么不密集问：Windows 上每次读数要起一个 PowerShell（实测 1~1.7 秒；走的是异步版，
+  // 不再堵事件循环，但每一问的成本还在），所以第一问给内核一个短窗口（SIGKILL 通常当场生效，
+  // 一问就完），问不出来才翻倍拉长。为什么不能不问：见上面那段 —— 下刀的返回值什么都不证明。
   //
   // 等待一律用不 unref 的 `wait`：被探测的进程一被收掉事件循环当场就空，unref 的 timer
   // 从此永不触发，收尾会卡在半路连警告都喊不出来（实测跑出 `unsettled top-level await`）。
@@ -249,13 +268,13 @@ async function settleUnit(
   const deadline = Date.now() + REAP_GRACE_MS * 2;
   while (Date.now() < deadline) {
     await wait(Math.min(step, deadline - Date.now()));
-    if (unitResidue(unit) === "gone") { discharge(unit); return; }
-    unit.confine?.killAll("SIGKILL");
+    if (await unitResidue(unit) === "gone") { discharge(unit); return; }
+    await cutUnit(unit);
     killTree(pid, "SIGKILL");
     step *= 2;
   }
 
-  const left = unit.confine?.read();
+  const left = unit.confine ? await readUnit(unit.confine) : null;
   const who = left?.kind === "members" && left.members.length
     ? `：还剩 ${left.members.map((m) => m.pid).join("、")}`
     : left?.kind === "unqueryable" ? `：这一刻问不出成员（${left.why}）` : "";
@@ -298,7 +317,7 @@ async function confirmHeld(confine: Confinement, pid: number): Promise<boolean> 
   if (!confine.enroll(pid)) return false;
   for (let round = 0; round < 2; round++) {
     await wait(HOLD_FLUSH_MS);
-    const read = confine.read();
+    const read = await readUnit(confine);
     if (process.env.ASH_PROBE_DIAG) {
       console.warn(`[diag] id=${confine.id} round=${round} kind=${read.kind}`
         + (read.kind === "members" ? `:${read.members.length}` : `/${read.why}`));

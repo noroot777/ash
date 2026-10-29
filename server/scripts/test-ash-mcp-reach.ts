@@ -57,21 +57,19 @@ const runCli = (bin: string, args: string[], opts: { cwd?: string; env: NodeJS.P
   });
 };
 
-// ── 先问一句：这道闸在这台机器上工作吗 ─────────────────────────────────────
+// ── 先问一句：这台机器问得了 CLI 本人吗 ─────────────────────────────────────
 // 探测层的规矩是「拿不到可核销的归属设备就不启动查询」(第 1 轮审查 B1)。macOS 上内核圈定
-// 如实弃权 ⇒ 一次 CLI 都不跑 ⇒ 每个问法都答「问不出来」⇒ 判据层一律放行。
-// **所以这道闸在这个平台上整个不工作**，它的判据自然也测不出来。
+// 如实弃权 ⇒ 一次 CLI 都不跑 ⇒ 判据层换成读配置文件那一档(`ash-mcp-file.ts`)。
+// 这份文件钉的全是**问 CLI 那一档**的判据,所以在这种机器上整份跳过;配置文件那一档
+// 由 `test-ash-mcp-file.ts` 钉(它强制关掉圈定,在哪个平台上都跑同一套)。
 //
-// 写成整份跳过、而不是把那十几条「该拦」的断言改成「恒放行」：后者会让这个文件看着还在
-// 守着什么，实际上一条都没守。跳过是刺眼的，而它**应该**刺眼 —— 回归保护在开发机上整个
-// 消失，正是「宁可不做这次预检，也不留一个收不回来的后台查询」这个取舍的代价之一。
-// 哪天 macOS 上补回了一条不起进程的判据（或者补上了可核销的归属设备），把这段删掉即可。
+// 写成整份跳过、而不是把那十几条「该拦」的断言改成别的预期：后者会让这个文件看着还在
+// 守着什么，实际上守的是另一条路。
 const { confineAbstention } = await import("../src/executors/kernel-confine.js");
 const abstention = confineAbstention();
 if (abstention) {
-  console.log(`⚠ 整份跳过 ash MCP 预检判据用例：${abstention}`);
-  console.log("  ⇒ 探测层据此一条查询都不起，判据层一律放行 —— 这道闸在这台机器上不工作，");
-  console.log("    不是测试跳过了它，是它本身没在守（第 1 轮审查 B1 的代价）。");
+  console.log(`⚠ 整份跳过「问 CLI 本人」那一档的判据用例：${abstention}`);
+  console.log("  ⇒ 这台机器上预检走配置文件那一档，那一档的用例在 test:ash-mcp-file。");
   rmSync(stage, { recursive: true, force: true });
   process.exit(0);
 }
@@ -435,11 +433,10 @@ try {
     );
 
     // 边界:宿主启动诊断问的是**默认上下文**,不能被任务默认 profile 带偏
-    const { hostAshMcpMissing } = await import("../src/ash-mcp-reachability.js");
-    assert.equal(
-      await hostAshMcpMissing("codex"), true,
-      "B1 边界:profile 里的 -c 覆盖不属于「这台机器默认配置」,启动诊断仍该报缺失",
-    );
+    const { hostAshMcpGap } = await import("../src/ash-mcp-reachability.js");
+    const gap = await hostAshMcpGap("codex");
+    assert.ok(gap, "B1 边界:profile 里的 -c 覆盖不属于「这台机器默认配置」,启动诊断仍该报缺失");
+    assert.equal(gap!.basis, "cli", "能问 CLI 的机器上,启动诊断的证据来源是 CLI 本人");
 
     await db.delete(agentsTable).where(eqOp(agentsTable.id, "b1-default"));
     delete process.env.CODEX_HOME;

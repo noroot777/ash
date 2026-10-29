@@ -250,9 +250,16 @@ async function initializeServer() {
   // 也记 failed，而这一趟能在第一个任务起跑之前就说出来。两档各做一件事：隔离档的目录
   // 是 ash 自己建的，缺了直接补上；自用/共用档读的是用户自己的 CLI 配置，**一个字节都
   // 不改**，只把缺口点名到文件路径。best-effort，出错只出声不拦启动。
+  //
+  // **不 await**：确认缺口要问 CLI 本人（起一次子进程，CLI 挂住时要等到预算用完），排在
+  // 监听前面就是把这段时间整个加到启动上 —— 而它要提醒的恰恰是缺登记的那些机器（新链
+  // 第 1 轮审查第 5 条）。它跟监听没有先后依赖：隔离档每次起跑前还会再补一遍
+  // （`ensureUserCliDir`），告警晚几秒出来不改变任何结论。
   if (!IS_PREVIEW_INSTANCE) {
-    const { sweepPersonalAshMcp } = await import("./auth/user-cli.js");
-    await sweepPersonalAshMcp().catch((err) => console.error("[ash] 个人 CLI 的 ash MCP 自检失败（不影响启动）:", err));
+    void (async () => {
+      const { sweepPersonalAshMcp } = await import("./auth/user-cli.js");
+      await sweepPersonalAshMcp();
+    })().catch((err) => console.error("[ash] 个人 CLI 的 ash MCP 自检失败（不影响启动）:", err));
   }
   // 上一个 ash 留下的逃逸追踪文件(tmpdir 里的空文件)。证据的寿命跟着「还能不能取到人」
   // 走、不再有硬期限(见 executors/kill.ts),所以「进程整个没了、内存里的租约也没了」这条

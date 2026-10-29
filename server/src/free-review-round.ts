@@ -210,6 +210,9 @@ export async function launchReviewRound(
     cwdCandidates: reviewCwdCandidates(cwd, sess, workspacePath),
   });
   if (!reach.reachable) throw new Error(`审查者交不了卷：${reach.problem}`);
+  // 放行了、但登记看着起不来：不拦（那是推断），但得留在时间线上 —— 这一轮要是又跑完没结论，
+  // 用户回头能看到这一句，而不是只剩「未能正常给出结论」（新链第 1 轮审查第 3 条）。
+  if (reach.warning) await appendTaskTimeline(task.id, `派审预检提示：${reach.warning}`);
   const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
   // 重跑分两档，差别不在按钮而在**送进去的那句话**：上下文还在就只说「接着做」（一条崩在
   // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。

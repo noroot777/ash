@@ -16,6 +16,8 @@
 //      整次运行干净（第 1 轮 B1，macOS 真机实测）
 //   8. **下刀谎报成功**：`killAll` 的返回值表达不了「整圈都终止了」，核销只认读数
 //      （第 2 轮 B1）
+//   9. 结构约束（在 `ash-mcp-probe-shape.ts`，由这里调用）
+//  10. 读数与下刀走异步版：探测期间事件循环不被同步 PowerShell 堵住（新链第 1 轮第 4 条）
 //
 // 跑：npm -w server run test:ash-mcp-probe
 import assert from "node:assert/strict";
@@ -345,23 +347,31 @@ try {
     const members = (ms: number[], coverage: string) =>
       fake({ kind: "members", members: ms.map((pid) => ({ pid, gen: null })), coverage });
 
-    assert.equal(unitResidue(unit(fake({ kind: "absent", why: "圈没建起来" }), true)), null,
+    assert.equal(await unitResidue(unit(fake({ kind: "absent", why: "圈没建起来" }), true)), null,
       "absent = 这台设备弃权，**不是**「已经回收」；门闩也不能让它说话（圈都没有，门闩无从谈起）");
-    assert.equal(unitResidue(unit(fake({ kind: "unqueryable", why: "这一刻问不到" }), true)), null,
+    assert.equal(await unitResidue(unit(fake({ kind: "unqueryable", why: "这一刻问不到" }), true)), null,
       "问不出来也不是空");
-    assert.equal(unitResidue(unit(members([], "since-enroll"), false)), null,
+    assert.equal(await unitResidue(unit(members([], "since-enroll"), false)), null,
       "没门闩时 since-enroll 的空不构成证明 —— 空窗里出生又脱离的后代不在集合里");
-    assert.equal(unitResidue(unit(members([], "whole-run"), false)), "gone",
+    assert.equal(await unitResidue(unit(members([], "whole-run"), false)), "gone",
       "设备自己说覆盖整次运行时，空就是证明");
     // 第 6 轮审查第 3 点：`cut >= 0` 当时绕过了 coverage 判据。现在反过来 —— 判据是
     // **门闩有没有把窗口关掉**，而不是设备自报的那一档。门闩之下被 spawn 的是不生后代的
     // 壳，CLI 在圈建成之后才出生，所以这个集合对 CLI 这棵树是确定的，空构成证明。
-    assert.equal(unitResidue(unit(members([], "since-enroll"), true)), "gone",
+    assert.equal(await unitResidue(unit(members([], "since-enroll"), true)), "gone",
       "门闩关掉了空窗：集合对 CLI 这棵树是确定的，空算证明");
-    assert.equal(unitResidue(unit(members([process.pid], "since-enroll"), true)), "remaining",
+    assert.equal(await unitResidue(unit(members([process.pid], "since-enroll"), true)), "remaining",
       "成员还活着就是还有残留");
     // 一台设备都没有 ⇒ 没人能作答。这一档不许退回进程组（第 1 轮 B1）。
-    assert.equal(unitResidue(unit(null, false)), null, "没有归属设备时只能答「不说话」");
+    assert.equal(await unitResidue(unit(null, false)), null, "没有归属设备时只能答「不说话」");
+    // 设备有异步版就只走异步版（新链第 1 轮审查第 4 条）：同步 `read()` 在 Windows 上每次
+    // 起一个 PowerShell、把整个 server 的事件循环堵上 1~1.7 秒。
+    const asyncOnly = {
+      ...fake(null),
+      read: () => { throw new Error("有 readAsync 时不准再走同步 read()"); },
+      readAsync: async () => ({ kind: "members", members: [], coverage: "since-enroll" }),
+    };
+    assert.equal(await unitResidue(unit(asyncOnly, true)), "gone", "读数要走 readAsync");
   }
 
   // ── 6. 门闩：归属没建成之前，CLI 一条指令都不准执行 ────────────────────────
@@ -590,78 +600,69 @@ try {
       `收不干净必须如实喊出来，否则残留连线索都不剩：${warned.join(" | ")}`);
   }
 
-  // ── 9. 结构约束：Windows 那条路本机跑不出来，用不变量兜住 ──────────────────
-  // macOS 上圈定如实弃权，所以「圈建不成 → 不启动」「整圈刀 → 核销」这两条只能在真机上
-  // 跑。断言刻意写成**否定式**（危险形状不存在）而不是某一种写法 —— 上一轮钉
-  // `return gone ?? byClose` 的表达式形状，实现一换就恒红，而恒红的断言钉不住任何东西。
+  // ── 10. 读数与下刀走异步版：探测期间事件循环不卡 ───────────────────────────
+  // 新链第 1 轮审查第 4 条：Windows 上 Job 的每次读数、每一刀都要起 PowerShell（实测 1~1.7
+  // 秒），探测走同步版时派审请求处理期间整个 server 卡住。这里拿一台替身把那个形状摆出来：
+  // 同步版**真的**同步堵 900 ms（跟 PowerShell 一样占住线程），异步版同样耗时但不占线程。
+  // 探测期间挂一个 50 ms 的心跳，断言最大间隔远小于 900 —— 退回同步版这条当场就红。
+  // 正常结束（读数）和超时（下刀 + 复核）两条路各走一遍。不分平台：验的是探测层自己的选择。
   {
-    const src = readFileSync(new URL("../src/ash-mcp-probe.ts", import.meta.url), "utf8");
-    const code = src.split("\n").filter((l) => !/^\s*(?:\/\/|\/?\*)/.test(l)).join("\n");
+    const BLOCK_MS = 900;
+    const calls = { syncRead: 0, syncKill: 0, asyncRead: 0, asyncKill: 0 };
+    const hog = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+    const slowStand = (token: string) => ({
+      id: token,
+      enroll: () => true,
+      preExecEnv: () => null,
+      read: () => { calls.syncRead++; hog(BLOCK_MS); return { kind: "members", members: [], coverage: "since-enroll" }; },
+      readAsync: async () => {
+        calls.asyncRead++;
+        await pause(BLOCK_MS);
+        return { kind: "members" as const, members: [], coverage: "since-enroll" as const };
+      },
+      killAll: () => { calls.syncKill++; hog(BLOCK_MS); return 1; },
+      killAllAsync: async () => { calls.asyncKill++; await pause(BLOCK_MS); return 1; },
+      dispose: () => {},
+    }) as unknown as NonNullable<ReturnType<NonNullable<Parameters<typeof probeCli>[5]>>>;
 
-    const fnBody = (body: string, head: string): string => {
-      const at = body.indexOf(head);
-      assert.ok(at >= 0, `${head} 不见了`);
-      const end = body.indexOf("\n}", at);
-      return body.slice(at, end > 0 ? end : undefined);
+    const dir = join(stage, "slow-cli");
+    mkdirSync(dir, { recursive: true });
+    const hang = join(dir, "hang.mjs");
+    writeFileSync(hang, "setInterval(() => {}, 1000);\n");
+    const shim = (posix: string, windows: string): void => {
+      if (process.platform === "win32") writeFileSync(join(dir, "codex.cmd"), windows);
+      else { const f = join(dir, "codex"); writeFileSync(f, posix); chmodSync(f, 0o755); }
     };
-
-    // **一台归属设备都拿不到时，一条指令都不准起。** 写成位置关系而不是某一句的形状：
-    // 要的不变量是「这道闸在 spawn 之前」。
-    const probeBody = fnBody(code, "export async function probeCli");
-    const guardAt = probeBody.search(/if \(!confine\) return null;/);
-    const spawnAt = probeBody.indexOf("spawn(launch.file");
-    assert.ok(guardAt >= 0 && spawnAt > guardAt,
-      "拿不到能核销的归属设备就不做这次探测 —— 不准退回直接起 CLI（第 6 轮 B1 / 第 1 轮 B1）");
-
-    // **进程组不准再参与核销**（第 1 轮 B1）：后代一个 setsid 就出圈，原组的 ESRCH 推不出
-    // 整次运行干净。组刀照留（killTree 内部那一刀在 platform.ts），但这个文件里不准再出现
-    // 拿进程组**探活**的写法。
-    assert.ok(!/kill\(-\s*\w+\s*,\s*0\s*\)/.test(code),
-      "原组的 ESRCH 不是「整次运行已清理」的证据（第 1 轮 B1，macOS 真机实测）");
-    // **追踪 fd 整台设备已经撤掉**（第 2 轮 N4/N5）。两条理由各自独立成立：
-    //  · 它到不了 CLI —— 门闩那一跳是 `spawnSync(stdio: "inherit")`，只转发 0/1/2，
-    //    Node 的 spawn 又把非 stdio 的 fd 都 CLOEXEC 掉（本轮实测：`lsof` 答空，而 `ps`
-    //    明明看得见那个后代）。断了之后它答的正是「没人握着」—— 一个假的核销。
-    //  · 就算接通也是冗余的 —— 在「圈定不完整就不启动」之下，能被 lsof 看见的后代必然
-    //    已经在圈里，圈的读数本来就覆盖它。
-    assert.ok(!/TrackFd|trackHolders|probeFileHolders|residueFromProbe|holdersMayExist/.test(code),
-      "追踪 fd 在这条链上只会答出一个假的「空」，而且冗余 —— 不准再接回来（第 2 轮 N4/N5）");
-
-    // **下刀的返回值不构成核销**（第 2 轮 B1）：Linux <5.14 那条降级路径枚举成员逐个
-    // `killOne`，失败被咽掉照样 `sent += 1`，返回的是**尝试数** —— 跟 `cgroup.kill` 那条
-    // 真原子路径返回的 1 长得一模一样，调用方分辨不出来。所以不准据它判事。
-    const settleBody = fnBody(code, "async function settleUnit");
-    assert.ok(!/(?:const|let|var)\s+\w+\s*=\s*[\w.?]*killAll\(/.test(settleBody),
-      "killAll 的返回值不准存下来 —— 存下来就是打算拿它判事（第 2 轮 B1）");
-    assert.ok(!/(?:if|while|\?\?|&&|\|\|)\s*\(?[\w.?]*killAll\(/.test(settleBody),
-      "killAll 的返回值不准参与判断（降级路径返回的是尝试数，第 2 轮 B1）");
-    // 正面那半：下刀之后必须回到**读数**上去证。
-    assert.ok(!/killAll\([^)]*\);\s*killTree\([^)]*\);\s*discharge\(/.test(settleBody),
-      "不准杀完就核销 —— 中间必须有一次读数（第 2 轮 B1）");
-    assert.match(settleBody, /while \([\s\S]*?unitResidue\(unit\)[\s\S]*?\}/,
-      "复核要成环地问，直到证空或者预算用完");
-    // **钉函数体里有哪几件事，不钉它们写成什么样。** 这一轮和上一轮各被形状断言咬过一次：
-    // 钉 `return gone ?? byClose`、钉 `confine.read().kind === …` 的那两条，实现一换写法就
-    // 恒红，而恒红的断言钉不住任何东西。
-    assert.match(code, /confirmHeld\(/, "开门之前必须确认归属，不能直接 open");
-    const confirm = fnBody(code, "async function confirmHeld");
-    assert.match(confirm, /enroll\(pid\)/, "确认归属要先 enroll");
-    // enroll 写的是 Node stream，read() 内部 Atomics.wait 会把事件循环堵死 —— 中间不把那次
-    // 写等出去，hold 请求根本发不出去（真机实测：第一次碰巧成功，之后是 absent）。
-    assert.match(confirm, /await wait\(HOLD_FLUSH_MS\)/,
-      "enroll 之后必须把那次异步写等出去（第 6 轮真机）");
-    assert.match(confirm, /kind === "members"/,
-      "enroll 答 true 只说明请求发出去了 —— 必须读到 members 才算圈真的建成");
-    assert.match(code, /await settleUnit\([^)]*"timeout"\)/,
-      "超时路径必须**等**收尾做完才说「问不出来」");
-    assert.match(code, /void settleUnit\([^)]*"ended"\)/,
-      "正常结束路径也必须收尾（根 close 不代表后代结束）");
-
-    assert.ok(!/byClose/.test(code),
-      "close 不准再当证据：后代不持管道时它来得更早，持管道时它根本不来（第 6 轮第 4 点）");
-    assert.ok(!/finally\s*\{[\s\S]{0,200}?dispose\(/.test(code),
-      "finally 里不准撤销身份：dispose 的契约是「调用方已经判空」，它自己不杀成员");
+    const pathWas = process.env.PATH;
+    process.env.PATH = `${dir}${delimiter}${pathWas ?? ""}`;
+    /** 跑一次探测，返回那段时间里心跳的最大间隔。 */
+    const gapDuring = async (timeoutMs: number): Promise<number> => {
+      let last = Date.now();
+      let worst = 0;
+      const tick = setInterval(() => { const t = Date.now(); worst = Math.max(worst, t - last); last = t; }, 50);
+      try {
+        await probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, timeoutMs, slowStand);
+        await pause(BLOCK_MS * 3);                     // 正常结束那条的收尾在后台跑，等它走完
+      } finally { clearInterval(tick); }
+      return worst;
+    };
+    try {
+      shim("#!/bin/sh\nprintf '[]'\n", "@echo off\r\n<nul set /p=[]\r\nexit /b 0\r\n");
+      const ended = await gapDuring(8_000);
+      shim(`#!/bin/sh\nexec "${process.execPath}" "${hang}"\n`,
+        `@echo off\r\n"${process.execPath}" "${hang}"\r\n`);
+      const timedOut = await gapDuring(1_500);
+      assert.equal(calls.syncRead + calls.syncKill, 0,
+        `有异步版时一次都不准走同步版（${JSON.stringify(calls)}）`);
+      assert.ok(calls.asyncRead > 0 && calls.asyncKill > 0, `两条路都该走到：${JSON.stringify(calls)}`);
+      assert.ok(ended < BLOCK_MS / 2 && timedOut < BLOCK_MS / 2,
+        `探测期间事件循环不准被读数/下刀堵住：正常结束最大间隔 ${ended} ms、超时 ${timedOut} ms`);
+    } finally { process.env.PATH = pathWas; }
   }
+
+  // ── 9. 结构约束：Windows 那条路本机跑不出来，用不变量兜住（在 ash-mcp-probe-shape.ts）──
+  const { checkProbeStructure } = await import("./ash-mcp-probe-shape.js");
+  checkProbeStructure();
 
   console.log("✅ ash MCP 探测层（结束路径 / 回收判据 / 输出解码）通过");
 } finally {
