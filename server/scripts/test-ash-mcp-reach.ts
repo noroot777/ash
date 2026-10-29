@@ -350,6 +350,7 @@ try {
     assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true,
       "看不懂 + 配置也判不了 → 两档都说不出来才放行");
     delete process.env.CODEX_HOME;
+    fake("[]"); // 上面几条把假 CLI 换成了乱码，不换回来这条就走到宿主真实配置那一档
     assert.equal(
       (await ashMcpReachability({ agentType: "codex", cwdCandidates: Array(12).fill(many[0]!) })).reachable,
       false, "重复目录去重后没超上限 → 照常拦(一条任务的会话常常都在同一个目录)",
