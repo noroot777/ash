@@ -9,6 +9,7 @@
  */
 import type { TerminalReservation } from "./terminal-capacity.js";
 import type { TerminalProcess } from "./terminal-pty.js";
+import type { LaunchClocks } from "./terminal-launch-survivors.js";
 
 export type TerminalEvent =
   | { seq: number; type: "data"; data: string }
@@ -160,18 +161,17 @@ export type TerminalSession = Omit<TerminalSessionInfo, "stoppedByUser"> & {
    */
   launchToken: string | null;
   /**
-   * 这次启动起跑的那一刻,记在**单调**钟上(`process.uptime()` 的毫秒数)。
+   * 这次启动起跑那一刻各个钟的读数,**在 spawn 之前**取(terminal-launch-survivors.ts 的
+   * `sampleLaunchClocks`)。
    *
-   * 为什么不复用 `startedAt`:后者是墙上钟,而「这个候选是不是出生在这次启动之前」要跟
-   * 进程年龄(「跑了多久」)比 —— 两边不是一个钟。启动那一刻钟被前拨过、随后校准回来,
-   * `startedAt` 就记小了,真后代于是被当成「早于启动」筛掉;两个端点此刻的偏移一样,
-   * 推不出中间那一刻也一样(第 5 轮自由审查实测:stop 报 verified、页面「已停止」,
-   * 工人还活着)。单调钟量的是时长,中间怎么拨都不影响这个差。
+   * 为什么不复用 `startedAt`:后者是墙上钟,而「这个候选是不是出生在这次启动之前」要跟候选的
+   * 进程年龄比,两边必须是**同一个钟**才构成证明。第 5 轮自由审查实测墙上钟那一份会被启动时的
+   * 校时带偏;第 6 轮接着指出单换成单调钟也不够 —— macOS 的候选年龄本身是墙上钟量的。所以这里
+   * 把各个钟都留一份,由扫描那一层按候选年龄实际用的钟去配对,配不上就判「证不出来」。
    *
-   * 会话表只活在当前这个 ash 进程里(重启即丢,跟 `launchToken` 同寿),所以
-   * `process.uptime()` 这个进程内单调钟够用,也最不受系统校时影响。不进 DTO。
+   * 会话表只活在当前这个 ash 进程里(重启即丢,跟 `launchToken` 同寿)。不进 DTO。
    */
-  startedUptimeMs: number;
+  launchClocks: LaunchClocks;
   /**
    * pty slave 路径(/dev/ttysN)。leader(wrapper)活着时,按它枚举会话成员(ctty/sid
    * ∪ fd 持有者,见 terminal-process-tree.ts 文件头)就是**确定性**清单 —— 不依赖 ppid

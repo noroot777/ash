@@ -306,22 +306,44 @@ try {
   // 候选集会膨胀到读不动 —— 但那一趟**说不出漏没漏**,所以 `unanswered` 可以是空的而结论仍
   // 然是 `incomplete`。这里用「这次启动的时刻记在未来」把这条路走通(钟被改过的等价形状)。
   {
-    // **年龄上界只能按单调参照给**(第 5 轮自由审查 F1)。上一版拿墙上钟算:`startedAt` 是
-    // 启动那一刻用 `Date.now()` 记的,年龄上界 = 现在 − 它。启动那一刻把钟前拨 10 秒、记完
-    // 立刻校准回来,上界就比真工人的年龄小 10 秒,那个**带着这次记号**的工人连 readLineage
-    // 都走不到就被筛掉,stop 报 verified、页面「已停止」而它还活着。两个端点此刻偏移一样,
-    // 推不出中间那一刻也一样 —— 所以这条上界此后一个字都不碰墙上钟。
+    // **年龄上界跟候选年龄必须是同一个钟量的**(第 5、6 轮自由审查 F1)。第 5 轮:启动那一刻用
+    // 墙上钟记、随后校时,上界就比真工人小 10 秒。第 6 轮:启动那一侧换成单调钟,可 macOS 候选的
+    // `ps etime` 是墙上钟(`gettimeofday() − p_starttime`)—— 启动之后把钟往前拨 60 秒,真工人
+    // 凭空老 60 秒,照样在读记号之前被跳过,stop 报 verified 而它还活着。**量纲都是毫秒推不出
+    // 同钟**,所以这条前提按「候选年龄实际用的那个钟」配对,配不上就是证不出来。
     const upNow = Math.round(process.uptime() * 1000);
-    const normal = candidateBounds({ token: "t", startedUptimeMs: upNow - 1000, cwd });
-    assert.equal(normal.proven, true, "有单调参照 = 这条前提立得住");
-    const twelve = candidateBounds({ token: "t", startedUptimeMs: upNow - 12_000, cwd });
-    assert.ok(twelve.oldest >= 17_000,
-      `上界要按单调参照给(12 秒 + 宽限),不是按那条可能被拨过的墙上钟（实得：${twelve.oldest}）`);
-    // 拿不到单调参照(身份不是从会话表取的)= 证不出来:照旧收窄,但这一趟不许封口。
-    const blind = candidateBounds({ token: "t", startedUptimeMs: null, cwd });
-    assert.notEqual(blind.proven, true, "没有单调参照就不能照常当「问全了」");
-    assert.match(String(blind.proven), /单调的起跑时刻/, "那句话要说出是哪个前提没立住");
+    const clocks = { uptimeMs: upNow - 1000, bootMs: 50_000, wallMs: Date.now() - 1000 };
+    // ① 同钟(Linux 的开机时钟):上界按那个钟的差给,前提立得住。
+    const boot = candidateBounds({ token: "t", clocks, cwd }, { domain: "boot", nowMs: 62_000 });
+    assert.equal(boot.ageProven, true, "候选年龄跟启动参照同是开机时钟 = 这条前提立得住");
+    assert.equal(boot.oldest, 12_000 + 5000, "上界 = 同一个钟上的差 + 宽限,跟单调钟/墙上钟都无关");
+    // ② 墙上钟量的候选年龄(macOS 的 ps):**证不出来**。上界照旧给,而且取两种「过了多久」里
+    //    大的那个 —— 墙上钟被往前拨 60 秒时,带记号的真后代不该在读记号之前就被跳过。
+    const forward = candidateBounds({ token: "t", clocks, cwd }, { domain: "wall", nowMs: Date.now() + 60_000 });
+    assert.notEqual(forward.ageProven, true, "墙上钟的年龄跟单调参照不是一个钟 —— 不许当成证明");
+    assert.match(String(forward.ageProven), /墙上钟/, "那句话要说出是哪个前提没立住");
+    assert.ok(forward.oldest >= 61_000,
+      `钟往前拨了 60 秒:上界要跟着墙上钟那一份走,否则带记号的真工人会被先跳过（实得：${forward.oldest}）`);
+    // 往回拨:墙上钟那一份变小,单调那一份不受影响 —— 上界取大的那个。
+    const backward = candidateBounds({ token: "t", clocks, cwd }, { domain: "wall", nowMs: Date.now() - 60_000 });
+    assert.ok(backward.oldest >= 1000 + 5000, "钟往回拨了:上界退到单调钟那一份,不许跟着缩成负数");
+    // ③ Linux 上声称是开机时钟、启动那一刻却没取到开机时钟读数:同样配不上。
+    const unpaired = candidateBounds({ token: "t", clocks: { ...clocks, bootMs: null }, cwd }, { domain: "boot", nowMs: 62_000 });
+    assert.notEqual(unpaired.ageProven, true, "一边有开机时钟、另一边没有,不是同钟");
+    // ④ 根本没留下起跑读数:证不出来,上界照常给(否则候选集会膨胀到读不动)。
+    const blind = candidateBounds({ token: "t", clocks: null, cwd }, { domain: "boot", nowMs: 62_000 });
+    assert.notEqual(blind.ageProven, true, "没有起跑读数就不能照常当「问全了」");
     assert.equal(blind.oldest, 5000, "前提立不住不等于不收窄:上界照常给出");
+  }
+  // 扫描这一层:**前提只在它真的排除了人时才要证**,而 macOS 上按年龄排除人是常态(同属主、
+  // 比这次启动更早出生的 PID-1 孤儿 —— loginwindow 就是一个)。所以 macOS 上这一趟必须如实
+  // 说「按出生时刻跳过的那些证不出不是这次的」,不许封口。
+  if (process.platform === "darwin") {
+    const earlier = terminalSessions.listForProject("no-port-stop")[0];
+    const scan = await launchSurvivors(terminalSessions.launchIdentityOf(earlier.id));
+    assert.equal(scan.evidence, "incomplete", "macOS 的候选年龄是墙上钟量的,按它跳过的号证不出不是这次的");
+    assert.equal(launchClosureSealed(scan), false);
+    assert.match(String(scan.why), /按出生时刻跳过的 \d+ 个号证不出不是这次的/, "理由要说到措辞里");
   }
   {
     // 枚举这一侧的完整性(同一条 F1 的另一半,按代码推断):ash 的祖先链走不到 PID 1,或者
@@ -399,7 +421,7 @@ try {
   sessions[0].alive = true;
   assert.equal(capacity.hasSlot("capacity", "job", true), false, "保留且还活着 = 真占着一个槽");
   assert.throws(() => capacity.reserve("capacity", "job", true), /数量已达上限/);
-  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env/rebuilt-env/moved-cwd/foreign-marker candidates stay unanswered, a moved-but-marked worker is still named, an unprovable narrowing bound blocks sealing, unified verdict completeness, retained history, newest-only history, capacity accounting");
+  console.log("stop verification passed: no-port stop/restart uncertainty, port-path mark scan, empty-env/rebuilt-env/moved-cwd/foreign-marker candidates stay unanswered, a moved-but-marked worker is still named, an age bound measured on a different clock blocks sealing, unified verdict completeness, retained history, newest-only history, capacity accounting");
 } finally {
   for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
   manager.shutdown();

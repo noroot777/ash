@@ -35,10 +35,22 @@
 // 记号**的工人连 readLineage 都没走到就被筛掉了,stop 报 `{"kind":"verified"}`、页面
 // 「已停止」、`WORKER_ALIVE_AFTER_STOP true`。**两个端点一样推不出中间没变过。**
 //
-// 所以年龄这条收窄不再碰墙上钟:启动那一刻在会话表里记一份 `process.uptime()`
-// (terminal-session-facts.ts 的 `startedUptimeMs`),上界 = 现在的 uptime − 那一份。它跟候选
-// 的进程年龄是同一种量(「跑了多久」),中间怎么拨钟都不影响这个差。拿不到那份参照(身份不
-// 从会话表取)就是**证不出来**,照旧收窄、但不许封口。
+// 第 5 轮的修法是把启动那一侧换成单调钟,第 6 轮自由审查接着指出:**只换了一侧**。macOS
+// 候选那一侧的年龄来自 `ps etime`,而那是墙上钟(`gettimeofday() − p_starttime`),启动之后
+// 把钟往前拨 60 秒,真后代就凭空老了 60 秒,照样在读记号之前被筛掉(协议夹具实测:stop 报
+// verified,工人还活着)。**量纲都是毫秒推不出同钟。**
+//
+// 所以这条前提现在写成:**候选年龄跟启动参照必须是同一个钟量的,而且这个钟不受校时影响**。
+// 年龄连同它的钟一起交出来(service-ports-probe.ts 的 `FactClock`),启动那一刻**在 spawn 之前**
+// 把各个钟都取样一份(`sampleLaunchClocks`,事后补取会把 spawn 那段停顿算漏)。能凑成同钟的
+// 只有 Linux:`/proc/<pid>/stat` 的出生时刻和 `/proc/uptime` 都是 CLOCK_BOOTTIME。macOS 这边
+// 没有 —— 跟 `p_start` 同时写下的单调时刻只有 libproc 给得出来,Node 不带 FFI 够不着 —— 所以
+// macOS 上按年龄排除掉的那些号**一律证不出不是这次的**。上界照旧给(取墙上钟与单调钟两种
+// 「过了多久」里大的那个,任一个钟被拨都尽量不漏掉带记号的真后代),只是那一趟不许封口。
+//
+// **前提只在它真的排除了人的时候才要证**:一个号都没被按属主/年龄筛掉,这两条前提立不立得住
+// 跟结论无关。所以 root 的 ash、macOS 的墙上钟年龄,都只在「确实有号因此被跳过」时才让这一趟
+// 落 incomplete。
 //
 // **③ 其余一切只能「辅助找人」,不能排除人**。记号没命中(`unmarked`)、环境读不出来
 // (`unknown`)、工作目录对不上 —— 都只是没有证据,不是反证。**带着另一次启动记号
@@ -63,7 +75,7 @@
 // 明令禁止扩大 kill 范围),这里的产出是「谁还活着」这个事实,交给停止路径落账并如实告诉用户。
 import { IS_WINDOWS } from "./platform.js";
 import { realpathSync } from "node:fs";
-import { readLineage, readProcessCwd, readProcessFacts } from "./service-ports-probe.js";
+import { bootClockMs, readLineage, readProcessCwd, readProcessFacts, type FactClock } from "./service-ports-probe.js";
 import { descendantsFromTable, processAlive, readProcessTable, type ProcessTable } from "./terminal-process-tree.js";
 
 /** ash 自己这条进程树不进候选集:它的环境里没有任何一次启动的记号,但没必要白问一遍。 */
@@ -73,22 +85,36 @@ const SELF = process.pid;
  *  让这一趟更保守地判「没问全」,错筛会把真残留当陌生人跳过。 */
 const SELF_UID: number | null = typeof process.getuid === "function" ? process.getuid() : null;
 
-/** 比这次启动早出生多少以内的号仍算候选。`ps` 的 etime 只有秒级精度,进程真正起来的时刻
- *  跟 ash 记下的 `startedAt` 之间也有毫秒级先后 —— 宁可多收几个候选(多收只会让这一趟更
- *  保守),绝不能把真残留筛掉。 */
+/** 比这次启动早出生多少以内的号仍算候选。`ps` 的 etime 只有秒级精度,`/proc` 的出生时刻是
+ *  10ms 一跳 —— 宁可多收几个候选(多收只会让这一趟更保守),绝不能把真残留筛掉。它**不**用来
+ *  兜「取样跟 spawn 之间隔了多久」:取样在 spawn 之前,那段停顿本来就不会被算漏。 */
 const BIRTH_GRACE_MS = 5_000;
+
+/**
+ * 启动那一刻各个钟的读数,**在 spawn 之前**取(第 6 轮自由审查:事后补取时,创建子进程到取样
+ * 之间的停顿会让真工人比上界更老)。
+ *
+ *  · `uptimeMs` —— 本进程的单调钟(`process.uptime()`);
+ *  · `bootMs`   —— Linux 的开机时钟(`/proc/uptime`),跟候选的出生时刻同钟;别处为 null;
+ *  · `wallMs`   —— 墙上钟。只用来给 macOS 那一档的上界兜底,从不当证明。
+ */
+export type LaunchClocks = { uptimeMs: number; bootMs: number | null; wallMs: number };
+
+export function sampleLaunchClocks(): LaunchClocks {
+  return { uptimeMs: Math.round(process.uptime() * 1000), bootMs: bootClockMs(), wallMs: Date.now() };
+}
 
 /**
  * 这次启动的身份:记号 + 两条收窄规则各自的参照。**只能从会话表取**
  * (`TerminalSessionManager.launchIdentityOf`)—— 从 DTO 上拼得出 `startedAt`,而那是墙上钟,
  * 拿它当年龄上界正是第 5 轮自由审查实测到的那个错(见文件头②)。
  *
- *  · `token`           —— 这次启动的记号;`null` = 这条线索在这次启动上不存在(交互会话);
- *  · `startedUptimeMs` —— 起跑那一刻的 `process.uptime()` 毫秒数;`null` = 没留下单调参照,
- *                         年龄这条收窄这一趟**证不出来**;
- *  · `cwd`             —— 启动目录。**不参与筛选**,只用来把最可疑的号排在措辞前面。
+ *  · `token`  —— 这次启动的记号;`null` = 这条线索在这次启动上不存在(交互会话);
+ *  · `clocks` —— 起跑那一刻各个钟的读数(`sampleLaunchClocks`);`null` = 没留下参照,
+ *               年龄这条收窄这一趟**证不出来**;
+ *  · `cwd`    —— 启动目录。**不参与筛选**,只用来把最可疑的号排在措辞前面。
  */
-export type LaunchIdentity = { token: string | null; startedUptimeMs: number | null; cwd: string };
+export type LaunchIdentity = { token: string | null; clocks: LaunchClocks | null; cwd: string };
 
 /**
  * 这一问的**结果**。空集有三种完全不同的成因,早先全折成 `[]`,于是「没答上来」被当成
@@ -141,25 +167,44 @@ export type LaunchScan = {
 };
 
 /**
- * 两道收窄规则这一趟用不用得上。**前提不成立时照样收窄、但 `proven` 变成那句理由** ——
- * 收窄是为了把搜索控制住(见文件头②),封口要的是证明,两件事分开记。
+ * 两道收窄规则这一趟的上界,以及**各自**的前提立不立得住。两条分开记,因为前提只在它真的排除
+ * 了人时才要证(文件头②末段):一个号都没被按年龄筛掉,年龄那条钟对不对得上跟结论无关。
+ *
+ * 前提不成立时照样收窄(否则候选集会膨胀到读不动),`…Proven` 变成那句理由。
  */
-export type CandidateBounds = { uid: number | null; oldest: number; proven: true | string };
+export type CandidateBounds = {
+  uid: number | null; uidProven: true | string;
+  oldest: number; ageProven: true | string;
+};
 
 /** 导出只为让回归能**直接问这两条前提**:整趟扫描的结论受这台机器此刻还跑着什么影响,
  *  「前提立不住就不许封口」这条不变量不能靠那种现场去钉。 */
-export function candidateBounds(launch: LaunchIdentity): CandidateBounds {
-  const unmet: string[] = [];
+export function candidateBounds(launch: LaunchIdentity, clock: FactClock): CandidateBounds {
   // root 的后代一句 setuid 就换掉属主,那时「属主跟 ash 不同」不再是不可能性。
-  if (SELF_UID === 0) unmet.push("ash 以 root 在跑，后代能 setuid 换掉属主");
-  // 年龄上界只认单调参照:它跟候选的进程年龄是同一种量。墙上钟一个字都不参与 —— 它在启动
-  // 那一刻是不是准的,事后无从查证(文件头②)。
-  if (launch.startedUptimeMs === null) unmet.push("这次启动没留下单调的起跑时刻");
-  const elapsed = launch.startedUptimeMs === null ? 0
-    : Math.max(Math.round(process.uptime() * 1000) - launch.startedUptimeMs, 0);
+  const uidProven = SELF_UID === 0 ? "ash 以 root 在跑，后代能 setuid 换掉属主" : true;
+  const clocks = launch.clocks;
+  if (!clocks) {
+    return { uid: SELF_UID, uidProven, oldest: BIRTH_GRACE_MS, ageProven: "这次启动没留下起跑时刻" };
+  }
+  // 同钟:Linux 的开机时钟。上界 = 现在的开机时钟 − 启动前取的那一份,两边一个钟,中间怎么
+  // 拨墙上钟、怎么休眠都不影响这个差。
+  if (clock.domain === "boot" && clocks.bootMs !== null) {
+    return {
+      uid: SELF_UID, uidProven,
+      oldest: Math.max(clock.nowMs - clocks.bootMs, 0) + BIRTH_GRACE_MS, ageProven: true,
+    };
+  }
+  // 不同钟:上界取两种「过了多久」里大的那个。墙上钟被往前拨 / 休眠过 = 候选的 etime 跟着变大,
+  // 墙上钟那一份也跟着变大;被往回拨 = 墙上钟那一份变小,单调那一份不受影响。取大的那个让
+  // 带记号的真后代尽量不在读记号之前被跳过 —— 但这只是**找人**,不是证明。
+  const wallElapsed = clock.domain === "wall" ? clock.nowMs - clocks.wallMs : 0;
+  const monoElapsed = Math.round(process.uptime() * 1000) - clocks.uptimeMs;
   return {
-    uid: SELF_UID, oldest: elapsed + BIRTH_GRACE_MS,
-    proven: unmet.length ? `${unmet.join("，")}，候选集这一趟收窄得不可靠` : true,
+    uid: SELF_UID, uidProven,
+    oldest: Math.max(wallElapsed, monoElapsed, 0) + BIRTH_GRACE_MS,
+    ageProven: clock.domain === "wall"
+      ? "这台机器给出的进程年龄是按墙上钟量的（ps 的 etime），跟这次启动的参照不是同一个钟"
+      : "这次启动没留下跟进程年龄同钟的起跑时刻",
   };
 }
 
@@ -210,15 +255,13 @@ export async function launchSurvivors(launch: LaunchIdentity | null): Promise<La
   }
   const enumeration = candidateRoots(table);
   const roots = enumeration.roots;
-  const bounds = candidateBounds(launch);
-  // 枚举没看全跟收窄前提没立住是同一类:都只能说「这一趟证不出完整」,不能改成「没有」。
-  if (!enumeration.complete) {
-    bounds.proven = `${bounds.proven === true ? "" : `${bounds.proven}；另外，`}`
-      + "进程表或 ash 的祖先链这一趟没看全，收养目标可能漏了";
-  }
-  if (!roots.length) return sealable([], [], bounds, launch);
-  const facts = await readProcessFacts(roots);
-  if (!facts) {
+  // 「这一趟证不出完整」的前因。枚举没看全跟收窄前提没立住是同一类:都只能说证不出来,不能
+  // 改成「没有」。
+  const gaps: string[] = [];
+  if (!enumeration.complete) gaps.push("进程表或 ash 的祖先链这一趟没看全，收养目标可能漏了");
+  if (!roots.length) return sealable([], [], gaps, launch);
+  const read = await readProcessFacts(roots);
+  if (!read) {
     return {
       pids: [], unanswered: [], evidence: "incomplete",
       why: "候选进程的属主和出生时刻没问出来，这次启动的记号没法逐个核对",
@@ -228,18 +271,24 @@ export async function launchSurvivors(launch: LaunchIdentity | null): Promise<La
   // 以及它进了候选集、环境那一问却没给出答案。
   const silent: number[] = [];
   const candidates: number[] = [];
+  const bounds = candidateBounds(launch, read.clock);
+  let byUid = 0;
+  let byAge = 0;
   for (const root of roots) {
-    const fact = facts.get(root);
+    const fact = read.facts.get(root);
     if (!fact) {
       if (processAlive(root)) silent.push(root);
       continue;
     }
     // **这两道是全部收窄规则,而且两道都是不可能性**(文件头①)。工作目录、记号指向别处
     // 都**不在这里** —— 前者可变、后者可复制,筛掉的可能正是真后代。
-    if (bounds.uid !== null && fact.uid !== bounds.uid) continue;
-    if (fact.ageMs > bounds.oldest) continue;
+    if (bounds.uid !== null && fact.uid !== bounds.uid) { byUid += 1; continue; }
+    if (fact.ageMs > bounds.oldest) { byAge += 1; continue; }
     candidates.push(root);
   }
+  // 前提只在它真的排除了人的时候才要证(文件头②末段)。
+  if (byUid && bounds.uidProven !== true) gaps.push(`${bounds.uidProven}，按属主跳过的 ${byUid} 个号证不出不是这次的`);
+  if (byAge && bounds.ageProven !== true) gaps.push(`${bounds.ageProven}，按出生时刻跳过的 ${byAge} 个号证不出不是这次的`);
   const lineage = await readLineage(candidates, token);
   const found = new Set<number>();
   for (const pid of candidates) {
@@ -255,22 +304,22 @@ export async function launchSurvivors(launch: LaunchIdentity | null): Promise<La
     for (const heir of descendantsFromTable(table, pid).pids) found.add(heir);
   }
   const pids = [...found].filter(processAlive).sort((left, right) => left - right);
-  return sealable(pids, silent.filter(processAlive), bounds, launch);
+  return sealable(pids, silent.filter(processAlive), gaps, launch);
 }
 
 /**
- * 最后一道:**没人核不上**且**两道收窄规则的前提都立得住**,才算问全了。前提立不住那一档
- * 的 `unanswered` 可以是空的 —— 漏的是谁都说不上来,正因如此更不能封口。
+ * 最后一道:**没人核不上**且**没有一处证不出来**(枚举看全了、真排除了人的那几条前提都立得住),
+ * 才算问全了。`gaps` 非空那一档的 `unanswered` 可以是空的 —— 漏的是谁都说不上来,正因如此
+ * 更不能封口。
  */
-async function sealable(pids: number[], unanswered: number[], bounds: CandidateBounds,
+async function sealable(pids: number[], unanswered: number[], gaps: string[],
   launch: LaunchIdentity): Promise<LaunchScan> {
+  const gap = gaps.join("；");
   if (unanswered.length) {
     const why = await unansweredWhy(unanswered, launch);
-    return { pids, unanswered, evidence: "incomplete", why: bounds.proven === true ? why : `${why}；另外，${bounds.proven}` };
+    return { pids, unanswered, evidence: "incomplete", why: gap ? `${why}；另外，${gap}` : why };
   }
-  if (bounds.proven !== true) {
-    return { pids, unanswered: [], evidence: "incomplete", why: `${bounds.proven}，所以这一趟说不出有没有漏` };
-  }
+  if (gap) return { pids, unanswered: [], evidence: "incomplete", why: `${gap}，所以这一趟说不出有没有漏` };
   return { pids, unanswered: [], evidence: "answered", why: null };
 }
 

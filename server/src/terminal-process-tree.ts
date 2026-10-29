@@ -499,7 +499,8 @@ export async function freezeAndEnumerate(
   for (const pid of memberPids) freezePid(pid);
   for (const pgid of accPgids) freezeGroup(pgid);
   const table = await readProcessTable();
-  if (!table) complete = false;
+  // 读不出来、或者读出来的表漏了活着的行(`ProcessTable.complete`),这份快照都不是封口的那一份。
+  if (!table || !table.complete) complete = false;
   const tree = table ? descendantsFromTable(table, groupId) : { pids: [], pgids: [] };
   // leader 的**直接**子进程 = wrapper 用 "$@" 起的那个内层 shell(交互会话是用户 shell,
   // 命令会话是 `shell -lc`)。单拎出来是给挂断用的:交互 shell 按 POSIX 惯例忽略 TERM,

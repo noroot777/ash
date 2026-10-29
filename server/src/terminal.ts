@@ -17,7 +17,7 @@ import {
   releaseLaunchResponsibility,
 } from "./terminal-stop-facts.js";
 import { killAllSessionTrees, killSessionTree, terminateSession, type KillResult } from "./terminal-session-kill.js";
-import type { LaunchIdentity } from "./terminal-launch-survivors.js";
+import { sampleLaunchClocks, type LaunchIdentity } from "./terminal-launch-survivors.js";
 import { TerminalWatcher } from "./terminal-session-watch.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
@@ -228,6 +228,9 @@ export class TerminalSessionManager {
       : { file: "/bin/sh", args: ["-c", wrapper, "ash-terminal", shell, ...args] };
     // 记号必须在 spawn **之前**生成:它要进这次启动的环境,才能被后代继承。
     const launchToken = options.command ? id() : null;
+    // 各个钟的起跑读数同样在 spawn 之前取:事后补取,创建子进程到取样之间那段停顿会让真后代
+    // 比上界更老,于是在读记号之前就被筛掉(第 6 轮自由审查,见 terminal-launch-survivors.ts)。
+    const launchClocks = sampleLaunchClocks();
     const processHandle = spawnProcess(spawnSpec.file, spawnSpec.args, {
       name: "xterm-256color",
       cols: terminalSize(options.cols, 100, 20, 400),
@@ -243,8 +246,8 @@ export class TerminalSessionManager {
       name: options.command ? options.command.name : basename(cwd) || cwd,
       commandId: options.command?.id ?? null,
       startedAt: Date.now(),
-      // 墙上钟那一份给用户看,单调那一份给「谁出生在这次启动之前」那道收窄用(见字段说明)。
-      startedUptimeMs: Math.round(process.uptime() * 1000),
+      // `startedAt` 给用户看;`launchClocks` 给「谁出生在这次启动之前」那道收窄用(见字段说明)。
+      launchClocks,
       exitCode: null,
       groupAlive: true,
       ports: [],
@@ -625,7 +628,7 @@ export class TerminalSessionManager {
   }
 
   /**
-   * 这次启动的**完整身份**:记号 + 两条收窄规则各自的参照(单调起跑时刻、启动目录)。
+   * 这次启动的**完整身份**:记号 + 两条收窄规则各自的参照(spawn 之前取的各个钟、启动目录)。
    *
    * 为什么要攒成一个方法而不是让调用方从 `TerminalSessionInfo` 上拼:那份 DTO 里只有墙上钟
    * 的 `startedAt`,拿它当年龄上界就是第 5 轮自由审查实测到的那个错。身份只能从会话表这一处
@@ -634,7 +637,7 @@ export class TerminalSessionManager {
   launchIdentityOf(sessionId: string): LaunchIdentity | null {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    return { token: session.launchToken, startedUptimeMs: session.startedUptimeMs, cwd: session.cwd };
+    return { token: session.launchToken, clocks: session.launchClocks, cwd: session.cwd };
   }
 
   private publish(session: TerminalSession, event: TerminalEventInput): void {

@@ -261,7 +261,41 @@ async function processCwd(pid: number, timeoutMs: number): Promise<string | null
 export type ProcessFact = { uid: number; ageMs: number };
 
 /**
- * 查这些号的属主与年龄。
+ * 这批年龄是**哪个钟**量出来的,以及读的那一刻那个钟读数是多少。
+ *
+ * 为什么年龄必须连钟一起交出去(第 6 轮自由审查 F1):「它出生在这次启动之前」要拿候选的年龄
+ * 跟「这次启动到现在过了多久」比,两边不是同一个钟,这一比就不构成证明。上一轮把启动那一侧
+ * 换成了单调钟,可 macOS 这一侧的 `ps etime` 是 `gettimeofday() − p_starttime`(Apple
+ * adv_cmds `print.c` 的 get_etime;`p_starttime` 是 fork 那一刻的墙上钟)—— 启动之后把钟往前
+ * 拨 60 秒,真后代的年龄就凭空多出 60 秒,而上界只按真实经过的时长涨,那个**带着这次记号**
+ * 的工人于是在读环境之前就被筛掉(审查用协议夹具实测:stop 报 verified,工人还活着)。
+ * 量纲都是「毫秒」推不出同钟。
+ *
+ *  · `boot` —— Linux:`/proc/<pid>/stat` 第 22 项与 `/proc/uptime` 都是 CLOCK_BOOTTIME(开机
+ *              以来,含休眠,不受校时影响),两边是同一个钟,`nowMs` 就是那次 `/proc/uptime`;
+ *  · `wall` —— 其余 POSIX(macOS 的 ps):墙上钟。**没有**与之同钟、又不受校时影响的启动参照
+ *              —— `p_start` 旁边那份单调时刻(`ps_start`)只有 libproc 的 `proc_pid_rusage`
+ *              给得出来,Node 不带 FFI 就够不着。所以这一档的年龄只能用来**找人**,不能用来
+ *              **排除人**(terminal-launch-survivors.ts 的 `candidateBounds`)。
+ */
+export type FactClock = { domain: "boot" | "wall"; nowMs: number };
+export type ProcessFacts = { facts: Map<number, ProcessFact>; clock: FactClock };
+
+/**
+ * Linux 的开机时钟此刻读数(毫秒)。给启动那一刻取样用:跟 `/proc/<pid>/stat` 的出生时刻是
+ * 同一个钟,所以「这个候选出生在启动之前」在 Linux 上可以被**证明**。没有 `/proc`(macOS)
+ * 或者读不动就是 null —— 那台机器上这条证明不存在,不是「证明成立」。
+ */
+export function bootClockMs(): number | null {
+  if (!HAS_PROC) return null;
+  try {
+    const value = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]) * 1000;
+    return Number.isFinite(value) ? value : null;
+  } catch { return null; }
+}
+
+/**
+ * 查这些号的属主与年龄,连同量年龄用的那个钟(`FactClock`)。
  *
  * 返回 `null` = **这一问本身没答上来**(这台机器上没有可用的 ps、`/proc/uptime` 读不动、
  * ps 超时或起不来)。调用方必须据此判「没问全」,**不许**当成「这些号都不是候选」——
@@ -271,11 +305,14 @@ export type ProcessFact = { uid: number; ageMs: number };
 export async function readProcessFacts(
   pids: number[],
   timeoutMs: number = PROBE_TIMEOUT_MS,
-): Promise<Map<number, ProcessFact> | null> {
-  if (!pids.length) return new Map();
+): Promise<ProcessFacts | null> {
   if (IS_WINDOWS) return null;
   if (HAS_PROC) return procProcessFacts(pids);
+  if (!pids.length) return { facts: new Map(), clock: { domain: "wall", nowMs: Date.now() } };
   if (!PS_PATH) return null;
+  // 墙上钟的「现在」在 ps 跑之前取:ps 自己的 gettimeofday 只会更晚,用这个读数给出的上界
+  // 只会偏紧一点 —— 而这一档的上界本来就只用来找人,不用来证明。
+  const nowMs = Date.now();
   let read: PsRead;
   try {
     read = { stdout: (await run(PS_PATH, ["-o", "pid=,uid=,etime=", "-p", pids.join(",")], { timeout: budgeted(timeoutMs) })).stdout, trusted: true };
@@ -291,7 +328,7 @@ export async function readProcessFacts(
     if (ageMs === null) continue;
     facts.set(Number(match[1]), { uid: Number(match[2]), ageMs });
   }
-  return facts;
+  return { facts, clock: { domain: "wall", nowMs } };
 }
 
 /**
@@ -300,11 +337,9 @@ export async function readProcessFacts(
  * `/proc/uptime` 读不动就是这一问没答上来;单个号读不动一律当它已经退了(stat 是全局可读的,
  * 活着的号不会读不出来)。
  */
-function procProcessFacts(pids: number[]): Map<number, ProcessFact> | null {
-  let uptimeMs: number;
-  try { uptimeMs = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]) * 1000; }
-  catch { return null; }
-  if (!Number.isFinite(uptimeMs)) return null;
+function procProcessFacts(pids: number[]): ProcessFacts | null {
+  const uptimeMs = bootClockMs();
+  if (uptimeMs === null) return null;
   const facts = new Map<number, ProcessFact>();
   for (const pid of pids) {
     try {
@@ -314,7 +349,7 @@ function procProcessFacts(pids: number[]): Map<number, ProcessFact> | null {
       facts.set(pid, { uid: statSync(`/proc/${pid}`).uid, ageMs: Math.max(0, uptimeMs - ticks * 10) });
     } catch { /* 这个号已经退了 */ }
   }
-  return facts;
+  return { facts, clock: { domain: "boot", nowMs: uptimeMs } };
 }
 
 /**
@@ -578,7 +613,8 @@ export function groupMembers(pid: number, pgid: number, selfPgid: number | null)
   if (!table) return { members: [pid], complete: false };
   const members = new Set<number>([pid]);
   for (const [other, group] of table.pgidOf) if (group === pgid) members.add(other);
-  return { members: [...members], complete: true };
+  // 表本身漏了活着的行(Linux 单个 stat 读失败),这份清单就不全 —— 漏的那一行可能正是同组的。
+  return { members: [...members], complete: table.complete };
 }
 
 /**
@@ -598,7 +634,7 @@ export function membersOfGroup(pgid: number, selfPgid: number | null): { members
   if (!table) return { members: [], complete: false };
   const members: number[] = [];
   for (const [other, group] of table.pgidOf) if (group === pgid) members.push(other);
-  return { members, complete: true };
+  return { members, complete: table.complete };
 }
 
 export function refusal(lineage: Lineage | undefined): string {
