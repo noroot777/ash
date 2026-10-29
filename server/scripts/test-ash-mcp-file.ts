@@ -12,6 +12,7 @@
 //   1. TOML 扫描器：引号名 / 缩进 / 行尾注释 / 点号键 / 内联表 / 多行字符串里的假表头 /
 //      多行数组 / 两个兼容名一开一关 / 挂在别的表底下 / 整个内联 —— 判不了的一律 doubt
 //   2. codex 文件判据：absent / disabled / present / 没有文件 / 读不动 / 项目内 .codex
+//      （只到 git 根、不把宿主默认那份当项目配置）
 //   3. claude 文件判据：用户级 / 项目级（目录及祖先）/ `.mcp.json` / 解析不了
 //   4. 端到端：派审预检在问不了 CLI 时按文件判，**一个进程都不起**；带 extraArgs 放行；
 //      409 文案写明证据来源与问不了的原因
@@ -92,6 +93,30 @@ try {
     writeFileSync(join(proj, ".codex", "config.toml"), '[mcp_servers.ash]\ncommand = "node"\n');
     assert.equal(fileAshMcpVerdict("codex", env, [join(proj, "sub")]).state, "unknown");
     assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "absent", "不指定目录时不看项目");
+
+    // 只看到 git 根为止（新链第 2 轮审查第 2 条；codex-cli 0.153 实测根外面的不读）。
+    mkdirSync(join(proj, "repo", ".git"), { recursive: true });
+    mkdirSync(join(proj, "repo", "sub"), { recursive: true });
+    assert.equal(fileAshMcpVerdict("codex", env, [join(proj, "repo", "sub")]).state, "absent",
+      "git 根外面那份 .codex/config.toml 这一轮不生效，不能替它下「判不了」");
+
+    // CODEX_HOME 指到别处时，宿主 ~/.codex/config.toml 不是项目配置 —— 任务目录在 $HOME 下、
+    // 一路没有 git 根也一样（审查证据 A 第 4 行就是这个形状）。
+    const fakeHome = join(stage, "fake-home");
+    mkdirSync(join(fakeHome, ".codex"), { recursive: true });
+    mkdirSync(join(fakeHome, "work", "task"), { recursive: true });
+    writeFileSync(join(fakeHome, ".codex", "config.toml"), '[mcp_servers.ash]\ncommand = "node"\n');
+    const homeWas = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    try {
+      assert.equal(fileAshMcpVerdict("codex", env, [join(fakeHome, "work", "task")]).state, "absent",
+        "生效的是 CODEX_HOME 那份，宿主默认那份不构成证据");
+    } finally {
+      for (const [k, v] of Object.entries(homeWas)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
 
     if (process.platform !== "win32" && process.getuid?.() !== 0) {
       chmodSync(join(codexHome, "config.toml"), 0o000);
@@ -206,6 +231,18 @@ try {
     assert.match(all, /ash MCP 登记/, `关着的登记必须出声：${all}`);
     assert.match(all, /没经 CLI 本人确认/, "证据来自配置文件时措辞要降档");
     assert.match(all, /enabled = false/, "点名到具体原因");
+
+    // 装了 codex、从没写过 config.toml：派审门禁答「确实没有」，启动自检也必须出声
+    // （新链第 2 轮审查第 3 条 —— 上一版拿「文件不存在」当「没用过这个 CLI」直接跳过）。
+    rmSync(join(codexHome, "config.toml"));
+    warned.length = 0;
+    console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
+    try {
+      const { sweepPersonalAshMcp } = await import("../src/auth/user-cli.js");
+      await sweepPersonalAshMcp();
+    } finally { console.warn = realWarn; }
+    assert.match(warned.join("\n"), /codex（[^）]*config\.toml）：.*还不存在/,
+      `配置文件还没建出来也要点名：${warned.join("\n")}`);
   }
 
   // ── 6. 登记在 ≠ 起得来：只出提示 ──────────────────────────────────────────

@@ -29,7 +29,6 @@ import { join } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { scanCodexToml } from "../ash-mcp-file.js";
-import { codexAshMcpServerName } from "../executors/codex-mcp.js";
 import { currentListeningPort } from "../listening-port.js";
 import { REPO_DIR } from "../paths.js";
 
@@ -173,7 +172,7 @@ export function hostCliConfigDir(agentType: string, hostHome: string = homedir()
 
 /**
  * 宿主机上这个 CLI 的用户级配置文件在哪（跟着 `hostCliConfigDir` 走）。
- * 启动自检拿它判「这个 CLI 在这台机器上用过没」，以及告警时把路径指给用户。
+ * 启动自检告警时拿它把路径指给用户（它不存在不代表 CLI 没装，见 `warnHostAshMcp`）。
  */
 export function hostCliConfigFile(agentType: string, hostHome: string = homedir()): string | null {
   const dir = hostCliConfigDir(agentType, hostHome);
@@ -224,13 +223,24 @@ function builtinClaudeEntry(): unknown | null {
 // ── codex:$CODEX_HOME/config.toml 的 [mcp_servers.*] ───────────────────────
 
 function ensureCodexAshMcp(dir: string, hostHome: string): PersonalAshMcp {
-  // 「有没有」的判据跟执行器用的是同一份(codex-mcp.ts),免得两边对 TOML 的理解漂移。
-  const already = codexAshMcpServerName(dir);
-  if (already) return ok(already);
+  // 「有没有」跟读那一侧（`ashMcpRegistration`）问同一个扫描器。上一版用的是执行器注入
+  // `env_vars` 的严格行首正则，认不出 `[mcp_servers."ash"]`、缩进表头，判成「没有」就再
+  // append 一份 —— 同名表重复，codex 整份配置都读不出来（新链第 2 轮审查第 5 条）。
+  // 所以只有扫描器**确定没有**时才写；关着的、看不准的都不碰，如实报出来。
+  const file = join(dir, "config.toml");
+  // 读不动的文件不能当空的：下面那次 writeAtomic 会拿一份只含 ash 的新文件把它整个盖掉。
+  if (fileState(file) === "unreadable") return fail(`${file} 读不出来，没有自动追加`);
+  const current = readTextOrEmpty(file);
+  const scan = scanCodexToml(current);
+  if (scan.doubt) return fail(`看不准 ${file} 里有没有 ash MCP 登记（${scan.doubt}），没有自动追加，免得写出重复的表`);
+  const names = [...scan.servers.keys()];
+  const live = names.find((n) => scan.servers.get(n)!.enabled);
+  if (live) return ok(live);
+  if (names.length) {
+    return fail(`${file} 里的 ${names.map((n) => `[mcp_servers.${n}]`).join("、")} 写着 enabled = false，没有替你打开`);
+  }
   const block = hostCodexBlock(hostHome) ?? builtinCodexBlock();
   if (!block) return fail(NO_SOURCE);
-  const file = join(dir, "config.toml");
-  const current = readTextOrEmpty(file);
   writeAtomic(file, current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`);
   return ok(ASH_MCP_SERVER_NAME);
 }

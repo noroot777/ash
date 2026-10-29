@@ -1,11 +1,16 @@
-// `test-ash-mcp-probe.ts` 第 9 块：探测层的**结构约束**。单拆出来只是为了让主测试文件守住
-// 700 行上限 —— 它仍由主测试调用、跟着 `test:ash-mcp-probe` 一起跑，不是一条独立的回归。
+// `test-ash-mcp-probe.ts` 第 9、11 块：探测层的**结构约束**，以及「没启动」/门闩扫地两条。
+// 单拆出来只是为了让主测试文件守住 700 行上限 —— 它们仍由主测试调用、跟着
+// `test:ash-mcp-probe` 一起跑，不是独立的回归。
 //
 // macOS 上圈定如实弃权，所以「圈建不成 → 不启动」「整圈刀 → 核销」这两条只能在真机上
 // 跑。断言刻意写成**否定式**（危险形状不存在）而不是某一种写法 —— 上一轮钉
 // `return gone ?? byClose` 的表达式形状，实现一换就恒红，而恒红的断言钉不住任何东西。
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { probeCli as ProbeCli } from "../src/ash-mcp-probe.js";
+import { sweepStaleGates } from "../src/ash-mcp-gate.js";
 
 export function checkProbeStructure(): void {
   const src = readFileSync(new URL("../src/ash-mcp-probe.ts", import.meta.url), "utf8");
@@ -21,7 +26,7 @@ export function checkProbeStructure(): void {
   // **一台归属设备都拿不到时，一条指令都不准起。** 写成位置关系而不是某一句的形状：
   // 要的不变量是「这道闸在 spawn 之前」。
   const probeBody = fnBody(code, "export async function probeCli");
-  const guardAt = probeBody.search(/if \(!confine\) return null;/);
+  const guardAt = probeBody.search(/if \(!confine\) return notStarted\(/);
   const spawnAt = probeBody.indexOf("spawn(launch.file");
   assert.ok(guardAt >= 0 && spawnAt > guardAt,
     "拿不到能核销的归属设备就不做这次探测 —— 不准退回直接起 CLI（第 6 轮 B1 / 第 1 轮 B1）");
@@ -77,4 +82,62 @@ export function checkProbeStructure(): void {
     "close 不准再当证据：后代不持管道时它来得更早，持管道时它根本不来（第 6 轮第 4 点）");
   assert.ok(!/finally\s*\{[\s\S]{0,200}?dispose\(/.test(code),
     "finally 里不准撤销身份：dispose 的契约是「调用方已经判空」，它自己不杀成员");
+
+  // **判据层不准拿预判当分支**（新链第 2 轮第 1 条）：走 CLI 档还是文件档，只看探测自己的
+  // 收场（`not-started`）。预判跟探测真实的失败面对不上 —— 一引用它，「预判说能、真起不来」
+  // 那条路就又落回「问不出来 ⇒ 放行」。
+  const reach = readFileSync(new URL("../src/ash-mcp-reachability.ts", import.meta.url), "utf8")
+    .split("\n").filter((l) => !/^\s*(?:\/\/|\/?\*)/.test(l)).join("\n");
+  assert.ok(!/confineAbstention/.test(reach),
+    "判据层不准引用 confineAbstention —— 分支依据必须是这次探测的收场");
+  assert.match(reach, /state === "not-started"\) return fromFiles\(/,
+    "没启动起来的那一问要退到配置文件那一档，不是放行");
+}
+
+/**
+ * 一条指令都没起的那几种收场，必须答「没启动」而不是「问不出来」—— 判据层只有拿到前者才会
+ * 退到配置文件那一档（新链第 2 轮第 1 条）。两种都不准把目标执行起来。
+ */
+export async function checkNotStarted(probeCli: typeof ProbeCli): Promise<void> {
+  const stage = mkdtempSync(join(tmpdir(), "ash-mcp-notstarted-"));
+  try {
+    const marker = join(stage, "ran");
+    const args = ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "x")`];
+    // ① 一台归属设备都拿不到（不管预判怎么说）。
+    const none = await probeCli("node", args, process.env, undefined, 3_000, () => null);
+    assert.equal(none.kind, "not-started", `拿不到归属设备 ⇒ 没启动：${JSON.stringify(none)}`);
+    assert.ok(none.kind === "not-started" && none.why.trim(), "要说得出为什么没启动");
+    // ② 设备给了，但这一次圈没建成（enroll 失败）—— 预判说「能」、运行期起不来的那种形状。
+    const broken = {
+      id: "broken", enroll: () => false, preExecEnv: () => null,
+      read: () => ({ kind: "absent", why: "没建成" }), killAll: () => 0, dispose: () => {},
+    } as unknown as NonNullable<ReturnType<NonNullable<Parameters<typeof ProbeCli>[5]>>>;
+    const unheld = await probeCli("node", args, process.env, undefined, 3_000, () => broken);
+    assert.equal(unheld.kind, "not-started", `圈没建成 ⇒ 没启动：${JSON.stringify(unheld)}`);
+    assert.ok(!existsSync(marker), "没启动的那几种收场，目标一条指令都不准执行");
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 门闩目录的回收不能只靠那个不被等待的后台收尾（新链第 2 轮第 4 条）：启动扫地按 mtime 收掉
+ * 陈旧的，刚建的不碰（可能是另一个 ash 实例正用着的）。
+ */
+export function checkGateSweep(): void {
+  const root = mkdtempSync(join(tmpdir(), "ash-mcp-gate-sweep-"));
+  try {
+    const stale = join(root, "stale");
+    const fresh = join(root, "fresh");
+    mkdirSync(stale);
+    mkdirSync(fresh);
+    const old = new Date(Date.now() - 60 * 60_000);
+    utimesSync(stale, old, old);
+    assert.equal(sweepStaleGates(Date.now(), root), 1, "只收陈旧的那一个");
+    assert.ok(!existsSync(stale), "陈旧的门闩目录要被收掉");
+    assert.ok(existsSync(fresh), "刚建的不准碰 —— 可能有探测正用着");
+    assert.equal(sweepStaleGates(Date.now(), join(root, "missing")), 0, "根目录不存在时安静返回");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }

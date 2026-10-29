@@ -17,14 +17,14 @@
 //
 // 探测不属于任何任务，UI 上看不见它，停止任务也找不到它 —— 所以泄漏会随着每次派审**静默
 // 累积**。于是这一层只认**可验证的归属**：结束时能对「这次运行还有没有东西活着」给出正面
-// 证据，而且证据不依赖后代的配合。拿不到这种归属就宁可不做这次探测，直接回「问不出来」
-// 放行（判据层对 null 一律放行，见 `ash-mcp-reachability.ts` 的 `reachWith`）。
+// 证据，而且证据不依赖后代的配合。拿不到这种归属就宁可不做这次探测，直接回「没启动」
+// （`ProbeOutcome` 的 `not-started`；判据层据此退到配置文件那一档，见 `reachWith`）。
 //
 // 按这个门槛，能用的只有一台：**内核圈定**（`kernel-confine.ts`）—— Linux 的 cgroup v2、
 // Windows 的 Job Object。成员归属由内核记着，`setsid` / `env -i` / close fd 一条都洗不掉。
 // macOS 没有等价物，那边如实弃权（`openConfinement()` 返回 null）。规矩随之是：
 //
-//     拿不到内核圈定 ⇒ 这次探测不做，直接回「问不出来」放行。
+//     拿不到内核圈定 ⇒ 这次探测不做，直接回「没启动」。
 //
 // **基线那台「追踪 fd」在这一层刻意不接**（第 2 轮审查 N4/N5）。第 1 轮本来接上了它，
 // 两个实测把它的价值削到零：
@@ -39,9 +39,9 @@
 //
 // 代价如实写在这里：**macOS 上这一层一次都不探测**（那边没有等价物，基线如实弃权）。
 // 方向由第 1 轮审查定死：探测不属于任何任务、UI 上看不见、停止任务也找不到它，泄漏会随每次
-// 派审静默累积。判据层在这种机器上不再整条放行，而是退到读配置文件那一档
+// 派审静默累积。判据层拿到「没启动」不再整条放行，而是退到读配置文件那一档
 // （`ash-mcp-file.ts`，不起任何进程；新链第 1 轮审查第 1 条）—— 这一层只管「起了进程就得
-// 收得回来」，问不了的时候怎么判是判据层的事。
+// 收得回来」，以及**如实说出这次到底起没起**；问不了的时候怎么判是判据层的事。
 //
 // ── 进程组**不是**归属设备（第 1 轮审查 B1，macOS 真机实测）──────────────────
 //
@@ -95,13 +95,36 @@ import { randomUUID } from "node:crypto";
 import { IS_WINDOWS, isPidRunning, killTree } from "./platform.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
 import { prepareGate } from "./ash-mcp-gate.js";
-import { openConfinement, type ConfineRead, type Confinement } from "./executors/kernel-confine.js";
+import { confineAbstention, openConfinement, type ConfineRead, type Confinement } from "./executors/kernel-confine.js";
 
 export interface ProbeResult {
   code: number;
   stdout: string;
   stderr: string;
 }
+
+/**
+ * 一次探测的三种收场。**「没启动」和「问不出来」必须分开**（新链第 2 轮审查第 1 条）：
+ *
+ *  · `answer` —— CLI 跑完了，退出码和输出照实带回，怎么解释归判据层；
+ *  · `unqueryable` —— CLI 起了，但没给出一份能用的答案（超时、被信号打断、盘上没有结束状态）。
+ *    判据层放行；
+ *  · `not-started` —— **一条指令都没起**（拿不到能核销的归属、门闩铺不出来、圈没建成、spawn
+ *    同步就失败）。这时 CLI 本人一个字都没说，判据层该做的跟「这台机器问不了 CLI」一样：
+ *    退到配置文件那一档，而不是放行。
+ *
+ * 上一版两者都是 `null`，判据层只好另找一句**预判**（`confineAbstention()`）来决定走不走文件档。
+ * 预判跟这里真实的失败面对不上：Windows 上它恒说「能」、Linux 上它只试一次 cgroup 可写 ——
+ * 预判说能、这里却起不来时，结论落成「问不出来 ⇒ 放行」，文件档再也接不上。现在分支依据
+ * 就是这次探测自己的收场，漂不了。
+ */
+export type ProbeOutcome =
+  | ({ kind: "answer" } & ProbeResult)
+  | { kind: "unqueryable" }
+  | { kind: "not-started"; why: string };
+
+const UNQUERYABLE: ProbeOutcome = { kind: "unqueryable" };
+const notStarted = (why: string): ProbeOutcome => ({ kind: "not-started", why });
 
 /** 单次探测最多收这么多输出。只读子命令的正常输出远小于此，超了说明问错了东西。 */
 const MAX_OUTPUT = 8 * 1024 * 1024;
@@ -328,8 +351,7 @@ async function confirmHeld(confine: Confinement, pid: number): Promise<boolean> 
 }
 
 /**
- * 跑一条只读 CLI 子命令。返回 null = **问不出来**（起不来、超时、被杀、归属建不起来），
- * 调用方一律放行。
+ * 跑一条只读 CLI 子命令。三种收场见 `ProbeOutcome`。
  *
  * 两件事是踩过的：
  *  ① **必须走 `resolveLaunch`**，不能把 `resolveBin` 的结果直接交给 spawn。
@@ -358,19 +380,20 @@ export async function probeCli(
    * 它弃权就是弃权。
    */
   openUnit: (token: string) => Confinement | null = openConfinement,
-): Promise<ProbeResult | null> {
+): Promise<ProbeOutcome> {
   const plan = resolveLaunch(bin, args);
-  if (!plan) return null;
+  if (!plan) return notStarted(`${bin} 解析不出启动方式`);
 
   // 归属先铺好。**顺序是硬的**：一台设备都拿不到，或者该配的门闩配不出来，就一条指令都不起。
   // **能核销的只有内核圈定这一台**（文件头那段），所以拿不到它就一条指令都不起 ——
   // macOS 恒走这条。宁可这次预检不做（返回「问不出来」放行），也不留一个谁都查不回去的
-  // 后台查询。
+  // 后台查询。**原因只拿来写文案**：弃权的平台说得出为什么，运行期建不出来的说不出，
+  // 两种收场一样 —— 是不是走文件档由这里的收场决定，不由那句预判决定。
   const confine = openUnit(`ash-mcp-probe-${randomUUID()}`);
-  if (!confine) return null;
+  if (!confine) return notStarted(confineAbstention() ?? "这一次没能建出能核销查询的内核圈定");
   // 门闩给圈补上 fork→enroll 那个空窗：壳先出生、圈建成核实之后目标才出生。
   const gate = prepareGate(plan);
-  if (!gate) { confine.dispose(); return null; }
+  if (!gate) { confine.dispose(); return notStarted("探测用的临时目录写不了（门闩铺不出来）"); }
   const launch = gate.plan;
 
   let child: ChildProcess;
@@ -389,7 +412,7 @@ export async function probeCli(
   } catch {
     gate.cleanup();
     confine.dispose();                               // 一个进程都没起来，圈里必然是空的
-    return null;                                     // cwd 不存在之类的同步失败
+    return notStarted("探测进程起不来");             // cwd 不存在之类的同步失败
   }
   const unit: ProbeUnit = { confine, gated: false };
 
@@ -420,7 +443,7 @@ export async function probeCli(
     if (!held) {
       await discardShell(child, unit);
       gate.cleanup();
-      return null;                                   // 归属没建成 ⇒ CLI 一次都没起
+      return notStarted("这一次的内核圈定没建成，CLI 一次都没起");
     }
     unit.gated = true;
     gate.open();
@@ -436,7 +459,7 @@ export async function probeCli(
   if (timedOut) {
     await settleUnit(child, unit, "timeout");
     gate.cleanup();
-    return null;
+    return UNQUERYABLE;
   }
 
   // 进程已经结束，给输出一个短窗口到齐。close 来了就提前走，不来也不等（后代可能攥着管道）。
@@ -452,12 +475,12 @@ export async function probeCli(
   if (out && !out.failed && !out.signal) code = out.status;
 
   // 其余每一条结束路径也都要收尾 —— 根进程走了不代表它的后代走了（第 5 轮审查实测）。
-  // **不挡住返回**：圈的读数和下刀是同步 PowerShell，摆在派审请求的等待路径上会把主服务
-  // 拖住（第 5 轮审查 N1）。放到后台只解决「不拖住这次请求」这一半；它仍然占着事件循环，
-  // 彻底解决要挪进 worker（第 6 轮审查 N1 仍挂着，本轮没做）。
+  // **不挡住返回**：收尾要读圈、可能还要等宽限，摆在派审请求的等待路径上会再拖几秒。
+  // 所以临时目录的回收在这里只是快捷路径：进程赶在这段窗口里退出，目录由下一次启动的
+  // `sweepStaleGates` 收（新链第 2 轮审查第 4 条）。
   void settleUnit(child, unit, "ended")
     .catch(() => { /* 收尾自己会喊 */ })
     .finally(() => { gate.cleanup(); });
 
-  return code === null ? null : { code, stdout, stderr };
+  return code === null ? UNQUERYABLE : { kind: "answer", code, stdout, stderr };
 }

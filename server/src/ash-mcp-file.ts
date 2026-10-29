@@ -135,9 +135,18 @@ function codexVerdict(env: NodeJS.ProcessEnv, dirs: (string | undefined)[]): Fil
   const file = join(env.CODEX_HOME?.trim() || join(homedir(), ".codex"), "config.toml");
   // codex 也认项目里的 `.codex/config.toml`（受信任的项目）。合并规则这一档不去复刻：
   // 只要那里提到 `mcp_servers`，就不归这里判。
-  for (const dir of withAncestors(dirs)) {
+  //
+  // **哪些算「项目里的」要照 codex 自己的范围来**，否则一份根本不生效的配置会替这一轮
+  // 下结论（新链第 2 轮审查第 2 条：`CODEX_HOME` 指到别处、任务目录在 `$HOME` 下时，祖先
+  // 里那份宿主 `~/.codex/config.toml` 让整条判成「判不了」）。codex-cli 0.153 实测两条：
+  //  · 向上找只到 git 根为止，根外面的 `.codex/config.toml` 不读；
+  //  · `CODEX_HOME` 指到别处时，`~/.codex/config.toml` 不会被当成项目配置读进来（哪怕
+  //    任务目录就在 `$HOME` 下、一路没有 git 根）。
+  // 所以这两份都跳过：生效的用户配置下面单独读，宿主默认那份这一轮压根不生效。
+  const hostDefault = resolve(join(homedir(), ".codex", "config.toml"));
+  for (const dir of upToGitRoot(dirs)) {
     const project = join(dir, ".codex", "config.toml");
-    if (resolve(project) === resolve(file)) continue;
+    if (resolve(project) === resolve(file) || resolve(project) === hostDefault) continue;
     const read = readText(project);
     if (read.kind === "unreadable") return { state: "unknown", why: `${project} 读不出来` };
     if (read.kind === "text" && /mcp_servers/.test(read.text)) {
@@ -416,6 +425,23 @@ function mentionsAsh(read: TextRead): boolean {
 }
 
 /** 候选目录连同它们的全部祖先（去重）。`undefined` = 宿主默认上下文，没有目录可看。 */
+/** 每个目录往上走到（含）最近的 git 根为止；一路没有 git 根就走到文件系统根。 */
+function upToGitRoot(dirs: (string | undefined)[]): string[] {
+  const seen = new Set<string>();
+  for (const d of dirs) {
+    if (!d) continue;
+    let cur = resolve(d);
+    while (!seen.has(cur)) {
+      seen.add(cur);
+      if (existsSync(join(cur, ".git"))) break;
+      const up = dirname(cur);
+      if (up === cur) break;
+      cur = up;
+    }
+  }
+  return [...seen];
+}
+
 function withAncestors(dirs: (string | undefined)[]): string[] {
   const seen = new Set<string>();
   for (const d of dirs) {

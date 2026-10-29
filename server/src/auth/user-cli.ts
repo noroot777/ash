@@ -195,7 +195,11 @@ async function warnHostAshMcp(): Promise<void> {
   const gaps: { line: string; basis: "cli" | "file" }[] = [];
   for (const agentType of ["claude", "codex"]) {
     const file = hostCliConfigFile(agentType);
-    if (!file || !existsSync(file)) continue;              // 这个 CLI 没在这台机器上用过
+    // **不拿「配置文件在不在」当「这个 CLI 用没用过」**：装了 codex、从没写过 config.toml 的
+    // 机器正是最该出声的那种 —— 派审那道门禁对同一个形状答的是「确实没有」（新链第 2 轮审查
+    // 第 3 条）。「这台机器上有没有这个 CLI」由 `hostAshMcpGap` 自己判（找不到 CLI 就不报缺口），
+    // 跟派审用同一份解析，这里不另起一份。
+    if (!file) continue;
     const dir = hostCliConfigDir(agentType);
     // 两道判据，顺序有意：**先用配置文件快速放过**（已经接好的机器零开销），只有它说
     // 「没有」或「关着」才去确认。快速通道**只许省掉那次确认，不许替它下「没问题」的结论**：

@@ -44,8 +44,13 @@
 // 问 CLI 要起进程,起进程之前必须拿到一台内核圈定(`ash-mcp-probe.ts`)。macOS、从 ssh 会话
 // 起的 Linux、只读 cgroup 的容器都拿不到 —— 上一版在这些机器上一条查询都不起、整条放行,
 // 新链第 1 轮审查在这台 Mac 上实测:配置里确实没有登记,预检 `reachable:true`。那等于判据
-// 在报事故的那类机器上整个不工作。所以弃权时换成读配置文件那一档(`ash-mcp-file.ts`,
+// 在报事故的那类机器上整个不工作。所以问不了时换成读配置文件那一档(`ash-mcp-file.ts`,
 // 不起任何进程),它只在「确定没有」时说没有,文案里写明证据来源和问不了 CLI 的原因。
+//
+// **「问不了」认的是这次探测自己的收场(`not-started`),不是一句预判。** 上一版先问
+// `confineAbstention()` 再决定走哪一档,而那句预判跟探测真实的失败面对不上(Windows 上恒说
+// 「能」,Linux 上只试一次 cgroup 可写):预判说能、真起不来时落成「问不出来 ⇒ 放行」,文件档
+// 再也接不上(新链第 2 轮审查第 1 条)。所以判据层不再引用那句预判。
 //
 // ── 总预算 ──────────────────────────────────────────────────────────────────
 //
@@ -55,7 +60,6 @@
 import { existsSync } from "node:fs";
 import type { AgentType } from "@ash/shared";
 import { fileAshMcpVerdict, launchHint } from "./ash-mcp-file.js";
-import { confineAbstention } from "./executors/kernel-confine.js";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { probeCli } from "./ash-mcp-probe.js";
 import { executorOwnerScope } from "./auth/dispatch-gate.js";
@@ -89,6 +93,11 @@ export interface AshMcpReach {
    * **只是提示**：「登记在」和「能连上」是两件事，后者是推断，不拿它拦人。
    */
   warning: string | null;
+  /**
+   * reachable=false 时这个结论的证据来源：`cli` = CLI 本人说的，`file` = 问不了它、读配置
+   * 文件得出的。启动自检的措辞跟着它降档。
+   */
+  basis?: "cli" | "file";
 }
 
 export interface AshMcpReachQuery {
@@ -117,10 +126,14 @@ const HOW_TO_CHECK: Record<string, string> = {
 
 const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
 
-/** CLI 自己给的答案。`unknown` = 问不出来，调用方必须放行。 */
+/**
+ * CLI 自己给的答案。`unknown` = 起了、问不出来，调用方必须放行；`not-started` = 一条指令都
+ * 没起（`ProbeOutcome` 同名那一种），调用方退到配置文件那一档。
+ */
 type Verdict =
   | { state: "present"; hint?: string | null }
   | { state: "unknown" }
+  | { state: "not-started"; why: string }
   | { state: "absent" }
   | { state: "disabled"; detail: string };
 
@@ -156,7 +169,8 @@ async function askClaude(
     const timeout = probeTimeout(budget);
     if (timeout === null) return { state: "unknown" };
     const res = await probeCli(bin, ["mcp", "get", name], env, cwd, timeout);
-    if (!res) return { state: "unknown" };
+    if (res.kind === "not-started") return { state: "not-started", why: res.why };
+    if (res.kind === "unqueryable") return { state: "unknown" };
     if (res.code === 0) return { state: "present", hint: claudeStatusHint(res.stdout) };
     // 文本判定两个通道都看：这句话落在哪一路由 CLI 版本决定，而它只是「有没有这个
     // server」的证词，不像 JSON 那样会被别的输出带坏。
@@ -190,7 +204,8 @@ async function askCodex(
   const timeout = probeTimeout(budget);
   if (timeout === null) return { state: "unknown" };
   const res = await probeCli(bin, [...extraArgs, "mcp", "list", "--json"], env, cwd, timeout);
-  if (!res || res.code !== 0) return { state: "unknown" };
+  if (res.kind === "not-started") return { state: "not-started", why: res.why };
+  if (res.kind === "unqueryable" || res.code !== 0) return { state: "unknown" };
   // **只解析 stdout**：stderr 的警告不是答案的一部分（第 2 位审查者 F3）。
   let parsed: unknown;
   try { parsed = JSON.parse(res.stdout.trim()); } catch { return { state: "unknown" }; }
@@ -300,16 +315,15 @@ async function reachWith(
 
   const { dirs, complete } = probeDirs(cwdCandidates);
 
-  // 问不了 CLI 本人(这台机器拿不到能核销那次查询的内核圈定)⇒ 退到配置文件那一档。
-  const abstained = confineAbstention();
-  if (abstained) return fromFiles(agentType, extraArgs, env, dirs, complete, abstained);
-
   // 逐个问:present / unknown 任一出现就放行,只有**全都**说拿不到才往下走。
+  // 哪一问没启动起来(拿不到能核销那次查询的内核圈定、门闩铺不出来……),CLI 本人就没说过话
+  // ⇒ 整次退到配置文件那一档(见文件头「问不了 CLI 时」),前面几问的结论不拿来拼。
   let worst: Verdict = { state: "absent" };
   for (const dir of dirs) {
     const v = agentType === "claude"
       ? await askClaude(bin, env, dir, budget)
       : await askCodex(bin, extraArgs, env, dir, budget);
+    if (v.state === "not-started") return fromFiles(agentType, extraArgs, env, dirs, complete, v.why);
     if (v.state === "present") return ok(v.hint ?? null);
     if (v.state === "unknown") return ok();
     if (v.state === "disabled") worst = v;            // 比 absent 更具体,留它来说话
@@ -322,6 +336,7 @@ async function reachWith(
       reachable: false,
       problem: `${worst.detail}，这一轮跑完也上报不了结论（自查：${HOW_TO_CHECK.codex}）`,
       warning: null,
+      basis: "cli",
     };
   }
   return {
@@ -329,6 +344,7 @@ async function reachWith(
     problem: `${agentType} 自己报告没有 ash MCP 登记，这一轮跑完也上报不了结论`
       + `（自查：${HOW_TO_CHECK[agentType]}；接法见 docs/install.md，或在仓库根跑一次 npm run setup）`,
     warning: null,
+    basis: "cli",
   };
 }
 
@@ -348,18 +364,19 @@ function fromFiles(
   env: NodeJS.ProcessEnv,
   dirs: (string | undefined)[],
   complete: boolean,
-  abstained: string,
+  whyNotAsked: string,
 ): AshMcpReach {
   if (extraArgs.length) return ok();
   const v = fileAshMcpVerdict(agentType, env, dirs);
   if (v.state === "present") return ok(v.hint);
   if (v.state === "unknown" || !complete) return ok();
-  const basis = `（这是读配置文件得出的，没经 ${agentType} 本人确认 —— 这台机器问不了它：${abstained}）`;
+  const basis = `（这是读配置文件得出的，没经 ${agentType} 本人确认 —— 这一次问不了它：${whyNotAsked}）`;
   return {
     reachable: false,
     problem: `${v.detail}，看配置这一轮跑完也上报不了结论${basis}`
       + `（自查：${HOW_TO_CHECK[agentType]}；接法见 docs/install.md，或在仓库根跑一次 npm run setup）`,
     warning: null,
+    basis: "file",
   };
 }
 
@@ -403,5 +420,6 @@ export async function hostAshMcpGap(
   // 它其实没查过的事（第 3 轮审查 B1 末尾那条边界）。
   const reach = await reachWith(agentType, [], [], null, HOST_REACH_BUDGET_MS);
   if (reach.reachable) return null;
-  return { basis: confineAbstention() ? "file" : "cli", problem: reach.problem ?? "" };
+  // 证据来源取**这一次实际走的那一档**,不另找一句预判(新链第 2 轮审查第 1 条末尾)。
+  return { basis: reach.basis ?? "cli", problem: reach.problem ?? "" };
 }

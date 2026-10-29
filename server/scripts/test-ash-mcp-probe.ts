@@ -18,6 +18,7 @@
 //      （第 2 轮 B1）
 //   9. 结构约束（在 `ash-mcp-probe-shape.ts`，由这里调用）
 //  10. 读数与下刀走异步版：探测期间事件循环不被同步 PowerShell 堵住（新链第 1 轮第 4 条）
+//  11. 「没启动」不等于「问不出来」；门闩目录有启动扫地兜底（新链第 2 轮第 1、4 条）
 //
 // 跑：npm -w server run test:ash-mcp-probe
 import assert from "node:assert/strict";
@@ -37,6 +38,12 @@ try {
   const { probeCli, unitResidue } = await import("../src/ash-mcp-probe.js");
   const { resolveLaunch } = await import("../src/executors/bin-resolve.js");
   if (!resolveLaunch("node", [])) throw new Error("这台机器上连 node 都解析不到？");
+  type Outcome = Awaited<ReturnType<typeof probeCli>>;
+  /** 断言这一问拿到了答案，并把它收窄出来。 */
+  const answerOf = (res: Outcome | null | undefined, msg: string) => {
+    assert.equal(res?.kind, "answer", `${msg}（实际：${JSON.stringify(res)}）`);
+    return res as Extract<Outcome, { kind: "answer" }>;
+  };
 
   /**
    * **测试替身**：拿进程组冒充一台归属设备，好让结束路径在本机（macOS 上圈定弃权）也能
@@ -122,7 +129,7 @@ try {
 
     const started = Date.now();
     const res = await probeStood(["mcp", "list", "--json"], undefined, 1_200);
-    assert.equal(res, null, "B3:超时必须回到「问不出来」(向放行开的结论不变)");
+    assert.equal(res.kind, "unqueryable", "B3:超时必须回到「问不出来」(向放行开的结论不变)");
     assert.ok(Date.now() - started < 20_000, "B3:不能一直干等下去");
 
     const hungPid = Number(readFileSync(pidFile, "utf8").trim());
@@ -169,7 +176,7 @@ try {
     const warned: string[] = [];
     const realWarn = console.warn;
     console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
-    let res: Awaited<ReturnType<typeof probeCli>> = null;
+    let res: Outcome | null = null;
     let gone = false;
     let hungPid = 0;
     try {
@@ -183,7 +190,7 @@ try {
     // 壳自己 `exit 3` 是一份**真实的结束状态**（`exit` 事件立刻就有），不是「问不出来」。
     // 判据层对非零退出同样放行（askCodex：`res.code !== 0` → unknown），所以对外结论不变；
     // 但这一层不该把一份真实的非零退出伪装成 null —— 那是第 4 轮 N1 反过来的那一半。
-    assert.ok(res !== null && res.code === 3, "包装自己的退出码要如实带回，非零交给判据层去解释");
+    assert.equal(answerOf(res, "包装自己的退出码要如实带回，非零交给判据层去解释").code, 3);
     if (!gone) { try { process.kill(hungPid, "SIGKILL"); } catch { /* 清场 */ } }
     assert.ok(gone, "B2：包装先退出了，它起的查询照样必须被回收");
     assert.ok(!warned.some((w) => w.includes("收不干净")),
@@ -198,7 +205,7 @@ try {
     if (process.platform === "win32") {
       console.log("⚠ 跳过 N1 一条：Windows 上没有自杀信号的等价写法，这条只在 POSIX 判");
     } else {
-      assert.equal(await ask(8_000), null, "N1：被信号终止 → 问不出来，不准当成 rc=0 的空列表");
+      assert.equal((await ask(8_000)).kind, "unqueryable", "N1：被信号终止 → 问不出来，不准当成 rc=0 的空列表");
     }
 
     // ③ N2：UTF-8 字符跨在两个 data 块边界上。逐块 String(chunk) 会解出替换字符，
@@ -212,11 +219,10 @@ try {
       `#!/bin/sh\nexec "${process.execPath}" "${split}"\n`,
       `@echo off\r\n"${process.execPath}" "${split}"\r\n`,
     );
-    const got = await ask(8_000);
-    assert.ok(got, "N2：这条该正常退出");
-    assert.ok(!got!.stdout.includes("\uFFFD"),
+    const got = answerOf(await ask(8_000), "N2：这条该正常退出");
+    assert.ok(!got.stdout.includes("\uFFFD"),
       "N2：跨块的多字节字符不准解成替换字符（两个输出通道都按流设编码）");
-    assert.match(got!.stdout, /配置里没有这一项/, "N2：拼回来的文本要和原文一致");
+    assert.match(got.stdout, /配置里没有这一项/, "N2：拼回来的文本要和原文一致");
 
     process.env.PATH = pathWas;
   }
@@ -256,7 +262,7 @@ try {
     const warned: string[] = [];
     const realWarn = console.warn;
     console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
-    let res: Awaited<ReturnType<typeof probeCli>>;
+    let res: Outcome | undefined;
     let gone = false;
     let orphan = 0;
     try {
@@ -267,9 +273,9 @@ try {
         try { process.kill(orphan, 0); await pause(100); } catch { gone = true; }
       }
     } finally { console.warn = realWarn; }
-    assert.ok(res, "正常退出要照常给出答案");
-    assert.equal(res!.code, 0, "退出码是 0");
-    assert.match(res!.stdout, /\[\]/, "答案本身不受收尾影响");
+    const ans = answerOf(res, "正常退出要照常给出答案");
+    assert.equal(ans.code, 0, "退出码是 0");
+    assert.match(ans.stdout, /\[\]/, "答案本身不受收尾影响");
     assert.ok(Number.isInteger(orphan) && orphan > 1, "假 CLI 应该写下了那个孤儿的 pid");
     if (!gone) { try { process.kill(orphan, "SIGKILL"); } catch { /* 清场 */ } }
     assert.ok(gone, "正常退出路径也必须把自己起的后代收掉 —— 根 close 不代表后代结束");
@@ -316,9 +322,9 @@ try {
     const t0 = Date.now();
     const res = await probeStood(["mcp", "list", "--json"], undefined, 6_000);
     const took = Date.now() - t0;
-    assert.ok(res, "进程退出了、答案也写完了，不能因为 close 不来就把它当成「问不出来」");
-    assert.equal(res!.code, 0, "退出码要带回来");
-    assert.match(res!.stdout, /\[\]/, "答案要完整");
+    const ans = answerOf(res, "进程退出了、答案也写完了，不能因为 close 不来就把它当成「问不出来」");
+    assert.equal(ans.code, 0, "退出码要带回来");
+    assert.match(ans.stdout, /\[\]/, "答案要完整");
     assert.ok(took < 5_000, `不该等到超时才返回（${took}ms）—— close 被攥着管道的后代推迟了`);
 
     // 收尾照旧要把那个攥管道的后代收掉。
@@ -487,7 +493,7 @@ try {
     const warned: string[] = [];
     const realWarn = console.warn;
     console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
-    let res: Awaited<ReturnType<typeof probeCli>>;
+    let res: Outcome | undefined;
     let queryPid = 0;
     let gone = false;
     let groupGone = false;
@@ -514,14 +520,14 @@ try {
     if (abstains) {
       // 这台机器没有内核圈定（macOS）⇒ **一条指令都不该起**。旧实现会照常起、答 gone、
       // 把那个离组查询留在机器上，所以这一支对旧实现是红的。
-      assert.equal(res, null, "拿不到能核销的归属设备就不探测，直接回「问不出来」（第 1 轮 B1）");
+      assert.equal(res?.kind, "not-started",
+        "拿不到能核销的归属设备就不探测，并且如实说「没启动」—— 判据层据此退到配置文件那一档（新链第 2 轮第 1 条）");
       assert.ok(!existsSync(wrapperFile),
         "假 CLI 一次都不该被执行 —— 起了就等于留下一个谁都查不回去的后台查询");
       assert.equal(queryPid, 0, "查询进程压根不该存在");
     } else {
       // 有圈（Linux 的 cgroup）：照常探测，离组后代由整圈刀收掉。
-      assert.ok(res, "答案照样要拿回来 —— 收尾的事不该影响这一问");
-      assert.match(res!.stdout, /\[\]/, "答案要完整");
+      assert.match(answerOf(res, "答案照样要拿回来 —— 收尾的事不该影响这一问").stdout, /\[\]/, "答案要完整");
       assert.ok(groupGone,
         "包装的进程组应该已经整个消失 —— 没有这一条，这个用例对旧实现同样是绿的");
       assert.ok(Number.isInteger(queryPid) && queryPid > 1, "假 CLI 应该写下了那个离组查询的 pid");
@@ -578,7 +584,7 @@ try {
     const warned: string[] = [];
     const realWarn = console.warn;
     console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
-    let res: Awaited<ReturnType<typeof probeCli>> = null;
+    let res: Outcome | null = null;
     try {
       // 这一块**必须**挂替身（哪个平台都挂）：谎报是替身的全部意义，真实设备不会谎报。
       res = await probeCli(
@@ -591,8 +597,7 @@ try {
       process.env.PATH = pathWas;
     }
 
-    assert.ok(res, "答案照样要拿回来 —— 收尾的事不该影响这一问");
-    assert.match(res!.stdout, /\[\]/, "答案要完整");
+    assert.match(answerOf(res, "答案照样要拿回来 —— 收尾的事不该影响这一问").stdout, /\[\]/, "答案要完整");
     assert.ok(liar.kills > 0, "该下的刀还是要下 —— 不看返回值不等于不下刀");
     assert.equal(liar.disposed, 0,
       "读数一直报着活成员 ⇒ 一次都不准核销：killAll 答的「成功」在降级路径上只是尝试数（第 2 轮 B1）");
@@ -661,8 +666,12 @@ try {
   }
 
   // ── 9. 结构约束：Windows 那条路本机跑不出来，用不变量兜住（在 ash-mcp-probe-shape.ts）──
-  const { checkProbeStructure } = await import("./ash-mcp-probe-shape.js");
+  const { checkProbeStructure, checkNotStarted, checkGateSweep } = await import("./ash-mcp-probe-shape.js");
   checkProbeStructure();
+
+  // ── 11. 「没启动」与「问不出来」分开（新链第 2 轮第 1、4 条，在 ash-mcp-probe-shape.ts）──
+  await checkNotStarted(probeCli);
+  checkGateSweep();
 
   console.log("✅ ash MCP 探测层（结束路径 / 回收判据 / 输出解码）通过");
 } finally {

@@ -38,7 +38,7 @@
 // 真实的退出码撞上 —— 撞上的后果是把一份错误读成一份答案,正是这条链上反复出现的那类错误。
 // 盘上没有 outcome ⇒ 问不出来(放行),语义干净。
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -51,6 +51,14 @@ export type LaunchPlan = {
 
 /** 门闩壳最多等多久开门。父进程确认归属要起一次 PowerShell,给够。 */
 const GATE_WAIT_MS = 60_000;
+
+/** 每次探测的临时目录都建在这下面 —— 启动扫地(`sweepStaleGates`)认的就是这一层。 */
+const GATE_ROOT = join(tmpdir(), "ash-mcp-gate");
+/**
+ * 多旧的门闩目录算没人要了。一次探测从建目录到收尾最多是「壳等开门 60 s + CLI 单问 15 s +
+ * 收尾几秒」,十分钟远在那之外;另一个 ash 实例(预览实例共用 tmpdir)正用着的目录不会被碰到。
+ */
+const STALE_GATE_MS = 10 * 60_000;
 
 export type GateOutcome = {
   /** CLI 的退出码。null = 没有正常退出(被信号打断 / 起不来)。 */
@@ -112,7 +120,7 @@ process.exit(0);
  * 调用方据此放弃这次探测 —— **不退回直接起 CLI**:那正是审查点掉的那条路。
  */
 export function prepareGate(target: LaunchPlan): Gate | null {
-  const dir = join(tmpdir(), "ash-mcp-gate", randomUUID());
+  const dir = join(GATE_ROOT, randomUUID());
   const script = join(dir, "gate.mjs");
   const go = join(dir, "go");
   const out = join(dir, "outcome.json");
@@ -156,4 +164,27 @@ export function prepareGate(target: LaunchPlan): Gate | null {
       try { rmSync(dir, { recursive: true, force: true }); } catch { /* 临时目录,留着也无害 */ }
     },
   };
+}
+
+/**
+ * 收掉上一个 ash 没来得及收的门闩目录(按 mtime,只收 `STALE_GATE_MS` 以前的)。返回收掉几个。
+ *
+ * 正常结束那条路的 `cleanup` 挂在**不被等待**的后台收尾后面(`ash-mcp-probe.ts`:等它跑完
+ * 会把派审请求再拖几秒),进程在那段窗口里退出,那次的目录就没人管了 —— 新链第 2 轮审查在
+ * 盘上找到了这样的残留。所以回收不能只靠那个 promise 跑完:`cleanup` 是快捷路径,兜底是
+ * 启动时这一趟(`index.ts`)。best-effort,单个目录收不掉不影响别的。
+ */
+export function sweepStaleGates(now: number = Date.now(), root: string = GATE_ROOT): number {
+  let names: string[];
+  try { names = readdirSync(root); } catch { return 0; }
+  let removed = 0;
+  for (const name of names) {
+    const dir = join(root, name);
+    try {
+      if (now - statSync(dir).mtimeMs < STALE_GATE_MS) continue;
+      rmSync(dir, { recursive: true, force: true });
+      removed++;
+    } catch { /* 收不掉就留给下一次 */ }
+  }
+  return removed;
 }

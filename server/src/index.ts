@@ -270,6 +270,13 @@ async function initializeServer() {
     const removed = await sweepOrphanTrackFiles();
     if (removed) console.log(`[ash] 回收 ${removed} 个上一轮遗留的逃逸追踪文件`);
   })().catch((err) => console.error("[ash] 逃逸追踪文件回收失败（不影响运行）:", err));
+  // ash MCP 预检的门闩目录(tmpdir/ash-mcp-gate)。正常结束那条路是后台收的,进程赶上那段窗口
+  // 退出就会留下来(见 ash-mcp-gate.ts 的 sweepStaleGates)。只收十分钟以前的。
+  void (async () => {
+    const { sweepStaleGates } = await import("./ash-mcp-gate.js");
+    const removed = sweepStaleGates();
+    if (removed) console.log(`[ash] 回收 ${removed} 个上一轮遗留的 ash MCP 预检临时目录`);
+  })().catch((err) => console.error("[ash] ash MCP 预检临时目录回收失败（不影响运行）:", err));
   // 上一辈子没收干净的 agent 后代:那一轮的清理明确答出「还有残留」或者「没问清楚」,
   // 责任落在 `agent_cleanup_debts` 上(见那张表的注释)。**排在接管之后**:接回来的那些
   // 运行自己还会再走一次清理,这里只追真正没人管的。best-effort,不影响启动。
