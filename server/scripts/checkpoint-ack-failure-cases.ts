@@ -51,7 +51,7 @@ const receiptOf = async (taskId: string) => (await db.select().from(scheduledMes
  *
  * 四条合起来钉的是一个取舍:**送达一旦成为事实,这张凭证只能往前走(标 sent),永不归还** ——
  * 所以这里既要证明它不再永久阻塞(①②),也要证明它没有被改成「超时就归还」(③:已送达的那张
- * 在重启那一拍不许被回填),以及归还那一侧仍然work(④)、正在送的不许被接管(⑤)。
+ * 在重启那一拍不许被回填),以及送达只认记号上那一轮(④)、正在送的不许被接管(⑤)。
  */
 export async function checkpointAckFailureCases(): Promise<void> {
   // ① 确认写不成 → 原地退避补办,库一恢复就自己走到 sent;期间启动被拒,但拒绝理由说的是
@@ -129,20 +129,60 @@ export async function checkpointAckFailureCases(): Promise<void> {
     console.log("PASS: a lease with no turn after it is proven undelivered and returned to the task");
   }
 
-  // ④ 同一张凭证,只是这一次库里有一个租约之后开起来的回合 —— 判据必须翻面:不许归还。
+  // ④ **「送达」只认带身份的那一份证据**(第 1 轮逻辑审查 4)。早先的判据是「这个任务在租约之后
+  //    开过任何一个回合」,同一个任务上别的回合(审查旁路、续聊、再点一次运行)也会命中,那段
+  //    交代于是被当成已送达划掉:agent 从没收到,时间线上也不留带原文的「交付不明」。
+  //    三个现场只差记号上写着的那一轮,判据必须分别给出三种结论。
+  const otherTurnAfterLease = async (taskId: string, sessionId: string) => db.insert(schema.sessions).values({
+    id: sessionId, taskId, role: "single", agentType: "claude",
+    executor: "claude", cwd: ".", startedAt: now(), turnStartedAt: now(),
+  });
   {
+    // ④a 租约之后有别的回合,却没有越线记号:凭证是硬前置那一代,「没有记号」就是没送出去 → 归还。
     const test = await scenario(0);
     const generation = (await taskOf(test.taskId)).resumePromptGeneration;
     const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
-    await db.insert(schema.sessions).values({
-      id: `sess-${receipt.id}`, taskId: test.taskId, role: "single", agentType: "claude",
-      executor: "claude", cwd: ".", startedAt: now(), turnStartedAt: now(),
+    await otherTurnAfterLease(test.taskId, `other-${receipt.id}`);
+    forgetCheckpointDelivering(receipt.id);
+    await reconcileCheckpointDeliveries(test.taskId);
+    await until("没越线的交代归还任务", async () => (await taskOf(test.taskId)).resumePrompt === test.checkpoint);
+    assert.equal(hits(test.checkpoint), 0, "压根没送出去,agent 不该见过它");
+    console.log("PASS: an unrelated turn after the lease does not count as delivery when nothing crossed");
+  }
+  {
+    // ④b 记号在,写着的那一轮却没开起来;同一个任务上另有一条晚于租约的回合。按时间窗会判送达
+    //    并静默划掉 —— 现在必须落「交付不明」,原文留在用户看得见的地方。
+    const test = await scenario(0);
+    const generation = (await taskOf(test.taskId)).resumePromptGeneration;
+    const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
+    noteDeliveryCrossing(test.taskId, [receipt.id], { sessionId: `sess-${receipt.id}`, turnStart: now() });
+    await otherTurnAfterLease(test.taskId, `other-${receipt.id}`);
+    forgetCheckpointDelivering(receipt.id);
+    await reconcileCheckpointDeliveries(test.taskId);
+    await until("交付不明就地了结", async () => (await rowOf(receipt.id)).status === "sent");
+    assert.equal((await taskOf(test.taskId)).resumePrompt, null, "越过线的那段话不许被回填");
+    const told = await transcript(test.taskId);
+    assert.match(told, /不会自动再送一遍/, "别的回合不是这段交代的送达证据 —— 必须留下交付不明的交代");
+    assert.match(told, new RegExp(test.checkpoint), "原文必须留在用户看得见的地方");
+    console.log("PASS: another turn after the lease is not proof the marked turn received the handoff");
+  }
+  {
+    // ④c 记号上那一轮确实开起来了(回合表里有那个「会话 + 起点」):这才是送达,只往前走。
+    const test = await scenario(0);
+    const generation = (await taskOf(test.taskId)).resumePromptGeneration;
+    const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
+    const turn = { sessionId: `sess-${receipt.id}`, turnStart: now() };
+    noteDeliveryCrossing(test.taskId, [receipt.id], turn);
+    await otherTurnAfterLease(test.taskId, turn.sessionId);
+    await db.insert(schema.sessionTurns).values({
+      id: `turn-${receipt.id}`, sessionId: turn.sessionId, taskId: test.taskId, cwd: ".", startedAt: turn.turnStart,
     });
     forgetCheckpointDelivering(receipt.id);
     await reconcileCheckpointDeliveries(test.taskId);
     await until("已送达那一侧只往前走", async () => (await rowOf(receipt.id)).status === "sent");
-    assert.equal((await taskOf(test.taskId)).resumePrompt, null, "有回合在租约之后开过时一律按已送达处理");
-    console.log("PASS: the same lease flips to delivered once a turn opened after it");
+    assert.equal((await taskOf(test.taskId)).resumePrompt, null, "记号上那一轮开起来过 = 已送达,不许归还");
+    assert.doesNotMatch(await transcript(test.taskId), /不会自动再送一遍/, "真送达了就不是交付不明");
+    console.log("PASS: the lease flips to delivered once the marked turn itself is on record");
   }
 
   // ⑤ 本进程还有一条路正在送它时,别人不许接管 —— 否则一条正在送的交代会被归还、送完再送一遍。

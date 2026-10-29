@@ -26,7 +26,7 @@
 // 普通待发送消息此刻仍按既有口径走「宁可重发一次也不丢一句话」—— 那是用户打的字,重发在会话
 // 里看得见,与 agent 自己的流水线交接不是同一个取舍(见 reclaimStaleDeliveries 的注释)。
 // 记号照样给它们写(`noteDeliveryCrossing`,尽力而为),越线这件事对谁都是同一个事实。
-import { closeSync, fsyncSync, mkdirSync, openSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { RUNS_DIR } from "./paths.js";
 
@@ -157,20 +157,40 @@ export function recordDeliveryCrossing(
 export type CrossingRead = "crossed" | "absent" | "unreadable";
 
 export function deliveryCrossing(taskId: string, messageId: string): CrossingRead {
+  return readDeliveryCrossing(taskId, messageId).state;
+}
+
+/** 记号上写着的那一轮:交出这段输入的是哪条会话、哪一刻开的回合(`writeCrossings` 落的内容)。 */
+export type CrossingTurn = { sessionId: string; turnStart: string };
+
+/**
+ * 同上,连同记号上写着的那一轮一起交出来。`about` 为 null = 记号在、内容却读不出那一轮
+ * (写到一半、被改过) —— 越线是事实,交给了谁说不上来,调用方按「交付不明」处理。
+ */
+export function readDeliveryCrossing(
+  taskId: string, messageId: string,
+): { state: CrossingRead; about: CrossingTurn | null } {
   try {
-    statSync(crossingPath(taskId, messageId));
-    return "crossed";
+    return { state: "crossed", about: crossingTurnOf(readFileSync(crossingPath(taskId, messageId), "utf8")) };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "unreadable";
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { state: "unreadable", about: null };
   }
   // 文件不在:只有**目录确实在**才算否证 —— 目录是认领凭证那一步建好并 fsync 过的,
   // 它不在说明这棵树被谁动过,那种沉默证明不了任何事。
   try {
     statSync(crossingDir(taskId));
-    return "absent";
+    return { state: "absent", about: null };
   } catch {
-    return "unreadable";
+    return { state: "unreadable", about: null };
   }
+}
+
+function crossingTurnOf(text: string): CrossingTurn | null {
+  try {
+    const parsed = JSON.parse(text) as Partial<CrossingTurn>;
+    return typeof parsed.sessionId === "string" && typeof parsed.turnStart === "string"
+      ? { sessionId: parsed.sessionId, turnStart: parsed.turnStart } : null;
+  } catch { return null; }
 }
 
 /** 这一条投递已经有定论了(标 sent / 已归还),记号留着只是垃圾。 */

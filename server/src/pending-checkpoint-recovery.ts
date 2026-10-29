@@ -1,7 +1,7 @@
-import { and, eq, gte, isNotNull, ne } from "drizzle-orm";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
-import { scheduledMessages, sessions, tasks } from "./db/schema.js";
-import { crossingProvesAbsence, deliveryCrossing } from "./delivery-crossing.js";
+import { scheduledMessages, sessionTurns, sessions, tasks } from "./db/schema.js";
+import { crossingProvesAbsence, readDeliveryCrossing, type CrossingTurn } from "./delivery-crossing.js";
 import { restoreMonitorCheckpoint } from "./monitor-checkpoint-handoff.js";
 
 export const CHECKPOINT_RUN_ORIGIN = "checkpoint:resume";
@@ -37,9 +37,18 @@ export const forgetCheckpointDelivering = (messageId: string): void => void deli
  * 那条缝里进程被换掉,同一段交代就会被归还、重投、执行两遍(第 1 轮审查 F1 跨进程实测,
  * 现场与判据见 delivery-crossing.ts 的文件头)。
  *
- * 顺序就是证据强度:**回合开起来过**是最强的正面证据(它蕴含 spawn 发生过),所以先问它;
- * 其次问越线记号 —— 有记号而没有回合行,正是那条缝;**只有记号这一问给出否证**(目录在、
- * 这一条确实没写过)才是真的还没启动。
+ * **只认带身份的那一份证据**。越线记号上写着交出这段话的是哪条会话、哪一刻开的回合
+ * (orchestrator 在 spawn 前那一行落的);「送达」= 记号在、**而且记号上那一轮**确实开起来了
+ * (`session_turns` 有那个 `(会话, 起点)`,或者那条会话行此刻正停在那个起点上)。早先这里先问
+ * 「这个任务在租约之后开过任何一个回合没有」,命中就判送达 —— 可同一个任务上别的回合(审查
+ * 旁路、续聊、用户再点一次运行)一样会命中,那段交代于是被当成已送达划掉,agent 从没收到,
+ * 时间线上也不留「交付不明」那条带原文的记录(第 1 轮逻辑审查 4)。时间窗是同一件事的弱证据,
+ * 它跟带身份的那一份说法不同时不该由它定论,所以现在不再单独参与判定。
+ *
+ *  · 记号在、那一轮有行             —— `delivered`;
+ *  · 记号在、那一轮没有行(或者记号上读不出是哪一轮) —— 越了线、记账没做完:`uncertain`;
+ *  · 记号不在、目录在、凭证是硬前置那一代 —— 否证:`not-started`;
+ *  · 其余(读不出来、旧代凭证)        —— `uncertain`。
  *
  * 记号读不出来(目录没了、权限没了、I/O 错)**不是否证**:第 2 轮自由审查实测,凭据写入
  * 失败只告警的那一版里,`existsSync` 的失败方向同样是 false,两头一夹,一段已经喂给 agent
@@ -55,18 +64,29 @@ export async function checkpointDeliveryVerdict(
   receipt: { id: string; taskId: string; deliveringSince: string | null; crossingProtocol: string | null },
 ): Promise<CheckpointDelivery> {
   if (!receipt.deliveringSince) return "not-started";
-  const opened = await db.select({ id: sessions.id }).from(sessions).where(and(
-    eq(sessions.taskId, receipt.taskId),
-    isNotNull(sessions.turnStartedAt),
-    gte(sessions.turnStartedAt, receipt.deliveringSince),
-  ));
-  if (opened.length > 0) return "delivered";
+  const crossing = readDeliveryCrossing(receipt.taskId, receipt.id);
+  if (crossing.state === "crossed") {
+    return crossing.about && await turnRecorded(crossing.about) ? "delivered" : "uncertain";
+  }
   // 否证的效力**跟着凭证走**,不跟着当前代码走:只有在「写记号是硬前置」的那一代里开出来的
   // 票据,才有资格拿「目录在、这一条不在」当「没送出去」。旧代的凭证长得一模一样,但它当时
   // 允许记号写失败后照常 spawn —— 升级之后用新判据读它,就是把它当时没有的证明力追认给它
   // (第 2 轮自由审查 F1:同一段交代在升级后被执行两遍)。不认得的代次按旧代处理。
   if (!crossingProvesAbsence(receipt.crossingProtocol)) return "uncertain";
-  return deliveryCrossing(receipt.taskId, receipt.id) === "absent" ? "not-started" : "uncertain";
+  return crossing.state === "absent" ? "not-started" : "uncertain";
+}
+
+/** 记号上那一轮确实开起来过吗。两处都按**同一个身份**问:回合表一个回合一行;会话行跨回合
+ *  复用,只在它此刻正停在那个起点上时才算数(后来又开过一轮,它就说不出那一轮了)。 */
+async function turnRecorded(turn: CrossingTurn): Promise<boolean> {
+  const opened = await db.select({ id: sessionTurns.id }).from(sessionTurns).where(and(
+    eq(sessionTurns.sessionId, turn.sessionId), eq(sessionTurns.startedAt, turn.turnStart),
+  )).limit(1);
+  if (opened.length) return true;
+  const current = await db.select({ id: sessions.id }).from(sessions).where(and(
+    eq(sessions.id, turn.sessionId), eq(sessions.turnStartedAt, turn.turnStart),
+  )).limit(1);
+  return current.length > 0;
 }
 
 /**
