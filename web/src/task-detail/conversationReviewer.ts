@@ -30,6 +30,29 @@ export function reviewerOf(
   return role === "reviewer" ? { round: null } : undefined;
 }
 
+/**
+ * 这条哨兵自动输入是不是喂给了**这一轮的审查者**。审查卡（conversationReviewLanes 的
+ * closeBefore）和验证区间（下面的 applyVerifySpans）都只问这一处 —— 早先两边各自从「谁先
+ * 说过话」反推，未知时一边留、一边收：审查者开口之前哨兵把执行者叫醒，那条输入和执行者
+ * 随后的回合被卡吞进默认收起的折叠区，区间那一侧却已经收了口（第 1 轮逻辑审查 3）。
+ *
+ * 收件人是条目自带的事实：`sessionId` 是它喂进的那条会话，`sessionRole` 是那条会话的角色。
+ *  · 自由派审 / 合并审查：审查者另开一条 role=reviewer 的会话 —— 角色就是答案；已经认出
+ *    这一轮的审查会话时再核一道会话号（上一轮的审查会话不是这一轮的审查者）；
+ *  · 就地验证：审查者搭在开轮旁注所在的那条会话上 —— 会话号就是答案。
+ * 两样都答不出（极老的数据没有会话号）才按「留在这一轮」：收错卡的代价是审查者后续发言
+ * 整段掉出卡外，比晚收一拍更难看懂。
+ */
+export function monitorWakeFedReviewer(
+  item: Extract<ConversationItem, { kind: "user" }>,
+  scope: { kind: VerifyNoteMark["kind"]; startSessionId?: string | null; reviewerSessionId?: string | null },
+): boolean {
+  const sameAs = (sessionId: string | null | undefined) => !sessionId || !item.sessionId || item.sessionId === sessionId;
+  if (scope.kind === "inline") return sameAs(scope.reviewerSessionId ?? scope.startSessionId);
+  if (item.sessionRole) return item.sessionRole === "reviewer" && sameAs(scope.reviewerSessionId);
+  return sameAs(scope.reviewerSessionId);
+}
+
 export function traceVerifyRound(entries: SessionTraceEntry[]): number | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const event = entries[index]?.event;
@@ -77,10 +100,10 @@ export function applyVerifySpans(items: ConversationItem[]): void {
   let span: (VerifyNoteMark & { sessionId?: string }) | null = null;
   let spoke = false;
   let concluded = false;
-  // 这一段里**最后说话的是哪条会话**：inline 是被验任务自己那条，自由派审是 reviewer 那条。
-  // 哨兵自动输入靠它分收件人（见下面 user 那一支）。
-  let lastSpeaker: string | undefined;
-  const close = () => { span = null; spoke = false; concluded = false; lastSpeaker = undefined; };
+  // 这一段里**审查者在哪条会话上说话**（认出过身份的那几条才算）：inline 是被验任务自己那条，
+  // 自由派审是 reviewer 那条。哨兵自动输入靠它核收件人（monitorWakeFedReviewer）。
+  let reviewerSession: string | undefined;
+  const close = () => { span = null; spoke = false; concluded = false; reviewerSession = undefined; };
   for (const item of items) {
     // 【答复】是审查者提问的回答，答完还是这一轮；真人另起话头才算接管。
     //
@@ -88,12 +111,15 @@ export function applyVerifySpans(items: ConversationItem[]): void {
     // 续跑，是审查里跑回归的常规做法，服务端照样算在这一轮里（sessionRole=reviewer 回到当前
     // round）。拿它收口，用户看到的就是徽标从「审查者 · 第 N 轮」退回「审查者」，自由派审
     // 续跑后的那段结论还会整段掉出审查卡。
-    // 判据是**喂给了谁**：喂给这一段里正在说话的那条会话 → 还是这一轮；喂给别人（审查已
-    // 交卷、哨兵结果把执行者叫醒）→ 这一段确实走完了，照旧收口。
+    // 判据是**喂给了谁**，跟审查卡问同一处（monitorWakeFedReviewer）：喂给这一轮的审查者 →
+    // 还是这一轮；喂给别人（审查已交卷、或者审查者还没开口，哨兵结果把执行者叫醒）→ 照旧收口。
     if (item.kind === "user") {
-      const resumesSpeaker = !!lastSpeaker && item.sessionId === lastSpeaker
-        && monitorWakeInput(item) !== null;
-      if (!item.isAnswer && !resumesSpeaker) close();
+      const fedReviewer = !!span && monitorWakeInput(item) !== null && monitorWakeFedReviewer(item, {
+        kind: (span as VerifyNoteMark & { sessionId?: string }).kind,
+        startSessionId: (span as VerifyNoteMark & { sessionId?: string }).sessionId,
+        reviewerSessionId: reviewerSession,
+      });
+      if (!item.isAnswer && !fedReviewer) close();
       continue;
     }
     if (item.kind === "event") {
@@ -114,11 +140,11 @@ export function applyVerifySpans(items: ConversationItem[]): void {
     if (item.kind !== "agent" || !span) continue;
     if (span.kind === "inline" && span.sessionId && item.sessionId !== span.sessionId) { close(); continue; }
     spoke = true;
-    lastSpeaker = item.sessionId;
     if (!item.reviewer) {
       if (span.kind === "inline") item.reviewer = { round: span.round };
-      continue;
+    } else if (item.reviewer.round === null && span.round) {
+      item.reviewer = { round: span.round };
     }
-    if (item.reviewer.round === null && span.round) item.reviewer = { round: span.round };
+    if (item.reviewer) reviewerSession = item.sessionId;
   }
 }

@@ -117,4 +117,44 @@ assert.equal(inlineLane.items.some((item) => item.kind === "user"), true,
   "同会话时分不出收件人,没出结论就留在卡里");
 assert.deepEqual(mainStream(inline), [], "不许把验证卡劈成两半");
 
-console.log("✓ 哨兵自动输入:喂给执行者的落主流自成一条,喂给审查者自己的留在卡里,就地验证同会话不劈卡");
+// ④ **审查者还没开口**,哨兵结果先把执行者叫醒(第 1 轮逻辑审查 3)。早先审查卡要等审查者
+//    第一条输出才认得出收件人,这之前一律留在卡里;验证区间那一侧却已经收口 —— 两处判据的
+//    未知方向相反,那条输入连同执行者随后的回合被吞进默认收起的折叠区。收件人现在是条目
+//    自带的事实(会话号 + 那条会话的角色),开口之前也答得出。
+const quiet = { ...reviewer, startedAt: "2026-08-11T02:30:00.000Z" };
+const early = rowsOf(
+  [
+    { session: main, output: [
+      turn("system", FREE_START, "2026-08-11T02:00:00.000Z"),
+      wakeTurn("2026-08-11T02:05:00.000Z", "m-early"),
+      "执行者在审查者开口之前被叫醒说的话。",
+    ].join("\n"), trace: [] },
+    { session: quiet, output: "", trace: [] },
+  ],
+  [main, quiet],
+);
+assert.equal(laneOf(early)?.items.some((item) => item.kind === "user"), false,
+  "审查者开口之前喂给执行者的输入也不属于这一轮");
+assert.deepEqual(mainStream(early).map((item) => item.kind), ["user", "agent"],
+  "那条输入和它叫醒的回合一起落在主流上,看得见");
+
+// ⑤ 同一个时刻,反过来:审查者**自己**挂的哨兵,结果在它第一条输出之前回来。按角色认得出
+//    收件人是审查者 —— 卡和区间都留着,续跑后的发言照旧是「第 1 轮」,不被踢出卡外。
+const selfFirst = rowsOf(
+  [
+    { session: main, output: turn("system", FREE_START, "2026-08-11T02:00:00.000Z"), trace: [] },
+    { session: quiet, output: [
+      wakeTurn("2026-08-11T02:40:00.000Z", "m-self"),
+      "回归绿了,结论照原样交。",
+    ].join("\n"), trace: [] },
+  ],
+  [main, quiet],
+);
+const selfLane = laneOf(selfFirst);
+assert.deepEqual(selfLane?.items.map((item) => item.kind), ["user", "agent"],
+  "审查者开口之前收到的自己那条哨兵结果,和它续跑后的发言都在这一轮的卡里");
+assert.equal(selfLane.items.find((item) => item.kind === "agent").reviewer?.round, 1,
+  "区间没被这条输入收口,续跑后的发言照旧标成第 1 轮");
+assert.deepEqual(mainStream(selfFirst), [], "不该有任何东西被挤出卡外");
+
+console.log("✓ 哨兵自动输入:喂给执行者的落主流自成一条,喂给审查者自己的留在卡里,就地验证同会话不劈卡,审查者开口之前同样认得出收件人");

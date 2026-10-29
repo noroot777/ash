@@ -263,6 +263,7 @@ export function useConversation(
           bySystem: event.bySystem,
           monitorWake: event.monitorWake,
           sessionId: event.sessionId,
+          sessionRole: event.role,
           source: "server",
         });
         refreshSessions();

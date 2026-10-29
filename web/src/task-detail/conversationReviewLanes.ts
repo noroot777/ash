@@ -3,6 +3,7 @@ import type { FreeReviewRun } from "@ash/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import { verifyNoteOf, type VerifyNoteMark } from "./conversationNotes.ts";
 import { monitorWakeInput } from "./monitorWakeModel.ts";
+import { monitorWakeFedReviewer } from "./conversationReviewer.ts";
 
 export type ReviewLaneConclusion = "verified" | "verify_failed" | "inconclusive" | null;
 export type ReviewLaneSource = VerifyNoteMark["kind"];
@@ -79,6 +80,8 @@ type ActiveLane = ConversationReviewLane & {
   reviewerSpoke: boolean;
   /** 这一轮的审查者在哪条会话上说话。自由派审是另开的 reviewer 会话，就地验证就是任务自己那条。 */
   reviewerSessionId: string | null;
+  /** 开轮旁注写在哪条会话上。就地验证的审查者就搭在这条上，审查者开口之前也认得出收件人。 */
+  startSessionId: string | null;
 };
 
 const STAGE_CONCLUSION = /验收阶段更新：.*（(verified|verify_failed)）/;
@@ -148,12 +151,14 @@ function closeBefore(lane: ActiveLane, item: ConversationItem): boolean {
     // 回合落在主流上还会标着「回复这次自动输入」，于是用户读到的是「回合说在回复一条看不见
     // 的输入」（现场实测：本任务 06:52:37 那条投喂就藏在「第 1 轮审查」卡的展开区里）。
     //
-    // 判据按**喂进了哪条会话**，跟 applyVerifySpans 的收口判据同一份：自由派审另开一条
-    // reviewer 会话，不是那条就是别人的输入；就地验证跟执行者共用会话，同一条就是审查者
-    // 自己在续跑，照旧留在卡里。两头都说不清时（审查者还没开口、或旧数据没有会话号）宁可
-    // 留在卡里：收错卡的代价是审查者后续的发言整段掉出卡外，比晚收一拍更难看懂。
+    // 判据按**喂给了谁**，跟 applyVerifySpans 问同一处（conversationReviewer 的
+    // monitorWakeFedReviewer）：收件人是条目自带的事实（会话号 + 那条会话的角色），审查者
+    // 开口之前也答得出 —— 早先这里要等审查者先说话才认得出收件人，开口前一律留在卡里，
+    // 区间那一侧却已经收口，叫醒执行者的那一段于是被吞进折叠区（第 1 轮逻辑审查 3）。
     if (monitorWakeInput(item) !== null) {
-      return !!lane.reviewerSessionId && !!item.sessionId && item.sessionId !== lane.reviewerSessionId;
+      return !monitorWakeFedReviewer(item, {
+        kind: lane.source, startSessionId: lane.startSessionId, reviewerSessionId: lane.reviewerSessionId,
+      });
     }
     return !item.bySystem && !item.isAnswer;
   }
@@ -204,7 +209,9 @@ function finishLane(
     lane.reportAvailable = lane.complete && lane.reviewerSpoke;
     if (lane.reportAvailable && lane.round !== null) lane.report = { kind: "inline", round: lane.round };
   }
-  const { reviewerSpoke: _reviewerSpoke, reviewerSessionId: _reviewerSessionId, ...finished } = lane;
+  const {
+    reviewerSpoke: _reviewerSpoke, reviewerSessionId: _reviewerSessionId, startSessionId: _startSessionId, ...finished
+  } = lane;
   return { ...finished, items: finished.items.filter(visibleLaneItem) };
 }
 
@@ -342,6 +349,7 @@ export function conversationFeedRows(
         defaultCollapsed: false,
         reviewerSpoke: false,
         reviewerSessionId: null,
+        startSessionId: item.kind === "event" ? item.sessionId ?? null : null,
       };
     }
     if (!active) {
