@@ -219,16 +219,20 @@ if (process.env.SKIP_MCP) {
       const res = run("codex", ["mcp", "list", "--json"], { cwd: tmpdir(), timeout: 60_000 });
       return parseCodexList(res.status, res.stdout);
     };
+    const removeServer = (name) =>
+      run("codex", ["mcp", "remove", name], { cwd: tmpdir(), timeout: 60_000 }).status === 0;
     const r = registerCodexMcp({
       configFile: codexCfg, mcpEntry, url: URL_BASE,
-      name: ASH_MCP_SERVER_NAME, legacyName: LEGACY_ASH_MCP_SERVER_NAME, listServers,
+      name: ASH_MCP_SERVER_NAME, legacyName: LEGACY_ASH_MCP_SERVER_NAME, listServers, removeServer,
     });
     if (r.action === "kept") {
       if (r.enabled) ok(`codex:ash 已在 ${codexCfg} 里,不动它`);
       else warn(`codex:${codexCfg} 里的 ash 写着 enabled = false,没有替你打开`);
     } else if (r.action === "blocked" || r.action === "rolledBack") {
-      warn(`codex:${r.why},${r.action === "blocked" ? "没有动" : "已原样还回"} ${codexCfg};`
-        + `先跑 codex mcp list 看它报什么、修好再重跑 setup`);
+      warn(`codex:${r.why},${r.action === "blocked" ? "没有动" : "已原样还回"} ${codexCfg}`
+        + `${r.backup ? `(备份在 ${r.backup})` : ""};先跑 codex mcp list 看它报什么、修好再重跑 setup`);
+    } else if (r.legacyLeft) {
+      warn(`codex:已写入 ash,但旧 harness 条目没删掉(两个名字都能用);可手动执行 codex mcp remove harness`);
     } else {
       ok(`codex:${r.action === "migrated" ? "旧 harness 条目已迁移为 ash" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
     }

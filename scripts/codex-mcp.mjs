@@ -6,8 +6,11 @@
 // 那是重复定义，codex 整份配置解析失败（`duplicate key`），别的 MCP 一起没了（新链第 4 轮审查
 // 第 2 条）。而「跑一次 npm run setup」正是派审预检给的补救办法。
 //
-// 所以：codex 读不动现在这份配置就不写；写完再问一遍，读不动了就原样还回去。
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// 所以：codex 读不动现在这份配置就不写；写完再问一遍，读不动了就原样还回去。迁移历史名时
+// 删旧条目也交给 codex 自己（`codex mcp remove`）—— 上一版按行首表头字面量删，
+// `[mcp_servers.harness.tools.*]` 这类子表留成一条没有 command 的孤儿，codex 整份拒载，
+// 迁移必然回滚，还把一份本来健康的配置说成「读不出来」（新链第 5 轮审查第 2 条）。
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 /** `codex mcp list --json` 的结果 → `{ ok, servers:[{name, enabled}] }` 或 `{ ok:false, why }`。 */
@@ -22,23 +25,20 @@ export function parseCodexList(status, stdout) {
   }
 }
 
-/** 删掉历史名那几段规范拼法的表（迁移用；带引号的拼法删不掉也无妨 —— 名字不同，不会重复）。 */
-function withoutMcpServer(config, name) {
-  const sections = new Set([`mcp_servers.${name}`, `mcp_servers.${name}.env`]);
-  let skip = false;
-  return config.split(/(?<=\n)/).filter((line) => {
-    const header = /^\[([^\]]+)\]/.exec(line)?.[1];
-    if (header) skip = sections.has(header);
-    return !skip;
-  }).join("");
+/** 同目录临时文件 + rename：codex 读到的要么是旧的、要么是写完的，没有半截。 */
+function writeAtomic(file, body) {
+  const tmp = `${file}.ash-tmp`;
+  writeFileSync(tmp, body);
+  renameSync(tmp, file);
 }
 
 /**
  * @param listServers 问 codex 本人：`() => parseCodexList(...)` 的结果
+ * @param removeServer 让 codex 本人删掉一条登记（`codex mcp remove <名>`），成功回 true
  * @returns action ∈ kept（已有，不动）| blocked（codex 读不动现有配置，没写）| added | migrated
- *          | rolledBack（写完 codex 读不动了，已还原）
+ *          | rolledBack（写完 codex 读不动了，已还原）；added 带 legacyLeft = 历史名没删掉
  */
-export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, listServers }) {
+export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, listServers, removeServer }) {
   const before = listServers();
   if (!before.ok) return { action: "blocked", why: before.why };
   const current = before.servers.find((s) => s.name === name);
@@ -50,10 +50,20 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
   // 先备份再写:改的是用户自己的配置文件,出错要能一键还原。
   const backup = `${configFile}.bak-ash-setup`;
   if (existing !== null) copyFileSync(configFile, backup);
+  const restore = (why) => {
+    if (existing !== null) writeAtomic(configFile, existing);
+    else rmSync(configFile, { force: true });
+    return { action: "rolledBack", why, backup: existing !== null ? backup : null };
+  };
+  // 删不掉就留着：两个名字 ash 都认，名字不同不会重复定义；下面如实报「没删掉」。
+  if (legacy && !removeServer(legacyName)) {
+    const now = existsSync(configFile) ? readFileSync(configFile, "utf8") : null;
+    if (now !== existing) return restore(`codex mcp remove ${legacyName} 失败`);
+  }
+  const base = existsSync(configFile) ? readFileSync(configFile, "utf8") : "";
   // TOML 的字符串是转义的,Windows 路径里的 `\` 必须成对写,否则 `\d`、`\n`
   // 会被当转义序列吞掉 —— 装完看着成功,codex 起 MCP 时才报路径不存在。
-  const base = legacy ? withoutMcpServer(existing ?? "", legacyName) : (existing ?? "");
-  writeFileSync(
+  writeAtomic(
     configFile,
     `${base}\n[mcp_servers.${name}]\ncommand = "node"\nargs = [${JSON.stringify(mcpEntry)}]\n\n`
       + `[mcp_servers.${name}.env]\nASH_URL = "${url}"\n`,
@@ -61,9 +71,10 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
 
   const after = listServers();
   if (!after.ok || !after.servers.some((s) => s.name === name)) {
-    if (existing !== null) writeFileSync(configFile, existing);
-    else rmSync(configFile, { force: true });
-    return { action: "rolledBack", why: after.ok ? `写完 codex 仍看不到 ${name}` : after.why };
+    return restore(after.ok ? `写完 codex 仍看不到 ${name}` : after.why);
   }
-  return { action: legacy ? "migrated" : "added", backup: existing !== null ? backup : null };
+  const backupPath = existing !== null ? backup : null;
+  const legacyLeft = after.servers.some((s) => s.name === legacyName);
+  if (legacy && !legacyLeft) return { action: "migrated", backup: backupPath };
+  return { action: "added", backup: backupPath, legacyLeft };
 }

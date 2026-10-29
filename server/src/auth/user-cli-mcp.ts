@@ -185,7 +185,9 @@ export function hostCliConfigFile(agentType: string, hostHome: string = homedir(
 
 function ensureClaudeAshMcp(dir: string, hostHome: string): PersonalAshMcp {
   const file = join(dir, ".claude.json");
-  const doc = readJsonObject(file);
+  const read = readForWrite(file);
+  if (!read) return fail(`${file} 读不出来，没有自动补写 —— 修好它的权限再重启`);
+  const doc = parseJsonObject(read.text);
   if (!doc) return fail(`${file} 解析不了，没敢动它 —— 手工修好或删掉它再重启`);
   const already = claudeServerName(doc);
   if (already) return ok(already);
@@ -195,7 +197,7 @@ function ensureClaudeAshMcp(dir: string, hostHome: string): PersonalAshMcp {
   // 规范名落地:宿主那份即使是历史名 harness,定义搬过来也按 ash 登记(同一个 server,
   // setup 迟早要迁;两边都叫 ash 之后,提示词里那句「ash MCP」才对得上工具名)。
   doc.mcpServers = { ...servers, [ASH_MCP_SERVER_NAME]: entry };
-  writeAtomic(file, `${JSON.stringify(doc, null, 2)}\n`);
+  writeAtomic(read, `${JSON.stringify(doc, null, 2)}\n`);
   return ok(ASH_MCP_SERVER_NAME);
 }
 
@@ -229,9 +231,9 @@ function ensureCodexAshMcp(dir: string, hostHome: string): PersonalAshMcp {
   // append 一份 —— 同名表重复，codex 整份配置都读不出来（新链第 2 轮审查第 5 条）。
   // 所以只有扫描器**确定没有**时才写；关着的、看不准的都不碰，如实报出来。
   const file = join(dir, "config.toml");
-  // 读不动的文件不能当空的：下面那次 writeAtomic 会拿一份只含 ash 的新文件把它整个盖掉。
-  if (fileState(file) === "unreadable") return fail(`${file} 读不出来，没有自动追加`);
-  const current = readTextOrEmpty(file);
+  const read = readForWrite(file);
+  if (!read) return fail(`${file} 读不出来，没有自动追加`);
+  const current = read.text ?? "";
   const scan = scanCodexToml(current);
   if (scan.doubt) return fail(`看不准 ${file} 里有没有 ash MCP 登记（${scan.doubt}），没有自动追加，免得写出重复的表`);
   const names = [...scan.servers.keys()];
@@ -242,7 +244,7 @@ function ensureCodexAshMcp(dir: string, hostHome: string): PersonalAshMcp {
   }
   const block = hostCodexBlock(hostHome) ?? builtinCodexBlock();
   if (!block) return fail(NO_SOURCE);
-  writeAtomic(file, current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`);
+  writeAtomic(read, current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`);
   return ok(ASH_MCP_SERVER_NAME);
 }
 
@@ -271,15 +273,15 @@ function builtinCodexBlock(): string | null {
 
 const localUrl = () => `http://127.0.0.1:${currentListeningPort() ?? 4317}`;
 
-/** 文件不存在 = 空文档(我们来建);解析不了 = null(**别动它**,上层如实报错)。 */
+/** 只读用:读不动、解析不了都是 null(调用方当「没有」或「判不了」)。 */
 function readJsonObject(file: string): Record<string, unknown> | null {
-  let raw: string;
-  try {
-    raw = readFileSync(file, "utf8");
-  } catch {
-    return {};
-  }
-  if (!raw.trim()) return {};
+  const read = readForWrite(file);
+  return read ? parseJsonObject(read.text) : null;
+}
+
+/** `null` 文本 = 确认没有这个文件 → 空文档(我们来建);解析不了 = null(**别动它**,上层如实报错)。 */
+function parseJsonObject(raw: string | null): Record<string, unknown> | null {
+  if (raw === null || !raw.trim()) return {};
   try {
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
@@ -296,8 +298,27 @@ function readTextOrEmpty(file: string): string {
   }
 }
 
-/** 同目录临时文件 + rename:CLI 自己也在写这份文件,不能让它读到半截。 */
-function writeAtomic(file: string, body: string): void {
+/**
+ * 一次**成功**的读:`text === null` = 确认没有这个文件(ENOENT)。读不动(权限、IO、是个目录)
+ * 返回 null —— 那不是「空」,拿它当空去写,就是一份只剩 MCP 登记的新文件把用户的整份配置
+ * 盖掉,界面还报「已接好」(新链第 5 轮审查第 1 条:claude 那半边就是这么丢的)。
+ */
+type ConfirmedRead = { readonly file: string; readonly text: string | null; readonly __confirmed: true };
+
+function readForWrite(file: string): ConfirmedRead | null {
+  try {
+    return { file, text: readFileSync(file, "utf8"), __confirmed: true };
+  } catch (e) {
+    return (e as { code?: string }).code === "ENOENT" ? { file, text: null, __confirmed: true } : null;
+  }
+}
+
+/**
+ * 同目录临时文件 + rename:CLI 自己也在写这份文件,不能让它读到半截。
+ * 只收 `readForWrite` 的结果 —— 「写之前必须拿到一次成功的读」由类型钉住,不靠各分支自己记。
+ */
+function writeAtomic(read: ConfirmedRead, body: string): void {
+  const file = read.file;
   const tmp = `${file}.ash-tmp`;
   writeFileSync(tmp, body, "utf8");
   renameSync(tmp, file);

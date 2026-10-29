@@ -133,9 +133,20 @@ try {
       id: "ex-codex-override", name: "codex+override", type: "codex",
       extraArgs: JSON.stringify(["-c", 'mcp_servers.ash.command="node"']),
     });
+    // 命令行覆盖带来的 ash 要带上去问（codex 列得出它）—— 但它不在 $CODEX_HOME/config.toml 里，
+    // 执行器注不进回合身份，跑完上报照样被拒（新链第 5 轮审查第 3 条），所以结论是「拦」，
+    // 而且要说清是身份注不进去，不是「没有登记」。登记自己声明了 env_vars 才算交得了卷。
+    const overridden = await reach({ executorId: "ex-codex-override" });
+    assert.equal(overridden.reachable, false, "F1：-c 带来的 ash 注不进回合身份 → 拦");
+    assert.match(overridden.problem ?? "", /注入回合身份/, "要说清卡在身份注入上");
+    await db.insert(agents).values({
+      id: "ex-codex-override-wired", name: "codex+override+env_vars", type: "codex",
+      extraArgs: JSON.stringify(["-c", 'mcp_servers.ash.command="node"',
+        "-c", 'mcp_servers.ash.env_vars=["ASH_TASK_ID","ASH_TURN_TOKEN","ASH_DIRECTION_TOKEN"]']),
+    });
     assert.equal(
-      (await reach({ executorId: "ex-codex-override" })).reachable, true,
-      "F1：命令行覆盖带来的 ash 必须算数",
+      (await reach({ executorId: "ex-codex-override-wired" })).reachable, true,
+      "F1：覆盖里自己声明了 env_vars → 身份进得去，必须算数",
     );
     // 无关的 `-c` 不该被带上去（带了也只是噪音，但判定不能因此翻转）
     await db.insert(agents).values({
@@ -310,9 +321,24 @@ try {
     assert.equal(off.reachable, false, "F3：禁用的答案也不能被 stderr 冲掉");
     assert.match(off.problem ?? "", /turned off/, "要把 CLI 给的停用原因带出来");
 
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\n');
     fake('[{"name":"ash","enabled":true}]');
     const on = await ashMcpReachability({ agentType: "codex" });
     assert.equal(on.reachable, true, "F3：正常登记照样放行");
+
+    // 证据面 = 生效面（新链第 5 轮审查第 3 条）：CLI 列得出的登记不在 $CODEX_HOME/config.toml 里
+    // （受信任项目的 .codex/config.toml 合进来的那种），执行器注不进回合身份 → 交不了卷。
+    writeCodex('model = "x"\n');
+    const elsewhere = await ashMcpReachability({ agentType: "codex" });
+    assert.equal(elsewhere.reachable, false, "CLI 列得出、注入那一侧看不见 → 拦");
+    assert.match(elsewhere.problem ?? "", /注入回合身份/);
+    fake('[{"name":"ash","enabled":true,"transport":{"type":"stdio","env_vars":["ASH_TASK_ID","ASH_TURN_TOKEN"]}}]');
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true,
+      "登记自己声明了把身份变量放进来 → 放行");
+    writeCodex('[mcp_servers.harness]\ncommand = "node"\n');
+    fake('[{"name":"harness","enabled":true},{"name":"ash","enabled":true}]');
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true,
+      "列出来的几条里有一条注得进去就够");
 
     // 超集太大时的收口:问不全就不准拦(拿假 CLI 测,每次 ~10ms,真 claude 要 800ms×2×N)。
     fake("[]");
@@ -359,6 +385,9 @@ try {
     // ── B2:两个兼容名是**集合**,不是「取第一个」──────────────────────────
     // 真机实测过的形状:新名那份被关掉、旧名那份还连着,codex app-server 确实列出了
     // harness 的 report_stage,派审却因为第一份被禁用而整轮 409(第 3 轮审查 B2)。
+    // 配置文件跟着 CLI 的说法写:注入那一侧读的就是它(上面 delete 过 CODEX_HOME,不设回来就读到宿主真实配置)。
+    useCodexHome();
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\nenabled = false\n[mcp_servers.harness]\ncommand = "node"\n');
     fake('[{"name":"ash","enabled":false,"disabled_reason":"turned off"},{"name":"harness","enabled":true}]');
     assert.equal(
       (await ashMcpReachability({ agentType: "codex" })).reachable, true,

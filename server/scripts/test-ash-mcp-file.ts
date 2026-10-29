@@ -264,6 +264,20 @@ try {
     writeCodex('note = """\n[mcp_servers.ash]\n"""\n');
     assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true, "判不了就放行");
 
+    // 登记只在项目的 .codex/config.toml 里：这一档判不了 ⇒ 放行，但执行器只往用户级那份里
+    // 的登记注入回合身份 —— 至少说一句（新链第 5 轮审查第 3 条）。用户级有登记时不啰嗦。
+    const projCodex = join(stage, "proj-codex");
+    mkdirSync(join(projCodex, ".codex"), { recursive: true });
+    writeFileSync(join(projCodex, ".codex", "config.toml"), '[mcp_servers.ash]\ncommand = "node"\n');
+    writeCodex('model = "x"\n');
+    const projOnly = await ashMcpReachability({ agentType: "codex", cwdCandidates: [projCodex] });
+    assert.equal(projOnly.reachable, true, "项目里配了 mcp_servers ⇒ 判不了 ⇒ 放行");
+    assert.match(projOnly.warning ?? "", /回合身份/, "但要说清身份注不进去的风险");
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\n');
+    const both = await ashMcpReachability({ agentType: "codex", cwdCandidates: [projCodex] });
+    assert.equal(both.reachable, true);
+    assert.equal(both.warning, null, "用户级那份注得进去 ⇒ 没什么好提醒的");
+
     // 带 extraArgs：文件里看不到命令行覆盖，不下硬结论（同 claude 那条）。
     writeCodex('model = "x"\n');
     const { agents } = await import("../src/db/schema.js");

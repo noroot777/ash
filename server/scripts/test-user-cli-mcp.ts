@@ -288,6 +288,20 @@ const HOST_CLAUDE = JSON.stringify({
   }
 }
 
+// ⑰ 个人配置**读不动**(权限、IO、被换成了目录)不是「空的」:一个字都不写,如实报出来。
+//    上一版 claude 那半边把读失败吞成空文档,随即用一份只剩 MCP 登记的新文件整个盖掉,
+//    还报「已接好」(新链第 5 轮审查第 1 条)。用同名目录造「读不动」:chmod 在 Windows 和 root 下不生效。
+for (const agent of ["claude", "codex"] as const) {
+  const { host, dir } = bench({ claude: HOST_CLAUDE, codex: `[mcp_servers.ash]\ncommand = "node"\n` });
+  const file = join(dir, agent === "claude" ? ".claude.json" : "config.toml");
+  mkdirSync(file);
+  writeFileSync(join(file, "keep"), "x", "utf8");
+  const state = ensureAshMcp(dir, agent, host);
+  assert.equal(state.configured, false, `${agent}:读不动不能报「已接好」`);
+  assert.match(state.problem ?? "", /读不出来/, `${agent}:要说清是读不出来`);
+  assert.equal(readFileSync(join(file, "keep"), "utf8"), "x", `${agent}:读不动的东西原样留着`);
+}
+
 // Windows 删不掉还开着的库文件：退出时那句 rmSync(stage) 会撞 EBUSY，断言全过也判红。
 await releaseTmpDb();
-console.log("test-user-cli-mcp: ✅ 16 组全过");
+console.log("test-user-cli-mcp: ✅ 17 组全过");

@@ -64,6 +64,8 @@
 // 上限乘上去是几分钟,而派审请求和启动自检都在等它。所以整次预检有一个总预算,用完了剩下的
 // 一律按「问不出来」放行(新链第 1 轮审查第 4、5 条)。
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
 import { fileAshMcpVerdict, launchHint } from "./ash-mcp-file.js";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
@@ -71,6 +73,7 @@ import { probeCli } from "./ash-mcp-probe.js";
 import { executorOwnerScope } from "./auth/dispatch-gate.js";
 import { runEnvForOwner } from "./auth/run-env.js";
 import { cliSpec } from "./executors/catalog/index.js";
+import { codexAshMcpServerName } from "./executors/codex-mcp.js";
 import { effectiveExecutorContext } from "./executors/index.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
 
@@ -140,7 +143,9 @@ type Verdict =
   | { state: "present"; hint?: string | null }
   | { state: "unknown"; why: string }
   | { state: "absent" }
-  | { state: "disabled"; detail: string };
+  | { state: "disabled"; detail: string }
+  /** 登记在也开着，但这一轮注不进回合身份 —— 工具拿得到，上报一律被拒（见 `askCodex`）。 */
+  | { state: "unwired"; detail: string };
 
 const OUT_OF_BUDGET: Verdict = { state: "unknown", why: "预检的时限用完了，没问完" };
 /** 探测层的两种「没答案」收场，统一成判据层的 unknown。 */
@@ -228,8 +233,25 @@ async function askCodex(
   // 都列出来、都接起来。上一版只看排在前面的那一份，于是「新名那份被关掉、旧名那份还
   // 连着」会被整轮拒掉 —— 第 3 轮审查在真机上让 codex app-server 列出了 harness 的
   // report_stage，派审仍然 409。所以结论必须下在**集合**上，不是第一项上。
-  const live = mine.find((r) => r.enabled !== false);
-  if (live) return { state: "present", hint: codexLaunchHint(live) };
+  const live = mine.filter((r) => r.enabled !== false);
+  // **够得着工具 ≠ 交得了卷**：上报要带回合身份，而 codex 默认过滤 MCP 子进程的环境，身份
+  // 只能靠执行器往**它读得到的那份**登记里注 `env_vars`（`codexAshMcpServerName`，只看
+  // `$CODEX_HOME/config.toml`）。CLI 列出来的登记若来自别处 —— 受信任项目的
+  // `.codex/config.toml`、profile 里的 `-c mcp_servers.…` —— 工具照样在，身份却注不进去，
+  // 跑完上报照样被拒（新链第 5 轮审查第 3 条）。所以「在」要落在注得进去的那一条上：
+  // 名字对得上注入目标，或者登记自己已经声明了把身份变量放进来。
+  const target = codexAshMcpServerName(env.CODEX_HOME);
+  const wired = live.find((r) => r.name === target || carriesTurnIdentity(r));
+  if (wired) return { state: "present", hint: codexLaunchHint(wired) };
+  if (live.length) {
+    const names = live.map((r) => `[mcp_servers.${String(r.name)}]`).join("、");
+    return {
+      state: "unwired",
+      detail: `codex 列得出 ${names}，但它不在 ${codexUserConfig(env)} 里（多半写在项目的 .codex/config.toml`
+        + `或执行器的 -c 参数里），ash 只能往那份用户级配置里的登记注入回合身份 —— 工具拿得到，上报会被拒。`
+        + `把这条登记挪进用户级配置（或给它加上 env_vars = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"]）`,
+    };
+  }
   const detail = mine.map((r) => {
     const why = typeof r.disabled_reason === "string" && r.disabled_reason.trim()
       ? r.disabled_reason.trim()
@@ -238,6 +260,16 @@ async function askCodex(
   }).join("、");
   return { state: "disabled", detail: `codex 自己报告这些 ash MCP 登记都没启用：${detail}` };
 }
+
+/** 登记自己有没有把回合身份变量放进 MCP 子进程（`transport.env_vars`）。 */
+function carriesTurnIdentity(row: Record<string, unknown>): boolean {
+  const t = row.transport && typeof row.transport === "object" ? row.transport as Record<string, unknown> : {};
+  const vars = Array.isArray(t.env_vars) ? t.env_vars : [];
+  return vars.some((v) => (typeof v === "string" ? v : (v as { name?: unknown } | null)?.name) === "ASH_TURN_TOKEN");
+}
+
+const codexUserConfig = (env: NodeJS.ProcessEnv): string =>
+  join(env.CODEX_HOME?.trim() || join(homedir(), ".codex"), "config.toml");
 
 /**
  * codex 的 `mcp list --json` 只读配置、不启动那个 server（`enabled` 是配置里的开关），所以
@@ -341,13 +373,17 @@ async function reachWith(
       : await askCodex(bin, extraArgs, env, dir, budget);
     if (v.state === "present") return ok(v.hint ?? null);
     if (v.state === "unknown") return fromFiles(agentType, extraArgs, env, all, v.why);
-    if (v.state === "disabled") worst = v;            // 比 absent 更具体,留它来说话
+    if (v.state === "unwired") worst = v;             // 最具体:登记在、开着,只是身份注不进去
+    else if (v.state === "disabled" && worst.state !== "unwired") worst = v;
   }
   // 超集没问全(目录太多被截断)时,「CLI 全都说没有」不再是个确定的结论 —— 剩下的交给文件档。
   if (!complete) {
     return fromFiles(agentType, extraArgs, env, all, `候选目录超过 ${MAX_PROBE_DIRS} 个，CLI 只问了前 ${MAX_PROBE_DIRS} 个`);
   }
 
+  if (worst.state === "unwired") {
+    return { reachable: false, problem: `${worst.detail}（自查：${HOW_TO_CHECK.codex}）`, warning: null, basis: "cli" };
+  }
   if (worst.state === "disabled") {
     return {
       reachable: false,
@@ -386,7 +422,15 @@ function fromFiles(
   if (extraArgs.length) return ok();
   const v = fileAshMcpVerdict(agentType, env, dirs);
   if (v.state === "present") return ok(v.hint);
-  if (v.state === "unknown") return ok();
+  if (v.state === "unknown") {
+    // 判不了就放行；但 codex 的用户级配置里确实没有能注入身份的登记时，就算项目里那份能用，
+    // 这一轮也交不了卷（见 `askCodex` 那段）—— 证据不够硬，不拦，至少说一句。
+    if (agentType === "codex" && !codexAshMcpServerName(env.CODEX_HOME)) {
+      return ok(`看不准这一轮有没有 ash MCP（${v.why}）；另外 ${codexUserConfig(env)} 里没有 ash 登记，`
+        + `ash 往 MCP 注入回合身份只认那一份 —— 若登记只在项目配置里，这一轮跑完上报会被拒`);
+    }
+    return ok();
+  }
   const basis = `（这是读配置文件得出的，没经 ${agentType} 本人确认 —— 这一次问不了它：${whyNotAsked}）`;
   return {
     reachable: false,
