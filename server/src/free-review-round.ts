@@ -6,7 +6,7 @@
 // 本文件），`task-retry-turn.ts` 直接从这里取重跑入口，不用绕回去。
 import type { AgentType } from "@ash/shared";
 import { and, desc, eq } from "drizzle-orm";
-import { ashMcpReachability } from "./ash-mcp-reachability.js";
+import { gateAshMcpBeforeLaunch } from "./ash-mcp-launch-gate.js";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, projects, sessions, tasks } from "./db/schema.js";
@@ -106,46 +106,8 @@ export async function failReviewStart(run: ReviewRunRow, message: string): Promi
 }
 
 
-/** `launchReviewRound` 传给预检的候选目录。见下面那段注释。 */
-export type ReviewCwdSession = { cwd: string | null; worktreePath: string | null };
-
-/**
- * 这一轮**可能**跑在哪些目录里 —— 给预检用的**超集**，不是「哪一个」。
- *
- * ── 为什么是超集而不是复刻 orchestrator ─────────────────────────────────────
- *
- * 前两轮都栽在「再维护一份近似的目录选择」上：第 1 版压根没传目录，第 2 版照抄了
- * `recorded` 那条 `||` 链，仍跟真货有三处分歧（诊断会话没过滤、没有显式 resumeSessionId
- * 时的 prev 选择规则、失效目录的回退方式）—— 每一处都够拦掉一轮本来能跑的审查。
- *
- * 而真正的解析没法共用：它跟 prev 的选择绑在一起（`cliGoalSessionCandidates`、
- * `sessionResumableHere`、codex 版本守卫），中途还会写库、往旧会话里写说明。预检必须
- * **只读**，也必须排在起跑之前，拿不到那份结果。
- *
- * 所以换个角度：预检的职责是「**确定**拿不到才拦」，它不需要知道是哪一个目录，只需要
- * 一个能论证的超集 —— orchestrator 的 `recorded` 必然取自
- * `opts.cwd / prev?.cwd / prev?.worktreePath / all[*]?.cwd / all[*]?.worktreePath`，
- * 失效时回退 `taskWorkspace`，而 `prev` 和 `all[0]` 都来自这条任务的会话集合。把**全部**
- * 会话的那两个字段加上显式 cwd 和任务工作区都收进来，就一定罩得住它最终选中的那个。
- *
- * 配上预检那边「任一目录有登记就放行」，误拦就不可能发生：它选中的目录若有登记，那个
- * 目录一定在这张表里，一定会被问到。orchestrator 以后改选法也不会把这条打破。
- * 代价是「确实没有登记」时要多问几次 —— 而那时本来就要拦人。
- */
-export function reviewCwdCandidates(
-  explicitCwd: string | undefined,
-  sessionsOfTask: ReviewCwdSession[],
-  workspacePath: string | undefined,
-): string[] {
-  const out: string[] = [];
-  const push = (dir: string | null | undefined) => {
-    if (dir && !out.includes(dir)) out.push(dir);
-  };
-  push(explicitCwd);
-  for (const s of sessionsOfTask) { push(s.cwd); push(s.worktreePath); }
-  push(workspacePath);
-  return out;
-}
+// 预检的候选目录超集挪到了 `ash-mcp-launch-gate.ts`（验证轮、辩论也要用）；这里留一个转出口。
+export { reviewCwdCandidates, type ReviewCwdSession } from "./ash-mcp-launch-gate.js";
 
 /**
  * 崩掉的那一轮能不能**从中断处接着做**：那条 CLI 会话在崩掉的那一回合里干过活吗。
@@ -192,27 +154,16 @@ export async function launchReviewRound(
   // 审查者交卷靠 ash MCP 的 report_stage，而那条登记在**它自己的 CLI 配置里**，ash 只能
   // 问、不能替它注入。缺了的话这一轮会完整跑完、报告也写得好好的，最后一步才发现没有
   // 工具可调 —— 一轮审查动辄几十分钟、几百万 token（2026-10-28 现场）。所以在这儿拦，
-  // 抛出去由三个调用点统一走 failReviewStart。
+  // 抛出去由三个调用点统一走 failReviewStart。验证轮、辩论走的是同一道闸（ash-mcp-launch-gate.ts）。
   //
   // **排在 cwd 算出来之后**：claude 的项目级登记（`--scope local`）只在那个目录下看得见，
-  // 在它之前问等于拿「别的目录没有」去拦这一轮（第 1 轮审查 F1）。判据刻意保守 ——
-  // 问的是 CLI 自己，而且只有它明确说「没有」才拦，见 ash-mcp-reachability.ts。
-  // 候选目录按 orchestrator 挑目录的**同一条链**给（`orchestrator.ts` 的 `recorded`）：
-  // 显式 cwd → 要续的那条会话 → 最近一条会话 → 任务工作区。只传单个 `cwd` 不够 ——
+  // 在它之前问等于拿「别的目录没有」去拦这一轮（第 1 轮审查 F1）。只传单个 `cwd` 不够 ——
   // 普通工作区分支的 `cwd` 一直是 undefined，于是预检在 **server 进程**的目录里问，
-  // 任务目录里接好的 claude 被判成没登记（第 2 位审查者 F1）。
-  const sess = await db.select({ cwd: sessions.cwd, worktreePath: sessions.worktreePath })
-    .from(sessions).where(eq(sessions.taskId, task.id)).orderBy(desc(sessions.startedAt));
-  const reach = await ashMcpReachability({
-    ownerUserId: task.ownerUserId,
-    agentType: run.agentType,
-    executorId: run.executorId,
-    cwdCandidates: reviewCwdCandidates(cwd, sess, workspacePath),
+  // 任务目录里接好的 claude 被判成没登记（第 2 位审查者 F1），所以闸那边按超集问。
+  await gateAshMcpBeforeLaunch(task, { agentType: run.agentType, executorId: run.executorId }, "审查者", {
+    cwd,
+    workspacePath,
   });
-  if (!reach.reachable) throw new Error(`审查者交不了卷：${reach.problem}`);
-  // 放行了、但登记看着起不来：不拦（那是推断），但得留在时间线上 —— 这一轮要是又跑完没结论，
-  // 用户回头能看到这一句，而不是只剩「未能正常给出结论」（新链第 1 轮审查第 3 条）。
-  if (reach.warning) await appendTaskTimeline(task.id, `派审预检提示：${reach.warning}`);
   const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
   // 重跑分两档，差别不在按钮而在**送进去的那句话**：上下文还在就只说「接着做」（一条崩在
   // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。

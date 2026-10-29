@@ -60,8 +60,15 @@ const readEdge = (path: string, edge: "head" | "tail"): string => {
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
-/** 这一轮通道到底怎么了。null = 没查出来，只能给通用提示。 */
-type Evidence = { connected: boolean; detail: string } | null;
+/**
+ * 这一轮通道到底怎么了。null = 没查出来，只能给通用提示。
+ *
+ * `definite` = 这份证据**点名 ash 且是确定的坏**：claude 的 init 清单里没有 ash，或者 ash 的
+ * 状态是确定的失败（`pending` 不算 —— 还在连，工具可能稍后就到）；codex 的 stderr 里有**点名
+ * ash** 的 MCP 报错（别的 server 的报错不算）。普通回合那句说明只认这一种（见
+ * `noteTurnChannelGap`），审查回合两种都用。
+ */
+type Evidence = { connected: boolean; detail: string; definite: boolean } | null;
 
 /**
  * claude：`{"type":"system","subtype":"init",…,"mcp_servers":[{"name":"ash","status":"connected"}]}`
@@ -88,7 +95,7 @@ export function claudeMcpEvidence(text: string): Evidence {
     // 偏掉的诊断 —— 跟派审门禁上那条是同一类（第 3 轮审查 B2）。
     const mine = rows.filter((s) => typeof s.name === "string" && wanted.has(s.name));
     if (!mine.length) {
-      return { connected: false, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 ash。` };
+      return { connected: false, definite: true, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 ash。` };
     }
     const ash = mine.find((s) => s.status === "connected") ?? mine[0]!;
     const status = typeof ash.status === "string" ? ash.status : "";
@@ -99,8 +106,12 @@ export function claudeMcpEvidence(text: string): Evidence {
       // **只说连上了，别替它断言工具在手**：init 事件写的是「server 连上没有」，不是
       // 「report_stage 暴露了没有」—— 执行器的工具白/黑名单能把具体工具挡掉，那时说
       // 「多半是它自己漏了上报」就是把限制归咎于审查者（第 2 位审查者 N2）。
-      ? { connected: true, detail: `这条会话启动时 ash MCP 是连上的${others}。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
-      : { connected: false, detail: `这条会话启动时 ash MCP（${String(ash.name)}）的状态是「${status || "未知"}」，不是 connected${others}。` };
+      ? { connected: true, definite: false, detail: `这条会话启动时 ash MCP 是连上的${others}。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
+      : {
+          connected: false,
+          definite: !!status && status !== "pending",
+          detail: `这条会话启动时 ash MCP（${String(ash.name)}）的状态是「${status || "未知"}」，不是 connected${others}。`,
+        };
   }
   return null;
 }
@@ -119,6 +130,7 @@ export function codexMcpEvidence(text: string): Evidence {
   const picked = (named.length ? named : hits).slice(-2);
   return {
     connected: false,
+    definite: named.length > 0,
     detail: `codex 的 stderr 里有这些跟 MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`,
   };
 }
@@ -127,6 +139,14 @@ const HOW_TO_CHECK: Record<string, string> = {
   claude: "claude mcp get ash",
   codex: "codex mcp list --json（看 ash 在不在、enabled 是不是 true）",
 };
+
+/** 这一回合留在盘上的通道证据：claude 的 init 是第一条事件，codex 的诊断取 stderr 末尾。 */
+function turnEvidence(a: { taskId: string; sessId: string; turnStart: string; agentType: AgentType }): Evidence {
+  const paths = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
+  return a.agentType === "claude"
+    ? claudeMcpEvidence(readEdge(paths.out, "head"))
+    : a.agentType === "codex" ? codexMcpEvidence(readEdge(paths.err, "tail")) : null;
+}
 
 /**
  * 刚刚那一轮审查是不是**判成了无结论**（round 落 error、conclusion 为空）。
@@ -173,10 +193,7 @@ export async function noteReviewerChannelGap(a: {
   if (!(await concludedNothing(a.taskId, a.review))) return false;
   // 干过活才算数：CLI 没起来、起来就崩的那种另有诊断，这里插一句只会误导。
   if (!(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) return false;
-  const paths = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
-  const evidence = a.agentType === "claude"
-    ? claudeMcpEvidence(readEdge(paths.out, "head"))      // init 是第一条事件
-    : a.agentType === "codex" ? codexMcpEvidence(readEdge(paths.err, "tail")) : null;  // 诊断取末两行
+  const evidence = turnEvidence(a);
   const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
   const why = evidence
     ? evidence.detail
@@ -191,6 +208,38 @@ export async function noteReviewerChannelGap(a: {
   await appendTaskTimeline(
     a.taskId,
     `这一轮的审查报告可能已经写完了，只是结论没能上报到 ash。${why}${next}`,
+    { sessionId: a.sessId },
+  );
+  return true;
+}
+
+/**
+ * 普通回合「没交卷」时的同一句说明（原任务第 1 轮审查第 3 条：普通任务只留下一句没有原因的
+ * 「失败」）。返回「说没说」。
+ *
+ * 跟审查那条的差别在判据上：审查回合「没给出结论」是 ash 自己的事实，没有证据也敢推断一句
+ * 「最可能是没有 report_stage」；普通回合没交卷的头号原因是 agent 漏调了 complete_task，没有
+ * 直接证据就说「通道坏了」是误诊。所以这里**只认点名 ash 的确定证据**（`Evidence.definite`），
+ * 拿不到就不说话 —— 结算说明里那句通用的「常见原因」已经在了。
+ *
+ * 调用方只在「exit 0 却没交卷、落了 failed」那一支调：被停的、交过卷的、以提问/检查点暂停的
+ * 回合都走不到这里（后两种本身就证明 ash MCP 是通的）。
+ */
+export async function noteTurnChannelGap(a: {
+  taskId: string;
+  sessId: string;
+  turnStart: string;
+  agentType: AgentType;
+}): Promise<boolean> {
+  if (!(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) return false;
+  const evidence = turnEvidence(a);
+  if (!evidence?.definite) return false;
+  const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
+  await appendTaskTimeline(
+    a.taskId,
+    "这一轮没交卷多半不是 agent 漏了，而是它手上没有 ash 的工具：complete_task、ask_question、pause_task 都是 ash MCP 提供的，"
+      + `通道不在，这一轮干得再好也交不上（自查：${check}）。修好之后点重试，它会从中断处接着做、只补交卷。`
+      + `证据：${evidence.detail}`,
     { sessionId: a.sessId },
   );
   return true;

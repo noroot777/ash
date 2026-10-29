@@ -1,5 +1,6 @@
 import { mkdirSync, createWriteStream } from "node:fs";
 import { markdownImageAccounting } from "./agent-image-journal.js";
+import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
@@ -276,6 +277,8 @@ export async function runTask(
       agentUnitToken: handle.detached?.unitToken ?? null,
     };
     await db.insert(sessions).values(sessRow);
+    // 这一轮够不够得着 ash MCP：后台问，只提示、不拦、不等（ash-mcp-turn-hint.ts）。排在会话行之后：提示写进这一条。
+    if (!localCommand) void hintAshMcpForTurn({ taskId, agentType, executorId: profileId, ownerUserId: runOwner ?? null, cwd: ws.path, sessionId: sessId });
     // 回合开始就落一行：收尾那下写不成时,「开了没收口」才有据可查(光靠计数对不出位置)。
     await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
 

@@ -218,7 +218,8 @@
     "test:duet-image-ownership": "tsx scripts/test-duet-image-ownership.ts",
     "test:ash-mcp-reach": "tsx scripts/test-ash-mcp-reach.ts",
     "test:ash-mcp-probe": "tsx scripts/test-ash-mcp-probe.ts",
-    "test:ash-mcp-file": "tsx scripts/test-ash-mcp-file.ts"
+    "test:ash-mcp-file": "tsx scripts/test-ash-mcp-file.ts",
+    "test:ash-mcp-launch": "tsx scripts/test-ash-mcp-launch.ts"
   },
   "dependencies": {
     "@ash/shared": "*",
