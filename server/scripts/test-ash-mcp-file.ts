@@ -102,7 +102,11 @@ try {
 
     // CODEX_HOME 指到别处时，宿主 ~/.codex/config.toml 不是项目配置 —— 任务目录在 $HOME 下、
     // 一路没有 git 根也一样（审查证据 A 第 4 行就是这个形状）。
-    const fakeHome = join(stage, "fake-home");
+    // 外面套一层 git 根，让向上查找停在舞台里：Windows 的 %TEMP% 就在真实用户目录底下，
+    // 不拦的话会一路走到**真实**的 `~/.codex/config.toml`（HOME 换掉之后它不再算宿主默认）。
+    const homeBox = join(stage, "home-box");
+    mkdirSync(join(homeBox, ".git"), { recursive: true });
+    const fakeHome = join(homeBox, "fake-home");
     mkdirSync(join(fakeHome, ".codex"), { recursive: true });
     mkdirSync(join(fakeHome, "work", "task"), { recursive: true });
     writeFileSync(join(fakeHome, ".codex", "config.toml"), '[mcp_servers.ash]\ncommand = "node"\n');

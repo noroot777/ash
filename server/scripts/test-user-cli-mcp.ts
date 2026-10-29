@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { ensureAshMcp, extractTomlTables, hostAshMcp, readAshMcp } from "../src/auth/user-cli-mcp.js";
 import { REPO_DIR } from "../src/paths.js";
-import { requireTmpDb } from "./tmp-db.js";
+import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-user-cli-mcp-"));
 process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
@@ -257,4 +257,6 @@ const HOST_CLAUDE = JSON.stringify({
   }
 }
 
+// Windows 删不掉还开着的库文件：退出时那句 rmSync(stage) 会撞 EBUSY，断言全过也判红。
+await releaseTmpDb();
 console.log("test-user-cli-mcp: ✅ 15 组全过");
