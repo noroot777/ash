@@ -14,15 +14,16 @@
 // 2026-08-14 从 setup.sh 改写成 .mjs:新机器上第一条命令必须是**每个平台都跑得动**的,
 // 而 Windows 没有 bash。平台差异集中在 scripts/platform.mjs。
 import { spawnSync } from "node:child_process";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
 import { registerKimiMcp } from "./kimi-mcp.mjs";
+import { parseCodexList, registerCodexMcp } from "./codex-mcp.mjs";
 
 // setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
 // 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把规范名钉为 ash。
@@ -61,16 +62,6 @@ function run(cmd, args, opts = {}) {
 
 function npm(args, opts = {}) {
   return spawnSync(NPM, args, { stdio: "inherit", ...NPM_SPAWN_OPTS, ...opts }).status ?? 1;
-}
-
-function withoutMcpServer(config, name) {
-  const sections = new Set([`mcp_servers.${name}`, `mcp_servers.${name}.env`]);
-  let skip = false;
-  return config.split(/(?<=\n)/).filter((line) => {
-    const header = /^\[([^\]]+)\]/.exec(line)?.[1];
-    if (header) skip = sections.has(header);
-    return !skip;
-  }).join("");
 }
 
 say("▶ 1/5 检查运行环境");
@@ -223,28 +214,23 @@ if (process.env.SKIP_MCP) {
   // ── codex ─────────────────────────────────────────────────────────────────
   const codexCfg = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
   if (which("codex")) {
-    const existing = existsSync(codexCfg) ? readFileSync(codexCfg, "utf8") : "";
-    const canonicalSection = new RegExp(`^\\[mcp_servers\\.${ASH_MCP_SERVER_NAME}\\]`, "m");
-    const legacySection = new RegExp(`^\\[mcp_servers\\.${LEGACY_ASH_MCP_SERVER_NAME}\\]`, "m");
-    if (canonicalSection.test(existing)) {
-      ok(`codex:ash 已在 ${codexCfg} 里,不动它`);
+    // 在临时目录里问:codex 会把 cwd 那份项目级 `.codex/config.toml` 也合进来,这里只关心用户级。
+    const listServers = () => {
+      const res = run("codex", ["mcp", "list", "--json"], { cwd: tmpdir(), timeout: 60_000 });
+      return parseCodexList(res.status, res.stdout);
+    };
+    const r = registerCodexMcp({
+      configFile: codexCfg, mcpEntry, url: URL_BASE,
+      name: ASH_MCP_SERVER_NAME, legacyName: LEGACY_ASH_MCP_SERVER_NAME, listServers,
+    });
+    if (r.action === "kept") {
+      if (r.enabled) ok(`codex:ash 已在 ${codexCfg} 里,不动它`);
+      else warn(`codex:${codexCfg} 里的 ash 写着 enabled = false,没有替你打开`);
+    } else if (r.action === "blocked" || r.action === "rolledBack") {
+      warn(`codex:${r.why},${r.action === "blocked" ? "没有动" : "已原样还回"} ${codexCfg};`
+        + `先跑 codex mcp list 看它报什么、修好再重跑 setup`);
     } else {
-      mkdirSync(dirname(codexCfg), { recursive: true });
-      // 先备份再追加:改的是用户自己的配置文件,出错要能一键还原。
-      const backup = `${codexCfg}.bak-ash-setup`;
-      if (existing) copyFileSync(codexCfg, backup);
-      // TOML 的字符串是转义的,Windows 路径里的 `\` 必须成对写,否则 `\d`、`\n`
-      // 会被当转义序列吞掉 —— 装完看着成功,codex 起 MCP 时才报路径不存在。
-      const tomlPath = JSON.stringify(mcpEntry);
-      if (legacySection.test(existing)) {
-        writeFileSync(codexCfg, withoutMcpServer(existing, LEGACY_ASH_MCP_SERVER_NAME));
-      }
-      appendFileSync(
-        codexCfg,
-        `\n[mcp_servers.${ASH_MCP_SERVER_NAME}]\ncommand = "node"\nargs = [${tomlPath}]\n\n`
-        + `[mcp_servers.${ASH_MCP_SERVER_NAME}.env]\nASH_URL = "${URL_BASE}"\n`,
-      );
-      ok(`codex:${legacySection.test(existing) ? "旧 harness 条目已迁移为 ash" : "已写入"} ${codexCfg}${existing ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
+      ok(`codex:${r.action === "migrated" ? "旧 harness 条目已迁移为 ash" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
     }
   } else {
     warn("没装 codex CLI,跳过它的 MCP 注册");

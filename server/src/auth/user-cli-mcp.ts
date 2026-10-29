@@ -28,7 +28,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
-import { scanCodexToml } from "../ash-mcp-file.js";
+import { extractTomlTables, scanCodexToml } from "../codex-toml.js";
+
+export { extractTomlTables } from "../codex-toml.js";
 import { currentListeningPort } from "../listening-port.js";
 import { REPO_DIR } from "../paths.js";
 
@@ -111,10 +113,9 @@ export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegist
         ? { state: "present", serverName: name, detail: "" }
         : none("这个配置目录里没有 ash MCP 登记");
     }
-    // **不用 `codexAshMcpServerName`**：它是执行器注入 `env_vars` 用的严格行首正则，
-    // 认不出 `[mcp_servers."ash"]`、缩进表头，也看不见 `enabled = false` —— 禁用的登记被
-    // 它报成「在」，启动自检的快速通道于是直接放过，那道本来算得出「没启用」的 CLI 确认
-    // 被跳过（新链第 1 轮审查第 2 条）。这里要的是三态判断，交给按表头/键路径认的扫描器。
+    // 和执行器注入（`codexAshMcpServerName`）读的是同一个扫描器，但这里要三态：注入那边只要
+    // 「往哪个名字里塞」，这里还得分出「关着」与「扫描器没把握」—— 禁用的登记若被报成「在」，
+    // 启动自检的快速通道会放过那道算得出「没启用」的 CLI 确认（新链第 1 轮审查第 2 条）。
     const scan = scanCodexToml(readFileSync(file, "utf8"));
     if (scan.doubt) return dunno(scan.doubt);
     const names = [...scan.servers.keys()];
@@ -251,11 +252,7 @@ function hostCodexBlock(hostHome: string): string | null {
   return (
     extractTomlTables(config, ASH_MCP_SERVER_NAME) ??
     // 历史名的定义照搬,但表头改成规范名(理由同 claude 那边)。
-    extractTomlTables(config, LEGACY_ASH_MCP_SERVER_NAME)?.replaceAll(
-      `[mcp_servers.${LEGACY_ASH_MCP_SERVER_NAME}`,
-      `[mcp_servers.${ASH_MCP_SERVER_NAME}`,
-    ) ??
-    null
+    extractTomlTables(config, LEGACY_ASH_MCP_SERVER_NAME, ASH_MCP_SERVER_NAME)
   );
 }
 
@@ -268,28 +265,6 @@ function builtinCodexBlock(): string | null {
     `[mcp_servers.${ASH_MCP_SERVER_NAME}.env]\n` +
     `ASH_URL = ${JSON.stringify(localUrl())}\n`
   );
-}
-
-/**
- * 把 `[mcp_servers.<name>]` 连同它的子表(`.env` 等)整段抠出来。
- *
- * 只认**行首的表头**来切段:`[[…]]` 数组表也算一次切换,否则紧跟在目标段后面的
- * 数组表会被当成正文一起搬走。
- */
-export function extractTomlTables(config: string, name: string): string | null {
-  const wanted = `mcp_servers.${name}`;
-  const picked: string[] = [];
-  let inside = false;
-  for (const line of config.split(/\r?\n/)) {
-    const header = /^\s*\[\[?([^\]]+)\]\]?\s*$/.exec(line);
-    if (header) {
-      const path = header[1].trim();
-      inside = path === wanted || path.startsWith(`${wanted}.`);
-    }
-    if (inside) picked.push(line);
-  }
-  while (picked.length && !picked[picked.length - 1].trim()) picked.pop();
-  return picked.length ? picked.join("\n") : null;
 }
 
 // ── 小工具 ────────────────────────────────────────────────────────────────

@@ -80,6 +80,34 @@ try {
       "多行字符串里的点号键登记：照旧判不了");
   }
 
+  // ── 1b. 执行器注入回合身份用的同一份判据 ─────────────────────────────────
+  // 上一版注入侧是 `^\[mcp_servers\.ash\]` 行首正则：带引号的写法预检放行、注入却认不出，
+  // MCP 拿不到回合身份，交卷 409（新链第 4 轮审查第 1 条）。预检认得的写法，注入必须都认得。
+  {
+    const { codexAshMcpServerName } = await import("../src/executors/codex-mcp.js");
+    const home = join(stage, "inject");
+    mkdirSync(home, { recursive: true });
+    const target = (toml: string) => { writeFileSync(join(home, "config.toml"), toml); return codexAshMcpServerName(home); };
+    for (const toml of [
+      '[mcp_servers.ash]\ncommand = "node"\n',
+      '[mcp_servers."ash"]\ncommand = "node"\n\n[mcp_servers."ash".env]\nASH_URL = "x"\n',
+      '  [ mcp_servers . \'ash\' ]  # 注释\n  command = "node"\n',
+      '[mcp_servers]\nash = { command = "node" }\n',
+      'mcp_servers.ash.command = "node"\n',
+    ]) {
+      assert.equal(scanCodexToml(toml).servers.has("ash"), true, `预检认得：${JSON.stringify(toml)}`);
+      assert.equal(target(toml), "ash", `注入也必须认得：${JSON.stringify(toml)}`);
+    }
+    assert.equal(target('[mcp_servers."harness"]\ncommand = "node"\n'), "harness", "只有历史名时注入历史名");
+    assert.equal(target('[mcp_servers.ash]\nenabled = false\n[mcp_servers.harness]\ncommand = "node"\n'), "harness",
+      "规范名关着、历史名开着：注入开着的那个（工具从它那里来）");
+    assert.equal(target('[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.harness]\ncommand = "b"\n'), "ash", "都开着取规范名");
+    // 往没声明的名字里塞 `-c` 会让 codex 整份配置起不来：认不出来的一律不注入。
+    assert.equal(target('note = """\n[mcp_servers.ash]\n"""\n'), null, "多行字符串里的假表头不是登记");
+    assert.equal(target('[mcp_servers.kb]\ncommand = "uv"\n[projects."/x/ash"]\ntrust_level = "trusted"\n'), null);
+    assert.equal(codexAshMcpServerName(join(stage, "no-such-home")), null, "没有配置文件");
+  }
+
   // ── 2. codex 文件判据 ────────────────────────────────────────────────────
   const codexHome = join(stage, "codex");
   mkdirSync(codexHome, { recursive: true });

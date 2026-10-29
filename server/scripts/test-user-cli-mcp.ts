@@ -163,6 +163,37 @@ const HOST_CLAUDE = JSON.stringify({
   assert.ok(!block?.includes("hooks"), "数组表不许被吞进来");
 }
 
+// ⑪b 切段和扫描器用同一份表头识别(新链第 4 轮审查:上一版要求表头独占整行、不认引号)。
+{
+  const quoted = `[mcp_servers."ash"]\ncommand = "node"\nargs = ["/h.js"]\n\n[mcp_servers."ash".env]\nASH_URL = "u"\n`;
+  assert.equal(
+    extractTomlTables(quoted, ASH_MCP_SERVER_NAME),
+    `[mcp_servers.ash]\ncommand = "node"\nargs = ["/h.js"]\n\n[mcp_servers.ash.env]\nASH_URL = "u"`,
+    "带引号的表头照样抠得出来,表头改写成规范拼法",
+  );
+  const commented = `[mcp_servers.ash]\ncommand = "node"\n[mcp_servers.secret] # 别人的\ncommand = "s"\ntoken = "t"\n`;
+  const block = extractTomlTables(commented, ASH_MCP_SERVER_NAME);
+  assert.ok(block && !block.includes("secret") && !block.includes("token"),
+    "表头带行尾注释也算一次切换,别人的配置不许被抄进来");
+  assert.equal(
+    extractTomlTables(`[mcp_servers.'harness']\ncommand = "node"\n`, LEGACY_ASH_MCP_SERVER_NAME, ASH_MCP_SERVER_NAME),
+    `[mcp_servers.ash]\ncommand = "node"`, "历史名(带引号)顺手改成规范名",
+  );
+  assert.equal(
+    extractTomlTables(`[mcp_servers]\nash.command = "node"\n[mcp_servers.ash.env]\nASH_URL = "u"\n`, ASH_MCP_SERVER_NAME),
+    null, "只抠得到 .env 那段 = 造出一条没有 command 的登记,宁可用内置模板",
+  );
+  assert.equal(
+    extractTomlTables(`note = """\n[mcp_servers.ash]\ncommand = "x"\n"""\n`, ASH_MCP_SERVER_NAME),
+    null, "多行字符串里的假表头不切段",
+  );
+  // 端到端:宿主是带引号的写法,隔离档要搬的是**宿主那份**,不是内置模板。
+  const { host, dir } = bench({ codex: quoted });
+  ensureAshMcp(dir, "codex", host);
+  const written = readFileSync(join(dir, "config.toml"), "utf8");
+  assert.ok(written.includes(`args = ["/h.js"]`) && written.includes(`ASH_URL = "u"`), "照搬宿主那份");
+}
+
 // ⑫ 只读版**一个字都不许写** —— 共用档拿它去问宿主机那份配置,那是用户自己的文件。
 {
   const { dir } = bench();
@@ -259,4 +290,4 @@ const HOST_CLAUDE = JSON.stringify({
 
 // Windows 删不掉还开着的库文件：退出时那句 rmSync(stage) 会撞 EBUSY，断言全过也判红。
 await releaseTmpDb();
-console.log("test-user-cli-mcp: ✅ 15 组全过");
+console.log("test-user-cli-mcp: ✅ 16 组全过");
