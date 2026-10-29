@@ -63,6 +63,11 @@ export type LaunchAbandonment = {
   portState: "ours" | "stranger" | "free" | "unknown" | "unavailable";
   /** 原样给用户看的那一段残留交代(弹层里显示的就是它)。 */
   notice: string;
+  /**
+   * 那段话说的是哪一种:有确定是这次启动留下的(owned)/只有 ash 分不清来路的(unsure)/
+   * 什么都探不到(none)。界面据它挑「已放弃管理（…）」的说法,别去认 notice 的措辞。
+   */
+  left: "owned" | "unsure" | "none";
 };
 
 export type TerminalSessionInfo = {

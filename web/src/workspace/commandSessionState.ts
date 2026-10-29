@@ -90,10 +90,9 @@ export function sessionState(
   // 这一档排在最前面:放弃之后服务端的 running 已经是 false,但这条记录的 stop 账原样留着,
   // 落到下面就会被说成「已停止（没能确认停净）」,把用户自己的决定讲成了 ash 的结论。
   if (session?.abandoned) {
-    // 三种说法认的是服务端 residueNotice 的措辞:只剩「分不清是不是这次的」那类时不能说成残留自理。
-    const notice = session.abandoned.notice;
-    const what = notice.includes("探不到任何残留") ? "当时无残留"
-      : notice.includes("没找到能确认是这次启动留下的") ? "有分不清来路的进程，未动" : "残留自理";
+    // 只剩「分不清是不是这次的」那类时不能说成残留自理 —— 那些多半是系统自己的进程。
+    const left = session.abandoned.left;
+    const what = left === "none" ? "当时无残留" : left === "unsure" ? "有分不清来路的进程，未动" : "残留自理";
     return { tone: "off", text: `已放弃管理（${what}）` };
   }
   if (session && sessionRunning(session)) {

@@ -65,6 +65,11 @@ export type LaunchAbandonment = {
   portState: "ours" | "stranger" | "free" | "unknown" | "unavailable";
   /** 原样显示给用户的那一段残留交代。 */
   notice: string;
+  /**
+   * 那段话说的是哪一种:有确定是这次启动留下的(owned)/只有 ash 分不清来路的(unsure)/
+   * 什么都探不到(none)。界面据它挑「已放弃管理（…）」的说法,别去认 notice 的措辞。
+   */
+  left: "owned" | "unsure" | "none";
 };
 
 /** 放弃前那个弹层要的全部材料：残留事实 + 解除范围 + 它针对的那条会话 id。 */

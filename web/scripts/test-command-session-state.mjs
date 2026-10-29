@@ -14,7 +14,7 @@ import { attachStatusOf } from "../src/workspace/terminalTabs.ts";
 
 const residue = (extra = {}) => ({
   at: 1, owedPids: [4321], taggedPids: [4321], ports: [8787], portState: "ours",
-  notice: "端口 8787 上还有人在听,这几个号留给你自己处理", ...extra,
+  notice: "端口 8787 上还有人在听,这几个号留给你自己处理", left: "owned", ...extra,
 });
 const session = (extra = {}) => ({
   id: "s1", projectId: "p1", cwd: "/tmp", shell: "zsh", name: "dev", commandId: "service",
@@ -59,11 +59,12 @@ const owed = session({
 });
 assert.deepEqual(leftoversOf(owed), [4321, 4322], "放弃不等于核销,账上的号必须还举得出来");
 assert.deepEqual(owed.abandoned.ports, [8787], "放弃那一刻的端口快照不许被抹掉");
-assert.equal(sessionState(session({ abandoned: residue({ notice: "探不到任何残留" }) })).text,
+assert.equal(sessionState(session({ abandoned: residue({ notice: "探不到任何残留", left: "none" }) })).text,
   "已放弃管理（当时无残留）", "当时确实干净的那种要说清,别一律说成残留自理");
 assert.equal(sessionState(session({ abandoned: residue({
-  owedPids: [], taggedPids: [], ports: [],
-  notice: "ash 没找到能确认是这次启动留下的进程。不过，pid 901 分不清是不是这次启动的",
+  owedPids: [], taggedPids: [], ports: [], left: "unsure",
+  // 措辞故意不像服务端那句:标签只认 `left`,不认 notice 的字。
+  notice: "pid 901 来路不明",
 }) })).text, "已放弃管理（有分不清来路的进程，未动）", "只剩分不清来路的那类,不能说成要你自理的残留");
 
 // ④ 反向:没放弃过的时候,那几档兜底一个都不能跟着被砍掉 —— 否则守护化的服务会脱管,

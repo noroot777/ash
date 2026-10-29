@@ -30,7 +30,7 @@ import type { LaunchAbandonment, TerminalSessionInfo } from "./terminal-session-
 /** 放弃之后 ash **不再做**哪几件事。原样进弹层 —— 用户按之前就该读到解除范围。 */
 function scopeOf(info: TerminalSessionInfo): string[] {
   return [
-    "这条启动记录的删除保护解除：关掉它的日志标签、删掉这个项目都不再被它拦下",
+    "这条启动记录的删除保护解除：关掉它的日志标签、删掉这个项目都不再被它拦下（只删这条记录，名下的进程 ash 一个都不杀）",
     "启动幂等门不再认它：再点启动会**另起一份**，上面还活着的那些进程不会被顺手收掉",
     "关掉 ash 时不再按它的端口和启动记号去收人，退出交代里也不再提它",
     `只解除「${info.name}」这一次启动（${new Date(info.startedAt).toLocaleString("zh-CN")} 起）——`
@@ -87,6 +87,7 @@ export async function launchResidue(info: TerminalSessionInfo): Promise<LaunchAb
   return {
     at: Date.now(), owedPids, taggedPids, ports: info.ports, portState: probe.state,
     notice: residueNotice(owned, unsure),
+    left: owned.length ? "owned" : unsure.length ? "unsure" : "none",
   };
 }
 

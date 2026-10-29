@@ -51,7 +51,13 @@ const IDLE_TTL_MS = 30 * 60 * 1000;
 export class TerminalSessionManager {
   private stopped = false;
   private readonly sessions = new Map<string, TerminalSession>();
-  private readonly capacity = new TerminalCapacity(MAX_SESSIONS, () => this.sessions.values(), (session) => sessionRunning(session), (session) => retainHistory(session));
+  // 放弃过的记录不被闲置回收,所以在容量账上跟「没能确认停净」的保留记录同档:pty 已经死了
+  // 就是纯历史、不占预算;pty 还活着照旧算占用。
+  private readonly capacity = new TerminalCapacity(
+    MAX_SESSIONS, () => this.sessions.values(),
+    (session) => sessionRunning(session) || (session.abandoned != null && sessionAlive(session)),
+    (session) => retainHistory(session) || session.abandoned != null,
+  );
   private readonly creations = new Set<TerminalCreation>();
   private readonly windowsPty: typeof spawnWindowsPty;
   private readonly sweeper: ReturnType<typeof setInterval>;
@@ -338,7 +344,9 @@ export class TerminalSessionManager {
   close(sessionId: string, projectId?: string, released = false): boolean {
     const session = this.session(sessionId, projectId);
     if (!session) return false;
-    if (!released && retainHistory(session)) return false;
+    // 放弃过的也不回收:「我放过手 + 当时还有什么活着」是持久可见的那份状态,闲置半小时
+    // 不是删它的理由(只有用户关它的日志标签、或同一条命令再起一份时才删)。
+    if (!released && (retainHistory(session) || session.abandoned)) return false;
     this.sessions.delete(sessionId);
     session.listeners.clear();
     killSessionTree(session);

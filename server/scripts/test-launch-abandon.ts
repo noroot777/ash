@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -80,6 +80,7 @@ try {
 
   // ②b 两类事实分开说:确定是这次留下的才叫「得你自己处理」,分不清来路的只交代、不让人替它签字。
   assert.match(view.residue.notice, /得你自己处理/, "账上没核销的号是这次留下的那一类");
+  assert.equal((view.residue as { left?: string }).left, "owned", "界面据这一格挑说法，不认措辞");
   const mixed = residueNotice(["pid 1 还活着"], ["pid 2 分不清是不是这次启动的"]);
   assert.match(mixed, /^下面这些是这次启动留下的.*得你自己处理：pid 1 还活着。另外，pid 2 分不清/);
   const onlyUnsure = residueNotice([], ["pid 2 分不清是不是这次启动的"]);
@@ -161,6 +162,41 @@ try {
   assert.equal(terminalSessions.get(workerId, projectId), null);
   assert.ok(await processAlive(strayPid), "删掉记录也不等于杀进程：那个号仍然活着，只是从此由用户自己处理");
   console.log("PASS: 同一条闸在放弃之后放行，而它名下那个活号一个字都没动");
+
+  // ⑨ 签过字的活物,ash 之后**哪条路都不杀**(第 1 轮自由审查必须修 1:闲置回收把放弃过的读成
+  // 「死透了」,半小时后连树 SIGKILL、连「我放过手」的记录一起抹掉)。形状取守护化启动真正
+  // 有用的那一种:组里还活着东西,用户签字接手。
+  const pidFile = join(temporary, "daemon.pid");
+  const daemon = {
+    id: "daemon", name: "daemon", restartCommand: null, stopCommand: null,
+    command: windows
+      ? `Set-Content -Path '${pidFile}' -Value $PID; Start-Sleep -Seconds 120`
+      : `echo $$ > '${pidFile}'; exec sleep 120`,
+  };
+  assert.equal((await startCommand(projectId, temporary, daemon)).status, 201);
+  const daemonId = terminalSessions.listCommandSessions()
+    .find((session) => session.projectId === projectId && session.commandId === daemon.id)!.id;
+  let daemonPid = 0;
+  for (let i = 0; i < 200 && !daemonPid; i++) {
+    try { daemonPid = Number(readFileSync(pidFile, "utf8").trim()); } catch { await delay(25); }
+  }
+  try {
+    assert.ok(daemonPid > 0 && await processAlive(daemonPid), "这次启动起来的那个进程要先活着");
+    const adopted = await launchResidue(terminalSessions.get(daemonId, projectId)!);
+    assert.ok(terminalSessions.abandonLaunch(daemonId, projectId, adopted));
+    // 计数不能拿来断言:前面几步留下的纯退出日志本来就该被这一趟收走。
+    terminalSessions.sweepIdleSessions(Date.now() + 31 * 60_000);
+    await delay(300);
+    assert.ok(await processAlive(daemonPid), "闲置回收不许杀用户签字接手的进程");
+    assert.ok(terminalSessions.get(daemonId, projectId)?.abandoned, "「已放弃管理」这条记录要一直看得见");
+    assert.equal((await terminalSessions.destroy(daemonId, projectId)).ok, true);
+    assert.equal(terminalSessions.get(daemonId, projectId), null, "关日志标签照样删得掉记录");
+    await delay(300);
+    assert.ok(await processAlive(daemonPid), "删记录也只删记录：签过字的进程一个不杀");
+    console.log("PASS: 放弃之后闲置回收不杀进程、不抹记录；关标签只删记录，进程照旧活着");
+  } finally {
+    if (daemonPid) try { process.kill(daemonPid, "SIGKILL"); } catch { /* 已经没了 */ }
+  }
 } finally {
   try { stray.kill("SIGKILL"); } catch { /* 已经没了 */ }
   terminalSessions.shutdown();

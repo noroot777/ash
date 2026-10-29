@@ -26,9 +26,19 @@ export type KillTarget = {
   readonly ttyPath: string | null;
   readonly descendantPgids: Set<number>;
   readonly commandId: string | null;
+  /** 非空 = 用户签字接手过这次启动(terminal-abandon.ts)。下面每个击杀入口都先认它。 */
+  readonly abandoned?: unknown;
   exitCode: number | null;
   stop: StopFact;
 };
+
+/**
+ * 放弃过的一律不杀 —— 闸立在**击杀层自己身上**,不借上游任何一个判据的返回值。
+ * 上游那几个判据(`sessionRunning`/`retainHistory`)对放弃过的都回 false,本意是「ash 不再
+ * 认这笔管理责任」;闲置回收把同一个 false 读成了「死透了、可以连树一起收」,签过字的
+ * `docker compose up -d`、`pm2 start` 半小时后就被 SIGKILL(第 1 轮自由审查必须修 1)。
+ */
+const handedOver = (target: KillTarget): boolean => target.abandoned != null;
 
 /**
  * `complete` = 这一趟的**成员清单全不全**(freezeAndEnumerate 的同名标记,两轮取与)。
@@ -47,6 +57,7 @@ export type KillResult = { ok: true; complete: boolean } | { ok: false; reason: 
  * terminateSession 的确认版。
  */
 export function killSessionTree(target: KillTarget): void {
+  if (handedOver(target)) return;
   const table = readProcessTableSync();
   const live = table ? descendantsFromTable(table, target.process.pid) : { pids: [], pgids: [] };
   const members = sessionMemberPidsSync([target.process.pid], target.ttyPath ? [target.ttyPath] : []) ?? [];
@@ -80,6 +91,8 @@ export async function terminateSession(
   target: KillTarget,
   timeouts?: { termMs?: number; killMs?: number },
 ): Promise<KillResult> {
+  // 一个号都没问过,`complete` 只能是 false。
+  if (handedOver(target)) return { ok: true, complete: false };
   const groupId = target.process.pid;
   // 成员清单要在**发信号 + 早退判定之前**拿齐,且拿之前先**冻结**(freezeAndEnumerate):
   // 枚举与发信号之间,组内 shell 可能正把新服务 fork 进新 PGID(实测 restart 后立即
@@ -198,7 +211,8 @@ function waitForGroupExit(target: KillTarget, timeoutMs: number, descendants?: D
  * 进程,强杀可接受;不杀的代价是它们被 PID 1 收养成孤儿,ash 重启后会话表(内存态)清零、
  * UI 显示「未启动」,旧进程却继续占着端口。
  */
-export function killAllSessionTrees(targets: KillTarget[]): void {
+export function killAllSessionTrees(all: KillTarget[]): void {
+  const targets = all.filter((target) => !handedOver(target));
   const table = readProcessTableSync();
   const members = sessionMemberPidsSync(
     targets.map((target) => target.process.pid),
