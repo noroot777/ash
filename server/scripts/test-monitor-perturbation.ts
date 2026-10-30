@@ -39,8 +39,14 @@ assert.equal(
     ["action=break; while true; do \"$action\"; done; printf 'DONE\\n'", "要跑的那个命令词是个展开，这一层读不出它是 `break`（实测 0 + DONE）"],
     ["unset X; : \"${X:?required}\"; while true; do :; done", "`${…:?…}` 在变量没定义时当场让 shell 走人（实测 127）"],
     [": \"${ASH_REVIEW_UNDEFINED:?required}\"; while true; do :; done", "同上，而「这个变量定义过没有」这一层答不出来（实测 127）"],
+    // 第 4 轮审查 F3 的三条:上面那两条 `${…:?…}` 当年之所以是绿的，是因为它们恰好**都写了引号**
+    // —— 引号里的内容原样留在 `text` 里，正则正好扫得到。不带引号的那一半，词法层按设计抹成了
+    // 占位符，三条判据一条都看不见（见下面 ②c）。
+    [": $((1/0)); while true; do :; done", "算术展开除零，循环一次都没跑（实测 127）"],
+    [": ${1:?required}; while true; do :; done", "位置参数的错误形式，而且 `${` 当年被当成分段符（实测 127）"],
+    ["read PATH; tail -F /dev/null; printf 'DONE\\n'", "`read PATH` 把 PATH 读成了空，那个 tail 压根没启动（实测 0 + DONE）"],
   ] as const) passes(command, `执行语义这一层读不懂（${why}）`);
-  console.log("✓ 执行环境:真 shell 实测会自己结束的那九条，一条都不许硬拦");
+  console.log("✓ 执行环境:真 shell 实测会自己结束的那十二条，一条都不许硬拦");
 }
 
 // ── ② 不变量:**这一层没处置的 shell 词，一个都不许留下硬拦** ────────────────────────
@@ -128,6 +134,77 @@ assert.equal(
     );
   }
   console.log("✓ 执行环境:命令词/展开/替换读不出来一律降级；只有赋值前缀的段不算扰动");
+}
+
+// ── ②c 不变量:**同一件事的每一种拼写都要判得一样** ────────────────────────────────
+// 这一节钉的是第 4 轮审查 F3 的根因:判据不许依赖「它恰好长什么样」。词法层按设计把不带引号的
+// 展开抹成占位符 `?`、还把 `${` 当成分段符，于是「拿正则扫 `Token.text`」这种写法对**不带引号**
+// 的那一半天生无效 —— 而我自己那几条 `${…:?…}` 回归恰好全写了引号，所以一直是绿的。
+//
+// 所以这里不按「某条命令该不该拦」列，按**拼写的对照组**列:同一件事的两三种写法必须同判。
+// 少传播一次未知（抹成占位符、切碎、只认命名变量不认位置参数），对照组里立刻有一半红。
+{
+  const spellings: readonly (readonly [string, readonly string[]])[] = [
+    ["命令替换", ["$(printf build.log)", "`printf build.log`", '"$(printf build.log)"']],
+    ["算术展开", ["$((1/0))", '"$((1/0))"', "$(( 1 / 0 ))"]],
+    ["带退出语义的展开（命名变量）", ["${ASH_X:?boom}", '"${ASH_X:?boom}"', "${ASH_X?boom}"]],
+    ["带退出语义的展开（位置参数）", ["${1:?boom}", '"${1:?boom}"', "${1?boom}"]],
+    ["带退出语义的展开（特殊参数）", ["${@:?boom}", "${#:?boom}"]],
+  ];
+  for (const [kind, forms] of spellings) {
+    for (const form of forms) {
+      passes(`: ${form}; ${BASE}`, `${kind}这一种（写法 \`${form}\`）的执行语义读不出来`);
+    }
+  }
+  console.log(`✓ 执行环境:${spellings.length} 类未知展开 × 每类两三种拼写，带不带引号都判得一样`);
+
+  // **反过来钉死三件不许跟着松的事** —— 这一道是往放行那侧走的，松过头闸就归零了。
+  for (const [command, why] of [
+    // ① 单引号里的是**字面量**:shell 不展开它，所以这一层证明得出那条 tail 照旧永不结束。
+    ["tail -F '$(printf x)'", "单引号不展开"],
+    ["tail -F '${X:?boom}'", "同上"],
+    // ② 参数位上的**值展开**不破证明:`tail -F` 不管跟的是什么都不结束。
+    ["tail -F $LOG", "值展开在参数位"],
+    ["tail -F ${LOG}", "换成大括号同理"],
+    [`echo ${"${HOME}"}; ${BASE}`, "没有退出语义的普通展开"],
+    [`echo $HOME; ${BASE}`, "同上，不带大括号"],
+    // ③ `${…}` 不再当分段符之后，**真正的分组 `{ …; }` 必须还认得**。
+    ["{ tail -F build.log; }", "大括号分组"],
+    ["{ tail -F a.log; } | grep x", "分组接管道"],
+    ["{ cd /tmp; tail -F a.log; }", "组里有多段"],
+    // 注:`while true; do { :; }; done` 在这一层**本来就**判不出来（改动前后都是 null），是既有的
+    // 漏判、方向安全，不在本轮范围里 —— 写进来只会把一条既有行为钉成「本轮保证」。
+  ] as const) {
+    assert.notEqual(
+      neverExitsOnItsOwn(command), null,
+      `这一条的执行语义是证明得出来的，不许跟着松掉（${why}）：${command}`,
+    );
+  }
+  console.log("✓ 执行环境:单引号是字面量、参数位的值展开不破证明、`{ …; }` 分组照旧认得");
+}
+
+// ── ②d 不变量:**在白名单里不等于整词放行** ────────────────────────────────────────
+// `HANDLED` 答的是「这个词的执行语义这一层有处置」，而有几个词的语义**压在参数上**。②那一节
+// 按不带参数的形态枚举，正好绕开了这一层 —— F3 实测 `read PATH` 把 PATH 读成空、后面的 tail
+// 压根没启动，却照旧吃 409。判据同样只能往封闭的那一侧写:证明得出它谁都没赋值才算放行。
+{
+  for (const [command, why] of [
+    [`read PATH; ${BASE}`, "读进 PATH ⇒ 后面那些工具还找不找得到"],
+    [`read X; ${BASE}`, "读进别的名字也算:这一层证明不出 X 不改执行语义（IFS/ENV/LD_PRELOAD 排着队）"],
+    [`read -r LINE; ${BASE}`, "带开关也一样，看的是有没有操作数"],
+    [`read "$NAME"; ${BASE}`, "名字读不出来 ⇒ 更不知道它赋给谁"],
+    [`printf -v PATH '%s' /missing; ${BASE}`, "bash 的 `printf -v` 是赋值"],
+    [`printf -vPATH '%s' /missing; ${BASE}`, "开关和名字连写同判"],
+  ] as const) passes(command, `这个词的语义压在参数上（${why}）`);
+
+  // 不带操作数的那一种**证明得出来**:`read` 写的是固定的 `REPLY`，`printf` 只往流里写字。
+  for (const command of [`read; ${BASE}`, `read -r; ${BASE}`, `printf 'x\\n'; ${BASE}`, `printf '%s' x; ${BASE}`]) {
+    assert.equal(
+      neverExitsOnItsOwn(command), "tail -f/-F",
+      `这一种证明得出它谁都没赋值，不许凭它把闸放掉：${command}`,
+    );
+  }
+  console.log("✓ 执行环境:白名单里的词按 argv 再证一遍，证得出没赋值的才放行");
 }
 
 // ── ③ 机制本身:逐类掀翻那个前提，每一类都必须把硬拦取消 ────────────────────────────

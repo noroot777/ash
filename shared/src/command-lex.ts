@@ -20,7 +20,69 @@
  * 一个普通参数没区别。而运算符在不在引号里,决定的恰恰是它**是不是运算符**:`<f` 是重定向,
  * `'<'f` 只是个叫 `<f` 的参数。按字符记下来之后,这两件事就分得开了(见 `redirectsIn`)。
  */
-export type Token = { text: string; quoted: boolean; bare: string };
+export type Token = {
+  text: string;
+  quoted: boolean;
+  bare: string;
+  /**
+   * 这个词里出现过**展开**（`$NAME` / `${…}` / `$( )` / `$(( ))` / 反引号）—— 它的值要等执行
+   * 时才定下来。
+   *
+   * 为什么标记非得落在这一层（第 4 轮审查 F3）:展开被**按设计抹成占位符** `?`，而占位符跟用户
+   * 自己打的一个 `?` 长得一模一样 —— 于是「这里本来有个读不出来的东西」这件事在词法层就丢了，
+   * 上面那层再拿 `text` 去正则怎么写都找不回来。实测被硬拦的三条（真 shell 全都自己结束）:
+   *   · `: $((1/0)); while true; do :; done` —— 算术展开除零，127，循环一次都没跑;
+   *   · `: ${1:?required}; while true; do :; done` —— `${` 当年被当成**分段符**，整个展开被切碎;
+   *   · `read PATH; tail -F /dev/null; printf 'DONE\n'` —— 见 command-perturbation.ts 的 argv 证明。
+   * 双引号里的展开照样算（`"$(…)"` 在 shell 里真的会执行），单引号里的不算（那是字面量）。
+   */
+  expanded?: true;
+  /** …而且那是**命令替换**（`$( )` / 反引号）:括号里是另一层这一层读不进去的执行。 */
+  substitution?: true;
+  /** …而且那是**算术展开**（`$(( ))`）:算术自己就能让 shell 当场出错走人（`$((1/0))` 实测 127）。 */
+  arithmetic?: true;
+  /** …而且那是**自带退出语义的展开**（`${X?w}` / `${X:?w}`）:X 没定义时 shell 在这一处就走人。 */
+  errorForm?: true;
+};
+
+/**
+ * `${…}` 里那个参数展开是不是**自带退出语义**的那一种（`${参数?字}` / `${参数:?字}`）。
+ * 收的是 `inner` —— 去掉 `${` 和 `}` 之后的中间那段。
+ *
+ * 判据按 POSIX 的参数名写:名字、位置参数（`${1:?…}`，审查实测的就是这一条）、以及
+ * `@ * # ? ! $ -` 那几个特殊参数。`${X:-?}` / `${X#?}` 这种 `?` 在**字**里的不算（那没有退出
+ * 语义），所以运算符的位置要卡死在参数名后面第一处。
+ */
+export function isErrorFormExpansion(inner: string): boolean {
+  return /^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[-@*#?!$0])(?::)?\?/.test(inner);
+}
+
+/** `$` 后面出现这些字符才算一个展开的开头（`$ ` / 行尾的 `$` 是个普通的美元号）。 */
+const EXPANSION_START = /[A-Za-z_0-9@*#?!$-]/;
+
+/** 双引号里的那段文本有没有展开 —— 引号里的内容原样进 `text`，所以只能扫文本。 */
+function expansionsInQuoted(inner: string): Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm"> {
+  const out: Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm"> = {};
+  if (inner.includes("`")) { out.expanded = true; out.substitution = true; }
+  for (let i = 0; i < inner.length; i += 1) {
+    if (inner[i] !== "$") continue;
+    const next = inner[i + 1];
+    if (next === "(") {
+      out.expanded = true;
+      if (inner[i + 2] === "(") out.arithmetic = true;
+      else out.substitution = true;
+      continue;
+    }
+    if (next === "{") {
+      out.expanded = true;
+      const close = inner.indexOf("}", i + 2);
+      if (isErrorFormExpansion(inner.slice(i + 2, close < 0 ? inner.length : close))) out.errorForm = true;
+      continue;
+    }
+    if (next !== undefined && EXPANSION_START.test(next)) out.expanded = true;
+  }
+  return out;
+}
 
 /**
  * 这个引号在哪儿收口。-1 = 没收口（命令本身就不完整，由调用方按「读到末尾」处理）。
@@ -93,12 +155,15 @@ export function segments(command: string): Segment[] {
   let bare = "";
   let quoted = false;
   let started = false;
+  // 这个词里出现过的展开（见 `Token.expanded` 那段）。占位符抹掉之前就得记下来。
+  let marks: Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm"> = {};
   const endToken = () => {
-    if (started) cur.push({ text, quoted, bare });
+    if (started) cur.push({ text, quoted, bare, ...marks });
     text = "";
     bare = "";
     quoted = false;
     started = false;
+    marks = {};
   };
   const endSegment = (sep: Sep) => {
     endToken();
@@ -112,12 +177,17 @@ export function segments(command: string): Segment[] {
       // 收口在哪儿由 `quoteEnd` 说（双引号里的 `\"` 不收口，见那边）。引号里的内容原样进
       // `text`（转义符留着也无妨:这个词打了 `quoted`,永远不会被当成命令词或关键字），所以
       // `bare` 照它的长度补 `\0` —— 两者等长这个不变量不能破（见 `Token.bare`）。
+      const q = c;
       const close = quoteEnd(command, i);
       const inner = close < 0 ? command.slice(i + 1) : command.slice(i + 1, close);
       text += inner;
       bare += "\0".repeat(inner.length);
       quoted = true;
       started = true;
+      // **双引号里的展开是真的会执行的**(`"$(printf x)"`)，单引号里的是字面量。引号里的内容
+      // 原样进 `text`,所以这一支只能扫文本把标记补上 —— 不补的话上面那层就只剩「正则扫 text」
+      // 一条路,而那条路对不带引号的那一半天生无效（见 `Token.expanded`）。
+      if (q === '"') marks = { ...marks, ...expansionsInQuoted(inner) };
       i = close < 0 ? command.length : close + 1;
       continue;
     }
@@ -137,9 +207,34 @@ export function segments(command: string): Segment[] {
         else if (command[j] === ")") depth -= 1;
         j += 1;
       }
-      // 占位成一个「不认识的词」:它是个参数，但也绝不该让后面那个词变成命令词。
+      // 占位成一个「不认识的词」:它是个参数，但也绝不该让后面那个词变成命令词。**抹掉之前**把
+      // 「这里有个什么」记在词上（见 `Token.expanded`）。`$((` 是算术,不是命令替换:它里面没有
+      // 另一层执行,但算术自己就能让 shell 当场出错走人。
       text += "?";
       bare += "?";
+      marks.expanded = true;
+      if (command[i + 2] === "(") marks.arithmetic = true;
+      else marks.substitution = true;
+      started = true;
+      i = j;
+      continue;
+    }
+    // **`${…}` 是一个词里的展开，不是分组**（第 4 轮审查 F3）。下面那条把 `{` / `}` 当分段符的
+    // 规矩对 `{ cmd; }` 是对的，对 `${X}` 是错的:`: ${1:?required}` 当年被切成「`:` `$`」+
+    // 「`1:?required`」两段,于是整个展开在判据面前根本不存在。
+    if (c === "$" && command[i + 1] === "{") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < command.length && depth > 0) {
+        if (command[j] === "{") depth += 1;
+        else if (command[j] === "}") depth -= 1;
+        j += 1;
+      }
+      const inner = command.slice(i + 2, depth === 0 ? j - 1 : command.length);
+      text += "?";
+      bare += "?";
+      marks.expanded = true;
+      if (isErrorFormExpansion(inner)) marks.errorForm = true;
       started = true;
       i = j;
       continue;
@@ -148,6 +243,8 @@ export function segments(command: string): Segment[] {
       const close = command.indexOf("`", i + 1);
       text += "?";
       bare += "?";
+      marks.expanded = true;
+      marks.substitution = true;
       started = true;
       i = close < 0 ? command.length : close + 1;
       continue;
@@ -181,6 +278,9 @@ export function segments(command: string): Segment[] {
       continue;
     }
     if (c === "(" || c === ")" || c === "{" || c === "}") { endSegment(c); i += 1; continue; }
+    // `$NAME` / `$1` / `$@` 这类**值展开**:占位符不换（`text` 里那个 `$` 还在），但标记照样打 ——
+    // 判据只认标记,不再靠「`text` 里有没有 `$`」,那条路对被抹成 `?` 的那一半天生无效。
+    if (c === "$" && EXPANSION_START.test(command[i + 1] ?? "")) marks.expanded = true;
     text += c;
     bare += c;
     started = true;

@@ -57,11 +57,17 @@ const SHELL_WORDS = new Set([
  *  · `:`/`true`/`false`/`test`/`[` —— 只产出一个退出码,而退出码这一层有处置（`errexitAt`）;
  *  · `echo`/`printf` —— 只往流里写字;
  *  · `cd`/`pwd` —— 只动工作目录,而「它盯的那个东西在不在」整档已经移出硬拦（文件头 ⑩）;
- *  · `read`/`wait`/`shift`/`umask`/`times` —— 不改后面那几段怎么执行;
+ *  · `wait`/`shift`/`umask`/`times` —— 不改后面那几段怎么执行;
+ *  · `read`/`printf` —— **要看参数**才算得清,见 `ARGV_PROOF`;
  *  · `export` —— 赋值,而唯一要紧的那个变量单独扫（`PATH_ASSIGN`,`export PATH=…` 同样命中）;
  *  · `break`/`continue`/`exit`/`return`/`exec` —— 形状那一层专门处置过（`JUMPS`/`TERMINATORS`/
  *    `ESCAPES`),这里再算一次只会把真阳性也降级;
  *  · `set` —— 有自己那道白名单（`setShaken`）。
+ *
+ * **在这张表里不等于整词放行**（第 4 轮审查 F3）:`HANDLED` 答的是「这个词的执行语义这一层有
+ * 处置」,而有几个词的语义**压在参数上** —— 实测 `read PATH; tail -F /dev/null; printf 'DONE\n'`
+ * 退出 0 并打出 DONE（`sh: tail: No such file or directory`）却照旧吃 409:`read PATH` 把 PATH
+ * 读成了空,后面那个 tail 压根没启动。所以进了这张表还要再过 `ARGV_PROOF`。
  */
 const HANDLED = new Set([
   ":", "true", "false", "test", "[", "echo", "printf", "cd", "pwd", "read", "wait",
@@ -81,25 +87,24 @@ const NOTES = new Map<string, string>([
   ["unset", "那个 unset 可以把 PATH 一类变量整个去掉，后面那些工具还找不找得到"],
   ["hash", "那个 hash 可以把一个命令名钉到别的可执行文件上"],
 ]);
+// 收尾那半句由调用方接（「它会不会让这条命令提前结束，这一层读不出来」），所以这儿**不要**
+// 自己再写一遍「读不出来」—— 两句接起来会结巴。
 const shellWordNote = (name: string): string =>
-  `那个 ${name} 是 shell 自己的词，这一层没有它的处置 —— 它改不改得动后面每一条的执行语义，读不出来`;
+  `那个 ${name} 是 shell 自己的词，这一层没有它的处置 —— 它改不改得动后面每一条的执行语义`;
 
 /** 给 `PATH` 赋值 ⇒ 后面那些工具还找不找得到,这一层读不出来（`PATH=/missing; tail -F x` 实测 127）。 */
 const PATH_ASSIGN = /^PATH=/;
 /**
- * **自带退出语义的那种展开**:`${X:?msg}` / `${X?msg}` —— X 没定义时 shell **在这一处**就走人
- * （报告实测 `unset X; : "${X:?required}"; while true; do :; done` 立刻退出 127）。而「X 定义过
- * 没有」这一层答不出来,所以它出现在哪一段里都算读不懂。其余展开形式（`:-` 取默认、`:=` 赋值）
- * 没有退出语义,不在这一道里。
+ * 这一道**不自己扫文本了,只读词法层打在词上的标记**（第 4 轮审查 F3）。
+ *
+ * 上一版三条判据（`${…?…}`、`$( )`、`$…`）全是拿正则去扫 `Token.text`,而词法层**按设计**把
+ * 不带引号的展开抹成了占位符 `?`、还把 `${` 当成分段符 —— 于是这三条正则只对**带引号**的那一半
+ * 有效。我自己那三条 `${…:?…}` 回归恰好全写成了 `"${X:?required}"`（引号里的内容原样留在
+ * `text` 里）,所以它们一直是绿的,而审查实测不带引号的同一件事照旧吃 409。
+ *
+ * 结论跟 D1 是同一条:**未知要向上传播,不能让中间某一层把它抹平**。标记的定义见
+ * command-lex.ts 的 `Token.expanded` / `substitution` / `arithmetic` / `errorForm`。
  */
-const ERROR_EXPANSION = /\$\{[A-Za-z_][A-Za-z0-9_]*(?::)?\?/;
-/**
- * **命令替换**:`$( … )` / 反引号 —— 括号里是**另一层这一层读不进去的执行**（词法层按设计把它
- * 整段抹掉,见 command-lex.ts）。跟 `eval` 同一回事:读得见不等于读得懂,所以同判。
- */
-const SUBSTITUTION = /\$\(|`/;
-/** 这个词里有没有展开(`$…`)或替换(反引号)—— 有就说明它的内容要等执行时才定下来。 */
-const EXPANDS = /[$`]/;
 /** 这一段开头那几个**结构骨架词**:要跳过它们才轮到真正的命令词（判据同 `provableBlocker`）。 */
 const isSkeleton = (head: string): boolean =>
   SKELETON.has(head) || LOOP_HEADS.has(head) || BRANCH.has(head);
@@ -127,7 +132,7 @@ function setShaken(argv: readonly Token[]): string | null {
     const t = argv[i]!;
     if (t.quoted) return t.text;                 // 引号里的开关这一层读不出来
     // 开关本身是个展开 ⇒ 它到底开的是什么要等执行时才知道（`set $VAR`，VAR=-n 就是 noexec）。
-    if (EXPANDS.test(t.text)) return t.text;
+    if (t.expanded) return t.text;
     if (!/^[-+]/.test(t.text)) break;            // 开关列表到此为止（后面是位置参数）
     if (/^[-+]o$/.test(t.text)) {
       const name = argv[i + 1];
@@ -138,6 +143,35 @@ function setShaken(argv: readonly Token[]): string | null {
   }
   return null;
 }
+
+/**
+ * `HANDLED` 里那几个**语义压在参数上**的词:给出第一个这一层证明不了的参数，全都证明得了就 `null`。
+ *
+ * 判据跟 `SET_HANDLED` 一个路子 —— **白名单,不是黑名单**。反过来写「哪些变量名危险」就是列反例:
+ * `PATH` 之外还有 `IFS`（改词分割）、`ENV`/`BASH_ENV`（起 shell 时读的脚本）、`LD_PRELOAD`/
+ * `DYLD_*`（动态库注入）排着队,而「哪些环境变量会改掉后面那几条怎么执行」这个集合压根不封闭。
+ * 所以这里要的是**封闭的那一侧**:证明得出它谁都没赋值。
+ *
+ * · `read` —— 带名字的操作数一律算未知（`read X` 也算:这一层证明不出 X 不改执行语义）。
+ *   不带操作数的 `read` 写的是固定的 `REPLY`,那是证明得出来的。
+ * · `printf` —— bash 的 `printf -v 名字 …` 同样是赋值;没有 `-v` 就只往流里写字。
+ */
+const ARGV_PROOF = new Map<string, (argv: readonly Token[]) => string | null>([
+  ["read", (argv) => {
+    for (const t of argv) {
+      if (t.expanded || t.quoted) return t.text;            // 操作数读不出来 ⇒ 不知道它赋给谁
+      if (!/^-/.test(t.text)) return t.text;                // 不是开关 ⇒ 它就是被赋值的那个名字
+    }
+    return null;
+  }],
+  ["printf", (argv) => {
+    const at = argv.findIndex((t) => !t.quoted && /^-v/.test(t.text));
+    if (at < 0) return null;
+    return argv[at]!.text === "-v" ? `-v ${argv[at + 1]?.text ?? ""}`.trim() : argv[at]!.text;
+  }],
+]);
+const argvNote = (name: string, arg: string): string =>
+  `那个 ${name} ${arg} 是在给变量赋值，而被赋值的那个名字改不改得动后面每一条的执行语义`;
 
 /**
  * 这一段**要跑的那个命令词**:读出来了给 `cmd`，有词却读不出来给 `unreadable`，整段压根没有
@@ -158,7 +192,7 @@ function commandWord(tokens: Token[], at: number): CommandWord | null {
   const head = tokens[i];
   if (!head) return null;                        // 整段没有命令词 ⇒ 什么都不执行
   if (head.quoted) return { unreadable: "那一段要跑的命令词藏在引号里，这一层读不出它是哪个命令" };
-  if (EXPANDS.test(head.text)) return { unreadable: "那一段要跑的命令词是个展开，它展开成哪个命令要等执行时才知道" };
+  if (head.expanded) return { unreadable: "那一段要跑的命令词是个展开，它展开成哪个命令要等执行时才知道" };
   const cmd = commandOf(tokens, i);
   return cmd ? { cmd } : { unreadable: "那一段的包装命令这一层认不出来，剥不出真正要跑的是谁" };
 }
@@ -179,8 +213,9 @@ export function perturbed(segs: Segment[]): string | null {
   for (const seg of segs) {
     for (const t of seg.tokens) {
       if (!t.quoted && PATH_ASSIGN.test(t.text)) return "前面有一段改过 PATH，后面那些工具还找不找得到";
-      if (ERROR_EXPANSION.test(t.text)) return "那个 ${…?…} 展开在变量没定义时当场就让 shell 走人";
-      if (SUBSTITUTION.test(t.text)) return "那段命令替换跑的是一段这一层读不进去的代码";
+      if (t.errorForm) return "那个 ${…?…} 展开在变量没定义时当场就让 shell 走人";
+      if (t.substitution) return "那段命令替换跑的是一段这一层读不进去的代码";
+      if (t.arithmetic) return "那段算术展开自己就能让 shell 当场出错走人（`$((1/0))` 实测 127）";
     }
     let at = 0;
     while (at < seg.tokens.length && isSkeleton(headOf(seg.tokens, at))) at += 1;
@@ -197,6 +232,13 @@ export function perturbed(segs: Segment[]): string | null {
     if (cmd.name === "set") {
       const flag = setShaken(cmd.argv);
       if (flag !== null) return `那个 set 开的是 ${flag}，它改掉了后面每一条的执行语义（这一层只认得 errexit）`;
+      continue;
+    }
+    // **进了 `HANDLED` 不等于整词放行**:语义压在参数上的那几个还要按 argv 证明一遍（F3）。
+    const proof = ARGV_PROOF.get(cmd.name);
+    if (proof) {
+      const arg = proof(cmd.argv);
+      if (arg !== null) return argvNote(cmd.name, arg);
       continue;
     }
     const note = NOTES.get(cmd.name);
