@@ -1,7 +1,7 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { tasks } from "./db/schema.js";
-import { isTurnClaimed } from "./runs.js";
+import { SEAT_ROLLBACK_ROLE, isTurnClaimed, turnRole } from "./runs.js";
 import { writeGuardedTaskStatus } from "./status.js";
 import { id } from "./util.js";
 
@@ -28,7 +28,12 @@ export async function reserveQueuedTask(reservation: TaskQueueReservation): Prom
 }
 
 export async function restoreQueuedTask(reservation: TaskQueueReservation): Promise<boolean> {
-  if (isTurnClaimed(reservation.taskId)) return false;
+  // 回合锁被**别人**占着 = 有人正拿着这个占位真正起跑,它的结算会覆盖状态,这里不动。
+  //
+  // `SEAT_ROLLBACK_ROLE` 是例外,而且必须是例外:回滚方自己就要占着这把锁提交,好把
+  // 「SELECT 归属 → UPDATE 状态」那段窗口关掉(理由写在 turn-lock.ts 那个常量上)。把
+  // 自己占的锁读成「有人在跑」,这一笔就永远提交不了,遗留永久停在「排队中」。
+  if (isTurnClaimed(reservation.taskId) && turnRole(reservation.taskId) !== SEAT_ROLLBACK_ROLE) return false;
   return writeGuardedTaskStatus(reservation.taskId, reservation.prevStatus, and(
     eq(tasks.status, "queued"), eq(tasks.directionEpoch, reservation.epoch),
     reservation.token === null ? isNull(tasks.queueSeatToken) : eq(tasks.queueSeatToken, reservation.token),

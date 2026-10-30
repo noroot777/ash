@@ -4,7 +4,10 @@ import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, groups, queueAdvanceIntents, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask, turnIdentity } from "./runs.js";
+import {
+  SEAT_ROLLBACK_ROLE, claimNonTurn, claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn,
+  stopTask, turnIdentity, whenTurnIdle,
+} from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
@@ -294,18 +297,49 @@ export async function reclaimStrandedSeat(
   taskId: string,
   queueId: string,
   prevStatus: TaskStatus,
-  opts?: { repush?: "always" | "stranded" | "never"; reservation?: TaskQueueReservation },
+  opts?: { repush?: "always" | "stranded" | "never"; reservation?: TaskQueueReservation; deferrals?: number },
 ): Promise<void> {
   const repush = opts?.repush ?? "stranded";
-  if (isTurnClaimed(taskId)) return;
+  const deferrals = opts?.deferrals ?? 0;
+  // 本函数收的是「**没有任何活着的 seat 认领**的 queued 遗留」。「有没有主」这一问由
+  // 持久凭证回答(见下面读到 row 之后那一段),不是内存里的代次表 —— 重启之后代次表是空的,
+  // 而遗留还在库里。
+  // **占住回合锁再提交**,和 queue-seat 的 rollback 同一条理由(见那个模块头):
+  // setTaskStatus 内部先 SELECT 再 UPDATE,「写之前再查一次所有权」挡不住那段窗口 ——
+  // 新持有者能在其中占锁、绑令牌、落 running,这次补偿随后照样把它写回终态,还连带触发
+  // 结算与队列推进(第 2 轮审查 F1)。占着锁写就没有这段窗口。
+  //
+  // 占不到 = 有人正拿着这个占位真正起跑,排到它释放之后再看一眼:那时状态要么已被真实
+  // 结算覆盖(本函数自然是 no-op),要么确实还孤零零停在 queued。
+  const releaseLock = claimNonTurn(taskId, SEAT_ROLLBACK_ROLE);
+  if (!releaseLock) {
+    // 重排有上限,只挡病态来回(两个入口在同一个释放点上反复互相接手)。到顶**不是撒手**:
+    // 这具遗留没有别的负责人了,隔久一点再来一趟 —— 一把真正没人管的锁要等到用户手动放开,
+    // 那一刻 whenTurnIdle 也会放行(第 2 轮审查 F2:留下无人负责的遗留就是永久「排队中」)。
+    if (deferrals >= 5) {
+      console.warn(`[ash] 队列占位守卫重排已达上限(${taskId}),改为 30s 后再试一趟`);
+      scheduleSeatReclaim(taskId, queueId, prevStatus, 30_000, { repush });
+      return;
+    }
+    whenTurnIdle(taskId, () => void reclaimStrandedSeat(taskId, queueId, prevStatus, { ...opts, repush, deferrals: deferrals + 1 }));
+    return;
+  }
   try {
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    // 没带 reservation 的直调(回归、以及纯兜底那一趟):库里这具 queued 带着一份凭证就说明
+    // 它**有主** —— 回滚它等于撤掉别人的占位,任务被翻回终态、结算钩子放行下一个成员,反而
+    // 造出双跑。那种该由它自己的 release() 负责,外人不插手。带着 reservation 进来的调用方
+    // 拿的就是自己那一份凭证,不在此列。
+    if (!opts?.reservation && row?.status === "queued" && row.queueSeatToken) return;
     const reservation: TaskQueueReservation | undefined = opts?.reservation ?? (row ? {
       taskId, prevStatus, token: row.queueSeatToken, epoch: row.directionEpoch,
     } : undefined);
     if (reservation?.advanceRequest && (row?.queueAdvanceRequest?.id !== reservation.advanceRequest.id
       || row.resumePromptGeneration !== reservation.advanceRequest.resumePromptGeneration)) return;
     const stranded = !!reservation && await restoreQueuedTask(reservation);
+    if (!stranded) {
+      console.warn(`[ash] 队列占位守卫未提交(${taskId}):库里不再是我这一份凭证的 queued`);
+    }
     if (repush === "never" || (repush === "stranded" && !stranded)) return;
     if (row && !stranded && (row.status !== prevStatus || row.directionEpoch !== reservation?.epoch)) return;
     if (reservation?.advanceRequest) {
@@ -319,6 +353,8 @@ export async function reclaimStrandedSeat(
     // 再补办交接」的那一等(第 7 轮审查:一次短暂锁故障不许变成永久停滞)。
     console.error(`[ash] 队列占位补偿失败(${taskId}),5s 后重试:`, err);
     scheduleSeatReclaim(taskId, queueId, prevStatus, 5_000, { repush, reservation: opts?.reservation });
+  } finally {
+    releaseLock();
   }
 }
 

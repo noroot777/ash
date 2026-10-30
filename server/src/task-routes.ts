@@ -28,6 +28,8 @@ import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
+import { recentRejectionNotices } from "./user-action-rejection.js";
+import { suspectTurns } from "./turn-lock-reclaim.js";
 
 export function mountTaskRoutes(api: Hono): void {
   // 删除那一族(连带关联行 + DELETE 本体)住在 task-delete-routes.ts —— 只是为了行数,
@@ -110,6 +112,19 @@ api.get("/tasks/:id", async (c) => {
   // 只是不是我的项目」。
   if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
   return c.json((await enrichTasks([r]))[0]);
+});
+
+// 这个任务被挡回/没做到位的那些用户操作。前端**无条件**读它,按时间合进同一条任务历史 ——
+// 不去问「对话流有没有正文」:从没跑过的任务没有会话时间线可写,而「有正文就不显示」会让
+// 那条已经入库的记录再也显示不出来(第 2 轮审查 F4)。判据见 user-action-rejection.ts 文件头。
+api.get("/tasks/:id/notices", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
+  // `remedy` 是**此刻**算出来的,不是存下来的:它回答的是「现在按那个开关有没有用」。
+  // 存进库就会出现「当时卡着、现在早好了,按钮还挂在那里」的死按钮。
+  const remedy = suspectTurns().some((t) => t.taskId === taskId) ? "reclaim-turn" as const : null;
+  return c.json({ notices: await recentRejectionNotices(taskId), remedy });
 });
 
 api.get("/tasks/:id/question-history", async (c) => {

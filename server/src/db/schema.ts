@@ -418,6 +418,10 @@ export const reviewerProfiles = sqliteTable("reviewer_profiles", {
 // `schema-free-workflow.ts`。整份原样再导出,理由同上面多人模式那条。
 export * from "./schema-free-workflow.js";
 
+// 被挡回的用户操作(不依赖 agent 会话的任务通知),表定义 + 建表都在
+// `schema-task-notice.ts`。整份原样再导出,理由同上。
+export * from "./schema-task-notice.js";
+
 // 验收前置命令的执行记录(accept_gate_runs)在 `schema-accept-gate.ts`。同上,原样再导出。
 export * from "./schema-accept-gate.js";
 

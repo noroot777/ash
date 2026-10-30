@@ -13,6 +13,7 @@ import { ensureTaskBackgroundSchema } from "./schema-task-background.js";
 import { ensureRegressionChecksSchema } from "./schema-regression-checks.js";
 import { ensureRegressionEvidenceSchema } from "./schema-regression-evidence.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
+import { ensureTaskNoticeSchema } from "./schema-task-notice.js";
 
 const dbFile = resolveAshDbFile();
 ensureAshDbDir(dbFile);
@@ -392,6 +393,7 @@ export async function ensureSchema() {
   }
   await ensureChatSchema(client);
   await ensureFreeWorkflowSchema(client);
+  await ensureTaskNoticeSchema(client);
   await ensureAcceptGateSchema(client);
   await ensureTaskBackgroundSchema(client);
   await ensureRegressionChecksSchema(client);

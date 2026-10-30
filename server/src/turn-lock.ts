@@ -34,7 +34,34 @@ import type { StopSettle } from "./runs.js";
  *    (`bindTurnToken`),所以「库里的令牌」和「内存里的这一轮」说的是同一件事。
  */
 export type TurnReview = { run: string; round: number };
-export type TurnIdentity = { role: string; review: TurnReview | null; token: string | null };
+export type TurnIdentity = {
+  role: string;
+  review: TurnReview | null;
+  token: string | null;
+  /**
+   * 这把锁是**哪一刻**占下的（`Date.now()`）。占位转正(`reclaimTurn`)沿用原值 —— 转正不是
+   * 重新占一次,把它刷新会让一把已经占了十分钟的锁每次转正都显得崭新。
+   *
+   * 它只有一个用途:判「这把锁还有没有主」。幽灵锁(占着、却再没有任何人会来释放)在瞬时
+   * 快照里和「正常起跑中」长得一模一样 —— `handles` 是空的(claim 排在 trackRun 之前)、
+   * 令牌也还没绑(`bindTokenTurn` 排在它之后),两者的唯一区别就是**这个状态持续了多久**。
+   * 回收判据与阈值住在 turn-lock-reclaim.ts。
+   */
+  claimedAt: number;
+  /**
+   * **这一次占用的身份号** —— 全进程单调递增,`turns` 里删掉之后也绝不复用。
+   *
+   * 它只服务一件事:让「替别人还锁」变成**条件释放**。判定一把锁可疑要读进程登记册、
+   * 要写时间线,中间全是 await;而按任务 id 删锁的写法在那段间隙里认不出换了主人 ——
+   * 原持有者自己还了锁、一个正常回合随即占上,拔的就是**后来者**那把,同一个任务从此
+   * 两个回合并跑(本轮审查 F2 按批量快照复现)。所以 `forceReleaseTurn` 只收快照、
+   * 核对号码,对不上就什么都不做。
+   *
+   * 占位转正(`reclaimTurn`)沿用原号:转正接的是同一把锁,换号会让判定时拿到的快照
+   * 凭空失效,可疑锁反而永远拔不掉。
+   */
+  seq: number;
+};
 
 /**
  * **起这一轮的人是谁、为哪一次审查而起** —— 一个对象,不是两个各自可缺的字段。
@@ -61,6 +88,8 @@ export const turnSourceReview = (source?: TurnSource | null): TurnReview | null 
   source && source.role === "reviewer" && source.review !== "unbound" ? source.review : null;
 
 const turns = new Map<string, TurnIdentity>();
+/** 占用身份号的发号器。只增不减、删掉不回收(见 `TurnIdentity.seq`)。 */
+let nextTurnSeq = 1;
 const afterTurn = new Map<string, Array<() => void>>();
 
 // 「回合已占位、进程还没起来」时收到的冻结请求。这一段窗口里 `handles` 是空的、
@@ -90,6 +119,18 @@ const WAKE_TURN_ROLE = "lead-wake";
 export const RECONCILE_TURN_ROLE = "reconcile";
 
 /**
+ * 队列占位回滚**提交状态时**占的位(`queue-seat` 的 rollback、`scheduler` 的
+ * `reclaimStrandedSeat`)。同样不是一个回合。
+ *
+ * 为什么回滚非得占这把锁:它要把任务从 queued 写回占位前的状态,而 `setTaskStatus` **自己
+ * 内部就有 await**(先整行 SELECT 再 UPDATE)。「写之前再查一次所有权」挡不住那段窗口 ——
+ * 新持有者可以在那次 SELECT 期间占锁、绑令牌、落 running,旧回滚随后照样把它写回终态,
+ * 还连带触发结算与队列推进(第 2 轮审查 F1 实测:新锁仍在而状态已被翻成 failed)。
+ * 占着锁写就没有这段窗口:任何新持有者都 claim 不进来,提交期间不可能有人开始新一轮。
+ */
+export const SEAT_ROLLBACK_ROLE = "seat-rollback";
+
+/**
  * 冻结一个**正在起跑**的回合：已 claim、还没 spawn，所以没有 handle 可杀。
  * 返回 false = 这个任务根本没有回合在起跑（调用方无事可做）。
  *
@@ -105,6 +146,7 @@ export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"
   const role = turns.get(taskId)?.role;
   if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
   if (role === RECONCILE_TURN_ROLE) return false; // 残留结算也不是回合,理由同上
+  if (role === SEAT_ROLLBACK_ROLE) return false; // 占位回滚也不是回合,理由同上
   startFreeze.set(taskId, settle);
   return true;
 }
@@ -124,7 +166,7 @@ export function takeStartFreeze(taskId: string): StopSettle | null {
  */
 export function claimTurn(taskId: string, role = "single", review: TurnReview | null = null): boolean {
   if (turns.has(taskId)) return false;
-  turns.set(taskId, { role, review, token: null });
+  turns.set(taskId, { role, review, token: null, claimedAt: Date.now(), seq: nextTurnSeq++ });
   return true;
 }
 
@@ -177,7 +219,14 @@ export function reclaimTurn(taskId: string, role: string, review?: TurnReview | 
   const held = turns.get(taskId);
   if (!held) throw new Error(`reclaimTurn(${taskId}) without holding the turn`);
   // `review` 省略 = 沿用占位时交代的那一份(占位转正不该把它抹掉);显式传 null 才是清掉。
-  turns.set(taskId, { role, review: review === undefined ? held.review : review, token: held.token });
+  // `claimedAt` 沿用:转正接的是同一把锁,不是新占一次(见 `TurnIdentity.claimedAt`)。
+  turns.set(taskId, {
+    role,
+    review: review === undefined ? held.review : review,
+    token: held.token,
+    claimedAt: held.claimedAt,
+    seq: held.seq, // 同一把锁,不换号(见 `TurnIdentity.seq`)
+  });
 }
 
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
@@ -291,6 +340,79 @@ function endTurn(taskId: string): void {
       console.error(`[ash] after-turn hook failed for ${taskId}:`, error);
     }
   }
+}
+
+/**
+ * 此刻所有被占着的回合锁的**只读快照**(含占用时刻与角色)。
+ *
+ * 给幽灵锁巡检用(turn-lock-reclaim.ts)。导出快照而不是导出那张 Map:回收方只许按判据
+ * 读与释放,不许顺手改别人这一轮的身份。
+ */
+export function heldTurns(): Array<TurnIdentity & { taskId: string }> {
+  return [...turns].map(([taskId, identity]) => ({ taskId, ...identity }));
+}
+
+/**
+ * **条件释放**一把回合锁 —— 给「旁人判定原持有者已经不在了」那一种收尾用。
+ *
+ * 和 `releaseTurn` 的差别只在调用者的身份:`releaseTurn` 是**持有者自己**在 finally 里还锁;
+ * 这一条是旁人替它还。所以它返回被拔掉的那份身份 —— 回收方要把「拔掉的是谁、占了多久」
+ * 如实写进日志和任务时间线,不许静默。
+ *
+ * **参数是一份快照,不是一个任务 id**,这是故意的:
+ * 判定「这把锁可疑」要读进程登记册、读库、写时间线,中间全是 await。按 id 删锁的签名
+ * 在那段间隙里**没有任何办法**认出锁已经换了主人 —— 原持有者自己还了锁、一个正常回合随即
+ * 占上,拔的就是后来者那把,同一个任务从此两个回合并跑。本轮审查 F2 就是按批量快照复现的:
+ * 一轮巡检先判定 N 把,逐把处理时第 2 把已经换了主。
+ *
+ * 所以类型上就不给「释放任务 X 上随便哪一把」这种说法:只收 `{ taskId, seq }`,`seq` 全进程
+ * 不复用(见 `TurnIdentity.seq`),号码对不上就返回 null、一个字节都不动。调用方要保证的只剩
+ * 一件事:**快照和这次调用之间不许隔 await**(判据自己也要重新算一次,见
+ * turn-lock-reclaim.ts `releaseSuspectTurn`)。
+ *
+ * ⚠ 该不该拔不在这里判。拔错一把正在起跑的锁 = 同一个任务起两个回合,比卡住严重得多;
+ * 判据与阈值只许住在 turn-lock-reclaim.ts 那一处(它要同时问进程登记册,依赖方向不许反过来)。
+ *
+ * 和 `releaseTurn` 一样会跑 `afterTurn` 回调:卡住的锁底下往往正压着
+ * 「等这一轮跑完再送」的交接(排队消息投递、队列补推),它们跟着这把锁一起被冻住了 ——
+ * 拔锁而不放它们走,任务照旧停在原地。
+ */
+export function forceReleaseTurn(expected: { taskId: string; seq: number }): TurnIdentity | null {
+  const held = turns.get(expected.taskId);
+  if (!held || held.seq !== expected.seq) return null;
+  startFreeze.delete(expected.taskId);
+  endTurn(expected.taskId);
+  return held;
+}
+
+/**
+ * **等这个任务的回合锁空出来**,最多等 `timeoutMs`。true = 真的空了;false = 等到超时它还占着。
+ *
+ * 给「停止」用,而且是它唯一能拿到的**证据**:停止在没有进程可杀时会竖一个起跑冻结标记,
+ * 但标记本身证明不了有人会来消费它 —— `freezeStartingTurn` 只要看见一个非预占身份就返回
+ * true,活着的起跑流程和一把没人管的锁在它眼里一模一样(第 2 轮审查 F3)。真正的区别是
+ * **会不会有人来还锁**:活着的起跑流程走到 spawn 前那道闸会消费掉标记、撤回这一轮、在
+ * 自己的 catch 里 releaseTurn;没有主的锁则一直占着。所以等一会儿看锁空不空,是唯一不靠
+ * 年龄猜测、而是靠**观察到释放**的判据。等不到也不猜 —— 如实说还占着,把放开交给用户。
+ */
+export function waitForTurnIdle(taskId: string, timeoutMs: number): Promise<boolean> {
+  if (!turns.has(taskId)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+    // **不 unref**:有一条 HTTP 响应在等这个 Promise。unref 掉的话,进程只剩它时事件循环
+    // 会直接空转退出,那条响应永远发不出去(回归里实测到「unsettled top-level await」)。
+    whenTurnIdle(taskId, () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 /** 任务空着就立刻执行，正在跑就排到它这一轮退出之后。 */
