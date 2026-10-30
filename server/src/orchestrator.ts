@@ -56,7 +56,7 @@ import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
-  COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote,
+  COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote, PLANNING_TURN,
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
@@ -422,14 +422,19 @@ export async function continueTask(
     // 这一句到 executor.run 之间隔着三个 await(runEnv / prepareResume / prepareCliInvocation),
     // 在这里就把授权拼死,用户在启动期间收回授权就拦不住了 —— 撤销已落库,发出去的
     // 第一条消息却还写着「已预先授权 x.com」(第 3 轮审查 P1)。
+    // 产出质量规则这一轮的事实(判据本体见 craft-rules.ts):`!resuming` 跟下面 `promptLevel`
+    // 发全文还是缩略版是同一个判据,为真的那几种(首次被 @ 进来、旧会话接不上、/clear 之后
+    // 新开)都是没有旧上下文的首条消息。原生命令那一支拿不到它 —— 它独占整条 prompt(见上)。
+    const craft = { freshContext: !resuming, verifying };
     const promptBody = nativeCommand
       ? promptedUserTurnText
-      : planning ? `${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`
+      : planning ? PLANNING_TURN(craft, promptedUserTurnText)
       : assembleTurnPrompt({
         invite: invited ? COLLAB_INVITE : "",
         brief: invitedTaskBrief(task.body, invited, verifying),
         handoffNotice,
         peerNotice,
+        craft,
         userText: promptedUserTurnText,
         workspaceReset: workspaceReset ? WORKSPACE_RESET(cwd) : "",
         completion: followUpFrom

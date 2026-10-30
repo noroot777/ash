@@ -199,11 +199,15 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   const entryCandidates = (reports: string[]) =>
     [...reports, commonDirectory(reports)].map((text) => ({ text, onDisk: true }));
   const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
-  const { assembleTurnPrompt } = await import("../src/turn-prompt.js");
+  const { assembleFreshPrompt, assembleTurnPrompt, NO_REMINDER } = await import("../src/turn-prompt.js");
   type TurnReminder = Parameters<typeof assembleTurnPrompt>[0]["reviewReminder"];
-  const { invitedTaskBrief } = await import("../src/invited-task-brief.js");
-  const { COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER } =
-    await import("../src/run-prompts.js");
+  const { LEAD_PREAMBLE, leadFirstMessage } = await import("../src/team/prompts.js");
+  const { craftRulesFor } = await import("../src/craft-rules.js");
+  const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
+  const {
+    AUTONOMY, COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL,
+    FOLLOW_UP_REMINDER, PLANNING_TURN,
+  } = await import("../src/run-prompts.js");
   const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
   const { gateFailurePrompt } = await import("../src/accept-gate-messages.js");
   const task = (await db.select().from(tasks)).find((row) => row.id === "pb-task")!;
@@ -246,6 +250,9 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     task: task as never, run, debate, turn: segment(3, "reviewer"),
     disputeReason: "第 2 条读错了代码。", previous: [], repoPath: repo,
   }));
+  // 产出质量规则本体。单独一份 = 这两句话自己的棘轮:想把它写成判断表,得先在 diff 里把
+  // 那个数改大(用户 2026-10-30 的口径是「原句一字不改、不加判据不加护栏」)。
+  add("turn/craft-rules", craftRulesFor({ freshContext: true, verifying: false }));
   add("turn/completion-protocol-free", COMPLETION_PROTOCOL("pb-task", false, false, true));
   add("turn/completion-protocol-normal", COMPLETION_PROTOCOL("pb-task", false, false, false));
   add("turn/completion-reminder-free", COMPLETION_REMINDER("pb-task", false, false, true));
@@ -399,6 +406,10 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       brief: invitedTaskBrief(task.body, true, true),
       handoffNotice: "",
       peerNotice: "",
+      // 派审/续跑这几条都是审查回合,两条判据各否一次。槽位收的是**判据**而不是渲染好的
+      // 字符串(见 craft-rules.ts):夹具手工传空串的话,「审查回合不带」就只是夹具自己声明
+      // 的事实,生产判据改了它照样绿。
+      craft: { freshContext: false, verifying: true },
       userText,
       workspaceReset: "",
       completion: COMPLETION_REMINDER(taskId, false, true, true),
@@ -431,12 +442,77 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   add("delivered/review-resume-dotdir", deliver(
     `${freeReviewResumeMessage(dotTask as never, dotRun, 2)}\n上一轮的清单在 ${olderManifest}`,
     dotReminder, "pb-dot。task"), { requires: [dotReminder.manifestEntry!] });
+  // ── 没有旧上下文的那几条首条消息 ────────────────────────────────────────────
+  //
+  // 四个入口各走一个拼装器,所以各要一份样本:只接其中一个(典型是只接 `runTask`)时，
+  // 剩下几条一个字都收不到，而「漏发」在任何单份样本里都看不出来。`PLACEMENT` 靠这几份
+  // 一起，才量得到「每一种新执行上下文都经过那个判据」。
+  //
+  // 这两份 fresh 的**口径**:量的是所有任务共有的那一截开场,团队前言、审查任务书、接力
+  // 前言、同伴告知一律置空(它们各有自己的样本)。所以 `delivered/fresh-review-run` 不是
+  // 「生产里审查首条消息的大小」—— 真实那条还要加上 `review/dispatch-*` 那一摞。
+  const fresh = (reviewTask: boolean) => withGlobalBrowserPolicy(
+    assembleFreshPrompt({
+      autonomy: AUTONOMY,
+      craft: { freshContext: true, verifying: reviewTask },
+      completion: COMPLETION_PROTOCOL("pb-task", false, reviewTask, true),
+      direction: DIRECTION_PROTOCOL("pb-token"),
+      teamPreamble: "",
+      reviewProtocol: "",
+      handoffNotice: "",
+      peerNotice: "",
+      objective: initialTaskObjective(task.body, task.title, reviewTask),
+    }),
+    "full",
+    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
+  );
+  add("delivered/fresh-run", fresh(false));
+  add("delivered/fresh-review-run", fresh(true));
+  // 首次 @ 另一位执行者接手(以及旧会话接不上、/clear 之后新开的那一条 —— 判据同一个
+  // `!resuming`)。
+  add("delivered/invited-first", withGlobalBrowserPolicy(
+    assembleTurnPrompt({
+      invite: COLLAB_INVITE,
+      brief: invitedTaskBrief(task.body, true, false),
+      handoffNotice: "",
+      peerNotice: "",
+      craft: { freshContext: true, verifying: false },
+      userText: "接着把设置页改完。",
+      workspaceReset: "",
+      completion: COMPLETION_REMINDER("pb-task", false, false, true),
+      direction: DIRECTION_PROTOCOL("pb-token"),
+      reviewReminder: NO_REMINDER,
+    }),
+    "full",
+    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
+  ));
+  // 团队调度台开台。它大是 `LEAD_PREAMBLE` 本身的体积(派活哲学那一摞),跟本条规则无关。
+  add("delivered/team-lead-first", withGlobalBrowserPolicy(
+    leadFirstMessage({
+      preamble: LEAD_PREAMBLE("pb-task", "codex"),
+      craft: { freshContext: true, verifying: false },
+      objective: task.body,
+      newMessage: "",
+    }),
+    "full",
+    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
+  ));
+  // 「先规划后实施」:开场就是规划回合那一条。它刻意只有正文加一句,浏览器策略也发缩略版
+  //（`promptLevel = planning || resuming ? "reminder" : "full"`）。
+  add("delivered/plan-first", withGlobalBrowserPolicy(
+    PLANNING_TURN({ freshContext: true, verifying: false }, "先想清楚设置页怎么改。"),
+    "reminder",
+    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
+  ));
   add("delivered/repair", withGlobalBrowserPolicy(
     assembleTurnPrompt({
       invite: "",
       brief: "",
       handoffNotice: "",
       peerNotice: "",
+      // 修复交接必然落在一条接得上的会话里(执行者刚交完卷、审查把意见打回来),所以
+      // `freshContext` 为假 —— 规则早就在它那条会话的上下文里了。
+      craft: { freshContext: false, verifying: false },
       userText: await freeRepairPrompt("pb-task", run),
       workspaceReset: "",
       completion: FOLLOW_UP_REMINDER("pb-task", "done", false, false, "", true),

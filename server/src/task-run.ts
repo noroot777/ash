@@ -41,6 +41,7 @@ import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js"
 import { handoffBlockReason } from "./handoff-guard.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
+import { assembleFreshPrompt } from "./turn-prompt.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
@@ -182,11 +183,19 @@ export async function runTask(
     // 这里只拼正文,浏览器策略留到起跑前最后一刻(takeFreeze 那一段)用现读的授权来贴 ——
     // 这一句到 spawn 之间还隔着两个 await,在这里拼死授权的话,用户在启动期间收回授权就
     // 拦不住了(同第 3 轮审查 P1 的续聊路径)。
-    const promptBody =
-      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + DIRECTION_PROTOCOL(directionToken) + teamPreamble + reviewProtocol +
-      (handoffNotice ? `${handoffNotice}\n\n` : "") +
-      peerNotice +
-      (autoTitle ? TITLE_HINT + objective : objective);
+    const promptBody = assembleFreshPrompt({
+      autonomy: AUTONOMY,
+      // fresh run 一律是一条全新的 CLI 会话,所以 `freshContext` 恒真;这一轮交结论还是
+      // 交代码由 `reviewTask`(历史独立审查任务)定。判据本体见 craft-rules.ts。
+      craft: { freshContext: true, verifying: reviewTask },
+      completion: COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free"),
+      direction: DIRECTION_PROTOCOL(directionToken),
+      teamPreamble,
+      reviewProtocol,
+      handoffNotice,
+      peerNotice,
+      objective: autoTitle ? TITLE_HINT + objective : objective,
+    });
     const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null, { resetPlan: true });
     const runEnv = { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
     // 启动末段的顺序是**定死的**:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论

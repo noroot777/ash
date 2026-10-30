@@ -13,6 +13,7 @@ import {
   REVIEW_VALIDATION_REQUIREMENT,
   REVIEWER_REGRESSION_CLAUSE,
 } from "@ash/shared/free-workflow";
+import { craftRulesFor, type CraftContext } from "./craft-rules.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 
@@ -92,6 +93,13 @@ export interface TurnPromptParts {
   handoffNotice: string;
   /** 「本任务里还有别人」。 */
   peerNotice: string;
+  /**
+   * 产出质量规则**这一轮的事实**（`craft-rules.ts`）。收的是判据而不是渲染好的字符串，
+   * 理由见 `craftRulesFor`。走这条路的回合里它多半是空的：真正的 `--resume` 续跑手上
+   * 已经有那段上下文了，只有「没有旧上下文的首条消息」（首次被 @ 进来、旧会话接不上、
+   * `/clear` 之后新开）才非空。
+   */
+  craft: CraftContext;
   /** 这一轮真正要说的话（已过技能处理、已拼附件）。 */
   userText: string;
   /** 工作目录被重建时的说明。 */
@@ -109,10 +117,58 @@ export function assembleTurnPrompt(parts: TurnPromptParts): string {
   return parts.invite +
     parts.brief +
     (parts.handoffNotice ? `${parts.handoffNotice}\n\n` : "") +
-    parts.peerNotice +
+    // 紧挨正文，和 fresh 那条同一个落位。不必补前导空行：它前面那几段（邀请语、需求抬头、
+    // 接力前言、同伴告知）都自带尾部空行，全空时它就是整条消息的开头。
+    craftRulesFor(parts.craft) +
     parts.userText +
     parts.workspaceReset +
     parts.completion +
     parts.direction +
     (reminder ? `\n${reminder}` : "");
+}
+
+/**
+ * fresh run（全新会话的第一条消息）各片段，顺序即投递顺序。
+ *
+ * 和上面那个续聊/续跑的拼装分开住，因为两条路带的东西不是一个集合：fresh 多了自主性前言、
+ * 团队前言、审查任务书，少了工作目录重建告警和每回合审查提醒。抽成函数的理由跟本文件头
+ * 那一段一样 —— 原先它是 `task-run.ts` 里的一个长表达式，于是「每个任务开场真正发出去的
+ * 那一条有多大、里面有没有某一段」在任何地方都量不到，而那恰恰是往开场加字时最该量的一条。
+ */
+export interface FreshPromptParts {
+  /** 无人值守前言（`AUTONOMY`）。 */
+  autonomy: string;
+  /**
+   * 产出质量规则这一轮的事实。fresh run 必然是一条全新 CLI 会话，所以 `freshContext`
+   * 恒真；交结论还是交代码由审查任务那一位定。
+   */
+  craft: CraftContext;
+  /** 完成协议长版（`COMPLETION_PROTOCOL`）。 */
+  completion: string;
+  /** 当前方向身份。 */
+  direction: string;
+  /** 团队执行者前言。 */
+  teamPreamble: string;
+  /** 历史独立审查任务的审查协议。 */
+  reviewProtocol: string;
+  /** 「你被搬过机器了」的一次性前言。 */
+  handoffNotice: string;
+  /** 「本任务里还有别人」。 */
+  peerNotice: string;
+  /** 任务目标正文（含 autoTitle 的标题提示）。 */
+  objective: string;
+}
+
+export function assembleFreshPrompt(parts: FreshPromptParts): string {
+  return parts.autonomy +
+    // 落在自主性前言之后：两段都是「怎么干活」的开场，而且 `AUTONOMY` 自带尾部空行，
+    // 这个位置不需要任何额外的分隔处理。
+    craftRulesFor(parts.craft) +
+    parts.completion +
+    parts.direction +
+    parts.teamPreamble +
+    parts.reviewProtocol +
+    (parts.handoffNotice ? `${parts.handoffNotice}\n\n` : "") +
+    parts.peerNotice +
+    parts.objective;
 }
