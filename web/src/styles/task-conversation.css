@@ -295,7 +295,11 @@
 .task-turn-remedy p { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 12px; line-height: 1.6; color: var(--faint); }
 .task-turn-remedy svg { flex: none; margin-top: 3px; }
 .task-turn-remedy strong { color: var(--text); font-weight: 600; }
-.task-turn-remedy__result { color: var(--text); }
+/* 结论那一段:凭据对不上时下面跟一颗「重新加载页面」。跟上面那颗开关共用一行的话,
+   flex 会把它挤成两行(实测「重新加载页/面」),所以这里改成纵向摞 —— 一句话、一个出路。 */
+.task-turn-remedy p.task-turn-remedy__result { display: grid; gap: 6px; justify-items: start; color: var(--text); }
+.task-turn-remedy__result button { border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 3px 9px; color: var(--text); font-size: 11px; }
+.task-turn-remedy__result button:hover { background: var(--raised); }
 
 .task-conversation-empty { display: grid; min-height: 150px; place-content: center; justify-items: center; color: var(--faint); }
 .task-conversation-empty p,

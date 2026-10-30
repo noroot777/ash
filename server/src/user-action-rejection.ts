@@ -36,9 +36,17 @@ import { id as newId, now } from "./util.js";
 /** 同一条挡回在这段时间内只写一次(理由见文件头「为什么要去重」)。 */
 const DEDUPE_MS = 60_000;
 
-/** 用户看得懂的操作名 —— 留痕里出现的就是这几个字,别写路由路径。 */
+/**
+ * 用户看得懂的操作名 —— 留痕里出现的就是这几个字,别写路由路径。
+ *
+ * 加一个的判据是「界面上真有这么一颗按钮」:这几个字会原样出现在任务历史里给人读,
+ * 跟他按的那颗按钮对不上就等于没留痕。所以别拿它当端点清单用。
+ */
 export type RejectedAction =
-  | "派审查" | "运行" | "触发新一轮" | "重跑上一回合" | "停止" | "放开回合占位";
+  | "派审查" | "运行" | "触发新一轮" | "重跑上一回合" | "停止" | "放开回合占位"
+  // 自由工作流那张卡上的几颗:派合并结果审查、按意见修复、预约复审,以及驳回之后
+  // 用户要拍的那两下(让双方辩论 / 裁定)。
+  | "按审查意见修复" | "建修复任务" | "预约派审" | "让双方辩论" | "裁定驳回";
 
 /**
  * 这一下的结果。**不是同一句话的两种语气,是两件不同的事**,所以存下来而不是让前端去猜:
@@ -60,8 +68,15 @@ const lastNoted = new Map<string, number>();
 
 export type RejectionNotice = {
   id: string;
-  action: string;
-  outcome: ActionOutcome | "system";
+  /**
+   * `unknown` = 库里那一格的值这一版认不出来(列值写丢了、或者是更新的版本写的)。
+   *
+   * 为什么要单独一档而不是回落 `rejected`:那两档说的是**完全相反**的两件事 ——
+   * 「点了,系统没执行」和「执行了,只是没到位」。认不出来时选 `rejected`,就会对一次
+   * 其实已经发生、已经改了状态的操作说「你点的操作没有执行」,用户据此再点一次。
+   * 宁可说「这条记录读不准」,也不能替它编一个确定的方向。
+   */
+  outcome: ActionOutcome | "system" | "unknown";
   reason: string;
   occurredAt: string;
 };
@@ -124,6 +139,28 @@ export async function noteSystemNotice(
 }
 
 /**
+ * **挡回的那一刻顺手留痕**,返回原样的响应体 —— 调用处写
+ * `c.json(await noted(taskId, "运行", { error: "…" }), 409)`,路由的返回形状一个字不变
+ * (前端读的还是同一个 `error` 字段)。
+ *
+ * 用在哪:**用户看不出原因**的那几种挡板 —— 回合正在进行、验收占用、同队有人在跑、
+ * 上一回合在这中间变了。「已归档」「not found」「状态不可运行」「已接力出去」这类他
+ * 一眼就能从界面上读到的,不记,免得把时间线刷成噪音。
+ *
+ * **只给真人点的入口用。** agent 在自己回合里调的那些口子(MCP 的驳回、辩论发言)挡回
+ * 时不记 —— 记了就是把 agent 的动作写成「用户点过」,而这张表的全部用途是回答「我点过
+ * 没有」。程序化路径(队列推进、消息补投、定时班次)的退避同理。
+ */
+export const noted = async <Body extends { error: string }>(
+  taskId: string,
+  action: RejectedAction,
+  body: Body,
+): Promise<Body> => {
+  await noteRejectedUserAction(taskId, action, body.error);
+  return body;
+};
+
+/**
  * 这个任务被挡回过的那些操作(新的在前)。前端把它合进任务历史 —— **不按「有没有正文」
  * 取舍**,那正是上一版把历史弄丢的判据(见文件头)。
  */
@@ -143,10 +180,14 @@ export async function recentRejectionNotices(
     .where(eq(taskNotices.taskId, taskId))
     .orderBy(desc(taskNotices.occurredAt))
     .limit(limit);
-  // 列是 TEXT,旧行(补列之前写的)读出来是默认值。认不出的一律当 rejected —— 多一档
-  // 新语气要前端配合,认错方向不如退回最保守的那一句。
+  // 列是 TEXT。`rejected` 是建表默认值,所以补列之前写的旧行读出来就是它,那一格可信。
+  // 认不出的值(写丢了、或者更新的版本写的)落 `unknown` —— 不替它编一个方向,理由见
+  // `RejectionNotice.outcome`。
+  const KNOWN = new Set<RejectionNotice["outcome"]>(["rejected", "incomplete", "system"]);
   return rows.map((row): RejectionNotice => ({
     ...row,
-    outcome: row.outcome === "incomplete" || row.outcome === "system" ? row.outcome : "rejected",
+    outcome: KNOWN.has(row.outcome as RejectionNotice["outcome"])
+      ? (row.outcome as RejectionNotice["outcome"])
+      : "unknown",
   }));
 }

@@ -47,6 +47,7 @@ import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
 import { fileApi } from "./fileApi.ts";
 import { pendingMergeApi } from "./pendingMergeApi.ts";
+import { humanAction } from "./humanActionToken.ts";
 import { scmApi } from "./apiScm.ts";
 import { searchApi } from "./searchApi.ts";
 import { taskNoticeApi } from "./taskNoticeApi.ts";
@@ -282,8 +283,9 @@ export const api = {
     request(`/tasks/${id(taskId)}/team/halt`, { method: "POST" }),
   teamCuaStatus: (taskId: string): Promise<TeamCuaStatus> =>
     request(`/tasks/${id(taskId)}/team/cua-status`),
+  // 真人专属闸后面的第二条(它杀的是开机级全局单例):同样走 `humanAction` 带凭据 + 轮换。
   killTeamCua: (taskId: string): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/team/kill-cua`, { method: "POST" }),
+    humanAction(`/tasks/${id(taskId)}/team/kill-cua`, { method: "POST" }),
 
   // 任务接力(跨机器 handoff)那一族在 `handoffApi.ts` —— 整份 spread 进来,
   // `api.handoffPeers()` 这类调用点一字不动。

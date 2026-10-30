@@ -16,6 +16,7 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
   const [busy, setBusy] = useState(false);
   const [released, setReleased] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [needsReload, setNeedsReload] = useState(false);
 
   const release = async () => {
     setBusy(true);
@@ -34,7 +35,12 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
       // 刷新之后照样在)。收起来等于让他对着一个消失的开关猜。
       if (r.runnable) onDone?.();
     } catch (error) {
-      setResult(error instanceof Error ? error.message : String(error));
+      // 凭据对不上(用过了、过期了、或者这一份是上次启动发的)时服务端回 403。恢复路径就是
+      // 重新加载一次页面文档——那一刻会换到新的一份。这句得说出口:否则用户看到的是一个
+      // 按下去没反应的开关(server/src/auth/human-action-token.ts)。
+      const message = error instanceof Error ? error.message : String(error);
+      setResult(message.includes("页面凭据") ? `${message}。` : message);
+      setNeedsReload(message.includes("页面凭据"));
     } finally {
       setBusy(false);
     }
@@ -53,7 +59,14 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
       <button type="button" onClick={() => void release()} disabled={busy || released}>
         {busy ? "正在放开…" : released ? "已放开" : "放开回合占位"}
       </button>
-      {result && <p className="task-turn-remedy__result" role="status">{result}</p>}
+      {result && (
+        <p className="task-turn-remedy__result" role="status">
+          {result}
+          {needsReload && (
+            <button type="button" onClick={() => location.reload()}>重新加载页面</button>
+          )}
+        </p>
+      )}
     </div>
   );
 }

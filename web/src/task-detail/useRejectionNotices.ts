@@ -55,9 +55,12 @@ export function useRejectionNotices(taskId: string, revision = 0): {
  */
 function noticeText(notice: { action: string; outcome: string; reason: string }): string {
   if (notice.outcome === "system") return `〔系统〕${notice.reason}`;
-  return notice.outcome === "incomplete"
-    ? `「${notice.action}」生效了，但还没到位：${notice.reason}`
-    : `「${notice.action}」没有执行：${notice.reason}`;
+  if (notice.outcome === "incomplete") return `「${notice.action}」生效了，但还没到位：${notice.reason}`;
+  // `unknown` = 服务端读那一格时认不出值来(见 server/src/user-action-rejection.ts)。
+  // **不许回落成「没有执行」**:那句话和「生效了但没到位」说的是相反的两件事,猜错方向
+  // 会让用户对一次其实已经发生的操作再点一次。照实说这条记录读不准。
+  if (notice.outcome === "unknown") return `「${notice.action}」的结果读不准（记录可能不完整）：${notice.reason}`;
+  return `「${notice.action}」没有执行：${notice.reason}`;
 }
 
 /**

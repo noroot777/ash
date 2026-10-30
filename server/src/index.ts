@@ -14,6 +14,7 @@ import {
 } from "./singleton.js";
 import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSync } from "./platform.js";
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
+import { HUMAN_ACTION_TOKEN_META, issueHumanActionToken } from "./auth/human-action-token.js";
 import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
 import { recordListeningPort } from "./listening-port.js";
 import { guardMonitorHook } from "./monitor-hook-failsafe.js";
@@ -558,6 +559,19 @@ async function serveSpa(c: Context, dist: string, rel: string) {
       ? candidate
       : join(dist, "index.html");
   const body = await readFile(file);
+  if (extname(file) === ".html") {
+    // 真人专属动作的凭据**只在交出页面文档这一刻发**(理由与能力边界见
+    // auth/human-action-token.ts):页面从 meta 里读走它,发那几个只有用户按得动的开关时
+    // 带上。刻意不开一个「领凭据」的 JSON 端点 —— 那等于把「先拿到页面文档」这一步也省掉。
+    //
+    // 带凭据的文档一律 no-cache(cacheHeader 对 .html 已经是),否则浏览器会把一份用过的
+    // 凭据一直端出来,开关就按不动了。
+    const stamped = body.toString("utf8").replace(
+      "</head>",
+      `<meta name="${HUMAN_ACTION_TOKEN_META}" content="${issueHumanActionToken()}"></head>`,
+    );
+    return c.body(stamped, 200, { "content-type": MIME[".html"]!, "cache-control": "no-cache" });
+  }
   return c.body(body, 200, {
     "content-type": MIME[extname(file)] ?? "application/octet-stream",
     "cache-control": cacheHeader(file),

@@ -38,6 +38,7 @@ import { parseAttachmentText } from "@ash/shared/attachments";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { noted } from "./user-action-rejection.js";
 import { db } from "./db/index.js";
 import { groups, sessions, tasks } from "./db/schema.js";
 import { profileDrift } from "./executors/index.js";
@@ -280,17 +281,22 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
     const taskId = c.req.param("id");
     const body = await c.req.json<{ sessionId?: string }>().catch(() => ({} as { sessionId?: string }));
     const checkpointBlocked = await preparePendingCheckpointStart(taskId);
-    if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
+    // 挡回就留痕(`noted`,判据见那边):这颗按钮按下去没反应时,用户刷新页面后要能看出
+    // 「点过、没成、因为什么」。下面每条 409 同理,**除了**一眼能从界面读到的那种
+    // (任务已删、上一回合不存在 → 那本来就不显示这颗按钮)。
+    if (checkpointBlocked) {
+      return c.json(await noted(taskId, "重跑上一回合", { error: checkpointBlocked, checkpoint: true }), 409);
+    }
     const first = await readFacts(taskId, body.sessionId);
     if (!first) return c.json({ error: "not found" }, 404);
     const rejection = retryTurnRejection(first.facts);
-    if (rejection) return c.json({ error: rejection.error, ...rejection.detail }, 409);
+    if (rejection) return c.json(await noted(taskId, "重跑上一回合", { error: rejection.error, ...rejection.detail }), 409);
     const kind = retryTurnKindOf(first.latest!);
     // 同 /run、/retry：原子占位，并发只有一个能 202。占位身份跟着分支走 —— 审查重跑此刻
     // 还没有审查回合，冒充 reviewer 会让迟到的结论上报被当成本回合的（见
     // reportFreeReviewConclusion 的 turnRole 校验）。
     if (!claimTurn(taskId, kind === "review" ? "dispatch" : "single")) {
-      return c.json({ error: "任务回合正在进行，结束后再重试", status: first.task.status }, 409);
+      return c.json(await noted(taskId, "重跑上一回合", { error: "任务回合正在进行，结束后再重试", status: first.task.status }), 409);
     }
     // 占位之后的每一条出路都必须交接或释放这把锁：漏一条就是「500 一次、之后永远 409，
     // 只能重启服务」。所以 handed 只在**真正把 turnHeld 交给下游**的那一刻才置位。
@@ -300,7 +306,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
     try {
       // 占位后镜像检查验收锁，否则下游撞上验收锁静默 return，202 就成了谎报。
       if (isAcceptingTask(taskId)) {
-        return c.json({ error: "任务正在验收（含发布尾段），结束后再重试", status: first.task.status }, 409);
+        return c.json(await noted(taskId, "重跑上一回合", { error: "任务正在验收（含发布尾段），结束后再重试", status: first.task.status }), 409);
       }
       // ── 占位后权威重查（口径同 review.ts）──
       // 上面那一遍是在**没有任何互斥**的情况下读的：从读完到 claimTurn 之间隔着好几个
@@ -311,12 +317,14 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       const fresh = await readFacts(taskId, body.sessionId);
       const again = fresh ? retryTurnRejection(fresh.facts) : { error: "任务已被删除", detail: undefined };
       if (!fresh || again) {
-        return c.json({ error: again?.error ?? "任务已被删除", ...(again?.detail ?? {}) }, 409);
+        const body = { error: again?.error ?? "任务已被删除", ...(again?.detail ?? {}) };
+        // 任务真被删了就没地方留痕了(那条记录读不出来),其余照记。
+        return c.json(fresh ? await noted(taskId, "重跑上一回合", body) : body, 409);
       }
       const { task, latest } = fresh as { task: TaskRow; latest: SessionRow };
       // 分支在占位前后必须是同一个：占位身份是按它选的，变了就等于按错的身份占了锁。
       if (retryTurnKindOf(latest) !== kind) {
-        return c.json({ error: "上一回合在这中间变了，刷新后再试", sessionId: latest.id }, 409);
+        return c.json(await noted(taskId, "重跑上一回合", { error: "上一回合在这中间变了，刷新后再试", sessionId: latest.id }), 409);
       }
 
       // 交接必须**有人接住错误**：`void continueTask(...)` 在下游接管这把锁之前抛错（它
@@ -351,7 +359,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
           const { resumed } = await reopenFailedFreeReview(taskId, { resumeSessionId: latest.id });
           return c.json({ started: true, mode: "review", resumed }, 202);
         } catch (error) {
-          return c.json({ error: errorText(error) }, 409);
+          return c.json(await noted(taskId, "重跑上一回合", { error: errorText(error) }), 409);
         }
       }
 
@@ -408,7 +416,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       // 把整条队列挡住;审查档同理(旁路回合,不是任务执行)。
       const claim = await claimQueueSeat(taskId);
       if (!claim.ok) {
-        return c.json({ error: queueClaimError(claim), blockedBy: claim.blockers }, 409);
+        return c.json(await noted(taskId, "重跑上一回合", { error: queueClaimError(claim), blockedBy: claim.blockers }), 409);
       }
       seat = claim.seat;
       handoff(

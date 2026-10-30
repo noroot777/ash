@@ -129,9 +129,18 @@ export function turnReclaimStatus(taskId: string, at = Date.now(), thresholdMs =
 // 不满一分钟就按秒说 —— 阈值被调低时(回归测试、临时排查)「约 0 分钟」读起来像没发生。
 const held = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)} 秒` : `${Math.round(ms / 60_000)} 分钟`);
 
+/**
+ * 放开那一下的**副作用**,单独一句。
+ *
+ * 刻意不含「放开之后这个任务就能再次运行」—— 那句话属于**预告**(还没放开时说「按了会
+ * 怎样」),把它焊进副作用里,就会在「已经放开、但它还点不动」那一档跟着被附上去:同一条
+ * 记录前半句说「它还点不动运行」,后半句紧跟一句「放开之后这个任务就能再次运行」,自相
+ * 矛盾(上一轮审查点名)。能不能运行由 `runnableAfterRelease` 现场核对,那一档各自说自己
+ * 的话,这里只说代价。
+ */
 const SIDE_EFFECT =
-  "放开之后这个任务就能再次运行；代价是万一原来那一位其实还活着（比如正在等一个很慢的"
-  + "准备步骤），互斥就没了，同一个任务会有两个回合并行改同一个工作区。";
+  "代价是万一原来那一位其实还活着（比如正在等一个很慢的准备步骤），互斥就没了，"
+  + "同一个任务会有两个回合并行改同一个工作区。";
 
 /**
  * 已经报过的占用(`taskId:seq`)。按**占用身份号**去重,所以同一把锁只报一次 —— 配 30 秒
@@ -172,7 +181,7 @@ export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise
         + "没有进程在册、也没有绑过回合令牌，但系统**无法确认**原来那一位是否真的已经结束，"
         + "所以不会自动放开。确认它确实不动了，用任务详情页上的「放开回合占位」手动解开"
         + `（或 POST /api/tasks/${suspect.taskId}/reclaim-turn）——**点运行是解不开的**，那条路只会继续被挡回。`
-        + SIDE_EFFECT,
+        + "放开之后这个任务通常就能再次运行。" + SIDE_EFFECT,
       );
       if (persisted) {
         told.add(key);
@@ -260,6 +269,11 @@ async function runnableAfterRelease(taskId: string): Promise<{ runnable: boolean
 export async function releaseSuspectTurn(
   taskId: string,
   thresholdMs = SUSPECT_TURN_MS,
+  /**
+   * 这一下**能证到哪一层**。`"page"` 由真人专属闸填(它核验过那份随页面下发的一次性凭据);
+   * 缺省 `"unverified"` 留给不过闸的内部直调与回归 —— 措辞照实说,不替它升一档。
+   */
+  origin: "page" | "unverified" = "unverified",
 ): Promise<ReleaseSuspectResult> {
   const status = turnReclaimStatus(taskId, Date.now(), thresholdMs);
   if (status.kind === "absent") return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
@@ -272,7 +286,11 @@ export async function releaseSuspectTurn(
     return { ok: false, why: "not-suspect", reason: "这个回合占位刚刚换了主人，已经有新的一轮接手了" };
   }
   const detail = `占位身份 ${released.role}、已持有约 ${held(suspect.heldMs)}`;
-  console.warn(`[ash] 来源无法确认的请求放开回合占位 task=${taskId}（${detail}）`);
+  // 措辞只说得出**这一层能证的那一档**。`origin: "page"` = 真人专属闸核验过一份随页面
+  // 下发的一次性凭据(auth/human-action-token.ts);它证的是「这一下来自一个页面文档」,
+  // **不是**「某个人按了鼠标」—— 所以也不能写成「用户主动放开」。拿不出凭据的请求压根
+  // 走不到这里(闸上 403),剩下的只有不过闸的内部直调,那一档如实写「来源无法确认」。
+  console.warn(`[ash] ${origin === "page" ? "页面发起的" : "来源无法确认的"}请求放开回合占位 task=${taskId}（${detail}）`);
   // 核对后置条件(理由见 `runnable`)。排在释放之后 —— 释放那两行一个 await 都不能隔。
   const after = await runnableAfterRelease(taskId);
   if (!after.runnable) {
@@ -282,7 +300,7 @@ export async function releaseSuspectTurn(
     taskId,
     `released-turn:${suspect.claimedAt}:${suspect.seq}`,
     "回合占位已放开",
-    `这个任务的回合占位已放开，请求来源无法确认（${detail}）。`
+    `这个任务的回合占位已放开，${origin === "page" ? "由本机页面发起" : "请求来源无法确认"}（${detail}）。`
     + (after.runnable ? "现在可以继续运行了。" : `但它还点不动运行：${after.nextStep ?? "请刷新查看当前状态"}。`)
     + SIDE_EFFECT,
   );

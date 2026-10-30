@@ -66,6 +66,10 @@
       "types": "./src/duet.ts",
       "default": "./src/duet.ts"
     },
+    "./human-action": {
+      "types": "./src/human-action.ts",
+      "default": "./src/human-action.ts"
+    },
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"

@@ -44,6 +44,8 @@ const { noteUserActionOutcome, recentRejectionNotices } = await import("../src/u
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { personalWriteGate, isHumanOnlyPath } = await import("../src/auth/personal-gate.js");
+const { issueHumanActionToken, liveHumanActionTokenCount, HUMAN_ACTION_TOKEN_FIELD, HUMAN_ACTION_TOKEN_HEADER } =
+  await import("../src/auth/human-action-token.js");
 const { actorOf } = await import("../src/auth/context.js");
 const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
@@ -256,6 +258,7 @@ await db.insert(queueItems).values({ id: "qi-guard2", queueId: "q-guard2", taskI
 // 这条路存在的全部理由是「系统判不了原持有者死没死,所以交给知情的人判」,把一次 agent
 // 发来的请求当成用户知情同意,等于把这个设计的唯一前提抽掉。
 assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn"), true);
+assert.equal(isHumanOnlyPath("/api/tasks/abc/team/kill-cua"), true, "杀 CUA 旁路会话同样只有真人按得动");
 assert.equal(isHumanOnlyPath("/api/tasks/abc/stop"), false, "停止不在真人专属之列");
 assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只认那条路径本身");
 
@@ -298,6 +301,112 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
     assert.equal(claimTurn("t-gate"), false, "403 之后那把锁必须还在");
   }
 
+  // ── 不申报身份的裸请求:默认必须是拒绝 ──────────────────────────────────────
+  // 这一格是上一轮的缺口。三段旧判据判的都是「调用方自己说了什么」——没自称 agent、没带
+  // 浏览器头 —— 于是一个什么头都不带的 `curl` 把三段全满足了:**诚实申报的 403、一言不发
+  // 的 200**(审查实测 `200 {reclaimed:true, role:"single", heldMs:45}`,锁确实被放开)。
+  // agent 手里有 shell,这不是理论缺口。
+  //
+  // 钉的是不变量本身:**身份判定不能建立在调用方自愿申报上** —— 要一份本服务自己发出去
+  // 的凭据,拿不出来就是拒绝。所以这里不去穷举「哪些头没带」,只问「没凭据的通不通」。
+  for (const mode of ["multi", "single"]) {
+    await writeSystemSetting("instanceMode", mode);
+    invalidateInstanceConfig();
+    const bare = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    });
+    // 多人模式下 `authGate` 先把匿名请求兜住(401),自用模式下走到凭据这一关(403)。
+    // 两档都是拒绝 —— 这一节钉的是「裸请求通不通」,不是具体哪个码。
+    assert.ok([401, 403].includes(bare.status), `${mode} 模式下不带凭据的裸请求必须被拒绝`);
+    if (mode === "single") {
+      assert.equal(bare.status, 403, "自用模式下该由真人专属闸拒绝(那里原本是放行的)");
+      assert.match((await bare.json() as { error: string }).error, /页面凭据/);
+    }
+    assert.equal(claimTurn("t-gate"), false, "被拒之后那把锁必须还在");
+  }
+  await writeSystemSetting("instanceMode", "single");
+  invalidateInstanceConfig();
+
+  // 伪造的、上次启动发的(前缀对不上)、以及空串,一律不算凭据。
+  for (const forged of ["", "deadbeef", "AAAAAAAAAAA.ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"]) {
+    const bad = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: forged },
+      body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    });
+    assert.equal(bad.status, 403, "编出来的凭据不算凭据");
+  }
+
+  // 自称 agent **而且**手里有一份真凭据:仍然 403 —— 两道判据是与关系,不是或关系。
+  // (真实形态:agent 从页面文档里抄到一份,再带上自己的回合凭证。)
+  const stolen = issueHumanActionToken();
+  const agentWithToken = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-ash-source-task-id": "source-agent",
+      "x-ash-turn-token": "valid-turn",
+      [HUMAN_ACTION_TOKEN_HEADER]: stolen,
+    },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(agentWithToken.status, 403, "自称 agent 的请求有凭据也不许按");
+  assert.match((await agentWithToken.json() as { error: string }).error, /只有账号本人/);
+
+  // 带着一份页面凭据:放行,并且响应里给回下一份(烧一份换一份,不然按完一次就按不动了)。
+  const pageToken = issueHumanActionToken();
+  const liveBefore = liveHumanActionTokenCount();
+  const byPage = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+    method: "POST",
+    headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: pageToken },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(byPage.status, 200, "带着页面凭据的请求该放行");
+  const reclaimBody = await byPage.json() as Record<string, unknown>;
+  assert.equal(reclaimBody.reclaimed, true);
+  const rotated = reclaimBody[HUMAN_ACTION_TOKEN_FIELD];
+  assert.equal(typeof rotated, "string", "响应必须给回下一份凭据");
+  assert.notEqual(rotated, pageToken, "给回的必须是新的一份");
+  assert.equal(liveHumanActionTokenCount(), liveBefore, "烧掉一份、发回一份,在册数不该涨");
+  // **记录只说得出凭据能证的那一档。** 过了闸 = 这一下来自一个本服务发过文档的页面,
+  // 所以痕迹里写「由本机页面发起」;但它仍然证不了「某个人按了鼠标」(本机程序读得到
+  // 那份文档),所以照样不许升格成「用户主动放开」。不过闸的内部直调写「来源无法确认」
+  // (test-turn-reclaim.ts ⑤ 钉的是那一档)。
+  {
+    const released = (await recentRejectionNotices("t-gate")).find((n) => n.action === "回合占位已放开");
+    assert.ok(released, "过闸放开也必须持久留痕");
+    assert.match(released.reason, /由本机页面发起/, "核验过页面凭据的那一下,措辞该说到这一档");
+    assert.doesNotMatch(released.reason, /用户主动|由你/, "页面凭据证不到「人按的」,不许替它升一档");
+    assert.doesNotMatch(
+      released.reason,
+      /还点不动运行[^。]*放开之后这个任务就能再次运行/,
+      "同一条记录不许前半句说点不动、后半句说能运行",
+    );
+  }
+
+  // 重放刚用过的那一份:403。日志、截图、历史记录里抄到的那一串按不动第二次。
+  assert.equal(claimTurn("t-gate"), true);
+  await new Promise((r) => setTimeout(r, 40));
+  const replay = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+    method: "POST",
+    headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: pageToken },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(replay.status, 403, "用过的凭据不许重放");
+  assert.equal(claimTurn("t-gate"), false, "重放被拒之后那把锁必须还在");
+  // 轮换给回的那一份接着就能用 —— 页面因此不会撞上一个按不动的开关。
+  const withRotated = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+    method: "POST",
+    headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: rotated as string },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(withRotated.status, 200, "轮换给回的那一份必须接着能用");
+  // 这一节放开过两次锁,后面几节仍按「锁占着不动」那个前提断言 —— 把前提摆回去。
+  assert.equal(claimTurn("t-gate"), true);
+  await new Promise((r) => setTimeout(r, 40)); // 过了可疑阈值
+
   const invalidCredentials: Record<string, string>[] = [
     { "x-ash-source-task-id": "source-agent", "x-ash-turn-token": "expired" },
     { "x-ash-source-task-id": "source-agent" },
@@ -309,7 +418,8 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
     const invalid = await gated.request("/api/tasks/t-gate/reclaim-turn", {
       method: "POST", headers, body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
     });
-    assert.equal(invalid.status, 403, "真人专属闸必须拒绝无效或不完整的任务凭证");
+    assert.equal(invalid.status, 403,
+      "真人专属闸必须拒绝无效或不完整的任务凭证(申报了 agent 身份的那几格先被挡;剩下的在凭据那一关)");
   }
 
   for (const headers of invalidCredentials) {
@@ -351,8 +461,12 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   await writeSystemSetting("instanceMode", "single");
   invalidateInstanceConfig();
 
+  // 带着真凭据、但没勾风险确认:凭据证的是「这一下来自页面」,不是「用户知情同意」,
+  // 两关各管一件事,所以这里必须仍然 400。
   const noConsent = await gated.request("/api/tasks/t-gate/reclaim-turn", {
-    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    method: "POST",
+    headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken() },
+    body: "{}",
   });
   assert.equal(noConsent.status, 400, "默认本机身份不等于确认风险");
   const crossSite = await gated.request("/api/tasks/t-gate/reclaim-turn", {
@@ -364,7 +478,12 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
 
   // 同一条路,真人(自用模式的隐式本地用户)照常放行。
   const asHuman = await gated.request("/api/tasks/t-gate/reclaim-turn", {
-    method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken(),
+    },
     body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
   });
   assert.equal(asHuman.status, 200, "账号本人该按得动");

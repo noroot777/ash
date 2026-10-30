@@ -32,7 +32,7 @@ import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimTurn, releaseTurn, stopTask } from "./runs.js";
-import { noteRejectedUserAction, noteUserActionOutcome, type RejectedAction } from "./user-action-rejection.js";
+import { noteRejectedUserAction, noteUserActionOutcome, noted } from "./user-action-rejection.js";
 import { releaseSuspectTurn } from "./turn-lock-reclaim.js";
 import { stopStartingTurn } from "./stop-starting-turn.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -45,6 +45,7 @@ import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
+import { HUMAN_ACTION_TOKEN_FIELD, humanActionOrigin, issueHumanActionToken } from "./auth/human-action-token.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
 // 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
@@ -81,23 +82,6 @@ api.get("/tasks/:id/duet", async (c) => c.json(await readDuetTurns(c.req.param("
 // 队列前置检查(queueBlockers)、queue 的增删改端点都在 ./queues.ts。
 
 // 用户主动操作被**状态性挡板**拦下时的统一出口:409 之外再往任务时间线写一条。
-// 只弹 toast 不算数 —— 刷新页面之后用户看不出「点过、没成、因为什么」(AGENTS.md
-// 关于持久可见状态的约定;2026-10-26 他因此两次误判)。
-//
-// 用在哪:**看不出原因**的那几种挡板 —— 回合正在进行、验收占用、同队有人在跑。
-// 「已归档」「not found」「状态不可运行」这类用户一眼就能从界面上读到,不记,免得
-// 把时间线刷成噪音。程序化路径(队列推进、消息补投、定时班次)的退避一律不记。
-// 返回原样的响应体,顺手留痕 —— 调用处照旧 `c.json(await noted(...), 409)`,
-// 不碰路由的返回形状(前端读的还是同一个 error 字段)。
-const noted = async <Body extends { error: string }>(
-  taskId: string,
-  action: RejectedAction,
-  body: Body,
-): Promise<Body> => {
-  await noteRejectedUserAction(taskId, action, body.error);
-  return body;
-};
-
 api.post("/tasks/:id/run", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -278,7 +262,7 @@ api.post("/tasks/:id/reclaim-turn", async (c) => {
   if (consent?.acknowledgeDuplicateRisk !== true) {
     return c.json(await noted(taskId, "放开回合占位", { error: "请先确认：放开互斥可能导致同一个任务的两个回合并行修改工作区" }), 400);
   }
-  const outcome = await releaseSuspectTurn(taskId);
+  const outcome = await releaseSuspectTurn(taskId, undefined, humanActionOrigin(c));
   if (!outcome.ok) {
     await noteRejectedUserAction(taskId, "放开回合占位", outcome.reason);
     return c.json({ error: outcome.reason, reclaimed: false }, 409);
@@ -302,6 +286,10 @@ api.post("/tasks/:id/reclaim-turn", async (c) => {
     status: outcome.status,
     nextStep: outcome.nextStep,
     note,
+    // 凭据用一次就烧掉,所以得把下一份交回页面 —— 不然这个开关按完一次就再也按不动了
+    // (而用户看到的会是一句「需要页面凭据」,活像开关坏了)。理由见
+    // auth/human-action-token.ts;前端那一侧在 lib/humanActionToken.ts。
+    [HUMAN_ACTION_TOKEN_FIELD]: issueHumanActionToken(),
   });
 });
 
@@ -485,6 +473,9 @@ api.post("/tasks/:id/team/kill-cua", async (c) => {
     after: result.after,
     status: result.status,
     warning: result.sideEffect,
+    // 这条端点也在真人专属闸后面(它杀的是开机级全局单例,外溢到用户在 ChatGPT 里的其它
+    // 会话),所以同样要把下一份凭据交回去。
+    [HUMAN_ACTION_TOKEN_FIELD]: issueHumanActionToken(),
   });
 });
 
