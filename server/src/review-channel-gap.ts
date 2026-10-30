@@ -70,24 +70,35 @@ const asRecord = (value: unknown): Record<string, unknown> =>
  * 出现过这个词」给出：
  *  · claude：init 清单（JSON）里没有 ash，或者全部兼容登记的状态都是**白名单里**的终局失败
  *    （`CLAUDE_FAILED_STATUSES`）。`pending`、`connecting` 这类没列举的状态一律不算 —— 未知即不确定；
- *  · codex：终局启动失败里 server 名出现在 codex 自己给 server 名加引号的那个位置（实测形状
- *    ``MCP client for `ash` failed to start``）。上一版拿 `\b(ash|harness)\b` 在整行上找，
- *    而本仓目录就叫 harness、`~/.ash/…` 这类路径也带 ash，于是任何一行顺带打了 cwd 的别家报错
- *    都成了「ash 自己坏了」的确定证据（第 1 轮审查第 1 条）。
- * 普通回合那句说明只认这一种（见 `noteTurnChannelGap`），审查回合两种都用。
+ *  · codex：**全部**兼容登记都有点名它的终局启动失败行（实测形状
+ *    ``MCP client for `ash` failed to start``）。点名认的是 codex 自己给 server 名加引号的那个
+ *    位置：上一版拿 `\b(ash|harness)\b` 在整行上找，而本仓目录就叫 harness、`~/.ash/…` 这类
+ *    路径也带 ash，于是任何一行顺带打了 cwd 的别家报错都成了确定证据（第 1 轮审查第 1 条）。
+ *
+ * `connected` 跟着同一条规矩，多一档 `null`＝**这份证据说不了**。codex 的 stderr 只写得下
+ * 「谁出错了」，连上的登记**一个字都不留**，所以「ash 启动失败」单独既不能证明通道没了
+ * （旧名 `harness` 那份可能正连着、complete_task 就在它手里），也不能证明通道还在。拿这种
+ * 残缺子集替整个通道下结论，就是把一份登记的失败说成「工具全都不在、修好再重试」
+ * （第 4 轮审查第 1 条）。拿得到完整清单的 claude 才按「任一连上即可用、任一未知即不确定、
+ * 全部终局失败才算全坏」判。
+ *
+ * 普通回合那句说明只认 `definite`（见 `noteTurnChannelGap`），审查回合两种都用。
  */
-type Evidence = { connected: boolean; detail: string; definite: boolean } | null;
+type Evidence = { connected: boolean | null; detail: string; definite: boolean } | null;
 
 /** claude init 里 server 状态的终局失败词。白名单：没列举的状态（含将来新增的瞬时态）都不算确定。 */
 const CLAUDE_FAILED_STATUSES = new Set(["failed", "needs-auth", "disabled"]);
 
 /**
- * codex 自己报 MCP server 出错时点名的那个位置：``MCP client for `ash` ``、``MCP server `ash` ``
+ * codex 自己报 MCP server 出错时点名的那个位置：``MCP client for `ash` ``、``MCP server 'harness' ``
  * （引号种类放宽到 `'"`）。只认这一个位置 —— 别家 server 的报错里顺带引到 `'ash'` 也不算。
+ * **一个兼容名一份**：判「是不是全部登记都坏了」要按名字分别看，不能把两个名字混成一个正则
+ * 之后数行数（那样「ash 坏了」会被当成「两个名字都坏了」）。
  */
-const CODEX_QUOTED_ASH = new RegExp(
-  `\\bMCP (?:client|server)(?: for)? [\`'"](?:${ASH_MCP_SERVER_NAME}|${LEGACY_ASH_MCP_SERVER_NAME})[\`'"]`, "i");
-const CODEX_ASH_START_FAILURE = new RegExp(`${CODEX_QUOTED_ASH.source}\\s+failed to (?:start|initialize)\\b`, "i");
+const CODEX_NAMED_ASH = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME].map((name) => {
+  const at = `\\bMCP (?:client|server)(?: for)? [\`'"]${name}[\`'"]`;
+  return { name, named: new RegExp(at, "i"), startFailed: new RegExp(`${at}\\s+failed to (?:start|initialize)\\b`, "i") };
+});
 
 /**
  * claude：`{"type":"system","subtype":"init",…,"mcp_servers":[{"name":"ash","status":"connected"}]}`
@@ -143,12 +154,22 @@ export function codexMcpEvidence(text: string): Evidence {
   // 同一份 stderr 里往往混着别的 server 的报错（实测最多的是 linear 的 OAuth）。
   // 点名 ash 的那几行才是这里要的，没有再退回最后两行。「点名」认的是引号里的 server 名，
   // 不是整行里出现过这个词（见 Evidence 上面那段）。
-  const named = hits.filter((line) => CODEX_QUOTED_ASH.test(line));
+  const named = hits.filter((line) => CODEX_NAMED_ASH.some((alias) => alias.named.test(line)));
+  const failed = CODEX_NAMED_ASH.filter((alias) => hits.some((line) => alias.startFailed.test(line)));
+  const silent = CODEX_NAMED_ASH.filter((alias) => !failed.includes(alias));
   const picked = (named.length ? named : hits).slice(-2);
+  const detail = `codex 的 stderr 里有这些跟 MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`;
+  // 全部兼容名都明确启动失败了，才敢替整个通道下结论；只坏了一份时**只说这一份的事实**，
+  // 剩下那个名字登记了没有、连上没有，这份证据看不出来（见 Evidence 上面那段）。
+  if (!silent.length) return { connected: false, definite: true, detail };
   return {
-    connected: false,
-    definite: named.length > 0 && named.every((line) => CODEX_ASH_START_FAILURE.test(line)),
-    detail: `codex 的 stderr 里有这些跟 MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`,
+    connected: null,
+    definite: false,
+    detail: failed.length
+      ? `${detail}\n（这只说明登记「${failed.map((alias) => alias.name).join("、")}」启动失败；`
+        + `兼容名「${silent.map((alias) => alias.name).join("、")}」登记了没有、连上没有，`
+        + "codex 的 stderr 里看不出来 —— 连上的登记不留报错行。）"
+      : detail,
   };
 }
 
@@ -216,9 +237,12 @@ export async function noteReviewerChannelGap(a: {
     ? evidence.detail
     // 没有证据时只能推断，措辞就得是推断：「最可能」而不是陈述一个原因。
     : `这一轮没查到直接证据；最可能的原因是审查者手上根本没有 report_stage 这个工具（自查：${check}）：报告照样写得完整，只有最后一步上报做不到。`;
-  const next = evidence?.connected
+  const next = evidence?.connected === true
     ? "可以先点「继续本轮审查」让它接着上一次的上下文补上报（不用重跑这一轮）；要是它说仍然没有这个工具，就去查执行器有没有限制工具清单。"
-    : `修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。`;
+    // 证据说不了连上没有（codex 只看得到报错的那几份登记）：两条路都给，别替它断言得修。
+    : evidence?.connected === null
+      ? "可以先点「继续本轮审查」让它接着上一次的上下文补上报（不用重跑这一轮）；要是它说没有这个工具，按上面的自查把登记修好再来一次。"
+      : `修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。`;
   // **显式绑定刚结束那条审查会话**：缺省会按 `sessions.startedAt` 挑最新建的那条，而一条
   // 任务上常有比它更新的别的会话（「继续本轮审查」复用的是**较早**那条审查会话），于是这句
   // 说明会落到另一位智能体名下 —— 看记录的人在审查者那边什么也看不到（第 1 轮审查 N3）。

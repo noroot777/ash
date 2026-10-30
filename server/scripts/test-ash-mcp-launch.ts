@@ -12,8 +12,9 @@
 //   3. 辩论：两边一起核，两边都够不着时两句都说；拒绝时一行辩论记录都没有
 //   4. 普通回合提示：只说一次、修好再坏会再说、宽松协议下不说、写不进去不算说过；先说过软的
 //      「看着起不来」，后来确定没有时那句硬的照样要说（记账分档，第 1 轮审查第 2 条）
-//   5. 普通回合事后说明：只认点名 ash 的确定证据（claude init 里没有 ash / 状态是终局失败；
-//      codex 报错在点名 server 的那个位置写着 ash），pending/connecting、别的 server 的报错
+//   5. 普通回合事后说明：只认点名 ash 的确定证据（claude init 里没有 ash / 全部兼容登记都是终局
+//      失败；codex 要**两个兼容名都**在点名 server 的那个位置写着启动失败 —— 连上的登记在 stderr
+//      里不留痕，只坏一份时「另一份正连着」没被排除），pending/connecting、别的 server 的报错
 //      （哪怕行里带着 harness 仓库路径或 ~/.ash 路径，第 1 轮审查第 1 条）、没产出的回合、
 //      旁路回合（第 1 轮审查第 3 条）都不说
 //   6. 接线：普通回合两个起跑点在会话行落库之后调提示；单飞收尾在「没交卷」那一支调事后说明，
@@ -315,11 +316,25 @@ try {
     assert.equal((await turn("codex", {
       err: "ERROR rmcp: MCP server `linear` failed to start: tool name 'ash' collides\n",
     })).said, false, "别家报错里顺带引到 'ash'：点名的位置写的是 linear，不算");
-    const named = await turn("codex", { err: "\u001b[31mERROR\u001b[0m MCP client for `ash` failed to start: No such file\n" });
-    assert.equal(named.said, true, "stderr 点名 ash 的 MCP 报错：确定证据");
-    assert.doesNotMatch(named.text, /\u001b\[/, "ANSI 着色要去掉");
-    assert.equal((await turn("codex", { err: "ERROR MCP server 'harness' failed to initialize: authentication required\n" })).said, true,
-      "旧名的明确初始化失败也能作为确定证据");
+    // 一份启动失败、另一份一个字都没留：**不能**替整个通道下结论 —— 连上的登记在 stderr 里
+    // 不留痕，「旧名那份正连着、complete_task 就在它手里」没被排除。下面这行是审查者在真
+    // codex 0.153.4 上拿到的形状，当次 app-server 报的正是 ash=failed + harness=connected
+    // （第 4 轮审查第 1 条）。
+    const aliasFailure = "ERROR MCP client for `ash` failed to start: MCP startup failed: No such file or directory (os error 2)";
+    const alone = codexMcpEvidence(aliasFailure);
+    assert.equal(alone?.definite, false, "只有一份登记启动失败：不算整个通道确定不可用");
+    assert.equal(alone?.connected, null, "连上没有这份证据说不了，不许报 false 让收尾直接说「去修」");
+    assert.match(alone?.detail ?? "", /登记「ash」启动失败/, "那一份的失败事实要留着");
+    assert.match(alone?.detail ?? "", /兼容名「harness」[^）]*看不出来/s, "也要写明剩下那个名字看不出来");
+    assert.equal((await turn("codex", { err: `${aliasFailure}\n` })).said, false, "拿不到确定证据就不说");
+    assert.equal((await turn("codex", { err: "ERROR MCP server 'harness' failed to initialize: authentication required\n" })).said, false,
+      "只有旧名那份失败也一样：新名那份可能正连着");
+
+    // 两个兼容名都明确启动失败：这才排除了「另一份还连着」，确定归因保留。
+    const bothDown = await turn("codex", { err: "\u001b[31mERROR\u001b[0m MCP client for `ash` failed to start: No such file\n"
+      + "ERROR MCP server 'harness' failed to initialize: authentication required\n" });
+    assert.equal(bothDown.said, true, "全部兼容登记都明确启动失败：确定证据");
+    assert.doesNotMatch(bothDown.text, /\u001b\[/, "ANSI 着色要去掉");
     for (const diagnostic of [
       "WARN MCP server `ash` returned error: unknown tool `not_a_tool`",
       "ERROR MCP client for `ash` tool call failed: request timed out",
@@ -429,7 +444,12 @@ try {
       const sessId = await makeSession(taskId, "codex");
       const paths = detachedPathsFor(join(RUNS_DIR, taskId), sessId, at);
       mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
-      writeFileSync(paths.err, "ERROR MCP client for `ash` failed to start: missing binary\n");
+      // 这一段要测的是**消费侧**（只有本轮缺确认那一支才追加通道归因），所以 stderr 得构造成
+      // 确定证据：两个兼容名都明确启动失败。只写 ash 那一份的话证据按判据就不确定了（连上的
+      // 登记在 stderr 里不留痕，见 review-channel-gap.ts 的 Evidence），这一段会全员 said=false，
+      // 等于不再区分场景。
+      writeFileSync(paths.err, "ERROR MCP client for `ash` failed to start: missing binary\n"
+        + "ERROR MCP server 'harness' failed to initialize: authentication required\n");
       const out = createWriteStream(sessionTranscriptPath(taskId, sessId), { flags: "a" });
       const closed = new Promise<void>((resolve, reject) => { out.once("close", resolve); out.once("error", reject); });
       await consumeSingleRun({
