@@ -55,6 +55,10 @@ const BUDGETS: Record<string, number> = {
   "debate/segment": 1500,
   "debate/final": 1600,
   // ── 每回合都要发的那几段 ─────────────────────────────────────────────────────
+  // 产出质量规则本体（`CRAFT_RULES`，用户 2026-10-30 拍板的两句原句）。**这个数就是它的
+  // 棘轮**：口径是「原句一字不改、不加判据不加护栏不加判断表」，所以余量刻意只留 40B。
+  // 想往里补一句判据，得先在 diff 里把这个数改大，那一行会被看见、被问一句「谁同意的」。
+  "turn/craft-rules": 200,
   "turn/completion-protocol-free": 950,
   "turn/completion-protocol-normal": 1100,
   "turn/completion-reminder-free": 800,
@@ -92,6 +96,23 @@ const BUDGETS: Record<string, number> = {
   // 目录名含「。」：比普通续跑多出用户引的那条旧地址，本轮入口必须照样在。
   "delivered/review-resume-dotdir": 7100,
   "delivered/repair": 6450,
+  // ── 没有旧上下文的那几条首条消息（产出质量规则唯一的落脚处）─────────────────
+  //
+  // 四个入口各走一个拼装器，所以各有一份。**口径**：`fresh-*` 那两份量的是所有任务共有
+  // 的那一截开场，团队前言／审查任务书／接力前言／同伴告知一律置空（各有自己的样本）——
+  // 拿 `delivered/fresh-review-run` 当「生产里审查首条消息的上限」会低估，真实那条还要
+  // 加上 `review/dispatch-*` 那一摞。
+  //
+  // 审查那一份小得多，不止少了这两句：它的完成协议走 `verifying` 分支（没有验收辅路、
+  // 没有执行者回归登记）。团队开台那份大，是 `LEAD_PREAMBLE` 本身的体积（派活哲学那一摞）。
+  // 规划那份小，是因为那条路刻意只有正文加一句，且浏览器策略发的是缩略版。
+  "delivered/fresh-run": 4000,
+  "delivered/fresh-review-run": 3350,
+  // 这一条比其余几份大约 560B，是**真实的非空同伴告知**（`peerNoticeText`，第 1 轮审查
+  // F1 之后换上的真实夹具）；地址已归一成 `<ROOT>`，所以这个数逐机稳定。
+  "delivered/invited-first": 4450,
+  "delivered/team-lead-first": 5900,
+  "delivered/plan-first": 1450,
   // ── MCP 工具清单：每一条都常驻执行者的每一个回合 ─────────────────────────────
   // 字段说明按 **SDK 真正发出去的那份 JSON Schema** 量（见采样器 `toolTexts`）。
   "mcp/accept_task": 1750,
@@ -327,6 +348,15 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
       "stress/repair-auto", "stress/repair-auto-100", "delivered/repair"],
   },
   { name: "GATE_FAILURE_REGRESSION_CARVE_OUT", where: ["accept/gate-failure"] },
+  // 产出质量规则：**只在没有旧 CLI 上下文的执行首条消息里**。这一行同时钉住两面 ——
+  // 「每一种新执行上下文都带它」（四个入口各一份样本，少一份就是那个入口没接上）和
+  // 「别处一个字都没有」（多一份就是在为一条全任务通用的开场按轮次重复付费）。
+  // `delivered/fresh-review-run` 刻意不在表里：那一轮交的是报告，不是新一版界面。
+  {
+    name: "CRAFT_RULES",
+    where: ["turn/craft-rules", "delivered/fresh-run", "delivered/invited-first",
+      "delivered/team-lead-first", "delivered/plan-first"],
+  },
   {
     name: "REVIEW_VALIDATION_REQUIREMENT",
     where: ["review/dispatch-bare", "review/dispatch-logic", "review/dispatch-syntax",
@@ -352,9 +382,9 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
     name: "EXECUTOR_REGRESSION_RECORDING",
     where: ["turn/completion-protocol-free", "turn/completion-protocol-normal",
       "turn/completion-reminder-free", "turn/follow-up-reminder-free",
-      // 审查/验证那两条投递消息里没有它：那一轮的完成协议走 `verifying` 分支，执行者
-      // 回归登记本来就不是审查者的事。
-      "delivered/repair"],
+      // 审查/验证那几条投递消息里没有它：那一轮的完成协议走 `verifying` 分支，执行者
+      // 回归登记本来就不是审查者的事（`delivered/fresh-review-run` 同理）。
+      "delivered/repair", "delivered/fresh-run", "delivered/invited-first"],
   },
   {
     name: "REGRESSION_POLICY",
@@ -366,6 +396,7 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
       // 续跑那条只带审查者面的一句话口径（`REVIEWER_REGRESSION_CLAUSE`），不带全文
       // —— 这是 `freeReviewResumeMessage` 一贯的分寸：续跑不重发任务书。
       "delivered/review-dispatch", "delivered/repair",
+      "delivered/fresh-run", "delivered/invited-first",
       "mcp/report_stage", "mcp/start_monitor"],
   },
 ];
@@ -424,6 +455,10 @@ try {
     ? PRIOR_FINDINGS_TAIL
     : guidanceLines(kind === "settled-reviewer" ? "reviewer" : "executor", true, true, false).at(-1)!;
   const shared = (await import("@ash/shared/free-workflow")) as unknown as Record<string, string>;
+  // 单源常量有两窝：审查/修复那一摞住在 shared，执行者开场那两句住在 `craft-rules.ts`
+  //（服务端独用，搬进 shared 只多一跳；零依赖独立成文件的理由见那个文件头）。两边都认。
+  const craft = (await import("../src/craft-rules.js")) as unknown as Record<string, string>;
+  const sourceOf = (name: string): string | undefined => shared[name] ?? craft[name];
   const samples = await renderPromptSamples(root);
   const size = new Map(samples.map((sample) => [sample.id, sizeOf(sample.text)]));
 
@@ -527,8 +562,9 @@ try {
 
   // ④ 单源。
   for (const { name, where } of PLACEMENT) {
-    const text = shared[name];
-    assert.ok(typeof text === "string" && text.length > 0, `@ash/shared/free-workflow 里找不到 ${name}`);
+    const text = sourceOf(name);
+    assert.ok(typeof text === "string" && text.length > 0,
+      `${name} 在 @ash/shared/free-workflow 和 server/src/craft-rules.ts 里都找不到`);
     const hits = samples.filter((sample) => sample.text.includes(text)).map((sample) => sample.id);
     assert.deepEqual([...hits].sort(), [...where].sort(),
       `${name} 的落脚处变了：现在在 ${hits.join("、") || "(没有任何样本)"}，` +
@@ -570,6 +606,26 @@ try {
     }
   }
 
+  // ⑥‴ 产出质量规则的**判据方向**。上面那张 PLACEMENT 盯的是「渲染出来落在哪几条消息里」，
+  //     这一条直接打生产判据本身：四个拼装入口都只认它的产物，所以判据塌了就是四处一起塌。
+  {
+    const { craftRulesFor, CRAFT_RULES } = await import("../src/craft-rules.js");
+    assert.equal(craftRulesFor({ freshContext: true, verifying: false }), CRAFT_RULES,
+      "没有旧上下文的执行首条消息没带产出质量规则：判据反了");
+    assert.equal(craftRulesFor({ freshContext: true, verifying: true }), "",
+      "审查/验证的首条消息带上了产出质量规则：那一轮交的是报告，不是新一版界面");
+    // 判据必须落在「模型手上有没有旧上下文」上，而不是「走的哪个 API 入口」：为假时一律
+    // 不贴，规则只贴一次，之后靠那条 CLI 会话自己留住（同 `AUTONOMY` 的分寸）。
+    assert.equal(craftRulesFor({ freshContext: false, verifying: false }), "",
+      "续跑（有旧上下文）也重贴了产出质量规则：规则只贴一次");
+    // 原句一字不改（用户 2026-10-30 的口径）。写死在这里是故意的：这两句是**用户给的
+    // 原话**，不是可以顺手改措辞的内部文案 —— 改一个字就得在 diff 里动这个断言。
+    assert.equal(CRAFT_RULES,
+      "避免不必要的次级标签和描述，让布局本身解释界面\n" +
+      "结合第一性原理和成熟实践，从根因修复 Bug，避免只遮住表面症状\n\n",
+      "产出质量规则的原句被改动了：用户给的是原话，改字要先问他");
+  }
+
   // ⑥′ 夹具声明的「这一份必须原样含有」。`REQUIRED` 只能写死字面量，而「本轮清单的**完整**
   //     地址有没有活着出现在投递消息里」是随夹具变的事实 —— 第 1 轮审查复现的正是它被误删。
   for (const { id, requires } of samples) {
@@ -594,6 +650,12 @@ try {
     assert.ok(!dedupeReminder(reminder, `正文里已经有 ${current}`).includes(current),
       "正文里已经有一模一样的那一句，提醒里仍留了第二份：该去重的没去掉");
   }
+
+  // ⑥⁗ 片段保留：拼装层不许把交进去的片段弄丢（第 1 轮审查 F1 的那条不变量）。判据、
+  //     夹具和三种调用事实都住在 `prompt-segment-retention.ts`：那是另一件事（这里量
+  //     「这条消息有多大、哪一段落在哪」，它量「拼装有没有把片段弄丢」），顺带让这份
+  //     不至于破 700 行（第 2 轮审查 F2）。
+  await (await import("./prompt-segment-retention.js")).assertSegmentRetention();
 
   // ⑦ 用户追认的体积目标：硬断言，超过即红（棘轮防回弹）。
   for (const { id, target, what } of TARGETS) {

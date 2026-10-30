@@ -46,7 +46,7 @@ import { LOST_SESSION_PATCH } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
-import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
+import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET, leadFirstMessage } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
@@ -440,7 +440,14 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   // 还在但文件已经不在,必须打断这个连续性。
   const rawMessage = resuming
     ? LEAD_RESUMED + promptedText + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
-    : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (promptedText ? `\n\n【新消息】${promptedText}` : "");
+    : leadFirstMessage({
+      preamble: LEAD_PREAMBLE(taskId, cfg.worker),
+      // 开台这一条是「没有旧上下文的首条消息」,判据跟下面那句浏览器策略同源(`resuming`)。
+      // 调度台不走审查链路,所以 `verifying` 恒假。
+      craft: { freshContext: !resuming, verifying: false },
+      objective,
+      newMessage: promptedText,
+    });
   const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), ASH_TASK_ID: taskId };
   await ex.prepareResume?.({ cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined, env: runEnv });
   // 授权现读、且读在开台之前的最后一刻:正文(rawMessage)拼好之后还隔着 runEnv 和
