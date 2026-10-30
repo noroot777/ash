@@ -3,6 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 
+const readConfig = (codexHome?: string): string => {
+  const configPath = join(codexHome?.trim() || join(homedir(), ".codex"), "config.toml");
+  try { return readFileSync(configPath, "utf8"); } catch { return ""; }
+};
+
 const hasServer = (config: string, name: string): boolean =>
   new RegExp(`^\\[mcp_servers\\.${name}\\]`, "m").test(config);
 
@@ -11,9 +16,7 @@ const hasServer = (config: string, name: string): boolean =>
  * 只在规范名确实不存在时回退，避免给一个未声明的 server 塞配置导致 Codex 整体拒载。
  */
 export function codexAshMcpServerName(codexHome = process.env.CODEX_HOME): string | null {
-  const configPath = join(codexHome?.trim() || join(homedir(), ".codex"), "config.toml");
-  let config = "";
-  try { config = readFileSync(configPath, "utf8"); } catch { /* 新安装按规范名 */ }
+  const config = readConfig(codexHome);
   if (hasServer(config, ASH_MCP_SERVER_NAME)) return ASH_MCP_SERVER_NAME;
   if (hasServer(config, LEGACY_ASH_MCP_SERVER_NAME)) return LEGACY_ASH_MCP_SERVER_NAME;
   return null;

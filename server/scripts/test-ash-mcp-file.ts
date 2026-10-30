@@ -1,0 +1,335 @@
+// ash MCP 预检的**配置文件那一档**（server/src/ash-mcp-file.ts）—— 问不了 CLI 本人时的退路。
+//
+// 为什么非钉不可：新链第 1 轮审查在 macOS 上用真配置实测，配置里确实没有 ash 登记，派审
+// 预检 `reachable:true`、启动自检一声不吭（问 CLI 要起进程，那台机器拿不到能核销进程的
+// 内核圈定，于是整条放行）。这一档要在那类机器上把「确定没有」说出来，同时**绝不**把
+// 「看不懂」读成「没有」—— 拦错一轮审查，用户得到的是一条根本跑不起来的链。
+//
+// 开头**强制关掉内核圈定**（`ASH_KERNEL_CONFINE=0`）：这样在哪个平台上走的都是同一条退路，
+// Windows/Linux 的验收也能把它跑一遍，不只在 macOS 上有效。
+//
+// 覆盖：
+//   1. TOML 扫描器：引号名 / 缩进 / 行尾注释 / 点号键 / 内联表 / 多行字符串里的假表头 /
+//      多行数组 / 两个兼容名一开一关 / 挂在别的表底下 / 整个内联 —— 判不了的一律 doubt；
+//      路径型表头（`[projects."…/harness"]`）不算信号
+//   2. codex 文件判据：absent / disabled / present / 没有文件 / 读不动 / 项目内 .codex
+//      （只到 git 根、不把宿主默认那份当项目配置）
+//   3. claude 文件判据：用户级 / 项目级（键是主仓 git 根或目录本身）/ `.mcp.json`（一路往上）/
+//      解析不了
+//   4. 端到端：派审预检在问不了 CLI 时按文件判，**一个进程都不起**；带 extraArgs 放行；
+//      409 文案写明证据来源与问不了的原因
+//   5. 启动自检：`enabled = false` 不再被快速通道放过（第 2 条），措辞随证据来源降档
+//   6. 「登记在 ≠ 起得来」：只出提示，不拦（第 3 条）
+//
+// 跑：npm -w server run test:ash-mcp-file
+import assert from "node:assert/strict";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { releaseTmpDb } from "./tmp-db.js";
+
+const stage = mkdtempSync(join(tmpdir(), "ash-mcp-file-"));
+process.env.ASH_DB = join(stage, "t.db");
+process.env.HARNESS_DB = process.env.ASH_DB;
+process.env.ASH_KERNEL_CONFINE = "0";
+
+try {
+  const { scanCodexToml, fileAshMcpVerdict, launchHint } = await import("../src/ash-mcp-file.js");
+
+  // ── 1. 扫描器 ───────────────────────────────────────────────────────────
+  {
+    const scan = (t: string) => {
+      const r = scanCodexToml(t);
+      return { names: Object.fromEntries([...r.servers].map(([n, s]) => [n, s.enabled])), doubt: !!r.doubt };
+    };
+    const yes = { names: { ash: true }, doubt: false };
+    assert.deepEqual(scan('[mcp_servers.ash]\ncommand = "node"\n'), yes, "标准写法");
+    assert.deepEqual(scan('[mcp_servers."ash"]\ncommand = "node"\n'), yes, "引号名（正则版判成缺失的那种）");
+    assert.deepEqual(scan('  [ mcp_servers . \'ash\' ]   # a=b ]\n  command = "node"\n'), yes,
+      "缩进 + 字面量引号 + 行尾注释里带 `=` 和 `]`");
+    assert.deepEqual(scan('mcp_servers.ash.command = "node"\n'), yes, "根上的点号键");
+    assert.deepEqual(scan('[mcp_servers]\nash = { command = "node" }\n'), yes, "内联表");
+    assert.deepEqual(scan('[mcp_servers.ash]\ncommand = "node"\nenabled = false\n'),
+      { names: { ash: false }, doubt: false }, "关着的登记必须认成关着（第 2 条的形状）");
+    assert.deepEqual(scan('mcp_servers.ash.enabled = false\n'), { names: { ash: false }, doubt: false });
+    assert.deepEqual(scan('[mcp_servers]\nash = { command = "node", enabled = false }\n'),
+      { names: { ash: false }, doubt: false });
+    // 另一个 server 的 enabled=false 不能算到 ash 头上（F2 那个形状），注释里的表头不算数。
+    assert.deepEqual(scan('[mcp_servers.foo] # 旁边\nenabled = false\n[mcp_servers.ash]\ncommand = "x"\n'), yes);
+    assert.deepEqual(scan('[mcp_servers.foo]\ncommand = "x" # [mcp_servers.ash]\n'), { names: {}, doubt: false },
+      "注释里的表头不是登记");
+    assert.deepEqual(scan('x = [\n  "[mcp_servers.ash]",\n]\n[mcp_servers.harness]\ncommand = "node"\n'),
+      { names: { harness: true }, doubt: false }, "多行数组续行里的 `[` 不是表头");
+    assert.deepEqual(
+      scan('[mcp_servers.ash]\nenabled = false\n[mcp_servers.harness]\ncommand = "node"\n'),
+      { names: { ash: false, harness: true }, doubt: false }, "两个兼容名各记各的");
+    assert.deepEqual(scan('model = "gpt"\n'), { names: {}, doubt: false });
+    // 判不了的一律 doubt：拦人只能落在「确定没有」上。
+    assert.equal(scan('note = """\n[mcp_servers.ash]\n"""\n').doubt, true,
+      "多行字符串里像表头的东西：扫描器不认、兜底也不许说「没有」");
+    assert.equal(scan('mcp_servers = { ash = { command = "node" } }\n').doubt, true, "整个 mcp_servers 写成内联");
+    assert.equal(scan('[profiles.p.mcp_servers.ash]\ncommand = "node"\n').doubt, true, "挂在别的表底下");
+    // codex 自己记项目信任就是路径型表头；路径里有 harness/ash 不是登记（新链第 3 轮第 1 条：
+    // 上一版兜底拿「行首 `[` + 行内有这两个词」当信号，跑过这个仓库的机器整份配置都成了「看不准」）。
+    for (const path of ["/Users/champion/code/harness", "/Users/x/ash/y", "C:\\\\ash"]) {
+      assert.deepEqual(
+        scan(`[mcp_servers.kb]\ncommand = "uv"\n[projects."${path}"]\ntrust_level = "trusted"\n`),
+        { names: {}, doubt: false }, `路径型表头不算信号：${path}`);
+    }
+    assert.equal(scan('note = """\nmcp_servers.harness.command = "x"\n"""\n').doubt, true,
+      "多行字符串里的点号键登记：照旧判不了");
+  }
+
+  // ── 2. codex 文件判据 ────────────────────────────────────────────────────
+  const codexHome = join(stage, "codex");
+  mkdirSync(codexHome, { recursive: true });
+  const writeCodex = (toml: string) => writeFileSync(join(codexHome, "config.toml"), toml);
+  {
+    const env = { CODEX_HOME: codexHome };
+    assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "absent", "没有 config.toml = 没有登记");
+    writeCodex('model = "x"\n[mcp_servers.linear]\ncommand = "y"\n');
+    assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "absent");
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\nenabled = false\n');
+    assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "disabled");
+    writeCodex('[mcp_servers."ash"]\ncommand = "node"\n');
+    assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "present");
+    writeCodex('note = """\n[mcp_servers.ash]\n"""\n');
+    assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "unknown", "扫描器没把握 ⇒ 判不了");
+    // 审查复现的原样配置：接过别的 MCP、codex 记过这个仓库的信任。ash 一条都没有 ⇒ 确定没有，
+    // 派审和启动自检两个出口都要说出来（新链第 3 轮第 1 条）。
+    writeCodex('model = "gpt-5"\n\n[mcp_servers.kb]\ncommand = "uv"\nargs = ["run", "kb-mcp"]\n\n'
+      + '[projects."/Users/champion/code/harness"]\ntrust_level = "trusted"\n');
+    assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "absent", "路径型表头不让整份配置失明");
+    const { ashMcpRegistration: quickReg } = await import("../src/auth/user-cli-mcp.js");
+    assert.equal(quickReg(codexHome, "codex").state, "absent", "启动自检的快速通道同样要说「没有」");
+
+    // 项目里的 .codex/config.toml 提到 mcp_servers：合并规则不复刻，判不了。祖先目录也算。
+    writeCodex('model = "x"\n');
+    const proj = join(stage, "proj-codex");
+    mkdirSync(join(proj, ".codex"), { recursive: true });
+    mkdirSync(join(proj, "sub"), { recursive: true });
+    writeFileSync(join(proj, ".codex", "config.toml"), '[mcp_servers.ash]\ncommand = "node"\n');
+    assert.equal(fileAshMcpVerdict("codex", env, [join(proj, "sub")]).state, "unknown");
+    assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "absent", "不指定目录时不看项目");
+
+    // 只看到 git 根为止（新链第 2 轮审查第 2 条；codex-cli 0.153 实测根外面的不读）。
+    mkdirSync(join(proj, "repo", ".git"), { recursive: true });
+    mkdirSync(join(proj, "repo", "sub"), { recursive: true });
+    assert.equal(fileAshMcpVerdict("codex", env, [join(proj, "repo", "sub")]).state, "absent",
+      "git 根外面那份 .codex/config.toml 这一轮不生效，不能替它下「判不了」");
+
+    // CODEX_HOME 指到别处时，宿主 ~/.codex/config.toml 不是项目配置 —— 任务目录在 $HOME 下、
+    // 一路没有 git 根也一样（审查证据 A 第 4 行就是这个形状）。
+    // 外面套一层 git 根，让向上查找停在舞台里：Windows 的 %TEMP% 就在真实用户目录底下，
+    // 不拦的话会一路走到**真实**的 `~/.codex/config.toml`（HOME 换掉之后它不再算宿主默认）。
+    const homeBox = join(stage, "home-box");
+    mkdirSync(join(homeBox, ".git"), { recursive: true });
+    const fakeHome = join(homeBox, "fake-home");
+    mkdirSync(join(fakeHome, ".codex"), { recursive: true });
+    mkdirSync(join(fakeHome, "work", "task"), { recursive: true });
+    writeFileSync(join(fakeHome, ".codex", "config.toml"), '[mcp_servers.ash]\ncommand = "node"\n');
+    const homeWas = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    try {
+      assert.equal(fileAshMcpVerdict("codex", env, [join(fakeHome, "work", "task")]).state, "absent",
+        "生效的是 CODEX_HOME 那份，宿主默认那份不构成证据");
+    } finally {
+      for (const [k, v] of Object.entries(homeWas)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      chmodSync(join(codexHome, "config.toml"), 0o000);
+      assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "unknown", "读不动 ≠ 没有");
+      chmodSync(join(codexHome, "config.toml"), 0o644);
+    }
+  }
+
+  // ── 3. claude 文件判据 ───────────────────────────────────────────────────
+  const claudeDir = join(stage, "claude");
+  mkdirSync(claudeDir, { recursive: true });
+  const writeClaude = (doc: unknown) => writeFileSync(join(claudeDir, ".claude.json"), JSON.stringify(doc));
+  {
+    const env = { CLAUDE_CONFIG_DIR: claudeDir };
+    const proj = join(stage, "proj-claude");
+    const deep = join(proj, "a", "b");
+    mkdirSync(deep, { recursive: true });
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "absent", "没有 .claude.json = 没有登记");
+    writeClaude({ mcpServers: { ash: { command: "node" } } });
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "present", "用户级");
+    // 项目级登记的键按 claude 自己的规则算（2.1.283 实测，新链第 3 轮第 3 条）。
+    const local = (key: string) =>
+      writeClaude({ mcpServers: { other: {} }, projects: { [key]: { mcpServers: { harness: { command: "node" } } } } });
+    local(proj);
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "absent",
+      "不在 git 仓库里时键就是目录本身，祖先目录的登记 claude 不认");
+    assert.equal(fileAshMcpVerdict("claude", env, [proj]).state, "present", "目录本身的键");
+    assert.equal(fileAshMcpVerdict("claude", env, [undefined]).state, "absent", "宿主默认上下文看不到项目级");
+    mkdirSync(join(proj, ".git"));
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "present", "在仓库里，键是 git 根");
+    local(deep);
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "absent", "子目录自己的键 claude 不认");
+    local(stage);
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "absent", "git 根外面祖先的键也不认");
+    // worktree：认的是主仓那一条，worktree 自己路径的键不认（ash 的任务正是跑在 worktree 里）。
+    const main = join(stage, "wt-main");
+    const wt = join(stage, "wt-task");
+    mkdirSync(join(main, ".git", "worktrees", "t"), { recursive: true });
+    writeFileSync(join(main, ".git", "worktrees", "t", "commondir"), "../..\n");
+    mkdirSync(join(wt, "sub"), { recursive: true });
+    writeFileSync(join(wt, ".git"), `gitdir: ${join(main, ".git", "worktrees", "t")}\n`);
+    local(main);
+    assert.equal(fileAshMcpVerdict("claude", env, [join(wt, "sub")]).state, "present", "worktree 认主仓的键");
+    local(wt);
+    assert.equal(fileAshMcpVerdict("claude", env, [join(wt, "sub")]).state, "absent", "worktree 自己路径的键不认");
+    // git 结构读不懂（子模块那种没有 commondir 的 gitdir）：算不出键，判不了。
+    const odd = join(stage, "odd-sub");
+    mkdirSync(odd, { recursive: true });
+    writeFileSync(join(odd, ".git"), "gitdir: ../nowhere/modules/x\n");
+    assert.equal(fileAshMcpVerdict("claude", env, [odd]).state, "unknown", "算不出键时不说「没有」");
+    writeClaude({ mcpServers: {} });
+    writeFileSync(join(proj, ".mcp.json"), JSON.stringify({ mcpServers: { ash: { command: "node" } } }));
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "unknown", ".mcp.json 要看审批状态，判不了");
+    rmSync(join(proj, ".mcp.json"));
+    // `.mcp.json` 跟项目级登记不同：git 根外面上层目录里的那份 claude 也读（实测 Pending
+    // approval），所以这一份照旧一路看上去。
+    writeFileSync(join(stage, ".mcp.json"), JSON.stringify({ mcpServers: { ash: { command: "node" } } }));
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "unknown", "git 根外面的 .mcp.json 也算");
+    rmSync(join(stage, ".mcp.json"));
+    writeFileSync(join(claudeDir, ".claude.json"), "{ 半截");
+    assert.equal(fileAshMcpVerdict("claude", env, [deep]).state, "unknown", "解析不了 ≠ 没有");
+    writeClaude({});
+  }
+
+  // ── 4. 端到端：派审预检在问不了 CLI 时按文件判 ─────────────────────────────
+  // 假 CLI 被执行就留痕 —— 这一档**一个进程都不该起**。
+  const binDir = join(stage, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const ran = join(stage, "cli-ran");
+  for (const name of ["codex", "claude"]) {
+    if (process.platform === "win32") {
+      writeFileSync(join(binDir, `${name}.cmd`), `@echo off\r\necho ran> "${ran}"\r\nexit /b 0\r\n`);
+    } else {
+      writeFileSync(join(binDir, name), `#!/bin/sh\necho ran > "${ran}"\n`);
+      chmodSync(join(binDir, name), 0o755);
+    }
+  }
+  const pathWas = process.env.PATH;
+  process.env.PATH = `${binDir}${delimiter}${pathWas ?? ""}`;
+  process.env.CODEX_HOME = codexHome;
+  process.env.CLAUDE_CONFIG_DIR = claudeDir;
+  const { ensureSchema, db } = await import("../src/db/index.js");
+  await ensureSchema();
+  const { ashMcpReachability, hostAshMcpGap } = await import("../src/ash-mcp-reachability.js");
+  {
+    writeCodex('model = "x"\n');
+    const miss = await ashMcpReachability({ agentType: "codex" });
+    assert.equal(miss.reachable, false, "问不了 CLI 时，配置里确定没有就要拦（第 1 条）");
+    assert.match(miss.problem ?? "", /读配置文件得出/, "文案写明证据来源");
+    assert.match(miss.problem ?? "", /ASH_KERNEL_CONFINE=0/, "文案带上问不了 CLI 的原因");
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\nenabled = false\n');
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, false, "关着也拦");
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\n');
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true);
+    writeCodex('note = """\n[mcp_servers.ash]\n"""\n');
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true, "判不了就放行");
+
+    // 带 extraArgs：文件里看不到命令行覆盖，不下硬结论（同 claude 那条）。
+    writeCodex('model = "x"\n');
+    const { agents } = await import("../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    await db.insert(agents).values({
+      id: "file-default", name: "codex-default", type: "codex", isDefault: true,
+      extraArgs: JSON.stringify(["-cmcp_servers.ash.command=node"]),
+    });
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true,
+      "profile 带了 -c 覆盖：文件那一档看不到它，必须放行");
+    await db.delete(agents).where(eq(agents.id, "file-default"));
+
+    // claude：用户级没有、候选目录里有项目级 ⇒ 放行；都没有 ⇒ 拦。
+    const proj = join(stage, "proj-claude");
+    writeClaude({ projects: { [proj]: { mcpServers: { ash: { command: "node" } } } } });
+    assert.equal((await ashMcpReachability({ agentType: "claude", cwdCandidates: [proj] })).reachable, true);
+    assert.equal((await ashMcpReachability({ agentType: "claude", cwdCandidates: [] })).reachable, false);
+    writeClaude({});
+
+    assert.ok(!existsSync(ran), "配置文件那一档一个进程都不该起");
+  }
+
+  // ── 5. 启动自检 ──────────────────────────────────────────────────────────
+  {
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\nenabled = false\n');
+    const gap = await hostAshMcpGap("codex");
+    assert.ok(gap, "宿主配置里登记关着 ⇒ 启动自检必须点名");
+    assert.equal(gap!.basis, "file", "问不了 CLI 的机器上，证据来源是配置文件");
+
+    const { ashMcpRegistration } = await import("../src/auth/user-cli-mcp.js");
+    assert.equal(ashMcpRegistration(codexHome, "codex").state, "disabled",
+      "快速通道必须认出 enabled = false —— 上一版报成 present，启动自检直接放过（第 2 条）");
+    writeCodex('[mcp_servers."ash"]\ncommand = "node"\n');
+    assert.equal(ashMcpRegistration(codexHome, "codex").state, "present", "引号表头是合法登记");
+
+    // 整条启动自检：关着的登记要出声，而且措辞要降一档（读配置得出、没经 CLI 确认）。
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\nenabled = false\n');
+    const warned: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
+    try {
+      const { sweepPersonalAshMcp } = await import("../src/auth/user-cli.js");
+      await sweepPersonalAshMcp();
+    } finally { console.warn = realWarn; }
+    const all = warned.join("\n");
+    assert.match(all, /ash MCP 登记/, `关着的登记必须出声：${all}`);
+    assert.match(all, /没经 CLI 本人确认/, "证据来自配置文件时措辞要降档");
+    assert.match(all, /enabled = false/, "点名到具体原因");
+
+    // 装了 codex、从没写过 config.toml：派审门禁答「确实没有」，启动自检也必须出声
+    // （新链第 2 轮审查第 3 条 —— 上一版拿「文件不存在」当「没用过这个 CLI」直接跳过）。
+    rmSync(join(codexHome, "config.toml"));
+    warned.length = 0;
+    console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
+    try {
+      const { sweepPersonalAshMcp } = await import("../src/auth/user-cli.js");
+      await sweepPersonalAshMcp();
+    } finally { console.warn = realWarn; }
+    assert.match(warned.join("\n"), /codex（[^）]*config\.toml）：.*还不存在/,
+      `配置文件还没建出来也要点名：${warned.join("\n")}`);
+  }
+
+  // ── 6. 登记在 ≠ 起得来：只出提示 ──────────────────────────────────────────
+  {
+    const { recordListeningPort } = await import("../src/listening-port.js");
+    assert.equal(launchHint({ command: "node", args: [], ashUrl: "http://127.0.0.1:4317" }), null,
+      "没 listen 过就不比端口（猜出来的端口只会制造假提示）");
+    recordListeningPort(4399);
+    const hint = launchHint({
+      command: "definitely-not-a-real-bin-ash",
+      args: [join(stage, "gone", "index.js")],
+      ashUrl: "http://localhost:4317",
+    });
+    assert.match(hint ?? "", /找不到/, "command 解析不到要说");
+    assert.match(hint ?? "", /不存在/, "指向的脚本不在要说");
+    assert.match(hint ?? "", /4317.*4399/, "端口对不上要说");
+    assert.match(hint ?? "", /没拦/, "明说只是提示");
+    assert.equal(launchHint({ command: "node", args: [], ashUrl: "http://127.0.0.1:4399" }), null);
+
+    // 端到端：放行，但带着提示。
+    writeCodex('[mcp_servers.ash]\ncommand = "definitely-not-a-real-bin-ash"\n');
+    const r = await ashMcpReachability({ agentType: "codex" });
+    assert.equal(r.reachable, true, "起不来只是推断，不拦");
+    assert.match(r.warning ?? "", /找不到/);
+
+    const { claudeStatusHint } = await import("../src/ash-mcp-reachability.js");
+    assert.equal(claudeStatusHint("ash:\n  Scope: User config\n  Status: ✔ Connected\n"), null);
+    assert.match(claudeStatusHint("ash:\n  Status: ✘ Failed to connect\n") ?? "", /连不上/);
+    assert.equal(claudeStatusHint("没有 Status 这一行\n"), null, "读不到就不说");
+  }
+
+  process.env.PATH = pathWas;
+  console.log("✅ ash MCP 预检的配置文件那一档（扫描器 / 文件判据 / 端到端 / 启动自检 / 起法提示）通过");
+} finally {
+  await releaseTmpDb();
+  rmSync(stage, { recursive: true, force: true });
+}

@@ -474,22 +474,7 @@ export function inspectProcessesSync(
   const found = new Map<number, { startedAt: string | null; command: string | null }>();
   const want = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
   if (!want.length) return found;
-  const FILTER_MAX = 32;
-  if (IS_WINDOWS) {
-    const filter = want.length <= FILTER_MAX
-      ? want.map((pid) => `ProcessId=${pid}`).join(" or ")
-      : null;
-    const script = filter
-      ? PS_PROCESS_SCRIPT
-        .replace("Get-CimInstance Win32_Process -ErrorAction Stop", `Get-CimInstance Win32_Process -Filter "${filter}" -ErrorAction Stop`)
-        .replace("Get-WmiObject Win32_Process", `Get-WmiObject Win32_Process -Filter "${filter}"`)
-      : PS_PROCESS_SCRIPT;
-    const wanted = new Set(want);
-    for (const row of readWindowsRows(powerShellSync(script)).rows) {
-      if (wanted.has(row.pid)) found.set(row.pid, { startedAt: row.startedAt, command: row.command || null });
-    }
-    return found;
-  }
+  if (IS_WINDOWS) return pickWindowsRows(want, powerShellSync(windowsInspectScript(want)));
   // POSIX:`ps` 一次收下整份名单。字段顺序与单号那一问一致(`lstart` 定宽 24 列在前)。
   let out: string;
   try {
@@ -505,6 +490,44 @@ export function inspectProcessesSync(
     const m = /^\s*(\d+)\s+(.{24})\s+(.*)$/.exec(line);
     if (!m) continue;
     found.set(Number(m[1]), { startedAt: m[2]!.trim(), command: m[3]!.trim() || null });
+  }
+  return found;
+}
+
+/**
+ * `inspectProcessesSync` 的异步版。**只有 Windows 那一支是真异步的**:那边一问要起
+ * PowerShell(实测 1~1.7 秒),同步跑会把整个 server 的事件循环堵住(新链第 1 轮审查第 4 条:
+ * 派审预检期间其它请求、SSE 一起卡住);POSIX 那一支是一次 `ps`/读 `/proc`,照旧同步。
+ */
+export async function inspectProcessesAsync(
+  pids: readonly number[],
+): Promise<Map<number, { startedAt: string | null; command: string | null }>> {
+  const want = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (!IS_WINDOWS || !want.length) return inspectProcessesSync(want);
+  return pickWindowsRows(want, await powerShell(windowsInspectScript(want)));
+}
+
+/** 名单不长就让 CIM 按号过滤(一次冷启动少传很多行),长了整表拉回来自己挑。 */
+function windowsInspectScript(want: readonly number[]): string {
+  const FILTER_MAX = 32;
+  const filter = want.length <= FILTER_MAX
+    ? want.map((pid) => `ProcessId=${pid}`).join(" or ")
+    : null;
+  return filter
+    ? PS_PROCESS_SCRIPT
+      .replace("Get-CimInstance Win32_Process -ErrorAction Stop", `Get-CimInstance Win32_Process -Filter "${filter}" -ErrorAction Stop`)
+      .replace("Get-WmiObject Win32_Process", `Get-WmiObject Win32_Process -Filter "${filter}"`)
+    : PS_PROCESS_SCRIPT;
+}
+
+function pickWindowsRows(
+  want: readonly number[],
+  text: string,
+): Map<number, { startedAt: string | null; command: string | null }> {
+  const found = new Map<number, { startedAt: string | null; command: string | null }>();
+  const wanted = new Set(want);
+  for (const row of readWindowsRows(text).rows) {
+    if (wanted.has(row.pid)) found.set(row.pid, { startedAt: row.startedAt, command: row.command || null });
   }
   return found;
 }

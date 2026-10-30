@@ -28,7 +28,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
-import { codexAshMcpServerName } from "../executors/codex-mcp.js";
+import { scanCodexToml } from "../ash-mcp-file.js";
 import { currentListeningPort } from "../listening-port.js";
 import { REPO_DIR } from "../paths.js";
 
@@ -65,21 +65,81 @@ export function ensureAshMcp(dir: string, agentType: string, hostHome: string = 
  * 而宿主那份 `~/.claude.json` 是用户自己的配置 —— 检查可以,写一个字都不行。
  */
 export function readAshMcp(dir: string, agentType: string): PersonalAshMcp {
+  const found = ashMcpRegistration(dir, agentType);
+  return found.state === "present" ? ok(found.serverName!) : fail(found.detail);
+}
+
+export type AshMcpRegistration = {
+  /**
+   * present=登记在且没关 / absent=确实没有 / disabled=登记在但写着 `enabled = false` /
+   * unknown=读不出来，别据此下结论
+   */
+  state: "present" | "absent" | "disabled" | "unknown";
+  serverName: string | null;
+  detail: string;
+};
+
+/**
+ * 同一个问题的**三态**版本。
+ *
+ * 为什么 `PersonalAshMcp` 那两态不够用：它把「确实没有登记」和「文件读不出来」一起记成
+ * `configured:false`，只有文案能把它们分开。设置页拿它显示没问题 —— 两种都该提示用户去看
+ * 一眼。但起跑前的预检要据此**拦下一整轮审查**，而拦错的代价是一条根本跑不起来的链，
+ * 所以这两种必须分得开，由调用方自己决定向哪边开（预检一律向放行开，见
+ * `ash-mcp-reachability.ts`）。
+ */
+export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegistration {
+  const none = (detail: string): AshMcpRegistration => ({ state: "absent", serverName: null, detail });
+  const dunno = (detail: string): AshMcpRegistration => ({ state: "unknown", serverName: null, detail });
+  const file = agentType === "claude" ? join(dir, ".claude.json")
+    : agentType === "codex" ? join(dir, "config.toml")
+    : null;
+  if (!file) return dunno(`${agentType} 没有个人配置目录，这一问不适用`);
+  // **先分清「没有这个文件」和「有但读不动」**：下面两条读取路径都把所有异常吞成
+  // 「空」，于是一次 EACCES / EIO 会被说成「没有登记」（第 1 轮审查 N1）。absent 是个
+  // 会被用来拦人的结论，只有确实没有文件才配得上它。
+  const probe = fileState(file);
+  if (probe === "unreadable") return dunno(`${file} 读不出来`);
+  if (probe === "missing") return none(`${file} 还不存在`);
   try {
     if (agentType === "claude") {
-      const file = join(dir, ".claude.json");
       const doc = readJsonObject(file);
-      if (!doc) return fail(`${file} 解析不了`);
+      // 解析不了 ≠ 没登记：文件可能正被 CLI 写到一半，也可能是用户手工改坏了一个花括号。
+      if (!doc) return dunno(`${file} 解析不了`);
       const name = claudeServerName(doc);
-      return name ? ok(name) : fail("这个配置目录里没有 ash MCP 登记");
+      return name
+        ? { state: "present", serverName: name, detail: "" }
+        : none("这个配置目录里没有 ash MCP 登记");
     }
-    if (agentType === "codex") {
-      const name = codexAshMcpServerName(dir);
-      return name ? ok(name) : fail("这个配置目录里没有 ash MCP 登记");
+    // **不用 `codexAshMcpServerName`**：它是执行器注入 `env_vars` 用的严格行首正则，
+    // 认不出 `[mcp_servers."ash"]`、缩进表头，也看不见 `enabled = false` —— 禁用的登记被
+    // 它报成「在」，启动自检的快速通道于是直接放过，那道本来算得出「没启用」的 CLI 确认
+    // 被跳过（新链第 1 轮审查第 2 条）。这里要的是三态判断，交给按表头/键路径认的扫描器。
+    const scan = scanCodexToml(readFileSync(file, "utf8"));
+    if (scan.doubt) return dunno(scan.doubt);
+    const names = [...scan.servers.keys()];
+    const live = names.find((n) => scan.servers.get(n)!.enabled);
+    if (live) return { state: "present", serverName: live, detail: "" };
+    if (names.length) {
+      return {
+        state: "disabled",
+        serverName: names[0]!,
+        detail: `${names.map((n) => `[mcp_servers.${n}]`).join("、")} 写着 enabled = false`,
+      };
     }
-    return fail(`${agentType} 没有个人配置目录，这一问不适用`);
+    return none("这个配置目录里没有 ash MCP 登记");
   } catch (e) {
-    return fail(`读 ash MCP 登记失败：${(e as Error).message}`);
+    return dunno(`读 ash MCP 登记失败：${(e as Error).message}`);
+  }
+}
+
+/** 「没有这个文件」/「有但读不动」/「读得动」。判 absent 之前必须先过这一关（N1）。 */
+function fileState(file: string): "missing" | "readable" | "unreadable" {
+  try {
+    readFileSync(file);
+    return "readable";
+  } catch (e) {
+    return (e as { code?: string }).code === "ENOENT" ? "missing" : "unreadable";
   }
 }
 
@@ -90,9 +150,34 @@ export function readAshMcp(dir: string, agentType: string): PersonalAshMcp {
  * `~/.codex/config.toml`;两条路径差一层,所以这里不能拿 home 当 dir 直接问。
  */
 export function hostAshMcp(agentType: string, hostHome: string = homedir()): PersonalAshMcp {
-  if (agentType === "claude") return readAshMcp(hostHome, "claude");
-  if (agentType === "codex") return readAshMcp(join(hostHome, ".codex"), "codex");
-  return fail(`${agentType} 没有宿主级配置目录，这一问不适用`);
+  const dir = hostCliConfigDir(agentType, hostHome);
+  return dir ? readAshMcp(dir, agentType) : fail(`${agentType} 没有宿主级配置目录，这一问不适用`);
+}
+
+/**
+ * 宿主机上这个 CLI 真正读的配置目录。
+ *
+ * **必须尊重 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`**：那两个变量由 ash 进程原样继承给
+ * 子进程，CLI 认的就是它们。写死 `homedir()` 会两头都错（第 1 轮审查 F1 的同类位置）——
+ * 实际目录有登记却报缺失，默认目录有登记而实际目录没有时又漏报。
+ *
+ * 两个 CLI 的路径差一层：claude 的用户级配置是配置目录**根**下的 `.claude.json`，
+ * codex 的是 `$CODEX_HOME/config.toml`。
+ */
+export function hostCliConfigDir(agentType: string, hostHome: string = homedir()): string | null {
+  if (agentType === "claude") return process.env.CLAUDE_CONFIG_DIR?.trim() || hostHome;
+  if (agentType === "codex") return process.env.CODEX_HOME?.trim() || join(hostHome, ".codex");
+  return null;
+}
+
+/**
+ * 宿主机上这个 CLI 的用户级配置文件在哪（跟着 `hostCliConfigDir` 走）。
+ * 启动自检告警时拿它把路径指给用户（它不存在不代表 CLI 没装，见 `warnHostAshMcp`）。
+ */
+export function hostCliConfigFile(agentType: string, hostHome: string = homedir()): string | null {
+  const dir = hostCliConfigDir(agentType, hostHome);
+  if (!dir) return null;
+  return agentType === "claude" ? join(dir, ".claude.json") : join(dir, "config.toml");
 }
 
 // ── claude:~/.claude.json 的 mcpServers ────────────────────────────────────
@@ -138,13 +223,24 @@ function builtinClaudeEntry(): unknown | null {
 // ── codex:$CODEX_HOME/config.toml 的 [mcp_servers.*] ───────────────────────
 
 function ensureCodexAshMcp(dir: string, hostHome: string): PersonalAshMcp {
-  // 「有没有」的判据跟执行器用的是同一份(codex-mcp.ts),免得两边对 TOML 的理解漂移。
-  const already = codexAshMcpServerName(dir);
-  if (already) return ok(already);
+  // 「有没有」跟读那一侧（`ashMcpRegistration`）问同一个扫描器。上一版用的是执行器注入
+  // `env_vars` 的严格行首正则，认不出 `[mcp_servers."ash"]`、缩进表头，判成「没有」就再
+  // append 一份 —— 同名表重复，codex 整份配置都读不出来（新链第 2 轮审查第 5 条）。
+  // 所以只有扫描器**确定没有**时才写；关着的、看不准的都不碰，如实报出来。
+  const file = join(dir, "config.toml");
+  // 读不动的文件不能当空的：下面那次 writeAtomic 会拿一份只含 ash 的新文件把它整个盖掉。
+  if (fileState(file) === "unreadable") return fail(`${file} 读不出来，没有自动追加`);
+  const current = readTextOrEmpty(file);
+  const scan = scanCodexToml(current);
+  if (scan.doubt) return fail(`看不准 ${file} 里有没有 ash MCP 登记（${scan.doubt}），没有自动追加，免得写出重复的表`);
+  const names = [...scan.servers.keys()];
+  const live = names.find((n) => scan.servers.get(n)!.enabled);
+  if (live) return ok(live);
+  if (names.length) {
+    return fail(`${file} 里的 ${names.map((n) => `[mcp_servers.${n}]`).join("、")} 写着 enabled = false，没有替你打开`);
+  }
   const block = hostCodexBlock(hostHome) ?? builtinCodexBlock();
   if (!block) return fail(NO_SOURCE);
-  const file = join(dir, "config.toml");
-  const current = readTextOrEmpty(file);
   writeAtomic(file, current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`);
   return ok(ASH_MCP_SERVER_NAME);
 }

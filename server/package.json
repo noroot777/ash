@@ -215,7 +215,11 @@
     "test:turn-migration": "tsx scripts/test-session-turn-migration.ts",
     "test:turn-persist": "tsx scripts/test-session-turn-persist.ts",
     "//test:duet-image-ownership": "讨论里 agent 贴的图：走真路由验普通成员看不看得到（上传归属登记），主发言者与子智能体两条路径各一次。",
-    "test:duet-image-ownership": "tsx scripts/test-duet-image-ownership.ts"
+    "test:duet-image-ownership": "tsx scripts/test-duet-image-ownership.ts",
+    "test:ash-mcp-reach": "tsx scripts/test-ash-mcp-reach.ts",
+    "test:ash-mcp-probe": "tsx scripts/test-ash-mcp-probe.ts",
+    "test:ash-mcp-file": "tsx scripts/test-ash-mcp-file.ts",
+    "test:ash-mcp-launch": "tsx scripts/test-ash-mcp-launch.ts"
   },
   "dependencies": {
     "@ash/shared": "*",

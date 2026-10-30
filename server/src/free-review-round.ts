@@ -6,6 +6,7 @@
 // 本文件），`task-retry-turn.ts` 直接从这里取重跑入口，不用绕回去。
 import type { AgentType } from "@ash/shared";
 import { and, desc, eq } from "drizzle-orm";
+import { gateAshMcpBeforeLaunch } from "./ash-mcp-launch-gate.js";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, projects, sessions, tasks } from "./db/schema.js";
@@ -104,6 +105,10 @@ export async function failReviewStart(run: ReviewRunRow, message: string): Promi
   bus.publish({ type: "task.review", taskId: run.taskId });
 }
 
+
+// 预检的候选目录超集挪到了 `ash-mcp-launch-gate.ts`（验证轮、辩论也要用）；这里留一个转出口。
+export { reviewCwdCandidates, type ReviewCwdSession } from "./ash-mcp-launch-gate.js";
+
 /**
  * 崩掉的那一轮能不能**从中断处接着做**：那条 CLI 会话在崩掉的那一回合里干过活吗。
  *
@@ -129,6 +134,7 @@ export async function launchReviewRound(
   await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   let cwd: string | undefined;
+  let workspacePath: string | undefined;
   // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，
   // 全靠它跟当前 HEAD 比，不靠任何状态字段。取不到（工作区缺失）就留 null。
   if (run.targetKind === "accepted_merge") {
@@ -138,12 +144,26 @@ export async function launchReviewRound(
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
   } else if (project) {
     const workspace = await taskWorkspace(task, project.repoPath).catch(() => null);
+    workspacePath = workspace?.path;
     const head = workspace ? await headCommit(workspace.path) : null;
     if (head) {
       await db.update(freeReviewRounds).set({ reviewedCommit: head })
         .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
     }
   }
+  // 审查者交卷靠 ash MCP 的 report_stage，而那条登记在**它自己的 CLI 配置里**，ash 只能
+  // 问、不能替它注入。缺了的话这一轮会完整跑完、报告也写得好好的，最后一步才发现没有
+  // 工具可调 —— 一轮审查动辄几十分钟、几百万 token（2026-10-28 现场）。所以在这儿拦，
+  // 抛出去由三个调用点统一走 failReviewStart。验证轮、辩论走的是同一道闸（ash-mcp-launch-gate.ts）。
+  //
+  // **排在 cwd 算出来之后**：claude 的项目级登记（`--scope local`）只在那个目录下看得见，
+  // 在它之前问等于拿「别的目录没有」去拦这一轮（第 1 轮审查 F1）。只传单个 `cwd` 不够 ——
+  // 普通工作区分支的 `cwd` 一直是 undefined，于是预检在 **server 进程**的目录里问，
+  // 任务目录里接好的 claude 被判成没登记（第 2 位审查者 F1），所以闸那边按超集问。
+  await gateAshMcpBeforeLaunch(task, { agentType: run.agentType, executorId: run.executorId }, "审查者", {
+    cwd,
+    workspacePath,
+  });
   const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
   // 重跑分两档，差别不在按钮而在**送进去的那句话**：上下文还在就只说「接着做」（一条崩在
   // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。

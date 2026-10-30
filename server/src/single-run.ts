@@ -16,7 +16,7 @@ import { bus } from "./bus.js";
 import { closeSessionTurns, recordTurnSpan } from "./session-turns.js";
 import { scanForTitle } from "./auto-title.js";
 import {
-  adoptRun, bindNativeSteer, finalizeAbandonedRun, takeSteered, takeStopped,
+  adoptRun, bindNativeSteer, finalizeAbandonedRun, takeSteered, takeStopped, turnIdentity,
 } from "./runs.js";
 import { now } from "./util.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
@@ -35,6 +35,7 @@ import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./fre
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
+import { noteReviewerChannelGap, noteTurnChannelGap } from "./review-channel-gap.js";
 import { afterSettlement, settleTaskStatus } from "./settle-status.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 import { markCliGoalStarted, persistRunGoal } from "./task-cli-state.js";
@@ -461,6 +462,17 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       executionFailed,
     );
   }
+  // 审查旁路回合收尾了，却一次 ash MCP 都没调过：把原因说出来（review-channel-gap.ts）。
+  // **排在 afterSettlement 之后** —— 那一步里自由工作流才写下「未能正常给出结论，已停止
+  // 自动链」，这一句紧跟其后才读得通（先结果、后原因）。说不出来就什么都不说，绝不因此
+  // 影响这一轮的落位。
+  if (role === "reviewer") {
+    // 回合身份在结算期间还占着（orchestrator 在 consumeSingleRun 之后才 releaseTurn），
+    // 这一轮绑的是哪一次审查就从那里整份读。
+    const review = turnIdentity(taskId)?.review ?? null;
+    await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped, review })
+      .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
+  }
   if (settled.note) {
     // 结算说明落成**会话旁注**（持久 system 行 + SSE），跟会话轮换旁注同一条道：
     // 它讲的是「这一轮为什么落成这个状态」，不是 agent 干的活，也不是执行器报的错。
@@ -475,6 +487,12 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   flushSessionNotices();
   out.end();
+  // 普通回合 exit 0 却没交卷：会话证据点名 ash MCP 没连上时，把原因接在结算说明后面说出来
+  // （先结果、后原因；只认确定证据，见 review-channel-gap.ts 的 noteTurnChannelGap）。
+  if (role !== "reviewer" && settled.failureReason === "missing_completion_confirmation") {
+    await noteTurnChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType })
+      .catch((error) => { console.error(`[ash] noteTurnChannelGap(${taskId}) failed:`, error); return false; });
+  }
   } finally {
     // 正常路径上上面那句已经把旁注清空了，这里是**异常路径**的保险：清库、重放、结算
     // 任何一步抛错，都不能让「这条会话作废了、下次会丢上下文」只活在实时 SSE 里 ——

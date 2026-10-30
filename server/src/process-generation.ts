@@ -34,7 +34,8 @@
 import { execFile, execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import {
-  IS_WINDOWS, inspectProcessSync, inspectProcessesSync, isPidAlive, listProcessesComplete,
+  IS_WINDOWS, inspectProcessSync, inspectProcessesAsync, inspectProcessesSync, isPidAlive,
+  listProcessesComplete,
 } from "./platform.js";
 import type { ProcessTableRead } from "./platform.js";
 
@@ -139,6 +140,24 @@ export function processGenerationsSync(
   }
   if (!askTable.length) return gens;
   for (const [pid, row] of inspectProcessesSync(askTable)) {
+    const startedAt = row.startedAt?.trim();
+    if (startedAt) gens.set(pid, `t:${startedAt}`);
+  }
+  return gens;
+}
+
+/**
+ * 同上的异步版:拼法逐字一致(同一个 `t:` 文本),只是 Windows 上那次进程表查询不再同步起
+ * PowerShell。给事件循环上还有别的活要干的调用方用(派审预检,见 `ash-mcp-probe.ts`)。
+ */
+export async function processGenerationsAsync(
+  pids: readonly number[],
+): Promise<Map<number, ProcessGeneration>> {
+  if (!IS_WINDOWS) return processGenerationsSync(pids);
+  const gens = new Map<number, ProcessGeneration>();
+  const want = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (!want.length) return gens;
+  for (const [pid, row] of await inspectProcessesAsync(want)) {
     const startedAt = row.startedAt?.trim();
     if (startedAt) gens.set(pid, `t:${startedAt}`);
   }

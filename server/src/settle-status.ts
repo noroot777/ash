@@ -118,6 +118,7 @@ export async function settleTaskStatus(
   status: TaskStatus;
   note?: string;
   confirmedDone: boolean;
+  failureReason?: "missing_completion_confirmation";
   /** 这一轮是 CLI 原生命令（`/compact`）—— 调用方据此整段跳过结算钩子。 */
   nativeTurn: boolean;
 }> {
@@ -330,5 +331,6 @@ export async function settleTaskStatus(
   const hint = await turnOutputHint(taskId);
   await setStatus(taskId, "failed");
   notify("failed_unconfirmed", undefined, hint);
-  return { status: "failed", note: UNCONFIRMED_NOTE + hint, confirmedDone: false, nativeTurn };
+  return { status: "failed", note: UNCONFIRMED_NOTE + hint, confirmedDone: false, nativeTurn,
+    failureReason: "missing_completion_confirmation" };
 }

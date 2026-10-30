@@ -21,7 +21,7 @@ import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync
 import { join } from "node:path";
 import type { AgentType, PersonalCliEnv, PersonalSkill } from "@ash/shared";
 import { DATA_DIR } from "../paths.js";
-import { ensureAshMcp } from "./user-cli-mcp.js";
+import { ensureAshMcp, ashMcpRegistration, hostCliConfigDir, hostCliConfigFile } from "./user-cli-mcp.js";
 
 /** 个人配置目录的根。刻意放 data/ 下 —— 见文件顶部。 */
 export const USER_CLI_ROOT = join(DATA_DIR, "user-cli");
@@ -184,19 +184,58 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
 }
 
 /**
- * 启动自检:隔离档下把每个人的个人配置目录补齐 ash MCP,补不上的**在日志里点名**。
+ * 共用宿主 CLI 的那一档（含自用模式）：宿主配置里缺 ash MCP 时**出声，但一个字节都不改**。
  *
- * 为什么补做之外还要单独扫一趟:`ensureUserCliDir` 只在「有人起任务 / 打开设置页」时
- * 才跑到,而缺这条登记的表现是**任务照跑、干完记 failed** —— 等第一个任务白跑一轮才
- * 发现,已经晚了一轮。启动时扫一遍,机器起来就是好的;补不上(没 build 过 mcp、配置
- * 文件坏了)则必须出声,否则用户只会看到一堆莫名其妙的失败任务。
- *
- * best-effort:任何一步出错都不许影响启动。
+ * 边界见 `user-cli-mcp.ts` 开头那条：那些是用户自己的配置文件。但「不该改」不等于
+ * 「不该说」—— 2026-10-28 现场正是一台 `~/.codex/config.toml` 里从来没有过
+ * `[mcp_servers.ash]` 的机器：codex 任务干完活交不了卷、一律记 failed，一轮审查更是
+ * 跑满 35 分钟写完报告，最后才发现没有 `report_stage` 可调，而 ash 全程一言不发。
  */
+async function warnHostAshMcp(): Promise<void> {
+  const gaps: { line: string; basis: "cli" | "file" }[] = [];
+  for (const agentType of ["claude", "codex"]) {
+    const file = hostCliConfigFile(agentType);
+    // **不拿「配置文件在不在」当「这个 CLI 用没用过」**：装了 codex、从没写过 config.toml 的
+    // 机器正是最该出声的那种 —— 派审那道门禁对同一个形状答的是「确实没有」（新链第 2 轮审查
+    // 第 3 条）。「这台机器上有没有这个 CLI」由 `hostAshMcpGap` 自己判（找不到 CLI 就不报缺口），
+    // 跟派审用同一份解析，这里不另起一份。
+    if (!file) continue;
+    const dir = hostCliConfigDir(agentType);
+    // 两道判据，顺序有意：**先用配置文件快速放过**（已经接好的机器零开销），只有它说
+    // 「没有」或「关着」才去确认。快速通道**只许省掉那次确认，不许替它下「没问题」的结论**：
+    // 上一版只看「不是 absent」就放过，`enabled = false` 的登记读出来是「在」，于是那道
+    // 本来算得出「没启用」的 CLI 确认被跳过（新链第 1 轮审查第 2 条）。所以只有明确的
+    // present 才放过；读不出来（unknown）也放过 —— 那时确认那一道同样问不出结论。
+    const quick = dir ? ashMcpRegistration(dir, agentType).state : "unknown";
+    if (quick === "present" || quick === "unknown") continue;
+    const { hostAshMcpGap } = await import("../ash-mcp-reachability.js");
+    const gap = await hostAshMcpGap(agentType);
+    if (!gap) continue;
+    gaps.push({ line: `${agentType}（${file}）：${gap.problem}`, basis: gap.basis });
+  }
+  if (!gaps.length) return;
+  // 措辞里的「这台机器的默认配置下」不是客套：这里问的是**宿主默认上下文** ——
+  // `hostAshMcpGap` 没有任务目录、没有执行器 profile，而 claude 的项目级登记
+  // (`--scope local`)和 codex 的 `-c mcp_servers.…` 覆盖都能让某条具体任务照样有工具。
+  // 派审那道门禁(`ashMcpReachability`)才问得到那些,所以这行启动日志只敢说默认配置。
+  //
+  // 证据来源也要说实话：问不了 CLI 本人的机器上（macOS 等，见 ash-mcp-reachability.ts
+  // 「问不了 CLI 时」）结论来自配置文件，措辞降一档成「看配置像是没登记」。
+  const fromCli = gaps.every((g) => g.basis === "cli");
+  console.warn((fromCli
+    ? "[ash] 这些 CLI 在这台机器的默认配置下自己报告没有可用的 ash MCP 登记，"
+    : "[ash] 看这台机器的默认配置，这些 CLI 像是没有可用的 ash MCP 登记（读配置得出，没经 CLI 本人确认），")
+    + "这么跑起来的 agent 交不了卷"
+    + "（没有 complete_task，干完的活会记 failed；派出去的审查跑完也给不出结论）：");
+  for (const g of gaps) console.warn(`  · ${g.line}`);
+  console.warn("  自查：claude mcp get ash / codex mcp list --json。接法见 docs/install.md，"
+    + "或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
+}
+
 export async function sweepPersonalAshMcp(): Promise<void> {
   // 动态 import:mode.ts / db 都在 auth 这一圈里绕回来,顶层导入会绕出一个环。
   const { isHostCliIsolated } = await import("./mode.js");
-  if (!(await isHostCliIsolated())) return;
+  if (!(await isHostCliIsolated())) return await warnHostAshMcp();
   const { db } = await import("../db/index.js");
   const { users } = await import("../db/schema.js");
   const rows = await db.select({ id: users.id, name: users.name }).from(users);

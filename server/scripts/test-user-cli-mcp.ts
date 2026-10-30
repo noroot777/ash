@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { ensureAshMcp, extractTomlTables, hostAshMcp, readAshMcp } from "../src/auth/user-cli-mcp.js";
 import { REPO_DIR } from "../src/paths.js";
-import { requireTmpDb } from "./tmp-db.js";
+import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-user-cli-mcp-"));
 process.on("exit", () => rmSync(stage, { recursive: true, force: true }));
@@ -220,4 +220,43 @@ const HOST_CLAUDE = JSON.stringify({
   }
 }
 
-console.log("test-user-cli-mcp: ✅ 14 组全过");
+// ⑮ 写那一侧跟读那一侧问同一个扫描器（新链第 2 轮审查第 5 条）：引号表头、缩进表头都算
+//    「已经有了」，关着的、看不准的不碰 —— 上一版用行首严格正则，判成没有就再 append 一份，
+//    同名表重复，codex 整份配置读不出来。
+{
+  const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+  for (const existing of [
+    `[mcp_servers."ash"]\ncommand = "node"\n`,
+    `  [mcp_servers.ash]\ncommand = "node"\n`,
+    `[mcp_servers]\nash = { command = "node" }\n`,
+  ]) {
+    const { host, dir } = bench({ codex: HOST });
+    writeFileSync(join(dir, "config.toml"), existing, "utf8");
+    const state = ensureAshMcp(dir, "codex", host);
+    assert.equal(state.configured, true, `已有登记要认得出：${JSON.stringify(existing)}`);
+    assert.equal(readFileSync(join(dir, "config.toml"), "utf8"), existing, "认出来了就一个字都不写");
+  }
+  {
+    const { host, dir } = bench({ codex: HOST });
+    const off = `[mcp_servers.ash]\ncommand = "node"\nenabled = false\n`;
+    writeFileSync(join(dir, "config.toml"), off, "utf8");
+    const state = ensureAshMcp(dir, "codex", host);
+    assert.equal(state.configured, false, "关着的登记不算接好");
+    assert.match(state.problem ?? "", /enabled = false/);
+    assert.equal(readFileSync(join(dir, "config.toml"), "utf8"), off, "关着的不替用户打开，也不再追加一份");
+  }
+  {
+    const { host, dir } = bench({ codex: HOST });
+    // 多行字符串里的假表头：扫描器自己判不了（doubt），宁可不写。
+    const odd = `notes = """\n[mcp_servers.ash]\n"""\n`;
+    writeFileSync(join(dir, "config.toml"), odd, "utf8");
+    const state = ensureAshMcp(dir, "codex", host);
+    assert.equal(state.configured, false, "看不准就不说接好了");
+    assert.match(state.problem ?? "", /看不准/);
+    assert.equal(readFileSync(join(dir, "config.toml"), "utf8"), odd, "看不准时不追加");
+  }
+}
+
+// Windows 删不掉还开着的库文件：退出时那句 rmSync(stage) 会撞 EBUSY，断言全过也判红。
+await releaseTmpDb();
+console.log("test-user-cli-mcp: ✅ 15 组全过");

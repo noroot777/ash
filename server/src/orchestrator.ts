@@ -38,6 +38,7 @@ import { peerNoticeFor } from "./peer-context.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
+import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { freeReviewReminder } from "./free-workflow.js";
@@ -575,6 +576,8 @@ export async function continueTask(
     };
     if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner);
     else await persistRunner(db);
+    // 后台问一句够不够得着 ash MCP:只提示不拦、不等(ash-mcp-turn-hint.ts);旁路回合在起跑处已过闸。
+    if (!sideTurn) void hintAshMcpForTurn({ taskId, agentType: agent, executorId: profileId, ownerUserId: runOwner ?? null, cwd, sessionId: sessId });
     if (handoffNotice) await clearHandoffNotice(taskId);
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
     await openTurn({ sessionId: sessId, taskId, cwd, startedAt: turnStart });

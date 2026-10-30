@@ -17,6 +17,7 @@
 //   7. 用户自己写的整条命令行走 `cmd /d /s /c` + verbatim（跟 5 的转义规则相反）
 //   8. 常用命令走 PowerShell `-EncodedCommand` + 退出码收口（commandLaunch）
 //   9. agent 壳的记号在 server 与 scripts 两侧**一字不差**（重启那一刀靠它认人）
+//  10. CLI 候选目录在两侧一致（漂了会让装机脚本把「装了」判成「没装」）
 // 跑：npm -w server run test:win-launch
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -286,7 +287,54 @@ try {
     "只有壳自己带记号;它起的 CLI 靠核验过代次的父子边一起被保住,不靠命令行",
   );
 
-  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行/常用命令/壳记号）全部通过");
+  // ── 10. CLI 候选目录:Windows 分支两份一致 ──────────────────────────────────
+  // 同 9 的理由(scripts 侧只能复刻),但错法不同:候选目录漂了不会杀错进程,而是让
+  // **装机脚本把「装了」判成「没装」** —— setup.mjs 跳过 MCP 注册,ash 自己却照样派得
+  // 出任务,于是每个任务都活干完、交不了卷、记 failed(2026-10-28 实测,见 bin-resolve.ts
+  // 的 extraPaths 头部)。Windows 分支那一坨(三个 Program Files、scoop、choco 兜底)是
+  // 最容易漂的,而它在开发机上永远走不到 —— 本文件已把 platform 翻成 win32,正好钉它。
+  const { extraPaths: binExtraPaths } = await import("../src/executors/bin-resolve.js");
+  const { extraPaths: scriptExtraPaths } = await import("../../scripts/platform.mjs");
+  const winEnv = {
+    APPDATA: "C:\\Users\\u\\AppData\\Roaming",
+    LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local",
+    ProgramFiles: "C:\\Program Files",
+    "ProgramFiles(x86)": "C:\\Program Files (x86)",
+    "ProgramFiles(Arm)": "C:\\Program Files (Arm)",
+    ChocolateyInstall: "C:\\choco",
+  };
+  const winHome = "C:\\Users\\u";
+  assert.deepEqual(scriptExtraPaths(winEnv, winHome), binExtraPaths(winEnv, winHome),
+    "scripts/platform.mjs 与 bin-resolve.ts 的候选目录必须一致（Windows 分支）");
+  // 三个 Program Files 都在里头(x64 版 node 起的 ash 看不见原生 ARM 目录,见那边注释)。
+  // 期望值用 `join` 拼而不是写死 `\`:两份实现都走 join,而 join 的分隔符由 Node 启动时的
+  // **真实**平台定死、跟 IS_WINDOWS 一起翻不过来(见本文件头部)。写死就只能在 Windows 上过。
+  const winDirs = binExtraPaths(winEnv, winHome);
+  for (const pf of ["C:\\Program Files", "C:\\Program Files (x86)", "C:\\Program Files (Arm)"]) {
+    assert.ok(winDirs.includes(join(pf, "nodejs")), `${pf} 下的 nodejs 必须在候选目录里`);
+  }
+  // choco 没设环境变量时要退到默认路径,而不是把这一项丢掉。
+  assert.ok(scriptExtraPaths({}, winHome).includes("C:\\ProgramData\\chocolatey\\bin"),
+    "ChocolateyInstall 缺失时要退默认路径");
+  assert.deepEqual(scriptExtraPaths({}, winHome), binExtraPaths({}, winHome),
+    "env 全空时两份也必须一致");
+
+  // 候选**文件名**也必须一致:目录一样不代表挑中同一个文件。npm 全局目录里同时躺着
+  // 无后缀的 POSIX 脚本和 `.cmd` 垫片,scripts 侧原先把裸名排在最前,于是 which 返回
+  // 它、run 据此 spawn,拿到 ENOENT(第 1 轮审查 N2,Windows 真机实测)。
+  const { candidates: scriptCandidates } = await import("../../scripts/platform.mjs");
+  const { candidatesIn } = await import("../src/executors/bin-resolve.js");
+  const dir = "C:\\Users\\u\\AppData\\Roaming\\npm";
+  for (const name of ["ash-review-cli", "claude", "node.exe"]) {
+    assert.deepEqual(
+      scriptCandidates(name).map((c) => join(dir, c)),
+      candidatesIn(dir, name),
+      `${name} 的候选文件名两份必须一致`,
+    );
+  }
+  assert.ok(!scriptCandidates("claude").includes("claude"), "Windows 上不能把无后缀名当候选");
+
+  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行/常用命令/壳记号/候选目录）全部通过");
 } finally {
   rmSync(stage, { recursive: true, force: true });
 }
