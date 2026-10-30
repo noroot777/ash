@@ -20,7 +20,7 @@
 //   tsx server/scripts/test-prompt-budget.ts            # 跑闸
 //   tsx server/scripts/test-prompt-budget.ts --dump DIR # 把金样写进 DIR，供改动前后肉眼对比
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -56,7 +56,7 @@ const BUDGETS: Record<string, number> = {
   "debate/final": 1600,
   // ── 每回合都要发的那几段 ─────────────────────────────────────────────────────
   // 产出质量规则本体（`CRAFT_RULES`，用户 2026-10-30 拍板的两句原句）。**这个数就是它的
-  // 棘轮**：口径是「原句一字不改、不加判据不加护栏不加判断表」，所以余量刻意只留 40B —— 
+  // 棘轮**：口径是「原句一字不改、不加判据不加护栏不加判断表」，所以余量刻意只留 40B。
   // 想往里补一句判据，得先在 diff 里把这个数改大，那一行会被看见、被问一句「谁同意的」。
   "turn/craft-rules": 200,
   "turn/completion-protocol-free": 950,
@@ -108,7 +108,9 @@ const BUDGETS: Record<string, number> = {
   // 规划那份小，是因为那条路刻意只有正文加一句，且浏览器策略发的是缩略版。
   "delivered/fresh-run": 4000,
   "delivered/fresh-review-run": 3350,
-  "delivered/invited-first": 3900,
+  // 这一条比其余几份大约 560B，是**真实的非空同伴告知**（`peerNoticeText`，第 1 轮审查
+  // F1 之后换上的真实夹具）；地址已归一成 `<ROOT>`，所以这个数逐机稳定。
+  "delivered/invited-first": 4450,
   "delivered/team-lead-first": 5900,
   "delivered/plan-first": 1450,
   // ── MCP 工具清单：每一条都常驻执行者的每一个回合 ─────────────────────────────
@@ -647,6 +649,81 @@ try {
       "的那一段，不是同一个入口。判据必须是整串相等");
     assert.ok(!dedupeReminder(reminder, `正文里已经有 ${current}`).includes(current),
       "正文里已经有一模一样的那一句，提醒里仍留了第二份：该去重的没去掉");
+  }
+
+  // ⑥⁗ **片段保留：新增一段只许插在片段之间，不许顶掉任何一个 `parts.*`。**
+  //
+  //     第 1 轮审查 F1 就是这么漏的 —— 产出质量规则那一段当初是**替换** `parts.peerNotice +`
+  //     加进去的：类型里 `peerNotice` 仍必填、调用方照样算了也传了，只有拼装那一行不再读它。
+  //     于是「本任务还有其他智能体参与」在首次被 @ 进来、普通续聊、审查三条路上一起消失，
+  //     而编译通过、当时那一摞样本（同伴字段一律传空）全绿 —— 上面任何一张表都量不到。
+  //
+  //     两步闭环，缺一不可：
+  //     ① **声明了的字段必须出现在夹具里**：字段名从生产源码的接口声明里现读，跟夹具的键
+  //        作差。往接口加一个字段却不补夹具就红 —— 否则第 ② 步只能证明「我列出来的那几个
+  //        没丢」，新字段照样能悄悄不被读（脚本不过 tsc，少一个键编译器不会吭声）。
+  //     ② **夹具里每个片段都必须活着出现在输出里**：每个字段喂一个独一无二的记号，跨三种
+  //        调用事实各量一遍（首次新开 / 已有上下文的续跑 / 审查回合）—— 报告点名要覆盖的
+  //        正是这三种，而它们走的是同一个拼装器。
+  {
+    const turnSrc = readFileSync(new URL("../src/turn-prompt.ts", import.meta.url), "utf8");
+    const teamSrc = readFileSync(new URL("../src/team/prompts.ts", import.meta.url), "utf8");
+    /** 从生产源码里现读一个 parts 声明的字段名（两空格缩进的属性行；注释行天然不匹配）。 */
+    const declaredFields = (text: string, open: string, close: string, what: string): string[] => {
+      const start = text.indexOf(open);
+      assert.ok(start >= 0, `片段保留闸找不到 ${what} 的声明（${open}）：生产声明换了形状，改这个闸，别改声明`);
+      const end = text.indexOf(close, start + open.length);
+      assert.ok(end > start, `片段保留闸找不到 ${what} 声明的收尾（${close}）`);
+      const fields = [...text.slice(start + open.length, end).matchAll(/^ {2}([A-Za-z]\w*)\??:/gm)].map((hit) => hit[1]!);
+      assert.ok(fields.length > 0, `片段保留闸在 ${what} 里一个字段都没读到：解析已经空转了`);
+      return fields;
+    };
+    const mark = (name: string) => `〔片段·${name}〕`;
+    /** 每个字符串字段喂一个独一无二的记号；`craft`/`reviewReminder` 按各自的真实形状给。 */
+    const fixtureFor = (keys: readonly string[], craft: { freshContext: boolean; verifying: boolean }) =>
+      Object.fromEntries(keys.map((key) => [
+        key,
+        key === "craft" ? craft
+          : key === "reviewReminder" ? { text: mark(key), manifestEntry: null }
+          : mark(key),
+      ])) as never;
+    /** 这一份夹具里**应当**活着出现在输出里的那些记号（`craft` 那一格由判据自己定）。 */
+    const expectedMarks = (keys: readonly string[]) => keys.filter((key) => key !== "craft").map(mark);
+
+    const turnKeys = declaredFields(turnSrc, "export interface TurnPromptParts {", "\n}", "TurnPromptParts");
+    const freshKeys = declaredFields(turnSrc, "export interface FreshPromptParts {", "\n}", "FreshPromptParts");
+    const leadKeys = declaredFields(teamSrc, "export const leadFirstMessage = (parts: {", "\n}): string =>", "leadFirstMessage");
+    const { assembleFreshPrompt, assembleTurnPrompt } = await import("../src/turn-prompt.js");
+    const { leadFirstMessage } = await import("../src/team/prompts.js");
+    const { PLANNING_TURN } = await import("../src/run-prompts.js");
+    const assemblers: Array<{ what: string; keys: readonly string[]; render: (parts: never) => string }> = [
+      { what: "assembleTurnPrompt（续聊/续跑/审查）", keys: turnKeys, render: assembleTurnPrompt },
+      { what: "assembleFreshPrompt（fresh run）", keys: freshKeys, render: assembleFreshPrompt },
+      { what: "leadFirstMessage（团队开台）", keys: leadKeys, render: leadFirstMessage },
+    ];
+    const facts = [
+      { what: "首次新开（没有旧上下文）", craft: { freshContext: true, verifying: false } },
+      { what: "已有上下文的续跑", craft: { freshContext: false, verifying: false } },
+      { what: "审查/验证回合", craft: { freshContext: true, verifying: true } },
+    ];
+    for (const { what, keys, render } of assemblers) {
+      // ① 声明的字段必须都在夹具里（夹具就是按 keys 现造的，所以这一条等价于「声明读得到」）。
+      assert.ok(keys.includes("craft"),
+        `${what} 的 parts 声明里没有 craft：产出质量规则的槽位没了，PLACEMENT 那一行会跟着空转`);
+      for (const fact of facts) {
+        const out = render(fixtureFor(keys, fact.craft));
+        // ② 每个片段都要活着出现在输出里。
+        const lost = expectedMarks(keys).filter((needle) => !out.includes(needle));
+        assert.deepEqual(lost, [],
+          `${what} 在「${fact.what}」这一轮把片段吞掉了：${lost.join("、")}。\n` +
+          "新增一段只许插在片段之间，不许替换掉任何一个 `parts.*` —— 这正是第 1 轮审查 F1。");
+      }
+    }
+    // 规划回合那条是位置参数（没有 parts 对象），单独量一次：正文和规则段都要在。
+    const { CRAFT_RULES } = await import("../src/craft-rules.js");
+    const plan = PLANNING_TURN({ freshContext: true, verifying: false }, mark("userText"));
+    assert.ok(plan.includes(mark("userText")) && plan.includes(CRAFT_RULES),
+      "PLANNING_TURN 丢了用户正文或规则段：规划开场那条路是「先规划后实施」唯一的注入点");
   }
 
   // ⑦ 用户追认的体积目标：硬断言，超过即红（棘轮防回弹）。

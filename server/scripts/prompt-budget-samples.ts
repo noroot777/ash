@@ -203,6 +203,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   type TurnReminder = Parameters<typeof assembleTurnPrompt>[0]["reviewReminder"];
   const { LEAD_PREAMBLE, leadFirstMessage } = await import("../src/team/prompts.js");
   const { craftRulesFor } = await import("../src/craft-rules.js");
+  const { peerNoticeText } = await import("../src/peer-context.js");
   const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
   const {
     AUTONOMY, COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL,
@@ -470,12 +471,22 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   add("delivered/fresh-review-run", fresh(true));
   // 首次 @ 另一位执行者接手(以及旧会话接不上、/clear 之后新开的那一条 —— 判据同一个
   // `!resuming`)。
+  //
+  // 同伴告知这里**刻意给非空的真实渲染**:被 @ 进来的那一位几乎总是进到一个已经有别人
+  // 干过活的任务里,传空串是不真实的夹具。而第 1 轮审查 F1 恰恰是「新增段顶掉了
+  // `parts.peerNotice`」—— 当时所有样本的同伴字段一律传空,那条回归在这一摞里量不到。
+  // 片段保留本身另有机械断言钉着(test-prompt-budget.ts 的「片段保留」那一节),这里负责
+  // 让**按字节量的投递态**也真带着它。
   add("delivered/invited-first", withGlobalBrowserPolicy(
     assembleTurnPrompt({
       invite: COLLAB_INVITE,
       brief: invitedTaskBrief(task.body, true, false),
       handoffNotice: "",
-      peerNotice: "",
+      peerNotice: peerNoticeText([{
+        agentType: "codex",
+        firstSeenAt: at,
+        transcripts: [join(root, "runs", "pb-task", "pb-sess-codex.md")],
+      }]),
       craft: { freshContext: true, verifying: false },
       userText: "接着把设置页改完。",
       workspaceReset: "",

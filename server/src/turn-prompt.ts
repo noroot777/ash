@@ -117,8 +117,15 @@ export function assembleTurnPrompt(parts: TurnPromptParts): string {
   return parts.invite +
     parts.brief +
     (parts.handoffNotice ? `${parts.handoffNotice}\n\n` : "") +
+    parts.peerNotice +
     // 紧挨正文，和 fresh 那条同一个落位。不必补前导空行：它前面那几段（邀请语、需求抬头、
     // 接力前言、同伴告知）都自带尾部空行，全空时它就是整条消息的开头。
+    //
+    // **新增一段只许插在片段之间，不许顶掉任何一个 `parts.*`。**第 1 轮审查 F1 就是这么
+    // 来的：这一段当初是替换 `parts.peerNotice +` 加进去的，于是「本任务还有其他智能体
+    // 参与」在首次被 @ 进来、普通续聊、审查三条路上一起消失 —— 类型里它仍必填、调用方
+    // 照样算了传了，只有拼装这一行不再读它，编译和当时的样本（同伴字段一律传空）全绿。
+    // 这条不变量现在由体积闸的「片段保留」断言机械钉住，见 test-prompt-budget.ts。
     craftRulesFor(parts.craft) +
     parts.userText +
     parts.workspaceReset +
