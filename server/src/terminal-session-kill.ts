@@ -6,6 +6,7 @@
 // 判据与枚举能力的来龙去脉在 terminal-process-tree.ts 顶部;这里只放「怎么收尾」。
 import { IS_WINDOWS } from "./platform.js";
 import type { StopFact } from "./terminal-session-facts.js";
+import { handedOver } from "./launch-handover.js";
 import { requestStop } from "./terminal-stop-facts.js";
 import {
   descendantsFromTable,
@@ -32,13 +33,7 @@ export type KillTarget = {
   stop: StopFact;
 };
 
-/**
- * 放弃过的一律不杀 —— 闸立在**击杀层自己身上**,不借上游任何一个判据的返回值。
- * 上游那几个判据(`sessionRunning`/`retainHistory`)对放弃过的都回 false,本意是「ash 不再
- * 认这笔管理责任」;闲置回收把同一个 false 读成了「死透了、可以连树一起收」,签过字的
- * `docker compose up -d`、`pm2 start` 半小时后就被 SIGKILL(第 1 轮自由审查必须修 1)。
- */
-const handedOver = (target: KillTarget): boolean => target.abandoned != null;
+
 
 /**
  * `complete` = 这一趟的**成员清单全不全**(freezeAndEnumerate 的同名标记,两轮取与)。
@@ -155,6 +150,9 @@ export async function terminateSession(
 }
 
 function signalSessionTree(target: KillTarget, signal: "SIGTERM" | "SIGKILL", descendants?: DescendantSnapshot): void {
+  // 全部进程信号的**唯一出口**,所以「签过字的不碰」兜在这儿:外面那几处 early return 负责
+  // 把结论说对、少跑几趟无用的枚举,这一行负责万一有谁绕过它们也发不出信号(launch-handover.ts)。
+  if (handedOver(target)) return;
   try {
     // Windows 没有进程组信号这一说,交给 node-pty 收 ConPTY —— 它按
     // `GetConsoleProcessList` 把挂在这个伪控制台上的进程全部收掉,交互 shell 与

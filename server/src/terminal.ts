@@ -17,6 +17,7 @@ import {
   releaseLaunchResponsibility,
 } from "./terminal-stop-facts.js";
 import { killAllSessionTrees, killSessionTree, terminateSession, type KillResult } from "./terminal-session-kill.js";
+import { withLaunchHandover, withSessionLock } from "./terminal-management-lock.js";
 import { sampleLaunchClocks, settleLaunchClocks, type LaunchIdentity } from "./terminal-launch-survivors.js";
 import { TerminalWatcher } from "./terminal-session-watch.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
@@ -366,7 +367,7 @@ export class TerminalSessionManager {
     // 记录已经不在了:这一趟什么都没枚举过,`complete` 只能是 false —— 把「没问过」说成
     // 「问全了」,下游那条「敢不敢说收干净了」的判断就建在空气上。
     if (!session) return { ok: true, complete: false };
-    return terminateSession(session, timeouts);
+    return withSessionLock(session, () => terminateSession(session, timeouts));
   }
 
   /**
@@ -386,16 +387,19 @@ export class TerminalSessionManager {
     timeouts?: { termMs?: number; killMs?: number },
   ): Promise<KillResult> {
     const session = this.session(sessionId, projectId);
-    const result = await this.terminate(sessionId, projectId, timeouts);
-    if (!result.ok) return result;
-    // 放弃过的跳过这道闸:它的全部内容就是「名下还有活物,不敢删记录」,而用户已经显式
-    // 接手了这笔责任(terminal-abandon.ts)。再拦一遍只会让那个出口自己走不通。
-    if (session && !session.abandoned) {
-      const left = await releaseLaunchResponsibility(session);
-      if (left) return { ok: false, reason: left };
-    }
-    this.close(sessionId, projectId, true);
-    return result;
+    if (!session) return { ok: true, complete: false };
+    return withSessionLock(session, async () => {
+      const result = await this.terminate(sessionId, projectId, timeouts);
+      if (!result.ok) return result;
+      // 放弃过的跳过这道闸:它的全部内容就是「名下还有活物,不敢删记录」,而用户已经显式
+      // 接手了这笔责任(terminal-abandon.ts)。再拦一遍只会让那个出口自己走不通。
+      if (!session.abandoned) {
+        const left = await releaseLaunchResponsibility(session);
+        if (left) return { ok: false, reason: left };
+      }
+      this.close(sessionId, projectId, true);
+      return result;
+    });
   }
 
   /**
@@ -551,13 +555,20 @@ export class TerminalSessionManager {
    * (根 AGENTS.md:停止要留下持久可见的状态,**而且不许谎报**)。
    *
    * 已经放弃过的**不覆盖**:第一次那份快照是用户签字时看到的事实,残留在那之后只会变。
-   * 返回 false = 记录已经不在了(刚被删掉),由调用方回 404。
+   * 返回 null = 记录已经不在了(刚被删掉),由调用方回 404。
    */
-  abandonLaunch(sessionId: string, projectId: string, record: LaunchAbandonment): boolean {
+  async abandonLaunch(sessionId: string, projectId: string,
+    record: LaunchAbandonment | (() => Promise<LaunchAbandonment>)): Promise<LaunchAbandonment | null> {
     const session = this.session(sessionId, projectId);
-    if (!session) return false;
-    session.abandoned ??= record;
-    return true;
+    if (!session) return null;
+    return withLaunchHandover(session, async () => {
+      if (this.session(sessionId, projectId) !== session) return null;
+      if (session.abandoned) return session.abandoned;
+      const residue = typeof record === "function" ? await record() : record;
+      if (this.session(sessionId, projectId) !== session) return null;
+      session.abandoned = residue;
+      return residue;
+    });
   }
 
   /**

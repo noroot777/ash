@@ -10,6 +10,7 @@
  *
  * 判据(StopFact 的四档语义、为什么单调)写在 terminal-session-facts.ts 的类型上。
  */
+import { handedOver } from "./launch-handover.js";
 import { PORT_TIER_AVAILABLE, probeOwnedPorts, stopByPorts, stopByPortsSync } from "./service-ports.js";
 import type { StopFact, StopResolution, TerminalSession } from "./terminal-session-facts.js";
 import { processAlive } from "./terminal-process-tree.js";
@@ -187,7 +188,7 @@ export function releaseLaunchPortsSync(sessions: Iterable<TerminalSession>): { k
     if (session.commandId === null) continue;
     // 用户显式放弃过的这次启动:ash 关服时不再按它的端口和记号去收人,退出交代里也不再提它
     // (那正是放弃的解除范围里写明的一条,terminal-abandon.ts)。
-    if (session.abandoned) continue;
+    if (handedOver(session)) continue;
     if (PORT_TIER_AVAILABLE && session.launchToken && session.launchPorts.size > 0) {
       const swept = stopByPortsSync(session.launchPorts, session.launchToken);
       killed += swept.killed.length;

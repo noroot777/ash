@@ -25,6 +25,7 @@ import { PORT_TIER_AVAILABLE, probeOwnedPorts } from "./service-ports.js";
 import { launchSurvivors } from "./terminal-launch-survivors.js";
 import { liveLeftovers } from "./terminal-stop-facts.js";
 import { terminalSessions } from "./terminal.js";
+import { withCommandLock } from "./terminal-management-lock.js";
 import type { LaunchAbandonment, TerminalSessionInfo } from "./terminal-session-facts.js";
 
 /** 放弃之后 ash **不再做**哪几件事。原样进弹层 —— 用户按之前就该读到解除范围。 */
@@ -142,28 +143,31 @@ export function mountLaunchAbandonRoutes(api: Hono): void {
   // 一条新的启动(这是「显式放弃」跟「静默核销」的分界线)。
   api.post("/projects/:projectId/commands/:commandId/abandon", async (c) => {
     const projectId = c.req.param("projectId");
+    const commandId = c.req.param("commandId");
     const body = await c.req.json().catch(() => ({})) as { sessionId?: unknown };
     if (typeof body.sessionId !== "string" || !body.sessionId) {
       return c.json({ error: "缺少 sessionId：放弃必须针对你刚看过的那一条启动记录" }, 400);
     }
-    const info = terminalSessions.get(body.sessionId, projectId);
-    if (!info || info.commandId !== c.req.param("commandId")) {
-      return c.json({ error: "这条启动记录已经不在了（可能刚被删掉）" }, 404);
-    }
-    const current = target(projectId, c.req.param("commandId"));
-    if (current && current.id !== info.id) {
-      return c.json({
-        error: "期间这条命令又起了一份，请重新看一眼残留事实再决定",
-        sessionId: current.id,
-      }, 409);
-    }
-    // 幂等:再按一次不覆盖第一次那份快照 —— 残留在那之后只会变,改写等于把签字时看到的
-    // 事实换掉。
-    if (info.abandoned) return c.json({ abandoned: info.abandoned, alreadyAbandoned: true });
-    const residue = await launchResidue(info);
-    if (!terminalSessions.abandonLaunch(info.id, projectId, residue)) {
-      return c.json({ error: "这条启动记录已经不在了（可能刚被删掉）" }, 404);
-    }
-    return c.json({ abandoned: residue });
+    const sessionId = body.sessionId;
+    return withCommandLock(projectId, commandId, async () => {
+      const info = terminalSessions.get(sessionId, projectId);
+      if (!info || info.commandId !== commandId) {
+        return c.json({ error: "这条启动记录已经不在了（可能刚被删掉）" }, 404);
+      }
+      const current = target(projectId, commandId);
+      if (current && current.id !== info.id) {
+        return c.json({
+          error: "期间这条命令又起了一份，请重新看一眼残留事实再决定",
+          sessionId: current.id,
+        }, 409);
+      }
+      // 幂等:再按一次不覆盖第一次那份快照 —— 残留在那之后只会变,改写等于把签字时看到的
+      // 事实换掉。
+      if (info.abandoned) return c.json({ abandoned: info.abandoned, alreadyAbandoned: true });
+      const abandoned = await terminalSessions.abandonLaunch(info.id, projectId,
+        () => launchResidue(terminalSessions.get(info.id, projectId)!));
+      if (!abandoned) return c.json({ error: "这条启动记录已经不在了（可能刚被删掉）" }, 404);
+      return c.json({ abandoned });
+    });
   });
 }

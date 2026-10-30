@@ -192,7 +192,7 @@
     "test:dir-picker": "tsx scripts/test-dir-picker.ts",
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
     "test:duet-attachments": "tsx scripts/test-duet-attachments.ts",
-    "test:terminal": "tsx scripts/test-terminal-pty.ts && tsx scripts/test-terminal.ts && tsx scripts/test-project-commands.ts && tsx scripts/test-service-ports-scan.ts && tsx scripts/test-stop-evidence.ts && tsx scripts/test-stop-review.ts && tsx scripts/test-stop-verification.ts && tsx scripts/test-service-ports.ts && tsx scripts/test-service-ports-script.ts && tsx scripts/test-terminal-capacity.ts && tsx scripts/test-terminal-lifecycle.ts && tsx scripts/test-launch-abandon.ts",
+    "test:terminal": "tsx scripts/test-terminal-pty.ts && tsx scripts/test-terminal.ts && tsx scripts/test-project-commands.ts && tsx scripts/test-service-ports-scan.ts && tsx scripts/test-stop-evidence.ts && tsx scripts/test-stop-review.ts && tsx scripts/test-stop-verification.ts && tsx scripts/test-service-ports.ts && tsx scripts/test-service-ports-script.ts && tsx scripts/test-terminal-capacity.ts && tsx scripts/test-terminal-lifecycle.ts && tsx scripts/test-launch-abandon.ts && tsx scripts/test-launch-abandon-races.ts",
     "test:win-launch": "tsx scripts/test-win-launch.ts && tsx scripts/test-powershell-command.ts && tsx scripts/test-user-shell-powershell.ts",
     "test:path-boundary": "tsx scripts/test-path-boundary.ts",
     "test:no-libsql": "tsx scripts/test-no-libsql.ts",

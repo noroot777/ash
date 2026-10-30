@@ -61,6 +61,7 @@ import { resolveTerminalDirectory, terminalSessions, type StopFact, type Termina
 import type { StopResolution } from "./terminal-session-facts.js";
 import { liveLeftovers } from "./terminal-stop-facts.js";
 import { runStopScript } from "./terminal-stop-script.js";
+import { withCommandLock } from "./terminal-management-lock.js";
 
 /**
  * 会话层跑的一条命令。restartCommand / stopCommand 只有项目级 service 才有(配置见
@@ -105,18 +106,6 @@ async function commandTarget(projectId: string, commandId: string): Promise<Comm
   const cwd = resolveTerminalDirectory(project.repoPath);
   if (!cwd) return { ok: false, error: "项目目录不存在，请先在项目设置中填写可用的本地目录", status: 400 };
   return { ok: true, cwd, command };
-}
-
-const commandLocks = new Map<string, Promise<unknown>>();
-
-function withCommandLock<T>(projectId: string, commandId: string, fn: () => Promise<T>): Promise<T> {
-  const key = `${projectId}:${commandId}`;
-  const prev = commandLocks.get(key) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  const tail = next.catch(() => undefined);
-  commandLocks.set(key, tail);
-  void tail.finally(() => { if (commandLocks.get(key) === tail) commandLocks.delete(key); });
-  return next;
 }
 
 /** 服务函数统一返回 HTTP 形状,路由原样透传;测试直接调函数、断言 body。 */

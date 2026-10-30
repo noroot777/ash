@@ -157,7 +157,7 @@ try {
   terminalSessions.oweCommandLeftovers(workerId, projectId, [strayPid], `pid ${strayPid} 核不上归属，一个字都没敢动`);
   assert.equal((await terminalSessions.destroy(workerId, projectId)).ok, false);
   const handed = await launchResidue(terminalSessions.get(workerId, projectId)!);
-  assert.ok(terminalSessions.abandonLaunch(workerId, projectId, handed));
+  assert.ok(await terminalSessions.abandonLaunch(workerId, projectId, handed));
   assert.equal((await terminalSessions.destroy(workerId, projectId)).ok, true, "放弃过的记录不再被删除保护拦下");
   assert.equal(terminalSessions.get(workerId, projectId), null);
   assert.ok(await processAlive(strayPid), "删掉记录也不等于杀进程：那个号仍然活着，只是从此由用户自己处理");
@@ -183,7 +183,7 @@ try {
   try {
     assert.ok(daemonPid > 0 && await processAlive(daemonPid), "这次启动起来的那个进程要先活着");
     const adopted = await launchResidue(terminalSessions.get(daemonId, projectId)!);
-    assert.ok(terminalSessions.abandonLaunch(daemonId, projectId, adopted));
+    assert.ok(await terminalSessions.abandonLaunch(daemonId, projectId, adopted));
     // 计数不能拿来断言:前面几步留下的纯退出日志本来就该被这一趟收走。
     terminalSessions.sweepIdleSessions(Date.now() + 31 * 60_000);
     await delay(300);
