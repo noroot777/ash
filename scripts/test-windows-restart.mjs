@@ -3,6 +3,8 @@ import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { windowsRestartPlan, windowsRestartTargets, windowsTerminateScript } from "./windows-restart.mjs";
 import { IS_WINDOWS, killServerProcess, listProcesses } from "./platform.mjs";
+import { runTestProcess } from "./test-process.mjs";
+import { spawnTestFixture } from "./test-process-scope.mjs";
 
 const row = (pid, ppid, created, command = "node fixture.mjs") => ({ pid, ppid, created: String(created), command });
 const rows = [row(10, 1, 100), row(11, 10, 110), row(12, 10, 90), row(13, 12, 120), row(14, 11, 120)];
@@ -19,7 +21,7 @@ assert.ok(windowsTerminateScript([row(10, 1, 100)]).includes("GetProcessTimes"))
 console.log("✓ 排除陈旧父号,未知代次/服务端身份拒杀,未知后代整棵保留");
 
 if (IS_WINDOWS) {
-  const fixture = childProcess.spawn(process.execPath, ["-e", "setInterval(()=>{},1000);\nvoid 'tab\t汉字';"], { stdio: "ignore" });
+  const fixture = spawnTestFixture(process.execPath, ["-e", "setInterval(()=>{},1000);\nvoid 'tab\t汉字';"], { stdio: "ignore" });
   await new Promise((resolve, reject) => { fixture.once("spawn", resolve); fixture.once("error", reject); });
   const original = childProcess.execFileSync;
   try {
@@ -44,8 +46,7 @@ if (IS_WINDOWS) {
     assert.ok(actual.command.includes("\n") && actual.command.includes("汉字"));
     const changed = { ...actual, created: String(BigInt(actual.created) + 10_000_000n) };
     const script = windowsTerminateScript([actual, changed]);
-    const result = childProcess.spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
-    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    await runTestProcess("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" }, 1);
     assert.doesNotThrow(() => process.kill(fixture.pid, 0), "代次不符时不能下刀");
     assert.equal(killServerProcess(fixture.pid), "selective");
     console.log("✓ 原生 Windows:查询失败不下刀,代次变化拒杀,绑定句柄正常终止");
