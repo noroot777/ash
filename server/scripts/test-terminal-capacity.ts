@@ -108,6 +108,9 @@ try {
     assert.equal((await restartCommand(projectId, temporary, command)).status, 201,
       "restart must replace its own record even when all sixteen slots are occupied");
     assert.notEqual(manager.liveCommandSession(projectId, command.id)?.id, previous.id);
+    // 这条命令的进程组是 ash 自己起的,停止时 terminate 把成员列全了、组也确实探不到了,
+    // 所以照旧是干净的「已停止」 —— 不留历史记录,这个数稳定在 16(判据见
+    // terminal-stop-notices.ts 的 processStopVerdict ②)。
     assert.equal(manager.listForProject(projectId).length, 16);
     assert.deepEqual((await stopCommand(projectId, command.id)).body, { stopped: true });
     assert.equal((await startCommand(projectId, temporary, command)).status, 201,
@@ -157,7 +160,7 @@ try {
   }
 
   const firstRecord = manager.listForProject(projectId).find((session) => session.commandId === "done-0")!;
-  assert.deepEqual(await manager.destroy(firstRecord.id, projectId), { ok: true });
+  assert.equal((await manager.destroy(firstRecord.id, projectId)).ok, true);
   const cancelled = manager.reserveCommand(projectId, "cancelled");
   assert.equal(manager.hasSlotForCommand(projectId, "extra"), false);
   cancelled.release();
@@ -184,7 +187,7 @@ try {
   assert.equal(manager.liveCommandSession(projectId, command.id)?.id, surviving.id);
 
   const secondRecord = manager.listForProject(projectId).find((session) => session.commandId === "done-1")!;
-  assert.deepEqual(await manager.destroy(secondRecord.id, projectId), { ok: true });
+  assert.equal((await manager.destroy(secondRecord.id, projectId)).ok, true);
   // 起不来的 shell:两边的形状不一样,断言得各写一份(2026-10-26 实测)。
   const brokenShell = join(temporary, "missing-shell.exe");
   if (windows) {
@@ -203,7 +206,7 @@ try {
       await delay(25);
     }
     assert.notEqual(manager.get(stillborn.id, projectId)?.exitCode, 0, "execvp 失败要带非零退出码");
-    assert.deepEqual(await manager.destroy(stillborn.id, projectId), { ok: true });
+    assert.equal((await manager.destroy(stillborn.id, projectId)).ok, true);
   }
   assert.equal(manager.hasSlotForCommand(projectId, "after-failure"), true,
     "failed startup must release its reserved slot");
@@ -212,7 +215,7 @@ try {
 
   for (const commandId of ["done-2", "done-3"]) {
     const record = manager.listForProject(projectId).find((session) => session.commandId === commandId)!;
-    assert.deepEqual(await manager.destroy(record.id, projectId), { ok: true });
+    assert.equal((await manager.destroy(record.id, projectId)).ok, true);
   }
   const duplicateCommand = { ...command, id: "duplicates" };
   const duplicateSessions = [];
@@ -221,7 +224,7 @@ try {
       command: { id: duplicateCommand.id, name: duplicateCommand.name, script: keepAlive },
     }));
   }
-  for (const session of duplicateSessions) assert.deepEqual(await manager.terminate(session.id, projectId), { ok: true });
+  for (const session of duplicateSessions) assert.equal((await manager.terminate(session.id, projectId)).ok, true);
   assert.equal(manager.listForProject(projectId).length, 16);
   const duplicateReservation = manager.reserveCommand(projectId, duplicateCommand.id);
   try {

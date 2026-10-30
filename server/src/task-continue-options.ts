@@ -66,6 +66,15 @@ export type ContinueTaskOptions = {
   monitorWake?: MonitorWakeData;
   pendingMessageIds?: readonly string[];
   /**
+   * 这几条输入的**越线记号是必要凭据**,不是尽力而为的记账。
+   *
+   * 续跑交代走这一档:它的恢复策略是「没有可靠的未投喂证明就不得归还」,所以记号写不下来时
+   * 必须在 spawn 之前原地撤回 —— 凭据缺失 + 照常投喂 = 恢复侧必然误判成「没送出去」并重放
+   * (delivery-crossing.ts 的文件头)。普通待发送消息不传这一位:它们的既有策略是「宁可重发
+   * 一次也不丢一句话」,为记号缺失把用户的「继续」整个拦掉反而更伤人。
+   */
+  crossingRequired?: boolean;
+  /**
    * **这一回合是谁点的**(多人模式)。共享项目里 B 可以在 A 的任务上回复/重跑/派审,
    * 而那一轮烧的是 B 自己的 key —— 所以执行器、供应商、个人 CLI 环境与 git 署名
    * 全部按 B 解析,而不是按 `tasks.ownerUserId`(§八「共享项目里的跨人操作」)。

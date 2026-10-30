@@ -235,7 +235,10 @@ export function testGateNoticeWording(): void {
     assert.equal(text.includes("不要为这件事改任何代码"), false, `${what}: 绝不许发免修令（审查十 F1）`);
     assert.equal(/没能启动/.test(text), false, `${what}: 不许把红说成「没能启动」`);
     assert.match(text, /跟本次改动无关/, `${what}: 留着「拿依据说它无关」这条路`);
-    assert.match(text, /命令不在树里/, `${what}: 把「命令不在树里」列进无关的依据里`);
+    // 括号里**不**列举「命令不在树里」:那是合并 ea12fe9d 之后源码一侧明确撤掉的（理由在
+    // accept-gate-messages.ts 的 `gateFailurePrompt` 头部 —— 真碰上那一档时 `diagnosis`
+    // 会把它连线索带出路讲完，而括号是每一次红都要付的字节）。那次合并把测试这一侧的断言
+    // 和源码那一侧的撤除各留了一份，于是整套门禁回归从此红着；这里跟着源码的决定收回它。
   }
   // 归类结论照旧原样附上去 —— 它是定位的线索，不是免修的理由。
   assert.ok(promptOf("exit_code", inner).includes(inner), "inner 的那段观察要附上去");

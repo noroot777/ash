@@ -18,7 +18,7 @@ export type ReviewStartReceipt = { directory: string; generation: string; identi
   repair?: true; acceptedRepair?: true; delivery?: ReviewDelivery };
 
 export async function withdrawReviewStart(taskId: string, receipt: ReviewStartReceipt | undefined,
-  priorStatus: TaskStatus | null): Promise<void> {
+  priorStatus: TaskStatus | null, spawned = false): Promise<void> {
   if (!receipt) return;
   if (receipt.repair) return withdrawRepairStart(taskId, receipt);
   const withdrawn = await db.transaction(async (transaction) => {
@@ -52,7 +52,9 @@ export async function withdrawReviewStart(taskId: string, receipt: ReviewStartRe
   if (!withdrawn) return;
   recordTaskStatus(withdrawn.owner, withdrawn.status);
   await announceResumePrompt(taskId);
-  await appendTaskTimeline(taskId, "审查在启动前撤回（原方向失效或起跑中断）；本轮没有启动，旧等待已作废，可重新派审。");
+  await appendTaskTimeline(taskId, spawned
+    ? "审查在交出输入之后撤回（原方向在起跑途中失效）；这一轮的 CLI 已收到输入、随即被收掉，旧等待已作废，可重新派审。"
+    : "审查在启动前撤回（原方向失效或起跑中断）；本轮没有启动，旧等待已作废，可重新派审。");
   if (withdrawn.free) await (await import("./free-workflow.js")).handleFreeWorkflowSettlement(taskId,
     withdrawn.status, false, false, "reviewer");
   else await (await import("./review.js")).handleTaskSettlement(taskId, withdrawn.status, false, false);

@@ -357,6 +357,9 @@ export async function diagnoseGateFailure(row: GateRow, outcome: { failure: Acce
   // 拓扑去推（第 4 轮审查 F2）。读不到就让 removedByTask 交白卷 → 归因落 unknown。
   const startCommit = miss.kind === "entry"
     ? (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0)?.worktreeStartCommit ?? null : null;
+  // 这一处的 catch **留着**：`readOrigin` 跑的是目标 ref 上的 git 查询，不是「这个路径在不在」。
+  // 读不出来正确的答案就是下面那两档里的 unknown（= 责任未知、你去核），归因只当线索、不授权任何
+  // 免修，所以失败方向本来就是保守的那一侧。
   const origin = repo && row.targetBranch
     ? await readOrigin(repo, row.targetBranch, row.sourceCommit ?? null, miss.name, row.command, startCommit, probe)
       .catch(() => null)

@@ -40,7 +40,20 @@ const PS_SESSION_ARGS = ["-axo", "pid=,pgid=,tty="];
 export const HAS_PROC = !IS_WINDOWS && existsSync("/proc/self/stat");
 
 export type DescendantSnapshot = { pids: number[]; pgids: number[] };
-export type ProcessTable = { children: Map<number, number[]>; pgidOf: Map<number, number> };
+export type ProcessTable = {
+  children: Map<number, number[]>;
+  pgidOf: Map<number, number>;
+  /**
+   * **这张表列全了吗**。`false` = 有号活着却没能读出它那一行(Linux 逐项读 `/proc` 时单个
+   * stat 读失败,而再探一次它还在)。整表读不出来走的是 `null`,这一位说的是**局部**漏行。
+   *
+   * 为什么要专门带出来:按这张表枚举候选的那一问(terminal-launch-survivors.ts)拿漏了行的
+   * 表照样能跑完,然后把「我没看见」答成「没有」。漏的那一行可能正好是收养了真后代的那个
+   * 祖先(第 5 轮自由审查按代码推断提出,未实测)。大多数消费者(杀进程、枚举子树)不看它
+   * —— 它们本来就只对看得见的那些动手。
+   */
+  complete: boolean;
+};
 export type SessionMember = { pid: number; pgid: number };
 
 /** 进程组里还有没有活人:信号 0 只探测不打扰,整组已空时抛 ESRCH。Windows 没有进程组。 */
@@ -67,7 +80,7 @@ function parseProcessTable(stdout: string): ProcessTable {
     siblings.push(pid);
     children.set(ppid, siblings);
   }
-  return { children, pgidOf };
+  return { children, pgidOf, complete: true };
 }
 
 /** /proc/<pid>/stat 括号后的字段:0=state 1=ppid 2=pgrp 3=session。comm 可含空格/括号,
@@ -80,6 +93,7 @@ function procStatFields(stat: string): string[] {
 function procProcessTable(): ProcessTable | null {
   const children = new Map<number, number[]>();
   const pgidOf = new Map<number, number>();
+  let complete = true;
   try {
     for (const entry of readdirSync("/proc")) {
       if (!/^\d+$/.test(entry)) continue;
@@ -93,12 +107,16 @@ function procProcessTable(): ProcessTable | null {
         const siblings = children.get(ppid) ?? [];
         siblings.push(pid);
         children.set(ppid, siblings);
-      } catch { /* 进程在读表途中退出,跳过 */ }
+      } catch {
+        // 读表途中退出的跳过就行;**还活着却读不出来**是另一回事 —— 这张表从此是残的,
+        // 据它判「没有」的那一问必须知道这件事。
+        if (processAlive(pid)) complete = false;
+      }
     }
   } catch {
     return null;
   }
-  return { children, pgidOf };
+  return { children, pgidOf, complete };
 }
 
 /**
@@ -458,7 +476,12 @@ export async function freezeAndEnumerate(
   ttyPath: string | null,
   accPgids: Set<number>,
   memberPids: Set<number>,
-): Promise<{ snapshot: DescendantSnapshot; innerShellPids: number[]; thaw: () => void }> {
+): Promise<{ snapshot: DescendantSnapshot; innerShellPids: number[]; complete: boolean; thaw: () => void }> {
+  // 这一趟的清单**全不全**。跟 groupMembers/membersOfGroup 同一个口径(那边的文件头):
+  // 「问不出来」不许跟「确实没有别人」混成一个值。三种不全 —— 进程表没答上话(ppid 树整条
+  // 缺)、会话成员那一问没答上话(ctty/sid ∪ fd 持有者整条缺)、以及迭代到上限还在冒新成员
+  // (封口没封住)。调用方据此决定敢不敢把「看得见的都收了」说出口。
+  let complete = true;
   const frozenGroups = new Set<number>();
   const frozenPids = new Set<number>();
   const freezeGroup = (pgid: number) => {
@@ -476,6 +499,8 @@ export async function freezeAndEnumerate(
   for (const pid of memberPids) freezePid(pid);
   for (const pgid of accPgids) freezeGroup(pgid);
   const table = await readProcessTable();
+  // 读不出来、或者读出来的表漏了活着的行(`ProcessTable.complete`),这份快照都不是封口的那一份。
+  if (!table || !table.complete) complete = false;
   const tree = table ? descendantsFromTable(table, groupId) : { pids: [], pgids: [] };
   // leader 的**直接**子进程 = wrapper 用 "$@" 起的那个内层 shell(交互会话是用户 shell,
   // 命令会话是 `shell -lc`)。单拎出来是给挂断用的:交互 shell 按 POSIX 惯例忽略 TERM,
@@ -483,9 +508,10 @@ export async function freezeAndEnumerate(
   const innerShellPids = (table?.children.get(groupId) ?? []).filter((pid) => pid > 1);
   for (const pid of tree.pids) { if (!memberPids.has(pid)) { memberPids.add(pid); freezePid(pid); } }
   for (const pgid of tree.pgids) { if (!accPgids.has(pgid)) { accPgids.add(pgid); freezeGroup(pgid); } }
+  let converged = false;
   for (let pass = 0; pass < 5; pass++) {
     const members = await sessionMemberPids([groupId], ttyPath ? [ttyPath] : []);
-    if (!members) break;
+    if (!members) { complete = false; break; }
     let discovered = false;
     for (const member of members) {
       if (member.pid === groupId) continue;
@@ -500,12 +526,14 @@ export async function freezeAndEnumerate(
         discovered = true;
       }
     }
-    if (!discovered) break;
+    if (!discovered) { converged = true; break; }
   }
+  // 跑满 5 轮还在冒新成员 = 没到不动点,这份快照不是封口的那一份。
+  if (!converged && complete) complete = false;
   const snapshot: DescendantSnapshot = { pids: [...memberPids], pgids: [...accPgids] };
   const thaw = () => {
     for (const pgid of frozenGroups) { try { process.kill(-pgid, "SIGCONT"); } catch { /* 已空 */ } }
     for (const pid of frozenPids) { try { process.kill(pid, "SIGCONT"); } catch { /* 已死 */ } }
   };
-  return { snapshot, innerShellPids, thaw };
+  return { snapshot, innerShellPids, complete, thaw };
 }

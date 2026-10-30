@@ -28,6 +28,7 @@ import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
+import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { deliverToLead } from "./team/session.js";
@@ -481,6 +482,12 @@ export async function continueTask(
     // 一半是 resume 回合，全都还挂在匿名管道上）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
+    // **交出 prompt 之前**把「这几条输入即将越线」同步落到磁盘:下面这一句 run(...) 才是不可逆
+    // 的那一刻,它之后的 persistRunner / onDelivered 都只是记账。两档策略(凭据档写不成当场抛,
+    // 走下面 catch 的「一个字都没送出去」那一支)与跨进程实测都在 delivery-crossing.ts 的文件头。
+    if (opts.pendingMessageIds?.length) {
+      recordDeliveryCrossing(taskId, opts.pendingMessageIds, { sessionId: sessId, turnStart }, opts.crossingRequired);
+    }
     handle = run({
       prompt,
       ...cli,
@@ -649,8 +656,11 @@ export async function continueTask(
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
     if (err instanceof ReviewSuperseded) {
-      await withdrawReviewStart(taskId, reviewStart, priorStatus);
-      return false;
+      // 两个抛出点:起跑前的 assertReviewTurnStart,和 spawn **之后**的 commitReviewTurnDelivery。后一种
+      // 输入已交到 CLI 手上(finally 收掉它之前它可能已经动过),只能交给越线记号去判,不许说「没送出去」。
+      await withdrawReviewStart(taskId, reviewStart, priorStatus, !!handle);
+      frozenBeforeSpawn = !handle;
+      return !frozenBeforeSpawn;
     }
     const steered = await takeSteered(taskId);
     const stopped = takeStopped(taskId);
@@ -659,7 +669,9 @@ export async function continueTask(
     // 调用方就是「没送出去」—— 返回 true 会让 resumePrompt 那路把检查点当已消费,
     // 暂停撤回一次、指定继续内容永久丢失,恢复分组后只剩通用「继续」(第 7 轮审查)。
     // 状态结算(落回 paused)仍由失败恢复完成,只是返回值改说实话。
-    frozenBeforeSpawn = err instanceof FrozenTurn;
+    // 越线凭据写不下来(DeliveryCrossingUnwritable)同属这一类:它也只在 spawn 之前抛,
+    // 而且**必须**说实话 —— 调用方据此确知「没投喂」,直接归还,不必再去读那张读不出来的记号。
+    frozenBeforeSpawn = err instanceof FrozenTurn || err instanceof DeliveryCrossingUnwritable;
     if (!handle && (frozenBeforeSpawn || checkingReviewStart)) {
       await recordReviewStartNotLaunched(taskId, reviewStart);
       if (await restoreUndeliveredReviewStart(taskId, reviewStart, true)) return false;
@@ -689,7 +701,7 @@ export async function continueTask(
     if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
-  // 落到时间线/状态上)。返回 false 的只有两类「一个字没送出去」:被单飞锁挡回,和
-  // 起跑前被冻结闸撤回(后者让 resumePrompt/待发送消息的调用方把原文安全放回)。
+  // 落到时间线/状态上)。返回 false 的只有「一个字没送出去」的几类:被单飞锁挡回,起跑前
+  // 被冻结闸撤回,以及 spawn 之前的审查撤回(让 resumePrompt/待发送消息的调用方把原文安全放回)。
   return !frozenBeforeSpawn;
 }

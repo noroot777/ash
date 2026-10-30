@@ -14,6 +14,9 @@
 //    不写它，共享同一份 runs 的另一个库路径和多实例模式都探不到）。
 // ④ **活着的占有者不按墙钟时间抢**（第 3 轮）：超时判死会让被 SIGSTOP、被慢盘卡住的持有者
 //    在恢复之后和抢锁方同时写。
+// ⑤ **路径字符串不是实体归属证明，撤销登记不是停止写入**（第 3 轮复核 F1/F2/F3/N1，场景 alias）：
+//    写入点必须独占创建（悬空软链、硬链接两种别名都不许跟着写），备份必须「写满了才以正式名字
+//    出现」，撤销在线登记和退出必须是同一件事，一组键的登记要么全成要么一个不留。
 //
 // **每个场景一套独立的库 + runs**，所以由 test-claude-usage-migration.ts 用子进程逐个拉起：
 // RUNS_DIR 在模块加载时就冻成常量了，一个进程里换不了。
@@ -24,11 +27,14 @@ import {
   existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync,
   symlinkSync, utimesSync, writeFileSync,
 } from "node:fs";
+import { spawn } from "node:child_process";
+import { linkSync, openSync, closeSync } from "node:fs";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TokenUsage } from "@ash/shared";
 
-const SCENARIOS = ["binding", "lock", "claim", "online", "escape"] as const;
+const SCENARIOS = ["binding", "lock", "claim", "online", "escape", "alias"] as const;
 
 const scenario = process.argv[2];
 if (!scenario || !SCENARIOS.includes(scenario as (typeof SCENARIOS)[number])) {
@@ -51,7 +57,8 @@ try {
   else if (scenario === "lock") await lock();
   else if (scenario === "claim") await claim();
   else if (scenario === "online") await online();
-  else await escape();
+  else if (scenario === "escape") await escape();
+  else await alias();
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
@@ -424,4 +431,142 @@ async function escape() {
     "连备份和临时文件都不许落到别人家",
   );
   dbClient.close();
+}
+
+// ── ⑥ 别名与生命周期：写入点独占创建、备份完整发布、下线即退出 ─────────────────
+async function alias() {
+  const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
+  const { sessions } = await import("../src/db/schema.js");
+  const { appendSessionTrace, sessionTracePath } = await import("../src/transcript.js");
+  const { planClaudeUsageRepair } = await import("../src/claude-usage-repair.js");
+  const { applyClaudeUsageRepair } = await import("../src/claude-usage-apply.js");
+  const { TRACE_BACKUP_SUFFIX } = await import("../src/claude-usage-trace.js");
+  const presence = await import("../src/ash-presence.js");
+  const maintenance = await import("../src/maintenance-lock.js");
+  const { canonicalResourceKey, resourceKeysFor } = await import("../src/resource-claim.js");
+  await ensureSchema();
+
+  const seed = async (id: string) => {
+    await db.insert(sessions).values({
+      id, taskId: "mig", agentType: "claude", executor: "claude", role: "single",
+      cliSessionId: `t-${id}`, startedAt: at(0), usageInput: 300, usageOutput: 0, usageCacheRead: 0,
+      usageCacheWrite: 0, usageReasoning: 0, usageCostUsd: null, usageTurns: 2,
+    });
+    [100, 200].forEach((input, index) => appendSessionTrace(
+      "mig", id, at(index), { kind: "usage", usage: usage(input), accounting: "incremental" }, at(index),
+    ));
+    return sessionTracePath("mig", id);
+  };
+  const accountOf = async (id: string) =>
+    (await db.select().from(sessions).all()).find((row) => row.id === id)!.usageInput;
+
+  // ① 临时文件名被**别名**占着时整轮拒绝，而且目录外那一份一个字节都不许动。两种别名各试一次：
+  //    悬空软链（realpath 失败后退回「父目录 + 名字」，归属判据看不出问题）和硬链接（realpath
+  //    本来就落在 runs 内）—— 两条都不是归属判据能拦住的，只有独占创建能。
+  const outside = join(root, "outside-history.jsonl");
+  writeFileSync(outside, "OUTSIDE_ORIGINAL\n");
+  for (const [id, alias] of [["a1", "dangling"], ["a2", "hardlink"]] as const) {
+    const trace = await seed(id);
+    const temp = `${trace}.repair-tmp`;
+    const target = join(root, `outside-${id}.jsonl`);
+    if (alias === "dangling") symlinkSync(target, temp); // 落点还不存在
+    else linkSync(outside, temp);
+    const before = readFileSync(outside, "utf8");
+    const report = await applyClaudeUsageRepair(await planClaudeUsageRepair());
+    assert.equal(report.committed, false, `${alias}: 临时文件名被别名占着必须整轮拒绝`);
+    assert.match(report.traces.failures.join("\n"), /这个名字已经被占着/);
+    assert.match(report.traces.failures.join("\n"), /确认那份文件没用之后删掉它再重跑/);
+    assert.equal(await accountOf(id), 300, `${alias}: 账一个字节没动`);
+    assert.equal(existsSync(target), false, `${alias}: 不许跟着悬空软链在目录外造文件`);
+    assert.equal(readFileSync(outside, "utf8"), before, `${alias}: 不许重写硬链接那头的旧历史`);
+    rmSync(temp, { force: true });
+  }
+
+  // ② 备份**写满了才以正式名字出现**：在它那份唯一临时文件上注入「写一半就抛」，失败之后正式
+  //    名字下不许留一份看起来可用、其实被截断的恢复材料（第 3 轮复核 F3 实测 460 → 40 字节）。
+  const trace = await seed("a3");
+  const backup = `${trace}${TRACE_BACKUP_SUFFIX}`;
+  const original = readFileSync(trace, "utf8");
+  // ESM 命名空间对象不可写，所以经 CJS 那份 node:fs 打桩（和 test-accept-gate-proof.ts 同款）。
+  const fs = createRequire(import.meta.url)("node:fs") as typeof import("node:fs");
+  const realWrite = fs.writeFileSync;
+  let injected = 0;
+  fs.writeFileSync = ((path: unknown, data: unknown, ...rest: unknown[]) => {
+    // 正式名字下压根不会被写，所以注入点是「以备份名开头的那份唯一临时文件」。
+    if (injected === 0 && String(path).startsWith(`${backup}.`)) {
+      injected += 1;
+      closeSync(openSync(String(path), "wx"));
+      realWrite(String(path), String(data).slice(0, 40));
+      throw Object.assign(new Error("injected partial ENOSPC"), { code: "ENOSPC" });
+    }
+    return (realWrite as (...args: unknown[]) => void)(path, data, ...rest);
+  }) as typeof realWrite;
+  syncBuiltinESMExports();
+  let first;
+  try {
+    first = await applyClaudeUsageRepair(await planClaudeUsageRepair());
+  } finally {
+    fs.writeFileSync = realWrite;
+    syncBuiltinESMExports();
+  }
+  assert.equal(injected, 1, "注入没打到备份那次写入 —— 用例已经和实现漂了");
+  assert.equal(first.committed, false, "备份没留下就不许继续改账");
+  assert.equal(readFileSync(trace, "utf8"), original, "原 trace 保持原样");
+  assert.equal(existsSync(backup), false, "半份备份绝不许以正式名字出现 —— 重跑只看 existsSync 就会信它");
+  assert.equal(await accountOf("a3"), 300);
+  const retry = await applyClaudeUsageRepair(await planClaudeUsageRepair());
+  assert.equal(retry.committed, true, "故障过去之后照常跑完");
+  assert.equal(readFileSync(backup, "utf8"), original, "重跑留下的必须是完整原文");
+  assert.equal(await accountOf("a3"), 200);
+  dbClient.close();
+
+  // ③ 一组键的在线登记要么全成、要么一个不留：第二个键写不下去时第一份不许留在盘上（它带着活
+  //    PID，会把离线回填永久挡在外面，而这个实例多半压根没起来）。
+  const keys = resourceKeysFor(process.env.ASH_DB!, process.env.ASH_RUNS_DIR!);
+  const blocked = join(root, "blocked-runs");
+  writeFileSync(blocked, "不是目录，所以第二个键的 mkdir 会 ENOTDIR\n");
+  assert.throws(() => presence.registerAshPresence([keys[0]!, join(blocked, "runs")],
+    { port: null, mode: "shared" }));
+  assert.equal(presence.liveAshPresenceFor(keys[0]!), null, "部分登记不算成功占用，必须整体撤销");
+  maintenance.acquireMaintenanceLocks(keys, "部分登记已撤销").release();
+
+  // ④ 登记读不懂时**既不清也不放过**：那一问没答上来，而它的下游是「要不要开始改别人正在写的
+  //    历史」。曾经的实现把它清掉并回「没人在线」。
+  const garbled = presence.presenceFileFor(canonicalResourceKey(process.env.ASH_DB!), 424_242);
+  writeFileSync(garbled, "{ 这不是 JSON");
+  assert.throws(() => presence.liveAshPresenceFor(canonicalResourceKey(process.env.ASH_DB!)),
+    presence.AshPresenceUnknownError);
+  assert.equal(existsSync(garbled), true, "读不懂的登记不许被当成残骸清掉");
+  assert.throws(() => maintenance.acquireMaintenanceLocks(keys, "证明不了没人在线"),
+    maintenance.AshOnlineError, "证明不了没人在线 = 按有人在线处理");
+  rmSync(garbled, { force: true });
+
+  // ⑤ ASH_ALLOW_MULTI 实例收到 SIGTERM 必须**退出**，不是只把自己的在线登记抹掉。只抹登记的话
+  //    它照旧在写库和 trace，而离线回填查完一片干净当场开跑（第 3 轮复核 F2 实测 health 仍 200）。
+  const child = spawn(process.execPath, ["--import", "tsx", "-e", `
+    const { acquireDbSingletonLock } = await import(${JSON.stringify(join(import.meta.dirname, "../src/singleton.js"))});
+    acquireDbSingletonLock({ port: null });
+    console.log("REGISTERED");
+    setInterval(() => {}, 1000);
+  `], { env: { ...process.env, ASH_ALLOW_MULTI: "1" }, stdio: ["ignore", "pipe", "inherit"] });
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+    child.once("exit", (code, signal) => resolve({ code, signal })));
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("子进程没能登记上线")), 30_000);
+    child.stdout!.on("data", (chunk: Buffer) => {
+      if (chunk.toString().includes("REGISTERED")) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+  });
+  const online = presence.liveAshPresenceFor(canonicalResourceKey(process.env.ASH_DB!));
+  assert.equal(online?.mode, "shared", "多实例模式也要留下在线登记");
+  assert.equal(online?.pid, child.pid);
+  child.kill("SIGTERM");
+  const outcome = await exited;
+  assert.equal(outcome.signal, null, "信号处理器接住了，所以不是被信号打死的");
+  assert.equal(outcome.code, 143, "撤销登记和退出是同一件事：排他那条路一直是 exit(143)");
+  assert.equal(presence.liveAshPresenceFor(canonicalResourceKey(process.env.ASH_DB!)), null,
+    "退出之后不许留下在线登记");
 }

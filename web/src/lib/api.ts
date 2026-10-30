@@ -50,6 +50,7 @@ import { handoffApi } from "./handoffApi.ts";
 import { fileApi } from "./fileApi.ts";
 import { pendingMergeApi } from "./pendingMergeApi.ts";
 import { scmApi } from "./apiScm.ts";
+import { terminalApi } from "./apiTerminal.ts";
 export type { TaskScopedHandoffPreflightResult } from "./handoffApi.ts";
 
 import type {
@@ -73,7 +74,6 @@ import type {
   TaskFileDiffResult,
   TaskWorkspaceProbe,
   TeamCuaStatus,
-  TerminalSessionInfo,
   VerifyOverrideResult,
 } from "./apiTypes.ts";
 
@@ -176,37 +176,9 @@ export const api = {
     request(`/projects/${id(projectId)}/git-credential`, json("PUT", { username, secret })),
   deleteProjectGitCredential: (projectId: string): Promise<ProjectGitConfig> =>
     request(`/projects/${id(projectId)}/git-credential`, json("DELETE")),
-  createTerminalSession: (
-    projectId: string,
-    size: { cols: number; rows: number },
-  ): Promise<TerminalSessionInfo> =>
-    request(`/projects/${id(projectId)}/terminal/sessions`, json("POST", size)),
-  terminalEventsUrl: (projectId: string, sessionId: string): string =>
-    apiPath(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/events`),
-  writeTerminalSession: (projectId: string, sessionId: string, data: string): Promise<void> =>
-    request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/input`, json("POST", { data })),
-  resizeTerminalSession: (
-    projectId: string,
-    sessionId: string,
-    size: { cols: number; rows: number },
-  ): Promise<void> =>
-    request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/resize`, json("POST", size)),
-  closeTerminalSession: (projectId: string, sessionId: string): Promise<void> =>
-    request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}`, { method: "DELETE" }),
-  listTerminalSessions: (projectId: string, signal?: AbortSignal): Promise<{ sessions: TerminalSessionInfo[] }> =>
-    request(`/projects/${id(projectId)}/terminal/sessions`, signal ? { signal } : undefined),
-  listCommandSessions: (): Promise<{ sessions: TerminalSessionInfo[] }> =>
-    request("/terminal-commands"),
-  // values = 命令里 `{{占位符}}` 的取值（shared/project-commands.ts）。只送取值不送脚本：
-  // 跑什么永远以库里存的那条命令为准。
-  startProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo; alreadyRunning?: boolean }> =>
-    request(`/projects/${id(projectId)}/commands/${id(commandId)}/start`, json("POST", { values })),
-  // notice = 停下来了,但同组还有核不上归属、没敢杀的进程(服务端 StopVerdict 的 unresolved)。
-  // 不是报错(端口确实让出来了),但必须说一句 —— 不然「这次启动起来的东西都停了」就是谎报。
-  stopProjectCommand: (projectId: string, commandId: string): Promise<{ stopped: boolean; notice?: string }> =>
-    request(`/projects/${id(projectId)}/commands/${id(commandId)}/stop`, json("POST", {})),
-  restartProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo; notice?: string }> =>
-    request(`/projects/${id(projectId)}/commands/${id(commandId)}/restart`, json("POST", { values })),
+  // 终端会话 + 常用命令(含「我自己处理了」那个显式出口)那一族在 `apiTerminal.ts` ——
+  // 整份 spread 进来,调用点写法不变。
+  ...terminalApi,
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     request("/projects/check", json("POST", { repoPath })),
   discardTaskWorkspace: (

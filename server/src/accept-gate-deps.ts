@@ -64,7 +64,11 @@ const MANIFESTS: Record<string, string[]> = {
   vendor: ["modules.txt", join("composer", "installed.json")],
 };
 
-const exists = async (path: string) => await lstat(path).then(() => true, () => false);
+// 「这个位置在不在」。**读不动不算不在**:这一族读取全部喂给依赖目录的身份指纹(dependencyDigest),
+// 而指纹的唯一用途是判「还是不是同一份输入、能不能沿用上一次的绿结果」。把一次 EACCES/EIO 当成
+// 「这里没有包」,两棵内容不同的依赖树会摘出同一个值,于是依赖升级了却继续沿用旧的绿结果 —— 失败
+// 方向是报绿。所以除「真的不存在」(ENOENT/ENOTDIR)之外一律明确失败。
+const exists = async (path: string) => await optionalRead(path, () => lstat(path)) !== null;
 
 // venv 的顶层只有 bin/lib/include，pyvenv.cfg 也只记 python 版本和 home——装包两者都不动，拿它
 // 当声明等于一个包都检不出来。所以这里下到 site-packages 去列 *.dist-info / *.egg-info，那些
@@ -77,7 +81,7 @@ async function sitePackages(root: string): Promise<string[]> {
       found.push(join(base, "site-packages"));
       continue;
     }
-    for (const version of (await readdir(base).catch(() => [])).sort()) {
+    for (const version of (await optionalRead(base, () => readdir(base)) ?? []).sort()) {
       if (await exists(join(base, version, "site-packages"))) found.push(join(base, version, "site-packages"));
     }
   }
@@ -87,7 +91,8 @@ async function sitePackages(root: string): Promise<string[]> {
 // 单个 npm 包的身份：name@version。读 353 个 package.json 仍比读 4.5 万个文件便宜两个数量级，
 // 而且只在没有已安装树声明时才走到这里（npm 6 以前、手铺的 node_modules）。
 async function packageIdentity(path: string, name: string): Promise<string> {
-  const raw = await readFile(join(path, "package.json"), "utf8").catch(() => null);
+  const manifest = join(path, "package.json");
+  const raw = await optionalRead(manifest, () => readFile(manifest, "utf8"));
   if (raw === null) return `${name}@absent`;
   try { return `${name}@${(JSON.parse(raw) as { version?: string }).version ?? "unversioned"}`; }
   catch { return `${name}@unparsable`; }
@@ -97,13 +102,13 @@ async function packageList(path: string, kind: string): Promise<string[]> {
   if (kind === ".venv") {
     const list: string[] = [];
     for (const site of await sitePackages(path)) {
-      for (const entry of (await readdir(site).catch(() => [])).sort()) {
+      for (const entry of (await optionalRead(site, () => readdir(site)) ?? []).sort()) {
         if (/\.(?:dist-info|egg-info|egg-link)$/.test(entry)) list.push(entry);
       }
     }
     return list;
   }
-  const entries = (await readdir(path, { withFileTypes: true }).catch(() => []))
+  const entries = (await optionalRead(path, () => readdir(path, { withFileTypes: true })) ?? [])
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   const list: string[] = [];
   for (const entry of entries) {
@@ -116,8 +121,9 @@ async function packageList(path: string, kind: string): Promise<string[]> {
       list.push(await packageIdentity(join(path, entry.name), entry.name));
       continue;
     }
-    for (const scoped of (await readdir(join(path, entry.name)).catch(() => [])).sort()) {
-      list.push(await packageIdentity(join(path, entry.name, scoped), `${entry.name}/${scoped}`));
+    const scope = join(path, entry.name);
+    for (const scoped of (await optionalRead(scope, () => readdir(scope)) ?? []).sort()) {
+      list.push(await packageIdentity(join(scope, scoped), `${entry.name}/${scoped}`));
     }
   }
   return list;
@@ -142,11 +148,15 @@ export async function dependencyDigest(root: string, dep: string, kind = dep.spl
   const hash = createHash("sha256").update("gate-dependency-v1\0");
   // 不可达的依赖根（没装的可选依赖、指向还没建起来的目录的悬空链、环）有自己的身份，不跟「空
   // 目录」混成同一个摘要：它指向哪里也算进去，于是「悬空链被改指到别处」「装好了」都会改摘要。
-  if (await realpath(path).catch(() => null) === null) {
-    return hash.update("unreachable\0").update(await readlink(path).catch(() => "")).digest("hex");
+  // 「不可达」只认 ENOENT/ENOTDIR/ELOOP(没装的可选依赖、悬空链、环);其余读失败按上面那条口径
+  // 明确失败,否则一次 EACCES 会把任意一棵树都摘成同一个 "unreachable" 值。readlink 另外放过
+  // EINVAL —— 目标不是链时它就是这个码,那是「读到了,答案是不是链」。
+  if (await optionalRead(path, () => realpath(path), ["ENOENT", "ENOTDIR", "ELOOP"]) === null) {
+    const original = await optionalRead(path, () => readlink(path), ["ENOENT", "ENOTDIR", "ELOOP", "EINVAL"]);
+    return hash.update("unreachable\0").update(original ?? "").digest("hex");
   }
   for (const manifest of MANIFESTS[kind] ?? []) {
-    const content = await readFile(join(path, manifest)).catch(() => null);
+    const content = await optionalRead(join(path, manifest), () => readFile(join(path, manifest)));
     if (content === null) continue;
     return hash.update(`manifest:${manifest}\0`).update(content).digest("hex");
   }

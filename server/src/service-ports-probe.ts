@@ -9,7 +9,7 @@
  * 这里一个 `kill` 都不发。动手那一半在 `service-ports.ts`。
  */
 import { execFile, execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { promisify } from "node:util";
 import { IS_WINDOWS } from "./platform.js";
 import { HAS_PROC, LSOF_PATH, PS_PATH, processAlive, readProcessTableSync } from "./terminal-process-tree.js";
@@ -130,7 +130,10 @@ export async function probePorts(
  *   · `ours`     —— 至少一个监听者带着这次启动的记号:确定还在跑;
  *   · `unknown`  —— 有人听但核不上(lsof 没答上来 / 这条会话没有记号 / 读不到对方环境):
  *                   **不许读成「没在跑」**,保持悲观(文件头那条「查不到不等于没人听」);
- *   · `stranger` —— 有人听,而且**核实了不是这次起来的**:这次启动在端口这条线索上已经没了;
+ *   · `stranger` —— 有人听,但那个号**核不上是这次的**(带着别次启动的记号,或者一枚记号
+ *                   都没有):这次启动在端口这条线索上已经没了 —— 注意这只是**端口这条**
+ *                   线索上的结论,不是「已经证明它不是这次的后代」(那是启动闭包那一问,
+ *                   环境可复制,见 Lineage 的 `stranger`);
  *   · `free`     —— 没人听。
  *
  * 优先级 **ours > unknown > stranger > free**:一个端口确认是别人的,不能把另一个端口上
@@ -166,7 +169,9 @@ export async function probeOwnedPorts(
       const who = lineage.get(pid);
       if (who === undefined) continue; // 刚才还在,现在没了
       if (who === "ours") ours = true;
-      else if (who === "stranger") stranger = true;
+      // `unmarked` 在这一问上跟 `stranger` 同义:端口上坐着一个核不上是自己的号,既不许动
+      // 它,也不能据此说这次启动还在听(分档的理由只对启动闭包那一问成立,见 Lineage)。
+      else if (withoutOurMark(who)) stranger = true;
       else why ??= `端口 ${port} 上的 pid ${pid} ${refusal(who)}`;
     }
   }
@@ -231,22 +236,223 @@ async function processCwd(pid: number, timeoutMs: number): Promise<string | null
   } catch { return null; }
 }
 
+// ── 候选闭包:属主与年龄 ───────────────────────────────────────────────────────
+
+/**
+ * 一个号的**非环境**事实。
+ *
+ * 为什么要单独问这两样:记号那一问(`readLineage`)在 macOS 上有一处天生的盲区 —— `ps -E`
+ * 分不出「这份环境本来就是空的」和「这份环境不给你看」,两种都只打出一行光杆命令。早先据
+ * 此断言「读不到环境的必然是别人家的号」,被自由审查用一个同用户、`env:{}` + setsid 的工人
+ * 当场证伪(uid 跟 ash 相同、PPID=1,`ps -E` 一个变量都不打),于是那个工人被当成陌生人跳
+ * 过,停止报了「已停止」而它还在跑。
+ *
+ * 补救不能靠猜环境,得换**跟环境无关**的两条事实先把候选圈小:
+ *
+ *  · `uid`   —— 子进程继承属主。属主跟 ash 不同的号不可能是这次启动直接创造的;
+ *  · `ageMs` —— 这次启动之前就活着的号不可能带这次的记号:那枚记号是启动时现生成的,它
+ *               那会儿还不存在,一个已经在跑的进程也无从把它塞进自己的环境。
+ *
+ * 圈完之后再读环境,读不出来的就是**真的没问出来**,必须算这一趟没问全。本机实测:同用户
+ * 的 PID 1 孤儿有四百多个,其中读不到环境的只有 `loginwindow` 和一个 ssh 复用进程(它把
+ * argv/env 区域改写成了自己的标题),两个都远早于任何一次启动 —— 不先按年龄筛,这台机器
+ * 上每一次停止都会永远停在「没问全」。
+ */
+export type ProcessFact = { uid: number; ageMs: number };
+
+/**
+ * 这批年龄是**哪个钟**量出来的,读的那一刻那个钟读数是多少,以及读的那一小段时间里这个钟
+ * 有没有被拨过。
+ *
+ * 为什么年龄必须连钟一起交出去(第 6 轮自由审查 F1):「它出生在这次启动之前」要拿候选的年龄
+ * 跟「这次启动到现在过了多久」比,两边不是同一个钟,这一比就不构成证明。
+ *
+ *  · `boot` —— Linux:`/proc/<pid>/stat` 第 22 项与 `/proc/uptime` 都是 CLOCK_BOOTTIME(开机
+ *              以来,含休眠,不受校时影响),`nowMs` 就是那次 `/proc/uptime`;
+ *  · `wall` —— 其余 POSIX(macOS 的 ps):墙上钟。`ps etime` = `gettimeofday() − p_starttime`
+ *              (Apple adv_cmds `print.c` 的 get_etime;`p_starttime` 是 fork 那一刻的墙上钟),
+ *              跟启动那一刻取的 `Date.now()` **是同一个钟**,`nowMs` 是 ps 跑完之后的墙上钟。
+ *
+ * 墙上钟会被拨,可拨在启动之后、扫描之前的那一下对两边同增同减,约掉之后比的就是「出生是否
+ * 早于启动取样」(复审第 1 轮指出,上一版把它判成了不同钟,macOS 上每次停止都封不了口)。
+ * 拨在**读数之间**的那一下才约不掉:ps 读钟和 `nowMs` 不是同一刻。`steady` 就是那一段量出来
+ * 的结论(`wallInStep`),`boot` 恒为 true。
+ */
+export type FactClock = { domain: "boot" | "wall"; nowMs: number; steady: boolean };
+export type ProcessFacts = { facts: Map<number, ProcessFact>; clock: FactClock };
+
+/** 墙上钟与单调钟在同一段时间里各走了多少,差出这么多就算这一段里钟被拨过。etime 只有秒级、
+ *  起进程还有几十毫秒的停顿,都远小于这个数;而它又远小于停止扫描的出生宽限(5 秒)。 */
+export const CLOCK_STEP_TOLERANCE_MS = 1_000;
+
+/** 本进程的单调钟(毫秒)。 */
+export function monoNowMs(): number {
+  return process.uptime() * 1000;
+}
+
+/** 从 (`wallFrom`, `monoFrom`) 那一刻到现在,墙上钟有没有跟着单调钟一起走 —— 不一致就是这段
+ *  时间里钟被拨过(或者机器睡过,单调钟不计休眠),两边的读数之间这一段就配不上。 */
+export function wallInStep(wallFrom: number, monoFrom: number): boolean {
+  const drift = (Date.now() - wallFrom) - (monoNowMs() - monoFrom);
+  return Math.abs(drift) <= CLOCK_STEP_TOLERANCE_MS;
+}
+
+/**
+ * Linux 的开机时钟此刻读数(毫秒)。给启动那一刻取样用:跟 `/proc/<pid>/stat` 的出生时刻是
+ * 同一个钟,所以「这个候选出生在启动之前」在 Linux 上可以被**证明**。没有 `/proc`(macOS)
+ * 或者读不动就是 null —— 那台机器上这条证明不存在,不是「证明成立」。
+ */
+export function bootClockMs(): number | null {
+  if (!HAS_PROC) return null;
+  try {
+    const value = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]) * 1000;
+    return Number.isFinite(value) ? value : null;
+  } catch { return null; }
+}
+
+/**
+ * 查这些号的属主与年龄,连同量年龄用的那个钟(`FactClock`)。
+ *
+ * 返回 `null` = **这一问本身没答上来**(这台机器上没有可用的 ps、`/proc/uptime` 读不动、
+ * ps 超时或起不来)。调用方必须据此判「没问全」,**不许**当成「这些号都不是候选」——
+ * 那正是把查询失灵读成否定结论的老毛病。映射里缺某个号 = ps 没打出它那一行;跟
+ * `lineageFromPs` 同一个判据:再探一次活,还活着就同样是「没答上来」。
+ */
+export async function readProcessFacts(
+  pids: number[],
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+): Promise<ProcessFacts | null> {
+  if (IS_WINDOWS) return null;
+  if (HAS_PROC) return procProcessFacts(pids);
+  if (!pids.length) return { facts: new Map(), clock: { domain: "wall", nowMs: Date.now(), steady: true } };
+  if (!PS_PATH) return null;
+  // ps 读钟的那一刻夹在这两次取样之间。「现在」取**跑完之后**那一份:ps 自己的 gettimeofday
+  // 不会比它更晚,上界只会偏宽;两次取样之间钟被拨过,ps 那一刻就跟哪份都对不上(`steady`)。
+  const wallFrom = Date.now();
+  const monoFrom = monoNowMs();
+  let read: PsRead;
+  try {
+    read = { stdout: (await run(PS_PATH, ["-o", "pid=,uid=,etime=", "-p", pids.join(",")], { timeout: budgeted(timeoutMs) })).stdout, trusted: true };
+  } catch (error) {
+    read = { stdout: psStdout(error), trusted: psAnswered(error) };
+  }
+  if (!read.trusted) return null;
+  const facts = new Map<number, ProcessFact>();
+  for (const line of read.stdout.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
+    if (!match) continue;
+    const ageMs = elapsedToMs(match[3]);
+    if (ageMs === null) continue;
+    facts.set(Number(match[1]), { uid: Number(match[2]), ageMs });
+  }
+  return { facts, clock: { domain: "wall", nowMs: Date.now(), steady: wallInStep(wallFrom, monoFrom) } };
+}
+
+/**
+ * Linux 版:属主取 `/proc/<pid>` 这个目录的属主,年龄 = 开机已跑的时长 − stat 的第 22 项
+ * (进程启动时刻,单位 USER_HZ —— 内核 ABI 把它固定成 100,不随 CONFIG_HZ 变)。
+ * `/proc/uptime` 读不动就是这一问没答上来;单个号读不动一律当它已经退了(stat 是全局可读的,
+ * 活着的号不会读不出来)。
+ */
+function procProcessFacts(pids: number[]): ProcessFacts | null {
+  const uptimeMs = bootClockMs();
+  if (uptimeMs === null) return null;
+  const facts = new Map<number, ProcessFact>();
+  for (const pid of pids) {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const ticks = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]);
+      if (!Number.isFinite(ticks)) continue;
+      facts.set(pid, { uid: statSync(`/proc/${pid}`).uid, ageMs: Math.max(0, uptimeMs - ticks * 10) });
+    } catch { /* 这个号已经退了 */ }
+  }
+  return { facts, clock: { domain: "boot", nowMs: uptimeMs, steady: true } };
+}
+
+/**
+ * 这几个号此刻的**工作目录**。拿不到(平台没有 lsof / `/proc`,或者这一问失灵)返回 null
+ * —— 跟 `readProcessFacts` 同一个约定:问不出来就别筛,少筛只会让调用方更保守。
+ *
+ * 为什么要它:cwd 跟属主一样是**继承**来的,而且跟环境变量是两条独立的继承线 —— 启动脚本
+ * 给工人现搭一份环境(记号丢了)时,cwd 照旧是从启动那一刻传下来的。所以它能把「这次启动
+ * 目录下冒出来的孤儿」跟「系统自己起的那一堆 PID-1 守护进程」分开(实测:本机 10 分钟内
+ * 新生的同属主孤儿有 10 个,其中 8 个 cwd 是 `/`)。
+ *
+ * 跟记号一样,它也是**可变**的:一个 chdir 出去的后代就筛不住了。所以它只用来**收窄候选**,
+ * 从不用来宣称「问全了」。
+ */
+export async function readProcessCwd(
+  pids: number[], timeoutMs: number = PROBE_TIMEOUT_MS,
+): Promise<Map<number, string> | null> {
+  if (!pids.length) return new Map();
+  if (IS_WINDOWS) return null;
+  if (HAS_PROC) {
+    const cwds = new Map<number, string>();
+    for (const pid of pids) {
+      try { cwds.set(pid, readlinkSync(`/proc/${pid}/cwd`)); }
+      catch { /* 退了,或者不是当前用户的号 */ }
+    }
+    return cwds;
+  }
+  if (!LSOF_PATH) return null;
+  let stdout: string;
+  try {
+    stdout = (await run(LSOF_PATH, ["-a", "-d", "cwd", "-p", pids.join(","), "-Fpn"],
+      { timeout: budgeted(timeoutMs) })).stdout;
+  } catch (error) {
+    // lsof 对「有的号已经退了」也退非零,照样把活着的那几条打出来;超时/起不来则是这一问
+    // 失灵,它的沉默什么都证明不了。
+    if (!psAnswered(error)) return null;
+    stdout = psStdout(error);
+  }
+  const cwds = new Map<number, string>();
+  let current: number | null = null;
+  for (const line of stdout.split("\n")) {
+    if (line.startsWith("p")) { current = Number(line.slice(1)) || null; continue; }
+    if (line.startsWith("n") && current !== null) { cwds.set(current, line.slice(1)); current = null; }
+  }
+  return cwds;
+}
+
 // ── 归属:环境里的那枚记号 ─────────────────────────────────────────────────────
 
 /**
  * 一个号跟这次启动的关系。**两档「核不上」是分开的** —— 它们的成因完全不同,给用户的
  * 说法也不该一样:
  *
+ *  · `unmarked`   —— 环境读出来了,里面**一枚 ash 启动记号都没有**。它不是「不是这次的」的
+ *    证明:启动脚本完全可以给自己 fork 出去的工人现搭一份环境(`spawn(..., {env:{PATH,…}})`),
+ *    那个号是这次启动创造的,只是记号没跟过去(第 2 轮自由审查 F2 真实复现)。端口那一档
+ *    把它跟 `stranger` 同等处理(都是「别动它」),启动闭包那一档必须分开 —— 一个是否证,
+ *    一个只是没有证据;
  *  · `unknown`    —— 问到了答案,但那份环境读不出来(多半不是当前用户的进程);
  *  · `unverified` —— **根本没问出答案**:ps 超时/起不来,或者它没打出这个号的那一行而这个号
  *    还活着。查询失灵不是「它已经退了」(第 4 轮审查发现 2),所以单独一档。
  *
  * 两档都不动它,也都不许折叠成「不在了」。
+ *
+ *  · `stranger`   —— 环境读出来了,里面带着**另一次** ash 启动的记号。那枚号码确实是 ash 生成
+ *    的,但**环境是可复制的**:启动脚本把上一次启动时存下的环境原样拿来派工人,这个号就带着
+ *    旧记号、却确凿是这次创造的(第 4 轮自由审查真实复现)。所以它跟 `unmarked` 一样**只是
+ *    没有证据,不是反证** —— 端口那一档据它拒绝动手(没有杀它的凭据),启动闭包那一档据它判
+ *    「没问出来」(terminal-launch-survivors.ts 文件头③)。两处都别把它读成「已经证明不是
+ *    这次的」。
  */
-export type Lineage = "ours" | "stranger" | "unknown" | "unverified";
+export type Lineage = "ours" | "stranger" | "unmarked" | "unknown" | "unverified";
 
 export function uncertainLineage(lineage: Lineage | undefined): boolean {
   return lineage === "unknown" || lineage === "unverified";
+}
+
+/**
+ * 「环境读出来了,里面没有**这次**启动的记号」—— `stranger` 与 `unmarked` 的共同点。
+ *
+ * 端口那一档只关心这一句:谁都不许动一个核不上是自己的号。两档的区别只对启动闭包那一问
+ * 有意义(terminal-launch-survivors.ts),所以那边单独分,这边共用一个谓词,行为与分档
+ * 之前逐字节相同。
+ */
+export function withoutOurMark(lineage: Lineage | undefined): boolean {
+  return lineage === "stranger" || lineage === "unmarked";
 }
 
 /** 一次 ps 读取的结果。`trusted=false` = 这次问话本身不可信,它的沉默不构成任何结论。 */
@@ -375,8 +581,11 @@ function lineageFromPs(read: PsRead, pids: number[], token: string): Map<number,
       continue;
     }
     // 一个 `KEY=` 都没有 = 这条根本没打出环境(不是当前用户的进程),那是「核不上」而不是
-    // 「不是我们的」。两种都不动它,但说法要诚实。
-    lineage.set(pid, /\s[A-Z_][A-Z0-9_]*=/.test(body) ? "stranger" : "unknown");
+    // 「不是我们的」。打出了环境的再分一道:带着**另一次**启动的记号 = 确凿是别人家的
+    // (`stranger`);一枚记号都没有 = 没有证据(`unmarked`),它可能是这次启动现搭环境
+    // fork 出去的工人。三种都不动它,但说法要诚实。
+    if (!/\s[A-Z_][A-Z0-9_]*=/.test(body)) { lineage.set(pid, "unknown"); continue; }
+    lineage.set(pid, body.includes(`${LAUNCH_ID_ENV}=`) ? "stranger" : "unmarked");
   }
   return lineage;
 }
@@ -399,7 +608,9 @@ function lineageFromProc(pids: number[], token: string): Map<number, Lineage> {
       lineage.set(pid, "unknown");
       continue;
     }
-    lineage.set(pid, environ.split("\0").includes(needle) ? "ours" : "stranger");
+    const entries = environ.split("\0");
+    lineage.set(pid, entries.includes(needle) ? "ours"
+      : entries.some((entry) => entry.startsWith(`${LAUNCH_ID_ENV}=`)) ? "stranger" : "unmarked");
   }
   return lineage;
 }
@@ -419,7 +630,8 @@ export function groupMembers(pid: number, pgid: number, selfPgid: number | null)
   if (!table) return { members: [pid], complete: false };
   const members = new Set<number>([pid]);
   for (const [other, group] of table.pgidOf) if (group === pgid) members.add(other);
-  return { members: [...members], complete: true };
+  // 表本身漏了活着的行(Linux 单个 stat 读失败),这份清单就不全 —— 漏的那一行可能正是同组的。
+  return { members: [...members], complete: table.complete };
 }
 
 /**
@@ -439,11 +651,12 @@ export function membersOfGroup(pgid: number, selfPgid: number | null): { members
   if (!table) return { members: [], complete: false };
   const members: number[] = [];
   for (const [other, group] of table.pgidOf) if (group === pgid) members.push(other);
-  return { members, complete: true };
+  return { members, complete: table.complete };
 }
 
 export function refusal(lineage: Lineage | undefined): string {
-  if (lineage === "stranger") return `它的环境里没有这次启动的记号（${LAUNCH_ID_ENV}），不是这次起来的`;
+  if (lineage === "stranger") return `它的环境里带着另一次启动的记号（${LAUNCH_ID_ENV}），没有杀它的归属凭据`;
+  if (lineage === "unmarked") return `它的环境里没有这次启动的记号（${LAUNCH_ID_ENV}）`;
   if (lineage === "unverified") return `问不出它的进程环境（ps 没给出这一行，而这个号还活着），核不上是不是这次起来的`;
   return `读不到它的环境（多半不是当前用户的进程），核不上是不是这次起来的`;
 }

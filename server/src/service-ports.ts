@@ -51,7 +51,7 @@ import { IS_WINDOWS } from "./platform.js";
 import { processAlive, readProcessTableSync } from "./terminal-process-tree.js";
 import {
   groupMembers, inspectPid, LAUNCH_ID_ENV, listeningPids, listeningPidsSync,
-  membersOfGroup, PORT_TIER_AVAILABLE, readLineage, readLineageSync, refusal, uncertainLineage,
+  membersOfGroup, PORT_TIER_AVAILABLE, readLineage, readLineageSync, refusal, uncertainLineage, withoutOurMark,
 } from "./service-ports-probe.js";
 import type { Lineage, PortHolder } from "./service-ports-probe.js";
 // 认端口那一段(整条文本 + 流式)拆去 service-ports-scan.ts 了,调用点照旧从这儿引。
@@ -228,7 +228,7 @@ export async function stopByPorts(
       const inspected = await inspectPid(pid, left());
       if (inspected.state === "gone") continue;
       if (inspected.state === "unknown") {
-        if (anchor === "stranger") continue;
+        if (withoutOurMark(anchor)) continue;
         outcome.unknown.push(port);
         outcome.membersIncomplete = true;
         owed.set(pid, { pid, ours: anchor === "ours", reason: inspected.why });
@@ -314,7 +314,7 @@ export async function launchMembers(
     for (const pid of found.pids) {
       if (pid === process.pid || seen.has(pid)) continue;
       const anchor = (await readLineage([pid], token)).get(pid);
-      if (anchor === undefined || anchor === "stranger") { seen.add(pid); continue; }
+      if (anchor === undefined || withoutOurMark(anchor)) { seen.add(pid); continue; }
       if (anchor !== "ours") {
         seen.add(pid);
         members.push({ pid, ours: false, reason: refusal(anchor) });

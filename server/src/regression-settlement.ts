@@ -6,7 +6,7 @@ import type { RegressionFinalization, RegressionSettlement } from "./db/schema-r
 import { checkRegressionConclusion, evidenceState } from "./regression-evidence-lifecycle.js";
 import { RegressionConclusionRejected } from "./regression-conclusion-errors.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { isTurnClaimed } from "./runs.js";
+import { isTurnClaimed, turnIdentity } from "./runs.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { reconcileRegressionFinalizations } from "./regression-finalization.js";
@@ -26,6 +26,8 @@ export type CheckedSettlement = {
   generation: string;
   recoveryOwnerTaskId?: string;
   target: ReviewTargetIdentity | null;
+  /** 原样带到下半场：「活回合」那一问由调用方回答（见 `regressionSettlementConclusion` 的同名入参）。 */
+  ignoreActive?: boolean;
 };
 
 export async function regressionSettlementConclusion(taskId: string, directory: string, input: {
@@ -34,6 +36,16 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
   ownerTaskId?: string;
   freeRoundId?: string;
   acceptedMerge?: boolean;
+  /**
+   * 「owner 还有回合在跑」这一问由调用方自己回答过了,这里不再按 `tasks.status` 拦一次。
+   *
+   * 自由工作流的审查是**同一个任务上的旁路回合**:结算这一拍 owner 常常就是 running,所以
+   * 那条分支从来都是自己带着 `ignoreActive=true` 判完才进来的(free-workflow.ts 审查旁路
+   * 分支)。恢复路径(outcome 省略)下面那道闸要是再按 status 拦一次,就会把「执行者正在跑
+   * 实现回合、这一轮审查早已交卷死透」的任务永远挡在结算之外 —— round 挂 reviewing,验收
+   * 409(D6)。
+   */
+  ignoreActive?: boolean;
 }): Promise<CheckedSettlement | null> {
   await evidenceState(taskId, directory);
   const stored = await db.transaction(async (transaction) => {
@@ -50,7 +62,7 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
     const currentConclusion = (input.freeRoundId || target && reviewIdentityMatches(target, state.targetIdentity))
       && (row?.conclusion === "verified" || row?.conclusion === "verify_failed") ? row.conclusion : null;
     if (input.outcome === undefined && (!owner || await reviewContinuationPending(transaction, owner, state,
-      !!input.freeRoundId && currentConclusion !== null))) return null;
+      !!input.freeRoundId && currentConclusion !== null, input.ignoreActive))) return null;
     let settlement: RegressionSettlement = state.settlement ?? {
       outcome: input.outcome ?? "failed", conclusion: currentConclusion, round: input.round, ownerTaskId: input.ownerTaskId ?? taskId,
       ...(input.freeRoundId ? { freeRoundId: input.freeRoundId } : {}), pending: true, target: state.targetIdentity,
@@ -70,6 +82,7 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
   const { conclusion, outcome } = stored;
   const checked: CheckedSettlement = { conclusion, outcome, generation: stored.generation, target: stored.target,
     ...(input.outcome === undefined ? { recoveryOwnerTaskId: input.ownerTaskId ?? taskId } : {}),
+    ...(input.ignoreActive ? { ignoreActive: true } : {}),
   };
   if (stored.unknown) await appendTaskTimeline(taskId, "审查缺少持久保存的真实退出结果，不能因已有通过结论推定正常结束；本轮按异常结束处理。");
   if (outcome !== "done" || !checked.target) return checked;
@@ -95,7 +108,9 @@ export async function completeRegressionSettlement(directory: string, checked: C
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
     if (checked.recoveryOwnerTaskId) {
       const owner = (await transaction.select().from(tasks).where(eq(tasks.id, checked.recoveryOwnerTaskId)))[0];
-      if (!owner || await reviewContinuationPending(transaction, owner, state)) return false;
+      // `checked.ignoreActive`:上半场判过「活回合」了,这里不许按 owner 的 status 再拦一次 ——
+      // 否则自由工作流那条自愈走完上半场就停在「settlement 挂着 pending」上,round 照旧 reviewing。
+      if (!owner || await reviewContinuationPending(transaction, owner, state, false, checked.ignoreActive)) return false;
     }
     if (!state?.settlement?.pending || state.generation !== checked.generation || state.settlement.outcome !== checked.outcome) return false;
     // 同上：存量 revoked=1 的旧轮次，没交依据就不许把通过结论落定（新轮次 revoked 恒为 0，这一支不触发）。
@@ -156,12 +171,18 @@ export async function reconcileRegressionSettlements(ownerTaskId?: string): Prom
     const settlement = state.settlement;
     if (!settlement?.pending || (ownerTaskId && settlement.ownerTaskId !== ownerTaskId)) continue;
     const owner = (await db.select().from(tasks).where(eq(tasks.id, settlement.ownerTaskId)))[0];
-    if (!owner || owner.status === "running" || owner.status === "queued" || isTurnClaimed(owner.id)) continue;
+    if (!owner) continue;
     if (settlement.freeRoundId) {
+      // 自由工作流的审查是**同一个任务上的旁路回合**,所以这里不能问「owner 忙不忙」:执行者
+      // 被哨兵结果叫醒去跑实现回合时它一直 running,而这一轮审查早就交卷死透了 —— 按状态跳过
+      // 等于让挂着 pending 的结算永远补不上(D6,判据同 reconcileFreeReviews)。
+      const held = turnIdentity(owner.id);
+      if (held ? held.role === "reviewer" : owner.status === "running" || owner.status === "queued") continue;
       await (await import("./free-workflow.js")).handleFreeWorkflowSettlement(owner.id, "failed", false, null, "reviewer")
         .catch((error) => console.error(`[ash] 自由审查恢复待重试 ${owner.id}:`, error));
       continue;
     }
+    if (owner.status === "running" || owner.status === "queued" || isTurnClaimed(owner.id)) continue;
     if (owner.reviewOf ? owner.reviewOf !== state.taskId || owner.reviewRound !== settlement.round
       : owner.id !== state.taskId || owner.verifyRound !== settlement.round) continue;
     const { handleTaskSettlement } = await import("./review.js");

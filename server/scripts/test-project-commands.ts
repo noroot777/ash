@@ -160,7 +160,7 @@ if (IS_WINDOWS) {
     assert.equal(manager.sweepIdleSessions(Date.now() + 31 * 60 * 1000), 0);
 
     // ② 停止 = terminate:保留现场、打「用户停的」标(刷新后看得出「我停过」)。
-    assert.deepEqual(await manager.terminate(live.id, "p1"), { ok: true });
+    assert.equal((await manager.terminate(live.id, "p1")).ok, true);
     const stoppedInfo = manager.get(live.id, "p1");
     assert.notEqual(stoppedInfo?.exitCode, null, "停止后 exitCode 必须落下");
     assert.equal(stoppedInfo?.stoppedByUser, true);
@@ -288,7 +288,10 @@ try {
   // 停止 = terminate:**保留现场** —— 会话不删、exitCode 照落、打上「用户停的」标,
   // 刷新后 UI 才看得出「我停过」而不是「从没跑过」。
   const stopped = manager.create("p1", cwd, { command: { id: "dev", name: "web dev", script: "sleep 60" } });
-  assert.deepEqual(await manager.terminate(stopped.id, "p1"), { ok: true });
+  // `complete` = terminate 那一趟的成员清单全不全(terminal-session-kill.ts 的 KillResult)。
+  // 它跟 ok 是两件事:ok 说「我枚举到的那些都不在了」,complete 说「那份清单本身可信」——
+  // 下游据此决定敢不敢把「这次启动起来的东西都停了」说出口。
+  assert.deepEqual(await manager.terminate(stopped.id, "p1"), { ok: true, complete: true });
   const stoppedInfo = manager.get(stopped.id, "p1");
   assert.notEqual(stoppedInfo?.exitCode, null);
   assert.equal(stoppedInfo?.stoppedByUser, true);
@@ -303,14 +306,14 @@ try {
     if (Date.now() > ready) throw new Error("stubborn process not ready");
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  assert.deepEqual(await manager.terminate(stubborn.id, "p1", { termMs: 600, killMs: 4000 }), { ok: true });
+  assert.equal((await manager.terminate(stubborn.id, "p1", { termMs: 600, killMs: 4000 })).ok, true);
   assert.notEqual(manager.get(stubborn.id, "p1")?.exitCode, null);
 
   // 同一条命令再启动:没人盯着的旧退出记录顺手清掉,反复启停不吃会话名额。
   const fresh = manager.create("p1", cwd, { command: { id: "dev", name: "web dev", script: "sleep 60" } });
   assert.equal(manager.get(stopped.id, "p1"), null);
   assert.ok(manager.get(fresh.id, "p1"));
-  assert.deepEqual(await manager.terminate(fresh.id, "p1"), { ok: true });
+  assert.equal((await manager.terminate(fresh.id, "p1")).ok, true);
 
   // 组长先死、同组子进程还活着(`cmd & wait` 形状,子进程忽略 TERM):停止判定必须看
   // 「整组清空」,否则孤儿继续占端口、SIGKILL 永远不发(第 2 轮审查实锤)。
@@ -326,7 +329,7 @@ try {
     if (childPid === 0 && Date.now() > orphanReady) throw new Error("orphan child not ready");
     if (childPid === 0) await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  assert.deepEqual(await manager.terminate(orphan.id, "p1", { termMs: 800, killMs: 4000 }), { ok: true });
+  assert.equal((await manager.terminate(orphan.id, "p1", { termMs: 800, killMs: 4000 })).ok, true);
   await assertProcessGone(childPid, "忽略 SIGTERM 的同组子进程也必须被收掉");
 
   // 并发 restart / start 按 (projectId, commandId) 串行化:同一条命令绝不出现两个活会话。
@@ -409,7 +412,7 @@ try {
   assert.equal(manager.get(daemon.id, "p1")?.exitCode, null, "daemonize 下 wrapper 必须持续拥有会话,exitCode 不得落下");
   assert.equal(manager.get(daemon.id, "p1")?.groupAlive, true, "组里还有活人,groupAlive 必须为 true");
   assert.equal(manager.liveCommandSession("p1", "daemon")?.id, daemon.id, "daemonize 会话必须仍算活,否则 stop/restart 找不到它");
-  assert.deepEqual(await manager.terminate(daemon.id, "p1", { termMs: 600, killMs: 4000 }), { ok: true });
+  assert.equal((await manager.terminate(daemon.id, "p1", { termMs: 600, killMs: 4000 })).ok, true);
   await assertProcessGone(dchild, "daemonize 的子进程也必须被停掉");
   assert.equal(manager.liveCommandSession("p1", "daemon"), null);
   assert.equal(manager.get(daemon.id, "p1")?.groupAlive, false);
@@ -435,7 +438,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 600));
   assert.equal(manager.get(rogue.id, "p1")?.exitCode, null, "独立 PGID 服务还在,会话不得落「已结束」");
   assert.equal(manager.liveCommandSession("p1", "rogue")?.id, rogue.id, "独立 PGID 服务还在,liveCommandSession 必须找得到(否则会被重复启动)");
-  assert.deepEqual(await manager.terminate(rogue.id, "p1", { termMs: 600, killMs: 4000 }), { ok: true });
+  assert.equal((await manager.terminate(rogue.id, "p1", { termMs: 600, killMs: 4000 })).ok, true);
   await assertProcessGone(rchild, "独立 PGID 的服务进程也必须被停止触达");
   assert.equal(manager.liveCommandSession("p1", "rogue"), null);
 
@@ -455,7 +458,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 800));
   assert.equal(manager.get(noh.id, "p1")?.exitCode, null, "全重定向的 nohup 服务还活着,会话不得落「已结束」");
   assert.equal(manager.liveCommandSession("p1", "noh")?.id, noh.id, "全重定向的 nohup 服务必须仍算活(否则 stop 找不到、start 会另起一份)");
-  assert.deepEqual(await manager.terminate(noh.id, "p1", { termMs: 600, killMs: 4000 }), { ok: true });
+  assert.equal((await manager.terminate(noh.id, "p1", { termMs: 600, killMs: 4000 })).ok, true);
   await assertProcessGone(nchild, "全重定向的 nohup 服务必须被停止触达");
   assert.equal(manager.liveCommandSession("p1", "noh"), null);
 
@@ -548,7 +551,15 @@ try {
   assert.deepEqual((await stopCommand("pcs", SERVICE_COMMAND_ID)).body, { stopped: false });
   // 配了停止命令:正常退出、又没被停过的那次启动仍算「开着」—— 否则那条停止命令永远按不到。
   rmSync(stopFlag, { force: true });
-  assert.deepEqual((await stopCommand("pcs", SERVICE_COMMAND_ID, { script: detached.stopCommand!, cwd })).body, { stopped: true });
+  // 脚本跑了,但这次启动既没有活进程、也没有端口线索,服务本来就在 ash 的进程树之外 ——
+  // 于是只能说「按过停止」,不能说「停净了」(terminal-stop-notices.ts 的 processStopVerdict ③)。
+  // 这个期望此前钉的是 `{ stopped: true }` 一个字段,在改成三档判定的那次合并里漏改了
+  // (HEAD 上实跑同样红),这一轮一并对齐。
+  const detachedStop = (await stopCommand("pcs", SERVICE_COMMAND_ID, { script: detached.stopCommand!, cwd })).body as
+    { stopped: boolean; unresolved: number[]; notice: string };
+  assert.equal(detachedStop.stopped, true);
+  assert.deepEqual(detachedStop.unresolved, [], "没有活号可举:这一档是证据不全,不是点到了谁");
+  assert.match(detachedStop.notice, /没法确认是否停净/);
   assert.equal(readFileSync(stopFlag, "utf8"), "down");
   assert.equal(
     terminalSessions.listCommandSessions().find((session) => session.id === detachedId)?.stoppedByUser,
@@ -559,13 +570,19 @@ try {
   rmSync(stopFlag, { force: true });
   assert.deepEqual((await stopCommand("pcs", SERVICE_COMMAND_ID, { script: detached.stopCommand!, cwd })).body, { stopped: false });
   assert.equal(existsSync(stopFlag), false, "已经停过的服务不该再跑一遍停止脚本");
-  // 停过之后它就只是一份退出日志,该回收就回收 —— 豁免只给「可能还开着」的那一类。
+  // 停过之后它不再是「可能还开着」,但也**不是一份可丢的退出日志**:这次停止没能确认停净,
+  // 那句话得在刷新之后还看得见(根 AGENTS.md「停止/暂停必须留下持久可见的状态」),所以闲置
+  // 清扫要放它过去。同一条命令只留最新那一条(terminal.ts 的 pruneStoppedHistory),而且它
+  // 整条不占活会话预算(terminal-capacity.ts 的 pureHistory),所以留着不会把槽吃光。
+  // 这个期望此前钉的是「该被清掉」,同样是改成三档判定那次合并漏改的。
   terminalSessions.sweepIdleSessions(Date.now() + 31 * 60 * 1000);
   assert.equal(
     terminalSessions.listCommandSessions().some((session) => session.id === detachedId),
-    false,
-    "停过的 service 记录不再豁免清扫",
+    true,
+    "「我停过、但没能确认停净」这句话必须扛过闲置清扫",
   );
+  assert.equal(terminalSessions.hasSlotForCommand("pcs", "another"), true, "纯历史记录不占活会话预算");
+  assert.equal((await terminalSessions.destroy(detachedId, "pcs")).ok, true, "一个号都举不出来时不许拦着用户删它");
 
   // ⑤ 停止脚本不认 TERM 时必须**自己收敛**:到点连它拉起的那一组一起 SIGKILL、502 落地,
   //    锁跟着 promise 释放。否则这条命令的启停全部排队到死(第 1 轮审查 E2)。
@@ -600,7 +617,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   // termMs 给足,让 handler 在解冻窗口跑完并 fork;killMs 给 KILL 轮重枚举 + 收割。
-  assert.deepEqual(await manager.terminate(tf.id, "p1", { termMs: 1200, killMs: 4000 }), { ok: true });
+  assert.equal((await manager.terminate(tf.id, "p1", { termMs: 1200, killMs: 4000 })).ok, true);
   let tfChild = 0;
   const tfChildDeadline = Date.now() + 3000;
   while (tfChild === 0) {
@@ -619,7 +636,7 @@ try {
   manager.subscribe(pinned.id, "p1", () => {}); // 一直开着的日志 tab,不退订
   const replacing = manager.create("p1", cwd, { command: { id: "pin", name: "pin", script: "sleep 60" } });
   assert.equal(manager.get(pinned.id, "p1"), null, "被订阅的同命令退出记录也必须被新会话替换清掉");
-  assert.deepEqual(await manager.terminate(replacing.id, "p1"), { ok: true });
+  assert.equal((await manager.terminate(replacing.id, "p1")).ok, true);
 
   // audit 的完整场景:连环 restart、每次都订阅新会话的日志,槽不再被吃光,每次都成功。
   const churn: RunnableCommand = { id: "churn", name: "churn", command: "sleep 60", restartCommand: null, stopCommand: null };

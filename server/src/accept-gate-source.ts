@@ -9,6 +9,7 @@ import { freezesAsSource, gateTreeDigest, insideTree as inside } from "./accept-
 import { confineOwnPackages } from "./accept-gate-confine.js";
 import { ambientDigest, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
   provideDependency, workspacePackages, type DependencyMode } from "./accept-gate-deps.js";
+import { optionalRead, requiredRead } from "./accept-gate-fs.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 // 快照的 sidecar。非 Git 项目一直靠它把输入清单交给收尾核验,现在**依赖放置计划**也走这里:
@@ -19,7 +20,10 @@ type GatePlacement = { path: string; mode: DependencyMode };
 type GateSidecar = { inputs?: SourceInput[]; dependencies?: GatePlacement[]; sourceCwd?: string; ambient?: string };
 
 async function readSidecar(target: string): Promise<GateSidecar | null> {
-  const raw = await readFile(`${target}.inputs.json`, "utf8").catch(() => null);
+  // 没有这份文件是正常形态(Git 项目的收尾从 DB 重建)。读不动就不是「没有」:那会让依赖放置计划
+  // 的豁免范围静默变空,收尾把被故意换掉的依赖目录判成「命令改了被测源码」—— 换一句无从照做的话。
+  const sidecar = `${target}.inputs.json`;
+  const raw = await optionalRead(sidecar, () => readFile(sidecar, "utf8"));
   if (raw === null) return null;
   try {
     const parsed = JSON.parse(raw) as GateSidecar | SourceInput[];
@@ -73,7 +77,8 @@ async function listInputs(cwd: string): Promise<SourceInput[]> {
     // 借用才是这一层的意图,按链登记会让它继续走「原样重建 + 落点要在副本里」那条老路。非 Git
     // 项目一视同仁,否则这一层的收益只有 Git 项目拿得到。
     if (DEPENDENCY_DIRS.includes(basename(path))
-      && (await stat(join(cwd, path)).catch(() => null))?.isDirectory()) {
+      && (await optionalRead(join(cwd, path), () => stat(join(cwd, path)),
+        ["ENOENT", "ENOTDIR", "ELOOP"]))?.isDirectory()) {
       inputs.push({ path, directory: true, dependency: true });
       return;
     }
@@ -141,14 +146,18 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
     for (const directory of [...packageDirs].sort()) {
       for (const name of DEPENDENCY_DIRS) {
         const dep = join(directory, name);
-        const info = await lstat(join(cwd, dep)).catch(() => null);
+        const info = await optionalRead(join(cwd, dep), () => lstat(join(cwd, dep)));
         if (info === null) continue;
         // 名字不证明类型。在 Git 根提交一个叫 `vendor`/`target` 的**普通文件**,上一版靠 lstat 成功
         // 就把它登记成依赖目录:随后 linkWhole 把它重建成一条借用原文件的链,那份源码不再冻结,往
         // 快照这条路径写就写到了工作区。非 Git 分支一直有这道判断,Git 分支漏了,两边对齐。
         // 判的是**落点**而不是 lstat 的类型:依赖根自己是一条链是合法形状(node_modules -> .store),
         // 落点读不出来的悬空根也照旧登记——provideDependency 要按原样把它重建成同样解析不通的一条。
-        const landing = await stat(join(cwd, dep)).catch(() => null);
+        // 落点「读不出来」只认 ENOENT/ENOTDIR/ELOOP(悬空根的正常形态);读不动必须明确失败,否则一棵
+        // 真实的依赖目录会因为一次 EACCES 落到这条 continue 上 —— 它就不再按依赖登记,改走源码冻结,
+        // 往快照这条路径写就写进了工作区那一份。
+        const landing = await optionalRead(join(cwd, dep), () => stat(join(cwd, dep)),
+          ["ENOENT", "ENOTDIR", "ELOOP"]);
         if (landing === null ? !info.isSymbolicLink() : !landing.isDirectory()) continue;
         if (registered.some(other => inside(join(cwd, other), join(cwd, dep)))) continue;
         registered.push(dep);
@@ -215,7 +224,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     // 依赖那一侧完全没被排除,遍历直接走进正在建的快照自己。
     const excluded = excludedInputs(cwd);
     const includedAsGiven = planFilter(cwd, excluded);
-    const includedPhysical = planFilter(await realpath(cwd).catch(() => cwd), excluded);
+    const includedPhysical = planFilter(await requiredRead(cwd, () => realpath(cwd)), excluded);
     const included = (path: string) => includedAsGiven(path) && includedPhysical(path);
     const provide = async (dep: string): Promise<void> => {
       provided.set(dep, await provideDependency(cwd, target, dep, workspace, path => !included(path)));

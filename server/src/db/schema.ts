@@ -487,6 +487,14 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 真的落进会话之后才写，所以 sent 永远意味着「用户刷新后看得见」。租约是内存态的
   // 持久投影：进程一换就作废（开机 reclaimStaleDeliveries 全清），那条消息回到待发送。
   deliveringSince: text("delivering_since"),
+  // 这张**续跑凭证**此刻挂在谁名下(checkpoint-ownership.ts 的 token:pid + 代次 + 开机随机数
+  // + 这一笔认领/接管独有的随机串)。只有续跑凭证用它。
+  //
+  // 为什么租约时刻不够:它既要当「这条租约多久了」又要当身份,于是同毫秒接管不保证换值,
+  // 更证不出「原发送方还在不在」。多开实例(ASH_ALLOW_MULTI)时后者是硬要求 —— 两个独立进程
+  // 实测:接管方按「没送出去」把交代还给任务,而原发送方照旧送了出去,同一段话执行两遍
+  // (第 2 轮自由审查 F1)。旧行 NULL = 那一代还没有身份,接管资格另按单例锁判(同上文件头)。
+  deliveringOwner: text("delivering_owner"),
   // 这条消息已经把 `tasks.resume_prompt` 那段续跑交代**接走了**,值就是那一段原文,正文
   // 末尾带着它(见 monitor-session.ts 的 monitorWakeCheckpoint)。
   //
@@ -510,6 +518,14 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 不适用,于是同一条结束通知变成两条消息、把 agent 叫醒两次。身份跟入队写在同一笔里,所以
   // 「送过没有」这一问有一个原子的答案:库里找得到这个 token ⇒ 已经送过,只补销凭证。
   handoffToken: text("handoff_token"),
+  // 这张凭证**是在哪一代投递协议下开出来的**(delivery-crossing.ts 的 CROSSING_PROTOCOL)。
+  //
+  // 为什么非得落库:恢复侧用「越线记号不在」当否证,而那个否证只有在写记号是**硬前置**
+  // (写不成就不 spawn)的那一代里才成立。`crossingRequired` 只活在当时那个调用栈里,
+  // 旧凭证和新凭证在库里长得一模一样 —— 升级之后拿新代码的判据去读旧代开的凭证,等于
+  // 把旧协议当时根本没给过的证明力追认给它(第 2 轮自由审查 F1 跨进程实测:同一段交代
+  // 在升级后被执行了两遍)。null = 旧代开的,它的沉默什么都不证明,只能按交付不明处理。
+  crossingProtocol: text("crossing_protocol"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one
@@ -576,15 +592,6 @@ export const llmProviders = sqliteTable("llm_providers", {
   createdAt: text("created_at").notNull(),
 });
 
-// 接力来源(入站方向的信任表):哪些机器可以把任务接力**进**本机。
-//
-// 主键是公钥指纹而不是地址 —— 地址会随 DHCP/网络环境漂,身份不会;而且换了地址还是
-// 同一台机器,不该重新批准。存的全是公开信息(公钥、对端自述的主机名),泄露无害;
-// 本机自己的私钥在 `<db>.identity.json`,见 handoff-identity.ts 顶部注释。
-//
-// 出站方向(「我要发的这台是不是原来那台」)不在这里,而是 app_settings.handoffTargets
-// 每个目标上的 peerFp —— 那是「地址 → 期望身份」的绑定,和这张「身份 → 是否放行」是
-// 两件事,合成一张表反而说不清一台只出不进(或只进不出)的机器该是什么状态。
 // 上传附件的**归属登记**(§八)。文件本身躺在 `data/uploads` 里 —— 那是个扁平目录,
 // 文件名就是全部信息,所以「谁能读它」只能靠这张表回答(判据在 `uploads.ts`)。
 export const uploads = sqliteTable("uploads", {
@@ -603,53 +610,6 @@ export const uploads = sqliteTable("uploads", {
   createdAt: text("created_at").notNull(),
 });
 
-export const handoffPeers = sqliteTable("handoff_peers", {
-  fingerprint: text("fingerprint").primaryKey(), // sha256(公钥 SPKI DER) 小写 hex
-  publicKey: text("public_key").notNull(), // base64(SPKI DER)
-  // 对端自述的主机名,**不可信**,只用来在批准列表里帮人认出是哪台;身份永远看指纹。
-  name: text("name").notNull().default(""),
-  // pending = 来敲过门还没批;approved = 放行;blocked = 明确拒绝(不再进待批列表打扰)。
-  status: text("status").notNull().default("pending"),
-  firstSeenAt: text("first_seen_at").notNull(),
-  lastSeenAt: text("last_seen_at").notNull(),
-  approvedAt: text("approved_at"),
-  // 多人模式下入站审批不是管理员专属(§十一 互信定位),所以必须记下是谁批的 ——
-  // 一台机器被放行意味着它上面的人都能敲本机的门,事后要能问出「这是谁点的」。
-  // 自用模式恒空(只有一个人)。
-  approvedBy: text("approved_by"),
-  // 这次配对申请代表本机的哪个账号:源机发申请时带的「我在对端的账号 key」认出来的人。
-  // **一条申请只打扰这个人**,也只有他能接受。多人模式下认不出主人的申请压根不落库
-  // (没有「无主申请」这回事,见 handoff-routes.ts 的 ping);空值只出现在单人时期或
-  // 升级前落下的存量行上,那些行只有管理员看得见、能拒能删但批不了。判据见
-  // handoff-peers.ts `peerAudience`。
-  requestedByUserId: text("requested_by_user_id"),
-  // 对端**自报**的实例模式(`single` / `multi:<人数>`)。自报的东西不做权限判据,
-  // 只在批准界面上明示:批一台多人实例 = 它上面所有人都能经这条路进来(§十一)。
-  peerMode: text("peer_mode").notNull().default(""),
-  // 最近一次来访的地址,纯展示(帮人判断「这是不是我那台台式机」)。
-  lastAddr: text("last_addr").notNull().default(""),
-});
-
-// 自用模式的「我在对端的账号 key」。**多人模式那份在 user_handoff_targets.peer_key**,
-// 这张表只服务自用实例。
-//
-// 为什么不塞进 app_settings.handoffTargets(自用模式的目标机清单就住在那儿):那份设置
-// 被 `GET /settings` 整份吐回前端,凭证进去就等于一个打开的网页拿走全部对端 key;而且
-// 实例以后转多人时,它会当场变成所有人都读得到的公共设置。凭证的待遇统一照
-// project_git_credentials:单独存,读侧只报 hasKey。
-//
-// 为什么自用实例也需要它:要不要 key 由**对端**的模式决定,不是本机。一台自用 ash 往
-// 多人 ash 上接力同样要带「你在对端的账号 key」——2026-08-29 之前自用模式压根没有存
-// 它的地方,预检失败的提示却让人去设置页补,那里根本没有输入框。
-export const handoffLocalPeerKeys = sqliteTable("handoff_local_peer_keys", {
-  // 归一后的目标机地址(去尾斜杠、小写),与 app_settings.handoffTargets 里的行按它对齐。
-  url: text("url").primaryKey(),
-  // 明文 key:要原样发给对端,没法只存哈希。GET 只报 hasKey。
-  peerKey: text("peer_key").notNull(),
-  // 保存这把 key 时通过签名核对的机器；旧数据没有归属证明，保持 null。
-  peerFp: text("peer_fp"),
-  updatedAt: text("updated_at").notNull(),
-});
 
 export const taskBranchReceipts = sqliteTable("task_branch_receipts", {
   id: text("id").primaryKey(),
@@ -659,11 +619,31 @@ export const taskBranchReceipts = sqliteTable("task_branch_receipts", {
   targetBranch: text("target_branch").notNull(),
 });
 
-export const handoffLocalKeyRevisions = sqliteTable("handoff_local_key_revisions", {
-  url: text("url").primaryKey(),
-  revision: text("revision").notNull(),
+/**
+ * 「这条队列被请求推进过,还没有哪一次推进把它做完」—— 一次**已被接受的推进意图**。
+ *
+ * 为什么不能靠现场推断:推进请求(`tasks.queue_advance_request`)是写在**候选任务**那一行上的,
+ * 那一笔写失败时,「这条队列该推进」这件事就只剩进程内存里的一个重试闭包,进程一消失就蒸发。
+ * 重启后的恢复只能回头猜 —— 早先那条判据是「候选前面已经有成员落了终态」,可「请求是否已被
+ * 接受」跟「现在还看不看得见一个终态前驱」根本不是同一件事:只有队首的队列、以及故障窗口里
+ * 前驱被移走/归档的队列,一律猜不出来,于是永久停住(第 1 轮审查发现 3 跨进程复现)。
+ *
+ * 所以把意图本身落下来:推进一开始就记一行,这一趟不用再重试了才删。
+ */
+export const queueAdvanceIntents = sqliteTable("queue_advance_intents", {
+  queueId: text("queue_id").primaryKey(),
+  acceptedAt: text("accepted_at").notNull(),
+  // **这一行代表的是哪一次接受。** 一条队列上同时只有一行意图,但先后被接受的两趟推进不是
+  // 同一份责任:后来那一趟只是借到了旧那行。了结因此必须条件写在这个代次上 —— 早先那趟做完
+  // 自己那份、按 queueId 裸删时,删掉的是**后来**那次接受的恢复责任,重启后于是没人补办
+  // (第 1 轮自由审查 F2 跨进程实测:新队首既无意图也无单任务请求,链永久停住)。
+  // 老库开出来的行没有代次(NULL):谁观察到它、谁就按「代次为 NULL」条件了结,口径在
+  // queue-advance-admission.ts。
+  generation: text("generation"),
 });
 
+// 接力的三张表住在 schema-handoff.ts（见那份的说明）。这里转发，导入路径不变。
+export { handoffPeers, handoffLocalPeerKeys, handoffLocalKeyRevisions } from "./schema-handoff.js";
 // 哨兵表住在隔壁（见 schema-monitors.ts 的说明）。这里转发，导入路径不变。
 export { monitors, monitorPendingCalls, monitorScanCursors, monitorReclaimDebts } from "./schema-monitors.js";
 export { taskBackgroundRevisions } from "./schema-task-background.js";

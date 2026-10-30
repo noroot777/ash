@@ -16,7 +16,8 @@
 //    而第一个进程手里的 fd 还在、照样返回成功（同一条审查意见的第二个面）。
 // ② **按排好的顺序取多把**：一套资源包含库文件和 runs 目录两个键，所有角色都按字典序
 //    取，顺序一致就不会互相等成死锁。
-import { linkSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, realpathSync, statSync,
+  unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isPidAlive } from "./platform.js";
@@ -42,6 +43,32 @@ export class ResourceClaimError extends Error {
 export const claimFileFor = (key: string): string => `${key}${CLAIM_SUFFIX}`;
 
 /**
+ * 「这条路径的真实落点是什么」这一问**没答上来**。
+ *
+ * 和「这个位置还不存在」严格分开（第 3 轮复核 F1）：后者是规范化流程里的正常形态（库文件第一次
+ * 创建、备份还没写），退一步解析父目录是对的；前者（权限、I/O、符号链接成环）退一步就等于拿一个
+ * 没证明过的名字继续往下判归属 —— 而那个判断的下游是「要不要往这里写」。
+ */
+export class ResourceResolveError extends Error {
+  constructor(public readonly target: string, public readonly cause: NodeJS.ErrnoException) {
+    super(`无法解析 ${target} 的真实落点（${cause.syscall}: ${cause.code}）：`
+      + "不能据此认定它属于哪套资源，请恢复该路径可读取后重试");
+    this.name = "ResourceResolveError";
+  }
+}
+
+/** 解析得了就给落点，**确实不存在**给 null，读不动抛 `ResourceResolveError`。 */
+function realpathOrAbsent(target: string): string | null {
+  try {
+    return realpathSync(target);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw new ResourceResolveError(target, error as NodeJS.ErrnoException);
+  }
+}
+
+/**
  * 资源键的规范形式。
  *
  * 同一份资源经不同路径到达（软链、`..`、父目录别名、相对路径）时必须得出**同一个键**，
@@ -50,15 +77,10 @@ export const claimFileFor = (key: string): string => `${key}${CLAIM_SUFFIX}`;
  */
 export function canonicalResourceKey(path: string): string {
   const abs = resolve(path);
-  try {
-    return realpathSync(abs);
-  } catch {
-    try {
-      return join(realpathSync(dirname(abs)), basename(abs));
-    } catch {
-      return abs;
-    }
-  }
+  const direct = realpathOrAbsent(abs);
+  if (direct !== null) return direct;
+  const parent = realpathOrAbsent(dirname(abs));
+  return parent === null ? abs : join(parent, basename(abs));
 }
 
 /** 一套资源（库文件 + 它的 runs 目录）的全部键，去重并排序 —— 所有角色都要用这一组。 */
@@ -72,12 +94,22 @@ export function resourceKeysFor(dbFile: string, runsDir: string): string[] {
  * `openSync(path, "wx")` 只保证文件原子出现，**内容是后写的**；`link()` 把一份写好的
  * 临时文件挂到目标名上，内容和存在性一起出现，所以绝不会被别人读到半份。
  */
-export function atomicCreateWithContent(path: string, text: string, mode = 0o600): boolean {
+export function atomicCreateWithContent(path: string, text: string, mode = 0o600,
+  options: { fsync?: boolean } = {}): boolean {
   const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   // 临时文件的写入也必须在 try 里:磁盘满 / I/O 错误会在 writeFileSync 中途抛，那时盘上
   // 可能已经留了半份 .tmp。清理放 finally，覆盖「写一半就抛」和「link 完」两条出口。
   try {
-    writeFileSync(temp, text, { mode });
+    writeFileSync(temp, text, { mode, flag: "wx" });
+    if (options.fsync === true) {
+      // 「原子出现」只对**别的进程**成立;要让这份内容在掉电之后还在，得在 link 之前刷一次。
+      const handle = openSync(temp, "r");
+      try {
+        fsyncSync(handle);
+      } finally {
+        closeSync(handle);
+      }
+    }
     linkSync(temp, path);
     return true;
   } catch (error) {
@@ -101,9 +133,16 @@ export function atomicCreateWithContent(path: string, text: string, mode = 0o600
  * 得了就解析文件，解析不了就退一步解析父目录 —— 父目录是软链同样会被揭出来。
  */
 export function withinResource(root: string, path: string): boolean {
-  const base = canonicalResourceKey(root);
-  const real = canonicalResourceKey(path);
-  return real === base || real.startsWith(base.endsWith(sep) ? base : `${base}${sep}`);
+  try {
+    const base = canonicalResourceKey(root);
+    const real = canonicalResourceKey(path);
+    return real === base || real.startsWith(base.endsWith(sep) ? base : `${base}${sep}`);
+  } catch (error) {
+    // 「证明不了在里面」只能按**在外面**算。这一问的下游是「要不要往这里写」，答不上来还放行，
+    // 失败方向就是往别人家的历史上写。
+    if (error instanceof ResourceResolveError) return false;
+    throw error;
+  }
 }
 
 type ClaimBody = { pid: number; note: string; token: string; at: string; startedAtMs?: number };

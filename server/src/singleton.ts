@@ -206,11 +206,18 @@ export function acquireDbSingletonLock(options: { port?: number | null } = {}): 
         );
         // 放弃排他不等于放弃「让别人看见我在线」:离线迁移据此拒绝开跑。
         const shared = registerAshPresence(keys, { port, mode: "shared" });
-        installPresenceCleanup(shared);
+        installPresenceCleanup(dbFile, shared);
         return { lock: null, presence: shared };
       }
       const lock = writeOwnLock(dbFile, lockFile, port);
-      return { lock, presence: registerAshPresence(keys, { port, mode: "exclusive" }) };
+      // 登记失败就把刚落下的锁放回去:它带着活 PID,留在盘上会把所有后来者(以及离线维护)永久挡在
+      // 外面,而这个实例自己压根没起来（第 3 轮复核 N1 的另一半）。
+      try {
+        return { lock, presence: registerAshPresence(keys, { port, mode: "exclusive" }) };
+      } catch (error) {
+        lock.release();
+        throw error;
+      }
     },
   );
   const { lock: ownLock, presence } = acquired;
@@ -262,10 +269,25 @@ function withPresenceRelease(lock: SingletonLock, presence: AshPresenceRegistrat
   };
 }
 
-/** ASH_ALLOW_MULTI 那条路没有锁对象可挂，所以在线登记单独装一次退出清理。 */
-function installPresenceCleanup(registration: AshPresenceRegistration): void {
+/**
+ * ASH_ALLOW_MULTI 那条路没有锁对象可挂，所以在线登记单独装一次退出清理。
+ *
+ * **撤销登记不等于停止写入**（第 3 轮复核 F2 实测）：这里曾经只 `registration.release()`。Node 一旦
+ * 注册了信号处理器，默认的「收到 SIGTERM 就退出」行为就被它替代了，于是收到 SIGTERM 之后服务照旧
+ * 监听端口、照旧写库和 trace，而它既没有单例锁、也没有在线登记 —— 离线回填查完一片干净，当场开跑。
+ * 排他那条路一直是「放锁 + 打印 + `process.exit`」，两条生命周期必须一样：**下线和退出是同一件事**。
+ */
+function installPresenceCleanup(dbFile: string, registration: AshPresenceRegistration): void {
+  const startedAtMs = Date.now() - Math.round(process.uptime() * 1000);
   process.once("exit", () => registration.release());
-  for (const signal of EXIT_SIGNALS) process.once(signal, () => registration.release());
+  for (const signal of EXIT_SIGNALS) {
+    process.once(signal, () => {
+      registration.release();
+      console.warn(`[ash] 收到 ${signal}，退出（运行 ${humanDuration(Date.now() - startedAtMs)}，`
+        + `ASH_ALLOW_MULTI 实例无单例锁，在线登记已撤销；库 ${dbFile}）`);
+      process.exit(SIGNAL_EXIT_CODE[signal] ?? 143);
+    });
+  }
 }
 
 function writeOwnLock(dbFile: string, lockFile: string, port: number | null): SingletonLock {

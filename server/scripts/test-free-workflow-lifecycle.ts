@@ -6,13 +6,27 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { delimiter, join as joinPath } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { releaseTmpDb } from "./tmp-db.js";
+import { installFakeClaude } from "./scheduled-messages-fixture.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-free-lifecycle-"));
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
+// 这份文件里绝大多数任务都用 `reasoningEffort: "ultra-fake"` 让执行器解析必炸、压根不拉起
+// 进程 —— 测的是锁与账,不是进程。**只有 ⑨ 不行**:它要钉「班次被正常消费」,而「消费」的
+// 判据已经收紧成「拿到启动回执才算真的开跑」(回执只在 adoptRun / 团队 deliver 时落),
+// 解析必炸的任务永远到不了那一步。所以给它备一个真能起来的假 claude。
+const fakeBin = installFakeClaude(root);
+const priorEnv = {
+  path: process.env.PATH, allow: process.env.ASH_ALLOW_REAL_AGENT, log: process.env.ASH_TEST_LEAD_LOG,
+};
+// PATH 上备着它就行;**放行真进程(ASH_ALLOW_REAL_AGENT)只在 ⑨ 那一小段开**——
+// 这份文件里别的任务用的是 baseTask 的 codex 执行器,全局放行会把它们也真的拉起来
+// (实测:真去 spawn /opt/homebrew/bin/codex)。
+process.env.PATH = `${fakeBin}${delimiter}${priorEnv.path ?? ""}`;
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -243,24 +257,36 @@ try {
   endAccepting("cas-lead");
 
   // ⑨ 验收锁期间 fire 端点 409（不再谎报 202）；once/cron 班次不消费、解锁后补跑。
-  await createTasks([{ ...baseTask, id: "sched-task", title: "sched", reasoningEffort: "ultra-fake" }]);
-  assert.equal(beginAccepting("sched-task"), true);
-  const fireBlocked = await runApi.request("/tasks/sched-task/fire", { method: "POST" });
-  assert.equal(fireBlocked.status, 409, "验收期间手动触发必须如实拒绝");
-  const pastAt = new Date(Date.now() - 60_000).toISOString();
-  await db.insert(schedules).values({
-    id: "sched-once", taskId: "sched-task", kind: "once", at: pastAt, cron: null,
-    enabled: true, lastRunAt: null, createdAt: pastAt,
-  });
-  await tick();
-  let schedRow = (await db.select().from(schedules).where(eq(schedules.id, "sched-once"))).at(0);
-  assert.equal(schedRow?.enabled, true, "验收锁内 once 班次不得被消费（enabled 保持）");
-  assert.equal(schedRow?.lastRunAt, null, "验收锁内 once 不得记 lastRunAt");
-  endAccepting("sched-task");
-  await tick();
-  schedRow = (await db.select().from(schedules).where(eq(schedules.id, "sched-once"))).at(0);
-  assert.equal(schedRow?.enabled, false, "解锁后的下一个 tick 应正常消费 once 班次");
-  assert.equal(!!schedRow?.lastRunAt, true);
+  // 这一位必须**真的起得来**:班次消费的判据是启动回执(waitForStartReceipt ← adoptRun),
+  // 起不来就按设计不消费班次、留给下一拍重试 —— 那样「解锁后补跑」这半句就验不到了。
+  // 所以这里用假 claude 能服务的 agentType,不跟这份文件里其它用例共用 ultra-fake。
+  await createTasks([{ ...baseTask, id: "sched-task", title: "sched",
+    agentType: "claude", executorId: null }]);
+  process.env.ASH_ALLOW_REAL_AGENT = "1";
+  process.env.ASH_TEST_LEAD_LOG = joinPath(root, "fake-claude-input.log");
+  try {
+    assert.equal(beginAccepting("sched-task"), true);
+    const fireBlocked = await runApi.request("/tasks/sched-task/fire", { method: "POST" });
+    assert.equal(fireBlocked.status, 409, "验收期间手动触发必须如实拒绝");
+    const pastAt = new Date(Date.now() - 60_000).toISOString();
+    await db.insert(schedules).values({
+      id: "sched-once", taskId: "sched-task", kind: "once", at: pastAt, cron: null,
+      enabled: true, lastRunAt: null, createdAt: pastAt,
+    });
+    await tick();
+    let schedRow = (await db.select().from(schedules).where(eq(schedules.id, "sched-once"))).at(0);
+    assert.equal(schedRow?.enabled, true, "验收锁内 once 班次不得被消费（enabled 保持）");
+    assert.equal(schedRow?.lastRunAt, null, "验收锁内 once 不得记 lastRunAt");
+    endAccepting("sched-task");
+    await tick();
+    schedRow = (await db.select().from(schedules).where(eq(schedules.id, "sched-once"))).at(0);
+    assert.equal(schedRow?.enabled, false, "解锁后的下一个 tick 应正常消费 once 班次");
+    assert.equal(!!schedRow?.lastRunAt, true);
+  } finally {
+    delete process.env.ASH_ALLOW_REAL_AGENT;
+    if (priorEnv.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
+    else process.env.ASH_TEST_LEAD_LOG = priorEnv.log;
+  }
 
   // ⑩ 尾段失败不清补跑凭据：失败站与后续站保留补跑入口，修好后再次验收接着跑。
   const tailFailWorkflow = JSON.stringify({ workspace: "shared", steps: [
@@ -544,5 +570,10 @@ try {
 } finally {
   // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
   await releaseTmpDb();
+  if (priorEnv.path === undefined) delete process.env.PATH; else process.env.PATH = priorEnv.path;
+  if (priorEnv.allow === undefined) delete process.env.ASH_ALLOW_REAL_AGENT;
+  else process.env.ASH_ALLOW_REAL_AGENT = priorEnv.allow;
+  if (priorEnv.log === undefined) delete process.env.ASH_TEST_LEAD_LOG;
+  else process.env.ASH_TEST_LEAD_LOG = priorEnv.log;
   rmSync(root, { recursive: true, force: true });
 }

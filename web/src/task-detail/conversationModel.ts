@@ -31,7 +31,7 @@ export type { AgentAuxEvent, AgentContentSegment, AttachmentSource } from "./con
 export type { LiveAgentEvent } from "./conversationTurnParts.ts";
 
 export type TimelineEntry =
-  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; source?: "optimistic" | "server" }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; sessionId?: string; sessionRole?: string; source?: "optimistic" | "server" }
   | { kind: "server"; id: string; event: LiveAgentEvent };
 
 export type ConversationItem =
@@ -77,7 +77,28 @@ export type ConversationItem =
       markdown: string;
       segments: AgentContentSegment[];
     }
-  | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData }
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      attachments: string[];
+      at?: string;
+      isAnswer?: boolean;
+      bySystem?: boolean;
+      monitorWake?: MonitorWakeData;
+      /**
+       * 这条输入喂进了**哪条会话**（同 event 那一路）。真人在输入框里打的字没有它（还没落到
+       * 任何一条会话上），系统代写的那些一律有。
+       *
+       * 审查泳道靠它分「这条哨兵自动输入是喂给审查者的，还是喂给执行者的」—— 自由派审另开
+       * 一条 reviewer 会话，两者在时间线上长得一模一样，分不开就会把执行者的新输入折进审查卡
+       * 的折叠区里藏掉（见 conversationReviewLanes 的 closeBefore）。
+       */
+      sessionId?: string;
+      /** 那条会话的角色（直播事件自带，落盘那一路取自会话行）。收件人是不是审查者，按它答
+       *  （conversationReviewer 的 monitorWakeFedReviewer），不再从「谁先说过话」反推。 */
+      sessionRole?: string;
+    }
   | {
       kind: "event";
       id: string;
@@ -351,6 +372,8 @@ function appendPersistedSession(
         attachments: [],
         at: segment.at,
         isAnswer: segment.text.startsWith(ANSWER_PREFIX),
+        sessionId: session.id,
+        sessionRole: session.role,
         // 后端代写、占着真人回合的那种（验证打回、验收冲突）。照常渲染成 user 气泡，
         // 但「后续追问」不收它 —— 判据统一在 shared 的 isUserFollowUp。
         bySystem: segment.bySystem,
