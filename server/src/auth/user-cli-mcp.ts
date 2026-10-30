@@ -24,8 +24,8 @@
 // 缺了才写。写一律走临时文件 + rename —— 这份 `.claude.json` 同时也是 CLI 自己在写的
 // 文件,半截内容比缺一条登记更糟。
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
@@ -34,7 +34,7 @@ import { extractTomlTables, scanCodexToml } from "../codex-toml.js";
 
 export { extractTomlTables } from "../codex-toml.js";
 import { currentListeningPort } from "../listening-port.js";
-import { REPO_DIR } from "../paths.js";
+import { DATA_DIR, REPO_DIR } from "../paths.js";
 
 /** 本仓库这份 MCP 服务的入口。宿主没登记过时按它现拼一条。 */
 const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
@@ -345,7 +345,12 @@ async function codexAccepts(
   candidate: string,
   ask: CodexAsk,
 ): Promise<{ state: "ok" | "bad" | "unasked"; why: string }> {
-  const sandbox = mkdtempSync(join(tmpdir(), "ash-mcp-ask-"));
+  // 沙盘放 **ash 自己的数据目录**,不放系统临时目录:Windows 真机实测 codex 看见
+  // `CODEX_HOME` 落在 `%TEMP%` 下会先喊一句「拒绝在临时目录里建 PATH 别名」(那一句会
+  // 原样进到报给用户的那段话里),换个普通目录就没有这层噪音,残留也看得见、扫得掉。
+  const asks = join(DATA_DIR, "tmp");
+  mkdirSync(asks, { recursive: true });
+  const sandbox = mkdtempSync(join(asks, "ash-mcp-ask-"));
   try {
     writeFileSync(join(sandbox, "config.toml"), candidate, "utf8");
     const outcome = await ask(sandbox);
