@@ -451,11 +451,15 @@ try {
     const { eq: eqOp } = await import("drizzle-orm");
 
     assert.equal((await reach()).reachable, false, "基准:配置和参数里都没有 ash → 拦");
+    // 每种写法都附带一条声明了身份变量的 `env_vars`:光有 `-c …command=node` 的登记注不进回合
+    // 身份,本来就该拦(第 5 轮审查第 3 条,见上面 F1)。这里钉的是「参数有没有被带上去问」——
+    // command 那条没被认出来时,codex 只看到一条缺 command 的登记、整份报错 → 退文件档 → 拦。
+    const WIRED = ["-c", 'mcp_servers.ash.env_vars=["ASH_TURN_TOKEN"]'];
 
     // 唯一的 ash 来源是这条默认 profile 的 extraArgs(分词形态)
     await db.insert(agentsTable).values({
       id: "b1-default", name: "codex-default", type: "codex", isDefault: true,
-      extraArgs: JSON.stringify(["-c", "mcp_servers.ash.command=node"]),
+      extraArgs: JSON.stringify(["-c", "mcp_servers.ash.command=node", ...WIRED]),
     });
     assert.equal(
       (await reach({ executorId: null })).reachable, true,
@@ -467,7 +471,7 @@ try {
     );
 
     // 整段参数:库里是**一个元素**,运行时 normalizeProfileExtraArgs 会拆成两个 token
-    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-c mcp_servers.ash.command=node"]) })
+    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-c mcp_servers.ash.command=node", ...WIRED]) })
       .where(eqOp(agentsTable.id, "b1-default"));
     assert.equal(
       (await reach()).reachable, true,
@@ -477,7 +481,7 @@ try {
     // **紧贴写法**:真实 codex 吃 `-cKEY=VAL`(实测 rc=0 且列出 ash),上一版的子集筛选
     // 只认 `-c VALUE` / `--config VALUE` / 带等号那三种,把这条整个丢掉,于是探测问的是
     // 另一份配置,再拿那份的「没有」去拒真实执行器(第 4 轮审查 B1)。
-    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-cmcp_servers.ash.command=node"]) })
+    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-cmcp_servers.ash.command=node", ...WIRED]) })
       .where(eqOp(agentsTable.id, "b1-default"));
     assert.equal(
       (await reach()).reachable, true,
