@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ServerEvent, Task, TaskListItem } from "@ash/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
 import { mergeTaskSnapshotFields } from "./taskSnapshot.ts";
+import { createCatchUp } from "./catchUp.ts";
 
 export function upsertTask(tasks: TaskListItem[], task: TaskListItem, projectId?: string): TaskListItem[] {
   if (projectId && task.projectId !== projectId) {
@@ -153,6 +154,13 @@ export function useTasks(projectId?: string) {
     }
   }, [projectId]);
 
+  // 追平实例按 hook 寿命存一份,SSE 回调与重连 effect 共用它(同时只有一条重试在排)。
+  // refetch 的身份会随 projectId 变,所以经由 ref 取最新那份,实例本身保持稳定。
+  const refetchRef = useRef(refetch);
+  refetchRef.current = refetch;
+  const catchUp = useMemo(() => createCatchUp(() => refetchRef.current({ silent: true })), []);
+  useEffect(() => () => catchUp.cancel(), [catchUp]);
+
   // 星标的本地回写走这里而不是裸 setTasks：除了字段级合并（applyStarredAt），还要记下
   // 写入时刻，refetch 才知道哪些行的星标可能比 in-flight 快照新。
   const applyStar = useCallback((taskId: string, starredAt: number | null) => {
@@ -167,7 +175,8 @@ export function useTasks(projectId?: string) {
   const connected = useServerEvents(
     useCallback((event) => {
       if (event.type === "task.monitors") {
-        void refetch({ silent: true });
+        // 走统一的追平入口(createCatchUp):失败要自己重试,见那里的说明。
+        catchUp.run();
         return;
       }
       if (event.type === "task.created" || event.type === "task.updated") {
@@ -191,28 +200,18 @@ export function useTasks(projectId?: string) {
       if (event.type === "task.stage" || event.type === "task.title" || event.type === "task.question") {
         setTasks((current) => current.map((task) => applyTaskMetadataEvent(task, event)));
       }
-    }, [projectId, refetch]),
+    }, [catchUp, projectId]),
   );
 
   // SSE 没有事件 ID 也没有补发：断线窗口里错过的事件追不回来，页面会一直陈旧到该任务
   // 下一次自己产生事件。「初始 GET 之后、SSE 第一次连上之前」也是这样一段窗口，所以
-  // 每次观察到连接建立 —— 首次也一样 —— 都静默 refetch 追平；失败隔 5 秒重试，断开或
-  // 卸载即停（重连时这个 effect 会重新跑）。
+  // 每次观察到连接建立 —— 首次也一样 —— 都静默追平；失败重试与取消都由 catchUp 负责，
+  // 断开或卸载即停（重连时这个 effect 会重新跑）。
   useEffect(() => {
     if (!connected) return;
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const catchUp = () => {
-      void refetch({ silent: true }).then((ok) => {
-        if (!ok && alive) timer = setTimeout(catchUp, 5000);
-      });
-    };
-    catchUp();
-    return () => {
-      alive = false;
-      if (timer) clearTimeout(timer);
-    };
-  }, [connected, refetch]);
+    catchUp.run();
+    return () => catchUp.cancel();
+  }, [catchUp, connected]);
 
   return { tasks, setTasks, loading, error, connected, settlementVersion, refetch, applyStar, confirmedDeleteIds };
 }

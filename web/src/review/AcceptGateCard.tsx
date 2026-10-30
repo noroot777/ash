@@ -5,6 +5,7 @@ import { ACCEPT_GATE_STATUS_LABELS, acceptGateCancelMessage, summarizeAcceptGate
 import type { Task, TaskListItem } from "@ash/shared";
 import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { api } from "../lib/api.ts";
+import { createCatchUp } from "../lib/catchUp.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
 import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 
@@ -54,13 +55,24 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
 
   // 能不能在这儿改这条命令 = 这个项目的管理权限。走列表接口而不是 `/projects/:id`
   // （后者不存在，见 AcceptCommitChoice 顶部），列表本身就带着 myRole。
+  //
+  // **读失败一律保持 `null`，并自己重试到读到**（C3）。上一版的失败分支是 `setCanManage(false)`，
+  // 等于把一次读取失败说成「已确认你不是管理员」:那颗「改这条命令」从此不再出现，页面上一个
+  // 字都不会说为什么，服务端恢复了也不会自己回来 —— 而 `null`（还没读到）和 `false`（确认没
+  // 权限）在界面上恰好长得一样，所以这个错判连看都看不出来。重试策略与任务列表那一条共用
+  // 同一份（`createCatchUp`）:恢复责任不许由每个调用点自己决定。
   useEffect(() => {
     let alive = true;
-    api.projects().then(
-      (list) => { if (alive) setCanManage(list.find((row) => row.id === task.projectId)?.myRole === "admin"); },
-      () => { if (alive) setCanManage(false); },
-    );
-    return () => { alive = false; };
+    setCanManage(null);
+    const catchUp = createCatchUp(() => api.projects().then(
+      (list) => {
+        if (alive) setCanManage(list.find((row) => row.id === task.projectId)?.myRole === "admin");
+        return true;
+      },
+      () => false,
+    ));
+    catchUp.run();
+    return () => { alive = false; catchUp.cancel(); };
   }, [task.projectId]);
   // 停在中途那道「等我点头」上时，那一按是**放行**不是验收：不会碰门禁，所以别在这儿
   // 预告「这一按要先跑十几分钟」—— 那句话在那一站上是假的。跑过的记录仍然照常显示。

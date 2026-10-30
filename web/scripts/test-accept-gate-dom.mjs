@@ -6,6 +6,7 @@ import { createServer } from "vite";
 import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
 import { stopwatchSeconds, waitForStopwatchTick } from "./accept-gate-stopwatch.mjs";
+import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
 
 // 验收台上那张「验收前置命令」卡。钉住的是四件在真实页面上才看得出来的事：
 //
@@ -29,6 +30,10 @@ import { stopwatchSeconds, waitForStopwatchTick } from "./accept-gate-stopwatch.
 //    仍是那条绿的，而真正放行的理由是「现在没有门禁」）。
 // ⑩ 并发读取只有**最后发出**的那一次能落地（第 1 轮审查 F3）：迟到的旧响应会把已经结束
 //    的那次又写回「正在跑」，而此后没有任何事件会来纠正它。
+// ⑪ **权限读不到 ≠ 没有权限**（C3）：②那条「没权限就不摆入口」的前提是「已经读到了
+//    角色」。读取本身失败时上一版落的是 `false`，于是一次 503 被当成「已确认你不是管理员」
+//    —— 而「还没读到」和「确认没权限」在界面上长得一模一样，所以这个错判看都看不出来，
+//    服务端恢复了那颗按钮也不会自己回来。这一条钉的是：失败只是还没读到，它自己会重试到读到。
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
@@ -74,7 +79,7 @@ try {
 
   // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
   // 带 delay（响应体迟到多久）或 status（直接给个 500）。不给就一直回 store.gate。
-  const open = async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled" } = {}) => {
+  const open = async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled", projectDown = false } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
     if (events) await page.addInitScript(() => {
       const streams = new Set();
@@ -87,7 +92,8 @@ try {
       };
     });
     const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, tasks, taskReads: 0, taskPlan: null,
-      requestIds: [], status: 0, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate };
+      requestIds: [], status: 0, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate,
+      projectReads: 0, projectDown };
     await page.route("**/api/tasks", async route => {
       const snapshot = store.tasks;
       const plan = store.taskPlan;
@@ -101,8 +107,11 @@ try {
     }));
     // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
     await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
-    await page.route("**/api/projects", (route) =>
-      json(route, [{ id: "proj-1", name: "kb", repoPath: "/repo", myRole: role, acceptGateCommand: store.command }]));
+    await page.route("**/api/projects", (route) => {
+      store.projectReads += 1;
+      if (store.projectDown) return json(route, { error: "数据库忙" }, 503);
+      return json(route, [{ id: "proj-1", name: "kb", repoPath: "/repo", myRole: role, acceptGateCommand: store.command }]);
+    });
     await page.route("**/api/projects/proj-1", async (route) => {
       store.patches.push(JSON.parse(route.request().postData() ?? "{}"));
       store.command = store.patches.at(-1).acceptGateCommand;
@@ -181,6 +190,25 @@ try {
     await page.waitForTimeout(300);
     assert.match(await page.locator(".accept-gate-command").innerText(), /未设置/);
     assert.equal(await page.getByRole("button", { name: "设一条" }).count(), 0);
+    await page.close();
+  }
+
+  // ⑪ 角色读失败只是「还没读到」：卡不许就此当成「你不是管理员」，它自己要重试到读到。
+  //    反过来说这一条也钉住了 ②：②那颗按钮之所以可以不摆，靠的是**读到了** member。
+  {
+    const { page, store } = await open({ gate: { command: null, running: null, latest: null }, projectDown: true });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.match(await card.textContent(), /没设验收前置命令/, "角色没读到不该连卡一起不显示");
+    // 先证「它真的在自己重试」：不碰页面，等到读取次数自己涨过首发那一拨。
+    const baseline = store.projectReads;
+    const deadline = Date.now() + CATCH_UP_RETRY_MS + 10_000;
+    while (store.projectReads <= baseline && Date.now() < deadline) await page.waitForTimeout(200);
+    assert(store.projectReads > baseline, `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms)，不是等下一次交互`);
+    assert.equal(await card.getByRole("button", { name: "设一条" }).count(), 0, "还没读到角色时不摆必然 403 的按钮");
+    // 服务端恢复之后那颗按钮要自己回来 —— 旧实现把 503 记成 `false`，它永远不再出现。
+    store.projectDown = false;
+    await card.getByRole("button", { name: "设一条" }).waitFor({ timeout: CATCH_UP_RETRY_MS + 10_000 });
     await page.close();
   }
 
