@@ -10,10 +10,14 @@
 //      项目主仓也在候选里（工作区还没建出来时 claude 的项目级登记照样看得见）
 //   2. 验证轮：交不了卷当场拒绝，且**一行状态都没写**（verifyRound / stage / 时间线）
 //   3. 辩论：两边一起核，两边都够不着时两句都说；拒绝时一行辩论记录都没有
-//   4. 普通回合提示：只说一次、修好再坏会再说、宽松协议下不说、写不进去不算说过
-//   5. 普通回合事后说明：只认点名 ash 的确定证据（claude init 里没有 ash / 状态 failed；
-//      codex stderr 点名 ash），pending、别的 server 的报错、没产出的回合都不说
-//   6. 接线：普通回合两个起跑点在会话行落库之后调提示；单飞收尾在「没交卷」那一支调事后说明
+//   4. 普通回合提示：只说一次、修好再坏会再说、宽松协议下不说、写不进去不算说过；先说过软的
+//      「看着起不来」，后来确定没有时那句硬的照样要说（记账分档，第 1 轮审查第 2 条）
+//   5. 普通回合事后说明：只认点名 ash 的确定证据（claude init 里没有 ash / 状态是终局失败；
+//      codex 报错在点名 server 的那个位置写着 ash），pending/connecting、别的 server 的报错
+//      （哪怕行里带着 harness 仓库路径或 ~/.ash 路径，第 1 轮审查第 1 条）、没产出的回合、
+//      旁路回合（第 1 轮审查第 3 条）都不说
+//   6. 接线：普通回合两个起跑点在会话行落库之后调提示；单飞收尾在「没交卷」那一支调事后说明，
+//      且排除原生命令回合
 //
 // 开头**强制关掉内核圈定**（`ASH_KERNEL_CONFINE=0`）：判据走配置文件那一档，一个 CLI 进程都
 // 不起（假 CLI 被执行就留痕），哪个平台上跑的都是同一套。
@@ -210,6 +214,22 @@ try {
     await makeSession("h2", "codex");
     await hintAshMcpForTurn(early);
     assert.equal(count(timeline("h2"), NEEDLE), 1, "第一次没写进去，第二次要补上");
+
+    // 先软后硬：软的那句占了名额，不能把后来那句硬的吞掉。
+    resetAshMcpTurnHints();
+    await makeTask("h3", "codex");
+    const h3 = await makeSession("h3", "codex");
+    const q3 = (cwd: string) => ({ taskId: "h3", agentType: "codex", executorId: null, ownerUserId: null, cwd, sessionId: h3 });
+    const SOFT = /起跑预检提示：[^\n]*找不到/;
+    writeCodex('[mcp_servers.ash]\ncommand = "definitely-not-a-real-bin-ash"\n');
+    await hintAshMcpForTurn(q3(dirs[0]!));
+    assert.match(timeline("h3"), SOFT, "登记看着起不来：先说一句软的");
+    assert.equal(count(timeline("h3"), NEEDLE), 0);
+    writeCodex('model = "x"\n');
+    await hintAshMcpForTurn(q3(dirs[1]!));
+    assert.equal(count(timeline("h3"), NEEDLE), 1, "后来确定没有了：那句硬的照说，不被软的那句占掉名额");
+    await hintAshMcpForTurn(q3(dirs[2]!));
+    assert.equal(count(timeline("h3"), NEEDLE), 1, "同一档不重复");
     writeCodex(ASH_CODEX);
   }
 
@@ -220,10 +240,11 @@ try {
     const { RUNS_DIR } = await import("../src/paths.js");
     let n = 0;
     /** 造一轮：干没干过活、claude 的 stdout / codex 的 stderr 里写了什么。 */
-    const turn = async (agentType: "claude" | "codex", o: { work?: boolean; out?: string; err?: string }) => {
+    const turn = async (agentType: "claude" | "codex", o: { work?: boolean; out?: string; err?: string; side?: boolean }) => {
       const taskId = `n${++n}`;
       await makeTask(taskId, agentType);
       const sessId = await makeSession(taskId, agentType);
+      if (o.side) await db.update(sessions).set({ sideTurn: true }).where(eq(sessions.id, sessId));
       const turnStart = `2026-10-30T00:0${n % 10}:00.000Z`;
       if (o.work !== false) appendSessionTrace(taskId, sessId, turnStart, { kind: "text", text: "改好了", at: turnStart } as never);
       const paths = detachedPathsFor(join(RUNS_DIR, taskId), sessId, turnStart);
@@ -244,8 +265,14 @@ try {
 
     assert.equal((await turn("claude", { out: init('[{"name":"ash","status":"failed"}]') })).said, true,
       "ash 状态 failed：确定证据");
+    assert.equal((await turn("claude", { out: init('[{"name":"ash","status":"needs-auth"}]') })).said, true,
+      "ash 状态 needs-auth：终局失败，确定证据");
     assert.equal((await turn("claude", { out: init('[{"name":"ash","status":"pending"}]') })).said, false,
       "pending 还在连，工具可能稍后就到 —— 不算证据");
+    assert.equal((await turn("claude", { out: init('[{"name":"ash","status":"connecting"}]') })).said, false,
+      "没列举的状态（connecting 之类）未知即不确定 —— 白名单，不是黑名单");
+    assert.equal((await turn("claude", { side: true, out: init('[{"name":"kb","status":"connected"}]') })).said, false,
+      "旁路回合（验证轮、辩论执行者段、计划模式）不靠 complete_task 交卷，这句话不是说给它的");
     assert.equal((await turn("claude", { out: init('[{"name":"ash","status":"connected"}]') })).said, false,
       "连上了：普通回合没交卷的头号原因是漏调，不许说成通道坏了");
     assert.equal((await turn("claude", { out: "" })).said, false, "没有 init 事件：没有证据就不说");
@@ -254,6 +281,15 @@ try {
 
     assert.equal((await turn("codex", { err: "ERROR rmcp: MCP server linear failed: OAuth required\n" })).said, false,
       "别的 server 的报错不算 ash 的证据");
+    assert.equal((await turn("codex", {
+      err: "ERROR rmcp: MCP server `linear` failed to start: OAuth required (cwd=/Users/fjh/code/harness)\n",
+    })).said, false, "别家报错的行里带着仓库路径（本仓就叫 harness）：不是 ash 的证据");
+    assert.equal((await turn("codex", {
+      err: "ERROR rmcp: MCP server `linear` failed to start: cannot read /Users/fjh/.ash/linear.json\n",
+    })).said, false, "别家报错的行里带着 ~/.ash 路径：不是 ash 的证据");
+    assert.equal((await turn("codex", {
+      err: "ERROR rmcp: MCP server `linear` failed to start: tool name 'ash' collides\n",
+    })).said, false, "别家报错里顺带引到 'ash'：点名的位置写的是 linear，不算");
     const named = await turn("codex", { err: "\u001b[31mERROR\u001b[0m MCP client for `ash` failed to start: No such file\n" });
     assert.equal(named.said, true, "stderr 点名 ash 的 MCP 报错：确定证据");
     assert.doesNotMatch(named.text, /\u001b\[/, "ANSI 着色要去掉");
@@ -276,8 +312,8 @@ try {
       "旁路回合（验证轮、审查、辩论）在起跑处已过闸，不再重复提示");
     const run = src("single-run.ts");
     assert.match(run,
-      /if \(role !== "reviewer" && !stopped && exitStatus === 0 && settled\.status === "failed" && !settled\.confirmedDone\) \{\s*await noteTurnChannelGap\(/,
-      "单飞收尾在「exit 0 却没交卷」那一支调事后说明");
+      /if \(role !== "reviewer" && !settled\.nativeTurn && !stopped && exitStatus === 0 && settled\.status === "failed" && !settled\.confirmedDone\) \{\s*await noteTurnChannelGap\(/,
+      "单飞收尾在「exit 0 却没交卷」那一支调事后说明，原生命令回合（/compact）排除");
     assert.ok(run.indexOf("noteSessionNotice(settled.note") < run.indexOf("await noteTurnChannelGap("),
       "原因接在结算说明后面（先结果、后原因）");
     assert.match(src("free-review-round.ts"), /await gateAshMcpBeforeLaunch\(task, \{ agentType: run\.agentType/,

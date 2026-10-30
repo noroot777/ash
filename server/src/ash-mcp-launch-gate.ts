@@ -95,8 +95,10 @@ export async function gateAshMcpBeforeLaunch(
   // 放行了、但登记看着起不来：不拦（那是推断），但得留在时间线上 —— 这一轮要是又跑完没结论，
   // 用户回头能看到这一句，而不是只剩「未能正常给出结论」（新链第 1 轮审查第 3 条）。
   if (reach.warning) {
-    await appendTaskTimeline(task.id, `起跑预检提示（${who}）：${reach.warning}`)
-      .catch((error) => console.error(`[ash] 起跑预检提示写不进时间线(${task.id}):`, error));
+    // appendTaskTimeline 自己不抛，写不进去只回 false（任务还没有会话行时就是这样）。
+    if (!(await appendTaskTimeline(task.id, `起跑预检提示（${who}）：${reach.warning}`))) {
+      console.error(`[ash] 起跑预检提示写不进时间线(${task.id})：${reach.warning}`);
+    }
   }
 }
 

@@ -20,7 +20,10 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
+import { eq } from "drizzle-orm";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { db } from "./db/index.js";
+import { sessions } from "./db/schema.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -63,12 +66,27 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 /**
  * 这一轮通道到底怎么了。null = 没查出来，只能给通用提示。
  *
- * `definite` = 这份证据**点名 ash 且是确定的坏**：claude 的 init 清单里没有 ash，或者 ash 的
- * 状态是确定的失败（`pending` 不算 —— 还在连，工具可能稍后就到）；codex 的 stderr 里有**点名
- * ash** 的 MCP 报错（别的 server 的报错不算）。普通回合那句说明只认这一种（见
- * `noteTurnChannelGap`），审查回合两种都用。
+ * `definite` = 这份证据**点名 ash 且是确定的坏**，只许由**结构上的位置**给出，不许由「整行里
+ * 出现过这个词」给出：
+ *  · claude：init 清单（JSON）里没有 ash，或者 ash 的状态是**白名单里**的终局失败
+ *    （`CLAUDE_FAILED_STATUSES`）。`pending`、`connecting` 这类没列举的状态一律不算 —— 未知即不确定；
+ *  · codex：报错里 server 名出现在 codex 自己给 server 名加引号的那个位置（实测形状
+ *    ``MCP client for `ash` failed to start``）。上一版拿 `\b(ash|harness)\b` 在整行上找，
+ *    而本仓目录就叫 harness、`~/.ash/…` 这类路径也带 ash，于是任何一行顺带打了 cwd 的别家报错
+ *    都成了「ash 自己坏了」的确定证据（第 1 轮审查第 1 条）。
+ * 普通回合那句说明只认这一种（见 `noteTurnChannelGap`），审查回合两种都用。
  */
 type Evidence = { connected: boolean; detail: string; definite: boolean } | null;
+
+/** claude init 里 server 状态的终局失败词。白名单：没列举的状态（含将来新增的瞬时态）都不算确定。 */
+const CLAUDE_FAILED_STATUSES = new Set(["failed", "needs-auth", "disabled"]);
+
+/**
+ * codex 自己报 MCP server 出错时点名的那个位置：``MCP client for `ash` ``、``MCP server `ash` ``
+ * （引号种类放宽到 `'"`）。只认这一个位置 —— 别家 server 的报错里顺带引到 `'ash'` 也不算。
+ */
+const CODEX_QUOTED_ASH = new RegExp(
+  `\\bMCP (?:client|server)(?: for)? [\`'"](?:${ASH_MCP_SERVER_NAME}|${LEGACY_ASH_MCP_SERVER_NAME})[\`'"]`, "i");
 
 /**
  * claude：`{"type":"system","subtype":"init",…,"mcp_servers":[{"name":"ash","status":"connected"}]}`
@@ -109,7 +127,7 @@ export function claudeMcpEvidence(text: string): Evidence {
       ? { connected: true, definite: false, detail: `这条会话启动时 ash MCP 是连上的${others}。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
       : {
           connected: false,
-          definite: !!status && status !== "pending",
+          definite: CLAUDE_FAILED_STATUSES.has(status),
           detail: `这条会话启动时 ash MCP（${String(ash.name)}）的状态是「${status || "未知"}」，不是 connected${others}。`,
         };
   }
@@ -125,8 +143,9 @@ export function codexMcpEvidence(text: string): Evidence {
     .filter(Boolean);
   if (!hits.length) return null;
   // 同一份 stderr 里往往混着别的 server 的报错（实测最多的是 linear 的 OAuth）。
-  // 点名 ash 的那几行才是这里要的，没有再退回最后两行。
-  const named = hits.filter((line) => new RegExp(`\\b(${ASH_MCP_SERVER_NAME}|${LEGACY_ASH_MCP_SERVER_NAME})\\b`, "i").test(line));
+  // 点名 ash 的那几行才是这里要的，没有再退回最后两行。「点名」认的是引号里的 server 名，
+  // 不是整行里出现过这个词（见 Evidence 上面那段）。
+  const named = hits.filter((line) => CODEX_QUOTED_ASH.test(line));
   const picked = (named.length ? named : hits).slice(-2);
   return {
     connected: false,
@@ -222,8 +241,9 @@ export async function noteReviewerChannelGap(a: {
  * 直接证据就说「通道坏了」是误诊。所以这里**只认点名 ash 的确定证据**（`Evidence.definite`），
  * 拿不到就不说话 —— 结算说明里那句通用的「常见原因」已经在了。
  *
- * 调用方只在「exit 0 却没交卷、落了 failed」那一支调：被停的、交过卷的、以提问/检查点暂停的
- * 回合都走不到这里（后两种本身就证明 ash MCP 是通的）。
+ * 调用方只在「exit 0 却没交卷、落了 failed」那一支调，且排除了原生命令回合（`/compact`）：被停的、
+ * 交过卷的、以提问/检查点暂停的回合都走不到这里（后两种本身就证明 ash MCP 是通的）。旁路回合
+ * 的原状态是 failed 时也会落在这一支，由下面按会话行的 `side_turn` 挡掉。
  */
 export async function noteTurnChannelGap(a: {
   taskId: string;
@@ -231,6 +251,10 @@ export async function noteTurnChannelGap(a: {
   turnStart: string;
   agentType: AgentType;
 }): Promise<boolean> {
+  // 旁路回合（就地验证、辩论里执行者那一段、计划模式）不靠 complete_task 交卷，这句话说的
+  // 不是它们。认的是会话行上那一列（起跑时落库，重启接管后也在），不靠内存里的回合身份。
+  const row = (await db.select({ sideTurn: sessions.sideTurn }).from(sessions).where(eq(sessions.id, a.sessId))).at(0);
+  if (!row || row.sideTurn) return false;
   if (!(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) return false;
   const evidence = turnEvidence(a);
   if (!evidence?.definite) return false;

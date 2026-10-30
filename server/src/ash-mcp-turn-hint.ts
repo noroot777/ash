@@ -11,13 +11,18 @@
 //    Windows 上一问就要四五秒）。
 //  · **同一个上下文十分钟内只问一次**：普通回合起得很频繁，每一轮都起一遍 CLI 子进程问
 //    不值；登记这种东西也不会每分钟都变。
-//  · **同一条任务同一个执行器只说一次**，直到某次查出来又通了才重新计数：缺登记的机器上
-//    每一轮都说同一句话就是刷屏，修好了以后再坏也还说得出来。
+//  · **同一条任务同一个执行器、同一档结论只说一次**，档变了（「看着起不来」→「确定没有」或
+//    反过来）就重说，查出来又通了才清账：缺登记的机器上每一轮都说同一句话就是刷屏，可只按
+//    「说过没有」记账的话，先说过一句软的，后来确定没有时那句硬的就被吞了（第 1 轮审查第 2 条）。
+//  · **记账有上限**：过期的缓存条目随手清，说过的记录超过上限就丢最旧的 —— 常驻进程里
+//    任务和目录只增不减，不能让这两张表跟着一直长。
 import { ashMcpReachability, type AshMcpReach } from "./ash-mcp-reachability.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
 /** 起跑提示这一档的缓存寿命。 */
 const CACHE_MS = 10 * 60_000;
+/** 「说过了」最多记多少条。超了丢最旧的：顶多让很久以前说过的那条任务再多说一次。 */
+const TOLD_MAX = 2000;
 
 type Query = {
   taskId: string;
@@ -34,21 +39,24 @@ type Query = {
 };
 
 const cache = new Map<string, { at: number; reach: Promise<AshMcpReach> }>();
-const told = new Set<string>();
+/** 任务×执行器 → 上次说的是哪一档。Map 按插入顺序迭代，所以第一个键就是最旧的。 */
+const told = new Map<string, "unreachable" | "warning">();
 
 const contextKey = (q: Query) => JSON.stringify([q.ownerUserId, q.agentType, q.executorId, q.cwd]);
 
 function cachedReach(q: Query): Promise<AshMcpReach> {
   const key = contextKey(q);
+  const now = Date.now();
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.reach;
+  if (hit && now - hit.at < CACHE_MS) return hit.reach;
+  for (const [k, v] of cache) if (now - v.at >= CACHE_MS) cache.delete(k);
   const reach = ashMcpReachability({
     ownerUserId: q.ownerUserId,
     agentType: q.agentType,
     executorId: q.executorId,
     cwdCandidates: [q.cwd],
   });
-  cache.set(key, { at: Date.now(), reach });
+  cache.set(key, { at: now, reach });
   // 查挂了就别把这个失败缓存十分钟。
   reach.catch(() => { if (cache.get(key)?.reach === reach) cache.delete(key); });
   return reach;
@@ -71,8 +79,11 @@ export async function hintAshMcpForTurn(q: Query): Promise<void> {
         ? `起跑预检提示：${reach.warning}`
         : null;
     if (!text) { told.delete(toldKey); return; }
-    if (told.has(toldKey)) return;
-    told.add(toldKey);
+    const tier = reach.reachable ? "warning" : "unreachable";
+    if (told.get(toldKey) === tier) return;
+    told.delete(toldKey);
+    told.set(toldKey, tier);
+    if (told.size > TOLD_MAX) told.delete(told.keys().next().value!);
     // 没写进去就不算说过，下一轮还说。
     if (!(await appendTaskTimeline(q.taskId, text, { sessionId: q.sessionId }))) told.delete(toldKey);
   } catch (error) {
