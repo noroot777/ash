@@ -63,19 +63,25 @@ export function checkProbeStructure(): void {
     "不准杀完就核销 —— 中间必须有一次读数（第 2 轮 B1）");
   assert.match(settleBody, /while \([\s\S]*?unitResidue\(unit\)[\s\S]*?\}/,
     "复核要成环地问，直到证空或者预算用完");
-  // **按裸进程号下刀必须先过身份关**（本轮 F2）：根进程被回收之后那个号可能已经归别人，
-  // 补刀就打到无辜进程上，Windows 还是 `taskkill /T` 连它的子树一起打。所以整份文件里
-  // `killTree` 只许出现在 `killOwnTree` 那一处，别的位置要下刀一律走 `cutRun`。
-  const ownKill = fnBody(code, "export function killOwnTree");
-  const count = (body: string): number => (body.match(/killTree\(/g) ?? []).length;
-  assert.equal(count(code), count(ownKill),
-    "killTree 只许在 killOwnTree 里下刀 —— 收尾/收壳都走 cutRun（本轮 F2）");
-  assert.ok(count(ownKill) > 0 && /stillOurs\(child\)/.test(ownKill),
-    "killOwnTree 下刀之前必须确认这个号还属于这次运行（本轮 F2）");
-  // 收壳那一档也不准再按号探活:号被复用之后它答的是别人的生死。
+  // **这个文件里一次都不准按进程号下刀**（第 1、2 轮 F2）：`killTree(pid)` 在 Windows 上是
+  // 异步起一个 `taskkill /PID n /T /F`，真正按这个号 `OpenProcess` 的是稍后才启动的另一个
+  // 进程 —— 「我发起调用时它还没被回收」证不到那一刻，这中间号可以已经归别人。要下刀只有
+  // 两条路：走圈（`cutRun` → `cutUnit`，号由内核现读），或者走 `child.kill()`（锚在 libuv
+  // 握着的句柄上，不是号）。
+  assert.ok(!/killTree\(/.test(code),
+    "不准再按进程号起树击杀 —— 走圈或走 child 自己的句柄（第 2 轮 F2）");
+  const ownKill = fnBody(code, "export function killOwnProcess");
+  const knives = (body: string): number => (body.match(/\.kill\(/g) ?? []).length;
+  assert.ok(knives(ownKill) > 0 && /child\.kill\(/.test(ownKill),
+    "killOwnProcess 必须用 child 自己的句柄下刀（第 2 轮 F2）");
+  assert.equal(knives(code), knives(ownKill),
+    "下刀只许在 killOwnProcess 这一处 —— 别的位置走圈（第 2 轮 F2）");
+  assert.ok(/stillOurs\(child\)/.test(ownKill),
+    "下刀之前仍要确认这是我们这次运行的子进程（第 1 轮 F2）");
+  // 收壳那一档也不准按号探活:号被复用之后它答的是别人的生死。
   const shellBody = fnBody(code, "async function discardShell");
   assert.ok(!/isPidRunning\(/.test(shellBody),
-    "壳的死亡证明只认「已被回收」，不认按号探活（本轮 F2）");
+    "壳的死亡证明只认「已被回收」，不认按号探活（第 1 轮 F2）");
   // **钉函数体里有哪几件事，不钉它们写成什么样。** 这一轮和上一轮各被形状断言咬过一次：
   // 钉 `return gone ?? byClose`、钉 `confine.read().kind === …` 的那两条，实现一换写法就
   // 恒红，而恒红的断言钉不住任何东西。
@@ -208,24 +214,24 @@ export async function checkAsyncUnitCalls(probeCli: typeof ProbeCli): Promise<vo
 }
 
 /**
- * **按进程号下刀之前必须确认这个号还属于这次运行**（本轮审查 F2）。
+ * **下刀只认我们自己攥着的子进程句柄**（第 1、2 轮审查 F2）。
  *
- * 结构断言只能钉住「别处不准出现 killTree」，这一条钉的是身份关本身答得对不对：根进程已经
- * 退出并被回收之后，那个号可以已经分配给了别人 —— 那时补刀打在无辜进程上（Windows 还是
- * `taskkill /T` 连它的子树一起打）。这一条两个平台都跑得出来，不依赖内核圈定。
+ * 结构断言钉的是「别处不准出现按号下刀」，这一条钉的是这把刀本身答得对不对：活着的下得去、
+ * 真的死掉；已经退出并被回收的一刀都不发（那一刻那个号可能已经是别人的）。两个平台都跑得
+ * 出来，不依赖内核圈定 —— Windows 上 `child.kill` 打的是 libuv 握着的句柄，连号都不经手。
  */
-export async function checkKillIdentity(killOwnTree: (child: ChildProcess) => boolean): Promise<void> {
+export async function checkKillIdentity(killOwnProcess: (child: ChildProcess) => boolean): Promise<void> {
   // ① 活着的:下得去刀,而且真的被收掉。
   const alive = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   await new Promise<void>((r) => { alive.once("spawn", r); });
-  assert.equal(killOwnTree(alive), true, "号还属于这次运行 ⇒ 下得去刀");
+  assert.equal(killOwnProcess(alive), true, "还活着 ⇒ 下得去刀");
   await new Promise<void>((r) => { alive.once("exit", () => r()); });
   // ② 已经被回收的:一刀都不准发 —— 这个号此刻可能已经是别人的了。
-  assert.equal(killOwnTree(alive), false, "回收之后不准再按旧号补刀（号复用，本轮 F2）");
+  assert.equal(killOwnProcess(alive), false, "退出并被回收之后一刀都不准发（号复用，F2）");
   // ③ 压根没起来(spawn 失败)就没有号可杀。
   const nope = spawn(join(tmpdir(), `ash-no-such-binary-${Date.now()}`), [], { stdio: "ignore" });
   nope.once("error", () => {});
-  assert.equal(killOwnTree(nope), false, "没拿到号的时候不准下刀");
+  assert.equal(killOwnProcess(nope), false, "压根没起来的时候不准下刀");
 }
 
 /**

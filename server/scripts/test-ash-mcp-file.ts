@@ -67,7 +67,6 @@ try {
     // 判不了的一律 doubt：拦人只能落在「确定没有」上。
     assert.equal(scan('note = """\n[mcp_servers.ash]\n"""\n').doubt, true,
       "多行字符串里像表头的东西：扫描器不认、兜底也不许说「没有」");
-    assert.equal(scan('mcp_servers = { ash = { command = "node" } }\n').doubt, true, "整个 mcp_servers 写成内联");
     assert.equal(scan('[profiles.p.mcp_servers.ash]\ncommand = "node"\n').doubt, true, "挂在别的表底下");
     // codex 自己记项目信任就是路径型表头；路径里有 harness/ash 不是登记（新链第 3 轮第 1 条：
     // 上一版兜底拿「行首 `[` + 行内有这两个词」当信号，跑过这个仓库的机器整份配置都成了「看不准」）。
@@ -97,6 +96,30 @@ try {
       "同名表定义两次：codex 报 duplicate key 整份拒载（setup 旧版追加重复表就是这个形状）");
     assert.deepEqual(scan('[[x]]\na = 1\n[[x]]\na = 2\n[mcp_servers.ash]\ncommand = "node"\n'), yes,
       "数组表重复出现是合法的，不准当成重复定义");
+    // ── 整张表写成一个内联值：**必须拆开读**。codex 自己认得（真机 rc=0、`mcp list` 列得出
+    // ash，`-c mcp_servers.ash.env_vars=[...]` 也落得上去），上一版只拿 `\bash\b` 扫值文本、
+    // 一律答 doubt：派审误拒、身份注不进去；而「确实没有 ash」那一半是对的时候，补写追加
+    // 一段普通表头，codex 报 `cannot extend value of type inline table with a dotted key`
+    // 整份拒载（第 2 轮审查 F1 的三组实测形状）。
+    assert.deepEqual(scan('mcp_servers = { ash = { command = "node", args = [] } }\n'), yes, "根内联表里的 ash");
+    assert.deepEqual(scan('mcp_servers = { "\\u0061sh" = { command = "node" } }\n'), yes, "根内联表 + 转义键");
+    assert.deepEqual(scan('mcp_servers = { ash = { command = "node", enabled = false } }\n'),
+      { names: { ash: false }, doubt: false }, "根内联表里关着的登记");
+    assert.deepEqual(scan('mcp_servers = { kb = { command = "node" } }\n'), { names: {}, doubt: false },
+      "根内联表里确实没有 ash —— 这一半要答得准，补写那边才知道「缺」是真的");
+    assert.equal(scan('mcp_servers = { ash = \n').doubt, true, "内联表拆不开:不准据此说没有");
+    // **封闭性**:我们唯一会写的东西是追加一段普通表头,而内联值定义过的表不许这么扩展。
+    // 封的只有「整张表是一个内联值」这一种 —— 另四种形状真机都扩展得了(rc=0)。
+    const sealed = (t: string) => !!scanCodexToml(t).sealed;
+    assert.equal(sealed('mcp_servers = { kb = { command = "node" } }\n'), true, "整张表是内联值 ⇒ 封住了");
+    assert.equal(sealed('mcp_servers = {}\n'), true, "空内联值一样封住");
+    for (const open of [
+      'mcp_servers.kb = { command = "node" }\n',
+      'mcp_servers.kb.command = "node"\n',
+      '[mcp_servers]\nkb = { command = "node" }\n',
+      '[mcp_servers.kb]\ncommand = "uv"\n',
+      'model = "gpt"\n',
+    ]) assert.equal(sealed(open), false, `这种写法还扩展得了，不准说封住：${JSON.stringify(open)}`);
     // 文件结尾处值还没收尾：后面那些行全成了这个值的续行，看不见的 ash 不等于没有 ash。
     assert.equal(scan('x = [\n  "a",\n').doubt, true, "数组少一个 ]");
     assert.equal(scan('x = [\n  "a",\n[mcp_servers.ash]\ncommand = "node"\n').doubt, true,
@@ -117,6 +140,9 @@ try {
       '  [ mcp_servers . \'ash\' ]  # 注释\n  command = "node"\n',
       '[mcp_servers]\nash = { command = "node" }\n',
       'mcp_servers.ash.command = "node"\n',
+      // 整张表写成内联值:真 codex 不仅列得出,`-c mcp_servers.ash.env_vars=[...]` 也落得
+      // 上去(本轮真机 rc=0 + env_vars 列得出来),所以注入目标必须给得出来。
+      'mcp_servers = { ash = { command = "node" } }\n',
     ]) {
       assert.equal(scanCodexToml(toml).servers.has("ash"), true, `预检认得：${JSON.stringify(toml)}`);
       assert.equal(target(toml), "ash", `注入也必须认得：${JSON.stringify(toml)}`);

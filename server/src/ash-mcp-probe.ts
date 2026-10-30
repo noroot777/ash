@@ -56,8 +56,8 @@
 //     queryPid=38986 queryStillAlive=true  PPID=1 PGID=38986 ← 查询活着，自成一组
 //
 // 探测层那一刻答的是 `gone`、连一句警告都没打，最后是审查脚本拿自己记的 pid 收掉的。
-// 所以**进程组从核销判据里整条撤掉**，只留它当下刀的一个目标集：`killTree` 的
-// `kill(-pgid)` 能一次打到还留在组里的那些，这个能力照留，但它答的「空」不算证明。
+// 所以**进程组从核销判据里整条撤掉**：它答的「空」不算证明。下刀也不再借它（见下一段）——
+// 现在整圈刀由内核圈定下，开门前收壳用句柄下。
 //
 // ── 下刀目标必须还属于这次运行（本轮审查 F2）────────────────────────────────
 //
@@ -67,8 +67,18 @@
 // `taskkill /T` 连它的子树一起打，而这一刀**圈那边一个字都不覆盖**（成员集合由内核现读）。
 //
 // 所以归属不变量钉在一个地方：**全文件只有 `cutRun` 一个下刀入口** —— 有圈走圈（号由内核
-// 现读，必然属于这次运行），没有圈才退到 `killOwnTree`，而它只在子进程**还没被回收**时下刀
-// （号那时还被僵尸 / 句柄占着，不可能是别人的）。`discardShell` 走的就是后者这档降级。
+// 现读，必然属于这次运行），没有圈才退到 `killOwnProcess`。
+//
+// **而那一档也不准把号交出去**（第 2 轮审查 F2）：`killTree(pid)` 在 Windows 上是异步起一个
+// `taskkill /PID n /T /F`，真正按这个号 `OpenProcess` 的是**稍后才启动的另一个进程** ——
+// 「我发起调用时它还没被回收」证不到那一刻，这中间壳可以已经退出、号已经归别人。所以按号
+// 那把刀整条撤掉，改用 `child.kill()`：Windows 上它对 libuv 一直握着的进程句柄
+// `TerminateProcess`（锚在那一个进程上，不是号），POSIX 上句柄已关就直接答 false、一个信号
+// 都不发（实测：回收之后 `child.kill("SIGKILL")` 返回 false）。
+//
+// 代价写明：句柄那把刀只打根进程，不打树。`discardShell` 用它正合适 —— 门还没开，壳没有
+// 后代（它的代码只有「轮询 go 文件 + 启动 CLI」）。没有圈又已开门那条路产品走不到（弃权就
+// 不启动），真走到也只会少杀后代、收不干净会如实喊出来，不会误杀别人。
 //
 // 这个形状**追踪 fd 也救不回来**（上面那段），所以 macOS 上剩不下任何能核销的设备 ——
 // 那边的出路只能是「不启动」。基线 `kernel-confine.ts` 顶部早写明了这一类（`close` 掉继承
@@ -103,7 +113,7 @@
 // cgroupfs，本来就不起进程）。
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { IS_WINDOWS, isPidRunning, killTree } from "./platform.js";
+import { IS_WINDOWS, isPidRunning } from "./platform.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
 import { prepareGate } from "./ash-mcp-gate.js";
 import { confineAbstention, openConfinement, type ConfineRead, type Confinement } from "./executors/kernel-confine.js";
@@ -253,26 +263,28 @@ const cutUnit = async (unit: ProbeUnit): Promise<void> => {
 const stillOurs = (child: ChildProcess): boolean => child.exitCode === null && child.signalCode === null;
 
 /**
- * 按进程号下刀 —— **只在号还属于这次运行时**。已经被回收就一刀都不发，如实回 `false`
- * （那时它本来也已经死了：回收的前提是它退出过）。
+ * 用**我们自己攥着的子进程句柄**终止它 —— 不把进程号交出去（见文件头那段）。
+ *
+ * 返回 `false` = 一刀都没下：要么压根没起来（没有 pid），要么它已经退出并被回收 —— 那它
+ * 本来也已经死了，而那个号此刻可能已经是别人的，正是**不该**再发刀的时候。
  */
-export function killOwnTree(child: ChildProcess): boolean {
-  const pid = child.pid;
-  if (pid === undefined || !stillOurs(child)) return false;
-  killTree(pid, "SIGKILL");
-  return true;
+export function killOwnProcess(child: ChildProcess): boolean {
+  if (child.pid === undefined || !stillOurs(child)) return false;
+  // `child.kill` 认的是 libuv 握着的那个句柄,不是我们手上的号(Windows 上是
+  // `TerminateProcess(handle)`,POSIX 上句柄已关时直接答 false)。
+  return child.kill("SIGKILL");
 }
 
 /**
  * 终止这次运行 —— **全文件只此一个下刀入口**，归属不变量就钉在这里。
  *
  * 有圈就只走圈：成员集合由内核**现读**，里面的号必然是此刻还在这次运行里的，而我们手上攥
- * 着的根进程号只是一个旧读数。没有圈（产品代码走不到 —— 弃权就不启动，见文件头）才退到按
- * 号下刀，并且必须先过 `killOwnTree` 那道身份关。
+ * 着的根进程号只是一个旧读数。没有圈（产品代码走不到 —— 弃权就不启动，见文件头）才退到
+ * `killOwnProcess`，它用的是句柄、不是号。
  */
 const cutRun = async (child: ChildProcess, unit: ProbeUnit): Promise<void> => {
   if (unit.confine) await cutUnit(unit);
-  else killOwnTree(child);
+  else killOwnProcess(child);
 };
 
 /**
@@ -357,10 +369,11 @@ async function settleUnit(
  * 是合法的，不违反「调用方已经判空」那条契约。
  */
 async function discardShell(child: ChildProcess, unit: ProbeUnit): Promise<void> {
-  // 这里只能按号下刀 —— 圈可能压根还没建成（这个分支正是为「建不成」准备的），所以
-  // 身份由 `killOwnTree` 自己兜：它答 false 就是「这个号已经不归我们了」，而那只会发生在
-  // 壳退出并被回收之后 ⇒ 壳已经死了 ⇒ 这时交还证据合法。
-  if (!killOwnTree(child)) { discharge(unit); return; }
+  // 这里下不了圈刀 —— 圈可能压根还没建成（这个分支正是为「建不成」准备的）。所以走句柄
+  // 那一把：壳从出生到这一刻没 fork 过任何东西，杀它自己就够，不需要按号起树击杀（那把刀
+  // 会把号交给一个稍后才运行的 taskkill，期间号可能已经换人 —— 第 2 轮审查 F2）。
+  // 它答 false = 壳已经退出并被回收 ⇒ 已经死了 ⇒ 这时交还证据合法。
+  if (!killOwnProcess(child)) { discharge(unit); return; }
   for (let waited = 0; waited < SHELL_REAP_MS; waited += 50) {
     // 死亡证明也换成「已被回收」:它是我们自己的子进程,这件事比按号探活可靠 —— 按号探活
     // 在号被复用之后答的是别人的生死。
@@ -446,8 +459,8 @@ export async function probeCli(
       env,
       cwd,
       windowsHide: true,
-      // POSIX：自成进程组，`killTree` 的 `process.kill(-pid)` 才打得到整组（垫片脚本起的
-      // 孙进程里**还留在组里**的那些正是靠这条收回来的）。它只是一把刀，不是归属证明 ——
+      // POSIX：自成进程组。收尾的刀由圈来下（见文件头「下刀目标必须还属于这次运行」），这里
+      // 分组只为把门闩壳和它起出来的东西隔到一边。进程组不是归属证明 ——
       // 核销判据里没有它（第 1 轮审查 B1）。Windows 走门闩 + Job，不需要也不能用 detached。
       detached: !IS_WINDOWS,
       stdio: ["ignore", "pipe", "pipe"],

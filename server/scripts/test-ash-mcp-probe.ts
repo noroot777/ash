@@ -20,8 +20,8 @@
 //  10. 读数与下刀走异步版：探测期间事件循环不被同步 PowerShell 堵住（新链第 1 轮第 4 条，
 //      在 `ash-mcp-probe-shape.ts`）
 //  11. 「没启动」不等于「问不出来」；门闩目录有启动扫地兜底（新链第 2 轮第 1、4 条）
-//  12. **按裸进程号下刀必须先确认这个号还属于这次运行**：根进程被回收之后那个号可能
-//      已经归别人，补刀就打到无辜进程上（本轮审查 F2）
+//  12. **下刀不准把进程号交出去**：异步 `taskkill` 真正按号开目标时，壳可能已经退出、
+//      号已经归别人；改用 libuv 握着的句柄（第 1、2 轮审查 F2）
 //
 // 跑：npm -w server run test:ash-mcp-probe
 import assert from "node:assert/strict";
@@ -38,7 +38,7 @@ process.env.HARNESS_DB = process.env.ASH_DB;
 const pause = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
 
 try {
-  const { probeCli, unitResidue, killOwnTree } = await import("../src/ash-mcp-probe.js");
+  const { probeCli, unitResidue, killOwnProcess } = await import("../src/ash-mcp-probe.js");
   const { resolveLaunch } = await import("../src/executors/bin-resolve.js");
   if (!resolveLaunch("node", [])) throw new Error("这台机器上连 node 都解析不到？");
   type Outcome = Awaited<ReturnType<typeof probeCli>>;
@@ -613,8 +613,8 @@ try {
   const { checkProbeStructure, checkNotStarted, checkGateSweep, checkKillIdentity, checkAsyncUnitCalls } =
     await import("./ash-mcp-probe-shape.js");
   checkProbeStructure();
-  // ── 12. 按号下刀的身份关（本轮 F2，在 ash-mcp-probe-shape.ts）──────────────
-  await checkKillIdentity(killOwnTree);
+  // ── 12. 下刀只认自己的子进程句柄（第 1、2 轮 F2，在 ash-mcp-probe-shape.ts）──
+  await checkKillIdentity(killOwnProcess);
 
   // ── 10. 读数与下刀走异步版（在 ash-mcp-probe-shape.ts）─────────────────────
   await checkAsyncUnitCalls(probeCli);

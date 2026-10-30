@@ -18,6 +18,18 @@ export type CodexTomlScan = {
   servers: Map<string, CodexServer>;
   /** 非空 = 扫描器自己没把握（写法超出它认得的范围），调用方必须按「判不了」处理。 */
   doubt: string | null;
+  /**
+   * 非空 = **这份配置里的 `mcp_servers` 不能再用 `[mcp_servers.x]` 表头扩展**，字符串是
+   * 说给用户听的原因。谁要它：自动补写（`auth/user-cli-mcp.ts`）—— 它唯一会写的东西就是
+   * 追加一段普通表头。
+   *
+   * 实测（codex-cli 0.153）：整张表写成内联值 `mcp_servers = { kb = {...} }` 之后再追加
+   * `[mcp_servers.ash]`，codex 报 `cannot extend value of type inline table with a dotted
+   * key` 并**整份拒载** —— 用户别的 MCP 一起没了。而根上的点号键（`mcp_servers.kb = {...}`、
+   * `mcp_servers.kb.command = "x"`）、`[mcp_servers]` 下的内联项、普通子表都照样扩展得了
+   * （四种形状都真机验过 rc=0）。所以封的只有「整张表是一个内联值」这一种。
+   */
+  sealed: string | null;
 };
 
 /**
@@ -27,6 +39,7 @@ export type CodexTomlScan = {
  *   [mcp_servers.ash]        [ mcp_servers . "ash" ]       [mcp_servers.'ash'.env]
  *   mcp_servers.ash.command = "node"                       （根上的点号键）
  *   [mcp_servers]  ash = { command = "node", enabled = false }   （内联表）
+ *   mcp_servers = { ash = { command = "node" } }           （整张表写成一个内联值）
  *
  * **兜底**：扫描器没认出任何登记、可文本里明明有 `mcp_servers.ash` / `mcp_servers.harness`
  * 出现在表头或行首键的位置 —— 说明写法超出了它认得的范围（多行字符串里的假表头、它没跟上的
@@ -42,6 +55,7 @@ export function scanCodexToml(text: string): CodexTomlScan {
   };
   let table: string[] = [];
   let doubt: string | null = null;
+  let sealed: string | null = null;
   const seen = new Set<string>();
   for (const stmt of statements(text)) {
     if (stmt.kind === "unparsed") { doubt ??= stmt.why; continue; }
@@ -64,9 +78,24 @@ export function scanCodexToml(text: string): CodexTomlScan {
     if (at > 0) { doubt ??= `${path.join(".")} 把 mcp_servers 挂在了别的表底下`; continue; }
     if (at < 0) continue;
     if (path.length === 1) {
-      // `mcp_servers = { ash = {...} }`：整张表写成一个内联值，这一档不去拆。
-      if (WANTED.some((n) => new RegExp(`\\b${n}\\b`).test(stmt.value))) {
-        doubt ??= "mcp_servers 整个写成了内联表";
+      // `mcp_servers = { ash = {...} }`：整张表写成一个内联值。**必须拆开读** —— 上一版
+      // 在这里只拿 `\bash\b` 扫一眼值文本就答 doubt：codex 自己认得这种登记（真机 rc=0、
+      // `mcp list` 列得出 ash，`-c mcp_servers.ash.env_vars=[...]` 也落得上去），而我们
+      // 这边派审误拒、回合身份注不进去；更糟的是「没有 ash」那一半是对的时候，自动补写
+      // 会追加一段普通表头，codex 整份拒载（第 2 轮审查 F1 实测三种形状）。
+      const fields = inlinePairs(stmt.value);
+      if (!fields) { doubt ??= "mcp_servers 整个写成了内联表，而它的内容拆不开"; continue; }
+      // 拆得开也要记下「这张表封住了」：我们唯一会写的东西就是追加普通表头，而 TOML 不许
+      // 用表头扩展一个已经定义成内联值的表（见 `sealed`）。
+      sealed ??= "mcp_servers 整张表写成了内联值（`mcp_servers = { ... }`），TOML 不许再用"
+        + " [mcp_servers.x] 表头扩展它 —— codex 会整份拒载";
+      for (const field of fields) {
+        const inlineName = field.path[0]!;
+        if (!WANTED.includes(inlineName)) continue;
+        const server = slot(inlineName);
+        if (!applyServerValue(server, field.path.slice(1), field.value)) {
+          doubt ??= `mcp_servers.${field.path.join(".")} 的值无法识别`;
+        }
       }
       continue;
     }
@@ -87,7 +116,7 @@ export function scanCodexToml(text: string): CodexTomlScan {
       doubt = "文本里有像是 ash 登记的写法，但扫描器没认出来";
     }
   }
-  return { servers, doubt };
+  return { servers, doubt, sealed };
 }
 
 type Statement =

@@ -23,12 +23,15 @@
 // 幂等,所以挂在 `ensureUserCliDir()` 上每次起跑都过一遍:已经有了就是两次文件读,
 // 缺了才写。写一律走临时文件 + rename —— 这份 `.claude.json` 同时也是 CLI 自己在写的
 // 文件,半截内容比缺一条登记更糟。
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { extractTomlTables, scanCodexToml } from "../codex-toml.js";
+import { resolveLaunch } from "../executors/bin-resolve.js";
 
 export { extractTomlTables } from "../codex-toml.js";
 import { currentListeningPort } from "../listening-port.js";
@@ -246,18 +249,89 @@ function ensureCodexAshMcp(dir: string, hostHome: string): PersonalAshMcp {
   if (names.length) {
     return fail(`${file} 里的 ${names.map((n) => `[mcp_servers.${n}]`).join("、")} 写着 enabled = false，没有替你打开`);
   }
+  // **这张表还能不能用表头扩展**：我们唯一会写的东西就是追加一段 `[mcp_servers.ash]`，
+  // 而整张表写成内联值之后 TOML 不许这么扩展 —— 照写进去 codex 整份拒载，用户别的 MCP
+  // 一起加载不了（第 2 轮审查 F1 真机实测）。所以这一档只能如实报，让用户自己挑一种改法。
+  if (scan.sealed) {
+    return fail(
+      `${file} 里 ${scan.sealed}，所以没有自动补写 —— 请在那个内联表里自己加一条 `
+      + `${ASH_MCP_SERVER_NAME}，或者把它改写成 [mcp_servers.xxx] 的普通表写法再重启`,
+    );
+  }
   const block = hostCodexBlock(hostHome) ?? builtinCodexBlock();
   if (!block) return fail(NO_SOURCE);
+  // 同一份原文 + 同一段要追加的内容,失败过一次就不再写第二遍:设置页每读一次都会走到这里,
+  // 而「写进去 → 验不过 → 还原」每一轮都要动一次用户的配置文件(中间崩一次就把坏的留在
+  // 那儿了)。任一段变了(用户改了自己的配置、宿主那条改好了)自然重试。
+  const attempt = fingerprint(file, current, block);
+  const failedBefore = failedWrites.get(attempt);
+  if (failedBefore) return fail(failedBefore);
   const why = writeVerified(read, current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`, (written) => {
     const back = scanCodexToml(written);
     // 搬过来的那段若带上游没想到的形状(表头、转义、值),扫描器自己都读不通 —— 那份文件
     // 现在就是 codex 也读不动的样子,说「已接好」等于把别的 MCP 一起弄没了。
     if (back.doubt) return `追加完 ${file} 自己都读不通了（${back.doubt}）`;
-    return back.servers.get(ASH_MCP_SERVER_NAME)?.enabled
-      ? null
-      : `追加完 ${file} 里仍读不出启用着的 [mcp_servers.${ASH_MCP_SERVER_NAME}]`;
+    if (!back.servers.get(ASH_MCP_SERVER_NAME)?.enabled) {
+      return `追加完 ${file} 里仍读不出启用着的 [mcp_servers.${ASH_MCP_SERVER_NAME}]`;
+    }
+    const real = codexReads(dir);
+    return real.state === "bad" ? `${real.why}，没敢留下这次追加` : null;
   });
+  if (why) failedWrites.set(attempt, why);
   return why ? fail(why) : ok(ASH_MCP_SERVER_NAME);
+}
+
+/** 写失败过的「原文 + 要追加的那段」指纹 → 当时的原因。见 `ensureCodexAshMcp` 里那段注释。 */
+const failedWrites = new Map<string, string>();
+
+const fingerprint = (file: string, current: string, block: string): string =>
+  createHash("sha256").update(`${file}\u0000${current}\u0000${block}`).digest("hex");
+
+/** 问 codex 本人花多久算问不动。它只是个只读子命令，本机实测几百毫秒。 */
+const CODEX_READ_MS = 10_000;
+
+/**
+ * 把补写完的文件交给 **codex 本人**解析一遍 —— 「这份 TOML 合不合法」只有它说了算
+ * （第 2 轮审查 F1）。
+ *
+ * 为什么不能只拿我们自己的扫描器复核：它是个**结构**扫描器，看得出新表头落进了文件里，
+ * 证不了这个表头在这份 TOML 上**合法**。`sealed` 把实测到的那一种挡在写之前了，但那是
+ * 枚举；这一问才是真实解析。`scripts/codex-mcp.mjs` 里 setup 那条路也是这么问的，两边
+ * 对「什么叫真的读通了」只有一个答案。
+ *
+ * `cwd` 刻意设成这个配置目录自己：`codex mcp list` 会把**项目级** `.codex/config.toml`
+ * 合进来，在仓库里问的话，别人项目配置里的毛病会算到这次补写头上（白白还原一份好文件），
+ * 项目里的 ash 登记又会给一份其实没写成的配置背书。
+ *
+ * 问不动（没解析到 codex、起不来、超时、输出看不懂）**不算失败**：那时只能退回扫描器
+ * 那一档，不拿「问不出来」去还原一份可能是好的文件。
+ */
+function codexReads(dir: string): { state: "ok" | "bad" | "unasked"; why: string } {
+  const plan = resolveLaunch("codex", ["mcp", "list", "--json"]);
+  if (!plan) return { state: "unasked", why: "这台机器上没解析出 codex 的启动方式" };
+  const res = spawnSync(plan.file, plan.args, {
+    cwd: dir,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: CODEX_READ_MS,
+    env: { ...process.env, CODEX_HOME: dir },
+  });
+  if (res.error || res.signal) {
+    return { state: "unasked", why: `codex mcp list 没跑成（${res.error?.message ?? res.signal}）` };
+  }
+  if (res.status !== 0) {
+    const said = `${res.stderr ?? ""}\n${res.stdout ?? ""}`.split("\n").map((l) => l.trim())
+      .filter(Boolean).slice(0, 3).join(" / ");
+    return { state: "bad", why: `codex 读不动补写之后的配置（退出码 ${res.status}）：${said}` };
+  }
+  let listed: unknown;
+  try { listed = JSON.parse(res.stdout ?? ""); } catch { return { state: "unasked", why: "codex mcp list 的输出看不懂" }; }
+  if (!Array.isArray(listed)) return { state: "unasked", why: "codex mcp list 的输出不是列表" };
+  const hit = listed.find((e) => (e as { name?: unknown } | null)?.name === ASH_MCP_SERVER_NAME) as
+    { enabled?: unknown } | undefined;
+  if (!hit) return { state: "bad", why: `codex 读完补写之后的配置，仍然没列出 ${ASH_MCP_SERVER_NAME}` };
+  if (hit.enabled === false) return { state: "bad", why: `codex 说补写之后的 ${ASH_MCP_SERVER_NAME} 是关着的` };
+  return { state: "ok", why: "" };
 }
 
 function hostCodexBlock(hostHome: string): string | null {

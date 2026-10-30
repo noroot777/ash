@@ -11,11 +11,12 @@
 //
 // 跑法:npm -w server run test:user-cli-mcp
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { ensureAshMcp, extractTomlTables, hostAshMcp, readAshMcp } from "../src/auth/user-cli-mcp.js";
+import { resolveLaunch } from "../src/executors/bin-resolve.js";
 import { REPO_DIR } from "../src/paths.js";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
@@ -328,6 +329,68 @@ for (const agent of ["claude", "codex"] as const) {
   assert.match(readFileSync(join(third.dir, "config.toml"), "utf8"), /\[mcp_servers\.ash\]/);
 }
 
+// ⑲ **整张 mcp_servers 写成内联值时一个字都不许写**（第 2 轮审查 F1）：我们唯一会写的东西
+//    是追加一段 `[mcp_servers.ash]`，而 TOML 不许用表头扩展一个已经定义成内联值的表 ——
+//    真机实测 codex 报 `cannot extend value of type inline table with a dotted key` 并整份
+//    拒载，用户别的 MCP 一起加载不了。认得出登记的那一半同样重要：根内联里有 ash 就别写。
+{
+  const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+  // ① 根内联里确实没有 ash：缺是真的，但这份文件不能这么补 —— 如实报，并说清两种改法。
+  const noAsh = `mcp_servers = { kb = { command = "node" } }\n`;
+  {
+    const { host, dir } = bench({ codex: HOST });
+    const file = join(dir, "config.toml");
+    writeFileSync(file, noAsh, "utf8");
+    const state = ensureAshMcp(dir, "codex", host);
+    assert.equal(state.configured, false, "补不了就不许报「已接好」");
+    assert.match(state.problem ?? "", /内联/, "要说清是内联表挡住了");
+    assert.match(state.problem ?? "", /普通表写法|自己加一条/, "要给得出改法");
+    assert.equal(readFileSync(file, "utf8"), noAsh, "一个字都不许写 —— 写了就是整份拒载");
+  }
+  // ② 根内联里已经有 ash（codex 认得、`-c` 也落得上去）：认出来，更不该追加。
+  for (const existing of [
+    `mcp_servers = { ash = { command = "node" } }\n`,
+    `mcp_servers = { "\\u0061sh" = { command = "node" } }\n`,
+  ]) {
+    const { host, dir } = bench({ codex: HOST });
+    const file = join(dir, "config.toml");
+    writeFileSync(file, existing, "utf8");
+    const state = ensureAshMcp(dir, "codex", host);
+    assert.equal(state.configured, true, `根内联登记要认得出：${JSON.stringify(existing)}`);
+    assert.equal(readFileSync(file, "utf8"), existing, "认出来了就一个字都不写");
+  }
+}
+
+// ⑳ **补写完要交给 codex 本人解析一遍**（第 2 轮审查 F1）：我们那份是**结构**扫描器，看得
+//    出新表头落进了文件里，证不了它在这份 TOML 上合法。这里拿一种真实形状把差别摆出来 ——
+//    宿主那条登记的 env 值里有个不合法转义（`"http://bad\q"`），搬过来之后扫描器照样答
+//    「ash 在、启用着」，而真 codex 整份拒载（实测 rc=1 `missing escaped value`）。
+//    要的行为是：还原原文、如实报，而且**同一份组合不再写第二遍**（设置页每读一次都会走到
+//    这里，不该反复动用户的配置文件 —— 写完还原的中间崩一次就把坏的留在那儿了）。
+{
+  const BAD_HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/x.js"]\n\n`
+    + `[mcp_servers.ash.env]\nASH_URL = "http://bad\\q"\n`;
+  const { host, dir } = bench({ codex: BAD_HOST });
+  const file = join(dir, "config.toml");
+  const before = `model = "gpt"\n`;
+  writeFileSync(file, before, "utf8");
+  const state = ensureAshMcp(dir, "codex", host);
+  if (resolveLaunch("codex", ["mcp", "list", "--json"])) {
+    assert.equal(state.configured, false, "codex 读不动补写之后的文件 ⇒ 不许报「已接好」");
+    assert.match(state.problem ?? "", /codex 读不动|仍然没列出|关着的/, `要说清是 codex 那边的结论：${state.problem}`);
+    assert.equal(readFileSync(file, "utf8"), before, "验不过就原样还回去");
+    // 用一个过去的时间戳把「有没有再动过这个文件」变成可观测的:再写一遍就会把它刷新成现在。
+    const past = new Date("2020-01-01T00:00:00Z");
+    utimesSync(file, past, past);
+    const again = ensureAshMcp(dir, "codex", host);
+    assert.equal(again.configured, false, "失败过的组合照样报失败");
+    assert.equal(statSync(file).mtimeMs, past.getTime(), "同一份组合不许再写第二遍 —— 一个字节都不该动");
+  } else {
+    console.log("⚠ 没装 codex，跳过「补写完交给 codex 本人解析」那一条");
+    assert.equal(state.configured, true, "问不动 codex 时退回扫描器那一档，不拿「问不出来」还原");
+  }
+}
+
 // Windows 删不掉还开着的库文件：退出时那句 rmSync(stage) 会撞 EBUSY，断言全过也判红。
 await releaseTmpDb();
-console.log("test-user-cli-mcp: ✅ 18 组全过");
+console.log("test-user-cli-mcp: ✅ 20 组全过");
