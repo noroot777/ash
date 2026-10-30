@@ -113,6 +113,58 @@ try {
   mkdirSync(codexHome, { recursive: true });
   const writeCodex = (toml: string) => writeFileSync(join(codexHome, "config.toml"), toml);
   {
+    const inlineHome = join(stage, "codex-inline");
+    mkdirSync(inlineHome, { recursive: true });
+    const { codexInjectionTarget } = await import("../src/codex-toml.js");
+    const { ashMcpRegistration } = await import("../src/auth/user-cli-mcp.js");
+    const cases: [string, boolean][] = [
+      ['tools = { get_task = { enabled = false } }', true],
+      ['env = { ASH_NOTE = "enabled = false" }', true],
+      ['some = { enabled = false }', true],
+      ['note = "enabled = false, command = \\"fake\\""', true],
+      ["note = 'enabled = false, command = \"fake\"'", true],
+      ['args = ["enabled = false", "}", ","]', true],
+      ['x_enabled = false', true],
+      ['tools.get_task.enabled = false', true],
+      ['"enabled.flag" = false', true],
+      ['enabled = true, tools = { get_task = { enabled = false } }', true],
+      ['"enabled" = false', false],
+      ['enabled = false, tools = { get_task = { enabled = true } }', false],
+    ];
+    for (const [fields, enabled] of cases) {
+      const config = `[mcp_servers]\nash = { command = "node", ${fields} }\n`;
+      const scanned = scanCodexToml(config);
+      assert.equal(scanned.doubt, null, fields);
+      assert.equal(scanned.servers.get("ash")?.enabled, enabled, fields);
+      assert.equal(scanned.servers.get("ash")?.spec.command, "node", fields);
+      writeFileSync(join(inlineHome, "config.toml"), config);
+      assert.equal(fileAshMcpVerdict("codex", { CODEX_HOME: inlineHome }, [undefined]).state,
+        enabled ? "present" : "disabled", fields);
+      assert.equal(ashMcpRegistration(inlineHome, "codex").state, enabled ? "present" : "disabled", fields);
+      assert.equal(codexInjectionTarget(`${config}[mcp_servers.harness]\ncommand = "node"\n`),
+        enabled ? "ash" : "harness", fields);
+    }
+    const specs: [string, unknown][] = [
+      ['some = { command = "fake", ASH_URL = "fake" }, command = "node", args = ["mcp.js", "a,b"], env = { nested = { ASH_URL = "fake" }, ASH_URL = "http://localhost:4317" }',
+        { command: "node", args: ["mcp.js", "a,b"], ashUrl: "http://localhost:4317" }],
+      ['note = \'command = "fake", ASH_URL = "fake"\', env = { nested = { ASH_URL = "fake" } }', {}],
+      ['"command" = "node", env."ASH_URL" = "http://localhost:4317"',
+        { command: "node", ashUrl: "http://localhost:4317" }],
+      ['command = "node", "env.ASH_URL" = "fake"', { command: "node" }],
+    ];
+    for (const [fields, spec] of specs) {
+      const scanned = scanCodexToml(`[mcp_servers]\nash = { ${fields} }\n`);
+      assert.equal(scanned.doubt, null, fields);
+      assert.deepEqual(scanned.servers.get("ash")?.spec, spec, fields);
+    }
+    assert.deepEqual(scanCodexToml('[mcp_servers.ash]\nenv = { nested = { ASH_URL = "fake" }, ASH_URL = "real" }\n')
+      .servers.get("ash")?.spec, { ashUrl: "real" });
+    for (const config of ['[mcp_servers]\nash = { command = "node"\n', '[mcp_servers.ash]\nenv = { broken }\n']) {
+      assert.ok(scanCodexToml(config).doubt, "未识别的内联表不据此拦人");
+    }
+    console.log("✅ 内联表开关与启动字段只读取对应层级，四个消费口径一致");
+  }
+  {
     const env = { CODEX_HOME: codexHome };
     assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "absent", "没有 config.toml = 没有登记");
     writeCodex('model = "x"\n[mcp_servers.linear]\ncommand = "y"\n');

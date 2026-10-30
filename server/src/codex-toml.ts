@@ -12,8 +12,10 @@ const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
 /** 一条登记**怎么起** —— 只拿来出提示，不参与拦/放。 */
 export type LaunchSpec = { command?: string | null; args?: unknown; ashUrl?: string | null };
 
+type CodexServer = { enabled: boolean; spec: LaunchSpec };
+
 export type CodexTomlScan = {
-  servers: Map<string, { enabled: boolean; spec: LaunchSpec }>;
+  servers: Map<string, CodexServer>;
   /** 非空 = 扫描器自己没把握（写法超出它认得的范围），调用方必须按「判不了」处理。 */
   doubt: string | null;
 };
@@ -32,7 +34,7 @@ export type CodexTomlScan = {
  * 型表头、注释、值里）不算信号。
  */
 export function scanCodexToml(text: string): CodexTomlScan {
-  const servers = new Map<string, { enabled: boolean; spec: LaunchSpec }>();
+  const servers = new Map<string, CodexServer>();
   const slot = (name: string) => {
     let s = servers.get(name);
     if (!s) { s = { enabled: true, spec: {} }; servers.set(name, s); }
@@ -63,24 +65,7 @@ export function scanCodexToml(text: string): CodexTomlScan {
     const name = path[1]!;
     if (!WANTED.includes(name)) continue;
     const s = slot(name);
-    const rest = path.slice(2).join(".");
-    const value = stmt.value.trim();
-    if (!rest) {
-      // `ash = { ... }` 内联表：开关和启动方式从值里认。
-      if (/\benabled\s*=\s*false\b/.test(value)) s.enabled = false;
-      s.spec.command = inlineString(value, "command") ?? s.spec.command;
-      s.spec.ashUrl = inlineString(value, "ASH_URL") ?? s.spec.ashUrl;
-    } else if (rest === "enabled") {
-      if (/^false\b/.test(value)) s.enabled = false;
-    } else if (rest === "command") {
-      s.spec.command = tomlString(value);
-    } else if (rest === "args") {
-      s.spec.args = tomlStringArray(value);
-    } else if (rest === "env.ASH_URL") {
-      s.spec.ashUrl = tomlString(value);
-    } else if (rest === "env") {
-      s.spec.ashUrl = inlineString(value, "ASH_URL") ?? s.spec.ashUrl;
-    }
+    if (!applyServerValue(s, path.slice(2), stmt.value)) doubt ??= `${path.join(".")} 的值无法识别`;
   }
   if (!servers.size && !doubt) {
     // **只认「mcp_servers 底下的 ash」那个位置**：表头或点号键的第一段是 `mcp_servers`、
@@ -198,10 +183,62 @@ function scanValue(
   return { text: out, depth, ml };
 }
 
-/** 内联表里 `key = "…"` 那一项的字符串值。 */
-function inlineString(value: string, key: string): string | null {
-  const m = new RegExp(`\\b${key}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*"|'[^']*')`).exec(value);
-  return m ? tomlString(m[1]!) : null;
+function inlinePairs(raw: string): { path: string[]; value: string }[] | null {
+  const value = raw.trim();
+  if (!value.startsWith("{") || !value.endsWith("}")) return null;
+  const body = value.slice(1, -1);
+  const fields: { path: string[]; value: string }[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote: string | null = null;
+  let multiline: string | null = null;
+  for (let index = 0; index <= body.length; index++) {
+    const character = body[index];
+    if (multiline) {
+      if (character === "\\" && multiline === '"""') { index++; continue; }
+      if (body.startsWith(multiline, index)) { index += 2; multiline = null; }
+      continue;
+    }
+    if (quote) {
+      if (character === "\\" && quote === '"') { index++; continue; }
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (body.startsWith('"""', index) || body.startsWith("'''", index)) {
+      multiline = body.slice(index, index + 3); index += 2; continue;
+    }
+    if (character === '"' || character === "'") { quote = character; continue; }
+    if (character === "[" || character === "{") depth++;
+    if (character === "]" || character === "}") depth--;
+    if (depth < 0) return null;
+    if (depth || (character !== "," && index !== body.length)) continue;
+    const field = body.slice(start, index).trim();
+    if (field) {
+      const pair = splitKey(field);
+      if (!pair) return null;
+      fields.push(pair);
+    } else if (index !== body.length) return null;
+    start = index + 1;
+  }
+  return depth || quote || multiline ? null : fields;
+}
+
+function applyServerValue(server: CodexServer, path: string[], raw: string): boolean {
+  const value = raw.trim();
+  if (!path.length || (path.length === 1 && path[0] === "env")) {
+    const fields = inlinePairs(value);
+    return fields !== null && fields.every((field) => applyServerValue(server, [...path, ...field.path], field.value));
+  }
+  if (path.length === 1) {
+    if (path[0] === "enabled") {
+      if (value !== "true" && value !== "false") return false;
+      server.enabled = value === "true";
+    } else if (path[0] === "command") server.spec.command = tomlString(value);
+    else if (path[0] === "args") server.spec.args = tomlStringArray(value);
+  } else if (path.length === 2 && path[0] === "env" && path[1] === "ASH_URL") {
+    server.spec.ashUrl = tomlString(value);
+  }
+  return true;
 }
 
 function tomlString(raw: string): string | null {

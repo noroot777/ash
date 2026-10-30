@@ -58,24 +58,7 @@ const runCli = (bin: string, args: string[], opts: { cwd?: string; env: NodeJS.P
   });
 };
 
-// ── 先问一句：这台机器问得了 CLI 本人吗 ─────────────────────────────────────
-// 探测层的规矩是「拿不到可核销的归属设备就不启动查询」(第 1 轮审查 B1)。macOS 上内核圈定
-// 如实弃权 ⇒ 一次 CLI 都不跑 ⇒ 判据层换成读配置文件那一档(`ash-mcp-file.ts`)。
-// 这份文件钉的全是**问 CLI 那一档**的判据,所以在这种机器上整份跳过;配置文件那一档
-// 由 `test-ash-mcp-file.ts` 钉(它强制关掉圈定,在哪个平台上都跑同一套)。
-//
-// 写成整份跳过、而不是把那十几条「该拦」的断言改成别的预期：后者会让这个文件看着还在
-// 守着什么，实际上守的是另一条路。
-const { confineAbstention } = await import("../src/executors/kernel-confine.js");
-const abstention = confineAbstention();
-if (abstention) {
-  console.log(`⚠ 整份跳过「问 CLI 本人」那一档的判据用例：${abstention}`);
-  console.log("  ⇒ 这台机器上预检走配置文件那一档，那一档的用例在 test:ash-mcp-file。");
-  rmSync(stage, { recursive: true, force: true });
-  process.exit(0);
-}
-
-try {
+async function checkCliReachability(): Promise<void> {
   const { ensureSchema } = await import("../src/db/index.js");
   await ensureSchema();
   const { db } = await import("../src/db/index.js");
@@ -89,9 +72,6 @@ try {
   const useCodexHome = () => { process.env.CODEX_HOME = codexHome; };
   const reach = (over: Record<string, unknown> = {}) =>
     ashMcpReachability({ agentType: "codex", ...over } as Parameters<typeof ashMcpReachability>[0]);
-
-  // ── 1. 不是 claude/codex ──────────────────────────────────────────────────
-  assert.equal((await reach({ agentType: "grok" })).reachable, true, "别的执行器一律放行");
 
   const hasCodex = has("codex");
   if (!hasCodex) console.log("⚠ 跳过 codex 各条：这台机器上没有 codex CLI");
@@ -202,46 +182,6 @@ try {
     );
     await db.delete(agents);                         // 同上:别让它成为后面用例的默认 profile
     delete process.env.CLAUDE_CONFIG_DIR;
-  }
-
-  // ── 9. F1:候选目录是 orchestrator 可能选中目录的**超集** ──────────────────
-  // 前两轮都栽在「再维护一份近似的目录选择」上(第 1 版压根不传目录;第 2 版照抄 recorded
-  // 那条 || 链,仍跟真货差三处)。这一版不猜哪一个,只保证罩得住 —— 所以这里钉两件事:
-  // 超集本身的形状,以及它凭什么是超集(orchestrator 的取值来源没变)。
-  {
-    const { reviewCwdCandidates } = await import("../src/free-review-round.js");
-    const sessionsDesc = [
-      { cwd: null, worktreePath: null },                 // 诊断会话:最新、两个字段都空(本轮 F1 的形状)
-      { cwd: "/w/new", worktreePath: "/wt/new" },
-      { cwd: "/w/old", worktreePath: "/wt/old" },
-      { cwd: "/w/new", worktreePath: null },             // 跟上面重复
-    ];
-    assert.deepEqual(
-      reviewCwdCandidates("/explicit", sessionsDesc, "/workspace"),
-      ["/explicit", "/w/new", "/wt/new", "/w/old", "/wt/old", "/workspace"],
-      "超集:**所有**会话的两个目录字段都要在里面,去重、丢空值",
-    );
-    assert.deepEqual(
-      reviewCwdCandidates(undefined, [], "/workspace"),
-      ["/workspace"],
-      "一条会话都没有时也要有任务工作区兜底(第 1 版在普通分支就是全空)",
-    );
-
-    // 不变量:超集之所以成立,靠的是 orchestrator 只从这几处取运行目录。哪天它多一个
-    // 来源(比如直接用 project.repoPath),这条就该红 —— 否则预检又会悄悄开始误拦。
-    const orch = readFileSync(new URL("../src/orchestrator.ts", import.meta.url), "utf8");
-    const line = /const recorded = (opts\.cwd[^;]*);/.exec(orch)?.[1];
-    assert.ok(line, "orchestrator 里 `const recorded = opts.cwd || …` 那行必须找得到");
-    assert.deepEqual(
-      line!.split("||").map((x) => x.trim()),
-      ["opts.cwd", "prev?.cwd", "prev?.worktreePath", "all[0]?.cwd", "all[0]?.worktreePath", '""'],
-      "recorded 的取值来源变了:要么把新来源也收进 reviewCwdCandidates 的超集,要么预检会误拦",
-    );
-    assert.match(
-      orch.slice(orch.indexOf("const recorded = opts.cwd")),
-      /if \(!existsSync\(cwd\)\)[\s\S]{0,400}?taskWorkspace\(/,
-      "失效目录的唯一回退必须还是 taskWorkspace() —— 超集末尾那个工作区正是据此放的",
-    );
   }
 
   // ── 10. F1:传了目录,项目级登记才看得见;不传就只剩用户级 ───────────────────
@@ -410,35 +350,6 @@ try {
     process.env.PATH = pathWas;
   }
 
-  // ── 12. F2:预检必须走启动计划层,不能直接起 resolveBin 找到的文件 ───────────
-  // Windows 的真实行为在 macOS 上测不出来（`.cmd` 垫片要 cmd.exe 才起得来），而这条
-  // 缺陷恰恰只在那边发作：直接 execFile 一个 `.cmd` 得到 EINVAL，被当成「问不出来」
-  // 放行（第 2 位审查者 F2，真机实测）。所以这里钉的是**依赖方向** —— 它只准用
-  // resolveLaunch。bin-resolve.ts 的文件头写着 resolveBin「只回答在不在，不回答怎么起」。
-  // 判据层和探测层都要钉：真正 spawn 的那一行现在住在 ash-mcp-probe.ts。
-  for (const file of ["../src/ash-mcp-reachability.ts", "../src/ash-mcp-probe.ts"]) {
-    const src = readFileSync(new URL(file, import.meta.url), "utf8");
-    assert.match(src, /import \{ resolveLaunch \} from "[^"]*bin-resolve\.js"/,
-      `${file} 必须从 bin-resolve 取 resolveLaunch`);
-    // 只看代码行 —— 注释里当然会提到 resolveBin（那段说明讲的就是为什么不能用它）。
-    const code = src.split("\n")
-      .filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line))
-      .join("\n");
-    assert.ok(!/\bresolveBin\b/.test(code),
-      `${file} 不准碰 resolveBin —— 它只回答「在不在」，Windows 上据此 spawn 会 EINVAL`);
-  }
-  // 超时与进程回收只准有一份实现：判据层不许自己再起进程。
-  {
-    const judge = readFileSync(new URL("../src/ash-mcp-reachability.ts", import.meta.url), "utf8")
-      .split("\n").filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line)).join("\n");
-    assert.ok(!/\b(?:execFile|spawn|spawnSync|execFileSync)\b/.test(judge),
-      "判据层不准自己起进程：超时和整棵进程树的生命周期只归 ash-mcp-probe.ts 管（B3）");
-    // 不准再长出「挑哪些参数跟 MCP 有关」的投影层：整份 argv 原样交给 CLI 自己判，
-    // 认不得就让它非零退出（→ 问不出来 → 放行）。补正则只会等下一种写法（B1）。
-    assert.match(judge, /probeCli\(bin, \[\.\.\.extraArgs, "mcp", "list", "--json"\]/,
-      "codex 探测必须原样带上整份归一后的 extraArgs，不准再挑子集");
-  }
-
   // ── 13. B1:预检必须消费**运行时那份**有效执行上下文 ─────────────────────
   // 第 3 轮审查用真实 HTTP 打穿的形状:接好的**默认**执行器(extraArgs 里带着
   // `-c mcp_servers.ash.command=node`)被预检判成没有登记,派审当场 409。病根是预检
@@ -501,24 +412,6 @@ try {
     delete process.env.CODEX_HOME;
   }
 
-  // ── 14. B2 同类:诊断读 init 事件也要按集合判,不取第一项 ────────────────
-  {
-    const { claudeMcpEvidence } = await import("../src/review-channel-gap.js");
-    const init = (servers: string) =>
-      `{"type":"system","subtype":"init","mcp_servers":${servers}}`;
-    const mixed = claudeMcpEvidence(init(
-      '[{"name":"ash","status":"failed"},{"name":"harness","status":"connected"}]',
-    ));
-    assert.equal(mixed?.connected, true, "B2 同类:旧名那份连上了,就不能说通道没连上");
-    assert.match(mixed?.detail ?? "", /2 份兼容登记/, "要如实说明这条会话里有两份登记");
-    const bothBad = claudeMcpEvidence(init(
-      '[{"name":"ash","status":"failed"},{"name":"harness","status":"failed"}]',
-    ));
-    assert.equal(bothBad?.connected, false, "两份都没连上才算没连上");
-    const none = claudeMcpEvidence(init('[{"name":"linear","status":"connected"}]'));
-    assert.equal(none?.connected, false, "一份兼容登记都没有 → 照旧如实说没有");
-  }
-
   // 探测层自己那几条（超时回收、包装先退出、正常退出也收尾、信号、跨块解码、
   // ConfineRead 三档语义）住在 test-ash-mcp-probe.ts —— 这个文件只管判据。
 
@@ -551,6 +444,19 @@ try {
   });
 
   console.log("✅ ash MCP 预检（真实 CLI 对照 F1/F2 全部形状）通过");
+}
+
+try {
+  const { checkPortableReachability } = await import("./ash-mcp-reach-portable.js");
+  await checkPortableReachability();
+  const { confineAbstention } = await import("../src/executors/kernel-confine.js");
+  const abstention = confineAbstention();
+  if (abstention) {
+    console.log(`⚠ 仅跳过需要启动 CLI 的预检用例：${abstention}`);
+    console.log("  ⇒ 平台无关断言已执行；配置文件退路另由 test:ash-mcp-file 覆盖。");
+  } else {
+    await checkCliReachability();
+  }
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

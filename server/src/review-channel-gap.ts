@@ -114,12 +114,13 @@ export function codexMcpEvidence(text: string): Evidence {
     .filter(Boolean);
   if (!hits.length) return null;
   // 同一份 stderr 里往往混着别的 server 的报错（实测最多的是 linear 的 OAuth）。
-  // 点名 ash 的那几行才是这里要的，没有再退回最后两行。
+  // 点名 ash 的那几行才是这里要的。
   const named = hits.filter((line) => new RegExp(`\\b(${ASH_MCP_SERVER_NAME}|${LEGACY_ASH_MCP_SERVER_NAME})\\b`, "i").test(line));
-  const picked = (named.length ? named : hits).slice(-2);
+  if (!named.length) return null;
+  const picked = named.slice(-2);
   return {
     connected: false,
-    detail: `codex 的 stderr 里有这些跟 MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`,
+    detail: `codex 的 stderr 里有这些跟 ash MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`,
   };
 }
 
