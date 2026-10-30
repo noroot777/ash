@@ -7,7 +7,10 @@
  * 单独一个文件而不是塞进 `test-user-cli-mcp.ts`:那份已经 663 行,贴着单文件 700 行的上限。
  */
 import assert from "node:assert/strict";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync,
+  readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProbeOutcome } from "../src/ash-mcp-probe.js";
@@ -38,7 +41,17 @@ function bench() {
 const ensure = (dir: string, host: string) => ensureAshMcp(dir, "codex", host, async () => LISTS_ASH);
 
 if (process.platform === "win32") {
-  console.log("⚠ Windows 的权限/硬链接语义不同，这几格只在 POSIX 上钉");
+  // Windows 上就地写：rename 换上去的新文件 ACL 继承父目录，原文件单独收紧过的 DACL 会当场
+  // 消失（审查第 4 轮 F1 真机实测到 Everyone 进了 DACL），而 Node 没有读写 ACL 的接口。
+  const { host, dir } = bench();
+  const file = join(dir, "config.toml");
+  writeFileSync(file, BEFORE, "utf8");
+  const ino = Number(statSync(file).ino);
+  const state = await ensure(dir, host);
+  assert.equal(state.configured, true);
+  assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/);
+  if (ino !== 0) assert.equal(Number(statSync(file).ino), ino, "就地写：不许换文件");
+  assert.equal(existsSync(`${file}.ash-tmp`), false, "就地写不该产生临时副本");
 } else {
   // ① 0600 的配置写完还得是 0600：临时文件按 umask 建出来是 0644，rename 上去就把私密
   //    配置对同机器上别的账号放开了。
@@ -67,14 +80,55 @@ if (process.platform === "win32") {
     assert.ok(readFileSync(managed, "utf8").startsWith(BEFORE), "原文照旧在前面");
     assert.equal(statSync(managed).mode & 0o777, 0o600, "目标的权限也不许动");
   }
-  // ③ 原来没有这个文件：新建那一路照旧(没有可抄的权限,按 umask 来)。
+  // ③ 多层软链、最后一层悬空：写它最终指的那个路径,别把中间那条链接换成普通文件。
+  {
+    const { host, dir } = bench();
+    const file = join(dir, "config.toml");
+    const hop = join(dir, "hop.toml");
+    const dangling = join(dir, "not-there.toml");
+    symlinkSync(dangling, hop);
+    symlinkSync(hop, file);
+    const state = await ensure(dir, host);
+    assert.equal(state.configured, true);
+    assert.ok(lstatSync(file).isSymbolicLink() && lstatSync(hop).isSymbolicLink(), "两层链接都还在");
+    assert.match(readFileSync(dangling, "utf8"), /\[mcp_servers\.ash\]/, "写到最终那个路径上");
+  }
+  // ④ 硬链接：rename 换 inode 会断开用户显式接起来的关联,这一种就地写。
+  {
+    const { host, dir } = bench();
+    const file = join(dir, "config.toml");
+    const twin = join(dir, "twin.toml");
+    writeFileSync(file, BEFORE, "utf8");
+    linkSync(file, twin);
+    const ino = statSync(file).ino;
+    const state = await ensure(dir, host);
+    assert.equal(state.configured, true);
+    assert.equal(statSync(file).ino, ino, "inode 不许换");
+    assert.match(readFileSync(twin, "utf8"), /\[mcp_servers\.ash\]/, "另一端跟着更新");
+  }
+  // ⑤ 原来没有这个文件：新建那一路照旧(没有可抄的权限,按 umask 来)。
   {
     const { host, dir } = bench();
     const file = join(dir, "config.toml");
     const state = await ensure(dir, host);
     assert.equal(state.configured, true);
     assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/, "原来没有就新建一份");
+    assert.equal(statSync(file).mode & 0o777, 0o666 & ~process.umask(), "新建的按 umask 来,跟基线一致");
+  }
+  // ⑥ 临时副本的名字被占住(上一次崩在半路留下的目录)：异常如实报出来,用户那份不动,
+  //    也不留下一份宽权限的残骸。
+  {
+    const { host, dir } = bench();
+    const file = join(dir, "config.toml");
+    writeFileSync(file, BEFORE, "utf8");
+    chmodSync(file, 0o600);
+    mkdirSync(`${file}.ash-tmp`); // rmSync(force) 删不掉目录 ⇒ 建临时副本必然失败
+    const state = await ensure(dir, host);
+    assert.equal(state.configured, false, "写不成就不许报「已接好」");
+    assert.equal(readFileSync(file, "utf8"), BEFORE, "用户那份一个字节都不许动");
+    assert.equal(statSync(file).mode & 0o777, 0o600, "权限也不许动");
+    rmSync(`${file}.ash-tmp`, { recursive: true, force: true });
   }
 }
 
-console.log("test-user-cli-write-identity: ✅ 写入器的文件身份(权限/软链/新建)通过");
+console.log("test-user-cli-write-identity: ✅ 写入器的文件身份(权限/软链/硬链接/新建/失败出口)通过");

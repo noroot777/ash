@@ -34,6 +34,7 @@ import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { probeCli, type ProbeOutcome } from "../ash-mcp-probe.js";
 import { extractTomlTables, scanCodexToml } from "../codex-toml.js";
+import { IS_WINDOWS } from "../platform.js";
 
 export { extractTomlTables } from "../codex-toml.js";
 import { currentListeningPort } from "../listening-port.js";
@@ -504,30 +505,55 @@ function readForWrite(file: string): ConfirmedRead | null {
   }
 }
 
+/** 临时副本一出生就只有自己能读 —— 它装着用户配置的全文。 */
+const TMP_MODE = 0o600;
+
+/** 跟到软链的尽头(最多 8 层,防环);最终悬空就用它指的那个路径,别去改中间那条链接。 */
+function resolveTarget(file: string): string {
+  let p = file;
+  for (let left = 8; left > 0; left--) {
+    try { return realpathSync(p); } catch { /* 不存在,或者这条链悬空 */ }
+    let next: string;
+    try { next = readlinkSync(p); } catch { return p; } // 不是软链 ⇒ 要写的就是它
+    p = resolve(dirname(p), next);
+  }
+  return p;
+}
+
 /**
- * 同目录临时文件 + rename:CLI 自己也在写这份文件,不能让它读到半截。
- * 只收 `readForWrite` 的结果 —— 「写之前必须拿到一次成功的读」由类型钉住,不靠各分支自己记。
+ * 把批准过的内容写到 `read.file`,**不改这个文件的身份**。只收 `readForWrite` 的结果 ——
+ * 「写之前必须拿到一次成功的读」由类型钉住,不靠各分支自己记。
  *
- * **换上去的那个文件得跟原来那个是同一身份**(审查第 3 轮 F2 在安装器那份写入器上提的同一条;
- * 根因一样,两边各自实现是因为 setup 在裸 Node 上跑、导不进 TS):软链写它指向的那份(否则
- * 一 rename 就把链接换成普通文件)、权限照抄(临时文件按 umask 多半 0644,0600 的私密配置会
- * 当场放宽)、硬链接就地写(rename 换 inode 会断开用户显式接起来的关联,这时原子性让位)。
+ * 这是安装器那份写入器(`scripts/codex-mcp.mjs`)的同一套规矩,两边各一份实现是因为 setup
+ * 在裸 Node 上跑、导不进 TS;四条都是审查打出来的:
+ *
+ * ① POSIX:同目录临时文件 + rename ⇒ CLI 读到的要么是旧的、要么是写完的,没有半截。临时副本
+ *    **一出生就是 0600**(第 4 轮 F1:上一版按 umask 建出 0644、把整份配置写进去、之后才
+ *    chmod,那期间同机器上别的账号能连 key 一起读走;chmod 之前抛异常还会留下那份 0644
+ *    副本)。放宽成原文件的权限是发布前最后一步,任何异常都把临时副本带走。
+ * ② Windows:**就地写**。那边 rename 换上去的是个新文件,ACL 继承父目录 —— 原文件单独收紧过
+ *    的 DACL 当场消失(第 4 轮 F1 真机实测到 Everyone 读进了 DACL),而 Node 没有读写 ACL 的
+ *    接口。保访问边界,代价是失去原子性(同下面硬链接那一路)。
+ * ③ 软链写它指向的那份(第 3 轮 F2),否则一 rename 就把链接换成普通文件。
+ * ④ 硬链接(nlink > 1)也就地写,rename 换 inode 会断开用户显式接起来的关联。
+ *
+ * 所有者(uid/gid)没抄:配置在谁的目录里就该由谁这个进程写。
  */
 function writeAtomic(read: ConfirmedRead, body: string): void {
-  let target = read.file;
-  try {
-    target = realpathSync(read.file);
-  } catch {
-    // 不存在,或者是条指向不存在目标的软链 —— 后者按它指的那个路径写。
-    try { target = resolve(dirname(read.file), readlinkSync(read.file)); } catch { /* 真的还没有 */ }
-  }
+  const target = resolveTarget(read.file);
   let had: ReturnType<typeof statSync> | null = null;
   try { had = statSync(target); } catch { /* 新建 */ }
-  if (had && had.nlink > 1) { writeFileSync(target, body, "utf8"); return; }
+  if (IS_WINDOWS || (had && had.nlink > 1)) { writeFileSync(target, body, "utf8"); return; }
   const tmp = `${target}.ash-tmp`;
-  writeFileSync(tmp, body, "utf8");
-  if (had) chmodSync(tmp, had.mode & 0o777); // writeFileSync 的 mode 会被 umask 削
-  renameSync(tmp, target);
+  try {
+    rmSync(tmp, { force: true }); // 残留那份的 mode 不受我们控制,一律重建
+    writeFileSync(tmp, body, { encoding: "utf8", mode: TMP_MODE, flag: "wx" });
+    chmodSync(tmp, had ? had.mode & 0o777 : 0o666 & ~process.umask());
+    renameSync(tmp, target);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
 }
 
 /**
