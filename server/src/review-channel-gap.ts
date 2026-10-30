@@ -68,9 +68,9 @@ const asRecord = (value: unknown): Record<string, unknown> =>
  *
  * `definite` = 这份证据**点名 ash 且是确定的坏**，只许由**结构上的位置**给出，不许由「整行里
  * 出现过这个词」给出：
- *  · claude：init 清单（JSON）里没有 ash，或者 ash 的状态是**白名单里**的终局失败
+ *  · claude：init 清单（JSON）里没有 ash，或者全部兼容登记的状态都是**白名单里**的终局失败
  *    （`CLAUDE_FAILED_STATUSES`）。`pending`、`connecting` 这类没列举的状态一律不算 —— 未知即不确定；
- *  · codex：报错里 server 名出现在 codex 自己给 server 名加引号的那个位置（实测形状
+ *  · codex：终局启动失败里 server 名出现在 codex 自己给 server 名加引号的那个位置（实测形状
  *    ``MCP client for `ash` failed to start``）。上一版拿 `\b(ash|harness)\b` 在整行上找，
  *    而本仓目录就叫 harness、`~/.ash/…` 这类路径也带 ash，于是任何一行顺带打了 cwd 的别家报错
  *    都成了「ash 自己坏了」的确定证据（第 1 轮审查第 1 条）。
@@ -87,6 +87,7 @@ const CLAUDE_FAILED_STATUSES = new Set(["failed", "needs-auth", "disabled"]);
  */
 const CODEX_QUOTED_ASH = new RegExp(
   `\\bMCP (?:client|server)(?: for)? [\`'"](?:${ASH_MCP_SERVER_NAME}|${LEGACY_ASH_MCP_SERVER_NAME})[\`'"]`, "i");
+const CODEX_ASH_START_FAILURE = new RegExp(`${CODEX_QUOTED_ASH.source}\\s+failed to (?:start|initialize)\\b`, "i");
 
 /**
  * claude：`{"type":"system","subtype":"init",…,"mcp_servers":[{"name":"ash","status":"connected"}]}`
@@ -115,20 +116,17 @@ export function claudeMcpEvidence(text: string): Evidence {
     if (!mine.length) {
       return { connected: false, definite: true, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 ash。` };
     }
-    const ash = mine.find((s) => s.status === "connected") ?? mine[0]!;
-    const status = typeof ash.status === "string" ? ash.status : "";
-    const others = mine.length > 1
-      ? `（这条会话里有 ${mine.length} 份兼容登记：${mine.map((s) => `${String(s.name)}=${typeof s.status === "string" ? s.status : "未知"}`).join("、")}）`
-      : "";
-    return status === "connected"
+    const connected = mine.some((server) => server.status === "connected");
+    const states = mine.map((server) => `${String(server.name)}=${typeof server.status === "string" && server.status ? server.status : "未知"}`).sort().join("、");
+    return connected
       // **只说连上了，别替它断言工具在手**：init 事件写的是「server 连上没有」，不是
       // 「report_stage 暴露了没有」—— 执行器的工具白/黑名单能把具体工具挡掉，那时说
       // 「多半是它自己漏了上报」就是把限制归咎于审查者（第 2 位审查者 N2）。
-      ? { connected: true, definite: false, detail: `这条会话启动时 ash MCP 是连上的${others}。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
+      ? { connected: true, definite: false, detail: `这条会话启动时 ash MCP 是连上的（兼容登记状态：${states}）。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
       : {
           connected: false,
-          definite: CLAUDE_FAILED_STATUSES.has(status),
-          detail: `这条会话启动时 ash MCP（${String(ash.name)}）的状态是「${status || "未知"}」，不是 connected${others}。`,
+          definite: mine.every((server) => typeof server.status === "string" && CLAUDE_FAILED_STATUSES.has(server.status)),
+          detail: `这条会话启动时 ash MCP 的兼容登记状态是「${states}」，没有报告 connected。`,
         };
   }
   return null;
@@ -149,7 +147,7 @@ export function codexMcpEvidence(text: string): Evidence {
   const picked = (named.length ? named : hits).slice(-2);
   return {
     connected: false,
-    definite: named.length > 0,
+    definite: named.length > 0 && named.every((line) => CODEX_ASH_START_FAILURE.test(line)),
     detail: `codex 的 stderr 里有这些跟 MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`,
   };
 }
@@ -241,9 +239,9 @@ export async function noteReviewerChannelGap(a: {
  * 直接证据就说「通道坏了」是误诊。所以这里**只认点名 ash 的确定证据**（`Evidence.definite`），
  * 拿不到就不说话 —— 结算说明里那句通用的「常见原因」已经在了。
  *
- * 调用方只在「exit 0 却没交卷、落了 failed」那一支调，且排除了原生命令回合（`/compact`）：被停的、
+ * 调用方只在结算层明确返回「缺少必需的完成确认」那一支调：被停的、原生命令（`/compact`）、
  * 交过卷的、以提问/检查点暂停的回合都走不到这里（后两种本身就证明 ash MCP 是通的）。旁路回合
- * 的原状态是 failed 时也会落在这一支，由下面按会话行的 `side_turn` 挡掉。
+ * 恢复原状态的回合也不走这一支；下面仍按会话行的 `side_turn` 排除旁路。
  */
 export async function noteTurnChannelGap(a: {
   taskId: string;

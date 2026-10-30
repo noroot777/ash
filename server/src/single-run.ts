@@ -489,7 +489,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   out.end();
   // 普通回合 exit 0 却没交卷：会话证据点名 ash MCP 没连上时，把原因接在结算说明后面说出来
   // （先结果、后原因；只认确定证据，见 review-channel-gap.ts 的 noteTurnChannelGap）。
-  if (role !== "reviewer" && !settled.nativeTurn && !stopped && exitStatus === 0 && settled.status === "failed" && !settled.confirmedDone) {
+  if (role !== "reviewer" && settled.failureReason === "missing_completion_confirmation") {
     await noteTurnChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType })
       .catch((error) => { console.error(`[ash] noteTurnChannelGap(${taskId}) failed:`, error); return false; });
   }

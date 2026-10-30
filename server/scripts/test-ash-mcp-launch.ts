@@ -27,7 +27,7 @@
 // 跑：npm -w server run test:ash-mcp-launch
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
@@ -185,13 +185,15 @@ try {
     await makeTask("h1", "codex");
     const sessionId = await makeSession("h1", "codex");
     const q = (cwd: string) => ({ taskId: "h1", agentType: "codex", executorId: null, ownerUserId: null, cwd, sessionId });
-    const NEEDLE = "起跑预检提示：这一轮的 agent 多半交不了卷";
+    const NEEDLE = "起跑预检提示：这一轮的 agent 可能用不了 ash MCP";
     const dirs = ["a", "b", "c", "d"].map((n) => { const d = join(stage, `cwd-${n}`); mkdirSync(d); return d; });
 
     writeCodex('model = "x"\n');
     await hintAshMcpForTurn(q(dirs[0]!));
     assert.equal(count(timeline("h1"), NEEDLE), 1, "确定没有：说一句");
-    assert.match(timeline("h1"), /只是提示，这一轮照常在跑/, "明说没拦");
+    assert.match(timeline("h1"), /只是提示，不阻止本轮继续/, "明说没拦");
+    assert.match(timeline("h1"), /若本轮需要确认完成.*不需要交卷的纯追问不因此记未完成/, "起跑只说明通道能力，不预判纯追问失败");
+    assert.doesNotMatch(timeline("h1"), /干得再好也只能按|跑完必然/, "不能把缺登记说成本轮必然失败");
     await hintAshMcpForTurn(q(dirs[0]!));
     await hintAshMcpForTurn(q(dirs[1]!));
     assert.equal(count(timeline("h1"), NEEDLE), 1, "同一条任务同一个执行器只说一次，不刷屏");
@@ -237,7 +239,7 @@ try {
 
   // ── 5. 普通回合事后说明 ────────────────────────────────────────────────────
   {
-    const { noteTurnChannelGap } = await import("../src/review-channel-gap.js");
+    const { claudeMcpEvidence, codexMcpEvidence, noteTurnChannelGap } = await import("../src/review-channel-gap.js");
     const { detachedPathsFor } = await import("../src/executors/detached.js");
     const { RUNS_DIR } = await import("../src/paths.js");
     let n = 0;
@@ -258,6 +260,27 @@ try {
     };
     const init = (servers: string) =>
       `{"type":"system","subtype":"init","mcp_servers":${servers}}\n{"type":"assistant"}\n`;
+    const statuses = ["failed", "needs-auth", "disabled", "pending", "connecting", "connected", "future-status", "", null, undefined, 7];
+    const terminalFailures = new Set(["failed", "needs-auth", "disabled"]);
+    for (const primary of statuses) for (const legacy of statuses) {
+      const rows = [{ name: "ash", status: primary }, { name: "harness", status: legacy }];
+      const evidence = claudeMcpEvidence(init(JSON.stringify(rows)));
+      const connected = [primary, legacy].includes("connected");
+      const definite = !connected && [primary, legacy].every((status) => typeof status === "string" && terminalFailures.has(status));
+      assert.equal(evidence?.connected, connected, `任一兼容登记连通即成功：${JSON.stringify(rows)}`);
+      assert.equal(evidence?.definite, definite, `只有全部明确终局失败才确定不可用：${JSON.stringify(rows)}`);
+      assert.deepEqual(claudeMcpEvidence(init(JSON.stringify([...rows].reverse()))), evidence,
+        "相同兼容登记的证据与顺序无关");
+    }
+    for (const status of ["pending", "connecting", "connected", "", null]) {
+      const rows = [{ name: "ash", status: "failed" }, { name: "harness", status }];
+      for (const ordered of [rows, [...rows].reverse()]) {
+        assert.equal((await turn("claude", { out: init(JSON.stringify(ordered)) })).said, false,
+          "失败和未知/成功混合时不写确定归因，交换顺序也一样");
+      }
+    }
+    assert.equal((await turn("claude", { out: init('[{"name":"ash","status":"failed"},{"name":"harness","status":"disabled"}]') })).said, true,
+      "兼容登记全部终局失败：保留确定归因");
 
     const missing = await turn("claude", { out: init('[{"name":"kb","status":"connected"}]') });
     assert.equal(missing.said, true, "init 清单里没有 ash：确定证据，要说");
@@ -295,6 +318,22 @@ try {
     const named = await turn("codex", { err: "\u001b[31mERROR\u001b[0m MCP client for `ash` failed to start: No such file\n" });
     assert.equal(named.said, true, "stderr 点名 ash 的 MCP 报错：确定证据");
     assert.doesNotMatch(named.text, /\u001b\[/, "ANSI 着色要去掉");
+    assert.equal((await turn("codex", { err: "ERROR MCP server 'harness' failed to initialize: authentication required\n" })).said, true,
+      "旧名的明确初始化失败也能作为确定证据");
+    for (const diagnostic of [
+      "WARN MCP server `ash` returned error: unknown tool `not_a_tool`",
+      "ERROR MCP client for `ash` tool call failed: request timed out",
+      'WARN MCP server "harness" returned error: tool execution failed',
+    ]) {
+      assert.equal(codexMcpEvidence(diagnostic)?.definite, false, "点名不等于启动失败");
+      assert.equal((await turn("codex", { err: `${diagnostic}\n` })).said, false, "调用级报错不归因为整组工具不在");
+    }
+    const startupFailure = "ERROR MCP client for `ash` failed to start: missing binary";
+    const unknownFailure = "WARN MCP server `harness` returned error: unknown tool `not_a_tool`";
+    for (const diagnostics of [[startupFailure, unknownFailure], [unknownFailure, startupFailure]]) {
+      assert.equal((await turn("codex", { err: diagnostics.join("\n") })).said, false,
+        "终局失败与非终局告警混合时不能确定全部不可用，交换顺序不改变结果");
+    }
   }
 
   // ── 6. 接线 ───────────────────────────────────────────────────────────────
@@ -313,9 +352,6 @@ try {
     assert.match(src("orchestrator.ts"), /if \(!sideTurn\) void hintAshMcpForTurn\(/,
       "旁路回合（验证轮、审查、辩论）在起跑处已过闸，不再重复提示");
     const run = src("single-run.ts");
-    assert.match(run,
-      /if \(role !== "reviewer" && !settled\.nativeTurn && !stopped && exitStatus === 0 && settled\.status === "failed" && !settled\.confirmedDone\) \{\s*await noteTurnChannelGap\(/,
-      "单飞收尾在「exit 0 却没交卷」那一支调事后说明，原生命令回合（/compact）排除");
     assert.ok(run.indexOf("noteSessionNotice(settled.note") < run.indexOf("await noteTurnChannelGap("),
       "原因接在结算说明后面（先结果、后原因）");
     assert.match(src("free-review-round.ts"), /await gateAshMcpBeforeLaunch\(task, \{ agentType: run\.agentType/,
@@ -361,6 +397,61 @@ try {
     for (let i = 0; i < 3; i++) await advanceWorkflowFrom(row, taskWorkflowDef(line), "s1");
     assert.equal(count(timeline("w1"), SAID), 1, "重放同一段推进不再多说");
     writeCodex(ASH_CODEX);
+  }
+
+  {
+    const { settleTaskStatus } = await import("../src/settle-status.js");
+    const scenarios = [
+      { id: "normal", extra: {}, exit: 0, stopped: null, status: "failed", missing: true },
+      { id: "followup", extra: { followUpFrom: "failed" }, exit: 0, stopped: null, status: "failed", missing: false },
+      { id: "followup-question", extra: { followUpFrom: "failed", question: "为什么？" }, exit: 0, stopped: null, status: "failed", missing: false },
+      { id: "followup-crash", extra: { followUpFrom: "failed" }, exit: 1, stopped: null, status: "failed", missing: false },
+      { id: "confirmed", extra: { completeConfirmedAt: at }, exit: 0, stopped: null, status: "done", missing: false },
+      { id: "native", extra: { nativeTurn: true }, exit: 0, stopped: null, status: "done", missing: false },
+      { id: "crash", extra: {}, exit: 1, stopped: null, status: "failed", missing: false },
+      { id: "stop", extra: {}, exit: 0, stopped: "canceled", status: "canceled", missing: false },
+      { id: "pause", extra: { resumePrompt: "继续" }, exit: 0, stopped: null, status: "paused", missing: false },
+    ] as const;
+    for (const scenario of scenarios) {
+      const taskId = `settle-${scenario.id}`;
+      await makeTask(taskId, "codex", { status: "running", ...scenario.extra });
+      const settled = await settleTaskStatus(taskId, scenario.exit, scenario.stopped);
+      assert.equal(settled.status, scenario.status, scenario.id);
+      assert.equal(settled.failureReason, scenario.missing ? "missing_completion_confirmation" : undefined, scenario.id);
+    }
+
+    const { consumeSingleRun } = await import("../src/single-run.js");
+    const { detachedPathsFor } = await import("../src/executors/detached.js");
+    const { RUNS_DIR } = await import("../src/paths.js");
+    for (const scenario of scenarios.filter((entry) => entry.stopped === null)) {
+      const taskId = `flow-${scenario.id}`;
+      await makeTask(taskId, "codex", { status: "running", ...scenario.extra });
+      const sessId = await makeSession(taskId, "codex");
+      const paths = detachedPathsFor(join(RUNS_DIR, taskId), sessId, at);
+      mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
+      writeFileSync(paths.err, "ERROR MCP client for `ash` failed to start: missing binary\n");
+      const out = createWriteStream(sessionTranscriptPath(taskId, sessId), { flags: "a" });
+      const closed = new Promise<void>((resolve, reject) => { out.once("close", resolve); out.once("error", reject); });
+      await consumeSingleRun({
+        taskId, sessId, agentType: "codex", cwd: repo, turnStart: at, cliSessionId: sessId, autoTitle: false, out,
+        ex: { model: null, reasoningEffort: null, resumeFields: () => ({}) } as never,
+        handle: {
+          sessionId: sessId, commandLine: "fake", kill() {}, async cleanup() {},
+          events: (async function* () {
+            yield { kind: "text" as const, text: "仅解释上次失败的原因，本轮没有修改文件。" };
+            yield { kind: "done" as const, exitStatus: scenario.exit };
+          })(),
+        },
+      });
+      await closed;
+      const row = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
+      assert.equal(row.status, scenario.status, `真实收流与结算：${scenario.id}`);
+      assert.equal(timeline(taskId).includes("没交卷多半不是 agent 漏了"), scenario.missing,
+        `只对本轮确实因缺确认失败的执行回合追加通道归因：${scenario.id}`);
+      if (scenario.id.startsWith("followup")) {
+        assert.doesNotMatch(timeline(taskId), /本回合没有交卷|修好之后点重试|只补交卷/, "恢复旧 failed 不是本轮漏交卷");
+      }
+    }
   }
 
   assert.ok(!existsSync(ran), "配置文件那一档一个 CLI 进程都不该起");

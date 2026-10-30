@@ -2,8 +2,8 @@
 //
 // 为什么普通回合不拦，见 `ash-mcp-launch-gate.ts` 文件头：那是用户自己派的活，产物不靠交卷
 // 也留得下；问不了 CLI 的机器上判据只是读配置推断，拿推断拦掉用户亲手点的活不值。可一声
-// 不吭也不行：缺了 ash MCP，这一轮无论干得多好都调不了 complete_task，跑完必然按「没交卷」
-// 记未完成，而用户只看得到一句没有原因的失败（原任务第 1 轮审查第 3 条）。所以起跑同时在
+// 不吭也不行：缺了 ash MCP，需要确认完成的执行回合会因「没交卷」记未完成，而纯追问无需交卷。
+// 用户需要区分通道能力与本轮是否需要确认完成。所以起跑同时在
 // 后台问一次，确定没有就在时间线上先说一句，用户可以当场停掉去修，而不是等它跑完。
 //
 // 三条约束：
@@ -72,9 +72,9 @@ export async function hintAshMcpForTurn(q: Query): Promise<void> {
   try {
     const reach = await cachedReach(q);
     const text = !reach.reachable
-      ? `起跑预检提示：这一轮的 agent 多半交不了卷 —— complete_task / ask_question / pause_task 这些都是 ash MCP 的工具，`
-        + `够不着的话这一轮干得再好也只能按「没交卷」记未完成。${reach.problem}`
-        + "（只是提示，这一轮照常在跑；接好之后点重试会从中断处接着做。）"
+      ? `起跑预检提示：这一轮的 agent 可能用不了 ash MCP —— complete_task / ask_question / pause_task 都由它提供。`
+        + `若本轮需要确认完成、提问或检查点暂停，可能无法上报；不需要交卷的纯追问不因此记未完成。工具通道检查依据：${reach.problem}`
+        + "（只是提示，不阻止本轮继续；若因此未能交卷，接好之后点重试会从中断处接着做。）"
       : reach.warning
         ? `起跑预检提示：${reach.warning}`
         : null;
