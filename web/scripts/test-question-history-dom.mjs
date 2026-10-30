@@ -32,6 +32,12 @@ try {
     }, { autoOpen });
     await page.route("**/api/**", async (route) => {
       const path = new URL(route.request().url()).pathname;
+      // 任务历史里的挡回记录:生产组件**无条件**读它(见 useRejectionNotices.ts),这一屏
+      // 不验它,给一份空的就行 —— 不计进 calls,那一串是这一屏自己的请求账。
+      if (path.endsWith("/notices")) {
+        await route.fulfill({ json: { notices: [], remedy: null } });
+        return;
+      }
       calls.push(path);
       if (!path.endsWith("/question-history")) {
         failures.push(`unexpected API request: ${path}`);

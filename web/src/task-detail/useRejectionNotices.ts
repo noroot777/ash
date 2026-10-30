@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConversationItem } from "./conversationModel.ts";
 import { api } from "../lib/api.ts";
+import { type CatchUp, createCatchUp } from "../lib/catchUp.ts";
+import { useServerEvents } from "../lib/events.ts";
 
 export type RejectionRemedy = "reclaim-turn" | null;
 
@@ -17,17 +19,24 @@ export function useRejectionNotices(taskId: string, revision = 0): {
 } {
   const [items, setItems] = useState<ConversationItem[]>([]);
   const [remedy, setRemedy] = useState<RejectionRemedy>(null);
-  const [tick, setTick] = useState(0);
-  const reload = useCallback(() => setTick((n) => n + 1), []);
+  const catchUp = useRef<CatchUp | null>(null);
+  // 「该重读了」。**不清空、不翻 loading** —— 它是追平,不是换一份数据(见下面那段)。
+  const reload = useCallback(() => catchUp.current?.run(), []);
 
   useEffect(() => {
     let live = true;
-    // 切任务先清空:否则上一个任务的挡回会挂在新任务的时间线上。
+    // 切任务先清空:否则上一个任务的挡回会挂在新任务的时间线上。**只有这里清** ——
+    // 「换了任务」是身份真的变了,而「重读一次」不是(见 reload)。
     setItems([]);
     setRemedy(null);
-    api.taskNotices(taskId)
-      .then((r) => {
-        if (!live) return;
+    // 读失败一律**保持原样并自己重试到读到**(第 1 轮审查 F6),策略与任务列表、验收卡
+    // 共用同一份(`createCatchUp`)。上一版的失败分支是整个吞掉:items 已经被清成空、
+    // remedy 已经被清成 null,于是「读失败」在界面上和「没有被挡回过、也没有救援资格」
+    // 长得一模一样 —— 之前的操作记录和那个人工救援入口一起不见,服务端恢复了也不会自己
+    // 回来(task.id 没变,这个 effect 不会再跑),页面上一个字都不说为什么。
+    const pending = createCatchUp(() => api.taskNotices(taskId).then(
+      (r) => {
+        if (!live) return true;
         setItems(r.notices.map((notice) => ({
           kind: "event" as const,
           // 用库里那行的 id:合进时间线之后它要能被稳定地认出来(排序、去重、key)。
@@ -39,10 +48,40 @@ export function useRejectionNotices(taskId: string, revision = 0): {
           aside: true,
         })));
         setRemedy(r.remedy);
-      })
-      .catch(() => { /* 读不到就不显示这一段,正文本身不受影响 */ });
-    return () => { live = false; };
-  }, [taskId, revision, tick]);
+        return true;
+      },
+      () => false,
+    ));
+    catchUp.current = pending;
+    pending.run();
+    return () => {
+      live = false;
+      pending.cancel();
+      if (catchUp.current === pending) catchUp.current = null;
+    };
+  }, [taskId, revision]);
+
+  // ── 失效协议:这一份不是只在打开那一刻算一次的 ────────────────────────────────
+  // 这个接口的 `remedy` 是**服务端此刻算出来的**(那个人工救援入口该不该显示),而它和
+  // 下面那串记录都会在「任务本身一个字段都没变」的情况下变化:新的挡回、巡检写下一条
+  // 诊断、锁被别处放开、占位占到超过可疑年龄。原先这个 effect 只认 task.id,外部唯一的
+  // 刷新路绑在「放开成功」那一下 —— 也就是说**只有已经看见并点过那个开关的人**才有刷新
+  // 路:一直开着详情页的人看不到后来出现的入口,也看不到旧入口已经失效(按下去只得到
+  // 409)。所以服务端把这两样的变化发成一条 `task.notices`(写入侧见
+  // server/src/user-action-rejection.ts,时间那一半见 turn-lock-reclaim.ts 的巡检)。
+  const connected = useServerEvents((event) => {
+    if (event.type !== "task.notices" || event.taskId !== taskId) return;
+    reload();
+  });
+  // **每次连上都重新对一遍账**:事件流没有历史回放(服务端只订阅当前 bus、不带事件 id),
+  // 断线那几十秒里的变化一条都补不回来。首次连上也要对一次 —— 挂载时那一发 GET 和事件流
+  // 的建立是并发的,中间那段的事件同样没人接。同 useTaskMonitors。
+  const linked = useRef(connected);
+  useEffect(() => {
+    const was = linked.current;
+    linked.current = connected;
+    if (connected && !was) reload();
+  }, [connected, reload]);
 
   return { items, remedy, reload };
 }

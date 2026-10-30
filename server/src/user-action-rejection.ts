@@ -20,6 +20,15 @@
 // 为什么不是反过来(只写会话正文):那条路要求任务**至少跑过一次** —— 没有会话就没有
 // transcript 文件可写,只会 return false 加一行 warn。而「点运行被同队前项挡回」最常
 // 发生的正是一个刚排进队列、还没跑过的任务。
+// ## 失效协议:写了一行就发一声
+//
+// 这张表的读取口(`GET /tasks/:id/notices`)还捎带着**此刻**算出来的 `remedy`(那个人工
+// 救援入口该不该显示)。两样东西都会在「任务本身一个字段都没变」的情况下变化 —— 新挡回、
+// 巡检写下一条诊断、锁被放开。前端那个 effect 原先只认 task.id,于是一直开着详情页的人
+// 看不到后来出现的救援入口,也看不到它已经失效(第 1 轮审查 F5)。所以**真落了一行就发
+// 一条 `task.notices`**(只发信号不带载荷),界面据此重读;「该不该显示」那一问由时间
+// 决定、没有写入可挂,它的信号在 `turn-lock-reclaim.ts` 的巡检里发。
+//
 //// ## 为什么要去重
 //
 // 挡回往往不是单次事件:按钮没反应,用户会连点;前端还可能自动重试。一次点一条的话
@@ -29,6 +38,7 @@
 //
 import { createHash } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
+import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { taskNotices } from "./db/schema.js";
 import { id as newId, now } from "./util.js";
@@ -111,6 +121,7 @@ export async function noteUserActionOutcome(
   }
   try {
     await db.insert(taskNotices).values({ id: newId(), taskId, action, outcome, reason, occurredAt: now() });
+    bus.publish({ type: "task.notices", taskId });
     return true;
   } catch (error) {
     // 去重记账要撤回,否则这条挡回会被静默吞掉整个 DEDUPE_MS。
@@ -129,8 +140,13 @@ export async function noteSystemNotice(
 ): Promise<boolean> {
   const id = `system:${createHash("sha256").update(JSON.stringify([taskId, eventKey])).digest("hex")}`;
   try {
-    await db.insert(taskNotices).values({ id, taskId, action, outcome: "system", reason, occurredAt: now() })
-      .onConflictDoNothing({ target: taskNotices.id });
+    // `returning` 是为了分清「真写进去了」和「同一条诊断又来了一趟」:发信号要按前者,
+    // 否则每 30 秒一趟的巡检会让每个开着的详情页白跑一次 GET(事件键稳定、按 id 冲突)。
+    const inserted = await db.insert(taskNotices)
+      .values({ id, taskId, action, outcome: "system", reason, occurredAt: now() })
+      .onConflictDoNothing({ target: taskNotices.id })
+      .returning({ id: taskNotices.id });
+    if (inserted.length) bus.publish({ type: "task.notices", taskId });
     return true;
   } catch (error) {
     console.warn(`[ash] 系统诊断留痕写表失败 task=${taskId}（${action}）:`, error);

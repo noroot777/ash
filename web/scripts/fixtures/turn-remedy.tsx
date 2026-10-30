@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ReclaimTurnSwitch } from "../../src/task-detail/ReclaimTurnSwitch.tsx";
+import { useServerEvents } from "../../src/lib/events.ts";
 import { useRejectionNotices } from "../../src/task-detail/useRejectionNotices.ts";
 import "../../src/styles/global.css";
 
@@ -28,12 +29,23 @@ function Stage({ id }: { id: string }) {
   );
 }
 
+// 事件流连上了没有,摆给测试看:**「又连上了」自己就是一条追平路**(事件流没有历史回放,
+// 断线那几十秒的变化一条都补不回来),所以那一条要和事件那一条分开验。
+function Stages({ ids }: { ids: string[] }) {
+  const connected = useServerEvents(() => {});
+  return (
+    <main
+      data-connected={connected}
+      style={{ maxWidth: 760, padding: 24, margin: "auto", background: "var(--bg)", minHeight: "100vh" }}
+    >
+      <h1 style={{ font: "var(--font-h2)" }}>任务历史</h1>
+      {ids.map((id) => <Stage key={id} id={id} />)}
+    </main>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <main style={{ maxWidth: 760, padding: 24, margin: "auto", background: "var(--bg)", minHeight: "100vh" }}>
-      <h1 style={{ font: "var(--font-h2)" }}>任务历史</h1>
-      <Stage id={taskId} />
-      {second && <Stage id={second} />}
-    </main>
+    <Stages ids={second ? [taskId, second] : [taskId]} />
   </StrictMode>,
 );

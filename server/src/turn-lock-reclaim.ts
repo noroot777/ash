@@ -57,6 +57,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
+import { bus } from "./bus.js";
 import { isRunning, isTurnClaimed } from "./runs.js";
 import { forceReleaseTurn, heldTurns } from "./turn-lock.js";
 import { noteSystemNotice } from "./user-action-rejection.js";
@@ -157,6 +158,7 @@ const reporting = new Set<string>();
  */
 export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise<number> {
   const suspects = suspectTurns(Date.now(), thresholdMs);
+  publishRemedyChanges(suspects);
   // 已经不在占着的那些从去重表里清掉,免得这张表随进程寿命单调增长。
   const alive = new Set(heldTurns().map((h) => `${h.taskId}:${h.seq}`));
   for (const key of told) if (!alive.has(key)) told.delete(key);
@@ -192,6 +194,33 @@ export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise
     }
   }
   return reported;
+}
+
+/**
+ * 上一趟巡检时「这个任务该不该显示那个人工放开开关」是什么样。
+ *
+ * 这一问的答案由**时间**决定(锁占到超过可疑年龄就出现,原持有者回来放手就消失),没有
+ * 任何数据库写入可以挂信号 —— 而 `GET /tasks/:id/notices` 里的 `remedy` 正是现算的。少了
+ * 这条信号,一直开着详情页的人只能看到打开那一刻的答案:该出现的入口不出现,已经失效的
+ * 旧入口继续摆着、按下去只得到 409(第 1 轮审查 F5)。
+ *
+ * **不挂在留痕写入上**:那条路要留痕真的写成了才会发声,而这一问的答案和留痕成不成功
+ * 是两件事。巡检是这台机器上唯一的时钟,所以在这里按「答案变了没有」发信号。
+ */
+const remedyShown = new Set<string>();
+
+function publishRemedyChanges(suspects: SuspectTurn[]): void {
+  const shown = new Set(suspects.map((suspect) => suspect.taskId));
+  for (const taskId of shown) {
+    if (remedyShown.has(taskId)) continue;
+    remedyShown.add(taskId);
+    bus.publish({ type: "task.notices", taskId });
+  }
+  for (const taskId of [...remedyShown]) {
+    if (shown.has(taskId)) continue;
+    remedyShown.delete(taskId);
+    bus.publish({ type: "task.notices", taskId });
+  }
 }
 
 /** `releaseSuspectTurn` 的结果。`ok:false` 带 `why` 给路由映射状态码与话术。 */

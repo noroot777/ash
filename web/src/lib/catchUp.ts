@@ -45,9 +45,15 @@ export function createCatchUp(
   // 代次:取消/重新触发之后,已经在途的那一发回来时不许再续排重试。
   let generation = 0;
   const attempt = (generationAtStart: number) => {
-    void refetch().then((ok) => {
-      if (!ok && generationAtStart === generation) timer = timers.set(() => attempt(generationAtStart), retryMs);
-    });
+    const again = () => {
+      if (generationAtStart === generation) timer = timers.set(() => attempt(generationAtStart), retryMs);
+    };
+    // **抛出来的也算「没读到」。** `refetch` 的约定是「返回成不成，别抛」，但那是约定:
+    // 调用方的成功分支里只要有一处 `r.x.map(...)`，一个形状不对的响应体就会在这里变成
+    // 一条没人接的 rejection —— 没有重试,而且在浏览器里它是一个 unhandled error,
+    // 整页都跟着报错(实测:某个 fixture 的兜底路由回 `[]`,页面连弹 5 条)。恢复责任既然
+    // 收在这一处,这一处就不能假设调用方不出错。
+    void refetch().then((ok) => { if (!ok) again(); }, again);
   };
   const cancel = () => {
     generation += 1;

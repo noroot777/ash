@@ -136,6 +136,16 @@ export type ServerEvent =
   // 哨兵列表有变化：起了一个、推了一批事件、结束了。界面按它重拉
   // `/tasks/:id/monitors` —— 只发信号不带载荷，跟托盘那条同一套理由。
   | { type: "task.monitors"; taskId: string }
+  // 任务历史里的「被挡回的操作 / 系统诊断」有变化,**或者那个人工救援入口该不该显示变了**。
+  // 界面按它重拉 `/tasks/:id/notices`(只发信号不带载荷,同 task.monitors)。
+  //
+  // 为什么这条必须存在:那个接口返回的 `remedy` 是**此刻算出来的**(见
+  // server/src/task-routes.ts),它会在没有任何任务字段变化的情况下自己出现和消失 ——
+  // 一把锁占到超过可疑年龄、巡检写下一条诊断、用户在别处放开了它。前端那个 effect 只
+  // 认 task.id,于是一直开着详情页的人看不到后来出现的救援入口,也看不到它已经失效
+  // (第 1 轮审查 F5)。三个发信号的点:两处留痕写入真落了一行、巡检发现「该不该显示」
+  // 这一问的答案变了。
+  | { type: "task.notices"; taskId: string }
   | {
       type: "agent.event";
       taskId: string;

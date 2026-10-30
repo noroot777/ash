@@ -37,6 +37,11 @@ try {
   /** 每次 reclaim 请求带上来的凭据,按顺序记下 —— 轮换对不对全看这串。 */
   const sent = [];
 
+  // 事件流**必须在这里截住**:这个 hook 现在订阅 task.notices(失效协议,见
+  // useRejectionNotices.ts),而 vite 的 /api 代理会把它接到真正在跑的 :4317 上去 ——
+  // 一个回归测试不该连到用户的实例上。空响应 = 连不上,这一支本来也不验事件路。
+  await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
+
   await page.route("**/api/tasks/t-stale/notices", (route) => json(route, notices([
     { id: "n4", action: "放开回合占位", outcome: "unknown", reason: "占位身份 single、已持有约 3 分钟", occurredAt: at(4) },
     { id: "n3", action: "回合占位已放开", outcome: "system", reason: "这个任务的回合占位已放开，由本机页面发起。", occurredAt: at(3) },
