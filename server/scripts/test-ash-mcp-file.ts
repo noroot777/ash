@@ -78,6 +78,29 @@ try {
     }
     assert.equal(scan('note = """\nmcp_servers.harness.command = "x"\n"""\n').doubt, true,
       "多行字符串里的点号键登记：照旧判不了");
+    // ── 转义键：**codex 自己会解**（0.153 真机实测：`[mcp_servers."\u0061sh"]` 它读成 ash，
+    // rc=0、`mcp mcp list --json` 列得出来）。扫描器不解的话，这份配置里明明有 ash，预检却答
+    // 「确定没有」—— 拦下一整轮审查；补写那一侧还会再追加一份同名表，那是 TOML 的重复定义，
+    // codex 整份拒载、用户别的 MCP 一起没了（本轮 F1）。
+    assert.deepEqual(scan('[mcp_servers."\\u0061sh"]\ncommand = "node"\n'), yes, "\\u 转义键");
+    assert.deepEqual(scan('[mcp_servers."as\\u0068"]\ncommand = "node"\n'), yes, "转义只占键的一截");
+    assert.deepEqual(scan('[mcp_servers."\\U00000061sh"]\ncommand = "node"\n'), yes, "\\U 八位转义");
+    assert.deepEqual(scan('mcp_servers."\\u0061sh".command = "node"\n'), yes, "点号键里的转义");
+    assert.deepEqual(scan('[mcp_servers]\n"\\u0061sh" = { command = "node" }\n'), yes, "内联表名里的转义");
+    assert.deepEqual(scan('[mcp_servers."a\\tsh"]\ncommand = "node"\n'), { names: {}, doubt: false },
+      "解出来是别的名字就不是 ash —— 解错方向反了也一样错（这个名字里是真制表符）");
+    assert.deepEqual(scan('[mcp_servers.ash]\ncommand = "no\\"de"\n'), yes, "值里的转义引号不影响读键");
+    // 反过来：**codex 读不动的，我们也不准据此说「没有」**。
+    assert.equal(scan('[mcp_servers."a\\qsh"]\ncommand = "node"\n').doubt, true, "TOML 不认的转义");
+    assert.equal(scan('[mcp_servers."ash]\ncommand = "node"\n').doubt, true, "引号没收尾");
+    assert.equal(scan('[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.ash]\ncommand = "b"\n').doubt, true,
+      "同名表定义两次：codex 报 duplicate key 整份拒载（setup 旧版追加重复表就是这个形状）");
+    assert.deepEqual(scan('[[x]]\na = 1\n[[x]]\na = 2\n[mcp_servers.ash]\ncommand = "node"\n'), yes,
+      "数组表重复出现是合法的，不准当成重复定义");
+    // 文件结尾处值还没收尾：后面那些行全成了这个值的续行，看不见的 ash 不等于没有 ash。
+    assert.equal(scan('x = [\n  "a",\n').doubt, true, "数组少一个 ]");
+    assert.equal(scan('x = [\n  "a",\n[mcp_servers.ash]\ncommand = "node"\n').doubt, true,
+      "没收尾的数组把后面的表头吞了 —— 不准答「没有」");
   }
 
   // ── 1b. 执行器注入回合身份用的同一份判据 ─────────────────────────────────

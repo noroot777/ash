@@ -42,8 +42,16 @@ export function scanCodexToml(text: string): CodexTomlScan {
   };
   let table: string[] = [];
   let doubt: string | null = null;
+  const seen = new Set<string>();
   for (const stmt of statements(text)) {
+    if (stmt.kind === "unparsed") { doubt ??= stmt.why; continue; }
     if (stmt.kind === "header") {
+      // **同名表重复定义**：TOML 里这是 `duplicate key`，codex 整份配置拒载（实测
+      // `failed to load bootstrap configuration`）。这一档说不出「有没有 ash」,只能答
+      // 判不了 —— 自动补写那一侧正是靠它才不会再往上追加一份(新链第 6 轮审查 F1)。
+      const key = stmt.path.join("\u0000");
+      if (!stmt.array && seen.has(key)) doubt ??= `[${stmt.path.join(".")}] 定义了两次（codex 会整份拒载）`;
+      seen.add(key);
       table = stmt.path;
       const at = table.indexOf("mcp_servers");
       if (at > 0) doubt ??= `[${table.join(".")}] 把 mcp_servers 挂在了别的表底下`;
@@ -84,7 +92,11 @@ export function scanCodexToml(text: string): CodexTomlScan {
 
 type Statement =
   | { kind: "header"; path: string[]; line: number; array: boolean }
-  | { kind: "pair"; path: string[]; value: string };
+  | { kind: "pair"; path: string[]; value: string }
+  /** 这一行按 TOML 读不通 —— codex 自己也读不动，所以**不许**据此说「没有 ash」。 */
+  | { kind: "unparsed"; why: string };
+
+const isHeader = (s: Statement): s is Statement & { kind: "header" } => s.kind === "header";
 
 /**
  * 把 TOML 切成「表头」和「键 = 值」两种语句。值可以跨行（多行数组/内联表/多行字符串），
@@ -110,33 +122,86 @@ function statements(text: string): Statement[] {
     if (line.startsWith("[")) {
       // 不在续行里时，行首的 `[` 只可能是表头；引号里的 `]` 不算收尾。
       const header = /^\[\[?((?:[^\]"']|"(?:[^"\\]|\\.)*"|'[^']*')*)\]/.exec(line);
-      if (header) out.push({ kind: "header", path: keyPath(header[1]!), line: n, array: line.startsWith("[[") });
+      const path = header ? keyPath(header[1]!) : null;
+      if (path) out.push({ kind: "header", path, line: n, array: line.startsWith("[[") });
+      else out.push({ kind: "unparsed", why: `表头 ${line} 按 TOML 读不通` });
       continue;
     }
     const eq = splitKey(line);
-    if (!eq) continue;
+    // `=` 都没有的行不是键值对(TOML 里也不合法,但不是这一档要管的);键读不通才要说一声。
+    if (!eq) {
+      if (/=/.test(line)) out.push({ kind: "unparsed", why: `${line} 的键按 TOML 读不通` });
+      continue;
+    }
     const scanned = scanValue(eq.value, 0, null);
     depth = scanned.depth; ml = scanned.ml;
     if (depth || ml) pending = { path: eq.path, value: scanned.text };
     else out.push({ kind: "pair", path: eq.path, value: scanned.text });
   }
-  if (pending) out.push({ kind: "pair", ...pending });
+  // **文件结尾处值还没收尾**（数组少一个 `]`、多行字符串少一个 `\"\"\"`）：这份 TOML 本身
+  // 不合法，codex 整份拒载。那后面那些本该是表头/键的行全被当成了这个值的续行 —— 据此说
+  // 「没有 ash」是错的，自动补写还会把新表追加进那个没收尾的值里（本轮 F1 同类）。
+  if (pending) out.push({ kind: "unparsed", why: `${pending.path.join(".")} 的值到文件结尾还没收尾` });
   return out;
 }
 
-/** `a."b".'c'` → ["a","b","c"]。点号只在引号外才是分隔符。 */
-function keyPath(raw: string): string[] {
+/**
+ * `a."b".'c'` → `["a","b","c"]`。点号只在引号外才是分隔符。
+ *
+ * **双引号键里的转义要按 TOML 解码**，因为 codex 就是这么读的：`[mcp_servers."\u0061sh"]`
+ * 在它眼里就是 `ash`（实测 codex-cli 0.153 列出 `"name":"ash"`）。上一版只把引号摘掉，于是
+ * 这份配置被判成「没有 ash」—— 派审误拒、回合身份注不进去，自动补写还会再追加一份**同名**
+ * 表，TOML 里那是重复定义，codex 整份配置拒载、别的 MCP 一起没了（新链第 6 轮审查 F1）。
+ *
+ * `null` = 这串键按 TOML 读不通（引号没收尾、转义不认）。那时**不许当成「没有」**：这种
+ * 文本 codex 自己也读不动，替它下结论只会错，一律交给上层答 doubt。
+ */
+function keyPath(raw: string): string[] | null {
   const parts: string[] = [];
   let cur = "";
-  let quote: string | null = null;
-  for (const ch of raw) {
-    if (quote) { if (ch === quote) quote = null; else cur += ch; continue; }
-    if (ch === '"' || ch === "'") { quote = ch; continue; }
-    if (ch === ".") { parts.push(cur.trim()); cur = ""; continue; }
-    cur += ch;
+  let quoted = false;                    // 这一段出现过引号形式(引号键允许空名、允许空白)
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i]!;
+    if (ch === '"' || ch === "'") {
+      const seg = readQuotedKey(raw, i, ch);
+      if (!seg) return null;
+      cur += seg.text; i = seg.next; quoted = true; continue;
+    }
+    // 引号外的空白只是分隔用的:TOML 的裸键本来就只许 `A-Za-z0-9_-`,不含空白。
+    if (ch === " " || ch === "\t") { i++; continue; }
+    if (ch === ".") { parts.push(cur); cur = ""; quoted = false; i++; continue; }
+    cur += ch; i++;
   }
-  parts.push(cur.trim());
-  return parts;
+  parts.push(cur);
+  return quoted || parts.every((p) => p.length) ? parts : null;
+}
+
+/** TOML 的转义键:双引号是基本字符串(认转义),单引号是字面量(原样)。 */
+function readQuotedKey(raw: string, at: number, quote: '"' | "'"): { text: string; next: number } | null {
+  const simple: Record<string, string> = {
+    b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\",
+  };
+  let out = "";
+  let i = at + 1;
+  while (i < raw.length) {
+    const ch = raw[i]!;
+    if (ch === quote) return { text: out, next: i + 1 };
+    if (quote === "'" || ch !== "\\") { out += ch; i++; continue; }
+    const esc = raw[i + 1];
+    if (esc !== undefined && simple[esc] !== undefined) { out += simple[esc]; i += 2; continue; }
+    if (esc === "u" || esc === "U") {
+      const width = esc === "u" ? 4 : 8;
+      const hex = raw.slice(i + 2, i + 2 + width);
+      if (hex.length !== width || !/^[0-9a-fA-F]+$/.test(hex)) return null;
+      const code = Number.parseInt(hex, 16);
+      // 代理区与超出平面的码位不是合法 TOML 标量值 —— codex 也会拒,别替它编一个名字出来。
+      if (code > 0x10_ffff || (code >= 0xd800 && code <= 0xdfff)) return null;
+      out += String.fromCodePoint(code); i += 2 + width; continue;
+    }
+    return null;                         // TOML 不认的转义
+  }
+  return null;                           // 引号没收尾
 }
 
 /** 找引号外的第一个 `=`，切成键路径和值。 */
@@ -144,9 +209,17 @@ function splitKey(line: string): { path: string[]; value: string } | null {
   let quote: string | null = null;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]!;
-    if (quote) { if (ch === quote) quote = null; continue; }
+    if (quote) {
+      // 基本字符串里 `\"` 不收尾 —— 不跳过它,`"a\"b" = 1` 的 `=` 会被当成在引号里。
+      if (ch === "\\" && quote === '"') { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
     if (ch === '"' || ch === "'") { quote = ch; continue; }
-    if (ch === "=") return { path: keyPath(line.slice(0, i)), value: line.slice(i + 1) };
+    if (ch === "=") {
+      const path = keyPath(line.slice(0, i));
+      return path ? { path, value: line.slice(i + 1) } : null;
+    }
   }
   return null;
 }
@@ -283,7 +356,7 @@ export function codexInjectionTarget(text: string): string | null {
  */
 export function extractTomlTables(config: string, name: string, as = name): string | null {
   const lines = config.split(/\r?\n/);
-  const heads = statements(config).filter((s) => s.kind === "header");
+  const heads = statements(config).filter(isHeader);
   const picked: string[] = [];
   heads.forEach((h, i) => {
     if (h.path[0] !== "mcp_servers" || h.path[1] !== name) return;

@@ -59,6 +59,17 @@
 // 所以**进程组从核销判据里整条撤掉**，只留它当下刀的一个目标集：`killTree` 的
 // `kill(-pgid)` 能一次打到还留在组里的那些，这个能力照留，但它答的「空」不算证明。
 //
+// ── 下刀目标必须还属于这次运行（本轮审查 F2）────────────────────────────────
+//
+// 上一版在收尾里把「整圈刀」和「按根进程号补一刀」并排发：`cutUnit(unit); killTree(pid)`，
+// 复核循环里每一轮再来一遍。那个 `pid` 是 spawn 时记下的**旧读数** —— 根进程早退出并被回收
+// 之后，这个号可以已经分配给了别人（号复用，N5）：补刀打在无辜进程上，Windows 还是
+// `taskkill /T` 连它的子树一起打，而这一刀**圈那边一个字都不覆盖**（成员集合由内核现读）。
+//
+// 所以归属不变量钉在一个地方：**全文件只有 `cutRun` 一个下刀入口** —— 有圈走圈（号由内核
+// 现读，必然属于这次运行），没有圈才退到 `killOwnTree`，而它只在子进程**还没被回收**时下刀
+// （号那时还被僵尸 / 句柄占着，不可能是别人的）。`discardShell` 走的就是后者这档降级。
+//
 // 这个形状**追踪 fd 也救不回来**（上面那段），所以 macOS 上剩不下任何能核销的设备 ——
 // 那边的出路只能是「不启动」。基线 `kernel-confine.ts` 顶部早写明了这一类（`close` 掉继承
 // fd + `setsid` 的后代）在没有内核圈定的平台上无解，内核圈定要解的正是它。
@@ -233,6 +244,38 @@ const cutUnit = async (unit: ProbeUnit): Promise<void> => {
 };
 
 /**
+ * 这个子进程的号此刻**还属于这次运行**吗（见文件头「下刀目标必须还属于这次运行」）。
+ *
+ * 判据是「它还没被回收」：POSIX 下退出后的号由僵尸占着，要等 libuv `waitpid` 过才释放；
+ * Windows 下 libuv 攥着进程句柄，号在句柄关掉之前不会被重新分配。两边都是**回收之后**那个
+ * 号才可能归别人，而 `exitCode`/`signalCode` 恰好就在那一刻从 `null` 变成值。
+ */
+const stillOurs = (child: ChildProcess): boolean => child.exitCode === null && child.signalCode === null;
+
+/**
+ * 按进程号下刀 —— **只在号还属于这次运行时**。已经被回收就一刀都不发，如实回 `false`
+ * （那时它本来也已经死了：回收的前提是它退出过）。
+ */
+export function killOwnTree(child: ChildProcess): boolean {
+  const pid = child.pid;
+  if (pid === undefined || !stillOurs(child)) return false;
+  killTree(pid, "SIGKILL");
+  return true;
+}
+
+/**
+ * 终止这次运行 —— **全文件只此一个下刀入口**，归属不变量就钉在这里。
+ *
+ * 有圈就只走圈：成员集合由内核**现读**，里面的号必然是此刻还在这次运行里的，而我们手上攥
+ * 着的根进程号只是一个旧读数。没有圈（产品代码走不到 —— 弃权就不启动，见文件头）才退到按
+ * 号下刀，并且必须先过 `killOwnTree` 那道身份关。
+ */
+const cutRun = async (child: ChildProcess, unit: ProbeUnit): Promise<void> => {
+  if (unit.confine) await cutUnit(unit);
+  else killOwnTree(child);
+};
+
+/**
  * 收尾：把这次探测自己起的东西收干净，**每条结束路径都要走一遍**。
  *
  * 上一版只在超时分支收，正常 `close` 直接返回 —— 第 5 轮审查实测：包装把查询用
@@ -276,8 +319,7 @@ async function settleUnit(
   if (why === "ended" && await unitResidue(unit) === "gone") { discharge(unit); return; }
 
   // ② 下刀。**返回值刻意不看**（上面那段）—— 它表达不了「整圈都终止了」。
-  await cutUnit(unit);
-  killTree(pid, "SIGKILL");
+  await cutRun(child, unit);
 
   // 复核：**步长递增**地问，直到证明空或者预算用完。
   //
@@ -292,8 +334,7 @@ async function settleUnit(
   while (Date.now() < deadline) {
     await wait(Math.min(step, deadline - Date.now()));
     if (await unitResidue(unit) === "gone") { discharge(unit); return; }
-    await cutUnit(unit);
-    killTree(pid, "SIGKILL");
+    await cutRun(child, unit);
     step *= 2;
   }
 
@@ -316,15 +357,18 @@ async function settleUnit(
  * 是合法的，不违反「调用方已经判空」那条契约。
  */
 async function discardShell(child: ChildProcess, unit: ProbeUnit): Promise<void> {
-  const pid = child.pid;
-  if (pid === undefined) { discharge(unit); return; }
-  killTree(pid, "SIGKILL");
+  // 这里只能按号下刀 —— 圈可能压根还没建成（这个分支正是为「建不成」准备的），所以
+  // 身份由 `killOwnTree` 自己兜：它答 false 就是「这个号已经不归我们了」，而那只会发生在
+  // 壳退出并被回收之后 ⇒ 壳已经死了 ⇒ 这时交还证据合法。
+  if (!killOwnTree(child)) { discharge(unit); return; }
   for (let waited = 0; waited < SHELL_REAP_MS; waited += 50) {
-    if (!isPidRunning(pid)) { discharge(unit); return; }
+    // 死亡证明也换成「已被回收」:它是我们自己的子进程,这件事比按号探活可靠 —— 按号探活
+    // 在号被复用之后答的是别人的生死。
+    if (!stillOurs(child)) { discharge(unit); return; }
     await wait(50);
   }
   // 壳自己都收不掉（极少见）：按契约不交还证据，交给上面那段警告的同一条规矩。
-  console.warn(`[ash] ash MCP 预检的门闩壳（pid=${pid}）没收掉；这次的执行单元证据保留着`);
+  console.warn(`[ash] ash MCP 预检的门闩壳（pid=${child.pid}）没收掉；这次的执行单元证据保留着`);
 }
 
 /**

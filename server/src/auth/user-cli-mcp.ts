@@ -23,7 +23,7 @@
 // 幂等,所以挂在 `ensureUserCliDir()` 上每次起跑都过一遍:已经有了就是两次文件读,
 // 缺了才写。写一律走临时文件 + rename —— 这份 `.claude.json` 同时也是 CLI 自己在写的
 // 文件,半截内容比缺一条登记更糟。
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
@@ -197,8 +197,12 @@ function ensureClaudeAshMcp(dir: string, hostHome: string): PersonalAshMcp {
   // 规范名落地:宿主那份即使是历史名 harness,定义搬过来也按 ash 登记(同一个 server,
   // setup 迟早要迁;两边都叫 ash 之后,提示词里那句「ash MCP」才对得上工具名)。
   doc.mcpServers = { ...servers, [ASH_MCP_SERVER_NAME]: entry };
-  writeAtomic(read, `${JSON.stringify(doc, null, 2)}\n`);
-  return ok(ASH_MCP_SERVER_NAME);
+  const why = writeVerified(read, `${JSON.stringify(doc, null, 2)}\n`, (written) => {
+    const back = parseJsonObject(written);
+    if (!back) return `补写完 ${file} 自己都解析不了`;
+    return claudeServerName(back) ? null : `补写完 ${file} 里仍读不出 ash MCP 登记`;
+  });
+  return why ? fail(why) : ok(ASH_MCP_SERVER_NAME);
 }
 
 function claudeServerName(doc: Record<string, unknown>): string | null {
@@ -244,8 +248,16 @@ function ensureCodexAshMcp(dir: string, hostHome: string): PersonalAshMcp {
   }
   const block = hostCodexBlock(hostHome) ?? builtinCodexBlock();
   if (!block) return fail(NO_SOURCE);
-  writeAtomic(read, current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`);
-  return ok(ASH_MCP_SERVER_NAME);
+  const why = writeVerified(read, current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`, (written) => {
+    const back = scanCodexToml(written);
+    // 搬过来的那段若带上游没想到的形状(表头、转义、值),扫描器自己都读不通 —— 那份文件
+    // 现在就是 codex 也读不动的样子,说「已接好」等于把别的 MCP 一起弄没了。
+    if (back.doubt) return `追加完 ${file} 自己都读不通了（${back.doubt}）`;
+    return back.servers.get(ASH_MCP_SERVER_NAME)?.enabled
+      ? null
+      : `追加完 ${file} 里仍读不出启用着的 [mcp_servers.${ASH_MCP_SERVER_NAME}]`;
+  });
+  return why ? fail(why) : ok(ASH_MCP_SERVER_NAME);
 }
 
 function hostCodexBlock(hostHome: string): string | null {
@@ -322,4 +334,28 @@ function writeAtomic(read: ConfirmedRead, body: string): void {
   const tmp = `${file}.ash-tmp`;
   writeFileSync(tmp, body, "utf8");
   renameSync(tmp, file);
+}
+
+/**
+ * 写 + **自己再读一遍** + 验不过就原样还回去。
+ *
+ * 为什么不能写完就报「已接好」:补进去的那段是**搬来的**(宿主那份配置里的 `[mcp_servers.ash]`,
+ * 连注释、奇怪的表头和转义一起搬),拼完的文件未必还读得通。读不通的 config.toml 对 codex 是
+ * 整份拒载 —— 用户别的 MCP 一起没了,而界面上写着「已接好」。
+ *
+ * `verify` 返回 null = 验过了;返回一句话 = 哪里不对(文件已被还原,这句话会原样报给用户)。
+ */
+function writeVerified(read: ConfirmedRead, body: string, verify: (written: string) => string | null): string | null {
+  writeAtomic(read, body);
+  const after = readForWrite(read.file);
+  const why = !after || after.text === null ? `补写完 ${read.file} 又读不出来` : verify(after.text);
+  if (!why) return null;
+  try {
+    // 原来没有这个文件就删掉:别留一份自己都读不动的残骸在那挡着 CLI。
+    if (read.text === null) rmSync(read.file, { force: true });
+    else writeAtomic(read, read.text);
+  } catch (e) {
+    return `${why}；还原也失败了（${(e as Error).message}），请手工检查 ${read.file}`;
+  }
+  return `${why}，已把它还原成补写前的样子`;
 }

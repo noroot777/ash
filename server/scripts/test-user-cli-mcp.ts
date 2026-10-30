@@ -302,6 +302,32 @@ for (const agent of ["claude", "codex"] as const) {
   assert.equal(readFileSync(join(file, "keep"), "utf8"), "x", `${agent}:读不动的东西原样留着`);
 }
 
+// ⑱ **补写完要自己再读一遍，验不过就原样还回去**（新链第 6 轮审查 F1）：补进去的那段是从
+//    宿主配置里搬来的，拼完的文件未必还读得通 —— 而读不通的 config.toml 对 codex 是整份
+//    拒载，用户别的 MCP 一起没了，界面上却写着「已接好」。
+{
+  // 宿主那条是**关着的**:搬过来照样是关着的,那不叫接好(agent 照样交不了卷)。
+  const { host, dir } = bench({ codex: `[mcp_servers.ash]\ncommand = "node"\nenabled = false\n` });
+  const before = `model = "gpt"\n`;
+  const file = join(dir, "config.toml");
+  writeFileSync(file, before, "utf8");
+  const state = ensureAshMcp(dir, "codex", host);
+  assert.equal(state.configured, false, "补写完读不出启用着的登记,不许报「已接好」");
+  assert.match(state.problem ?? "", /还原/, "要说清已经还原了");
+  assert.equal(readFileSync(file, "utf8"), before, "原样还回补写前的样子");
+
+  // 原来压根没有这个文件:还原 = 把它删掉,不留一份自己都读不通的残骸。
+  const second = bench({ codex: `[mcp_servers.ash]\ncommand = "node"\nenabled = false\n` });
+  assert.equal(ensureAshMcp(second.dir, "codex", second.host).configured, false);
+  assert.equal(existsSync(join(second.dir, "config.toml")), false, "原来没有的文件不许留下半截");
+
+  // 对照:宿主那条是开着的 → 补写、验过、如实报已接好。
+  const third = bench({ codex: `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n` });
+  writeFileSync(join(third.dir, "config.toml"), before, "utf8");
+  assert.equal(ensureAshMcp(third.dir, "codex", third.host).configured, true, "开着的照样补得上");
+  assert.match(readFileSync(join(third.dir, "config.toml"), "utf8"), /\[mcp_servers\.ash\]/);
+}
+
 // Windows 删不掉还开着的库文件：退出时那句 rmSync(stage) 会撞 EBUSY，断言全过也判红。
 await releaseTmpDb();
-console.log("test-user-cli-mcp: ✅ 17 组全过");
+console.log("test-user-cli-mcp: ✅ 18 组全过");

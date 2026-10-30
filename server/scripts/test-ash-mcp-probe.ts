@@ -17,8 +17,11 @@
 //   8. **下刀谎报成功**：`killAll` 的返回值表达不了「整圈都终止了」，核销只认读数
 //      （第 2 轮 B1）
 //   9. 结构约束（在 `ash-mcp-probe-shape.ts`，由这里调用）
-//  10. 读数与下刀走异步版：探测期间事件循环不被同步 PowerShell 堵住（新链第 1 轮第 4 条）
+//  10. 读数与下刀走异步版：探测期间事件循环不被同步 PowerShell 堵住（新链第 1 轮第 4 条，
+//      在 `ash-mcp-probe-shape.ts`）
 //  11. 「没启动」不等于「问不出来」；门闩目录有启动扫地兜底（新链第 2 轮第 1、4 条）
+//  12. **按裸进程号下刀必须先确认这个号还属于这次运行**：根进程被回收之后那个号可能
+//      已经归别人，补刀就打到无辜进程上（本轮审查 F2）
 //
 // 跑：npm -w server run test:ash-mcp-probe
 import assert from "node:assert/strict";
@@ -35,7 +38,7 @@ process.env.HARNESS_DB = process.env.ASH_DB;
 const pause = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
 
 try {
-  const { probeCli, unitResidue } = await import("../src/ash-mcp-probe.js");
+  const { probeCli, unitResidue, killOwnTree } = await import("../src/ash-mcp-probe.js");
   const { resolveLaunch } = await import("../src/executors/bin-resolve.js");
   if (!resolveLaunch("node", [])) throw new Error("这台机器上连 node 都解析不到？");
   type Outcome = Awaited<ReturnType<typeof probeCli>>;
@@ -605,69 +608,16 @@ try {
       `收不干净必须如实喊出来，否则残留连线索都不剩：${warned.join(" | ")}`);
   }
 
-  // ── 10. 读数与下刀走异步版：探测期间事件循环不卡 ───────────────────────────
-  // 新链第 1 轮审查第 4 条：Windows 上 Job 的每次读数、每一刀都要起 PowerShell（实测 1~1.7
-  // 秒），探测走同步版时派审请求处理期间整个 server 卡住。这里拿一台替身把那个形状摆出来：
-  // 同步版**真的**同步堵 900 ms（跟 PowerShell 一样占住线程），异步版同样耗时但不占线程。
-  // 探测期间挂一个 50 ms 的心跳，断言最大间隔远小于 900 —— 退回同步版这条当场就红。
-  // 正常结束（读数）和超时（下刀 + 复核）两条路各走一遍。不分平台：验的是探测层自己的选择。
-  {
-    const BLOCK_MS = 900;
-    const calls = { syncRead: 0, syncKill: 0, asyncRead: 0, asyncKill: 0 };
-    const hog = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
-    const slowStand = (token: string) => ({
-      id: token,
-      enroll: () => true,
-      preExecEnv: () => null,
-      read: () => { calls.syncRead++; hog(BLOCK_MS); return { kind: "members", members: [], coverage: "since-enroll" }; },
-      readAsync: async () => {
-        calls.asyncRead++;
-        await pause(BLOCK_MS);
-        return { kind: "members" as const, members: [], coverage: "since-enroll" as const };
-      },
-      killAll: () => { calls.syncKill++; hog(BLOCK_MS); return 1; },
-      killAllAsync: async () => { calls.asyncKill++; await pause(BLOCK_MS); return 1; },
-      dispose: () => {},
-    }) as unknown as NonNullable<ReturnType<NonNullable<Parameters<typeof probeCli>[5]>>>;
-
-    const dir = join(stage, "slow-cli");
-    mkdirSync(dir, { recursive: true });
-    const hang = join(dir, "hang.mjs");
-    writeFileSync(hang, "setInterval(() => {}, 1000);\n");
-    const shim = (posix: string, windows: string): void => {
-      if (process.platform === "win32") writeFileSync(join(dir, "codex.cmd"), windows);
-      else { const f = join(dir, "codex"); writeFileSync(f, posix); chmodSync(f, 0o755); }
-    };
-    const pathWas = process.env.PATH;
-    process.env.PATH = `${dir}${delimiter}${pathWas ?? ""}`;
-    /** 跑一次探测，返回那段时间里心跳的最大间隔。 */
-    const gapDuring = async (timeoutMs: number): Promise<number> => {
-      let last = Date.now();
-      let worst = 0;
-      const tick = setInterval(() => { const t = Date.now(); worst = Math.max(worst, t - last); last = t; }, 50);
-      try {
-        await probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, timeoutMs, slowStand);
-        await pause(BLOCK_MS * 3);                     // 正常结束那条的收尾在后台跑，等它走完
-      } finally { clearInterval(tick); }
-      return worst;
-    };
-    try {
-      shim("#!/bin/sh\nprintf '[]'\n", "@echo off\r\n<nul set /p=[]\r\nexit /b 0\r\n");
-      const ended = await gapDuring(8_000);
-      shim(`#!/bin/sh\nexec "${process.execPath}" "${hang}"\n`,
-        `@echo off\r\n"${process.execPath}" "${hang}"\r\n`);
-      const timedOut = await gapDuring(1_500);
-      assert.equal(calls.syncRead + calls.syncKill, 0,
-        `有异步版时一次都不准走同步版（${JSON.stringify(calls)}）`);
-      assert.ok(calls.asyncRead > 0 && calls.asyncKill > 0, `两条路都该走到：${JSON.stringify(calls)}`);
-      assert.ok(ended < BLOCK_MS / 2 && timedOut < BLOCK_MS / 2,
-        `探测期间事件循环不准被读数/下刀堵住：正常结束最大间隔 ${ended} ms、超时 ${timedOut} ms`);
-    } finally { process.env.PATH = pathWas; }
-  }
 
   // ── 9. 结构约束：Windows 那条路本机跑不出来，用不变量兜住（在 ash-mcp-probe-shape.ts）──
-  const { checkProbeStructure, checkNotStarted, checkGateSweep } = await import("./ash-mcp-probe-shape.js");
+  const { checkProbeStructure, checkNotStarted, checkGateSweep, checkKillIdentity, checkAsyncUnitCalls } =
+    await import("./ash-mcp-probe-shape.js");
   checkProbeStructure();
+  // ── 12. 按号下刀的身份关（本轮 F2，在 ash-mcp-probe-shape.ts）──────────────
+  await checkKillIdentity(killOwnTree);
+
+  // ── 10. 读数与下刀走异步版（在 ash-mcp-probe-shape.ts）─────────────────────
+  await checkAsyncUnitCalls(probeCli);
 
   // ── 11. 「没启动」与「问不出来」分开（新链第 2 轮第 1、4 条，在 ash-mcp-probe-shape.ts）──
   await checkNotStarted(probeCli);
