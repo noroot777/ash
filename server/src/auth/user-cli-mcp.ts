@@ -315,6 +315,10 @@ function codexReads(dir: string): { state: "ok" | "bad" | "unasked"; why: string
     windowsHide: true,
     timeout: CODEX_READ_MS,
     env: { ...process.env, CODEX_HOME: dir },
+    // Windows 上 `codex` 是 `.cmd` 垫片,`resolveLaunch` 给的是 `cmd.exe /d /s /c "..."`
+    // 那一套 —— **这个开关必须跟着传**,不传 Node 会把那串参数再引号化一遍,cmd 找不到
+    // 命令、退 1(Windows 真机上就是这么红的:STDERR 回了一整串带引号的命令行)。
+    ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
   });
   if (res.error || res.signal) {
     return { state: "unasked", why: `codex mcp list 没跑成（${res.error?.message ?? res.signal}）` };
