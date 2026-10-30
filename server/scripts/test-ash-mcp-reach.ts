@@ -362,7 +362,10 @@ try {
     writeCodex('model = "x"\n');
     const truncated = await ashMcpReachability({ agentType: "codex", cwdCandidates: many });
     assert.equal(truncated.reachable, false, "问不全 + 配置里确定没有 → 拦");
-    assert.match(truncated.problem ?? "", /读配置文件得出[\s\S]*只问了前 8 个/, "文案写明证据来源和为什么没问全");
+    // 慢机器(Windows 上每问一次假 CLI 要 1~2 秒)可能先撞上 20 秒总时限、问不到第 8 个 —— 那是
+    // 同一个出口(退文件档、照样拦),只是没问全的原因不同。两种都认,撞时限时如实说一声。
+    assert.match(truncated.problem ?? "", /读配置文件得出[\s\S]*(?:只问了前 8 个|时限用完)/, "文案写明证据来源和为什么没问全");
+    if (/时限用完/.test(truncated.problem ?? "")) console.log("⚠ 这台机器 8 问没在时限内问完：截断那条退成了时限那条（同一个出口）");
 
     // CLI 给了答案、但看不懂(以及超时、被打断、预算用完,同一条路):同样先过配置文件那一档。
     fake("这不是 JSON");
