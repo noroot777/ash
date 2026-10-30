@@ -13,9 +13,15 @@
 //     (Windows 没有这套语义:ppid 字段在父进程死后仍然保留,链还在。)
 //   · **进程组**:setsid 会换组,同样断;而且组号会被复用,所以**只在组长本身证明得出是我们的**
 //     时候才认(见 `active`)。
-//   · **边界描述符**(POSIX):每个 spawn 出来的进程都继承一个指向 `<执行域>/boundary` 的
-//     fd。`lsof` 读的是内核里「谁打开着这个文件」,不是文本 —— 外面的进程**拿不到**我们这个
-//     fd,所以这条线索既伪造不了,也不随 exec / setsid / 重新挂父而丢。
+//   · **边界描述符**(POSIX):每个 spawn 出来的进程都继承一个指向本域边界 inode 的 fd。
+//     那个 inode **一建出来就 unlink 掉**,于是它在文件系统里没有名字 —— 想持有它只有一条路:
+//     从本域继承(或者由本域经 unix socket 递过去,而这一层不做这件事)。判据是内核里的
+//     (设备号, inode 号) 这对事实,不是文本,所以既伪造不了,也不随 exec / setsid / 重新挂父而丢。
+//
+//     **为什么非得 unlink**(第 2 轮审查第 4 条):上一版那个 boundary 是个普通的具名文件,
+//     于是「谁打开着同一个路径」被当成了来源证明 —— 同用户的域外程序(看一眼这次检查的临时
+//     文件的诊断工具就够了)自己 open 一下就会被 `owned.add` 收养,随后被 `stop()` 终止。
+//     「继承了受监管资源」和「碰巧打开同一个文件」是两件事,而没有名字的 inode 只剩前一种。
 //
 // 上一版的第四条线索是**环境变量继承**(`ASH_TEST_PROCESS_SCOPE`),两处都塌了(第 4 轮审查
 // F1/F2,都有实测):
@@ -29,12 +35,29 @@
 // `ps` 的输出再接环境块,实测前缀关系成立,于是两次快照一减就把环境段切出来了);而「不随
 // exec 丢」这件事交给边界描述符。
 //
-// ## 可证明的执行模型:它的边界写在这儿,不靠「再补一条会消失的线索」
+// ## 支持形态,以及这一层到底证明了什么
 //
-// 一个后代要想彻底跑出这一层的视野,得**同时**做到:关掉继承来的边界 fd、清空环境、脱离
-// 父子链和进程组。前三条里任意一条没做到,它就还在 `active()` 里。而真要全做到了,这一层
-// 答的就不是「清场了」而是「证明不了」—— `survey()` 的 `ok:false` 走的是失败路径,`stop()`
-// 到最后仍有活的就报遗留。**扫不到不算停了**这条不变量没有例外。
+// **先把话说准**:成功返回时这一层证明的是
+//
+//   「本域创建的进程里,**可观测**的那些都已经退出 —— 可观测 = 登记 / 父子链 / 进程组 /
+//    环境段 / 边界 inode 这五条线索里还命中任意一条」,
+//
+// 不是「这一次绝对没有任何后代活着」。差别在于:一个后代可以**主动**把五条线索一条一条丢掉
+// (关掉边界 fd、`execve(…, {})` 清环境、setsid 脱组、原父退出断链)。四条做完它就不在任何
+// 一次枚举里了,而从普通 Node 进程能用的 POSIX 接口里**没有一个内核级的容器**(subreaper /
+// cgroup / pidns / job object 都够不着),所以这种形态下「它不存在」这件事**谁也证明不出来**
+// —— 既然证明不出来,就不许写成「清场成功」这四个字(第 2 轮审查第 1 条)。
+//
+// 于是这一层的规矩是:**限制支持形态 + 该失败的地方明确失败**。
+//
+//   · **不支持**主动丢弃监管资源的 daemon 形态(fork → setsid → 清环境 → 关掉继承的 fd)。
+//     这不是「不许这么写测试」,而是「这么写的话本层答的只能是证明不了」。
+//   · 查不动(ps/CIM/lsof/proc 任一条答不出来)⇒ `survey()` 走 `ok:false` 失败路径,
+//     绝不退化成「没有活的」。**扫不到不算停了**这条不变量没有例外。
+//   · **丢边界这件事只要落在我们看得见的地方,就当场失败**:我们自己 spawn 的那一层,fd 是
+//     本层亲手交到它手里的 —— 它还活着却不再持有,就是它自己关掉了,它的后代本层从此监管不到。
+//     这时 `survey()` 同样走失败路径并点名那几个号码,而不是接着往「都停了」上走
+//     (见 `#escapees`)。孙子辈再往下关掉的那一种落在上面那条「不支持」里,只能靠形态约束。
 //
 // ## 实例身份:pid 不是身份,(pid, 出生时刻) 才是
 //
@@ -42,7 +65,7 @@
 // 是**另一个进程**,既不认它是我们的,更不会去杀它。终止前还要再核一次(POSIX 用
 // `ps -p` 重查,Windows 走句柄 + GetProcessTimes,见 stop)。
 import { spawn, spawnSync, execFile } from "node:child_process";
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,11 +86,25 @@ const CLOCK_SLACK_MS = 1_000;
 const fileTime = (milliseconds) => (BigInt(Math.floor(milliseconds)) + 11_644_473_600_000n) * 10_000n;
 
 /**
- * 边界描述符那个文件的名字。每个 spawn 出来的进程都继承一个指向它的 fd —— 「谁打开着这个
- * 文件」是内核里的事实,外面的进程拿不到我们这个 fd,所以它既伪造不了也不随 exec 丢
- * (见文件头)。
+ * 边界 inode 的三个文件名。
+ *  · `BOUNDARY` —— 建它的时候短暂用一下这个名字,`open` 完立刻 unlink,之后这个名字就不存在了
+ *    (见文件头:有名字 = 域外程序自己 open 一下就能被收养);
+ *  · `BOUNDARY_ID` —— 那个 inode 的身份 (dev, ino)。清理助手是**另一个进程**、而 inode 已经
+ *    没有名字可打开,所以它只能靠这份身份去认持有者;
+ *  · `CREATOR` —— 创建者自己的号码。它一直握着那个 fd(不握就没人钉住这个 inode,号码一被
+ *    回收,别人家的未链接 inode 就可能撞上同一个号),所以它必然出现在持有者里 —— 清理助手
+ *    得认得出「这是创建者,不是后代」,否则会把它当域内进程一刀 SIGTERM 掉(本轮实测过这条:
+ *    `test:restart` 整套 rc=143)。
  */
+/**
+ * 登记文件名的形状:`<被登记 pid>.<发布者 pid>.json`(协议见 `publishRecord` 与
+ * test-process-register.cjs)。执行域目录里还有别的东西,所以读登记只认这个形状。
+ */
+const REGISTRATION = /^\d+\.\d+\.json$/;
+
 const BOUNDARY = "boundary";
+const BOUNDARY_ID = "boundary.id";
+const CREATOR = "creator.id";
 
 async function command(file, args, options = {}) {
   const { timeout = 4_000, env } = options;
@@ -79,37 +116,59 @@ async function command(file, args, options = {}) {
 }
 
 /**
- * 还有谁打开着那个边界文件 —— 返回 pid 数组(不含本进程自己:读端是我们开的)。
+ * 还有谁持有那个边界 inode —— 返回 pid 的 Set。`identity` 是 `{ dev, ino }`,`excluded` 是
+ * 不算在内的号码(本进程、以及本域的创建者:它一直握着 fd 用来钉住这个 inode)。
  *
- * **查不动一律抛**,绝不返回空数组:这一层最要紧的不变量是「扫不到 ≠ 停了」,把一次查询失败
+ * **按 (dev, ino) 认,不按路径认**(第 2 轮审查第 4 条):那个 inode 已经 unlink 了,压根没有
+ * 路径可以 open —— 这正是「继承了受监管资源」和「碰巧打开同一个文件」分得开的地方。两个平台
+ * 都顺带要求 `nlink === 0`(未链接):一个还有名字的 inode 不可能是我们这个。
+ *
+ * **查不动一律抛**,绝不返回空集:这一层最要紧的不变量是「扫不到 ≠ 停了」,把一次查询失败
  * 说成「没有持有者」正是那个事故形状的根子。调用方经 `survey()` 把它走成失败路径。
  */
-async function boundaryHolders(path) {
-  // Linux 不必起外部进程:/proc 直接读得到每个 pid 开着哪些 fd。
+async function boundaryHolders(identity, excluded) {
+  const holders = new Set();
+  // Linux 不必起外部进程:/proc 直接读得到每个 pid 开着哪些 fd。stat 那个 fd 入口会跟到真正的
+  // 文件上(readlink 只会给出 "…/boundary (deleted)" 这种文本,unlink 之后不能再拿它比对)。
   if (existsSync("/proc/self/fd")) {
-    const holders = [];
     for (const name of readdirSync("/proc")) {
       const pid = Number(name);
-      if (!Number.isInteger(pid) || pid === process.pid) continue;
+      if (!Number.isInteger(pid) || excluded.has(pid)) continue;
       let entries;
       try { entries = readdirSync(`/proc/${pid}/fd`); } catch { continue; } // 进程没了 / 不是我们的
       for (const entry of entries) {
-        try { if (readlinkSync(`/proc/${pid}/fd/${entry}`) === path) { holders.push(pid); break; } }
-        catch { /* fd 刚好关了 */ }
+        try {
+          const stats = statSync(`/proc/${pid}/fd/${entry}`);
+          if (stats.dev === identity.dev && stats.ino === identity.ino && stats.nlink === 0) {
+            holders.add(pid);
+            break;
+          }
+        } catch { /* fd 刚好关了 */ }
       }
     }
     return holders;
   }
+  // macOS:`+L1` 只列「链接数 < 1」的打开文件,也就是未链接的那些 —— 本域这个 inode 必在其中,
+  // 而全系统的具名文件一条都不进来。`-F pfDi` 的输出是逐行的字段:`p` 换 pid、`D` 设备号(十六
+  // 进制)、`i` inode 号。
   let output;
-  try { output = await command("lsof", ["-w", "-t", "--", path], { timeout: 10_000 }); }
+  try { output = await command("lsof", ["+L1", "-F", "pfDi"], { timeout: 10_000 }); }
   catch (error) {
-    // lsof 查一个没人打开的文件时退 1 且不吐任何东西 —— 那是「没有持有者」这个**答案**,
-    // 不是查询失败。其余任何情况(找不到 lsof、超时、有 stderr)都算答不出来,往上抛。
-    if (error.code === 1 && !error.stdout?.trim() && !error.stderr?.trim()) return [];
+    // 全系统一个未链接的打开文件都没有时,lsof 退 1 且不吐东西 —— 那是「没有持有者」这个
+    // **答案**,不是查询失败。其余任何情况(找不到 lsof、超时、有 stderr)都算答不出来,往上抛。
+    if (error.code === 1 && !error.stdout?.trim() && !error.stderr?.trim()) return holders;
     throw error;
   }
-  return output.split("\n").map((line) => Number(line.trim()))
-    .filter((pid) => Number.isInteger(pid) && pid !== process.pid);
+  let pid = null;
+  let device = null;
+  for (const line of output.split("\n")) {
+    const value = line.slice(1).trim();
+    if (line.startsWith("p")) { pid = Number(value); device = null; continue; }
+    if (line.startsWith("D")) { device = Number(value); continue; } // 0x… 形式,Number 认得
+    if (!line.startsWith("i") || pid === null || excluded.has(pid)) continue;
+    if (device === identity.dev && Number(value) === identity.ino) holders.add(pid);
+  }
+  return holders;
 }
 
 const powerShell = (script) =>
@@ -211,12 +270,16 @@ export class TestProcessScope {
     this.children = [];
     /** 终止时**没能核对实例身份**的那些号码 —— 宁可报出来,也不照着旧号码乱杀(F2)。 */
     this.unverified = [];
-    // 边界描述符那个文件(见文件头)。POSIX 专有:Windows 那边 ppid 在父进程死后仍然保留,
-    // 父子链本身就是完整的,不需要这一条;那边也没有 lsof / proc 这种「谁开着这个文件」的查法。
-    // 清理助手拿已有目录重建 scope 时这个文件已经在了,所以用追加方式确保存在。
-    this.boundaryPath = windows ? null : join(this.directory, BOUNDARY);
-    if (this.boundaryPath) {
-      try { writeFileSync(this.boundaryPath, "", { flag: "a" }); }
+    // 边界 inode(见文件头)。POSIX 专有:Windows 那边 ppid 在父进程死后仍然保留,父子链本身
+    // 就是完整的,不需要这一条;那边也没有「谁持有这个 inode」的查法。
+    /** 创建者手里那个 fd:**它钉住这个 inode**,号码不会被回收,所以身份不会被别人撞上。 */
+    this.boundary = null;
+    /** `{ dev, ino }` —— 认持有者就靠这对号码(那个 inode 已经没有名字了)。 */
+    this.boundaryId = null;
+    /** 哪个进程是创建者(它必然持有边界,得认得出来,不能当成后代去杀)。 */
+    this.creator = process.pid;
+    if (!windows) {
+      try { this.#prepareBoundary(); }
       catch (error) {
         if (mine) rmSync(this.directory, { recursive: true, force: true });
         throw error;
@@ -225,29 +288,61 @@ export class TestProcessScope {
     scopes.add(this);
   }
 
+  /**
+   * 准备边界 inode。两种入口:
+   *  · **新建域** —— 建出来、open、**立刻 unlink**。从这一刻起它在文件系统里没有名字,想持有
+   *    只能从本域继承(第 2 轮审查第 4 条:具名文件会被「碰巧打开它的域外程序」冒领)。身份
+   *    (dev, ino) 和创建者号码各写一份,给另一个进程用。
+   *  · **清理助手拿已有目录重建** —— 那个 inode 早就没名字了,它只能读那份身份;而创建者此刻
+   *    还活着并握着 fd(助手是从它的 exit 钩子里 spawnSync 出来的),所以 inode 不会被回收、
+   *    号码也不会被别的未链接 inode 撞上。
+   *
+   * 读到的身份坏了(JSON 残缺)就**抛**:这一层宁可明确失败,也不要悄悄少一条线索(文件头)。
+   */
+  #prepareBoundary() {
+    const idPath = join(this.directory, BOUNDARY_ID);
+    const existing = readFileSyncSafe(idPath);
+    if (existing) {
+      const { dev, ino } = JSON.parse(existing);
+      this.boundaryId = { dev, ino };
+      const creator = readFileSyncSafe(join(this.directory, CREATOR));
+      if (creator) this.creator = JSON.parse(creator).pid;
+      return;
+    }
+    const path = join(this.directory, BOUNDARY);
+    writeFileSync(path, "");
+    this.boundary = openSync(path, "r");
+    unlinkSync(path);
+    const stats = fstatSync(this.boundary);
+    this.boundaryId = { dev: stats.dev, ino: stats.ino };
+    writeFileSync(idPath, JSON.stringify(this.boundaryId));
+    writeFileSync(join(this.directory, CREATOR), JSON.stringify({ pid: process.pid, at: Date.now() }));
+  }
+
+  /** 认持有者时不算在内的那两个号码(本进程、创建者)。 */
+  #outsiders() {
+    return new Set([process.pid, this.creator]);
+  }
+
   spawn(commandName, args, options = {}) {
     const environment = options.env ?? process.env;
     // 边界描述符挂在 fd 3 上。它跟着 fork、exec、setsid、重新挂父一路传下去,而
     // `execve(…, {})` 清掉的只是环境、带不走描述符 —— 这正是环境那条线索塌掉的那一种
     // (文件头)。调用方自己的 stdio 原样保留,只在后面续一位。
     const stdio = options.stdio ?? ["pipe", "pipe", "pipe"];
-    // **开了就马上关**:`spawn` 在返回之前已经把它 dup 进子进程了,所以这一侧不必留着 ——
-    // 留着的话「谁开着这个文件」里就永远有创建者自己,而清理助手是**另一个进程**、只排除得掉
-    // 自己那个 pid,于是它会把创建者认成域内进程并一刀 SIGTERM 掉(本轮实测 `test:restart`
-    // 整套 rc=143)。只在 spawn 那一瞬开着,持有者集合里就只剩真正的后代。
-    const boundary = this.boundaryPath === null ? null : openSync(this.boundaryPath, "r");
-    let child;
-    try {
-      child = spawn(commandName, args, {
-        ...options, detached: !windows, windowsHide: true,
-        stdio: boundary === null ? stdio
-          : [...(Array.isArray(stdio) ? stdio : [stdio, stdio, stdio]), boundary],
-        env: { ...environment, ASH_TEST_PROCESS_SCOPE: this.directory,
-          NODE_OPTIONS: `--require ${JSON.stringify(registerPath)} ${environment.NODE_OPTIONS ?? ""}`.trim() },
-      });
-    } finally {
-      if (boundary !== null) { try { closeSync(boundary); } catch { /* 已经关了 */ } }
-    }
+    // **这个 fd 全程留着**:它钉住那个 unlink 掉的 inode(号码不被回收 ⇒ 身份不会被别人撞上)。
+    // 于是创建者自己必然在持有者里 —— 上一版正是为了躲开这件事才「开了就马上关」,因为清理助手
+    // 是**另一个进程**、只排除得掉自己那个号码,会把创建者当域内进程一刀 SIGTERM 掉(实测
+    // `test:restart` 整套 rc=143)。现在创建者的号码记在 CREATOR 里,按身份排除,不靠「谁都
+    // 别持有」这种巧合(见 `#outsiders`)。
+    const boundary = this.boundary;
+    const child = spawn(commandName, args, {
+      ...options, detached: !windows, windowsHide: true,
+      stdio: boundary === null ? stdio
+        : [...(Array.isArray(stdio) ? stdio : [stdio, stdio, stdio]), boundary],
+      env: { ...environment, ASH_TEST_PROCESS_SCOPE: this.directory,
+        NODE_OPTIONS: `--require ${JSON.stringify(registerPath)} ${environment.NODE_OPTIONS ?? ""}`.trim() },
+    });
     child.on("error", () => {});
     this.children.push(child);
     if (child.pid) {
@@ -265,7 +360,11 @@ export class TestProcessScope {
   records() {
     const byPid = new Map();
     for (const name of readdirSync(this.directory)) {
-      if (!name.endsWith(".json")) continue;
+      // **只认登记协议那个形状**(`<被登记 pid>.<发布者 pid>.json`),不是「目录里所有 .json」。
+      // 本轮实测过这条:边界身份和创建者号码原先也写成 `.json`,于是 `creator.json` 被读成一条
+      // 「pid = 创建者」的登记 —— 创建者把自己认成域内进程,`stop()` 当场把自己 SIGTERM 掉
+      // (整套测试 rc=143)。执行域目录里以后还会有别的元数据,判据按协议形状写才关得住这个口。
+      if (!REGISTRATION.test(name)) continue;
       let parsed;
       // 读到一半的文件不该让整轮扫描崩掉(发布是 rename,理论上看不到半截,
       // 但这层是清场的最后一道,宁可跳过一条也不要抛)。
@@ -285,7 +384,11 @@ export class TestProcessScope {
     return row.born > notAfter || row.born < this.started - CLOCK_SLACK_MS;
   }
 
-  async active() {
+  /**
+   * 一次完整扫描:域内**还活着**的那些行,外加**形态违规**的那几个号码(见 `#escapees`)。
+   * 两样一起返回而不是分两次查:持有者那一问在 macOS 上要起一个 lsof,不该为同一个结论问两遍。
+   */
+  async inspect() {
     const rows = await processRows(this.directory);
     const records = this.records();
     const owned = new Set();
@@ -295,10 +398,12 @@ export class TestProcessScope {
       if (!row || this.#impostor(row, record.at)) continue;
       owned.add(record.pid);
     }
-    // **边界描述符**:开着我们那个文件的,一定是我们这一次创建的 —— 外面的进程拿不到这个
-    // fd(文件头)。查不动会抛,由 `survey()` 走失败路径,绝不退化成「没有活的」。
-    if (this.boundaryPath !== null) {
-      for (const pid of await boundaryHolders(this.boundaryPath)) {
+    // **边界 inode**:持有它的一定是我们这一次创建的 —— 它没有名字,外面的进程开不出这个 fd
+    // (文件头)。查不动会抛,由 `survey()` 走失败路径,绝不退化成「没有活的」。
+    let holders = null;
+    if (this.boundaryId !== null) {
+      holders = await boundaryHolders(this.boundaryId, this.#outsiders());
+      for (const pid of holders) {
         const row = rows.find((entry) => entry.pid === pid);
         if (row && !this.#impostor(row, Date.now())) owned.add(pid);
       }
@@ -340,16 +445,58 @@ export class TestProcessScope {
         ancestors.set(row.pid, row.born); owned.add(row.pid); changed = true;
       }
     }
-    return rows.filter((row) => owned.has(row.pid));
+    return {
+      rows: rows.filter((row) => owned.has(row.pid)),
+      escaped: holders === null ? [] : await this.#escapees(rows, holders),
+    };
+  }
+
+  async active() {
+    return (await this.inspect()).rows;
   }
 
   /**
-   * 这一轮扫描**能不能作数**。扫描本身失败(ps/CIM 查不动)时绝不能当成「没有活的」——
-   * 那正是「没扫描到」被当成清场的那一步。调用方据此决定是报失败还是接着等。
+   * **我们亲手交到它手里的那个边界,它丢了**。那个 fd 是本层塞进它 stdio 的,所以「它还活着、
+   * 却不再持有」只有一种解释:它自己关掉了 —— 而从这一刻起,它再 fork 出来的后代本层一条线索
+   * 都认不出来(文件头「支持形态」)。这时候要的是**明确失败**,不是接着往「都停了」上走。
+   *
+   * **只看自己 spawn 的那一层**。再往下的那些,fd 要么由被改过的 `child_process.spawn` 继续传
+   * (见 test-process-register.cjs),要么是原生 fork/exec 自然继承 —— 但 `execFile`/`fork`/
+   * `spawnSync` 这些入口走的是 Node 内部的那个引用、改不到,所以「孙子辈也必须持有」这条**不**
+   * 成立,拿它当判据会把一堆正当形态误报成违规。孙子辈自己关掉的那一种这一层确实看不见,靠
+   * 形态约束,不在这儿假装检测得到。
+   *
+   * 会**复核一次**:取进程表和取持有者之间它可能正好在退出(内核在进程收尾时把 fd 全关掉),
+   * 那种「还活着」只是还没被收尸。所以要求再查一遍仍然不持有、而且实例身份还在。
+   */
+  async #escapees(rows, holders) {
+    const suspects = this.children.filter((child) => child.pid && child.exitCode === null
+      && child.signalCode === null && !holders.has(child.pid)
+      && rows.some((row) => row.pid === child.pid));
+    if (!suspects.length) return [];
+    const again = await boundaryHolders(this.boundaryId, this.#outsiders());
+    const confirmed = [];
+    for (const child of suspects) {
+      if (again.has(child.pid)) continue;
+      const row = rows.find((entry) => entry.pid === child.pid);
+      if (row && await this.#stillSame(row)) confirmed.push(child.pid);
+    }
+    return confirmed;
+  }
+
+  /**
+   * 这一轮扫描**能不能作数**。两种都不许当成「没有活的」:
+   *  · 扫描本身失败(ps/CIM/lsof/proc 查不动)—— 那正是「没扫描到」被当成清场的那一步;
+   *  · **形态违规**(有进程把本层交给它的边界丢了)—— 它的后代本层监管不到,所以这一轮的
+   *    「没有活的」证明不了任何事(文件头「支持形态」)。
+   * 调用方据此决定是报失败还是接着等。
    */
   async survey() {
-    try { return { ok: true, rows: await this.active() }; }
-    catch (error) { return { ok: false, rows: [], error }; }
+    try {
+      const { rows, escaped } = await this.inspect();
+      if (!escaped.length) return { ok: true, rows };
+      return { ok: false, rows, error: new Error(`这些进程已经不持有本域的边界描述符，它们的后代本层监管不到（不支持的形态，见 scripts/test-process-scope.mjs 文件头）: ${escaped.join(",")}`) };
+    } catch (error) { return { ok: false, rows: [], error }; }
   }
 
   /** 终止前再核一次实例身份:号码还在、出生时刻一致,才是当初那一个。 */
@@ -460,8 +607,14 @@ export class TestProcessScope {
       await terminate(active, true);
       await delay(50);
     }
-    active = await attempt(() => this.active());
+    // 最后这一次用 `inspect`:除了「还有没有活的」,**形态违规也要落在清理结论里** —— 一个把
+    // 边界丢掉的进程若还活着,它的后代本层监管不到,这时候的「扫不到」证明不了清场(文件头)。
+    const final = await attempt(() => this.inspect());
+    active = Array.isArray(final) ? final : final.rows;
     if (active.length) errors.push(new Error(`测试进程未清场: ${active.map((row) => row.pid).join(",")}`));
+    if (!Array.isArray(final) && final.escaped.length) {
+      errors.push(new Error(`这些进程已经不持有本域的边界描述符，它们的后代本层监管不到: ${final.escaped.join(",")}`));
+    }
     if (this.unverified.length) {
       errors.push(new Error(`无法核验实例身份,未终止: ${[...new Set(this.unverified)].join(",")}`));
     }
@@ -469,6 +622,12 @@ export class TestProcessScope {
   }
 
   remove() {
+    // 边界那个 fd 关在这儿:它一关,那个未链接的 inode 才真正释放 —— 在此之前它一直钉着,
+    // 身份不会被别的未链接 inode 撞上(见 `#prepareBoundary`)。
+    if (this.boundary !== null) {
+      try { closeSync(this.boundary); } catch { /* 已经关了 */ }
+      this.boundary = null;
+    }
     rmSync(this.directory, { recursive: true, force: true });
     for (const scope of scopes) if (scope.directory === this.directory) scopes.delete(scope);
   }

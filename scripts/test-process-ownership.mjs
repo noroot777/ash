@@ -138,6 +138,70 @@ if (windows) {
   console.log("✓ 所有权:标记只在 argv 里的外部进程既不认领也不终止");
 }
 
+// ── ②d 所有权:**碰巧打开同一个文件 ≠ 继承了受监管资源** ──────────────────────────
+// 第 2 轮审查第 4 条。上一版的 boundary 是个普通的具名文件,判据是「谁打开着这个路径」——
+// 于是同用户的域外程序(看一眼这次检查的临时文件的诊断工具就够了)自己 open 一下就被收养,
+// 随后被 `stop()` 终止。现在那个 inode 建出来就 unlink 掉:**没有名字可打开**,持有它只有
+// 「从本域继承」一条路。
+if (windows) {
+  console.log("- 跳过边界冒领一节(POSIX 专属:Windows 侧走句柄 + 父子链)");
+} else {
+  const scope = new TestProcessScope();
+  const boundaryPath = join(scope.directory, "boundary");
+  assert.ok(!existsSync(boundaryPath),
+    "边界 inode 不许留下名字 —— 有名字就等于把「冒领它」的门开着");
+  const stage = mkdtempSync(join(tmpdir(), "ash-probe-"));
+  const grabber = join(stage, "grab.mjs");
+  // 域外程序:**按名字**去抓那个边界,抓到就一直握着。它既不是本域的后代,也没有本域的环境。
+  writeFileSync(grabber, `
+import { openSync } from "node:fs";
+let held = null;
+try { held = openSync(process.argv[2], "r"); } catch {}
+console.log(JSON.stringify({ opened: held !== null }));
+setTimeout(() => {}, 5000);
+`);
+  const outsider = spawn(process.execPath, [grabber, boundaryPath], { stdio: ["ignore", "pipe", "ignore"] });
+  let said = "";
+  outsider.stdout.on("data", (chunk) => { said += chunk; });
+  await delay(500);
+  assert.deepEqual(JSON.parse(said.trim() || "{}"), { opened: false },
+    "那个 inode 已经没有名字,外面压根开不出来");
+  const owned = await scope.active();
+  assert.ok(!owned.some((row) => row.pid === outsider.pid),
+    "打开同一个文件只说明它开了个文件,不是来源证明,不许认领");
+  await scope.stop();
+  scope.remove();
+  assert.ok(alive(outsider.pid), "没认领的进程更不许被杀 —— 那就是「结束一次检查时把别人的程序也关掉」");
+  outsider.kill("SIGKILL");
+  rmSync(stage, { recursive: true, force: true });
+  console.log("✓ 所有权:边界 inode 没有名字,按路径冒领它的域外程序既不认领也不终止");
+}
+
+// ── ②e 退出证明:**把本层交给它的边界丢掉 ⇒ 明确失败,不许走成「都停了」** ──────────
+// 第 2 轮审查第 1 条。那个 fd 是执行域亲手塞进它 stdio 的,所以「它还活着、却不再持有」只有
+// 一种解释:它自己关掉了 —— 从这一刻起它再 fork 出来的后代本层一条线索都认不出来。这种形态
+// 不在支持范围里(文件头),判据要当场点名失败,而不是接着往「扫不到 = 清场了」上走。
+if (windows) {
+  console.log("- 跳过丢边界一节(POSIX 专属)");
+} else {
+  const scope = new TestProcessScope();
+  // `exec 3>&-` 把继承来的那一位关掉,然后继续活着。
+  const child = scope.spawn("/bin/sh", ["-c", "exec 3>&-; sleep 5"], { stdio: "ignore" });
+  await delay(500);
+  const survey = await scope.survey();
+  assert.equal(survey.ok, false, "有进程把边界丢了,这一轮扫描证明不了任何事,不许作数");
+  assert.match(String(survey.error?.message), new RegExp(String(child.pid)),
+    `失败要点名是哪个号码,实际:${survey.error?.message}`);
+  assert.match(String(survey.error?.message), /边界描述符/);
+  // 它仍然是我们的(登记在),所以照旧要被停掉 —— 「证明不了」说的是它的**后代**。
+  let failure;
+  try { await scope.stop(); } catch (error) { failure = error; }
+  scope.remove();
+  assert.ok(!alive(child.pid), `认领得出的那一个照旧要停掉(pid=${child.pid})`);
+  console.log("✓ 退出证明:丢掉边界的进程当场点名失败,不混成「清场成功」");
+  if (failure) assert.ok(failure instanceof AggregateError, "清理失败要如实聚合抛出");
+}
+
 // ── ③ 实例绑定:号码对上但出生时刻对不上的,既不认领也不终止 ────────────────────
 if (windows) {
   console.log("- 跳过实例绑定一节(POSIX 专属;Windows 侧走句柄 + GetProcessTimes)");
