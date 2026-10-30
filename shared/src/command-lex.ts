@@ -60,8 +60,19 @@ export function isErrorFormExpansion(inner: string): boolean {
 /** `$` 后面出现这些字符才算一个展开的开头（`$ ` / 行尾的 `$` 是个普通的美元号）。 */
 const EXPANSION_START = /[A-Za-z_0-9@*#?!$-]/;
 
-/** 双引号里的那段文本有没有展开 —— 引号里的内容原样进 `text`，所以只能扫文本。 */
-function expansionsInQuoted(inner: string): Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm"> {
+/**
+ * 这段**文本**里有没有展开、是哪几种。
+ *
+ * 两处都用它,因为两处都只剩「扫文本」一条路:
+ *  · 双引号里的内容原样进 `text`（引号里的展开在 shell 里真的会执行）;
+ *  · 不带引号的 `${…}` 被整段抹成占位符 `?` 之前,**里面还套着别的展开**（第 2 轮审查第 2 条:
+ *    `: ${X:-$((1/0))}` 真 shell 里除零退 127,而上一版只问了最外层是不是 error form,内层那个
+ *    算术在词法层就没了,于是一条自己会结束的命令被硬拦)。
+ *
+ * **不按参数展开的语法分区**（`:-` 前后)取舍:偏「多认一个未知」那一侧 —— 多认 ⇒ 降成提示,
+ * 少认 ⇒ 一件做得成的事做不成（见 command-never-exits.ts 文件头那段不对称）。
+ */
+function expansionsInText(inner: string): Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm"> {
   const out: Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm"> = {};
   if (inner.includes("`")) { out.expanded = true; out.substitution = true; }
   for (let i = 0; i < inner.length; i += 1) {
@@ -187,7 +198,7 @@ export function segments(command: string): Segment[] {
       // **双引号里的展开是真的会执行的**(`"$(printf x)"`)，单引号里的是字面量。引号里的内容
       // 原样进 `text`,所以这一支只能扫文本把标记补上 —— 不补的话上面那层就只剩「正则扫 text」
       // 一条路,而那条路对不带引号的那一半天生无效（见 `Token.expanded`）。
-      if (q === '"') marks = { ...marks, ...expansionsInQuoted(inner) };
+      if (q === '"') marks = { ...marks, ...expansionsInText(inner) };
       i = close < 0 ? command.length : close + 1;
       continue;
     }
@@ -235,6 +246,12 @@ export function segments(command: string): Segment[] {
       bare += "?";
       marks.expanded = true;
       if (isErrorFormExpansion(inner)) marks.errorForm = true;
+      // **内层那些展开也要带上来**（第 2 轮审查第 2 条）:整段马上要被抹成一个 `?`,里面套着的
+      // 算术/命令替换/error form 再不记就永远找不回来了 —— `: ${X:-$((1/0))}` 真 shell 里是
+      // 除零退 127,而判据只看见「一个说不清的展开」,于是把一条自己会结束的命令硬拦掉。
+      // 带引号那一侧一直是对的（引号里的内容原样留在 text 里,被同一个扫描看了个遍）,这正是
+      // 为什么同一件事只有不带引号的那半边出问题。
+      marks = { ...marks, ...expansionsInText(inner) };
       started = true;
       i = j;
       continue;

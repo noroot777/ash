@@ -152,26 +152,68 @@ function setShaken(argv: readonly Token[]): string | null {
  * `DYLD_*`（动态库注入）排着队,而「哪些环境变量会改掉后面那几条怎么执行」这个集合压根不封闭。
  * 所以这里要的是**封闭的那一侧**:证明得出它谁都没赋值。
  *
- * · `read` —— 带名字的操作数一律算未知（`read X` 也算:这一层证明不出 X 不改执行语义）。
+ * · `read` —— 带操作数就算未知（`read X` 也算:这一层证明不出 X 不改执行语义）。
  *   不带操作数的 `read` 写的是固定的 `REPLY`,那是证明得出来的。
  * · `printf` —— bash 的 `printf -v 名字 …` 同样是赋值;没有 `-v` 就只往流里写字。
+ *
+ * **引号不反向证明「这不是开关」**（第 2 轮审查第 2 条）。上一版 printf 那一侧搜的是「不带引号
+ * 且文本以 `-v` 开头」的参数,于是实测这两条都被当成「压根没赋值」、照旧硬拦,而真 shell 里
+ * 赋值确实发生了（后面那个 tail 因此找不到,随后正常打出 DONE 退出 0）:
+ *   · `printf '-v' PATH '%s' /no-such-directory; tail -F /dev/null; printf 'DONE\n'`
+ *     —— `'-v'` 和 `-v` 是同一个开关,引号只影响它算不算命令词/关键字,不影响它的字面值;
+ *   · `flag=-v; printf $flag PATH …` —— 开关本身是个展开,这一层压根读不出它是什么。
+ * 要证明的是**封闭的那一侧**:「这条 printf 的选项区里不可能出现 `-v`」。证得出来才放行。
  */
-const ARGV_PROOF = new Map<string, (argv: readonly Token[]) => string | null>([
+/**
+ * 证明没过的那个参数,以及**这一层对它到底知道到什么程度**。
+ *
+ * 三档不能用同一句话说(报告第 2 条的措辞要求):把「我读不出来」说成「它在给变量赋值」是替
+ * 用户编了一个事实 —— 他照着这条提示去找一个可能压根不存在的赋值;反过来把读得出来的
+ * `printf -v PATH` 说成「可能」,又把一件确定的事说软了。
+ *  · `assigns`    —— 读出来了,它确实在赋值（`printf -v NAME`）;
+ *  · `operand`    —— 它落在操作数位置上,而这一层**分不开**「变量名」和「某个选项的参数」
+ *    （`read -p 提示 X` 里那个提示跟 X 长在同一个位置），所以只说位置,不替它断定是哪一种;
+ *  · `unreadable` —— 它是个展开,是什么要等执行时才知道（`printf $flag`）。
+ */
+type ArgvFlaw = { arg: string; claim: "assigns" | "operand" | "unreadable" };
+const ARGV_PROOF = new Map<string, (argv: readonly Token[]) => ArgvFlaw | null>([
+  // 引号同样不反向证明「这不是开关」(与 printf 一个口径)。**选项的参数和变量名这一层分不开**
+  // (`read -p 提示 X` 里那个提示落在同一个位置上),分不开就一起算未知 —— 结论是同一个,而
+  // 文案只说「带着操作数」,不替用户断定那个词就是变量名。
   ["read", (argv) => {
     for (const t of argv) {
-      if (t.expanded || t.quoted) return t.text;            // 操作数读不出来 ⇒ 不知道它赋给谁
-      if (!/^-/.test(t.text)) return t.text;                // 不是开关 ⇒ 它就是被赋值的那个名字
+      if (t.expanded) return { arg: t.text, claim: "unreadable" }; // 操作数展开成什么读不出来
+      if (!/^-/.test(t.text)) return { arg: t.text, claim: "operand" }; // 不是开关 ⇒ 落在操作数位置上
     }
     return null;
   }],
+  // 只看**选项区**:选项得排在格式串前面（POSIX 的工具语法,`--` 显式收口),格式串之后的
+  // `-v` 是操作数,printf 会把它当字打出去。所以这一侧两个方向都能证:
+  //  · 选项区里读得出一个 `-v` ⇒ 它在赋值（引号照样算);
+  //  · 选项区里有个读不出来的词 ⇒ 证明不了它不是 `-v` ⇒ 未知;
+  //  · 选项区收口了（撞上 `--`、或撞上一个读得出来且不以 `-` 开头的词) ⇒ 证明得出谁都没赋值。
+  // 上一版连「选项区」这个概念都没有,于是 `printf '%s\n' -v` 和 `printf -- -v PATH` 这两条
+  // 不是赋值的也被当成了赋值（方向相反的同一个错:拿「长得像 -v」代替「它是不是开关」)。
   ["printf", (argv) => {
-    const at = argv.findIndex((t) => !t.quoted && /^-v/.test(t.text));
-    if (at < 0) return null;
-    return argv[at]!.text === "-v" ? `-v ${argv[at + 1]?.text ?? ""}`.trim() : argv[at]!.text;
+    for (let i = 0; i < argv.length; i += 1) {
+      const t = argv[i]!;
+      if (t.expanded) return { arg: t.text, claim: "unreadable" };
+      if (t.text === "--") return null;
+      if (!t.text.startsWith("-")) return null;
+      if (/^-v/.test(t.text)) {
+        const arg = t.text === "-v" ? `-v ${argv[i + 1]?.text ?? ""}`.trim() : t.text;
+        return { arg, claim: "assigns" };
+      }
+    }
+    return null;
   }],
 ]);
-const argvNote = (name: string, arg: string): string =>
-  `那个 ${name} ${arg} 是在给变量赋值，而被赋值的那个名字改不改得动后面每一条的执行语义`;
+const TAIL = "而被赋值的那个名字改不改得动后面每一条的执行语义";
+const argvNote = (name: string, flaw: ArgvFlaw): string => {
+  if (flaw.claim === "assigns") return `那个 ${name} ${flaw.arg} 是在给变量赋值，${TAIL}`;
+  if (flaw.claim === "operand") return `那个 ${name} 带着操作数 ${flaw.arg}，${TAIL}`;
+  return `那个 ${name} ${flaw.arg} 这一层读不出它是什么，证明不了它没在给变量赋值 —— ${TAIL}`;
+};
 
 /**
  * 这一段**要跑的那个命令词**:读出来了给 `cmd`，有词却读不出来给 `unreadable`，整段压根没有
@@ -237,8 +279,8 @@ export function perturbed(segs: Segment[]): string | null {
     // **进了 `HANDLED` 不等于整词放行**:语义压在参数上的那几个还要按 argv 证明一遍（F3）。
     const proof = ARGV_PROOF.get(cmd.name);
     if (proof) {
-      const arg = proof(cmd.argv);
-      if (arg !== null) return argvNote(cmd.name, arg);
+      const flaw = proof(cmd.argv);
+      if (flaw !== null) return argvNote(cmd.name, flaw);
       continue;
     }
     const note = NOTES.get(cmd.name);

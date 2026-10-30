@@ -28,7 +28,7 @@ assert.equal(
 // 前四条是上一轮（⑪）的，后两条是本轮 D1 的 —— 同一族、同一个机制，而上一版靠一张「我见过的
 // 词」表，于是后两条照旧硬拦。全部 `sh -lc` 实测:退出码与输出记在各自那句话里。
 {
-  for (const [command, why] of [
+  const cases = [
     ["while true; do eval 'break'; done; printf 'DONE\\n'", "`break` 在引号里，词表扫不进 eval 的字符串（实测 0 + DONE）"],
     ["set -n; while true; do :; done", "`-n` 是「读完一条都不执行」（实测 0）"],
     ["while true; do kill -TERM $$; done", "能终止这个 shell 的不只有 break/exit/return（实测 SIGTERM）"],
@@ -45,8 +45,14 @@ assert.equal(
     [": $((1/0)); while true; do :; done", "算术展开除零，循环一次都没跑（实测 127）"],
     [": ${1:?required}; while true; do :; done", "位置参数的错误形式，而且 `${` 当年被当成分段符（实测 127）"],
     ["read PATH; tail -F /dev/null; printf 'DONE\\n'", "`read PATH` 把 PATH 读成了空，那个 tail 压根没启动（实测 0 + DONE）"],
-  ] as const) passes(command, `执行语义这一层读不懂（${why}）`);
-  console.log("✓ 执行环境:真 shell 实测会自己结束的那十二条，一条都不许硬拦");
+    // 第 2 轮审查第 2 条给的三条输入本体（同族的根因与对照组在 ②c、②d 两节）。前者丢的是
+    // **嵌套**进参数展开里那一层语义,后两者是把「带引号/展开出来的 `-v`」当成了没赋值。
+    [": ${CK_REVIEW_UNSET:-$((1/0))}; while true; do :; done", "套在 `${…:-…}` 里的算术照样让 shell 当场走人（实测 127，division by 0）"],
+    ["printf '-v' PATH '%s' /no-such-directory; tail -F /dev/null; printf 'DONE\\n'", "引号不反向证明「这不是开关」（实测 0 + DONE，PATH 真的被改成 /no-such-directory）"],
+    ["flag=-v; printf $flag PATH '%s' /no-such-directory; tail -F /dev/null; printf 'DONE\\n'", "开关自己是个展开，读不出来就证明不了它没赋值（实测 0 + DONE）"],
+  ] as const;
+  for (const [command, why] of cases) passes(command, `执行语义这一层读不懂（${why}）`);
+  console.log(`✓ 执行环境:真 shell 实测会自己结束的那 ${cases.length} 条，一条都不许硬拦`);
 }
 
 // ── ② 不变量:**这一层没处置的 shell 词，一个都不许留下硬拦** ────────────────────────
@@ -150,6 +156,16 @@ assert.equal(
     ["带退出语义的展开（命名变量）", ["${ASH_X:?boom}", '"${ASH_X:?boom}"', "${ASH_X?boom}"]],
     ["带退出语义的展开（位置参数）", ["${1:?boom}", '"${1:?boom}"', "${1?boom}"]],
     ["带退出语义的展开（特殊参数）", ["${@:?boom}", "${#:?boom}"]],
+    // **套在参数展开里面的那一层也算**（第 2 轮审查第 2 条）。整段马上要被抹成一个占位符,
+    // 内层那个算术/替换/error form 不在词法层记下来就永远找不回来 —— 上一版只问了最外层是不是
+    // error form,于是 `: ${X:-$((1/0))}` 这条**真 shell 里除零退 127** 的命令被硬拦。
+    // 带引号那一半一直是对的（引号里的内容原样留在 text 里,被同一个扫描看了个遍）,所以这个
+    // 对照组里只有不带引号的那一侧会红 —— 这正是「按拼写列对照」要抓的那种偏科。
+    // 实测（/bin/sh -lc）:`: ${CK_REVIEW_UNSET:-$((1/0))}` 报 division by 0、退 127;
+    // `: ${CK_A:-${CK_B:?boom}}` 报 CK_B: boom、退 127。
+    ["嵌套在参数展开里的算术", ["${ASH_X:-$((1/0))}", '"${ASH_X:-$((1/0))}"', "${ASH_X-$((1/0))}"]],
+    ["嵌套在参数展开里的命令替换", ["${ASH_X:-$(printf x)}", '"${ASH_X:-$(printf x)}"', "${ASH_X:+`printf x`}"]],
+    ["嵌套在参数展开里的退出语义", ["${ASH_X:-${ASH_Y:?boom}}", '"${ASH_X:-${ASH_Y:?boom}}"']],
   ];
   for (const [kind, forms] of spellings) {
     for (const form of forms) {
@@ -195,10 +211,24 @@ assert.equal(
     [`read "$NAME"; ${BASE}`, "名字读不出来 ⇒ 更不知道它赋给谁"],
     [`printf -v PATH '%s' /missing; ${BASE}`, "bash 的 `printf -v` 是赋值"],
     [`printf -vPATH '%s' /missing; ${BASE}`, "开关和名字连写同判"],
+    // **引号不反向证明「这不是开关」**（第 2 轮审查第 2 条）。上一版搜的是「不带引号且以 `-v`
+    // 开头」的参数 —— 引号只决定这个词算不算命令词/关键字,不改它的字面值。实测
+    // （/bin/sh -lc）:`printf '-v' PATH '%s' /no-such-directory` 之后 PATH 真的变成了
+    // /no-such-directory、tail 找不到,整条命令退 0 并打出 DONE。
+    [`printf '-v' PATH '%s' /missing; ${BASE}`, "`'-v'` 和 `-v` 是同一个开关（实测 0 + DONE）"],
+    [`printf "-v" PATH '%s' /missing; ${BASE}`, "双引号同判"],
+    [`printf $flag PATH '%s' /missing; ${BASE}`, "开关自己是个展开 ⇒ 证明不了它不是 -v（实测 0 + DONE）"],
+    [`printf "$flag" PATH '%s' /missing; ${BASE}`, "带引号的展开同判"],
   ] as const) passes(command, `这个词的语义压在参数上（${why}）`);
 
   // 不带操作数的那一种**证明得出来**:`read` 写的是固定的 `REPLY`，`printf` 只往流里写字。
-  for (const command of [`read; ${BASE}`, `read -r; ${BASE}`, `printf 'x\\n'; ${BASE}`, `printf '%s' x; ${BASE}`]) {
+  // 后两条钉的是**反方向的同一个错**:判据不许拿「长得像 -v」代替「它是不是开关」。选项排在格式串
+  // 前面（`--` 显式收口）,之后的 `-v` 是操作数 —— 实测 `printf '%s\\n' -v` 与 `printf -- -v PATH`
+  // 都只把 `-v` 打出来、PATH 一个字没动,所以那条 tail 照旧证明得出永不结束,闸不许松。
+  for (const command of [
+    `read; ${BASE}`, `read -r; ${BASE}`, `printf 'x\\n'; ${BASE}`, `printf '%s' x; ${BASE}`,
+    `printf '%s\\n' -v; ${BASE}`, `printf -- -v PATH; ${BASE}`,
+  ]) {
     assert.equal(
       neverExitsOnItsOwn(command), "tail -f/-F",
       `这一种证明得出它谁都没赋值，不许凭它把闸放掉：${command}`,
