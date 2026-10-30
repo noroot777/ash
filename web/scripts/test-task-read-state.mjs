@@ -65,4 +65,29 @@ assert.equal(deriveTaskStatusIndicator({ ...lead, status: "paused", monitorRunni
 assert.equal(deriveTaskStatusIndicator(lead, [worker({ status: "paused", monitorRunning: true, question: "问你" })]), "attention");
 assert.equal(deriveTaskStatusIndicator({ ...lead, acceptGateRunning: true }, []), "working");
 
+// 「它在干等上游」那颗红环:停滞是**派生事实**(标记 + 会话未收尾 + 任务在跑,三条都在
+// server/src/task-store.ts 的投影里),而后台水位只盯那个标记列 —— 乱序到达的旧响应能把
+// 「旧的 true」和「新的状态」拼在一起(第 3 轮审查 N1)。所以这一侧跟服务端同口径再问一次。
+assert.equal(dot({ status: "running", upstreamStalled: true }), "stalled", "正在跑却卡在上游:红环");
+assert.equal(
+  dot({ status: "running", upstreamStalled: true, monitorRunning: true }),
+  "stalled",
+  "停滞排在「有东西在跑」之前:它其实没在动,而这一档才需要你做点什么",
+);
+assert.notEqual(
+  dot({ status: "done", upstreamStalled: true }),
+  "stalled",
+  "任务已经不在跑了,还亮着上一轮的停滞红环 —— 陈旧的 true 不许自己说话",
+);
+assert.equal(
+  deriveTaskStatusIndicator(lead, [worker({ status: "running", upstreamStalled: true })]),
+  "stalled",
+  "执行者卡在上游,团队卡片上要看得出来",
+);
+assert.notEqual(
+  deriveTaskStatusIndicator(lead, [worker({ status: "failed", upstreamStalled: true })]),
+  "stalled",
+  "执行者早就收尾了,团队卡片还亮着它的停滞环",
+);
+
 console.log("test-task-read-state: all assertions passed");

@@ -222,7 +222,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
       persistTrace(event);
       publishEvent(event);
-      markSessionStalled(taskId, sessId, facts.turnStartedAt, facts.since);
+      markSessionStalled(taskId, sessId, facts.since);
     },
     // 熔断档:说出来 + 杀进程。「这一轮失败」这个结论**不在这儿记** —— 看门狗在调 trip 之前
     // 就已经把它钉在回合身份上了(turn-stall-verdict.ts),下面收尾那一段连 `executionFailed` 带
@@ -238,7 +238,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       publishEvent(event);
       a.handle.kill();
     },
-    resolve: (facts) => clearSessionStalled(taskId, sessId, facts.turnStartedAt),
+    resolve: (facts) => clearSessionStalled(taskId, sessId, facts.since),
   };
 
   if (a.nativeSteer) {
@@ -480,7 +480,12 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 一个永远连不上上游的回合会走进「exit 0」那几支:本轮早先交过卷就落 done,名下还有活动
   // 哨兵就落 paused —— 时间线上红着写「按失败结算」,任务却显示完成(第 1 轮审查第 2 条)。
   const settleExit = watchdogFailure && exitStatus === 0 ? 1 : exitStatus;
-  const settled = await settleTaskStatus(taskId, settleExit, stopped, sessId);
+  // 退出码只够让它**不落 done**;要让它别落成「检查点暂停」,得把原因本身交进去 ——
+  // 提问 / 续跑指令 / 持续目标那三支都排在非零退出之前,一个留过续跑指令的回合于是显示
+  // 「暂停中 + 继续」,而同一轮区间记 failed(第 3 轮审查 F1,已实测)。落位规则仍然只有
+  // 结算那一个单点,这里只负责如实报原因。
+  const settled = await settleTaskStatus(taskId, settleExit, stopped, sessId,
+    watchdogFailure ? { kind: "upstream_stall", detail: watchdogFailure.reason } : null);
   clearStallFailure(sessId, a.turnStart); // 这一轮结算完了,销账(见那个文件里的水位)
   clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
   // 这一轮到底改没改东西:账在回合开头就清过了,这里只管「白清了要放回去」——

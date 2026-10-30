@@ -122,7 +122,13 @@ export function leadStallActions(
       const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
       trace(event);
       publish(lead, event);
-      markSessionStalled(lead.taskId, lead.sessId, facts.turnStartedAt, facts.since);
+      // 摘过牌的台连这一笔都不写:这条 sessionId 现在归接管的那台,旧进程的倒计时把标记写上去
+      // 就是在用户正看着的新会话上凭空亮一个红环(第 1 轮审查第 5 条)。原先这道闸靠库里那次
+      // 回合 CAS,而回合身份挡不住「投入≠执行中」那一类(第 3 轮审查 F2),所以挪回所有权层 ——
+      // trace / publish 本来就按同一块牌子办(见本文件顶部)。
+      // **撤那一笔不加这道闸**:`retireLead` 先置 `retired` 再 `clearTurnStall`,加了就永远撤不掉;
+      // 而撤是按停滞自己那一刻比对的,只碰得到自己置上的那一个(见 session-stall-flag.ts)。
+      if (!lead.retired) markSessionStalled(lead.taskId, lead.sessId, facts.since);
     },
     trip: (text) => {
       diagnose(text);
@@ -133,6 +139,6 @@ export function leadStallActions(
       releasePending(lead);
       lead.handle.kill();
     },
-    resolve: (facts) => clearSessionStalled(lead.taskId, lead.sessId, facts.turnStartedAt),
+    resolve: (facts) => clearSessionStalled(lead.taskId, lead.sessId, facts.since),
   };
 }

@@ -373,7 +373,14 @@ async function beginTurn(lead: Lead, at = nextTurnStart(lead.sessId)): Promise<v
   }
   // **返回值不能丢**：这一路的 session 写入是被捕获后继续的（`updateOwnSession` 不抛），
   // 丢掉它就等于把「写成功」当默认（第 5 轮审查必须修 2.3）。
-  const stamped = await updateOwnSession(lead, "回合开始状态", { ...resumedTurnFields(at) }, at);
+  // **投入 ≠ 切换正在执行的那一轮。** 队首(`lead.turnStart`,见 lead-turns.ts 的 adoptFront)
+  // 才是执行器此刻在跑的那个;用户插话时这里开的 T2 排在 T1 后面,而 T1 要等它自己的 turnEnd。
+  // 行上的 `turn_started_at` 照旧刷成 T2(那一列记的是**最近一次投入**,产物归属不靠它,
+  // 见这个函数顶部),但「上游停滞」那个标记不能跟着清 —— T1 可能正卡在重连上、警告已经亮着,
+  // 而补一句话既不是恢复也不是回合结束(第 3 轮审查 F2,已实测:补一句话红环当场消失、刷新
+  // 也不回来)。
+  const queuedBehind = lead.turnStart !== null && lead.turnStart !== at;
+  const stamped = await updateOwnSession(lead, "回合开始状态", { ...resumedTurnFields(at, { queuedBehind }) }, at);
   if (!stamped && !lead.retired) {
     // 会话行上的回合起点没刷上。第一手证据是下面那行回合记录,所以照落;产物面板判「还在
     // 写」用的是内存里登记的活动身份、区间起点也从那儿取,都不靠这一列,所以这里只报一句。

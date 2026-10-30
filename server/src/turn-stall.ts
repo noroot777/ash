@@ -57,7 +57,7 @@ import { detachedPathsFor } from "./executors/detached-child.js";
 import { isExecutionNotice } from "./session-notice.js";
 import { RUNS_DIR } from "./paths.js";
 import { runTracePaths } from "./transcript.js";
-import { markStallFailure } from "./turn-stall-verdict.js";
+import { markStallFailure, retireStallFailure } from "./turn-stall-verdict.js";
 import { now } from "./util.js";
 
 /** 持有者 = 此刻在消费这条会话的那个实例本身(同 session-waiting.ts 的 WaitingOwner)。 */
@@ -341,9 +341,26 @@ function openStall(
     escalated: false,
     actions,
   };
+  // 顶掉的那一条也算退场:同一条会话上换了持有者或换了轮(认领语义见上面那句三元),
+  // 旧那份从此再不会被 evaluate 碰到,它的失败判决于是进入孤立时效(见 turn-stall-verdict.ts)。
+  // 不走 `close`:那会顺手撤掉持久标记,而这条路上标记该归新认领的那一轮管。
+  const displaced = stalls.get(sessionId);
+  if (displaced) retire(displaced);
   stalls.set(sessionId, stall);
   arm();
   return stall;
+}
+
+/**
+ * 这条停滞记录离开状态机了 → 把它那份失败判决标成「已退场」。
+ *
+ * **只对熔断过的那些有意义**(没熔断就没有判决,那边是空转)。判决本身绝不在这里删:退场
+ * 之后紧接着就是消费链读它、结算、再销账,删早一步那一轮就又会被记成正常完成(第 2、3 轮
+ * 审查同一处的两次打回,理由写在 turn-stall-verdict.ts 的 ORPHAN_MS 上)。
+ */
+function retire(stall: Stall): void {
+  if (stall.trippedAtMs === null) return;
+  retireStallFailure(stall.sessionId, stall.turnStartedAt);
 }
 
 const factsOf = (stall: Stall): StallFacts => ({
@@ -363,6 +380,7 @@ const factsOf = (stall: Stall): StallFacts => ({
 function close(sessionId: string, stall: Stall): void {
   stalls.delete(sessionId);
   if (stalls.size === 0) disarm();
+  retire(stall);
   if (!stall.warned) return;
   try {
     stall.actions.resolve(factsOf(stall));

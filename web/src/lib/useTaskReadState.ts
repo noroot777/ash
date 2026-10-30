@@ -75,6 +75,16 @@ export function readEventForTask(task: TaskListItem, workers: TaskListItem[] = [
 
 const liveWork = (task: TaskListItem): boolean => !!task.acceptGateRunning || !!task.monitorRunning;
 
+/**
+ * 「它此刻在干等上游」。
+ *
+ * 停滞是**派生事实**(标记在 + 那条会话没收尾 + 任务真的在跑,三条都在 server/src/task-store.ts
+ * 的投影里),可后台水位只盯那个标记列 —— 乱序到达的旧响应于是能把「旧的 true」和「新的状态」
+ * 拼在一起,卡片上亮一个过期的红环(第 3 轮审查 N1,未实测、按代码推断)。这里跟服务端**同一个
+ * 口径**再问一次:条件一致,正常情形下一个字都不变,只是不让陈旧的 true 自己说话。
+ */
+const stalledNow = (task: TaskListItem): boolean => !!task.upstreamStalled && task.status === "running";
+
 export function deriveTaskStatusIndicator(
   task: TaskListItem,
   workers: TaskListItem[] = [],
@@ -85,7 +95,7 @@ export function deriveTaskStatusIndicator(
     if (task.question || workers.some((worker) => worker.question)) return "attention";
     // 排在 working/active 之前:一台卡在上游的调度台这三档全都成立,而「它其实没在动」是
     // 其中唯一需要用户做点什么的那一位。
-    if (task.upstreamStalled || workers.some((worker) => worker.upstreamStalled)) return "stalled";
+    if (stalledNow(task) || workers.some(stalledNow)) return "stalled";
     if (liveWork(task) || workers.some(liveWork)) return "working";
     const leadLive = task.status === "running";
     if (leadLive || workers.some((worker) => worker.status === "running" || worker.status === "queued")) {
@@ -107,7 +117,7 @@ export function deriveTaskStatusIndicator(
   }
 
   if (task.question) return "attention";
-  if (task.upstreamStalled) return "stalled"; // 同上:排在 working/active 之前
+  if (stalledNow(task)) return "stalled"; // 同上:排在 working/active 之前
   if (liveWork(task)) return "working";
   if (task.status === "paused") return "attention";
   if (task.status === "running" || task.status === "queued") return "active";

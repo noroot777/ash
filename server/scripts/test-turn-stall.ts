@@ -26,7 +26,7 @@ import {
   type StallActions,
   type StallFacts,
 } from "../src/turn-stall.js";
-import { __ageStallFailures, __resetStallFailures, clearStallFailure, markStallFailure, stallFailure } from "../src/turn-stall-verdict.js";
+import { __ageStallFailures, __resetStallFailures, clearStallFailure, markStallFailure, retireStallFailure, stallFailure } from "../src/turn-stall-verdict.js";
 
 const TURN = "2026-10-30T07:36:21.000Z";
 const RETRY = "Reconnecting... waiting for network";
@@ -283,13 +283,46 @@ function configure(opts: {
   for (const [i, turn] of turns.entries()) clearStallFailure(`cap-${i}`, turn);
   assert.equal(stallFailure("cap-0", turns[0]!), null, "销账之后还读得到 —— 下一轮会被当成熔断过");
 
-  // 孤立回收:久到不可能还有人来结算的那些,下一次写入时顺手清掉;新的那条一个字不动。
+  // 孤立回收:**退场**之后久到不可能还有人来结算的那些,下一次写入时顺手清掉。
   markStallFailure("orphan", TURN, "没人来销账的那种");
+  retireStallFailure("orphan", TURN); // 回合真的结束了(状态机的 close/顶掉都会打这一下)
   __ageStallFailures(7 * 60 * 60_000);
   markStallFailure("fresh", TURN, "刚熔断");
-  assert.equal(stallFailure("orphan", TURN), null, "孤立判决一直占着内存,TTL 没生效");
+  assert.equal(stallFailure("orphan", TURN), null, "已退场的孤立判决一直占着内存,TTL 没生效");
   assert.ok(stallFailure("fresh", TURN), "回收把刚写下的活判决也清了");
   clearStallFailure("fresh", TURN);
+}
+
+// ── ⑤g **老不等于孤立**:还在跑的那一轮,判决多老都不许动 ────────────────────────
+// 第 3 轮审查 F3(已实测):上一版纯按年龄回收。`ASH_STALL_TRIP_GRACE_MS=0` 是产品允许的配置
+// (关掉强制回收),于是一个熔断过、`interrupt` 没人理的回合可以一直活着;跨过 6 小时、或者
+// 主机休眠把墙钟往前一跳,下一次熔断的写入就把那条**仍然有人要读**的判决扫掉 —— 旧回合后来
+// 真收到结束回执时读到 null,区间照样记 completed。
+{
+  configure({ warnErrors: 1, tripMs: 60, graceMs: 0, pollMs: 15 });
+  const { actions, log } = spy();
+  const owner = {};
+  trackTurnStall("s5g", owner, TURN, notice(), actions);
+  await sleep(320);
+  assert.equal(log.trips.length, 1, "没熔断");
+  assert.equal(log.escalations.length, 0, "graceMs=0 该是「不强制回收」,却还是回收了");
+
+  // 这一轮没结束(没有 clearTurnStall,也没被顶掉),只是变老了。
+  __ageStallFailures(7 * 60 * 60_000);
+  markStallFailure("another", "2026-10-30T09:00:00.000Z", "另一轮熔断了,顺手扫一遍");
+  assert.ok(
+    stallFailure("s5g", TURN),
+    "一个还在跑的熔断回合,判决被当成孤立记录扫掉了 —— 它收到结束回执时会被记成正常完成",
+  );
+
+  // 回合真结束 → 退场 → 这才轮到年龄说话。
+  clearTurnStall("s5g", owner);
+  assert.ok(stallFailure("s5g", TURN), "刚退场就删了 —— 结算还没来得及读");
+  __ageStallFailures(7 * 60 * 60_000);
+  markStallFailure("another2", "2026-10-30T09:00:00.000Z", "再来一轮");
+  assert.equal(stallFailure("s5g", TURN), null, "退场够久的记录没被回收");
+  clearStallFailure("another", "2026-10-30T09:00:00.000Z");
+  clearStallFailure("another2", "2026-10-30T09:00:00.000Z");
 }
 
 // ── ⑥ 反向:正常的长回合一档都不许触发(误杀代价最高的一位) ──────────────────────
@@ -479,6 +512,68 @@ function configure(opts: {
   console.log(
     `  现场对照:旧行为 0 条事件、${realMin.toFixed(0)} 分钟全程无声;`
     + `新行为第 5 条错误(停滞 ${warnMin.toFixed(1)} 分钟)报警、30 分钟熔断。`,
+  );
+}
+
+// ── ⑬ 现场副本**按原相对时序**整条重放(验收标准⑤) ─────────────────────────────
+// 上一段是算术对照(按时间戳算旧/新各会说什么);这一段把**全部 257 行按它们记录下来的相对
+// 顺序与间隔**喂进状态机,时钟整体压缩 K 倍,阈值同比例缩小。它要答的是算术答不了的那几问:
+//   · 停滞之前那 33 行正常事件在场时,一档都不许触发;
+//   · 220 条错误连成一片时,报警恰好一次、熔断恰好一次(不是每条一次);
+//   · 熔断**之后**现场那几行收尾事件(thread/status/changed、turn/completed…)到达时,
+//     那份没兑现的终止义务不许被它们撤掉(⑤e 的同一条不变量,这里用真实事件序复核);
+//   · 回合真收口时标记才撤。
+//
+// 只到状态机为止:**不拉起真实 CLI、不走消费链与结算**(那两段各有自己的钉子 —— 结算那一段
+// 在 test-stall-settle.ts)。非错误行按「不是错误」这唯一一条属性折成一个占位进展事件:状态机
+// 对它们只区分「是/不是错误」,原方法名照样带着,便于读失败现场。
+{
+  const fixture = fileURLToPath(new URL("./fixtures/codex-upstream-stall.jsonl", import.meta.url));
+  const lines = readFileSync(fixture, "utf8").trim().split("\n").map((line) => JSON.parse(line) as {
+    method: string;
+    params: Record<string, any>;
+    emittedAtMs: number | null;
+  });
+  assert.equal(lines.length, 257, "夹具行数变了,下面的时序结论是照它算的");
+  const stamped = lines.filter((line) => line.emittedAtMs !== null);
+  const spanMs = stamped[stamped.length - 1]!.emittedAtMs! - stamped[0]!.emittedAtMs!;
+  // 墙钟压缩倍率:整条流跑完约 3.5 秒。阈值同比例缩小,于是「5 分钟/30 分钟」在压缩后的
+  // 时间轴上还是同一个相对位置(扫表间隔有 200ms 下限,所以熔断会落在它之后第一拍)。
+  const K = Math.round(spanMs / 3500);
+  configure({ warnErrors: 5, warnMs: Math.round(5 * 60_000 / K), tripMs: Math.round(30 * 60_000 / K), pollMs: 15 });
+  const { actions, log } = spy("W54czudPJ9Q9");
+  const owner = {};
+  const base = stamped[0]!.emittedAtMs!;
+  const startedAt = Date.now();
+  let preStall: [number, number] | null = null;
+  let firstError = true;
+  for (const line of lines) {
+    if (line.emittedAtMs !== null) {
+      const due = startedAt + (line.emittedAtMs - base) / K;
+      const wait = due - Date.now();
+      if (wait > 0) await sleep(wait);
+    }
+    const converted = line.method === "error" ? codexErrorEvent(line.params) : null;
+    if (converted && firstError) {
+      firstError = false;
+      // 停滞开始前那 33 行里有正常事件,这一刻两档都该是 0 —— 判据是「自上次非错误事件以来」,
+      // 不是回合总时长(⑥ 用构造事件钉同一条,这里用现场真实序列复核)。
+      preStall = [log.warns.length, log.trips.length];
+    }
+    trackTurnStall("replay", owner, TURN, converted?.event ?? { kind: "tool", name: line.method }, actions);
+  }
+  assert.deepEqual(preStall, [0, 0], "停滞还没开始(现场前 33 行都是正常事件)就报警/熔断了");
+  assert.equal(log.warns.length, 1, "现场那条流重放后一声不响,或者 220 条错误报了 220 次警");
+  assert.equal(log.warns[0]!.facts.errors, 5, "警告不是在第 5 条错误上报的");
+  assert.equal(log.trips.length, 1, "整条流重放后没有熔断,或者熔断了不止一次");
+  assert.ok(stallFailure("replay", TURN), "熔断了却没把失败结论钉在回合身份上");
+  // 现场在最后一条错误之后还有 4 行收尾事件,刚才已经原样喂进去了。
+  assert.deepEqual(log.resolves, [], "熔断之后现场那几行收尾事件把停滞标记撤了 —— 终止义务没兑现");
+  clearTurnStall("replay", owner);
+  assert.deepEqual(log.resolves, [TURN], "回合真收口了却没撤标记");
+  console.log(
+    `  整条重放:${lines.length} 行按原时序(${(spanMs / 60_000).toFixed(0)} 分钟压缩 ${K}×,`
+    + `实耗 ${((Date.now() - startedAt) / 1000).toFixed(1)}s)→ 报警 1 次、熔断 1 次、收口时撤标记。`,
   );
 }
 

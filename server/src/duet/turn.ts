@@ -301,7 +301,7 @@ export async function runTurn(args: {
         const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
         appendSessionTrace(taskId, rowId, turnStart, event);
         bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
-        markSessionStalled(taskId, rowId, facts.turnStartedAt, facts.since);
+        markSessionStalled(taskId, rowId, facts.since);
       },
       // `errorMsg` 非空 = 这一轮按失败结算(见下面 recordTurnSpan 的 outcome),而讨论链据此
       // 中止整场 —— 对一个上游连不上的回合这正是想要的:接着往下发言只会把空话喂给对手。
@@ -318,7 +318,7 @@ export async function runTurn(args: {
         bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
         handle.kill();
       },
-      resolve: (facts) => clearSessionStalled(taskId, rowId, facts.turnStartedAt),
+      resolve: (facts) => clearSessionStalled(taskId, rowId, facts.since),
     };
     try {
       for await (const event of handle.events) {

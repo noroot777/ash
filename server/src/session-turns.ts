@@ -181,7 +181,7 @@ export const freshTurnFields = (at: string) => ({
  * `endedAt: null` 也在这里：会话重新开跑就不再是「已收尾」,漏掉它的那一处会让读端把这条
  * 会话当成结束了的（区间按老的收尾时刻截断）。计数同样不在这里加，理由见文件头。
  */
-export const resumedTurnFields = (_at: string) => ({
+export const resumedTurnFields = (_at: string, opts?: { queuedBehind?: boolean }) => ({
   turnStartedAt: _at,
   endedAt: null as string | null,
   // `stoppedAs: null` 同理:上一轮「是被停的」这个结论随新回合翻篇。单飞每轮收尾都覆写这一
@@ -192,7 +192,14 @@ export const resumedTurnFields = (_at: string) => ({
   // 挡在外面(task-store.ts),可这里正好把 `ended_at` 清成 null —— 上一轮留下的标记于是当场
   // 复活,页面上一边是正常答完的新回合、一边亮着红色停滞环,刷新还在(第 1 轮审查第 3 条,
   // 已实测)。这是**开始边界**那一道;终止边界那一道在 session-stall-flag.ts。
-  upstreamStalledSince: null as string | null,
+  //
+  // `queuedBehind: true` = **这一轮只是排在还在跑的那一轮后面,不是真开跑**(常驻台投入口:
+  // 用户插话时 `sendToLead` 当场持有 T2,而队首 T1 还在执行器手里)。那种情形这一列一个字都
+  // 不许动:T1 可能正卡在上游重连上并且已经报过警,而「补一句话」既不是恢复、也不是回合结束,
+  // 清掉它等于让一个仍然有效的警告凭空消失,而且之后不会再报第二次(`warned` 已经是真)——
+  // 第 3 轮审查 F2,已实测。其余字段照旧刷:它们说的是「这条会话还在跑」,排在后面的那一轮
+  // 同样成立。
+  ...(opts?.queuedBehind ? {} : { upstreamStalledSince: null as string | null }),
 });
 
 /**

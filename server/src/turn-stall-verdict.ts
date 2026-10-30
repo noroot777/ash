@@ -29,37 +29,51 @@ export interface StallVerdict {
   at: string;
 }
 
-const failures = new Map<string, StallVerdict>();
+interface Entry extends StallVerdict {
+  /**
+   * 这个回合身份**退场**的时刻(`null` = 还在跑)。
+   *
+   * 由 `turn-stall.ts` 在那条停滞记录离开状态机时填(真实收口、摘牌、或被新一轮顶掉)——
+   * 也就是「不会再有人往这一轮里写东西了」那一刻。回收只看它,见 ORPHAN_MS。
+   */
+  retiredAt: string | null;
+}
+
+const failures = new Map<string, Entry>();
 
 /**
- * 回收**只认时间,不认条数**。
+ * 回收**只认生命周期**:一条判决要么还归某个在跑的回合,要么已经退场够久了。
  *
- * 上一版留的是条数水位(KEEP=64,超了从最老的扔),那是反的:被扔掉的恰恰是**还没结算**的那
- * 一条。断网会同时波及很多台(「每组限流 4」限的是单个分组,不是整进程的会话数),实测 65 个
- * 回合先全部熔断、再统一收到结束回执时,最早那一轮的判决已经被挤掉,`endTurn` 读不到于是记成
- * `completed` —— 时间线上明明白白写着「按失败结算」,区间却是成功(第 2 轮审查 F2,已实测:
- * 1 completed / 64 failed)。
+ * 这一处被打回过两次,两次都是「拿淘汰策略代替生命周期」:
+ *   · 第 2 轮是条数水位(KEEP=64,超了扔最老的)—— 扔掉的恰恰是还没结算那一条。断网会同时
+ *     波及很多台,实测 65 个回合先全部熔断、再统一收到结束回执时,最早那一轮的判决已经被挤掉,
+ *     `endTurn` 读不到于是记成 `completed`(1 completed / 64 failed)。
+ *   · 第 3 轮是纯年龄 TTL —— **老不等于孤立**。`ASH_STALL_TRIP_GRACE_MS=0`(产品允许的配置)
+ *     关掉了强制回收,于是一个熔断过、`interrupt` 没人理的回合可以继续活着;跨过 6 小时、或者
+ *     主机休眠把墙钟往前一跳,下一次熔断的写入就会把那条**仍然有人要读**的判决扫掉,旧回合
+ *     后来真收到 turnEnd 时读到 null,照样写 `completed`(第 3 轮审查 F3,已实测)。
  *
- * 所以不变量是:**判决一直留着,直到对应回合自己来销账**(`clearStallFailure`,各链在结算之后
- * 调)。容量清理只许碰**明确孤立**的那些 —— 久到不可能还有人来结算的。
+ * 所以年龄只能用在**已经退场**的那些上:`retiredAt` 由状态机在那条停滞记录离开 `stalls` 时
+ * 填(真实收口 / 摘牌 / 被新一轮顶掉),填上就意味着「这一轮不会再产生事件了」,余下只剩那条
+ * 消费链自己来销账(`clearStallFailure`)。链要是半路没了(进程被硬杀、异常绕过结算),这条
+ * 记录就等 ORPHAN_MS 之后被顺手清掉 —— 这才是「明确孤立」。
  *
- * 为什么不怕它涨:每一条都要先有一次真实熔断(默认 30 分钟只收到错误事件)才写得出来,所以
- * 条数天然被「同时卡住的会话数」限住,而一条就几百字节。跨 server 重启这张表本来就是空的
- * (进程内状态),所以「孤立」只可能来自同一进程里某条链连结算都没走到 —— 那种残留等 TTL
- * 到了自己消失,不必也不许去挤掉活的。
+ * **还在跑的一条都不碰**,所以条数上界就是「同时卡着的回合数」,一条几百字节;跨 server 重启
+ * 这张表本来是空的(进程内状态),所以也不存在越攒越多那回事。
  */
 const ORPHAN_MS = 6 * 60 * 60_000;
 
 const key = (sessionId: string, turnStartedAt: string): string => `${sessionId}\u0000${turnStartedAt}`;
 
 /**
- * 顺手清掉明确孤立的那些(写入时做,不另起计时器:这张表只在熔断时被写,频率极低)。
+ * 顺手清掉**已退场且已经够老**的那些(写入时做,不另起计时器:这张表只在熔断时被写,频率极低)。
  *
- * **只按时间判,绝不按条数** —— 判据见 ORPHAN_MS 那段。
+ * `retiredAt === null` = 这一轮还在跑,**一个字都不许碰** —— 判据见 ORPHAN_MS 那段。
  */
 function sweepOrphans(cutoffMs: number): void {
   for (const [k, verdict] of failures) {
-    const at = Date.parse(verdict.at);
+    if (verdict.retiredAt === null) continue;
+    const at = Date.parse(verdict.retiredAt);
     // 时间戳读不出来就留着:宁可多留一条孤立记录,也不能因为解析失败丢掉一条活判决。
     if (Number.isFinite(at) && at <= cutoffMs) failures.delete(k);
   }
@@ -68,9 +82,22 @@ function sweepOrphans(cutoffMs: number): void {
 /** 看门狗熔断:把「这一轮失败」钉在这个回合身份上。 */
 export function markStallFailure(sessionId: string, turnStartedAt: string, reason: string): void {
   const at = now();
-  failures.set(key(sessionId, turnStartedAt), { reason, at });
+  failures.set(key(sessionId, turnStartedAt), { reason, at, retiredAt: null });
   const cutoff = Date.parse(at) - ORPHAN_MS;
   if (Number.isFinite(cutoff)) sweepOrphans(cutoff);
+}
+
+/**
+ * 这个回合身份**退场了**:状态机里那条停滞记录离开了(真实收口 / 摘牌 / 被新一轮顶掉)。
+ *
+ * 只打时间戳,**不删**:退场之后紧接着就是那条消费链读判决、结算、再 `clearStallFailure`,
+ * 这中间一个字都不能少。链要是半路没了,这条记录从此刻开始算 ORPHAN_MS 的孤立时效。
+ * 没有对应判决(这一轮压根没熔断)时是空转。
+ */
+export function retireStallFailure(sessionId: string, turnStartedAt: string): void {
+  const entry = failures.get(key(sessionId, turnStartedAt));
+  if (!entry || entry.retiredAt !== null) return;
+  entry.retiredAt = now();
 }
 
 /** 这个回合身份有没有被看门狗判过失败。读不清掉 —— 同一轮有三处要读(span/会话/任务)。 */
@@ -102,6 +129,8 @@ export function __resetStallFailures(): void {
  */
 export function __ageStallFailures(ms: number): void {
   for (const [k, verdict] of failures) {
-    failures.set(k, { ...verdict, at: new Date(Date.parse(verdict.at) - ms).toISOString() });
+    const shift = (iso: string | null): string | null =>
+      (iso === null ? null : new Date(Date.parse(iso) - ms).toISOString());
+    failures.set(k, { ...verdict, at: shift(verdict.at)!, retiredAt: shift(verdict.retiredAt) });
   }
 }
