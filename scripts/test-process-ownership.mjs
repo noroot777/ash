@@ -10,7 +10,6 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { TestProcessScope, delay } from "./test-process-scope.mjs";
 import { runTestProcess } from "./test-process.mjs";
 
@@ -108,6 +107,8 @@ if (windows) {
 // 执行域目录是在 try 之外建的,`started` 写失败时调用方还没拿到 scope,输出目录和执行域
 // 目录会双双留下(实测注入 ENOSPC)。在子进程里打桩那一次写入,直接验收回收。
 {
+  // 动态 import 的说明符必须是 **file:// URL**:Windows 上 `D:\...` 这种绝对路径不是合法
+  // URL,ESM 加载器直接 ERR_UNSUPPORTED_ESM_URL_SCHEME(真机实测)。
   const probe = join(mkdtempSync(join(tmpdir(), "ash-probe-")), "probe.mjs");
   writeFileSync(probe, `
 import fs from "node:fs";
@@ -118,7 +119,7 @@ fs.writeFileSync = (path, ...rest) => {
   return original(path, ...rest);
 };
 syncBuiltinESMExports();
-const { runTestProcess } = await import(${JSON.stringify(fileURLToPath(new URL("test-process.mjs", import.meta.url)))});
+const { runTestProcess } = await import(${JSON.stringify(new URL("test-process.mjs", import.meta.url).href)});
 let failed = false;
 try { await runTestProcess(process.execPath, ["-e", "0"]); } catch (error) { failed = error.code === "ENOSPC" || /ENOSPC/.test(String(error)); }
 console.log(JSON.stringify({ failed }));
