@@ -59,6 +59,9 @@ export const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(
 /** 进程表的时刻只精确到秒(ps 的 lstart、CIM 的 CreationDate),比较一律留这么多余量。 */
 const CLOCK_SLACK_MS = 1_000;
 
+/** FILETIME:1601 年起算的 100 纳秒数。Windows 核对进程代次用的就是这把尺子。 */
+const fileTime = (milliseconds) => (BigInt(Math.floor(milliseconds)) + 11_644_473_600_000n) * 10_000n;
+
 /**
  * 边界描述符那个文件的名字。每个 spawn 出来的进程都继承一个指向它的 fd —— 「谁打开着这个
  * 文件」是内核里的事实,外面的进程拿不到我们这个 fd,所以它既伪造不了也不随 exec 丢
@@ -370,52 +373,84 @@ export class TestProcessScope {
       try { process.kill(pid, name); }
       catch (error) { if (error.code !== "ESRCH") errors.push(error); }
     };
-    /** 按**实例**终止一批行:核对出生时刻之后才动手。 */
-    const terminate = async (rows, force) => {
-      if (windows) {
-        // 句柄 + GetProcessTimes 代次核对,和生产重启同一套(scripts/windows-restart.mjs)。
-        // 不用 `taskkill /T`:它在执行那一刻重新展开进程树,杀的可能是我们查完之后才挂上去
-        // 的、别人的进程。
-        //
-        // **一行一次**,不打包:那段脚本是先把整批句柄开完、任一代次对不上就整批抛,
-        // 打包的话一个「号码换了主人」的旧行会把其余真该停的一起拦下。
+    /**
+     * 按**实例**终止一批行:核对出生时刻之后才动手。返回**没能核对实例身份**的那些号码 ——
+     * 由调用方决定是报出来(主路径,见文件尾的 `unverified`)还是不吭声(「先砍一刀」那一刀:
+     * 号码既然换了主人就本来不是我们的,主路径的 `active()` 也不会去认领它)。
+     */
+    const terminateRows = async (rows, force) => {
+      if (!windows) {
         for (const row of rows) {
-          if (!row.created) { this.unverified.push(row.pid); continue; }
-          try { await powerShell(windowsTerminateScript([row])); }
-          catch (error) {
-            // 代次对不上 = 这个号码在查到和动手之间换了主人,不是我们的那一个:不杀,记一笔。
-            if (/PID generation changed/.test(`${error.stderr ?? ""}${error.message ?? ""}`)) { this.unverified.push(row.pid); continue; }
-            errors.push(error);
-          }
+          const same = await this.#stillSame(row);
+          if (!same) continue; // 号码换了主人:不是我们的,绝不碰
+          signal(row.pid, force ? "SIGKILL" : "SIGTERM");
         }
-        return;
+        return []; // POSIX 这边「核不出来」就是「已经没了」(见 #stillSame),没有待报的号码
       }
-      for (const row of rows) {
-        const same = await this.#stillSame(row);
-        if (!same) continue; // 号码换了主人:不是我们的,绝不碰
-        signal(row.pid, force ? "SIGKILL" : "SIGTERM");
+      // 句柄 + GetProcessTimes 代次核对,和生产重启同一套(scripts/windows-restart.mjs)。
+      // 不用 `taskkill /T`:它在执行那一刻重新展开进程树,杀的可能是我们查完之后才挂上去
+      // 的、别人的进程。
+      //
+      // **整批一次**,代次对不上的那几个由那段脚本自己跳过并报号码(`tolerant`)。两件事都要:
+      // 起一个 powershell 要 ~400ms,一行一个串着跑,第一刀就落到 2s 开外,而被判死的后代多活
+      // 一拍就多写一次文件(真机实测:`test-test-process` 从超时到那次写只留了不到 1s,串行
+      // 那一版它写出来了);而默认那种「任一代次对不上就整批抛」,会让一个号码换了主人的旧行
+      // 把其余真该停的一起拦下。
+      const targets = rows.filter((row) => row.created);
+      const unverified = rows.filter((row) => !row.created).map((row) => row.pid);
+      if (targets.length) {
+        try {
+          const output = await powerShell(windowsTerminateScript(targets, { tolerant: true }));
+          // 跳过的那些:这个号码在查到和动手之间换了主人,不是我们的那一个。不杀,记一笔。
+          for (const line of output.split("\n")) {
+            const skipped = /^ASH_RESTART_SKIPPED (\d+)/.exec(line.trim());
+            if (skipped) unverified.push(Number(skipped[1]));
+          }
+        } catch (error) { errors.push(error); }
       }
+      return unverified;
+    };
+    const terminate = async (rows, force) => {
+      this.unverified.push(...await terminateRows(rows, force));
     };
 
     await attempt(() => writeFileSync(join(this.directory, "stopped"), ""));
-    // 我们自己 spawn 出来的那一层:句柄还没回收,这个号码就不可能被复用,所以整组发信号
-    // 是安全的 —— 也只有这一处敢按组号发。
+    // ── 先砍一刀 ────────────────────────────────────────────────────────────────
+    // 枚举全表是要花时间的(Windows 上起一个 powershell 查 WMI,实测 ~600ms),而**清场慢一拍,
+    // 被判死的后代就多出一拍去写文件**。所以在枚举之前先用**不花钱的证据**砍一刀:
+    //  · POSIX:整组发信号。句柄还没回收 ⇒ 这个号码不可能被复用,所以整组是安全的 ——
+    //    也只有这一处敢按组号发。
+    //  · Windows:
+    //     - 我们自己 spawn 的那一层按**句柄**杀。`child.kill()` 用的是 spawn 时拿到的那个句柄,
+    //       根本不经过号码,比按号码杀更硬;
+    //     - 它们的后代按**登记**杀。号码来自本域的登记文件(本地读,零开销),实例身份当场
+    //       核(`#impostor`:出生时刻必须落在「本域创建」到「它登记那一刻」之间,一个号码被
+    //       复用的陌生进程落不进这个区间)。
     //
     // **Windows 这儿原先走 `taskkill /T /F`,已经去掉**(第 4 轮审查 F1 同类)。当时的理由是
     // 「句柄没回收 ⇒ 这个号码不会被复用 ⇒ 展开出来的那棵树一定是我们的」,可那只固定了**根**的
     // 身份:`/T` 在执行那一刻按 ppid 重新展开整棵树,而 Windows 的 ppid 在父进程死后仍然留着
-    // 旧号码 —— 一个号码被复用的中间节点就能把别人的进程挂进这棵树。那边改走跟下面同一条路:
-    // `active()` 列出来(父子链在 Windows 上本来就完整)、一行一次按句柄 + GetProcessTimes
-    // 核代次再终止。少掉的只是「先砍根」这一下,根自己照样在 `active()` 里。
-    if (!windows) {
-      for (const child of this.children) {
-        if (!child.pid || child.exitCode !== null || child.signalCode !== null) continue;
-        signal(-child.pid, "SIGTERM");
-      }
+    // 旧号码 —— 一个号码被复用的中间节点就能把别人的进程挂进这棵树。换成上面这两条之后,砍下去
+    // 的每一个都是自己证明得出来的,「及时」和「不误杀」不必二选一。
+    for (const child of this.children) {
+      if (!child.pid || child.exitCode !== null || child.signalCode !== null) continue;
+      if (!windows) { signal(-child.pid, "SIGTERM"); continue; }
+      try { child.kill(); } catch (error) { errors.push(error); }
     }
-    let active = await attempt(() => this.active());
+    if (windows) {
+      await attempt(() => terminateRows(this.records()
+        .filter((record) => record.pid !== process.pid && Number.isFinite(record.at))
+        // 代次核成**区间**:这正是 `#impostor` 那条判据,换成句柄那头看得懂的尺子交过去 ——
+        // 于是不必先起一个 powershell 查一遍进程表拿代次,这一刀只花一次。跳过的号码不往
+        // `unverified` 里记:号码换了主人就本来不是我们的,后面的 `active()` 也不会认领它。
+        .map((record) => ({ pid: record.pid, created: `${fileTime(this.started - CLOCK_SLACK_MS)}-${fileTime(record.at + CLOCK_SLACK_MS)}` })), true));
+    }
+    // 下面这一段是**凭据**:前面那一刀只覆盖得到自己登记过的(非 Node 的后代不执行 preload),
+    // 全表枚举才认得出靠父子链挂着的那些,而「还有没有活的」这个结论只能由它来下。
+    let active = [];
     if (!windows) {
-      await terminate(active, false);
+      // POSIX 先温和一轮:上面整组发的是 SIGTERM,这儿再按实例补一次,给它们机会自己收场。
+      await terminate(await attempt(() => this.active()), false);
       await delay(100);
     }
     for (let round = 0; round < 3; round++) {

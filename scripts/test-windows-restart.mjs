@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { windowsRestartPlan, windowsRestartTargets, windowsTerminateScript } from "./windows-restart.mjs";
-import { IS_WINDOWS, killServerProcess, listProcesses } from "./platform.mjs";
+import { IS_WINDOWS, isPidAlive, killServerProcess, listProcesses } from "./platform.mjs";
 import { runTestProcess } from "./test-process.mjs";
-import { spawnTestFixture } from "./test-process-scope.mjs";
+import { delay, spawnTestFixture } from "./test-process-scope.mjs";
 
 const row = (pid, ppid, created, command = "node fixture.mjs") => ({ pid, ppid, created: String(created), command });
 const rows = [row(10, 1, 100), row(11, 10, 110), row(12, 10, 90), row(13, 12, 120), row(14, 11, 120)];
@@ -18,6 +18,10 @@ assert.throws(() => windowsRestartTargets(unreadable, [10, 16], []), /受保护�
 assert.throws(() => windowsRestartTargets([row(10, 1, 100, "")], 10, []), /身份不完整/);
 assert.throws(() => windowsRestartTargets([{ ...row(10, 1, 100), ppid: null }], 10, []), /身份不完整/);
 assert.ok(windowsTerminateScript([row(10, 1, 100)]).includes("GetProcessTimes"));
+// 身份令牌两种写法都要能原样送到那段脚本里:精确代次(生产重启)与代次区间(测试执行域按
+// 自己的登记下刀,手上没有进程表那一行);容错开关同理 —— 默认整批抛,开了才跳过。
+assert.ok(windowsTerminateScript([row(10, 1, 100)]).includes("Kill('10:100', $false)"));
+assert.ok(windowsTerminateScript([row(10, 1, "100-200")], { tolerant: true }).includes("Kill('10:100-200', $true)"));
 console.log("✓ 排除陈旧父号,未知代次/服务端身份拒杀,未知后代整棵保留");
 
 if (IS_WINDOWS) {
@@ -50,6 +54,32 @@ if (IS_WINDOWS) {
     assert.doesNotThrow(() => process.kill(fixture.pid, 0), "代次不符时不能下刀");
     assert.equal(killServerProcess(fixture.pid), "selective");
     console.log("✓ 原生 Windows:查询失败不下刀,代次变化拒杀,绑定句柄正常终止");
+
+    // 代次**区间** + **容错**:测试执行域清场时号码来自自己的登记文件,手上没有进程表那一行,
+    // 核的是「出生在本域创建之后、登记之前」这个区间;而一个号码换了主人不能把同一批里其余
+    // 真该停的一起拦下(见 test-process-scope.mjs 的「先砍一刀」)。
+    const doomed = spawnTestFixture(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+    const spared = spawnTestFixture(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+    try {
+      await Promise.all([doomed, spared].map((child) =>
+        new Promise((ready, failed) => { child.once("spawn", ready); child.once("error", failed); })));
+      const table = listProcesses();
+      const born = (pid) => table.find((entry) => entry.pid === pid)?.created;
+      assert.ok(born(doomed.pid) && born(spared.pid), "两个 fixture 都要在进程表里");
+      const batch = windowsTerminateScript([
+        { pid: spared.pid, created: "1-2" }, // 区间落在 1601 年:任何进程都对不上
+        // 区间给一秒的余量:进程表那边的 `CreationDate` 和句柄那边的 `GetProcessTimes`
+        // 不保证最后几位一致(精确那一路也正是为此才除 10 再比)。
+        { pid: doomed.pid, created: `${BigInt(born(doomed.pid)) - 10_000_000n}-${BigInt(born(doomed.pid)) + 10_000_000n}` },
+      ], { tolerant: true });
+      const output = await runTestProcess("powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(batch, "utf16le").toString("base64")], { encoding: "utf8" });
+      assert.match(output.stdout, new RegExp(`ASH_RESTART_SKIPPED ${spared.pid}\\b`), "对不上的只报号码");
+      assert.doesNotThrow(() => process.kill(spared.pid, 0), "区间对不上不能下刀");
+      for (let attempt = 0; attempt < 100 && isPidAlive(doomed.pid); attempt++) await delay(20);
+      assert.ok(!isPidAlive(doomed.pid), "区间对得上的照杀,不被另一条拦下");
+      console.log("✓ 原生 Windows:代次区间核得准,容错只跳过对不上的那一个");
+    } finally { await doomed.dispose(); await spared.dispose(); }
   } finally {
     childProcess.execFileSync = original;
     syncBuiltinESMExports();
