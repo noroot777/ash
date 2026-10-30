@@ -549,7 +549,11 @@ export function restartCommand(
         // register 抛一句「旧命令会话尚未停止」(500,且不说是谁还活着)诚实得多。
         // pids 为空的那种 unresolved(证据不全)不走这条路:没有活号可举,照旧起新的。
         const alive = liveLeftovers(stop);
-        if (alive.length) return { status: 502 as const, body: { error: `重启失败：${stop.kind === "unresolved" ? stop.why : ""}` } };
+        // 话要说全:旧的那份**已经停了**、新的没起 —— 只说「重启失败」,用户会以为服务还开着。
+        if (alive.length) {
+          return { status: 502 as const, body: { error: "重启没有起新的一份：旧的那份已经停下，服务现在是停着的；"
+            + `账上还有确认活着的进程，起第二份只会撞上它们${stop.kind === "unresolved" ? `（${stop.why}）` : ""}` } };
+        }
         const session = await reservation.create(cwd, { name: resolved.name, script: resolved.script });
         // 旧服务的监听停了、新的起来了,但旧账上那几个核不上归属的号还活着 —— 照实说一句,
         // 别让「重启成功」把它盖过去。

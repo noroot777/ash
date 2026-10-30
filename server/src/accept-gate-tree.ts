@@ -160,8 +160,10 @@ async function freezeEntry(path: string, hash: ReturnType<typeof createHash>, wa
     throw error;
   }
   if (frame.ancestors.has(canonical)) return false;
-  let info: Stats;
-  try { info = await stat(path); } catch { return false; }
+  // 跟上面 realpath 同一口径:只有确实不在才算「这条输入不存在」,读不动要上抛(本文件
+  // treeRealPath / linkLanding 同一条理由 —— 读不动说明这一问没答上来)。
+  const info: Stats | null = await optionalRead(path, () => stat(path), ["ENOENT", "ENOTDIR", "ELOOP"]);
+  if (!info) return false;
   if (info.isFile()) {
     hash.update(`file:${info.mode & 0o111}:`);
     if (copy) {

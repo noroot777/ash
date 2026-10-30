@@ -509,7 +509,7 @@ export async function groupLaunchTargets(groupId: string): Promise<string[]> {
  * 共用一个 catch,第一个读抛错就等于剩下的队列这次重启全都没恢复,而定时 tick 不会再扫
  * 这一趟(第 1 轮审查发现 3 的第二半)。失败的那一条交给 `deferQueueAdvance` 退避重试。
  */
-export async function recoverQueueAdvances(): Promise<void> {
+export async function recoverQueueAdvances(attempt = 0): Promise<void> {
   let intents: Set<string>;
   let queueIds: Set<string>;
   try {
@@ -519,9 +519,11 @@ export async function recoverQueueAdvances(): Promise<void> {
     // 连「有哪些队列」都没读出来:这一轮一条都恢复不了,而定时 tick 只重放已落库的推进请求,
     // 不会再扫这一趟。所以这里自己留着整轮的恢复责任,退避后重来(调用方的 catch 只负责
     // 别让启动挂掉)。
-    console.error("[ash] 重启恢复:队列枚举失败，稍后重试整轮:", error);
-    const timer = setTimeout(() => void recoverQueueAdvances()
-      .catch((retryError) => console.error("[ash] 队列推进补办重试失败:", retryError)), 1_000);
+    // 退避加倍、封顶一分钟,但不设次数上限:放弃就等于这次重启的恢复责任没人接。
+    const wait = Math.min(1_000 * 2 ** attempt, 60_000);
+    console.error(`[ash] 重启恢复:队列枚举失败，${wait / 1000}s 后重试整轮:`, error);
+    const timer = setTimeout(() => void recoverQueueAdvances(attempt + 1)
+      .catch((retryError) => console.error("[ash] 队列推进补办重试失败:", retryError)), wait);
     timer.unref?.();
     return;
   }

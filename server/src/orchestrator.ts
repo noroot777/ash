@@ -648,8 +648,11 @@ export async function continueTask(
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
     if (err instanceof ReviewSuperseded) {
-      await withdrawReviewStart(taskId, reviewStart, priorStatus);
-      return false;
+      // 两个抛出点:起跑前的 assertReviewTurnStart,和 spawn **之后**的 commitReviewTurnDelivery。后一种
+      // 输入已交到 CLI 手上(finally 收掉它之前它可能已经动过),只能交给越线记号去判,不许说「没送出去」。
+      await withdrawReviewStart(taskId, reviewStart, priorStatus, !!handle);
+      frozenBeforeSpawn = !handle;
+      return !frozenBeforeSpawn;
     }
     const steered = await takeSteered(taskId);
     const stopped = takeStopped(taskId);
@@ -690,7 +693,7 @@ export async function continueTask(
     if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
-  // 落到时间线/状态上)。返回 false 的只有两类「一个字没送出去」:被单飞锁挡回,和
-  // 起跑前被冻结闸撤回(后者让 resumePrompt/待发送消息的调用方把原文安全放回)。
+  // 落到时间线/状态上)。返回 false 的只有「一个字没送出去」的几类:被单飞锁挡回,起跑前
+  // 被冻结闸撤回,以及 spawn 之前的审查撤回(让 resumePrompt/待发送消息的调用方把原文安全放回)。
   return !frozenBeforeSpawn;
 }
