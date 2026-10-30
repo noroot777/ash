@@ -46,6 +46,8 @@ import {
   reportLeadFailure,
   traceLead,
 } from "./lead-voice.js";
+// 看门狗熔断掉的那一轮的「这一轮是失败的」—— 由下结论的一方写下,收尾这两处各自读。
+import { clearStallFailure, stallFailure } from "../turn-stall-verdict.js";
 
 // 待命中的常驻会话冒出这几种事件 = CLI 自己又开工了(见 consume 里的补开回合)。
 //
@@ -118,7 +120,7 @@ async function consume(lead: Lead): Promise<void> {
     traceInTurn({ kind: "text", text: pendingTraceText });
     pendingTraceText = "";
   };
-  const stallActions = leadStallActions(lead, traceInTurn);
+  const stallActions = leadStallActions(lead, traceInTurn, releasePending);
   // 兜底:上面每个写库点都已经各自把失败咽下了(persistOrReport),这里管的是**剩下**
   // 那些没预料到的抛出 —— 执行器解析、用量记账、乃至 events 流自己炸掉。掀翻循环本身
   // 不致命,**跳过 closeLead 才致命**(理由见 reportLeadFailure 顶部),所以这里只如实说
@@ -427,17 +429,24 @@ async function endTurn(lead: Lead): Promise<void> {
     endIso,
   );
   // 这一回合的区间（产物归属按它认人，不按会话寿命——常驻调度台那一行从开台活到收工）。
-  // 走到这里就是**执行器自己报的「这一轮说完了」**,所以结局是 completed:进程继续待命,
-  // 它后来怎么没的(空闲回收、异常退出)属于另一件事,不许回头改写这一轮(门禁在
-  // `writeTurnRow` 的收尾合并上;后果见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  // 走到这里通常就是**执行器自己报的「这一轮说完了」**,结局 completed:进程继续待命,它后来
+  // 怎么没的(空闲回收、异常退出)属于另一件事,不许回头改写这一轮(门禁在 `writeTurnRow` 的
+  // 收尾合并上;后果见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  //
+  // **唯一的例外是看门狗熔断掉的那一轮**:那个 turnEnd 正是我们请求来的,不是它自己答完的。
+  // 无条件记 completed 的那一版于是让时间线红着写「已按失败结算」、区间却是成功
+  // (第 1 轮审查第 2 条,已实测)。结论由下结论的一方钉在回合身份上(../turn-stall-verdict.ts),
+  // 这里只读;读完销账 —— 这一轮的区间已经落定,不会再有人来读。
+  const watchdogFailed = turnStart ? stallFailure(lead.sessId, turnStart) : null;
   await recordTurnSpan({
     sessionId: lead.sessId,
     taskId: lead.taskId,
     cwd: lead.cwd,
     startedAt: turnStart,
     endedAt: endIso,
-    outcome: "completed",
+    outcome: watchdogFailed ? "failed" : "completed",
   });
+  clearStallFailure(lead.sessId, turnStart);
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
   // 还有回合在手：攒着的执行者汇报等它真正空下来再合并送（省一轮模型调用本来就是这么来的）,
@@ -548,14 +557,19 @@ async function closeLead(
   // 码退出,从前那个退出码被读成「上一轮失败」,整轮的「正在重试」重新挂回手机上。
   const closeOutcome = (lead.closing ?? stopSettle) ? "stopped" : aborted || exitStatus !== 0 ? "failed" : "completed";
   for (const startedAt of closing) {
+    // 看门狗熔断/回收掉的那一轮**逐轮**单独认(../turn-stall-verdict.ts):`closeOutcome` 是整台的
+    // 口径,而被我们回收的进程多半报不出非零退出码(claude 走信号退出时是 `code ?? 0` = 0),
+    // 照整台口径会把它记成 completed。手上同时攥着好几轮时也只该改熔断那一轮。
+    const watchdogFailed = stallFailure(lead.sessId, startedAt);
     await recordTurnSpan({
       sessionId: lead.sessId,
       taskId: lead.taskId,
       cwd: lead.cwd,
       startedAt,
       endedAt: endIso,
-      outcome: closeOutcome,
+      outcome: watchdogFailed ? "failed" : closeOutcome,
     });
+    clearStallFailure(lead.sessId, startedAt);
   }
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
   // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。

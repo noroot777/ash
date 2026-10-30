@@ -48,8 +48,13 @@ export class CodexChildActivity {
       }
     } else if (method === "error") {
       // 跟主线程同一份判据(codex-error-event.ts):重试中抬成 level:"notice"。从前这里不看
-      // `willRetry`、一律裸 error —— 一场重连风暴在子智能体抽屉里是几百条红色「执行异常」,
-      // 每一条都把这一轮判成有执行故障,而它只是在重试。
+      // `willRetry`、一律裸 error —— 一场重连风暴在子智能体抽屉里就是几百条红色「执行异常」,
+      // 而它只是在重试。
+      //
+      // 注意这一层**只改抽屉里的渲染和语义,不改父回合的成败**:下面那个 `push` 会把它包进
+      // `childActivity`(恒为 `kind:"tool"`),所以它既不会写主时间线的红色诊断块、也不会置
+      // `sawExecutionError` —— 子线程在重试不等于父回合有执行故障,这是刻意的。真正要穿过
+      // 这层包装去判的只有回合级停滞看门狗(../turn-stall.ts 的 errorFacts):包装不是进展。
       const reported = codexErrorEvent(p);
       if (reported) push(reported.event);
     } else if (method === "turn/completed" && p.turn?.error?.message) {

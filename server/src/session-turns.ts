@@ -188,6 +188,11 @@ export const resumedTurnFields = (_at: string) => ({
   // 列,所以缺它只在**复用同一行**的那几条路上看得出来(团队/duet),而读端拿它当「这一轮不是
   // 失败」的判据,留着就会把一轮真失败说成受控停止(见 session-waiting.ts)。
   stoppedAs: null as string | null,
+  // 「上游停滞」那个标记同理,而且它更凶:读端的 EXISTS 本来靠 `ended_at IS NULL` 把陈旧值
+  // 挡在外面(task-store.ts),可这里正好把 `ended_at` 清成 null —— 上一轮留下的标记于是当场
+  // 复活,页面上一边是正常答完的新回合、一边亮着红色停滞环,刷新还在(第 1 轮审查第 3 条,
+  // 已实测)。这是**开始边界**那一道;终止边界那一道在 session-stall-flag.ts。
+  upstreamStalledSince: null as string | null,
 });
 
 /**

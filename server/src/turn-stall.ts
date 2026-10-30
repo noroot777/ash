@@ -24,35 +24,40 @@
 // 才轮到这里。
 //
 // 为什么住在**消费层**而不是各执行器里:停滞这件事对 claude / codex / kimi / cursor / … 是
-// 同一件事,而 error 事件的语义各家不同(盘点见 docs 与本轮收尾说明)。各 adapter 只负责把
-// 「上游在重试」如实抬成 `kind:"error" + level:"notice"` 事件,判据与动手一律在这一份里 ——
-// 三条消费链(single-run / duet / team)共用它,别再各内联一份。
+// 同一件事,只有「怎么把上游在重试这件事说出来」各家不同。三条消费链(single-run / duet /
+// team)共用这一份,别再各内联一份;**也别在某个 adapter 里另抄一个计时器**。
 //
-// ── 各执行器喂进来的是什么(2026-10-30 盘点,看门狗只认 `kind:"error"`) ────────────
-// 这一层只能看见各 adapter**肯发出来**的 error 事件,所以盘点的结论同时就是覆盖面:
-//   · claude(`executors/claude-stream.ts`)—— 已经是对的那一家:`api_retry` 每次抬成
-//     notice,外加一个 waitTimer(默认 5 分钟一条)专治「requesting 之后彻底静默」那种
-//     不重试、不报错、零事件的挂住。**两档全覆盖。**
-//   · codex app-server(主线程 + 子智能体线程)—— 本轮修的两处,判据合并到
-//     `executors/codex-error-event.ts`:重试中 = notice、重试完还是错 = 裸 error。
-//     从前主线程整条丢掉(就是这次事故)、子线程一律裸 error(反方向的毛病)。**两档全覆盖。**
-//   · codex exec(`executors/codex.ts`)—— 事件流里只有 `turn.failed` 和 `error` 两种,
-//     都是终局错误、没有 willRetry 这一档,所以它要么报错收尾、要么静默。**错误一侧覆盖。**
-//   · catalog 的十一家(cursor/antigravity/qwen/opencode/kimi/grok/gemini/kilo/pi/qoder/…)
-//     —— 错误一律走 `catalog/parsers.ts` 那个共用 finish():spawn 失败、非零退出、exit 0
-//     但零输出、流没收尾。全是**进程退出之后**才发的,所以回合进行中它们一个 error 都不发。
-//     **这些家此刻只在「进程退出前报过错又不收尾」时才会被看门狗接住。** 已知唯一一处可补的
-//     信号源是 pi 的 `auto_retry_*`(它自己的注释也写着「长时间重试时界面会显得静默」),
-//     那几个事件现在只落原始 trace、不进事件流 —— 要补得先有真实样本,本轮没动。
-// 结论:**停滞判据与两档动手在这一份里,一处都不重复;而「我在等上游」要由各 adapter 说出来**
-// —— 不说出来的那几家,这一层给不出结论也不会乱猜(纯静默不动手,见上面一段)。
+// ── 各执行器喂进来的是什么(2026-10-30 盘点,看门狗只认 error 事件) ──────────────
+// 按**错误什么时候发得出来**分三档,这三档决定了看门狗在哪几家身上真的有用:
+//   ① **活动期就发错误**(回合还在跑、进程还活着就发 —— 看门狗接得住的只有这一档):
+//      claude 的 `api_retry`(已抬成 `level:"notice"`,外加一个 waitTimer 专治「requesting
+//      之后彻底静默」那种不重试、不报错、零事件的挂住,**两档全覆盖**);codex app-server
+//      的主线程与子智能体线程(本轮修的两处,判据合到 `executors/codex-error-event.ts`:
+//      重试中 = notice、重试完还是错 = 裸 error);以及 catalog 里按流内事件报错的那几家
+//      —— gemini(`error` 事件,含 warning 档)、kimi、grok、kilo、opencode、cursor、qwen、
+//      qoder、antigravity、pi(各自的 `result`/`turn` 失败)。**但后面这十家发的基本都是
+//      终局错误**(「这一轮失败了」,发完就收尾),不是「我在重试」,所以看门狗在它们身上兜
+//      的是另一种毛病:**报了错又不收尾**(反复报错却永不结束的回合,照总时长判抓不到)。
+//   ② **只在收尾时发错误**(`catalog/parsers.ts` 的共用 `finish()`:spawn 失败、非零退出、
+//      exit 0 却零输出、流没收尾)—— 全是验尸式的,那时回合已经结束,看门狗不参与。
+//   ③ **重试被咽掉、一个字都不发**(真正的盲区):pi 的 `auto_retry_*` 只落原始 trace 不进
+//      事件流(它自己的注释也写着「长时间重试时界面会显得静默」)。要补得先有真实样本,
+//      本轮没动。codex 主线程从前也在这一档,就是这次事故。
+// 结论:**判据与两档动手在这一份里,一处都不重复;而「我在等上游」要由各 adapter 说出来**
+// —— 落在第 ③ 档的那几家,这一层给不出结论也不会乱猜(纯静默不动手,见上面一段)。
 //
-// 本文件**刻意不碰库、不碰 bus**:判据是纯状态机,所以能被 `test-turn-stall.ts` 直接钉住。
-// 落盘与终止回合由各链传进来的 `StallActions` 做。
+// 本文件**不碰库、不碰 bus**:判据是纯状态机,所以能被 `test-turn-stall.ts` 直接钉住。
+// 落盘、终止回合、回收句柄由各链传进来的 `StallActions` 做;唯一的例外是
+// `turn-stall-verdict.ts` —— 那也只是一张内存表,而「这一轮算失败」这个结论必须由下结论的
+// 这一方写下,见那个文件头。
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
+import { detachedPathsFor } from "./executors/detached-child.js";
 import { isExecutionNotice } from "./session-notice.js";
 import { RUNS_DIR } from "./paths.js";
+import { runTracePaths } from "./transcript.js";
+import { markStallFailure } from "./turn-stall-verdict.js";
 import { now } from "./util.js";
 
 /** 持有者 = 此刻在消费这条会话的那个实例本身(同 session-waiting.ts 的 WaitingOwner)。 */
@@ -69,8 +74,22 @@ export interface StallFacts {
   errors: number;
   /** 其中 `level:"notice"` 的那些 —— 「上游在重试」这一类。 */
   retries: number;
+  /** 其中来自**子智能体线程**的那些(包装成 `nativeWork` 活动的,见 errorFacts)。 */
+  childErrors: number;
   /** 最后一条错误的原文(已截断)。 */
   lastMessage: string;
+  /**
+   * 停滞**之前**这一轮最后那条正常事件是什么(`text`/`thinking`/`tool`/…),null = 这一轮从头
+   * 到尾没有过正常事件。
+   *
+   * 诊断里「卡在哪一步」靠它:`tool` 之后挂住(工具跑完等模型总结)和一条正常输出都没有过
+   * (连接从头就没建起来)是两种现场,要查的东西完全不同。
+   *
+   * **原始协议的 method/type 不在这一层**:那个只有 `executors/diagnostics.ts` 的
+   * `RunTraceRecorder.finish()` 产出,而它是**进程退出之后**才跑的 —— 熔断这一刻进程还活着,
+   * 那个对象压根不存在。同一份信息在下面 `rawLogHint` 指名的那个原始事件流文件的最后一行里。
+   */
+  lastProgressKind: string | null;
   elapsedMs: number;
 }
 
@@ -86,26 +105,67 @@ export interface StallActions {
    */
   warn(text: string, facts: StallFacts): void;
   /**
-   * **熔断档**:红色诊断 + 判这一轮失败 + 终止回合。
+   * **熔断档**:红色诊断 + 终止这一轮。
    *
-   * 实现方必须把「这一轮算失败」也落下来(单飞是 `sawExecutionError`),**不能只靠退出码**:
-   * 各执行器的 `kill()` 语义不一(codex 的 kill 会置 `stopRequested`,从而咽掉自己那份失败
-   * 诊断),光杀进程有可能settle成「受控停止」而不是失败,那样用户连重试按钮都看不到。
+   * 「这一轮算失败」这件事**本模块已经替实现方钉好了**(熔断前先写 `turn-stall-verdict.ts`,
+   * 三处结算各自去读),实现方不必、也不该再去反推退出码 —— 被杀的 CLI 多半报不出非零,理由
+   * 见那个文件头。这里只负责「说出来 + 让它停下」。
    */
   trip(text: string, facts: StallFacts): void;
-  /** 停滞解除(上游回话了)或回合收尾:撤掉卡片上那个持久标记。只在真的报过警时才会被调。 */
-  resolve(): void;
+  /**
+   * **熔断的兜底**:`trip` 之后过了宽限期,这一轮**还是没真的结束**。
+   *
+   * 为什么要有这一档(第 1 轮审查第 4 条):`trip` 对常驻台走的是 `interrupt()`,而那只是
+   * 往 stdin 写一行请求 —— 没有 ACK、没有「等回合真的结束」、也没有强杀退路。请求没人理
+   * 的话,熔断就只是在时间线上说了句话,回合照旧卡着。所以熔断**以真实结束为成功条件**:
+   * 没结束就在这里回收句柄/台。
+   *
+   * 不实现 = 这条链的 `trip` 本身就是硬终止(单飞/duet 直接 `kill()`),不需要第二档。
+   */
+  escalate?(text: string, facts: StallFacts): void;
+  /**
+   * 停滞解除(上游回话了)或回合收尾:撤掉卡片上那个持久标记。只在真的报过警时才会被调。
+   *
+   * **熔断之后同样会走到这里**(回合真结束时)—— 那个标记说的是「此刻正卡着」,回合都结束了
+   * 它就该撤掉,持久可见的那份证据是时间线上的熔断诊断 + 任务落的失败态。不撤的那一版会把
+   * 标记留在会话行上,下一轮复用同一行时 `ended_at` 一清,它又亮起来:页面上一边是正常答完
+   * 的新回合、一边是红色停滞环,刷新还在(第 1 轮审查第 3 条,已实测)。
+   */
+  resolve(facts: StallFacts): void;
 }
 
 type Stall = StallFacts & {
   owner: StallOwner;
   sinceMs: number;
   warned: boolean;
-  tripped: boolean;
+  trippedAtMs: number | null;
+  escalated: boolean;
   actions: StallActions;
 };
 
 const stalls = new Map<string, Stall>();
+
+/** 配过一次的坏值只报一次,别让看门狗自己变成刷屏源。 */
+const badEnvReported = new Set<string>();
+
+/**
+ * 读一个毫秒/条数阈值。**非有限数一律退回默认值**。
+ *
+ * 不校验的那一版有个很糟的失效方向(第 1 轮审查非拦项):`ASH_STALL_TRIP_MS=30m` 解析成
+ * `NaN`,而 `NaN <= 0` 和 `elapsedMs < NaN` **都是 false** —— 两道闸同时放行,于是第一条
+ * 错误事件就当场熔断。看门狗配错一个字就变成「见错就杀」,这比不设看门狗更坏。
+ */
+function num(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return fallback;
+  const value = Number(raw);
+  if (Number.isFinite(value)) return value;
+  if (!badEnvReported.has(name)) {
+    badEnvReported.add(name);
+    console.warn(`[ash] ${name}=${JSON.stringify(raw)} 不是数字,这一档按默认值 ${fallback} 走`);
+  }
+  return fallback;
+}
 
 /**
  * 阈值**每次现读**而不是模块加载时定格:回归测试要在一个进程里分阶段改口径(先钉条数档、
@@ -116,15 +176,17 @@ const stalls = new Map<string, Stall>();
 function thresholds() {
   return {
     /** 警告档:连续这么多条错误事件(期间无任何非错误事件)就报。 */
-    warnErrors: Number(process.env.ASH_STALL_WARN_ERRORS ?? 5),
+    warnErrors: num("ASH_STALL_WARN_ERRORS", 5),
     /** 警告档:这种状态持续这么久也报(两个条件取或)。 */
-    warnMs: Number(process.env.ASH_STALL_WARN_MS ?? 5 * 60_000),
+    warnMs: num("ASH_STALL_WARN_MS", 5 * 60_000),
     /** 熔断档:这种状态持续这么久就终止本回合。 */
-    tripMs: Number(process.env.ASH_STALL_TRIP_MS ?? 30 * 60_000),
+    tripMs: num("ASH_STALL_TRIP_MS", 30 * 60_000),
+    /** 熔断之后留给「这一轮真的结束」的宽限期,过了就回收句柄(见 StallActions.escalate)。 */
+    graceMs: num("ASH_STALL_TRIP_GRACE_MS", 60_000),
   };
 }
 
-const pollMs = () => Math.min(30_000, Math.max(200, Number(process.env.ASH_STALL_POLL_MS ?? 15_000)));
+const pollMs = () => Math.min(30_000, Math.max(200, num("ASH_STALL_POLL_MS", 15_000)));
 
 let timer: NodeJS.Timeout | null = null;
 
@@ -132,7 +194,7 @@ let timer: NodeJS.Timeout | null = null;
  * 时间档只能靠计时器:**最后一条错误事件之后可能再也没有事件了**。W54 现场的重连提示
  * 恰好每 80 秒一条,看着像能靠事件驱动走完;但同一个毛病换成「挂住之后彻底静默」
  * (2026-09-24 那次中转网关挂了 47 分钟,回合从头到尾零事件)就一条都不会来 ——
- * 事件驱动的那一版会在最后一条提示上永远停住。
+ * 事件驱动的那一版会在最后一条提示上永远停住。熔断后的宽限期同理:回合没结束就没有事件。
  *
  * 一个共享计时器扫整张表(而不是每条会话一个):停滞是少见状态,表通常是空的。
  */
@@ -151,8 +213,45 @@ function disarm() {
   timer = null;
 }
 
-/** 这条事件算「上游接着往下走了」吗 —— 停滞判据的**唯一**解除条件。 */
-const isProgress = (event: AgentEvent): boolean => event.kind !== "error";
+/**
+ * 这条事件是不是一条错误 —— **穿过包装看里面那一层**。
+ *
+ * 子智能体(codex 的子线程、claude 的 `parent_tool_use_id` 子回合)的每一条活动都被
+ * `executors/native-agent-activity.ts` 的 `childActivity()` 包成
+ * `{ kind:"tool", name:"Agent", nativeWork:{ type:"activity", event } }` —— 包装层恒为
+ * `tool`,真正的那条错误躺在 `nativeWork.event` 里。只看外层的那一版于是把子线程的重连
+ * 风暴读成「有工具在动」:**既开不了停滞,还会把父线程已经开着的那一份当场解除**,正好
+ * 把看门狗关在了最需要它的场合(第 1 轮审查第 1 条,已实测)。
+ *
+ * 不变量写在这一层而不是让各 adapter 改发裸 error:子线程的错误**不是**父回合的终局错误
+ * (几百条重连提示不该把这一轮判成有执行故障,也不该从子智能体抽屉里跑到主时间线上),
+ * 包装要留着,逻辑子线程身份也要留着 —— 所以这里顺手把「它来自子线程」一起带出去,
+ * 熔断诊断要用。
+ */
+function errorFacts(event: AgentEvent): { message: string; notice: boolean; child: boolean } | null {
+  const inner = event.kind === "tool" && event.nativeWork?.type === "activity" ? event.nativeWork.event : null;
+  const err: AgentEvent | typeof inner = inner ?? event;
+  if (!err || err.kind !== "error") return null;
+  // notice 的判据只有一份(session-notice.ts):包装内外同一个字段、同一个含义,
+  // 所以解包之后照样过那一份,别在这儿另写一遍 `level === "notice"`。
+  return { message: err.message, notice: isExecutionNotice(err), child: !!inner };
+}
+
+// 「这条事件算上游接着往下走了吗」= `errorFacts(event) === null`,停滞判据的**唯一**解除条件。
+// 不另包一个 isProgress 谓词:两个名字读同一份判据,改一处漏一处的毛病就是这么来的。
+
+/**
+ * 这一轮最后那条**正常**事件是什么 kind,按持有者记(见 StallFacts.lastProgressKind)。
+ *
+ * 用 WeakMap 挂在持有者对象上而不是一张按 sessionId 的表:持有者就是此刻在消费这条流的那个
+ * 句柄/台,它被回收时这条记录跟着没,不需要任何清理路径 —— 而按 sessionId 的表就得为每条活着
+ * 的会话各记一份、还得保证收尾时删掉。带上回合身份是因为常驻台一个持有者吃很多轮。
+ *
+ * 代价是每条正常事件一次 WeakMap.set(正文 delta 也算,那是最密的一路)。量级上可忽略,但它
+ * 确实排在下面那句「热路径在这儿就走掉」之前,所以摆在明处:换来的是熔断诊断说得出「卡在哪
+ * 一步」,而不是只能说「什么都没有」。
+ */
+const lastProgress = new WeakMap<StallOwner, { turn: string; kind: string }>();
 
 /**
  * 事件消费链上的每一条 agent 事件都过这里。
@@ -164,6 +263,7 @@ const isProgress = (event: AgentEvent): boolean => event.kind !== "error";
  *   · error 事件 → 计入停滞。`level:"notice"`(上游在重试)另记一笔,诊断文案要用。
  *     真故障(非 notice)**同样计入**:它既不是进展,也不该把 30 分钟的钟重置掉 —— 一个每隔
  *     几分钟报一次真错、却永远不收尾的回合跟重连循环是同一个毛病。
+ *   · 两侧都**穿过子智能体包装**判(见 errorFacts):包装不是进展。
  *
  * `turnStartedAt` 给 null = 这一刻还没有回合身份:一条都不记(同 session-waiting.ts ——
  * 没有回合的提示记下来只会挂在一个与它无关的回合名下,熔断更不该在没有身份时动手)。
@@ -175,7 +275,9 @@ export function trackTurnStall(
   event: AgentEvent,
   actions: StallActions,
 ): void {
-  if (isProgress(event)) {
+  const err = errorFacts(event);
+  if (!err) {
+    if (turnStartedAt) lastProgress.set(owner, { turn: turnStartedAt, kind: event.kind });
     if (stalls.size === 0) return; // 热路径(正文 delta)在这儿就走掉
     const held = stalls.get(sessionId);
     // 持有者不符 = 迟到的旧台输出,无权解除接管那台的停滞(同 session-waiting.ts 的换台闸)。
@@ -191,8 +293,9 @@ export function trackTurnStall(
     : openStall(sessionId, owner, turnStartedAt, actions);
   stall.actions = actions;
   stall.errors += 1;
-  if (isExecutionNotice(event)) stall.retries += 1;
-  if (event.kind === "error") stall.lastMessage = event.message.slice(0, 300);
+  if (err.notice) stall.retries += 1;
+  if (err.child) stall.childErrors += 1;
+  stall.lastMessage = err.message.slice(0, 300);
   evaluate(sessionId, stall);
 }
 
@@ -214,11 +317,15 @@ function openStall(
     sinceMs: Date.parse(at),
     errors: 0,
     retries: 0,
+    childErrors: 0,
     lastMessage: "",
+    // 这一轮停滞之前最后那条正常事件。身份不符 = 那是上一轮的,不算(常驻台一个持有者吃很多轮)。
+    lastProgressKind: ((prior) => (prior?.turn === turnStartedAt ? prior.kind : null))(lastProgress.get(owner)),
     elapsedMs: 0,
     owner,
     warned: false,
-    tripped: false,
+    trippedAtMs: null,
+    escalated: false,
     actions,
   };
   stalls.set(sessionId, stall);
@@ -226,31 +333,35 @@ function openStall(
   return stall;
 }
 
-/** 停滞结束(上游回话 / 回合收尾 / 已熔断):报过警就得把卡片上那个标记撤掉。 */
+const factsOf = (stall: Stall): StallFacts => ({
+  sessionId: stall.sessionId,
+  taskId: stall.taskId,
+  turnStartedAt: stall.turnStartedAt,
+  since: stall.since,
+  errors: stall.errors,
+  retries: stall.retries,
+  childErrors: stall.childErrors,
+  lastMessage: stall.lastMessage,
+  lastProgressKind: stall.lastProgressKind,
+  elapsedMs: stall.elapsedMs,
+});
+
+/** 停滞结束(上游回话 / 回合收尾 / 熔断后回合真的结束了):报过警就得把那个标记撤掉。 */
 function close(sessionId: string, stall: Stall): void {
   stalls.delete(sessionId);
   if (stalls.size === 0) disarm();
   if (!stall.warned) return;
   try {
-    stall.actions.resolve();
+    stall.actions.resolve(factsOf(stall));
   } catch (error) {
     console.warn(`[ash] 撤销会话 ${sessionId} 的上游停滞标记失败:`, error);
   }
 }
 
 function evaluate(sessionId: string, stall: Stall): void {
-  const { warnErrors, warnMs, tripMs } = thresholds();
+  const { warnErrors, warnMs, tripMs, graceMs } = thresholds();
   stall.elapsedMs = Math.max(0, Date.now() - stall.sinceMs);
-  const facts: StallFacts = {
-    sessionId: stall.sessionId,
-    taskId: stall.taskId,
-    turnStartedAt: stall.turnStartedAt,
-    since: stall.since,
-    errors: stall.errors,
-    retries: stall.retries,
-    lastMessage: stall.lastMessage,
-    elapsedMs: stall.elapsedMs,
-  };
+  const facts = factsOf(stall);
   if (!stall.warned
     && ((warnErrors > 0 && stall.errors >= warnErrors) || (warnMs > 0 && stall.elapsedMs >= warnMs))) {
     stall.warned = true;
@@ -260,15 +371,30 @@ function evaluate(sessionId: string, stall: Stall): void {
       console.warn(`[ash] 落会话 ${sessionId} 的上游停滞警告失败:`, error);
     }
   }
-  if (stall.tripped || tripMs <= 0 || stall.elapsedMs < tripMs) return;
-  stall.tripped = true;
-  // 先登记再动手:`trip` 会杀掉进程,流随即结束、消费链走到 clearTurnStall —— 表里还留着
-  // 这一条的话,那次 close 会再调一次 resolve 去撤标记,把熔断诊断旁边那个卡片状态一起
-  // 擦掉。所以这里先摘牌(resolve 由 trip 的实现方在失败结算里自己负责)。
-  stalls.delete(sessionId);
-  if (stalls.size === 0) disarm();
+  if (stall.trippedAtMs !== null) {
+    // 已经熔断过了。**这一条不摘牌**:熔断的成功条件是「这一轮真的结束」,而那只能由消费链
+    // 走到 clearTurnStall 来证明(届时 close 会把标记撤掉)。回合没结束就说明终止请求没生效,
+    // 过了宽限期再升一级回收句柄 —— 只升一次,之后留在表里等真实结束。
+    // 从前这里是 `stalls.delete()`,于是熔断掉的那一轮既没人兜底、标记也永远撤不掉
+    // (第 1 轮审查第 3、4 条)。
+    if (!stall.escalated && graceMs > 0 && Date.now() - stall.trippedAtMs >= graceMs) {
+      stall.escalated = true;
+      try {
+        stall.actions.escalate?.(stallEscalateText(facts, graceMs), facts);
+      } catch (error) {
+        console.warn(`[ash] 回收会话 ${sessionId} 的停滞回合失败:`, error);
+      }
+    }
+    return;
+  }
+  if (tripMs <= 0 || stall.elapsedMs < tripMs) return;
+  stall.trippedAtMs = Date.now();
+  const text = stallTripText(facts);
+  // **先把「这一轮失败」钉死,再动手终止。** 顺序是刻意的:trip 会杀进程,流随即结束、
+  // 消费链当场走到收尾结算 —— 那一刻它必须已经读得到这个结论(见 turn-stall-verdict.ts)。
+  markStallFailure(stall.sessionId, stall.turnStartedAt, text);
   try {
-    stall.actions.trip(stallTripText(facts), facts);
+    stall.actions.trip(text, facts);
   } catch (error) {
     console.warn(`[ash] 熔断会话 ${sessionId} 的停滞回合失败:`, error);
   }
@@ -290,14 +416,47 @@ const minutes = (ms: number): string => {
   return `${Math.round(ms / 60_000)} 分钟`;
 };
 
-/** 错误条数 + 其中多少条是重试提示。两个数都给:全是重试 ≠ 一半是真故障,措辞不该一样。 */
-const tally = (facts: StallFacts): string =>
-  facts.retries >= facts.errors
+/** 错误条数 + 其中多少条是重试提示 + 多少条来自子智能体线程。措辞不该把三种混成一种。 */
+const tally = (facts: StallFacts): string => {
+  const head = facts.retries >= facts.errors
     ? `共 ${facts.errors} 条,全部是上游重试提示`
     : `共 ${facts.errors} 条,其中 ${facts.retries} 条是上游重试提示`;
+  if (!facts.childErrors) return head;
+  return `${head};${facts.childErrors === facts.errors ? "全部" : `其中 ${facts.childErrors} 条`}来自子智能体线程`;
+};
 
 const lastLine = (facts: StallFacts): string =>
   facts.lastMessage ? `最后一条:${facts.lastMessage}` : "最后一条错误没有附带说明。";
+
+/** 卡在哪一步 —— 「工具跑完等模型总结」和「一条正常输出都没有过」是两种现场。 */
+const stalledAfter = (facts: StallFacts): string =>
+  facts.lastProgressKind
+    ? `停滞前这一轮最后一条正常事件是 ${facts.lastProgressKind}。`
+    : "这一轮从头到尾没有过任何正常事件(连接多半压根没建起来)。";
+
+/**
+ * 原始事件流的**落点**。
+ *
+ * 给目录是不够的 —— 一个任务目录下几十个文件,出事那一轮是哪一个得人去猜(第 1 轮审查
+ * 非拦项)。两组文件名都是 `(sessionId, 回合起点)` 的纯函数(`detachedPathsFor` /
+ * `runTracePaths`),所以这里能算出确切路径;`existsSync` 过一遍只报真的存在的那几个,
+ * 免得指一个不存在的文件给用户。都不存在就退回目录。
+ */
+function rawLogHint(facts: StallFacts): string {
+  const dir = join(RUNS_DIR, facts.taskId);
+  const candidates = [
+    detachedPathsFor(dir, facts.sessionId, facts.turnStartedAt).out,
+    runTracePaths(dir, facts.sessionId, facts.turnStartedAt).eventsPath,
+  ];
+  const found = candidates.filter((path) => {
+    try {
+      return existsSync(path);
+    } catch {
+      return false;
+    }
+  });
+  return found.length ? found.join("；") : `${dir}(本回合未单独落原始事件流)`;
+}
 
 /** 警告档的文案。落进执行过程里它发生的那个位置,所以写成「此刻怎么了」。 */
 export function stallWarningText(facts: StallFacts): string {
@@ -309,15 +468,23 @@ export function stallWarningText(facts: StallFacts): string {
 export function stallTripText(facts: StallFacts): string {
   return `〔上游停滞·已自动终止本回合〕自 ${facts.since} 起连续 ${minutes(facts.elapsedMs)}`
     + `只收到错误事件、没有任何模型输出或工具调用(${tally(facts)}),判定模型上游连不上,`
-    + `已终止本回合并按失败结算。${lastLine(facts)}\n`
-    + `原始事件流:${join(RUNS_DIR, facts.taskId)}(会话 ${facts.sessionId},回合起于 ${facts.turnStartedAt})\n`
+    + `已终止本回合并按失败结算。${stalledAfter(facts)}${lastLine(facts)}\n`
+    + `原始事件流:${rawLogHint(facts)}(会话 ${facts.sessionId},回合起于 ${facts.turnStartedAt})\n`
     + "可直接重试续跑,或换一个执行器/供应商再跑。"
     + "熔断时长由 ASH_STALL_TRIP_MS 配置(默认 30 分钟,置 0 关闭);"
     + "警告档是 ASH_STALL_WARN_ERRORS(默认 5 条)与 ASH_STALL_WARN_MS(默认 5 分钟)。";
 }
 
+/** 兜底档的文案:终止请求没生效,这一轮是被**回收句柄**结束的 —— 如实说,别冒充前一句。 */
+export function stallEscalateText(facts: StallFacts, graceMs: number): string {
+  return `〔上游停滞·终止请求未生效,已回收进程〕${minutes(graceMs)}前已请求终止这一停滞回合,`
+    + `到现在仍未收到回合结束 —— 改为直接回收它的进程。这一轮仍按失败结算(${tally(facts)})。\n`
+    + "宽限期由 ASH_STALL_TRIP_GRACE_MS 配置(默认 60 秒,置 0 关闭这一档)。";
+}
+
 /** 只给回归测试:把表清干净,免得上一段的残留影响下一段。 */
 export function __resetTurnStalls(): void {
   stalls.clear();
+  badEnvReported.clear();
   disarm();
 }

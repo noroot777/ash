@@ -32,6 +32,7 @@ import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import { clearTurnStall, trackTurnStall, type StallActions } from "./turn-stall.js";
+import { clearStallFailure, stallFailure } from "./turn-stall-verdict.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
@@ -221,21 +222,23 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
       persistTrace(event);
       publishEvent(event);
-      markSessionStalled(taskId, sessId, facts.since);
+      markSessionStalled(taskId, sessId, facts.turnStartedAt, facts.since);
     },
-    // 熔断档:**先把「这一轮失败」钉死再杀进程**。只杀进程是不够的 —— 各执行器的 kill()
-    // 语义不一(codex 的 kill 置 stopRequested,从而咽掉自己那份失败诊断),光看退出码有
-    // 可能被 settle 成受控停止;而 sawExecutionError 这一位是单飞判失败的另一半判据
-    // (「非零退出 **或** 中途报过执行故障」),它一定成立。
+    // 熔断档:说出来 + 杀进程。「这一轮失败」这个结论**不在这儿记** —— 看门狗在调 trip 之前
+    // 就已经把它钉在回合身份上了(turn-stall-verdict.ts),下面收尾那一段连 `executionFailed` 带
+    // 结算用的退出码一起从那一份读。从前这里是 `sawExecutionError = true`:那一位只喂得到
+    // 会话行和回合区间,`settleTaskStatus` 压根看不见它(它只收到原始退出码),于是被我们杀掉
+    // 的回合照样能落 done —— 被杀的 CLI 多半报不出非零(第 1 轮审查第 2 条)。
+    //
+    // 不实现 `escalate`:单飞的 `trip` 本身就是硬终止(三层击杀),没有「请求了没人理」那一档。
     trip: (text) => {
-      sawExecutionError = true;
       const event: AgentEvent = { kind: "error", message: text };
       persistTrace(event);
       writeRunError(out, text);
       publishEvent(event);
       a.handle.kill();
     },
-    resolve: () => clearSessionStalled(taskId, sessId),
+    resolve: (facts) => clearSessionStalled(taskId, sessId, facts.turnStartedAt),
   };
 
   if (a.nativeSteer) {
@@ -386,7 +389,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 会话 UPDATE 都可能抛,抛了就走不到 `recordTurnSpan`,残留的活动登记会让读端把这条会话
   // 当成「还在写」（第 6 轮审查必须修 1）。入口的 finally 还兜一道。
   closeSessionTurns(sessId);
-  const executionFailed = !stopped && (exitStatus !== 0 || sawExecutionError);
+  // 看门狗熔断掉的这一轮:**结论由它写下,这里只读**(turn-stall-verdict.ts)。
+  const watchdogFailure = stallFailure(sessId, a.turnStart);
+  const executionFailed = !stopped && (exitStatus !== 0 || sawExecutionError || !!watchdogFailure);
   // CLI 否认了这条会话：把失效的 id 连同由它派生的三件套恢复命令一起清掉。清了之后
   // orchestrator 的 `resuming`（判据就是「这条会话行上有没有 cli_session_id」）自然为
   // 假，下一次运行走全新会话那条路 —— 不必在别处再加一个「要不要续」的开关。
@@ -469,7 +474,14 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     agentType,
   }).catch(() => 0);
   await persistRunGoal(taskId, agentType, a.handle, exitStatus, stopped);
-  const settled = await settleTaskStatus(taskId, exitStatus, stopped, sessId);
+  // **结算看的退出码必须反映熔断**。库里那一列(上面刚写的 `exitStatus`)记真实值不动;
+  // 结算这一笔得换成非零,因为被我们杀掉的 CLI 报不出非零 —— claude 走信号退出时
+  // `claude-stream.ts` 写的是 `code ?? 0`(信号退出 `code` 为 null,于是 0)。照原样交进去,
+  // 一个永远连不上上游的回合会走进「exit 0」那几支:本轮早先交过卷就落 done,名下还有活动
+  // 哨兵就落 paused —— 时间线上红着写「按失败结算」,任务却显示完成(第 1 轮审查第 2 条)。
+  const settleExit = watchdogFailure && exitStatus === 0 ? 1 : exitStatus;
+  const settled = await settleTaskStatus(taskId, settleExit, stopped, sessId);
+  clearStallFailure(sessId, a.turnStart); // 这一轮结算完了,销账(见那个文件里的水位)
   clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
   // 这一轮到底改没改东西:账在回合开头就清过了,这里只管「白清了要放回去」——
   // 一个字节没改就把游标/轮数/验收阶段原样放回,屋子是临时搭的还顺手拆掉。

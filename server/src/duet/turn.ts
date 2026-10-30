@@ -300,10 +300,14 @@ export async function runTurn(args: {
         const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
         appendSessionTrace(taskId, rowId, turnStart, event);
         bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
-        markSessionStalled(taskId, rowId, facts.since);
+        markSessionStalled(taskId, rowId, facts.turnStartedAt, facts.since);
       },
       // `errorMsg` 非空 = 这一轮按失败结算(见下面 recordTurnSpan 的 outcome),而讨论链据此
       // 中止整场 —— 对一个上游连不上的回合这正是想要的:接着往下发言只会把空话喂给对手。
+      // 所以讨论这一路不需要从 `turn-stall-verdict.ts` 读回结论:它的结算判据(`errorMsg`)本来就在
+      // 手边,而且退出码碰巧是 0 也照样判失败(见下面的 outcome 与 afterTurn)。
+      //
+      // 也不实现 `escalate`:这里的 `trip` 本身就是硬终止(单飞同理,见 single-run.ts)。
       trip: (text) => {
         errorMsg = `${errorMsg ?? ""}\n${text}`.trim();
         out.write("✕ " + text + "\n");
@@ -313,7 +317,7 @@ export async function runTurn(args: {
         bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
         handle.kill();
       },
-      resolve: () => clearSessionStalled(taskId, rowId),
+      resolve: (facts) => clearSessionStalled(taskId, rowId, facts.turnStartedAt),
     };
     try {
       for await (const event of handle.events) {

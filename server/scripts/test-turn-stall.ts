@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { AgentEvent } from "@ash/shared";
 import { codexErrorEvent } from "../src/executors/codex-error-event.js";
+import { childActivity } from "../src/executors/native-agent-activity.js";
 import {
   __resetTurnStalls,
   clearTurnStall,
@@ -25,6 +26,7 @@ import {
   type StallActions,
   type StallFacts,
 } from "../src/turn-stall.js";
+import { __resetStallFailures, stallFailure } from "../src/turn-stall-verdict.js";
 
 const TURN = "2026-10-30T07:36:21.000Z";
 const RETRY = "Reconnecting... waiting for network";
@@ -32,26 +34,37 @@ const notice = (message = RETRY): AgentEvent => ({ kind: "error", message, level
 const hard = (message: string): AgentEvent => ({ kind: "error", message });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-type Log = { warns: { text: string; facts: StallFacts }[]; trips: string[]; resolves: number };
+type Log = {
+  warns: { text: string; facts: StallFacts }[];
+  trips: string[];
+  escalations: string[];
+  /** 撤标记时拿到的回合身份 —— 库里那一侧按它做 CAS(session-stall-flag.ts),所以得钉住。 */
+  resolves: string[];
+};
 function spy(taskId = "task-1"): { actions: StallActions; log: Log } {
-  const log: Log = { warns: [], trips: [], resolves: 0 };
+  const log: Log = { warns: [], trips: [], escalations: [], resolves: [] };
   return {
     log,
     actions: {
       taskId,
       warn: (text, facts) => log.warns.push({ text, facts }),
       trip: (text) => log.trips.push(text),
-      resolve: () => { log.resolves += 1; },
+      escalate: (text) => log.escalations.push(text),
+      resolve: (facts) => log.resolves.push(facts.turnStartedAt),
     },
   };
 }
 
-/** 每段各自设口径,免得上一段的 env 漏到下一段。 */
-function configure(opts: { warnErrors?: number; warnMs?: number; tripMs?: number; pollMs?: number }) {
+/** 每段各自设口径,免得上一段的 env 漏到下一段。各档 0 = 关掉。 */
+function configure(opts: {
+  warnErrors?: number; warnMs?: number; tripMs?: number; graceMs?: number; pollMs?: number;
+}) {
   __resetTurnStalls();
+  __resetStallFailures();
   process.env.ASH_STALL_WARN_ERRORS = String(opts.warnErrors ?? 0);
   process.env.ASH_STALL_WARN_MS = String(opts.warnMs ?? 0);
   process.env.ASH_STALL_TRIP_MS = String(opts.tripMs ?? 0);
+  process.env.ASH_STALL_TRIP_GRACE_MS = String(opts.graceMs ?? 0);
   process.env.ASH_STALL_POLL_MS = String(opts.pollMs ?? 20);
 }
 
@@ -76,7 +89,7 @@ function configure(opts: { warnErrors?: number; warnMs?: number; tripMs?: number
 
   // 非错误事件 = 停滞解除,报过警就得把卡片上那个标记撤掉。
   trackTurnStall("s1", owner, TURN, { kind: "text", text: "上游回来了，继续回答。" }, actions);
-  assert.equal(log.resolves, 1, "上游已经在吐正文了,卡片上那个停滞标记没撤");
+  assert.deepEqual(log.resolves, [TURN], "上游已经在吐正文了,卡片上那个停滞标记没撤");
   // 解除之后重新起算:下一轮重试要能再报一次(真的又挂了就得再说一声)。
   for (let i = 0; i < 5; i += 1) trackTurnStall("s1", owner, TURN, notice(), actions);
   assert.equal(log.warns.length, 2, "解除之后又挂了,第二次停滞不报警");
@@ -147,14 +160,69 @@ function configure(opts: { warnErrors?: number; warnMs?: number; tripMs?: number
   assert.match(text, /task-1/, "诊断里没有原始事件流的落点");
   assert.match(text, new RegExp(TURN), "诊断里没有本回合的起点");
   assert.match(text, /ASH_STALL_TRIP_MS/, "诊断里没写阈值怎么调");
+  assert.match(text, /没有过任何正常事件/, "诊断里没说清卡在哪一步");
   assert.match(text, /重试续跑|换一个执行器/, "诊断里没写用户还能做什么");
   await sleep(100);
   assert.equal(log.trips.length, 1, "同一次停滞熔断了两次");
-  // 熔断那一刻已经摘牌:随后收流走到 clearTurnStall 时不能再撤一次卡片标记 ——
-  // 那会把熔断诊断旁边那个「它卡在上游」的状态当场擦掉。
-  const resolvesBefore = log.resolves;
+  // 熔断掉的那一轮**仍然留在表里**:熔断的成功条件是「这一轮真的结束」。回合真结束(收流走到
+  // clearTurnStall)时才撤那个持久标记 —— 标记说的是「此刻正卡着」,回合都结束了它就该灭,
+  // 持久可见的那份证据是时间线上的熔断诊断 + 任务落的失败态。
+  //
+  // 从前这里断言的正相反(熔断时就摘牌、之后不许再 resolve),而那样标记永远没人撤:下一轮
+  // 复用同一行把 `ended_at` 清成 null,它当场复活 —— 页面上一边是正常答完的新回合、一边
+  // 亮着红色停滞环,刷新还在(第 1 轮审查第 3 条,已实测)。
   clearTurnStall("s5", owner);
-  assert.equal(log.resolves, resolvesBefore, "熔断之后的收流又撤了一次标记,诊断旁边那个状态被擦掉");
+  assert.deepEqual(log.resolves, [TURN], "熔断掉的回合结束时没撤标记 —— 它会在下一轮复活");
+}
+
+// ── ⑤b 熔断必须把「这一轮失败」钉在回合身份上,让三处结算读得到 ──────────────────
+{
+  configure({ warnErrors: 1, tripMs: 60, pollMs: 15 });
+  const { actions } = spy();
+  const owner = {};
+  trackTurnStall("s5b", owner, TURN, notice(), actions);
+  assert.equal(stallFailure("s5b", TURN), null, "还没熔断就先判了失败");
+  await sleep(320); // 扫表间隔有 200ms 下限(turn-stall.ts 的 pollMs),等够一拍
+  // 这就是 span/会话/任务结算共同的判据(turn-stall-verdict.ts)。只靠退出码是不行的:
+  // 被我们杀掉的 CLI 多半报不出非零 —— claude 走信号退出时写的是 `code ?? 0`,于是 0,
+  // 于是时间线红着写「按失败结算」、任务却落 done(第 1 轮审查第 2 条)。
+  const verdict = stallFailure("s5b", TURN);
+  assert.ok(verdict, "熔断了却没把失败结论钉在回合身份上 —— 结算读不到,这一轮会落成功");
+  assert.match(verdict.reason, /已自动终止本回合/, "钉下来的结论不是熔断那段诊断");
+  assert.equal(stallFailure("s5b", "2026-10-30T09:00:00.000Z"), null, "把别的回合也判成失败了");
+  assert.equal(stallFailure("other", TURN), null, "把别的会话也判成失败了");
+}
+
+// ── ⑤c 熔断之后回合**没真的结束**:过了宽限期回收句柄 ─────────────────────────────
+// 常驻台的 trip 走 `interrupt()` —— 那只是往 stdin 写一行请求,没有 ACK、不等回合结束、也没有
+// 强杀退路。请求没人理的话,熔断就只是在时间线上说了句话,回合照旧卡着(第 1 轮审查第 4 条)。
+{
+  configure({ warnErrors: 1, tripMs: 60, graceMs: 400, pollMs: 15 });
+  const { actions, log } = spy();
+  const owner = {};
+  trackTurnStall("s5c", owner, TURN, notice(), actions);
+  await sleep(320); // 第一拍就该熔断(扫表间隔下限 200ms)
+  assert.equal(log.trips.length, 1, "没熔断");
+  assert.equal(log.escalations.length, 0, "宽限期还没过就回收了句柄");
+  await sleep(500);
+  assert.equal(log.escalations.length, 1, "终止请求没生效,却也没有回收兜底 —— 回合永远卡着");
+  assert.match(log.escalations[0]!, /终止请求未生效/, "兜底那句话冒充了前一句");
+  assert.match(log.escalations[0]!, /ASH_STALL_TRIP_GRACE_MS/, "兜底诊断里没写宽限期怎么调");
+  await sleep(300);
+  assert.equal(log.escalations.length, 1, "同一轮回收了两次");
+}
+
+// ── ⑤d 回合**真的**结束了就不该再回收:成功条件是真实结束 ─────────────────────────
+{
+  configure({ warnErrors: 1, tripMs: 60, graceMs: 400, pollMs: 15 });
+  const { actions, log } = spy();
+  const owner = {};
+  trackTurnStall("s5d", owner, TURN, notice(), actions);
+  await sleep(320);
+  assert.equal(log.trips.length, 1, "没熔断");
+  clearTurnStall("s5d", owner); // 终止请求生效了,回合收尾
+  await sleep(600);
+  assert.equal(log.escalations.length, 0, "回合已经结束了还去回收句柄 —— 那会连整台一起收掉");
 }
 
 // ── ⑥ 反向:正常的长回合一档都不许触发(误杀代价最高的一位) ──────────────────────
@@ -209,9 +277,9 @@ function configure(opts: { warnErrors?: number; warnMs?: number; tripMs?: number
   trackTurnStall(shared, b, TURN, notice(), newLead.actions);
   assert.equal(newLead.log.warns.length, 1, "旧台迟到的输出解除了新台的停滞");
   clearTurnStall(shared, a); // 不是持有者:空转
-  assert.equal(newLead.log.resolves, 0, "不是持有者也撤得动别人的标记");
+  assert.equal(newLead.log.resolves.length, 0, "不是持有者也撤得动别人的标记");
   clearTurnStall(shared, b);
-  assert.equal(newLead.log.resolves, 1, "持有者自己也撤不掉");
+  assert.deepEqual(newLead.log.resolves, [TURN], "持有者自己也撤不掉,或者没把回合身份交出来");
 
   // 换轮同理:新回合的第一条错误是**认领**,上一轮悬着的计数不许跟着带过来。
   configure({ warnErrors: 3 });
@@ -221,6 +289,81 @@ function configure(opts: { warnErrors?: number; warnMs?: number; tripMs?: number
   trackTurnStall("s10", owner, TURN, notice(), next.actions);
   trackTurnStall("s10", owner, "2026-10-30T09:00:00.000Z", notice(), next.actions);
   assert.equal(next.log.warns.length, 0, "上一轮的计数被带进了新回合");
+}
+
+// ── ⑩ 子智能体的错误被包成 kind:"tool",**包装不算进展** ──────────────────────────
+// 子线程(codex 子线程、claude 的 parent_tool_use_id 子回合)的每一条活动都被 childActivity()
+// 包成 `{kind:"tool", name:"Agent", nativeWork:{type:"activity", event}}` —— 外层恒为 tool。
+// 只看外层的那一版把子线程的重连风暴读成「有工具在动」:既开不了停滞,还会把父线程已经开着
+// 的那一份当场解除,正好把看门狗关在最需要它的场合(第 1 轮审查第 1 条,已实测)。
+{
+  configure({ warnErrors: 3 });
+  const { actions, log } = spy();
+  const owner = {};
+  const childRetry = childActivity("thread-1", { kind: "error", message: RETRY, level: "notice" });
+  assert.equal(childRetry.kind, "tool", "夹具不对:子智能体活动的外层本来就该是 tool");
+  for (let i = 0; i < 3; i += 1) trackTurnStall("s11", owner, TURN, childRetry, actions);
+  assert.equal(log.warns.length, 1, "子线程的重连风暴一条都没被计入 —— 整条链上只有它在报错");
+  const facts = log.warns[0]!.facts;
+  assert.equal(facts.errors, 3);
+  assert.equal(facts.retries, 3, "包装里的 level:\"notice\" 没读出来,重试被当成真故障");
+  assert.equal(facts.childErrors, 3, "没记下这几条来自子线程 —— 诊断里分不清是谁卡住了");
+  assert.match(log.warns[0]!.text, /子智能体线程/, "诊断没说清停滞来自子线程");
+
+  // 另一半:子线程的错误**不许**解除父线程已经开着的停滞。
+  configure({ warnErrors: 2 });
+  const parent = spy();
+  const owner2 = {};
+  trackTurnStall("s12", owner2, TURN, notice(), parent.actions);
+  trackTurnStall("s12", owner2, TURN, childRetry, parent.actions);
+  assert.equal(parent.log.warns.length, 1, "子线程的错误把父线程的停滞当成进展解除掉了");
+
+  // 反向闸:子线程**真的在干活**(正文/工具)照样解除 —— 它证明这条流还在动。
+  configure({ warnErrors: 2 });
+  const live = spy();
+  const owner3 = {};
+  trackTurnStall("s13", owner3, TURN, notice(), live.actions);
+  trackTurnStall("s13", owner3, TURN, childActivity("thread-1", { kind: "tool", name: "exec" }), live.actions);
+  trackTurnStall("s13", owner3, TURN, notice(), live.actions);
+  assert.equal(live.log.warns.length, 0, "子线程在干活却被算成停滞 —— 误杀正在跑的回合");
+}
+
+// ── ⑪ 阈值配错一个字不许变成「见错就杀」 ────────────────────────────────────────
+// `Number("30m")` 是 NaN,而 `NaN <= 0` 和 `elapsedMs < NaN` **都是 false** —— 不校验的那一版
+// 两道闸同时放行,第一条错误事件就当场熔断。比不设看门狗更坏(第 1 轮审查非拦项)。
+{
+  configure({ warnErrors: 1 });
+  process.env.ASH_STALL_TRIP_MS = "30m";
+  const { actions, log } = spy();
+  trackTurnStall("s14", {}, TURN, notice(), actions);
+  assert.equal(log.trips.length, 0, "阈值写成 30m 就见错即杀 —— 配错一个字比没有看门狗更坏");
+  assert.equal(log.warns.length, 1, "警告档也被那个坏值带坏了");
+  process.env.ASH_STALL_TRIP_MS = "0";
+}
+
+// ── ⑫ 诊断要说得出「卡在哪一步」:停滞前最后一条正常事件是什么 ──────────────────
+// 「工具跑完在等模型总结」和「一条正常输出都没有过」是两种现场,要查的东西完全不同。
+// 原始协议的 method/type 不在这一层(那个由 RunTraceRecorder.finish() 在**进程退出后**才产出,
+// 熔断这一刻它压根不存在),所以这一层给的是归一化之后的 kind + 指名那个原始事件流文件。
+{
+  configure({ warnErrors: 2, tripMs: 60, pollMs: 15 });
+  const { actions, log } = spy();
+  const owner = {};
+  trackTurnStall("s15", owner, TURN, { kind: "tool", name: "exec", detail: "pytest" }, actions);
+  trackTurnStall("s15", owner, TURN, notice(), actions);
+  trackTurnStall("s15", owner, TURN, notice(), actions);
+  assert.equal(log.warns.length, 1, "没报警");
+  assert.equal(log.warns[0]!.facts.lastProgressKind, "tool", "没记下停滞前最后那条正常事件");
+  await sleep(320);
+  assert.match(log.trips[0]!, /最后一条正常事件是 tool/, "熔断诊断里没说清卡在哪一步");
+
+  // 上一轮的「最后一条正常事件」不许带进新回合。
+  configure({ warnErrors: 1 });
+  const next = spy();
+  const o = {};
+  trackTurnStall("s16", o, TURN, { kind: "tool", name: "exec" }, next.actions);
+  trackTurnStall("s16", o, "2026-10-30T09:00:00.000Z", notice(), next.actions);
+  assert.equal(next.log.warns[0]!.facts.lastProgressKind, null, "上一轮的最后一步被算进了新回合");
 }
 
 // ── ⑨ 现场重放:旧判据全程无声,新判据按时限报警并熔断 ───────────────────────────

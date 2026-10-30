@@ -83,34 +83,56 @@ export function flushSessionNotices(lead: Lead): void {
 }
 
 /**
- * 回合级停滞看门狗的**这一路的三件动作**(判据与两档阈值在 ../turn-stall.ts,三条消费链共用)。
+ * 回合级停滞看门狗的**这一路的那几件动作**(判据与各档阈值在 ../turn-stall.ts,三条消费链共用)。
  *
  * 挂在这儿而不是消费循环里,因为它正好就是上面那三个出口的组合 —— SSE + 执行过程 + `.md`。
  *
- * 调度台跟单飞有一处本质不同:它是**常驻**的,一个进程吃很多回合。所以熔断只终止**卡住的
- * 这一轮**(`interrupt`),不收整台 —— 回合收口后这台落回待命,用户插话和执行者汇报照常能把
- * 下一轮投进去。
+ * 调度台跟单飞有两处本质不同:
  *
- * **本轮区间的结局仍由执行器自己报的 turnEnd 决定(记 completed)**:那一层有一串自己的不变量
- * (见 lead-turns.ts 顶部的队首语义),不该被看门狗从旁边改写。失败这件事对用户仍然是可见的
- * —— 红色诊断进时间线、刷新后还在,任务卡片上那个停滞标记也亮着。
+ * ① 它是**常驻**的,一个进程吃很多回合。所以熔断先只终止**卡住的这一轮**(`interrupt`),不收
+ *    整台 —— 回合收口后这台落回待命,用户插话和执行者汇报照常能把下一轮投进去。
+ *
+ * ② 正因为是请求式终止,**它可能根本不生效**:`ResidentHandle.interrupt()` 只是往 stdin 写一行
+ *    请求,没有 ACK、不等回合结束、也没有强杀退路(`executors/claude.ts`)。所以这一路必须实现
+ *    `escalate` —— 看门狗给足宽限期后回收整台。回收前先 `releasePending`:排着的入站消息有 seq
+ *    的留在 `team_inbound` 等下一台认领、只有内存副本的交给进程内最后一档,一条都不跟着这台
+ *    一起没(见 team/pending-inbox.ts)。进程一没,事件流结束 → `closeLead` 走正常的失败收尾,
+ *    「CLI 会话还在、再说一句话就接回」那条路照旧(第 1 轮审查第 4 条)。
+ *
+ * **本轮区间的结局不再是无条件 `completed`**:熔断前看门狗已经把「这一轮失败」钉在回合身份上
+ * (../turn-stall-verdict.ts),`endTurn` 与 `closeLead` 各自读它。从前那一版只在时间线上红着说一句
+ * 「已按失败结算」,而区间记 `completed`、任务落 `done` —— 看门狗说过的话一句都没兑现
+ * (第 1 轮审查第 2 条,已实测)。
  */
-export function leadStallActions(lead: Lead, trace: (event: SessionTraceEvent) => void): StallActions {
+export function leadStallActions(
+  lead: Lead,
+  trace: (event: SessionTraceEvent) => void,
+  releasePending: (lead: Lead) => void,
+): StallActions {
+  // 熔断与兜底都走同一个出口组合:红色诊断进执行过程 + `.md` + SSE。
+  const diagnose = (text: string): void => {
+    const event: AgentEvent = { kind: "error", message: text };
+    trace(event);
+    writeRunError(lead.out, text);
+    publish(lead, event);
+  };
   return {
     taskId: lead.taskId,
     warn: (text, facts) => {
       const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
       trace(event);
       publish(lead, event);
-      markSessionStalled(lead.taskId, lead.sessId, facts.since);
+      markSessionStalled(lead.taskId, lead.sessId, facts.turnStartedAt, facts.since);
     },
     trip: (text) => {
-      const event: AgentEvent = { kind: "error", message: text };
-      trace(event);
-      writeRunError(lead.out, text);
-      publish(lead, event);
+      diagnose(text);
       lead.handle.interrupt();
     },
-    resolve: () => clearSessionStalled(lead.taskId, lead.sessId),
+    escalate: (text) => {
+      diagnose(text);
+      releasePending(lead);
+      lead.handle.kill();
+    },
+    resolve: (facts) => clearSessionStalled(lead.taskId, lead.sessId, facts.turnStartedAt),
   };
 }

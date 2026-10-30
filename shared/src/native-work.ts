@@ -13,7 +13,11 @@ export function nativeWorkStatus(value: unknown): NativeWorkStatus {
 export type NativeAgentActivity =
   | { kind: "text" | "thinking"; text: string }
   | { kind: "tool"; name: string; detail?: string }
-  | { kind: "error"; message: string }
+  // `level:"notice"` 跟主会话那一层同义(见 shared/src/events.ts 的 error 变体):
+  // **上游在重试、这一轮还在正常进行**,不是执行故障。子线程也必须带得住这一位 ——
+  // 少了它,一条「Reconnecting…」和一条真失败在包装里长得一模一样,读端(回合级停滞
+  // 看门狗 server/src/turn-stall.ts)只能二选一地猜。
+  | { kind: "error"; message: string; level?: "notice" }
   // source/ref/path 的语义见 shared/src/events.ts 的同名字段(子智能体那一层同样要带:
   // 抽屉里的正文跟主会话走同一套配对,少一个字段就配不上)。
   // `field` = 这条记录属于哪份**快照式**正文:子智能体的 message / 返回结果 result(它们
