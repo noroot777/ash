@@ -5,7 +5,7 @@ import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
-import { stopwatchSeconds, waitForStopwatchTick } from "./accept-gate-stopwatch.mjs";
+import { testAcceptGateWaitBar } from "./test-accept-gate-wait-bar.mjs";
 import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
 
 // 验收台上那张「验收前置命令」卡。钉住的是四件在真实页面上才看得出来的事：
@@ -34,6 +34,10 @@ import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
 //    角色」。读取本身失败时上一版落的是 `false`，于是一次 503 被当成「已确认你不是管理员」
 //    —— 而「还没读到」和「确认没权限」在界面上长得一模一样，所以这个错判看都看不出来，
 //    服务端恢复了那颗按钮也不会自己回来。这一条钉的是：失败只是还没读到，它自己会重试到读到。
+//
+// 姊妹文件装的是**另外几个表面**（这份贴着 700 行上限，按表面拆）：主会话页那条「正在跑」
+// 的折叠条在 test-accept-gate-wait-bar.mjs（⑩ 那条并发读取就在那边），断线重连与任务投影
+// 对账在 test-accept-gate-recovery.mjs，真人动作那一道闸在 test-accept-gate-actions.mjs。
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
@@ -416,82 +420,7 @@ try {
     await page.close();
   }
 
-  // ⑮ 主会话页那条折叠条（用户 2026-10-23 的 04-A）：门禁跑的十几分钟里任务本身
-  //    status/stage 一个字都不变，这条是会话页上**唯一**看得出「有东西在跑」的东西。
-  //    折叠态要把命令和已经跑了多久都写在一行；展开能就地收掉它。
-  {
-    const running = run({ status: "running", exitCode: null, finishedAt: null, logTail: "RUN x_post\n" });
-    const { page, store } = await open({ gate: { command: running.command, running, latest: null }, query: "?wait=1" });
-    const bar = page.locator(".accept-gate-wait");
-    await bar.waitFor();
-    const text = await bar.innerText();
-    assert.match(text, /验收前置命令在跑/);
-    assert.match(text, /\.\/kb\.sh test full/, "折叠那一行要说清在跑的是哪条命令");
-    // 秒表要自己走，不能定在点下去那一刻 —— 两条读数一起证，容差与理由见 stopwatchSeconds。
-    const first = stopwatchSeconds(text);
-    assert.ok(first >= 90,
-      `秒表要从开跑那一刻（startedAt 是 90 秒前）起算，不能定在点下去那一刻：读到 ${first} 秒`);
-    await waitForStopwatchTick(page, bar, first);
-    // 折叠态不许把出路摆出来占地方，但点开就得有。
-    assert.equal(await bar.getByRole("button", { name: /不等了/ }).count(), 0);
-    await bar.locator(".wait-bar__bar").click();
-    await bar.getByRole("button", { name: /不等了/ }).click();
-    await page.waitForTimeout(200);
-    assert.equal(store.canceled, 1, "收掉它要真打那一发 cancel");
-    assert.equal(await page.locator(".accept-gate-wait").count(), 0, "收掉之后这条就该消失 —— 它只说「正在跑」");
-    await page.close();
-  }
-
-  // ⑯ 没在跑就彻底不占地方：跑完之后该看的是验收台上那张回执，不是这条。
-  {
-    const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run() }, query: "?wait=1" });
-    await page.locator("h1").waitFor();
-    await page.waitForTimeout(300);
-    assert.equal(await page.locator(".accept-gate-wait").count(), 0);
-    await page.close();
-  }
-
-  // ⑰ **第 1 轮审查 F3**：并发读取乱序。页面一打开天然就有两次读取（挂载那一次 + SSE
-  //    连上之后的对账那一次）。让**先发出**的那一次响应体迟到、并且回的是「正在跑」，
-  //    后发出的那一次先回来、回的是「已通过」—— 落地的必须是后者。从前旧响应会把它写回
-  //    「正在跑」，秒表接着加，而此后没有任何事件会来纠正它。
-  {
-    const running = run({ status: "running", exitCode: null, finishedAt: null });
-    const { page } = await open({
-      gate: { command: running.command, running: null, latest: run(), basis: null },
-      query: "?wait=1&expected=1",
-      states: [
-        // 第 1 次（挂载）：慢，而且说「在跑」。
-        { delay: 1200, body: { command: running.command, running, latest: running, basis: null } },
-        // 第 2 次（连上之后对账）：快，说「已经通过了」。
-        { body: { command: running.command, running: null, latest: run(), basis: null } },
-      ],
-    });
-    await page.locator("h1").waitFor();
-    // 等那条迟到的响应落回来（1200ms + 余量），期间它一旦落地就会把这条重新画出来。
-    await page.waitForTimeout(1800);
-    assert.equal(await page.locator(".accept-gate-wait").count(), 0,
-      "迟到的旧响应不许把已经结束的那次又写回「正在跑」");
-    await page.close();
-  }
-
-  // ⑱ 状态读不出来、而任务投影说有命令在跑：这条**仍然要出现**并如实说读不出来。从前
-  //    一次 500 之后它整个消失，跟「什么都没在跑」长得一模一样（第 1 轮审查不拦项 3）。
-  {
-    const { page, store } = await open({
-      gate: { command: "./kb.sh test full", running: null, latest: null, basis: null },
-      query: "?wait=1&expected=1",
-      states: [{ status: 500 }, { status: 500 }, { status: 500 }, { status: 500 }],
-    });
-    const bar = page.locator(".accept-gate-wait");
-    await bar.waitFor();
-    assert.match(await bar.innerText(), /状态读不出来/);
-    const before = store.reads;
-    await bar.getByRole("button", { name: "重试" }).click();
-    await page.waitForTimeout(200);
-    assert.ok(store.reads > before, "重试要真的再读一次");
-    await page.close();
-  }
+  await testAcceptGateWaitBar({ open, run });
 
   for (const event of [
     { type: "task.acceptGate", taskId: "gate-task" },
