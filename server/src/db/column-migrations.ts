@@ -362,4 +362,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 主人就不受理,所以空值只见于单人时期或升级前的存量行(见 handoff-peers.ts
   // peerAudience)。
   "ALTER TABLE handoff_peers ADD COLUMN requested_by_user_id TEXT",
+  // 这一行意图代表的是哪一次接受(queue-advance-admission.ts)。旧行 NULL = 没有代次,
+  // 按「谁观察到它、谁就按 NULL 条件了结」处理,不会被另一趟的代次条件误删。
+  "ALTER TABLE queue_advance_intents ADD COLUMN generation TEXT",
 ];

@@ -81,11 +81,23 @@ export async function claimCheckpointForRun(taskId: string, expected: string, ge
  * 身份还是我那一个」——0 行 = 我已经失权,这一趟不许起跑。
  *
  * 它自己**不负责**排他:排他来自接管那一侧的证据闸(checkpoint-ownership.ts:活着的发送方
- * 证不出已不在,就不许被接管)。这一问只负责两件事:发现自己已经失权,以及
- * **问不出来时按失权处理** —— 「读不到被回收的证据」不是「仍有起跑权」的证明,而这一步
- * 之后紧接着就是 spawn,宁可这一趟不起跑(凭证原样留着,下一趟对账照旧接得走)。
+ * 证不出已不在,就不许被接管)。这一问负责的是三件事:发现自己已经失权、问不出来时一律
+ * 不起跑(「读不到被回收的证据」不是「仍有起跑权」的证明,而这一步之后紧接着就是 spawn),
+ * 以及 —— 两种退出都**把本地那条「正在送」的登记交还出去**。
+ *
+ * 最后那件事是第 1 轮自由审查 F1 点的缝:早先这两条路一律 `return false`,调用方跟着
+ * `return`,于是 `deliveringNow` 里那条登记(认领时就写上了,故意没有到期清理)永远留在
+ * 这个进程里 —— 此后每一趟对账、每一次启动准备都把这张票当成「本进程还在投递」跳过。
+ * 实测现象:资格那一笔写失败一次之后,故障撤掉也没用,反复点继续一律被挡,只有重启能解。
+ * 所以:
+ *  · **确已失权**(条件不匹配,0 行)→ 交回登记,到此为止。新持有者的账不许我写(那会变成
+ *    「原文既被归还、又被标成已送达」),所以也不自己了结。
+ *  · **问不出来**(库锁/IO 故障)→ 交回登记 + 退避重排一趟对账,一个字都不消费(租约和越线
+ *    记号原样留着)。下一趟对账经证据闸 + 条件更新接手,不必非等用户再点一次运行。
  */
-export async function holdCheckpointOwnership(receipt: Row): Promise<boolean> {
+export type CheckpointHold = "mine" | "lost" | "unknown";
+
+export async function holdCheckpointOwnership(receipt: Row): Promise<CheckpointHold> {
   try {
     const held = await db.update(scheduledMessages).set({ deliveringSince: now() }).where(and(
       eq(scheduledMessages.id, receipt.id),
@@ -95,11 +107,17 @@ export async function holdCheckpointOwnership(receipt: Row): Promise<boolean> {
         : eq(scheduledMessages.deliveringOwner, receipt.deliveringOwner),
       isNotNull(scheduledMessages.checkpointTaken),
     )).returning({ id: scheduledMessages.id });
-    return held.length > 0;
+    if (held.length) return "mine";
+    console.warn(`[ash] 续跑凭证已被接管 task=${receipt.taskId} message=${receipt.id}`
+      + `（这一趟不起跑，本地投递登记交回，这张票由新持有者处置）`);
+    forgetCheckpointDelivering(receipt.id);
+    return "lost";
   } catch (error) {
     console.error(`[ash] 续跑凭证所有权复查失败 task=${receipt.taskId} message=${receipt.id}`
-      + `（按已失权处理，这一趟不起跑）:`, error);
-    return false;
+      + `（这一趟不起跑）:`, error);
+    // 交回 + 退避重排都在这里头(它一个字都不消费)。
+    rescheduleCheckpointSettle(receipt, "本轮续跑起跑资格复查失败", 0, error);
+    return "unknown";
   }
 }
 

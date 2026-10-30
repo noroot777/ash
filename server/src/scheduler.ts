@@ -93,10 +93,10 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
   // 补办。但那一趟的结果此刻就是全部 —— 走不完就**不许按「已接受」收场**:发起者拿到的是
   // 一次正常返回,而责任只活在这个进程的内存里(第 1 轮审查 F2 跨进程实测:同库两笔持久
   // 写入一起失败,推进责任彻底蒸发;准入口径见 queue-advance-admission.ts)。
-  const durable = await recordQueueAdvanceIntent(queueId);
+  const intent = await recordQueueAdvanceIntent(queueId);
   const attempt: QueueAdvanceAttempt = { request, pauseGeneration };
-  const done = await retryableQueueAdvance(queueId, attempt, durable);
-  if (durable || done.ok) return;
+  const done = await retryableQueueAdvance(queueId, attempt, intent);
+  if (intent || done.ok) return;
   // 候选是临界区里挑出来的,挑到了才知道该把这句话写给谁(没挑到就只剩日志与抛出)。
   throw await refuseQueueAdvance(queueId, attempt.candidate?.taskId ?? null, done.error);
 }
@@ -104,21 +104,25 @@ export async function advanceQueue(queueId: string, request?: QueueAdvanceReques
 type AdvanceOutcome = { ok: true } | { ok: false; error: unknown };
 
 async function retryableQueueAdvance(
-  queueId: string, attempt: QueueAdvanceAttempt, durable = true,
+  queueId: string, attempt: QueueAdvanceAttempt,
+  /** 这一趟承担的那一代推进责任(recordQueueAdvanceIntent 领的);null = 没能落库。 */
+  intent: string | null,
 ): Promise<AdvanceOutcome> {
   try {
     await advanceQueueAttempt(queueId, attempt);
   } catch (error) {
     // 退避重试照旧登记:它在**同一个进程里**还救得回来,只是不能拿它当「已接受」的凭据
-    // (那正是 F2 的错)。凭据在不在由 durable 说,这里只负责把这一趟的结果如实报上去。
+    // (那正是 F2 的错)。凭据在不在由 intent 说,这里只负责把这一趟的结果如实报上去;
+    // 重试带着**同一代**责任走,因为要了结的本来就是它。
     console.error(`[ash] 队列推进临界区失败 queue=${queueId}，稍后重试:`, error);
-    deferQueueAdvance(queueId, async () => { await retryableQueueAdvance(queueId, attempt, durable); });
+    deferQueueAdvance(queueId, async () => { await retryableQueueAdvance(queueId, attempt, intent); });
     return { ok: false, error };
   }
   // 这一趟自己走完了(起了下一位、或者判定此刻没什么可推)。意图到此了结 —— 留着它只会让
   // 下一次重启平白再推一遍。抛出去的那条路**不删**:那正是要活过重启的那一份。
-  // 同一条队列上并发的两趟会互相删掉对方的那一行:无妨,删的前提是确实有一趟完整走完了。
-  if (durable) await clearQueueAdvanceIntent(queueId);
+  // **只清自己那一代**:这段 await 期间可能又有一趟推进被接受(它 upsert 走了这一行),
+  // 裸按 queueId 删就会把那份还没做完的恢复责任一起抹掉(第 1 轮自由审查 F2)。
+  if (intent) await clearQueueAdvanceIntent(queueId, intent);
   return { ok: true };
 }
 
@@ -510,10 +514,14 @@ export async function groupLaunchTargets(groupId: string): Promise<string[]> {
  * 这一趟(第 1 轮审查发现 3 的第二半)。失败的那一条交给 `deferQueueAdvance` 退避重试。
  */
 export async function recoverQueueAdvances(attempt = 0): Promise<void> {
-  let intents: Set<string>;
+  // 代次一起读回来:了结必须按**自己观察到的那一代**条件清,不能按 queueId 裸删 —— 这一轮
+  // 补办的过程里可能又有一趟推进被接受(它 upsert 走了那一行),裸删就把它的责任抹了
+  // (第 1 轮自由审查 F2)。老库行没有代次,读回 null,照 null 条件清。
+  let intents: Map<string, string | null>;
   let queueIds: Set<string>;
   try {
-    intents = new Set((await db.select().from(queueAdvanceIntents)).map((row) => row.queueId));
+    intents = new Map((await db.select().from(queueAdvanceIntents))
+      .map((row) => [row.queueId, row.generation] as const));
     queueIds = new Set((await db.select().from(queueItems)).map((item) => item.queueId));
   } catch (error) {
     // 连「有哪些队列」都没读出来:这一轮一条都恢复不了,而定时 tick 只重放已落库的推进请求,
@@ -527,23 +535,29 @@ export async function recoverQueueAdvances(attempt = 0): Promise<void> {
     timer.unref?.();
     return;
   }
-  for (const queueId of new Set([...intents, ...queueIds])) {
+  for (const queueId of new Set([...intents.keys(), ...queueIds])) {
+    const accepted: AcceptedAdvance | null = intents.has(queueId)
+      ? { generation: intents.get(queueId) ?? null } : null;
     try {
-      await recoverQueueAdvance(queueId, intents.has(queueId));
+      await recoverQueueAdvance(queueId, accepted);
     } catch (error) {
       console.error(`[ash] 重启恢复:队列 ${queueId} 读取失败，稍后重试:`, error);
-      deferQueueAdvance(queueId, () => recoverQueueAdvance(queueId, intents.has(queueId)));
+      deferQueueAdvance(queueId, () => recoverQueueAdvance(queueId, accepted));
     }
   }
 }
 
-async function recoverQueueAdvance(queueId: string, accepted: boolean): Promise<void> {
+/** 开机那一拍读到的那一行意图:`generation` 是**这一刻观察到**的代次(老库行为 null)。 */
+type AcceptedAdvance = { generation: string | null };
+
+async function recoverQueueAdvance(queueId: string, accepted: AcceptedAdvance | null): Promise<void> {
   const rows = await queueMembers(queueId);
   const candidate = selectNextInQueue(rows);
   if (!candidate) {
     // 意图还挂着、队列却已经没有可推的人(成员被删光/全归档):留着它只会让每次重启都白扫
-    // 一遍,这里就地了结。
-    if (accepted) await db.delete(queueAdvanceIntents).where(eq(queueAdvanceIntents.queueId, queueId));
+    // 一遍,这里就地了结 —— 但**只了结自己读到的那一代**:读成员这几步之间又被接受的那一趟
+    // 推进(它 upsert 换了代次)不该被这一趟按旧观察抹掉(同上,F2 的同类位置)。
+    if (accepted) await clearQueueAdvanceIntent(queueId, accepted.generation);
     return;
   }
   if (!accepted) {

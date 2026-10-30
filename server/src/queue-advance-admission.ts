@@ -14,32 +14,54 @@
 // 所以口径是:**拿不出可恢复的凭据、这一趟又没当场做完,就不许按「已接受」收场**。报给
 // 发起者(抛),同时在候选任务上留一条持久可见的交代 —— 后台动作没人在等返回值,日志一行
 // 对用户等于没发生过(根 AGENTS.md:停止/暂停必须留下持久可见的状态,同一个道理)。
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueAdvanceIntents, tasks } from "./db/schema.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
 
-/** 记下「这条队列该推进」。返回 false = 这一次推进**没有**可恢复的凭据。 */
-export async function recordQueueAdvanceIntent(queueId: string): Promise<boolean> {
+/**
+ * 记下「这条队列该推进」,并**领走这一次接受的代次**。返回的代次就是这一趟的凭据;
+ * 返回 null = 这一次推进**没有**可恢复的凭据。
+ *
+ * 为什么是 upsert、而不是「已经有行就不动」(第 1 轮自由审查 F2 跨进程实测):一条队列同时
+ * 只有一行意图,可**先后被接受的两趟推进不是同一份责任**。旧口径下后来那一趟只是借到了旧
+ * 那行,于是旧那趟一做完就按 queueId 把它裸删 —— 删掉的是别人的恢复责任,重启后没人补办
+ * (实测里新队首既无意图也无单任务请求,那条链永久停住)。
+ *
+ * 改成「最后一次接受拥有这一行」之后,了结只认自己那一代:旧那趟的删除落到 0 行。多留一行
+ * 意图的代价只是重启后多推一次(推进幂等),比把别人的责任抹掉轻得多。
+ */
+export async function recordQueueAdvanceIntent(queueId: string): Promise<string | null> {
+  const generation = id();
   try {
-    await db.insert(queueAdvanceIntents).values({ queueId, acceptedAt: now() }).onConflictDoNothing();
-    return true;
+    const acceptedAt = now();
+    await db.insert(queueAdvanceIntents).values({ queueId, acceptedAt, generation })
+      .onConflictDoUpdate({ target: queueAdvanceIntents.queueId, set: { acceptedAt, generation } });
+    return generation;
   } catch (error) {
     console.error(`[ash] 队列推进意图落库失败 queue=${queueId}:`, error);
-    return false;
+    return null;
   }
 }
 
 /**
- * 这一趟自己走完了,凭据到此了结 —— 留着它只会让下一次重启平白再推一遍。
+ * 这一趟自己走完了,**自己那一代**的凭据到此了结 —— 留着它只会让下一次重启平白再推一遍。
+ *
+ * `generation` 必须是调用方实际承担、或者实际观察到的那一代:只清自己那一行是这条协议的
+ * 全部重点(见 recordQueueAdvanceIntent)。老库开出来的行没有代次,传 null 按「代次为 NULL」
+ * 清 —— 它同样只会命中观察者看见的那一行,不会误删后来某次接受。
  *
  * 清理自己失败**不拦路**:多留一行意图的代价是重启后多推一次(推进幂等),比把一趟已经
  * 做完的推进说成失败轻得多。
  */
-export async function clearQueueAdvanceIntent(queueId: string): Promise<void> {
-  await db.delete(queueAdvanceIntents).where(eq(queueAdvanceIntents.queueId, queueId))
-    .catch((error) => console.error(`[ash] 队列推进意图清理失败 queue=${queueId}:`, error));
+export async function clearQueueAdvanceIntent(queueId: string, generation: string | null): Promise<void> {
+  await db.delete(queueAdvanceIntents).where(and(
+    eq(queueAdvanceIntents.queueId, queueId),
+    generation === null
+      ? isNull(queueAdvanceIntents.generation)
+      : eq(queueAdvanceIntents.generation, generation),
+  )).catch((error) => console.error(`[ash] 队列推进意图清理失败 queue=${queueId}:`, error));
 }
 
 /**

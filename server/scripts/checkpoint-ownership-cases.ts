@@ -9,6 +9,7 @@ import { deliveryCrossing, noteDeliveryCrossing } from "../src/delivery-crossing
 import {
   claimCheckpointForRun, holdCheckpointOwnership, settleStrandedCheckpointRun,
 } from "../src/task-checkpoint-delivery.js";
+import { resumeOrRunTask } from "../src/task-resume.js";
 import {
   forgetCheckpointDelivering, preparePendingCheckpointStart,
   reconcileCheckpointDeliveries, recoverPendingCheckpoints,
@@ -204,25 +205,19 @@ export async function checkpointOwnershipCases(): Promise<void> {
     console.log("PASS: a lease held by a live foreign process is left alone and only taken over once it is gone");
   }
 
-  // ④ 起跑资格是一次**条件写**,而且两种答不出都按失权算:被接管走(身份变了)、以及这一问
-  //    自己写不下去。早先它是一次读 + 读失败放行 —— 用过期观察授权一次不可逆的投递。
+  // ④ 起跑资格是一次**条件写**:被接管走(身份变了)之后这一问当场为假,而且失权方一个字都
+  //    不许再写账。早先它是一次读 + 读失败放行 —— 用过期观察授权一次不可逆的投递。
+  //    (「这一问自己写不下去」那一档在 ⑥:它除了返回假,还必须把本地登记交还出去。)
   {
     const test = await scenario(0);
     const generation = (await taskOf(test.taskId)).resumePromptGeneration;
     const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
-    assert.equal(await holdCheckpointOwnership(receipt), true, "正常情况下这一问放行");
-    const fault = failOwnershipWrite();
-    try {
-      assert.equal(await holdCheckpointOwnership(receipt), false, "问不出来 ⇒ 按失权算,这一趟不起跑");
-      assert.equal(fault.count(), 1);
-    } finally {
-      fault.restore();
-    }
+    assert.equal(await holdCheckpointOwnership(receipt), "mine", "正常情况下这一问放行");
     // 被别人接管走:身份换了,原发送方的资格一问当场为假。
     const taken = [process.pid, "?", `boot-${id()}`, id()].join("|");
     await db.update(scheduledMessages).set({ deliveringOwner: taken })
       .where(eq(scheduledMessages.id, receipt.id));
-    assert.equal(await holdCheckpointOwnership(receipt), false, "身份已经不是我那一个 ⇒ 失权");
+    assert.equal(await holdCheckpointOwnership(receipt), "lost", "身份已经不是我那一个 ⇒ 失权");
     // **失权方不许再写账**:这个出口会归还/补记/就地了结,三种都在改那张票和任务上的交代。
     await settleStrandedCheckpointRun(receipt, "测试：失权之后不许再写账");
     const untouched = await rowOf(receipt.id);
@@ -264,5 +259,36 @@ export async function checkpointOwnershipCases(): Promise<void> {
     await until("读得动之后自己了结", async () => (await rowOf(receipt.id)).status === "sent");
     assert.equal(await preparePendingCheckpointStart(test.taskId), null);
     console.log("PASS: repeated verdict read failures actually back off instead of retrying every 200ms");
+  }
+
+  // ⑥ **资格那一笔写失败之后,这个任务不许从此起不来**(第 1 轮自由审查 F1 实测)。
+  //
+  //    这一档走的是真实 `resumeOrRunTask` 入口,而不是单独问一次 helper 返回什么:缝不在
+  //    「返回了假」,而在返回假之后谁都没有善后 —— 认领时写进 `deliveringNow` 的那条登记
+  //    (它故意没有到期清理)留在这个进程里,此后每一趟对账、每一次启动准备都把这张票当成
+  //    「本进程还在投递」跳过。故障撤掉也没用,反复点继续一律被挡,只有重启能解。
+  //
+  //    现在两条路都交还登记:确已失权 = 交回、新持有者去处置;问不出来 = 交回 + 退避重排
+  //    一趟对账(一个字都不消费)。所以这里撤掉故障之后**不碰任何东西**,原交代就该自己回到
+  //    任务上 —— 下面先走一趟真实对账入口(等同于用户再点一次),再断言它确实回来了。
+  {
+    const test = await scenario(0);
+    const fault = failOwnershipWrite();
+    try {
+      await resumeOrRunTask(test.taskId, { reason: "run" });
+      assert.equal(fault.count(), 1, "定点确实打在起跑资格那一笔条件写上");
+    } finally {
+      fault.restore();
+    }
+    assert.equal(hits(test.checkpoint), 0, "资格问不出来 ⇒ 这一趟压根不许起跑");
+    await reconcileCheckpointDeliveries(test.taskId);
+    await until("故障过去后这张票自己有了去处", async () =>
+      (await taskOf(test.taskId)).resumePrompt === test.checkpoint);
+    const row = (await db.select().from(scheduledMessages)
+      .where(eq(scheduledMessages.taskId, test.taskId))).find((r) => r.checkpointTaken !== null);
+    assert.equal(row, undefined, "归还之后这张票不该还扣着原文");
+    assert.equal(await preparePendingCheckpointStart(test.taskId), null, "也不许再挡着下一次启动");
+    assert.equal(hits(test.checkpoint), 0);
+    console.log("PASS: a failed eligibility write hands the local delivering registration back instead of wedging the task");
   }
 }

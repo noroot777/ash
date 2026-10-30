@@ -5,6 +5,7 @@ import {
   db, dbClient, hits, now, runs, scenario, schema, settled, taskOf, tasks, until,
 } from "./checkpoint-recovery-fixture.js";
 import { advanceQueue, pauseGroup, recoverQueueAdvances } from "../src/scheduler.js";
+import { clearQueueAdvanceIntent, recordQueueAdvanceIntent } from "../src/queue-advance-admission.js";
 import { requestQueueAdvance } from "../src/queue-advance-retry.js";
 import { occupyResumePrompt } from "../src/task-resume-prompt.js";
 import { setTaskStatus } from "../src/status.js";
@@ -276,5 +277,58 @@ export async function checkpointAdvanceFailureCases(): Promise<void> {
       .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "走完之后不许留着意图");
     await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
     console.log("PASS: a queue advance with no durable intent and a failed attempt is refused, not reported as accepted");
+  }
+
+  // 第 1 轮自由审查 F2:**较早完成的那一趟不许了结后来接受的那份责任**。
+  //
+  // 一条队列上同时只有一行意图,可先后被接受的两趟推进不是同一份责任。旧口径下后来那一趟
+  // 只是借到了旧那行(`onConflictDoNothing` 照样回「已接受」),于是旧那趟一做完就按 queueId
+  // 裸删 —— 删掉的是别人的恢复责任。跨进程实测里新队首既无意图也无单任务请求,那条链永久
+  // 停住(审查目录的 queue-intent-smoke.mjs)。现在每次接受领走自己的代次,了结只认那一代。
+  {
+    const queueId = id();
+    const first = await recordQueueAdvanceIntent(queueId);
+    const second = await recordQueueAdvanceIntent(queueId);
+    assert.ok(first && second && first !== second, "每一次接受领的都是自己那一代");
+    await clearQueueAdvanceIntent(queueId, first);
+    const left = await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId));
+    assert.equal(left.length, 1, "较早那一趟做完自己那份,不许顺手了结后来接受的那份");
+    assert.equal(left[0]!.generation, second, "留下的必须是后来那一次接受");
+    await clearQueueAdvanceIntent(queueId, second);
+    assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "本人那一代照旧了结得掉");
+    console.log("PASS: an earlier advance attempt cannot retire the responsibility a later one accepted");
+  }
+
+  {
+    // 同类位置:重启恢复的**无候选就地了结**。读完意图、挑候选这几步之间又有一趟推进被接受
+    // (它换掉了代次),这一趟不许按旧观察把它抹掉 —— 只修「成功起跑那个调用点」不算修完。
+    const queueId = id();
+    const stale = await recordQueueAdvanceIntent(queueId);
+    assert.ok(stale);
+    const execute = dbClient.execute;
+    const swapped: string[] = [];
+    dbClient.execute = async function (statement) {
+      const result = await execute.call(dbClient, statement);
+      if (!swapped.length && typeof statement !== "string" && /from "queue_advance_intents"/i.test(statement.sql)) {
+        const fresh = await recordQueueAdvanceIntent(queueId);
+        if (fresh) swapped.push(fresh);
+      }
+      return result;
+    };
+    try {
+      await recoverQueueAdvances();
+    } finally {
+      dbClient.execute = execute;
+    }
+    assert.equal(swapped.length, 1, "定点确实插进了「读完意图之后」那一瞬");
+    assert.notEqual(swapped[0], stale, "插进去的是**后来**那一次接受");
+    const left = await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId));
+    assert.equal(left.length, 1, "无候选清理不许按旧观察抹掉后来那次接受");
+    assert.equal(left[0]!.generation, swapped[0]);
+    await db.delete(schema.queueAdvanceIntents).where(eq(schema.queueAdvanceIntents.queueId, queueId));
+    console.log("PASS: no-candidate cleanup only retires the generation that pass actually observed");
   }
 }
