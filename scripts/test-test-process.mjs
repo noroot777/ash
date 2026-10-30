@@ -63,9 +63,17 @@ try {
   assert.match(tails.stderr, /late-stderr-tail/);
   const inheritedService = join(temporary, "inherited-service.cjs");
   writeFileSync(inheritedService, "setInterval(() => {}, 1000)");
+  // 继承了捕获流的服务**不算保留**(它占着我们要收的那两个流),所以这一档必须失败。
+  // 失败的名目是**遗留**而不是超时:父进程自己 0 退出收场得好好的,到点还没停的是它留下
+  // 的那个服务。两种诊断指向完全不同的两件事(一个该去看子进程为什么不结束,一个该去看
+  // 谁没清干净),混成一句「超时」只会把人支到错的地方。
   await assert.rejects(() => runTestProcess(process.execPath, ["-e", `
     require('node:child_process').spawn(process.execPath, [${JSON.stringify(inheritedService)}], { detached: true, stdio: 'inherit' }).unref();
-  `], { timeout: 800, preserveScripts: [inheritedService] }), /ETIMEDOUT/);
+  `], { timeout: 800, preserveScripts: [inheritedService] }), (error) => {
+    assert.equal(error.code, "ESTRANDED", "父进程正常退出、后代没停 = 遗留,不是超时");
+    assert.match(error.message, /仍在运行/);
+    return true;
+  });
 
   const sideEffect = join(temporary, "late-side-effect");
   const descendantPid = join(temporary, "descendant.pid");
