@@ -83,6 +83,61 @@ if (!python || windows) {
   console.log("✓ 退出证明:原生后代脱离登记/父子链/进程组之后仍被认出、停掉,并如实报失败");
 }
 
+// ── ②b 退出证明:后代**把环境清空**之后仍必须被认出来 ────────────────────────────
+// ②那一节的后代是 fork 出来的,`os.environ` 原样继承 —— 所以当年「环境变量继承」那条线索
+// 认得出它。第 4 轮审查 F2 换成 `os.execve(…, {})`:环境被整个清空,于是登记、父子链、进程组、
+// 环境四条线索**同时**失效,扫描结果变空又被当成清场的证明(实测 helper 返回 0、后代随后还在
+// 往磁盘写)。现在认它的是**边界描述符**:fd 跟着 exec 传下去,清环境带不走它(文件头)。
+if (!python || windows) {
+  console.log(`- 跳过清空环境一节(${windows ? "Windows 走父子链" : "本机没有 python3"})`);
+} else {
+  const directory = mkdtempSync(join(tmpdir(), "ash-native-env-probe-"));
+  try {
+    const pidPath = join(directory, "child.pid");
+    const marker = join(directory, "late");
+    // 后代:fork → setsid → execve(空环境)。被 exec 掉的那一段只认 argv,所以 pid 文件和
+    // 标记路径都写在命令行里;父进程等 pid 文件出现就退出。
+    const descendant = `import os,time;open(${JSON.stringify(pidPath)},'w').write(str(os.getpid()));time.sleep(1.2);open(${JSON.stringify(marker)},'w').write('late');time.sleep(6)`;
+    const script = `import os,time\nc=os.fork()\nif c==0:\n os.setsid()\n os.execve(${JSON.stringify(python)},[${JSON.stringify(python)},'-c',${JSON.stringify(descendant)}],{})\nelse:\n while not os.path.exists(${JSON.stringify(pidPath)}): time.sleep(.01)\n print('PARENT_DONE',flush=True)\n os._exit(0)`;
+    let failure;
+    try { await runTestProcess(python, ["-c", script], { timeout: 4_000 }); }
+    catch (error) { failure = error; }
+    const pid = Number(readFileSync(pidPath, "utf8"));
+    assert.ok(failure, "后代清空环境之后照样是遗留,不许返回成功");
+    assert.equal(failure.code, "ESTRANDED", `要如实报遗留,实际:${failure.code}\n${failure.message}`);
+    assert.ok(!alive(pid), `返回之前必须已经把它停掉(pid=${pid})`);
+    const before = existsSync(marker);
+    await delay(1_600);
+    assert.equal(existsSync(marker), before, "返回之后不许再写出任何东西");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+  console.log("✓ 退出证明:后代把环境整个清空之后仍被认出、停掉,并如实报遗留");
+}
+
+// ── ②c 所有权:**命令行里有那段文字不等于它是我们的** ─────────────────────────────
+// 第 4 轮审查 F1 的直接复现。判据原先是 `ps -E` 那一整行 `includes(标记)`,而那一行是「命令行
+// + 环境块」拼起来的 —— 于是把这段文字当普通参数传进去的外部进程被认领、被 `stop()` 终止
+// (探针实测 `adopted:true` / `outsiderAliveAfterScopeStop:false`)。那就是「结束一次检查时,
+// 另一个独立运行的程序也被关掉」。
+if (windows) {
+  console.log("- 跳过 argv 假归属一节(POSIX 专属:Windows 读不到别人的环境块,判据里没有这条线索)");
+} else {
+  const scope = new TestProcessScope();
+  // 标记只出现在 argv 里:既没有这个环境变量,也没有继承那个边界 fd。
+  // 用 node 而不是 `sleep`:多给一个参数时 `sleep` 自己就按「时间间隔非法」退掉了,那样这一条
+  // 验的就不是「没被杀」而是「它自己死了」。
+  const outsider = spawn(process.execPath,
+    ["-e", "setTimeout(() => {}, 5000)", `ASH_TEST_PROCESS_SCOPE=${scope.directory}`], { stdio: "ignore" });
+  await delay(300);
+  const owned = await scope.active();
+  assert.ok(!owned.some((row) => row.pid === outsider.pid),
+    "命令行里有那段文字只说明它打了这几个字,不是归属证明,不许认领");
+  await scope.stop();
+  scope.remove();
+  assert.ok(alive(outsider.pid), "没认领的进程更不许被杀 —— 那就是把用户另外的活关掉");
+  outsider.kill("SIGKILL");
+  console.log("✓ 所有权:标记只在 argv 里的外部进程既不认领也不终止");
+}
+
 // ── ③ 实例绑定:号码对上但出生时刻对不上的,既不认领也不终止 ────────────────────
 if (windows) {
   console.log("- 跳过实例绑定一节(POSIX 专属;Windows 侧走句柄 + GetProcessTimes)");
@@ -101,6 +156,30 @@ if (windows) {
   assert.ok(alive(outsider.pid), "没认领的进程更不许被杀 —— 那就是「把用户另外的活关掉」");
   outsider.kill("SIGKILL");
   console.log("✓ 实例绑定:出生时刻对不上的号码既不认领也不终止");
+}
+
+// ── ③b 实例绑定:**组长证明不出是我们的,组号就不作数** ───────────────────────────
+// 同一条「号码会被复用」的规矩,原先漏在进程组这一侧:`.root` 文件里有那个号码就按组认领,
+// 而注释声称的「组长还是我们的」实现里压根没核(第 4 轮审查 F1 同类)。旧组长退了、号码被
+// 复用之后,新组出生得比本域**晚**,现有的出生时刻检查一条都拦不住它。
+if (windows) {
+  console.log("- 跳过组号复用一节(POSIX 专属)");
+} else {
+  // 另起一个会话 ⇒ 它自己是组长,组号 = 它自己的 pid(这正是本域孩子的形状)。
+  const outsider = spawn("/bin/sleep", ["5"], { stdio: "ignore", detached: true });
+  outsider.unref();
+  await delay(300);
+  const scope = new TestProcessScope();
+  // 伪造一条「这个号码是本域某个根」的凭据 —— 旧组长退掉、号码被复用之后留下的就是这个样子。
+  writeFileSync(join(scope.directory, `${outsider.pid}.root`), "");
+  const owned = await scope.active();
+  assert.ok(!owned.some((row) => row.pid === outsider.pid),
+    "组长不在本域的登记里 = 这个组号是复用来的,不许按组收养");
+  await scope.stop();
+  scope.remove();
+  assert.ok(alive(outsider.pid), "没认领的进程更不许被杀");
+  outsider.kill("SIGKILL");
+  console.log("✓ 实例绑定:组长证明不出是我们的,组号不作数");
 }
 
 // ── ④ 初始化失败不留目录 ──────────────────────────────────────────────────────

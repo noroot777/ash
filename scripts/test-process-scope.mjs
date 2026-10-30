@@ -5,21 +5,36 @@
 //   ② **它们是不是都停了**(退出证明)。扫不到 ≠ 停了 —— 把一次空扫描当成清场,正是
 //      「测试显示成功、磁盘上还在写」那个形状的根子。
 //
-// ## 所有权的三条线索,以及它们各自的盲区
+// ## 所有权:只认**来源可证明**的那几条线索
 //
 //   · **登记**(preload 写 `<pid>.*.json`):只覆盖 Node 进程。非 Node 程序自己 fork 出来
 //     的后代不执行 preload,登记里没有它。
 //   · **父子链**:后代 setsid + 原父退出之后在 POSIX 上被挂到 1 号进程,链断了。
 //     (Windows 没有这套语义:ppid 字段在父进程死后仍然保留,链还在。)
-//   · **进程组**:setsid 会换组,同样断。
+//   · **进程组**:setsid 会换组,同样断;而且组号会被复用,所以**只在组长本身证明得出是我们的**
+//     时候才认(见 `active`)。
+//   · **边界描述符**(POSIX):每个 spawn 出来的进程都继承一个指向 `<执行域>/boundary` 的
+//     fd。`lsof` 读的是内核里「谁打开着这个文件」,不是文本 —— 外面的进程**拿不到**我们这个
+//     fd,所以这条线索既伪造不了,也不随 exec / setsid / 重新挂父而丢。
 //
-// 于是 POSIX 上三条全断的那一种真实存在(原生 fork+setsid,实测:父进程正常退出和超时
-// 两种模式下后代都活着、helper 都正常返回)。补第四条线索:**环境变量继承**。
-// `ASH_TEST_PROCESS_SCOPE` 在 fork 和 exec 之间都会传下去,setsid 和重新挂父都带不走它,
-// 而 `ps -E` 读得到自己这个用户的进程环境 —— 这条线索不依赖父子关系,因此不怕重新挂父。
-// Windows 读不到别的进程的环境块,但那边也没有「重新挂父」这件事:ppid 在父进程死后仍然
-// 指向原父,父子链本身就是完整的。所以两个平台各有一条**不依赖易变关系**的证明路径,
-// 哪条都不是「扫不到就算没有」。
+// 上一版的第四条线索是**环境变量继承**(`ASH_TEST_PROCESS_SCOPE`),两处都塌了(第 4 轮审查
+// F1/F2,都有实测):
+//   · **它伪造得了**:判据是 `ps -E` 那一整行 `includes(标记)`,而那一行是「命令行 + 环境块」
+//     拼起来的 —— 随便一个把这段文字当**普通 argv 参数**传进去的外部进程都会被认领,然后被
+//     `stop()` 终止(探针实测:`adopted:true`、`outsiderAliveAfterScopeStop:false`)。
+//   · **它丢得了,而且恰恰在它本来要覆盖的那一种上丢**:原生后代走 `execve(…, {})`,环境被
+//     整个清空。实测那个 fork+setsid 的后代环境段里**一个标记都没有** —— 补这条线索当年声称
+//     覆盖的就是这一种,实际上一次都没覆盖到。
+// 所以这一版:环境这条线索留着,但判据改成「标记出现在**环境段**里」(`ps -E` 的输出等于
+// `ps` 的输出再接环境块,实测前缀关系成立,于是两次快照一减就把环境段切出来了);而「不随
+// exec 丢」这件事交给边界描述符。
+//
+// ## 可证明的执行模型:它的边界写在这儿,不靠「再补一条会消失的线索」
+//
+// 一个后代要想彻底跑出这一层的视野,得**同时**做到:关掉继承来的边界 fd、清空环境、脱离
+// 父子链和进程组。前三条里任意一条没做到,它就还在 `active()` 里。而真要全做到了,这一层
+// 答的就不是「清场了」而是「证明不了」—— `survey()` 的 `ok:false` 走的是失败路径,`stop()`
+// 到最后仍有活的就报遗留。**扫不到不算停了**这条不变量没有例外。
 //
 // ## 实例身份:pid 不是身份,(pid, 出生时刻) 才是
 //
@@ -27,7 +42,7 @@
 // 是**另一个进程**,既不认它是我们的,更不会去杀它。终止前还要再核一次(POSIX 用
 // `ps -p` 重查,Windows 走句柄 + GetProcessTimes,见 stop)。
 import { spawn, spawnSync, execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +59,13 @@ export const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(
 /** 进程表的时刻只精确到秒(ps 的 lstart、CIM 的 CreationDate),比较一律留这么多余量。 */
 const CLOCK_SLACK_MS = 1_000;
 
+/**
+ * 边界描述符那个文件的名字。每个 spawn 出来的进程都继承一个指向它的 fd —— 「谁打开着这个
+ * 文件」是内核里的事实,外面的进程拿不到我们这个 fd,所以它既伪造不了也不随 exec 丢
+ * (见文件头)。
+ */
+const BOUNDARY = "boundary";
+
 async function command(file, args, options = {}) {
   const { timeout = 4_000, env } = options;
   return (await execute(file, args, {
@@ -51,6 +73,40 @@ async function command(file, args, options = {}) {
     maxBuffer: 64 * 1024 * 1024, // -E 把环境块也打出来,默认 1 MB 的缓冲区装不下整张表
     env: env ? { ...process.env, ...env } : process.env,
   })).stdout;
+}
+
+/**
+ * 还有谁打开着那个边界文件 —— 返回 pid 数组(不含本进程自己:读端是我们开的)。
+ *
+ * **查不动一律抛**,绝不返回空数组:这一层最要紧的不变量是「扫不到 ≠ 停了」,把一次查询失败
+ * 说成「没有持有者」正是那个事故形状的根子。调用方经 `survey()` 把它走成失败路径。
+ */
+async function boundaryHolders(path) {
+  // Linux 不必起外部进程:/proc 直接读得到每个 pid 开着哪些 fd。
+  if (existsSync("/proc/self/fd")) {
+    const holders = [];
+    for (const name of readdirSync("/proc")) {
+      const pid = Number(name);
+      if (!Number.isInteger(pid) || pid === process.pid) continue;
+      let entries;
+      try { entries = readdirSync(`/proc/${pid}/fd`); } catch { continue; } // 进程没了 / 不是我们的
+      for (const entry of entries) {
+        try { if (readlinkSync(`/proc/${pid}/fd/${entry}`) === path) { holders.push(pid); break; } }
+        catch { /* fd 刚好关了 */ }
+      }
+    }
+    return holders;
+  }
+  let output;
+  try { output = await command("lsof", ["-w", "-t", "--", path], { timeout: 10_000 }); }
+  catch (error) {
+    // lsof 查一个没人打开的文件时退 1 且不吐任何东西 —— 那是「没有持有者」这个**答案**,
+    // 不是查询失败。其余任何情况(找不到 lsof、超时、有 stderr)都算答不出来,往上抛。
+    if (error.code === 1 && !error.stdout?.trim() && !error.stderr?.trim()) return [];
+    throw error;
+  }
+  return output.split("\n").map((line) => Number(line.trim()))
+    .filter((pid) => Number.isInteger(pid) && pid !== process.pid);
 }
 
 const powerShell = (script) =>
@@ -71,24 +127,46 @@ async function processRows(scopeDirectory) {
     const parsed = JSON.parse(await powerShell(script));
     return (Array.isArray(parsed) ? parsed : [parsed]).map((row) => ({ ...row, group: null, scoped: false }));
   }
-  // `-E` 让环境块跟在命令行后面(只对自己这个用户的进程有效,正好是我们唯一要认的范围);
   // `LC_ALL=C` 把 lstart 钉成固定的英文格式,否则中文 locale 下是「四 10月/22 ...」,
   // Date.parse 认不出来,整条实例身份就垮了。
-  const output = await command("ps", ["-ww", "-E", "-axo", "pid=,ppid=,pgid=,stat=,lstart=,command="],
-    { env: { LC_ALL: "C" }, timeout: 10_000 });
+  //
+  // **两张快照,一张带 `-E` 一张不带**(第 4 轮审查 F1)。`-E` 把环境块接在命令行后面,中间
+  // 没有任何分隔符 —— 于是上一版那句 `line.includes(标记)` 根本分不清标记是在**环境里**还是
+  // 只是人家 argv 里的一个普通参数,一个外部进程就这么被认领、被终止(探针实测)。而
+  // `ps -E` 的那一行等于 `ps` 的那一行再接环境块(实测前缀关系成立),所以减一下就把环境段
+  // 切出来了:判据只看那一段。
+  const columns = "pid=,ppid=,pgid=,stat=,lstart=,command=";
+  const snapshot = async (extra) =>
+    command("ps", ["-ww", ...extra, "-axo", columns], { env: { LC_ALL: "C" }, timeout: 10_000 });
+  const [plain, withEnvironment] = await Promise.all([snapshot([]), snapshot(["-E"])]);
   const marker = scopeDirectory ? `ASH_TEST_PROCESS_SCOPE=${scopeDirectory}` : null;
+  /** pid → 这一行去掉前面那几列之后的「命令行(+环境块)」。 */
+  const tails = (text) => {
+    const out = new Map();
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s+/);
+      // 前五列固定:pid ppid pgid stat + lstart 的五段(Thu Oct 22 09:25:56 2026)。
+      out.set(Number(parts[0]), { parts, tail: parts.slice(9).join(" ") });
+    }
+    return out;
+  };
+  const argvOnly = tails(plain);
   const rows = [];
-  for (const line of output.split("\n")) {
-    if (!line.trim()) continue;
-    const parts = line.trim().split(/\s+/);
-    const [pid, ppid, group, state, ...rest] = parts;
+  for (const [pid, { parts, tail }] of tails(withEnvironment)) {
+    const [, ppid, group, state] = parts;
     if (state?.startsWith("Z")) continue; // 僵尸:已经死了,只是还没被收尸
-    // lstart 固定五段(Thu Oct 22 09:25:56 2026),后面全是命令行 + 环境块。
-    const born = Date.parse(rest.slice(0, 5).join(" "));
+    const born = Date.parse(parts.slice(4, 9).join(" "));
+    // 环境段 = 带 `-E` 那一行减掉不带 `-E` 那一行。切不出来(两次快照之间 argv 变了、或者
+    // 有一张里没有这个 pid)就**算读不出来**,不算「没有标记」—— 这条线索答不了的时候还有
+    // 边界 fd 和父子链,不必在这儿猜。
+    const argv = argvOnly.get(pid)?.tail;
+    const environment = argv !== undefined && tail.startsWith(argv) ? tail.slice(argv.length) : null;
     rows.push({
-      pid: Number(pid), ppid: Number(ppid), group: Number(group), created: null,
+      pid, ppid: Number(ppid), group: Number(group), created: null,
       born: Number.isFinite(born) ? born : null,
-      scoped: !!marker && line.includes(marker),
+      scoped: !!marker && environment !== null && environment.includes(marker),
     });
   }
   return rows;
@@ -130,16 +208,43 @@ export class TestProcessScope {
     this.children = [];
     /** 终止时**没能核对实例身份**的那些号码 —— 宁可报出来,也不照着旧号码乱杀(F2)。 */
     this.unverified = [];
+    // 边界描述符那个文件(见文件头)。POSIX 专有:Windows 那边 ppid 在父进程死后仍然保留,
+    // 父子链本身就是完整的,不需要这一条;那边也没有 lsof / proc 这种「谁开着这个文件」的查法。
+    // 清理助手拿已有目录重建 scope 时这个文件已经在了,所以用追加方式确保存在。
+    this.boundaryPath = windows ? null : join(this.directory, BOUNDARY);
+    if (this.boundaryPath) {
+      try { writeFileSync(this.boundaryPath, "", { flag: "a" }); }
+      catch (error) {
+        if (mine) rmSync(this.directory, { recursive: true, force: true });
+        throw error;
+      }
+    }
     scopes.add(this);
   }
 
   spawn(commandName, args, options = {}) {
     const environment = options.env ?? process.env;
-    const child = spawn(commandName, args, {
-      ...options, detached: !windows, windowsHide: true,
-      env: { ...environment, ASH_TEST_PROCESS_SCOPE: this.directory,
-        NODE_OPTIONS: `--require ${JSON.stringify(registerPath)} ${environment.NODE_OPTIONS ?? ""}`.trim() },
-    });
+    // 边界描述符挂在 fd 3 上。它跟着 fork、exec、setsid、重新挂父一路传下去,而
+    // `execve(…, {})` 清掉的只是环境、带不走描述符 —— 这正是环境那条线索塌掉的那一种
+    // (文件头)。调用方自己的 stdio 原样保留,只在后面续一位。
+    const stdio = options.stdio ?? ["pipe", "pipe", "pipe"];
+    // **开了就马上关**:`spawn` 在返回之前已经把它 dup 进子进程了,所以这一侧不必留着 ——
+    // 留着的话「谁开着这个文件」里就永远有创建者自己,而清理助手是**另一个进程**、只排除得掉
+    // 自己那个 pid,于是它会把创建者认成域内进程并一刀 SIGTERM 掉(本轮实测 `test:restart`
+    // 整套 rc=143)。只在 spawn 那一瞬开着,持有者集合里就只剩真正的后代。
+    const boundary = this.boundaryPath === null ? null : openSync(this.boundaryPath, "r");
+    let child;
+    try {
+      child = spawn(commandName, args, {
+        ...options, detached: !windows, windowsHide: true,
+        stdio: boundary === null ? stdio
+          : [...(Array.isArray(stdio) ? stdio : [stdio, stdio, stdio]), boundary],
+        env: { ...environment, ASH_TEST_PROCESS_SCOPE: this.directory,
+          NODE_OPTIONS: `--require ${JSON.stringify(registerPath)} ${environment.NODE_OPTIONS ?? ""}`.trim() },
+      });
+    } finally {
+      if (boundary !== null) { try { closeSync(boundary); } catch { /* 已经关了 */ } }
+    }
     child.on("error", () => {});
     this.children.push(child);
     if (child.pid) {
@@ -187,10 +292,33 @@ export class TestProcessScope {
       if (!row || this.#impostor(row, record.at)) continue;
       owned.add(record.pid);
     }
-    // 环境块里带着本执行域的:不问父子、不问进程组,它一定是我们这一次创建的(文件头)。
+    // **边界描述符**:开着我们那个文件的,一定是我们这一次创建的 —— 外面的进程拿不到这个
+    // fd(文件头)。查不动会抛,由 `survey()` 走失败路径,绝不退化成「没有活的」。
+    if (this.boundaryPath !== null) {
+      for (const pid of await boundaryHolders(this.boundaryPath)) {
+        const row = rows.find((entry) => entry.pid === pid);
+        if (row && !this.#impostor(row, Date.now())) owned.add(pid);
+      }
+    }
+    // 环境段里带着本执行域的。判据是**环境段**而不是整行,不然一个把这段文字当普通参数传进来
+    // 的外部进程就会被认领、被终止(第 4 轮审查 F1 实测)。
     for (const row of rows) if (row.scoped && !this.#impostor(row, Date.now())) owned.add(row.pid);
-    // 进程组只在**组长还是我们的**时候作数:号码会被复用,光凭组号认领等于按旧号码收养。
-    if (!windows) for (const row of rows) if (groups.has(row.group) && !this.#impostor(row, Date.now())) owned.add(row.pid);
+    // **进程组只在组长本身证明得出是我们的时候才作数**。号码会被复用:光凭「组号在 .root 里」
+    // 认领,等于拿一个早就退了的旧组号去收养别人新建的组 —— 而那个新组出生得比本域晚,现有的
+    // 出生时刻检查一条都拦不住它(第 4 轮审查 F1 同类)。组长在不在、是不是我们的,这儿查得到:
+    //  · 还握着句柄没回收的那个孩子 ⇒ 这个号码不可能被复用,组号作数;
+    //  · 否则要求组长那一行还在表里、而且它自己已经被上面几条线索认下来了。
+    if (!windows) {
+      const held = new Set(this.children
+        .filter((child) => child.pid && child.exitCode === null && child.signalCode === null)
+        .map((child) => child.pid));
+      const provable = new Set([...groups].filter((leader) =>
+        held.has(leader) || (owned.has(leader) && rows.some((row) => row.pid === leader))));
+      for (const row of rows) {
+        if (!provable.has(row.group) || this.#impostor(row, Date.now())) continue;
+        owned.add(row.pid);
+      }
+    }
     let changed = true;
     // 已经不在表里的登记 pid 仍然当祖先用:Windows 上父进程死后 ppid 字段还留着,
     // 那条边是它那边唯一完整的线索。
@@ -272,14 +400,16 @@ export class TestProcessScope {
     await attempt(() => writeFileSync(join(this.directory, "stopped"), ""));
     // 我们自己 spawn 出来的那一层:句柄还没回收,这个号码就不可能被复用,所以整组发信号
     // 是安全的 —— 也只有这一处敢按组号发。
-    for (const child of this.children) {
-      if (!child.pid || child.exitCode !== null || child.signalCode !== null) continue;
-      if (windows) {
-        // 这一处 `/T` 是安全的:句柄还没回收,这个号码就不会被复用,所以展开出来的那棵树
-        // 一定是我们这个孩子的后代。别处的 /T 没有这个前提,所以走句柄终止。
-        try { await command("taskkill", ["/PID", String(child.pid), "/T", "/F"]); }
-        catch (error) { if (!Number.isInteger(error.code)) errors.push(error); }
-      } else {
+    //
+    // **Windows 这儿原先走 `taskkill /T /F`,已经去掉**(第 4 轮审查 F1 同类)。当时的理由是
+    // 「句柄没回收 ⇒ 这个号码不会被复用 ⇒ 展开出来的那棵树一定是我们的」,可那只固定了**根**的
+    // 身份:`/T` 在执行那一刻按 ppid 重新展开整棵树,而 Windows 的 ppid 在父进程死后仍然留着
+    // 旧号码 —— 一个号码被复用的中间节点就能把别人的进程挂进这棵树。那边改走跟下面同一条路:
+    // `active()` 列出来(父子链在 Windows 上本来就完整)、一行一次按句柄 + GetProcessTimes
+    // 核代次再终止。少掉的只是「先砍根」这一下,根自己照样在 `active()` 里。
+    if (!windows) {
+      for (const child of this.children) {
+        if (!child.pid || child.exitCode !== null || child.signalCode !== null) continue;
         signal(-child.pid, "SIGTERM");
       }
     }
