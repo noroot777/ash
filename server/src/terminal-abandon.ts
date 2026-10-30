@@ -32,7 +32,9 @@ import type { LaunchAbandonment, TerminalSessionInfo } from "./terminal-session-
 function scopeOf(info: TerminalSessionInfo): string[] {
   return [
     "这条启动记录的删除保护解除：关掉它的日志标签、删掉这个项目都不再被它拦下（只删这条记录，名下的进程 ash 一个都不杀）",
-    "启动幂等门不再认它：再点启动会**另起一份**，上面还活着的那些进程不会被顺手收掉",
+    // 这几行原样进纯文本弹层(web/src/workspace/LaunchAbandonDialog.tsx 的 li),不过 markdown
+    // —— 所以别在这里写 `**`,它会原样显示给用户看(第 2 轮自由审查 N5 截图)。
+    "启动幂等门不再认它：再点启动会另起一份，上面还活着的那些进程不会被顺手收掉",
     "关掉 ash 时不再按它的端口和启动记号去收人，退出交代里也不再提它",
     `只解除「${info.name}」这一次启动（${new Date(info.startedAt).toLocaleString("zh-CN")} 起）——`
       + "同项目其它会话，以及这条命令以后的启动，照旧受全套保护",

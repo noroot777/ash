@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { restoreMonitorCheckpoint } from "./monitor-checkpoint-handoff.js";
@@ -13,6 +13,7 @@ import { markSent } from "./pending-messages.js";
 import {
   announceResumePrompt, resumePromptHeldBy, resumePromptTakePatch,
 } from "./task-resume-prompt.js";
+import { describeCheckpointOwner, mintCheckpointOwner } from "./checkpoint-ownership.js";
 import { id, now } from "./util.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
@@ -33,6 +34,7 @@ export async function claimCheckpointForRun(taskId: string, expected: string, ge
   // 第一次 CLI 收到 1 次、任务上原文还在,第二次运行 CLI 收到次数变成 2)。
   // 登记在前就没有这个窗口:行一旦可见,所有权就已经在了。
   const messageId = id();
+  const owner = mintCheckpointOwner();
   noteCheckpointDelivering(messageId);
   let receipt: Row | null = null;
   try {
@@ -52,6 +54,9 @@ export async function claimCheckpointForRun(taskId: string, expected: string, ge
     const logged = await transaction.insert(scheduledMessages).values({
       id: messageId, taskId, text: expected, mode: "queued", status: "canceled",
       origin: CHECKPOINT_RUN_ORIGIN, sendAt: stamp, createdAt: stamp, deliveringSince: stamp,
+      // 所有权**身份**,跟租约同一笔落库:接管方据此证明「原发送方已经不在送」,原发送方
+      // 据此发现自己已经失权(checkpoint-ownership.ts 的文件头,第 2 轮自由审查 F1)。
+      deliveringOwner: owner,
       checkpointTaken: expected, checkpointAuto: task.resumePromptAuto,
       checkpointGeneration: task.resumePromptGeneration,
       // 跟凭证同一笔落库:这张票据受哪一代协议保护,以后谁来读都看得见(F1)。
@@ -69,24 +74,51 @@ export async function claimCheckpointForRun(taskId: string, expected: string, ge
 }
 
 /**
- * 这张凭证**还是我的吗** —— 起跑资格的最后一问。
+ * 这张凭证**还是我的吗** —— 起跑资格的最后一问,而且必须是一次**条件写**,不是一次读。
  *
- * 多开实例(`ASH_ALLOW_MULTI`)时 `deliveringNow` 只覆盖本进程,另一个实例的对账照样可能把
- * 这张租约接管走(接管一律走 `seizeStrandedCheckpoint` 的 CAS)。被接管之后这条路就**不许
- * 再起跑**:那边已经按「没送出去」把交代还给任务了,这边再送一遍就是执行两遍。
+ * 为什么不能是读(第 2 轮自由审查 F1 实测):读回来的是「刚才那一瞬的样子」,拿它当起跑
+ * 许可就等于用过期观察授权一次不可逆的投递。现在问法改成「把租约续到此刻,条件是所有权
+ * 身份还是我那一个」——0 行 = 我已经失权,这一趟不许起跑。
  *
- * 读不出来时按「还是我的」继续:这一问只用于发现**已经被回收**,读失败不构成回收的证据,
- * 拿它拦下一次正常起跑反而会把交代卡住。
+ * 它自己**不负责**排他:排他来自接管那一侧的证据闸(checkpoint-ownership.ts:活着的发送方
+ * 证不出已不在,就不许被接管)。这一问只负责两件事:发现自己已经失权,以及
+ * **问不出来时按失权处理** —— 「读不到被回收的证据」不是「仍有起跑权」的证明,而这一步
+ * 之后紧接着就是 spawn,宁可这一趟不起跑(凭证原样留着,下一趟对账照旧接得走)。
  */
-export async function checkpointStillOwned(receipt: Row): Promise<boolean> {
+export async function holdCheckpointOwnership(receipt: Row): Promise<boolean> {
   try {
-    const current = (await db.select().from(scheduledMessages)
-      .where(eq(scheduledMessages.id, receipt.id))).at(0);
-    if (!current) return false;
-    return current.deliveringSince === receipt.deliveringSince && current.checkpointTaken !== null;
+    const held = await db.update(scheduledMessages).set({ deliveringSince: now() }).where(and(
+      eq(scheduledMessages.id, receipt.id),
+      // 老库开出来的凭证没有身份,只能退回比租约戳(它那一代就是这个口径)。
+      receipt.deliveringOwner === null
+        ? eq(scheduledMessages.deliveringSince, receipt.deliveringSince!)
+        : eq(scheduledMessages.deliveringOwner, receipt.deliveringOwner),
+      isNotNull(scheduledMessages.checkpointTaken),
+    )).returning({ id: scheduledMessages.id });
+    return held.length > 0;
   } catch (error) {
-    console.warn(`[ash] 续跑凭证归属复查失败 task=${receipt.taskId} message=${receipt.id}（按仍持有继续）:`, error);
-    return true;
+    console.error(`[ash] 续跑凭证所有权复查失败 task=${receipt.taskId} message=${receipt.id}`
+      + `（按已失权处理，这一趟不起跑）:`, error);
+    return false;
+  }
+}
+
+/**
+ * 这张票现在还挂在我名下吗 —— 账本副作用之前的那一问(归还、补记、交付不明都经它)。
+ *
+ * 三态:`mine` / `lost`(已经被别人接管走) / `unknown`(读不出来)。`unknown` 不许当成
+ * `mine`:失权方继续写账就是「原文既被归还、又被标成已送达」那一类后果(审查点名的
+ * fence 缺口)。
+ */
+async function checkpointOwnershipState(receipt: Row): Promise<"mine" | "lost" | "unknown"> {
+  if (receipt.deliveringOwner === null) return "mine"; // 老库凭证没有身份可比,按原口径继续
+  try {
+    const current = (await db.select({ owner: scheduledMessages.deliveringOwner })
+      .from(scheduledMessages).where(eq(scheduledMessages.id, receipt.id))).at(0);
+    if (!current) return "lost";
+    return current.owner === receipt.deliveringOwner ? "mine" : "lost";
+  } catch {
+    return "unknown";
   }
 }
 
@@ -202,6 +234,37 @@ async function publishUncertainRecord(receipt: Row): Promise<boolean> {
 }
 
 /**
+ * 「证据读不出来」那条路的**退避代次**,按凭证记。
+ *
+ * 为什么不能只靠参数(第 2 轮自由审查 N6):计时器回调要先绕一趟 `reconcileCheckpointDeliveries`
+ * 才回到这里,`attempts` 在那一跳上丢掉 —— 于是持续故障时每一轮又从 0 起,恒为 200ms,
+ * 既没有真正的退避,还会把日志和读取压力按故障时长线性放大。记在这里,代次就跨得过那一跳;
+ * 判定一旦读得动(或者这张票了结)就删掉。
+ */
+const settleRetries = new Map<string, number>();
+
+/**
+ * 交回所有权 + 退避重排一趟对账,**一个字都不消费**(租约与越线记号原样留着)。
+ *
+ * 交回是前提:不交回的话,下一趟对账会把它当成「还有发送方」跳过,任务从此起不来,只有
+ * 重启能解(第 1 轮审查 F2 定点实测)。接管方经证据闸 + 条件更新接手,不会跟谁撞。
+ */
+function rescheduleCheckpointSettle(receipt: Row, why: string, attempts: number, error: unknown): void {
+  forgetCheckpointDelivering(receipt.id);
+  if (dbClient.closed) return;
+  const attempt = Math.max(attempts, settleRetries.get(receipt.id) ?? 0);
+  settleRetries.set(receipt.id, attempt + 1);
+  const delay = Math.min(200 * 2 ** Math.min(attempt, 8), 30_000);
+  const head = `[ash] ${why} task=${receipt.taskId} message=${receipt.id}：`;
+  console.warn(`${head}这一问读不出来（所有权已交回，${delay}ms 后第 ${attempt + 2} 次对账）:`, error);
+  const timer = setTimeout(() => void (async () => {
+    const { reconcileCheckpointDeliveries } = await import("./pending-checkpoint-recovery.js");
+    await reconcileCheckpointDeliveries(receipt.taskId);
+  })().catch((retryError) => console.error(`${head}重排对账失败:`, retryError)), delay);
+  timer.unref?.();
+}
+
+/**
  * 一张**带着在途租约、却没人在送**的凭证该怎么收场 —— 三态判定与三条出路收在这一个函数里。
  *
  * 所有入口都必须经过它:进程内的 `finally`(task-resume.ts)、开机那一拍与每次启动前的对账
@@ -212,6 +275,21 @@ export async function settleStrandedCheckpointRun(receipt: Row, why: string,
   /** 调用方**确知**这一轮一个字都没送出去(continueTask 返回 false:起跑前被冻结闸撤回、
    *  或者越线凭据根本写不下来)。那是比任何事后读取都强的否证,直接归还。 */
   notLaunched = false, attempts = 0): Promise<void> {
+  // **失权方不许再写账**(第 2 轮自由审查 F1 的第 5 条):这个出口会归还、会补记、会就地
+  // 了结 —— 三种都在改那张票和任务上的交代。票已经不在我名下时一个字都不许动:那边可能
+  // 已经按别的结论处置过了,再写一遍就是「原文既被归还、又被标成已送达」。
+  const held = await checkpointOwnershipState(receipt);
+  if (held === "lost") {
+    console.warn(`[ash] ${why} task=${receipt.taskId} message=${receipt.id}：`
+      + `这张续跑凭证已经由 ${describeCheckpointOwner(receipt.deliveringOwner)} 之外的人接管，这一趟不再处置它`);
+    forgetCheckpointDelivering(receipt.id);
+    return;
+  }
+  if (held === "unknown") {
+    // 读不出来跟下面「判定读不出来」是同一档:交回所有权 + 退避重排,一个字都不消费。
+    rescheduleCheckpointSettle(receipt, why, attempts, new Error("所有权归属读不出来"));
+    return;
+  }
   if (notLaunched) {
     console.warn(`[ash] ${why} task=${receipt.taskId} message=${receipt.id}：这一轮在 spawn 之前就撤回了，归还给任务`);
     await returnCheckpointRun(receipt);
@@ -227,17 +305,11 @@ export async function settleStrandedCheckpointRun(receipt: Row, why: string,
     // 任务从此起不来,只有重启能解(第 1 轮审查 FMGMWUm5TH7E F2 定点实测)。
     // 所以:所有权当场交回(下一趟对账接得走,它经 CAS 接管,不会跟谁撞),再自己退避重排
     // 一趟对账 —— 不必非等用户再点一次运行。一个字都不消费:租约和记号都原样留着。
-    forgetCheckpointDelivering(receipt.id);
-    if (dbClient.closed) return;
-    const delay = Math.min(200 * 2 ** Math.min(attempts, 8), 30_000);
-    console.warn(`${head}送没送出去这一问读不出来（所有权已交回，${delay}ms 后第 ${attempts + 2} 次对账）:`, error);
-    const timer = setTimeout(() => void (async () => {
-      const { reconcileCheckpointDeliveries } = await import("./pending-checkpoint-recovery.js");
-      await reconcileCheckpointDeliveries(receipt.taskId);
-    })().catch((retryError) => console.error(`${head}重排对账失败:`, retryError)), delay);
-    timer.unref?.();
+    rescheduleCheckpointSettle(receipt, why, attempts, error);
     return;
   }
+  // 判定读得动了:这张票的退避代次清零(下一次故障重新从头退避)。
+  settleRetries.delete(receipt.id);
   if (verdict === "delivered") {
     console.warn(`${head}原文已送达（租约之后有回合开起来过），补记这一笔确认`);
     await acknowledgeCheckpointRun(receipt);

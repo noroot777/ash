@@ -9,7 +9,7 @@ import { handDuePendingMessageToRun } from "./pending-messages.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
 import {
-  acknowledgeCheckpointRun, checkpointStillOwned, claimCheckpointForRun, settleStrandedCheckpointRun,
+  acknowledgeCheckpointRun, claimCheckpointForRun, holdCheckpointOwnership, settleStrandedCheckpointRun,
 } from "./task-checkpoint-delivery.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { activeReviewEvidence } from "./review-continuation.js";
@@ -75,12 +75,16 @@ async function resumeOrRunClaimedTask(taskId: string,
       // `continueTask` 返回 false = 这一轮**一个字都没送出去**(起跑前被冻结闸撤回,或者越线
       // 凭据写不下来而原地撤回)。抛错那条路不给这个结论,所以初值按「不知道」算。
       let launched = true;
+      // 这一轮的账还该不该由我来结。失权之后一个字都不许写:那边可能已经按别的结论处置过
+      // 这张票了(第 2 轮自由审查 F1 的第 5 条 —— 早先这里 return 之后 finally 照旧了结旧票)。
+      let owned = true;
       try {
         // 认领与起跑之间隔着几个 await:这段里对账可能已经把这张凭证接管走、并按「没送出去」
-        // 把交代还给了任务(多开实例时尤其)。那种情况下再送一遍就是执行两遍 —— 被回收的凭证
-        // 不许继续起跑(task-checkpoint-delivery.ts 的 checkpointStillOwned)。
-        if (!await checkpointStillOwned(receipt)) {
-          console.warn(`[ash] 续跑凭证已被对账接管 task=${taskId} message=${receipt.id}：这一趟不再起跑`);
+        // 把交代还给了任务(多开实例时尤其)。那种情况下再送一遍就是执行两遍。资格这一问是
+        // 一次**条件写**而不是一次读,读不出来按失权算(holdCheckpointOwnership 的头部)。
+        owned = await holdCheckpointOwnership(receipt);
+        if (!owned) {
+          console.warn(`[ash] 续跑凭证已不在本进程名下 task=${taskId} message=${receipt.id}：这一趟不再起跑`);
           return;
         }
         launched = await continueTask(taskId, rp, {
@@ -96,7 +100,9 @@ async function resumeOrRunClaimedTask(taskId: string,
         // 没走到送达回调 ≠ 没送出去:spawn 排在 persistRunner 与 onDelivered **之前**,崩在
         // 中间那条缝里时这段话已经在 agent 手上了。三态判定与三条出路统一在
         // settleStrandedCheckpointRun(第 1 轮审查 F1:这里原先一律归还)。
-        if (!delivered) await settleStrandedCheckpointRun(receipt, "本轮续跑交代未走到送达确认", !launched);
+        if (!delivered && owned) {
+          await settleStrandedCheckpointRun(receipt, "本轮续跑交代未走到送达确认", !launched);
+        }
       }
       return;
     }

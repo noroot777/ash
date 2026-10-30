@@ -88,6 +88,27 @@ function alive(record: AshPresence): boolean {
 
 /** 这个资源键上现在有没有活着的 ash。顺手清掉已经没主的记录。 */
 export function liveAshPresenceFor(key: string): AshPresence | null {
+  return liveAshPresenceIn(key, null);
+}
+
+/**
+ * 这个资源键上**除了我之外**还有没有活着的 ash。
+ *
+ * 跟上面那一问分开给:拿着单例锁只证明「没有别的**守锁的**实例」,`ASH_ALLOW_MULTI=1` 起的
+ * 那种压根不写锁、只留在线登记 —— 所以「这台机器上就我一个」必须连这一问一起答
+ * (checkpoint-ownership.ts:接管一张滞留凭证之前要拿它当证据)。答不出来照旧抛
+ * AshPresenceUnknownError,调用方按「可能有」处理。
+ */
+export function otherLiveAshPresenceForAny(keys: readonly string[]):
+{ key: string; presence: AshPresence } | null {
+  for (const key of keys) {
+    const presence = liveAshPresenceIn(key, process.pid);
+    if (presence) return { key, presence };
+  }
+  return null;
+}
+
+function liveAshPresenceIn(key: string, skipPid: number | null): AshPresence | null {
   const canonical = canonicalResourceKey(key);
   const dir = dirname(canonical);
   const head = `${basename(canonical)}${PREFIX}`;
@@ -107,6 +128,8 @@ export function liveAshPresenceFor(key: string): AshPresence | null {
     // 读不懂的那份**既不清也不放过**:清掉它等于把一个可能活着的写入者抹成不存在。
     if (read.kind === "unreadable") throw new AshPresenceUnknownError(file, read.reason);
     if (read.kind === "absent") continue;
+    // 自己那一份:既不算「别人」,也不许被当成残骸清掉。
+    if (skipPid !== null && read.record.pid === skipPid) continue;
     if (alive(read.record)) return read.record;
     try {
       unlinkSync(file); // 主人已死，是残骸

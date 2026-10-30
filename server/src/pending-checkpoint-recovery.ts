@@ -1,6 +1,9 @@
-import { and, eq, isNotNull, ne } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne } from "drizzle-orm";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, sessionTurns, sessions, tasks } from "./db/schema.js";
+import {
+  checkpointSeizureReason, describeCheckpointOwner, mintCheckpointOwner,
+} from "./checkpoint-ownership.js";
 import { crossingProvesAbsence, readDeliveryCrossing, type CrossingTurn } from "./delivery-crossing.js";
 import { restoreMonitorCheckpoint } from "./monitor-checkpoint-handoff.js";
 
@@ -133,10 +136,18 @@ async function reconcileLeasedCheckpoints(rows: (typeof scheduledMessages.$infer
   if (!stranded.length) return;
   const delivery = await import("./task-checkpoint-delivery.js");
   for (const receipt of stranded) {
-    // **接管要先抢到手**:上面那张筛子是进程内的,它答不出「别的实例/别的并发对账有没有在
-    // 办这一张」。抢的办法是把租约戳换成我这一趟的(条件更新,0 行 = 没抢到,跳过它) ——
-    // 于是同一张凭证在同一时刻只有一个接管方,原发送方的归属复查(checkpointStillOwned)也
-    // 据此看得出自己已经被回收(F1 的不变量:接管只许接管确实无人负责的那些)。
+    // **接管要有证据**:上面那张筛子是进程内的,它答不出「另一份 ash 有没有在送这一张」。
+    // 放行只认三条(本进程拿着单例锁 / 这张票是本进程开的 / token 里那个进程证明得了已经
+    // 不在),其余一律不接管 —— 墙钟租约证不出「原发送方已经不在送」,按它接管就是把一段
+    // 正在送的交代归还回任务,同一段话执行两遍(第 2 轮自由审查 F1,两个独立进程实测)。
+    const allowed = checkpointSeizureReason(receipt.deliveringOwner);
+    if (!allowed) {
+      console.warn(`[ash] 在途续跑交代仍由 ${describeCheckpointOwner(receipt.deliveringOwner)} 负责`
+        + ` task=${receipt.taskId} message=${receipt.id}：证不出它已经不在送，这一趟不接管`);
+      continue;
+    }
+    // 抢到手才算接管:把**所有权身份**换成这一趟新开的(条件是它还是我读到的那一个,
+    // 0 行 = 这一瞬有别人动过它)。身份每次都换,所以同毫秒接管也分得清代次。
     const seized = await seizeStrandedCheckpoint(receipt);
     if (!seized) continue;
     noteCheckpointDelivering(seized.id);
@@ -151,19 +162,26 @@ async function reconcileLeasedCheckpoints(rows: (typeof scheduledMessages.$infer
 }
 
 /**
- * 抢下一张滞留凭证的在途租约:把 `delivering_since` 换成这一趟的戳,**条件是它还是我读到
- * 的那个值**。回 null = 这一瞬有别人动过它(另一个实例的对账抢在前面、或者原发送方已经
- * 把它了结),这一趟就不该再碰。
+ * 抢下一张滞留凭证:把**所有权身份**换成这一趟新开的那一个,条件是它还是我读到的那一个
+ * (老库那种没有身份的行退回比租约戳)。回 null = 这一瞬有别人动过它(另一趟对账抢在前面、
+ * 或者原发送方已经把它了结),这一趟就不该再碰。
+ *
+ * 身份每次接管都换,所以「同毫秒接管不保证改变旧戳」那条缝对它不成立(第 2 轮自由审查 F1
+ * 点名:一个值不能同时当时间和代次);原发送方据此也看得出自己已经失权。
  */
 async function seizeStrandedCheckpoint(
   receipt: typeof scheduledMessages.$inferSelect,
 ): Promise<typeof scheduledMessages.$inferSelect | null> {
   const stamp = new Date(Date.now()).toISOString();
-  const seized = await db.update(scheduledMessages).set({ deliveringSince: stamp }).where(and(
-    eq(scheduledMessages.id, receipt.id),
-    eq(scheduledMessages.deliveringSince, receipt.deliveringSince!),
-    isNotNull(scheduledMessages.checkpointTaken),
-  )).returning();
+  const seized = await db.update(scheduledMessages)
+    .set({ deliveringSince: stamp, deliveringOwner: mintCheckpointOwner() }).where(and(
+      eq(scheduledMessages.id, receipt.id),
+      receipt.deliveringOwner === null
+        ? and(isNull(scheduledMessages.deliveringOwner),
+          eq(scheduledMessages.deliveringSince, receipt.deliveringSince!))
+        : eq(scheduledMessages.deliveringOwner, receipt.deliveringOwner),
+      isNotNull(scheduledMessages.checkpointTaken),
+    )).returning();
   return seized.at(0) ?? null;
 }
 
@@ -227,6 +245,15 @@ export async function pendingCheckpointBlockReason(
         + "记录（原文会留在任务时间线里，由你决定要不要再送一遍）；它不会被自动重投，否则同一段"
         + "交代可能被执行两遍";
     }
+  }
+  // 「证不出原发送方已经不在送」也要如实说:多开实例时这张票可能真的还有人在送,系统
+  // 不许据此归还(F1),所以用户看到的不该是一句没有出路的「仍由消息账本保管」。
+  for (const receipt of blocking) {
+    if (receipt.origin !== CHECKPOINT_RUN_ORIGIN || !receipt.deliveringSince) continue;
+    if (checkpointSeizureReason(receipt.deliveringOwner)) continue;
+    return `这一轮的续跑交代仍由 ${describeCheckpointOwner(receipt.deliveringOwner)} 负责投递，`
+      + "系统证不出那边已经不在送它 —— 接管会把一段可能正在送的交代重新变成待执行输入，"
+      + "所以这里只等不抢；那个进程退出（或把这一笔结清）之后就能再启动";
   }
   return "未送达的续跑交代仍由消息账本保管，归还或完成交接后才能启动";
 }

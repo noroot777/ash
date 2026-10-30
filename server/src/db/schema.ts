@@ -487,6 +487,14 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 真的落进会话之后才写，所以 sent 永远意味着「用户刷新后看得见」。租约是内存态的
   // 持久投影：进程一换就作废（开机 reclaimStaleDeliveries 全清），那条消息回到待发送。
   deliveringSince: text("delivering_since"),
+  // 这张**续跑凭证**此刻挂在谁名下(checkpoint-ownership.ts 的 token:pid + 代次 + 开机随机数
+  // + 这一笔认领/接管独有的随机串)。只有续跑凭证用它。
+  //
+  // 为什么租约时刻不够:它既要当「这条租约多久了」又要当身份,于是同毫秒接管不保证换值,
+  // 更证不出「原发送方还在不在」。多开实例(ASH_ALLOW_MULTI)时后者是硬要求 —— 两个独立进程
+  // 实测:接管方按「没送出去」把交代还给任务,而原发送方照旧送了出去,同一段话执行两遍
+  // (第 2 轮自由审查 F1)。旧行 NULL = 那一代还没有身份,接管资格另按单例锁判(同上文件头)。
+  deliveringOwner: text("delivering_owner"),
   // 这条消息已经把 `tasks.resume_prompt` 那段续跑交代**接走了**,值就是那一段原文,正文
   // 末尾带着它(见 monitor-session.ts 的 monitorWakeCheckpoint)。
   //

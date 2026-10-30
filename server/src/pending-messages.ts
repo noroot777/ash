@@ -130,6 +130,7 @@ export function pendingMessageRow(input: {
     createdAt: now(),
     sentAt: null,
     deliveringSince: null,
+    deliveringOwner: null,   // 普通消息不走续跑凭证那套所有权(见 schema 注释)
     // 新消息没接走任何交代（接走发生在投递那一刻，见 monitorWakeCheckpoint）。
     checkpointTaken: null,
     handoffToken: input.handoffToken ?? null,
@@ -262,7 +263,9 @@ export async function markSent(message: Row | Row[], transaction?: ConclusionTra
   if (!messages.length) return;
   await (transaction ?? db)
     .update(scheduledMessages)
-    .set({ status: "sent", sentAt: now(), deliveringSince: null })
+    // 结清的那一刻连所有权身份一起收掉:一张已经 sent 的票不该再声称有人在送它
+    // (续跑凭证之外的消息这一列本来就是 null,写它是空转)。
+    .set({ status: "sent", sentAt: now(), deliveringSince: null, deliveringOwner: null })
     .where(and(
       inArray(scheduledMessages.id, messages.map((current) => current.id)),
       or(
