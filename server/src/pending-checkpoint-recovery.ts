@@ -133,12 +133,38 @@ async function reconcileLeasedCheckpoints(rows: (typeof scheduledMessages.$infer
   if (!stranded.length) return;
   const delivery = await import("./task-checkpoint-delivery.js");
   for (const receipt of stranded) {
+    // **接管要先抢到手**:上面那张筛子是进程内的,它答不出「别的实例/别的并发对账有没有在
+    // 办这一张」。抢的办法是把租约戳换成我这一趟的(条件更新,0 行 = 没抢到,跳过它) ——
+    // 于是同一张凭证在同一时刻只有一个接管方,原发送方的归属复查(checkpointStillOwned)也
+    // 据此看得出自己已经被回收(F1 的不变量:接管只许接管确实无人负责的那些)。
+    const seized = await seizeStrandedCheckpoint(receipt);
+    if (!seized) continue;
+    noteCheckpointDelivering(seized.id);
     try {
-      await delivery.settleStrandedCheckpointRun(receipt, "接管在途续跑交代");
+      await delivery.settleStrandedCheckpointRun(seized, "接管在途续跑交代");
     } catch (error) {
-      console.error(`[ash] 在途续跑交代对账失败 task=${receipt.taskId} message=${receipt.id}:`, error);
+      // 出路自己没走完就抛出来:所有权交回,下一趟对账照旧接得走(别把它锁死,那是 F2)。
+      forgetCheckpointDelivering(seized.id);
+      console.error(`[ash] 在途续跑交代对账失败 task=${seized.taskId} message=${seized.id}:`, error);
     }
   }
+}
+
+/**
+ * 抢下一张滞留凭证的在途租约:把 `delivering_since` 换成这一趟的戳,**条件是它还是我读到
+ * 的那个值**。回 null = 这一瞬有别人动过它(另一个实例的对账抢在前面、或者原发送方已经
+ * 把它了结),这一趟就不该再碰。
+ */
+async function seizeStrandedCheckpoint(
+  receipt: typeof scheduledMessages.$inferSelect,
+): Promise<typeof scheduledMessages.$inferSelect | null> {
+  const stamp = new Date(Date.now()).toISOString();
+  const seized = await db.update(scheduledMessages).set({ deliveringSince: stamp }).where(and(
+    eq(scheduledMessages.id, receipt.id),
+    eq(scheduledMessages.deliveringSince, receipt.deliveringSince!),
+    isNotNull(scheduledMessages.checkpointTaken),
+  )).returning();
+  return seized.at(0) ?? null;
 }
 
 export async function recoverPendingCheckpoints(taskId?: string): Promise<Map<string, "read" | "restore">> {

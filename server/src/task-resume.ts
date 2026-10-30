@@ -8,7 +8,9 @@ import { continueTask, runTask, type ResumeReason } from "./orchestrator.js";
 import { handDuePendingMessageToRun } from "./pending-messages.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
-import { acknowledgeCheckpointRun, claimCheckpointForRun, settleStrandedCheckpointRun } from "./task-checkpoint-delivery.js";
+import {
+  acknowledgeCheckpointRun, checkpointStillOwned, claimCheckpointForRun, settleStrandedCheckpointRun,
+} from "./task-checkpoint-delivery.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { activeReviewEvidence } from "./review-continuation.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
@@ -74,6 +76,13 @@ async function resumeOrRunClaimedTask(taskId: string,
       // 凭据写不下来而原地撤回)。抛错那条路不给这个结论,所以初值按「不知道」算。
       let launched = true;
       try {
+        // 认领与起跑之间隔着几个 await:这段里对账可能已经把这张凭证接管走、并按「没送出去」
+        // 把交代还给了任务(多开实例时尤其)。那种情况下再送一遍就是执行两遍 —— 被回收的凭证
+        // 不许继续起跑(task-checkpoint-delivery.ts 的 checkpointStillOwned)。
+        if (!await checkpointStillOwned(receipt)) {
+          console.warn(`[ash] 续跑凭证已被对账接管 task=${taskId} message=${receipt.id}：这一趟不再起跑`);
+          return;
+        }
         launched = await continueTask(taskId, rp, {
           system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
           actingUserId: acting, ...(reviewerRoute ?? {}),

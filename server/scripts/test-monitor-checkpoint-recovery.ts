@@ -27,6 +27,7 @@ import { checkpointAdvanceAdmissionCases } from "./checkpoint-advance-admission-
 import { checkpointAdvanceFailureCases } from "./checkpoint-advance-failure-cases.js";
 import { checkpointGroupFailureCases } from "./checkpoint-group-failure-cases.js";
 import { checkpointAckFailureCases } from "./checkpoint-ack-failure-cases.js";
+import { checkpointOwnershipCases } from "./checkpoint-ownership-cases.js";
 
 function owner(mode: string, taskId: string, messageId = ""): void {
   const child = spawnSync(process.execPath, [
@@ -51,6 +52,7 @@ async function resultsDelivered(test: Awaited<ReturnType<typeof scenario>>): Pro
 }
 
 try {
+  await checkpointOwnershipCases();
   await checkpointAckFailureCases();
   await checkpointAdvanceFailureCases();
   await checkpointGroupFailureCases();
