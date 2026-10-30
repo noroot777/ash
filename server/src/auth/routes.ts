@@ -213,7 +213,7 @@ export function mountAuthRoutes(api: Hono): void {
     });
     // 认领来的那行的目录名可能与表单里填的不同(锁死的是库里那个),按它再保一次。
     if (half) await ensureUserHomeDir(half.dirName);
-    initUserCliEnv(admin.id);
+    await initUserCliEnv(admin.id);
     // 存量项目/随手记/供应商/执行器等一律归初始管理员(§十三);项目路径一律不动。
     const claimed = await claimExistingDataFor(admin.id);
     const key = await resetUserKey(admin.id);

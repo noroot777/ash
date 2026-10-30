@@ -53,7 +53,7 @@ const hostBefore = readFileSync(hostMarker, "utf8");
 
 // ash 真正会建的那个目录(走产品代码,不是测试自己拼一份)。
 const userId = "smoke-user";
-const dir = ensureUserCliDir(userId, "claude");
+const dir = await ensureUserCliDir(userId, "claude");
 assert.ok(dir, "claude 应该有个人配置目录");
 assert.equal(configDirEnvVar("claude"), "CLAUDE_CONFIG_DIR");
 assert.ok(existsSync(join(dir!, "skills")), "seed 应该建出 skills/");
@@ -72,7 +72,7 @@ for (const key of Object.keys(inherited)) {
 
 const env: NodeJS.ProcessEnv = {
   ...inherited,
-  ...cliConfigEnvFor(userId, "claude"),
+  ...(await cliConfigEnvFor(userId, "claude")),
   HOME: fakeHome,
   USERPROFILE: fakeHome,
   ANTHROPIC_AUTH_TOKEN: TOKEN,

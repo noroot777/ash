@@ -23,15 +23,14 @@
 // 幂等,所以挂在 `ensureUserCliDir()` 上每次起跑都过一遍:已经有了就是两次文件读,
 // 缺了才写。写一律走临时文件 + rename —— 这份 `.claude.json` 同时也是 CLI 自己在写的
 // 文件,半截内容比缺一条登记更糟。
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { probeCli, type ProbeOutcome } from "../ash-mcp-probe.js";
 import { extractTomlTables, scanCodexToml } from "../codex-toml.js";
-import { resolveLaunch } from "../executors/bin-resolve.js";
 
 export { extractTomlTables } from "../codex-toml.js";
 import { currentListeningPort } from "../listening-port.js";
@@ -52,11 +51,21 @@ const fail = (problem: string): PersonalAshMcp => ({ configured: false, serverNa
  *
  * `hostHome` 只为回归测试留:产品代码永远用真 `homedir()`,测试拿一个假 HOME 来跑,
  * 免得测试碰宿主机那份 `~/.claude.json`(那是用户的真配置,一个字节都不该动)。
+ *
+ * **为什么是 async**:codex 那半边要把候选配置交给 codex 本人解析一遍才敢发布,而那一次
+ * 子进程必须走探测执行层(异步、带归属、收得回来),不能在事件循环里同步 spawn
+ * (本轮审查 F2)。`ask` 同样只为回归测试留 —— macOS 上探测层如实弃权,那几条路在开发机上
+ * 一条都跑不了,所以测试拿一个替身把它们逐个驱动起来(理由同 `probeCli` 的 `openUnit`)。
  */
-export function ensureAshMcp(dir: string, agentType: string, hostHome: string = homedir()): PersonalAshMcp {
+export async function ensureAshMcp(
+  dir: string,
+  agentType: string,
+  hostHome: string = homedir(),
+  ask: CodexAsk = askCodexHere,
+): Promise<PersonalAshMcp> {
   try {
-    if (agentType === "claude") return ensureClaudeAshMcp(dir, hostHome);
-    if (agentType === "codex") return ensureCodexAshMcp(dir, hostHome);
+    if (agentType === "claude") return await ensureClaudeAshMcp(dir, hostHome);
+    if (agentType === "codex") return await ensureCodexAshMcp(dir, hostHome, ask);
     return fail(`${agentType} 没有个人配置目录，这一问不适用`);
   } catch (e) {
     return fail(`补写 ash MCP 登记失败：${(e as Error).message}`);
@@ -186,7 +195,7 @@ export function hostCliConfigFile(agentType: string, hostHome: string = homedir(
 
 // ── claude:~/.claude.json 的 mcpServers ────────────────────────────────────
 
-function ensureClaudeAshMcp(dir: string, hostHome: string): PersonalAshMcp {
+async function ensureClaudeAshMcp(dir: string, hostHome: string): Promise<PersonalAshMcp> {
   const file = join(dir, ".claude.json");
   const read = readForWrite(file);
   if (!read) return fail(`${file} 读不出来，没有自动补写 —— 修好它的权限再重启`);
@@ -200,10 +209,13 @@ function ensureClaudeAshMcp(dir: string, hostHome: string): PersonalAshMcp {
   // 规范名落地:宿主那份即使是历史名 harness,定义搬过来也按 ash 登记(同一个 server,
   // setup 迟早要迁;两边都叫 ash 之后,提示词里那句「ash MCP」才对得上工具名)。
   doc.mcpServers = { ...servers, [ASH_MCP_SERVER_NAME]: entry };
-  const why = writeVerified(read, `${JSON.stringify(doc, null, 2)}\n`, (written) => {
-    const back = parseJsonObject(written);
-    if (!back) return `补写完 ${file} 自己都解析不了`;
-    return claudeServerName(back) ? null : `补写完 ${file} 里仍读不出 ash MCP 登记`;
+  const why = await publishApproved(read, `${JSON.stringify(doc, null, 2)}\n`, async (candidate) => {
+    // 这半边的「真解析器」就在手上:`.claude.json` 的语义全在 JSON 语法里,`JSON.parse`
+    // 认了就是 claude 也认(内容还是我们自己 stringify 出来的)。codex 那半边不一样 ——
+    // TOML 的判官住在 codex 进程里,所以那边必须问它本人(见 `codexAccepts`)。
+    const back = parseJsonObject(candidate);
+    if (!back) return `补上那条之后 ${file} 自己都解析不了`;
+    return claudeServerName(back) ? null : `补上那条之后 ${file} 里仍读不出 ash MCP 登记`;
   });
   return why ? fail(why) : ok(ASH_MCP_SERVER_NAME);
 }
@@ -232,7 +244,7 @@ function builtinClaudeEntry(): unknown | null {
 
 // ── codex:$CODEX_HOME/config.toml 的 [mcp_servers.*] ───────────────────────
 
-function ensureCodexAshMcp(dir: string, hostHome: string): PersonalAshMcp {
+async function ensureCodexAshMcp(dir: string, hostHome: string, ask: CodexAsk): Promise<PersonalAshMcp> {
   // 「有没有」跟读那一侧（`ashMcpRegistration`）问同一个扫描器。上一版用的是执行器注入
   // `env_vars` 的严格行首正则，认不出 `[mcp_servers."ash"]`、缩进表头，判成「没有」就再
   // append 一份 —— 同名表重复，codex 整份配置都读不出来（新链第 2 轮审查第 5 条）。
@@ -260,25 +272,103 @@ function ensureCodexAshMcp(dir: string, hostHome: string): PersonalAshMcp {
   }
   const block = hostCodexBlock(hostHome) ?? builtinCodexBlock();
   if (!block) return fail(NO_SOURCE);
-  // 同一份原文 + 同一段要追加的内容,失败过一次就不再写第二遍:设置页每读一次都会走到这里,
-  // 而「写进去 → 验不过 → 还原」每一轮都要动一次用户的配置文件(中间崩一次就把坏的留在
-  // 那儿了)。任一段变了(用户改了自己的配置、宿主那条改好了)自然重试。
+  const body = current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`;
+  // 同一份原文 + 同一段要追加的内容,没通过一次就不再问第二遍:设置页每读一次、每条任务
+  // 起跑都会走到这里,而问 codex 本人要起一次进程。任一段变了(用户改了自己的配置、宿主
+  // 那条改好了)自然重试。
   const attempt = fingerprint(file, current, block);
   const failedBefore = failedWrites.get(attempt);
   if (failedBefore) return fail(failedBefore);
-  const why = writeVerified(read, current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`, (written) => {
-    const back = scanCodexToml(written);
-    // 搬过来的那段若带上游没想到的形状(表头、转义、值),扫描器自己都读不通 —— 那份文件
-    // 现在就是 codex 也读不动的样子,说「已接好」等于把别的 MCP 一起弄没了。
-    if (back.doubt) return `追加完 ${file} 自己都读不通了（${back.doubt}）`;
+  const why = await publishApproved(read, body, async (candidate) => {
+    // 先过自己这道:便宜,而且说得出具体哪里不对。但它**只是预筛** —— 判官在下一句。
+    const back = scanCodexToml(candidate);
+    if (back.doubt) return `补上那段之后 ${file} 自己都读不通了（${back.doubt}）`;
     if (!back.servers.get(ASH_MCP_SERVER_NAME)?.enabled) {
-      return `追加完 ${file} 里仍读不出启用着的 [mcp_servers.${ASH_MCP_SERVER_NAME}]`;
+      return `补上那段之后仍读不出启用着的 [mcp_servers.${ASH_MCP_SERVER_NAME}]`;
     }
-    const real = codexReads(dir);
-    return real.state === "bad" ? `${real.why}，没敢留下这次追加` : null;
+    const verdict = await codexAccepts(candidate, ask);
+    return verdict.state === "ok" ? null : `${verdict.why}${byHand(file, block)}`;
   });
   if (why) failedWrites.set(attempt, why);
   return why ? fail(why) : ok(ASH_MCP_SERVER_NAME);
+}
+
+/**
+ * 没补接成功时给的办法。**必须带上那段内容** —— 问不动 codex 的机器（macOS 上探测层如实
+ * 弃权，见 `codexAccepts`）从此一律不自动补接，只剩这条路能让 agent 交得了卷。
+ */
+const byHand = (file: string, block: string): string =>
+  `，所以没有替你写进去（你那份配置一个字节都没动）。要手工接的话，把这段加到 ${file} 末尾：\n${block}`;
+
+/** 问一次 codex 本人:给它一个只放着候选配置的 `CODEX_HOME`。**测试会换成替身**(见 `ensureAshMcp`)。 */
+export type CodexAsk = (sandbox: string) => Promise<ProbeOutcome>;
+
+/** 问 codex 本人花多久算问不动。它只是个只读子命令,本机实测几百毫秒。 */
+const CODEX_ASK_MS = 10_000;
+
+const askCodexHere: CodexAsk = (sandbox) => probeCli(
+  "codex",
+  ["mcp", "list", "--json"],
+  { ...process.env, CODEX_HOME: sandbox },
+  // `cwd` 刻意也设成沙盘:`codex mcp list` 会把**项目级** `.codex/config.toml` 合进来,
+  // 在仓库里问的话,别人项目配置里的毛病会算到这份候选头上,项目里的 ash 登记又会给一份
+  // 其实不成立的候选背书。
+  sandbox,
+  CODEX_ASK_MS,
+);
+
+/**
+ * 把**候选内容**交给 codex 本人解析一遍 —— 「这份 TOML 合不合法」只有它说了算。
+ *
+ * 为什么不能只拿我们自己的扫描器复核:它是个**结构**扫描器,看得出新表头落进了文件里,
+ * 证不了这个表头在这份 TOML 上**合法**。`sealed` 把实测到的那一种挡在写之前了,但那是枚举;
+ * 这一问才是真实解析。`scripts/codex-mcp.mjs` 里 setup 那条路也是这么问的,两边对「什么叫
+ * 真的读通了」只有一个答案。
+ *
+ * 本轮审查改了两件事:
+ *  ① **问的是沙盘里的一份副本,不是用户那个文件**(F1)。上一版先把候选写进用户的
+ *    `config.toml` 再问,验不过才还原 —— 那期间盘上躺着的是一份 codex 整份拒载的配置
+ *    (中间崩一次就留在那儿了),而还原本身又是第二次写,会盖掉别人同时存下的设置(N5)。
+ *    候选和要发布的内容逐字节相同,而「这份 TOML 读不读得通」只取决于内容,所以沙盘里
+ *    问出来的结论照样算。
+ *  ② **走探测执行层**(`probeCli`),不自己 spawn(F2)。那是这台机器上唯一保证「起了进程
+ *    就收得回来」的路:异步(不堵事件循环)、启动前先拿到内核圈定的归属、每条结束路径都
+ *    现读成员集合下刀。上一版用的是 `spawnSync`,Windows 真机实测包装退出之后那个查询还
+ *    活着(PID 25544 / 18208),而同步调用期间整个 server 的事件循环被堵满十秒。
+ *
+ * **「问不出来」不等于「可以发布」**(F1 的本体):超时、起不来、输出看不懂一律答 `unasked`,
+ * 调用方据此**不发布**。拿不到安全归属的机器(macOS 弃权)于是一律不自动补接,改走
+ * `byHand` 那条 —— 宁可如实说「没接上,这段你手工加」,也不留一份没人证过的配置,
+ * 让 codex 连别人的 MCP 一起加载不了。
+ */
+async function codexAccepts(
+  candidate: string,
+  ask: CodexAsk,
+): Promise<{ state: "ok" | "bad" | "unasked"; why: string }> {
+  const sandbox = mkdtempSync(join(tmpdir(), "ash-mcp-ask-"));
+  try {
+    writeFileSync(join(sandbox, "config.toml"), candidate, "utf8");
+    const outcome = await ask(sandbox);
+    if (outcome.kind === "not-started") {
+      return { state: "unasked", why: `这台机器上没法安全地起一次 codex 来确认这份配置读得通（${outcome.why}）` };
+    }
+    if (outcome.kind === "unqueryable") return { state: "unasked", why: "问了 codex，但它没给出一份能用的答案" };
+    if (outcome.code !== 0) {
+      const said = `${outcome.stderr}\n${outcome.stdout}`.split("\n").map((l) => l.trim())
+        .filter(Boolean).slice(0, 3).join(" / ");
+      return { state: "bad", why: `codex 读不动补上那段之后的配置（退出码 ${outcome.code}）：${said}` };
+    }
+    let listed: unknown;
+    try { listed = JSON.parse(outcome.stdout); } catch { return { state: "unasked", why: "codex mcp list 的输出看不懂" }; }
+    if (!Array.isArray(listed)) return { state: "unasked", why: "codex mcp list 的输出不是列表" };
+    const hit = listed.find((e) => (e as { name?: unknown } | null)?.name === ASH_MCP_SERVER_NAME) as
+      { enabled?: unknown } | undefined;
+    if (!hit) return { state: "bad", why: `codex 读完这份配置，仍然没列出 ${ASH_MCP_SERVER_NAME}` };
+    if (hit.enabled === false) return { state: "bad", why: `codex 说这份配置里的 ${ASH_MCP_SERVER_NAME} 是关着的` };
+    return { state: "ok", why: "" };
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
 }
 
 /** 写失败过的「原文 + 要追加的那段」指纹 → 当时的原因。见 `ensureCodexAshMcp` 里那段注释。 */
@@ -286,57 +376,6 @@ const failedWrites = new Map<string, string>();
 
 const fingerprint = (file: string, current: string, block: string): string =>
   createHash("sha256").update(`${file}\u0000${current}\u0000${block}`).digest("hex");
-
-/** 问 codex 本人花多久算问不动。它只是个只读子命令，本机实测几百毫秒。 */
-const CODEX_READ_MS = 10_000;
-
-/**
- * 把补写完的文件交给 **codex 本人**解析一遍 —— 「这份 TOML 合不合法」只有它说了算
- * （第 2 轮审查 F1）。
- *
- * 为什么不能只拿我们自己的扫描器复核：它是个**结构**扫描器，看得出新表头落进了文件里，
- * 证不了这个表头在这份 TOML 上**合法**。`sealed` 把实测到的那一种挡在写之前了，但那是
- * 枚举；这一问才是真实解析。`scripts/codex-mcp.mjs` 里 setup 那条路也是这么问的，两边
- * 对「什么叫真的读通了」只有一个答案。
- *
- * `cwd` 刻意设成这个配置目录自己：`codex mcp list` 会把**项目级** `.codex/config.toml`
- * 合进来，在仓库里问的话，别人项目配置里的毛病会算到这次补写头上（白白还原一份好文件），
- * 项目里的 ash 登记又会给一份其实没写成的配置背书。
- *
- * 问不动（没解析到 codex、起不来、超时、输出看不懂）**不算失败**：那时只能退回扫描器
- * 那一档，不拿「问不出来」去还原一份可能是好的文件。
- */
-function codexReads(dir: string): { state: "ok" | "bad" | "unasked"; why: string } {
-  const plan = resolveLaunch("codex", ["mcp", "list", "--json"]);
-  if (!plan) return { state: "unasked", why: "这台机器上没解析出 codex 的启动方式" };
-  const res = spawnSync(plan.file, plan.args, {
-    cwd: dir,
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: CODEX_READ_MS,
-    env: { ...process.env, CODEX_HOME: dir },
-    // Windows 上 `codex` 是 `.cmd` 垫片,`resolveLaunch` 给的是 `cmd.exe /d /s /c "..."`
-    // 那一套 —— **这个开关必须跟着传**,不传 Node 会把那串参数再引号化一遍,cmd 找不到
-    // 命令、退 1(Windows 真机上就是这么红的:STDERR 回了一整串带引号的命令行)。
-    ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true as const } : {}),
-  });
-  if (res.error || res.signal) {
-    return { state: "unasked", why: `codex mcp list 没跑成（${res.error?.message ?? res.signal}）` };
-  }
-  if (res.status !== 0) {
-    const said = `${res.stderr ?? ""}\n${res.stdout ?? ""}`.split("\n").map((l) => l.trim())
-      .filter(Boolean).slice(0, 3).join(" / ");
-    return { state: "bad", why: `codex 读不动补写之后的配置（退出码 ${res.status}）：${said}` };
-  }
-  let listed: unknown;
-  try { listed = JSON.parse(res.stdout ?? ""); } catch { return { state: "unasked", why: "codex mcp list 的输出看不懂" }; }
-  if (!Array.isArray(listed)) return { state: "unasked", why: "codex mcp list 的输出不是列表" };
-  const hit = listed.find((e) => (e as { name?: unknown } | null)?.name === ASH_MCP_SERVER_NAME) as
-    { enabled?: unknown } | undefined;
-  if (!hit) return { state: "bad", why: `codex 读完补写之后的配置，仍然没列出 ${ASH_MCP_SERVER_NAME}` };
-  if (hit.enabled === false) return { state: "bad", why: `codex 说补写之后的 ${ASH_MCP_SERVER_NAME} 是关着的` };
-  return { state: "ok", why: "" };
-}
 
 function hostCodexBlock(hostHome: string): string | null {
   const config = readTextOrEmpty(join(hostHome, ".codex", "config.toml"));
@@ -415,25 +454,31 @@ function writeAtomic(read: ConfirmedRead, body: string): void {
 }
 
 /**
- * 写 + **自己再读一遍** + 验不过就原样还回去。
+ * **先批准,再替换**:没批准的内容一个字节都不会落到用户那份配置上。
  *
- * 为什么不能写完就报「已接好」:补进去的那段是**搬来的**(宿主那份配置里的 `[mcp_servers.ash]`,
- * 连注释、奇怪的表头和转义一起搬),拼完的文件未必还读得通。读不通的 config.toml 对 codex 是
- * 整份拒载 —— 用户别的 MCP 一起没了,而界面上写着「已接好」。
+ * 顺序是本轮审查 F1 改的。上一版是「写进去 → 读回来 → 验不过再还原」,两头都踩过:
+ *  · 验的那一问本身可能答不出来(没解析到 CLI、超时、输出看不懂),上一版把这些当成
+ *    「可以留着」—— 实测:搬来的那段带一个非法转义,`codex mcp list` 成功退出但输出不是
+ *    JSON,于是落盘留下一份 codex **整份拒载**的配置,界面上写着「已接好」;
+ *  · 还原本身是第二次写:写完到还原之间崩一次,坏文件就留在那儿了;而且它会把别人同时
+ *    存下的新设置一起盖掉(本轮 N5)。
  *
- * `verify` 返回 null = 验过了;返回一句话 = 哪里不对(文件已被还原,这句话会原样报给用户)。
+ * `approve` 返回 null = 这份内容可以发布;返回一句话 = 哪里不对(文件没被动过,这句话原样
+ * 报给用户)。
  */
-function writeVerified(read: ConfirmedRead, body: string, verify: (written: string) => string | null): string | null {
+async function publishApproved(
+  read: ConfirmedRead,
+  body: string,
+  approve: (candidate: string) => Promise<string | null>,
+): Promise<string | null> {
+  const why = await approve(body);
+  if (why) return why;
   writeAtomic(read, body);
+  // 落盘之后只确认一件事:盘上现在就是我们批准的那份。不一样说明有别的程序也在写这个
+  // 文件 —— 如实报,不去抢着再写一遍。
   const after = readForWrite(read.file);
-  const why = !after || after.text === null ? `补写完 ${read.file} 又读不出来` : verify(after.text);
-  if (!why) return null;
-  try {
-    // 原来没有这个文件就删掉:别留一份自己都读不动的残骸在那挡着 CLI。
-    if (read.text === null) rmSync(read.file, { force: true });
-    else writeAtomic(read, read.text);
-  } catch (e) {
-    return `${why}；还原也失败了（${(e as Error).message}），请手工检查 ${read.file}`;
+  if (!after || after.text !== body) {
+    return `写完 ${read.file} 读回来跟刚批准的那份不一样（有别的程序也在写它？），请手工检查一遍`;
   }
-  return `${why}，已把它还原成补写前的样子`;
+  return null;
 }
