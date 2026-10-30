@@ -28,6 +28,7 @@ import { verifyStationAction } from "./review-policy.js";
 import { advanceSegment, type SegmentOptions } from "./workflow-steps.js";
 import { now } from "./util.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
+import { AshMcpUnreachable } from "./ash-mcp-launch-gate.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -79,6 +80,7 @@ async function atVerifyStation(
   station: WorkflowStep,
   opts: WorkflowAdvanceOptions,
 ): Promise<boolean> {
+  const rounds = await stationRounds(task.id, station.id);
   const action = verifyStationAction({
     parentIsTeam: await parentIsTeam(task),
     reviewRequested: task.reviewRequested,
@@ -86,7 +88,7 @@ async function atVerifyStation(
     workflow: def,
     at: station.id,
     stage: task.stage,
-    rounds: await stationRounds(task.id, station.id),
+    rounds,
   });
   if (action === "skip") return true; // 接着往下走
   if (action === "halt") {
@@ -100,10 +102,17 @@ async function atVerifyStation(
   await setWorkflowAt(task.id, station.id, opts.reviewAuthority);
   const startVerifyRound = opts.startVerifyRound
     ?? ((taskId: string) => import("./review.js").then((review) => review.startVerifyRound(taskId, {}, { reviewAuthority: opts.reviewAuthority })));
-  await startVerifyRound(task.id).catch((error) => appendTaskTimeline(
-    task.id,
-    `想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${error instanceof Error ? error.message : String(error)}）。`,
-  ));
+  // 这一步会被重放：验证收尾（review-finalization）没走完就每半分钟重试一遍整段。同一次尝试
+  // （同一站、同一轮数、同一次结算、同一个原因）只说一句，靠 eventKey 去重。
+  await startVerifyRound(task.id).catch((error) => {
+    const reason = error instanceof Error ? error.message : String(error);
+    return appendTaskTimeline(
+      task.id,
+      `想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${reason}）。`
+        + (error instanceof AshMcpUnreachable ? "线停在这一站：把 ash MCP 接好之后点「再验一轮」，会从这一站接着走。" : ""),
+      { eventKey: `verify-start-failed:${station.id}:${rounds}:${task.endedAt ?? ""}:${reason}` },
+    );
+  });
   return false;
 }
 

@@ -362,8 +362,12 @@ export async function handleTaskSettlement(
   })) {
     // 结算钩子里起的这一轮没有人在等它的返回值：起不来（含交不了卷被闸拦下）只写进
     // afterSettlement 的错误日志的话，用户看到的就是「说好的验证没开」且没有一个字的原因。
-    await startVerifyRound(task.id).catch((error) => appendTaskTimeline(task.id,
-      `想自动开一轮验证，但没开起来（${error instanceof Error ? error.message : String(error)}）。`));
+    // 结算恢复（regression-settlement）会重放这个钩子，同一次结算、同一个原因只说一句。
+    await startVerifyRound(task.id).catch((error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      return appendTaskTimeline(task.id, `想自动开一轮验证，但没开起来（${reason}）。`,
+        { eventKey: `auto-verify-start-failed:${task.endedAt ?? ""}:${reason}` });
+    });
   }
 }
 

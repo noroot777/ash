@@ -15,6 +15,7 @@ import { advanceWorkflowFrom } from "./workflow-advance.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { now } from "./util.js";
 import { assertReviewAuthority, finalizationAuthority, ReviewSuperseded, withReviewAuthority } from "./review-ownership.js";
+import { AshMcpUnreachable } from "./ash-mcp-launch-gate.js";
 import { recordTaskWait } from "./task-wait-ownership.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -77,9 +78,11 @@ export async function finalizePresetReview(state: typeof regressionEvidence.$inf
           await checkpointFinalizationWorkflow(state.directory, state.generation, stepId, "failed", stepHalted);
         },
         onStepDone: (stepId) => checkpointFinalizationWorkflow(state.directory, state.generation, stepId),
+        // 开不起来的验证会让这段收尾整体重试（外层每半分钟一遍）—— 除了「交不了卷」：那不会自己
+        // 好，重试只会无限期地空转。它照常由推进器写一句原因，然后这一段按「停在这一站」收掉。
         startVerifyRound: async (taskId) => {
           try { return await (await import("./review.js")).startVerifyRound(taskId, {}, { reviewAuthority: authority }); }
-          catch (error) { dispatchError = error; throw error; }
+          catch (error) { if (!(error instanceof AshMcpUnreachable)) dispatchError = error; throw error; }
         },
       });
       if (dispatchError) throw dispatchError;

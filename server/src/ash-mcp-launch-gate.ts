@@ -66,6 +66,13 @@ export function reviewCwdCandidates(
   return out;
 }
 
+/**
+ * 闸拦下时抛的就是它。单独一类，是因为它跟起跑路径上别的拒绝（「正等待答复」「已有一轮在跑」）
+ * 不是一回事：那些过一会儿自己就清掉，重试有意义；「这台机器上没有 ash 的登记」不会自己好，
+ * 只能等人接好。会自动重试的调用方（预设工作流的验证收尾）据此停在这一站，不进重试环。
+ */
+export class AshMcpUnreachable extends Error {}
+
 /** 这一轮由谁来跑：执行器类型 + profile。归属人一律取任务归属人（这几条路都不带 actingUserId）。 */
 export type LaunchAgent = { agentType: string; executorId: string | null };
 
@@ -91,7 +98,7 @@ export async function gateAshMcpBeforeLaunch(
     executorId: agent.executorId,
     cwdCandidates: await launchCwdCandidates(task, where),
   });
-  if (!reach.reachable) throw new Error(`${who}交不了卷：${reach.problem}`);
+  if (!reach.reachable) throw new AshMcpUnreachable(`${who}交不了卷：${reach.problem}`);
   // 放行了、但登记看着起不来：不拦（那是推断），但得留在时间线上 —— 这一轮要是又跑完没结论，
   // 用户回头能看到这一句，而不是只剩「未能正常给出结论」（新链第 1 轮审查第 3 条）。
   if (reach.warning) {

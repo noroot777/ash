@@ -18,6 +18,8 @@
 //      旁路回合（第 1 轮审查第 3 条）都不说
 //   6. 接线：普通回合两个起跑点在会话行落库之后调提示；单飞收尾在「没交卷」那一支调事后说明，
 //      且排除原生命令回合
+//   7. 预设工作流走到下一站自动验证、验证者交不了卷：收尾就此收掉（不进每半分钟一遍的重试环），
+//      原因只说一句，重放同一段推进也不再多说（新链第 1 轮审查第 1 条）
 //
 // 开头**强制关掉内核圈定**（`ASH_KERNEL_CONFINE=0`）：判据走配置文件那一档，一个 CLI 进程都
 // 不起（假 CLI 被执行就留痕），哪个平台上跑的都是同一套。
@@ -318,6 +320,47 @@ try {
       "原因接在结算说明后面（先结果、后原因）");
     assert.match(src("free-review-round.ts"), /await gateAshMcpBeforeLaunch\(task, \{ agentType: run\.agentType/,
       "派审走同一道闸，不另留一份");
+  }
+
+  // ── 7. 验证收尾：交不了卷是停在这一站，不是待重试 ─────────────────────────────
+  {
+    const { drainRegressionFinalization, finalization } = await import("../src/regression-finalization.js");
+    const { advanceWorkflowFrom } = await import("../src/workflow-advance.js");
+    const { taskWorkflowDef } = await import("../src/workflows.js");
+    const { regressionEvidence } = await import("../src/db/schema.js");
+    // 干活 → 验证 → 再验证 → 人工：第一站刚验过，推进器要去第二站开一轮。
+    const line = JSON.stringify({ workspace: "shared", steps: [
+      { id: "s0", kind: "run", p: { instruction: null, executorId: null, model: null, reasoningEffort: null }, fail: null },
+      { id: "s1", kind: "verify", p: { executorId: null, model: null, reasoningEffort: null, checks: [] }, fail: { mode: "stop", max: 2 } },
+      { id: "s2", kind: "verify", p: { executorId: null, model: null, reasoningEffort: null, checks: [] }, fail: { mode: "stop", max: 2 } },
+      { id: "s3", kind: "human", p: { show: [], notify: [] }, fail: null },
+    ] });
+    const target = await makeTask("w1", "codex", { workflowMode: "preset", workflow: line, workflowAt: "s1", endedAt: at });
+    await makeSession("w1", "codex");
+    const payload = { target, round: 1, reviewTaskId: null, station: "s1", stationRound: 1,
+      outcome: "done", conclusion: "verified", frozen: false, stageChanged: false };
+    await db.insert(regressionEvidence).values({
+      directory: "w1-dir", taskId: "w1", generation: "w1-g", excludedMonitors: [],
+      settlement: { outcome: "done", conclusion: "verified", ownerTaskId: "w1", round: 1, pending: false,
+        target: { turnToken: null, directionToken: null, directionEpoch: target.directionEpoch } },
+      finalization: finalization("preset", payload),
+    });
+    const SAID = "但没开起来";
+    writeCodex('model = "x"\n');
+    const thrown = await drainRegressionFinalization("w1-dir").then(() => null, (error: unknown) => error);
+    assert.equal(thrown, null, "交不了卷不是待重试的失败：收尾不该往外抛（外层每半分钟重试的就是抛出来的那种）");
+    const state = (await db.select().from(regressionEvidence).where(eq(regressionEvidence.directory, "w1-dir")))[0]!;
+    assert.equal(state.finalization?.completed, true, "收尾落 completed，不再被定时器捡起来");
+    assert.equal(count(timeline("w1"), SAID), 1, "原因说一句");
+    assert.match(timeline("w1"), /交不了卷.*线停在这一站.*再验一轮/s, "说清线停在哪、接好之后怎么接着走");
+    const row = (await db.select().from(tasks).where(eq(tasks.id, "w1")))[0]!;
+    assert.equal(row.workflowAt, "s2", "游标停在开不起来的那一站，「再验一轮」据此知道该验哪一站");
+    assert.equal(row.verifyRound, null, "这一轮一个字都没开起来");
+
+    // 别的拒绝照旧会让收尾重放整段推进：同一次尝试、同一个原因只说一句。
+    for (let i = 0; i < 3; i++) await advanceWorkflowFrom(row, taskWorkflowDef(line), "s1");
+    assert.equal(count(timeline("w1"), SAID), 1, "重放同一段推进不再多说");
+    writeCodex(ASH_CODEX);
   }
 
   assert.ok(!existsSync(ran), "配置文件那一档一个 CLI 进程都不该起");
