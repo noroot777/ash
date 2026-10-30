@@ -54,6 +54,27 @@ try {
   assert.equal(registerCodexMcp({ ...base, listServers: answers(listed(), listed()) }).action, "rolledBack");
   assert.equal(existsSync(file), false, "原来没有的文件不许留下半截");
 
+  // 写完 codex 读不动,但这期间别人存过新内容 → **不还原**(还原就是把那次改动抹掉)。
+  // 同一条不变量在 server 侧是 publishFresh 的「只替换我们读到的那一版」(审查第 2 轮 F1)。
+  {
+    writeFileSync(file, `model = "mine"\n`);
+    const foreign = `model = "someone-else"\n[mcp_servers.user_added]\ncommand = "x"\n`;
+    let asked = 0;
+    const r = registerCodexMcp({
+      ...base,
+      listServers: () => {
+        if (++asked === 1) return listed();
+        // 问第二遍这期间,别的程序把这份文件整个换掉了。
+        writeFileSync(file, foreign);
+        return { ok: false, why: "codex mcp list 退出码 1" };
+      },
+    });
+    assert.equal(r.action, "foreignChange", "被别人改过就不该报「已还原」");
+    assert.match(r.why, /被别的程序改过/);
+    assert.equal(readFileSync(file, "utf8"), foreign, "别人那次改动必须原样留着");
+    assert.equal(readFileSync(`${file}.bak-ash-setup`, "utf8"), `model = "mine"\n`, "补写前的备份照旧给出来");
+  }
+
   // 只有历史名 → 让 codex 删旧的、再补规范名。
   writeFileSync(file, `[mcp_servers.harness]\ncommand = "node"\n[other]\nk = 1\n`);
   const removed = [];

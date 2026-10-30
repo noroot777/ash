@@ -228,6 +228,8 @@ if (process.env.SKIP_MCP) {
     if (r.action === "kept") {
       if (r.enabled) ok(`codex:ash 已在 ${codexCfg} 里,不动它`);
       else warn(`codex:${codexCfg} 里的 ash 写着 enabled = false,没有替你打开`);
+    } else if (r.action === "foreignChange") {
+      warn(`codex:${r.why}${r.backup ? `(补写前的备份在 ${r.backup})` : ""};先看一眼 ${codexCfg} 现在的内容,再决定要不要重跑 setup`);
     } else if (r.action === "blocked" || r.action === "rolledBack") {
       warn(`codex:${r.why},${r.action === "blocked" ? "没有动" : "已原样还回"} ${codexCfg}`
         + `${r.backup ? `(备份在 ${r.backup})` : ""};先跑 codex mcp list 看它报什么、修好再重跑 setup`);

@@ -36,7 +36,8 @@ function writeAtomic(file, body) {
  * @param listServers 问 codex 本人：`() => parseCodexList(...)` 的结果
  * @param removeServer 让 codex 本人删掉一条登记（`codex mcp remove <名>`），成功回 true
  * @returns action ∈ kept（已有，不动）| blocked（codex 读不动现有配置，没写）| added | migrated
- *          | rolledBack（写完 codex 读不动了，已还原）；added 带 legacyLeft = 历史名没删掉
+ *          | rolledBack（写完 codex 读不动了，已还原）| foreignChange（写完 codex 读不动，但这
+ *          期间文件被别的程序改过，所以没还原）；added 带 legacyLeft = 历史名没删掉
  */
 export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, listServers, removeServer }) {
   const before = listServers();
@@ -50,7 +51,20 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
   // 先备份再写:改的是用户自己的配置文件,出错要能一键还原。
   const backup = `${configFile}.bak-ash-setup`;
   if (existing !== null) copyFileSync(configFile, backup);
-  const restore = (why) => {
+  // 还原。`expect` 给了就先确认**盘上还是我们自己写下的那一版**(server 侧同一条不变量,
+  // 审查第 2 轮 F1):问 codex 那一问是个子进程,这期间用户或另一个 setup 可能已经存过新
+  // 内容,拿旧快照盖回去就是把它抹掉。不是我们那一版就什么都不动,如实报出来。
+  const restore = (why, expect) => {
+    if (expect !== undefined) {
+      const now = existsSync(configFile) ? readFileSync(configFile, "utf8") : null;
+      if (now !== expect) {
+        return {
+          action: "foreignChange",
+          why: `${why}；而 ${configFile} 在这期间被别的程序改过，所以没有还原（免得盖掉那次改动）`,
+          backup: existing !== null ? backup : null,
+        };
+      }
+    }
     if (existing !== null) writeAtomic(configFile, existing);
     else rmSync(configFile, { force: true });
     return { action: "rolledBack", why, backup: existing !== null ? backup : null };
@@ -63,15 +77,13 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
   const base = existsSync(configFile) ? readFileSync(configFile, "utf8") : "";
   // TOML 的字符串是转义的,Windows 路径里的 `\` 必须成对写,否则 `\d`、`\n`
   // 会被当转义序列吞掉 —— 装完看着成功,codex 起 MCP 时才报路径不存在。
-  writeAtomic(
-    configFile,
-    `${base}\n[mcp_servers.${name}]\ncommand = "node"\nargs = [${JSON.stringify(mcpEntry)}]\n\n`
-      + `[mcp_servers.${name}.env]\nASH_URL = "${url}"\n`,
-  );
+  const written = `${base}\n[mcp_servers.${name}]\ncommand = "node"\nargs = [${JSON.stringify(mcpEntry)}]\n\n`
+    + `[mcp_servers.${name}.env]\nASH_URL = "${url}"\n`;
+  writeAtomic(configFile, written);
 
   const after = listServers();
   if (!after.ok || !after.servers.some((s) => s.name === name)) {
-    return restore(after.ok ? `写完 codex 仍看不到 ${name}` : after.why);
+    return restore(after.ok ? `写完 codex 仍看不到 ${name}` : after.why, written);
   }
   const backupPath = existing !== null ? backup : null;
   const legacyLeft = after.servers.some((s) => s.name === legacyName);

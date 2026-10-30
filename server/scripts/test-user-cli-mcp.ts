@@ -12,14 +12,14 @@
 // 跑法:npm -w server run test:user-cli-mcp
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import type { ProbeOutcome } from "../src/ash-mcp-probe.js";
 import { ensureAshMcp, extractTomlTables, hostAshMcp, readAshMcp, type CodexAsk } from "../src/auth/user-cli-mcp.js";
 import { resolveLaunch } from "../src/executors/bin-resolve.js";
-import { REPO_DIR } from "../src/paths.js";
+import { DATA_DIR, REPO_DIR } from "../src/paths.js";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-user-cli-mcp-"));
@@ -511,6 +511,153 @@ for (const agent of ["claude", "codex"] as const) {
   assert.ok(/probeCli\(/.test(code), "问 codex 本人那一问必须走探测执行层");
 }
 
+// ㉔ **批准期间别人存了新东西,不许被盖掉**（第 2 轮审查 F1）：批准那一问要起一次 codex、
+//    秒级,这期间用户完全可能在另一处存下新模型、加上自己的 MCP。上一版拿批准过的**旧快照**
+//    整份盖下去,那些改动当场消失、函数照样答「已接好」。要的行为:盘上内容一变就整条重做 ——
+//    重新读、在**新内容**上重新拼、重新批准,于是别人那次改动天然留在结果里。
+{
+  const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+  const { host, dir } = bench({ codex: HOST });
+  const file = join(dir, "config.toml");
+  const before = `model = "gpt"\n`;
+  writeFileSync(file, before, "utf8");
+  const SAVED_MEANWHILE = `model = "gpt-5"\n\n[mcp_servers.user_added]\ncommand = "uv"\n`;
+  let asked = 0;
+  const state = await ensure(dir, "codex", host, async () => {
+    // 第一问这十秒里,用户在设置页里按了保存。
+    if (++asked === 1) writeFileSync(file, SAVED_MEANWHILE, "utf8");
+    return LISTS_ASH;
+  });
+  assert.equal(state.configured, true, "重做一轮照样要接上");
+  assert.equal(asked, 2, "内容变了就得在新内容上重新批准一遍,不许拿旧批准硬写");
+  const final = readFileSync(file, "utf8");
+  assert.ok(final.includes(`model = "gpt-5"`), "别人存的新模型不许被盖回去");
+  assert.ok(final.includes("[mcp_servers.user_added]"), "别人加的 MCP 不许消失");
+  assert.match(final, /\[mcp_servers\.ash\]/, "ash 还是要接上");
+}
+
+// ㉕ **一直撞上就如实说没写**（第 2 轮审查 F1 的另一半）：重做不能无限转,也不能为了「接上」
+//    去盖掉别人正在写的东西。判据只有一条:**这次什么都没写**,而且说得出为什么。
+{
+  const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+  const { host, dir } = bench({ codex: HOST });
+  const file = join(dir, "config.toml");
+  writeFileSync(file, `model = "gpt"\n`, "utf8");
+  let asked = 0;
+  const state = await ensure(dir, "codex", host, async () => {
+    writeFileSync(file, `model = "round-${++asked}"\n`, "utf8"); // 每一轮都被改掉
+    return LISTS_ASH;
+  });
+  assert.equal(state.configured, false, "没落定就不许报「已接好」");
+  assert.match(state.problem ?? "", /一直有别的程序在改/, `要说清是撞上了：${state.problem}`);
+  assert.equal(readFileSync(file, "utf8"), `model = "round-${asked}"\n`, "盘上留着的是别人最后那次写的,不是我们的");
+  assert.ok(!readFileSync(file, "utf8").includes("mcp_servers"), "一个字节都没写进去");
+}
+
+// ㉖ **沙盘要放在任何项目配置的祖先链之外**（第 2 轮审查 F2）：codex 读配置会**沿 cwd 往上
+//    合并**每一层的 `.codex/config.toml`。上一版为了躲开 codex 对 `%TEMP%` 的那句 PATH 抱怨
+//    把沙盘挪进了 `DATA_DIR/tmp` —— 那在 ash 自己的检出里,批准那一问于是连着仓库里的配置一起
+//    读,判的不再是「用户那份加上这段行不行」。那句抱怨改成从原因里剥掉(见下一格)。
+{
+  const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+  const { host, dir } = bench({ codex: HOST });
+  writeFileSync(join(dir, "config.toml"), `model = "gpt"\n`, "utf8");
+  const log: Asked[] = [];
+  const state = await ensure(dir, "codex", host, canned(LISTS_ASH, log));
+  assert.equal(state.configured, true);
+  const sandbox = log[0]!.sandbox;
+  for (const ancestor of [REPO_DIR, DATA_DIR]) {
+    assert.ok(!sandbox.startsWith(ancestor), `沙盘不许落在 ${ancestor} 底下 —— 那条祖先链会被一起读进来`);
+  }
+  const code = readFileSync(join(REPO_DIR, "server", "src", "auth", "user-cli-mcp.ts"), "utf8")
+    .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  assert.ok(/mkdtempSync\(join\(tmpdir\(\)/.test(code), "沙盘建在系统临时目录里");
+  assert.ok(!/mkdtempSync\(join\(DATA_DIR/.test(code), "不许再挪回 DATA_DIR（那是 ash 检出的一部分）");
+}
+
+// ㉗ **codex 对临时目录的那句 PATH 抱怨不是失败原因**（第 2 轮审查 F2）：`CODEX_HOME` 在
+//    `%TEMP%` 底下时它会先喊一句「拒绝在临时目录里建帮手程序」(Windows 真机实测,退出码照样 0)。
+//    那句话混进报给用户的原因里只会把人带偏,所以挑原因的时候把 `WARNING:` 开头的行剥掉。
+{
+  const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+  const { host, dir } = bench({ codex: HOST });
+  const file = join(dir, "config.toml");
+  const before = `model = "gpt"\n`;
+  writeFileSync(file, before, "utf8");
+  const noisy: ProbeOutcome = {
+    kind: "answer", code: 1, stdout: "",
+    stderr: "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir\n"
+      + "missing escaped value at line 7 column 12\n",
+  };
+  const state = await ensure(dir, "codex", host, canned(noisy));
+  assert.equal(state.configured, false);
+  assert.ok(state.problem!.includes("missing escaped value"), `真正的原因要报出来：${state.problem}`);
+  assert.ok(!/WARNING|PATH aliases/.test(state.problem!), `那句抱怨不该出现在原因里：${state.problem}`);
+  assert.equal(readFileSync(file, "utf8"), before, "读不动就一个字节都不写");
+}
+
+// ㉘ **沙盘没删干净不许翻掉已经成立的判决**（第 2 轮审查 N7）：codex 退出后那个目录偶尔还被
+//    占着(Windows 真机上撞过 EBUSY)。清不掉只是留个垃圾,跟「codex 认不认这份配置」毫无关系 ——
+//    上一版让它把判决整个翻成失败,于是补接在能接的机器上随机不接。
+if (process.platform !== "win32" && process.getuid?.() !== 0) {
+  const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+  const { host, dir } = bench({ codex: HOST });
+  writeFileSync(join(dir, "config.toml"), `model = "gpt"\n`, "utf8");
+  let stuck: string | null = null;
+  const state = await ensure(dir, "codex", host, async (sandbox) => {
+    stuck = join(sandbox, "locked");
+    mkdirSync(stuck);
+    chmodSync(stuck, 0o000); // 里头读不进去 ⇒ 递归删会失败
+    return LISTS_ASH;
+  });
+  assert.equal(state.configured, true, "清不掉沙盘不影响「codex 收下了」这个结论");
+  assert.match(readFileSync(join(dir, "config.toml"), "utf8"), /\[mcp_servers\.ash\]/, "该写的照样写");
+  chmodSync(stuck!, 0o700);
+  rmSync(join(stuck!, ".."), { recursive: true, force: true });
+} else {
+  console.log("⚠ Windows/root 下 chmod 拦不住删除，跳过「沙盘清不掉」那一格");
+}
+
+// ㉙ **两种失败的记性不一样长**（第 2 轮审查 N6）：设置页每读一次、每条任务起跑都会走到这里,
+//    同一个已知答案不该反复起 codex。但「问不出来」(没装 codex、超时、探测层弃权)是会自己好的 ——
+//    记死了就等于装好 codex 也得重启 ash 才认。所以:**内容本身的毛病记死**(内容一变键就变了),
+//    **问不出来只记一小会儿**。这里把钟往前拨来跨过那一小会儿。
+{
+  const HOST = `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n`;
+  const BOOM: CodexAsk = async () => { throw new Error("这一格不该再问 codex"); };
+  const realNow = Date.now;
+  const jump = (ms: number) => { Date.now = () => realNow() + ms; };
+  try {
+    // 内容的毛病:拨多久都不再问。
+    {
+      const { host, dir } = bench({ codex: HOST });
+      writeFileSync(join(dir, "config.toml"), `model = "gpt"\n`, "utf8");
+      const bad: ProbeOutcome = { kind: "answer", code: 1, stdout: "", stderr: "missing escaped value\n" };
+      assert.equal((await ensure(dir, "codex", host, canned(bad))).configured, false);
+      jump(86_400_000);
+      const again = await ensure(dir, "codex", host, BOOM);
+      assert.equal(again.configured, false, "内容没变、毛病也就没变,照样报失败");
+      assert.ok(again.problem!.includes("missing escaped value"), "报的还是那条原因");
+    }
+    // 问不出来:过一会儿要肯再问一次,而且这次能接上。
+    {
+      Date.now = realNow;
+      const { host, dir } = bench({ codex: HOST });
+      const file = join(dir, "config.toml");
+      writeFileSync(file, `model = "gpt"\n`, "utf8");
+      const dead: ProbeOutcome = { kind: "not-started", why: "内核圈定在这台机器上弃权" };
+      assert.equal((await ensure(dir, "codex", host, canned(dead))).configured, false);
+      assert.equal((await ensure(dir, "codex", host, BOOM)).configured, false, "紧接着再问一遍不该又起一次 codex");
+      jump(120_000);
+      const healed = await ensure(dir, "codex", host, canned(LISTS_ASH));
+      assert.equal(healed.configured, true, "装好 codex 之后不该还得重启 ash 才认");
+      assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/);
+    }
+  } finally {
+    Date.now = realNow;
+  }
+}
+
 // Windows 删不掉还开着的库文件：退出时那句 rmSync(stage) 会撞 EBUSY，断言全过也判红。
 await releaseTmpDb();
-console.log("test-user-cli-mcp: ✅ 23 组全过");
+console.log("test-user-cli-mcp: ✅ 29 组全过");
