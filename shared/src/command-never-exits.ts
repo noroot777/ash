@@ -157,6 +157,21 @@
 //    不按 eval / kill / set 各补一条字符串特判:那条路本轮审查明确点掉了（「不要再分别添加
 //    eval、kill、set 的字符串特判」),补一条它就再长出第四种。
 //
+// ⑫ **「我认得的那一种」要对着一个封闭的空间说,不然它还是黑名单**（本轮 D1）。⑪ 把「执行环境
+//    被掀翻」这一层立起来了,可它落地成了一张「我见过的会掀翻前提的词」表
+//    （eval/source/trap/kill/ulimit/shopt/setopt）—— 对 `set` 的开关用的是白名单,对**命令词**
+//    用的是黑名单。于是同一族的下一个照旧硬拦（本轮 `sh -lc` 实测,两条都退出 0 并打出 DONE）:
+//      · `unset PATH; tail -F /dev/null; printf 'DONE\n'` —— `unset` 把 PATH 整个去掉,那个
+//        tail 压根没启动。给 PATH **赋值**那一侧早就认了,**取消**那一侧没人认。
+//      · `hash -p /usr/bin/true tail; tail -F /dev/null; printf 'DONE\n'` —— `hash -p` 把
+//        `tail` 这个名字钉到别的可执行文件上,跑的根本不是 tail。
+//    补这两条进黑名单就又是列反例（`builtin`/`enable`/`let`/`local`/`alias` 还排着队）。所以
+//    这一版把判据换成**空间内的白名单**:能改掉「后面那几段按什么规矩执行」的东西只有 **shell
+//    自己的词**（外部程序改不动调用它的那个 shell,它唯一能做的是结束这个进程 —— 而那正是上面
+//    那条不作待证项的背景前提）,而「shell 有哪些自己的词」是封闭可枚举的。于是:shell 词里这一
+//    层确实有处置的那几个放过,**其余任何一个都算未知** ⇒ 降级（见 command-perturbation.ts 的
+//    `SHELL_WORDS` / `HANDLED`）。代价方向照旧:多收一个词 ⇒ 硬拦降成提示,人照样提交得了。
+//
 //
 //    ①–⑪ 合起来是同一条不变量:**硬拦只用「盖得住整条命令必要执行与退出语义」的那种证明**
 //    —— 执行资格（这一条跑不跑得到）、argv（它到底有没有开始跟随）、输入来源（它盯的是谁）、
@@ -186,6 +201,7 @@
 // 这个文件只收它的结果 —— 「每个字符在不在引号外」这件事由那边负责记下来(见 `Token.bare`)。
 import { blankComments, blankQuoted, segments, type Segment, type Token } from "./command-lex.ts";
 import { followerOf, readsToEof } from "./command-followers.ts";
+import { perturbed } from "./command-perturbation.ts";
 import { commandOf } from "./command-wrappers.ts";
 
 // **另外两张表在隔壁**（单文件 700 行的约定）:哪些命令的语义是「盯着不走」、它们的 argv 读不
@@ -439,95 +455,6 @@ function pipeTarget(segs: Segment[], at: number): { name: string; argv: Token[];
 const downstreamNote = (name: string | null): string =>
   `下游${name ? `那个 ${name} ` : ""}会不会一直读到头，这一层读不出来 —— 它先收工就把管子关掉了`;
 
-/**
- * **这条命令自己动摇了「默认执行环境」这个前提吗** —— 动摇了就说是哪一处（见文件头 ⑪）。
- *
- * 硬拦的证明压着一个说不出口的前提:shell 按常规语义执行每一段、工具找得到、没人把这个进程
- * 结束掉。那个前提不是待证项,它是哨兵这个功能本身的运行假设 —— 不然任何命令都可能因为磁盘
- * 满、信号、ulimit 而退出,硬拦就归零了。可**命令自己就能把这个假设掀翻**,而那几种写法全都
- * 写在 argv 里、这一层本来就看得见。
- *
- * 所以这里问的不是「它会不会结束」,而是「我这一层还读得懂它的执行语义吗」。读不懂 ⇒ 整条
- * 证明失效 ⇒ 降级成提示。**判的是「我认得的那一种」而不是「我见过的反例」**:`set` 只认得
- * errexit 这一种语义,别的开关(`-n` 就是「读而不执行」)一律算未知 —— 列反例的那条路第 1 轮
- * 审查已经点明是走不通的。
- */
-const SHAKERS = new Map<string, string>([
-  ["eval", "那个 eval 跑的是一段这一层读不进去的代码"],
-  ["source", "那个 source 把另一个文件的内容当代码跑"],
-  [".", "那个 . 把另一个文件的内容当代码跑"],
-  ["trap", "那个 trap 挂的是一段收到信号才跑的代码"],
-  ["kill", "那个 kill 可以把这条命令自己结束掉"],
-  ["ulimit", "那个 ulimit 改掉了这条命令自己的资源上限"],
-  ["shopt", "那个 shopt 改掉了 shell 的执行选项"],
-  ["setopt", "那个 setopt 改掉了 shell 的执行选项"],
-]);
-/** 给 `PATH` 赋值 ⇒ 后面那些工具还找不找得到,这一层读不出来（`PATH=/missing; tail -F x` 实测 127）。 */
-const PATH_ASSIGN = /^PATH=/;
-/** 这一段开头那几个**结构骨架词**:要跳过它们才轮到真正的命令词（判据同 `provableBlocker`）。 */
-const isSkeleton = (head: string): boolean =>
-  SKELETON.has(head) || LOOP_HEADS.has(head) || BRANCH.has(head);
-
-/**
- * `set` 的开关里**第一个这一层没有处置的** —— 全都有处置就是 `null`。
- *
- * **白名单,不是黑名单**:认得的那几个放过,其余一律算未知（同⑩在下游那一侧的口径）。反过来
- * 列「哪几个危险」就是列反例 —— `set -n`（读完一条都不执行，实测退出 0 而恒真循环照旧被 409）
- * 只是第一个被抓到的,`-C` 挡得住重定向、`-f` 改通配展开,一张黑名单永远差下一个。
- *
- * 放过的三件事各有理由:`errexit` 这边有专门的处置（`errexitAt`）;`xtrace`/`verbose` 只是把执行
- * 过程打出来,一个字的执行语义都不改。**`+` 那一侧同样放过** —— 它是关掉,而这三个本来就默认
- * 关着（`set +e; false; tail -F x` 真 shell 里照旧挂住，是选定要拦的真阳性）。
- *
- * **明知的误降级:`set -eu` 这一类**。`-u`（未定义变量当错误）只在命令里真的引用了未定义变量
- * 时才改变结局,而「有没有引用、引用的定义了没有」这一层答不出来 —— 于是 `set -eu; tail -F x`
- * 从硬拦降成提示。代价方向是对的那一侧:提示照样说得清,人照样能提交（见文件头那段不对称）。
- * 想把它收回硬拦,得先拿出「这条命令里每个变量都定义过」的证明,而不是把 `-u` 塞进白名单。
- */
-const SET_HANDLED = new Set(["errexit", "xtrace", "verbose"]);
-const SET_SHORT = /^[-+][exv]+$/;
-function setShaken(argv: readonly Token[]): string | null {
-  for (let i = 0; i < argv.length; i += 1) {
-    const t = argv[i]!;
-    if (t.quoted) return t.text;                 // 引号里的开关这一层读不出来
-    if (!/^[-+]/.test(t.text)) break;            // 开关列表到此为止（后面是位置参数）
-    if (/^[-+]o$/.test(t.text)) {
-      const name = argv[i + 1];
-      if (name && !name.quoted && SET_HANDLED.has(name.text)) { i += 1; continue; }
-      return name ? `${t.text} ${name.text}` : t.text;
-    }
-    if (!SET_SHORT.test(t.text)) return t.text;
-  }
-  return null;
-}
-
-/**
- * 整条命令里第一处「执行语义这一层读不懂」的地方 —— 没有就是 `null`（见 `SHAKERS`）。
- *
- * **不管执行资格,每一段都看**:`if false; then eval x; fi` 里那个 `eval` 确实跑不到,可
- * 「跑不到」这个结论本身也是这一层算出来的 —— 真要分清就得先读懂 eval。偏放行那一侧 ⇒ 一律算。
- *
- * **只认命令词位置**（文件头 ①）:`find . -name x`、`grep kill log` 里那两个词是参数,不是
- * 执行节点。`PATH=` 是唯一一个按整段词扫的 —— 它作为赋值前缀时压根不在命令词位置上。
- */
-function perturbed(segs: Segment[]): string | null {
-  for (const seg of segs) {
-    for (const t of seg.tokens) {
-      if (!t.quoted && PATH_ASSIGN.test(t.text)) return "前面有一段改过 PATH，后面那些工具还找不找得到";
-    }
-    let at = 0;
-    while (at < seg.tokens.length && isSkeleton(headOf(seg.tokens, at))) at += 1;
-    const cmd = at < seg.tokens.length ? commandOf(seg.tokens, at) : null;
-    if (!cmd) continue;
-    const note = SHAKERS.get(cmd.name);
-    if (note) return note;
-    if (cmd.name === "set") {
-      const flag = setShaken(cmd.argv);
-      if (flag !== null) return `那个 set 开的是 ${flag}，它改掉了后面每一条的执行语义（这一层只认得 errexit）`;
-    }
-  }
-  return null;
-}
 
 function judge(command: string): Found | null {
   // **读不出执行资格的结构 ⇒ 整条命令放行**（见文件头 ②）。here-doc 的终止词、函数体到底
