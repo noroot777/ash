@@ -37,6 +37,7 @@ import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWN
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
 import { clearTurnStall, trackTurnStall, type StallActions } from "../turn-stall.js";
 import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
+import { clearStallFailure } from "../turn-stall-verdict.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
 import { recordTurnStart } from "./timeline.js";
 
@@ -468,6 +469,11 @@ export async function runTurn(args: {
       endedAt: endIso,
       outcome: peekStopped(taskId) ? "stopped" : exit !== 0 || errorMsg ? "failed" : "completed",
     });
+    // 这一轮结算完了,销账。讨论自己不读那份判决(判据是手边的 `errorMsg`,见上面 trip 的注释),
+    // 但**写是共享状态机写的** —— 熔断过的回合在那张表里有一条,不撤就一直占着(第 2 轮审查 F2:
+    // 三条链里只有这一条没销账)。撤在 `recordTurnSpan` 之后而不是消费循环的 finally 里:那一刻
+    // 还没结算,提前撤等于把「留到结算完」这条不变量在讨论这一路上破例。
+    clearStallFailure(rowId, turnStart);
     // Persist the turn so a reloaded duet can rebuild its timeline (no live
     // events). Includes errors and non-fatal notices so reload preserves the same meaning as live SSE.
     try {

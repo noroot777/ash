@@ -32,24 +32,45 @@ export interface StallVerdict {
 const failures = new Map<string, StallVerdict>();
 
 /**
- * 上限 = 兜住「写了却没人来读」的那几条。
+ * 回收**只认时间,不认条数**。
  *
- * 正常路径上每一笔都会被对应的结算读掉并清掉(单飞在 settle 之后、团队在 endTurn/closeLead
- * 里),所以这张表常态是空的。留个水位是因为熔断本身就发生在异常现场:万一那条链这一次连
- * 结算都没走到,表也不该无界长。Map 迭代序 = 插入序,超了就从最老的扔。
+ * 上一版留的是条数水位(KEEP=64,超了从最老的扔),那是反的:被扔掉的恰恰是**还没结算**的那
+ * 一条。断网会同时波及很多台(「每组限流 4」限的是单个分组,不是整进程的会话数),实测 65 个
+ * 回合先全部熔断、再统一收到结束回执时,最早那一轮的判决已经被挤掉,`endTurn` 读不到于是记成
+ * `completed` —— 时间线上明明白白写着「按失败结算」,区间却是成功(第 2 轮审查 F2,已实测:
+ * 1 completed / 64 failed)。
+ *
+ * 所以不变量是:**判决一直留着,直到对应回合自己来销账**(`clearStallFailure`,各链在结算之后
+ * 调)。容量清理只许碰**明确孤立**的那些 —— 久到不可能还有人来结算的。
+ *
+ * 为什么不怕它涨:每一条都要先有一次真实熔断(默认 30 分钟只收到错误事件)才写得出来,所以
+ * 条数天然被「同时卡住的会话数」限住,而一条就几百字节。跨 server 重启这张表本来就是空的
+ * (进程内状态),所以「孤立」只可能来自同一进程里某条链连结算都没走到 —— 那种残留等 TTL
+ * 到了自己消失,不必也不许去挤掉活的。
  */
-const KEEP = 64;
+const ORPHAN_MS = 6 * 60 * 60_000;
 
 const key = (sessionId: string, turnStartedAt: string): string => `${sessionId}\u0000${turnStartedAt}`;
 
+/**
+ * 顺手清掉明确孤立的那些(写入时做,不另起计时器:这张表只在熔断时被写,频率极低)。
+ *
+ * **只按时间判,绝不按条数** —— 判据见 ORPHAN_MS 那段。
+ */
+function sweepOrphans(cutoffMs: number): void {
+  for (const [k, verdict] of failures) {
+    const at = Date.parse(verdict.at);
+    // 时间戳读不出来就留着:宁可多留一条孤立记录,也不能因为解析失败丢掉一条活判决。
+    if (Number.isFinite(at) && at <= cutoffMs) failures.delete(k);
+  }
+}
+
 /** 看门狗熔断:把「这一轮失败」钉在这个回合身份上。 */
 export function markStallFailure(sessionId: string, turnStartedAt: string, reason: string): void {
-  failures.set(key(sessionId, turnStartedAt), { reason, at: now() });
-  while (failures.size > KEEP) {
-    const oldest = failures.keys().next().value;
-    if (oldest === undefined) break;
-    failures.delete(oldest);
-  }
+  const at = now();
+  failures.set(key(sessionId, turnStartedAt), { reason, at });
+  const cutoff = Date.parse(at) - ORPHAN_MS;
+  if (Number.isFinite(cutoff)) sweepOrphans(cutoff);
 }
 
 /** 这个回合身份有没有被看门狗判过失败。读不清掉 —— 同一轮有三处要读(span/会话/任务)。 */
@@ -58,7 +79,13 @@ export function stallFailure(sessionId: string, turnStartedAt: string | null): S
   return failures.get(key(sessionId, turnStartedAt)) ?? null;
 }
 
-/** 这一轮结算完了:销账。漏掉只会被上面那个水位兜住,但别指望它。 */
+/**
+ * 这一轮结算完了:销账。
+ *
+ * **这是唯一的正常出口** —— 三条链都得调(单飞在 settle 之后、团队在 endTurn/closeLead 逐轮、
+ * 讨论在 recordTurnSpan 之后)。漏掉的那一条要等 ORPHAN_MS 才消失,而在那之前它一直占着内存,
+ * 所以漏不是「没后果」,只是后果被兜住了。
+ */
 export function clearStallFailure(sessionId: string, turnStartedAt: string | null): void {
   if (!turnStartedAt) return;
   failures.delete(key(sessionId, turnStartedAt));
@@ -67,4 +94,14 @@ export function clearStallFailure(sessionId: string, turnStartedAt: string | nul
 /** 只给回归测试。 */
 export function __resetStallFailures(): void {
   failures.clear();
+}
+
+/**
+ * 只给回归测试:把现存判决的时间戳往前挪 `ms`,用来跑孤立回收那一路(不然得等 6 小时)。
+ * 回收发生在下一次 `markStallFailure` 里,所以测试得在挪完之后再写一条。
+ */
+export function __ageStallFailures(ms: number): void {
+  for (const [k, verdict] of failures) {
+    failures.set(k, { ...verdict, at: new Date(Date.parse(verdict.at) - ms).toISOString() });
+  }
 }

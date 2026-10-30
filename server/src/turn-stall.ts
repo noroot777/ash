@@ -282,6 +282,19 @@ export function trackTurnStall(
     const held = stalls.get(sessionId);
     // 持有者不符 = 迟到的旧台输出,无权解除接管那台的停滞(同 session-waiting.ts 的换台闸)。
     if (!held || held.owner !== owner) return;
+    // **熔断之后,这一条不再是「观察」,而是一份没兑现的终止义务** —— 普通进展事件撤不动它。
+    //
+    // 分两档是刻意的(第 2 轮审查 F1,已实测):
+    //   · 熔断**之前**:任何非错误事件都解除。这一档宁可漏判也不误杀,`context`/`usage` 这种
+    //     也算 —— 它们证明这条流还在动。
+    //   · 熔断**之后**:`trip` 对常驻台走的是 request-only 的 `interrupt()`,而「有事件到达」
+    //     压根证明不了那个请求生效了。照上一档解除的那一版于是把 grace 兜底一起撤掉:页面上
+    //     「已自动终止本回合并按失败结算」已经写着了,任务却永远停在运行中、连停滞环都灭了
+    //     (resolve 把标记撤了),刷新后还是这个矛盾。
+    // 所以终止义务只有两个出口:**同一 owner+回合真的收口**(三条链各自的 turnEnd / 收流
+    // finally / closeLead → clearTurnStall),或者**这台明确退役**(retireLead → clearTurnStall)。
+    // 两个出口都走 clearTurnStall,不经过这里。
+    if (held.trippedAtMs !== null) return;
     close(sessionId, held);
     return;
   }

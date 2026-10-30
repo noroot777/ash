@@ -26,7 +26,7 @@ import {
   type StallActions,
   type StallFacts,
 } from "../src/turn-stall.js";
-import { __resetStallFailures, stallFailure } from "../src/turn-stall-verdict.js";
+import { __ageStallFailures, __resetStallFailures, clearStallFailure, markStallFailure, stallFailure } from "../src/turn-stall-verdict.js";
 
 const TURN = "2026-10-30T07:36:21.000Z";
 const RETRY = "Reconnecting... waiting for network";
@@ -223,6 +223,73 @@ function configure(opts: {
   clearTurnStall("s5d", owner); // 终止请求生效了,回合收尾
   await sleep(600);
   assert.equal(log.escalations.length, 0, "回合已经结束了还去回收句柄 —— 那会连整台一起收掉");
+}
+
+// ── ⑤e 熔断之后:普通事件撤不动那份**还没兑现的**终止义务 ───────────────────────
+// 第 2 轮审查 F1(已实测):旧版在非错误分支无条件 close,于是熔断之后随便来一条 `context` /
+// `usage` / 正文,整条记录就没了 —— grace 兜底跟着消失(回合永远卡着)、resolve 还顺手把停滞
+// 环撤了。页面上「已自动终止本回合并按失败结算」白写着,任务却停在运行中、什么异常都看不出来。
+{
+  configure({ warnErrors: 1, tripMs: 60, graceMs: 1000, pollMs: 15 });
+  const { actions, log } = spy();
+  const owner = {};
+  trackTurnStall("s5e", owner, TURN, notice(), actions);
+  await sleep(320); // 扫表间隔下限 200ms,第一拍就熔断
+  assert.equal(log.trips.length, 1, "没熔断");
+  const trippedAt = Date.now();
+
+  await sleep(700);
+  trackTurnStall("s5e", owner, TURN, { kind: "text", text: "继续" }, actions);
+  trackTurnStall("s5e", owner, TURN, { kind: "tool", name: "Bash", detail: "{}" }, actions);
+  assert.deepEqual(log.resolves, [], "熔断之后一条普通事件就把停滞标记撤了 —— 异常现场当场消失");
+  assert.ok(stallFailure("s5e", TURN), "熔断之后一条普通事件就把失败判决抹了 —— 这一轮会落成功");
+
+  // 它也不许**延长**宽限期:定期发 usage/context 的 CLI 会让兜底永远不到点,F1 就换成慢放版。
+  // 距熔断已过 ~1020ms(宽限 1000ms),没被顶掉就该在这之后的第一拍回收;若按进展事件重算,
+  // 到点要等到 ~1700ms 之后那一拍 —— 下面这个检查点落在两者中间。
+  await sleep(600);
+  assert.equal(
+    log.escalations.length,
+    1,
+    `熔断后的进展事件把宽限期顶掉或延长了(距熔断 ${Date.now() - trippedAt}ms 仍未回收)`,
+  );
+
+  // 熔断之后再来的错误同样不该把钟重置掉,也不该二次熔断、二次回收。
+  trackTurnStall("s5e", owner, TURN, notice(), actions);
+  await sleep(300);
+  assert.deepEqual([log.trips.length, log.escalations.length], [1, 1], "同一轮熔断/回收了两次");
+
+  // 唯一的正常出口:同一 owner+回合真的收口(三条链的 turnEnd / 收流 finally / closeLead)。
+  clearTurnStall("s5e", owner);
+  assert.deepEqual(log.resolves, [TURN], "回合真结束了却没撤停滞标记 —— 它会在下一轮复活");
+}
+
+// ── ⑤f 失败判决的水位:**只按时间回收,绝不按条数** ─────────────────────────────
+// 第 2 轮审查 F2(已实测 1 completed / 64 failed):旧版留条数水位(KEEP=64,超了扔最老的),
+// 而被扔掉的恰恰是**还没结算**的那一条。断网会同时波及很多台,65 个回合先全部熔断、再统一
+// 收到结束回执时,最早那一轮的判决已经被挤掉 —— 时间线写着「按失败结算」,区间却记 completed。
+{
+  __resetStallFailures();
+  const turns = Array.from({ length: 65 }, (_, i) => `2026-10-30T07:${String(i).padStart(2, "0")}:00.000Z`);
+  for (const [i, turn] of turns.entries()) markStallFailure(`cap-${i}`, turn, `熔断 ${i}`);
+  const missing = turns.filter((turn, i) => !stallFailure(`cap-${i}`, turn));
+  assert.deepEqual(
+    missing,
+    [],
+    `同时熔断 65 轮,有 ${missing.length} 条判决被挤掉了 —— 那几轮会在结算时落成功`,
+  );
+
+  // 结算完了才销账(三条链各自调 clearStallFailure:单飞 settle 后、团队逐轮、讨论 span 后)。
+  for (const [i, turn] of turns.entries()) clearStallFailure(`cap-${i}`, turn);
+  assert.equal(stallFailure("cap-0", turns[0]!), null, "销账之后还读得到 —— 下一轮会被当成熔断过");
+
+  // 孤立回收:久到不可能还有人来结算的那些,下一次写入时顺手清掉;新的那条一个字不动。
+  markStallFailure("orphan", TURN, "没人来销账的那种");
+  __ageStallFailures(7 * 60 * 60_000);
+  markStallFailure("fresh", TURN, "刚熔断");
+  assert.equal(stallFailure("orphan", TURN), null, "孤立判决一直占着内存,TTL 没生效");
+  assert.ok(stallFailure("fresh", TURN), "回收把刚写下的活判决也清了");
+  clearStallFailure("fresh", TURN);
 }
 
 // ── ⑥ 反向:正常的长回合一档都不许触发(误杀代价最高的一位) ──────────────────────
