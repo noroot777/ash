@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync,
+  readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseCodexList, registerCodexMcp } from "./codex-mcp.mjs";
@@ -94,6 +97,72 @@ try {
   const rb = registerCodexMcp({ ...base, listServers: answers(listed(), { ok: false, why: "x" }) });
   assert.equal(rb.backup, `${file}.bak-ash-setup`);
   assert.equal(existsSync(`${file}.ash-tmp`), false, "原子写不留临时文件");
+
+  // **恢复只能撤销自己那次改动**(审查第 3 轮 F1)。「现在这份还是我刚写的」只证明后面没人
+  // 再动,证不出「最早那份快照里有中途该保留的东西」—— 删旧登记要几百毫秒,用户完全可能在
+  // 这期间按了保存。
+  //
+  // ① 删旧登记失败、而文件已经变了:可能是 codex 删到一半,也可能是别人存了新内容,两者
+  //    分不开 ⇒ 保留现场。上一版在这里无条件写回最初快照,两种改动一起没。
+  {
+    const mine = `model = "mine"\n[mcp_servers.harness]\ncommand = "node"\n`;
+    writeFileSync(file, mine);
+    const foreign = `model = "someone-else"\n[mcp_servers.harness]\ncommand = "node"\n`;
+    const r = registerCodexMcp({
+      ...base,
+      listServers: answers(listed("harness")),
+      removeServer: () => { writeFileSync(file, foreign); return false; }, // 删到一半失败了
+    });
+    assert.equal(r.action, "foreignChange", "分不清归属就不许报「已还原」");
+    assert.match(r.why, /分不清哪些该撤/, `要说清为什么没还原：${r.why}`);
+    assert.equal(readFileSync(file, "utf8"), foreign, "现场一个字都不许改");
+    assert.equal(r.backup, `${file}.bak-ash-setup`, "动手前那一版还是要指给人");
+  }
+  // ② 旧登记删成功、这期间别人存了新模型和自己的 MCP,最后那问失败 ⇒ 只撤我们追加的那段,
+  //    回到「我们动手前」那一版(含别人的新内容),不是回到迁移前的快照;codex 删掉的旧登记
+  //    撤不回来,得说出来。
+  {
+    writeFileSync(file, `model = "old-model"\n[mcp_servers.harness]\ncommand = "node"\n`);
+    const meanwhile = `model = "new-model"\n\n[mcp_servers.user_added]\ncommand = "uv"\n`;
+    const r = registerCodexMcp({
+      ...base,
+      listServers: answers(listed("harness"), { ok: false, why: "codex mcp list 退出码 1" }),
+      removeServer: () => { writeFileSync(file, meanwhile); return true; },
+    });
+    assert.equal(r.action, "rolledBack");
+    assert.equal(readFileSync(file, "utf8"), meanwhile, "别人存的新模型、新 MCP 必须留着");
+    assert.match(r.why, /撤不回来/, `旧登记是 codex 删的,要讲明撤不回来：${r.why}`);
+  }
+
+  // **换上去那份要跟原来那份同身份**(审查第 3 轮 F2)。替换式写入是本任务引入的,这三样
+  // 以前(直接往原路径写)本来都不会丢。Windows 上权限/硬链接语义不同,只在 POSIX 上钉。
+  if (!IS_WINDOWS) {
+    // ① 0600 的私密配置不许被放宽成 0644(临时文件按 umask 建出来就是那样)。
+    const priv = join(directory, "priv.toml");
+    writeFileSync(priv, `model = "p"\n`);
+    chmodSync(priv, 0o600);
+    assert.equal(registerCodexMcp({ ...base, configFile: priv, listServers: answers(listed(), listed("ash")) }).action, "added");
+    assert.equal(statSync(priv).mode & 0o777, 0o600, "写完还得是 0600");
+    // ② 软链(dotfiles/集中管理)要写它指向的那份,别把链接换成普通文件。
+    const managed = join(directory, "managed.toml");
+    const link = join(directory, "linked.toml");
+    writeFileSync(managed, `model = "m"\n`);
+    chmodSync(managed, 0o600);
+    symlinkSync(managed, link);
+    assert.equal(registerCodexMcp({ ...base, configFile: link, listServers: answers(listed(), listed("ash")) }).action, "added");
+    assert.ok(lstatSync(link).isSymbolicLink(), "软链还得是软链");
+    assert.match(readFileSync(managed, "utf8"), /\[mcp_servers\.ash\]/, "写的是它指向的那份");
+    assert.equal(statSync(managed).mode & 0o777, 0o600, "目标的权限也不许动");
+    // ③ 硬链接:rename 换 inode 会把用户显式接起来的关联断掉,这一种就地写。
+    const hardA = join(directory, "hard-a.toml");
+    const hardB = join(directory, "hard-b.toml");
+    writeFileSync(hardA, `model = "h"\n`);
+    linkSync(hardA, hardB);
+    const ino = statSync(hardA).ino;
+    assert.equal(registerCodexMcp({ ...base, configFile: hardA, listServers: answers(listed(), listed("ash")) }).action, "added");
+    assert.equal(statSync(hardA).ino, ino, "inode 不许换");
+    assert.match(readFileSync(hardB, "utf8"), /\[mcp_servers\.ash\]/, "另一端跟着更新");
+  }
 
   // 审查复现的原样形状,问真 codex:带引号的登记它认得 → 不追加;重复定义它读不动 → 不动。
   const codex = which("codex");

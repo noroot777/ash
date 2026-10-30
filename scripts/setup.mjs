@@ -231,7 +231,9 @@ if (process.env.SKIP_MCP) {
     } else if (r.action === "foreignChange") {
       warn(`codex:${r.why}${r.backup ? `(补写前的备份在 ${r.backup})` : ""};先看一眼 ${codexCfg} 现在的内容,再决定要不要重跑 setup`);
     } else if (r.action === "blocked" || r.action === "rolledBack") {
-      warn(`codex:${r.why},${r.action === "blocked" ? "没有动" : "已原样还回"} ${codexCfg}`
+      // rolledBack 只保证「我们加的那段撤了」 —— 迁移里 codex 删掉的旧登记撤不回来,r.why
+      // 里已经写明,这里别再说成「原样还回」(审查第 3 轮 F1)。
+      warn(`codex:${r.why};${r.action === "blocked" ? `没有动 ${codexCfg}` : `我们对 ${codexCfg} 的改动已撤销`}`
         + `${r.backup ? `(备份在 ${r.backup})` : ""};先跑 codex mcp list 看它报什么、修好再重跑 setup`);
     } else if (r.legacyLeft) {
       warn(`codex:已写入 ash,但旧 harness 条目没删掉(两个名字都能用);可手动执行 codex mcp remove harness`);

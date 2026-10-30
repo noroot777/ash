@@ -24,9 +24,12 @@
 // 缺了才写。写一律走临时文件 + rename —— 这份 `.claude.json` 同时也是 CLI 自己在写的
 // 文件,半截内容比缺一条登记更糟。
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdtempSync, readFileSync, readlinkSync,
+  realpathSync, renameSync, rmSync, statSync, writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { probeCli, type ProbeOutcome } from "../ash-mcp-probe.js";
@@ -504,12 +507,27 @@ function readForWrite(file: string): ConfirmedRead | null {
 /**
  * 同目录临时文件 + rename:CLI 自己也在写这份文件,不能让它读到半截。
  * 只收 `readForWrite` 的结果 —— 「写之前必须拿到一次成功的读」由类型钉住,不靠各分支自己记。
+ *
+ * **换上去的那个文件得跟原来那个是同一身份**(审查第 3 轮 F2 在安装器那份写入器上提的同一条;
+ * 根因一样,两边各自实现是因为 setup 在裸 Node 上跑、导不进 TS):软链写它指向的那份(否则
+ * 一 rename 就把链接换成普通文件)、权限照抄(临时文件按 umask 多半 0644,0600 的私密配置会
+ * 当场放宽)、硬链接就地写(rename 换 inode 会断开用户显式接起来的关联,这时原子性让位)。
  */
 function writeAtomic(read: ConfirmedRead, body: string): void {
-  const file = read.file;
-  const tmp = `${file}.ash-tmp`;
+  let target = read.file;
+  try {
+    target = realpathSync(read.file);
+  } catch {
+    // 不存在,或者是条指向不存在目标的软链 —— 后者按它指的那个路径写。
+    try { target = resolve(dirname(read.file), readlinkSync(read.file)); } catch { /* 真的还没有 */ }
+  }
+  let had: ReturnType<typeof statSync> | null = null;
+  try { had = statSync(target); } catch { /* 新建 */ }
+  if (had && had.nlink > 1) { writeFileSync(target, body, "utf8"); return; }
+  const tmp = `${target}.ash-tmp`;
   writeFileSync(tmp, body, "utf8");
-  renameSync(tmp, file);
+  if (had) chmodSync(tmp, had.mode & 0o777); // writeFileSync 的 mode 会被 umask 削
+  renameSync(tmp, target);
 }
 
 /**
