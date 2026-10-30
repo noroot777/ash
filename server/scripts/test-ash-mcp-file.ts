@@ -77,6 +77,25 @@ try {
     }
     assert.equal(scan('note = """\nmcp_servers.harness.command = "x"\n"""\n').doubt, true,
       "多行字符串里的点号键登记：照旧判不了");
+    // ── 多行字符串在哪收尾：**转义引号、连续引号、行尾续行**（第 5 轮 F2）。上一版见到三个
+    // 引号就收尾，于是一段合法指令里带转义三引号的接入示例被升级成真登记 —— 真 codex
+    // `mcp list` 只列出 kb，而执行器照着那条假登记注入 `-c mcp_servers.ash.env_vars=…`，
+    // 同一份本来读得动的配置当场拒载（`invalid transport in mcp_servers.ash`），这台机器上
+    // 别的 MCP 一起没了。
+    const escaped = 'developer_instructions = """\nAn escaped triple quote: \\"""\n'
+      + '[mcp_servers.ash]\ncommand = "node"\n"""\n[mcp_servers.kb]\ncommand = "node"\n';
+    assert.deepEqual(scan(escaped).names, {}, "转义引号不收尾 ⇒ 里面那段是示例，不是登记");
+    assert.deepEqual(scan('note = """a""""\n[mcp_servers.ash]\ncommand = "node"\n'), yes,
+      "四个引号里只有后三个是收尾符（内容末尾留一个）⇒ 下一行是真表头");
+    assert.equal(scan('note = """a""""""\n[mcp_servers.ash]\ncommand = "node"\n').doubt, true,
+      "六个连续引号：这份 TOML 本身不合法，codex 也读不动 —— 别替它猜");
+    assert.deepEqual(scan("note = '''\\'''\n[mcp_servers.ash]\ncommand = \"node\"\n"), yes,
+      "多行字面量串里反斜杠不是转义 ⇒ 第一行就收尾了");
+    assert.deepEqual(
+      scan('note = """\\\n  still inside \\"""\n[mcp_servers.ash]\nc = 1\n"""\n[mcp_servers.harness]\ncommand = "node"\n'),
+      { names: { harness: true }, doubt: false }, "行尾续行是合法写法，字符串收尾之后那个才是登记");
+    assert.deepEqual(scan('mcp_servers = { ash = { command = "node", note = """a"""" } }\n'),
+      yes, "内联表里的连续引号也得按同一条规矩收尾（上一版在这里答「拆不开」）");
     // ── 转义键：**codex 自己会解**（0.153 真机实测：`[mcp_servers."\u0061sh"]` 它读成 ash，
     // rc=0、`mcp mcp list --json` 列得出来）。扫描器不解的话，这份配置里明明有 ash，预检却答
     // 「确定没有」—— 拦下一整轮审查；补写那一侧还会再追加一份同名表，那是 TOML 的重复定义，
@@ -153,6 +172,14 @@ try {
     assert.equal(target('[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.harness]\ncommand = "b"\n'), "ash", "都开着取规范名");
     // 往没声明的名字里塞 `-c` 会让 codex 整份配置起不来：认不出来的一律不注入。
     assert.equal(target('note = """\n[mcp_servers.ash]\n"""\n'), null, "多行字符串里的假表头不是登记");
+    assert.equal(
+      target('developer_instructions = """\nAn escaped triple quote: \\"""\n'
+        + '[mcp_servers.ash]\ncommand = "node"\n"""\n[mcp_servers.kb]\ncommand = "node"\n'),
+      null, "带转义三引号的示例更不许据此注入身份（第 5 轮 F2 的本体）");
+    // **看不准就什么都不注**（第 5 轮 F2）：重复定义时 codex 整份拒载，这时 `servers` 里
+    // 认出来的东西说明不了它真是一条登记，落一条 `-c` 只会多毁一份本来还能救的配置。
+    assert.equal(target('[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.ash]\ncommand = "b"\n'), null,
+      "判不了的一律不注入");
     assert.equal(target('[mcp_servers.kb]\ncommand = "uv"\n[projects."/x/ash"]\ntrust_level = "trusted"\n'), null);
     assert.equal(codexAshMcpServerName(join(stage, "no-such-home")), null, "没有配置文件");
   }

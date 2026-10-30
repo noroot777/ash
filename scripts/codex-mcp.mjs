@@ -6,18 +6,17 @@
 // 那是重复定义，codex 整份配置解析失败（`duplicate key`），别的 MCP 一起没了（新链第 4 轮审查
 // 第 2 条）。而「跑一次 npm run setup」正是派审预检给的补救办法。
 //
-// **用户那份配置只被我们在批准之后原子写一次**，codex 碰的全是沙盘里的副本（审查第 4 轮 F2）：
+// **用户那份配置只被我们在批准之后写一次**，codex 碰的全是沙盘里的副本（审查第 4 轮 F2）：
 // 删历史名也交给 codex 自己（`codex mcp remove`，上一版按行首表头字面量删，
 // `[mcp_servers.harness.tools.*]` 这类子表留成一条没有 command 的孤儿，codex 整份拒载 —— 新链
 // 第 5 轮审查第 2 条），但它自己也是「写临时文件再 rename」：让它去改用户真文件，硬链接在那一步
 // 就断了，我们后面再怎么保身份都来不及，删到一半失败还会把用户那份留在中间状态。
 import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync,
-  realpathSync, renameSync, rmSync, statSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync,
+  realpathSync, rmSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { IS_WINDOWS } from "./platform.mjs";
 
 /** `codex mcp list --json` 的结果 → `{ ok, servers:[{name, enabled}] }` 或 `{ ok:false, why }`。 */
 export function parseCodexList(status, stdout) {
@@ -43,38 +42,42 @@ function resolveTarget(file) {
     try { next = readlinkSync(p); } catch { return p; } // 不是软链 ⇒ 要写的就是它
     p = resolve(dirname(p), next);
   }
-  return p;
+  // 跟满 8 层还没到头:成环,或者长到不正常。此刻 `p` 只是链条中间的一环,**写它就是把一条
+  // 软链接换成普通文件**(审查第 5 轮 N9:上一版直接 `return p`)。定位不了就不写,如实报。
+  throw new Error(`${file} 的软链接跟了 8 层还没到头，没法确定该写哪个文件`);
 }
 
 /**
- * 把内容发布到 `file`，**不改这个文件的身份**。
+ * 把内容发布到 `file`，**保住这个文件的身份** —— 它的有效访问边界、它的链接关系。
  *
- * POSIX：同目录临时文件 + rename ⇒ codex 读到的要么是旧的、要么是写完的，没有半截。临时副本
- * **一出生就是 0600**（审查第 4 轮 F1：上一版按 umask 建出 0644、把整份配置写进去、之后才
- * chmod，那期间同一台机器上别的账号能把它连 key 一起读走；chmod 之前抛异常还会把那份 0644
- * 副本留在盘上）。放宽成原文件的权限是发布前最后一步，任何异常都把临时副本带走。
+ * **一律就地写。** 原来 POSIX 走「同目录临时副本 + rename」，那样换上去的是一个**新文件**，
+ * 它只继承得到我们抄得过去的那几位，而这份文件里装着 key：
  *
- * Windows：**就地写**。那边 rename 换上去的是个新文件，ACL 继承父目录 —— 原文件单独收紧过的
- * DACL 当场消失（审查第 4 轮 F1 在真机上实测到 Everyone 读进了 DACL），而 Node 没有读写 ACL
- * 的接口，复制不了。就地写保住整条访问边界，代价是**失去原子性**（同下面硬链接那一路的取舍）。
+ * · Windows 的 DACL 抄不了（Node 没有读写 ACL 的接口），原文件单独收紧过的访问边界当场消失
+ *   —— 第 4 轮 F1 在真机上实测到 Everyone 读进了 DACL。
+ * · POSIX 的扩展 ACL 同样抄不了，**mode 相等不等于有效权限相等**：第 5 轮 F1 实测 macOS 上
+ *   `chmod +a 'user:nobody deny read'` 这条禁读会随 rename 消失（`-rw-r--r--+` 变回
+ *   `-rw-r--r--`，mode 一模一样）。本机另测了 `copyFileSync`，它也不带这条 ACL 过去；带得过去
+ *   的只有 `cp -p`/`ditto` 这类外部命令，而发布侧不许起子进程（server 那份有结构断言钉着）。
+ * · 硬链接会被换掉 inode，断开用户显式接起来的关联。
  *
- * 另外两样：软链写它指向的那份（否则一 rename 就把链接换成普通文件）；硬链接（nlink > 1）也
- * 就地写，rename 换 inode 会断开用户显式接起来的关联。所有者（uid/gid）没抄 —— 配置在谁的
+ * 代价是**失去原子替换**：截断到写完之间有个窗口，这期间 codex 读到的是空的或者半截的
+ * （第 4/5 轮 N8，现在全平台都如此）。所以**恢复手段必须是明确的**：写出异常就把这一轮读到的
+ * 那一版原样写回去（原来没有这个文件就把它删掉）；回写也失败、或者断电/进程被杀来不及回写时，
+ * 还有下面那份 `.bak-ash-setup` 可以手工还原。
+ *
+ * 软链写它指向的那份（否则一写就把链接本身变成普通文件）。所有者（uid/gid）没抄 —— 配置在谁的
  * HOME 里就该由谁跑这个。
  */
-function writeAtomic(file, body) {
+function publishInPlace(file, body, previous) {
   const target = resolveTarget(file);
-  let had = null;
-  try { had = statSync(target); } catch { /* 新建 */ }
-  if (IS_WINDOWS || (had && had.nlink > 1)) { writeFileSync(target, body); return; }
-  const tmp = `${target}.ash-tmp`;
   try {
-    rmSync(tmp, { force: true }); // 残留的那份 mode 不受我们控制,一律重建
-    writeFileSync(tmp, body, { mode: TMP_MODE, flag: "wx" });
-    chmodSync(tmp, had ? had.mode & 0o777 : 0o666 & ~process.umask());
-    renameSync(tmp, target);
+    writeFileSync(target, body);
   } catch (e) {
-    rmSync(tmp, { force: true });
+    try {
+      if (previous === null) rmSync(target, { force: true });
+      else writeFileSync(target, previous);
+    } catch { /* 尽力:连回写都失败就只剩那份备份这条路了 */ }
     throw e;
   }
 }
@@ -132,7 +135,7 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
     // DACL 它复制不了,那份备份仍继承父目录 —— 这个做法本任务开工前就是这样(审查第 4 轮 N11)。
     const backup = `${configFile}.bak-ash-setup`;
     if (existing !== null) copyFileSync(configFile, backup);
-    writeAtomic(configFile, written);
+    publishInPlace(configFile, written, existing);
     const backupPath = existing !== null ? backup : null;
     const legacyLeft = after.servers.some((s) => s.name === legacyName);
     if (legacy && legacyRemoved && !legacyLeft) return { action: "migrated", backup: backupPath };

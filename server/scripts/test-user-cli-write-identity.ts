@@ -1,12 +1,14 @@
 /**
  * 个人 CLI 配置的写入器:**换上去那份要跟原来那份同身份**（审查第 3 轮 F2）。
  *
- * 和安装器那份(`scripts/test-codex-mcp-setup.mjs`)钉的是同一条:软链要写它指向的那份、
- * 权限照抄、硬链接就地写。两边各有一份写入器是因为 setup 在裸 Node 上跑、导不进 TS。
+ * 和安装器那份(`scripts/test-codex-mcp-setup.mjs`)钉的是同一条:**一律就地写**,所以 mode、
+ * 扩展 ACL、软链、硬链接全都原样留着。两边各有一份写入器是因为 setup 在裸 Node 上跑、
+ * 导不进 TS。
  *
  * 单独一个文件而不是塞进 `test-user-cli-mcp.ts`:那份已经 663 行,贴着单文件 700 行的上限。
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync,
   readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
@@ -39,6 +41,23 @@ function bench() {
   return { host, dir };
 }
 const ensure = (dir: string, host: string) => ensureAshMcp(dir, "codex", host, async () => LISTS_ASH);
+
+/**
+ * 给 `f` 设一条「某个具名账号禁止读取」的扩展 ACL,并给出怎么把它打印出来。设不上(文件系统
+ * 不支持、没这个命令)就返回 null,由调用方跳过并说明 —— 这种本机能力不该让回归整条红。
+ *
+ * 子进程只出现在**测试**里:被测的那个文件自己不许起进程(第 4 轮 F2,`test-user-cli-mcp.ts`
+ * 第 ㉓ 组有结构断言钉着),所以写入器没法「读一下 ACL 再决定」,只能就地写把它整条留住。
+ */
+function denyReadAcl(f: string) {
+  const plan = process.platform === "darwin"
+    ? { set: ["chmod", ["+a", "user:nobody deny read", f]], show: ["ls", ["-le", f]], mark: "nobody deny read" }
+    : { set: ["setfacl", ["-m", "u:nobody:---", f]], show: ["getfacl", ["-c", f]], mark: "user:nobody:---" };
+  const show = () => spawnSync(plan.show[0]!, plan.show[1] as string[], { encoding: "utf8" }).stdout ?? "";
+  const put = spawnSync(plan.set[0]!, plan.set[1] as string[], { encoding: "utf8" });
+  if (put.status !== 0 || !show().includes(plan.mark)) return null;
+  return { show, mark: plan.mark };
+}
 
 if (process.platform === "win32") {
   // Windows 上就地写：rename 换上去的新文件 ACL 继承父目录，原文件单独收紧过的 DACL 会当场
@@ -115,20 +134,51 @@ if (process.platform === "win32") {
     assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/, "原来没有就新建一份");
     assert.equal(statSync(file).mode & 0o777, 0o666 & ~process.umask(), "新建的按 umask 来,跟基线一致");
   }
-  // ⑥ 临时副本的名字被占住(上一次崩在半路留下的目录)：异常如实报出来,用户那份不动,
-  //    也不留下一份宽权限的残骸。
+  // ⑥ **扩展 ACL 也得留下** —— mode 相等不等于有效权限相等(审查第 5 轮 F1:macOS 上
+  //    `user:nobody deny read` 随 rename 消失,mode 还是 420,只比 mode 一点看不出来,而那
+  //    一刻起原本被禁读的账号就能把 key 读走了)。
   {
     const { host, dir } = bench();
     const file = join(dir, "config.toml");
     writeFileSync(file, BEFORE, "utf8");
-    chmodSync(file, 0o600);
-    mkdirSync(`${file}.ash-tmp`); // rmSync(force) 删不掉目录 ⇒ 建临时副本必然失败
+    const acl = denyReadAcl(file);
+    if (!acl) {
+      console.log("  ⑥ 跳过:这台机器设不上扩展 ACL");
+    } else {
+      const state = await ensure(dir, host);
+      assert.equal(state.configured, true);
+      assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/);
+      assert.ok(acl.show().includes(acl.mark), `那条禁读写完还得在:\n${acl.show()}`);
+    }
+  }
+  // ⑦ 软链跟满 8 层还没到头(成环/异常长)：定位不了就**不写**,别把中间那环换成普通文件
+  //    (审查第 5 轮 N9:上一版返回当前这一环,于是 rename 把它替换掉了)。
+  {
+    const { host, dir } = bench();
+    const chain = Array.from({ length: 9 }, (_, i) => join(dir, `deep-${i}.toml`));
+    const never = join(dir, "deep-never.toml");
+    symlinkSync(never, chain[8]!);
+    for (let i = 7; i >= 0; i--) symlinkSync(chain[i + 1]!, chain[i]!);
+    symlinkSync(chain[0]!, join(dir, "config.toml"));
+    const state = await ensure(dir, host);
+    assert.equal(state.configured, false, "定位不了就不许报「已接好」");
+    assert.match(state.problem ?? "", /8 层/, "如实说是定位不了");
+    assert.ok(chain.every((c) => lstatSync(c).isSymbolicLink()), "那条链一环都不许被换成文件");
+    assert.equal(existsSync(never), false, "也别凭猜写出一个文件来");
+  }
+  // ⑧ 就地写失败(配置被设成只读)：如实报出来,用户那份一个字节不动 —— 截断之前就失败了。
+  if (process.getuid?.() === 0) {
+    console.log("  ⑧ 跳过:root 无视只读位");
+  } else {
+    const { host, dir } = bench();
+    const file = join(dir, "config.toml");
+    writeFileSync(file, BEFORE, "utf8");
+    chmodSync(file, 0o400);
     const state = await ensure(dir, host);
     assert.equal(state.configured, false, "写不成就不许报「已接好」");
     assert.equal(readFileSync(file, "utf8"), BEFORE, "用户那份一个字节都不许动");
-    assert.equal(statSync(file).mode & 0o777, 0o600, "权限也不许动");
-    rmSync(`${file}.ash-tmp`, { recursive: true, force: true });
+    assert.equal(statSync(file).mode & 0o777, 0o400, "权限也不许动");
   }
 }
 
-console.log("test-user-cli-write-identity: ✅ 写入器的文件身份(权限/软链/硬链接/新建/失败出口)通过");
+console.log("test-user-cli-write-identity: ✅ 写入器的文件身份(权限/扩展 ACL/软链/硬链接/新建/失败出口)通过");

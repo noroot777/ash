@@ -21,12 +21,13 @@
 //  · **已有登记一律不覆盖**(含历史名 `harness`)——用户可能自己改过 URL 或路径。
 //
 // 幂等,所以挂在 `ensureUserCliDir()` 上每次起跑都过一遍:已经有了就是两次文件读,
-// 缺了才写。写一律走临时文件 + rename —— 这份 `.claude.json` 同时也是 CLI 自己在写的
-// 文件,半截内容比缺一条登记更糟。
+// 缺了才写。写**一律就地写**并在失败时回写原内容 —— 为什么不用临时文件 + rename
+// (这份 `.claude.json` 同时也是 CLI 自己在写的文件,半截内容比缺一条登记更糟),
+// 见 `publishInPlace` 顶上那段。
 import { createHash } from "node:crypto";
 import {
-  chmodSync, existsSync, mkdtempSync, readFileSync, readlinkSync,
-  realpathSync, renameSync, rmSync, statSync, writeFileSync,
+  existsSync, mkdtempSync, readFileSync, readlinkSync,
+  realpathSync, rmSync, writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -34,7 +35,6 @@ import type { PersonalAshMcp } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { probeCli, type ProbeOutcome } from "../ash-mcp-probe.js";
 import { extractTomlTables, scanCodexToml } from "../codex-toml.js";
-import { IS_WINDOWS } from "../platform.js";
 
 export { extractTomlTables } from "../codex-toml.js";
 import { currentListeningPort } from "../listening-port.js";
@@ -360,7 +360,7 @@ async function codexAccepts(
   // 别名」的告警 —— 那只是噪音,现在在下面按 `WARNING:` 滤掉,不该拿判决的正确性去换。)
   const sandbox = mkdtempSync(join(tmpdir(), "ash-mcp-ask-"));
   try {
-    writeFileSync(join(sandbox, "config.toml"), candidate, "utf8");
+    writeFileSync(join(sandbox, "config.toml"), candidate, { encoding: "utf8", mode: TMP_MODE });
     const outcome = await ask(sandbox);
     if (outcome.kind === "not-started") {
       return { state: "unasked", why: `这台机器上没法安全地起一次 codex 来确认这份配置读得通（${outcome.why}）` };
@@ -505,7 +505,7 @@ function readForWrite(file: string): ConfirmedRead | null {
   }
 }
 
-/** 临时副本一出生就只有自己能读 —— 它装着用户配置的全文。 */
+/** 沙盘副本一出生就只有自己能读 —— 它装着用户配置的全文(沙盘目录本身是 0700,这是第二道)。 */
 const TMP_MODE = 0o600;
 
 /** 跟到软链的尽头(最多 8 层,防环);最终悬空就用它指的那个路径,别去改中间那条链接。 */
@@ -517,41 +517,47 @@ function resolveTarget(file: string): string {
     try { next = readlinkSync(p); } catch { return p; } // 不是软链 ⇒ 要写的就是它
     p = resolve(dirname(p), next);
   }
-  return p;
+  // 跟满 8 层还没到头:成环,或者长到不正常。此刻 `p` 只是链条中间的一环,**写它就是把一条
+  // 软链接换成普通文件**(第 5 轮 N9:上一版直接 `return p`)。定位不了就不写,如实报。
+  throw new Error(`${file} 的软链接跟了 8 层还没到头，没法确定该写哪个文件`);
 }
 
 /**
- * 把批准过的内容写到 `read.file`,**不改这个文件的身份**。只收 `readForWrite` 的结果 ——
- * 「写之前必须拿到一次成功的读」由类型钉住,不靠各分支自己记。
+ * 把批准过的内容写到 `read.file`,**保住这个文件的身份** —— 它的有效访问边界、它的链接关系。
+ * 只收 `readForWrite` 的结果:「写之前必须拿到一次成功的读」由类型钉住,不靠各分支自己记。
  *
- * 这是安装器那份写入器(`scripts/codex-mcp.mjs`)的同一套规矩,两边各一份实现是因为 setup
- * 在裸 Node 上跑、导不进 TS;四条都是审查打出来的:
+ * 这是安装器那份发布器(`scripts/codex-mcp.mjs` 的 `publishInPlace`)的同一套规矩,两边各
+ * 一份实现是因为 setup 在裸 Node 上跑、导不进 TS。规矩本体全是审查打出来的:
  *
- * ① POSIX:同目录临时文件 + rename ⇒ CLI 读到的要么是旧的、要么是写完的,没有半截。临时副本
- *    **一出生就是 0600**(第 4 轮 F1:上一版按 umask 建出 0644、把整份配置写进去、之后才
- *    chmod,那期间同机器上别的账号能连 key 一起读走;chmod 之前抛异常还会留下那份 0644
- *    副本)。放宽成原文件的权限是发布前最后一步,任何异常都把临时副本带走。
- * ② Windows:**就地写**。那边 rename 换上去的是个新文件,ACL 继承父目录 —— 原文件单独收紧过
- *    的 DACL 当场消失(第 4 轮 F1 真机实测到 Everyone 读进了 DACL),而 Node 没有读写 ACL 的
- *    接口。保访问边界,代价是失去原子性(同下面硬链接那一路)。
- * ③ 软链写它指向的那份(第 3 轮 F2),否则一 rename 就把链接换成普通文件。
- * ④ 硬链接(nlink > 1)也就地写,rename 换 inode 会断开用户显式接起来的关联。
+ * **一律就地写。** 原来 POSIX 走「同目录临时副本 + rename」,那样换上去的是一个**新文件**,
+ * 它只继承得到我们抄得过去的那几位,而这份文件里装着 key:
+ * ① Windows 的 DACL 抄不了(Node 没有读写 ACL 的接口),原文件单独收紧过的访问边界当场消失
+ *    —— 第 4 轮 F1 在真机上实测到 Everyone 读进了 DACL。
+ * ② POSIX 的扩展 ACL 同样抄不了,**mode 相等不等于有效权限相等**:第 5 轮 F1 实测 macOS 上
+ *    `chmod +a 'user:nobody deny read'` 这条禁读会随 rename 消失(`-rw-r--r--+` 变回
+ *    `-rw-r--r--`,mode 一模一样)。本机另测了 `copyFileSync`,它也不带这条 ACL 过去;带得
+ *    过去的只有 `cp -p`/`ditto` 这类外部命令,而**这个文件里不许起子进程**(第 4 轮 F2 之后
+ *    有结构断言钉着,见 `test-user-cli-mcp.ts` 第 ㉓ 组)。
+ * ③ 硬链接会被换掉 inode,断开用户显式接起来的关联。
+ * ④ 软链写它指向的那份(第 3 轮 F2),否则一写就把链接本身变成普通文件。
+ *
+ * 代价是**失去原子替换**:截断到写完之间有个窗口,这期间 CLI 读到的是空的或者半截的
+ * (第 4/5 轮 N8,现在全平台都如此;这份 `.claude.json` 还是 CLI 自己也在写的文件)。所以
+ * **恢复手段必须是明确的**:写出异常就把这一轮读到的那一版原样写回去(原来没有这个文件就
+ * 把它删掉)。回写也失败、或者断电/进程被杀来不及回写时,盘上会留下半截 —— 那一档这里兜不住,
+ * 由下一次起跑接住:读得通但没有 ash ⇒ 重新补一份;读不通 ⇒ 不猜、如实报给用户。
  *
  * 所有者(uid/gid)没抄:配置在谁的目录里就该由谁这个进程写。
  */
-function writeAtomic(read: ConfirmedRead, body: string): void {
+function publishInPlace(read: ConfirmedRead, body: string): void {
   const target = resolveTarget(read.file);
-  let had: ReturnType<typeof statSync> | null = null;
-  try { had = statSync(target); } catch { /* 新建 */ }
-  if (IS_WINDOWS || (had && had.nlink > 1)) { writeFileSync(target, body, "utf8"); return; }
-  const tmp = `${target}.ash-tmp`;
   try {
-    rmSync(tmp, { force: true }); // 残留那份的 mode 不受我们控制,一律重建
-    writeFileSync(tmp, body, { encoding: "utf8", mode: TMP_MODE, flag: "wx" });
-    chmodSync(tmp, had ? had.mode & 0o777 : 0o666 & ~process.umask());
-    renameSync(tmp, target);
+    writeFileSync(target, body, "utf8");
   } catch (e) {
-    rmSync(tmp, { force: true });
+    try {
+      if (read.text === null) rmSync(target, { force: true });
+      else writeFileSync(target, read.text, "utf8");
+    } catch { /* 尽力:连回写都失败就只能让下一次起跑接住了 */ }
     throw e;
   }
 }
@@ -572,7 +578,7 @@ function writeAtomic(read: ConfirmedRead, body: string): void {
  *    `model` 回退、`[mcp_servers.user_added]` 不见了)。所以盘上内容一变就整条重做:
  *    重新读、在**新内容**上重新拼、重新批准。拼出来的东西因此天然带上别人那次改动。
  *
- * 残留的窗口如实写明:`commit` 是「现读一次 → 比对 → rename」,两步之间还有亚毫秒级的缝。
+ * 残留的窗口如实写明:`commit` 是「现读一次 → 比对 → 写」,两步之间还有亚毫秒级的缝。
  * 要彻底关掉它得给这份文件上文件锁,而 CLI 自己写它时不会拿那把锁,所以锁住的只有我们
  * 自己这几条路 —— 秒级的那个窗口是真问题,这个缝不是。
  */
@@ -610,7 +616,7 @@ const commit: Commit = (read, body) => {
   if (!now) return `要写 ${read.file} 之前又读不出它了`;
   // 别人动过 ⇒ 这一轮读到的那一版已经不作数,整条重做(见 publishFresh 的 ②)。
   if (now.text !== read.text) throw STALE;
-  writeAtomic(read, body);
+  publishInPlace(read, body);
   const after = readForWrite(read.file);
   if (!after || after.text !== body) {
     return `写完 ${read.file} 读回来跟刚批准的那份不一样（有别的程序也在写它？），请手工检查一遍`;

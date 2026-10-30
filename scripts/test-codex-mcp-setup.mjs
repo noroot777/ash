@@ -25,6 +25,21 @@ const removesInSandbox = (left, watch) => (name, home) => {
   return true;
 };
 
+/**
+ * 在这台机器上给 `f` 设一条「某个具名账号禁止读取」的扩展 ACL,并给出怎么把它打印出来。
+ * 设不上(文件系统不支持、没有这个命令)就返回 null,由调用方跳过并说明 —— 这种本机能力
+ * 不该让回归整条红。
+ */
+function denyReadAcl(f) {
+  const plan = process.platform === "darwin"
+    ? { set: ["chmod", ["+a", "user:nobody deny read", f]], show: ["ls", ["-le", f]], mark: "nobody deny read" }
+    : { set: ["setfacl", ["-m", "u:nobody:---", f]], show: ["getfacl", ["-c", f]], mark: "user:nobody:---" };
+  const show = () => spawnSync(plan.show[0], plan.show[1], { encoding: "utf8" }).stdout ?? "";
+  const put = spawnSync(plan.set[0], plan.set[1], { encoding: "utf8" });
+  if (put.status !== 0 || !show().includes(plan.mark)) return null;
+  return { show, mark: plan.mark, how: plan.set[0] };
+}
+
 try {
   assert.deepEqual(parseCodexList(0, '[{"name":"ash","enabled":false}]'), { ok: true, servers: [{ name: "ash", enabled: false }] });
   assert.equal(parseCodexList(1, "").ok, false, "codex 自己报错退出 = 读不动");
@@ -122,10 +137,11 @@ try {
   assert.equal(kept.legacyLeft, true);
   assert.equal(kept.backup, `${file}.bak-ash-setup`, "真写了就把备份在哪交出来");
 
-  // **换上去那份要跟原来那份同身份**(审查第 3/4 轮 F2)。Windows 的权限/链接语义不同,各自钉。
+  // **换上去那份要跟原来那份同身份**(审查第 3/4/5 轮)。现在一律就地写,但「身份」在两边
+  // 由不同的东西构成(DACL / mode + 扩展 ACL + 链接),所以各自钉各自那几样。
   if (IS_WINDOWS) {
-    // Windows 上就地写:文件本身(连同它的 DACL)不换 —— rename 换上去的新文件会继承父目录
-    // 权限,原来单独收紧过的访问边界当场消失(审查第 4 轮 F1,真机实测 Everyone 进了 DACL)。
+    // 文件本身(连同它的 DACL)不换 —— rename 换上去的新文件会继承父目录权限,原来单独收紧过
+    // 的访问边界当场消失(审查第 4 轮 F1,真机实测 Everyone 进了 DACL)。
     const w = join(directory, "win-inplace.toml");
     writeFileSync(w, `model = "w"\n`);
     const ino = Number(statSync(w).ino);
@@ -190,6 +206,30 @@ try {
     assert.match(other, /\[mcp_servers\.ash\]/, "另一端跟着更新");
     assert.ok(!other.includes("harness"), "另一端的旧名也没了");
     assert.deepEqual(watch.seen, [original], "删旧名那一步用户那份还是原样");
+    // ⑥ **扩展 ACL 也得留下** —— mode 相等不等于有效权限相等(审查第 5 轮 F1:macOS 上
+    //    `user:nobody deny read` 随 rename 消失,mode 还是 0644,光比 mode 一点看不出来)。
+    const acled = join(directory, "acled.toml");
+    writeFileSync(acled, `model = "a"\ndummy_secret = "s"\n`);
+    const acl = denyReadAcl(acled);
+    if (!acl) {
+      console.log("  ⑥ 跳过:这台机器设不上扩展 ACL");
+    } else {
+      assert.equal(registerCodexMcp({ ...base, configFile: acled, listServers: answers(listed(), listed("ash")) }).action, "added");
+      assert.match(readFileSync(acled, "utf8"), /\[mcp_servers\.ash\]/);
+      assert.ok(acl.show().includes(acl.mark), `那条禁读写完还得在:\n${acl.show()}`);
+    }
+    // ⑦ 软链跟满 8 层还没到头(成环/异常长):定位不了就**不写**,别把中间那环换成普通文件
+    //    (审查第 5 轮 N9:上一版返回当前这一环,于是 rename 把它替换掉了)。
+    const chain = Array.from({ length: 9 }, (_, i) => join(directory, `deep-${i}.toml`));
+    const never = join(directory, "deep-never.toml");
+    symlinkSync(never, chain[8]);
+    for (let i = 7; i >= 0; i--) symlinkSync(chain[i + 1], chain[i]);
+    assert.throws(
+      () => registerCodexMcp({ ...base, configFile: chain[0], listServers: answers(listed(), listed("ash")) }),
+      /8 层/, "跟不到头要如实报错,不许假装到达",
+    );
+    assert.ok(chain.every((c) => lstatSync(c).isSymbolicLink()), "那条链一环都不许被换成文件");
+    assert.equal(existsSync(never), false, "也别凭猜写出一个文件来");
   }
 
   // 审查复现的原样形状,问真 codex:带引号的登记它认得 → 不追加;重复定义它读不动 → 不动。

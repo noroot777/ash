@@ -141,6 +141,7 @@ function statements(text: string): Statement[] {
     const raw = lines[n]!;
     if (pending) {
       const scanned = scanValue(raw, depth, ml);
+      if (scanned.bad) { out.push({ kind: "unparsed", why: scanned.bad }); return out; }
       pending.value += `\n${scanned.text}`;
       depth = scanned.depth; ml = scanned.ml;
       if (!depth && !ml) { out.push({ kind: "pair", ...pending }); pending = null; }
@@ -163,6 +164,8 @@ function statements(text: string): Statement[] {
       continue;
     }
     const scanned = scanValue(eq.value, 0, null);
+    // 这份 TOML 本身不合法 ⇒ 后面的行怎么切都是猜,到此为止、如实答(上层据此 doubt)。
+    if (scanned.bad) { out.push({ kind: "unparsed", why: scanned.bad }); return out; }
     depth = scanned.depth; ml = scanned.ml;
     if (depth || ml) pending = { path: eq.path, value: scanned.text };
     else out.push({ kind: "pair", path: eq.path, value: scanned.text });
@@ -253,18 +256,62 @@ function splitKey(line: string): { path: string[]; value: string } | null {
   return null;
 }
 
+/**
+ * 已经在一段 `delim` 开头的多行字符串里面了，从 `text[at]` 起找它在哪收尾。
+ *
+ * 两条 TOML 规矩，错一条就会把**字符串里的示例**当成真配置。第 5 轮 F2 实测：合法的
+ * `developer_instructions` 里放一段带转义三引号的 `[mcp_servers.ash]` 示例，上一版在那个
+ * 转义引号处就把字符串结束了，于是认出一条根本不存在的 ash 登记；真 codex `mcp list` 只
+ * 列出 kb，而执行器照着那条假登记注入 `-c mcp_servers.ash.env_vars=…`，整份配置当场拒载
+ * （`invalid transport in mcp_servers.ash`）—— 原来读得动的那些 MCP 一起没了。
+ *
+ * ① 多行**基本**字符串（三个双引号）里反斜杠是转义：被转义的那个引号是内容，所以紧跟其后
+ *    只剩两个引号时并不收尾；连反斜杠本身一起跳过，这样 `\\` 之后的三引号才是真收尾。行尾
+ *    那个反斜杠（合法的续行写法）跳过去正好落到行尾，下一行接着扫，不影响。多行**字面量**
+ *    字符串（三个单引号）里没有转义，反斜杠原样算一个字符。
+ * ② 连续引号：内容里最多允许两个连续引号，所以一串 n 个引号里**只有最后三个**是收尾符
+ *    （四个引号收尾时，内容末尾还留着一个引号）。n > 5 这份 TOML 本身不合法 —— codex 自己
+ *    也读不动，那就别替它猜，如实答 bad。
+ *
+ * @returns end = 收尾符后面那个下标；end=null 表示这段文本里没收尾（还要接着往下读），
+ *          带 bad 则是这份 TOML 本身不合法。
+ */
+function scanMultiline(
+  text: string,
+  at: number,
+  delim: '"""' | "'''",
+): { end: number | null; bad?: string } {
+  const q = delim[0]!;
+  let i = at;
+  while (i < text.length) {
+    if (text[i] === "\\" && delim === '"""') { i += 2; continue; }
+    if (text[i] !== q) { i++; continue; }
+    let run = 0;
+    while (text[i + run] === q) run++;
+    if (run < 3) { i += run; continue; }
+    if (run > 5) return { end: null, bad: `多行字符串里有 ${run} 个连续 ${q}，这份 TOML 不合法` };
+    return { end: i + run };
+  }
+  return { end: null };
+}
+
 /** 跟踪一段值文本的括号深度与多行字符串状态，并去掉引号外的行尾注释。 */
 function scanValue(
   text: string,
   depth: number,
   ml: '"""' | "'''" | null,
-): { text: string; depth: number; ml: '"""' | "'''" | null } {
+): { text: string; depth: number; ml: '"""' | "'''" | null; bad?: string } {
   let out = "";
   let quote: string | null = null;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
     if (ml) {
-      if (text.startsWith(ml, i)) { out += ml; i += 2; ml = null; } else out += ch;
+      const found = scanMultiline(text, i, ml);
+      // 没收尾:这一段整条都在字符串里(里面的 `#`、`[`、`=` 全是内容,一个都不许当语法看)。
+      if (found.end === null) return { text: out + text.slice(i), depth, ml, bad: found.bad };
+      out += text.slice(i, found.end);
+      i = found.end - 1;
+      ml = null;
       continue;
     }
     if (quote) {
@@ -293,12 +340,17 @@ function inlinePairs(raw: string): { path: string[]; value: string }[] | null {
   let start = 0;
   let depth = 0;
   let quote: string | null = null;
-  let multiline: string | null = null;
+  let multiline: '"""' | "'''" | null = null;
   for (let index = 0; index <= body.length; index++) {
     const character = body[index];
     if (multiline) {
-      if (character === "\\" && multiline === '"""') { index++; continue; }
-      if (body.startsWith(multiline, index)) { index += 2; multiline = null; }
+      // 转义引号、连续引号的规矩跟外面一模一样,所以共用 `scanMultiline` —— 内联表这一路
+      // 自己写一份收尾判断,就是第 5 轮 F2 那个「同一层的另一条路没修」:它漏的是连续引号,
+      // `{ x = """a"""" }` 会被它判成到末尾都还在字符串里。
+      const found = scanMultiline(body, index, multiline);
+      if (found.end === null) return null;    // 没收尾/不合法:都不该据此把内联表拆开
+      index = found.end - 1;
+      multiline = null;
       continue;
     }
     if (quote) {
@@ -307,7 +359,7 @@ function inlinePairs(raw: string): { path: string[]; value: string }[] | null {
       continue;
     }
     if (body.startsWith('"""', index) || body.startsWith("'''", index)) {
-      multiline = body.slice(index, index + 3); index += 2; continue;
+      multiline = body.slice(index, index + 3) as '"""' | "'''"; index += 2; continue;
     }
     if (character === '"' || character === "'") { quote = character; continue; }
     if (character === "[" || character === "{") depth++;
@@ -367,9 +419,16 @@ function tomlStringArray(raw: string): string[] {
  * 只认扫描器**正面认出来**的登记 —— 往一个没声明的名字里塞 `-c`，codex 整份配置都起不来
  * （实测 codex-cli 0.153：`invalid transport in mcp_servers.harness`）。带引号的表头、内联表
  * 都接受不带引号的 `-c` 覆盖（同版本实测）。两个兼容名都在时取开着的那个，都开着取规范名。
+ *
+ * **看不准就什么都不注**（第 5 轮 F2）：`doubt` 的意思是「这份文本我们没读明白」，那时
+ * `servers` 里认出来的东西可能压根不是登记（字符串里的示例、重复定义、挂错位置的表），
+ * 拿它去落 `-c` 就是在把一份本来读得动的配置弄成整份拒载。注不进身份的代价是那一轮交不了
+ * 卷，派审预检会在派审那一步就拦住、把原因给用户（`ash-mcp-reachability.ts`）—— 比让这台
+ * 机器上所有 MCP 一起消失轻。
  */
 export function codexInjectionTarget(text: string): string | null {
-  const { servers } = scanCodexToml(text);
+  const { servers, doubt } = scanCodexToml(text);
+  if (doubt) return null;
   const names = WANTED.filter((n) => servers.has(n));
   return names.find((n) => servers.get(n)!.enabled) ?? names[0] ?? null;
 }
