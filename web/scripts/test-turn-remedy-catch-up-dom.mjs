@@ -29,6 +29,12 @@ const rejected = (n) => ({
 
 /** 服务端这一侧的全部权威状态。`down` = 这个接口此刻读不出来。 */
 const store = { notices: [], remedy: null, down: false, hits: 0 };
+/**
+ * 把响应**扣在手里**的闸(第 2 轮审查第 3 条)。`on` 期间新到的读取不立刻回,而是把
+ * 「到达那一刻的快照」连同发送动作排进 `held`,由测试决定什么时候放 —— 这样才能造出
+ * 「迟到的旧响应」这件事本身,不必伪造它的内容。
+ */
+const gate = { on: false, held: [] };
 const streams = new Set();
 const emit = (event) => {
   const line = `data: ${JSON.stringify(event)}\n\n`;
@@ -52,8 +58,20 @@ const server = await createServer({
           response.end(JSON.stringify({ error: "任务通知暂时读不到" }));
           return;
         }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ notices: store.notices, remedy: store.remedy }));
+        // 快照在**到达那一刻**定下来:放行得晚,带的也还是那时候的那一份。
+        const body = JSON.stringify({ notices: store.notices, remedy: store.remedy });
+        const send = () => {
+          // `no-store` 不是讲究:缺了它,Chrome 的 HTTP 缓存会把「同一个 URL 的第二发」
+          // 锁在本地等第一发写完缓存条目,于是并发在浏览器这一侧根本没发生 —— 下面④那条
+          // 单飞断言会变成永真(实测:把串行纪律摘掉,它照样绿)。
+          response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          response.end(body);
+        };
+        if (gate.on) {
+          gate.held.push(send);
+          return;
+        }
+        send();
       });
       dev.middlewares.use("/api/events", (request, response) => {
         response.writeHead(200, {
@@ -133,8 +151,50 @@ try {
   );
   assert.equal(await page.locator('main[data-connected="true"]').count(), 1, "重连应当已经建立");
 
+  // ── ④ 并发触发不许让旧快照赢(第 2 轮审查第 3 条)──────────────────────────────
+  // 四个触发口(首读、事件、重连、调用方手动 reload)随时重叠,而每个调用方都是在自己的
+  // then 里就地 setState —— 并发发车一旦乱序回来,迟到的那份旧快照会把新的盖掉,页面倒退
+  // 回一个服务端早就不这么说的状态,此后也没有新变化来纠正它。所以追平那一层改成**严格
+  // 串行**:至多一发在途,在途期间来的触发只记一笔「还欠一趟」,落地之后自己补。
+  //
+  // 判据取**客户端发车数**(fixture 里的 `__notices`),不取服务端 hits:见 fixture 里那段
+  // 注释 —— 浏览器自己会把同 URL 的第二发锁在本地,服务端数出来的永远是串行。
+  const probe = () => page.evaluate(() => window.__notices);
+  const issued = (await probe()).issued;
+  // 峰值从这一节重新计:StrictMode 挂载时 effect 跑两遍,第一个实例虽然立刻被 cancel,
+  // 它那一发 GET 已经出门(cancel 只断责任、不中止传输),峰值到过 2 —— 那是挂载期的既有
+  // 形状、两个独立实例各一发,与「同一个追平器至多一发在途」不是一件事。
+  await page.evaluate(() => { window.__notices.peak = 0; });
+  const before = store.hits;
+  gate.on = true;
+  emit({ type: "task.notices", taskId: "t-stale" }); // 第一发:3 条记录 + 入口还在,被扣住
+  const arrival = Date.now() + 10_000;
+  while (store.hits < before + 1 && Date.now() < arrival) await page.waitForTimeout(50);
+  assert.equal(store.hits, before + 1, "第一发应当已经到达并被扣住");
+  // 扣着的这段时间里服务端变了:别处把占位放开了,又多一条记录。
+  store.notices = [rejected(4), rejected(3), rejected(2), rejected(1)];
+  store.remedy = null;
+  emit({ type: "task.notices", taskId: "t-stale" });
+  await page.waitForTimeout(800);
+  const during = await probe();
+  assert.equal(during.issued, issued + 1,
+    "在途期间不许并发开第二发 —— 并发才有乱序,而迟到的旧快照会把新状态盖回去");
+  gate.on = false;
+  gate.held.shift()(); // 放那一发旧的
+  // 欠下的那一趟必须自己补上(没有第三次事件、没有重连、没人点),并且最后落地的是新快照。
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-stage="t-stale"] .turn-remedy-notices li').length === 4,
+    undefined,
+    { timeout: 20_000 },
+  );
+  assert.equal(await remedy.count(), 0,
+    "最后落地的必须是最新那一份:别处已经放开了,失效的那颗按钮不许被迟到的旧响应摆回来");
+  const after = await probe();
+  assert.equal(after.issued, issued + 2, "欠下的那一趟补一发就够,不是每次触发都攒一发");
+  assert.equal(after.peak, 1, "全程任何时刻都只许有一发在途");
+
   assert.deepEqual(errors, []);
-  console.log("✓ 通知与救援入口的失效协议:事件带着变化、首读失败自己重试到读到、断线重连重新对账");
+  console.log("✓ 通知与救援入口的失效协议:事件带着变化、首读失败自己重试到读到、断线重连重新对账、并发触发串行落地");
 } finally {
   for (const stream of streams) stream.end();
   await browser?.close();

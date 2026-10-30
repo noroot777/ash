@@ -12,6 +12,28 @@ import "../../src/styles/global.css";
 // `?task=` 选哪一套固定数据,`?second=` 再摆一个**另一个任务**的开关(测试按它分档,见
 // test-turn-remedy-dom.mjs):凭据是整页共享的一份,两个表面轮换不同步就是「按了第一个
 // 之后第二个按不动」。
+
+// ── 发车计数:只给测试看,不碰请求本身 ────────────────────────────────────────────
+// 「同一时刻至多一发在途」这条纪律**只能在客户端数**。Chrome 的 HTTP 缓存在**请求侧**就
+// 给同一个 URL 上锁:第一发还没写完缓存条目时,第二发被扣在本地等着,服务端那边看起来
+// 永远是串行的 —— 按服务端计数写的断言,把纪律摘掉照样绿(实测过)。响应头加 no-store
+// 也救不了,那时候锁已经上了。
+const probe = { issued: 0, inFlight: 0, peak: 0 };
+(window as unknown as { __notices: typeof probe }).__notices = probe;
+const passThrough = window.fetch.bind(window);
+window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (!/\/notices(\?|$)/.test(url)) return passThrough(input, init);
+  probe.issued += 1;
+  probe.inFlight += 1;
+  probe.peak = Math.max(probe.peak, probe.inFlight);
+  const settle = () => { probe.inFlight -= 1; };
+  return passThrough(input, init).then(
+    (response) => { settle(); return response; },
+    (error) => { settle(); throw error; },
+  );
+};
+
 const params = new URLSearchParams(location.search);
 const taskId = params.get("task") ?? "t-stale";
 const second = params.get("second");
