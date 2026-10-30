@@ -153,7 +153,7 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
       // 异常若直接外抛,手动启动入口(/run 等)在 claimTurn 之后的 await 就会把 500
       // 抛给用户、回合锁没人释放,此后一律 409「回合正在进行」(第 ll7XKsu_ps0n 链
       // 第 1 轮)。按失败认领返回,让调用方走统一的「认领失败」收口(释放自己的锁/
-      // 暂存消息);可能的 queued 遗留延迟交给 scheduler 的守卫补偿按持久结果收拾。
+      // 暂存消息);可能的 queued 遗留延迟交给 queue-seat-reclaim 的守卫补偿按持久结果收拾。
       //
       // 补偿必须 repush:"never" —— 本函数的调用方全是带自身语义的入口(/fire 全新
       // 一轮、/run 续跑、扫描投递消息),记账重推走的是 advanceQueue 的 resumeOrRunTask,
@@ -161,7 +161,7 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
       // 链第 2 轮实测:409 之后任务自行续上旧检查点)。失败就只回滚遗留,让原入口按
       // 原语义重试(用户重点、扫描重投、定时不消费班次)。
       console.error(`[ash] 队列占位写入失败(${taskId}),按认领失败返回并安排遗留回收:`, err);
-      void import("./scheduler.js").then(({ reclaimStrandedSeat }) => {
+      void import("./queue-seat-reclaim.js").then(({ reclaimStrandedSeat }) => {
         const timer = setTimeout(
           () => void reclaimStrandedSeat(taskId, item.queueId, prevStatus, { repush: "never", reservation }),
           1_000,
@@ -177,7 +177,7 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
 /**
  * 延期回滚最多再排几次。每一次重排都要等一个完整的「占锁 → 放锁」周期,所以现实里它本就
  * 收敛;这个上限只为挡住病态的来回(两个入口在同一个释放点上反复互相接手)。到顶**不是
- * 撒手**:把补偿交给 scheduler 那条带重试的路。
+ * 撒手**:把补偿交给 queue-seat-reclaim 那条带重试的路。
  */
 const MAX_ROLLBACK_DEFERRALS = 5;
 
@@ -185,13 +185,13 @@ function makeSeat(reservation: TaskQueueReservation, queueId: string): QueueSeat
   const { taskId, prevStatus } = reservation;
   let released = false;
 
-  // 本 seat 不再为这具占位负责了,交给 scheduler 兜底那条带重试的路。只要还有人接手,
+  // 本 seat 不再为这具占位负责了,交给 queue-seat-reclaim 兜底那条带重试的路。只要还有人接手,
   // 「占位没人回滚」就不会变成永久的「排队中」。
   const handOff = (why: string): void => {
-    console.warn(`[ash] 队列占位回滚交给 scheduler 兜底(${taskId}):${why}`);
-    // 动态 import:scheduler 静态依赖本模块。repush:"never" —— 本模块的调用方全是带自身
-    // 语义的入口,补办重推会把 /fire 的「全新一轮」偷换成续跑旧会话(见 claimQueueSeat)。
-    void import("./scheduler.js").then(({ reclaimStrandedSeat }) =>
+    console.warn(`[ash] 队列占位回滚交给兜底补偿(${taskId}):${why}`);
+    // 动态 import:queue-seat-reclaim 静态依赖本模块。repush:"never" —— 本模块的调用方全是
+    // 带自身语义的入口,补办重推会把 /fire 的「全新一轮」偷换成续跑旧会话(见 claimQueueSeat)。
+    void import("./queue-seat-reclaim.js").then(({ reclaimStrandedSeat }) =>
       reclaimStrandedSeat(taskId, queueId, prevStatus as Parameters<typeof reclaimStrandedSeat>[2],
         { repush: "never", reservation }),
     ).catch((err) => console.error(`[ash] 队列占位回滚交接失败(${taskId}):`, err));

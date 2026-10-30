@@ -13,7 +13,9 @@
 //   ⑤ 队列占位:不再因「释放那一瞬锁被占着」而永久放弃,**且延期回滚只撤自己那一代**
 //      (F3:endTurn 按注册顺序跑回调,排在前面的合法回调已抢到新锁,旧回滚照样写);
 //   ⑥ 被挡回的用户操作留下持久可见的痕迹,**包括从没跑过、没有会话可写的任务**(F4);
-//   ⑦ 久久发不出去的待发送消息会出声(pending-delivery-timing)。
+//   ⑦ 久久发不出去的待发送消息会出声(pending-delivery-timing);
+//   ⑧ 补偿责任**延续时整份身份一起带走** —— 重排到顶那一趟旧版只传了 repush,占位凭证
+//      在那里掉了,下一趟于是把自己那份凭证误读成「别人还持有」,撒手不管(第 1 轮审查 F4)。
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -39,6 +41,7 @@ const { forceReleaseTurn } = await import("../src/turn-lock.js");
 const { SUSPECT_TURN_MS, releaseSuspectTurn, reportSuspectTurns, suspectTurns } =
   await import("../src/turn-lock-reclaim.js");
 const { claimQueueSeat } = await import("../src/queue-seat.js");
+const { reserveQueuedTask, taskQueueReservation } = await import("../src/task-queue-reservation.js");
 const { reclaimStrandedSeat } = await import("../src/scheduler.js");
 const { noteRejectedUserAction, noteSystemNotice, recentRejectionNotices } = await import("../src/user-action-rejection.js");
 const { forgetStalled, noteStalledPending } = await import("../src/pending-delivery-timing.js");
@@ -467,6 +470,33 @@ await db.insert(queueItems).values([{ queueId: "q5", taskId: "t-ghostseat", posi
   assert.equal(await statusOf("t-ghostseat"), "failed",
     "锁一放开,被它冻住的占位回滚必须跑完 —— 否则任务永久停在「排队中」");
   assert.equal(await seatTokenOf("t-ghostseat"), null, "责任交回后凭证要清掉,不能永久屏蔽兜底");
+}
+
+// ── ⑦d 延期到顶:凭证必须跟着那一趟一起走 ───────────────────────────────────
+// **第 1 轮审查 F4 的回归。** 锁被占着时补偿排到 whenTurnIdle,重排有上限;到顶那一趟
+// 旧版写的是 `scheduleSeatReclaim(taskId, queueId, prevStatus, 30_000, { repush })` ——
+// **自己那份占位凭证在这里掉了**。丢了凭证的下一趟会撞上「库里这具 queued 带着凭证 =
+// 它有主、外人不插手」那一道门,而那份凭证正是它自己的:于是直接 return,这具遗留从此
+// 没有任何负责人,任务永久停在「排队中」——正是这条补偿路存在要防的那个结局。
+// 现在延续入口只收完整的 `SeatReclaim`,漏带一项编译就不过。
+await createTasks([{ ...baseTask, id: "t-defer", title: "deferral keeps credential", status: "paused" }]);
+await db.insert(queueItems).values([{ queueId: "q6", taskId: "t-defer", position: 0, createdAt: stamp }]);
+{
+  const before = (await db.select().from(tasks).where(eq(tasks.id, "t-defer"))).at(0)!;
+  const reservation = taskQueueReservation(before);
+  await reserveQueuedTask(reservation);
+  assert.equal(await statusOf("t-defer"), "queued", "占位落库");
+  assert.ok(await seatTokenOf("t-defer"), "凭证落库 —— 它是「这具 queued 有主」的唯一依据");
+  // 锁被占着,这一趟必进延期分支;deferrals 直接给满,打的就是「重排到顶」那一步
+  // (deferMs 压到毫秒级,否则要等现实里的 30s)。
+  assert.equal(claimTurn("t-defer", "single"), true, "一把压着补偿的锁");
+  await reclaimStrandedSeat("t-defer", "q6", "paused", { reservation, deferrals: 5, deferMs: 40 });
+  assert.equal(await statusOf("t-defer"), "queued", "锁占着时不动");
+  releaseTurn("t-defer");
+  await sleep(300);
+  assert.equal(await statusOf("t-defer"), "paused",
+    "到顶那一趟必须带着凭证回来 —— 丢了它就会把自己那份占位读成别人的,撒手不管");
+  assert.equal(await seatTokenOf("t-defer"), null, "回滚落地后占位凭证要清掉");
 }
 
 // ── ⑦d 停止:等到真的释放才说「可以重新运行」 ────────────────────────────────

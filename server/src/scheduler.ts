@@ -4,15 +4,13 @@ import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, groups, queueAdvanceIntents, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import {
-  SEAT_ROLLBACK_ROLE, claimNonTurn, claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn,
-  stopTask, turnIdentity, whenTurnIdle,
-} from "./runs.js";
+import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask, turnIdentity } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
 import { clearQueueAdvance, deferQueueAdvance, isQueueAdvanceCanceling, requestQueueAdvance, type QueueAdvanceRequest } from "./queue-advance-retry.js";
+import { reclaimStrandedSeat, scheduleSeatReclaim } from "./queue-seat-reclaim.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
 import { reportGroupStartFailure } from "./group-start-failure.js";
 import { clearQueueAdvanceIntent, recordQueueAdvanceIntent, refuseQueueAdvance } from "./queue-advance-admission.js";
@@ -230,7 +228,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
       // 会被这具遗留占位冻结,单纯重推救不回(第 7 轮审查:短暂锁故障后整队永久
       // 「排队中」)。按持久结果补偿:延迟交给 reclaimStrandedSeat 守卫式收拾(queued
       // 遗留就回滚,没写进去就只记账重推),它自己失败会再重试,数据库恢复后交接续上。
-      scheduleSeatReclaim(candidate.id, queueId, candidate.status as TaskStatus, 1_000, { reservation });
+      scheduleSeatReclaim(candidate.id, queueId, candidate.status as TaskStatus, 1_000, reservation);
       return null;
     }
     return { ...candidate, reservation, advanceRequest };
@@ -275,99 +273,9 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
   }
 }
 
-// 续跑没接管占位的兜底:turnHeld 的锁被 enterTurn 退回(验收互斥、接力拒收),或占位
-// 写入半途而废(UPDATE 已提交、附带读取才失败)—— 任务停在 queued、回合又没人持有,
-// 不收拾就是永久「排队中」。守卫与 queue-seat 的 seat.release 同款:正常跑完的回合在
-// 这里全是 no-op(状态早被结算覆盖/锁被真实回合接管)。回滚用 quiet(回原样不是落位);
-// 重推延迟一拍 —— 互斥方(典型:验收)没有结束钩子来推队列,立刻重试只会原地打转。
-//
-// repush = 回收之后要不要记账重推队列,三档按**是谁欠下这次启动**选:
-//   "always"   队列推进自己的占位写失败:交接确实发生过、语义就是 resume-or-run,
-//              即使写入没提交也要记账,数据库恢复后由 advanceQueue 原样补办;
-//   "stranded" finally 的常规兜底(缺省):只有真收拾了 queued 遗留才记账 —— 正常
-//              结算的回合自有终态钩子,不额外多推;
-//   "never"    手动/扫描入口(/run、/fire、/retry、消息投递)的占位写失败:只回滚
-//              遗留,**绝不记账重推** —— advanceQueue 的补办是 resumeOrRunTask,会把
-//              /fire 的「全新一轮」偷换成续跑旧会话、消费掉检查点指令(第 ll7XKsu_ps0n
-//              链第 2 轮实测);这些入口各有自己的重试面(用户重点、扫描重投、定时
-//              不消费班次),失败就让原入口按原语义重来。
-// 导出供回归直调(触发它的真实路径是「UPDATE 提交后附带 SELECT 超时」,无法从测试
-// 外侧精确注入到两条语句之间)。
-export async function reclaimStrandedSeat(
-  taskId: string,
-  queueId: string,
-  prevStatus: TaskStatus,
-  opts?: { repush?: "always" | "stranded" | "never"; reservation?: TaskQueueReservation; deferrals?: number },
-): Promise<void> {
-  const repush = opts?.repush ?? "stranded";
-  const deferrals = opts?.deferrals ?? 0;
-  // 本函数收的是「**没有任何活着的 seat 认领**的 queued 遗留」。「有没有主」这一问由
-  // 持久凭证回答(见下面读到 row 之后那一段),不是内存里的代次表 —— 重启之后代次表是空的,
-  // 而遗留还在库里。
-  // **占住回合锁再提交**,和 queue-seat 的 rollback 同一条理由(见那个模块头):
-  // setTaskStatus 内部先 SELECT 再 UPDATE,「写之前再查一次所有权」挡不住那段窗口 ——
-  // 新持有者能在其中占锁、绑令牌、落 running,这次补偿随后照样把它写回终态,还连带触发
-  // 结算与队列推进(第 2 轮审查 F1)。占着锁写就没有这段窗口。
-  //
-  // 占不到 = 有人正拿着这个占位真正起跑,排到它释放之后再看一眼:那时状态要么已被真实
-  // 结算覆盖(本函数自然是 no-op),要么确实还孤零零停在 queued。
-  const releaseLock = claimNonTurn(taskId, SEAT_ROLLBACK_ROLE);
-  if (!releaseLock) {
-    // 重排有上限,只挡病态来回(两个入口在同一个释放点上反复互相接手)。到顶**不是撒手**:
-    // 这具遗留没有别的负责人了,隔久一点再来一趟 —— 一把真正没人管的锁要等到用户手动放开,
-    // 那一刻 whenTurnIdle 也会放行(第 2 轮审查 F2:留下无人负责的遗留就是永久「排队中」)。
-    if (deferrals >= 5) {
-      console.warn(`[ash] 队列占位守卫重排已达上限(${taskId}),改为 30s 后再试一趟`);
-      scheduleSeatReclaim(taskId, queueId, prevStatus, 30_000, { repush });
-      return;
-    }
-    whenTurnIdle(taskId, () => void reclaimStrandedSeat(taskId, queueId, prevStatus, { ...opts, repush, deferrals: deferrals + 1 }));
-    return;
-  }
-  try {
-    const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    // 没带 reservation 的直调(回归、以及纯兜底那一趟):库里这具 queued 带着一份凭证就说明
-    // 它**有主** —— 回滚它等于撤掉别人的占位,任务被翻回终态、结算钩子放行下一个成员,反而
-    // 造出双跑。那种该由它自己的 release() 负责,外人不插手。带着 reservation 进来的调用方
-    // 拿的就是自己那一份凭证,不在此列。
-    if (!opts?.reservation && row?.status === "queued" && row.queueSeatToken) return;
-    const reservation: TaskQueueReservation | undefined = opts?.reservation ?? (row ? {
-      taskId, prevStatus, token: row.queueSeatToken, epoch: row.directionEpoch,
-    } : undefined);
-    if (reservation?.advanceRequest && (row?.queueAdvanceRequest?.id !== reservation.advanceRequest.id
-      || row.resumePromptGeneration !== reservation.advanceRequest.resumePromptGeneration)) return;
-    const stranded = !!reservation && await restoreQueuedTask(reservation);
-    if (!stranded) {
-      console.warn(`[ash] 队列占位守卫未提交(${taskId}):库里不再是我这一份凭证的 queued`);
-    }
-    if (repush === "never" || (repush === "stranded" && !stranded)) return;
-    if (row && !stranded && (row.status !== prevStatus || row.directionEpoch !== reservation?.epoch)) return;
-    if (reservation?.advanceRequest) {
-      deferQueueAdvance(queueId);
-      return;
-    }
-    const timer = setTimeout(() => noteMissedAdvance(taskId, queueId), 1_000);
-    timer.unref?.();
-  } catch (err) {
-    // 补偿自己也可能撞上还没放开的写锁:不放弃,退避后重试 —— 这正是「数据库恢复后
-    // 再补办交接」的那一等(第 7 轮审查:一次短暂锁故障不许变成永久停滞)。
-    console.error(`[ash] 队列占位补偿失败(${taskId}),5s 后重试:`, err);
-    scheduleSeatReclaim(taskId, queueId, prevStatus, 5_000, { repush, reservation: opts?.reservation });
-  } finally {
-    releaseLock();
-  }
-}
-
-function scheduleSeatReclaim(
-  taskId: string,
-  queueId: string,
-  prevStatus: TaskStatus,
-  delayMs: number,
-  opts?: { repush?: "always" | "stranded" | "never"; reservation?: TaskQueueReservation },
-): void {
-  const timer = setTimeout(() => void reclaimStrandedSeat(taskId, queueId, prevStatus, { repush: "always", ...opts }), delayMs);
-  timer.unref?.();
-}
+// 队列占位的兜底补偿搬到了 queue-seat-reclaim.ts(它自带一台重试状态机,而这份文件
+// 已经到 700 行上限)。回归脚本仍从本模块导入,这里原样转发。
+export { reclaimStrandedSeat };
 
 // selectNextInQueue 只需要这几列,写成结构类型,单测就能直接喂字面量。
 export type QueueMember = {
