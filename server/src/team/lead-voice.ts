@@ -5,6 +5,8 @@ import { appendSessionTrace, writeTurn, writeRunError } from "../transcript.js";
 import type { SessionTraceEvent } from "../transcript.js";
 import { noteAgentEventUpload } from "../uploads.js";
 import type { Lead } from "./session-types.js";
+import type { StallActions } from "../turn-stall.js";
+import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
 
 // 一台调度台**对外说话的三个出口**：实时 SSE（`publish`）、执行过程面板（`traceLead`）、
 // 以及会话正文 `.md`（`writeTurn` / `writeRunError`）。
@@ -78,4 +80,37 @@ export function flushSessionNotices(lead: Lead): void {
   for (const notice of notices) {
     writeTurn(lead.out, { t: "system", agent: lead.agentType, text: notice.text, level: notice.level }, notice.at);
   }
+}
+
+/**
+ * 回合级停滞看门狗的**这一路的三件动作**(判据与两档阈值在 ../turn-stall.ts,三条消费链共用)。
+ *
+ * 挂在这儿而不是消费循环里,因为它正好就是上面那三个出口的组合 —— SSE + 执行过程 + `.md`。
+ *
+ * 调度台跟单飞有一处本质不同:它是**常驻**的,一个进程吃很多回合。所以熔断只终止**卡住的
+ * 这一轮**(`interrupt`),不收整台 —— 回合收口后这台落回待命,用户插话和执行者汇报照常能把
+ * 下一轮投进去。
+ *
+ * **本轮区间的结局仍由执行器自己报的 turnEnd 决定(记 completed)**:那一层有一串自己的不变量
+ * (见 lead-turns.ts 顶部的队首语义),不该被看门狗从旁边改写。失败这件事对用户仍然是可见的
+ * —— 红色诊断进时间线、刷新后还在,任务卡片上那个停滞标记也亮着。
+ */
+export function leadStallActions(lead: Lead, trace: (event: SessionTraceEvent) => void): StallActions {
+  return {
+    taskId: lead.taskId,
+    warn: (text, facts) => {
+      const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
+      trace(event);
+      publish(lead, event);
+      markSessionStalled(lead.taskId, lead.sessId, facts.since);
+    },
+    trip: (text) => {
+      const event: AgentEvent = { kind: "error", message: text };
+      trace(event);
+      writeRunError(lead.out, text);
+      publish(lead, event);
+      lead.handle.interrupt();
+    },
+    resolve: () => clearSessionStalled(lead.taskId, lead.sessId),
+  };
 }

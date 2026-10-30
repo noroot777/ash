@@ -48,6 +48,7 @@
     "test:file-delete": "tsx scripts/test-file-delete.ts",
     "test:open-in-ide": "tsx scripts/test-open-in-ide.ts",
     "test:turn-baseline": "tsx scripts/test-turn-baseline.ts",
+    "test:turn-stall": "tsx scripts/test-turn-stall.ts",
     "test:turn-ownership": "tsx scripts/test-turn-ownership.ts",
     "test:turn-output": "tsx scripts/test-turn-output.ts",
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",

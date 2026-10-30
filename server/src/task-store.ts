@@ -175,6 +175,12 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       and (${acceptGateRuns.status} = 'running' or ${acceptGateRuns.processPending} = 1))`.mapWith(Boolean),
     monitorRunning: sql<boolean>`exists(select 1 from ${monitors} where ${monitors.taskId} = ${tasks.id}
       and ${monitors.status} = 'running')`.mapWith(Boolean),
+    // 「这个任务其实在干等上游」(回合级停滞看门狗,见 turn-stall.ts)。三个条件缺一不可:
+    // 标记在、那条会话还没收尾、任务此刻真的在跑 —— 后两条是**残值闸**:ash 被硬杀时标记
+    // 留在库里没人撤,少了它们那颗点会永久亮在卡片上。
+    upstreamStalled: sql<boolean>`exists(select 1 from ${sessions} where ${sessions.taskId} = ${tasks.id}
+      and ${sessions.upstreamStalledSince} is not null and ${sessions.endedAt} is null
+      and ${tasks.status} = 'running')`.mapWith(Boolean),
   }).from(tasks).leftJoin(taskBackgroundRevisions, eq(tasks.id, taskBackgroundRevisions.taskId))
     .where(inArray(tasks.id, rows.map(row => row.id)))).map(row => [row.taskId, row]));
   return rows.map((r) => {
@@ -187,6 +193,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       backgroundRevision: background.get(r.id)?.backgroundRevision ?? 0,
       acceptGateRunning: background.get(r.id)?.acceptGateRunning ?? false,
       monitorRunning: background.get(r.id)?.monitorRunning ?? false,
+      upstreamStalled: background.get(r.id)?.upstreamStalled ?? false,
     };
   });
 }

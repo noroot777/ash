@@ -1,4 +1,5 @@
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
+import { codexErrorEvent } from "./codex-error-event.js";
 
 export function childActivity(id: string, event: NativeAgentActivity): AgentEvent {
   return { kind: "tool", name: "Agent", nativeWork: { type: "activity", id, event, at: new Date().toISOString() } };
@@ -45,8 +46,12 @@ export class CodexChildActivity {
         const result = item.error ?? item.result ?? item.contentItems;
         if (result != null) push({ kind: "tool", name: `${item.tool} 结果`, detail: short(result) });
       }
-    } else if (method === "error" && p.error?.message) {
-      push({ kind: "error", message: p.error.message });
+    } else if (method === "error") {
+      // 跟主线程同一份判据(codex-error-event.ts):重试中抬成 level:"notice"。从前这里不看
+      // `willRetry`、一律裸 error —— 一场重连风暴在子智能体抽屉里是几百条红色「执行异常」,
+      // 每一条都把这一轮判成有执行故障,而它只是在重试。
+      const reported = codexErrorEvent(p);
+      if (reported) push(reported.event);
     } else if (method === "turn/completed" && p.turn?.error?.message) {
       push({ kind: "error", message: p.turn.error.message });
     }

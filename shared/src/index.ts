@@ -404,6 +404,13 @@ export interface Task {
    */
   acceptGateRunning?: boolean;
   monitorRunning?: boolean;
+  /**
+   * 这个任务此刻**卡在模型上游连不上**(回合级停滞看门狗,见 server/src/turn-stall.ts)。
+   *
+   * 跟 `monitorRunning` 同一档语义:后台事实,随 `backgroundRevision` 一起刷新。区别是它
+   * 不是「有东西会自己回来」,而是「它在干等,大概回不来」—— 所以圆点是另一档。
+   */
+  upstreamStalled?: boolean;
   backgroundRevision?: number;
 }
 

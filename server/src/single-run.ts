@@ -31,6 +31,8 @@ import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./tr
 import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
+import { clearTurnStall, trackTurnStall, type StallActions } from "./turn-stall.js";
+import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
@@ -209,6 +211,33 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     }
   };
 
+  // 回合级停滞看门狗(判据与两档动手见 turn-stall.ts)。这三件动作是这条链专属的部分 ——
+  // 判据一个字都不在这儿,三条消费链共用同一份。
+  const stallActions: StallActions = {
+    taskId,
+    // 警告档走 trace:它排在执行过程里它发生的那个位置(不是回合结尾),而且 level:"notice"
+    // 保证它不改变这一轮的成败 —— 上游恢复后正常答完的那一轮仍然算成功。
+    warn: (text, facts) => {
+      const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
+      persistTrace(event);
+      publishEvent(event);
+      markSessionStalled(taskId, sessId, facts.since);
+    },
+    // 熔断档:**先把「这一轮失败」钉死再杀进程**。只杀进程是不够的 —— 各执行器的 kill()
+    // 语义不一(codex 的 kill 置 stopRequested,从而咽掉自己那份失败诊断),光看退出码有
+    // 可能被 settle 成受控停止;而 sawExecutionError 这一位是单飞判失败的另一半判据
+    // (「非零退出 **或** 中途报过执行故障」),它一定成立。
+    trip: (text) => {
+      sawExecutionError = true;
+      const event: AgentEvent = { kind: "error", message: text };
+      persistTrace(event);
+      writeRunError(out, text);
+      publishEvent(event);
+      a.handle.kill();
+    },
+    resolve: () => clearSessionStalled(taskId, sessId),
+  };
+
   if (a.nativeSteer) {
     bindNativeSteer(taskId, a.handle, {
       agentType,
@@ -242,6 +271,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
       // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
       trackSessionWaiting(sessId, a.handle, a.turnStart, event);
+      // 「这一轮还在往前走吗」(turn-stall.ts):同一条事件流、同一个持有者语义,只是它要
+      // 回答的不是「此刻在等」而是「等到该动手了没有」。
+      trackTurnStall(sessId, a.handle, a.turnStart, event, stallActions);
       if (goalStartPending && a.handle.goalStarted?.()) { await markCliGoalStarted(taskId, agentType, event.kind === "session" ? event.cliSessionId : cliSessionId); goalStartPending = false; }
       if (event.kind === "session") {
         if (event.cliSessionId !== cliSessionId) {
@@ -320,6 +352,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   } finally {
     // 流异常中断时 done 事件压根不会来,内存里那条等待状态就得在这儿撤(见 session-waiting.ts)。
     clearSessionWaiting(sessId, a.handle);
+    clearTurnStall(sessId, a.handle);
     if (offsetTimer) clearInterval(offsetTimer);
     const cleaned = await a.handle.cleanup?.().catch((error): CleanupResult => {
       console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);

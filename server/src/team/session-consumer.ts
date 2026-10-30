@@ -20,6 +20,7 @@ import { writeRunError, writeTurnEnd } from "../transcript.js";
 import type { SessionTraceEvent } from "../transcript.js";
 import { isExecutionNotice, isSessionScopeNotice } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
+import { clearTurnStall, trackTurnStall } from "../turn-stall.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
@@ -38,6 +39,7 @@ import type { Lead } from "./session-types.js";
 // 说话的三个出口（SSE / trace / .md）住在 lead-voice.ts,见那份顶部。
 import {
   flushSessionNotices,
+  leadStallActions,
   noteSessionNotice,
   publish,
   recordSystemTurn,
@@ -116,6 +118,7 @@ async function consume(lead: Lead): Promise<void> {
     traceInTurn({ kind: "text", text: pendingTraceText });
     pendingTraceText = "";
   };
+  const stallActions = leadStallActions(lead, traceInTurn);
   // 兜底:上面每个写库点都已经各自把失败咽下了(persistOrReport),这里管的是**剩下**
   // 那些没预料到的抛出 —— 执行器解析、用量记账、乃至 events 流自己炸掉。掀翻循环本身
   // 不致命,**跳过 closeLead 才致命**(理由见 reportLeadFailure 顶部),所以这里只如实说
@@ -126,6 +129,7 @@ async function consume(lead: Lead): Promise<void> {
         // 回合收口 = 这一轮不再「在等」了。常驻调度台没有 done 事件,这里是它唯一的边界;
         // 不清的话一台答完待命的调度台会一直在手机上挂着「正在重试」(第 3 轮审查 F1)。
         clearSessionWaiting(lead.sessId, lead);
+        clearTurnStall(lead.sessId, lead); // 同理:回合收口是常驻台唯一的「这一轮结束了」边界
         flushTraceText();
         await endTurn(lead);
         // 上一回合欠着的新会话凭据在这儿补:补上了,轮换事宜这才算真翻篇。
@@ -172,6 +176,8 @@ async function consume(lead: Lead): Promise<void> {
       // session-waiting.ts —— 没有身份的提示一律不记)。
       // 摘牌的台一个字都不许写,内存这份同理:它的等待状态归接管的那台(同 traceLead/updateOwnSession)。
       if (!lead.retired) trackSessionWaiting(lead.sessId, lead, lead.turnStart, event);
+      // 摘牌的台同样不许动手:它的停滞状态归接管的那台(同上面那道闸)。
+      if (!lead.retired) trackTurnStall(lead.sessId, lead, lead.turnStart, event, stallActions);
       if (event.kind === "text") {
         lead.out.write(event.text);
         pendingTraceText += event.text;
@@ -489,6 +495,7 @@ async function closeLead(
 ): Promise<void> {
   clearIdle(lead);
   clearSessionWaiting(lead.sessId, lead); // 这台进程没了,**自己那条**等待状态跟着撤
+  clearTurnStall(lead.sessId, lead);
   untrackRun(lead.taskId, lead.handle);
   // 工作目录被抽走时我们会主动收掉旧进程、立刻开新的,旧进程的 close 事件晚一步
   // 才到 —— 它不能把已经接管的新会话摘掉,更不能把新回合的 running 改回 idle。

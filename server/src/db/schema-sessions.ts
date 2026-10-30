@@ -82,6 +82,15 @@ export const sessions = sqliteTable("sessions", {
   activeMs: integer("active_ms"),
   turnStartedAt: text("turn_started_at"),
   /**
+   * 这一轮**卡在上游连不上**的起点(ISO)。非空 = 看门狗已经为当前回合报过停滞警告
+   * (判据见 `turn-stall.ts`),上游一回话或回合一收尾就撤回 null。
+   *
+   * 落库的理由只有一个:任务列表要在卡片上一眼看出「这个任务其实在干等」,而内存里那份
+   * (`session-waiting.ts`)是转瞬状态、重启就没。读侧(`task-store.ts`)再叠一道
+   * `ended_at IS NULL` + 任务仍 running —— 于是 ash 被硬杀留下的残值不会永久挂在卡片上。
+   */
+  upstreamStalledSince: text("upstream_stalled_since"),
+  /**
    * 这条会话**开过几个回合**（本列出现之后的那些；之前的历史在 `turns_base` 里）。
    *
    * 完整性的**第一手证据不是它**，而是 `session_turns` 里那一行：回合一开始就落行、收尾

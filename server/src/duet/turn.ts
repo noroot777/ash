@@ -11,7 +11,7 @@ import { mkdirSync, createWriteStream, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { finished } from "node:stream/promises";
 import { eq, sql } from "drizzle-orm";
-import type { DuetSpeaker, SessionRole, TurnImageRef, TurnTraceEvent } from "@ash/shared";
+import type { AgentEvent, DuetSpeaker, SessionRole, TurnImageRef, TurnTraceEvent } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
 import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
@@ -35,6 +35,8 @@ import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verific
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
+import { clearTurnStall, trackTurnStall, type StallActions } from "../turn-stall.js";
+import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
 import { recordTurnStart } from "./timeline.js";
 
@@ -289,11 +291,36 @@ export async function runTurn(args: {
     // 回收责任归下面那道 finally,外层兜底只负责注销。认领之前(落库、建日志目录、开写流)
     // 任何一条出口都归起跑方,它必须连进程一起收 —— 三态见 runs.ts 顶部。
     adoptRun(handle);
+    // 回合级停滞看门狗(判据见 ../turn-stall.ts)。讨论这一路有自己的消费循环与结算,所以
+    // 落点也是它自己那两样:结构化过程 `trace` + 会话 trace(手机的失败现场从后者回放)。
+    const stallActions: StallActions = {
+      taskId,
+      warn: (text, facts) => {
+        if (trace.length < TRACE_CAP) trace.push({ kind: "notice", label: "提示", detail: text });
+        const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
+        appendSessionTrace(taskId, rowId, turnStart, event);
+        bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
+        markSessionStalled(taskId, rowId, facts.since);
+      },
+      // `errorMsg` 非空 = 这一轮按失败结算(见下面 recordTurnSpan 的 outcome),而讨论链据此
+      // 中止整场 —— 对一个上游连不上的回合这正是想要的:接着往下发言只会把空话喂给对手。
+      trip: (text) => {
+        errorMsg = `${errorMsg ?? ""}\n${text}`.trim();
+        out.write("✕ " + text + "\n");
+        const event: AgentEvent = { kind: "error", message: text };
+        if (trace.length < TRACE_CAP) trace.push({ kind: "notice", label: "执行诊断", detail: text });
+        appendSessionTrace(taskId, rowId, turnStart, event);
+        bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
+        handle.kill();
+      },
+      resolve: () => clearSessionStalled(taskId, rowId),
+    };
     try {
       for await (const event of handle.events) {
         // 窄出口的「此刻还在等上游」同一处口径(见 session-waiting.ts):讨论这一路的正文
         // 也是攒在内存里的,照落盘产物反推一样会在恢复之后还说正在重试。
         trackSessionWaiting(rowId, handle, turnStart, event);
+        trackTurnStall(rowId, handle, turnStart, event, stallActions);
         const sessionNotice = isSessionScopeNotice(event);
         const emittedEvent = event.kind === "usage"
           ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
@@ -363,6 +390,7 @@ export async function runTurn(args: {
     } finally {
       untrackRun(taskId, handle);
       clearSessionWaiting(rowId, handle); // 这一轮的消费结束了,等待状态跟着撤(见 session-waiting.ts)
+      clearTurnStall(rowId, handle);
       // 消费循环结束 = 这一轮不再写盘,**这一刻**就撤:后面那些收尾写库再慢再失败,读端
       // 也不会把这条会话继续当成「还在写」（第 6 轮审查必须修 1）。保证由外面那道 finally
       // 给（它盖住全部出口),这里只是把窗口收窄到真实的「还在写」那一段。
