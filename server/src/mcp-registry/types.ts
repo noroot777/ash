@@ -67,8 +67,20 @@ export interface AshMcpShape {
   read(text: string | null): AshMcpConfigState;
   /** 把 ash 这一条拼进去(已有一律不覆盖 —— 调用方先 `read` 过)。 */
   compose(text: string | null, entry: AshMcpEntry, opts?: AshMcpComposeOpts): AshMcpCompose;
-  /** 别处(通常是宿主机那份同格式配置)里 ash 那条登记的定义,搬过来复用。 */
-  hostEntry?(text: string): AshMcpEntry | null;
+  /**
+   * 别处(通常是宿主机那份**同格式**配置)里 ash 那条登记的**原值**,整个搬过来复用。
+   *
+   * 为什么返回原值而不是 `{command,args,env}`:投影一遍就丢东西。宿主那条可能是
+   * `{"type":"http","url":…,"headers":{…}}`(远程),也可能带 `cwd`/`timeout`/`tools`,
+   * 投影成那三位之后「远程」变成「连本机 4317 的 stdio」、启动字段静默消失 ——
+   * 本轮审查 R5 在沙盘里实测到的就是这两种。搬得了就一个字节不改地搬,搬不了就老实
+   * 用内置那条(`builtinEntry`),**不许把「表达不了」解释成「宿主没有登记」**。
+   *
+   * 只返回**开着**的那条(关着的搬过去等于把「已关闭」一起搬过去)。
+   */
+  hostRaw?(text: string): Record<string, unknown> | null;
+  /** 把一条原值登记按规范名拼进去(配 `hostRaw`,JSON 两族有)。 */
+  composeRaw?(text: string | null, value: Record<string, unknown>): AshMcpCompose;
   /**
    * 「整段原文照搬」那一路,只有 TOML 族有(下面三位要么都有、要么都没有)。
    *
@@ -118,6 +130,15 @@ export interface AshMcpConfigSite {
    * `.json`,两份都被 CLI 认,到底生效哪个说不清。
    */
   readonly alternates?: readonly (readonly string[])[];
+  /**
+   * 同一个配置目录里这家 CLI **也会读、而这个格式族读不了**的文件(trae 的原生
+   * `traecli.yaml` 和它那两个 `mcp.yaml`)。存在就两件事都不做:
+   *
+   *  · 判:答 unknown —— 用户完全可能把 ash 写在那里面,「我们读不了」不是「没有」;
+   *  · 写:不写 —— 同名登记同时出现在两个来源,谁生效没有文档依据(trae 只写了「项目级
+   *    更近者优先」),而两份里有一份是我们看不见的。
+   */
+  readonly opaque?: readonly (readonly string[])[];
 }
 
 /** 证据等级:本机真 CLI 验过,还是只按官方文档写。 */
@@ -129,6 +150,15 @@ export type AshMcpIdentity =
   | "inherit"
   /** CLI 过滤子进程环境,必须在登记里声明放行哪几个变量(codex 的 `env_vars`)。 */
   | "declare"
+  /**
+   * CLI 过滤子进程环境,而登记里那个位置**只收字面值**(copilot:文档明写只自动继承
+   * `PATH`,其余要写死在 `env` 里)—— 回合 token 一轮一个,写死就是过期的假身份。
+   *
+   * 这一档的意思是「登记写对了也交不了卷」,所以必须配 `caveat` 当场说出来:ash 现在
+   * 送不进回合身份,要么用户自己换个接法,要么等 ash 给这家开隔离档(会连带丢掉宿主登录态,
+   * 那是用户自己才能拍的板)。
+   */
+  | "blocked"
   /** 还没验过。按 inherit 走(多数 CLI 如此),矩阵里如实标出来。 */
   | "unknown";
 
@@ -145,13 +175,14 @@ export type AshMcpMechanism =
     /** TOML 族:写进去的那段要不要带 `enabled = true`(跟着该 CLI 自己 `mcp add` 的写法)。 */
     writeEnabled?: boolean;
     /**
-     * JSON 族:那条登记里要不要带 `"type": "stdio"`。
+     * JSON 族:那条登记里 `type` 写什么值(不写这一项就不带 `type`)。
      *
-     * 两个方向都有真实后果:cursor 的文档说这一条**必填**;claude 自己 `mcp add` 写出来的
-     * 就带着它(不带的话同一份文件里两种写法并存,看上去像被谁改过)。其余几家实测/文档都
+     * **值按各家文档照抄,不许套用**:cursor 文档说 stdio 这条 `type` 必填、claude 自己
+     * `mcp add` 写出来的也是 `"stdio"`;而 copilot 的本地服务在文件里叫 `"local"`
+     * (它的 `--transport stdio` 是命令行那一侧的拼法,两边不同名)。其余几家实测/文档都
      * 不要求,就不写 —— 多塞一个字段进别人的 schema 是在赌它宽松。
      */
-    writeType?: boolean;
+    writeType?: string;
     /** 依据出处(官方文档链接 / 本机实测记录),原样进矩阵。 */
     source: string;
     /** 已知的坑、未确认的点。`evidence:"docs"` 时必填(回归测试会拦)。 */

@@ -9,7 +9,7 @@
 //  ② **「读不出来」绝不当成「没有」**:解析失败、写法超出认得的范围一律 unknown,
 //     因为 absent 是个会被用来拦人的结论(`ash-mcp-reachability.ts` 的「向放行开」)。
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
-import { extractTomlTables, scanCodexToml } from "../codex-toml.js";
+import { extractTomlTables, scanCodexToml, tomlRootStringArray } from "../codex-toml.js";
 import type {
   AshMcpCompose, AshMcpComposeOpts, AshMcpConfigState, AshMcpEntry, AshMcpLaunch, AshMcpShape,
 } from "./types.js";
@@ -101,21 +101,91 @@ const asObject = (v: unknown): Record<string, unknown> | null =>
 const switchedOff = (entry: Record<string, unknown>): boolean =>
   entry.disabled === true || entry.enabled === false;
 
-/** 在容器里找 ash(或历史名)那条登记。 */
+/**
+ * 在容器里找 ash(或历史名)那条登记。
+ *
+ * 两条判据都是本轮审查打出来的:
+ *
+ * ① **先找开着的那条,再汇总关着的**(R8)。两个兼容名是两条独立登记:`ash` 关着、
+ *    `harness` 开着时,CLI 那边 ash MCP 是**能用**的 —— 上一版按 `WANTED` 的顺序取,
+ *    取到关着的那条就当场返回 disabled,而 disabled 在预检里是硬拒。TOML 族一直是
+ *    「先找 live」,JSON 这两族跟上。
+ * ② **值不是对象一律 unknown**(N2)。`"ash": null`、`"ash": "node x.js"` 这种写法我们
+ *    认不出来,上一版直接跳过当没有 —— 于是 compose 会把那个键覆盖掉,跟「已有登记一律
+ *    不覆盖」自相矛盾。认不出来就说认不出来。
+ */
 function pickEntry(container: unknown, file: string): AshMcpConfigState {
   const servers = asObject(container);
   if (container !== undefined && !servers) return unknown(`${file} 里的登记容器不是一个对象`);
+  const off: string[] = [];
   for (const name of WANTED) {
-    const entry = servers ? asObject(servers[name]) : null;
-    if (!entry) continue;
-    return switchedOff(entry)
-      ? { state: "disabled", serverName: name, detail: `${file} 里的 ${name} 这条登记是关着的` }
-      : present(name);
+    const raw = servers ? servers[name] : undefined;
+    if (raw === undefined) continue;
+    const entry = asObject(raw);
+    if (!entry) return unknown(`${file} 里的 ${name} 这条登记不是一个对象（值是 ${typeof raw}）`);
+    if (!switchedOff(entry)) return present(name);
+    off.push(name);
+  }
+  if (off.length) {
+    return {
+      state: "disabled",
+      serverName: off[0]!,
+      detail: `${file} 里的 ${off.join(" / ")} ${off.length > 1 ? "这几条" : "这条"}登记都是关着的`,
+    };
   }
   return absent(`${file} 里没有 ash MCP 登记`);
 }
 
+/** 这个键能不能写(已有的一律不覆盖,含认不出来的值 —— 判据跟 `pickEntry` 同一份)。 */
+function takenNames(container: unknown): string[] {
+  const servers = asObject(container);
+  return servers ? WANTED.filter((n) => Object.hasOwn(servers, n)) : [];
+}
+
+/** 宿主那条**开着**的登记原值(关着的不搬,见 `AshMcpShape.hostRaw`)。 */
+function pickHostRaw(container: unknown): Record<string, unknown> | null {
+  const servers = asObject(container);
+  if (!servers) return null;
+  for (const name of WANTED) {
+    const entry = asObject(servers[name]);
+    if (entry && !switchedOff(entry)) return entry;
+  }
+  return null;
+}
+
 const serialize = (doc: Record<string, unknown>): string => `${JSON.stringify(doc, null, 2)}\n`;
+
+/**
+ * 把一条登记按规范名写进容器 —— JSON 两族**只有这一处会改文档**。
+ *
+ * 规范名落地:宿主那份即使叫历史名 harness,搬过来也按 ash 登记(两边都叫 ash 之后,提示词
+ * 里那句「ash MCP」才对得上工具名)。已有同名键一律不碰(含值认不出来的那种,见 `pickEntry`
+ * 的 ②):调用方本该先 `read` 过,这里是第二道闸,因为「覆盖用户已有登记」是不可逆的。
+ */
+function putJson(
+  shape: AshMcpShape,
+  container: string,
+  text: string | null,
+  value: Record<string, unknown>,
+): AshMcpCompose {
+  const guard = jsonComposeGuard(text);
+  if (guard) return guard;
+  const doc = parseDoc(text);
+  if (doc === undefined) return { why: "配置解析不了，没敢动它 —— 手工修好或删掉它再重启" };
+  const base = doc ?? {};
+  const servers = asObject(base[container]);
+  if (base[container] !== undefined && !servers) {
+    return { why: `配置里的 ${container} 不是一个对象，没敢动它` };
+  }
+  const taken = takenNames(base[container]);
+  if (taken.length) return { why: `配置里已经有 ${taken.join(" / ")} 这条登记了，没有覆盖它` };
+  base[container] = { ...(servers ?? {}), [ASH_MCP_SERVER_NAME]: value };
+  const body = serialize(base);
+  // 自己复核一遍:这一族的「真解析器」就在手上(语义全在 JSON 语法里),所以拼完能当场验。
+  const back = shape.read(body);
+  if (back.state !== "present") return { why: `补上那条之后仍读不出 ash MCP 登记（${back.detail}）` };
+  return { body };
+}
 
 // ── ① `mcpServers` 这一族(claude / gemini / kimi / cursor / qwen / copilot / kiro / qoder / antigravity)──
 //
@@ -134,40 +204,15 @@ export const mcpServersJsonShape: AshMcpShape = {
     return pickEntry(doc[CONTAINER], "配置");
   },
   compose(text, entry, opts) {
-    const guard = jsonComposeGuard(text);
-    if (guard) return guard;
-    const doc = parseDoc(text);
-    if (doc === undefined) return { why: "配置解析不了，没敢动它 —— 手工修好或删掉它再重启" };
-    const base = doc ?? {};
-    const servers = asObject(base[CONTAINER]);
-    if (base[CONTAINER] !== undefined && !servers) {
-      return { why: `配置里的 ${CONTAINER} 不是一个对象，没敢动它` };
-    }
     const value = opts?.type ? { type: opts.type, ...entry } : { ...entry };
-    // 规范名落地:宿主那份即使叫历史名 harness,搬过来也按 ash 登记(两边都叫 ash 之后,
-    // 提示词里那句「ash MCP」才对得上工具名)。
-    base[CONTAINER] = { ...(servers ?? {}), [ASH_MCP_SERVER_NAME]: value };
-    const body = serialize(base);
-    // 自己复核一遍:这一族的「真解析器」就在手上(语义全在 JSON 语法里),所以拼完能当场验。
-    const back = mcpServersJsonShape.read(body);
-    if (back.state !== "present") return { why: `补上那条之后仍读不出 ash MCP 登记（${back.detail}）` };
-    return { body };
+    return putJson(mcpServersJsonShape, CONTAINER, text, value);
   },
-  hostEntry(text) {
+  composeRaw(text, value) {
+    return putJson(mcpServersJsonShape, CONTAINER, text, value);
+  },
+  hostRaw(text) {
     const doc = parseDoc(text);
-    const servers = doc ? asObject(doc[CONTAINER]) : null;
-    if (!servers) return null;
-    for (const name of WANTED) {
-      const entry = asObject(servers[name]);
-      if (entry && typeof entry.command === "string") {
-        return {
-          command: entry.command,
-          args: Array.isArray(entry.args) ? entry.args.map(String) : [],
-          env: Object.fromEntries(Object.entries(asObject(entry.env) ?? {}).map(([k, v]) => [k, String(v)])),
-        };
-      }
-    }
-    return null;
+    return doc ? pickHostRaw(doc[CONTAINER]) : null;
   },
   launch(text) {
     const doc = parseDoc(text);
@@ -212,39 +257,14 @@ export const opencodeJsonShape: AshMcpShape = {
     return pickEntry(doc[OPENCODE_CONTAINER], "配置");
   },
   compose(text, entry) {
-    const guard = jsonComposeGuard(text);
-    if (guard) return guard;
-    const doc = parseDoc(text);
-    if (doc === undefined) return { why: "配置解析不了，没敢动它 —— 手工修好或删掉它再重启" };
-    const base = doc ?? {};
-    const servers = asObject(base[OPENCODE_CONTAINER]);
-    if (base[OPENCODE_CONTAINER] !== undefined && !servers) {
-      return { why: `配置里的 ${OPENCODE_CONTAINER} 不是一个对象，没敢动它` };
-    }
-    base[OPENCODE_CONTAINER] = { ...(servers ?? {}), [ASH_MCP_SERVER_NAME]: opencodeEntry(entry) };
-    const body = serialize(base);
-    const back = opencodeJsonShape.read(body);
-    if (back.state !== "present") return { why: `补上那条之后仍读不出 ash MCP 登记（${back.detail}）` };
-    return { body };
+    return putJson(opencodeJsonShape, OPENCODE_CONTAINER, text, opencodeEntry(entry));
   },
-  hostEntry(text) {
+  composeRaw(text, value) {
+    return putJson(opencodeJsonShape, OPENCODE_CONTAINER, text, value);
+  },
+  hostRaw(text) {
     const doc = parseDoc(text);
-    const servers = doc ? asObject(doc[OPENCODE_CONTAINER]) : null;
-    if (!servers) return null;
-    for (const name of WANTED) {
-      const entry = asObject(servers[name]);
-      // 这一族的 `command` 是整条 argv:第一个是命令,其余是参数(别忘了这跟上一族相反)。
-      const argv = entry && Array.isArray(entry.command) ? entry.command.map(String) : [];
-      if (!argv.length) continue;
-      return {
-        command: argv[0]!,
-        args: argv.slice(1),
-        env: Object.fromEntries(
-          Object.entries(asObject(entry!.environment) ?? {}).map(([k, v]) => [k, String(v)]),
-        ),
-      };
-    }
-    return null;
+    return doc ? pickHostRaw(doc[OPENCODE_CONTAINER]) : null;
   },
   launch(text) {
     const doc = parseDoc(text);
@@ -273,14 +293,15 @@ export const opencodeJsonShape: AshMcpShape = {
 
 /**
  * grok 还有一个根级开关 `disabled_mcp_servers = ["ash"]`(实测 `grok mcp disable ash` 会
- * 同时写它和 `enabled = false`)。这里只认**写在一行里**的那种数组,多行的认不出来就
- * 当没有 —— 方向刻意偏向「放行」:多行数组被漏读,最坏是放过一轮(跑完没结论,有说明);
- * 反过来误判成「关着」会当场拦掉一轮本来跑得起来的审查。
+ * 同时写它和 `enabled = false`)。
+ *
+ * 判据走 `codex-toml.ts` 的结构扫描器(**本轮审查 R7**:上一版拿全文正则扫,别人多行字符串
+ * 里的同名行会被当成根级事实,把一条启用着的 ash 判成「已关闭」—— 而 disabled 在预检里是
+ * 硬拒)。读不通或根级没这个键一律当「没关」:这个方向上的错最多是放过一轮(跑完没结论、
+ * 有说明),反过来是当场拦掉一轮本来跑得起来的审查。
  */
 function tomlRootDisabled(text: string, name: string): boolean {
-  const line = /^[ \t]*disabled_mcp_servers[ \t]*=[ \t]*\[(.*)\][ \t]*(?:#.*)?$/m.exec(text);
-  if (!line) return false;
-  return new RegExp(`['"]${name}['"]`).test(line[1]!);
+  return tomlRootStringArray(text, "disabled_mcp_servers")?.includes(name) === true;
 }
 
 

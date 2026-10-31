@@ -33,7 +33,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { type LaunchSpec, scanCodexToml } from "./codex-toml.js";
 import { ashMcpConfigDir, ashMcpMechanism } from "./mcp-registry/catalog.js";
-import { ashMcpConfigFile } from "./mcp-registry/register.js";
+import { ashMcpHostFile, ashMcpOpaqueSibling } from "./mcp-registry/register.js";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { boundListeningPort } from "./listening-port.js";
 
@@ -93,7 +93,14 @@ function registryVerdict(
   }
   const dir = ashMcpConfigDir(agentType, env, homedir());
   if (!dir) return { state: "unknown", why: `算不出 ${agentType} 的配置目录` };
-  const file = ashMcpConfigFile(dir, mechanism.site);
+  // 文件名只有一处解析:`dirEnv` 指到文件的那几家(opencode / kilo)必须原样用那个路径,
+  // 不许在这里把文件名丢掉再按默认名拼回来(本轮审查 R4)。
+  const file = ashMcpHostFile(agentType, env, homedir());
+  if (!file) return { state: "unknown", why: `算不出 ${agentType} 的配置文件` };
+  // 同目录有这家也读、而我们读不了格式的配置(trae 的原生 YAML)⇒ 不下结论:
+  // ash 可能就写在那里面(`AshMcpConfigSite.opaque`)。
+  const opaque = ashMcpOpaqueSibling(dir, mechanism.site);
+  if (opaque) return { state: "unknown", why: `${opaque} 这份配置 ${agentType} 也读，而 ash 读不了它的格式` };
   // 项目级那几份:提到 MCP 就不归这里判(跟 codex 那条同一个理由)。
   for (const candidate of mechanism.site.projectRelative ?? []) {
     for (const base of upToGitRoot(dirs)) {

@@ -54,12 +54,48 @@ export function ashMcpConfigFile(dir: string, site: AshMcpConfigSite): string {
   return join(dir, ...site.relative);
 }
 
-/** `dirEnv` 指到文件的那几家(opencode 的 `OPENCODE_CONFIG`、kilo 的 `KILO_CONFIG`)。 */
-function siteFileFor(agentType: string, dir: string, site: AshMcpConfigSite, env: NodeJS.ProcessEnv): string {
+/**
+ * **宿主机上这家 CLI 真正读的那份配置文件 —— 写、判、提示只认这一处。**
+ *
+ * `dirEnv` 指到文件的那几家(opencode 的 `OPENCODE_CONFIG`、kilo 的 `KILO_CONFIG`)必须原样
+ * 用那个路径。本轮审查 R4:上一版只有这里认得它,另外三处消费者(预检的 `fileAshMcpVerdict`、
+ * 启动自检的 `hostCliConfigFile`、自查文案的 `howToCheck`)各自先把文件名丢掉、再按默认名
+ * 拼回来 —— 于是用自定义文件名的用户那边,真 CLI 连得上 ash、派审却报「没接好」,给出的
+ * 路径还是另一份文件。声明了 `dirEnvIsFile` 之后不许任何消费者再自己恢复默认文件名。
+ */
+export function ashMcpHostFile(
+  agentType: string,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string | null {
+  const mechanism = ashMcpMechanism(agentType);
+  if (mechanism?.kind !== "file") return null;
+  const { site } = mechanism;
   const override = site.dirEnv ? env[site.dirEnv]?.trim() : "";
+  if (override && site.dirEnvIsFile) return override;
+  const dir = ashMcpConfigDir(agentType, env, home);
+  return dir ? ashMcpConfigFile(dir, site) : null;
+}
+
+/** 某个配置目录(隔离档给个人目录,宿主档走 `ashMcpHostFile`)里的那份配置文件。 */
+function siteFileFor(agentType: string, dir: string, site: AshMcpConfigSite, env: NodeJS.ProcessEnv): string {
   // 指到文件的变量只在**宿主档**成立:隔离档是我们自己造的目录,调用方给的 dir 才是权威。
-  if (override && site.dirEnvIsFile && dir === ashMcpConfigDir(agentType, env, homedir())) return override;
+  if (site.dirEnvIsFile && dir === ashMcpConfigDir(agentType, env, homedir())) {
+    return ashMcpHostFile(agentType, env) ?? ashMcpConfigFile(dir, site);
+  }
   return ashMcpConfigFile(dir, site);
+}
+
+/**
+ * 同一个配置目录里这家 CLI 也会读、而这个格式族读不了的那种文件(trae 的原生 YAML)。
+ * 返回第一个**真实存在**的;没有就 null。语义与两条后果见 `AshMcpConfigSite.opaque`。
+ */
+export function ashMcpOpaqueSibling(dir: string, site: AshMcpConfigSite): string | null {
+  for (const candidate of site.opaque ?? []) {
+    const file = join(dir, ...candidate);
+    if (existsSync(file)) return file;
+  }
+  return null;
 }
 
 /** 这家 CLI 的 ash MCP 登记状态(四态,语义见 `types.ts` 的 `AshMcpConfigState`)。 */
@@ -75,6 +111,9 @@ export function ashMcpStateIn(
     return unknownState(`${agentType} 的 MCP 配置 ash 不自动读写：${mechanism.howTo}`);
   }
   const file = siteFileFor(agentType, dir, mechanism.site, env);
+  // 同目录有这家也读、而我们读不了格式的配置 ⇒ 不下结论(`AshMcpConfigSite.opaque`)。
+  const opaque = ashMcpOpaqueSibling(dir, mechanism.site);
+  if (opaque) return unknownState(`${opaque} 这份配置 ${agentType} 也读，而 ash 读不了它的格式`);
   // **先分清「没有这个文件」和「有但读不动」**:下面的读取路径会把异常吞成「空」,于是一次
   // EACCES / EIO 会被说成「没有登记」。absent 是个会被用来拦人的结论(`ash-mcp-reachability.ts`
   // 的「向放行开」),只有确实没有文件才配得上它。
@@ -149,6 +188,14 @@ export async function registerAshMcp(opts: AshMcpRegisterOptions): Promise<AshMc
   }
   const file = siteFileFor(agentType, dir, mechanism.site, env);
   const fail = (why: string): AshMcpRegisterResult => ({ ok: false, why });
+  // 同目录有我们读不了、而这家 CLI 也会读的那种配置(trae 的原生 YAML):**不写**。
+  // ash 可能已经被写在那里面了,而同名登记同时来自两个来源、谁生效没有文档依据。
+  const opaque = ashMcpOpaqueSibling(dir, mechanism.site);
+  if (opaque) {
+    return fail(`${opaque} 这份配置 ${agentType} 也会读，而 ash 读不了它的格式 —— `
+      + `所以没有自动补写 ${file}（免得同一个 ash 登记在两份配置里各有一条）；`
+      + "请在那份配置里自己加一条 ash 登记，或者把它挪开再重启");
+  }
   return await publishFresh<AshMcpRegisterResult>(file, async (read, commit) => {
     const found = mechanism.shape.read(read.text);
     if (found.state === "present") return { ok: true, serverName: found.serverName! };
@@ -191,7 +238,7 @@ function composeEntry(
   const { shape } = mechanism;
   const opts: AshMcpComposeOpts = {
     enabled: mechanism.writeEnabled === true,
-    ...(mechanism.writeType ? { type: "stdio" } : {}),
+    ...(mechanism.writeType ? { type: mechanism.writeType } : {}),
   };
   const hostText = hostConfigText(agentType, hostHome, env);
   if (blockShape(shape)) {
@@ -206,9 +253,14 @@ function composeEntry(
     const composed = shape.appendBlock(current, block);
     return "why" in composed ? composed : { body: composed.body, block };
   }
-  // 规范名落地:宿主那份即使叫历史名 harness,定义搬过来也按 ash 登记(两边都叫 ash 之后,
-  // 提示词里那句「ash MCP」才对得上工具名)。
-  const entry = (hostText ? shape.hostEntry?.(hostText) : null) ?? builtinEntry();
+  // 宿主那条**原值照搬**(规范名落地:即使它在宿主那边叫历史名 harness,搬过来也按 ash 登记 ——
+  // 两边都叫 ash 之后,提示词里那句「ash MCP」才对得上工具名)。
+  //
+  // 为什么不投影成 `{command,args,env}`:那样远程登记(`type:"http"` + url + headers)会变成
+  // 「连本机 4317 的 stdio」、`cwd`/`timeout` 这些启动字段静默消失(本轮审查 R5 实测)。
+  const hostValue = hostText ? shape.hostRaw?.(hostText) : null;
+  if (hostValue && shape.composeRaw) return shape.composeRaw(current, hostValue);
+  const entry = builtinEntry();
   if (!entry) return { why: NO_SOURCE };
   return shape.compose(current, entry, opts);
 }

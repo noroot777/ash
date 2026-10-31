@@ -29,8 +29,8 @@
 // 缺了才写。
 import { homedir } from "node:os";
 import type { PersonalAshMcp } from "@ash/shared";
-import { ashMcpConfigDir, ashMcpMechanism } from "../mcp-registry/catalog.js";
-import { ashMcpConfigFile, ashMcpStateIn, registerAshMcp } from "../mcp-registry/register.js";
+import { ashMcpConfigDir } from "../mcp-registry/catalog.js";
+import { ashMcpHostFile, ashMcpStateIn, registerAshMcp } from "../mcp-registry/register.js";
 import { askCodexHere, codexAccepts, type CodexAsk } from "./codex-approve.js";
 
 export { extractTomlTables } from "../codex-toml.js";
@@ -135,8 +135,5 @@ export function hostCliConfigDir(agentType: string, hostHome: string = homedir()
  * 启动自检告警时拿它把路径指给用户（它不存在不代表 CLI 没装，见 `warnHostAshMcp`）。
  */
 export function hostCliConfigFile(agentType: string, hostHome: string = homedir()): string | null {
-  const dir = hostCliConfigDir(agentType, hostHome);
-  const mechanism = ashMcpMechanism(agentType);
-  if (!dir || mechanism?.kind !== "file") return null;
-  return ashMcpConfigFile(dir, mechanism.site);
+  return ashMcpHostFile(agentType, process.env, hostHome);
 }

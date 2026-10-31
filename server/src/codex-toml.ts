@@ -438,6 +438,29 @@ function tomlStringArray(raw: string): string[] {
 }
 
 /**
+ * 根级 `<key> = ["a","b"]`(grok 的 `disabled_mcp_servers`)。
+ *
+ * 判据必须走**结构扫描**而不是全文正则(本轮审查 R7):上一版 `/^[ \t]*disabled_mcp_servers…/m`
+ * 对整份 TOML 逐行匹配,于是
+ *  · 另一个 MCP 的三引号多行字符串里恰好有这么一行 ⇒ 被当成根级事实,一条启用着的 ash
+ *    被判成「已关闭」,预检当场硬拒;
+ *  · 真的写成多行数组 ⇒ 反过来漏读。
+ * 两头都错,而这个文件里本来就有一个认得多行字符串、认得表作用域的扫描器。
+ *
+ * `null` = 这份 TOML 有读不通的地方(调用方自己已经按 unknown 处理),或者根级没有这个键。
+ */
+export function tomlRootStringArray(text: string, key: string): string[] | null {
+  let root = true;
+  for (const stmt of statements(text)) {
+    if (stmt.kind === "unparsed") return null;         // 读不通 ⇒ 不下结论
+    if (stmt.kind === "header") { root = false; continue; }
+    // 根级才算:`[other]` 底下同名的键是别人的字段,不是这个开关。
+    if (root && stmt.path.length === 1 && stmt.path[0] === key) return tomlStringArray(stmt.value);
+  }
+  return null;
+}
+
+/**
  * 执行器往哪个名字里注入 `-c mcp_servers.<名>.env_vars=…`（回合身份靠它进 MCP 子进程）。
  *
  * 只认扫描器**正面认出来**的登记 —— 往一个没声明的名字里塞 `-c`，codex 整份配置都起不来

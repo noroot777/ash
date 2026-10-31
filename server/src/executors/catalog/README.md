@@ -247,14 +247,14 @@ factory: (opts) => new FooExecutor(opts),
 | kimi | 是 | `$KIMI_CODE_HOME/mcp.json` | `KIMI_CODE_HOME` | `mcpServers` JSON | 未验 | 实测 |
 | opencode | 是 | `~/.config/opencode/opencode.json[c]` | `OPENCODE_CONFIG`(指文件) | `mcp` JSON | 原样继承 | 实测(含端到端) |
 | cursor | 是 | `~/.cursor/mcp.json` | 无 | `mcpServers` JSON(要 `type`) | 未验 | 未实测 |
-| qwen | 是 | `<配置目录>/.qwen/settings.json` | `QWEN_HOME` | `mcpServers` JSON | 未验 | 未实测 |
+| qwen | 是 | `$QWEN_HOME/settings.json`(默认 `~/.qwen/`) | `QWEN_HOME`(**就是配置目录**) | `mcpServers` JSON | 未验 | 未实测 |
 | qoder | 是 | `~/.qoder/mcp.json` | 无(`QODER_CONFIG_DIR_NAME` 换目录名) | `mcpServers` JSON | 未验 | 未实测 |
-| copilot | 是 | `$COPILOT_HOME/mcp-config.json` | `COPILOT_HOME` | `mcpServers` JSON | 未验 | 未实测 |
+| copilot | 是 | `$COPILOT_HOME/mcp-config.json` | `COPILOT_HOME` | `mcpServers` JSON(`type: local`) | **送不进去**(只继承 PATH) | 未实测 |
 | kiro | 是 | `~/.kiro/settings/mcp.json` | 无 | `mcpServers` JSON | 未验 | 未实测 |
 | kilo | 是 | `~/.config/kilo/kilo.json[c]` | `KILO_CONFIG`(指文件) | `mcp` JSON | 未验 | 未实测 |
 | antigravity | 是 | `~/.gemini/config/mcp_config.json` | 无 | `mcpServers` JSON | 未验 | 未实测 |
 | pi | 是 | `$PI_CODING_AGENT_DIR/mcp.json`(默认 `~/.pi/agent/`) | `PI_CODING_AGENT_DIR` | `mcpServers` JSON | 原样继承 | 未实测 |
-| trae | **否** | `trae_cli.yaml`(`traecli config edit`) | 无 | YAML 数组 | 未验 | 未实测 |
+| trae | 是 | `~/.trae/mcp.json` | 无 | `mcpServers` JSON | 未验 | 未实测 |
 
 **「档位」只有两档**,判据是**本机有没有真 CLI 可问**:实测 = 拿真 CLI 在沙盘配置目录里写过/读过
 一遍;未实测 = 只查了官方文档或发布包源码(逐家的出处写在代码那张表的 `source` 里)。没有第三档。
@@ -276,9 +276,20 @@ factory: (opts) => new FooExecutor(opts),
   登记写了也没人读。
 - **kiro 依据最弱**:官方文档把配置位置按 IDE / CLI / Web 分页签,只抓到 IDE 那一份;`kiro-cli`
   读不读它没有第二处证据。
-- **copilot 有个更高优先级的旗标**:`--config-dir` 优先于 `COPILOT_HOME`,起跑带了它这条判据会错。
-- **trae 为什么不自动写**:全局配置是 YAML,本仓没有能保住注释与缩进的写入器,拿 JSON 那套硬写会
-  毁掉用户整份配置;它另认项目里的 `.trae/mcp.json`,但那是用户仓库里的文件、会被提交进去,ash 不碰。
+- **copilot 登记写对了也交不了卷**:官方文档明写「`PATH` 自动继承,其余环境变量必须配在这条登记的
+  `env` 里」,而回合身份一轮一个值 —— 写死就是过期的假身份,ash 现在没有把它送进 copilot 的 MCP
+  子进程的办法。表里 `identity: "blocked"` + `caveat`,预检每轮都会把这句说出来;要让它能交卷得由
+  用户拍板(给 copilot 开隔离档会连带丢掉宿主登录态)。另外 `--config-dir` 旗标优先于 `COPILOT_HOME`,
+  起跑带了它这条判据会错。
+- **trae 写的是它「另外支持的那种格式」**:原生 `~/.trae/traecli.yaml` 是 YAML(`mcp_servers` 对象
+  数组、`env` 是 `{key,value}` 列表),本仓没有保得住注释缩进的 YAML 写入器;但它同样扫描标准
+  `mcpServers` JSON(`~/.trae/mcp.json`),所以走后者。**同目录出现 `traecli.yaml` / `mcp.yaml` /
+  `.mcp.yaml` 时一个字都不写、也不下结论**(`site.opaque`):ash 可能已经被写在那里面了,而同名登记
+  同时来自两份配置、谁生效没有文档依据。项目里的 `.trae/mcp.json` 是用户仓库文件,ash 不碰。
+
+**「回合身份」那一列的三种值**:原样继承 = ash 起跑时注进 CLI 进程就够了;要声明 = 得在登记里放行
+变量名(codex 的 `env_vars`,按回合用 `-c` 给,不写进配置文件);**送不进去** = CLI 过滤子进程环境、
+而登记位只收字面值(copilot),那一家登记写对了也交不了卷,表里必须配 `caveat` 当场说出来。
 
 **改这张表要同时改三处**:`mcp-registry/catalog.ts`(单源)、`scripts/mcp-hosts.mjs`(安装时那份裸
 Node 实现,setup 导不进 TS)、本节表格。三处不一致时 `test:ash-mcp-registry` 会红 —— 它逐项比对

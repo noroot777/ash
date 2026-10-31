@@ -39,7 +39,7 @@ export const ASH_MCP_TABLE = {
     identity: "inherit",
     evidence: "tested",
     // CLI 自己 `mcp add` 写出来的那条带 `type`,照抄它:同一份文件两种写法会让人以为被改过。
-    writeType: true,
+    writeType: "stdio",
     source: "`claude mcp add ash --scope user` 实测；本仓 `scripts/setup.mjs` 从一开始就在写这份",
     notes: "`.claude.json` 同时是 CLI 自己在写的文件（会话、onboarding 标记都在里面），"
       + "所以写它必须走 `config-publish.ts` 那套就地写 + 读回来比对：半截内容比缺一条登记更糟",
@@ -161,7 +161,7 @@ export const ASH_MCP_TABLE = {
     identity: "unknown",
     evidence: "docs",
     // 文档明说 stdio 这条 `type` 是必填。
-    writeType: true,
+    writeType: "stdio",
     source: "cursor.com/docs/context/mcp（2026-10-31 查）：全局 `~/.cursor/mcp.json`，"
       + "`mcpServers` 容器，stdio 支持 type/command/args/env",
     notes: "**未实测**（本机没装 cursor-agent）。CLI 侧的配置文档是 `~/.cursor/cli-config.json` 那一份，"
@@ -171,17 +171,21 @@ export const ASH_MCP_TABLE = {
   qwen: {
     kind: "file",
     shape: mcpServersJsonShape,
+    // `QWEN_HOME` 是**最终配置目录**,不是 home —— 跟 gemini 的 `GEMINI_CLI_HOME` 正好相反
+    // (本轮审查 R3:上一版在它底下又接了一层 `.qwen`,于是指定了目录的用户那份登记写到了
+    // CLI 根本不读的地方,界面还报「已接好」)。
     site: {
       dirEnv: "QWEN_HOME",
-      defaultDir: atHome,
-      relative: [".qwen", "settings.json"],
+      defaultDir: underHome(".qwen"),
+      relative: ["settings.json"],
       projectRelative: [[".qwen", "settings.json"], [".mcp.json"], ["mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
-    source: "读 npm 包 `@qwen-code/qwen-code@0.26.4` 的 bundle：`QWEN_DIR=\".qwen\"`、用户级 "
-      + "settings 里的 `mcpServers`、`QWEN_HOME` 作为 home 基准（报错原文「QWEN_HOME points to … "
-      + "but no settings.json was found there」）",
+    source: "读 npm 包 `@qwen-code/qwen-code@0.26.4` 的 bundle：`cli-entry.js` 的 `resolveQwenHome()` "
+      + "「没设 QWEN_HOME 才 `join(home, '.qwen')`，设了就直接解析它」，`glob-search-worker.js` 的 "
+      + "`Storage.getGlobalQwenDir()` 同构，`getGlobalSettingsPath()` 在那个目录下直接接 "
+      + "`settings.json`；用户级 settings 里的容器是 `mcpServers`",
     notes: "**未实测**（本机没装）。它是 gemini-cli 的衍生，bundle 里同样有 `isTrustedFolder()` 判断，"
       + "很可能也有「未信任目录不加载 MCP」那道门 —— 真装上之后先验这一条",
   },
@@ -212,12 +216,27 @@ export const ASH_MCP_TABLE = {
       relative: ["mcp-config.json"],
       projectRelative: [[".mcp.json"], [".github", "mcp.json"]],
     },
-    identity: "unknown",
+    // 文件里本地服务的 `type` 叫 `local`(命令行那一侧才是 `--transport stdio`,两边不同名)。
+    writeType: "local",
+    // **登记写对了也交不了卷**:copilot 只自动继承 PATH,别的环境变量要写死在 `env` 里,
+    // 而回合 token 一轮一个 —— 写死就是过期的假身份。详见 `AshMcpIdentity` 的 `blocked`。
+    identity: "blocked",
+    identityNote: "copilot 文档明写「`PATH` 自动继承，其余环境变量必须在这条登记的 `env` 里配」，"
+      + "而回合身份（`ASH_TASK_ID` / 两套 token）一轮一个值、只能在起跑时注进 CLI 进程 —— "
+      + "ash 现在没有把它送进 copilot 的 MCP 子进程的办法",
+    caveat: "copilot 的 MCP 子进程只自动继承 PATH，ash 注的回合身份进不去，"
+      + "**这一轮跑完交卷大概率被拒**（文档依据见 catalog 的 source；本机没装 copilot，未实测）。"
+      + "要让它能交卷，得由你决定走哪条：① 给 copilot 开隔离档（`COPILOT_HOME`／`--config-dir`，"
+      + "但那会连带丢掉宿主的 copilot 登录态）；② 换别的执行器跑需要交卷的任务",
     evidence: "docs",
     source: "docs.github.com/copilot/reference/copilot-cli-reference/cli-config-dir-reference"
-      + "（2026-10-31 查）：`COPILOT_HOME` 整体取代 `~/.copilot`，用户级 MCP 在 `mcp-config.json`",
+      + "（2026-10-31 查）：`COPILOT_HOME` 整体取代 `~/.copilot`，用户级 MCP 在 `mcp-config.json`；"
+      + "同站 how-tos/copilot-cli/customize-copilot/add-mcp-servers 的 Environment Variables 一节原文："
+      + "「The `PATH` variable is automatically inherited from your environment. All other environment "
+      + "variables must be configured here.」，示例里本地服务写 `\"type\": \"local\"`",
     notes: "**未实测**（本机没装）。旧版文档曾写成 `~/.config`，后来改正；另有 `--config-dir` 旗标"
-      + "**优先于** `COPILOT_HOME`，起跑时用了那个旗标的话这条判据会错",
+      + "**优先于** `COPILOT_HOME`，起跑时用了那个旗标的话这条判据会错。`tools` 字段不写：文档说"
+      + "默认就是全选（`\"*\"`）",
   },
 
   kiro: {
@@ -300,19 +319,41 @@ export const ASH_MCP_TABLE = {
       + "所以这一条是「新版按文档支持、老版完全不支持」,别只看文件在不在就当它通了",
   },
 
-  // ── 有 MCP、但 ash 不替你写的一家 ───────────────────────────────────────
+  // ── 原生格式我们写不了、但它另认标准 JSON 的一家 ─────────────────────────
 
   trae: {
-    kind: "manual",
-    howTo: "全局登记在 `trae_cli.yaml`（`traecli config edit` 打开），按 stdio 加一条："
-      + "`name: ash` / `type: stdio` / `command: node` / `args: [<仓库>/mcp/dist/index.js]` / "
-      + "`env: { ASH_URL: … }`；回合身份由 ash 起跑时注入，不要写进配置文件",
+    kind: "file",
+    shape: mcpServersJsonShape,
+    // **不写它的原生 YAML**(`~/.trae/traecli.yaml`,`mcp_servers` 是对象数组、env 是
+    // `{key,value}` 列表),本仓没有保得住注释与缩进的 YAML 写入器。走它另外支持的那条:
+    // 「标准 MCP 配置文件格式,`mcpServers` 作顶层键,扫描 `mcp.json`/`.mcp.json`/
+    // `mcp.yaml`/`.mcp.yaml`,位置含用户级 YAML 配置所在目录(通常是 `~/.trae/`)」。
+    site: {
+      dirEnv: null,
+      defaultDir: underHome(".trae"),
+      relative: ["mcp.json"],
+      alternates: [[".mcp.json"]],
+      // 同目录那三份它也读、而 JSON 族读不了(见 `AshMcpConfigSite.opaque`)。
+      opaque: [["traecli.yaml"], ["mcp.yaml"], [".mcp.yaml"]],
+      projectRelative: [
+        [".trae", "traecli.yaml"], [".trae", "mcp.json"], [".trae", ".mcp.json"],
+        [".coco", "coco.yaml"], [".agents", "coco.yaml"],
+      ],
+    },
+    identity: "unknown",
     evidence: "docs",
-    source: "docs.trae.cn 的 TRAE CLI「模型上下文协议（MCP）」章节（2026-10-31 经检索摘要核对，"
-      + "直连该页当天 404）：全局配置是 YAML 的 `trae_cli.yaml`，stdio 字段 name/type/command/args/env/timeout",
-    notes: "**未实测**（本机没装）。不自动写有两个原因：① 全局配置是 YAML，本仓没有能保住注释与"
-      + "缩进的写入器，拿 JSON 那套硬写会毁掉用户整份配置；② 它另认项目里的 `.trae/mcp.json`"
-      + "（`mcpServers` 形状），但那是用户仓库里的文件，会被提交进去，ash 不碰",
+    writeType: "stdio",
+    caveat: "trae 的落点按它自己发布的二进制里那份内置文档核对（`~/.trae/mcp.json`），"
+      + "但本机没装 traecli（官方限企业版旗舰套餐），一次都没实跑过 —— 这条登记写了也可能不生效",
+    source: "读官方发布包 `trae-cli_0.121.3_darwin_arm64.tar.gz`（`trae.cn/trae-cli/install.sh` 里的"
+      + "下载地址）里内置的 MCP 文档原文：用户级原生配置 `~/.trae/traecli.yaml` 用 `mcp_servers`；"
+      + "「TraeCLI 也支持标准的 MCP 配置文件格式，使用 `mcpServers` 作为顶层键。扫描以下文件名："
+      + "`mcp.json`、`.mcp.json`、`mcp.yaml`、`.mcp.yaml`。扫描位置包括…用户级 YAML 配置所在目录"
+      + "（通常是 `~/.trae/`）」；示例里 stdio 条目写 `\"type\": \"stdio\"`、`env` 是键值映射",
+    notes: "**未实测**（本机没装）。两种格式的 `env` 写法不同（原生 YAML 是 `{key,value}` 对象数组，"
+      + "`mcp.json` 是键值映射），所以只写后者。另有 `traecli mcp add-json <名> <json>` 子命令，"
+      + "没用它：它写哪一份（项目级还是用户级）文档没说，而我们要的是用户级那一份；"
+      + "它的 `${workspaceFolder}` 变量插值不包括环境变量，回合身份仍然只能靠继承",
   },
 } satisfies AshMcpTable;
 

@@ -110,22 +110,37 @@ ASH_URL = "http://localhost:4317"
 
 验证:`claude mcp list` 应该看到 `ash: … ✔ Connected`。
 
-### 其它 CLI(gemini / grok / kimi / opencode / cursor / qwen / qoder / copilot / kiro / kilo / antigravity / pi)
+### 其它 CLI(gemini / grok / kimi / opencode / cursor / qwen / qoder / copilot / kiro / kilo / antigravity / pi / trae)
 
 `npm run setup` 会给**这台机器上真装了**的每一家都写一条 ash 登记,落点和格式各不相同
 (逐家一张表在 `server/src/executors/catalog/README.md` 的「ash MCP 登记矩阵」,表本体是代码:
 `server/src/mcp-registry/catalog.ts`)。规矩一样:
 
 - **只在缺 ash 条目时追加**,其它条目(含你自己装的第三方 MCP)一个字节都不动;
-- 已有 `ash` 或历史名 `harness` 一律不覆盖,关着的不替你打开;
+- 已有 `ash` 或历史名 `harness` 一律不覆盖,关着的不替你打开,那个键的值我们认不出来时也不动;
 - 配置里有注释的那种(`opencode.jsonc` 一类)**不自动改写**(序列化会把注释丢掉),会提示你自己加;
-- 改写已有文件前生成 `.bak-ash-setup` 备份。
+- 改写已有文件前生成 `.bak-ash-setup` 备份,而且**写盘那一步是个事务**:提交前先确认盘上还是
+  刚读到的那一版(免得盖掉你同时存的改动),写出异常就把原文原样放回去,写完再读回来比对 ——
+  所以中途失败不会把你的配置留成半截;
+- TOML 那一族(grok)**认得出你已经装过的第三方 MCP**,会接在它后面;只有判不准那份配置的写法时
+  才一个字都不写(TOML 里重复一张同名表会让 CLI 整份配置都读不出来)。
 
-装完某家 CLI 之后重新跑一次 `npm run setup` 就会补上。**trae 要手工接**:它的全局配置是 YAML
-(`traecli config edit` 打开 `trae_cli.yaml`),本仓没有能保住注释与缩进的 YAML 写入器。
+装完某家 CLI 之后重新跑一次 `npm run setup` 就会补上。两处例外值得单说:
+
+- **trae**:它的原生配置是 YAML(`traecli config edit` 打开 `~/.trae/traecli.yaml`),本仓没有能保住
+  注释与缩进的 YAML 写入器 —— 但它同样扫描标准的 `mcpServers` JSON,所以 ash 写的是
+  `~/.trae/mcp.json`。**如果那个目录里已经有 `traecli.yaml` / `mcp.yaml` / `.mcp.yaml`,ash 一个字
+  都不写也不下结论**(你可能已经把 ash 写在那里面了,而两份配置里各有一条同名登记、谁生效没有
+  文档依据):那种情况请按原生格式自己加一条。
+- **copilot**:登记能写,但它的 MCP 子进程**只自动继承 `PATH`**(官方文档明写其余环境变量必须配在
+  那条登记的 `env` 里),而 ash 的回合身份一轮一个值、写死就是过期的假身份 —— 所以用 copilot 跑的
+  任务**大概率交不了卷**。预检每轮都会把这句说出来。要让它能交卷,得在两条里挑一条:给 copilot 单独
+  开配置目录(`COPILOT_HOME` / `--config-dir`,代价是丢掉宿主那份 copilot 登录态),或者需要交卷的
+  任务换别的执行器。
 
 接没接上不用自己猜:起跑前的预检会在任务时间线上说一句(确实没有 MCP 机制的直接拒掉派审,
-只按文档核对过、没在真机实测的那几家会明说这一点),ash 启动时也会把缺口逐家列在日志里。
+只按文档核对过、没在真机实测的那几家会明说这一点,已知「写了也交不了卷」的会把原因说出来),
+ash 启动时也会把缺口逐家列在日志里。
 
 ### Kimi Code
 

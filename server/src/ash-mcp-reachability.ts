@@ -76,8 +76,8 @@ import { cliSpec } from "./executors/catalog/index.js";
 import { codexAshMcpServerName } from "./executors/codex-mcp.js";
 import { effectiveExecutorContext } from "./executors/index.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
-import { ashMcpConfigDir, ashMcpMechanism } from "./mcp-registry/catalog.js";
-import { ashMcpConfigFile, ashMcpUnsupported } from "./mcp-registry/register.js";
+import { ashMcpMechanism } from "./mcp-registry/catalog.js";
+import { ashMcpHostFile, ashMcpUnsupported } from "./mcp-registry/register.js";
 
 /** 探测是只读子命令（claude 实测 ~0.8s、codex ~0.01s）；超时一律按「问不出来」放行。 */
 const PROBE_TIMEOUT_MS = 15_000;
@@ -139,10 +139,10 @@ const HOW_TO_CHECK: Record<string, string> = {
 function howToCheck(agentType: string, env: NodeJS.ProcessEnv): string {
   const known = HOW_TO_CHECK[agentType];
   if (known) return known;
-  const mechanism = ashMcpMechanism(agentType);
-  if (mechanism?.kind !== "file") return `看一眼 ${agentType} 自己的 MCP 配置`;
-  const dir = ashMcpConfigDir(agentType, env, homedir());
-  return dir ? `看一眼 ${ashMcpConfigFile(dir, mechanism.site)}` : `看一眼 ${agentType} 自己的 MCP 配置`;
+  // 跟写入侧同一个解析口(本轮审查 R4:上一版在这里按默认文件名重拼，于是自定义配置文件的
+  // 用户拿到的自查路径指向另一份文件)。
+  const file = ashMcpHostFile(agentType, env);
+  return file ? `看一眼 ${file}` : `看一眼 ${agentType} 自己的 MCP 配置`;
 }
 
 const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
@@ -476,7 +476,9 @@ function fromFiles(
   dirs: (string | undefined)[],
   whyNotAsked: string,
 ): AshMcpReach {
-  if (extraArgs.length) return ok();
+  // 放行的那几档也要带上「这家只按文档核对过」那一句(本轮审查不拦项 1):放不放行是一回事,
+  // 把已知的未实测/版本坑一起吞掉是另一回事 —— 任务交不了卷时用户要看的就是这句。
+  if (extraArgs.length) return ok(docsOnlyCaveat(agentType));
   const v = fileAshMcpVerdict(agentType, env, dirs);
   if (v.state === "present") return ok(joinHints(v.hint, docsOnlyCaveat(agentType)));
   if (v.state === "unknown") {
@@ -486,7 +488,7 @@ function fromFiles(
       return ok(`看不准这一轮有没有 ash MCP（${v.why}）；另外 ${codexUserConfig(env)} 里没有 ash 登记，`
         + `ash 往 MCP 注入回合身份只认那一份 —— 若登记只在项目配置里，这一轮跑完上报会被拒`);
     }
-    return ok();
+    return ok(docsOnlyCaveat(agentType));
   }
   const basis = `（这是读配置文件得出的，没经 ${agentType} 本人确认 —— 这一次问不了它：${whyNotAsked}）`;
   return {

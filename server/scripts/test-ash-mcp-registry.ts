@@ -20,8 +20,11 @@ import { AGENT_TYPES, type AgentType } from "@ash/shared";
 import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { ensureAshMcp } from "../src/auth/user-cli-mcp.js";
 import { cliSpec } from "../src/executors/catalog/index.js";
+import { fileAshMcpVerdict } from "../src/ash-mcp-file.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir, canRegisterAshMcp } from "../src/mcp-registry/catalog.js";
-import { ashMcpConfigFile, ashMcpStateIn, ashMcpUnsupported, registerAshMcp } from "../src/mcp-registry/register.js";
+import {
+  ashMcpConfigFile, ashMcpHostFile, ashMcpStateIn, ashMcpUnsupported, registerAshMcp,
+} from "../src/mcp-registry/register.js";
 import { REPO_DIR } from "../src/paths.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-mcp-registry-"));
@@ -70,6 +73,9 @@ const hostToml = (host: string, agentType: AgentType, extra = ""): string => {
   return file;
 };
 
+/** 一条启用着的 ash 登记(TOML 族)。根级开关的用例要在它**前面**插自己那一行。 */
+const TOML_ASH = '[mcp_servers.ash]\ncommand = "node"\nargs = ["/x.js"]\n';
+
 const register = (agentType: string, dir: string, host: string) =>
   registerAshMcp({ agentType, dir, hostHome: host, env: {} });
 
@@ -96,6 +102,11 @@ try {
         assert.ok(["mcp-servers-json", "opencode-json", "mcp-servers-toml"].includes(mechanism.shape.id));
       }
       if (mechanism.kind === "manual") assert.ok(mechanism.howTo.trim(), `${type}:manual 必须给 howTo`);
+      // 「登记写对了也交不了卷」这一档必须当场说给用户听(预检会把 caveat 显示出来)。
+      if (mechanism.kind === "file" && mechanism.identity === "blocked") {
+        assert.ok(mechanism.caveat?.trim(), `${type}:identity=blocked 必须配 caveat`);
+        assert.ok(mechanism.identityNote?.trim(), `${type}:identity=blocked 必须说清是哪一条机制挡的`);
+      }
     }
     // 真机实测过的那几家别悄悄退档成 docs(退了要在提交信息里说清为什么)。
     const tested = AGENT_TYPES.filter((t) => ASH_MCP_TABLE[t].evidence === "tested");
@@ -138,15 +149,34 @@ try {
     assert.match(toml, /\[mcp_servers\.ash\.tools\.get_task\]/, "TOML:子表不许丢");
     assert.equal(ashMcpStateIn(k.dir, "grok", {}).state, "present");
 
-    // `type: "stdio"` 只给要它的那几家写(cursor 文档说必填)。
-    const c = bench("cursor");
+    // 搬宿主那条是**原值照搬**,所以不会凭空多出一个 type(本轮审查 R5)。
+    const c = bench("cursor-host");
     hostJson(c.host, "cursor");
     assert.ok((await register("cursor", c.dir, c.host)).ok);
     const cur = JSON.parse(readFileSync(join(c.dir, "mcp.json"), "utf8")) as
       { mcpServers: Record<string, Record<string, unknown>> };
-    assert.equal(cur.mcpServers.ash!.type, "stdio", "cursor:type 必填");
+    assert.equal(cur.mcpServers.ash!.type, undefined, "搬宿主那条:原值照搬,不加字段");
     assert.equal(doc.mcpServers.ash!.type, undefined, "gemini:没人要求就不塞 type");
-    group("三个格式族 + 子层目录 + type/子表都写对");
+    group("三个格式族 + 子层目录 + 子表/原值都写对");
+  }
+
+  // ── ②' 宿主没登记时自己渲染那条:`type` 按表里的字面值写 ───────────────────
+  {
+    // 没得可搬才走 `builtinEntry()`,它要求仓库里 build 过 MCP 产物。
+    if (existsSync(ENTRY)) {
+      for (const [type, expect] of [["cursor", "stdio"], ["copilot", "local"], ["kimi", undefined]] as const) {
+        const b = bench(`type-${type}`);
+        assert.ok((await register(type, b.dir, b.host)).ok, `${type}:该写进去`);
+        const doc = JSON.parse(readFileSync(fileIn(type as AgentType, b.dir), "utf8")) as
+          { mcpServers: Record<string, Record<string, unknown>> };
+        // copilot 的本地服务在文件里叫 `local`、cursor 叫 `stdio` —— 值不许互相套用。
+        assert.equal(doc.mcpServers.ash!.type, expect, `${type}:type 得是 ${expect ?? "不写"}`);
+        assert.deepEqual(doc.mcpServers.ash!.args, [ENTRY], `${type}:登记的是本仓那个入口`);
+      }
+      group("自己现渲染那条:type 按各家文档的字面值写");
+    } else {
+      group("(跳过)没 build 过 mcp/dist/index.js，自己渲染那条测不了");
+    }
   }
 
   // ── ③ 幂等:第二遍一个字节都不动 ──────────────────────────────────────────
@@ -210,14 +240,49 @@ try {
     assert.equal(ashMcpStateIn(b.dir, "copilot", {}).state, "disabled");
 
     // grok 的两种关法都要认出来,而且说清是哪一种(用户照着去改的就是那一行)。
-    for (const [extra, expect] of [["enabled = false\n", /enabled = false/], ['\ndisabled_mcp_servers = ["ash"]\n', /disabled_mcp_servers/]] as const) {
+    // 根级那个开关**必须写在所有表头之前** —— TOML 里写在表头之后就属于那张表,不是根级事实。
+    for (const [body, expect] of [
+      [`${TOML_ASH}enabled = false\n`, /enabled = false/],
+      [`disabled_mcp_servers = ["ash"]\n\n${TOML_ASH}`, /disabled_mcp_servers/],
+      // 多行写法也要读得出来(上一版那条单行正则漏读它 ⇒ 当成「开着」)。
+      [`disabled_mcp_servers = [\n  "ash",\n]\n\n${TOML_ASH}`, /disabled_mcp_servers/],
+    ] as const) {
       const g = bench("disabled-toml");
-      const gf = join(g.dir, "config.toml");
-      writeFileSync(gf, `[mcp_servers.ash]\ncommand = "node"\nargs = ["/x.js"]\n${extra}`, "utf8");
+      writeFileSync(join(g.dir, "config.toml"), body, "utf8");
       const gr = await register("grok", g.dir, g.host);
       assert.ok(!gr.ok && expect.test(gr.why), `TOML 关法要说清:${gr.ok ? "" : gr.why}`);
     }
     group("关着的登记:不打开、说清哪一行");
+  }
+
+  // ── ⑤' 根级开关的作用域(本轮审查 R7)──────────────────────────────────────
+  {
+    // 判据必须认得表作用域和多行字符串:上一版拿全文正则扫,下面这两份都会把一条**启用着**的
+    // ash 判成「已关闭」,而 disabled 在派审预检里是硬拒。
+    const multiline = [
+      `${TOML_ASH}`,
+      '[mcp_servers.other]',
+      'command = "x"',
+      '',
+      '[mcp_servers.other.env]',
+      'NOTE = """',
+      'disabled_mcp_servers = ["ash"]',
+      '"""',
+      '',
+    ].join("\n");
+    const fakes = [
+      // ① 别人的 env 里有个三引号多行字符串,里面恰好有这么一行
+      multiline,
+      // ② 同一行写在表头**之后** ⇒ 它是那张表的字段,不是根级开关
+      `${TOML_ASH}disabled_mcp_servers = ["ash"]\n`,
+    ];
+    for (const body of fakes) {
+      const g = bench("root-scope");
+      writeFileSync(join(g.dir, "config.toml"), body, "utf8");
+      const state = ashMcpStateIn(g.dir, "grok", {});
+      assert.equal(state.state, "present", `不许把文本当成根级事实:${state.detail}`);
+    }
+    group("TOML 根级开关:只认根级、不认字符串里的同名行");
   }
 
   // ── ⑥ 有注释的 JSON 不自动改写 ─────────────────────────────────────────
@@ -262,77 +327,169 @@ try {
     group("隔离档起跑补齐:十三家也走同一条路");
   }
 
-  // ── ⑨ 不支持的那两档:拦/提示分得开 ────────────────────────────────────
+  // ── ⑨ 能力分档:现在十五家全都能自动写,两档措辞仍要分得开 ─────────────────
   {
-    const b = bench("trae");
-    const r = await register("trae", b.dir, b.host);
-    assert.ok(!r.ok && /不自动写/.test(r.why) && /trae_cli\.yaml/.test(r.why), `manual 要给办法:${r.ok ? "" : r.why}`);
     assert.deepEqual(
-      [...new Set(AGENT_TYPES.filter((t) => !canRegisterAshMcp(t)))],
-      ["trae"],
-      "现在只有 trae 不自动写;再多一家要在这里登记并说明",
+      AGENT_TYPES.filter((t) => !canRegisterAshMcp(t)),
+      [],
+      "十五家都该能自动登记 ash MCP(新增一家不能写的,要在这里登记并说明为什么)",
     );
-    // 两档的措辞只有一份,所以拿合成的机制驱动它(表里暂时没有 none 这一档)。
+    // 所以两档措辞只能拿合成的机制驱动(表里暂时没有 none / manual 这两档)。
     const none = ashMcpUnsupported("fakecli", {
       kind: "none", why: "它压根没有 MCP", evidence: "tested", source: "实测",
     });
     assert.equal(none?.tier, "refuse");
     assert.match(none!.why, /上报不了结论/);
-    const manual = ashMcpUnsupported("trae", ASH_MCP_TABLE.trae);
+    const manual = ashMcpUnsupported("fakecli", {
+      kind: "manual", howTo: "自己往 x.yaml 里加一条", evidence: "docs", source: "文档",
+    });
     assert.equal(manual?.tier, "hint", "有 MCP、只是我们不写 ⇒ 不许拦");
     assert.equal(ashMcpUnsupported("gemini", ASH_MCP_TABLE.gemini), null, "能写的归常规判据管");
-    group("none 拦得住、manual 只提示");
+    group("能力分档:十五家全能写,none 拦得住、manual 只提示");
   }
 
-  // ── ⑩ 两份实现不许漂(TS 表 ↔ 裸 Node 那份)────────────────────────────
+  // ── ⑨' trae:写标准 JSON;同目录有它那份 YAML 时一个字都不写 ────────────────
   {
-    const hosts = await import(pathToFileURL(join(REPO_DIR, "scripts", "mcp-hosts.mjs")).href) as {
-      HOST_SITES: Record<string, {
-        bins: string[]; dirEnv: string | null; dirEnvIsFile?: boolean;
-        relative: string[]; alternates?: string[][]; shape: string; type?: boolean; enabled?: boolean;
-        dir: (env: NodeJS.ProcessEnv, home: string) => string;
-      }>;
-      hostMcpFile: (agentType: string, opts: { env: NodeJS.ProcessEnv; home: string }) => string | null;
-    };
-    const SHAPE_ID: Record<string, string> = {
-      mcpServers: "mcp-servers-json", opencode: "opencode-json", toml: "mcp-servers-toml",
-    };
-    // claude 走它自己的 `mcp add`,codex 走 codex-mcp.mjs(发布前要 codex 本人点头),
-    // trae 不自动写 —— 其余每一家都必须在裸 Node 那份表里有落点。
-    const expected = AGENT_TYPES.filter((t) => canRegisterAshMcp(t) && t !== "claude" && t !== "codex");
-    assert.deepEqual(Object.keys(hosts.HOST_SITES).sort(), [...expected].sort(), "两边覆盖的家数要一致");
-    for (const [type, site] of Object.entries(hosts.HOST_SITES)) {
-      const mechanism = ASH_MCP_TABLE[type as AgentType];
-      assert.equal(mechanism.kind, "file", `${type}:裸 Node 那份只该有能自动写的`);
-      if (mechanism.kind !== "file") continue;
-      assert.equal(SHAPE_ID[site.shape], mechanism.shape.id, `${type}:格式族要对上`);
-      assert.equal(site.dirEnv, mechanism.site.dirEnv, `${type}:配置目录变量要对上`);
-      assert.equal(!!site.dirEnvIsFile, !!mechanism.site.dirEnvIsFile, `${type}:变量指文件还是目录要对上`);
-      assert.deepEqual(site.relative, [...mechanism.site.relative], `${type}:文件位置要对上`);
-      assert.deepEqual(
-        (site.alternates ?? []).map((a) => [...a]),
-        (mechanism.site.alternates ?? []).map((a) => [...a]),
-        `${type}:备选文件名要对上`,
-      );
-      assert.equal(!!site.type, !!mechanism.writeType, `${type}:要不要写 type 得一致`);
-      assert.equal(!!site.enabled, !!mechanism.writeEnabled, `${type}:要不要写 enabled 得一致`);
-      // 默认目录也要算出同一个路径(QODER_CONFIG_DIR_NAME / XDG 这些分支都在里面)。
-      for (const env of [{}, { XDG_CONFIG_HOME: "/xdg" }, { QODER_CONFIG_DIR_NAME: ".qq" }] as NodeJS.ProcessEnv[]) {
-        assert.equal(
-          hosts.hostMcpFile(type, { env, home: "/h" }),
-          ashMcpConfigFile(ashMcpConfigDir(type, env, "/h")!, mechanism.site),
-          `${type}:默认路径要算出同一个(env=${JSON.stringify(env)})`,
-        );
-      }
-      // 命令名也不许漂:裸 Node 那边靠它判「这台机器装没装」。
-      for (const bin of site.bins) {
-        assert.ok(cliSpec(type as AgentType).bins.includes(bin), `${type}:${bin} 不在执行器目录的 bins 里`);
-      }
-    }
-    group("TS 表与裸 Node 那份逐项对齐");
+    const b = bench("trae");
+    hostJson(b.host, "trae");
+    assert.ok((await register("trae", b.dir, b.host)).ok, "trae:该写进 ~/.trae/mcp.json");
+    assert.equal(join(b.dir, "mcp.json"), fileIn("trae", b.dir));
+    assert.equal(ashMcpStateIn(b.dir, "trae", {}).state, "present");
+
+    // 它的原生 YAML 我们读不了 —— 存在就不许写,也不许据此说「没有」。
+    const y = bench("trae-yaml");
+    hostJson(y.host, "trae");
+    writeFileSync(join(y.dir, "traecli.yaml"), "mcp_servers:\n  - name: ash\n    type: stdio\n", "utf8");
+    const r = await register("trae", y.dir, y.host);
+    assert.ok(!r.ok && /traecli\.yaml/.test(r.why), `有那份 YAML 就不写:${r.ok ? "" : r.why}`);
+    assert.ok(!existsSync(join(y.dir, "mcp.json")), "也不许另建一份 mcp.json");
+    assert.equal(ashMcpStateIn(y.dir, "trae", {}).state, "unknown", "读不了它的格式 ⇒ 不下结论");
+    group("trae:写标准 JSON、撞上原生 YAML 就不写也不下结论");
   }
 
-  // ── ⑪ 宿主那份配置全程不许被碰 ──────────────────────────────────────────
+  // ── ⑩ 搬宿主那条:**原值照搬**,远程/额外字段都不许丢(本轮审查 R5)──────────
+  {
+    // 上一版把宿主那条投影成 `{command,args,env}`:远程登记变成「连本机 4317 的 stdio」、
+    // `cwd`/`timeout` 静默消失,而函数照样报「已接好」—— 这是审查在沙盘里实测到的。
+    const http = bench("host-http");
+    const headers = { Authorization: "Bearer abc" };
+    hostJson(http.host, "claude", { type: "http", url: "https://ash.example.com/mcp", headers });
+    assert.ok((await register("claude", http.dir, http.host)).ok);
+    const moved = (JSON.parse(readFileSync(fileIn("claude", http.dir), "utf8")) as
+      { mcpServers: Record<string, Record<string, unknown>> }).mcpServers.ash!;
+    assert.deepEqual(moved, { type: "http", url: "https://ash.example.com/mcp", headers },
+      "远程那条要原样搬过去(不许退回内置 stdio)");
+
+    const extra = bench("host-extra");
+    hostJson(extra.host, "claude", {
+      type: "stdio", command: "./node", args: ["entry.js"], env: { ASH_URL: "http://127.0.0.1:4317" },
+      cwd: "/host/repo", timeout: 30_000,
+    });
+    assert.ok((await register("claude", extra.dir, extra.host)).ok);
+    const kept = (JSON.parse(readFileSync(fileIn("claude", extra.dir), "utf8")) as
+      { mcpServers: Record<string, Record<string, unknown>> }).mcpServers.ash!;
+    assert.equal(kept.cwd, "/host/repo", "cwd 不许丢");
+    assert.equal(kept.timeout, 30_000, "timeout 不许丢");
+
+    // 宿主那条是**关着**的:不搬(搬过去等于把「已关闭」一起搬到个人档)。
+    const off = bench("host-off");
+    hostJson(off.host, "kimi", { command: "node", args: ["/host/x.js"], disabled: true });
+    const r = await register("kimi", off.dir, off.host);
+    if (existsSync(ENTRY)) {
+      assert.ok(r.ok, r.ok ? "" : r.why);
+      const built = (JSON.parse(readFileSync(fileIn("kimi", off.dir), "utf8")) as
+        { mcpServers: Record<string, Record<string, unknown>> }).mcpServers.ash!;
+      assert.equal(built.disabled, undefined, "关着的那条不许搬过来");
+      assert.deepEqual(built.args, [ENTRY], "改用本仓那个入口");
+    } else {
+      assert.ok(!r.ok, "没 build 过产物、宿主那条又关着 ⇒ 如实说没得可搬");
+    }
+    group("搬宿主那条:原值照搬、关着的不搬");
+  }
+
+  // ── ⑪ 两个兼容名同时在:先认开着的那条(本轮审查 R8)────────────────────────
+  {
+    const b = bench("live-legacy");
+    const file = fileIn("antigravity", b.dir);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify({
+      mcpServers: {
+        ash: { command: "node", args: ["/old.js"], disabled: true },
+        harness: { command: "node", args: ["/live.js"] },
+      },
+    }, null, 2)}\n`, "utf8");
+    const state = ashMcpStateIn(b.dir, "antigravity", {});
+    assert.equal(state.state, "present", `有一个开着就是接好了:${state.detail}`);
+    assert.equal(state.serverName, "harness", "报的是实际开着的那个名字");
+    const r = await register("antigravity", b.dir, b.host);
+    assert.ok(r.ok && r.serverName === "harness", "补接也认它,别去打开那条关着的");
+
+    // 两个都关着 ⇒ 才是 disabled,而且两个名字都要说出来。
+    const both = bench("both-off");
+    const bf = fileIn("antigravity", both.dir);
+    mkdirSync(dirname(bf), { recursive: true });
+    writeFileSync(bf, `${JSON.stringify({
+      mcpServers: { ash: { command: "a", disabled: true }, harness: { command: "b", enabled: false } },
+    }, null, 2)}\n`, "utf8");
+    const offState = ashMcpStateIn(both.dir, "antigravity", {});
+    assert.equal(offState.state, "disabled");
+    assert.match(offState.detail, /ash \/ harness/, "两个名字都要说出来");
+    group("兼容名:有一个开着就算接好,都关着才说关着");
+  }
+
+  // ── ⑫ 值不是对象:说认不出来,别覆盖(本轮审查不拦项 2)─────────────────────
+  {
+    for (const value of [null, "node /x.js", 42] as const) {
+      const b = bench("weird-value");
+      const file = fileIn("pi", b.dir);
+      mkdirSync(dirname(file), { recursive: true });
+      const mine = `${JSON.stringify({ mcpServers: { ash: value } }, null, 2)}\n`;
+      writeFileSync(file, mine, "utf8");
+      const state = ashMcpStateIn(b.dir, "pi", {});
+      assert.equal(state.state, "unknown", `${JSON.stringify(value)}:认不出来就说认不出来`);
+      const r = await register("pi", b.dir, b.host);
+      assert.ok(!r.ok, "认不出来就不写");
+      assert.equal(readFileSync(file, "utf8"), mine, "一个字节都不许动");
+    }
+    group("ash 那个键的值认不出来:不下结论、不覆盖");
+  }
+
+  // ── ⑬ 覆盖变量的层级契约(本轮审查 R3)+ 指到文件的那几家(R4)───────────────
+  {
+    // 这张表是**跟各家 CLI 的契约**,两份实现「互相一致」证明不了它 —— qwen 那条就是这么
+    // 错的(QWEN_HOME 已经是最终配置目录,上一版又在它底下接了一层 `.qwen`)。
+    const contract: Partial<Record<AgentType, string>> = {
+      claude: "/profile/.claude.json",
+      codex: "/profile/config.toml",
+      gemini: "/profile/.gemini/settings.json",       // GEMINI_CLI_HOME 是 home 基准(实测)
+      grok: "/profile/config.toml",
+      kimi: "/profile/mcp.json",
+      qwen: "/profile/settings.json",                 // QWEN_HOME 是最终配置目录
+      copilot: "/profile/mcp-config.json",
+      pi: "/profile/mcp.json",
+    };
+    for (const [type, expect] of Object.entries(contract) as [AgentType, string][]) {
+      const mechanism = ASH_MCP_TABLE[type];
+      assert.equal(mechanism.kind, "file");
+      if (mechanism.kind !== "file") continue;
+      const env = { [mechanism.site.dirEnv!]: "/profile" } as NodeJS.ProcessEnv;
+      assert.equal(ashMcpHostFile(type, env, "/h"), expect, `${type}:覆盖变量指到的那一层`);
+    }
+    // `dirEnvIsFile` 的那两家:**写、判、提示必须是同一个路径**(上一版三处消费者各自把
+    // 文件名丢掉再按默认名拼回来,于是真 CLI 连得上、派审却报没接好)。
+    const b = bench("config-is-file");
+    const custom = join(b.dir, "my-profile.json");
+    const env = { OPENCODE_CONFIG: custom } as NodeJS.ProcessEnv;
+    assert.equal(ashMcpHostFile("opencode", env, b.host), custom, "解析口认那个文件名");
+    hostJson(b.host, "opencode");
+    const r = await registerAshMcp({ agentType: "opencode", dir: ashMcpConfigDir("opencode", env, b.host)!, hostHome: b.host, env });
+    assert.ok(r.ok, r.ok ? "" : r.why);
+    assert.ok(existsSync(custom), "写的就是那个文件");
+    assert.equal(fileAshMcpVerdict("opencode", env, [undefined]).state, "present", "判的也是那个文件");
+    group("覆盖变量的层级契约 + 指到文件的那几家只有一个解析口");
+  }
+
+  // ── ⑭ 宿主那份配置全程不许被碰 ──────────────────────────────────────────
   {
     const b = bench("host-untouched");
     const file = hostJson(b.host, "antigravity");
@@ -342,7 +499,7 @@ try {
     group("宿主配置只读不写");
   }
 
-  // ── ⑫ README 那张给人读的矩阵不许和代码漂 ────────────────────────────────
+  // ── ⑮ README 那张给人读的矩阵不许和代码漂 ────────────────────────────────
   {
     const readme = readFileSync(join(REPO_DIR, "server", "src", "executors", "catalog", "README.md"), "utf8");
     const rows = readme.split("\n")
