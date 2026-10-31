@@ -12,10 +12,14 @@ import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp
 import { extractTomlTables, scanCodexToml, tomlRootStringArray } from "../codex-toml.js";
 import { readJsonLoose, spliceJsonMember } from "./json-edit.js";
 import type {
-  AshMcpCompose, AshMcpComposeOpts, AshMcpConfigState, AshMcpEntry, AshMcpLaunch, AshMcpShape,
+  AshMcpCompose, AshMcpComposeOpts, AshMcpConfigState, AshMcpEntry, AshMcpLaunch, AshMcpNameFact,
+  AshMcpNameScan, AshMcpShape,
 } from "./types.js";
 
-const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
+/** 认的那两个服务名(`ash` 和历史名 `harness`)—— **两条独立登记**,顺序就是优先。 */
+export const ASH_MCP_NAMES = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
+
+const WANTED = ASH_MCP_NAMES;
 
 const present = (serverName: string): AshMcpConfigState => ({ state: "present", serverName, detail: "" });
 const absent = (detail: string): AshMcpConfigState => ({ state: "absent", serverName: null, detail });
@@ -37,74 +41,111 @@ const asObject = (v: unknown): Record<string, unknown> | null =>
 const switchedOff = (entry: Record<string, unknown>): boolean =>
   entry.disabled === true || entry.enabled === false;
 
-/**
- * 在容器里找 ash(或历史名)那条登记。
- *
- * 两条判据都是本轮审查打出来的:
- *
- * ① **先找开着的那条,再汇总关着的**(R8)。两个兼容名是两条独立登记:`ash` 关着、
- *    `harness` 开着时,CLI 那边 ash MCP 是**能用**的 —— 上一版按 `WANTED` 的顺序取,
- *    取到关着的那条就当场返回 disabled,而 disabled 在预检里是硬拒。TOML 族一直是
- *    「先找 live」,JSON 这两族跟上。
- * ② **值不是对象一律 unknown**(N2)。`"ash": null`、`"ash": "node x.js"` 这种写法我们
- *    认不出来,上一版直接跳过当没有 —— 于是 compose 会把那个键覆盖掉,跟「已有登记一律
- *    不覆盖」自相矛盾。认不出来就说认不出来。
- */
-function pickEntry(container: unknown, file: string): AshMcpConfigState {
-  const servers = asObject(container);
-  if (container !== undefined && !servers) return unknown(`${file} 里的登记容器不是一个对象`);
-  const off: string[] = [];
-  for (const name of WANTED) {
-    const raw = servers ? servers[name] : undefined;
-    if (raw === undefined) continue;
-    const entry = asObject(raw);
-    if (!entry) return unknown(`${file} 里的 ${name} 这条登记不是一个对象（值是 ${typeof raw}）`);
-    if (!switchedOff(entry)) return present(name);
-    off.push(name);
-  }
-  if (off.length) {
-    return {
-      state: "disabled",
-      serverName: off[0]!,
-      detail: `${file} 里的 ${off.join(" / ")} ${off.length > 1 ? "这几条登记都" : "这条登记"}是关着的`,
-    };
-  }
-  return absent(`${file} 里没有 ash MCP 登记`);
-}
-
-/** 这个键能不能写(已有的一律不覆盖,含认不出来的值 —— 判据跟 `pickEntry` 同一份)。 */
+/** 这个键能不能写(已有的一律不覆盖,含**认不出来**的值 —— 见 `scanJson` 的 doubt 那一档)。 */
 function takenNames(container: unknown): string[] {
   const servers = asObject(container);
   return servers ? WANTED.filter((n) => Object.hasOwn(servers, n)) : [];
 }
 
+const doubtScan = (doubt: string): AshMcpNameScan => ({ doubt, names: new Map() });
+const noConfig = (): AshMcpNameScan => ({ missing: true, names: new Map() });
+
 /**
- * 容器里**活着**的那一条登记(关着的跳过)。
+ * 这一份配置里**选中**的那条登记 —— 整个格式族层**只有这一处**在做这个选择。
  *
- * 三个地方共用这一份判据:搬宿主那条(`hostRaw`)、报状态(`pickEntry`)、给诊断提示
- * (`launch`)。各写一遍的后果上一版就犯过:`launch` 按名字取**第一条**,于是
- * `harness` 关着、`ash` 开着时,提示里拿的是那条关着的 —— 用户照着提示去查一个
- * 根本没在跑的命令,而 `read` 明明已经放行了(本轮审查不拦项)。
+ * 两个兼容名是两条独立登记,所以**先找开着的那条**:`ash` 关着、`harness` 开着时 CLI 那边
+ * ash MCP 是能用的。本轮审查 F3 的病根就是各处自己选一遍:`hostBlock` 固定先挑 `ash`、
+ * `read` 挑开着的那条,于是搬过去的是那条关着的;更早一版 `launch` 按名字取第一条,提示里
+ * 给的是一个根本没在跑的命令,而 `read` 明明已经放行了。
  */
-function activeEntry(container: unknown): Record<string, unknown> | null {
-  const servers = asObject(container);
-  if (!servers) return null;
+export function pickFact(scan: AshMcpNameScan): { name: string; fact: AshMcpNameFact } | null {
   for (const name of WANTED) {
-    const entry = asObject(servers[name]);
-    if (entry && !switchedOff(entry)) return entry;
+    const fact = scan.names.get(name);
+    if (fact?.status === "on") return { name, fact };
   }
   return null;
 }
 
-/** 宿主那条**开着**的登记原值(关着的不搬,见 `AshMcpShape.hostRaw`)。 */
-const pickHostRaw = activeEntry;
+/**
+ * 一份扫描结果折叠成四态。`at` = 这份来源的名字(有就当前缀 —— 几份配置一起看时,用户得
+ * 知道说的是哪一份)。
+ *
+ * 顺序刻意是「开着的 > 认不出来 > 关着的 > 没有」:开着的那条一旦找到,另一个名字写成什么样
+ * 都不改变「ash MCP 能用」这个事实(认不出来的那条照样不许覆盖,那道闸在 `takenNames`)。
+ */
+export function foldScan(scan: AshMcpNameScan, at = ""): AshMcpConfigState {
+  const say = (d: string) => (at ? `${at}：${d}` : d);
+  if (scan.doubt) return unknown(say(scan.doubt));
+  const live = pickFact(scan);
+  if (live) return present(live.name);
+  const facts = [...scan.names];
+  const doubts = facts.filter(([, f]) => f.status === "doubt");
+  if (doubts.length) return unknown(say(doubts.map(([, f]) => f.detail).join("；")));
+  const off = facts.filter(([, f]) => f.status === "off");
+  if (off.length) {
+    return { state: "disabled", serverName: off[0]![0], detail: say(off.map(([, f]) => f.detail).join("、")) };
+  }
+  return absent(say(scan.missing ? "配置文件还不存在" : "没有 ash MCP 登记"));
+}
+
+/**
+ * 读那一侧的**全部**实现:四个动作都是 `scan` 折一下或投影一下。
+ *
+ * 为什么非得这样收(本轮审查 F3):`read`/`hostRaw`/`hostBlock`/`launch` 原先各自走一遍
+ * 「在容器里找 ash」,四处判据就有四种漂法。现在族里只实现 `scan`,「选中哪条」只有
+ * `pickFact` 一处。
+ */
+function readSide(
+  scan: (text: string | null) => AshMcpNameScan,
+): Pick<AshMcpShape, "scan" | "read" | "hostRaw" | "hostBlock" | "launch"> {
+  const pick = (text: string | null) => pickFact(scan(text));
+  return {
+    scan,
+    read: (text) => foldScan(scan(text)),
+    hostRaw: (text) => pick(text)?.fact.raw ?? null,
+    hostBlock: (text) => pick(text)?.fact.block ?? null,
+    launch: (text) => pick(text)?.fact.launch ?? null,
+  };
+}
+
+/**
+ * JSON 两族的逐名扫描。族间只差两件事,所以都做成参数:登记容器叫什么、启动方式怎么读
+ * (`env` + 字符串命令 vs `environment` + 整条 argv)。
+ *
+ * **值不是对象一律 doubt**:`"ash": null`、`"ash": "node x.js"` 这种写法我们认不出来,
+ * 当没有去写就会把用户那个键覆盖掉,跟「已有登记一律不覆盖」自相矛盾。
+ */
+function scanJson(
+  container: string,
+  text: string | null,
+  launchOf: (entry: Record<string, unknown>) => AshMcpLaunch,
+): AshMcpNameScan {
+  const doc = parseDoc(text);
+  if (doc === undefined) return doubtScan("配置解析不了（它可能正被 CLI 写到一半，也可能被手工改坏了）");
+  if (doc === null) return noConfig();
+  const servers = asObject(doc[container]);
+  if (doc[container] !== undefined && !servers) return doubtScan("里的登记容器不是一个对象");
+  const names = new Map<string, AshMcpNameFact>();
+  for (const name of WANTED) {
+    const raw = servers ? servers[name] : undefined;
+    if (raw === undefined) continue;
+    const entry = asObject(raw);
+    if (!entry) {
+      names.set(name, { status: "doubt", detail: `${name} 这条登记不是一个对象（值是 ${typeof raw}）` });
+      continue;
+    }
+    names.set(name, switchedOff(entry)
+      ? { status: "off", detail: `${name} 这条登记是关着的`, raw: entry }
+      : { status: "on", detail: "", raw: entry, launch: launchOf(entry) });
+  }
+  return { names };
+}
 
 /**
  * 把一条登记按规范名写进容器 —— JSON 两族**只有这一处会改文档**。
  *
  * 规范名落地:宿主那份即使叫历史名 harness,搬过来也按 ash 登记(两边都叫 ash 之后,提示词
- * 里那句「ash MCP」才对得上工具名)。已有同名键一律不碰(含值认不出来的那种,见 `pickEntry`
- * 的 ②):调用方本该先 `read` 过,这里是第二道闸,因为「覆盖用户已有登记」是不可逆的。
+ * 里那句「ash MCP」才对得上工具名)。已有同名键一律不碰(含值认不出来的那种,见 `scanJson`):调用方本该先 `read` 过,这里是第二道闸,因为「覆盖用户已有登记」是不可逆的。
  */
 function putJson(
   shape: AshMcpShape,
@@ -137,36 +178,25 @@ function putJson(
 
 const CONTAINER = "mcpServers";
 
+/** 这一族的启动方式:`command` 是字符串、`args` 另给、环境变量的键叫 `env`。 */
+function mcpServersLaunch(entry: Record<string, unknown>): AshMcpLaunch {
+  const env = asObject(entry.env) ?? {};
+  return {
+    command: typeof entry.command === "string" ? entry.command : null,
+    args: entry.args,
+    ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
+  };
+}
+
 export const mcpServersJsonShape: AshMcpShape = {
   id: "mcp-servers-json",
-  read(text) {
-    const doc = parseDoc(text);
-    if (doc === undefined) return unknown("配置解析不了（它可能正被 CLI 写到一半，也可能被手工改坏了）");
-    if (doc === null) return absent("配置文件还不存在");
-    return pickEntry(doc[CONTAINER], "配置");
-  },
+  ...readSide((text) => scanJson(CONTAINER, text, mcpServersLaunch)),
   compose(text, entry, opts) {
     const value = opts?.type ? { type: opts.type, ...entry } : { ...entry };
     return putJson(mcpServersJsonShape, CONTAINER, text, value);
   },
   composeRaw(text, value) {
     return putJson(mcpServersJsonShape, CONTAINER, text, value);
-  },
-  hostRaw(text) {
-    const doc = parseDoc(text);
-    return doc ? pickHostRaw(doc[CONTAINER]) : null;
-  },
-  launch(text) {
-    const doc = parseDoc(text);
-    // 取**活着**那一条(见 `activeEntry`):关着的那条拿来当提示会把人引到一个没在跑的命令上。
-    const entry = doc ? activeEntry(doc[CONTAINER]) : null;
-    if (!entry) return null;
-    const env = asObject(entry.env) ?? {};
-    return {
-      command: typeof entry.command === "string" ? entry.command : null,
-      args: entry.args,
-      ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
-    };
   },
 };
 
@@ -186,35 +216,25 @@ const opencodeEntry = (entry: AshMcpEntry) => ({
   enabled: true,
 });
 
+/** 这一族的启动方式:`command` 是**整条 argv 的数组**、环境变量的键叫 `environment`。 */
+function opencodeLaunch(entry: Record<string, unknown>): AshMcpLaunch {
+  const argv = Array.isArray(entry.command) ? entry.command.map(String) : [];
+  const env = asObject(entry.environment) ?? {};
+  return {
+    command: argv[0] ?? null,
+    args: argv.slice(1),
+    ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
+  };
+}
+
 export const opencodeJsonShape: AshMcpShape = {
   id: "opencode-json",
-  read(text) {
-    const doc = parseDoc(text);
-    if (doc === undefined) return unknown("配置解析不了（它可能正被 CLI 写到一半，也可能被手工改坏了）");
-    if (doc === null) return absent("配置文件还不存在");
-    return pickEntry(doc[OPENCODE_CONTAINER], "配置");
-  },
+  ...readSide((text) => scanJson(OPENCODE_CONTAINER, text, opencodeLaunch)),
   compose(text, entry) {
     return putJson(opencodeJsonShape, OPENCODE_CONTAINER, text, opencodeEntry(entry));
   },
   composeRaw(text, value) {
     return putJson(opencodeJsonShape, OPENCODE_CONTAINER, text, value);
-  },
-  hostRaw(text) {
-    const doc = parseDoc(text);
-    return doc ? pickHostRaw(doc[OPENCODE_CONTAINER]) : null;
-  },
-  launch(text) {
-    const doc = parseDoc(text);
-    const entry = doc ? activeEntry(doc[OPENCODE_CONTAINER]) : null;
-    if (!entry) return null;
-    const argv = Array.isArray(entry.command) ? entry.command.map(String) : [];
-    const env = asObject(entry.environment) ?? {};
-    return {
-      command: argv[0] ?? null,
-      args: argv.slice(1),
-      ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
-    };
   },
 };
 
@@ -268,38 +288,47 @@ function appendToml(text: string | null, block: string): AshMcpCompose {
   return { body };
 }
 
+/**
+ * TOML 的逐名扫描。判据走 `codex-toml.ts` 的结构扫描器(它只认那两个兼容名),**两种关法
+ * 都看**:条目上的 `enabled = false` 和根级 `disabled_mcp_servers`。
+ *
+ * `block` 顺手在这里取好(表头改成规范名):搬宿主那条时整段原文照搬,连底下的子表一起 ——
+ * 上一版 `hostBlock` 自己又按名字固定先挑 `ash`,跟这里挑**开着**那条的判据不是一套
+ * (本轮审查 F3)。
+ */
+function scanToml(text: string | null): AshMcpNameScan {
+  if (text === null) return noConfig();
+  const found = scanCodexToml(text);
+  if (found.doubt) return doubtScan(found.doubt);
+  const names = new Map<string, AshMcpNameFact>();
+  for (const name of WANTED) {
+    const one = found.servers.get(name);
+    if (!one) continue;
+    const block = extractTomlTables(text, name, ASH_MCP_SERVER_NAME) ?? undefined;
+    if (one.enabled && !tomlRootDisabled(text, name)) {
+      names.set(name, { status: "on", detail: "", block, launch: one.spec });
+      continue;
+    }
+    // 关法有两种,说清是哪一种:用户要照着去改的就是那一行(只说「关着的」等于让他自己去翻)。
+    names.set(name, {
+      status: "off",
+      detail: one.enabled
+        ? `[mcp_servers.${name}] 被 disabled_mcp_servers 关掉了`
+        : `[mcp_servers.${name}] 写着 enabled = false`,
+      block,
+    });
+  }
+  return { names };
+}
+
 export const mcpServersTomlShape: AshMcpShape = {
   id: "mcp-servers-toml",
-  read(text) {
-    if (text === null) return absent("配置文件还不存在");
-    const scan = scanCodexToml(text);
-    if (scan.doubt) return unknown(scan.doubt);
-    const names = [...scan.servers.keys()];
-    if (!names.length) return absent("配置里没有 [mcp_servers.ash]");
-    const live = names.find((n) => scan.servers.get(n)!.enabled && !tomlRootDisabled(text, n));
-    if (live) return present(live);
-    // 关法有两种,说清是哪一种:用户要照着去改的就是那一行(只说「关着的」等于让他自己去翻)。
-    const off = names
-      .map((n) => scan.servers.get(n)!.enabled
-        ? `[mcp_servers.${n}] 被 disabled_mcp_servers 关掉了`
-        : `[mcp_servers.${n}] 写着 enabled = false`)
-      .join("、");
-    return { state: "disabled", serverName: names[0]!, detail: off };
-  },
+  ...readSide(scanToml),
   compose(text, entry, opts) {
     return appendToml(text, tomlBlock(entry, opts?.enabled === true));
   },
-  hostBlock: tomlHostBlock,
   blockFor: (entry, opts) => tomlBlock(entry, opts?.enabled === true),
   appendBlock: appendToml,
-  launch(text) {
-    if (text === null) return null;
-    const scan = scanCodexToml(text);
-    // 关法有两种,`read` 两种都看 —— 这里也必须两种都看(只看条目上那个 `enabled` 的话,
-    // 根级 `disabled_mcp_servers` 关掉的那条会被当成在跑的拿去当提示)。
-    const live = [...scan.servers.entries()].find(([name, s]) => s.enabled && !tomlRootDisabled(text, name));
-    return live ? live[1].spec : null;
-  },
 };
 
 /** 一条 ash 登记的 TOML 原文。路径一律走 `JSON.stringify` —— Windows 的 `\` 必须成对写。 */
@@ -317,12 +346,6 @@ export function tomlBlock(entry: AshMcpEntry, enabled: boolean): string {
     for (const [k, v] of env) lines.push(`${k} = ${JSON.stringify(v)}`);
   }
   return lines.join("\n");
-}
-
-/** TOML 族搬宿主那条登记:整段原文照搬(表头顺手改成规范名)。 */
-export function tomlHostBlock(text: string): string | null {
-  return extractTomlTables(text, ASH_MCP_SERVER_NAME)
-    ?? extractTomlTables(text, LEGACY_ASH_MCP_SERVER_NAME, ASH_MCP_SERVER_NAME);
 }
 
 export type { AshMcpCompose, AshMcpComposeOpts, AshMcpEntry, AshMcpLaunch };

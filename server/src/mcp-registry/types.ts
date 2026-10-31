@@ -42,6 +42,42 @@ export interface AshMcpLaunch {
   ashUrl?: string | null;
 }
 
+/**
+ * 一个兼容名(`ash` / 历史名 `harness`)在**一份**配置里的事实 —— 刻意**不折叠**。
+ *
+ * 为什么要有这一层(本轮审查 F3):`ash` 和 `harness` 是**两条独立登记**,一条关着、另一条
+ * 开着时 ash MCP 是能用的。上一版每份来源先压成一个四态结论,再按来源优先级选赢家 ——
+ * 两个名字的事实在第一步就被混成了一个,于是「高优先级那份里 ash 关着、低优先级那份里
+ * harness 开着」被判成 disabled(预检硬拒),而真 CLI 那边工具明明连得上。
+ */
+export interface AshMcpNameFact {
+  /** on=登记在且没关 / off=显式关掉了 / doubt=写法认不出来(**别据此下结论**)。 */
+  readonly status: "on" | "off" | "doubt";
+  /** 给用户看的一句话(off/doubt 必填)。**不带来源前缀** —— 前缀由消费者按来源加。 */
+  readonly detail: string;
+  /** 这条登记的原值(JSON 两族),整条搬给隔离档用,见 `AshMcpShape.hostRaw`。 */
+  readonly raw?: Record<string, unknown>;
+  /** 这条登记的原文(TOML 族),整段搬给隔离档用,见 `AshMcpShape.hostBlock`。 */
+  readonly block?: string;
+  /** 这条登记写的启动方式,只给 `launchHint` 出提示。 */
+  readonly launch?: AshMcpLaunch | null;
+}
+
+/**
+ * **一份**配置扫出来的「每个兼容名各自的事实」。
+ *
+ * 折叠成四态是 `shapes.ts` 的 `foldScan`,跨来源逐名解析是 `register.ts` 的 `resolveAshMcp` ——
+ * 读状态、幂等判断、宿主搬运、诊断提示全部消费同一个选中结果,不许各自再选一遍。
+ */
+export interface AshMcpNameScan {
+  /** 整份读不准(解析不了、登记容器不是对象…):它声明了哪些名字也就谈不上。 */
+  readonly doubt?: string;
+  /** 确认没有这份配置(文件不存在 / 正文空白)。 */
+  readonly missing?: boolean;
+  /** **声明过**的那几个兼容名(没声明的不出现)。 */
+  readonly names: ReadonlyMap<string, AshMcpNameFact>;
+}
+
 /** 拼的时候这家 CLI 要的那两个可选修饰(来自 `AshMcpMechanism` 的同名字段)。 */
 export interface AshMcpComposeOpts {
   /** TOML 族:带上 `enabled = true`。 */
@@ -63,7 +99,16 @@ export type AshMcpCompose = { body: string } | { why: string };
 export interface AshMcpShape {
   /** 格式族名字,出现在矩阵和报错文案里。 */
   readonly id: "mcp-servers-json" | "opencode-json" | "mcp-servers-toml";
-  /** 这份配置里 ash 登记的状态。`text === null` = 确认没有这个文件。 */
+  /**
+   * 这份配置里**每个兼容名各自**的事实。`text === null` = 确认没有这个文件。
+   *
+   * 读那一侧的**唯一**族内实现:`read` / `hostRaw` / `hostBlock` / `launch` 全是它折一下或
+   * 投影一下(见 `shapes.ts` 的 `readSide`)。各写一遍就会漂 —— 本轮审查 F3 实测到的那次:
+   * `hostBlock` 按名字固定先挑 `ash`,`read` 挑**开着**的那条,于是 `ash` 关着、`harness`
+   * 开着时,搬过去的是那条关着的。
+   */
+  scan(text: string | null): AshMcpNameScan;
+  /** 这份配置里 ash 登记的状态(= `scan` 折一下)。`text === null` = 确认没有这个文件。 */
   read(text: string | null): AshMcpConfigState;
   /** 把 ash 这一条拼进去(已有一律不覆盖 —— 调用方先 `read` 过)。 */
   compose(text: string | null, entry: AshMcpEntry, opts?: AshMcpComposeOpts): AshMcpCompose;
@@ -76,9 +121,10 @@ export interface AshMcpShape {
    * 本轮审查 R5 在沙盘里实测到的就是这两种。搬得了就一个字节不改地搬,搬不了就老实
    * 用内置那条(`builtinEntry`),**不许把「表达不了」解释成「宿主没有登记」**。
    *
-   * 只返回**开着**的那条(关着的搬过去等于把「已关闭」一起搬过去)。
+   * 只返回**开着**的那条(关着的搬过去等于把「已关闭」一起搬过去) —— 选哪条由 `scan` +
+   * `pickFact` 一处说了算,这里只是取出它的原值。TOML 族恒为 null(它走 `hostBlock`)。
    */
-  hostRaw?(text: string): Record<string, unknown> | null;
+  hostRaw(text: string): Record<string, unknown> | null;
   /** 把一条原值登记按规范名拼进去(配 `hostRaw`,JSON 两族有)。 */
   composeRaw?(text: string | null, value: Record<string, unknown>): AshMcpCompose;
   /**
@@ -87,8 +133,11 @@ export interface AshMcpShape {
    * 为什么 TOML 不走 `hostEntry`:宿主那条登记底下可能挂着子表(本机实测
    * `[mcp_servers.ash.tools.get_task] approval_mode = "approve"`),拆成
    * `{command,args,env}` 再拼回去会把它们丢掉。照搬原文一个字节都不丢。
+   *
+   * 选哪条同样走 `scan` + `pickFact`(JSON 两族恒为 null:它们走 `hostRaw`)。「整段原文照搬」
+   * 这一路成不成立看 `blockFor`/`appendBlock` 在不在,不看这一位。
    */
-  hostBlock?(text: string): string | null;
+  hostBlock(text: string): string | null;
   /** 没有宿主那段可搬时,按一条登记现渲染一段。 */
   blockFor?(entry: AshMcpEntry, opts?: AshMcpComposeOpts): string;
   /** 把一段登记原文接进配置(重复表、内联表这些判据跟 `compose` 同一份)。 */

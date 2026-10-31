@@ -473,7 +473,8 @@ try {
     }, null, 2)}\n`, "utf8");
     const offState = ashMcpStateIn(both.dir, "antigravity", {});
     assert.equal(offState.state, "disabled");
-    assert.match(offState.detail, /ash \/ harness/, "两个名字都要说出来");
+    assert.match(offState.detail, /ash 这条登记是关着的、harness 这条登记是关着的/,
+      "两个名字各自说一遍 —— 逐名扫描之后每条登记自带一句话(本轮审查 F3)");
     // 诊断提示也得指到**活着**那一条:上一版 `launch` 按名字取第一条,于是这里拿的是
     // `ash` 那条关着的 `/old.js` —— 用户照着提示去查一个根本没在跑的命令,而状态明明是
     // present(本轮审查不拦项:`shapes.ts` 的 launch 与 read 不同源)。

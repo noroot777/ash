@@ -34,7 +34,7 @@ import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp
 import { type LaunchSpec, scanCodexToml } from "./codex-toml.js";
 import { ashMcpConfigDir, ashMcpMechanism } from "./mcp-registry/catalog.js";
 import {
-  ashMcpHostSources, ashMcpOpaqueSibling, effectiveConfigState, sourceConfigState,
+  ashMcpHostSources, ashMcpOpaqueSibling, resolveAshMcp,
 } from "./mcp-registry/register.js";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { boundListeningPort } from "./listening-port.js";
@@ -117,15 +117,12 @@ function registryVerdict(
       }
     }
   }
-  const found = effectiveConfigState(sources, mechanism.shape, mechanism.site.sourcesMerge === true);
+  const found = resolveAshMcp(sources, mechanism.shape, mechanism.site.sourcesMerge === true);
   if (found.state === "present") {
-    // 提示里的启动参数取**真有那条登记**的那一份(不一定是写入目标那份;只读来源直接用它的正文)。
-    const live = sources.filter((s) => sourceConfigState(s, mechanism.shape).state === "present").at(-1);
-    const text = live?.file ? readText(live.file) : { kind: "text" as const, text: live?.text ?? "" };
-    return {
-      state: "present",
-      hint: launchHint(text.kind === "text" ? mechanism.shape.launch(text.text) ?? {} : {}),
-    };
+    // 提示里的启动参数直接取**解析层选中那条登记**自己带的(本轮审查 F3):上一版在这里按
+    // present 重新过滤一遍来源、取最后一份、再重新读文件重新挑一次条目 —— 跟解析层两套判据,
+    // 而漂起来的后果是提示里给出一条根本没在跑的命令。
+    return { state: "present", hint: launchHint(found.fact?.launch ?? {}) };
   }
   if (found.state === "unknown") return { state: "unknown", why: found.detail };
   if (found.state === "disabled") return { state: "disabled", detail: found.detail };

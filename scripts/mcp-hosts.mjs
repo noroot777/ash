@@ -170,89 +170,159 @@ export function hostMcpFile(agentType, { env = process.env, home = homedir() } =
 /** 这条登记有没有被显式关掉。两种写法都认(`disabled: true` / `enabled: false`),跟 TS 同口径。 */
 const switchedOff = (entry) => entry.disabled === true || entry.enabled === false;
 
+/** 认的那两个服务名 —— **两条独立登记**,顺序就是优先。跟 TS 那份 `ASH_MCP_NAMES` 同口径。 */
+const NAMES = [ASH, LEGACY];
+
 /**
- * 一份来源里有没有 ash:`present` / `absent` / `disabled` / `unsure`(看不准 ⇒ 调用方不许写)。
+ * 一份来源扫出来的**逐名事实**:`{ doubt?, missing?, names: Map<名, { status, detail }> }`,
+ * status 是 `on` / `off` / `doubt`(写法认不出来)。
  *
- * 判据跟 TS 那份 `shapes.ts` 的 `pickEntry` 一一对应:先找**开着**的那条(两个兼容名是两条
- * 独立登记),都关着才报 disabled;值认不出来(不是对象)一律 unsure —— 当没有去写就会把
- * 用户那个键覆盖掉,跟「已有登记一律不覆盖」自相矛盾。
+ * 刻意**不折叠**,跟 TS 那份 `shapes.ts` 的 `scan` 一一对应:`ash` 和 `harness` 是两条独立
+ * 登记,先压成一个四态结论就会把两个名字的事实混成一个(本轮审查 F3)。值认不出来(不是
+ * 对象)一律 doubt —— 当没有去写就会把用户那个键覆盖掉,跟「已有登记一律不覆盖」自相矛盾。
  */
-function sourceState(source, site) {
+function scanSource(source, site) {
+  const names = new Map();
   let text;
   if (source.file) {
     const read = readForWrite(source.file);
-    if (!read) return { state: "unsure", why: `${source.label} 读不出来` };
-    if (read.text === null) return { state: "absent" };
+    if (!read) return { doubt: "读不出来", names };
+    if (read.text === null) return { missing: true, names };
     text = read.text;
   } else {
     text = source.text || "";
   }
   if (site.shape === "toml") {
     const scan = scanTomlServers(text);
-    if (scan.why) return { state: "unsure", why: `${source.label}：${scan.why}` };
-    const taken = scan.names.filter((n) => n === ASH || n === LEGACY);
-    if (!taken.length) return { state: "absent" };
-    const off = taken.filter((n) => scan.disabled.includes(n));
-    return off.length === taken.length
-      ? { state: "disabled", name: taken[0], why: `${source.label} 里的 ${taken.join(" / ")} 被 disabled_mcp_servers 关掉了` }
-      : { state: "present", name: taken.find((n) => !off.includes(n)) };
+    if (scan.why) return { doubt: scan.why, names };
+    for (const name of NAMES) {
+      if (!scan.names.includes(name)) continue;
+      names.set(name, scan.disabled.includes(name)
+        ? { status: "off", detail: `[mcp_servers.${name}] 被 disabled_mcp_servers 关掉了` }
+        : { status: "on", detail: "" });
+    }
+    return { names };
   }
   const doc = readJsonLoose(text);
-  if (doc === undefined) return { state: "unsure", why: `${source.label} 解析不了` };
+  if (doc === undefined) return { doubt: "解析不了", names };
   const servers = doc === null ? undefined : doc[site.shape === "opencode" ? "mcp" : "mcpServers"];
   if (servers !== undefined && (!servers || typeof servers !== "object" || Array.isArray(servers))) {
-    return { state: "unsure", why: `${source.label} 的登记容器不是对象` };
+    return { doubt: "登记容器不是对象", names };
   }
-  const off = [];
-  for (const name of [ASH, LEGACY]) {
+  for (const name of NAMES) {
     const raw = servers ? servers[name] : undefined;
     if (raw === undefined) continue;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      return { state: "unsure", why: `${source.label} 里的 ${name} 这条登记不是一个对象` };
+      names.set(name, { status: "doubt", detail: `${name} 这条登记不是一个对象` });
+      continue;
     }
-    if (!switchedOff(raw)) return { state: "present", name };
-    off.push(name);
+    names.set(name, switchedOff(raw)
+      ? { status: "off", detail: `${name} 这条登记是关着的` }
+      : { status: "on", detail: "" });
   }
-  return off.length
-    ? { state: "disabled", name: off[0], why: `${source.label} 里的 ${off.join(" / ")} 登记是关着的` }
-    : { state: "absent" };
+  return { names };
+}
+
+/** 这一份里**选中**的那条登记:先找开着的那条(整份只有这一处在选,跟 TS 的 `pickFact` 同口径)。 */
+function pickFact(scan) {
+  for (const name of NAMES) {
+    const fact = scan.names.get(name);
+    if (fact && fact.status === "on") return { name, fact };
+  }
+  return null;
+}
+
+/** 一份扫描结果折叠成四态(跟 TS 的 `foldScan` 同口径;`label` 是这份来源的名字)。 */
+function foldScan(scan, label) {
+  const say = (d) => `${label}：${d}`;
+  if (scan.doubt) return { state: "unsure", why: say(scan.doubt), label };
+  const live = pickFact(scan);
+  if (live) return { state: "present", name: live.name, label };
+  const facts = [...scan.names.entries()];
+  const doubts = facts.filter(([, f]) => f.status === "doubt");
+  if (doubts.length) return { state: "unsure", why: doubts.map(([, f]) => say(f.detail)).join("；"), label };
+  const off = facts.filter(([, f]) => f.status === "off");
+  if (off.length) {
+    return { state: "disabled", name: off[0][0], why: off.map(([, f]) => say(f.detail)).join("、"), label };
+  }
+  return { state: "absent", label };
 }
 
 /**
- * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记 —— 跟 TS 那份 `effectiveConfigState`
+ * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记 —— 跟 TS 那份 `resolveAshMcp`
  * 同一条判据:**声明了这个名字的来源里,优先级最高的那份说了算**。高优先级那份只写
  * `{"enabled": false}` 也算声明,它会合到低优先级那条上、把它关掉(真 opencode 实测)。
  *
- * 两处一律回 unsure(看不准就不写):**同一层**两份结论不一致(同层谁覆盖谁没实测);
- * 这家的合并语义本身没实测(`sourcesMerge` 不为真)而几份结论不一致。
+ * **逐个兼容名各算一次**(本轮审查 F3):上一版先把每份来源压成一个四态、再按优先级选赢家,
+ * 于是「高优先级那份里 `ash` 关着、低优先级那份里 `harness` 开着」被判成关着,而真 CLI 那边
+ * 工具明明连得上 —— 安装器据此报「被关掉了,没有替你打开」,用户照着去翻一个其实没问题的配置。
+ *
+ * 三处一律回 unsure(看不准就不写):这家的合并语义本身没实测(`sourcesMerge` 不为真)而几份
+ * 结论不一致;**同一层**里同一个名字有两份不一致的写法;有一份整份读不准、而且优先级不低于
+ * 那条生效的登记(它可能正把那条关掉)。
  */
 function effectiveState(sources, site) {
-  // `label` = 最终说了算的那一份来源,话术里要指名道姓(用户得知道去看哪个文件)。
-  const read = sources.map((source) => ({ source, st: { ...sourceState(source, site), label: source.label } }));
-  if (!read.length) return { state: "unsure", why: "算不出这家 CLI 会读哪几份配置" };
-  if (read.length === 1) return read[0].st;
-  const kinds = new Set(read.map((r) => r.st.state));
-  if (!site.sourcesMerge && kinds.size > 1) {
+  if (!sources.length) return { state: "unsure", why: "算不出这家 CLI 会读哪几份配置" };
+  const read = sources.map((source) => ({ source, scan: scanSource(source, site) }));
+  const folded = read.map((r) => foldScan(r.scan, r.source.label));
+  if (read.length > 1 && !site.sourcesMerge && new Set(folded.map((f) => f.state)).size > 1) {
     return {
       state: "unsure",
       why: "这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 ash 没实测过："
-        + read.map((r) => r.st.why || `${r.source.label}：${r.st.state}`).join("；"),
+        + folded.map((f) => f.why || `${f.label}：${f.state === "present" ? "里已经有 ash 登记" : f.state}`).join("；"),
     };
   }
-  const declared = read.filter((r) => r.st.state !== "absent");
-  if (!declared.length) return read[read.length - 1].st;
-  const top = Math.max(...declared.map((r) => r.source.level));
-  const winners = declared.filter((r) => r.source.level === top);
-  const unsure = winners.find((r) => r.st.state === "unsure");
-  if (unsure) return unsure.st;
-  if (new Set(winners.map((r) => r.st.state)).size > 1) {
+  const picks = [];
+  for (const name of NAMES) {
+    const declared = read.filter((r) => r.scan.names.has(name));
+    if (!declared.length) continue;
+    const top = Math.max(...declared.map((r) => r.source.level));
+    const winners = declared
+      .filter((r) => r.source.level === top)
+      .map((r) => ({ name, fact: r.scan.names.get(name), source: r.source }));
+    const unsure = winners.find((w) => w.fact.status === "doubt");
+    if (unsure) {
+      picks.push({ why: `${unsure.source.label}：${unsure.fact.detail}` });
+      continue;
+    }
+    if (new Set(winners.map((w) => w.fact.status)).size > 1) {
+      picks.push({
+        why: `同一层里好几份配置都写了 ${name} 这条登记、结论还不一致、谁覆盖谁 ash 没实测过（`
+          + winners.map((w) => `${w.source.label}：${w.fact.status === "on" ? "开着" : "关着"}`).join("；") + "）",
+      });
+      continue;
+    }
+    picks.push(winners[0]);
+  }
+  const live = picks.find((p) => p.fact && p.fact.status === "on");
+  // 整份读不准的那些:它**可能声明任何名字**,包括把生效那条关掉 —— 但优先级比它低的影响不到。
+  const blind = read.filter((r) => r.scan.doubt);
+  const blindWhy = (over) => over.map((b) => foldScan(b.scan, b.source.label).why).join("；");
+  if (live) {
+    const over = blind.filter((b) => b.source.level >= live.source.level);
+    if (over.length) {
+      return {
+        state: "unsure",
+        why: `${live.source.label} 里有生效的 ${live.name} 登记，但 ${blindWhy(over)}`
+          + " —— 那几份优先级不低于它、可能正把它关掉",
+      };
+    }
+    return { state: "present", name: live.name, label: live.source.label };
+  }
+  if (blind.length) return { state: "unsure", why: blindWhy(blind) };
+  const unsure = picks.filter((p) => p.why);
+  if (unsure.length) return { state: "unsure", why: unsure.map((u) => u.why).join("；") };
+  const off = picks.filter((p) => p.fact);
+  if (off.length) {
     return {
-      state: "unsure",
-      why: "这家 CLI 同一层里有好几份配置，它们的结论不一致、谁覆盖谁 ash 没实测过："
-        + winners.map((r) => r.st.why || `${r.source.label}：${r.st.state}`).join("；"),
+      state: "disabled",
+      name: off[0].name,
+      why: off.map((o) => `${o.source.label}：${o.fact.detail}`).join("、"),
+      label: off[0].source.label,
     };
   }
-  return winners[0].st;
+  // 一个名字都没声明 ⇒ 确实没有。措辞用**最后那份**(优先级最高的那份,也是写入落点)。
+  return folded[folded.length - 1];
 }
 
 /**

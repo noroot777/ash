@@ -23,7 +23,11 @@ import { fileState, publishFresh, readForWrite } from "../auth/config-publish.js
 import { currentListeningPort } from "../listening-port.js";
 import { REPO_DIR } from "../paths.js";
 import { ashMcpConfigDir, ashMcpMechanism } from "./catalog.js";
-import type { AshMcpComposeOpts, AshMcpConfigSite, AshMcpConfigState, AshMcpEntry, AshMcpMechanism, AshMcpShape } from "./types.js";
+import { ASH_MCP_NAMES, foldScan } from "./shapes.js";
+import type {
+  AshMcpComposeOpts, AshMcpConfigSite, AshMcpConfigState, AshMcpEntry, AshMcpMechanism,
+  AshMcpNameFact, AshMcpNameScan, AshMcpShape,
+} from "./types.js";
 
 /** 本仓库这份 MCP 服务的入口。宿主没登记过时按它现拼一条。 */
 const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
@@ -149,66 +153,141 @@ export function ashMcpHostSources(
   return out;
 }
 
-/** 一份文件里的登记状态(先分清「没有这个文件」和「有但读不动」,见 `ashMcpStateIn`)。 */
-export function fileConfigState(file: string, shape: AshMcpShape): AshMcpConfigState {
-  const probe = fileState(file);
-  if (probe === "unreadable") return unknownState(`${file} 读不出来`);
-  if (probe === "missing") return { state: "absent", serverName: null, detail: `${file} 还不存在` };
+/**
+ * 一份来源扫出来的**逐名事实**(折叠和跨来源解析都建在它上面,见 `resolveAshMcp`)。
+ *
+ * 文件那一路先分清「没有这个文件」和「有但读不动」:下面的读取路径会把异常吞成「空」,
+ * 于是一次 EACCES / EIO 会被说成「没有登记」,而 absent 是个会被用来拦人的结论
+ * (`ash-mcp-reachability.ts` 的「向放行开」)。
+ */
+export function sourceScan(source: AshMcpSource, shape: AshMcpShape): AshMcpNameScan {
+  if (!source.file) {
+    try {
+      return shape.scan(source.text ?? null);
+    } catch (e) {
+      return { doubt: `读里面的 ash MCP 登记失败：${(e as Error).message}`, names: new Map() };
+    }
+  }
+  const probe = fileState(source.file);
+  if (probe === "unreadable") return { doubt: "读不出来", names: new Map() };
+  if (probe === "missing") return { missing: true, names: new Map() };
   try {
-    const found = shape.read(readFileSync(file, "utf8"));
-    return { ...found, detail: found.detail ? `${file}：${found.detail}` : "" };
+    return shape.scan(readFileSync(source.file, "utf8"));
   } catch (e) {
-    return unknownState(`读 ${file} 的 ash MCP 登记失败：${(e as Error).message}`);
+    return { doubt: `读里面的 ash MCP 登记失败：${(e as Error).message}`, names: new Map() };
   }
 }
 
-/** 一份来源里的登记状态(文件走 `fileConfigState`,变量里那段正文直接读)。 */
-export function sourceConfigState(source: AshMcpSource, shape: AshMcpShape): AshMcpConfigState {
-  if (source.file) return fileConfigState(source.file, shape);
-  try {
-    const found = shape.read(source.text ?? null);
-    return { ...found, detail: found.detail ? `${source.label}：${found.detail}` : "" };
-  } catch (e) {
-    return unknownState(`读 ${source.label} 里的 ash MCP 登记失败：${(e as Error).message}`);
-  }
+/** 一份文件里的登记状态。 */
+export function fileConfigState(file: string, shape: AshMcpShape): AshMcpConfigState {
+  return sourceConfigState({ label: file, file, level: 0 }, shape);
 }
+
+/** 一份来源里的登记状态(= 扫一遍再折一下,折叠判据只有 `foldScan` 一份)。 */
+export function sourceConfigState(source: AshMcpSource, shape: AshMcpShape): AshMcpConfigState {
+  return foldScan(sourceScan(source, shape), source.label);
+}
+
+/** 最终生效的那条登记,外加**它来自哪一份来源 / 那条登记本身**(搬运和提示都消费这个)。 */
+export interface AshMcpEffective extends AshMcpConfigState {
+  /** present/disabled 时:说了算的那份来源。 */
+  readonly source?: AshMcpSource;
+  /** present/disabled 时:那条登记在它那份里的事实(原值 / 原文 / 启动方式都在这)。 */
+  readonly fact?: AshMcpNameFact;
+}
+
+type NamePick = { name: string; fact: AshMcpNameFact; source: AshMcpSource } | { why: string };
 
 /**
- * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记。
+ * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记,以及它出自哪一份。
  *
- * 判据(真 opencode 实测,本轮审查 F4):**声明了这个名字的来源里,优先级最高的那份说了算** ——
+ * 判据(真 opencode 实测,上一轮审查 F4):**声明了这个名字的来源里,优先级最高的那份说了算** ——
  * 高优先级那份只写 `{"enabled": false}` 也算声明,它会合到低优先级那条上、把它关掉(实测:
- * 真 CLI 报 `ash disabled`,而上一版「任一来源 present 就 present」报的是已接好,于是这家
+ * 真 CLI 报 `ash disabled`,而更早一版「任一来源 present 就 present」报的是已接好,于是这家
  * 执行器一路跑到交卷才发现工具根本不在)。
  *
- * 两处一律回 unknown(看不准就不写、也不拦起跑):
- *  · **同一层**两份结论不一致 —— 同层谁覆盖谁没实测;
+ * **逐个兼容名各算一次**(本轮审查 F3):`ash` 和 `harness` 是两条独立登记。上一版先把每份
+ * 来源压成一个四态结论、再按优先级选赢家,两个名字的事实在第一步就混成了一个 —— 于是
+ * 「高优先级那份里 `ash` 关着、低优先级那份里 `harness` 开着」被判成 disabled(预检硬拒),
+ * 而真 CLI 那边工具明明连得上。先按名字各自定下最终登记,再在这几条之上找开着的那条。
+ *
+ * 三处一律回 unknown(看不准就不写、也不拦起跑):
  *  · **这家的合并语义本身没实测**(`sourcesMerge` 不为真)而几份结论不一致 —— 那时「present」
- *    和「absent」各是一种猜,两种猜错的代价都是实打实的。
+ *    和「absent」各是一种猜,两种猜错的代价都是实打实的;
+ *  · **同一层**里同一个名字有两份不一致的写法 —— 同层谁覆盖谁没实测;
+ *  · 有一份**整份读不准**、而且优先级不低于那条生效的登记 —— 它可能正把那条关掉。
  */
+export function resolveAshMcp(
+  sources: readonly AshMcpSource[],
+  shape: AshMcpShape,
+  merges: boolean,
+): AshMcpEffective {
+  if (!sources.length) return unknownState("算不出这家 CLI 会读哪几份配置");
+  const read = sources.map((source) => ({ source, scan: sourceScan(source, shape) }));
+  const folded = read.map((r) => foldScan(r.scan, r.source.label));
+  if (read.length > 1 && !merges && new Set(folded.map((f) => f.state)).size > 1) {
+    return unknownState("这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 ash 没实测过："
+      + folded.map((f, i) => f.detail
+        || (f.state === "present" ? `${read[i]!.source.label} 里已经有 ash 登记` : f.state)).join("；"));
+  }
+  const picks: NamePick[] = [];
+  for (const name of ASH_MCP_NAMES) {
+    const declared = read.filter((r) => r.scan.names.has(name));
+    if (!declared.length) continue;
+    const top = Math.max(...declared.map((r) => r.source.level));
+    const winners = declared
+      .filter((r) => r.source.level === top)
+      .map((r) => ({ name, fact: r.scan.names.get(name)!, source: r.source }));
+    const unsure = winners.find((w) => w.fact.status === "doubt");
+    if (unsure) {
+      picks.push({ why: `${unsure.source.label}：${unsure.fact.detail}` });
+      continue;
+    }
+    if (new Set(winners.map((w) => w.fact.status)).size > 1) {
+      picks.push({
+        why: `同一层里好几份配置都写了 ${name} 这条登记、结论还不一致、谁覆盖谁 ash 没实测过（`
+          + winners.map((w) => `${w.source.label}：${w.fact.status === "on" ? "开着" : "关着"}`).join("；") + "）",
+      });
+      continue;
+    }
+    picks.push(winners[0]!);
+  }
+  const live = picks.find((p): p is Extract<NamePick, { name: string }> => "fact" in p && p.fact.status === "on");
+  // 整份读不准的那些:它**可能声明任何名字**,包括把生效那条关掉 —— 但优先级比它低的影响不到。
+  const blind = read.filter((r) => r.scan.doubt);
+  const blindWhy = (over: typeof blind) => over.map((b) => foldScan(b.scan, b.source.label).detail).join("；");
+  if (live) {
+    const over = blind.filter((b) => b.source.level >= live.source.level);
+    if (over.length) {
+      return unknownState(`${live.source.label} 里有生效的 ${live.name} 登记，但 ${blindWhy(over)}`
+        + " —— 那几份优先级不低于它、可能正把它关掉");
+    }
+    return { state: "present", serverName: live.name, detail: "", source: live.source, fact: live.fact };
+  }
+  if (blind.length) return unknownState(blindWhy(blind));
+  const unsure = picks.filter((p): p is { why: string } => "why" in p);
+  if (unsure.length) return unknownState(unsure.map((u) => u.why).join("；"));
+  const off = picks.filter((p): p is Extract<NamePick, { name: string }> => "fact" in p);
+  if (off.length) {
+    return {
+      state: "disabled",
+      serverName: off[0]!.name,
+      detail: off.map((o) => `${o.source.label}：${o.fact.detail}`).join("、"),
+      source: off[0]!.source,
+      fact: off[0]!.fact,
+    };
+  }
+  // 一个名字都没声明 ⇒ 确实没有。措辞用**最后那份**(优先级最高的那份,也是写入落点)。
+  return { ...folded.at(-1)!, source: read.at(-1)!.source };
+}
+
+/** `resolveAshMcp` 的四态投影(老调用方只要状态)。 */
 export function effectiveConfigState(
   sources: readonly AshMcpSource[],
   shape: AshMcpShape,
   merges: boolean,
 ): AshMcpConfigState {
-  const read = sources.map((source) => ({ source, state: sourceConfigState(source, shape) }));
-  if (!read.length) return unknownState("算不出这家 CLI 会读哪几份配置");
-  if (read.length === 1) return read[0]!.state;
-  const declared = read.filter((r) => r.state.state !== "absent");
-  if (!declared.length) return read.at(-1)!.state;
-  if (!merges && new Set(read.map((r) => r.state.state)).size > 1) {
-    return unknownState("这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 ash 没实测过："
-      + read.map((r) => r.state.detail || (r.state.state === "present" ? `${r.source.label} 里已经有 ash 登记` : r.state.state)).join("；"));
-  }
-  const top = Math.max(...declared.map((r) => r.source.level));
-  const winners = declared.filter((r) => r.source.level === top);
-  const unsure = winners.find((r) => r.state.state === "unknown");
-  if (unsure) return unsure.state;
-  if (new Set(winners.map((r) => r.state.state)).size > 1) {
-    return unknownState("这家 CLI 同一层里有好几份配置，它们的结论不一致、谁覆盖谁 ash 没实测过："
-      + winners.map((r) => r.state.detail || `${r.source.label}：${r.state.state}`).join("；"));
-  }
-  return winners[0]!.state;
+  return resolveAshMcp(sources, shape, merges);
 }
 
 /** 某个配置目录(隔离档给个人目录,宿主档走 `ashMcpHostFile`)里的那份配置文件。 */
@@ -401,30 +480,37 @@ function composeEntry(
   //
   // 为什么不投影成 `{command,args,env}`:那样远程登记(`type:"http"` + url + headers)会变成
   // 「连本机 4317 的 stdio」、`cwd`/`timeout` 这些启动字段静默消失(本轮审查 R5 实测)。
-  const hostValue = hostText ? shape.hostRaw?.(hostText) : null;
+  const hostValue = hostText ? shape.hostRaw(hostText) : null;
   if (hostValue && shape.composeRaw) return shape.composeRaw(current, hostValue);
   const entry = builtinEntry();
   if (!entry) return { why: NO_SOURCE };
   return shape.compose(current, entry, opts);
 }
 
-/** TOML 那一族(三位要么都有、要么都没有,见 `types.ts`)。 */
-function blockShape(shape: AshMcpShape): shape is AshMcpShape & Required<Pick<AshMcpShape, "hostBlock" | "blockFor" | "appendBlock">> {
-  return !!shape.hostBlock && !!shape.blockFor && !!shape.appendBlock;
+/**
+ * 「整段原文照搬」那一路成不成立 —— 只有 TOML 族有(`blockFor`/`appendBlock` 要么都有、
+ * 要么都没有,见 `types.ts`)。不看 `hostBlock`:它现在三族都有,JSON 两族恒为 null。
+ */
+function blockShape(shape: AshMcpShape): shape is AshMcpShape & Required<Pick<AshMcpShape, "blockFor" | "appendBlock">> {
+  return !!shape.blockFor && !!shape.appendBlock;
 }
 
 /**
  * 宿主机那份同格式配置的全文(读不动就当没有 —— 它只是「有没有东西可搬」的来源)。
  *
- * 取的是**最终生效那条登记所在的那一份**,不是写入目标那一份(本轮审查 F4):ash 可能写在
+ * 取的是**最终生效那条登记所在的那一份**,不是写入目标那一份(上一轮审查 F4):ash 可能写在
  * 全局那份、而落点是 `OPENCODE_CONFIG` 指的那个文件 —— 只读落点就会把「有东西可搬」看成
  * 「没有」,于是隔离档里拿默认模板重新渲染一条,用户自己调过的启动参数当场丢掉。
+ *
+ * 「哪一份说了算」**问解析层**(本轮审查 F3):上一版在这里自己按 present 过滤再取最后一个,
+ * 跟 `resolveAshMcp` 的优先级算法各一套 —— 两套判据迟早分叉,而分叉的后果是搬错那一条。
  */
 function hostConfigText(agentType: string, hostHome: string, env: NodeJS.ProcessEnv): string {
   const mechanism = ashMcpMechanism(agentType);
   if (mechanism?.kind !== "file") return "";
   const sources = ashMcpHostSources(agentType, env, hostHome);
-  const live = sources.filter((s) => sourceConfigState(s, mechanism.shape).state === "present").at(-1);
+  const found = resolveAshMcp(sources, mechanism.shape, mechanism.site.sourcesMerge === true);
+  const live = found.state === "present" ? found.source : undefined;
   if (live) return live.file ? readForWrite(live.file)?.text ?? "" : live.text ?? "";
   const dir = ashMcpConfigDir(agentType, env, hostHome);
   if (!dir) return "";
