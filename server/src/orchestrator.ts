@@ -1,4 +1,4 @@
-import { mkdirSync, createWriteStream, existsSync } from "node:fs";
+import { mkdirSync, createWriteStream } from "node:fs";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -20,7 +20,8 @@ import { ReviewSuperseded } from "./review-ownership.js";
 import { withdrawReviewStart, type ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { retireHistoricalReview } from "./review-retirement.js";
 import { consumeSingleRun } from "./single-run.js";
-import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
+import { pickTurnSession } from "./turn-session-pick.js";
+import { pickTurnWorkspace } from "./turn-workspace-pick.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "./auth/dispatch-gate.js";
@@ -47,13 +48,11 @@ import { NO_REMINDER, assembleTurnPrompt } from "./turn-prompt.js";
 import { withSkillInvocation } from "./skills.js";
 import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
-import { cliGoalSessionCandidates } from "./task-cli-goal-scopes.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterLeadDelivery, enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
-import { isDiagnosticSession } from "./turn-failure.js";
-import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
+import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
@@ -63,9 +62,6 @@ import {
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
 import { baseFallbackNote } from "./base-fallback-notice.js";
-import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
-import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
-import { announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "./session-notice.js";
 
 // 这一回合的**调用契约**(连 ResumeReason 一起)住在 task-continue-options.ts；这里原样
 // 再导出，调用方（task-resume、runs 那几处）不用跟着改导入路径。
@@ -281,85 +277,20 @@ export async function continueTask(
     }
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
-    // A single task can now host several agents — one session line per agentType,
-    // each invited via @-mention. Newest first.
-    const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-      .filter((session) => !isDiagnosticSession(session))
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    // 「这一条接得上吗」不止看 agentType+role:CLI 的会话文件躺在**开它的那个人**的配置
-    // 目录里,而共享项目里 B 可以回复 A 的任务(runOwner 上面刚算过)。拿 A 的 session id
-    // 去 B 的 CLAUDE_CONFIG_DIR 里 --resume,CLI 只会回一句 "No conversation found" ——
-    // 与 2026-08-29 那次接力事故同一堵墙,换了个触发口。判据在 auth/run-env.ts
-    // (自用模式两边恒为 null,这一层永远放行,行为不变)。
-    // 第二个触发口是实例把「CLI 额度」换了档(共用宿主 CLI ⇄ 每人自带 key):人没变,
-    // 目录整体挪了位置。所以比的是**会话行记下的那个目录**,不是按归属人现算一遍。
-    // 存量会话没有这两列,回落到任务归属人:它们本来就是按归属人跑的。
-    const resumableHere = async (s: typeof all[number]) =>
-      !s.cliSessionId || await sessionResumableHere(s, runOwner, agent);
-    // 指名道姓要续哪一条会话行（「重跑上一回合」）：按 agentType+role 挑会在同一位
-    // 智能体有多条会话时挑错人，而重投必须落回**崩掉的那一条**，否则等于换个人重说。
-    const candidates = opts.freshSession
-      ? []
-      : opts.resumeSessionId
-        ? all.filter((s) => s.id === opts.resumeSessionId)
-        : cliGoalSessionCandidates(task, agent, profileId, runOwner, slash, all.filter((session) => session.agentType === agent && session.role === sessionRole));
-    let prev: typeof all[number] | undefined;
-    for (const s of candidates) {
-      if (await resumableHere(s)) { prev = s; break; }
-      // 接不上就另开一条 —— 但**不能一声不吭**:这一轮起跑后界面上会凭空多出一条会话行,
-      // 而旧会话看着好好的却再没人续。理由写进旧会话的时间线,刷新后仍在。
-      await announceSessionNote({
-        taskId, sessionId: s.id, role: s.role as SessionRole, agentType: agent,
-        text: CROSS_OWNER_SESSION_NOTE,
-      });
-    }
-    // 版本守卫要去**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行回落到
-    // 按归属人现算)——不传等于按宿主机默认目录找,隔离档下必然扑空、静默放行。
-    const affectedSessionVersion = await affectedCodexResumeVersion(
-      agent, prev?.cliSessionId,
-      prev ? await sessionCliConfigDir(prev, agent) : null,
-    );
-    if (prev && affectedSessionVersion) {
-      // 说明必须先持久写进旧会话，凭据后清；否则下面任一 await 抛错都会留下一个
-      // 「上下文没了、但没有解释」的永久状态。
-      await announceAffectedSessionReplacement({
-        taskId, sessionId: prev.id, role: sessionRole, agentType: agent, version: affectedSessionVersion,
-      });
-      await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
-      prev = undefined;
-    }
-    const resuming = !!prev?.cliSessionId && !["fork", "new", "clear"].includes(slash?.name ?? "");
-
+    // 这一轮续哪一条会话行(同一位智能体可能有好几条;接不接得上还要看 CLI 配置目录与
+    // codex 版本守卫)——判据与两处持久说明都在 turn-session-pick.ts。
+    const { all, prev, resuming } = await pickTurnSession({
+      taskId, task, agent, sessionRole, profileId, runOwner, slash,
+      freshSession: opts.freshSession, resumeSessionId: opts.resumeSessionId,
+    });
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
     const recorded = opts.cwd || prev?.cwd || prev?.worktreePath || all[0]?.cwd || all[0]?.worktreePath || "";
-    // A recorded cwd that has since vanished (worktree cleaned up, project moved)
-    // used to be handed to spawn as-is — which stuck the task in 'running' forever.
-    // Re-resolve through the same path a fresh run takes: it RESTORES the worktree
-    // when the branch outlived the directory, and only rebuilds an empty one when
-    // the branch is gone too.
-    let cwd = recorded;
-    let workspaceReset = false;
-    let freshWorkspace = false;
-    if (!existsSync(cwd)) {
-      if (project) {
-        const ws = await taskWorkspace(task, project.repoPath);
-        cwd = ws.path;
-        freshWorkspace = !!ws.fresh;
-        baseFallback = ws.baseFallback;
-        // Only a resumed session carries stale memory worth correcting; a fresh
-        // session starts empty-handed and needs no warning.
-        workspaceReset = freshWorkspace && resuming;
-      } else if (!cwd) {
-        cwd = ".";
-      }
-    } else if (project) {
-      // 目录还在 = 这一轮不重新解析工作目录，可登记的**验收目标**照样可能已经没了
-      //（验收合并后目标分支被删，worktree 却留着）。不查的话这一轮跑得好好的，用户
-      // 到 diff / 验收那头才撞墙 —— 那正是上一轮修的「起得来但交不掉」。
-      baseFallback = await refreshTaskBase(task, project.repoPath);
-    }
-
+    // 目录没了怎么办、还在又要刷什么,都在 turn-workspace-pick.ts。
+    const { cwd, workspaceReset, freshWorkspace, baseFallback: resolvedFallback } = await pickTurnWorkspace({
+      task, project, recorded, resuming,
+    });
+    baseFallback = resolvedFallback;
     await setStatus(taskId, "running");
     // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。摘牌
     // 刻意排在**所有可能抛错的解析之后**(执行器解析、工作目录解析都会抛):解析失败时
