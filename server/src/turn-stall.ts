@@ -451,13 +451,18 @@ function evaluate(sessionId: string, stall: Stall): void {
   }
   if (tripMs <= 0 || stall.elapsedMs < tripMs) return;
   stall.trippedAtMs = Date.now();
-  const text = stallTripText(facts);
-  // **先把「这一轮失败」钉死,再动手终止。** 顺序是刻意的:trip 会杀进程,流随即结束、
-  // 消费链当场走到收尾结算 —— 那一刻它必须已经读得到这个结论(见 turn-stall-verdict.ts)。
-  // 这一笔连持久那一半一起写(见 turn-stall-verdict.ts 的 setStallVerdictPersister):
-  // detached 的进程活得过重启,判决只留在内存里就会在「接管一个已被判熔断、却仍然存活的
-  // 回合」那条路上整份丢掉。本模块不碰库,持久化是那个模块自己的事。
-  markStallFailure(stall.sessionId, stall.turnStartedAt, text);
+  const verdict = stallTripText(facts);
+  // **先把「这一轮失败」存住,再动手终止。** 顺序是刻意的,而且两层都靠它:
+  //   · 同进程 —— trip 会杀进程,流随即结束、消费链当场走到收尾结算,那一刻它必须已经读得到
+  //     这个结论(见 turn-stall-verdict.ts);
+  //   · 跨进程 —— trip 之后的两件事(时间线上写「已终止并按失败结算」、向执行器发终止请求)
+  //     **都收不回来**,而 detached 的进程活得过 server 重启。判决没存住就做这两件事,就会
+  //     出现「用户看到已终止、重启接管后却按正常完成结算」(第 1 轮审查 F1,已实测)。
+  // 所以这里拿的是**落盘结果**而不是「调过了」:`markStallFailure` 返回即落盘(持久那一半在
+  // turn-stall-journal.ts / turn-stall-persist.ts,本模块不碰盘也不碰库)。
+  const durability = markStallFailure(stall.sessionId, stall.turnStartedAt, verdict);
+  // 没存住照样终止 —— 那一轮确实该停;但要**如实说一句**,别让用户以为这个结论一定还在。
+  const text = durability === "lost-on-restart" ? `${verdict}\n${stallVolatileVerdictText()}` : verdict;
   try {
     stall.actions.trip(text, facts);
   } catch (error) {
@@ -538,6 +543,18 @@ export function stallTripText(facts: StallFacts): string {
     + "可直接重试续跑,或换一个执行器/供应商再跑。"
     + "熔断时长由 ASH_STALL_TRIP_MS 配置(默认 30 分钟,置 0 关闭);"
     + "警告档是 ASH_STALL_WARN_ERRORS(默认 5 条)与 ASH_STALL_WARN_MS(默认 5 分钟)。";
+}
+
+/**
+ * 判决**没能存住**时补在熔断诊断后面的一句。
+ *
+ * 为什么要说出来:这一轮照常被终止、照常按失败结算,但那个结论只在当前进程的内存里 —— 如果
+ * ash 在这一轮结算完之前重启,接管的新进程读不到它,这一轮可能又显示成「已完成」。这正是
+ * F1 那条路,出现过一次就不该再让用户自己去猜。
+ */
+export function stallVolatileVerdictText(): string {
+  return "注意:这个结论没能写进磁盘(多半是磁盘满或权限问题),"
+    + "如果 ash 在本回合结算完之前重启,它可能重新显示成已完成 —— 以这条诊断为准。";
 }
 
 /** 兜底档的文案:终止请求没生效,这一轮是被**回收句柄**结束的 —— 如实说,别冒充前一句。 */

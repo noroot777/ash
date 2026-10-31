@@ -26,8 +26,15 @@
 // 错的 —— **detached 的 agent 活得过 server 重启**(executors/detached.ts,ash 的既有能力)。
 // 进程没死,它会被接管;新进程的这个 Map 是空的,上游一恢复并正常答完,这一轮就按
 // `completed` 结算、任务落 `done`,而用户早已看到「已自动终止本回合并按失败结算」。
-// 持久那一半在 `turn-stall-persist.ts`(落库 + 接管时装回来),由消费链注入进来,不反过来
-// 把 db 拖进状态机。
+// 持久那一半在 `turn-stall-persist.ts`(落盘 + 接管时装回来),注册进来,不反过来把 db 拖进
+// 状态机。
+//
+// **而「持久」的判据是落盘,不是「调过写库函数」**(第 1 轮审查 F1,已实测两个独立消费进程):
+// 库里那一格的写要排在别人的长事务后面(`db/node-sqlite-client.ts` 的 `whenIdle`),排着的时候
+// 既没抛错也没落盘;消费者在这段窗口退出,那笔写和这张 Map 一起消失,下一个进程读到
+// `stall_reason=NULL` 就把它解释成「没熔断过」。所以判决的事实落在一个不可能排在别人事务后面
+// 的地方(`turn-stall-journal.ts`:另一个文件、同步写、写完 fsync),库那一格降级成给界面和接口
+// 读的投影。这里只认一件事:**注册进来的那一半必须在返回之前把事实存住,并如实报它存住了没有**。
 import { now } from "./util.js";
 
 export interface StallVerdict {
@@ -49,17 +56,33 @@ interface Entry extends StallVerdict {
 const failures = new Map<string, Entry>();
 
 /**
- * 判决的**持久那一半**,启动时注册一次(`turn-stall-persist.ts` 的 `installStallVerdictPersistence`)。
+ * 一份判决**现在存住了没有** —— 这是 `markStallFailure` 的返回值,trip 的措辞按它定。
  *
- * 为什么是注册式、而不是让每条消费链自己传一笔:那样新增一条链时默认就是「不落库」,而且
+ * - `durable`         已经落盘,这一轮的结论跨得过 server 重启。
+ * - `lost-on-restart` 落盘失败(磁盘满/权限)。那一轮**仍然该停**,内存里的判决也钉好了,
+ *                     丢掉的只是「跨重启还认得它」—— 所以不拦终止,但必须在用户看到的诊断里
+ *                     如实说一句,不许静默。
+ * - `not-persisted`   压根没注册持久化:纯状态机测试的常态。生产里不会是这一档(模块加载即
+ *                     注册,`index.ts` 在任何消费链起来之前就 import 过),所以它**不**算
+ *                     「落盘失败」,也不该让每份单元测试期望里都挂一句假警报。
+ */
+export type StallDurability = "durable" | "lost-on-restart" | "not-persisted";
+
+/**
+ * 判决的**持久那一半**,模块加载时注册一次(`turn-stall-persist.ts`)。
+ *
+ * 为什么是注册式、而不是让每条消费链自己传一笔:那样新增一条链时默认就是「不落盘」,而且
  * **没有任何东西会提醒作者** —— 判决静默只活在内存里,直到某次重启把它丢掉才看得见。
  * 「这一轮被判了失败」是判决本身的属性,不是某条链的可选增强,所以归这个模块自己管。
  *
- * 仍然做成可注册的,是为了让本模块与 `turn-stall.ts` 保持**纯内存、不引 db** —— 那让整套
- * 判据能被纯状态机钉住(test-turn-stall.ts 不需要库,也就不可能误连生产库)。没注册时(单元
- * 测试)这里是 null,一个字都不碰库。
+ * 仍然做成可注册的,是为了让本模块与 `turn-stall.ts` 保持**纯内存、不碰库也不碰盘** —— 那让
+ * 整套判据能被纯状态机钉住(test-turn-stall.ts 不需要库,也就不可能误连生产库,更不会在生产
+ * 数据目录旁边写出一个日志文件)。没注册时这里是 null,一个字节都不落。
+ *
+ * **返回值是契约**:`true` 只能在事实确实存住之后给。返回即落盘 —— 发起一笔异步写然后报
+ * `true`,就是 F1 那个根上错的判据本身。
  */
-type StallVerdictPersister = (sessionId: string, turnStartedAt: string, reason: string) => void;
+type StallVerdictPersister = (sessionId: string, turnStartedAt: string, reason: string) => boolean;
 let persister: StallVerdictPersister | null = null;
 
 export function setStallVerdictPersister(fn: StallVerdictPersister | null): void {
@@ -104,19 +127,44 @@ function sweepOrphans(cutoffMs: number): void {
   }
 }
 
-/** 看门狗熔断:把「这一轮失败」钉在这个回合身份上。 */
-export function markStallFailure(sessionId: string, turnStartedAt: string, reason: string): void {
+function remember(sessionId: string, turnStartedAt: string, reason: string): string {
   const at = now();
   failures.set(key(sessionId, turnStartedAt), { reason, at, retiredAt: null });
-  // 持久那一半跟着同一笔走(注册过才有)。**不让它抛**:写库失败不该拦住终止本身 —— 那一轮
-  // 确实该停,内存判决也已经钉好了,丢掉的只是「跨重启还认得它」这一层。
-  try {
-    persister?.(sessionId, turnStartedAt, reason);
-  } catch (error) {
-    console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能落库:`, error);
-  }
   const cutoff = Date.parse(at) - ORPHAN_MS;
   if (Number.isFinite(cutoff)) sweepOrphans(cutoff);
+  return at;
+}
+
+/**
+ * 看门狗熔断:把「这一轮失败」钉在这个回合身份上,并且**当场把它存住**。
+ *
+ * 返回的是落盘结果(见 `StallDurability`)。调用方(`turn-stall.ts` 的 trip)拿到它之后才去做
+ * 不可撤销的那两件事 —— 写时间线诊断、发终止请求 —— 顺序是刻意的:那两件事一旦做出去就收不
+ * 回来,而「用户看到已终止、重启后却显示已完成」正是 F1 那条路。
+ *
+ * **不让持久那一半抛**:落盘失败不该拦住终止 —— 那一轮确实该停。但也绝不静默:返回
+ * `lost-on-restart`,由 trip 的措辞如实说出来。
+ */
+export function markStallFailure(sessionId: string, turnStartedAt: string, reason: string): StallDurability {
+  remember(sessionId, turnStartedAt, reason);
+  if (!persister) return "not-persisted";
+  try {
+    return persister(sessionId, turnStartedAt, reason) ? "durable" : "lost-on-restart";
+  } catch (error) {
+    console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能存住:`, error);
+    return "lost-on-restart";
+  }
+}
+
+/**
+ * 接管一个仍然存活的回合时,把**已经落盘过**的判决装回内存(`turn-stall-persist.ts` 的
+ * `restoreStallVerdict` 调)。
+ *
+ * 跟 `markStallFailure` 分开,是因为这条路**不许再走一遍持久化**:事实早就在日志里,再追加
+ * 一条只会让同一份判决在账本上重复,接管几次就重复几次。
+ */
+export function adoptStallFailure(sessionId: string, turnStartedAt: string, reason: string): void {
+  remember(sessionId, turnStartedAt, reason);
 }
 
 /**
