@@ -15,6 +15,7 @@ import { ArrowCounterClockwise, Copy, Plus, Prohibit, TrashSimple } from "@phosp
 import { Toggle } from "../components/ui.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { api } from "../lib/api.ts";
+import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { WorkflowRail } from "../workflow/WorkflowRail.tsx";
 import { forgetWorkflows } from "../workflow/WorkflowPicker.tsx";
 
@@ -25,11 +26,13 @@ const BLANK: WorkflowDef = { workspace: "isolated", steps: [makeStep("run", "s1"
 // 横条上的一颗。**刻意不带摘要**（「干活 → 验证 → 合并」那行）：横排每颗只有名字那么
 // 宽，摘要挤进来就得截断成一串省略号；而它下面就是整条线路图，看得比摘要清楚得多。
 function LibraryTab({
-  item, active, onPick,
+  item, active, onPick, tabProps,
 }: {
   item: WorkflowItem;
   active: boolean;
   onPick: () => void;
+  /** 方向键漫游那套 props(lib/useRovingChoice.ts),由整条 tab 条统一发下来。 */
+  tabProps: Record<string, unknown>;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   // 起手式多到横条要滚时，选中的那颗（尤其是刚新建完排在最后的）得自己滚进来。
@@ -40,9 +43,8 @@ function LibraryTab({
     <button
       type="button"
       ref={ref}
-      role="tab"
+      {...tabProps}
       className="wf-lib-tab"
-      aria-selected={active}
       onClick={onPick}
     >
       {item.name}
@@ -145,6 +147,11 @@ export function WorkflowsSettings({ notify }: { notify: (message: string) => voi
   const builtin = items.filter((item) => item.builtin && !item.disabled);
   const mine = items.filter((item) => !item.builtin && !item.disabled);
   const off = items.filter((item) => item.disabled);
+  // 横条上的顺序就是方向键的顺序(系统自带 → 我建的 → 已停用),中间那几个分组标题
+  // 不是页签,漫游自然跳过它们。
+  const libTabs = useRovingChoice(
+    [...builtin, ...mine, ...off].map((item) => item.id), activeId ?? "", setActiveId, "tab",
+  );
 
   return (
     <>
@@ -162,18 +169,21 @@ export function WorkflowsSettings({ notify }: { notify: (message: string) => voi
         {/* 起手式横着排一条 tab。竖着放在左边时，主区（名牌 + 在哪儿干活 + 线路图）被压掉
             230px 宽，而线路图恰恰是这一页最需要宽度的东西 —— 5 站起步，窄一点就得紧凑档
             甚至出滚动条。横条只占一行高，宽度全留给线路图。 */}
-        <div className="wf-lib-tabs" role="tablist" aria-label="起手式">
+        <div className="wf-lib-tabs" {...libTabs.groupProps} aria-label="起手式">
           {builtin.length > 0 && <span className="wf-lib-tabgroup">系统自带</span>}
           {builtin.map((item) => (
-            <LibraryTab key={item.id} item={item} active={item.id === activeId} onPick={() => setActiveId(item.id)} />
+            <LibraryTab key={item.id} item={item} active={item.id === activeId}
+              tabProps={libTabs.itemProps(item.id)} onPick={() => setActiveId(item.id)} />
           ))}
           {mine.length > 0 && <span className="wf-lib-tabgroup">我建的</span>}
           {mine.map((item) => (
-            <LibraryTab key={item.id} item={item} active={item.id === activeId} onPick={() => setActiveId(item.id)} />
+            <LibraryTab key={item.id} item={item} active={item.id === activeId}
+              tabProps={libTabs.itemProps(item.id)} onPick={() => setActiveId(item.id)} />
           ))}
           {off.length > 0 && <span className="wf-lib-tabgroup">已停用</span>}
           {off.map((item) => (
-            <LibraryTab key={item.id} item={item} active={item.id === activeId} onPick={() => setActiveId(item.id)} />
+            <LibraryTab key={item.id} item={item} active={item.id === activeId}
+              tabProps={libTabs.itemProps(item.id)} onPick={() => setActiveId(item.id)} />
           ))}
           {!loading && !items.length && <span className="wf-lib-tabgroup">一个起手式都没有</span>}
           <button type="button" className="wf-lib-new" onClick={() => void create()}>

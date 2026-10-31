@@ -1,5 +1,6 @@
 import type { AgentExecutorProfile, AgentType, FreeReviewExecutorOverride, ReviewerProfile } from "@ash/shared";
 import { executorValue, parseExecutorValue } from "../lib/agentAvailability.ts";
+import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 
 /** 派审面上「这一次用谁跑」的草稿——形状与审查者表单同源，只是不含名称。 */
@@ -58,6 +59,8 @@ export function reviewerRunPayload(
  * 把它写回配置反而是意外副作用。三段没动时整块保存选择不出现，别拿一个无从选起
  * 的单选题占版面。
  */
+const SAVE_MODES: readonly ReviewerRunSaveMode[] = ["once", "overwrite", "new"];
+
 export function ReviewerRunOverride({
   reviewer,
   profiles,
@@ -83,6 +86,9 @@ export function ReviewerRunOverride({
   onSaveModeChange: (mode: ReviewerRunSaveMode) => void;
   onNewNameChange: (name: string) => void;
 }) {
+  // 钩子排在那句早退之前(hooks 规则):这一组的取值是固定的三档,只有标签要等
+  // reviewer 才拼得出来。
+  const saveModeGroup = useRovingChoice(SAVE_MODES, saveMode, onSaveModeChange);
   if (!reviewer) return null;
   const modes: Array<{ value: ReviewerRunSaveMode; label: string; hint: string }> = [
     { value: "once", label: "仅本次使用", hint: `不改动「${reviewer.name}」的配置` },
@@ -105,13 +111,12 @@ export function ReviewerRunOverride({
         onEffortChange={(effort) => onChange({ ...draft, effort })}
       />
       {changed && (
-        <div className="free-review-save-mode" role="radiogroup" aria-label="改动的保存方式">
+        <div className="free-review-save-mode" {...saveModeGroup.groupProps} aria-label="改动的保存方式">
           {modes.map((mode) => (
             <button
               key={mode.value}
               type="button"
-              role="radio"
-              aria-checked={saveMode === mode.value}
+              {...saveModeGroup.itemProps(mode.value)}
               disabled={disabled}
               onClick={() => onSaveModeChange(mode.value)}
             >

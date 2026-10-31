@@ -30,6 +30,17 @@ export interface AppSettings {
   instanceMode: "" | "single" | "multi";
   rootDir: string;
   sharedHostCli: boolean;
+  /**
+   * 首启向导走完(或被跳过)的那一刻,ISO 时间串;`""` = 还没走完。
+   *
+   * 个人面的键(PERSONAL_SETTING_KEYS):多人模式下供应商与执行器都是一人一套,
+   * 新来的人同样要被领着配一遍,所以这个标志也得一人一份。
+   *
+   * **它只是「用户已经表过态」的凭据,不是判据本身** —— 判据在
+   * `server/src/onboarding.ts`:已经有执行器或项目的实例一律算走过,否则这一版
+   * 升上去会给每台老实例糊一屏欢迎页。
+   */
+  onboardedAt: string;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
@@ -46,4 +57,5 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   instanceMode: "",
   rootDir: "",
   sharedHostCli: false,
+  onboardedAt: "",
 });

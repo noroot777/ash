@@ -19,7 +19,7 @@ const params = new URLSearchParams(location.search);
 const delay = Number(params.get("delay") ?? 0);
 
 // 自用模式:AuthGate 对它应当**整体透明**,直接渲染 children。
-const state: AuthState = { mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null };
+const state: AuthState = { mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false };
 
 let realRequests = 0;
 const realFetch = window.fetch.bind(window);

@@ -39,11 +39,8 @@ import {
   type NavItem,
   type SettingsSection,
 } from "./sections.ts";
-import "./agents-settings.css";
-// 必须排在 agents-settings.css 之后:两边有几组共用的表单基础样式留在那边,
-// 顺序换了层叠结果就变了(见 providers-settings.css 顶部)。
-import "./providers-settings.css";
-import "./executors-settings.css";
+// agents / providers / executors 那三份搬去了 styles/global.css:首启向导也要复用
+// 其中两个组件,而它们之间的层叠顺序只能在一个地方写死。
 import "./reviewer-settings.css";
 
 // 这一节到底属于哪个导航组、叫什么名字、URL 里怎么写，全在 sections.ts（认路的不止这一页：

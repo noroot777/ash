@@ -48,6 +48,14 @@ export function syncHostCliPolicy(policy: HostCliPolicy): void {
   for (const notify of listeners) notify(next);
 }
 
+/**
+ * 现在是哪一档。**要这一位就从这里拿,别再拿 `mode` 和 `sharedHostCli` 自己兜一遍**
+ * —— 兜出来的那份不会跟着设置页那个开关翻面,而且判据一分成两份就会各自漂移。
+ */
+export function hostCliIsolated(): boolean {
+  return isolated;
+}
+
 /** 订阅翻面。返回退订函数;模块级订阅不退订也无妨。 */
 export function onHostCliPolicyChange(listener: (isolated: boolean) => void): () => void {
   listeners.add(listener);
