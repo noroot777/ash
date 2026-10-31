@@ -25,7 +25,22 @@ const uniquePaths = (paths: string[]) => [...new Set(paths)];
 const noteTime = (value: number) => new Date(value).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 type NoteDraft = { id: string | null; body: string; attachments: string[] };
-type SaveState = "saved" | "pending" | "saving" | "error";
+type SaveState = "saved" | "pending" | "saving" | "empty" | "error";
+/**
+ * 一次落盘的三种结局。**「存不下去」和「不许走」是两件事**：
+ *
+ * · `saved`     —— 落盘了，或者本来就没有改动
+ * · `unsavable` —— 正文被清空了，服务端不收空正文（`POST/PATCH /notes` 一律 400）；
+ *                  这条的原文一个字没动地留在服务端那份里，没有可丢的东西
+ * · `failed`    —— 请求被拒或网断了，草稿里有内容会丢
+ *
+ * 以前这里只回一个 boolean，「正文空」和「真失败」都是 `false`，而面板里每个「要离开
+ * 当前草稿」的动作（关闭 / Esc / 点遮罩 / 换一条 / 新建 / 删除 / 转任务）都拿它当放行
+ * 条件 —— 于是「把一条已存在的随手记正文全删掉」会把整个面板焊死：删也删不掉，关也关
+ * 不上，只能把字打回去。保护的本意是「别把用户的编辑弄丢」，而空正文根本没有可丢的
+ * 编辑，拿同一个 false 挡住所有出口纯属连坐。
+ */
+type FlushResult = "saved" | "unsavable" | "failed";
 type Position = { left: number; top: number };
 type DragState = {
   pointerId: number;
@@ -192,10 +207,17 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
   const [confirmDelete, setConfirmDelete] = useState(false);
   const movable = useMovableNotesPanel();
   const uploads = useAttachments();
+  // `notify` 是调用方传进来的，**它的函数身份一律不进 hook 依赖**：没被 useCallback 稳住
+  // 的调用方（而弹提示这件事本身常常就会让调用方重渲染）会让下面「读取随手记」那个 effect
+  // 跟着重跑 —— 弹一句提示就把列表重新拉一遍，把用户正在编的草稿连带冲掉。走 ref 之后，
+  // 面板对调用方怎么传这个函数免疫。
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
+  const say = useCallback((message: string) => notifyRef.current(message), []);
   const rowsRef = useRef<Note[]>([]);
   const draftRef = useRef<NoteDraft>(initialDraft);
   const savedDraftRef = useRef<NoteDraft>(initialDraft);
-  const saveInFlightRef = useRef<Promise<boolean> | null>(null);
+  const saveInFlightRef = useRef<Promise<FlushResult> | null>(null);
 
   const updateRows = useCallback((update: (current: Note[]) => Note[]) => {
     const next = update(rowsRef.current);
@@ -208,23 +230,23 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     setSaveState(sameDraft(next, savedDraftRef.current) ? "saved" : "pending");
   }, []);
 
-  const flushDraft = useCallback(async (): Promise<boolean> => {
+  const flushDraft = useCallback(async (): Promise<FlushResult> => {
     while (true) {
       if (saveInFlightRef.current) {
-        if (!await saveInFlightRef.current) return false;
+        const settled = await saveInFlightRef.current;
+        if (settled !== "saved") return settled;
         continue;
       }
       const snapshot = draftRef.current;
-      if (sameDraft(snapshot, savedDraftRef.current)) return true;
+      if (sameDraft(snapshot, savedDraftRef.current)) return "saved";
       const isNew = snapshot.id === null;
       if (!snapshot.body.trim()) {
-        if (isNew) return true;
-        setSaveState("error");
-        notify("随手记内容不能为空");
-        return false;
+        setSaveState("empty");
+        // 新建的空草稿压根没落过盘：没东西可存，也没东西可丢。
+        return isNew ? "saved" : "unsavable";
       }
       setSaveState("saving");
-      let request: Promise<boolean>;
+      let request: Promise<FlushResult>;
       const persist = isNew
         ? api.createNote({ projectId: project.id, body: snapshot.body, attachments: snapshot.attachments })
         : api.patchNote(snapshot.id!, { body: snapshot.body, attachments: snapshot.attachments });
@@ -241,20 +263,31 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
           }
           savedDraftRef.current = { id: saved.id, body: saved.body, attachments: saved.attachments };
           setSaveState(sameDraft(draftRef.current, savedDraftRef.current) ? "saved" : "pending");
-          return true;
+          return "saved" as FlushResult;
         },
         (reason: unknown) => {
           setSaveState("error");
-          notify(reason instanceof Error ? reason.message : "随手记保存失败");
-          return false;
+          say(reason instanceof Error ? reason.message : "随手记保存失败");
+          return "failed" as FlushResult;
         },
       ).finally(() => {
         if (saveInFlightRef.current === request) saveInFlightRef.current = null;
       });
       saveInFlightRef.current = request;
-      if (!await request) return false;
+      const settled = await request;
+      if (settled !== "saved") return settled;
     }
-  }, [notify, project.id, updateRows]);
+  }, [project.id, say, updateRows]);
+
+  /**
+   * 每个「要离开当前草稿」的动作都先过这一关。**只有真失败才留住用户** —— 正文清空了
+   * 存不下去的，服务端那份原文还在，把人挡在这里只会让删除、关闭、换一条全都点不动。
+   */
+  const leaveDraft = useCallback(async (): Promise<boolean> => {
+    const result = await flushDraft();
+    if (result === "unsavable") say("随手记不能为空，原内容已保留");
+    return result !== "failed";
+  }, [flushDraft, say]);
 
   useEffect(() => {
     let alive = true;
@@ -276,18 +309,20 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
       setEditing(startNew || !first);
       uploads.clear();
     }).catch((reason: unknown) => {
-      if (alive) notify(reason instanceof Error ? reason.message : "随手记读取失败");
+      if (alive) say(reason instanceof Error ? reason.message : "随手记读取失败");
     }).finally(() => {
       if (alive) setLoading(false);
     });
     return () => { alive = false; };
-  }, [initialNoteId, notify, project.id, uploads.clear]);
+  }, [initialNoteId, project.id, say, uploads.clear]);
 
   useEffect(() => {
-    if (sameDraft(draft, savedDraftRef.current)) return;
+    // 删除确认框开着时按住自动保存：这条马上要没了，存它要么白存，要么排到 DELETE 后面
+    // 把刚删掉的那条又写回列表。取消确认后这个 effect 会重跑，自动保存照旧接上。
+    if (confirmDelete || sameDraft(draft, savedDraftRef.current)) return;
     const timer = window.setTimeout(() => { void flushDraft(); }, 800);
     return () => window.clearTimeout(timer);
-  }, [draft, flushDraft]);
+  }, [confirmDelete, draft, flushDraft]);
 
   useEffect(() => {
     if (!uploads.attachments.length) return;
@@ -318,11 +353,11 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     setDeferred(false);
     // 传失败就别接着走了：这一走用户就看不到那条错误了，留在原地让他自己决定。
     if (uploads.error) {
-      notify("附件上传失败，先处理一下再离开");
+      say("附件上传失败，先处理一下再离开");
       return;
     }
     void action?.();
-  }, [deferred, notify, uploads.error, uploadsSettled]);
+  }, [deferred, say, uploads.error, uploadsSettled]);
 
   useEffect(() => () => { void flushDraft(); }, [flushDraft]);
 
@@ -339,9 +374,10 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
         : "还没有随手记";
   const saveStatus = newDraft && !draft.body.trim() && !draft.attachments.length ? "输入后自动保存"
     : saveState === "saving" ? "正在保存…"
-      : saveState === "pending" ? "等待自动保存"
-        : saveState === "error" ? "保存失败，可重试"
-          : "已自动保存";
+      : saveState === "empty" ? "随手记不能为空，这次清空没保存"
+        : saveState === "pending" ? "等待自动保存"
+          : saveState === "error" ? "保存失败，可重试"
+            : "已自动保存";
   const saveButtonLabel = !draft.body.trim() ? "保存"
     : saveState === "saving" ? "保存中…"
       : saveState === "error" ? "重试保存"
@@ -349,8 +385,8 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
           : "已保存";
 
   const close = useCallback(() => {
-    afterUploads(async () => { if (await flushDraft()) onClose(); });
-  }, [afterUploads, flushDraft, onClose]);
+    afterUploads(async () => { if (await leaveDraft()) onClose(); });
+  }, [afterUploads, leaveDraft, onClose]);
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -369,10 +405,10 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
   }, [close, confirmDelete, flushDraft]);
 
   const openTask = (taskId: string) => {
-    afterUploads(async () => { if (await flushDraft()) onTask(taskId); });
+    afterUploads(async () => { if (await leaveDraft()) onTask(taskId); });
   };
   const select = (note: Note) => afterUploads(async () => {
-    if (note.id === draftRef.current.id || !await flushDraft()) return;
+    if (note.id === draftRef.current.id || !await leaveDraft()) return;
     const target = rowsRef.current.find((item) => item.id === note.id);
     if (!target) return;
     const next = { id: target.id, body: target.body, attachments: target.attachments };
@@ -385,7 +421,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     uploads.clear();
   });
   const create = () => afterUploads(async () => {
-    if (!await flushDraft()) return;
+    if (!await leaveDraft()) return;
     const next = emptyDraft();
     savedDraftRef.current = next;
     draftRef.current = next;
@@ -397,11 +433,15 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     setConversionFilter("all");
     uploads.clear();
   });
+  // 删除**不先落盘**：这条记马上要被销毁，存一遍毫无意义，而「存不下去就不许删」正是
+  // 「清空正文后删除按钮点不动」的来由。只有在途的那次保存要等完，否则它的成功回调会把
+  // 这条写回 rows，排在 DELETE 之后就把刚删掉的那条又请回了列表。
   const remove = async () => {
     const targetId = draftRef.current.id;
     if (!targetId) return;
     setDeleting(true);
     try {
+      if (saveInFlightRef.current) await saveInFlightRef.current;
       await api.deleteNote(targetId);
       const remaining = rowsRef.current.filter((note) => note.id !== targetId);
       updateRows(() => remaining);
@@ -419,9 +459,9 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
       setSaveState("saved");
       setEditing(!first);
       uploads.clear();
-      notify("随手记已删除");
+      say("随手记已删除");
     } catch (reason) {
-      notify(reason instanceof Error ? reason.message : "随手记删除失败");
+      say(reason instanceof Error ? reason.message : "随手记删除失败");
     } finally {
       setDeleting(false);
     }
@@ -435,7 +475,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     });
   };
   const convert = () => afterUploads(async () => {
-    if (deleting || !await flushDraft()) return;
+    if (deleting || !await leaveDraft()) return;
     const selectedNotes = rowsRef.current.filter((note) => picked.has(note.id));
     const current = rowsRef.current.find((note) => note.id === draftRef.current.id) ?? null;
     const notes = selectedNotes.length ? selectedNotes : current ? [current] : [];
@@ -537,9 +577,9 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
                 : `${saveStatus} · 正文失焦后显示 Markdown`}</span>
           <div className="notes-footer-actions">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={deleting} />
-            {active && <Button variant="danger" disabled={deleting} onClick={() => afterUploads(async () => { if (await flushDraft()) setConfirmDelete(true); })}><Trash size={13} />删除</Button>}
+            {active && <Button variant="danger" disabled={deleting} onClick={() => afterUploads(() => setConfirmDelete(true))}><Trash size={13} />删除</Button>}
             <Button variant={picked.size ? "primary" : "secondary"} disabled={deleting || (!picked.size && !draft.body.trim())} onClick={() => convert()}><NotePencil size={13} />{picked.size ? `创建任务（${picked.size}）` : "转为新任务"}</Button>
-            <Button variant={picked.size ? "secondary" : "primary"} disabled={!dirty || !draft.body.trim() || deleting || saveState === "saving"} onClick={() => { void flushDraft().then((saved) => { if (saved) notify("随手记已保存"); }); }}>{saveButtonLabel}</Button>
+            <Button variant={picked.size ? "secondary" : "primary"} disabled={!dirty || !draft.body.trim() || deleting || saveState === "saving"} onClick={() => { void flushDraft().then((result) => { if (result === "saved") say("随手记已保存"); else if (result === "unsavable") say("随手记不能为空"); }); }}>{saveButtonLabel}</Button>
           </div>
         </footer>
       </section>
