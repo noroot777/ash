@@ -211,7 +211,24 @@ try {
     const offR = install("grok", off);
     assert.ok(!offR.added && /disabled_mcp_servers/.test(offR.why ?? ""), `关着的要说清:${offR.why ?? ""}`);
     assert.equal(readFileSync(offFile, "utf8"), offBefore, "也不动它");
-    group("TOML:第三方表在也接得上、重名认得出、判不准就不写");
+
+    // ⑥b **别人表里同名的那个键不是这个全局开关**(本轮审查 F2,真 grok 实测:这份配置
+    //     `grok mcp list` 读得通、照样能加 ash)。上一版裸 Node 那侧不记表作用域,任意表里
+    //     的 `disabled_mcp_servers` 都当成根级事实 —— 自动补接当场被拒,理由还说是用户关的。
+    //     TS 那侧(`codex-toml.ts` 的 `tomlRootStringArray`)本来就记作用域,这里钉的是并口径。
+    for (const body of [
+      '[plugins.demo]\ndisabled_mcp_servers = ["ash"]\n',
+      '[mcp_servers.other]\ncommand = "x"\n\n[plugins.demo]\ndisabled_mcp_servers = ["ash", "harness"]\n',
+    ]) {
+      const h = home("toml-scoped-off");
+      const file = seed(h, body);
+      const r = install("grok", h);
+      assert.ok(r.added, `非根级的同名键不该挡住补接:${r.why ?? ""}`);
+      const after = readFileSync(file, "utf8");
+      assert.ok(after.startsWith(body), "用户原来那几行一个字节都不许动");
+      assert.equal((after.match(/\[mcp_servers\.ash\]/g) ?? []).length, 1, "恰好一张 ash 表");
+    }
+    group("TOML:第三方表在也接得上、重名认得出、判不准就不写、非根级同名键不当全局开关");
   }
 
   // ── ⑤ JSON:注释不改写、已有不覆盖、值认不出来不覆盖 ──────────────────────
@@ -455,7 +472,72 @@ try {
     assert.match(r7.why ?? "", /看不准|没实测/, `要说清是看不准:${r7.why ?? ""}`);
     assert.equal(readFileSync(g7, "utf8"), kiloBody, "两份都不许动");
     assert.equal(readFileSync(k7, "utf8"), empty, "两份都不许动");
-    group("会读好几份配置的那家:按「最终生效的是哪一条」判(关掉的、两份都读的、只在变量里的)");
+
+    // ── 本轮审查 F1:判的是「几份**合起来**生效的那一条」,不是「挑一份赢家」 ────────
+    //    四格的真 CLI 结论都在 `catalog.ts` 那家的 `source` 里(⑨⑫⑬⑭),这里钉裸 Node 这侧
+    //    跟它一致 —— TS 那侧同样四格在 `mcp-sources-cases.ts` 第 ⑲ 组。
+    const ocFull = (tag: string, enabled: boolean) => `${JSON.stringify({
+      mcp: { ash: { type: "local", command: ["node", `/${tag}.js`], environment: { WHO: tag }, enabled } },
+    }, null, 2)}\n`;
+    const ocRaw = (ash: Record<string, unknown>) => `${JSON.stringify({ mcp: { ash } }, null, 2)}\n`;
+
+    // ⒤ **层级对打**:`OPENCODE_CONFIG` 那个文件写完整条目 + `enabled:false`,
+    //    `OPENCODE_CONFIG_DIR` 那个目录里只写 `{"enabled":true}` ⇒ 真 CLI `ash connected`。
+    //    上一版把文件排在目录上面(排反了),于是报「被关掉了,没有替你打开」。
+    const h8 = home("merge-dir-beats-file");
+    mkdirSync(join(h8, ".config", "opencode"), { recursive: true });
+    writeFileSync(join(h8, ".config", "opencode", "opencode.json"), empty, "utf8");
+    const f8 = join(h8, "custom.json");
+    writeFileSync(f8, ocFull("FILE", false), "utf8");
+    const alt8 = join(h8, "altdir");
+    mkdirSync(alt8, { recursive: true });
+    writeFileSync(join(alt8, "opencode.json"), ocRaw({ enabled: true }), "utf8");
+    const r8 = install("opencode", h8, { OPENCODE_CONFIG: f8, OPENCODE_CONFIG_DIR: alt8 });
+    assert.ok(!r8.added, "合起来是开着的 ⇒ 不该再写一条");
+    assert.match(r8.why ?? "", /已经有生效的/, `不许说成被关掉了:${r8.why ?? ""}`);
+    assert.equal(hosts.hostMcpFile("opencode", { env: { OPENCODE_CONFIG: f8, OPENCODE_CONFIG_DIR: alt8 }, home: h8 }),
+      join(alt8, "opencode.json"), "落点是优先级最高的那份可写来源");
+
+    // ⒥ **只写开关、没写启动方式**:真 CLI 打印 `No MCP servers configured`(有键不等于有
+    //    服务),所以既不许当「已接好」,也不许覆盖用户那个键 ⇒ 如实说看不准、一个字不写。
+    const h9 = home("merge-switch-only");
+    const g9 = join(h9, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(g9), { recursive: true });
+    const switchOnly = ocRaw({ enabled: true });
+    writeFileSync(g9, switchOnly, "utf8");
+    const f9 = join(h9, "custom.json");
+    writeFileSync(f9, empty, "utf8");
+    const r9 = install("opencode", h9, { OPENCODE_CONFIG: f9 });
+    assert.ok(!r9.added, "只有一个开关键 ⇒ 不许报成已接好,也不许覆盖它");
+    assert.match(r9.why ?? "", /没写启动方式/, `要说清缺的是什么:${r9.why ?? ""}`);
+    assert.equal(readFileSync(g9, "utf8"), switchOnly, "一个字节都不许动");
+
+    // ⒦ **同目录两份都开着、命令不同** ⇒ 真 CLI 用 `.jsonc` 那条,所以措辞和落点都指它。
+    const h10 = home("merge-same-dir");
+    mkdirSync(join(h10, ".config", "opencode"), { recursive: true });
+    writeFileSync(join(h10, ".config", "opencode", "opencode.json"), ocFull("JSON", true), "utf8");
+    const jsonc10 = join(h10, ".config", "opencode", "opencode.jsonc");
+    writeFileSync(jsonc10, ocFull("JSONC", true), "utf8");
+    const f10 = join(h10, "custom.json");
+    writeFileSync(f10, empty, "utf8");
+    const r10 = install("opencode", h10, { OPENCODE_CONFIG: f10 });
+    assert.ok(!r10.added, "已经有生效的 ⇒ 不写");
+    assert.match(r10.why ?? "", /opencode\.jsonc/, `说的该是生效那份:${r10.why ?? ""}`);
+
+    // ⒧ **`disabled: true` 这个键 opencode 不认**(实测带着它照样连):不许当成关着硬拒,
+    //    也不敢当成没写(同格式的 kilo 没真 CLI 可问)⇒ 如实答看不准。
+    const h11 = home("merge-disabled-key");
+    const g11 = join(h11, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(g11), { recursive: true });
+    const withDisabled = ocRaw({ type: "local", command: ["node", "/x.js"], enabled: true, disabled: true });
+    writeFileSync(g11, withDisabled, "utf8");
+    const f11 = join(h11, "custom.json");
+    writeFileSync(f11, empty, "utf8");
+    const r11 = install("opencode", h11, { OPENCODE_CONFIG: f11 });
+    assert.ok(!r11.added, "看不准就不写");
+    assert.match(r11.why ?? "", /disabled: true/, `要指明是哪个键:${r11.why ?? ""}`);
+    assert.equal(readFileSync(g11, "utf8"), withDisabled, "一个字节都不许动");
+    group("会读好几份配置的那家:判的是几份合起来那一条(层级、字段继承、同目录先后、只写开关)");
   }
 
   // ── ⑧ 文本编辑器两侧不许漂(TS `json-edit.ts` ↔ 裸 Node `json-edit.mjs`)──────

@@ -237,6 +237,135 @@ export async function checkSourceModel(
     group("逐名跨来源:两个兼容名各算一次、搬运与提示消费同一个选中结果、自查路径是路径");
   }
 
+  // ── ⑲ 几份来源**合起来**算那一条(本轮审查 F1)────────────────────────────────
+  //
+  // 七格的真 CLI 结论记在 `catalog.ts` 那家的 `source` ⑨–⑮ 里(2026-10-31 用真 opencode
+  // 1.19.3 逐格测的),这里钉「解析、落点、搬运三处都跟实测一致」。裸 Node 那侧同样四格在
+  // `test-ash-mcp-installer.ts` 第 ⑦ 组的 ⒤–⒧。
+  {
+    const { shape, site } = shapeOf("opencode");
+    const merges = site.sourcesMerge === true;
+    /** 一条完整登记(认得出启动方式的那种),`tag` 用来分辨生效的是哪一份。 */
+    const full = (tag: string, extra: Record<string, unknown> = {}) => ({
+      type: "local", command: ["node", `/${tag}.js`], environment: { WHO: tag, KEEP: "1" }, ...extra,
+    });
+
+    // ⒜ 审查那条复现:`OPENCODE_CONFIG` 指的文件里是完整登记 + `enabled:false`,
+    //    `OPENCODE_CONFIG_DIR` 那个目录里只写 `{"enabled":true}` ⇒ 真 CLI `ash connected`。
+    //    上一版两处都错:层级排反了(实测那个目录比那个文件高),又按「赢家整份说了算」算
+    //    ⇒ 判成 disabled(预检硬拒)、安装器还说成是用户自己关的,落点也指到更低那一份。
+    const a = bench("f1-dir-beats-file");
+    const aGlobal = seedGlobal(a.host, EMPTY);
+    const aFile = join(a.dir, "my.json");
+    const aFileBody = ocBody({ ash: full("FILE", { enabled: false }) });
+    writeFileSync(aFile, aFileBody, "utf8");
+    const aDir = join(a.dir, "alt");
+    mkdirSync(aDir, { recursive: true });
+    const aAlt = join(aDir, "opencode.json");
+    const aAltBody = ocBody({ ash: { enabled: true } });
+    writeFileSync(aAlt, aAltBody, "utf8");
+    const envA = ocEnv(a.host, { OPENCODE_CONFIG: aFile, OPENCODE_CONFIG_DIR: aDir });
+    const srcA = ashMcpHostSources("opencode", envA, a.host);
+    assert.deepEqual(srcA.map((s) => s.file), [aGlobal, aFile, aAlt],
+      "升序:默认目录 < 变量指的那个文件 < 变量指的那个目录");
+    assert.equal(new Set(srcA.map((s) => s.level)).size, srcA.length, "实测过加载序 ⇒ 每份各占一级");
+    const stA = effectiveConfigState(srcA, shape, merges);
+    assert.equal(stA.state, "present", `合起来是开着的:${stA.detail}`);
+    assert.deepEqual(stA.fact?.launch?.args, ["/FILE.js"], "启动方式是低那份继承上来的");
+    assert.equal(fileAshMcpVerdict("opencode", envA, [a.host]).state, "present", "派审门禁也得放行");
+    assert.equal(ashMcpHostFile("opencode", envA, a.host), aAlt, "落点是优先级最高的那份可写来源");
+    const rA = await registerAshMcp({
+      agentType: "opencode", dir: ashMcpConfigDir("opencode", envA, a.host)!, hostHome: a.host, env: envA,
+    });
+    assert.ok(rA.ok, rA.ok ? "" : rA.why);
+    assert.deepEqual(
+      [readFileSync(aGlobal, "utf8"), readFileSync(aFile, "utf8"), readFileSync(aAlt, "utf8")],
+      [EMPTY, aFileBody, aAltBody], "三份一个字节都不许动");
+
+    // ⒝ 搬进隔离档的必须是**合完**那一条:宿主全局那份写着完整启动命令和环境变量、
+    //    `OPENCODE_CONFIG` 那份只写 `{"enabled": true}` ⇒ 真 CLI 用的是合起来那条。
+    //    上一版搬的是赢家那一份里的原值,也就是只有一个 `enabled` 键:注册报成功,而隔离档
+    //    里真 CLI 打印 `No MCP servers configured`,agent 一个 ash 工具都没有。
+    const b = bench("f1-transplant-merged");
+    seedGlobal(b.host, ocBody({ ash: full("GLOBAL") }));
+    const bFile = join(b.dir, "my.json");
+    writeFileSync(bFile, ocBody({ ash: { enabled: true } }), "utf8");
+    const isolated = join(b.dir, "profile");
+    mkdirSync(isolated, { recursive: true });
+    const rB = await registerAshMcp({
+      agentType: "opencode", dir: isolated, hostHome: b.host, env: ocEnv(b.host, { OPENCODE_CONFIG: bFile }),
+    });
+    assert.ok(rB.ok, rB.ok ? "" : rB.why);
+    const built = JSON.parse(readFileSync(join(isolated, "opencode.json"), "utf8")) as
+      { mcp: Record<string, Record<string, unknown>> };
+    assert.deepEqual(built.mcp.ash?.command, ["node", "/GLOBAL.js"], "继承来的启动命令要在");
+    assert.deepEqual(built.mcp.ash?.environment, { WHO: "GLOBAL", KEEP: "1" }, "继承来的环境变量也要在");
+
+    // ⒞ 同一个目录里两份都开着、命令不同 ⇒ 真 CLI 用 `.jsonc` 那条。上一版同目录几份同级,
+    //    取的是数组里第一个(`.json`),于是提示指向一个根本没在跑的命令。
+    const c = bench("f1-same-dir-order");
+    seedGlobal(c.host, ocBody({ ash: full("JSON") }));
+    seedGlobal(c.host, ocBody({ ash: full("JSONC") }), "opencode.jsonc");
+    const envC = ocEnv(c.host);
+    const stC = effectiveConfigState(ashMcpHostSources("opencode", envC, c.host), shape, merges);
+    assert.equal(stC.state, "present", stC.detail);
+    assert.deepEqual(stC.fact?.launch?.args, ["/JSONC.js"], "同目录里 .jsonc 排在 .json 之后");
+    assert.match(fileAshMcpVerdict("opencode", envC, [c.host]).hint ?? "", /JSONC\.js/, "提示跟判定同源");
+
+    // ⒟ 合的是**逐字段**:子对象按键合(低那份没被顶掉的键留着),数组整条换掉。
+    const d = bench("f1-deep-merge");
+    seedGlobal(d.host, ocBody({ ash: full("LOW") }));
+    const dFile = join(d.dir, "my.json");
+    writeFileSync(dFile, ocBody({
+      ash: { type: "local", command: ["node", "/HIGH.js"], environment: { WHO: "HIGH" } },
+    }), "utf8");
+    const stD = effectiveConfigState(
+      ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: dFile }), d.host), shape, merges);
+    assert.equal(stD.state, "present", stD.detail);
+    assert.deepEqual(stD.fact?.launch?.args, ["/HIGH.js"], "数组整条换掉");
+    assert.deepEqual(stD.fact?.raw?.environment, { WHO: "HIGH", KEEP: "1" },
+      "子对象按键合:被顶的那个键换了,没被顶的留着");
+
+    // ⒠ **有键不等于有服务**:只写 `{"enabled": true}` 时真 CLI 打印
+    //    `No MCP servers configured`(条目那个联合类型里,没写 `type` 的那一支只有开关)
+    //    ⇒ 既不许报成已接好,也不许往那个键上盖一条 —— 如实说看不准、一个字不写。
+    const e = bench("f1-switch-only");
+    const switchOnly = ocBody({ ash: { enabled: true } });
+    const eGlobal = seedGlobal(e.host, switchOnly);
+    const eFile = join(e.dir, "my.json");
+    writeFileSync(eFile, EMPTY, "utf8");
+    const envE = ocEnv(e.host, { OPENCODE_CONFIG: eFile });
+    const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), shape, merges);
+    assert.equal(stE.state, "unknown", `只有一个开关键 ⇒ 看不准:${stE.detail}`);
+    assert.match(stE.detail, /没写启动方式/, stE.detail);
+    const rE = await registerAshMcp({
+      agentType: "opencode", dir: ashMcpConfigDir("opencode", envE, e.host)!, hostHome: e.host, env: envE,
+    });
+    assert.ok(!rE.ok && /看不准/.test(rE.why), `看不准就不写:${rE.ok ? "ok" : rE.why}`);
+    assert.equal(readFileSync(eGlobal, "utf8"), switchOnly, "用户那个键一个字节都不许动");
+    //    两个键都没写更糟:真 CLI 把**整份配置**判成非法、直接 exit 1。
+    const f = bench("f1-no-keys");
+    seedGlobal(f.host, ocBody({ ash: { command: ["node", "/x.js"] } }));
+    const fFile = join(f.dir, "my.json");
+    writeFileSync(fFile, EMPTY, "utf8");
+    const stF = effectiveConfigState(
+      ashMcpHostSources("opencode", ocEnv(f.host, { OPENCODE_CONFIG: fFile }), f.host), shape, merges);
+    assert.equal(stF.state, "unknown", `既没 type 也没 enabled ⇒ 看不准:${stF.detail}`);
+    assert.match(stF.detail, /非法/, stF.detail);
+
+    // ⒡ `disabled: true` 这个键 opencode **实测不认**(带着它照样连):不许当成关着硬拒
+    //    (disabled 在预检里是硬拒),可同格式的 kilo 没真 CLI 可问 ⇒ 只能答看不准。
+    const g = bench("f1-disabled-key");
+    seedGlobal(g.host, ocBody({ ash: full("DIS", { disabled: true }) }));
+    const gFile = join(g.dir, "my.json");
+    writeFileSync(gFile, EMPTY, "utf8");
+    const stG = effectiveConfigState(
+      ashMcpHostSources("opencode", ocEnv(g.host, { OPENCODE_CONFIG: gFile }), g.host), shape, merges);
+    assert.equal(stG.state, "unknown", `不许当成关着:${stG.detail}`);
+    assert.match(stG.detail, /disabled: true/, stG.detail);
+    group("几份合起来那一条:层级实测序、跨来源字段继承、同目录先后、只写开关、disabled 不认");
+  }
+
   // ── ⑰ 改写已有配置之前留一份核对过的备份(本轮审查 F2)──────────────────────
   {
     if (!entryBuilt) {
