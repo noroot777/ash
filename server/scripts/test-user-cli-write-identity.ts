@@ -120,14 +120,17 @@ if (process.platform === "win32") {
     assert.equal(statSync(file).ino, ino, "inode 不许换");
     assert.match(readFileSync(twin, "utf8"), /\[mcp_servers\.ash\]/, "另一端跟着更新");
   }
-  // ⑤ 原来没有这个文件：新建那一路照旧(没有可抄的权限,按 umask 来)。
+  // ⑤ 原来没有这个文件：新建那一路**只给自己读**(0600)。这一档没有「原来那份」可抄,所以
+  //    不是就地写那条规矩在管 —— 是「这个文件装着 MCP 接法,别按 umask 摊开给同机器上别的
+  //    账号」。裸 Node 那侧(安装器)同口径,`mcp-publish-cases.ts` 第 ③ 组 ⒟ 和
+  //    `test-ash-mcp-registry.ts` 第 ③ 组各钉着自己那一边。
   {
     const { host, dir } = bench();
     const file = join(dir, "config.toml");
     const state = await ensure(dir, host);
     assert.equal(state.configured, true);
     assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/, "原来没有就新建一份");
-    assert.equal(statSync(file).mode & 0o777, 0o666 & ~process.umask(), "新建的按 umask 来,跟基线一致");
+    assert.equal(statSync(file).mode & 0o777, 0o600, "新建的只给自己读,不按 umask 摊开");
   }
   // ⑥ **扩展 ACL 也得留下** —— mode 相等不等于有效权限相等(审查第 5 轮 F1:macOS 上
   //    `user:nobody deny read` 随 rename 消失,mode 还是 420,只比 mode 一点看不出来,而那
