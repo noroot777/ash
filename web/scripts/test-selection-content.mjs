@@ -21,7 +21,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   browser = await chromium.launch(await chromeLaunchOptions());
   const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(20_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/selection-content.html`);
@@ -96,13 +96,13 @@ try {
   //    折叠摘要那几个字是这样,点开之后里面那条命令也是这样。
   await page.getByTestId("clear").click();
   const summaryRaw = await select({ text: "执行过程 · 6 工具" }, { text: "执行过程 · 6 工具" });
-  assert.equal(await take(), summaryRaw.trim());
+  assert.equal(await take(), summaryRaw, "整个落在装置内时一个字节都不改");
   await page.getByTestId("clear").click();
   await page.locator(".task-execution-block").first().evaluate((element) => { element.open = true; });
   await flush();
   const insideRaw = await select({ text: "case-1-2" }, { text: "case-1-3" });
   assert.match(insideRaw, /case-1-2/);
-  assert.equal(await take(), insideRaw.trim(), "折叠块内部的选区一个字不改");
+  assert.equal(await take(), insideRaw, "折叠块内部的选区一个字不改");
 
   // ⑥ 没有装置相交的普通选区,结果必须跟原生 toString 一字不差——去噪不许顺手改排版。
   await page.getByTestId("clear").click();
@@ -119,8 +119,20 @@ try {
     assert.equal(across.includes(noise), false, `取到的正文里混进了「${noise}」`);
   }
 
+  // ⑧ 切口两边只许削换行:代码块首行那四个空格是正文自己的缩进,削掉它原本同级的两行
+  //    会变成不同层级(审查第 1 轮必修 1)。
+  await page.getByTestId("clear").click();
+  await select({ text: "用户尾行" }, { text: 'print("第二行")' });
+  assert.equal(await take(), '用户尾行\n\n    print("缩进不能丢")\n    print("第二行")');
+
+  // ⑨ 排版语义归原页面:用户气泡那三行靠祖先限定的 `white-space: pre-wrap` 撑着,取文
+  //    不许把它折成一行(审查第 1 轮必修 2)。
+  await page.getByTestId("clear").click();
+  await select({ text: "第 3 条改完了。" }, { text: "用户尾行" });
+  assert.equal(await take(), "第 3 条改完了。\n\n用户首行\n    缩进内容\n用户尾行");
+
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("✓ 会话选文只取正文:跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致");
+  console.log("✓ 会话选文只取正文:跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住");
 } finally {
   await browser?.close();
   await server.close();

@@ -49,6 +49,11 @@ const items: ConversationItem[] = [
   // 结论两段:段内的换行得由排版说了算(Range.toString() 会把它们挤成一行)。
   turn(1, "先把启动自检那一段读了一遍。", "第 2 条改完，测试也过了。\n\n接下来做第 3 条。", [4, 2]),
   turn(2, "把旧的跳过条件放回去又跑了一轮。", "第 3 条改完了。", [1, 1]),
+  // 多行用户消息:气泡的 `white-space: pre-wrap` 来自祖先限定的 CSS
+  // (`.task-user-bubble > p`),取文必须在原页面上量,离屏克隆会把它折成一行。
+  { kind: "user", id: "user-2", text: "用户首行\n    缩进内容\n用户尾行", attachments: [], at: "2026-10-30T02:30:00.000Z" },
+  // 以代码块开头的结论:切口两边只能削换行,首行那四个空格是正文自己的缩进。
+  turn(3, "顺手把示例补上。", '```python\n    print("缩进不能丢")\n    print("第二行")\n```', [1, 1]),
 ];
 
 const task = { id: "selection", projectId: "p", title: "选文取正文", mode: "single", agentType: "claude", status: "done" } as Task;

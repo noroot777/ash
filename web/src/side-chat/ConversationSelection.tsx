@@ -2,11 +2,13 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { createPortal } from "react-dom";
 import { Chats, NotePencil, Quotes } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
-import { selectionContentText } from "./selectionContent.ts";
+import { hasSelectionContent, selectionContentText } from "./selectionContent.ts";
 import { stageSideChatQuote } from "./sideChatQuote.ts";
 import "./conversation-selection.css";
 
-type Selected = { text: string; left: number; top: number };
+/* 存的是**选区本身**而不是取好的文本：取文要借用 `Selection` 去读排版（见
+   selectionContent.ts），那件事只能在用户点按钮、选区马上要收起来的那一刻做。 */
+type Selected = { range: Range; left: number; top: number };
 const controls = "button, input, textarea, select, [contenteditable]:not([contenteditable=false])";
 const elementOf = (node: Node) => node instanceof Element ? node : node.parentElement;
 
@@ -45,13 +47,14 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
         if (!scope?.contains(range.startContainer) || !scope.contains(range.endContainer)
           || elementOf(range.startContainer)?.closest(controls) || elementOf(range.endContainer)?.closest(controls)
           || range.cloneContents().querySelector("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return setSelected(null);
-        // 浮条上那几颗按钮取的是正文，不是选区扫过的每一个字符（见 selectionContent.ts）。
-        const text = selectionContentText(selection, scope);
         const rect = range.getBoundingClientRect();
-        if (!text.trim() || (!rect.width && !rect.height) || rect.bottom < 0 || rect.top > innerHeight) return setSelected(null);
+        // 浮条只问「剔掉界面装置之后还剩不剩正文」—— 扫过的装置不算内容,光选中一条
+        // 「执行过程 · 6 工具」不该出按钮。
+        if (!hasSelectionContent(range, scope) || (!rect.width && !rect.height) || rect.bottom < 0 || rect.top > innerHeight) return setSelected(null);
         const last = Array.from(range.getClientRects()).filter((box) => box.width && box.height).at(-1) ?? rect;
         setSelected({
-          text,
+          // getRangeAt 给的是活的那一个,选区一变它跟着变;留一份快照。
+          range: range.cloneRange(),
           left: Math.max(8, last.left),
           top: Math.max(8, Math.min(last.bottom + 8, innerHeight - 48)),
         });
@@ -95,8 +98,12 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
   }, [selected]);
 
   const take = (use: (text: string) => void) => () => {
-    const text = selected?.text;
+    const picked = selected?.range;
+    const scope = root.current;
     setSelected(null);
+    // 先取文再清选区:取文本身要借用 Selection 把每一截框出来读排版,顺序反了就什么都
+    // 读不到。
+    const text = picked && scope ? selectionContentText(picked, scope) : "";
     window.getSelection()?.removeAllRanges();
     if (text) use(text);
   };
