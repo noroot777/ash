@@ -24,10 +24,11 @@ import { optionalRead, requiredRead } from "./accept-gate-fs.js";
 //    junction 与目录链都不成）落到 ②，不留「逐文件深拷」的退路:那条退路拿不到数据块共享，也不
 //    过对账。
 //
-// ② 有其中任何一样 —— 整棵克隆（copyFile 的 COPYFILE_FICLONE，macOS clonefile / Linux reflink，
-//    内核在不支持的文件系统上自动退回整块复制）。本仓实测 9779 ms，实际占用 16 MB（对照：同一
-//    棵树不带数据块共享是 5040 ms / 684 MB，所以这一项换的是「慢一倍、省 98% 空间」）。Windows
-//    没有对应物，node 会退回普通复制，那台机器上就是真拷 684 MB——慢且占地方，但正确。
+// ② 有其中任何一样 —— 整棵克隆（数据块共享：macOS clonefile / Linux reflink，由 copyTree 交给
+//    平台的拷贝命令完成；**不是** copyFile 的 COPYFILE_FICLONE，那个标志位在 macOS 上根本不克隆，
+//    理由与实测见 accept-gate-relocate 的 cloneInto）。2026-10-31 本仓实测：五棵依赖树 858 MB
+//    表观，克隆一遍 2.2 秒、实际占用 18 MB。Windows 没有对应物，那里退回逐文件普通复制——慢且
+//    真占地方，但正确。
 //
 // 为什么 monorepo 必须克隆、借用不够（这一节是 2026-10-26 独立审查实测打回来的结论，三个入口都
 // 有复现）：借用意味着**链那一侧的所有解析都发生在工作区**，而 node 的模块解析走 realpath。于是
@@ -381,8 +382,9 @@ async function linkWhole(source: string, destination: string): Promise<boolean> 
  * 搬迁这棵依赖树时的落点口径。**构造和对账必须共用这一份**，否则就是复制那一侧自己猜、对账那一
  * 侧另一套判据——2026-10-26 独立审查打回的三处链接失败都是这么来的。
  */
-export async function relocationFor(root: string, target: string, dep: string): Promise<Relocation | null> {
-  const treeRoot = await optionalRead(join(root, dep), () => realpath(join(root, dep)), ["ENOENT", "ENOTDIR", "ELOOP"]);
+export async function relocationFor(root: string, target: string, dep: string,
+  from = join(root, dep)): Promise<Relocation | null> {
+  const treeRoot = await optionalRead(from, () => realpath(from), ["ENOENT", "ENOTDIR", "ELOOP"]);
   if (treeRoot === null) return null;
   return {
     realRoot: await requiredRead(root, () => realpath(root)),
@@ -511,11 +513,12 @@ export async function declaredPackageDirs(root: string): Promise<Map<string, str
  * 失败。
  */
 export async function provideDependency(root: string, target: string, dep: string,
-  workspace: WorkspacePackages, skip?: (path: string) => boolean): Promise<DependencyMode> {
+  workspace: WorkspacePackages, skip?: (path: string) => boolean,
+  supplied?: string): Promise<DependencyMode> {
   const destination = join(target, dep);
   await mkdir(dirname(destination), { recursive: true });
-  const from = join(root, dep);
-  const relocation = await relocationFor(root, target, dep);
+  const from = supplied ?? join(root, dep);
+  const relocation = await relocationFor(root, target, dep, from);
   if (relocation === null) {
     // 不可达的依赖根：没装的可选依赖、指向还没建起来的目录的悬空链、环。它在快照里**照原样**
     // 重建（是链就建同原文的一条悬空链，什么都没有就什么都不建），于是「本来跑不通」在副本里
@@ -539,7 +542,10 @@ export async function provideDependency(root: string, target: string, dep: strin
   const offender = relocation.owned.length > 0
     ? relocation.owned[0].entry
     : await linksIntoSource(relocation.treeRoot, relocation.realRoot);
-  if (offender === null && !declaresWorkspace(dep, workspace)
+  // `supplied` 那一路**不许借**:来源在参考检出里,借一条链出去等于把解析根放回那个检出 —— 正是
+  // accept-gate-supply 顶部①②③要消掉的那件事。借用形态的对账口径也写明「那条链必须正好落在工作区
+  // 那个依赖目录上」,而补来的树在工作区里压根没有对应位置,对不上账。
+  if (offender === null && supplied === undefined && !declaresWorkspace(dep, workspace)
     && await linkWhole(relocation.treeRoot, destination)) return "link";
   // 借用建不出来(权限、跨设备、文件系统不支持)时同样走克隆,而不是退回一条「不对账的深拷」:
   // 那条旧退路既没开数据块共享(本仓一次多拷 684 MB)、也不登记进 provided,于是一个字都不对账,
@@ -573,14 +579,15 @@ export async function provideDependency(root: string, target: string, dep: strin
  * 要等源码落盘；非 Git 分支曾经在源码之前对账，于是任何 monorepo 都会在门禁开跑前就失败。
  */
 export async function dependencyMismatch(root: string, target: string, dep: string,
-  mode: DependencyMode): Promise<string | null> {
+  mode: DependencyMode, supplied?: string): Promise<string | null> {
   const copy = join(target, dep);
+  const origin = supplied ?? join(root, dep);
   const landing = await optionalRead(copy, () => realpath(copy), ["ENOENT", "ENOTDIR", "ELOOP"]);
   if (mode === "absent") {
     return landing === null ? null : `${dep} 在工作区里解析不出东西来，快照里却落在了 ${landing}`;
   }
   if (mode === "link") {
-    const expected = await optionalRead(join(root, dep), () => realpath(join(root, dep)), ["ENOENT", "ENOTDIR", "ELOOP"]);
+    const expected = await optionalRead(origin, () => realpath(origin), ["ENOENT", "ENOTDIR", "ELOOP"]);
     return landing !== null && landing === expected ? null : `${dep} 的借用链没有落在工作区那一份上`;
   }
   const realTarget = await requiredRead(target, () => realpath(target));
@@ -591,8 +598,8 @@ export async function dependencyMismatch(root: string, target: string, dep: stri
   // `npm link`、pnpm 的 link: 都展开不出来),而且这一遍排在收口**之前**——收口才是补绑定的那一步,
   // 在它之前要求「每个包都解析到快照」只会把正常布局判成失败。一个判据只留一处实现:对账管副本的
   // 链落点对不对(放法的保真度),源码隔离整个归 confineOwnPackages。
-  const relocation = await relocationFor(root, target, dep);
-  if (relocation === null) return `${dep} 在工作区里已经解析不出来了，无法核对副本的链落点`;
+  const relocation = await relocationFor(root, target, dep, origin);
+  if (relocation === null) return `${dep} 的依赖来源 ${origin} 已经解析不出来了，无法核对副本的链落点`;
   const problem = await linkMismatch(relocation);
   return problem === null ? null : `${dep} 里 ${problem}`;
 }

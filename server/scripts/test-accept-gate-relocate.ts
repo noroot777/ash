@@ -148,5 +148,48 @@ try {
     assert.equal(existsSync(join(trailingSnapshot, "packages", "lib", "index.mjs")), true, "源码本身照旧在");
   }
 
-  console.log("accept-gate-relocate: declaration three-state, nested globs, package identity, relative external links and native trailing-separator semantics passed");
+  // ── 5. 指回自己所在目录的链(`node_modules/.bin/.bin -> …/.bin`,npm 真的会建出来)。
+  // relative() 对「落点就是目的地的父目录」给出空串,而 symlink("") 建出来的链解析不到任何东西:
+  // 源端活着、副本里死掉,随后对账报「副本里却落在 解析不出来」,整次门禁拒绝一个合法项目。
+  if (process.platform !== "win32") {
+    const { copyTree, linkMismatch } = await import("../src/accept-gate-relocate.js");
+    const tree = join(root, "selfref", "node_modules");
+    mkdirSync(join(tree, ".bin"), { recursive: true });
+    writeFileSync(join(tree, ".bin", "tool"), "#!/bin/sh\nexit 0\n");
+    symlinkSync(join(tree, ".bin"), join(tree, ".bin", ".bin"));
+    const copy = join(root, "selfref-copy", "node_modules");
+    const relocation = { treeRoot: realpathSync(tree), treeDest: copy, target: join(root, "selfref-copy"),
+      realRoot: realpathSync(join(root, "selfref")), owned: [] };
+    await copyTree(relocation.treeRoot, copy, { clone: true, relocate: relocation, snapshotRoot: dirname(copy) });
+    assert.equal(realpathSync(join(copy, ".bin", ".bin")), realpathSync(join(copy, ".bin")),
+      "自指链在副本里必须仍指向它所在的那个目录");
+    assert.equal(await linkMismatch(relocation), null, "自指链要过链闭包对账");
+  }
+
+  // ── 6. 克隆形态真的在共享数据块。这一条钉的是**代价**而不是行为,但它曾经静默烂掉一整次:
+  // node 的 `COPYFILE_FICLONE` 在 macOS 上整块复制(FICLONE_FORCE 直接 ENOSYS),于是「实测 16 MB」
+  // 的注释和文档全都失效,门禁每建一份快照实打实占 1034 MB 而没有任何报错 —— 行为测试全绿。
+  // 判据只能是磁盘:写一份随机数据(不可压缩、不是稀疏文件),克隆一遍,看可用空间掉了多少。
+  if (process.platform === "darwin" || process.platform === "linux") {
+    const { copyTree } = await import("../src/accept-gate-relocate.js");
+    const megabytes = 128;
+    const bulk = join(root, "bulk");
+    mkdirSync(bulk, { recursive: true });
+    execFileSync("dd", ["if=/dev/urandom", `of=${join(bulk, "payload.bin")}`, "bs=1m", `count=${megabytes}`],
+      { stdio: "ignore" });
+    const free = () => Number(execFileSync("df", ["-k", root], { encoding: "utf8" })
+      .trim().split("\n")[1].split(/\s+/)[3]);
+    const before = free();
+    await copyTree(bulk, join(root, "bulk-clone"), { clone: true });
+    const spent = (before - free()) / 1024;
+    assert.equal(readFileSync(join(root, "bulk-clone", "payload.bin")).length, megabytes * 1024 * 1024,
+      "副本内容必须完整");
+    // 阈值取一半:共享时实占接近 0(本仓实测 128 MB 的负载花 0~2 MB),不共享时就是整整 128 MB。
+    // 中间这么大的空档留给 df 自己的噪声(可清除空间、本地快照),所以它不会因为抖动而红。
+    assert.ok(spent < megabytes / 2,
+      `克隆形态必须共享数据块:${megabytes} MB 的负载实占了 ${spent.toFixed(0)} MB`
+      + "(文件系统确实不支持克隆时,这一条会红;那种机器上门禁的磁盘账要重算,不是改阈值)");
+  }
+
+  console.log("accept-gate-relocate: declaration three-state, nested globs, package identity, relative external links, native trailing-separator semantics, self-referential links and block-sharing clones passed");
 } finally { rmSync(root, { recursive: true, force: true }); }
