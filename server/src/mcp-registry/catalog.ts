@@ -126,11 +126,15 @@ export const ASH_MCP_TABLE = {
   opencode: {
     kind: "file",
     shape: opencodeJsonShape,
-    // `OPENCODE_CONFIG` 指的是**一个文件**,而且是「再加一份」而不是「取代」(见 `envFileMerges`)。
+    // 这家会读好几份配置,而且是「合起来看、高优先级那份赢」(见 `sourcesMerge`,逐格实测
+    // 记在下面的 `source` 里)。优先级实测顺序:默认目录(`.json` 与 `.jsonc` 都读)
+    // < `OPENCODE_CONFIG_DIR` 那个目录 < `OPENCODE_CONFIG` 那个文件 < `OPENCODE_CONFIG_CONTENT`。
     site: {
       dirEnv: "OPENCODE_CONFIG",
       dirEnvIsFile: true,
-      envFileMerges: true,
+      altDirEnv: "OPENCODE_CONFIG_DIR",
+      contentEnv: "OPENCODE_CONFIG_CONTENT",
+      sourcesMerge: true,
       defaultDir: xdgConfig("opencode"),
       relative: ["opencode.json"],
       alternates: [["opencode.jsonc"]],
@@ -144,9 +148,14 @@ export const ASH_MCP_TABLE = {
       + "`mcp.ash`（`type:\"local\"` + `command:[argv]` + `environment`）；"
       + "另有端到端 `server/scripts/e2e-opencode-ash-mcp.ts`:注册 → 起真任务 → agent 调 "
       + "`ash_complete_task` 交卷,任务落 done(2026-10-31 跑通);"
-      + "`OPENCODE_CONFIG` 的合并语义另有三组实测(本轮审查 R3):全局有 ash、变量那份没有 ⇒ "
-      + "`opencode mcp list` 照样列出 ash;两份各放一条不同的 ⇒ 列出 2 条;同名各放一条 ⇒ "
-      + "列出变量那份的 —— 所以它是**再加一份、同名它赢**",
+      + "来源与优先级共八组实测(审查 R3 三组 + F4 五组,全部 `opencode mcp list` 退出 0):"
+      + "① 全局有 ash、`OPENCODE_CONFIG` 那份没有 ⇒ 照样列出 ash;② 两份各放一条不同的 ⇒ 列出 2 条;"
+      + "③ 同名各放一条 ⇒ 列出变量那份的;④ 高优先级那份只写 `{\"enabled\":false}` ⇒ 报 "
+      + "`ash disabled`(所以「任一来源有」不等于「接上了」);⑤ ash 只在 `opencode.jsonc` 里 ⇒ "
+      + "照样生效(默认目录两个文件名都读);⑥ `OPENCODE_CONFIG_DIR` 指到别处、ash 只在默认那份 ⇒ "
+      + "照样生效(它是再加一个目录,不取代);⑦ 那个目录里写 `enabled:false`、默认那份开着 ⇒ "
+      + "报 disabled(它优先级更高);⑧ `OPENCODE_CONFIG_CONTENT` 与文件/全局各写一条相反的 ⇒ "
+      + "两次都是它赢(优先级最高、而且没有文件可写)",
     notes: "跟 `mcpServers` 那族**不是同一个形状**（容器叫 `mcp`、argv 是数组、环境变量键叫 "
       + "`environment`），别拿那份硬套",
   },
@@ -279,7 +288,8 @@ export const ASH_MCP_TABLE = {
     identity: "unknown",
     evidence: "docs",
     // 这家也有「指到文件」的变量,但**合并语义没实测**(本机没有 kilo CLI),所以不置
-    // `envFileMerges`:几份来源结论不一致时判定回 unknown、不写,见 `combineConfigStates`。
+    // `sourcesMerge` **故意不置真**:形状和 opencode 一样,但没有真 CLI 可问 —— 几份来源结论
+    // 不一致时判定回 unknown、不写,见 `effectiveConfigState`。
     source: "kilo.ai/docs 的 CLI + MCP 章节（2026-10-31 查）：`@kilocode/cli` 是 opencode 的衍生，"
       + "全局 `~/.config/kilo/kilo.json`（也认 `.jsonc` / `config.json` / 遗留的 `opencode.json[c]`），"
       + "MCP 在 `mcp` 键下，本地服务 `command` 是数组、可用 `enabled: false` 关掉",

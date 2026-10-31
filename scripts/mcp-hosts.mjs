@@ -27,7 +27,10 @@ const xdgConfig = (name) => (env, home) =>
 /**
  * 一家 CLI 的落点。字段跟 TS 那张表一一对应:
  *  · `bins`      这台机器上装没装(装了才写 —— 没装就建目录等于乱留垃圾)
- *  · `dirEnv`    「整体取代配置目录」的变量;`dirEnvIsFile` = 它指的是文件
+ *  · `dirEnv`    指到配置文件/目录的变量;`dirEnvIsFile` = 它指的是文件
+ *  · `altDirEnv` 「再加一个配置目录」的变量(优先级高于默认目录)
+ *  · `contentEnv` 整段配置就装在这个变量里(优先级最高,**没有文件可写**)
+ *  · `sourcesMerge` 这家会读好几份、而且合并语义实测过(见 `effectiveState`)
  *  · `shape`     三个格式族之一
  *  · `type`      这条登记要不要带 `"type": "stdio"`(cursor 文档说必填,claude 自己也写)
  *  · `enabled`   TOML 那一族要不要带 `enabled = true`(跟着该 CLI 自己 mcp add 的写法)
@@ -49,8 +52,11 @@ export const HOST_SITES = {
   opencode: {
     bins: ["opencode"], dirEnv: "OPENCODE_CONFIG", dirEnvIsFile: true, dir: xdgConfig("opencode"),
     relative: ["opencode.json"], alternates: [["opencode.jsonc"]], shape: "opencode",
-    // 那个变量是「再加一份」不是「取代」—— 真 opencode 三组实测,依据记在 TS 那张表的 source。
-    envFileMerges: true,
+    // 这家会读好几份配置、合起来看、高优先级那份赢 —— 真 opencode 逐格实测,八格依据记在
+    // TS 那张表的 source 里(本轮审查 F4)。`sourcesMerge` 的语义见 `effectiveState`。
+    altDirEnv: "OPENCODE_CONFIG_DIR",
+    contentEnv: "OPENCODE_CONFIG_CONTENT",
+    sourcesMerge: true,
   },
   cursor: {
     bins: ["cursor-agent", "agent"], dirEnv: null, dir: underHome(".cursor"),
@@ -102,13 +108,8 @@ export const HOST_SITES = {
 const ASH = "ash";
 const LEGACY = "harness";
 
-/** 这家 CLI 的配置文件落在哪(`alternates` 存在哪个就用哪个,免得多出一份两边都生效)。 */
-export function hostMcpFile(agentType, { env = process.env, home = homedir() } = {}) {
-  const site = HOST_SITES[agentType];
-  if (!site) return null;
-  const override = site.dirEnv ? (env[site.dirEnv] || "").trim() : "";
-  if (override && site.dirEnvIsFile) return override;
-  const dir = override || site.dir(env, home);
+/** 某个配置目录里该写哪一份(`alternates` 存在哪个就用哪个,免得多出一份两边都生效)。 */
+function fileInDir(dir, site) {
   for (const candidate of site.alternates || []) {
     const file = join(dir, ...candidate);
     if (existsSync(file)) return file;
@@ -117,42 +118,141 @@ export function hostMcpFile(agentType, { env = process.env, home = homedir() } =
 }
 
 /**
- * 这家 CLI **会读的全部配置文件**,低优先级在前、写入目标在最后。
+ * 这一层目录里**实际存在**的那几份;一份都不存在时给出该写哪一份。
  *
- * `dirEnvIsFile` 那个变量是「再加一份」而不是「取代默认那份」(本轮审查 R3,真 opencode 实测:
- * 全局那份里的 ash 照样生效)。所以判「有没有」必须看全这几份 —— 只看写入目标那一份,就会往
- * 更高优先级那份里再补一条、把本来连得上的那条顶掉。
+ * 「该写哪一份」只有 `fileInDir` 一份判据,所以把它挑中的那个**排在最后** —— `hostMcpFile`
+ * 取的是最后一个,两边因此必然一致(kilo 同时有 `config.json` 和 `opencode.jsonc` 时,
+ * alternates 的顺序就是优先级,按 existsSync 的自然顺序取最后一个会挑错)。
+ */
+function filesInDir(dir, site, level) {
+  const names = [site.relative, ...(site.alternates || [])];
+  const found = names.map((parts) => join(dir, ...parts)).filter((f) => existsSync(f));
+  const pick = fileInDir(dir, site);
+  const files = found.length ? [...found.filter((f) => f !== pick), pick] : [pick];
+  return files.map((file) => ({ label: file, file, level }));
+}
+
+/**
+ * 这家 CLI 在宿主机上**会读的全部配置**,按优先级**从低到高**。
+ *
+ * 为什么不是一个文件(真 opencode 逐格实测,本轮审查 F4;TS 那份 `ashMcpHostSources` 同模型):
+ *  · `OPENCODE_CONFIG` 是「再加一份」不是「取代」—— 全局那份里的 ash 照样生效;
+ *  · 默认目录里 `opencode.json` 和 `opencode.jsonc` **两份都读**(上一版「找到第一个就只认
+ *    它」,于是 ash 写在 `.json`、目录里又有一份 `.jsonc` 时判成没有,安装器还往 `.jsonc`
+ *    里再补一条);
+ *  · `OPENCODE_CONFIG_DIR` 是**再加一个目录**、优先级高于默认目录;
+ *  · `OPENCODE_CONFIG_CONTENT` 里那整段 JSON 优先级最高、而且**没有文件可写**。
+ *
+ * 判「到底有没有」一律走 `effectiveState`:这几份合起来 CLI 最终看到的是哪一条。
  */
 export function hostMcpSources(agentType, { env = process.env, home = homedir() } = {}) {
   const site = HOST_SITES[agentType];
   if (!site) return [];
-  const target = hostMcpFile(agentType, { env, home });
-  if (!target) return [];
-  const fallback = join(site.dir(env, home), ...site.relative);
-  const alt = (site.alternates || []).map((c) => join(site.dir(env, home), ...c)).find((f) => existsSync(f));
-  const base = alt || fallback;
-  return site.dirEnvIsFile && base !== target ? [base, target] : [target];
+  // `dirEnv` 指到**目录**时整体取代默认目录;指到**文件**时这一层仍是默认目录(那份全局
+  // 配置照样会被读,见上面第一条)。
+  const dirOverride = site.dirEnv && !site.dirEnvIsFile ? (env[site.dirEnv] || "").trim() : "";
+  const out = filesInDir(dirOverride || site.dir(env, home), site, 0);
+  const altDir = site.altDirEnv ? (env[site.altDirEnv] || "").trim() : "";
+  if (altDir) out.push(...filesInDir(altDir, site, 1));
+  const file = site.dirEnvIsFile && site.dirEnv ? (env[site.dirEnv] || "").trim() : "";
+  if (file && !out.some((s) => s.file === file)) out.push({ label: file, file, level: 2 });
+  const inline = site.contentEnv ? (env[site.contentEnv] || "").trim() : "";
+  if (inline) out.push({ label: `$${site.contentEnv}`, file: null, text: inline, level: 3 });
+  return out;
 }
 
-/** 一份来源里有没有 ash:`present` / `absent` / `unsure`(看不准 ⇒ 调用方不许写)。 */
-function sourceState(file, site) {
-  const read = readForWrite(file);
-  if (!read) return { state: "unsure", why: `${file} 读不出来` };
-  if (read.text === null) return { state: "absent" };
-  if (site.shape === "toml") {
-    const scan = scanTomlServers(read.text);
-    if (scan.why) return { state: "unsure", why: `${file}：${scan.why}` };
-    const taken = scan.names.filter((n) => n === ASH || n === LEGACY);
-    return taken.length ? { state: "present", name: taken[0] } : { state: "absent" };
+/** 写入落点 = **优先级最高的那份可写来源**(只读来源当然不能当落点)。 */
+export function hostMcpFile(agentType, { env = process.env, home = homedir() } = {}) {
+  const writable = hostMcpSources(agentType, { env, home }).filter((s) => s.file);
+  return writable.length ? writable[writable.length - 1].file : null;
+}
+
+/** 这条登记有没有被显式关掉。两种写法都认(`disabled: true` / `enabled: false`),跟 TS 同口径。 */
+const switchedOff = (entry) => entry.disabled === true || entry.enabled === false;
+
+/**
+ * 一份来源里有没有 ash:`present` / `absent` / `disabled` / `unsure`(看不准 ⇒ 调用方不许写)。
+ *
+ * 判据跟 TS 那份 `shapes.ts` 的 `pickEntry` 一一对应:先找**开着**的那条(两个兼容名是两条
+ * 独立登记),都关着才报 disabled;值认不出来(不是对象)一律 unsure —— 当没有去写就会把
+ * 用户那个键覆盖掉,跟「已有登记一律不覆盖」自相矛盾。
+ */
+function sourceState(source, site) {
+  let text;
+  if (source.file) {
+    const read = readForWrite(source.file);
+    if (!read) return { state: "unsure", why: `${source.label} 读不出来` };
+    if (read.text === null) return { state: "absent" };
+    text = read.text;
+  } else {
+    text = source.text || "";
   }
-  const doc = readJsonLoose(read.text);
-  if (doc === undefined) return { state: "unsure", why: `${file} 解析不了` };
+  if (site.shape === "toml") {
+    const scan = scanTomlServers(text);
+    if (scan.why) return { state: "unsure", why: `${source.label}：${scan.why}` };
+    const taken = scan.names.filter((n) => n === ASH || n === LEGACY);
+    if (!taken.length) return { state: "absent" };
+    const off = taken.filter((n) => scan.disabled.includes(n));
+    return off.length === taken.length
+      ? { state: "disabled", name: taken[0], why: `${source.label} 里的 ${taken.join(" / ")} 被 disabled_mcp_servers 关掉了` }
+      : { state: "present", name: taken.find((n) => !off.includes(n)) };
+  }
+  const doc = readJsonLoose(text);
+  if (doc === undefined) return { state: "unsure", why: `${source.label} 解析不了` };
   const servers = doc === null ? undefined : doc[site.shape === "opencode" ? "mcp" : "mcpServers"];
   if (servers !== undefined && (!servers || typeof servers !== "object" || Array.isArray(servers))) {
-    return { state: "unsure", why: `${file} 的登记容器不是对象` };
+    return { state: "unsure", why: `${source.label} 的登记容器不是对象` };
   }
-  const taken = [ASH, LEGACY].filter((n) => servers && Object.hasOwn(servers, n));
-  return taken.length ? { state: "present", name: taken[0] } : { state: "absent" };
+  const off = [];
+  for (const name of [ASH, LEGACY]) {
+    const raw = servers ? servers[name] : undefined;
+    if (raw === undefined) continue;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return { state: "unsure", why: `${source.label} 里的 ${name} 这条登记不是一个对象` };
+    }
+    if (!switchedOff(raw)) return { state: "present", name };
+    off.push(name);
+  }
+  return off.length
+    ? { state: "disabled", name: off[0], why: `${source.label} 里的 ${off.join(" / ")} 登记是关着的` }
+    : { state: "absent" };
+}
+
+/**
+ * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记 —— 跟 TS 那份 `effectiveConfigState`
+ * 同一条判据:**声明了这个名字的来源里,优先级最高的那份说了算**。高优先级那份只写
+ * `{"enabled": false}` 也算声明,它会合到低优先级那条上、把它关掉(真 opencode 实测)。
+ *
+ * 两处一律回 unsure(看不准就不写):**同一层**两份结论不一致(同层谁覆盖谁没实测);
+ * 这家的合并语义本身没实测(`sourcesMerge` 不为真)而几份结论不一致。
+ */
+function effectiveState(sources, site) {
+  // `label` = 最终说了算的那一份来源,话术里要指名道姓(用户得知道去看哪个文件)。
+  const read = sources.map((source) => ({ source, st: { ...sourceState(source, site), label: source.label } }));
+  if (!read.length) return { state: "unsure", why: "算不出这家 CLI 会读哪几份配置" };
+  if (read.length === 1) return read[0].st;
+  const kinds = new Set(read.map((r) => r.st.state));
+  if (!site.sourcesMerge && kinds.size > 1) {
+    return {
+      state: "unsure",
+      why: "这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 ash 没实测过："
+        + read.map((r) => r.st.why || `${r.source.label}：${r.st.state}`).join("；"),
+    };
+  }
+  const declared = read.filter((r) => r.st.state !== "absent");
+  if (!declared.length) return read[read.length - 1].st;
+  const top = Math.max(...declared.map((r) => r.source.level));
+  const winners = declared.filter((r) => r.source.level === top);
+  const unsure = winners.find((r) => r.st.state === "unsure");
+  if (unsure) return unsure.st;
+  if (new Set(winners.map((r) => r.st.state)).size > 1) {
+    return {
+      state: "unsure",
+      why: "这家 CLI 同一层里有好几份配置，它们的结论不一致、谁覆盖谁 ash 没实测过："
+        + winners.map((r) => r.st.why || `${r.source.label}：${r.st.state}`).join("；"),
+    };
+  }
+  return winners[0].st;
 }
 
 /**
@@ -175,15 +275,25 @@ export function registerHostMcp({ agentType, mcpEntry, url, nodeBin = process.ex
         + "（请在那份配置里自己加一条 ash 登记，接法见 docs/install.md）",
     };
   }
-  // **先看这家 CLI 会读的其它来源**(本轮审查 R3):任一份已经有 ash ⇒ 不写(往更高优先级那份
-  // 补一条会把它顶掉);任一份看不准 ⇒ 也不写,如实说。谁优先、合不合并见 `envFileMerges`。
-  for (const other of hostMcpSources(agentType, { env, home }).filter((f) => f !== file)) {
-    const state = sourceState(other, site);
+  // **先看这家 CLI 会读的全部来源**(本轮审查 F4):判的是「最终生效的是哪一条」,不是
+  // 「有没有任一份里有」—— 高优先级那份只写 `{"enabled": false}` 也会把低优先级那条关掉
+  // (真 opencode 实测)。已经生效 ⇒ 不写(往别处补一条也顶不过它);关着 ⇒ 不替用户打开;
+  // 看不准 ⇒ 不写,如实说。谁优先、合不合并见 `effectiveState` 与站点上的 `sourcesMerge`。
+  const sources = hostMcpSources(agentType, { env, home });
+  if (sources.length > 1) {
+    const state = effectiveState(sources, site);
     if (state.state === "present") {
-      return { file: other, added: false, why: `${other} 里已经有 ${state.name} 登记（${agentType} 也会读这份），不动它` };
+      return {
+        file: state.label,
+        added: false,
+        why: `${state.label} 里已经有生效的 ${state.name} 登记（${agentType} 也会读这份），不动它`,
+      };
+    }
+    if (state.state === "disabled") {
+      return { file, added: false, why: `${state.why} —— 没有替你打开` };
     }
     if (state.state === "unsure") {
-      return { file, added: false, why: `${state.why} —— ${agentType} 也会读这份配置，看不准就不写` };
+      return { file, added: false, why: `${state.why} —— 看不准就不写，你那几份配置一个字节都没动` };
     }
   }
   // **先拿到一次成功的读**:读不动不是「空」(见 config-publish.mjs 的 readForWrite)。
@@ -218,6 +328,15 @@ function composeJson(text, entry, site, file) {
   // 也因此带注释的 `.jsonc` 现在能自动补接了(原来只能如实说一句、让用户自己加)。
   const spliced = spliceJsonMember(text, container, ASH, value);
   if (!spliced.body) return { why: `${file}：${spliced.why}` };
+  // **发布前把候选自己再读一遍**(本轮审查 F5):「写进去了」不等于「生效的那条就是它」——
+  // 同名容器重复时,生效的是最后一个(`JSON.parse` 语义)。编辑器现在也插在最后那个里,
+  // 但前置条件要由这里独立确认一次:读不出来、或者读出来的不是我们这条,一律不写。
+  // TOML 那一族同理(见 composeToml 末尾),两族都不许只凭「字节落盘了」报成功。
+  const back = readJsonLoose(spliced.body);
+  const live = back === null || back === undefined ? undefined : back[container];
+  if (!live || typeof live !== "object" || Array.isArray(live) || !Object.hasOwn(live, ASH)) {
+    return { why: `${file}：拼出来的配置里，生效的那个 ${container} 容器仍然没有 ash 登记，所以没写` };
+  }
   return { body: spliced.body };
 }
 

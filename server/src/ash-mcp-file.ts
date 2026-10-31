@@ -34,7 +34,7 @@ import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp
 import { type LaunchSpec, scanCodexToml } from "./codex-toml.js";
 import { ashMcpConfigDir, ashMcpMechanism } from "./mcp-registry/catalog.js";
 import {
-  ashMcpHostSources, ashMcpOpaqueSibling, combineConfigStates, fileConfigState,
+  ashMcpHostSources, ashMcpOpaqueSibling, effectiveConfigState, sourceConfigState,
 } from "./mcp-registry/register.js";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { boundListeningPort } from "./listening-port.js";
@@ -99,8 +99,8 @@ function registryVerdict(
   // 全局那份里的 ash 照样生效 —— 只看变量那一份会把「连得上」判成「没接好」,而 absent 在
   // 预检里是硬拒)。文件名解析仍然只有一处,见 `ashMcpHostSources` / `ashMcpHostFile`。
   const sources = ashMcpHostSources(agentType, env, homedir());
-  const file = sources[sources.length - 1];
-  if (!file) return { state: "unknown", why: `算不出 ${agentType} 的配置文件` };
+  const file = sources.filter((s) => s.file).at(-1)?.file;
+  if (!sources.length) return { state: "unknown", why: `算不出 ${agentType} 会读哪几份配置` };
   // 同目录有这家也读、而我们读不了格式的配置(trae 的原生 YAML)⇒ 不下结论:
   // ash 可能就写在那里面(`AshMcpConfigSite.opaque`)。
   const opaque = ashMcpOpaqueSibling(dir, mechanism.site);
@@ -109,7 +109,7 @@ function registryVerdict(
   for (const candidate of mechanism.site.projectRelative ?? []) {
     for (const base of upToGitRoot(dirs)) {
       const project = join(base, ...candidate);
-      if (sources.some((f) => resolve(project) === resolve(f))) continue;
+      if (sources.some((s) => s.file && resolve(project) === resolve(s.file))) continue;
       const read = readText(project);
       if (read.kind === "unreadable") return { state: "unknown", why: `${project} 读不出来` };
       if (read.kind === "text" && /mcp[_-]?[sS]ervers|"mcp"|\[mcp\b/.test(read.text)) {
@@ -117,12 +117,11 @@ function registryVerdict(
       }
     }
   }
-  const states = sources.map((f) => fileConfigState(f, mechanism.shape));
-  const found = combineConfigStates(states, mechanism.site.envFileMerges === true);
+  const found = effectiveConfigState(sources, mechanism.shape, mechanism.site.sourcesMerge === true);
   if (found.state === "present") {
-    // 提示里的启动参数取**真有那条登记**的那一份(不一定是写入目标那份)。
-    const live = sources[states.findIndex((st) => st.state === "present")]!;
-    const text = readText(live);
+    // 提示里的启动参数取**真有那条登记**的那一份(不一定是写入目标那份;只读来源直接用它的正文)。
+    const live = sources.filter((s) => sourceConfigState(s, mechanism.shape).state === "present").at(-1);
+    const text = live?.file ? readText(live.file) : { kind: "text" as const, text: live?.text ?? "" };
     return {
       state: "present",
       hint: launchHint(text.kind === "text" ? mechanism.shape.launch(text.text) ?? {} : {}),

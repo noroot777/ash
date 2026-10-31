@@ -268,12 +268,17 @@ factory: (opts) => new FooExecutor(opts),
 - **grok 有两种关法**:条目上的 `enabled = false`,和根级 `disabled_mcp_servers = ["ash"]`。
 - **kimi 没有 `mcp` 子命令**(`kimi mcp add` 报 unknown command),只能我们写文件,也就没法拿它
   自己的输出复核;预检对它只有「读配置」这一档依据。
-- **opencode 的 `OPENCODE_CONFIG` 是「再加一份」,不是「取代」**(2026-10-31 真 CLI 三组实测,
-  记在那家的 `source` 里):全局 `~/.config/opencode/opencode.json` 里的 ash 照样生效,同名键
-  由变量那份赢。所以判「这家到底有没有 ash」必须看全这几份来源 —— 只看变量那一份会把「本来
-  连得上」判成 absent(预检里 absent 是硬拒),安装器还会往更高优先级那份补一条、把它顶掉。
-  这件事由站点上的 `envFileMerges` 声明,**只给实测过的家置真**;kilo 的 `KILO_CONFIG` 形状
-  一样但没实测,几份来源结论不一致时判定一律回 unknown(不写、也不拦起跑)。
+- **opencode 会读好几份配置,判的是「最终生效的是哪一条」**(2026-10-31 真 CLI 逐格实测,八格
+  记在那家的 `source` 里)。四层来源,优先级从低到高:默认目录(`opencode.json` 和
+  `opencode.jsonc` **两份都读**)、`OPENCODE_CONFIG_DIR` 再加的那个目录、`OPENCODE_CONFIG`
+  指的那个文件、`OPENCODE_CONFIG_CONTENT` 里那整段 JSON(**只读,没有文件可写**)。它们是
+  「合起来看、高优先级那份赢」:高优先级那份只写 `{"enabled": false}` 也会把低优先级那条
+  完整登记关掉(真 CLI 报 `ash disabled`)。所以判据只能是 `effectiveConfigState`
+  (`mcp-registry/register.ts`)——「任一份里有就算有」会把已经被关掉的说成已接好,「只看写入
+  目标那一份」会把本来连得上的判成 absent(预检里 absent 是硬拒),安装器还会往更高优先级那份
+  补一条把它顶掉。这件事由站点上的 `sourcesMerge` 声明,**只给实测过的家置真**;kilo 的
+  `KILO_CONFIG` 形状一样但没真 CLI 可问,几份来源结论不一致时判定一律回 unknown(不写、也不
+  拦起跑)。
 - **opencode / kilo 不是 `mcpServers` 那一族**:容器叫 `mcp`、`command` 是整条 argv 数组、环境
   变量键叫 `environment`。
 - **antigravity 别和 gemini 搞混**:两家都住 `~/.gemini` 下,但 gemini 读 `settings.json`、

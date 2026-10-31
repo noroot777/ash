@@ -66,7 +66,7 @@ function pickEntry(container: unknown, file: string): AshMcpConfigState {
     return {
       state: "disabled",
       serverName: off[0]!,
-      detail: `${file} 里的 ${off.join(" / ")} ${off.length > 1 ? "这几条" : "这条"}登记都是关着的`,
+      detail: `${file} 里的 ${off.join(" / ")} ${off.length > 1 ? "这几条登记都" : "这条登记"}是关着的`,
     };
   }
   return absent(`${file} 里没有 ash MCP 登记`);

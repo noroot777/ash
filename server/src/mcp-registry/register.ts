@@ -68,39 +68,85 @@ export function ashMcpHostFile(
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
 ): string | null {
-  const mechanism = ashMcpMechanism(agentType);
-  if (mechanism?.kind !== "file") return null;
-  const { site } = mechanism;
-  const override = site.dirEnv ? env[site.dirEnv]?.trim() : "";
-  if (override && site.dirEnvIsFile) return override;
-  const dir = ashMcpConfigDir(agentType, env, home);
-  return dir ? ashMcpConfigFile(dir, site) : null;
+  // 落点 = **优先级最高的那份可写来源**(见 `ashMcpHostSources`)。往更低优先级那份写,
+  // 写完也可能被上面那份盖掉;只读来源(变量里那整段 JSON)当然不能当落点。
+  const writable = ashMcpHostSources(agentType, env, home).filter((s) => s.file);
+  return writable.at(-1)?.file ?? null;
 }
 
 /**
- * 这家 CLI 在宿主机上**会读的全部配置文件**,低优先级在前、写入目标在最后。
+ * 一份「这家 CLI 会读的配置」。
  *
- * 为什么不是一个文件(本轮审查 R3,真 opencode 实测):`OPENCODE_CONFIG` 不是「取代配置目录」,
- * 而是**再加一份**配置 —— 全局那份里的 ash 照样生效。上一版只认变量指的那一份,于是那种
- * 「全局放 MCP、另给一份模型设置」的正常分拆:预检说「没接好」把派审硬拒了,安装器还会往更高
- * 优先级那份里补一条、把本来连得上的那条 URL 顶掉。
+ * `level` 大的优先级高。**同一层里谁覆盖谁没实测**(例如 `opencode.json` 与 `opencode.jsonc`
+ * 都会被读,但同名键谁赢没测过),所以同层两份结论不一致一律判看不准。
+ */
+export interface AshMcpSource {
+  /** 给人看的名字:文件路径,或 `$OPENCODE_CONFIG_CONTENT` 这样的变量名。 */
+  readonly label: string;
+  /** 可写落点;null = 只读来源(整段配置装在变量里,没有文件可写)。 */
+  readonly file: string | null;
+  /** 只读来源的正文。 */
+  readonly text?: string;
+  readonly level: number;
+}
+
+/**
+ * 这一层(某个配置目录)里**实际存在**的那几份;一份都不存在时给出该写哪一份。
+ *
+ * 「该写哪一份」只有 `ashMcpConfigFile` 一份判据,所以这里把它挑中的那个**排在最后** ——
+ * 上游 `ashMcpHostFile` 取的是最后一个,两边因此必然一致。按 existsSync 的自然顺序排会
+ * 分叉:kilo 同时有 `config.json` 和 `opencode.jsonc` 时,`ashMcpConfigFile` 取前者
+ * (alternates 的顺序就是优先级),自然顺序的最后一个却是后者。
+ */
+function filesInDir(dir: string, site: AshMcpConfigSite, level: number): AshMcpSource[] {
+  const names = [site.relative, ...(site.alternates ?? [])];
+  const found = names.map((parts) => join(dir, ...parts)).filter((f) => existsSync(f));
+  const pick = ashMcpConfigFile(dir, site);
+  const files = found.length ? [...found.filter((f) => f !== pick), pick] : [pick];
+  return files.map((file) => ({ label: file, file, level }));
+}
+
+/**
+ * 这家 CLI 在宿主机上**会读的全部配置**,按优先级**从低到高**。
+ *
+ * 为什么不是一个文件(真 opencode 实测,三轮):
+ *  · `OPENCODE_CONFIG` 是「再加一份」不是「取代」—— 全局那份里的 ash 照样生效;
+ *  · 默认目录里 `opencode.json` 和 `opencode.jsonc` **两份都读**(上一版「找到第一个就只认
+ *    它」,于是 ash 写在 `.json`、目录里又有一份 `.jsonc` 时判成 absent,安装器还往 `.jsonc`
+ *    里再补一条 —— 本轮审查 F4 的第二格);
+ *  · `OPENCODE_CONFIG_DIR` 是**再加一个目录**、优先级高于默认目录(本轮实测:默认那份照样
+ *    生效,而这个目录里的 `enabled = false` 盖得住默认那份的开启);
+ *  · `OPENCODE_CONFIG_CONTENT` 里那整段 JSON 优先级最高、而且**没有文件可写** —— 只有它
+ *    有 ash 时,真 CLI 连得上,上一版却判 absent 还去改全局文件(F4 的第三格)。
+ *
+ * 判「到底有没有」一律走 `effectiveConfigState`:这几份合起来 CLI 最终看到的是哪一条。
  */
 export function ashMcpHostSources(
   agentType: string,
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
-): string[] {
+): AshMcpSource[] {
   const mechanism = ashMcpMechanism(agentType);
   if (mechanism?.kind !== "file") return [];
   const { site } = mechanism;
-  const target = ashMcpHostFile(agentType, env, home);
-  if (!target) return [];
-  // 默认位置那份要用 `defaultDir` 直接算:`ashMcpConfigDir` 在变量指到文件时返回的是**那个
-  // 文件所在的目录**,拿它拼只会又得到同一份,全局那份照样看不见。
-  const fallback = ashMcpConfigFile(site.defaultDir(env, home), site);
-  // 变量指到文件的那几家:默认位置那份也是来源之一(谁优先、合不合并见 `envFileMerges`)。
-  if (site.dirEnvIsFile && resolve(fallback) !== resolve(target)) return [fallback, target];
-  return [target];
+  // ① 配置目录那一层。`dirEnv` 指到**目录**时它整体取代默认目录(变量原样继承给子进程,
+  //    CLI 认的就是它);指到**文件**时这一层仍是默认目录 —— 那种情况下不能走
+  //    `ashMcpConfigDir`,它返回的是那个文件所在的目录,拿它拼只会又得到同一份,
+  //    真正该一起看的全局那份照样看不见。
+  const dirOverride = site.dirEnv && !site.dirEnvIsFile ? env[site.dirEnv]?.trim() : "";
+  const out: AshMcpSource[] = filesInDir(dirOverride || site.defaultDir(env, home), site, 0);
+  // ② 指到另一个配置目录的变量:再加一层,优先级更高。
+  const altDir = site.altDirEnv ? env[site.altDirEnv]?.trim() : "";
+  if (altDir) out.push(...filesInDir(altDir, site, 1));
+  // ③ 指到文件的变量。
+  const file = site.dirEnvIsFile && site.dirEnv ? env[site.dirEnv]?.trim() : "";
+  if (file && !out.some((s) => s.file && resolve(s.file) === resolve(file))) {
+    out.push({ label: file, file, level: 2 });
+  }
+  // ④ 整段 JSON 装在变量里:优先级最高,**只读**。
+  const inline = site.contentEnv ? env[site.contentEnv]?.trim() : "";
+  if (inline) out.push({ label: `$${site.contentEnv}`, file: null, text: inline, level: 3 });
+  return out;
 }
 
 /** 一份文件里的登记状态(先分清「没有这个文件」和「有但读不动」,见 `ashMcpStateIn`)。 */
@@ -116,34 +162,53 @@ export function fileConfigState(file: string, shape: AshMcpShape): AshMcpConfigS
   }
 }
 
+/** 一份来源里的登记状态(文件走 `fileConfigState`,变量里那段正文直接读)。 */
+export function sourceConfigState(source: AshMcpSource, shape: AshMcpShape): AshMcpConfigState {
+  if (source.file) return fileConfigState(source.file, shape);
+  try {
+    const found = shape.read(source.text ?? null);
+    return { ...found, detail: found.detail ? `${source.label}：${found.detail}` : "" };
+  } catch (e) {
+    return unknownState(`读 ${source.label} 里的 ash MCP 登记失败：${(e as Error).message}`);
+  }
+}
+
 /**
- * 把同一家 CLI 几份来源的判定合成一个结论。
+ * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记。
  *
- * - 任一来源 present ⇒ present(合并来源下它就是 CLI 真看到的那条);
- * - 否则任一 disabled ⇒ disabled;任一 unknown ⇒ unknown;
- * - **合并语义没实测过、而几份来源结论不一致 ⇒ unknown**:这时「present」和「absent」各是一种
- *   猜,两种猜错的代价都是实打实的(见 `envFileMerges`),所以只说看不准、不写;
- * - 全部确认没有 ⇒ absent(只有这一档配得上「可以自动补写」)。
+ * 判据(真 opencode 实测,本轮审查 F4):**声明了这个名字的来源里,优先级最高的那份说了算** ——
+ * 高优先级那份只写 `{"enabled": false}` 也算声明,它会合到低优先级那条上、把它关掉(实测:
+ * 真 CLI 报 `ash disabled`,而上一版「任一来源 present 就 present」报的是已接好,于是这家
+ * 执行器一路跑到交卷才发现工具根本不在)。
+ *
+ * 两处一律回 unknown(看不准就不写、也不拦起跑):
+ *  · **同一层**两份结论不一致 —— 同层谁覆盖谁没实测;
+ *  · **这家的合并语义本身没实测**(`sourcesMerge` 不为真)而几份结论不一致 —— 那时「present」
+ *    和「absent」各是一种猜,两种猜错的代价都是实打实的。
  */
-export function combineConfigStates(
-  states: readonly AshMcpConfigState[],
+export function effectiveConfigState(
+  sources: readonly AshMcpSource[],
+  shape: AshMcpShape,
   merges: boolean,
 ): AshMcpConfigState {
-  if (states.length === 1) return states[0]!;
-  // **先判「几份结论一致吗」**:合并语义没实测时,不一致的那一档既不能说有也不能说没有
-  // (说有 ⇒ 真要是取代语义,那就是没接上还报接上了;说没有 ⇒ 真要是合并语义,预检会硬拒
-  // 一个本来连得上的执行器、安装器还会再写一条顶掉它)。所以只说看不准。
-  if (!merges && new Set(states.map((s) => s.state)).size > 1) {
+  const read = sources.map((source) => ({ source, state: sourceConfigState(source, shape) }));
+  if (!read.length) return unknownState("算不出这家 CLI 会读哪几份配置");
+  if (read.length === 1) return read[0]!.state;
+  const declared = read.filter((r) => r.state.state !== "absent");
+  if (!declared.length) return read.at(-1)!.state;
+  if (!merges && new Set(read.map((r) => r.state.state)).size > 1) {
     return unknownState("这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 ash 没实测过："
-      + states.map((s) => s.detail || (s.state === "present" ? "其中一份里已经有 ash 登记" : s.state)).join("；"));
+      + read.map((r) => r.state.detail || (r.state.state === "present" ? `${r.source.label} 里已经有 ash 登记` : r.state.state)).join("；"));
   }
-  const present = states.find((s) => s.state === "present");
-  if (present) return present;
-  const unsure = states.find((s) => s.state === "unknown");
-  if (unsure) return unsure;
-  const off = states.find((s) => s.state === "disabled");
-  if (off) return off;
-  return states[0]!;
+  const top = Math.max(...declared.map((r) => r.source.level));
+  const winners = declared.filter((r) => r.source.level === top);
+  const unsure = winners.find((r) => r.state.state === "unknown");
+  if (unsure) return unsure.state;
+  if (new Set(winners.map((r) => r.state.state)).size > 1) {
+    return unknownState("这家 CLI 同一层里有好几份配置，它们的结论不一致、谁覆盖谁 ash 没实测过："
+      + winners.map((r) => r.state.detail || `${r.source.label}：${r.state.state}`).join("；"));
+  }
+  return winners[0]!.state;
 }
 
 /** 某个配置目录(隔离档给个人目录,宿主档走 `ashMcpHostFile`)里的那份配置文件。 */
@@ -261,13 +326,11 @@ export async function registerAshMcp(opts: AshMcpRegisterOptions): Promise<AshMc
   // 是我们自己造的目录。任一来源已经有 ash ⇒ 不写(往更高优先级那份补一条会把它顶掉);
   // 看不准 ⇒ 也不写,如实说。
   if (resolve(dir) === resolve(ashMcpConfigDir(agentType, env, hostHome) ?? dir)) {
-    const others = ashMcpHostSources(agentType, env, hostHome)
-      .filter((f) => resolve(f) !== resolve(file));
-    for (const other of others) {
-      const state = combineConfigStates(
-        [fileConfigState(other, mechanism.shape), fileConfigState(file, mechanism.shape)],
-        mechanism.site.envFileMerges === true,
-      );
+    const sources = ashMcpHostSources(agentType, env, hostHome);
+    if (sources.length > 1) {
+      // 判「最终生效的是哪一条」,不是「有没有任一份里有」:高优先级那份只写
+      // `{"enabled": false}` 也会把低优先级那条关掉(真 opencode 实测,本轮审查 F4)。
+      const state = effectiveConfigState(sources, mechanism.shape, mechanism.site.sourcesMerge === true);
       if (state.state === "present") return { ok: true, serverName: state.serverName ?? ASH_MCP_SERVER_NAME };
       if (state.state === "disabled") return fail(`${state.detail}，没有替你打开`);
       if (state.state === "unknown") {
@@ -350,13 +413,22 @@ function blockShape(shape: AshMcpShape): shape is AshMcpShape & Required<Pick<As
   return !!shape.hostBlock && !!shape.blockFor && !!shape.appendBlock;
 }
 
-/** 宿主机那份同格式配置的全文(读不动就当没有 —— 它只是「有没有东西可搬」的来源)。 */
+/**
+ * 宿主机那份同格式配置的全文(读不动就当没有 —— 它只是「有没有东西可搬」的来源)。
+ *
+ * 取的是**最终生效那条登记所在的那一份**,不是写入目标那一份(本轮审查 F4):ash 可能写在
+ * 全局那份、而落点是 `OPENCODE_CONFIG` 指的那个文件 —— 只读落点就会把「有东西可搬」看成
+ * 「没有」,于是隔离档里拿默认模板重新渲染一条,用户自己调过的启动参数当场丢掉。
+ */
 function hostConfigText(agentType: string, hostHome: string, env: NodeJS.ProcessEnv): string {
-  const dir = ashMcpConfigDir(agentType, env, hostHome);
   const mechanism = ashMcpMechanism(agentType);
-  if (!dir || mechanism?.kind !== "file") return "";
-  const read = readForWrite(siteFileFor(agentType, dir, mechanism.site, env));
-  return read?.text ?? "";
+  if (mechanism?.kind !== "file") return "";
+  const sources = ashMcpHostSources(agentType, env, hostHome);
+  const live = sources.filter((s) => sourceConfigState(s, mechanism.shape).state === "present").at(-1);
+  if (live) return live.file ? readForWrite(live.file)?.text ?? "" : live.text ?? "";
+  const dir = ashMcpConfigDir(agentType, env, hostHome);
+  if (!dir) return "";
+  return readForWrite(siteFileFor(agentType, dir, mechanism.site, env))?.text ?? "";
 }
 
 /**

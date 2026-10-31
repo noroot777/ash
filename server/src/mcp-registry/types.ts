@@ -114,15 +114,34 @@ export interface AshMcpConfigSite {
    */
   readonly dirEnvIsFile?: boolean;
   /**
-   * `dirEnvIsFile` 那个变量指的是「**再加一份**配置」而不是「取代默认那份」—— 置真表示这件事
-   * **已实测**,默认位置那份照样生效、同名键由变量那份赢。
+   * 这家 CLI 的几份来源是「**合起来看、同名键由优先级高的那份赢**」—— 置真表示这件事
+   * **已实测**(判定与安装据此按 `effectiveConfigState` 算最终生效的那一条)。
    *
-   * 2026-10-31 用真 opencode 三组实测(本轮审查 R3):全局有 ash、`OPENCODE_CONFIG` 那份没有
-   * ⇒ `opencode mcp list` 照样列出 ash;两份各放一条不同的 ⇒ 列出 2 条;同名各放一条 ⇒ 列出
-   * 变量那份的。没实测过的家(kilo)**不要**置真:几份来源结论不一致时判定只能回 unknown,
-   * 猜「合并」会把没接上说成接上了,猜「取代」会把接上了说成没接上、还要再写一条顶掉它。
+   * 2026-10-31 用真 opencode 实测(本轮审查 R3/F4,逐格记在 catalog 的 `source` 里):
+   * 全局那份有 ash、`OPENCODE_CONFIG` 那份没有 ⇒ 照样列出 ash;同名各放一条 ⇒ 变量那份赢;
+   * 高优先级那份只写 `{"enabled": false}` ⇒ 真 CLI 报 `ash disabled`;默认目录里 `.json`
+   * 和 `.jsonc` **两份都读**;`OPENCODE_CONFIG_DIR` 再加一个目录、优先级高于默认目录;
+   * `OPENCODE_CONFIG_CONTENT` 那整段 JSON 优先级最高。
+   *
+   * 没实测过的家(kilo)**不要**置真:几份来源结论不一致时判定只能回 unknown,猜「合并」会把
+   * 没接上说成接上了,猜「取代」会把接上了说成没接上、还要再写一条顶掉它。
    */
-  readonly envFileMerges?: boolean;
+  readonly sourcesMerge?: boolean;
+  /**
+   * 指到**另一个配置目录**、而且优先级高于默认目录的变量(opencode 的 `OPENCODE_CONFIG_DIR`)。
+   *
+   * 和 `dirEnv` 的区别是它**不取代**默认目录:本轮实测,默认目录那份照样生效,而这个目录里的
+   * `enabled = false` 盖得住默认那份的开启。
+   */
+  readonly altDirEnv?: string;
+  /**
+   * 整段配置 JSON 直接装在这个变量里(opencode 的 `OPENCODE_CONFIG_CONTENT`)。
+   *
+   * 它是**只读来源**:优先级最高(本轮实测它能盖掉 `OPENCODE_CONFIG` 文件里的 enabled),
+   * 但没有文件可写 —— 只有它里面有 ash 时,判定必须是 present、而且一个字都不许写
+   * (上一版判 absent 还去改全局文件)。
+   */
+  readonly contentEnv?: string;
   /** 宿主机默认配置目录(`dirEnv` 没设时用它)。XDG 之类的分支写在这里面。 */
   readonly defaultDir: (env: NodeJS.ProcessEnv, home: string) => string;
   /** 配置文件相对配置目录的位置(`["config.toml"]`、`[".gemini","settings.json"]`)。 */
