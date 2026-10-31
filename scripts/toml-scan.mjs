@@ -77,6 +77,7 @@ function stripTomlNoise(text) {
  *
  * - `names`:配置里登记过的服务名,**去重**。子表也算(`[mcp_servers.ash.env]` 在而
  *   `[mcp_servers.ash]` 不在,这家 CLI 眼里 ash 照样是配过的,所以「已有就不覆盖」要认它);
+ * - `disabled`:**根级**那个 `disabled_mcp_servers` 列的名字(见下面的 `root`);
  * - `duplicateTables`:同一个名字的 `[mcp_servers.<名>]` 出现了不止一次 —— 这是**写坏了**的
  *   形状(TOML 不许重复表,CLI 会整份拒载),所以单独数出来,给写之前的候选校验用。
  */
@@ -88,12 +89,21 @@ export function scanTomlServers(text) {
   const tables = [];      // 只有 `[mcp_servers.<名>]` 这一层,带重数
   let disabled = [];
   const rest = [];
+  // **只有根级那个 `disabled_mcp_servers` 才是那个全局开关**(本轮审查 F2,真 grok 实测):
+  // `[plugins.demo]` 底下同名的键是那个插件自己的字段,上一版不记表作用域、任意表里的同名
+  // 行都当成根级事实,于是一份真 grok 能照常加 ash 的配置被判成「你关掉了 ash」、自动补接
+  // 当场被拒。TS 那侧(`codex-toml.ts` 的 `tomlRootStringArray`)本来就记作用域,这里跟上。
+  // TOML 里第一个表头之后再回不到根级,所以一个布尔就够。非根级那几行照样要**吃掉** ——
+  // 不吃就会落到下面的 `mcp_servers` 散行检查上(`disabled_mcp_servers` 带着这个词),
+  // 判不准同样会让安装器不写:那不是修好,只是换了句话拒绝。
+  let root = true;
   for (const line of stripped.lines.map((l) => l.trim())) {
     if (!line) continue;
     if (line.startsWith("[")) {
       const header = /^\[\[?((?:[^\]"']|"(?:[^"\\]|\\.)*"|'[^']*')*)\]\]?$/.exec(line);
       const path = header ? tomlKeyPath(header[1]) : null;
       if (!path) return { why: `表头 ${line} 按 TOML 读不通` };
+      root = false;
       if (path[0] === "mcp_servers") {
         // `[mcp_servers]` 本体底下只能靠点号键给出名字 —— 那一档我们不认,交给「判不准」。
         if (path.length < 2) return { why: "配置里有一张 [mcp_servers] 总表（名字写在点号键里，ash 认不了）" };
@@ -104,7 +114,9 @@ export function scanTomlServers(text) {
     }
     const off = /^disabled_mcp_servers[ \t]*=[ \t]*\[(.*)\][ \t]*$/.exec(line);
     if (off) {
-      disabled = [...(off[1].match(/"(?:[^"\\]|\\.)*"|'[^']*'/g) || [])].map((q) => unquoteToml(q) ?? "");
+      if (root) {
+        disabled = [...(off[1].match(/"(?:[^"\\]|\\.)*"|'[^']*'/g) || [])].map((q) => unquoteToml(q) ?? "");
+      }
       continue;
     }
     rest.push(line);
