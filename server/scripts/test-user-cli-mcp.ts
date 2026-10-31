@@ -502,13 +502,29 @@ for (const agent of ["claude", "codex"] as const) {
 // ㉓ **这一问不许在 server 里同步 spawn**（本轮审查 F2）：那样起的进程没有归属、收不回来
 //    （Windows 真机实测包装退出后查询还活着），而同步调用期间整个 server 的事件循环被堵住。
 //    唯一许可的起法是探测执行层。替身住在**测试文件**里,产品代码里一个都不许有。
+//
+//    2026-10-31 这一条跟着代码搬了家:补登记现在是十五家 CLI 通用的一份实现
+//    (`mcp-registry/register.ts` + `auth/config-publish.ts`),问 codex 本人那一关单独住在
+//    `auth/codex-approve.ts`。断言因此改成**整条写入链逐个文件查** —— 只盯原来那一个文件的话,
+//    往新文件里写一句 spawnSync 就没人拦得住了。
 {
-  const raw = readFileSync(join(REPO_DIR, "server", "src", "auth", "user-cli-mcp.ts"), "utf8");
-  // 注释里会提到旧写法(「上一版用的是 spawnSync」),按行剥掉注释再看代码本身。
-  const code = raw.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
-  assert.ok(!/spawnSync\(|\bspawn\(|execFile|execSync/.test(code),
-    "写入侧不许自己起进程 —— 走 probeCli（本轮审查 F2）");
-  assert.ok(/probeCli\(/.test(code), "问 codex 本人那一问必须走探测执行层");
+  const CHAIN = [
+    join("auth", "user-cli-mcp.ts"),
+    join("auth", "config-publish.ts"),
+    join("auth", "codex-approve.ts"),
+    join("mcp-registry", "register.ts"),
+    join("mcp-registry", "shapes.ts"),
+    join("mcp-registry", "catalog.ts"),
+  ];
+  for (const rel of CHAIN) {
+    const raw = readFileSync(join(REPO_DIR, "server", "src", rel), "utf8");
+    // 注释里会提到旧写法(「上一版用的是 spawnSync」),按行剥掉注释再看代码本身。
+    const code = raw.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    assert.ok(!/spawnSync\(|\bspawn\(|execFile|execSync/.test(code),
+      `${rel}：写入侧不许自己起进程 —— 走 probeCli（本轮审查 F2）`);
+  }
+  const askCode = readFileSync(join(REPO_DIR, "server", "src", "auth", "codex-approve.ts"), "utf8");
+  assert.ok(/probeCli\(/.test(askCode), "问 codex 本人那一问必须走探测执行层");
 }
 
 // ㉔ **批准期间别人存了新东西,不许被盖掉**（第 2 轮审查 F1）：批准那一问要起一次 codex、
@@ -569,7 +585,8 @@ for (const agent of ["claude", "codex"] as const) {
   for (const ancestor of [REPO_DIR, DATA_DIR]) {
     assert.ok(!sandbox.startsWith(ancestor), `沙盘不许落在 ${ancestor} 底下 —— 那条祖先链会被一起读进来`);
   }
-  const code = readFileSync(join(REPO_DIR, "server", "src", "auth", "user-cli-mcp.ts"), "utf8")
+  // 问 codex 那一关 2026-10-31 搬进了 `auth/codex-approve.ts`,断言跟着它走。
+  const code = readFileSync(join(REPO_DIR, "server", "src", "auth", "codex-approve.ts"), "utf8")
     .split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
   assert.ok(/mkdtempSync\(join\(tmpdir\(\)/.test(code), "沙盘建在系统临时目录里");
   assert.ok(!/mkdtempSync\(join\(DATA_DIR/.test(code), "不许再挪回 DATA_DIR（那是 ash 检出的一部分）");

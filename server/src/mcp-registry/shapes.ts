@@ -264,6 +264,37 @@ function tomlRootDisabled(text: string, name: string): boolean {
   return new RegExp(`['"]${name}['"]`).test(line[1]!);
 }
 
+
+/**
+ * 把一段 `[mcp_servers.…]` 原文接到配置末尾。**只在扫描器确定「没有」时才接**。
+ *
+ * 判据跟读那一侧(`read`)问同一个扫描器:判错成「没有」就会再追加一份同名表,那在 TOML
+ * 里是重复定义,CLI 整份配置都读不出来(连用户别的 MCP 一起没了)。
+ */
+function appendToml(text: string | null, block: string): AshMcpCompose {
+  const current = text ?? "";
+  const scan = scanCodexToml(current);
+  if (scan.doubt) {
+    return { why: `看不准配置里有没有 ash MCP 登记（${scan.doubt}），没有自动追加，免得写出重复的表` };
+  }
+  // 整张表写成内联值之后 TOML 不许再用表头扩展 —— 照写进去 CLI 整份拒载(codex 真机实测)。
+  if (scan.sealed) {
+    return {
+      why: `配置里 ${scan.sealed}，所以没有自动补写 —— 请在那个内联表里自己加一条 `
+        + `${ASH_MCP_SERVER_NAME}，或者把它改写成 [mcp_servers.xxx] 的普通表写法再重启`,
+    };
+  }
+  const body = current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`;
+  // 自己这道只是**预筛**:TOML 的判官住在 CLI 进程里(codex 那条路会再问它本人,
+  // 见 `auth/codex-approve.ts`)。
+  const back = scanCodexToml(body);
+  if (back.doubt) return { why: `补上那段之后配置自己都读不通了（${back.doubt}）` };
+  if (!back.servers.get(ASH_MCP_SERVER_NAME)?.enabled) {
+    return { why: `补上那段之后仍读不出启用着的 [mcp_servers.${ASH_MCP_SERVER_NAME}]` };
+  }
+  return { body };
+}
+
 export const mcpServersTomlShape: AshMcpShape = {
   id: "mcp-servers-toml",
   read(text) {
@@ -274,36 +305,20 @@ export const mcpServersTomlShape: AshMcpShape = {
     if (!names.length) return absent("配置里没有 [mcp_servers.ash]");
     const live = names.find((n) => scan.servers.get(n)!.enabled && !tomlRootDisabled(text, n));
     if (live) return present(live);
-    const off = names.map((n) => `[mcp_servers.${n}]`).join("、");
-    return { state: "disabled", serverName: names[0]!, detail: `配置里的 ${off} 是关着的` };
+    // 关法有两种,说清是哪一种:用户要照着去改的就是那一行(只说「关着的」等于让他自己去翻)。
+    const off = names
+      .map((n) => scan.servers.get(n)!.enabled
+        ? `[mcp_servers.${n}] 被 disabled_mcp_servers 关掉了`
+        : `[mcp_servers.${n}] 写着 enabled = false`)
+      .join("、");
+    return { state: "disabled", serverName: names[0]!, detail: off };
   },
   compose(text, entry, opts) {
-    const current = text ?? "";
-    const scan = scanCodexToml(current);
-    // 「有没有」跟读那一侧问同一个扫描器:判错成「没有」就会再 append 一份同名表,
-    // 那在 TOML 里是重复定义,CLI 整份配置都读不出来(连用户别的 MCP 一起没了)。
-    if (scan.doubt) {
-      return { why: `看不准配置里有没有 ash MCP 登记（${scan.doubt}），没有自动追加，免得写出重复的表` };
-    }
-    // 整张表写成内联值之后 TOML 不许再用表头扩展 —— 照写进去 CLI 整份拒载(codex 真机实测)。
-    if (scan.sealed) {
-      return {
-        why: `配置里 ${scan.sealed}，所以没有自动补写 —— 请在那个内联表里自己加一条 `
-          + `${ASH_MCP_SERVER_NAME}，或者把它改写成 [mcp_servers.xxx] 的普通表写法再重启`,
-      };
-    }
-    const block = tomlBlock(entry, opts?.enabled === true);
-    const body = current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`;
-    // 自己这道只是**预筛**:TOML 的判官住在 CLI 进程里(codex 那条路会再问它本人,
-    // 见 `auth/user-cli-mcp.ts` 的 `codexAccepts`)。
-    const back = scanCodexToml(body);
-    if (back.doubt) return { why: `补上那段之后配置自己都读不通了（${back.doubt}）` };
-    if (!back.servers.get(ASH_MCP_SERVER_NAME)?.enabled) {
-      return { why: `补上那段之后仍读不出启用着的 [mcp_servers.${ASH_MCP_SERVER_NAME}]` };
-    }
-    return { body };
+    return appendToml(text, tomlBlock(entry, opts?.enabled === true));
   },
-  hostEntry: undefined,     // TOML 族搬宿主那段用 `extractTomlTables`(整段原文照搬,见下)
+  hostBlock: tomlHostBlock,
+  blockFor: (entry, opts) => tomlBlock(entry, opts?.enabled === true),
+  appendBlock: appendToml,
   launch(text) {
     if (text === null) return null;
     const scan = scanCodexToml(text);

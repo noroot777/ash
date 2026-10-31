@@ -69,6 +69,18 @@ export interface AshMcpShape {
   compose(text: string | null, entry: AshMcpEntry, opts?: AshMcpComposeOpts): AshMcpCompose;
   /** 别处(通常是宿主机那份同格式配置)里 ash 那条登记的定义,搬过来复用。 */
   hostEntry?(text: string): AshMcpEntry | null;
+  /**
+   * 「整段原文照搬」那一路,只有 TOML 族有(下面三位要么都有、要么都没有)。
+   *
+   * 为什么 TOML 不走 `hostEntry`:宿主那条登记底下可能挂着子表(本机实测
+   * `[mcp_servers.ash.tools.get_task] approval_mode = "approve"`),拆成
+   * `{command,args,env}` 再拼回去会把它们丢掉。照搬原文一个字节都不丢。
+   */
+  hostBlock?(text: string): string | null;
+  /** 没有宿主那段可搬时,按一条登记现渲染一段。 */
+  blockFor?(entry: AshMcpEntry, opts?: AshMcpComposeOpts): string;
+  /** 把一段登记原文接进配置(重复表、内联表这些判据跟 `compose` 同一份)。 */
+  appendBlock?(text: string | null, block: string): AshMcpCompose;
   /** 这条登记写的启动方式,只给 `launchHint` 出提示。 */
   launch(text: string | null): AshMcpLaunch | null;
 }
