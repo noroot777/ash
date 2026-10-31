@@ -141,8 +141,21 @@ try {
   assert.ok(task);
   const res = await api.request(`/tasks/${task.id}/run`, { method: "POST" });
   assert.ok(res.ok, `起跑要成功:${res.status} ${await res.text()}`);
-  // 从这一刻起,任何一条出错路径都得先把它停掉(整棵进程树由 stop 那条路杀)。
-  stopRun = async () => { await api.request(`/tasks/${task.id}/stop`, { method: "POST" }); };
+  // 从这一刻起,任何一条出错路径都得先把它停掉(整棵进程树由 stop 那条路杀),而且要**等它
+  // 真的停下来**:`/stop` 在发出击杀之后就应答(`runs.ts` 只发 kill、`kill.ts` 的 SIGKILL
+  // 兜底还要 2 秒),结算是异步的 —— 上一版只等那个 HTTP 响应就去关库、删沙盘,那会儿
+  // CLI 往往还在退出中,读的正是刚被删掉的配置目录(本轮审查 N1)。
+  stopRun = async () => {
+    const stop = await api.request(`/tasks/${task.id}/stop`, { method: "POST" });
+    if (!stop.ok) console.error(`停任务没成功:${stop.status} ${await stop.text()}`);
+    const until = Date.now() + 30_000;
+    while (Date.now() < until) {
+      const [row] = await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, task.id));
+      if (!["running", "queued"].includes(row?.status ?? "")) return;    // 结算完 = 进程树已收回
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    console.error("等了 30 秒它还在 running/queued —— 下面的清理可能撞上还活着的进程");
+  };
   console.log(`③ 任务已起跑(opencode / ${task.model})`);
 
   // ── 4. 等它交卷 ───────────────────────────────────────────────────────
@@ -166,9 +179,9 @@ try {
   assert.equal(status, "done", "opencode 要能靠 ash MCP 交卷");
   console.log("✅ 非 claude/codex 的真 CLI 端到端通过:注册 → 起跑 → 靠 ash MCP 交卷");
 } finally {
-  // 顺序是定死的:先停这次起的任务和它的 CLI,再关服务,再松开库文件,最后才删沙盘
-  // (沙盘里有仓库和配置,还在跑的进程正读着它们)。每一步各自兜异常 —— 一步失败不该
-  // 让后面几步不做。
+  // 顺序是定死的:先停这次起的任务和它的 CLI、**并等它真的落终态**,再关服务,再松开库文件,
+  // 最后才删沙盘(沙盘里有仓库和配置,还在跑的进程正读着它们)。每一步各自兜异常 ——
+  // 一步失败不该让后面几步不做。
   if (stopRun) await stopRun().catch((e) => console.error(`停任务没成功:${String(e)}`));
   if (backend) await new Promise<void>((r) => backend!.close(() => r()));
   await releaseTmpDb();

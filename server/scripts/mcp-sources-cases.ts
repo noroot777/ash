@@ -207,8 +207,11 @@ export async function checkSourceModel(
     assert.match(verdictC.hint ?? "", /live\.js/, `提示要指到开着那条:${verdictC.hint}`);
     assert.ok(!/old\.js/.test(verdictC.hint ?? ""), `关着那条不许拿去当提示:${verdictC.hint}`);
 
-    // ⒟ 整份读不准的那一份:**优先级不低于**生效那条时只能说看不准(它可能正把那条关掉);
-    //    优先级更低时影响不到,照样放行 —— 低的盖不住高的。
+    // ⒟ 整份读不准的那一份:**不管它在哪一层**都只能说看不准。
+    //    这一格原来分两档(高的拦、低的放行,理由是「低的盖不住高的」),2026-10-31 实测推翻了
+    //    低那一档:真 opencode 读到任何一份读不通的配置就整份拒载(`debug config --pure`
+    //    exit 1),那时压根没有生效的登记可言 —— 放行会答成 present、安装器还说「已经有生效
+    //    的 ash 登记」(本轮审查 F1-C)。
     const d = bench("f3-blind-high");
     seedGlobal(d.host, WITH_ASH);
     const brokenHigh = join(d.dir, "broken.json");
@@ -217,12 +220,18 @@ export async function checkSourceModel(
       ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: brokenHigh }), d.host), shape, merges);
     assert.equal(stD.state, "unknown", "更高优先级那份读不准 ⇒ 看不准");
     const e = bench("f3-blind-low");
-    seedGlobal(e.host, '{"mcp": {');
+    const lowBroken = seedGlobal(e.host, '{"mcp": {');
     const highOk = join(e.dir, "ok.json");
     writeFileSync(highOk, WITH_ASH, "utf8");
-    const stE = effectiveConfigState(
-      ashMcpHostSources("opencode", ocEnv(e.host, { OPENCODE_CONFIG: highOk }), e.host), shape, merges);
-    assert.equal(stE.state, "present", `优先级更低那份读不准,盖不住高的:${stE.detail}`);
+    const envE = ocEnv(e.host, { OPENCODE_CONFIG: highOk });
+    const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), shape, merges);
+    assert.equal(stE.state, "unknown", `更低那份读不准也得说看不准:${stE.detail}`);
+    assert.match(stE.detail, /整份配置一起拒载/, `要说清为什么:${stE.detail}`);
+    const rE2 = await registerAshMcp({
+      agentType: "opencode", dir: ashMcpConfigDir("opencode", envE, e.host)!, hostHome: e.host, env: envE,
+    });
+    assert.ok(!rE2.ok && /看不准/.test(rE2.why), `看不准就不写:${rE2.ok ? "ok" : rE2.why}`);
+    assert.equal(readFileSync(lowBroken, "utf8"), '{"mcp": {', "坏的那份也不许动");
 
     // ⒠ 缺登记时给的自查路径必须是**路径**(本轮审查 N1:上一版把来源对象直接拼进话里,
     //    用户拿到的是 `看一眼 [object Object]`)。
@@ -364,6 +373,112 @@ export async function checkSourceModel(
     assert.equal(stG.state, "unknown", `不许当成关着:${stG.detail}`);
     assert.match(stG.detail, /disabled: true/, stG.detail);
     group("几份合起来那一条:层级实测序、跨来源字段继承、同目录先后、只写开关、disabled 不认");
+  }
+
+  // ── ⑳ 合并的三条实测约束(本轮审查 F1 的 A/B/C)──────────────────────────────
+  //
+  // 三格都用审查那份复现的形状,结论全部拿真 opencode 1.19.3 比对过(记在 `catalog.ts` 的
+  // `source` ⑯–⑳)。裸 Node 那侧同样三格在 `test-ash-mcp-installer.ts` 第 ⑦ 组的 ⒨–⒰。
+  {
+    const { shape, site } = shapeOf("opencode");
+    const merges = site.sourcesMerge === true;
+
+    // ⒜ **逐份投影**:低那份写成开关(没 type)时只贡献 `enabled`,它同时写的
+    //    `command` / `environment` 真 CLI 一律丢掉。上一版只在高那份上投影、最低那份原值
+    //    照抄,于是那些字段被合进有效登记、再被搬进隔离档 —— 审查实测隔离档里真 CLI 报
+    //    `MCP error -32000: Connection closed`:注册说成功,工具却没了。
+    const a = bench("f1a-project-lowest");
+    seedGlobal(a.host, ocBody({
+      ash: { enabled: true, environment: { SMOKE_REJECT: "yes" }, command: ["node", "/ignored.js"] },
+    }));
+    const aFile = join(a.dir, "my.json");
+    writeFileSync(aFile, ocBody({ ash: { type: "local", command: ["node", "/live.js"] } }), "utf8");
+    const envA = ocEnv(a.host, { OPENCODE_CONFIG: aFile });
+    const stA = effectiveConfigState(ashMcpHostSources("opencode", envA, a.host), shape, merges);
+    assert.equal(stA.state, "present", stA.detail);
+    assert.deepEqual(stA.fact?.raw, { enabled: true, type: "local", command: ["node", "/live.js"] },
+      "合出来的那条必须跟真 CLI 一个字段不差 —— 开关那一支只贡献 enabled");
+    const isolated = join(a.dir, "profile");
+    mkdirSync(isolated, { recursive: true });
+    const rA = await registerAshMcp({ agentType: "opencode", dir: isolated, hostHome: a.host, env: envA });
+    assert.ok(rA.ok, rA.ok ? "" : rA.why);
+    const built = JSON.parse(readFileSync(join(isolated, "opencode.json"), "utf8")) as
+      { mcp: Record<string, Record<string, unknown>> };
+    assert.deepEqual(built.mcp.ash?.command, ["node", "/live.js"], "搬的是能连上那条命令");
+    assert.ok(!("environment" in (built.mcp.ash ?? {})),
+      `真 CLI 丢掉的字段不许跟着搬过去:${JSON.stringify(built.mcp.ash)}`);
+    //    开关跨来源继承照旧成立:低那份写成 `{enabled:false}`(没 type)+ 高那份完整不写
+    //    开关 ⇒ 真 CLI `enabled:false`,所以这种不许替用户打开。
+    const b = bench("f1a-switch-off-inherits");
+    seedGlobal(b.host, ocBody({ ash: { enabled: false, environment: { X: "1" } } }));
+    const bFile = join(b.dir, "my.json");
+    writeFileSync(bFile, ocBody({ ash: { type: "local", command: ["node", "/live.js"] } }), "utf8");
+    const envB = ocEnv(b.host, { OPENCODE_CONFIG: bFile });
+    const stB = effectiveConfigState(ashMcpHostSources("opencode", envB, b.host), shape, merges);
+    assert.equal(stB.state, "disabled", `开关继承上来 ⇒ 关着:${stB.detail}`);
+    const rB = await registerAshMcp({
+      agentType: "opencode", dir: ashMcpConfigDir("opencode", envB, b.host)!, hostHome: b.host, env: envB,
+    });
+    assert.ok(!rB.ok && /没有替你打开/.test(rB.why), `不许替用户打开:${rB.ok ? "ok" : rB.why}`);
+
+    // ⒝ **阶段才是单位**:`OPENCODE_CONFIG` 指回默认目录那份时,真 CLI 会在同目录 `.jsonc`
+    //    之后**再读一遍它**,结论因此翻过来(实测 `enabled:true`、`ash connected`)。上一版
+    //    按路径去重、只留第一次出现 ⇒ 最高那次加载整个消失,判成 disabled、预检硬拒,
+    //    落点还指向 `.jsonc`。
+    const c = bench("f1b-same-path-two-stages");
+    const cJson = seedGlobal(c.host, ocBody({ ash: { ...OC_ENTRY, command: ["node", "/json.js"] } }));
+    const cJsonc = seedGlobal(c.host, ocBody({ ash: { enabled: false } }), "opencode.jsonc");
+    const envC = ocEnv(c.host, { OPENCODE_CONFIG: cJson });
+    const srcC = ashMcpHostSources("opencode", envC, c.host);
+    assert.deepEqual(srcC.map((s) => s.file), [cJson, cJsonc, cJson],
+      "同一个路径在两个加载阶段各算一次(文件身份相同 ≠ 加载阶段相同)");
+    const stC = effectiveConfigState(srcC, shape, merges);
+    assert.equal(stC.state, "present", `再读那一遍把开关翻回来了:${stC.detail}`);
+    assert.deepEqual(stC.fact?.launch?.args, ["/json.js"], "生效的是再读那一份里的命令");
+    assert.equal(fileAshMcpVerdict("opencode", envC, [c.host]).state, "present", "派审门禁要放行");
+    assert.equal(ashMcpHostFile("opencode", envC, c.host), cJson, "落点也是最高那个阶段指的那份");
+    //    反过来指回 `.jsonc`:那它就是最后一次加载 ⇒ 关着(同一条规则的另一面)。
+    const d = bench("f1b-same-path-reversed");
+    seedGlobal(d.host, ocBody({ ash: { ...OC_ENTRY, command: ["node", "/json.js"] } }));
+    const dJsonc = seedGlobal(d.host, ocBody({ ash: { enabled: false } }), "opencode.jsonc");
+    const stD = effectiveConfigState(
+      ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: dJsonc }), d.host), shape, merges);
+    assert.equal(stD.state, "disabled", `指回 .jsonc ⇒ 它是最后一次加载:${stD.detail}`);
+
+    // ⒞ **任何一份读不通就整份拒载**:坏文件放在哪一层都一样,甚至那份里压根没提 ash
+    //    (实测四种都是 `exit 1`)。所以不许靠「低的盖不住高的」答 present ——
+    //    那会让安装器说「已经有生效的 ash 登记」,而真 CLI 一个服务都起不来。
+    for (const where of ["lowest", "highest", "same-dir", "no-ash"] as const) {
+      const e = bench(`f1c-broken-${where}`);
+      const extra = join(e.dir, "my.json");
+      let broken = "";
+      if (where === "lowest") {
+        broken = seedGlobal(e.host, "{BROKEN");
+        writeFileSync(extra, WITH_ASH, "utf8");
+      } else if (where === "highest") {
+        seedGlobal(e.host, WITH_ASH);
+        broken = extra;
+        writeFileSync(broken, "{BROKEN", "utf8");
+      } else if (where === "same-dir") {
+        seedGlobal(e.host, WITH_ASH);
+        broken = seedGlobal(e.host, "{BROKEN", "opencode.jsonc");
+        writeFileSync(extra, EMPTY, "utf8");
+      } else {
+        broken = seedGlobal(e.host, '{"model": ');   // 坏,而且一个字都没提 ash
+        writeFileSync(extra, WITH_ASH, "utf8");
+      }
+      const envE = ocEnv(e.host, { OPENCODE_CONFIG: extra });
+      const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), shape, merges);
+      assert.equal(stE.state, "unknown", `${where}:有一份读不准 ⇒ 看不准(得到 ${stE.state})`);
+      assert.equal(fileAshMcpVerdict("opencode", envE, [e.host]).state, "unknown",
+        `${where}:预检也只能说看不准`);
+      const rE = await registerAshMcp({
+        agentType: "opencode", dir: ashMcpConfigDir("opencode", envE, e.host)!, hostHome: e.host, env: envE,
+      });
+      assert.ok(!rE.ok && /看不准/.test(rE.why), `${where}:看不准就不写(${rE.ok ? "ok" : rE.why})`);
+      assert.ok(readFileSync(broken, "utf8").startsWith("{"), `${where}:坏的那份一个字节都不许动`);
+    }
+    group("合并的三条实测约束:逐份投影(首项也投)、同路径两个阶段各算一次、任一份读不通就看不准");
   }
 
   // ── ⑰ 改写已有配置之前留一份核对过的备份(本轮审查 F2)──────────────────────
