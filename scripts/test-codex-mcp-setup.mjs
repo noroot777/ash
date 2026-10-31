@@ -6,6 +6,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { denyReadAcl } from "./acl-probe.mjs";
 import { parseCodexList, registerCodexMcp } from "./codex-mcp.mjs";
 import { IS_WINDOWS, which } from "./platform.mjs";
 
@@ -24,21 +25,6 @@ const removesInSandbox = (left, watch) => (name, home) => {
   writeFileSync(join(home, "config.toml"), left);
   return true;
 };
-
-/**
- * 在这台机器上给 `f` 设一条「某个具名账号禁止读取」的扩展 ACL,并给出怎么把它打印出来。
- * 设不上(文件系统不支持、没有这个命令)就返回 null,由调用方跳过并说明 —— 这种本机能力
- * 不该让回归整条红。
- */
-function denyReadAcl(f) {
-  const plan = process.platform === "darwin"
-    ? { set: ["chmod", ["+a", "user:nobody deny read", f]], show: ["ls", ["-le", f]], mark: "nobody deny read" }
-    : { set: ["setfacl", ["-m", "u:nobody:---", f]], show: ["getfacl", ["-c", f]], mark: "user:nobody:---" };
-  const show = () => spawnSync(plan.show[0], plan.show[1], { encoding: "utf8" }).stdout ?? "";
-  const put = spawnSync(plan.set[0], plan.set[1], { encoding: "utf8" });
-  if (put.status !== 0 || !show().includes(plan.mark)) return null;
-  return { show, mark: plan.mark, how: plan.set[0] };
-}
 
 try {
   assert.deepEqual(parseCodexList(0, '[{"name":"ash","enabled":false}]'), { ok: true, servers: [{ name: "ash", enabled: false }] });
@@ -216,7 +202,7 @@ try {
     } else {
       assert.equal(registerCodexMcp({ ...base, configFile: acled, listServers: answers(listed(), listed("ash")) }).action, "added");
       assert.match(readFileSync(acled, "utf8"), /\[mcp_servers\.ash\]/);
-      assert.ok(acl.show().includes(acl.mark), `那条禁读写完还得在:\n${acl.show()}`);
+      assert.deepEqual(acl.list(), acl.aces, `那条禁读写完还得在:\n${acl.show()}`);
     }
     // ⑦ 软链跟满 8 层还没到头(成环/异常长):定位不了就**不写**,别把中间那环换成普通文件
     //    (审查第 5 轮 N9:上一版返回当前这一环,于是 rename 把它替换掉了)。
