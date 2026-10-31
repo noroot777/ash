@@ -42,6 +42,14 @@ export interface AshMcpLaunch {
   ashUrl?: string | null;
 }
 
+/** 拼的时候这家 CLI 要的那两个可选修饰(来自 `AshMcpMechanism` 的同名字段)。 */
+export interface AshMcpComposeOpts {
+  /** TOML 族:带上 `enabled = true`。 */
+  enabled?: boolean;
+  /** JSON 族:带上 `"type": "stdio"`。 */
+  type?: string;
+}
+
 /** 拼一段新内容出来:给 body 就是可以发布,给 why 就是**不能自动补**(原因原样交给用户)。 */
 export type AshMcpCompose = { body: string } | { why: string };
 
@@ -58,7 +66,7 @@ export interface AshMcpShape {
   /** 这份配置里 ash 登记的状态。`text === null` = 确认没有这个文件。 */
   read(text: string | null): AshMcpConfigState;
   /** 把 ash 这一条拼进去(已有一律不覆盖 —— 调用方先 `read` 过)。 */
-  compose(text: string | null, entry: AshMcpEntry, opts?: { enabled?: boolean }): AshMcpCompose;
+  compose(text: string | null, entry: AshMcpEntry, opts?: AshMcpComposeOpts): AshMcpCompose;
   /** 别处(通常是宿主机那份同格式配置)里 ash 那条登记的定义,搬过来复用。 */
   hostEntry?(text: string): AshMcpEntry | null;
   /** 这条登记写的启动方式,只给 `launchHint` 出提示。 */
@@ -72,31 +80,37 @@ export interface AshMcpConfigSite {
    * grok 的 `GROK_HOME`…)。null = 这家没有已知的等价变量,只有宿主机默认目录那一份。
    *
    * **宿主机那一份也必须尊重它**:变量由 ash 进程原样继承给子进程,CLI 认的就是它 ——
-   * 写死 `homedir()` 会两头都错(实际目录有登记却报缺失,默认目录有登记而实际目录没有时
+   * 写死 `homedir()` 会两头都错(实际目录有登记却报缺失;默认目录有登记而实际目录没有时
    * 又漏报)。
    */
   readonly dirEnv: string | null;
   /**
-   * 环境变量直接指向**配置文件**而不是目录(opencode 的 `OPENCODE_CONFIG`)。
-   * 这种情况下 `relative` 对它不适用。
+   * `dirEnv` 指向的是**配置文件**而不是目录(opencode 的 `OPENCODE_CONFIG`)。
+   * 这种写法下 `relative` 对它不适用。
    */
   readonly dirEnvIsFile?: boolean;
-  /** 宿主机默认配置目录相对 home 的位置(`[".codex"]`、`[]` = home 根)。 */
-  readonly homeSegments: readonly string[];
+  /** 宿主机默认配置目录(`dirEnv` 没设时用它)。XDG 之类的分支写在这里面。 */
+  readonly defaultDir: (env: NodeJS.ProcessEnv, home: string) => string;
   /** 配置文件相对配置目录的位置(`["config.toml"]`、`[".gemini","settings.json"]`)。 */
   readonly relative: readonly string[];
+  /**
+   * 同样合法的其它文件名(opencode 的 `opencode.jsonc`)。**存在哪个就读写哪个**,
+   * 一个都不存在才按 `relative` 新建 —— 否则会在用户已有的 `.jsonc` 旁边多出一份
+   * `.json`,两份都被 CLI 认,到底生效哪个说不清。
+   */
+  readonly alternates?: readonly (readonly string[])[];
 }
 
 /** 证据等级:本机真 CLI 验过,还是只按官方文档写。 */
 export type AshMcpEvidence = "tested" | "docs";
 
-/** 回合身份(ASH_TASK_ID / ASH_TURN_TOKEN / ASH_DIRECTION_TOKEN)怎么进 MCP 子进程。 */
+/** 回合身份(`@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_ENV`)怎么进 MCP 子进程。 */
 export type AshMcpIdentity =
-  /** CLI 把自己的环境原样传给 MCP 子进程 —— ash 起跑时注进去就够了。 */
+  /** CLI 把自己的环境原样(或只按名字黑名单)传给 MCP 子进程 —— ash 起跑时注进去就够了。 */
   | "inherit"
-  /** CLI 过滤子进程环境,必须在登记里声明要放行哪几个变量(codex 的 `env_vars`)。 */
+  /** CLI 过滤子进程环境,必须在登记里声明放行哪几个变量(codex 的 `env_vars`)。 */
   | "declare"
-  /** 还没验过。按 inherit 走,但矩阵里如实标出来。 */
+  /** 还没验过。按 inherit 走(多数 CLI 如此),矩阵里如实标出来。 */
   | "unknown";
 
 /** 这家 CLI 的 ash MCP 机制。 */
@@ -106,9 +120,19 @@ export type AshMcpMechanism =
     shape: AshMcpShape;
     site: AshMcpConfigSite;
     identity: AshMcpIdentity;
+    /** 身份这一路上的坑(谁按名字过滤、要靠哪套别名才过得去),原样进矩阵。 */
+    identityNote?: string;
     evidence: AshMcpEvidence;
     /** TOML 族:写进去的那段要不要带 `enabled = true`(跟着该 CLI 自己 `mcp add` 的写法)。 */
     writeEnabled?: boolean;
+    /**
+     * JSON 族:那条登记里要不要带 `"type": "stdio"`。
+     *
+     * 两个方向都有真实后果:cursor 的文档说这一条**必填**;claude 自己 `mcp add` 写出来的
+     * 就带着它(不带的话同一份文件里两种写法并存,看上去像被谁改过)。其余几家实测/文档都
+     * 不要求,就不写 —— 多塞一个字段进别人的 schema 是在赌它宽松。
+     */
+    writeType?: boolean;
     /** 依据出处(官方文档链接 / 本机实测记录),原样进矩阵。 */
     source: string;
     /** 已知的坑、未确认的点。`evidence:"docs"` 时必填(回归测试会拦)。 */

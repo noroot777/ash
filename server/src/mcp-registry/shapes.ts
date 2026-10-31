@@ -10,7 +10,9 @@
 //     因为 absent 是个会被用来拦人的结论(`ash-mcp-reachability.ts` 的「向放行开」)。
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { extractTomlTables, scanCodexToml } from "../codex-toml.js";
-import type { AshMcpCompose, AshMcpConfigState, AshMcpEntry, AshMcpLaunch, AshMcpShape } from "./types.js";
+import type {
+  AshMcpCompose, AshMcpComposeOpts, AshMcpConfigState, AshMcpEntry, AshMcpLaunch, AshMcpShape,
+} from "./types.js";
 
 const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
 
@@ -24,7 +26,7 @@ const unknown = (detail: string): AshMcpConfigState => ({ state: "unknown", serv
 function parseDoc(text: string | null): Record<string, unknown> | null | undefined {
   if (text === null || !text.trim()) return null;
   try {
-    const parsed = JSON.parse(stripJsonComments(text)) as unknown;
+    const parsed = JSON.parse(stripJsonComments(text).text) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
     return parsed as Record<string, unknown>;
   } catch {
@@ -33,15 +35,26 @@ function parseDoc(text: string | null): Record<string, unknown> | null | undefin
 }
 
 /**
- * `.jsonc` 这一族(kilo 的 `kilo.jsonc`、opencode 允许注释)读之前要去掉注释,
- * 否则一份合法配置会被判成「解析不了」。**只用于读**:拼回去时用的是 `JSON.parse` 过的
- * 文档对象,所以我们永远不会把别人的注释当内容写回去 —— 注释会丢,这一条写在
- * `catalog.ts` 那几家的 `notes` 里,也是这几家只在**没有这个文件**时才自动建的原因。
+ * 注释一旦存在就**不自动改写这份配置**。
+ *
+ * 读是读得了(`stripJsonComments`),可拼回去用的是 `JSON.parse` 出来的文档对象 ——
+ * 序列化出去注释全没了。用户在 `opencode.jsonc` / `kilo.jsonc` 里写的注释是他自己的内容,
+ * 本轮的硬边界是「只在缺 ash 条目时追加,绝不动其它条目」,把人家的注释抹掉算动。
+ * 所以这种文件改走「如实说一句,让用户自己加」那条路(预检会把这句显示出来)。
  */
-function stripJsonComments(text: string): string {
+function hasComments(text: string | null): boolean {
+  return text !== null && stripJsonComments(text).stripped;
+}
+
+/**
+ * `.jsonc` 这一族(kilo 的 `kilo.jsonc`、opencode 允许注释)读之前要去掉注释,
+ * 否则一份合法配置会被判成「解析不了」。**只用于读**;写那一侧见 `hasComments`。
+ */
+function stripJsonComments(text: string): { text: string; stripped: boolean } {
   let out = "";
   let inString = false;
   let escape = false;
+  let stripped = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
     if (inString) {
@@ -55,17 +68,30 @@ function stripJsonComments(text: string): string {
     if (ch === "/" && text[i + 1] === "/") {
       while (i < text.length && text[i] !== "\n") i++;
       out += "\n";
+      stripped = true;
       continue;
     }
     if (ch === "/" && text[i + 1] === "*") {
       i += 2;
       while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
       i += 1;
+      stripped = true;
       continue;
     }
     out += ch;
   }
-  return out;
+  return { text: out, stripped };
+}
+
+/** 两个 JSON 族共用的「能不能动这份文件」前置判断。 */
+function jsonComposeGuard(text: string | null): { why: string } | null {
+  if (hasComments(text)) {
+    return {
+      why: "配置里有注释，自动改写会把注释丢掉，所以没有动它 —— "
+        + "请自己在里面加一条 ash 登记（或把注释挪到别处再重启）",
+    };
+  }
+  return null;
 }
 
 const asObject = (v: unknown): Record<string, unknown> | null =>
@@ -107,7 +133,9 @@ export const mcpServersJsonShape: AshMcpShape = {
     if (doc === null) return absent("配置文件还不存在");
     return pickEntry(doc[CONTAINER], "配置");
   },
-  compose(text, entry) {
+  compose(text, entry, opts) {
+    const guard = jsonComposeGuard(text);
+    if (guard) return guard;
     const doc = parseDoc(text);
     if (doc === undefined) return { why: "配置解析不了，没敢动它 —— 手工修好或删掉它再重启" };
     const base = doc ?? {};
@@ -115,9 +143,10 @@ export const mcpServersJsonShape: AshMcpShape = {
     if (base[CONTAINER] !== undefined && !servers) {
       return { why: `配置里的 ${CONTAINER} 不是一个对象，没敢动它` };
     }
+    const value = opts?.type ? { type: opts.type, ...entry } : { ...entry };
     // 规范名落地:宿主那份即使叫历史名 harness,搬过来也按 ash 登记(两边都叫 ash 之后,
     // 提示词里那句「ash MCP」才对得上工具名)。
-    base[CONTAINER] = { ...(servers ?? {}), [ASH_MCP_SERVER_NAME]: { ...entry } };
+    base[CONTAINER] = { ...(servers ?? {}), [ASH_MCP_SERVER_NAME]: value };
     const body = serialize(base);
     // 自己复核一遍:这一族的「真解析器」就在手上(语义全在 JSON 语法里),所以拼完能当场验。
     const back = mcpServersJsonShape.read(body);
@@ -183,6 +212,8 @@ export const opencodeJsonShape: AshMcpShape = {
     return pickEntry(doc[OPENCODE_CONTAINER], "配置");
   },
   compose(text, entry) {
+    const guard = jsonComposeGuard(text);
+    if (guard) return guard;
     const doc = parseDoc(text);
     if (doc === undefined) return { why: "配置解析不了，没敢动它 —— 手工修好或删掉它再重启" };
     const base = doc ?? {};
@@ -304,4 +335,4 @@ export function tomlHostBlock(text: string): string | null {
     ?? extractTomlTables(text, LEGACY_ASH_MCP_SERVER_NAME, ASH_MCP_SERVER_NAME);
 }
 
-export type { AshMcpCompose, AshMcpEntry, AshMcpLaunch };
+export type { AshMcpCompose, AshMcpComposeOpts, AshMcpEntry, AshMcpLaunch };
