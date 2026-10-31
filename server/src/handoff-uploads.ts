@@ -20,6 +20,7 @@ import { join, sep } from "node:path";
 import { MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type { HandoffUploadPayload } from "./handoff-types.js";
 import { UPLOADS_DIR } from "./paths.js";
+import { UPLOAD_NAME_RUN, isSafeUploadName } from "./upload-names.js";
 import { id } from "./util.js";
 
 export const MAX_UPLOADS = 100;
@@ -38,12 +39,13 @@ export interface LocalUploadNames {
 /** 一段文本在 JSON 字符串里的形态(去掉包裹引号)。POSIX 路径没有需转义字符,原样返回。 */
 export const jsonEscaped = (s: string): string => JSON.stringify(s).slice(1, -1);
 
-// 上传文件名由 id()+sanitizeName 生成,字符集固定;路径末段凡是超出这个字符集的
-// 都不是我们写的附件名,扫描就地截断。
-const NAME_CHARS = /^[A-Za-z0-9._-]+/;
-const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
-
-/** 从一段文本里扫出被引用的上传文件名(只认 uploads 目录直下)。 */
+/**
+ * 从一段文本里扫出被引用的上传文件名(只认 uploads 目录直下)。
+ *
+ * 切法只有一条:按 `upload-names.ts` 的**字符集**取最长的一段。标点(含中文标点)、
+ * 空白、引号、分隔符都不在集合里,所以正文、JSON 字符串、markdown `![]()` 里这一刀
+ * 都落在正确的位置;够不着的那一档与为什么不再补刀,见那个文件末尾的说明。
+ */
 export function scanUploadNames(text: string, uploadsDir: string = UPLOADS_DIR): Set<string> {
   const names = new Set<string>();
   // POSIX 下两种形态相同,Set 去重后只扫一遍。
@@ -51,7 +53,7 @@ export function scanUploadNames(text: string, uploadsDir: string = UPLOADS_DIR):
     let idx = 0;
     while ((idx = text.indexOf(prefix, idx)) !== -1) {
       idx += prefix.length;
-      const match = NAME_CHARS.exec(text.slice(idx, idx + 512));
+      const match = UPLOAD_NAME_RUN.exec(text.slice(idx, idx + 512));
       if (match) names.add(match[0]);
     }
   }
@@ -133,8 +135,9 @@ export async function writeUploads(
 ): Promise<WrittenUpload[]> {
   const written: WrittenUpload[] = [];
   for (const u of uploads) {
-    // "." 与 ".." 也满足字符集正则,必须单独拒绝。
-    if (!SAFE_NAME.test(u.name) || u.name === "." || u.name === "..") {
+    // 远端送来的名字直接变成本机路径段,判据见 upload-names.ts 的 isSafeUploadName
+    // (纯点号的目录引用、超长名一并挡在门外)。
+    if (!isSafeUploadName(u.name)) {
       notes.push(`上传附件名非法,跳过:${u.name}`);
       continue;
     }
