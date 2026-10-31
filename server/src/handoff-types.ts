@@ -39,7 +39,7 @@ export interface HandoffFilePayload {
 // 任务文本/会话文件里被引用的上传附件(data/uploads 下的文件)。收集与改写逻辑在
 // handoff-uploads.ts。
 export interface HandoffUploadPayload {
-  // uploads 目录直下的文件名(id()+净化名生成,字符集 [A-Za-z0-9._-],无目录成分)。
+  // uploads 目录直下的文件名(id()+净化名生成,字符集见 upload-names.ts,无目录成分)。
   name: string;
   // 源机上的绝对路径:导入侧据此把各处文本里的旧路径改写成本机新路径。
   sourcePath: string;
