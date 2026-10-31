@@ -268,15 +268,18 @@ factory: (opts) => new FooExecutor(opts),
 - **grok 有两种关法**:条目上的 `enabled = false`,和根级 `disabled_mcp_servers = ["ash"]`。
 - **kimi 没有 `mcp` 子命令**(`kimi mcp add` 报 unknown command),只能我们写文件,也就没法拿它
   自己的输出复核;预检对它只有「读配置」这一档依据。
-- **opencode 会读好几份配置,判的是「最终生效的是哪一条」**(2026-10-31 真 CLI 逐格实测,八格
+- **opencode 会读好几份配置,判的是「几份合起来最终生效的那一条」**(真 CLI 逐格实测,全部
   记在那家的 `source` 里)。四层来源,优先级从低到高:默认目录(`opencode.json` 和
-  `opencode.jsonc` **两份都读**)、`OPENCODE_CONFIG_DIR` 再加的那个目录、`OPENCODE_CONFIG`
-  指的那个文件、`OPENCODE_CONFIG_CONTENT` 里那整段 JSON(**只读,没有文件可写**)。它们是
-  「合起来看、高优先级那份赢」:高优先级那份只写 `{"enabled": false}` 也会把低优先级那条
-  完整登记关掉(真 CLI 报 `ash disabled`)。所以判据只能是 `effectiveConfigState`
-  (`mcp-registry/register.ts`)——「任一份里有就算有」会把已经被关掉的说成已接好,「只看写入
-  目标那一份」会把本来连得上的判成 absent(预检里 absent 是硬拒),安装器还会往更高优先级那份
-  补一条把它顶掉。这件事由站点上的 `sourcesMerge` 声明,**只给实测过的家置真**;kilo 的
+  `opencode.jsonc` **两份都读**,`.jsonc` 压得住 `.json`)、`OPENCODE_CONFIG` 指的那个文件、
+  `OPENCODE_CONFIG_DIR` 再加的那个目录、`OPENCODE_CONFIG_CONTENT` 里那整段 JSON(**只读,
+  没有文件可写**)。合并是**逐字段深合并**:低的那份写完整登记、高的那份只写
+  `{"enabled": false}` ⇒ 命令留着、开关被关掉(真 CLI 报 `ash disabled`);嵌套的
+  `environment` 按键合、数组整条替换。所以判据只能是 `resolveAshMcp`
+  (`mcp-registry/register.ts`),而且必须是**合完那一条**——「任一份里有就算有」会把已经被
+  关掉的说成已接好;「只看写入目标那一份」会把本来连得上的判成 absent(预检里 absent 是硬拒);
+  「挑一份赢家」会把跨来源继承来的启动命令整个丢掉(高优先级那份只写 `{"enabled": true}` 时,
+  搬进隔离档的就只有这一个键,真 CLI 在那边一个服务都没有)。这件事由站点上的 `sourcesMerge`
+  声明 ——它同时表示**加载序**和**逐字段合并**语义都实测过,**只给实测过的家置真**;kilo 的
   `KILO_CONFIG` 形状一样但没真 CLI 可问,几份来源结论不一致时判定一律回 unknown(不写、也不
   拦起跑)。
 - **opencode / kilo 不是 `mcpServers` 那一族**:容器叫 `mcp`、`command` 是整条 argv 数组、环境

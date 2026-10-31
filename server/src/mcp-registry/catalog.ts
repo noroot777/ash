@@ -126,9 +126,9 @@ export const ASH_MCP_TABLE = {
   opencode: {
     kind: "file",
     shape: opencodeJsonShape,
-    // 这家会读好几份配置,而且是「合起来看、高优先级那份赢」(见 `sourcesMerge`,逐格实测
-    // 记在下面的 `source` 里)。优先级实测顺序:默认目录(`.json` 与 `.jsonc` 都读)
-    // < `OPENCODE_CONFIG_DIR` 那个目录 < `OPENCODE_CONFIG` 那个文件 < `OPENCODE_CONFIG_CONTENT`。
+    // 这家会读好几份配置,而且是「合起来看、**逐字段**合并」(见 `sourcesMerge`,逐格实测
+    // 记在下面的 `source` 里)。优先级实测顺序:默认目录(`opencode.json` < `opencode.jsonc`)
+    // < `OPENCODE_CONFIG` 那个文件 < `OPENCODE_CONFIG_DIR` 那个目录 < `OPENCODE_CONFIG_CONTENT`。
     site: {
       dirEnv: "OPENCODE_CONFIG",
       dirEnvIsFile: true,
@@ -155,7 +155,19 @@ export const ASH_MCP_TABLE = {
       + "照样生效(默认目录两个文件名都读);⑥ `OPENCODE_CONFIG_DIR` 指到别处、ash 只在默认那份 ⇒ "
       + "照样生效(它是再加一个目录,不取代);⑦ 那个目录里写 `enabled:false`、默认那份开着 ⇒ "
       + "报 disabled(它优先级更高);⑧ `OPENCODE_CONFIG_CONTENT` 与文件/全局各写一条相反的 ⇒ "
-      + "两次都是它赢(优先级最高、而且没有文件可写)",
+      + "两次都是它赢(优先级最高、而且没有文件可写);"
+      + "**审查 F1 又补了七组**(`opencode debug config --pure` + `mcp list`,全部退出 0):"
+      + "⑨ `OPENCODE_CONFIG` 文件写完整条目 + `enabled:false`、`OPENCODE_CONFIG_DIR` 目录里只写 "
+      + "`{\"enabled\":true}` ⇒ 真 CLI `ash connected` —— **那个目录比那个文件还高**(⑦⑧ 都没对打"
+      + "过这两层,上一版据此排反了);⑩ 全局写完整条目、文件只写 `{\"enabled\":true}` ⇒ 生效的是"
+      + "两份**合起来**那一条(命令、`environment` 全在),所以搬运必须搬合完那条;⑪ 嵌套对象按键"
+      + "合、数组整条替换(`environment` 低份 `{KEEP,OVER}` + 高份 `{OVER,NEW}` ⇒ 三个键都在);"
+      + "⑫ 同目录两份都写完整条目、命令不同 ⇒ 生效的是 `opencode.jsonc` 那条;⑬ 一条登记**没写 "
+      + "`type`** 时它只是个开关:高份 `{command,environment,enabled:true}` 里只有 `enabled` 过得去,"
+      + "命令仍取低份的;⑭ 单独一句 `{\"enabled\":true}` ⇒ `No MCP servers configured`(有键不等于"
+      + "有服务);连 `enabled` 都不写(光写 `command`)⇒ 整份配置非法、`exit 1` 起不来;"
+      + "⑮ `{type,command}` 不写 `enabled` 照样去连(默认开着),而 `disabled:true` 这个键**它不认**"
+      + "(带着它照样连、状态仍是 enabled)——那是 `mcpServers` 那一族的写法",
     notes: "跟 `mcpServers` 那族**不是同一个形状**（容器叫 `mcp`、argv 是数组、环境变量键叫 "
       + "`environment`），别拿那份硬套",
   },

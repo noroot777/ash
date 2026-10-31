@@ -142,13 +142,19 @@ ASH_URL = "http://localhost:4317"
 - TOML 那一族(grok)**认得出你已经装过的第三方 MCP**,会接在它后面;判不准那份配置的写法时
   一个字都不写,拼好之后还会自己再扫一遍、确认恰好只有一张 ash 表才提交(TOML 里重复一张同名
   表会让 CLI 整份配置都读不出来,连你自己的 MCP 一起没了);
-- **一家 CLI 会读好几份配置时,判的是「最终生效的是哪一条」**。opencode 这边 2026-10-31 用真
-  CLI 逐格实测过四层来源,优先级从低到高:默认目录(`opencode.json` 和 `opencode.jsonc` **两份
-  都读**)→ `OPENCODE_CONFIG_DIR` 再加的那个目录 → `OPENCODE_CONFIG` 指的那个文件 →
-  `OPENCODE_CONFIG_CONTENT` 里那整段 JSON。它们是合起来看的:全局那份里的 ash 照样生效,所以
-  setup 不会再往别处补一条;反过来,**高优先级那份只写一句 `"ash": {"enabled": false}` 也会把
-  全局那条完整登记关掉**(真 CLI 报 `ash disabled`),那种情况 ash 只如实说「被关着」、不替你
-  打开。`OPENCODE_CONFIG_CONTENT` 是只读来源(没有文件可写),它里面有 ash 时 ash 一个字都不写。
+- **一家 CLI 会读好几份配置时,判的是「几份合起来最终生效的那一条」**。opencode 这边 2026-10-31
+  用真 CLI 逐格实测过四层来源,优先级从低到高:默认目录(`opencode.json` 和 `opencode.jsonc`
+  **两份都读**,而且 `.jsonc` 压得住 `.json`)→ `OPENCODE_CONFIG` 指的那个文件 →
+  `OPENCODE_CONFIG_DIR` 再加的那个目录 → `OPENCODE_CONFIG_CONTENT` 里那整段 JSON。
+  合并是**逐字段**的:全局那份写完整的启动命令和环境变量、高优先级那份只写一句
+  `"ash": {"enabled": true}`,真 CLI 用的是两份合起来那一条(照样 `ash connected`),所以
+  setup 不会再往别处补一条,搬进隔离档的也是**合完**那一条(只搬高优先级那份的话,隔离档里
+  就只剩一个 `enabled` 键,真 CLI 在那边打印 `No MCP servers configured`);反过来,
+  **高优先级那份只写一句 `"ash": {"enabled": false}` 也会把全局那条完整登记关掉**(真 CLI 报
+  `ash disabled`),那种情况 ash 只如实说「被关着」、不替你打开。另外两条实测结论:一条登记
+  **没写 `type` 就不是服务、只是个开关**(单独一句 `{"enabled": true}` 真 CLI 当没有),而
+  `disabled: true` 这个键 opencode 压根不认(那是 claude 那一族的写法),ash 遇到它只说看不准。
+  `OPENCODE_CONFIG_CONTENT` 是只读来源(没有文件可写),它里面有 ash 时 ash 一个字都不写。
   kilo 的 `KILO_CONFIG` 形状一样但没真 CLI 可问,几份结论不一致时 ash 只说「看不准」、不写也不
   拦你起跑。
 

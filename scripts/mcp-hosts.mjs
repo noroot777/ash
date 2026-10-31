@@ -124,40 +124,57 @@ function fileInDir(dir, site) {
  * 取的是最后一个,两边因此必然一致(kilo 同时有 `config.json` 和 `opencode.jsonc` 时,
  * alternates 的顺序就是优先级,按 existsSync 的自然顺序取最后一个会挑错)。
  */
-function filesInDir(dir, site, level) {
+function filesInDir(dir, site) {
   const names = [site.relative, ...(site.alternates || [])];
   const found = names.map((parts) => join(dir, ...parts)).filter((f) => existsSync(f));
   const pick = fileInDir(dir, site);
-  const files = found.length ? [...found.filter((f) => f !== pick), pick] : [pick];
-  return files.map((file) => ({ label: file, file, level }));
+  return found.length ? [...found.filter((f) => f !== pick), pick] : [pick];
 }
 
 /**
  * 这家 CLI 在宿主机上**会读的全部配置**,按优先级**从低到高**。
  *
- * 为什么不是一个文件(真 opencode 逐格实测,本轮审查 F4;TS 那份 `ashMcpHostSources` 同模型):
+ * 为什么不是一个文件,以及这个顺序凭什么(真 opencode 1.19.3 逐格实测;TS 那份
+ * `ashMcpHostSources` 同模型、同顺序,两边各一份实现是因为 setup 在裸 Node 上跑):
  *  · `OPENCODE_CONFIG` 是「再加一份」不是「取代」—— 全局那份里的 ash 照样生效;
  *  · 默认目录里 `opencode.json` 和 `opencode.jsonc` **两份都读**(上一版「找到第一个就只认
  *    它」,于是 ash 写在 `.json`、目录里又有一份 `.jsonc` 时判成没有,安装器还往 `.jsonc`
- *    里再补一条);
- *  · `OPENCODE_CONFIG_DIR` 是**再加一个目录**、优先级高于默认目录;
+ *    里再补一条),而且 **`.jsonc` 压得住 `.json`**(本轮实测);
+ *  · `OPENCODE_CONFIG_DIR` 是**再加一个目录**,优先级高于默认目录、**也高于上面那个文件**
+ *    (本轮审查 F1 实测:上一版把文件排在它上面,排反了);
  *  · `OPENCODE_CONFIG_CONTENT` 里那整段 JSON 优先级最高、而且**没有文件可写**。
  *
- * 判「到底有没有」一律走 `effectiveState`:这几份合起来 CLI 最终看到的是哪一条。
+ * `level` 大的优先级高,**相等 = 谁覆盖谁没实测**;实测过加载序的那几家(`sourcesMerge`)
+ * 连同一个目录里的几个文件名都各占一级。判「到底有没有」一律走 `effectiveState`:这几份
+ * **合起来**CLI 最终看到的是哪一条。
  */
 export function hostMcpSources(agentType, { env = process.env, home = homedir() } = {}) {
   const site = HOST_SITES[agentType];
   if (!site) return [];
+  const out = [];
+  const seen = new Set();
+  const ordered = site.sourcesMerge === true;
+  let next = 0;
+  const fresh = (file) => {
+    if (seen.has(file)) return false;     // 同一个文件被两条路指到 ⇒ 只算一份
+    seen.add(file);
+    return true;
+  };
+  const addDir = (dir) => {
+    const files = filesInDir(dir, site).filter(fresh);
+    files.forEach((file, i) => out.push({ label: file, file, level: next + (ordered ? i : 0) }));
+    next += ordered ? files.length : 1;
+  };
   // `dirEnv` 指到**目录**时整体取代默认目录;指到**文件**时这一层仍是默认目录(那份全局
   // 配置照样会被读,见上面第一条)。
   const dirOverride = site.dirEnv && !site.dirEnvIsFile ? (env[site.dirEnv] || "").trim() : "";
-  const out = filesInDir(dirOverride || site.dir(env, home), site, 0);
-  const altDir = site.altDirEnv ? (env[site.altDirEnv] || "").trim() : "";
-  if (altDir) out.push(...filesInDir(altDir, site, 1));
+  addDir(dirOverride || site.dir(env, home));
   const file = site.dirEnvIsFile && site.dirEnv ? (env[site.dirEnv] || "").trim() : "";
-  if (file && !out.some((s) => s.file === file)) out.push({ label: file, file, level: 2 });
+  if (file && fresh(file)) out.push({ label: file, file, level: next++ });
+  const altDir = site.altDirEnv ? (env[site.altDirEnv] || "").trim() : "";
+  if (altDir) addDir(altDir);
   const inline = site.contentEnv ? (env[site.contentEnv] || "").trim() : "";
-  if (inline) out.push({ label: `$${site.contentEnv}`, file: null, text: inline, level: 3 });
+  if (inline) out.push({ label: `$${site.contentEnv}`, file: null, text: inline, level: next++ });
   return out;
 }
 
@@ -169,6 +186,74 @@ export function hostMcpFile(agentType, { env = process.env, home = homedir() } =
 
 /** 这条登记有没有被显式关掉。两种写法都认(`disabled: true` / `enabled: false`),跟 TS 同口径。 */
 const switchedOff = (entry) => entry.disabled === true || entry.enabled === false;
+
+/** `mcpServers` 那一族的逐条判据(跟 TS 的 `mcpServersFact` 同口径,**没有**跨来源合并)。 */
+const mcpServersFact = (name, entry) => switchedOff(entry)
+  ? { status: "off", detail: `${name} 这条登记是关着的`, raw: entry }
+  : { status: "on", detail: "", raw: entry };
+
+/**
+ * opencode 这一族的逐条判据 —— 四档全是真 opencode 1.19.3 实测的,跟 TS 的 `opencodeFact`
+ * 同口径(理由写在那边,别只改一侧):没写 `type` 就不是一条服务登记、只是个开关;连
+ * `enabled` 都没写真 CLI 会整份拒载;`enabled` 不写 = 开着;**`disabled: true` 这个键
+ * opencode 不认**(实测照样去连),所以既不当关着也不当没写,如实答看不准。
+ */
+const opencodeFact = (name, entry) => {
+  if (!Object.hasOwn(entry, "type")) {
+    if (!Object.hasOwn(entry, "enabled")) {
+      return {
+        status: "doubt",
+        detail: `${name} 这条登记既没写 type 也没写 enabled —— opencode 会把整份配置判成非法、直接起不来`,
+      };
+    }
+    return {
+      status: "doubt",
+      detail: `${name} 这条登记只写了开关、没写启动方式（没有 type）—— opencode 不把它当成一个服务`,
+      raw: entry,
+    };
+  }
+  if (entry.enabled === false) return { status: "off", detail: `${name} 这条登记是关着的`, raw: entry };
+  if (entry.disabled === true) {
+    return {
+      status: "doubt",
+      detail: `${name} 这条登记写着 disabled: true —— opencode 实测不认这个键（照样会去连它），`
+        + "而这一族里别的 CLI 认不认没实测过",
+      raw: entry,
+    };
+  }
+  return { status: "on", detail: "", raw: entry };
+};
+
+/** 逐字段深合并:对象按键往下合,其余(标量、数组)整条替换 —— 真 opencode 实测的口径。 */
+function deepMergeRaw(lower, higher) {
+  const out = { ...lower };
+  const plain = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : null);
+  for (const [key, value] of Object.entries(higher)) {
+    const a = plain(out[key]);
+    const b = plain(value);
+    out[key] = a && b ? deepMergeRaw(a, b) : value;
+  }
+  return out;
+}
+
+/**
+ * 这家 CLI 的几份来源**怎么合**。null = 不合(格式族没有实测依据,或这家 CLI 本身没实测过
+ * 会不会合)—— 那时 `effectiveState` 走老判据:最高那层说了算、同层不一致就看不准。
+ *
+ * 合完**必须重新判状态**(本轮审查 F1):状态和启动方式都只能从合完那份原值上算。高优先级
+ * 那份里哪些字段真的算也是实测出来的:没写 `type` 的那条走开关那一支,只有 `enabled` 过得去。
+ */
+function mergeFactsFor(site) {
+  if (!site.sourcesMerge || site.shape !== "opencode") return null;
+  const contribute = (raw) => (Object.hasOwn(raw, "type")
+    ? raw
+    : Object.hasOwn(raw, "enabled") ? { enabled: raw.enabled } : {});
+  return (name, lower, higher) => {
+    if (!lower.raw) return lower;
+    if (!higher.raw) return higher;
+    return opencodeFact(name, deepMergeRaw(lower.raw, contribute(higher.raw)));
+  };
+}
 
 /** 认的那两个服务名 —— **两条独立登记**,顺序就是优先。跟 TS 那份 `ASH_MCP_NAMES` 同口径。 */
 const NAMES = [ASH, LEGACY];
@@ -209,16 +294,14 @@ function scanSource(source, site) {
   if (servers !== undefined && (!servers || typeof servers !== "object" || Array.isArray(servers))) {
     return { doubt: "登记容器不是对象", names };
   }
+  const factOf = site.shape === "opencode" ? opencodeFact : mcpServersFact;
   for (const name of NAMES) {
     const raw = servers ? servers[name] : undefined;
     if (raw === undefined) continue;
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      names.set(name, { status: "doubt", detail: `${name} 这条登记不是一个对象` });
-      continue;
-    }
-    names.set(name, switchedOff(raw)
-      ? { status: "off", detail: `${name} 这条登记是关着的` }
-      : { status: "on", detail: "" });
+    // 值不是对象 ⇒ doubt,而且**不带 raw**:那种写法合不动,跨来源合并时只能继续 doubt。
+    names.set(name, !raw || typeof raw !== "object" || Array.isArray(raw)
+      ? { status: "doubt", detail: `${name} 这条登记不是一个对象` }
+      : factOf(name, raw));
   }
   return { names };
 }
@@ -249,22 +332,26 @@ function foldScan(scan, label) {
 }
 
 /**
- * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记 —— 跟 TS 那份 `resolveAshMcp`
- * 同一条判据:**声明了这个名字的来源里,优先级最高的那份说了算**。高优先级那份只写
- * `{"enabled": false}` 也算声明,它会合到低优先级那条上、把它关掉(真 opencode 实测)。
+ * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记 —— 跟 TS 那份 `resolveAshMcp` 同一套
+ * 判据:实测过合并语义的那几家走**逐字段合并**,状态从合完那份原值上重算(本轮审查 F1)。
+ * 上一版是「声明了这个名字的来源里,优先级最高的那份说了算」,而真 opencode 实测里那三种
+ * 形状都错:低的那份写完整登记、高的那份只写 `{"enabled": true}` 时真 CLI 连得上;来源层级
+ * 本身排反了;同层两份都开着时真 CLI 用的是后面那份。没实测过的家仍走老判据。
  *
- * **逐个兼容名各算一次**(本轮审查 F3):上一版先把每份来源压成一个四态、再按优先级选赢家,
- * 于是「高优先级那份里 `ash` 关着、低优先级那份里 `harness` 开着」被判成关着,而真 CLI 那边
- * 工具明明连得上 —— 安装器据此报「被关掉了,没有替你打开」,用户照着去翻一个其实没问题的配置。
+ * **逐个兼容名各算一次**(上一轮审查 F3):更早一版先把每份来源压成一个四态、再按优先级选
+ * 赢家,于是「高优先级那份里 `ash` 关着、低优先级那份里 `harness` 开着」被判成关着,而真 CLI
+ * 那边工具明明连得上 —— 安装器据此报「被关掉了,没有替你打开」,用户照着去翻一个其实没问题
+ * 的配置。
  *
- * 三处一律回 unsure(看不准就不写):这家的合并语义本身没实测(`sourcesMerge` 不为真)而几份
- * 结论不一致;**同一层**里同一个名字有两份不一致的写法;有一份整份读不准、而且优先级不低于
- * 那条生效的登记(它可能正把那条关掉)。
+ * 四处一律回 unsure(看不准就不写):这家的合并语义本身没实测(`sourcesMerge` 不为真)而几份
+ * 结论不一致;**同一层**里同一个名字有两份不一致的写法;合完那条自己就认不出来;有一份整份
+ * 读不准、而且优先级不低于那条生效的登记(它可能正把那条关掉)。
  */
 function effectiveState(sources, site) {
   if (!sources.length) return { state: "unsure", why: "算不出这家 CLI 会读哪几份配置" };
   const read = sources.map((source) => ({ source, scan: scanSource(source, site) }));
   const folded = read.map((r) => foldScan(r.scan, r.source.label));
+  const merge = mergeFactsFor(site);
   if (read.length > 1 && !site.sourcesMerge && new Set(folded.map((f) => f.state)).size > 1) {
     return {
       state: "unsure",
@@ -274,8 +361,19 @@ function effectiveState(sources, site) {
   }
   const picks = [];
   for (const name of NAMES) {
+    // `read` 是升序的(见 `hostMcpSources`),所以这几份本身就是加载序。
     const declared = read.filter((r) => r.scan.names.has(name));
     if (!declared.length) continue;
+    if (merge) {
+      const fact = declared
+        .map((r) => r.scan.names.get(name))
+        .reduce((lower, higher) => merge(name, lower, higher));
+      const source = declared[declared.length - 1].source;
+      const at = declared.length > 1 ? declared.map((r) => r.source.label).join(" + ") : source.label;
+      if (fact.status === "doubt") picks.push({ why: `${at}：${fact.detail}` });
+      else picks.push({ name, fact, source });
+      continue;
+    }
     const top = Math.max(...declared.map((r) => r.source.level));
     const winners = declared
       .filter((r) => r.source.level === top)
@@ -292,7 +390,9 @@ function effectiveState(sources, site) {
       });
       continue;
     }
-    picks.push(winners[0]);
+    // 同层、状态一致 ⇒ 取**写入落点那一份**(`filesInDir` 把它排在最后),跟 `hostMcpFile`
+    // 指的是同一份,不会出现「说的是 a、写的是 b」。
+    picks.push(winners[winners.length - 1]);
   }
   const live = picks.find((p) => p.fact && p.fact.status === "on");
   // 整份读不准的那些:它**可能声明任何名字**,包括把生效那条关掉 —— 但优先级比它低的影响不到。

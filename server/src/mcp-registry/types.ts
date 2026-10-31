@@ -55,9 +55,16 @@ export interface AshMcpNameFact {
   readonly status: "on" | "off" | "doubt";
   /** 给用户看的一句话(off/doubt 必填)。**不带来源前缀** —— 前缀由消费者按来源加。 */
   readonly detail: string;
-  /** 这条登记的原值(JSON 两族),整条搬给隔离档用,见 `AshMcpShape.hostRaw`。 */
+  /**
+   * 这条登记的原值(JSON 两族),整条搬给隔离档用。
+   *
+   * **跨来源的逐字段合并也靠它**(`AshMcpShape.mergeFacts`):几份来源各写了同一个名字时,
+   * CLI 最终用的是它们合起来那一条,所以 `status` / `launch` 都必须从**合完的原值**上重算,
+   * 不能从某一份的结论上取。有 `raw` 还意味着「这一份的写法认得出来、能参与合并」——
+   * `status: "doubt"` 而**不带** `raw` 的那种(值根本不是对象)一合就只能继续 doubt。
+   */
   readonly raw?: Record<string, unknown>;
-  /** 这条登记的原文(TOML 族),整段搬给隔离档用,见 `AshMcpShape.hostBlock`。 */
+  /** 这条登记的原文(TOML 族),整段搬给隔离档用。 */
   readonly block?: string;
   /** 这条登记写的启动方式,只给 `launchHint` 出提示。 */
   readonly launch?: AshMcpLaunch | null;
@@ -113,32 +120,24 @@ export interface AshMcpShape {
   /** 把 ash 这一条拼进去(已有一律不覆盖 —— 调用方先 `read` 过)。 */
   compose(text: string | null, entry: AshMcpEntry, opts?: AshMcpComposeOpts): AshMcpCompose;
   /**
-   * 别处(通常是宿主机那份**同格式**配置)里 ash 那条登记的**原值**,整个搬过来复用。
+   * 同一个名字在**几份来源**里各有一条时,合起来是哪一条 —— 只有**实测过合并语义**的格式
+   * 族有(本轮审查 F1)。`lower` 是优先级低的那份,`higher` 是高的那份,按升序两两折叠;
+   * `name` 只用来拼那句给用户看的话。
    *
-   * 为什么返回原值而不是 `{command,args,env}`:投影一遍就丢东西。宿主那条可能是
-   * `{"type":"http","url":…,"headers":{…}}`(远程),也可能带 `cwd`/`timeout`/`tools`,
-   * 投影成那三位之后「远程」变成「连本机 4317 的 stdio」、启动字段静默消失 ——
-   * 本轮审查 R5 在沙盘里实测到的就是这两种。搬得了就一个字节不改地搬,搬不了就老实
-   * 用内置那条(`builtinEntry`),**不许把「表达不了」解释成「宿主没有登记」**。
+   * 为什么非得是「合并」而不是「选一份赢家」(2026-10-31 真 opencode 实测):全局那份写着
+   * 完整的启动命令和环境变量、`OPENCODE_CONFIG` 那份只写 `{"enabled": true}` 时,真 CLI
+   * 用的是**两份合起来**那一条(`ash connected`)。上一版只取赢家那一份的原值,于是搬进
+   * 隔离档的只有 `{"enabled": true}` —— 注册报成功,而那份档里真 CLI 打印
+   * `No MCP servers configured`,agent 一个 ash 工具都没有。
    *
-   * 只返回**开着**的那条(关着的搬过去等于把「已关闭」一起搬过去) —— 选哪条由 `scan` +
-   * `pickFact` 一处说了算,这里只是取出它的原值。TOML 族恒为 null(它走 `hostBlock`)。
+   * 这一位在不在是**格式**的事(这种写法怎么合),站点上的 `sourcesMerge` 是**那家 CLI**
+   * 的事(它到底会不会把几份读到一起)。两个都成立才真的合 —— kilo 跟 opencode 同格式、
+   * 但没有真 CLI 可问,所以它那边几份结论不一致仍然只能答 unknown。
    */
-  hostRaw(text: string): Record<string, unknown> | null;
-  /** 把一条原值登记按规范名拼进去(配 `hostRaw`,JSON 两族有)。 */
+  mergeFacts?(name: string, lower: AshMcpNameFact, higher: AshMcpNameFact): AshMcpNameFact;
+  /** 把一条原值登记按规范名拼进去(配 `AshMcpNameFact.raw`,JSON 两族有)。 */
   composeRaw?(text: string | null, value: Record<string, unknown>): AshMcpCompose;
-  /**
-   * 「整段原文照搬」那一路,只有 TOML 族有(下面三位要么都有、要么都没有)。
-   *
-   * 为什么 TOML 不走 `hostEntry`:宿主那条登记底下可能挂着子表(本机实测
-   * `[mcp_servers.ash.tools.get_task] approval_mode = "approve"`),拆成
-   * `{command,args,env}` 再拼回去会把它们丢掉。照搬原文一个字节都不丢。
-   *
-   * 选哪条同样走 `scan` + `pickFact`(JSON 两族恒为 null:它们走 `hostRaw`)。「整段原文照搬」
-   * 这一路成不成立看 `blockFor`/`appendBlock` 在不在,不看这一位。
-   */
-  hostBlock(text: string): string | null;
-  /** 没有宿主那段可搬时,按一条登记现渲染一段。 */
+  /** 没有宿主那段可搬时,按一条登记现渲染一段(「整段原文照搬」只有 TOML 族有)。 */
   blockFor?(entry: AshMcpEntry, opts?: AshMcpComposeOpts): string;
   /** 把一段登记原文接进配置(重复表、内联表这些判据跟 `compose` 同一份)。 */
   appendBlock?(text: string | null, block: string): AshMcpCompose;
@@ -163,14 +162,16 @@ export interface AshMcpConfigSite {
    */
   readonly dirEnvIsFile?: boolean;
   /**
-   * 这家 CLI 的几份来源是「**合起来看、同名键由优先级高的那份赢**」—— 置真表示这件事
-   * **已实测**(判定与安装据此按 `effectiveConfigState` 算最终生效的那一条)。
+   * 这家 CLI 的几份来源**合起来看**,而且「谁覆盖谁」这件事 ash **逐格实测过** ——
+   * 置真表示两件事都成立:**加载序**是确定的(含同一个目录里那几个文件名的先后),
+   * **逐字段合并**语义是确定的。判定、搬运、安装都据此算最终生效的那一条
+   * (`register.ts` 的 `resolveAshMcp`)。
    *
-   * 2026-10-31 用真 opencode 实测(本轮审查 R3/F4,逐格记在 catalog 的 `source` 里):
-   * 全局那份有 ash、`OPENCODE_CONFIG` 那份没有 ⇒ 照样列出 ash;同名各放一条 ⇒ 变量那份赢;
-   * 高优先级那份只写 `{"enabled": false}` ⇒ 真 CLI 报 `ash disabled`;默认目录里 `.json`
-   * 和 `.jsonc` **两份都读**;`OPENCODE_CONFIG_DIR` 再加一个目录、优先级高于默认目录;
-   * `OPENCODE_CONFIG_CONTENT` 那整段 JSON 优先级最高。
+   * 2026-10-31 用真 opencode 1.19.3 实测,升序是:默认目录(`opencode.json` <
+   * `opencode.jsonc`)< `OPENCODE_CONFIG` 那个文件 < `OPENCODE_CONFIG_DIR` 那个目录 <
+   * `OPENCODE_CONFIG_CONTENT` 那整段 JSON(它还**没有文件可写**)。合并是**逐字段深合并**:
+   * 低的那份写完整启动命令、高的那份只写 `{"enabled": false}` ⇒ 命令留着、开关被关掉;
+   * 嵌套的 `environment` 也是按键合,数组整条替换。逐格记在 catalog 那家的 `source` 里。
    *
    * 没实测过的家(kilo)**不要**置真:几份来源结论不一致时判定只能回 unknown,猜「合并」会把
    * 没接上说成接上了,猜「取代」会把接上了说成没接上、还要再写一条顶掉它。
@@ -179,8 +180,13 @@ export interface AshMcpConfigSite {
   /**
    * 指到**另一个配置目录**、而且优先级高于默认目录的变量(opencode 的 `OPENCODE_CONFIG_DIR`)。
    *
-   * 和 `dirEnv` 的区别是它**不取代**默认目录:本轮实测,默认目录那份照样生效,而这个目录里的
+   * 和 `dirEnv` 的区别是它**不取代**默认目录:实测默认目录那份照样生效,而这个目录里的
    * `enabled = false` 盖得住默认那份的开启。
+   *
+   * **它比 `dirEnvIsFile` 那份文件还高**(本轮审查 F1 实测:那个文件里写完整的
+   * `enabled: false`、这个目录里只写 `{"enabled": true}` ⇒ 真 CLI `ash connected`)。
+   * 上一版按「文件比目录具体、所以更高」排,排反了 —— 于是一条连得上的登记被判成
+   * disabled,预检当场硬拒,安装器还说是用户自己关的。
    */
   readonly altDirEnv?: string;
   /**

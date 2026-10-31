@@ -89,37 +89,35 @@ export function foldScan(scan: AshMcpNameScan, at = ""): AshMcpConfigState {
 }
 
 /**
- * 读那一侧的**全部**实现:四个动作都是 `scan` 折一下或投影一下。
+ * 读那一侧的**全部**实现:都是 `scan` 折一下或投影一下。
  *
- * 为什么非得这样收(本轮审查 F3):`read`/`hostRaw`/`hostBlock`/`launch` 原先各自走一遍
+ * 为什么非得这样收(上一轮审查 F3):`read`/`hostRaw`/`hostBlock`/`launch` 原先各自走一遍
  * 「在容器里找 ash」,四处判据就有四种漂法。现在族里只实现 `scan`,「选中哪条」只有
- * `pickFact` 一处。
+ * `pickFact` 一处。本轮审查 F1 又把 `hostRaw`/`hostBlock` 整个删掉了:搬运要的是**几份
+ * 来源合起来**那一条,再按单份原文重新找一遍必然跟解析层分叉 —— 它现在直接读
+ * `resolveAshMcp` 给出的那条 `AshMcpNameFact`。
  */
 function readSide(
   scan: (text: string | null) => AshMcpNameScan,
-): Pick<AshMcpShape, "scan" | "read" | "hostRaw" | "hostBlock" | "launch"> {
-  const pick = (text: string | null) => pickFact(scan(text));
+): Pick<AshMcpShape, "scan" | "read" | "launch"> {
   return {
     scan,
     read: (text) => foldScan(scan(text)),
-    hostRaw: (text) => pick(text)?.fact.raw ?? null,
-    hostBlock: (text) => pick(text)?.fact.block ?? null,
-    launch: (text) => pick(text)?.fact.launch ?? null,
+    launch: (text) => pickFact(scan(text))?.fact.launch ?? null,
   };
 }
 
+/** 一条登记的原值 → 这个名字的事实。各族一份(判据各自实测,别互相套)。 */
+type FactOf = (name: string, entry: Record<string, unknown>) => AshMcpNameFact;
+
 /**
- * JSON 两族的逐名扫描。族间只差两件事,所以都做成参数:登记容器叫什么、启动方式怎么读
- * (`env` + 字符串命令 vs `environment` + 整条 argv)。
+ * JSON 两族的逐名扫描。族间只差两件事,所以都做成参数:登记容器叫什么、一条原值怎么判。
  *
  * **值不是对象一律 doubt**:`"ash": null`、`"ash": "node x.js"` 这种写法我们认不出来,
- * 当没有去写就会把用户那个键覆盖掉,跟「已有登记一律不覆盖」自相矛盾。
+ * 当没有去写就会把用户那个键覆盖掉,跟「已有登记一律不覆盖」自相矛盾。那一档**不带 `raw`**,
+ * 于是跨来源合并时它只能继续 doubt(见 `AshMcpNameFact.raw`)。
  */
-function scanJson(
-  container: string,
-  text: string | null,
-  launchOf: (entry: Record<string, unknown>) => AshMcpLaunch,
-): AshMcpNameScan {
+function scanJson(container: string, text: string | null, factOf: FactOf): AshMcpNameScan {
   const doc = parseDoc(text);
   if (doc === undefined) return doubtScan("配置解析不了（它可能正被 CLI 写到一半，也可能被手工改坏了）");
   if (doc === null) return noConfig();
@@ -130,15 +128,45 @@ function scanJson(
     const raw = servers ? servers[name] : undefined;
     if (raw === undefined) continue;
     const entry = asObject(raw);
-    if (!entry) {
-      names.set(name, { status: "doubt", detail: `${name} 这条登记不是一个对象（值是 ${typeof raw}）` });
-      continue;
-    }
-    names.set(name, switchedOff(entry)
-      ? { status: "off", detail: `${name} 这条登记是关着的`, raw: entry }
-      : { status: "on", detail: "", raw: entry, launch: launchOf(entry) });
+    names.set(name, entry
+      ? factOf(name, entry)
+      : { status: "doubt", detail: `${name} 这条登记不是一个对象（值是 ${typeof raw}）` });
   }
   return { names };
+}
+
+/**
+ * **逐字段深合并**:对象按键往下合,其余(标量、数组)整条替换 —— 真 opencode 实测的口径
+ * (低的那份 `environment: {KEEP, OVER}` + 高的那份 `{OVER, NEW}` ⇒ 三个键都在、`OVER`
+ * 取高的那份;`command` 这种数组整条换掉,不拼接)。
+ */
+function deepMergeRaw(
+  lower: Record<string, unknown>,
+  higher: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...lower };
+  for (const [key, value] of Object.entries(higher)) {
+    const a = asObject(out[key]);
+    const b = asObject(value);
+    out[key] = a && b ? deepMergeRaw(a, b) : value;
+  }
+  return out;
+}
+
+/**
+ * 跨来源把同一个名字的两条登记合成一条,**合完再重新判状态** —— 状态和启动方式都只能从
+ * 合完那份原值上算(本轮审查 F1:上一版取的是赢家那一份,于是高优先级那份只写
+ * `{"enabled": true}` 时,搬进隔离档的就只有这一个键)。
+ *
+ * `contribute` 是这一族「高优先级那份里哪些字段真的算」的判据(opencode 有一条实测出来的
+ * 例外,见 `opencodeContribution`);认不出来的那一份(没有 `raw`)一律让 doubt 赢。
+ */
+function mergeJson(factOf: FactOf, contribute: (raw: Record<string, unknown>) => Record<string, unknown>) {
+  return (name: string, lower: AshMcpNameFact, higher: AshMcpNameFact): AshMcpNameFact => {
+    if (!lower.raw) return lower;
+    if (!higher.raw) return higher;
+    return factOf(name, deepMergeRaw(lower.raw, contribute(higher.raw)));
+  };
 }
 
 /**
@@ -188,9 +216,18 @@ function mcpServersLaunch(entry: Record<string, unknown>): AshMcpLaunch {
   };
 }
 
+/**
+ * 这一族的逐条判据。**没有 `mergeFacts`**:这九家里一家都没有「几份来源合起来看」的实测
+ * 依据(多数只有一份用户级配置),而 opencode 那边那套字段级规矩是逐格问真 CLI 问出来的,
+ * 照搬过来就是拿别人家的实测给这几家背书。
+ */
+const mcpServersFact: FactOf = (name, entry) => switchedOff(entry)
+  ? { status: "off", detail: `${name} 这条登记是关着的`, raw: entry }
+  : { status: "on", detail: "", raw: entry, launch: mcpServersLaunch(entry) };
+
 export const mcpServersJsonShape: AshMcpShape = {
   id: "mcp-servers-json",
-  ...readSide((text) => scanJson(CONTAINER, text, mcpServersLaunch)),
+  ...readSide((text) => scanJson(CONTAINER, text, mcpServersFact)),
   compose(text, entry, opts) {
     const value = opts?.type ? { type: opts.type, ...entry } : { ...entry };
     return putJson(mcpServersJsonShape, CONTAINER, text, value);
@@ -227,9 +264,62 @@ function opencodeLaunch(entry: Record<string, unknown>): AshMcpLaunch {
   };
 }
 
+/**
+ * 这一族的逐条判据 —— **四档全是 2026-10-31 问真 opencode 1.19.3 问出来的**,别按别族的
+ * 习惯改(本轮审查 F1)。它的 schema 是三支并集:`{type:"local",command,…}` /
+ * `{type:"remote",url,…}` / 只有 `{enabled}` 的那支开关。由此:
+ *
+ *  · **没写 `type` 就不是一条服务登记**,只是个开关:`{"enabled": true}` 单独在那儿时真 CLI
+ *    打印 `No MCP servers configured`(实测),所以这种不许报成「已接好」—— 上一版报的是
+ *    present,而那份档里 agent 一个 ash 工具都没有、跑完交不了卷;
+ *  · 连 `enabled` 都没写(光写 `command` 之类)⇒ 真 opencode 把**整份配置**判为非法、
+ *    `exit 1` 起不来(实测 `Missing key mcp.ash.command` / `…enabled`),那更不是「有登记」;
+ *  · `enabled` 不写 = 开着(实测 `{type,command}` 照样去连);`enabled: false` 才是关着;
+ *  · **`disabled: true` 这个键 opencode 不认**(实测:带着它照样连,状态还是 enabled)——
+ *    它是 `mcpServers` 那一族的写法。这里既不敢当成关着(那会把一条连得上的登记硬拒掉),
+ *    也不敢当成没写(同格式的 kilo 没有真 CLI 可问),所以如实答「看不准」。
+ */
+const opencodeFact: FactOf = (name, entry) => {
+  if (!Object.hasOwn(entry, "type")) {
+    if (!Object.hasOwn(entry, "enabled")) {
+      return {
+        status: "doubt",
+        detail: `${name} 这条登记既没写 type 也没写 enabled —— opencode 会把整份配置判成非法、直接起不来`,
+      };
+    }
+    return {
+      status: "doubt",
+      detail: `${name} 这条登记只写了开关、没写启动方式（没有 type）—— opencode 不把它当成一个服务`,
+      raw: entry,
+    };
+  }
+  if (entry.enabled === false) return { status: "off", detail: `${name} 这条登记是关着的`, raw: entry };
+  if (entry.disabled === true) {
+    return {
+      status: "doubt",
+      detail: `${name} 这条登记写着 disabled: true —— opencode 实测不认这个键（照样会去连它），`
+        + "而这一族里别的 CLI 认不认没实测过",
+      raw: entry,
+    };
+  }
+  return { status: "on", detail: "", raw: entry, launch: opencodeLaunch(entry) };
+};
+
+/**
+ * 高优先级那一份里**哪些字段真的算**(实测出来的一条例外):没写 `type` 的那条走开关那一支,
+ * 于是**只有 `enabled` 过得去**,它同时写的 `command`/`environment` 真 CLI 一律丢掉
+ * (实测:低的那份完整、高的那份 `{command, environment, enabled:true}` ⇒ 生效的命令和环境
+ * 变量仍是低那份的,只有开关翻了过来)。
+ */
+function opencodeContribution(raw: Record<string, unknown>): Record<string, unknown> {
+  if (Object.hasOwn(raw, "type")) return raw;
+  return Object.hasOwn(raw, "enabled") ? { enabled: raw.enabled } : {};
+}
+
 export const opencodeJsonShape: AshMcpShape = {
   id: "opencode-json",
-  ...readSide((text) => scanJson(OPENCODE_CONTAINER, text, opencodeLaunch)),
+  ...readSide((text) => scanJson(OPENCODE_CONTAINER, text, opencodeFact)),
+  mergeFacts: mergeJson(opencodeFact, opencodeContribution),
   compose(text, entry) {
     return putJson(opencodeJsonShape, OPENCODE_CONTAINER, text, opencodeEntry(entry));
   },

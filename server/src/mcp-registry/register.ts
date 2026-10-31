@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { byHand, type ApprovalVerdict } from "../auth/codex-approve.js";
-import { fileState, publishFresh, readForWrite } from "../auth/config-publish.js";
+import { fileState, publishFresh } from "../auth/config-publish.js";
 import { currentListeningPort } from "../listening-port.js";
 import { REPO_DIR } from "../paths.js";
 import { ashMcpConfigDir, ashMcpMechanism } from "./catalog.js";
@@ -81,8 +81,9 @@ export function ashMcpHostFile(
 /**
  * 一份「这家 CLI 会读的配置」。
  *
- * `level` 大的优先级高。**同一层里谁覆盖谁没实测**(例如 `opencode.json` 与 `opencode.jsonc`
- * 都会被读,但同名键谁赢没测过),所以同层两份结论不一致一律判看不准。
+ * `level` 大的优先级高,**相等 = 谁覆盖谁没实测**,那时同名两份结论不一致一律判看不准。
+ * 实测过加载序的那几家(站点上的 `sourcesMerge`)连同一个目录里的几个文件名都各占一级,
+ * 所以它们永远不会出现相等的 level —— 判定走的是「几份合起来」,不是「挑一份赢家」。
  */
 export interface AshMcpSource {
   /** 给人看的名字:文件路径,或 `$OPENCODE_CONFIG_CONTENT` 这样的变量名。 */
@@ -102,28 +103,29 @@ export interface AshMcpSource {
  * 分叉:kilo 同时有 `config.json` 和 `opencode.jsonc` 时,`ashMcpConfigFile` 取前者
  * (alternates 的顺序就是优先级),自然顺序的最后一个却是后者。
  */
-function filesInDir(dir: string, site: AshMcpConfigSite, level: number): AshMcpSource[] {
+function filesInDir(dir: string, site: AshMcpConfigSite): string[] {
   const names = [site.relative, ...(site.alternates ?? [])];
   const found = names.map((parts) => join(dir, ...parts)).filter((f) => existsSync(f));
   const pick = ashMcpConfigFile(dir, site);
-  const files = found.length ? [...found.filter((f) => f !== pick), pick] : [pick];
-  return files.map((file) => ({ label: file, file, level }));
+  return found.length ? [...found.filter((f) => f !== pick), pick] : [pick];
 }
 
 /**
  * 这家 CLI 在宿主机上**会读的全部配置**,按优先级**从低到高**。
  *
- * 为什么不是一个文件(真 opencode 实测,三轮):
+ * 为什么不是一个文件,以及这个顺序凭什么(真 opencode 1.19.3 逐格实测,四轮):
  *  · `OPENCODE_CONFIG` 是「再加一份」不是「取代」—— 全局那份里的 ash 照样生效;
  *  · 默认目录里 `opencode.json` 和 `opencode.jsonc` **两份都读**(上一版「找到第一个就只认
  *    它」,于是 ash 写在 `.json`、目录里又有一份 `.jsonc` 时判成 absent,安装器还往 `.jsonc`
- *    里再补一条 —— 本轮审查 F4 的第二格);
- *  · `OPENCODE_CONFIG_DIR` 是**再加一个目录**、优先级高于默认目录(本轮实测:默认那份照样
- *    生效,而这个目录里的 `enabled = false` 盖得住默认那份的开启);
+ *    里再补一条 —— 上一轮审查 F4 的第二格),而且 **`.jsonc` 压得住 `.json`**(本轮实测:
+ *    两份都写完整登记、命令不同,真 CLI 用的是 `.jsonc` 那条);
+ *  · `OPENCODE_CONFIG_DIR` 是**再加一个目录**,优先级高于默认目录,**也高于上面那个文件**
+ *    (本轮审查 F1 实测:文件里 `enabled: false`、这个目录里只写 `{"enabled": true}` ⇒
+ *    真 CLI `ash connected`。上一版把文件排在它上面,于是这条连得上的登记被判成 disabled);
  *  · `OPENCODE_CONFIG_CONTENT` 里那整段 JSON 优先级最高、而且**没有文件可写** —— 只有它
  *    有 ash 时,真 CLI 连得上,上一版却判 absent 还去改全局文件(F4 的第三格)。
  *
- * 判「到底有没有」一律走 `effectiveConfigState`:这几份合起来 CLI 最终看到的是哪一条。
+ * 判「到底有没有」一律走 `resolveAshMcp`:这几份**合起来**CLI 最终看到的是哪一条。
  */
 export function ashMcpHostSources(
   agentType: string,
@@ -133,23 +135,38 @@ export function ashMcpHostSources(
   const mechanism = ashMcpMechanism(agentType);
   if (mechanism?.kind !== "file") return [];
   const { site } = mechanism;
+  const out: AshMcpSource[] = [];
+  const seen = new Set<string>();
+  // 实测过加载序的那几家(`sourcesMerge`),同一个目录里的几份也各占一级;没实测的那几家
+  // 整层共用一级 —— 「相等 = 谁覆盖谁没实测」,见 `AshMcpSource.level`。
+  const ordered = site.sourcesMerge === true;
+  let next = 0;
+  const fresh = (file: string): boolean => {
+    const key = resolve(file);
+    if (seen.has(key)) return false;      // 同一个文件被两条路指到 ⇒ 只算一份
+    seen.add(key);
+    return true;
+  };
+  const addDir = (dir: string): void => {
+    const files = filesInDir(dir, site).filter(fresh);
+    files.forEach((file, i) => out.push({ label: file, file, level: next + (ordered ? i : 0) }));
+    next += ordered ? files.length : 1;
+  };
   // ① 配置目录那一层。`dirEnv` 指到**目录**时它整体取代默认目录(变量原样继承给子进程,
   //    CLI 认的就是它);指到**文件**时这一层仍是默认目录 —— 那种情况下不能走
   //    `ashMcpConfigDir`,它返回的是那个文件所在的目录,拿它拼只会又得到同一份,
   //    真正该一起看的全局那份照样看不见。
   const dirOverride = site.dirEnv && !site.dirEnvIsFile ? env[site.dirEnv]?.trim() : "";
-  const out: AshMcpSource[] = filesInDir(dirOverride || site.defaultDir(env, home), site, 0);
-  // ② 指到另一个配置目录的变量:再加一层,优先级更高。
-  const altDir = site.altDirEnv ? env[site.altDirEnv]?.trim() : "";
-  if (altDir) out.push(...filesInDir(altDir, site, 1));
-  // ③ 指到文件的变量。
+  addDir(dirOverride || site.defaultDir(env, home));
+  // ② 指到文件的变量。
   const file = site.dirEnvIsFile && site.dirEnv ? env[site.dirEnv]?.trim() : "";
-  if (file && !out.some((s) => s.file && resolve(s.file) === resolve(file))) {
-    out.push({ label: file, file, level: 2 });
-  }
+  if (file && fresh(file)) out.push({ label: file, file, level: next++ });
+  // ③ 指到另一个配置目录的变量:再加一层,**比上面那个文件还高**(本轮实测)。
+  const altDir = site.altDirEnv ? env[site.altDirEnv]?.trim() : "";
+  if (altDir) addDir(altDir);
   // ④ 整段 JSON 装在变量里:优先级最高,**只读**。
   const inline = site.contentEnv ? env[site.contentEnv]?.trim() : "";
-  if (inline) out.push({ label: `$${site.contentEnv}`, file: null, text: inline, level: 3 });
+  if (inline) out.push({ label: `$${site.contentEnv}`, file: null, text: inline, level: next++ });
   return out;
 }
 
@@ -201,20 +218,30 @@ type NamePick = { name: string; fact: AshMcpNameFact; source: AshMcpSource } | {
 /**
  * 几份来源合起来,这家 CLI **最终看到的**是哪一条登记,以及它出自哪一份。
  *
- * 判据(真 opencode 实测,上一轮审查 F4):**声明了这个名字的来源里,优先级最高的那份说了算** ——
- * 高优先级那份只写 `{"enabled": false}` 也算声明,它会合到低优先级那条上、把它关掉(实测:
- * 真 CLI 报 `ash disabled`,而更早一版「任一来源 present 就 present」报的是已接好,于是这家
- * 执行器一路跑到交卷才发现工具根本不在)。
+ * 判据(真 opencode 逐格实测):实测过合并语义的那几家走**逐字段合并** —— 同一个名字在几份
+ * 来源里各有一条时,CLI 用的是它们按加载序合起来那一条,所以**状态和启动方式都从合完那份
+ * 原值上重算**(本轮审查 F1)。上一版是「声明了这个名字的来源里,优先级最高的那份说了算」,
+ * 三种形状都错:
+ *  · 低的那份写完整登记、高的那份只写 `{"enabled": true}` ⇒ 真 CLI `ash connected`,而取
+ *    赢家那一份得到的是「只有一个 enabled 键」的登记,搬进隔离档后那边一个工具都没有;
+ *  · 来源层级本身排反了(见 `ashMcpHostSources` 的 ③)⇒ 一条连得上的登记被判成 disabled,
+ *    预检当场硬拒,安装器还说是用户自己关的;
+ *  · 同一层里两份都开着、命令不同时取的是数组里第一份,而真 CLI 用的是后面那份。
  *
- * **逐个兼容名各算一次**(本轮审查 F3):`ash` 和 `harness` 是两条独立登记。上一版先把每份
- * 来源压成一个四态结论、再按优先级选赢家,两个名字的事实在第一步就混成了一个 —— 于是
+ * 没实测过合并语义的家仍走老判据(最高那层说了算、同层不一致就看不准):猜「合并」会把没
+ * 接上说成接上了,猜「取代」会把接上了说成没接上、还要再写一条顶掉它。
+ *
+ * **逐个兼容名各算一次**(上一轮审查 F3):`ash` 和 `harness` 是两条独立登记。更早一版先把
+ * 每份来源压成一个四态结论、再按优先级选赢家,两个名字的事实在第一步就混成了一个 —— 于是
  * 「高优先级那份里 `ash` 关着、低优先级那份里 `harness` 开着」被判成 disabled(预检硬拒),
  * 而真 CLI 那边工具明明连得上。先按名字各自定下最终登记,再在这几条之上找开着的那条。
  *
- * 三处一律回 unknown(看不准就不写、也不拦起跑):
+ * 四处一律回 unknown(看不准就不写、也不拦起跑):
  *  · **这家的合并语义本身没实测**(`sourcesMerge` 不为真)而几份结论不一致 —— 那时「present」
  *    和「absent」各是一种猜,两种猜错的代价都是实打实的;
- *  · **同一层**里同一个名字有两份不一致的写法 —— 同层谁覆盖谁没实测;
+ *  · **同一层**里同一个名字有两份不一致的写法 —— 同层谁覆盖谁没实测(只会出现在没实测
+ *    加载序的那几家身上);
+ *  · 合完那条自己就认不出来(写法超出格式族认得的范围);
  *  · 有一份**整份读不准**、而且优先级不低于那条生效的登记 —— 它可能正把那条关掉。
  */
 export function resolveAshMcp(
@@ -225,6 +252,8 @@ export function resolveAshMcp(
   if (!sources.length) return unknownState("算不出这家 CLI 会读哪几份配置");
   const read = sources.map((source) => ({ source, scan: sourceScan(source, shape) }));
   const folded = read.map((r) => foldScan(r.scan, r.source.label));
+  // 格式族知道「这种写法怎么合」,站点知道「这家 CLI 到底会不会合」—— 两个都成立才真的合。
+  const merge = merges ? shape.mergeFacts : undefined;
   if (read.length > 1 && !merges && new Set(folded.map((f) => f.state)).size > 1) {
     return unknownState("这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 ash 没实测过："
       + folded.map((f, i) => f.detail
@@ -232,8 +261,20 @@ export function resolveAshMcp(
   }
   const picks: NamePick[] = [];
   for (const name of ASH_MCP_NAMES) {
+    // `read` 是升序的(见 `ashMcpHostSources`),所以这几份本身就是加载序。
     const declared = read.filter((r) => r.scan.names.has(name));
     if (!declared.length) continue;
+    if (merge) {
+      const fact = declared
+        .map((r) => r.scan.names.get(name)!)
+        .reduce((lower, higher) => merge(name, lower, higher));
+      // 措辞和写入落点都指**优先级最高**的那份;合出来的结论跨了好几份时把它们都报出来。
+      const source = declared.at(-1)!.source;
+      const at = declared.length > 1 ? declared.map((r) => r.source.label).join(" + ") : source.label;
+      if (fact.status === "doubt") picks.push({ why: `${at}：${fact.detail}` });
+      else picks.push({ name, fact, source });
+      continue;
+    }
     const top = Math.max(...declared.map((r) => r.source.level));
     const winners = declared
       .filter((r) => r.source.level === top)
@@ -250,7 +291,9 @@ export function resolveAshMcp(
       });
       continue;
     }
-    picks.push(winners[0]!);
+    // 同层、状态一致 ⇒ 取**写入落点那一份**(`filesInDir` 把它排在最后)。谁覆盖谁没实测,
+    // 但指向落点至少跟 `ashMcpHostFile` 是同一份,不会出现「说的是 a、写的是 b」。
+    picks.push(winners.at(-1)!);
   }
   const live = picks.find((p): p is Extract<NamePick, { name: string }> => "fact" in p && p.fact.status === "on");
   // 整份读不准的那些:它**可能声明任何名字**,包括把生效那条关掉 —— 但优先级比它低的影响不到。
@@ -462,11 +505,10 @@ function composeEntry(
     enabled: mechanism.writeEnabled === true,
     ...(mechanism.writeType ? { type: mechanism.writeType } : {}),
   };
-  const hostText = hostConfigText(agentType, hostHome, env);
+  const host = hostFact(agentType, hostHome, env);
   if (blockShape(shape)) {
     // 宿主那段原样搬(连子表一起),没有就按一条登记现渲染一段。
-    const fromHost = hostText ? shape.hostBlock(hostText) : null;
-    let block = fromHost;
+    let block = host?.block ?? null;
     if (!block) {
       const entry = builtinEntry();
       if (!entry) return { why: NO_SOURCE };
@@ -480,7 +522,7 @@ function composeEntry(
   //
   // 为什么不投影成 `{command,args,env}`:那样远程登记(`type:"http"` + url + headers)会变成
   // 「连本机 4317 的 stdio」、`cwd`/`timeout` 这些启动字段静默消失(本轮审查 R5 实测)。
-  const hostValue = hostText ? shape.hostRaw(hostText) : null;
+  const hostValue = host?.raw ?? null;
   if (hostValue && shape.composeRaw) return shape.composeRaw(current, hostValue);
   const entry = builtinEntry();
   if (!entry) return { why: NO_SOURCE };
@@ -496,25 +538,24 @@ function blockShape(shape: AshMcpShape): shape is AshMcpShape & Required<Pick<As
 }
 
 /**
- * 宿主机那份同格式配置的全文(读不动就当没有 —— 它只是「有没有东西可搬」的来源)。
+ * 宿主机上**最终生效**那条 ash 登记的事实(没有生效的那条就 null) —— 搬运的唯一来源。
  *
- * 取的是**最终生效那条登记所在的那一份**,不是写入目标那一份(上一轮审查 F4):ash 可能写在
- * 全局那份、而落点是 `OPENCODE_CONFIG` 指的那个文件 —— 只读落点就会把「有东西可搬」看成
- * 「没有」,于是隔离档里拿默认模板重新渲染一条,用户自己调过的启动参数当场丢掉。
+ * 为什么是「事实」而不是「某一份配置的全文」(本轮审查 F1):上一版取的是赢家那一份的全文、
+ * 再按名字在里面重新找一遍,于是
+ *  · 跟解析层各算一次「选哪条」,两套判据迟早分叉(上一轮 F3 就是这么漏的);
+ *  · **跨来源继承来的字段整个丢掉** —— 全局那份写着完整启动命令、`OPENCODE_CONFIG` 那份
+ *    只写 `{"enabled": true}` 时,真 CLI 用的是合起来那一条,而按赢家那一份搬过去的只有
+ *    一个 `enabled` 键:注册报成功,隔离档里真 CLI 打印 `No MCP servers configured`。
  *
- * 「哪一份说了算」**问解析层**(本轮审查 F3):上一版在这里自己按 present 过滤再取最后一个,
- * 跟 `resolveAshMcp` 的优先级算法各一套 —— 两套判据迟早分叉,而分叉的后果是搬错那一条。
+ * 现在直接用 `resolveAshMcp` 算出来的那条 `fact`:JSON 两族读它的 `raw`(合完的原值)、
+ * TOML 族读它的 `block`(整段原文),判定、诊断、搬运因此永远是同一条。
  */
-function hostConfigText(agentType: string, hostHome: string, env: NodeJS.ProcessEnv): string {
+function hostFact(agentType: string, hostHome: string, env: NodeJS.ProcessEnv): AshMcpNameFact | null {
   const mechanism = ashMcpMechanism(agentType);
-  if (mechanism?.kind !== "file") return "";
+  if (mechanism?.kind !== "file") return null;
   const sources = ashMcpHostSources(agentType, env, hostHome);
   const found = resolveAshMcp(sources, mechanism.shape, mechanism.site.sourcesMerge === true);
-  const live = found.state === "present" ? found.source : undefined;
-  if (live) return live.file ? readForWrite(live.file)?.text ?? "" : live.text ?? "";
-  const dir = ashMcpConfigDir(agentType, env, hostHome);
-  if (!dir) return "";
-  return readForWrite(siteFileFor(agentType, dir, mechanism.site, env))?.text ?? "";
+  return found.state === "present" ? found.fact ?? null : null;
 }
 
 /**
