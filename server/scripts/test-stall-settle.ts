@@ -103,4 +103,31 @@ const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.
   assert.doesNotMatch(settled.note ?? "", /退出码/, "续聊的收尾说明还在念那个合成的退出码");
 }
 
-console.log("test:stall-settle ok：熔断排在被动检查点之前、真人停止之后,续跑材料与终态续聊契约都没动");
+// ── ⑦ 续聊回合被我们自己杀掉,就不许凭那个确认把任务升级成「已完成」 ─────────────
+// 第 2 轮审查 F2(已实测):⑥ 那一条只挡住了「failed 打翻 done」,反方向还开着 —— 一个
+// **原本 failed** 的任务续聊,agent 在被杀之前(或上一轮)留下过完成确认,于是 `confirmed`
+// 为真,落位照原样把它升级成 done、清掉 followUpFrom 并消费掉续跑材料。那一轮压根没跑完:
+// 是看门狗判它上游连不上、把它终止的。「只能变好不会变差」说的是**保持原状态**,不是
+// 「拿一个没兑现的确认换个更好的结论」。
+{
+  const id = await task({
+    status: "failed", followUpFrom: "failed",
+    completeConfirmedAt: AT, resumePrompt: "继续处理尚未完成的目标",
+  });
+  const settled = await settleTaskStatus(id, 1, null, undefined, STALL);
+  assert.equal(settled.status, "failed", "我们自己杀掉的那一轮,靠一个没兑现的确认升级成了「已完成」");
+  const after = await row(id);
+  assert.equal(after.status, "failed", "库里的状态跟返回值不一致");
+  // 升级那一支顺带会清掉续跑材料并广播一句,所以得连着钉:材料还在,点重试才接得上。
+  assert.equal(after.resumePrompt, "继续处理尚未完成的目标", "熔断的续聊回合把续跑指令当成功消费掉了");
+}
+
+// ── ⑧ 对照:同一个 failed 续聊,**没有**熔断时照旧能升级成 done ──────────────────
+// 上一条只许拦住「被我们杀掉的那一轮」。正常跑完并确认完成的续聊,既有契约不许动。
+{
+  const id = await task({ status: "failed", followUpFrom: "failed", completeConfirmedAt: AT });
+  const settled = await settleTaskStatus(id, 0, null);
+  assert.equal(settled.status, "done", "正常确认完成的续聊回合升级不上去了 —— 上一条拦过头了");
+}
+
+console.log("test:stall-settle ok：熔断排在被动检查点之前、真人停止之后,续跑材料与两个方向的终态续聊契约都没动");

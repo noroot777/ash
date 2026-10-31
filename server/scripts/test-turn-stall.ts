@@ -7,7 +7,7 @@
 // 全程无报错、无超时,界面一直 running。本文件钉三件事:
 //   ① 那种形状现在会按时限报警并熔断;
 //   ② **正常的长回合一档都不许触发** —— 长思考、长工具调用期间同样一个事件都不发,判据
-//      只能是「自上次非错误事件以来」,不能是回合总时长;
+//      只能是「自上次上游真回话以来」,不能是回合总时长;
 //   ③ 现场那条事件流的副本重放:旧判据一条事件都发不出来(全程无声),新判据 220 条。
 //
 // 阈值刻意做成**每次现读 env**(见 turn-stall.ts 的 thresholds),所以这里能在一个进程里分段
@@ -68,7 +68,7 @@ function configure(opts: {
   process.env.ASH_STALL_POLL_MS = String(opts.pollMs ?? 20);
 }
 
-// ── ① 警告档·条数路径:连续错误、期间没有任何非错误事件 ─────────────────────────
+// ── ① 警告档·条数路径:连续错误、期间上游一次都没真回话 ───────────────────────────
 {
   configure({ warnErrors: 5 });
   const { actions, log } = spy();
@@ -87,7 +87,7 @@ function configure(opts: {
   assert.equal(log.warns.length, 1, "同一次停滞报了第二次警告");
   assert.equal(log.trips.length, 0, "熔断档关着还是动手了");
 
-  // 非错误事件 = 停滞解除,报过警就得把卡片上那个标记撤掉。
+  // 上游真回话 = 停滞解除,报过警就得把卡片上那个标记撤掉。
   trackTurnStall("s1", owner, TURN, { kind: "text", text: "上游回来了，继续回答。" }, actions);
   assert.deepEqual(log.resolves, [TURN], "上游已经在吐正文了,卡片上那个停滞标记没撤");
   // 解除之后重新起算:下一轮重试要能再报一次(真的又挂了就得再说一声)。
@@ -109,7 +109,8 @@ function configure(opts: {
   assert.match(log.warns[0]!.text, /其中 1 条是上游重试提示/, "混着真故障时措辞要分开说");
 }
 
-// ── ③ 解除条件认的是「非错误事件」这一整类 ──────────────────────────────────────
+// ── ③a 解除条件:**上游真的回话了**那一类 ───────────────────────────────────────
+// 判据共用 `@ash/shared/waiting` 的 `resumesWaiting`(那个文件就是为了不让三处判据各自漂)。
 {
   for (const resume of [
     { kind: "text", text: "续" },
@@ -117,9 +118,6 @@ function configure(opts: {
     { kind: "tool", name: "Bash", detail: "{}" },
     { kind: "attachment", path: "/tmp/a.png" },
     { kind: "usage", usage: { inputTokens: 1, outputTokens: 1 } },
-    { kind: "session", cliSessionId: "abc" },
-    { kind: "context", context: { used: 1, window: 2, windowEstimated: false } },
-    { kind: "system", text: "旁注" },
     { kind: "turnEnd" },
     { kind: "done", exitStatus: 0 },
   ] as AgentEvent[]) {
@@ -129,8 +127,55 @@ function configure(opts: {
     trackTurnStall("s3", owner, TURN, notice(), actions);
     trackTurnStall("s3", owner, TURN, resume, actions);
     trackTurnStall("s3", owner, TURN, notice(), actions);
-    assert.equal(log.warns.length, 0, `${resume.kind} 没能解除停滞 —— 流还在动就不许动手`);
+    assert.equal(log.warns.length, 0, `${resume.kind} 没能解除停滞 —— 上游真回话了就不许动手`);
   }
+}
+
+// ── ③b **辅助通知既不解除也不计数**(第 2 轮审查 F1,已实测) ─────────────────────
+// 这一档从前被算进「非错误就是有进展」里,于是 Claude 每条重试提示后面紧跟的那条 `session`
+// (只是把 CLI 会话 id 报一遍)把停滞当场解除 —— 8 次重试、远超阈值,页面上既不报警也不熔断,
+// 任务一直显示运行中。`session`/`context`/`system` 都不是上游回话:会话身份是 adapter 自己
+// 报的,上下文水位是本地算的,`system` 是旁注。真 adapter 序列那一面见 test-claude-retry-stall。
+{
+  for (const aside of [
+    { kind: "session", cliSessionId: "abc" },
+    { kind: "context", context: { used: 1, window: 2, windowEstimated: false } },
+    { kind: "system", text: "旁注" },
+  ] as AgentEvent[]) {
+    configure({ warnErrors: 2 });
+    const { actions, log } = spy();
+    const owner = {};
+    trackTurnStall("s3b", owner, TURN, notice(), actions);
+    trackTurnStall("s3b", owner, TURN, aside, actions);
+    trackTurnStall("s3b", owner, TURN, notice(), actions);
+    assert.equal(log.warns.length, 1, `${aside.kind} 把停滞解除了 —— 它不是上游回话`);
+    assert.equal(log.warns[0]!.facts.errors, 2, `${aside.kind} 自己被算成了一条错误`);
+    // 诊断里「卡在哪一步」不许被它顶替:一条正常输出都没有过(连接从头没建起来)和
+    // 「`tool` 之后挂住」是两种现场,把身份通知说成最后那步进展会把人带到另一条路上去查。
+    assert.equal(
+      log.warns[0]!.facts.lastProgressKind,
+      null,
+      `熔断诊断把「卡在哪一步」说成了 ${aside.kind} 这条辅助通知`,
+    );
+  }
+}
+
+// ── ③c 混着来:辅助通知夹在中间,真进展照样解除得掉 ─────────────────────────────
+// ③b 不许拦过头 —— 真回话了就得解除,哪怕前面刚来过一条身份通知。
+{
+  configure({ warnErrors: 2 });
+  const { actions, log } = spy();
+  const owner = {};
+  trackTurnStall("s3c", owner, TURN, notice(), actions);
+  trackTurnStall("s3c", owner, TURN, { kind: "session", cliSessionId: "abc" } as AgentEvent, actions);
+  trackTurnStall("s3c", owner, TURN, { kind: "text", text: "模型回话了" } as AgentEvent, actions);
+  trackTurnStall("s3c", owner, TURN, notice(), actions);
+  assert.equal(log.warns.length, 0, "真进展被前面那条辅助通知带累,解除不掉了");
+  // 解除之后重新起算,而且这一次「卡在哪一步」记的是那条真进展。
+  trackTurnStall("s3c", owner, TURN, notice(), actions);
+  assert.equal(log.warns.length, 1, "重新起算之后凑够阈值没报警");
+  assert.equal(log.warns[0]!.facts.errors, 2, "解除之后错误数没重新起算");
+  assert.equal(log.warns[0]!.facts.lastProgressKind, "text", "「卡在哪一步」没记住那条真进展");
 }
 
 // ── ④ 警告档·时间路径:最后一条错误之后再也没有事件了,靠计时器 ─────────────────
@@ -328,7 +373,7 @@ function configure(opts: {
 // ── ⑥ 反向:正常的长回合一档都不许触发(误杀代价最高的一位) ──────────────────────
 {
   // 一边重试一边有正常输出(真实的恢复过程就是这样):总时长远超两档阈值,但从来没有
-  // 「自上次非错误事件以来」够长过,所以一下都不许动。
+  // 「自上次上游真回话以来」够长过,所以一下都不许动。
   configure({ warnErrors: 5, warnMs: 60, tripMs: 100, pollMs: 15 });
   const { actions, log } = spy();
   const owner = {};
@@ -556,7 +601,7 @@ function configure(opts: {
     const converted = line.method === "error" ? codexErrorEvent(line.params) : null;
     if (converted && firstError) {
       firstError = false;
-      // 停滞开始前那 33 行里有正常事件,这一刻两档都该是 0 —— 判据是「自上次非错误事件以来」,
+      // 停滞开始前那 33 行里有正常事件,这一刻两档都该是 0 —— 判据是「自上次上游真回话以来」,
       // 不是回合总时长(⑥ 用构造事件钉同一条,这里用现场真实序列复核)。
       preStall = [log.warns.length, log.trips.length];
     }
@@ -578,4 +623,4 @@ function configure(opts: {
 }
 
 __resetTurnStalls();
-console.log("test:turn-stall ok：两档按「自上次非错误事件以来」判,长回合与纯静默一档都不触发");
+console.log("test:turn-stall ok：两档按「自上次上游真回话以来」判,长回合与纯静默一档都不触发");

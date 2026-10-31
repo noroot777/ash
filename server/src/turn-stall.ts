@@ -16,12 +16,19 @@
 //     可见的提示,并在任务卡片上亮出来(刷新后还在,不是只弹 toast)。
 //   • **熔断档** —— 这种状态超过可配置时长,自动终止本回合、按失败结算,完整诊断进时间线。
 //
-// **判据必须是「自上次非错误事件以来」,不能按回合总时长**:正常的长思考、长工具调用
+// **判据必须是「自上次上游真回话以来」,不能按回合总时长**:正常的长思考、长工具调用
 // (pytest 跑半小时)期间一个事件都不发也很常见,照总时长判会把干得正好的活儿误杀。这也是
 // 本模块为什么**只在真的收到过错误事件时才动手** —— 纯静默(一个事件都没有)在这一层分辨不出
 // 「上游挂住」和「工具在跑」,那一半由执行器自己负责把「我在等上游」说出来
 // (`claude-stream.ts` 的 waitTimer、`codex-app-server.ts` 的 willRetry 提示),说出来了
 // 才轮到这里。
+//
+// 「真回话」有一层细化,别退回成「不是错误就算」:adapter 自己报的那些辅助通知
+// (`session` 会话身份、`context` 本地算的上下文水位、`system` 旁注)都**不是上游在回话**。
+// Claude 每条重试提示后面紧跟一条 `session`,照「非错误即进展」判就是每条重试被自己后面
+// 那句身份通知当场解除 —— 远超阈值也一声不响(第 2 轮审查 F1,已实测)。这一类既不解除也不
+// 计数,连「卡在哪一步」都不记。判据共用 `@ash/shared/waiting` 的 `resumesWaiting`(那个文件
+// 就是为了不让三处判据各自漂),钉子在 test-turn-stall.ts ③a/③b/③c 与 test-claude-retry-stall.ts。
 //
 // 为什么住在**消费层**而不是各执行器里:停滞这件事对 claude / codex / kimi / cursor / … 是
 // 同一件事,只有「怎么把上游在重试这件事说出来」各家不同。三条消费链(single-run / duet /
@@ -57,6 +64,7 @@ import { detachedPathsFor } from "./executors/detached-child.js";
 import { isExecutionNotice } from "./session-notice.js";
 import { RUNS_DIR } from "./paths.js";
 import { runTracePaths } from "./transcript.js";
+import { resumesWaiting } from "@ash/shared/waiting";
 import { markStallFailure, retireStallFailure } from "./turn-stall-verdict.js";
 import { now } from "./util.js";
 
@@ -175,7 +183,7 @@ function num(name: string, fallback: number): number {
  */
 function thresholds() {
   return {
-    /** 警告档:连续这么多条错误事件(期间无任何非错误事件)就报。 */
+    /** 警告档:连续这么多条错误事件(期间上游一次都没真回话)就报。 */
     warnErrors: num("ASH_STALL_WARN_ERRORS", 5),
     /** 警告档:这种状态持续这么久也报(两个条件取或)。 */
     warnMs: num("ASH_STALL_WARN_MS", 5 * 60_000),
@@ -237,8 +245,33 @@ function errorFacts(event: AgentEvent): { message: string; notice: boolean; chil
   return { message: err.message, notice: isExecutionNotice(err), child: !!inner };
 }
 
-// 「这条事件算上游接着往下走了吗」= `errorFacts(event) === null`,停滞判据的**唯一**解除条件。
-// 不另包一个 isProgress 谓词:两个名字读同一份判据,改一处漏一处的毛病就是这么来的。
+/**
+ * 「这条事件算**上游接着往下走了**吗」—— 解除停滞的唯一条件,判据**共用** `@ash/shared/waiting`
+ * 的 `resumesWaiting`(text/thinking/tool/attachment/usage/turnEnd/done 算,`session`/`context`/
+ * `system` 不算)。
+ *
+ * 自己内联一张表的那一版错在把「不是错误」读成了「有进展」(第 2 轮审查 F1,已实测):Claude
+ * 的一次重试在原始流里是**两条** —— 先一条 notice error,紧跟一条 `session`(把 CLI 会话 id 报
+ * 一遍)。于是每一条重试都被自己后面那句身份通知当场解除,一条永远连不上的会话报警和熔断都
+ * 不会发生,页面上只有八条普通提示、任务一直显示运行中。那句话压根不是上游回话,它是适配器
+ * 自己的辅助通知 —— 而这正是 `shared/src/waiting.ts` 早就写明的口径,三个维护点共一份就是为了
+ * 不出现这种分叉(那个文件顶部说的就是这件事)。
+ *
+ * 所以三档,不是两档:
+ *   · **进展**(`resumesWaiting`)→ 熔断前解除停滞;
+ *   · **错误**(穿过子智能体包装,见 errorFacts)→ 计入停滞;
+ *   · **其余**(`session`/`context`/`system`)→ 既不计入也不解除,一个字都不动。
+ *
+ * 第三档刻意排在「宁可漏判不误杀」那一侧之外:它们不是进展的证据,但也不是停滞的证据。真的
+ * 恢复了,紧跟着就会有正文/工具/收尾事件,那一条才解除。
+ */
+const isProgress = (event: AgentEvent): boolean => {
+  const inner = event.kind === "tool" && event.nativeWork?.type === "activity" ? event.nativeWork.event : null;
+  // 包装本身恒为 `kind:"tool"`(childActivity),照它判等于「子线程有任何动静都算进展」——
+  // 包装不是进展,里面那条才算(与 errorFacts 同一道穿透)。
+  if (!inner) return resumesWaiting(event);
+  return inner.kind === "text" || inner.kind === "thinking" || inner.kind === "tool" || inner.kind === "attachment";
+};
 
 /**
  * 这一轮最后那条**正常**事件是什么 kind,按持有者记(见 StallFacts.lastProgressKind)。
@@ -256,10 +289,8 @@ const lastProgress = new WeakMap<StallOwner, { turn: string; kind: string }>();
 /**
  * 事件消费链上的每一条 agent 事件都过这里。
  *
- * 口径(与「自上次非错误事件以来只有错误事件」逐字对应):
- *   · 任何**非** error 事件 → 停滞解除。`session`/`context`/`system` 也算 —— 它们虽然不是
- *     上游在回话(所以 `shared/src/waiting.ts` 的 `resumesWaiting` 不收它们),但它们证明
- *     这条流还在动,而这里要防的恰恰是「误杀还在动的回合」,保守的那一边就是解除。
+ * 口径(与「自上次**有进展**以来只有错误事件」逐字对应,三档见上面的 `isProgress`):
+ *   · 进展事件 → 停滞解除;适配器的辅助通知(`session`/`context`/`system`)既不解除也不计入。
  *   · error 事件 → 计入停滞。`level:"notice"`(上游在重试)另记一笔,诊断文案要用。
  *     真故障(非 notice)**同样计入**:它既不是进展,也不该把 30 分钟的钟重置掉 —— 一个每隔
  *     几分钟报一次真错、却永远不收尾的回合跟重连循环是同一个毛病。
@@ -277,6 +308,9 @@ export function trackTurnStall(
 ): void {
   const err = errorFacts(event);
   if (!err) {
+    // 第三档:既不是进展也不是错误(适配器的辅助通知)—— 一个字都不动,连 lastProgressKind
+    // 都不记,否则熔断诊断会把「卡在哪一步」说成那句身份通知。
+    if (!isProgress(event)) return;
     if (turnStartedAt) lastProgress.set(owner, { turn: turnStartedAt, kind: event.kind });
     if (stalls.size === 0) return; // 热路径(正文 delta)在这儿就走掉
     const held = stalls.get(sessionId);
@@ -285,8 +319,7 @@ export function trackTurnStall(
     // **熔断之后,这一条不再是「观察」,而是一份没兑现的终止义务** —— 普通进展事件撤不动它。
     //
     // 分两档是刻意的(第 2 轮审查 F1,已实测):
-    //   · 熔断**之前**:任何非错误事件都解除。这一档宁可漏判也不误杀,`context`/`usage` 这种
-    //     也算 —— 它们证明这条流还在动。
+    //   · 熔断**之前**:任何进展事件都解除(判据见上面的 isProgress)。
     //   · 熔断**之后**:`trip` 对常驻台走的是 request-only 的 `interrupt()`,而「有事件到达」
     //     压根证明不了那个请求生效了。照上一档解除的那一版于是把 grace 兜底一起撤掉:页面上
     //     「已自动终止本回合并按失败结算」已经写着了,任务却永远停在运行中、连停滞环都灭了

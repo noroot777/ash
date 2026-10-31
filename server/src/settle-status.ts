@@ -208,9 +208,18 @@ export async function settleTaskStatus(
     // **未确认那一支也要过闸**(第 2 轮审查 R2-1):没交卷就恢复原状态,而那个原状态本身多半
     // 是 done/failed —— 恢复它跟落一个新终态对哨兵是同一件事,这一轮新挂的哨兵照样被收走。
     // 原状态是 paused/backlog 一类时不问:那些落位不碰哨兵,问了只会白写一段系统等待。
-    const hold = confirmed || monitorSweepingStatus(back) ? await monitorGate() : null;
-    const consumedCheckpoint = !!(confirmed && !hold && t.resumePrompt);
-    if (confirmed && !hold) {
+    // **「保持旧终态」可以,「凭一轮失败升级成成功」不行。**(第 2 轮审查 F2,已实测)
+    //
+    // 续聊的既定契约是「只能变好,不会变差」,所以熔断**不**把 done 打成 failed —— 那一条照旧。
+    // 但反过来那一半上一版漏了:本轮早先合法交过卷、随后上游断掉被我们熔断,`confirmed` 这一
+    // 支排在最前面、压根不问原因,于是一个续聊前是 `failed` 的任务被这轮失败**升级**成了 done
+    // (时间线上同时红着写「已自动终止并按失败结算」)。确认说的是「目标达成了」,而这一轮我们
+    // 亲手判了它失败 —— 两者冲突时以失败为准,状态回到续聊前那个终态。
+    // 它顺带还清掉续跑材料(`consumedCheckpoint`)并按成功推进队列,所以不能只改措辞。
+    const upgradable = confirmed && reason?.kind !== "upstream_stall";
+    const hold = upgradable || monitorSweepingStatus(back) ? await monitorGate() : null;
+    const consumedCheckpoint = !!(upgradable && !hold && t.resumePrompt);
+    if (upgradable && !hold) {
       await db.update(tasks).set({
         followUpFrom: null,
         // checkpoint-paused 上的真人消息先保留旧检查点,避免一句普通追问把恢复指令吞掉;

@@ -1,5 +1,6 @@
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { codexErrorEvent } from "./codex-error-event.js";
+import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
 
 export function childActivity(id: string, event: NativeAgentActivity): AgentEvent {
   return { kind: "tool", name: "Agent", nativeWork: { type: "activity", id, event, at: new Date().toISOString() } };
@@ -73,7 +74,13 @@ export class ClaudeChildActivity {
     if (!id) return [];
     const out: AgentEvent[] = [];
     const push = (event: NativeAgentActivity) => out.push(childActivity(id, event));
-    if (ev.type === "stream_event") {
+    // **子线程里的重试也得报出来。** 带 `parent_tool_use_id` 的事件在 claude-stream 那边提前
+    // return,不走它的 `system` 分支 —— 少了这一处,一个子智能体连不上上游的回合在 ash 眼里
+    // 全程静默:看门狗一条错误都收不到,报警与熔断都无从谈起(第 2 轮审查 F1 的同类缺口;
+    // codex 那一侧的同一个洞是第 1 轮第 1 条)。措辞与主线程共用一处,见那个文件。
+    if (isClaudeRetry(ev)) {
+      push({ kind: "error", message: claudeRetryMessage(ev), level: "notice" });
+    } else if (ev.type === "stream_event") {
       const stream = ev.event;
       if (stream?.type === "message_start") this.streamed.delete(id);
       const delta = stream?.delta;

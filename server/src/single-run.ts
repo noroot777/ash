@@ -32,7 +32,7 @@ import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import { clearTurnStall, trackTurnStall, type StallActions } from "./turn-stall.js";
-import { clearStallFailure, stallFailure } from "./turn-stall-verdict.js";
+import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
@@ -140,6 +140,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // executors/session-lost.ts）。认下来的话这一轮收尾时要把失效 id 从库里清掉，
   // 否则每一次重试都在 --resume 同一条坏会话。
   let sessionFault: SessionResumeFault | null = null;
+  // 看门狗熔断掉这一轮的话,**收流那一刻**取走的那份结论(赋值点在下面的 finally,理由在那儿)。
+  let watchdogFailure: StallVerdict | null = null;
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
   let head = "";
   let pendingTraceText = "";
@@ -355,6 +357,13 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   } finally {
     // 流异常中断时 done 事件压根不会来,内存里那条等待状态就得在这儿撤(见 session-waiting.ts)。
     clearSessionWaiting(sessId, a.handle);
+    // **判决在这一刻就取走,不留到下面去读**(第 2 轮审查 F3,已实测)。流结束了 = 不会再有
+    // 新的熔断写进这个回合身份,所以此刻读到的就是最终结论;而从这里到下面结算之间隔着
+    // `cleanup()` 和一串写库 await —— 那段窗口里另一轮熔断的回收扫描(或者机器休眠把墙钟
+    // 往前一跳)完全可能把这条**还有读者**的判决扫掉,于是这一轮被记成正常完成。
+    // 「退场」只证明它离开了状态机,不证明最后一个读者已经读过(那条不变量在
+    // turn-stall-verdict.ts 的 ORPHAN_MS 上),所以读者自己持一份独立事实。
+    watchdogFailure = stallFailure(sessId, a.turnStart);
     clearTurnStall(sessId, a.handle);
     if (offsetTimer) clearInterval(offsetTimer);
     const cleaned = await a.handle.cleanup?.().catch((error): CleanupResult => {
@@ -389,8 +398,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 会话 UPDATE 都可能抛,抛了就走不到 `recordTurnSpan`,残留的活动登记会让读端把这条会话
   // 当成「还在写」（第 6 轮审查必须修 1）。入口的 finally 还兜一道。
   closeSessionTurns(sessId);
-  // 看门狗熔断掉的这一轮:**结论由它写下,这里只读**(turn-stall-verdict.ts)。
-  const watchdogFailure = stallFailure(sessId, a.turnStart);
+  // 看门狗熔断掉的这一轮:结论由它写下,**上面收流那一刻就取走了**(理由见那里)。
   const executionFailed = !stopped && (exitStatus !== 0 || sawExecutionError || !!watchdogFailure);
   // CLI 否认了这条会话：把失效的 id 连同由它派生的三件套恢复命令一起清掉。清了之后
   // orchestrator 的 `resuming`（判据就是「这条会话行上有没有 cli_session_id」）自然为
