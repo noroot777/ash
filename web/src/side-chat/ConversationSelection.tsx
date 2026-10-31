@@ -74,7 +74,9 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
         // 浮条只问「剔掉界面装置之后还剩不剩正文」—— 扫过的装置不算内容，光选中一条
         // 「执行过程 · 6 工具」不该出按钮。
         const text = selectionContentText(range, scope);
-        if (!text) return commit(null);
+        // 全是空白也算没正文:存进备忘的时候才说「内容不能为空」太晚了。但取到的文本原样
+        // 留着 —— 行内的缩进是正文自己的(代码块靠它)。
+        if (!text.trim()) return commit(null);
         const last = Array.from(range.getClientRects()).filter((box) => box.width && box.height).at(-1) ?? rect;
         commit({
           text,

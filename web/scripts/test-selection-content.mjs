@@ -202,7 +202,27 @@ try {
   const over = await take();
   assert.equal(over, 'print("第二行")\n\n按第二个方案做，先把开关关掉。\n\n审查卡自己的正文该留下。');
 
-  // ⑬ 浮条上那颗按钮按下去必须兑现得了。Tab 聚到浮条上之后正文被流式续写换掉(结论从
+  // ⑬ 反过来:从答复预览**中间**起步、跨到卡片外面。预览前面那一截 summary 整个落在选区
+  //    起点之前,照原样拿它去挪起点就会把起点拽回预览的开头 —— 用户没选的前半句跟着被
+  //    存进备忘(审查第 2 轮必修)。两头各一道闸,每一截都得是原选区的子区间。
+  await page.getByTestId("clear").click();
+  await question.scrollIntoViewIfNeeded();
+  await settle();
+  await select({ text: "先把开关关掉。" }, { text: "审查卡自己的正文该留下。" });
+  assert.equal(await take(), "先把开关关掉。\n\n审查卡自己的正文该留下。");
+
+  // ⑭ 只选中代码块行首那几个空格:剔不出正文,浮条就该撤掉 —— 否则要等存的时候才说
+  //    「内容不能为空」。先在同一处选一段真正文做对照,免得浮条其实是因为滚出视口才没出来。
+  await page.getByTestId("clear").click();
+  await page.getByText('print("缩进不能丢")').first().scrollIntoViewIfNeeded();
+  await settle();
+  await select({ text: 'print("缩进不能丢")' }, { text: 'print("缩进不能丢")' });
+  await memo.waitFor();
+  await select({ text: 'print("缩进不能丢")', at: 0 }, { text: 'print("缩进不能丢")', at: 4 });
+  await flush();
+  assert.equal(await memo.isVisible().catch(() => false), false, "只选到空白时浮条该撤掉");
+
+  // ⑮ 浮条上那颗按钮按下去必须兑现得了。Tab 聚到浮条上之后正文被流式续写换掉(结论从
   //    段落变列表,原来那个 `<p>` 当场卸载、选区里的文本节点脱离文档),此时 selectionchange
   //    被「焦点在浮条上」那条早退吞掉、浮条还在 —— 存 Range 的实现这时取文得到空串,于是
   //    用户按了一下什么都没发生(审查第 2 轮必修 1)。
@@ -217,7 +237,7 @@ try {
     "按下去要兑现当时选的那段话,不许静默丢弃");
 
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("✓ 会话选文只取正文:折起来的卡片保住摘要行那段正文、隐藏子树一个字不漏、浮条按下去必定兑现、跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
+  console.log("✓ 会话选文只取正文:每一截都是原选区的子区间(从正文岛中间起步不补前半句)、只选到空白时撤掉浮条、折起来的卡片保住摘要行那段正文、隐藏子树一个字不漏、浮条按下去必定兑现、跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
 } finally {
   await browser?.close();
   await server.close();

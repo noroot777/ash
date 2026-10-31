@@ -44,7 +44,19 @@ export function selectionContentText(range: Range, root: Element): string {
 
 const join = (texts: string[]) => texts.map(trimSeam).filter(Boolean).join("\n\n");
 
-/** 把选区按「要剔掉的那些段」切成若干截。没有要剔的就是它自己。 */
+/**
+ * 把选区按「要剔掉的那些段」切成若干截。没有要剔的就是它自己。
+ *
+ * 一条贯穿整个循环的不变量：**每一截都得是原选区的子区间**。要剔的那些段是按整块装置
+ * 算出来的，跟选区只是相交关系 —— 没剪到选区里头就直接拿去挪边界，两头都会跑出去：
+ *
+ * - 整段落在选区**后头**（选到一半的那块装置后面还有字）：`setEnd` 把这一截的尾巴推到
+ *   用户没选的地方。
+ * - 整段落在选区**前头**（选区从正文岛中间起步，岛前面那一截装置整个在起点之前）：
+ *   `setStart` 把起点拽回那一段的末尾，也就是岛的开头 —— 用户没选的前半句跟着进来。
+ *
+ * 所以两头各一道闸，合起来就是「剪到选区里头」：起点只许往后走，终点压根不动。
+ */
 function contentRanges(range: Range, root: Element): Range[] {
   const skips = skipRanges(range, root);
   if (!skips.length) return [range.cloneRange()];
@@ -52,13 +64,13 @@ function contentRanges(range: Range, root: Element): Range[] {
   let rest: Range | null = range.cloneRange();
   for (const skip of skips) {
     if (!rest) break;
-    // 这一段已经整个落在选区后头了 —— 跳过区按文档顺序排，后面的只会更远，收手。不拦住
-    // 的话底下那个 setEnd 会把这一截的尾巴推到选区外面去（选到一半的那块装置后面还有
-    // 字时，取文就会多带出用户没选的内容）。
-    if (startsAfter(rest, skip)) break;
+    // 整个排在后头 —— 跳过区按文档顺序排，后面的只会更远，收手。
+    if (sideOf(rest, skip.startContainer, skip.startOffset) > 0) break;
+    // 整个排在前头 —— 让它过去，一个边界都不许动。
+    if (sideOf(rest, skip.endContainer, skip.endOffset) < 0) continue;
     const head = rest.cloneRange();
-    // 要剔的那段压在选区头上(或尾上)时，setEnd/setStart 会把另一头一起拖过来 ——
-    // 于是这一截自己就塌成空的，正是想要的结果，不必另外判一遍前后关系。
+    // 剪过之后这一段必然与 rest 有交集，压在头上或尾上时 setEnd/setStart 会把另一头一起
+    // 拖过来 —— 于是这一截自己塌成空的，正是想要的结果，不必再判一遍前后关系。
     head.setEnd(skip.startContainer, skip.startOffset);
     if (!head.collapsed) parts.push(head);
     rest.setStart(skip.endContainer, skip.endOffset);
@@ -68,12 +80,13 @@ function contentRanges(range: Range, root: Element): Range[] {
   return parts;
 }
 
-/** 这一段是不是整个排在选区后头。比不了（节点已经不在同一棵树上）就当是，宁可少剔。 */
-function startsAfter(rest: Range, skip: Range): boolean {
+/** 这个点落在 rest 的哪一侧：-1 前头 / 0 里头 / 1 后头。比不了（节点已经不在同一棵树
+ *  上）就当「在后头」—— 那一支是收手，宁可少剔，不能越界。 */
+function sideOf(rest: Range, node: Node, offset: number): number {
   try {
-    return rest.comparePoint(skip.startContainer, skip.startOffset) > 0;
+    return rest.comparePoint(node, offset);
   } catch {
-    return true;
+    return 1;
   }
 }
 
