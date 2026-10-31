@@ -11,12 +11,11 @@
 // `[mcp_servers.harness.tools.*]` 这类子表留成一条没有 command 的孤儿，codex 整份拒载 —— 新链
 // 第 5 轮审查第 2 条），但它自己也是「写临时文件再 rename」：让它去改用户真文件，硬链接在那一步
 // 就断了，我们后面再怎么保身份都来不及，删到一半失败还会把用户那份留在中间状态。
-import {
-  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync,
-  realpathSync, rmSync, writeFileSync,
-} from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
+// 就地写那一套规矩(连同它的来历)只有一份,见该文件的头部注释。
+import { publishInPlace, TMP_MODE } from "./config-publish.mjs";
 
 /** `codex mcp list --json` 的结果 → `{ ok, servers:[{name, enabled}] }` 或 `{ ok:false, why }`。 */
 export function parseCodexList(status, stdout) {
@@ -27,58 +26,6 @@ export function parseCodexList(status, stdout) {
     return { ok: true, servers: listed.map((e) => ({ name: String(e?.name), enabled: e?.enabled !== false })) };
   } catch {
     return { ok: false, why: "codex mcp list 的输出看不懂" };
-  }
-}
-
-/** 临时副本一出生就只有自己能读 —— 它装着用户配置的全文。 */
-const TMP_MODE = 0o600;
-
-/** 跟到软链的尽头（最多 8 层，防环）；最终悬空就用它指的那个路径，别去改中间那条链接。 */
-function resolveTarget(file) {
-  let p = file;
-  for (let left = 8; left > 0; left--) {
-    try { return realpathSync(p); } catch { /* 不存在,或者这条链悬空 */ }
-    let next;
-    try { next = readlinkSync(p); } catch { return p; } // 不是软链 ⇒ 要写的就是它
-    p = resolve(dirname(p), next);
-  }
-  // 跟满 8 层还没到头:成环,或者长到不正常。此刻 `p` 只是链条中间的一环,**写它就是把一条
-  // 软链接换成普通文件**(审查第 5 轮 N9:上一版直接 `return p`)。定位不了就不写,如实报。
-  throw new Error(`${file} 的软链接跟了 8 层还没到头，没法确定该写哪个文件`);
-}
-
-/**
- * 把内容发布到 `file`，**保住这个文件的身份** —— 它的有效访问边界、它的链接关系。
- *
- * **一律就地写。** 原来 POSIX 走「同目录临时副本 + rename」，那样换上去的是一个**新文件**，
- * 它只继承得到我们抄得过去的那几位，而这份文件里装着 key：
- *
- * · Windows 的 DACL 抄不了（Node 没有读写 ACL 的接口），原文件单独收紧过的访问边界当场消失
- *   —— 第 4 轮 F1 在真机上实测到 Everyone 读进了 DACL。
- * · POSIX 的扩展 ACL 同样抄不了，**mode 相等不等于有效权限相等**：第 5 轮 F1 实测 macOS 上
- *   `chmod +a 'user:nobody deny read'` 这条禁读会随 rename 消失（`-rw-r--r--+` 变回
- *   `-rw-r--r--`，mode 一模一样）。本机另测了 `copyFileSync`，它也不带这条 ACL 过去；带得过去
- *   的只有 `cp -p`/`ditto` 这类外部命令，而发布侧不许起子进程（server 那份有结构断言钉着）。
- * · 硬链接会被换掉 inode，断开用户显式接起来的关联。
- *
- * 代价是**失去原子替换**：截断到写完之间有个窗口，这期间 codex 读到的是空的或者半截的
- * （第 4/5 轮 N8，现在全平台都如此）。所以**恢复手段必须是明确的**：写出异常就把这一轮读到的
- * 那一版原样写回去（原来没有这个文件就把它删掉）；回写也失败、或者断电/进程被杀来不及回写时，
- * 还有下面那份 `.bak-ash-setup` 可以手工还原。
- *
- * 软链写它指向的那份（否则一写就把链接本身变成普通文件）。所有者（uid/gid）没抄 —— 配置在谁的
- * HOME 里就该由谁跑这个。
- */
-function publishInPlace(file, body, previous) {
-  const target = resolveTarget(file);
-  try {
-    writeFileSync(target, body);
-  } catch (e) {
-    try {
-      if (previous === null) rmSync(target, { force: true });
-      else writeFileSync(target, previous);
-    } catch { /* 尽力:连回写都失败就只剩那份备份这条路了 */ }
-    throw e;
   }
 }
 
