@@ -10,7 +10,7 @@ import { confineOwnPackages } from "./accept-gate-confine.js";
 import { ambientDigest, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
   provideDependency, workspacePackages, type DependencyMode } from "./accept-gate-deps.js";
 import { optionalRead, requiredRead } from "./accept-gate-fs.js";
-import { dependencySupply, type DependencySupply } from "./accept-gate-supply.js";
+import { dependencySupply, supplyRoots, type DependencySupply } from "./accept-gate-supply.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 // 快照的 sidecar。非 Git 项目一直靠它把输入清单交给收尾核验,现在**依赖放置计划**也走这里:
@@ -18,7 +18,9 @@ type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 // 本次真实登记并放置的那几条路径。生产收尾(accept-gate.ts)是从 DB 的 commit/fingerprint 重建
 // GateSource 的,`dependencies` 固定为空,所以计划不落盘就根本传不回去,重启恢复更拿不到。
 type GatePlacement = { path: string; mode: DependencyMode };
-type GateSidecar = { inputs?: SourceInput[]; dependencies?: GatePlacement[]; sourceCwd?: string; ambient?: string };
+type GateSidecar = { inputs?: SourceInput[]; dependencies?: GatePlacement[]; sourceCwd?: string; ambient?: string;
+  /** 补给来源的消费者位置。收尾核验要按同一套根重算 ambient,少这一笔就与登记值永远对不上。 */
+  ambientRoots?: string[] };
 
 async function readSidecar(target: string): Promise<GateSidecar | null> {
   // 没有这份文件是正常形态(Git 项目的收尾从 DB 重建)。读不动就不是「没有」:那会让依赖放置计划
@@ -209,15 +211,16 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
       ambient: await ambientDigest(cwd, executionCwd), executionCwd };
   }
   return { commit, fingerprint: hash.digest("hex"), dependencies, supplied,
-    ambient: await ambientDigest(cwd, executionCwd), executionCwd };
+    ambient: await ambientDigest(cwd, executionCwd, supplyRoots(supplied)), executionCwd };
 }
 
 export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR, taskId, `accept-gate-${runId}.source`);
 
 export async function createGateSnapshot(cwd: string, target: string, source: GateSource): Promise<void> {
   await mkdir(target, { recursive: true });
+  const roots = supplyRoots(source.supplied);
   try {
-    if (await ambientDigest(cwd, target) !== source.ambient) {
+    if (await ambientDigest(cwd, target, roots) !== source.ambient) {
       // 对不上一律拒绝（这一条不打折），但**说法得对得上**，因为出路不是同一条：
       //
       // · 登记位置上**现在**也已经对不上 → 登记之后依赖输入自己变了（装/删/升级了包、改了安装
@@ -229,7 +232,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       // 场面上尤其显眼：漂移是夹具自己造的，报出来的却是位置不对。`executionCwd` 缺失（跨版本重启
       // 读到的旧计划）时归不了因，照旧按位置那一条报——归因不了就不编一个更具体的理由。
       const drifted = source.executionCwd !== undefined
-        && await ambientDigest(cwd, source.executionCwd) !== source.ambient;
+        && await ambientDigest(cwd, source.executionCwd, roots) !== source.ambient;
       throw new Error(drifted
         ? "登记之后依赖输入已变化，请重新验收"
         : "测试快照的实际依赖输入与登记计划不同，请按快照执行位置重新登记后验收");
@@ -336,6 +339,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     if (unconfined) throw new Error(`测试快照没能隔离项目自己的包：${unconfined}`);
     const sidecar: GateSidecar = {
       sourceCwd: cwd, ambient: source.ambient,
+      ...(roots.length > 0 ? { ambientRoots: roots } : {}),
       ...(source.inputs ? { inputs: source.inputs } : {}),
       // 路径按 POSIX 分隔符落盘:登记用的是 path.join(Windows 上是 `\`),而收尾比对的 `git diff
       // --name-only` 一律吐 `/`。不归一的话 Windows 上每条嵌套依赖路径都对不上,豁免整个失效。
@@ -357,7 +361,8 @@ export async function removeGateSnapshot(taskId: string, runId: string): Promise
 export async function verifyGateSnapshot(cwd: string, source: GateSource): Promise<boolean> {
   try {
     const sidecar = await readSidecar(cwd);
-    if (sidecar?.sourceCwd && await ambientDigest(sidecar.sourceCwd, cwd) !== sidecar.ambient) return false;
+    if (sidecar?.sourceCwd
+      && await ambientDigest(sidecar.sourceCwd, cwd, sidecar.ambientRoots ?? []) !== sidecar.ambient) return false;
     if (!source.commit) {
       const inputs = source.inputs ?? (await readSidecar(cwd))?.inputs;
       if (!inputs) return false;

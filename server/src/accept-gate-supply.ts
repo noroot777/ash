@@ -1,5 +1,5 @@
 import { lstat, realpath, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { execFileText } from "./exec.js";
 import { physicalPath, samePath, worktreePorcelain } from "./git-worktree-state.js";
 import { recordedLinks } from "./accept-gate-deps.js";
@@ -70,6 +70,14 @@ const SUPPLIED_DIRS = ["node_modules"];
 export type DependencySupply = { path: string; from: string };
 
 /**
+ * 这次补给把哪几个**消费者位置**带进了解析图。身份计算（ambientDigest）要按它们再枚举一遍：
+ * 补来的树连同树里外链指出去的独立安装树，都是这一次实际跑的东西，必须进身份。给的是包目录
+ * （树的上一级）而不是树本身，因为 resolutionInputs 的根是「从哪里开始解析」。
+ */
+export const supplyRoots = (supplied: DependencySupply[] = []): string[] =>
+  [...new Set(supplied.map(item => dirname(item.from)))].sort();
+
+/**
  * 同一仓库的**主工作树**。worktree 任务按它取依赖；任务本身就在主工作树里时回 null。
  *
  * 判据取 Git 自己的登记而不是「`.worktrees` 的上一级」这类路径形状：`git worktree list` 的第一条
@@ -87,7 +95,19 @@ export async function referenceCheckout(cwd: string): Promise<string | null> {
   const first = stdout?.split("\0\0").filter(Boolean).at(0)?.split("\0")
     .find(field => field.startsWith("worktree "))?.slice(9);
   if (first === undefined || first === "") return null;
-  return samePath(first, cwd) ? null : physicalPath(first);
+  if (samePath(first, cwd)) return null;
+  // 项目根必须**就是**它所在工作树的根,否则不补。下面按 `join(reference, dep)` 把依赖位置原样
+  // 映射过去,这一步只在两侧的相对位置一致时才成立;项目被配置成仓库的子目录(`<仓库>/subproject`)
+  // 时,参考侧该取 `<主检出>/subproject/node_modules`,而这里会取成 `<主检出>/node_modules` ——
+  // 拿错一棵树比不补更坏。子目录项目的完整契约要单独收口(快照本身也还是整仓 clone/checkout),
+  // 在那之前这里如实弃权,由隔离证明那一层照旧处理。
+  const top = await (async () => {
+    try {
+      return (await execFileText("git", ["-C", cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
+    } catch { return null; }
+  })();
+  if (top === null || top === "" || !samePath(top, cwd)) return null;
+  return physicalPath(first);
 }
 
 /** 这个位置上摆着一棵能用的依赖树吗（真目录，或落点是真目录的一条链）。 */

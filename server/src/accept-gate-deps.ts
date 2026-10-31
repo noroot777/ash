@@ -182,9 +182,17 @@ export async function dependencyDigest(root: string, dep: string, kind = dep.spl
  * 重算一遍，而快照住在 runs 目录下、向上继承的是另一条链，混进去会让每一次快照都判成没复现。
  * 它绑定复用、启动前复核与运行后核验；换口径之后存量绿结果失效、各重跑一次，这是预期的。
  */
-export async function ambientDigest(cwd: string, executionCwd: string): Promise<string> {
+export async function ambientDigest(cwd: string, executionCwd: string,
+  extraRoots: string[] = []): Promise<string> {
   const hash = createHash("sha256").update("gate-ambient-v2\0");
-  const inputs = await resolutionInputs([cwd, dirname(executionCwd)]);
+  // `extraRoots` 是**补给来源**那一侧的消费者位置（见 accept-gate-supply）。不补这一笔的后果是
+  // 报绿：工作区自己装了依赖时，那棵树里一条 `file:` 外链指出去的独立安装树就在 cwd 的解析图里，
+  // 外部包正常 npm 升级会改掉 ambient、旧的通过记录随之失效（2026-10-31 三变体实测，装过依赖的
+  // worktree 与主检出都是这个结果）；而补给那条路上工作区压根没有依赖目录，那棵树挂在参考检出
+  // 下面、根本不在 cwd 与 executionCwd 的解析图里，于是同一次升级摘不出任何变化 —— 快照里实际
+  // 跑的东西换了版本，门禁却继续沿用旧的绿。追加的根排在后面，所以没有补给时摘要逐字节不变，
+  // 已有的通过记录不会因为这一处改动集体失效。
+  const inputs = await resolutionInputs([cwd, dirname(executionCwd), ...extraRoots]);
   for (const input of inputs) {
     hash.update(input.path).update("\0").update(await dependencyDigest(input.path, ".", "node_modules"));
   }
