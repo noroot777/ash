@@ -94,8 +94,14 @@ const project = (name: string, workspaces: string[], value: string) => {
 };
 
 try {
-  // ── 1. 工作区**没有**装依赖(worktree 的常态)。快照里没有依赖树,前面每一条检查都「通过」,而
-  // node 往上一级就找到主检出那份 node_modules,顺着 workspace 链读到活的工作区源码。
+  // ── 1. 工作区**没有**装依赖(worktree 的常态)。这一条曾经是「快照里没有依赖树,前面每一条检查
+  // 都通过,而 node 往上一级就找到主检出那份 node_modules,顺着 workspace 链读到活的工作区源码」。
+  // 2026-10-31 起根因换了修法:工作区某个位置完全没有依赖目录时,门禁按同仓参考检出把整棵树**克隆**
+  // 进快照(accept-gate-supply),解析根因此落在快照内 —— 所以这里登记的不再是空清单。
+  //
+  // **要钉的那件事一个字没变**:快照跑出来的必须是快照自己那份源码,而且门禁开跑之后改工作区不许
+  // 改变结果。下面三条断言照旧。ancestor 那条路(工作区有一棵**不含**自有包的树,收口去补绑定)由
+  // test-accept-gate-plan 的 removedTask / rawLayout 用例钉着,不在这里重复。
   const host = project("host", ["packages/*"], "MAIN_OLD");
   npmInstall(host);
   git(host, "add", "-A");
@@ -107,7 +113,13 @@ try {
   git(task, "commit", "-qm", "task");
 
   const ambient = await snapshotOf(task);
-  assert.deepEqual(ambient.source.dependencies, [], "前提:任务工作区没有任何已安装的依赖根");
+  assert.deepEqual(ambient.source.dependencies, ["node_modules"],
+    "工作区一个依赖都没装时,门禁按参考检出补上那棵树(而不是把解析交给偶然的祖先链)");
+  assert.deepEqual(ambient.source.supplied?.map(item => item.path), ["node_modules"], "这棵树的来源记在 supplied 上");
+  assert.equal(lstatSync(join(ambient.target, "node_modules")).isSymbolicLink(), false,
+    "补来的依赖必须克隆进快照:借一条链出去等于把解析根放回参考检出");
+  assert.ok(realpathSync(join(ambient.target, "node_modules")).startsWith(realpathSync(ambient.target)),
+    "依赖树的落点必须在快照内");
   assert.equal(run(join(ambient.target, "probe.mjs")), "TASK_NEW",
     "工作区没装依赖时,快照跑的必须是快照自己那份源码,不是 node 向上找到的那个检出");
   save(join(host, "packages", "lib", "index.mjs"), 'export const value = "MAIN_LIVE";\n');
@@ -454,6 +466,27 @@ try {
     linkDir(join("..", "..", "packages", "lib"), join(tree, "@demo", "lib"));
     return { directory, tree, entry: binEntry(tree, "demo-cli", join(directory, "packages", "lib")) };
   };
+  /**
+   * 在任务工作区占住 `node_modules` 这个位置,放一棵**不含自有包**的树。
+   *
+   * 为什么要这一手:工作区某个位置完全没有依赖目录时,门禁会按参考检出整棵克隆进快照
+   * (accept-gate-supply),于是「自有包得从祖先树解析、收口去补绑定」这条路压根走不到。而那条路在
+   * 生产里仍然存在(工作区装了一棵**缺自有包**的树:`npm ci --omit=dev`、本次提交删过依赖、手铺的
+   * 部分依赖),所以它要继续被钉住。
+   *
+   * 这里手铺目录是**故意**的,与文件头「手铺目录证明不了它是装进来的」不冲突:那句话针对的是「要
+   * 区分正式装进来的第三方包和本项目源码」的那几条用例,而这一手只负责**占位**——这棵树里有什么、
+   * 怎么来的都不影响要钉的那件事,只要它不含自有包。
+   */
+  const occupyDependencies = (task: string, filler = "filler") => {
+    const tree = join(task, "node_modules");
+    save(join(tree, filler, "package.json"),
+      JSON.stringify({ name: filler, version: "1.0.0", type: "module", main: "index.mjs" }));
+    save(join(tree, filler, "index.mjs"), "export const value = \"FILLER\";\n");
+    save(join(tree, ".package-lock.json"),
+      JSON.stringify({ packages: { [`node_modules/${filler}`]: { version: "1.0.0" } } }));
+    return tree;
+  };
   const taskOf = (directory: string, value: string) => {
     const task = join(directory, ".worktrees", "task");
     git(directory, "worktree", "add", "--detach", task, "HEAD");
@@ -500,9 +533,11 @@ try {
     packages: { "node_modules/@demo/lib": { link: true, resolved: "packages/lib" } },
   }));
   const ownedTask = taskOf(owned.directory, "TASK_NEW");
+  occupyDependencies(ownedTask);
   const ownedTarget = join(owned.directory, "data", "runs", "owned.source");
   const ownedSource = await readGateSource(ownedTask, ownedTarget);
-  assert.deepEqual(ownedSource.dependencies, [], "前提:任务自己没装依赖,快照里压根没有依赖树");
+  assert.deepEqual(ownedSource.supplied, [],
+    "前提:位置被一棵**缺自有包**的树占着,所以不补依赖——自有包仍要从祖先树解析、由收口补绑定");
   await createGateSnapshot(ownedTask, ownedTarget, ownedSource);
   assert.equal(run(join(ownedTarget, "probe.mjs")), "TASK_NEW", "包入口要解析到快照自己那份源码");
   assert.equal(run(join(ownedTarget, "node_modules", owned.entry)), "TASK_NEW",
@@ -551,9 +586,11 @@ try {
   git(consumedTask, "add", "-A");
   git(consumedTask, "commit", "-qm", "task");
 
+  occupyDependencies(consumedTask);
   const consumedTarget = targetIn(consumed);
   const consumedSource = await readGateSource(consumedTask, consumedTarget);
-  assert.deepEqual(consumedSource.dependencies, [], "前提:任务工作区没有任何已安装的依赖根");
+  assert.deepEqual(consumedSource.supplied, [],
+    "前提:位置被一棵缺自有包的树占着,所以不补依赖——这条拒绝要在「解析仍会爬到祖先树」时成立");
   await assert.rejects(createGateSnapshot(consumedTask, consumedTarget, consumedSource),
     /既摆着本项目自己的包、又摆着 plain-consumer 这样不属于本项目的入口/,
     "祖先树里有第三方消费者时,根上的绑定证明不了闭包,必须拒绝");

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@ash/shared";
-import { providersForAgent } from "../settings/agentProviderRules.ts";
 import { api } from "./api.ts";
 import { cliCatalogNote, useCliModelCatalog } from "./cliModelCatalog.ts";
 
@@ -194,21 +193,17 @@ function groupSeeds(
       profileModel: null,
     });
   }
-  // 该类型能挂、但还没有任何 Profile 挂上的供应商也列出来：用户在这里选了模型，
-  // 就等于「这一回合用这家供应商」——只是没有专属 Profile，执行器退回类型默认。
-  for (const provider of providersForAgent(type, providers)) {
-    if (seen.has(provider.id)) continue;
-    seen.add(provider.id);
-    seeds.push({
-      key: provider.id,
-      providerId: provider.id,
-      providerName: provider.name,
-      executorId: null,
-      executorName: null,
-      profileModel: null,
-      provider,
-    });
-  }
+  // **没有任何 Profile 挂上的供应商不出现在这里。** 一次选择能表达的全部内容是
+  // 「哪个智能体 + 哪条 Profile + 哪个模型」(AgentModelSelection),供应商本身没有通道:
+  // 真正把 base_url + key 注进 CLI 的是 Profile 上的 providerId(见 server
+  // executors/index.ts 的 loadRelay)。所以列一块「还没人挂的供应商」,用户点中它的模型
+  // 落下的是 `executorId: null`,起跑时解析到的却是该类型**当前默认 Profile** —— 多半挂
+  // 着另一家、或干脆是 CLI 官方账号。于是拿 A 家的模型名去 B 家的端点上撞,任务当场死在
+  // 握手上,用户看到的只是「选了没反应」。
+  //
+  // 这一段曾经反着写,注释说「选了就等于这一回合用这家供应商」—— 那个意思从来没有实现过。
+  // 供应商要能用,就得先去执行器设置里挂到一条 Profile 上;没挂的那些由供应商页面当面说清
+  // (ProvidersSection 的「未挂到执行器」),而不是在这里给一个点了会失败的候选。
   return seeds;
 }
 
