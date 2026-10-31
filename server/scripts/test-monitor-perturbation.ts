@@ -342,6 +342,58 @@ assert.equal(
   console.log("✓ 执行环境:内建的赋值与特殊内建的错误退出按 argv 封闭证明，引号不算证明，无操作数的照旧拦");
 }
 
+// ── ②g 不变量:**结构没收口 ⇒ 整条命令连语法都过不去,一个字都不许硬拦** ───────────────
+// 自由工作流第 1 轮审查 F3 给的三条输入本体 + 同族的全部收口形式。上一版的缺口在**调用方**:
+// 封闭的 `parameterForm` 判得没错,可它的前提是「这个词法单元是完整的」—— 而两处调用点在找不到
+// `}` 时把残段截到末尾照样喂进去,于是 `"${X"` 剩下的那个 `X` 像个合法参数名,「没收口」凭空
+// 变成「证明过的形式」。真 shell 里这些命令连执行阶段都进不去（下面每条括号里是实测 rc 与
+// stdout；全部 `/bin/sh -lc`,`sh -n` 同样非零）。
+{
+  const cases = [
+    // 报告给的三条（第三条判的是恒真循环，前两条判的是跟随型 —— 两个判定都得取消）
+    [': "${X"; tail -F /dev/null', "双引号里的参数展开没收口（实测 rc=2，stdout 空）"],
+    [': "${X:-ok"; tail -F /dev/null', "带默认值的那一种同判（实测 rc=2，stdout 空）"],
+    [': "${X%ok"; while true; do :; done', "模式剥除那一种同判（实测 rc=2，stdout 空）"],
+    // 同族的其余收口形式:一种一条，少接一种这里立刻红
+    ["echo A; : ${X", "不带引号的 `${` 没收口（实测 rc=2）"],
+    ["echo A; : '${X", "单引号没收口（实测 rc=2）"],
+    ['echo A; : "${X', "双引号没收口（实测 rc=2）"],
+    ["echo A; : `printf x", "反引号没收口（实测 rc=2）"],
+    ["echo A; : $(printf x", "`$(` 没收口（实测 rc=2）"],
+    ["echo A; : $((1+1", "`$((` 没收口（实测 rc=2）"],
+    // **这一条是「为什么不能只给那个词打标记」的证据**:没收口在最后一段，而前面那个 tail
+    // 自己证明得出会跑 —— 真 shell 里它一次都没跑（整串先被解析，rc=2、stdout 空）。
+    ['echo A; tail -F /dev/null; : "${Y"', "没收口在后面那一段，前面那条也一次都没跑（实测 rc=2，stdout 空）"],
+  ] as const;
+  for (const [command, why] of cases) passes(command, `结构没收口，整条命令跑都跑不起来（${why}）`);
+
+  // **反过来钉死**:收口了的那几种照旧按各自的形式判 —— 这一道只认「没收口」，不许顺手把
+  // 封闭证明也一起松掉（松掉的话这道闸就被一个 `}` 的有无决定了）。
+  for (const command of [
+    ': "${X}"; tail -F /dev/null',          // 实测真的挂住（stdout 打出前面那段后超时）
+    ": ${X:-ok}; tail -F /dev/null",
+    ': "${X%ok}"; while true; do :; done',
+  ]) {
+    assert.notEqual(
+      neverExitsOnItsOwn(command), null,
+      `这一条每个结构都收口了，该拦照旧拦：${command}`,
+    );
+  }
+  // 替换那两种收口之后**照旧降级**（里面是另一层这边读不进去的执行，见 ③），但降级和放行是
+  // 两件事:降级仍然有判定、带着那句提示，没收口是**压根没有判定**。这一组钉的就是这个区别 ——
+  // 把「没收口」接成 `unknownForm` 的那种写法在这儿会露出来（它会落成「有判定 + 提示」）。
+  for (const [closed, open] of [
+    ["echo A; : `printf x`; tail -F /dev/null", "echo A; : `printf x; tail -F /dev/null"],
+    ["echo A; : $(printf x); tail -F /dev/null", "echo A; : $(printf x; tail -F /dev/null"],
+  ] as const) {
+    const verdict = neverExitsVerdict(closed);
+    assert.notEqual(verdict, null, `收口了的替换仍有判定（只是降级）：${closed}`);
+    assert.notEqual(verdict?.unprovable ?? null, null, `而且带着那句「读不进去」的提示：${closed}`);
+    assert.equal(neverExitsVerdict(open), null, `没收口的那一侧压根不该有判定：${open}`);
+  }
+  console.log(`✓ 执行环境:${cases.length} 种没收口的结构全部取消硬拦，收口了的照旧按形式判`);
+}
+
 // ── ③ 机制本身:逐类掀翻那个前提，每一类都必须把硬拦取消 ────────────────────────────
 // 这一节不是反例表，是**对照**:同一条铁定该拦的命令，每次只掀翻一类前提。
 {

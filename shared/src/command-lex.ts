@@ -57,6 +57,9 @@ export type Token = {
 /** 一个词里可能带上来的那几种展开标记。 */
 export type ExpansionMarks = Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm" | "unknownForm">;
 
+/** 扫一段文本的结果:带上来的标记 + **有没有哪个结构在这段里没收口**(见 `Lexed.unclosed`)。 */
+type TextScan = { marks: ExpansionMarks; unclosed: string | null };
+
 /** POSIX 参数展开的**参数名**（`${name}` / `${name:-字}` …）。只有它赋得上值,见 parameterForm。 */
 const PARAM_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** 位置参数与特殊参数（`${1}` / `${@}` / `${#}` / `${?}` / `${!}` / `${$}` / `${-}`）。 */
@@ -146,29 +149,39 @@ export function dollarForm(next: string | undefined, after?: string | undefined)
  * **不按参数展开的语法分区**（`:-` 前后)取舍:偏「多认一个未知」那一侧 —— 多认 ⇒ 降成提示,
  * 少认 ⇒ 一件做得成的事做不成（见 command-never-exits.ts 文件头那段不对称）。
  */
-function expansionsInText(inner: string): ExpansionMarks {
-  const out: ExpansionMarks = {};
-  if (inner.includes("`")) { out.expanded = true; out.substitution = true; }
+function expansionsInText(inner: string): TextScan {
+  const marks: ExpansionMarks = {};
+  let unclosed: string | null = null;
+  // 反引号成对才算收口。双引号里 `\`` 是字面量,所以这条可能多报一次 —— 多报的代价是
+  // 一条真的永不退出的命令降成提示,少报的代价是一条压根跑不起来的命令被硬拦(见文件尾
+  // `lex` 那段不对称),所以宁可多报。
+  const ticks = inner.split("`").length - 1;
+  if (ticks) { marks.expanded = true; marks.substitution = true; }
+  if (ticks % 2) unclosed = "反引号";
   for (let i = 0; i < inner.length; i += 1) {
     if (inner[i] !== "$") continue;
     switch (dollarForm(inner[i + 1], inner[i + 2])) {
-      case "arithmetic": out.expanded = true; out.arithmetic = true; break;
-      case "substitution": out.expanded = true; out.substitution = true; break;
+      case "arithmetic": marks.expanded = true; marks.arithmetic = true; break;
+      case "substitution": marks.expanded = true; marks.substitution = true; break;
       case "parameter": {
-        out.expanded = true;
+        marks.expanded = true;
         const close = inner.indexOf("}", i + 2);
+        // **没收口的残段不许喂给 `parameterForm`**(本轮审查 F3):`"${X"` 里剩下的那个 `X`
+        // 看着就是个合法参数名,于是「这个展开没收口」被读成了「证明过的形式」,而真 shell
+        // 里这条命令连语法都过不去(实测 rc=2、stdout 一个字都没有)。
+        if (close < 0) { unclosed ??= "${"; break; }
         // 同一个封闭判据,引号内外共用一份(见 parameterForm;两处各自枚举正是 F1 的形状)。
-        const form = parameterForm(inner.slice(i + 2, close < 0 ? inner.length : close));
-        if (form === "error") out.errorForm = true;
-        else if (form === "unknown") out.unknownForm = true;
+        const form = parameterForm(inner.slice(i + 2, close));
+        if (form === "error") marks.errorForm = true;
+        else if (form === "unknown") marks.unknownForm = true;
         break;
       }
-      case "value": out.expanded = true; break;
-      case "unknown": out.unknownForm = true; break;
+      case "value": marks.expanded = true; break;
+      case "unknown": marks.unknownForm = true; break;
       default: break; // 字面的美元号
     }
   }
-  return out;
+  return { marks, unclosed };
 }
 
 /**
@@ -225,16 +238,41 @@ export type Sep = ";" | "&" | "&&" | "|" | "||" | "(" | ")" | "{" | "}" | "eof";
 /** 一条简单命令 + 收尾它的那个符号。token 可以是空的（`(`、`;;`、注释行留下的空段）。 */
 export type Segment = { tokens: Token[]; sep: Sep };
 
+/** 词法扫描的结果:切好的那些段,**外加「有没有哪个结构没收口」**。 */
+export type Lexed = {
+  segments: Segment[];
+  /**
+   * 有一个结构**没收口**就是它的名字（`单引号`/`双引号`/`` 反引号 ``/`$(`/`$((`/`${`），
+   * 全都收口了就是 `null`。
+   *
+   * 为什么这件事必须跟段一起交出去（本轮审查 F3）:没收口 ⇒ 这串字符在 shell 那边**连语法
+   * 都过不去**,一条都不会执行。实测（`/bin/sh -lc`,七种写法全是 rc=2、stdout 一个字都没有）:
+   *   · `echo A; : "${X"` / `: '${X` / `` : `printf x `` / `: $(printf x` / `: $((1+1` / `: ${X`;
+   *   · `echo A; tail -F /dev/null; : "${Y"` —— **没收口在后面那一段,前面那个 tail 也一次都没跑**。
+   * 所以它不能只落成「那个词里有个读不懂的东西」(`unknownForm`):那是**一个词**的性质,而这里
+   * 要的是整条命令的 —— 上一版正是把 `"${X"` 的残段喂给 `parameterForm`,`X` 像个合法参数名,
+   * 于是「没收口」凭空变成「证明过的形式」,一条跑都跑不起来的命令被硬拦（实测接口 409）。
+   *
+   * 调用方的处置只有一种:**整条放行**。跟 `provableBlocker` 里「组括号没配上对就放行」是同一
+   * 条口径（那一档实测同样 rc=2），也跟文件尾那段代价不对称一致。
+   */
+  unclosed: string | null;
+};
+
 /**
- * 把命令切成**简单命令 + 它的收尾符号**。
+ * 把命令切成**简单命令 + 它的收尾符号**，并报出**有没有哪个结构没收口**。
  *
  * 只认结构，不认意图：引号里的内容合成一个 token 并打上 `quoted`（**永远不会被当成命令词、
  * 也永远不会被当成关键字**），`$( )` 与反引号整段跳过（里面是另一层执行，这一层读不懂就不猜）。
  *
  * **空段也留着**（`tokens` 为空）:它身上那个符号还有用 —— `(cmd) && tail -F x` 里的 `&&`
  * 正好落在 `(` 留下的那个空段上,丢掉它就等于把「要看前一条退出码」这件事丢掉。
+ *
+ * 返回的是一个**对象**而不是光一串段:「没收口」这件事只有扫到底的人知道,而漏掉它的代价是
+ * 把一条压根跑不起来的命令硬拦掉（见 `Lexed.unclosed`）—— 所以让类型逼着每个调用方接住它,
+ * 别做成一个「想起来才去问一句」的旁路函数。
  */
-export function segments(command: string): Segment[] {
+export function lex(command: string): Lexed {
   const out: Segment[] = [];
   let cur: Token[] = [];
   let text = "";
@@ -258,6 +296,8 @@ export function segments(command: string): Segment[] {
     cur = [];
   };
   let i = 0;
+  // 没收口的那个结构（第一个就够:整条命令已经是语法错误了,再往后数第二个没有意义）。
+  let unclosed: string | null = null;
   while (i < command.length) {
     const c = command[i]!;
     if (c === "'" || c === '"') {
@@ -266,6 +306,7 @@ export function segments(command: string): Segment[] {
       // `bare` 照它的长度补 `\0` —— 两者等长这个不变量不能破（见 `Token.bare`）。
       const q = c;
       const close = quoteEnd(command, i);
+      if (close < 0) unclosed ??= q === "'" ? "单引号" : "双引号";
       const inner = close < 0 ? command.slice(i + 1) : command.slice(i + 1, close);
       text += inner;
       bare += "\0".repeat(inner.length);
@@ -274,7 +315,11 @@ export function segments(command: string): Segment[] {
       // **双引号里的展开是真的会执行的**(`"$(printf x)"`)，单引号里的是字面量。引号里的内容
       // 原样进 `text`,所以这一支只能扫文本把标记补上 —— 不补的话上面那层就只剩「正则扫 text」
       // 一条路,而那条路对不带引号的那一半天生无效（见 `Token.expanded`）。
-      if (q === '"') marks = { ...marks, ...expansionsInText(inner) };
+      if (q === '"') {
+        const scan = expansionsInText(inner);
+        marks = { ...marks, ...scan.marks };
+        unclosed ??= scan.unclosed;
+      }
       i = close < 0 ? command.length : close + 1;
       continue;
     }
@@ -294,6 +339,7 @@ export function segments(command: string): Segment[] {
         else if (command[j] === ")") depth -= 1;
         j += 1;
       }
+      if (depth > 0) unclosed ??= command[i + 2] === "(" ? "$((" : "$(";
       // 占位成一个「不认识的词」:它是个参数，但也绝不该让后面那个词变成命令词。**抹掉之前**把
       // 「这里有个什么」记在词上（见 `Token.expanded`）。`$((` 是算术,不是命令替换:它里面没有
       // 另一层执行,但算术自己就能让 shell 当场出错走人。
@@ -321,23 +367,31 @@ export function segments(command: string): Segment[] {
       text += "?";
       bare += "?";
       marks.expanded = true;
-      const form = parameterForm(inner);
-      if (form === "error") marks.errorForm = true;
-      // **证明不了就是未知**:不带引号这一侧整段马上被抹成占位符,这里不记就永远没人知道
-      // 「这个参数形式没人证明过」(见 parameterForm 的三条实测)。
-      else if (form === "unknown") marks.unknownForm = true;
+      // **没收口就不许再问它是哪一种**(本轮审查 F3):残段喂进 `parameterForm` 会被认成
+      // 「证明过的形式」,而真 shell 里这条命令连语法都过不去(见 `Lexed.unclosed`)。
+      if (depth !== 0) unclosed ??= "${";
+      else {
+        const form = parameterForm(inner);
+        if (form === "error") marks.errorForm = true;
+        // **证明不了就是未知**:不带引号这一侧整段马上被抹成占位符,这里不记就永远没人知道
+        // 「这个参数形式没人证明过」(见 parameterForm 的三条实测)。
+        else if (form === "unknown") marks.unknownForm = true;
+      }
       // **内层那些展开也要带上来**（第 2 轮审查第 2 条）:整段马上要被抹成一个 `?`,里面套着的
       // 算术/命令替换/error form 再不记就永远找不回来了 —— `: ${X:-$((1/0))}` 真 shell 里是
       // 除零退 127,而判据只看见「一个说不清的展开」,于是把一条自己会结束的命令硬拦掉。
       // 带引号那一侧一直是对的（引号里的内容原样留在 text 里,被同一个扫描看了个遍）,这正是
       // 为什么同一件事只有不带引号的那半边出问题。
-      marks = { ...marks, ...expansionsInText(inner) };
+      const nested = expansionsInText(inner);
+      marks = { ...marks, ...nested.marks };
+      unclosed ??= nested.unclosed;
       started = true;
       i = j;
       continue;
     }
     if (c === "`") {
       const close = command.indexOf("`", i + 1);
+      if (close < 0) unclosed ??= "反引号";
       text += "?";
       bare += "?";
       marks.expanded = true;
@@ -390,7 +444,7 @@ export function segments(command: string): Segment[] {
     i += 1;
   }
   endSegment("eof");
-  return out;
+  return { segments: out, unclosed };
 }
 
 /**

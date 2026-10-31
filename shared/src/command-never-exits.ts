@@ -212,7 +212,7 @@
 
 // **词法层在隔壁**(command-lex.ts,单文件 700 行的约定):分词、分段、引号骨架、抹注释。
 // 这个文件只收它的结果 —— 「每个字符在不在引号外」这件事由那边负责记下来(见 `Token.bare`)。
-import { blankComments, blankQuoted, segments, type Segment, type Token } from "./command-lex.ts";
+import { blankComments, blankQuoted, lex, type Segment, type Token } from "./command-lex.ts";
 import { followerOf, readsToEof } from "./command-followers.ts";
 import { perturbed } from "./command-perturbation.ts";
 import { commandOf } from "./command-wrappers.ts";
@@ -477,7 +477,14 @@ function judge(command: string): Found | null {
   // 前提核不核得了这一问**不在这一层**:它压根不该由「哪个路径 + 谁动过它」这种拼写分析来
   // 答（第 2 轮审查证伪,见文件头 ⑩）。工具目录那一层直接交出「这件事没人核得了」那句话,
   // 这里只负责把它一路带出去。
-  const segs = segments(command);
+  const { segments: segs, unclosed } = lex(command);
+  // **有结构没收口 ⇒ 整条命令在 shell 那边连语法都过不去,一条都不会执行**(本轮审查 F3)。
+  // 实测七种写法(`"${X`、`'${X`、反引号、`$(`、`$((`、裸 `${`、`"${X%ok"`)全是 rc=2、stdout
+  // 一个字都没有;**没收口在后面那一段也一样** —— `echo A; tail -F /dev/null; : "${Y"` 里那个
+  // tail 一次都没跑。所以这件事必须按**整条**处置:只给那个词打个未知标记不够,前面那段
+  // `tail -F` 自己就证明得出「会跑」,硬拦照旧成立(这正是上一版的实测误拦形状,接口 409)。
+  // 跟下面 `provableBlocker` 里「组括号没配上对就放行」同一条口径,那一档实测同样 rc=2。
+  if (unclosed) return null;
   const found = provableBlocker(scanOf(segs));
   // **扰动这一问排在最后,而且只改硬拦那一档**（见文件头 ⑪）。压根没判定 ⇒ 没什么可提示的;
   // 已经降过级 ⇒ 它自己那句话更具体（说的是哪个文件、哪个下游）,不拿这句通用的盖掉它。
