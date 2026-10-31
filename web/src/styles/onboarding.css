@@ -1,0 +1,264 @@
+/* 首启向导的后半段(供应商 / 执行器 / 项目)。
+   外壳沿用 auth.css 的那条路:**全屏单卡片**,不复用工作台布局 —— 那套的前提是
+   「已经选好项目了」,而这一屏存在的理由正是还没有。
+
+   配色只用 global.css `:root` 里真实存在的令牌(--chrome/--panel/--raised/--ink/
+   --muted/--line/--accent),淡底一律 color-mix(in srgb, …) —— 理由见 auth.css 顶部
+   (--panel/--line 是零彩度的,在 lch 里混色会把一个没有意义的色相插值进来)。
+
+   卡片比登录那张宽(760 而不是 560):里面摊着的是设置页那几个真组件(供应商表单的
+   两列栅格、本地 CLI 检测的网格),挤在 560 里会把那两列压成一列。 */
+
+.onboarding-shell {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  overflow: auto;
+  background: var(--chrome);
+}
+
+.onboarding-card {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 26px 28px 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+/* 导轨同时是「回上一步」的入口 —— 所以每一格都是按钮,而不是一排装饰圆点。
+   这也是卡片里唯一的导航,底下不再另给一颗「上一步」。 */
+.onboarding-rail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.onboarding-rail-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.onboarding-rail-step i {
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raised);
+  font-size: 11px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.onboarding-rail-step:hover:not(.is-on) {
+  color: var(--ink);
+}
+
+.onboarding-rail-step.is-on {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  color: var(--ink);
+  font-weight: 560;
+}
+
+.onboarding-rail-step.is-done i {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  color: var(--accent);
+}
+
+.onboarding-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.onboarding-head h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 650;
+}
+
+.onboarding-head p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.onboarding-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.onboarding-muted {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* 三步共用的那张「已经有什么」清单:供应商、执行器、项目各自一行。
+   列宽靠内容自己撑(头像 / 文案 / 右侧状态),所以不画表头 —— 一行里读得出来的东西
+   不需要在上面再标一遍。 */
+.onboarding-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.onboarding-rows > li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+
+.onboarding-rows > li > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.onboarding-rows b {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.onboarding-rows small {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.onboarding-default {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 11.5px;
+  color: var(--accent);
+}
+
+.onboarding-provider-pick {
+  flex: none;
+  width: 168px;
+}
+
+/* 项目那一步整行可点(选中它),所以行本身就是按钮,不再另画单选框。 */
+.onboarding-rows--pick > li {
+  padding: 0;
+}
+
+.onboarding-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.onboarding-pick > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.onboarding-pick b {
+  font-size: 13px;
+}
+
+.onboarding-pick small {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.onboarding-pick:hover {
+  background: var(--raised);
+}
+
+.onboarding-pick.is-on {
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.onboarding-add {
+  align-self: flex-start;
+}
+
+.onboarding-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+/* 供应商表单与本地 CLI 检测结果是设置页那两份原件(样式在 providers-settings.css /
+   executors-settings.css,已由 global.css 统一引入)。它们在设置页里躺在
+   `.settings-card` 上,那张卡自带内边距和底色;这里直接躺在向导卡上,所以把那两层
+   补出来,否则表单会贴着卡片边缘、检测网格的分隔线会断在空气里。 */
+.onboarding-body .provider-form,
+.onboarding-body .agent-detection-results {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+}
+
+@media (max-width: 640px) {
+  .onboarding-card {
+    padding: 20px 16px 16px;
+  }
+
+  .onboarding-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .onboarding-provider-pick {
+    width: 128px;
+  }
+}

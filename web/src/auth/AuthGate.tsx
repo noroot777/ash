@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthState } from "@ash/shared";
 import { authApi } from "../lib/authApi.ts";
 import { ApiError } from "../lib/apiClient.ts";
+import { FirstRunWizard } from "../onboarding/FirstRunWizard.tsx";
 import { AuthShell } from "./AuthShell.tsx";
 import { ClaimPage } from "./ClaimPage.tsx";
 import { LoginPage } from "./LoginPage.tsx";
@@ -86,6 +87,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return <LoginPage pendingJoin={route?.kind === "join" ? route.token : null} onDone={refresh} />;
   }
   if (route?.kind === "join") return <ProjectJoinPage token={route.token} onDone={leaveRoute} />;
+
+  // 首启向导的后半段(供应商 / 执行器 / 项目)。它在 Provider **里面** —— 那三步都要
+  // 读「我是谁」(多人模式下新建项目的路径前缀锁死在自己的目录里),而读 context 的前提
+  // 是身份已经确认。前半段(SetupWizard)相反:那时还没确认,所以它在外面。
+  if (state.needsOnboarding) {
+    return (
+      <AuthContext.Provider value={{ state, refresh }}>
+        <FirstRunWizard onDone={refresh} />
+      </AuthContext.Provider>
+    );
+  }
 
   return <AuthContext.Provider value={{ state, refresh }}>{children}</AuthContext.Provider>;
 }

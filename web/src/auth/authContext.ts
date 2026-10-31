@@ -9,7 +9,7 @@ export interface AuthContextValue {
 // 自用模式的兜底值:`mode: "single"`、没有用户。这样每个消费点都不必写
 // `?.` —— 「有没有多人这回事」用 `mode` 判断,而不是用「context 在不在」。
 const SINGLE: AuthContextValue = {
-  state: { mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null },
+  state: { mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false },
   refresh: async () => {},
 };
 

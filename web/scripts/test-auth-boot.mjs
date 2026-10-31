@@ -45,7 +45,7 @@ assert.doesNotMatch(probeAttrs, /type\s*=/, "预热脚本不能带 type —— m
 assert.doesNotMatch(probeAttrs, /\b(?:defer|async)\b/, "预热脚本不能 defer/async,那正好抵消它存在的理由");
 assert.match(probeSource, /window\.__ashAuthProbe/, "authProbe.ts 接的全局名要和 index.html 写的那个一致");
 
-const AUTH_STATE = { mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null };
+const AUTH_STATE = { mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false };
 
 const server = await createServer({
   root,

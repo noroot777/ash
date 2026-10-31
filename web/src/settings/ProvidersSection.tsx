@@ -175,7 +175,12 @@ function ProviderModelField({
   );
 }
 
-function ProviderForm({
+/**
+ * 供应商表单本体。导出是给首启向导用的(`src/onboarding/ProviderStep.tsx`):
+ * 「添加供应商」这件事全应用只该有一份表单 —— 协议/BaseURL/Key/模型目录/1M 声明
+ * 这几项的联动规则抄第二份的话,两边迟早说出不一样的话。
+ */
+export function ProviderForm({
   provider,
   onCancel,
   onSaved,
