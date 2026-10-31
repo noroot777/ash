@@ -20,9 +20,10 @@ import { basename, dirname, join } from "node:path";
 import { BACKUP_SUFFIX } from "../src/auth/config-publish.js";
 import { fileAshMcpVerdict } from "../src/ash-mcp-file.js";
 import { howToCheck } from "../src/ash-mcp-reachability.js";
+import { registerAshMcp } from "../src/mcp-registry/register.js";
 import {
-  ashMcpHostFile, ashMcpHostSources, effectiveConfigState, registerAshMcp, resolveAshMcp,
-} from "../src/mcp-registry/register.js";
+  ashMcpHostFile, ashMcpHostSources, effectiveConfigState, resolveAshMcp,
+} from "../src/mcp-registry/sources.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir } from "../src/mcp-registry/catalog.js";
 
 const OC_ENTRY = {
@@ -34,6 +35,13 @@ const EMPTY = ocBody({});
 const WITH_ASH = ocBody({ ash: OC_ENTRY });
 const ASH_OFF = ocBody({ ash: { enabled: false } });
 const HARNESS_ON = ocBody({ harness: OC_ENTRY });
+
+/** 这家 CLI 「怎么读」那一份(跟产品代码同一个来源:站点的合并语义 + 机制上的启停策略)。 */
+const readingOf = (
+  site: { sourcesMerge?: boolean },
+  shape: Parameters<typeof effectiveConfigState>[1]["shape"],
+  switches?: Parameters<typeof effectiveConfigState>[1]["switches"],
+) => ({ shape, merges: site.sourcesMerge === true, ...(switches ? { switches } : {}) });
 
 const shapeOf = (agentType: string) => {
   const mechanism = ASH_MCP_TABLE[agentType as keyof typeof ASH_MCP_TABLE];
@@ -72,7 +80,7 @@ export async function checkSourceModel(
     const srcA = ashMcpHostSources("opencode", envA, a.host);
     assert.deepEqual(srcA.map((s) => s.file), [aJson, aJsonc],
       "默认目录里存在的几份都要进来源集合(写入目标排最后)");
-    assert.equal(effectiveConfigState(srcA, shape, site.sourcesMerge === true).state, "present",
+    assert.equal(effectiveConfigState(srcA, readingOf(site, shape)).state, "present",
       "另一份里有生效的 ash ⇒ 最终就是 present");
     assert.equal(fileAshMcpVerdict("opencode", envA, [a.host]).state, "present", "判定也得是 present");
     const beforeA = [readFileSync(aJson, "utf8"), readFileSync(aJsonc, "utf8")];
@@ -89,7 +97,7 @@ export async function checkSourceModel(
     writeFileSync(bCustom, ASH_OFF, "utf8");
     const envB = ocEnv(b.host, { OPENCODE_CONFIG: bCustom });
     const srcB = ashMcpHostSources("opencode", envB, b.host);
-    assert.equal(effectiveConfigState(srcB, shape, site.sourcesMerge === true).state, "disabled",
+    assert.equal(effectiveConfigState(srcB, readingOf(site, shape)).state, "disabled",
       "高优先级那份关掉了 ⇒ 最终是 disabled");
     const verdictB = fileAshMcpVerdict("opencode", envB, [b.host]);
     assert.equal(verdictB.state, "disabled", `判定也得是 disabled:${JSON.stringify(verdictB)}`);
@@ -106,7 +114,7 @@ export async function checkSourceModel(
     writeFileSync(join(altDir, "opencode.json"), ASH_OFF, "utf8");
     const envC = ocEnv(c.host, { OPENCODE_CONFIG_DIR: altDir });
     assert.equal(
-      effectiveConfigState(ashMcpHostSources("opencode", envC, c.host), shape, site.sourcesMerge === true).state,
+      effectiveConfigState(ashMcpHostSources("opencode", envC, c.host), readingOf(site, shape)).state,
       "disabled", "再加的那个目录优先级更高 ⇒ 它关掉了就是关掉了");
 
     // ⒟ `OPENCODE_CONFIG_CONTENT` 优先级最高,而且**没有文件可写**:只有它有 ash 时,
@@ -132,7 +140,7 @@ export async function checkSourceModel(
     writeFileSync(kiloCustom, EMPTY, "utf8");
     const envE = { XDG_CONFIG_HOME: join(e.host, ".config"), KILO_CONFIG: kiloCustom } as NodeJS.ProcessEnv;
     const stateE = effectiveConfigState(
-      ashMcpHostSources("kilo", envE, e.host), shapeOf("kilo").shape, shapeOf("kilo").site.sourcesMerge === true);
+      ashMcpHostSources("kilo", envE, e.host), readingOf(shapeOf("kilo").site, shapeOf("kilo").shape));
     assert.equal(stateE.state, "unknown", "没实测过合并语义、几份还不一致 ⇒ 看不准");
     assert.match(stateE.detail, /没实测/, `要说清是没实测过:${stateE.detail}`);
     const rE = await registerAshMcp({ agentType: "kilo", dir: ashMcpConfigDir("kilo", envE, e.host)!, hostHome: e.host, env: envE });
@@ -156,7 +164,7 @@ export async function checkSourceModel(
     writeFileSync(aCustom, ASH_OFF, "utf8");
     const envA = ocEnv(a.host, { OPENCODE_CONFIG: aCustom });
     const srcA = ashMcpHostSources("opencode", envA, a.host);
-    const stA = effectiveConfigState(srcA, shape, merges);
+    const stA = effectiveConfigState(srcA, { shape, merges });
     assert.equal(stA.state, "present", `两个名字各算一次,harness 那条是开着的:${stA.detail}`);
     assert.equal(stA.serverName, "harness", "说清生效的是哪一条(用户要去看的就是它)");
     assert.equal(fileAshMcpVerdict("opencode", envA, [a.host]).state, "present", "派审门禁也得放行");
@@ -199,7 +207,7 @@ export async function checkSourceModel(
     });
     seedGlobal(c.host, hintBody);
     const envC = ocEnv(c.host);
-    const pick = resolveAshMcp(ashMcpHostSources("opencode", envC, c.host), shape, merges);
+    const pick = resolveAshMcp(ashMcpHostSources("opencode", envC, c.host), { shape, merges });
     assert.equal(pick.state, "present");
     assert.deepEqual(pick.fact?.launch?.args, ["/live.js"], "解析层交出来的就是开着那条的启动方式");
     const verdictC = fileAshMcpVerdict("opencode", envC, [c.host]);
@@ -217,14 +225,14 @@ export async function checkSourceModel(
     const brokenHigh = join(d.dir, "broken.json");
     writeFileSync(brokenHigh, '{"mcp": {', "utf8");
     const stD = effectiveConfigState(
-      ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: brokenHigh }), d.host), shape, merges);
+      ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: brokenHigh }), d.host), { shape, merges });
     assert.equal(stD.state, "unknown", "更高优先级那份读不准 ⇒ 看不准");
     const e = bench("f3-blind-low");
     const lowBroken = seedGlobal(e.host, '{"mcp": {');
     const highOk = join(e.dir, "ok.json");
     writeFileSync(highOk, WITH_ASH, "utf8");
     const envE = ocEnv(e.host, { OPENCODE_CONFIG: highOk });
-    const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), shape, merges);
+    const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), { shape, merges });
     assert.equal(stE.state, "unknown", `更低那份读不准也得说看不准:${stE.detail}`);
     assert.match(stE.detail, /整份配置一起拒载/, `要说清为什么:${stE.detail}`);
     const rE2 = await registerAshMcp({
@@ -278,7 +286,7 @@ export async function checkSourceModel(
     assert.deepEqual(srcA.map((s) => s.file), [aGlobal, aFile, aAlt],
       "升序:默认目录 < 变量指的那个文件 < 变量指的那个目录");
     assert.equal(new Set(srcA.map((s) => s.level)).size, srcA.length, "实测过加载序 ⇒ 每份各占一级");
-    const stA = effectiveConfigState(srcA, shape, merges);
+    const stA = effectiveConfigState(srcA, { shape, merges });
     assert.equal(stA.state, "present", `合起来是开着的:${stA.detail}`);
     assert.deepEqual(stA.fact?.launch?.args, ["/FILE.js"], "启动方式是低那份继承上来的");
     assert.equal(fileAshMcpVerdict("opencode", envA, [a.host]).state, "present", "派审门禁也得放行");
@@ -316,7 +324,7 @@ export async function checkSourceModel(
     seedGlobal(c.host, ocBody({ ash: full("JSON") }));
     seedGlobal(c.host, ocBody({ ash: full("JSONC") }), "opencode.jsonc");
     const envC = ocEnv(c.host);
-    const stC = effectiveConfigState(ashMcpHostSources("opencode", envC, c.host), shape, merges);
+    const stC = effectiveConfigState(ashMcpHostSources("opencode", envC, c.host), { shape, merges });
     assert.equal(stC.state, "present", stC.detail);
     assert.deepEqual(stC.fact?.launch?.args, ["/JSONC.js"], "同目录里 .jsonc 排在 .json 之后");
     assert.match(fileAshMcpVerdict("opencode", envC, [c.host]).hint ?? "", /JSONC\.js/, "提示跟判定同源");
@@ -329,7 +337,7 @@ export async function checkSourceModel(
       ash: { type: "local", command: ["node", "/HIGH.js"], environment: { WHO: "HIGH" } },
     }), "utf8");
     const stD = effectiveConfigState(
-      ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: dFile }), d.host), shape, merges);
+      ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: dFile }), d.host), { shape, merges });
     assert.equal(stD.state, "present", stD.detail);
     assert.deepEqual(stD.fact?.launch?.args, ["/HIGH.js"], "数组整条换掉");
     assert.deepEqual(stD.fact?.raw?.environment, { WHO: "HIGH", KEEP: "1" },
@@ -344,7 +352,7 @@ export async function checkSourceModel(
     const eFile = join(e.dir, "my.json");
     writeFileSync(eFile, EMPTY, "utf8");
     const envE = ocEnv(e.host, { OPENCODE_CONFIG: eFile });
-    const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), shape, merges);
+    const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), { shape, merges });
     assert.equal(stE.state, "unknown", `只有一个开关键 ⇒ 看不准:${stE.detail}`);
     assert.match(stE.detail, /没写启动方式/, stE.detail);
     const rE = await registerAshMcp({
@@ -358,7 +366,7 @@ export async function checkSourceModel(
     const fFile = join(f.dir, "my.json");
     writeFileSync(fFile, EMPTY, "utf8");
     const stF = effectiveConfigState(
-      ashMcpHostSources("opencode", ocEnv(f.host, { OPENCODE_CONFIG: fFile }), f.host), shape, merges);
+      ashMcpHostSources("opencode", ocEnv(f.host, { OPENCODE_CONFIG: fFile }), f.host), { shape, merges });
     assert.equal(stF.state, "unknown", `既没 type 也没 enabled ⇒ 看不准:${stF.detail}`);
     assert.match(stF.detail, /非法/, stF.detail);
 
@@ -369,7 +377,7 @@ export async function checkSourceModel(
     const gFile = join(g.dir, "my.json");
     writeFileSync(gFile, EMPTY, "utf8");
     const stG = effectiveConfigState(
-      ashMcpHostSources("opencode", ocEnv(g.host, { OPENCODE_CONFIG: gFile }), g.host), shape, merges);
+      ashMcpHostSources("opencode", ocEnv(g.host, { OPENCODE_CONFIG: gFile }), g.host), { shape, merges });
     assert.equal(stG.state, "unknown", `不许当成关着:${stG.detail}`);
     assert.match(stG.detail, /disabled: true/, stG.detail);
     group("几份合起来那一条:层级实测序、跨来源字段继承、同目录先后、只写开关、disabled 不认");
@@ -394,7 +402,7 @@ export async function checkSourceModel(
     const aFile = join(a.dir, "my.json");
     writeFileSync(aFile, ocBody({ ash: { type: "local", command: ["node", "/live.js"] } }), "utf8");
     const envA = ocEnv(a.host, { OPENCODE_CONFIG: aFile });
-    const stA = effectiveConfigState(ashMcpHostSources("opencode", envA, a.host), shape, merges);
+    const stA = effectiveConfigState(ashMcpHostSources("opencode", envA, a.host), { shape, merges });
     assert.equal(stA.state, "present", stA.detail);
     assert.deepEqual(stA.fact?.raw, { enabled: true, type: "local", command: ["node", "/live.js"] },
       "合出来的那条必须跟真 CLI 一个字段不差 —— 开关那一支只贡献 enabled");
@@ -414,7 +422,7 @@ export async function checkSourceModel(
     const bFile = join(b.dir, "my.json");
     writeFileSync(bFile, ocBody({ ash: { type: "local", command: ["node", "/live.js"] } }), "utf8");
     const envB = ocEnv(b.host, { OPENCODE_CONFIG: bFile });
-    const stB = effectiveConfigState(ashMcpHostSources("opencode", envB, b.host), shape, merges);
+    const stB = effectiveConfigState(ashMcpHostSources("opencode", envB, b.host), { shape, merges });
     assert.equal(stB.state, "disabled", `开关继承上来 ⇒ 关着:${stB.detail}`);
     const rB = await registerAshMcp({
       agentType: "opencode", dir: ashMcpConfigDir("opencode", envB, b.host)!, hostHome: b.host, env: envB,
@@ -432,7 +440,7 @@ export async function checkSourceModel(
     const srcC = ashMcpHostSources("opencode", envC, c.host);
     assert.deepEqual(srcC.map((s) => s.file), [cJson, cJsonc, cJson],
       "同一个路径在两个加载阶段各算一次(文件身份相同 ≠ 加载阶段相同)");
-    const stC = effectiveConfigState(srcC, shape, merges);
+    const stC = effectiveConfigState(srcC, { shape, merges });
     assert.equal(stC.state, "present", `再读那一遍把开关翻回来了:${stC.detail}`);
     assert.deepEqual(stC.fact?.launch?.args, ["/json.js"], "生效的是再读那一份里的命令");
     assert.equal(fileAshMcpVerdict("opencode", envC, [c.host]).state, "present", "派审门禁要放行");
@@ -442,7 +450,7 @@ export async function checkSourceModel(
     seedGlobal(d.host, ocBody({ ash: { ...OC_ENTRY, command: ["node", "/json.js"] } }));
     const dJsonc = seedGlobal(d.host, ocBody({ ash: { enabled: false } }), "opencode.jsonc");
     const stD = effectiveConfigState(
-      ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: dJsonc }), d.host), shape, merges);
+      ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: dJsonc }), d.host), { shape, merges });
     assert.equal(stD.state, "disabled", `指回 .jsonc ⇒ 它是最后一次加载:${stD.detail}`);
 
     // ⒞ **任何一份读不通就整份拒载**:坏文件放在哪一层都一样,甚至那份里压根没提 ash
@@ -468,7 +476,7 @@ export async function checkSourceModel(
         writeFileSync(extra, WITH_ASH, "utf8");
       }
       const envE = ocEnv(e.host, { OPENCODE_CONFIG: extra });
-      const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), shape, merges);
+      const stE = effectiveConfigState(ashMcpHostSources("opencode", envE, e.host), { shape, merges });
       assert.equal(stE.state, "unknown", `${where}:有一份读不准 ⇒ 看不准(得到 ${stE.state})`);
       assert.equal(fileAshMcpVerdict("opencode", envE, [e.host]).state, "unknown",
         `${where}:预检也只能说看不准`);

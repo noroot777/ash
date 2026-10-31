@@ -7,7 +7,7 @@
 //   ① 已有登记一律不覆盖(含历史名 harness),第三方条目一个字节都不动;
 //   ② 关着的不替他打开、有注释的不改写、读不动的不猜;
 //   ③ 就地写:软链还是软链,inode 不换;
-//   ④ 两份实现不许漂 —— TS 那张表和 `scripts/mcp-hosts.mjs`(setup 在裸 Node 上跑,导不进 TS)
+//   ④ 两份实现不许漂 —— TS 那张表和 `scripts/mcp-host-sources.mjs`(setup 在裸 Node 上跑,导不进 TS)
 //      逐项比对。
 //
 // 跑:`npm -w server run test:ash-mcp-registry`
@@ -22,11 +22,11 @@ import { ensureAshMcp } from "../src/auth/user-cli-mcp.js";
 import { cliSpec } from "../src/executors/catalog/index.js";
 import { fileAshMcpVerdict } from "../src/ash-mcp-file.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir, canRegisterAshMcp } from "../src/mcp-registry/catalog.js";
-import {
-  ashMcpConfigFile, ashMcpHostFile, ashMcpStateIn, ashMcpUnsupported, registerAshMcp,
-} from "../src/mcp-registry/register.js";
+import { ashMcpUnsupported, registerAshMcp } from "../src/mcp-registry/register.js";
+import { ashMcpConfigFile, ashMcpHostFile, ashMcpStateIn } from "../src/mcp-registry/sources.js";
 import { REPO_DIR } from "../src/paths.js";
 import { checkSourceModel } from "./mcp-sources-cases.js";
+import { checkLoadAndSwitches } from "./mcp-load-switch-cases.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-mcp-registry-"));
 let done = 0;
@@ -489,7 +489,10 @@ try {
     if (toml.kind === "file") {
       // TOML 的两种关法,`read` 两种都看,launch 也必须 —— 根级那种是上一版漏掉的。
       const rootOff = 'disabled_mcp_servers = ["ash"]\n\n[mcp_servers.ash]\ncommand = "node"\nargs = ["/off.js"]\n';
-      assert.equal(toml.shape.launch?.(rootOff) ?? null, null, "根级关掉的那条不该拿去当提示");
+      assert.equal(toml.shape.launch?.(rootOff, toml.switches) ?? null, null,
+        "根级关掉的那条不该拿去当提示(根级那个键只在声明了它的那家才算 —— 本轮审查 F2)");
+      assert.deepEqual(toml.shape.launch?.(rootOff)?.args, ["/off.js"],
+        "同一份原文、不带那家的启停声明 ⇒ 格式族只读结构、不解释那个键");
       const live = toml.shape.launch?.('[mcp_servers.ash]\ncommand = "node"\nargs = ["/live.js"]\n');
       assert.deepEqual(live?.args, ["/live.js"], "开着的照常给提示");
     }
@@ -585,6 +588,10 @@ try {
 
   // ── ⑯⑰ 来源模型 + 服务端那条路的备份(在 `mcp-sources-cases.ts`)──────────────
   await checkSourceModel(bench, group, existsSync(ENTRY));
+
+  // ── 逐家来源解析(加载位置、相对路径、absent 的可证性)+ 逐家启停策略
+  //    (在 `mcp-load-switch-cases.ts`;本轮审查 F1 / F2)────────────────────────
+  await checkLoadAndSwitches(bench, group);
 
   // ── ⑮ README 那张给人读的矩阵不许和代码漂 ────────────────────────────────
   {

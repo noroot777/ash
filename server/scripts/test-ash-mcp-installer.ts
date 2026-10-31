@@ -1,4 +1,5 @@
-// 安装器那一侧的回归:`scripts/mcp-hosts.mjs` + `scripts/config-publish.mjs`(裸 Node)。
+// 安装器那一侧的回归:`scripts/mcp-hosts.mjs` + `scripts/mcp-host-sources.mjs`
+// + `scripts/config-publish.mjs`(裸 Node)。
 //
 // 为什么跟 `test-ash-mcp-registry.ts` 分开:那边测的是 server 里那条通用补接链(TS),
 // 这边测的是 **setup 在裸 Node 上跑的那一份**。同一条规矩在这个仓库里有两份实现(setup
@@ -19,7 +20,7 @@ import { AGENT_TYPES, type AgentType } from "@ash/shared";
 import { cliSpec } from "../src/executors/catalog/index.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir, canRegisterAshMcp } from "../src/mcp-registry/catalog.js";
 import * as edit from "../src/mcp-registry/json-edit.js";
-import { ashMcpConfigFile } from "../src/mcp-registry/register.js";
+import { ashMcpConfigFile } from "../src/mcp-registry/sources.js";
 import { REPO_DIR } from "../src/paths.js";
 import { checkMultiSource } from "./mcp-multi-source-cases.js";
 import { checkPublishCases, type BarePublish } from "./mcp-publish-cases.js";
@@ -27,7 +28,9 @@ import { checkPublishCases, type BarePublish } from "./mcp-publish-cases.js";
 type HostSite = {
   bins: string[]; dirEnv: string | null; dirEnvIsFile?: boolean;
   altDirEnv?: string; contentEnv?: string; sourcesMerge?: boolean;
-  relative: string[]; alternates?: string[][]; opaque?: string[][];
+  relative: string[]; alternates?: string[][]; load?: string[][]; opaque?: string[][];
+  extraDirs?: ((env: NodeJS.ProcessEnv, home: string) => string)[];
+  switches?: { off?: string[]; only?: string[] };
   shape: string; type?: string; enabled?: boolean;
   dir: (env: NodeJS.ProcessEnv, home: string) => string;
 };
@@ -95,13 +98,26 @@ try {
       assert.equal(site.contentEnv, mechanism.site.contentEnv, `${type}:整段配置那个变量要对上`);
       assert.equal(!!site.sourcesMerge, !!mechanism.site.sourcesMerge, `${type}:合并语义实测没实测要一致`);
       assert.deepEqual(site.relative, [...mechanism.site.relative], `${type}:文件位置要对上`);
-      for (const key of ["alternates", "opaque"] as const) {
+      // `load` = 同目录的实测加载序,`alternates` = 没实测那一档 —— 两边都不许漂:
+      // 少一个文件名 = 少看一份配置,而「少看一份」正是本轮 F1 那三行的病根。
+      for (const key of ["alternates", "load", "opaque"] as const) {
         assert.deepEqual(
           (site[key] ?? []).map((a) => [...a]),
           (mechanism.site[key] ?? []).map((a) => [...a]),
           `${type}:${key} 要对上`,
         );
       }
+      // 启停策略(本轮审查 F2)和额外那几个固定路径目录(F1)也要逐项对上 —— 这两项各只在
+      // 一侧写对过一次就会出现「安装器替你打开了 CLI 明确挡住的那条」。
+      assert.deepEqual(site.switches ?? null, mechanism.switches ?? null, `${type}:启停策略声明要对上`);
+      assert.equal((site.extraDirs ?? []).length, (mechanism.site.extraDirs ?? []).length,
+        `${type}:额外配置目录的个数要对上`);
+      (site.extraDirs ?? []).forEach((dir, i) => {
+        for (const env of [{}, { XDG_CONFIG_HOME: "/xdg" }] as NodeJS.ProcessEnv[]) {
+          assert.equal(dir(env, "/home"), mechanism.site.extraDirs![i]!(env, "/home"),
+            `${type}:第 ${i + 1} 个额外配置目录要算出同一个路径`);
+        }
+      });
       // `type` 是**字面值**,不是开关:cursor 写 stdio、copilot 写 local,互相套用就错。
       assert.equal(site.type, mechanism.writeType, `${type}:type 的值要对上`);
       assert.equal(!!site.enabled, !!mechanism.writeEnabled, `${type}:要不要写 enabled 得一致`);

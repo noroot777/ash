@@ -261,4 +261,98 @@ export function checkMultiSource({ home, install, hosts, group }: MultiSourceDep
     }
     group("会读好几份配置的那家:判的是几份合起来那一条(层级、逐份投影、阶段去重、读不通就看不准)");
   }
+
+  // ── 本轮审查 F1:来源集合漏掉的那三个入口(裸 Node 这侧只有「写不写」这一个出口)──
+  {
+    const full = (tag: string) => `${JSON.stringify({
+      mcp: {
+        ash: {
+          type: "local", command: ["node", `/${tag}.js`],
+          environment: { ASH_URL: "http://127.0.0.1:54321" }, enabled: true,
+        },
+      },
+    }, null, 2)}\n`;
+    const empty = '{\n  "$schema": "x"\n}\n';
+    const put = (file: string, body: string): string => {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, body, "utf8");
+      return file;
+    };
+
+    // ⒜ 默认目录里的 `config.json`(真 CLI 也读、优先级最低)。**审查那一行的复现**:上一版
+    //    压根没枚举这个名字,于是这里 `added:true`、新建一份 `opencode.json`,而它优先级更
+    //    高 —— 真 CLI 的生效 `ASH_URL` 当场从用户那条 `:54321` 换成了 ash 那条 `:4317`。
+    const h = home("load-config-json");
+    const low = put(join(h, ".config", "opencode", "config.json"), full("CONFIGJSON"));
+    const r = install("opencode", h);
+    assert.ok(!r.added, `config.json 里已经有生效的 ash ⇒ 不许再写一条顶掉它:${r.why ?? ""}`);
+    assert.equal(readFileSync(low, "utf8"), full("CONFIGJSON"), "那份一个字节都不许动");
+
+    // ⒝ `~/.opencode/`(另一层全局配置,压过默认目录):同理不写。
+    const h2 = home("load-dot-opencode");
+    put(join(h2, ".config", "opencode", "opencode.json"), empty);
+    const dot = put(join(h2, ".opencode", "opencode.json"), full("DOT"));
+    const r2 = install("opencode", h2);
+    assert.ok(!r2.added, `~/.opencode 那份里已经有 ash ⇒ 不写:${r2.why ?? ""}`);
+    assert.equal(readFileSync(dot, "utf8"), full("DOT"), "那份一个字节都不许动");
+
+    // ⒞ `OPENCODE_CONFIG` 给**相对路径**:它按 CLI 自己的工作目录解,安装器这边压根算不出
+    //    是哪一份 ⇒ **看不准就不写**(上一版当成文件名直接用、按自己的目录找不到就判没有,
+    //    于是又新写一条)。
+    const h3 = home("load-relative");
+    const g3 = put(join(h3, ".config", "opencode", "opencode.json"), empty);
+    const r3 = install("opencode", h3, { OPENCODE_CONFIG: "ws-config.json" });
+    assert.ok(!r3.added, "相对路径解不出 ⇒ 不写");
+    assert.match(r3.why ?? "", /看不准/, `要如实说看不准:${r3.why ?? ""}`);
+    assert.equal(readFileSync(g3, "utf8"), empty, "全局那份也不许动");
+    // 绝对路径照旧照常走(别把这条闸开得太大)。
+    const abs = put(join(h3, "abs.json"), empty);
+    const r4 = install("opencode", h3, { OPENCODE_CONFIG: abs });
+    assert.ok(r4.added, `绝对路径仍然照常补:${r4.why ?? ""}`);
+    assert.equal(r4.file, abs, "写的就是变量指的那一份");
+    group("来源集合补齐:config.json / ~/.opencode 里已有的不覆盖,相对路径看不准就不写");
+  }
+
+  // ── 本轮审查 F2:逐家启停策略(裸 Node 这侧)────────────────────────────────
+  {
+    const geminiBody = (extra: Record<string, unknown>) => `${JSON.stringify({
+      mcpServers: { other: { command: "node", args: ["/o.js"] } }, ...extra,
+    }, null, 2)}\n`;
+    for (const [tag, extra] of [
+      ["excluded 列着 ash", { mcp: { excluded: ["ash"] } }],
+      ["allowed 白名单里没有 ash", { mcp: { allowed: ["other"] } }],
+    ] as const) {
+      const h = home("switch-gemini");
+      const file = join(h, ".gemini", "settings.json");
+      mkdirSync(dirname(file), { recursive: true });
+      const body = geminiBody(extra);
+      writeFileSync(file, body, "utf8");
+      const r = install("gemini", h);
+      // 真 gemini 0.60.0 实测:这两种写法都把 ash 打成 `Blocked`。写进去也是一条用不上的
+      // 登记,而用户看到的是「已接好」—— 所以如实拒,别碰那两个名单。
+      assert.ok(!r.added, `${tag} ⇒ 不写:${r.why ?? ""}`);
+      assert.match(r.why ?? "", /没有替你打开|mcp\.(excluded|allowed)/, `${tag}:要说清为什么(${r.why ?? ""})`);
+      assert.equal(readFileSync(file, "utf8"), body, `${tag}:那份一个字节都不许动`);
+    }
+    // 白名单里有 ash ⇒ 照常补(闸不许开大)。
+    const ok = home("switch-gemini-ok");
+    const okFile = join(ok, ".gemini", "settings.json");
+    mkdirSync(dirname(okFile), { recursive: true });
+    writeFileSync(okFile, geminiBody({ mcp: { allowed: ["ash", "other"] } }), "utf8");
+    const rOk = install("gemini", ok);
+    assert.ok(rOk.added, `白名单里有 ash ⇒ 照常补:${rOk.why ?? ""}`);
+
+    // grok 的根级数组是它专有的:认它(而同格式的 codex 不认 —— codex 走它自己那条带 CLI
+    // 批准的路,不在这张表里,TS 那侧有逐家对打的那一格)。
+    const g = home("switch-grok");
+    const gFile = join(g, ".grok", "config.toml");
+    mkdirSync(dirname(gFile), { recursive: true });
+    const gBody = 'disabled_mcp_servers = ["ash"]\n\nmodel = "x"\n';
+    writeFileSync(gFile, gBody, "utf8");
+    const rg = install("grok", g);
+    assert.ok(!rg.added, `grok:根级那行关着 ash ⇒ 不写:${rg.why ?? ""}`);
+    assert.match(rg.why ?? "", /disabled_mcp_servers/, `要说清是哪一行:${rg.why ?? ""}`);
+    assert.equal(readFileSync(gFile, "utf8"), gBody, "那份一个字节都不许动");
+    group("逐家启停策略:gemini 的根级名单挡住就不写、grok 的根级数组照旧认(都不替用户打开)");
+  }
 }
