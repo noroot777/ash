@@ -133,10 +133,32 @@
 
 .onboarding-rows > li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
   background: var(--panel);
+}
+
+/* 「注册出来了,但派不动」的理由:独占一行(flex-basis 100%)摆在那条执行器下面,
+   挤在右侧状态位里会被省略号吃掉,而这句话的全文才是用户要照着做的下一步。 */
+.onboarding-blocked {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--amber);
+}
+
+/* 初读失败的那几份:就地说清少了什么,并给一颗重试 —— 退成空列表会让用户以为
+   自己什么都没配过。 */
+.onboarding-retry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--amber);
 }
 
 .onboarding-rows > li > div {

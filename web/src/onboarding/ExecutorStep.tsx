@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@ash/shared";
 import { MagnifyingGlass, Star } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
@@ -30,7 +30,12 @@ export function ExecutorStep({ profiles, providers, onProfileAdded, onProfileCha
   const [detecting, setDetecting] = useState(false);
   const [detected, setDetected] = useState<DetectedCli[] | null>(null);
   const [registeringKey, setRegisteringKey] = useState<string | null>(null);
-  const [bindingId, setBindingId] = useState<string | null>(null);
+  // 在途的绑定**按执行器记**,不共用一个键:A 还没回来就去改 B,共用键会被 B 覆盖,
+  // A 那一行提前恢复可点;任何一条的 finally 又会把另一行的忙状态一并清掉。
+  const [bindingIds, setBindingIds] = useState<string[]>([]);
+  // 每条执行器各自的请求代次:晚到的旧响应带着的是上一次选的那家供应商,写回界面
+  // 等于把用户刚改的选择又改回去。
+  const bindGen = useRef<Record<string, number>>({});
 
   const detect = useCallback(async () => {
     setDetecting(true);
@@ -72,13 +77,20 @@ export function ExecutorStep({ profiles, providers, onProfileAdded, onProfileCha
   };
 
   const bind = async (profile: AgentExecutorProfile, providerId: string) => {
-    setBindingId(profile.id);
+    const gen = (bindGen.current[profile.id] ?? 0) + 1;
+    bindGen.current[profile.id] = gen;
+    setBindingIds((current) => current.includes(profile.id) ? current : [...current, profile.id]);
     try {
-      onProfileChanged(await api.patchAgent(profile.id, { providerId: providerId || null }));
+      const updated = await api.patchAgent(profile.id, { providerId: providerId || null });
+      if (bindGen.current[profile.id] !== gen) return; // 已经被更晚的一次顶掉
+      onProfileChanged(updated);
     } catch (error) {
+      if (bindGen.current[profile.id] !== gen) return;
       notify(error instanceof Error ? error.message : "供应商绑定失败");
     } finally {
-      setBindingId(null);
+      if (bindGen.current[profile.id] === gen) {
+        setBindingIds((current) => current.filter((id) => id !== profile.id));
+      }
     }
   };
 
@@ -114,12 +126,15 @@ export function ExecutorStep({ profiles, providers, onProfileAdded, onProfileCha
                   label={`${profile.name} 的供应商`}
                   className="onboarding-provider-pick"
                   value={profile.providerId ?? ""}
-                  disabled={bindingId === profile.id}
+                  disabled={bindingIds.includes(profile.id)}
                   filterable={false}
                   options={providerChoices(profile, providers)}
                   onChange={(value) => void bind(profile, value)}
                 />
               )}
+              {/* 注册出来 ≠ 派得动。隔离档下服务端现算的拒绝理由直接摆在这一行上 ——
+                  不说的话用户要到真正派任务时才知道它跑不起来。 */}
+              {profile.dispatchBlocked && <p className="onboarding-blocked">{profile.dispatchBlocked}</p>}
             </li>
           ))}
         </ul>

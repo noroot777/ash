@@ -10,7 +10,7 @@ export function LoginPage({
   onDone,
 }: {
   pendingJoin: string | null;
-  onDone: () => Promise<void> | void;
+  onDone: () => Promise<unknown> | void;
 }) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);

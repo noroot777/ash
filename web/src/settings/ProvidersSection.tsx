@@ -198,17 +198,35 @@ function ProtocolChoice({
   value: LlmProtocol | "";
   onChange: (protocol: LlmProtocol) => void;
 }) {
+  const groupRef = useRef<HTMLDivElement>(null);
+  // 单选组的键盘语义得自己补上:换掉的那颗原生 <select> 是能用方向键切的,两颗
+  // 光挂 role="radio" 的按钮不是。做法照 WAI-ARIA 的 radiogroup —— 方向键换选,
+  // 焦点只停在选中的那一颗上(没选中时停第一颗),Tab 一下整组进出。
+  const move = (from: number, delta: number) => {
+    const next = (from + delta + PROTOCOL_CHOICES.length) % PROTOCOL_CHOICES.length;
+    onChange(PROTOCOL_CHOICES[next]);
+    groupRef.current?.querySelectorAll("button")[next]?.focus();
+  };
+  const focusIndex = Math.max(0, PROTOCOL_CHOICES.indexOf(value as LlmProtocol));
+
   return (
     <div className="is-wide provider-protocol-pick">
       <span>协议</span>
-      <div role="radiogroup" aria-label="协议">
-        {PROTOCOL_CHOICES.map((protocol) => (
+      <div role="radiogroup" aria-label="协议" ref={groupRef}>
+        {PROTOCOL_CHOICES.map((protocol, index) => (
           <button
             key={protocol}
             type="button"
             role="radio"
             aria-checked={value === protocol}
+            tabIndex={index === focusIndex ? 0 : -1}
             onClick={() => onChange(protocol)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowRight" || event.key === "ArrowDown") move(index, 1);
+              else if (event.key === "ArrowLeft" || event.key === "ArrowUp") move(index, -1);
+              else return;
+              event.preventDefault();
+            }}
           >
             <b>{protocolLabel(protocol)}</b>
             <small>{agentsForProtocol(protocol).join(" · ")}</small>

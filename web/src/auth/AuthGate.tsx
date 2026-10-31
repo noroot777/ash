@@ -41,10 +41,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
     try {
       setState(await authApi.state());
       setError(null);
+      return true;
     } catch (e) {
       // 拿不到状态 = 服务端不可达或比前端旧。**不放行** —— 放行会让工作台带着一堆
       // 401 渲染出来,那种画面看不出成因。
       setError(e instanceof ApiError ? e.message : "连不上 ash 服务端");
+      // 已经有旧状态时下面那块错误屏不出来(它只认 `!state`),所以失败必须**回给
+      // 调用方**:等着这一次刷新换屏的人只有它自己知道该怎么收场。
+      return false;
     }
   }, []);
 
