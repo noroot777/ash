@@ -121,18 +121,6 @@ export interface StallActions {
    */
   trip(text: string, facts: StallFacts): void;
   /**
-   * **把判决写进库**(可选):让「这一轮已经被判失败」跨得过 server 重启。
-   *
-   * 本模块是纯内存的,一个字都不碰库(那让整套判据能被纯状态机钉住、也就不可能误连生产库),
-   * 所以这一笔由消费链注入 —— 实现在 `turn-stall-persist.ts`,它同时负责接管时装回来。
-   * 调用点排在终止动作**之前**(同 `markStallFailure`):终止一发出,流随即结束、结算当场就要
-   * 读这个结论。
-   *
-   * 不实现 = 这条链没有「接管一个仍在跑、且已被判熔断的回合」这条路(团队重启走重开台、
-   * duet 断了就是断了,见 turn-stall-persist.ts 的边界那段)。
-   */
-  persist?(reason: string): void;
-  /**
    * **熔断的兜底**:`trip` 之后过了宽限期,这一轮**还是没真的结束**。
    *
    * 为什么要有这一档(第 1 轮审查第 4 条):`trip` 对常驻台走的是 `interrupt()`,而那只是
@@ -466,14 +454,10 @@ function evaluate(sessionId: string, stall: Stall): void {
   const text = stallTripText(facts);
   // **先把「这一轮失败」钉死,再动手终止。** 顺序是刻意的:trip 会杀进程,流随即结束、
   // 消费链当场走到收尾结算 —— 那一刻它必须已经读得到这个结论(见 turn-stall-verdict.ts)。
+  // 这一笔连持久那一半一起写(见 turn-stall-verdict.ts 的 setStallVerdictPersister):
+  // detached 的进程活得过重启,判决只留在内存里就会在「接管一个已被判熔断、却仍然存活的
+  // 回合」那条路上整份丢掉。本模块不碰库,持久化是那个模块自己的事。
   markStallFailure(stall.sessionId, stall.turnStartedAt, text);
-  // 同一个结论的持久那一半(可选,见 StallActions.persist):detached 的进程活得过重启,
-  // 判决只留在内存里就会在「接管一个已被判熔断、却仍然存活的回合」那条路上整份丢掉。
-  try {
-    stall.actions.persist?.(text);
-  } catch (error) {
-    console.warn(`[ash] 落库会话 ${sessionId} 的熔断判决失败:`, error);
-  }
   try {
     stall.actions.trip(text, facts);
   } catch (error) {

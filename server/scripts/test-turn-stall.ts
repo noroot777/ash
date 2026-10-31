@@ -27,46 +27,10 @@ import {
   type StallFacts,
 } from "../src/turn-stall.js";
 import { __ageStallFailures, __resetStallFailures, clearStallFailure, markStallFailure, retireStallFailure, stallFailure } from "../src/turn-stall-verdict.js";
+// 夹具与**解除条件那一组**分别住在 stall-fixtures.ts / test-turn-stall-progress.ts:这份文件
+// 顶到过单文件上限,而「判据」和「两档动手」本来就是两件事(根 CLAUDE.md 的 700 行)。
+import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtures.js";
 
-const TURN = "2026-10-30T07:36:21.000Z";
-const RETRY = "Reconnecting... waiting for network";
-const notice = (message = RETRY): AgentEvent => ({ kind: "error", message, level: "notice", affectsTurn: false });
-const hard = (message: string): AgentEvent => ({ kind: "error", message });
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-type Log = {
-  warns: { text: string; facts: StallFacts }[];
-  trips: string[];
-  escalations: string[];
-  /** 撤标记时拿到的回合身份 —— 库里那一侧按它做 CAS(session-stall-flag.ts),所以得钉住。 */
-  resolves: string[];
-};
-function spy(taskId = "task-1"): { actions: StallActions; log: Log } {
-  const log: Log = { warns: [], trips: [], escalations: [], resolves: [] };
-  return {
-    log,
-    actions: {
-      taskId,
-      warn: (text, facts) => log.warns.push({ text, facts }),
-      trip: (text) => log.trips.push(text),
-      escalate: (text) => log.escalations.push(text),
-      resolve: (facts) => log.resolves.push(facts.turnStartedAt),
-    },
-  };
-}
-
-/** 每段各自设口径,免得上一段的 env 漏到下一段。各档 0 = 关掉。 */
-function configure(opts: {
-  warnErrors?: number; warnMs?: number; tripMs?: number; graceMs?: number; pollMs?: number;
-}) {
-  __resetTurnStalls();
-  __resetStallFailures();
-  process.env.ASH_STALL_WARN_ERRORS = String(opts.warnErrors ?? 0);
-  process.env.ASH_STALL_WARN_MS = String(opts.warnMs ?? 0);
-  process.env.ASH_STALL_TRIP_MS = String(opts.tripMs ?? 0);
-  process.env.ASH_STALL_TRIP_GRACE_MS = String(opts.graceMs ?? 0);
-  process.env.ASH_STALL_POLL_MS = String(opts.pollMs ?? 20);
-}
 
 // ── ① 警告档·条数路径:连续错误、期间上游一次都没真回话 ───────────────────────────
 {
@@ -107,75 +71,6 @@ function configure(opts: {
   assert.equal(log.warns[0]!.facts.errors, 3);
   assert.equal(log.warns[0]!.facts.retries, 1);
   assert.match(log.warns[0]!.text, /其中 1 条是上游重试提示/, "混着真故障时措辞要分开说");
-}
-
-// ── ③a 解除条件:**上游真的回话了**那一类 ───────────────────────────────────────
-// 判据共用 `@ash/shared/waiting` 的 `resumesWaiting`(那个文件就是为了不让三处判据各自漂)。
-{
-  for (const resume of [
-    { kind: "text", text: "续" },
-    { kind: "thinking", text: "想" },
-    { kind: "tool", name: "Bash", detail: "{}" },
-    { kind: "attachment", path: "/tmp/a.png" },
-    { kind: "usage", usage: { inputTokens: 1, outputTokens: 1 } },
-    { kind: "turnEnd" },
-    { kind: "done", exitStatus: 0 },
-  ] as AgentEvent[]) {
-    configure({ warnErrors: 2 });
-    const { actions, log } = spy();
-    const owner = {};
-    trackTurnStall("s3", owner, TURN, notice(), actions);
-    trackTurnStall("s3", owner, TURN, resume, actions);
-    trackTurnStall("s3", owner, TURN, notice(), actions);
-    assert.equal(log.warns.length, 0, `${resume.kind} 没能解除停滞 —— 上游真回话了就不许动手`);
-  }
-}
-
-// ── ③b **辅助通知既不解除也不计数**(第 2 轮审查 F1,已实测) ─────────────────────
-// 这一档从前被算进「非错误就是有进展」里,于是 Claude 每条重试提示后面紧跟的那条 `session`
-// (只是把 CLI 会话 id 报一遍)把停滞当场解除 —— 8 次重试、远超阈值,页面上既不报警也不熔断,
-// 任务一直显示运行中。`session`/`context`/`system` 都不是上游回话:会话身份是 adapter 自己
-// 报的,上下文水位是本地算的,`system` 是旁注。真 adapter 序列那一面见 test-claude-retry-stall。
-{
-  for (const aside of [
-    { kind: "session", cliSessionId: "abc" },
-    { kind: "context", context: { used: 1, window: 2, windowEstimated: false } },
-    { kind: "system", text: "旁注" },
-  ] as AgentEvent[]) {
-    configure({ warnErrors: 2 });
-    const { actions, log } = spy();
-    const owner = {};
-    trackTurnStall("s3b", owner, TURN, notice(), actions);
-    trackTurnStall("s3b", owner, TURN, aside, actions);
-    trackTurnStall("s3b", owner, TURN, notice(), actions);
-    assert.equal(log.warns.length, 1, `${aside.kind} 把停滞解除了 —— 它不是上游回话`);
-    assert.equal(log.warns[0]!.facts.errors, 2, `${aside.kind} 自己被算成了一条错误`);
-    // 诊断里「卡在哪一步」不许被它顶替:一条正常输出都没有过(连接从头没建起来)和
-    // 「`tool` 之后挂住」是两种现场,把身份通知说成最后那步进展会把人带到另一条路上去查。
-    assert.equal(
-      log.warns[0]!.facts.lastProgressKind,
-      null,
-      `熔断诊断把「卡在哪一步」说成了 ${aside.kind} 这条辅助通知`,
-    );
-  }
-}
-
-// ── ③c 混着来:辅助通知夹在中间,真进展照样解除得掉 ─────────────────────────────
-// ③b 不许拦过头 —— 真回话了就得解除,哪怕前面刚来过一条身份通知。
-{
-  configure({ warnErrors: 2 });
-  const { actions, log } = spy();
-  const owner = {};
-  trackTurnStall("s3c", owner, TURN, notice(), actions);
-  trackTurnStall("s3c", owner, TURN, { kind: "session", cliSessionId: "abc" } as AgentEvent, actions);
-  trackTurnStall("s3c", owner, TURN, { kind: "text", text: "模型回话了" } as AgentEvent, actions);
-  trackTurnStall("s3c", owner, TURN, notice(), actions);
-  assert.equal(log.warns.length, 0, "真进展被前面那条辅助通知带累,解除不掉了");
-  // 解除之后重新起算,而且这一次「卡在哪一步」记的是那条真进展。
-  trackTurnStall("s3c", owner, TURN, notice(), actions);
-  assert.equal(log.warns.length, 1, "重新起算之后凑够阈值没报警");
-  assert.equal(log.warns[0]!.facts.errors, 2, "解除之后错误数没重新起算");
-  assert.equal(log.warns[0]!.facts.lastProgressKind, "text", "「卡在哪一步」没记住那条真进展");
 }
 
 // ── ④ 警告档·时间路径:最后一条错误之后再也没有事件了,靠计时器 ─────────────────
@@ -434,43 +329,6 @@ function configure(opts: {
   trackTurnStall("s10", owner, TURN, notice(), next.actions);
   trackTurnStall("s10", owner, "2026-10-30T09:00:00.000Z", notice(), next.actions);
   assert.equal(next.log.warns.length, 0, "上一轮的计数被带进了新回合");
-}
-
-// ── ⑩ 子智能体的错误被包成 kind:"tool",**包装不算进展** ──────────────────────────
-// 子线程(codex 子线程、claude 的 parent_tool_use_id 子回合)的每一条活动都被 childActivity()
-// 包成 `{kind:"tool", name:"Agent", nativeWork:{type:"activity", event}}` —— 外层恒为 tool。
-// 只看外层的那一版把子线程的重连风暴读成「有工具在动」:既开不了停滞,还会把父线程已经开着
-// 的那一份当场解除,正好把看门狗关在最需要它的场合(第 1 轮审查第 1 条,已实测)。
-{
-  configure({ warnErrors: 3 });
-  const { actions, log } = spy();
-  const owner = {};
-  const childRetry = childActivity("thread-1", { kind: "error", message: RETRY, level: "notice" });
-  assert.equal(childRetry.kind, "tool", "夹具不对:子智能体活动的外层本来就该是 tool");
-  for (let i = 0; i < 3; i += 1) trackTurnStall("s11", owner, TURN, childRetry, actions);
-  assert.equal(log.warns.length, 1, "子线程的重连风暴一条都没被计入 —— 整条链上只有它在报错");
-  const facts = log.warns[0]!.facts;
-  assert.equal(facts.errors, 3);
-  assert.equal(facts.retries, 3, "包装里的 level:\"notice\" 没读出来,重试被当成真故障");
-  assert.equal(facts.childErrors, 3, "没记下这几条来自子线程 —— 诊断里分不清是谁卡住了");
-  assert.match(log.warns[0]!.text, /子智能体线程/, "诊断没说清停滞来自子线程");
-
-  // 另一半:子线程的错误**不许**解除父线程已经开着的停滞。
-  configure({ warnErrors: 2 });
-  const parent = spy();
-  const owner2 = {};
-  trackTurnStall("s12", owner2, TURN, notice(), parent.actions);
-  trackTurnStall("s12", owner2, TURN, childRetry, parent.actions);
-  assert.equal(parent.log.warns.length, 1, "子线程的错误把父线程的停滞当成进展解除掉了");
-
-  // 反向闸:子线程**真的在干活**(正文/工具)照样解除 —— 它证明这条流还在动。
-  configure({ warnErrors: 2 });
-  const live = spy();
-  const owner3 = {};
-  trackTurnStall("s13", owner3, TURN, notice(), live.actions);
-  trackTurnStall("s13", owner3, TURN, childActivity("thread-1", { kind: "tool", name: "exec" }), live.actions);
-  trackTurnStall("s13", owner3, TURN, notice(), live.actions);
-  assert.equal(live.log.warns.length, 0, "子线程在干活却被算成停滞 —— 误杀正在跑的回合");
 }
 
 // ── ⑪ 阈值配错一个字不许变成「见错就杀」 ────────────────────────────────────────

@@ -16,7 +16,23 @@
 // 记进 `resumes`,不接管存活进程),duet 的回合断了就是断了 —— 那两条链上没有「接管一个仍在
 // 跑、且已被判熔断的回合」这条路可走,所以不给它们接恢复。落库本身无害,但也没必要。
 import { dbClient } from "./db/index.js";
-import { markStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
+import { markStallFailure, setStallVerdictPersister, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
+
+// **加载这个模块就等于装上了持久化。**
+//
+// 为什么是模块初始化、而不是某处显式调一次:显式装配只在它那条启动路径上成立 —— 换个入口
+// (回归脚本、将来的 worker/子命令)跑同一条消费链,判决就静默只活在内存里,直到某次重启把它
+// 丢掉才看得见。而那正是审查 F3 的形状,不该靠「记得装」来避免。
+//
+// 也不能让每条消费链自己传一笔:那样新增一条链默认就是「不落库」,同样没有任何东西提醒作者。
+// 「这一轮被判了失败」是判决本身的属性,不是某条链的可选增强。
+//
+// 判据与判决本体(`turn-stall.ts` / `turn-stall-verdict.ts`)仍然一个字都不碰库:它们只认一个
+// 可注册的钩子,没注册时(纯状态机测试)什么都不做。库只从**这个**文件进来,而谁 import 它、
+// 谁就连着库 —— `index.ts` 启动时 import 一次,保证连一条消费链都还没起来时就已经装上。
+setStallVerdictPersister((sessionId, turnStartedAt, reason) => {
+  void persistStallVerdict(sessionId, turnStartedAt, reason);
+});
 
 /**
  * 判决作出那一刻就写库(`turn-stall.ts` 的 trip 里调,先于终止动作)。

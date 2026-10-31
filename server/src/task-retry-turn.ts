@@ -42,6 +42,7 @@ import { db } from "./db/index.js";
 import { groups, sessions, tasks } from "./db/schema.js";
 import { profileDrift } from "./executors/index.js";
 import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, roundOf } from "./free-review-round.js";
+import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import { turnOutcome } from "./session-turns.js";
 import type { TurnOutcome } from "./session-turns.js";
 import { handoffBlockReason } from "./handoff-guard.js";
@@ -206,15 +207,16 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
   // freeReviewRetryBlocker）。两者会分家 —— CLI 打完「API Error: Connection lost
   // mid-response」照样 exit 0（2026-09-11 实测：reviewer 会话 exit 0、审查链却停在 failed，
   // 时间线上明写「未能正常给出结论，已停止自动链」，界面却一个重跑入口都没有）。
-  // **先问权威结局,退出码只是兜底**。两者会分家,而分家时权威的那一位才对:回合级停滞看门狗
-  // 终止掉的那一轮,ash 已经判它失败(区间 outcome=failed、时间线写明「已自动终止本回合并按
-  // 失败结算」),可被终止的进程多半 exit 0 —— 照退出码判就是页面明写「因上游连不上被自动
-  // 终止」、却一个重跑入口都没有(审查 F2,已实测 409)。审查档本来就不看退出码(上面那段注释),
-  // 它另有更准的判据;这一条把同样的道理补给重投档。
-  const authoritativeFailure = facts.turnOutcome === "failed";
-  if (retryTurnKindOf(latest) !== "review" && !authoritativeFailure
-    && (latest.exitStatus === 0 || latest.exitStatus == null)) {
-    return { error: "上一回合不是异常结束，不需要重跑", detail: { exitStatus: latest.exitStatus } };
+  // 「算不算异常结束」整份住在 `@ash/shared/turn-outcome`:三个信号的优先级(真人停止 >
+  // 这一轮自己的权威结局 > 退出码)写在那里,**前端那颗按钮读同一份** —— 两边各写一份 if
+  // 就是在等下一次漂开,审查 F2 要修的恰恰是同一句判据在两端各错一次(都只看退出码)。
+  // 审查档不吃这一条:它另有更准的判据(上面那段注释)。
+  if (retryTurnKindOf(latest) !== "review"
+    && !turnEndedAbnormally({ ...latest, turnOutcome: facts.turnOutcome })) {
+    return {
+      error: "上一回合不是异常结束，不需要重跑",
+      detail: { exitStatus: latest.exitStatus, turnOutcome: facts.turnOutcome ?? null },
+    };
   }
   if (facts.groupPaused) return { error: "所在分组已暂停，先恢复分组再重试", detail: { groupPaused: true } };
   // 同 /run：串行队列里排在前面的还没完，这一颗就不该抢跑。少了这道闸，队尾任务上的

@@ -4,6 +4,7 @@
 // 跑:npm -w server run test:retry-turn
 import assert from "node:assert/strict";
 import type { RetryTurnFacts, RetryTurnSession, RetryTurnTask } from "../src/task-retry-turn.js";
+import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import { lastInputOf, latestSessionOf, retryTurnKindOf, retryTurnRejection } from "../src/task-retry-turn.js";
 
 const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
@@ -193,6 +194,31 @@ assert.ok(why(task(), sess({ id: "a", role: "voiceA" })), "duet 会话不归这�
 // 重投档不跟着放松：续聊聊天回合本来就不调 complete_task，exit 0 给按钮等于每次闲聊后
 // 都挂一颗「重试」。
 assert.ok(why(task(), sess({ id: "a", role: "single", exitStatus: 0 })), "普通回合 exit 0 仍然不给");
+
+// ── 共用判据本身:三个信号的优先级(@ash/shared/turn-outcome) ───────────────────
+// 这一份被**前端那颗按钮读着同一个函数**(web/src/task-detail/turnRetry.ts),所以优先级直接
+// 钉在这儿,而不是只通过 retryTurnRejection 间接测 —— 审查 F2 要修的那一条恰恰是同一句判据
+// 在两端各错一次。
+{
+  const abnormal = (turn: Parameters<typeof turnEndedAbnormally>[0]) => turnEndedAbnormally(turn);
+  // ① 真人按下的停止排最前:CLI 吃 SIGTERM 后按 signal 写非零退出码,跟崩溃一模一样。
+  assert.equal(abnormal({ exitStatus: 1, stoppedAs: "canceled" }), false, "手动停止不是异常结束");
+  assert.equal(
+    abnormal({ exitStatus: 1, stoppedAs: "canceled", turnOutcome: "failed" }),
+    false,
+    "手动停止压得住权威结局 —— 否则用户刚停下的那句话会被重跑",
+  );
+  // ② 有权威结局就完全听它(只认 failed)。
+  assert.equal(abnormal({ exitStatus: 0, turnOutcome: "failed" }), true, "exit 0 + 区间 failed = 被我们终止的那一轮");
+  assert.equal(abnormal({ exitStatus: null, turnOutcome: "failed" }), true, "退出码没写成也认权威结局");
+  assert.equal(abnormal({ exitStatus: 1, turnOutcome: "completed" }), false, "权威结局说好着呢,非零退出码也不算");
+  assert.equal(abnormal({ exitStatus: 1, turnOutcome: "stopped" }), false, "受控停止不是异常结束");
+  // ③ 不知道权威结局时才退回退出码。
+  assert.equal(abnormal({ exitStatus: 1 }), true, "存量行/回合还开着 → 退回退出码");
+  assert.equal(abnormal({ exitStatus: 1, turnOutcome: null }), true, "null = 不知道,同上");
+  assert.equal(abnormal({ exitStatus: 0 }), false, "正常退出");
+  assert.equal(abnormal({ exitStatus: null }), false, "还没结算不算异常结束");
+}
 
 // ── 权威结局优先于退出码(审查 F2,已实测) ──────────────────────────────────────
 // 回合级停滞看门狗终止掉的那一轮:ash 已经判它失败(区间 outcome=failed、正文写明「已自动

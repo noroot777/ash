@@ -51,6 +51,7 @@
     "test:turn-stall": "tsx scripts/test-turn-stall.ts",
     "test:stall-flag": "tsx scripts/test-stall-flag.ts",
     "test:stall-settle": "tsx scripts/test-stall-settle.ts",
+    "test:turn-stall-progress": "tsx scripts/test-turn-stall-progress.ts",
     "test:claude-retry-stall": "tsx scripts/test-claude-retry-stall.ts",
     "test:stall-restart": "tsx scripts/test-stall-restart.ts",
     "test:turn-ownership": "tsx scripts/test-turn-ownership.ts",

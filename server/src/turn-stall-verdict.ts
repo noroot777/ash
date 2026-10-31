@@ -49,6 +49,24 @@ interface Entry extends StallVerdict {
 const failures = new Map<string, Entry>();
 
 /**
+ * 判决的**持久那一半**,启动时注册一次(`turn-stall-persist.ts` 的 `installStallVerdictPersistence`)。
+ *
+ * 为什么是注册式、而不是让每条消费链自己传一笔:那样新增一条链时默认就是「不落库」,而且
+ * **没有任何东西会提醒作者** —— 判决静默只活在内存里,直到某次重启把它丢掉才看得见。
+ * 「这一轮被判了失败」是判决本身的属性,不是某条链的可选增强,所以归这个模块自己管。
+ *
+ * 仍然做成可注册的,是为了让本模块与 `turn-stall.ts` 保持**纯内存、不引 db** —— 那让整套
+ * 判据能被纯状态机钉住(test-turn-stall.ts 不需要库,也就不可能误连生产库)。没注册时(单元
+ * 测试)这里是 null,一个字都不碰库。
+ */
+type StallVerdictPersister = (sessionId: string, turnStartedAt: string, reason: string) => void;
+let persister: StallVerdictPersister | null = null;
+
+export function setStallVerdictPersister(fn: StallVerdictPersister | null): void {
+  persister = fn;
+}
+
+/**
  * 回收**只认生命周期**:一条判决要么还归某个在跑的回合,要么已经退场够久了。
  *
  * 这一处被打回过两次,两次都是「拿淘汰策略代替生命周期」:
@@ -90,6 +108,13 @@ function sweepOrphans(cutoffMs: number): void {
 export function markStallFailure(sessionId: string, turnStartedAt: string, reason: string): void {
   const at = now();
   failures.set(key(sessionId, turnStartedAt), { reason, at, retiredAt: null });
+  // 持久那一半跟着同一笔走(注册过才有)。**不让它抛**:写库失败不该拦住终止本身 —— 那一轮
+  // 确实该停,内存判决也已经钉好了,丢掉的只是「跨重启还认得它」这一层。
+  try {
+    persister?.(sessionId, turnStartedAt, reason);
+  } catch (error) {
+    console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能落库:`, error);
+  }
   const cutoff = Date.parse(at) - ORPHAN_MS;
   if (Number.isFinite(cutoff)) sweepOrphans(cutoff);
 }

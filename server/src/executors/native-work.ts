@@ -54,10 +54,6 @@ export class NativeWorkTrace {
         type: "agent", id, nativeId: ev.task_id,
         ...(ev.subtype === "task_started" ? { title: ev.description } : {}),
         status: ev.subtype === "task_notification" ? nativeStatus(ev.status) : "running",
-        // task_started/task_progress 只是「还在跑」的心跳 —— progress 的 message 装的是当前
-        // 那一步的名字(description / last_tool_name),一条都不是上游新产出的东西。这一位的
-        // 要害见 shared/src/native-work.ts 的 heartbeat 与 waiting.ts 的 producesWork。
-        ...(ev.subtype === "task_notification" ? {} : { heartbeat: true }),
         ...(ev.subtype === "task_notification" ? { result: clip(ev.summary ?? "") } : ev.subtype === "task_progress" ? { message: clip(ev.description || ev.last_tool_name || "") } : {}),
       }));
     }

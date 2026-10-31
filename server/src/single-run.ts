@@ -33,7 +33,7 @@ import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import { clearTurnStall, trackTurnStall, type StallActions } from "./turn-stall.js";
 import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
-import { persistStallVerdict, restoreStallVerdict } from "./turn-stall-persist.js";
+import { restoreStallVerdict } from "./turn-stall-persist.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
@@ -240,12 +240,6 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       writeRunError(out, text);
       publishEvent(event);
       a.handle.kill();
-    },
-    // 判决的持久那一半:这条链的进程是 detached 的,活得过 server 重启(见
-    // turn-stall-persist.ts)。不落的那一版会在「重启后接管一个已被判熔断、却仍然存活的
-    // 回合」时把判决整份丢掉,上游一恢复这一轮就按成功结算(审查 F3,已实测)。
-    persist: (reason) => {
-      if (a.turnStart) void persistStallVerdict(sessId, a.turnStart, reason);
     },
     resolve: (facts) => clearSessionStalled(taskId, sessId, facts.since),
   };
