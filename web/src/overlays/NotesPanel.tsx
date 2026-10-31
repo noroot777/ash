@@ -13,34 +13,15 @@ import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { Button } from "../components/ui.tsx";
-import { api } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
 import { filterNotes, NOTE_CONVERSION_FILTERS, type NoteConversionFilter } from "./notesFilter.ts";
+import { uniquePaths, useNoteDrafts } from "./useNoteDrafts.ts";
 
 const titleOf = (body: string) => body.split(/\r?\n/).map((line) => line.trim()).find(Boolean)?.slice(0, 42) || "无标题随手记";
-const ordered = (rows: Note[]) => [...rows].sort((a, b) => b.updatedAt - a.updatedAt);
-const uniquePaths = (paths: string[]) => [...new Set(paths)];
 const noteTime = (value: number) => new Date(value).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-type NoteDraft = { id: string | null; body: string; attachments: string[] };
-type SaveState = "saved" | "pending" | "saving" | "empty" | "error";
-/**
- * 一次落盘的三种结局。**「存不下去」和「不许走」是两件事**：
- *
- * · `saved`     —— 落盘了，或者本来就没有改动
- * · `unsavable` —— 正文被清空了，服务端不收空正文（`POST/PATCH /notes` 一律 400）；
- *                  这条的原文一个字没动地留在服务端那份里，没有可丢的东西
- * · `failed`    —— 请求被拒或网断了，草稿里有内容会丢
- *
- * 以前这里只回一个 boolean，「正文空」和「真失败」都是 `false`，而面板里每个「要离开
- * 当前草稿」的动作（关闭 / Esc / 点遮罩 / 换一条 / 新建 / 删除 / 转任务）都拿它当放行
- * 条件 —— 于是「把一条已存在的随手记正文全删掉」会把整个面板焊死：删也删不掉，关也关
- * 不上，只能把字打回去。保护的本意是「别把用户的编辑弄丢」，而空正文根本没有可丢的
- * 编辑，拿同一个 false 挡住所有出口纯属连坐。
- */
-type FlushResult = "saved" | "unsavable" | "failed";
 type Position = { left: number; top: number };
 type DragState = {
   pointerId: number;
@@ -173,12 +154,6 @@ function useMovableNotesPanel() {
   return { panelRef, panelStyle, isFullscreen, toggleFullscreen, onPointerDown };
 }
 
-const sameAttachments = (left: NoteDraft, right: NoteDraft) => left.attachments.length === right.attachments.length
-  && left.attachments.every((path, index) => path === right.attachments[index]);
-const sameDraft = (left: NoteDraft, right: NoteDraft) => left.id === right.id
-  && left.body === right.body
-  && sameAttachments(left, right);
-
 export type NoteTaskDraft = {
   body: string;
   attachments: string[];
@@ -193,174 +168,31 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
   onConvert: (draft: NoteTaskDraft) => void;
   notify: (message: string) => void;
 }) {
-  const emptyDraft = (): NoteDraft => ({ id: null, body: "", attachments: [] });
-  const initialDraft = emptyDraft();
-  const [rows, setRows] = useState<Note[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [draft, setDraft] = useState<NoteDraft>(initialDraft);
   const [query, setQuery] = useState("");
   const [conversionFilter, setConversionFilter] = useState<NoteConversionFilter>("all");
-  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(true);
-  const [saveState, setSaveState] = useState<SaveState>("saved");
-  const [deleting, setDeleting] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const movable = useMovableNotesPanel();
   const uploads = useAttachments();
-  // `notify` 是调用方传进来的，**它的函数身份一律不进 hook 依赖**：没被 useCallback 稳住
-  // 的调用方（而弹提示这件事本身常常就会让调用方重渲染）会让下面「读取随手记」那个 effect
-  // 跟着重跑 —— 弹一句提示就把列表重新拉一遍，把用户正在编的草稿连带冲掉。走 ref 之后，
-  // 面板对调用方怎么传这个函数免疫。
-  const notifyRef = useRef(notify);
-  notifyRef.current = notify;
-  const say = useCallback((message: string) => notifyRef.current(message), []);
-  const rowsRef = useRef<Note[]>([]);
-  const draftRef = useRef<NoteDraft>(initialDraft);
-  const savedDraftRef = useRef<NoteDraft>(initialDraft);
-  const saveInFlightRef = useRef<Promise<FlushResult> | null>(null);
-  // 正在删的那条随手记 id。删除和保存必须互斥：删除期间谁都别再往这条上写
-  // （判据在 flushDraft 里，覆盖全部五条保存来路）。
-  const deletingIdRef = useRef<string | null>(null);
-
-  const updateRows = useCallback((update: (current: Note[]) => Note[]) => {
-    const next = update(rowsRef.current);
-    rowsRef.current = next;
-    setRows(next);
-  }, []);
-  const updateDraft = useCallback((next: NoteDraft) => {
-    draftRef.current = next;
-    setDraft(next);
-    setSaveState(sameDraft(next, savedDraftRef.current) ? "saved" : "pending");
-  }, []);
-
-  const flushDraft = useCallback(async (): Promise<FlushResult> => {
-    while (true) {
-      if (saveInFlightRef.current) {
-        const settled = await saveInFlightRef.current;
-        if (settled !== "saved") return settled;
-        continue;
-      }
-      const snapshot = draftRef.current;
-      // 正在删的那条一律不再落盘。判据放在**落盘函数自己身上**而不是某个 effect 上：
-      // 保存有五条来路（自动保存、⌘/Ctrl+回车、保存按钮、各出口的 leaveDraft、卸载
-      // 清理），在任何一条上单独加判断都会漏掉其余几条。回「没有待落盘的东西」是实话
-      // —— 这条记马上就没了 —— 所以也不会把想关面板的人挡在外面。
-      if (snapshot.id !== null && snapshot.id === deletingIdRef.current) return "saved";
-      if (sameDraft(snapshot, savedDraftRef.current)) return "saved";
-      const isNew = snapshot.id === null;
-      // 正文空，服务端不收（`POST/PATCH /notes` 一律 400）。
-      const blank = !snapshot.body.trim();
-      if (blank) {
-        setSaveState("empty");
-        // 新建的空草稿压根没落过盘：没东西可存，也没有「原内容」可提。（这种草稿带着
-        // 附件时附件会被丢掉，基线就是这样 —— `POST /notes` 没有「只存附件」这一路。）
-        if (isNew) return "saved";
-        // 但「正文空」证明不了「这份草稿没有要紧东西」：附件可能刚变过（传了新的、
-        // 摘掉了旧的）。`PATCH /notes/:id` 不带 body 时服务端跳过空正文校验
-        // （server/src/notes.ts），所以附件那半边照旧单独落盘 —— 否则用户刚传完的
-        // 那张图一离开就只剩 uploads 里一个没人认领的文件，摘掉附件的那一下同样白做。
-        if (sameAttachments(snapshot, savedDraftRef.current)) return "unsavable";
-      } else {
-        setSaveState("saving");
-      }
-      let request: Promise<FlushResult>;
-      const persist = isNew
-        ? api.createNote({ projectId: project.id, body: snapshot.body, attachments: snapshot.attachments })
-        : api.patchNote(snapshot.id!, blank
-          ? { attachments: snapshot.attachments }
-          : { body: snapshot.body, attachments: snapshot.attachments });
-      request = persist.then(
-        (saved) => {
-          updateRows((current) => {
-            const known = current.some((note) => note.id === saved.id);
-            // 刚建出来的那条要进列表；**已存在的那条不在列表里 = 它在这次请求在途期间
-            // 被删掉了**，迟到的回包不许把它请回来（提示过「已删除」又冒出来，而服务端
-            // 其实已经没有它了）。
-            if (!known) return isNew ? ordered([saved, ...current]) : current;
-            return ordered(current.map((note) => note.id === saved.id ? saved : note));
-          });
-          if (isNew && draftRef.current.id === null) {
-            const promoted = { ...draftRef.current, id: saved.id };
-            draftRef.current = promoted;
-            setDraft(promoted);
-            setActiveId(saved.id);
-          }
-          // 回包迟到期间草稿可能已经换人了（换了一条、或者这条被删掉了）：那这份回包只
-          // 更新列表，不许再去写「已存内容」的基准 —— 否则下一次比对会拿**别人**的内容
-          // 当基准，凭空判出一次「有改动」，白存一遍刚切过去的那条。
-          if (draftRef.current.id === saved.id) {
-            savedDraftRef.current = { id: saved.id, body: saved.body, attachments: saved.attachments };
-            // 正文空的那一半仍然没落盘：附件存住了，正文留着服务端那份。
-            setSaveState(blank ? "empty" : (sameDraft(draftRef.current, savedDraftRef.current) ? "saved" : "pending"));
-          }
-          return blank ? "unsavable" as FlushResult : "saved" as FlushResult;
-        },
-        (reason: unknown) => {
-          setSaveState("error");
-          say(reason instanceof Error ? reason.message : "随手记保存失败");
-          return "failed" as FlushResult;
-        },
-      ).finally(() => {
-        if (saveInFlightRef.current === request) saveInFlightRef.current = null;
-      });
-      saveInFlightRef.current = request;
-      const settled = await request;
-      if (settled !== "saved") return settled;
-    }
-  }, [project.id, say, updateRows]);
-
-  /**
-   * 每个「要离开当前草稿」的动作都先过这一关。**只有真失败才留住用户** —— 正文清空了
-   * 存不下去的，服务端那份原文还在，把人挡在这里只会让删除、关闭、换一条全都点不动。
-   */
-  const leaveDraft = useCallback(async (): Promise<boolean> => {
-    const result = await flushDraft();
-    if (result === "unsavable") say("随手记不能为空，原内容已保留");
-    return result !== "failed";
-  }, [flushDraft, say]);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    void api.notes(project.id).then((notes) => {
-      if (!alive) return;
-      const nextRows = ordered(notes);
-      const startNew = initialNoteId === "__new__";
-      const first = startNew ? null : (initialNoteId ? nextRows.find((note) => note.id === initialNoteId) : undefined) ?? nextRows[0] ?? null;
-      const nextDraft = first ? { id: first.id, body: first.body, attachments: first.attachments } : emptyDraft();
-      rowsRef.current = nextRows;
-      draftRef.current = nextDraft;
-      savedDraftRef.current = nextDraft;
-      setRows(nextRows);
-      setActiveId(first?.id ?? null);
-      setDraft(nextDraft);
-      setPicked(new Set());
-      setSaveState("saved");
-      setEditing(startNew || !first);
-      uploads.clear();
-    }).catch((reason: unknown) => {
-      if (alive) say(reason instanceof Error ? reason.message : "随手记读取失败");
-    }).finally(() => {
-      if (alive) setLoading(false);
-    });
-    return () => { alive = false; };
-  }, [initialNoteId, project.id, say, uploads.clear]);
-
-  useEffect(() => {
-    // 删除确认框开着时按住自动保存：这条马上要没了，存它要么白存，要么排到 DELETE 后面
-    // 把刚删掉的那条又写回列表。取消确认后这个 effect 会重跑，自动保存照旧接上。
-    if (confirmDelete || sameDraft(draft, savedDraftRef.current)) return;
-    const timer = window.setTimeout(() => { void flushDraft(); }, 800);
-    return () => window.clearTimeout(timer);
-  }, [confirmDelete, draft, flushDraft]);
+  // 草稿、落盘、删除全归这一层：它只留 rows 和 draft 两份真相，其余（脏不脏、存没存上、
+  // 当前选中哪条）一律推导。见 useNoteDrafts.ts 顶部那段说明。
+  // 逐项取出来用：返回的函数都是稳定身份，可以直接写进 effect 依赖。
+  const {
+    rows, draft, active, loading, saveState, dirty, deleting, pendingDelete,
+    edit, flush, leave, latest, openNote, openNew, askDelete, cancelDelete, confirmDelete,
+  } = useNoteDrafts({
+    projectId: project.id,
+    initialNoteId,
+    notify,
+    onLoaded: (blank) => { setEditing(blank); setPicked(new Set()); uploads.clear(); },
+  });
 
   useEffect(() => {
     if (!uploads.attachments.length) return;
-    const attachments = uniquePaths([...draftRef.current.attachments, ...uploads.attachments.map((item) => item.path)]);
-    updateDraft({ ...draftRef.current, attachments });
+    const paths = uploads.attachments.map((item) => item.path);
+    edit((current) => ({ ...current, attachments: uniquePaths([...current.attachments, ...paths]) }));
     uploads.clear();
-  }, [updateDraft, uploads.attachments, uploads.clear]);
+  }, [edit, uploads.attachments, uploads.clear]);
 
   // 传上来的附件是由上面那个 effect 折进**当前**草稿的，所以「换一条 / 关掉面板 / 转任务」
   // 都不能在上传落地前发生：面板已经关了就没人接住结果（附件白传），中途换了一条就会
@@ -384,16 +216,12 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     setDeferred(false);
     // 传失败就别接着走了：这一走用户就看不到那条错误了，留在原地让他自己决定。
     if (uploads.error) {
-      say("附件上传失败，先处理一下再离开");
+      notify("附件上传失败，先处理一下再离开");
       return;
     }
     void action?.();
-  }, [deferred, say, uploads.error, uploadsSettled]);
+  }, [deferred, notify, uploads.error, uploadsSettled]);
 
-  useEffect(() => () => { void flushDraft(); }, [flushDraft]);
-
-  const active = rows.find((note) => note.id === activeId) ?? null;
-  const dirty = !sameDraft(draft, savedDraftRef.current);
   const newDraft = draft.id === null;
   const filtered = useMemo(
     () => filterNotes(rows, query, conversionFilter, draft),
@@ -416,93 +244,51 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
           : "已保存";
 
   const close = useCallback(() => {
-    afterUploads(async () => { if (await leaveDraft()) onClose(); });
-  }, [afterUploads, leaveDraft, onClose]);
+    afterUploads(async () => { if (await leave()) onClose(); });
+  }, [afterUploads, leave, onClose]);
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (confirmDelete) return;
+      if (pendingDelete) return;
       if (event.key === "Escape") close();
       // 这一下**故意不跟**「输入框发送键」那一档（设置 → 默认规则 → 输入框）：笔记本来就
       // 自动保存，这里的 ⌘/Ctrl+回车只是「现在就存」，而笔记里换行是最常用的一个键 ——
       // 把裸回车也算进来，等于每敲一个换行就存一次盘，还顺手把焦点以外的回车都接走。
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
-        void flushDraft();
+        void flush();
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [close, confirmDelete, flushDraft]);
+  }, [close, flush, pendingDelete]);
 
   const openTask = (taskId: string) => {
-    afterUploads(async () => { if (await leaveDraft()) onTask(taskId); });
+    afterUploads(async () => { if (await leave()) onTask(taskId); });
   };
   const select = (note: Note) => afterUploads(async () => {
-    if (note.id === draftRef.current.id || !await leaveDraft()) return;
-    const target = rowsRef.current.find((item) => item.id === note.id);
-    if (!target) return;
-    const next = { id: target.id, body: target.body, attachments: target.attachments };
-    savedDraftRef.current = next;
-    draftRef.current = next;
-    setActiveId(target.id);
-    setDraft(next);
-    setSaveState("saved");
+    if (!await openNote(note.id)) return;
     setEditing(false);
     uploads.clear();
   });
   const create = () => afterUploads(async () => {
-    if (!await leaveDraft()) return;
-    const next = emptyDraft();
-    savedDraftRef.current = next;
-    draftRef.current = next;
-    setActiveId(null);
-    setDraft(next);
-    setSaveState("saved");
+    if (!await openNew()) return;
     setEditing(true);
     setQuery("");
     setConversionFilter("all");
     uploads.clear();
   });
-  // 删除**不先落盘**：这条记马上要被销毁，存一遍毫无意义，而「存不下去就不许删」正是
-  // 「清空正文后删除按钮点不动」的来由。代价是这条草稿可能还脏着，于是删除期间得把保存
-  // 关掉（`deletingIdRef`，判据在 flushDraft 里），并且**排空已经在途的那些** ——
-  // 它们的成功回调会把这条写回 rows，排在 DELETE 之后就把刚删掉的那条又请回列表。
-  const remove = async () => {
-    const targetId = draftRef.current.id;
-    if (!targetId) return;
-    deletingIdRef.current = targetId;
-    setDeleting(true);
-    try {
-      // 不是「等一个 Promise」而是「等到没有在途的」：flushDraft 一轮请求之后还会接着
-      // 追存，等单个请求不等于排空整条保存循环。
-      while (saveInFlightRef.current) await saveInFlightRef.current;
-      await api.deleteNote(targetId);
-      const remaining = rowsRef.current.filter((note) => note.id !== targetId);
-      updateRows(() => remaining);
+  const remove = () => {
+    void confirmDelete().then(({ deleted, blank }) => {
+      if (!deleted) return;
       setPicked((current) => {
-        const nextPicked = new Set(current);
-        nextPicked.delete(targetId);
-        return nextPicked;
+        const next = new Set(current);
+        next.delete(deleted);
+        return next;
       });
-      const first = remaining[0] ?? null;
-      const nextDraft = first ? { id: first.id, body: first.body, attachments: first.attachments } : emptyDraft();
-      savedDraftRef.current = nextDraft;
-      draftRef.current = nextDraft;
-      setActiveId(first?.id ?? null);
-      setDraft(nextDraft);
-      setSaveState("saved");
-      setEditing(!first);
+      setEditing(blank);
       uploads.clear();
-      say("随手记已删除");
-    } catch (reason) {
-      say(reason instanceof Error ? reason.message : "随手记删除失败");
-    } finally {
-      // 删成了：这条已经不在 rows 里，迟到的回包由 updateRows 那道判据挡住（撤掉互斥
-      // 不等于放它回来）。删失败了：这条还在，用户可以接着编辑和重试，保存得放开。
-      deletingIdRef.current = null;
-      setDeleting(false);
-    }
+    });
   };
   const togglePicked = (noteId: string) => {
     setPicked((current) => {
@@ -513,15 +299,18 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     });
   };
   const convert = () => afterUploads(async () => {
-    if (deleting || !await leaveDraft()) return;
-    const selectedNotes = rowsRef.current.filter((note) => picked.has(note.id));
-    const current = rowsRef.current.find((note) => note.id === draftRef.current.id) ?? null;
-    const notes = selectedNotes.length ? selectedNotes : current ? [current] : [];
-    if (!notes.length) return;
+    if (deleting || !await leave()) return;
+    // 取的是**服务端那份**而不是草稿：没落盘的改动不该跟着进新任务。而且要读 latest()
+    // —— 刚才那次 leave() 可能已经把内容存上去并更新了列表。
+    const snapshot = latest();
+    const selected = snapshot.rows.filter((note) => picked.has(note.id));
+    const editingNote = snapshot.rows.find((note) => note.id === snapshot.draft.id) ?? null;
+    const chosen = selected.length ? selected : editingNote ? [editingNote] : [];
+    if (!chosen.length) return;
     onConvert({
-      body: notes.map((note) => note.body).join("\n\n---\n\n"),
-      attachments: uniquePaths(notes.flatMap((note) => note.attachments)),
-      noteIds: notes.map((note) => note.id),
+      body: chosen.map((note) => note.body).join("\n\n---\n\n"),
+      attachments: uniquePaths(chosen.flatMap((note) => note.attachments)),
+      noteIds: chosen.map((note) => note.id),
     });
   });
   return (
@@ -574,7 +363,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
               ) : null}
             </div>
             {editing ? (
-              <textarea autoFocus value={draft.body} onChange={(event) => updateDraft({ ...draftRef.current, body: event.target.value })} onPaste={uploads.onPaste} onBlur={() => setEditing(false)} placeholder="记下临时想法、路径、验证清单…" />
+              <textarea autoFocus value={draft.body} onChange={(event) => edit((current) => ({ ...current, body: event.target.value }))} onPaste={uploads.onPaste} onBlur={() => setEditing(false)} placeholder="记下临时想法、路径、验证清单…" />
             ) : (
               <div
                 className="note-editor-preview"
@@ -596,7 +385,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
             )}
             <ImagePreviewGroup isolated>
               <div className="note-attachments">
-                {draft.attachments.map((path) => { const view = attachmentView(path); return <div key={path}>{view.image && view.url ? <PreviewableImage src={view.url} alt={view.name} /> : <span><File size={16} />{view.name}</span>}<button type="button" onClick={() => updateDraft({ ...draftRef.current, attachments: draftRef.current.attachments.filter((item) => item !== path) })} aria-label={`移除 ${view.name}`}><X size={11} /></button></div>; })}
+                {draft.attachments.map((path) => { const view = attachmentView(path); return <div key={path}>{view.image && view.url ? <PreviewableImage src={view.url} alt={view.name} /> : <span><File size={16} />{view.name}</span>}<button type="button" onClick={() => edit((current) => ({ ...current, attachments: current.attachments.filter((item) => item !== path) }))} aria-label={`移除 ${view.name}`}><X size={11} /></button></div>; })}
               </div>
               <UploadAttachmentList
                 attachments={uploads.attachments}
@@ -615,13 +404,13 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
                 : `${saveStatus} · 正文失焦后显示 Markdown`}</span>
           <div className="notes-footer-actions">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={deleting} />
-            {active && <Button variant="danger" disabled={deleting} onClick={() => afterUploads(() => setConfirmDelete(true))}><Trash size={13} />删除</Button>}
+            {active && <Button variant="danger" disabled={deleting} onClick={() => afterUploads(askDelete)}><Trash size={13} />删除</Button>}
             <Button variant={picked.size ? "primary" : "secondary"} disabled={deleting || (!picked.size && !draft.body.trim())} onClick={() => convert()}><NotePencil size={13} />{picked.size ? `创建任务（${picked.size}）` : "转为新任务"}</Button>
-            <Button variant={picked.size ? "secondary" : "primary"} disabled={!dirty || !draft.body.trim() || deleting || saveState === "saving"} onClick={() => { void flushDraft().then((result) => { if (result === "saved") say("随手记已保存"); else if (result === "unsavable") say("随手记不能为空"); }); }}>{saveButtonLabel}</Button>
+            <Button variant={picked.size ? "secondary" : "primary"} disabled={!dirty || !draft.body.trim() || deleting || saveState === "saving"} onClick={() => { void flush().then((result) => { if (result === "saved") notify("随手记已保存"); else if (result === "unsavable") notify("随手记不能为空"); }); }}>{saveButtonLabel}</Button>
           </div>
         </footer>
       </section>
-      {confirmDelete && active && <ConfirmDialog title="删除随手记" message={`确定删除“${titleOf(active.body)}”？此操作不可撤销。`} confirmLabel="删除" danger busy={deleting} onClose={() => setConfirmDelete(false)} onConfirm={() => { setConfirmDelete(false); void remove(); }} />}
+      {pendingDelete && active && <ConfirmDialog title="删除随手记" message={`确定删除“${titleOf(active.body)}”？此操作不可撤销。`} confirmLabel="删除" danger busy={deleting} onClose={cancelDelete} onConfirm={remove} />}
     </div>
   );
 }
