@@ -57,16 +57,47 @@ export type Token = {
 /** 一个词里可能带上来的那几种展开标记。 */
 export type ExpansionMarks = Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm" | "unknownForm">;
 
+/** POSIX 参数展开的**参数名**（`${name}` / `${name:-字}` …）。只有它赋得上值,见 parameterForm。 */
+const PARAM_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** 位置参数与特殊参数（`${1}` / `${@}` / `${#}` / `${?}` / `${!}` / `${$}` / `${-}`）。 */
+const SPECIAL_PARAM = /^(?:[0-9]+|[-@*#?!$])$/;
+const isParam = (text: string) => PARAM_NAME.test(text) || SPECIAL_PARAM.test(text);
+
 /**
- * `${…}` 里那个参数展开是不是**自带退出语义**的那一种（`${参数?字}` / `${参数:?字}`）。
- * 收的是 `inner` —— 去掉 `${` 和 `}` 之后的中间那段。
+ * `${…}` 里那个参数展开是**哪一种**。收的是 `inner` —— 去掉 `${` 和 `}` 之后的中间那段。
  *
- * 判据按 POSIX 的参数名写:名字、位置参数（`${1:?…}`，审查实测的就是这一条）、以及
- * `@ * # ? ! $ -` 那几个特殊参数。`${X:-?}` / `${X#?}` 这种 `?` 在**字**里的不算（那没有退出
- * 语义），所以运算符的位置要卡死在参数名后面第一处。
+ * **这张表是封闭的**（第 1 轮审查 F1）:上一版只认 `${参数?字}` / `${参数:?字}` 一种,其余
+ * 一律不打标 —— 于是「这一层没正面证明过的参数形式」和「证明得出没有退出语义的参数形式」
+ * 在判据面前长得一模一样,凭空获得硬拦资格。实测被硬拦的三条(真 shell 全都自己结束、
+ * `signal=null`、`tail` 一次都没跑到):
+ *   · `: ${1:=default}; tail -F /dev/null; printf DONE` —— `$1: cannot assign in this way`,退 1;
+ *   · `: "${value!}"; …` / `: ${value@Q}; …` —— `bad substitution`,退 1。
+ * 再加 `${1:=…}`、`${…!}` 两条黑名单只修得掉这三个输入;把默认值翻成「证明不了就是未知」
+ * 才修得掉这一类(同 `dollarForm` 那一道的形状)。
+ *
+ *  · `"error"` —— 这个展开**自己就能让 shell 当场走人**:`?` 两种(变量没定义,POSIX)、以及
+ *    往位置参数/特殊参数上赋值(`${1:=v}`,实测当场报错退出)。两者都是「这条命令会自己结束」
+ *    的正面证据,所以同一个标记(`Token.errorForm`)。
+ *  · `"proved"` —— POSIX 列过的那几种:`${param}`、`${#param}`、`:-` `-` `:+` `+` `:=` `=`
+ *    (赋值那两种只在参数是名字时才算)、`#` `##` `%` `%%`。**字**那一半是文本,里面套的展开
+ *    由 `expansionsInText` 自己扫,不在这一层判。
+ *  · `"unknown"` —— 其余一切:bash 的 `${X@Q}`、`${X!}`、`${!X}`、`${X/a/b}`、`${X:1:2}`、
+ *    `${X^^}`、数组下标,以及空的 `${}`。它们的语义随 shell 而变(`@Q` 要 bash 4.4、本机
+ *    /bin/sh 是 bash 3.2 ⇒ bad substitution),这一层读不懂就不许替它背书。
  */
-export function isErrorFormExpansion(inner: string): boolean {
-  return /^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[-@*#?!$0])(?::)?\?/.test(inner);
+export function parameterForm(inner: string): "error" | "proved" | "unknown" {
+  if (isParam(inner)) return "proved";                                   // ${name} ${1} ${@} ${#} …
+  if (inner.startsWith("#") && isParam(inner.slice(1))) return "proved"; // ${#name} ${#1} ${#@}
+  const split = /^([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[-@*#?!$])([\s\S]+)$/.exec(inner);
+  if (!split) return "unknown";                                          // 空的 ${}、参数名就不合法的
+  const [, param = "", rest = ""] = split;
+  if (/^:?\?/.test(rest)) return "error";                                // ${X?字} / ${X:?字}
+  // 赋值:**只有名字赋得上**。位置参数和特殊参数一律当场报错走人(POSIX 说它 unspecified,
+  // dash/bash 实测都是 `cannot assign in this way` + 立刻退出)—— 那也是一种退出语义。
+  if (/^:?=/.test(rest)) return PARAM_NAME.test(param) ? "proved" : "error";
+  if (/^(?::[-+]|[-+])/.test(rest)) return "proved";                     // 默认值 / 替代值
+  if (/^(?:##?|%%?)/.test(rest)) return "proved";                        // 模式剥除
+  return "unknown";
 }
 
 /** `$` 后面出现这些字符才算一个**值展开**的开头（`$NAME` / `$1` / `$@` / `$?` …）。 */
@@ -85,7 +116,7 @@ const LITERAL_AFTER_DOLLAR = /[\s)\]};&|<>=,.:/+%^~`\\]/;
  * 里的形式一律 `unknown`（第 1 轮审查 F2）。
  *
  *   · `substitution` / `arithmetic` —— `$( )` / `$(( ))`:里面是另一层执行 / 算术自己会出错走人;
- *   · `parameter` —— `${…}`:可能带退出语义（见 `isErrorFormExpansion`）;
+ *   · `parameter` —— `${…}`:按 `parameterForm` 再分「自带退出语义 / 证明过 / 未知」三种;
  *   · `value` —— `$NAME` / `$1` / `$@` …:值要等执行时才定下来;
  *   · `literal` —— 上面那张白名单:这个 `$` 什么都不做;
  *   · `unknown` —— **其余一切**。`$[1/0]`（bash 旧式算术，实测除零退 127）、`$'…'`（ANSI-C
@@ -126,7 +157,10 @@ function expansionsInText(inner: string): ExpansionMarks {
       case "parameter": {
         out.expanded = true;
         const close = inner.indexOf("}", i + 2);
-        if (isErrorFormExpansion(inner.slice(i + 2, close < 0 ? inner.length : close))) out.errorForm = true;
+        // 同一个封闭判据,引号内外共用一份(见 parameterForm;两处各自枚举正是 F1 的形状)。
+        const form = parameterForm(inner.slice(i + 2, close < 0 ? inner.length : close));
+        if (form === "error") out.errorForm = true;
+        else if (form === "unknown") out.unknownForm = true;
         break;
       }
       case "value": out.expanded = true; break;
@@ -287,7 +321,11 @@ export function segments(command: string): Segment[] {
       text += "?";
       bare += "?";
       marks.expanded = true;
-      if (isErrorFormExpansion(inner)) marks.errorForm = true;
+      const form = parameterForm(inner);
+      if (form === "error") marks.errorForm = true;
+      // **证明不了就是未知**:不带引号这一侧整段马上被抹成占位符,这里不记就永远没人知道
+      // 「这个参数形式没人证明过」(见 parameterForm 的三条实测)。
+      else if (form === "unknown") marks.unknownForm = true;
       // **内层那些展开也要带上来**（第 2 轮审查第 2 条）:整段马上要被抹成一个 `?`,里面套着的
       // 算术/命令替换/error form 再不记就永远找不回来了 —— `: ${X:-$((1/0))}` 真 shell 里是
       // 除零退 127,而判据只看见「一个说不清的展开」,于是把一条自己会结束的命令硬拦掉。

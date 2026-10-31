@@ -54,6 +54,12 @@ assert.equal(
     // `/bin/sh -c ': $[1/0]; while true; do :; done'` ⇒ rc=127、`1/0: division by 0`,
     // 循环一次都没跑 —— 而上一版的词法层对 `$[` 一个标记都不打。
     [": $[1/0]; while true; do :; done", "`$[…]` 是这一层没见过的展开形式（旧式算术，实测 127 division by 0）"],
+    // 自由工作流第 1 轮审查 F1 给的三条输入本体(同族的封闭性对照组在 ②f)。三条真 shell 里
+    // 都是 `status=1, signal=null`、tail 一次都没跑到:前者是「位置参数赋不上值」,后两者是
+    // bash 3.2 不认的参数形式。词法层上一版对它们只打一个 expanded,于是硬拦资格照旧。
+    [": ${1:=default}; tail -F /dev/null; printf 'DONE\\n'", "往位置参数上赋值当场报错走人（实测 1，`$1: cannot assign in this way`）"],
+    [': "${value!}"; tail -F /dev/null; printf \'DONE\\n\'', "`${X!}` 是这一层没正面证明过的参数形式（实测 1，bad substitution）"],
+    [": ${value@Q}; tail -F /dev/null; printf 'DONE\\n'", "`${X@Q}` 同上（bash 4.4 才有，本机 /bin/sh 是 3.2，实测 1 bad substitution）"],
   ] as const;
   for (const [command, why] of cases) passes(command, `执行语义这一层读不懂（${why}）`);
   console.log(`✓ 执行环境:真 shell 实测会自己结束的那 ${cases.length} 条，一条都不许硬拦`);
@@ -172,6 +178,10 @@ assert.equal(
     ["嵌套在参数展开里的算术", ["${ASH_X:-$((1/0))}", '"${ASH_X:-$((1/0))}"', "${ASH_X-$((1/0))}"]],
     ["嵌套在参数展开里的命令替换", ["${ASH_X:-$(printf x)}", '"${ASH_X:-$(printf x)}"', "${ASH_X:+`printf x`}"]],
     ["嵌套在参数展开里的退出语义", ["${ASH_X:-${ASH_Y:?boom}}", '"${ASH_X:-${ASH_Y:?boom}}"']],
+    // 自由工作流第 1 轮审查 F1:参数展开那一道也得是**封闭**的(见 shared 的 parameterForm)。
+    // 赋值只有名字赋得上,位置参数和特殊参数当场报错走人;而这一层没正面证明过的形式一律未知。
+    ["往位置/特殊参数上赋值", ["${1:=v}", '"${1:=v}"', "${1=v}", "${@:=v}", "${#=v}"]],
+    ["没正面证明过的参数形式", ["${ASH_X!}", '"${ASH_X!}"', "${ASH_X@Q}", "${!ASH_X}", "${ASH_X/a/b}", "${ASH_X:1:2}", "${ASH_X^^}", "${}"]],
   ];
   for (const [kind, forms] of spellings) {
     for (const form of forms) {
@@ -189,6 +199,13 @@ assert.equal(
     ["tail -F $LOG", "值展开在参数位"],
     ["tail -F ${LOG}", "换成大括号同理"],
     [`echo ${"${HOME}"}; ${BASE}`, "没有退出语义的普通展开"],
+    // F1 往「未知」那侧翻默认值,**POSIX 列过的那几种不许跟着翻**:它们证明得出没有退出语义,
+    // 跟着翻一遍这道闸就只剩纯内建循环还拦得住了。实测 `: ${CK_UNSET:=d}; tail -F /dev/null`
+    // 永不结束(被 2.5 秒超时 SIGTERM 掉),`${#X}` / `${X%.log}` 同理。
+    [`: ${"${CK_UNSET:=d}"}; ${BASE}`, "名字赋得上值 ⇒ 没有退出语义"],
+    [`: ${"${#CK_UNSET}"}; ${BASE}`, "取长度"],
+    [`: ${"${CK_UNSET%.log}"}; ${BASE}`, "模式剥除"],
+    [`: ${"${CK_UNSET:-fallback}"}; ${BASE}`, "默认值"],
     [`echo $HOME; ${BASE}`, "同上，不带大括号"],
     // ③ `${…}` 不再当分段符之后，**真正的分组 `{ …; }` 必须还认得**。
     ["{ tail -F build.log; }", "大括号分组"],

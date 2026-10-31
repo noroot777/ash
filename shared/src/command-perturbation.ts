@@ -324,10 +324,14 @@ export function perturbed(segs: Segment[]): string | null {
       if (PATH_ASSIGN.test(t.text) && (!t.quoted || (i >= at && i < prefixEnd))) {
         return "前面有一段改过 PATH，后面那些工具还找不找得到";
       }
-      if (t.errorForm) return "那个 ${…?…} 展开在变量没定义时当场就让 shell 走人";
+      // 两种都在这个标记下(见 command-lex.ts 的 parameterForm):`${X:?字}` 是变量没定义时走人,
+      // `${1:=值}` 是往位置参数上赋值当场报错走人 —— 对判据而言是同一件事:它自己会结束。
+      if (t.errorForm) return "那个参数展开自己就能让 shell 当场走人（`${X:?字}` 变量没定义、`${1:=值}` 不能这样赋值，实测都是立刻退出）";
       if (t.substitution) return "那段命令替换跑的是一段这一层读不进去的代码";
       if (t.arithmetic) return "那段算术展开自己就能让 shell 当场出错走人（`$((1/0))` 实测 127）";
-      if (t.unknownForm) return "那个 `$` 后面跟的形式这一层没有正面识别（`$[1/0]` 这类旧式算术实测除零退 127），读不懂就证明不了它不出错";
+      // 两道封闭判定都冒到这个标记上:`$` 后面那一个字符(dollarForm)、以及 `${…}` 里那个参数
+      // 形式(parameterForm)。两者都是「这一层没正面证明过」,不是「没什么可担心的」。
+      if (t.unknownForm) return "那个展开形式这一层没有正面识别（`$[1/0]` 这类旧式算术实测除零退 127、`${X@Q}` / `${X!}` 实测 bad substitution 退 1），读不懂就证明不了它不出错";
     }
     // **「这一段的命令词是谁」答不出来 ⇒ 未知,不是「没什么可担心的」**。原先这里是 `continue`,
     // 于是 `action=break; while true; do "$action"; done; printf 'DONE\n'`（实测退出 0 并打出
