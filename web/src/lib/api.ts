@@ -101,7 +101,7 @@ export const api = {
   pickDirectory: (startIn: string): Promise<DirectoryPick> =>
     request("/host/pick-directory", json("POST", { startIn })),
 
-  projects: (): Promise<ProjectView[]> => request("/projects"),
+  projects: (signal?: AbortSignal): Promise<ProjectView[]> => request("/projects", { signal }),
   // `createDir` 为真时服务端会把不存在的目录（连同缺失的上级）建出来；不带它就是老行为
   // ——目录不存在也照记不误。只有在界面上明确告诉过用户「这个目录会被建出来」时才带上。
   createProject: (name: string, repoPath: string, createDir = false): Promise<ProjectView> =>
@@ -198,10 +198,10 @@ export const api = {
     request(`/groups/${id(groupId)}/tasks/batch`, json("POST", body)),
 
   // 列表不带正文（见 shared 的 TaskListItem）；正文走 api.task(id)。
-  tasks: (): Promise<TaskListItem[]> => request("/tasks"),
+  tasks: (signal?: AbortSignal): Promise<TaskListItem[]> => request("/tasks", { signal }),
   task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
-  taskQuestionHistory: (taskId: string): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
-    request(`/tasks/${id(taskId)}/question-history`),
+  taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
+    request(`/tasks/${id(taskId)}/question-history`, { signal }),
   ...taskNoticeApi,
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
   followUps: (taskIds: string[]): Promise<TaskFollowUp[]> =>

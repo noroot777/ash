@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowClockwise, ArrowUUpLeft, CheckCircle, FileText, PencilSimple, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
 import type { AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
 import { ACCEPT_GATE_STATUS_LABELS, acceptGateCancelMessage, summarizeAcceptGate } from "@ash/shared/accept-gate";
 import type { Task, TaskListItem } from "@ash/shared";
 import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { api } from "../lib/api.ts";
-import { createCatchUp } from "../lib/catchUp.ts";
+import { useCatchUp } from "../lib/useCatchUp.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
 import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 
@@ -60,20 +60,26 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
   // 等于把一次读取失败说成「已确认你不是管理员」:那颗「改这条命令」从此不再出现，页面上一个
   // 字都不会说为什么，服务端恢复了也不会自己回来 —— 而 `null`（还没读到）和 `false`（确认没
   // 权限）在界面上恰好长得一样，所以这个错判连看都看不出来。重试策略与任务列表那一条共用
-  // 同一份（`createCatchUp`）:恢复责任不许由每个调用点自己决定。
-  useEffect(() => {
-    let alive = true;
-    setCanManage(null);
-    const catchUp = createCatchUp(() => api.projects().then(
+  // 同一份（`useCatchUp` → `createCatchUp`）:恢复责任不许由每个调用点自己决定。
+  //
+  // 这一条不接「连上就对账」:管理权限不随 SSE 变化(改成员要刷新页面),它只要「读到为止」。
+  const projectRef = useRef(task.projectId);
+  projectRef.current = task.projectId;
+  const manageCatchUp = useCatchUp((signal) => {
+    const mine = task.projectId;
+    return api.projects(signal).then(
       (list) => {
-        if (alive) setCanManage(list.find((row) => row.id === task.projectId)?.myRole === "admin");
+        // 换了项目之后才回来的那一份不许写进来(掐断那一瞬它可能已经 resolve)。
+        if (projectRef.current === mine) setCanManage(list.find((row) => row.id === mine)?.myRole === "admin");
         return true;
       },
       () => false,
-    ));
-    catchUp.run();
-    return () => { alive = false; catchUp.cancel(); };
-  }, [task.projectId]);
+    );
+  }, task.projectId);
+  useEffect(() => {
+    setCanManage(null);
+    void manageCatchUp.run();
+  }, [manageCatchUp]);
   // 停在中途那道「等我点头」上时，那一按是**放行**不是验收：不会碰门禁，所以别在这儿
   // 预告「这一按要先跑十几分钟」—— 那句话在那一站上是假的。跑过的记录仍然照常显示。
   const atFinalGate = isFinalHumanGate(task.workflow, task.workflowAt);

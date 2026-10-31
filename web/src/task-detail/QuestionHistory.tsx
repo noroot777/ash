@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { CaretDown, CheckCircle } from "@phosphor-icons/react";
 import { formatQuestionAnswers, legacyQuestionRecord, questionItems, questionOptionSelected, type QuestionRecord } from "@ash/shared/questions";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
+import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { formatInstant } from "./utils.ts";
@@ -30,39 +31,46 @@ function LocalQuestionHistory({ taskId, history, messages, children }: {
   taskId: string; history?: QuestionRecord[]; messages: QuestionMessage[]; children: ReactNode;
 }) {
   const [state, setState] = useState<{ taskId: string; records: QuestionRecord[]; error?: string }>({ taskId, records: history ?? [] });
-  const generation = useRef(0);
+  // 连上过没有。连上过之后就不再走那条「没连上时延迟兜底读一次」的路 —— 断线期间读也读
+  // 不到,而追平那一层会自己重试到读到。
   const connectedOnce = useRef(false);
   useEffect(() => {
     if (history !== undefined) setState((current) => ({ taskId, records: mergeRecords(current.records, history) }));
   }, [taskId, history]);
-  const reload = useCallback(() => {
-    const token = ++generation.current;
-    void api.taskQuestionHistory(taskId).then((records) => {
-      if (token !== generation.current) return;
+  // 读取、重试、代次都交给追平层(lib/catchUp.ts):这个组件原先自己写了一套 generation +
+  // connectedOnce + setTimeout,而读失败不重试、断线也不作废在途那一发(第 5 轮审查 N1 点到
+  // 的五处写法之一)。`taskId` 作身份:它一变就是新一代次。
+  const catchUp = useCatchUp((signal) => api.taskQuestionHistory(taskId, signal).then(
+    (records) => {
       setState((current) => ({ taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], records) }));
-    }).catch((error) => {
-      if (token !== generation.current) return;
-      setState((current) => ({ taskId, records: current.taskId === taskId ? current.records : [], error: String(error.message ?? error) }));
-    });
-  }, [taskId]);
-  useEffect(() => () => { generation.current += 1; }, [taskId]);
+      return true;
+    },
+    (error) => {
+      // 如实显示「这一份没读到」,同时让追平层接着重试 —— 两件事不冲突(上一版只做了前者)。
+      setState((current) => ({ taskId, records: current.taskId === taskId ? current.records : [], error: String(error?.message ?? error) }));
+      return false;
+    },
+  ), taskId);
+  // 交给「重试」按钮的是抢占式那一个:人点了就该立刻去读,不排在一发背景读取后面。
+  const reload = catchUp.runNow;
   const connected = useServerEvents((event) => {
     const records = event.type === "task.question" && event.taskId === taskId && event.answeredQuestion
       ? [event.answeredQuestion]
       : event.type === "task.updated" && event.task.id === taskId ? event.task.questionHistory : undefined;
     if (records) setState((current) => ({ taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], records) }));
   });
+  // 连上就对账、断线就作废(统一接线,见 lib/useCatchUp.ts)。
+  useCatchUpLink(catchUp, connected);
   useEffect(() => {
     if (connected) {
       connectedOnce.current = true;
-      const timer = setTimeout(reload, 0);
-      return () => clearTimeout(timer);
+      return;
     }
     if (connectedOnce.current) return;
-    // 调用方快照可能早于最近一次答复；每次挂载用轻量读取补齐，事件流未连上时延迟兜底。
-    const timer = setTimeout(reload, 1000);
+    // 调用方快照可能早于最近一次答复;事件流还没连上时用一次轻量读取补齐。
+    const timer = setTimeout(() => { void catchUp.run(); }, 1000);
     return () => clearTimeout(timer);
-  }, [connected, reload]);
+  }, [catchUp, connected]);
   const local = state.taskId === taskId ? state : { records: [], error: undefined };
   return <HistoryContext value={{ records: local.records, messages, error: local.error, retry: reload }}>{children}</HistoryContext>;
 }

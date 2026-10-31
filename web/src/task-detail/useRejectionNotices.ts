@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ConversationItem } from "./conversationModel.ts";
 import { api } from "../lib/api.ts";
-import { type CatchUp, createCatchUp } from "../lib/catchUp.ts";
+import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 import { useServerEvents } from "../lib/events.ts";
 
 export type RejectionRemedy = "reclaim-turn" | null;
@@ -19,24 +19,22 @@ export function useRejectionNotices(taskId: string, revision = 0): {
 } {
   const [items, setItems] = useState<ConversationItem[]>([]);
   const [remedy, setRemedy] = useState<RejectionRemedy>(null);
-  const catchUp = useRef<CatchUp | null>(null);
-  // 「该重读了」。**不清空、不翻 loading** —— 它是追平,不是换一份数据(见下面那段)。
-  const reload = useCallback(() => catchUp.current?.run(), []);
-
-  useEffect(() => {
-    let live = true;
-    // 切任务先清空:否则上一个任务的挡回会挂在新任务的时间线上。**只有这里清** ——
-    // 「换了任务」是身份真的变了,而「重读一次」不是(见 reload)。
-    setItems([]);
-    setRemedy(null);
-    // 读失败一律**保持原样并自己重试到读到**(第 1 轮审查 F6),策略与任务列表、验收卡
-    // 共用同一份(`createCatchUp`)。上一版的失败分支是整个吞掉:items 已经被清成空、
-    // remedy 已经被清成 null,于是「读失败」在界面上和「没有被挡回过、也没有救援资格」
-    // 长得一模一样 —— 之前的操作记录和那个人工救援入口一起不见,服务端恢复了也不会自己
-    // 回来(task.id 没变,这个 effect 不会再跑),页面上一个字都不说为什么。
-    const pending = createCatchUp(() => api.taskNotices(taskId).then(
+  // 这一份**属于谁**:taskId 变了是换任务,revision 变了是调用方要求重新来一轮。它一变就是
+  // 新一代次 —— 上一代在途那一发当场掐断,它回来也写不进来(下面那道 `mine` 判据兜住
+  // 「abort 之前就已经 resolve」那一瞬)。
+  const identity = `${taskId}:${revision}`;
+  const active = useRef(identity);
+  active.current = identity;
+  // 读失败一律**保持原样并自己重试到读到**(第 1 轮审查 F6),策略与任务列表、验收卡共用
+  // 同一份(`useCatchUp` → `createCatchUp`)。上一版的失败分支是整个吞掉:items 已经被清成
+  // 空、remedy 已经被清成 null,于是「读失败」在界面上和「没有被挡回过、也没有救援资格」
+  // 长得一模一样 —— 之前的操作记录和那个人工救援入口一起不见,服务端恢复了也不会自己
+  // 回来(task.id 没变,这个 effect 不会再跑),页面上一个字都不说为什么。
+  const catchUp = useCatchUp((signal) => {
+    const mine = identity;
+    return api.taskNotices(taskId, signal).then(
       (r) => {
-        if (!live) return true;
+        if (active.current !== mine) return true;
         setItems(r.notices.map((notice) => ({
           kind: "event" as const,
           // 用库里那行的 id:合进时间线之后它要能被稳定地认出来(排序、去重、key)。
@@ -51,15 +49,21 @@ export function useRejectionNotices(taskId: string, revision = 0): {
         return true;
       },
       () => false,
-    ));
-    catchUp.current = pending;
-    pending.run();
-    return () => {
-      live = false;
-      pending.cancel();
-      if (catchUp.current === pending) catchUp.current = null;
-    };
-  }, [taskId, revision]);
+    );
+  }, identity);
+  // 「该重读了」。**不清空、不翻 loading** —— 它是追平,不是换一份数据(见下面那段)。
+  // 交出去的是抢占式那一个:调用方是「人刚放开了回合占位,等着看结果」(ConversationFeed 把它
+  // 接在 ReclaimTurnSwitch 的 onDone 上),不该排在一发背景读取后面(见 CatchUp.runNow)。
+  const reload = catchUp.runNow;
+
+  useEffect(() => {
+    // 切任务先清空:否则上一个任务的挡回会挂在新任务的时间线上。**只有这里清** ——
+    // 「换了任务」是身份真的变了,而「重读一次」不是(见 reload)。换身份时 useCatchUp 已经
+    // 换了实例,所以这个 effect 跟着重跑,首读也由它发。
+    setItems([]);
+    setRemedy(null);
+    void catchUp.run();
+  }, [catchUp]);
 
   // ── 失效协议:这一份不是只在打开那一刻算一次的 ────────────────────────────────
   // 这个接口的 `remedy` 是**服务端此刻算出来的**(那个人工救援入口该不该显示),而它和
@@ -71,17 +75,13 @@ export function useRejectionNotices(taskId: string, revision = 0): {
   // server/src/user-action-rejection.ts,时间那一半见 turn-lock-reclaim.ts 的巡检)。
   const connected = useServerEvents((event) => {
     if (event.type !== "task.notices" || event.taskId !== taskId) return;
-    reload();
+    // 背景触发走合流那一个:事件可以成串地来,掐掉在途那一发重发会把慢接口饿死。
+    void catchUp.run();
   });
-  // **每次连上都重新对一遍账**:事件流没有历史回放(服务端只订阅当前 bus、不带事件 id),
-  // 断线那几十秒里的变化一条都补不回来。首次连上也要对一次 —— 挂载时那一发 GET 和事件流
-  // 的建立是并发的,中间那段的事件同样没人接。同 useTaskMonitors。
-  const linked = useRef(connected);
-  useEffect(() => {
-    const was = linked.current;
-    linked.current = connected;
-    if (connected && !was) reload();
-  }, [connected, reload]);
+  // **每次连上都重新对一遍账,断线就把这一代次作废**。两件事都不能少,理由见
+  // lib/useCatchUp.ts 的文件头 —— 这个 hook 的上一版只写了前一半(只认 false→true 那一下),
+  // 于是断线那一发挂住之后,重连的追平只记一笔欠账就没有下文了(第 5 轮审查 N1)。
+  useCatchUpLink(catchUp, connected);
 
   return { items, remedy, reload };
 }
