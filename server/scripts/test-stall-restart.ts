@@ -19,7 +19,12 @@
 //   ③ 判决日志读不出来(第 5 轮审查 F1,已实测):库那一格排队没落、日志又被改成不可读,于是
 //      这一轮的结局**核实不了**。那时不许把它升级成成功 —— 但也不该杀:我们并不知道它熔断过
 //      没有。所以这一段钉的是「只说不杀、照样落 failed」。
-//   ④ 原进程**没活到接管**,走启动对账(第 5 轮审查 F3,已实测):持续目标原先在这条路上被
+//   ④ **全新起跑的回合 + 日志读不出来**:这一档必须**什么都不发生**。「核实不了」只对上一个
+//      进程留下来的回合成立 —— 全新起跑的身份此刻刚生成,盘上不可能有它的判决,读不出来推不出
+//      任何结论。少了这一条,一次日志权限故障就会把这台 ash 上每一轮都打成失败。
+//      「是不是留下来的」由事实认(本进程开过那一行开始记录没有,见 session-turn-registry.ts 的
+//      `openedHere`),不由调用方申报 —— 申报的默认值落在不安全那一侧,忘了传就退回 F1。
+//   ⑤ 原进程**没活到接管**,走启动对账(第 5 轮审查 F3,已实测):持续目标原先在这条路上被
 //      写成「因服务中断已暂停」,界面显示暂停中 + 继续,回合区间 `outcome` 留空 —— 而判决明明
 //      还在日志里读得出来。两个结算入口共用同一句问话之后,这条路落 failed 并把区间收口。
 //
@@ -31,7 +36,9 @@
 // 答完**:那是对判决最严格的考验 —— 没有任何退出码能提示这一轮出过问题。
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, createWriteStream, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import {
+  chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,15 +50,21 @@ const UNREADABLE = "ASH_STALL_RESTART_UNREADABLE";
 if (!phase) {
   // ── 调度:两个场景各一个临时库,每个场景两个独立进程依次跑 ──────────────────────
   const scenes = [
-    { what: "无竞争", hold: false, unreadable: false, mode: "consume" },
-    { what: "库被另一笔长事务占着", hold: true, unreadable: false, mode: "consume" },
-    { what: "判决日志读不出来", hold: true, unreadable: true, mode: "consume" },
-    { what: "原进程没活到接管,走启动对账", hold: false, unreadable: false, mode: "reconcile" },
+    { what: "无竞争", hold: false, unreadable: false, mode: "consume", phases: ["before-restart", "after-restart"] },
+    { what: "库被另一笔长事务占着", hold: true, unreadable: false, mode: "consume", phases: ["before-restart", "after-restart"] },
+    { what: "判决日志读不出来", hold: true, unreadable: true, mode: "consume", phases: ["before-restart", "after-restart"] },
+    // 这一个只有一段:全新起跑、日志从一开始就读不出来,看它会不会被冤枉。
+    { what: "全新起跑遇上日志读不出来", hold: false, unreadable: true, mode: "fresh-unreadable", phases: ["before-restart"] },
+    { what: "原进程没活到接管,走启动对账", hold: false, unreadable: false, mode: "reconcile", phases: ["before-restart", "after-restart"] },
+    // 同一条路 + 判决核实不了:对账**不许**拿熔断那套措辞去念一份「核实不了」的记录。
+    // 这是上一版「并列三档返回」留下的假话:接管失败转对账时对账第二次来问,内存里已经有那份
+    // unverified 记录,于是它走「有判决」那一支,被说成「已被判定上游连不上并按失败结算」。
+    { what: "走启动对账,且判决核实不了", hold: true, unreadable: true, mode: "reconcile", phases: ["before-restart", "after-restart"] },
   ] as const;
   for (const scene of scenes) {
     const stage = mkdtempSync(join(tmpdir(), "ash-stall-restart-"));
     const lines: string[] = [];
-    for (const next of ["before-restart", "after-restart"]) {
+    for (const next of scene.phases) {
       const child = spawnSync(process.execPath, ["--import", "tsx", import.meta.filename, next], {
         encoding: "utf8",
         env: {
@@ -71,6 +84,22 @@ if (!phase) {
       }).find((r) => r.event === event);
     const where = (why: string) => `[${scene.what}] ${why}\n${lines.join("\n")}`;
 
+    // ④ 全新起跑那一档:一个字都不该发生 —— 这一轮正常答完就该落「已完成」。
+    if (scene.mode === "fresh-unreadable") {
+      const settledFresh = say("settled");
+      assert.ok(settledFresh, where("这一段没走到结算"));
+      assert.equal(settledFresh.kindAtConsume, null,
+        where("全新起跑的回合被登记成「结局核实不了」—— 一次日志故障会把这台 ash 上每一轮都打成失败"));
+      // **这一轮自己的结局**才是判据:`completed`。任务那一行照 ash 的完成协议落 `failed`
+      // (这个合成回合没调过 complete_task,exit 0 ≠ done),跟日志故障无关 —— 所以这里不拿它
+      // 当断言,免得测出一个假的「没被冤枉」。
+      assert.equal(settledFresh.turn, "completed",
+        where("全新起跑、正常答完的一轮,回合区间被记成了 failed —— 它被日志故障冤枉了"));
+      assert.doesNotMatch(String(settledFresh.trace ?? ""), /核实不了/,
+        where("全新起跑的一轮被告知「上次中断的结局核实不了」—— 它压根没有上一次"));
+      continue;
+    }
+
     // ① 第一段:看门狗真的熔断了,那一刻判决在内存里、而且**已经落盘**。
     const tripped = say("termination-requested");
     assert.ok(tripped, where("第一段没熔断 —— 夹具不对"));
@@ -86,13 +115,17 @@ if (!phase) {
     // ③ 第二段(全新进程)接管:**结论必须还在**。旧版这里是 false —— 那就是整条缺陷的起点。
     if (scene.mode === "consume") {
       const resumed = say("resumed");
+      const settled = say("settled");
       assert.ok(resumed, where("第二段没跑起来"));
       if (scene.unreadable) {
         // 核实不了那一档:登记的是「不许按成功结算」,**不是**熔断 —— 所以不杀。
         assert.equal(resumed.kind, "unverified",
           where("日志读不出来,这一轮却被当成了「没判决」(会升级成成功)或者「确凿熔断」(会被误杀)"));
         assert.equal(resumed.killed, false, where("只是核实不了就把一个可能完全健康的 agent 杀了"));
-        assert.match(String(resumed.diagnosis ?? ""), /核实不了/, where("用户那边一个字都没说"));
+        // 用户看得见的那一句:落在会话的 `.md` 里(`emitTurnError` 的三处之一)。判决记的是
+        // **原始起因**(EACCES 那句),措辞由 turn-stall.ts 按收场挑 —— 所以这一条要看产物,
+        // 不是看判决里存了什么。
+        assert.match(String(settled.trace ?? ""), /核实不了/, where("用户那边一个字都没说"));
       } else {
         assert.equal(resumed.kind, "tripped", where("重启接管后判决丢了 —— 上游一恢复,被我们熔断的那一轮就会按正常完成结算"));
         // 终止义务也要跟着恢复:判决已经作出、话已经说出去了,不能让它接着跑下去。
@@ -100,7 +133,7 @@ if (!phase) {
       }
     }
 
-    // ④ 最后显示成什么:consume 那三个场景里上游**完全恢复、正常答完**(exit 0),没有任何
+    // ⑤ 最后显示成什么:consume 那三个场景里上游**完全恢复、正常答完**(exit 0),没有任何
     // 退出码能提示出过问题 —— 结论只能来自那份判决(或者「核实不了」这个事实本身)。
     const settled = say("settled");
     assert.ok(settled, where("第二段没走到结算"));
@@ -112,11 +145,17 @@ if (!phase) {
         where("对账把熔断过的那一轮说成了暂停 —— 用户看到的那个结论说它在等人"));
       assert.doesNotMatch(String(settled.timeline ?? ""), /因服务中断已暂停/,
         where("「因服务中断已暂停」还在"));
+      if (scene.unreadable) {
+        assert.match(String(settled.timeline ?? ""), /核实不了/,
+          where("对账没说清这一轮是「核实不了」"));
+        assert.doesNotMatch(String(settled.timeline ?? ""), /已被判定上游连不上并按失败结算/,
+          where("对账拿熔断的措辞念了一份「核实不了」的记录 —— 那是句假话,我们并不知道它熔断过"));
+      }
       assert.equal(settled.goalTurn, 0, where("持续目标没收尾"));
       assert.equal(settled.stallFlag, null, where("旧会话的停滞标记没人撤 —— 下一轮会让红环凭空亮起来"));
     }
   }
-  console.log("test:stall-restart ok：判决落盘,库排队/日志读不出来/原进程没活到接管三条路都不会把一轮失败说成成功");
+  console.log("test:stall-restart ok：判决落盘;库排队、日志读不出来、原进程没活到接管三条路都不会把一轮失败说成成功,全新起跑也不会被冤枉");
 } else {
   // ── 两段共用的一段:合成上游 + 真 consumeSingleRun ───────────────────────────
   const stage = process.env.ASH_STALL_RESTART_STAGE!;
@@ -137,8 +176,10 @@ if (!phase) {
   await ensureSchema();
   // 场景③:第二段开始前把日志改成不可读 —— 必须在 turn-stall-persist 装载之前动手(装载就在
   // 那个模块的模块初始化里),所以这几句排在下面那些 import 前面。
-  if (phase === "after-restart" && process.env[UNREADABLE]) {
-    chmodSync(stallJournalFileForDb(process.env.ASH_DB), 0o000);
+  if (process.env[UNREADABLE] && (phase === "after-restart" || mode === "fresh-unreadable")) {
+    const journal = stallJournalFileForDb(process.env.ASH_DB);
+    writeFileSync(journal, "", { flag: "a" }); // 全新那一档盘上压根还没有这个文件
+    chmodSync(journal, 0o000);
   }
   const { consumeSingleRun } = await import("../src/single-run.js");
   const { stallFailure } = await import("../src/turn-stall-verdict.js");
@@ -193,6 +234,13 @@ if (!phase) {
     },
     events: {
       async *[Symbol.asyncIterator]() {
+        if (mode === "fresh-unreadable") {
+          // 全新起跑:上游一切正常。此刻 `restoreStallVerdict` 已经跑过了,看它登记了什么。
+          emit({ event: "fresh", kind: stallFailure("restart-session", AT)?.kind ?? null });
+          yield { kind: "text", text: "一切正常。\n" };
+          yield { kind: "done", exitStatus: 0 };
+          return;
+        }
         if (phase === "before-restart") {
           // 场景②:在这里占住连接。**不提交也不回滚** —— 进程马上就要没了,而这正是现场:
           // 判决的写排在这笔事务后面,一个字节都还没落库。
@@ -221,17 +269,24 @@ if (!phase) {
       taskId: "restart", sessId: "restart-session", agentType: "codex",
       ex: { type: "codex", name: "smoke", model: null } as never,
       cwd, handle: handle as never, out, turnStart: AT, cliSessionId: "cli-restart", autoTitle: false,
-      adopted: phase === "after-restart",
     });
   }
   const taskRow = (await dbClient.execute("SELECT status, goal_turn FROM tasks WHERE id = 'restart'")).rows.at(0);
   const turn = (await dbClient.execute("SELECT outcome FROM session_turns WHERE session_id = 'restart-session'")).rows.at(0)?.outcome;
   const stallFlag = (await dbClient.execute("SELECT upstream_stalled_since FROM sessions WHERE id = 'restart-session'"))
     .rows.at(0)?.upstream_stalled_since ?? null;
-  // 时间线落在会话的 `.md` 里(task-timeline.ts),不是库里的一列。
-  const timeline = readFileSync(join(stage, "runs", "restart", "restart-session.md"), "utf8");
+  // 时间线落在会话的 `.md` 里(task-timeline.ts),不是库里的一列。运行输出那条流是异步冲刷的,
+  // 一个字都还没落盘时文件可能压根不存在 —— 那不是失败,所以这里不许因此抛。
+  const transcript = join(stage, "runs", "restart", "restart-session.md");
+  const timeline = existsSync(transcript) ? readFileSync(transcript, "utf8") : "";
+  // **用户看得见的那一条红字看 trace**:`.md` 那条流是异步冲刷的,而这个夹具末尾要
+  // `process.exit`(模拟 server 被杀),缓冲里的内容跟着丢 —— 不是产品少写了。trace 是同步追加
+  // 的,而且它才是刷新页面之后按回合回放的那一份,正好对上项目那条「刷新后仍看得出」的判据。
+  const tracePath = join(stage, "runs", "restart", "restart-session.trace.jsonl");
+  const trace = existsSync(tracePath) ? readFileSync(tracePath, "utf8") : "";
   emit({
-    event: "settled", task: taskRow?.status, turn, goalTurn: taskRow?.goal_turn ?? null, timeline, stallFlag,
+    event: "settled", task: taskRow?.status, turn, goalTurn: taskRow?.goal_turn ?? null, timeline, trace, stallFlag,
+    kindAtConsume: stallFailure("restart-session", AT)?.kind ?? null,
   });
   process.exit(0);
 }

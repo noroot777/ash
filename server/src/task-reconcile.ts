@@ -6,6 +6,7 @@ import { db } from "./db/index.js";
 import { sessions, sessionTurns, tasks } from "./db/schema.js";
 import { recordTurnSpan } from "./session-turns.js";
 import { clearTaskStallFlags } from "./session-stall-flag.js";
+import { stallReconcileText, stallReconcileUnverifiableText } from "./turn-stall.js";
 import { restoreStallVerdict } from "./turn-stall-persist.js";
 import { clearStallFailure } from "./turn-stall-verdict.js";
 import { claimReconcileTurn } from "./runs.js";
@@ -138,15 +139,16 @@ async function interruptedTurnVerdict(taskId: string): Promise<{ note: string } 
     .orderBy(desc(sessionTurns.startedAt));
   const notes: string[] = [];
   for (const turn of open) {
-    // `adopted: true` —— 这些回合身份确实是上一个进程留下来的,所以「判决核实不了」那一档在这里
-    // 同样成立:读不出日志时不许把这一轮说成正常结束(同一条判据见 restoreStallVerdict)。
-    const restored = await restoreStallVerdict(turn.sessionId, turn.startedAt, true);
-    if (!restored) continue;
-    notes.push(restored.kind === "verdict"
-      ? "本回合在上次 ash 运行期间已被判定上游连不上并按失败结算,服务重启后原进程已不在,"
-        + `按失败收尾。原判决(${restored.verdict.at}):${restored.verdict.reason}`
-      : `本回合是上次 ash 中断时留下的,而本次启动读不出熔断判决日志(${restored.why}),`
-        + "无法确认它当时有没有被判失败 —— 按未完成收尾,不记成完成。");
+    // 「这是上一个进程留下来的回合吗」由 `restoreStallVerdict` 自己从事实认(本进程开过那一行
+    // 开始记录没有),这里一个字都不用申报 —— 对账既可能碰到上一个进程留下来的回合,也可能碰到
+    // 本进程刚起跑、消费循环却在初始化段挂掉的那种,两者该得到不同答案。
+    const verdict = await restoreStallVerdict(turn.sessionId, turn.startedAt);
+    if (!verdict) continue;
+    // **措辞不在这儿写**:同一个结论在两处各说一遍,迟早说成两件事(这条链上出过的事故全是
+    // 这个形状)。共同那一句和判决原文的格式归 turn-stall.ts 一处出,这里只挑收场。
+    notes.push(verdict.kind === "tripped"
+      ? stallReconcileText(verdict)
+      : stallReconcileUnverifiableText(verdict.reason));
     await recordTurnSpan({
       sessionId: turn.sessionId, taskId, cwd: turn.cwd, startedAt: turn.startedAt,
       endedAt: now(), outcome: "failed",

@@ -65,7 +65,7 @@ import { isExecutionNotice } from "./session-notice.js";
 import { RUNS_DIR } from "./paths.js";
 import { runTracePaths } from "./transcript.js";
 import { producesWork } from "@ash/shared/waiting";
-import { markStallFailure, markUnverifiedTurn, type StallVerdict } from "./turn-stall-verdict.js";
+import { markStallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import { now } from "./util.js";
 
 /** 持有者 = 此刻在消费这条会话的那个实例本身(同 session-waiting.ts 的 WaitingOwner)。 */
@@ -576,39 +576,52 @@ export function stallTripText(facts: StallFacts): string {
 }
 
 /**
- * 接管一个已被判熔断的回合时那段文案:**如实说这是上一次运行的判决**,别冒充这一刻才判的。
+ * **一份上一次运行留下的判决,要怎么对用户讲** —— 共同那一句加判决原文,由这一处出。
+ *
+ * 为什么不许各处自己措辞(第 2 轮续聊自审):这条链上反复出事的形状就是**同一个结论在两处被
+ * 说成两件事**(「已自动终止」的红字 vs 落位说的「它在等你」)。接管那一路和启动对账那一路说的
+ * 是同一件事,只有收场不同,所以共同那一句和判决原文的格式必须只有一份。
  *
  * 判决原文整段带上 —— 上一次运行写的那条诊断可能随进程一起没了(trace 那一笔同样可能排在
  * 队里),这里是用户唯一还能看到它的地方。
  */
+function carriedVerdictText(verdict: StallVerdict, tail: string): string {
+  return "这一回合在上次 ash 运行期间已被判定上游连不上并按失败结算,"
+    + `${tail}原判决(${verdict.at}):${verdict.reason}`;
+}
+
+/** 「这台 ash 为什么核不了自己的判决」—— 同理,只有一份。 */
+function unverifiableText(why: string, tail: string): string {
+  return "这一回合是上次 ash 中断时留下的,而本次启动读不出熔断判决日志"
+    + `(${why}),无法确认它当时有没有被判定上游连不上并按失败结算。${tail}`;
+}
+
+/** 接管那一路:进程还在,义务没兑现完 —— **如实说这是上一次运行的判决**,别冒充这一刻才判的。 */
 export function stallResumeText(verdict: StallVerdict): string {
-  return "〔上游停滞·接管后继续终止〕这一回合在上次 ash 运行期间已被判定上游连不上并按失败结算,"
-    + `重启接管后仍背着尚未兑现的终止义务,现在把它终止。原判决(${verdict.at}):${verdict.reason}`;
+  return "〔上游停滞·接管后继续终止〕"
+    + carriedVerdictText(verdict, "重启接管后仍背着尚未兑现的终止义务,现在把它终止。");
 }
 
-/**
- * 接管一个**结局核实不了**的回合:登记「这一轮不许按成功结算」,并把要对用户说的那句话给回去。
- *
- * 跟熔断那条路差在**不动进程**:判决日志读不出来只说明我们核不了这一轮,不说明它熔断过 ——
- * 拿一个不确定的终止义务去杀一个可能完全健康的 agent,比让它跑完更糟。所以这里只做两件事:
- * 把结论钉在回合身份上(结算侧那一句 `stallFailure` 不改一个字就会读到它),外加一句持久可见的
- * 诊断。判据见 `turn-stall-persist.ts` 的 `unverifiable`:**恢复失败不许授权成功升级**。
- *
- * 文案与登记捆在一起返回,是为了让「库里记的理由」和「用户看到的那句话」只有一份来源。
- */
-export function markUnverifiedTurnFailure(sessionId: string, turnStartedAt: string, why: string): string {
-  const text = stallUnverifiableText(why);
-  markUnverifiedTurn(sessionId, turnStartedAt, text);
-  return text;
+/** 启动对账那一路:原进程已经不在了,没有什么可终止的,只有收口。 */
+export function stallReconcileText(verdict: StallVerdict): string {
+  return "〔上游停滞·重启后按失败收尾〕"
+    + carriedVerdictText(verdict, "服务重启后原进程已不在,这一轮按失败收尾。");
 }
 
-/** 「这一轮的结局核实不了」那段文案。 */
+/** 启动对账那一路的「核实不了」版本。 */
+export function stallReconcileUnverifiableText(why: string): string {
+  return "〔上游停滞·上一次运行的结局核实不了〕"
+    + unverifiableText(why, "原进程也已经不在 —— 这一轮按未完成收尾,不记成完成:"
+      + "可能它本来就是失败的,也可能日志故障让我们冤枉了它,两种都不该悄悄记成完成。"
+      + "先把日志那个故障修掉(多半是权限或磁盘)。");
+}
+
+/** 消费那一路的「核实不了」版本:进程还活着,所以这一轮会跑完,只是不许按成功结算。 */
 export function stallUnverifiableText(why: string): string {
-  return "〔上游停滞·上一次运行的结局核实不了〕这一回合是上次 ash 运行留下的,而本次启动读不出"
-    + `熔断判决日志(${why}),所以无法确认它当时有没有被判定上游连不上并按失败结算。`
-    + "这一轮因此**不会**按成功结算 —— 可能它本来就是失败的,也可能日志故障让我们冤枉了它,"
-    + "两种都不该悄悄记成完成。续跑材料一个字没动:确认过工作成果之后点重试或者直接续聊即可;"
-    + "先把日志那个故障修掉(多半是权限或磁盘),下一轮就不会再遇到这一句。";
+  return "〔上游停滞·上一次运行的结局核实不了〕"
+    + unverifiableText(why, "这一轮因此**不会**按成功结算 —— 可能它本来就是失败的,也可能日志"
+      + "故障让我们冤枉了它,两种都不该悄悄记成完成。续跑材料一个字没动:确认过工作成果之后点"
+      + "重试或者直接续聊即可;先把日志那个故障修掉(多半是权限或磁盘),下一轮就不会再遇到这一句。");
 }
 
 /**

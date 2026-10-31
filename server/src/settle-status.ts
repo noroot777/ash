@@ -20,6 +20,7 @@ import { announceResumePrompt, resumePromptVoidPatch } from "./task-resume-promp
 import { turnOutputHint } from "./turn-output.js";
 import { beginTerminalLanding } from "./task-complete.js";
 import { readCliState } from "./task-cli-state.js";
+import type { StallVerdictKind } from "./turn-stall-verdict.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
 
@@ -121,22 +122,21 @@ const UNCONFIRMED_HELD_TAIL =
  */
 export type SettleExecutionReason = {
   /**
-   * 两种都是「ash 自己认定这一轮不成功」,落位完全一样,只有对用户说的话不同:
-   * - `upstream_stall`     看门狗确凿判了熔断。
-   * - `unverified_verdict` 接管上一个进程留下的回合时判决日志读不出来,结局核实不了。
+   * 原因种类**直接用判决自己那一份枚举**(`StallVerdictKind`),不在这儿另定义一套同义的。
    *
-   * **判据一律是「有没有这个原因」,不是「它是哪一种」**(下面三处都这么写)。按 kind 逐处枚举
-   * 的话,每加一种就得把三处各改一遍,漏掉的那一处会悄悄把一轮失败放行成成功 —— 而这个类型
-   * 本身的含义就是「不成功」,所以枚举从一开始就是多余的。
+   * 上一版这里是 `"upstream_stall" | "unverified_verdict"`,由消费链在中间手工三元映射成它 ——
+   * 加第三种原因时那个 `else` 会静默把它当成第一种,而编译器一声不响。现在只有一份枚举,
+   * 下面那两张措辞表按它穷举(`Record<StallVerdictKind, …>`):加一种就编译不过。
+   *
+   * **落位判据是「有没有这个原因」,不是「它是哪一种」**(下面三处都这么写)——这个类型本身的
+   * 含义就是「ash 认定这一轮不成功」,逐处枚举只会给漏掉一处留出空间。种类只决定措辞。
    */
-  kind: "upstream_stall" | "unverified_verdict";
+  kind: StallVerdictKind;
   /** 诊断原文(`turn-stall.ts` 那段),给落位说明转述。 */
   detail: string;
 };
 
-/** 落位说明按原因分:措辞必须对得上事实,见 `SettleExecutionReason.kind`。 */
-const ashFailureNote = (reason: SettleExecutionReason): string =>
-  reason.kind === "upstream_stall" ? STALL_FAILED_NOTE : UNVERIFIED_FAILED_NOTE;
+
 
 // 熔断落位的说明。要同时说清三件事:为什么失败、续跑材料还在、以及现在能做什么 ——
 // 「暂停中」那个落位原本替用户表达了后两件,改成 failed 之后得由这段话接上。
@@ -152,6 +152,18 @@ const UNVERIFIED_FAILED_NOTE =
   "本回合是上次 ash 中断时留下的,而本次启动读不出熔断判决日志,无法确认它当时有没有被判失败。"
   + "按未完成结算:可能它本来就失败了,也可能日志故障让我们冤枉了它,两种都不该悄悄记成完成"
   + "(诊断见上面那条红字)。续跑材料一个字没动:核对过工作成果之后点重试或者直接续聊即可。";
+
+/** 落位说明按原因分。穷举的 `Record` 不是装饰:加一种原因而忘了写措辞,这里就编译不过。 */
+const ASH_FAILURE_NOTE: Record<StallVerdictKind, string> = {
+  tripped: STALL_FAILED_NOTE,
+  unverified: UNVERIFIED_FAILED_NOTE,
+};
+
+/** 终态续聊那一支的一句话版本(同一张穷举表的道理)。 */
+const ASH_FAILURE_FOLLOW_UP: Record<StallVerdictKind, string> = {
+  tripped: "续聊回合因上游连不上被自动终止",
+  unverified: "续聊回合是上次中断留下的,结局核实不了",
+};
 
 const GROUP_PAUSED_NOTE =
   "分组被暂停,本回合被中止 —— 任务落为已暂停;点「运行/继续」恢复分组时会从当前会话接着跑。";
@@ -295,8 +307,7 @@ export async function settleTaskStatus(
       // 终态续聊的既定契约是「只能变好,不会变差」,熔断也不例外:状态照旧回到续聊前那个终态
       // (第 3 轮审查 F1 明确不要求改这条)。但**话要说准** —— 这一轮不是「异常结束」,是 ash
       // 主动终止的,退出码还是我们自己合成的,照原样念出来会让人去查一个不存在的崩溃。
-      const why = reason?.kind === "upstream_stall" ? "续聊回合因上游连不上被自动终止"
-        : reason?.kind === "unverified_verdict" ? "续聊回合是上次中断留下的,结局核实不了"
+      const why = reason ? ASH_FAILURE_FOLLOW_UP[reason.kind]
         : `续聊回合异常结束(退出码 ${exitStatus})`;
       return { status: back, note: `${why},任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
     }
@@ -348,7 +359,7 @@ export async function settleTaskStatus(
   if (reason) {
     await setStatus(taskId, "failed");
     notify("failed");
-    return { status: "failed", note: ashFailureNote(reason), confirmedDone: false, nativeTurn };
+    return { status: "failed", note: ASH_FAILURE_NOTE[reason.kind], confirmedDone: false, nativeTurn };
   }
   // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
   // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。

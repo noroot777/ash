@@ -27,9 +27,10 @@
 import { dbClient } from "./db/index.js";
 import { appendStallVerdict, compactStallJournal, readStallJournal, type StallVerdictRecord } from "./turn-stall-journal.js";
 import {
-  adoptStallFailure, clearStallFailure, liveStallVerdicts, loadStallFailures, setStallVerdictPersister,
-  stallFailure, type StallVerdict,
+  adoptStallFailure, clearStallFailure, liveStallVerdicts, loadStallFailures, markUnverifiedTurn,
+  setStallVerdictPersister, stallFailure, type StallVerdict,
 } from "./turn-stall-verdict.js";
+import { turnOpenedHere } from "./session-turns.js";
 import { now } from "./util.js";
 
 // **加载这个模块就等于装上了持久化。**
@@ -112,43 +113,40 @@ export async function projectStallVerdictToDb(
 }
 
 /**
- * 读一次判决的三种结果 —— **「核实不了」必须跟「没有」分开**(第 5 轮审查 F1 的根)。
- *
- * - `verdict`      这一轮背着一份没兑现的终止义务。
- * - `unverifiable` 判决核实不了(日志读不出来、回合行也读不到)。**不是**「没有判决」:这一轮
- *                  不许按成功结算,但也不该被当成熔断过那样杀掉 —— 我们不知道它熔断过没有。
- * - `null`         确实没有。
- */
-export type StallRestore =
-  | { kind: "verdict"; verdict: StallVerdict }
-  | { kind: "unverifiable"; why: string }
-  | null;
-
-/**
  * 这一轮的**权威结束原因**:给每一个「回合结算入口」共用的那一句问话。
  *
- * 三个调用方:接管一个仍然存活的回合(`single-run.ts`)、启动对账(`task-reconcile.ts`,没有可
- * 接管的进程、或者接管后消费循环自己挂了)。F3 那条就是因为对账那一路没问过这一句 —— 持续目标
- * 被写成「因服务中断已暂停」,熔断过的那一轮 `outcome` 留空。
+ * 调用方:单飞消费开头(`single-run.ts`,fresh run 与接管共用那一份)、启动对账
+ * (`task-reconcile.ts`,没有可接管的进程、或者接管后消费循环自己挂了)。F3 那条就是因为对账
+ * 那一路没问过这一句 —— 持续目标被写成「因服务中断已暂停」,熔断过的那一轮 `outcome` 留空。
  *
  * 判据是「有判决 **且** 这一行还没收口」:收口过的行说明那一轮已经结算完了,判决早该销账,
  * 再拿出来等于拿一份旧判决去压一轮新的执行(同一个理由见 turn-stall-verdict.ts 的键为什么
  * 是回合身份而不是 sessionId)。
  *
- * `adopted` = 「这个回合身份是上一个进程留下来的」。只有这一类才可能背着没兑现的义务,也只有
- * 它需要 `unverifiable`:全新起跑的回合身份此刻刚生成,盘上不可能有它的判决,读不出来也推不出
- * 任何结论,再报一句只会把每次日志故障放大成一片假失败。
+ * **「这是上一个进程留下来的回合吗」由事实回答,不要调用方申报**:本进程开过那一行开始记录的
+ * 就是全新起跑(`turnOpenedHere`,登记在 `openTurn` 里)。只有留下来的那一类才可能背着没兑现的
+ * 义务,也只有它需要 `unverifiable` —— 全新起跑的回合身份此刻刚生成,盘上不可能有它的判决,读不
+ * 出来也推不出任何结论,再报一句只会把每次日志故障放大成一片假失败。
+ *
+ * 上一版在这里收一个 `adopted` 布尔,由三个调用点各自申报。那个默认值落在**不安全那一侧**:
+ * 新增一条消费路径忘了传,恢复就静默退回「读不到就当没有」—— 而那正是 F1 本身。现在忘不掉了。
+ *
+ * **返回只有一个轴:判决,或者没有。**「核实不了」在这里当场铸成一份 `kind: "unverified"` 的
+ * 判决 —— 它本来就是一种结局(「这一轮的权威结局不是成功」),而不是另一种返回形状。上一版把它
+ * 做成并列的第三档,代价当场就出现了:接管失败转对账时(reattach.ts 的 finally),对账第二次
+ * 来问,内存里已经有那份 `unverified` 记录,于是它走「有判决」那一支、被用**熔断**的措辞念了
+ * 出来 —— 一句假话。一个轴之后,措辞处处按 `verdict.kind` 挑,不存在第二种读法。
  */
 export async function restoreStallVerdict(
   sessionId: string,
   turnStartedAt: string | null | undefined,
-  adopted: boolean,
-): Promise<StallRestore> {
+): Promise<StallVerdict | null> {
   if (!turnStartedAt) return null;
+  const carriedOver = !turnOpenedHere(sessionId, turnStartedAt);
   // 内存这张表在模块加载时就从日志装满了,所以这一问同时覆盖「本进程刚判的」和「上一个进程判的」。
   const held = stallFailure(sessionId, turnStartedAt);
-  if (held) return { kind: "verdict", verdict: held };
-  let unreadable = adopted ? journalUnavailable : null;
+  if (held) return held;
+  let unreadable = carriedOver ? journalUnavailable : null;
   // 日志没有,库那一格仍可能有:判决落盘成了而投影排队失败是一种,反过来也是一种。
   let reason = "";
   let settled = false;
@@ -165,7 +163,7 @@ export async function restoreStallVerdict(
       + "(落盘的判决仍然算数):", error);
     // 「还没收口」只能问库,而问不到的时候**不许解释成收口过**:那又是一次「拿读不到当成没
     // 发生」。此刻调用方正要开始消费这个回合身份,它按定义就是活的。
-    if (adopted) unreadable = unreadable ?? `回合行读不出来:${String(error)}`;
+    if (carriedOver) unreadable = unreadable ?? `回合行读不出来:${String(error)}`;
   }
   if (settled) return null;
   if (reason) {
@@ -174,9 +172,11 @@ export async function restoreStallVerdict(
     const at = now();
     adoptStallFailure(sessionId, turnStartedAt, { reason, at, since: at });
     const adoptedVerdict = stallFailure(sessionId, turnStartedAt);
-    if (adoptedVerdict) return { kind: "verdict", verdict: adoptedVerdict };
+    if (adoptedVerdict) return adoptedVerdict;
   }
-  return unreadable ? { kind: "unverifiable", why: unreadable } : null;
+  // 核实不了就在这儿登记:**不许让调用方自己记得铸一份**(同 `carriedOver` 那条,忘了就退回
+  // 「读不到就当没有」)。登记进同一张表,结算侧那一句 `stallFailure` 不改一个字就会把它算进去。
+  return unreadable ? markUnverifiedTurn(sessionId, turnStartedAt, unreadable) : null;
 }
 
 /**

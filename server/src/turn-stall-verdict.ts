@@ -37,6 +37,16 @@
 // 读的投影。这里只认一件事:**注册进来的那一半必须在返回之前把事实存住,并如实报它存住了没有**。
 import { now } from "./util.js";
 
+/**
+ * 「ash 认定这一轮不成功」的**原因种类** —— 判决自己带着它,结算侧照它挑落位说明。
+ *
+ * **只有这一份枚举**(第 2 轮续聊自审):上一版在结算侧另定义了一份(`upstream_stall` /
+ * `unverified_verdict`),由消费链在中间做一次手工三元映射。那种形状的代价是加第三种原因时
+ * 映射点的 `else` 会静默把它当成第一种 —— 两份同义枚举之间的翻译,错了编译器一声不响。现在
+ * 结算原因直接引用这个类型,措辞表按它穷举(`Record<StallVerdictKind, string>`),加一种就编译不过。
+ */
+export type StallVerdictKind = "tripped" | "unverified";
+
 export interface StallVerdict {
   /**
    * 这一轮**为什么不能按成功结算**:
@@ -45,7 +55,7 @@ export interface StallVerdict {
    *                (都是 failed、都不许凭确认升级),但对用户说的话必须不一样 —— 拿熔断那段
    *                「整段时间里只收到重试类错误」去描述一次日志故障就是编事实。
    */
-  kind: "tripped" | "unverified";
+  kind: StallVerdictKind;
   /** 判失败的原因原文(熔断诊断那一段),给结算侧需要时转述。 */
   reason: string;
   at: string;
@@ -194,12 +204,19 @@ export function adoptStallFailure(
  * (调用方因此不走 `resumeTrippedTurn`)。已经有判决的不覆盖 —— 那一份是确凿的。
  *
  * `durable` 记 false 并且不落盘:这一条是从「日志读不出来」现推出来的,下次启动照样推得出来,
- * 存它没有意义。它也不产出 trip 文案,所以没人会拿这个字段去对用户说话。
+ * 存它没有意义。
+ *
+ * `reason` 存的是**原始起因**(「日志读不出来,因为 EACCES…」),不是对用户说的那句话:同一份
+ * 记录要被两处用不同收场念出来(消费那一路进程还活着、对账那一路原进程已经不在),措辞归
+ * `turn-stall.ts` 一处出。已经有判决的不覆盖 —— 那一份是确凿的。
  */
-export function markUnverifiedTurn(sessionId: string, turnStartedAt: string, why: string): void {
+export function markUnverifiedTurn(sessionId: string, turnStartedAt: string, why: string): StallVerdict {
   const k = key(sessionId, turnStartedAt);
-  if (failures.has(k)) return;
-  failures.set(k, { kind: "unverified", reason: why, at: now(), since: now(), durable: false });
+  const held = failures.get(k);
+  if (held) return held;
+  const verdict: StallVerdict = { kind: "unverified", reason: why, at: now(), since: now(), durable: false };
+  failures.set(k, verdict);
+  return verdict;
 }
 
 /** 这个回合身份有没有被看门狗判过失败。读不清掉 —— 同一轮有三处要读(span/会话/任务)。 */

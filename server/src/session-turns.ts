@@ -1,7 +1,7 @@
 import { dbClient } from "./db/index.js";
 import type { TurnOutcome } from "@ash/shared";
 import { id } from "./util.js";
-import { clearTurnActive, closedAlready, markTurnActive } from "./session-turn-registry.js";
+import { clearTurnActive, closedAlready, markTurnActive, markTurnOpenedHere } from "./session-turn-registry.js";
 // 对外的门面：登记层的公开函数在这里原样再导出一遍（理由见下面文件头的最后一段）。
 export {
   activeRegistrySize,
@@ -11,8 +11,10 @@ export {
   closeTaskTurns,
   closedAlready,
   markTurnActive,
+  markTurnOpenedHere,
   nextTurnStart,
   primeTurnStarts,
+  turnOpenedHere,
 } from "./session-turn-registry.js";
 // 回合区间的**写入端**。读取端在 `task-artifact-windows.ts`（产物归属按时间认人），表的语义写在
 // `db/schema-sessions.ts` 的 `sessionTurns` 上，这里不复述。
@@ -231,6 +233,11 @@ export async function openTurn(input: {
   if (!input.startedAt) return;
   const startedAt = input.startedAt;
   const register = opts.register ?? true;
+  // **这一行开始记录是本进程写的** —— 判决恢复那一路靠它分辨「全新起跑」和「上一个进程留下来
+  // 的」,理由见 session-turn-registry.ts 的 `openedHere`。登记在最前面:下面那几步都可能抛,
+  // 而「是我开的」这个事实跟它们成不成没关系。`register: false` 那一档(重放一个已经终结的身份)
+  // 也照登 —— 问这句话的只有单飞消费开头,重放路径压根不经过。
+  markTurnOpenedHere(input.sessionId, startedAt);
   // 先登记活动身份：登记得比写库早一点没有坏处,反过来晚一点就有——那个窗口里面板会把
   // 正在写的这一轮算成「崩了没收口」。
   if (register) markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt });

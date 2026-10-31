@@ -30,7 +30,7 @@ const { tasks } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { settleTaskStatus } = await import("../src/settle-status.js");
 
-const STALL: SettleExecutionReason = { kind: "upstream_stall", detail: "已自动终止本回合并按失败结算:只收到错误事件" };
+const STALL: SettleExecutionReason = { kind: "tripped", detail: "已自动终止本回合并按失败结算:只收到错误事件" };
 const AT = "2026-10-30T07:36:21.000Z";
 let seq = 0;
 
