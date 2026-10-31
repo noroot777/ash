@@ -18,7 +18,10 @@ export interface CatchUp {
    * 记下「还欠一趟」,等在途那一发落地之后自动补上(见 createCatchUp 里的单飞那一段)。
    */
   run: () => void;
-  /** 停(断线、卸载):排着的重试取消,欠着的那一趟作废,已发出的那一发回来也不再续排。 */
+  /**
+   * 停(断线、卸载):排着的重试取消,这一代次欠着的那一趟作废,已发出的那一发回来也不再
+   * 续排。**停过之后再 run 是新的一代次**,它自己发车,不排在作废的那一发后面(见下)。
+   */
   cancel: () => void;
 }
 
@@ -48,7 +51,7 @@ export function createCatchUp(
   // 代次:取消之后,已经在途的那一发回来时不许再续排重试、也不许再去补欠下的那一趟。
   let generation = 0;
   // ── 单飞 ───────────────────────────────────────────────────────────────────────
-  // **同一时刻只许有一发在途**,在途期间来的触发只记一笔「还欠一趟」。
+  // **同一代次同一时刻只许有一发在途**,在途期间来的触发只记一笔「还欠一趟」。
   //
   // 为什么这条纪律必须在这一层:追平的触发口有四个(挂载首读、SSE 事件、重连对账、调用方
   // 手动 reload),它们随时重叠。并发发车时**响应可以乱序回来**,而每个调用方都是在自己的
@@ -59,35 +62,55 @@ export function createCatchUp(
   // 这里**不是**靠「请各调用点自己核代次」解决的:那正是上一版的形状 —— 任务列表那个 hook
   // 自己写了 fetchGen、验收卡自己 abort,新接进来的消费者默认就是没有防护的那一种,而
   // 「共用了同一份追平策略」看起来像是已经继承了这条保证。改成串行之后,乱序在物理上就不
-  // 成立:至多一发在途 ⇒ 落地顺序必定等于发车顺序,无论调用方在 then 里做什么。
+  // 成立:一代次内至多一发在途 ⇒ 落地顺序必定等于发车顺序,无论调用方在 then 里做什么。
   //
   // 代价是在途那一发若长期不返回,这个槽位就一直占着(传输层本来就没有 deadline,那是另一
   // 条已告知的待办)—— 但它换来的是「最后落地的一定是最新那一份」,这是正确性,不是优化。
-  let inFlight = false;
-  /** 在途期间又被触发过:那一发落地之后还欠一趟。 */
-  let owed = false;
+  // (「长期不返回」最常见的成因是断线,而断线会 cancel,下一段正是为此:换了代次就不再
+  // 等它。)
+  //
+  // ── 排队只在同一代次之内(第 1 轮审查 F3 实测)────────────────────────────────────
+  // 槽位和欠账都**记着自己属于哪个代次**。两件事都靠它:
+  //  · 旧代次那一发回来时不许清掉新代次欠下的那一趟 —— 清掉之后既没有请求在途、也没有
+  //    重试在排,恢复责任凭空消失(实测:断线期间权威列表变了,重连后页面一直停在断线前
+  //    那一份快照上,connected 已经回到 true,此后没有任何事件会来纠正它,只有手动刷新
+  //    才对得上);
+  //  · 新代次不排在作废的那一发后面 —— 换代次正是因为上下文已经变了(断线/卸载/切身份),
+  //    那一发的快照生成于断线之前,**物理上不可能**包含断线窗口里的变化,拿它当追平等于
+  //    没追;何况它很可能永远不返回(断线那一下的请求挂在传输层上,没有 deadline)。
+  //
+  // 所以跨 cancel 的那一瞬可以有两发在途(旧的一发 + 新代次自己的一发)。它们之间的落地
+  // 顺序由消费方按「发起序号」裁决(任务列表的 fetchGen;另两处 hook 在 cleanup 里就把
+  // 结果整个丢掉了),而旧那一发的快照只会更旧 —— 这一层保证的是**同代次内至多一发在途**,
+  // 也就是「最后落地的一定是这一代次最新那一份」。
+  let inFlight: { generation: number; serial: number } | null = null;
+  let serials = 0;
+  /** 哪个代次还欠一趟(null = 没人欠)。 */
+  let owed: number | null = null;
   const attempt = (generationAtStart: number) => {
     if (generationAtStart !== generation) return;
-    if (inFlight) {
-      owed = true; // 不并发开第二发:责任记下来,别丢
+    if (inFlight?.generation === generation) {
+      owed = generation; // 不并发开第二发:责任连代次一起记下来,别丢
       return;
     }
-    inFlight = true;
+    const serial = ++serials;
+    inFlight = { generation, serial };
     // 这一发出去之后才到的触发才算欠账:它自己已经把此刻之前欠的全补了。
-    owed = false;
+    if (owed === generation) owed = null;
     const settle = (ok: boolean) => {
-      inFlight = false;
+      // 只清自己占的那个槽:旧代次的响应落地时,槽位可能已经被新代次那一发接走了。
+      if (inFlight?.serial === serial) inFlight = null;
       if (generationAtStart !== generation) {
-        owed = false;
+        // 作废的一代次:什么都不动。此刻的 owed 要么是 null,要么是别人的责任。
         return;
       }
       if (!ok) {
         // 重试本身就是一趟新的读取,欠的那趟由它一并补上。
-        owed = false;
+        owed = null;
         timer = timers.set(() => attempt(generationAtStart), retryMs);
         return;
       }
-      if (owed) attempt(generationAtStart);
+      if (owed === generationAtStart) attempt(generationAtStart);
     };
     // **抛出来的也算「没读到」。** `refetch` 的约定是「返回成不成，别抛」，但那是约定:
     // 调用方的成功分支里只要有一处 `r.x.map(...)`，一个形状不对的响应体就会在这里变成
@@ -98,7 +121,7 @@ export function createCatchUp(
   };
   const cancel = () => {
     generation += 1;
-    owed = false;
+    owed = null;
     if (timer !== undefined) {
       timers.clear(timer);
       timer = undefined;
