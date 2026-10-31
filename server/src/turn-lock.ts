@@ -485,14 +485,21 @@ export function waitForTurnIdle(taskId: string, timeoutMs: number): Promise<bool
   if (!turns.has(taskId)) return Promise.resolve(true);
   return new Promise((resolve) => {
     let settled = false;
+    let cancel: (() => void) | null = null;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
+      // **等到超时就不再是等待者了**(自由工作流第 1 轮审查 N1)。上一版只把自己标成
+      // settled 就走人,那个闭包一直留在 `afterTurn` 里 —— 对一个长期不释放的回合反复按
+      // 停止(每次都等到超时),一次按一个,全攒到这把锁真的释放或者进程退出。它们都是
+      // 死的(settled 之后一个字都不做),但「死的观察者」和「等着的观察者」在那张表里
+      // 长得一模一样:巡检读到的待办数量、以及这块内存,都跟着按的次数线性涨。
+      cancel?.();
       resolve(false);
     }, timeoutMs);
     // **不 unref**:有一条 HTTP 响应在等这个 Promise。unref 掉的话,进程只剩它时事件循环
     // 会直接空转退出,那条响应永远发不出去(回归里实测到「unsettled top-level await」)。
-    whenTurnIdle(taskId, () => {
+    cancel = whenTurnIdle(taskId, () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -501,15 +508,28 @@ export function waitForTurnIdle(taskId: string, timeoutMs: number): Promise<bool
   });
 }
 
-/** 任务空着就立刻执行，正在跑就排到它这一轮退出之后。 */
-export function whenTurnIdle(taskId: string, fn: () => void): void {
+/**
+ * 任务空着就立刻执行，正在跑就排到它这一轮退出之后。
+ *
+ * **交回一个取消函数**:等待方有自己的出路(超时、换了代次、请求断开)时,得撤掉的只有
+ * 自己这一笔 —— 按任务 id 清整组是另一个缺陷的形状(`endOwnTurn` 的文件注释),那会把别人
+ * 排着的交接一并吃掉。空着那一侧已经当场执行完了,取消是个空操作(调了也不抛)。
+ */
+export function whenTurnIdle(taskId: string, fn: () => void): () => void {
   if (!turns.has(taskId)) {
     fn();
-    return;
+    return () => {};
   }
   const waiting = afterTurn.get(taskId);
   if (waiting) waiting.push(fn);
   else afterTurn.set(taskId, [fn]);
+  return () => {
+    const list = afterTurn.get(taskId);
+    if (!list) return; // 这一轮已经释放过了:整组被 endOwnTurn 取走并清掉
+    const at = list.indexOf(fn);
+    if (at >= 0) list.splice(at, 1);
+    if (!list.length) afterTurn.delete(taskId);
+  };
 }
 
 /**
