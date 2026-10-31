@@ -269,10 +269,22 @@ async function runnableAfterRelease(taskId: string): Promise<{ runnable: boolean
     return { runnable: true, status: null, nextStep: null };
   }
   let row: { status: string } | undefined;
+  let readFailed = false;
   try {
     row = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   } catch (error) {
+    readFailed = true;
     console.warn(`[ash] 放开回合占位后读状态失败 task=${taskId}:`, error);
+  }
+  // **隔了一次 await,持有者就得再核一次**(本轮审查 N2)。上面那一道只证到「读之前没人持有」,
+  // 而读库这一段里完全可以有新回合接手(放开之后紧接着就是调度推进)。下面每一句话的前提都是
+  // 「此刻没人持有、没人会再来改状态」—— 前提没了,读到的 queued/running 很可能正是新那一轮
+  // 自己写的,照旧劝用户「点一次停止」等于劝他去停一个刚起来的回合。读失败那一条同理:那句
+  // 「要是还停在排队中就停一次」也是建立在同一个前提上的。
+  if (isTurnClaimed(taskId)) {
+    return { runnable: true, status: row?.status ?? null, nextStep: null };
+  }
+  if (readFailed) {
     return { runnable: false, status: null, nextStep: "刷新一下页面看它现在的状态；要是还停在「排队中」，点一次停止把它收成「已取消」，然后就能重新运行" };
   }
   if (!row) return { runnable: false, status: null, nextStep: null };

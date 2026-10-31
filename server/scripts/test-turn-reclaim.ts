@@ -275,6 +275,30 @@ releaseTurn("t-ghost");
   assert.equal(again.ok === false && again.why, "no-lock");
 }
 
+// ── ⑤b 交接正好发生在读库那一瞬:下一步建议的前提是「此刻没人持有」 ─────────────
+// **本轮审查 N2 的回归。** 核对后置条件要读库,`await` 一让出,新回合完全可以在这段间隙里
+// 接手(放开之后紧接着就是调度推进)。那之后读到的 queued/running 很可能正是新那一轮自己
+// 写下的,而「没有人会再来把它改回去了,点一次停止」这句话的前提恰恰是没人持有 —— 前提
+// 没了还照旧劝,就是劝用户去停掉一个刚起来的回合。
+await createTasks([{ ...baseTask, id: "t-takeover", title: "takeover during status read", status: "queued" }]);
+assert.equal(claimTurn("t-takeover"), true, "先造一把判得上可疑的锁");
+await sleep(SUSPECT_TURN_MS * 3);
+{
+  // 不 await:releaseSuspectTurn 同步走到 forceReleaseTurn 之后,停在「读库核对状态」那个
+  // await 上 —— 此刻锁已经空了。那个窗口是确定存在的,不靠时序巧合。
+  const releasing = releaseSuspectTurn("t-takeover");
+  assert.equal(claimTurn("t-takeover", "single"), true, "读库这段间隙里新回合占到了锁");
+  const outcome = await releasing;
+  assert.ok(outcome.ok, "放开本身照常成功");
+  assert.equal(outcome.ok && outcome.nextStep, null,
+    "状态由新接手那一轮负责,不许再劝用户「点一次停止」—— 那停掉的是刚起来的回合");
+  assert.equal(outcome.ok && outcome.runnable, true, "有人接手就算恢复了可运行");
+  const notice = (await recentRejectionNotices("t-takeover")).find((n) => n.action === "回合占位已放开");
+  assert.ok(notice, "放开照常留痕");
+  assert.doesNotMatch(notice.reason, /点一次停止/, "持久痕迹里同样不许留下那条过期建议");
+  releaseTurn("t-takeover");
+}
+
 // 判据不因为是人点的就放宽:有令牌 / 有句柄 / 刚占下,三种都要挡回并说清是哪一条没过
 assert.equal(claimTurn("t-token"), false, "t-token 的锁还占着(它有令牌)");
 {
