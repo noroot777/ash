@@ -155,17 +155,21 @@ function deepMergeRaw(
 
 /**
  * 跨来源把同一个名字的两条登记合成一条,**合完再重新判状态** —— 状态和启动方式都只能从
- * 合完那份原值上算(本轮审查 F1:上一版取的是赢家那一份,于是高优先级那份只写
+ * 合完那份原值上算(上一轮审查 F1:上一版取的是赢家那一份,于是高优先级那份只写
  * `{"enabled": true}` 时,搬进隔离档的就只有这一个键)。
  *
- * `contribute` 是这一族「高优先级那份里哪些字段真的算」的判据(opencode 有一条实测出来的
- * 例外,见 `opencodeContribution`);认不出来的那一份(没有 `raw`)一律让 doubt 赢。
+ * **两边一视同仁**:每份来源的 `raw` 在逐条判据里就已经投影成「这份来源真正贡献的字段」
+ * (见 `opencodeFact`),所以这里直接深合,没有「只过滤高的那份」这回事 —— 本轮审查 F1-A
+ * 就是那个不对称漏出来的:上一版只过滤 higher、首项(最低那份)原值照抄,于是走开关那一支
+ * 的低来源里那些真 CLI 丢掉的字段活了下来,搬进隔离档后把一条本来连得上的登记搬成连不上的。
+ *
+ * 认不出来的那一份(没有 `raw`)一律让 doubt 赢:合不动就别猜。
  */
-function mergeJson(factOf: FactOf, contribute: (raw: Record<string, unknown>) => Record<string, unknown>) {
+function mergeJson(factOf: FactOf) {
   return (name: string, lower: AshMcpNameFact, higher: AshMcpNameFact): AshMcpNameFact => {
     if (!lower.raw) return lower;
     if (!higher.raw) return higher;
-    return factOf(name, deepMergeRaw(lower.raw, contribute(higher.raw)));
+    return factOf(name, deepMergeRaw(lower.raw, higher.raw));
   };
 }
 
@@ -290,7 +294,12 @@ const opencodeFact: FactOf = (name, entry) => {
     return {
       status: "doubt",
       detail: `${name} 这条登记只写了开关、没写启动方式（没有 type）—— opencode 不把它当成一个服务`,
-      raw: entry,
+      // **只贡献这一个键**(本轮审查 F1-A):走开关那一支时,它同时写的 `command` /
+      // `environment` 真 CLI 一律丢掉 —— 2026-10-31 实测两个方向都如此,
+      // 低那份是开关(`{enabled, environment}` + 高那份完整 ⇒ 合出来没有 environment)、
+      // 高那份是开关(⇒ 只有开关翻过来)都一样。所以这里**只留 enabled**:
+      // `raw` 是跨来源合并的唯一载体,留着那些字段会在搬运时复活成一条真的启动设置。
+      raw: { enabled: entry.enabled },
     };
   }
   if (entry.enabled === false) return { status: "off", detail: `${name} 这条登记是关着的`, raw: entry };
@@ -305,21 +314,10 @@ const opencodeFact: FactOf = (name, entry) => {
   return { status: "on", detail: "", raw: entry, launch: opencodeLaunch(entry) };
 };
 
-/**
- * 高优先级那一份里**哪些字段真的算**(实测出来的一条例外):没写 `type` 的那条走开关那一支,
- * 于是**只有 `enabled` 过得去**,它同时写的 `command`/`environment` 真 CLI 一律丢掉
- * (实测:低的那份完整、高的那份 `{command, environment, enabled:true}` ⇒ 生效的命令和环境
- * 变量仍是低那份的,只有开关翻了过来)。
- */
-function opencodeContribution(raw: Record<string, unknown>): Record<string, unknown> {
-  if (Object.hasOwn(raw, "type")) return raw;
-  return Object.hasOwn(raw, "enabled") ? { enabled: raw.enabled } : {};
-}
-
 export const opencodeJsonShape: AshMcpShape = {
   id: "opencode-json",
   ...readSide((text) => scanJson(OPENCODE_CONTAINER, text, opencodeFact)),
-  mergeFacts: mergeJson(opencodeFact, opencodeContribution),
+  mergeFacts: mergeJson(opencodeFact),
   compose(text, entry) {
     return putJson(opencodeJsonShape, OPENCODE_CONTAINER, text, opencodeEntry(entry));
   },

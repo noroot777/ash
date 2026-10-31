@@ -152,16 +152,10 @@ export function hostMcpSources(agentType, { env = process.env, home = homedir() 
   const site = HOST_SITES[agentType];
   if (!site) return [];
   const out = [];
-  const seen = new Set();
   const ordered = site.sourcesMerge === true;
   let next = 0;
-  const fresh = (file) => {
-    if (seen.has(file)) return false;     // 同一个文件被两条路指到 ⇒ 只算一份
-    seen.add(file);
-    return true;
-  };
   const addDir = (dir) => {
-    const files = filesInDir(dir, site).filter(fresh);
+    const files = filesInDir(dir, site);
     files.forEach((file, i) => out.push({ label: file, file, level: next + (ordered ? i : 0) }));
     next += ordered ? files.length : 1;
   };
@@ -169,8 +163,11 @@ export function hostMcpSources(agentType, { env = process.env, home = homedir() 
   // 配置照样会被读,见上面第一条)。
   const dirOverride = site.dirEnv && !site.dirEnvIsFile ? (env[site.dirEnv] || "").trim() : "";
   addDir(dirOverride || site.dir(env, home));
+  // **同一个路径在两个阶段各算一次**(本轮审查 F1-B,跟 TS 的 `ashMcpHostSources` 同口径):
+  // 上一版按路径去重、只留第一次出现,于是 `OPENCODE_CONFIG` 指回默认目录那份时,它那一次
+  // (最高优先级的)加载被整个删掉 —— 实测真 CLI 会再读一遍、结论相反。
   const file = site.dirEnvIsFile && site.dirEnv ? (env[site.dirEnv] || "").trim() : "";
-  if (file && fresh(file)) out.push({ label: file, file, level: next++ });
+  if (file) out.push({ label: file, file, level: next++ });
   const altDir = site.altDirEnv ? (env[site.altDirEnv] || "").trim() : "";
   if (altDir) addDir(altDir);
   const inline = site.contentEnv ? (env[site.contentEnv] || "").trim() : "";
@@ -209,7 +206,9 @@ const opencodeFact = (name, entry) => {
     return {
       status: "doubt",
       detail: `${name} 这条登记只写了开关、没写启动方式（没有 type）—— opencode 不把它当成一个服务`,
-      raw: entry,
+      // **只贡献这一个键**(本轮审查 F1-A,跟 TS 的 `opencodeFact` 同口径):走开关那一支时
+      // 它同时写的 `command` / `environment` 真 CLI 一律丢掉,留着会在搬运时复活。
+      raw: { enabled: entry.enabled },
     };
   }
   if (entry.enabled === false) return { status: "off", detail: `${name} 这条登记是关着的`, raw: entry };
@@ -240,18 +239,16 @@ function deepMergeRaw(lower, higher) {
  * 这家 CLI 的几份来源**怎么合**。null = 不合(格式族没有实测依据,或这家 CLI 本身没实测过
  * 会不会合)—— 那时 `effectiveState` 走老判据:最高那层说了算、同层不一致就看不准。
  *
- * 合完**必须重新判状态**(本轮审查 F1):状态和启动方式都只能从合完那份原值上算。高优先级
- * 那份里哪些字段真的算也是实测出来的:没写 `type` 的那条走开关那一支,只有 `enabled` 过得去。
+ * 合完**必须重新判状态**(上一轮审查 F1):状态和启动方式都只能从合完那份原值上算。
+ * **两边一视同仁**:每份来源的 `raw` 在 `opencodeFact` 里已经投影成「这份来源真正贡献的
+ * 字段」,所以这里直接深合 —— 上一版只过滤高的那份、最低那份原值照抄(本轮审查 F1-A)。
  */
 function mergeFactsFor(site) {
   if (!site.sourcesMerge || site.shape !== "opencode") return null;
-  const contribute = (raw) => (Object.hasOwn(raw, "type")
-    ? raw
-    : Object.hasOwn(raw, "enabled") ? { enabled: raw.enabled } : {});
   return (name, lower, higher) => {
     if (!lower.raw) return lower;
     if (!higher.raw) return higher;
-    return opencodeFact(name, deepMergeRaw(lower.raw, contribute(higher.raw)));
+    return opencodeFact(name, deepMergeRaw(lower.raw, higher.raw));
   };
 }
 
@@ -395,21 +392,19 @@ function effectiveState(sources, site) {
     picks.push(winners[winners.length - 1]);
   }
   const live = picks.find((p) => p.fact && p.fact.status === "on");
-  // 整份读不准的那些:它**可能声明任何名字**,包括把生效那条关掉 —— 但优先级比它低的影响不到。
+  // 整份读不准的那些 —— **一份都不许放过**(本轮审查 F1-C,跟 TS 的 `resolveAshMcp` 同口径):
+  // 实测真 opencode 读到任何一份读不通的配置就整份拒载(不管它在哪一层、有没有提到 ash),
+  // 那时压根没有「生效的登记」可言。上一版只拦「优先级不低于生效那条」的,于是低层一份坏
+  // 文件 + 高层一条完整登记会被答成 present、安装器还说「已经有生效的 ash 登记」。
   const blind = read.filter((r) => r.scan.doubt);
-  const blindWhy = (over) => over.map((b) => foldScan(b.scan, b.source.label).why).join("；");
-  if (live) {
-    const over = blind.filter((b) => b.source.level >= live.source.level);
-    if (over.length) {
-      return {
-        state: "unsure",
-        why: `${live.source.label} 里有生效的 ${live.name} 登记，但 ${blindWhy(over)}`
-          + " —— 那几份优先级不低于它、可能正把它关掉",
-      };
-    }
-    return { state: "present", name: live.name, label: live.source.label };
+  const blindWhy = (over) => [...new Set(
+    over.map((b) => foldScan(b.scan, b.source.label).why))].join("；");
+  if (blind.length) {
+    const why = `${blindWhy(blind)} —— 这家 CLI 会读的配置里有读不准的那一份：它可能正把别处`
+      + "那条登记关掉，也可能让这家 CLI 整份配置一起拒载（真 opencode 实测：任何一份读不通就起不来）";
+    return { state: "unsure", why: live ? `${live.source.label} 里有生效的 ${live.name} 登记，但 ${why}` : why };
   }
-  if (blind.length) return { state: "unsure", why: blindWhy(blind) };
+  if (live) return { state: "present", name: live.name, label: live.source.label };
   const unsure = picks.filter((p) => p.why);
   if (unsure.length) return { state: "unsure", why: unsure.map((u) => u.why).join("；") };
   const off = picks.filter((p) => p.fact);

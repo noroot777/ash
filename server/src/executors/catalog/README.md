@@ -281,7 +281,17 @@ factory: (opts) => new FooExecutor(opts),
   搬进隔离档的就只有这一个键,真 CLI 在那边一个服务都没有)。这件事由站点上的 `sourcesMerge`
   声明 ——它同时表示**加载序**和**逐字段合并**语义都实测过,**只给实测过的家置真**;kilo 的
   `KILO_CONFIG` 形状一样但没真 CLI 可问,几份来源结论不一致时判定一律回 unknown(不写、也不
-  拦起跑)。
+  拦起跑)。合并还有三条实测约束,少一条就会把「连得上」和「连不上」算反:
+  ① **逐份投影**:条目是三支并集,没写 `type` 的那一支只认 `enabled` —— 哪一份来源写成开关就
+  只贡献这一个键(低的那份、高的那份都一样),所以投影做在 `shapes.ts` 的 `opencodeFact` 里、
+  `mergeFacts` 两边一视同仁;只过滤高的那份会让低那份里本该被丢掉的 `environment` 活下来,
+  搬进隔离档后真 CLI 报 `MCP error -32000: Connection closed`。
+  ② **阶段才是单位**:同一个文件被两条路指到(`OPENCODE_CONFIG` 指回默认目录那份)算两次
+  加载,`ashMcpHostSources` 不按路径去重 —— 去重会把优先级最高的那次加载整个删掉,实测把一条
+  `connected` 的登记判成 disabled、落点还指错。
+  ③ **任何一份读不通就整份拒载**:实测 `debug config --pure` 直接 `exit 1`(不管那份在哪一层、
+  有没有提到 ash),所以 `resolveAshMcp` 只要见到一份读不准就回 unknown,不能靠「优先级比它低
+  的影响不到」放行 —— 那时压根没有生效的登记可言。
 - **opencode / kilo 不是 `mcpServers` 那一族**:容器叫 `mcp`、`command` 是整条 argv 数组、环境
   变量键叫 `environment`。
 - **antigravity 别和 gemini 搞混**:两家都住 `~/.gemini` 下,但 gemini 读 `settings.json`、

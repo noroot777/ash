@@ -136,19 +136,12 @@ export function ashMcpHostSources(
   if (mechanism?.kind !== "file") return [];
   const { site } = mechanism;
   const out: AshMcpSource[] = [];
-  const seen = new Set<string>();
   // 实测过加载序的那几家(`sourcesMerge`),同一个目录里的几份也各占一级;没实测的那几家
   // 整层共用一级 —— 「相等 = 谁覆盖谁没实测」,见 `AshMcpSource.level`。
   const ordered = site.sourcesMerge === true;
   let next = 0;
-  const fresh = (file: string): boolean => {
-    const key = resolve(file);
-    if (seen.has(key)) return false;      // 同一个文件被两条路指到 ⇒ 只算一份
-    seen.add(key);
-    return true;
-  };
   const addDir = (dir: string): void => {
-    const files = filesInDir(dir, site).filter(fresh);
+    const files = filesInDir(dir, site);
     files.forEach((file, i) => out.push({ label: file, file, level: next + (ordered ? i : 0) }));
     next += ordered ? files.length : 1;
   };
@@ -158,9 +151,14 @@ export function ashMcpHostSources(
   //    真正该一起看的全局那份照样看不见。
   const dirOverride = site.dirEnv && !site.dirEnvIsFile ? env[site.dirEnv]?.trim() : "";
   addDir(dirOverride || site.defaultDir(env, home));
-  // ② 指到文件的变量。
+  // ② 指到文件的变量。**同一个路径在两个阶段各算一次**(本轮审查 F1-B):上一版按 resolve
+  //    后的路径去重、只保留第一次出现,于是 `OPENCODE_CONFIG` 指回默认目录里那份时,它那
+  //    一次(优先级最高的)加载被整个删掉 —— 2026-10-31 实测:默认目录 `.json` 完整开着、
+  //    同目录 `.jsonc` 只写 `{"enabled": false}`、`OPENCODE_CONFIG` 指回那份 `.json`,真
+  //    CLI 最终是 `enabled: true`(`ash connected`),而去重之后 ash 判成 disabled、预检硬拒,
+  //    落点还指向 `.jsonc`。文件身份相同不等于加载阶段相同,合并本身对同一份内容是幂等的。
   const file = site.dirEnvIsFile && site.dirEnv ? env[site.dirEnv]?.trim() : "";
-  if (file && fresh(file)) out.push({ label: file, file, level: next++ });
+  if (file) out.push({ label: file, file, level: next++ });
   // ③ 指到另一个配置目录的变量:再加一层,**比上面那个文件还高**(本轮实测)。
   const altDir = site.altDirEnv ? env[site.altDirEnv]?.trim() : "";
   if (altDir) addDir(altDir);
@@ -296,18 +294,29 @@ export function resolveAshMcp(
     picks.push(winners.at(-1)!);
   }
   const live = picks.find((p): p is Extract<NamePick, { name: string }> => "fact" in p && p.fact.status === "on");
-  // 整份读不准的那些:它**可能声明任何名字**,包括把生效那条关掉 —— 但优先级比它低的影响不到。
+  /**
+   * 整份读不准的那些 —— **一份都不许放过**(本轮审查 F1-C)。
+   *
+   * 上一版只拦「优先级不低于生效那条」的,理由是「低的盖不住高的」。那条推理只覆盖了「某个
+   * 字段会不会被覆盖」,漏掉了更粗的一档:2026-10-31 实测,真 opencode 读到**任何一份**读不
+   * 通的配置就整份拒载(`debug config --pure` exit 1,报的是那份文件不是合法 JSON(C))——
+   * 不管它在最低那层、最高那层、还是同目录那份 `.jsonc`,也不管它里面有没有提到 ash。
+   * 那种情况下压根没有「生效的登记」可言,而上一版答的是 present、安装器还说「已经有生效的
+   * ash 登记,不动它」:用户看到的是「已接好」,agent 起来一个工具都没有。
+   *
+   * 所以这里只要有一份读不准就答 unknown:不写(写进去也救不了那份坏文件)、不拦起跑、
+   * 如实说是哪一份。同一份文件会在两个加载阶段各出现一次(见 `ashMcpHostSources` 的 ②),
+   * 说给人听的时候按名字去重。
+   */
   const blind = read.filter((r) => r.scan.doubt);
-  const blindWhy = (over: typeof blind) => over.map((b) => foldScan(b.scan, b.source.label).detail).join("；");
-  if (live) {
-    const over = blind.filter((b) => b.source.level >= live.source.level);
-    if (over.length) {
-      return unknownState(`${live.source.label} 里有生效的 ${live.name} 登记，但 ${blindWhy(over)}`
-        + " —— 那几份优先级不低于它、可能正把它关掉");
-    }
-    return { state: "present", serverName: live.name, detail: "", source: live.source, fact: live.fact };
+  const blindWhy = (over: typeof blind): string => [...new Set(
+    over.map((b) => foldScan(b.scan, b.source.label).detail))].join("；");
+  if (blind.length) {
+    const why = `${blindWhy(blind)} —— 这家 CLI 会读的配置里有读不准的那一份：它可能正把别处`
+      + "那条登记关掉，也可能让这家 CLI 整份配置一起拒载（真 opencode 实测：任何一份读不通就起不来）";
+    return unknownState(live ? `${live.source.label} 里有生效的 ${live.name} 登记，但 ${why}` : why);
   }
-  if (blind.length) return unknownState(blindWhy(blind));
+  if (live) return { state: "present", serverName: live.name, detail: "", source: live.source, fact: live.fact };
   const unsure = picks.filter((p): p is { why: string } => "why" in p);
   if (unsure.length) return unknownState(unsure.map((u) => u.why).join("；"));
   const off = picks.filter((p): p is Extract<NamePick, { name: string }> => "fact" in p);

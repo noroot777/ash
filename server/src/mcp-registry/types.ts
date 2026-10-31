@@ -56,12 +56,20 @@ export interface AshMcpNameFact {
   /** 给用户看的一句话(off/doubt 必填)。**不带来源前缀** —— 前缀由消费者按来源加。 */
   readonly detail: string;
   /**
-   * 这条登记的原值(JSON 两族),整条搬给隔离档用。
+   * 这条登记**在这份来源里真正贡献的那些字段**,整条搬给隔离档用。
    *
    * **跨来源的逐字段合并也靠它**(`AshMcpShape.mergeFacts`):几份来源各写了同一个名字时,
    * CLI 最终用的是它们合起来那一条,所以 `status` / `launch` 都必须从**合完的原值**上重算,
    * 不能从某一份的结论上取。有 `raw` 还意味着「这一份的写法认得出来、能参与合并」——
-   * `status: "doubt"` 而**不带** `raw` 的那种(值根本不是对象)一合就只能继续 doubt。
+   * `status: "doubt"` 而**不带** `raw` 的那种(值根本不是对象、或者少到让 CLI 整份拒载)
+   * 一合就只能继续 doubt。
+   *
+   * 「真正贡献」不是「原文照抄」(本轮审查 F1-A):有些 schema 会**按写法丢字段** ——
+   * opencode 的条目是三支并集,没写 `type` 的那一支只认 `enabled`,同时写的 `command` /
+   * `environment` 真 CLI 一律丢掉。所以投影在逐条判据里就做掉(见 `shapes.ts` 的
+   * `opencodeFact`),合并两边因此一视同仁;上一版只在「高优先级那份」上投影、最低那份原值
+   * 照抄,于是那些本该被丢掉的字段被合进了有效登记,搬进隔离档后把一条连得上的登记搬成
+   * 连不上的(`MCP error -32000: Connection closed`)。
    */
   readonly raw?: Record<string, unknown>;
   /** 这条登记的原文(TOML 族),整段搬给隔离档用。 */

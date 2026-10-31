@@ -167,7 +167,20 @@ export const ASH_MCP_TABLE = {
       + "命令仍取低份的;⑭ 单独一句 `{\"enabled\":true}` ⇒ `No MCP servers configured`(有键不等于"
       + "有服务);连 `enabled` 都不写(光写 `command`)⇒ 整份配置非法、`exit 1` 起不来;"
       + "⑮ `{type,command}` 不写 `enabled` 照样去连(默认开着),而 `disabled:true` 这个键**它不认**"
-      + "(带着它照样连、状态仍是 enabled)——那是 `mcpServers` 那一族的写法",
+      + "(带着它照样连、状态仍是 enabled)——那是 `mcpServers` 那一族的写法;"
+      + "**审查 F1-A/B/C 再补八组**(同样 `debug config --pure` 逐格比对,审查那三条复现也一并跑过):"
+      + "⑯ 开关那一支的投影**两个方向都成立**:低份 `{enabled:true,environment,command}`(没 type)"
+      + "+ 高份完整 ⇒ 合出来**没有** environment、命令是高份的 —— 所以那些字段不能留在 `raw` 里"
+      + "(留着搬进隔离档会把一条连得上的登记搬成 `MCP error -32000: Connection closed`,审查实测);"
+      + "⑰ 低份是 `{enabled:false,…}`(没 type)+ 高份完整不写 enabled ⇒ 合出来 `enabled:false`"
+      + "(开关照样跨来源继承,所以这种不许替用户打开);⑱ 低份完整 + 高份 `{enabled,environment,"
+      + "command}`(没 type)⇒ 命令和 environment 仍是低份的(⑬ 的复核);"
+      + "⑲ **同一个文件被两条路指到算两次加载**:默认目录 `.json` 完整开着、同目录 `.jsonc` 只写 "
+      + "`{\"enabled\":false}`、`OPENCODE_CONFIG` 指回那份 `.json` ⇒ 最终 `enabled:true`、"
+      + "`ash connected`(指回 `.jsonc` 则相反:`enabled:false`)—— 按路径去重会把最高那次加载删掉;"
+      + "⑳ **任何一份读不通整份拒载**:`{BROKEN` 放在最低那层、最高那层、同目录 `.jsonc`、"
+      + "或者放在一份压根没提 ash 的文件里,四种都是 `exit 1`(报那份不是合法 JSON(C))——"
+      + "所以「低的盖不住高的」在这一档不成立,只要有一份读不准就没有生效的登记可言",
     notes: "跟 `mcpServers` 那族**不是同一个形状**（容器叫 `mcp`、argv 是数组、环境变量键叫 "
       + "`environment`），别拿那份硬套",
   },

@@ -151,10 +151,13 @@ export function howToCheck(agentType: string, env: NodeJS.ProcessEnv): string {
   const sources = ashMcpHostSources(agentType, env);
   if (!sources.length) return `看一眼 ${agentType} 自己的 MCP 配置`;
   // 列的是来源的**名字**(文件路径,或 `$OPENCODE_CONFIG_CONTENT` 这样的变量名)——
-  // `AshMcpSource` 是个对象,直接拼进话里就是 `[object Object]`(本轮审查 N1)。
-  return sources.length > 1
-    ? `看一眼这几份配置（这家 CLI 都会读，谁都可能装着那条登记）：${sources.map((s) => s.label).join("、")}`
-    : `看一眼 ${sources[0]!.label}`;
+  // `AshMcpSource` 是个对象,直接拼进话里就是 `[object Object]`(上一轮审查 N1)。
+  // 同一个路径会在两个加载阶段各算一份(见 `ashMcpHostSources` 的 ②),给人看的时候去重:
+  // 让用户「看一眼 a、a」只会让他以为我们算错了。
+  const labels = [...new Set(sources.map((s) => s.label))];
+  return labels.length > 1
+    ? `看一眼这几份配置（这家 CLI 都会读，谁都可能装着那条登记）：${labels.join("、")}`
+    : `看一眼 ${labels[0]!}`;
 }
 
 const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
