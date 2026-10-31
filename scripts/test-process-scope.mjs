@@ -33,7 +33,12 @@
 //     覆盖的就是这一种,实际上一次都没覆盖到。
 // 所以这一版:环境这条线索留着,但判据改成「标记出现在**环境段**里」(`ps -E` 的输出等于
 // `ps` 的输出再接环境块,实测前缀关系成立,于是两次快照一减就把环境段切出来了);而「不随
-// exec 丢」这件事交给边界描述符。
+// exec 丢」这件事交给边界描述符。**整段两侧还要收口**(第 1 轮审查 F4:裸 `includes` 会让
+// `…SCOPE=/tmp/x-other` 这个另一个域的真实环境把 `/tmp/x` 的标记整段包住,于是一域的 `stop()`
+// 去终止另一域正在用的进程),判据与残留见 test-process-probe.mjs 的 `environmentHasMarker`。
+//
+// 「此刻系统里有些什么」全在 **test-process-probe.mjs** 答(ps / lsof / CIM 的输出怎么读、
+// 实例身份怎么比),这个文件只下所有权与清场的判据。
 //
 // ## 支持形态,以及这一层到底证明了什么
 //
@@ -52,6 +57,10 @@
 //
 //   · **不支持**主动丢弃监管资源的 daemon 形态(fork → setsid → 清环境 → 关掉继承的 fd)。
 //     这不是「不许这么写测试」,而是「这么写的话本层答的只能是证明不了」。
+//   · **不支持**用 `execFile`/`exec` 建出来的 Node 后代**再往下**的非 Node 后代:那两个入口
+//     不转发 stdio(实测),边界交不到它手里,所以它的非 Node 后代五条线索全不命中。那个
+//     Node 后代自己照旧认得出来(登记 + NODE_OPTIONS 一路继承),交没交到边界也如实记在登记
+//     里(`boundary`),不靠猜 —— 见 test-process-register.cjs 那段 patch 的说明。
 //   · 查不动(ps/CIM/lsof/proc 任一条答不出来)⇒ `survey()` 走 `ok:false` 失败路径,
 //     绝不退化成「没有活的」。**扫不到不算停了**这条不变量没有例外。
 //   · **丢边界这件事只要落在我们看得见的地方,就当场失败**:我们自己 spawn 的那一层,fd 是
@@ -64,26 +73,30 @@
 // 号码会被复用。所以每一行快照都带 `born`,登记也带时刻:号码对上但出生时刻对不上的,
 // 是**另一个进程**,既不认它是我们的,更不会去杀它。终止前还要再核一次(POSIX 用
 // `ps -p` 重查,Windows 走句柄 + GetProcessTimes,见 stop)。
-import { spawn, spawnSync, execFile } from "node:child_process";
-import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+//
+// **核不出来是第三种答案**,不许往「已经没了」上归(第 1 轮审查 F5):那一刀不发,号码照实
+// 报进 `unverified`,由 `stop()` 失败。两次读数之间也**没有时间容差** —— 同一个进程的两次
+// lstart 读的是内核里同一个值,相等就该严格相等;留一秒容差换来的只是「下一秒出生的复用实例
+// 照旧算同一个」,然后对它发信号(判据见 test-process-probe.mjs 的 `instanceVerdict`)。
+// 容差只在**两把不同尺子**之间才有意义:秒级的 `born` 对毫秒级的 `started`,见 `#impostor`。
+import { spawn, spawnSync } from "node:child_process";
+import { closeSync, fstatSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { windowsTerminateScript } from "./windows-restart.mjs";
+// 「此刻系统里有些什么」全在那边答(ps / lsof / CIM 的输出、实例身份的比较),这边只下所有权
+// 与清场的判据 —— 两种问题分开,见 test-process-probe.mjs 文件头。
+import {
+  CLOCK_SLACK_MS, boundaryHolders, command, fileTime, instanceVerdict, powerShell, processRows,
+} from "./test-process-probe.mjs";
 
-const execute = promisify(execFile);
 const windows = process.platform === "win32";
 const registerPath = fileURLToPath(new URL("test-process-register.cjs", import.meta.url));
 const cleanupPath = fileURLToPath(new URL("test-process-cleanup.mjs", import.meta.url));
 const scopes = new Set();
 export const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 
-/** 进程表的时刻只精确到秒(ps 的 lstart、CIM 的 CreationDate),比较一律留这么多余量。 */
-const CLOCK_SLACK_MS = 1_000;
-
-/** FILETIME:1601 年起算的 100 纳秒数。Windows 核对进程代次用的就是这把尺子。 */
-const fileTime = (milliseconds) => (BigInt(Math.floor(milliseconds)) + 11_644_473_600_000n) * 10_000n;
 
 /**
  * 边界 inode 的三个文件名。
@@ -105,134 +118,6 @@ const REGISTRATION = /^\d+\.\d+\.json$/;
 const BOUNDARY = "boundary";
 const BOUNDARY_ID = "boundary.id";
 const CREATOR = "creator.id";
-
-async function command(file, args, options = {}) {
-  const { timeout = 4_000, env } = options;
-  return (await execute(file, args, {
-    encoding: "utf8", timeout, killSignal: "SIGKILL", windowsHide: true,
-    maxBuffer: 64 * 1024 * 1024, // -E 把环境块也打出来,默认 1 MB 的缓冲区装不下整张表
-    env: env ? { ...process.env, ...env } : process.env,
-  })).stdout;
-}
-
-/**
- * 还有谁持有那个边界 inode —— 返回 pid 的 Set。`identity` 是 `{ dev, ino }`,`excluded` 是
- * 不算在内的号码(本进程、以及本域的创建者:它一直握着 fd 用来钉住这个 inode)。
- *
- * **按 (dev, ino) 认,不按路径认**(第 2 轮审查第 4 条):那个 inode 已经 unlink 了,压根没有
- * 路径可以 open —— 这正是「继承了受监管资源」和「碰巧打开同一个文件」分得开的地方。两个平台
- * 都顺带要求 `nlink === 0`(未链接):一个还有名字的 inode 不可能是我们这个。
- *
- * **查不动一律抛**,绝不返回空集:这一层最要紧的不变量是「扫不到 ≠ 停了」,把一次查询失败
- * 说成「没有持有者」正是那个事故形状的根子。调用方经 `survey()` 把它走成失败路径。
- */
-async function boundaryHolders(identity, excluded) {
-  const holders = new Set();
-  // Linux 不必起外部进程:/proc 直接读得到每个 pid 开着哪些 fd。stat 那个 fd 入口会跟到真正的
-  // 文件上(readlink 只会给出 "…/boundary (deleted)" 这种文本,unlink 之后不能再拿它比对)。
-  if (existsSync("/proc/self/fd")) {
-    for (const name of readdirSync("/proc")) {
-      const pid = Number(name);
-      if (!Number.isInteger(pid) || excluded.has(pid)) continue;
-      let entries;
-      try { entries = readdirSync(`/proc/${pid}/fd`); } catch { continue; } // 进程没了 / 不是我们的
-      for (const entry of entries) {
-        try {
-          const stats = statSync(`/proc/${pid}/fd/${entry}`);
-          if (stats.dev === identity.dev && stats.ino === identity.ino && stats.nlink === 0) {
-            holders.add(pid);
-            break;
-          }
-        } catch { /* fd 刚好关了 */ }
-      }
-    }
-    return holders;
-  }
-  // macOS:`+L1` 只列「链接数 < 1」的打开文件,也就是未链接的那些 —— 本域这个 inode 必在其中,
-  // 而全系统的具名文件一条都不进来。`-F pfDi` 的输出是逐行的字段:`p` 换 pid、`D` 设备号(十六
-  // 进制)、`i` inode 号。
-  let output;
-  try { output = await command("lsof", ["+L1", "-F", "pfDi"], { timeout: 10_000 }); }
-  catch (error) {
-    // 全系统一个未链接的打开文件都没有时,lsof 退 1 且不吐东西 —— 那是「没有持有者」这个
-    // **答案**,不是查询失败。其余任何情况(找不到 lsof、超时、有 stderr)都算答不出来,往上抛。
-    if (error.code === 1 && !error.stdout?.trim() && !error.stderr?.trim()) return holders;
-    throw error;
-  }
-  let pid = null;
-  let device = null;
-  for (const line of output.split("\n")) {
-    const value = line.slice(1).trim();
-    if (line.startsWith("p")) { pid = Number(value); device = null; continue; }
-    if (line.startsWith("D")) { device = Number(value); continue; } // 0x… 形式,Number 认得
-    if (!line.startsWith("i") || pid === null || excluded.has(pid)) continue;
-    if (device === identity.dev && Number(value) === identity.ino) holders.add(pid);
-  }
-  return holders;
-}
-
-const powerShell = (script) =>
-  command("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand",
-    Buffer.from(script, "utf16le").toString("base64")], { timeout: 20_000 });
-
-/**
- * 全表快照。每行 `{ pid, ppid, group, born, created, scoped }`:
- *  · `born` 是出生时刻(ms),实例身份的依据;
- *  · `created` 只有 Windows 有 —— 原始 FILETIME,句柄终止要拿它核对代次;
- *  · `scoped` 是「环境里带着某个执行域」的标记,POSIX 专有(见文件头)。
- */
-async function processRows(scopeDirectory) {
-  if (windows) {
-    const script = `$ErrorActionPreference='Stop'; $rows=@(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate } | ForEach-Object {
-      @{ pid=$_.ProcessId; ppid=$_.ParentProcessId; born=([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds(); created=$_.CreationDate.ToUniversalTime().ToFileTimeUtc().ToString() }
-    }); [Console]::Out.WriteLine((ConvertTo-Json -InputObject $rows -Compress))`;
-    const parsed = JSON.parse(await powerShell(script));
-    return (Array.isArray(parsed) ? parsed : [parsed]).map((row) => ({ ...row, group: null, scoped: false }));
-  }
-  // `LC_ALL=C` 把 lstart 钉成固定的英文格式,否则中文 locale 下是「四 10月/22 ...」,
-  // Date.parse 认不出来,整条实例身份就垮了。
-  //
-  // **两张快照,一张带 `-E` 一张不带**(第 4 轮审查 F1)。`-E` 把环境块接在命令行后面,中间
-  // 没有任何分隔符 —— 于是上一版那句 `line.includes(标记)` 根本分不清标记是在**环境里**还是
-  // 只是人家 argv 里的一个普通参数,一个外部进程就这么被认领、被终止(探针实测)。而
-  // `ps -E` 的那一行等于 `ps` 的那一行再接环境块(实测前缀关系成立),所以减一下就把环境段
-  // 切出来了:判据只看那一段。
-  const columns = "pid=,ppid=,pgid=,stat=,lstart=,command=";
-  const snapshot = async (extra) =>
-    command("ps", ["-ww", ...extra, "-axo", columns], { env: { LC_ALL: "C" }, timeout: 10_000 });
-  const [plain, withEnvironment] = await Promise.all([snapshot([]), snapshot(["-E"])]);
-  const marker = scopeDirectory ? `ASH_TEST_PROCESS_SCOPE=${scopeDirectory}` : null;
-  /** pid → 这一行去掉前面那几列之后的「命令行(+环境块)」。 */
-  const tails = (text) => {
-    const out = new Map();
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const parts = trimmed.split(/\s+/);
-      // 前五列固定:pid ppid pgid stat + lstart 的五段(Thu Oct 22 09:25:56 2026)。
-      out.set(Number(parts[0]), { parts, tail: parts.slice(9).join(" ") });
-    }
-    return out;
-  };
-  const argvOnly = tails(plain);
-  const rows = [];
-  for (const [pid, { parts, tail }] of tails(withEnvironment)) {
-    const [, ppid, group, state] = parts;
-    if (state?.startsWith("Z")) continue; // 僵尸:已经死了,只是还没被收尸
-    const born = Date.parse(parts.slice(4, 9).join(" "));
-    // 环境段 = 带 `-E` 那一行减掉不带 `-E` 那一行。切不出来(两次快照之间 argv 变了、或者
-    // 有一张里没有这个 pid)就**算读不出来**,不算「没有标记」—— 这条线索答不了的时候还有
-    // 边界 fd 和父子链,不必在这儿猜。
-    const argv = argvOnly.get(pid)?.tail;
-    const environment = argv !== undefined && tail.startsWith(argv) ? tail.slice(argv.length) : null;
-    rows.push({
-      pid, ppid: Number(ppid), group: Number(group), created: null,
-      born: Number.isFinite(born) ? born : null,
-      scoped: !!marker && environment !== null && environment.includes(marker),
-    });
-  }
-  return rows;
-}
 
 /**
  * 发布一条登记。**每个发布者写自己的文件名**,两个发布者永远不会抢同一个目标 ——
@@ -268,7 +153,11 @@ export class TestProcessScope {
       throw error;
     }
     this.children = [];
-    /** 终止时**没能核对实例身份**的那些号码 —— 宁可报出来,也不照着旧号码乱杀(F2)。 */
+    /**
+     * 终止时**没能核对实例身份**的那些号码 —— 宁可报出来,也不照着旧号码乱杀(第 4 轮审查 F2)。
+     * 两个平台都会往这儿记:Windows 是句柄那头说「代次对不上」,POSIX 是出生时刻读不出来
+     * (第 1 轮审查 F5 —— 上一版在 POSIX 上把「核不出来」当成「已经没了」咽掉了)。
+     */
     this.unverified = [];
     // 边界 inode(见文件头)。POSIX 专有:Windows 那边 ppid 在父进程死后仍然保留,父子链本身
     // 就是完整的,不需要这一条;那边也没有「谁持有这个 inode」的查法。
@@ -460,26 +349,42 @@ export class TestProcessScope {
    * 却不再持有」只有一种解释:它自己关掉了 —— 而从这一刻起,它再 fork 出来的后代本层一条线索
    * 都认不出来(文件头「支持形态」)。这时候要的是**明确失败**,不是接着往「都停了」上走。
    *
-   * **只看自己 spawn 的那一层**。再往下的那些,fd 要么由被改过的 `child_process.spawn` 继续传
-   * (见 test-process-register.cjs),要么是原生 fork/exec 自然继承 —— 但 `execFile`/`fork`/
-   * `spawnSync` 这些入口走的是 Node 内部的那个引用、改不到,所以「孙子辈也必须持有」这条**不**
-   * 成立,拿它当判据会把一堆正当形态误报成违规。孙子辈自己关掉的那一种这一层确实看不见,靠
-   * 形态约束,不在这儿假装检测得到。
+   * **看的是「交过的那些」,不是只看自己 spawn 的那一层**(第 1 轮审查 F1)。上一版只认
+   * `this.children`:根命令一正常退出,它就一个嫌疑人都挑不出来,于是「不支持的形态要明确失败」
+   * 实际上只是一句注释。再往下交没交到边界**不靠推断**,按登记里那一笔算（`boundary`,由交的
+   * 那一方记下,见 test-process-register.cjs）:
+   *  · `spawn`/`spawnSync`/`fork` 建出来的,边界续进了 stdio ⇒ 记 `true`,它**该**持有;
+   *  · `execFile`/`exec` 建出来的 Node 后代拿不到（Node 不转发 stdio,实测）⇒ 记 `false`,
+   *    这一道不碰它们 —— 那是覆盖面的缺口,记在文件头「支持形态」里,不是形态违规。
+   * 孙子辈再往下**原生** fork/exec 自然继承,这一道同样管不到它们自己关掉的那一种,靠形态约束。
    *
    * 会**复核一次**:取进程表和取持有者之间它可能正好在退出(内核在进程收尾时把 fd 全关掉),
    * 那种「还活着」只是还没被收尸。所以要求再查一遍仍然不持有、而且实例身份还在。
    */
   async #escapees(rows, holders) {
-    const suspects = this.children.filter((child) => child.pid && child.exitCode === null
-      && child.signalCode === null && !holders.has(child.pid)
-      && rows.some((row) => row.pid === child.pid));
+    /** pid → 核实例身份的上界(`null` = 句柄还在我们手里,这个号码不可能被复用)。 */
+    const handed = new Map();
+    for (const child of this.children) {
+      if (child.pid && child.exitCode === null && child.signalCode === null) handed.set(child.pid, null);
+    }
+    for (const record of this.records()) {
+      if (record.boundary === true && !handed.has(record.pid)) handed.set(record.pid, record.at);
+    }
+    const suspects = [];
+    for (const [pid, notAfter] of handed) {
+      const row = rows.find((entry) => entry.pid === pid);
+      // 不在表里 = 已经退了;还持有 = 本来就没问题;号码换了主人 = 不是我们交过的那一个。
+      if (!row || holders.has(pid)) continue;
+      if (notAfter !== null && this.#impostor(row, notAfter)) continue;
+      suspects.push(pid);
+    }
     if (!suspects.length) return [];
     const again = await boundaryHolders(this.boundaryId, this.#outsiders());
     const confirmed = [];
-    for (const child of suspects) {
-      if (again.has(child.pid)) continue;
-      const row = rows.find((entry) => entry.pid === child.pid);
-      if (row && await this.#stillSame(row)) confirmed.push(child.pid);
+    for (const pid of suspects) {
+      if (again.has(pid)) continue;
+      const row = rows.find((entry) => entry.pid === pid);
+      if (row && await this.#instance(row) === "same") confirmed.push(pid);
     }
     return confirmed;
   }
@@ -499,15 +404,26 @@ export class TestProcessScope {
     } catch (error) { return { ok: false, rows: [], error }; }
   }
 
-  /** 终止前再核一次实例身份:号码还在、出生时刻一致,才是当初那一个。 */
-  async #stillSame(row) {
-    if (windows) return row; // Windows 走句柄 + GetProcessTimes,核对在那边做(见 stop)
+  /**
+   * 终止前再核一次实例身份。四档,`"same"` 之外一个都不许动手(第 1 轮审查 F5):
+   *  · `"same"` / `"other"` / `"unverifiable"` —— 判据在 `instanceVerdict`(**没有时间容差**:
+   *    同一个进程的两次 lstart 读数不存在「差一秒的测量误差」,留容差等于重新授权终止一个
+   *    下一秒出生的复用实例);
+   *  · `"gone"` —— `ps -p` 查不到它,已经没了,不必杀。
+   *
+   * 查**不动**(超时、找不到 ps)在这儿也落到 `"gone"`:它只决定「这一刀不发」,而「到底还有
+   * 没有活的」那个结论由 `stop()` 最后那一次 `inspect()` 下 —— 真还活着且真是我们的,它会在
+   * 那里被点名报出来,不会因为这儿没杀成就悄悄算清场。
+   */
+  async #instance(row) {
+    if (windows) return "same"; // Windows 走句柄 + GetProcessTimes,核对在那边做(见 stop)
+    // 当初就没读出出生时刻 ⇒ 核不了。别去 `ps` 问一遍再拿答案当「待验证身份」用:那样
+    // 必然相等(上一版的 `row.born ?? born` 就是这个形状),等于不核。
+    if (row.born === null) return "unverifiable";
     try {
       const out = await command("ps", ["-p", String(row.pid), "-o", "lstart="], { env: { LC_ALL: "C" }, timeout: 4_000 });
-      const born = Date.parse(out.trim());
-      if (!Number.isFinite(born)) return null;
-      return Math.abs(born - (row.born ?? born)) <= CLOCK_SLACK_MS ? row : null;
-    } catch { return null; } // 查不到 = 已经没了,不必杀
+      return instanceVerdict(row.born, Date.parse(out.trim()));
+    } catch { return "gone"; }
   }
 
   async stop() {
@@ -527,12 +443,16 @@ export class TestProcessScope {
      */
     const terminateRows = async (rows, force) => {
       if (!windows) {
+        const unverified = [];
         for (const row of rows) {
-          const same = await this.#stillSame(row);
-          if (!same) continue; // 号码换了主人:不是我们的,绝不碰
-          signal(row.pid, force ? "SIGKILL" : "SIGTERM");
+          const verdict = await this.#instance(row);
+          if (verdict === "same") { signal(row.pid, force ? "SIGKILL" : "SIGTERM"); continue; }
+          // `other` = 号码换了主人,本来就不是我们的;`gone` = 已经没了。这两种不吭声。
+          // **`unverifiable` 要报出来**(F5):核不出代次就不动手,而「我没核出来」不许
+          // 悄悄变成「它已经没了」—— 那正是这一层最不许犯的那个错。
+          if (verdict === "unverifiable") unverified.push(row.pid);
         }
-        return []; // POSIX 这边「核不出来」就是「已经没了」(见 #stillSame),没有待报的号码
+        return unverified;
       }
       // 句柄 + GetProcessTimes 代次核对,和生产重启同一套(scripts/windows-restart.mjs)。
       // 不用 `taskkill /T`:它在执行那一刻重新展开进程树,杀的可能是我们查完之后才挂上去
@@ -590,7 +510,10 @@ export class TestProcessScope {
         // 代次核成**区间**:这正是 `#impostor` 那条判据,换成句柄那头看得懂的尺子交过去 ——
         // 于是不必先起一个 powershell 查一遍进程表拿代次,这一刀只花一次。跳过的号码不往
         // `unverified` 里记:号码换了主人就本来不是我们的,后面的 `active()` 也不会认领它。
-        .map((record) => ({ pid: record.pid, created: `${fileTime(this.started - CLOCK_SLACK_MS)}-${fileTime(record.at + CLOCK_SLACK_MS)}` })), true));
+        // 上界就是 `record.at` 本身,**不加容差**(第 1 轮审查 F5):登记必然晚于出生,所以
+        // 真正属于我们的那一个落在区间里;而加一秒等于把「登记之后一秒内出生的复用实例」也收
+        // 进来。这样这个区间和 `#impostor` 的判据一个字都不差 —— 同一条判据不许有两个尺子。
+        .map((record) => ({ pid: record.pid, created: `${fileTime(this.started - CLOCK_SLACK_MS)}-${fileTime(record.at)}` })), true));
     }
     // 下面这一段是**凭据**:前面那一刀只覆盖得到自己登记过的(非 Node 的后代不执行 preload),
     // 全表枚举才认得出靠父子链挂着的那些,而「还有没有活的」这个结论只能由它来下。

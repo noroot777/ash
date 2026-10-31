@@ -7,7 +7,7 @@
 // child_process 造不出来(它一定走 preload)。没有 python3 的机器上这一节跳过并说明。
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TestProcessScope, delay } from "./test-process-scope.mjs";
@@ -200,6 +200,105 @@ if (windows) {
   assert.ok(!alive(child.pid), `认领得出的那一个照旧要停掉(pid=${child.pid})`);
   console.log("✓ 退出证明:丢掉边界的进程当场点名失败,不混成「清场成功」");
   if (failure) assert.ok(failure instanceof AggregateError, "清理失败要如实聚合抛出");
+}
+
+// ── ②f 所有权:**名字相邻的另一个执行域,一个进程都不许碰** ────────────────────────
+// 第 1 轮审查 F4 的直接复现。判据原先是 `environment.includes(标记)`,而另一个域的**真实**
+// 环境 `ASH_TEST_PROCESS_SCOPE=<我这个>-other` 把我这一段整段包住 —— 于是 A 的 `stop()` 会对
+// B 正在用的进程发终止信号。并行跑同一套测试、目录名按用途加后缀,这是常态而不是巧合输入。
+if (windows) {
+  console.log("- 跳过相邻执行域一节(POSIX 专属:判据里的环境段线索)");
+} else {
+  const scope = new TestProcessScope();
+  const sibling = new TestProcessScope((() => {
+    const directory = `${scope.directory}-other`;
+    mkdirSync(directory);
+    return directory;
+  })());
+  const theirs = sibling.spawn("/bin/sleep", ["5"], { stdio: "ignore" });
+  await delay(400);
+  const owned = await scope.active();
+  assert.ok(!owned.some((row) => row.pid === theirs.pid),
+    "另一个执行域的进程不是我们创建的 —— 目录名把我这段包住不构成来源证明");
+  await scope.stop();
+  scope.remove();
+  assert.ok(alive(theirs.pid), "更不许被我们的 stop() 杀掉:那是把别人正在跑的检查整个关掉");
+  await sibling.stop();
+  sibling.remove();
+  console.log("✓ 所有权:目录名把本域整段包住的另一个执行域,既不认领也不终止");
+}
+
+// ── ②g 所有权:环境段的判据按**整个 KEY=VALUE** 收口,但这条线索本身要留着 ────────────
+// 两个方向一起钉:别的变量的值里嵌着这段文字不算(F4 的另一半),而**真有这个变量**的仍然要
+// 认得出来 —— 把这条线索删掉也能让上面那几条绿,所以正向这一条是它的对照组。默认的
+// `subprocess.Popen(close_fds=True)` 关掉继承的 fd、又换了会话,环境是那种形态下唯一还认得出
+// 它的线索(见 `environmentHasMarker` 的说明)。
+if (windows) {
+  console.log("- 跳过环境段收口一节(POSIX 专属)");
+} else {
+  const scope = new TestProcessScope();
+  const sleeper = ["-e", "setTimeout(() => {}, 5000)"];
+  // 反向:标记原样嵌在**另一个变量的值**里(左边没有收口)。
+  const outsider = spawn(process.execPath, sleeper,
+    { stdio: "ignore", env: { OTHER: `prefix-ASH_TEST_PROCESS_SCOPE=${scope.directory}` } });
+  // 正向:真的带着这个变量(没有 NODE_OPTIONS ⇒ 没有登记,认它的只能是环境段这一条)。
+  const descendant = spawn(process.execPath, sleeper,
+    { stdio: "ignore", env: { ASH_TEST_PROCESS_SCOPE: scope.directory } });
+  await delay(400);
+  const owned = await scope.active();
+  assert.ok(!owned.some((row) => row.pid === outsider.pid),
+    "标记嵌在别的变量的值里 = 没有这个变量,不许认领");
+  assert.ok(owned.some((row) => row.pid === descendant.pid),
+    "真带着这个变量的要认得出来 —— 收口不等于把这条线索删掉");
+  await scope.stop();
+  scope.remove();
+  assert.ok(alive(outsider.pid), "没认领的进程更不许被杀");
+  assert.ok(!alive(descendant.pid), "认领得出的要停掉");
+  outsider.kill("SIGKILL");
+  descendant.kill("SIGKILL");
+  console.log("✓ 所有权:环境段按整个 KEY=VALUE 收口,嵌在别的值里的不算、真有这个变量的照旧认得出");
+}
+
+// ── ②h 退出证明:**边界不在 fd 3 上时也要往下传** ────────────────────────────────
+// 第 1 轮审查 F1 的两个子缺陷一起验:preload 那一侧原先写死 `fstatSync(3)`,而执行域是「在
+// 调用方自己的 stdio 后面续一位」—— 调用方要了一个 IPC 通道,边界就落在 fd 4(本机实测)。
+// 于是那个 Node 后代**手里明明有、却读成 null**,再往下一个都传不到;另外原先只 patch 了
+// `spawn`,走 `spawnSync`/`fork` 的那一代也拿不到。
+//
+// 这一节造的后代把**登记、父子链、进程组、环境**四条线索同时丢掉(fork → setsid → execve 空
+// 环境),所以认得出它的只剩边界那一条:边界没传到,它就是个遗留。
+if (!python || windows) {
+  console.log(`- 跳过边界位置一节(${windows ? "Windows 没有 fork/setsid 语义" : "本机没有 python3"})`);
+} else {
+  const stage = mkdtempSync(join(tmpdir(), "ash-probe-"));
+  const scope = new TestProcessScope();
+  try {
+    const pidPath = join(stage, "grandchild.pid");
+    const grandchild = `import os,time;open(${JSON.stringify(pidPath)},'w').write(str(os.getpid()));time.sleep(6)`;
+    const forker = `import os,time\nc=os.fork()\nif c==0:\n os.setsid()\n os.execve(${JSON.stringify(python)},[${JSON.stringify(python)},'-c',${JSON.stringify(grandchild)}],{})\nelse:\n while not os.path.exists(${JSON.stringify(pidPath)}): time.sleep(.01)\n os._exit(0)`;
+    const relay = join(stage, "relay.mjs");
+    // 中转那一层走 `spawnSync`:它和 `fork` 一样原先没被 patch,顺带一起钉住。
+    writeFileSync(relay, `
+import { spawnSync } from "node:child_process";
+spawnSync(${JSON.stringify(python)}, ["-c", ${JSON.stringify(forker)}], { stdio: "ignore" });
+setTimeout(() => {}, 5000);
+`);
+    // 要一个 IPC 通道 ⇒ 执行域把边界续在它后面,孩子那边它就在 fd 4 上。
+    scope.spawn(process.execPath, [relay], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    const deadline = Date.now() + 8_000;
+    while (!existsSync(pidPath) && Date.now() < deadline) await delay(50);
+    assert.ok(existsSync(pidPath), "那个原生后代没起来,这一节的前提就不成立");
+    const pid = Number(readFileSync(pidPath, "utf8"));
+    const owned = await scope.active();
+    assert.ok(owned.some((row) => row.pid === pid),
+      `边界落在 fd 4 上时也要被读出来、往下传:只有它认得出这个后代(pid=${pid})`);
+    await scope.stop();
+    assert.ok(!alive(pid), `认出来了就要停掉(pid=${pid})`);
+  } finally {
+    scope.remove();
+    rmSync(stage, { recursive: true, force: true });
+  }
+  console.log("✓ 退出证明:边界不在 fd 3 上(带 IPC)也照样读出来并往下传,spawnSync 那一代同样接上");
 }
 
 // ── ③ 实例绑定:号码对上但出生时刻对不上的,既不认领也不终止 ────────────────────
