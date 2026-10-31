@@ -13,12 +13,15 @@
 //  · 它们是「合起来看、高优先级那份赢」—— 高的那份只写 `{"enabled": false}` 也会把低的
 //    那条完整登记关掉。
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+  existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { BACKUP_SUFFIX } from "../src/auth/config-publish.js";
 import { fileAshMcpVerdict } from "../src/ash-mcp-file.js";
+import { howToCheck } from "../src/ash-mcp-reachability.js";
 import {
-  ashMcpHostFile, ashMcpHostSources, effectiveConfigState, registerAshMcp,
+  ashMcpHostFile, ashMcpHostSources, effectiveConfigState, registerAshMcp, resolveAshMcp,
 } from "../src/mcp-registry/register.js";
 import { ASH_MCP_TABLE, ashMcpConfigDir } from "../src/mcp-registry/catalog.js";
 
@@ -30,6 +33,7 @@ const ocBody = (mcp: Record<string, unknown>) => `${JSON.stringify({ $schema: "x
 const EMPTY = ocBody({});
 const WITH_ASH = ocBody({ ash: OC_ENTRY });
 const ASH_OFF = ocBody({ ash: { enabled: false } });
+const HARNESS_ON = ocBody({ harness: OC_ENTRY });
 
 const shapeOf = (agentType: string) => {
   const mechanism = ASH_MCP_TABLE[agentType as keyof typeof ASH_MCP_TABLE];
@@ -137,6 +141,102 @@ export async function checkSourceModel(
     group("来源完整性 + 顺序 + 最终条目:两份都读、关掉的赢、只读来源不写、没实测的只说看不准");
   }
 
+  // ── ⑱ 逐名跨来源解析:`ash` 和 `harness` 是两条独立登记(本轮审查 F3)──────────
+  {
+    const { shape, site } = shapeOf("opencode");
+    const merges = site.sourcesMerge === true;
+
+    // ⒜ 审查那条复现:高优先级那份里 `ash` 关着、低优先级那份里 `harness` 开着 ⇒ 真 CLI
+    //    那边工具**连得上**(两个名字各是一条登记,ash 的工具由 harness 那条提供)。
+    //    上一版先把每份来源压成一个四态、再按优先级选赢家,两个名字的事实在第一步就混成了
+    //    一个 —— 判成 disabled,而 disabled 在预检里是硬拒:执行器明明能交卷却被拒派审。
+    const a = bench("f3-two-names");
+    const aGlobal = seedGlobal(a.host, HARNESS_ON);
+    const aCustom = join(a.dir, "my.json");
+    writeFileSync(aCustom, ASH_OFF, "utf8");
+    const envA = ocEnv(a.host, { OPENCODE_CONFIG: aCustom });
+    const srcA = ashMcpHostSources("opencode", envA, a.host);
+    const stA = effectiveConfigState(srcA, shape, merges);
+    assert.equal(stA.state, "present", `两个名字各算一次,harness 那条是开着的:${stA.detail}`);
+    assert.equal(stA.serverName, "harness", "说清生效的是哪一条(用户要去看的就是它)");
+    assert.equal(fileAshMcpVerdict("opencode", envA, [a.host]).state, "present", "派审门禁也得放行");
+    const rA = await registerAshMcp({
+      agentType: "opencode", dir: ashMcpConfigDir("opencode", envA, a.host)!, hostHome: a.host, env: envA,
+    });
+    assert.ok(rA.ok && rA.serverName === "harness", `已经接好了就别再写:${rA.ok ? rA.serverName : rA.why}`);
+    assert.equal(readFileSync(aGlobal, "utf8"), HARNESS_ON, "两份都不许动");
+    assert.equal(readFileSync(aCustom, "utf8"), ASH_OFF, "两份都不许动");
+
+    // ⒝ 同一个选中结果要**喂给搬运**:宿主那份里 `ash` 关着(指向 /off.js)、`harness` 开着
+    //    (指向 /live.js,底下还挂着子表)⇒ 隔离档里补出来的那条必须是 harness 那段的内容。
+    //    上一版 `hostBlock` 自己按名字固定先挑 `ash`,跟 `read` 挑开着那条的判据不是一套:
+    //    搬过去的是那条**关着的**,隔离档里的 agent 一开口就交不了卷。
+    const b = bench("f3-host-transplant");
+    const codexHome = join(b.host, ".codex");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(join(codexHome, "config.toml"),
+      '[mcp_servers.ash]\ncommand = "node"\nargs = ["/off.js"]\nenabled = false\n\n'
+      + '[mcp_servers.harness]\ncommand = "node"\nargs = ["/live.js"]\n\n'
+      + '[mcp_servers.harness.tools.get_task]\napproval_mode = "approve"\n', "utf8");
+    const isolated = join(b.dir, "codex-home");
+    mkdirSync(isolated, { recursive: true });
+    const rB = await registerAshMcp({ agentType: "codex", dir: isolated, hostHome: b.host, env: {} });
+    assert.ok(rB.ok, rB.ok ? "" : rB.why);
+    const built = readFileSync(join(isolated, "config.toml"), "utf8");
+    assert.match(built, /args = \["\/live\.js"\]/, `搬的必须是开着那条:\n${built}`);
+    assert.ok(!/enabled = false/.test(built), `那条关着的一个字都不该搬过来:\n${built}`);
+    assert.match(built, /\[mcp_servers\.ash\.tools\.get_task\]/, "子表照搬(表头改成规范名)");
+    assert.ok(!/off\.js/.test(built), "关着那条的启动参数也不该出现");
+
+    // ⒞ 诊断提示跟判定取**同一条**登记:`ash` 关着(/old.js)、`harness` 开着(/live.js)
+    //    ⇒ 提示里说的是 /live.js。这一格钉的是「同源」:上一版判定按最终生效算、提示按
+    //    present 过滤再取最后一份、再重新挑一次条目 —— 两套判据,漂起来的后果就是提示指向
+    //    一个根本没在跑的命令(⒜⒝ 是那两套判据已经实测分叉的地方)。
+    const c = bench("f3-hint");
+    const hintBody = ocBody({
+      ash: { ...OC_ENTRY, command: ["node", "/old.js"], enabled: false },
+      harness: { ...OC_ENTRY, command: ["node", "/live.js"] },
+    });
+    seedGlobal(c.host, hintBody);
+    const envC = ocEnv(c.host);
+    const pick = resolveAshMcp(ashMcpHostSources("opencode", envC, c.host), shape, merges);
+    assert.equal(pick.state, "present");
+    assert.deepEqual(pick.fact?.launch?.args, ["/live.js"], "解析层交出来的就是开着那条的启动方式");
+    const verdictC = fileAshMcpVerdict("opencode", envC, [c.host]);
+    assert.equal(verdictC.state, "present");
+    assert.match(verdictC.hint ?? "", /live\.js/, `提示要指到开着那条:${verdictC.hint}`);
+    assert.ok(!/old\.js/.test(verdictC.hint ?? ""), `关着那条不许拿去当提示:${verdictC.hint}`);
+
+    // ⒟ 整份读不准的那一份:**优先级不低于**生效那条时只能说看不准(它可能正把那条关掉);
+    //    优先级更低时影响不到,照样放行 —— 低的盖不住高的。
+    const d = bench("f3-blind-high");
+    seedGlobal(d.host, WITH_ASH);
+    const brokenHigh = join(d.dir, "broken.json");
+    writeFileSync(brokenHigh, '{"mcp": {', "utf8");
+    const stD = effectiveConfigState(
+      ashMcpHostSources("opencode", ocEnv(d.host, { OPENCODE_CONFIG: brokenHigh }), d.host), shape, merges);
+    assert.equal(stD.state, "unknown", "更高优先级那份读不准 ⇒ 看不准");
+    const e = bench("f3-blind-low");
+    seedGlobal(e.host, '{"mcp": {');
+    const highOk = join(e.dir, "ok.json");
+    writeFileSync(highOk, WITH_ASH, "utf8");
+    const stE = effectiveConfigState(
+      ashMcpHostSources("opencode", ocEnv(e.host, { OPENCODE_CONFIG: highOk }), e.host), shape, merges);
+    assert.equal(stE.state, "present", `优先级更低那份读不准,盖不住高的:${stE.detail}`);
+
+    // ⒠ 缺登记时给的自查路径必须是**路径**(本轮审查 N1:上一版把来源对象直接拼进话里,
+    //    用户拿到的是 `看一眼 [object Object]`)。
+    const f = bench("n1-how-to-check");
+    const one = howToCheck("kimi", { KIMI_CODE_HOME: f.dir } as NodeJS.ProcessEnv);
+    assert.ok(!one.includes("[object Object]"), `单来源那家也得给出路径:${one}`);
+    assert.match(one, /mcp\.json/, `说清是哪一份:${one}`);
+    const many = howToCheck("opencode", ocEnv(f.host, { OPENCODE_CONFIG: join(f.dir, "my.json") }));
+    assert.ok(!many.includes("[object Object]"), `几份来源也得逐个给出路径:${many}`);
+    assert.match(many, /opencode\.json/, `默认目录那份要在:${many}`);
+    assert.match(many, /my\.json/, `变量指的那份也要在:${many}`);
+    group("逐名跨来源:两个兼容名各算一次、搬运与提示消费同一个选中结果、自查路径是路径");
+  }
+
   // ── ⑰ 改写已有配置之前留一份核对过的备份(本轮审查 F2)──────────────────────
   {
     if (!entryBuilt) {
@@ -164,6 +264,28 @@ export async function checkSourceModel(
     assert.ok(r2.ok, r2.ok ? "" : r2.why);
     assert.ok(existsSync(fresh), "该写的写了");
     assert.ok(!existsSync(`${fresh}${BACKUP_SUFFIX}`), "原来没有这个文件就别留备份");
-    group("服务端这条路也留备份:改写前那一版逐字节在,新建那一路不留白备份");
+
+    // 备份那个名字上**摆着别的东西**时:不覆盖、也不跟着它写(本轮审查 F2)。上一版拿
+    // `copyFileSync` 往那个固定名字上直接拷,于是一条指向用户另一份文件的软链接会被跟着
+    // 走 —— 那份无关文件被整份改成 CLI 配置,而且整条路照样报成功。
+    const d = bench("server-backup-squatter");
+    const file2 = join(d.dir, "mcp.json");
+    const before2 = `${JSON.stringify({ userSetting: "keep-me-too" }, null, 2)}\n`;
+    writeFileSync(file2, before2, "utf8");
+    const bystander = join(d.dir, "unrelated.txt");
+    const bystanderBody = "用户另一份文件，跟 ash 无关\n";
+    writeFileSync(bystander, bystanderBody, "utf8");
+    const plain = `${file2}${BACKUP_SUFFIX}`;
+    symlinkSync(bystander, plain);
+    const r3 = await registerAshMcp({ agentType: "kimi", dir: d.dir, hostHome: d.host, env: {} });
+    assert.ok(r3.ok, r3.ok ? "" : r3.why);
+    assert.equal(readFileSync(bystander, "utf8"), bystanderBody, "无关文件一个字节都不许动");
+    assert.ok(lstatSync(plain).isSymbolicLink(), "那条软链接本身也不许被换成普通文件");
+    const own = readdirSync(d.dir).filter((n) => n.startsWith(`${basename(file2)}${BACKUP_SUFFIX}-`));
+    assert.equal(own.length, 1, `被占住就换一个自己的唯一名字:${readdirSync(d.dir).join("、")}`);
+    assert.equal(readFileSync(join(d.dir, own[0]!), "utf8"), before2, "备份必须逐字节是改之前那一版");
+    assert.equal(statSync(join(d.dir, own[0]!)).mode & 0o777, 0o600, "备份一出生就只有自己能读");
+    assert.match(readFileSync(file2, "utf8"), /"ash"/, "正事也办成了");
+    group("服务端这条路也留备份:改写前那一版逐字节在、新建那一路不留白备份、占住的名字不碰");
   }
 }

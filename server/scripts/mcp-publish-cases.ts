@@ -33,6 +33,12 @@ const PROBE_MARK = ".ash-publish-probe";
 const probeLeft = (file: string): boolean =>
   readdirSync(dirname(file)).some((n) => n.includes(`${PROBE_MARK}-`));
 
+/** 两份实现的源码 —— 有几条不变量只能读源码钉(理由见文件头)。 */
+const bothSources = (): Record<string, string> => ({
+  bare: readFileSync(new URL("../../scripts/config-publish.mjs", import.meta.url), "utf8"),
+  server: readFileSync(new URL("../src/auth/config-publish.ts", import.meta.url), "utf8"),
+});
+
 export async function checkPublishCases(
   publish: BarePublish,
   home: (name: string) => string,
@@ -245,10 +251,7 @@ export async function checkPublishCases(
 
   // ── ⑫ 两份实现的结构不变量(行为测不出来的那几条)──────────────────────────
   {
-    const src = {
-      bare: readFileSync(new URL("../../scripts/config-publish.mjs", import.meta.url), "utf8"),
-      server: readFileSync(new URL("../src/auth/config-publish.ts", import.meta.url), "utf8"),
-    };
+    const src = bothSources();
     for (const [side, code] of Object.entries(src)) {
       // 独占创建:名字带随机段 + `wx`。拿不到那个随机名字,测试没法先占住它来证明 —— 但
       // 这两条一起才是「绝不写到别人的对象上」的来源(本轮审查 F1)。
@@ -272,5 +275,59 @@ export async function checkPublishCases(
     assert.ok(at("backupBefore(read)") < lastCheck, "备份必须排在最终校验之前(F3)");
     assert.ok(at("publishInPlace(read, body)") > lastCheck, "写盘必须排在最终校验之后(F3)");
     group("结构不变量:预演独占创建、慢步骤排在最终校验之前");
+  }
+
+  // ── ⑬ 备份也是发布产物:独占创建、不覆盖也不跟随已有对象(本轮审查 F2)───────────
+  {
+    const body = '{\n  "ash": 1\n}\n';
+    const before = `${JSON.stringify({ userSetting: "keep" }, null, 2)}\n`;
+
+    // ⒜ 那个固定名字上摆一条**指向用户另一份文件**的软链接:上一版 `copyFileSync` 跟着它
+    //    写,把那份无关文件整份改成了 CLI 配置,而且整条路照样报成功(审查实测)。
+    const h = home("backup-symlink");
+    const file = join(h, "config.json");
+    writeFileSync(file, before, "utf8");
+    const bystander = join(h, "unrelated.txt");
+    const bystanderBody = "用户另一份文件，跟 ash 无关\n";
+    writeFileSync(bystander, bystanderBody, "utf8");
+    const plain = `${file}.bak-ash-setup`;
+    symlinkSync(bystander, plain);
+    const r = publish.publishConfirmed({ file, previous: publish.readForWrite(file)!.text, body });
+    assert.ok(r.ok, r.ok ? "" : r.why);
+    assert.equal(readFileSync(bystander, "utf8"), bystanderBody, "无关文件一个字节都不许动");
+    assert.ok(lstatSync(plain).isSymbolicLink(), "那条软链接本身也不许被换成普通文件");
+    const backup = (r.ok ? r.backup : "") ?? "";
+    assert.ok(backup.startsWith(`${plain}-`), `被占住就换一个自己的唯一名字:${backup}`);
+    assert.equal(readFileSync(backup, "utf8"), before, "备份必须逐字节是改之前那一版");
+    assert.equal(statSync(backup).mode & 0o777, 0o600, "备份一出生就只有自己能读");
+    assert.equal(readFileSync(file, "utf8"), body, "正事也办成了");
+
+    // ⒝ 那个名字上是**上一次留下的真备份**:也不覆盖 —— 那是用户手里的旧版本。
+    const h2 = home("backup-occupied");
+    const file2 = join(h2, "config.json");
+    writeFileSync(file2, before, "utf8");
+    const old2 = `${file2}.bak-ash-setup`;
+    const oldBody = "上一次留下的那一版\n";
+    writeFileSync(old2, oldBody, "utf8");
+    const r2 = publish.publishConfirmed({ file: file2, previous: publish.readForWrite(file2)!.text, body });
+    assert.ok(r2.ok, r2.ok ? "" : r2.why);
+    assert.equal(readFileSync(old2, "utf8"), oldBody, "上一次那份备份不许被盖掉");
+    assert.ok(((r2.ok ? r2.backup : "") ?? "").startsWith(`${old2}-`), "这一轮的备份是另一个唯一名字");
+
+    // ⒞ 名字没被占住时照旧用那个好记的名字(用户要去拷回来的就是它)。
+    const h3 = home("backup-plain");
+    const file3 = join(h3, "config.json");
+    writeFileSync(file3, before, "utf8");
+    const r3 = publish.publishConfirmed({ file: file3, previous: publish.readForWrite(file3)!.text, body });
+    assert.ok(r3.ok, r3.ok ? "" : r3.why);
+    assert.equal(r3.ok ? r3.backup : "", `${file3}.bak-ash-setup`, "没被占住就用固定名字");
+
+    // ⒟ 结构:两侧都只许用「自己独占创建的那个句柄」写备份,不许再按固定路径拷。
+    //    `copyFileSync` 的问题不是慢,是它**跟随**路径上已经有的对象(⒜ 那条软链接)。
+    for (const [side, code] of Object.entries(bothSources())) {
+      assert.match(code, /openSync\(backup, "wx", TMP_MODE\)/, `${side}:备份必须独占创建、0600 出生`);
+      assert.ok(!/copyFileSync\(/.test(code), `${side}:备份不许再走 copyFileSync`);
+    }
+    group("备份也是自有对象:占住的名字不覆盖不跟随、换唯一名字、0600 出生");
   }
 }
