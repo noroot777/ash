@@ -151,7 +151,7 @@ try {
         const endpoint = path === "retry-turn" ? path : status === "failed" ? "retry" : "run";
         const response = await request(`/tasks/${taskId}/${endpoint}`);
         const result = await response.json();
-        assert.equal(response.status, 202, JSON.stringify(result));
+        assert.equal(response.status, 202, `${taskId} /${endpoint}: ${JSON.stringify(result)}`);
         if (path === "retry-turn") assert.equal(result.mode, "resume");
       } else {
         // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
