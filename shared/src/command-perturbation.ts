@@ -57,9 +57,8 @@ const SHELL_WORDS = new Set([
  *  · `:`/`true`/`false`/`test`/`[` —— 只产出一个退出码,而退出码这一层有处置（`errexitAt`）;
  *  · `echo`/`printf` —— 只往流里写字;
  *  · `cd`/`pwd` —— 只动工作目录,而「它盯的那个东西在不在」整档已经移出硬拦（文件头 ⑩）;
- *  · `wait`/`shift`/`umask`/`times` —— 不改后面那几段怎么执行;
- *  · `read`/`printf` —— **要看参数**才算得清,见 `ARGV_PROOF`;
- *  · `export` —— 赋值,而唯一要紧的那个变量单独扫（`PATH_ASSIGN`,`export PATH=…` 同样命中）;
+ *  · `wait`/`umask` —— 不改后面那几段怎么执行;
+ *  · `read`/`printf`/`export`/`shift`/`times` —— **要看参数**才算得清,见 `ARGV_PROOF`;
  *  · `break`/`continue`/`exit`/`return`/`exec` —— 形状那一层专门处置过（`JUMPS`/`TERMINATORS`/
  *    `ESCAPES`),这里再算一次只会把真阳性也降级;
  *  · `set` —— 有自己那道白名单（`setShaken`）。
@@ -92,8 +91,26 @@ const NOTES = new Map<string, string>([
 const shellWordNote = (name: string): string =>
   `那个 ${name} 是 shell 自己的词，这一层没有它的处置 —— 它改不改得动后面每一条的执行语义`;
 
-/** 给 `PATH` 赋值 ⇒ 后面那些工具还找不找得到,这一层读不出来（`PATH=/missing; tail -F x` 实测 127）。 */
+/**
+ * 给 `PATH` 赋值 ⇒ 后面那些工具还找不找得到,这一层读不出来（`PATH=/missing; tail -F x` 实测 127）。
+ *
+ * **引号不反向证明「这不是赋值」**（第 5 轮审查 F2,与 `ARGV_PROOF` 里 printf 那一侧同一条）。
+ * 上一版这道判据只扫**不带引号**的词,而词法层的 `quoted` 是「这个词里出现过引号」,不是
+ * 「那个 `=` 被引起来了」—— 于是 `PATH="/missing"` 这种最常见的写法整词带上 `quoted`,一路放行,
+ * 实测（`sh -lc`）PATH 真的被改掉、后面那个 tail 找不到、整条退 0 并打出 DONE。
+ *
+ * 所以判据改成**位置**:
+ *  · **赋值前缀区**（POSIX XCU 2.10.2 规则 7:命令词之前那几个 `名字=值`）里的词,带不带引号都算
+ *    赋值 —— `PATH="/x"`、`PATH=/x` 同判;
+ *  · 命令词**之后**的词只在不带引号时算 —— `env PATH=/x cmd` 要算（它真的改环境）,而
+ *    `printf 'PATH=1\n'`、`grep "PATH=x" log` 里那是个字面量,一个字都没改（这正是文件尾
+ *    「口径按命令词位置」那条:闸不许被一句 `grep` 拆掉）。
+ *  · `export "PATH=/x"` 这一类**不靠这道扫**:内建自己做赋值解析,整条由 `ARGV_PROOF` 的
+ *    `export` 那一项按「带操作数就算未知」接住（带不带引号一个判法）。
+ */
 const PATH_ASSIGN = /^PATH=/;
+/** `名字=值` 这个形状（赋值前缀区的右边界靠它定,见 `PATH_ASSIGN`）。 */
+const ASSIGN_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
 /**
  * 这一道**不自己扫文本了,只读词法层打在词上的标记**（第 4 轮审查 F3）。
  *
@@ -175,7 +192,28 @@ function setShaken(argv: readonly Token[]): string | null {
  *    （`read -p 提示 X` 里那个提示跟 X 长在同一个位置），所以只说位置,不替它断定是哪一种;
  *  · `unreadable` —— 它是个展开,是什么要等执行时才知道（`printf $flag`）。
  */
-type ArgvFlaw = { arg: string; claim: "assigns" | "operand" | "unreadable" };
+type ArgvFlaw = { arg: string; claim: "assigns" | "operand" | "unreadable"; tail?: string };
+/**
+ * **特殊内建报错 ⇒ 非交互 shell 当场走人**(POSIX XCU 2.14:special built-in 的重定向/赋值/
+ * 操作数错误会让非交互 shell 退出)。这不是「这一条失败、后面接着跑」,而是整条命令到此结束
+ * —— 哨兵那条「它自己永远不会结束」的证明当场失效。
+ *
+ * 为什么只能算未知:哨兵走的是 `sh -lc`,而 `sh` 在不同机器上是不同的 shell(macOS 上是 bash
+ * 的 sh 模式,Debian 上是 dash),**退不退出、哪些选项认得,正是随它变的那一档**。本机实测
+ * (第 5 轮审查 F2 给的两条输入):
+ *   · `/bin/sh -c 'export -not-an-option; echo AFTER'` ⇒ rc=2,**AFTER 没打出来**(走人了);
+ *     同一条在 `/bin/bash` 下 rc=0 并打出 AFTER,在 `zsh` 下也照跑 —— 三家三个结果;
+ *   · `/bin/sh -c 'shift not_a_number; echo AFTER'` ⇒ rc=1,AFTER 没打出来;`/bin/bash` 同样。
+ */
+const SPECIAL_TAIL = "而特殊内建一报错，非交互 shell 当场就走人（`export -not-an-option` 实测退 2、`shift not_a_number` 实测退 1，后面一条都没跑），这一层证明不了这个参数一定合法";
+/** `export` 的操作数两头都不封闭:既可能是赋值,也可能是一个报错就带走 shell 的选项。 */
+const BOTH_TAIL = "既证明不了它没在给变量赋值，也证明不了特殊内建不会因为它报错走人（`export -not-an-option` 实测退 2）";
+/** 特殊内建的「带操作数就算未知」:封闭的那一侧只有「压根没有操作数」。 */
+const specialOperand = (argv: readonly Token[]): ArgvFlaw | null => {
+  const first = argv[0];
+  if (!first) return null;
+  return { arg: first.text, claim: first.expanded ? "unreadable" : "operand", tail: SPECIAL_TAIL };
+};
 const ARGV_PROOF = new Map<string, (argv: readonly Token[]) => ArgvFlaw | null>([
   // 引号同样不反向证明「这不是开关」(与 printf 一个口径)。**选项的参数和变量名这一层分不开**
   // (`read -p 提示 X` 里那个提示落在同一个位置上),分不开就一起算未知 —— 结论是同一个,而
@@ -207,12 +245,35 @@ const ARGV_PROOF = new Map<string, (argv: readonly Token[]) => ArgvFlaw | null>(
     }
     return null;
   }],
+  // `export`:**两件事同时压在参数上**,所以封闭的那一侧只有「压根没有参数」(那时它只把已导出
+  // 的变量列出来)。
+  //  · **赋值效果** —— `export NAME=值` 改的是后面每一条看得见的环境。`PATH` 单独有一道扫
+  //    (`PATH_ASSIGN`),但「哪些环境变量会改掉后面怎么执行」这个集合压根不封闭:`IFS`(词分割)、
+  //    `ENV`/`BASH_ENV`(起 shell 时读的脚本)、`LD_PRELOAD`/`DYLD_*`(动态库注入)排着队 ——
+  //    上一版按「只有 PATH 要紧」放行,正是列反例那条老路(第 5 轮审查 F2 点名的「赋值效果」)。
+  //  · **特殊内建的错误退出** —— 见 `SPECIAL_TAIL`:`export -not-an-option` 实测退 2 且后面一条
+  //    都没跑。连 `export -n PATH`(取消导出)也在这一类里:选项认不认得、报不报错随 shell 变。
+  ["export", (argv) => {
+    const first = argv[0];
+    if (!first) return null;
+    if (first.expanded) return { arg: first.text, claim: "unreadable", tail: BOTH_TAIL };
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first.text)) return { arg: first.text, claim: "assigns" };
+    return { arg: first.text, claim: "operand", tail: BOTH_TAIL };
+  }],
+  // `shift`/`times`:不赋值,但都是**特殊内建**,带操作数就可能当场把 shell 带走(`SPECIAL_TAIL`)。
+  //  · `shift n` —— `n` 合不合法要看 `$#`,这一层读不出来(`shift not_a_number` 实测退 1,
+  //    `/bin/sh` 与 `/bin/bash` 两边都没跑到后面那一条);不带操作数的 `shift` 证明得出来。
+  //  · `times` —— 按 POSIX 不收操作数。给了操作数之后各家不一样(本机 `/bin/sh` 吞掉照跑,
+  //    `zsh` 报 too many arguments),而「随 shell 而变」正是这一层证明不了的那一档。
+  ["shift", specialOperand],
+  ["times", specialOperand],
 ]);
 const TAIL = "而被赋值的那个名字改不改得动后面每一条的执行语义";
 const argvNote = (name: string, flaw: ArgvFlaw): string => {
-  if (flaw.claim === "assigns") return `那个 ${name} ${flaw.arg} 是在给变量赋值，${TAIL}`;
-  if (flaw.claim === "operand") return `那个 ${name} 带着操作数 ${flaw.arg}，${TAIL}`;
-  return `那个 ${name} ${flaw.arg} 这一层读不出它是什么，证明不了它没在给变量赋值 —— ${TAIL}`;
+  const tail = flaw.tail ?? TAIL;
+  if (flaw.claim === "assigns") return `那个 ${name} ${flaw.arg} 是在给变量赋值，${tail}`;
+  if (flaw.claim === "operand") return `那个 ${name} 带着操作数 ${flaw.arg}，${tail}`;
+  return `那个 ${name} ${flaw.arg} 这一层读不出它是什么，${flaw.tail ? tail : `证明不了它没在给变量赋值 —— ${tail}`}`;
 };
 
 /**
@@ -253,15 +314,21 @@ function commandWord(tokens: Token[], at: number): CommandWord | null {
  */
 export function perturbed(segs: Segment[]): string | null {
   for (const seg of segs) {
-    for (const t of seg.tokens) {
-      if (!t.quoted && PATH_ASSIGN.test(t.text)) return "前面有一段改过 PATH，后面那些工具还找不找得到";
+    let at = 0;
+    while (at < seg.tokens.length && isSkeleton(headOf(seg.tokens, at))) at += 1;
+    // 赋值前缀区 = 骨架词之后那几个连续的 `名字=值`。这一区里**不看引号**（见 `PATH_ASSIGN`）。
+    let prefixEnd = at;
+    while (prefixEnd < seg.tokens.length && ASSIGN_WORD.test(seg.tokens[prefixEnd]!.text)) prefixEnd += 1;
+    for (let i = 0; i < seg.tokens.length; i += 1) {
+      const t = seg.tokens[i]!;
+      if (PATH_ASSIGN.test(t.text) && (!t.quoted || (i >= at && i < prefixEnd))) {
+        return "前面有一段改过 PATH，后面那些工具还找不找得到";
+      }
       if (t.errorForm) return "那个 ${…?…} 展开在变量没定义时当场就让 shell 走人";
       if (t.substitution) return "那段命令替换跑的是一段这一层读不进去的代码";
       if (t.arithmetic) return "那段算术展开自己就能让 shell 当场出错走人（`$((1/0))` 实测 127）";
       if (t.unknownForm) return "那个 `$` 后面跟的形式这一层没有正面识别（`$[1/0]` 这类旧式算术实测除零退 127），读不懂就证明不了它不出错";
     }
-    let at = 0;
-    while (at < seg.tokens.length && isSkeleton(headOf(seg.tokens, at))) at += 1;
     // **「这一段的命令词是谁」答不出来 ⇒ 未知,不是「没什么可担心的」**。原先这里是 `continue`,
     // 于是 `action=break; while true; do "$action"; done; printf 'DONE\n'`（实测退出 0 并打出
     // DONE）照旧硬拦:那个命令词藏在引号里的展开后面,这一层压根没读出它是 `break`。

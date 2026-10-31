@@ -100,7 +100,9 @@ assert.equal(
   for (const command of [
     `: ; ${BASE}`, `true; ${BASE}`, `false; ${BASE}`, `printf 'x\\n'; ${BASE}`,
     `echo x; ${BASE}`, `cd /tmp; ${BASE}`, `pwd; ${BASE}`, `umask 022; ${BASE}`,
-    `shift; ${BASE}`, `wait; ${BASE}`, `times; ${BASE}`, `export FOO=1; ${BASE}`,
+    // `export`/`shift`/`times` 只有**不带操作数**那一种证明得出来 —— 带操作数的那一侧见 ②f
+    // (上一版这里放的是 `export FOO=1`,而「只有 PATH 要紧」正是第 5 轮审查 F2 点名的列反例)。
+    `shift; ${BASE}`, `wait; ${BASE}`, `times; ${BASE}`, `export; ${BASE}`,
     `test -f x; ${BASE}`, `[ -f x ]; ${BASE}`, `set -e; ${BASE}`, `set -x; ${BASE}`,
   ]) {
     assert.equal(
@@ -279,6 +281,48 @@ assert.equal(
     );
   }
   console.log("✓ 执行环境:`$` 的形式按白名单封闭 —— 认不出来的每种拼写都降级，字面的美元号一个都不松");
+}
+
+// ── ②f 不变量:**内建的参数、赋值效果、特殊内建的错误退出,三样都要证得出来** ───────────
+// 第 5 轮审查 F2 的四条实测输入(`sh -lc`,前两条退 0 并打出 DONE、后两条当场报错走人),全都
+// 吃了 409。根因是两处各缺一半封闭证明:
+//   · **赋值那一侧按引号放行** —— `export PATH="/x"` 和 `export "PATH=/x"` 的词在词法层都带
+//     `quoted`,而上一版那道 PATH 扫描只看不带引号的词。引号只决定这个词算不算命令词/关键字,
+//     不改它的字面值(`export` 自己在引号去掉之后才做赋值解析)。
+//   · **「只有 PATH 要紧」是列反例** —— `IFS`/`ENV`/`LD_PRELOAD` 排着队,这个集合压根不封闭;
+//     而**特殊内建报错会把非交互 shell 带走**这一整类(`export -not-an-option`、
+//     `shift not_a_number`)上一版连算都没算。
+// 所以这一节按②c/②d 的办法列**拼写组**:同一件事的每一种写法都要判得一样,而封闭的那一侧
+// (压根没有操作数)不许跟着松。
+{
+  for (const [command, why] of [
+    [`export PATH="/missing-review-directory"; ${BASE}`, "值带引号:整个词被打上 quoted(实测 0 + DONE，PATH 真的改了)"],
+    [`export "PATH=/missing-review-directory"; ${BASE}`, "连 `=` 一起括进去，同判(实测 0 + DONE)"],
+    [`export 'PATH=/missing'; ${BASE}`, "单引号同判"],
+    [`export PATH=/missing; ${BASE}`, "不带引号的那一半本来就认得，这里是对照"],
+    [`export -not-an-option; ${BASE}`, "特殊内建报错当场走人(/bin/sh 实测 rc=2 且 AFTER 没打出来)"],
+    [`shift not_a_number; ${BASE}`, "同上(实测 rc=1，AFTER 没打出来)"],
+    [`shift 1; ${BASE}`, "`n` 合不合法要看 `$#`，这一层读不出来"],
+    [`shift $n; ${BASE}`, "操作数是个展开，更读不出来"],
+    [`times x; ${BASE}`, "POSIX 不收操作数;给了之后各家不一样(zsh 报 too many arguments)"],
+    [`export IFS=x; ${BASE}`, "「只有 PATH 要紧」是列反例:IFS 改词分割"],
+    [`export LD_PRELOAD=/x.so; ${BASE}`, "动态库注入同理"],
+    [`export ENV=/tmp/rc; ${BASE}`, "起 shell 时读的脚本同理"],
+    [`export PATH; ${BASE}`, "只给名字也算:导出一个名字同样改后面看得见的环境"],
+    [`export -n PATH; ${BASE}`, "取消导出也在这一类里(选项认不认得随 shell 变)"],
+    [`export $flag; ${BASE}`, "参数是个展开 ⇒ 既证不了没赋值，也证不了它不报错"],
+  ] as const) passes(command, `内建的参数/赋值/退出语义这一层证明不了（${why}）`);
+
+  // **封闭的那一侧不许跟着松**:不带任何操作数的这三个证明得出来 —— `export` 只把已导出的变量
+  // 列出来,`shift` 与 `times` 都是它们的正常用法(本机 `/bin/sh -c 'shift; echo AFTER'` 与
+  // `/bin/bash` 实测都是 rc=0 并打出 AFTER)。这三条要是跟着降级,这道闸就被一句 `export` 拆了。
+  for (const command of [`export; ${BASE}`, `shift; ${BASE}`, `times; ${BASE}`]) {
+    assert.equal(
+      neverExitsOnItsOwn(command), "tail -f/-F",
+      `不带操作数的这一种证明得出来，不许凭它把闸放掉：${command}`,
+    );
+  }
+  console.log("✓ 执行环境:内建的赋值与特殊内建的错误退出按 argv 封闭证明，引号不算证明，无操作数的照旧拦");
 }
 
 // ── ③ 机制本身:逐类掀翻那个前提，每一类都必须把硬拦取消 ────────────────────────────
