@@ -14,9 +14,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider, ProjectView } from "@ash/shared";
 import { Check } from "@phosphor-icons/react";
-import { useAuth } from "../auth/authContext.ts";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
+import { useHostCliIsolated } from "../lib/useHostCliIsolated.ts";
 import { CreateProjectDialog } from "../overlays/CreateProjectDialog.tsx";
 import { useToast, WorkspaceToast } from "../workspace/WorkspaceToast.tsx";
 import { FIRST_RUN_STEPS, STEP_LABEL, stepGap, stepSettled, type FirstRunStep } from "./firstRunSteps.ts";
@@ -60,11 +60,10 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
   const [loadFailed, setLoadFailed] = useState("");
   const [finishing, setFinishing] = useState(false);
   const [reloads, setReloads] = useState(0);
-  const { state } = useAuth();
-  // 隔离档:多人模式 + 没开「共用宿主机 CLI」。`sharedHostCli` 是实例面的设置项,
-  // 人人读得到(只有管理员改得了)。读不出来时按不隔离算 —— 自用模式是绝大多数。
-  const [sharedHostCli, setSharedHostCli] = useState(true);
-  const isolated = state.mode === "multi" && !sharedHostCli;
+  // 「宿主机的 CLI 订阅算不算数」问前端那一份单点(lib/hostCliPolicy.ts),不在这里
+  // 拿 mode + sharedHostCli 自己兜第二份 —— 下面那发 `api.settings()` 正是教会它的
+  // 那一下(读设置的路径统一经 settingsSync 喂给它)。
+  const isolated = useHostCliIsolated();
 
   useEffect(() => {
     let alive = true;
@@ -72,8 +71,10 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
     // 一份读失败不该把另外两份也一起丢掉:`Promise.all` 的那一版任意一条 500,整屏
     // 就退成三个空列表 + 一句 toast,用户看到的是「我什么都没配过」而不是「没读出来」,
     // 而且页面上没有任何重试入口(第 1 轮审查)。所以逐份落地,失败的那几份单独报。
+    // 第四份 `api.settings()` 不往这里存任何东西:它经 settingsSync 把「CLI 额度」
+    // 那一档喂给 hostCliPolicy,上面 `isolated` 订的就是那一份。
     void Promise.allSettled([api.llmProviders(), api.agents(), api.projects(), api.settings()])
-      .then(([provider, profile, project, settings]) => {
+      .then(([provider, profile, project]) => {
         if (!alive) return;
         if (provider.status === "fulfilled") setProviders(provider.value);
         if (profile.status === "fulfilled") setProfiles(profile.value);
@@ -83,7 +84,6 @@ export function FirstRunWizard({ onDone }: { onDone: () => Promise<boolean> }) {
           // 永远有个落点 —— 否则「进入 ash」会把人丢进一个没选中项目的工作台。
           setProjectId((current) => current ?? project.value[0]?.id ?? null);
         }
-        if (settings.status === "fulfilled") setSharedHostCli(settings.value.sharedHostCli);
         const failed = [
           provider.status === "rejected" ? "供应商" : "",
           profile.status === "rejected" ? "执行器" : "",

@@ -66,8 +66,8 @@ const activate = async (key: InspectorShortcutKey) => {
   await act(async () => { handled = activateInspectorShortcut(key); });
   return handled;
 };
-const active = (host: string) => document.querySelector(`[data-host="${host}"] [role="tab"][aria-selected="true"]`)?.getAttribute("data-tab-id") ?? null;
-const hasTab = (host: string, id: string) => !!document.querySelector(`[data-host="${host}"] [role="tab"][data-tab-id="${id}"]`);
+const active = (host: string) => document.querySelector(`[data-host="${host}"] [role="tab"][aria-selected="true"]`)?.getAttribute("data-choice-value") ?? null;
+const hasTab = (host: string, id: string) => !!document.querySelector(`[data-host="${host}"] [role="tab"][data-choice-value="${id}"]`);
 /** 「+」菜单里列着哪几格——没上图标条的那几格只能从这儿找到，所以它不能漏人。 */
 const menuTitles = async (host: string) => {
   const root = document.querySelector(`[data-host="${host}"]`)!;
