@@ -36,6 +36,7 @@ import {
   type Job,
 } from "./preview-assist-jobs.js";
 import { trialPreviewScript } from "./preview-trial.js";
+import { withoutTurnIdentity } from "./turn-identity.js";
 
 // 进度查询和取消就住在登记簿里（那边不碰 DB）；这里只管「起一趟」和那三轮循环。
 export { cancelPreviewAssist, previewAssistState } from "./preview-assist-jobs.js";
@@ -203,7 +204,7 @@ async function think(
       // 这不是一个任务回合：完成协议的那三个变量一个都不能有。不显式清掉的话，子进程会从
       // server 自己的环境里继承到**别的任务**的身份（duet 那边实测过），借来的身份比没有
       // 身份更糟 —— 它能拿着去调 complete_task。
-      env: { ...runEnv, ASH_TASK_ID: undefined, ASH_TURN_TOKEN: undefined, ASH_DIRECTION_TOKEN: undefined },
+      env: withoutTurnIdentity({ ...runEnv }),
     });
     job.handle = handle;
     for await (const event of handle.events) {

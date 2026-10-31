@@ -4,12 +4,23 @@
 // 整份传输层重新读一遍。
 //
 // 这里不含任何业务判断 —— 业务全在 ash 的 HTTP 端点上（见 index.ts 顶部那段）。
+import { ASH_TURN_IDENTITY_ENV } from "@ash/shared/mcp";
 import { UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
 
 export const BASE = (process.env.ASH_URL ?? process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
 export const SOURCE_TASK_ID = process.env.ASH_TASK_ID?.trim() ?? "";
-export const TURN_TOKEN = process.env.ASH_TURN_TOKEN?.trim() ?? "";
-export const DIRECTION_TOKEN = process.env.ASH_DIRECTION_TOKEN?.trim() ?? "";
+// 回合令牌有两套变量名,谁活着用谁 —— 有的 CLI(实测 gemini)按**名字**把带 TOKEN 字样的
+// 变量从 MCP 子进程环境里删掉,别名那套刻意不含那些词。理由与取证见
+// `@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_ENV`。
+const pick = (...names: string[]): string => {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return "";
+};
+export const TURN_TOKEN = pick(ASH_TURN_IDENTITY_ENV.turnToken, ASH_TURN_IDENTITY_ENV.turnTicket);
+export const DIRECTION_TOKEN = pick(ASH_TURN_IDENTITY_ENV.directionToken, ASH_TURN_IDENTITY_ENV.directionTicket);
 
 // 本机流量一律不走代理。Node 24+ 在 NODE_USE_ENV_PROXY=1(或显式 HTTP_PROXY)下
 // **连 localhost 也走代理** —— 实测本机 http_proxy=127.0.0.1:7897 时,打给

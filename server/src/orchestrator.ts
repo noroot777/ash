@@ -54,6 +54,7 @@ import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verif
 import { enterLeadDelivery, enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
 import { isDiagnosticSession } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
+import { turnIdentityEnv } from "./turn-identity.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
@@ -446,7 +447,10 @@ export async function continueTask(
         reviewReminder,
       });
     const promptLevel = planning || resuming ? "reminder" as const : "full" as const;
-    const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
+    const runEnv = {
+      ...(await runEnvForOwner(runOwner, agent)),
+      ...turnIdentityEnv({ taskId, turnToken, directionToken }),
+    };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
     const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState });
     // 复用同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,

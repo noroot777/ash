@@ -37,6 +37,7 @@ import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWN
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
 import { recordTurnStart } from "./timeline.js";
+import { withoutTurnIdentity } from "../turn-identity.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
 const AGREE_RE = /与对方一致[：:]\s*是/; // self-declared agreement with the opponent's conclusion
@@ -194,17 +195,13 @@ export async function runTurn(args: {
     cwd,
     sessionId: resumeCliId || undefined,
     // 个人 CLI 配置目录 + git 署名(§八)。
-    env: {
-      ...runEnv,
-      // **不给讨论者回合身份,并且要确保它是真的没有**:讨论者没有完成协议,duet 的结算
-      // 由这条流水线自己做,凭空发一个没登记进 tasks.activeTurnToken 的令牌只会让每个
-      // 消费者都拒收。但「不设」不等于「没有」—— 子进程默认继承 server 自己的环境,
-      // 而 ash 从一个 ash 任务里启动时那三个变量是有值的(实测:duet 的假 CLI 收到了
-      // **另一个任务**的 ASH_TASK_ID)。借来的身份比没有身份更糟,所以显式清掉。
-      ASH_TASK_ID: undefined,
-      ASH_TURN_TOKEN: undefined,
-      ASH_DIRECTION_TOKEN: undefined,
-    },
+    // **不给讨论者回合身份,并且要确保它是真的没有**:讨论者没有完成协议,duet 的结算
+    // 由这条流水线自己做,凭空发一个没登记进 tasks.activeTurnToken 的令牌只会让每个
+    // 消费者都拒收。但「不设」不等于「没有」—— 子进程默认继承 server 自己的环境,
+    // 而 ash 从一个 ash 任务里启动时那几个变量是有值的(实测:duet 的假 CLI 收到了
+    // **另一个任务**的 ASH_TASK_ID)。借来的身份比没有身份更糟,所以显式清掉 ——
+    // 清哪几个由 `withoutTurnIdentity` 一处说了算(别在这里自己列名字)。
+    env: withoutTurnIdentity({ ...runEnv }),
   });
   trackRun(taskId, handle);
   let cliId = handle.sessionId;
