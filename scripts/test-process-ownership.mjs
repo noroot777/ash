@@ -2,6 +2,11 @@
 // 覆盖的是审查里那四条(F3 登记发布、F1 退出证明、F2 实例绑定、N2 初始化回收),
 // 判据与理由在 test-process-scope.mjs 顶部,这里只钉行为。
 //
+// **「认出来」和「停得掉」是两件事,这个文件分开钉。**第 6 轮审查 F1 之后,本层只对内核钉得住
+// 的绑定下刀(自己的活句柄 / 被活组长钉住的整组 / 自退通道,见 test-process-terminate.mjs),
+// 所以下面几节里那些原生 `fork` + `setsid` 的后代是「认得出、但一个信号都不发」:断言要的是
+// **它还活着、而清理结论里点着它的号码**,不是它被杀掉了。
+//
 // 为什么用 python3 造「原生后代」:它 fork 之后 setsid、原父再退出,于是 preload 登记、
 // 父子链、进程组三条线索同时失效 —— 这正是「扫不到就当清场」漏掉的那一类,Node 的
 // child_process 造不出来(它一定走 preload)。没有 python3 的机器上这一节跳过并说明。
@@ -70,17 +75,25 @@ if (!python || windows) {
       catch (error) { failure = error; }
       const pid = Number(readFileSync(pidPath, "utf8"));
       assert.ok(failure, `${timed ? "超时" : "正常退出"}档:留下还在跑的后代时不许返回成功`);
-      assert.ok(!alive(pid), `${timed ? "超时" : "正常退出"}档:返回之前必须已经把后代停掉(pid=${pid})`);
+      // **认得出,但绑不住。** 这一具 fork → setsid 之后自己另起一组:句柄不在我们手上(它是
+      // python 自己 fork 的)、组号也不被任何活句柄钉住、更没有 preload 那条自退通道 —— 三条
+      // 绑定一条都拿不出来,于是本层**一个信号都不发**,如实把号码交回来(第 6 轮审查 F1:
+      // 按号码赌一刀,赌输了关掉的是用户另外的程序;而那一刀的「验明身份」在 macOS 上只有秒级
+      // 精度,同秒复用在第一次核验时就已经认错了)。
+      assert.ok(alive(pid), `${timed ? "超时" : "正常退出"}档:绑不住就不许动手,它必须还在(pid=${pid})`);
+      assert.match(failure.message, /无法安全终止/, "没终止这件事必须明说,不许静默跳过");
+      assert.match(failure.message, new RegExp(`\\b${pid}\\b`), "报告里要点出是哪个号码");
       if (!timed) {
         assert.equal(failure.code, "ESTRANDED", `正常退出档要如实报遗留,实际:${failure.code}\n${failure.message}`);
         assert.match(failure.message, /仍在运行/);
       }
-      const before = existsSync(marker);
+      // 它接着写 —— 而这正是为什么上面那几句必须是**失败**:本层从来不声称它停了,
+      // 「扫不到 ≠ 停了」那条不变量这一轮仍然成立(文件头)。
       await delay(1_800);
-      assert.equal(existsSync(marker), before, "返回之后后代不许再写出任何东西");
+      assert.ok(existsSync(marker), "没被终止的后代当然会接着写:报告如实说了,就不算冒报清场");
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
-  console.log("✓ 退出证明:原生后代脱离登记/父子链/进程组之后仍被认出、停掉,并如实报失败");
+  console.log("✓ 退出证明:原生后代脱离登记/父子链/进程组之后仍被认出;本层绑不住它,于是不动手、连号码一起报失败");
 }
 
 // ── ②b 退出证明:后代**把环境清空**之后仍必须被认出来 ────────────────────────────
@@ -105,12 +118,16 @@ if (!python || windows) {
     const pid = Number(readFileSync(pidPath, "utf8"));
     assert.ok(failure, "后代清空环境之后照样是遗留,不许返回成功");
     assert.equal(failure.code, "ESTRANDED", `要如实报遗留,实际:${failure.code}\n${failure.message}`);
-    assert.ok(!alive(pid), `返回之前必须已经把它停掉(pid=${pid})`);
+    // 同 ②:边界描述符让它**认得出**,但 fork+setsid 的原生后代本层**绑不住** —— 不动手,
+    // 把号码如实交回(第 6 轮审查 F1)。认得出仍然要紧:这一轮因此不会被说成清场成功。
+    assert.ok(alive(pid), `绑不住就不许动手,它必须还在(pid=${pid})`);
+    assert.match(failure.message, /无法安全终止/);
+    assert.match(failure.message, new RegExp(`\\b${pid}\\b`));
     const before = existsSync(marker);
     await delay(1_600);
     assert.equal(existsSync(marker), before, "返回之后不许再写出任何东西");
   } finally { rmSync(directory, { recursive: true, force: true }); }
-  console.log("✓ 退出证明:后代把环境整个清空之后仍被认出、停掉,并如实报遗留");
+  console.log("✓ 退出证明:后代把环境整个清空之后仍被认出;绑不住就不动手,如实报遗留");
 }
 
 // ── ②c 所有权:**命令行里有那段文字不等于它是我们的** ─────────────────────────────
@@ -250,13 +267,18 @@ if (windows) {
     "标记嵌在别的变量的值里 = 没有这个变量,不许认领");
   assert.ok(owned.some((row) => row.pid === descendant.pid),
     "真带着这个变量的要认得出来 —— 收口不等于把这条线索删掉");
-  await scope.stop();
+  // **认得出 ≠ 绑得住。** 这一具不是本域 spawn 出来的(句柄不在我们手上)、也没有登记(没有
+  // NODE_OPTIONS ⇒ 没有自退通道),三条绑定一条都拿不出来 —— 于是清场**一个信号都不发**,
+  // 如实报「无法安全终止」并点名号码(第 6 轮审查 F1:按号码赌一刀,赌输了关掉的是别人的
+  // 程序)。认得出仍然要紧:它决定这一轮不许被说成「清场成功」。
+  await assert.rejects(() => scope.stop(), (error) =>
+    error.errors?.some((one) => /无法安全终止/.test(one.message) && one.message.includes(String(descendant.pid))));
   scope.remove();
   assert.ok(alive(outsider.pid), "没认领的进程更不许被杀");
-  assert.ok(!alive(descendant.pid), "认领得出的要停掉");
+  assert.ok(alive(descendant.pid), "认得出但绑不住 ⇒ 一刀都没发,它必须还在");
   outsider.kill("SIGKILL");
   descendant.kill("SIGKILL");
-  console.log("✓ 所有权:环境段按整个 KEY=VALUE 收口,嵌在别的值里的不算、真有这个变量的照旧认得出");
+  console.log("✓ 所有权:环境段按整个 KEY=VALUE 收口,嵌在别的值里的不算、真有这个变量的照旧认得出(认得出但绑不住的如实报)");
 }
 
 // ── ②h 退出证明:**边界不在 fd 3 上时也要往下传** ────────────────────────────────
@@ -292,13 +314,20 @@ setTimeout(() => {}, 5000);
     const owned = await scope.active();
     assert.ok(owned.some((row) => row.pid === pid),
       `边界落在 fd 4 上时也要被读出来、往下传:只有它认得出这个后代(pid=${pid})`);
-    await scope.stop();
-    assert.ok(!alive(pid), `认出来了就要停掉(pid=${pid})`);
+    // 认出来了 —— 但照样绑不住:它 setsid 之后自成一组(不在中转那层被钉住的组里),句柄在
+    // 已经退掉的 python 手上,也不是 Node(没有自退通道)。这一节钉的是**边界描述符那条线索
+    // 读没读对**,不是「读对了就有权按号码杀」:后者是第 6 轮审查 F1 否掉的那一步。
+    await assert.rejects(
+      () => scope.stop(),
+      (error) => /无法安全终止/.test(error.message) && error.message.includes(String(pid)),
+      "认出来之后要把「绑不住、没终止」连号码一起交回调用方",
+    );
+    assert.ok(alive(pid), `绑不住就不许动手(pid=${pid})`);
   } finally {
     scope.remove();
     rmSync(stage, { recursive: true, force: true });
   }
-  console.log("✓ 退出证明:边界不在 fd 3 上(带 IPC)也照样读出来并往下传,spawnSync 那一代同样接上");
+  console.log("✓ 退出证明:边界不在 fd 3 上(带 IPC)也照样读出来并往下传,spawnSync 那一代同样接上(认出来之后如实报「绑不住」)");
 }
 
 // ── ③ 实例绑定:号码对上但出生时刻对不上的,既不认领也不终止 ────────────────────

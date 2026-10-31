@@ -41,6 +41,62 @@ if (directory) {
   })();
 
   /**
+   * **自退通道**:执行域要我退的时候,是**我自己**读到那张纸条、自己退 —— 它不发信号,所以
+   * 连「号码换了主人、一刀打在陌生人身上」的可能都没有(判据见 test-process-scope.mjs 文件头
+   * 「实例身份」与 test-process-terminate.mjs 文件头 ③)。detached 之后自己另起一组的 Node
+   * 后代,只有这一条路绑得住。
+   *
+   * 两个细节:
+   *  · **只认自己登记之后写下的那一份**(比 `at`):目录里一张过期的 `.quit` 不该让一个碰巧
+   *    拿到同号码的新后代一上来就退;
+   *  · 定时器 `unref`:它不许让一个本该退出的进程多活着。
+   *
+   * 装得上才在登记里记 `quit: true` —— 清场那边据此判「这个号码绑得住吗」,装不上就如实说没有。
+   */
+  const quitWatcher = () => {
+    const quitPath = path.join(directory, `${process.pid}.quit`);
+    const since = Date.now();
+    try {
+      const timer = setInterval(() => {
+        let asked;
+        try { asked = JSON.parse(fs.readFileSync(quitPath, "utf8")); } catch { return; }
+        if (!(Number(asked?.at) >= since - 1000)) return; // 过期纸条不算
+        clearInterval(timer);
+        takeChildrenDown();
+        process.exit(0);
+      }, 50);
+      timer.unref();
+      return true;
+    } catch { return false; }
+  };
+
+  /**
+   * **往下传一层:自己那一层的孩子由自己按句柄带走。**
+   *
+   * 执行域只握得住它自己 spawn 的那一层,再往下(尤其是 `detached` 之后自己另起一组的)它
+   * 既没有句柄、也没有被钉住的组号 —— 而**我手上有**:这些孩子是我 fork 出来的,句柄还没回收
+   * ⇒ 内核不会把它们的号码交给别人。于是「一个卡死在退出回调里、读不到纸条的后代」照样停得
+   * 住,而且这一刀是绑定的(第 6 轮审查 F1)。
+   *
+   * 两刀都发:
+   *  · `child.kill()` —— 句柄那一刀,打的就是这个实例;
+   *  · `process.kill(-child.pid)` —— 它要是 `detached` 过,它自己就是组长,这一刀把它底下
+   *    那一片一起带走。**安全性不依赖「它是不是组长」**:组号和进程号是同一个命名空间,号码
+   *    G 正被我手上这个没回收的孩子占着 ⇒ 组 G 要么就是它自己建的那一个,要么压根不存在
+   *    (ESRCH,无害)。
+   */
+  const spawned = [];
+  const takeChildrenDown = () => {
+    for (const child of spawned) {
+      if (!child || !child.pid || child.exitCode !== null || child.signalCode !== null) continue;
+      try { child.kill("SIGKILL"); } catch {}
+      if (process.platform !== "win32") {
+        try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      }
+    }
+  };
+
+  /**
    * `boundary` 那一笔记的是「**这个号码,边界确实交到它手里了**」:给自己登记时它是「我手里
    * 有」,给孩子登记时它是「我把它续进了孩子的 stdio」。两处同义,所以同一个字段。
    *
@@ -58,6 +114,9 @@ if (directory) {
       try { const stat = fs.fstatSync(descriptor); return `${stat.dev}:${stat.ino}`; } catch { return null; }
     };
     fs.writeFileSync(temporary, JSON.stringify({ pid, at: Date.now(), script, boundary: gave,
+      // 只有**自己这一个**装得上自退通道(下面那段轮询);给孩子登记时它还没执行 preload,
+      // 这一笔必须是 false —— 清场那边据此决定「这个号码绑得住吗」,猜一下就等于没有绑定。
+      quit: pid === process.pid ? quitWatcher() : false,
       streams: script ? [stream(1), stream(2)] : [] }));
     try { fs.renameSync(temporary, target); }
     finally { try { fs.unlinkSync(temporary); } catch {} }
@@ -112,6 +171,9 @@ if (directory) {
       if (fs.existsSync(stopped)) throw new Error("测试执行域已停止");
       const child = original.apply(this, withBoundary(args, ipc));
       register(child?.pid);
+      // 句柄留着:它是「这一层的孩子」唯一绑得住的终止能力(见 `takeChildrenDown`)。
+      // `spawnSync` 回的不是 ChildProcess,存进去也只是个不带 kill 的对象,那边会跳过。
+      if (child && typeof child.kill === "function") spawned.push(child);
       return child;
     };
   };

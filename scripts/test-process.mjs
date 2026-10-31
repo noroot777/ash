@@ -42,7 +42,9 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
    *
    * 这一份是给调用方收尾用的:它们是本次创建的,但按约定不由执行域终止 —— 而调用方要停它们
    * 的时候,**不许回头读 PID 文件现编一个号码**(第 5 轮审查 F4:号码换了主人就会关掉无关
-   * 程序)。身份在这儿一并交出去,终止走 `terminateInstance`,那边发信号前后各核一次。
+   * 程序)。身份与**停它的那条路**在这儿一并交出去,终止走 `terminateInstance`:POSIX 上那是
+   * 「请它自己退」,Windows 上是句柄 + 代次 —— 两种都不按号码下刀(见
+   * scripts/test-process-terminate.mjs 文件头)。
    */
   let preserved = [];
   const captured = { stdout: "", stderr: "" };
@@ -95,8 +97,12 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
         const survey = await scope.survey();
         if (!survey.ok) throw survey.error;
         const spared = preservedPids(scope, preserveScripts, capturedStreams);
+        // 凭据里除了实例身份,还要带上**停它的那条路**:POSIX 上保留进程(detached、自己另起
+        // 一组)唯一绑得住的是它自己的自退通道,而递纸条要知道域目录在哪、它装没装上那个轮询
+        // (见 test-process-terminate.mjs 文件头 ③)。少带这两样,调用方就只剩「按号码裸杀」。
+        const quitable = new Set(scope.records().filter((record) => record.quit === true).map((record) => record.pid));
         preserved = survey.rows.filter((row) => spared.has(row.pid))
-          .map(({ pid, born, created }) => ({ pid, born, created }));
+          .map(({ pid, born, created }) => ({ pid, born, created, directory: scope.directory, quit: quitable.has(pid) }));
         const live = survey.rows.filter((row) => !spared.has(row.pid));
         if (!live.length) return [];
         if (expired || Date.now() >= deadline) return live;

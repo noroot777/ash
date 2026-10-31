@@ -21,14 +21,18 @@ const TMP = mkdtempSync(join(tmpdir(), "ash-restart-test-"));
 const FAKE_BIN = join(TMP, "bin");
 mkdirSync(FAKE_BIN);
 
+/** 退出钩子里唯一能用的「等一会儿」:同步阻塞,不需要事件循环(它这时候已经不转了)。 */
+const sleepSync = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
 const PID_FILE = join(TMP, "server.pid");
 let serverPid = 0;
 /**
- * detached 起来的那个假 server 的**实例凭据**(号码 + 出生时刻,由执行域交出来)。
+ * detached 起来的那个假 server 的**实例凭据**(号码、出生时刻,以及**停它的那条路** ——
+ * 执行域目录 + 它装没装上自退通道,由执行域交出来)。
  *
  * 停它只认这一份:照 PID 文件里的号码裸杀,号码换了主人就会关掉一个无关程序
- * (第 5 轮审查 F4)。凭据来自 `runTestProcess` 的 `preserved` —— 那是它在域内观察到的身份,
- * 不是事后读文件猜的。
+ * (第 5 轮审查 F4;第 6 轮审查 F1 进一步把「按号码下刀」整条路撤掉了)。凭据来自
+ * `runTestProcess` 的 `preserved` —— 那是它在域内观察到的身份,不是事后读文件猜的。
  */
 let serverInstance = null;
 
@@ -39,15 +43,26 @@ function takeServerInstance(run) {
   if (serverPid && !serverInstance) fail(`没拿到 detached server(${serverPid})的实例凭据 —— 按号码裸杀是 F4 明禁的那条路`);
 }
 
-/** 按实例停掉它。核不出身份就**不下刀**并当场失败 —— 宁可留一个,也不关一个可能无关的。 */
-function stopServer() {
+/**
+ * 停掉它 —— **请它自己退,再核实它真的退了**。
+ *
+ * 本层对一个 detached 的后代没有「按号码下刀」的权力(窗口关不掉、macOS 的尺子只有秒,
+ * 理由见 scripts/test-process-terminate.mjs 文件头):所以这里递的是那张写在执行域目录里的
+ * 纸条,它自己读到之后自己退。绑不住、或者请完还在,一律当场失败 —— 宁可留一个让人自己确认,
+ * 也不拿一个号码去赌。
+ */
+async function stopServer() {
   if (!serverInstance) return;
-  const shot = terminateInstance(serverInstance);
+  const instance = serverInstance;
+  const shot = terminateInstance(instance);
   serverInstance = null;
   serverPid = 0;
-  if (shot.verdict === "unverifiable") fail(`detached server(${shot.pid})核不出实例身份,没有终止`);
-  if (shot.misfired) fail(`detached server(${shot.pid})的号码在核对与发信号之间换了主人,这一刀可能打错了`);
   if (shot.error) fail(`detached server(${shot.pid})终止失败: ${shot.error.message}`);
+  if (!shot.sent && !shot.requested) fail(`detached server(${shot.pid})${shot.why}`);
+  for (let round = 0; round < 50 && isPidAlive(instance.pid); round += 1) await sleep(40);
+  if (isPidAlive(instance.pid)) {
+    fail(`detached server(${instance.pid})请它自己退之后 2s 还在,本层不按号码补刀 —— 请自行确认 :${PORT} 上没有残留`);
+  }
 }
 
 /** 停掉一个 fixture:整个执行域(它自己 + 它的后代)按实例收走,清不干净当场失败。 */
@@ -63,11 +78,21 @@ function cleanup() {
   //  · `spawnTestFixture` 建的那些执行域**不必在这儿管** —— test-process-scope.mjs 自己的退出
   //    钩子会按实例把它们整域收走(连后代),比在这儿按句柄杀一层更严。
   if (serverInstance) {
-    const shot = terminateInstance(serverInstance);
+    const instance = serverInstance;
+    const shot = terminateInstance(instance);
     serverInstance = null;
-    if (shot.verdict === "unverifiable" || shot.misfired || shot.error) {
+    if (shot.error || (!shot.sent && !shot.requested)) {
       process.exitCode = 1;
-      process.stderr.write(`⚠ detached server(${shot.pid})没能按实例停掉:${shot.verdict}${shot.misfired ? "(号码中途换了主人)" : ""}\n`);
+      process.stderr.write(`⚠ detached server(${shot.pid})没能停掉:${shot.error?.message ?? shot.why}\n`);
+    } else {
+      // 退出钩子里只能同步等。纸条已经递出去了,它自己那个轮询在另一个进程里照常跑 ——
+      // 所以这里卡一会儿、把结果**核实**出来,而不是写一句「已请求」就算完(核不实的清理
+      // 报告跟没清理一样危险)。
+      for (let round = 0; round < 40 && isPidAlive(instance.pid); round += 1) sleepSync(40);
+      if (isPidAlive(instance.pid)) {
+        process.exitCode = 1;
+        process.stderr.write(`⚠ detached server(${instance.pid})请它自己退之后仍在,本层不按号码补刀 —— 请自行确认 :${PORT}\n`);
+      }
     }
   } else if (existsSync(PID_FILE)) {
     process.exitCode = 1;
@@ -163,7 +188,7 @@ if (!IS_WINDOWS) {
   if (ppid !== "1") fail(`detached server 的 ppid 是 ${ppid},没脱离调用方进程组`);
 }
 
-stopServer();
+await stopServer();
 rmSync(PID_FILE, { force: true });
 await sleep(200);
 
@@ -288,7 +313,7 @@ await sleep(200);
 if (forcedOutput.includes("问不到「重启会打断谁」")) fail(`${forceLabel} 不该被这道闸挡住`, forcedOutput);
 if (!forcedOutput.includes(`${PORT} 已就绪`)) fail(`${forceLabel} 没把服务端换成新的`, forcedOutput);
 console.log(`✓ ${forceLabel}: 调用无错误/异常信号且输出收集完成`);
-stopServer();
+await stopServer();
 rmSync(PID_FILE, { force: true });
 await sleep(200);
 }
@@ -406,7 +431,7 @@ if (!residualOutput.includes("退出意向(收到 SIGTERM)")) fail("没把观察
 if (!residualOutput.includes("最终死因仍然未知")) fail("两档都必须落在「死因未知」上", residualOutput);
 if (residualOutput.includes("是正常停的")) fail("一条进程内的记录定不了性,不许说成正常停", residualOutput);
 if (residualOutput.includes("不是强杀")) fail("同理也不许声称排除强杀", residualOutput);
-stopServer();
+await stopServer();
 rmSync(PID_FILE, { force: true });
 
 process.stdout.write("✓ restart.mjs 的本机探测绕过代理，且脚本返回后 detached server 仍在运行\n");

@@ -78,7 +78,7 @@ import { CLOCK_SLACK_MS, birthOf, environmentHasMarker, instanceVerdict, process
     `本进程的出生时刻(${mine.born})离挂钟读数(${wall})太远:刻度或零点不对`);
   if (process.platform === "win32") {
     // Windows 不走出生时刻这条路:代次核对在句柄那头(OpenProcess + GetProcessTimes),快照里
-    // 带的是 FILETIME。没有它,`signalInstance` 只能落 unverifiable、一刀都不发。
+    // 带的是 FILETIME。没有它,Windows 那条句柄路只能落 unverifiable、一刀都不发。
     assert.ok(mine.created, "Windows 的快照必须带 created(FILETIME),句柄那头靠它核代次");
     console.log("- 跳过出生时刻一节(Windows 的代次核对在句柄那头)");
   } else {

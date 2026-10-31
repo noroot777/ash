@@ -78,17 +78,28 @@ try {
       env: { ...process.env, NODE_OPTIONS: `--require ${JSON.stringify(hook)} ${process.env.NODE_OPTIONS ?? ""}` },
     }, 1);
     assert.match(output.stderr, /测试执行域清理未全部成功/);
-    assert.ok(!isPidAlive(firstChild.pid), "停止标记失败也要终止本域已知进程");
-    assert.ok(!isPidAlive(child.pid), "第一域失败不能跳过第二域");
+    // **第一域的目录被锁成只读了**,所以连那张「请你自己退」的纸条都写不进去 —— 而清理助手是
+    // 另一个进程,这些孩子的句柄从来不在它手上:三条绑定一条都拿不出来(见
+    // scripts/test-process-terminate.mjs 文件头)。于是它**一个信号都不发**,如实报出来并点名
+    // 号码(第 6 轮审查 F1:绑不住就别拿号码去赌,赌输了关掉的是一个无关程序)。
+    assert.match(output.stderr, /无法安全终止/, "绑不住要如实报,不能静默跳过");
+    assert.match(output.stderr, new RegExp(`\\b${firstChild.pid}\\b`), "报告里要点出是哪几个号码");
+    assert.ok(isPidAlive(firstChild.pid), "绑不住就不许动手 —— 它必须还在,而不是被按号码杀掉");
+    assert.ok(!isPidAlive(child.pid), "第一域失败不能跳过第二域(那一域的纸条递得进去,它自己退)");
     assert.equal(fs.existsSync(second.directory), false);
     assert.equal(fs.existsSync(first.directory), true, "保留失败登记");
-  } finally {
+    // 能力并没有丢,只是不在助手那边:**创建者手上还握着句柄**,目录一放开,这边一停就真的停掉。
     fs.chmodSync(first.directory, 0o700);
-    await first.stop(); first.remove();
+    await first.stop();
+    assert.ok(!isPidAlive(firstChild.pid), "创建者手上有句柄,这一停必须真的把它停掉");
+  } finally {
+    try { fs.chmodSync(first.directory, 0o700); } catch { /* 已经放开了 */ }
+    try { await first.stop(); } catch { /* 上面已经停过 */ }
+    first.remove();
     if (fs.existsSync(second.directory)) await second.stop();
     second.remove();
   }
-  console.log("✓ 单域停止标记失败不短路其他域清理,失败记录保留");
+  console.log("✓ 单域停止标记失败不短路其他域清理,失败记录保留,绑不住的如实报");
 
   const originalWrite = fs.writeFileSync;
   let failedDirectory;

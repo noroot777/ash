@@ -27,7 +27,8 @@ const pidPath = join(temporary, "child.pid");
  * 按约定保留下来的那个后台进程,连同执行域交出来的**实例凭据**。
  *
  * 停它由调用方负责,但不许照 PID 文件里的号码裸杀(第 5 轮审查 F4:号码换了主人就会关掉
- * 无关程序)—— 凭据里带着在域内观察到的出生时刻,`terminateInstance` 发信号前后各核一次。
+ * 无关程序)—— 凭据里带着停它的那条路(POSIX 上是它自己的自退通道),`terminateInstance`
+ * 递纸条,这边核实它真的退了(第 6 轮审查 F1)。
  */
 let preservedBackground = [];
 const cleanupProblems = [];
@@ -140,9 +141,13 @@ try {
   // 真出错时那个错才是主报告,这里只记一笔,出了 finally 再断言。
   for (const instance of preservedBackground) {
     const shot = terminateInstance(instance);
-    if (shot.verdict === "unverifiable") cleanupProblems.push(`保留进程 ${shot.pid} 核不出实例身份,未终止`);
-    if (shot.misfired) cleanupProblems.push(`保留进程 ${shot.pid} 的号码在核对与发信号之间换了主人`);
     if (shot.error) cleanupProblems.push(`保留进程 ${shot.pid} 终止失败: ${shot.error.message}`);
+    else if (!shot.sent && !shot.requested) cleanupProblems.push(`保留进程 ${shot.pid} ${shot.why}`);
+  }
+  // 自退那条路是**请求**:请完要核实它真的退了,不许把「纸条递出去了」当成「它停了」。
+  for (const instance of preservedBackground) {
+    for (let round = 0; round < 50 && isPidAlive(instance.pid); round += 1) await delay(40);
+    if (isPidAlive(instance.pid)) cleanupProblems.push(`保留进程 ${instance.pid} 请它自己退之后 2s 还在,本层不按号码补刀`);
   }
   if (cleanupProblems.length) process.stderr.write(`${cleanupProblems.join("\n")}\n`);
   rmSync(temporary, { recursive: true, force: true });

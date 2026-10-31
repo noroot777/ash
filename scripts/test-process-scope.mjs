@@ -39,7 +39,9 @@
 // 去终止另一域正在用的进程),判据与残留见 test-process-probe.mjs 的 `environmentHasMarker`。
 //
 // 「此刻系统里有些什么」全在 **test-process-probe.mjs** 答(ps / lsof / CIM 的输出怎么读、
-// 实例身份怎么比),这个文件只下所有权与清场的判据。
+// 实例身份怎么比);「怎么下刀」全在 **test-process-terminate.mjs** 答(只有内核钉得住的绑定
+// 才算刀);「收场的全过程」在 **test-process-stop.mjs**(下刀顺序、等几拍、最后那份结论)。
+// 这个文件只下**所有权**的判据,以及「清没清干净」这个问题的枚举面。
 //
 // ## 支持形态,以及这一层到底证明了什么
 //
@@ -62,6 +64,12 @@
 //     不转发 stdio(实测),边界交不到它手里,所以它的非 Node 后代五条线索全不命中。那个
 //     Node 后代自己照旧认得出来(登记 + NODE_OPTIONS 一路继承),交没交到边界也如实记在登记
 //     里(`boundary`),不靠猜 —— 见 test-process-register.cjs 那段 patch 的说明。
+//   · **不支持**「要本层按号码去杀一个不是本层 spawn 的进程」:认得出 ≠ 动得了手。原生
+//     `fork` + `setsid` 出来的后代、以及只凭环境段认出来的那些,本层**一个信号都不发**,
+//     号码如实报成「无法安全终止」(第 6 轮审查 F1,判据见 test-process-terminate.mjs 文件头)。
+//     这一条换掉了上一版的「核一次身份再按号码杀」—— 那一版能杀,但杀错的时候关掉的是用户
+//     另外那个程序,而 macOS 的秒级尺子让「杀错」在同秒复用下无从察觉。少掉的那部分清场能力
+//     由上面两条补:Node 后代走自退通道,非 Node 后代只要没自己 setsid 过就落在整组那一刀里。
 //   · 查不动(ps/CIM/lsof/proc 任一条答不出来)⇒ `survey()` 走 `ok:false` 失败路径,
 //     绝不退化成「没有活的」。**扫不到不算停了**这条不变量没有例外。
 //   · **丢边界这件事只要落在我们看得见的地方,就当场失败**:我们自己 spawn 的那一层,fd 是
@@ -69,14 +77,18 @@
 //     这时 `survey()` 同样走失败路径并点名那几个号码,而不是接着往「都停了」上走
 //     (见 `#escapees`)。孙子辈再往下关掉的那一种落在上面那条「不支持」里,只能靠形态约束。
 //
-// ## 实例身份:pid 不是身份,(pid, 出生时刻) 才是
+// ## 实例身份:pid 不是身份,(pid, 出生时刻) 才是 —— 而**身份不授权终止**
 //
 // 号码会被复用。所以每一行快照都带 `born`,登记也带时刻:号码对上但出生时刻对不上的,
-// 是**另一个进程**,既不认它是我们的,更不会去杀它。终止前还要再核一次(POSIX 重读出生时刻
-// —— Linux 读 `/proc/<pid>/stat`、macOS 问 `ps -p`;Windows 走句柄 + GetProcessTimes),
-// **发完再核第三次**:POSIX 上「核对」和「发信号」之间那截窗口关不掉(拿不到 pidfd),所以
-// 只能把它压到一次系统调用,再用发后那一次核对把「可能打在陌生人身上」如实报出来 ——
-// 判据与上界写在 `signalInstance`,这一层只从那一个口下刀。
+// 是**另一个进程**,不认它是我们的。这一道管的是**所有权**(该不该把它算进本域、该不该
+// 报出来),它是**非破坏性**的判断。
+//
+// **终止不走这条路。** 「先核对身份、再按号码发信号」有两个关不掉的口子:核与发之间内核可以
+// 把号码交给别人(POSIX 从普通 Node 进程拿不到 pidfd),而 macOS 的出生时刻只有秒精度、同秒
+// 复用在**第一次核验时**就已经认错了(第 6 轮审查 F1)。所以这一层的终止能力收成三条内核钉
+// 得住的绑定 —— 自己的活句柄、被活组长钉住的整组、以及「写张纸条请它自己退」的自退通道;
+// 三条都拿不出来的目标**一个信号都不发**,如实报成「无法安全终止」。判据与理由写在
+// **test-process-terminate.mjs** 文件头,这一层只从那一个口下刀。
 //
 // **核不出来是第三种答案**,不许往「已经没了」上归(第 1 轮审查 F5):那一刀不发,号码照实
 // 报进 `unverified`,由 `stop()` 失败。两次读数之间也**没有时间容差** —— 同一个进程的两次
@@ -92,15 +104,20 @@ import { windowsTerminateScript } from "./windows-restart.mjs";
 // 「此刻系统里有些什么」全在那边答(ps / lsof / CIM 的输出、实例身份的比较),这边只下所有权
 // 与清场的判据 —— 两种问题分开,见 test-process-probe.mjs 文件头。
 import {
-  CLOCK_SLACK_MS, birthOf, boundaryHolders, fileTime, instanceVerdict, powerShell, powerShellSync,
-  processRows,
+  CLOCK_SLACK_MS, birthOf, boundaryHolders, instanceVerdict, powerShellSync, processRows,
 } from "./test-process-probe.mjs";
+// 「怎么下刀」全在那边答:**只有内核钉得住的绑定才算刀**,拿不出绑定的一律不动手。
+import { terminateBound } from "./test-process-terminate.mjs";
+// 「怎么收场」在那边答:下刀顺序、等几拍、以及最后那份「到底清没清干净」的结论。
+import { stopScope, strikeBoundSync } from "./test-process-stop.mjs";
 
 const windows = process.platform === "win32";
 const registerPath = fileURLToPath(new URL("test-process-register.cjs", import.meta.url));
 const cleanupPath = fileURLToPath(new URL("test-process-cleanup.mjs", import.meta.url));
 const scopes = new Set();
-export const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+// 等几拍是下刀的一部分(递完纸条要给它时间自己退),所以这两个原语住在那一层;这里转发一手,
+// 省得各个用例改导入。
+export { delay } from "./test-process-terminate.mjs";
 
 
 /**
@@ -143,8 +160,12 @@ export function publishRecord(directory, subjectPid, payload) {
 }
 
 /**
- * **同一个号码上现在那一个,还是当初观察到的那一个吗。** 四档,`"same"` 之外一个都不许动手
- * (第 1 轮审查 F5;前三档的判据在 test-process-probe.mjs 的 `instanceVerdict`):
+ * **同一个号码上现在那一个,还是当初观察到的那一个吗。** 四档(判据在 test-process-probe.mjs
+ * 的 `instanceVerdict`)。
+ *
+ * **这一问只用来判所有权,不用来授权终止**(第 6 轮审查 F1):它的答案建立在「取样那一刻」
+ * 上,而 macOS 的尺子只有秒 —— 拿它去授权一刀,同秒复用就是误杀。终止只走
+ * test-process-terminate.mjs 那三条绑定。
  *
  *   · `"same"` —— 出生时刻一模一样,只有这一档能动手;
  *   · `"other"` —— 号码换了主人,它本来就不是我们的;
@@ -155,7 +176,7 @@ export function publishRecord(directory, subjectPid, payload) {
  *     兜得住的前提恰好是进程表查得动,成因相同的两处不能互相当兜底。)
  *
  * 别去 `ps` 问一遍再拿答案当「待验证身份」用:那样必然相等(上一版的 `row.born ?? born` 就是
- * 这个形状),等于不核。Windows 不走这一套:代次核对在句柄那头(见 `signalInstance`)。
+ * 这个形状),等于不核。Windows 不走这一套:代次核对在句柄那头(见 `terminateInstance`)。
  */
 function verifyInstance(row) {
   if (windows) return "same";
@@ -167,52 +188,46 @@ function verifyInstance(row) {
 }
 
 /**
- * **按实例发一刀** —— 这一层唯一的下刀口。`row` 必须带当初观察到的身份:POSIX 是 `born`
- * (出生时刻),Windows 是 `created`(FILETIME)。返回
- * `{ pid, verdict, misfired, error }`:`verdict` 见 `verifyInstance`;`misfired` 见下。
- *
- * **窗口关不掉,所以不说大话**(第 5 轮审查 F4)。POSIX 从普通 Node 进程拿不到 pidfd / 句柄
- * 这种「钉住实例」的东西(`process.kill` 的入参只有一个号码),所以「刚刚查到出生时刻相等」
- * 证明的是**查的那一刻**它还是我们那一个,不是「这一刀一定落在它身上」。能做到的上界是两条:
- *  · 核与发之间**不 await 任何东西**(出生时刻走同步读,见 `birthOf` 为什么是同步的),
- *    窗口压到一次系统调用;
- *  · 发完**再核一次**:还是当初那个 ⇒ 这一刀确实落在它身上;**变成了另一个** ⇒ 号码在那截
- *    窗口里换了主人、这一刀可能打在陌生人身上,如实记进 `misfired`,由 `stop()` 报出来。
- *    读到「它不在了」是预期结果(我们正是要它停),这一档分不出「被我们杀掉」和「它自己先
- *    退了、号码还空着」—— 分不出就写成分不出,不许往「一定打对了」上说。
- *
- * **Windows 没有这个窗口**:`OpenProcess` 拿到的句柄本身钉住实例,代次核对(GetProcessTimes)
- * 与 `TerminateProcess` 在同一个句柄上做,见 `windowsTerminateScript`。那边「跳过」一律落
- * `"unverifiable"`:句柄开不出来、代次读不出来、代次对不上三种长得一样,分不出就不猜。
+ * **Windows 专用:句柄 + 代次,在同一个句柄上核对与终止。** 这一侧本来就没有「核完到发完之间
+ * 号码换了主人」的窗口(`OpenProcess` 的句柄钉住实例,见 scripts/windows-restart.mjs),所以
+ * 这条路原样保留。「跳过」一律落 `"unverifiable"`:句柄开不出来、代次读不出来、代次对不上
+ * 三种长得一样,分不出就不猜。
  */
-export function signalInstance(row, signalName) {
-  if (windows) {
-    if (!row.created) return { pid: row.pid, verdict: "unverifiable", misfired: false };
-    let output;
-    try { output = powerShellSync(windowsTerminateScript([{ pid: row.pid, created: row.created }], { tolerant: true })); }
-    catch (error) { return { pid: row.pid, verdict: "unverifiable", misfired: false, error }; }
-    const skipped = output.split("\n").some((line) => new RegExp(`^ASH_RESTART_SKIPPED ${row.pid}$`).test(line.trim()));
-    return { pid: row.pid, verdict: skipped ? "unverifiable" : "same", misfired: false };
-  }
-  const verdict = verifyInstance(row);
-  if (verdict !== "same") return { pid: row.pid, verdict, misfired: false };
-  let error;
-  try { process.kill(row.pid, signalName); }
-  catch (failure) { if (failure.code !== "ESRCH") error = failure; }
-  return { pid: row.pid, verdict, misfired: verifyInstance(row) === "other", error };
+function windowsSignalInstance(row) {
+  if (!row.created) return { pid: row.pid, verdict: "unverifiable" };
+  let output;
+  try { output = powerShellSync(windowsTerminateScript([{ pid: row.pid, created: row.created }], { tolerant: true })); }
+  catch (error) { return { pid: row.pid, verdict: "unverifiable", error }; }
+  const skipped = output.split("\n").some((line) => new RegExp(`^ASH_RESTART_SKIPPED ${row.pid}$`).test(line.trim()));
+  return { pid: row.pid, verdict: skipped ? "unverifiable" : "same" };
 }
 
 /**
  * 停掉一个**保留下来**的进程 —— `preserveScripts` 那些:本次创建的,但按约定不由执行域终止,
- * 由调用方自己负责收尾。`instance` 就是 `runTestProcess` 返回的 `preserved` 里的那一份,
- * 里面带着在域内观察到的实例身份,所以这里既不必、也不许回头读 PID 文件现编一个号码出来
- * (第 5 轮审查 F4:裸号码终止 —— 号码换了主人就会关掉无关程序)。
+ * 由调用方自己负责收尾。`instance` 就是 `runTestProcess` 返回的 `preserved` 里的那一份。
  *
- * 返回 `signalInstance` 的结论,**同步**:退出钩子里的清理只能同步。调用方必须自己处理
- * `"unverifiable"`(核不出来就没有下刀,该失败的要失败)。
+ * **POSIX 上这类进程唯一绑得住的路是自退通道**(它 detached 之后自己另起一组,句柄不在我们
+ * 手上、组号也不被任何活句柄钉住 —— 理由见 test-process-terminate.mjs 文件头)。所以这里做的
+ * 是**请它自己退**,并把「请没请出去」如实交回:`requested: true` 只说明纸条写下了,**不等于
+ * 它已经停了**,调用方要么接着等、要么如实报出来。登记里没有自退通道(非 Node、或 preload
+ * 没装上)时一个字都不动,`binding: "unbindable"`。
+ *
+ * **同步**,所以退出钩子里的收尾也用得上。
  */
 export function terminateInstance(instance, { force = true } = {}) {
-  return signalInstance(instance, force ? "SIGKILL" : "SIGTERM");
+  if (windows) {
+    const shot = windowsSignalInstance(instance);
+    return { pid: instance.pid, binding: "handle", sent: shot.verdict === "same", requested: false,
+      verdict: shot.verdict, error: shot.error,
+      why: shot.verdict === "same" ? undefined : "句柄那头核不出代次（开不出句柄/读不出/对不上），未终止" };
+  }
+  void force; // 自退通道只有一种力度:请它自己退
+  if (instance.quit !== true || !instance.directory) {
+    return { pid: instance.pid, binding: "unbindable", sent: false, requested: false,
+      why: "这个实例没有自退通道（非 Node 后代，或 preload 没装上），本层绑不住它，未终止" };
+  }
+  const shot = terminateBound({ kind: "quit", directory: instance.directory, pid: instance.pid });
+  return { pid: instance.pid, binding: shot.kind, sent: false, requested: shot.requested, error: shot.error, why: shot.why };
 }
 
 export class TestProcessScope {
@@ -238,10 +253,11 @@ export class TestProcessScope {
      */
     this.unverified = [];
     /**
-     * 「核对实例」和「发信号」之间号码换了主人的那些 —— 这一刀可能打在陌生人身上。窗口为什么
-     * 关不掉、为什么只能如实报,见 `signalInstance`。
+     * **本层绑不住、所以一个信号都没发**的那些号码(见 test-process-terminate.mjs 文件头):
+     * 既不在我们手上的活句柄里、也不在被活组长钉住的组里、登记里又没有自退通道 —— 典型是
+     * 「非 Node 的后代自己 detached 另起一组」。宁可留着并如实报出来,也不拿一个号码去赌。
      */
-    this.misfired = [];
+    this.unbindable = [];
     // 边界 inode(见文件头)。POSIX 专有:Windows 那边 ppid 在父进程死后仍然保留,父子链本身
     // 就是完整的,不需要这一条;那边也没有「谁持有这个 inode」的查法。
     /** 创建者手里那个 fd:**它钉住这个 inode**,号码不会被回收,所以身份不会被别人撞上。 */
@@ -344,7 +360,11 @@ export class TestProcessScope {
       const previous = byPid.get(parsed.pid);
       byPid.set(parsed.pid, previous
         ? { ...previous, ...parsed, at: Math.max(previous.at ?? 0, parsed.at ?? 0),
-          script: parsed.script || previous.script, streams: parsed.streams?.length ? parsed.streams : previous.streams }
+          script: parsed.script || previous.script, streams: parsed.streams?.length ? parsed.streams : previous.streams,
+          // **自退通道这一笔只有它自己说得准**(父进程给孩子登记时孩子还没执行 preload,
+          // 记的必然是 false)。两条记录按「有就是有」合,否则目录读取顺序会把能力抹掉 ——
+          // 而抹掉的后果是本层以为它绑不住、于是一个明明请得动的后代被报成「无法安全终止」。
+          quit: parsed.quit === true || previous.quit === true }
         : parsed);
     }
     return [...byPid.values()];
@@ -487,130 +507,15 @@ export class TestProcessScope {
     } catch (error) { return { ok: false, rows: [], error }; }
   }
 
-  async stop() {
-    const errors = [];
-    const attempt = async (operation) => {
-      try { return await operation(); }
-      catch (error) { errors.push(error); return []; }
-    };
-    const signal = (pid, name) => {
-      try { process.kill(pid, name); }
-      catch (error) { if (error.code !== "ESRCH") errors.push(error); }
-    };
-    /**
-     * 按**实例**终止一批行:核对出生时刻之后才动手。返回**没能核对实例身份**的那些号码 ——
-     * 由调用方决定是报出来(主路径,见文件尾的 `unverified`)还是不吭声(「先砍一刀」那一刀:
-     * 号码既然换了主人就本来不是我们的,主路径的 `active()` 也不会去认领它)。
-     */
-    const terminateRows = async (rows, force) => {
-      if (!windows) {
-        const unverified = [];
-        for (const row of rows) {
-          // 核对 → 发信号 → 再核对,全在 `signalInstance` 里(那是这一层唯一的下刀口,
-          // 判据不许有第二份);两件事要从它的结论里分开记:
-          //  · `other` = 号码换了主人,本来就不是我们的;`gone` = 已经没了。这两种不吭声。
-          //  · **`unverifiable` 要报出来**(F5):核不出代次就不动手,而「我没核出来」不许
-          //    悄悄变成「它已经没了」—— 那正是这一层最不许犯的那个错。
-          //  · `misfired` = 核完到发完之间号码换了主人,这一刀可能打在别人身上,同样报出来。
-          const shot = signalInstance(row, force ? "SIGKILL" : "SIGTERM");
-          if (shot.error) errors.push(shot.error);
-          if (shot.verdict === "unverifiable") unverified.push(shot.pid);
-          if (shot.misfired) this.misfired.push(shot.pid);
-        }
-        return unverified;
-      }
-      // 句柄 + GetProcessTimes 代次核对,和生产重启同一套(scripts/windows-restart.mjs)。
-      // 不用 `taskkill /T`:它在执行那一刻重新展开进程树,杀的可能是我们查完之后才挂上去
-      // 的、别人的进程。
-      //
-      // **整批一次**,代次对不上的那几个由那段脚本自己跳过并报号码(`tolerant`)。两件事都要:
-      // 起一个 powershell 要 ~400ms,一行一个串着跑,第一刀就落到 2s 开外,而被判死的后代多活
-      // 一拍就多写一次文件(真机实测:`test-test-process` 从超时到那次写只留了不到 1s,串行
-      // 那一版它写出来了);而默认那种「任一代次对不上就整批抛」,会让一个号码换了主人的旧行
-      // 把其余真该停的一起拦下。
-      const targets = rows.filter((row) => row.created);
-      const unverified = rows.filter((row) => !row.created).map((row) => row.pid);
-      if (targets.length) {
-        try {
-          const output = await powerShell(windowsTerminateScript(targets, { tolerant: true }));
-          // 跳过的那些:这个号码在查到和动手之间换了主人,不是我们的那一个。不杀,记一笔。
-          for (const line of output.split("\n")) {
-            const skipped = /^ASH_RESTART_SKIPPED (\d+)/.exec(line.trim());
-            if (skipped) unverified.push(Number(skipped[1]));
-          }
-        } catch (error) { errors.push(error); }
-      }
-      return unverified;
-    };
-    const terminate = async (rows, force) => {
-      this.unverified.push(...await terminateRows(rows, force));
-    };
 
-    await attempt(() => writeFileSync(join(this.directory, "stopped"), ""));
-    // ── 先砍一刀 ────────────────────────────────────────────────────────────────
-    // 枚举全表是要花时间的(Windows 上起一个 powershell 查 WMI,实测 ~600ms),而**清场慢一拍,
-    // 被判死的后代就多出一拍去写文件**。所以在枚举之前先用**不花钱的证据**砍一刀:
-    //  · POSIX:整组发信号。句柄还没回收 ⇒ 这个号码不可能被复用,所以整组是安全的 ——
-    //    也只有这一处敢按组号发。
-    //  · Windows:
-    //     - 我们自己 spawn 的那一层按**句柄**杀。`child.kill()` 用的是 spawn 时拿到的那个句柄,
-    //       根本不经过号码,比按号码杀更硬;
-    //     - 它们的后代按**登记**杀。号码来自本域的登记文件(本地读,零开销),实例身份当场
-    //       核(`#impostor`:出生时刻必须落在「本域创建」到「它登记那一刻」之间,一个号码被
-    //       复用的陌生进程落不进这个区间)。
-    //
-    // **Windows 这儿原先走 `taskkill /T /F`,已经去掉**(第 4 轮审查 F1 同类)。当时的理由是
-    // 「句柄没回收 ⇒ 这个号码不会被复用 ⇒ 展开出来的那棵树一定是我们的」,可那只固定了**根**的
-    // 身份:`/T` 在执行那一刻按 ppid 重新展开整棵树,而 Windows 的 ppid 在父进程死后仍然留着
-    // 旧号码 —— 一个号码被复用的中间节点就能把别人的进程挂进这棵树。换成上面这两条之后,砍下去
-    // 的每一个都是自己证明得出来的,「及时」和「不误杀」不必二选一。
-    for (const child of this.children) {
-      if (!child.pid || child.exitCode !== null || child.signalCode !== null) continue;
-      if (!windows) { signal(-child.pid, "SIGTERM"); continue; }
-      try { child.kill(); } catch (error) { errors.push(error); }
-    }
-    if (windows) {
-      await attempt(() => terminateRows(this.records()
-        .filter((record) => record.pid !== process.pid && Number.isFinite(record.at))
-        // 代次核成**区间**:这正是 `#impostor` 那条判据,换成句柄那头看得懂的尺子交过去 ——
-        // 于是不必先起一个 powershell 查一遍进程表拿代次,这一刀只花一次。跳过的号码不往
-        // `unverified` 里记:号码换了主人就本来不是我们的,后面的 `active()` 也不会认领它。
-        // 上界就是 `record.at` 本身,**不加容差**(第 1 轮审查 F5):登记必然晚于出生,所以
-        // 真正属于我们的那一个落在区间里;而加一秒等于把「登记之后一秒内出生的复用实例」也收
-        // 进来。这样这个区间和 `#impostor` 的判据一个字都不差 —— 同一条判据不许有两个尺子。
-        .map((record) => ({ pid: record.pid, created: `${fileTime(this.started - CLOCK_SLACK_MS)}-${fileTime(record.at)}` })), true));
-    }
-    // 下面这一段是**凭据**:前面那一刀只覆盖得到自己登记过的(非 Node 的后代不执行 preload),
-    // 全表枚举才认得出靠父子链挂着的那些,而「还有没有活的」这个结论只能由它来下。
-    let active = [];
-    if (!windows) {
-      // POSIX 先温和一轮:上面整组发的是 SIGTERM,这儿再按实例补一次,给它们机会自己收场。
-      await terminate(await attempt(() => this.active()), false);
-      await delay(100);
-    }
-    for (let round = 0; round < 3; round++) {
-      try { active = await this.active(); }
-      catch (error) { errors.push(error); break; }
-      if (!active.length) break;
-      await terminate(active, true);
-      await delay(50);
-    }
-    // 最后这一次用 `inspect`:除了「还有没有活的」,**形态违规也要落在清理结论里** —— 一个把
-    // 边界丢掉的进程若还活着,它的后代本层监管不到,这时候的「扫不到」证明不了清场(文件头)。
-    const final = await attempt(() => this.inspect());
-    active = Array.isArray(final) ? final : final.rows;
-    if (active.length) errors.push(new Error(`测试进程未清场: ${active.map((row) => row.pid).join(",")}`));
-    if (!Array.isArray(final) && final.escaped.length) {
-      errors.push(new Error(`这些进程已经不持有本域的边界描述符，它们的后代本层监管不到: ${final.escaped.join(",")}`));
-    }
-    if (this.unverified.length) {
-      errors.push(new Error(`无法核验实例身份,未终止: ${[...new Set(this.unverified)].join(",")}`));
-    }
-    if (this.misfired.length) {
-      errors.push(new Error(`这些号码在「核对实例」与「发信号」之间换了主人，这一刀可能打在无关进程上: ${[...new Set(this.misfired)].join(",")}`));
-    }
-    if (errors.length) throw Object.assign(new AggregateError(errors, `测试执行域清理失败: ${this.directory}`), { directory: this.directory });
-  }
+
+
+
+  /** 见 test-process-stop.mjs:退出钩子里趁句柄还在手上、同步把绑得住的那些带走。 */
+  strikeBoundSync() { strikeBoundSync(this); }
+
+  /** 见 test-process-stop.mjs:收场的全过程(下刀顺序、等几拍、以及最后那份结论)。 */
+  async stop() { await stopScope(this); }
 
   remove() {
     // 边界那个 fd 关在这儿:它一关,那个未链接的 inode 才真正释放 —— 在此之前它一直钉着,
@@ -645,6 +550,10 @@ export function preservedPids(scope, scripts, capturedStreams) {
 process.once("exit", () => {
   if (process.argv[1] && resolve(process.argv[1]) === cleanupPath) return;
   if (!scopes.size) return;
+  // **先用手上的绑定砍一刀**(理由见 `strikeBoundSync`):助手接手之后就只剩自退通道了。
+  for (const scope of scopes) {
+    try { scope.strikeBoundSync(); } catch { /* 退出钩子里不许再抛 */ }
+  }
   const result = spawnSync(process.execPath, [cleanupPath, ...[...scopes].map((scope) => scope.directory)], {
     stdio: "inherit", timeout: 30_000, killSignal: "SIGKILL", windowsHide: true,
   });
