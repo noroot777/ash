@@ -443,6 +443,9 @@ try {
   assert.match(rangeDay, /^\d\d\/\d\d \d\d:\d\d → \d\d:\d\d$/);
   assert.match(formatInstantRange("2026-07-30T01:00:00.000Z", null), / 起$/);
   assert.equal(formatInstantRange(null, "2026-07-30T01:10:00.000Z"), "");
+  // 跨年但月日相同:省掉第二个日期就会读成「一小时跑完」,必须留住完整日期。
+  const crossYear = formatInstantRange("2025-07-30T01:00:00.000Z", "2026-07-30T02:00:00.000Z");
+  assert.match(crossYear, /^\d\d\/\d\d \d\d:\d\d → \d\d\/\d\d \d\d:\d\d$/);
 
   const team = { id: "team-1", mode: "team", projectId: "project-1", title: "父团队" };
   const sharedWorker = { id: "worker-1", parentId: "team-1", useWorktree: false };

@@ -48,7 +48,10 @@ export function formatInstantRange(from?: string | null, to?: string | null): st
   if (!start) return "";
   const end = formatInstant(to);
   if (!end) return `${start} 起`;
-  return `${start} → ${start.slice(0, 5) === end.slice(0, 5) ? end.slice(6) : end}`;
+  // 「同一天」必须回到真实日期上判，不能拿 formatInstant 的输出去比月日：那串里没有年份，
+  // 去年今天开工、今天收工的任务会被压成「10/31 10:00 → 11:00」，看着像一小时跑完。
+  const sameDay = new Date(from!).toDateString() === new Date(to!).toDateString();
+  return `${start} → ${sameDay ? end.slice(6) : end}`;
 }
 
 export function durationBetween(from?: string | null, to?: string | null): string | null {
