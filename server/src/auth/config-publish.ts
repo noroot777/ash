@@ -9,7 +9,7 @@
 // 只能靠「同一条规矩写两遍」,回归测试钉着两边行为一致。
 import { randomBytes } from "node:crypto";
 import {
-  closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync,
+  closeSync, fsyncSync, mkdirSync, openSync,
   readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -142,38 +142,61 @@ function rehearse(target: string, body: string, create: boolean): string | null 
 export const BACKUP_SUFFIX = ".bak-ash-setup";
 
 /**
- * **改写已有文件之前,先留一份核对过的备份**(本轮审查 F2 的可修部分)。
+ * **改写已有文件之前,先留一份核对过的备份**(上一轮审查 F2 的可修部分)。
  *
  * 为什么非留不可:就地写没有原子替换,而「写出异常就回写旧正文」这条退路在**只有目标那个
  * inode 坏**的持续故障下同样失败 —— 审查在裸 Node 那侧实测过:活动配置留成 `{"other":{"`,
  * 而这条路**一份备份都没有**,用户手里什么都不剩。安装器那侧一直有 `.bak-ash-setup`,服务端
  * 这条(每次起跑、每次读设置页都会走)原来没有。
  *
- * **核对**的意思是:拷完立刻读回来逐字节比对。拷贝本身也可能半途失败(同一类设备故障),
+ * **备份也是发布产物,所以同样独占创建**(本轮审查 F2):上一版拿 `copyFileSync` 往那个固定
+ * 名字上直接拷,于是那个名字上要是摆着一条指向用户别的文件的软链接,这一拷就把那份无关文件
+ * 改成了整份 CLI 配置 —— 还显示成功。三条跟预演同一套(见 `rehearse`):
+ *  · 用 `wx` 开 —— 路径上此刻有任何东西(普通文件、软链接、目录)都直接 EEXIST;
+ *  · 固定名字被占住(含**上一次成功发布留下的那份备份**)就换一个带随机段的名字,绝不覆盖、
+ *    绝不跟随别人的对象;
+ *  · 正文走**自己这个句柄**写、fsync 到设备,不按路径二次打开。
+ *
+ * 代价如实写明:备份一律 0600 出生(拷权限这件事本来就只在 POSIX 上成立),而且同一份配置
+ * 反复被改写时会留下好几份 `…-<随机段>`。两样都比「可能写到用户别的文件上」便宜。
+ *
+ * **核对**的意思是:写完立刻读回来逐字节比对。写备份本身也可能半途失败(同一类设备故障),
  * 一份半截的备份比没有备份更坏 —— 那种情况下直接收手,活动配置一个字节都不碰。
  *
  * 返回 `{ backup }` = 留好了;`{ why }` = 没留成,这次别写;`{ backup: null }` = 原来没有
- * 这个文件,没什么可备份的。`created` = 这一轮新建的 —— 收手时只删得掉自己建的那一份,
- * **上一次成功发布留下的备份不许动**(那是用户手里唯一的旧版本)。
+ * 这个文件,没什么可备份的。`created` 恒为真(留下来的那份一定是我们自己建的)—— 收手时
+ * 只删自己建的那一份,**上一次成功发布留下的备份不许动**(那是用户手里唯一的旧版本)。
  */
 function backupBefore(read: ConfirmedRead): { backup: string | null; created: boolean } | { why: string } {
   if (read.text === null) return { backup: null, created: false };
-  const backup = `${read.file}${BACKUP_SUFFIX}`;
-  const existed = existsSync(backup);
-  try {
-    // `copyFileSync` 在 POSIX 上带着原权限建目标(0600 的配置不会从备份这条路泄出去);
-    // Windows 的 DACL 它复制不了,那份备份仍继承父目录 —— 跟安装器那侧同一个做法。
-    copyFileSync(read.file, backup);
-    const back = readForWrite(backup);
-    if (!back || back.text !== read.text) {
-      if (!existed) { try { rmSync(backup, { force: true }); } catch { /* 尽力 */ } }
-      return { why: `给 ${read.file} 留备份没留成（${backup} 读回来跟原文不一样），所以这次什么都没写` };
+  const nope = (why: string) => ({ why: `给 ${read.file} 留备份没留成（${why}），所以这次什么都没写` });
+  const plain = `${read.file}${BACKUP_SUFFIX}`;
+  let backup = plain;
+  let fd: number | null = null;
+  for (let left = 4; left > 0; left--) {
+    try { fd = openSync(backup, "wx", TMP_MODE); break; } catch (e) {
+      if ((e as { code?: string }).code !== "EEXIST" || left === 1) return nope((e as Error).message);
+      backup = `${plain}-${randomBytes(6).toString("hex")}`;
     }
-    return { backup, created: !existed };
-  } catch (e) {
-    if (!existed) { try { rmSync(backup, { force: true }); } catch { /* 尽力 */ } }
-    return { why: `给 ${read.file} 留备份没留成（${(e as Error).message}），所以这次什么都没写` };
   }
+  let failed: string | null = null;
+  try {
+    writeFileSync(fd!, read.text, "utf8");
+    fsyncSync(fd!);
+  } catch (e) {
+    failed = (e as Error).message;
+  }
+  try { closeSync(fd!); } catch { /* 已经关了也不该拦住结论 */ }
+  if (failed === null) {
+    const back = readForWrite(backup);
+    if (!back || back.text !== read.text) failed = `${backup} 读回来跟原文不一样`;
+  }
+  if (failed !== null) {
+    // 删的是**自己刚建出来的那一个**(名字就在手上),不是 force 清扫一个固定名字。
+    try { rmSync(backup, { force: true }); } catch { /* 自己的产物,删不掉也不该拦住结论 */ }
+    return nope(failed);
+  }
+  return { backup, created: true };
 }
 
 function publishInPlace(read: ConfirmedRead, body: string): void {

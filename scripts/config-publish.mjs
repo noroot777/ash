@@ -16,7 +16,7 @@
 //     刚存过新设置,拿旧快照盖下去就是把它抹掉。
 import { randomBytes } from "node:crypto";
 import {
-  closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync,
+  closeSync, fsyncSync, mkdirSync, openSync,
   readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -130,6 +130,52 @@ function rehearse(target, body, write, create) {
 }
 
 /**
+ * **留一份核对过的、属于我们自己的备份**(本轮审查 F2)。
+ *
+ * 上一版拿 `copyFileSync` 往 `<配置>.bak-ash-setup` 这个固定名字上直接拷。审查实测:在那个
+ * 名字上摆一条指向用户别的文件的软链接,这一拷就**跟着它**把那份无关文件改成了整份 CLI
+ * 配置,而且整条路照样报成功。所以备份跟预演产物同一套所有权约束(见 `rehearse`):
+ *  · 用 `wx` 开 —— 路径上此刻有任何东西(普通文件、软链接、目录)都直接 EEXIST;
+ *  · 被占住(含**上一次成功发布留下的那份备份**)就换一个带随机段的名字,绝不覆盖、绝不跟随;
+ *  · 正文走**自己这个句柄**写、fsync 到设备,不按路径二次打开;
+ *  · 写完读回来逐字节核对 —— 一份半截的备份比没有备份更坏。
+ *
+ * 代价如实写明:备份一律 0600 出生(拷原权限这件事本来也只在 POSIX 上成立),而且同一份配置
+ * 反复被改写时会留下好几份 `…-<随机段>`。两样都比「可能写到用户别的文件上」便宜。
+ *
+ * 返回 `{ backup }` = 留好了(名字就是我们建的那个);`{ why }` = 没留成。
+ */
+function ownBackup(file, previous, suffix = ".bak-ash-setup") {
+  const plain = `${file}${suffix}`;
+  let backup = plain;
+  let fd = null;
+  for (let left = 4; left > 0; left--) {
+    try { fd = openSync(backup, "wx", TMP_MODE); break; } catch (error) {
+      if (error.code !== "EEXIST" || left === 1) return { why: error.message };
+      backup = `${plain}-${randomBytes(6).toString("hex")}`;
+    }
+  }
+  let failed = null;
+  try {
+    writeFileSync(fd, previous, "utf8");
+    fsyncSync(fd);
+  } catch (error) {
+    failed = error.message;
+  }
+  try { closeSync(fd); } catch { /* 已经关了也不该拦住结论 */ }
+  if (failed === null) {
+    const back = readForWrite(backup);
+    if (!back || back.text !== previous) failed = `${backup} 读回来跟原文不一样`;
+  }
+  if (failed !== null) {
+    // 删的是**自己刚建出来的那一个**(名字就在手上),不是 force 清扫一个固定名字。
+    try { rmSync(backup, { force: true }); } catch { /* 自己的产物,删不掉也不该拦住结论 */ }
+    return { why: failed };
+  }
+  return { backup };
+}
+
+/**
  * 一次发布:**预演 → 备份 → 再确认一次没被别人改过 → 就地写 → 读回来比对**。
  *
  * 顺序是本轮审查 F3 打出来的:**最后一次新鲜度校验必须紧贴写盘那一步**。上一版把校验放在
@@ -158,31 +204,23 @@ export function publishConfirmed({ file, previous, body, backupSuffix = ".bak-as
   if (dry) {
     return { ok: false, why: `写不进 ${file} 所在的目录（${dry.message}），所以这次什么都没写` };
   }
-  const backup = previous !== null ? `${file}${backupSuffix}` : null;
-  // 真要写了才备份:改的是用户自己的配置文件,出错要能一键还原。`copyFileSync` 在 POSIX 上
-  // 带着原权限建目标(0600 的配置不会从备份这条路泄出去);Windows 的 DACL 它复制不了,那份
-  // 备份仍继承父目录 —— 这个做法本任务开工前就是这样。
-  // 只删得掉**自己这一轮建出来的**那一份:上一次成功发布留下的备份不许动(那是用户手里
-  // 唯一的旧版本)。
-  const backupExisted = backup !== null && existsSync(backup);
-  if (backup) copyFileSync(file, backup);
-  // 拷完立刻读回来核对:拷贝本身也会半途失败(同一类设备故障),一份半截的备份比没有更坏。
-  // 核不上有两种来历,分清了再说话:**活动那份在这期间被改过**(拷到的就是新那版),还是
-  // 拷贝自己出了问题。前者是 F3 那条新鲜度失败,后者才是「备份没留成」。
-  if (backup) {
-    const back = readForWrite(backup);
-    if (!back || back.text !== previous) {
-      if (!backupExisted) { try { rmSync(backup, { force: true }); } catch { /* 尽力 */ } }
-      const live = readForWrite(file);
-      if (live && live.text !== previous) return { ok: false, stale: true, why: foreignChange(file) };
-      return { ok: false, why: `给 ${file} 留备份没留成（${backup} 读回来跟原文不一样），所以这次什么都没写` };
-    }
+  // 真要写了才备份:改的是用户自己的配置文件,出错要能一键还原。**备份也是发布产物,所以
+  // 跟预演同一套所有权约束**(本轮审查 F2,见 `ownBackup`):独占创建自己的那个对象,
+  // 固定名字被占住就换一个唯一名字,绝不覆盖也绝不跟随别人的对象。
+  const saved = previous !== null ? ownBackup(file, previous, backupSuffix) : { backup: null };
+  // 核不上有两种来历,分清了再说话:**活动那份在这期间被改过**(备份到的就是新那版),还是
+  // 写备份自己出了问题。前者是上一轮 F3 那条新鲜度失败,后者才是「备份没留成」。
+  if (saved.why) {
+    const live = readForWrite(file);
+    if (live && live.text !== previous) return { ok: false, stale: true, why: foreignChange(file) };
+    return { ok: false, why: `给 ${file} 留备份没留成（${saved.why}），所以这次什么都没写` };
   }
-  // **写盘前最后一步:再确认一次盘上还是我们读到的那一版**(F3)。没过就收手,顺手把刚才
-  // 建出来的那份备份删掉 —— 什么都没改却留一份 `.bak`,用户会以为我们动过手。
+  const backup = saved.backup;
+  // **写盘前最后一步:再确认一次盘上还是我们读到的那一版**(上一轮 F3)。没过就收手,顺手把
+  // 刚才建出来的那份备份删掉 —— 什么都没改却留一份 `.bak`,用户会以为我们动过手。
   const now = readForWrite(file);
   if (!now || now.text !== previous) {
-    if (backup && !backupExisted) { try { rmSync(backup, { force: true }); } catch { /* 尽力 */ } }
+    if (backup) { try { rmSync(backup, { force: true }); } catch { /* 尽力 */ } }
     return now
       ? { ok: false, stale: true, why: foreignChange(file) }
       : { ok: false, why: `要写 ${file} 之前又读不出它了，这次什么都没写` };
