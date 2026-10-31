@@ -85,7 +85,7 @@ const leads = new Map<string, Lead>();
  * 起进程、`beginTurn` 又把状态写回 running:用户点了停止、页面刷新后却还是「运行中」
  * (第 4 轮审查 P1)。所以把那一次停止记在这里,由开台自己在**起进程之前**消费掉。
  * `turn-freeze` 那套(freezeStartingTurn/abortIfFrozen)解的是同一类问题,但它要求回合已经
- * claimTurn,而团队开台没有占回合,用不上。
+ * claimOwnTurn,而团队开台没有占回合,用不上。
  *
  * 标记必须挂在**这一次**开台上,不能是一个按 taskId 的全局 Set:停止之后用户另发一句就会
  * 开出新的一台,全局标记会被那台误消费,等于用户的新指令刚起步就被上一次的停止撤回。

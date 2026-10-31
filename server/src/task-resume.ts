@@ -17,7 +17,8 @@ import { activeReviewEvidence } from "./review-continuation.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 import { withTurnPreflight } from "./turn-entry-guard.js";
 import { checkpointWaitOrigin } from "./task-wait-ownership.js";
-import { releaseTurn, turnIdentity } from "./runs.js";
+import { releaseTurn } from "./runs.js";
+import type { TurnIdentity } from "./runs.js";
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
 // that was interrupted keeps a session row with a cliSessionId (server restart
@@ -29,19 +30,20 @@ import { releaseTurn, turnIdentity } from "./runs.js";
 // scheduler) keep chaining on the same promise.
 export async function resumeOrRunTask(
   taskId: string,
-  opts: { reason?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null } = {},
+  // turnHeld:入口占下的那把锁的身份(不是 true),见 continueTask 同名选项。
+  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
 ): Promise<void> {
   return withTurnPreflight(taskId, opts.turnHeld, () => resumeOrRunClaimedTask(taskId, opts));
 }
 
 async function resumeOrRunClaimedTask(taskId: string,
-  opts: { reason?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null }): Promise<void> {
+  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null }): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) throw new Error(checkpointBlocked);
   // `actingUserId` 一路原样往下传:它决定这一轮烧谁的 key(§八)。这里只是个中转,
   // 不给默认值 —— 后端触发的那几路本来就该退回任务归属人。
   const acting = opts.actingUserId ?? undefined;
-  const held = opts.turnHeld ? turnIdentity(taskId) : null;
+  const held = opts.turnHeld ?? null;
   // 启动来源与回合所有权是两件事,不能共用 turnHeld 当判据(第 6 轮审查:队列推进带
   // turnHeld 后,待发送交接误享了手动运行的冻结豁免,穿透分组暂停)。无人值守的启动
   // (队列推进/恢复分组/上游唤醒)从预检查到 spawn 隔着一串 await,用户可能在认领之前
@@ -110,7 +112,8 @@ async function resumeOrRunClaimedTask(taskId: string,
       }
       return;
     }
-    if (held && turnIdentity(taskId) === held) releaseTurn(taskId);
+    // 还的只能是入口交给我们的那一把(核验在 releaseTurn 里按 seq 做)。
+    if (held) releaseTurn(taskId, held);
     return;
   }
   const agent = (task.agentType as AgentType) ?? "claude";

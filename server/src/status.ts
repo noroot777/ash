@@ -105,7 +105,7 @@ async function writeTaskStatus(
     // **旁路回合例外**：审查轮/验证轮只读工作区、不产出新一版代码，页面不会在用户眼皮
     // 底下变成别的东西。收掉它等于每派一次审查就把用户正看着的预览关掉——而那十几分钟
     // 恰恰是最该自己点开看一眼的时候（见 review-turn.ts）。身份在这一刻已经落下：
-    // claimTurn/reclaimTurn 都排在 setStatus(running) 之前。
+    // claimOwnTurn/reclaimTurn 都排在 setStatus(running) 之前。
     if (rerun && !reviewTurnInFlight(taskId)) {
       try { await stopPreviewOnRerun(taskId); }
       catch (error) { await appendTaskTimeline(taskId, `旧预览回收暂缓，任务继续运行。${previewStopFailure(error).message}`); }

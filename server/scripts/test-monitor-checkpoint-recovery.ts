@@ -96,12 +96,15 @@ try {
     const fault = failCheckpointRestore();
     try {
       await rejectedDelivery(test);
-      assert.ok(runs.claimTurn(test.taskId));
-      await assert.rejects(resumeOrRunTask(test.taskId, { reason, turnHeld: true }), /续跑交代/);
+      // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+      const resumeTurn = runs.claimOwnTurn(test.taskId);
+      assert.ok(resumeTurn);
+      await assert.rejects(resumeOrRunTask(test.taskId, { reason, turnHeld: resumeTurn }), /续跑交代/);
       assert.equal(runs.isTurnClaimed(test.taskId), false);
       assert.equal(await continueTask(test.taskId, "BYPASS_INPUT", { system: reason }), false);
-      assert.ok(runs.claimTurn(test.taskId));
-      await runTask(test.taskId, { turnHeld: true });
+      const runTurn = runs.claimOwnTurn(test.taskId);
+      assert.ok(runTurn);
+      await runTask(test.taskId, { turnHeld: runTurn });
       assert.equal(runs.isTurnClaimed(test.taskId), false);
       assert.equal(input().includes("BYPASS_INPUT"), false);
       assert.equal(hits(test.checkpoint), 0);
@@ -131,7 +134,8 @@ try {
       await cancelPendingMonitorEvents(test.taskId);
       assert.equal((await rowOf(test.messages[0]!.id)).status, "canceled");
       assert.equal((await rowOf(test.messages[0]!.id)).checkpointTaken, test.checkpoint);
-      assert.equal(await enterTurn({ taskId: test.taskId, source: { role: "single" } }), false);
+      // null = 这一轮不起(enterTurn 现在交回身份而不是 true,第 2 轮审查 F1)。
+      assert.equal(await enterTurn({ taskId: test.taskId, source: { role: "single" } }), null);
       assert.equal(await enterLeadDelivery({ taskId: test.taskId }), null);
       assert.equal(runs.isTurnClaimed(test.taskId), false);
     } finally {
@@ -213,8 +217,9 @@ try {
       return active;
     };
     try {
-      assert.ok(runs.claimTurn(test.taskId));
-      await assert.rejects(resumeOrRunTask(test.taskId, { turnHeld: true }), /INJECT_RUN_RECEIPT_INSERT_FAILURE/);
+      const receiptTurn = runs.claimOwnTurn(test.taskId);
+      assert.ok(receiptTurn);
+      await assert.rejects(resumeOrRunTask(test.taskId, { turnHeld: receiptTurn }), /INJECT_RUN_RECEIPT_INSERT_FAILURE/);
       assert.equal(runs.isTurnClaimed(test.taskId), false);
       assert.equal((await taskOf(test.taskId)).resumePrompt, test.checkpoint);
     } finally {

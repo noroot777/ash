@@ -28,10 +28,15 @@ try {
       if (!injected) { injected = true; throw new Error("ONCE_REVIEW_PREFLIGHT_FAULT"); }
       return original.apply(this, args);
     };
+    // `turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。这一轮的锁是派审那一侧占下的
+    // (所以这里再 claim 一次是占不到的),交下去的就是它那一份 —— 本节验的正是「读失败要把
+    // 调用方那把锁还回去」。
+    const entryTurn = runs.turnIdentity(review.taskId);
+    assert.ok(entryTurn, "台子前提:派审已经占住这一轮");
     try {
       await assert.rejects(entry === "continue"
-        ? continueTask(review.taskId, "Continue", { turnHeld: true })
-        : resumeOrRunTask(review.taskId, { reason: "run", turnHeld: true }), /ONCE_REVIEW_PREFLIGHT_FAULT/);
+        ? continueTask(review.taskId, "Continue", { turnHeld: entryTurn })
+        : resumeOrRunTask(review.taskId, { reason: "run", turnHeld: entryTurn }), /ONCE_REVIEW_PREFLIGHT_FAULT/);
     } finally { db.transaction = original; }
     assert(injected);
     assert.equal(runs.isTurnClaimed(review.taskId), false);

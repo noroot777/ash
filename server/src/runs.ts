@@ -9,12 +9,12 @@ import { acknowledgeStartReceipt, registerStartReceipt } from "./task-start-rece
 // turn-lock.ts —— 两摊各自的使用方几乎不重叠,挤在一个文件里已经过了 700 行上限
 // (第 3 轮审查 F3)。八十多个文件照旧从这里 import,所以原样转出去。
 export {
-  bindTurnToken, claimIdleWorkspaceTurns, claimTurn, claimWakeTurn, claimWorkspaceTurn,
-  continueWhenIdle, freezeStartingTurn, isTurnClaimed, reclaimTurn, releaseTurn,
-  SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, turnIdentity, turnRole, turnSourceReview,
-  turnSourceRole, waitForTurnIdle, whenTurnIdle,
+  bindTurnToken, claimIdleWorkspaceTurns, claimOwnTurn, claimTurn, claimWakeTurn,
+  claimWorkspaceTurn, continueWhenIdle, freezeStartingTurn, isTurnClaimed, reclaimTurn,
+  releaseHeldTurn, releaseTurn, SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, turnIdentity,
+  turnRole, turnSourceReview, turnSourceRole, waitForTurnIdle, whenTurnIdle,
 } from "./turn-lock.js";
-export type { TurnIdentity, TurnReview, TurnSource } from "./turn-lock.js";
+export type { TurnIdentity, TurnOwner, TurnReview, TurnSource } from "./turn-lock.js";
 
 // Registry of in-flight agent subprocesses, keyed by task, so a running task can
 // be killed on demand (manual stop / group pause) — the orchestrator/duet

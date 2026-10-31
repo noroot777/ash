@@ -49,7 +49,7 @@ import {
   shouldAutoDispatchReview,
   withVerifyExecutor,
 } from "./review-policy.js";
-import { claimTurn, continueWhenIdle, releaseTurn } from "./runs.js";
+import { claimOwnTurn, continueWhenIdle, releaseTurn } from "./runs.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { advanceWorkflowFrom, settleFrom } from "./workflow-advance.js";
 import { applyRunFailPolicy } from "./workflow-steps.js";
@@ -150,8 +150,11 @@ export async function startVerifyRound(
   // 到那个回合之后——UI 与验收门禁提前宣称「正在验证」（审查实测）。占位身份 dispatch
   // 覆盖校验到排队注册，finally 释放后验证投递自然开跑。结算内部的自动触发不走这里
   //（那时收尾回合正占着 turn，天然互斥；gate 放行路径由验收锁互斥）。
+  // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
+  // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  if (holdingTurn && !claimTurn(targetId, "dispatch")) {
+  const turn = holdingTurn ? claimOwnTurn(targetId, "dispatch") : null;
+  if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再派验证");
   }
   try {
@@ -268,7 +271,7 @@ export async function startVerifyRound(
   );
   return { round };
   } finally {
-    if (holdingTurn) releaseTurn(targetId);
+    if (turn) releaseTurn(targetId, turn);
   }
 }
 

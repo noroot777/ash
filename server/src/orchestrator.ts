@@ -158,14 +158,17 @@ export async function continueTask(
   // turn-entry-guard.ts 的文件头：它们共享的不变量是「从占住位到交给下面那个大 try
   // 之间，每一条出路都得自己把位还回去」，散着写时新加一道闸就会漏掉这件事。
   const sessionRole = turnSourceRole(opts.turnSource) as Extract<SessionRole, "single" | "reviewer">;
-  if (!await enterTurn({
+  // 交回来的是**这一把锁的身份**:这一整轮里凡是要还锁、要转正的地方都拿它核(本轮审查
+  // F1 —— 按任务 id 还锁会撤掉人工放开之后那一轮的互斥,见 turn-lock.ts `endOwnTurn`)。
+  const turn = await enterTurn({
     taskId,
     handoff: head?.handoff,
     turnHeld: opts.turnHeld,
     wakeGuard: opts.wakeGuard,
     pendingMessageIds: opts.pendingMessageIds,
     source: opts.turnSource ?? { role: "single" },
-  })) return false;
+  });
+  if (!turn) return false;
   // catch 那边署名用的就是它：出错时 task 可能压根没读出来，所以按 head 的快照兜底，
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
   const agentType = opts.agent ?? (head?.agentType as AgentType) ?? "claude";
@@ -218,7 +221,7 @@ export async function continueTask(
     let sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
     // DB 里的 verifyRound/nativeTurn 会在结算中途先清，handle/turn 要到 finally 才释放。
     // 把旁路身份也钉进运行时 turn role，关闭那段“标记已清、进程仍可被引导”的小窗口。
-    if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
+    if (sideTurn && sessionRole === "single") reclaimTurn(taskId, turn, nativeCommand ? "native" : "side");
     // 「这一回合是任务的执行」:system(后端代写的续跑)或 executionTurn(让位交接
     // 把用户回复当启动输入)。只影响续聊判定,输入来源各自另算(见 opts.executionTurn)。
     const execution = !!opts.system || !!opts.executionTurn || isGoalRecovery(slash);
@@ -273,7 +276,7 @@ export async function continueTask(
     const planning = !resetPlan && !goalExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
     if (planning) {
       sideTurn = true;
-      if (sessionRole === "single") reclaimTurn(taskId, "side");
+      if (sessionRole === "single") reclaimTurn(taskId, turn, "side");
       await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status }).where(eq(tasks.id, taskId));
     }
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
@@ -695,7 +698,7 @@ export async function continueTask(
     // 收掉**,只注销会留下一个没人读输出、停止按钮也碰不到的 CLI(第 1 轮审查 F1;三态
     // 和「为什么认领过的只注销不杀」见 runs.ts 顶部)。认领过的走到这里只是注销。
     if (handle) discardStartingRun(taskId, handle);
-    releaseTurn(taskId);
+    releaseTurn(taskId, turn);
     // 同 task-run：全出口注销,不依赖走到收尾函数（第 6 轮审查必须修 1）。
     closeTaskTurns(taskId);
     if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));

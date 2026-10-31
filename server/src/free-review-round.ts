@@ -17,7 +17,7 @@ import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { headCommit } from "./git.js";
 import { cleanupPostMergeReviewWorktree, preparePostMergeReviewWorktree } from "./post-merge-review-worktree.js";
-import { claimTurn, continueWhenIdle, releaseTurn } from "./runs.js";
+import { claimOwnTurn, continueWhenIdle, releaseTurn } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { turnProducedWork } from "./transcript.js";
@@ -273,8 +273,11 @@ export async function reopenFailedFreeReview(
   }
   // 与即时派审同级的原子互斥（理由见 free-workflow.ts 的 startFreeReview）：占位身份
   // dispatch，校验到写库整段占住；释放后审查消息才可能真正投递。
+  // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
+  // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  if (holdingTurn && !claimTurn(taskId, "dispatch")) throw new Error("任务回合正在进行，结束后再重跑");
+  const turn = holdingTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  if (holdingTurn && !turn) throw new Error("任务回合正在进行，结束后再重跑");
   try {
     if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
     try {
@@ -306,6 +309,6 @@ export async function reopenFailedFreeReview(
       releaseFreeWorkflowAction(taskId);
     }
   } finally {
-    if (holdingTurn) releaseTurn(taskId);
+    if (turn) releaseTurn(taskId, turn);
   }
 }

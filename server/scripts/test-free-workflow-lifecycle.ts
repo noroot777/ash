@@ -47,7 +47,7 @@ try {
   const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { reconcileFreeReviews } = await import("../src/free-workflow.js");
-  const { claimTurn, releaseTurn } = await import("../src/runs.js");
+  const { claimOwnTurn, claimTurn, releaseTurn } = await import("../src/runs.js");
   const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
@@ -512,8 +512,10 @@ try {
 
   // ㉑ turnHeld 占位传递：入口原子占位后 runTask 接管同一把锁并在结束时释放。
   await createTasks([{ ...baseTask, id: "held-task", title: "held", reasoningEffort: "ultra-fake" }]);
-  assert.equal(claimTurn("held-task", "single"), true, "入口占位");
-  await runTask("held-task", { turnHeld: true }); // 解析必炸；接管的锁由 finally 释放
+  // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+  const entryTurn = claimOwnTurn("held-task", "single");
+  assert.ok(entryTurn, "入口占位");
+  await runTask("held-task", { turnHeld: entryTurn }); // 解析必炸；接管的锁由 finally 释放
   assert.equal(claimTurn("held-task"), true, "turnHeld 接管的锁必须在回合结束时释放");
   releaseTurn("held-task");
 

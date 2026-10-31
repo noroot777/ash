@@ -54,7 +54,7 @@ import { retireHistoricalReview } from "./review-retirement.js";
 import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { claimTurn, releaseTurn, turnIdentity, turnRole } from "./runs.js";
+import { claimOwnTurn, releaseTurn, turnIdentity, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
@@ -318,7 +318,7 @@ export async function reportFreeReviewConclusion(
   if (stage !== "verified" && stage !== "verify_failed") {
     throw new Error("自由工作流审查回合只能上报 verified 或 verify_failed");
   }
-  // 结论必须出自**活跃的审查回合**：读 turn 的运行时身份（claimTurn 时由 opts 显式落下），
+  // 结论必须出自**活跃的审查回合**：读 turn 的运行时身份（claimOwnTurn 时由 opts 显式落下），
   // 不查 sessions 表——session 行的 endedAt 既不代表进程活着、也不代表回合归属（reattach
   // 收尾先写 endedAt 再结算，正是误判窗口）。迟到重放（审查回合已结束 → turn 已释放）和
   // 普通回合的误投（turnRole=single）都拒。MCP 补捞豁免这一检查——它发生在回合收尾、
@@ -351,7 +351,7 @@ export async function reportFreeReviewConclusion(
 }
 
 // 自由工作流的回合结算只分两种回合，**按回合自己的 role 分流**，不按「库里有没有
-// reviewing run」猜——派审请求可能在普通回合 claimTurn 之后才插入 reviewing run
+// reviewing run」猜——派审请求可能在普通回合 claimOwnTurn 之后才插入 reviewing run
 // （TOCTOU），靠查库会把普通回合冒充成审查回合、把没有结论的审查链错杀成 failed：
 // - role=reviewer（审查旁路回合）：按 conclusion 落 round/run，未通过且还有轮数时
 //   发修复消息并挂**自动续轮预约**（runId）。
@@ -406,7 +406,7 @@ export async function handleFreeWorkflowSettlement(
       // 审查该看的是它们都说完之后的工作区，而不是半截的。
       //
       // 让路必须发生在这里（结算内），不能指望两条路在释放点上「公平竞争」——它们抢的是
-      // 同一把单飞锁，而审查走的 `continueWhenIdle` 排到队头就**同步** claimTurn
+      // 同一把单飞锁，而审查走的 `continueWhenIdle` 排到队头就**同步** claimOwnTurn
       // （runs.ts），消息投递第一步却是 `await beginDelivery`，于是审查一定赢、消息被挡回
       // 托盘（`abortDelivery`）等下一轮。谁先注册 waiter 都改不了这个结果。
       //
@@ -547,8 +547,11 @@ export async function startFreeReview(
   // 是 TOCTOU：检查后普通回合仍能 claim 成功，两边同时启动（审查实测五连中）。审查
   // 投递（whenTurnIdle）在自己占着 turn 时排队，finally 释放后自然开跑。
   // 结算内部的派审（预约消费）不走这里：那时收尾回合正占着 turn，天然互斥。
+  // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
+  // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  if (holdingTurn && !claimTurn(taskId, "dispatch")) {
+  const turn = holdingTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再派审");
   }
   try {
@@ -604,6 +607,6 @@ export async function startFreeReview(
     releaseFreeWorkflowAction(taskId);
   }
   } finally {
-    if (holdingTurn) releaseTurn(taskId);
+    if (turn) releaseTurn(taskId, turn);
   }
 }

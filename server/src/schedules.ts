@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { claimTurn, releaseTurn } from "./runs.js";
+import { claimOwnTurn, releaseTurn } from "./runs.js";
 import { seatThenStart } from "./queue-seat.js";
 import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
@@ -88,9 +88,10 @@ async function fire(taskId: string): Promise<boolean> {
   // beginAccepting→isTurnClaimed 互为镜像,任意交错至少一方退避;退避不消费班次,
   // 下个 tick 再试。duet 走同一把锁:它原来在占位之前就 fire-and-forget 并返回
   // true,于是验收锁里的 duet 一步没跑、once 班次却被永久消费(审查实测)。
-  if (!claimTurn(taskId, t.mode === "duet" ? "duet" : "single")) return false;
+  const turn = claimOwnTurn(taskId, t.mode === "duet" ? "duet" : "single");
+  if (!turn) return false;
   if (isAcceptingTask(taskId)) {
-    releaseTurn(taskId);
+    releaseTurn(taskId, turn);
     return false;
   }
   // 队列执行认领(queue-seat.ts):排在后面的任务到了定时启动时间,也得等前项结束 ——
@@ -98,8 +99,8 @@ async function fire(taskId: string): Promise<boolean> {
   // 按自己的状态放行,同队前项还在跑就开了第二个(第 8 轮审查拦验收 1:once 到点
   // 双跑,且班次被消费)。被挡同样不消费班次:once 保持 enabled、不写 lastRunAt,
   // 前项结束后的下一个 tick 再试。seatThenStart 会给启动挂收尾,起跑失败按守卫回滚占位。
-  const started = await seatThenStart(taskId, () =>
-    t.mode === "duet" ? runDuet(taskId, { turnHeld: true }) : runTask(taskId, { turnHeld: true }));
+  const started = await seatThenStart(taskId, turn, () =>
+    t.mode === "duet" ? runDuet(taskId, { turnHeld: turn }) : runTask(taskId, { turnHeld: turn }));
   if (!started.ok) {
     return false;
   }

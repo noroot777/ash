@@ -44,8 +44,10 @@ try {
       if (existingSession) await db.insert(schema.sessions).values({ id: `old-${imported.taskId}`, taskId: imported.taskId,
         role: "single", agentType: "claude", executor: "test", cliSessionId: "old-single", startedAt: new Date().toISOString() });
       const old = await row(imported.taskId);
-      assert(runs.claimTurn(imported.taskId));
-      await resumeOrRunTask(imported.taskId, { reason: existingSession ? "wake" : "run", turnHeld: true });
+      // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+      const importedTurn = runs.claimOwnTurn(imported.taskId);
+      assert(importedTurn);
+      await resumeOrRunTask(imported.taskId, { reason: existingSession ? "wake" : "run", turnHeld: importedTurn });
       assert.equal((await row(imported.taskId)).directionEpoch, old.directionEpoch);
       assert.equal((await row(imported.taskId)).resumePrompt, null);
       assert.equal(runs.isTurnClaimed(imported.taskId), false);
@@ -97,8 +99,9 @@ try {
     return active;
   };
   const old = await row(ordinary.taskId);
-  assert(runs.claimTurn(ordinary.taskId));
-  try { await resumeOrRunTask(ordinary.taskId, { reason: "run", turnHeld: true }); }
+  const ordinaryTurn = runs.claimOwnTurn(ordinary.taskId);
+  assert(ordinaryTurn);
+  try { await resumeOrRunTask(ordinary.taskId, { reason: "run", turnHeld: ordinaryTurn }); }
   finally { dbClient.transaction = transaction; }
   assert(raced);
   const rejected = await row(ordinary.taskId);

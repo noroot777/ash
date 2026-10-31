@@ -3,7 +3,7 @@
 // 重跑上一回合(retry-turn)、消息补投扫描(pending-messages)、队列推进(advanceQueue)。
 //
 // 为什么:这些入口各自都是「先读库检查、隔着若干 await、再把状态落库/把任务拉起」。检查
-// 读的是 tasks.status,而另一个入口在自己的窗口里只占了**任务级**回合锁(claimTurn)、
+// 读的是 tasks.status,而另一个入口在自己的窗口里只占了**任务级**回合锁(claimOwnTurn)、
 // 状态还停在终态 —— 于是两个入口各自读到「整队空闲」,同一条串行队列上两个成员一起跑
 // (第 7 轮审查:重跑上一回合在异步读旧记录期间保持 done,扫描判定整队空闲并启动另一个
 // 失败成员,普通 HTTP 并发 10/10 复现)。任务级锁解决不了跨成员互斥;多查几次也关不掉
@@ -26,7 +26,8 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
 import { manualStartBlockers } from "./queues.js";
-import { SEAT_ROLLBACK_ROLE, claimNonTurn, releaseTurn, turnIdentity, whenTurnIdle } from "./runs.js";
+import { SEAT_ROLLBACK_ROLE, claimNonTurn, releaseTurn, whenTurnIdle } from "./runs.js";
+import type { TurnOwner } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
 import { waitForStartReceipt } from "./task-start-receipt.js";
@@ -150,7 +151,7 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
     } catch (err) {
       // 占位写入失败 ≠ 肯定没写入:setTaskStatus 写完 status 还要读 sessions 广播,
       // UPDATE 已提交、附带读取才超时的话任务已经是 queued(第 7 轮审查同款)。这里
-      // 异常若直接外抛,手动启动入口(/run 等)在 claimTurn 之后的 await 就会把 500
+      // 异常若直接外抛,手动启动入口(/run 等)在 claimOwnTurn 之后的 await 就会把 500
       // 抛给用户、回合锁没人释放,此后一律 409「回合正在进行」(第 ll7XKsu_ps0n 链
       // 第 1 轮)。按失败认领返回,让调用方走统一的「认领失败」收口(释放自己的锁/
       // 暂存消息);可能的 queued 遗留延迟交给 queue-seat-reclaim 的守卫补偿按持久结果收拾。
@@ -243,14 +244,18 @@ function makeSeat(reservation: TaskQueueReservation, queueId: string): QueueSeat
 // 回滚占位,别让任务卡在 queued(真跑起来了 release 是 no-op)。
 export async function seatThenStart(
   taskId: string,
+  // 调用方刚刚 `claimOwnTurn` 占下的那把锁的**身份**。早先这里是自己现读一次
+  // (`turnIdentity(taskId)`)—— 读到的必然是「现在占着的那一把」,也就是说人工放开拔走
+  // 之后另一轮占上时,读到的是后来者,收尾时还掉的就是后来者那把互斥(本轮审查 F1)。
+  // 凭据只能由占位那一刻产生,所以它是参数。
+  owner: TurnOwner,
   start: (seat: QueueSeat | null) => Promise<unknown>,
 ): Promise<{ ok: true } | { ok: false; blockers: string[]; transient?: boolean; self?: boolean }> {
-  const owner = turnIdentity(taskId);
   let claim: QueueSeatClaim;
   try {
     claim = await claimQueueSeat(taskId);
   } catch (err) {
-    // 临界区里的读也可能撞锁:异常传出去就是手动入口 claimTurn 之后的 500 + 锁泄漏
+    // 临界区里的读也可能撞锁:异常传出去就是手动入口 claimOwnTurn 之后的 500 + 锁泄漏
     // (调用方的「认领失败」分支走不到)。读失败没有写入遗留,按失败
     // 认领返回即可,下一次点运行就是干净的重试。
     console.error(`[ash] 队列占位认领读取失败(${taskId}):`, err);

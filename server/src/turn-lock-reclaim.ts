@@ -13,7 +13,7 @@
 // ## 为什么这里只诊断、不自动放开
 //
 // **年龄证不了持有者已经死了。** 瞬时快照分不出「卡住了」和「正常起跑中」—— 两者都是
-// 「锁占着、进程还没在册、令牌还没绑」:`claimTurn` 排在 `trackRun` 之前(所以 `isRunning`
+// 「锁占着、进程还没在册、令牌还没绑」:`claimOwnTurn` 排在 `trackRun` 之前(所以 `isRunning`
 // 答不了「有没有人正在起跑」,见 runs.ts `claimReconcileTurn`),`bindTurnToken` 排在它之后。
 // 于是只剩「这个状态持续了多久」可用,而**有一整类持有者的等待本来就没有时长上界**:
 //   · duet 的人工裁决门 —— `duet/index.ts` `runGate` 里 `await waitForGate(taskId)`,
@@ -65,7 +65,7 @@ import { noteSystemNotice } from "./user-action-rejection.js";
 /**
  * 一把「无句柄、无令牌」的锁占多久开始报可疑。
  *
- * 为什么 60 秒够:两条起跑路径从 `claimTurn` 到 `bindTurnToken` 之间只有几次库读加一个
+ * 为什么 60 秒够:两条起跑路径从 `claimOwnTurn` 到 `bindTurnToken` 之间只有几次库读加一个
  * 事务(task-run.ts、orchestrator.ts 都是先绑令牌、再去准备工作目录和 spawn),毫秒级。
  * 留这么宽只为兜住一种已知的慢:SQLite 写锁撞上时那个事务会卡几秒(第 6、7 轮审查注入
  * 过 7 秒)。等待无上界的那几种角色不走年龄判据,见 `UNBOUNDED_WAIT_ROLES`。

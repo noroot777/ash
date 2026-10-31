@@ -1,6 +1,6 @@
 import type { AgentType } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
-import type { TurnSource } from "./runs.js";
+import type { TurnIdentity, TurnSource } from "./runs.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -84,11 +84,15 @@ export type ContinueTaskOptions = {
    */
   actingUserId?: string | null;
   /**
-   * 调用方已在入口**原子占住** turn（claimTurn 成功后传 true）：这里不再抢锁，用
+   * 调用方已在入口**原子占住** turn（传 `claimOwnTurn` 交回来的那份身份）：这里不再抢锁，用
    * sessionRole 接管（reclaimTurn）并照常在 finally 释放。入口占位是并发双 202 谎报
    * 的唯一解——只读预检查后的任何 await 间隙都可能被另一次启动抢先。
+   *
+   * **为什么是身份不是 true**(本轮审查 F1):交接与释放之间隔着整整一回合,人工放开可以在
+   * 那段间隙里把锁拔走、让下一轮占上;按任务 id 还锁撤掉的就是后来者那把互斥。接管与释放
+   * 都按这份身份核(理由整段在 turn-lock.ts 的 `endOwnTurn`)。
    */
-  turnHeld?: boolean;
+  turnHeld?: TurnIdentity | null;
   /**
    * 起跑前再查一遍冻结事实（分组暂停 / 任务被删或归档），命中就在 spawn 之前撤回。
    *

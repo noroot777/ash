@@ -4,7 +4,8 @@ import { hasCliGoalHold } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks, groups, queueAdvanceIntents, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { claimTurn, freezeStartingTurn, isTurnClaimed, releaseTurn, stopTask, turnIdentity } from "./runs.js";
+import { claimOwnTurn, freezeStartingTurn, releaseTurn, stopTask } from "./runs.js";
+import type { TurnIdentity } from "./runs.js";
 import { noteMissedAdvance, serializeQueueClaims } from "./queue-seat.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
@@ -146,7 +147,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
   // 刚认领的占位在这里看不见,按旧快照再拉起一个就是同队双跑(第 7 轮审查:跨入口
   // 竞争)。临界区里只做挑选与占位,真正拉起(resumeOrRunTask)在链外。
   const next = await serializeQueueClaims<(typeof tasks.$inferSelect & {
-    reservation: TaskQueueReservation; advanceRequest: QueueAdvanceRequest;
+    reservation: TaskQueueReservation; advanceRequest: QueueAdvanceRequest; turn: TurnIdentity;
   }) | "paused" | null>(async () => {
     const rows = await queueMembers(queueId);
     const candidate = selectNextInQueue(rows);
@@ -205,10 +206,11 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     // 观察空闲 ≠ 取得所有权:上一版先 isTurnClaimed 再 setQueued,检查与落位之间的
     // await 窗口里 checkpoint 追问这类合法入口照样抢走回合 —— 推进把追问的 running
     // 覆盖成 queued、续跑被旧 reply 占的锁挡回、追问结算恢复 paused,交接蒸发
-    // (第 5 轮审查确定性复现)。claimTurn 是同步的内存原子操作,在临界区里直接
+    // (第 5 轮审查确定性复现)。claimOwnTurn 是同步的内存原子操作,在临界区里直接
     // **认领**所有权:抢到才落 queued,续跑带 turnHeld 进场;抢不到(占用方多半是
     // 刚进来的旁路追问)记账,等它 releaseTurn 后回调补办这次推进。
-    if (!claimTurn(candidate.id)) {
+    const turn = claimOwnTurn(candidate.id);
+    if (!turn) {
       deferQueueAdvance(queueId);
       return null;
     }
@@ -221,7 +223,7 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
     try {
       await reserveQueuedTask(reservation);
     } catch (err) {
-      releaseTurn(candidate.id);
+      releaseTurn(candidate.id, turn);
       console.error(`[ash] 队列推进占位写入失败(${candidate.id}),释放预认领并稍后补偿:`, err);
       // 失败 ≠ 肯定没写入:setTaskStatus 写完 status 还要读 sessions 算用时再广播,
       // UPDATE 已提交、附带 SELECT 才超时的话任务已经是 queued —— selectNextInQueue
@@ -231,18 +233,21 @@ async function advanceQueueAttempt(queueId: string, attempt: QueueAdvanceAttempt
       scheduleSeatReclaim(candidate.id, queueId, candidate.status as TaskStatus, 1_000, reservation);
       return null;
     }
-    return { ...candidate, reservation, advanceRequest };
+    // `turn` 一路带给下面的续跑与收尾:认领与那条异步出路之间隔着整段启动,人工放开可以
+    // 在其间把这把锁拔走、另一轮占上(本轮审查 F1)。
+    return { ...candidate, reservation, advanceRequest, turn };
   });
   if (next === "paused") return;
   if (next && typeof next === "object") {
     const prevStatus = next.status as TaskStatus; // 临界区里读到的占位前状态
-    void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { reason: "queue", turnHeld: true })
+    void waitForStartReceipt(next.id, () => resumeOrRunTask(next.id, { reason: "queue", turnHeld: next.turn })
       .catch((err) => {
         console.error(`[ash] 队列推进续跑(${next.id})失败:`, err);
-        // 接管前就抛了(读库/取指令那串 await):turnHeld 的锁还挂在我们头上 —— 占着
-        // 期间别的入口 claim 不进来,所以此刻还被占的锁必是这次认领的,由认领方收回。
-        // 接管后的异常由 continueTask 自己吸收并在 finally 释放,不会走到这里。
-        if (isTurnClaimed(next.id)) releaseTurn(next.id);
+        // 接管前就抛了(读库/取指令那串 await):turnHeld 的锁还挂在我们头上 —— 由认领方
+        // 按**自己那份身份**收回。接管后的异常由 continueTask 自己吸收并在 finally 释放,
+        // 不会走到这里。早先这里是「还占着就释放」:占着不等于占的是这一次认领的那把 ——
+        // 人工放开拔走之后另一轮合法占上,这一还就撤掉了后来者的互斥(本轮审查 F1)。
+        releaseTurn(next.id, next.turn);
       })
       .finally(() => reclaimStrandedSeat(next.id, queueId, prevStatus, { reservation: next.reservation })))
       .then(async (started) => {
@@ -567,8 +572,8 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
         if (await preparePendingCheckpointStart(taskId)) return;
         const before = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
         if (!before || (before.status === "paused" && before.resumePrompt)) return;
-        if (!claimTurn(taskId)) return;
-        const owner = turnIdentity(taskId);
+        const owner = claimOwnTurn(taskId);
+        if (!owner) return;
         const reservation = taskQueueReservation(before);
         try {
           await reserveQueuedTask(reservation);
@@ -576,7 +581,7 @@ async function runParallel(groupId: string, attempted?: GroupLaunchRoster): Prom
           // 分组的并发上限才还是「同时 N 个在跑」。
           let run!: Promise<void>;
           spawned = await waitForStartReceipt(taskId, () => {
-            run = resumeOrRunTask(taskId, { reason: "group", turnHeld: true });
+            run = resumeOrRunTask(taskId, { reason: "group", turnHeld: owner });
             run.catch(() => {}); // 只为了别在 await 之前变成 unhandled;原 promise 照旧抛给下面
             return run;
           });

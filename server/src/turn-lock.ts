@@ -34,6 +34,15 @@ import type { StopSettle } from "./runs.js";
  *    (`bindTurnToken`),所以「库里的令牌」和「内存里的这一轮」说的是同一件事。
  */
 export type TurnReview = { run: string; round: number };
+/**
+ * **放锁凭据** —— 「我占到的是哪一把」。`claimTurn` / `reclaimTurn` / `enterTurn` 交回来的
+ * `TurnIdentity` 结构上就是它,所以拿着身份就能还锁,拿不到身份就还不了别人的锁。
+ *
+ * 为什么单独一个类型而不是直接收 `TurnIdentity`:条件释放只认号码(`seq`),身份里其余几样
+ * (role/token/review)在占位转正时会变 —— 签名只要号码,就不会有人以为「传一份新读出来的
+ * 身份」也算凭据(那正是按 id 删锁的变装版:现读的身份必然等于现在那把锁)。
+ */
+export type TurnOwner = { readonly seq: number };
 export type TurnIdentity = {
   role: string;
   review: TurnReview | null;
@@ -159,15 +168,32 @@ export function takeStartFreeze(taskId: string): StopSettle | null {
 }
 
 /**
- * 抢占这个任务的回合；已经有人在跑就返回 false（调用方直接放弃这一次）。
+ * 抢占这个任务的回合，并把**放锁凭据**交回来；已经有人在跑就返回 null（调用方直接放弃
+ * 这一次，`if (!claimOwnTurn(...))` 照旧成立）。
  * role 是这一回合的身份（"single" / "reviewer"…）——它是**运行时事实**，审查结论的
  * 归属检查（report_stage）读它，而不是查 sessions 表猜（session 行的 endedAt 语义
  * 既不代表进程活着、也不代表回合归属，审查实测两个方向都错过）。
  */
+export function claimOwnTurn(taskId: string, role = "single", review: TurnReview | null = null): TurnIdentity | null {
+  if (turns.has(taskId)) return null;
+  const identity: TurnIdentity = { role, review, token: null, claimedAt: Date.now(), seq: nextTurnSeq++ };
+  turns.set(taskId, identity);
+  return identity;
+}
+
+/**
+ * 同上,但**只回答「抢到没抢到」**。
+ *
+ * 不交凭据,所以它只配得上一种形状:**同一段同步代码里 claim 完马上 release**(中间没有
+ * await ⇒ 没人可能把这把锁换掉 ⇒ 凭据没有信息量)。回归脚本里两百多处就是这种形状,诊断
+ * 端点同理。
+ *
+ * **生产路径一个都不许走这条**:凡是占位与释放之间隔着 await 的,必须 `claimOwnTurn` 把
+ * 身份留住、`releaseTurn(taskId, owner)` 还它(理由整段在 `endOwnTurn`)。这一条由 tsc 盯着
+ * server/src ——「要凭据」是 `releaseTurn` 的签名要求,拿布尔值的调用方在那里编译不过。
+ */
 export function claimTurn(taskId: string, role = "single", review: TurnReview | null = null): boolean {
-  if (turns.has(taskId)) return false;
-  turns.set(taskId, { role, review, token: null, claimedAt: Date.now(), seq: nextTurnSeq++ });
-  return true;
+  return claimOwnTurn(taskId, role, review) !== null;
 }
 
 /**
@@ -212,32 +238,65 @@ export function bindTurnToken(taskId: string, token: string): void {
 }
 
 /**
- * 占位转正：入口在最后一个 await 检查之后原子占住 turn（turnHeld 传递给启动函数），
- * 启动函数到位后用真实身份接管这把锁。只允许在**已持有**时调用——没占就转正是编程错。
+ * 占位转正：入口在最后一个 await 检查之后原子占住 turn（`turnHeld` 把那份身份传给启动
+ * 函数），启动函数到位后用真实身份接管这把锁。返回接管后的身份;**null = 这把锁已经不是
+ * 你那一把了**(人工放开拔走之后另一轮占上,或者压根没占),调用方据此当「这一轮没接管」
+ * 处理 —— 对拿着用户原话的调用方就是「一个字没送出去」,消息按未投递回托盘。
+ *
+ * 为什么它也必须核 owner:转正是**整份覆写**这把锁的 role/review。旧代次的转正会把后来者
+ * 那一轮的身份改成自己的(seq/token 还是后来者的),于是来源核验按一个谁都没授权过的组合
+ * 放行 —— 和裸删锁同一类(见 `endOwnTurn`),只是破坏面从互斥换成了身份。
  */
-export function reclaimTurn(taskId: string, role: string, review?: TurnReview | null): void {
+export function reclaimTurn(taskId: string, owner: TurnOwner, role: string,
+  review?: TurnReview | null): TurnIdentity | null {
   const held = turns.get(taskId);
-  if (!held) throw new Error(`reclaimTurn(${taskId}) without holding the turn`);
+  if (!held || held.seq !== owner.seq) {
+    // 出声:这一轮不接管了,而「锁被拔走」和「调用顺序写错了」在日志里长得一样。
+    console.error(`[ash] reclaimTurn(${taskId}) 的占位已经不在手上(seq=${owner.seq},`
+      + ` 现持有=${held ? held.seq : "无"}),这一轮不接管`);
+    return null;
+  }
   // `review` 省略 = 沿用占位时交代的那一份(占位转正不该把它抹掉);显式传 null 才是清掉。
   // `claimedAt` 沿用:转正接的是同一把锁,不是新占一次(见 `TurnIdentity.claimedAt`)。
-  turns.set(taskId, {
+  const identity: TurnIdentity = {
     role,
     review: review === undefined ? held.review : review,
     token: held.token,
     claimedAt: held.claimedAt,
     seq: held.seq, // 同一把锁,不换号(见 `TurnIdentity.seq`)
-  });
+  };
+  turns.set(taskId, identity);
+  return identity;
 }
 
-/** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
-export function releaseTurn(taskId: string): void;
-export function releaseTurn(taskId: string, owner: TurnIdentity | null): void;
-export function releaseTurn(taskId: string, owner?: TurnIdentity | null): void {
-  if (owner !== undefined && (!owner || turns.get(taskId) !== owner)) return;
+/**
+ * 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。
+ *
+ * **`owner` 不是可选的礼节**:它是 `claimTurn` / `reclaimTurn` / `enterTurn` 交回来的那份
+ * 身份,放的只能是**自己占下的那一把**。理由整段写在 `endOwnTurn` 上。
+ */
+export function releaseTurn(taskId: string, owner: TurnOwner): void {
   // 起跑冻结标记只属于刚结束的这一回合（没被消费 = 那一轮已经自己结束了）。留着它，
-  // 下一次运行会在起跑前被上一次的暂停莫名冻掉。
-  startFreeze.delete(taskId);
-  endTurn(taskId);
+  // 下一次运行会在起跑前被上一次的暂停莫名冻掉。clearFreeze 由原语按 owner 核过之后才做:
+  // 旧代次连「清掉新锁的冻结标记」都不许(那等于把下一轮该撤回的暂停意图吃掉)。
+  //
+  // `!owner` 只可能来自**不过 tsc 的回归脚本**(server/scripts 不在 tsconfig 的 include 里):
+  // 那边有两百多处 `releaseTurn(taskId)`,全是「同一段同步代码里 claim 完马上 release」的
+  // 形状。按「放掉此刻那一把」兼容它们;生产路径由签名兜住,少传一个参数就编译不过。
+  if (!owner) { releaseHeldTurn(taskId); return; }
+  endOwnTurn(taskId, owner, true);
+}
+
+/**
+ * **放掉这个任务此刻占着的那一把,不核凭据** —— 返回被放掉的那份身份(没占着是 null)。
+ *
+ * 和 `releaseTurn` 的差别就是「核不核」,所以它只配得上 `claimTurn`(布尔版)那同一种形状:
+ * 同一段同步代码里 claim 完马上 release。**凡是中间隔着 await 的,用它就是本轮审查 F1 那个
+ * 缺陷本身** —— 读到的「此刻那一把」必然等于现在占着的那一把,等于不核。
+ */
+export function releaseHeldTurn(taskId: string): TurnIdentity | null {
+  const held = turns.get(taskId);
+  return held ? endOwnTurn(taskId, held, true) : null;
 }
 
 /**
@@ -260,13 +319,14 @@ export function releaseTurn(taskId: string, owner?: TurnIdentity | null): void {
  * 否则标记会漏给下一次真启动。
  */
 export function claimWorkspaceTurn(taskIds: string[]): (() => void) | null {
-  const claimed: string[] = [];
+  const claimed: Array<{ taskId: string; owner: TurnIdentity }> = [];
   for (const taskId of new Set(taskIds)) {
-    if (claimTurn(taskId, WORKSPACE_TURN_ROLE)) {
-      claimed.push(taskId);
+    const owner = claimOwnTurn(taskId, WORKSPACE_TURN_ROLE);
+    if (owner) {
+      claimed.push({ taskId, owner });
       continue;
     }
-    for (const held of claimed) endTurn(held);
+    for (const held of claimed) endOwnTurn(held.taskId, held.owner, false);
     return null;
   }
   return releaserFor(claimed);
@@ -284,9 +344,10 @@ export function claimWorkspaceTurn(taskIds: string[]): (() => void) | null {
  * 占不到的那些不必回给调用方：force 路径本来就不再据此拒绝，知道也无事可做。
  */
 export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
-  const claimed: string[] = [];
+  const claimed: Array<{ taskId: string; owner: TurnIdentity }> = [];
   for (const taskId of new Set(taskIds)) {
-    if (claimTurn(taskId, WORKSPACE_TURN_ROLE)) claimed.push(taskId);
+    const owner = claimOwnTurn(taskId, WORKSPACE_TURN_ROLE);
+    if (owner) claimed.push({ taskId, owner });
   }
   return releaserFor(claimed);
 }
@@ -302,8 +363,9 @@ export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
  * 和真回合的差别同 `claimWorkspaceTurn`：**不碰起跑冻结**（这不是一个回合）。
  */
 export function claimWakeTurn(taskId: string): (() => void) | null {
-  if (!claimTurn(taskId, WAKE_TURN_ROLE)) return null;
-  return releaserFor([taskId]);
+  const owner = claimOwnTurn(taskId, WAKE_TURN_ROLE);
+  if (!owner) return null;
+  return releaserFor([{ taskId, owner }]);
 }
 
 /**
@@ -313,25 +375,52 @@ export function claimWakeTurn(taskId: string): (() => void) | null {
  * 和真回合的差别同 `claimWorkspaceTurn`:**不碰起跑冻结**(这不是一个回合)。
  */
 export function claimNonTurn(taskId: string, role: string): (() => void) | null {
-  if (!claimTurn(taskId, role)) return null;
-  return releaserFor([taskId]);
+  const owner = claimOwnTurn(taskId, role);
+  if (!owner) return null;
+  return releaserFor([{ taskId, owner }]);
 }
 
-/** 释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。 */
-function releaserFor(claimed: readonly string[]): () => void {
+/**
+ * 释放函数可重复调用（写操作的 finally 与错误路径可能都走到）。
+ *
+ * **闭包里存的是身份而不是任务 id**:占位与释放之间隔着整段 await(git 命令、通知落库),
+ * 人工放开可以在那段间隙里把这把锁拔走、另一轮合法占上 —— 按 id 释放拔的就是后来者那把
+ * (本轮审查 F1 在生产构建产物上实测:seq=1 的旧闭包撤掉了 seq=2,第三次认领随即成功)。
+ */
+function releaserFor(claimed: ReadonlyArray<{ taskId: string; owner: TurnIdentity }>): () => void {
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    for (const taskId of claimed) endTurn(taskId);
+    // 预占不碰起跑冻结(那是真回合的东西,理由见 `claimWorkspaceTurn` 的注释)。
+    for (const held of claimed) endOwnTurn(held.taskId, held.owner, false);
   };
 }
 
-/** 放锁 + 跑「等这一轮跑完」的回调。回合与 SCM 预占共用（前者另外还要清起跑冻结）。 */
-function endTurn(taskId: string): void {
+/**
+ * **唯一的放锁原语:只放 seq 对得上的那一把。** 返回被放掉的那份身份,null = 这把锁不是
+ * 你那一把(换了主人,或者早就没了)。
+ *
+ * 为什么没有「按任务 id 放锁」的形态 —— 那是本轮审查 F1 的根因:占位到释放之间全是 await,
+ * 而人工放开(`forceReleaseTurn`)可以合法地在那段间隙里把锁拔走、让下一轮占上。按 id 删锁
+ * 的调用在那一刻**没有任何办法**认出锁已经换了主人,于是:
+ *  · 删掉后来者那把 ⇒ 同一个任务两个回合并跑(实测 thirdClaimed=true);
+ *  · 排空后来者的 `afterTurn` ⇒ 那一轮真结束时该走的交接(排队投递、队列补推)已经被别人
+ *    消费掉了,再没有第二次;
+ *  · 清掉后来者的起跑冻结标记 ⇒ 下一轮该撤回的暂停意图凭空消失。
+ * 三件事因此全收在这一处,按 owner 核过之后才做 —— 「在某一个调用点补一次检查」挡不住它,
+ * 新接进来的释放入口默认就是没有核验的那一种。
+ *
+ * `seq` 全进程单调、删了也不复用(见 `TurnIdentity.seq`),所以它是这一层唯一可信的凭据:
+ * 身份**对象**在占位转正(`reclaimTurn`)时会被整份换掉,按对象比会把自己的锁也判成别人的。
+ */
+function endOwnTurn(taskId: string, owner: TurnOwner, clearFreeze: boolean): TurnIdentity | null {
+  const held = turns.get(taskId);
+  if (!held || held.seq !== owner.seq) return null;
+  if (clearFreeze) startFreeze.delete(taskId);
   turns.delete(taskId);
   const waiting = afterTurn.get(taskId);
-  if (!waiting) return;
+  if (!waiting) return held;
   afterTurn.delete(taskId);
   for (const fn of waiting) {
     try {
@@ -340,6 +429,7 @@ function endTurn(taskId: string): void {
       console.error(`[ash] after-turn hook failed for ${taskId}:`, error);
     }
   }
+  return held;
 }
 
 /**
@@ -378,11 +468,7 @@ export function heldTurns(): Array<TurnIdentity & { taskId: string }> {
  * 拔锁而不放它们走,任务照旧停在原地。
  */
 export function forceReleaseTurn(expected: { taskId: string; seq: number }): TurnIdentity | null {
-  const held = turns.get(expected.taskId);
-  if (!held || held.seq !== expected.seq) return null;
-  startFreeze.delete(expected.taskId);
-  endTurn(expected.taskId);
-  return held;
+  return endOwnTurn(expected.taskId, expected, true);
 }
 
 /**
@@ -452,7 +538,11 @@ export function continueWhenIdle(
     // run 和轮次,而创建入口过后只能查「现在是哪一次」—— 那两者在派审交接期并不是同一个
     // (第 10 轮审查 F1)。两样同在一个 `TurnSource` 里,所以这里不可能只带到一半。
     const source = (opts as { turnSource?: TurnSource | null }).turnSource ?? null;
-    if (!claimTurn(taskId, turnSourceRole(source), turnSourceReview(source))) {
+    // 占到的那份身份一路带到下面两条释放出路上:从这里到它们之间隔着 `await import`、
+    // 隔着一次查库,人工放开完全可以在那段间隙里把这把锁拔走、另一轮合法占上(见
+    // `endOwnTurn`)。按任务 id 还锁撤掉的就是后来者那把。
+    const owner = claimOwnTurn(taskId, turnSourceRole(source), turnSourceReview(source));
+    if (!owner) {
       console.error(`[ash] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
       void onError?.("回合被其它执行抢占，消息未能投递");
       return;
@@ -469,13 +559,13 @@ export function continueWhenIdle(
         //（第 4 轮审查确定性复现）。所以这里按事实查库权威复查一次。
         const freeze = await turnFreezeReason(taskId, true);
         if (!freeze) {
-          return (await import("./orchestrator.js")).continueTask(taskId, text, { ...opts, turnHeld: true });
+          return (await import("./orchestrator.js")).continueTask(taskId, text, { ...opts, turnHeld: owner });
         }
         // 撤回，且**不标停止落位**：这一轮一个字都没送出去，任务状态还停在上一轮的终态，
         // 标了就会被下一次真启动误读成「上一轮是被停的」。当作投递失败上报，调用方那套
         // 回滚（清 verifyRound、复位 stage、写时间线）才跑得到——不然任务会永久卡在
         // 「正在验证」而验证从未开始。
-        releaseTurn(taskId);
+        releaseTurn(taskId, owner);
         console.error(`[ash] continueWhenIdle(${taskId}) withdrawn: ${freeze.reason}`);
         try { await onError?.(`${freeze.reason}，这一轮在启动前被撤回`); } catch { /* 上报失败不再连锁 */ }
         return true;
@@ -493,7 +583,7 @@ export function continueWhenIdle(
           // 只有 import 失败或 continueTask 进入自己的 try/finally 之前抛错才会到这——
           // 那两种情况下锁还是这里占的那把，必须还回去（continueTask 一旦接管，正常与
           // 失败路径都由它自己释放，不会落到这个分支）。
-          releaseTurn(taskId);
+          releaseTurn(taskId, owner);
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[ash] continueWhenIdle(${taskId}) failed:`, error);
           try { await onError?.(message); } catch { /* 上报失败不再连锁 */ }

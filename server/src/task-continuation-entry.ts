@@ -4,6 +4,7 @@ import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { withTurnPreflight } from "./turn-entry-guard.js";
+import type { TurnIdentity } from "./runs.js";
 import { nativeCliCommand } from "./skills.js";
 import { preflightCliGoalCommand } from "./task-cli-state.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -15,7 +16,7 @@ type ContinuationEntryOptions = {
   reasoningEffort?: string | null;
   attachments?: string[];
   actingUserId?: string | null;
-  turnHeld?: boolean;
+  turnHeld?: TurnIdentity | null;
 };
 
 export async function prepareContinuationEntry<Options extends ContinuationEntryOptions>(

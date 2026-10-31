@@ -12,8 +12,8 @@ import type { RunHandle } from "./executors/types.js";
 import { db } from "./db/index.js";
 import { agents, freeReviewRuns, tasks, sessions } from "./db/schema.js";
 import {
-  bindTurnToken, claimTurn, discardStartingRun, finalizeAbandonedRun, releaseTurn, trackRun,
-  type Killable,
+  bindTurnToken, claimOwnTurn, discardStartingRun, finalizeAbandonedRun, releaseTurn, trackRun,
+  type Killable, type TurnIdentity,
 } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
@@ -142,7 +142,9 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
     // 都在 try 里面,于是那条 catch 既撤不掉句柄登记、也还不回回合锁 —— 第 8 轮审查 N1
     // 的同类窗口）。
     let handle: RunHandle | null = null;
-    let claimedTurn = false;
+    // 这一次接管占到的那把锁的**身份**(不是一个 true):下面的消费循环 finally 与接管失败
+    // 的 catch 都隔着 await,还锁只能还自己那一把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
+    let claimedTurn: TurnIdentity | null = null;
     try {
       const profile = (await db.select({ id: agents.id }).from(agents).where(eq(agents.name, sess.executor))).at(0);
       const ex = await resolveExecutorFor({
@@ -182,7 +184,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       // 没收口」一律回到「未知」那一档。但接回成功是相反方向的新证据——这条会话这一刻确实
       // 在写,不登记的话面板会把正在落盘的产物说成「算不准」（第 5 轮审查必须修 1 的对称面）。
       markTurnActive({ sessionId: sess.id, taskId: task.id, startedAt: sess.turnStartedAt ?? sess.startedAt });
-      // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimTurn 落下的），
+      // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimOwnTurn 落下的），
       // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
       //
       // **令牌和审查来源一起恢复**:接回的 agent 手里拿的还是上一轮那个 `ASH_TURN_TOKEN`,
@@ -195,7 +197,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
           .where(and(eq(freeReviewRuns.taskId, task.id), eq(freeReviewRuns.status, "reviewing")))).at(0) ?? null
         : null;
       // claimedTurn 是外层那个 let(不是 const):下面接管失败的 catch 出口也要凭它放锁。
-      claimedTurn = claimTurn(
+      claimedTurn = claimOwnTurn(
         task.id, sess.role,
         restoredReview ? { run: restoredReview.id, round: restoredReview.round } : null,
       );
@@ -232,7 +234,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         .catch((err) => console.error(`[ash] 接管 ${task.id} 的消费循环出错:`, err))
         .finally(async () => {
           discardStartingRun(task.id, adoptedHandle);
-          if (claimedTurn) releaseTurn(task.id);
+          if (claimedTurn) releaseTurn(task.id, claimedTurn);
           // 接回的这条消费循环结束了（正常收尾、抛错、被停都走这里）：活动登记跟着撤,
           // 否则一条接回后崩掉的会话会一直被读端当成「还在写」（第 6 轮审查必须修 1）。
           closeSessionTurns(sess.id);
@@ -259,14 +261,14 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       // 登记在 trackRun 之后、这段 try 里面,所以接管半路失败同样要撤（必须修 1 的同类出口）。
       closeSessionTurns(sess.id);
       // 句柄登记与回合锁同理,而且这两样漏了更狠:前者让 `isRunning` 永远判真（停止按钮亮着
-      // 却什么都停不了）,后者让这个任务在本进程里**再也起不来**（claimTurn 一直占着）。
+      // 却什么都停不了）,后者让这个任务在本进程里**再也起不来**（claimOwnTurn 一直占着）。
       // 接管失败就按中断处理,进程一起收掉 —— 同上面 `!ex.attach` 那一支的口径:别让它失联
       // 地跑着（第 8 轮审查 N1）。
       // 句柄构造成功了就按句柄那条路收(它自带同一个 finalizer);还没构造出来就走原始进程
       // 那个所有者 —— 后代回收和责任交接一个都不能少(第 11 轮审查 F2)。
       if (handle) discardStartingRun(task.id, handle);
       else await finalizeAbandonedRun(rawOwner);
-      if (claimedTurn) releaseTurn(task.id);
+      if (claimedTurn) releaseTurn(task.id, claimedTurn);
     }
   }
   return adopted;

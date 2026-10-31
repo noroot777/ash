@@ -8,8 +8,8 @@
 // 审查者中途提问时更是要照着页面才答得上来。
 //
 // 判据是 turn 的**运行时身份**，不是「库里有没有 reviewing run」：派审请求可能插在一个
-// 普通回合 claimTurn 之后才写进 run 行（free-workflow.ts 里那条 TOCTOU），按库猜会把一个
-// 正在改代码的普通回合认成审查回合，预览就起在了 agent 脚下。role 由 claimTurn /
+// 普通回合 claimOwnTurn 之后才写进 run 行（free-workflow.ts 里那条 TOCTOU），按库猜会把一个
+// 正在改代码的普通回合认成审查回合，预览就起在了 agent 脚下。role 由 claimOwnTurn /
 // reclaimTurn 落下，服务重启后 reattach 按原 role 复原，report_stage 认的也是它。
 import { turnRole } from "./runs.js";
 

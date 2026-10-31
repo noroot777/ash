@@ -61,7 +61,7 @@ export async function acceptanceState(taskId: string): Promise<{
   const task = related.find((row) => row.id === taskId) ?? null;
   if (!task) return { task: null, inFlightTasks: [] };
 
-  // DB status 之外还要看 turn 锁：续聊从 claimTurn 到写 running 之间有真实窗口，
+  // DB status 之外还要看 turn 锁：续聊从 claimOwnTurn 到写 running 之间有真实窗口，
   // 只看 status 会在 agent 已开跑时合并并删掉它正在用的 worktree（审查实测复现）。
   const inFlight = (row: typeof tasks.$inferSelect) =>
     row.status === "running" || row.status === "queued" || isTurnClaimed(row.id);

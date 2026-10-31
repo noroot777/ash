@@ -29,7 +29,7 @@ const { claimQueueSeat } = await import("../src/queue-seat.js");
 const { queueBlockers } = await import("../src/queues.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { taskStartStatus } = await import("../src/task-start-status.js");
-const { claimTurn, isTurnClaimed, releaseTurn, stopTask } = await import("../src/runs.js");
+const { claimOwnTurn, claimTurn, isTurnClaimed, releaseTurn, stopTask } = await import("../src/runs.js");
 await ensureSchema();
 
 const invocations = new Map<string, RunOpts[]>();
@@ -154,10 +154,12 @@ try {
         assert.equal(response.status, 202, JSON.stringify(result));
         if (path === "retry-turn") assert.equal(result.mode, "resume");
       } else {
-        assert.equal(claimTurn(taskId), true);
+        // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+        const directTurn = claimOwnTurn(taskId);
+        assert.ok(directTurn);
         await setTaskStatus(taskId, "queued");
         assert.equal(taskStartStatus(await row(taskId)), status);
-        direct = handDuePendingMessageToRun(taskId, { turnHeld: true, freezeGuard: false });
+        direct = handDuePendingMessageToRun(taskId, { turnHeld: directTurn, freezeGuard: false });
       }
       if (phase === "success") {
         const running = await active(taskId);
@@ -204,13 +206,14 @@ try {
         if (delivery === "legacy") await deliverPendingMessages(taskId);
         else {
           await db.update(groups).set({ paused: true }).where(eq(groups.id, taskId));
-          assert.equal(claimTurn(taskId), true);
+          const handoffTurn = claimOwnTurn(taskId);
+          assert.ok(handoffTurn);
           const claim = await claimQueueSeat(taskId);
           assert.equal(claim.ok, true);
           if (!claim.ok) assert.fail("handoff queue seat unavailable");
           const seat = claim.seat;
           assert.equal(seat?.prevStatus, status);
-          handoff = handDuePendingMessageToRun(taskId, { turnHeld: true, freezeGuard: false })
+          handoff = handDuePendingMessageToRun(taskId, { turnHeld: handoffTurn, freezeGuard: false })
             .finally(async () => { await seat?.release(); });
         }
       }

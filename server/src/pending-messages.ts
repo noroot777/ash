@@ -35,7 +35,7 @@ import { queueBlockers } from "./queues.js";
 import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { releaseTurn, turnSourceReview, whenTurnIdle } from "./runs.js";
-import type { TurnSource } from "./runs.js";
+import type { TurnIdentity, TurnSource } from "./runs.js";
 import { forgetStalled, forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, noteStalledPending, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
@@ -514,21 +514,22 @@ export function flushPendingForTask(taskId: string): void {
 // 调用方不要再开别的回合;false = 没有可交接的消息,照常走默认输入。
 export async function handDuePendingMessageToRun(
   taskId: string,
-  opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  // turnHeld:入口占下的那把锁的身份(不是 true),见 continueTask 同名选项。
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
 ): Promise<boolean> {
   if (dbClient.closed) return false;
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) {
-    if (opts.turnHeld) releaseTurn(taskId);
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     throw new Error(checkpointBlocked);
   }
   const checkpoint = await db.select({ prompt: tasks.resumePrompt }).from(tasks)
     .where(eq(tasks.id, taskId)).then((rows) => rows.at(0)?.prompt).catch((error) => {
-      if (opts.turnHeld) releaseTurn(taskId);
+      if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
       throw error;
     });
   if (checkpoint) {
-    if (opts.turnHeld) releaseTurn(taskId);
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     throw new Error("任务仍有续跑交代，先交付检查点再交接普通输入");
   }
   // 已有投递在途:它自己会开回合,这里再开默认「继续」就是同一任务两路起跑。
@@ -598,7 +599,7 @@ export async function handDuePendingMessageToRun(
     return true;
   } catch (error) {
     if (delivered) return true; // 已进会话之后才炸的是运行事故,不是未送达
-    if (!handedOff && opts.turnHeld) releaseTurn(taskId);
+    if (!handedOff && opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     const detail = error instanceof Error ? error.message : String(error);
     await cancelPendingMessage(due, `续跑失败：${detail}`).catch(() => {});
     return true;

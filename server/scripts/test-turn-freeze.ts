@@ -19,7 +19,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { freeReviewRounds, freeReviewRuns, groups, projects, regressionEvidence, sessions: sessionsTable, tasks } = await import("../src/db/schema.js");
-  const { claimTurn, continueWhenIdle, freezeStartingTurn, isTurnClaimed, releaseTurn, takeStopped, trackRun, untrackRun } =
+  const { claimOwnTurn, claimTurn, continueWhenIdle, freezeStartingTurn, isTurnClaimed, releaseTurn, takeStopped, trackRun, untrackRun } =
     await import("../src/runs.js");
   const { abortFrozen, abortIfFrozen, freezeFacts, FrozenTurn, takeFreeze, turnFreezeReason } = await import("../src/turn-freeze.js");
   const { pauseGroup } = await import("../src/scheduler.js");
@@ -143,11 +143,13 @@ try {
   const off = bus.subscribe((ev) => {
     if (ev.type === "agent.event" && ev.event.kind === "error") errors.push(ev.event.message);
   });
-  assert.ok(claimTurn("t2", "single"));
+  // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+  const t2Turn = claimOwnTurn("t2", "single");
+  assert.ok(t2Turn);
   freezeStartingTurn("t2");
   // 返回 false:spawn 前撤回 = 输入一个字没送出去(第 7 轮审查:按 true 处理会让
   // resumePrompt 调用方把检查点指令当已消费,暂停一次、指令永久丢失)。状态结算照旧。
-  assert.equal(await continueTask("t2", "再试一次", { turnHeld: true }), false, "spawn 前撤回要如实报「没送出去」,调用方才能把原文放回");
+  assert.equal(await continueTask("t2", "再试一次", { turnHeld: t2Turn }), false, "spawn 前撤回要如实报「没送出去」,调用方才能把原文放回");
   off();
   assert.equal(errors.length, 1, "撤回要如实报一条错误事件");
   assert.match(errors[0], /启动前被撤回/, "起跑闸必须排在 spawn 之前：拿到的应当是撤回，不是执行器的报错");

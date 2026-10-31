@@ -1,6 +1,6 @@
 // 起这一轮之前的那串闸：接力存档、回合占位、验收互斥、唤醒资格。
 //
-// 为什么单独一份：这几道闸共享一个**同一个人都看不见的不变量** —— 从 `claimTurn` 占住位
+// 为什么单独一份：这几道闸共享一个**同一个人都看不见的不变量** —— 从 `claimOwnTurn` 占住位
 // 到把活交给 `continueTask` 那个大 try 之间，每一条出路都得自己把占位还回去，大 try 的
 // finally 管不到这一段。散在那个函数里的时候，新加一道闸就会漏掉这件事：第 4 轮加的
 // `wakeGuard` 要读库，一次读失败把异常抛在这条缝里，占位就留在内存里没人放 —— 任务停在
@@ -8,25 +8,30 @@
 // 而库早就恢复正常了（第 5 轮审查单次读故障注入实测：run 与 stop 双 409）。
 //
 // 收成一个函数之后出口只有两个，不变量就由类型本身兜着：
-//   `true`  = 占位在手，调用方负责在自己的 finally 里 `releaseTurn`
-//   `false` = 这一轮不起，**占位已经还回去了**（或者压根没占）
+//   身份  = 占位在手，调用方负责在自己的 finally 里拿**这份身份**还锁(`releaseTurn`)
+//   `null` = 这一轮不起，**占位已经还回去了**（或者压根没占）
+//
+// 为什么交出去的是身份而不是 true(本轮审查 F1):从这里到调用方的 finally 之间隔着整整
+// 一回合,人工放开可以合法地把这把锁拔走、让下一轮占上 —— 按任务 id 还锁撤掉的就是后来者
+// 那把互斥(理由整段在 turn-lock.ts 的 `endOwnTurn`)。
 //
 // 团队那条路(`enterLeadDelivery`)住在同一份文件里,因为它要挡的是同一件事(别让一条还没
 // 送达的通知把一个已经结束的任务拉起来),只是下游没有那个大 try 可以托管占位,所以它把
 // 「送完要还的那把锁」当返回值交出去。两个入口的判据(验收互斥、唤醒资格、读失败的退避
 // 语义)必须逐字一致 —— 分家一次就是第 6 轮审查那两条:单飞这侧全部修好,团队那侧照旧。
-import { claimTurn, claimWakeTurn, reclaimTurn, releaseTurn, turnIdentity, turnSourceRole, turnSourceReview } from "./runs.js";
-import type { TurnSource } from "./runs.js";
+import { claimOwnTurn, claimWakeTurn, reclaimTurn, releaseTurn, turnSourceRole, turnSourceReview } from "./runs.js";
+import type { TurnIdentity, TurnOwner, TurnSource } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { pendingCheckpointBlockReason } from "./pending-checkpoint-recovery.js";
 
-export async function withTurnPreflight<Result>(taskId: string, turnHeld: boolean | undefined,
+export async function withTurnPreflight<Result>(taskId: string, held: TurnOwner | null | undefined,
   prepare: () => Promise<Result>): Promise<Result> {
-  const held = turnHeld ? turnIdentity(taskId) : null;
   try { return await prepare(); }
   catch (error) {
-    if (held && turnIdentity(taskId) === held) releaseTurn(taskId);
+    // 还的只能是**调用方自己占下的那一把**:预检查里全是 await,其间这把锁可能已经被人工
+    // 放开拔走、另一轮占上(核验住在 `releaseTurn` 里,所以这里不必也不该自己比对)。
+    if (held) releaseTurn(taskId, held);
     throw error;
   }
 }
@@ -43,34 +48,41 @@ export type TurnEntryInput = {
   source: TurnSource;
   /** 任务行上的接力状态；接力出去的任务在本机只是历史存档。 */
   handoff?: string | null;
-  /** 调用方已在入口原子占好位（continueWhenIdle / run 路由），这里只做身份接管。 */
-  turnHeld?: boolean;
+  /**
+   * 调用方已在入口原子占好位（continueWhenIdle / run 路由），这里只做身份接管。
+   * **传的是那次 `claimOwnTurn` 交回来的身份**,不是一个 true —— 接管与还锁都要核它(F1)。
+   */
+  turnHeld?: TurnIdentity | null;
   /** 「这个任务此刻还能不能被这条消息叫醒」——占住位之后才问（见 orchestrator 的 opts）。 */
   wakeGuard?: () => Promise<string | null>;
   pendingMessageIds?: readonly string[];
 };
 
-export async function enterTurn(input: TurnEntryInput): Promise<boolean> {
+export async function enterTurn(input: TurnEntryInput): Promise<TurnIdentity | null> {
   const { taskId } = input;
   // 接力出去的任务：路由层各有 409，但队列推进/排队消息投递等程序化续聊全汇到这里，
   // 必须在占位之前收口（消息按「未投递」留在托盘，事实不丢）。
   if (handoffBlockReason(input.handoff)) {
-    if (input.turnHeld) releaseTurn(taskId);
-    return false;
+    if (input.turnHeld) releaseTurn(taskId, input.turnHeld);
+    return null;
   }
   // 抢不到 = 这个任务此刻正跑着别的回合，这一句话没送出去。调用方必须知道。
   // turnHeld 那条路用真实身份接管——只读预检查代替不了原子所有权（审查实测：两个并发
   // 启动双双 202）。
-  if (input.turnHeld) reclaimTurn(taskId, turnSourceRole(input.source), turnSourceReview(input.source));
-  else if (!claimTurn(taskId, turnSourceRole(input.source), turnSourceReview(input.source))) return false;
+  // 接管失败(null)= 入口占下的那把锁已经不在手上了(人工放开拔走之后另一轮占上):这一轮
+  // 不起,而且**没有任何东西需要还** —— 现在占着的那把不是我们的。
+  const owner = input.turnHeld
+    ? reclaimTurn(taskId, input.turnHeld, turnSourceRole(input.source), turnSourceReview(input.source))
+    : claimOwnTurn(taskId, turnSourceRole(input.source), turnSourceReview(input.source));
+  if (!owner) return null;
 
   // 验收互斥：**先占己锁（turn），再查彼锁（acceptance），两步之间没有 await**——
   // acceptTask 那边是镜像（beginAccepting 先占，acceptanceGuard 再查 isTurnClaimed）。
   // 任意交错下至少一方看到对方已占而退避；只查不占是 TOCTOU（审查实测 40/40：检查刚
   // 通过验收就开始，回复照样启动并摘牌）。退避 = 消息按「未投递」排队，验收事实原封不动。
   if (isAcceptingTask(taskId)) {
-    releaseTurn(taskId);
-    return false;
+    releaseTurn(taskId, owner);
+    return null;
   }
 
   // 同一个位置、同一个理由：占住回合之后才问「这一轮还该不该起」。排在这里而不是更后面，
@@ -92,11 +104,11 @@ export async function enterTurn(input: TurnEntryInput): Promise<boolean> {
       blocked = "读不到这个任务此刻的状态";
     }
     if (blocked) {
-      releaseTurn(taskId);
-      return false;
+      releaseTurn(taskId, owner);
+      return null;
     }
   }
-  return true;
+  return owner;
 }
 
 /**
@@ -119,14 +131,14 @@ export async function enterTurn(input: TurnEntryInput): Promise<boolean> {
  */
 export async function enterLeadDelivery(input: {
   taskId: string;
-  turnHeld?: boolean;
+  turnHeld?: TurnIdentity | null;
   wakeGuard?: () => Promise<string | null>;
   pendingMessageIds?: readonly string[];
 }): Promise<(() => void) | null> {
   const { taskId, wakeGuard } = input;
   // 入口占的那个位是给「起一轮」用的,而这条路压根不起回合 —— 原样还回。紧接着占唤醒锁:
   // 两句之间没有 await,所以中间不存在被插队的窗口(真被插了也只是占不到,见下)。
-  if (input.turnHeld) releaseTurn(taskId);
+  if (input.turnHeld) releaseTurn(taskId, input.turnHeld);
   // 抢不到 = 正有人改着这个任务的状态(或另一条唤醒正在送)。这一句一个字都没送出去,
   // 消息按「未投递」留在托盘里,下一次扫描再判 —— 那时它读到的就是落库后的终态。
   const release = wakeGuard ? claimWakeTurn(taskId) : () => {};

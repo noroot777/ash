@@ -524,11 +524,13 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   ]);
   await db.insert(scheduledMessages).values({ ...messageRow("scheduled-gate-nb-msg", nB, nBText, "queued"), execution: true });
   // 模拟推进临界区的产物(已认领 + 已落位),随后组才被暂停 —— 正是预检查看不见的窗口。
-  assert.equal(runs.claimTurn(nB), true, "测试前提:应能预认领 nB 的回合");
+  // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+  const nTurn = runs.claimOwnTurn(nB);
+  assert.ok(nTurn, "测试前提:应能预认领 nB 的回合");
   await db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, nB));
   await db.update(schema.groups).set({ paused: true }).where(eq(schema.groups.id, nGroup));
   const taskResume = await import("../src/task-resume.js");
-  await taskResume.resumeOrRunTask(nB, { reason: "queue", turnHeld: true });
+  await taskResume.resumeOrRunTask(nB, { reason: "queue", turnHeld: nTurn });
   await new Promise((resolve) => setTimeout(resolve, 600));
   assert.equal(await taskStatusOf(nB), "paused", "组已暂停,自动交接必须被 spawn 前的持久复查挡回");
   assert.equal(runs.isTurnClaimed(nB), false, "挡回后预认领的回合必须释放");
@@ -615,10 +617,11 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
     { queueId: "scheduled-gate-queue-13", taskId: pA, position: 0, createdAt: at },
     { queueId: "scheduled-gate-queue-13", taskId: pB, position: 1, createdAt: at },
   ]);
-  assert.equal(runs.claimTurn(pB), true, "测试前提:应能预认领 pB 的回合");
+  const pTurn = runs.claimOwnTurn(pB);
+  assert.ok(pTurn, "测试前提:应能预认领 pB 的回合");
   await db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, pB));
   await db.update(schema.groups).set({ paused: true }).where(eq(schema.groups.id, pGroup));
-  await taskResume.resumeOrRunTask(pB, { reason: "queue", turnHeld: true });
+  await taskResume.resumeOrRunTask(pB, { reason: "queue", turnHeld: pTurn });
   await new Promise((resolve) => setTimeout(resolve, 600));
   assert.equal(await taskStatusOf(pB), "paused", "组已暂停,检查点续跑必须被挡回");
   assert.equal(runs.isTurnClaimed(pB), false, "挡回后预认领的回合必须释放");

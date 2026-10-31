@@ -47,7 +47,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat, queueClaimError, type QueueSeat } from "./queue-seat.js";
-import { claimTurn, releaseTurn } from "./runs.js";
+import { claimOwnTurn, releaseTurn } from "./runs.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
@@ -295,7 +295,11 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
     // 同 /run、/retry：原子占位，并发只有一个能 202。占位身份跟着分支走 —— 审查重跑此刻
     // 还没有审查回合，冒充 reviewer 会让迟到的结论上报被当成本回合的（见
     // reportFreeReviewConclusion 的 turnRole 校验）。
-    if (!claimTurn(taskId, kind === "review" ? "dispatch" : "single")) {
+    // 占到的那把锁的**身份**一路带到交接与释放:这中间全是 await(权威重查、队列认领),
+    // 人工放开可以把锁拔走、另一轮合法占上,按任务 id 还锁撤掉的就是后来者那把互斥
+    // (本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
+    const turn = claimOwnTurn(taskId, kind === "review" ? "dispatch" : "single");
+    if (!turn) {
       return c.json(await noted(taskId, "重跑上一回合", { error: "任务回合正在进行，结束后再重试", status: first.task.status }), 409);
     }
     // 占位之后的每一条出路都必须交接或释放这把锁：漏一条就是「500 一次、之后永远 409，
@@ -309,7 +313,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         return c.json(await noted(taskId, "重跑上一回合", { error: "任务正在验收（含发布尾段），结束后再重试", status: first.task.status }), 409);
       }
       // ── 占位后权威重查（口径同 review.ts）──
-      // 上面那一遍是在**没有任何互斥**的情况下读的：从读完到 claimTurn 之间隔着好几个
+      // 上面那一遍是在**没有任何互斥**的情况下读的：从读完到 claimOwnTurn 之间隔着好几个
       // await，归档、取消、入队、验收随便哪个都能在这中间落库，而占位只挡得住「另一个
       // 回合」，挡不住这些不占 turn 的写操作。实测 20/20：并发归档 + 重试双双成功，任务
       // 落在 archived=true 且 running（第 2 轮审查 finding 3）。所以判据整套重跑一遍，
@@ -340,7 +344,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
           async (error) => {
             // 只有下游接管之前抛错才会到这（接管之后它自己 try/finally 兜底），锁还是
             // 我们占的那把，必须还回去。
-            releaseTurn(taskId);
+            releaseTurn(taskId, turn);
             await appendTaskTimeline(taskId, `${what}启动失败：${errorText(error)}；可以再试一次。`);
           },
         ).finally(() => {
@@ -393,7 +397,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
             byBackend: !!seg.bySystem,
             monitorWake: seg.monitorWake,
             resumeSessionId: latest.id,
-            turnHeld: true,
+            turnHeld: turn,
             // 判据是在这里读的，CLI 却要到几个 await 之后才真正起来（执行器解析、worktree
             // 准备）：起跑前再核一遍冻结事实，不然「暂停分组已经 200 返回」和「重试把 CLI
             // 拉起来」会同时成立（第 1 轮审查 finding 1）。
@@ -421,14 +425,14 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       seat = claim.seat;
       handoff(
         latest.executorId
-          ? continueTask(taskId, RESUME_PROMPT, { ...route, actingUserId: acting, system: "retry", resumeSessionId: latest.id, turnHeld: true, freezeGuard: true })
-          : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting }),
+          ? continueTask(taskId, RESUME_PROMPT, { ...route, actingUserId: acting, system: "retry", resumeSessionId: latest.id, turnHeld: turn, freezeGuard: true })
+          : resumeOrRunTask(taskId, { reason: "retry", turnHeld: turn, actingUserId: acting }),
         "重跑上一回合",
       );
       return c.json({ started: true, mode: "resume" }, 202);
     } finally {
       if (!handed) {
-        releaseTurn(taskId);
+        releaseTurn(taskId, turn);
         // 占了队列位却没交接出去(权威重查 409、认领后又被拒):按守卫回滚,别卡在 queued。
         if (seat) void seat.release();
       }

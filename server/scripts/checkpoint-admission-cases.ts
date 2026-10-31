@@ -81,6 +81,9 @@ export async function checkpointAdmissionCases(): Promise<void> {
       ]);
     }
     assert.ok(runs.claimTurn(test.taskId));
+    // 凭据从占位那一刻拿:`seatThenStart` 现在只肯还**调用方自己占下的那一把**(第 2 轮
+    // 审查 F1)。下面断言的正是这一条 —— 它失败收尾时不许碰继任者那把锁。
+    const owner = runs.turnIdentity(test.taskId)!;
     let successor: ReturnType<typeof runs.turnIdentity> = null;
     runs.whenTurnIdle(test.taskId, () => {
       assert.ok(runs.claimTurn(test.taskId, "successor"));
@@ -98,7 +101,7 @@ export async function checkpointAdmissionCases(): Promise<void> {
     };
     let started = false;
     try {
-      assert.equal((await seatThenStart(test.taskId, async () => { started = true; })).ok, false);
+      assert.equal((await seatThenStart(test.taskId, owner, async () => { started = true; })).ok, false);
       assert.equal(started, false);
       assert.ok(successor);
       assert.equal(runs.turnIdentity(test.taskId), successor);

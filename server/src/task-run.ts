@@ -9,7 +9,8 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, discardStartingRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, claimOwnTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
+import type { TurnIdentity } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
 import { snapshotReviewWait } from "./review-wait.js";
 import { consumeSingleRun } from "./single-run.js";
@@ -58,11 +59,13 @@ import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 // 队列推进、上游唤醒)不传,退回任务归属人。
 export async function runTask(
   taskId: string,
-  opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  // turnHeld:入口占下的那把锁的**身份**(不是 true)—— 接管与释放都按它核,理由见
+  // continueTask 同名选项与 turn-lock.ts 的 `endOwnTurn`。
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
 ): Promise<void> {
   const checkpointBlocked = await preparePendingCheckpointStart(taskId);
   if (checkpointBlocked) {
-    if (opts.turnHeld) releaseTurn(taskId);
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     console.warn(`[ash] 任务 ${taskId} 未启动：${checkpointBlocked}`);
     return;
   }
@@ -77,22 +80,23 @@ export async function runTask(
   // cwd),验收正在合并/删 worktree 时把它拉起来,跟单飞撞上是同一类破坏。早先这道检查
   // 排在 team 分支之后,team 完全绕过(审查实测:验收锁下仍真的 startTeam)。
   if (isAcceptingTask(taskId)) {
-    if (opts.turnHeld) releaseTurn(taskId);
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     return; // 验收(含尾段)进行中,不与合并/清理抢工作区
   }
   if (mode === "team") {
-    if (opts.turnHeld) releaseTurn(taskId);
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     return startTeam(taskId);
   }
   // 接力出去的任务在本机只是历史存档 —— 路由层各有 409,但队列推进/定时班次/重试
   // 等程序化路径全都汇到这里,必须在 spawn 之前收口,否则就是双机并跑。
   if (handoffBlockReason(head?.handoff)) {
-    if (opts.turnHeld) releaseTurn(taskId);
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     return;
   }
-  // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。
-  if (opts.turnHeld) reclaimTurn(taskId, "single");
-  else if (!claimTurn(taskId)) return;
+  // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。接管返回 null =
+  // 那把锁已经不在手上(人工放开拔走之后另一轮占上),这一轮不起,也没有东西要还。
+  const turn = opts.turnHeld ? reclaimTurn(taskId, opts.turnHeld, "single") : claimOwnTurn(taskId);
+  if (!turn) return;
   let handle: RunHandle | undefined;
   let invocationAgent: AgentType | undefined;
   // 解析工作目录那一刻就可能把登记的基线**落库换掉**了(persistBaseFallback)，而说明写在
@@ -340,7 +344,7 @@ export async function runTask(
     // 收掉**,只注销会留下一个没人读输出、停止按钮也碰不到的 CLI(第 1 轮审查 F1;三态
     // 和「为什么认领过的只注销不杀」见 runs.ts 顶部)。认领过的走到这里只是注销。
     if (handle) discardStartingRun(taskId, handle);
-    releaseTurn(taskId);
+    releaseTurn(taskId, turn);
     // 这一次调用结束了 = 它名下不再有回合在写。**注销不能只挂在正常收尾那条路上**：
     // stream 抛错、结算写库失败、被停都走不到 `recordTurnSpan`,残留的活动登记会让读端把这条
     // 早就死掉的会话当成「还在写」,下次跑起来就从老起点开到无穷、把中间别人做的东西收进来
