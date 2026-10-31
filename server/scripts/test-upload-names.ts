@@ -24,7 +24,7 @@ requireTmpDb("test-upload-names");
 mkdirSync(uploads, { recursive: true });
 
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
-const { MAX_STORED_NAME_BYTES, isSafeUploadName, newUploadName, resolveUploadRun, sanitizeUploadName, sanitizeUploadStem, uploadNameIndex } = await import("../src/upload-names.js");
+const { MAX_STORED_NAME_BYTES, isSafeUploadName, newUploadName, sanitizeUploadName, sanitizeUploadStem, uploadNameIndex, uploadRunCandidates } = await import("../src/upload-names.js");
 const { collectUploads, scanUploadNames, scanUploadRuns, writeUploads } = await import("../src/handoff-uploads.js");
 const { uploadNameOf } = await import("../src/uploads.js");
 const { attachmentsPrompt } = await import("../src/util.js");
@@ -125,28 +125,88 @@ try {
   assert.deepEqual([...scanUploadNames(`![图](${abs})`)], [file], "markdown 的 `)` 同样收口");
   assert.deepEqual([...scanUploadNames(`我读了 ${abs},有三点`)], [file], "中文标点也在集合外");
 
-  // ── 路径后面紧跟中文说明:按本机真有的名字收敛,文本启发式一概不用 ─────────
+  // ── 引用的身份:**占满一个字段**的只认精确名字,夹在正文里的才按已知名字收敛 ───
   // 审查第 1 轮发现 2 / 第 2 轮发现 1:只按字符集切会把后文吞进名字;改按「最后一处
   // 扩展名」再猜一刀,后文里出现 `v1.2` 又猜偏。正文/续跑说明里直接粘路径是正常入口,
-  // 没有附件块兜底,这两种写法都必须找回真文件。
+  // 没有附件块兜底,这几种写法都必须找回真文件。
   const ascii = "aBcD1234_-xy-report.pdf";
   writeFileSync(join(uploads, ascii), "pdf");
   const index = uploadNameIndex(readdirSync(uploads));
+  /** 调用方那一刀:候选里第一个本机真有的。 */
+  const pick = (ref: { run: string; explicit: boolean }): string | undefined =>
+    uploadRunCandidates(ref, index).find((candidate) => index.has(candidate));
   for (const tail of ["的要求完成作业", "的要求按v1.2版本完成作业", "的第2.1节", "。"]) {
     const glued = `请按 ${join(uploads, ascii)}${tail}`;
-    const resolved = scanUploadRuns(glued).map((run) => resolveUploadRun(run, index));
-    assert.deepEqual(resolved, [ascii], `后缀「${tail}」没能收敛回真名字:${resolved}`);
+    const refs = scanUploadRuns(glued);
+    assert.deepEqual(refs.map((ref) => ref.explicit), [false], `句子中间的引用不该算占满字段:${glued}`);
+    assert.deepEqual(refs.map(pick), [ascii], `后缀「${tail}」没能收敛回真名字`);
     const noteBuf: string[] = [];
     const packed = await collectUploads([glued], noteBuf, true, async () => true);
     assert.deepEqual(packed.map((u) => u.name), [ascii], `后缀「${tail}」下附件没被打包`);
-    assert.deepEqual(noteBuf, [], `不该多报一句:${noteBuf}`);
+    // 收敛过的要如实说一句(不说就是「无缺失提示地带走不相关内容」);没收敛的不许多话。
+    const trimmed = tail !== "。";
+    assert.equal(noteBuf.length, trimmed ? 1 : 0, `交代条数不对:${JSON.stringify(noteBuf)}`);
+    if (trimmed) assert.ok(noteBuf[0]!.includes(`${ascii}${tail}`) && noteBuf[0]!.includes(ascii),
+      `收敛要报原文那一段和落到的名字:${noteBuf[0]}`);
   }
   // 反向:结尾没有扩展名、内部有点号的合法名字 —— 按扩展名猜那一刀会把它截成 v1.2。
   const dotted = "aBcD1234_-xy-v1.2终稿";
   writeFileSync(join(uploads, dotted), "x");
   const dottedIndex = uploadNameIndex(readdirSync(uploads));
-  assert.equal(resolveUploadRun(dotted, dottedIndex), dotted, "整段本身就是真名字时不许被截短");
-  assert.equal(resolveUploadRun(`${dotted}的说明`, dottedIndex), dotted, "它后面粘上中文同样要收敛回来");
+  const resolveLoose = (run: string): string | undefined =>
+    uploadRunCandidates({ run, explicit: false }, dottedIndex).find((c) => dottedIndex.has(c));
+  assert.equal(resolveLoose(dotted), dotted, "整段本身就是真名字时不许被截短");
+  assert.equal(resolveLoose(`${dotted}的说明`), dotted, "它后面粘上中文同样要收敛回来");
+
+  // ── 出处判据:哪些写法算「占满一个字段」 ──────────────────────────────────
+  assert.deepEqual(scanUploadRuns(attachmentsPrompt([abs])).map((r) => r.explicit), [true],
+    "附件块每行一条路径,行尾就是边界 —— 这是我们自己写下去的名字");
+  assert.deepEqual(scanUploadRuns(JSON.stringify({ seq: 7, text: "见", path: abs })).map((r) => r.explicit), [true],
+    "JSON 的路径字段:一对引号之间只有它,键排第几都算");
+  assert.deepEqual(scanUploadRuns(`![图](${abs})`).map((r) => r.explicit), [true], "markdown 的 `![](…)` 同理");
+  assert.deepEqual(scanUploadRuns(`> - ${abs}\n下一行`).map((r) => r.explicit), [true], "缩进/引用号/列表标记不影响");
+  assert.deepEqual(scanUploadRuns(`看了 ${abs} 之后`).map((r) => r.explicit), [false], "句子中间的不算");
+
+  // ── 明确路径缺失就保持缺失,不许改指另一份文件(UNFxdc3ADpeS 第 1 轮 R1)──────
+  // 正文里写明一条完整路径、独占一行:它要么就是那个文件,要么是「这个附件丢了」。
+  // 给它也配前缀候选的代价实测过 —— 被改指成同目录里真实存在的短名字,于是缺失一声
+  // 不响,反而多带走一份不相关的字节,原引用在对端照旧打不开。
+  const gone = `${ascii}.backup`; // 盘上没有,而 ascii 真实存在且正好是它的前缀
+  const goneRef = { run: gone, explicit: true };
+  assert.deepEqual(uploadRunCandidates(goneRef, index), [gone], "占满字段的引用只有一个候选 —— 它自己");
+  assert.ok(uploadRunCandidates({ run: gone, explicit: false }, index).includes(ascii),
+    "夹在正文里的那一档才给前缀候选(别把判据收成一律不认)");
+  const explicitNotes: string[] = [];
+  const explicitPack = await collectUploads(
+    [`独立完整路径:\n- ${join(uploads, gone)}\n`], explicitNotes, true, async () => true,
+  );
+  assert.deepEqual(explicitPack.map((u) => u.name), [],
+    `明确路径缺失时不许改指别的文件:${JSON.stringify(explicitPack.map((u) => u.name))}`);
+  assert.equal(explicitNotes.length, 1, `缺失要有一条交代:${JSON.stringify(explicitNotes)}`);
+  assert.ok(explicitNotes[0]!.includes(gone), `交代报的是原文那一段:${explicitNotes[0]}`);
+  // 别收过头:同样独占一行、文件真的在,照常带走。
+  assert.deepEqual(
+    (await collectUploads([`- ${join(uploads, ascii)}\n`], [], true, async () => true)).map((u) => u.name),
+    [ascii], "附件块里真实存在的路径照常打包",
+  );
+
+  // ── 读不到的目录条目不许改变一条可读引用的结果(同上 R1 证据二)───────────────
+  // 往目录里放一个「`<短名字>` + 一段中文」的私有文件:如果它能把同一条引用从「带走」
+  // 变成「带不走」,外人不用读出一个字节,就能从预检结果的变化问出这个名字在不在。
+  // 授权回调固定不变,文本不变,可读的那份也不变 —— 公开结果就必须逐字相同。
+  const onlyAscii = async (name: string): Promise<boolean> => name === ascii;
+  const oracleText = `请按 ${join(uploads, ascii)}的要求办`;
+  const oracleBefore: string[] = [];
+  const packBefore = await collectUploads([oracleText], oracleBefore, true, onlyAscii);
+  const shadow = join(uploads, `${ascii}的要求办`);
+  writeFileSync(shadow, "private");
+  const oracleAfter: string[] = [];
+  const packAfter = await collectUploads([oracleText], oracleAfter, true, onlyAscii);
+  rmSync(shadow, { force: true });
+  assert.deepEqual(packBefore.map((u) => u.name), [ascii], "可读的那份照常带走");
+  assert.deepEqual(packAfter.map((u) => u.name), packBefore.map((u) => u.name),
+    "多一个读不到的同前缀文件,带走的东西就变了 —— 这是一个存在性探针");
+  assert.deepEqual(oracleAfter, oracleBefore, `notes 也不许变:${JSON.stringify({ oracleBefore, oracleAfter })}`);
 
   // 对不上本机任何名字时原样返回,notes 报的是**原文那一段**而不是收敛后的名字 ——
   // 「有这个文件但你读不到」和「本机压根没有」必须是同一句话、同样的条数(存在性探针)。

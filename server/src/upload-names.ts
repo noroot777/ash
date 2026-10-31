@@ -15,7 +15,7 @@
 //     改写格式字符(`\p{Cf}`)全都落在集合外,一个单路径段的安全性与原来逐字相同;
 //   · 标点(含中文标点 `,。、;:?!()【】`)和空白都在集合外,于是正文、JSON 字符串、
 //     markdown `![]()` 里路径的末尾都有天然边界。唯一够不着的是「中文说明直接粘在
-//     路径后面、一个标点都没有」,那一档由 `trimToUploadName` 另给一个候选,见那里。
+//     路径后面、一个标点都没有」,那一档按**出处**分两档处置,见 `uploadRunCandidates`。
 import { extname } from "node:path";
 import { id } from "./util.js";
 
@@ -129,31 +129,22 @@ export const isSafeUploadName = (name: string): boolean =>
   ALL_NAME_CHARS.test(name) && !/^\.+$/.test(name) && utf8Length(name) <= MAX_ACCEPTED_BYTES;
 
 /**
- * 一处引用的**最长合法段**(扫描端切出来的那一截)→ 它真正指的那个文件名。
+ * 一处 uploads 引用:扫描端按字符集切到的那一段(`run`),外加**它在文本里的出处**。
  *
- * 为什么不能只靠文本:字符集不是正文里的可靠边界。中文可以把路径和后文粘在一起、
- * 中间一个标点都没有(「请按 …/uploads/<id>-report.pdf的要求按v1.2版本完成作业」),
- * 而汉字、数字、点号在名字里和在后文里都合法。按「最后一处像扩展名的位置」再猜一刀
- * 也不行:后文里出现一个 `v1.2` 就又猜偏了(审查第 2 轮发现 1 实测),而且那一刀还会
- * 切坏 `<id>-v1.2终稿` 这种结尾没扩展名的合法名字。**任何纯文本启发式都不成立。**
- *
- * 所以判据换成「**落在本机真有的那批名字里的最长前缀**」:名字由谁指定不重要,本机
- * 有没有这个文件是确定的事实。一个都对不上就原样返回整段 —— 调用方照常按「本机没有」
- * 处置,措辞不区分存在与否。
- *
- * **这不是把存在性提到授权前面。** 调用方(`collectUploads`)的 notes 一律报**原文那一段**
- * 而不是收敛后的名字,而且一处引用恒一条 notes:于是「本机有这个文件但你读不到」和
- * 「本机压根没有」在外部观察上仍是同一句话、同样的条数,收敛只决定我们去问哪个名字
- * 的授权(8CEbm0rJQIwK 第 2 轮审查 P2 的不变量)。
- *
- * 开销是**每处引用一个有界常数**:先直接查一次表(绝大多数引用本来就是精确路径,一次
- * 命中),否则只试那些「本机真有某个名字恰好是这个长度」的前缀 —— 长度至多 255 种,
- * 与引用条数无关。早先那版按「两两比前缀」找派生候选,80k 条引用能把主服务同步卡住
- * 16.8 秒(审查第 2 轮发现 2)。
+ * `explicit` = 这条路径**把它那个字段整个占满了**(独占一行、或者一对引号/括号之间只有
+ * 它)。附件块(`attachmentsPrompt` 写的 `- <绝对路径>` 行)、JSONL 里的路径字段、markdown
+ * 的 `![](…)` 全是这一档 —— 那些名字是我们自己写下去的,一个字都不会多。判据在
+ * handoff-uploads.ts 的 `fillsField`(那里才看得见上下文)。
  */
+export interface UploadRef {
+  run: string;
+  explicit: boolean;
+}
+
+/** 一批本机已知的名字(盘上的、或有登记行的)。只回答「有没有」和「出现过哪些长度」。 */
 export interface UploadNameIndex {
   has: (name: string) => boolean;
-  /** 本机名字出现过的长度,降序去重 —— 要试的前缀只有这些。 */
+  /** 已知名字出现过的长度,降序去重 —— 要试的前缀只有这些。 */
   lengths: number[];
 }
 
@@ -163,12 +154,41 @@ export function uploadNameIndex(names: Iterable<string>): UploadNameIndex {
   return { has: (name) => set.has(name), lengths };
 }
 
-export function resolveUploadRun(run: string, index: UploadNameIndex): string {
-  if (index.has(run)) return run;
+/**
+ * 一处引用能指向的候选名字,**长的在前**;调用方按自己的放行判据取第一个成立的那个。
+ *
+ * 判据分两档,因为「这段文本到哪里为止」只有一半能从文本本身读出来:
+ *
+ * · **占满字段的引用只有一个候选 —— 它自己。** 字符集确实不是正文里的可靠边界
+ *   (中文能把路径和后文粘成一段,中间一个标点都没有),但「这个字段里除了它什么
+ *   都没有」是看得出来的,而这一档恰好覆盖了全部由我们自己写下去的引用。给它也配前缀候选的
+ *   代价实测过:正文里写明一条已经没了的完整路径(`…-报告.pdf.backup`),盘点时被**改指**
+ *   成同目录里真实存在的 `…-报告.pdf` —— 「这个附件丢了」一声不响,反而多带走一份不
+ *   相关的字节,原引用在对端照旧打不开(UNFxdc3ADpeS 第 1 轮 R1)。**明确路径失败就
+ *   保持失败,不改成另一份文件。**
+ *
+ * · **夹在正文中间的引用才给前缀候选**,取已知名字里的最长前缀。纯文本启发式一概不做:
+ *   按「最后一处像扩展名的位置」再猜一刀,后文里出现一个 `v1.2` 就猜偏(审查第 2 轮
+ *   发现 1 实测),而且那一刀还会切坏 `<id>-v1.2终稿` 这种结尾没扩展名的合法名字。
+ *
+ * **候选不是答案,存在性更不是授权。** 返回的是一串候选,由调用方逐个过自己的授权闸
+ * (`collectUploads` 的 `canPack`),第一个**既放行、又真有**的才算答案。于是读不到的那些
+ * 目录条目最多让一个候选落选、继续试下一个:公开结果(带不带走、几条 notes)与它们
+ * 存不存在无关 —— 否则只要往目录里放一个「`<短名字>` + 一段中文」的私有文件,外人就能
+ * 从预检结果的变化问出它在不在(8CEbm0rJQIwK 第 2 轮审查 P2;UNFxdc3ADpeS 第 1 轮
+ * R1 证据二实测过这条差异)。
+ *
+ * 开销是**每处引用一个有界常数**:候选只取「已知名字里恰好是这个长度」的前缀,长度至多
+ * 255 种,与引用条数无关。早先那版按「两两比前缀」找派生候选,80k 条引用能把主服务
+ * 同步卡住 16.8 秒(审查第 2 轮发现 2)。
+ */
+export function uploadRunCandidates(ref: UploadRef, index: UploadNameIndex): string[] {
+  const out = [ref.run];
+  if (ref.explicit) return out;
   for (const length of index.lengths) {
-    if (length >= run.length) continue;
-    const candidate = run.slice(0, length);
-    if (index.has(candidate)) return candidate;
+    if (length >= ref.run.length) continue;
+    const candidate = ref.run.slice(0, length);
+    if (index.has(candidate)) out.push(candidate);
   }
-  return run;
+  return out;
 }

@@ -24,7 +24,7 @@ import { db } from "./db/index.js";
 import { tasks, uploads } from "./db/schema.js";
 import { UPLOADS_DIR } from "./paths.js";
 import { scanUploadNames, scanUploadRuns } from "./handoff-uploads.js";
-import { resolveUploadRun, uploadNameIndex } from "./upload-names.js";
+import { uploadNameIndex, uploadRunCandidates } from "./upload-names.js";
 import type { Actor } from "./auth/context.js";
 import { ANONYMOUS_ACTOR, isAccountHolder, isAdminActor } from "./auth/context.js";
 import { isMultiUser } from "./auth/mode.js";
@@ -346,14 +346,17 @@ export async function claimExistingUploads(userId: string): Promise<number> {
   const orphanRows = rows.filter((row) => !row.ownerUserId || !row.taskId);
   if (!pending.length && !orphanRows.length) return 0;
   // 一次扫完任务正文建反向索引,别对每个文件各扫一遍(存量库两边都是上千条)。
-  // 正文里的路径后面可能紧跟着中文说明(没有分隔符),所以扫出来的那一段要按**本机
-  // 真有的名字**收敛一下,否则这批文件的 taskId 回填不上 —— 判据见 upload-names.ts。
-  const index = uploadNameIndex(files);
+  // 正文里的路径后面可能紧跟着中文说明(没有分隔符),所以夹在正文里的那种引用要按
+  // **本机已知的名字**收敛一下,否则这批文件的 taskId 回填不上。已知 = 盘上有 ∪ 有
+  // 登记行(文件被删、行还在的也得认得出自己属于哪条任务)。占满一个字段的引用
+  // (附件块那种 `- <绝对路径>` 行)只认精确名字 —— 正文里写明一条已经没了的长路径时,
+  // 按前缀收敛会把它算成另一份短名字附件的归属。判据见 upload-names.ts。
+  const index = uploadNameIndex([...files, ...known.keys()]);
   const byFile = new Map<string, string>();
   for (const task of await db.select({ id: tasks.id, body: tasks.body }).from(tasks)) {
-    for (const run of scanUploadRuns(task.body)) {
-      const name = resolveUploadRun(run, index);
-      if (!byFile.has(name)) byFile.set(name, task.id);
+    for (const ref of scanUploadRuns(task.body)) {
+      const name = uploadRunCandidates(ref, index).find((candidate) => index.has(candidate));
+      if (name && !byFile.has(name)) byFile.set(name, task.id);
     }
   }
   const at = now();
