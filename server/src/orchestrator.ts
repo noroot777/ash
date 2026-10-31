@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { isGoalRecovery } from "@ash/shared/cli-commands";
+import { deliverLeadInterjection } from "./team/lead-interjection.js";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -31,7 +32,6 @@ import { RUNS_DIR } from "./paths.js";
 import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
-import { deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
@@ -51,7 +51,7 @@ import { cliGoalSessionCandidates } from "./task-cli-goal-scopes.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
-import { enterLeadDelivery, enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
+import { enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
 import { isDiagnosticSession } from "./turn-failure.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
@@ -121,40 +121,8 @@ export async function continueTask(
   });
   opts = options;
   if (retired) return false;
-  // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
-  // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
-  // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的
-  // `enterLeadDelivery`:常驻调度台没有「一个回合」可以托管占位,所以它把要还的锁
-  // 当返回值交出来,这里用 finally 还 —— 含 deliverToLead 抛错那条出路。
-  if (head?.mode === "team") {
-    const releaseLead = await enterLeadDelivery({
-      taskId,
-      turnHeld: opts.turnHeld,
-      wakeGuard: opts.wakeGuard,
-      pendingMessageIds: opts.pendingMessageIds,
-    });
-    if (!releaseLead) return false;
-    try {
-      // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令;
-      // 或者进程正在收尾、stdin 已经关了)时,这一句**一个字都没送出去** —— 绝不能顺手
-      // onDelivered():那是 pending → sent 的唯一写点,标了 sent 排队/定时的那条就从托盘里
-      // 消失、会话里也没有,用户的话凭空蒸发(docs/incidents.md「排队消息凭空消失」)。
-      // 跟单飞锁挡回同一口径:返回 false。
-      const delivered = await deliverToLead(taskId, userText, {
-        attachments: opts.attachments,
-        bySystem: opts.byBackend,
-        monitorWake: opts.monitorWake,
-        throwOnOpenFailure: opts.throwOnTeamUnavailable,
-      });
-      if (!delivered) return false;
-      if (opts.onDelivered) {
-        try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
-      }
-      return true;
-    } finally {
-      releaseLead();
-    }
-  }
+  // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 整条在 team/lead-interjection.ts。
+  if (head?.mode === "team") return await deliverLeadInterjection(taskId, userText, opts);
   // 起跑前的那串闸（接力存档 / 回合占位 / 验收互斥 / 唤醒资格）收在一处，见
   // turn-entry-guard.ts 的文件头：它们共享的不变量是「从占住位到交给下面那个大 try
   // 之间，每一条出路都得自己把位还回去」，散着写时新加一道闸就会漏掉这件事。

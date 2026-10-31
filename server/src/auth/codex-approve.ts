@@ -126,4 +126,3 @@ async function discardSandbox(dir: string): Promise<void> {
     }
   }
 }
-
