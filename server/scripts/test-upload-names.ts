@@ -11,7 +11,7 @@
 // 跑法(自带临时库):
 //   npm -w server run test:upload-names
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
@@ -24,8 +24,8 @@ requireTmpDb("test-upload-names");
 mkdirSync(uploads, { recursive: true });
 
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
-const { MAX_STORED_NAME_BYTES, isSafeUploadName, newUploadName, sanitizeUploadName, sanitizeUploadStem } = await import("../src/upload-names.js");
-const { collectUploads, scanUploadNames, writeUploads } = await import("../src/handoff-uploads.js");
+const { MAX_STORED_NAME_BYTES, isSafeUploadName, newUploadName, resolveUploadRun, sanitizeUploadName, sanitizeUploadStem, uploadNameIndex } = await import("../src/upload-names.js");
+const { collectUploads, scanUploadNames, scanUploadRuns, writeUploads } = await import("../src/handoff-uploads.js");
 const { uploadNameOf } = await import("../src/uploads.js");
 const { attachmentsPrompt } = await import("../src/util.js");
 const { ensureSchema } = await import("../src/db/index.js");
@@ -84,6 +84,8 @@ try {
 
   // ── 校验端:远端送来的名字 ────────────────────────────────────────────────
   assert.ok(isSafeUploadName("abc-第九期实战作业.pdf"));
+  assert.ok(isSafeUploadName("n".repeat(249)),
+    "旧版本叠前缀能写出 249 字节的名字,本机既然存着它,接力就得收得下(审查第 2 轮 N2)");
   for (const bad of ["a/b", "a\\b", ".", "..", "x\u0000y", "x\u202Ey", "n".repeat(300)]) {
     assert.equal(isSafeUploadName(bad), false, `这个名字不该放行:${JSON.stringify(bad)}`);
   }
@@ -123,23 +125,48 @@ try {
   assert.deepEqual([...scanUploadNames(`![图](${abs})`)], [file], "markdown 的 `)` 同样收口");
   assert.deepEqual([...scanUploadNames(`我读了 ${abs},有三点`)], [file], "中文标点也在集合外");
 
-  // ── 路径后面紧跟中文说明:两刀都报,真名字必须在候选里 ─────────────────────
-  // 审查第 1 轮发现 2:只按字符集切会把「的要求完成作业」吞进名字,连旧的纯英文名
-  // 附件也一起漏掉 —— 而正文/续跑说明里直接粘路径是正常入口,没有附件块兜底。
+  // ── 路径后面紧跟中文说明:按本机真有的名字收敛,文本启发式一概不用 ─────────
+  // 审查第 1 轮发现 2 / 第 2 轮发现 1:只按字符集切会把后文吞进名字;改按「最后一处
+  // 扩展名」再猜一刀,后文里出现 `v1.2` 又猜偏。正文/续跑说明里直接粘路径是正常入口,
+  // 没有附件块兜底,这两种写法都必须找回真文件。
   const ascii = "aBcD1234_-xy-report.pdf";
   writeFileSync(join(uploads, ascii), "pdf");
-  const glued = `请按 ${join(uploads, ascii)}的要求完成作业`;
-  assert.ok(scanUploadNames(glued).has(ascii), `粘连写法里扫不出真名字:${[...scanUploadNames(glued)]}`);
-  // 反向:结尾没有扩展名、内部有点号的合法名字,整段那一刀才是对的 —— 所以两个候选都要在。
+  const index = uploadNameIndex(readdirSync(uploads));
+  for (const tail of ["的要求完成作业", "的要求按v1.2版本完成作业", "的第2.1节", "。"]) {
+    const glued = `请按 ${join(uploads, ascii)}${tail}`;
+    const resolved = scanUploadRuns(glued).map((run) => resolveUploadRun(run, index));
+    assert.deepEqual(resolved, [ascii], `后缀「${tail}」没能收敛回真名字:${resolved}`);
+    const noteBuf: string[] = [];
+    const packed = await collectUploads([glued], noteBuf, true, async () => true);
+    assert.deepEqual(packed.map((u) => u.name), [ascii], `后缀「${tail}」下附件没被打包`);
+    assert.deepEqual(noteBuf, [], `不该多报一句:${noteBuf}`);
+  }
+  // 反向:结尾没有扩展名、内部有点号的合法名字 —— 按扩展名猜那一刀会把它截成 v1.2。
   const dotted = "aBcD1234_-xy-v1.2终稿";
   writeFileSync(join(uploads, dotted), "x");
-  assert.ok(scanUploadNames(join(uploads, dotted)).has(dotted), "按扩展名收尾那一刀会切坏它,整段那一刀必须还在");
+  const dottedIndex = uploadNameIndex(readdirSync(uploads));
+  assert.equal(resolveUploadRun(dotted, dottedIndex), dotted, "整段本身就是真名字时不许被截短");
+  assert.equal(resolveUploadRun(`${dotted}的说明`, dottedIndex), dotted, "它后面粘上中文同样要收敛回来");
 
-  // 真走一遍导出:粘连写法要把真文件打包进去,而且不为派生候选多甩一句 notes。
-  const collectNotes: string[] = [];
-  const packed = await collectUploads([glued], collectNotes, true, async () => true);
-  assert.deepEqual(packed.map((u) => u.name), [ascii], "正文里粘着中文说明的路径,附件照样要迁移");
-  assert.deepEqual(collectNotes, [], `派生候选不该多报一句:${collectNotes}`);
+  // 对不上本机任何名字时原样返回,notes 报的是**原文那一段**而不是收敛后的名字 ——
+  // 「有这个文件但你读不到」和「本机压根没有」必须是同一句话、同样的条数(存在性探针)。
+  const ghostNotes: string[] = [];
+  const ghost = `${join(uploads, "nOtHeRe12345-x.pdf")}的要求`;
+  assert.deepEqual(await collectUploads([ghost], ghostNotes, true, async () => true), []);
+  assert.equal(ghostNotes.length, 1, "一处引用恒一条交代");
+  assert.ok(ghostNotes[0]!.includes("nOtHeRe12345-x.pdf的要求"), `notes 要报原文那一段:${ghostNotes[0]}`);
+  // 同一份文本里两处指向同一个**读不到**的文件:条数只跟文本有关,不随它存不存在变化。
+  const probeNotes: string[] = [];
+  await collectUploads([`${join(uploads, ascii)}的 和 ${join(uploads, ascii)}的要求`], probeNotes, true, async () => false);
+  assert.equal(probeNotes.length, 2, "两处引用两条交代 —— 条数随存在性变化就是一个存在性探针");
+
+  // 成本:收敛是「每处引用一个有界常数」,不是全局两两比较(审查第 2 轮发现 2:
+  // 旧写法 80k 条引用把主服务同步卡住 16.8 秒)。阈值放得很松,只拦平方级回归。
+  const bulk = Array.from({ length: 20_000 }, (_, i) => `${join(uploads, `bulk${String(i).padStart(8, "0")}-x.pdf`)} `).join("");
+  const started = Date.now();
+  await collectUploads([bulk], [], true, async () => false);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 5_000, `2 万条引用的盘点耗时 ${elapsed}ms —— 这段在第一次 await 之前跑,会卡住同进程其它请求`);
 
   // 归属回填/任务绑定认的是同一条路径:认不出来 = 多人模式下这张附件对项目成员恒 404。
   assert.equal(uploadNameOf(abs), file, "带路径的要能归一到文件名");

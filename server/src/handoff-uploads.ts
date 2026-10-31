@@ -15,12 +15,12 @@
 // 形态分组返回,替换时由调用方声明文本的上下文(纯文本还是 JSON),歧义时按上下文
 // 选组;.md 这类 markdown 正文和 JSON 哨兵行混排的文件,逐行判断是不是 JSON。
 import { existsSync, mkdirSync, statSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type { HandoffUploadPayload } from "./handoff-types.js";
 import { UPLOADS_DIR } from "./paths.js";
-import { UPLOAD_NAME_RUN, isDerivedUploadName, isSafeUploadName, newUploadName, trimToUploadName } from "./upload-names.js";
+import { UPLOAD_NAME_RUN, isSafeUploadName, newUploadName, resolveUploadRun, uploadNameIndex } from "./upload-names.js";
 
 export const MAX_UPLOADS = 100;
 
@@ -39,29 +39,35 @@ export interface LocalUploadNames {
 export const jsonEscaped = (s: string): string => JSON.stringify(s).slice(1, -1);
 
 /**
- * 从一段文本里扫出被引用的上传文件名(只认 uploads 目录直下)。
+ * 文本里**每一处** uploads 引用按字符集切到的最长一段(一处一条,保留重复)。
  *
- * 一处引用可能给出**两个候选**:按字符集取到的最长一段,以及按扩展名收尾的那一段
- * (`trimToUploadName`)。两刀各有切错的输入 —— 字符集这一刀会把紧跟在路径后面的中文
- * 说明吞进名字,扩展名那一刀会截断 `<id>-v1.2终稿` 这类名字 —— 所以不在这里二选一,
- * 两个都报出去,由调用方拿它们去对盘上/库里真有的东西,谁对得上谁生效。判据全在文本
- * 上,不碰磁盘(推演见 upload-names.ts 的 trimToUploadName)。
+ * 这一刀只负责「从哪里开始、最多到哪里」。它切不准的那一档(中文说明直接粘在路径
+ * 后面)由 `resolveUploadRun` 拿本机真有的名字收敛 —— 文本启发式一概不做,推演见
+ * upload-names.ts。保留逐处结果而不是直接归并成名字集合,是因为**出处关系是判据的
+ * 一部分**:调用方要按「一处引用一条交代」记 notes,归并掉就只能靠事后比前缀去猜
+ * 哪两个名字来自同一处(审查第 2 轮发现 2:那个猜法是全局两两比较,80k 条引用把主
+ * 服务同步卡住 16.8 秒)。
  */
-export function scanUploadNames(text: string, uploadsDir: string = UPLOADS_DIR): Set<string> {
-  const names = new Set<string>();
+export function scanUploadRuns(text: string, uploadsDir: string = UPLOADS_DIR): string[] {
+  const runs: string[] = [];
   // POSIX 下两种形态相同,Set 去重后只扫一遍。
   for (const prefix of new Set([uploadsDir + sep, jsonEscaped(uploadsDir + sep)])) {
     let idx = 0;
     while ((idx = text.indexOf(prefix, idx)) !== -1) {
       idx += prefix.length;
       const match = UPLOAD_NAME_RUN.exec(text.slice(idx, idx + 512));
-      if (!match) continue;
-      names.add(match[0]);
-      names.add(trimToUploadName(match[0]));
+      if (match) runs.push(match[0]);
     }
   }
-  return names;
+  return runs;
 }
+
+/**
+ * 同上,只要名字集合 —— 给「输入本来就是一条独立路径」的调用方用(`uploadNameOf`),
+ * 那种输入没有后接散文,最长段就是精确名字。
+ */
+export const scanUploadNames = (text: string, uploadsDir: string = UPLOADS_DIR): Set<string> =>
+  new Set(scanUploadRuns(text, uploadsDir));
 
 /**
  * 导出侧:收集被引用且本机真实存在的附件。dryRun(preflight)只盘点,不读内容。
@@ -82,39 +88,42 @@ export async function collectUploads(
   dryRun: boolean,
   canPack: (name: string) => Promise<boolean>,
 ): Promise<HandoffUploadPayload[]> {
-  const names = new Set<string>();
-  for (const t of texts) for (const n of scanUploadNames(t)) names.add(n);
-  // 同一处引用的两个候选里,长的那个是短的加长而来。短的照常走全套判据并记 notes;
-  // 长的仍然逐个问(它可能才是真名字),但**不再重复记一句** —— 否则「路径后面紧跟
-  // 中文说明」这种正常写法,每次都会多甩一句看着像乱码的「本机已不存在」。
-  const derived = new Set([...names].filter((name) => [...names].some((other) => isDerivedUploadName(other, name))));
+  const runs = new Set<string>();
+  for (const t of texts) for (const run of scanUploadRuns(t)) runs.add(run);
+  // 收敛判据见 upload-names.ts 的 resolveUploadRun。**一处引用恒一条交代**:notes 报的
+  // 是原文那一段而不是收敛后的名字,条数也只跟文本有关 —— 于是「有这个文件但你读不到」
+  // 与「本机压根没有」在外部看来仍是同一句话、同样的条数。
+  const index = uploadNameIndex(await readdir(UPLOADS_DIR).catch(() => [] as string[]));
   const out: HandoffUploadPayload[] = [];
-  for (const name of names) {
-    const note = (line: string) => {
-      if (!derived.has(name)) notes.push(line);
-    };
+  const packed = new Set<string>();
+  for (const run of runs) {
     if (out.length >= MAX_UPLOADS) {
       notes.push(`上传附件超过 ${MAX_UPLOADS} 个,余下的不迁移(对端按旧路径读不到)`);
       break;
     }
+    const name = resolveUploadRun(run, index);
+    // 同一个附件被引用多次:带一份就够。能走到这里说明上一处已经**过了授权闸**,
+    // 静默跳过不泄露任何他读不到的东西。
+    if (packed.has(name)) continue;
     const abs = join(UPLOADS_DIR, name);
     // **先问授权,再看在不在。** 反过来的话「本机没有这个文件」和「有,但你读不到」
     // 就是两句不同的话,谁都能拿一个猜来的文件名建条任务、点一次预检,问出「这台机器
     // 上有没有这个附件」—— `/api/uploads/:file` 对这两种情况回同一句 404 就白费了
     // (8CEbm0rJQIwK 第 2 轮审查 P2)。所以读不到的一律走同一句话,不区分存不存在。
     if (!(await canPack(name))) {
-      note(`上传附件 ${name} 不随任务迁移(本机没有,或不在你的可读范围内)`);
+      notes.push(`上传附件 ${run} 不随任务迁移(本机没有,或不在你的可读范围内)`);
       continue;
     }
     if (!existsSync(abs)) {
-      note(`上传附件 ${name} 在本机已不存在,跳过`);
+      notes.push(`上传附件 ${run} 在本机已不存在,跳过`);
       continue;
     }
     const size = statSync(abs).size;
     if (size > MAX_FILE_BYTES) {
-      note(`上传附件 ${name} ${Math.round(size / MB)}MB 超限,跳过`);
+      notes.push(`上传附件 ${run} ${Math.round(size / MB)}MB 超限,跳过`);
       continue;
     }
+    packed.add(name);
     out.push({ name, sourcePath: abs, dataBase64: dryRun ? "" : (await readFile(abs)).toString("base64") });
   }
   return out;

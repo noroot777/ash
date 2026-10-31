@@ -38,16 +38,18 @@ const ID_PREFIX_BYTES = 13; // nanoid(12) + "-"
 /** 落盘名的上限 —— `newUploadName` 的输出恒在此之内(撞名改名叠多少次都一样)。 */
 export const MAX_STORED_NAME_BYTES = ID_PREFIX_BYTES + MAX_NAME_BYTES;
 /**
- * 校验端的上限,**从生成端的上限推出来**,不是另拍一个数。
+ * 校验端的上限 = **文件系统给单个路径段的硬限**(APFS / ext4 都是 255 字节)。
  *
- * 这两个数脱钩过一次,代价是漏附件:撞名改名那条路当时写的是 `${id()}-${原名}`,
- * 一个 191 字节的长中文名接力过去撞上同名文件,改名后 204 字节 —— 下一跳的校验把
- * **我们自己生成的名字**判成非法,整个附件在那台机器上直接消失(审查第 1 轮发现 1)。
- * 所以不变量得立在命名层:生成的一定收得下,改名是重新生成而不是无限叠前缀。
- * 余量留给存量名字(旧版本净化口径不同、早先撞名叠过前缀),仍在 255 字节硬限之内。
+ * 生成端与校验端的上限脱钩过一次,代价是漏附件:撞名改名那条路当时写的是
+ * `${id()}-${原名}`,一个 191 字节的长中文名接力过去撞上同名文件,改名后 204 字节 ——
+ * 下一跳的校验把**我们自己生成的名字**判成非法,整个附件在那台机器上直接消失
+ * (审查第 1 轮发现 1)。所以不变量立在命名层而不是靠两个数字对得上:
+ *   · 生成端(`newUploadName`)自己收敛到 `MAX_STORED_NAME_BYTES`,叠多少次都不长大;
+ *   · 校验端只问「这个名字本机写不写得下」—— 比生成端宽的那一截恰好收下存量名字
+ *     (旧版本净化口径不同、早先撞名叠过前缀,最长能到 249 字节;审查第 2 轮 N2),
+ *     它们撞名时照样会被重新生成成有界名字。
  */
-const LEGACY_SLACK_BYTES = 47;
-const MAX_ACCEPTED_BYTES = MAX_STORED_NAME_BYTES + LEGACY_SLACK_BYTES;
+const MAX_ACCEPTED_BYTES = 255;
 
 const utf8Length = (text: string): number => Buffer.byteLength(text, "utf8");
 
@@ -127,30 +129,46 @@ export const isSafeUploadName = (name: string): boolean =>
   ALL_NAME_CHARS.test(name) && !/^\.+$/.test(name) && utf8Length(name) <= MAX_ACCEPTED_BYTES;
 
 /**
- * 一段合法字符构成的串里,**另一个可能的收尾位置**:最后一处 `.` + 1~8 个 ASCII 字母
- * 数字、且其后不再是 ASCII 字母数字。`report.tar.gz` 取 `.gz`、`v1.2备份.docx` 取
- * `.docx`,整段本来就以扩展名收尾时原样返回。
+ * 一处引用的**最长合法段**(扫描端切出来的那一截)→ 它真正指的那个文件名。
  *
- * 为什么需要它:字符集本身不是正文里的可靠边界。中文正文可以把路径和后文粘在一起、
- * 中间一个标点都没有(「请按 …/uploads/<id>-report.pdf的要求完成作业」),而汉字是合法
- * 文件名字符,只按字符集切会把「的要求完成作业」吞进名字 —— 连旧的纯英文名附件也一起
- * 漏掉(审查第 1 轮发现 2 实测)。
+ * 为什么不能只靠文本:字符集不是正文里的可靠边界。中文可以把路径和后文粘在一起、
+ * 中间一个标点都没有(「请按 …/uploads/<id>-report.pdf的要求按v1.2版本完成作业」),
+ * 而汉字、数字、点号在名字里和在后文里都合法。按「最后一处像扩展名的位置」再猜一刀
+ * 也不行:后文里出现一个 `v1.2` 就又猜偏了(审查第 2 轮发现 1 实测),而且那一刀还会
+ * 切坏 `<id>-v1.2终稿` 这种结尾没扩展名的合法名字。**任何纯文本启发式都不成立。**
  *
- * 为什么**不是**二选一、而是两个候选都报出去(见 `scanUploadNames`):这一刀同样会切错
- * ——`<id>-v1.2终稿` 这种内部有点号、结尾没扩展名的合法名字会被截成 `<id>-v1.2`。
- * 两个候选都交给调用方,谁对得上盘上/库里的东西谁生效,两种写法就都认得出来。
+ * 所以判据换成「**落在本机真有的那批名字里的最长前缀**」:名字由谁指定不重要,本机
+ * 有没有这个文件是确定的事实。一个都对不上就原样返回整段 —— 调用方照常按「本机没有」
+ * 处置,措辞不区分存在与否。
  *
- * 判据只看文本,不碰磁盘也不查库:「这个文件在不在本机」是另一条判据,混进来就等于
- * 给出一个存在性探针 —— 接力预检的 notes 会把名字原样印出来,而「没这个文件」和
- * 「有、但你读不到」在这条链上必须是同一句话(8CEbm0rJQIwK 第 2 轮审查 P2)。
+ * **这不是把存在性提到授权前面。** 调用方(`collectUploads`)的 notes 一律报**原文那一段**
+ * 而不是收敛后的名字,而且一处引用恒一条 notes:于是「本机有这个文件但你读不到」和
+ * 「本机压根没有」在外部观察上仍是同一句话、同样的条数,收敛只决定我们去问哪个名字
+ * 的授权(8CEbm0rJQIwK 第 2 轮审查 P2 的不变量)。
+ *
+ * 开销是**每处引用一个有界常数**:先直接查一次表(绝大多数引用本来就是精确路径,一次
+ * 命中),否则只试那些「本机真有某个名字恰好是这个长度」的前缀 —— 长度至多 255 种,
+ * 与引用条数无关。早先那版按「两两比前缀」找派生候选,80k 条引用能把主服务同步卡住
+ * 16.8 秒(审查第 2 轮发现 2)。
  */
-const EXT_BOUNDARY = /\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9])/g;
-
-export function trimToUploadName(run: string): string {
-  let end = -1;
-  for (const match of run.matchAll(EXT_BOUNDARY)) end = match.index + match[0].length;
-  return end > 0 ? run.slice(0, end) : run;
+export interface UploadNameIndex {
+  has: (name: string) => boolean;
+  /** 本机名字出现过的长度,降序去重 —— 要试的前缀只有这些。 */
+  lengths: number[];
 }
 
-/** b 是不是由 a 加长而来的**派生候选**(同一处引用的另一种收尾)。 */
-export const isDerivedUploadName = (a: string, b: string): boolean => b.length > a.length && b.startsWith(a);
+export function uploadNameIndex(names: Iterable<string>): UploadNameIndex {
+  const set = new Set(names);
+  const lengths = [...new Set([...set].map((name) => name.length))].sort((a, b) => b - a);
+  return { has: (name) => set.has(name), lengths };
+}
+
+export function resolveUploadRun(run: string, index: UploadNameIndex): string {
+  if (index.has(run)) return run;
+  for (const length of index.lengths) {
+    if (length >= run.length) continue;
+    const candidate = run.slice(0, length);
+    if (index.has(candidate)) return candidate;
+  }
+  return run;
+}
