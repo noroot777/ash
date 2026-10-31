@@ -361,21 +361,42 @@ for (const agent of ["claude", "codex"] as const) {
 //    上一版是「写进去 → 读回来 → 验不过再还原」：写完到还原之间崩一次，坏文件就留在那儿了，
 //    而还原本身又是第二次写，会把别人同时存下的设置一起盖掉。现在顺序倒过来，没有还原这一步。
 {
-  // 宿主那条是**关着的**:搬过来照样是关着的,那不叫接好(agent 照样交不了卷)。
+  // 宿主那条是**关着的**:不搬它,改用内置那条(2026-10-31 审查 F3 起跟 JSON 两族同口径 ——
+  // 判据只有一处 `pickFact`,只认开着的那条;`test-ash-mcp-registry.ts` ⑩「关着的那条不许
+  // 搬过来」是同一格)。上一版 TOML 这一族独自把那条关着的整段搬过去,拼完自己又读不出
+  // 启用着的登记、于是报「没接好」:同一个现场,JSON 族写出内置那条、TOML 族什么都不写。
+  // **隔离档是 ash 自己造的目录**,宿主那个 `enabled = false` 是用户给他自己那份 codex 下的;
+  // 宿主那份我们一个位都不会动(那一格在 ⑤),这里不写就等于这个档的 agent 交不了卷。
   const { host, dir } = bench({ codex: `[mcp_servers.ash]\ncommand = "node"\nenabled = false\n` });
   const before = `model = "gpt"\n`;
   const file = join(dir, "config.toml");
   writeFileSync(file, before, "utf8");
-  const past = new Date("2020-01-01T00:00:00Z");
-  utimesSync(file, past, past);
   const state = await ensure(dir, "codex", host);
-  assert.equal(state.configured, false, "补上那段也读不出启用着的登记,不许报「已接好」");
-  assert.equal(readFileSync(file, "utf8"), before, "原文照旧");
-  assert.equal(statSync(file).mtimeMs, past.getTime(), "没批准就根本没写过 —— 连 mtime 都不该变");
+  assert.equal(state.configured, HAS_BUILT_MCP, "关着的不搬 ⇒ 改用内置那条(仓库没 build 就只能如实说补不上)");
+  const written = readFileSync(file, "utf8");
+  assert.ok(written.startsWith(before), "用户原有那几行原样留在前面");
+  if (HAS_BUILT_MCP) {
+    assert.match(written, /\[mcp_servers\.ash\]/, "补的是规范名那条");
+    assert.ok(!/enabled = false/.test(written), "宿主那条关着的一个字都不许搬过来");
+    assert.match(written, /mcp[\\/]dist[\\/]index\.js/, "搬不了就按内置那条渲染(指向本仓库的 MCP 入口)");
+  } else {
+    assert.equal(written, before, "没东西可搬、仓库也没 build ⇒ 一个字都不写");
+  }
 
-  // 原来压根没有这个文件:也不许被建出来(上一版是先建、再删)。
-  const second = bench({ codex: `[mcp_servers.ash]\ncommand = "node"\nenabled = false\n` });
-  assert.equal((await ensure(second.dir, "codex", second.host)).configured, false);
+  // **没批准就一个字节都没写**:codex 看完候选说它仍然列不出 ash ⇒ 原文照旧、连 mtime
+  // 都不变,原来压根没有那个文件时也不许被建出来(上一版是先建、再删)。
+  const stillBlind: ProbeOutcome = { kind: "answer", code: 0, stdout: "[]", stderr: "" };
+  const refused = bench({ codex: `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n` });
+  const refusedFile = join(refused.dir, "config.toml");
+  writeFileSync(refusedFile, before, "utf8");
+  const past = new Date("2020-01-01T00:00:00Z");
+  utimesSync(refusedFile, past, past);
+  const blocked = await ensure(refused.dir, "codex", refused.host, canned(stillBlind));
+  assert.equal(blocked.configured, false, "codex 说补完仍看不到 ash ⇒ 不许报「已接好」");
+  assert.equal(readFileSync(refusedFile, "utf8"), before, "原文照旧");
+  assert.equal(statSync(refusedFile).mtimeMs, past.getTime(), "没批准就根本没写过 —— 连 mtime 都不该变");
+  const second = bench({ codex: `[mcp_servers.ash]\ncommand = "node"\nargs = ["/opt/x.js"]\n` });
+  assert.equal((await ensure(second.dir, "codex", second.host, canned(stillBlind))).configured, false);
   assert.equal(existsSync(join(second.dir, "config.toml")), false, "原来没有的文件不许被建出来");
 
   // 对照:宿主那条是开着的、codex 也收下了 → 落盘,如实报已接好。
