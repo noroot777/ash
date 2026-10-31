@@ -128,14 +128,66 @@
   color: var(--ink);
 }
 
+/* 表单里每一项都占满整行（协议是两张卡，其余是宽输入框），所以这里不再分两列；
+   子组件上的 `.is-wide` 在单列下也仍然对（1 / -1 就是那一列）。 */
 .provider-form-grid {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(150px, 0.7fr);
   gap: 10px;
 }
 
 .provider-form-grid .is-wide {
   grid-column: 1 / -1;
+}
+
+/* 协议二选一(理由见 ProvidersSection 里的 ProtocolChoice)。做成两张占满整行的卡,
+   而不是「名称」右边一颗小下拉：这是这张表单里唯一一处「选错了整条链就挂不上」的
+   决定，不该长得像个已经填好的附属项。 */
+.provider-protocol-pick {
+  display: grid;
+  gap: 5px;
+}
+
+.provider-protocol-pick > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.provider-protocol-pick button {
+  display: grid;
+  min-height: 50px;
+  align-content: center;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--canvas);
+  padding: 8px 11px;
+  text-align: left;
+}
+
+.provider-protocol-pick button:hover {
+  border-color: color-mix(in lch, var(--accent) 45%, var(--line));
+}
+
+.provider-protocol-pick button[aria-checked="true"] {
+  border-color: var(--accent);
+  background: color-mix(in lch, var(--accent-soft) 60%, var(--canvas));
+}
+
+.provider-protocol-pick b {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+/* 这家供应商能挂给哪些执行器 —— 用户认的是 CLI 名字，协议名才是实现细节。 */
+.provider-protocol-pick small {
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .provider-conversion-field {
@@ -552,17 +604,13 @@
     display: none;
   }
 
-  .provider-form-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .provider-test-action {
     min-width: 28px;
     font-size: 0;
   }
 
-  .provider-form-grid .is-wide {
-    grid-column: auto;
+  .provider-protocol-pick > div {
+    grid-template-columns: 1fr;
   }
 
   .provider-model-field > div,

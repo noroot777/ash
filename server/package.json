@@ -60,6 +60,8 @@
     "test:accept-gate-process": "tsx scripts/test-accept-gate-process.ts && node scripts/run-accept-gate-tests.mjs --command-only",
     "test:multi-user": "tsx scripts/test-multi-user.ts",
     "test:multi-user-setup": "tsx scripts/test-multi-user-setup.ts",
+    "//test:onboarding-gate": "首启向导后半段的放行判据:空库弹、老实例(有执行器或项目)不弹、表过态不弹、多人模式按人算。",
+    "test:onboarding-gate": "tsx scripts/test-onboarding-gate.ts",
     "test:user-cli-smoke": "tsx scripts/test-user-cli-smoke.ts",
     "test:user-cli-mcp": "tsx scripts/test-user-cli-mcp.ts && tsx scripts/test-user-cli-write-identity.ts && node ../scripts/test-codex-mcp-setup.mjs",
     "test:personal-cli-settings": "tsx scripts/test-personal-cli-settings.ts",

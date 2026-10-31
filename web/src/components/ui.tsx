@@ -4,6 +4,7 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
 } from "react";
+import { useRovingChoice } from "../lib/useRovingChoice.ts";
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "icon";
 
@@ -103,16 +104,15 @@ export function PillTabs<T extends string>({
   onChange: (value: T) => void;
   label: string;
 }) {
+  // 键盘契约与别处的按钮单选共用一份(lib/useRovingChoice.ts):方向键换页、整组
+  // 一个 Tab 停靠点。分页项一律可选,所以不必再管禁用。
+  const { groupProps, itemProps } = useRovingChoice(
+    items.map((item) => item.value), value, onChange, "tab",
+  );
   return (
-    <div className="ui-tabs" role="tablist" aria-label={label}>
+    <div className="ui-tabs" {...groupProps} aria-label={label}>
       {items.map((item) => (
-        <button
-          key={item.value}
-          type="button"
-          role="tab"
-          aria-selected={item.value === value}
-          onClick={() => onChange(item.value)}
-        >
+        <button key={item.value} type="button" {...itemProps(item.value)} onClick={() => onChange(item.value)}>
           {item.label}
         </button>
       ))}
