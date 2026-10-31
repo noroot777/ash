@@ -173,10 +173,11 @@ function useMovableNotesPanel() {
   return { panelRef, panelStyle, isFullscreen, toggleFullscreen, onPointerDown };
 }
 
+const sameAttachments = (left: NoteDraft, right: NoteDraft) => left.attachments.length === right.attachments.length
+  && left.attachments.every((path, index) => path === right.attachments[index]);
 const sameDraft = (left: NoteDraft, right: NoteDraft) => left.id === right.id
   && left.body === right.body
-  && left.attachments.length === right.attachments.length
-  && left.attachments.every((path, index) => path === right.attachments[index]);
+  && sameAttachments(left, right);
 
 export type NoteTaskDraft = {
   body: string;
@@ -218,6 +219,9 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
   const draftRef = useRef<NoteDraft>(initialDraft);
   const savedDraftRef = useRef<NoteDraft>(initialDraft);
   const saveInFlightRef = useRef<Promise<FlushResult> | null>(null);
+  // 正在删的那条随手记 id。删除和保存必须互斥：删除期间谁都别再往这条上写
+  // （判据在 flushDraft 里，覆盖全部五条保存来路）。
+  const deletingIdRef = useRef<string | null>(null);
 
   const updateRows = useCallback((update: (current: Note[]) => Note[]) => {
     const next = update(rowsRef.current);
@@ -238,32 +242,59 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
         continue;
       }
       const snapshot = draftRef.current;
+      // 正在删的那条一律不再落盘。判据放在**落盘函数自己身上**而不是某个 effect 上：
+      // 保存有五条来路（自动保存、⌘/Ctrl+回车、保存按钮、各出口的 leaveDraft、卸载
+      // 清理），在任何一条上单独加判断都会漏掉其余几条。回「没有待落盘的东西」是实话
+      // —— 这条记马上就没了 —— 所以也不会把想关面板的人挡在外面。
+      if (snapshot.id !== null && snapshot.id === deletingIdRef.current) return "saved";
       if (sameDraft(snapshot, savedDraftRef.current)) return "saved";
       const isNew = snapshot.id === null;
-      if (!snapshot.body.trim()) {
+      // 正文空，服务端不收（`POST/PATCH /notes` 一律 400）。
+      const blank = !snapshot.body.trim();
+      if (blank) {
         setSaveState("empty");
-        // 新建的空草稿压根没落过盘：没东西可存，也没东西可丢。
-        return isNew ? "saved" : "unsavable";
+        // 新建的空草稿压根没落过盘：没东西可存，也没有「原内容」可提。（这种草稿带着
+        // 附件时附件会被丢掉，基线就是这样 —— `POST /notes` 没有「只存附件」这一路。）
+        if (isNew) return "saved";
+        // 但「正文空」证明不了「这份草稿没有要紧东西」：附件可能刚变过（传了新的、
+        // 摘掉了旧的）。`PATCH /notes/:id` 不带 body 时服务端跳过空正文校验
+        // （server/src/notes.ts），所以附件那半边照旧单独落盘 —— 否则用户刚传完的
+        // 那张图一离开就只剩 uploads 里一个没人认领的文件，摘掉附件的那一下同样白做。
+        if (sameAttachments(snapshot, savedDraftRef.current)) return "unsavable";
+      } else {
+        setSaveState("saving");
       }
-      setSaveState("saving");
       let request: Promise<FlushResult>;
       const persist = isNew
         ? api.createNote({ projectId: project.id, body: snapshot.body, attachments: snapshot.attachments })
-        : api.patchNote(snapshot.id!, { body: snapshot.body, attachments: snapshot.attachments });
+        : api.patchNote(snapshot.id!, blank
+          ? { attachments: snapshot.attachments }
+          : { body: snapshot.body, attachments: snapshot.attachments });
       request = persist.then(
         (saved) => {
-          updateRows((current) => ordered(current.some((note) => note.id === saved.id)
-            ? current.map((note) => note.id === saved.id ? saved : note)
-            : [saved, ...current]));
+          updateRows((current) => {
+            const known = current.some((note) => note.id === saved.id);
+            // 刚建出来的那条要进列表；**已存在的那条不在列表里 = 它在这次请求在途期间
+            // 被删掉了**，迟到的回包不许把它请回来（提示过「已删除」又冒出来，而服务端
+            // 其实已经没有它了）。
+            if (!known) return isNew ? ordered([saved, ...current]) : current;
+            return ordered(current.map((note) => note.id === saved.id ? saved : note));
+          });
           if (isNew && draftRef.current.id === null) {
             const promoted = { ...draftRef.current, id: saved.id };
             draftRef.current = promoted;
             setDraft(promoted);
             setActiveId(saved.id);
           }
-          savedDraftRef.current = { id: saved.id, body: saved.body, attachments: saved.attachments };
-          setSaveState(sameDraft(draftRef.current, savedDraftRef.current) ? "saved" : "pending");
-          return "saved" as FlushResult;
+          // 回包迟到期间草稿可能已经换人了（换了一条、或者这条被删掉了）：那这份回包只
+          // 更新列表，不许再去写「已存内容」的基准 —— 否则下一次比对会拿**别人**的内容
+          // 当基准，凭空判出一次「有改动」，白存一遍刚切过去的那条。
+          if (draftRef.current.id === saved.id) {
+            savedDraftRef.current = { id: saved.id, body: saved.body, attachments: saved.attachments };
+            // 正文空的那一半仍然没落盘：附件存住了，正文留着服务端那份。
+            setSaveState(blank ? "empty" : (sameDraft(draftRef.current, savedDraftRef.current) ? "saved" : "pending"));
+          }
+          return blank ? "unsavable" as FlushResult : "saved" as FlushResult;
         },
         (reason: unknown) => {
           setSaveState("error");
@@ -434,14 +465,18 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     uploads.clear();
   });
   // 删除**不先落盘**：这条记马上要被销毁，存一遍毫无意义，而「存不下去就不许删」正是
-  // 「清空正文后删除按钮点不动」的来由。只有在途的那次保存要等完，否则它的成功回调会把
-  // 这条写回 rows，排在 DELETE 之后就把刚删掉的那条又请回了列表。
+  // 「清空正文后删除按钮点不动」的来由。代价是这条草稿可能还脏着，于是删除期间得把保存
+  // 关掉（`deletingIdRef`，判据在 flushDraft 里），并且**排空已经在途的那些** ——
+  // 它们的成功回调会把这条写回 rows，排在 DELETE 之后就把刚删掉的那条又请回列表。
   const remove = async () => {
     const targetId = draftRef.current.id;
     if (!targetId) return;
+    deletingIdRef.current = targetId;
     setDeleting(true);
     try {
-      if (saveInFlightRef.current) await saveInFlightRef.current;
+      // 不是「等一个 Promise」而是「等到没有在途的」：flushDraft 一轮请求之后还会接着
+      // 追存，等单个请求不等于排空整条保存循环。
+      while (saveInFlightRef.current) await saveInFlightRef.current;
       await api.deleteNote(targetId);
       const remaining = rowsRef.current.filter((note) => note.id !== targetId);
       updateRows(() => remaining);
@@ -463,6 +498,9 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     } catch (reason) {
       say(reason instanceof Error ? reason.message : "随手记删除失败");
     } finally {
+      // 删成了：这条已经不在 rows 里，迟到的回包由 updateRows 那道判据挡住（撤掉互斥
+      // 不等于放它回来）。删失败了：这条还在，用户可以接着编辑和重试，保存得放开。
+      deletingIdRef.current = null;
       setDeleting(false);
     }
   };

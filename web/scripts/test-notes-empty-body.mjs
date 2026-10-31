@@ -10,8 +10,11 @@ import { createServer } from "vite";
 // ① 清空正文不会往服务端发空正文的 PATCH（服务端 400，发了也白发）；
 // ② 清空之后换一条 / 关面板都走得通，服务端那份原文一个字不动；
 // ③ 清空之后删除按钮照旧开确认框，确认后真的发 DELETE；
-// ④ 非空的改动仍然挡在「离开」前面先落盘 —— 这一条别连坐修掉。
+// ④ 非空的改动仍然挡在「离开」前面先落盘 —— 这一条别连坐修掉；
+// ⑤ 「正文空」不等于「草稿里没有要紧东西」：清空正文之后传的附件必须单独落盘，
+//    否则离开一次就只剩 uploads 里一个没人认领的文件（审查第 1 轮发现 1）。
 const root = fileURLToPath(new URL("..", import.meta.url));
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 const server = await createServer({
   root,
@@ -43,6 +46,7 @@ try {
   ]);
   const patched = [];
   const deleted = [];
+  const uploaded = [];
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -73,6 +77,13 @@ try {
       await reply([...rows.values()]);
       return;
     }
+    if (path === "/api/uploads" && request.method() === "POST") {
+      const body = JSON.parse(request.postData() ?? "{}");
+      const name = typeof body.name === "string" ? body.name : "pasted.png";
+      uploaded.push(name);
+      await reply({ id: `up-${name}`, path: `/tmp/uploads/${name}`, url: `data:image/png;base64,${PNG}`, name, kind: "image" });
+      return;
+    }
     await reply([]);
   });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/notes-panel.html`);
@@ -89,6 +100,17 @@ try {
   };
   // 自动保存的防抖是 800ms，等过那一档才能断言「它没发请求」而不是「它还没发」。
   const pastAutosave = () => page.waitForTimeout(1100);
+  const pastePng = async (name) => {
+    await page.locator(".note-editor-preview, .note-editor textarea").first().click();
+    await editor.waitFor();
+    await editor.evaluate((textarea, { name, png }) => {
+      const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([bytes], name, { type: "image/png" }));
+      textarea.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    }, { name, png: PNG });
+    for (let i = 0; i < 100 && !uploaded.includes(name); i++) await page.waitForTimeout(50);
+  };
 
   // ① 清空一条已存在的随手记：不往服务端发空正文，状态栏说清为什么没存。
   await row("第一条随手记").waitFor();
@@ -129,8 +151,25 @@ try {
   assert.deepEqual(deleted, ["note-a"], "确认之后必须真的发 DELETE");
   assert.equal(await row("第一条随手记（改过）").count(), 0, "删掉的那条要从列表里走掉");
 
-  // ⑥ 清空正文之后 Esc 也关得掉 —— 面板不是一按清空就焊死的笼子。
+  // ⑥ 清空正文之后传的附件：正文存不下去，不代表附件关联也该跟着丢。服务端的 PATCH
+  //    不带 body 时跳过空正文校验，所以附件那半边必须单独存上去。
   await page.locator(".note-row.is-selected", { hasText: "第二条随手记" }).waitFor();
+  await typeBody("");
+  await pastePng("note-b-shot.png");
+  for (let i = 0; i < 120 && !patched.some((entry) => entry.id === "note-b"); i++) await page.waitForTimeout(50);
+  assert.deepEqual(
+    patched.filter((entry) => entry.id === "note-b").at(-1),
+    { id: "note-b", attachments: ["/tmp/uploads/note-b-shot.png"] },
+    "空正文时只存附件、不带 body（带了会被服务端 400 挡掉）",
+  );
+  assert.deepEqual(rows.get("note-b").attachments, ["/tmp/uploads/note-b-shot.png"], "服务端那份要真的挂上这个附件");
+
+  // 离开再回来：附件还在，正文回到服务端那份原文。
+  await page.locator(".notes-list-tools button[aria-label='新建随手记']").click();
+  await row("第二条随手记").click();
+  await page.locator(".note-attachments").getByText("note-b-shot.png", { exact: true }).waitFor({ timeout: 4000 });
+
+  // ⑦ 清空正文之后 Esc 也关得掉 —— 面板不是一按清空就焊死的笼子。
   await typeBody("");
   await pastAutosave();
   await page.keyboard.press("Escape");
