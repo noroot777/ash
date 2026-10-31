@@ -149,20 +149,30 @@ export async function collectUploads(
     else if (taken.kind === "oversize") notes.push(`附件 ${name} ${Math.round(taken.size / MB)}MB 超限,跳过`);
   }
 
-  // ② 文本里提到的其它附件。先把已带走的名字排好:改写按前缀走,所以一处引用只要**以**
-  // 某个已带走的名字开头(「<路径>的要求」),对端就读得到,不必交代。这一步也是 `owned`
-  // 覆盖粘连写法的地方 —— 没有它就会对本来好端端的引用误报一句缺失。
-  const migrated = [...packed];
+  // ② 文本里提到的其它附件。**每一处引用独立判定**,不拿别处的结论抵扣。
+  //
+  // 这里曾经有一句捷径:「run 以某个已带走的名字开头就跳过」,理由是改写按前缀走、
+  // 粘连写法(`<路径>的要求`)对端照样读得到。那句推理漏了一种情况 —— run 也可能是
+  // **另一个真文件**的名字,恰好以已带走的那个开头(`A` 与 `A.附录.pdf`)。于是 A 带走了、
+  // `A.附录.pdf` 既不收集也不交代,而前缀改写又把正文里那条长路径改到目标机:指过去却
+  // 没有字节,少带的那份一声不响(IrEB2TWvYf0_ 第 1 轮 R1)。同一句捷径还会把「正文里
+  // 写明一条缺失路径」的交代也遮掉。**它又把「这段文本到哪里为止」这个不可判定的问题
+  // 偷偷放了回来,只是换了个位置。**
+  //
+  // 代价是粘连写法会多一句交代:`<路径>的要求` 整段本身不是文件名,而路径那一段其实会被
+  // 改写、对端读得到。**失败方向必须是多说一句话** —— 反过来是真少带一个附件、再配一条
+  // 指向空处的路径,而且不出声。
   for (const run of new Set(texts.flatMap((text) => scanUploadRuns(text)))) {
     if (full) break;
-    if (migrated.some((name) => run.startsWith(name))) continue;
     const taken = await takeUpload(run, out, packed, dryRun, canPack);
     if (taken.kind === "full") { overflow(); break; }
     // **一处引用恒一条交代,而且读不到与不存在同一句话**:否则拿一个猜来的名字建条任务、
-    // 点一次预检就能问出它在不在(同上 P2)。`run` 不是真文件时走的也是这一句 —— 于是
-    // 「正文里写明的路径缺失」如实报出来,而不是悄悄换成另一份文件。
+    // 点一次预检就能问出它在不在(同上 P2)。
     if (taken.kind === "missing" || taken.kind === "denied") {
-      notes.push(`上传附件 ${run} 不随任务迁移(本机没有,或不在你的可读范围内)`);
+      notes.push(
+        `上传附件 ${run} 不随任务迁移(本机没有这个名字,或不在你的可读范围内;`
+        + `若它是「附件路径 + 紧跟的说明文字」,路径那一段仍会照常改写)`,
+      );
     } else if (taken.kind === "oversize") {
       notes.push(`上传附件 ${run} ${Math.round(taken.size / MB)}MB 超限,跳过`);
     }

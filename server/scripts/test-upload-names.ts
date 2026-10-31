@@ -138,11 +138,15 @@ try {
 
   // ① 挂在这条任务上的照常带走 —— 哪怕正文里路径后面粘着中文、一个标点都没有。这是
   //    真实入口:attachmentsPrompt 写进正文的附件由 bindUploadsToTask 挂上这条任务。
+  //    粘连的那几档会多一句交代(整段本身不是文件名),路径那一截照样改写 —— **失败方向
+  //    是多说一句话**。拿「以已带走的名字开头就跳过」抵扣这句话的代价见 ⑥。
   for (const tail of ["的要求完成作业", "的要求按v1.2版本完成作业", "的第2.1节", "。", ""]) {
     const noteBuf: string[] = [];
     const packed = await collectUploads([ascii], [`请按 ${join(uploads, ascii)}${tail}`], noteBuf, true, yes);
     assert.deepEqual(packed.map((u) => u.name), [ascii], `后缀「${tail}」下附件没随任务走`);
-    assert.deepEqual(noteBuf, [], `粘连写法不该误报缺失:${JSON.stringify(noteBuf)}`);
+    const glued = tail !== "。" && tail !== "";
+    assert.equal(noteBuf.length, glued ? 1 : 0, `后缀「${tail}」的交代条数不对:${JSON.stringify(noteBuf)}`);
+    if (glued) assert.ok(noteBuf[0]!.includes(`${ascii}${tail}`), `交代报的是原文那一段:${noteBuf[0]}`);
   }
 
   // ② 没有归属、但正文里那一段**恰好就是一个真文件**:过授权闸照旧带走(老行为 ——
@@ -164,11 +168,15 @@ try {
     `明确缺失的路径不许改指别的文件:${JSON.stringify(gonePack.map((u) => u.name))}`);
   assert.equal(goneNotes.length, 1, `缺失要有一条交代:${JSON.stringify(goneNotes)}`);
   assert.ok(goneNotes[0]!.includes(gone), `交代报的是原文那一段:${goneNotes[0]}`);
-  // 同一条坏引用 + 这条任务真有附件时:带走的是**归属表说的那一份**,不是正文那段指向的。
+  // 同一条坏引用 + 这条任务真有附件时:带走的是**归属表说的那一份**,而那条缺失路径
+  //    照旧要有交代 —— 别处收集成功不能把它遮掉(IrEB2TWvYf0_ 第 1 轮 R1 的第二态)。
+  const goneOwnedNotes: string[] = [];
   assert.deepEqual(
-    (await collectUploads([ascii], [`- ${join(uploads, gone)}\n`], [], true, yes)).map((u) => u.name),
+    (await collectUploads([ascii], [`- ${join(uploads, gone)}\n`], goneOwnedNotes, true, yes)).map((u) => u.name),
     [ascii], "带走的身份由归属表定",
   );
+  assert.equal(goneOwnedNotes.length, 1, `缺失交代不许被另一处的成功遮掉:${JSON.stringify(goneOwnedNotes)}`);
+  assert.ok(goneOwnedNotes[0]!.includes(gone), `交代报的是原文那一段:${goneOwnedNotes[0]}`);
 
   // ④ 读不到的目录条目不许改变一条引用的公开结果:往目录里放一个「`<名字>` + 一段中文」
   //    的私有文件,如果它能让结果变一个字,外人不用读出一个字节就能问出它在不在。
@@ -196,6 +204,28 @@ try {
   assert.equal(rewritten, `请按 ${join(uploads, landed[0]!.name)}的要求按v1.2版本完成作业`,
     `改写该换掉前缀、原样留下后面那截:${rewritten}`);
   assert.ok(existsSync(join(uploads, landed[0]!.name)), "对端那条路径上真有文件");
+
+  // ⑥ 名字互为前缀的两份附件是**两个身份**:一份被带走不能免掉另一条完整路径的收集、
+  //    缺失检查和改写。旧代码拿「run 以已带走的名字开头」当「这处引用已被覆盖」,于是
+  //    `A.附录.pdf` 既不收集也不交代,而前缀改写又把正文里那条长路径改到目标机 —— 指过去
+  //    却没有字节(IrEB2TWvYf0_ 第 1 轮 R1)。
+  const sibling = `${ascii}.附录.pdf`;
+  writeFileSync(join(uploads, sibling), "sibling bytes");
+  const sibNotes: string[] = [];
+  const sibBody = `- ${join(uploads, sibling)}\n`;
+  const sibPack = await collectUploads([ascii], [sibBody], sibNotes, false, yes);
+  assert.deepEqual(sibPack.map((u) => u.name).sort(), [ascii, sibling].sort(),
+    `两个身份都要进载荷:${JSON.stringify(sibPack.map((u) => u.name))}`);
+  assert.deepEqual(sibNotes, [], `两份都带上了就不该有交代:${JSON.stringify(sibNotes)}`);
+  // 改写也不许串台:长的先换(buildUploadRewrites 与 applyUploadRewrites 各排一次),否则
+  // 短名字的 from 会把长路径的前缀吃掉,正文指向一个拼接出来的名字。两份都走真实的撞名
+  // 改名落地 —— 新名字各带一个随机 id,互吞产出的拼接名字与真名字才区分得开(拿同一个
+  // 固定前缀改名,两种结果恰好相同,这条断言就白写了)。
+  const sibLanded = await writeUploads(sibPack, []);
+  const sibRewritten = applyUploadRewrites(sibBody, buildUploadRewrites(sibLanded, uploads), "plain");
+  const sibNew = sibLanded.find((u) => u.sourcePath.endsWith(sibling))!.name;
+  assert.equal(sibRewritten, `- ${join(uploads, sibNew)}\n`, `长路径该整条换成它自己的新名字:${sibRewritten}`);
+  assert.ok(existsSync(join(uploads, sibNew)), "对端那条路径上真有文件");
 
   // 成本:两档都线性。旧写法按「两两比前缀」找候选,80k 条引用把主服务同步卡住 16.8 秒
   // (第 2 轮发现 2);这一版连整个上传目录都不枚举了。
