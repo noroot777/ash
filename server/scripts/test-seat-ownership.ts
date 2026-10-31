@@ -44,8 +44,12 @@ const { noteUserActionOutcome, recentRejectionNotices } = await import("../src/u
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { personalWriteGate, isHumanOnlyPath } = await import("../src/auth/personal-gate.js");
-const { issueHumanActionToken, liveHumanActionTokenCount, HUMAN_ACTION_TOKEN_FIELD, HUMAN_ACTION_TOKEN_HEADER } =
-  await import("../src/auth/human-action-token.js");
+const {
+  issueHumanActionToken,
+  liveHumanActionTokenCount,
+  HUMAN_ACTION_TOKEN_HEADER,
+  HUMAN_ACTION_TOKEN_NEXT_HEADER,
+} = await import("../src/auth/human-action-token.js");
 const { actorOf } = await import("../src/auth/context.js");
 const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
@@ -355,7 +359,7 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   assert.equal(agentWithToken.status, 403, "自称 agent 的请求有凭据也不许按");
   assert.match((await agentWithToken.json() as { error: string }).error, /只有账号本人/);
 
-  // 带着一份页面凭据:放行,并且响应里给回下一份(烧一份换一份,不然按完一次就按不动了)。
+  // 带着一份页面凭据:放行,并且**响应头**里给回下一份(烧一份换一份,不然按完一次就按不动了)。
   const pageToken = issueHumanActionToken();
   const liveBefore = liveHumanActionTokenCount();
   const byPage = await gated.request("/api/tasks/t-gate/reclaim-turn", {
@@ -366,9 +370,11 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   assert.equal(byPage.status, 200, "带着页面凭据的请求该放行");
   const reclaimBody = await byPage.json() as Record<string, unknown>;
   assert.equal(reclaimBody.reclaimed, true);
-  const rotated = reclaimBody[HUMAN_ACTION_TOKEN_FIELD];
+  const rotated = byPage.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER);
   assert.equal(typeof rotated, "string", "响应必须给回下一份凭据");
   assert.notEqual(rotated, pageToken, "给回的必须是新的一份");
+  assert.equal(reclaimBody.nextHumanActionToken, undefined,
+    "下一份凭据不许再塞在响应体里:那条路只覆盖成功分支,正是 N2 的成因");
   assert.equal(liveHumanActionTokenCount(), liveBefore, "烧掉一份、发回一份,在册数不该涨");
   // **记录只说得出凭据能证的那一档。** 过了闸 = 这一下来自一个本服务发过文档的页面,
   // 所以痕迹里写「由本机页面发起」;但它仍然证不了「某个人按了鼠标」(本机程序读得到
@@ -384,6 +390,38 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
       /还点不动运行[^。]*放开之后这个任务就能再次运行/,
       "同一条记录不许前半句说点不动、后半句说能运行",
     );
+  }
+
+  // ── **N2 本体**:过了闸之后,业务怎么回都得把下一份凭据交回去 ────────────────────
+  //
+  // 凭据是闸烧的,而上一版的续发写在各条路由的**成功分支**里:400(没确认重复风险)、
+  // 409(没有占位可放)、500 这几条路径一个字都不发 —— 于是同一个页面的下一次点击必然 403
+  // 「需要页面凭据」,用户只能刷新页面,而他上一步做的其实是一次完全正常的操作。
+  //
+  // 这里走 400 那条:故意不确认重复风险。它必须 ① 带回下一份凭据,② 那一份真的按得动。
+  {
+    const beforeReject = issueHumanActionToken();
+    const liveAtReject = liveHumanActionTokenCount();
+    const rejected = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: beforeReject },
+      body: JSON.stringify({ acknowledgeDuplicateRisk: false }),
+    });
+    assert.equal(rejected.status, 400, "台子前提:没确认重复风险的那一次是业务拒绝");
+    const afterReject = rejected.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER);
+    assert.equal(typeof afterReject, "string", "业务拒绝也必须给回下一份凭据(闸烧掉的那一份)");
+    assert.notEqual(afterReject, beforeReject, "给回的必须是新的一份");
+    assert.equal(liveHumanActionTokenCount(), liveAtReject, "烧一份发一份,在册数不该涨");
+    // 那一份真的按得动:这才是 N2 要的结论 —— 一次普通的业务拒绝之后不必刷新页面。
+    assert.equal(claimTurn("t-gate"), true);
+    await new Promise((r) => setTimeout(r, 40));
+    const retried = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: afterReject! },
+      body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    });
+    assert.equal(retried.status, 200, "拒绝之后给回的那一份必须按得动,不能逼用户刷新页面");
+    assert.equal(typeof retried.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER), "string", "这一次照样要续一份");
   }
 
   // 重放刚用过的那一份:403。日志、截图、历史记录里抄到的那一串按不动第二次。

@@ -22,7 +22,13 @@
 // 被这道闸挡在外面。
 import type { MiddlewareHandler } from "hono";
 import { actorOf, isAccountHolder } from "./context.js";
-import { HUMAN_ACTION_TOKEN_HEADER, consumeHumanActionToken, markHumanActionVerified } from "./human-action-token.js";
+import {
+  HUMAN_ACTION_TOKEN_HEADER,
+  HUMAN_ACTION_TOKEN_NEXT_HEADER,
+  consumeHumanActionToken,
+  issueHumanActionToken,
+  markHumanActionVerified,
+} from "./human-action-token.js";
 import { crossSiteRejection, WRITE_METHODS } from "./middleware.js";
 import { isMultiUser } from "./mode.js";
 
@@ -132,6 +138,19 @@ export function personalWriteGate(): MiddlewareHandler {
   return async (c, next) => {
     if (!c.req.path.startsWith("/api/")) return next();
     if (!WRITE_METHODS.has(c.req.method)) return next();
+    /**
+     * 烧掉一份就得发下一份 —— **由这道闸发,不分成功失败**(第 5 轮审查 N2)。
+     *
+     * 原先是各条路由在自己的成功分支里 `[HUMAN_ACTION_TOKEN_FIELD]: issueHumanActionToken()`:
+     * 消费在闸这一处、续发散在 N 条路由的 happy path 上,于是一次业务拒绝(400/409)或异常
+     * (500)之后,凭据已经烧了、页面手里还攥着废号,同一个页面的下一次点击必然 403「需要页面
+     * 凭据」——而那句话读起来像是开关坏了。收回这里之后,新增一条真人端点不需要记得做任何事。
+     */
+    let issued: string | null = null;
+    const handoff = async () => {
+      await next();
+      if (issued) c.header(HUMAN_ACTION_TOKEN_NEXT_HEADER, issued);
+    };
     // 真人专属动作先判:它**不看单人/多人**(理由见 HUMAN_ONLY_PATHS)。
     if (isHumanOnlyPath(c.req.path)) {
       if (!isAccountHolder(actorOf(c))
@@ -150,17 +169,20 @@ export function personalWriteGate(): MiddlewareHandler {
       // 一言不发的 200(审查实测)。穷举「哪些头没带算可疑」救不了这个形状:少一种组合
       // 就是一个缺口。所以改成要一份**本服务自己发出去**的凭据,拿不出来就是拒绝;
       // 它的能力边界写在 human-action-token.ts 顶部,别把它当密码学边界用。
+      //
+      // 这几条 403 都**不发**下一份:凭据没被烧掉(或者这根本不是本人),页面手里那份还能用。
       if (!consumeHumanActionToken(c.req.header(HUMAN_ACTION_TOKEN_HEADER))) {
         return c.json({ error: HUMAN_ACTION_TOKEN_REFUSAL }, 403);
       }
       // 核验过了盖个戳。路由拿它决定留痕的措辞 —— 别让路由自己去重读请求头推断
       // (那是第二份判据,而且推断不出「闸到底跑没跑」,见 humanActionOrigin)。
       markHumanActionVerified(c);
+      issued = issueHumanActionToken();
     }
-    if (!(await isMultiUser())) return next();
+    if (!(await isMultiUser())) return handoff();
     // 只拦 agent:真人(cookie / Bearer)本来就是账号本人,匿名早被 authGate 拦掉了。
-    if (actorOf(c).kind !== "agent") return next();
-    if (!isPersonalWritePath(c.req.path)) return next();
+    if (actorOf(c).kind !== "agent") return handoff();
+    if (!isPersonalWritePath(c.req.path)) return handoff();
     return c.json({ error: AGENT_PERSONAL_REFUSAL }, 403);
   };
 }

@@ -17,9 +17,13 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0, strictPort: false } });
 
 const HEADER = "x-ash-human-action-token";
+// 下一份凭据走**响应头**(shared 的 HUMAN_ACTION_TOKEN_NEXT_HEADER):烧掉它的是闸,发下一份
+// 也归闸,所以不分状态码 —— 原先是各条路由在成功分支里塞进响应体,业务拒绝那几条路径一个
+// 字都不发,于是一次 400/409 之后这个开关就按不动了(第 5 轮审查 N2)。
+const NEXT = "x-ash-human-action-token-next";
 const REFUSAL = "这个动作需要本次会话的页面凭据：请在 ash 页面上点这个开关。凭据随页面下发、用一次就失效，刷新页面可以换一份新的";
-const json = (route, body, status = 200) =>
-  route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+const json = (route, body, status = 200, headers) =>
+  route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body), headers });
 
 const notices = (rows, remedy = "reclaim-turn") => ({ notices: rows, remedy });
 const at = (n) => `2026-10-31T0${n}:00:00.000Z`;
@@ -60,12 +64,18 @@ try {
       // 照服务端那条路拼(task-run-routes.ts 的 reclaim-turn):note = 结论 + nextStep + 副作用。
       note: "已放开这个任务的回合占位，但它还点不动运行：任务还停在「排队中」——点一次停止把它收成「已取消」，之后就能重新运行"
         + "；如果原来那一位其实还活着，互斥就没了，同一个任务可能有两个回合并行改同一个工作区",
-      nextHumanActionToken: "page-token-2",
-    });
+    }, 200, { [NEXT]: "page-token-2" });
   });
   // 另一个任务的同类开关:凭据是整页共享的一份,这里必须收到轮换之后的那一份。
+  // 第一次故意**业务拒绝**(占位已经不在了,服务端那边是 409):凭据照样被闸烧掉了,所以这一
+  // 条响应同样得把下一份交回来 —— 下面 ②b 钉的就是「拒绝之后不必刷新页面」(N2)。
+  let secondCalls = 0;
   await page.route("**/api/tasks/t-second/reclaim-turn", (route) => {
     sent.push(route.request().headers()[HEADER]);
+    secondCalls += 1;
+    if (secondCalls === 1) {
+      return json(route, { error: "这个任务现在没有占着的回合占位", reclaimed: false }, 409, { [NEXT]: "page-token-3" });
+    }
     return json(route, { reclaimed: true, role: "single", heldMs: 1, runnable: true, status: "done", nextStep: null, note: "已放开这个任务的回合占位，现在可以继续运行" });
   });
   // 凭据对不上:服务端的真实形状(personal-gate.ts 的 403)。
@@ -102,8 +112,18 @@ try {
   // ── 凭据轮换对整页生效:另一个表面接着按,带的是服务端刚给回的那一份 ──
   const second = page.locator('[data-stage="t-second"] .task-turn-remedy');
   await second.locator("button", { hasText: "放开回合占位" }).click();
-  await second.locator(".task-turn-remedy__result").waitFor();
+  const secondResult = second.locator(".task-turn-remedy__result");
+  await secondResult.waitFor();
   assert.equal(sent[1], "page-token-2", "烧过一份之后,下一个真人动作必须换上响应里给回的那一份");
+
+  // ── ②b **N2 本体**:一次普通的业务拒绝之后,同一页接着按必须还按得动 ──
+  // 上一版的轮换只认成功响应,于是 409 之后手里攥着的是已经烧掉的那一串,下一次点击必然
+  // 403「需要页面凭据」—— 用户只能刷新页面,而他上一步做的是一次完全正常的操作。
+  assert.match(await secondResult.innerText(), /没有占着的回合占位/, "台子前提:这一次是业务拒绝");
+  assert.equal(await secondResult.locator("button").count(), 0, "业务拒绝不是凭据问题,不该冒出重新加载按钮");
+  await second.locator("button", { hasText: "放开回合占位" }).click();
+  await secondResult.filter({ hasText: "现在可以继续运行" }).waitFor();
+  assert.equal(sent[2], "page-token-3", "业务拒绝那一下给回的凭据必须换上 —— 不许逼用户刷新页面(N2)");
 
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
 
@@ -124,7 +144,7 @@ try {
   );
   if (process.env.SHOT_DENIED) await page.screenshot({ path: process.env.SHOT_DENIED, fullPage: true });
 
-  console.log("turn remedy: 读不准的记录照实说、没恢复时开关与下一步都留着、凭据 403 给出重新加载入口 ✔");
+  console.log("turn remedy: 读不准的记录照实说、没恢复时开关与下一步都留着、凭据按响应头轮换(业务拒绝之后照样按得动)、凭据 403 给出重新加载入口 ✔");
 } finally {
   await browser?.close();
   await server.close();

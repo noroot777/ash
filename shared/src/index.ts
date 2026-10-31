@@ -46,7 +46,7 @@ export type {
 export type { AppSettings, ComposerSendKey } from "./app-settings.ts";
 export { MAX_BROWSER_CDP_DOMAINS, normalizeBrowserCdpDomains, browserCdpHostOf, browserCdpDomainAllowed } from "./project.ts";
 export { COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "./app-settings.ts";
-export { HUMAN_ACTION_TOKEN_FIELD, HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META } from "./human-action.ts";
+export { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "./human-action.ts";
 
 // ── 多人模式 ────────────────────────────────────────────────────────────────
 // 类型本体在 ./multiuser.ts;运行时判据(目录名校验、权限判据)走子路径

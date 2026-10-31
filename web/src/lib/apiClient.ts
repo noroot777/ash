@@ -33,8 +33,36 @@ export async function parseBody(response: Response): Promise<unknown> {
   return parseText(await response.text());
 }
 
+/**
+ * 每个经过 `request()` 的响应都要过一遍的观察者。**不分状态码。**
+ *
+ * (上传那条走 XHR 的路 `postWithProgress` 不在内 —— 它拿不到 `Response` 对象。目前没有真人
+ * 专属动作走上传,真要有的话得先把那条路的响应头取出来。)
+ *
+ * 眼下唯一的用户是真人动作凭据的轮换（lib/humanActionToken.ts）:服务端在闸里烧掉一份、
+ * 在响应头上发下一份,而「哪些响应会带那个头」不该由每个调用点去记 —— 记漏一处的表现是
+ * 「那个开关按一次之后再也按不动」,而编译器不会说一句话（第 5 轮审查 N2）。
+ *
+ * 观察者只许读,不许改响应、也不许抛:它跑在每一次请求的热路径上。
+ */
+type ResponseObserver = (response: Response) => void;
+
+const responseObservers: ResponseObserver[] = [];
+
+export function observeResponses(observer: ResponseObserver): void {
+  responseObservers.push(observer);
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiPath(path), init);
+  // 一个坏观察者不该把每一次请求都搞砸:它是旁观者,出错只影响它自己那件事。
+  for (const observer of responseObservers) {
+    try {
+      observer(response);
+    } catch {
+      // 故意咽掉:它连「这次请求成没成」都不该左右。
+    }
+  }
   const body = await parseBody(response);
   if (!response.ok) {
     throw apiError(response, body);

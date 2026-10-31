@@ -25,7 +25,7 @@
 //   ③ 记录只说得出它能证的那一档(见 turn-lock-reclaim.ts 的措辞)。
 import { randomBytes } from "node:crypto";
 import type { Context } from "hono";
-export { HUMAN_ACTION_TOKEN_FIELD, HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META } from "@ash/shared/human-action";
+export { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "@ash/shared/human-action";
 
 /**
  * 这次启动的前缀。上次启动发出去的凭据因此一律验不过 —— 不必持久化、也不必清理。
@@ -51,9 +51,10 @@ function sweep(now: number): void {
 }
 
 /**
- * 发一份新凭据。**唯一的调用点是「服务端把页面文档交出去」那一刻**(index.ts 的 serveSpa)
- * 和真人动作成功之后的轮换 —— 别给它开一个 JSON 端点，那等于把「要先拿到页面文档」这一步
- * 也省掉了。
+ * 发一份新凭据。**只有两个调用点**:「服务端把页面文档交出去」那一刻(index.ts 的 serveSpa),
+ * 以及**闸烧掉一份之后的轮换**(personalWriteGate —— 烧和发在同一处,不分成功失败)。别给它
+ * 开一个 JSON 端点,那等于把「要先拿到页面文档」这一步也省掉了;也别在路由里自己发一份 ——
+ * 那正是 N2 的形状:错误分支一定会漏。
  */
 export function issueHumanActionToken(): string {
   const now = Date.now();
@@ -71,8 +72,8 @@ export function issueHumanActionToken(): string {
 /**
  * 核验并**烧掉**一份凭据。拿不出、对不上、过期、或者是上次启动发的 —— 一律 false。
  *
- * 烧掉之后调用方要把 `issueHumanActionToken()` 发的新一份交回页面(路由响应里带着)，
- * 这样「从日志里抄一串重放」就不成立。页面万一两边都丢了(响应在路上没了)，它重新加载
+ * 烧掉之后**闸**会把 `issueHumanActionToken()` 发的新一份挂在响应头上交回页面(见
+ * HUMAN_ACTION_TOKEN_NEXT_HEADER),这样「从日志里抄一串重放」就不成立。页面万一两边都丢了(响应在路上没了)，它重新加载
  * 一次文档就能换到新的 —— 那条恢复路径是刻意留的，不然用户会撞上一个按不动的开关。
  */
 export function consumeHumanActionToken(token: string | undefined | null): boolean {

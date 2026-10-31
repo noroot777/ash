@@ -45,7 +45,7 @@ import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
-import { HUMAN_ACTION_TOKEN_FIELD, humanActionOrigin, issueHumanActionToken } from "./auth/human-action-token.js";
+import { humanActionOrigin } from "./auth/human-action-token.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
 // 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
@@ -291,10 +291,9 @@ api.post("/tasks/:id/reclaim-turn", async (c) => {
     status: outcome.status,
     nextStep: outcome.nextStep,
     note,
-    // 凭据用一次就烧掉,所以得把下一份交回页面 —— 不然这个开关按完一次就再也按不动了
-    // (而用户看到的会是一句「需要页面凭据」,活像开关坏了)。理由见
-    // auth/human-action-token.ts;前端那一侧在 lib/humanActionToken.ts。
-    [HUMAN_ACTION_TOKEN_FIELD]: issueHumanActionToken(),
+    // 下一份凭据**不在这里发**:烧掉它的是闸,发下一份也归闸(响应头,不分成功失败)——
+    // 原先这里发一份、而 400/409/500 那几条路径一个字都不发,于是一次业务拒绝之后这个开关
+    // 就再也按不动了(第 5 轮审查 N2)。见 auth/personal-gate.ts 的 handoff。
   });
 });
 
@@ -478,9 +477,7 @@ api.post("/tasks/:id/team/kill-cua", async (c) => {
     after: result.after,
     status: result.status,
     warning: result.sideEffect,
-    // 这条端点也在真人专属闸后面(它杀的是开机级全局单例,外溢到用户在 ChatGPT 里的其它
-    // 会话),所以同样要把下一份凭据交回去。
-    [HUMAN_ACTION_TOKEN_FIELD]: issueHumanActionToken(),
+    // 下一份凭据同样由闸发(这条端点也在真人专属闸后面)。
   });
 });
 
