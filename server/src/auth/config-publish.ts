@@ -7,8 +7,9 @@
 //
 // 注:`scripts/` 下的安装器另有一份同规矩的实现(setup 在裸 Node 上跑,导不进 TS),两边
 // 只能靠「同一条规矩写两遍」,回归测试钉着两边行为一致。
+import { randomBytes } from "node:crypto";
 import {
-  closeSync, fsyncSync, mkdirSync, openSync,
+  closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync,
   readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -81,34 +82,97 @@ function resolveTarget(file: string): string {
  * 代价是**失去原子替换**:截断到写完之间有个窗口,这期间 CLI 读到的是空的或者半截的
  * (第 4/5 轮 N8,现在全平台都如此;这份 `.claude.json` 还是 CLI 自己也在写的文件)。所以
  * **恢复手段必须是明确的**:写出异常就把这一轮读到的那一版原样写回去(原来没有这个文件就
- * 把它删掉)。回写也失败、或者断电/进程被杀来不及回写时,盘上会留下半截 —— 那一档这里兜不住,
- * 由下一次起跑接住:读得通但没有 ash ⇒ 重新补一份;读不通 ⇒ 不猜、如实报给用户。
+ * 把它删掉),而且**动手之前先留一份核对过的备份**(见 `backupBefore`)。
+ *
+ * 回写也失败时盘上就是半截。那不只是「断电/被杀」那一档 —— 本轮审查在裸 Node 那侧实测过
+ * **只有目标那个 inode 持续坏**的情形:同目录预演过得去,写活动文件一直 EIO,回写同样 EIO,
+ * 活动配置留成 `{"other":{"`。所以这一档必须靠备份,不能靠「下一次起跑接住」:下一次起跑能
+ * 接住的只有「读得通但没有 ash ⇒ 重新补一份」和「读不通 ⇒ 不猜、如实报给用户」。
  *
  * 所有者(uid/gid)没抄:配置在谁的目录里就该由谁这个进程写。
  */
+/** 预演产物的名字前缀。后面还要接一段随机值 —— 见 `rehearse` 的「独占创建」。 */
+const PROBE_PREFIX = ".ash-publish-probe-";
+
 /**
  * **动用户那份之前,先证明这份正文落得下去**:在同目录(同一个文件系统、同一份配额)写一个
  * 只有自己能读的临时文件、fsync 到设备、再删掉。落不下去就交回那句话,活动配置一个字节没碰。
  *
- * 为什么非要这一步(本轮审查 R1):就地写是先截断再写,没有原子性,而上一版把「写出异常就回写
+ * 为什么非要这一步(审查 R1):就地写是先截断再写,没有原子性,而上一版把「写出异常就回写
  * 旧正文」当成了失败安全。可写失败往往不是一次性的(配额耗尽、设备 EIO、挂载转只读),那时
  * **回写同样失败**,盘上留下半截正文、备份完整,而 CLI 读的是活动那份。预演把这一整类挡在
- * 动手之前;挡不住的只剩「写到一半断电/被杀」,那一档任何非原子写都兜不住。
+ * 动手之前。挡不住的有两档,话术里不许瞒着:① 写到一半断电/被杀;② **只有目标那个 inode 坏**
+ * 的持续故障(同目录预演过得去、真写一直 EIO)。两档都靠 `commit` 留下的备份还原。
+ *
+ * **探针一律独占创建**(本轮审查 F1,裸 Node 那侧实测:上一版那个固定名字被指向一个无关文件
+ * 时,预演把用户那份正文整份覆盖进去、随后还把它删了)。三条一起才算数:
+ *  · 名字带随机段,而且用 `wx` 打开 —— 路径上此刻有任何东西(普通文件、软链接、目录)都直接
+ *    EEXIST,我们绝不会写到别人的对象上;
+ *  · 写和 fsync 都走**自己这个句柄**,不按路径二次打开;
+ *  · 只删**自己刚建出来的那一个**,不是 force 清扫一个固定名字。
  */
 function rehearse(target: string, body: string, create: boolean): string | null {
-  const probe = `${target}.ash-publish-probe`;
+  // 新建那一路:父目录得先有(gemini 的 `.gemini/`、kiro 的 `settings/` 这种子层)。
+  // 顺序跟真写那一步一致 —— 建目录本身也是一次写,挡不住的话这一步就该失败。
+  if (create) {
+    try { mkdirSync(dirname(target), { recursive: true }); } catch (e) { return (e as Error).message; }
+  }
+  let probe = "";
+  let fd: number | null = null;
+  for (let left = 4; left > 0; left--) {
+    probe = `${target}${PROBE_PREFIX}${randomBytes(9).toString("hex")}`;
+    try { fd = openSync(probe, "wx", TMP_MODE); break; } catch (e) {
+      if ((e as { code?: string }).code !== "EEXIST" || left === 1) return (e as Error).message;
+    }
+  }
   try {
-    // 新建那一路:父目录得先有(gemini 的 `.gemini/`、kiro 的 `settings/` 这种子层)。
-    // 顺序跟真写那一步一致 —— 建目录本身也是一次写,挡不住的话这一步就该失败。
-    if (create) mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(probe, body, { encoding: "utf8", mode: 0o600 });
-    const fd = openSync(probe, "r+");
-    try { fsyncSync(fd); } finally { closeSync(fd); }
+    writeFileSync(fd!, body, "utf8");
+    fsyncSync(fd!);
     return null;
   } catch (e) {
     return (e as Error).message;
   } finally {
-    try { rmSync(probe, { force: true }); } catch { /* 预演产物,删不掉也不该拦住结论 */ }
+    try { closeSync(fd!); } catch { /* 已经关了也不该拦住结论 */ }
+    try { rmSync(probe, { force: true }); } catch { /* 自己的产物,删不掉也不该拦住结论 */ }
+  }
+}
+
+
+/** 备份文件的后缀。跟安装器那份同名:同一个用途,用户只需要记住一个名字。 */
+export const BACKUP_SUFFIX = ".bak-ash-setup";
+
+/**
+ * **改写已有文件之前,先留一份核对过的备份**(本轮审查 F2 的可修部分)。
+ *
+ * 为什么非留不可:就地写没有原子替换,而「写出异常就回写旧正文」这条退路在**只有目标那个
+ * inode 坏**的持续故障下同样失败 —— 审查在裸 Node 那侧实测过:活动配置留成 `{"other":{"`,
+ * 而这条路**一份备份都没有**,用户手里什么都不剩。安装器那侧一直有 `.bak-ash-setup`,服务端
+ * 这条(每次起跑、每次读设置页都会走)原来没有。
+ *
+ * **核对**的意思是:拷完立刻读回来逐字节比对。拷贝本身也可能半途失败(同一类设备故障),
+ * 一份半截的备份比没有备份更坏 —— 那种情况下直接收手,活动配置一个字节都不碰。
+ *
+ * 返回 `{ backup }` = 留好了;`{ why }` = 没留成,这次别写;`{ backup: null }` = 原来没有
+ * 这个文件,没什么可备份的。`created` = 这一轮新建的 —— 收手时只删得掉自己建的那一份,
+ * **上一次成功发布留下的备份不许动**(那是用户手里唯一的旧版本)。
+ */
+function backupBefore(read: ConfirmedRead): { backup: string | null; created: boolean } | { why: string } {
+  if (read.text === null) return { backup: null, created: false };
+  const backup = `${read.file}${BACKUP_SUFFIX}`;
+  const existed = existsSync(backup);
+  try {
+    // `copyFileSync` 在 POSIX 上带着原权限建目标(0600 的配置不会从备份这条路泄出去);
+    // Windows 的 DACL 它复制不了,那份备份仍继承父目录 —— 跟安装器那侧同一个做法。
+    copyFileSync(read.file, backup);
+    const back = readForWrite(backup);
+    if (!back || back.text !== read.text) {
+      if (!existed) { try { rmSync(backup, { force: true }); } catch { /* 尽力 */ } }
+      return { why: `给 ${read.file} 留备份没留成（${backup} 读回来跟原文不一样），所以这次什么都没写` };
+    }
+    return { backup, created: !existed };
+  } catch (e) {
+    if (!existed) { try { rmSync(backup, { force: true }); } catch { /* 尽力 */ } }
+    return { why: `给 ${read.file} 留备份没留成（${(e as Error).message}），所以这次什么都没写` };
   }
 }
 
@@ -189,17 +253,44 @@ const PUBLISH_TRIES = 3;
 export type Commit = (read: ConfirmedRead, body: string) => string | null;
 
 const commit: Commit = (read, body) => {
-  const now = readForWrite(read.file);
-  if (!now) return `要写 ${read.file} 之前又读不出它了`;
-  // 别人动过 ⇒ 这一轮读到的那一版已经不作数,整条重做(见 publishFresh 的 ②)。
-  if (now.text !== read.text) throw STALE;
   // 预演先行(R1):落不下去就在这里收手,用户那份还是原样。
   const dry = rehearse(resolveTarget(read.file), body, read.text === null);
   if (dry) return `写不进 ${read.file} 所在的目录（${dry}），所以这次什么都没写`;
-  publishInPlace(read, body);
+  const saved = backupBefore(read);
+  if ("why" in saved) {
+    // 备份核不上有两种来历:**活动那份在这期间被改过**(拷到的就是新那版)⇒ 整条重做;
+    // 拷贝自己出了问题 ⇒ 如实说没留成、这次不写。
+    const live = readForWrite(read.file);
+    if (live && live.text !== read.text) throw STALE;
+    return saved.why;
+  }
+  // **写盘前最后一步:再确认一次盘上还是这一轮读到的那一版**(本轮审查 F3)。上一版把这一道
+  // 放在最前面,后面还夹着预演(写一份全文 + fsync)和备份(整份 copy)—— 这两步在慢盘、
+  // 网络盘、大配置上是秒级的,而它们对外部编辑没有任何互斥作用:那段窗口里用户存了一版新
+  // 配置,上一版照旧拿旧快照盖下去,读回来比对还匹配、于是报成功。慢步骤全排在这一道之前。
+  const now = readForWrite(read.file);
+  if (!now) return dropBackup(saved, `要写 ${read.file} 之前又读不出它了`);
+  // 别人动过 ⇒ 这一轮读到的那一版已经不作数,整条重做(见 publishFresh 的 ②)。
+  if (now.text !== read.text) { dropBackup(saved, ""); throw STALE; }
+  try {
+    publishInPlace(read, body);
+  } catch (e) {
+    const restored = readForWrite(read.file);
+    if (restored && restored.text === read.text) {
+      return `写 ${read.file} 失败：${(e as Error).message}；原来那份已经原样放回去了`;
+    }
+    return `写 ${read.file} 失败：${(e as Error).message}；而且回写也没成功，活动那份现在是坏的 —— `
+      + `请把 ${saved.backup ?? "备份"} 拷回去手工还原`;
+  }
   const after = readForWrite(read.file);
   if (!after || after.text !== body) {
     return `写完 ${read.file} 读回来跟刚批准的那份不一样（有别的程序也在写它？），请手工检查一遍`;
   }
   return null;
 };
+
+/** 没写成就别留一份白备份:用户看见 `.bak-ash-setup` 会以为我们动过手。只删自己建的那份。 */
+function dropBackup(saved: { backup: string | null; created: boolean }, why: string): string {
+  if (saved.backup && saved.created) { try { rmSync(saved.backup, { force: true }); } catch { /* 尽力 */ } }
+  return why;
+}

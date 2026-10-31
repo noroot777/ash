@@ -11,11 +11,14 @@
 // `[mcp_servers.harness.tools.*]` 这类子表留成一条没有 command 的孤儿，codex 整份拒载 —— 新链
 // 第 5 轮审查第 2 条），但它自己也是「写临时文件再 rename」：让它去改用户真文件，硬链接在那一步
 // 就断了，我们后面再怎么保身份都来不及，删到一半失败还会把用户那份留在中间状态。
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-// 就地写那一套规矩(连同它的来历)只有一份,见该文件的头部注释。
-import { publishInPlace, TMP_MODE } from "./config-publish.mjs";
+import { join } from "node:path";
+// 整条发布事务(预演 → 备份 → 写盘前再校验一次 → 就地写 → 读回来比对)只有一份实现,
+// 规矩连同它的来历见该文件的头部注释。**这条路也必须走它**:上一版只在这里手写了「比对
+// 快照 + 备份 + publishInPlace」三行,于是预演那一道完全没有,持续写盘故障照样把用户那份
+// 留成半截(本轮审查 F2 的对称扫描项)。
+import { publishConfirmed, TMP_MODE } from "./config-publish.mjs";
 
 /** `codex mcp list --json` 的结果 → `{ ok, servers:[{name, enabled}] }` 或 `{ ok:false, why }`。 */
 export function parseCodexList(status, stdout) {
@@ -34,8 +37,9 @@ export function parseCodexList(status, stdout) {
  *                    那个 `CODEX_HOME` 里的配置（沙盘），不给就问用户自己那份
  * @param removeServer 让 codex 本人在**沙盘**里删掉一条登记：`(name, home) => boolean`
  * @returns action ∈ kept（已有，不动）| blocked（codex 读不动 —— 现有的那份，或者补完那段的
- *          那份；两种都是一个字节都没写）| added | migrated | foreignChange（批准期间用户那份
- *          被别的程序改过，所以没写）；added 带 legacyLeft = 历史名没删掉
+ *          那份；写不进它所在的目录也算 —— 三种都是一个字节都没写）| added | migrated |
+ *          foreignChange（批准期间用户那份被别的程序改过，所以没写）；added 带
+ *          legacyLeft = 历史名没删掉
  */
 export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, listServers, removeServer }) {
   const before = listServers();
@@ -67,26 +71,18 @@ export function registerCodexMcp({ configFile, mcpEntry, url, name, legacyName, 
     }
 
     // 批准过了才碰用户那份,而且只替换我们读到的那一版(问 codex 那一问是个子进程,这期间
-    // 用户或另一个 setup 可能已经存过新内容,拿旧快照盖回去就是把它抹掉)。
-    const now = existsSync(configFile) ? readFileSync(configFile, "utf8") : null;
-    if (now !== existing) {
-      return {
-        action: "foreignChange",
-        why: `${configFile} 在批准那一问期间被别的程序改过，所以这次没有写（免得盖掉那次改动）`,
-        backup: null, // 它一个字节都没被我们动过,给备份路径只会让人以为我们改了
-      };
+    // 用户或另一个 setup 可能已经存过新内容,拿旧快照盖回去就是把它抹掉)。这几道
+    // (新鲜度、预演、备份、读回来比对)全在发布器里,这里不再手写第二份。
+    const published = publishConfirmed({ file: configFile, previous: existing, body: written });
+    if (!published.ok) {
+      return published.stale
+        // 它一个字节都没被我们动过,给备份路径只会让人以为我们改了。
+        ? { action: "foreignChange", why: published.why, backup: null }
+        : { action: "blocked", why: published.why };
     }
-    mkdirSync(dirname(configFile), { recursive: true });
-    // 真要写了才备份：改的是用户自己的配置文件,出错要能一键还原。`copyFileSync` 在 POSIX 上
-    // 带着原权限建目标(所以 0600 的配置不会从备份这条路泄出去,回归里钉着这一条);Windows 的
-    // DACL 它复制不了,那份备份仍继承父目录 —— 这个做法本任务开工前就是这样(审查第 4 轮 N11)。
-    const backup = `${configFile}.bak-ash-setup`;
-    if (existing !== null) copyFileSync(configFile, backup);
-    publishInPlace(configFile, written, existing);
-    const backupPath = existing !== null ? backup : null;
     const legacyLeft = after.servers.some((s) => s.name === legacyName);
-    if (legacy && legacyRemoved && !legacyLeft) return { action: "migrated", backup: backupPath };
-    return { action: "added", backup: backupPath, legacyLeft };
+    if (legacy && legacyRemoved && !legacyLeft) return { action: "migrated", backup: published.backup };
+    return { action: "added", backup: published.backup, legacyLeft };
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
