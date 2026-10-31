@@ -107,13 +107,13 @@ function AgentMessage({
     >
       {/* 卡头左边已经有一颗同样的盾：卡里每条发言再挂一颗，只是把同一个身份画两遍。 */}
       {!laneRole && (
-        <span className="task-message-avatar" aria-hidden="true">
+        <span className="task-message-avatar" aria-hidden="true" data-selection-chrome="">
           {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
         </span>
       )}
       <div className="task-message-content">
         {!headless && (
-          <header>
+          <header data-selection-chrome="">
             {showIdentity && (
               <span className="agent-run-identity">
                 <b>{item.label}</b>
@@ -167,7 +167,7 @@ function UserMessage({
   return (
     <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}`}>
       <div className="task-user-bubble">
-        <header>
+        <header data-selection-chrome="">
           <b>{bySystem ? "系统" : "你"}</b>
           {item.at && <time>{formatInstant(item.at)}</time>}
           {displayBody && (

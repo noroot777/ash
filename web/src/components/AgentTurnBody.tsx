@@ -31,6 +31,7 @@ function ProcessFold({ events, open, onToggle, children }: {
   return (
     <details
       className={`task-execution-block task-turn-process${executionBlockTone(events)}`}
+      data-selection-chrome=""
       open={open}
       onToggle={(event) => onToggle(event.currentTarget.open)}
     >

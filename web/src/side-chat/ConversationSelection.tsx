@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { createPortal } from "react-dom";
 import { Chats, NotePencil, Quotes } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { selectionContentText } from "./selectionContent.ts";
 import { stageSideChatQuote } from "./sideChatQuote.ts";
 import "./conversation-selection.css";
 
@@ -40,10 +41,12 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
         const selection = window.getSelection();
         if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return setSelected(null);
         const range = selection.getRangeAt(0);
-        if (!root.current?.contains(range.startContainer) || !root.current.contains(range.endContainer)
+        const scope = root.current;
+        if (!scope?.contains(range.startContainer) || !scope.contains(range.endContainer)
           || elementOf(range.startContainer)?.closest(controls) || elementOf(range.endContainer)?.closest(controls)
           || range.cloneContents().querySelector("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return setSelected(null);
-        const text = selection.toString();
+        // 浮条上那几颗按钮取的是正文，不是选区扫过的每一个字符（见 selectionContent.ts）。
+        const text = selectionContentText(selection, scope);
         const rect = range.getBoundingClientRect();
         if (!text.trim() || (!rect.width && !rect.height) || rect.bottom < 0 || rect.top > innerHeight) return setSelected(null);
         const last = Array.from(range.getClientRects()).filter((box) => box.width && box.height).at(-1) ?? rect;

@@ -216,7 +216,7 @@ export function ExecutionDetails(
   events = events.filter(isVisibleExecutionEvent);
   if (!events.length) return null;
   return (
-    <details className={`task-execution-block${executionBlockTone(events)}`}>
+    <details className={`task-execution-block${executionBlockTone(events)}`} data-selection-chrome="">
       <summary>
         <ExecutionSummaryLine events={events} running={running} awaiting={awaiting} />
       </summary>
