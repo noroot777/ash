@@ -15,7 +15,7 @@ import { CATCH_UP_DEADLINE_MS, createCatchUp } from "../src/lib/catchUp.ts";
 /** 跑完所有已排的微任务(settle 挂在 then 上)。 */
 const settled = () => new Promise((resolve) => setImmediate(resolve));
 
-function harness() {
+function harness(overrides = {}) {
   const sent = [];
   const retries = [];
   const deadlines = [];
@@ -23,7 +23,9 @@ function harness() {
   const catchUp = createCatchUp(
     (signal) => new Promise((resolve) => { sent.push({ resolve, signal }); }),
     {
+      // 默认是固定节奏;`{ retry: () => null }` 这种**有限**节奏由用例自己传(见 ⑨)。
       retry: 5000,
+      ...overrides,
       timers: {
       set: (run, delayMs, kind) => {
         const handle = ++next;
@@ -244,4 +246,34 @@ function harness() {
   assert.equal(h.count, 2, "并且立刻发车");
 }
 
-console.log("✓ 追平层的纪律:同代次串行攒一笔欠账、换代次掐断旧的自己发车、旧代次落地不清新代次的待办、失败自排重试且取消即停、一发挂住到点按没读到算并真掐断、run() 等的是这次触发那一趟、runNow() 抢占在途那一发并把等待者转交给它");
+// ⑨ 节奏说「到此为止」时,**攒着还没被认领的那几次触发也要结算**(本轮审查 N1)。
+//
+// 上一版停下来时只唤醒了本趟自己那些等待者:在途期间再触发的那一次记成了欠账,而欠账在
+// 这一支里被清成 null、`waiting` 又没人来取 —— 它的 promise 永远 pending。无限节奏的那几屏
+// 走不到这一支,所以得拿一条**有限**节奏来测:`retry: () => null` 第一次没读到就到此为止。
+{
+  const h = harness({ retry: () => null });
+  let background = false;
+  let queued = false;
+  void h.catchUp.run().then(() => { background = true; });
+  await settled();
+  void h.catchUp.run().then(() => { queued = true; });   // 在途期间再触发:记一笔欠账
+  await settled();
+  assert.equal(h.count, 1, "在途期间不许并发开第二发");
+  await h.land(0, false);                                // 没读到,而节奏说别再试了
+  assert.equal(h.retries.length, 0, "节奏说到此为止,不许再排重试");
+  assert.equal(h.count, 1, "也不许偷偷自己再发一趟");
+  assert.equal(background, true, "这一发自己的等待者照旧兑现");
+  assert.equal(queued, true, "欠账那一次也要兑现 —— 不会再有那一趟了,吊着它就是骗调用方");
+  // 停下来**不是把恢复责任丢掉**:人点一下还能重新开始(额度清零),而且这一次等的是它自己
+  // 那一趟,不是刚才那个已经结算掉的。
+  let manual = false;
+  void h.catchUp.run().then(() => { manual = true; });
+  await settled();
+  assert.equal(h.count, 2, "停下来之后手动按钮按得动");
+  assert.equal(manual, false, "它等的是自己这一趟");
+  await h.land(1, true);
+  assert.equal(manual, true, "自己那一趟落地才兑现");
+}
+
+console.log("✓ 追平层的纪律:同代次串行攒一笔欠账、换代次掐断旧的自己发车、旧代次落地不清新代次的待办、失败自排重试且取消即停、一发挂住到点按没读到算并真掐断、run() 等的是这次触发那一趟、runNow() 抢占在途那一发并把等待者转交给它、有限节奏停下来时连没认领的等待一起结算");

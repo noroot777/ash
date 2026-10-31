@@ -295,7 +295,19 @@ export function createCatchUp(
         // `null` = 这一屏的节奏说「到此为止」。**不是把恢复责任丢掉** —— 那几处都同时把
         // 「没读到」如实显示出来并给了一颗手动按钮(见 CatchUpRetry 的说明);按下去就是一次
         // 新的 run(),额度也跟着清零。
-        if (delay !== null) timer = timers.set(() => attempt(generationAtStart), delay, "retry");
+        if (delay !== null) {
+          timer = timers.set(() => attempt(generationAtStart), delay, "retry");
+          return;
+        }
+        // 到此为止 ⇒ 这一代次里**不会再有下一趟**,所以攒在 `waiting` 里还没被哪一发认领的
+        // 那几次触发也得当场结算(本轮审查 N1)。判据跟 `cancel` 末尾那一句一模一样:兑现的是
+        // 「那一趟落地了」,而「不会再有那一趟」同样是落地 —— 吊着它们等于让调用方等一个
+        // 永远不来的 promise。上一版只唤醒了本趟自己那些等待者、又把欠账清成了 null,于是
+        // 在途期间触发的那一次永远 pending(`retry: () => null` 这种节奏第一次失败就走到这儿;
+        // 无限节奏的那几屏之所以没事,只是因为它们永远不走这一支)。
+        const stranded = waiting;
+        waiting = [];
+        wake(stranded);
         return;
       }
       failures = 0;
