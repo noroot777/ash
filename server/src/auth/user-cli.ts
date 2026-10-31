@@ -41,9 +41,18 @@ const MEMORY_FILE: Partial<Record<AgentType, string>> = {
 /** 有个人配置目录的 CLI(管理面按它列节)。 */
 export const PERSONAL_CLI_TYPES = Object.keys(CONFIG_DIR_ENV) as AgentType[];
 
-/** 没有等价环境变量时,如实说明原因(界面上原样显示)。 */
+/**
+ * 个人档没接这家 CLI 时,如实说明原因(界面上原样显示)。
+ *
+ * 注意**别把「没接」写成「做不到」**:2026-10-31 实测,gemini 有 `GEMINI_CLI_HOME`、grok 有
+ * `GROK_HOME`、kimi 有 `KIMI_CODE_HOME`、copilot 有 `COPILOT_HOME`(各家见
+ * `mcp-registry/catalog.ts` 那张表的 `dirEnv`)—— 技术上都能隔离。没接是**有意的**:那些变量
+ * 整体取代配置目录,一接上,用户宿主机上这些 CLI 的登录态就一起被隔掉(claude 实测如此),
+ * 那是另一件要单独验的事。这里只如实说现状。
+ */
 const UNSUPPORTED_REASON: Partial<Record<AgentType, string>> = {
-  gemini: "gemini CLI 没有「整体取代配置目录」的环境变量，个人级技能/指令暂时做不到，只有项目级生效",
+  gemini: "gemini 有 GEMINI_CLI_HOME（2026-10-31 实测整体取代配置目录），但个人档还没接它 —— "
+    + "接上会把宿主机上的 gemini 登录态一起隔掉，要单独一轮；现在只有项目级生效",
 };
 
 export const configDirEnvVar = (agentType: string): string | null =>
@@ -208,8 +217,12 @@ export async function personalCliEnv(userId: string, agentType: AgentType): Prom
  * 跑满 35 分钟写完报告，最后才发现没有 `report_stage` 可调，而 ash 全程一言不发。
  */
 async function warnHostAshMcp(): Promise<void> {
-  const gaps: { line: string; basis: "cli" | "file" }[] = [];
-  for (const agentType of ["claude", "codex"]) {
+  const gaps: { line: string; basis: "cli" | "file"; agentType: string }[] = [];
+  // **逐家问,不再只问 claude / codex**(2026-10-31):另外十三家原来压根没有登记逻辑,
+  // 预检也一律放行,于是「换个 agent 跑任务全是 failed」这件事启动日志一个字都不说。
+  // 这台机器上没装的那几家不会出现在这里 —— `hostAshMcpGap` 找不到 CLI 就不报缺口。
+  const { AGENT_TYPES } = await import("@ash/shared");
+  for (const agentType of AGENT_TYPES) {
     const file = hostCliConfigFile(agentType);
     // **不拿「配置文件在不在」当「这个 CLI 用没用过」**：装了 codex、从没写过 config.toml 的
     // 机器正是最该出声的那种 —— 派审那道门禁对同一个形状答的是「确实没有」（新链第 2 轮审查
@@ -227,7 +240,7 @@ async function warnHostAshMcp(): Promise<void> {
     const { hostAshMcpGap } = await import("../ash-mcp-reachability.js");
     const gap = await hostAshMcpGap(agentType);
     if (!gap) continue;
-    gaps.push({ line: `${agentType}（${file}）：${gap.problem}`, basis: gap.basis });
+    gaps.push({ line: `${agentType}（${file}）：${gap.problem}`, basis: gap.basis, agentType });
   }
   if (!gaps.length) return;
   // 措辞里的「这台机器的默认配置下」不是客套：这里问的是**宿主默认上下文** ——
@@ -244,8 +257,13 @@ async function warnHostAshMcp(): Promise<void> {
     + "这么跑起来的 agent 交不了卷"
     + "（没有 complete_task，干完的活会记 failed；派出去的审查跑完也给不出结论）：");
   for (const g of gaps) console.warn(`  · ${g.line}`);
-  console.warn("  自查：claude mcp get ash / codex mcp list --json。接法见 docs/install.md，"
-    + "或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
+  const named = gaps.map((g) => g.agentType);
+  const selfCheck = [
+    named.includes("claude") ? "claude mcp get ash" : null,
+    named.includes("codex") ? "codex mcp list --json" : null,
+  ].filter(Boolean).join(" / ");
+  console.warn(`  自查：${selfCheck ? `${selfCheck}，其余几家看上面那几个路径。` : "看上面那几个路径。"}`
+    + "接法见 docs/install.md，或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
 }
 
 export async function sweepPersonalAshMcp(): Promise<void> {

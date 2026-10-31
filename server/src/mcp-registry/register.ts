@@ -91,6 +91,30 @@ export function ashMcpStateIn(
 
 const unknownState = (detail: string): AshMcpConfigState => ({ state: "unknown", serverName: null, detail });
 
+/**
+ * 「这家 CLI 的 MCP 机制本身够不够用」—— 预检拦/提示的措辞**只有这一份**。
+ *
+ * 两档分开:`refuse` 是表里按实测/文档写死的「确实没有 MCP」,拦得住才对;`hint` 是「有 MCP、
+ * 只是 ash 不替他写」(trae 的 YAML),拦不得 —— 用户完全可能自己接好了,而我们读不了那种格式,
+ * 「读不了」不是「没有」。返回 null = 这家归常规判据管(问 CLI 或读配置)。
+ */
+export function ashMcpUnsupported(
+  agentType: string,
+  mechanism: AshMcpMechanism | null,
+): { tier: "refuse" | "hint"; why: string } | null {
+  if (!mechanism) return null;
+  if (mechanism.kind === "none") {
+    return { tier: "refuse", why: `${agentType} 没有 MCP 机制：${mechanism.why} —— 这一轮跑完也上报不了结论` };
+  }
+  if (mechanism.kind === "manual") {
+    return {
+      tier: "hint",
+      why: `${agentType} 的 ash MCP 登记 ash 不会自动写（${mechanism.howTo}）；若没接过，这一轮跑完上报会失败`,
+    };
+  }
+  return null;
+}
+
 /** 补接的结果。`ok:false` 时 `why` 是**给用户看**的一句话(会进时间线和设置页)。 */
 export type AshMcpRegisterResult = { ok: true; serverName: string } | { ok: false; why: string };
 

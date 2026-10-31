@@ -227,6 +227,25 @@ export const opencodeJsonShape: AshMcpShape = {
     if (back.state !== "present") return { why: `补上那条之后仍读不出 ash MCP 登记（${back.detail}）` };
     return { body };
   },
+  hostEntry(text) {
+    const doc = parseDoc(text);
+    const servers = doc ? asObject(doc[OPENCODE_CONTAINER]) : null;
+    if (!servers) return null;
+    for (const name of WANTED) {
+      const entry = asObject(servers[name]);
+      // 这一族的 `command` 是整条 argv:第一个是命令,其余是参数(别忘了这跟上一族相反)。
+      const argv = entry && Array.isArray(entry.command) ? entry.command.map(String) : [];
+      if (!argv.length) continue;
+      return {
+        command: argv[0]!,
+        args: argv.slice(1),
+        env: Object.fromEntries(
+          Object.entries(asObject(entry!.environment) ?? {}).map(([k, v]) => [k, String(v)]),
+        ),
+      };
+    }
+    return null;
+  },
   launch(text) {
     const doc = parseDoc(text);
     const servers = doc ? asObject(doc[OPENCODE_CONTAINER]) : null;

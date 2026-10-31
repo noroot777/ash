@@ -48,7 +48,12 @@ export const ASH_MCP_TABLE = {
   codex: {
     kind: "file",
     shape: mcpServersTomlShape,
-    site: { dirEnv: "CODEX_HOME", defaultDir: underHome(".codex"), relative: ["config.toml"] },
+    site: {
+      dirEnv: "CODEX_HOME",
+      defaultDir: underHome(".codex"),
+      relative: ["config.toml"],
+      projectRelative: [[".codex", "config.toml"]],
+    },
     // codex 按 `env_vars` 白名单过滤 MCP 子进程环境:起跑时用 `-c mcp_servers.<名>.env_vars=[…]`
     // 声明(`executors/codex.ts`)。**那是按回合给的命令行覆盖,不是写进配置文件的** ——
     // 回合 token 一轮一个,写进配置就是过期的假身份。
@@ -63,7 +68,12 @@ export const ASH_MCP_TABLE = {
   gemini: {
     kind: "file",
     shape: mcpServersJsonShape,
-    site: { dirEnv: "GEMINI_CLI_HOME", defaultDir: atHome, relative: [".gemini", "settings.json"] },
+    site: {
+      dirEnv: "GEMINI_CLI_HOME",
+      defaultDir: atHome,
+      relative: [".gemini", "settings.json"],
+      projectRelative: [[".gemini", "settings.json"], [".mcp.json"]],
+    },
     identity: "inherit",
     identityNote: "gemini 把交给 MCP 子进程的环境按**变量名**过滤（命中 /TOKEN|KEY|SECRET|AUTH/i 一类的删掉），"
       + "所以回合身份另按 `*_TICKET` 别名导一份（`shared/src/mcp.ts` 的 `ASH_TURN_IDENTITY_ENV`）；"
@@ -78,7 +88,12 @@ export const ASH_MCP_TABLE = {
   grok: {
     kind: "file",
     shape: mcpServersTomlShape,
-    site: { dirEnv: "GROK_HOME", defaultDir: underHome(".grok"), relative: ["config.toml"] },
+    site: {
+      dirEnv: "GROK_HOME",
+      defaultDir: underHome(".grok"),
+      relative: ["config.toml"],
+      projectRelative: [[".grok", "config.toml"]],
+    },
     identity: "unknown",
     identityNote: "没验过它给 MCP 子进程的环境是不是原样继承（TOML 里也没有 codex 那样的 `env_vars` 声明位）",
     evidence: "tested",
@@ -93,7 +108,13 @@ export const ASH_MCP_TABLE = {
   kimi: {
     kind: "file",
     shape: mcpServersJsonShape,
-    site: { dirEnv: "KIMI_CODE_HOME", defaultDir: underHome(".kimi-code"), relative: ["mcp.json"] },
+    site: {
+      dirEnv: "KIMI_CODE_HOME",
+      defaultDir: underHome(".kimi-code"),
+      relative: ["mcp.json"],
+      // 装好的二进制里原文列着这三档:user / projectRoot 的 `.mcp.json` / `<cwd>/.kimi-code/mcp.json`。
+      projectRelative: [[".mcp.json"], [".kimi-code", "mcp.json"]],
+    },
     identity: "unknown",
     evidence: "tested",
     source: "装好的 kimi 二进制里原文写着「The unified MCP management view: user-level "
@@ -112,6 +133,7 @@ export const ASH_MCP_TABLE = {
       defaultDir: xdgConfig("opencode"),
       relative: ["opencode.json"],
       alternates: [["opencode.jsonc"]],
+      projectRelative: [["opencode.json"], ["opencode.jsonc"], [".opencode", "opencode.json"]],
     },
     identity: "inherit",
     evidence: "tested",
@@ -126,7 +148,12 @@ export const ASH_MCP_TABLE = {
   cursor: {
     kind: "file",
     shape: mcpServersJsonShape,
-    site: { dirEnv: null, defaultDir: underHome(".cursor"), relative: ["mcp.json"] },
+    site: {
+      dirEnv: null,
+      defaultDir: underHome(".cursor"),
+      relative: ["mcp.json"],
+      projectRelative: [[".cursor", "mcp.json"]],
+    },
     identity: "unknown",
     evidence: "docs",
     // 文档明说 stdio 这条 `type` 是必填。
@@ -140,7 +167,12 @@ export const ASH_MCP_TABLE = {
   qwen: {
     kind: "file",
     shape: mcpServersJsonShape,
-    site: { dirEnv: "QWEN_HOME", defaultDir: atHome, relative: [".qwen", "settings.json"] },
+    site: {
+      dirEnv: "QWEN_HOME",
+      defaultDir: atHome,
+      relative: [".qwen", "settings.json"],
+      projectRelative: [[".qwen", "settings.json"], [".mcp.json"], ["mcp.json"]],
+    },
     identity: "unknown",
     evidence: "docs",
     source: "读 npm 包 `@qwen-code/qwen-code@0.26.4` 的 bundle：`QWEN_DIR=\".qwen\"`、用户级 "
@@ -158,6 +190,7 @@ export const ASH_MCP_TABLE = {
       // 目录名本身可以被 `QODER_CONFIG_DIR_NAME` 换掉(bundle 里有这个分支)。
       defaultDir: (env, home) => join(home, env.QODER_CONFIG_DIR_NAME?.trim() || ".qoder"),
       relative: ["mcp.json"],
+      projectRelative: [[".mcp.json"], ["mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -169,7 +202,12 @@ export const ASH_MCP_TABLE = {
   copilot: {
     kind: "file",
     shape: mcpServersJsonShape,
-    site: { dirEnv: "COPILOT_HOME", defaultDir: underHome(".copilot"), relative: ["mcp-config.json"] },
+    site: {
+      dirEnv: "COPILOT_HOME",
+      defaultDir: underHome(".copilot"),
+      relative: ["mcp-config.json"],
+      projectRelative: [[".mcp.json"], [".github", "mcp.json"]],
+    },
     identity: "unknown",
     evidence: "docs",
     source: "docs.github.com/copilot/reference/copilot-cli-reference/cli-config-dir-reference"
@@ -181,9 +219,16 @@ export const ASH_MCP_TABLE = {
   kiro: {
     kind: "file",
     shape: mcpServersJsonShape,
-    site: { dirEnv: null, defaultDir: underHome(".kiro"), relative: ["settings", "mcp.json"] },
+    site: {
+      dirEnv: null,
+      defaultDir: underHome(".kiro"),
+      relative: ["settings", "mcp.json"],
+      projectRelative: [[".kiro", "settings", "mcp.json"]],
+    },
     identity: "unknown",
     evidence: "docs",
+    caveat: "kiro 的 MCP 配置位置只核对到 IDE/用户级那一份（`~/.kiro/settings/mcp.json`），"
+      + "`kiro-cli` 读不读它没有第二处证据 —— 这条登记写了也可能不生效",
     source: "kiro.dev/docs/mcp/configuration（2026-10-31 查）：用户级 `~/.kiro/settings/mcp.json`，"
       + "`mcpServers` 容器，stdio 支持 command/args/env/disabled",
     notes: "**未实测，而且这一家的依据最弱**：官方那页把配置位置按 IDE / CLI / Web 分页签，"
@@ -199,6 +244,7 @@ export const ASH_MCP_TABLE = {
       defaultDir: xdgConfig("kilo"),
       relative: ["kilo.json"],
       alternates: [["kilo.jsonc"], ["config.json"], ["opencode.json"], ["opencode.jsonc"]],
+      projectRelative: [["kilo.json"], ["kilo.jsonc"], [".kilo", "kilo.json"], [".kilocode", "mcp.json"]],
     },
     identity: "unknown",
     evidence: "docs",
@@ -213,7 +259,12 @@ export const ASH_MCP_TABLE = {
   antigravity: {
     kind: "file",
     shape: mcpServersJsonShape,
-    site: { dirEnv: null, defaultDir: underHome(".gemini", "config"), relative: ["mcp_config.json"] },
+    site: {
+      dirEnv: null,
+      defaultDir: underHome(".gemini", "config"),
+      relative: ["mcp_config.json"],
+      projectRelative: [[".agents", "mcp_config.json"]],
+    },
     identity: "unknown",
     evidence: "docs",
     source: "antigravity.google/docs/mcp（2026-10-31 查）：全局 `~/.gemini/config/mcp_config.json`，"
@@ -225,11 +276,18 @@ export const ASH_MCP_TABLE = {
   pi: {
     kind: "file",
     shape: mcpServersJsonShape,
-    site: { dirEnv: "PI_CODING_AGENT_DIR", defaultDir: underHome(".pi", "agent"), relative: ["mcp.json"] },
+    site: {
+      dirEnv: "PI_CODING_AGENT_DIR",
+      defaultDir: underHome(".pi", "agent"),
+      relative: ["mcp.json"],
+      projectRelative: [[".pi", "mcp.json"]],
+    },
     // pi-mcp 的 StdioTransport 默认 `{ ...process.env, ...options.env }`(inheritEnv 不为 false),
     // pi 自己没传 inheritEnv —— 所以起跑时注的回合身份进得去。
     identity: "inherit",
     evidence: "docs",
+    caveat: "pi 的 MCP 是 1.x 才有的（本机 0.83.0 整个产物里一个 MCP 入口都没有）—— "
+      + "老版本下这条登记写了也没人读，先 `pi --version` 看一眼",
     source: "读 npm 包 `@earendil-works/pi-coding-agent@1.4.0`（`dist/extensions/mcp/config.js` 原文："
       + "「Servers are read from `mcp.json` in the agent directory」，agent dir = `$PI_CODING_AGENT_DIR` "
       + "或 `~/.pi/agent`）与 `@earendil-works/pi-mcp@1.4.0`（stdio 默认继承 `process.env`）",

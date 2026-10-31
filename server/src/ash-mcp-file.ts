@@ -32,6 +32,8 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { type LaunchSpec, scanCodexToml } from "./codex-toml.js";
+import { ashMcpConfigDir, ashMcpMechanism } from "./mcp-registry/catalog.js";
+import { ashMcpConfigFile } from "./mcp-registry/register.js";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { boundListeningPort } from "./listening-port.js";
 
@@ -58,10 +60,62 @@ export function fileAshMcpVerdict(
   try {
     if (agentType === "claude") return claudeVerdict(env, dirs);
     if (agentType === "codex") return codexVerdict(env, dirs);
+    return registryVerdict(agentType, env, dirs);
   } catch (e) {
     return { state: "unknown", why: `读配置失败：${(e as Error).message}` };
   }
-  return { state: "unknown", why: `${agentType} 不归这里判` };
+}
+
+// ── 其余十三家:按 `mcp-registry` 那张表读 ─────────────────────────────────────
+
+/**
+ * claude / codex 之外的那十三家。两家为什么还留着各自的实现:它们的**项目级**语义要专门
+ * 复刻(claude 的 `projects[<键>]` 键算法、`.mcp.json` 的审批态;codex 只到 git 根为止),
+ * 这些写不进一张声明表。其余各家没有那种结构,表里一条 site 就够。
+ *
+ * 规矩跟那两家一字不差 —— **只在「确定没有」时说没有**:
+ *  · 项目级配置里只要提到 MCP 就答 unknown(合并规则这一档不复刻);
+ *  · 读不动、解析不了、写法判不了一律 unknown;
+ *  · 只有「用户级那份文件确实读得通、里面确实没有 ash」才敢说 absent。
+ */
+function registryVerdict(
+  agentType: string,
+  env: NodeJS.ProcessEnv,
+  dirs: (string | undefined)[],
+): FileVerdict {
+  const mechanism = ashMcpMechanism(agentType);
+  if (!mechanism) return { state: "unknown", why: `不认识的执行器 ${agentType}` };
+  if (mechanism.kind === "none") {
+    return { state: "absent", detail: `${agentType} 没有 MCP 机制（${mechanism.why}）` };
+  }
+  if (mechanism.kind === "manual") {
+    return { state: "unknown", why: `${agentType} 的 MCP 配置 ash 不读写（${mechanism.howTo}）` };
+  }
+  const dir = ashMcpConfigDir(agentType, env, homedir());
+  if (!dir) return { state: "unknown", why: `算不出 ${agentType} 的配置目录` };
+  const file = ashMcpConfigFile(dir, mechanism.site);
+  // 项目级那几份:提到 MCP 就不归这里判(跟 codex 那条同一个理由)。
+  for (const candidate of mechanism.site.projectRelative ?? []) {
+    for (const base of upToGitRoot(dirs)) {
+      const project = join(base, ...candidate);
+      if (resolve(project) === resolve(file)) continue;
+      const read = readText(project);
+      if (read.kind === "unreadable") return { state: "unknown", why: `${project} 读不出来` };
+      if (read.kind === "text" && /mcp[_-]?[sS]ervers|"mcp"|\[mcp\b/.test(read.text)) {
+        return { state: "unknown", why: `${project} 里配了 MCP，合并规则这一档不复刻` };
+      }
+    }
+  }
+  const read = readText(file);
+  if (read.kind === "unreadable") return { state: "unknown", why: `${file} 读不出来` };
+  if (read.kind === "missing") return { state: "absent", detail: `${file} 还不存在` };
+  const found = mechanism.shape.read(read.text);
+  if (found.state === "present") {
+    return { state: "present", hint: launchHint(mechanism.shape.launch(read.text) ?? {}) };
+  }
+  if (found.state === "unknown") return { state: "unknown", why: `${file}：${found.detail}` };
+  if (found.state === "disabled") return { state: "disabled", detail: `${file}：${found.detail}` };
+  return { state: "absent", detail: `${file} 里没有 ash MCP 登记` };
 }
 
 // ── claude ─────────────────────────────────────────────────────────────────

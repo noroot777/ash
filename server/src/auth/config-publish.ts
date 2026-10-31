@@ -7,7 +7,7 @@
 //
 // 注:`scripts/` 下的安装器另有一份同规矩的实现(setup 在裸 Node 上跑,导不进 TS),两边
 // 只能靠「同一条规矩写两遍」,回归测试钉着两边行为一致。
-import { readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 /** 「没有这个文件」/「有但读不动」/「读得动」。判 absent 之前必须先过这一关（N1）。 */
@@ -86,6 +86,11 @@ function resolveTarget(file: string): string {
 function publishInPlace(read: ConfirmedRead, body: string): void {
   const target = resolveTarget(read.file);
   try {
+    // 新建的那一档要先有父目录:好几家 CLI 的配置在子层(gemini 的 `.gemini/settings.json`、
+    // kiro 的 `settings/mcp.json`),目录不存在时 `writeFileSync` 直接 ENOENT。
+    // **只在原来确实没有这个文件时建** —— 已有文件的父目录当然在,那时多调一次就是多一次
+    // 对用户目录的写操作。
+    if (read.text === null) mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, body, "utf8");
   } catch (e) {
     try {

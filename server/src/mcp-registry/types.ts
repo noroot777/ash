@@ -106,6 +106,13 @@ export interface AshMcpConfigSite {
   /** 配置文件相对配置目录的位置(`["config.toml"]`、`[".gemini","settings.json"]`)。 */
   readonly relative: readonly string[];
   /**
+   * 这家 CLI 还会读的**项目级**配置(相对任务目录)。只给判据那一档用:这些文件里只要
+   * 提到 MCP,「用户级没有」就不再是个确定的结论 —— 按「向放行开」答 unknown,别拿
+   * 一份看不全的证据拦下一整轮审查(`ash-mcp-file.ts` 文件头)。ash 永远不写它们:
+   * 那是用户仓库里的文件,会被提交进去。
+   */
+  readonly projectRelative?: readonly (readonly string[])[];
+  /**
    * 同样合法的其它文件名(opencode 的 `opencode.jsonc`)。**存在哪个就读写哪个**,
    * 一个都不存在才按 `relative` 新建 —— 否则会在用户已有的 `.jsonc` 旁边多出一份
    * `.json`,两份都被 CLI 认,到底生效哪个说不清。
@@ -149,6 +156,13 @@ export type AshMcpMechanism =
     source: string;
     /** 已知的坑、未确认的点。`evidence:"docs"` 时必填(回归测试会拦)。 */
     notes?: string;
+    /**
+     * **必须当场说给用户听**的那一句(进起跑提示和预检文案)。
+     *
+     * `notes` 是给改代码的人看的,这一句是给「任务为什么交不了卷」的用户看的 —— 判据只有
+     * 一条:**知道这条登记可能写了也不生效**(pi 老版本压根没有 MCP、kiro 的 CLI 路径没验过)。
+     */
+    caveat?: string;
   }
   | {
     /** 有 MCP 机制,但 ash **不自动写**(格式我们没有安全的写入器,如 trae 的 YAML 数组)。 */

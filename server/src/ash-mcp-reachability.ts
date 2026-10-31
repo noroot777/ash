@@ -76,6 +76,8 @@ import { cliSpec } from "./executors/catalog/index.js";
 import { codexAshMcpServerName } from "./executors/codex-mcp.js";
 import { effectiveExecutorContext } from "./executors/index.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
+import { ashMcpConfigDir, ashMcpMechanism } from "./mcp-registry/catalog.js";
+import { ashMcpConfigFile, ashMcpUnsupported } from "./mcp-registry/register.js";
 
 /** 探测是只读子命令（claude 实测 ~0.8s、codex ~0.01s）；超时一律按「问不出来」放行。 */
 const PROBE_TIMEOUT_MS = 15_000;
@@ -132,6 +134,16 @@ const HOW_TO_CHECK: Record<string, string> = {
   claude: "claude mcp get ash",
   codex: "codex mcp list --json（看 ash 在不在、enabled 是不是 true）",
 };
+
+/** 没有专门的只读子命令判据时,至少把那份配置文件的路径指给用户。 */
+function howToCheck(agentType: string, env: NodeJS.ProcessEnv): string {
+  const known = HOW_TO_CHECK[agentType];
+  if (known) return known;
+  const mechanism = ashMcpMechanism(agentType);
+  if (mechanism?.kind !== "file") return `看一眼 ${agentType} 自己的 MCP 配置`;
+  const dir = ashMcpConfigDir(agentType, env, homedir());
+  return dir ? `看一眼 ${ashMcpConfigFile(dir, mechanism.site)}` : `看一眼 ${agentType} 自己的 MCP 配置`;
+}
 
 const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
 
@@ -340,7 +352,22 @@ async function reachWith(
   budgetMs: number,
 ): Promise<AshMcpReach> {
   const budget: Budget = { deadline: Date.now() + budgetMs };
-  if (agentType !== "claude" && agentType !== "codex") return ok();
+  // ── 先问能力:这家 CLI 到底有没有 MCP 这回事(`mcp-registry/catalog.ts`)───────
+  //
+  // 2026-10-30 之前这里是一句 `return ok()`:claude / codex 之外一律放行,理由写着「ash 不
+  // 知道不等于它没有」。那句话在**十三家一行注册逻辑都没有**的时候是自我安慰 —— 用户换
+  // 别的 agent 跑任务,工具压根不在,任务全记 failed,而预检一声不吭。现在表里逐家写明了
+  // 机制,所以这三档分开说:
+  const mechanism = ashMcpMechanism(agentType);
+  if (!mechanism) return ok();                       // 不认识的类型:不知道 ≠ 没有
+  const unsupported = ashMcpUnsupported(agentType, mechanism);
+  // **确定**交不了卷(不是「查不到」)就拦;「有 MCP、只是 ash 不替他写」降成一句提示。
+  // 两档的措辞只有一份(`mcp-registry/register.ts` 的 `ashMcpUnsupported`)。
+  if (unsupported?.tier === "refuse") {
+    return { reachable: false, problem: unsupported.why, warning: null, basis: "file" };
+  }
+  if (unsupported?.tier === "hint") return ok(unsupported.why);
+
   // claude 的子命令带不动这些参数（上面那段说明：`--mcp-config` 是 variadic，会把子命令
   // 本身吃掉）。保证不了「探测用的配置 = 运行时的配置」，就不下硬结论。
   if (agentType === "claude" && extraArgs.length) return ok();
@@ -350,7 +377,8 @@ async function reachWith(
   try {
     // 命令名交给 resolveLaunch 去解析（它内部走 resolveBin，再决定怎么起）——
     // 这里只负责挑出「这台机器上有的那个候选名」。
-    for (const candidate of cliSpec(agentType).bins) {
+    // `agentType` 到这里已经是表里认得的那十五个之一(上面查过 `ashMcpMechanism`)。
+    for (const candidate of cliSpec(agentType as AgentType).bins) {
       if (resolveLaunch(candidate, [])) { bin = candidate; break; }
     }
     // 起跑要用的那一份 env（隔离档下带 CLAUDE_CONFIG_DIR / CODEX_HOME）。宿主机自己
@@ -362,6 +390,16 @@ async function reachWith(
   if (!bin) return ok();                             // CLI 都不在这台机器上，派审会以别的方式失败
 
   const { dirs, all, complete } = probeDirs(cwdCandidates);
+
+  // claude / codex 之外的那十三家:**不问 CLI 本人**,直接走配置文件那一档。
+  //
+  // 为什么不问:每家的只读子命令各不相同(opencode 是 `mcp list`、kimi 压根没有这个子命令、
+  // cursor/kiro 没在本机验过),而问错一条命令的代价不是「没答案」——`ask*` 那套要按退出码
+  // 和输出格式解释结论,猜一个命令就是拿猜出来的东西去拦人。配置文件那一档既不起进程,
+  // 判据也只在「确定没有」时说没有(`ash-mcp-file.ts` 文件头),正好够用。
+  if (agentType !== "claude" && agentType !== "codex") {
+    return fromFiles(agentType, extraArgs, env, all, `ash 还没有「问 ${agentType} 本人」的只读判据`);
+  }
 
   // 逐个问:present 出现就放行,只有**全都**说拿不到才往下走。
   // 哪一问没拿到能解释的答案(没启动、问不出来、看不懂、预算用完),CLI 本人对这个目录就没
@@ -395,11 +433,30 @@ async function reachWith(
   return {
     reachable: false,
     problem: `${agentType} 自己报告没有 ash MCP 登记，这一轮跑完也上报不了结论`
-      + `（自查：${HOW_TO_CHECK[agentType]}；接法见 docs/install.md，或在仓库根跑一次 npm run setup）`,
+      + `（自查：${howToCheck(agentType, env)}；接法见 docs/install.md，或在仓库根跑一次 npm run setup）`,
     warning: null,
     basis: "cli",
   };
 }
+
+/**
+ * 「登记看着在」但这家的依据只有文档 —— 如实说一句。
+ *
+ * 为什么值得说:这一档的 present 只是「我们写进去的那条还在」,而「CLI 真读这个文件」在
+ * 本机没装的那几家是**未实测**的(表里 `evidence: "docs"`)。用户看到的若只是一片绿,
+ * 任务交不了卷时他会先去查别处 —— 而真正该看的是这句里给的那条路径。
+ */
+function docsOnlyCaveat(agentType: string): string | null {
+  const mechanism = ashMcpMechanism(agentType);
+  if (mechanism?.kind !== "file" || mechanism.evidence !== "docs") return null;
+  const extra = mechanism.caveat ? `；${mechanism.caveat}` : "";
+  return `${agentType} 的 ash MCP 登记位置只按文档/发布包源码核对过，未在真机实测过${extra}`;
+}
+
+const joinHints = (...parts: (string | null)[]): string | null => {
+  const kept = parts.filter((p): p is string => !!p);
+  return kept.length ? kept.join("；") : null;
+};
 
 /**
  * 配置文件那一档(见文件头「问不了 CLI 时」)。拦人的规矩跟 CLI 那一档一样只有「确定没有」:
@@ -421,7 +478,7 @@ function fromFiles(
 ): AshMcpReach {
   if (extraArgs.length) return ok();
   const v = fileAshMcpVerdict(agentType, env, dirs);
-  if (v.state === "present") return ok(v.hint);
+  if (v.state === "present") return ok(joinHints(v.hint, docsOnlyCaveat(agentType)));
   if (v.state === "unknown") {
     // 判不了就放行；但 codex 的用户级配置里确实没有能注入身份的登记时，就算项目里那份能用，
     // 这一轮也交不了卷（见 `askCodex` 那段）—— 证据不够硬，不拦，至少说一句。
@@ -435,7 +492,7 @@ function fromFiles(
   return {
     reachable: false,
     problem: `${v.detail}，看配置这一轮跑完也上报不了结论${basis}`
-      + `（自查：${HOW_TO_CHECK[agentType]}；接法见 docs/install.md，或在仓库根跑一次 npm run setup）`,
+      + `（自查：${howToCheck(agentType, env)}；接法见 docs/install.md，或在仓库根跑一次 npm run setup）`,
     warning: null,
     basis: "file",
   };
