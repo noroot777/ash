@@ -7,13 +7,12 @@ import { stageSideChatQuote } from "./sideChatQuote.ts";
 import "./conversation-selection.css";
 
 /* 存的是**当场取好的文本**而不是选区：选区是活的，正文还在流式刷新的那一下文本节点会被
-   整个换掉，留下来的 `cloneRange()` 当场塌成空的 —— 浮条还在，按下去却什么都没有。
-   `bounds` 只用来认「选区还是刚才那一段」，不拿它取文。 */
-type Selected = { text: string; bounds: Range; left: number; top: number };
+   整个换掉，留下来的 `cloneRange()` 当场塌成空的 —— 浮条还在，按下去却什么都没有。 */
+type Selected = { text: string; left: number; top: number };
 const controls = "button, input, textarea, select, [contenteditable]:not([contenteditable=false])";
 const elementOf = (node: Node) => node instanceof Element ? node : node.parentElement;
 
-/** 两段选区首尾完全重合。用来认「用户没动过」，比存一份序列化便宜。 */
+/** 两段选区首尾完全重合。用来认「这一段算过了」，比存一份序列化便宜。 */
 function sameBounds(range: Range, bounds: Range): boolean {
   try {
     return range.compareBoundaryPoints(Range.START_TO_START, bounds) === 0
@@ -40,54 +39,65 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
   const root = useRef<HTMLDivElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
-  // 取文那条路会借用当前选区（见 selectionContent.ts），还原的那一下又触发一次
-  // selectionchange —— 底下要立刻读到刚存的这一份来认「边界没变」，等不了 state 提交。
+  // 按钮按下去要兑现的那段文本。state 之外另记一份：onClick 读它时等不了 state 提交。
   const picked = useRef<Selected | null>(null);
   const commit = (next: Selected | null) => {
     picked.current = next;
     setSelected(next);
   };
+  /**
+   * **已经算过的那一段选区**，只用来认「这一段算过了」—— 跟浮条该不该显示是两件事，不能
+   * 共用一份状态。取文要借用当前选区读排版（见 selectionContent.ts），还原的那一下又是
+   * 一次 selectionchange；算出来没有正文时浮条确实撤掉了，但边界要是跟着一起忘掉，那次
+   * 还原回来就认不出「算过了」，于是每一帧都重算同一段选区 —— 浮条没出来，底下却一直在
+   * 转（审查实测 1.1 秒 66 次）。所以记边界这件事不看算出来有没有正文。
+   */
+  const seen = useRef<Range | null>(null);
+  /** 放弃这一段：浮条撤掉，边界也忘掉（下次再选中它要能重新算一遍）。 */
+  const forget = () => {
+    seen.current = null;
+    commit(null);
+  };
   // 浮条实际有多宽取决于按钮个数和文案，量出来再贴边，别拿常数猜（猜小了会被右边缘切掉）。
   const [left, setLeft] = useState(8);
-  useDismissable({ enabled: !!selected, containerRef: toolbar, onClose: () => commit(null) });
+  useDismissable({ enabled: !!selected, containerRef: toolbar, onClose: forget });
 
   useEffect(() => {
-    commit(null);
+    forget();
     let frame = 0;
     const update = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         if (toolbar.current?.contains(document.activeElement)) return;
-        if (document.activeElement?.matches("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return commit(null);
+        if (document.activeElement?.matches("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return forget();
         const selection = window.getSelection();
-        if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return commit(null);
+        if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return forget();
         const range = selection.getRangeAt(0);
-        // 这一段跟上次算过的那一段首尾一致就收手：取文借完选区要还原，还原本身会再触发
-        // 一次 selectionchange，不在这儿拦住就每帧白算一遍。
-        if (picked.current && sameBounds(range, picked.current.bounds)) return;
+        // 这一段算过了就收手 —— 底下取文会借用选区再还原，还原本身又触发一次事件。
+        if (seen.current && sameBounds(range, seen.current)) return;
         const scope = root.current;
         if (!scope?.contains(range.startContainer) || !scope.contains(range.endContainer)
           || elementOf(range.startContainer)?.closest(controls) || elementOf(range.endContainer)?.closest(controls)
-          || range.cloneContents().querySelector("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return commit(null);
+          || range.cloneContents().querySelector("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return forget();
         const rect = range.getBoundingClientRect();
-        if ((!rect.width && !rect.height) || rect.bottom < 0 || rect.top > innerHeight) return commit(null);
+        if ((!rect.width && !rect.height) || rect.bottom < 0 || rect.top > innerHeight) return forget();
+        // 下面这一下会借用当前选区（上面那些早退都不借，所以只有到这儿才需要记）。边界先
+        // 记下来，取出来有没有正文都认它 —— 还原触发的那次事件靠它收口。
+        seen.current = range.cloneRange();
         // 浮条只问「剔掉界面装置之后还剩不剩正文」—— 扫过的装置不算内容，光选中一条
-        // 「执行过程 · 6 工具」不该出按钮。
+        // 「执行过程 · 6 工具」不该出按钮。全是空白也算没有：存进备忘的时候才说「内容不能
+        // 为空」太晚了（取到的文本仍原样留着，行内缩进是正文自己的）。
         const text = selectionContentText(range, scope);
-        // 全是空白也算没正文:存进备忘的时候才说「内容不能为空」太晚了。但取到的文本原样
-        // 留着 —— 行内的缩进是正文自己的(代码块靠它)。
         if (!text.trim()) return commit(null);
         const last = Array.from(range.getClientRects()).filter((box) => box.width && box.height).at(-1) ?? rect;
         commit({
           text,
-          // getRangeAt 给的是活的那一个，选区一变它跟着变；留一份快照。
-          bounds: range.cloneRange(),
           left: Math.max(8, last.left),
           top: Math.max(8, Math.min(last.bottom + 8, innerHeight - 48)),
         });
       });
     };
-    const dismiss = () => { cancelAnimationFrame(frame); commit(null); };
+    const dismiss = () => { cancelAnimationFrame(frame); forget(); };
     const afterPointer = (event: PointerEvent) => {
       if (event.target instanceof Node && root.current?.contains(event.target)) update();
     };
@@ -126,7 +136,9 @@ export function ConversationSelection({ taskId, onAsk, onAddToReply, onAddToMemo
 
   const take = (use: (text: string) => void) => () => {
     const text = picked.current?.text ?? "";
-    commit(null);
+    // forget 而不是 commit(null)：这一段用掉了，边界也别留着 —— 不然用户紧接着重新选中
+    // **同一段**时会被当成「算过了」，浮条再也不出来。
+    forget();
     window.getSelection()?.removeAllRanges();
     if (text) use(text);
   };

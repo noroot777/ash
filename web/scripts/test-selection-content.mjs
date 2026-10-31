@@ -222,7 +222,26 @@ try {
   await flush();
   assert.equal(await memo.isVisible().catch(() => false), false, "只选到空白时浮条该撤掉");
 
-  // ⑮ 浮条上那颗按钮按下去必须兑现得了。Tab 聚到浮条上之后正文被流式续写换掉(结论从
+  // ⑮ 剔不出正文时也得**停下来**。取文要借用全局选区读排版、读完还原,还原本身又是一次
+  //    selectionchange —— 空结果那条路上要是把「这一段算过了」跟浮条一起忘掉,下一帧就
+  //    重算同一个选区,一帧一轮转下去(审查实测 1.1 秒 66 次)。浮条没出来不等于已经停了,
+  //    所以这条数的是事件,不是看界面。
+  await page.getByTestId("clear").click();
+  await page.evaluate(() => {
+    window.__selectionEvents = 0;
+    document.addEventListener("selectionchange", () => { window.__selectionEvents += 1; });
+  });
+  await page.getByText("Claude 2", { exact: true }).scrollIntoViewIfNeeded();
+  await settle();
+  await select({ text: "Claude 2" }, { text: "执行过程 · 2 工具" });
+  await page.waitForTimeout(300);
+  const spun = await page.evaluate(() => window.__selectionEvents);
+  await page.waitForTimeout(500);
+  const stillSpinning = await page.evaluate(() => window.__selectionEvents) - spun;
+  assert.equal(await memo.isVisible().catch(() => false), false, "只选到身份行和过程标题时不出浮条");
+  assert.ok(stillSpinning <= 2, `选区没再动过,却还在转:500ms 内又来了 ${stillSpinning} 次 selectionchange`);
+
+  // ⑯ 浮条上那颗按钮按下去必须兑现得了。Tab 聚到浮条上之后正文被流式续写换掉(结论从
   //    段落变列表,原来那个 `<p>` 当场卸载、选区里的文本节点脱离文档),此时 selectionchange
   //    被「焦点在浮条上」那条早退吞掉、浮条还在 —— 存 Range 的实现这时取文得到空串,于是
   //    用户按了一下什么都没发生(审查第 2 轮必修 1)。
@@ -237,7 +256,7 @@ try {
     "按下去要兑现当时选的那段话,不许静默丢弃");
 
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("✓ 会话选文只取正文:每一截都是原选区的子区间(从正文岛中间起步不补前半句)、只选到空白时撤掉浮条、折起来的卡片保住摘要行那段正文、隐藏子树一个字不漏、浮条按下去必定兑现、跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
+  console.log("✓ 会话选文只取正文:剔不出正文时内部还原能收口(不逐帧重算)、每一截都是原选区的子区间(从正文岛中间起步不补前半句)、只选到空白时撤掉浮条、折起来的卡片保住摘要行那段正文、隐藏子树一个字不漏、浮条按下去必定兑现、跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
 } finally {
   await browser?.close();
   await server.close();
