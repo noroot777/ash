@@ -21,9 +21,11 @@ import { ASH_MCP_TABLE, ashMcpConfigDir, canRegisterAshMcp } from "../src/mcp-re
 import * as edit from "../src/mcp-registry/json-edit.js";
 import { ashMcpConfigFile } from "../src/mcp-registry/register.js";
 import { REPO_DIR } from "../src/paths.js";
+import { checkPublishCases, type BarePublish } from "./mcp-publish-cases.js";
 
 type HostSite = {
   bins: string[]; dirEnv: string | null; dirEnvIsFile?: boolean;
+  altDirEnv?: string; contentEnv?: string; sourcesMerge?: boolean;
   relative: string[]; alternates?: string[][]; opaque?: string[][];
   shape: string; type?: string; enabled?: boolean;
   dir: (env: NodeJS.ProcessEnv, home: string) => string;
@@ -38,13 +40,9 @@ const hosts = await import(pathToFileURL(join(REPO_DIR, "scripts", "mcp-hosts.mj
   }) => { file: string; added: boolean; why?: string; backup?: string | null };
 };
 
-const publish = await import(pathToFileURL(join(REPO_DIR, "scripts", "config-publish.mjs")).href) as {
-  readForWrite: (file: string) => { file: string; text: string | null } | null;
-  publishConfirmed: (opts: {
-    file: string; previous: string | null; body: string; backupSuffix?: string;
-    write?: (file: string, body: string, enc: string) => void;
-  }) => { ok: true; backup: string | null } | { ok: false; why: string };
-};
+const publish = await import(
+  pathToFileURL(join(REPO_DIR, "scripts", "config-publish.mjs")).href
+) as unknown as BarePublish;
 
 const root = mkdtempSync(join(tmpdir(), "ash-mcp-installer-"));
 let done = 0;
@@ -91,6 +89,10 @@ try {
       assert.equal(SHAPE_ID[site.shape], mechanism.shape.id, `${type}:格式族要对上`);
       assert.equal(site.dirEnv, mechanism.site.dirEnv, `${type}:配置目录变量要对上`);
       assert.equal(!!site.dirEnvIsFile, !!mechanism.site.dirEnvIsFile, `${type}:变量指文件还是目录要对上`);
+      // 来源那一组也不许漂:少一个变量 = 少看一份配置,而「少看一份」正是本轮 F4 的病根。
+      assert.equal(site.altDirEnv, mechanism.site.altDirEnv, `${type}:再加一个目录的变量要对上`);
+      assert.equal(site.contentEnv, mechanism.site.contentEnv, `${type}:整段配置那个变量要对上`);
+      assert.equal(!!site.sourcesMerge, !!mechanism.site.sourcesMerge, `${type}:合并语义实测没实测要一致`);
       assert.deepEqual(site.relative, [...mechanism.site.relative], `${type}:文件位置要对上`);
       for (const key of ["alternates", "opaque"] as const) {
         assert.deepEqual(
@@ -123,124 +125,8 @@ try {
     group("TS 表与裸 Node 那份逐项对齐(含覆盖变量那一层)");
   }
 
-  // ── ② 写盘失败:活动配置必须还是原来那份(审查 R1 两轮)──────────────────────
-  {
-    const probeOf = (f: string) => `${f}.ash-publish-probe`;
-
-    // ⒜ **持续**写不动(配额耗尽、设备 EIO、挂载转只读):第 2 轮审查注入持续 EIO 实测,上一版
-    //    先截断活动文件、再靠「第二次写」回写,持续故障下回写同样失败 —— 盘上留下半截正文
-    //    (`{"userSetting":"ke`),备份完整而 CLI 读的是活动那份。现在**预演先行**:同目录写个
-    //    临时文件试一次,落不下去就在动用户那份之前收手。
-    const hp = home("persistent");
-    const file0 = join(hp, "config.json");
-    const intact = `${JSON.stringify({ userSetting: "keep-me" }, null, 2)}\n`;
-    writeFileSync(file0, intact, "utf8");
-    let calls = 0;
-    const r0 = publish.publishConfirmed({
-      file: file0,
-      previous: publish.readForWrite(file0)!.text,
-      body: `${JSON.stringify({ ash: "x", userSetting: "keep-me" }, null, 2)}\n`,
-      write: (target: string, body: string) => {
-        calls++;
-        if (typeof body === "string" && body.length > 18) writeFileSync(target, body.slice(0, 18), "utf8");
-        const e = new Error("i/o error") as Error & { code?: string };
-        e.code = "EIO";
-        throw e;
-      },
-    });
-    assert.ok(!r0.ok, "写不动要如实说");
-    assert.match(r0.ok ? "" : r0.why, /什么都没写/, "而且要说清一个字节都没写");
-    assert.equal(readFileSync(file0, "utf8"), intact, "活动配置必须逐字节还是原来那份");
-    assert.equal(calls, 1, "预演那一次就收手了,活动文件根本没被碰");
-    assert.ok(!existsSync(probeOf(file0)), "预演产物不许留下");
-    assert.ok(!existsSync(`${file0}.bak-ash-setup`), "没动过就别留一份白备份");
-
-    // ⒝ 预演过得去、**真写那一下**才失败(只读文件、文件被别人独占):这一档只能靠回写,
-    //    所以仍要钉住「原文回去了 + 备份在」。
-    const h = home("partial");
-    const file = join(h, "config.json");
-    const before = `${JSON.stringify({ userSetting: "keep-me", mcpServers: { other: { command: "x" } } }, null, 2)}\n`;
-    writeFileSync(file, before, "utf8");
-    const read = publish.readForWrite(file)!;
-    let wrote = 0;
-    const flaky = (target: string, body: string, opts?: unknown) => {
-      // 预演照常放过(它写的是 `.ash-publish-probe`),真写那一下才抛。
-      if (target.endsWith(".ash-publish-probe")) { writeFileSync(target, body, opts as never); return; }
-      if (wrote++ === 0) {
-        writeFileSync(target, body.slice(0, 21), "utf8");
-        const e = new Error("no space left on device") as Error & { code?: string };
-        e.code = "ENOSPC";
-        throw e;
-      }
-      writeFileSync(target, body, "utf8");
-    };
-    const r = publish.publishConfirmed({ file, previous: read.text, body: "{}\n", write: flaky });
-    assert.ok(!r.ok, "写失败要如实说");
-    assert.match(r.ok ? "" : r.why, /原样放回去/, "而且要说清原文已经回去了");
-    assert.equal(readFileSync(file, "utf8"), before, "活动配置必须还是原来那份(不许留半截)");
-    assert.ok(existsSync(`${file}.bak-ash-setup`), "备份也还在");
-    assert.ok(!existsSync(probeOf(file)), "预演产物不许留下");
-
-    // ⒞ 原来**没有**这个文件:写失败就不该留下一个半截的新文件。
-    const h2 = home("partial-new");
-    const file2 = join(h2, "sub", "config.json");
-    let tries = 0;
-    const r2 = publish.publishConfirmed({
-      file: file2,
-      previous: null,
-      body: "{}\n",
-      write: (target: string, body: string, opts?: unknown) => {
-        if (target.endsWith(".ash-publish-probe")) { writeFileSync(target, body, opts as never); return; }
-        if (tries++ === 0) { writeFileSync(target, body.slice(0, 1), "utf8"); throw new Error("boom"); }
-        writeFileSync(target, body, "utf8");
-      },
-    });
-    assert.ok(!r2.ok, "写失败要如实说");
-    assert.ok(!existsSync(file2), "原来没有这个文件 ⇒ 失败后也不许留下来");
-    assert.ok(!existsSync(probeOf(file2)), "预演产物不许留下");
-
-    // ⒟ 新建那一份只给自己读(kimi 原来的写入器就是 0600;改走通用发布器后别退成 umask)。
-    const h3 = home("mode");
-    const file3 = join(h3, "deep", "config.json");
-    const r3 = publish.publishConfirmed({ file: file3, previous: null, body: "{}\n" });
-    assert.ok(r3.ok, r3.ok ? "" : r3.why);
-    assert.equal(statSync(file3).mode & 0o777, 0o600, "新建的配置只给自己读");
-    group("写盘失败:持续故障在动手之前收手、真写失败回写原文、新建不留半截也不放宽权限");
-  }
-
-  // ── ③ 提交前的新鲜度 + 写完读回来比对 ────────────────────────────────────
-  {
-    const h = home("fresh");
-    const file = join(h, "config.json");
-    writeFileSync(file, "{\n}\n", "utf8");
-    const read = publish.readForWrite(file)!;
-    writeFileSync(file, '{\n  "userJustSaved": true\n}\n', "utf8");   // 别的程序抢先存了一版
-    const r = publish.publishConfirmed({ file, previous: read.text, body: "{}\n" });
-    assert.ok(!r.ok && /被别的程序改过/.test(r.why), `过期快照不许盖下去:${r.ok ? "" : r.why}`);
-    assert.equal(readFileSync(file, "utf8"), '{\n  "userJustSaved": true\n}\n', "那次改动要留着");
-
-    // 写完读回来跟要写的不一样(有人同时也在写)⇒ 如实报,别说「已注册」。
-    const h2 = home("readback");
-    const file2 = join(h2, "config.json");
-    writeFileSync(file2, "{\n}\n", "utf8");
-    const read2 = publish.readForWrite(file2)!;
-    const r2 = publish.publishConfirmed({
-      file: file2, previous: read2.text, body: '{"mine":1}\n',
-      write: (target) => writeFileSync(target, '{"someone-else":1}\n', "utf8"),
-    });
-    assert.ok(!r2.ok && /读回来跟要写的那份不一样/.test(r2.why), `读回来不一致要报:${r2.ok ? "" : r2.why}`);
-
-    // 正常那一路:就地写,inode 不换(文件身份保住)。
-    const h3 = home("inplace");
-    const file3 = join(h3, "config.json");
-    writeFileSync(file3, "{\n}\n", "utf8");
-    const ino = Number(statSync(file3).ino);
-    const read3 = publish.readForWrite(file3)!;
-    const r3 = publish.publishConfirmed({ file: file3, previous: read3.text, body: '{"ok":1}\n' });
-    assert.ok(r3.ok, r3.ok ? "" : r3.why);
-    if (ino !== 0) assert.equal(Number(statSync(file3).ino), ino, "就地写:inode 不换");
-    group("发布事务:过期快照不盖、落盘后读回来比对、就地写");
-  }
+  // ── ②③⑩⑪⑫ 发布事务那一层(在 `mcp-publish-cases.ts`)──────────────────────
+  await checkPublishCases(publish, home, group);
 
   // ── ④ TOML:别人装过第三方 MCP 也要接得上(本轮审查 R6)────────────────────
   {
@@ -416,6 +302,57 @@ try {
     group("trae:撞上原生 YAML 就不写,干净时写标准 JSON");
   }
 
+  // ── ⑥b 同名容器重复 / 空容器里的注释(本轮审查 F5、N1)──────────────────────
+  {
+    // F5:`JSON.parse` 的语义是**最后一个同名键赢**,所以生效的容器是后面那个。上一版编辑器
+    //     按 `.find()` 插进**第一个**,于是「写进去了」而最终生效的那个容器里仍然没有 ash,
+    //     安装日志还报 added。两族(`mcpServers` / opencode 的 `mcp`)都算。
+    const dup = home("dup-container");
+    const file = join(dup, ".kimi-code", "mcp.json");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, '{"mcpServers":{},"mcpServers":{"other":{"command":"tool"}}}\n', "utf8");
+    const r = install("kimi", dup);
+    assert.ok(r.added, `重复容器也该补得上:${r.why ?? ""}`);
+    const text = readFileSync(file, "utf8");
+    // 判据用 `JSON.parse` —— 它就是 CLI 看到的那一份。
+    const live = (JSON.parse(text) as { mcpServers: Record<string, unknown> }).mcpServers;
+    assert.ok(Object.hasOwn(live, "ash"), `生效的那个容器里必须有 ash:${text}`);
+    assert.ok(Object.hasOwn(live, "other"), "用户原来那条也要还在");
+
+    // opencode 那一族同理(容器叫 `mcp`)。
+    const dup2 = home("dup-container-oc");
+    const file2 = join(dup2, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(file2), { recursive: true });
+    writeFileSync(file2, '{"mcp":{},"mcp":{"other":{"type":"local"}}}\n', "utf8");
+    const r2 = install("opencode", dup2);
+    assert.ok(r2.added, `重复容器也该补得上:${r2.why ?? ""}`);
+    const live2 = (JSON.parse(readFileSync(file2, "utf8")) as { mcp: Record<string, unknown> }).mcp;
+    assert.ok(Object.hasOwn(live2, "ash"), "生效的那个 mcp 容器里必须有 ash");
+
+    // N1:**空容器里的注释也要留着**。上一版那条空对象分支把 `{` 和 `}` 之间的原文整段截掉,
+    //     ash 能生效,但用户写在里面的说明没了 —— 补接的边界是「只插入,不删不改」。
+    const keep = home("empty-comment");
+    const file3 = join(keep, ".kimi-code", "mcp.json");
+    mkdirSync(dirname(file3), { recursive: true });
+    writeFileSync(file3, '{\n  "mcpServers": {\n    // 这里本来是空的，这句说明要留着\n  }\n}\n', "utf8");
+    const r3 = install("kimi", keep);
+    assert.ok(r3.added, `空容器也该补得上:${r3.why ?? ""}`);
+    const text3 = readFileSync(file3, "utf8");
+    assert.match(text3, /这句说明要留着/, `空容器里的注释不许被删:${text3}`);
+    assert.ok(Object.hasOwn((JSON.parse(text3.replace(/^\s*\/\/.*$/gm, "")) as
+      { mcpServers: Record<string, unknown> }).mcpServers, "ash"), "ash 也确实写进去了");
+
+    // 根对象只有注释、连容器都没有的那一档(同一条分支的另一入口)。
+    const keep2 = home("empty-root-comment");
+    const file4 = join(keep2, ".kimi-code", "mcp.json");
+    mkdirSync(dirname(file4), { recursive: true });
+    writeFileSync(file4, '{\n  // 整份配置目前只有这句说明\n}\n', "utf8");
+    const r4 = install("kimi", keep2);
+    assert.ok(r4.added, `只有注释的根对象也该补得上:${r4.why ?? ""}`);
+    assert.match(readFileSync(file4, "utf8"), /整份配置目前只有这句说明/, "根对象里的注释也不许被删");
+    group("同名容器重复:插进生效那个;空容器/只有注释的根对象:注释一个字不丢");
+  }
+
   // ── ⑦ 一家 CLI 会读好几份配置:判「有没有」要看全(本轮审查 R3)─────────────
   {
     const mk = (url: string) => `${JSON.stringify({
@@ -451,7 +388,74 @@ try {
     assert.equal(r2.file, custom2, "写的就是变量指的那一份");
     assert.match(readFileSync(custom2, "utf8"), /"ash"/, "确实写进去了");
     assert.equal(readFileSync(g2, "utf8"), empty, "全局那份仍然不许动");
-    group("会读好几份配置的那家:任一份已有就不写、都没有才写,全局那份只读");
+
+    // ⒞ 高优先级那份只把同名 ash **关掉**:真 opencode 报 `ash disabled`(本轮实测)。
+    //    上一版「任一份里有就算有」判成已接好 —— 执行器一路跑到交卷才发现工具根本不在。
+    const h3 = home("merge-disabled");
+    const g3 = join(h3, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(g3), { recursive: true });
+    writeFileSync(g3, mk("http://127.0.0.1:54321"), "utf8");
+    const off = join(h3, "custom.json");
+    const offBody = `${JSON.stringify({ $schema: "x", mcp: { ash: { enabled: false } } }, null, 2)}\n`;
+    writeFileSync(off, offBody, "utf8");
+    const r3 = install("opencode", h3, { OPENCODE_CONFIG: off });
+    assert.ok(!r3.added, "被关着就不该当成已接好、也不该替用户打开");
+    assert.match(r3.why ?? "", /关着|没有替你打开/, `要说清是被关掉了:${r3.why ?? ""}`);
+    assert.equal(readFileSync(off, "utf8"), offBody, "那份也不许被我们改");
+
+    // ⒟ 默认目录里 `.json` 和 `.jsonc` **两份都读**(本轮实测):ash 在 `.json` 里,`.jsonc`
+    //    不含 MCP ⇒ 真 CLI 报 connected。上一版「找到第一个 alternate 就只认它」只看
+    //    `.jsonc`,判成没有、还往它里面再补一条,把本来生效那条顶掉。
+    const h4 = home("merge-two-files");
+    const dir4 = join(h4, ".config", "opencode");
+    mkdirSync(dir4, { recursive: true });
+    const g4 = join(dir4, "opencode.json");
+    const body4 = mk("http://127.0.0.1:54321");
+    writeFileSync(g4, body4, "utf8");
+    const jsonc4 = join(dir4, "opencode.jsonc");
+    writeFileSync(jsonc4, empty, "utf8");
+    const r4 = install("opencode", h4, {});
+    assert.ok(!r4.added, "另一份已经有生效的 ash 就不该再补");
+    assert.equal(readFileSync(g4, "utf8"), body4, "`.json` 那份不许动");
+    assert.equal(readFileSync(jsonc4, "utf8"), empty, "`.jsonc` 那份也不许被补一条");
+
+    // ⒠ 只有 `OPENCODE_CONFIG_CONTENT` 里那整段 JSON 有 ash:真 CLI 报 connected,而它
+    //    **没有文件可写** ⇒ 一个字都不许写(上一版判成没有、还去改全局文件)。
+    const h5 = home("merge-inline");
+    const g5 = join(h5, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(g5), { recursive: true });
+    writeFileSync(g5, empty, "utf8");
+    const r5 = install("opencode", h5, { OPENCODE_CONFIG_CONTENT: mk("http://127.0.0.1:54321") });
+    assert.ok(!r5.added, "变量里那段已经有 ash 了就不该写");
+    assert.equal(readFileSync(g5, "utf8"), empty, "全局那份一个字节都不许动");
+
+    // ⒡ `OPENCODE_CONFIG_DIR` 再加一个目录、优先级高于默认目录(本轮实测):它里面关掉了
+    //    ash ⇒ 最终就是关着的。
+    const h6 = home("merge-altdir");
+    const g6 = join(h6, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(g6), { recursive: true });
+    writeFileSync(g6, mk("http://127.0.0.1:54321"), "utf8");
+    const alt6 = join(h6, "altdir");
+    mkdirSync(alt6, { recursive: true });
+    writeFileSync(join(alt6, "opencode.json"), offBody, "utf8");
+    const r6 = install("opencode", h6, { OPENCODE_CONFIG_DIR: alt6 });
+    assert.ok(!r6.added, "更高优先级那个目录里关掉了 ⇒ 不许当成已接好");
+    assert.match(r6.why ?? "", /关着|没有替你打开/, `要说清是被关掉了:${r6.why ?? ""}`);
+
+    // ⒢ 合并语义**没实测过**的那家(kilo):几份结论不一致 ⇒ 只说看不准,一个字都不写。
+    const h7 = home("merge-unmeasured");
+    const g7 = join(h7, ".config", "kilo", "kilo.json");
+    mkdirSync(dirname(g7), { recursive: true });
+    const kiloBody = mk("http://127.0.0.1:54321");
+    writeFileSync(g7, kiloBody, "utf8");
+    const k7 = join(h7, "custom.json");
+    writeFileSync(k7, empty, "utf8");
+    const r7 = install("kilo", h7, { KILO_CONFIG: k7 });
+    assert.ok(!r7.added, "没实测过合并语义、几份还不一致 ⇒ 不写");
+    assert.match(r7.why ?? "", /看不准|没实测/, `要说清是看不准:${r7.why ?? ""}`);
+    assert.equal(readFileSync(g7, "utf8"), kiloBody, "两份都不许动");
+    assert.equal(readFileSync(k7, "utf8"), empty, "两份都不许动");
+    group("会读好几份配置的那家:按「最终生效的是哪一条」判(关掉的、两份都读的、只在变量里的)");
   }
 
   // ── ⑧ 文本编辑器两侧不许漂(TS `json-edit.ts` ↔ 裸 Node `json-edit.mjs`)──────
@@ -473,6 +477,10 @@ try {
       '[1, 2]\n',                                                      // 根不是对象
       '{ "a": 1 ',                                                      // 截断
       '{\n  "s": "带 } 和 // 的字符串"\n}\n',
+      '{\n  "mcpServers": {\n    // 空容器里的说明\n  }\n}\n',       // N1:空容器的内文也不许删
+      '{\n  /* 整份只有这句 */\n}\n',                                   // N1:根对象那一层同理
+      '{"mcpServers":{},"mcpServers":{"other":{"command":"t"}}}\n',   // F5:生效的是后一个
+      '{"mcpServers":{"other":1},"mcpServers":{}}\n',                 // F5:后一个还是空的
       '',
       '   \n',
     ];
@@ -488,6 +496,16 @@ try {
       assert.equal(bare.stripTrivia(text), edit.stripTrivia(text), `stripTrivia 两侧不一致(${label})`);
       // 顺带钉住「只插入」:成功的那几份,原字节必须整段留在结果里。
       if (a.body && text.trim()) assert.ok(onlyInserted(text, a.body), `不是纯插入(${label})`);
+      // 以及「插在**最终生效**的那个容器里」(本轮审查 F5):同名容器重复时生效的是最后一个
+      // (`JSON.parse` 语义),而编辑器原来按 `.find()` 插进第一个 —— 写进去了却接不上。
+      if (a.body) {
+        const back = edit.readJsonLoose(a.body) as Record<string, unknown> | null | undefined;
+        const live = back && typeof back === "object" && !Array.isArray(back) ? back.mcpServers : undefined;
+        assert.ok(
+          live && typeof live === "object" && !Array.isArray(live) && Object.hasOwn(live, "ash"),
+          `ash 没落在最终生效的那个容器里(${label})`,
+        );
+      }
     }
     group(`文本编辑器两侧逐字节对齐(${corpus.length} 份刁钻输入)`);
   }

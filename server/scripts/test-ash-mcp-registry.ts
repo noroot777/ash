@@ -26,6 +26,7 @@ import {
   ashMcpConfigFile, ashMcpHostFile, ashMcpStateIn, ashMcpUnsupported, registerAshMcp,
 } from "../src/mcp-registry/register.js";
 import { REPO_DIR } from "../src/paths.js";
+import { checkSourceModel } from "./mcp-sources-cases.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-mcp-registry-"));
 let done = 0;
@@ -580,6 +581,9 @@ try {
     assert.equal(readFileSync(file, "utf8"), before, "宿主那份一个字节都不许动");
     group("宿主配置只读不写");
   }
+
+  // ── ⑯⑰ 来源模型 + 服务端那条路的备份(在 `mcp-sources-cases.ts`)──────────────
+  await checkSourceModel(bench, group, existsSync(ENTRY));
 
   // ── ⑮ README 那张给人读的矩阵不许和代码漂 ────────────────────────────────
   {
