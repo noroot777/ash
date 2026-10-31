@@ -144,12 +144,24 @@ export function useNoteDrafts({ projectId, initialNoteId, notify, onLoaded }: {
     setFailed((current) => current === subjectOf(draftRef.current) ? null : current);
   }, [writeDraft]);
 
+  /**
+   * 把当前草稿落盘，回报**当前草稿**的处境。
+   *
+   * **「这次请求存了什么」和「当前草稿还有没有要存的东西」是两个判据。** 一次落盘要走
+   * 一个网络往返，这期间用户完全可能又打了字 —— 尤其是「清空正文、改了附件」那一路：
+   * 附件那半边单独落盘的结论是 `unsavable`，可等它回来时正文早已经写上新内容了。所以
+   * 每一轮等待结束都回到循环顶上**重新看一遍当前草稿**，绝不拿上一次请求的结论代表它。
+   * 真失败是唯一的例外：那说明确实有内容没存住，得当场留住用户。
+   */
   const flush = useCallback(async (): Promise<FlushResult> => {
+    // 这一轮里刚成功存过的那份内容，只用来兜住「服务端把内容规范化成了别的样子」——
+    // 那种情况草稿会一直判成脏的，同一份再发一遍还是同一份，会原地打转。
+    let persisted: NoteDraft | null = null;
     while (true) {
       const running = savingRef.current;
       if (running) {
-        const settled = await running.done;
-        if (settled !== "saved") return settled;
+        // 别人的请求（甚至是别条笔记的请求）结束了：回头重新判，不接管它的结论。
+        if (await running.done === "failed") return "failed";
         continue;
       }
       const sent = draftRef.current;
@@ -169,6 +181,9 @@ export function useNoteDrafts({ projectId, initialNoteId, notify, onLoaded }: {
       // 所以附件那半边照旧单独落盘 —— 否则用户刚传完的那张图一离开就只剩 uploads 里
       // 一个没人认领的文件，摘掉附件的那一下同样白做。
       if (blank && sameAttachments(sent, server)) return "unsavable";
+      // 同一份内容刚存过、回来还判成脏的，只能是服务端把它规范化成了别的样子。等用户
+      // 下次真的改动再说，别拿同一份去撞第二次。
+      if (persisted && sameDraft(sent, persisted)) return blank ? "unsavable" : "saved";
       const subject = subjectOf(sent);
       const record: { subject: Subject; done: Promise<FlushResult> } = { subject, done: Promise.resolve("saved") };
       record.done = (sent.id === null
@@ -205,13 +220,10 @@ export function useNoteDrafts({ projectId, initialNoteId, notify, onLoaded }: {
       });
       savingRef.current = record;
       setSaving(subject);
-      const settled = await record.done;
-      if (settled !== "saved") return settled;
-      // 存完之后草稿**又被改过**才值得再存一轮。只看内容：新建那条刚拿到 id，id 变了不算
-      // 用户改了东西。没改过还判成脏的只能是服务端把内容规范化成了别的样子，再发一遍还是
-      // 同一份，会原地打转。
-      const current = draftRef.current;
-      if (current.body === sent.body && sameAttachments(current, sent)) return "saved";
+      if (await record.done === "failed") return "failed";
+      persisted = sent;
+      // 这里**故意不回报结论**：存完了也要回到循环顶上重新判当前草稿 —— 请求期间它可能
+      // 又被改过（那就再存一轮），也可能只剩「正文空存不上」这件事要作为结论回出去。
     }
   }, [projectId, say, writeDraft, writeRows]);
 
@@ -306,9 +318,14 @@ export function useNoteDrafts({ projectId, initialNoteId, notify, onLoaded }: {
   useEffect(() => {
     const server = serverCopy(rows, draft.id);
     if (!server || sameDraft(draft, server)) return;
+    // `pendingDelete` 必须进依赖 —— 它是**调度触发器**，不是在这儿重复一道闸。删除意图
+    // 立起来的时候这个定时器本来就该撤掉（马上要删的东西不值得存），而取消确认或者删除
+    // 失败之后得有人**重新排一次**：少了这一下，草稿就一直停在「等待自动保存」，用户不
+    // 手动点一下永远不落盘。准入（flush 那道闸）和调度（这里）必须成对出现。
+    if (pendingDelete) return;
     const timer = window.setTimeout(() => { void flush(); }, 800);
     return () => window.clearTimeout(timer);
-  }, [draft, flush, rows]);
+  }, [draft, flush, pendingDelete, rows]);
 
   useEffect(() => () => { void flush(); }, [flush]);
 

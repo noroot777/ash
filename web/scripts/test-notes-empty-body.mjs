@@ -12,7 +12,10 @@ import { createServer } from "vite";
 // ③ 清空之后删除按钮照旧开确认框，确认后真的发 DELETE；
 // ④ 非空的改动仍然挡在「离开」前面先落盘 —— 这一条别连坐修掉；
 // ⑤ 「正文空」不等于「草稿里没有要紧东西」：清空正文之后传的附件必须单独落盘，
-//    否则离开一次就只剩 uploads 里一个没人认领的文件（审查第 1 轮发现 1）。
+//    否则离开一次就只剩 uploads 里一个没人认领的文件（审查第 1 轮发现 1）；
+// ⑥ 「在途那次请求存了哪一版」不等于「当前草稿可以安全离开」：附件单独落盘的结论是
+//    「正文空存不上」，可等它回包时正文早写上新内容了 —— 统一关口必须回头重判当前草稿，
+//    不能拿上一次请求的结论替它放行（第 2 轮审查发现 1）。
 const root = fileURLToPath(new URL("..", import.meta.url));
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
@@ -47,6 +50,15 @@ try {
   const patched = [];
   const deleted = [];
   const uploaded = [];
+  // 扣住某一次 PATCH 的回包：请求照常发出、服务端照常处理，只是回包停在路上。「等回包
+  // 期间用户又打了字」这件事只有这样才造得出来。
+  let gate = null;
+  const holdPatch = (match) => {
+    const held = { match, hit: false, release: () => {} };
+    held.wait = new Promise((resolve) => { held.release = resolve; });
+    gate = held;
+    return held;
+  };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -56,7 +68,14 @@ try {
     const single = /^\/api\/notes\/([^/]+)$/.exec(path);
     if (single && request.method() === "PATCH") {
       const body = JSON.parse(request.postData() ?? "{}");
-      patched.push({ id: single[1], ...body });
+      const entry = { id: single[1], ...body };
+      patched.push(entry);
+      if (gate?.match(entry)) {
+        const held = gate;
+        gate = null;
+        held.hit = true;
+        await held.wait;
+      }
       // 跟 server/src/notes.ts 一个口径：空正文一律 400，别让夹具比真服务端宽松。
       if (typeof body.body === "string" && !body.body.trim()) {
         await reply({ error: "body required" }, 400);
@@ -169,7 +188,31 @@ try {
   await row("第二条随手记").click();
   await page.locator(".note-attachments").getByText("note-b-shot.png", { exact: true }).waitFor({ timeout: 4000 });
 
-  // ⑦ 清空正文之后 Esc 也关得掉 —— 面板不是一按清空就焊死的笼子。
+  // ⑦ 附件那半边还在等回包，正文已经补上新内容：离开之前必须把这份正文存下来。在途那次
+  //    请求存的是「请求发出时」的草稿，它回报 unsavable 只说明那一版正文是空的，跟当前草
+  //    稿能不能安全离开是两个判据 —— 拿它替当前草稿放行，用户刚打的字就无声丢了。
+  const held = holdPatch((entry) => entry.id === "note-b" && entry.body === undefined);
+  await typeBody("");
+  await pastePng("note-b-second.png");
+  for (let i = 0; i < 160 && !held.hit; i++) await page.waitForTimeout(50);
+  assert.ok(held.hit, "附件那半边应当已经把 PATCH 发出去了");
+  const LATE = "回包路上补的正文";
+  await editor.fill(LATE);
+  // 不等回包就换走（这里用「新建」这个出口，它和换一条、关面板、转任务同走一道关口）。
+  await page.locator(".notes-list-tools button[aria-label='新建随手记']").click();
+  await page.waitForTimeout(300);
+  held.release();
+  for (let i = 0; i < 160 && rows.get("note-b")?.body !== LATE; i++) await page.waitForTimeout(50);
+  assert.deepEqual(
+    patched.filter((entry) => entry.id === "note-b" && entry.body !== undefined).at(-1),
+    { id: "note-b", body: LATE, attachments: ["/tmp/uploads/note-b-shot.png", "/tmp/uploads/note-b-second.png"] },
+    `在途请求回来之后要重判当前草稿，把补上的正文存掉：${JSON.stringify(patched)}`,
+  );
+  assert.equal(rows.get("note-b").body, LATE, "服务端那份必须是用户最后打的内容");
+  await row(LATE).click();
+  await page.locator(".note-row.is-selected", { hasText: LATE }).waitFor({ timeout: 4000 });
+
+  // ⑧ 清空正文之后 Esc 也关得掉 —— 面板不是一按清空就焊死的笼子。
   await typeBody("");
   await pastAutosave();
   await page.keyboard.press("Escape");

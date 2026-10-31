@@ -12,6 +12,10 @@ import { createServer } from "vite";
 // 这条钉住：删除期间一条保存都不许发（判据在落盘函数自己身上，覆盖自动保存 / ⌘+回车 /
 // 保存按钮 / 各出口 / 卸载清理这五条来路），而且删掉的那条不许复活、也不许顺手把刚切
 // 过去的那条白存一遍。
+//
+// 还钉住另一半：**那道闸关上之后得有人把它重新打开**。删除确认框开着的时候自动保存被挡
+// 掉，用户若取消确认（或删除失败），草稿还脏着却再没人排下一次定时器 —— 它就一直停在
+// 「等待自动保存」，不手动点一下永远不落盘（第 2 轮审查的非阻塞项）。
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 // DELETE 比 PATCH 先发、后回：正是「保存回包迟到」那个顺序。
@@ -121,6 +125,30 @@ try {
   // 白存一遍。界面上的说法同样得是「已保存」而不是「等待自动保存」。
   await page.locator(".note-row.is-selected", { hasText: "第二条随手记" }).waitFor();
   assert.match(await page.locator(".notes-panel footer span").first().innerText(), /已自动保存/, "切过去的那条不该被判成有改动");
+
+  // 取消删除之后，脏草稿得自己接着存上 —— 准入（落盘函数那道闸）和调度（自动保存定时器）
+  // 必须成对恢复。
+  await page.locator(".note-editor-preview").click();
+  await editor.waitFor();
+  const RESUMED = "取消删除之后应当继续自动保存";
+  await editor.fill(RESUMED);
+  await page.locator(".notes-footer-actions button", { hasText: "删除" }).click();
+  await dialog.waitFor();
+  const beforeCancel = requests.length;
+  // 确认框开着就是不许存（这一条两种实现下都该成立；万一这里红了，说明下面那条断言的
+  // 时序前提没站住，而不是悄悄放过）。
+  await page.waitForTimeout(1200);
+  assert.equal(requests.length, beforeCancel, `确认框开着的时候不许发请求：${JSON.stringify(requests.slice(beforeCancel))}`);
+  await dialog.locator("footer button:not(.is-danger)").first().click();
+  await dialog.waitFor({ state: "detached" });
+
+  for (let i = 0; i < 60 && requests.length === beforeCancel; i++) await page.waitForTimeout(100);
+  assert.deepEqual(
+    requests.slice(beforeCancel).map((entry) => ({ method: entry.method, id: entry.id, body: entry.body?.body })),
+    [{ method: "PATCH", id: "note-b", body: RESUMED }],
+    `取消删除之后那次自动保存必须补上：${JSON.stringify(requests.slice(beforeCancel))}`,
+  );
+  assert.equal(rows.get("note-b").body, RESUMED, "服务端那份要真的存上");
 
   console.log("notes panel delete-race test passed");
 } finally {
