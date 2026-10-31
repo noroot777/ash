@@ -16,7 +16,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { byHand, type ApprovalVerdict } from "../auth/codex-approve.js";
 import { fileState, publishFresh, readForWrite } from "../auth/config-publish.js";
@@ -77,6 +77,75 @@ export function ashMcpHostFile(
   return dir ? ashMcpConfigFile(dir, site) : null;
 }
 
+/**
+ * 这家 CLI 在宿主机上**会读的全部配置文件**,低优先级在前、写入目标在最后。
+ *
+ * 为什么不是一个文件(本轮审查 R3,真 opencode 实测):`OPENCODE_CONFIG` 不是「取代配置目录」,
+ * 而是**再加一份**配置 —— 全局那份里的 ash 照样生效。上一版只认变量指的那一份,于是那种
+ * 「全局放 MCP、另给一份模型设置」的正常分拆:预检说「没接好」把派审硬拒了,安装器还会往更高
+ * 优先级那份里补一条、把本来连得上的那条 URL 顶掉。
+ */
+export function ashMcpHostSources(
+  agentType: string,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string[] {
+  const mechanism = ashMcpMechanism(agentType);
+  if (mechanism?.kind !== "file") return [];
+  const { site } = mechanism;
+  const target = ashMcpHostFile(agentType, env, home);
+  if (!target) return [];
+  // 默认位置那份要用 `defaultDir` 直接算:`ashMcpConfigDir` 在变量指到文件时返回的是**那个
+  // 文件所在的目录**,拿它拼只会又得到同一份,全局那份照样看不见。
+  const fallback = ashMcpConfigFile(site.defaultDir(env, home), site);
+  // 变量指到文件的那几家:默认位置那份也是来源之一(谁优先、合不合并见 `envFileMerges`)。
+  if (site.dirEnvIsFile && resolve(fallback) !== resolve(target)) return [fallback, target];
+  return [target];
+}
+
+/** 一份文件里的登记状态(先分清「没有这个文件」和「有但读不动」,见 `ashMcpStateIn`)。 */
+export function fileConfigState(file: string, shape: AshMcpShape): AshMcpConfigState {
+  const probe = fileState(file);
+  if (probe === "unreadable") return unknownState(`${file} 读不出来`);
+  if (probe === "missing") return { state: "absent", serverName: null, detail: `${file} 还不存在` };
+  try {
+    const found = shape.read(readFileSync(file, "utf8"));
+    return { ...found, detail: found.detail ? `${file}：${found.detail}` : "" };
+  } catch (e) {
+    return unknownState(`读 ${file} 的 ash MCP 登记失败：${(e as Error).message}`);
+  }
+}
+
+/**
+ * 把同一家 CLI 几份来源的判定合成一个结论。
+ *
+ * - 任一来源 present ⇒ present(合并来源下它就是 CLI 真看到的那条);
+ * - 否则任一 disabled ⇒ disabled;任一 unknown ⇒ unknown;
+ * - **合并语义没实测过、而几份来源结论不一致 ⇒ unknown**:这时「present」和「absent」各是一种
+ *   猜,两种猜错的代价都是实打实的(见 `envFileMerges`),所以只说看不准、不写;
+ * - 全部确认没有 ⇒ absent(只有这一档配得上「可以自动补写」)。
+ */
+export function combineConfigStates(
+  states: readonly AshMcpConfigState[],
+  merges: boolean,
+): AshMcpConfigState {
+  if (states.length === 1) return states[0]!;
+  // **先判「几份结论一致吗」**:合并语义没实测时,不一致的那一档既不能说有也不能说没有
+  // (说有 ⇒ 真要是取代语义,那就是没接上还报接上了;说没有 ⇒ 真要是合并语义,预检会硬拒
+  // 一个本来连得上的执行器、安装器还会再写一条顶掉它)。所以只说看不准。
+  if (!merges && new Set(states.map((s) => s.state)).size > 1) {
+    return unknownState("这家 CLI 会读好几份配置，而它们的结论不一致、合并规则 ash 没实测过："
+      + states.map((s) => s.detail || (s.state === "present" ? "其中一份里已经有 ash 登记" : s.state)).join("；"));
+  }
+  const present = states.find((s) => s.state === "present");
+  if (present) return present;
+  const unsure = states.find((s) => s.state === "unknown");
+  if (unsure) return unsure;
+  const off = states.find((s) => s.state === "disabled");
+  if (off) return off;
+  return states[0]!;
+}
+
 /** 某个配置目录(隔离档给个人目录,宿主档走 `ashMcpHostFile`)里的那份配置文件。 */
 function siteFileFor(agentType: string, dir: string, site: AshMcpConfigSite, env: NodeJS.ProcessEnv): string {
   // 指到文件的变量只在**宿主档**成立:隔离档是我们自己造的目录,调用方给的 dir 才是权威。
@@ -117,15 +186,7 @@ export function ashMcpStateIn(
   // **先分清「没有这个文件」和「有但读不动」**:下面的读取路径会把异常吞成「空」,于是一次
   // EACCES / EIO 会被说成「没有登记」。absent 是个会被用来拦人的结论(`ash-mcp-reachability.ts`
   // 的「向放行开」),只有确实没有文件才配得上它。
-  const probe = fileState(file);
-  if (probe === "unreadable") return unknownState(`${file} 读不出来`);
-  if (probe === "missing") return { state: "absent", serverName: null, detail: `${file} 还不存在` };
-  try {
-    const found = mechanism.shape.read(readFileSync(file, "utf8"));
-    return { ...found, detail: found.detail ? `${file}：${found.detail}` : "" };
-  } catch (e) {
-    return unknownState(`读 ash MCP 登记失败：${(e as Error).message}`);
-  }
+  return fileConfigState(file, mechanism.shape);
 }
 
 const unknownState = (detail: string): AshMcpConfigState => ({ state: "unknown", serverName: null, detail });
@@ -195,6 +256,25 @@ export async function registerAshMcp(opts: AshMcpRegisterOptions): Promise<AshMc
     return fail(`${opaque} 这份配置 ${agentType} 也会读，而 ash 读不了它的格式 —— `
       + `所以没有自动补写 ${file}（免得同一个 ash 登记在两份配置里各有一条）；`
       + "请在那份配置里自己加一条 ash 登记，或者把它挪开再重启");
+  }
+  // **写之前把这家 CLI 会读的其它来源看一眼**(本轮审查 R3)。只有宿主档会有这种事:隔离档
+  // 是我们自己造的目录。任一来源已经有 ash ⇒ 不写(往更高优先级那份补一条会把它顶掉);
+  // 看不准 ⇒ 也不写,如实说。
+  if (resolve(dir) === resolve(ashMcpConfigDir(agentType, env, hostHome) ?? dir)) {
+    const others = ashMcpHostSources(agentType, env, hostHome)
+      .filter((f) => resolve(f) !== resolve(file));
+    for (const other of others) {
+      const state = combineConfigStates(
+        [fileConfigState(other, mechanism.shape), fileConfigState(file, mechanism.shape)],
+        mechanism.site.envFileMerges === true,
+      );
+      if (state.state === "present") return { ok: true, serverName: state.serverName ?? ASH_MCP_SERVER_NAME };
+      if (state.state === "disabled") return fail(`${state.detail}，没有替你打开`);
+      if (state.state === "unknown") {
+        return fail(`看不准这家 CLI 到底有没有 ash MCP 登记（${state.detail}），所以没有自动补写 ——`
+          + "你那几份配置一个字节都没动");
+      }
+    }
   }
   return await publishFresh<AshMcpRegisterResult>(file, async (read, commit) => {
     const found = mechanism.shape.read(read.text);

@@ -126,10 +126,11 @@ export const ASH_MCP_TABLE = {
   opencode: {
     kind: "file",
     shape: opencodeJsonShape,
-    // `OPENCODE_CONFIG` 指的是**一个文件**,不是目录。
+    // `OPENCODE_CONFIG` 指的是**一个文件**,而且是「再加一份」而不是「取代」(见 `envFileMerges`)。
     site: {
       dirEnv: "OPENCODE_CONFIG",
       dirEnvIsFile: true,
+      envFileMerges: true,
       defaultDir: xdgConfig("opencode"),
       relative: ["opencode.json"],
       alternates: [["opencode.jsonc"]],
@@ -142,7 +143,10 @@ export const ASH_MCP_TABLE = {
     source: "`OPENCODE_CONFIG=<沙盘>/opencode.json opencode mcp list` 实测读得出我们写的那条 "
       + "`mcp.ash`（`type:\"local\"` + `command:[argv]` + `environment`）；"
       + "另有端到端 `server/scripts/e2e-opencode-ash-mcp.ts`:注册 → 起真任务 → agent 调 "
-      + "`ash_complete_task` 交卷,任务落 done(2026-10-31 跑通)",
+      + "`ash_complete_task` 交卷,任务落 done(2026-10-31 跑通);"
+      + "`OPENCODE_CONFIG` 的合并语义另有三组实测(本轮审查 R3):全局有 ash、变量那份没有 ⇒ "
+      + "`opencode mcp list` 照样列出 ash;两份各放一条不同的 ⇒ 列出 2 条;同名各放一条 ⇒ "
+      + "列出变量那份的 —— 所以它是**再加一份、同名它赢**",
     notes: "跟 `mcpServers` 那族**不是同一个形状**（容器叫 `mcp`、argv 是数组、环境变量键叫 "
       + "`environment`），别拿那份硬套",
   },
@@ -218,16 +222,19 @@ export const ASH_MCP_TABLE = {
     },
     // 文件里本地服务的 `type` 叫 `local`(命令行那一侧才是 `--transport stdio`,两边不同名)。
     writeType: "local",
-    // **登记写对了也交不了卷**:copilot 只自动继承 PATH,别的环境变量要写死在 `env` 里,
-    // 而回合 token 一轮一个 —— 写死就是过期的假身份。详见 `AshMcpIdentity` 的 `blocked`。
-    identity: "blocked",
+    // **身份搭 PATH 那班车**:copilot 只自动继承 PATH,别的环境变量要求写死在 `env` 里,
+    // 而回合 token 一轮一个 —— 写死就是过期的假身份。所以身份改走一份文件,目录挂在 PATH
+    // 末尾。详见 `AshMcpIdentity` 的 `path` 与 `@ash/shared/mcp` 那段约定。
+    identity: "path",
     identityNote: "copilot 文档明写「`PATH` 自动继承，其余环境变量必须在这条登记的 `env` 里配」，"
-      + "而回合身份（`ASH_TASK_ID` / 两套 token）一轮一个值、只能在起跑时注进 CLI 进程 —— "
-      + "ash 现在没有把它送进 copilot 的 MCP 子进程的办法",
-    caveat: "copilot 的 MCP 子进程只自动继承 PATH，ash 注的回合身份进不去，"
-      + "**这一轮跑完交卷大概率被拒**（文档依据见 catalog 的 source；本机没装 copilot，未实测）。"
-      + "要让它能交卷，得由你决定走哪条：① 给 copilot 开隔离档（`COPILOT_HOME`／`--config-dir`，"
-      + "但那会连带丢掉宿主的 copilot 登录态）；② 换别的执行器跑需要交卷的任务",
+      + "而回合身份一轮一个值、写死进配置文件就是过期的假身份 —— 所以 ash 每回合在 "
+      + "`<runs>/<taskId>/turn-identity/<turnToken>/` 放一份 `identity.json`、把那个目录追加到 "
+      + "`PATH` 末尾（目录里没有可执行文件，盖不掉任何命令），MCP 侧在变量都不在时读它。"
+      + "登记本身不需要写任何身份相关的东西",
+    caveat: "copilot 的 MCP 子进程只自动继承 PATH，所以 ash 的回合身份走 `PATH` 上一个一次性目录"
+      + "里的文件（约定见 `@ash/shared/mcp`）。**这条桥本机没法实测**（没装 copilot），"
+      + "文档依据见 source；万一它连 `PATH` 也改写，表现就回到「交卷被拒」，"
+      + "那时请换别的执行器跑需要交卷的任务",
     evidence: "docs",
     source: "docs.github.com/copilot/reference/copilot-cli-reference/cli-config-dir-reference"
       + "（2026-10-31 查）：`COPILOT_HOME` 整体取代 `~/.copilot`，用户级 MCP 在 `mcp-config.json`；"
@@ -271,6 +278,8 @@ export const ASH_MCP_TABLE = {
     },
     identity: "unknown",
     evidence: "docs",
+    // 这家也有「指到文件」的变量,但**合并语义没实测**(本机没有 kilo CLI),所以不置
+    // `envFileMerges`:几份来源结论不一致时判定回 unknown、不写,见 `combineConfigStates`。
     source: "kilo.ai/docs 的 CLI + MCP 章节（2026-10-31 查）：`@kilocode/cli` 是 opencode 的衍生，"
       + "全局 `~/.config/kilo/kilo.json`（也认 `.jsonc` / `config.json` / 遗留的 `opencode.json[c]`），"
       + "MCP 在 `mcp` 键下，本地服务 `command` 是数组、可用 `enabled: false` 关掉",

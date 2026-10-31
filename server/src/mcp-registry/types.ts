@@ -113,6 +113,16 @@ export interface AshMcpConfigSite {
    * 这种写法下 `relative` 对它不适用。
    */
   readonly dirEnvIsFile?: boolean;
+  /**
+   * `dirEnvIsFile` 那个变量指的是「**再加一份**配置」而不是「取代默认那份」—— 置真表示这件事
+   * **已实测**,默认位置那份照样生效、同名键由变量那份赢。
+   *
+   * 2026-10-31 用真 opencode 三组实测(本轮审查 R3):全局有 ash、`OPENCODE_CONFIG` 那份没有
+   * ⇒ `opencode mcp list` 照样列出 ash;两份各放一条不同的 ⇒ 列出 2 条;同名各放一条 ⇒ 列出
+   * 变量那份的。没实测过的家(kilo)**不要**置真:几份来源结论不一致时判定只能回 unknown,
+   * 猜「合并」会把没接上说成接上了,猜「取代」会把接上了说成没接上、还要再写一条顶掉它。
+   */
+  readonly envFileMerges?: boolean;
   /** 宿主机默认配置目录(`dirEnv` 没设时用它)。XDG 之类的分支写在这里面。 */
   readonly defaultDir: (env: NodeJS.ProcessEnv, home: string) => string;
   /** 配置文件相对配置目录的位置(`["config.toml"]`、`[".gemini","settings.json"]`)。 */
@@ -154,11 +164,21 @@ export type AshMcpIdentity =
    * CLI 过滤子进程环境,而登记里那个位置**只收字面值**(copilot:文档明写只自动继承
    * `PATH`,其余要写死在 `env` 里)—— 回合 token 一轮一个,写死就是过期的假身份。
    *
-   * 这一档的意思是「登记写对了也交不了卷」,所以必须配 `caveat` 当场说出来:ash 现在
-   * 送不进回合身份,要么用户自己换个接法,要么等 ash 给这家开隔离档(会连带丢掉宿主登录态,
-   * 那是用户自己才能拍的板)。
+   * 这一档的意思是「登记写对了也交不了卷」,所以必须配 `caveat` 当场说出来:ash 送不进
+   * 回合身份,用户只能自己换个接法。**在 ash 给出 `PATH` 那条通路之后,这一档空着** ——
+   * 留着是因为判据还在:下一家 CLI 若连 `PATH` 都过滤,它就该落这一档。
    */
   | "blocked"
+  /**
+   * CLI 只把 `PATH` 自动交给 MCP 子进程(copilot 文档原文),于是身份改走**文件**:
+   * ash 每回合开一个一次性目录、把 `identity.json` 放进去、把目录追加到 `PATH` 末尾,
+   * MCP 侧在变量都不在时读它。约定与四条安全要点见 `@ash/shared/mcp` 的
+   * `ASH_TURN_IDENTITY_PATH_DIR`,两侧实现在 `server/src/turn-identity.ts` 与
+   * `mcp/src/runtime.ts`。
+   *
+   * 这一档**不需要在登记里写任何东西**(写进 `env` 的只有静态的 `ASH_URL`)。
+   */
+  | "path"
   /** 还没验过。按 inherit 走(多数 CLI 如此),矩阵里如实标出来。 */
   | "unknown";
 

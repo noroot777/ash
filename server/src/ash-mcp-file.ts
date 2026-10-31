@@ -33,7 +33,9 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { type LaunchSpec, scanCodexToml } from "./codex-toml.js";
 import { ashMcpConfigDir, ashMcpMechanism } from "./mcp-registry/catalog.js";
-import { ashMcpHostFile, ashMcpOpaqueSibling } from "./mcp-registry/register.js";
+import {
+  ashMcpHostSources, ashMcpOpaqueSibling, combineConfigStates, fileConfigState,
+} from "./mcp-registry/register.js";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { boundListeningPort } from "./listening-port.js";
 
@@ -93,9 +95,11 @@ function registryVerdict(
   }
   const dir = ashMcpConfigDir(agentType, env, homedir());
   if (!dir) return { state: "unknown", why: `算不出 ${agentType} 的配置目录` };
-  // 文件名只有一处解析:`dirEnv` 指到文件的那几家(opencode / kilo)必须原样用那个路径,
-  // 不许在这里把文件名丢掉再按默认名拼回来(本轮审查 R4)。
-  const file = ashMcpHostFile(agentType, env, homedir());
+  // **这家 CLI 会读的全部来源**,不是一个文件(本轮审查 R3:`OPENCODE_CONFIG` 是再加一份,
+  // 全局那份里的 ash 照样生效 —— 只看变量那一份会把「连得上」判成「没接好」,而 absent 在
+  // 预检里是硬拒)。文件名解析仍然只有一处,见 `ashMcpHostSources` / `ashMcpHostFile`。
+  const sources = ashMcpHostSources(agentType, env, homedir());
+  const file = sources[sources.length - 1];
   if (!file) return { state: "unknown", why: `算不出 ${agentType} 的配置文件` };
   // 同目录有这家也读、而我们读不了格式的配置(trae 的原生 YAML)⇒ 不下结论:
   // ash 可能就写在那里面(`AshMcpConfigSite.opaque`)。
@@ -105,7 +109,7 @@ function registryVerdict(
   for (const candidate of mechanism.site.projectRelative ?? []) {
     for (const base of upToGitRoot(dirs)) {
       const project = join(base, ...candidate);
-      if (resolve(project) === resolve(file)) continue;
+      if (sources.some((f) => resolve(project) === resolve(f))) continue;
       const read = readText(project);
       if (read.kind === "unreadable") return { state: "unknown", why: `${project} 读不出来` };
       if (read.kind === "text" && /mcp[_-]?[sS]ervers|"mcp"|\[mcp\b/.test(read.text)) {
@@ -113,16 +117,20 @@ function registryVerdict(
       }
     }
   }
-  const read = readText(file);
-  if (read.kind === "unreadable") return { state: "unknown", why: `${file} 读不出来` };
-  if (read.kind === "missing") return { state: "absent", detail: `${file} 还不存在` };
-  const found = mechanism.shape.read(read.text);
+  const states = sources.map((f) => fileConfigState(f, mechanism.shape));
+  const found = combineConfigStates(states, mechanism.site.envFileMerges === true);
   if (found.state === "present") {
-    return { state: "present", hint: launchHint(mechanism.shape.launch(read.text) ?? {}) };
+    // 提示里的启动参数取**真有那条登记**的那一份(不一定是写入目标那份)。
+    const live = sources[states.findIndex((st) => st.state === "present")]!;
+    const text = readText(live);
+    return {
+      state: "present",
+      hint: launchHint(text.kind === "text" ? mechanism.shape.launch(text.text) ?? {} : {}),
+    };
   }
-  if (found.state === "unknown") return { state: "unknown", why: `${file}：${found.detail}` };
-  if (found.state === "disabled") return { state: "disabled", detail: `${file}：${found.detail}` };
-  return { state: "absent", detail: `${file} 里没有 ash MCP 登记` };
+  if (found.state === "unknown") return { state: "unknown", why: found.detail };
+  if (found.state === "disabled") return { state: "disabled", detail: found.detail };
+  return { state: "absent", detail: found.detail || `${file} 里没有 ash MCP 登记` };
 }
 
 // ── claude ─────────────────────────────────────────────────────────────────

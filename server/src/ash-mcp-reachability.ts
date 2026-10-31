@@ -77,7 +77,7 @@ import { codexAshMcpServerName } from "./executors/codex-mcp.js";
 import { effectiveExecutorContext } from "./executors/index.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
 import { ashMcpMechanism } from "./mcp-registry/catalog.js";
-import { ashMcpHostFile, ashMcpUnsupported } from "./mcp-registry/register.js";
+import { ashMcpHostSources, ashMcpUnsupported } from "./mcp-registry/register.js";
 
 /** 探测是只读子命令（claude 实测 ~0.8s、codex ~0.01s）；超时一律按「问不出来」放行。 */
 const PROBE_TIMEOUT_MS = 15_000;
@@ -141,8 +141,13 @@ function howToCheck(agentType: string, env: NodeJS.ProcessEnv): string {
   if (known) return known;
   // 跟写入侧同一个解析口(本轮审查 R4:上一版在这里按默认文件名重拼，于是自定义配置文件的
   // 用户拿到的自查路径指向另一份文件)。
-  const file = ashMcpHostFile(agentType, env);
-  return file ? `看一眼 ${file}` : `看一眼 ${agentType} 自己的 MCP 配置`;
+  // 来源不止一份时(opencode / kilo 的那个变量是「再加一份」)**全都列出来**:ash 可能就写在
+  // 另一份里,只指写入目标那一份会让用户以为没接上(本轮审查 R3)。
+  const sources = ashMcpHostSources(agentType, env);
+  if (!sources.length) return `看一眼 ${agentType} 自己的 MCP 配置`;
+  return sources.length > 1
+    ? `看一眼这几份配置（这家 CLI 都会读，谁都可能装着那条登记）：${sources.join("、")}`
+    : `看一眼 ${sources[0]}`;
 }
 
 const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
