@@ -34,8 +34,8 @@ import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp
 import { type LaunchSpec, scanCodexToml } from "./codex-toml.js";
 import { ashMcpConfigDir, ashMcpMechanism } from "./mcp-registry/catalog.js";
 import {
-  ashMcpHostSources, ashMcpOpaqueSibling, resolveAshMcp,
-} from "./mcp-registry/register.js";
+  ashMcpHostSources, ashMcpOpaqueSibling, readingFor, resolveAshMcp,
+} from "./mcp-registry/sources.js";
 import { resolveBin } from "./executors/bin-resolve.js";
 import { boundListeningPort } from "./listening-port.js";
 
@@ -45,7 +45,15 @@ export { type CodexTomlScan, type LaunchSpec, scanCodexToml } from "./codex-toml
 
 export type FileVerdict =
   | { state: "present"; hint: string | null }
-  | { state: "unknown"; why: string }
+  /**
+   * `tell` = 这一句**要当场说给用户听**(进预检的 warning)。
+   *
+   * 只给一种 unknown 用:本来会落到 absent(也就是会拦人)、只因为**证据不够硬**才放行的
+   * 那几档 —— 读取位置没实测全、相对路径按几个候选目录解出来结论不一致。一声不吭地放过去,
+   * 用户看到的是一片绿,而那一轮很可能跑完交不了卷(本轮审查 F1)。其余 unknown(项目里配了
+   * MCP、配置读不通…)照旧只放行不啰嗦:那几档本来就不是「可能没接」,说一句反倒是噪音。
+   */
+  | { state: "unknown"; why: string; tell?: boolean }
   | { state: "absent"; detail: string }
   | { state: "disabled"; detail: string };
 
@@ -78,7 +86,12 @@ export function fileAshMcpVerdict(
  * 规矩跟那两家一字不差 —— **只在「确定没有」时说没有**:
  *  · 项目级配置里只要提到 MCP 就答 unknown(合并规则这一档不复刻);
  *  · 读不动、解析不了、写法判不了一律 unknown;
- *  · 只有「用户级那份文件确实读得通、里面确实没有 ash」才敢说 absent。
+ *  · **这家 CLI 的读取位置没逐格实测过**(站点上没有 `loadMeasured`)时,「枚举到的几份里
+ *    都没有」也只答 unknown:absent 在预检里是硬拒,而那种「没找到」可能只是我们不知道它
+ *    还读哪儿 —— 本轮审查 F1 的三格实测(默认目录里被漏掉的 `config.json`、按相对路径指过去
+ *    的那份、项目目录里那份 `.jsonc`)全是这么错的:真 CLI `ash connected`,ash 答 absent;
+ *  · 指到文件的变量给**相对路径**时按**候选工作目录逐个解**,几个目录结论不一致就答 unknown
+ *    (真 CLI 是按它自己的 cwd 解的,我们只知道这一轮可能跑在哪几个目录里)。
  */
 function registryVerdict(
   agentType: string,
@@ -95,10 +108,14 @@ function registryVerdict(
   }
   const dir = ashMcpConfigDir(agentType, env, homedir());
   if (!dir) return { state: "unknown", why: `算不出 ${agentType} 的配置目录` };
+  // 这一轮可能跑在哪几个目录里 —— 相对路径的来源只能按它们逐个解(见下面 `perCwd`)。
+  const cwds: (string | undefined)[] = dirs.filter((d): d is string => !!d);
+  if (!cwds.length) cwds.push(undefined);
   // **这家 CLI 会读的全部来源**,不是一个文件(本轮审查 R3:`OPENCODE_CONFIG` 是再加一份,
   // 全局那份里的 ash 照样生效 —— 只看变量那一份会把「连得上」判成「没接好」,而 absent 在
   // 预检里是硬拒)。文件名解析仍然只有一处,见 `ashMcpHostSources` / `ashMcpHostFile`。
-  const sources = ashMcpHostSources(agentType, env, homedir());
+  const perCwd = cwds.map((cwd) => ashMcpHostSources(agentType, env, homedir(), cwd));
+  const sources = perCwd[0]!;
   const file = sources.filter((s) => s.file).at(-1)?.file;
   if (!sources.length) return { state: "unknown", why: `算不出 ${agentType} 会读哪几份配置` };
   // 同目录有这家也读、而我们读不了格式的配置(trae 的原生 YAML)⇒ 不下结论:
@@ -109,7 +126,8 @@ function registryVerdict(
   for (const candidate of mechanism.site.projectRelative ?? []) {
     for (const base of upToGitRoot(dirs)) {
       const project = join(base, ...candidate);
-      if (sources.some((s) => s.file && resolve(project) === resolve(s.file))) continue;
+      // 已经作为来源算过的那份不重复判(相对路径解出来的可能正是它)。
+      if (perCwd.some((set) => set.some((s) => s.file && resolve(project) === resolve(s.file)))) continue;
       const read = readText(project);
       if (read.kind === "unreadable") return { state: "unknown", why: `${project} 读不出来` };
       if (read.kind === "text" && /mcp[_-]?[sS]ervers|"mcp"|\[mcp\b/.test(read.text)) {
@@ -117,7 +135,20 @@ function registryVerdict(
       }
     }
   }
-  const found = resolveAshMcp(sources, mechanism.shape, mechanism.site.sourcesMerge === true);
+  const reading = readingFor(mechanism);
+  // 候选目录逐个解一遍。没有相对路径来源时几份输入完全相同、结论自然一致;有的时候
+  // 「在 A 目录跑读得出、在 B 目录读不到」是真事,那一轮究竟跑在哪个目录我们定不了 ——
+  // 不一致就答 unknown(放行、不写),别拿其中一个目录的结论去拦人或去写一条顶掉它。
+  const picks = perCwd.map((set) => resolveAshMcp(set, reading));
+  const found = picks[0]!;
+  if (picks.length > 1 && new Set(picks.map((p) => `${p.state}\u0000${p.serverName ?? ""}`)).size > 1) {
+    return {
+      state: "unknown",
+      why: `${agentType} 的配置变量指过去的是相对路径，这一轮可能跑在的几个目录解出来结论还不一致（`
+        + picks.map((p, i) => `${cwds[i] ?? "宿主默认目录"}：${p.state}`).join("；") + "）",
+      tell: true,
+    };
+  }
   if (found.state === "present") {
     // 提示里的启动参数直接取**解析层选中那条登记**自己带的(本轮审查 F3):上一版在这里按
     // present 重新过滤一遍来源、取最后一份、再重新读文件重新挑一次条目 —— 跟解析层两套判据,
@@ -126,6 +157,15 @@ function registryVerdict(
   }
   if (found.state === "unknown") return { state: "unknown", why: found.detail };
   if (found.state === "disabled") return { state: "disabled", detail: found.detail };
+  // absent 是硬拒,所以它要的不是「我没找到」而是「可证没有」—— 闸在站点的 `loadMeasured`。
+  if (!mechanism.site.loadMeasured) {
+    return {
+      state: "unknown",
+      why: `${found.detail || `${file} 里没有 ash MCP 登记`}，不过 ${agentType} 到底会读哪几份配置`
+        + "ash 没逐格实测过（可能还读着别处），所以不据此拦人",
+      tell: true,
+    };
+  }
   return { state: "absent", detail: found.detail || `${file} 里没有 ash MCP 登记` };
 }
 

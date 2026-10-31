@@ -143,9 +143,11 @@ ASH_URL = "http://localhost:4317"
   一个字都不写,拼好之后还会自己再扫一遍、确认恰好只有一张 ash 表才提交(TOML 里重复一张同名
   表会让 CLI 整份配置都读不出来,连你自己的 MCP 一起没了);
 - **一家 CLI 会读好几份配置时,判的是「几份合起来最终生效的那一条」**。opencode 这边 2026-10-31
-  用真 CLI 逐格实测过四层来源,优先级从低到高:默认目录(`opencode.json` 和 `opencode.jsonc`
-  **两份都读**,而且 `.jsonc` 压得住 `.json`)→ `OPENCODE_CONFIG` 指的那个文件 →
-  `OPENCODE_CONFIG_DIR` 再加的那个目录 → `OPENCODE_CONFIG_CONTENT` 里那整段 JSON。
+  用真 CLI 逐格实测过**六层**来源,优先级从低到高:默认目录(`config.json`、`opencode.json`、
+  `opencode.jsonc` **三份都读**,升序就是这个)→ `OPENCODE_CONFIG` 指的那个文件 → 任务目录往上
+  走的项目配置(`.opencode/opencode.json(c)`、仓库根的 `opencode.json(c)`)→ `~/.opencode/`
+  (`opencode.json` < `opencode.jsonc`,**它压过上面那几层**)→ `OPENCODE_CONFIG_DIR` 再加的那个
+  目录 → `OPENCODE_CONFIG_CONTENT` 里那整段 JSON。
   合并是**逐字段**的:全局那份写完整的启动命令和环境变量、高优先级那份只写一句
   `"ash": {"enabled": true}`,真 CLI 用的是两份合起来那一条(照样 `ash connected`),所以
   setup 不会再往别处补一条,搬进隔离档的也是**合完**那一条(只搬高优先级那份的话,隔离档里
@@ -164,8 +166,19 @@ ASH_URL = "http://localhost:4317"
   说「看不准是哪一份坏了」、一个字不写也不拦你起跑 —— 往另一份里补一条救不了它,得你自己把
   那份文件修好或挪开。
   `OPENCODE_CONFIG_CONTENT` 是只读来源(没有文件可写),它里面有 ash 时 ash 一个字都不写。
+  `OPENCODE_CONFIG` 给**相对路径**时,真 CLI 按**它自己的工作目录**解(同一个变量在任务目录里
+  跑读得出、在别处跑读不到)—— 那种情况 ash 只在知道那个目录时才下结论,算不出来就只说
+  「看不准」,既不拦你起跑也不写(往别处补一条会顶掉你那份)。
   kilo 的 `KILO_CONFIG` 形状一样但没真 CLI 可问,几份结论不一致时 ash 只说「看不准」、不写也不
   拦你起跑。
+- **「配置里没有 ash」这句话,ash 只对读取位置逐格实测过的那家才敢说**(目前只有 opencode)。
+  其余各家缺登记时 ash 只说「看不准」、照常放你起跑,顺手在派审提示里说一句 —— 它可能还读着
+  一份我们不知道的配置,而「确定没有」在派审那一关是**硬拒**。
+- **这家 CLI 自己的「别用这个 server」开关,ash 一家一家认,不跨家套用**(2026-10-31 两边真机
+  实测):gemini 的根级 `mcp.excluded: ["ash"]` 或 `mcp.allowed: [...]`(白名单里没有 ash,**空
+  数组也算**)会让它把那条登记直接判成 `Blocked` —— ash 如实说「被挡住了」、指出是哪一行,
+  **绝不替你改那两个名单**;而根级 `disabled_mcp_servers = ["ash"]` 是 **grok 专有**的,
+  同样写 TOML 的 codex 压根不认它,所以 ash 也不再拿它判 codex。
 
 装完某家 CLI 之后重新跑一次 `npm run setup` 就会补上。两处例外值得单说:
 

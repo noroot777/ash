@@ -245,7 +245,7 @@ factory: (opts) => new FooExecutor(opts),
 | gemini | 是 | `<配置目录>/.gemini/settings.json` | `GEMINI_CLI_HOME` | `mcpServers` JSON | 原样继承(按**变量名**过滤) | 实测 |
 | grok | 是 | `$GROK_HOME/config.toml` | `GROK_HOME` | `[mcp_servers.x]` TOML | 未验 | 实测 |
 | kimi | 是 | `$KIMI_CODE_HOME/mcp.json` | `KIMI_CODE_HOME` | `mcpServers` JSON | 未验 | 实测 |
-| opencode | 是 | `~/.config/opencode/opencode.json[c]` | `OPENCODE_CONFIG`(指文件) | `mcp` JSON | 原样继承 | 实测(含端到端) |
+| opencode | 是 | `~/.config/opencode/{config,opencode}.json[c]` + `~/.opencode/` | `OPENCODE_CONFIG`(指文件) | `mcp` JSON | 原样继承 | 实测(含端到端) |
 | cursor | 是 | `~/.cursor/mcp.json` | 无 | `mcpServers` JSON(要 `type`) | 未验 | 未实测 |
 | qwen | 是 | `$QWEN_HOME/settings.json`(默认 `~/.qwen/`) | `QWEN_HOME`(**就是配置目录**) | `mcpServers` JSON | 未验 | 未实测 |
 | qoder | 是 | `~/.qoder/mcp.json` | 无(`QODER_CONFIG_DIR_NAME` 换目录名) | `mcpServers` JSON | 未验 | 未实测 |
@@ -265,14 +265,26 @@ factory: (opts) => new FooExecutor(opts),
   `baseArgs` 带 `--skip-trust`,别去掉;② 它把交给 MCP 子进程的环境按**变量名**过滤(命中
   `/TOKEN|KEY|SECRET|AUTH/i` 一类的直接删),于是回合身份 `ASH_TURN_TOKEN` 根本到不了子进程 ——
   这就是为什么 `shared/src/mcp.ts` 另按 `*_TICKET` 别名导了一份(用只 dump 环境的假 MCP server 取证)。
-- **grok 有两种关法**:条目上的 `enabled = false`,和根级 `disabled_mcp_servers = ["ash"]`。
+- **启停策略一家一家认,不跨家套用**(机制上的 `switches`,2026-10-31 两边真机实测):
+  - **grok 有两种关法**:条目上的 `enabled = false`,和根级 `disabled_mcp_servers = ["ash"]`
+    (`grok mcp list` 打出 `(disabled)`);
+  - **同样写 TOML 的 codex 压根不认那个根级键**(`codex mcp list --json` 仍是
+    `enabled: true, disabled_reason: null`)—— 所以它**不许**声明 `switches`。上一版两家共用
+    格式族、无条件解释那个键,给 grok 关一次 ash 会把 codex 这条能用的连接也判成「被关掉了」,
+    安装器还说是用户自己关的;
+  - **gemini 还有两个根级名单**:`mcp.excluded` 列着 ash、或 `mcp.allowed` 这个白名单里没有
+    ash(**空数组也算「一个都不放行」**),真 CLI 把那条登记直接打成 `⛔ Blocked`。所以它
+    **压根没登记时也要如实说「被挡住了」**(没登记的名字里只问规范名 —— 历史名 `harness` 不在
+    白名单里是常态,拿它判会把一份完全可用的配置说成关着的),而且绝不替用户改那两个名单。
+  格式族只负责**结构读取**:条目上那两个布尔之外的开关一律由逐家声明进来(本轮审查 F2)。
 - **kimi 没有 `mcp` 子命令**(`kimi mcp add` 报 unknown command),只能我们写文件,也就没法拿它
   自己的输出复核;预检对它只有「读配置」这一档依据。
 - **opencode 会读好几份配置,判的是「几份合起来最终生效的那一条」**(真 CLI 逐格实测,全部
-  记在那家的 `source` 里)。四层来源,优先级从低到高:默认目录(`opencode.json` 和
-  `opencode.jsonc` **两份都读**,`.jsonc` 压得住 `.json`)、`OPENCODE_CONFIG` 指的那个文件、
-  `OPENCODE_CONFIG_DIR` 再加的那个目录、`OPENCODE_CONFIG_CONTENT` 里那整段 JSON(**只读,
-  没有文件可写**)。合并是**逐字段深合并**:低的那份写完整登记、高的那份只写
+  记在那家的 `source` 里)。**六层**来源,优先级从低到高:默认目录(`config.json` <
+  `opencode.json` < `opencode.jsonc`,**三份都读**;`config.json` 这个名字**只在默认目录**算)、
+  `OPENCODE_CONFIG` 指的那个文件、任务目录往上走的项目配置、`~/.opencode/`(`opencode.json` <
+  `opencode.jsonc`,**压过上面那几层**,站点上的 `extraDirs`)、`OPENCODE_CONFIG_DIR` 再加的
+  那个目录、`OPENCODE_CONFIG_CONTENT` 里那整段 JSON(**只读,没有文件可写**)。合并是**逐字段深合并**:低的那份写完整登记、高的那份只写
   `{"enabled": false}` ⇒ 命令留着、开关被关掉(真 CLI 报 `ash disabled`);嵌套的
   `environment` 按键合、数组整条替换。所以判据只能是 `resolveAshMcp`
   (`mcp-registry/register.ts`),而且必须是**合完那一条**——「任一份里有就算有」会把已经被
@@ -292,6 +304,17 @@ factory: (opts) => new FooExecutor(opts),
   ③ **任何一份读不通就整份拒载**:实测 `debug config --pure` 直接 `exit 1`(不管那份在哪一层、
   有没有提到 ash),所以 `resolveAshMcp` 只要见到一份读不准就回 unknown,不能靠「优先级比它低
   的影响不到」放行 —— 那时压根没有生效的登记可言。
+  来源**入口**那一侧还有两条(本轮审查 F1,三行实测里真 CLI 全是 `ash connected`、而 ash 答
+  absent 并据此硬拒、安装器还新写一条把生效 `ASH_URL` 换掉了):
+  ④ **指到文件的变量给相对路径时按 CLI 自己的工作目录解** —— 所以 `ashMcpHostSources` 吃一个
+  `cwd`:知道那个目录就解准,不知道就把这份来源标成**证不出来**(`AshMcpSource.unprovable`),
+  整体回 unknown(不拦人、不写,也永不当写入落点)。判定那一档按**每个候选工作目录各解一遍**,
+  结论不一致同样回 unknown —— 那一轮究竟跑在哪个目录,ash 定不了。
+  ⑤ **「确定没有」要可证**:站点上的 `loadMeasured` 才是 absent 的闸(目前只有 opencode 置真)。
+  没逐格实测过读取位置的家,「枚举到的几份里都没有」只答 unknown、放行并在预检里说一句 ——
+  absent 在派审那一关是硬拒,而那种「没找到」可能只是我们不知道它还读哪儿。安装器**不看**这一位
+  (它问的是「看得见的里面有没有」,追加不覆盖任何已有登记),否则十三家的 `npm run setup` 一条
+  都写不出来。
 - **opencode / kilo 不是 `mcpServers` 那一族**:容器叫 `mcp`、`command` 是整条 argv 数组、环境
   变量键叫 `environment`。
 - **antigravity 别和 gemini 搞混**:两家都住 `~/.gemini` 下,但 gemini 读 `settings.json`、
@@ -321,8 +344,8 @@ factory: (opts) => new FooExecutor(opts),
 **送不进去**(`blocked`)当判据,现在空着:下一家若连 `PATH` 都过滤就落它,那一家登记写对了也交不了卷,
 表里必须配 `caveat` 当场说出来。
 
-**改这张表要同时改三处**:`mcp-registry/catalog.ts`(单源)、`scripts/mcp-hosts.mjs`(安装时那份裸
-Node 实现,setup 导不进 TS)、本节表格。三处不一致时 `test:ash-mcp-registry` 会红 —— 它逐项比对
+**改这张表要同时改三处**:`mcp-registry/catalog.ts`(单源)、`scripts/mcp-host-sources.mjs`(安装时
+那份裸 Node 实现,setup 导不进 TS)、本节表格。三处不一致时 `test:ash-mcp-registry` 会红 —— 它逐项比对
 路径、变量、格式族、要不要 `type`/`enabled`,以及本节每一行的档位。
 
 ---

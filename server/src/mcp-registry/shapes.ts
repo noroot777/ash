@@ -13,7 +13,7 @@ import { extractTomlTables, scanCodexToml, tomlRootStringArray } from "../codex-
 import { readJsonLoose, spliceJsonMember } from "./json-edit.js";
 import type {
   AshMcpCompose, AshMcpComposeOpts, AshMcpConfigState, AshMcpEntry, AshMcpLaunch, AshMcpNameFact,
-  AshMcpNameScan, AshMcpShape,
+  AshMcpNameScan, AshMcpShape, AshMcpSwitches,
 } from "./types.js";
 
 /** 认的那两个服务名(`ash` 和历史名 `harness`)—— **两条独立登记**,顺序就是优先。 */
@@ -98,13 +98,66 @@ export function foldScan(scan: AshMcpNameScan, at = ""): AshMcpConfigState {
  * `resolveAshMcp` 给出的那条 `AshMcpNameFact`。
  */
 function readSide(
-  scan: (text: string | null) => AshMcpNameScan,
+  scan: (text: string | null, switches?: AshMcpSwitches) => AshMcpNameScan,
 ): Pick<AshMcpShape, "scan" | "read" | "launch"> {
   return {
     scan,
-    read: (text) => foldScan(scan(text)),
-    launch: (text) => pickFact(scan(text))?.fact.launch ?? null,
+    read: (text, switches) => foldScan(scan(text, switches)),
+    launch: (text, switches) => pickFact(scan(text, switches))?.fact.launch ?? null,
   };
+}
+
+/**
+ * 这家 CLI 的**别处开关**对这个名字怎么说 —— 格式族只在这里消费 `AshMcpSwitches`,
+ * 一条策略一处实现(JSON 两族共用;TOML 那族只有一层键,走 `tomlRootStringArray`)。
+ *
+ * 三档刻意分开:`"off"` = 它明确挡住了这个名字(状态按关着算,而且要说清是**哪一行**在挡,
+ * 用户照着去改的就是那一行);`null` = 没挡;字符串 = 看不准(那种写法真 CLI 怎么处理没
+ * 实测过,按「看不准」答,别猜)。
+ */
+function switchVerdict(
+  doc: Record<string, unknown>,
+  switches: AshMcpSwitches | undefined,
+  name: string,
+): { off: string } | { doubt: string } | null {
+  if (!switches) return null;
+  const at = (path: readonly string[]): { value: unknown } | null => {
+    let cur: unknown = doc;
+    for (const key of path) {
+      const obj = asObject(cur);
+      if (!obj || !Object.hasOwn(obj, key)) return null;
+      cur = obj[key];
+    }
+    return { value: cur };
+  };
+  const show = (path: readonly string[]) => path.join(".");
+  const list = (path: readonly string[]): string[] | { doubt: string } | null => {
+    const found = at(path);
+    if (!found) return null;
+    if (!Array.isArray(found.value)) {
+      return { doubt: `根级 ${show(path)} 不是一个数组 —— 这家 CLI 拿它怎么判 ash 没实测过` };
+    }
+    return found.value.map(String);
+  };
+  if (switches.off) {
+    const names = list(switches.off);
+    if (names && !Array.isArray(names)) return names;
+    if (names?.includes(name)) {
+      return { off: `${name} 被根级 ${show(switches.off)} 挡住了（这家 CLI 会把它判成不可用）` };
+    }
+  }
+  if (switches.only) {
+    // **键存在就生效**:空数组实测是「全挡」(真 gemini 0.60.0),不是「没配」。
+    const names = list(switches.only);
+    if (names && !Array.isArray(names)) return names;
+    if (names && !names.includes(name)) {
+      return {
+        off: `根级 ${show(switches.only)} 是个白名单、里面没有 ${name}`
+          + `（${names.length ? `只放行 ${names.join("、")}` : "空数组 = 一个都不放行"}）`,
+      };
+    }
+  }
+  return null;
 }
 
 /** 一条登记的原值 → 这个名字的事实。各族一份(判据各自实测,别互相套)。 */
@@ -117,7 +170,12 @@ type FactOf = (name: string, entry: Record<string, unknown>) => AshMcpNameFact;
  * 当没有去写就会把用户那个键覆盖掉,跟「已有登记一律不覆盖」自相矛盾。那一档**不带 `raw`**,
  * 于是跨来源合并时它只能继续 doubt(见 `AshMcpNameFact.raw`)。
  */
-function scanJson(container: string, text: string | null, factOf: FactOf): AshMcpNameScan {
+function scanJson(
+  container: string,
+  text: string | null,
+  factOf: FactOf,
+  switches?: AshMcpSwitches,
+): AshMcpNameScan {
   const doc = parseDoc(text);
   if (doc === undefined) return doubtScan("配置解析不了（它可能正被 CLI 写到一半，也可能被手工改坏了）");
   if (doc === null) return noConfig();
@@ -126,11 +184,38 @@ function scanJson(container: string, text: string | null, factOf: FactOf): AshMc
   const names = new Map<string, AshMcpNameFact>();
   for (const name of WANTED) {
     const raw = servers ? servers[name] : undefined;
-    if (raw === undefined) continue;
+    if (raw === undefined) {
+      // **这家明确挡住这个名字时,压根没登记也要如实说**(本轮审查 F2):`mcp.excluded:["ash"]`
+      // 在那儿摆着,补一条登记进去也是条用不上的(真 gemini 把它打成 `Blocked`)—— 答 absent
+      // 的话安装器会照写、设置页一片绿,而那一轮起来一个 ash 工具都没有。
+      //
+      // 没登记的名字里**只问规范名**:它才是 ash 会去写的那个。历史名 `harness` 没在白名单
+      // 里是常态(`allowed: ["ash"]` 就是这样),拿它说「被关掉了」会把一份其实完全可用的
+      // 配置判成 disabled、派审当场硬拒。
+      if (name !== ASH_MCP_SERVER_NAME) continue;
+      const blocked = switchVerdict(doc, switches, name);
+      if (blocked && "off" in blocked) names.set(name, { status: "off", detail: blocked.off });
+      else if (blocked) names.set(name, { status: "doubt", detail: blocked.doubt });
+      continue;
+    }
     const entry = asObject(raw);
-    names.set(name, entry
-      ? factOf(name, entry)
-      : { status: "doubt", detail: `${name} 这条登记不是一个对象（值是 ${typeof raw}）` });
+    if (!entry) {
+      names.set(name, { status: "doubt", detail: `${name} 这条登记不是一个对象（值是 ${typeof raw}）` });
+      continue;
+    }
+    const fact = factOf(name, entry);
+    // 这家自己的别处开关**压在条目之上**:条目写得再对,它挡住了就是用不上(本轮审查 F2)。
+    // `raw` 照样留着 —— 跨来源合并和搬运要的是「这份来源贡献了什么」,跟能不能用是两回事。
+    const switched = switchVerdict(doc, switches, name);
+    if (switched && "off" in switched) {
+      names.set(name, { status: "off", detail: switched.off, ...(fact.raw ? { raw: fact.raw } : {}) });
+      continue;
+    }
+    if (switched) {
+      names.set(name, { status: "doubt", detail: switched.doubt, ...(fact.raw ? { raw: fact.raw } : {}) });
+      continue;
+    }
+    names.set(name, fact);
   }
   return { names };
 }
@@ -221,9 +306,15 @@ function mcpServersLaunch(entry: Record<string, unknown>): AshMcpLaunch {
 }
 
 /**
- * 这一族的逐条判据。**没有 `mergeFacts`**:这九家里一家都没有「几份来源合起来看」的实测
- * 依据(多数只有一份用户级配置),而 opencode 那边那套字段级规矩是逐格问真 CLI 问出来的,
- * 照搬过来就是拿别人家的实测给这几家背书。
+ * 这一族的逐条判据 —— **只看条目本身那两个布尔**(`disabled: true` / `enabled: false`)。
+ *
+ * 「这家还有没有别处的开关」不在这里判:那是逐家的事,走机制上的 `switches`
+ * (`scanJson` 里消费)。本轮审查 F2 的病根就是这一层想替所有人回答启停 —— gemini 的根级
+ * `mcp.excluded` 没人读,而 grok 专有的根级键被套到了 codex 头上。
+ *
+ * **没有 `mergeFacts`**:这九家里一家都没有「几份来源合起来看」的实测依据(多数只有一份
+ * 用户级配置),而 opencode 那边那套字段级规矩是逐格问真 CLI 问出来的,照搬过来就是拿
+ * 别人家的实测给这几家背书。
  */
 const mcpServersFact: FactOf = (name, entry) => switchedOff(entry)
   ? { status: "off", detail: `${name} 这条登记是关着的`, raw: entry }
@@ -231,7 +322,7 @@ const mcpServersFact: FactOf = (name, entry) => switchedOff(entry)
 
 export const mcpServersJsonShape: AshMcpShape = {
   id: "mcp-servers-json",
-  ...readSide((text) => scanJson(CONTAINER, text, mcpServersFact)),
+  ...readSide((text, switches) => scanJson(CONTAINER, text, mcpServersFact, switches)),
   compose(text, entry, opts) {
     const value = opts?.type ? { type: opts.type, ...entry } : { ...entry };
     return putJson(mcpServersJsonShape, CONTAINER, text, value);
@@ -316,7 +407,7 @@ const opencodeFact: FactOf = (name, entry) => {
 
 export const opencodeJsonShape: AshMcpShape = {
   id: "opencode-json",
-  ...readSide((text) => scanJson(OPENCODE_CONTAINER, text, opencodeFact)),
+  ...readSide((text, switches) => scanJson(OPENCODE_CONTAINER, text, opencodeFact, switches)),
   mergeFacts: mergeJson(opencodeFact),
   compose(text, entry) {
     return putJson(opencodeJsonShape, OPENCODE_CONTAINER, text, opencodeEntry(entry));
@@ -333,16 +424,25 @@ export const opencodeJsonShape: AshMcpShape = {
 // 正则:`[mcp_servers."ash"]`、缩进表头、点号键、内联表都认,它自己没把握时答 unknown。
 
 /**
- * grok 还有一个根级开关 `disabled_mcp_servers = ["ash"]`(实测 `grok mcp disable ash` 会
- * 同时写它和 `enabled = false`)。
+ * 根级那个「关掉这几个名字」的数组对这个名字怎么说。**哪一家有这个键、叫什么,由那家自己
+ * 声明**(机制上的 `switches.off`)—— 不声明就一律当「没有这种开关」。
  *
- * 判据走 `codex-toml.ts` 的结构扫描器(**本轮审查 R7**:上一版拿全文正则扫,别人多行字符串
- * 里的同名行会被当成根级事实,把一条启用着的 ash 判成「已关闭」—— 而 disabled 在预检里是
- * 硬拒)。读不通或根级没这个键一律当「没关」:这个方向上的错最多是放过一轮(跑完没结论、
- * 有说明),反过来是当场拦掉一轮本来跑得起来的审查。
+ * 本轮审查 F2 实测(2026-10-31,同一份 `disabled_mcp_servers = ["ash"]` + 条目
+ * `enabled = true`):grok 1.0.41 `grok mcp list` 打出 `(disabled)`,**codex-cli 0.153.4
+ * 压根不认**(`codex mcp list --json` 仍是 `enabled: true, disabled_reason: null`)。
+ * 上一版两家共用这一族、无条件解释这个键,于是用户给 grok 关一次 ash,codex 这边一条能用
+ * 的连接也被判成「被关掉了」,安装器还说是他自己关的。
+ *
+ * 判据走 `codex-toml.ts` 的结构扫描器(**第 7 轮审查**:上一版拿全文正则扫,别人多行字符串
+ * 里的同名行会被当成根级事实)。读不通或根级没这个键一律当「没关」:这个方向上的错最多是
+ * 放过一轮(跑完没结论、有说明),反过来是当场拦掉一轮本来跑得起来的审查。
  */
-function tomlRootDisabled(text: string, name: string): boolean {
-  return tomlRootStringArray(text, "disabled_mcp_servers")?.includes(name) === true;
+function tomlRootDisabled(text: string, name: string, switches?: AshMcpSwitches): boolean {
+  const key = switches?.off;
+  if (!key?.length) return false;
+  // TOML 这一族只支持一层键:根级 `disabled_mcp_servers` 那种。多层的路径声明是写错了。
+  if (key.length > 1) return false;
+  return tomlRootStringArray(text, key[0]!)?.includes(name) === true;
 }
 
 
@@ -377,14 +477,15 @@ function appendToml(text: string | null, block: string): AshMcpCompose {
 }
 
 /**
- * TOML 的逐名扫描。判据走 `codex-toml.ts` 的结构扫描器(它只认那两个兼容名),**两种关法
- * 都看**:条目上的 `enabled = false` 和根级 `disabled_mcp_servers`。
+ * TOML 的逐名扫描。判据走 `codex-toml.ts` 的结构扫描器(它只认那两个兼容名)。两种关法:
+ * 条目上的 `enabled = false`(这一族共通),以及**声明了 `switches.off` 的那家**才算的根级
+ * 数组(见 `tomlRootDisabled` —— grok 认、codex 不认,都是实测)。
  *
  * `block` 顺手在这里取好(表头改成规范名):搬宿主那条时整段原文照搬,连底下的子表一起 ——
  * 上一版 `hostBlock` 自己又按名字固定先挑 `ash`,跟这里挑**开着**那条的判据不是一套
  * (本轮审查 F3)。
  */
-function scanToml(text: string | null): AshMcpNameScan {
+function scanToml(text: string | null, switches?: AshMcpSwitches): AshMcpNameScan {
   if (text === null) return noConfig();
   const found = scanCodexToml(text);
   if (found.doubt) return doubtScan(found.doubt);
@@ -393,7 +494,8 @@ function scanToml(text: string | null): AshMcpNameScan {
     const one = found.servers.get(name);
     if (!one) continue;
     const block = extractTomlTables(text, name, ASH_MCP_SERVER_NAME) ?? undefined;
-    if (one.enabled && !tomlRootDisabled(text, name)) {
+    const rootOff = tomlRootDisabled(text, name, switches);
+    if (one.enabled && !rootOff) {
       names.set(name, { status: "on", detail: "", block, launch: one.spec });
       continue;
     }
@@ -401,7 +503,7 @@ function scanToml(text: string | null): AshMcpNameScan {
     names.set(name, {
       status: "off",
       detail: one.enabled
-        ? `[mcp_servers.${name}] 被 disabled_mcp_servers 关掉了`
+        ? `[mcp_servers.${name}] 被根级 ${switches?.off?.[0]} 关掉了`
         : `[mcp_servers.${name}] 写着 enabled = false`,
       block,
     });
@@ -411,7 +513,7 @@ function scanToml(text: string | null): AshMcpNameScan {
 
 export const mcpServersTomlShape: AshMcpShape = {
   id: "mcp-servers-toml",
-  ...readSide(scanToml),
+  ...readSide((text, switches) => scanToml(text, switches)),
   compose(text, entry, opts) {
     return appendToml(text, tomlBlock(entry, opts?.enabled === true));
   },

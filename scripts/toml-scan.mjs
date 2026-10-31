@@ -73,11 +73,14 @@ function stripTomlNoise(text) {
 }
 
 /**
- * `{ names, disabled, duplicateTables }`,或者 `{ why }` = 判不准,**不许写**。
+ * `{ names, rootArrays, duplicateTables }`,或者 `{ why }` = 判不准,**不许写**。
  *
  * - `names`:配置里登记过的服务名,**去重**。子表也算(`[mcp_servers.ash.env]` 在而
  *   `[mcp_servers.ash]` 不在,这家 CLI 眼里 ash 照样是配过的,所以「已有就不覆盖」要认它);
- * - `disabled`:**根级**那个 `disabled_mcp_servers` 列的名字(见下面的 `root`);
+ * - `rootArrays`:**根级**那几个开关数组的原值(`{ disabled_mcp_servers: [...] }`)。
+ *   **这里只负责读出来,不负责解释**:哪一家认哪个键由调用方按逐家声明决定(`switches.off`)——
+ *   同一个 `disabled_mcp_servers` grok 1.0.41 认、codex-cli 0.153.4 不认,都是实测
+ *   (本轮审查 F2:上一版这一层直接把它命名成 `disabled`,于是格式族替所有人回答了启停);
  * - `duplicateTables`:同一个名字的 `[mcp_servers.<名>]` 出现了不止一次 —— 这是**写坏了**的
  *   形状(TOML 不许重复表,CLI 会整份拒载),所以单独数出来,给写之前的候选校验用。
  */
@@ -87,7 +90,7 @@ export function scanTomlServers(text) {
 
   const seen = [];        // 所有深度的名字(含子表),去重后交出去
   const tables = [];      // 只有 `[mcp_servers.<名>]` 这一层,带重数
-  let disabled = [];
+  const rootArrays = {};
   const rest = [];
   // **只有根级那个 `disabled_mcp_servers` 才是那个全局开关**(本轮审查 F2,真 grok 实测):
   // `[plugins.demo]` 底下同名的键是那个插件自己的字段,上一版不记表作用域、任意表里的同名
@@ -112,10 +115,11 @@ export function scanTomlServers(text) {
       }
       continue;
     }
-    const off = /^disabled_mcp_servers[ \t]*=[ \t]*\[(.*)\][ \t]*$/.exec(line);
+    const off = /^(disabled_mcp_servers)[ \t]*=[ \t]*\[(.*)\][ \t]*$/.exec(line);
     if (off) {
       if (root) {
-        disabled = [...(off[1].match(/"(?:[^"\\]|\\.)*"|'[^']*'/g) || [])].map((q) => unquoteToml(q) ?? "");
+        rootArrays[off[1]] = [...(off[2].match(/"(?:[^"\\]|\\.)*"|'[^']*'/g) || [])]
+          .map((q) => unquoteToml(q) ?? "");
       }
       continue;
     }
@@ -125,7 +129,7 @@ export function scanTomlServers(text) {
   if (stray) return { why: `配置里这一行提到了 mcp_servers，而 ash 读不准它的写法：${stray.slice(0, 60)}` };
   const names = [...new Set(seen)];
   const duplicateTables = names.filter((n) => tables.filter((t) => t === n).length > 1);
-  return { names, disabled, duplicateTables };
+  return { names, rootArrays, duplicateTables };
 }
 
 /** `mcp_servers."ash".env` → `["mcp_servers","ash","env"]`;读不通返回 null。 */

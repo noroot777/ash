@@ -252,7 +252,7 @@ if (process.env.SKIP_MCP) {
 
   // ── 其余各家 ───────────────────────────────────────────────────────────────
   //
-  // 一张表走完(`mcp-hosts.mjs` 的 `HOST_SITES`):claude 走它自己的 `mcp add`(那是它的
+  // 一张表走完(`mcp-host-sources.mjs` 的 `HOST_SITES`,`mcp-hosts.mjs` 转一手):claude 走它自己的 `mcp add`(那是它的
   // 原生入口),codex 走 `codex-mcp.mjs`(发布前要让 codex 本人读一遍),**其余十二家都在
   // 这里**。2026-10-30 之前这里只有 kimi 一家,所以换别的 agent 跑任务一律交不了卷。
   //

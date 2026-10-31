@@ -122,9 +122,9 @@ export interface AshMcpShape {
    * `hostBlock` 按名字固定先挑 `ash`,`read` 挑**开着**的那条,于是 `ash` 关着、`harness`
    * 开着时,搬过去的是那条关着的。
    */
-  scan(text: string | null): AshMcpNameScan;
+  scan(text: string | null, switches?: AshMcpSwitches): AshMcpNameScan;
   /** 这份配置里 ash 登记的状态(= `scan` 折一下)。`text === null` = 确认没有这个文件。 */
-  read(text: string | null): AshMcpConfigState;
+  read(text: string | null, switches?: AshMcpSwitches): AshMcpConfigState;
   /** 把 ash 这一条拼进去(已有一律不覆盖 —— 调用方先 `read` 过)。 */
   compose(text: string | null, entry: AshMcpEntry, opts?: AshMcpComposeOpts): AshMcpCompose;
   /**
@@ -149,8 +149,58 @@ export interface AshMcpShape {
   blockFor?(entry: AshMcpEntry, opts?: AshMcpComposeOpts): string;
   /** 把一段登记原文接进配置(重复表、内联表这些判据跟 `compose` 同一份)。 */
   appendBlock?(text: string | null, block: string): AshMcpCompose;
-  /** 这条登记写的启动方式,只给 `launchHint` 出提示。 */
-  launch(text: string | null): AshMcpLaunch | null;
+  /**
+   * 这条登记写的启动方式,只给提示用。**要带上这家的启停策略**:被这家自己的根级名单挡住
+   * 的那条不该拿去当提示(用户照着去查一个其实用不上的命令)。
+   */
+  launch(text: string | null, switches?: AshMcpSwitches): AshMcpLaunch | null;
+}
+
+/**
+ * 这家 CLI **自己**的「哪里写着别用这个 server」—— 启停策略归**逐家声明**,格式族只负责
+ * 结构读取(本轮审查 F2)。
+ *
+ * 为什么不能留在格式族里:同一个格式族底下各家的开关各不相同,而把一家的开关套到另一家
+ * 身上两个方向都错,两种错都是实测出来的(2026-10-31,本机真 CLI):
+ *  · **漏掉**:gemini 的根级 `mcp.excluded: ["ash"]` / `mcp.allowed: ["other"]` 会让它直接
+ *    把 ash 判成 `Blocked`,而格式族只看条目上的 `disabled/enabled` ⇒ ash 答 present、
+ *    预检无提示放行,那一轮起来一个 ash 工具都没有、跑完交不了卷;
+ *  · **套用**:根级 `disabled_mcp_servers = ["ash"]` 是 **grok 专有**的(`grok mcp list`
+ *    打出 `(disabled)`),同格式的 codex 压根不认它(`codex mcp list --json` 照样
+ *    `enabled: true, disabled_reason: null`)⇒ 一条能用的 codex 连接被判成「被关掉了」,
+ *    安装器还会说「是你自己关的,没替你打开」。
+ *
+ * 键路径按**根级**算(`["mcp","excluded"]` = 根下 `mcp` 对象里的 `excluded`)。TOML 那一族
+ * 只支持一层(`["disabled_mcp_servers"]`)。
+ */
+export interface AshMcpSwitches {
+  /** 「这几个名字关掉」的数组键路径(grok: `disabled_mcp_servers`;gemini: `mcp.excluded`)。 */
+  readonly off?: readonly string[];
+  /**
+   * 「只有这几个名字可用」的白名单键路径(gemini: `mcp.allowed`)。
+   *
+   * **键存在就生效**,不在名单里的一律挡掉 —— 空数组 `[]` 实测是「全挡」(真 gemini 0.60.0
+   * 把两条登记都打成 `Blocked`),所以别把空数组当成「没配」。值不是数组时答看不准:那种
+   * 写法 gemini 怎么处理没实测过。
+   */
+  readonly only?: readonly string[];
+}
+
+/**
+ * 「这家 CLI 的配置**怎么读**」的完整契约:结构(格式族)+ 这家的启停策略 + 这家会不会把
+ * 几份来源合起来看。
+ *
+ * 为什么要把三样绑成一份(本轮审查 F2):判定、搬运、安装写入资格、派审预检、诊断文案
+ * 原先各自从机制上挑自己要的那几项,于是启停策略只进了其中一处 —— 同一份配置在设置页上
+ * 是「已接好」、在真 CLI 那边是 `Blocked`。一律走 `readingFor(mechanism)` 拿这一份,
+ * 别在调用点自己拼。
+ */
+export interface AshMcpReading {
+  readonly shape: AshMcpShape;
+  /** 这家会不会把几份来源**合起来**看(站点上的 `sourcesMerge`)。 */
+  readonly merges: boolean;
+  /** 这家自己的启停策略(机制上的 `switches`)。 */
+  readonly switches?: AshMcpSwitches;
 }
 
 /** 这家 CLI 的配置目录由哪个环境变量指定、文件落在目录里的哪一层。 */
@@ -207,8 +257,49 @@ export interface AshMcpConfigSite {
   readonly contentEnv?: string;
   /** 宿主机默认配置目录(`dirEnv` 没设时用它)。XDG 之类的分支写在这里面。 */
   readonly defaultDir: (env: NodeJS.ProcessEnv, home: string) => string;
-  /** 配置文件相对配置目录的位置(`["config.toml"]`、`[".gemini","settings.json"]`)。 */
+  /**
+   * 配置文件相对配置目录的位置(`["config.toml"]`、`[".gemini","settings.json"]`)。
+   * 一个文件都不存在时**新建的就是它** —— 所以它永远是「该写哪一份」的兜底答案。
+   */
   readonly relative: readonly string[];
+  /**
+   * 同一个目录里这家 CLI 会读的那几个文件名,按**加载序从低到高**(含 `relative` 自己)。
+   * 只有**实测过同目录加载序**的家给(回归测试会钉住它包含 `relative`)。
+   *
+   * 2026-10-31 真 opencode 1.19.3 实测:`config.json` < `opencode.json` < `opencode.jsonc`,
+   * 三份**都读**、合起来看。上一版只枚举后两个,于是用户的 ash 只写在 `config.json` 里时
+   * (真 CLI `ash connected`)ash 答 absent、派审硬拒,裸 Node 安装器还往 `opencode.json`
+   * 里新写一条 —— 那份优先级更高,**真 CLI 的生效 `ASH_URL` 当场被换掉**(本轮审查 F1)。
+   *
+   * 没有这一项的家走 `alternates`:同目录几份算同一级,谁覆盖谁没实测。
+   */
+  readonly load?: readonly (readonly string[])[];
+  /**
+   * 默认目录之外、这家 CLI 也读的**固定路径**配置目录(只认 env + home 就能算出来的)。
+   *
+   * opencode 的 `~/.opencode/`:2026-10-31 实测它**压过** `$XDG_CONFIG_HOME/opencode/`、
+   * 压过 `$OPENCODE_CONFIG` 那个文件、也压过任务目录里的项目配置,只有
+   * `OPENCODE_CONFIG_DIR` 和 `OPENCODE_CONFIG_CONTENT` 比它高 —— 所以它在
+   * `ashMcpHostSources` 里排在「指到文件的变量」之上、`altDirEnv` 之下,别挪。
+   * 同目录里也是 `opencode.json` < `opencode.jsonc`,而 `config.json` 这个名字**只在默认
+   * 目录**才算(实测:`~/.opencode/config.json` 和 `$OPENCODE_CONFIG_DIR/config.json`
+   * 都不读)。
+   *
+   * **只枚举真实存在的那几份,永远不当新建落点**:ash 不去给用户新造一个全局配置目录。
+   */
+  readonly extraDirs?: readonly ((env: NodeJS.ProcessEnv, home: string) => string)[];
+  /**
+   * 这家 CLI 的**全部读取位置**都本机逐格实测过、而且都在这张 site 上有对应声明。
+   *
+   * 这一位是「能不能下 absent 这个硬结论」的闸(本轮审查 F1):absent 在派审预检里是**硬拒**,
+   * 而「我枚举到的几份里都没有」只有在枚举本身可证完整时才等于「真的没有」。不置真的家
+   * 照样照常判 present / disabled,只是「都没找到」答 unknown(放行、不写、如实说一句),
+   * 因为那种「没找到」可能只是我们不知道它还读哪儿 —— 本轮三格实测里每一格都是这么错的。
+   *
+   * **安装器不看这一位**:它问的是「我看得见的来源里有没有」,追加一条不覆盖任何已有登记,
+   * 否则十三家 CLI 的 `npm run setup` 会一条都写不出来。
+   */
+  readonly loadMeasured?: boolean;
   /**
    * 这家 CLI 还会读的**项目级**配置(相对任务目录)。只给判据那一档用:这些文件里只要
    * 提到 MCP,「用户级没有」就不再是个确定的结论 —— 按「向放行开」答 unknown,别拿
@@ -217,9 +308,10 @@ export interface AshMcpConfigSite {
    */
   readonly projectRelative?: readonly (readonly string[])[];
   /**
-   * 同样合法的其它文件名(opencode 的 `opencode.jsonc`)。**存在哪个就读写哪个**,
-   * 一个都不存在才按 `relative` 新建 —— 否则会在用户已有的 `.jsonc` 旁边多出一份
-   * `.json`,两份都被 CLI 认,到底生效哪个说不清。
+   * 同样合法的其它文件名(kilo 的 `kilo.jsonc` / `config.json` / `opencode.json(c)`)——
+   * **这一档是「没实测过同目录加载序」那种**:存在哪个就读写哪个(顺序就是我们猜的优先级),
+   * 一个都不存在才按 `relative` 新建,免得在用户已有的 `.jsonc` 旁边多出一份 `.json`。
+   * 实测过加载序的家改用 `load`,那边的顺序是真 CLI 的加载序、每份各占一级。
    */
   readonly alternates?: readonly (readonly string[])[];
   /**
@@ -270,6 +362,11 @@ export type AshMcpMechanism =
     kind: "file";
     shape: AshMcpShape;
     site: AshMcpConfigSite;
+    /**
+     * 这家自己的启停策略(语义见 `AshMcpSwitches`)。不写 = 这家除了条目上那两个布尔
+     * 之外没有已知的别处开关 —— **别照着同格式的邻居填**,那正是 F2 两种错的来路。
+     */
+    switches?: AshMcpSwitches;
     identity: AshMcpIdentity;
     /** 身份这一路上的坑(谁按名字过滤、要靠哪套别名才过得去),原样进矩阵。 */
     identityNote?: string;

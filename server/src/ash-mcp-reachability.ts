@@ -77,7 +77,8 @@ import { codexAshMcpServerName } from "./executors/codex-mcp.js";
 import { effectiveExecutorContext } from "./executors/index.js";
 import { resolveLaunch } from "./executors/bin-resolve.js";
 import { ashMcpMechanism } from "./mcp-registry/catalog.js";
-import { ashMcpHostSources, ashMcpUnsupported } from "./mcp-registry/register.js";
+import { ashMcpUnsupported } from "./mcp-registry/register.js";
+import { ashMcpHostSources } from "./mcp-registry/sources.js";
 
 /** 探测是只读子命令（claude 实测 ~0.8s、codex ~0.01s）；超时一律按「问不出来」放行。 */
 const PROBE_TIMEOUT_MS = 15_000;
@@ -503,6 +504,10 @@ function fromFiles(
       return ok(`看不准这一轮有没有 ash MCP（${v.why}）；另外 ${codexUserConfig(env)} 里没有 ash 登记，`
         + `ash 往 MCP 注入回合身份只认那一份 —— 若登记只在项目配置里，这一轮跑完上报会被拒`);
     }
+    // **本来会拦、只因为证据不够硬才放行的那几档要当场说一句**（本轮审查 F1 的后半截，
+    // 判据见 `FileVerdict` 的 `tell`）：一声不吭地放过去，用户看到的是一片绿，而那一轮很
+    // 可能跑完交不了卷。其余 unknown 照旧不啰嗦。
+    if (v.tell) return ok(joinHints(`看不准这一轮有没有 ash MCP（${v.why}）`, docsOnlyCaveat(agentType)));
     return ok(docsOnlyCaveat(agentType));
   }
   const basis = `（这是读配置文件得出的，没经 ${agentType} 本人确认 —— 这一次问不了它：${whyNotAsked}）`;

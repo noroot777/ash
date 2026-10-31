@@ -54,6 +54,10 @@ export const ASH_MCP_TABLE = {
       relative: ["config.toml"],
       projectRelative: [[".codex", "config.toml"]],
     },
+    // **没有 `switches`**:根级 `disabled_mcp_servers` 是 grok 专有的,codex 不认(2026-10-31
+    // 实测 codex-cli 0.153.4:同一份配置里那个键 + 条目 `enabled = true` ⇒ `codex mcp list
+    // --json` 仍是 `enabled: true, disabled_reason: null`)。上一版两家共用 TOML 族、无条件
+    // 解释那个键,于是给 grok 关一次 ash 会让 codex 这边也被判成「被关掉了」(本轮审查 F2)。
     // codex 按 `env_vars` 白名单过滤 MCP 子进程环境:起跑时用 `-c mcp_servers.<名>.env_vars=[…]`
     // 声明(`executors/codex.ts`)。**那是按回合给的命令行覆盖,不是写进配置文件的** ——
     // 回合 token 一轮一个,写进配置就是过期的假身份。
@@ -74,6 +78,11 @@ export const ASH_MCP_TABLE = {
       relative: [".gemini", "settings.json"],
       projectRelative: [[".gemini", "settings.json"], [".mcp.json"]],
     },
+    // 根级两个名单会直接把一条写得完全正确的登记打成 `Blocked`(2026-10-31 本机实测,
+    // gemini 0.60.0:`mcp.excluded:["ash"]` ⇒ `⛔ ash … Blocked`;`mcp.allowed:["other"]`
+    // 同样 Blocked;`mcp.allowed:["ash"]` 则换成 `other` 被 Blocked;`mcp.allowed:[]`
+    // 两条全 Blocked —— 所以**键存在就生效**,空数组不是「没配」)。
+    switches: { off: ["mcp", "excluded"], only: ["mcp", "allowed"] },
     identity: "inherit",
     identityNote: "gemini 把交给 MCP 子进程的环境按**变量名**过滤（命中 /TOKEN|KEY|SECRET|AUTH/i 一类的删掉），"
       + "所以回合身份另按 `*_TICKET` 别名导一份（`shared/src/mcp.ts` 的 `ASH_TURN_IDENTITY_ENV`）；"
@@ -94,6 +103,10 @@ export const ASH_MCP_TABLE = {
       relative: ["config.toml"],
       projectRelative: [[".grok", "config.toml"]],
     },
+    // 根级这个数组是**它专有**的:2026-10-31 同一份配置(条目 `enabled = true` + 根级
+    // `disabled_mcp_servers = ["ash"]`)grok 1.0.41 打出 `(disabled)`,codex-cli 0.153.4
+    // 压根不认(仍是 `enabled: true, disabled_reason: null`)—— 所以它只能挂在这一家身上。
+    switches: { off: ["disabled_mcp_servers"] },
     identity: "unknown",
     identityNote: "没验过它给 MCP 子进程的环境是不是原样继承（TOML 里也没有 codex 那样的 `env_vars` 声明位）",
     evidence: "tested",
@@ -127,8 +140,13 @@ export const ASH_MCP_TABLE = {
     kind: "file",
     shape: opencodeJsonShape,
     // 这家会读好几份配置,而且是「合起来看、**逐字段**合并」(见 `sourcesMerge`,逐格实测
-    // 记在下面的 `source` 里)。优先级实测顺序:默认目录(`opencode.json` < `opencode.jsonc`)
-    // < `OPENCODE_CONFIG` 那个文件 < `OPENCODE_CONFIG_DIR` 那个目录 < `OPENCODE_CONFIG_CONTENT`。
+    // 记在下面的 `source` 里)。**整条加载序**(2026-10-31 逐格实测,升序):
+    //   默认目录(`config.json` < `opencode.json` < `opencode.jsonc`)
+    //   < `OPENCODE_CONFIG` 那个文件
+    //   < 任务目录往上走的项目配置(`.opencode/opencode.json(c)`、仓库根 `opencode.json(c)`)
+    //   < `~/.opencode/`(`opencode.json` < `opencode.jsonc`)
+    //   < `OPENCODE_CONFIG_DIR` 那个目录
+    //   < `OPENCODE_CONFIG_CONTENT` 那整段 JSON(没有文件可写)
     site: {
       dirEnv: "OPENCODE_CONFIG",
       dirEnvIsFile: true,
@@ -137,8 +155,14 @@ export const ASH_MCP_TABLE = {
       sourcesMerge: true,
       defaultDir: xdgConfig("opencode"),
       relative: ["opencode.json"],
-      alternates: [["opencode.jsonc"]],
-      projectRelative: [["opencode.json"], ["opencode.jsonc"], [".opencode", "opencode.json"]],
+      // 同目录三个名字都读,顺序就是实测的加载序(`config.json` 这个名字**只在默认目录**算)。
+      load: [["config.json"], ["opencode.json"], ["opencode.jsonc"]],
+      extraDirs: [underHome(".opencode")],
+      projectRelative: [
+        ["opencode.json"], ["opencode.jsonc"],
+        [".opencode", "opencode.json"], [".opencode", "opencode.jsonc"],
+      ],
+      loadMeasured: true,
     },
     identity: "inherit",
     identityNote: "回合身份原样传到 MCP 子进程 —— 端到端那一条真跑出来的结论（交卷要带 turn/direction token，"
@@ -180,7 +204,23 @@ export const ASH_MCP_TABLE = {
       + "`ash connected`(指回 `.jsonc` 则相反:`enabled:false`)—— 按路径去重会把最高那次加载删掉;"
       + "⑳ **任何一份读不通整份拒载**:`{BROKEN` 放在最低那层、最高那层、同目录 `.jsonc`、"
       + "或者放在一份压根没提 ash 的文件里,四种都是 `exit 1`(报那份不是合法 JSON(C))——"
-      + "所以「低的盖不住高的」在这一档不成立,只要有一份读不准就没有生效的登记可言",
+      + "所以「低的盖不住高的」在这一档不成立,只要有一份读不准就没有生效的登记可言;"
+      + "**本轮审查 F1 又补了十二组**(`opencode debug config --pure`,逐格比对 `mcp.ash.command`):"
+      + "㉑ 默认目录里**只有** `config.json` 写 ash ⇒ 读得出(上一版压根没枚举这个名字,于是答 "
+      + "absent、派审硬拒,裸 Node 安装器还往 `opencode.json` 新写一条、把真 CLI 的生效 "
+      + "`ASH_URL` 从 `:54321` 换成了 `:4317`);㉒ `config.json` + `opencode.json` 同在 ⇒ 后者赢;"
+      + "㉓ `config.json` + `opencode.jsonc` ⇒ `.jsonc` 赢;㉔ 三份同在 ⇒ `.jsonc` 赢(所以升序是 "
+      + "`config.json` < `.json` < `.jsonc`);㉕ `config.json` 读不通 ⇒ 整份 `exit 1`(⑳ 同一条规矩);"
+      + "㉖ 这个名字**只在默认目录**算:`~/.opencode/config.json` 和 `$OPENCODE_CONFIG_DIR/config.json` "
+      + "都不读;㉗ **`~/.opencode/` 是另一层全局配置**:`opencode.json` / `opencode.jsonc` 都读、"
+      + "同目录 `.jsonc` 压 `.json`,而且它**压过** `$XDG_CONFIG_HOME/opencode/`、压过 "
+      + "`OPENCODE_CONFIG` 那个文件、也压过任务目录里的项目配置,只有 `OPENCODE_CONFIG_DIR` 比它高;"
+      + "㉘ `~/.opencode/opencode.json` 读不通 ⇒ 整份 `exit 1`;㉙ 项目级那一档:任务目录的 "
+      + "`.opencode/opencode.json`、`.opencode/opencode.jsonc`、仓库根 `opencode.json`/`opencode.jsonc` "
+      + "都读、会往上层目录走、压过全局那几份,而 `.opencode/config.json` 和任务目录根的 "
+      + "`config.json` 都不读;㉚ 项目配置压过 `OPENCODE_CONFIG` 那个文件;㉛ `OPENCODE_CONFIG` 给**相对**"
+      + "路径时按 **CLI 自己的工作目录**解(在任务目录里跑 ⇒ 读得出;同一个变量在别处跑 ⇒ 读不到)——"
+      + "所以来源解析接口必须吃 cwd,拿 server 自己的目录去解会把一条连得上的登记判成 absent",
     notes: "跟 `mcpServers` 那族**不是同一个形状**（容器叫 `mcp`、argv 是数组、环境变量键叫 "
       + "`environment`），别拿那份硬套",
   },

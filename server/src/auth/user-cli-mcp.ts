@@ -30,7 +30,8 @@
 import { homedir } from "node:os";
 import type { PersonalAshMcp } from "@ash/shared";
 import { ashMcpConfigDir } from "../mcp-registry/catalog.js";
-import { ashMcpHostFile, ashMcpStateIn, registerAshMcp } from "../mcp-registry/register.js";
+import { registerAshMcp } from "../mcp-registry/register.js";
+import { ashMcpHostFile, ashMcpStateIn } from "../mcp-registry/sources.js";
 import { askCodexHere, codexAccepts, type CodexAsk } from "./codex-approve.js";
 
 export { extractTomlTables } from "../codex-toml.js";
