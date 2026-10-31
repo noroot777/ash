@@ -37,6 +37,14 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
   let operationError;
   /** 子进程自己结束了、却还没停下来的那些行(见下面 settle)。 */
   let stranded = [];
+  /**
+   * 按约定**保留**下来的那些进程(`preserveScripts`),连同在域内观察到的实例身份。
+   *
+   * 这一份是给调用方收尾用的:它们是本次创建的,但按约定不由执行域终止 —— 而调用方要停它们
+   * 的时候,**不许回头读 PID 文件现编一个号码**(第 5 轮审查 F4:号码换了主人就会关掉无关
+   * 程序)。身份在这儿一并交出去,终止走 `terminateInstance`,那边发信号前后各核一次。
+   */
+  let preserved = [];
   const captured = { stdout: "", stderr: "" };
   const cleanupErrors = [];
   let stdoutPath;
@@ -87,6 +95,8 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
         const survey = await scope.survey();
         if (!survey.ok) throw survey.error;
         const spared = preservedPids(scope, preserveScripts, capturedStreams);
+        preserved = survey.rows.filter((row) => spared.has(row.pid))
+          .map(({ pid, born, created }) => ({ pid, born, created }));
         const live = survey.rows.filter((row) => !spared.has(row.pid));
         if (!live.length) return [];
         if (expired || Date.now() >= deadline) return live;
@@ -149,5 +159,5 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
       code: cause.code, ...captured, cleanupErrors,
     });
   }
-  return { ...result, ...captured };
+  return { ...result, ...captured, preserved };
 }

@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertProcessResult, runTestProcess } from "./test-process.mjs";
-import { IS_WINDOWS, isPidAlive, killPid } from "./platform.mjs";
-import { delay, spawnTestFixture } from "./test-process-scope.mjs";
+import { IS_WINDOWS, isPidAlive } from "./platform.mjs";
+import { delay, spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
 
 const complete = { status: 0, signal: null, stdout: "已就绪\n✅ 完成\n", stderr: "" };
 assert.equal(assertProcessResult(complete), complete);
@@ -23,6 +23,14 @@ for (const result of [
 
 const temporary = mkdtempSync(join(tmpdir(), "ash-test-process-fixture-"));
 const pidPath = join(temporary, "child.pid");
+/**
+ * 按约定保留下来的那个后台进程,连同执行域交出来的**实例凭据**。
+ *
+ * 停它由调用方负责,但不许照 PID 文件里的号码裸杀(第 5 轮审查 F4:号码换了主人就会关掉
+ * 无关程序)—— 凭据里带着在域内观察到的出生时刻,`terminateInstance` 发信号前后各核一次。
+ */
+let preservedBackground = [];
+const cleanupProblems = [];
 try {
   const output = await runTestProcess(process.execPath, ["-e", `
     require('node:fs').writeSync(1, 'x'.repeat(2 * 1024 * 1024) + 'stdout-tail');
@@ -51,7 +59,14 @@ try {
   assert.equal(inherited.stdout.trim(), "stdout-complete");
   assert.equal(inherited.stderr.trim(), "stderr-complete");
   for (let attempt = 0; attempt < 100 && !existsSync(pidPath); attempt++) await delay(20);
-  assert.ok(isPidAlive(Number(readFileSync(pidPath, "utf8"))));
+  const backgroundPid = Number(readFileSync(pidPath, "utf8"));
+  assert.ok(isPidAlive(backgroundPid));
+  // 保留下来的进程必须**带着实例身份**交回调用方:这是它收尾时唯一该用的东西。
+  preservedBackground = inherited.preserved;
+  assert.deepEqual(preservedBackground.map((instance) => instance.pid), [backgroundPid],
+    "保留下来的那个后台进程没有连实例凭据一起交回来");
+  assert.ok(IS_WINDOWS ? preservedBackground[0].created : Number.isFinite(preservedBackground[0].born),
+    "实例凭据里没有出生时刻/代次,核不了身份就等于没有凭据");
 
   const tails = await runTestProcess(process.execPath, ["-e", `
     require('node:child_process').spawn(process.execPath, ['-e',
@@ -121,7 +136,16 @@ try {
   assert.ok(existsSync(descendantPid));
   assert.ok(!isPidAlive(Number(readFileSync(descendantPid, "utf8"))));
 } finally {
-  if (existsSync(pidPath)) killPid(Number(readFileSync(pidPath, "utf8")));
+  // 保留下来的那些由**实例凭据**停(不是 PID 文件里的号码)。`finally` 里不 assert:上面
+  // 真出错时那个错才是主报告,这里只记一笔,出了 finally 再断言。
+  for (const instance of preservedBackground) {
+    const shot = terminateInstance(instance);
+    if (shot.verdict === "unverifiable") cleanupProblems.push(`保留进程 ${shot.pid} 核不出实例身份,未终止`);
+    if (shot.misfired) cleanupProblems.push(`保留进程 ${shot.pid} 的号码在核对与发信号之间换了主人`);
+    if (shot.error) cleanupProblems.push(`保留进程 ${shot.pid} 终止失败: ${shot.error.message}`);
+  }
+  if (cleanupProblems.length) process.stderr.write(`${cleanupProblems.join("\n")}\n`);
   rmSync(temporary, { recursive: true, force: true });
 }
+assert.deepEqual(cleanupProblems, [], "保留进程没能按实例停掉");
 console.log("✓ 子进程执行域:超时后代/拒绝信号/登记失败均清场,保留诊断及晚写双流,独立日志服务显式登记");

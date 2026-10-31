@@ -7,7 +7,7 @@
 //
 // 行为面在 test-process-ownership.mjs(真进程、真 ps、真终止)。
 import assert from "node:assert/strict";
-import { environmentHasMarker, instanceVerdict } from "./test-process-probe.mjs";
+import { CLOCK_SLACK_MS, birthOf, environmentHasMarker, instanceVerdict, processRows } from "./test-process-probe.mjs";
 
 // ── ① 实例身份:三档,而且**没有时间容差** ────────────────────────────────────────
 // 第 1 轮审查 F5:上一版是 `Math.abs(born - (row.born ?? born)) <= 1000`,两处都塌了 ——
@@ -60,6 +60,38 @@ import { environmentHasMarker, instanceVerdict } from "./test-process-probe.mjs"
   assert.equal(environmentHasMarker(` OTHER=x ${marker} y`, marker), true,
     "已知残留:值里嵌着空格收口的那一段,文本判据分不出来");
   console.log("✓ 环境段:前缀/后缀碰撞都不算有这个变量(F4 那一条当场被拦),残留只剩值里嵌空格那一种");
+}
+
+// ── ③ 出生时刻:枚举和下刀前读的必须是**同一把尺子**,而且零点对得上挂钟 ─────────────
+// 这一节是平台相关的:`processRows` 枚举一遍,`verifyInstance` 在发信号之前用 `birthOf` 再读
+// 一遍,两处如果不是同一把尺子,严格相等的判据会把**每一行**都判成 "other" —— 什么都不认领、
+// 什么都不终止,而且一声不响。第 5 轮审查 F3 把 Linux 换成自己读 `/proc`(GNU ps 不认 `-E`),
+// 两个平台从此各一套实现,这一节就是钉住它们别漂。
+{
+  const rows = await processRows(null);
+  const mine = rows.find((row) => row.pid === process.pid);
+  assert.ok(mine, "全表快照里必须有本进程 —— 查不动不算空集");
+  // **零点要对得上挂钟**:Linux 的刻度(USER_HZ)是解出来的,解错时两次读数照旧相等、却会把
+  // born 偏到几十分钟开外 —— 于是 `#impostor` 把域内进程全判成冒充者,一个都不认领。
+  const wall = Date.now() - process.uptime() * 1_000;
+  assert.ok(Math.abs(mine.born - wall) <= 2 * CLOCK_SLACK_MS,
+    `本进程的出生时刻(${mine.born})离挂钟读数(${wall})太远:刻度或零点不对`);
+  if (process.platform === "win32") {
+    // Windows 不走出生时刻这条路:代次核对在句柄那头(OpenProcess + GetProcessTimes),快照里
+    // 带的是 FILETIME。没有它,`signalInstance` 只能落 unverifiable、一刀都不发。
+    assert.ok(mine.created, "Windows 的快照必须带 created(FILETIME),句柄那头靠它核代次");
+    console.log("- 跳过出生时刻一节(Windows 的代次核对在句柄那头)");
+  } else {
+    assert.equal(instanceVerdict(mine.born, birthOf(process.pid)), "same",
+      "枚举读到的出生时刻和下刀前读到的必须严格相等,否则就是两把尺子");
+    // 没有主人的号码要答「它不在了」—— 这一档决定「这一刀不发」,不许混进「核不出来」。
+    const vacant = (() => {
+      for (let pid = 99_999; pid > 99_900; pid -= 1) if (birthOf(pid) === "gone") return pid;
+      throw new Error("找不到一个空号码,这一节没法测");
+    })();
+    assert.equal(birthOf(vacant), "gone", `空号码 ${vacant} 应当答「它不在了」`);
+    console.log(`✓ 出生时刻:枚举与下刀前同一把尺子、零点对得上挂钟,空号码答「不在了」(${process.platform})`);
+  }
 }
 
 console.log("process identity judgements ok");

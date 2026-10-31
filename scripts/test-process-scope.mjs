@@ -31,9 +31,10 @@
 //   · **它丢得了,而且恰恰在它本来要覆盖的那一种上丢**:原生后代走 `execve(…, {})`,环境被
 //     整个清空。实测那个 fork+setsid 的后代环境段里**一个标记都没有** —— 补这条线索当年声称
 //     覆盖的就是这一种,实际上一次都没覆盖到。
-// 所以这一版:环境这条线索留着,但判据改成「标记出现在**环境段**里」(`ps -E` 的输出等于
-// `ps` 的输出再接环境块,实测前缀关系成立,于是两次快照一减就把环境段切出来了);而「不随
-// exec 丢」这件事交给边界描述符。**整段两侧还要收口**(第 1 轮审查 F4:裸 `includes` 会让
+// 所以这一版:环境这条线索留着,但判据改成「标记出现在**环境段**里」(macOS 两张 `ps` 快照
+// 一减就把环境段切出来;Linux 直接读 `/proc/<pid>/environ`,NUL 分隔、整段严格相等 ——
+// 两个平台各一套实现,见 test-process-probe.mjs 的 `processRows`);而「不随 exec 丢」这件事
+// 交给边界描述符。**整段两侧还要收口**(第 1 轮审查 F4:裸 `includes` 会让
 // `…SCOPE=/tmp/x-other` 这个另一个域的真实环境把 `/tmp/x` 的标记整段包住,于是一域的 `stop()`
 // 去终止另一域正在用的进程),判据与残留见 test-process-probe.mjs 的 `environmentHasMarker`。
 //
@@ -71,8 +72,11 @@
 // ## 实例身份:pid 不是身份,(pid, 出生时刻) 才是
 //
 // 号码会被复用。所以每一行快照都带 `born`,登记也带时刻:号码对上但出生时刻对不上的,
-// 是**另一个进程**,既不认它是我们的,更不会去杀它。终止前还要再核一次(POSIX 用
-// `ps -p` 重查,Windows 走句柄 + GetProcessTimes,见 stop)。
+// 是**另一个进程**,既不认它是我们的,更不会去杀它。终止前还要再核一次(POSIX 重读出生时刻
+// —— Linux 读 `/proc/<pid>/stat`、macOS 问 `ps -p`;Windows 走句柄 + GetProcessTimes),
+// **发完再核第三次**:POSIX 上「核对」和「发信号」之间那截窗口关不掉(拿不到 pidfd),所以
+// 只能把它压到一次系统调用,再用发后那一次核对把「可能打在陌生人身上」如实报出来 ——
+// 判据与上界写在 `signalInstance`,这一层只从那一个口下刀。
 //
 // **核不出来是第三种答案**,不许往「已经没了」上归(第 1 轮审查 F5):那一刀不发,号码照实
 // 报进 `unverified`,由 `stop()` 失败。两次读数之间也**没有时间容差** —— 同一个进程的两次
@@ -88,7 +92,8 @@ import { windowsTerminateScript } from "./windows-restart.mjs";
 // 「此刻系统里有些什么」全在那边答(ps / lsof / CIM 的输出、实例身份的比较),这边只下所有权
 // 与清场的判据 —— 两种问题分开,见 test-process-probe.mjs 文件头。
 import {
-  CLOCK_SLACK_MS, boundaryHolders, command, fileTime, instanceVerdict, powerShell, processRows,
+  CLOCK_SLACK_MS, birthOf, boundaryHolders, fileTime, instanceVerdict, powerShell, powerShellSync,
+  processRows,
 } from "./test-process-probe.mjs";
 
 const windows = process.platform === "win32";
@@ -137,6 +142,79 @@ export function publishRecord(directory, subjectPid, payload) {
   finally { try { rmSync(temporary, { force: true }); } catch { /* rename 成功后它本来就没了 */ } }
 }
 
+/**
+ * **同一个号码上现在那一个,还是当初观察到的那一个吗。** 四档,`"same"` 之外一个都不许动手
+ * (第 1 轮审查 F5;前三档的判据在 test-process-probe.mjs 的 `instanceVerdict`):
+ *
+ *   · `"same"` —— 出生时刻一模一样,只有这一档能动手;
+ *   · `"other"` —— 号码换了主人,它本来就不是我们的;
+ *   · `"gone"` —— 查到了「它不在了」,不必动手;
+ *   · `"unverifiable"` —— 当初没读出出生时刻,或者这一次**查不动**(ps 不在、超时、读不懂)。
+ *     不动手,而且**要报出来** —— 把「我没核出来」算成「它已经没了」正是那个事故形状。
+ *     (上一版把查不动归到 `"gone"` 里悄悄咽掉了,理由是最后那次 `inspect()` 会兜住;可那次
+ *     兜得住的前提恰好是进程表查得动,成因相同的两处不能互相当兜底。)
+ *
+ * 别去 `ps` 问一遍再拿答案当「待验证身份」用:那样必然相等(上一版的 `row.born ?? born` 就是
+ * 这个形状),等于不核。Windows 不走这一套:代次核对在句柄那头(见 `signalInstance`)。
+ */
+function verifyInstance(row) {
+  if (windows) return "same";
+  if (!Number.isFinite(row.born)) return "unverifiable";
+  let observed;
+  try { observed = birthOf(row.pid); }
+  catch { return "unverifiable"; }
+  return observed === "gone" ? "gone" : instanceVerdict(row.born, observed);
+}
+
+/**
+ * **按实例发一刀** —— 这一层唯一的下刀口。`row` 必须带当初观察到的身份:POSIX 是 `born`
+ * (出生时刻),Windows 是 `created`(FILETIME)。返回
+ * `{ pid, verdict, misfired, error }`:`verdict` 见 `verifyInstance`;`misfired` 见下。
+ *
+ * **窗口关不掉,所以不说大话**(第 5 轮审查 F4)。POSIX 从普通 Node 进程拿不到 pidfd / 句柄
+ * 这种「钉住实例」的东西(`process.kill` 的入参只有一个号码),所以「刚刚查到出生时刻相等」
+ * 证明的是**查的那一刻**它还是我们那一个,不是「这一刀一定落在它身上」。能做到的上界是两条:
+ *  · 核与发之间**不 await 任何东西**(出生时刻走同步读,见 `birthOf` 为什么是同步的),
+ *    窗口压到一次系统调用;
+ *  · 发完**再核一次**:还是当初那个 ⇒ 这一刀确实落在它身上;**变成了另一个** ⇒ 号码在那截
+ *    窗口里换了主人、这一刀可能打在陌生人身上,如实记进 `misfired`,由 `stop()` 报出来。
+ *    读到「它不在了」是预期结果(我们正是要它停),这一档分不出「被我们杀掉」和「它自己先
+ *    退了、号码还空着」—— 分不出就写成分不出,不许往「一定打对了」上说。
+ *
+ * **Windows 没有这个窗口**:`OpenProcess` 拿到的句柄本身钉住实例,代次核对(GetProcessTimes)
+ * 与 `TerminateProcess` 在同一个句柄上做,见 `windowsTerminateScript`。那边「跳过」一律落
+ * `"unverifiable"`:句柄开不出来、代次读不出来、代次对不上三种长得一样,分不出就不猜。
+ */
+export function signalInstance(row, signalName) {
+  if (windows) {
+    if (!row.created) return { pid: row.pid, verdict: "unverifiable", misfired: false };
+    let output;
+    try { output = powerShellSync(windowsTerminateScript([{ pid: row.pid, created: row.created }], { tolerant: true })); }
+    catch (error) { return { pid: row.pid, verdict: "unverifiable", misfired: false, error }; }
+    const skipped = output.split("\n").some((line) => new RegExp(`^ASH_RESTART_SKIPPED ${row.pid}$`).test(line.trim()));
+    return { pid: row.pid, verdict: skipped ? "unverifiable" : "same", misfired: false };
+  }
+  const verdict = verifyInstance(row);
+  if (verdict !== "same") return { pid: row.pid, verdict, misfired: false };
+  let error;
+  try { process.kill(row.pid, signalName); }
+  catch (failure) { if (failure.code !== "ESRCH") error = failure; }
+  return { pid: row.pid, verdict, misfired: verifyInstance(row) === "other", error };
+}
+
+/**
+ * 停掉一个**保留下来**的进程 —— `preserveScripts` 那些:本次创建的,但按约定不由执行域终止,
+ * 由调用方自己负责收尾。`instance` 就是 `runTestProcess` 返回的 `preserved` 里的那一份,
+ * 里面带着在域内观察到的实例身份,所以这里既不必、也不许回头读 PID 文件现编一个号码出来
+ * (第 5 轮审查 F4:裸号码终止 —— 号码换了主人就会关掉无关程序)。
+ *
+ * 返回 `signalInstance` 的结论,**同步**:退出钩子里的清理只能同步。调用方必须自己处理
+ * `"unverifiable"`(核不出来就没有下刀,该失败的要失败)。
+ */
+export function terminateInstance(instance, { force = true } = {}) {
+  return signalInstance(instance, force ? "SIGKILL" : "SIGTERM");
+}
+
 export class TestProcessScope {
   constructor(directory) {
     // 自己建的目录,构造失败时要自己收走:调用方这时还没拿到 scope,它的 finally 够不着
@@ -159,6 +237,11 @@ export class TestProcessScope {
      * (第 1 轮审查 F5 —— 上一版在 POSIX 上把「核不出来」当成「已经没了」咽掉了)。
      */
     this.unverified = [];
+    /**
+     * 「核对实例」和「发信号」之间号码换了主人的那些 —— 这一刀可能打在陌生人身上。窗口为什么
+     * 关不掉、为什么只能如实报,见 `signalInstance`。
+     */
+    this.misfired = [];
     // 边界 inode(见文件头)。POSIX 专有:Windows 那边 ppid 在父进程死后仍然保留,父子链本身
     // 就是完整的,不需要这一条;那边也没有「谁持有这个 inode」的查法。
     /** 创建者手里那个 fd:**它钉住这个 inode**,号码不会被回收,所以身份不会被别人撞上。 */
@@ -384,7 +467,7 @@ export class TestProcessScope {
     for (const pid of suspects) {
       if (again.has(pid)) continue;
       const row = rows.find((entry) => entry.pid === pid);
-      if (row && await this.#instance(row) === "same") confirmed.push(pid);
+      if (row && verifyInstance(row) === "same") confirmed.push(pid);
     }
     return confirmed;
   }
@@ -402,28 +485,6 @@ export class TestProcessScope {
       if (!escaped.length) return { ok: true, rows };
       return { ok: false, rows, error: new Error(`这些进程已经不持有本域的边界描述符，它们的后代本层监管不到（不支持的形态，见 scripts/test-process-scope.mjs 文件头）: ${escaped.join(",")}`) };
     } catch (error) { return { ok: false, rows: [], error }; }
-  }
-
-  /**
-   * 终止前再核一次实例身份。四档,`"same"` 之外一个都不许动手(第 1 轮审查 F5):
-   *  · `"same"` / `"other"` / `"unverifiable"` —— 判据在 `instanceVerdict`(**没有时间容差**:
-   *    同一个进程的两次 lstart 读数不存在「差一秒的测量误差」,留容差等于重新授权终止一个
-   *    下一秒出生的复用实例);
-   *  · `"gone"` —— `ps -p` 查不到它,已经没了,不必杀。
-   *
-   * 查**不动**(超时、找不到 ps)在这儿也落到 `"gone"`:它只决定「这一刀不发」,而「到底还有
-   * 没有活的」那个结论由 `stop()` 最后那一次 `inspect()` 下 —— 真还活着且真是我们的,它会在
-   * 那里被点名报出来,不会因为这儿没杀成就悄悄算清场。
-   */
-  async #instance(row) {
-    if (windows) return "same"; // Windows 走句柄 + GetProcessTimes,核对在那边做(见 stop)
-    // 当初就没读出出生时刻 ⇒ 核不了。别去 `ps` 问一遍再拿答案当「待验证身份」用:那样
-    // 必然相等(上一版的 `row.born ?? born` 就是这个形状),等于不核。
-    if (row.born === null) return "unverifiable";
-    try {
-      const out = await command("ps", ["-p", String(row.pid), "-o", "lstart="], { env: { LC_ALL: "C" }, timeout: 4_000 });
-      return instanceVerdict(row.born, Date.parse(out.trim()));
-    } catch { return "gone"; }
   }
 
   async stop() {
@@ -445,12 +506,16 @@ export class TestProcessScope {
       if (!windows) {
         const unverified = [];
         for (const row of rows) {
-          const verdict = await this.#instance(row);
-          if (verdict === "same") { signal(row.pid, force ? "SIGKILL" : "SIGTERM"); continue; }
-          // `other` = 号码换了主人,本来就不是我们的;`gone` = 已经没了。这两种不吭声。
-          // **`unverifiable` 要报出来**(F5):核不出代次就不动手,而「我没核出来」不许
-          // 悄悄变成「它已经没了」—— 那正是这一层最不许犯的那个错。
-          if (verdict === "unverifiable") unverified.push(row.pid);
+          // 核对 → 发信号 → 再核对,全在 `signalInstance` 里(那是这一层唯一的下刀口,
+          // 判据不许有第二份);两件事要从它的结论里分开记:
+          //  · `other` = 号码换了主人,本来就不是我们的;`gone` = 已经没了。这两种不吭声。
+          //  · **`unverifiable` 要报出来**(F5):核不出代次就不动手,而「我没核出来」不许
+          //    悄悄变成「它已经没了」—— 那正是这一层最不许犯的那个错。
+          //  · `misfired` = 核完到发完之间号码换了主人,这一刀可能打在别人身上,同样报出来。
+          const shot = signalInstance(row, force ? "SIGKILL" : "SIGTERM");
+          if (shot.error) errors.push(shot.error);
+          if (shot.verdict === "unverifiable") unverified.push(shot.pid);
+          if (shot.misfired) this.misfired.push(shot.pid);
         }
         return unverified;
       }
@@ -540,6 +605,9 @@ export class TestProcessScope {
     }
     if (this.unverified.length) {
       errors.push(new Error(`无法核验实例身份,未终止: ${[...new Set(this.unverified)].join(",")}`));
+    }
+    if (this.misfired.length) {
+      errors.push(new Error(`这些号码在「核对实例」与「发信号」之间换了主人，这一刀可能打在无关进程上: ${[...new Set(this.misfired)].join(",")}`));
     }
     if (errors.length) throw Object.assign(new AggregateError(errors, `测试执行域清理失败: ${this.directory}`), { directory: this.directory });
   }
