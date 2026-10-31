@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { eq, inArray } from "drizzle-orm";
+import { ASH_TURN_IDENTITY_PATH_DIR } from "@ash/shared/mcp";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
 import type { sessions, tasks } from "./db/schema.js";
@@ -151,6 +152,10 @@ async function enumerateRunArtifacts(taskId: string, notes: string[]): Promise<{
       // 门禁那一摊只放行「一份日志」的那组文件（原始输出 + .notes/.scene 诊断附件）,
       // 控制文件和保留快照一律留在本机 —— 判据在 accept-gate-diagnosis.ts 一处。
       if (entry.name.startsWith("accept-gate-") && !isGateLogFile(entry.name)) continue;
+      // 回合身份那个目录**绝不出本机**:里面是这一回合的 taskId + 两个令牌(给只继承 PATH
+      // 的 CLI 搭的那条桥,见 `@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_PATH_DIR`)。接力是把
+      // 产物打包发到**另一台机器**,一起带走就等于把一张还能用的身份递出去了。
+      if (entry.isDirectory() && entry.name === ASH_TURN_IDENTITY_PATH_DIR) continue;
       const abs = join(dir, entry.name);
       if (entry.isDirectory()) { await walk(abs); continue; }
       if (!entry.isFile()) continue;

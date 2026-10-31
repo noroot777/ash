@@ -4,23 +4,58 @@
 // 整份传输层重新读一遍。
 //
 // 这里不含任何业务判断 —— 业务全在 ash 的 HTTP 端点上（见 index.ts 顶部那段）。
-import { ASH_TURN_IDENTITY_ENV } from "@ash/shared/mcp";
+import { readFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import { ASH_TURN_IDENTITY_ENV, ASH_TURN_IDENTITY_FILE, isTurnIdentityPathEntry } from "@ash/shared/mcp";
 import { UNDELIVERED_NET_CODES } from "@ash/shared/mcp-delivery";
 
 export const BASE = (process.env.ASH_URL ?? process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
-export const SOURCE_TASK_ID = process.env.ASH_TASK_ID?.trim() ?? "";
+
+/**
+ * 回合身份的**第二条通路**:`PATH` 上那个一次性目录里的 `identity.json`。
+ *
+ * 谁需要它:只把 `PATH` 自动交给 MCP 子进程的那几家 CLI(copilot 文档明写其余变量必须
+ * 写死在登记的 `env` 里,而回合身份一轮一个值 —— 写死就是过期的假身份)。约定本体、以及
+ * 「为什么是按回合开目录」那几条安全要点,见 `@ash/shared/mcp` 的
+ * `ASH_TURN_IDENTITY_PATH_DIR`;写的那一侧是 `server/src/turn-identity.ts`。
+ *
+ * **变量优先**:变量在就用变量,这里只是兜底。读不出来一律当没有(目录可能已经被下一回合
+ * 清掉了 —— 那正是设计意图:宁可交不了卷,也不能让上一回合的残留进程拿到当前令牌)。
+ */
+const identityFromPath = ((): { taskId?: string; turnToken?: string; directionToken?: string } => {
+  for (const entry of (process.env.PATH ?? "").split(delimiter)) {
+    if (!entry || !isTurnIdentityPathEntry(entry)) continue;
+    try {
+      const raw = JSON.parse(readFileSync(join(entry, ASH_TURN_IDENTITY_FILE), "utf8")) as Record<string, unknown>;
+      const str = (key: string): string | undefined => {
+        const value = raw[key];
+        return typeof value === "string" && value.trim() ? value.trim() : undefined;
+      };
+      const found = { taskId: str("taskId"), turnToken: str("turnToken"), directionToken: str("directionToken") };
+      if (found.taskId && found.turnToken) return found;
+    } catch { /* 这一段读不出来就继续找下一段 */ }
+  }
+  return {};
+})();
+
 // 回合令牌有两套变量名,谁活着用谁 —— 有的 CLI(实测 gemini)按**名字**把带 TOKEN 字样的
 // 变量从 MCP 子进程环境里删掉,别名那套刻意不含那些词。理由与取证见
-// `@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_ENV`。
-const pick = (...names: string[]): string => {
+// `@ash/shared/mcp` 的 `ASH_TURN_IDENTITY_ENV`。两套名字都没过来时,再退到 `PATH` 那条路
+// (见上)—— 逐项退,不整组退:有的 CLI 只删带 TOKEN 字样的那两个,`ASH_TASK_ID` 是过得去的。
+const pick = (fallback: string | undefined, ...names: string[]): string => {
   for (const name of names) {
     const value = process.env[name]?.trim();
     if (value) return value;
   }
-  return "";
+  return fallback?.trim() ?? "";
 };
-export const TURN_TOKEN = pick(ASH_TURN_IDENTITY_ENV.turnToken, ASH_TURN_IDENTITY_ENV.turnTicket);
-export const DIRECTION_TOKEN = pick(ASH_TURN_IDENTITY_ENV.directionToken, ASH_TURN_IDENTITY_ENV.directionTicket);
+export const SOURCE_TASK_ID = pick(identityFromPath.taskId, ASH_TURN_IDENTITY_ENV.taskId);
+export const TURN_TOKEN = pick(
+  identityFromPath.turnToken, ASH_TURN_IDENTITY_ENV.turnToken, ASH_TURN_IDENTITY_ENV.turnTicket,
+);
+export const DIRECTION_TOKEN = pick(
+  identityFromPath.directionToken, ASH_TURN_IDENTITY_ENV.directionToken, ASH_TURN_IDENTITY_ENV.directionTicket,
+);
 
 // 本机流量一律不走代理。Node 24+ 在 NODE_USE_ENV_PROXY=1(或显式 HTTP_PROXY)下
 // **连 localhost 也走代理** —— 实测本机 http_proxy=127.0.0.1:7897 时,打给

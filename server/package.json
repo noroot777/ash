@@ -212,7 +212,7 @@
     "test:preview-workspace": "tsx scripts/test-preview-workspace.ts",
     "test:monitor-races": "tsx scripts/test-monitor-races.ts",
     "test:db-tx": "tsx scripts/test-db-tx-ownership.ts",
-    "test:turn-identity": "tsx scripts/test-session-turn-identity.ts && tsx scripts/test-team-turn-artifacts.ts",
+    "test:turn-identity": "tsx scripts/test-session-turn-identity.ts && tsx scripts/test-team-turn-artifacts.ts && tsx scripts/test-turn-identity-bridge.ts",
     "test:turn-migration": "tsx scripts/test-session-turn-migration.ts",
     "test:turn-persist": "tsx scripts/test-session-turn-persist.ts",
     "//test:duet-image-ownership": "讨论里 agent 贴的图：走真路由验普通成员看不看得到（上传归属登记），主发言者与子智能体两条路径各一次。",
