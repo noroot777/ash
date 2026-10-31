@@ -61,11 +61,18 @@ __resetTurnStalls();
 __resetStallFailures();
 
 const warns: { text: string; facts: StallFacts }[] = [];
+const projected: StallFacts[] = [];
+// `project` 是 `StallActions` 的**必填**项(turn-stall.ts 那段注释:做成可选就会有消费链静默
+// 少掉持久那一半)。夹具漏掉它不会被 tsc 拦住 —— `server/scripts` 不在 tsconfig 的 include 里
+// (见 server/CLAUDE.md),看门狗那一句调用于是在运行时抛 TypeError,被它自己的 try/catch 兜住:
+// 测试照样绿,日志里却躺着三条 `stall.actions.project is not a function`,而「报了警就该重投到
+// 确认落库」这半条压根没被走到(本轮审查 N3)。所以这里不是补个空函数了事,而是记下来并断言。
 const actions: StallActions = {
   taskId: "task-claude-retry",
   warn: (text, facts) => warns.push({ text, facts }),
   trip: () => assert.fail("这一段把熔断档关了,却熔断了"),
   resolve: () => { /* 这一段不该有解除,下面按 warns 判 */ },
+  project: async (facts) => { projected.push(facts); return true; },
 };
 
 const kinds: string[] = [];
@@ -91,6 +98,12 @@ assert.equal(
 
 // ② 看门狗:5 条错误(4 主 + 1 子)凑够阈值就该报警,中间那几条身份通知撤不动它。
 assert.equal(warns.length, 1, "整条真实流喂进去之后一声不响 —— 身份通知把每条重试都当场解除了");
+// 报了警就必须有持久投影跟着(卡片上那颗红环),而且说的是同一个起点 —— 只看 warn 的那一版
+// 对「投影压根没被调用过」是瞎的。
+assert.equal(projected.length >= 1, true,
+  "报了警却一次都没投影 —— 卡片上永远不会有那颗红环");
+assert.equal(projected.at(0)?.since, warns.at(0)?.facts.since,
+  "投影说的起点跟警告不是同一个");
 assert.equal(warns[0]!.facts.errors, 5, "错误条数不对:夹着的身份通知把计数清零过");
 assert.equal(warns[0]!.facts.retries, 5, "重试条数不对:有的重试没算成 notice");
 assert.equal(warns[0]!.facts.childErrors, 1, "子线程那条没算进来");
@@ -132,11 +145,13 @@ __resetTurnStalls();
 
   const warns3: StallFacts[] = [];
   const trips3: StallFacts[] = [];
+  const projected3: StallFacts[] = [];
   const actions3: StallActions = {
     taskId: "task-heartbeat",
     warn: (_text, facts) => warns3.push(facts),
     trip: (_text, facts) => trips3.push(facts),
     resolve: () => { /* 心跳不该触发解除,下面按 warns/trips 判 */ },
+    project: async (facts) => { projected3.push(facts); return true; },
   };
 
   // 真 parser 收全,再**按真实时序**喂:熔断发生在流**还在进行**的时候(进程活着、心跳不断)。
@@ -164,6 +179,8 @@ __resetTurnStalls();
   );
   await new Promise((done) => setTimeout(done, 300));
   assert.equal(trips3.length, 1, "心跳一直到达,熔断档永远等不到 —— 任务会一直显示运行中");
+  assert.equal(projected3.length >= 1, true,
+    "子线程重试报了警却一次都没投影 —— 卡片上永远不会有那颗红环");
   // 流随后结束(进程退出):熔断已经作出,这条 `done` 不许把它撤回去(第 2 轮审查的终止义务)。
   for (const event of streamed.filter((e) => e.kind === "done")) {
     trackTurnStall("sess-beat", child3, TURN, event, actions3);

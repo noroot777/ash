@@ -1,6 +1,6 @@
 // 重启后收拾被打断的任务（从 orchestrator.ts 拆出，纯行数拆分）。
 // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序），理由见函数注释。
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { sessions, sessionTurns, tasks } from "./db/schema.js";
@@ -160,28 +160,53 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
  * CLI 多半报的是 0。
  */
 async function interruptedTurnVerdict(taskId: string): Promise<InterruptedVerdict> {
-  // 身份集合由**两边**给:
+  // 身份集合由**三边**给,而且刻意互不依赖 —— 每一边单独瞎掉时另外两边照样认得出这一轮:
+  //
+  //   · **还没收尾的会话**(`sessions.ended_at IS NULL`)的当前回合身份,以及这条会话最新的
+  //     那一行回合记录。这是本轮审查 F1 补上的那一边:前两边都带着一个自己证明不了的前提 ——
+  //     「区间还开着」证明不了「这一轮没有待结算的责任」(执行流先收口、任务还没落位时退出,
+  //     区间已经 failed 却没人把它算进任务),而「日志读得出来」更是条件而非事实(日志一坏,
+  //     pending 身份就是空的,于是那一轮**压根进不了询问**:库里 `outcome=failed` 和
+  //     `stall_reason` 明明都还在,结论却被当成「没有失败」,持续目标回来显示「暂停中 + 继续」)。
+  //     会话没收尾是这两者都不依赖的事实:置标记的那个消费者没了,没人来给它收尾。
+  //
   //   · 还开着的回合行 —— **全看一遍**,不是只看最新那一条:一个任务可以同时有多条会话各开着
   //     一轮(讨论模式的两个声部就是),背着判决的那一个未必是最后开始的。
-  //   · 盘上没销账的失败义务 —— 开放行给不出的那两类都在这儿(第 1 轮审查 F1,已实测):区间
-  //     提前收口(执行流结束、任务还没落位时进程退出),以及开始行压根没落下(`openTurn` 那一批
-  //     写失败,而看门狗照样熔断并落了判决)。少了这一边,一个已经提示过「已自动终止」的持续目标
-  //     回来会显示「暂停中 + 继续」,而判决明明还在日志里读得出来。
+  //
+  //   · 盘上没销账的失败义务 —— 上面两边都给不出的那一类在这儿(上一链 F1,已实测):开始行
+  //     压根没落下(`openTurn` 那一批写失败,而看门狗照样熔断并落了判决),而且任务状态自己也漂了
+  //     (例如上一版留下的 `paused`)时,只有这一条能把它捞回来。
+  //
+  // **为什么限定在「还没收尾的会话」**:这是防止「把全部历史失败区间一概重放到最新任务」的那道
+  // 边界。一个任务跑过几十轮、每轮都正常收口之后又被起跑,那些老回合属于**已经收尾的会话**;
+  // 它们早就各自结算过了,再去问一遍等于拿一份旧判决去压一轮新的执行(日志一旦不可读,库那一格
+  // 的旧原文还会被当成判决采纳)。所以边界按会话生命周期划,不按条数或年龄猜。
   const rows = await db.select().from(sessionTurns).where(eq(sessionTurns.taskId, taskId));
   // 键的口径跟判决日志同一份(`stallIdentityKey`)—— 两边各手拼一遍迟早漂。
   const byIdentity = new Map(rows.map((r) => [stallIdentityKey(r.sessionId, r.startedAt), r]));
   const identities = new Map<string, { sessionId: string; startedAt: string; cwd: string | null }>();
+  const remember = (sessionId: string, startedAt: string | null, cwd: string | null): void => {
+    if (!startedAt) return;
+    const k = stallIdentityKey(sessionId, startedAt);
+    if (identities.has(k)) return;
+    identities.set(k, { sessionId, startedAt, cwd: cwd ?? byIdentity.get(k)?.cwd ?? null });
+  };
   for (const row of rows) {
-    if (row.endedAt == null) {
-      identities.set(stallIdentityKey(row.sessionId, row.startedAt), { sessionId: row.sessionId, startedAt: row.startedAt, cwd: row.cwd });
-    }
+    if (row.endedAt == null) remember(row.sessionId, row.startedAt, row.cwd);
+  }
+  const live = await db.select().from(sessions).where(and(eq(sessions.taskId, taskId), isNull(sessions.endedAt)));
+  for (const session of live) {
+    // 会话行上记着的那一轮:**开始行可能压根没落下**(写库整批失败),这时它是唯一说得出身份的地方。
+    remember(session.id, session.turnStartedAt, session.cwd);
+    // 这条会话最新的那一行:覆盖「投入 ≠ 正在执行」那一类 —— 会话行上写的是刚投进来的下一轮,
+    // 而真卡住、真背着判决的是前一轮(见 session-stall-flag.ts 的同一条口径)。
+    const newest = rows.filter((r) => r.sessionId === session.id)
+      .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1)).at(0);
+    if (newest) remember(newest.sessionId, newest.startedAt, newest.cwd);
   }
   for (const owed of await pendingStallObligations()) {
     if (owed.taskId !== taskId) continue;
-    const k = stallIdentityKey(owed.sessionId, owed.turnStartedAt);
-    if (!identities.has(k)) {
-      identities.set(k, { sessionId: owed.sessionId, startedAt: owed.turnStartedAt, cwd: byIdentity.get(k)?.cwd ?? null });
-    }
+    remember(owed.sessionId, owed.turnStartedAt, null);
   }
   const notes: string[] = [];
   /** 这一轮认下来、等落位那一笔去兑现的失败义务(见下面那段「这里不销账」)。 */
@@ -256,7 +281,17 @@ export async function reconcileInterruptedTask(taskId: string): Promise<boolean>
     const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
     if (!task || !["running", "queued"].includes(task.status)) return false;
     if (task.mode === "team") {
-      await setTaskStatus(taskId, "idle");
+      // **待命与上一轮失败是两个轴,前者替代不了后者**(本轮审查 F1 的对称实例)。这一支原先
+      // 直接写 `idle` 就返回:不问已经装回来的判决、不给上一轮的区间一个结局、也不兑现那份
+      // 义务。于是一台被看门狗判了熔断的调度台重启后回到待命,而那一轮在盘上是
+      // `ended_at=null, outcome=null`、判决还欠着 —— 用户看不出上一轮失败过,下一次启动还会
+      // 把同一份判决读回来。
+      // 团队任务**仍然回待命**(既有策略没错,也不该把整台粗暴改成 failed),只是先把回合那一
+      // 轴收掉:`interruptedTurnVerdict` 把区间收在 failed 上,结论进时间线,义务跟着这一笔
+      // 落位一起兑现(`settleStallTurns`,见 status.ts)。
+      const verdict = await interruptedTurnVerdict(taskId);
+      if (verdict.note) await appendTaskTimeline(taskId, verdict.note);
+      await setTaskStatus(taskId, "idle", { settleStallTurns: verdict.settled });
       return true;
     }
     await settleInterruptedTask(task);

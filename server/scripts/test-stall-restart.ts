@@ -44,6 +44,16 @@
 //      再启动一次就只能把本该回到 `done` 的任务落成 failed,或者把熔断过的持续目标说成「暂停中」。
 //      这一段用一个 SQLite 触发器让落位那条 UPDATE **真的失败**,然后钉两件事:义务还在、原终态
 //      还在;触发器撤掉后再跑一次对账,照样落对。
+//   ⑪ **日志读不出来、而区间已经收口**(第 3 链第 1 轮审查 F1,已实测):候选发现原先只由两边给
+//      —— 「区间还开着」和「日志里读得出来的义务」。两个前提各自都证明不了「这一轮没有待结算的
+//      责任」:前者在「执行流先收口、任务还没落位」时为假,后者日志一坏就整个为空。于是那一轮
+//      **压根进不了询问** —— 库里 `outcome=failed` 和 `stall_reason` 明明都还在,结论却被当成
+//      「没有失败」,持续目标回来显示「暂停中 + 继续」。补上第三边:**还没收尾的会话**自己说得出
+//      身份(它没收尾恰恰因为置标记的那个消费者没了),这一边不依赖日志也不依赖区间开着。
+//   ⑫ **团队任务回待命时把回合那一轴丢了**(同一条 F1 的对称实例):`mode==='team'` 那一支原先
+//      直接写 `idle` 就返回,不问已经装回来的判决、不给上一轮区间一个结局、也不兑现义务。
+//      **待命与上一轮失败是两个轴,前者替代不了后者**:任务照旧回待命,但区间要收在 failed 上、
+//      结论要进时间线、义务要跟着那一笔落位一起销掉。
 //
 // 为什么非得两个进程:同进程里 `__resetStallFailures()` 只能模拟「内存没了」,**模拟不了
 // 「模块级 Map 随进程一起消失、而盘上的东西还在」** —— 而这正是要测的那件事。所以这里真的
@@ -86,6 +96,10 @@ if (!phase) {
     { what: "已完成任务的失败续聊走启动对账", hold: false, unreadable: false, mode: "follow-up", expectTask: "done", phases: ["before-restart", "after-restart"] },
     // ⑩ 中间那一段让落位那条 UPDATE 失败:消费过的东西一样都不许少。
     { what: "落位那一笔没写成", hold: false, unreadable: false, mode: "landing-aborted", expectTask: "done", phases: ["before-restart", "block-landing", "after-restart"] },
+    // ⑪ 区间已收口 + 日志读不出来:库那一格还在,这一轮照样得被问到。
+    { what: "区间已收口且日志读不出来", hold: false, unreadable: true, mode: "span-closed-unreadable", expectTask: "failed", phases: ["before-restart", "close-span", "after-restart"] },
+    // ⑫ 团队任务:回待命,但上一轮的失败不许跟着丢。
+    { what: "团队任务回待命时的回合结局", hold: false, unreadable: false, mode: "team", expectTask: "idle", phases: ["before-restart", "after-restart"] },
   ] as const;
   for (const scene of scenes) {
     const stage = mkdtempSync(join(tmpdir(), "ash-stall-restart-"));
@@ -187,13 +201,32 @@ if (!phase) {
       assert.match(String(settled.timeline ?? ""), /按失败结算|按失败收尾/,
         where("库里没有回合行,于是对账压根没问过那条判决 —— 持续目标回来显示「暂停中 + 继续」"));
     }
-    if (scene.mode === "reconcile" || scene.mode === "no-turn-row") {
+    if (scene.mode === "span-closed-unreadable") {
+      // 这一条的要害:日志那一边**确实是空的**(读不出来),所以身份只能来自「还没收尾的会话」。
+      // 少了这一句,这个场景可能在不知不觉中退化成「靠日志认出来的」那条顺风路。
+      assert.equal(settled.pendingAtRecover, 0,
+        where("恢复那一刻日志还读得出义务 —— 这一段没模拟出「日志那一边整个为空」,场景失效"));
+      assert.match(String(settled.timeline ?? ""), /按失败结算|按失败收尾/,
+        where("日志读不出来、而区间已经收口,这一轮就压根没被问过 —— 库里 outcome=failed 和"
+          + " stall_reason 明明都还在,结论却被当成「没有失败」"));
+      assert.doesNotMatch(String(settled.timeline ?? ""), /因服务中断已暂停/,
+        where("持续目标又被说成「暂停中 + 继续」—— 它明明已经提示过「已自动终止」"));
+    }
+    if (scene.mode === "team") {
+      // 待命与上一轮失败是两个轴:任务回 idle 是对的,但区间必须收在 failed 上、结论必须说出来、
+      // 义务必须跟着那一笔落位一起销掉,否则下一次启动还会把同一份判决读回来。
+      assert.match(String(settled.timeline ?? ""), /按失败结算|按失败收尾/,
+        where("团队任务回了待命,上一轮失败一个字都没说 —— 用户看不出它失败过"));
+      assert.equal(settled.pendingAtRecover, 0,
+        where("团队那一支没兑现这份义务 —— 下一次启动还会把同一份判决读回来"));
+    }
+    if (scene.mode === "reconcile" || scene.mode === "no-turn-row" || scene.mode === "span-closed-unreadable") {
       // 持续目标那一支原先在这里写「因服务中断已暂停」:那句话替用户表达了「它在等你」。
       assert.match(String(settled.timeline ?? ""), /按失败结算|按失败收尾/,
         where("对账把熔断过的那一轮说成了暂停 —— 用户看到的那个结论说它在等人"));
       assert.doesNotMatch(String(settled.timeline ?? ""), /因服务中断已暂停/,
         where("「因服务中断已暂停」还在"));
-      if (scene.unreadable) {
+      if (scene.unreadable && scene.mode === "reconcile") {
         assert.match(String(settled.timeline ?? ""), /核实不了/,
           where("对账没说清这一轮是「核实不了」"));
         assert.doesNotMatch(String(settled.timeline ?? ""), /已被判定上游连不上并按失败结算/,
@@ -242,14 +275,14 @@ if (!phase) {
     pendingStallVerdicts(readStallJournal()).some((r) => r.sessionId === sessionId && r.turnStartedAt === at);
 
   const cwd = join(stage, "workspace");
-  if (phase === "before-restart") {
+  if (phase === "before-restart" && mode !== "team") {
     await db.insert(tasks).values({
       id: "restart", projectId: "isolated", title: "熔断后消费者重启", body: "",
       status: "running", mode: "single", workflowMode: "free", createdAt: AT, updatedAt: AT,
       // 对账那条路专门用持续目标:它是 F3 里被写成「因服务中断已暂停」的那一支,而「暂停」
       // 这个落位恰恰把一轮失败说成了「在等你」。cliState 给成能被 hold 的形状,否则
       // interruptCliGoal 直接返回 false,这一段就测不到那个分叉。
-      ...(mode === "reconcile" || mode === "no-turn-row"
+      ...(mode === "reconcile" || mode === "no-turn-row" || mode === "span-closed-unreadable"
         ? { goalTurn: true, cliState: JSON.stringify({ codex: { goal: { objective: "一直盯着上游", status: "active" } } }) }
         : {}),
       // ⑨⑩ 已完成任务的一次失败续聊:落位该退回 `done`,不是把整个任务降成 failed。
@@ -272,6 +305,31 @@ if (!phase) {
   const column = async (): Promise<unknown> =>
     (await dbClient.execute("SELECT stall_reason FROM session_turns WHERE session_id = 'restart-session'"))
       .rows.at(0)?.stall_reason ?? null;
+
+  if (mode === "team" && phase === "before-restart") {
+    // 团队那一档不走单飞消费循环:它要的现场只有「一台调度台的某一轮被判了熔断、判决落了盘,
+    // 进程随后没了」。判决用真的持久接口落(`markStallFailure` → 日志 + 库投影),不手搓日志行。
+    const { markStallFailure } = await import("../src/turn-stall-verdict.js");
+    await db.insert(tasks).values({
+      id: "restart", projectId: "isolated", title: "团队调度台被打断", body: "",
+      status: "running", mode: "team", workflowMode: "free", createdAt: AT, updatedAt: AT,
+    });
+    await db.insert(sessions).values({
+      id: "restart-session", taskId: "restart", role: "lead", agentType: "claude",
+      executor: "claude@smoke", cwd, startedAt: AT, turnStartedAt: AT, cliSessionId: "cli-restart",
+    });
+    await openTurn({ taskId: "restart", sessionId: "restart-session", cwd, startedAt: AT });
+    const durability = markStallFailure("restart-session", AT,
+      "〔上游停滞·已自动终止本回合〕判定模型上游连不上,已终止本回合并按失败结算。", AT);
+    emit({
+      event: "termination-requested",
+      verdict: !!stallFailure("restart-session", AT),
+      journaled: durability === "durable",
+      column: await column(),
+    });
+    process.exit(0);
+  }
+
 
   if (phase === "block-landing") {
     // 让**落位那一条 UPDATE** 真的失败 —— 不是跳过它,是让它抛。触发器只拦落位那一笔
@@ -399,6 +457,9 @@ if (!phase) {
   const trace = existsSync(tracePath) ? readFileSync(tracePath, "utf8") : "";
   emit({
     event: "settled", task: taskRow?.status, turn, goalTurn: taskRow?.goal_turn ?? null, timeline, trace, stallFlag, compacted,
+    // 恢复那一刻日志里还读得出几条义务 —— ⑪ 要靠它证明「这一轮不是从日志那一边被认出来的」。
+    pendingAtRecover: pendingStallVerdicts(readStallJournal())
+      .filter((r) => r.sessionId === "restart-session").length,
     kindAtConsume: stallFailure("restart-session", AT)?.kind ?? null,
   });
   process.exit(0);
