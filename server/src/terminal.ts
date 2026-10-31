@@ -6,23 +6,26 @@ import { createPortScanner, LAUNCH_ID_ENV } from "./service-ports.js";
 import { id } from "./util.js";
 import {
   containmentAvailable,
-  groupAlive,
   TTY_COMMAND_WRAPPER,
   TTY_REAPER_WRAPPER,
 } from "./terminal-process-tree.js";
 import {
   applyStop,
-  liveLeftovers,
   projectStop,
   oweLeftovers,
   releaseLaunchPortsSync,
   releaseLaunchResponsibility,
 } from "./terminal-stop-facts.js";
-import { killAllSessionTrees, killSessionTree, terminateSession } from "./terminal-session-kill.js";
+import { killAllSessionTrees, killSessionTree, terminateSession, type KillResult } from "./terminal-session-kill.js";
+import { withLaunchHandover, withSessionLock } from "./terminal-management-lock.js";
+import { sampleLaunchClocks, settleLaunchClocks, type LaunchIdentity } from "./terminal-launch-survivors.js";
 import { TerminalWatcher } from "./terminal-session-watch.js";
 import { commandLaunch, ptyEnvironment, shellCommand, terminalSize } from "./terminal-shell.js";
 import { spawnWindowsPty, type TerminalProcess } from "./terminal-pty.js";
 import { TerminalCapacity } from "./terminal-capacity.js";
+import {
+  recordPorts, retainHistory, sessionAlive, sessionInfo, sessionRunning,
+} from "./terminal-session-view.js";
 
 export { resolveTerminalDirectory } from "./terminal-shell.js";
 
@@ -33,30 +36,29 @@ import {
   type TerminalCreation,
   type TerminalEvent,
   type TerminalEventInput,
+  type LaunchAbandonment,
   type TerminalSession,
   type TerminalSessionInfo,
 } from "./terminal-session-facts.js";
 
 // 会话事实的形状住在 terminal-session-facts.ts(连同「每条线索为什么存在」的说明)。
 // 这里原样对外转发:terminal-routes / terminal-commands 一直从 terminal.js 取它们。
-export type { StopFact, TerminalEvent, TerminalSessionInfo };
-
+export type { LaunchAbandonment, StopFact, TerminalEvent, TerminalSessionInfo };
 
 const MAX_BUFFER_BYTES = 512 * 1024;
 const MAX_SESSIONS = 16;
 const IDLE_TTL_MS = 30 * 60 * 1000;
-/**
- * 一条会话最多记这么多个本机端口。停止那一档是逐个端口问 lsof 的,一条嘴碎的启动脚本
- * (测试输出、日志回放)不该把那次停止拖成几十次外部调用。先到先记 —— 服务自报家门
- * 几乎总在最前面。
- */
-const MAX_LAUNCH_PORTS = 8;
-
 
 export class TerminalSessionManager {
   private stopped = false;
   private readonly sessions = new Map<string, TerminalSession>();
-  private readonly capacity = new TerminalCapacity(MAX_SESSIONS, () => this.sessions.values(), (session) => this.sessionRunning(session), (session) => this.retainHistory(session));
+  // 放弃过的记录不被闲置回收,所以在容量账上跟「没能确认停净」的保留记录同档:pty 已经死了
+  // 就是纯历史、不占预算;pty 还活着照旧算占用。
+  private readonly capacity = new TerminalCapacity(
+    MAX_SESSIONS, () => this.sessions.values(),
+    (session) => sessionRunning(session) || (session.abandoned != null && sessionAlive(session)),
+    (session) => retainHistory(session) || session.abandoned != null,
+  );
   private readonly creations = new Set<TerminalCreation>();
   private readonly windowsPty: typeof spawnWindowsPty;
   private readonly sweeper: ReturnType<typeof setInterval>;
@@ -183,11 +185,11 @@ export class TerminalSessionManager {
     // launch token(唯一的归属凭据)一起删掉,那台服务从此没人能停(第 2 轮审查发现 1)。
     for (const sessionId of creation.reservation.replacedSessionIds) {
       const previous = this.sessions.get(sessionId);
-      if (previous && this.sessionRunning(previous)) throw new Error("旧命令会话尚未停止，无法替换");
+      if (previous && sessionRunning(previous)) throw new Error("旧命令会话尚未停止，无法替换");
     }
     if (options.command) {
       for (const stale of [...this.sessions.values()]) {
-        if (stale.projectId === projectId && stale.commandId === options.command.id && !this.sessionRunning(stale) && !this.retainHistory(stale)) {
+        if (stale.projectId === projectId && stale.commandId === options.command.id && !sessionRunning(stale) && !retainHistory(stale)) {
           stale.listeners.clear();
           this.sessions.delete(stale.id);
         }
@@ -233,6 +235,9 @@ export class TerminalSessionManager {
       : { file: "/bin/sh", args: ["-c", wrapper, "ash-terminal", shell, ...args] };
     // 记号必须在 spawn **之前**生成:它要进这次启动的环境,才能被后代继承。
     const launchToken = options.command ? id() : null;
+    // 各个钟的起跑读数同样在 spawn 之前取:事后补取,创建子进程到取样之间那段停顿会让真后代
+    // 比上界更老,于是在读记号之前就被筛掉(第 6 轮自由审查,见 terminal-launch-survivors.ts)。
+    const launchClocks = sampleLaunchClocks();
     const processHandle = spawnProcess(spawnSpec.file, spawnSpec.args, {
       name: "xterm-256color",
       cols: terminalSize(options.cols, 100, 20, 400),
@@ -248,6 +253,9 @@ export class TerminalSessionManager {
       name: options.command ? options.command.name : basename(cwd) || cwd,
       commandId: options.command?.id ?? null,
       startedAt: Date.now(),
+      // `startedAt` 给用户看;`launchClocks` 给「谁出生在这次启动之前」那道收窄用(见字段说明)。
+      // spawn 一返回就核一遍:fork 落在取样到这里之间,这段钟被拨过,那份墙上钟就配不上。
+      launchClocks: settleLaunchClocks(launchClocks),
       exitCode: null,
       groupAlive: true,
       ports: [],
@@ -272,7 +280,7 @@ export class TerminalSessionManager {
       this.publish(session, { type: "data", data });
       // 服务起来都会自报家门(`Local: http://127.0.0.1:5173`)。趁输出流过记下来 ——
       // 守护化的服务退出进程树之后,这是唯一还指得到它的线索。按流增量认,不按块认。
-      if (session.commandId !== null) this.recordPorts(session, session.portScanner.feed(data));
+      if (session.commandId !== null) recordPorts(session, session.portScanner.feed(data));
       // shell 产出输出 = 它还活着,且可能刚起了后台作业(job-control 会打印 `[1] pid`)。
       // 限流触发一次后代扫描,让新作业在毫秒级被记进 descendantPgids,而不必等满一个周期
       // —— 缩小「起作业后立刻退 shell」的漏记窗口(第 3 轮审查)。
@@ -281,15 +289,15 @@ export class TerminalSessionManager {
     processHandle.onExit(({ exitCode, signal }) => {
       session.exitCode = exitCode;
       // 流到头了:扫描器手里那截尾巴按终态再认一遍(地址恰好是最后一个字节时才用到)。
-      if (session.commandId !== null) this.recordPorts(session, session.portScanner.flush());
+      if (session.commandId !== null) recordPorts(session, session.portScanner.flush());
       this.publish(session, { type: "exit", exitCode, signal });
     });
-    return this.info(session);
+    return sessionInfo(session);
   }
 
   get(sessionId: string, projectId?: string): TerminalSessionInfo | null {
     const session = this.session(sessionId, projectId);
-    return session ? this.info(session) : null;
+    return session ? sessionInfo(session) : null;
   }
 
   eventsAfter(sessionId: string, projectId: string, seq: number): TerminalEvent[] | null {
@@ -337,7 +345,9 @@ export class TerminalSessionManager {
   close(sessionId: string, projectId?: string, released = false): boolean {
     const session = this.session(sessionId, projectId);
     if (!session) return false;
-    if (!released && this.retainHistory(session)) return false;
+    // 放弃过的也不回收:「我放过手 + 当时还有什么活着」是持久可见的那份状态,闲置半小时
+    // 不是删它的理由(只有用户关它的日志标签、或同一条命令再起一份时才删)。
+    if (!released && (retainHistory(session) || session.abandoned)) return false;
     this.sessions.delete(sessionId);
     session.listeners.clear();
     killSessionTree(session);
@@ -352,10 +362,12 @@ export class TerminalSessionManager {
     sessionId: string,
     projectId?: string,
     timeouts?: { termMs?: number; killMs?: number },
-  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  ): Promise<KillResult> {
     const session = this.session(sessionId, projectId);
-    if (!session) return { ok: true };
-    return terminateSession(session, timeouts);
+    // 记录已经不在了:这一趟什么都没枚举过,`complete` 只能是 false —— 把「没问过」说成
+    // 「问全了」,下游那条「敢不敢说收干净了」的判断就建在空气上。
+    if (!session) return { ok: true, complete: false };
+    return withSessionLock(session, () => terminateSession(session, timeouts));
   }
 
   /**
@@ -373,16 +385,21 @@ export class TerminalSessionManager {
     sessionId: string,
     projectId?: string,
     timeouts?: { termMs?: number; killMs?: number },
-  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  ): Promise<KillResult> {
     const session = this.session(sessionId, projectId);
-    const result = await this.terminate(sessionId, projectId, timeouts);
-    if (!result.ok) return result;
-    if (session) {
-      const left = await releaseLaunchResponsibility(session);
-      if (left) return { ok: false, reason: left };
-    }
-    this.close(sessionId, projectId, true);
-    return result;
+    if (!session) return { ok: true, complete: false };
+    return withSessionLock(session, async () => {
+      const result = await this.terminate(sessionId, projectId, timeouts);
+      if (!result.ok) return result;
+      // 放弃过的跳过这道闸:它的全部内容就是「名下还有活物,不敢删记录」,而用户已经显式
+      // 接手了这笔责任(terminal-abandon.ts)。再拦一遍只会让那个出口自己走不通。
+      if (!session.abandoned) {
+        const left = await releaseLaunchResponsibility(session);
+        if (left) return { ok: false, reason: left };
+      }
+      this.close(sessionId, projectId, true);
+      return result;
+    });
   }
 
   /**
@@ -390,6 +407,7 @@ export class TerminalSessionManager {
    * 杀不净都如实报失败,由调用方**拒绝删项目**——项目行一删,这些会话就再没有任何
    * UI/API 把手,只能占着全局会话槽等 server 重启(第 1 轮自由审查实锤)。
    */
+  // 项目级没有「清单全不全」这一问(逐条会话各有各的),所以这里不透传 KillResult 的 complete。
   async destroyProject(projectId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
     const alreadyClosing = this.closingProjects.has(projectId);
     this.beginProjectShutdown(projectId);
@@ -471,7 +489,7 @@ export class TerminalSessionManager {
       // 语义:关抽屉只是收起,回来还要原样在,结束它的只有 tab 上的关闭按钮和它自己
       // exit)。判「活」含 daemonize 形状(组长退了、子进程还在):回收会话就没人能停
       // 那些进程了。只有整组死透的(纯退出日志)才闲置半小时后回收。
-      if (this.sessionRunning(session)) continue;
+      if (sessionRunning(session)) continue;
       // 唯一的例外:service 的启动脚本**正常退出、又没被用户停过**。这条记录可能是
       // 「服务还开着」仅存的凭据 —— `docker compose up -d`、`pm2 start` 这类服务跑在
       // ash 的进程树之外,启动脚本跑完自己就退,把它当「纯退出日志」收走,停止按钮当场
@@ -487,14 +505,14 @@ export class TerminalSessionManager {
   listForProject(projectId: string): TerminalSessionInfo[] {
     return [...this.sessions.values()]
       .filter((session) => session.projectId === projectId)
-      .map((session) => this.info(session));
+      .map((session) => sessionInfo(session));
   }
 
   /** 所有项目的常用命令会话（含刚退出还没被回收的），给全局状态栏汇总用。 */
   listCommandSessions(): TerminalSessionInfo[] {
     return [...this.sessions.values()]
       .filter((session) => session.commandId !== null)
-      .map((session) => this.info(session));
+      .map((session) => sessionInfo(session));
   }
 
   /**
@@ -504,8 +522,8 @@ export class TerminalSessionManager {
    */
   liveCommandSession(projectId: string, commandId: string): TerminalSessionInfo | null {
     for (const session of this.sessions.values()) {
-      if (session.projectId === projectId && session.commandId === commandId && this.sessionAlive(session)) {
-        return this.info(session);
+      if (session.projectId === projectId && session.commandId === commandId && sessionAlive(session)) {
+        return sessionInfo(session);
       }
     }
     return null;
@@ -528,6 +546,32 @@ export class TerminalSessionManager {
   }
 
   /**
+   * 用户**显式放弃**这次启动的管理责任(「我自己处理了」)。判据、确认流程与解除范围写在
+   * terminal-abandon.ts 的文件头 —— 这里只负责把那一刻的快照落进会话事实。
+   *
+   * **只写一格,不动别的任何一格**:`stop` 账原样留着(`unresolved` 不改写成 `verified`)、
+   * 端口事实不碰、进程一个不杀。放弃是「ash 不再把它当还在跑的东西管」,不是「它停了」——
+   * 两者混成一格,界面上就会凭空多出一句「已停止」,而那正是停止语义里最不许出现的谎
+   * (根 AGENTS.md:停止要留下持久可见的状态,**而且不许谎报**)。
+   *
+   * 已经放弃过的**不覆盖**:第一次那份快照是用户签字时看到的事实,残留在那之后只会变。
+   * 返回 null = 记录已经不在了(刚被删掉),由调用方回 404。
+   */
+  async abandonLaunch(sessionId: string, projectId: string,
+    record: LaunchAbandonment | (() => Promise<LaunchAbandonment>)): Promise<LaunchAbandonment | null> {
+    const session = this.session(sessionId, projectId);
+    if (!session) return null;
+    return withLaunchHandover(session, async () => {
+      if (this.session(sessionId, projectId) !== session) return null;
+      if (session.abandoned) return session.abandoned;
+      const residue = typeof record === "function" ? await record() : record;
+      if (this.session(sessionId, projectId) !== session) return null;
+      session.abandoned = residue;
+      return residue;
+    });
+  }
+
+  /**
    * 把这条常用命令**最近一次**会话记成「用户停的」,并落下这次停止的核验结论。
    *
    * 停止路径一律调它,**不分活进程还是守护形状**:`docker compose up -d` 这类启动脚本早就
@@ -544,7 +588,32 @@ export class TerminalSessionManager {
     const session = this.session(sessionId, projectId);
     if (!session) return resolution;
     applyStop(session, resolution);
+    this.pruneStoppedHistory(session);
     return projectStop(session.stop);
+  }
+
+  /**
+   * 同一条命令只留**最新那条**「没能确认停净」的记录。
+   *
+   * 这类记录按设计永远核销不掉(`mergeStop` 对 `complete=false` 的单调性),于是既不被
+   * `close()` 回收、也不被同命令新会话替换(`register` 的 stale 清理放过它们),而界面上根本
+   * 没有释放它们的入口 —— 命令日志标签的 ✕ 只是「收起」,同一条命令又只有最新那条会进标签。
+   * 容量那一侧已经不把纯历史算进活会话预算(terminal-capacity 的 `pureHistory`),这一侧负责
+   * 它们不会无界堆积:更早的那些 pids 和端口都是空的,除了那句话之外不提供任何把手,留着
+   * 只会占地方(第 2 轮审查必须修 1 的建议修法)。
+   *
+   * **名下还有活物的一条都不动**(`sessionRunning`):那种记录是触达残留进程的唯一把手,删掉
+   * 就等于把还在跑的东西变成永久孤儿。所以这里只删「保留 且 不活」的那些。
+   */
+  private pruneStoppedHistory(latest: TerminalSession): void {
+    if (latest.commandId === null || !retainHistory(latest)) return;
+    for (const session of [...this.sessions.values()]) {
+      if (session.id === latest.id || session.projectId !== latest.projectId) continue;
+      if (session.commandId !== latest.commandId) continue;
+      if (sessionRunning(session) || !retainHistory(session)) continue;
+      session.listeners.clear();
+      this.sessions.delete(session.id);
+    }
   }
 
   recordCommandPortState(sessionId: string, projectId: string, state: "ours" | "unknown" | "stranger" | "free"): void {
@@ -570,56 +639,6 @@ export class TerminalSessionManager {
     return null;
   }
 
-  private info(session: TerminalSession): TerminalSessionInfo {
-    const { id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode } = session;
-    return {
-      id: sessionId, projectId, cwd, shell, name, commandId, startedAt, exitCode,
-      // 派生,不存:「有没有人要求停过」是 stop 的投影,两份就会漂(见 StopFact 的注释)。
-      stoppedByUser: session.stop.kind !== "none",
-      // 即时探测,不是缓存值:组长退没退(exitCode)和组里有没有活人是两件事。
-      groupAlive: this.sessionAlive(session),
-      ports: [...session.launchPorts],
-      // 这个只能是缓存值:问端口要跑 lsof,不能挂在每次 info() 上(列表接口一次几十条)。
-      portsAlive: session.portsAlive,
-      portUncertain: session.portUncertain ?? false,
-      running: this.sessionRunning(session),
-      stop: projectStop(session.stop),
-      portsTruncated: session.portsTruncated,
-    };
-  }
-
-  /**
-   * 记下这次启动打印的端口(有上限 —— 一条疯狂刷端口的输出不该把内存和每次停止的 lsof
-   * 预算吃光)。只在命令会话上调。
-   *
-   * **溢出要记账**:超额丢掉的那些是「没能收进来的线索」,不是「不存在的线索」。丢过就把
-   * portsTruncated 立起来,停止那一档据此拒绝从「记下的端口都空了」推出「全停了」
-   * (第 2 轮审查发现 2 的同一类:未核验的候选不许凭端口空闲核销)。
-   */
-  private recordPorts(session: TerminalSession, ports: number[]): void {
-    for (const port of ports) {
-      if (session.launchPorts.has(port)) continue;
-      if (session.launchPorts.size >= MAX_LAUNCH_PORTS) { session.portsTruncated = true; continue; }
-      session.launchPorts.add(port);
-    }
-  }
-
-  /**
-   * 这条会话名下**还有东西在跑吗** —— 整个生命周期(start 的幂等门、stop/restart、容量、
-   * 同命令旧记录清理、闲置回收、前端那颗按钮)都认这一个口径。
-   *
-   * 进程归属(sessionAlive)之外多一档:**它打印过的端口还有人在听**。真·守护化的服务从
-   * ppid/ctty/pgid 三条线索里全逃了,只剩端口这一条 —— 少了这一档就会出现「停止接口认为
-   * 它开着、启动接口认为它没开」,于是同一个服务被起第二份(第 1 轮审查发现 3)。
-   */
-  private sessionRunning(session: TerminalSession): boolean {
-    return this.sessionAlive(session) || session.portsAlive || session.portUncertain === true || liveLeftovers(session.stop).length > 0;
-  }
-
-  private retainHistory(session: TerminalSession): boolean {
-    return projectStop(session.stop).kind === "unresolved";
-  }
-
   /**
    * 这条会话的启动记号(service-ports.ts 核归属用)。服务端内部接口,不进 DTO ——
    * 它是一枚授权凭据,没有任何前端用途。
@@ -629,15 +648,16 @@ export class TerminalSessionManager {
   }
 
   /**
-   * 这条会话是否还有活着的进程:组长没退,或组长退了但同组子进程还在(daemonize 形状),
-   * 或 job-control 后台作业在累积的独立组里还活着 —— 少最后这一条,shell exit 后独立组的
-   * 后台作业会被 sweeper 当死透会话回收,连同累积快照一起丢,那些进程就彻底失控
-   * (第 2 轮自由审查实锤)。
+   * 这次启动的**完整身份**:记号 + 两条收窄规则各自的参照(spawn 之前取的各个钟、启动目录)。
+   *
+   * 为什么要攒成一个方法而不是让调用方从 `TerminalSessionInfo` 上拼:那份 DTO 里只有墙上钟
+   * 的 `startedAt`,拿它当年龄上界就是第 5 轮自由审查实测到的那个错。身份只能从会话表这一处
+   * 取,拼不出来 —— 会话没了就是 `null`,那一问落 `unavailable`。
    */
-  private sessionAlive(session: TerminalSession): boolean {
-    if (session.exitCode === null || groupAlive(session.process.pid)) return true;
-    for (const pgid of session.descendantPgids) if (groupAlive(pgid)) return true;
-    return false;
+  launchIdentityOf(sessionId: string): LaunchIdentity | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    return { token: session.launchToken, clocks: session.launchClocks, cwd: session.cwd };
   }
 
   private publish(session: TerminalSession, event: TerminalEventInput): void {

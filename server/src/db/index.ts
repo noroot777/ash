@@ -52,6 +52,9 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, source_commit TEXT NOT NULL, merge_commit TEXT NOT NULL, target_branch TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS task_branch_receipts_task ON task_branch_receipts(task_id);
+    CREATE TABLE IF NOT EXISTS queue_advance_intents (
+      queue_id TEXT PRIMARY KEY, accepted_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL, created_at TEXT NOT NULL
     );

@@ -2,6 +2,8 @@ import { LEGACY_SYS_MARKER } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import type { ConversationItem } from "./conversationModel.ts";
 import { verifyNoteOf, type VerifyNoteMark } from "./conversationNotes.ts";
+import { monitorWakeInput } from "./monitorWakeModel.ts";
+import { monitorWakeFedReviewer } from "./conversationReviewer.ts";
 
 export type ReviewLaneConclusion = "verified" | "verify_failed" | "inconclusive" | null;
 export type ReviewLaneSource = VerifyNoteMark["kind"];
@@ -74,7 +76,13 @@ export function reviewLaneMessageRoles(lane: ConversationReviewLane): Map<string
   return roles;
 }
 
-type ActiveLane = ConversationReviewLane & { reviewerSpoke: boolean };
+type ActiveLane = ConversationReviewLane & {
+  reviewerSpoke: boolean;
+  /** 这一轮的审查者在哪条会话上说话。自由派审是另开的 reviewer 会话，就地验证就是任务自己那条。 */
+  reviewerSessionId: string | null;
+  /** 开轮旁注写在哪条会话上。就地验证的审查者就搭在这条上，审查者开口之前也认得出收件人。 */
+  startSessionId: string | null;
+};
 
 const STAGE_CONCLUSION = /验收阶段更新：.*（(verified|verify_failed)）/;
 const FREE_REVIEW_REPAIR_HANDOFF = /^【自由工作流审查未通过(?:\s*·[^】]+)?】/;
@@ -136,7 +144,24 @@ function matchingEnd(item: ConversationItem, lane: ActiveLane): boolean {
 }
 
 function closeBefore(lane: ActiveLane, item: ConversationItem): boolean {
-  if (item.kind === "user") return !item.bySystem && !item.isAnswer;
+  if (item.kind === "user") {
+    // 哨兵自动输入（系统代写）是**一次新输入**，不是旁注。它可能喂给审查者自己（审查者挂
+    // 回归哨兵 + pause_task 是常规做法，那一段必须留在卡里），也可能喂给执行者（审查已交卷、
+    // 哨兵结果把执行者叫醒）—— 后者一旦被折进卡里就跟着默认收起、彻底藏掉，而紧随的执行者
+    // 回合落在主流上还会标着「回复这次自动输入」，于是用户读到的是「回合说在回复一条看不见
+    // 的输入」（现场实测：本任务 06:52:37 那条投喂就藏在「第 1 轮审查」卡的展开区里）。
+    //
+    // 判据按**喂给了谁**，跟 applyVerifySpans 问同一处（conversationReviewer 的
+    // monitorWakeFedReviewer）：收件人是条目自带的事实（会话号 + 那条会话的角色），审查者
+    // 开口之前也答得出 —— 早先这里要等审查者先说话才认得出收件人，开口前一律留在卡里，
+    // 区间那一侧却已经收口，叫醒执行者的那一段于是被吞进折叠区（第 1 轮逻辑审查 3）。
+    if (monitorWakeInput(item) !== null) {
+      return !monitorWakeFedReviewer(item, {
+        kind: lane.source, startSessionId: lane.startSessionId, reviewerSessionId: lane.reviewerSessionId,
+      });
+    }
+    return !item.bySystem && !item.isAnswer;
+  }
   if (item.kind === "agent") {
     // 就地验证搭在被验任务自己的会话上，区间内说话的就是审查者；轮次徽标要等 run 事件
     // 或旁注区间补上，所以在审查者开口前先放行（reviewerSpoke 门禁）。
@@ -166,6 +191,7 @@ function addToLane(lane: ActiveLane, item: ConversationItem): void {
   if (conclusion) lane.conclusion = conclusion;
   if (item.kind !== "agent" || item.reviewer?.round !== lane.round) return;
   lane.reviewerSpoke = true;
+  lane.reviewerSessionId ??= item.sessionId;
   lane.reviewerLabel ??= item.label;
   lane.reviewerModel ??= item.run?.model ?? null;
   lane.reviewerEffort ??= item.run?.reasoningEffort ?? null;
@@ -183,7 +209,9 @@ function finishLane(
     lane.reportAvailable = lane.complete && lane.reviewerSpoke;
     if (lane.reportAvailable && lane.round !== null) lane.report = { kind: "inline", round: lane.round };
   }
-  const { reviewerSpoke: _reviewerSpoke, ...finished } = lane;
+  const {
+    reviewerSpoke: _reviewerSpoke, reviewerSessionId: _reviewerSessionId, startSessionId: _startSessionId, ...finished
+  } = lane;
   return { ...finished, items: finished.items.filter(visibleLaneItem) };
 }
 
@@ -320,6 +348,8 @@ export function conversationFeedRows(
         report: null,
         defaultCollapsed: false,
         reviewerSpoke: false,
+        reviewerSessionId: null,
+        startSessionId: item.kind === "event" ? item.sessionId ?? null : null,
       };
     }
     if (!active) {

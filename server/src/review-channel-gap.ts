@@ -20,7 +20,10 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentType } from "@ash/shared";
+import { eq } from "drizzle-orm";
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { db } from "./db/index.js";
+import { sessions } from "./db/schema.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -60,8 +63,42 @@ const readEdge = (path: string, edge: "head" | "tail"): string => {
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
-/** 这一轮通道到底怎么了。null = 没查出来，只能给通用提示。 */
-type Evidence = { connected: boolean; detail: string } | null;
+/**
+ * 这一轮通道到底怎么了。null = 没查出来，只能给通用提示。
+ *
+ * `definite` = 这份证据**点名 ash 且是确定的坏**，只许由**结构上的位置**给出，不许由「整行里
+ * 出现过这个词」给出：
+ *  · claude：init 清单（JSON）里没有 ash，或者全部兼容登记的状态都是**白名单里**的终局失败
+ *    （`CLAUDE_FAILED_STATUSES`）。`pending`、`connecting` 这类没列举的状态一律不算 —— 未知即不确定；
+ *  · codex：**全部**兼容登记都有点名它的终局启动失败行（实测形状
+ *    ``MCP client for `ash` failed to start``）。点名认的是 codex 自己给 server 名加引号的那个
+ *    位置：上一版拿 `\b(ash|harness)\b` 在整行上找，而本仓目录就叫 harness、`~/.ash/…` 这类
+ *    路径也带 ash，于是任何一行顺带打了 cwd 的别家报错都成了确定证据（第 1 轮审查第 1 条）。
+ *
+ * `connected` 跟着同一条规矩，多一档 `null`＝**这份证据说不了**。codex 的 stderr 只写得下
+ * 「谁出错了」，连上的登记**一个字都不留**，所以「ash 启动失败」单独既不能证明通道没了
+ * （旧名 `harness` 那份可能正连着、complete_task 就在它手里），也不能证明通道还在。拿这种
+ * 残缺子集替整个通道下结论，就是把一份登记的失败说成「工具全都不在、修好再重试」
+ * （第 4 轮审查第 1 条）。拿得到完整清单的 claude 才按「任一连上即可用、任一未知即不确定、
+ * 全部终局失败才算全坏」判。
+ *
+ * 普通回合那句说明只认 `definite`（见 `noteTurnChannelGap`），审查回合两种都用。
+ */
+type Evidence = { connected: boolean | null; detail: string; definite: boolean } | null;
+
+/** claude init 里 server 状态的终局失败词。白名单：没列举的状态（含将来新增的瞬时态）都不算确定。 */
+const CLAUDE_FAILED_STATUSES = new Set(["failed", "needs-auth", "disabled"]);
+
+/**
+ * codex 自己报 MCP server 出错时点名的那个位置：``MCP client for `ash` ``、``MCP server 'harness' ``
+ * （引号种类放宽到 `'"`）。只认这一个位置 —— 别家 server 的报错里顺带引到 `'ash'` 也不算。
+ * **一个兼容名一份**：判「是不是全部登记都坏了」要按名字分别看，不能把两个名字混成一个正则
+ * 之后数行数（那样「ash 坏了」会被当成「两个名字都坏了」）。
+ */
+const CODEX_NAMED_ASH = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME].map((name) => {
+  const at = `\\bMCP (?:client|server)(?: for)? [\`'"]${name}[\`'"]`;
+  return { name, named: new RegExp(at, "i"), startFailed: new RegExp(`${at}\\s+failed to (?:start|initialize)\\b`, "i") };
+});
 
 /**
  * claude：`{"type":"system","subtype":"init",…,"mcp_servers":[{"name":"ash","status":"connected"}]}`
@@ -88,19 +125,20 @@ export function claudeMcpEvidence(text: string): Evidence {
     // 偏掉的诊断 —— 跟派审门禁上那条是同一类（第 3 轮审查 B2）。
     const mine = rows.filter((s) => typeof s.name === "string" && wanted.has(s.name));
     if (!mine.length) {
-      return { connected: false, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 ash。` };
+      return { connected: false, definite: true, detail: `这条会话启动时 claude 报告的 MCP server 是「${names.join("、") || "一个都没有"}」，里面没有 ash。` };
     }
-    const ash = mine.find((s) => s.status === "connected") ?? mine[0]!;
-    const status = typeof ash.status === "string" ? ash.status : "";
-    const others = mine.length > 1
-      ? `（这条会话里有 ${mine.length} 份兼容登记：${mine.map((s) => `${String(s.name)}=${typeof s.status === "string" ? s.status : "未知"}`).join("、")}）`
-      : "";
-    return status === "connected"
+    const connected = mine.some((server) => server.status === "connected");
+    const states = mine.map((server) => `${String(server.name)}=${typeof server.status === "string" && server.status ? server.status : "未知"}`).sort().join("、");
+    return connected
       // **只说连上了，别替它断言工具在手**：init 事件写的是「server 连上没有」，不是
       // 「report_stage 暴露了没有」—— 执行器的工具白/黑名单能把具体工具挡掉，那时说
       // 「多半是它自己漏了上报」就是把限制归咎于审查者（第 2 位审查者 N2）。
-      ? { connected: true, detail: `这条会话启动时 ash MCP 是连上的${others}。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
-      : { connected: false, detail: `这条会话启动时 ash MCP（${String(ash.name)}）的状态是「${status || "未知"}」，不是 connected${others}。` };
+      ? { connected: true, definite: false, detail: `这条会话启动时 ash MCP 是连上的（兼容登记状态：${states}）。至于 report_stage 当时在不在它手里，init 事件没说（执行器若限制过工具清单，这里看不出来）。` }
+      : {
+          connected: false,
+          definite: mine.every((server) => typeof server.status === "string" && CLAUDE_FAILED_STATUSES.has(server.status)),
+          detail: `这条会话启动时 ash MCP 的兼容登记状态是「${states}」，没有报告 connected。`,
+        };
   }
   return null;
 }
@@ -114,13 +152,29 @@ export function codexMcpEvidence(text: string): Evidence {
     .filter(Boolean);
   if (!hits.length) return null;
   // 同一份 stderr 里往往混着别的 server 的报错（实测最多的是 linear 的 OAuth）。
-  // 点名 ash 的那几行才是这里要的。
-  const named = hits.filter((line) => new RegExp(`\\b(${ASH_MCP_SERVER_NAME}|${LEGACY_ASH_MCP_SERVER_NAME})\\b`, "i").test(line));
+  // 点名 ash 的那几行才是这里要的。「点名」认的是引号里的 server 名，不是整行里出现过这个
+  // 词（见 Evidence 上面那段）。
+  const named = hits.filter((line) => CODEX_NAMED_ASH.some((alias) => alias.named.test(line)));
+  // **一行都没点名就不作证**,不退回「最后两行」:那会把别家 server 的报错原文贴进 ash 的
+  // 诊断里(实测最多的是 linear 的 OAuth)。没有证据时收尾那句会改用「没查到直接证据、最
+  // 可能是…」的推断措辞 —— 比贴一段别人的报错准(本任务 af6ec688;同一处也被这条审查链记
+  // 成 N3)。
   if (!named.length) return null;
+  const failed = CODEX_NAMED_ASH.filter((alias) => hits.some((line) => alias.startFailed.test(line)));
+  const silent = CODEX_NAMED_ASH.filter((alias) => !failed.includes(alias));
   const picked = named.slice(-2);
+  const detail = `codex 的 stderr 里有这些跟 ash MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`;
+  // 全部兼容名都明确启动失败了，才敢替整个通道下结论；只坏了一份时**只说这一份的事实**，
+  // 剩下那个名字登记了没有、连上没有，这份证据看不出来（见 Evidence 上面那段）。
+  if (!silent.length) return { connected: false, definite: true, detail };
   return {
-    connected: false,
-    detail: `codex 的 stderr 里有这些跟 ash MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`,
+    connected: null,
+    definite: false,
+    detail: failed.length
+      ? `${detail}\n（这只说明登记「${failed.map((alias) => alias.name).join("、")}」启动失败；`
+        + `兼容名「${silent.map((alias) => alias.name).join("、")}」登记了没有、连上没有，`
+        + "codex 的 stderr 里看不出来 —— 连上的登记不留报错行。）"
+      : detail,
   };
 }
 
@@ -128,6 +182,14 @@ const HOW_TO_CHECK: Record<string, string> = {
   claude: "claude mcp get ash",
   codex: "codex mcp list --json（看 ash 在不在、enabled 是不是 true）",
 };
+
+/** 这一回合留在盘上的通道证据：claude 的 init 是第一条事件，codex 的诊断取 stderr 末尾。 */
+function turnEvidence(a: { taskId: string; sessId: string; turnStart: string; agentType: AgentType }): Evidence {
+  const paths = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
+  return a.agentType === "claude"
+    ? claudeMcpEvidence(readEdge(paths.out, "head"))
+    : a.agentType === "codex" ? codexMcpEvidence(readEdge(paths.err, "tail")) : null;
+}
 
 /**
  * 刚刚那一轮审查是不是**判成了无结论**（round 落 error、conclusion 为空）。
@@ -174,24 +236,61 @@ export async function noteReviewerChannelGap(a: {
   if (!(await concludedNothing(a.taskId, a.review))) return false;
   // 干过活才算数：CLI 没起来、起来就崩的那种另有诊断，这里插一句只会误导。
   if (!(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) return false;
-  const paths = detachedPathsFor(join(RUNS_DIR, a.taskId), a.sessId, a.turnStart);
-  const evidence = a.agentType === "claude"
-    ? claudeMcpEvidence(readEdge(paths.out, "head"))      // init 是第一条事件
-    : a.agentType === "codex" ? codexMcpEvidence(readEdge(paths.err, "tail")) : null;  // 诊断取末两行
+  const evidence = turnEvidence(a);
   const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
   const why = evidence
     ? evidence.detail
     // 没有证据时只能推断，措辞就得是推断：「最可能」而不是陈述一个原因。
     : `这一轮没查到直接证据；最可能的原因是审查者手上根本没有 report_stage 这个工具（自查：${check}）：报告照样写得完整，只有最后一步上报做不到。`;
-  const next = evidence?.connected
+  const next = evidence?.connected === true
     ? "可以先点「继续本轮审查」让它接着上一次的上下文补上报（不用重跑这一轮）；要是它说仍然没有这个工具，就去查执行器有没有限制工具清单。"
-    : `修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。`;
+    // 证据说不了连上没有（codex 只看得到报错的那几份登记）：两条路都给，别替它断言得修。
+    : evidence?.connected === null
+      ? "可以先点「继续本轮审查」让它接着上一次的上下文补上报（不用重跑这一轮）；要是它说没有这个工具，按上面的自查把登记修好再来一次。"
+      : `修好之后点「继续本轮审查」，它会接着上一次的上下文只补上报，不用重跑这一轮。`;
   // **显式绑定刚结束那条审查会话**：缺省会按 `sessions.startedAt` 挑最新建的那条，而一条
   // 任务上常有比它更新的别的会话（「继续本轮审查」复用的是**较早**那条审查会话），于是这句
   // 说明会落到另一位智能体名下 —— 看记录的人在审查者那边什么也看不到（第 1 轮审查 N3）。
   await appendTaskTimeline(
     a.taskId,
     `这一轮的审查报告可能已经写完了，只是结论没能上报到 ash。${why}${next}`,
+    { sessionId: a.sessId },
+  );
+  return true;
+}
+
+/**
+ * 普通回合「没交卷」时的同一句说明（原任务第 1 轮审查第 3 条：普通任务只留下一句没有原因的
+ * 「失败」）。返回「说没说」。
+ *
+ * 跟审查那条的差别在判据上：审查回合「没给出结论」是 ash 自己的事实，没有证据也敢推断一句
+ * 「最可能是没有 report_stage」；普通回合没交卷的头号原因是 agent 漏调了 complete_task，没有
+ * 直接证据就说「通道坏了」是误诊。所以这里**只认点名 ash 的确定证据**（`Evidence.definite`），
+ * 拿不到就不说话 —— 结算说明里那句通用的「常见原因」已经在了。
+ *
+ * 调用方只在结算层明确返回「缺少必需的完成确认」那一支调：被停的、原生命令（`/compact`）、
+ * 交过卷的、以提问/检查点暂停的回合都走不到这里（后两种本身就证明 ash MCP 是通的）。旁路回合
+ * 恢复原状态的回合也不走这一支；下面仍按会话行的 `side_turn` 排除旁路。
+ */
+export async function noteTurnChannelGap(a: {
+  taskId: string;
+  sessId: string;
+  turnStart: string;
+  agentType: AgentType;
+}): Promise<boolean> {
+  // 旁路回合（就地验证、辩论里执行者那一段、计划模式）不靠 complete_task 交卷，这句话说的
+  // 不是它们。认的是会话行上那一列（起跑时落库，重启接管后也在），不靠内存里的回合身份。
+  const row = (await db.select({ sideTurn: sessions.sideTurn }).from(sessions).where(eq(sessions.id, a.sessId))).at(0);
+  if (!row || row.sideTurn) return false;
+  if (!(await turnProducedWork(a.taskId, a.sessId, a.turnStart))) return false;
+  const evidence = turnEvidence(a);
+  if (!evidence?.definite) return false;
+  const check = HOW_TO_CHECK[a.agentType] ?? "检查该执行器的 ash MCP 登记";
+  await appendTaskTimeline(
+    a.taskId,
+    "这一轮没交卷多半不是 agent 漏了，而是它手上没有 ash 的工具：complete_task、ask_question、pause_task 都是 ash MCP 提供的，"
+      + `通道不在，这一轮干得再好也交不上（自查：${check}）。修好之后点重试，它会从中断处接着做、只补交卷。`
+      + `证据：${evidence.detail}`,
     { sessionId: a.sessId },
   );
   return true;

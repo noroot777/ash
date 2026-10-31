@@ -39,9 +39,9 @@ export const scmApi = {
   scmCommit: (
     taskId: string,
     message: string,
-    options: { stagePaths?: string[]; amend?: boolean; force?: boolean } = {},
+    options: { stagePaths?: string[]; amend?: boolean; force?: boolean; acceptance?: boolean } = {},
   ): Promise<ScmCommitResult> =>
-    request(`/tasks/${id(taskId)}/scm/commit`, json("POST", { message, ...options })),
+    request(`/tasks/${id(taskId)}/scm/${options.acceptance ? "acceptance-commit" : "commit"}`, json("POST", { message, ...options })),
   scmPush: (taskId: string, remote: string | null, force = false): Promise<ScmPushResult> =>
     request(`/tasks/${id(taskId)}/scm/push`, json("POST", { remote, force })),
 };

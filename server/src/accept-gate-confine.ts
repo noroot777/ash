@@ -316,7 +316,22 @@ export async function confineOwnPackages(target: string, sourceRoot: string, ori
     for (const item of input.direct) if (!visible.has(item.entry)) visible.set(item.entry, item);
   }
   const plan: Binding[] = [];
-  /** 快照**之外**、而且摆着本项目源码入口的那些树。消费者闭包要在这些树上证明，见循环后那一段。 */
+  /**
+   * 快照**之外**、而且摆着本项目源码入口的那些树。消费者闭包要在这些树上证明，见循环后那一段。
+   *
+   * 判据取 `selected` 而**不是** `direct`，这不是疏漏（2026-10-28 第 1 轮审查把它报成「按会变的集合
+   * 判」，实测不成立）：`direct` 是「从快照根出发」那一张遮蔽表，`selected` 是**每个解析根各自**的
+   * 第一命中的并集。这棵树里的消费者是从它自己在树里的位置往上解析的，对它来说快照根上的遮蔽不
+   * 存在 —— 所以 `visible` 按根新建正是在如实区分这两件事，不是把已遮蔽的条目重数一遍。两侧各有
+   * 一个定点用例钉住，改判据会从相反方向各破一个：
+   *   · 消费者住在这棵树里（tarball 装出来的真目录）→ 它确实读到活源码，必须拒。实测
+   *     `test-accept-gate-plan.ts` 的 removedTask/rawLayout：直接 import 得 TASK_NEW，经
+   *     plain-consumer 间接 import 得 MAIN_OLD 并随工作区改动变成 MAIN_LIVE；此时 `direct` 里
+   *     没有那个自有包入口（已被快照就近遮住），只有 `selected` 里有。改读 `direct` 就放过它。
+   *   · 消费者的落点在这棵树**之外**（`file:` 装成的链）→ 它的解析链压根不经过这棵树，必须放过。
+   *     同一文件的 selectedTarget 用例钉住 `selected == ["external-only"]`，而 `entries` 更长。
+   *     把「这棵树上摆着自有包吗」改读 `entries` 就反过来误拒它。
+   */
   const exposed = new Set<string>();
   for (const item of entries) {
     const record = await recordFor(item);
@@ -409,7 +424,10 @@ export async function confineOwnPackages(target: string, sourceRoot: string, ori
       return `依赖树 ${tree} 落在快照之外，里面既摆着本项目自己的包、又摆着 ${outsider.entry} 这样`
         + `不属于本项目的入口：往快照里补的绑定只对「从快照根出发」的解析有效，而那些入口是从它们`
         + `自己在那棵树里的位置向上解析的，会先命中那棵树里的原入口、读到活工作区的源码 —— `
-        + `无法证明隔离。请在任务工作区安装提供 ${outsider.entry} 的依赖，使该入口被快照就近遮蔽；`
+        + `无法证明隔离。三条出路任选一条：在 ${tree} 所属的那个检出里重新安装依赖 —— `
+        + `${outsider.entry} 只在那棵树里有、而本次提交已经不需要它时，npm install / npm prune 会把`
+        + `它清掉，这棵树就不再摆着它（本次提交删掉过依赖的场合走这一条，不要把刚删掉的那条装回来）；`
+        + `或在任务工作区安装提供 ${outsider.entry} 的依赖，使该入口被快照就近遮蔽；`
         + `或将 ASH_RUNS_DIR 移到解析祖先链不经过 ${tree} 的目录后验收`;
     }
   }

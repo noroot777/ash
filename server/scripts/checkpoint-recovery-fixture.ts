@@ -70,6 +70,33 @@ export function failCheckpointRestore() {
   return { count: () => failures, restore: () => { dbClient.batch = batch; } };
 }
 
+/**
+ * 定点让**送达确认**那一笔写失败(`markSent` 的 `status = 'sent'`),原文照旧送出去。
+ *
+ * 这一笔跟 failCheckpointRestore 注入的不是同一个窗口:那个打的是「取走了、一个字没送出去」
+ * 的回填,这个打的是「已经喂给 agent 了、只差记这一笔账」—— 后者没有补偿时会把任务永久钉死
+ * (第 1 轮审查必须修 3)。`disarm` 只停止注入、不还原钩子,给「库恢复了,补办自己会成功」
+ * 那一段用。
+ */
+export function failCheckpointAck() {
+  const execute = dbClient.execute;
+  let failures = 0;
+  let armed = true;
+  dbClient.execute = async function (statement, ...rest) {
+    if (armed && typeof statement !== "string" && /^update "scheduled_messages" set/i.test(statement.sql)
+      && /"status"/i.test(statement.sql) && Array.isArray(statement.args) && statement.args[0] === "sent") {
+      failures++;
+      throw new Error("INJECT_CHECKPOINT_ACK_FAILURE");
+    }
+    return execute.call(dbClient, statement, ...rest);
+  };
+  return {
+    count: () => failures,
+    disarm: () => { armed = false; },
+    restore: () => { armed = false; dbClient.execute = execute; },
+  };
+}
+
 export async function rejectedDelivery(test: Awaited<ReturnType<typeof scenario>>): Promise<void> {
   const release = test.mode === "team" ? runs.claimWakeTurn(test.taskId) : (() => {
     assert.ok(runs.claimTurn(test.taskId, "single"));

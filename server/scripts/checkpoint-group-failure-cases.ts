@@ -104,7 +104,30 @@ export async function checkpointGroupFailureCases(): Promise<void> {
     const task = await taskOf(test.taskId);
     const groupId = id();
     await db.insert(schema.groups).values({ id: groupId, projectId: task.projectId, name: "background-error", mode: "parallel", createdAt: now() });
-    await db.update(tasks).set({ groupId }).where(eq(tasks.id, test.taskId));
+    // 旁观者:跟这次启动毫无关系的三种成员。早先失败交代按 `groupId` 全捞一遍、一个条件都
+    // 不加,数据库抖一下它们各收一条「这一轮没能起跑」,已完成那位还被追加进正常对话、刷新
+    // 后仍在(第 2 轮审查必须修 2;复现见审查目录的 group-failure-fanout.mts)。这个用例
+    // 此前只放了 1 个成员,扇出范围因此整条漏出去 —— 所以旁观者必须在场。
+    const bystanders: { label: string; taskId: string }[] = [];
+    const finished = await scenario(0);
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, finished.taskId));
+    bystanders.push({ label: "早已完成", taskId: finished.taskId });
+    const archived = await scenario(0);
+    await db.update(tasks).set({ status: "done", archived: true }).where(eq(tasks.id, archived.taskId));
+    bystanders.push({ label: "已归档", taskId: archived.taskId });
+    const team = await scenario(0, "team");
+    bystanders.push({ label: "团队调度台", taskId: team.taskId });
+    const owner = await scenario(0);
+    await db.update(tasks).set({ status: "idle" }).where(eq(tasks.id, owner.taskId));
+    await db.update(schema.groups).set({ ownerTaskId: owner.taskId }).where(eq(schema.groups.id, groupId));
+    for (const member of [test, ...bystanders.map((one) => ({ taskId: one.taskId }))]) {
+      await db.update(tasks).set({ groupId }).where(eq(tasks.id, member.taskId));
+    }
+    const before = new Map<string, number>();
+    for (const one of bystanders) {
+      before.set(one.taskId, (await db.select().from(schema.sessions)
+        .where(eq(schema.sessions.taskId, one.taskId))).length);
+    }
     const execute = dbClient.execute;
     let reads = 0;
     let injected = false;
@@ -124,9 +147,72 @@ export async function checkpointGroupFailureCases(): Promise<void> {
       assert.equal(sessions.length, 1);
       assert.ok(isDiagnosticSession(sessions[0]!));
       assert.equal(runs.isTurnClaimed(test.taskId), false);
+      // 发起这次启动的调度台也要听见:它是「谁在等这个结果」的那一位。
+      await until("发起这次启动的调度台收到交代", async () => /INJECT_BACKGROUND_GROUP_READ_FAILURE/.test(await transcript(owner.taskId)));
+      // 旁观者一个字都不许收到,也不许被插诊断会话行。
+      for (const one of bystanders) {
+        assert.equal(/分组本次启动未完成/.test(await transcript(one.taskId)), false,
+          `${one.label}的时间线里不该冒出不属于它的失败`);
+        assert.equal((await db.select().from(schema.sessions)
+          .where(eq(schema.sessions.taskId, one.taskId))).length, before.get(one.taskId),
+          `${one.label}不该为这次启动失败多出一条会话行`);
+      }
     } finally {
       dbClient.execute = execute;
     }
-    console.log("PASS: real group-run HTTP background rejection is reported in a refresh-persistent diagnostic session");
+    console.log("PASS: background group failure reaches only this run's launch targets and the owner, never bystanders");
+  }
+  {
+    // 成员全部**成功起跑**之后、收尾那几步(parkQueued / 推队列)才抛的那一档。
+    // 第 1 轮审查发现 4:名单此刻正该是空的,早先却在这里回头按 `groupId` 重算一遍,
+    // 等于把一批正在跑(或已跑完)的任务重新算成「这一轮没能起跑」。上面那个
+    // background-error 用例只证明了**静态旁观者**不连坐 —— 它们从头到尾没被挑中;
+    // 这里要证的是另一半:**本次挑中且确实起来了**的成员也必须退出名单。
+    const members = [];
+    for (let index = 0; index < 2; index++) {
+      const test = await scenario(0);
+      const body = `LAUNCHED_MEMBER_${id()}`;
+      await takeResumePrompt(test.taskId, test.checkpoint);
+      await db.update(tasks).set({ status: "backlog", body }).where(eq(tasks.id, test.taskId));
+      members.push({ ...test, body });
+    }
+    const first = await taskOf(members[0]!.taskId);
+    const groupId = id();
+    await db.insert(schema.groups).values({ id: groupId, projectId: first.projectId, name: "after-launch-error", mode: "parallel", createdAt: now() });
+    const owner = await scenario(0);
+    await db.update(tasks).set({ status: "idle" }).where(eq(tasks.id, owner.taskId));
+    await db.update(schema.groups).set({ ownerTaskId: owner.taskId }).where(eq(schema.groups.id, groupId));
+    for (const member of [...members, owner]) {
+      await db.update(tasks).set({ groupId }).where(eq(tasks.id, member.taskId));
+    }
+    const execute = dbClient.execute;
+    let injected = false;
+    // 全员都已到达执行器之后的第一次「按 group_id 捞成员」—— 那就是收尾的 parkQueued。
+    // 用「到过执行器」而不是数第几次读,是为了让注入点无条件落在起跑之后。
+    dbClient.execute = async function (statement) {
+      if (!injected && typeof statement !== "string" && /from "tasks" where/i.test(statement.sql)
+        && Array.isArray(statement.args) && statement.args.includes(groupId)
+        && members.every((member) => hits(member.body) > 0)) {
+        injected = true;
+        throw new Error("INJECT_GROUP_TEARDOWN_FAILURE");
+      }
+      return execute.call(dbClient, statement);
+    };
+    try {
+      assert.equal((await groupApi.request(`/groups/${groupId}/run`, { method: "POST" })).status, 202);
+      await until("收尾失败交代给发起这次启动的调度台", async () => /INJECT_GROUP_TEARDOWN_FAILURE/.test(await transcript(owner.taskId)));
+      assert.equal(injected, true);
+      for (const member of members) {
+        await settled(member.taskId);
+        assert.ok(hits(member.body) > 0, "成员这一轮确实起跑了");
+        assert.equal(/分组本次启动未完成/.test(await transcript(member.taskId)), false,
+          "已经拿到启动回执的成员不该收到「这一轮没能起跑」");
+        const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.taskId, member.taskId));
+        assert.equal(sessions.some(isDiagnosticSession), false, "起跑成功的成员不该为收尾失败多出一条诊断会话行");
+      }
+    } finally {
+      dbClient.execute = execute;
+    }
+    console.log("PASS: post-launch group teardown failure tells only the owner, never the members that already started");
   }
 }

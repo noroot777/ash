@@ -111,8 +111,14 @@ try {
   assert.match(twiceBody.notice ?? "", /还活着/, "还得再说一次没停净");
   assert.deepEqual(leftoversOf("ports1"), [washedPid], "账还在");
   process.kill(washedPid, "SIGKILL");
-  await waitFor("它走了之后,活号跟着销", () => (leftoversOf("ports1")?.length ?? 1) === 0);
-  assert.deepEqual(leftoversOf("ports1"), [], "号退完了,但「这次停止没能核验干净」这件事不许跟着消失");
+  // 它走了之后,账跟着销:上一次停止的成员枚举是**完整**的,唯一没敢动的那个号现在也退了,
+  // 于是「这次启动起来的东西都停了」第一次成立 —— 投影(projectStop → mergeStop)据此收口成
+  // verified。这跟「证据本身不全」那一档(complete=false)正相反:那种没有活号也绝不收口,
+  // 由 test-stop-verification.ts 钉着。本断言此前写的是「收口后 pids 仍是空数组」,可一旦
+  // 收口 kind 就不再是 unresolved、leftoversOf 返回 null,于是 waitFor 的谓词永远不成立
+  // (HEAD 上实跑同样红,且跟紧接着那句「不该再把停止按钮钉在那儿」自相矛盾)。
+  await waitFor("它走了之后,活号跟着销", () => serviceSession("ports1")?.stop.kind === "verified");
+  assert.equal(leftoversOf("ports1"), null, "号退完了,账上不该再挂着谁");
   assert.equal(serviceSession("ports1")?.portsAlive, false);
   assert.equal(
     ((await stopCommand("ports1", SERVICE_COMMAND_ID, null, { portGraceMs: 300 })).body as { stopped: boolean }).stopped,

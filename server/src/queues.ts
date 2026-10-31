@@ -12,7 +12,7 @@ import type { Task } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
-import { advanceQueue, queueStatus } from "./scheduler.js";
+import { advanceQueueInBackground, queueStatus } from "./scheduler.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { handoffBlockReason, isHandoffPreparing } from "./handoff-guard.js";
 import { actorOf } from "./auth/context.js";
@@ -248,7 +248,7 @@ export function mountQueueRoutes(api: Hono): void {
     await repackQueue(qid, want);
     void publishQueueMembers(want);
     // reorder 后某个 backlog/paused 可能上位到 head,立刻推进一次
-    void advanceQueue(qid);
+    advanceQueueInBackground(qid);
     return c.json({ ok: true });
   });
 
@@ -278,7 +278,7 @@ export function mountQueueRoutes(api: Hono): void {
     await repackQueue(qid, next);
     void publishQueueMembers([...next, b.taskId]);
     // 移除后立刻推一下,看看后面的 task 是否能动了
-    if (next.length > 0) void advanceQueue(qid);
+    if (next.length > 0) advanceQueueInBackground(qid);
     return c.json({ ok: true });
   });
 
@@ -362,7 +362,7 @@ export function mountQueueRoutes(api: Hono): void {
     const published = await publishQueueMembers(next);
     // 插入后:如果前序已全 done/canceled,新 task 应立刻起来(实测发现的竞态:
     // codex skill 在链跑完后插尾任务,不推进会一直 backlog)
-    void advanceQueue(qid);
+    advanceQueueInBackground(qid);
     // tasks 带上全体成员:老成员的 queuePosition/updatedAt 也被这次插入改了,
     // 只回新成员的话客户端拿不到前驱的新快照(第 5 轮审查:前驱无徽标、计数错位)。
     return c.json({
@@ -428,7 +428,7 @@ export function mountQueueRoutes(api: Hono): void {
     // 权威入队状态随响应到手,不必成功后再 GET。
     const published = await publishQueueMembers(want);
     // 新建 queue 也要推进:head 如果已经可启动(backlog/paused),让它立刻动
-    void advanceQueue(qid);
+    advanceQueueInBackground(qid);
     return c.json({ queueId: qid, taskIds: want, tasks: want.map((tid) => published.get(tid) ?? null) }, 201);
   });
 }

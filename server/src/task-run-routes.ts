@@ -33,7 +33,7 @@ import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js"
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimTurn, releaseTurn, stopTask } from "./runs.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { advanceQueue } from "./scheduler.js";
+import { advanceQueueInBackground } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { replyToTask } from "./task-reply.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
@@ -539,7 +539,7 @@ api.post("/tasks/:id/requeue", async (c) => {
 
   await setTaskStatus(taskId, "backlog");
   // 前面若还有人在跑,advanceQueue 会被 selectNextInQueue 的守卫挡住,什么都不做。
-  void advanceQueue(queueId);
+  advanceQueueInBackground(queueId);
 
   const updated = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
   const task = (await enrichTasks([updated]))[0];

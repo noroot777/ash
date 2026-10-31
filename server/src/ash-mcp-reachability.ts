@@ -117,7 +117,7 @@ export interface AshMcpReachQuery {
   /**
    * 这一轮**可能**跑在哪些目录里 —— 要的是**超集**，不是「哪一个」。每个都会被问一遍,
    * 任一说有登记就放行(见 `probeDirs` 那段)。调用方怎么凑出这个超集见
-   * `free-review-round.ts` 的 `reviewCwdCandidates`。
+   * `ash-mcp-launch-gate.ts` 的 `reviewCwdCandidates`。
    *
    * 为什么要给目录:claude 的**项目级**登记(`--scope local`)只在那个目录下看得见。
    * 第 1 版压根没传,`execFile` 继承了 **server 进程**的目录,在任务目录里接好的 claude

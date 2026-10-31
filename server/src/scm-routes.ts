@@ -18,6 +18,8 @@ import {
   type ScmGuard,
 } from "./git-workspace-ops.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
+import { acceptanceWorkspaceCommitBlock, assertAcceptanceWorkspaceCommit } from "./accept-workspace-ownership.js";
+import { acceptanceAutoCommitDecision } from "./accept-workspace-decision.js";
 import { assertInsideRoot, assertPathShape, gateScmPaths, scmNestedPaths } from "./scm-paths.js";
 import {
   ARCHIVED_REFUSAL,
@@ -98,11 +100,12 @@ export function mountScmRoutes(api: Hono) {
     const context = await gitRootOr(c.req.param("id"));
     if ("error" in context) return c.json({ error: context.error }, context.status);
     try {
-      const [status, commits, remotes, readOnly] = await Promise.all([
+      const [status, commits, remotes, readOnly, acceptanceCommitBlock] = await Promise.all([
         readScmStatus(context.root.path),
         readScmCommits(context.root.path),
         readScmRemotes(context.root.path),
         workspaceReadOnlyReason(context.task, context.root),
+        acceptanceWorkspaceCommitBlock(context),
       ]);
       return c.json({
         root: publicRoot(context.root),
@@ -110,6 +113,8 @@ export function mountScmRoutes(api: Hono) {
         // 只读的理由要一起给：面板不光要收起按钮，还得说清楚为什么——「按钮不见了」
         // 和「按钮坏了」在用户那儿是同一件事。
         readOnly,
+        acceptanceCommitBlock,
+        acceptanceAutoCommit: await acceptanceAutoCommitDecision(context, status, undefined, acceptanceCommitBlock),
         status,
         commits,
         remotes,
@@ -158,6 +163,7 @@ export function mountScmRoutes(api: Hono) {
   const write = (
     path: string,
     run: (root: WorkspaceRoot, body: ScmRequestBody, guard: ScmGuard) => Promise<unknown>,
+    acceptance = false,
   ) => {
     api.post(path, async (c) => {
       if (IS_PREVIEW_INSTANCE) return c.json({ error: previewRefusal("改任务的工作区") }, 403);
@@ -166,7 +172,7 @@ export function mountScmRoutes(api: Hono) {
       const context = await gitRootOr(taskId);
       if ("error" in context) return c.json({ error: context.error }, context.status);
       const body = await c.req.json().catch(() => ({})) as ScmRequestBody;
-      const forced = body.force === true;
+      const forced = !acceptance && body.force === true;
       // 只读是**冻结**，不是「确认一下就能干」：force 不解这两道。
       const readOnly = await workspaceReadOnlyReason(context.task, context.root);
       if (readOnly) return c.json({ error: readOnly, readOnly }, 409);
@@ -177,14 +183,17 @@ export function mountScmRoutes(api: Hono) {
         }, 409);
       }
       // 锁内那道是**占位**不是复查（为什么见 `workspace-write-gate.ts` 顶部）。
-      const guard: ScmGuard = () => claimWorkspaceWrite({
-        taskId,
-        context,
-        forced,
-        busyError: (who) => new ScmBusyError(who),
-        archivedError: () => new ScmOperationError(ARCHIVED_REFUSAL, 409),
-        missingError: () => new ScmOperationError("这个任务已经不在了", 404),
-      });
+      const guard: ScmGuard = async () => {
+        if (acceptance) await assertAcceptanceWorkspaceCommit(context);
+        return claimWorkspaceWrite({
+          taskId,
+          context,
+          forced,
+          busyError: (who) => new ScmBusyError(who),
+          archivedError: () => new ScmOperationError(ARCHIVED_REFUSAL, 409),
+          missingError: () => new ScmOperationError("这个任务已经不在了", 404),
+        });
+      };
       try {
         const result = await run(context.root, body, guard);
         // 每个写操作都把最新状态一起回去：面板不必再补一次请求，也不会出现
@@ -227,6 +236,12 @@ export function mountScmRoutes(api: Hono) {
       stagePaths: stringList(body.stagePaths),
       amend: body.amend === true,
     }, guard));
+
+  write("/tasks/:id/scm/acceptance-commit", (root, body, guard) =>
+    commitWorkspace(root.path, root.repo, {
+      message: typeof body.message === "string" ? body.message : "",
+      stagePaths: stringList(body.stagePaths),
+    }, guard), true);
 
   write("/tasks/:id/scm/push", (root, body, guard) =>
     pushWorkspace(

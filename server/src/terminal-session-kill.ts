@@ -6,6 +6,7 @@
 // 判据与枚举能力的来龙去脉在 terminal-process-tree.ts 顶部;这里只放「怎么收尾」。
 import { IS_WINDOWS } from "./platform.js";
 import type { StopFact } from "./terminal-session-facts.js";
+import { handedOver } from "./launch-handover.js";
 import { requestStop } from "./terminal-stop-facts.js";
 import {
   descendantsFromTable,
@@ -26,11 +27,21 @@ export type KillTarget = {
   readonly ttyPath: string | null;
   readonly descendantPgids: Set<number>;
   readonly commandId: string | null;
+  /** 非空 = 用户签字接手过这次启动(terminal-abandon.ts)。下面每个击杀入口都先认它。 */
+  readonly abandoned?: unknown;
   exitCode: number | null;
   stop: StopFact;
 };
 
-export type KillResult = { ok: true } | { ok: false; reason: string };
+
+
+/**
+ * `complete` = 这一趟的**成员清单全不全**(freezeAndEnumerate 的同名标记,两轮取与)。
+ * 它跟 `ok` 是两件事:`ok` 说「我枚举到的那些都不在了」,`complete` 说「那份清单本身可信」。
+ * 调用方不许拿 `ok` 单独当「这次启动起来的东西都停了」—— 判据与被证伪的推论见
+ * terminal-commands.ts 的 `processStopVerdict`。
+ */
+export type KillResult = { ok: true; complete: boolean } | { ok: false; reason: string };
 
 /**
  * 关掉 tab 那一下的杀法:只发一轮 SIGKILL,清单按「实时 ppid 树 ∪ 会话成员 ∪ 存续期
@@ -41,6 +52,7 @@ export type KillResult = { ok: true } | { ok: false; reason: string };
  * terminateSession 的确认版。
  */
 export function killSessionTree(target: KillTarget): void {
+  if (handedOver(target)) return;
   const table = readProcessTableSync();
   const live = table ? descendantsFromTable(table, target.process.pid) : { pids: [], pgids: [] };
   const members = sessionMemberPidsSync([target.process.pid], target.ttyPath ? [target.ttyPath] : []) ?? [];
@@ -74,6 +86,8 @@ export async function terminateSession(
   target: KillTarget,
   timeouts?: { termMs?: number; killMs?: number },
 ): Promise<KillResult> {
+  // 一个号都没问过,`complete` 只能是 false。
+  if (handedOver(target)) return { ok: true, complete: false };
   const groupId = target.process.pid;
   // 成员清单要在**发信号 + 早退判定之前**拿齐,且拿之前先**冻结**(freezeAndEnumerate):
   // 枚举与发信号之间,组内 shell 可能正把新服务 fork 进新 PGID(实测 restart 后立即
@@ -93,7 +107,7 @@ export async function terminateSession(
     && snapshot.pids.every((pid) => !processAlive(pid));
 
   const term = await freezeAndEnumerate(groupId, target.ttyPath, target.descendantPgids, memberPids);
-  if (clearedBy(term.snapshot)) { term.thaw(); return { ok: true }; }
+  if (clearedBy(term.snapshot)) { term.thaw(); return { ok: true, complete: term.complete }; }
   // 这一行记的是**「用户要求停止」**,不是「已经停净」—— 两件事必须分开:它在 TERM/KILL
   // 之前就落下,后面每一轮都可能失败。「停净了吗」是账上另一档(StopFact 的 verified /
   // unresolved,由停止动作层核验后落:terminal-commands.ts 的 StopVerdict),这一档只决定
@@ -117,13 +131,16 @@ export async function terminateSession(
     }
   }
   term.thaw(); // 解冻:让 TERM handler 收尾(它也可能 fork —— 交给下面的 KILL 轮抓)
-  if (await waitForGroupExit(target, timeouts?.termMs ?? 3000, term.snapshot)) return { ok: true };
+  if (await waitForGroupExit(target, timeouts?.termMs ?? 3000, term.snapshot)) return { ok: true, complete: term.complete };
 
   // KILL 轮:重新冻结 + 枚举到不动点,纳管 TERM handler 解冻期新建的独立 PGID。
   const kill = await freezeAndEnumerate(groupId, target.ttyPath, target.descendantPgids, memberPids);
   signalSessionTree(target, "SIGKILL", kill.snapshot);
   kill.thaw(); // KILL 已致命,CONT 只为不把万一没死透的留在 stopped(D 状态那种)
-  if (await waitForGroupExit(target, timeouts?.killMs ?? 2000, kill.snapshot)) return { ok: true };
+  // 两轮取与:TERM 那一轮缺了一条线索,KILL 这一轮答全了也补不回「解冻期里逃掉的那些」。
+  if (await waitForGroupExit(target, timeouts?.killMs ?? 2000, kill.snapshot)) {
+    return { ok: true, complete: term.complete && kill.complete };
+  }
   return {
     ok: false,
     reason: target.exitCode === null
@@ -133,6 +150,9 @@ export async function terminateSession(
 }
 
 function signalSessionTree(target: KillTarget, signal: "SIGTERM" | "SIGKILL", descendants?: DescendantSnapshot): void {
+  // 全部进程信号的**唯一出口**,所以「签过字的不碰」兜在这儿:外面那几处 early return 负责
+  // 把结论说对、少跑几趟无用的枚举,这一行负责万一有谁绕过它们也发不出信号(launch-handover.ts)。
+  if (handedOver(target)) return;
   try {
     // Windows 没有进程组信号这一说,交给 node-pty 收 ConPTY —— 它按
     // `GetConsoleProcessList` 把挂在这个伪控制台上的进程全部收掉,交互 shell 与
@@ -189,7 +209,8 @@ function waitForGroupExit(target: KillTarget, timeoutMs: number, descendants?: D
  * 进程,强杀可接受;不杀的代价是它们被 PID 1 收养成孤儿,ash 重启后会话表(内存态)清零、
  * UI 显示「未启动」,旧进程却继续占着端口。
  */
-export function killAllSessionTrees(targets: KillTarget[]): void {
+export function killAllSessionTrees(all: KillTarget[]): void {
+  const targets = all.filter((target) => !handedOver(target));
   const table = readProcessTableSync();
   const members = sessionMemberPidsSync(
     targets.map((target) => target.process.pid),

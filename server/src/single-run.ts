@@ -35,7 +35,7 @@ import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./fre
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
-import { noteReviewerChannelGap } from "./review-channel-gap.js";
+import { noteReviewerChannelGap, noteTurnChannelGap } from "./review-channel-gap.js";
 import { afterSettlement, settleTaskStatus } from "./settle-status.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 import { markCliGoalStarted, persistRunGoal } from "./task-cli-state.js";
@@ -487,6 +487,12 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   flushSessionNotices();
   out.end();
+  // 普通回合 exit 0 却没交卷：会话证据点名 ash MCP 没连上时，把原因接在结算说明后面说出来
+  // （先结果、后原因；只认确定证据，见 review-channel-gap.ts 的 noteTurnChannelGap）。
+  if (role !== "reviewer" && settled.failureReason === "missing_completion_confirmation") {
+    await noteTurnChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType })
+      .catch((error) => { console.error(`[ash] noteTurnChannelGap(${taskId}) failed:`, error); return false; });
+  }
   } finally {
     // 正常路径上上面那句已经把旁注清空了，这里是**异常路径**的保险：清库、重放、结算
     // 任何一步抛错，都不能让「这条会话作废了、下次会丢上下文」只活在实时 SSE 里 ——

@@ -53,7 +53,7 @@
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
     "test:branch-acceptance": "tsx scripts/test-branch-acceptance.ts && tsx scripts/test-branch-worktree-state.ts && tsx scripts/test-base-update-recovery.ts && tsx scripts/test-base-update-followups.ts && tsx scripts/test-branch-plan-scale.ts",
     "test:branch-plan-creation": "tsx scripts/test-branch-plan-creation.ts",
-    "test:accept-merge": "tsx scripts/test-accept-merge.ts && tsx scripts/test-accept-commit-setting.ts && tsx scripts/test-accept-pending-merge.ts && tsx scripts/test-accept-cleanup.ts && node scripts/run-accept-gate-tests.mjs && tsx scripts/test-task-background-state.ts",
+    "test:accept-merge": "tsx scripts/test-accept-auto-commit.ts && tsx scripts/test-accept-merge.ts && tsx scripts/test-accept-commit-setting.ts && tsx scripts/test-accept-pending-merge.ts && tsx scripts/test-accept-cleanup.ts && node scripts/run-accept-gate-tests.mjs && tsx scripts/test-task-background-state.ts",
     "test:accept": "npm run test:review && npm run test:free-workflow && npm run test:accept-merge && npm run test:monitor-checkpoint-recovery",
     "test:accept-gate-process": "tsx scripts/test-accept-gate-process.ts && node scripts/run-accept-gate-tests.mjs --command-only",
     "test:multi-user": "tsx scripts/test-multi-user.ts",
@@ -192,7 +192,7 @@
     "test:dir-picker": "tsx scripts/test-dir-picker.ts",
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
     "test:duet-attachments": "tsx scripts/test-duet-attachments.ts",
-    "test:terminal": "tsx scripts/test-terminal-pty.ts && tsx scripts/test-terminal.ts && tsx scripts/test-project-commands.ts && tsx scripts/test-service-ports-scan.ts && tsx scripts/test-stop-evidence.ts && tsx scripts/test-stop-review.ts && tsx scripts/test-stop-verification.ts && tsx scripts/test-service-ports.ts && tsx scripts/test-service-ports-script.ts && tsx scripts/test-terminal-capacity.ts && tsx scripts/test-terminal-lifecycle.ts",
+    "test:terminal": "tsx scripts/test-terminal-pty.ts && tsx scripts/test-terminal.ts && tsx scripts/test-project-commands.ts && tsx scripts/test-service-ports-scan.ts && tsx scripts/test-stop-evidence.ts && tsx scripts/test-stop-review.ts && tsx scripts/test-stop-verification.ts && tsx scripts/test-service-ports.ts && tsx scripts/test-service-ports-script.ts && tsx scripts/test-terminal-capacity.ts && tsx scripts/test-terminal-lifecycle.ts && tsx scripts/test-launch-abandon.ts && tsx scripts/test-launch-abandon-races.ts",
     "test:win-launch": "tsx scripts/test-win-launch.ts && tsx scripts/test-powershell-command.ts && tsx scripts/test-user-shell-powershell.ts",
     "test:path-boundary": "tsx scripts/test-path-boundary.ts",
     "test:no-libsql": "tsx scripts/test-no-libsql.ts",
@@ -218,7 +218,8 @@
     "test:duet-image-ownership": "tsx scripts/test-duet-image-ownership.ts",
     "test:ash-mcp-reach": "tsx scripts/test-ash-mcp-reach.ts",
     "test:ash-mcp-probe": "tsx scripts/test-ash-mcp-probe.ts",
-    "test:ash-mcp-file": "tsx scripts/test-ash-mcp-file.ts"
+    "test:ash-mcp-file": "tsx scripts/test-ash-mcp-file.ts",
+    "test:ash-mcp-launch": "tsx scripts/test-ash-mcp-launch.ts"
   },
   "dependencies": {
     "@ash/shared": "*",

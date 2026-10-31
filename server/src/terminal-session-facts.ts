@@ -9,6 +9,7 @@
  */
 import type { TerminalReservation } from "./terminal-capacity.js";
 import type { TerminalProcess } from "./terminal-pty.js";
+import type { LaunchClocks } from "./terminal-launch-survivors.js";
 
 export type TerminalEvent =
   | { seq: number; type: "data"; data: string }
@@ -46,6 +47,28 @@ export type StopFact =
 
 /** 一次停止动作**核验之后**的结论(mergeStop 的输入)。`requested` 不在其中:那是动手前落的。 */
 export type StopResolution = Extract<StopFact, { kind: "verified" } | { kind: "unresolved" }>;
+
+/**
+ * 一次**显式放弃**留下的事实。全是「放弃那一刻」的快照 —— 事后再探一遍只会得到一个不断
+ * 变化的现场,而用户按下那颗按钮时看到的就是这一份,交代必须跟他看到的对得上。
+ */
+export type LaunchAbandonment = {
+  at: number;
+  /** 账上此刻还活着的号(核不上归属没敢动的,或者 TERM/KILL 都没停下来的)。 */
+  owedPids: number[];
+  /** 按这次启动的记号还点到名的号 —— 确凿是这次起来的。 */
+  taggedPids: number[];
+  /** 这次启动记下的端口,以及放弃那一刻问出来的归属。 */
+  ports: number[];
+  portState: "ours" | "stranger" | "free" | "unknown" | "unavailable";
+  /** 原样给用户看的那一段残留交代(弹层里显示的就是它)。 */
+  notice: string;
+  /**
+   * 那段话说的是哪一种:有确定是这次启动留下的(owned)/只有 ash 分不清来路的(unsure)/
+   * 什么都探不到(none)。界面据它挑「已放弃管理（…）」的说法,别去认 notice 的措辞。
+   */
+  left: "owned" | "unsure" | "none";
+};
 
 export type TerminalSessionInfo = {
   id: string;
@@ -91,6 +114,15 @@ export type TerminalSessionInfo = {
    */
   stop: StopFact;
   /**
+   * 用户**显式放弃**了这次启动的管理责任(「我自己处理了」)。非 null = 他已经看过残留事实、
+   * 按过那颗带风险确认的按钮:ash 从此不再把这条记录当「还在跑」,删除保护一并解除。
+   *
+   * **它不是核销。** 这次启动停没停净的结论仍然原样留在 `stop` 账上(`unresolved` 不会被改成
+   * `verified`),这一格另记「放弃那一刻还有什么活着」—— 刷新回来仍看得出「我放过手」以及
+   * 当时的残留,而不是界面上凭空多出一句「已停止」。判据与范围写在 terminal-abandon.ts。
+   */
+  abandoned?: LaunchAbandonment | null;
+  /**
    * 这次启动打印的本机端口**超过了记录额度**(MAX_LAUNCH_PORTS),第 9 个起没记下来。
    * 于是「记下的端口全空了」就证明不到「这次起来的东西都停了」—— 自己 setsid 单开一组、
    * 只能从它自己那个端口找到的守护进程,线索压根没进账(第 2 轮审查发现 2 的同一类)。
@@ -133,6 +165,19 @@ export type TerminalSession = Omit<TerminalSessionInfo, "stoppedByUser"> & {
    * (交互 shell 不长停止按钮,也就没有按端口动手的路);不进 DTO,服务端内部用。
    */
   launchToken: string | null;
+  /**
+   * 这次启动起跑那一刻各个钟的读数,**在 spawn 之前**取(terminal-launch-survivors.ts 的
+   * `sampleLaunchClocks`)。
+   *
+   * 为什么不复用 `startedAt`:后者是墙上钟,而「这个候选是不是出生在这次启动之前」要跟候选的
+   * 进程年龄比,两边必须是**同一个钟**才构成证明。第 5 轮自由审查实测墙上钟那一份会被启动时的
+   * 校时带偏;第 6 轮接着指出单换成单调钟也不够 —— macOS 的候选年龄本身是墙上钟量的。所以这里
+   * 把各个钟都留一份,由扫描那一层按候选年龄实际用的钟去配对,配不上、或者取样到 spawn 之间
+   * 钟被拨过(`wallSteady`),就判「证不出来」。
+   *
+   * 会话表只活在当前这个 ash 进程里(重启即丢,跟 `launchToken` 同寿)。不进 DTO。
+   */
+  launchClocks: LaunchClocks;
   /**
    * pty slave 路径(/dev/ttysN)。leader(wrapper)活着时,按它枚举会话成员(ctty/sid
    * ∪ fd 持有者,见 terminal-process-tree.ts 文件头)就是**确定性**清单 —— 不依赖 ppid

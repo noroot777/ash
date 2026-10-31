@@ -28,6 +28,7 @@ import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
+import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { deliverToLead } from "./team/session.js";
@@ -38,6 +39,7 @@ import { peerNoticeFor } from "./peer-context.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
+import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { freeReviewReminder } from "./free-workflow.js";
@@ -56,7 +58,7 @@ import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
-  COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote,
+  COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote, PLANNING_TURN,
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
@@ -422,14 +424,19 @@ export async function continueTask(
     // 这一句到 executor.run 之间隔着三个 await(runEnv / prepareResume / prepareCliInvocation),
     // 在这里就把授权拼死,用户在启动期间收回授权就拦不住了 —— 撤销已落库,发出去的
     // 第一条消息却还写着「已预先授权 x.com」(第 3 轮审查 P1)。
+    // 产出质量规则这一轮的事实(判据本体见 craft-rules.ts):`!resuming` 跟下面 `promptLevel`
+    // 发全文还是缩略版是同一个判据,为真的那几种(首次被 @ 进来、旧会话接不上、/clear 之后
+    // 新开)都是没有旧上下文的首条消息。原生命令那一支拿不到它 —— 它独占整条 prompt(见上)。
+    const craft = { freshContext: !resuming, verifying };
     const promptBody = nativeCommand
       ? promptedUserTurnText
-      : planning ? `${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`
+      : planning ? PLANNING_TURN(craft, promptedUserTurnText)
       : assembleTurnPrompt({
         invite: invited ? COLLAB_INVITE : "",
         brief: invitedTaskBrief(task.body, invited, verifying),
         handoffNotice,
         peerNotice,
+        craft,
         userText: promptedUserTurnText,
         workspaceReset: workspaceReset ? WORKSPACE_RESET(cwd) : "",
         completion: followUpFrom
@@ -475,6 +482,12 @@ export async function continueTask(
     // 一半是 resume 回合，全都还挂在匿名管道上）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
+    // **交出 prompt 之前**把「这几条输入即将越线」同步落到磁盘:下面这一句 run(...) 才是不可逆
+    // 的那一刻,它之后的 persistRunner / onDelivered 都只是记账。两档策略(凭据档写不成当场抛,
+    // 走下面 catch 的「一个字都没送出去」那一支)与跨进程实测都在 delivery-crossing.ts 的文件头。
+    if (opts.pendingMessageIds?.length) {
+      recordDeliveryCrossing(taskId, opts.pendingMessageIds, { sessionId: sessId, turnStart }, opts.crossingRequired);
+    }
     handle = run({
       prompt,
       ...cli,
@@ -575,6 +588,8 @@ export async function continueTask(
     };
     if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner);
     else await persistRunner(db);
+    // 后台问一句够不够得着 ash MCP:只提示不拦、不等(ash-mcp-turn-hint.ts);旁路回合在起跑处已过闸。
+    if (!sideTurn) void hintAshMcpForTurn({ taskId, agentType: agent, executorId: profileId, ownerUserId: runOwner ?? null, cwd, sessionId: sessId });
     if (handoffNotice) await clearHandoffNotice(taskId);
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
     await openTurn({ sessionId: sessId, taskId, cwd, startedAt: turnStart });
@@ -641,8 +656,11 @@ export async function continueTask(
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
     if (err instanceof ReviewSuperseded) {
-      await withdrawReviewStart(taskId, reviewStart, priorStatus);
-      return false;
+      // 两个抛出点:起跑前的 assertReviewTurnStart,和 spawn **之后**的 commitReviewTurnDelivery。后一种
+      // 输入已交到 CLI 手上(finally 收掉它之前它可能已经动过),只能交给越线记号去判,不许说「没送出去」。
+      await withdrawReviewStart(taskId, reviewStart, priorStatus, !!handle);
+      frozenBeforeSpawn = !handle;
+      return !frozenBeforeSpawn;
     }
     const steered = await takeSteered(taskId);
     const stopped = takeStopped(taskId);
@@ -651,7 +669,9 @@ export async function continueTask(
     // 调用方就是「没送出去」—— 返回 true 会让 resumePrompt 那路把检查点当已消费,
     // 暂停撤回一次、指定继续内容永久丢失,恢复分组后只剩通用「继续」(第 7 轮审查)。
     // 状态结算(落回 paused)仍由失败恢复完成,只是返回值改说实话。
-    frozenBeforeSpawn = err instanceof FrozenTurn;
+    // 越线凭据写不下来(DeliveryCrossingUnwritable)同属这一类:它也只在 spawn 之前抛,
+    // 而且**必须**说实话 —— 调用方据此确知「没投喂」,直接归还,不必再去读那张读不出来的记号。
+    frozenBeforeSpawn = err instanceof FrozenTurn || err instanceof DeliveryCrossingUnwritable;
     if (!handle && (frozenBeforeSpawn || checkingReviewStart)) {
       await recordReviewStartNotLaunched(taskId, reviewStart);
       if (await restoreUndeliveredReviewStart(taskId, reviewStart, true)) return false;
@@ -681,7 +701,7 @@ export async function continueTask(
     if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
-  // 落到时间线/状态上)。返回 false 的只有两类「一个字没送出去」:被单飞锁挡回,和
-  // 起跑前被冻结闸撤回(后者让 resumePrompt/待发送消息的调用方把原文安全放回)。
+  // 落到时间线/状态上)。返回 false 的只有「一个字没送出去」的几类:被单飞锁挡回,起跑前
+  // 被冻结闸撤回,以及 spawn 之前的审查撤回(让 resumePrompt/待发送消息的调用方把原文安全放回)。
   return !frozenBeforeSpawn;
 }

@@ -1,13 +1,39 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import {
   db, dbClient, hits, now, runs, scenario, schema, settled, taskOf, tasks, until,
 } from "./checkpoint-recovery-fixture.js";
-import { advanceQueue, pauseGroup } from "../src/scheduler.js";
+import { advanceQueue, pauseGroup, recoverQueueAdvances } from "../src/scheduler.js";
+import { clearQueueAdvanceIntent, recordQueueAdvanceIntent } from "../src/queue-advance-admission.js";
 import { requestQueueAdvance } from "../src/queue-advance-retry.js";
 import { occupyResumePrompt } from "../src/task-resume-prompt.js";
 import { setTaskStatus } from "../src/status.js";
+import { makeTask } from "./monitors-fixture.js";
+import { sessionTranscriptPath } from "../src/transcript.js";
 import { id } from "../src/util.js";
+
+async function transcript(taskId: string): Promise<string> {
+  const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.taskId, taskId));
+  return rows.map((row) => {
+    const path = sessionTranscriptPath(taskId, row.id);
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  }).join("\n");
+}
+
+/** 落不下任何持久凭据:推进意图那一笔整条写不进去(库里某几笔写不了,不是整库挂掉)。 */
+function failIntentWrites() {
+  const execute = dbClient.execute;
+  let failures = 0;
+  dbClient.execute = async function (statement) {
+    if (typeof statement !== "string" && /insert into "queue_advance_intents"/i.test(statement.sql)) {
+      failures++;
+      throw new Error("INJECT_ADVANCE_INTENT_WRITE_FAILURE");
+    }
+    return execute.call(dbClient, statement);
+  };
+  return { count: () => failures, restore: () => { dbClient.execute = execute; } };
+}
 
 function failRequestWrites(taskId: string, limit = 1) {
   const transaction = dbClient.transaction;
@@ -76,6 +102,13 @@ export async function checkpointAdvanceFailureCases(): Promise<void> {
     console.log(`PASS: ${entry} queue critical-section failure retries before any durable request exists`);
   }
 
+  // 落库前失败之后,**后来发生的那件事**决定重试该怎么收场。两种截然不同,不能共用一套期望:
+  //  · 分组被暂停 = 真的撤销 —— 整组一个都不许启动,重试必须认这件事;
+  //  · 队首的续跑交代被改写 = **换人/换交代,不是撤销** —— 这条队列照旧该推进,只是该推的
+  //    是最新那段交代。早先两种都按「撤销」处理,于是写入成功那条路会带着最新代次继续
+  //    (checkpoint-advance-admission-cases.ts 钉着),写入失败这条路却永久停住:同一个外部
+  //    事件,两条路径相反结果,而后者是「队列永久停住 + 新交代也永不执行」
+  //    (第 2 轮审查必须修 3;定点实验见审查目录的 d3-replaced-stall.mts)。
   for (const revocation of ["group-pause", "checkpoint-replaced"]) {
     const test = await scenario(0);
     const task = await taskOf(test.taskId);
@@ -94,14 +127,86 @@ export async function checkpointAdvanceFailureCases(): Promise<void> {
     if (revocation === "group-pause") {
       await pauseGroup(groupId);
       await db.update(schema.groups).set({ paused: false }).where(eq(schema.groups.id, groupId));
-    } else await occupyResumePrompt(test.taskId, "REPLACED_AFTER_FAILED_ADMISSION", false);
-    await new Promise((resolve) => setTimeout(resolve, 1_250));
-    assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
-    assert.equal(hits(test.checkpoint), 0);
-    assert.equal(hits("REPLACED_AFTER_FAILED_ADMISSION"), 0);
-    assert.equal(runs.isTurnClaimed(test.taskId), false);
+      await new Promise((resolve) => setTimeout(resolve, 1_250));
+      assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
+      assert.equal(hits(test.checkpoint), 0);
+      assert.equal(runs.isTurnClaimed(test.taskId), false);
+      console.log("PASS: failed admission retry respects a later group pause instead of resurrecting canceled intent");
+    } else {
+      const replacement = "REPLACED_AFTER_FAILED_ADMISSION";
+      await occupyResumePrompt(test.taskId, replacement, false);
+      await until("落库前失败后交代被改写,重试换人接着跑", async () => hits(replacement) === 1);
+      assert.equal(hits(test.checkpoint), 0, "作废的旧交代不许被执行");
+      await settled(test.taskId);
+      assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
+      assert.equal((await taskOf(test.taskId)).queueSeatToken, null);
+      console.log("PASS: failed admission retry re-picks the candidate when the checkpoint was replaced");
+    }
     await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
-    console.log(`PASS: failed admission retry respects later ${revocation} instead of resurrecting canceled intent`);
+  }
+
+  // 必须修 1 的回归:推进请求那一笔写失败时,补办责任只活在进程内存里(deferQueueAdvance 的
+  // 闭包 + 一个 unref 定时器),请求此刻一个字都还没落库 —— 进程一消失这件事就没人记得,
+  // 三条恢复入口没有一条看得见它。跨进程复现见审查目录的 restart-loses-retry.mts;这里钉
+  // 的是补上的那条入口本身,以及**它的边界**。
+  for (const shape of ["in-flight", "accepted-first-item", "never-started"] as const) {
+    const queueId = id();
+    if (shape === "in-flight") {
+      // 前一个已经跑完、队首还停着 = 丢掉那次推进之后的现场。
+      const prev = await scenario(0);
+      const head = await scenario(0);
+      await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, prev.taskId));
+      await db.insert(schema.queueItems).values([
+        { taskId: prev.taskId, queueId, position: 0, createdAt: now() },
+        { taskId: head.taskId, queueId, position: 1, createdAt: now() },
+      ]);
+      await recoverQueueAdvances();
+      await until("重启恢复把丢掉的那次队列推进补回来", async () => hits(head.checkpoint) === 1);
+      await settled(head.taskId);
+      console.log("PASS: restart recovery re-drives a queue whose advance was lost before it reached the database");
+    } else if (shape === "accepted-first-item") {
+      // **只有队首的队列**:候选前面什么都没有,旧判据(「前驱已落终态」)在这种形状上永远
+      // 不成立,于是丢掉的那次推进再也补不回来,链永久停住(第 1 轮审查发现 3 跨进程复现)。
+      // 现在读的是落了库的**推进意图**——它说的正是「有一次推进被接受过、没人把它做完」。
+      // 这里直接写那一行,就是在扮演「上一个进程记下了意图,随后死掉」。
+      const head = await scenario(0);
+      await db.insert(schema.queueItems).values({ taskId: head.taskId, queueId, position: 0, createdAt: now() });
+      await db.insert(schema.queueAdvanceIntents).values({ queueId, acceptedAt: now() });
+      await recoverQueueAdvances();
+      await until("已接受的推进意图在重启后把单项队列推起来", async () => hits(head.checkpoint) === 1);
+      await settled(head.taskId);
+      assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+        .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "补办完就该把意图了结");
+      console.log("PASS: restart recovery re-drives a first-item queue from the durable advance intent");
+    } else {
+      // 建好还没点过运行的链(batch_create_tasks 的 run:false):全员 backlog、候选就是第一位、
+      // 它前面什么都没落终态 —— 一个字都不许碰,否则重启会把用户压根没点过运行的任务拉起来。
+      const members = [await makeTask({ status: "backlog" }), await makeTask({ status: "backlog" })];
+      await db.insert(schema.queueItems).values(members.map((taskId, position) => (
+        { taskId, queueId, position, createdAt: now() })));
+      await recoverQueueAdvances();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      for (const taskId of members) {
+        assert.equal((await taskOf(taskId)).status, "backlog", "没点过运行的链不许被重启恢复拉起来");
+        assert.equal(runs.isTurnClaimed(taskId), false);
+      }
+      assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+        .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [],
+        "没人请求过推进的链不许凭空多出一条意图");
+      console.log("PASS: restart recovery leaves a never-started queue alone");
+    }
+    await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
+    await db.delete(schema.queueAdvanceIntents).where(eq(schema.queueAdvanceIntents.queueId, queueId));
+  }
+
+  {
+    // 意图还挂着、队列却已经空了(成员被删光/全归档):留着只会让每次重启白扫一遍,就地了结。
+    const queueId = id();
+    await db.insert(schema.queueAdvanceIntents).values({ queueId, acceptedAt: now() });
+    await recoverQueueAdvances();
+    assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "推不出人的意图要就地了结");
+    console.log("PASS: restart recovery retires an advance intent whose queue has no candidate left");
   }
 
   {
@@ -132,5 +237,98 @@ export async function checkpointAdvanceFailureCases(): Promise<void> {
     assert.equal(hits("KEEP_NEW_CHECKPOINT_PAUSED"), 0);
     await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
     console.log("PASS: failed stale-request cleanup replays the same identity, not a fresh unscoped queue advance");
+  }
+
+  // 第 1 轮审查 F2:**两笔持久写入一起失败** —— 推进意图落不下去,推进请求也落不下去。
+  // 旧代码两笔都是尽力而为,于是 advanceQueue 正常返回(等于告诉发起者「已接受」),而补办
+  // 责任只剩内存里那个退避闭包;进程一消失就没人记得,而只有队首的队列连「前驱已落终态」
+  // 这条存量兜底都不成立 —— 那条链从此永久停住(跨进程复现:那一轮审查目录的
+  // queue-smoke.mjs)。已经落住意图的那几档由上面的用例钉着,它们反证不了这条路。
+  //
+  // 现在的口径(queue-advance-admission.ts):拿不出可恢复的凭据、这一趟又没当场走完 =
+  // **未接受**。抛给发起者,并在候选任务上留一条持久可见的交代。内存退避照旧登记 ——
+  // 它在同一个进程里还救得回来,只是不许拿它当「已接受」的凭据。
+  {
+    const test = await scenario(0);
+    const queueId = id();
+    await db.insert(schema.queueItems).values({ taskId: test.taskId, queueId, position: 0, createdAt: now() });
+    const intent = failIntentWrites();
+    const fault = failRequestWrites(test.taskId, 1);
+    try {
+      await assert.rejects(advanceQueue(queueId), /队列推进未接受/,
+        "两笔持久写入都没落住时,不许按「已接受推进」正常返回");
+      assert.ok(intent.count() > 0, "这一趟确实试过记下推进意图");
+      assert.equal(fault.count(), 1);
+      assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+        .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "凭据确实一个字都没落住");
+      assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
+      assert.equal(hits(test.checkpoint), 0, "没被接受的推进不许把交代送出去");
+      assert.match(await transcript(test.taskId), /队列推进未接受/,
+        "未接受必须留下持久可见的交代 —— 后台动作没人在等返回值,只打日志对用户等于没发生");
+    } finally {
+      fault.restore();
+      intent.restore();
+    }
+    // 内存退避仍在:同一个进程里数据库恢复可写之后,这次推进自己接着走完。
+    await until("库恢复可写后内存退避把这次推进走完", async () => hits(test.checkpoint) === 1);
+    await settled(test.taskId);
+    assert.equal((await taskOf(test.taskId)).queueAdvanceRequest, null);
+    assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "走完之后不许留着意图");
+    await db.delete(schema.queueItems).where(eq(schema.queueItems.queueId, queueId));
+    console.log("PASS: a queue advance with no durable intent and a failed attempt is refused, not reported as accepted");
+  }
+
+  // 第 1 轮自由审查 F2:**较早完成的那一趟不许了结后来接受的那份责任**。
+  //
+  // 一条队列上同时只有一行意图,可先后被接受的两趟推进不是同一份责任。旧口径下后来那一趟
+  // 只是借到了旧那行(`onConflictDoNothing` 照样回「已接受」),于是旧那趟一做完就按 queueId
+  // 裸删 —— 删掉的是别人的恢复责任。跨进程实测里新队首既无意图也无单任务请求,那条链永久
+  // 停住(审查目录的 queue-intent-smoke.mjs)。现在每次接受领走自己的代次,了结只认那一代。
+  {
+    const queueId = id();
+    const first = await recordQueueAdvanceIntent(queueId);
+    const second = await recordQueueAdvanceIntent(queueId);
+    assert.ok(first && second && first !== second, "每一次接受领的都是自己那一代");
+    await clearQueueAdvanceIntent(queueId, first);
+    const left = await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId));
+    assert.equal(left.length, 1, "较早那一趟做完自己那份,不许顺手了结后来接受的那份");
+    assert.equal(left[0]!.generation, second, "留下的必须是后来那一次接受");
+    await clearQueueAdvanceIntent(queueId, second);
+    assert.deepEqual(await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId)), [], "本人那一代照旧了结得掉");
+    console.log("PASS: an earlier advance attempt cannot retire the responsibility a later one accepted");
+  }
+
+  {
+    // 同类位置:重启恢复的**无候选就地了结**。读完意图、挑候选这几步之间又有一趟推进被接受
+    // (它换掉了代次),这一趟不许按旧观察把它抹掉 —— 只修「成功起跑那个调用点」不算修完。
+    const queueId = id();
+    const stale = await recordQueueAdvanceIntent(queueId);
+    assert.ok(stale);
+    const execute = dbClient.execute;
+    const swapped: string[] = [];
+    dbClient.execute = async function (statement) {
+      const result = await execute.call(dbClient, statement);
+      if (!swapped.length && typeof statement !== "string" && /from "queue_advance_intents"/i.test(statement.sql)) {
+        const fresh = await recordQueueAdvanceIntent(queueId);
+        if (fresh) swapped.push(fresh);
+      }
+      return result;
+    };
+    try {
+      await recoverQueueAdvances();
+    } finally {
+      dbClient.execute = execute;
+    }
+    assert.equal(swapped.length, 1, "定点确实插进了「读完意图之后」那一瞬");
+    assert.notEqual(swapped[0], stale, "插进去的是**后来**那一次接受");
+    const left = await db.select().from(schema.queueAdvanceIntents)
+      .where(eq(schema.queueAdvanceIntents.queueId, queueId));
+    assert.equal(left.length, 1, "无候选清理不许按旧观察抹掉后来那次接受");
+    assert.equal(left[0]!.generation, swapped[0]);
+    await db.delete(schema.queueAdvanceIntents).where(eq(schema.queueAdvanceIntents.queueId, queueId));
+    console.log("PASS: no-candidate cleanup only retires the generation that pass actually observed");
   }
 }

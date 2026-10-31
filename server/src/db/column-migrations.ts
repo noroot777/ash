@@ -313,6 +313,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE projects ADD COLUMN commands_config TEXT",
   // 验收合并完落不落提交（1 = 老行为，落提交）。见 db/schema.ts 同名列。
   "ALTER TABLE projects ADD COLUMN accept_commit INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE projects ADD COLUMN accept_auto_commit INTEGER NOT NULL DEFAULT 0",
   // 验收前置命令（点验收之后、动 git 之前跑，rc=0 才合并）。null = 不设门禁 = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_command TEXT",
   // 那一按**实际**拿什么当凭据放的行（passed / skipped / unset + 真的跑绿的那一次）。
@@ -341,6 +342,12 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 投递时按显式的「不绑」处理,不退回「查最新那一轮」(本轮审查 F2)。
   "ALTER TABLE scheduled_messages ADD COLUMN review_run TEXT",
   "ALTER TABLE scheduled_messages ADD COLUMN review_round INTEGER",
+  // 这张凭证开出来时走的是哪一代投递协议。旧行 NULL = 强制前置还不存在的那一代,
+  // 「越线记号不在」对它不构成否证(第 2 轮自由审查 F1)。
+  "ALTER TABLE scheduled_messages ADD COLUMN crossing_protocol TEXT",
+  // 续跑凭证的投递所有权身份(checkpoint-ownership.ts)。旧行 NULL = 开出来时还没有身份,
+  // 接管资格只能靠单例锁判(多开实例时就不许接管它)。
+  "ALTER TABLE scheduled_messages ADD COLUMN delivering_owner TEXT",
   // 这一轮实际跑在谁名下(= 注入 CLAUDE_CONFIG_DIR/CODEX_HOME 的那个人)。接力搬会话
   // 文件按它找,不按任务归属人 —— 跨人回合两者不是一回事(见 db/schema.ts 同名列)。
   "ALTER TABLE sessions ADD COLUMN run_owner_user_id TEXT",
@@ -355,4 +362,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 主人就不受理,所以空值只见于单人时期或升级前的存量行(见 handoff-peers.ts
   // peerAudience)。
   "ALTER TABLE handoff_peers ADD COLUMN requested_by_user_id TEXT",
+  // 这一行意图代表的是哪一次接受(queue-advance-admission.ts)。旧行 NULL = 没有代次,
+  // 按「谁观察到它、谁就按 NULL 条件了结」处理,不会被另一趟的代次条件误删。
+  "ALTER TABLE queue_advance_intents ADD COLUMN generation TEXT",
 ];

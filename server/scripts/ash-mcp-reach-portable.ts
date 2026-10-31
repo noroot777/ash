@@ -50,7 +50,9 @@ export async function checkPortableReachability(): Promise<void> {
   for (const servers of [mixedServers, [...mixedServers].reverse()]) {
     const evidence = claudeMcpEvidence(init(servers));
     assert.equal(evidence?.connected, true, "任一兼容登记连上都不能诊断成断开");
-    assert.match(evidence?.detail ?? "", /2 份兼容登记/);
+    // 两份的状态都要写出来(合 main 时它把「2 份兼容登记」换成了逐份状态,更具体)。
+    assert.match(evidence?.detail ?? "", /ash=failed/);
+    assert.match(evidence?.detail ?? "", /harness=connected/);
   }
   assert.equal(claudeMcpEvidence(init([
     { name: "ash", status: "failed" }, { name: "harness", status: "failed" },
@@ -63,13 +65,21 @@ export async function checkPortableReachability(): Promise<void> {
     assert.equal(codexMcpEvidence(text), null, "其它 MCP 的报错不能作为 ash 断开的证据");
   }
   for (const name of ["ash", "harness"]) {
-    const text = `\u001b[31mERROR mcp client for '${name}' failed: handshake closed\u001b[0m`;
+    const text = `\u001b[31mERROR MCP client for '${name}' failed: handshake closed\u001b[0m`;
     const evidence = codexMcpEvidence(`${unrelated}\n${text}\n${unrelated}`);
-    assert.equal(evidence?.connected, false, "点名 ash 或历史名的 MCP 报错才可作证");
+    // 点名了就作证,但「不是启动失败」这一档说不了连上没有(合 main 时它加的第三档)。
+    assert.equal(evidence?.connected, null, "点名 ash 或历史名的 MCP 报错才可作证");
+    assert.equal(evidence?.definite, false, "handshake closed 不是终局启动失败");
     assert.match(evidence?.detail ?? "", /handshake closed/);
     assert.doesNotMatch(evidence?.detail ?? "", /linear|OAuth|\u001b/);
   }
-  const limited = codexMcpEvidence("ERROR mcp ash failed: first\nWARN mcp ash failed: second\nERROR mcp ash failed: third");
+  const bothDown = codexMcpEvidence(`${unrelated}\nERROR MCP client for 'ash' failed to start: no such file\n`
+    + "ERROR MCP server 'harness' failed to initialize: auth required\n");
+  assert.equal(bothDown?.connected, false, "两个兼容名都明确启动失败:这才敢说通道没了");
+  assert.equal(bothDown?.definite, true);
+  assert.doesNotMatch(bothDown?.detail ?? "", /linear|OAuth/, "别家的报错行不许混进来");
+  const limited = codexMcpEvidence("ERROR MCP client for 'ash' failed: first\n"
+    + "WARN MCP server 'ash' failed: second\nERROR MCP client for 'ash' failed: third");
   assert.doesNotMatch(limited?.detail ?? "", /first/);
   assert.match(limited?.detail ?? "", /second\n.*third/);
   console.log("✅ 平台无关预检：claude 集合诊断与 codex 错误归属、去色、限量");
