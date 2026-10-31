@@ -43,7 +43,19 @@ export type Token = {
   arithmetic?: true;
   /** …而且那是**自带退出语义的展开**（`${X?w}` / `${X:?w}`）:X 没定义时 shell 在这一处就走人。 */
   errorForm?: true;
+  /**
+   * 这个词里有一处 `$` 开头的形式**这一层没有正面识别**（第 1 轮审查 F2 实测）。
+   *
+   * 上一版的默认值是反的:枚举过的几种打标，其余一律不打标 —— 于是一个没见过的展开形式
+   * (`$[1/0]`，bash 的旧式算术）一个标记都没有，判据层拿不到任何「这里有读不懂的东西」的
+   * 信号，`: $[1/0]; while true; do :; done` 照旧吃硬拦，而真 shell 里它当场除零退 127。
+   * 再加一条黑名单只修得掉这一个输入；把默认值翻过来（见 `dollarForm`）才修得掉这一类。
+   */
+  unknownForm?: true;
 };
+
+/** 一个词里可能带上来的那几种展开标记。 */
+export type ExpansionMarks = Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm" | "unknownForm">;
 
 /**
  * `${…}` 里那个参数展开是不是**自带退出语义**的那一种（`${参数?字}` / `${参数:?字}`）。
@@ -57,8 +69,39 @@ export function isErrorFormExpansion(inner: string): boolean {
   return /^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[-@*#?!$0])(?::)?\?/.test(inner);
 }
 
-/** `$` 后面出现这些字符才算一个展开的开头（`$ ` / 行尾的 `$` 是个普通的美元号）。 */
+/** `$` 后面出现这些字符才算一个**值展开**的开头（`$NAME` / `$1` / `$@` / `$?` …）。 */
 const EXPANSION_START = /[A-Za-z_0-9@*#?!$-]/;
+
+/**
+ * `$` 后面跟这些字符时它只是个**普通的美元号** —— POSIX:`$` 后面不是能起一个展开的字符，
+ * 它就是字面值（`$ ` / 行尾的 `$` / `cost=$:` 都是这一种）。
+ *
+ * 这是一张**字面值白名单**,不是「可疑形式黑名单」:默认值是「读不懂」（见 `dollarForm`）。
+ */
+const LITERAL_AFTER_DOLLAR = /[\s)\]};&|<>=,.:/+%^~`\\]/;
+
+/**
+ * `$` 后面那一个（或两个）字符决定这是哪一种形式。**这张表是封闭的**:不在上面任何一种
+ * 里的形式一律 `unknown`（第 1 轮审查 F2）。
+ *
+ *   · `substitution` / `arithmetic` —— `$( )` / `$(( ))`:里面是另一层执行 / 算术自己会出错走人;
+ *   · `parameter` —— `${…}`:可能带退出语义（见 `isErrorFormExpansion`）;
+ *   · `value` —— `$NAME` / `$1` / `$@` …:值要等执行时才定下来;
+ *   · `literal` —— 上面那张白名单:这个 `$` 什么都不做;
+ *   · `unknown` —— **其余一切**。`$[1/0]`（bash 旧式算术，实测除零退 127）、`$'…'`（ANSI-C
+ *     引用）、`$"…"`（locale 翻译）都落在这儿:它们的语义随 shell 而变，这一层读不懂,
+ *     所以它要往上冒成「证明不了」,而不是悄悄算成「没什么可担心的」。
+ *
+ * 两处扫描共用这一个函数:词法主循环和 `expansionsInText`（双引号里 / `${…}` 里套的那层）。
+ * **别抄第二份** —— F2 的形状正是「同一件事两处各自枚举」。
+ */
+export function dollarForm(next: string | undefined, after?: string | undefined): "substitution" | "arithmetic" | "parameter" | "value" | "literal" | "unknown" {
+  if (next === undefined || LITERAL_AFTER_DOLLAR.test(next)) return "literal";
+  if (next === "(") return after === "(" ? "arithmetic" : "substitution";
+  if (next === "{") return "parameter";
+  if (EXPANSION_START.test(next)) return "value";
+  return "unknown";
+}
 
 /**
  * 这段**文本**里有没有展开、是哪几种。
@@ -72,25 +115,24 @@ const EXPANSION_START = /[A-Za-z_0-9@*#?!$-]/;
  * **不按参数展开的语法分区**（`:-` 前后)取舍:偏「多认一个未知」那一侧 —— 多认 ⇒ 降成提示,
  * 少认 ⇒ 一件做得成的事做不成（见 command-never-exits.ts 文件头那段不对称）。
  */
-function expansionsInText(inner: string): Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm"> {
-  const out: Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm"> = {};
+function expansionsInText(inner: string): ExpansionMarks {
+  const out: ExpansionMarks = {};
   if (inner.includes("`")) { out.expanded = true; out.substitution = true; }
   for (let i = 0; i < inner.length; i += 1) {
     if (inner[i] !== "$") continue;
-    const next = inner[i + 1];
-    if (next === "(") {
-      out.expanded = true;
-      if (inner[i + 2] === "(") out.arithmetic = true;
-      else out.substitution = true;
-      continue;
+    switch (dollarForm(inner[i + 1], inner[i + 2])) {
+      case "arithmetic": out.expanded = true; out.arithmetic = true; break;
+      case "substitution": out.expanded = true; out.substitution = true; break;
+      case "parameter": {
+        out.expanded = true;
+        const close = inner.indexOf("}", i + 2);
+        if (isErrorFormExpansion(inner.slice(i + 2, close < 0 ? inner.length : close))) out.errorForm = true;
+        break;
+      }
+      case "value": out.expanded = true; break;
+      case "unknown": out.unknownForm = true; break;
+      default: break; // 字面的美元号
     }
-    if (next === "{") {
-      out.expanded = true;
-      const close = inner.indexOf("}", i + 2);
-      if (isErrorFormExpansion(inner.slice(i + 2, close < 0 ? inner.length : close))) out.errorForm = true;
-      continue;
-    }
-    if (next !== undefined && EXPANSION_START.test(next)) out.expanded = true;
   }
   return out;
 }
@@ -167,7 +209,7 @@ export function segments(command: string): Segment[] {
   let quoted = false;
   let started = false;
   // 这个词里出现过的展开（见 `Token.expanded` 那段）。占位符抹掉之前就得记下来。
-  let marks: Pick<Token, "expanded" | "substitution" | "arithmetic" | "errorForm"> = {};
+  let marks: ExpansionMarks = {};
   const endToken = () => {
     if (started) cur.push({ text, quoted, bare, ...marks });
     text = "";
@@ -295,9 +337,15 @@ export function segments(command: string): Segment[] {
       continue;
     }
     if (c === "(" || c === ")" || c === "{" || c === "}") { endSegment(c); i += 1; continue; }
-    // `$NAME` / `$1` / `$@` 这类**值展开**:占位符不换（`text` 里那个 `$` 还在），但标记照样打 ——
-    // 判据只认标记,不再靠「`text` 里有没有 `$`」,那条路对被抹成 `?` 的那一半天生无效。
-    if (c === "$" && EXPANSION_START.test(command[i + 1] ?? "")) marks.expanded = true;
+    // 走到这儿的 `$` 后面不是 `(` 也不是 `{`（那两种上面各自处置过了）。剩下的按 `dollarForm`
+    // **封闭**地分:`$NAME` / `$1` / `$@` 这类**值展开**占位符不换（`text` 里那个 `$` 还在），
+    // 但标记照样打 —— 判据只认标记,不再靠「`text` 里有没有 `$`」,那条路对被抹成 `?` 的那一半
+    // 天生无效;认不出来的形式打 `unknownForm`,它往上冒成「证明不了」（第 1 轮审查 F2）。
+    if (c === "$") {
+      const form = dollarForm(command[i + 1], command[i + 2]);
+      if (form === "value") marks.expanded = true;
+      else if (form === "unknown") marks.unknownForm = true;
+    }
     text += c;
     bare += c;
     started = true;

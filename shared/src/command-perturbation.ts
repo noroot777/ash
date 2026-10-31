@@ -258,6 +258,7 @@ export function perturbed(segs: Segment[]): string | null {
       if (t.errorForm) return "那个 ${…?…} 展开在变量没定义时当场就让 shell 走人";
       if (t.substitution) return "那段命令替换跑的是一段这一层读不进去的代码";
       if (t.arithmetic) return "那段算术展开自己就能让 shell 当场出错走人（`$((1/0))` 实测 127）";
+      if (t.unknownForm) return "那个 `$` 后面跟的形式这一层没有正面识别（`$[1/0]` 这类旧式算术实测除零退 127），读不懂就证明不了它不出错";
     }
     let at = 0;
     while (at < seg.tokens.length && isSkeleton(headOf(seg.tokens, at))) at += 1;
