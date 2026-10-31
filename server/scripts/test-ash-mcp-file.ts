@@ -68,6 +68,22 @@ try {
     assert.equal(scan('note = """\n[mcp_servers.ash]\n"""\n').doubt, true,
       "多行字符串里像表头的东西：扫描器不认、兜底也不许说「没有」");
     assert.equal(scan('[profiles.p.mcp_servers.ash]\ncommand = "node"\n').doubt, true, "挂在别的表底下");
+    assert.equal(scan('profiles.p.mcp_servers.ash.command = "node"\n').doubt, true, "点号键挂在别的表底下");
+    // ── 别的命名空间里**恰好**有个字段叫 mcp_servers：合法、与 ash 无关，一个字都不许算到
+    //    我们头上（第 2 轮审查 F1，真机取证）。上一版对任何位置的 mcp_servers 段都答 doubt，
+    //    于是一份接得好好的配置被判成「看不准」：注入目标变 null、Windows 上派审当场被拒、
+    //    mac 上审查跑完交不了卷。值得提示的只有「紧跟着兼容名」那种 —— 用户以为接好了，而
+    //    codex 并不读那个位置（上面两条）。
+    for (const unrelated of [
+      '[profiles.mcp_servers]\nmodel = "gpt"\n',
+      '[model_providers.mcp_servers]\nbase_url = "http://x"\n',
+      '[profiles.foo.mcp_servers]\nkb = { command = "uv" }\n',
+      'profiles.mcp_servers.model = "gpt"\n',
+      '[profiles.p]\nmcp_servers = { kb = { command = "uv" } }\n',
+    ]) {
+      assert.deepEqual(scan(`[mcp_servers.ash]\ncommand = "node"\n${unrelated}`), yes,
+        `无关命名空间不许污染判据：${JSON.stringify(unrelated)}`);
+    }
     // codex 自己记项目信任就是路径型表头；路径里有 harness/ash 不是登记（新链第 3 轮第 1 条：
     // 上一版兜底拿「行首 `[` + 行内有这两个词」当信号，跑过这个仓库的机器整份配置都成了「看不准」）。
     for (const path of ["/Users/champion/code/harness", "/Users/x/ash/y", "C:\\\\ash"]) {
@@ -176,10 +192,24 @@ try {
       target('developer_instructions = """\nAn escaped triple quote: \\"""\n'
         + '[mcp_servers.ash]\ncommand = "node"\n"""\n[mcp_servers.kb]\ncommand = "node"\n'),
       null, "带转义三引号的示例更不许据此注入身份（第 5 轮 F2 的本体）");
-    // **看不准就什么都不注**（第 5 轮 F2）：重复定义时 codex 整份拒载，这时 `servers` 里
-    // 认出来的东西说明不了它真是一条登记，落一条 `-c` 只会多毁一份本来还能救的配置。
-    assert.equal(target('[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.ash]\ncommand = "b"\n'), null,
-      "判不了的一律不注入");
+    // **切不开才不注入**（第 5 轮 F2 + 第 2 轮 F1）：整份文本切不成语句时，认出来的可能是
+    // 字符串里的示例；而「某处有疑问」不算 —— 那一档连别的命名空间里恰好叫 mcp_servers 的
+    // 字段都算进去，真 codex 读得好好的、也接受这条 `-c`，上一版却把身份注入整个取消了。
+    assert.equal(target('note = """\n[mcp_servers.ash]\ncommand = "node"\n'), null,
+      "多行串到文件结尾还没收尾：切不开 ⇒ 不注入");
+    assert.equal(target('[mcp_servers."ash]\ncommand = "node"\n'), null,
+      "表头按 TOML 读不通：切不开 ⇒ 不注入");
+    assert.equal(target('[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.ash]\ncommand = "b"\n'), "ash",
+      "重复定义 codex 会整份拒载，但那条 ash 是正面认出来的 —— 注入与否无差，不算「不可信」");
+    for (const unrelated of [
+      '[profiles.mcp_servers]\nmodel = "gpt"\n',
+      '[model_providers.mcp_servers]\nbase_url = "http://x"\n',
+      '[profiles.foo.mcp_servers]\nkb = { command = "uv" }\n',
+      'profiles.mcp_servers.model = "gpt"\n',
+    ]) {
+      assert.equal(target(`[mcp_servers.ash]\ncommand = "node"\n${unrelated}`), "ash",
+        `无关命名空间不许取消身份注入：${JSON.stringify(unrelated)}`);
+    }
     assert.equal(target('[mcp_servers.kb]\ncommand = "uv"\n[projects."/x/ash"]\ntrust_level = "trusted"\n'), null);
     assert.equal(codexAshMcpServerName(join(stage, "no-such-home")), null, "没有配置文件");
   }
@@ -219,6 +249,13 @@ try {
       assert.equal(ashMcpRegistration(inlineHome, "codex").state, enabled ? "present" : "disabled", fields);
       assert.equal(codexInjectionTarget(`${config}[mcp_servers.harness]\ncommand = "node"\n`),
         enabled ? "ash" : "harness", fields);
+    }
+    // 文件判据消费的是同一份扫描:无关命名空间在这里也不许把「有」降成「看不准」(第 2 轮 F1)。
+    for (const unrelated of ['[profiles.mcp_servers]\nmodel = "gpt"\n', '[model_providers.mcp_servers]\nbase_url = "http://x"\n']) {
+      writeFileSync(join(inlineHome, "config.toml"), `[mcp_servers.ash]\ncommand = "node"\n${unrelated}`);
+      assert.equal(fileAshMcpVerdict("codex", { CODEX_HOME: inlineHome }, [undefined]).state, "present",
+        `文件判据:${JSON.stringify(unrelated)}`);
+      assert.equal(ashMcpRegistration(inlineHome, "codex").state, "present", `个人登记读取:${JSON.stringify(unrelated)}`);
     }
     const specs: [string, unknown][] = [
       ['some = { command = "fake", ASH_URL = "fake" }, command = "node", args = ["mcp.js", "a,b"], env = { nested = { ASH_URL = "fake" }, ASH_URL = "http://localhost:4317" }',

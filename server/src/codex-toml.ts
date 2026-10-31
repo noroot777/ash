@@ -19,6 +19,18 @@ export type CodexTomlScan = {
   /** 非空 = 扫描器自己没把握（写法超出它认得的范围），调用方必须按「判不了」处理。 */
   doubt: string | null;
   /**
+   * 非空 = **连语句都切不开**，所以连 `servers` 里认出来的那几条也不可信（里面的字符串是
+   * 说给用户听的原因）。`doubt` 的范围比它大得多：表里有一处我们读不懂、有个表挂错了位置、
+   * 某个值的写法不认识 —— 这些都让「这份配置里没有 ash」这句话说不出口，但**不影响**已经
+   * 正面认出来的根级登记。
+   *
+   * 分开这两档是第 2 轮审查 F1 打出来的：上一版 `codexInjectionTarget` 见 `doubt` 就不注
+   * 回合身份,而一份合法配置里只要有个叫 mcp_servers 的 profile(`[profiles.mcp_servers]`)
+   * 就会答 doubt —— 真 codex 列得出 ash、也接受那条 `-c` 覆盖,我们却把身份注入整个取消了:
+   * Windows 上派审当场被拒,mac 上审查跑完交不了卷。
+   */
+  unreadable: string | null;
+  /**
    * 非空 = **这份配置里的 `mcp_servers` 不能再用 `[mcp_servers.x]` 表头扩展**，字符串是
    * 说给用户听的原因。谁要它：自动补写（`auth/user-cli-mcp.ts`）—— 它唯一会写的东西就是
    * 追加一段普通表头。
@@ -55,10 +67,12 @@ export function scanCodexToml(text: string): CodexTomlScan {
   };
   let table: string[] = [];
   let doubt: string | null = null;
+  let unreadable: string | null = null;
   let sealed: string | null = null;
   const seen = new Set<string>();
   for (const stmt of statements(text)) {
-    if (stmt.kind === "unparsed") { doubt ??= stmt.why; continue; }
+    // 这一行按 TOML 读不通 ⇒ 后面的行怎么切都是猜,连认出来的东西都不作数(见 `unreadable`)。
+    if (stmt.kind === "unparsed") { doubt ??= stmt.why; unreadable ??= stmt.why; continue; }
     if (stmt.kind === "header") {
       // **同名表重复定义**：TOML 里这是 `duplicate key`，codex 整份配置拒载（实测
       // `failed to load bootstrap configuration`）。这一档说不出「有没有 ash」,只能答
@@ -68,14 +82,24 @@ export function scanCodexToml(text: string): CodexTomlScan {
       seen.add(key);
       table = stmt.path;
       const at = table.indexOf("mcp_servers");
-      if (at > 0) doubt ??= `[${table.join(".")}] 把 mcp_servers 挂在了别的表底下`;
+      if (at > 0 && WANTED.includes(table[at + 1] ?? "")) {
+        doubt ??= `[${table.join(".")}] 把 mcp_servers 挂在了别的表底下`;
+      }
       // 表头本身就是一次登记（`[mcp_servers.ash]` 下面可以一行都没有）。
       if (at === 0 && table.length >= 2 && WANTED.includes(table[1]!)) slot(table[1]!);
       continue;
     }
     const path = [...table, ...stmt.path];
     const at = path.indexOf("mcp_servers");
-    if (at > 0) { doubt ??= `${path.join(".")} 把 mcp_servers 挂在了别的表底下`; continue; }
+    // **只有紧跟着兼容名的那种才值得说一句**:`[profiles.p.mcp_servers.ash]` 是用户以为接好
+    // 了、codex 其实不读那个位置。而 `[profiles.mcp_servers]`、`[model_providers.mcp_servers]`
+    // 这些是别的命名空间里恰好叫这个名字的字段 —— 合法、与 ash 无关,上一版对它们一律答
+    // doubt,于是一份接得好好的配置被判成「看不准」:身份注入整个取消、派审当场被拒
+    // (第 2 轮审查 F1,真机取证)。
+    if (at > 0) {
+      if (WANTED.includes(path[at + 1] ?? "")) doubt ??= `${path.join(".")} 把 mcp_servers 挂在了别的表底下`;
+      continue;
+    }
     if (at < 0) continue;
     if (path.length === 1) {
       // `mcp_servers = { ash = {...} }`：整张表写成一个内联值。**必须拆开读** —— 上一版
@@ -116,7 +140,7 @@ export function scanCodexToml(text: string): CodexTomlScan {
       doubt = "文本里有像是 ash 登记的写法，但扫描器没认出来";
     }
   }
-  return { servers, doubt, sealed };
+  return { servers, doubt, unreadable, sealed };
 }
 
 type Statement =
@@ -420,15 +444,15 @@ function tomlStringArray(raw: string): string[] {
  * （实测 codex-cli 0.153：`invalid transport in mcp_servers.harness`）。带引号的表头、内联表
  * 都接受不带引号的 `-c` 覆盖（同版本实测）。两个兼容名都在时取开着的那个，都开着取规范名。
  *
- * **看不准就什么都不注**（第 5 轮 F2）：`doubt` 的意思是「这份文本我们没读明白」，那时
- * `servers` 里认出来的东西可能压根不是登记（字符串里的示例、重复定义、挂错位置的表），
- * 拿它去落 `-c` 就是在把一份本来读得动的配置弄成整份拒载。注不进身份的代价是那一轮交不了
- * 卷，派审预检会在派审那一步就拦住、把原因给用户（`ash-mcp-reachability.ts`）—— 比让这台
- * 机器上所有 MCP 一起消失轻。
+ * **切不开就什么都不注，但「哪里有疑问」不算切不开**（第 5 轮 F2 + 第 2 轮 F1）：只有
+ * `unreadable`（连语句都切不开，认出来的可能是字符串里的示例）才取消注入；`doubt` 不行 ——
+ * 它连「别的命名空间里恰好有个字段叫 mcp_servers」都算进去，而那种配置真 codex 读得好好的、
+ * 也接受这条 `-c` 覆盖（第 2 轮 F1 真机取证：上一版在那里返回 null，Windows 上派审当场被
+ * 拒、mac 上审查跑完交不了卷）。两档的区别见 `CodexTomlScan.unreadable`。
  */
 export function codexInjectionTarget(text: string): string | null {
-  const { servers, doubt } = scanCodexToml(text);
-  if (doubt) return null;
+  const { servers, unreadable } = scanCodexToml(text);
+  if (unreadable) return null;
   const names = WANTED.filter((n) => servers.has(n));
   return names.find((n) => servers.get(n)!.enabled) ?? names[0] ?? null;
 }
