@@ -42,6 +42,14 @@ function bench() {
 }
 const ensure = (dir: string, host: string) => ensureAshMcp(dir, "codex", host, async () => LISTS_ASH);
 
+/** 某个账号的 Apple 兼容 UUID —— macOS 解不出名字时 `ls -le` 打的就是它。 */
+function compatUuid(user: string): string | null {
+  const got = spawnSync("id", ["-u", user], { encoding: "utf8" });
+  const uid = Number((got.stdout ?? "").trim());
+  if (got.status !== 0 || !Number.isInteger(uid)) return null;
+  return `FFFFEEEE-DDDD-CCCC-BBBB-AAAA${(uid >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+}
+
 /**
  * 给 `f` 设一条「某个具名账号禁止读取」的扩展 ACL,并给出怎么把它打印出来。设不上(文件系统
  * 不支持、没这个命令)就返回 null,由调用方跳过并说明 —— 这种本机能力不该让回归整条红。
@@ -53,7 +61,15 @@ function denyReadAcl(f: string) {
   const plan = process.platform === "darwin"
     ? { set: ["chmod", ["+a", "user:nobody deny read", f]], show: ["ls", ["-le", f]], mark: "nobody deny read" }
     : { set: ["setfacl", ["-m", "u:nobody:---", f]], show: ["getfacl", ["-c", f]], mark: "user:nobody:---" };
-  const show = () => spawnSync(plan.show[0]!, plan.show[1] as string[], { encoding: "utf8" }).stdout ?? "";
+  // macOS 的 `ls -le` 把 ACL 主体交给 opendirectoryd 解名,**解不动就原样打出兼容 UUID**
+  // (`FFFFEEEE-DDDD-CCCC-BBBB-AAAA` + uid 的八位十六进制)。2026-10-31 实测:几条回归并发
+  // 跑时解名偶发失败,于是「ACL 整条还在」却因为那一行字换了写法被判红。所以先把 UUID 换回
+  // 名字再比对 —— 换掉的是**显示**不是判据:ACL 真丢了的时候这一行整条不存在,照样判红。
+  const uuid = process.platform === "darwin" ? compatUuid("nobody") : null;
+  const show = () => {
+    const raw = spawnSync(plan.show[0]!, plan.show[1] as string[], { encoding: "utf8" }).stdout ?? "";
+    return uuid ? raw.replace(new RegExp(uuid, "gi"), "user:nobody") : raw;
+  };
   const put = spawnSync(plan.set[0]!, plan.set[1] as string[], { encoding: "utf8" });
   if (put.status !== 0 || !show().includes(plan.mark)) return null;
   return { show, mark: plan.mark };
