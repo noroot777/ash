@@ -86,7 +86,11 @@ export function parseJsonDoc(text) {
   return skipTrivia(text, root.end) === text.length ? root : null;
 }
 
-const member = (node, key) => (node.members || []).find((m) => m.key === key);
+/**
+ * 同名键取**最后一条** —— `JSON.parse` 就是这么取的(后来的覆盖先前的)。取第一条会让读和写
+ * 指向不同的容器:文件写出去了、语法也对,生效的那个容器里却没有 ash(本轮审查 F5)。
+ */
+const member = (node, key) => (node.members || []).filter((m) => m.key === key).at(-1);
 
 function lineIndent(text, at) {
   const nl = text.lastIndexOf("\n", at - 1) + 1;
@@ -103,8 +107,12 @@ function insertFirst(text, obj, entry) {
   const first = (obj.members || [])[0];
   const indent = first ? lineIndent(text, first.keyStart) : `${outer}  `;
   const body = `${indent}${reindent(entry, indent)}`;
+  // 一条成员都没有(只有空白或注释):**原文照留**,我们那条接在它后面(本轮审查 N1;
+  // 接在后面是为了不出现「逗号在注释之前」那种不合法的拼法)。
   if (!(obj.members || []).length) {
-    return `${text.slice(0, brace + 1)}\n${body}\n${outer}${text.slice(obj.end - 1)}`;
+    const inner = text.slice(brace + 1, obj.end - 1);
+    const gap = inner.endsWith("\n") ? "" : "\n";
+    return `${text.slice(0, brace + 1)}${inner}${gap}${body}\n${outer}${text.slice(obj.end - 1)}`;
   }
   return `${text.slice(0, brace + 1)}\n${body},${text.slice(brace + 1)}`;
 }

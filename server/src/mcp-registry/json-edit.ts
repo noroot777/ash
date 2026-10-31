@@ -115,8 +115,16 @@ export function parseJsonDoc(text: string): JsonNode | null {
   return skipTrivia(text, root.end) === text.length ? root : null;
 }
 
+/**
+ * 同名键取**最后一条** —— `JSON.parse` 就是这么取的(后来的覆盖先前的)。
+ *
+ * 这不是风格选择:取第一条会让读和写指向不同的容器(本轮审查 F5)。
+ * `{"mcpServers":{},"mcpServers":{"other":…}}` 这种配置上,上一版把 ash 插进**第一个**
+ * 空容器,而 CLI(以及我们自己的回读)用的是**最后一个** —— 文件写出去了、语法也对,
+ * 生效的那个容器里却没有 ash:界面报「已接好」,启动后一个 ash 工具都看不到。
+ */
 const member = (node: JsonNode, key: string): JsonMember | undefined =>
-  node.members?.find((m) => m.key === key);
+  node.members?.filter((m) => m.key === key).at(-1);
 
 /** 某一行开头的缩进(用来让插进去的那几行跟邻居对齐)。 */
 function lineIndent(text: string, at: number): string {
@@ -135,9 +143,13 @@ function insertFirst(text: string, obj: JsonNode, entry: string): string {
   const first = obj.members?.[0];
   const indent = first ? lineIndent(text, first.keyStart) : `${outer}  `;
   const body = `${indent}${reindent(entry, indent)}`;
-  // 空对象:自己开一行,收尾括号跟着外层缩进。
+  // 一条成员都没有(只有空白或注释):**原文照留**,我们那条接在它后面。上一版把 `{` 到 `}`
+  // 之间整段切掉,于是 `{"mcp":{/* 保留说明 */}}` 这种配置补完登记,说明文字没了(本轮审查
+  // N1)。接在后面而不是前面,是为了不出现「逗号在注释之前」那种不合法的拼法。
   if (!obj.members?.length) {
-    return `${text.slice(0, brace + 1)}\n${body}\n${outer}${text.slice(obj.end - 1)}`;
+    const inner = text.slice(brace + 1, obj.end - 1);
+    const gap = inner.endsWith("\n") ? "" : "\n";
+    return `${text.slice(0, brace + 1)}${inner}${gap}${body}\n${outer}${text.slice(obj.end - 1)}`;
   }
   return `${text.slice(0, brace + 1)}\n${body},${text.slice(brace + 1)}`;
 }
