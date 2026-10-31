@@ -95,21 +95,43 @@
   white-space: nowrap;
 }
 
-.provider-key-state {
+/* 状态列摆的是「这家能不能用」的两个前置条件：Key 和有没有执行器挂它。
+   同一种药丸、同一套配色（缺 = 琥珀，齐 = 绿），所以一行扫过去就知道还差哪个。 */
+.provider-state-stack {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.provider-key-state,
+.provider-mount-state {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  border: 0;
   border-radius: 999px;
   background: rgb(181 123 0 / 9%);
   padding: 3px 7px;
   color: var(--amber);
+  font-family: inherit;
   font-size: 9px;
   white-space: nowrap;
 }
 
-.provider-key-state.is-ready {
+.provider-key-state.is-ready,
+.provider-mount-state.is-ready {
   background: var(--green-bg);
   color: var(--green);
+}
+
+/* 没人挂它时这颗药丸是条出路：点它直接去执行器设置挂上。 */
+button.provider-mount-state {
+  cursor: pointer;
+}
+
+button.provider-mount-state:hover {
+  background: rgb(181 123 0 / 20%);
 }
 
 .provider-icon-action {
@@ -600,7 +622,10 @@
     grid-template-columns: 30px minmax(0, 1fr) auto 28px 28px;
   }
 
-  .provider-key-state {
+  /* 最窄这一档只留「还缺什么」:两颗绿药丸说的是「都齐了」,那在这个宽度上不值一列。
+     缺 Key 的那颗历来就是这么处理的,「未挂到执行器」跟它同一个判据。 */
+  .provider-key-state,
+  .provider-mount-state.is-ready {
     display: none;
   }
 

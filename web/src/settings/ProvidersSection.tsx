@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { LlmProtocol, LlmProvider, ProviderModelListMode } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProtocol, LlmProvider, ProviderModelListMode } from "@ash/shared";
 import {
   ArrowsClockwise,
   CheckCircle,
@@ -403,10 +403,15 @@ export function ProviderForm({
 
 function ProviderRow({
   provider,
+  mountedBy,
+  onOpenExecutors,
   onChanged,
   notify,
 }: {
   provider: LlmProvider;
+  /** 把这家供应商挂上去的执行器 Profile —— 一条都没有时它在任务里是选不到的。 */
+  mountedBy: AgentExecutorProfile[];
+  onOpenExecutors?: () => void;
   onChanged: () => Promise<void>;
   notify: (message: string) => void;
 }) {
@@ -454,9 +459,33 @@ function ProviderRow({
             {provider.context1mModels.length ? ` · ${provider.context1mModels.length} 个 1M` : ""}
           </small>
         </div>
-        <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>
-          {provider.hasKey && <CheckCircle size={12} weight="fill" />}
-          {provider.hasKey ? "Key 已保存" : "缺少 Key"}
+        {/* 一家供应商能用,要 Key 和「被某条执行器挂上」两件事同时成立 —— ash 自己不直连
+            大模型,供应商只是执行器启动时注入的 base_url + key(server executors/index.ts)。
+            所以这两件事是同一级别的前置条件,并排摆、各自绿掉,缺哪个一眼看得见。
+            没人挂它时任务里**根本列不出**它的模型(lib/modelCatalog.ts 的 groupSeeds),
+            这句话必须在这里说,否则用户加完供应商只会得出「加了但用不了」。 */}
+        <span className="provider-state-stack">
+          <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>
+            {provider.hasKey && <CheckCircle size={12} weight="fill" />}
+            {provider.hasKey ? "Key 已保存" : "缺少 Key"}
+          </span>
+          {mountedBy.length ? (
+            <span className="provider-mount-state is-ready">
+              <CheckCircle size={12} weight="fill" />
+              {mountedBy.length} 个执行器在用
+            </span>
+          ) : onOpenExecutors ? (
+            <button
+              type="button"
+              className="provider-mount-state"
+              aria-label={`${provider.name} 还没有执行器挂它，任务里选不到它的模型；去执行器设置挂上`}
+              onClick={onOpenExecutors}
+            >
+              未挂到执行器
+            </button>
+          ) : (
+            <span className="provider-mount-state">未挂到执行器</span>
+          )}
         </span>
         <span className="provider-default-model">{provider.model || "未设默认模型"}</span>
         <button
@@ -488,7 +517,11 @@ function ProviderRow({
       {confirmDelete && (
         <ConfirmDialog
           title="删除供应商"
-          message={`删除“${provider.name}”后，绑定它的执行器会退回 CLI 官方账号。`}
+          // 后果按**这一行真实的挂载情况**说:没人挂它时那句「执行器会退回官方账号」
+          // 是空话,而真有人挂着时用户想知道的恰好是「是哪几个」。
+          message={mountedBy.length
+            ? `删除“${provider.name}”后，挂着它的 ${mountedBy.map((profile) => profile.name).join("、")} 会退回 CLI 官方账号。`
+            : `删除“${provider.name}”。目前没有执行器挂着它。`}
           confirmLabel="删除"
           danger
           busy={deleting}
@@ -502,10 +535,15 @@ function ProviderRow({
 
 export function ProvidersSection({
   providers,
+  profiles,
+  onOpenExecutors,
   onChanged,
   notify,
 }: {
   providers: LlmProvider[];
+  /** 全部执行器 Profile:用来回答每一行「有没有人挂它」。 */
+  profiles: AgentExecutorProfile[];
+  onOpenExecutors?: () => void;
   onChanged: () => Promise<void>;
   notify: (message: string) => void;
 }) {
@@ -532,6 +570,8 @@ export function ProvidersSection({
           <ProviderRow
             key={provider.id}
             provider={provider}
+            mountedBy={profiles.filter((profile) => profile.providerId === provider.id)}
+            onOpenExecutors={onOpenExecutors}
             onChanged={onChanged}
             notify={notify}
           />
