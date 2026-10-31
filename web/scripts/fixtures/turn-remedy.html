@@ -3,7 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- 页面凭据随文档下发(真实链路里由 server 的 serveSpa 盖进来)。 -->
+    <!-- 页面凭据随文档下发(真实链路里由 server 的 serveSpa 盖进来)。这里写死一份,是因为这条
+         回归要测的是 meta → 请求头 → 按响应轮换那条前端链路;**真实交付的文档上到底有没有
+         凭据**不归它证 —— 那一条是 `npm -w web run test:page-token`(打 vite 真正交出去的
+         dev / preview 文档,并让后端自己核验那一份)。 -->
     <meta name="ash-human-action-token" content="page-token-1" />
     <title>Turn remedy regression</title>
   </head>

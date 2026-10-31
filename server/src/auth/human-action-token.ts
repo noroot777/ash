@@ -25,6 +25,7 @@
 //   ③ 记录只说得出它能证的那一档(见 turn-lock-reclaim.ts 的措辞)。
 import { randomBytes } from "node:crypto";
 import type { Context } from "hono";
+import { HUMAN_ACTION_TOKEN_META } from "@ash/shared/human-action";
 export { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "@ash/shared/human-action";
 
 /**
@@ -51,10 +52,11 @@ function sweep(now: number): void {
 }
 
 /**
- * 发一份新凭据。**只有两个调用点**:「服务端把页面文档交出去」那一刻(index.ts 的 serveSpa),
- * 以及**闸烧掉一份之后的轮换**(personalWriteGate —— 烧和发在同一处,不分成功失败)。别给它
- * 开一个 JSON 端点,那等于把「要先拿到页面文档」这一步也省掉了;也别在路由里自己发一份 ——
- * 那正是 N2 的形状:错误分支一定会漏。
+ * 发一份新凭据。**只有两个调用点**:「服务端把页面文档交出去」那一刻(下面的
+ * `stampHumanActionToken`,`index.ts` 的 serveSpa 经它盖),以及**闸烧掉一份之后的轮换**
+ * (personalWriteGate —— 烧和发在同一处,不分成功失败)。别给它开一个 JSON 端点,那等于把
+ * 「要先拿到页面文档」这一步也省掉了;也别在路由里自己发一份 —— 那正是 N2 的形状:错误
+ * 分支一定会漏。
  */
 export function issueHumanActionToken(): string {
   const now = Date.now();
@@ -67,6 +69,22 @@ export function issueHumanActionToken(): string {
   const token = `${EPOCH}.${randomBytes(24).toString("base64url")}`;
   live.set(token, now + TTL_MS);
   return token;
+}
+
+/**
+ * 把一份新凭据盖进一份页面文档 —— **凭据长在文档上的形状只有这一处定义**。
+ *
+ * 为什么要收成一个函数:交付这个应用文档的入口不止服务端自己那一条(vite 的 dev 与 preview
+ * 也交,见 `web/vite/page-token.ts` —— 它们从本服务取一份文档再把这个 meta 抬过去),而回归
+ * 要钉的恰恰是「那两条路上的页面,凭据后端真的认」。盖法散成两份字符串时,这种测试只能自己
+ * 照抄一遍形状,于是测的是抄件而不是本体(本轮审查 F2:fixture 里写死 `page-token-1` 的那份
+ * DOM 回归,对真实文档一个字都证明不了)。
+ */
+export function stampHumanActionToken(html: string): string {
+  return html.replace(
+    "</head>",
+    `<meta name="${HUMAN_ACTION_TOKEN_META}" content="${issueHumanActionToken()}"></head>`,
+  );
 }
 
 /**
