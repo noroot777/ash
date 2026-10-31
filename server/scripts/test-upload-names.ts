@@ -24,8 +24,8 @@ requireTmpDb("test-upload-names");
 mkdirSync(uploads, { recursive: true });
 
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
-const { isSafeUploadName, sanitizeUploadName, sanitizeUploadStem } = await import("../src/upload-names.js");
-const { scanUploadNames, writeUploads } = await import("../src/handoff-uploads.js");
+const { MAX_STORED_NAME_BYTES, isSafeUploadName, newUploadName, sanitizeUploadName, sanitizeUploadStem } = await import("../src/upload-names.js");
+const { collectUploads, scanUploadNames, writeUploads } = await import("../src/handoff-uploads.js");
 const { uploadNameOf } = await import("../src/uploads.js");
 const { attachmentsPrompt } = await import("../src/util.js");
 const { ensureSchema } = await import("../src/db/index.js");
@@ -60,10 +60,22 @@ try {
   assert.equal(sanitizeUploadName("a\u0000b\u202Ec.png"), "a_b_c.png", "控制字符与双向改写字符都在集合外");
 
   // 长度两头都要卡住:80 个汉字 = 240 字节,只卡码点数会把文件名顶过 APFS/ext4 的 255 字节墙。
-  const long = `${ID}-${sanitizeUploadName("汉".repeat(200) + ".pdf")}`;
+  const long = newUploadName(sanitizeUploadName("汉".repeat(200) + ".pdf"));
   assert.ok(Buffer.byteLength(long) <= 255, `落盘名必须在 255 字节内,实际 ${Buffer.byteLength(long)}`);
   assert.ok(long.endsWith(".pdf"), "截断保末尾 —— 扩展名决定 Content-Type,丢不得");
   writeFileSync(join(uploads, long), "x");
+
+  // ── 生成端的输出,校验端必须收得下 —— 而且叠多少次都收得下 ─────────────────
+  // 审查第 1 轮发现 1:撞名改名曾写成 `${id()}-${原名}`,191 字节的长中文名改一次名
+  // 变 204 字节,下一跳把**自己生成的名字**判成非法跳过,附件在那台机器上直接消失。
+  let chained = long;
+  for (let round = 0; round < 6; round += 1) {
+    chained = newUploadName(chained);
+    assert.ok(Buffer.byteLength(chained) <= MAX_STORED_NAME_BYTES,
+      `第 ${round + 1} 次改名把名字撑大了(${Buffer.byteLength(chained)} 字节),改名必须是重新生成而不是叠前缀`);
+    assert.ok(isSafeUploadName(chained), "生成端的输出,校验端必须收得下");
+    assert.ok(chained.endsWith(".pdf"), "改名也要保住扩展名");
+  }
 
   // ── agent 落图的主干名:同一份字符集,扩展名由 mime 另行强制 ───────────────
   assert.equal(sanitizeUploadStem("wake-input-desktop.png"), "wake-input-desktop", "老行为不变");
@@ -85,6 +97,21 @@ try {
     "中文名的接力附件要能落地,带目录成分的照旧拒收");
   assert.equal(notes.length, 1);
 
+  // ── 撞名落地 → 再接力一跳:改名产出的名字必须还能被下一跳收下 ───────────────
+  // (这条在旧写法下会红:firstNameBytes=204 > 上限,secondCount=0)
+  const collided = { name: long, sourcePath: join(uploads, long), dataBase64: Buffer.from("别的内容").toString("base64") };
+  const hop1Notes: string[] = [];
+  const hop1 = await writeUploads([collided], hop1Notes);
+  assert.equal(hop1.length, 1, "撞上本机同名文件要改名落地,不是丢掉");
+  assert.notEqual(hop1[0]!.name, long, "本机原文件不许被远端内容顶掉");
+  assert.ok(existsSync(join(uploads, hop1[0]!.name)));
+  assert.ok(Buffer.byteLength(hop1[0]!.name) <= MAX_STORED_NAME_BYTES,
+    `改名产出 ${Buffer.byteLength(hop1[0]!.name)} 字节,超出生成端上限(旧写法 ${13 + Buffer.byteLength(long)} 字节就是这么漏附件的)`);
+  const hop2Notes: string[] = [];
+  const hop2 = await writeUploads([{ ...collided, name: hop1[0]!.name }], hop2Notes);
+  assert.deepEqual(hop2Notes.filter((n) => n.includes("非法")), [], `下一跳不该把自己生成的名字判非法:${hop2Notes}`);
+  assert.equal(hop2.length, 1, "长中文名附件再接力一跳不能凭空消失");
+
   // ── 扫描端:正文里认得出中文名的附件路径 ──────────────────────────────────
   const file = "zzzz1111aaaa-第九期实战作业.pdf";
   const abs = join(uploads, file);
@@ -95,6 +122,24 @@ try {
     "JSON 字符串里路径两侧是引号/空格,都在集合外");
   assert.deepEqual([...scanUploadNames(`![图](${abs})`)], [file], "markdown 的 `)` 同样收口");
   assert.deepEqual([...scanUploadNames(`我读了 ${abs},有三点`)], [file], "中文标点也在集合外");
+
+  // ── 路径后面紧跟中文说明:两刀都报,真名字必须在候选里 ─────────────────────
+  // 审查第 1 轮发现 2:只按字符集切会把「的要求完成作业」吞进名字,连旧的纯英文名
+  // 附件也一起漏掉 —— 而正文/续跑说明里直接粘路径是正常入口,没有附件块兜底。
+  const ascii = "aBcD1234_-xy-report.pdf";
+  writeFileSync(join(uploads, ascii), "pdf");
+  const glued = `请按 ${join(uploads, ascii)}的要求完成作业`;
+  assert.ok(scanUploadNames(glued).has(ascii), `粘连写法里扫不出真名字:${[...scanUploadNames(glued)]}`);
+  // 反向:结尾没有扩展名、内部有点号的合法名字,整段那一刀才是对的 —— 所以两个候选都要在。
+  const dotted = "aBcD1234_-xy-v1.2终稿";
+  writeFileSync(join(uploads, dotted), "x");
+  assert.ok(scanUploadNames(join(uploads, dotted)).has(dotted), "按扩展名收尾那一刀会切坏它,整段那一刀必须还在");
+
+  // 真走一遍导出:粘连写法要把真文件打包进去,而且不为派生候选多甩一句 notes。
+  const collectNotes: string[] = [];
+  const packed = await collectUploads([glued], collectNotes, true, async () => true);
+  assert.deepEqual(packed.map((u) => u.name), [ascii], "正文里粘着中文说明的路径,附件照样要迁移");
+  assert.deepEqual(collectNotes, [], `派生候选不该多报一句:${collectNotes}`);
 
   // 归属回填/任务绑定认的是同一条路径:认不出来 = 多人模式下这张附件对项目成员恒 404。
   assert.equal(uploadNameOf(abs), file, "带路径的要能归一到文件名");

@@ -6,8 +6,7 @@ import { maxBytesFor, attachmentKind } from "@ash/shared";
 import { UPLOADS_DIR } from "./paths.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { canReadUpload, registerUpload, repairUploadClaim, watchAgentUploads } from "./uploads.js";
-import { sanitizeUploadName } from "./upload-names.js";
-import { id } from "./util.js";
+import { newUploadName, sanitizeUploadName } from "./upload-names.js";
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
 // Agents take text on stdin, not binaries — so we persist the pasted image/file
@@ -70,7 +69,7 @@ export function mountUploadRoutes(api: Hono): void {
     }
     const display = sanitizeUploadName(name ?? "") || `pasted.${MIME_EXT[mime] ?? "bin"}`;
     mkdirSync(UPLOADS_DIR, { recursive: true });
-    const file = `${id()}-${display}`;
+    const file = newUploadName(display);
     writeFileSync(join(UPLOADS_DIR, file), bytes);
     // 谁上传的就归谁(§八)。目录是扁平的、文件名就是全部信息,不登记这一句的话
     // 「谁能读它」在多人模式下无从判起 —— 判据见 uploads.ts。

@@ -20,8 +20,7 @@ import { join, sep } from "node:path";
 import { MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type { HandoffUploadPayload } from "./handoff-types.js";
 import { UPLOADS_DIR } from "./paths.js";
-import { UPLOAD_NAME_RUN, isSafeUploadName } from "./upload-names.js";
-import { id } from "./util.js";
+import { UPLOAD_NAME_RUN, isDerivedUploadName, isSafeUploadName, newUploadName, trimToUploadName } from "./upload-names.js";
 
 export const MAX_UPLOADS = 100;
 
@@ -42,9 +41,11 @@ export const jsonEscaped = (s: string): string => JSON.stringify(s).slice(1, -1)
 /**
  * 从一段文本里扫出被引用的上传文件名(只认 uploads 目录直下)。
  *
- * 切法只有一条:按 `upload-names.ts` 的**字符集**取最长的一段。标点(含中文标点)、
- * 空白、引号、分隔符都不在集合里,所以正文、JSON 字符串、markdown `![]()` 里这一刀
- * 都落在正确的位置;够不着的那一档与为什么不再补刀,见那个文件末尾的说明。
+ * 一处引用可能给出**两个候选**:按字符集取到的最长一段,以及按扩展名收尾的那一段
+ * (`trimToUploadName`)。两刀各有切错的输入 —— 字符集这一刀会把紧跟在路径后面的中文
+ * 说明吞进名字,扩展名那一刀会截断 `<id>-v1.2终稿` 这类名字 —— 所以不在这里二选一,
+ * 两个都报出去,由调用方拿它们去对盘上/库里真有的东西,谁对得上谁生效。判据全在文本
+ * 上,不碰磁盘(推演见 upload-names.ts 的 trimToUploadName)。
  */
 export function scanUploadNames(text: string, uploadsDir: string = UPLOADS_DIR): Set<string> {
   const names = new Set<string>();
@@ -54,7 +55,9 @@ export function scanUploadNames(text: string, uploadsDir: string = UPLOADS_DIR):
     while ((idx = text.indexOf(prefix, idx)) !== -1) {
       idx += prefix.length;
       const match = UPLOAD_NAME_RUN.exec(text.slice(idx, idx + 512));
-      if (match) names.add(match[0]);
+      if (!match) continue;
+      names.add(match[0]);
+      names.add(trimToUploadName(match[0]));
     }
   }
   return names;
@@ -81,8 +84,15 @@ export async function collectUploads(
 ): Promise<HandoffUploadPayload[]> {
   const names = new Set<string>();
   for (const t of texts) for (const n of scanUploadNames(t)) names.add(n);
+  // 同一处引用的两个候选里,长的那个是短的加长而来。短的照常走全套判据并记 notes;
+  // 长的仍然逐个问(它可能才是真名字),但**不再重复记一句** —— 否则「路径后面紧跟
+  // 中文说明」这种正常写法,每次都会多甩一句看着像乱码的「本机已不存在」。
+  const derived = new Set([...names].filter((name) => [...names].some((other) => isDerivedUploadName(other, name))));
   const out: HandoffUploadPayload[] = [];
   for (const name of names) {
+    const note = (line: string) => {
+      if (!derived.has(name)) notes.push(line);
+    };
     if (out.length >= MAX_UPLOADS) {
       notes.push(`上传附件超过 ${MAX_UPLOADS} 个,余下的不迁移(对端按旧路径读不到)`);
       break;
@@ -93,16 +103,16 @@ export async function collectUploads(
     // 上有没有这个附件」—— `/api/uploads/:file` 对这两种情况回同一句 404 就白费了
     // (8CEbm0rJQIwK 第 2 轮审查 P2)。所以读不到的一律走同一句话,不区分存不存在。
     if (!(await canPack(name))) {
-      notes.push(`上传附件 ${name} 不随任务迁移(本机没有,或不在你的可读范围内)`);
+      note(`上传附件 ${name} 不随任务迁移(本机没有,或不在你的可读范围内)`);
       continue;
     }
     if (!existsSync(abs)) {
-      notes.push(`上传附件 ${name} 在本机已不存在,跳过`);
+      note(`上传附件 ${name} 在本机已不存在,跳过`);
       continue;
     }
     const size = statSync(abs).size;
     if (size > MAX_FILE_BYTES) {
-      notes.push(`上传附件 ${name} ${Math.round(size / MB)}MB 超限,跳过`);
+      note(`上传附件 ${name} ${Math.round(size / MB)}MB 超限,跳过`);
       continue;
     }
     out.push({ name, sourcePath: abs, dataBase64: dryRun ? "" : (await readFile(abs)).toString("base64") });
@@ -161,7 +171,9 @@ export async function writeUploads(
       written.push({ ...u, fresh: false });
       continue;
     }
-    const name = `${id()}-${u.name}`;
+    // 改名是**重新生成一个有界的名字**,不是往上叠前缀:叠加会把名字撑过校验上限,
+    // 下一跳就把我们自己生成的附件名判成非法跳过(判据见 upload-names.ts)。
+    const name = newUploadName(u.name);
     await writeFile(join(UPLOADS_DIR, name), data);
     notes.push(`上传附件 ${u.name} 与本机同名文件冲突,改名为 ${name} 落地(本机原文件没动)`);
     written.push({ ...u, name, fresh: true });

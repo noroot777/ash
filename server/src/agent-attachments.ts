@@ -10,8 +10,7 @@ import {
   type MarkdownImageRef,
 } from "@ash/shared/markdown-images";
 import { UPLOADS_DIR } from "./paths.js";
-import { sanitizeUploadStem } from "./upload-names.js";
-import { id } from "./util.js";
+import { newUploadName, sanitizeUploadStem } from "./upload-names.js";
 
 const MIME_EXT: Record<string, string> = {
   "image/png": "png",
@@ -75,7 +74,7 @@ function resultImages(value: unknown, allowBareBase64: boolean): ImageBytes[] {
  */
 function uploadFileNameFor(name: string | undefined, ext: string, index: number): string {
   const stem = sanitizeUploadStem(name);
-  return `${id()}-${stem || `agent-image-${index + 1}`}.${ext}`;
+  return newUploadName(`${stem || `agent-image-${index + 1}`}.${ext}`);
 }
 
 /**

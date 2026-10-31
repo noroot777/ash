@@ -13,9 +13,11 @@
 //   · 汉字、假名、西里尔字母都是 `\p{L}`,原名照常保留 —— 这才是用户要的;
 //   · 路径分隔符、控制字符、Windows 禁用的 `< > : " | ? *`、以及 U+202E 这类双向
 //     改写格式字符(`\p{Cf}`)全都落在集合外,一个单路径段的安全性与原来逐字相同;
-//   · 标点(含中文标点 `,。、;:?!()【】`)和空白都在集合外,于是**正文里路径的末尾有
-//     天然边界**:扫描端只按字符集切就能停在正确的位置。
+//   · 标点(含中文标点 `,。、;:?!()【】`)和空白都在集合外,于是正文、JSON 字符串、
+//     markdown `![]()` 里路径的末尾都有天然边界。唯一够不着的是「中文说明直接粘在
+//     路径后面、一个标点都没有」,那一档由 `trimToUploadName` 另给一个候选,见那里。
 import { extname } from "node:path";
+import { id } from "./util.js";
 
 /** 名字里混进了目录成分(某些客户端报的是整条路径)就只取末段。两种分隔符都认。 */
 const lastSegment = (raw: string): string => raw.split(/[\\/]/).pop() ?? "";
@@ -28,11 +30,24 @@ const ALL_NAME_CHARS = new RegExp(`^[${NAME_CLASS}]+$`, "u");
 
 // 名字长度两头都要卡:码点数是老规矩(`.slice(-80)`),字节数是文件系统的硬限
 // (APFS / ext4 都是 255 **字节**)。只卡码点的话 80 个汉字 = 240 字节,加上 13 字节的
-// id 前缀就顶到墙上了;接力落地撞名时还会再套一层前缀,所以生成端留足余量。
+// id 前缀就顶到墙上了。
 const MAX_NAME_CHARS = 80;
+/** `<id>-` 之后那一段的字节预算。 */
 const MAX_NAME_BYTES = 180;
-/** 校验端(别人送来的名字)的上限:比生成端宽,但要给撞名改名的 `<id>-` 留出余量。 */
-const MAX_ACCEPTED_BYTES = 200;
+const ID_PREFIX_BYTES = 13; // nanoid(12) + "-"
+/** 落盘名的上限 —— `newUploadName` 的输出恒在此之内(撞名改名叠多少次都一样)。 */
+export const MAX_STORED_NAME_BYTES = ID_PREFIX_BYTES + MAX_NAME_BYTES;
+/**
+ * 校验端的上限,**从生成端的上限推出来**,不是另拍一个数。
+ *
+ * 这两个数脱钩过一次,代价是漏附件:撞名改名那条路当时写的是 `${id()}-${原名}`,
+ * 一个 191 字节的长中文名接力过去撞上同名文件,改名后 204 字节 —— 下一跳的校验把
+ * **我们自己生成的名字**判成非法,整个附件在那台机器上直接消失(审查第 1 轮发现 1)。
+ * 所以不变量得立在命名层:生成的一定收得下,改名是重新生成而不是无限叠前缀。
+ * 余量留给存量名字(旧版本净化口径不同、早先撞名叠过前缀),仍在 255 字节硬限之内。
+ */
+const LEGACY_SLACK_BYTES = 47;
+const MAX_ACCEPTED_BYTES = MAX_STORED_NAME_BYTES + LEGACY_SLACK_BYTES;
 
 const utf8Length = (text: string): number => Buffer.byteLength(text, "utf8");
 
@@ -92,6 +107,18 @@ export function sanitizeUploadStem(raw: string | undefined): string {
 }
 
 /**
+ * **落盘名的唯一出处**:`<nanoid>-<净化名>`。上传接口、agent 落图、接力撞名改名三处
+ * 共用它,所以「生成出来的名字一定过得了 `isSafeUploadName`」是构造上成立的,而不是
+ * 靠两个常量碰巧对得上。
+ *
+ * 撞名改名传进来的是**一个完整的落盘名**:截断保末尾,于是叠加的效果是「换一个新前缀、
+ * 把最老的那个前缀挤掉」,长度恒定收敛,叠多少次都不会把自己撑成非法名。
+ */
+export function newUploadName(display: string): string {
+  return `${id()}-${tailWithin(display, MAX_NAME_CHARS, MAX_NAME_BYTES)}`;
+}
+
+/**
  * 别人送来的名字(接力载荷)能不能原样落盘。**失败方向是拒绝**:这是一条远端可控的
  * 字符串直接变成本机路径段的路,集合外的 `/` `\` 与控制字符一个都不能放过。
  * 纯点号的(`.` / `..`)单独拒 —— 它满足字符集却是目录引用。
@@ -100,15 +127,30 @@ export const isSafeUploadName = (name: string): boolean =>
   ALL_NAME_CHARS.test(name) && !/^\.+$/.test(name) && utf8Length(name) <= MAX_ACCEPTED_BYTES;
 
 /**
- * 扫描端(`scanUploadNames`)的边界就是这一段字符集,**不做二次猜测**。
+ * 一段合法字符构成的串里,**另一个可能的收尾位置**:最后一处 `.` + 1~8 个 ASCII 字母
+ * 数字、且其后不再是 ASCII 字母数字。`report.tar.gz` 取 `.gz`、`v1.2备份.docx` 取
+ * `.docx`,整段本来就以扩展名收尾时原样返回。
  *
- * 唯一够不着的一档:中文正文里把路径和后文粘在一起、中间一个标点都没有
- * (「我看了 …/uploads/<id>-作业.pdf的要求」) —— 汉字本身合法,这一刀切不开。曾经想按
- * 「最后一处扩展名」再收一刀,但那会**切坏合法名字**:`<id>-v1.2终稿` 这种内部有点号、
- * 结尾没扩展名的,连单独一条路径都会被截成 `<id>-v1.2`,归属回填跟着失效。
+ * 为什么需要它:字符集本身不是正文里的可靠边界。中文正文可以把路径和后文粘在一起、
+ * 中间一个标点都没有(「请按 …/uploads/<id>-report.pdf的要求完成作业」),而汉字是合法
+ * 文件名字符,只按字符集切会把「的要求完成作业」吞进名字 —— 连旧的纯英文名附件也一起
+ * 漏掉(审查第 1 轮发现 2 实测)。
  *
- * 不收这一刀的代价很小:一个附件的**权威出处**(正文里 `attachmentsPrompt` 那一行、
- * JSON 字符串、markdown `![]()`)末尾都有集合外的字符收口,照样切得准;粘连只发生在
- * agent 的散文复述里,多扫出来的那个名字对不上盘,最多在接力 notes 里多一句
- * 「本机已不存在」,文件本身照常迁移。
+ * 为什么**不是**二选一、而是两个候选都报出去(见 `scanUploadNames`):这一刀同样会切错
+ * ——`<id>-v1.2终稿` 这种内部有点号、结尾没扩展名的合法名字会被截成 `<id>-v1.2`。
+ * 两个候选都交给调用方,谁对得上盘上/库里的东西谁生效,两种写法就都认得出来。
+ *
+ * 判据只看文本,不碰磁盘也不查库:「这个文件在不在本机」是另一条判据,混进来就等于
+ * 给出一个存在性探针 —— 接力预检的 notes 会把名字原样印出来,而「没这个文件」和
+ * 「有、但你读不到」在这条链上必须是同一句话(8CEbm0rJQIwK 第 2 轮审查 P2)。
  */
+const EXT_BOUNDARY = /\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9])/g;
+
+export function trimToUploadName(run: string): string {
+  let end = -1;
+  for (const match of run.matchAll(EXT_BOUNDARY)) end = match.index + match[0].length;
+  return end > 0 ? run.slice(0, end) : run;
+}
+
+/** b 是不是由 a 加长而来的**派生候选**(同一处引用的另一种收尾)。 */
+export const isDerivedUploadName = (a: string, b: string): boolean => b.length > a.length && b.startsWith(a);
