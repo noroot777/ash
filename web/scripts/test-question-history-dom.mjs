@@ -136,6 +136,35 @@ try {
   assert.equal(retry.calls.length, 2);
   await retry.page.close();
 
+  // **主动取消不是读取失败**(本轮审查 N1)。断线会把在途那一发掐断(useCatchUpLink 的 cleanup),
+  // 它的 rejection 一路冒上来曾被写成「问答记录加载失败」—— 那一刻压根没有任何读取失败,而且
+  // 要等重连后的那一发成功才消得掉。
+  //
+  // **第二发也吊着**:这一条要验的是「错误压根没出现」,而一发成功的读取会把错误清掉 —— 第二发
+  // 要是落了地,有 bug 的那一版也能擦干净自己,这条用例就白写了(实测:先让它落地,这条用例在
+  // 没修的代码上照旧绿)。
+  let releaseStale;
+  let releaseSecond;
+  const stalePending = new Promise((resolve) => { releaseStale = resolve; });
+  const secondPending = new Promise((resolve) => { releaseSecond = resolve; });
+  pending.push(() => { releaseStale({ json: [] }); releaseSecond({ json: [] }); });
+  const cancelled = await open("", { respond: async (_path, n) => (n === 1 ? stalePending : secondPending) });
+  await waitForCalls(cancelled, 1);
+  await sse(cancelled.page, "error");
+  await sse(cancelled.page, "open");
+  await waitForCalls(cancelled, 2);
+  // 掐断那一发的 rejection 是个微任务，第二发是 setTimeout(0) —— 读到第二发已经发车，就说明
+  // 那个 rejection 早已处理完；再留一段给 React 刷新（它的非紧急更新走宏任务）。
+  await cancelled.page.waitForTimeout(300);
+  assert.equal(await cancelled.page.getByText("问答记录加载失败").count(), 0, "断线掐断在途那一发，不许显示成读取失败");
+  releaseStale({ json: [record("stale-response")] });
+  releaseSecond({ json: [record("reconnected")] });
+  await count(cancelled.page, 1);
+  assert.equal(await cancelled.page.getByText("问答记录加载失败").count(), 0, "被接替的那一发落地也不许留下失败提示");
+  assert.match(await cancelled.page.locator("main").textContent(), /reconnected的问题/);
+  assert.doesNotMatch(await cancelled.page.locator("main").textContent(), /stale-response/);
+  await cancelled.page.close();
+
   for (const eventType of ["task.question", "task.updated"]) {
     const recovered = await open("", { respond: async () => ({ status: 503, json: { error: "暂时不可用" } }) });
     await recovered.page.getByText("问答记录加载失败").waitFor();

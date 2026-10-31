@@ -3,6 +3,7 @@ import { CaretDown, CheckCircle } from "@phosphor-icons/react";
 import { formatQuestionAnswers, legacyQuestionRecord, questionItems, questionOptionSelected, type QuestionRecord } from "@ash/shared/questions";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
+import { catchUpAbortKind } from "../lib/catchUp.ts";
 import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -46,6 +47,15 @@ function LocalQuestionHistory({ taskId, history, messages, children }: {
       return true;
     },
     (error) => {
+      // **主动取消不是读取失败**(本轮审查 N1)。断线作废这一代次、以及有人点「重试」把在途
+      // 那一发接替掉(`runNow`),都会 abort 这一发 —— 它的 rejection 一路冒上来被写成「加载
+      // 失败」,而那一刻压根没有任何读取失败,得等下一发成功才消掉。追平层的其它四个消费者
+      // (useTasks / useTaskMonitors / useRejectionNotices / useAcceptGate)都接了这一道,
+      // 问答历史漏接了同一个协议。
+      //
+      // 换代次的那一种一个字都不说:新代次会自己追平。等到点的那一种照实说 —— 它的 reason
+      // 本身就是人话,而且追平层还会接着重试。
+      if (catchUpAbortKind(signal, error) === "stale") return false;
       // 如实显示「这一份没读到」,同时让追平层接着重试 —— 两件事不冲突(上一版只做了前者)。
       setState((current) => ({ taskId, records: current.taskId === taskId ? current.records : [], error: String(error?.message ?? error) }));
       return false;
