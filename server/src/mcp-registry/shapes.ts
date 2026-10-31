@@ -10,6 +10,7 @@
 //     因为 absent 是个会被用来拦人的结论(`ash-mcp-reachability.ts` 的「向放行开」)。
 import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
 import { extractTomlTables, scanCodexToml, tomlRootStringArray } from "../codex-toml.js";
+import { readJsonLoose, spliceJsonMember } from "./json-edit.js";
 import type {
   AshMcpCompose, AshMcpComposeOpts, AshMcpConfigState, AshMcpEntry, AshMcpLaunch, AshMcpShape,
 } from "./types.js";
@@ -22,77 +23,12 @@ const unknown = (detail: string): AshMcpConfigState => ({ state: "unknown", serv
 
 // ── JSON 两族共用的小工具 ──────────────────────────────────────────────────
 
-/** `null` = 确认没有这个文件或内容是空白(当空文档,我们来建);`undefined` = 解析不了(**别动它**)。 */
-function parseDoc(text: string | null): Record<string, unknown> | null | undefined {
-  if (text === null || !text.trim()) return null;
-  try {
-    const parsed = JSON.parse(stripJsonComments(text).text) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    return parsed as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
- * 注释一旦存在就**不自动改写这份配置**。
- *
- * 读是读得了(`stripJsonComments`),可拼回去用的是 `JSON.parse` 出来的文档对象 ——
- * 序列化出去注释全没了。用户在 `opencode.jsonc` / `kilo.jsonc` 里写的注释是他自己的内容,
- * 本轮的硬边界是「只在缺 ash 条目时追加,绝不动其它条目」,把人家的注释抹掉算动。
- * 所以这种文件改走「如实说一句,让用户自己加」那条路(预检会把这句显示出来)。
+ * `null` = 确认没有这个文件或内容是空白(当空文档,我们来建);`undefined` = 解析不了
+ * (**别动它**)。注释和尾逗号都容得下,见 `json-edit.ts`。
  */
-function hasComments(text: string | null): boolean {
-  return text !== null && stripJsonComments(text).stripped;
-}
-
-/**
- * `.jsonc` 这一族(kilo 的 `kilo.jsonc`、opencode 允许注释)读之前要去掉注释,
- * 否则一份合法配置会被判成「解析不了」。**只用于读**;写那一侧见 `hasComments`。
- */
-function stripJsonComments(text: string): { text: string; stripped: boolean } {
-  let out = "";
-  let inString = false;
-  let escape = false;
-  let stripped = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (inString) {
-      out += ch;
-      if (escape) escape = false;
-      else if (ch === "\\") escape = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') { inString = true; out += ch; continue; }
-    if (ch === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n") i++;
-      out += "\n";
-      stripped = true;
-      continue;
-    }
-    if (ch === "/" && text[i + 1] === "*") {
-      i += 2;
-      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
-      i += 1;
-      stripped = true;
-      continue;
-    }
-    out += ch;
-  }
-  return { text: out, stripped };
-}
-
-/** 两个 JSON 族共用的「能不能动这份文件」前置判断。 */
-function jsonComposeGuard(text: string | null): { why: string } | null {
-  if (hasComments(text)) {
-    return {
-      why: "配置里有注释，自动改写会把注释丢掉，所以没有动它 —— "
-        + "请自己在里面加一条 ash 登记（或把注释挪到别处再重启）",
-    };
-  }
-  return null;
-}
+const parseDoc = (text: string | null): Record<string, unknown> | null | undefined =>
+  readJsonLoose(text);
 
 const asObject = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -142,8 +78,15 @@ function takenNames(container: unknown): string[] {
   return servers ? WANTED.filter((n) => Object.hasOwn(servers, n)) : [];
 }
 
-/** 宿主那条**开着**的登记原值(关着的不搬,见 `AshMcpShape.hostRaw`)。 */
-function pickHostRaw(container: unknown): Record<string, unknown> | null {
+/**
+ * 容器里**活着**的那一条登记(关着的跳过)。
+ *
+ * 三个地方共用这一份判据:搬宿主那条(`hostRaw`)、报状态(`pickEntry`)、给诊断提示
+ * (`launch`)。各写一遍的后果上一版就犯过:`launch` 按名字取**第一条**,于是
+ * `harness` 关着、`ash` 开着时,提示里拿的是那条关着的 —— 用户照着提示去查一个
+ * 根本没在跑的命令,而 `read` 明明已经放行了(本轮审查不拦项)。
+ */
+function activeEntry(container: unknown): Record<string, unknown> | null {
   const servers = asObject(container);
   if (!servers) return null;
   for (const name of WANTED) {
@@ -153,7 +96,8 @@ function pickHostRaw(container: unknown): Record<string, unknown> | null {
   return null;
 }
 
-const serialize = (doc: Record<string, unknown>): string => `${JSON.stringify(doc, null, 2)}\n`;
+/** 宿主那条**开着**的登记原值(关着的不搬,见 `AshMcpShape.hostRaw`)。 */
+const pickHostRaw = activeEntry;
 
 /**
  * 把一条登记按规范名写进容器 —— JSON 两族**只有这一处会改文档**。
@@ -168,19 +112,17 @@ function putJson(
   text: string | null,
   value: Record<string, unknown>,
 ): AshMcpCompose {
-  const guard = jsonComposeGuard(text);
-  if (guard) return guard;
   const doc = parseDoc(text);
   if (doc === undefined) return { why: "配置解析不了，没敢动它 —— 手工修好或删掉它再重启" };
-  const base = doc ?? {};
-  const servers = asObject(base[container]);
-  if (base[container] !== undefined && !servers) {
-    return { why: `配置里的 ${container} 不是一个对象，没敢动它` };
-  }
-  const taken = takenNames(base[container]);
+  const taken = takenNames((doc ?? {})[container]);
   if (taken.length) return { why: `配置里已经有 ${taken.join(" / ")} 这条登记了，没有覆盖它` };
-  base[container] = { ...(servers ?? {}), [ASH_MCP_SERVER_NAME]: value };
-  const body = serialize(base);
+  // **文本插入,不重新序列化**(本轮审查 R4):大整数、`1e999`、`-0`、重复键、注释、键序、
+  // 缩进全部按字节留着。上一版走 `JSON.parse` → `JSON.stringify` 往返,那条路会悄悄改掉用户
+  // 保存的值(`9007199254740993` → `…992`),而回读只看 ash 在不在、看不出这种损失。
+  // 顺带:注释不再会被抹掉,所以带注释的 `.jsonc` 也能自动补接了。
+  const spliced = spliceJsonMember(text, container, ASH_MCP_SERVER_NAME, value);
+  if (!spliced.body) return { why: spliced.why ?? "没能把那条登记插进去" };
+  const body = spliced.body;
   // 自己复核一遍:这一族的「真解析器」就在手上(语义全在 JSON 语法里),所以拼完能当场验。
   const back = shape.read(body);
   if (back.state !== "present") return { why: `补上那条之后仍读不出 ash MCP 登记（${back.detail}）` };
@@ -216,19 +158,15 @@ export const mcpServersJsonShape: AshMcpShape = {
   },
   launch(text) {
     const doc = parseDoc(text);
-    const servers = doc ? asObject(doc[CONTAINER]) : null;
-    if (!servers) return null;
-    for (const name of WANTED) {
-      const entry = asObject(servers[name]);
-      if (!entry) continue;
-      const env = asObject(entry.env) ?? {};
-      return {
-        command: typeof entry.command === "string" ? entry.command : null,
-        args: entry.args,
-        ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
-      };
-    }
-    return null;
+    // 取**活着**那一条(见 `activeEntry`):关着的那条拿来当提示会把人引到一个没在跑的命令上。
+    const entry = doc ? activeEntry(doc[CONTAINER]) : null;
+    if (!entry) return null;
+    const env = asObject(entry.env) ?? {};
+    return {
+      command: typeof entry.command === "string" ? entry.command : null,
+      args: entry.args,
+      ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
+    };
   },
 };
 
@@ -268,20 +206,15 @@ export const opencodeJsonShape: AshMcpShape = {
   },
   launch(text) {
     const doc = parseDoc(text);
-    const servers = doc ? asObject(doc[OPENCODE_CONTAINER]) : null;
-    if (!servers) return null;
-    for (const name of WANTED) {
-      const entry = asObject(servers[name]);
-      if (!entry) continue;
-      const argv = Array.isArray(entry.command) ? entry.command.map(String) : [];
-      const env = asObject(entry.environment) ?? {};
-      return {
-        command: argv[0] ?? null,
-        args: argv.slice(1),
-        ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
-      };
-    }
-    return null;
+    const entry = doc ? activeEntry(doc[OPENCODE_CONTAINER]) : null;
+    if (!entry) return null;
+    const argv = Array.isArray(entry.command) ? entry.command.map(String) : [];
+    const env = asObject(entry.environment) ?? {};
+    return {
+      command: argv[0] ?? null,
+      args: argv.slice(1),
+      ashUrl: typeof env.ASH_URL === "string" ? env.ASH_URL : null,
+    };
   },
 };
 
@@ -362,7 +295,9 @@ export const mcpServersTomlShape: AshMcpShape = {
   launch(text) {
     if (text === null) return null;
     const scan = scanCodexToml(text);
-    const live = [...scan.servers.entries()].find(([, s]) => s.enabled);
+    // 关法有两种,`read` 两种都看 —— 这里也必须两种都看(只看条目上那个 `enabled` 的话,
+    // 根级 `disabled_mcp_servers` 关掉的那条会被当成在跑的拿去当提示)。
+    const live = [...scan.servers.entries()].find(([name, s]) => s.enabled && !tomlRootDisabled(text, name));
     return live ? live[1].spec : null;
   },
 };

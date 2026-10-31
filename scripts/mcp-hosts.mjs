@@ -16,6 +16,8 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { publishConfirmed, readForWrite } from "./config-publish.mjs";
+import { readJsonLoose, spliceJsonMember } from "./json-edit.mjs";
+import { scanTomlServers } from "./toml-scan.mjs";
 
 const atHome = (_env, home) => home;
 const underHome = (...segments) => (_env, home) => join(home, ...segments);
@@ -47,6 +49,8 @@ export const HOST_SITES = {
   opencode: {
     bins: ["opencode"], dirEnv: "OPENCODE_CONFIG", dirEnvIsFile: true, dir: xdgConfig("opencode"),
     relative: ["opencode.json"], alternates: [["opencode.jsonc"]], shape: "opencode",
+    // 那个变量是「再加一份」不是「取代」—— 真 opencode 三组实测,依据记在 TS 那张表的 source。
+    envFileMerges: true,
   },
   cursor: {
     bins: ["cursor-agent", "agent"], dirEnv: null, dir: underHome(".cursor"),
@@ -113,6 +117,45 @@ export function hostMcpFile(agentType, { env = process.env, home = homedir() } =
 }
 
 /**
+ * 这家 CLI **会读的全部配置文件**,低优先级在前、写入目标在最后。
+ *
+ * `dirEnvIsFile` 那个变量是「再加一份」而不是「取代默认那份」(本轮审查 R3,真 opencode 实测:
+ * 全局那份里的 ash 照样生效)。所以判「有没有」必须看全这几份 —— 只看写入目标那一份,就会往
+ * 更高优先级那份里再补一条、把本来连得上的那条顶掉。
+ */
+export function hostMcpSources(agentType, { env = process.env, home = homedir() } = {}) {
+  const site = HOST_SITES[agentType];
+  if (!site) return [];
+  const target = hostMcpFile(agentType, { env, home });
+  if (!target) return [];
+  const fallback = join(site.dir(env, home), ...site.relative);
+  const alt = (site.alternates || []).map((c) => join(site.dir(env, home), ...c)).find((f) => existsSync(f));
+  const base = alt || fallback;
+  return site.dirEnvIsFile && base !== target ? [base, target] : [target];
+}
+
+/** 一份来源里有没有 ash:`present` / `absent` / `unsure`(看不准 ⇒ 调用方不许写)。 */
+function sourceState(file, site) {
+  const read = readForWrite(file);
+  if (!read) return { state: "unsure", why: `${file} 读不出来` };
+  if (read.text === null) return { state: "absent" };
+  if (site.shape === "toml") {
+    const scan = scanTomlServers(read.text);
+    if (scan.why) return { state: "unsure", why: `${file}：${scan.why}` };
+    const taken = scan.names.filter((n) => n === ASH || n === LEGACY);
+    return taken.length ? { state: "present", name: taken[0] } : { state: "absent" };
+  }
+  const doc = readJsonLoose(read.text);
+  if (doc === undefined) return { state: "unsure", why: `${file} 解析不了` };
+  const servers = doc === null ? undefined : doc[site.shape === "opencode" ? "mcp" : "mcpServers"];
+  if (servers !== undefined && (!servers || typeof servers !== "object" || Array.isArray(servers))) {
+    return { state: "unsure", why: `${file} 的登记容器不是对象` };
+  }
+  const taken = [ASH, LEGACY].filter((n) => servers && Object.hasOwn(servers, n));
+  return taken.length ? { state: "present", name: taken[0] } : { state: "absent" };
+}
+
+/**
  * 缺了就追加。返回 `{ file, added, why }`:`added:false` + `why` = 没写,原因如实说。
  *
  * 不认得的 agentType 直接抛 —— 调用方拼错名字该当场知道,不该静默跳过(静默正是这轮在治的病)。
@@ -132,6 +175,17 @@ export function registerHostMcp({ agentType, mcpEntry, url, nodeBin = process.ex
         + "（请在那份配置里自己加一条 ash 登记，接法见 docs/install.md）",
     };
   }
+  // **先看这家 CLI 会读的其它来源**(本轮审查 R3):任一份已经有 ash ⇒ 不写(往更高优先级那份
+  // 补一条会把它顶掉);任一份看不准 ⇒ 也不写,如实说。谁优先、合不合并见 `envFileMerges`。
+  for (const other of hostMcpSources(agentType, { env, home }).filter((f) => f !== file)) {
+    const state = sourceState(other, site);
+    if (state.state === "present") {
+      return { file: other, added: false, why: `${other} 里已经有 ${state.name} 登记（${agentType} 也会读这份），不动它` };
+    }
+    if (state.state === "unsure") {
+      return { file, added: false, why: `${state.why} —— ${agentType} 也会读这份配置，看不准就不写` };
+    }
+  }
   // **先拿到一次成功的读**:读不动不是「空」(见 config-publish.mjs 的 readForWrite)。
   const read = readForWrite(file);
   if (!read) return { file, added: false, why: `${file} 读不出来，没有自动补写` };
@@ -148,26 +202,23 @@ export function registerHostMcp({ agentType, mcpEntry, url, nodeBin = process.ex
 /** `mcpServers`(claude/gemini/kimi/cursor/qwen/qoder/copilot/kiro/antigravity/pi)与 opencode 的 `mcp`。 */
 function composeJson(text, entry, site, file) {
   const container = site.shape === "opencode" ? "mcp" : "mcpServers";
-  if (text !== null && hasJsonComments(text)) {
-    return { why: `${file} 里有注释，自动改写会把注释丢掉，所以没动它 —— 请自己加一条 ash 登记` };
-  }
-  const config = text === null || !text.trim() ? {} : JSON.parse(text);
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    throw new Error(`${file} 不是 JSON 对象，未修改`);
-  }
-  const servers = config[container];
+  const doc = readJsonLoose(text);
+  if (doc === undefined) return { why: `${file} 解析不了，没动它 —— 手工修好再重跑 setup` };
+  const servers = doc === null ? undefined : doc[container];
   if (servers !== undefined && (!servers || typeof servers !== "object" || Array.isArray(servers))) {
-    throw new Error(`${file} 的 ${container} 不是对象，未修改`);
+    return { why: `${file} 的 ${container} 不是对象，没动它` };
   }
-  const current = servers || {};
-  if (Object.hasOwn(current, ASH) || Object.hasOwn(current, LEGACY)) {
-    return { why: `${file} 里已经有 ash/harness 登记，不动它` };
-  }
-  current[ASH] = site.shape === "opencode"
+  const taken = [ASH, LEGACY].filter((n) => servers && Object.hasOwn(servers, n));
+  if (taken.length) return { why: `${file} 里已经有 ${taken.join(" / ")} 登记，不动它` };
+  const value = site.shape === "opencode"
     ? { type: "local", command: [entry.command, ...entry.args], environment: { ...entry.env }, enabled: true }
     : site.type ? { type: site.type, ...entry } : entry;
-  config[container] = current;
-  return { body: `${JSON.stringify(config, null, 2)}\n` };
+  // **文本插入,不重新序列化**(本轮审查 R4):大整数、`1e999`、`-0`、重复键、注释、键序、
+  // 缩进全按字节留着 —— 上一版 `JSON.parse` → `JSON.stringify` 往返会悄悄改掉用户保存的值。
+  // 也因此带注释的 `.jsonc` 现在能自动补接了(原来只能如实说一句、让用户自己加)。
+  const spliced = spliceJsonMember(text, container, ASH, value);
+  if (!spliced.body) return { why: `${file}：${spliced.why}` };
+  return { body: spliced.body };
 }
 
 /** `[mcp_servers.ash]`(grok;codex 走 `codex-mcp.mjs` 那条带 CLI 批准的路)。 */
@@ -190,120 +241,14 @@ function composeToml(text, entry, site) {
   lines.push("", `[mcp_servers.${ASH}.env]`);
   for (const [k, v] of Object.entries(entry.env)) lines.push(`${k} = ${JSON.stringify(v)}`);
   const block = lines.join("\n");
-  return { body: current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n` };
-}
-
-/**
- * 这份 TOML 里已经登记了哪几个 MCP、根级关掉了哪几个 —— **结构判据,不是全文搜**。
- *
- * 上一版「只要提到 mcp_servers 就不写」(本轮审查 R6):用户早先装过任何一个第三方 MCP,
- * ash 就永远接不上,而 grok 没有隔离档那条路可以后补 —— 安装器跳过就是真的没接上。
- * 反过来也不能退成正则全文扫(那是 R7 在 TS 侧的病):多行字符串里的示例会被当成真事实。
- *
- * 所以**只认两种写法,其余一律回 why**(不写比写错便宜得多):
- *  · `[mcp_servers.<名>]` / `[[…]]` / `[mcp_servers."名"]` 这样的表头 —— 取名字;
- *  · 根级 `disabled_mcp_servers = ["a","b"]`(写在一行里的数组);
- *  · 别的地方再出现 `mcp_servers` 这个词(内联表 `mcp_servers = { … }`、点号键
- *    `mcp_servers.ash.command = …`、某个值里带着这个词)⇒ 判不准,不写。
- *
- * 注释和多行字符串先剔掉再判(它们里面的文本不是事实);单行引号里的文本不剔 —— 那种
- * 情况会落到「判不准」,方向偏向不写。
- */
-function scanTomlServers(text) {
-  const bare = [];                                  // 剔掉注释和多行字符串之后的同构行
-  let ml = null;
-  for (const raw of text.split(/\r?\n/)) {
-    if (ml) {                                       // 多行字符串里:只找它的收尾
-      bare.push("");
-      if (raw.includes(ml)) ml = null;
-      continue;
-    }
-    const opened = /("""|''')/.exec(raw);
-    if (opened) {
-      bare.push(raw.slice(0, opened.index));
-      if (!raw.slice(opened.index + 3).includes(opened[1])) ml = opened[1];
-      continue;
-    }
-    bare.push(raw.replace(/#.*$/, ""));
+  const body = current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`;
+  // **发布前把候选自己再扫一遍**(本轮审查 R2):重复一张同名表会让 CLI 整份配置都读不出来,
+  // 所以「拼完之后恰好一张 ash 表、而且还扫得准」是写出去的前置条件 —— 不能只信扫描器判对。
+  const after = scanTomlServers(body);
+  if (after.why) return { why: `拼出来的配置自己又读不准了（${after.why}），所以没写` };
+  if (!after.names.includes(ASH)) return { why: "拼出来的配置自己又读不出那条 ash 登记，所以没写" };
+  if (after.duplicateTables.includes(ASH)) {
+    return { why: "拼出来的配置里有不止一张 ash 表（TOML 不许重复表，CLI 会整份拒载），所以没写" };
   }
-  if (ml) return { why: "配置里有一个多行字符串到文件结尾还没收尾（这份 TOML 本身读不通）" };
-
-  const names = [];
-  let disabled = [];
-  const rest = [];
-  for (const line of bare.map((l) => l.trim())) {
-    if (!line) continue;
-    if (line.startsWith("[")) {
-      const header = /^\[\[?((?:[^\]"']|"(?:[^"\\]|\\.)*"|'[^']*')*)\]\]?$/.exec(line);
-      const path = header ? tomlKeyPath(header[1]) : null;
-      if (!path) return { why: `表头 ${line} 按 TOML 读不通` };
-      if (path[0] === "mcp_servers") {
-        // `[mcp_servers]` 本体底下只能靠点号键给出名字 —— 那一档我们不认,交给「判不准」。
-        if (path.length < 2) return { why: "配置里有一张 [mcp_servers] 总表（名字写在点号键里，ash 认不了）" };
-        names.push(path[1]);
-      }
-      continue;
-    }
-    const off = /^disabled_mcp_servers[ \t]*=[ \t]*\[(.*)\][ \t]*$/.exec(line);
-    if (off) {
-      disabled = [...(off[1].match(/"(?:[^"\\]|\\.)*"|'[^']*'/g) || [])].map((q) => unquoteToml(q) ?? "");
-      continue;
-    }
-    rest.push(line);
-  }
-  // 剩下的地方不许再出现这个词:内联表、点号键、值里带着它,我们都读不准。
-  const stray = rest.find((l) => /mcp_servers/.test(l));
-  if (stray) return { why: `配置里这一行提到了 mcp_servers，而 ash 读不准它的写法：${stray.slice(0, 60)}` };
-  return { names, disabled };
-}
-
-/** `mcp_servers."ash".env` → `["mcp_servers","ash","env"]`;读不通返回 null。 */
-function tomlKeyPath(raw) {
-  const out = [];
-  let i = 0;
-  while (i < raw.length) {
-    while (raw[i] === " " || raw[i] === "\t") i++;
-    if (raw[i] === '"' || raw[i] === "'") {
-      const re = raw[i] === '"' ? /^"(?:[^"\\]|\\.)*"/ : /^'[^']*'/;
-      const m = re.exec(raw.slice(i));
-      const text = m ? unquoteToml(m[0]) : null;
-      if (!m || text === null) return null;
-      out.push(text);
-      i += m[0].length;
-    } else {
-      const m = /^[A-Za-z0-9_-]+/.exec(raw.slice(i));
-      if (!m) return null;
-      out.push(m[0]);
-      i += m[0].length;
-    }
-    while (raw[i] === " " || raw[i] === "\t") i++;
-    if (i >= raw.length) break;
-    if (raw[i] !== ".") return null;
-    i++;
-  }
-  return out.length ? out : null;
-}
-
-/** TOML 的字符串字面量 → 文本(双引号按转义解码,单引号原样);读不通返回 null。 */
-function unquoteToml(raw) {
-  if (raw.startsWith("'")) return raw.slice(1, -1);
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-/** 有注释就不改写(理由同 TS 那边的 `jsonComposeGuard`)。 */
-function hasJsonComments(text) {
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escape) escape = false;
-      else if (ch === "\\") escape = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') { inString = true; continue; }
-    if (ch === "/" && (text[i + 1] === "/" || text[i + 1] === "*")) return true;
-  }
-  return false;
+  return { body };
 }
