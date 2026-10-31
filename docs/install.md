@@ -110,11 +110,27 @@ ASH_URL = "http://localhost:4317"
 
 验证:`claude mcp list` 应该看到 `ash: … ✔ Connected`。
 
+### 其它 CLI(gemini / grok / kimi / opencode / cursor / qwen / qoder / copilot / kiro / kilo / antigravity / pi)
+
+`npm run setup` 会给**这台机器上真装了**的每一家都写一条 ash 登记,落点和格式各不相同
+(逐家一张表在 `server/src/executors/catalog/README.md` 的「ash MCP 登记矩阵」,表本体是代码:
+`server/src/mcp-registry/catalog.ts`)。规矩一样:
+
+- **只在缺 ash 条目时追加**,其它条目(含你自己装的第三方 MCP)一个字节都不动;
+- 已有 `ash` 或历史名 `harness` 一律不覆盖,关着的不替你打开;
+- 配置里有注释的那种(`opencode.jsonc` 一类)**不自动改写**(序列化会把注释丢掉),会提示你自己加;
+- 改写已有文件前生成 `.bak-ash-setup` 备份。
+
+装完某家 CLI 之后重新跑一次 `npm run setup` 就会补上。**trae 要手工接**:它的全局配置是 YAML
+(`traecli config edit` 打开 `trae_cli.yaml`),本仓没有能保住注释与缩进的 YAML 写入器。
+
+接没接上不用自己猜:起跑前的预检会在任务时间线上说一句(确实没有 MCP 机制的直接拒掉派审,
+只按文档核对过、没在真机实测的那几家会明说这一点),ash 启动时也会把缺口逐家列在日志里。
+
 ### Kimi Code
 
 安装并运行 `kimi login` 登录后，重新运行 `npm run setup`，会把 ash MCP 登记到
-`~/.kimi-code/mcp.json`（设置了 `KIMI_CODE_HOME` 时使用该目录）。已有 ash/harness
-登记和其他 MCP 服务保持不变；改写已有文件前会生成 `.bak-ash-setup` 备份。
+`~/.kimi-code/mcp.json`（设置了 `KIMI_CODE_HOME` 时使用该目录）。
 
 手动配置时，把下面的 `ash` 条目合并进该文件的 `mcpServers`：
 
