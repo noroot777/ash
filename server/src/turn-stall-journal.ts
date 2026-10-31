@@ -42,6 +42,12 @@ export interface StallVerdictRecord {
   turnStartedAt: string;
   /** 熔断诊断那一段原文,结算侧需要时转述。 */
   reason: string;
+  /**
+   * 这一次停滞的起点。接管那一路要拿它还原停滞记录 —— 持久标记的 CAS 认的是这个身份
+   * (`session-stall-flag.ts`),所以它必须跟着判决一起落盘,不能由接管那一刻现编。
+   * 读的一侧按可选处理:退回 `at` 是诚实的退路(撤不掉旧标记,但也碰不到别人的)。
+   */
+  since?: string;
 }
 
 export function stallJournalFileForDb(dbFile = resolveAshDbFile()): string {
@@ -139,9 +145,10 @@ export function rotateStallJournal(dbFile = resolveAshDbFile()): void {
 
 /** 只给回归测试:直接追加一条(不经 fsync 那条路),用来铺两代之间的历史。 */
 export function __seedStallVerdict(record: Partial<StallVerdictRecord>, dbFile: string): void {
+  const at = record.at ?? now();
   const full: StallVerdictRecord = {
-    at: record.at ?? now(), sessionId: record.sessionId ?? "s", turnStartedAt: record.turnStartedAt ?? "t",
-    reason: record.reason ?? "seed",
+    at, sessionId: record.sessionId ?? "s", turnStartedAt: record.turnStartedAt ?? "t",
+    reason: record.reason ?? "seed", since: record.since ?? at,
   };
   appendFileSync(stallJournalFileForDb(dbFile), `\n${JSON.stringify(full)}\n`, { mode: 0o600 });
 }

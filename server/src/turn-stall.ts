@@ -65,7 +65,7 @@ import { isExecutionNotice } from "./session-notice.js";
 import { RUNS_DIR } from "./paths.js";
 import { runTracePaths } from "./transcript.js";
 import { producesWork } from "@ash/shared/waiting";
-import { markStallFailure, retireStallFailure } from "./turn-stall-verdict.js";
+import { markStallFailure, retireStallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import { now } from "./util.js";
 
 /** 持有者 = 此刻在消费这条会话的那个实例本身(同 session-waiting.ts 的 WaitingOwner)。 */
@@ -460,13 +460,55 @@ function evaluate(sessionId: string, stall: Stall): void {
   //     出现「用户看到已终止、重启接管后却按正常完成结算」(第 1 轮审查 F1,已实测)。
   // 所以这里拿的是**落盘结果**而不是「调过了」:`markStallFailure` 返回即落盘(持久那一半在
   // turn-stall-journal.ts / turn-stall-persist.ts,本模块不碰盘也不碰库)。
-  const durability = markStallFailure(stall.sessionId, stall.turnStartedAt, verdict);
+  const durability = markStallFailure(stall.sessionId, stall.turnStartedAt, verdict, stall.since);
   // 没存住照样终止 —— 那一轮确实该停;但要**如实说一句**,别让用户以为这个结论一定还在。
   const text = durability === "lost-on-restart" ? `${verdict}\n${stallVolatileVerdictText()}` : verdict;
   try {
     stall.actions.trip(text, facts);
   } catch (error) {
     console.warn(`[ash] 熔断会话 ${sessionId} 的停滞回合失败:`, error);
+  }
+}
+
+/**
+ * 接管一个**上一个进程已经判了熔断**的回合:把那份没兑现完的终止义务放回状态机,并按同一条
+ * 路兑现它。
+ *
+ * 为什么非得回到状态机、而不是在消费入口手动「发一句诊断 + 杀一次」(那是上一版的做法):
+ * 判决跨进程留下来了,**义务没有**。义务的全部语义都住在这张表里 ——
+ *   · 「终止义务只有两个出口」:熔断之后普通进展事件撤不动它,只有同一 owner+回合真的收口、
+ *     或者这台明确退役才算完(见 `trackTurnStall` 里那段)。手动杀一次的话,这个回合在状态机
+ *     里压根不存在,于是上游要是继续只吐错误,`tripMs` 之后它会被当成**一次全新的停滞**再
+ *     宣布一遍熔断、再落一条判决。
+ *   · 宽限回收那一档(`ASH_STALL_TRIP_GRACE_MS`):终止请求没生效时升一级回收句柄。手动那条
+ *     路一次 `kill()` 之后就没有下文了。
+ *   · 退场与销账(`retire` → `retireStallFailure`):判决的生命周期靠它,否则这一份要等孤立
+ *     时效。
+ * 所以接管这条路跟熔断那条路**走同一个出口**,差别只在措辞和「判决是现做的还是读回来的」。
+ *
+ * 现场按判决里记的那一份还原(`verdict.since`),不是按接管这一刻 —— 持久标记的 CAS 认的是
+ * 那个身份。`trippedAtMs` 反过来按**现在**算:这一次的终止请求确实是此刻发出的,宽限期该从
+ * 此刻起算。
+ */
+export function resumeTrippedTurn(
+  sessionId: string,
+  owner: StallOwner,
+  turnStartedAt: string,
+  verdict: StallVerdict,
+  actions: StallActions,
+): void {
+  const stall = openStall(sessionId, owner, turnStartedAt, actions);
+  stall.since = verdict.since;
+  const sinceMs = Date.parse(verdict.since);
+  if (Number.isFinite(sinceMs)) stall.sinceMs = sinceMs;
+  // 上一个进程多半已经报过警、置过持久标记 —— 当成「报过」,这一轮收口时那个标记才撤得掉。
+  stall.warned = true;
+  stall.trippedAtMs = Date.now();
+  stall.elapsedMs = Math.max(0, stall.trippedAtMs - stall.sinceMs);
+  try {
+    actions.trip(stallResumeText(verdict), factsOf(stall));
+  } catch (error) {
+    console.warn(`[ash] 接管会话 ${sessionId} 的停滞回合、继续终止失败:`, error);
   }
 }
 
@@ -543,6 +585,17 @@ export function stallTripText(facts: StallFacts): string {
     + "可直接重试续跑,或换一个执行器/供应商再跑。"
     + "熔断时长由 ASH_STALL_TRIP_MS 配置(默认 30 分钟,置 0 关闭);"
     + "警告档是 ASH_STALL_WARN_ERRORS(默认 5 条)与 ASH_STALL_WARN_MS(默认 5 分钟)。";
+}
+
+/**
+ * 接管一个已被判熔断的回合时那段文案:**如实说这是上一次运行的判决**,别冒充这一刻才判的。
+ *
+ * 判决原文整段带上 —— 上一次运行写的那条诊断可能随进程一起没了(trace 那一笔同样可能排在
+ * 队里),这里是用户唯一还能看到它的地方。
+ */
+export function stallResumeText(verdict: StallVerdict): string {
+  return "〔上游停滞·接管后继续终止〕这一回合在上次 ash 运行期间已被判定上游连不上并按失败结算,"
+    + `重启接管后仍背着尚未兑现的终止义务,现在把它终止。原判决(${verdict.at}):${verdict.reason}`;
 }
 
 /**

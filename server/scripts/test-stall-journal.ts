@@ -92,9 +92,13 @@ const TURN2 = "2026-10-30T09:00:00.000Z";
   setStallVerdictPersister(null);
   assert.equal(markStallFailure("d1", TURN, "没注册"), "not-persisted");
 
-  const seen: string[] = [];
-  setStallVerdictPersister((sessionId) => { seen.push(sessionId); return true; });
-  assert.equal(markStallFailure("d2", TURN, "存住了"), "durable");
+  // 整份判决交给持久那一半 —— 包含停滞起点:它必须跟着落盘,否则接管那一路只能现编一个
+  // (`StallVerdict.since`:持久标记的 CAS 认的是那个身份)。
+  const seen: { sessionId: string; since: string; reason: string }[] = [];
+  setStallVerdictPersister((verdict) => { seen.push(verdict); return true; });
+  assert.equal(markStallFailure("d2", TURN, "存住了", "2026-10-30T07:00:00.000Z"), "durable");
+  assert.deepEqual(seen.map((v) => [v.sessionId, v.since, v.reason]),
+    [["d2", "2026-10-30T07:00:00.000Z", "存住了"]], "交给持久那一半的判决少了字段");
 
   setStallVerdictPersister(() => false);
   assert.equal(markStallFailure("d3", TURN, "没存住"), "lost-on-restart");
@@ -108,7 +112,7 @@ const TURN2 = "2026-10-30T09:00:00.000Z";
   } finally {
     console.warn = quiet;
   }
-  assert.deepEqual(seen, ["d2"], "持久那一半被按错次数调用了");
+  assert.equal(seen.length, 1, "持久那一半被按错次数调用了");
 }
 
 // ── ⑤ 没存住那一档:熔断诊断里如实多说一句 ─────────────────────────────────────

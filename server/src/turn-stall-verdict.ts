@@ -41,6 +41,22 @@ export interface StallVerdict {
   /** 判失败的原因原文(熔断诊断那一段),给结算侧需要时转述。 */
   reason: string;
   at: string;
+  /**
+   * **这一次停滞的起点**,也就是持久标记的 CAS 身份(`session-stall-flag.ts`:只有置上它的
+   * 那一次停滞撤得动)。
+   *
+   * 为什么它属于判决、而不是让接管那一路现编一个:接管一个已被判熔断的回合时要把这份没兑现
+   * 完的终止义务放回状态机,而那条记录的 `since` 决定它结束时撤得掉哪一个标记。现编一个
+   * 「接管这一刻」出来,撤的就是个不存在的身份 —— 那是拿我们自己不知道的值冒充事实。
+   */
+  since: string;
+  /**
+   * 这份判决**存住了没有**(`StallDurability` 的 `durable` 那一档)。
+   *
+   * 挂在判决上而不是让下结论那一处拿个局部变量传着走:三处读判决的地方(终止、恢复、结算)
+   * 都有资格问这一句,而「问得到」是它们能不能如实对用户说话的前提。
+   */
+  durable: boolean;
 }
 
 interface Entry extends StallVerdict {
@@ -82,7 +98,9 @@ export type StallDurability = "durable" | "lost-on-restart" | "not-persisted";
  * **返回值是契约**:`true` 只能在事实确实存住之后给。返回即落盘 —— 发起一笔异步写然后报
  * `true`,就是 F1 那个根上错的判据本身。
  */
-type StallVerdictPersister = (sessionId: string, turnStartedAt: string, reason: string) => boolean;
+type StallVerdictPersister = (
+  verdict: Omit<StallVerdict, "durable"> & { sessionId: string; turnStartedAt: string },
+) => boolean;
 let persister: StallVerdictPersister | null = null;
 
 export function setStallVerdictPersister(fn: StallVerdictPersister | null): void {
@@ -127,12 +145,11 @@ function sweepOrphans(cutoffMs: number): void {
   }
 }
 
-function remember(sessionId: string, turnStartedAt: string, reason: string): string {
-  const at = now();
-  failures.set(key(sessionId, turnStartedAt), { reason, at, retiredAt: null });
-  const cutoff = Date.parse(at) - ORPHAN_MS;
+function remember(verdict: StallVerdict & { sessionId: string; turnStartedAt: string }): void {
+  const { sessionId, turnStartedAt, ...rest } = verdict;
+  failures.set(key(sessionId, turnStartedAt), { ...rest, retiredAt: null });
+  const cutoff = Date.parse(rest.at) - ORPHAN_MS;
   if (Number.isFinite(cutoff)) sweepOrphans(cutoff);
-  return at;
 }
 
 /**
@@ -145,15 +162,25 @@ function remember(sessionId: string, turnStartedAt: string, reason: string): str
  * **不让持久那一半抛**:落盘失败不该拦住终止 —— 那一轮确实该停。但也绝不静默:返回
  * `lost-on-restart`,由 trip 的措辞如实说出来。
  */
-export function markStallFailure(sessionId: string, turnStartedAt: string, reason: string): StallDurability {
-  remember(sessionId, turnStartedAt, reason);
-  if (!persister) return "not-persisted";
-  try {
-    return persister(sessionId, turnStartedAt, reason) ? "durable" : "lost-on-restart";
-  } catch (error) {
-    console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能存住:`, error);
-    return "lost-on-restart";
-  }
+export function markStallFailure(
+  sessionId: string,
+  turnStartedAt: string,
+  reason: string,
+  /** 这一次停滞的起点。不给就按判决时刻算(纯状态机测试用不到它)。 */
+  since?: string,
+): StallDurability {
+  const at = now();
+  const durability = ((): StallDurability => {
+    if (!persister) return "not-persisted";
+    try {
+      return persister({ sessionId, turnStartedAt, reason, since: since ?? at, at }) ? "durable" : "lost-on-restart";
+    } catch (error) {
+      console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能存住:`, error);
+      return "lost-on-restart";
+    }
+  })();
+  remember({ sessionId, turnStartedAt, reason, at, since: since ?? at, durable: durability === "durable" });
+  return durability;
 }
 
 /**
@@ -163,8 +190,13 @@ export function markStallFailure(sessionId: string, turnStartedAt: string, reaso
  * 跟 `markStallFailure` 分开,是因为这条路**不许再走一遍持久化**:事实早就在日志里,再追加
  * 一条只会让同一份判决在账本上重复,接管几次就重复几次。
  */
-export function adoptStallFailure(sessionId: string, turnStartedAt: string, reason: string): void {
-  remember(sessionId, turnStartedAt, reason);
+export function adoptStallFailure(
+  sessionId: string,
+  turnStartedAt: string,
+  verdict: Omit<StallVerdict, "durable">,
+): void {
+  // 装回来的这一份**按定义是存住的** —— 它正是从进程外读出来的。
+  remember({ sessionId, turnStartedAt, ...verdict, durable: true });
 }
 
 /**

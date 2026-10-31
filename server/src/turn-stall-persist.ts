@@ -41,12 +41,12 @@ import { now } from "./util.js";
 // 判据与判决本体仍然一个字节都不落:它们只认一个可注册的钩子,没注册时(纯状态机测试)什么都
 // 不做。盘和库只从**这个**文件进来,而谁 import 它、谁就连着它们 —— `index.ts` 启动时 import
 // 一次,保证连一条消费链都还没起来时就已经装上。
-setStallVerdictPersister((sessionId, turnStartedAt, reason) => {
+setStallVerdictPersister((verdict) => {
   // **同步落盘那一笔就是判决的事实**,它成了才算存住 —— 返回值如实带回去(契约见
   // `markStallFailure`:返回即落盘,不许发起一笔异步写然后报成功)。
-  const journaled = appendStallVerdict({ at: now(), sessionId, turnStartedAt, reason });
+  const journaled = appendStallVerdict(verdict);
   // 库那一格异步补一份:它可能排在别人的长事务后面,而那恰好是它不能承载事实的原因。
-  void projectStallVerdictToDb(sessionId, turnStartedAt, reason);
+  void projectStallVerdictToDb(verdict.sessionId, verdict.turnStartedAt, verdict.reason);
   return journaled;
 });
 
@@ -104,7 +104,8 @@ export async function restoreStallVerdict(
   // 同进程里已经有了就别再翻盘和库:那一份才是最新的(这条路也走正常起跑,不只走接管)。
   const held = stallFailure(sessionId, turnStartedAt);
   if (held) return held;
-  let reason = readStallVerdict(sessionId, turnStartedAt)?.reason ?? "";
+  const journaled = readStallVerdict(sessionId, turnStartedAt);
+  let reason = journaled?.reason ?? "";
   let settled = false;
   try {
     const read = await dbClient.execute({
@@ -119,6 +120,9 @@ export async function restoreStallVerdict(
       + "(落盘的判决仍然算数):", error);
   }
   if (!reason || settled) return null;
-  adoptStallFailure(sessionId, turnStartedAt, reason);
+  // 停滞起点只有日志里记着(库那一格只有原因原文)。退回判决时刻是**诚实的退路**:那一路撤
+  // 不掉上一个进程置的持久标记,但也绝不会去撤别人的 —— 判据见 StallVerdict.since。
+  const at = journaled?.at ?? now();
+  adoptStallFailure(sessionId, turnStartedAt, { reason, at, since: journaled?.since ?? at });
   return stallFailure(sessionId, turnStartedAt);
 }

@@ -22,6 +22,7 @@ import { childActivity } from "../src/executors/native-agent-activity.js";
 import {
   __resetTurnStalls,
   clearTurnStall,
+  resumeTrippedTurn,
   trackTurnStall,
   type StallActions,
   type StallFacts,
@@ -131,6 +132,40 @@ import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtur
   assert.match(verdict.reason, /已自动终止本回合/, "钉下来的结论不是熔断那段诊断");
   assert.equal(stallFailure("s5b", "2026-10-30T09:00:00.000Z"), null, "把别的回合也判成失败了");
   assert.equal(stallFailure("other", TURN), null, "把别的会话也判成失败了");
+}
+
+// ── ⑤h 接管一个**上一个进程已经判了熔断**的回合:走同一条动手路径 ───────────────────
+// 判决跨进程留下来了(落盘),**义务没有**:义务的语义全住在状态机那张表里。上一版在消费入口
+// 手抄了「发一句诊断 + 杀一次」,于是这个回合在状态机里压根不存在 —— 下面三条一条都拿不到。
+{
+  // 扫表间隔有 200ms 下限(thresholds 的夹取),所以下面每一段都要等够一拍;宽限期特意放到
+  // 700ms,免得「第二次熔断」和「宽限回收」挤在同一拍里分不清是哪一条在动。
+  configure({ warnErrors: 1, tripMs: 60, graceMs: 700, pollMs: 15 });
+  const { actions, log } = spy();
+  const owner = {};
+  const SINCE = "2026-10-30T07:30:00.000Z";
+  resumeTrippedTurn("s5h", owner, TURN, { reason: "上次那段熔断诊断", at: SINCE, since: SINCE, durable: true }, actions);
+  assert.equal(log.trips.length, 1, "接管后没有继续兑现终止义务");
+  assert.match(log.trips[0]!, /接管后继续终止/, "没说清这是上次运行作出的判决");
+  assert.match(log.trips[0]!, /上次那段熔断诊断/, "原判决原文没带上 —— 上一次运行写的那条诊断可能已经随进程没了");
+
+  // ① 终止义务只有两个出口:**普通进展事件撤不动它**。
+  trackTurnStall("s5h", owner, TURN, { kind: "text", text: "上游回来了,接着说。" }, actions);
+  assert.deepEqual(log.resolves, [], "一条正文就把接管来的终止义务撤了");
+
+  // ② 上游继续只吐错误,也**不会第二次宣布熔断** —— 状态机知道这一轮已经熔断过了。
+  for (let i = 0; i < 6; i += 1) trackTurnStall("s5h", owner, TURN, notice(), actions);
+  await sleep(320); // 等够一拍扫表:没进状态机的话,这些错误会被当成一次全新的停滞再熔断一遍
+  assert.equal(log.trips.length, 1, "同一轮被宣布了两次熔断 —— 接管那一路没进状态机");
+  assert.equal(log.escalations.length, 0, "宽限期还没到就回收了");
+
+  // ③ 终止请求没生效:宽限期到了照样升一级回收(手抄那一版一次 kill 之后就没有下文了)。
+  await sleep(600);
+  assert.equal(log.escalations.length, 1, "接管来的终止请求没人理,宽限回收这一档没接上");
+
+  // ④ 回合真收口:撤标记撤的是**判决里记的那一次停滞**,不是接管这一刻(持久标记按它做 CAS)。
+  clearTurnStall("s5h", owner);
+  assert.deepEqual(log.resolveSince, [SINCE], "撤的不是上一个进程置上的那个停滞身份 —— 那个标记永远撤不掉");
 }
 
 // ── ⑤c 熔断之后回合**没真的结束**:过了宽限期回收句柄 ─────────────────────────────

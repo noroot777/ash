@@ -17,11 +17,13 @@ export type Log = {
   warns: { text: string; facts: StallFacts }[];
   trips: string[];
   escalations: string[];
-  /** 撤标记时拿到的回合身份 —— 库里那一侧按它做 CAS(session-stall-flag.ts),所以得钉住。 */
+  /** 撤标记时拿到的回合身份。 */
   resolves: string[];
+  /** 撤标记时拿到的**停滞身份** —— 库里那一侧按它做 CAS(session-stall-flag.ts),所以得钉住。 */
+  resolveSince: string[];
 };
 export function spy(taskId = "task-1"): { actions: StallActions; log: Log } {
-  const log: Log = { warns: [], trips: [], escalations: [], resolves: [] };
+  const log: Log = { warns: [], trips: [], escalations: [], resolves: [], resolveSince: [] };
   return {
     log,
     actions: {
@@ -29,7 +31,7 @@ export function spy(taskId = "task-1"): { actions: StallActions; log: Log } {
       warn: (text, facts) => log.warns.push({ text, facts }),
       trip: (text) => log.trips.push(text),
       escalate: (text) => log.escalations.push(text),
-      resolve: (facts) => log.resolves.push(facts.turnStartedAt),
+      resolve: (facts) => { log.resolves.push(facts.turnStartedAt); log.resolveSince.push(facts.since); },
     },
   };
 }

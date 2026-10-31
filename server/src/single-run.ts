@@ -31,7 +31,7 @@ import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./tr
 import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
-import { clearTurnStall, trackTurnStall, type StallActions } from "./turn-stall.js";
+import { clearTurnStall, resumeTrippedTurn, trackTurnStall, type StallActions } from "./turn-stall.js";
 import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import { restoreStallVerdict } from "./turn-stall-persist.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
@@ -281,17 +281,14 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 任务落 done,而用户那边早已看到「已自动终止本回合并按失败结算」(审查 F3,已实测)。
     //
     // 装回来只是让结算读得到结论;**终止义务也得接着兑现** —— 判决已经作出、话已经说出去了,
-    // 让它继续跑下去就是第二次失信。正常起跑走到这里一律是 null(那一轮库里没有判决)。
+    // 让它继续跑下去就是第二次失信。正常起跑走到这里一律是 null(那一轮没有落盘的判决)。
+    //
+    // 兑现走 `resumeTrippedTurn`,**不在这里手抄一遍「发句诊断 + 杀一次」**:那四步跟
+    // `stallActions.trip` 一模一样,抄一份就会跟它漂;更要紧的是义务本身的语义(终止义务只有
+    // 两个出口、宽限回收、退场销账)全住在看门狗那张表里,手动杀一次拿不到(见那个函数的注释)。
     const carriedVerdict = await restoreStallVerdict(sessId, a.turnStart);
-    if (carriedVerdict) {
-      const text = "〔上游停滞·接管后继续终止〕这一回合在上次 ash 运行期间已被判定上游连不上"
-        + "并按失败结算,重启接管后仍背着尚未兑现的终止义务,现在把它终止。"
-        + `原判决:${carriedVerdict.reason}`;
-      const event: AgentEvent = { kind: "error", message: text };
-      persistTrace(event);
-      writeRunError(out, text);
-      publishEvent(event);
-      a.handle.kill();
+    if (carriedVerdict && a.turnStart) {
+      resumeTrippedTurn(sessId, a.handle, a.turnStart, carriedVerdict, stallActions);
     }
     for await (const event of a.handle.events) {
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
