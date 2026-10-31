@@ -131,8 +131,28 @@ try {
   await select({ text: "第 3 条改完了。" }, { text: "用户尾行" });
   assert.equal(await take(), "第 3 条改完了。\n\n用户首行\n    缩进内容\n用户尾行");
 
+  // ⑩ 根因这一条:判据先读 HTML 语义,不靠「每个卡片的作者记得加标记」。这张卡一个
+  //    选文标记都没有,头尾却照样剔得干净 —— 审查第 1 轮不拦项里那四处(审查泳道、
+  //    辩论卡、问答历史、系统旁注)的头尾都是同一套语义标签写的,一个字都不用改。
+  await page.getByTestId("clear").click();
+  await page.getByTestId("unmarked-card").evaluate((card) => {
+    const range = document.createRange();
+    range.selectNodeContents(card);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    const box = range.getBoundingClientRect();
+    card.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: box.right, clientY: box.bottom }));
+  });
+  const card = await take();
+  assert.equal(card, "审查卡自己的正文该留下。");
+  for (const noise of ["第 1 轮独立验证", "Codex 在审", "收起", "查看报告", "10/30", "🛡", "已通过"]) {
+    assert.equal(card.includes(noise), false, `没标记的卡片漏出了「${noise}」`);
+  }
+
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("✓ 会话选文只取正文:跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住");
+  console.log("✓ 会话选文只取正文:跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
 } finally {
   await browser?.close();
   await server.close();

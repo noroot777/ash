@@ -73,6 +73,21 @@ function Fixture() {
       <div style={{ height: 520 }}>
         <ConversationFeed task={task} items={items} sessions={[]} questionHistory={[]} loading={false} error={null} />
       </div>
+      {/* 一张**没有任何选文标记**的卡,照审查泳道/辩论卡那种写法摆:头尾用的就是
+          header / time / button / aria-hidden 这些语义标签。钉住「新写的卡片不必记得
+          加标记」—— 审查第 1 轮不拦项里那四处现成的,靠的正是这条。摆在会话区旁边而
+          不是它的 footer 里:那块高度是固定的,卡会被裁掉,rect 为 0 就连浮条都不出。 */}
+      <article className="verify-lane" data-testid="unmarked-card">
+        <header className="verify-lane-head">
+          <span aria-hidden="true">🛡</span>
+          <b>第 1 轮独立验证</b>
+          <span>Codex 在审</span>
+          <time>10/30 12:00</time>
+          <button type="button">收起</button>
+        </header>
+        <p>审查卡自己的正文该留下。</p>
+        <footer><button type="button">查看报告</button>已通过</footer>
+      </article>
     </ConversationSelection>
   </main>;
 }

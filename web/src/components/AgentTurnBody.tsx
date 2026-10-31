@@ -31,6 +31,8 @@ function ProcessFold({ events, open, onToggle, children }: {
   return (
     <details
       className={`task-execution-block task-turn-process${executionBlockTone(events)}`}
+      /* 选中一段会话时整块不算正文 —— 这里尤其要声明:折进去的那半截**本来就是正文**
+         (markdown 顶层块),语义上跟外面那段结论一模一样,分不出来(同 ExecutionTrace)。 */
       data-selection-chrome=""
       open={open}
       onToggle={(event) => onToggle(event.currentTarget.open)}

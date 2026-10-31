@@ -215,6 +215,9 @@ export function ExecutionDetails(
 ) {
   events = events.filter(isVisibleExecutionEvent);
   if (!events.length) return null;
+  /* data-selection-chrome:选中一段会话时整块不算正文。折叠条本身是 `summary`,选文那边
+     认语义就够;要标的是**展开之后那些事件行** —— 它们是一堆普通 div,语义上说不出
+     「这不是用户要的那段话」,只能在这里声明(见 side-chat/selectionContent.ts)。 */
   return (
     <details className={`task-execution-block${executionBlockTone(events)}`} data-selection-chrome="">
       <summary>

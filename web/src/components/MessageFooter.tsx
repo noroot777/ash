@@ -40,7 +40,7 @@ export function MessageFooter({
   const water = session ? (sessionContext !== undefined ? sessionContext : session.context) : null;
   if (!actions && !session?.cliSessionId && !session?.resumeCommand && !turnUsage && !total && !water) return null;
   return (
-    <footer className="task-message-footer" data-selection-chrome="">
+    <footer className="task-message-footer">
       {session?.cliSessionId && (
         <CopyButton
           value={session.cliSessionId}

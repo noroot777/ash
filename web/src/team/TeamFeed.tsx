@@ -48,7 +48,7 @@ function AgentRow({
   return (
     <article className={`team-feed-agent${row.continuation ? " is-continuation" : ""}`}>
       {!compactContinuation && (
-        <header data-selection-chrome="">
+        <header>
           {!row.continuation && (
             <span className="agent-run-identity">
               <b>{row.label}</b>
@@ -84,7 +84,7 @@ function UserRow({ row, noticeMode }: { row: Extract<TeamFeedRow, { kind: "conv"
   return (
     <article className={`team-feed-user${bySystem ? " is-system-authored" : ""}`}>
       <div>
-        <header data-selection-chrome=""><b>{bySystem ? "系统" : "你"}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
+        <header><b>{bySystem ? "系统" : "你"}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
       </div>
@@ -112,7 +112,7 @@ function InboundRow({
   const body = message.kind === "question" && worker?.question ? worker.question : message.body;
   return (
     <article className={`team-feed-inbound is-${message.kind}`} title={message.raw}>
-      <header data-selection-chrome="">
+      <header>
         <span>{number || "工"}</span>
         {worker ? <button type="button" onClick={() => onOpenWorker(worker.id)}>{worker.title}</button> : <b>{message.title || "系统"}</b>}
         {message.kind !== "note" && <em>· {message.kind === "question" ? "提问，卡住了" : message.kind === "failed" ? "失败了" : "汇报完成"}</em>}
@@ -122,7 +122,7 @@ function InboundRow({
       </header>
       <p>{body}</p>
       {message.kind === "question" && worker?.question && (
-        <div className="team-question-actions" data-selection-chrome="">
+        <div className="team-question-actions">
           <button
             className="team-question-delegate"
             type="button"
@@ -152,7 +152,7 @@ function BatchCard({
   indicatorForTask: IndicatorForTask;
 }) {
   return (
-    <article className="team-dispatch-card" data-selection-chrome="">
+    <article className="team-dispatch-card">
       <header>
         <ArrowElbowDownRight size={12} />
         <b>派活 · {batch.workers.length} 个执行者</b>
