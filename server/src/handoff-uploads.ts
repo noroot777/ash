@@ -15,13 +15,12 @@
 // 形态分组返回,替换时由调用方声明文本的上下文(纯文本还是 JSON),歧义时按上下文
 // 选组;.md 这类 markdown 正文和 JSON 哨兵行混排的文件,逐行判断是不是 JSON。
 import { existsSync, mkdirSync, statSync } from "node:fs";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { MAX_FILE_BYTES, MB } from "./handoff-types.js";
 import type { HandoffUploadPayload } from "./handoff-types.js";
 import { UPLOADS_DIR } from "./paths.js";
-import { UPLOAD_NAME_RUN, isSafeUploadName, newUploadName, uploadNameIndex, uploadRunCandidates } from "./upload-names.js";
-import type { UploadRef } from "./upload-names.js";
+import { UPLOAD_NAME_RUN, isSafeUploadName, newUploadName } from "./upload-names.js";
 
 export const MAX_UPLOADS = 100;
 
@@ -40,151 +39,133 @@ export interface LocalUploadNames {
 export const jsonEscaped = (s: string): string => JSON.stringify(s).slice(1, -1);
 
 /**
- * 这处引用**是不是把它那个字段整个占满了**。
+ * 文本里**每一处** uploads 引用按字符集切到的最长一段(一处一条,保留重复)。
  *
- * 这是「路径到哪里为止」唯一能从文本确定的一半,三种字段形态:
- *   · 引号/括号刚打开、紧跟着就合上 —— 这一对之间除了路径什么都没有(JSON 里的路径
- *     字段,键排第几都认得出;markdown 的 `![](…)`);
- *   · 独占一行 —— 行首到路径之间只有缩进、引用号或列表标记,路径之后就是行尾/文末。
- *     附件块(`attachmentsPrompt` 写的 `- <绝对路径>` 行)就是这一档;
- *   · 其余一律算「夹在正文里」。
- *
- * 占满字段的那些名字是我们自己写下去的,后面不可能粘着正文;而「请按 …/uploads/<名字>的
- * 要求办」这种夹在句子里的,前面有正文、后面也可能有 —— 只有后者才需要按本机已知的
- * 名字去消歧(判据与代价见 upload-names.ts 的 `uploadRunCandidates`)。
- *
- * 回看只看有界的一截:行首离得比这还远,说明前面必然还有别的正文。一行 11MB 的 JSONL
- * 上逐处 `lastIndexOf("\n")` 会退化成平方级(审查第 2 轮发现 2 是同一个坑)。
+ * 这一刀只回答「从哪里开始、最多到哪里」。它**不回答这段文本指向哪个附件** —— 那个
+ * 问题在文本层无解,判据见 `collectUploads`。
  */
-const FIELD_LOOKBACK = 200;
-/** 行首到路径之间只许有缩进、引用号和列表标记。 */
-const LINE_LEAD = /[\n\r][\s>]*(?:[-*+]\s+|\d+[.)]\s+)?$/u;
-const CLOSERS: Record<string, string> = { "(": ")", "[": "]", "<": ">", '"': '"', "'": "'", "`": "`" };
-
-function fillsField(text: string, at: number, end: number): boolean {
-  const before = at > 0 ? text[at - 1]! : "";
-  const after = end < text.length ? text[end]! : "";
-  if (before && CLOSERS[before] === after) return true;
-  if (after && after !== "\n" && after !== "\r") return false;
-  const from = Math.max(0, at - FIELD_LOOKBACK);
-  const window = text.slice(from, at);
-  // 判据一律以一个**真的换行**起头:文本开头自己补一个;窗口被截断(from > 0 且里面
-  // 一个换行都没有)就匹配不上 —— 前面还有 200 个字符的正文,当然不是独占一行。拿 `^`
-  // 兜这一档会把「截断的窗口」误当行首。
-  return LINE_LEAD.test(from === 0 ? `\n${window}` : window);
-}
-
-/**
- * 文本里**每一处** uploads 引用:按字符集切到的最长一段 + 它是不是占满了自己那个字段
- * (一处一条,保留重复)。
- *
- * 这一刀只负责「从哪里开始、最多到哪里」。切不准的那一档(中文说明直接粘在路径后面)
- * 由 `uploadRunCandidates` 按出处给候选、再由调用方的授权闸定答案 —— 文本启发式一概
- * 不做,推演见 upload-names.ts。保留逐处结果而不是直接归并成名字集合,是因为**出处
- * 关系是判据的一部分**:调用方要按「一处引用一条交代」记 notes,归并掉就只能靠事后比
- * 前缀去猜哪两个名字来自同一处(审查第 2 轮发现 2:那个猜法是全局两两比较,80k 条
- * 引用把主服务同步卡住 16.8 秒)。
- */
-export function scanUploadRuns(text: string, uploadsDir: string = UPLOADS_DIR): UploadRef[] {
-  const refs: UploadRef[] = [];
+export function scanUploadRuns(text: string, uploadsDir: string = UPLOADS_DIR): string[] {
+  const runs: string[] = [];
   // POSIX 下两种形态相同,Set 去重后只扫一遍。
   for (const prefix of new Set([uploadsDir + sep, jsonEscaped(uploadsDir + sep)])) {
     let idx = 0;
     while ((idx = text.indexOf(prefix, idx)) !== -1) {
-      const at = idx;
       idx += prefix.length;
       const match = UPLOAD_NAME_RUN.exec(text.slice(idx, idx + 512));
-      if (match) refs.push({ run: match[0], explicit: fillsField(text, at, idx + match[0].length) });
+      if (match) runs.push(match[0]);
     }
   }
-  return refs;
+  return runs;
+}
+
+/** 同上,只要名字集合。 */
+export const scanUploadNames = (text: string, uploadsDir: string = UPLOADS_DIR): Set<string> =>
+  new Set(scanUploadRuns(text, uploadsDir));
+
+type Taken =
+  | { kind: "ok" | "dup" | "full" | "denied" | "missing" }
+  | { kind: "oversize"; size: number };
+
+/** 一个名字过三道闸(授权 → 存在 → 大小)并入列。措辞由调用方按自己那一档定。 */
+async function takeUpload(
+  name: string,
+  out: HandoffUploadPayload[],
+  packed: Set<string>,
+  dryRun: boolean,
+  canPack: (name: string) => Promise<boolean>,
+): Promise<Taken> {
+  if (packed.has(name)) return { kind: "dup" };
+  if (out.length >= MAX_UPLOADS) return { kind: "full" };
+  // **授权在前,再碰盘。** 不变量本体在调用方的措辞上(文本那一档「没有这个文件」与
+  // 「有,但你读不到」必须是同一句话、同样的条数,否则拿一个猜来的文件名建条任务、点一次
+  // 预检就能问出它在不在 —— `/api/uploads/:file` 对两种情况回同一句 404 就白费了,
+  // 8CEbm0rJQIwK 第 2 轮审查 P2)。这里的顺序是另一半:没过闸的名字连 stat 都不做,
+  // 免得耗时差本身变成那个答案。
+  if (!(await canPack(name))) return { kind: "denied" };
+  const abs = join(UPLOADS_DIR, name);
+  if (!existsSync(abs)) return { kind: "missing" };
+  const size = statSync(abs).size;
+  if (size > MAX_FILE_BYTES) return { kind: "oversize", size };
+  packed.add(name);
+  out.push({ name, sourcePath: abs, dataBase64: dryRun ? "" : (await readFile(abs)).toString("base64") });
+  return { kind: "ok" };
 }
 
 /**
- * 同上,只要名字集合 —— 给「输入本来就是一条独立路径」的调用方用(`uploadNameOf`),
- * 那种输入没有后接散文,最长段就是精确名字。
- */
-export const scanUploadNames = (text: string, uploadsDir: string = UPLOADS_DIR): Set<string> =>
-  new Set(scanUploadRuns(text, uploadsDir).map((ref) => ref.run));
-
-/**
- * 导出侧:收集被引用且本机真实存在的附件。dryRun(preflight)只盘点,不读内容。
+ * 导出侧:收集随这条任务迁移的附件。dryRun(preflight)只盘点,不读内容。
  *
- * `canPack` 是**授权闸**,不给默认值:名字是从任务正文/会话文本里扫出来的,而路径
- * 会顺着日志、粘贴的 prompt、截图流到任何人手上。把别人的附件路径写进一条自己看得见
- * 的任务再接力出去,不问一声就等于把私有附件的内容送到另一台机器上(8CEbm0rJQIwK
- * 第 1 轮审查 P1)。判据由调用方从 `uploads.ts` 取(`readableUploads`),这里只负责
- * 逐个问、被拒的如实记进 notes —— 少一个附件对端最多按旧路径读不到,而多带一个是
- * 越权。新加导出入口时这个参数编译期就逼你想一遍「这是谁在导」。
+ * **身份来自归属表,不是从文本里解析出来的。** 这一条是本模块最贵的一课:
+ * `attachmentsPrompt` 把附件的**绝对路径**写进任务正文,于是「这条任务有哪些附件」看着
+ * 像个文本问题 —— 扫出路径、切出名字就完了。但文件名的字符集和正文的字符集重叠(汉字
+ * 既是合法文件名字符、也是正文字符),中文说明可以直接粘在路径后面、中间一个标点都没有,
+ * **「这段文本到哪里为止」在文本层根本不可判定**。沿这条路修过三轮,每一轮都是补丁:
+ *   · 只按字符集切 → 把后文吞进名字(审查第 1 轮发现 2);
+ *   · 再按「最后一处像扩展名的位置」猜一刀 → 后文里一个 `v1.2` 就猜偏,还会切坏
+ *     `<id>-v1.2终稿` 这种合法名字(第 2 轮发现 1);
+ *   · 改按「目录里存在的最长前缀」 → 正文里写明的一条缺失路径被**改指**成另一份真实
+ *     存在的附件:缺失一声不响,反而多带走不相关的字节;而且读不到的目录条目能借此
+ *     改变公开结果,成了存在性探针(UNFxdc3ADpeS 第 1 轮 R1)。
  *
- * 问的顺序也是判据的一部分:**授权在前、存在性在后**,读不到的一律回同一句话
- * (第 2 轮审查 P2,推演见循环里)。
+ * 所以不再问这个问题。两档候选,**都不需要知道边界在哪**:
+ *   · `owned` —— 登记表说这些附件挂在这条任务上(`uploads.ts` 的 `taskUploadNames`)。
+ *     权威、精确,而且覆盖得比扫文本更全:agent 落的图、讨论回合的图压根不在任务正文里,
+ *     以前得靠扫 run 产物文本才碰得到。
+ *   · 文本里**恰好就是一个真文件**的那些引用 —— 别的任务/随手记的附件被粘了一条路径
+ *     进来,过了授权闸照旧带走(老行为)。「这一段本身是不是一个真文件」是确定的事实,
+ *     不是对边界的猜测;**不是真文件就不带**,于是缺失保持缺失,不会改指成另一份文件。
+ *
+ * 路径改写也不需要边界:`buildUploadRewrites` 构造的是 `<目录>/<名字>` → `<目录>/<新名字>`,
+ * `replaceAll` 天然按前缀走 —— 正文里「<路径>的要求」这种粘连写法,前缀被换掉、后面那截
+ * 原样留着,对端照样读得到。
+ *
+ * `canPack` 是**授权闸**,不给默认值:路径会顺着日志、粘贴的 prompt、截图流到任何人手上,
+ * 把别人的附件路径写进一条自己看得见的任务再接力出去,不问一声就等于把私有附件的内容送到
+ * 另一台机器上(8CEbm0rJQIwK 第 1 轮审查 P1)。判据由调用方从 `uploads.ts` 取
+ * (`readableUploads`)。新加导出入口时这两个参数编译期就逼你想一遍「这是谁在导、导的是
+ * 哪条任务」。
  */
 export async function collectUploads(
+  owned: Iterable<string>,
   texts: string[],
   notes: string[],
   dryRun: boolean,
   canPack: (name: string) => Promise<boolean>,
 ): Promise<HandoffUploadPayload[]> {
-  // 同一段文本(同样的出处)重复出现只记一次;出处不同的两处各算一处。
-  const refs = new Map<string, UploadRef>();
-  for (const t of texts) {
-    for (const ref of scanUploadRuns(t)) {
-      const key = `${ref.explicit ? "!" : "?"}${ref.run}`;
-      if (!refs.has(key)) refs.set(key, ref);
-    }
-  }
-  const index = uploadNameIndex(await readdir(UPLOADS_DIR).catch(() => [] as string[]));
   const out: HandoffUploadPayload[] = [];
   const packed = new Set<string>();
-  for (const ref of refs.values()) {
-    if (out.length >= MAX_UPLOADS) {
-      notes.push(`上传附件超过 ${MAX_UPLOADS} 个,余下的不迁移(对端按旧路径读不到)`);
-      break;
+  let full = false;
+  const overflow = (): void => {
+    if (!full) notes.push(`上传附件超过 ${MAX_UPLOADS} 个,余下的不迁移(对端按旧路径读不到)`);
+    full = true;
+  };
+
+  // ① 挂在这条任务上的。导出者对这条任务本来就有权限,所以这一档的交代可以说实话。
+  for (const name of new Set(owned)) {
+    if (full) break;
+    const taken = await takeUpload(name, out, packed, dryRun, canPack);
+    if (taken.kind === "full") { overflow(); break; }
+    if (taken.kind === "missing") notes.push(`附件 ${name} 挂在这条任务上,但本机已不存在,跳过`);
+    else if (taken.kind === "denied") notes.push(`附件 ${name} 不在你的可读范围内,不随任务迁移`);
+    else if (taken.kind === "oversize") notes.push(`附件 ${name} ${Math.round(taken.size / MB)}MB 超限,跳过`);
+  }
+
+  // ② 文本里提到的其它附件。先把已带走的名字排好:改写按前缀走,所以一处引用只要**以**
+  // 某个已带走的名字开头(「<路径>的要求」),对端就读得到,不必交代。这一步也是 `owned`
+  // 覆盖粘连写法的地方 —— 没有它就会对本来好端端的引用误报一句缺失。
+  const migrated = [...packed];
+  for (const run of new Set(texts.flatMap((text) => scanUploadRuns(text)))) {
+    if (full) break;
+    if (migrated.some((name) => run.startsWith(name))) continue;
+    const taken = await takeUpload(run, out, packed, dryRun, canPack);
+    if (taken.kind === "full") { overflow(); break; }
+    // **一处引用恒一条交代,而且读不到与不存在同一句话**:否则拿一个猜来的名字建条任务、
+    // 点一次预检就能问出它在不在(同上 P2)。`run` 不是真文件时走的也是这一句 —— 于是
+    // 「正文里写明的路径缺失」如实报出来,而不是悄悄换成另一份文件。
+    if (taken.kind === "missing" || taken.kind === "denied") {
+      notes.push(`上传附件 ${run} 不随任务迁移(本机没有,或不在你的可读范围内)`);
+    } else if (taken.kind === "oversize") {
+      notes.push(`上传附件 ${run} ${Math.round(taken.size / MB)}MB 超限,跳过`);
     }
-    // 候选判据见 upload-names.ts 的 uploadRunCandidates:明确路径只有它自己一个候选,
-    // 夹在正文里的才按本机已知的名字收敛。
-    //
-    // **先问授权,再看在不在** —— 两件事都成立才算答案,一个候选落选就试下一个。反过来
-    // 的话「本机没有这个文件」和「有,但你读不到」就是两句不同的话,谁都能拿一个猜来的
-    // 文件名建条任务、点一次预检,问出「这台机器上有没有这个附件」,`/api/uploads/:file`
-    // 对这两种情况回同一句 404 就白费了(8CEbm0rJQIwK 第 2 轮审查 P2)。候选落选也不许
-    // 中止整处引用:否则往目录里放一个「`<短名字>` + 一段中文」的私有文件,就能让同一条
-    // 可读引用从「带走」变成「带不走」,照样问出它在不在(UNFxdc3ADpeS 第 1 轮 R1)。
-    let resolved: string | null = null;
-    let denied = false;
-    for (const candidate of uploadRunCandidates(ref, index)) {
-      if (!(await canPack(candidate))) {
-        denied = true;
-        continue;
-      }
-      if (!existsSync(join(UPLOADS_DIR, candidate))) continue;
-      resolved = candidate;
-      break;
-    }
-    // **一处引用恒一条交代**,而且报的是原文那一段:于是「有这个文件但你读不到」与
-    // 「本机压根没有」在外部看来是同一句话、同样的条数。
-    if (!resolved) {
-      notes.push(denied
-        ? `上传附件 ${ref.run} 不随任务迁移(本机没有,或不在你的可读范围内)`
-        : `上传附件 ${ref.run} 在本机已不存在,跳过`);
-      continue;
-    }
-    // 收敛过的要如实说一句:带走的字节和正文里写的那一段不是同一个名字,用户得能看出
-    // 我们把后面那截当成了说明文字(不说这一句就是「无缺失提示地带走不相关内容」)。
-    if (resolved !== ref.run) {
-      notes.push(`上传附件 ${ref.run} 按 ${resolved} 迁移(路径后面粘着正文,不算名字)`);
-    }
-    // 同一个附件被引用多次:带一份就够。能走到这里说明已经**过了授权闸**,静默跳过。
-    if (packed.has(resolved)) continue;
-    const abs = join(UPLOADS_DIR, resolved);
-    const size = statSync(abs).size;
-    if (size > MAX_FILE_BYTES) {
-      notes.push(`上传附件 ${ref.run} ${Math.round(size / MB)}MB 超限,跳过`);
-      continue;
-    }
-    packed.add(resolved);
-    out.push({ name: resolved, sourcePath: abs, dataBase64: dryRun ? "" : (await readFile(abs)).toString("base64") });
   }
   return out;
 }

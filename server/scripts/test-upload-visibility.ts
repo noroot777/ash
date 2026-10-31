@@ -307,7 +307,8 @@ try {
   assert.equal((await get(bobExport.file, AS_ALICE)).status, 404, "前提:这份私有附件 Alice 本来就读不到");
   const exportText = `任务正文引用 ${bobExport.path} 和 ${aliceFile.path}`;
   const aliceNotesOut: string[] = [];
-  const alicePack = await collectUploads([exportText], aliceNotesOut, false, await readableUploads(alice.id));
+  // owned 传空:这一档专测**文本里提到的别人附件**那条路,归属表那档由 test-upload-names 钉。
+  const alicePack = await collectUploads([], [exportText], aliceNotesOut, false, await readableUploads(alice.id));
   assert.deepEqual(
     alicePack.map((u) => u.name).sort(),
     [aliceFile.file],
@@ -328,6 +329,7 @@ try {
   const missingName = "no-such-upload-9a1f.txt";
   const probeNotes: string[] = [];
   await collectUploads(
+    [],
     [`${bobExport.path} 与 ${join(UPLOADS_DIR, missingName)}`],
     probeNotes,
     true,
@@ -337,10 +339,10 @@ try {
   assert.equal(probeNotes.length, 2, `两个名字各记一句:${JSON.stringify(probeNotes)}`);
   assert.equal(shapes.size, 1, `「读不到」与「不存在」必须是同一句话:${JSON.stringify(probeNotes)}`);
   // 别收过头:本人导出自己的附件照常带走。
-  const bobPack = await collectUploads([exportText], [], false, await readableUploads(bob.id));
+  const bobPack = await collectUploads([], [exportText], [], false, await readableUploads(bob.id));
   assert.ok(bobPack.some((u) => u.name === bobExport.file), "Bob 自己导出时照常带得走");
   // 认不出人(出站链路没带身份)就一个都不带:失败方向是少带,不是越权。
-  const blindPack = await collectUploads([exportText], [], false, await readableUploads(null));
+  const blindPack = await collectUploads([], [exportText], [], false, await readableUploads(null));
   assert.deepEqual(blindPack.map((u) => u.name), [], "认不出身份就不该带走任何附件");
 
 

@@ -52,7 +52,7 @@ import {
 } from "./handoff-peer-client.js";
 import { localIdentity, shortFingerprint } from "./handoff-identity.js";
 import { collectUploads, isTextRel } from "./handoff-uploads.js";
-import { readableUploads } from "./uploads.js";
+import { readableUploads, taskUploadNames } from "./uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { capabilityReportFor } from "./handoff-capability.js";
 import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/handoff";
@@ -269,15 +269,18 @@ export async function preflightHandoff(
   const pendingMsgs = await db.select().from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
   const scheduleRow = (await db.select().from(schedules).where(eq(schedules.taskId, taskId))).at(0);
-  // 上传附件盘点:正文/续跑提示/提问/待发送消息 + run 产物文本就够了(回复回合的附件
-  // 路径必然出现在任务 transcript 里);会话 JSONL 留给真正导出时全量扫。
+  // 上传附件盘点:挂在这条任务名下的一律带走(权威名单),文本只用来找出**别的**任务/
+  // 随手记的附件被粘了路径进来的那些 —— 正文/续跑提示/提问/待发送消息 + run 产物文本
+  // 就够了;会话 JSONL 留给真正导出时全量扫。
   const uploadTexts = [
     task.body, task.resumePrompt ?? "", task.question ?? "",
     ...pendingMsgs.flatMap((x) => [x.text, x.attachments]),
   ];
   uploadTexts.push(...await collectRunArtifactTexts(taskId, notes));
   // 盘点也过授权闸:对话框里报的数字必须就是真会带走的那批(uploads.ts readableUploads)。
-  const uploads = await collectUploads(uploadTexts, notes, true, await packGateFor(task));
+  const uploads = await collectUploads(
+    await taskUploadNames(taskId), uploadTexts, notes, true, await packGateFor(task),
+  );
   // 能力握手:对端跑不跑得动这个任务。判据与身份核对同档 —— 在打包之前就要知道
   // (详见 handoff-capability.ts 顶部)。它永不抛,读不出来就是 unknown 不拦。
   const capability = await capabilityReportFor(taskId, ping.capabilities);
@@ -445,6 +448,8 @@ export async function exportHandoff(
       // 任务文本和文本类载荷(会话 JSONL/产物)里引用的上传附件一并打包——不带走的话,
       // 对端 agent 照着 prompt 里的源机绝对路径 Read 只会得到「文件不存在」。
       const uploads = await collectUploads(
+        // 身份的权威出处是归属表,不是正文里那些路径(推演见 collectUploads)。
+        await taskUploadNames(taskId),
         [
           task.body, task.resumePrompt ?? "", task.question ?? "",
           task.questionOptions ?? "", task.questionItems ?? "", task.questionHistory ?? "",

@@ -24,8 +24,8 @@ requireTmpDb("test-upload-names");
 mkdirSync(uploads, { recursive: true });
 
 // 碰库的模块一律 await import:静态 import 会被提升到设 ASH_DB 之前,那样连的是真库。
-const { MAX_STORED_NAME_BYTES, isSafeUploadName, newUploadName, sanitizeUploadName, sanitizeUploadStem, uploadNameIndex, uploadRunCandidates } = await import("../src/upload-names.js");
-const { collectUploads, scanUploadNames, scanUploadRuns, writeUploads } = await import("../src/handoff-uploads.js");
+const { MAX_STORED_NAME_BYTES, isSafeUploadName, newUploadName, sanitizeUploadName, sanitizeUploadStem } = await import("../src/upload-names.js");
+const { applyUploadRewrites, buildUploadRewrites, collectUploads, scanUploadNames, writeUploads } = await import("../src/handoff-uploads.js");
 const { uploadNameOf } = await import("../src/uploads.js");
 const { attachmentsPrompt } = await import("../src/util.js");
 const { ensureSchema } = await import("../src/db/index.js");
@@ -125,108 +125,87 @@ try {
   assert.deepEqual([...scanUploadNames(`![图](${abs})`)], [file], "markdown 的 `)` 同样收口");
   assert.deepEqual([...scanUploadNames(`我读了 ${abs},有三点`)], [file], "中文标点也在集合外");
 
-  // ── 引用的身份:**占满一个字段**的只认精确名字,夹在正文里的才按已知名字收敛 ───
-  // 审查第 1 轮发现 2 / 第 2 轮发现 1:只按字符集切会把后文吞进名字;改按「最后一处
-  // 扩展名」再猜一刀,后文里出现 `v1.2` 又猜偏。正文/续跑说明里直接粘路径是正常入口,
-  // 没有附件块兜底,这几种写法都必须找回真文件。
+  // ── 引用的身份不从文本判:归属表作主,文本只认「恰好是一个真文件」的那一段 ───────
+  // 本任务最贵的一课。文件名字符集和正文字符集重叠(汉字两边都合法),中文说明能直接
+  // 粘在路径后面、一个标点都没有 —— **「这段文本到哪里为止」在文本层不可判定**。沿那条
+  // 路修过三轮,每轮都是补丁:只按字符集切 → 把后文吞进名字(审查第 1 轮发现 2);再按
+  // 「最后一处像扩展名的位置」猜一刀 → 后文里一个 `v1.2` 就猜偏(第 2 轮发现 1);改按
+  // 「目录里存在的最长前缀」 → 把正文里写明的缺失路径改指成另一份真实附件(UNFxdc3ADpeS
+  // 第 1 轮 R1)。现在不问这个问题:带走哪些字节由归属表说。
   const ascii = "aBcD1234_-xy-report.pdf";
   writeFileSync(join(uploads, ascii), "pdf");
-  const index = uploadNameIndex(readdirSync(uploads));
-  /** 调用方那一刀:候选里第一个本机真有的。 */
-  const pick = (ref: { run: string; explicit: boolean }): string | undefined =>
-    uploadRunCandidates(ref, index).find((candidate) => index.has(candidate));
-  for (const tail of ["的要求完成作业", "的要求按v1.2版本完成作业", "的第2.1节", "。"]) {
-    const glued = `请按 ${join(uploads, ascii)}${tail}`;
-    const refs = scanUploadRuns(glued);
-    assert.deepEqual(refs.map((ref) => ref.explicit), [false], `句子中间的引用不该算占满字段:${glued}`);
-    assert.deepEqual(refs.map(pick), [ascii], `后缀「${tail}」没能收敛回真名字`);
+  const yes = async (): Promise<boolean> => true;
+
+  // ① 挂在这条任务上的照常带走 —— 哪怕正文里路径后面粘着中文、一个标点都没有。这是
+  //    真实入口:attachmentsPrompt 写进正文的附件由 bindUploadsToTask 挂上这条任务。
+  for (const tail of ["的要求完成作业", "的要求按v1.2版本完成作业", "的第2.1节", "。", ""]) {
     const noteBuf: string[] = [];
-    const packed = await collectUploads([glued], noteBuf, true, async () => true);
-    assert.deepEqual(packed.map((u) => u.name), [ascii], `后缀「${tail}」下附件没被打包`);
-    // 收敛过的要如实说一句(不说就是「无缺失提示地带走不相关内容」);没收敛的不许多话。
-    const trimmed = tail !== "。";
-    assert.equal(noteBuf.length, trimmed ? 1 : 0, `交代条数不对:${JSON.stringify(noteBuf)}`);
-    if (trimmed) assert.ok(noteBuf[0]!.includes(`${ascii}${tail}`) && noteBuf[0]!.includes(ascii),
-      `收敛要报原文那一段和落到的名字:${noteBuf[0]}`);
+    const packed = await collectUploads([ascii], [`请按 ${join(uploads, ascii)}${tail}`], noteBuf, true, yes);
+    assert.deepEqual(packed.map((u) => u.name), [ascii], `后缀「${tail}」下附件没随任务走`);
+    assert.deepEqual(noteBuf, [], `粘连写法不该误报缺失:${JSON.stringify(noteBuf)}`);
   }
-  // 反向:结尾没有扩展名、内部有点号的合法名字 —— 按扩展名猜那一刀会把它截成 v1.2。
-  const dotted = "aBcD1234_-xy-v1.2终稿";
-  writeFileSync(join(uploads, dotted), "x");
-  const dottedIndex = uploadNameIndex(readdirSync(uploads));
-  const resolveLoose = (run: string): string | undefined =>
-    uploadRunCandidates({ run, explicit: false }, dottedIndex).find((c) => dottedIndex.has(c));
-  assert.equal(resolveLoose(dotted), dotted, "整段本身就是真名字时不许被截短");
-  assert.equal(resolveLoose(`${dotted}的说明`), dotted, "它后面粘上中文同样要收敛回来");
 
-  // ── 出处判据:哪些写法算「占满一个字段」 ──────────────────────────────────
-  assert.deepEqual(scanUploadRuns(attachmentsPrompt([abs])).map((r) => r.explicit), [true],
-    "附件块每行一条路径,行尾就是边界 —— 这是我们自己写下去的名字");
-  assert.deepEqual(scanUploadRuns(JSON.stringify({ seq: 7, text: "见", path: abs })).map((r) => r.explicit), [true],
-    "JSON 的路径字段:一对引号之间只有它,键排第几都算");
-  assert.deepEqual(scanUploadRuns(`![图](${abs})`).map((r) => r.explicit), [true], "markdown 的 `![](…)` 同理");
-  assert.deepEqual(scanUploadRuns(`> - ${abs}\n下一行`).map((r) => r.explicit), [true], "缩进/引用号/列表标记不影响");
-  assert.deepEqual(scanUploadRuns(`看了 ${abs} 之后`).map((r) => r.explicit), [false], "句子中间的不算");
-
-  // ── 明确路径缺失就保持缺失,不许改指另一份文件(UNFxdc3ADpeS 第 1 轮 R1)──────
-  // 正文里写明一条完整路径、独占一行:它要么就是那个文件,要么是「这个附件丢了」。
-  // 给它也配前缀候选的代价实测过 —— 被改指成同目录里真实存在的短名字,于是缺失一声
-  // 不响,反而多带走一份不相关的字节,原引用在对端照旧打不开。
-  const gone = `${ascii}.backup`; // 盘上没有,而 ascii 真实存在且正好是它的前缀
-  const goneRef = { run: gone, explicit: true };
-  assert.deepEqual(uploadRunCandidates(goneRef, index), [gone], "占满字段的引用只有一个候选 —— 它自己");
-  assert.ok(uploadRunCandidates({ run: gone, explicit: false }, index).includes(ascii),
-    "夹在正文里的那一档才给前缀候选(别把判据收成一律不认)");
-  const explicitNotes: string[] = [];
-  const explicitPack = await collectUploads(
-    [`独立完整路径:\n- ${join(uploads, gone)}\n`], explicitNotes, true, async () => true,
-  );
-  assert.deepEqual(explicitPack.map((u) => u.name), [],
-    `明确路径缺失时不许改指别的文件:${JSON.stringify(explicitPack.map((u) => u.name))}`);
-  assert.equal(explicitNotes.length, 1, `缺失要有一条交代:${JSON.stringify(explicitNotes)}`);
-  assert.ok(explicitNotes[0]!.includes(gone), `交代报的是原文那一段:${explicitNotes[0]}`);
-  // 别收过头:同样独占一行、文件真的在,照常带走。
+  // ② 没有归属、但正文里那一段**恰好就是一个真文件**:过授权闸照旧带走(老行为 ——
+  //    别的任务/随手记的附件被粘了一条精确路径进来,对端得读得到)。
+  const textOnlyNotes: string[] = [];
   assert.deepEqual(
-    (await collectUploads([`- ${join(uploads, ascii)}\n`], [], true, async () => true)).map((u) => u.name),
-    [ascii], "附件块里真实存在的路径照常打包",
+    (await collectUploads([], [`看了 ${join(uploads, ascii)} 之后`], textOnlyNotes, true, yes)).map((u) => u.name),
+    [ascii], "正文里的精确路径仍然带得走",
+  );
+  assert.deepEqual(textOnlyNotes, [], `精确路径不该有交代:${JSON.stringify(textOnlyNotes)}`);
+
+  // ③ 正文里写明一条**不存在**的路径,而另一份真实附件正好是它的前缀:缺失就是缺失。
+  //    旧口径把它改指成 ascii —— 缺失一声不响,反而多带走一份不相关的字节,原引用在对端
+  //    照旧打不开。判据换成「这一段本身是不是一个真文件」之后,这一幕不依赖任何边界猜测。
+  const gone = `${ascii}.backup`;
+  const goneNotes: string[] = [];
+  const gonePack = await collectUploads([], [`独立完整路径:\n- ${join(uploads, gone)}\n`], goneNotes, true, yes);
+  assert.deepEqual(gonePack.map((u) => u.name), [],
+    `明确缺失的路径不许改指别的文件:${JSON.stringify(gonePack.map((u) => u.name))}`);
+  assert.equal(goneNotes.length, 1, `缺失要有一条交代:${JSON.stringify(goneNotes)}`);
+  assert.ok(goneNotes[0]!.includes(gone), `交代报的是原文那一段:${goneNotes[0]}`);
+  // 同一条坏引用 + 这条任务真有附件时:带走的是**归属表说的那一份**,不是正文那段指向的。
+  assert.deepEqual(
+    (await collectUploads([ascii], [`- ${join(uploads, gone)}\n`], [], true, yes)).map((u) => u.name),
+    [ascii], "带走的身份由归属表定",
   );
 
-  // ── 读不到的目录条目不许改变一条可读引用的结果(同上 R1 证据二)───────────────
-  // 往目录里放一个「`<短名字>` + 一段中文」的私有文件:如果它能把同一条引用从「带走」
-  // 变成「带不走」,外人不用读出一个字节,就能从预检结果的变化问出这个名字在不在。
-  // 授权回调固定不变,文本不变,可读的那份也不变 —— 公开结果就必须逐字相同。
+  // ④ 读不到的目录条目不许改变一条引用的公开结果:往目录里放一个「`<名字>` + 一段中文」
+  //    的私有文件,如果它能让结果变一个字,外人不用读出一个字节就能问出它在不在。
   const onlyAscii = async (name: string): Promise<boolean> => name === ascii;
-  const oracleText = `请按 ${join(uploads, ascii)}的要求办`;
-  const oracleBefore: string[] = [];
-  const packBefore = await collectUploads([oracleText], oracleBefore, true, onlyAscii);
+  const probeText = `请按 ${join(uploads, ascii)}的要求办`;
+  const probeBefore: string[] = [];
+  const packBefore = await collectUploads([], [probeText], probeBefore, true, onlyAscii);
   const shadow = join(uploads, `${ascii}的要求办`);
   writeFileSync(shadow, "private");
-  const oracleAfter: string[] = [];
-  const packAfter = await collectUploads([oracleText], oracleAfter, true, onlyAscii);
+  const probeAfter: string[] = [];
+  const packAfter = await collectUploads([], [probeText], probeAfter, true, onlyAscii);
   rmSync(shadow, { force: true });
-  assert.deepEqual(packBefore.map((u) => u.name), [ascii], "可读的那份照常带走");
   assert.deepEqual(packAfter.map((u) => u.name), packBefore.map((u) => u.name),
     "多一个读不到的同前缀文件,带走的东西就变了 —— 这是一个存在性探针");
-  assert.deepEqual(oracleAfter, oracleBefore, `notes 也不许变:${JSON.stringify({ oracleBefore, oracleAfter })}`);
+  assert.deepEqual(probeAfter, probeBefore, `notes 也不许变:${JSON.stringify({ probeBefore, probeAfter })}`);
+  assert.equal(probeBefore.length, 1, `读不到与不存在同一句话、同样的条数:${JSON.stringify(probeBefore)}`);
 
-  // 对不上本机任何名字时原样返回,notes 报的是**原文那一段**而不是收敛后的名字 ——
-  // 「有这个文件但你读不到」和「本机压根没有」必须是同一句话、同样的条数(存在性探针)。
-  const ghostNotes: string[] = [];
-  const ghost = `${join(uploads, "nOtHeRe12345-x.pdf")}的要求`;
-  assert.deepEqual(await collectUploads([ghost], ghostNotes, true, async () => true), []);
-  assert.equal(ghostNotes.length, 1, "一处引用恒一条交代");
-  assert.ok(ghostNotes[0]!.includes("nOtHeRe12345-x.pdf的要求"), `notes 要报原文那一段:${ghostNotes[0]}`);
-  // 同一份文本里两处指向同一个**读不到**的文件:条数只跟文本有关,不随它存不存在变化。
-  const probeNotes: string[] = [];
-  await collectUploads([`${join(uploads, ascii)}的 和 ${join(uploads, ascii)}的要求`], probeNotes, true, async () => false);
-  assert.equal(probeNotes.length, 2, "两处引用两条交代 —— 条数随存在性变化就是一个存在性探针");
+  // ⑤ 边界之所以**不必知道**:改写是 `<目录>/<名字>` → `<目录>/<新名字>` 的 replaceAll,
+  //    天然按前缀走 —— 粘连写法里前缀被换掉、后面那截原样留着,对端照样读得到。
+  const gluedBody = `请按 ${join(uploads, ascii)}的要求按v1.2版本完成作业`;
+  const forRewrite = await collectUploads([ascii], [gluedBody], [], false, yes);
+  const landed = await writeUploads(forRewrite.map((u) => ({ ...u, name: `moved-${u.name}` })), []);
+  assert.equal(landed.length, 1, "改名落地该成功");
+  const rewritten = applyUploadRewrites(gluedBody, buildUploadRewrites(landed, uploads), "plain");
+  assert.equal(rewritten, `请按 ${join(uploads, landed[0]!.name)}的要求按v1.2版本完成作业`,
+    `改写该换掉前缀、原样留下后面那截:${rewritten}`);
+  assert.ok(existsSync(join(uploads, landed[0]!.name)), "对端那条路径上真有文件");
 
-  // 成本:收敛是「每处引用一个有界常数」,不是全局两两比较(审查第 2 轮发现 2:
-  // 旧写法 80k 条引用把主服务同步卡住 16.8 秒)。阈值放得很松,只拦平方级回归。
+  // 成本:两档都线性。旧写法按「两两比前缀」找候选,80k 条引用把主服务同步卡住 16.8 秒
+  // (第 2 轮发现 2);这一版连整个上传目录都不枚举了。
+  const ownedReal = Array.from({ length: 50 }, (_, i) => `ownd${String(i).padStart(8, "0")}-y.pdf`);
+  for (const name of ownedReal) writeFileSync(join(uploads, name), "y");
   const bulk = Array.from({ length: 20_000 }, (_, i) => `${join(uploads, `bulk${String(i).padStart(8, "0")}-x.pdf`)} `).join("");
   const started = Date.now();
-  await collectUploads([bulk], [], true, async () => false);
+  await collectUploads(ownedReal, [bulk], [], true, yes);
   const elapsed = Date.now() - started;
-  assert.ok(elapsed < 5_000, `2 万条引用的盘点耗时 ${elapsed}ms —— 这段在第一次 await 之前跑,会卡住同进程其它请求`);
+  assert.ok(elapsed < 5_000, `2 万条引用 + 50 个归属附件耗时 ${elapsed}ms —— 这段会卡住同进程其它请求`);
 
   // 归属回填/任务绑定认的是同一条路径:认不出来 = 多人模式下这张附件对项目成员恒 404。
   assert.equal(uploadNameOf(abs), file, "带路径的要能归一到文件名");
