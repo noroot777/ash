@@ -139,19 +139,17 @@ assert.equal(
   // 真 shell 里其实挂得住,而「读不出来」只能往放行那一侧站。代价方向对:提示照样说得清，
   // 人照样提交得了;反过来留着硬拦，就是拿一个没人核过的假设把一件做得成的事变成做不成。
 
-  // **不许顺着这一道把闸整个放掉**:只有赋值前缀的那一段压根没有命令词 —— 那里什么都不执行，
-  // 如实算「没有扰动」。读成未知的话，一句 `FOO=1;` 就能把闸关掉。
-  for (const command of [
-    "LOG=1 tail -F build.log",
-    "FOO=1; " + BASE,
-    "action=break; " + BASE,
-  ]) {
+  // **不许顺着这一道把闸整个放掉**:赋值前缀挂在**普通命令**身上时,它那条命令照旧要跑 ——
+  // 实测 `SHELLOPTS=x true; printf AFTER` 是 rc=0 并打出 AFTER(赋值错照报、命令照跑),所以
+  // 这一档的硬拦资格是证明得出来的。赋值**自成一条语句**和挂在**特殊内建**身上那两种是另一
+  // 回事(实测当场走人),见 ②i。
+  for (const command of ["LOG=1 tail -F build.log", "LC_ALL=C " + BASE]) {
     assert.equal(
       neverExitsOnItsOwn(command), "tail -f/-F",
-      `只有赋值前缀的那一段什么都不执行，不算扰动：${command}`,
+      `赋值前缀挂在普通命令上不致命，不算扰动：${command}`,
     );
   }
-  console.log("✓ 执行环境:命令词/展开/替换读不出来一律降级；只有赋值前缀的段不算扰动");
+  console.log("✓ 执行环境:命令词/展开/替换读不出来一律降级；普通命令上的赋值前缀不算扰动");
 }
 
 // ── ②c 不变量:**同一件事的每一种拼写都要判得一样** ────────────────────────────────
@@ -392,6 +390,99 @@ assert.equal(
     assert.equal(neverExitsVerdict(open), null, `没收口的那一侧压根不该有判定：${open}`);
   }
   console.log(`✓ 执行环境:${cases.length} 种没收口的结构全部取消硬拦，收口了的照旧按形式判`);
+}
+
+// ── ②h 不变量:**结构骨架没凑齐 ⇒ 跟没收口同一个结局,一个字都不许硬拦** ───────────────
+// 自由工作流第 1 轮审查 F1 给的那几条输入本体。②g 钉的是**词法**没收口(引号、`$(`),这一节
+// 钉的是**结构**没收口(`if`/`case`/循环的骨架词凑没凑齐)—— 在 shell 那边是同一个结局:解析
+// 阶段就报语法错误,**整条命令一个字都不执行**。上一版把它当成「扫到那一区时放行」,于是排在
+// 前面那一段 `tail -F` 自己证明得出会跑,硬拦照旧成立(实测接口 409,而 shell 连 tail 都没启动)。
+// 下面每条括号里是本机 `/bin/sh -c` 实测的 rc 与 stdout;`sh -n` 同样非零。
+{
+  const cases = [
+    // 报告给的那三条(第一条判的是跟随型)
+    ["tail -F /dev/null; if", "`if` 开了没说完（实测 rc=2，stdout 空）"],
+    ["tail -F /dev/null; while :; done", "循环少了 `do`（实测 rc=2，stdout 空）"],
+    ["tail -F /dev/null; case x in", "`case` 开了没 `esac`（实测 rc=2，stdout 空）"],
+    // 同族的其余形式:一种一条，少接一种这里立刻红
+    ["tail -F /dev/null; fi", "凭空一个 `fi`（实测 rc=2）"],
+    ["tail -F /dev/null; done", "凭空一个 `done`（实测 rc=2）"],
+    ["tail -F /dev/null; then", "凭空一个 `then`（实测 rc=2）"],
+    ["tail -F /dev/null; esac", "凭空一个 `esac`（实测 rc=2）"],
+    ["tail -F /dev/null; if true; fi", "`if` 少了 `then`（实测 rc=2）"],
+    ["tail -F /dev/null; case x; esac", "`case` 少了 `in`（实测 rc=2）"],
+    ["tail -F /dev/null; if true; then :", "`if` 没关上（实测 rc=2）"],
+    ["tail -F /dev/null; while :; do :", "循环没关上（实测 rc=2）"],
+    // **每两个骨架词之间那一区不许是空的** —— 骨架词凑齐了也可能是语法错误
+    ["tail -F /dev/null; if; then :; fi", "条件是空的（实测 rc=2）"],
+    ["tail -F /dev/null; while :; do done", "循环体是空的（实测 rc=2）"],
+    ["tail -F /dev/null; if true; then :; elif false; fi", "`elif` 之后少了 `then`（实测 rc=2）"],
+    // 这一条跟 ②g 最后那条是同一个论点:没凑齐出现在**后面**那一段，而前面那个 tail 自己
+    // 证明得出会跑 —— 真 shell 里它一次都没跑(整串先被解析)。
+    ["echo A; tail -F /dev/null; done", "没凑齐在后面那一段，前面那条也一次都没跑（实测 rc=2，stdout 空）"],
+  ] as const;
+  for (const [command, why] of cases) passes(command, `结构骨架没凑齐，整条命令跑都跑不起来（${why}）`);
+
+  // **反过来钉死**:凑齐了的那些照旧按形状判。这一道只认「没凑齐」—— 多认一种,下面这些**合法
+  // 结构**里就有真阳性跟着漏掉(嵌套、`else`/`elif`、`case` 的多个分支、取反、分组、只有一个
+  // 重定向的那一段,全是哨兵命令里写得出来的形状)。
+  for (const [command, why] of [
+    ["while true; do if :; then :; fi; done", "循环体里嵌一个完整的 if"],
+    ["until false; do case x in a) :;; esac; done", "循环体里嵌一个完整的 case"],
+    [`if true; then :; else :; fi; ${BASE}`, "`else` 那一支"],
+    [`if false; then :; elif true; then :; fi; ${BASE}`, "`elif` 那一支"],
+    [`for f in a b; do printf .; done; ${BASE}`, "跑得完的 for"],
+    [`case x in a) :;; *) :;; esac; ${BASE}`, "case 的多个分支"],
+    [`{ printf x; }; ${BASE}`, "花括号分组"],
+    [`( printf x ); ${BASE}`, "圆括号分组"],
+    [`! printf x; ${BASE}`, "取反"],
+    [`if true; then > /dev/null; fi; ${BASE}`, "只有一个重定向的那一段也是一条合法命令"],
+    ["for i in 1 2; do tail -F /dev/null; done", "跑得到的循环体里那条跟随型"],
+  ] as const) {
+    assert.notEqual(
+      neverExitsOnItsOwn(command), null,
+      `这一条的结构是凑齐了的(${why})，该拦照旧拦：${command}`,
+    );
+  }
+  console.log(`✓ 执行环境:${cases.length} 种骨架没凑齐的结构全部取消硬拦，凑齐了的照旧按形状判`);
+}
+
+// ── ②i 不变量:**赋值自己就能把 shell 带走 ⇒「没有命令词」不等于「什么都不执行」** ────────
+// 自由工作流第 1 轮审查 F1 的另一半。上一版把「整段没有命令词」如实算成了没有扰动,可赋值那
+// 一刻真的在执行,失败就是整条命令到此结束。本机 `/bin/sh` 实测(rc + 后面那条跑没跑):
+//   · `SHELLOPTS=x; printf AFTER`            ⇒ rc=127,AFTER **没打出来**
+//   · `readonly FOO=1; FOO=2 :; printf AFTER` ⇒ rc=1,  AFTER **没打出来**(特殊内建上的前缀)
+//   · `SHELLOPTS=x true; printf AFTER`       ⇒ rc=0,  AFTER 打出来了(普通命令上的前缀)
+// 所以判据按**位置**封闭,而不是列「哪几个名字只读」(那是列反例:`SHELLOPTS`/`UID`/`PPID`
+// 排着队,还轮不到 `readonly` 现场造的那些 —— 随便一句 `readonly 名字=值` 就能把任何名字变成
+// 只读,所以「这个名字赋得上」对谁都证明不了)。
+{
+  const cases = [
+    ["SHELLOPTS=x; tail -F /dev/null; printf 'DONE\n'", "shell 自己钉成只读的名字（实测 rc=127，后面一条都没跑）"],
+    ["UID=1; tail -F /dev/null; printf 'DONE\n'", "同上，而「哪些名字只读」这个集合不封闭"],
+    [`FOO=1; ${BASE}`, "换个看着无害的名字同判 —— 前面一句 `readonly FOO=1` 就能让它赋不上"],
+    [`action=break; ${BASE}`, "同上"],
+    [`${BASE}; FOO=1`, "哪一段里出现都算（口径同 ③ 那一节的 `kill -TERM $$`）"],
+    [`FOO=1 :; ${BASE}`, "赋值前缀挂在特殊内建上（实测 rc=1，后面一条都没跑）"],
+    [`FOO=1 set -e; ${BASE}`, "`set` 同样是特殊内建"],
+    [`FOO=1 shift; ${BASE}`, "`shift` 同样"],
+    [`TZ=UTC export FOO; ${BASE}`, "`export` 同样"],
+  ] as const;
+  for (const [command, why] of cases) passes(command, `赋值自己就能让 shell 当场走人（${why}）`);
+
+  // **反过来钉死两件事**:
+  //  ① 普通命令上的赋值前缀实测不致命 ⇒ 这一档照旧有硬拦资格。哨兵命令里 `LC_ALL=C`、
+  //     `TZ=UTC` 这种前缀太常见,跟着一起降级等于把闸拆了。
+  //  ② `SHELLOPTS=x tail …` 这一条是上面那条**同名同值**的前缀形态:同一个只读名字、同一个
+  //     赋值错误,位置一换结局就不同(实测 rc=0 并打出 AFTER)——「按位置封闭」这件事就靠它钉住,
+  //     换成「按名字列黑名单」的写法在这儿立刻红。
+  for (const command of ["LOG=1 tail -F build.log", `LC_ALL=C ${BASE}`, "SHELLOPTS=x tail -F /dev/null"]) {
+    assert.equal(
+      neverExitsOnItsOwn(command), "tail -f/-F",
+      `赋值前缀挂在普通命令上实测不致命，不许凭它把闸放掉：${command}`,
+    );
+  }
+  console.log(`✓ 执行环境:${cases.length} 条赋值语义全部取消硬拦，普通命令上的前缀照旧拦`);
 }
 
 // ── ③ 机制本身:逐类掀翻那个前提，每一类都必须把硬拦取消 ────────────────────────────

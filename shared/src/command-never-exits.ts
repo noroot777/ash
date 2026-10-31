@@ -246,6 +246,7 @@ const HERE_DOC = /<</;
 import {
   BRANCH, ESCAPES, JUMPS, LOOP_HEADS, SKELETON, TERMINATORS,
   branchEnd, headOf, loopEnd, loopReadable, loopShape, regionHas, scanOf, startProvable,
+  structureProven,
   type Scan,
 } from "./command-scan.ts";
 
@@ -337,7 +338,11 @@ function provableBlocker(scan: Scan): Found | null {
       if (close) {
         // 分支区:整区不扫。区里有 `exit`/`exec` ⇒ 区后面的也证明不出来（那一支可能真的跑了）。
         const end = branchEnd(scan, i, head);
-        if (end < 0) return pipeline;
+        // 配不上对 ⇒ 整条命令在 shell 那边就是个语法错误,**手里那个判定也跟着作废**
+        // (本轮审查 F1;同一条口径见下面那个循环、函数尾的组括号、以及 `judge` 里的
+        // `structureProven`/`unclosed`)。交出 `pipeline` 等于拿「前面那一段会跑」去硬拦一条
+        // 压根跑不起来的命令。
+        if (end < 0) return null;
         if (regionHas(scan, i, end, TERMINATORS)) return pipeline;
         i = end;
         at = tokens.length;
@@ -345,7 +350,8 @@ function provableBlocker(scan: Scan): Found | null {
       }
       if (LOOP_HEADS.has(head)) {
         const end = loopEnd(scan, i);
-        if (end < 0) return pipeline;
+        if (end < 0) return null;                // 判据同上:配不上对 ⇒ 整条放行
+
         // **读得懂才轮到下结论**（见 `loopReadable`）:条件列表、挂在循环身上的重定向,
         // 两样里有一样读不出来,这个循环跑不跑得到就答不出来 ⇒ 整区不扫。
         const { bodyRuns, endless } = loopReadable(scan, i, end)
@@ -485,6 +491,12 @@ function judge(command: string): Found | null {
   // `tail -F` 自己就证明得出「会跑」,硬拦照旧成立(这正是上一版的实测误拦形状,接口 409)。
   // 跟下面 `provableBlocker` 里「组括号没配上对就放行」同一条口径,那一档实测同样 rc=2。
   if (unclosed) return null;
+  // **结构没收口的那一半,同一条口径**(本轮审查 F1)。`unclosed` 答的是词法(引号、`$(`),
+  // 这一道答的是结构(`if`/`case`/循环的骨架词凑没凑齐)—— 两件事在 shell 那边是同一个结局:
+  // 解析阶段就报语法错误,**整条命令一个字都不执行**,所以处置也只能是整条放行。判据和实测
+  // 见 `structureProven`;上一版把它当成「扫到那一区时放行」,于是排在前面那一段
+  // `tail -F /dev/null` 照旧被硬拦(接口 409,而 shell 连 tail 都没启动)。
+  if (!structureProven(segs)) return null;
   const found = provableBlocker(scanOf(segs));
   // **扰动这一问排在最后,而且只改硬拦那一档**（见文件头 ⑪）。压根没判定 ⇒ 没什么可提示的;
   // 已经降过级 ⇒ 它自己那句话更具体（说的是哪个文件、哪个下游）,不拿这句通用的盖掉它。

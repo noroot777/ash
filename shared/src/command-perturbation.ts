@@ -32,10 +32,18 @@ import { commandOf } from "./command-wrappers.ts";
  * 表里收的是 sh(dash)/bash/zsh/ksh 的内建词并集。**宁可多收**:多收一个 ⇒ 那条命令从硬拦
  * 降成提示（人照样提交得了），少收一个 ⇒ 一件做得成的事做不成（见那边文件头的不对称那段）。
  */
-const SHELL_WORDS = new Set([
-  // POSIX 特殊内建
+/**
+ * **POSIX 特殊内建**。两处要用到它,所以单列一张表而不是在 `SHELL_WORDS` 里数第一组:
+ *  · 报错就把非交互 shell 带走（`SPECIAL_TAIL`）;
+ *  · 挂在它们身上的**赋值前缀**出错同样致命（`assignPrefixNote`）。
+ */
+const SPECIAL_BUILTINS = new Set([
   "break", ":", "continue", ".", "eval", "exec", "exit", "export", "readonly", "return",
   "set", "shift", "times", "trap", "unset",
+]);
+const SHELL_WORDS = new Set([
+  // POSIX 特殊内建
+  ...SPECIAL_BUILTINS,
   // POSIX 常规内建
   "alias", "bg", "cd", "command", "false", "fc", "fg", "getopts", "hash", "jobs", "kill",
   "newgrp", "pwd", "read", "true", "umask", "unalias", "wait",
@@ -111,6 +119,29 @@ const shellWordNote = (name: string): string =>
 const PATH_ASSIGN = /^PATH=/;
 /** `名字=值` 这个形状（赋值前缀区的右边界靠它定,见 `PATH_ASSIGN`）。 */
 const ASSIGN_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/**
+ * **赋值自己就能把 shell 带走** —— 所以「这一段只有赋值」不等于「这一段什么都不执行」。
+ *
+ * 上一版把「整段没有命令词」如实算成了没有扰动(注释里写的是「`action=break` 自己一个字都不
+ * 跑」),可赋值失败那一刻 shell 当场退出,后面那几条一条都跑不到。本机 `/bin/sh` 实测:
+ *  · `SHELLOPTS=x; printf AFTER` ⇒ rc=127 `readonly variable`,**AFTER 没打出来**;
+ *    `UID=1` 同样(两个都是 shell 自己钉成只读的名字);
+ *  · 而且这件事**对任何名字都证明不了**:前面一句 `readonly FOO=1` 就能把任意名字变成只读
+ *    —— `readonly FOO=1; FOO=2 :; printf AFTER` 实测 rc=1 且 AFTER 没打出来。
+ *
+ * 所以这一层不去列「哪几个名字只读」(那是列反例:`SHELLOPTS`/`UID`/`PPID`/`BASH_VERSINFO`
+ * 排着队,还轮不到 `readonly` 现场造的那些),而是按**位置**封闭:
+ *  · **赋值自成一条语句**(`NAME=值;`)⇒ 证明不了,打这个标记;
+ *  · **赋值前缀挂在特殊内建身上**(`FOO=1 :`)⇒ 同样致命(POSIX XCU 2.8.1;实测 rc=1、后面
+ *    没跑)⇒ 打标记;
+ *  · **赋值前缀挂在普通命令身上**(`LC_ALL=C tail -F x`)⇒ 实测**不致命**:`SHELLOPTS=x true;
+ *    printf AFTER` rc=0 并打出 AFTER(错照报、命令照跑)。这一档照旧有硬拦资格 —— 哨兵命令里
+ *    `LC_ALL=C`、`TZ=UTC` 这种前缀太常见,跟着一起降级等于把闸拆了。
+ */
+const ASSIGN_ALONE =
+  "那一段只有赋值、没有命令词，而赋值失败自己就能让 shell 当场走人（`SHELLOPTS=x` 实测 rc=127 readonly variable，后面一条都没跑；而前面随便一句 `readonly 名字=值` 就能把任何名字变成只读，所以「这个名字赋得上」这一层对谁都证明不了）";
+const assignPrefixNote = (name: string): string =>
+  `那个赋值前缀挂在特殊内建 ${name} 身上，这个位置上赋值一失败就是整条命令结束（POSIX 的规定，实测 \`readonly FOO=1; FOO=2 :\` 退 1 且后面一条都没跑；挂在普通命令上才不会）`;
 /**
  * 这一道**不自己扫文本了,只读词法层打在词上的标记**（第 4 轮审查 F3）。
  *
@@ -337,12 +368,22 @@ export function perturbed(segs: Segment[]): string | null {
     // 于是 `action=break; while true; do "$action"; done; printf 'DONE\n'`（实测退出 0 并打出
     // DONE）照旧硬拦:那个命令词藏在引号里的展开后面,这一层压根没读出它是 `break`。
     //
-    // 两种 null 要分开:**整段没有命令词**（只有赋值前缀、或空段）那里什么都不执行,如实算没有
-    // 扰动（`action=break` 自己一个字都不跑）;**有词却读不出来**才是未知。
+    // 两种 null 要分开:**有词却读不出来**是未知;**整段没有命令词**里还要再分一次 ——
+    // 只有空段（多打一个 `;`）才真是「什么都不执行」,**只有赋值的那一种会执行赋值**,而赋值
+    // 失败就是整条命令到此结束（见 `ASSIGN_ALONE`;上一版把这两种一起 `continue` 掉了,于是
+    // `SHELLOPTS=x; tail -F /dev/null; printf DONE` 被硬拦,而实测 shell 在第一段就走人了）。
     const word = commandWord(seg.tokens, at);
-    if (word === null) continue;
+    const assigned = prefixEnd > at;
+    if (word === null) {
+      if (assigned) return ASSIGN_ALONE;
+      continue;                                  // 真的空段（多打一个 `;`）⇒ 接着看下一段
+    }
     if (word.unreadable !== undefined) return word.unreadable;
     const { cmd } = word;
+    // 赋值前缀 + 特殊内建 ⇒ 同一件事的前缀形态（见 `ASSIGN_ALONE` 第二条）。**要排在
+    // `HANDLED` 前面**:`:`/`exit`/`set`/`shift` 这几个特殊内建在那张表里是「形状层已经处置
+    // 过」,可处置的是它们自己的语义,不是挂在它们身上的赋值。
+    if (assigned && SPECIAL_BUILTINS.has(cmd.name)) return assignPrefixNote(cmd.name);
     if (cmd.name === "set") {
       const flag = setShaken(cmd.argv);
       if (flag !== null) return `那个 set 开的是 ${flag}，它改掉了后面每一条的执行语义（这一层只认得 errexit）`;
