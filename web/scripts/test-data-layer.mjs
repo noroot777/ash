@@ -4,7 +4,7 @@ import { ApiError, api } from "../src/lib/api.ts";
 import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
-import { taskDurationInfo } from "../src/task-detail/utils.ts";
+import { formatDurationShort, formatInstantRange, taskDurationInfo } from "../src/task-detail/utils.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDuetGate, runCreatedHandoffFollowUps } from "../src/duet/handoffPolicy.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
@@ -425,9 +425,24 @@ try {
 
   const durationInfo = taskDurationInfo(task, Date.parse("2026-07-30T01:10:00.000Z"));
   assert.equal(durationInfo?.label, "用时");
-  assert.equal(durationInfo?.text, "10m 0s");
+  // 任务级时长只留最高两个单位，第二个是 0 就一起省掉：18 小时的任务不该再报到秒。
+  assert.equal(durationInfo?.text, "10m");
   assert.match(durationInfo?.title ?? "", /^结束 /);
-  assert.equal(taskDurationInfo({ ...task, activeMs: null })?.label, "跨度");
+  assert.equal(durationInfo?.note, undefined);
+  const spanInfo = taskDurationInfo({ ...task, activeMs: null });
+  assert.equal(spanInfo?.label, "跨度");
+  // 起止已经可见的表面用 note 当 title：它不重复结束时间，只留口径说明。
+  assert.match(spanInfo?.note ?? "", /^跨度含/);
+  assert.ok(!(spanInfo?.note ?? "").includes("结束"));
+  assert.equal(formatDurationShort(65_400_000), "18h 10m");
+  assert.equal(formatDurationShort(183_000_000), "2d 2h");
+  assert.equal(formatDurationShort(45_000), "45s");
+  assert.equal(formatDurationShort(0), "0s");
+  // 同一天只写一次日期；没结束就写「起」。
+  const rangeDay = formatInstantRange("2026-07-30T01:00:00.000Z", "2026-07-30T01:10:00.000Z");
+  assert.match(rangeDay, /^\d\d\/\d\d \d\d:\d\d → \d\d:\d\d$/);
+  assert.match(formatInstantRange("2026-07-30T01:00:00.000Z", null), / 起$/);
+  assert.equal(formatInstantRange(null, "2026-07-30T01:10:00.000Z"), "");
 
   const team = { id: "team-1", mode: "team", projectId: "project-1", title: "父团队" };
   const sharedWorker = { id: "worker-1", parentId: "team-1", useWorktree: false };

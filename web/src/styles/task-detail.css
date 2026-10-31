@@ -196,6 +196,7 @@
 .task-inspector-row.is-danger code { color: var(--red); }
 /* 多个 agent 参与时,每行前面标出这笔账是谁的 —— 它们从不相加,谁的就是谁的。 */
 .task-usage-who { margin-right: 6px; color: var(--faint); font-style: normal; }
+.task-inspector-aside { margin-left: 7px; color: var(--faint); font-style: normal; }
 .task-inspector-row select { width: 100%; min-width: 0; border: 0; border-radius: 6px; background: transparent; padding: 4px 5px; color: var(--muted); font-size: 10.5px; outline: 0; }
 .task-inspector-row select:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .task-inspector-row code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9.5px; }

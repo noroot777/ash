@@ -22,6 +22,35 @@ export function formatDuration(milliseconds: number): string {
   return `${seconds}s`;
 }
 
+/**
+ * 任务级时长：只留最高两个单位（`18h 18m`、`2d 3h`），第二个是 0 就连它一起省掉
+ * （`10m`）。回合级时长照旧用 `formatDuration` —— 跑了几分零几秒在那里是有意义的，
+ * 跑了十八小时零几秒在这里不是。
+ */
+export function formatDurationShort(milliseconds: number): string {
+  const total = Math.max(0, Math.floor(milliseconds / 1000));
+  const units: [number, string][] = [
+    [Math.floor(total / 86400), "d"],
+    [Math.floor(total / 3600) % 24, "h"],
+    [Math.floor(total / 60) % 60, "m"],
+    [total % 60, "s"],
+  ];
+  const head = units.findIndex(([value]) => value > 0);
+  if (head < 0) return "0s";
+  const [value, unit] = units[head]!;
+  const next = units[head + 1];
+  return next && next[0] > 0 ? `${value}${unit} ${next[0]}${next[1]}` : `${value}${unit}`;
+}
+
+/** 执行区间：同一天只写一次日期（`10/27 13:20 → 14:05`），还没结束就写「起」。 */
+export function formatInstantRange(from?: string | null, to?: string | null): string {
+  const start = formatInstant(from);
+  if (!start) return "";
+  const end = formatInstant(to);
+  if (!end) return `${start} 起`;
+  return `${start} → ${start.slice(0, 5) === end.slice(0, 5) ? end.slice(6) : end}`;
+}
+
 export function durationBetween(from?: string | null, to?: string | null): string | null {
   if (!from || !to) return null;
   const start = Date.parse(from);
@@ -33,6 +62,8 @@ export type TaskDurationInfo = {
   label: "用时" | "跨度";
   text: string;
   title?: string;
+  /** 只有「跨度」才有的口径说明。起止时刻已经摆在明面上的表面拿它当 title，免得 hover 一下只换来一遍已经看得见的结束时间。 */
+  note?: string;
 };
 
 export function taskDurationInfo(task: Task, now = Date.now()): TaskDurationInfo | null {
@@ -41,18 +72,20 @@ export function taskDurationInfo(task: Task, now = Date.now()): TaskDurationInfo
   if (typeof task.activeMs === "number") {
     const liveStart = task.liveSince && !task.endedAt ? Date.parse(task.liveSince) : NaN;
     const live = Number.isFinite(liveStart) ? Math.max(0, now - liveStart) : 0;
-    return { label: "用时", text: formatDuration(task.activeMs + live), title: endTitle };
+    return { label: "用时", text: formatDurationShort(task.activeMs + live), title: endTitle };
   }
   const start = Date.parse(task.startedAt);
   const end = task.endedAt ? Date.parse(task.endedAt) : now;
   if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
   if (task.activeMs === undefined) {
-    return { label: "用时", text: formatDuration(end - start), title: endTitle };
+    return { label: "用时", text: formatDurationShort(end - start), title: endTitle };
   }
+  const note = "跨度含等待回复的空闲，非纯执行时长";
   return {
     label: "跨度",
-    text: formatDuration(end - start),
-    title: `${endTitle ? `${endTitle} · ` : ""}跨度含等待回复的空闲，非纯执行时长`,
+    text: formatDurationShort(end - start),
+    title: `${endTitle ? `${endTitle} · ` : ""}${note}`,
+    note,
   };
 }
 
