@@ -192,7 +192,7 @@ export function SettingsPage({
 
       <main className="settings-main">
         <div className="settings-content" data-wide={WIDE_SECTIONS.includes(section) ? "yes" : "no"}>
-          {section === "providers" && <ProvidersSettings notify={notify} />}
+          {section === "providers" && <ProvidersSettings notify={notify} onOpen={onSection} />}
           {section === "executors" && <ExecutorsSettings notify={notify} />}
           {section === "modes" && <ModesSettings notify={notify} />}
           {section === "workflows" && <WorkflowsSettings notify={notify} />}

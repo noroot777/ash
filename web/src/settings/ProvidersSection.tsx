@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { LlmProtocol, LlmProvider, ProviderModelListMode } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProtocol, LlmProvider, ProviderModelListMode } from "@ash/shared";
 import {
   ArrowsClockwise,
   CheckCircle,
@@ -19,6 +19,9 @@ import { ProviderPinnedModels } from "./ProviderPinnedModels.tsx";
 import { ProviderContext1mModels } from "./ProviderContext1mModels.tsx";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { useProviderCatalog, type ProviderCatalog } from "./useProviderCatalog.ts";
+
+/** 一份远端数据此刻的处境。`ready` 之外都不许拿来下断言。 */
+export type LoadState = "loading" | "ready" | "failed";
 
 type ProviderDraft = {
   name: string;
@@ -403,10 +406,19 @@ export function ProviderForm({
 
 function ProviderRow({
   provider,
+  mountedBy,
+  onOpenExecutors,
   onChanged,
   notify,
 }: {
   provider: LlmProvider;
+  /**
+   * 把这家供应商挂上去的执行器 Profile —— 一条都没有时它在任务里是选不到的。
+   * **null = 还不知道**(执行器清单没读成功 / 还在读):那是「未知」,不是「没有」,
+   * 这一格什么都不说,由卡片上那一句统一交代。
+   */
+  mountedBy: AgentExecutorProfile[] | null;
+  onOpenExecutors?: () => void;
   onChanged: () => Promise<void>;
   notify: (message: string) => void;
 }) {
@@ -454,9 +466,33 @@ function ProviderRow({
             {provider.context1mModels.length ? ` · ${provider.context1mModels.length} 个 1M` : ""}
           </small>
         </div>
-        <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>
-          {provider.hasKey && <CheckCircle size={12} weight="fill" />}
-          {provider.hasKey ? "Key 已保存" : "缺少 Key"}
+        {/* 一家供应商能用,要 Key 和「被某条执行器挂上」两件事同时成立 —— ash 自己不直连
+            大模型,供应商只是执行器启动时注入的 base_url + key(server executors/index.ts)。
+            所以这两件事是同一级别的前置条件,并排摆、各自绿掉,缺哪个一眼看得见。
+            没人挂它时任务里**根本列不出**它的模型(lib/modelCatalog.ts 的 groupSeeds),
+            这句话必须在这里说,否则用户加完供应商只会得出「加了但用不了」。 */}
+        <span className="provider-state-stack">
+          <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>
+            {provider.hasKey && <CheckCircle size={12} weight="fill" />}
+            {provider.hasKey ? "Key 已保存" : "缺少 Key"}
+          </span>
+          {!mountedBy ? null : mountedBy.length ? (
+            <span className="provider-mount-state is-ready">
+              <CheckCircle size={12} weight="fill" />
+              {mountedBy.length} 个执行器在用
+            </span>
+          ) : onOpenExecutors ? (
+            <button
+              type="button"
+              className="provider-mount-state"
+              aria-label={`${provider.name} 还没有执行器挂它，任务里选不到它的模型；去执行器设置挂上`}
+              onClick={onOpenExecutors}
+            >
+              未挂到执行器
+            </button>
+          ) : (
+            <span className="provider-mount-state">未挂到执行器</span>
+          )}
         </span>
         <span className="provider-default-model">{provider.model || "未设默认模型"}</span>
         <button
@@ -488,7 +524,13 @@ function ProviderRow({
       {confirmDelete && (
         <ConfirmDialog
           title="删除供应商"
-          message={`删除“${provider.name}”后，绑定它的执行器会退回 CLI 官方账号。`}
+          // 后果按**这一行真实的挂载情况**说:没人挂它时那句「执行器会退回官方账号」
+          // 是空话,而真有人挂着时用户想知道的恰好是「是哪几个」。
+          message={!mountedBy
+            ? `删除“${provider.name}”后，挂着它的执行器会退回 CLI 官方账号。`
+            : mountedBy.length
+              ? `删除“${provider.name}”后，挂着它的 ${mountedBy.map((profile) => profile.name).join("、")} 会退回 CLI 官方账号。`
+              : `删除“${provider.name}”。目前没有执行器挂着它。`}
           confirmLabel="删除"
           danger
           busy={deleting}
@@ -502,14 +544,27 @@ function ProviderRow({
 
 export function ProvidersSection({
   providers,
+  profiles,
+  profilesState = "ready",
+  onRetryProfiles,
+  onOpenExecutors,
   onChanged,
   notify,
 }: {
   providers: LlmProvider[];
+  /** 全部执行器 Profile:用来回答每一行「有没有人挂它」。 */
+  profiles: AgentExecutorProfile[];
+  /** 上面那份清单此刻的处境。只有 ready 时才允许在行上下「挂没挂」的断言。 */
+  profilesState?: LoadState;
+  onRetryProfiles?: () => void;
+  onOpenExecutors?: () => void;
   onChanged: () => Promise<void>;
   notify: (message: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  // 没读成功就没有「挂载情况」这件事可说 —— 行上一个字都不写,原因在卡片上说一次。
+  const mountedBy = (provider: LlmProvider) =>
+    profilesState === "ready" ? profiles.filter((profile) => profile.providerId === provider.id) : null;
   return (
     <section className="settings-section">
       <h2>模型供应商</h2>
@@ -525,6 +580,13 @@ export function ProvidersSection({
             </Button>
           )}
         </div>
+        {profilesState === "failed" && (
+          // 「不知道挂没挂」说一次就够,不要每行重复一遍;重试也只需要一颗。
+          <p className="settings-muted providers-mount-unknown" role="status">
+            执行器清单读取失败，暂时无法确认哪些供应商已挂上执行器。
+            {onRetryProfiles && <Button variant="ghost" onClick={onRetryProfiles}>重试</Button>}
+          </p>
+        )}
         {!providers.length && !adding && (
           <p className="settings-muted">还没有供应商；现有 Profile 继续使用各 CLI 的官方登录账号。</p>
         )}
@@ -532,6 +594,8 @@ export function ProvidersSection({
           <ProviderRow
             key={provider.id}
             provider={provider}
+            mountedBy={mountedBy(provider)}
+            onOpenExecutors={onOpenExecutors}
             onChanged={onChanged}
             notify={notify}
           />
