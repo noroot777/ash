@@ -187,6 +187,42 @@ try {
   await reload(pending.filter((item) => !item.sessionRole));
   await page.waitForFunction(() => document.querySelector('.scheduled-message-filters button[aria-pressed="true"]')?.textContent?.startsWith("全部"));
   assert.equal(await list.locator(".scheduled-message-item").count(), 8, "审查分类消失后回到全部，不遗留不可选空筛选");
+  // ── 带 origin 但不是哨兵的那几种 ──────────────────────────────────────────────
+  // origin 早期只有哨兵唤醒在写，审查结算的修复交接（review-settlement:<代次>）、检查点
+  // 续跑后来也写它。按 !!origin 判哨兵会把一条审查交接标成哨兵、还配上「取消这次唤醒 /
+  // 不执行停止哨兵操作」的措辞，用户据此以为有个哨兵在盯（2026-10-31 实例：任务
+  // CKjeps4QSRTE 的 review-repair-dde14804…）。这里钉的是「哨兵口径只落在真哨兵上」。
+  const systemRow = (id, text, origin, at) => ({
+    id, taskId: "task-a", text, attachments: [], agent: null, executorId: null, model: null, reasoningEffort: null,
+    sessionRole: null, origin, mode: "queued", sendAt: at, status: "pending", createdAt: at, sentAt: null,
+  });
+  await reload([
+    message(0),
+    systemRow("repair", "【自由工作流审查未通过 · 第 1 轮】\nREGRESSION_FINISHED exitCode=1 monitor=m9",
+      "review-settlement:gen-1", "2026-10-24T11:00:00.000Z"),
+    systemRow("resume", "继续：把剩下两处改完", "checkpoint:resume", "2026-10-24T11:00:01.000Z"),
+    systemRow("mine-2", "我自己写的", null, "2026-10-24T11:00:02.000Z"),
+  ]);
+  assert.match(await card.innerText(), /我的消息 1 · 哨兵 1 · 系统 2/, "头部只把真哨兵算进「哨兵 N」");
+  const repairItem = list.locator('.scheduled-message-item:has(details[data-message-id="repair"])');
+  assert.match(await repairItem.innerText(), /系统/);
+  assert.doesNotMatch(await repairItem.innerText(), /哨兵/, "审查交接行一个哨兵字样都不许有");
+  assert.equal(await repairItem.getByRole("button", { name: /取消哨兵事件|撤回|引导会话/ }).count(), 0,
+    "系统排进来的不是用户打的字、也不是哨兵唤醒：只展示");
+  assert.match(await repairItem.innerText(), /由系统排入 · 不可撤回/, "要说清这行为什么没有按钮");
+  const ids = () => list.locator("details[data-message-id]")
+    .evaluateAll((nodes) => nodes.map((node) => node.dataset.messageId));
+  await filter("哨兵").click();
+  assert.deepEqual(await ids(), ["msg-0"], "「哨兵」筛选器只命中真哨兵");
+  await filter("系统").click();
+  assert.deepEqual(await ids(), ["repair", "resume"], "认不出来源的 origin 归到「系统」");
+  assert.equal(await list.getByRole("button").count(), 0, "「系统」整类只读");
+  await filter("需留意").click();
+  assert.match(await list.innerText(), /这个分类下没有待发送输入/, "正文里引着的退出码不许算成需留意");
+  await filter("全部").click();
+  await reload([message(0), systemRow("mine-2", "我自己写的", null, "2026-10-24T11:00:02.000Z")]);
+  assert.equal(await page.getByRole("group", { name: "筛选待发送消息" }).getByRole("button", { name: /^系统/ }).count(), 0,
+    "没有系统排入的输入时不多这颗筛选器");
   await reload(Array.from({ length: 30 }, (_, index) => message(index)));
   for (const width of [1280, 768, 390, 320]) {
     await page.setViewportSize({ width, height: width < 500 ? 700 : 900 });
@@ -209,7 +245,8 @@ try {
   assert.equal(await list.count(), 0, "切换任务重置展开和筛选状态");
   assert.equal(await draft.inputValue(), "未发送的草稿", "浏览、筛选和取消哨兵不改动草稿");
   assert.deepEqual(errors, []);
-  console.log("✓ 正式排队托盘：原卡片向上展开、输入框锚定、消息权限、筛选、正文阅读、确认失败/重试、引导、实时新增、任务切换及四档宽度通过");
+  console.log("✓ 正式排队托盘：原卡片向上展开、输入框锚定、消息权限、筛选（哨兵只含真哨兵）、"
+    + "非哨兵 origin 的中性展示、正文阅读、确认失败/重试、引导、实时新增、任务切换及四档宽度通过");
 } finally {
   releaseCancel?.();
   await browser?.close();
