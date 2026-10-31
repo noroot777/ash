@@ -32,6 +32,25 @@ const cfgDir = join(stage, "opencode");
 // **这一句决定了整条验证成不成立**:opencode 认 `OPENCODE_CONFIG` 指的那份配置,而 agent
 // 是 ash 这个进程的子进程、原样继承它。所以 ash 这边注册到哪、agent 就从哪读。
 process.env.OPENCODE_CONFIG = join(cfgDir, "opencode.json");
+// 比它优先级更高的两个来源(真 opencode 实测的层级:`OPENCODE_CONFIG_DIR` 那个目录、
+// `OPENCODE_CONFIG_CONTENT` 里那整段 JSON)**从这个进程里摘掉**:留着它们,我们写的那条
+// 可能被更高优先级的一条顶掉甚至关掉,而这条 e2e 的全部结论都建立在「agent 用的就是我们
+// 刚写的那条登记」上(本轮审查 N2)。
+delete process.env.OPENCODE_CONFIG_DIR;
+delete process.env.OPENCODE_CONFIG_CONTENT;
+/**
+ * 注册那一步**只看隔离出来的这套来源**。
+ *
+ * opencode 的来源不止一份:默认目录那几份也会被读。所以用真 `homedir()` 去问「要不要补」,
+ * 答案会被**宿主自己那份全局配置**左右 —— 用户机器上早就接过 ash 时,安装器照规矩回
+ * 「已经有生效的登记了,不动它」,`added` 就是 false,这条 e2e 在起跑前自拒(本轮审查 N2)。
+ * 判定本身没错,错在拿宿主状态当了被测对象的输入。
+ */
+const sandboxHome = join(stage, "host-home");
+const sandboxEnv: NodeJS.ProcessEnv = {
+  ...process.env,
+  XDG_CONFIG_HOME: join(sandboxHome, ".config"),
+};
 
 const { REPO_DIR } = await import("../src/paths.js");
 const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
@@ -44,6 +63,8 @@ try {
   // ── 1. 一个干净的仓库和一个干净的 ash 实例 ──────────────────────────────
   execFileSync("mkdir", ["-p", repo]);
   execFileSync("mkdir", ["-p", cfgDir]);
+  // 隔离出来的那套来源里,默认目录得真的在(不然「写入落点」算不出来)。
+  execFileSync("mkdir", ["-p", join(sandboxHome, ".config", "opencode")]);
   git("init", "-q", "-b", "main");
   git("config", "user.email", "e2e@ash.local");
   git("config", "user.name", "ash e2e");
@@ -70,7 +91,9 @@ try {
   const hosts = await import(pathToFileURL(join(REPO_DIR, "scripts", "mcp-hosts.mjs")).href) as {
     registerHostMcp: (o: Record<string, unknown>) => { file: string; added: boolean; why?: string };
   };
-  const written = hosts.registerHostMcp({ agentType: "opencode", mcpEntry: MCP_ENTRY, url });
+  const written = hosts.registerHostMcp({
+    agentType: "opencode", mcpEntry: MCP_ENTRY, url, env: sandboxEnv, home: sandboxHome,
+  });
   assert.equal(written.added, true, `该写进去:${written.why ?? ""}`);
   assert.equal(written.file, process.env.OPENCODE_CONFIG);
   console.log(`① 已注册 ash MCP → ${written.file}`);
