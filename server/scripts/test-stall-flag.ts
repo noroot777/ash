@@ -18,6 +18,12 @@
 //      所以读侧的 EXISTS 还得再要一条:那条会话得是**此刻这一轮用的那条**。同一个生命周期缺口
 //      在「没有进程可接管」的结束边界上也有一半:置标记的消费者早就没了,没人来撤
 //      (`clearTaskStallFlags`,由启动对账调)。
+//   ⑤ **④那道闸的判据一开始错了**(第 1 轮审查 F3,已实测):它问的是「这个任务里还有没有起得
+//      更晚的会话」,而 duet 的两个声部**本来就并行**。于是 A 卡着、B 这一轮先答完,A 那个仍然
+//      有效的警告被 B 的时间戳盖掉 —— 恰恰是「上游连不上」最该亮的那段时间里一声不响。
+//      所有权在 ash 里从来是 `sessions.role` 说的(每个角色至多一条在跑),不是时间先后,所以
+//      那道闸必须限定在**同一个角色**内比。duet 的 voiceA / voiceB 因此互不遮蔽,而④那条
+//      「换执行器另起一条 single」照旧被挡住。
 //
 // 库用临时文件(**绝不碰生产库**),所以 env 必须在 import 那些摸库的模块**之前**设好。
 import assert from "node:assert/strict";
@@ -173,4 +179,39 @@ assert.equal(
 );
 assert.equal(await stalled(), false, "清完了点还亮着");
 
-console.log("test:stall-flag ok：标记按停滞身份认人,终止/开始/不接管三道边界都清,只认此刻这一轮,排在后面的投入不清");
+// ── ⑧ 并行的两个声部互不遮蔽:遮蔽按**角色**算,不按时间先后(第 1 轮审查 F3) ──────────
+// 上面⑥那道闸原先问的是「这个任务里还有没有起得更晚的会话」。单飞链上「更晚」确实等于「换了
+// 一条」—— 一个任务同一时刻只有一条 single 在跑。可 duet 不是:voiceA 和 voiceB 本来就并行,
+// B 这一轮正常答完(甚至只是起得晚一点)就会把 A 那个仍然有效的警告盖掉。
+const DUET = "task-duet-flag";
+const VOICE_A = "sess-duet-a";
+const VOICE_B = "sess-duet-b";
+await db.insert(tasks).values({
+  id: DUET, projectId: "proj-stall-flag", title: "两个声部并行", body: "", status: "running",
+  mode: "duet", createdAt: T1, updatedAt: T1,
+});
+await db.insert(sessions).values([
+  // A:还在跑(没收尾),上游连不上,标记已经置上。
+  { id: VOICE_A, taskId: DUET, role: "voiceA", agentType: "codex", executor: "codex", startedAt: T1, turnStartedAt: T1 },
+  // B:起得更晚,而且这一轮**已经收尾**了 —— 时间先后那一版判据正是被这种行盖掉的。
+  { id: VOICE_B, taskId: DUET, role: "voiceB", agentType: "claude", executor: "claude", startedAt: T2, turnStartedAt: T2, endedAt: OTHER_SINCE },
+]);
+const duetStalled = async (): Promise<boolean> => {
+  const [row] = await db.select().from(tasks).where(eq(tasks.id, DUET));
+  return (await enrichTasks([row!]))[0]!.upstreamStalled === true;
+};
+assert.equal(await duetStalled(), false, "夹具不对:还没置标记,点就亮了");
+markSessionStalled(DUET, VOICE_A, SINCE);
+for (let i = 0; i < 100 && !(await duetStalled()); i += 1) await new Promise((r) => { setTimeout(r, 10); });
+assert.equal(await duetStalled(), true,
+  "另一个声部起得更晚,就把这个声部仍然有效的停滞警告盖掉了 —— duet 的两个声部本来就并行,"
+  + "遮蔽只能在同一个角色内算(所有权在 ash 里是 sessions.role 说的,不是时间先后)");
+// 同一个角色内照旧遮蔽:A 这一轮收了尾、新开一条 voiceA,旧行那个没人撤的标记不许再点灯。
+await db.insert(sessions).values({
+  id: "sess-duet-a2", taskId: DUET, role: "voiceA", agentType: "codex", executor: "codex",
+  startedAt: OTHER_SINCE, turnStartedAt: OTHER_SINCE,
+});
+assert.equal(await duetStalled(), false,
+  "同一个声部另起了一条会话,旧行上那个没人撤的标记还在点灯 —— 限定角色之后这道闸不该失效");
+
+console.log("test:stall-flag ok：标记按停滞身份认人,终止/开始/不接管三道边界都清,只认此刻这一轮,遮蔽按角色算(并行声部互不遮蔽)");

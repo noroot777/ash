@@ -12,6 +12,13 @@
 // 反面同样要钉住:**真人按下的停止比看门狗的结论更该被尊重**,终态续聊「只能变好不会变差」
 // 的既有契约也不许被这一条撞翻。
 //
+// 末尾那一段钉的是另一件事(第 1 轮审查 F2,已实测):这条优先级原先在**两处各写了一份**,
+// 正常结算用分支顺序、启动对账用一行三元表达式。两份一漂,同一个事实就按进了哪个入口给出两种
+// 结论 —— 一个已完成的任务被一次失败续聊打断,不重启收尾保住 `done`,重启收尾却整个降成
+// `failed`,而用户那边唯一的区别只是 ash 有没有重启。现在两个入口共用同一个纯函数
+// (`settle-landing.ts`),所以这一段直接把那张优先级表逐行钉住 —— 跨进程那一侧的端到端由
+// `test:stall-restart` 的场景⑨钉。
+//
 // 库用临时文件(**绝不碰生产库**),所以 env 必须在 import 那些摸库的模块**之前**设好。
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -130,4 +137,31 @@ const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.
   assert.equal(settled.status, "done", "正常确认完成的续聊回合升级不上去了 —— 上一条拦过头了");
 }
 
-console.log("test:stall-settle ok：熔断排在被动检查点之前、真人停止之后,续跑材料与两个方向的终态续聊契约都没动");
+// ── ⑨ 落位优先级表本体:两个入口共用的那一份(第 1 轮审查 F2) ────────────────────
+// 纯函数,逐行钉。四个轴都不给默认值是刻意的(见 settle-landing.ts),所以这里每条都写全 ——
+// 将来多一个轴,这几行会跟两个调用点一起编译不过。
+{
+  const { failedTurnLanding } = await import("../src/settle-landing.js");
+  const landing = (facts: Partial<Parameters<typeof failedTurnLanding>[0]>) => failedTurnLanding({
+    ashFailed: false, followUpFrom: null, queueAdvancePrev: null, goalHeld: false, ...facts,
+  });
+  // ① 终态续聊回到原终态 —— 而且它压过 ash 判的失败:回合失败和任务此前的成果是两个轴。
+  assert.equal(landing({ followUpFrom: "done" }), "done", "终态续聊没回到原终态");
+  assert.equal(landing({ followUpFrom: "done", ashFailed: true }), "done",
+    "一次被我们熔断的续聊把整个已完成的任务降成了失败 —— 续聊的契约是「只能变好,不会变差」");
+  assert.equal(landing({ followUpFrom: "paused" }), "paused",
+    "旁路回合恢复的不止三个终态,这一支不能只认 done/failed");
+  // ② ash 判的失败压过残留的队列占位和持续目标 —— 那两句话都替用户表达了「它在等你」。
+  assert.equal(landing({ ashFailed: true, queueAdvancePrev: "backlog" }), "failed",
+    "一条残留的起跑请求把一轮确凿的失败落回了「尚未起跑」");
+  assert.equal(landing({ ashFailed: true, goalHeld: true }), "failed",
+    "持续目标那一支把我们自己判的失败说成了「暂停中 + 继续」");
+  // ③④⑤ 没有 ash 失败时,后两条按序生效;都没有就是 failed。
+  assert.equal(landing({ queueAdvancePrev: "backlog" }), "backlog", "压根没起跑的一轮留下了失败记录");
+  assert.equal(landing({ queueAdvancePrev: "backlog", goalHeld: true }), "backlog",
+    "队列占位该排在持续目标前面:这一轮连开始都没开始");
+  assert.equal(landing({ goalHeld: true }), "paused", "持续目标留住了却不是 paused,/goal resume 接不上");
+  assert.equal(landing({}), "failed", "什么都没有的一轮失败,落位不是 failed");
+}
+
+console.log("test:stall-settle ok：熔断排在被动检查点之前、真人停止之后,续跑材料与两个方向的终态续聊契约都没动,落位优先级只有一份");

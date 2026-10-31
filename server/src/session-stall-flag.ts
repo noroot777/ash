@@ -62,8 +62,26 @@ function flip(taskId: string, write: Promise<void>, what: string, sessionId: str
     });
 }
 
-export function markSessionStalled(taskId: string, sessionId: string, since: string): void {
-  flip(taskId, setStalled(sessionId, since), "置", sessionId);
+/**
+ * 置上标记。**返回「落库确认了没有」**,而不是发起一笔就走(本轮审查 N1):看门狗拿这个答案
+ * 决定要不要在下一拍重投 —— 从前这里失败只写一行 console,而「已经报过警」那一位早就置上了,
+ * 于是上游继续断着、时间线上的警告也在,卡片却永远没有那颗红环。
+ *
+ * 幂等:同一个 `since` 写第二次结果一样,所以重投无害。
+ */
+export async function markSessionStalled(taskId: string, sessionId: string, since: string): Promise<boolean> {
+  try {
+    await setStalled(sessionId, since);
+  } catch (error) {
+    console.warn(`[ash] 置会话 ${sessionId} 的上游停滞标记失败:`, error);
+    return false;
+  }
+  // 广播失败不算投影失败:库里那一格已经是对的,刷新页面就能看见 —— 重投一笔 UPDATE 也救不了
+  // 一次投递故障,只会在每一拍里白写一次库。
+  await publishTaskUpdated(taskId).catch((error: unknown) => {
+    console.warn(`[ash] 会话 ${sessionId} 的停滞标记已落库,但这一次任务广播没发出去:`, error);
+  });
+  return true;
 }
 
 /**

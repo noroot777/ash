@@ -9,7 +9,7 @@
 //
 // 退出码重建不出这个事实(被我们杀掉的进程多半 exit 0),所以判决本身必须按回合身份存住。
 //
-// **四个场景**(前两个差别只在第一段退出时库忙不忙,第 4 轮审查 F1 拦下的正是第二个):
+// **九个场景**(前两个差别只在第一段退出时库忙不忙,第 4 轮审查 F1 拦下的正是第二个):
 //   ① 无竞争 —— 判决该存住,接管后结论和终止义务都还在。
 //   ② 库被另一笔长事务占着 —— `dbClient` 的写要过 `whenIdle`(写不许借别人的事务),这条
 //      UPDATE 排在队里,**既没抛错也没落盘**。判决作出之后紧接着就是不可撤销的两件事(时间线
@@ -27,6 +27,15 @@
 //   ⑤ 原进程**没活到接管**,走启动对账(第 5 轮审查 F3,已实测):持续目标原先在这条路上被
 //      写成「因服务中断已暂停」,界面显示暂停中 + 继续,回合区间 `outcome` 留空 —— 而判决明明
 //      还在日志里读得出来。两个结算入口共用同一句问话之后,这条路落 failed 并把区间收口。
+//   ⑦ **区间已经收口、任务还没落位**时进程退出(第 1 轮审查 F1,已实测):单飞那条链先落区间,
+//      之后还要补录 MCP、保存持续目标,隔着好几个 await 才轮到任务结算。盘上于是留下「区间已
+//      failed、任务仍 running」。上一版压缩按「`ended_at` 非空 ⇒ 没人要了」把判决删掉,恢复又只
+//      枚举还开着的区间 —— 一个已经提示过「已自动终止」的持续目标回来显示「暂停中 + 继续」。
+//   ⑧ **开始行压根没落下**(同一条 F1 的第二个实例):`openTurn` 那一批写失败,而看门狗照样
+//      熔断并把判决落了盘。恢复身份集合如果只由「现有的开放区间」决定,这一类压根没人问。
+//   ⑨ **已完成任务的一次失败续聊**(第 1 轮审查 F2,已实测):正常收尾保住 `done`(续聊只能变好
+//      不会变差),而启动对账原先另写了一行三元表达式,无条件把整个任务降成 failed —— 用户那边
+//      唯一的区别只是 ash 有没有重启。
 //
 // 为什么非得两个进程:同进程里 `__resetStallFailures()` 只能模拟「内存没了」,**模拟不了
 // 「模块级 Map 随进程一起消失、而盘上的东西还在」** —— 而这正是要测的那件事。所以这里真的
@@ -50,16 +59,23 @@ const UNREADABLE = "ASH_STALL_RESTART_UNREADABLE";
 if (!phase) {
   // ── 调度:两个场景各一个临时库,每个场景两个独立进程依次跑 ──────────────────────
   const scenes = [
-    { what: "无竞争", hold: false, unreadable: false, mode: "consume", phases: ["before-restart", "after-restart"] },
-    { what: "库被另一笔长事务占着", hold: true, unreadable: false, mode: "consume", phases: ["before-restart", "after-restart"] },
-    { what: "判决日志读不出来", hold: true, unreadable: true, mode: "consume", phases: ["before-restart", "after-restart"] },
+    { what: "无竞争", hold: false, unreadable: false, mode: "consume", expectTask: "failed", phases: ["before-restart", "after-restart"] },
+    { what: "库被另一笔长事务占着", hold: true, unreadable: false, mode: "consume", expectTask: "failed", phases: ["before-restart", "after-restart"] },
+    { what: "判决日志读不出来", hold: true, unreadable: true, mode: "consume", expectTask: "failed", phases: ["before-restart", "after-restart"] },
     // 这一个只有一段:全新起跑、日志从一开始就读不出来,看它会不会被冤枉。
-    { what: "全新起跑遇上日志读不出来", hold: false, unreadable: true, mode: "fresh-unreadable", phases: ["before-restart"] },
-    { what: "原进程没活到接管,走启动对账", hold: false, unreadable: false, mode: "reconcile", phases: ["before-restart", "after-restart"] },
+    { what: "全新起跑遇上日志读不出来", hold: false, unreadable: true, mode: "fresh-unreadable", expectTask: "failed", phases: ["before-restart"] },
+    { what: "原进程没活到接管,走启动对账", hold: false, unreadable: false, mode: "reconcile", expectTask: "failed", phases: ["before-restart", "after-restart"] },
     // 同一条路 + 判决核实不了:对账**不许**拿熔断那套措辞去念一份「核实不了」的记录。
     // 这是上一版「并列三档返回」留下的假话:接管失败转对账时对账第二次来问,内存里已经有那份
     // unverified 记录,于是它走「有判决」那一支,被说成「已被判定上游连不上并按失败结算」。
-    { what: "走启动对账,且判决核实不了", hold: true, unreadable: true, mode: "reconcile", phases: ["before-restart", "after-restart"] },
+    { what: "走启动对账,且判决核实不了", hold: true, unreadable: true, mode: "reconcile", expectTask: "failed", phases: ["before-restart", "after-restart"] },
+    // ⑦ 中间多一段 `close-span`:它**只**落回合区间、不碰任务状态 —— 那正是单飞那条链在
+    // `recordTurnSpan` 与 `settleTaskStatus` 之间被打断时盘上留下的样子(区间 failed、任务 running)。
+    { what: "区间已收口、任务还没落位时退出", hold: false, unreadable: false, mode: "reconcile", expectTask: "failed", phases: ["before-restart", "close-span", "after-restart"] },
+    // ⑧ 开始行压根没落下:库里一条回合行都没有,判决只在日志里。
+    { what: "开始行没落下,只有判决在日志里", hold: false, unreadable: false, mode: "no-turn-row", expectTask: "failed", phases: ["before-restart", "after-restart"] },
+    // ⑨ 已完成任务的失败续聊:任务那一行**必须保住 done**,失败记在回合区间上。
+    { what: "已完成任务的失败续聊走启动对账", hold: false, unreadable: false, mode: "follow-up", expectTask: "done", phases: ["before-restart", "after-restart"] },
   ] as const;
   for (const scene of scenes) {
     const stage = mkdtempSync(join(tmpdir(), "ash-stall-restart-"));
@@ -137,9 +153,17 @@ if (!phase) {
     // 退出码能提示出过问题 —— 结论只能来自那份判决(或者「核实不了」这个事实本身)。
     const settled = say("settled");
     assert.ok(settled, where("第二段没走到结算"));
-    assert.equal(settled.task, "failed", where("任务落成了「已完成」/「暂停中」—— 看门狗说过的话一句没兑现"));
+    assert.equal(settled.task, scene.expectTask, scene.expectTask === "done"
+      ? where("一次失败续聊把整个已完成的任务降成了失败 —— 续聊的契约是「只能变好,不会变差」,"
+        + "而正常收尾那一侧保住了 done:同一个事实按进了哪个入口给出两种结论")
+      : where("任务落成了「已完成」/「暂停中」—— 看门狗说过的话一句没兑现"));
     assert.equal(settled.turn, "failed", where("回合区间记成了 completed 或者留空「不知道」"));
-    if (scene.mode === "reconcile") {
+    if (scene.mode === "no-turn-row") {
+      // 判决是靠**它自己**给出的身份被找回来的(会话行反查任务),不是靠「现有的开放区间」。
+      assert.match(String(settled.timeline ?? ""), /按失败结算|按失败收尾/,
+        where("库里没有回合行,于是对账压根没问过那条判决 —— 持续目标回来显示「暂停中 + 继续」"));
+    }
+    if (scene.mode === "reconcile" || scene.mode === "no-turn-row") {
       // 持续目标那一支原先在这里写「因服务中断已暂停」:那句话替用户表达了「它在等你」。
       assert.match(String(settled.timeline ?? ""), /按失败结算|按失败收尾/,
         where("对账把熔断过的那一轮说成了暂停 —— 用户看到的那个结论说它在等人"));
@@ -153,6 +177,10 @@ if (!phase) {
       }
       assert.equal(settled.goalTurn, 0, where("持续目标没收尾"));
       assert.equal(settled.stallFlag, null, where("旧会话的停滞标记没人撤 —— 下一轮会让红环凭空亮起来"));
+      // 压缩**不许**把这条判决扔掉:上一版的判据是「区间收口了 ⇒ 没人要了」,而⑦这一段正是
+      // 区间已收口、任务还没落位。扔掉之后对账无从得知这一轮失败过。
+      assert.equal(settled.compacted ?? null, null,
+        where("启动压缩把一条还没销账的判决清掉了(dropped 非零)"));
     }
   }
   console.log("test:stall-restart ok：判决落盘;库排队、日志读不出来、原进程没活到接管三条路都不会把一轮失败说成成功,全新起跑也不会被冤枉");
@@ -183,9 +211,11 @@ if (!phase) {
   }
   const { consumeSingleRun } = await import("../src/single-run.js");
   const { stallFailure } = await import("../src/turn-stall-verdict.js");
-  const { readStallJournal } = await import("../src/turn-stall-journal.js");
+  const { readStallJournal, pendingStallVerdicts } = await import("../src/turn-stall-journal.js");
+  // 「落盘了吗」问的是**还没销账的那一份**:日志里同时躺着判决行和销账行,只数判决行会把一条
+  // 已经结算过的旧判决也算成「还欠着」(turn-stall-journal.ts 文件头第四条)。
   const journaled = (sessionId: string, at: string): boolean =>
-    readStallJournal().records.some((r) => r.sessionId === sessionId && r.turnStartedAt === at);
+    pendingStallVerdicts(readStallJournal()).some((r) => r.sessionId === sessionId && r.turnStartedAt === at);
 
   const cwd = join(stage, "workspace");
   if (phase === "before-restart") {
@@ -195,15 +225,21 @@ if (!phase) {
       // 对账那条路专门用持续目标:它是 F3 里被写成「因服务中断已暂停」的那一支,而「暂停」
       // 这个落位恰恰把一轮失败说成了「在等你」。cliState 给成能被 hold 的形状,否则
       // interruptCliGoal 直接返回 false,这一段就测不到那个分叉。
-      ...(mode === "reconcile"
+      ...(mode === "reconcile" || mode === "no-turn-row"
         ? { goalTurn: true, cliState: JSON.stringify({ codex: { goal: { objective: "一直盯着上游", status: "active" } } }) }
         : {}),
+      // ⑨ 已完成任务的一次失败续聊:落位该退回 `done`,不是把整个任务降成 failed。
+      ...(mode === "follow-up" ? { followUpFrom: "done" } : {}),
     });
     await db.insert(sessions).values({
       id: "restart-session", taskId: "restart", role: "single", agentType: "codex",
       executor: "codex@smoke", cwd, startedAt: AT, turnStartedAt: AT, cliSessionId: "cli-restart",
     });
-    await openTurn({ taskId: "restart", sessionId: "restart-session", cwd, startedAt: AT });
+    // ⑧ 这一档**故意不开**那一行:模拟 `openTurn` 那一批写失败(排在别人的事务后面,既没抛错
+    // 也没落盘)。判决照样会落日志 —— 恢复的身份集合因此不能只由「现有的开放区间」决定。
+    if (mode !== "no-turn-row") {
+      await openTurn({ taskId: "restart", sessionId: "restart-session", cwd, startedAt: AT });
+    }
   }
   mkdirSync(join(stage, "runs", "restart"), { recursive: true });
   const out = createWriteStream(join(stage, "runs", "restart", "restart-session.md"), { flags: "a" });
@@ -212,6 +248,28 @@ if (!phase) {
   const column = async (): Promise<unknown> =>
     (await dbClient.execute("SELECT stall_reason FROM session_turns WHERE session_id = 'restart-session'"))
       .rows.at(0)?.stall_reason ?? null;
+
+  if (phase === "close-span") {
+    // ⑦ 单飞那条链在 `recordTurnSpan` 与 `settleTaskStatus` 之间被打断时,盘上留下的就是这个样子:
+    // 回合区间已经 failed、任务那一行还是 running。两件事隔着好几个 await(补录 MCP、保存持续
+    // 目标),而中间任何一刻进程没了都会定格在这儿。这一段**只**落区间,一个字都不碰任务 ——
+    // 也不销账(销账的唯一出口是结算之后那一句 `clearStallFailure`,这里压根没走到结算)。
+    const { recordTurnSpan } = await import("../src/session-turns.js");
+    await recordTurnSpan({
+      taskId: "restart", sessionId: "restart-session", cwd, startedAt: AT,
+      endedAt: "2026-10-31T01:05:00.000Z", outcome: "failed",
+    });
+    emit({ event: "span-closed" });
+    process.exit(0);
+  }
+
+  // 启动顺序照 index.ts:压缩排在接回/对账前面。这一步是⑦的要害 —— 上一版按「区间收口了 ⇒
+  // 没人要了」压缩,正好会把⑦那条还没销账的判决清掉,后面的对账于是无从得知这一轮失败过。
+  let compacted: number | null = null;
+  if (phase === "after-restart") {
+    const { compactStallVerdicts } = await import("../src/turn-stall-persist.js");
+    compacted = (await compactStallVerdicts())?.dropped || null;
+  }
 
   let killed = false;
   const handle = {
@@ -260,7 +318,7 @@ if (!phase) {
     },
   };
 
-  if (mode === "reconcile" && phase === "after-restart") {
+  if (mode !== "consume" && mode !== "fresh-unreadable" && phase === "after-restart") {
     // 原进程**没活到接管**:这条路上没有句柄可以消费,只有启动对账。真入口,不是手写一份。
     const { reconcileInterruptedTask } = await import("../src/task-reconcile.js");
     assert.equal(await reconcileInterruptedTask("restart"), true, "对账没认领这个被打断的任务");
@@ -285,7 +343,7 @@ if (!phase) {
   const tracePath = join(stage, "runs", "restart", "restart-session.trace.jsonl");
   const trace = existsSync(tracePath) ? readFileSync(tracePath, "utf8") : "";
   emit({
-    event: "settled", task: taskRow?.status, turn, goalTurn: taskRow?.goal_turn ?? null, timeline, trace, stallFlag,
+    event: "settled", task: taskRow?.status, turn, goalTurn: taskRow?.goal_turn ?? null, timeline, trace, stallFlag, compacted,
     kindAtConsume: stallFailure("restart-session", AT)?.kind ?? null,
   });
   process.exit(0);

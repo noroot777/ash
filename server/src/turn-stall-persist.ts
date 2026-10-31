@@ -19,15 +19,19 @@
 //   · 判决的事实 → `turn-stall-journal.ts`(另一个文件、同步写、写完 fsync,不可能排在事务后面);
 //   · 库那一格 → 降级成同一笔顺手补的**第二份记录**(给 SQL 取证和将来的读者;今天它没有别的
 //     读者),排队和写失败都不影响结论。
-// 恢复时两边都读:哪一边有判决都算有(判据仍是「有判决 **且** 这一行还没收口」)。
+// 恢复时两边都读:哪一边有判决都算有(判据是「有判决 **且** 这份判决还没销账」—— 销账是判决
+// 日志自己的一种记录,由结算之后那一句 `clearStallFailure` 追加,不是任何代理指标)。
 //
 // 边界:**只有单飞这条链需要恢复**。团队常驻台重启后走的是重开台(`restartImpact` 把 team
 // 记进 `resumes`,不接管存活进程),duet 的回合断了就是断了 —— 那两条链上没有「接管一个仍在
 // 跑、且已被判熔断的回合」这条路可走,所以不给它们接恢复。落盘本身无害,但也没必要。
 import { dbClient } from "./db/index.js";
-import { appendStallVerdict, compactStallJournal, readStallJournal, type StallVerdictRecord } from "./turn-stall-journal.js";
 import {
-  adoptStallFailure, clearStallFailure, liveStallVerdicts, loadStallFailures, markUnverifiedTurn,
+  appendStallDischarge, appendStallVerdict, compactStallJournal, pendingStallVerdicts, readStallJournal,
+  stallIdentityKey,
+} from "./turn-stall-journal.js";
+import {
+  adoptStallFailure, liveStallVerdicts, loadStallFailures, markUnverifiedTurn,
   setStallVerdictPersister, stallFailure, type StallVerdict,
 } from "./turn-stall-verdict.js";
 import { turnOpenedHere } from "./session-turns.js";
@@ -45,17 +49,24 @@ import { now } from "./util.js";
 // 判据与判决本体仍然一个字节都不落:它们只认一个可注册的钩子,没注册时(纯状态机测试)什么都
 // 不做。盘和库只从**这个**文件进来,而谁 import 它、谁就连着它们 —— `index.ts` 启动时 import
 // 一次,保证连一条消费链都还没起来时就已经装上。
-setStallVerdictPersister((verdict) => {
-  // **同步落盘那一笔就是判决的事实**,它成了才算存住 —— 返回值如实带回去(契约见
-  // `markStallFailure`:返回即落盘,不许发起一笔异步写然后报成功)。
-  const journaled = appendStallVerdict(verdict);
-  // 库那一格异步补一份:它可能排在别人的长事务后面,而那恰好是它不能承载事实的原因。
-  void projectStallVerdictToDb(verdict.sessionId, verdict.turnStartedAt, verdict.reason, journaled);
-  return journaled;
+setStallVerdictPersister({
+  append: (verdict) => {
+    // **同步落盘那一笔就是判决的事实**,它成了才算存住 —— 返回值如实带回去(契约见
+    // `markStallFailure`:返回即落盘,不许发起一笔异步写然后报成功)。
+    const journaled = appendStallVerdict(verdict);
+    // 库那一格异步补一份:它可能排在别人的长事务后面,而那恰好是它不能承载事实的原因。
+    void projectStallVerdictToDb(verdict.sessionId, verdict.turnStartedAt, verdict.reason, journaled);
+    return journaled;
+  },
+  // 销账也落盘:判决的回收条件是「权威结算确认过」,而唯一知道这件事的就是调 `clearStallFailure`
+  // 的那一处。不落这一笔,压缩就只能回头去找一个代理指标 —— 而那正是 F1(见该文件头第四条)。
+  discharge: (sessionId, turnStartedAt) => {
+    appendStallDischarge(sessionId, turnStartedAt);
+  },
 });
 
 /**
- * **装载也在模块加载里做**:把盘上的判决一次性读进内存,之后结算侧照常只读内存。
+ * **装载也在模块加载里做**:把盘上**还没销账的**判决一次性读进内存,之后结算侧照常只读内存。
  *
  * 为什么是一次性装载、而不是每个读取点各读一遍文件(上一版的做法,第 5 轮审查 F1):
  * 「读不出来」要不要影响结论,是个**全局**判断 —— 「这台 ash 还核得了自己的判决吗」。摊到每个
@@ -65,17 +76,21 @@ setStallVerdictPersister((verdict) => {
  *
  * 所以读不出来这件事在这里被**记下来**(`journalUnavailable`),由 `restoreStallVerdict` 带给
  * 调用方:核实不了的时候不许把一轮升级成成功。
+ *
+ * 已经销账的那些**连内存都不进**:它们的结算早就落完了,再装回来只会让启动对账又念一遍那句
+ * 诊断。销账记录本身随后由压缩清掉。
  */
+const discharged = new Set<string>();
 const journalUnavailable = ((): string | null => {
   const read = readStallJournal();
+  for (const record of read.discharges) discharged.add(stallIdentityKey(record.sessionId, record.turnStartedAt));
   // 读出来多少先装多少 —— 坏了一行不该连带丢掉同一份日志里其它完好的判决。
-  const loaded = loadStallFailures(read.records);
+  const loaded = loadStallFailures(pendingStallVerdicts(read));
   if (read.status === "unavailable") {
     console.warn(`[ash] 熔断判决日志有内容读不出来,这台 ash 核不了自己的判决:${read.why}`);
     return read.why;
   }
-  // 这一刻还不知道哪些已经结算完了(压缩那一步才问库),所以别说成「未结算」。
-  if (loaded) console.log(`[ash] 从判决日志装回 ${loaded} 条熔断判决(已结算的随后压缩时清掉)`);
+  if (loaded) console.log(`[ash] 从判决日志装回 ${loaded} 条还没结算的熔断判决`);
   return null;
 })();
 
@@ -119,9 +134,13 @@ export async function projectStallVerdictToDb(
  * (`task-reconcile.ts`,没有可接管的进程、或者接管后消费循环自己挂了)。F3 那条就是因为对账
  * 那一路没问过这一句 —— 持续目标被写成「因服务中断已暂停」,熔断过的那一轮 `outcome` 留空。
  *
- * 判据是「有判决 **且** 这一行还没收口」:收口过的行说明那一轮已经结算完了,判决早该销账,
- * 再拿出来等于拿一份旧判决去压一轮新的执行(同一个理由见 turn-stall-verdict.ts 的键为什么
- * 是回合身份而不是 sessionId)。
+ * 判据是「有判决 **且** 这份判决还没销账」。**不许拿回合区间的开闭代替后半句**(第 1 轮审查
+ * F1,已实测):区间收口只证明执行流结束了,而单飞那条链落完区间之后还要补录 MCP、保存持续
+ * 目标,隔着好几个 await 才轮到任务结算。按「`ended_at` 非空 ⇒ 结算完了」判的那一版,进程在
+ * 这段窗口里退出,盘上留下「区间已 failed、任务仍 running」,下次启动压缩把判决删掉、恢复又只
+ * 枚举还开着的区间 —— 于是一个已经提示过「已自动终止」的持续目标回来显示「暂停中 + 继续」。
+ * 销账记录由 `clearStallFailure` 在结算之后落(见 turn-stall-journal.ts 文件头第四条),已经
+ * 销账的判决连内存都不进,所以这里只剩「有没有」这一问。
  *
  * **「这是上一个进程留下来的回合吗」由事实回答,不要调用方申报**:本进程开过那一行开始记录的
  * 就是全新起跑(`turnOpenedHere`,登记在 `openTurn` 里)。只有留下来的那一类才可能背着没兑现的
@@ -146,26 +165,23 @@ export async function restoreStallVerdict(
   // 内存这张表在模块加载时就从日志装满了,所以这一问同时覆盖「本进程刚判的」和「上一个进程判的」。
   const held = stallFailure(sessionId, turnStartedAt);
   if (held) return held;
+  // 销账过的不再是判决:它的结算早就落完了,再拿出来等于拿一份旧判决去压一轮新的执行。
+  if (discharged.has(stallIdentityKey(sessionId, turnStartedAt))) return null;
   let unreadable = carriedOver ? journalUnavailable : null;
   // 日志没有,库那一格仍可能有:判决落盘成了而投影排队失败是一种,反过来也是一种。
   let reason = "";
-  let settled = false;
   try {
     const read = await dbClient.execute({
-      sql: "SELECT stall_reason, ended_at FROM session_turns WHERE session_id = :sid AND started_at = :at LIMIT 1",
+      sql: "SELECT stall_reason FROM session_turns WHERE session_id = :sid AND started_at = :at LIMIT 1",
       args: { sid: sessionId, at: turnStartedAt },
     });
-    const row = read.rows.at(0);
-    if (typeof row?.stall_reason === "string") reason = row.stall_reason;
-    settled = row?.ended_at != null;
+    if (typeof read.rows.at(0)?.stall_reason === "string") reason = read.rows.at(0)!.stall_reason as string;
   } catch (error) {
     console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的回合行没读出来`
       + "(落盘的判决仍然算数):", error);
-    // 「还没收口」只能问库,而问不到的时候**不许解释成收口过**:那又是一次「拿读不到当成没
-    // 发生」。此刻调用方正要开始消费这个回合身份,它按定义就是活的。
+    // 问不到也**不许解释成「已经结算完了」**:那又是一次「拿读不到当成没发生」。
     if (carriedOver) unreadable = unreadable ?? `回合行读不出来:${String(error)}`;
   }
-  if (settled) return null;
   if (reason) {
     // 停滞起点只有日志里记着(库那一格只有原因原文)。退回判决时刻是**诚实的退路**:那一路撤
     // 不掉上一个进程置的持久标记,但也绝不会去撤别人的 —— 判据见 StallVerdict.since。
@@ -180,50 +196,53 @@ export async function restoreStallVerdict(
 }
 
 /**
- * 启动期把日志压到**只剩还有读者的那些**,顺手把内存里那些已经确凿结算完的也销掉。
+ * 现在还有哪些**没销账的失败义务**,各自落在哪个任务上 —— 给启动对账用。
  *
- * 「还有读者」的唯一可靠证据是**库里那一行确凿地收口了**(`ended_at` 非空)。行不在也当「还有
- * 读者」留着:回合行写失败的那种情况下,消费链手里仍然握着这个回合身份,判决照样有人要读。
+ * 为什么恢复不能只从 `session_turns` 的开放行出发(第 1 轮审查 F1 的两个实例):
+ *   · 区间**提前收口**:执行流结束了、任务还没落位,进程在这中间退出 —— 行在,但不开着;
+ *   · 开始行**压根没落下**:`openTurn` 那一批写失败(库坏了/磁盘满),而看门狗照样能熔断并
+ *     把判决落盘 —— 连行都没有。
+ * 两种都是「义务还在、却查不到人」。所以身份集合由**判决自己**给出,任务由会话行反查:判决的
+ * 键是 `(sessionId, turnStartedAt)`,而 `sessions.task_id` 是这个会话归谁的权威记录。
  *
- * 为什么是「条数」和「年龄」都不行,见 turn-stall-verdict.ts 的回收那段 —— 同一个类问题在内存
- * 和磁盘两侧各被打回过一次。
+ * 会话行也读不出来的那些只能跳过(任务都认不出来,没有能落位的对象),但要报一句 —— 那说明库
+ * 坏得比判决日志更厉害,不该静默。
+ */
+export async function pendingStallObligations(): Promise<{ sessionId: string; turnStartedAt: string; taskId: string }[]> {
+  const live = liveStallVerdicts();
+  if (!live.length) return [];
+  const owners = new Map<string, string>();
+  for (const sessionId of new Set(live.map((v) => v.sessionId))) {
+    try {
+      const read = await dbClient.execute({
+        sql: "SELECT task_id FROM sessions WHERE id = :sid LIMIT 1",
+        args: { sid: sessionId },
+      });
+      const taskId = read.rows.at(0)?.task_id;
+      if (typeof taskId === "string") owners.set(sessionId, taskId);
+      else console.warn(`[ash] 会话 ${sessionId} 背着一条没结算的熔断判决,但库里没有这条会话行 —— 落位无从下手`);
+    } catch (error) {
+      console.warn(`[ash] 会话 ${sessionId} 的归属任务没读出来,这条熔断判决这次落不了位:`, error);
+    }
+  }
+  return live.flatMap((v) => {
+    const taskId = owners.get(v.sessionId);
+    return taskId ? [{ ...v, taskId }] : [];
+  });
+}
+
+/**
+ * 启动期把判决日志压到**只剩还没销账的那些**。
+ *
+ * 判据整个住在日志那一层(销账是它自己的一种记录),所以这里既不问库、也不认识「回合区间」——
+ * 上一版正是在这儿把判据换成了「区间收口了没有」那个代理指标(第 1 轮审查 F1)。
  *
  * **必须排在任何消费链起来之前**(`index.ts`:紧跟在本模块 import 之后、`reattachRunningTasks`
  * 之前)。那一刻本进程还没作出过任何判决,也没有任何人在读,所以这一步不可能跟读者打架;
  * `turn-stall-journal.ts` 的读-改-写也正是靠这个前提加单实例锁才成立的。
  */
 export async function compactStallVerdicts(): Promise<{ kept: number; dropped: number } | null> {
-  const read = readStallJournal();
-  if (read.status === "unavailable") return null; // 读不全就不压缩(日志那边已经警告过)
-  const identities = new Map<string, StallVerdictRecord>();
-  for (const record of read.records) identities.set(`${record.sessionId}\u0000${record.turnStartedAt}`, record);
-  // 内存里可能还有本进程刚装载进来的那些(id 口径跟日志一致),一起纳入判定。
-  for (const live of liveStallVerdicts()) {
-    const k = `${live.sessionId}\u0000${live.turnStartedAt}`;
-    if (!identities.has(k)) identities.set(k, { at: "", sessionId: live.sessionId, turnStartedAt: live.turnStartedAt, reason: "" });
-  }
-  if (!identities.size) return { kept: 0, dropped: 0 };
-  const closed = new Set<string>();
-  for (const sessionId of new Set([...identities.values()].map((r) => r.sessionId))) {
-    try {
-      const rows = await dbClient.execute({
-        sql: "SELECT started_at FROM session_turns WHERE session_id = :sid AND ended_at IS NOT NULL",
-        args: { sid: sessionId },
-      });
-      for (const row of rows.rows) {
-        if (typeof row.started_at === "string") closed.add(`${sessionId}\u0000${row.started_at}`);
-      }
-    } catch (error) {
-      // 问不出来就当「还有读者」:宁可日志大一点,也不能把一条核实不了的判决抹掉。
-      console.warn(`[ash] 会话 ${sessionId} 的回合收口情况没读出来,这一批判决一条不压:`, error);
-      return null;
-    }
-  }
-  for (const k of closed) {
-    const record = identities.get(k);
-    if (record) clearStallFailure(record.sessionId, record.turnStartedAt);
-  }
-  const result = compactStallJournal((record) => !closed.has(`${record.sessionId}\u0000${record.turnStartedAt}`));
-  if (result?.dropped) console.log(`[ash] 判决日志已压缩:留下 ${result.kept} 条未结算,清掉 ${result.dropped} 条已结算`);
+  const result = compactStallJournal();
+  if (result?.dropped) console.log(`[ash] 判决日志已压缩:留下 ${result.kept} 条未结算,清掉 ${result.dropped} 条已销账记录`);
   return result;
 }

@@ -21,6 +21,7 @@ import { turnOutputHint } from "./turn-output.js";
 import { beginTerminalLanding } from "./task-complete.js";
 import { readCliState } from "./task-cli-state.js";
 import type { StallVerdictKind } from "./turn-stall-verdict.js";
+import { failedTurnLanding } from "./settle-landing.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
 
@@ -288,9 +289,15 @@ export async function settleTaskStatus(
     // 由 advanceQueue 记账),两边都由 whenTurnIdle 回调补办,账本见 queue-seat.ts。
     // 恢复 paused 用 quietAdvance:回到原样不是新的检查点落位(setTaskStatus 的注释)。
     const { serializeQueueClaims } = await import("./queue-seat.js");
+    // **落位优先级走共用那一份**(`settle-landing.ts`):这一支算出来就是 `back`,写成一次调用是
+    // 为了让「续聊的原终态压过 ash 判的失败」这条优先级只有一处定义 —— 启动对账那边原先在同一个
+    // 事实上另写了一行三元表达式,于是同一轮失败续聊按进了哪个入口给出两种任务结论(第 1 轮审查 F2)。
+    const landing = failedTurnLanding({
+      ashFailed: !!reason, followUpFrom: back as Parameters<typeof setStatus>[1], queueAdvancePrev: null, goalHeld: false,
+    }) as Parameters<typeof setStatus>[1];
     await serializeQueueClaims(async () => {
       await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-      await setStatus(taskId, back, back === "paused" ? { quietAdvance: true } : undefined);
+      await setStatus(taskId, landing, landing === "paused" ? { quietAdvance: true } : undefined);
     });
     const label = FOLLOW_UP_LABEL[back] ?? back;
     if (t.question) {
@@ -357,9 +364,15 @@ export async function settleTaskStatus(
   // 这里也不过哨兵闸 —— 同 `exitStatus !== 0` 那一支:这一轮是真失败,不拿检查点粉饰它
   // (哨兵的连坐是终态本来就有的后果,见 task-complete.ts)。
   if (reason) {
-    await setStatus(taskId, "failed");
+    // 同一份策略(`settle-landing.ts`):这里交进去的事实是「ash 判了失败」+「这是不是持续目标」,
+    // 答案必然是 `failed` —— 写成调用而不是字面量,是为了让「它压过持续目标那句暂停」这条优先级
+    // 跟启动对账读的是同一行代码。
+    const landing = failedTurnLanding({
+      ashFailed: true, followUpFrom: null, queueAdvancePrev: null, goalHeld: goalTurn,
+    }) as Parameters<typeof setStatus>[1];
+    await setStatus(taskId, landing);
     notify("failed");
-    return { status: "failed", note: ASH_FAILURE_NOTE[reason.kind], confirmedDone: false, nativeTurn };
+    return { status: landing, note: ASH_FAILURE_NOTE[reason.kind], confirmedDone: false, nativeTurn };
   }
   // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
   // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。

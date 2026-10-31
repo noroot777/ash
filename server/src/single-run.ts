@@ -32,8 +32,9 @@ import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import {
-  clearTurnStall, resumeTrippedTurn, stallUnverifiableText, trackTurnStall, type StallActions,
+  clearTurnStall, resumeTrippedTurn, trackTurnStall, type StallActions,
 } from "./turn-stall.js";
+import { stallUnverifiableText } from "./turn-stall-text.js";
 import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import { restoreStallVerdict } from "./turn-stall-persist.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
@@ -233,12 +234,13 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     taskId,
     // 警告档走 trace:它排在执行过程里它发生的那个位置(不是回合结尾),而且 level:"notice"
     // 保证它不改变这一轮的成败 —— 上游恢复后正常答完的那一轮仍然算成功。
-    warn: (text, facts) => {
+    warn: (text) => {
       const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
       persistTrace(event);
       publishEvent(event);
-      markSessionStalled(taskId, sessId, facts.since);
     },
+    // 持久那一半单独一个动作:它要报成败,看门狗据此重投到确认(理由见 StallActions.project)。
+    project: (facts) => markSessionStalled(taskId, sessId, facts.since),
     // 熔断档:说出来 + 杀进程。「这一轮失败」这个结论**不在这儿记** —— 看门狗在调 trip 之前
     // 就已经把它钉在回合身份上了(turn-stall-verdict.ts),下面收尾那一段连 `executionFailed` 带
     // 结算用的退出码一起从那一份读。从前这里是 `sawExecutionError = true`:那一位只喂得到

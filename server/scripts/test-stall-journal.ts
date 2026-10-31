@@ -12,8 +12,9 @@
 //   ① 事实落在一个不可能排在别人事务后面的地方(另一个文件、同步写、写完 fsync);
 //   ② **「读不出来」跟「没有」是两件事**(第 5 轮审查 F1:上一版的 `parseRecords` 把权限失败、
 //      I/O 错误、半行坏记录统统归约成空数组 —— 新的权威日志沿用了旧实现那个不可靠的缺省值);
-//   ③ 压缩的保留条件只能是「这一轮已经确凿结算完了」,不能是条数或年龄(第 5 轮审查 F2:
-//      按条数轮转第二次会直接覆盖上一代,而 rename 原子并不证明被覆盖的那代没人要);
+//   ③ 压缩的保留条件只能是「这一轮已经确凿结算完了」,不能是条数、年龄,**也不能是回合区间
+//      收口了**(第 5 轮审查 F2 + 第 1 轮审查 F1:后者实测过「区间已 failed、任务仍 running」那个
+//      窗口 —— 区间收口只证明执行流结束,不证明任务落位);所以销账是日志自己的一种记录;
 //   ④ 落盘失败**如实报失败**,不许假装成功;
 //   ⑤ `markStallFailure` 的返回值就是落盘结果,三档各自什么意思;加上启动装载;
 //   ⑥ 没存住那一档,熔断诊断里**要如实多说一句** —— 不然用户看到「已终止」、重启后又看到
@@ -31,7 +32,8 @@ const stage = mkdtempSync(join(tmpdir(), "ash-stall-journal-"));
 process.env.ASH_DB = join(stage, "journal.db");
 
 const {
-  __seedStallVerdict, appendStallVerdict, compactStallJournal, readStallJournal, stallJournalFileForDb,
+  __seedStallVerdict, appendStallDischarge, appendStallVerdict, compactStallJournal, pendingStallVerdicts,
+  readStallJournal, stallJournalFileForDb,
 } = await import("../src/turn-stall-journal.js");
 const {
   __resetStallFailures, loadStallFailures, markStallFailure, setStallVerdictPersister, stallFailure,
@@ -43,7 +45,8 @@ const TURN2 = "2026-10-30T09:00:00.000Z";
 
 /** 读一个回合身份上最后那条判决 —— 读的一侧只认「全集 + 状态」,这个只是测试里的取数糖。 */
 const verdictOf = (sessionId: string, turnStartedAt: string, dbFile: string) =>
-  readStallJournal(dbFile).records.filter((r) => r.sessionId === sessionId && r.turnStartedAt === turnStartedAt).at(-1) ?? null;
+  pendingStallVerdicts(readStallJournal(dbFile))
+    .filter((r) => r.sessionId === sessionId && r.turnStartedAt === turnStartedAt).at(-1) ?? null;
 
 // ── ① 落盘与读回 ────────────────────────────────────────────────────────────────
 {
@@ -52,7 +55,8 @@ const verdictOf = (sessionId: string, turnStartedAt: string, dbFile: string) =>
   // 第一次启动都在喊「核不了自己的判决」,那句警告立刻变成噪音。
   const empty = readStallJournal(dbFile);
   assert.equal(empty.status, "ok", "日志文件不存在被当成了读取故障");
-  assert.deepEqual(empty.records, [], "空日志里读出了判决");
+  assert.deepEqual(empty.verdicts, [], "空日志里读出了判决");
+  assert.deepEqual(empty.discharges, [], "空日志里读出了销账记录");
   assert.equal(appendStallVerdict({ at: "t0", sessionId: "s", turnStartedAt: TURN, reason: "第一次" }, dbFile), true);
   assert.equal(verdictOf("s", TURN, dbFile)?.reason, "第一次");
   // 键是**回合身份**,不是 sessionId:一条会话跑很多轮,只有熔断掉的那一轮算失败。
@@ -93,7 +97,7 @@ const verdictOf = (sessionId: string, turnStartedAt: string, dbFile: string) =>
   appendFileSync(stallJournalFileForDb(partial), '\n{"at":"t1","sessionId":"half"\n');
   const damaged = readStallJournal(partial);
   assert.equal(damaged.status, "unavailable", "半行坏记录被静默跳过了");
-  assert.deepEqual(damaged.records.map((r) => r.sessionId), ["good"], "坏行把同一份日志里完好的判决也带走了");
+  assert.deepEqual(damaged.verdicts.map((r) => r.sessionId), ["good"], "坏行把同一份日志里完好的判决也带走了");
 }
 
 // ── ③ 压缩:保留条件只能是「这一轮确凿结算完了」 ────────────────────────────────
@@ -105,21 +109,34 @@ const verdictOf = (sessionId: string, turnStartedAt: string, dbFile: string) =>
   const dbFile = join(stage, "compact.db");
   const file = stallJournalFileForDb(dbFile);
   appendStallVerdict({ at: "t0", sessionId: "still-open", turnStartedAt: TURN, reason: "还没结算" }, dbFile);
-  for (let i = 0; i < 400; i += 1) __seedStallVerdict({ sessionId: `settled-${i}`, turnStartedAt: TURN }, dbFile);
-  // 条数远超过任何水位,但保留条件只认「结算完了没有」。
-  const result = compactStallJournal((r) => r.sessionId === "still-open", dbFile);
-  assert.deepEqual(result, { kept: 1, dropped: 400 }, "压缩的账算错了");
+  for (let i = 0; i < 400; i += 1) {
+    __seedStallVerdict({ sessionId: `settled-${i}`, turnStartedAt: TURN }, dbFile);
+    appendStallDischarge(`settled-${i}`, TURN, dbFile);
+  }
+  // 条数远超过任何水位,但保留条件只认「销账了没有」。
+  const result = compactStallJournal(dbFile);
+  assert.deepEqual(result, { kept: 1, dropped: 800 }, "压缩的账算错了(400 条判决 + 400 条销账都该清掉)");
   assert.equal(verdictOf("still-open", TURN, dbFile)?.reason, "还没结算",
-    "压缩把一条还没结算的判决清掉了 —— 那一轮收到结束回执时会被记成正常完成");
-  assert.equal(verdictOf("settled-0", TURN, dbFile), null, "已经结算完的没清掉");
+    "压缩把一条还没销账的判决清掉了 —— 那一轮收到结束回执时会被记成正常完成");
+  assert.equal(verdictOf("settled-0", TURN, dbFile), null, "已经销账的没清掉");
   assert.equal(existsSync(`${file}.1`), false, "压缩之后上一代还留着");
 
+  // **销账之前它一直算数**,哪怕回合区间早就收口了:上一版的判据正是「区间收口 ⇒ 可以扔」,
+  // 而执行流结束不证明任务落位(第 1 轮审查 F1,已实测)。这一层压根不认识回合区间,所以这里
+  // 钉的是另一头:只有那条销账记录才搬得动它。
+  const kept = pendingStallVerdicts(readStallJournal(dbFile));
+  assert.deepEqual(kept.map((r) => r.sessionId), ["still-open"], "压缩之后留下来的不是那一条");
+  appendStallDischarge("still-open", TURN, dbFile);
+  assert.deepEqual(pendingStallVerdicts(readStallJournal(dbFile)), [], "销账之后它还算一条有效判决");
+  assert.deepEqual(compactStallJournal(dbFile), { kept: 0, dropped: 2 }, "销账之后没被压掉");
+
   // 读不全的时候**不许重写**:那会把「核实不了」变成「没有」,正是 F1 换个地方重演。
+  appendStallVerdict({ at: "t2", sessionId: "still-open", turnStartedAt: TURN2, reason: "还没结算" }, dbFile);
   appendFileSync(file, '\n{"坏行\n');
   const quiet = console.warn;
   console.warn = () => {};
   try {
-    assert.equal(compactStallJournal(() => false, dbFile), null, "读不全还照样重写了日志");
+    assert.equal(compactStallJournal(dbFile), null, "读不全还照样重写了日志");
   } finally {
     console.warn = quiet;
   }
@@ -152,16 +169,27 @@ const verdictOf = (sessionId: string, turnStartedAt: string, dbFile: string) =>
   // 整份判决交给持久那一半 —— 包含停滞起点:它必须跟着落盘,否则接管那一路只能现编一个
   // (`StallVerdict.since`:持久标记的 CAS 认的是那个身份)。
   const seen: { sessionId: string; since: string; reason: string }[] = [];
-  setStallVerdictPersister((verdict) => { seen.push(verdict); return true; });
+  const discharged: string[] = [];
+  setStallVerdictPersister({
+    append: (verdict) => { seen.push(verdict); return true; },
+    discharge: (sessionId, turnStartedAt) => { discharged.push(`${sessionId}@${turnStartedAt}`); },
+  });
   assert.equal(markStallFailure("d2", TURN, "存住了", "2026-10-30T07:00:00.000Z"), "durable");
   assert.deepEqual(seen.map((v) => [v.sessionId, v.since, v.reason]),
     [["d2", "2026-10-30T07:00:00.000Z", "存住了"]], "交给持久那一半的判决少了字段");
+  // **销账也走持久那一半**,而且只在真的销掉一条时走:判决的回收条件是「权威结算确认过」,
+  // 而唯一知道这件事的就是 `clearStallFailure` 的调用者(第 1 轮审查 F1)。
+  const { clearStallFailure } = await import("../src/turn-stall-verdict.js");
+  clearStallFailure("d2", TURN);
+  assert.deepEqual(discharged, [`d2@${TURN}`], "结算销账时没通知持久那一半 —— 盘上那条判决会被重新读回来");
+  clearStallFailure("d2", TURN);
+  assert.equal(discharged.length, 1, "压根没有判决的回合也往日志里写了一条销账 —— 每轮一行废记录");
 
-  setStallVerdictPersister(() => false);
+  setStallVerdictPersister({ append: () => false, discharge: () => {} });
   assert.equal(markStallFailure("d3", TURN, "没存住"), "lost-on-restart");
 
   // 持久那一半抛了也只是「没存住」—— 不许把一次磁盘故障变成「这一轮没被熔断」。
-  setStallVerdictPersister(() => { throw new Error("磁盘满"); });
+  setStallVerdictPersister({ append: () => { throw new Error("磁盘满"); }, discharge: () => {} });
   const quiet = console.warn;
   console.warn = () => {};
   try {
@@ -181,7 +209,7 @@ const verdictOf = (sessionId: string, turnStartedAt: string, dbFile: string) =>
   assert.equal(stallFailure("boot", TURN)?.since, "s0", "停滞起点没跟着装回来 —— 撤标记会撤到别人身上");
   assert.equal(stallFailure("boot", TURN)?.kind, "tripped");
   // 本进程刚判的那一份更新,不许被盘上的旧记录盖掉。
-  setStallVerdictPersister(() => true);
+  setStallVerdictPersister({ append: () => true, discharge: () => {} });
   markStallFailure("boot", TURN, "本进程刚判的");
   assert.equal(loadStallFailures([{ sessionId: "boot", turnStartedAt: TURN, reason: "盘上那条", at: "t0" }]), 0);
   assert.equal(stallFailure("boot", TURN)?.reason, "本进程刚判的", "装载把本进程刚作出的判决盖掉了");
@@ -192,7 +220,7 @@ const verdictOf = (sessionId: string, turnStartedAt: string, dbFile: string) =>
 {
   const trip = async (persist: boolean | null, sessionId: string): Promise<string> => {
     configure({ warnErrors: 1, tripMs: 60, pollMs: 15 });
-    setStallVerdictPersister(persist === null ? null : () => persist);
+      setStallVerdictPersister(persist === null ? null : { append: () => persist, discharge: () => {} });
     const { actions, log } = spy();
     trackTurnStall(sessionId, {}, TURN, notice(), actions);
     await sleep(320);

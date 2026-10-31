@@ -11,7 +11,7 @@ import { mkdirSync, createWriteStream, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { finished } from "node:stream/promises";
 import { eq, sql } from "drizzle-orm";
-import type { AgentEvent, DuetSpeaker, SessionRole, TurnImageRef, TurnTraceEvent } from "@ash/shared";
+import type { AgentEvent, DuetSpeaker, SessionRole, TurnImageRef } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
 import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
@@ -39,7 +39,8 @@ import { clearTurnStall, trackTurnStall, type StallActions } from "../turn-stall
 import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
 import { clearStallFailure } from "../turn-stall-verdict.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
-import { recordTurnStart } from "./timeline.js";
+import { recordTurnDiagnostic, recordTurnStart } from "./timeline.js";
+import { createTurnTrace } from "./turn-trace.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
 const AGREE_RE = /与对方一致[：:]\s*是/; // self-declared agreement with the opponent's conclusion
@@ -283,8 +284,9 @@ export async function runTurn(args: {
     // 库里那份喂下一次 /retry,返回值里那份喂本次运行的后续轮次,两处都要清。
     let sessionFault: SessionResumeFault | null = null;
     // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
-    const trace: TurnTraceEvent[] = [];
-    const TRACE_CAP = 200;
+    // 条数上限和「关键生命周期事件不被上限砍掉」归 `turn-trace.ts` 一处管(第 1 轮审查 F4)。
+    const traceLog = createTurnTrace();
+    const trace = traceLog.events;
     // 正文引用到的图:**逐处引用一条**,原样随回合落盘(见 TurnImageRef)。讨论区不走分段
     // 模型,这是它唯一能把「说那句话时的那一张」留住的地方。
     const images: TurnImageRef[] = [];
@@ -296,13 +298,16 @@ export async function runTurn(args: {
     // 落点也是它自己那两样:结构化过程 `trace` + 会话 trace(手机的失败现场从后者回放)。
     const stallActions: StallActions = {
       taskId,
-      warn: (text, facts) => {
-        if (trace.length < TRACE_CAP) trace.push({ kind: "notice", label: "提示", detail: text });
+      warn: (text) => {
+        traceLog.push({ kind: "notice", label: "提示", detail: text }, true);
         const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
         appendSessionTrace(taskId, rowId, turnStart, event);
-        bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
-        markSessionStalled(taskId, rowId, facts.since);
+        // **即时落进讨论页读的那份记录**,不等发言收尾(第 1 轮审查 F4):那段窗口按定义很长,
+        // 而刷新一下警告就没了的话,警告档承诺的「持久可见」在讨论这条链上压根没兑现。
+        recordTurnDiagnostic({ type: "agent.event", taskId, sessionId: rowId, role, event });
       },
+      // 持久那一半单独一个动作:它要报成败,看门狗据此重投到确认(理由见 StallActions.project)。
+      project: (facts) => markSessionStalled(taskId, rowId, facts.since),
       // `errorMsg` 非空 = 这一轮按失败结算(见下面 recordTurnSpan 的 outcome),而讨论链据此
       // 中止整场 —— 对一个上游连不上的回合这正是想要的:接着往下发言只会把空话喂给对手。
       // 所以讨论这一路不需要从 `turn-stall-verdict.ts` 读回结论:它的结算判据(`errorMsg`)本来就在
@@ -313,9 +318,10 @@ export async function runTurn(args: {
         errorMsg = `${errorMsg ?? ""}\n${text}`.trim();
         out.write("✕ " + text + "\n");
         const event: AgentEvent = { kind: "error", message: text };
-        if (trace.length < TRACE_CAP) trace.push({ kind: "notice", label: "执行诊断", detail: text });
+        traceLog.push({ kind: "notice", label: "执行诊断", detail: text }, true);
         appendSessionTrace(taskId, rowId, turnStart, event);
-        bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
+        // 同警告:熔断到这一轮真的收尾之间也有窗口(终止请求不是瞬时的),刷新得看得见。
+        recordTurnDiagnostic({ type: "agent.event", taskId, sessionId: rowId, role, event });
         handle.kill();
       },
       resolve: (facts) => clearSessionStalled(taskId, rowId, facts.since),
@@ -353,9 +359,9 @@ export async function runTurn(args: {
         } else if (event.kind === "attachment") {
           if (event.source) images.push({ path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost });
         } else if (event.kind === "tool") {
-          if (isVisibleExecutionEvent(event) && trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
+          if (isVisibleExecutionEvent(event)) traceLog.push({ kind: "tool", label: event.name, detail: event.detail });
         } else if (event.kind === "thinking") {
-          if (trace.length < TRACE_CAP) trace.push({ kind: "thinking", label: "思考过程", detail: event.text });
+          traceLog.push({ kind: "thinking", label: "思考过程", detail: event.text });
           out.write("〔思考〕" + event.text + "\n");
         } else if (event.kind === "system") {
           noticeMsg = `${noticeMsg ?? ""}\n${event.text}`.trim();
@@ -371,7 +377,7 @@ export async function runTurn(args: {
           // 也不会消失(第 5 轮审查 F1,已实测)。单飞与团队早就不写了,讨论是最后一处。
           // 等待期间手机看到的那句提示由窄出口 `/sessions/:id/notices` 给(权威状态在
           // session-waiting.ts)。
-          if (trace.length < TRACE_CAP) trace.push({ kind: "notice", label: "提示", detail: event.message });
+          traceLog.push({ kind: "notice", label: "提示", detail: event.message });
           // 同一条也进**会话** trace:讨论自己那份 transcript 只有讨论界面读,而窄出口的
           // 「失败现场」(真收在失败上的那一轮,照给它卡在哪儿)从会话 trace 回放 ——
           // 不落这一笔,手机在一场**真失败**的讨论上一条线索都拿不到(F1 要的「为当前等待

@@ -60,6 +60,30 @@ import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtur
   assert.equal(log.warns.length, 2, "解除之后又挂了,第二次停滞不报警");
 }
 
+// ── ①b 「已经通知过」≠「持久状态已经确认」:投影失败要重投到确认(本轮审查 N1) ─────
+// 从前这两件事挤在 `warn` 一个动作里,而 `warned` 在调用动作之前就置了 true —— 置标记那笔
+// UPDATE 一次失败(I/O、权限、库忙)只写一行 console,之后再也没人重投。于是上游继续断着、
+// 时间线上的警告也在,卡片却永远没有那颗红环:**通知是一次性的,投影是个要确认的状态**。
+{
+  configure({ warnErrors: 2, pollMs: 10 });
+  const { actions, log } = spy("task-1", 2); // 前两次投影报失败
+  const owner = {};
+  for (let i = 0; i < 2; i += 1) trackTurnStall("s-proj", owner, TURN, notice(), actions);
+  assert.equal(log.warns.length, 1, "没到警告档 —— 夹具不对");
+  assert.equal(log.projects.length, 1, "报警那一刻没去投影");
+  // 看门狗每一拍重投一次,直到投影自己说「落库了」。
+  for (let i = 0; i < 60 && log.projects.length < 3; i += 1) await sleep(10);
+  assert.ok(log.projects.length >= 3,
+    `投影失败之后再也没人重投(只投了 ${log.projects.length} 次)—— 上游还断着,卡片上永远不会有红环`);
+  assert.equal(log.warns.length, 1, "重投把用户看得见的那条警告也重发了 —— 那是刷屏");
+  // 确认之后就停:幂等不等于可以每拍白写一次库。
+  const settled = log.projects.length;
+  await sleep(60);
+  assert.equal(log.projects.length, settled, "投影已经确认落库了,看门狗还在一拍一笔地重投");
+  assert.equal(log.projects[0]!.since, log.projects[settled - 1]!.since,
+    "重投换了停滞身份 —— 那会写出一条撤不掉的标记(撤按 since 做 CAS)");
+}
+
 // ── ②「只有错误事件」逐字成立:真故障也计入,notice 与否只影响措辞 ──────────────
 {
   configure({ warnErrors: 3 });

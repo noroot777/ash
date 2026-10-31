@@ -234,13 +234,19 @@ export async function openTurn(input: {
   const startedAt = input.startedAt;
   const register = opts.register ?? true;
   // **这一行开始记录是本进程写的** —— 判决恢复那一路靠它分辨「全新起跑」和「上一个进程留下来
-  // 的」,理由见 session-turn-registry.ts 的 `openedHere`。登记在最前面:下面那几步都可能抛,
-  // 而「是我开的」这个事实跟它们成不成没关系。`register: false` 那一档(重放一个已经终结的身份)
-  // 也照登 —— 问这句话的只有单飞消费开头,重放路径压根不经过。
-  markTurnOpenedHere(input.sessionId, startedAt);
-  // 先登记活动身份：登记得比写库早一点没有坏处,反过来晚一点就有——那个窗口里面板会把
-  // 正在写的这一轮算成「崩了没收口」。
-  if (register) markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt });
+  // 的」,理由见 session-turn-registry.ts 的 `openedHere`。登记在写库之前:下面那几步都可能抛,
+  // 而「是我开的」这个事实跟它们成不成没关系(开始行没落下的回合照样要认得出是本进程开的)。
+  //
+  // **`register: false` 那一档不登记**(本轮审查 N4):那一路重放的是一个在所有权层已经终结的
+  // 身份(刚被结束事件关掉、整台已经摘牌),它不是「新的一轮」—— 而注销只长在 `clearTurnActive`
+  // 上,那一轮早就注销过了。照登的话这条登记永远没有人来撤,长期跑下去只增不减;语义上也是假的:
+  // 迟到的补录不该把一个已经收尾的回合复活成「本进程正开着的」。两件事于是同一道闸。
+  if (register) {
+    markTurnOpenedHere(input.sessionId, startedAt);
+    // 先登记活动身份：登记得比写库早一点没有坏处,反过来晚一点就有——那个窗口里面板会把
+    // 正在写的这一轮算成「崩了没收口」。
+    markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt });
+  }
   // 上一轮欠着的身份在这里补：那时库正坏着,现在也许好了。放在新回合落账**之前**,这样
   // 「后来成功的一轮」永远不会先把两个数凑相等再让欠账无声无息（第 6 轮审查必须修 2）。
   // 补的恰好是同一个身份时（库恢复后用同一个 `startedAt` 重试）这一步就把它落完了,下面

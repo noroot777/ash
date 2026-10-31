@@ -105,10 +105,16 @@ export type StallDurability = "durable" | "lost-on-restart" | "not-persisted";
  *
  * **返回值是契约**:`true` 只能在事实确实存住之后给。返回即落盘 —— 发起一笔异步写然后报
  * `true`,就是 F1 那个根上错的判据本身。
+ *
+ * `discharge` 是**销账**那一半,跟 `append` 成对:判决的持久那一份也得在结算完成时被勾掉,
+ * 否则下次启动它会被重新读回来。为什么销账也必须走这里、而不是让压缩那一侧现算一个判据,
+ * 见 `turn-stall-journal.ts` 文件头第四条 —— 简单说:回收条件只有「权威结算确认过」这一个,
+ * 而唯一知道这件事的就是 `clearStallFailure` 的调用者。
  */
-type StallVerdictPersister = (
-  verdict: Omit<StallVerdict, "durable" | "kind"> & { sessionId: string; turnStartedAt: string },
-) => boolean;
+interface StallVerdictPersister {
+  append(verdict: Omit<StallVerdict, "durable" | "kind"> & { sessionId: string; turnStartedAt: string }): boolean;
+  discharge(sessionId: string, turnStartedAt: string): void;
+}
 let persister: StallVerdictPersister | null = null;
 
 export function setStallVerdictPersister(fn: StallVerdictPersister | null): void {
@@ -165,7 +171,7 @@ export function markStallFailure(
   const durability = ((): StallDurability => {
     if (!persister) return "not-persisted";
     try {
-      return persister({ sessionId, turnStartedAt, reason, since: since ?? at, at }) ? "durable" : "lost-on-restart";
+      return persister.append({ sessionId, turnStartedAt, reason, since: since ?? at, at }) ? "durable" : "lost-on-restart";
     } catch (error) {
       console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的熔断判决没能存住:`, error);
       return "lost-on-restart";
@@ -231,10 +237,25 @@ export function stallFailure(sessionId: string, turnStartedAt: string | null): S
  * **这是唯一的出口** —— 三条链都得调(单飞在 settle 之后、团队在 endTurn/closeLead 逐轮、
  * 讨论在 recordTurnSpan 之后)。漏掉的那一条会一直留着(判据见上),所以漏的后果是占内存,
  * 不是丢判决 —— 这个方向是刻意选的。
+ *
+ * **内存和盘上这两份一起销**(第 1 轮审查 F1,已实测):落盘那一份原先是由压缩那一侧「现算一个
+ * 判据」决定扔不扔的,而它拿到的最好用的指标是回合区间收口了没有 —— 区间收口只证明执行流结束,
+ * 不证明任务落位。于是「区间已 failed、任务仍 running」那个窗口里退出的进程,留下的判决下次启动
+ * 就被压缩删掉了。现在销账是一条**落盘的记录**,由这个唯一出口追加:它只在结算写完之后被调到,
+ * 所以回收条件就是「权威结算确认过」本身,不再是它的影子。
+ *
+ * 只在**真的销掉了一条**时才去落那一笔:绝大多数回合压根没有判决,无条件追加等于每轮都往日志里
+ * 写一行废记录。
  */
 export function clearStallFailure(sessionId: string, turnStartedAt: string | null): void {
   if (!turnStartedAt) return;
-  failures.delete(key(sessionId, turnStartedAt));
+  if (!failures.delete(key(sessionId, turnStartedAt))) return;
+  try {
+    persister?.discharge(sessionId, turnStartedAt);
+  } catch (error) {
+    // 销账失败只意味着下次启动会把这条判决读回来(偏保守那一侧),不该掀翻正在收尾的结算。
+    console.warn(`[ash] 会话 ${sessionId} 回合 ${turnStartedAt} 的判决销账失败:`, error);
+  }
 }
 
 /** 只给回归测试。 */

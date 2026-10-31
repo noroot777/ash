@@ -57,15 +57,13 @@
 // 落盘、终止回合、回收句柄由各链传进来的 `StallActions` 做;唯一的例外是
 // `turn-stall-verdict.ts` —— 那也只是一张内存表,而「这一轮算失败」这个结论必须由下结论的
 // 这一方写下,见那个文件头。
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
-import { detachedPathsFor } from "./executors/detached-child.js";
 import { isExecutionNotice } from "./session-notice.js";
-import { RUNS_DIR } from "./paths.js";
-import { runTracePaths } from "./transcript.js";
 import { producesWork } from "@ash/shared/waiting";
 import { markStallFailure, type StallVerdict } from "./turn-stall-verdict.js";
+import {
+  stallEscalateText, stallResumeText, stallTripText, stallVolatileVerdictText, stallWarningText,
+} from "./turn-stall-text.js";
 import { now } from "./util.js";
 
 /** 持有者 = 此刻在消费这条会话的那个实例本身(同 session-waiting.ts 的 WaitingOwner)。 */
@@ -140,12 +138,31 @@ export interface StallActions {
    * 的新回合、一边是红色停滞环,刷新还在(第 1 轮审查第 3 条,已实测)。
    */
   resolve(facts: StallFacts): void;
+  /**
+   * 警告档的**持久投影**:把「这条会话此刻卡在上游连不上」落进库(卡片上那颗红环)。
+   *
+   * 为什么它跟 `warn` 分开、而且要报成败(本轮审查 N1):上一版两件事挤在 `warn` 里,而
+   * `warned` 在调用动作之前就置 true 了 —— 投影那笔 UPDATE 一次失败(I/O、权限、库忙)只写一行
+   * console,之后再也不会有人重投。于是上游继续断着、时间线上的警告也在,卡片却一直没有红环:
+   * **「已经通知过」被当成了「持久状态已经确认」**,而这两件事的失败模式完全不同 —— 通知是一次性
+   * 的,投影是个需要确认的状态。
+   *
+   * 拆开之后看门狗每一拍重投一次,直到它确认落库(置标记那笔按定义幂等:同一个 `since` 写第二次
+   * 结果一样)。**必填**,不是可选增强:做成可选的话新增一条消费链忘了传就静默没有持久那一半,
+   * 而那正是这一条本身的形状。
+   */
+  project(facts: StallFacts): Promise<boolean>;
 }
 
 type Stall = StallFacts & {
   owner: StallOwner;
   sinceMs: number;
+  /** 已经**通知**过了(时间线/执行过程那一条)。一次性的,不重发。 */
   warned: boolean;
+  /** 持久投影已经**确认**落库了。没确认就每拍重投一次 —— 跟 `warned` 是两件事(见 `project`)。 */
+  projected: boolean;
+  /** 此刻有一笔投影在途:别叠第二笔。 */
+  projecting: boolean;
   trippedAtMs: number | null;
   escalated: boolean;
   actions: StallActions;
@@ -369,6 +386,8 @@ function openStall(
     owner,
     warned: false,
     trippedAtMs: null,
+    projected: false,
+    projecting: false,
     escalated: false,
     actions,
   };
@@ -412,13 +431,31 @@ function evaluate(sessionId: string, stall: Stall): void {
   const { warnErrors, warnMs, tripMs, graceMs } = thresholds();
   stall.elapsedMs = Math.max(0, Date.now() - stall.sinceMs);
   const facts = factsOf(stall);
-  if (!stall.warned
-    && ((warnErrors > 0 && stall.errors >= warnErrors) || (warnMs > 0 && stall.elapsedMs >= warnMs))) {
+  const warnDue = (warnErrors > 0 && stall.errors >= warnErrors) || (warnMs > 0 && stall.elapsedMs >= warnMs);
+  if (!stall.warned && warnDue) {
     stall.warned = true;
     try {
       stall.actions.warn(stallWarningText(facts), facts);
     } catch (error) {
       console.warn(`[ash] 落会话 ${sessionId} 的上游停滞警告失败:`, error);
+    }
+  }
+  // 持久投影**单独跟**:报过警而它还没确认落库,就每拍重投一次(N1)。幂等,所以重投无害;
+  // 不重投的代价是上游还断着、卡片上却永远没有那颗红环。
+  if (stall.warned && !stall.projected && !stall.projecting) {
+    stall.projecting = true;
+    // **同步发起**(不包一层 `Promise.resolve().then`):报警和投影是同一拍里的两件事,推迟一个
+    // 微任务的唯一后果是把「卡片上要亮红环」这件事排到别人后面去。
+    try {
+      void stall.actions.project(facts)
+        .then((ok) => { stall.projected = ok; })
+        .catch((error: unknown) => {
+          console.warn(`[ash] 置会话 ${sessionId} 的上游停滞标记失败(下一拍重投):`, error);
+        })
+        .finally(() => { stall.projecting = false; });
+    } catch (error) {
+      stall.projecting = false;
+      console.warn(`[ash] 置会话 ${sessionId} 的上游停滞标记抛了(下一拍重投):`, error);
     }
   }
   if (stall.trippedAtMs !== null) {
@@ -509,138 +546,6 @@ export function clearTurnStall(sessionId: string, owner: StallOwner): void {
   const held = stalls.get(sessionId);
   if (!held || held.owner !== owner) return;
   close(sessionId, held);
-}
-
-const minutes = (ms: number): string => {
-  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))} 秒`;
-  return `${Math.round(ms / 60_000)} 分钟`;
-};
-
-/** 错误条数 + 其中多少条是重试提示 + 多少条来自子智能体线程。措辞不该把三种混成一种。 */
-const tally = (facts: StallFacts): string => {
-  const head = facts.retries >= facts.errors
-    ? `共 ${facts.errors} 条,全部是上游重试提示`
-    : `共 ${facts.errors} 条,其中 ${facts.retries} 条是上游重试提示`;
-  if (!facts.childErrors) return head;
-  return `${head};${facts.childErrors === facts.errors ? "全部" : `其中 ${facts.childErrors} 条`}来自子智能体线程`;
-};
-
-const lastLine = (facts: StallFacts): string =>
-  facts.lastMessage ? `最后一条:${facts.lastMessage}` : "最后一条错误没有附带说明。";
-
-/** 卡在哪一步 —— 「工具跑完等模型总结」和「一条正常输出都没有过」是两种现场。 */
-const stalledAfter = (facts: StallFacts): string =>
-  facts.lastProgressKind
-    ? `停滞前这一轮最后一条正常事件是 ${facts.lastProgressKind}。`
-    : "这一轮从头到尾没有过任何正常事件(连接多半压根没建起来)。";
-
-/**
- * 原始事件流的**落点**。
- *
- * 给目录是不够的 —— 一个任务目录下几十个文件,出事那一轮是哪一个得人去猜(第 1 轮审查
- * 非拦项)。两组文件名都是 `(sessionId, 回合起点)` 的纯函数(`detachedPathsFor` /
- * `runTracePaths`),所以这里能算出确切路径;`existsSync` 过一遍只报真的存在的那几个,
- * 免得指一个不存在的文件给用户。都不存在就退回目录。
- */
-function rawLogHint(facts: StallFacts): string {
-  const dir = join(RUNS_DIR, facts.taskId);
-  const candidates = [
-    detachedPathsFor(dir, facts.sessionId, facts.turnStartedAt).out,
-    runTracePaths(dir, facts.sessionId, facts.turnStartedAt).eventsPath,
-  ];
-  const found = candidates.filter((path) => {
-    try {
-      return existsSync(path);
-    } catch {
-      return false;
-    }
-  });
-  return found.length ? found.join("；") : `${dir}(本回合未单独落原始事件流)`;
-}
-
-/** 警告档的文案。落进执行过程里它发生的那个位置,所以写成「此刻怎么了」。 */
-export function stallWarningText(facts: StallFacts): string {
-  return `〔上游停滞〕自上一条正常输出以来只收到错误事件(${tally(facts)}),已经 ${minutes(facts.elapsedMs)}`
-    + `没有任何模型输出或工具调用 —— 多半是模型上游连不上。${lastLine(facts)}`;
-}
-
-/** 熔断档的文案:完整诊断(重试次数、停滞起点、原始日志落点、怎么续)+ 阈值怎么调。 */
-export function stallTripText(facts: StallFacts): string {
-  return `〔上游停滞·已自动终止本回合〕自 ${facts.since} 起连续 ${minutes(facts.elapsedMs)}`
-    + `只收到错误事件、没有任何模型输出或工具调用(${tally(facts)}),判定模型上游连不上,`
-    + `已终止本回合并按失败结算。${stalledAfter(facts)}${lastLine(facts)}\n`
-    + `原始事件流:${rawLogHint(facts)}(会话 ${facts.sessionId},回合起于 ${facts.turnStartedAt})\n`
-    + "可直接重试续跑,或换一个执行器/供应商再跑。"
-    + "熔断时长由 ASH_STALL_TRIP_MS 配置(默认 30 分钟,置 0 关闭);"
-    + "警告档是 ASH_STALL_WARN_ERRORS(默认 5 条)与 ASH_STALL_WARN_MS(默认 5 分钟)。";
-}
-
-/**
- * **一份上一次运行留下的判决,要怎么对用户讲** —— 共同那一句加判决原文,由这一处出。
- *
- * 为什么不许各处自己措辞(第 2 轮续聊自审):这条链上反复出事的形状就是**同一个结论在两处被
- * 说成两件事**(「已自动终止」的红字 vs 落位说的「它在等你」)。接管那一路和启动对账那一路说的
- * 是同一件事,只有收场不同,所以共同那一句和判决原文的格式必须只有一份。
- *
- * 判决原文整段带上 —— 上一次运行写的那条诊断可能随进程一起没了(trace 那一笔同样可能排在
- * 队里),这里是用户唯一还能看到它的地方。
- */
-function carriedVerdictText(verdict: StallVerdict, tail: string): string {
-  return "这一回合在上次 ash 运行期间已被判定上游连不上并按失败结算,"
-    + `${tail}原判决(${verdict.at}):${verdict.reason}`;
-}
-
-/** 「这台 ash 为什么核不了自己的判决」—— 同理,只有一份。 */
-function unverifiableText(why: string, tail: string): string {
-  return "这一回合是上次 ash 中断时留下的,而本次启动读不出熔断判决日志"
-    + `(${why}),无法确认它当时有没有被判定上游连不上并按失败结算。${tail}`;
-}
-
-/** 接管那一路:进程还在,义务没兑现完 —— **如实说这是上一次运行的判决**,别冒充这一刻才判的。 */
-export function stallResumeText(verdict: StallVerdict): string {
-  return "〔上游停滞·接管后继续终止〕"
-    + carriedVerdictText(verdict, "重启接管后仍背着尚未兑现的终止义务,现在把它终止。");
-}
-
-/** 启动对账那一路:原进程已经不在了,没有什么可终止的,只有收口。 */
-export function stallReconcileText(verdict: StallVerdict): string {
-  return "〔上游停滞·重启后按失败收尾〕"
-    + carriedVerdictText(verdict, "服务重启后原进程已不在,这一轮按失败收尾。");
-}
-
-/** 启动对账那一路的「核实不了」版本。 */
-export function stallReconcileUnverifiableText(why: string): string {
-  return "〔上游停滞·上一次运行的结局核实不了〕"
-    + unverifiableText(why, "原进程也已经不在 —— 这一轮按未完成收尾,不记成完成:"
-      + "可能它本来就是失败的,也可能日志故障让我们冤枉了它,两种都不该悄悄记成完成。"
-      + "先把日志那个故障修掉(多半是权限或磁盘)。");
-}
-
-/** 消费那一路的「核实不了」版本:进程还活着,所以这一轮会跑完,只是不许按成功结算。 */
-export function stallUnverifiableText(why: string): string {
-  return "〔上游停滞·上一次运行的结局核实不了〕"
-    + unverifiableText(why, "这一轮因此**不会**按成功结算 —— 可能它本来就是失败的,也可能日志"
-      + "故障让我们冤枉了它,两种都不该悄悄记成完成。续跑材料一个字没动:确认过工作成果之后点"
-      + "重试或者直接续聊即可;先把日志那个故障修掉(多半是权限或磁盘),下一轮就不会再遇到这一句。");
-}
-
-/**
- * 判决**没能存住**时补在熔断诊断后面的一句。
- *
- * 为什么要说出来:这一轮照常被终止、照常按失败结算,但那个结论只在当前进程的内存里 —— 如果
- * ash 在这一轮结算完之前重启,接管的新进程读不到它,这一轮可能又显示成「已完成」。这正是
- * F1 那条路,出现过一次就不该再让用户自己去猜。
- */
-export function stallVolatileVerdictText(): string {
-  return "注意:这个结论没能写进磁盘(多半是磁盘满或权限问题),"
-    + "如果 ash 在本回合结算完之前重启,它可能重新显示成已完成 —— 以这条诊断为准。";
-}
-
-/** 兜底档的文案:终止请求没生效,这一轮是被**回收句柄**结束的 —— 如实说,别冒充前一句。 */
-export function stallEscalateText(facts: StallFacts, graceMs: number): string {
-  return `〔上游停滞·终止请求未生效,已回收进程〕${minutes(graceMs)}前已请求终止这一停滞回合,`
-    + `到现在仍未收到回合结束 —— 改为直接回收它的进程。这一轮仍按失败结算(${tally(facts)})。\n`
-    + "宽限期由 ASH_STALL_TRIP_GRACE_MS 配置(默认 60 秒,置 0 关闭这一档)。";
 }
 
 /** 只给回归测试:把表清干净,免得上一段的残留影响下一段。 */

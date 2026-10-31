@@ -130,6 +130,8 @@
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
     "test:session-lost": "tsx scripts/test-session-lost.ts",
     "test:duet-session-lost": "tsx scripts/test-duet-session-lost.ts",
+    "//test:duet-stall-visibility": "讨论里的停滞诊断发言进行中就落进 transcript.jsonl(讨论页刷新只读这一份),以及 trace 那 200 格满了之后关键事件挤掉一条普通的、不挤掉自己。",
+    "test:duet-stall-visibility": "tsx scripts/test-duet-stall-visibility.ts",
     "test:session-notice": "tsx scripts/test-session-notice.ts && tsx scripts/test-team-session-notice.ts",
     "test:codex-resident": "tsx scripts/test-codex-resident.ts",
     "test:cleanup-result": "tsx scripts/test-cleanup-result.ts",

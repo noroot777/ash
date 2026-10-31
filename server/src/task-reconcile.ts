@@ -1,13 +1,15 @@
 // 重启后收拾被打断的任务（从 orchestrator.ts 拆出，纯行数拆分）。
 // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序），理由见函数注释。
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { sessions, sessionTurns, tasks } from "./db/schema.js";
 import { recordTurnSpan } from "./session-turns.js";
 import { clearTaskStallFlags } from "./session-stall-flag.js";
-import { stallReconcileText, stallReconcileUnverifiableText } from "./turn-stall.js";
-import { restoreStallVerdict } from "./turn-stall-persist.js";
+import { stallReconcileText, stallReconcileUnverifiableText } from "./turn-stall-text.js";
+import { pendingStallObligations, restoreStallVerdict } from "./turn-stall-persist.js";
+import { stallIdentityKey } from "./turn-stall-journal.js";
+import { failedTurnLanding } from "./settle-landing.js";
 import { clearStallFailure } from "./turn-stall-verdict.js";
 import { claimReconcileTurn } from "./runs.js";
 import { setTaskStatus } from "./status.js";
@@ -36,7 +38,19 @@ export async function reconcileInterrupted(): Promise<void> {
   // failed：那会让一个正在干活的 agent 在界面上显示失败，用户一点重试就会有
   // 第二个 agent 进同一个 worktree。那道闸现在长在 reconcileInterruptedTask 里
   //（原子预占 + 临界区内重读），这里只负责**扫谁**和**汇总日志**。
-  const orphaned = await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]));
+  const flying = await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]));
+  // **扫谁不能只由任务状态决定**(第 1 轮审查 F1):还有一类是「盘上留着一条没销账的失败义务」。
+  // 两个实例都走这条路 —— 区间提前收口、开始行压根没落下 —— 共同点是任务状态仍在飞,所以
+  // 多半已经在上面那批里;但义务自己给出的身份是下面 `interruptedTurnVerdict` 真正要用的东西,
+  // 而且任务状态要是也漂了(例如上一版留下的 `paused`),只有这一条能把它捞回来。
+  const obligations = await pendingStallObligations();
+  const byId = new Map(flying.map((t) => [t.id, t] as const));
+  for (const owner of new Set(obligations.map((o) => o.taskId))) {
+    if (byId.has(owner)) continue;
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, owner));
+    if (task) byId.set(owner, task);
+  }
+  const orphaned = [...byId.values()];
   if (!orphaned.length) return;
   const teamIds: string[] = [];
   let failed = 0;
@@ -71,31 +85,42 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
   // 回合区间 `outcome` 留空,而判决明明还在日志里读得出来。落位不是「多一种重启时间组合」,
   // 是**同一个权威结局在另一个结算入口没被接上**。
   const ashFailure = await interruptedTurnVerdict(t.id);
-  let back = ashFailure ? "failed"
-    : (t.followUpFrom as TaskStatus | null) ?? (t.goalTurn ? "paused" : "failed");
   const advance = t.queueAdvanceRequest;
   const pendingAdvance = advance && advance.resumePromptGeneration === t.resumePromptGeneration;
-  if (pendingAdvance) back = advance.prevStatus as TaskStatus;
   if (t.nativeTurn && !t.goalTurn) {
     const [session] = await db.select().from(sessions).where(eq(sessions.taskId, t.id)).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
     await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");
   }
+  // 持续目标的善后要先做:它的结果(留住了没有)本身是落位的一个输入。
+  let goalHeld = false;
+  let goalFollowUpFrom: TaskStatus | null = null;
   if (t.goalTurn) {
     const [session] = await db.select().from(sessions).where(eq(sessions.taskId, t.id)).orderBy(desc(sessions.turnStartedAt), desc(sessions.startedAt));
-    const held = await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");
-    if (!held) {
+    goalHeld = await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");
+    if (!goalHeld) {
+      // 压根没启动起来的持续目标:回到它起跑前的状态(库里那行此刻才是权威的)。
       const [restored] = await db.select().from(tasks).where(eq(tasks.id, t.id));
-      back = ashFailure ? "failed" : (restored?.followUpFrom as TaskStatus | null) ?? "failed";
+      goalFollowUpFrom = (restored?.followUpFrom as TaskStatus | null) ?? null;
     }
     if (session?.agentType === "claude" && session.commandLine) cleanupClaudeGoalContext(session.commandLine);
     // 熔断过的那一轮不许说成「暂停」:那句话替用户表达了「它在等你」,而这一轮是我们自己判
     // 失败的 —— 两个结论里用户看到的那个说它在等人,正是 F3 的形状。那一句由下面统一补。
     if (!ashFailure) {
-      await appendTaskTimeline(t.id, held
+      await appendTaskTimeline(t.id, goalHeld
         ? "持续目标因服务中断已暂停；任务和历史保留，使用 /goal resume 续跑。"
         : "持续目标尚未启动就遇到服务中断；已恢复起跑前的目标状态。");
     }
   }
+  // **落位优先级不在这儿定**(第 1 轮审查 F2,已实测):这一处原先是一行三元表达式,而正常结算
+  // 那边是一串分支顺序 —— 两份一漂,同一个事实就按进了哪个入口给出两种结论:一个已完成的任务被
+  // 一次失败续聊打断,不重启收尾保住 `done`,重启收尾却整个降成 `failed`。恢复层只提供事实,
+  // 优先级归 `settle-landing.ts` 一处(它同时也挡住了「残留的队列占位抵消一轮确凿失败」那一支)。
+  const back = failedTurnLanding({
+    ashFailed: !!ashFailure,
+    followUpFrom: (t.followUpFrom as TaskStatus | null) ?? goalFollowUpFrom,
+    queueAdvancePrev: pendingAdvance ? (advance.prevStatus as TaskStatus) : null,
+    goalHeld,
+  });
   if (t.goalTurn || t.followUpFrom || t.nativeTurn || t.completeConfirmedAt) {
     await db
       .update(tasks)
@@ -129,16 +154,31 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
  * CLI 多半报的是 0。
  */
 async function interruptedTurnVerdict(taskId: string): Promise<{ note: string } | null> {
-  // **还开着的回合全看一遍**,不是只看最新那一条:一个任务可以同时有多条会话各开着一轮
-  // (讨论模式的两个声部就是),背着判决的那一个未必是最后开始的。只看一条的话,另一条的
-  // 判决就跟着这次对账一起失效了 —— 而它的回合行会被留在「不知道」那一档。
-  const open = await db
-    .select()
-    .from(sessionTurns)
-    .where(and(eq(sessionTurns.taskId, taskId), isNull(sessionTurns.endedAt)))
-    .orderBy(desc(sessionTurns.startedAt));
+  // 身份集合由**两边**给:
+  //   · 还开着的回合行 —— **全看一遍**,不是只看最新那一条:一个任务可以同时有多条会话各开着
+  //     一轮(讨论模式的两个声部就是),背着判决的那一个未必是最后开始的。
+  //   · 盘上没销账的失败义务 —— 开放行给不出的那两类都在这儿(第 1 轮审查 F1,已实测):区间
+  //     提前收口(执行流结束、任务还没落位时进程退出),以及开始行压根没落下(`openTurn` 那一批
+  //     写失败,而看门狗照样熔断并落了判决)。少了这一边,一个已经提示过「已自动终止」的持续目标
+  //     回来会显示「暂停中 + 继续」,而判决明明还在日志里读得出来。
+  const rows = await db.select().from(sessionTurns).where(eq(sessionTurns.taskId, taskId));
+  // 键的口径跟判决日志同一份(`stallIdentityKey`)—— 两边各手拼一遍迟早漂。
+  const byIdentity = new Map(rows.map((r) => [stallIdentityKey(r.sessionId, r.startedAt), r]));
+  const identities = new Map<string, { sessionId: string; startedAt: string; cwd: string | null }>();
+  for (const row of rows) {
+    if (row.endedAt == null) {
+      identities.set(stallIdentityKey(row.sessionId, row.startedAt), { sessionId: row.sessionId, startedAt: row.startedAt, cwd: row.cwd });
+    }
+  }
+  for (const owed of await pendingStallObligations()) {
+    if (owed.taskId !== taskId) continue;
+    const k = stallIdentityKey(owed.sessionId, owed.turnStartedAt);
+    if (!identities.has(k)) {
+      identities.set(k, { sessionId: owed.sessionId, startedAt: owed.turnStartedAt, cwd: byIdentity.get(k)?.cwd ?? null });
+    }
+  }
   const notes: string[] = [];
-  for (const turn of open) {
+  for (const turn of [...identities.values()].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))) {
     // 「这是上一个进程留下来的回合吗」由 `restoreStallVerdict` 自己从事实认(本进程开过那一行
     // 开始记录没有),这里一个字都不用申报 —— 对账既可能碰到上一个进程留下来的回合,也可能碰到
     // 本进程刚起跑、消费循环却在初始化段挂掉的那种,两者该得到不同答案。
@@ -149,11 +189,17 @@ async function interruptedTurnVerdict(taskId: string): Promise<{ note: string } 
     notes.push(verdict.kind === "tripped"
       ? stallReconcileText(verdict)
       : stallReconcileUnverifiableText(verdict.reason));
-    await recordTurnSpan({
-      sessionId: turn.sessionId, taskId, cwd: turn.cwd, startedAt: turn.startedAt,
-      endedAt: now(), outcome: "failed",
-    });
-    clearStallFailure(turn.sessionId, turn.startedAt); // 这一轮结算完了,销账
+    // 已经确凿收在 `failed` 上的那一行不重写:它的 `ended_at` 是当时真实的收尾时刻,改成「现在」
+    // 等于把一段不存在的执行时间算给它。其余三种都要写 —— 还开着的、行压根不存在的、以及收在
+    // 非 failed 结局上却背着判决的(那一份结论比区间里记的那个更权威)。
+    const existing = byIdentity.get(stallIdentityKey(turn.sessionId, turn.startedAt));
+    if (!(existing?.endedAt != null && existing.outcome === "failed")) {
+      await recordTurnSpan({
+        sessionId: turn.sessionId, taskId, cwd: turn.cwd, startedAt: turn.startedAt,
+        endedAt: existing?.endedAt ?? now(), outcome: "failed",
+      });
+    }
+    clearStallFailure(turn.sessionId, turn.startedAt); // 这一轮结算完了,销账(内存 + 盘上那份)
   }
   return notes.length ? { note: notes.join("\n\n") } : null;
 }

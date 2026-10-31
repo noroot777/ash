@@ -21,14 +21,24 @@ export type Log = {
   resolves: string[];
   /** 撤标记时拿到的**停滞身份** —— 库里那一侧按它做 CAS(session-stall-flag.ts),所以得钉住。 */
   resolveSince: string[];
+  /** 持久投影被叫了几次 —— 它跟「通知」是两件事,失败要能重投(N1)。 */
+  projects: StallFacts[];
 };
-export function spy(taskId = "task-1"): { actions: StallActions; log: Log } {
-  const log: Log = { warns: [], trips: [], escalations: [], resolves: [], resolveSince: [] };
+/** `projectFails` = 前几次投影报失败,用来钉「没确认就重投」。 */
+export function spy(taskId = "task-1", projectFails = 0): { actions: StallActions; log: Log } {
+  const log: Log = { warns: [], trips: [], escalations: [], resolves: [], resolveSince: [], projects: [] };
+  let failures = projectFails;
   return {
     log,
     actions: {
       taskId,
       warn: (text, facts) => log.warns.push({ text, facts }),
+      project: (facts) => {
+        log.projects.push(facts);
+        if (failures <= 0) return Promise.resolve(true);
+        failures -= 1;
+        return Promise.resolve(false);
+      },
       trip: (text) => log.trips.push(text),
       escalate: (text) => log.escalations.push(text),
       resolve: (facts) => { log.resolves.push(facts.turnStartedAt); log.resolveSince.push(facts.since); },
