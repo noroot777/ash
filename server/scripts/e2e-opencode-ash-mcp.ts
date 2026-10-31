@@ -19,7 +19,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { requireTmpDb } from "./tmp-db.js";
+import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
 requireTmpDb("e2e-opencode-ash-mcp");
 assert.ok(process.env.ASH_RUNS_DIR?.trim(), "先设 ASH_RUNS_DIR —— 这条会写时间线,不许落进真实 data/runs");
@@ -39,18 +39,24 @@ process.env.OPENCODE_CONFIG = join(cfgDir, "opencode.json");
 delete process.env.OPENCODE_CONFIG_DIR;
 delete process.env.OPENCODE_CONFIG_CONTENT;
 /**
- * 注册那一步**只看隔离出来的这套来源**。
+ * **三个消费者共用同一套来源**:注册那一步、问 CLI 本人那一步、以及真起跑的那个 agent。
  *
  * opencode 的来源不止一份:默认目录那几份也会被读。所以用真 `homedir()` 去问「要不要补」,
  * 答案会被**宿主自己那份全局配置**左右 —— 用户机器上早就接过 ash 时,安装器照规矩回
- * 「已经有生效的登记了,不动它」,`added` 就是 false,这条 e2e 在起跑前自拒(本轮审查 N2)。
+ * 「已经有生效的登记了,不动它」,`added` 就是 false,这条 e2e 在起跑前自拒(上一轮审查 N2)。
  * 判定本身没错,错在拿宿主状态当了被测对象的输入。
+ *
+ * 上一版只把隔离环境交给安装器一处(本轮审查 N1):`opencode mcp list` 和 agent 都继承
+ * `process.env`,于是**真跑的那一侧仍然合着宿主的全局配置、插件和别的 MCP** —— 拿一个阶段
+ * 的沙盘给另一个阶段背书,`done` 这个结论就不再只能由我们刚写的那条登记解释。所以这里直接
+ * 改掉**本进程**的 `XDG_CONFIG_HOME`:agent 是这个进程的子进程、原样继承,一处设完三处一致。
+ *
+ * 只隔离配置那一层:凭证和数据(`XDG_DATA_HOME` 底下)照旧用宿主那份 —— 那是这条 e2e 能用
+ * 免费模型真跑起来的前提,也不是本条要证的东西。
  */
 const sandboxHome = join(stage, "host-home");
-const sandboxEnv: NodeJS.ProcessEnv = {
-  ...process.env,
-  XDG_CONFIG_HOME: join(sandboxHome, ".config"),
-};
+process.env.XDG_CONFIG_HOME = join(sandboxHome, ".config");
+const sandboxEnv: NodeJS.ProcessEnv = process.env;
 
 const { REPO_DIR } = await import("../src/paths.js");
 const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
@@ -58,6 +64,16 @@ const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
 function git(...args: string[]): string {
   return execFileSync("git", args, { cwd: repo, encoding: "utf8" });
 }
+
+/**
+ * 收尾要做的事,**出错那条路也得做**(本轮审查 N2)。
+ *
+ * 上一版服务只在走到结果检查时才 `close`、`finally` 里只删沙盘:中间任何一步抛出(CLI 查询
+ * 失败、断言不过、起跑没成功),listener 还在听、这次起的 agent 还在跑,进程于是自然退不出来。
+ * 关 HTTP listener 也不等于停 agent,所以停任务那一下要单独做、而且排在关服务之前。
+ */
+let backend: { close: (cb: () => void) => void } | null = null;
+let stopRun: (() => Promise<void>) | null = null;
 
 try {
   // ── 1. 一个干净的仓库和一个干净的 ash 实例 ──────────────────────────────
@@ -81,9 +97,10 @@ try {
 
   const { serve } = await import("@hono/node-server");
   const { Hono } = await import("hono");
-  const backend = serve({ fetch: new Hono().route("/api", api).fetch, hostname: "127.0.0.1", port: 0 });
-  if (!backend.listening) await new Promise<void>((r) => backend.once("listening", r));
-  const address = backend.address();
+  const server = serve({ fetch: new Hono().route("/api", api).fetch, hostname: "127.0.0.1", port: 0 });
+  backend = server;
+  if (!server.listening) await new Promise<void>((r) => server.once("listening", r));
+  const address = server.address();
   assert.ok(address && typeof address === "object");
   const url = `http://127.0.0.1:${address.port}`;
 
@@ -100,7 +117,10 @@ try {
   console.log(readFileSync(written.file, "utf8").trim());
 
   // 这家 CLI 自己认不认这份登记 —— 先问它本人,免得后面失败时分不清是谁的问题。
-  const listed = execFileSync("opencode", ["mcp", "list"], { encoding: "utf8", timeout: 120_000 });
+  // 问的是**agent 将来那套来源**:同一份隔离环境、同一个工作目录(opencode 读配置会沿 cwd
+  // 往上合并每一层的项目配置,cwd 一不一样,问到的就不是同一件事)。
+  const listed = execFileSync("opencode", ["mcp", "list"],
+    { cwd: repo, env: sandboxEnv, encoding: "utf8", timeout: 120_000 });
   assert.match(listed, /ash/, "opencode mcp list 要列出 ash");
   console.log(`② opencode 自己列得出 ash`);
 
@@ -121,6 +141,8 @@ try {
   assert.ok(task);
   const res = await api.request(`/tasks/${task.id}/run`, { method: "POST" });
   assert.ok(res.ok, `起跑要成功:${res.status} ${await res.text()}`);
+  // 从这一刻起,任何一条出错路径都得先把它停掉(整棵进程树由 stop 那条路杀)。
+  stopRun = async () => { await api.request(`/tasks/${task.id}/stop`, { method: "POST" }); };
   console.log(`③ 任务已起跑(opencode / ${task.model})`);
 
   // ── 4. 等它交卷 ───────────────────────────────────────────────────────
@@ -136,12 +158,19 @@ try {
   const [session] = await db.select({ id: sessions.id, cwd: sessions.cwd })
     .from(sessions).where(eq(sessions.taskId, task.id));
   console.log(`④ 结算状态:${status}（会话 ${session?.id ?? "无"}）`);
-  await new Promise<void>((r) => backend.close(() => r()));
+  // 已经落终态就不用再停了(停一个 done 的任务只会多一条无意义的时间线)。
+  if (["done", "failed", "canceled"].includes(status)) stopRun = null;
 
   // **done 这个结论只有一条来路**:agent 通过 ash MCP 调了 `complete_task`,服务端收下了
   // 那次确认(exit 0 不算完成,见完成协议)。所以这一行断言就是整条链的证据。
   assert.equal(status, "done", "opencode 要能靠 ash MCP 交卷");
   console.log("✅ 非 claude/codex 的真 CLI 端到端通过:注册 → 起跑 → 靠 ash MCP 交卷");
 } finally {
+  // 顺序是定死的:先停这次起的任务和它的 CLI,再关服务,再松开库文件,最后才删沙盘
+  // (沙盘里有仓库和配置,还在跑的进程正读着它们)。每一步各自兜异常 —— 一步失败不该
+  // 让后面几步不做。
+  if (stopRun) await stopRun().catch((e) => console.error(`停任务没成功:${String(e)}`));
+  if (backend) await new Promise<void>((r) => backend!.close(() => r()));
+  await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
 }
