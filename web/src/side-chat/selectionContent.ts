@@ -1,140 +1,184 @@
-// 从会话里取一段话，取的是**用户读到的那些话**，不是 DOM 上恰好被扫过的字符。
-//
-// 会话流里正文和界面装置是混排的：折起来的「执行过程 · 6 工具」、气泡头上的头像、
-// 身份与时间、尾栏的账目胶囊、审查泳道与辩论卡的卡头、问答历史的摘要行。跨消息拖选
-// 必然扫过它们，而 `Selection.toString()` 照单全收 —— 于是「添加到备忘 / 添加到对话 /
-// 在侧聊中提问」三个入口拿到的都是掺着这些碎片的文本（用户反馈：存进备忘的那段里夹
-// 着六条「执行过程」）。
-//
-// **判据先读 HTML 语义，再读声明**（见 CHROME）。这件事不能靠「每个卡片的作者记得加
-// 一个标记」：漏标的样子跟「本来就没装置」一模一样，没有任何地方会报错，于是新写一张
-// 卡就重新长出一次同样的 bug（审查第 1 轮不拦项列了四处现成的）。而会话里每张卡片的
-// 头尾本来就是 `header` / `footer` / `summary` / `time` / `aria-hidden` 写的 —— 认这层
-// 语义，它们一处都不用改就对了，新写的卡片也一样。声明那一层只收语义表达不了的例外。
-//
-// **排版文本只许问浏览器要。** 取文必须保住原页面的排版语义：代码块的缩进、用户气泡
-// 的 `white-space: pre-wrap`、段落之间的空行，都由 CSS 和祖先选择器决定。所以这里既
-// 不用 `Range.toString()`（它把文本节点首尾相接，一个换行都没有），也不把内容克隆到
-// 离屏容器上读 `innerText`（脱离祖先链，`.task-user-bubble > p` 这类规则不再命中，
-// 三行用户消息会被折成一行 —— 审查第 1 轮必修 2）。唯一权威是让 `Selection` 在**原
-// 文档上**框住那一截，再读它的 `toString()`。
-
 /**
- * 不算正文的东西。
+ * 从一段会话选区里取出「用户真正想要的那段话」—— 跨消息选中时，中间夹着的执行过程、
+ * 身份头、账目尾栏都不算。
  *
- * - `header` / `footer`：卡片与气泡的元信息行（身份、时间、用时、账目胶囊、操作位）
- * - `summary`：折叠条的标签 —— 它是那个开关本身，内容在 `details` 里
- * - `button` / `[role=button]`：控件 —— 按钮上的字是操作名。代价是**待答**提问卡的候选
- *   项（它们是 `aria-pressed` 的单选按钮）也不进选文；答过之后的历史卡里那些选项是
- *   `li`，照旧取得到。
- * - `time`：时间戳
- * - `[aria-hidden=true]`：纯装饰（图标、头像首字母），它本来就不该被读出来
- * - `[data-selection-chrome]`：语义说不出来的那几处产品判断。目前只有「执行过程」折叠
- *   块：它整块都不是用户要的那段话，连被折进去的那半截正文也不是。
+ * 判据两条，先后顺序要紧：
  *
- * markdown 正文不受影响：它渲染出来的是 `p` / `pre` / `li` / `a` / `table`，一个都不在
- * 这张表里；`details`/`summary` 在正文里是纯文本（没有开 rehype-raw）。
+ * 1. **先读 HTML 语义**。`header` / `footer` / `summary` / `button` / `time` /
+ *    `aria-hidden` 这些标签已经把「我是界面装置、不是正文」说清楚了，不必再逐处加标记
+ *    —— 靠人工逐处标记的黑名单漏一处就带一处噪音，而漏在哪儿只能等下一次被用户发现。
+ * 2. **语义说不出来的才声明**。`data-selection-chrome` = 整块不算正文（现有两处：展开
+ *    后的执行事件行是一堆普通 div；过程折叠里关着的那半截本来就是正文，分不出来）。
+ *    `data-selection-content` = 装置**里头**这一块其实是正文（折起来时摘要行就是整张卡
+ *    的全部可见内容，整块删掉等于用户什么都没选到）。
+ *
+ * 另有两条不是判据的硬约束：
+ *
+ * - **排版文本只许问浏览器要**。`Range.toString()` 把文本节点首尾相接、一个换行都不给；
+ *   离屏克隆读 `innerText` 又脱离了祖先链，`.task-user-bubble > p` 这种祖先限定的
+ *   `white-space` 当场失效，多行用户消息被折成一行。所以只能在**原文档上**借
+ *   `window.getSelection()` 把每一截框出来读 `toString()`；借了就得精确还原（见
+ *   borrowSelection），否则用户正拖着的那一下会被清掉。
+ * - **只认看得见的东西**。闭合 `<details>` 里的文字 `Range.toString()` 照样读得到，而拿
+ *   含隐藏内容的 range 重建 Selection 之后，`Selection.toString()` 甚至会越过 range 边界
+ *   把后面的字一起带出来（实测能带出尾栏上的「复制答案」）。所以没有布局盒子的子树一律
+ *   当装置剔掉，重建出来的每一截都只盖着原选区里看得见的正文。
+ *
+ * 已知代价：`button` 一刀切会连带剔掉**待答提问卡上的候选项**（那些选项是按钮）。要选它
+ * 们得单独选一次（整段落在装置里时原样给）。
  */
+
+/** 语义上就是界面装置的那些标签，外加一处说不出来、只能声明的。 */
 const CHROME = 'header,footer,summary,button,[role="button"],time,[aria-hidden="true"],[data-selection-chrome]';
+/** 装置里头这一块其实是正文。 */
+const CONTENT = "[data-selection-content]";
 
-/**
- * 这个选区里还有没有正文可取 —— 浮条的显隐判据。
- *
- * 只问有无，所以用 `Range.toString()` 就够：纯文本拼接和排版文本在「是不是全是空白」
- * 这件事上答案一致，而它没有副作用，可以在每次选区变动时跑。
- */
-export function hasSelectionContent(range: Range, root: Element): boolean {
-  const parts = contentRanges(range, root);
-  return parts ? parts.length > 0 : !!range.toString().trim();
-}
-
-/**
- * 选区文本，剔掉中间夹着的界面装置。
- *
- * **会清空当前选区**：排版文本得靠 `Selection` 在原文档上框出每一截来读（理由见文件
- * 头）。所以只许在用户点下浮条、本来就要收起选区的那一刻调用 —— 不要放进选区变化的
- * 回调里，那会打断用户正在拖的选区，还会把自己派发的 `selectionchange` 喂回来。
- */
+/** 取出这段选区里的正文，按它在页面上的排版。剔干净之后什么都不剩就给空串。 */
 export function selectionContentText(range: Range, root: Element): string {
   const parts = contentRanges(range, root);
-  // null = 没有装置要剔（含「选区整个落在一块装置里」）：原样，一个字节不改。
-  if (!parts) return renderedText(range);
-  return parts.map((part) => trimSeam(renderedText(part))).filter(Boolean).join("\n\n");
+  const selection = window.getSelection();
+  // 拿不到选区就只能退回文本节点拼接：没有块级换行，但比什么都没有好。
+  if (!selection) return join(parts.map((part) => part.toString()));
+  return borrowSelection(selection, () => join(parts.map((part) => renderedText(part, selection))));
 }
 
-/**
- * 把选区按装置切成几截正文；`null` = 不用切。
- *
- * 切口两边的空白留给 `trimSeam` 处理，这里一个字都不动；只把整截都是空白的丢掉 ——
- * 两颗相邻按钮之间那点缝隙不是内容。
- */
-function contentRanges(range: Range, root: Element): Range[] | null {
-  const chrome = chromeToSkip(range, root);
-  if (!chrome.length) return null;
+const join = (texts: string[]) => texts.map(trimSeam).filter(Boolean).join("\n\n");
+
+/** 把选区按「要剔掉的那些段」切成若干截。没有要剔的就是它自己。 */
+function contentRanges(range: Range, root: Element): Range[] {
+  const skips = skipRanges(range, root);
+  if (!skips.length) return [range.cloneRange()];
   const parts: Range[] = [];
-  // 「还没取的那一截」。每跳过一块装置就把它的起点往后挪一次。
   let rest: Range | null = range.cloneRange();
-  for (const element of chrome) {
+  for (const skip of skips) {
     if (!rest) break;
+    // 这一段已经整个落在选区后头了 —— 跳过区按文档顺序排，后面的只会更远，收手。不拦住
+    // 的话底下那个 setEnd 会把这一截的尾巴推到选区外面去（选到一半的那块装置后面还有
+    // 字时，取文就会多带出用户没选的内容）。
+    if (startsAfter(rest, skip)) break;
     const head = rest.cloneRange();
-    head.setEndBefore(element);
-    // 空 = 这块装置压在选区头上（选区从它中间起步），它前面没有正文。
+    // 要剔的那段压在选区头上(或尾上)时，setEnd/setStart 会把另一头一起拖过来 ——
+    // 于是这一截自己就塌成空的，正是想要的结果，不必另外判一遍前后关系。
+    head.setEnd(skip.startContainer, skip.startOffset);
     if (!head.collapsed) parts.push(head);
-    rest.setStartAfter(element);
-    // 起点被推到了选区终点之后 = 这块装置压在选区尾上，后面也没有正文了。
+    rest.setStart(skip.endContainer, skip.endOffset);
     if (rest.collapsed) rest = null;
   }
   if (rest) parts.push(rest);
-  return parts.filter((part) => part.toString().trim());
+  return parts;
+}
+
+/** 这一段是不是整个排在选区后头。比不了（节点已经不在同一棵树上）就当是，宁可少剔。 */
+function startsAfter(rest: Range, skip: Range): boolean {
+  try {
+    return rest.comparePoint(skip.startContainer, skip.startOffset) > 0;
+  } catch {
+    return true;
+  }
 }
 
 /**
- * 这个选区里要整块跳过的装置，按文档顺序。
+ * 选区里要剔掉的那些段，按文档顺序、互不重叠。
  *
- * 只走选区**真正盖住的**那部分 DOM（不相交的子树整棵剪掉），所以开销跟选了多少东西
- * 成正比，跟会话有多长无关 —— 这个判据每次选区变动都要跑一遍。
+ * 返回的是 Range 而不是元素：装置里头可能包着正文（折起来时的摘要行），那一块要原样
+ * 留下 —— 于是一块装置被它内部的正文岛切成好几段。
  */
-function chromeToSkip(range: Range, root: Element): Element[] {
+function skipRanges(range: Range, root: Element): Range[] {
   const anchor = elementOf(range.commonAncestorContainer);
   if (!anchor || !root.contains(anchor)) return [];
-  // 选区**整个**落在一块装置里 = 用户就是冲它去的（点开执行过程、单独取其中一条工具
-  // 输出）。那不是顺带扫过，原样给他，别回一份空文本。
+  // 整段选区都落在一块装置里：那就是用户专门去选它，原样给。
   const enclosing = anchor.closest(CHROME);
   if (enclosing && root.contains(enclosing)) return [];
-  const skip: Element[] = [];
+  const outer: Element[] = [];
   const walker = document.createTreeWalker(anchor, NodeFilter.SHOW_ELEMENT, {
     acceptNode: (node) => {
-      // 不相交就把整棵子树剪掉 —— 这是「只走选区盖住的那部分」的来源。
+      // 没碰到选区的整棵子树直接剪掉：开销跟选区多大成正比，跟会话多长无关。
       if (!range.intersectsNode(node)) return NodeFilter.FILTER_REJECT;
-      return (node as Element).matches(CHROME) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      return isChrome(node as Element) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
     },
   });
   while (walker.nextNode()) {
     const element = walker.currentNode as Element;
-    // 装置套装置时只认最外层：里层已经随外层整块跳过了，再按它切会把游标往回拖。
-    if (skip.some((outer) => outer.contains(element))) continue;
-    skip.push(element);
+    // 外层已经整块剔掉了，嵌在里面的不必再算一遍。
+    if (!outer.some((taken) => taken.contains(element))) outer.push(element);
   }
-  return skip;
+  return outer.flatMap(skipOf);
+}
+
+/** 要整块剔掉的：语义上的界面装置，或者此刻根本看不见。 */
+function isChrome(element: Element): boolean {
+  if (element.matches(CHROME)) return true;
+  // 空元素不判可见性 —— 它没字可剔，剔了反而把一行正文切成两截，拼回去多一个空行。
+  return !!element.textContent?.trim() && !isVisible(element);
+}
+
+/**
+ * 此刻真画得出来。不能拿 `getClientRects()` 判 —— 闭合 `<details>` 里关着的那半截照旧
+ * 有布局盒子（实测 788×159、`offsetHeight` 159），只有 `checkVisibility()` 认得出它是被
+ * `content-visibility` 跳过的。
+ *
+ * 为什么非判不可：`Range.toString()` 读得到关着的那段问答，底下拿不到 `Selection` 时走
+ * 的就是它；而借 `Selection` 读的那条路上，拿含隐藏内容的 range 重建选区之后，浏览器
+ * 返回的东西连 range 边界都未必认（审查实测过一次把后面尾栏的字一起带出来，本机 Chrome
+ * 上则是直接给空串）。两种都不是「原选区里看得见的那部分」，所以隐藏子树一律先剔掉。
+ */
+const isVisible = (element: Element) => element.checkVisibility();
+
+/**
+ * 一块装置要让出的那些段。里头声明了正文就被切开：只有装置自己那几截进跳过区，正文岛
+ * 原样留着。
+ */
+function skipOf(element: Element): Range[] {
+  const whole = document.createRange();
+  whole.selectNode(element);
+  const islands = contentIslands(element);
+  if (!islands.length) return [whole];
+  const parts: Range[] = [];
+  const rest = whole;
+  for (const island of islands) {
+    const head = rest.cloneRange();
+    head.setEndBefore(island);
+    if (!head.collapsed) parts.push(head);
+    rest.setStartAfter(island);
+  }
+  if (!rest.collapsed) parts.push(rest);
+  return parts;
+}
+
+/** 这块装置里最外层的那几座正文岛（文档顺序）。 */
+function contentIslands(element: Element): Element[] {
+  const found: Element[] = [];
+  for (const island of element.querySelectorAll(CONTENT)) {
+    // 岛自己也看不见（展开之后让位的那半行）就不算正文，留着它只会把隐藏文字带出来。
+    if (!isVisible(island)) continue;
+    if (found.some((taken) => taken.contains(island))) continue;
+    found.push(island);
+  }
+  return found;
 }
 
 const elementOf = (node: Node): Element | null => (node instanceof Element ? node : node.parentElement);
 
-/**
- * 剥掉切口两边的空行。
- *
- * 只删**换行**（连同同一行里那点水平空白），不碰换行之后的空格与制表符 —— 那是正文
- * 自己的缩进。整段 `trim()` 会把代码块首行的四个空格一起削掉，于是原本同级的两行在
- * 备忘里变成不同层级（审查第 1 轮必修 1）。
- */
+/** 切口处的空白不算正文，但行内的缩进要留着（代码块靠它）。 */
 function trimSeam(text: string): string {
   return text.replace(/^(?:[ \t]*[\r\n])+/, "").replace(/(?:[\r\n][ \t]*)+$/, "");
 }
 
-/** 这一截 range 在屏幕上是什么字。借用 `Selection` 来读，所以它会改动当前选区。 */
-function renderedText(range: Range): string {
-  const selection = window.getSelection();
-  if (!selection) return range.toString();
+/**
+ * 借当前文档的选区去读排版文本，读完精确还原（anchor / focus 各自归位，方向也不翻）。
+ * 还原不精确的话，拖选到一半的那一下会被打断。
+ */
+function borrowSelection(selection: Selection, read: () => string): string {
+  const { anchorNode, anchorOffset, focusNode, focusOffset } = selection;
+  try {
+    return read();
+  } finally {
+    if (anchorNode && focusNode) selection.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+    else selection.removeAllRanges();
+  }
+}
+
+function renderedText(range: Range, selection: Selection): string {
   selection.removeAllRanges();
   selection.addRange(range);
   return selection.toString();

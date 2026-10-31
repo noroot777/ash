@@ -4,12 +4,13 @@
  * 身份与时间、折起来的「执行过程 · N 工具」、尾栏的账目胶囊,它们和正文在 DOM 里是
  * 混排的,跨消息拖选必然扫过。手搓几个 div 证明不了选区会不会把它们一起捞走。
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Task } from "@ash/shared";
 import { ConversationSelection } from "../../src/side-chat/ConversationSelection.tsx";
 import { ConversationFeed } from "../../src/task-detail/ConversationFeed.tsx";
 import type { ConversationItem } from "../../src/task-detail/conversationModel.ts";
+import type { QuestionRecord } from "@ash/shared/questions";
 import "../../src/styles/global.css";
 
 const usage = { input: 1200, output: 340, cacheRead: 9000, cacheWrite: 0, reasoning: 0, costUsd: 0.12, turns: 1 };
@@ -56,10 +57,34 @@ const items: ConversationItem[] = [
   turn(3, "顺手把示例补上。", '```python\n    print("缩进不能丢")\n    print("第二行")\n```', [1, 1]),
 ];
 
+/* 一条没跟任何用户消息配对的问答记录 —— 走 QuestionHistoryRemainder 那条路，渲染出真实的
+   `AnsweredQuestionCard`。折起来时整张卡**可见的只有 `<summary>` 那一行**：答复预览就在
+   里头，而完整问答藏在闭合的 `<details>` 里。两件要钉的事都只在这个真结构上成立 ——
+   摘要行不能被当装置整块删掉，藏着的那半截一个字都不许漏出来。 */
+const answered: QuestionRecord = {
+  id: "q-1",
+  answeredAt: "2026-10-30T03:30:00.000Z",
+  question: "隐藏的问题正文",
+  answer: "按第二个方案做，先把开关关掉。",
+  reply: "按第二个方案做，先把开关关掉。",
+};
+
+/* 流式续写把块类型换掉的那一下：结论从一个段落变成列表，原来那个 `<p>` 当场卸载，选区
+   里的文本节点脱离文档。存 Range 的实现在这一刻取文只能得到空串（而浮条还在）。 */
+const streamed = items.map((item) => item.id === "agent-1"
+  ? turn(1, "先把启动自检那一段读了一遍。", "- 第 2 条改完，测试也过了。\n- 接下来做第 3 条。", [4, 2])
+  : item);
+
 const task = { id: "selection", projectId: "p", title: "选文取正文", mode: "single", agentType: "claude", status: "done" } as Task;
 
 function Fixture() {
   const [taken, setTaken] = useState<{ from: string; text: string } | null>(null);
+  const [list, setList] = useState(items);
+  // 用全局钩子触发而不是摆一颗按钮：点按钮会把选区清掉，那就测不到「选着的时候正文被
+  // 换掉」这一幕了。
+  useEffect(() => {
+    (window as unknown as { __restream: () => void }).__restream = () => setList(streamed);
+  }, []);
   return <main style={{ padding: 24 }}>
     {/* 读数摆在会话**上面**:会话区自己会铺满给它的那块高度,摆在下面会被它盖住点不着。 */}
     <button type="button" data-testid="clear" onClick={() => setTaken(null)}>清空</button>
@@ -71,7 +96,7 @@ function Fixture() {
       onAddToMemo={(text) => setTaken({ from: "memo", text })}
     >
       <div style={{ height: 520 }}>
-        <ConversationFeed task={task} items={items} sessions={[]} questionHistory={[]} loading={false} error={null} />
+        <ConversationFeed task={task} items={list} sessions={[]} questionHistory={[answered]} loading={false} error={null} />
       </div>
       {/* 一张**没有任何选文标记**的卡,照审查泳道/辩论卡那种写法摆:头尾用的就是
           header / time / button / aria-hidden 这些语义标签。钉住「新写的卡片不必记得

@@ -43,8 +43,10 @@ export function MonitorWakeInput({ item, input, surface }: {
                   <CaretDown size={11} aria-hidden="true" />
                 </span>
               </span>
-              {/* 折叠时这一行就是全部内容；展开后正文里的标题会把同一句话说全，这里让位。 */}
-              <span className="monitor-wake-brief">
+              {/* 折叠时这一行就是全部内容；展开后正文里的标题会把同一句话说全，这里让位。
+                  所以它也要声明成正文（否则选中整张折着的卡只能得到空的），而展开之后
+                  CSS 把它藏起来，取文那边按「看不见就不算正文」自己让位，不会说两遍。 */}
+              <span className="monitor-wake-brief" data-selection-content="">
                 {input.reason}
                 {input.source && <span className="monitor-wake-brief-source">{input.source}</span>}
               </span>

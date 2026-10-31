@@ -78,7 +78,9 @@ export function AnsweredQuestionCard({ record }: { record: QuestionRecord }) {
         <CheckCircle className="task-question-record-icon" size={18} weight="duotone" aria-hidden="true" />
         <span className="task-question-record-summary">
           <span><b>你的答复</b>{partial && <small>已部分答复</small>}{record.answeredAt && <time>{formatInstant(record.answeredAt)}</time>}</span>
-          <span className="task-question-record-preview">{answerText}</span>
+          {/* 折起来时这一行就是整张卡的全部可见内容，不能跟着外面那层 `<summary>` 一起被
+              当成界面装置剔掉（见 side-chat/selectionContent.ts）。 */}
+          <span className="task-question-record-preview" data-selection-content="">{answerText}</span>
         </span>
         <span className="task-question-record-action">查看问答</span>
         <CaretDown className="task-question-record-caret" size={14} aria-hidden="true" />

@@ -31,6 +31,9 @@ try {
   const addToReply = page.getByRole("button", { name: "添加到对话", exact: true });
   const taken = page.getByTestId("taken");
   const flush = () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  /* 等布局彻底平静下来。会话区会跟着内容高度自动贴底（useStickToBottom），那一下滚动是
+     异步来的，而滚动本来就该把浮条收走 —— 不等它停就选，刚排上的那一帧会被当场掐掉。 */
+  const settle = () => page.waitForTimeout(250);
 
   /* 选区按「第一个文本节点的第 from 个字」到「某个文本节点的第 to 个字」画,用真实的
      pointerup 收尾 —— 浮条就是靠它出来的。`anchor` 是那段文字所在元素的特征文案。 */
@@ -54,6 +57,18 @@ try {
     (tail.parentElement ?? document.body).dispatchEvent(new PointerEvent("pointerup", init));
     return selection?.toString() ?? "";
   }, [start, end]);
+
+  /* 把一个元素的内容整块选中（同样用真实 pointerup 收尾）。 */
+  const selectAll = (locator) => locator.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    const box = range.getBoundingClientRect();
+    element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: box.right, clientY: box.bottom }));
+  });
 
   const take = async (button = memo) => {
     await button.waitFor();
@@ -135,24 +150,74 @@ try {
   //    选文标记都没有,头尾却照样剔得干净 —— 审查第 1 轮不拦项里那四处(审查泳道、
   //    辩论卡、问答历史、系统旁注)的头尾都是同一套语义标签写的,一个字都不用改。
   await page.getByTestId("clear").click();
-  await page.getByTestId("unmarked-card").evaluate((card) => {
-    const range = document.createRange();
-    range.selectNodeContents(card);
-    const selection = getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
-    const box = range.getBoundingClientRect();
-    card.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: box.right, clientY: box.bottom }));
-  });
-  const card = await take();
-  assert.equal(card, "审查卡自己的正文该留下。");
+  await selectAll(page.getByTestId("unmarked-card"));
+  const unmarked = await take();
+  assert.equal(unmarked, "审查卡自己的正文该留下。");
   for (const noise of ["第 1 轮独立验证", "Codex 在审", "收起", "查看报告", "10/30", "🛡", "已通过"]) {
-    assert.equal(card.includes(noise), false, `没标记的卡片漏出了「${noise}」`);
+    assert.equal(unmarked.includes(noise), false, `没标记的卡片漏出了「${noise}」`);
   }
 
+  // ⑪ 折起来的问答卡:整张卡此刻**可见的只有 `<summary>` 那一行**,答复预览就长在里头。
+  //    光按标签判的话 summary 整块算装置,于是用户选了一整张卡却什么都没取到(审查第 2 轮
+  //    必修 2)。同类还有哨兵自动输入卡和系统旁注,都是「折着的时候摘要行就是全部内容」。
+  await page.getByTestId("clear").click();
+  const question = page.locator(".task-question-record");
+  await question.scrollIntoViewIfNeeded();
+  await settle();
+  await selectAll(question);
+  const folded = await take();
+  assert.equal(folded, "按第二个方案做，先把开关关掉。");
+  for (const noise of ["你的答复", "查看问答", "隐藏的问题正文", "你的答案", "10/30"]) {
+    assert.equal(folded.includes(noise), false, `折着的问答卡漏出了「${noise}」`);
+  }
+
+  // 点开之后藏着的那半截成了正文,照样取得到 —— 「看不见就不算」判的是此刻,不是标签。
+  await page.getByTestId("clear").click();
+  await question.evaluate((card) => { card.open = true; });
+  await question.scrollIntoViewIfNeeded();
+  await settle();
+  await selectAll(question);
+  const opened = await take();
+  assert.match(opened, /隐藏的问题正文/, "展开之后那段问答就该取得到");
+  assert.match(opened, /按第二个方案做，先把开关关掉。/);
+
+  // ⑫ 选区从上一条的代码块跨进折起来的问答卡,终点停在答复预览**中间**。藏着的那半截
+  //    `Range.toString()` 照样读得到;而拿含隐藏内容的 range 重建 Selection 之后,
+  //    `Selection.toString()` 还会越过 range 边界把后面的字一起带出来(必修 3)。
+  await page.getByTestId("clear").click();
+  await question.evaluate((card) => { card.open = false; });
+  await question.scrollIntoViewIfNeeded();
+  await settle();
+  await select({ text: 'print("第二行")' }, { text: "按第二个方案做，" });
+  const crossed = await take();
+  assert.equal(crossed, 'print("第二行")\n\n按第二个方案做，');
+
+  //    再把整张折叠卡整个跨过去,落到它后面那张卡的正文里 —— 审查复现的就是这个形状。
+  //    中间那一截整个落在关着的子树里(`Range.toString()` 照样读得到那段问答),一个字都
+  //    不许漏出来,也不许把选区终点之后的尾栏带进来。
+  await page.getByTestId("clear").click();
+  await question.scrollIntoViewIfNeeded();
+  await settle();
+  await select({ text: 'print("第二行")' }, { text: "审查卡自己的正文该留下。" });
+  const over = await take();
+  assert.equal(over, 'print("第二行")\n\n按第二个方案做，先把开关关掉。\n\n审查卡自己的正文该留下。');
+
+  // ⑬ 浮条上那颗按钮按下去必须兑现得了。Tab 聚到浮条上之后正文被流式续写换掉(结论从
+  //    段落变列表,原来那个 `<p>` 当场卸载、选区里的文本节点脱离文档),此时 selectionchange
+  //    被「焦点在浮条上」那条早退吞掉、浮条还在 —— 存 Range 的实现这时取文得到空串,于是
+  //    用户按了一下什么都没发生(审查第 2 轮必修 1)。
+  await page.getByTestId("clear").click();
+  await select({ text: "第 2 条改完，测试也过了。" }, { text: "接下来做第 3 条。" });
+  await memo.waitFor();
+  await page.keyboard.press("Tab");
+  await page.evaluate(() => window.__restream());
+  await flush();
+  assert.equal(await memo.isVisible(), true, "焦点还在浮条上时它不该自己消失");
+  assert.equal(await take(), "第 2 条改完，测试也过了。\n\n接下来做第 3 条。",
+    "按下去要兑现当时选的那段话,不许静默丢弃");
+
   assert.equal(errors.length, 0, errors.join("\n"));
-  console.log("✓ 会话选文只取正文:跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
+  console.log("✓ 会话选文只取正文:折起来的卡片保住摘要行那段正文、隐藏子树一个字不漏、浮条按下去必定兑现、跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
 } finally {
   await browser?.close();
   await server.close();
