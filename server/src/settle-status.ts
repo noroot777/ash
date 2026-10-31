@@ -276,8 +276,10 @@ export async function settleTaskStatus(
       // 当成一个「旁路回合」记账。
       const { serializeQueueClaims } = await import("./queue-seat.js");
       await serializeQueueClaims(async () => {
-        await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-        await setStatus(taskId, "paused");
+        // 清旁路身份与写 paused 是**同一条 UPDATE**(`consume`,见 status.ts):分成两句的话,
+        // 中间那条缝里进程一没,`followUpFrom` 已经消失而任务还是 running —— 重启后的对账再也
+        // 拿不到「该回到哪个终态」这个事实(第 2 轮审查 F2)。
+        await setStatus(taskId, "paused", { consume: { followUpFrom: null } });
       });
       await announceResumePrompt(taskId);
       return { status: "paused", note: hold, confirmedDone: false, nativeTurn };
@@ -296,8 +298,12 @@ export async function settleTaskStatus(
       ashFailed: !!reason, followUpFrom: back as Parameters<typeof setStatus>[1], queueAdvancePrev: null, goalHeld: false,
     }) as Parameters<typeof setStatus>[1];
     await serializeQueueClaims(async () => {
-      await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-      await setStatus(taskId, landing, landing === "paused" ? { quietAdvance: true } : undefined);
+      // 同上:**消费输入与写下结论必须是一笔**。原终态是这条链唯一的权威来源(库里就这一列),
+      // 先清后写等于把它交给了「两句之间不会崩」这个假设(第 2 轮审查 F2,已实测)。
+      await setStatus(taskId, landing, {
+        consume: { followUpFrom: null },
+        ...(landing === "paused" ? { quietAdvance: true } : {}),
+      });
     });
     const label = FOLLOW_UP_LABEL[back] ?? back;
     if (t.question) {

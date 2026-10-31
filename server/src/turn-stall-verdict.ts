@@ -246,6 +246,16 @@ export function stallFailure(sessionId: string, turnStartedAt: string | null): S
  *
  * 只在**真的销掉了一条**时才去落那一笔:绝大多数回合压根没有判决,无条件追加等于每轮都往日志里
  * 写一行废记录。
+ *
+ * **谁该直接调这个、谁不该**(第 2 轮审查 F1 之后划清):
+ *   • 直接调 —— 回合区间自己就是权威结局的那几条链:duet 的一轮发言、团队那台的一个回合、
+ *     以及单飞那条链在 `settleTaskStatus` 返回之后的那一句。它们的失败由各自的区间/返回值承载,
+ *     跟任务那一行什么时候落位无关。
+ *   • **不要直接调** —— 以「任务落位」为权威结局的恢复链(启动对账)。那一路要走
+ *     `setTaskStatus` 的 `settleStallTurns`:销账与落位在同一次写库里完成,所以不存在
+ *     「义务已销、落位未写」的缝。对账原先在算出落位之前就调了这里,后面还隔着持续目标善后、
+ *     输入事实消费、时间线和基线恢复 —— 那段路上任何一次重启或抛错都会让一个提示过
+ *     「已自动终止」的持续目标回来显示「暂停中 + 继续」(第 2 轮审查 F1,已实测)。
  */
 export function clearStallFailure(sessionId: string, turnStartedAt: string | null): void {
   if (!turnStartedAt) return;

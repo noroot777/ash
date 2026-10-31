@@ -31,7 +31,7 @@ const stage = mkdtempSync(join(tmpdir(), "ash-stall-settle-"));
 process.env.ASH_DB = join(stage, "t.db");
 process.env.HARNESS_DB = process.env.ASH_DB;
 
-const { db, ensureSchema } = await import("../src/db/index.js");
+const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();
 const { tasks } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
@@ -137,6 +137,34 @@ const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.
   assert.equal(settled.status, "done", "正常确认完成的续聊回合升级不上去了 —— 上一条拦过头了");
 }
 
+// ── ⑩ 落位那一笔没写成时,输入事实一样都不许少(第 2 轮审查 F2) ────────────────────
+// 这一支原先是两条语句:先单独清 `followUpFrom`,下一句才写 status。两句之间任务是
+// `running + followUpFrom=null` —— 此刻进程没了(或者下一句抛了),**续聊前的原终态就永久
+// 消失了**,而那是库里唯一的权威来源:重启后的对账再也拿不到「该回到哪个终态」,只能把一个
+// 本该回到 `done` 的任务落成 failed。用户那边唯一的区别只是 ash 有没有在那条缝里重启。
+// 现在清与写是同一条 UPDATE(`setTaskStatus` 的 `consume`),所以这里用触发器让那一笔真的
+// 失败,然后钉:原终态还在。
+{
+  const id = await task({ status: "running", followUpFrom: "done" });
+  await dbClient.executeMultiple(
+    `CREATE TRIGGER block_${id.replace(/-/g, "_")} BEFORE UPDATE ON tasks
+       WHEN NEW.id = '${id}' AND NEW.status = 'done' BEGIN SELECT RAISE(ABORT, 'disk full'); END;`,
+  );
+  let threw = false;
+  try {
+    await settleTaskStatus(id, 1, null, undefined, STALL);
+  } catch {
+    threw = true;
+  }
+  await dbClient.executeMultiple(`DROP TRIGGER block_${id.replace(/-/g, "_")};`);
+  assert.equal(threw, true, "落位那一笔居然没抛 —— 触发器没生效,这一段退化成了顺风路");
+  const after = await row(id);
+  assert.equal(after.status, "running", "落位都没写成,状态却变了");
+  assert.equal(after.followUpFrom, "done",
+    "落位没写成,续聊前的原终态却已经被清掉了 —— 消费输入和写下结论必须同生共死,"
+    + "否则重启后这个任务只能落成 failed");
+}
+
 // ── ⑨ 落位优先级表本体:两个入口共用的那一份(第 1 轮审查 F2) ────────────────────
 // 纯函数,逐行钉。四个轴都不给默认值是刻意的(见 settle-landing.ts),所以这里每条都写全 ——
 // 将来多一个轴,这几行会跟两个调用点一起编译不过。
@@ -164,4 +192,4 @@ const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.
   assert.equal(landing({}), "failed", "什么都没有的一轮失败,落位不是 failed");
 }
 
-console.log("test:stall-settle ok：熔断排在被动检查点之前、真人停止之后,续跑材料与两个方向的终态续聊契约都没动,落位优先级只有一份");
+console.log("test:stall-settle ok：熔断排在被动检查点之前、真人停止之后,续跑材料与两个方向的终态续聊契约都没动,落位优先级只有一份,落位没写成时输入事实一样不少");

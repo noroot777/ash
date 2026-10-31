@@ -36,6 +36,14 @@
 //   ⑨ **已完成任务的一次失败续聊**(第 1 轮审查 F2,已实测):正常收尾保住 `done`(续聊只能变好
 //      不会变差),而启动对账原先另写了一行三元表达式,无条件把整个任务降成 failed —— 用户那边
 //      唯一的区别只是 ash 有没有重启。
+//   ⑩ **落位那一笔没写成**(第 2 轮审查 F1+F2,已实测):上面⑦⑨修的是「盘上留下半截状态」,
+//      这一条修的是**同一件事的另一半** —— 恢复链自己在算出落位之前就把两样东西消费掉了:
+//      失败义务(提前 `clearStallFailure`)和续聊前的原终态(单独一条 UPDATE 先清 `followUpFrom`)。
+//      两者都发生在最终状态写入之前,中间还隔着持续目标善后、时间线、基线恢复。所以只要落位那一笔
+//      没成(重启,或者任何一个 await 抛错),盘上就是「任务仍 running / 义务已销 / 原终态已失传」,
+//      再启动一次就只能把本该回到 `done` 的任务落成 failed,或者把熔断过的持续目标说成「暂停中」。
+//      这一段用一个 SQLite 触发器让落位那条 UPDATE **真的失败**,然后钉两件事:义务还在、原终态
+//      还在;触发器撤掉后再跑一次对账,照样落对。
 //
 // 为什么非得两个进程:同进程里 `__resetStallFailures()` 只能模拟「内存没了」,**模拟不了
 // 「模块级 Map 随进程一起消失、而盘上的东西还在」** —— 而这正是要测的那件事。所以这里真的
@@ -76,6 +84,8 @@ if (!phase) {
     { what: "开始行没落下,只有判决在日志里", hold: false, unreadable: false, mode: "no-turn-row", expectTask: "failed", phases: ["before-restart", "after-restart"] },
     // ⑨ 已完成任务的失败续聊:任务那一行**必须保住 done**,失败记在回合区间上。
     { what: "已完成任务的失败续聊走启动对账", hold: false, unreadable: false, mode: "follow-up", expectTask: "done", phases: ["before-restart", "after-restart"] },
+    // ⑩ 中间那一段让落位那条 UPDATE 失败:消费过的东西一样都不许少。
+    { what: "落位那一笔没写成", hold: false, unreadable: false, mode: "landing-aborted", expectTask: "done", phases: ["before-restart", "block-landing", "after-restart"] },
   ] as const;
   for (const scene of scenes) {
     const stage = mkdtempSync(join(tmpdir(), "ash-stall-restart-"));
@@ -158,6 +168,20 @@ if (!phase) {
         + "而正常收尾那一侧保住了 done:同一个事实按进了哪个入口给出两种结论")
       : where("任务落成了「已完成」/「暂停中」—— 看门狗说过的话一句没兑现"));
     assert.equal(settled.turn, "failed", where("回合区间记成了 completed 或者留空「不知道」"));
+    if (scene.mode === "landing-aborted") {
+      const blocked = say("landing-aborted");
+      assert.ok(blocked, where("那一段没走到「落位写失败」—— 触发器没拦住,场景失效"));
+      assert.equal(blocked.threw, true,
+        where("落位那一笔居然没抛 —— 触发器没生效,这一段退化成了顺风路"));
+      assert.equal(blocked.task, "running", where("落位都没写成,任务状态却变了"));
+      // 这两条就是 F1 / F2 的要害:**消费输入**和**写下结论**必须同生共死。
+      assert.equal(blocked.pending, 1,
+        where("落位没写成,失败义务却已经销账了 —— 下一次启动只看到一个闭合的回合,"
+          + "一个提示过「已自动终止」的持续目标回来会显示「暂停中 + 继续」"));
+      assert.equal(blocked.followUpFrom, "done",
+        where("落位没写成,续聊前的原终态却已经被清掉了 —— 那是库里唯一的权威来源,"
+          + "重启后的对账再也拿不到「该回到哪个终态」,只能把它落成 failed"));
+    }
     if (scene.mode === "no-turn-row") {
       // 判决是靠**它自己**给出的身份被找回来的(会话行反查任务),不是靠「现有的开放区间」。
       assert.match(String(settled.timeline ?? ""), /按失败结算|按失败收尾/,
@@ -228,8 +252,8 @@ if (!phase) {
       ...(mode === "reconcile" || mode === "no-turn-row"
         ? { goalTurn: true, cliState: JSON.stringify({ codex: { goal: { objective: "一直盯着上游", status: "active" } } }) }
         : {}),
-      // ⑨ 已完成任务的一次失败续聊:落位该退回 `done`,不是把整个任务降成 failed。
-      ...(mode === "follow-up" ? { followUpFrom: "done" } : {}),
+      // ⑨⑩ 已完成任务的一次失败续聊:落位该退回 `done`,不是把整个任务降成 failed。
+      ...(mode === "follow-up" || mode === "landing-aborted" ? { followUpFrom: "done" } : {}),
     });
     await db.insert(sessions).values({
       id: "restart-session", taskId: "restart", role: "single", agentType: "codex",
@@ -248,6 +272,37 @@ if (!phase) {
   const column = async (): Promise<unknown> =>
     (await dbClient.execute("SELECT stall_reason FROM session_turns WHERE session_id = 'restart-session'"))
       .rows.at(0)?.stall_reason ?? null;
+
+  if (phase === "block-landing") {
+    // 让**落位那一条 UPDATE** 真的失败 —— 不是跳过它,是让它抛。触发器只拦落位那一笔
+    // (`status` 要变成 `done`),前面那些写库照常成功,所以走到的正是真实现场:恢复链已经
+    // 跑过「认下失败结局 / 收口回合区间」,正要写最终状态时整笔没写进去。
+    await dbClient.executeMultiple(
+      `CREATE TRIGGER block_landing BEFORE UPDATE ON tasks
+         WHEN NEW.id = 'restart' AND NEW.status = 'done' BEGIN SELECT RAISE(ABORT, 'disk full'); END;`,
+    );
+    const { reconcileInterruptedTask } = await import("../src/task-reconcile.js");
+    let threw = false;
+    try {
+      await reconcileInterruptedTask("restart");
+    } catch {
+      threw = true; // 预期:落位那一笔抛出来
+    }
+    await dbClient.executeMultiple("DROP TRIGGER block_landing;");
+    const row = (await dbClient.execute(
+      "SELECT status, follow_up_from FROM tasks WHERE id = 'restart'",
+    )).rows.at(0);
+    emit({
+      event: "landing-aborted",
+      threw,
+      task: row?.status,
+      followUpFrom: row?.follow_up_from ?? null,
+      // 还欠着的失败义务:销账要么跟落位一起成,要么一起不成。
+      pending: pendingStallVerdicts(readStallJournal())
+        .filter((r) => r.sessionId === "restart-session").length,
+    });
+    process.exit(0);
+  }
 
   if (phase === "close-span") {
     // ⑦ 单飞那条链在 `recordTurnSpan` 与 `settleTaskStatus` 之间被打断时,盘上留下的就是这个样子:

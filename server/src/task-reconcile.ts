@@ -10,7 +10,6 @@ import { stallReconcileText, stallReconcileUnverifiableText } from "./turn-stall
 import { pendingStallObligations, restoreStallVerdict } from "./turn-stall-persist.js";
 import { stallIdentityKey } from "./turn-stall-journal.js";
 import { failedTurnLanding } from "./settle-landing.js";
-import { clearStallFailure } from "./turn-stall-verdict.js";
 import { claimReconcileTurn } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { startTeam } from "./team/session.js";
@@ -105,7 +104,7 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
     if (session?.agentType === "claude" && session.commandLine) cleanupClaudeGoalContext(session.commandLine);
     // 熔断过的那一轮不许说成「暂停」:那句话替用户表达了「它在等你」,而这一轮是我们自己判
     // 失败的 —— 两个结论里用户看到的那个说它在等人,正是 F3 的形状。那一句由下面统一补。
-    if (!ashFailure) {
+    if (!ashFailure.note) {
       await appendTaskTimeline(t.id, goalHeld
         ? "持续目标因服务中断已暂停；任务和历史保留，使用 /goal resume 续跑。"
         : "持续目标尚未启动就遇到服务中断；已恢复起跑前的目标状态。");
@@ -116,17 +115,19 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
   // 一次失败续聊打断,不重启收尾保住 `done`,重启收尾却整个降成 `failed`。恢复层只提供事实,
   // 优先级归 `settle-landing.ts` 一处(它同时也挡住了「残留的队列占位抵消一轮确凿失败」那一支)。
   const back = failedTurnLanding({
-    ashFailed: !!ashFailure,
+    ashFailed: !!ashFailure.note,
     followUpFrom: (t.followUpFrom as TaskStatus | null) ?? goalFollowUpFrom,
     queueAdvancePrev: pendingAdvance ? (advance.prevStatus as TaskStatus) : null,
     goalHeld,
   });
-  if (t.goalTurn || t.followUpFrom || t.nativeTurn || t.completeConfirmedAt) {
-    await db
-      .update(tasks)
-      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, updatedAt: now() })
-      .where(eq(tasks.id, t.id));
-  }
+  // 回合输入事实(原终态、原生回合标记、完成确认)**跟落位同一条 UPDATE** 消费
+  // (第 2 轮审查 F2,已实测)。原先是先清、后面几步才写状态:两者之间进程一没,
+  // `followUpFrom` 已经永久消失而任务还是 running —— 重启后的对账只能把一个本该回到 `done`
+  // 的任务落成 failed,而 `failedTurnLanding` 这时拿到的事实已经是残的,纯函数再对也救不回来。
+  // 起跑侧一直就是一笔写完的(`guarded-turn-start.ts`),结算侧照它对齐。
+  const consume = (t.goalTurn || t.followUpFrom || t.nativeTurn || t.completeConfirmedAt)
+    ? { followUpFrom: null, nativeTurn: false as const, completeConfirmedAt: null }
+    : undefined;
   // 被打断的回合可能已经走完 write-ahead（基线落盘、验收快照清空）：这里就是它的
   // 结算，必须把基线消费掉——工作目录没动过就整套挂回 stage/合并快照/尾段进度。
   // 只恢复 status 的话，基线躺在磁盘上等下一个真人回合 recordTurnBaseline 直接覆盖，
@@ -134,13 +135,18 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
   // 这一轮的结局说给用户:**每一条路都要说**,不只持续目标那一支 —— 普通回合落 failed 时,
   // 时间线上同样只有那条来自上一个进程的红字,不说清「这一轮为什么是失败的」就只能让人去查
   // 一个不存在的崩溃。
-  if (ashFailure) await appendTaskTimeline(t.id, ashFailure.note);
+  if (ashFailure.note) await appendTaskTimeline(t.id, ashFailure.note);
   await reconcileTurnBaseline(t.id, false);
   // 旧会话的停滞标记在这里撤:置标记的那个消费者早就没了,没人来撤(第 5 轮审查 F5)。留着
   // 的话,用户换执行器重试时新会话只清自己那一行,旧行重新满足「任务在跑」的 EXISTS,卡片上
   // 那颗红环凭空亮起来。这一刻任务名下确实没有活句柄(调用方的闸保证),所以一律清干净。
   await clearTaskStallFlags(t.id);
-  await setTaskStatus(t.id, back, pendingAdvance ? { quietAdvance: true } : undefined);
+  await setTaskStatus(t.id, back, {
+    ...(pendingAdvance ? { quietAdvance: true } : {}),
+    ...(consume ? { consume } : {}),
+    // 失败义务在**这一笔**兑现:落位写进库了才销账,没写到行就一个字都不销。
+    settleStallTurns: ashFailure.settled,
+  });
 }
 
 /**
@@ -153,7 +159,7 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
  * 恰恰知道 —— 判决就在手上。留空的话窄出口和面板都只能回头去猜进程退出码,而被我们杀掉的
  * CLI 多半报的是 0。
  */
-async function interruptedTurnVerdict(taskId: string): Promise<{ note: string } | null> {
+async function interruptedTurnVerdict(taskId: string): Promise<InterruptedVerdict> {
   // 身份集合由**两边**给:
   //   · 还开着的回合行 —— **全看一遍**,不是只看最新那一条:一个任务可以同时有多条会话各开着
   //     一轮(讨论模式的两个声部就是),背着判决的那一个未必是最后开始的。
@@ -178,6 +184,8 @@ async function interruptedTurnVerdict(taskId: string): Promise<{ note: string } 
     }
   }
   const notes: string[] = [];
+  /** 这一轮认下来、等落位那一笔去兑现的失败义务(见下面那段「这里不销账」)。 */
+  const settled: { sessionId: string; turnStartedAt: string }[] = [];
   for (const turn of [...identities.values()].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))) {
     // 「这是上一个进程留下来的回合吗」由 `restoreStallVerdict` 自己从事实认(本进程开过那一行
     // 开始记录没有),这里一个字都不用申报 —— 对账既可能碰到上一个进程留下来的回合,也可能碰到
@@ -199,10 +207,30 @@ async function interruptedTurnVerdict(taskId: string): Promise<{ note: string } 
         endedAt: existing?.endedAt ?? now(), outcome: "failed",
       });
     }
-    clearStallFailure(turn.sessionId, turn.startedAt); // 这一轮结算完了,销账(内存 + 盘上那份)
+    // **这里不销账**(第 2 轮审查 F1,已实测)。判决的回收条件是「这个执行身份的任务落位已经
+    // 持久确认」,而这一刻任务那一行还是 running:后面还隔着持续目标善后、输入事实消费、时间线、
+    // 基线恢复才轮到落位。在这儿销掉,等于把那个条件换成「我打算去落位」—— 中间重启一次、或者
+    // 任何一个 await 抛一次,盘上就留下「任务仍 running、义务已销账」,下一次启动只看到一个
+    // 已经闭合的回合,持续目标回来显示「暂停中 + 继续」。
+    // 身份交给落位那一笔去兑现(`setTaskStatus` 的 `settleStallTurns`),不是「记得待会儿再调
+    // 一句」:靠调用顺序的那一版已经被这条链上每一轮审查否过一次。
+    settled.push({ sessionId: turn.sessionId, turnStartedAt: turn.startedAt });
   }
-  return notes.length ? { note: notes.join("\n\n") } : null;
+  return { note: notes.length ? notes.join("\n\n") : null, settled };
 }
+
+/**
+ * 被打断的那一轮的权威结局 —— 外加**这一轮认下来、还没兑现的失败义务**。
+ *
+ * 为什么把义务一起交出来而不是在里面销掉:回收条件是「任务落位已经持久确认」,这个函数只认得出
+ * 「这一轮失败过」,认不出「任务落到哪儿了」。两件事分给两个人,中间那段 await 才不会变成一条
+ * 「义务已销、落位未写」的缝(第 2 轮审查 F1)。
+ */
+type InterruptedVerdict = {
+  /** 用户看得见的那一句(没有 ash 判定的失败结局就是 null)。 */
+  note: string | null;
+  settled: { sessionId: string; turnStartedAt: string }[];
+};
 
 // 单个任务的「被打断」结算。给**接管成功之后才暴露出来**的那种中断用:
 // reattachRunningTasks 把消费循环 `void` 出去就返回了,紧随其后的 reconcileInterrupted
