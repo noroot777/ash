@@ -22,8 +22,26 @@
 // 只在 `serve` 下挂(dev + preview)。**不许进 build**:打进 `web/dist/index.html` 的凭据是
 // 一份死号,而它排在 `serveSpa` 追加的那一份前面,`fromDocument()` 读到的就是它 —— 那会把
 // 后端自己交付的每一个页面也一起弄坏。
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+//
+// ## preview 那条路:盖凭据之前先把**路由归属**划清
+//
+// preview 把 `dist` 当静态文件发,`transformIndexHtml` 不过那条路,所以只能另挂一段中间件;
+// 而 vite 的 preview 把插件中间件装在**代理前面**(本机实测:插件 hook 先跑,`/api`、`/preview`
+// 的代理后装),于是这一段**先看见所有请求**。上一版据此只问一句「最后一段有没有点号」就
+// 当文档发 —— `/api/projects`、`/api/tasks`、`/api/events`、`/preview/<id>/` 一个点号都没有,
+// 全部命中,整页读不出任何数据、最后白屏(第 2 轮审查 F1 实测)。
+//
+// 所以这一段只在**两条判据都说「这是本应用的文档」**时才接手,而且两条各自独立:
+//   ① **代理拥有的请求一律原路放行**。谁拥有不在这里另列一份清单 —— 直接读 vite 自己那份
+//      代理配置(`proxyOwns`),配置里加一条 `/foo` 代理,这儿当天就跟着让开。
+//   ② **接手的必须真是一份 HTML 文档**:dist 里确实躺着那个文件(含显式 `/index.html`),
+//      或者是找不到文件、而对方**明确要 HTML** 的 SPA 深链。带扩展名的资源、要 JSON 或
+//      `text/event-stream` 的调用一律不接。
+// 两条都是必需的,少一条就漏:`/preview/absent/` 没有扩展名、浏览器导航也要 HTML(只有 ① 拦
+// 得住),而一条没配代理的 `/whatever` 用 `fetch` 要 JSON 时不该拿到首页(只有 ② 拦得住)。
+import { readFile, stat } from "node:fs/promises";
+import { extname, join, resolve, sep } from "node:path";
+import type { IncomingMessage } from "node:http";
 import type { Plugin, ResolvedConfig } from "vite";
 import { HUMAN_ACTION_TOKEN_META } from "@ash/shared/human-action";
 
@@ -84,6 +102,59 @@ async function borrowToken(): Promise<string | null> {
 const metaFor = (token: string) => `<meta name="${HUMAN_ACTION_TOKEN_META}" content="${token}">`;
 
 /**
+ * **这次请求归代理吗。** 判据直接取 vite 自己那份代理配置,匹配规则也照抄它
+ * (`^` 开头当正则、否则按前缀,都对整条 url 判 —— 见 vite 的 proxy 中间件),这样
+ * 「哪些路径归代理」只有一处定义:`vite.config.ts` 里加一条代理,这一段当天就跟着让开。
+ *
+ * 反面做法是在这儿写死 `/api`、`/preview`:配置加第三条代理的那天,这段代码会安静地把它
+ * 截下来当首页发,而症状是「页面读不出数据」而不是「某个请求 404」—— 最难查的那一类
+ * (第 2 轮审查 F1 就是这个形状)。
+ */
+function proxyOwns(config: ResolvedConfig): (url: string) => boolean {
+  const proxy = config.preview.proxy ?? config.server.proxy ?? {};
+  const contexts = Object.keys(proxy);
+  return (url) => contexts.some((context) =>
+    context.startsWith("^") ? new RegExp(context).test(url) : url.startsWith(context));
+}
+
+/** 浏览器导航必带 `text/html`;要 JSON 或 `text/event-stream` 的调用不会带它。 */
+const WANTS_DOCUMENT = /\btext\/html\b/i;
+
+/** 这条路径落在 dist 里的哪个文件上。越界(`..`)或解不开的百分号编码一律 null。 */
+function insideDist(dist: string, pathname: string): string | null {
+  let decoded: string;
+  try { decoded = decodeURIComponent(pathname); } catch { return null; }
+  const target = resolve(dist, `.${decoded.startsWith("/") ? decoded : `/${decoded}`}`);
+  return target === dist || target.startsWith(`${dist}${sep}`) ? target : null;
+}
+
+/**
+ * **这一下该由本段交出哪份文档** —— 不该本段管的返回 null(交回 `next()`,该谁处理谁处理)。
+ * 两条判据都要过,理由与反例见文件头「路由归属」。
+ */
+async function documentFor(
+  req: IncomingMessage,
+  dist: string,
+  owned: (url: string) => boolean,
+): Promise<string | null> {
+  if (req.method !== "GET" && req.method !== "HEAD") return null;
+  const url = req.url ?? "/";
+  if (owned(url)) return null; // ① 代理的归代理
+  const pathname = url.split("?")[0]!.split("#")[0]!;
+  const target = insideDist(dist, pathname);
+  if (!target) return null;
+  // ② dist 里确实有这个文件:HTML 要盖(`/index.html` 直连也得有凭据),其余资源归静态中间件
+  const file = pathname.endsWith("/") ? join(target, "index.html") : target;
+  if (await stat(file).then((entry) => entry.isFile(), () => false)) {
+    return file.endsWith(".html") ? file : null;
+  }
+  // 文件不在:带扩展名的就是真的 404(让静态中间件照实回),没扩展名的才可能是 SPA 深链 ——
+  // 而深链只认「明确要 HTML」那一下,拿 `fetch` 要数据的不该收到一份首页。
+  if (extname(pathname)) return null;
+  return WANTS_DOCUMENT.test(req.headers.accept ?? "") ? join(dist, "index.html") : null;
+}
+
+/**
  * 把后端那一份凭据盖到 vite 交出的文档上。
  *
  * dev 走 `transformIndexHtml`(它对 dev server 交出的**每一份** HTML 都生效,包括回归
@@ -106,15 +177,13 @@ export function pageTokenPlugin(): Plugin {
       },
     },
     configurePreviewServer(server) {
-      const index = resolve(config.root, config.build.outDir, "index.html");
+      const dist = resolve(config.root, config.build.outDir);
+      const owned = proxyOwns(config);
       server.middlewares.use(async (req, res, next) => {
-        if (req.method !== "GET" && req.method !== "HEAD") return next();
-        // 只接「交出文档」那种请求:没有扩展名的路径(SPA 路由)和 index.html 本身。
-        const path = (req.url ?? "/").split("?")[0]!.split("#")[0]!;
-        const last = path.slice(path.lastIndexOf("/") + 1);
-        if (last.includes(".") && !last.endsWith(".html")) return next();
+        const document = await documentFor(req, dist, owned);
+        if (!document) return next();
         let html: string;
-        try { html = await readFile(index, "utf8"); } catch { return next(); }
+        try { html = await readFile(document, "utf8"); } catch { return next(); }
         const token = carriesPageToken(html) ? null : await borrowToken();
         const body = token ? html.replace("</head>", `${metaFor(token)}</head>`) : html;
         // 带凭据的文档一律 no-cache(同 `serveSpa` 的理由):浏览器端出一份用过的凭据,
