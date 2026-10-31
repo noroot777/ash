@@ -135,6 +135,71 @@ try {
   await page.locator("main.settings-main").evaluate((main) => { main.style.width = ""; });
   await page.setViewportSize({ width: 900, height: 700 });
 
+  // ③ 两份数据各自成败:读到的供应商不许被另一个接口的失败一起否决。
+  //    (审查第 1 轮实测:/agents 一个 503,已加的供应商全没了,页面却说「还没有供应商」)
+  const settingsPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  let agentsStatus = 503;
+  let agentsDelayMs = 0;
+  await settingsPage.route("**/api/llm-providers", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([provider("p-mounted", "已挂中转", ["relay-opus"]), provider("p-orphan", "没人挂的中转", ["orphan-opus"])]),
+  }));
+  await settingsPage.route("**/api/agents", async (route) => {
+    if (agentsDelayMs) await new Promise((resolve) => setTimeout(resolve, agentsDelayMs));
+    if (agentsStatus !== 200) {
+      await route.fulfill({ status: agentsStatus, contentType: "application/json", body: JSON.stringify({ error: "模拟：执行器列表暂时不可用" }) });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([{ id: "claude-relay", name: "claude@已挂中转", type: "claude", providerId: "p-mounted", isDefault: true }]),
+    });
+  });
+  await settingsPage.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/providers-settings-load.html`);
+
+  await settingsPage.locator(".provider-row").first().waitFor();
+  assert.equal(await settingsPage.locator(".provider-row").count(), 2, "读到的两家供应商不许因为 /agents 失败而消失");
+  const settingsText = async () => await settingsPage.locator(".providers-card").textContent() ?? "";
+  assert.doesNotMatch(await settingsText(), /还没有供应商/, "读成功了就不许说「还没有供应商」");
+  assert.match(await settingsText(), /执行器清单读取失败/, "挂载情况不知道,要在卡片上说一次");
+  assert.equal(
+    await settingsPage.getByRole("button", { name: /还没有执行器挂它/ }).count(),
+    0,
+    "挂载情况未知时不许断言「未挂到执行器」",
+  );
+  // 未知时删除确认也不许编造后果。
+  await settingsPage.getByRole("button", { name: "删除 没人挂的中转" }).click();
+  assert.match(await settingsPage.locator(".confirm-dialog, [role=dialog]").textContent() ?? "", /挂着它的执行器会退回 CLI 官方账号/);
+  await settingsPage.getByRole("button", { name: "取消" }).first().click();
+
+  // 重试:这一次 /agents 好了,每行的挂载情况当场补上。
+  agentsStatus = 200;
+  await settingsPage.getByRole("button", { name: "重试" }).click();
+  await settingsPage.getByRole("button", { name: /还没有执行器挂它/ }).waitFor();
+  assert.match(await settingsText(), /1 个执行器在用/);
+  assert.doesNotMatch(await settingsText(), /执行器清单读取失败/);
+
+  // /agents 慢,也不许把整张卡一起拖在「读取中…」。
+  agentsStatus = 200;
+  agentsDelayMs = 2000;
+  await settingsPage.reload();
+  await settingsPage.locator(".provider-row").first().waitFor({ timeout: 1500 });
+  assert.equal(await settingsPage.locator(".provider-row").count(), 2);
+  agentsDelayMs = 0;
+
+  // 反过来:主体读不到时,说的是「读取失败」而不是「一个都没有」。
+  await settingsPage.unroute("**/api/llm-providers");
+  await settingsPage.route("**/api/llm-providers", (route) => route.fulfill({
+    status: 503, contentType: "application/json", body: JSON.stringify({ error: "模拟：供应商列表暂时不可用" }),
+  }));
+  await settingsPage.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/providers-settings-load.html`);
+  await settingsPage.getByText(/供应商列表读取失败/).waitFor();
+  assert.doesNotMatch(await settingsPage.locator(".settings-section").textContent() ?? "", /还没有供应商/);
+  assert.match(await settingsPage.getByTestId("notices").textContent() ?? "", /供应商列表暂时不可用/);
+  await settingsPage.close();
+
   console.log("provider visibility test passed");
 } finally {
   await browser?.close();

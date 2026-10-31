@@ -134,6 +134,15 @@ button.provider-mount-state:hover {
   background: rgb(181 123 0 / 20%);
 }
 
+/* 卡片上那两句处境说明(供应商读失败 / 挂载情况未知),末尾带一颗重试。 */
+.providers-mount-unknown,
+.providers-load-failed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .provider-icon-action {
   display: grid;
   width: 28px;
