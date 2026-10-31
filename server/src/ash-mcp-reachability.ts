@@ -135,8 +135,13 @@ const HOW_TO_CHECK: Record<string, string> = {
   codex: "codex mcp list --json（看 ash 在不在、enabled 是不是 true）",
 };
 
-/** 没有专门的只读子命令判据时,至少把那份配置文件的路径指给用户。 */
-function howToCheck(agentType: string, env: NodeJS.ProcessEnv): string {
+/**
+ * 没有专门的只读子命令判据时,至少把那份配置文件的路径指给用户。
+ *
+ * 导出只为**单测**:这句话里拼的是来源对象,而它上一版拼成了 `[object Object]`(本轮审查
+ * N1)—— 整条 `ashMcpReachability` 的结论取决于这台机器装了哪几家 CLI,拿它当测试入口测不住。
+ */
+export function howToCheck(agentType: string, env: NodeJS.ProcessEnv): string {
   const known = HOW_TO_CHECK[agentType];
   if (known) return known;
   // 跟写入侧同一个解析口(本轮审查 R4:上一版在这里按默认文件名重拼，于是自定义配置文件的
@@ -145,9 +150,11 @@ function howToCheck(agentType: string, env: NodeJS.ProcessEnv): string {
   // 另一份里,只指写入目标那一份会让用户以为没接上(本轮审查 R3)。
   const sources = ashMcpHostSources(agentType, env);
   if (!sources.length) return `看一眼 ${agentType} 自己的 MCP 配置`;
+  // 列的是来源的**名字**(文件路径,或 `$OPENCODE_CONFIG_CONTENT` 这样的变量名)——
+  // `AshMcpSource` 是个对象,直接拼进话里就是 `[object Object]`(本轮审查 N1)。
   return sources.length > 1
-    ? `看一眼这几份配置（这家 CLI 都会读，谁都可能装着那条登记）：${sources.join("、")}`
-    : `看一眼 ${sources[0]}`;
+    ? `看一眼这几份配置（这家 CLI 都会读，谁都可能装着那条登记）：${sources.map((s) => s.label).join("、")}`
+    : `看一眼 ${sources[0]!.label}`;
 }
 
 const WANTED = [ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME];
