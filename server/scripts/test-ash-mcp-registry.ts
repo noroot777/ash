@@ -342,6 +342,34 @@ try {
     group("宿主配置只读不写");
   }
 
+  // ── ⑫ README 那张给人读的矩阵不许和代码漂 ────────────────────────────────
+  {
+    const readme = readFileSync(join(REPO_DIR, "server", "src", "executors", "catalog", "README.md"), "utf8");
+    const rows = readme.split("\n")
+      .filter((l) => l.startsWith("| ") && !l.startsWith("|---") && !l.includes("执行器 |"))
+      .map((l) => l.split("|").slice(1, -1).map((c) => c.trim()))
+      .filter((cells) => cells.length === 7 && AGENT_TYPES.includes(cells[0]!.replace(/\*/g, "") as AgentType));
+    assert.deepEqual(
+      rows.map((c) => c[0]).sort(),
+      [...AGENT_TYPES].sort(),
+      "矩阵里每个执行器一行(新加执行器时这里会红 —— 代码那张表同时也编译不过)",
+    );
+    for (const cells of rows) {
+      const type = cells[0] as AgentType;
+      const mechanism = ASH_MCP_TABLE[type];
+      const auto = cells[1]!.replace(/\*/g, "");
+      assert.equal(auto, canRegisterAshMcp(type) ? "是" : "否", `${type}:「ash 自动写」那一列对不上`);
+      const tier = cells[6]!;
+      // 「未实测」里也含「实测」两个字,所以先判否,顺序不能换。
+      const claimsTested = !tier.includes("未实测");
+      assert.equal(claimsTested, mechanism.evidence === "tested", `${type}:档位对不上(${tier})`);
+      if (mechanism.kind === "file" && mechanism.site.dirEnv) {
+        assert.ok(cells[3]!.includes(mechanism.site.dirEnv), `${type}:配置目录变量那一列要写明 ${mechanism.site.dirEnv}`);
+      }
+    }
+    group("README 矩阵与代码逐行对齐");
+  }
+
   console.log(`✅ ash MCP 登记表 + 通用补接器:${done} 组全过`);
 } finally {
   rmSync(root, { recursive: true, force: true });

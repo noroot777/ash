@@ -136,9 +136,13 @@ export const ASH_MCP_TABLE = {
       projectRelative: [["opencode.json"], ["opencode.jsonc"], [".opencode", "opencode.json"]],
     },
     identity: "inherit",
+    identityNote: "回合身份原样传到 MCP 子进程 —— 端到端那一条真跑出来的结论（交卷要带 turn/direction token，"
+      + "传不进去服务端会拒）",
     evidence: "tested",
     source: "`OPENCODE_CONFIG=<沙盘>/opencode.json opencode mcp list` 实测读得出我们写的那条 "
-      + "`mcp.ash`（`type:\"local\"` + `command:[argv]` + `environment`），并按它去 spawn",
+      + "`mcp.ash`（`type:\"local\"` + `command:[argv]` + `environment`）；"
+      + "另有端到端 `server/scripts/e2e-opencode-ash-mcp.ts`:注册 → 起真任务 → agent 调 "
+      + "`ash_complete_task` 交卷,任务落 done(2026-10-31 跑通)",
     notes: "跟 `mcpServers` 那族**不是同一个形状**（容器叫 `mcp`、argv 是数组、环境变量键叫 "
       + "`environment`），别拿那份硬套",
   },

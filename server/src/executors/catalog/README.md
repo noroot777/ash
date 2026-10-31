@@ -228,10 +228,70 @@ factory: (opts) => new FooExecutor(opts),
 
 ---
 
+## ash MCP 登记矩阵(2026-10-31)
+
+**为什么这张表要紧**:ash 的完成协议整个建立在 ash MCP 上(`complete_task` / `ask_question` /
+`pause_task` / `report_stage`)。一家 CLI 接不上它,用它跑的任务干完活也交不了卷,界面上只看得到
+「失败」—— 用户 2026-10-30 实测到的就是这个:claude / codex 之外的十三家压根没有注册逻辑。
+
+**表本体是代码,不是这段文字**:`server/src/mcp-registry/catalog.ts`(`satisfies Record<AgentType,…>`
+保证新增执行器时编译不过,逼着当场给结论)。下面这张是给人读的同一份内容,
+`npm -w server run test:ash-mcp-registry` 会逐行比对它和代码里那张表,对不上就红。
+
+| 执行器 | ash 自动写? | 落点(用户级) | 配置目录变量 | 格式族 | 回合身份 | 档位 |
+|---|---|---|---|---|---|---|
+| claude | 是 | `<配置目录>/.claude.json` | `CLAUDE_CONFIG_DIR` | `mcpServers` JSON | 原样继承 | 实测 |
+| codex | 是 | `$CODEX_HOME/config.toml` | `CODEX_HOME` | `[mcp_servers.x]` TOML | 要声明(`env_vars`) | 实测 |
+| gemini | 是 | `<配置目录>/.gemini/settings.json` | `GEMINI_CLI_HOME` | `mcpServers` JSON | 原样继承(按**变量名**过滤) | 实测 |
+| grok | 是 | `$GROK_HOME/config.toml` | `GROK_HOME` | `[mcp_servers.x]` TOML | 未验 | 实测 |
+| kimi | 是 | `$KIMI_CODE_HOME/mcp.json` | `KIMI_CODE_HOME` | `mcpServers` JSON | 未验 | 实测 |
+| opencode | 是 | `~/.config/opencode/opencode.json[c]` | `OPENCODE_CONFIG`(指文件) | `mcp` JSON | 原样继承 | 实测(含端到端) |
+| cursor | 是 | `~/.cursor/mcp.json` | 无 | `mcpServers` JSON(要 `type`) | 未验 | 未实测 |
+| qwen | 是 | `<配置目录>/.qwen/settings.json` | `QWEN_HOME` | `mcpServers` JSON | 未验 | 未实测 |
+| qoder | 是 | `~/.qoder/mcp.json` | 无(`QODER_CONFIG_DIR_NAME` 换目录名) | `mcpServers` JSON | 未验 | 未实测 |
+| copilot | 是 | `$COPILOT_HOME/mcp-config.json` | `COPILOT_HOME` | `mcpServers` JSON | 未验 | 未实测 |
+| kiro | 是 | `~/.kiro/settings/mcp.json` | 无 | `mcpServers` JSON | 未验 | 未实测 |
+| kilo | 是 | `~/.config/kilo/kilo.json[c]` | `KILO_CONFIG`(指文件) | `mcp` JSON | 未验 | 未实测 |
+| antigravity | 是 | `~/.gemini/config/mcp_config.json` | 无 | `mcpServers` JSON | 未验 | 未实测 |
+| pi | 是 | `$PI_CODING_AGENT_DIR/mcp.json`(默认 `~/.pi/agent/`) | `PI_CODING_AGENT_DIR` | `mcpServers` JSON | 原样继承 | 未实测 |
+| trae | **否** | `trae_cli.yaml`(`traecli config edit`) | 无 | YAML 数组 | 未验 | 未实测 |
+
+**「档位」只有两档**,判据是**本机有没有真 CLI 可问**:实测 = 拿真 CLI 在沙盘配置目录里写过/读过
+一遍;未实测 = 只查了官方文档或发布包源码(逐家的出处写在代码那张表的 `source` 里)。没有第三档。
+
+**哪些坑必须知道**(完整版在代码里逐条的 `notes` / `caveat`):
+
+- **gemini 两道门**。① 未信任的目录连**用户级** MCP server 都不加载 —— 所以 `gemini.ts` 的
+  `baseArgs` 带 `--skip-trust`,别去掉;② 它把交给 MCP 子进程的环境按**变量名**过滤(命中
+  `/TOKEN|KEY|SECRET|AUTH/i` 一类的直接删),于是回合身份 `ASH_TURN_TOKEN` 根本到不了子进程 ——
+  这就是为什么 `shared/src/mcp.ts` 另按 `*_TICKET` 别名导了一份(用只 dump 环境的假 MCP server 取证)。
+- **grok 有两种关法**:条目上的 `enabled = false`,和根级 `disabled_mcp_servers = ["ash"]`。
+- **kimi 没有 `mcp` 子命令**(`kimi mcp add` 报 unknown command),只能我们写文件,也就没法拿它
+  自己的输出复核;预检对它只有「读配置」这一档依据。
+- **opencode / kilo 不是 `mcpServers` 那一族**:容器叫 `mcp`、`command` 是整条 argv 数组、环境
+  变量键叫 `environment`。
+- **antigravity 别和 gemini 搞混**:两家都住 `~/.gemini` 下,但 gemini 读 `settings.json`、
+  antigravity 读 `config/mcp_config.json`,互不相认。
+- **pi 看版本**:MCP 是 1.x 才有的,本机装的 0.83.0 整个产物里一个 MCP 入口都没有 —— 那种版本下
+  登记写了也没人读。
+- **kiro 依据最弱**:官方文档把配置位置按 IDE / CLI / Web 分页签,只抓到 IDE 那一份;`kiro-cli`
+  读不读它没有第二处证据。
+- **copilot 有个更高优先级的旗标**:`--config-dir` 优先于 `COPILOT_HOME`,起跑带了它这条判据会错。
+- **trae 为什么不自动写**:全局配置是 YAML,本仓没有能保住注释与缩进的写入器,拿 JSON 那套硬写会
+  毁掉用户整份配置;它另认项目里的 `.trae/mcp.json`,但那是用户仓库里的文件、会被提交进去,ash 不碰。
+
+**改这张表要同时改三处**:`mcp-registry/catalog.ts`(单源)、`scripts/mcp-hosts.mjs`(安装时那份裸
+Node 实现,setup 导不进 TS)、本节表格。三处不一致时 `test:ash-mcp-registry` 会红 —— 它逐项比对
+路径、变量、格式族、要不要 `type`/`enabled`,以及本节每一行的档位。
+
+---
+
 ## 自检清单(交活前逐条对)
 
 - [ ] `npx tsc -p server/tsconfig.json --noEmit` 干净
 - [ ] `npm -w server run test:cli-catalog` 通过
+- [ ] 新执行器在「ash MCP 登记矩阵」里有一行(代码那张表会编译不过;本节表格由
+      `npm -w server run test:ash-mcp-registry` 逐行核对)
 - [ ] 只改了自己的 spec 文件 + `shared/src/cli-presets.ts` 里自己 type 的两行(`git status` 确认)
 - [ ] 实测通过才去掉 `untested`;没通过就把结论写进 `notes`(包括「这个 CLI 不支持非交互,当不了执行器」这种结论 —— 如实说比留个跑不动的配置有用)
 - [ ] `notes` 写了版本号和实测日期
