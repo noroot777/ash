@@ -42,6 +42,8 @@ import { db } from "./db/index.js";
 import { groups, sessions, tasks } from "./db/schema.js";
 import { profileDrift } from "./executors/index.js";
 import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, roundOf } from "./free-review-round.js";
+import { turnOutcome } from "./session-turns.js";
+import type { TurnOutcome } from "./session-turns.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
@@ -137,6 +139,15 @@ export type RetryTurnFacts = {
   profileDrift?: "missing" | "changed" | null;
   /** 审查档专用：这条审查链能不能重跑（`freeReviewRetryBlocker` 的结论）。 */
   reviewBlocker?: string | null;
+  /**
+   * 上一回合**自己**的权威结局（`session_turns.outcome`）。
+   *
+   * 退出码答不了「ash 判这一轮成没成」：被回合级停滞看门狗终止的那一轮,我们判它失败、区间
+   * 记 failed,而被终止的进程多半以 **exit 0** 收流 —— 页面明写「本次续聊因上游连不上被自动
+   * 终止」,重试却 409「上一回合不是异常结束」(审查 F2,已实测)。null = 不知道（回合还开着、
+   * 存量行、收口没写成）,按老行为退回退出码判。
+   */
+  turnOutcome?: TurnOutcome | null;
 };
 
 /** 重试落在哪条路上，由**上一回合自己的身份**决定。 */
@@ -195,7 +206,14 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
   // freeReviewRetryBlocker）。两者会分家 —— CLI 打完「API Error: Connection lost
   // mid-response」照样 exit 0（2026-09-11 实测：reviewer 会话 exit 0、审查链却停在 failed，
   // 时间线上明写「未能正常给出结论，已停止自动链」，界面却一个重跑入口都没有）。
-  if (retryTurnKindOf(latest) !== "review" && (latest.exitStatus === 0 || latest.exitStatus == null)) {
+  // **先问权威结局,退出码只是兜底**。两者会分家,而分家时权威的那一位才对:回合级停滞看门狗
+  // 终止掉的那一轮,ash 已经判它失败(区间 outcome=failed、时间线写明「已自动终止本回合并按
+  // 失败结算」),可被终止的进程多半 exit 0 —— 照退出码判就是页面明写「因上游连不上被自动
+  // 终止」、却一个重跑入口都没有(审查 F2,已实测 409)。审查档本来就不看退出码(上面那段注释),
+  // 它另有更准的判据;这一条把同样的道理补给重投档。
+  const authoritativeFailure = facts.turnOutcome === "failed";
+  if (retryTurnKindOf(latest) !== "review" && !authoritativeFailure
+    && (latest.exitStatus === 0 || latest.exitStatus == null)) {
     return { error: "上一回合不是异常结束，不需要重跑", detail: { exitStatus: latest.exitStatus } };
   }
   if (facts.groupPaused) return { error: "所在分组已暂停，先恢复分组再重试", detail: { groupPaused: true } };
@@ -269,6 +287,7 @@ async function readFacts(
       // 老会话行没记指纹（null）时返回 null = 无从核对，按老行为放行。
       profileDrift: latest ? await profileDrift(latest.executorId, latest.executorFingerprint) : null,
       reviewBlocker,
+      turnOutcome: latest ? await turnOutcome(latest.id, latest.turnStartedAt ?? latest.startedAt) : null,
     },
   };
 }

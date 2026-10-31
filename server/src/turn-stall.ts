@@ -64,7 +64,7 @@ import { detachedPathsFor } from "./executors/detached-child.js";
 import { isExecutionNotice } from "./session-notice.js";
 import { RUNS_DIR } from "./paths.js";
 import { runTracePaths } from "./transcript.js";
-import { resumesWaiting } from "@ash/shared/waiting";
+import { producesWork } from "@ash/shared/waiting";
 import { markStallFailure, retireStallFailure } from "./turn-stall-verdict.js";
 import { now } from "./util.js";
 
@@ -120,6 +120,18 @@ export interface StallActions {
    * 见那个文件头。这里只负责「说出来 + 让它停下」。
    */
   trip(text: string, facts: StallFacts): void;
+  /**
+   * **把判决写进库**(可选):让「这一轮已经被判失败」跨得过 server 重启。
+   *
+   * 本模块是纯内存的,一个字都不碰库(那让整套判据能被纯状态机钉住、也就不可能误连生产库),
+   * 所以这一笔由消费链注入 —— 实现在 `turn-stall-persist.ts`,它同时负责接管时装回来。
+   * 调用点排在终止动作**之前**(同 `markStallFailure`):终止一发出,流随即结束、结算当场就要
+   * 读这个结论。
+   *
+   * 不实现 = 这条链没有「接管一个仍在跑、且已被判熔断的回合」这条路(团队重启走重开台、
+   * duet 断了就是断了,见 turn-stall-persist.ts 的边界那段)。
+   */
+  persist?(reason: string): void;
   /**
    * **熔断的兜底**:`trip` 之后过了宽限期,这一轮**还是没真的结束**。
    *
@@ -265,13 +277,11 @@ function errorFacts(event: AgentEvent): { message: string; notice: boolean; chil
  * 第三档刻意排在「宁可漏判不误杀」那一侧之外:它们不是进展的证据,但也不是停滞的证据。真的
  * 恢复了,紧跟着就会有正文/工具/收尾事件,那一条才解除。
  */
-const isProgress = (event: AgentEvent): boolean => {
-  const inner = event.kind === "tool" && event.nativeWork?.type === "activity" ? event.nativeWork.event : null;
-  // 包装本身恒为 `kind:"tool"`(childActivity),照它判等于「子线程有任何动静都算进展」——
-  // 包装不是进展,里面那条才算(与 errorFacts 同一道穿透)。
-  if (!inner) return resumesWaiting(event);
-  return inner.kind === "text" || inner.kind === "thinking" || inner.kind === "tool" || inner.kind === "attachment";
-};
+// 「上游真回话了吗」的判据整份住在 `@ash/shared/waiting`(producesWork):包装恒为
+// `kind:"tool"`,照外层判等于「子线程有任何动静都算进展」,而**包装不是进展,里面那条才算**
+// (与 errorFacts 同一道穿透)。上一版只穿透了 `activity` 一种包装,`type:"agent"` 的状态
+// 通知仍从默认分支漏过去 —— 一条「仍在运行」的心跳就能解除停滞(审查 F1,已实测)。
+const isProgress = (event: AgentEvent): boolean => producesWork(event);
 
 /**
  * 这一轮最后那条**正常**事件是什么 kind,按持有者记(见 StallFacts.lastProgressKind)。
@@ -457,6 +467,13 @@ function evaluate(sessionId: string, stall: Stall): void {
   // **先把「这一轮失败」钉死,再动手终止。** 顺序是刻意的:trip 会杀进程,流随即结束、
   // 消费链当场走到收尾结算 —— 那一刻它必须已经读得到这个结论(见 turn-stall-verdict.ts)。
   markStallFailure(stall.sessionId, stall.turnStartedAt, text);
+  // 同一个结论的持久那一半(可选,见 StallActions.persist):detached 的进程活得过重启,
+  // 判决只留在内存里就会在「接管一个已被判熔断、却仍然存活的回合」那条路上整份丢掉。
+  try {
+    stall.actions.persist?.(text);
+  } catch (error) {
+    console.warn(`[ash] 落库会话 ${sessionId} 的熔断判决失败:`, error);
+  }
   try {
     stall.actions.trip(text, facts);
   } catch (error) {

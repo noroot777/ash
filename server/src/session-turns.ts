@@ -1,4 +1,5 @@
 import { dbClient } from "./db/index.js";
+import type { TurnOutcome } from "@ash/shared";
 import { id } from "./util.js";
 import { clearTurnActive, closedAlready, markTurnActive } from "./session-turn-registry.js";
 // 对外的门面：登记层的公开函数在这里原样再导出一遍（理由见下面文件头的最后一段）。
@@ -262,7 +263,7 @@ export async function openTurn(input: {
  * 一个回合**自己**的结局。语义、为什么不能拿会话行上的退出码投影、null 的含义,都写在
  * `db/schema-sessions.ts` 的 `sessionTurns.outcome` 上(第 5 轮审查 F3)。
  */
-export type TurnOutcome = "completed" | "failed" | "stopped";
+export type { TurnOutcome };
 
 /**
  * 这一轮收在什么结局上。null = **不知道**(存量行、收口那一下没写成、回合还开着)。
@@ -282,8 +283,25 @@ export async function turnOutcome(
     sql: "SELECT outcome FROM session_turns WHERE session_id = :sid AND started_at = :at LIMIT 1",
     args: { sid: sessionId, at: startedAt },
   });
-  const value = read.rows.at(0)?.outcome;
-  return value === "completed" || value === "failed" || value === "stopped" ? value : null;
+  return readOutcome(read.rows.at(0)?.outcome);
+}
+
+/** 库里那一格怎么解释成结局 —— 单条与批量共用这一份(白名单之外一律按「不知道」)。 */
+const readOutcome = (value: unknown): TurnOutcome | null =>
+  value === "completed" || value === "failed" || value === "stopped" ? value : null;
+
+/**
+ * 一个任务名下**每个回合**的结局,键是 `会话 id@回合起点`(`session_turns` 的唯一键)。
+ *
+ * 批量版给列表/详情那种要一次带出很多会话的出口用(逐条查会变成 N 条 SQL);解释口径与上面
+ * 那条单条版共用 `readOutcome`,两边漂开就是这条链上所有事故的形状。
+ */
+export async function turnOutcomesForTask(taskId: string): Promise<Map<string, TurnOutcome | null>> {
+  const read = await dbClient.execute({
+    sql: "SELECT session_id, started_at, outcome FROM session_turns WHERE task_id = :tid",
+    args: { tid: taskId },
+  });
+  return new Map(read.rows.map((row) => [`${String(row.session_id)}@${String(row.started_at)}`, readOutcome(row.outcome)]));
 }
 
 /** 一个回合的身份,加上落这一行所需要的其余事实。 */

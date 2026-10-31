@@ -24,6 +24,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // 纯类型,静态引进来不碰库(类型擦除,不会在设 env 之前加载那条链)。
+import type { AgentEvent } from "@ash/shared";
 import type { StallActions, StallFacts } from "../src/turn-stall.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-claude-retry-"));
@@ -96,4 +97,80 @@ assert.equal(warns[0]!.facts.childErrors, 1, "子线程那条没算进来");
 assert.match(warns[0]!.text, /上游停滞/);
 
 __resetTurnStalls();
-console.log("test:claude-retry-stall ok：真 parser 的 error+session 序列不再自我解除,子线程重试也报得出来");
+
+// ── ③ 子智能体的「仍在运行」心跳不许解除停滞(审查 F1,已实测) ───────────────────
+// 现场形状:子线程一直连不上上游(`api_retry`),与 `task_progress` 心跳交替到达。心跳的包装
+// 是 `type:"agent"`,外层恒为 `kind:"tool"` —— 上一版只穿透 `activity` 一种包装,心跳从默认
+// 分支漏过去被当成进展,每一条都把前一条重试建立的停滞 close 掉:实测 3654 条重试、3655 条
+// 心跳、正文 0 条、369 秒,警告 0、熔断 0,任务全程显示运行中。
+//
+// 这里刻意让心跳**带 `last_tool_name`**(真实 claude 心跳就带):那样它的 `message` 非空,
+// 「没有正文就不算产出」这种结构判据挡不住它 —— 只有生产点标的 `heartbeat` 位能分清
+// 「重复报告当前这一步」和「子线程真说了话」。另一种(message 为空的)一并钉在下面。
+{
+  const beat = (n: number, extra: Record<string, unknown>) => JSON.stringify({
+    type: "system", subtype: "task_progress", task_type: "local_agent",
+    task_id: "task-child-1", tool_use_id: "toolu_child", session_id: "sess-beat", seq: n, ...extra,
+  });
+  const lines3 = [
+    JSON.stringify({ type: "system", subtype: "init", session_id: "sess-beat" }),
+    retry(1, { parent_tool_use_id: "toolu_child", session_id: "sess-beat" }),
+    beat(1, { last_tool_name: "Bash", description: "仍在运行" }), // message 非空:只有 heartbeat 位挡得住
+    retry(2, { parent_tool_use_id: "toolu_child", session_id: "sess-beat" }),
+    beat(2, {}),                                                  // message 为空:结构判据也挡得住
+    retry(3, { parent_tool_use_id: "toolu_child", session_id: "sess-beat" }),
+    beat(3, { last_tool_name: "Bash" }),
+  ];
+  const child3 = spawn(process.execPath, ["-e", `for (const l of ${JSON.stringify(lines3)}) console.log(l);`],
+    { stdio: ["ignore", "pipe", "pipe"] });
+
+  process.env.ASH_STALL_WARN_ERRORS = "3";
+  process.env.ASH_STALL_TRIP_MS = "60";   // 熔断档也要真落下来:报告实测那一例是「警告 0、熔断 0」
+  process.env.ASH_STALL_POLL_MS = "20";
+  __resetTurnStalls();
+  __resetStallFailures();
+
+  const warns3: StallFacts[] = [];
+  const trips3: StallFacts[] = [];
+  const actions3: StallActions = {
+    taskId: "task-heartbeat",
+    warn: (_text, facts) => warns3.push(facts),
+    trip: (_text, facts) => trips3.push(facts),
+    resolve: () => { /* 心跳不该触发解除,下面按 warns/trips 判 */ },
+  };
+
+  // 真 parser 收全,再**按真实时序**喂:熔断发生在流**还在进行**的时候(进程活着、心跳不断)。
+  // 流末尾那条 `done` 是进程真的结束了 —— 它算上游回话、会解除停滞,所以单独留到最后喂,
+  // 否则这一段测的就不是「心跳期间会不会熔断」而是「进程退出后还熔不熔断」。
+  const streamed: AgentEvent[] = [];
+  for await (const event of parseClaudeStream(child3 as never, undefined, "claude")) streamed.push(event);
+  const beats = streamed
+    .filter((e) => e.kind === "tool" && e.nativeWork?.type === "agent")
+    .map((e) => (e.kind === "tool" && e.nativeWork?.type === "agent" ? e.nativeWork.status : ""));
+  for (const event of streamed.filter((e) => e.kind !== "done")) {
+    trackTurnStall("sess-beat", child3, TURN, event, actions3);
+  }
+  // 夹具自检:心跳真的被 parser 生产出来了,否则这一段什么都没测到。
+  assert.ok(beats.length >= 3, `夹具不对:task_progress 没被转成 agent 包装(${JSON.stringify(beats)})`);
+  assert.ok(beats.every((status) => status === "running"), `心跳的状态不是 running(${JSON.stringify(beats)})`);
+
+  assert.equal(warns3.length, 1, "心跳把每条子线程重试建立的停滞都解除了 —— 远超阈值也一声不响");
+  assert.equal(warns3[0]!.errors, 3, "错误条数不对:心跳把计数清零过");
+  assert.equal(warns3[0]!.childErrors, 3, "子线程那几条没算进来");
+  assert.equal(
+    warns3[0]!.lastProgressKind,
+    null,
+    "诊断把「卡在哪一步」说成了那条心跳 —— 这一轮一条正常产出都没有过",
+  );
+  await new Promise((done) => setTimeout(done, 300));
+  assert.equal(trips3.length, 1, "心跳一直到达,熔断档永远等不到 —— 任务会一直显示运行中");
+  // 流随后结束(进程退出):熔断已经作出,这条 `done` 不许把它撤回去(第 2 轮审查的终止义务)。
+  for (const event of streamed.filter((e) => e.kind === "done")) {
+    trackTurnStall("sess-beat", child3, TURN, event, actions3);
+  }
+  assert.equal(trips3.length, 1, "流结束又触发了一次熔断");
+  __resetTurnStalls();
+  __resetStallFailures();
+}
+
+console.log("test:claude-retry-stall ok：真 parser 的 error+session 不自我解除,子线程重试报得出来,「仍在运行」心跳解除不掉停滞");

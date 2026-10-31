@@ -246,6 +246,21 @@ export const sessionTurns = sqliteTable(
      * 进程自身怎么没的仍然单独记在会话行上（`exit_status` / `stopped_as`），两件事不混。
      */
     outcome: text("outcome"),
+    /**
+     * 这一回合被**回合级停滞看门狗**判了熔断,以及那份诊断原文(`server/src/turn-stall.ts`)。
+     * null = 没被熔断过。
+     *
+     * 为什么这一位非得落库(审查 F3,已实测):判决原先只活在进程内存里,而**detached 执行器
+     * 活得过 server 重启**(`executors/detached.ts`,这是 ash 的既有能力)。于是:熔断已经作出、
+     * 终止请求还没兑现时 server 退出 → 重启接管那个仍然存活的进程 → 新进程的 Map 是空的 →
+     * 上游恰好恢复并正常答完,这一轮就按 `completed` 结算、任务落 `done`,看门狗说过的话一句
+     * 都没兑现。退出码重建不出这个事实(被我们杀掉的进程多半 exit 0)。
+     *
+     * 与 `outcome` 的分工:`outcome` 是**收口**时写的最终结局,这一位是**判决作出**那一刻就写
+     * 的、尚未兑现的义务 —— 所以恢复判据是「这一位非空 **且** `ended_at` 还是 null」。收口之后
+     * 它只剩诊断价值(读端一律按 `outcome` 办)。
+     */
+    stallReason: text("stall_reason"),
   },
   (t) => ({
     taskIdx: index("session_turns_task_idx").on(t.taskId, t.startedAt),

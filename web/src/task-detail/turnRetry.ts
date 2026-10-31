@@ -65,8 +65,13 @@ export function turnRetryTarget(
     if (task.workflowMode !== "free" || !opts.reviewRetryable) return null;
     return { sessionId: session.id, kind: "review", exitStatus };
   }
-  // exitStatus 为 null = 回合还没结算（或 server 重启时断的），那不是「异常结束」。
-  if (exitStatus == null || exitStatus === 0) return null;
+  // **先问权威结局,退出码只是兜底**（判据与服务端 retryTurnRejection 同一份）。
+  // 两者会分家,而分家时权威的那一位才对:回合级停滞看门狗终止掉的那一轮,ash 已经判它失败
+  // (`session_turns.outcome = failed`,正文里也写明「已自动终止本回合并按失败结算」),可被
+  // 终止的进程多半以 exit 0 收流 —— 照退出码判,页面明写「本次续聊因上游连不上被自动终止」
+  // 的同时一个重跑入口都没有(审查 F2,已实测服务端 409、页面无按钮)。
+  // exitStatus 为 null = 回合还没结算（或 server 重启时断的），那本身不是「异常结束」。
+  if (session.turnOutcome !== "failed" && (exitStatus == null || exitStatus === 0)) return null;
   // 剩下的只放行普通实现回合：lead/voiceA/voiceB 这些身份连「上一回合」的形状都不同。
   if (session.role !== "single") return null;
   // 旁路回合（就地验证、`/compact` 这类 CLI 原生命令）重投会按任务当前配置另跑一段普通

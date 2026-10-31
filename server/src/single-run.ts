@@ -33,6 +33,7 @@ import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import { clearTurnStall, trackTurnStall, type StallActions } from "./turn-stall.js";
 import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
+import { persistStallVerdict, restoreStallVerdict } from "./turn-stall-persist.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
@@ -240,6 +241,12 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       publishEvent(event);
       a.handle.kill();
     },
+    // 判决的持久那一半:这条链的进程是 detached 的,活得过 server 重启(见
+    // turn-stall-persist.ts)。不落的那一版会在「重启后接管一个已被判熔断、却仍然存活的
+    // 回合」时把判决整份丢掉,上游一恢复这一轮就按成功结算(审查 F3,已实测)。
+    persist: (reason) => {
+      if (a.turnStart) void persistStallVerdict(sessId, a.turnStart, reason);
+    },
     resolve: (facts) => clearSessionStalled(taskId, sessId, facts.since),
   };
 
@@ -272,6 +279,26 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   (offsetTimer as { unref?: () => void } | null)?.unref?.();
 
   try {
+    // **接管一个仍然存活的回合时,先把尚未兑现的熔断判决装回来,并且接着把它终止掉。**
+    //
+    // detached 的 agent 活得过 server 重启(executors/detached.ts),而判决原先只活在进程内存
+    // 里:熔断已经作出、终止请求还没兑现(codex 的 kill 先发 interrupt,另设 2 秒回收)时 server
+    // 退出,重启接管那个还活着的进程,新进程的 Map 空着 —— 上游一恢复,这一轮就按成功结算、
+    // 任务落 done,而用户那边早已看到「已自动终止本回合并按失败结算」(审查 F3,已实测)。
+    //
+    // 装回来只是让结算读得到结论;**终止义务也得接着兑现** —— 判决已经作出、话已经说出去了,
+    // 让它继续跑下去就是第二次失信。正常起跑走到这里一律是 null(那一轮库里没有判决)。
+    const carriedVerdict = await restoreStallVerdict(sessId, a.turnStart);
+    if (carriedVerdict) {
+      const text = "〔上游停滞·接管后继续终止〕这一回合在上次 ash 运行期间已被判定上游连不上"
+        + "并按失败结算,重启接管后仍背着尚未兑现的终止义务,现在把它终止。"
+        + `原判决:${carriedVerdict.reason}`;
+      const event: AgentEvent = { kind: "error", message: text };
+      persistTrace(event);
+      writeRunError(out, text);
+      publishEvent(event);
+      a.handle.kill();
+    }
     for await (const event of a.handle.events) {
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
       // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
