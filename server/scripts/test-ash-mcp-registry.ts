@@ -76,6 +76,19 @@ const hostToml = (host: string, agentType: AgentType, extra = ""): string => {
 /** 一条启用着的 ash 登记(TOML 族)。根级开关的用例要在它**前面**插自己那一行。 */
 const TOML_ASH = '[mcp_servers.ash]\ncommand = "node"\nargs = ["/x.js"]\n';
 
+/**
+ * **只插入,没改没删**:新文本 = 原文的公共前缀 + 插进去那一段 + 原文的公共后缀。
+ *
+ * 这是「只改我们那一条」的通用判据,不依赖插在哪儿、插了什么形状(本轮审查 R4)。
+ */
+function onlyInserted(before: string, after: string): boolean {
+  let head = 0;
+  while (head < before.length && before[head] === after[head]) head++;
+  let tail = 0;
+  while (tail < before.length - head && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++;
+  return head + tail === before.length && after.length >= before.length;
+}
+
 const register = (agentType: string, dir: string, host: string) =>
   registerAshMcp({ agentType, dir, hostHome: host, env: {} });
 
@@ -102,10 +115,11 @@ try {
         assert.ok(["mcp-servers-json", "opencode-json", "mcp-servers-toml"].includes(mechanism.shape.id));
       }
       if (mechanism.kind === "manual") assert.ok(mechanism.howTo.trim(), `${type}:manual 必须给 howTo`);
-      // 「登记写对了也交不了卷」这一档必须当场说给用户听(预检会把 caveat 显示出来)。
-      if (mechanism.kind === "file" && mechanism.identity === "blocked") {
-        assert.ok(mechanism.caveat?.trim(), `${type}:identity=blocked 必须配 caveat`);
-        assert.ok(mechanism.identityNote?.trim(), `${type}:identity=blocked 必须说清是哪一条机制挡的`);
+      // 身份走不了变量的那两档,都必须当场说给用户听(预检会把 caveat 显示出来):
+      // `blocked` = 交不了卷;`path` = 改走 PATH 上那份文件、而那条桥本机没实测过。
+      if (mechanism.kind === "file" && (mechanism.identity === "blocked" || mechanism.identity === "path")) {
+        assert.ok(mechanism.caveat?.trim(), `${type}:identity=${mechanism.identity} 必须配 caveat`);
+        assert.ok(mechanism.identityNote?.trim(), `${type}:identity=${mechanism.identity} 必须说清是哪一条机制挡的`);
       }
     }
     // 真机实测过的那几家别悄悄退档成 docs(退了要在提交信息里说清为什么)。
@@ -191,7 +205,12 @@ try {
     assert.ok(again.ok && again.serverName === ASH_MCP_SERVER_NAME);
     assert.equal(readFileSync(file, "utf8"), first, "第二遍不改内容");
     if (ino !== 0) assert.equal(Number(statSync(file).ino), ino, "也不换文件");
-    group("幂等:补过了就只是读");
+    // **新建的那一份只给自己读**:它装着 MCP 接法。裸 Node 那份(安装器)同口径,
+    // 两边都由回归钉着 —— 一边退成 umask 另一边没退,正是这种事上一轮漏掉的。
+    if (process.platform !== "win32") {
+      assert.equal(statSync(file).mode & 0o777, 0o600, "ash 新建的配置文件只给本人读");
+    }
+    group("幂等:补过了就只是读;新建那份权限 0600");
   }
 
   // ── ④ 已有登记一律不覆盖,第三方条目一个字节不动 ───────────────────────────
@@ -285,18 +304,38 @@ try {
     group("TOML 根级开关:只认根级、不认字符串里的同名行");
   }
 
-  // ── ⑥ 有注释的 JSON 不自动改写 ─────────────────────────────────────────
+  // ── ⑥ 改写是**文本插入**:除了插进去那一条,其余字节原样(本轮审查 R4) ────────
   {
+    // 带注释的 `.jsonc`:现在能自动补接了 —— 注释、缩进、键序一个字都不动,也不另建一份。
+    // (上一版走 `JSON.parse` → `JSON.stringify` 往返,只能靠「有注释就不改写」躲开。)
     const b = bench("jsonc");
     const file = join(b.dir, "opencode.jsonc");
     const commented = '{\n  // 这是我自己写的注释\n  "$schema": "https://opencode.ai/config.json"\n}\n';
     writeFileSync(file, commented, "utf8");
     hostJson(b.host, "opencode");
     const r = await register("opencode", b.dir, b.host);
-    assert.ok(!r.ok && /注释/.test(r.why), `有注释要如实说:${r.ok ? "" : r.why}`);
-    assert.equal(readFileSync(file, "utf8"), commented, "注释一个字都不许丢");
+    assert.ok(r.ok, `带注释也该补上:${r.ok ? "" : r.why}`);
+    const after = readFileSync(file, "utf8");
+    assert.match(after, /\/\/ 这是我自己写的注释/, "注释一个字都不许丢");
+    assert.match(after, /"\$schema": "https:\/\/opencode\.ai\/config\.json"/, "原有键原样");
     assert.ok(!existsSync(join(b.dir, "opencode.json")), "也不许在旁边另建一份 .json");
-    group("有注释的配置:不改写、不另建一份");
+
+    assert.ok(onlyInserted(commented, after), `插入点之外一个字节都不许动：\n${after}`);
+
+    // 超出 JS 安全整数的原值:往返会写成另一个数字,文本插入不会。
+    const n = bench("lossless");
+    const nf = join(n.dir, "opencode.json");
+    const precise = '{\n  "bigId": 9007199254740993,\n  "huge": 1e999,\n  "negZero": -0\n}\n';
+    writeFileSync(nf, precise, "utf8");
+    hostJson(n.host, "opencode");
+    const r2 = await register("opencode", n.dir, n.host);
+    assert.ok(r2.ok, `该补上:${r2.ok ? "" : r2.why}`);
+    const doc = readFileSync(nf, "utf8");
+    assert.match(doc, /9007199254740993/, "大整数原值不许被改成 …992");
+    assert.match(doc, /1e999/, "`1e999` 不许变成 null");
+    assert.match(doc, /-0/, "`-0` 不许变成 0");
+    assert.ok(onlyInserted(precise, doc), `除了插进去那一段,原文一个字节都不许动：\n${doc}`);
+    group("改写是文本插入:注释/大整数/键序全原样,只多出 ash 那一条");
   }
 
   // ── ⑦ 就地写:软链还是软链 ───────────────────────────────────────────────
@@ -434,7 +473,25 @@ try {
     const offState = ashMcpStateIn(both.dir, "antigravity", {});
     assert.equal(offState.state, "disabled");
     assert.match(offState.detail, /ash \/ harness/, "两个名字都要说出来");
-    group("兼容名:有一个开着就算接好,都关着才说关着");
+    // 诊断提示也得指到**活着**那一条:上一版 `launch` 按名字取第一条,于是这里拿的是
+    // `ash` 那条关着的 `/old.js` —— 用户照着提示去查一个根本没在跑的命令,而状态明明是
+    // present(本轮审查不拦项:`shapes.ts` 的 launch 与 read 不同源)。
+    const json = ASH_MCP_TABLE.antigravity;
+    assert.equal(json.kind, "file");
+    if (json.kind === "file") {
+      const live = json.shape.launch?.(readFileSync(file, "utf8"));
+      assert.deepEqual(live?.args, ["/live.js"], "提示要指到开着那条");
+    }
+    const toml = ASH_MCP_TABLE.grok;
+    assert.equal(toml.kind, "file");
+    if (toml.kind === "file") {
+      // TOML 的两种关法,`read` 两种都看,launch 也必须 —— 根级那种是上一版漏掉的。
+      const rootOff = 'disabled_mcp_servers = ["ash"]\n\n[mcp_servers.ash]\ncommand = "node"\nargs = ["/off.js"]\n';
+      assert.equal(toml.shape.launch?.(rootOff) ?? null, null, "根级关掉的那条不该拿去当提示");
+      const live = toml.shape.launch?.('[mcp_servers.ash]\ncommand = "node"\nargs = ["/live.js"]\n');
+      assert.deepEqual(live?.args, ["/live.js"], "开着的照常给提示");
+    }
+    group("兼容名:有一个开着就算接好,都关着才说关着;诊断提示也指到活着那条");
   }
 
   // ── ⑫ 值不是对象:说认不出来,别覆盖(本轮审查不拦项 2)─────────────────────
@@ -479,14 +536,39 @@ try {
     // 文件名丢掉再按默认名拼回来,于是真 CLI 连得上、派审却报没接好)。
     const b = bench("config-is-file");
     const custom = join(b.dir, "my-profile.json");
-    const env = { OPENCODE_CONFIG: custom } as NodeJS.ProcessEnv;
+    // `XDG_CONFIG_HOME` 也给上:判定那一问内部用的是真 `homedir()`,不给就会去看这台机器上
+    // 真实的 `~/.config/opencode`(来源集合里的全局那份)。
+    const env = { OPENCODE_CONFIG: custom, XDG_CONFIG_HOME: join(b.host, ".config") } as NodeJS.ProcessEnv;
     assert.equal(ashMcpHostFile("opencode", env, b.host), custom, "解析口认那个文件名");
-    hostJson(b.host, "opencode");
-    const r = await registerAshMcp({ agentType: "opencode", dir: ashMcpConfigDir("opencode", env, b.host)!, hostHome: b.host, env });
-    assert.ok(r.ok, r.ok ? "" : r.why);
-    assert.ok(existsSync(custom), "写的就是那个文件");
-    assert.equal(fileAshMcpVerdict("opencode", env, [undefined]).state, "present", "判的也是那个文件");
-    group("覆盖变量的层级契约 + 指到文件的那几家只有一个解析口");
+    const dirOf = (home: string, e: NodeJS.ProcessEnv) => ashMcpConfigDir("opencode", e, home)!;
+
+    // 全局那份**也有 ash** 时:`OPENCODE_CONFIG` 是「再加一份」而不是「取代」,所以这家
+    // 已经接好了 —— 不许再往更高优先级那份补一条(那会把本来连得上的那条顶掉,本轮审查 R3)。
+    const globalFile = hostJson(b.host, "opencode");
+    const globalBefore = readFileSync(globalFile, "utf8");
+    const merged = await registerAshMcp({ agentType: "opencode", dir: dirOf(b.host, env), hostHome: b.host, env });
+    assert.ok(merged.ok, merged.ok ? "" : merged.why);
+    assert.equal(existsSync(custom), false, "全局那份已经有了,就不该再写变量那份");
+    assert.equal(readFileSync(globalFile, "utf8"), globalBefore, "全局那份也一个字节都不许动");
+    assert.equal(fileAshMcpVerdict("opencode", env, [undefined]).state, "present",
+      "判定也得看全来源:全局有 ash 就是接好了,不许说 absent（absent 在预检里是硬拒）");
+
+    // 全局那份**没有** ash 时:写的、判的、提示的都得是变量指的那一份。
+    const c = bench("config-is-file-empty");
+    const target = join(c.dir, "my-profile.json");
+    const env2 = { OPENCODE_CONFIG: target, XDG_CONFIG_HOME: join(c.host, ".config") } as NodeJS.ProcessEnv;
+    const emptyGlobal = join(c.host, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(emptyGlobal), { recursive: true });
+    writeFileSync(emptyGlobal, '{\n  "$schema": "x"\n}\n', "utf8");
+    assert.equal(fileAshMcpVerdict("opencode", env2, [undefined]).state, "absent",
+      "两份都确认没有,才配得上 absent");
+    if (existsSync(ENTRY)) {           // 没 build 过 MCP 产物时通用补接器按设计拒写
+      const r2 = await registerAshMcp({ agentType: "opencode", dir: dirOf(c.host, env2), hostHome: c.host, env: env2 });
+      assert.ok(r2.ok, r2.ok ? "" : r2.why);
+      assert.ok(existsSync(target), "写的就是变量指的那个文件");
+      assert.equal(fileAshMcpVerdict("opencode", env2, [undefined]).state, "present", "判的也是它");
+    }
+    group("覆盖变量的层级契约 + 指到文件的那家:来源看全、落点只有一个解析口");
   }
 
   // ── ⑭ 宿主那份配置全程不许被碰 ──────────────────────────────────────────
