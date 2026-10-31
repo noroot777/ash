@@ -148,7 +148,15 @@ async function initializeServer() {
   // 回合级停滞看门狗的判决从此自动落库:**加载那个模块就等于装上了**(理由见它顶部 ——
   // 显式装配只在一条启动路径上成立,换个入口就静默不落库,而那正是审查 F3 的形状)。
   // 这一句只为副作用,而且排在接管之前:接管回来的那些会话随后要是又熔断,判决同样得留得下来。
-  await import("./turn-stall-persist.js");
+  const stallPersist = await import("./turn-stall-persist.js");
+  // 顺手把判决日志压到「只剩还有读者的那些」。**必须排在接管之前**:这一刻本进程还没作出过
+  // 任何判决、也没有任何人在读,「库里那一行确凿收口了」才等于「这条判决没有读者了」。保留条件
+  // 为什么不能是条数或年龄,见 turn-stall-verdict.ts 的回收那一段(同一个类问题在内存和磁盘
+  // 两侧各被打回过一次)。
+  await stallPersist.compactStallVerdicts().catch((error) => {
+    console.warn("[ash] 判决日志压缩跳过(内容一个字没动):", error);
+    return null;
+  });
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
   // 一个 server 进程一起死），再 reconcile 剩下那些真被打断的。反过来的话，一个
   // 正在干活的 agent 会先被判 failed，用户一点重试就有第二个 agent 进同一个

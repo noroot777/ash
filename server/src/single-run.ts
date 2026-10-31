@@ -31,7 +31,9 @@ import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./tr
 import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
-import { clearTurnStall, resumeTrippedTurn, trackTurnStall, type StallActions } from "./turn-stall.js";
+import {
+  clearTurnStall, markUnverifiedTurnFailure, resumeTrippedTurn, trackTurnStall, type StallActions,
+} from "./turn-stall.js";
 import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import { restoreStallVerdict } from "./turn-stall-persist.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
@@ -59,6 +61,14 @@ export type SingleRunArgs = {
   turnStart: string;
   cliSessionId: string;
   autoTitle: boolean;
+  /**
+   * 这个回合身份是**上一个 ash 进程留下来的**(`reattach.ts` 接管存活进程时为 true)。
+   *
+   * 只有这一类才可能背着一份没兑现的熔断判决,也只有它需要「判决核实不了」那一档 —— 全新起跑
+   * 的回合身份此刻刚生成,盘上不可能有它的判决,读不出来也推不出任何结论。判据见
+   * `turn-stall-persist.ts` 的 `restoreStallVerdict`。
+   */
+  adopted?: boolean;
   role?: SessionRole;
   nativeSteer?: {
     prepare?(text: string): string | Promise<string>;
@@ -215,6 +225,16 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     }
   };
 
+  // 一条**持久可见**的红字:trace(按它发生的位置回放)+ `.md`(落盘产物)+ 当场推送。三处缺
+  // 一不可 —— 项目规矩是「判据是用户刷新页面后仍能看出」,少了 trace 那一笔刷新就没了。
+  // 熔断和「结局核实不了」两条路都用它,所以只留一份:措辞归 turn-stall.ts,送达归这里。
+  const emitTurnError = (text: string) => {
+    const event: AgentEvent = { kind: "error", message: text };
+    persistTrace(event);
+    writeRunError(out, text);
+    publishEvent(event);
+  };
+
   // 回合级停滞看门狗(判据与两档动手见 turn-stall.ts)。这三件动作是这条链专属的部分 ——
   // 判据一个字都不在这儿,三条消费链共用同一份。
   const stallActions: StallActions = {
@@ -235,10 +255,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     //
     // 不实现 `escalate`:单飞的 `trip` 本身就是硬终止(三层击杀),没有「请求了没人理」那一档。
     trip: (text) => {
-      const event: AgentEvent = { kind: "error", message: text };
-      persistTrace(event);
-      writeRunError(out, text);
-      publishEvent(event);
+      emitTurnError(text);
       a.handle.kill();
     },
     resolve: (facts) => clearSessionStalled(taskId, sessId, facts.since),
@@ -286,9 +303,13 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 兑现走 `resumeTrippedTurn`,**不在这里手抄一遍「发句诊断 + 杀一次」**:那四步跟
     // `stallActions.trip` 一模一样,抄一份就会跟它漂;更要紧的是义务本身的语义(终止义务只有
     // 两个出口、宽限回收、退场销账)全住在看门狗那张表里,手动杀一次拿不到(见那个函数的注释)。
-    const carriedVerdict = await restoreStallVerdict(sessId, a.turnStart);
-    if (carriedVerdict && a.turnStart) {
-      resumeTrippedTurn(sessId, a.handle, a.turnStart, carriedVerdict, stallActions);
+    const carried = await restoreStallVerdict(sessId, a.turnStart, a.adopted === true);
+    if (carried?.kind === "verdict" && a.turnStart) {
+      resumeTrippedTurn(sessId, a.handle, a.turnStart, carried.verdict, stallActions);
+    } else if (carried?.kind === "unverifiable" && a.turnStart) {
+      // 核实不了就**只说不杀**:登记「这一轮不许按成功结算」,外加一句持久可见的诊断。
+      // 结算那一段读的仍然是同一张表,所以这里不需要、也不该再另写一套判据。
+      emitTurnError(markUnverifiedTurnFailure(sessId, a.turnStart, carried.why));
     }
     for await (const event of a.handle.events) {
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
@@ -377,10 +398,10 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     clearSessionWaiting(sessId, a.handle);
     // **判决在这一刻就取走,不留到下面去读**(第 2 轮审查 F3,已实测)。流结束了 = 不会再有
     // 新的熔断写进这个回合身份,所以此刻读到的就是最终结论;而从这里到下面结算之间隔着
-    // `cleanup()` 和一串写库 await —— 那段窗口里另一轮熔断的回收扫描(或者机器休眠把墙钟
-    // 往前一跳)完全可能把这条**还有读者**的判决扫掉,于是这一轮被记成正常完成。
-    // 「退场」只证明它离开了状态机,不证明最后一个读者已经读过(那条不变量在
-    // turn-stall-verdict.ts 的 ORPHAN_MS 上),所以读者自己持一份独立事实。
+    // `cleanup()` 和一串写库 await。判决的回收现在只认「读者自己销账」(下面那句
+    // `clearStallFailure`),所以这一笔取值已经不是必需的 —— 留着是因为它把「读」和「销」摆成
+    // 了同一段里的一对,下一个人改结算顺序时看得见配对关系,不必再去 turn-stall-verdict.ts 确认
+    // 回收策略。
     watchdogFailure = stallFailure(sessId, a.turnStart);
     clearTurnStall(sessId, a.handle);
     if (offsetTimer) clearInterval(offsetTimer);
@@ -511,7 +532,10 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 「暂停中 + 继续」,而同一轮区间记 failed(第 3 轮审查 F1,已实测)。落位规则仍然只有
   // 结算那一个单点,这里只负责如实报原因。
   const settled = await settleTaskStatus(taskId, settleExit, stopped, sessId,
-    watchdogFailure ? { kind: "upstream_stall", detail: watchdogFailure.reason } : null);
+    watchdogFailure
+      ? { kind: watchdogFailure.kind === "unverified" ? "unverified_verdict" : "upstream_stall",
+        detail: watchdogFailure.reason }
+      : null);
   clearStallFailure(sessId, a.turnStart); // 这一轮结算完了,销账(见那个文件里的水位)
   clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
   // 这一轮到底改没改东西:账在回合开头就清过了,这里只管「白清了要放回去」——

@@ -10,7 +10,7 @@
 //
 // 写得很省:一次停滞最多两次 UPDATE(报警时置上、上游回话或回合收尾时撤掉),而停滞本身是
 // 少见状态 —— 绝大多数回合一次都不写。
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -76,4 +76,31 @@ export function markSessionStalled(taskId: string, sessionId: string, since: str
  */
 export function clearSessionStalled(taskId: string, sessionId: string, since: string): void {
   flip(taskId, unsetStalled(sessionId, since), "撤", sessionId);
+}
+
+/**
+ * 把这个任务名下**所有还挂着停滞标记**的会话行清干净,用在「不接管的结束边界」上
+ * (`task-reconcile.ts` 的启动对账,第 5 轮审查 F5)。
+ *
+ * 为什么需要一个不带 `since` 的版本:上面那个 CAS 的前提是「置上它的那一次停滞自己来撤」,而
+ * 这条路恰恰是**那个消费者已经不在了** —— 进程随上一个 ash 一起没了,没有任何人握着那个
+ * `since`。留着的后果不是「多一个无害的字段」:读侧的 EXISTS 只问「标记在、这行没收尾、任务在
+ * 跑」,于是用户换执行器重试时新会话只清自己那一行,旧行跟着新任务的 running 一起又让红环亮起来。
+ *
+ * 安全性靠调用点保证:对账只处理「状态在飞、手上却没有活句柄」的任务,而且是在原子预占了那个
+ * 任务的回合锁之后 —— 此刻不可能有谁正合法地持着一次停滞。
+ *
+ * 失败只记一句:这是一条提示,不该掀翻正在收尾的对账。
+ */
+export async function clearTaskStallFlags(taskId: string): Promise<void> {
+  try {
+    const cleared = await db
+      .update(sessions)
+      .set({ upstreamStalledSince: null })
+      .where(and(eq(sessions.taskId, taskId), isNotNull(sessions.upstreamStalledSince)))
+      .returning({ id: sessions.id });
+    if (cleared.length) await publishTaskUpdated(taskId);
+  } catch (error) {
+    console.warn(`[ash] 清任务 ${taskId} 名下的上游停滞标记失败:`, error);
+  }
 }

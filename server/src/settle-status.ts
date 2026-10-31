@@ -120,10 +120,23 @@ const UNCONFIRMED_HELD_TAIL =
  * 「暂停中 + 继续」,区间却记 failed —— 同一轮两个结论,用户看到的那个说它在等人。
  */
 export type SettleExecutionReason = {
-  kind: "upstream_stall";
-  /** 熔断诊断原文(`turn-stall.ts` 那段),给落位说明转述。 */
+  /**
+   * 两种都是「ash 自己认定这一轮不成功」,落位完全一样,只有对用户说的话不同:
+   * - `upstream_stall`     看门狗确凿判了熔断。
+   * - `unverified_verdict` 接管上一个进程留下的回合时判决日志读不出来,结局核实不了。
+   *
+   * **判据一律是「有没有这个原因」,不是「它是哪一种」**(下面三处都这么写)。按 kind 逐处枚举
+   * 的话,每加一种就得把三处各改一遍,漏掉的那一处会悄悄把一轮失败放行成成功 —— 而这个类型
+   * 本身的含义就是「不成功」,所以枚举从一开始就是多余的。
+   */
+  kind: "upstream_stall" | "unverified_verdict";
+  /** 诊断原文(`turn-stall.ts` 那段),给落位说明转述。 */
   detail: string;
 };
+
+/** 落位说明按原因分:措辞必须对得上事实,见 `SettleExecutionReason.kind`。 */
+const ashFailureNote = (reason: SettleExecutionReason): string =>
+  reason.kind === "upstream_stall" ? STALL_FAILED_NOTE : UNVERIFIED_FAILED_NOTE;
 
 // 熔断落位的说明。要同时说清三件事:为什么失败、续跑材料还在、以及现在能做什么 ——
 // 「暂停中」那个落位原本替用户表达了后两件,改成 failed 之后得由这段话接上。
@@ -132,6 +145,13 @@ const STALL_FAILED_NOTE =
   + "按失败结算(诊断见上面那条红字)。**不是检查点暂停** —— 这一轮确实失败了,"
   + "所以状态是未完成而不是「在等」。续跑材料一个字没动:点重试会从中断处接着跑,"
   + "原来的续跑指令/待答复的问题都还在;上游一直连不上就换一个执行器。";
+
+// 「结局核实不了」那一档的落位说明。**不能复用上面那段** —— 那段断言「整段时间里只收到重试类
+// 错误」,而这一档恰恰是我们不知道当时发生了什么。
+const UNVERIFIED_FAILED_NOTE =
+  "本回合是上次 ash 中断时留下的,而本次启动读不出熔断判决日志,无法确认它当时有没有被判失败。"
+  + "按未完成结算:可能它本来就失败了,也可能日志故障让我们冤枉了它,两种都不该悄悄记成完成"
+  + "(诊断见上面那条红字)。续跑材料一个字没动:核对过工作成果之后点重试或者直接续聊即可。";
 
 const GROUP_PAUSED_NOTE =
   "分组被暂停,本回合被中止 —— 任务落为已暂停;点「运行/继续」恢复分组时会从当前会话接着跑。";
@@ -216,7 +236,7 @@ export async function settleTaskStatus(
     // (时间线上同时红着写「已自动终止并按失败结算」)。确认说的是「目标达成了」,而这一轮我们
     // 亲手判了它失败 —— 两者冲突时以失败为准,状态回到续聊前那个终态。
     // 它顺带还清掉续跑材料(`consumedCheckpoint`)并按成功推进队列,所以不能只改措辞。
-    const upgradable = confirmed && reason?.kind !== "upstream_stall";
+    const upgradable = confirmed && !reason;
     const hold = upgradable || monitorSweepingStatus(back) ? await monitorGate() : null;
     const consumedCheckpoint = !!(upgradable && !hold && t.resumePrompt);
     if (upgradable && !hold) {
@@ -275,8 +295,8 @@ export async function settleTaskStatus(
       // 终态续聊的既定契约是「只能变好,不会变差」,熔断也不例外:状态照旧回到续聊前那个终态
       // (第 3 轮审查 F1 明确不要求改这条)。但**话要说准** —— 这一轮不是「异常结束」,是 ash
       // 主动终止的,退出码还是我们自己合成的,照原样念出来会让人去查一个不存在的崩溃。
-      const why = reason?.kind === "upstream_stall"
-        ? "续聊回合因上游连不上被自动终止"
+      const why = reason?.kind === "upstream_stall" ? "续聊回合因上游连不上被自动终止"
+        : reason?.kind === "unverified_verdict" ? "续聊回合是上次中断留下的,结局核实不了"
         : `续聊回合异常结束(退出码 ${exitStatus})`;
       return { status: back, note: `${why},任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
     }
@@ -325,10 +345,10 @@ export async function settleTaskStatus(
   // 点重试照旧从中断处接着跑,答复照旧能把它叫起来(`/answer` 只拦 running/queued)。
   // 这里也不过哨兵闸 —— 同 `exitStatus !== 0` 那一支:这一轮是真失败,不拿检查点粉饰它
   // (哨兵的连坐是终态本来就有的后果,见 task-complete.ts)。
-  if (reason?.kind === "upstream_stall") {
+  if (reason) {
     await setStatus(taskId, "failed");
     notify("failed");
-    return { status: "failed", note: STALL_FAILED_NOTE, confirmedDone: false, nativeTurn };
+    return { status: "failed", note: ashFailureNote(reason), confirmedDone: false, nativeTurn };
   }
   // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
   // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。

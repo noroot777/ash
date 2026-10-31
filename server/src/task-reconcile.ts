@@ -1,9 +1,13 @@
 // 重启后收拾被打断的任务（从 orchestrator.ts 拆出，纯行数拆分）。
 // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序），理由见函数注释。
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
-import { sessions, tasks } from "./db/schema.js";
+import { sessions, sessionTurns, tasks } from "./db/schema.js";
+import { recordTurnSpan } from "./session-turns.js";
+import { clearTaskStallFlags } from "./session-stall-flag.js";
+import { restoreStallVerdict } from "./turn-stall-persist.js";
+import { clearStallFailure } from "./turn-stall-verdict.js";
 import { claimReconcileTurn } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { startTeam } from "./team/session.js";
@@ -60,7 +64,14 @@ export async function reconcileInterrupted(): Promise<void> {
 // 批量版(重启时扫全库)和单任务版(接管之后才暴露出来的那种中断)共用这一份。
 async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void> {
   if (await (await import("./regression-settlement.js")).recordInterruptedRegressionReview(t)) return;
-  let back = (t.followUpFrom as TaskStatus | null) ?? (t.goalTurn ? "paused" : "failed");
+  // **这一路也要问一句「这一轮的权威结束原因是什么」**(第 5 轮审查 F3,已实测)。
+  // 接管那条路问过了(single-run.ts),对账这条路原先没问 —— 于是一个被看门狗判了熔断、
+  // 进程随后没活到接管的持续目标,在这里被写成「因服务中断已暂停」:界面显示暂停中 + 继续,
+  // 回合区间 `outcome` 留空,而判决明明还在日志里读得出来。落位不是「多一种重启时间组合」,
+  // 是**同一个权威结局在另一个结算入口没被接上**。
+  const ashFailure = await interruptedTurnVerdict(t.id);
+  let back = ashFailure ? "failed"
+    : (t.followUpFrom as TaskStatus | null) ?? (t.goalTurn ? "paused" : "failed");
   const advance = t.queueAdvanceRequest;
   const pendingAdvance = advance && advance.resumePromptGeneration === t.resumePromptGeneration;
   if (pendingAdvance) back = advance.prevStatus as TaskStatus;
@@ -73,10 +84,16 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
     const held = await interruptCliGoal(t, session?.agentType ?? t.agentType ?? "claude");
     if (!held) {
       const [restored] = await db.select().from(tasks).where(eq(tasks.id, t.id));
-      back = (restored?.followUpFrom as TaskStatus | null) ?? "failed";
+      back = ashFailure ? "failed" : (restored?.followUpFrom as TaskStatus | null) ?? "failed";
     }
     if (session?.agentType === "claude" && session.commandLine) cleanupClaudeGoalContext(session.commandLine);
-    await appendTaskTimeline(t.id, held ? "持续目标因服务中断已暂停；任务和历史保留，使用 /goal resume 续跑。" : "持续目标尚未启动就遇到服务中断；已恢复起跑前的目标状态。");
+    // 熔断过的那一轮不许说成「暂停」:那句话替用户表达了「它在等你」,而这一轮是我们自己判
+    // 失败的 —— 两个结论里用户看到的那个说它在等人,正是 F3 的形状。那一句由下面统一补。
+    if (!ashFailure) {
+      await appendTaskTimeline(t.id, held
+        ? "持续目标因服务中断已暂停；任务和历史保留，使用 /goal resume 续跑。"
+        : "持续目标尚未启动就遇到服务中断；已恢复起跑前的目标状态。");
+    }
   }
   if (t.goalTurn || t.followUpFrom || t.nativeTurn || t.completeConfirmedAt) {
     await db
@@ -88,8 +105,55 @@ async function settleInterruptedTask(t: typeof tasks.$inferSelect): Promise<void
   // 结算，必须把基线消费掉——工作目录没动过就整套挂回 stage/合并快照/尾段进度。
   // 只恢复 status 的话，基线躺在磁盘上等下一个真人回合 recordTurnBaseline 直接覆盖，
   // 已验收事实从「暂时不显示」变成永久丢失（审查实测复现）。
+  // 这一轮的结局说给用户:**每一条路都要说**,不只持续目标那一支 —— 普通回合落 failed 时,
+  // 时间线上同样只有那条来自上一个进程的红字,不说清「这一轮为什么是失败的」就只能让人去查
+  // 一个不存在的崩溃。
+  if (ashFailure) await appendTaskTimeline(t.id, ashFailure.note);
   await reconcileTurnBaseline(t.id, false);
+  // 旧会话的停滞标记在这里撤:置标记的那个消费者早就没了,没人来撤(第 5 轮审查 F5)。留着
+  // 的话,用户换执行器重试时新会话只清自己那一行,旧行重新满足「任务在跑」的 EXISTS,卡片上
+  // 那颗红环凭空亮起来。这一刻任务名下确实没有活句柄(调用方的闸保证),所以一律清干净。
+  await clearTaskStallFlags(t.id);
   await setTaskStatus(t.id, back, pendingAdvance ? { quietAdvance: true } : undefined);
+}
+
+/**
+ * 这个任务**被打断的那一轮**有没有一个 ash 自己认定的失败结局,顺带把那一轮收口。
+ *
+ * 判据跟接管那条路共用同一个单点(`restoreStallVerdict`),所以两边不可能漂:一边读得到判决、
+ * 另一边把同一轮写成「暂停中」这种事,只会在各写一份判据的时候发生。
+ *
+ * 收口这一下是必须的,不只是落位好看:回合区间的 `outcome` 留空意味着「不知道」,而我们这里
+ * 恰恰知道 —— 判决就在手上。留空的话窄出口和面板都只能回头去猜进程退出码,而被我们杀掉的
+ * CLI 多半报的是 0。
+ */
+async function interruptedTurnVerdict(taskId: string): Promise<{ note: string } | null> {
+  // **还开着的回合全看一遍**,不是只看最新那一条:一个任务可以同时有多条会话各开着一轮
+  // (讨论模式的两个声部就是),背着判决的那一个未必是最后开始的。只看一条的话,另一条的
+  // 判决就跟着这次对账一起失效了 —— 而它的回合行会被留在「不知道」那一档。
+  const open = await db
+    .select()
+    .from(sessionTurns)
+    .where(and(eq(sessionTurns.taskId, taskId), isNull(sessionTurns.endedAt)))
+    .orderBy(desc(sessionTurns.startedAt));
+  const notes: string[] = [];
+  for (const turn of open) {
+    // `adopted: true` —— 这些回合身份确实是上一个进程留下来的,所以「判决核实不了」那一档在这里
+    // 同样成立:读不出日志时不许把这一轮说成正常结束(同一条判据见 restoreStallVerdict)。
+    const restored = await restoreStallVerdict(turn.sessionId, turn.startedAt, true);
+    if (!restored) continue;
+    notes.push(restored.kind === "verdict"
+      ? "本回合在上次 ash 运行期间已被判定上游连不上并按失败结算,服务重启后原进程已不在,"
+        + `按失败收尾。原判决(${restored.verdict.at}):${restored.verdict.reason}`
+      : `本回合是上次 ash 中断时留下的,而本次启动读不出熔断判决日志(${restored.why}),`
+        + "无法确认它当时有没有被判失败 —— 按未完成收尾,不记成完成。");
+    await recordTurnSpan({
+      sessionId: turn.sessionId, taskId, cwd: turn.cwd, startedAt: turn.startedAt,
+      endedAt: now(), outcome: "failed",
+    });
+    clearStallFailure(turn.sessionId, turn.startedAt); // 这一轮结算完了,销账
+  }
+  return notes.length ? { note: notes.join("\n\n") } : null;
 }
 
 // 单个任务的「被打断」结算。给**接管成功之后才暴露出来**的那种中断用:

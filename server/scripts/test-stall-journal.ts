@@ -10,16 +10,19 @@
 // 根上错的那条判据是**「调了持久化函数」=「事实已经持久」**。所以这份文件钉的是改过之后的
 // 契约本身:
 //   ① 事实落在一个不可能排在别人事务后面的地方(另一个文件、同步写、写完 fsync);
-//   ② 裁剪只改名、不读-改-写(照 exit-ledger.ts 的教训,那边实测过重写会吞掉追加);
-//   ③ 落盘失败**如实报失败**,不许假装成功;
-//   ④ `markStallFailure` 的返回值就是落盘结果,三档各自什么意思;
-//   ⑤ 没存住那一档,熔断诊断里**要如实多说一句** —— 不然用户看到「已终止」、重启后又看到
+//   ② **「读不出来」跟「没有」是两件事**(第 5 轮审查 F1:上一版的 `parseRecords` 把权限失败、
+//      I/O 错误、半行坏记录统统归约成空数组 —— 新的权威日志沿用了旧实现那个不可靠的缺省值);
+//   ③ 压缩的保留条件只能是「这一轮已经确凿结算完了」,不能是条数或年龄(第 5 轮审查 F2:
+//      按条数轮转第二次会直接覆盖上一代,而 rename 原子并不证明被覆盖的那代没人要);
+//   ④ 落盘失败**如实报失败**,不许假装成功;
+//   ⑤ `markStallFailure` 的返回值就是落盘结果,三档各自什么意思;加上启动装载;
+//   ⑥ 没存住那一档,熔断诊断里**要如实多说一句** —— 不然用户看到「已终止」、重启后又看到
 //      「已完成」,而他没有任何线索。
 //
 // 跨进程那一半(真 `consumeSingleRun`、真库被事务占着、真的换一个进程接管)在
 // test-stall-restart.ts;这里一个字都不碰库。
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,48 +31,102 @@ const stage = mkdtempSync(join(tmpdir(), "ash-stall-journal-"));
 process.env.ASH_DB = join(stage, "journal.db");
 
 const {
-  __seedStallVerdict, appendStallVerdict, readStallVerdict, rotateStallJournal, stallJournalFileForDb,
+  __seedStallVerdict, appendStallVerdict, compactStallJournal, readStallJournal, stallJournalFileForDb,
 } = await import("../src/turn-stall-journal.js");
-const { markStallFailure, setStallVerdictPersister } = await import("../src/turn-stall-verdict.js");
+const {
+  __resetStallFailures, loadStallFailures, markStallFailure, setStallVerdictPersister, stallFailure,
+} = await import("../src/turn-stall-verdict.js");
 const { trackTurnStall } = await import("../src/turn-stall.js");
 const { configure, notice, sleep, spy, TURN } = await import("./stall-fixtures.js");
 
 const TURN2 = "2026-10-30T09:00:00.000Z";
 
+/** 读一个回合身份上最后那条判决 —— 读的一侧只认「全集 + 状态」,这个只是测试里的取数糖。 */
+const verdictOf = (sessionId: string, turnStartedAt: string, dbFile: string) =>
+  readStallJournal(dbFile).records.filter((r) => r.sessionId === sessionId && r.turnStartedAt === turnStartedAt).at(-1) ?? null;
+
 // ── ① 落盘与读回 ────────────────────────────────────────────────────────────────
 {
   const dbFile = join(stage, "read.db");
-  assert.equal(readStallVerdict("s", TURN, dbFile), null, "空日志里读出了判决");
+  // 文件压根不在 = **确实没有判决**,这一档必须是 ok(不是「读不出来」):否则每台新装的 ash
+  // 第一次启动都在喊「核不了自己的判决」,那句警告立刻变成噪音。
+  const empty = readStallJournal(dbFile);
+  assert.equal(empty.status, "ok", "日志文件不存在被当成了读取故障");
+  assert.deepEqual(empty.records, [], "空日志里读出了判决");
   assert.equal(appendStallVerdict({ at: "t0", sessionId: "s", turnStartedAt: TURN, reason: "第一次" }, dbFile), true);
-  assert.equal(readStallVerdict("s", TURN, dbFile)?.reason, "第一次");
+  assert.equal(verdictOf("s", TURN, dbFile)?.reason, "第一次");
   // 键是**回合身份**,不是 sessionId:一条会话跑很多轮,只有熔断掉的那一轮算失败。
-  assert.equal(readStallVerdict("s", TURN2, dbFile), null, "同一会话的另一轮也被判了失败");
-  assert.equal(readStallVerdict("other", TURN, dbFile), null, "另一条会话也被判了失败");
+  assert.equal(verdictOf("s", TURN2, dbFile), null, "同一会话的另一轮也被判了失败");
+  assert.equal(verdictOf("other", TURN, dbFile), null, "另一条会话也被判了失败");
   // 同一身份写了两次(接管后又熔断一次)取最后那条 —— 新判决该盖住旧的。
   appendStallVerdict({ at: "t1", sessionId: "s", turnStartedAt: TURN, reason: "第二次" }, dbFile);
-  assert.equal(readStallVerdict("s", TURN, dbFile)?.reason, "第二次", "读到的不是最新那条判决");
+  assert.equal(verdictOf("s", TURN, dbFile)?.reason, "第二次", "读到的不是最新那条判决");
+  // 整条记录都得落全(F4:短写时 `writeSync` 不一定抛,按字节数自己核)。
+  const line = readFileSync(stallJournalFileForDb(dbFile), "utf8").split("\n").filter(Boolean).at(-1)!;
+  assert.deepEqual(JSON.parse(line).reason, "第二次", "落盘的那一行不是一条完整记录");
 }
 
-// ── ② 裁剪只改名,不丢任何已经落盘的记录 ────────────────────────────────────────
-// 这一条是 exit-ledger.ts 换来的教训:账本是追加式的,「读整文件 → 重写」会把快照之后的追加
-// 整段吞掉(那边用真实入口复现过 206 → 200)。改名没有这个窗口,代价是磁盘上最多留两代 ——
-// 所以**读的一侧必须两代都看**,这里连带钉住。
+// ── ② 「读不出来」≠「没有」 ────────────────────────────────────────────────────
+// 第 5 轮审查 F1 的根:上一版把权限失败、I/O 错误、半行坏记录统统归约成「空」,于是接管一个
+// 仍然存活的回合时恢复静默失败,上游一恢复这一轮就记成 completed、任务落 done,而用户那边
+// 「已自动终止本回合」的红字还在。
 {
-  const dbFile = join(stage, "rotate.db");
+  // (a) 整个文件读不出来(权限):status 必须是 unavailable。
+  const dbFile = join(stage, "eacces.db");
   const file = stallJournalFileForDb(dbFile);
-  appendStallVerdict({ at: "t0", sessionId: "old", turnStartedAt: TURN, reason: "最老那条" }, dbFile);
-  rotateStallJournal(dbFile);
-  assert.equal(existsSync(`${file}${".1"}`), false, "水位以内就轮转了");
-  for (let i = 0; i < 220; i += 1) __seedStallVerdict({ sessionId: `pad-${i}`, turnStartedAt: TURN }, dbFile);
-  rotateStallJournal(dbFile);
-  assert.equal(existsSync(`${file}.1`), true, "超了水位没轮转");
-  assert.equal(readStallVerdict("old", TURN, dbFile)?.reason, "最老那条", "轮转之后上一代里的判决读不到了 —— 那等于丢判决");
-  // 轮转之后新来的照样读得出来(落在新文件里)。
-  appendStallVerdict({ at: "t2", sessionId: "fresh", turnStartedAt: TURN, reason: "轮转之后" }, dbFile);
-  assert.equal(readStallVerdict("fresh", TURN, dbFile)?.reason, "轮转之后");
+  appendStallVerdict({ at: "t0", sessionId: "s", turnStartedAt: TURN, reason: "读不到我" }, dbFile);
+  chmodSync(file, 0o000);
+  try {
+    const read = readStallJournal(dbFile);
+    assert.equal(read.status, "unavailable", "日志读不出来被当成了「没有判决」—— 那一轮会升级成成功");
+    assert.match(read.status === "unavailable" ? read.why : "", /eacces|permission/i, "没说清为什么读不出来");
+  } finally {
+    chmodSync(file, 0o600);
+  }
+  // 权限修好之后照样读得出来(上一步没破坏内容)。
+  assert.equal(readStallJournal(dbFile).status, "ok");
+
+  // (b) 半行坏记录:**好的那些照常读出来**,但整次读取仍然是 unavailable —— 丢了一条就不能
+  // 再对任何一轮说「它没被判失败」。
+  const partial = join(stage, "partial.db");
+  appendStallVerdict({ at: "t0", sessionId: "good", turnStartedAt: TURN, reason: "完好" }, partial);
+  appendFileSync(stallJournalFileForDb(partial), '\n{"at":"t1","sessionId":"half"\n');
+  const damaged = readStallJournal(partial);
+  assert.equal(damaged.status, "unavailable", "半行坏记录被静默跳过了");
+  assert.deepEqual(damaged.records.map((r) => r.sessionId), ["good"], "坏行把同一份日志里完好的判决也带走了");
 }
 
-// ── ③ 落盘失败如实报失败 ──────────────────────────────────────────────────────
+// ── ③ 压缩:保留条件只能是「这一轮确凿结算完了」 ────────────────────────────────
+// 第 5 轮审查 F2(日志那一侧已实测):上一版按条数轮转,第二次轮转直接覆盖上一代 —— 实测保留
+// 一个「已判失败、库投影没写进去、区间仍开着」的目标回合,连续建两代各 201 条之后那条判决就没了。
+// `rename` 原子、不读改写,但那**不证明被覆盖的上一代已经没人需要**。同一个类问题在内存那侧被
+// 打回过两次(条数水位、年龄 TTL),判据见 turn-stall-verdict.ts。
+{
+  const dbFile = join(stage, "compact.db");
+  const file = stallJournalFileForDb(dbFile);
+  appendStallVerdict({ at: "t0", sessionId: "still-open", turnStartedAt: TURN, reason: "还没结算" }, dbFile);
+  for (let i = 0; i < 400; i += 1) __seedStallVerdict({ sessionId: `settled-${i}`, turnStartedAt: TURN }, dbFile);
+  // 条数远超过任何水位,但保留条件只认「结算完了没有」。
+  const result = compactStallJournal((r) => r.sessionId === "still-open", dbFile);
+  assert.deepEqual(result, { kept: 1, dropped: 400 }, "压缩的账算错了");
+  assert.equal(verdictOf("still-open", TURN, dbFile)?.reason, "还没结算",
+    "压缩把一条还没结算的判决清掉了 —— 那一轮收到结束回执时会被记成正常完成");
+  assert.equal(verdictOf("settled-0", TURN, dbFile), null, "已经结算完的没清掉");
+  assert.equal(existsSync(`${file}.1`), false, "压缩之后上一代还留着");
+
+  // 读不全的时候**不许重写**:那会把「核实不了」变成「没有」,正是 F1 换个地方重演。
+  appendFileSync(file, '\n{"坏行\n');
+  const quiet = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal(compactStallJournal(() => false, dbFile), null, "读不全还照样重写了日志");
+  } finally {
+    console.warn = quiet;
+  }
+  assert.ok(readFileSync(file, "utf8").includes("还没结算"), "读不全那一次把内容抹掉了");
+}
+
+// ── ④ 落盘失败如实报失败 ──────────────────────────────────────────────────────
 // 返回值是契约:上层拿它决定「要不要在用户看到的诊断里说一句重启会丢」。假装成功就等于把
 // F1 换了个地方重演。
 {
@@ -84,7 +141,7 @@ const TURN2 = "2026-10-30T09:00:00.000Z";
   }
 }
 
-// ── ④ markStallFailure 的返回值就是落盘结果 ────────────────────────────────────
+// ── ⑤ markStallFailure 的返回值就是落盘结果,外加启动装载 ──────────────────────
 {
   configure({});
   // 没注册持久化(纯状态机测试的常态):**不算落盘失败** —— 否则每份单元测试期望里都挂一句
@@ -113,9 +170,25 @@ const TURN2 = "2026-10-30T09:00:00.000Z";
     console.warn = quiet;
   }
   assert.equal(seen.length, 1, "持久那一半被按错次数调用了");
+
+  // 启动装载:盘上那些一次性装进内存,之后结算侧只读内存(判据见 loadStallFailures)。
+  __resetStallFailures();
+  const loaded = loadStallFailures([
+    { sessionId: "boot", turnStartedAt: TURN, reason: "上一个进程判的", at: "t0", since: "s0" },
+  ]);
+  assert.equal(loaded, 1);
+  assert.equal(stallFailure("boot", TURN)?.reason, "上一个进程判的", "装回来的判决读不到");
+  assert.equal(stallFailure("boot", TURN)?.since, "s0", "停滞起点没跟着装回来 —— 撤标记会撤到别人身上");
+  assert.equal(stallFailure("boot", TURN)?.kind, "tripped");
+  // 本进程刚判的那一份更新,不许被盘上的旧记录盖掉。
+  setStallVerdictPersister(() => true);
+  markStallFailure("boot", TURN, "本进程刚判的");
+  assert.equal(loadStallFailures([{ sessionId: "boot", turnStartedAt: TURN, reason: "盘上那条", at: "t0" }]), 0);
+  assert.equal(stallFailure("boot", TURN)?.reason, "本进程刚判的", "装载把本进程刚作出的判决盖掉了");
+  __resetStallFailures();
 }
 
-// ── ⑤ 没存住那一档:熔断诊断里如实多说一句 ─────────────────────────────────────
+// ── ⑥ 没存住那一档:熔断诊断里如实多说一句 ─────────────────────────────────────
 {
   const trip = async (persist: boolean | null, sessionId: string): Promise<string> => {
     configure({ warnErrors: 1, tripMs: 60, pollMs: 15 });
@@ -136,5 +209,9 @@ const TURN2 = "2026-10-30T09:00:00.000Z";
   assert.doesNotMatch(await trip(null, "t-plain"), /没能写进磁盘/, "压根没注册持久化也喊了一句假警报");
 }
 
-console.log("test:stall-journal ok：判决先落盘才动手终止,裁剪只改名,没存住如实说出来");
+// 留白(如实记):**短写本身没有制造**(F4 按代码推断)。macOS 没有 /dev/full,配额/满盘在这个
+// 夹具里造不出来,所以这里钉的是它的两头 —— 成功那一路整条记录确实落全(①),以及半行记录在读
+// 的一侧被算作「读不出来」而不是「没有」(②(b))。中间那一段(短写时按字节补写、补不完返回
+// false)只有代码阅读保证。
+console.log("test:stall-journal ok：读不出来≠没有,压缩只认结算,没存住如实说出来");
 process.exit(0);

@@ -27,7 +27,7 @@ import {
   type StallActions,
   type StallFacts,
 } from "../src/turn-stall.js";
-import { __ageStallFailures, __resetStallFailures, clearStallFailure, markStallFailure, retireStallFailure, stallFailure } from "../src/turn-stall-verdict.js";
+import { __resetStallFailures, clearStallFailure, markStallFailure, stallFailure } from "../src/turn-stall-verdict.js";
 // 夹具与**解除条件那一组**分别住在 stall-fixtures.ts / test-turn-stall-progress.ts:这份文件
 // 顶到过单文件上限,而「判据」和「两档动手」本来就是两件事(根 CLAUDE.md 的 700 行)。
 import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtures.js";
@@ -258,21 +258,20 @@ import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtur
   for (const [i, turn] of turns.entries()) clearStallFailure(`cap-${i}`, turn);
   assert.equal(stallFailure("cap-0", turns[0]!), null, "销账之后还读得到 —— 下一轮会被当成熔断过");
 
-  // 孤立回收:**退场**之后久到不可能还有人来结算的那些,下一次写入时顺手清掉。
-  markStallFailure("orphan", TURN, "没人来销账的那种");
-  retireStallFailure("orphan", TURN); // 回合真的结束了(状态机的 close/顶掉都会打这一下)
-  __ageStallFailures(7 * 60 * 60_000);
-  markStallFailure("fresh", TURN, "刚熔断");
-  assert.equal(stallFailure("orphan", TURN), null, "已退场的孤立判决一直占着内存,TTL 没生效");
-  assert.ok(stallFailure("fresh", TURN), "回收把刚写下的活判决也清了");
-  clearStallFailure("fresh", TURN);
+  // **写入不许顺手回收任何东西**:上两版在这里各挂了一个代理指标(条数水位、年龄 TTL),
+  // 两次都把「还没结算」的那条扫掉了。现在写一百条也动不了别人一条。
+  markStallFailure("nosweep", TURN, "没人来销账的那种");
+  for (let i = 0; i < 100; i += 1) markStallFailure(`flood-${i}`, TURN, "后面来的一大批");
+  assert.ok(stallFailure("nosweep", TURN), "写入时顺手扫掉了一条还没结算的判决");
+  clearStallFailure("nosweep", TURN);
+  for (let i = 0; i < 100; i += 1) clearStallFailure(`flood-${i}`, TURN);
 }
 
-// ── ⑤g **老不等于孤立**:还在跑的那一轮,判决多老都不许动 ────────────────────────
-// 第 3 轮审查 F3(已实测):上一版纯按年龄回收。`ASH_STALL_TRIP_GRACE_MS=0` 是产品允许的配置
-// (关掉强制回收),于是一个熔断过、`interrupt` 没人理的回合可以一直活着;跨过 6 小时、或者
-// 主机休眠把墙钟往前一跳,下一次熔断的写入就把那条**仍然有人要读**的判决扫掉 —— 旧回合后来
-// 真收到结束回执时读到 null,区间照样记 completed。
+// ── ⑤g **回收的唯一条件是结算**:离开状态机不算,老了也不算 ──────────────────────
+// 同一处被打回过三次,三次都是拿一个代理指标冒充「没有读者了」:条数水位(第 2 轮)、年龄 TTL
+// (第 3 轮)、「退场 + 年龄」(第 5 轮 F2 —— 摘牌只证明那条记录不再代表这个会话,不证明旧消费
+// 循环已经读过判决)。`ASH_STALL_TRIP_GRACE_MS=0` 是产品允许的配置(关掉强制回收),于是一个
+// 熔断过、`interrupt` 没人理的回合可以一直活着,读者随后才来。
 {
   configure({ warnErrors: 1, tripMs: 60, graceMs: 0, pollMs: 15 });
   const { actions, log } = spy();
@@ -282,22 +281,26 @@ import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtur
   assert.equal(log.trips.length, 1, "没熔断");
   assert.equal(log.escalations.length, 0, "graceMs=0 该是「不强制回收」,却还是回收了");
 
-  // 这一轮没结束(没有 clearTurnStall,也没被顶掉),只是变老了。
-  __ageStallFailures(7 * 60 * 60_000);
-  markStallFailure("another", "2026-10-30T09:00:00.000Z", "另一轮熔断了,顺手扫一遍");
+  // 这一轮没结束(没有 clearTurnStall,也没被顶掉),后面又来了一大批熔断。
+  for (let i = 0; i < 100; i += 1) markStallFailure("another", `2026-10-30T09:${String(i).padStart(2, "0")}:00.000Z`, "另一轮熔断了");
   assert.ok(
     stallFailure("s5g", TURN),
-    "一个还在跑的熔断回合,判决被当成孤立记录扫掉了 —— 它收到结束回执时会被记成正常完成",
+    "一个还在跑的熔断回合,判决被后面来的写入扫掉了 —— 它收到结束回执时会被记成正常完成",
   );
 
-  // 回合真结束 → 退场 → 这才轮到年龄说话。
+  // **离开状态机也不算**:同一条会话被新一轮顶掉、或者 close 掉,判决都得留着等读者销账。
   clearTurnStall("s5g", owner);
-  assert.ok(stallFailure("s5g", TURN), "刚退场就删了 —— 结算还没来得及读");
-  __ageStallFailures(7 * 60 * 60_000);
-  markStallFailure("another2", "2026-10-30T09:00:00.000Z", "再来一轮");
-  assert.equal(stallFailure("s5g", TURN), null, "退场够久的记录没被回收");
-  clearStallFailure("another", "2026-10-30T09:00:00.000Z");
-  clearStallFailure("another2", "2026-10-30T09:00:00.000Z");
+  assert.ok(stallFailure("s5g", TURN), "离开状态机就删了 —— 结算还没来得及读");
+  for (let i = 0; i < 100; i += 1) markStallFailure("another2", `2026-10-30T10:${String(i).padStart(2, "0")}:00.000Z`, "再来一轮");
+  assert.ok(stallFailure("s5g", TURN), "退场之后被当成孤立记录扫掉了 —— 读者还没来");
+
+  // 只有读者自己销账才清得掉。
+  clearStallFailure("s5g", TURN);
+  assert.equal(stallFailure("s5g", TURN), null, "销账之后还读得到");
+  for (let i = 0; i < 100; i += 1) {
+    clearStallFailure("another", `2026-10-30T09:${String(i).padStart(2, "0")}:00.000Z`);
+    clearStallFailure("another2", `2026-10-30T10:${String(i).padStart(2, "0")}:00.000Z`);
+  }
 }
 
 // ── ⑥ 反向:正常的长回合一档都不许触发(误杀代价最高的一位) ──────────────────────

@@ -216,6 +216,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         turnStart: sess.turnStartedAt ?? sess.startedAt,
         cliSessionId: sess.cliSessionId ?? "",
         autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
+        adopted: true, // 这个回合身份是上一个进程留下来的 —— 它可能背着没兑现的熔断判决
         nativeSteer: {
           // 接回的会话同样现读:重启不该把一份过期授权一直带下去。
           prepare: async (text) => withGlobalBrowserPolicy(

@@ -12,6 +12,12 @@
 //      变成 T2,可执行器真在跑的仍是队首 T1。按回合身份做 CAS 的那一版于是让「补一句话」清掉
 //      了一个仍然有效的警告(第 3 轮审查 F2)。现在标记按**停滞自己那一刻**(`since`)认人,
 //      ②那一条改由所有权层挡(`lead.retired`,见 team/lead-voice.ts)。
+//   ④ **换执行器重试会新建一条会话行**,旧行一个字不动(第 5 轮审查 F5)。①修的是「复用同一
+//      行」那条路,这一条是另一条:新会话正常输出只撤得掉自己那一行的标记(撤按停滞身份认人),
+//      而旧行跟着新任务的 running 一起又让那颗点亮起来 —— 一直亮到下一次有人恰好清了旧行。
+//      所以读侧的 EXISTS 还得再要一条:那条会话得是**此刻这一轮用的那条**。同一个生命周期缺口
+//      在「没有进程可接管」的结束边界上也有一半:置标记的消费者早就没了,没人来撤
+//      (`clearTaskStallFlags`,由启动对账调)。
 //
 // 库用临时文件(**绝不碰生产库**),所以 env 必须在 import 那些摸库的模块**之前**设好。
 import assert from "node:assert/strict";
@@ -27,7 +33,9 @@ const { db, ensureSchema } = await import("../src/db/index.js");
 await ensureSchema();
 const { sessions, tasks } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
-const { clearSessionStalled, markSessionStalled } = await import("../src/session-stall-flag.js");
+const {
+  clearSessionStalled, clearTaskStallFlags, markSessionStalled,
+} = await import("../src/session-stall-flag.js");
 const { resumedTurnFields } = await import("../src/session-turns.js");
 const { enrichTasks } = await import("../src/task-store.js");
 
@@ -136,4 +144,33 @@ markSessionStalled(TASK, SESS, OTHER_SINCE);
 await settles(OTHER_SINCE, "换轮之后新回合的标记写不进去了");
 assert.equal(await stalled(), true, "新回合自己卡住了,点却不亮");
 
-console.log("test:stall-flag ok：标记按停滞身份认人,终止/开始两道边界都清,排在后面的投入不清,残值闸三条齐全");
+// ── ⑥ 另起一条会话:旧行上的标记不许再代表这个任务(第 5 轮审查 F5) ──────────────
+// 换执行器重试、或者旧执行器不能复用时走的是**新建会话行**(task-run.ts / orchestrator.ts),
+// 旧行一个字不动 —— 上面④的前半(`resumedTurnFields`)压根不经过。于是旧行仍然「标记非空、
+// 没收尾」,任务又是 running,那颗点就凭空亮回来了。
+const NEWER = "sess-stall-flag-2";
+await db.insert(sessions).values({
+  id: NEWER, taskId: TASK, role: "single", agentType: "claude", executor: "claude",
+  startedAt: OTHER_SINCE, turnStartedAt: OTHER_SINCE,
+});
+assert.equal(await flag(), OTHER_SINCE, "夹具不对:旧行上的标记该还在");
+assert.equal(await stalled(), false,
+  "换了执行器另起一条会话,旧行上那个没人撤的标记还在给任务点灯 —— 用户看到的是一个凭空亮起的红环");
+// 新会话自己卡住了当然要亮:这道闸挡的是「不是此刻这一轮的那条会话」,不是「有两条会话」。
+markSessionStalled(TASK, NEWER, OTHER_SINCE);
+for (let i = 0; i < 100 && !(await stalled()); i += 1) await new Promise((r) => { setTimeout(r, 10); });
+assert.equal(await stalled(), true, "此刻这一轮自己卡住了,点却不亮");
+
+// ── ⑦ 不接管的那道结束边界:没人来撤,就由对账整个任务清一遍 ──────────────────────
+// 那条消费链连进程都没了(没活到接管),CAS 要的那个 `since` 没有任何人握着,所以这里需要一个
+// 不带身份的版本。安全性靠调用点:对账只处理「状态在飞、手上却没有活句柄」的任务,而且已经原子
+// 预占了它的回合锁。
+await clearTaskStallFlags(TASK);
+assert.equal(await flag(), null, "旧行的标记没清掉");
+assert.equal(
+  (await db.select({ v: sessions.upstreamStalledSince }).from(sessions).where(eq(sessions.id, NEWER)))[0]!.v ?? null,
+  null, "新行的标记没清掉 —— 这一路是整个任务收尾,不是只收一条会话",
+);
+assert.equal(await stalled(), false, "清完了点还亮着");
+
+console.log("test:stall-flag ok：标记按停滞身份认人,终止/开始/不接管三道边界都清,只认此刻这一轮,排在后面的投入不清");

@@ -65,7 +65,7 @@ import { isExecutionNotice } from "./session-notice.js";
 import { RUNS_DIR } from "./paths.js";
 import { runTracePaths } from "./transcript.js";
 import { producesWork } from "@ash/shared/waiting";
-import { markStallFailure, retireStallFailure, type StallVerdict } from "./turn-stall-verdict.js";
+import { markStallFailure, markUnverifiedTurn, type StallVerdict } from "./turn-stall-verdict.js";
 import { now } from "./util.js";
 
 /** 持有者 = 此刻在消费这条会话的那个实例本身(同 session-waiting.ts 的 WaitingOwner)。 */
@@ -372,26 +372,14 @@ function openStall(
     escalated: false,
     actions,
   };
-  // 顶掉的那一条也算退场:同一条会话上换了持有者或换了轮(认领语义见上面那句三元),
-  // 旧那份从此再不会被 evaluate 碰到,它的失败判决于是进入孤立时效(见 turn-stall-verdict.ts)。
-  // 不走 `close`:那会顺手撤掉持久标记,而这条路上标记该归新认领的那一轮管。
-  const displaced = stalls.get(sessionId);
-  if (displaced) retire(displaced);
+  // 顶掉的那一条**什么都不做**:同一条会话上换了持有者或换了轮(认领语义见上面那句三元),
+  // 旧那份从此再不会被 evaluate 碰到,但它那份失败判决仍然归旧消费链读 —— 摘牌只证明它不再
+  // 代表这条会话,不证明那条链已经读过判决(第 5 轮审查 F2),所以销账一律由读者自己做
+  // (`clearStallFailure`,判据写在 turn-stall-verdict.ts 上)。
+  // 也不走 `close`:那会顺手撤掉持久标记,而这条路上标记该归新认领的那一轮管。
   stalls.set(sessionId, stall);
   arm();
   return stall;
-}
-
-/**
- * 这条停滞记录离开状态机了 → 把它那份失败判决标成「已退场」。
- *
- * **只对熔断过的那些有意义**(没熔断就没有判决,那边是空转)。判决本身绝不在这里删:退场
- * 之后紧接着就是消费链读它、结算、再销账,删早一步那一轮就又会被记成正常完成(第 2、3 轮
- * 审查同一处的两次打回,理由写在 turn-stall-verdict.ts 的 ORPHAN_MS 上)。
- */
-function retire(stall: Stall): void {
-  if (stall.trippedAtMs === null) return;
-  retireStallFailure(stall.sessionId, stall.turnStartedAt);
 }
 
 const factsOf = (stall: Stall): StallFacts => ({
@@ -411,7 +399,7 @@ const factsOf = (stall: Stall): StallFacts => ({
 function close(sessionId: string, stall: Stall): void {
   stalls.delete(sessionId);
   if (stalls.size === 0) disarm();
-  retire(stall);
+  // 判决不在这里碰:离开状态机不等于「消费链已经读过它」,销账只能由读者自己做。
   if (!stall.warned) return;
   try {
     stall.actions.resolve(factsOf(stall));
@@ -482,8 +470,8 @@ function evaluate(sessionId: string, stall: Stall): void {
  *     宣布一遍熔断、再落一条判决。
  *   · 宽限回收那一档(`ASH_STALL_TRIP_GRACE_MS`):终止请求没生效时升一级回收句柄。手动那条
  *     路一次 `kill()` 之后就没有下文了。
- *   · 退场与销账(`retire` → `retireStallFailure`):判决的生命周期靠它,否则这一份要等孤立
- *     时效。
+ *   · 「同一份判决只兑现一次」:状态机里这一条在,下一次 `evaluate` 才知道这一轮已经宣布过
+ *     熔断,不会重复发终止请求、也不会重复落判决。
  * 所以接管这条路跟熔断那条路**走同一个出口**,差别只在措辞和「判决是现做的还是读回来的」。
  *
  * 现场按判决里记的那一份还原(`verdict.since`),不是按接管这一刻 —— 持久标记的 CAS 认的是
@@ -596,6 +584,31 @@ export function stallTripText(facts: StallFacts): string {
 export function stallResumeText(verdict: StallVerdict): string {
   return "〔上游停滞·接管后继续终止〕这一回合在上次 ash 运行期间已被判定上游连不上并按失败结算,"
     + `重启接管后仍背着尚未兑现的终止义务,现在把它终止。原判决(${verdict.at}):${verdict.reason}`;
+}
+
+/**
+ * 接管一个**结局核实不了**的回合:登记「这一轮不许按成功结算」,并把要对用户说的那句话给回去。
+ *
+ * 跟熔断那条路差在**不动进程**:判决日志读不出来只说明我们核不了这一轮,不说明它熔断过 ——
+ * 拿一个不确定的终止义务去杀一个可能完全健康的 agent,比让它跑完更糟。所以这里只做两件事:
+ * 把结论钉在回合身份上(结算侧那一句 `stallFailure` 不改一个字就会读到它),外加一句持久可见的
+ * 诊断。判据见 `turn-stall-persist.ts` 的 `unverifiable`:**恢复失败不许授权成功升级**。
+ *
+ * 文案与登记捆在一起返回,是为了让「库里记的理由」和「用户看到的那句话」只有一份来源。
+ */
+export function markUnverifiedTurnFailure(sessionId: string, turnStartedAt: string, why: string): string {
+  const text = stallUnverifiableText(why);
+  markUnverifiedTurn(sessionId, turnStartedAt, text);
+  return text;
+}
+
+/** 「这一轮的结局核实不了」那段文案。 */
+export function stallUnverifiableText(why: string): string {
+  return "〔上游停滞·上一次运行的结局核实不了〕这一回合是上次 ash 运行留下的,而本次启动读不出"
+    + `熔断判决日志(${why}),所以无法确认它当时有没有被判定上游连不上并按失败结算。`
+    + "这一轮因此**不会**按成功结算 —— 可能它本来就是失败的,也可能日志故障让我们冤枉了它,"
+    + "两种都不该悄悄记成完成。续跑材料一个字没动:确认过工作成果之后点重试或者直接续聊即可;"
+    + "先把日志那个故障修掉(多半是权限或磁盘),下一轮就不会再遇到这一句。";
 }
 
 /**

@@ -38,6 +38,14 @@
 import { now } from "./util.js";
 
 export interface StallVerdict {
+  /**
+   * 这一轮**为什么不能按成功结算**:
+   * - `tripped`    看门狗确凿判了它熔断(上游连不上,只有错误事件)。
+   * - `unverified` 结局核实不了(接管上一个进程留下的回合时判决日志读不出来)。两者落位一样
+   *                (都是 failed、都不许凭确认升级),但对用户说的话必须不一样 —— 拿熔断那段
+   *                「整段时间里只收到重试类错误」去描述一次日志故障就是编事实。
+   */
+  kind: "tripped" | "unverified";
   /** 判失败的原因原文(熔断诊断那一段),给结算侧需要时转述。 */
   reason: string;
   at: string;
@@ -59,17 +67,7 @@ export interface StallVerdict {
   durable: boolean;
 }
 
-interface Entry extends StallVerdict {
-  /**
-   * 这个回合身份**退场**的时刻(`null` = 还在跑)。
-   *
-   * 由 `turn-stall.ts` 在那条停滞记录离开状态机时填(真实收口、摘牌、或被新一轮顶掉)——
-   * 也就是「不会再有人往这一轮里写东西了」那一刻。回收只看它,见 ORPHAN_MS。
-   */
-  retiredAt: string | null;
-}
-
-const failures = new Map<string, Entry>();
+const failures = new Map<string, StallVerdict>();
 
 /**
  * 一份判决**现在存住了没有** —— 这是 `markStallFailure` 的返回值,trip 的措辞按它定。
@@ -99,7 +97,7 @@ export type StallDurability = "durable" | "lost-on-restart" | "not-persisted";
  * `true`,就是 F1 那个根上错的判据本身。
  */
 type StallVerdictPersister = (
-  verdict: Omit<StallVerdict, "durable"> & { sessionId: string; turnStartedAt: string },
+  verdict: Omit<StallVerdict, "durable" | "kind"> & { sessionId: string; turnStartedAt: string },
 ) => boolean;
 let persister: StallVerdictPersister | null = null;
 
@@ -108,48 +106,32 @@ export function setStallVerdictPersister(fn: StallVerdictPersister | null): void
 }
 
 /**
- * 回收**只认生命周期**:一条判决要么还归某个在跑的回合,要么已经退场够久了。
+ * **回收只有一个条件:这一轮结算完了** —— 也就是 `clearStallFailure`,由三条消费链各自在写完
+ * 结局之后调。除此之外一个字都不删:没有条数水位,也没有年龄时效。
  *
- * 这一处被打回过两次,两次都是「拿淘汰策略代替生命周期」:
+ * 这一处被打回过三次,三次都是**拿一个代理指标冒充「判决已经没有读者了」**:
  *   · 第 2 轮是条数水位(KEEP=64,超了扔最老的)—— 扔掉的恰恰是还没结算那一条。断网会同时
  *     波及很多台,实测 65 个回合先全部熔断、再统一收到结束回执时,最早那一轮的判决已经被挤掉,
  *     `endTurn` 读不到于是记成 `completed`(1 completed / 64 failed)。
- *   · 第 3 轮是纯年龄 TTL —— **老不等于孤立**。`ASH_STALL_TRIP_GRACE_MS=0`(产品允许的配置)
+ *   · 第 3 轮换成纯年龄 TTL —— **老不等于孤立**。`ASH_STALL_TRIP_GRACE_MS=0`(产品允许的配置)
  *     关掉了强制回收,于是一个熔断过、`interrupt` 没人理的回合可以继续活着;跨过 6 小时、或者
  *     主机休眠把墙钟往前一跳,下一次熔断的写入就会把那条**仍然有人要读**的判决扫掉,旧回合
  *     后来真收到 turnEnd 时读到 null,照样写 `completed`(第 3 轮审查 F3,已实测)。
+ *   · 第 5 轮打回的是「退场 + 年龄」这个组合(F2):`retiredAt` 由状态机在摘牌时填,而**摘牌只
+ *     证明那条记录不再代表这个会话,不证明旧消费循环已经读过判决** —— 常驻台换台后旧流收尾
+ *     延迟、再跨过时效,`closeLead` 要读的那条判决就被扫掉了。磁盘那一侧的同类实例是按条数
+ *     轮转覆盖上一代。
  *
- * 所以年龄只能用在**已经退场**的那些上:`retiredAt` 由状态机在那条停滞记录离开 `stalls` 时
- * 填(真实收口 / 摘牌 / 被新一轮顶掉),填上就意味着「这一轮不会再产生事件了」,余下只剩那条
- * 消费链自己来销账(`clearStallFailure`)。链要是半路没了(进程被硬杀、异常绕过结算),这条
- * 记录就等 ORPHAN_MS 之后被顺手清掉 —— 这才是「明确孤立」。
- *
- * **还在跑的一条都不碰**,所以条数上界就是「同时卡着的回合数」,一条几百字节;跨 server 重启
- * 这张表本来是空的(进程内状态),所以也不存在越攒越多那回事。
+ * 所以这一版不再找「更好的代理指标」,而是**取消代理**:只有读者自己销账才回收。代价是链要是
+ * 半路没了(进程被硬杀、异常绕过结算),这一条会留在内存里直到进程结束 —— 上界是「本进程内
+ * 熔断过、却始终没走完结算的回合数」,每条几百字节。那本身就是个该查的异常,而且那一轮的回合行
+ * 也还开着:下次启动照样从日志里把它读回来。宁可占这点内存,也不要再丢一条判决。
  */
-const ORPHAN_MS = 6 * 60 * 60_000;
-
 const key = (sessionId: string, turnStartedAt: string): string => `${sessionId}\u0000${turnStartedAt}`;
-
-/**
- * 顺手清掉**已退场且已经够老**的那些(写入时做,不另起计时器:这张表只在熔断时被写,频率极低)。
- *
- * `retiredAt === null` = 这一轮还在跑,**一个字都不许碰** —— 判据见 ORPHAN_MS 那段。
- */
-function sweepOrphans(cutoffMs: number): void {
-  for (const [k, verdict] of failures) {
-    if (verdict.retiredAt === null) continue;
-    const at = Date.parse(verdict.retiredAt);
-    // 时间戳读不出来就留着:宁可多留一条孤立记录,也不能因为解析失败丢掉一条活判决。
-    if (Number.isFinite(at) && at <= cutoffMs) failures.delete(k);
-  }
-}
 
 function remember(verdict: StallVerdict & { sessionId: string; turnStartedAt: string }): void {
   const { sessionId, turnStartedAt, ...rest } = verdict;
-  failures.set(key(sessionId, turnStartedAt), { ...rest, retiredAt: null });
-  const cutoff = Date.parse(rest.at) - ORPHAN_MS;
-  if (Number.isFinite(cutoff)) sweepOrphans(cutoff);
+  failures.set(key(sessionId, turnStartedAt), rest);
 }
 
 /**
@@ -179,7 +161,7 @@ export function markStallFailure(
       return "lost-on-restart";
     }
   })();
-  remember({ sessionId, turnStartedAt, reason, at, since: since ?? at, durable: durability === "durable" });
+  remember({ sessionId, turnStartedAt, kind: "tripped", reason, at, since: since ?? at, durable: durability === "durable" });
   return durability;
 }
 
@@ -193,23 +175,31 @@ export function markStallFailure(
 export function adoptStallFailure(
   sessionId: string,
   turnStartedAt: string,
-  verdict: Omit<StallVerdict, "durable">,
+  verdict: Omit<StallVerdict, "durable" | "kind">,
 ): void {
   // 装回来的这一份**按定义是存住的** —— 它正是从进程外读出来的。
-  remember({ sessionId, turnStartedAt, ...verdict, durable: true });
+  remember({ sessionId, turnStartedAt, kind: "tripped", ...verdict, durable: true });
 }
 
 /**
- * 这个回合身份**退场了**:状态机里那条停滞记录离开了(真实收口 / 摘牌 / 被新一轮顶掉)。
+ * 「这一轮的结局**核实不了**」—— 接管一个上一个进程留下来的回合、而判决日志读不出来时走这条
+ * (`turn-stall-persist.ts` 的 `unverifiable`)。
  *
- * 只打时间戳,**不删**:退场之后紧接着就是那条消费链读判决、结算、再 `clearStallFailure`,
- * 这中间一个字都不能少。链要是半路没了,这条记录从此刻开始算 ORPHAN_MS 的孤立时效。
- * 没有对应判决(这一轮压根没熔断)时是空转。
+ * 为什么记进**同一张表**、而不是在消费链那边另起一个标志位:这张表的含义本来就是「这一轮的
+ * 权威结局不是成功」,熔断只是得出这个结论的一种方式。进了这张表,结算侧那一句
+ * `stallFailure(...)` 不用改一个字就会把它算进去 —— 而另起一个标志位就得在每条消费链上各抄一
+ * 份判据,那正是上一轮用户点出来的「只打补丁」。
+ *
+ * 跟熔断判决的区别只在**不杀进程**:我们不知道它熔断过没有,所以不去兑现一个不确定的终止义务
+ * (调用方因此不走 `resumeTrippedTurn`)。已经有判决的不覆盖 —— 那一份是确凿的。
+ *
+ * `durable` 记 false 并且不落盘:这一条是从「日志读不出来」现推出来的,下次启动照样推得出来,
+ * 存它没有意义。它也不产出 trip 文案,所以没人会拿这个字段去对用户说话。
  */
-export function retireStallFailure(sessionId: string, turnStartedAt: string): void {
-  const entry = failures.get(key(sessionId, turnStartedAt));
-  if (!entry || entry.retiredAt !== null) return;
-  entry.retiredAt = now();
+export function markUnverifiedTurn(sessionId: string, turnStartedAt: string, why: string): void {
+  const k = key(sessionId, turnStartedAt);
+  if (failures.has(k)) return;
+  failures.set(k, { kind: "unverified", reason: why, at: now(), since: now(), durable: false });
 }
 
 /** 这个回合身份有没有被看门狗判过失败。读不清掉 —— 同一轮有三处要读(span/会话/任务)。 */
@@ -221,9 +211,9 @@ export function stallFailure(sessionId: string, turnStartedAt: string | null): S
 /**
  * 这一轮结算完了:销账。
  *
- * **这是唯一的正常出口** —— 三条链都得调(单飞在 settle 之后、团队在 endTurn/closeLead 逐轮、
- * 讨论在 recordTurnSpan 之后)。漏掉的那一条要等 ORPHAN_MS 才消失,而在那之前它一直占着内存,
- * 所以漏不是「没后果」,只是后果被兜住了。
+ * **这是唯一的出口** —— 三条链都得调(单飞在 settle 之后、团队在 endTurn/closeLead 逐轮、
+ * 讨论在 recordTurnSpan 之后)。漏掉的那一条会一直留着(判据见上),所以漏的后果是占内存,
+ * 不是丢判决 —— 这个方向是刻意选的。
  */
 export function clearStallFailure(sessionId: string, turnStartedAt: string | null): void {
   if (!turnStartedAt) return;
@@ -236,13 +226,35 @@ export function __resetStallFailures(): void {
 }
 
 /**
- * 只给回归测试:把现存判决的时间戳往前挪 `ms`,用来跑孤立回收那一路(不然得等 6 小时)。
- * 回收发生在下一次 `markStallFailure` 里,所以测试得在挪完之后再写一条。
+ * 启动时把**落盘的那些**装进内存(`turn-stall-persist.ts` 在模块加载时调一次)。
+ *
+ * 为什么是启动一次性装载、而不是每次读判决时各自去读一遍文件:「读不出来」要不要影响结论,是
+ * 个**全局**判断(「这台 ash 还核得了自己的判决吗」);摊到每个读取点各写一次 try/catch,默认
+ * 行为必然又退化成「读不到就当没有」—— 那正是第 5 轮审查 F1 指的那条。装载完成之后,内存这张
+ * 表就是判决的全集,结算侧照常只读内存,一个字都不用改。
+ *
+ * 已经在表里的不覆盖:那是本进程刚作出的判决,比盘上那份新。
  */
-export function __ageStallFailures(ms: number): void {
-  for (const [k, verdict] of failures) {
-    const shift = (iso: string | null): string | null =>
-      (iso === null ? null : new Date(Date.parse(iso) - ms).toISOString());
-    failures.set(k, { ...verdict, at: shift(verdict.at)!, retiredAt: shift(verdict.retiredAt) });
+export function loadStallFailures(
+  records: { sessionId: string; turnStartedAt: string; reason: string; at: string; since?: string }[],
+): number {
+  let loaded = 0;
+  for (const record of records) {
+    const k = key(record.sessionId, record.turnStartedAt);
+    if (failures.has(k)) continue;
+    failures.set(k, { kind: "tripped", reason: record.reason, at: record.at, since: record.since ?? record.at, durable: true });
+    loaded += 1;
   }
+  return loaded;
+}
+
+/**
+ * 现在还有哪些回合身份背着判决 —— 给**压缩**那一侧用(`compactStallJournal` 的保留名单要跟这张
+ * 表口径一致),也给回归测试用。
+ */
+export function liveStallVerdicts(): { sessionId: string; turnStartedAt: string }[] {
+  return [...failures.keys()].map((k) => {
+    const [sessionId, turnStartedAt] = k.split("\u0000");
+    return { sessionId, turnStartedAt };
+  });
 }
