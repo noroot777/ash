@@ -7,7 +7,10 @@
 //
 // 注:`scripts/` 下的安装器另有一份同规矩的实现(setup 在裸 Node 上跑,导不进 TS),两边
 // 只能靠「同一条规矩写两遍」,回归测试钉着两边行为一致。
-import { mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync, fsyncSync, mkdirSync, openSync,
+  readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 
 /** 「没有这个文件」/「有但读不动」/「读得动」。判 absent 之前必须先过这一关（N1）。 */
@@ -83,6 +86,32 @@ function resolveTarget(file: string): string {
  *
  * 所有者(uid/gid)没抄:配置在谁的目录里就该由谁这个进程写。
  */
+/**
+ * **动用户那份之前,先证明这份正文落得下去**:在同目录(同一个文件系统、同一份配额)写一个
+ * 只有自己能读的临时文件、fsync 到设备、再删掉。落不下去就交回那句话,活动配置一个字节没碰。
+ *
+ * 为什么非要这一步(本轮审查 R1):就地写是先截断再写,没有原子性,而上一版把「写出异常就回写
+ * 旧正文」当成了失败安全。可写失败往往不是一次性的(配额耗尽、设备 EIO、挂载转只读),那时
+ * **回写同样失败**,盘上留下半截正文、备份完整,而 CLI 读的是活动那份。预演把这一整类挡在
+ * 动手之前;挡不住的只剩「写到一半断电/被杀」,那一档任何非原子写都兜不住。
+ */
+function rehearse(target: string, body: string, create: boolean): string | null {
+  const probe = `${target}.ash-publish-probe`;
+  try {
+    // 新建那一路:父目录得先有(gemini 的 `.gemini/`、kiro 的 `settings/` 这种子层)。
+    // 顺序跟真写那一步一致 —— 建目录本身也是一次写,挡不住的话这一步就该失败。
+    if (create) mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(probe, body, { encoding: "utf8", mode: 0o600 });
+    const fd = openSync(probe, "r+");
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    return null;
+  } catch (e) {
+    return (e as Error).message;
+  } finally {
+    try { rmSync(probe, { force: true }); } catch { /* 预演产物,删不掉也不该拦住结论 */ }
+  }
+}
+
 function publishInPlace(read: ConfirmedRead, body: string): void {
   const target = resolveTarget(read.file);
   try {
@@ -90,8 +119,14 @@ function publishInPlace(read: ConfirmedRead, body: string): void {
     // kiro 的 `settings/mcp.json`),目录不存在时 `writeFileSync` 直接 ENOENT。
     // **只在原来确实没有这个文件时建** —— 已有文件的父目录当然在,那时多调一次就是多一次
     // 对用户目录的写操作。
-    if (read.text === null) mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, body, "utf8");
+    if (read.text === null) {
+      mkdirSync(dirname(target), { recursive: true });
+      // **新建的那一份只给自己读**(0600),跟裸 Node 那份逐字节同口径:它装着 MCP 接法。
+      // 已有文件走下面那句、权限一个位都不动(就地写的全部意义就在这儿)。
+      writeFileSync(target, body, { encoding: "utf8", mode: TMP_MODE });
+    } else {
+      writeFileSync(target, body, "utf8");
+    }
   } catch (e) {
     try {
       if (read.text === null) rmSync(target, { force: true });
@@ -158,6 +193,9 @@ const commit: Commit = (read, body) => {
   if (!now) return `要写 ${read.file} 之前又读不出它了`;
   // 别人动过 ⇒ 这一轮读到的那一版已经不作数,整条重做(见 publishFresh 的 ②)。
   if (now.text !== read.text) throw STALE;
+  // 预演先行(R1):落不下去就在这里收手,用户那份还是原样。
+  const dry = rehearse(resolveTarget(read.file), body, read.text === null);
+  if (dry) return `写不进 ${read.file} 所在的目录（${dry}），所以这次什么都没写`;
   publishInPlace(read, body);
   const after = readForWrite(read.file);
   if (!after || after.text !== body) {
