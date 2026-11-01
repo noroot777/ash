@@ -32,6 +32,7 @@ import {
   toUserView,
   touchUser,
 } from "./store.js";
+import { needsOnboarding } from "../onboarding.js";
 import { initUserCliEnv } from "./user-cli.js";
 import { claimExistingDataFor, conversionPreflight } from "./conversion.js";
 
@@ -55,7 +56,14 @@ async function stateFor(c: Context): Promise<AuthState> {
   const config = await instanceConfig();
   const actor = actorOf(c);
   if (config.mode !== "multi") {
-    return { mode: "single", needsSetup: config.mode === "", user: null, rootDir: null, homeDir: null };
+    return {
+      mode: "single",
+      needsSetup: config.mode === "",
+      user: null,
+      rootDir: null,
+      homeDir: null,
+      needsOnboarding: await needsOnboarding(actor),
+    };
   }
   const user = actor.kind === "user" && actor.userId ? await getUser(actor.userId) : null;
   const needs = await needsSetup();
@@ -67,6 +75,8 @@ async function stateFor(c: Context): Promise<AuthState> {
     // 只能靠用户凭记忆填对,填错就是一个 409。
     rootDir: user?.role === "admin" || needs ? config.rootDir : null,
     homeDir: user ? await userHomeDir(user.dirName) : null,
+    // 没登录就答不上「我还缺什么」,也不该答:那一屏是登录页。
+    needsOnboarding: user ? await needsOnboarding(actor) : false,
   };
 }
 

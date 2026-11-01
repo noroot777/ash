@@ -13,6 +13,7 @@ import {
   scheduledMessageCounts,
   scheduledMessageExitCode,
   scheduledMessageMatches,
+  scheduledMessageSource,
   scheduledMessageSummary,
 } from "../src/components/scheduledMessagePresentation.ts";
 import {
@@ -77,7 +78,7 @@ assert.equal(scheduledMessageExitCode(monitor("【哨兵结束】检查。进程
 assert.equal(scheduledMessageExitCode({ ...samples[0], text: "REGRESSION_FINISHED exitCode=1" }), null);
 assert.equal(scheduledMessageMatches(monitor("【哨兵结束】检查。进程已丢失"), "attention"), false);
 const countSamples = [samples[0], { ...samples[1], sessionRole: "reviewer" as const }, monitor("REGRESSION_FINISHED exitCode=1")];
-assert.deepEqual(scheduledMessageCounts(countSamples), { all: 3, mine: 1, managed: 1, monitor: 1, attention: 1 });
+assert.deepEqual(scheduledMessageCounts(countSamples), { all: 3, mine: 1, managed: 1, monitor: 1, system: 0, attention: 1 });
 assert.match(renderTray(countSamples), /1 条需留意/);
 
 const html = renderToStaticMarkup(
@@ -178,9 +179,11 @@ assert.match(
   "普通顶层任务即使支持派生命令，运行中提示也必须让用户发现队尾引导动作",
 );
 // 撤回的回填只能发生在取消成功之后：失败了消息还挂在队列上，再往输入框塞一份就成了两条。
+// 团队那半的回复框在 e5107008 从 TeamView.tsx 拆进了 TeamReplyBox.tsx —— 这里读的是实现
+// 所在的那个文件，拆走后没跟过来就等于这几条断言在读一份不存在的 withdraw。
 for (const [file, source] of [
   ["ReplyBox.tsx", replySource],
-  ["TeamView.tsx", readSource(new URL("../src/team/TeamView.tsx", import.meta.url))],
+  ["TeamReplyBox.tsx", readSource(new URL("../src/team/TeamReplyBox.tsx", import.meta.url))],
 ] as const) {
   const withdraw = source.slice(source.indexOf("const withdraw = async"));
   assert.match(withdraw, /if \(!await scheduled\.cancel\(message\.id\)\) return;/, `${file} 撤回必须先取消成功再回填`);
@@ -268,6 +271,60 @@ assert.deepEqual(
   assert.match(mineMarkup, /scheduled-message-guide/, "引导入口应落到用户自己最早的那条排队消息上");
 }
 
+// ── 带 origin 但不是哨兵的那几种 ────────────────────────────────────────────
+// `origin` 早期只有哨兵在写，后来审查结算的修复交接（`review-settlement:<代次>`）、检查点
+// 续跑也写它。按 `!!origin` 判哨兵会把一条审查交接标成哨兵，还配上「取消这次唤醒 / 不执行
+// 停止哨兵操作」的措辞——用户据此以为「有个哨兵在盯」（2026-10-31 实例：任务 CKjeps4QSRTE
+// 的 review-repair-dde14804…）。真哨兵的判据与后端同源（`monitorIdFromOrigin`），认不出来
+// 的 origin 一律落到中性的「系统」，而不是沿用哨兵那一套。
+{
+  const repair: ScheduledMessage = { ...row("repair", "【自由工作流审查未通过 · 第 1 轮】\n请先完整读取 report.md。",
+    "2026-10-31T10:00:01.000Z"), origin: "review-settlement:gen-1" };
+  const resume: ScheduledMessage = { ...row("resume", "继续：把剩下两处改完", "2026-10-31T10:00:02.000Z"), origin: "checkpoint:resume" };
+  const real: ScheduledMessage = { ...row("mon", "【哨兵事件】盯构建（monitorId=m1）\nREGRESSION_FINISHED exitCode=1 monitor=m1",
+    "2026-10-31T10:00:00.000Z"), origin: "monitor:m1" };
+  assert.deepEqual([real, repair, resume, { ...row("role", "审查答复", "2026-10-31T10:00:03.000Z"), sessionRole: "reviewer" as const },
+    row("mine", "我写的", "2026-10-31T10:00:04.000Z")].map(scheduledMessageSource),
+  ["monitor", "system", "system", "managed", "mine"], "来源判定:真哨兵 / 认不出的 origin 落中性 / 会话角色 / 用户自己");
+  // 「哨兵」筛选器只许命中真哨兵，否则点进去看到的还是那条审查交接。
+  assert.equal(scheduledMessageMatches(repair, "monitor"), false, "审查结算不属于哨兵");
+  assert.equal(scheduledMessageMatches(resume, "monitor"), false, "检查点续跑不属于哨兵");
+  assert.equal(scheduledMessageMatches(real, "monitor"), true, "真哨兵仍归哨兵");
+  assert.equal(scheduledMessageMatches(repair, "mine"), false, "系统排入的不是用户自己的消息");
+  assert.equal(scheduledMessageMatches(repair, "system"), true);
+  assert.deepEqual(scheduledMessageCounts([real, repair, resume]),
+    { all: 3, mine: 0, managed: 0, monitor: 1, system: 2, attention: 1 }, "三条里只有一条是哨兵");
+  // 退出码是哨兵独有的概念:交接正文里引着的 REGRESSION_FINISHED 不许算成「需留意」。
+  const quoted: ScheduledMessage = { ...repair, text: "【审查未通过】\nREGRESSION_FINISHED exitCode=1 monitor=m1" };
+  assert.equal(scheduledMessageExitCode(quoted), null, "非哨兵来源不读退出码");
+  assert.equal(scheduledMessageMatches(quoted, "attention"), false);
+  assert.equal(scheduledMessageExitCode(real), 1, "真哨兵的退出码照旧读得出来");
+  // 哨兵格式那几刀也只许用在真哨兵上。
+  assert.equal(scheduledMessageSummary({ ...repair, text: "审查未通过（monitorId=m1），退出码 1\n正文" }),
+    "审查未通过（monitorId=m1），退出码 1", "非哨兵来源的第一行原样留着");
+
+  const markup = renderToStaticMarkup(<ScheduledMessageTray messages={[real, repair, row("mine", "我写的", "2026-10-31T10:00:04.000Z")]}
+    loading={false} error={null} cancelingIds={new Set()} steeringIds={new Set()}
+    onSteer={() => undefined} onWithdraw={() => undefined} onCancel={() => undefined} />);
+  const chunks = markup.split('<div class="scheduled-message-row">');
+  const repairRow = chunks.find((chunk) => chunk.includes("自由工作流审查未通过")) ?? "";
+  const monitorRow = chunks.find((chunk) => chunk.includes("盯构建")) ?? "";
+  assert.ok(repairRow && monitorRow, "两行都应被渲染出来");
+  assert.doesNotMatch(repairRow, /<em>哨兵<\/em>/, "审查结算不得标成哨兵");
+  assert.doesNotMatch(repairRow, /取消哨兵事件|停止哨兵/, "审查结算不得套用哨兵的取消措辞");
+  assert.doesNotMatch(repairRow, /放回输入框|scheduled-message-guide/, "系统排进来的不是用户打的字，撤回与引导都不给");
+  assert.match(repairRow, /<em>系统<\/em>/, "认不出来源时只说「系统」，不冒充哨兵");
+  assert.match(repairRow, /scheduled-message-managed[^>]*>由系统排入 · 不可撤回</, "要说清这行为什么没有按钮");
+  // 真哨兵那一行一个字都不变。
+  assert.match(monitorRow, /<em>哨兵<\/em>/);
+  assert.match(monitorRow, /取消哨兵事件[\s\S]*这一次唤醒（仅移除本条输入，不执行停止哨兵操作）/);
+  // 头部计数与筛选器按来源分摊:只有真哨兵算进「哨兵 N」。
+  assert.match(markup, /我的消息 1 · 哨兵 1 · 系统 1/, "头部按真实来源分摊计数");
+  assert.doesNotMatch(markup, /哨兵 2/);
+}
+// 展开后那排筛选器(含只在有系统输入时才多出来的「系统」)要真浏览器才摆得出来,
+// 钉在 test-scheduled-message-tray-dom.mjs 里。
+
 // 就一次都不做——只提示去网页端，绝不能从这个入口发出取消请求。真要扔掉走独立的丢弃。
 const mobileSource = readSource(new URL("../../mobile/src/components/PendingMessageTray.tsx", import.meta.url));
 const slice = (from: string, to: string) => {
@@ -297,4 +354,5 @@ assert.ok(
   mobileRow.indexOf("审查会话 · 自动投递") < mobileRow.indexOf("void withdraw(m)"),
   "撤回与丢弃必须落在 sessionRole 为空的那个分支里",
 );
-console.log("✓ 撤回回填、发送减法、附件丢失防线、审查会话答复只读、哨兵事件只许取消、引导按钮位置、错误失效与窄托盘降级均受回归保护");
+console.log("✓ 撤回回填、发送减法、附件丢失防线、审查会话答复只读、哨兵事件只许取消、"
+  + "非哨兵 origin 不套哨兵口径、引导按钮位置、错误失效与窄托盘降级均受回归保护");

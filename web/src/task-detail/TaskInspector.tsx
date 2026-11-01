@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, Group, Session, Task, TaskListItem, TaskStatus, TokenUsage } from "@ash/shared";
+import type { Group, Session, Task, TaskListItem, TaskStatus, TokenUsage } from "@ash/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@ash/shared";
-import { REASONING_EFFORT_DETAIL } from "@ash/shared/cli-presets";
 import { addUsage, formatTokens, formatTokensExact, hasUsage, usageTotal } from "@ash/shared/usage";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
@@ -14,17 +13,10 @@ import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
 import { taskCreationLabel } from "@ash/shared/task-origin";
-import {
-  executorRunSummary,
-  isExecutorPickable,
-  nothingRunnable,
-  teamExecutorCandidates,
-  useAgentAvailability,
-} from "../lib/agentAvailability.ts";
 import { QueueDrawer } from "./QueueDrawer.tsx";
 import { InspectorPromptContent } from "./InspectorPromptContent.tsx";
 import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
-import { formatInstant, taskDurationInfo } from "./utils.ts";
+import { formatInstant, formatInstantRange, taskDurationInfo } from "./utils.ts";
 
 const STATUS_ORDER: TaskStatus[] = [
   "running", "idle", "paused", "awaiting_review", "queued", "backlog", "done", "failed", "canceled",
@@ -149,9 +141,6 @@ export function TaskInspector({
   const [queueItems, setQueueItems] = useState<{ taskId: string; title: string }[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
   const [requeueing, setRequeueing] = useState(false);
-  const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
-  const [profilesReady, setProfilesReady] = useState(false);
-  const detection = useAgentAvailability();
   const readOnly = task.parentId !== null || !!task.archived;
   const latestSession = useMemo(
     () => [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0],
@@ -185,10 +174,6 @@ export function TaskInspector({
     let alive = true;
     if (!task.queueId) setQueueItems([]);
     else api.queue(task.queueId).then((queue) => { if (alive) setQueueItems(queue.items); }).catch(() => undefined);
-    setProfilesReady(false);
-    api.agents().then((value) => { if (alive) setProfiles(value); })
-      .catch(() => { if (alive) setProfiles([]); })
-      .finally(() => { if (alive) setProfilesReady(true); });
     return () => { alive = false; };
   }, [task.id, task.queueId, task.queuePosition, queueSignature, queueOpen]);
 
@@ -213,34 +198,9 @@ export function TaskInspector({
   };
 
   const statusOptions = STATUS_ORDER.filter((status) => isUserSettableStatus(status) || status === task.status);
-  const agentType = task.agentType ?? "claude";
-  const { workerTypes, leadTypes, leadProfiles } = useMemo(
-    () => teamExecutorCandidates(detection, profiles),
-    [detection, profiles],
-  );
-  const executorTypes = task.mode === "team" ? leadTypes : workerTypes;
-  const executorProfiles = task.mode === "team" ? leadProfiles : profiles;
-  const executorSelection = { agentType, executorId: task.executorId ?? null };
-  // 这一节是只读的执行信息：真正生效的模型/强度可能来自 profile 也可能来自任务级
-  // 覆盖，一律由 executorRunSummary 算出来照抄。改执行器和模型走对话框底部那排胶囊。
-  const run = executorRunSummary(executorSelection, profiles, {
-    model: task.model,
-    effort: task.reasoningEffort,
-  });
-  const noExecutor = profilesReady && nothingRunnable(profiles);
-  const currentUnavailable = profilesReady
-    && !isExecutorPickable(executorSelection, executorTypes, executorProfiles);
-  const availabilityMessage = noExecutor
-    ? "还没有已注册执行器。"
-    : currentUnavailable
-      ? task.mode === "team"
-        ? "当前团队调度者未注册或不支持常驻会话，请改选可用执行器。"
-        : "当前执行器未注册，请改选已注册 Profile 或其类型默认。"
-      : task.mode === "team" && detection.status === "loading"
-        ? "正在确认已注册调度者的常驻会话能力…"
-        : task.mode === "team" && detection.status === "failed"
-          ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
-          : null;
+  // 执行器/模型/智能水平不在这里露面：它们跑到一半就能改，这里写下的只会是
+  // 「此刻的配置」而不是「这段历史里谁在跑」。当前配置看对话框底部那颗三段胶囊，
+  // 起跑前的可用性由 ExecutorGate 按后端判据拦。真正跑过的执行器见下面 Token 用量。
   const duration = taskDurationInfo(task);
   const parent = taskParentLink(task, allTasks);
   const canRequeue = task.parentId === null
@@ -316,21 +276,15 @@ export function TaskInspector({
 
         <section>
           <h2>执行信息</h2>
-          <InspectorRow label="执行器">
-            <span>{task.executorLabel ?? agentType}</span>
-          </InspectorRow>
-          <InspectorRow label="模型">
-            <span>{run.model ?? "跟随执行器"}</span>
-          </InspectorRow>
-          <InspectorRow label="智能水平">
-            <span>{run.effort ? (REASONING_EFFORT_DETAIL[run.effort] ? `${run.effort}（${REASONING_EFFORT_DETAIL[run.effort]}）` : run.effort) : "跟随执行器"}</span>
-          </InspectorRow>
-          {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
           {latestSession?.versionWarning && <p className="task-inspector-note is-warning">{latestSession.versionWarning}</p>}
-          <InspectorRow label="创建时间"><span>{formatInstant(task.createdAt)}</span></InspectorRow>
-          {task.startedAt && <InspectorRow label="开始时间"><span>{formatInstant(task.startedAt)}</span></InspectorRow>}
-          {task.endedAt && <InspectorRow label="结束时间"><span>{formatInstant(task.endedAt)}</span></InspectorRow>}
-          {duration && <InspectorRow label={duration.label}><span title={duration.title}>{duration.text}</span></InspectorRow>}
+          {duration ? (
+            <InspectorRow label={duration.label}>
+              <span title={[`创建 ${formatInstant(task.createdAt)}`, duration.note].filter(Boolean).join(" · ")}>
+                {duration.text}
+                <em className="task-inspector-aside">{formatInstantRange(task.startedAt, task.endedAt)}</em>
+              </span>
+            </InspectorRow>
+          ) : <InspectorRow label="创建"><span>{formatInstant(task.createdAt)}</span></InspectorRow>}
           {usageByExecutor.map(([label, usage], index) => (
             <InspectorRow key={label} label={index === 0 ? "Token 用量" : ""}>
               <span aria-label={`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`}>

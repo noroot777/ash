@@ -1,6 +1,7 @@
 import { dbClient } from "./db/index.js";
+import type { TurnOutcome } from "@ash/shared";
 import { id } from "./util.js";
-import { clearTurnActive, closedAlready, markTurnActive } from "./session-turn-registry.js";
+import { clearTurnActive, closedAlready, markTurnActive, markTurnOpenedHere } from "./session-turn-registry.js";
 // 对外的门面：登记层的公开函数在这里原样再导出一遍（理由见下面文件头的最后一段）。
 export {
   activeRegistrySize,
@@ -10,8 +11,10 @@ export {
   closeTaskTurns,
   closedAlready,
   markTurnActive,
+  markTurnOpenedHere,
   nextTurnStart,
   primeTurnStarts,
+  turnOpenedHere,
 } from "./session-turn-registry.js";
 // 回合区间的**写入端**。读取端在 `task-artifact-windows.ts`（产物归属按时间认人），表的语义写在
 // `db/schema-sessions.ts` 的 `sessionTurns` 上，这里不复述。
@@ -181,13 +184,25 @@ export const freshTurnFields = (at: string) => ({
  * `endedAt: null` 也在这里：会话重新开跑就不再是「已收尾」,漏掉它的那一处会让读端把这条
  * 会话当成结束了的（区间按老的收尾时刻截断）。计数同样不在这里加，理由见文件头。
  */
-export const resumedTurnFields = (_at: string) => ({
+export const resumedTurnFields = (_at: string, opts?: { queuedBehind?: boolean }) => ({
   turnStartedAt: _at,
   endedAt: null as string | null,
   // `stoppedAs: null` 同理:上一轮「是被停的」这个结论随新回合翻篇。单飞每轮收尾都覆写这一
   // 列,所以缺它只在**复用同一行**的那几条路上看得出来(团队/duet),而读端拿它当「这一轮不是
   // 失败」的判据,留着就会把一轮真失败说成受控停止(见 session-waiting.ts)。
   stoppedAs: null as string | null,
+  // 「上游停滞」那个标记同理,而且它更凶:读端的 EXISTS 本来靠 `ended_at IS NULL` 把陈旧值
+  // 挡在外面(task-store.ts),可这里正好把 `ended_at` 清成 null —— 上一轮留下的标记于是当场
+  // 复活,页面上一边是正常答完的新回合、一边亮着红色停滞环,刷新还在(第 1 轮审查第 3 条,
+  // 已实测)。这是**开始边界**那一道;终止边界那一道在 session-stall-flag.ts。
+  //
+  // `queuedBehind: true` = **这一轮只是排在还在跑的那一轮后面,不是真开跑**(常驻台投入口:
+  // 用户插话时 `sendToLead` 当场持有 T2,而队首 T1 还在执行器手里)。那种情形这一列一个字都
+  // 不许动:T1 可能正卡在上游重连上并且已经报过警,而「补一句话」既不是恢复、也不是回合结束,
+  // 清掉它等于让一个仍然有效的警告凭空消失,而且之后不会再报第二次(`warned` 已经是真)——
+  // 第 3 轮审查 F2,已实测。其余字段照旧刷:它们说的是「这条会话还在跑」,排在后面的那一轮
+  // 同样成立。
+  ...(opts?.queuedBehind ? {} : { upstreamStalledSince: null as string | null }),
 });
 
 /**
@@ -218,9 +233,20 @@ export async function openTurn(input: {
   if (!input.startedAt) return;
   const startedAt = input.startedAt;
   const register = opts.register ?? true;
-  // 先登记活动身份：登记得比写库早一点没有坏处,反过来晚一点就有——那个窗口里面板会把
-  // 正在写的这一轮算成「崩了没收口」。
-  if (register) markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt });
+  // **这一行开始记录是本进程写的** —— 判决恢复那一路靠它分辨「全新起跑」和「上一个进程留下来
+  // 的」,理由见 session-turn-registry.ts 的 `openedHere`。登记在写库之前:下面那几步都可能抛,
+  // 而「是我开的」这个事实跟它们成不成没关系(开始行没落下的回合照样要认得出是本进程开的)。
+  //
+  // **`register: false` 那一档不登记**(本轮审查 N4):那一路重放的是一个在所有权层已经终结的
+  // 身份(刚被结束事件关掉、整台已经摘牌),它不是「新的一轮」—— 而注销只长在 `clearTurnActive`
+  // 上,那一轮早就注销过了。照登的话这条登记永远没有人来撤,长期跑下去只增不减;语义上也是假的:
+  // 迟到的补录不该把一个已经收尾的回合复活成「本进程正开着的」。两件事于是同一道闸。
+  if (register) {
+    markTurnOpenedHere(input.sessionId, startedAt);
+    // 先登记活动身份：登记得比写库早一点没有坏处,反过来晚一点就有——那个窗口里面板会把
+    // 正在写的这一轮算成「崩了没收口」。
+    markTurnActive({ sessionId: input.sessionId, taskId: input.taskId, startedAt });
+  }
   // 上一轮欠着的身份在这里补：那时库正坏着,现在也许好了。放在新回合落账**之前**,这样
   // 「后来成功的一轮」永远不会先把两个数凑相等再让欠账无声无息（第 6 轮审查必须修 2）。
   // 补的恰好是同一个身份时（库恢复后用同一个 `startedAt` 重试）这一步就把它落完了,下面
@@ -250,7 +276,7 @@ export async function openTurn(input: {
  * 一个回合**自己**的结局。语义、为什么不能拿会话行上的退出码投影、null 的含义,都写在
  * `db/schema-sessions.ts` 的 `sessionTurns.outcome` 上(第 5 轮审查 F3)。
  */
-export type TurnOutcome = "completed" | "failed" | "stopped";
+export type { TurnOutcome };
 
 /**
  * 这一轮收在什么结局上。null = **不知道**(存量行、收口那一下没写成、回合还开着)。
@@ -270,8 +296,25 @@ export async function turnOutcome(
     sql: "SELECT outcome FROM session_turns WHERE session_id = :sid AND started_at = :at LIMIT 1",
     args: { sid: sessionId, at: startedAt },
   });
-  const value = read.rows.at(0)?.outcome;
-  return value === "completed" || value === "failed" || value === "stopped" ? value : null;
+  return readOutcome(read.rows.at(0)?.outcome);
+}
+
+/** 库里那一格怎么解释成结局 —— 单条与批量共用这一份(白名单之外一律按「不知道」)。 */
+const readOutcome = (value: unknown): TurnOutcome | null =>
+  value === "completed" || value === "failed" || value === "stopped" ? value : null;
+
+/**
+ * 一个任务名下**每个回合**的结局,键是 `会话 id@回合起点`(`session_turns` 的唯一键)。
+ *
+ * 批量版给列表/详情那种要一次带出很多会话的出口用(逐条查会变成 N 条 SQL);解释口径与上面
+ * 那条单条版共用 `readOutcome`,两边漂开就是这条链上所有事故的形状。
+ */
+export async function turnOutcomesForTask(taskId: string): Promise<Map<string, TurnOutcome | null>> {
+  const read = await dbClient.execute({
+    sql: "SELECT session_id, started_at, outcome FROM session_turns WHERE task_id = :tid",
+    args: { tid: taskId },
+  });
+  return new Map(read.rows.map((row) => [`${String(row.session_id)}@${String(row.started_at)}`, readOutcome(row.outcome)]));
 }
 
 /** 一个回合的身份,加上落这一行所需要的其余事实。 */

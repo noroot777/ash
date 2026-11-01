@@ -26,7 +26,7 @@ import { forgetRemovedPeerKeys } from "./handoff-scope.js";
 import { isMultiUser } from "./mode.js";
 
 /** 一人一份的那几项。加一项就往这里加,读写两侧同时生效。 */
-export const PERSONAL_SETTING_KEYS = ["defaultWorkflowId", "composerSendKey"] as const;
+export const PERSONAL_SETTING_KEYS = ["defaultWorkflowId", "composerSendKey", "onboardedAt"] as const;
 export type PersonalSettingKey = (typeof PERSONAL_SETTING_KEYS)[number];
 
 const isPersonalKey = (key: string): key is PersonalSettingKey =>
@@ -60,6 +60,35 @@ export async function settingsFor(ownerUserId: string | null): Promise<AppSettin
 
 /** 设置页要按 actor 读。 */
 export const settingsForActor = (actor: Actor): Promise<AppSettings> => settingsFor(ownerIdOf(actor));
+
+/**
+ * 这个人**自己**写过这一项吗 —— 写过就给值,没写过给 null,**不落回全局那份**。
+ *
+ * 与 `settingsFor` 的分工:那条给的是「他看到的生效值」,全局那份当出厂默认。对
+ * 「默认起手式」这类口味项是对的;对**表态记录**则正相反 —— `onboardedAt` 全局那行
+ * 的意思是「这台机器转多人之前,那个独自使用它的人走完过向导」,它替不了今天刚加进来
+ * 的 bob:bob 自己一个执行器都没有,正该被领一遍(`src/onboarding.ts`)。
+ *
+ * 自用模式下只有一份设置,全局那份就是他自己那份。
+ */
+export async function ownPersonalSetting<K extends PersonalSettingKey>(
+  ownerUserId: string | null,
+  key: K,
+): Promise<AppSettings[K] | null> {
+  if (!ownerUserId || !(await isMultiUser())) return (await getAppSettings())[key];
+  const row = (await db
+    .select()
+    .from(userSettings)
+    .where(and(eq(userSettings.userId, ownerUserId), eq(userSettings.key, key)))).at(0);
+  if (!row) return null;
+  try {
+    const value: unknown = JSON.parse(row.value);
+    // 判据与读写两侧共用一份(理由见 settingsFor 里那段)。
+    return acceptsSettingValue(key, value) ? (value as AppSettings[K]) : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * 写设置。个人面落自己那份;实例面要实例管理员;多人模式的接力目标机不走这条路

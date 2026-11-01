@@ -14,7 +14,7 @@ type Step = "choose" | "multi-form" | "key";
 
 // `state` 是**传进来的**,不是 useAuth() 读的:这一屏由 AuthGate 渲染在
 // `AuthContext.Provider` 之外(那时还没确认身份),读 context 只会拿到自用模式的兜底值。
-export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () => Promise<void> | void }) {
+export function SetupWizard({ state, onDone }: { state: AuthState; onDone: () => Promise<unknown> | void }) {
   // 模式已经是 multi 却还进得了向导 = 上一次转换崩在半路,没建出能登录的管理员。
   // 那一步的分叉早就没得选了(转不回自用),直接进表单,只把管理员补出来。
   const resuming = state.mode === "multi";

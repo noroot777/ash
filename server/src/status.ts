@@ -12,6 +12,7 @@ import { previewStopFailure } from "./preview-process-stop.js";
 import { recordTaskStatus } from "./task-start-status.js";
 import { releaseTerminalLanding } from "./task-complete.js";
 import { directionIdentityCleared } from "./task-direction-epoch.js";
+import { clearStallFailure } from "./turn-stall-verdict.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -38,6 +39,37 @@ export async function setTaskStatus(
      * 检查点,误做会。恢复终态不走这个口子:让位与待发送消息的 flush 都靠那次推进。
      */
     quietAdvance?: boolean;
+    /**
+     * 这一笔落位**同时消费掉**的那几项回合输入事实(续聊前的原状态、原生回合标记、完成确认)。
+     *
+     * 为什么非得挤进同一条 UPDATE(第 2 轮审查 F2,已实测):结算侧原先是「先清 `followUpFrom`、
+     * 下一句再写 status」两条语句。两句之间任务是 `running + followUpFrom=null` —— 此刻进程没了,
+     * **恢复原终态所需的那个事实已经永久消失**,重启后的对账只能把一个本该回到 `done` 的任务落成
+     * failed。用户那边唯一的区别只是 ash 有没有在那条缝里重启。
+     *
+     * 起跑侧一直是对的(`guarded-turn-start.ts` / `review-start-retry.ts`:status 与这三列在同一笔
+     * 事务里写),结算侧照它对齐。类型只允许「清掉」那几个值:这个口子不是通用的字段补写入口。
+     */
+    consume?: { followUpFrom?: null; nativeTurn?: false; completeConfirmedAt?: null };
+    /**
+     * 这一笔落位**兑现掉**的熔断失败义务(会话 + 回合起点)。
+     *
+     * 为什么销账只能从这个口子走(第 2 轮审查 F1,已实测):判决的回收条件是「这个执行身份的任务
+     * 落位已经持久确认」,而全仓唯一知道这件事的就是**真把那一行写进库的那一次**。启动对账原先在
+     * 算出落位之前就销了账(`interruptedTurnVerdict` 里),后面还隔着持续目标善后、时间线、基线恢复
+     * 和最终状态写入 —— 这中间重启一次、或者任何一个 await 抛一次,盘上就留下「任务仍 running、
+     * 失败义务已销账」:下一次启动只看到一个已经闭合的回合,一个提示过「已自动终止」的持续目标
+     * 回来显示「暂停中 + 继续」。
+     *
+     * 做成这个函数的参数,而不是「记得在 setStatus 之后再调一句」:后者的正确性靠调用顺序,而
+     * 这条链上每一轮审查都在证明调用顺序护不住这件事。写在这儿,销账与落位同生共死 ——
+     * UPDATE 没改到行(被 guard 挡下、任务已被删)就一个字都不销。
+     *
+     * 回合区间自己就是权威结局的那几条链(duet 的一轮发言、团队那台的一个回合)不走这里:
+     * 它们的失败由各自的区间与返回值承载,跟任务那一行什么时候落位无关(见
+     * turn-stall-verdict.ts 的 `clearStallFailure`)。
+     */
+    settleStallTurns?: { sessionId: string; turnStartedAt: string }[];
   },
 ): Promise<void> {
   const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -47,7 +79,7 @@ export async function setTaskStatus(
   const rerun = status === "running" && !!cur && cur.status !== "running";
   if (rerun) beginRerunGate(taskId);
   try {
-    await writeTaskStatus(taskId, status, cur, rerun, opts?.quietAdvance);
+    await writeTaskStatus(taskId, status, cur, rerun, opts?.quietAdvance, undefined, undefined, opts?.consume, opts?.settleStallTurns);
   } finally {
     if (rerun) endRerunGate(taskId);
   }
@@ -61,6 +93,8 @@ async function writeTaskStatus(
   quietAdvance?: boolean,
   guard?: SQL,
   queueSeatToken?: string | null,
+  consume?: { followUpFrom?: null; nativeTurn?: false; completeConfirmedAt?: null },
+  settleStallTurns?: { sessionId: string; turnStartedAt: string }[],
 ): Promise<boolean> {
   const updatedAt = now();
   let startedAt = cur?.startedAt ?? null;
@@ -93,8 +127,15 @@ async function writeTaskStatus(
     Object.assign(patch, directionIdentityCleared());
   }
 
+  // 回合输入事实跟着这一笔一起消费(见 setTaskStatus 的 `consume`):同一条 UPDATE,所以「落位
+  // 写下了」和「输入被消费了」永远同时成立或同时不成立,中间没有可以崩进去的缝。
+  if (consume) Object.assign(patch, consume);
   const changed = await db.update(tasks).set(patch).where(and(eq(tasks.id, taskId), guard)).returning({ id: tasks.id });
   if (!changed.length) return false;
+  // **落位这一行确实写进去了** —— 这是熔断判决唯一的合法回收条件(见 setTaskStatus 的
+  // `settleStallTurns`)。紧跟在判断之后,中间不插任何 await:再往后挪一步就又给出一条
+  // 「落位已写、义务还欠着」的缝,而那条缝正是这一轮被拦下的东西。
+  for (const turn of settleStallTurns ?? []) clearStallFailure(turn.sessionId, turn.turnStartedAt);
   // 这一行落库了 ⇒ 结算那一关置的闩可以撤了(见 task-complete.ts 的 `beginTerminalLanding`):
   // 它护的就是「核完阻塞物」到「这一笔写进库」之间那条缝。从这一刻起,库里这一行自己就答得了
   // 「还能不能挂哨兵」—— 终态由 `monitorSourceGate` 挡住,非终态本来就该放行。

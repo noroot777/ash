@@ -24,10 +24,11 @@ type AcceptGateCardProps = {
   task: TaskListItem | Task;
   notify: (message: string) => void;
   /**
-   * 红了之后的两条出路：重跑一次 / 这一次跳过。点下去走的仍是正常那道验收确认框。
+   * 绕开这道门的两条出路：重跑一次 / 这一次跳过。点下去走的仍是正常那道验收确认框。
    *
-   * 把**上一次跑成什么样**一起带出去：确认框要据它说话。「跳过」在红了之后和在被取消
-   * 之后是两句不同的话（一个是明知红着仍然合，另一个是上一次根本没有结论）。
+   * 把**上一次跑成什么样**一起带出去（没跑过就是 null）：确认框要据它说话。「跳过」在
+   * 红了之后、被取消之后、和一次都没跑过时是三句不同的话（明知红着仍然合 / 上一次根本
+   * 没有结论 / 这次干脆不验）。
    */
   onIntent: (intent: "rerun" | "skip", latest: AcceptGateView | null) => void;
   disabled?: boolean;
@@ -96,6 +97,19 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
   }
   // 卡上摆的是哪一次：正在跑的 > 本次凭据那一次 > 最近一次（最后这种只作历史，措辞里说破）。
   const shown = running ?? receipt?.run ?? latest;
+
+  // 这一按到底会不会撞上这道门 —— 会撞，「跳过」才是一条出路。
+  //
+  // 从前这颗按钮只摆在枚举出来的两种场面上（上一次红了/被取消了、本机能力不可用且一次都
+  // 没跑过），于是最常见的那一种反而没有：命令设着、这棵树上一次都还没跑过。那时用户唯一
+  // 的走法是先点验收、眼看它烧十几分钟，红了之后才摆出跳过（用户 2026-10-31 要求补上）。
+  // 所以这里改成按事实判，不再枚举。
+  //
+  // 不会撞的只有两种：项目没设这条命令，以及这棵树上已经有一次能原样复用的绿 —— 那时点
+  // 验收既不跑它也不被它挡，摆「跳过」只会把一份真凭据换成一句「你明确跳过了」。能力不可用
+  // 或源码输入读不出来时那份绿也复用不了（验收会在更早一步被挡下），所以照样要给出路。
+  const reusablePass = !state.unavailable && !state.sourceError && latest?.status === "passed" && !latest.stale;
+  const gateAhead = atFinalGate && !!state.command && !running && !settled && !reusablePass;
 
   const cancel = async () => {
     if (busy || !running) return;
@@ -279,17 +293,20 @@ ${shown.legacyDiagnosis}`}
               <button type="button" disabled={busy} onClick={() => void cancel()}>
                 <XCircle size={13} />不等了，收掉它
               </button>
-            ) : atFinalGate && state.command && latest && latest.status !== "passed" && !settled ? (
+            ) : gateAhead ? (
               <>
-                <button type="button" disabled={busy || disabled || !!state.unavailable} onClick={() => onIntent("rerun", latest)}>
-                  <ArrowClockwise size={13} />重跑一次
-                </button>
+                {/* 「重跑一次」只在**有一次结论摆在那儿**时才是一句话：没跑过的时候没有「再」
+                    可言（点验收本来就会跑它），而那次是绿的时候这颗按钮的名字应该是别的。 */}
+                {latest && latest.status !== "passed" && (
+                  <button type="button" disabled={busy || disabled || !!state.unavailable} onClick={() => onIntent("rerun", latest)}>
+                    <ArrowClockwise size={13} />重跑一次
+                  </button>
+                )}
                 <button type="button" disabled={busy || disabled} onClick={() => onIntent("skip", latest)}>
                   这次跳过它，直接合并
                 </button>
               </>
             ) : null}
-            {atFinalGate && state.unavailable && !running && !settled && !latest && <button type="button" disabled={busy || disabled} onClick={() => onIntent("skip", null)}>这次跳过它，直接合并</button>}
             {running && running.status !== "running" && running.processPending && <AcceptGateForceRelease key={running.id} taskId={task.id} runId={running.id} reload={reload} notify={notify} />}
             {state.command && latest?.status === "failed" && !running && !settled && !state.unavailable && (
               <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>

@@ -11,6 +11,7 @@ import { ChatsCircle, Check, FolderSimple, GitBranch, NotePencil, Tag, UsersThre
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import { ComposerStarters } from "./ComposerStudio.tsx";
 import { ComposerPopover } from "./ComposerPopover.tsx";
+import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { MODES } from "./composerParts.tsx";
 import { parseExecutorValue } from "../lib/agentAvailability.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
@@ -120,6 +121,7 @@ export function ComposerFields({
   onPickStarter: (body: string, mode: TaskMode) => void;
   children: (executorTools: ReactNode) => ReactNode;
 }) {
+  const modeTabs = useRovingChoice(MODES.map((item) => item.value), mode, onModeChange, "tab");
   const nameFor = (role: ComposerExecutorRole) => {
     const selection = parseExecutorValue(executors[role].profile, profiles, { agentType: executorTypes[role], executorId: null });
     return profiles.find((profile) => profile.id === selection.executorId)?.name || selection.agentType;
@@ -197,9 +199,9 @@ export function ComposerFields({
   return (
     <>
       <div className="studio-accessories" aria-label="任务辅助设置">
-        <div className="studio-mode-tabs" role="tablist" aria-label="任务模式">
-          {MODES.map((item) => { const Icon = item.icon; return <button type="button" role="tab" key={item.value}
-            aria-selected={mode === item.value} onClick={() => onModeChange(item.value)}>
+        <div className="studio-mode-tabs" {...modeTabs.groupProps} aria-label="任务模式">
+          {MODES.map((item) => { const Icon = item.icon; return <button type="button" key={item.value}
+            {...modeTabs.itemProps(item.value)} onClick={() => onModeChange(item.value)}>
             <Icon size={14} /><span>{item.label}</span>
           </button>; })}
           {extraModeTabs}

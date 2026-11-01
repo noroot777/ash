@@ -6,6 +6,7 @@ const INDICATOR_LABELS: Record<TaskStatusIndicator, string> = {
   active: "运行中或排队中",
   attention: "需要人工输入",
   working: "有东西在后台跑着，它会自己回来",
+  stalled: "在干等模型上游回话，没有任何输出",
   unaccepted: "已完成，等你验收",
   success: "已完成，有未读动态",
   error: "失败或取消，有未读动态",

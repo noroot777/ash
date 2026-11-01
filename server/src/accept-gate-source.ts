@@ -10,6 +10,7 @@ import { confineOwnPackages } from "./accept-gate-confine.js";
 import { ambientDigest, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
   provideDependency, workspacePackages, type DependencyMode } from "./accept-gate-deps.js";
 import { optionalRead, requiredRead } from "./accept-gate-fs.js";
+import { dependencySupply, supplyRoots, type DependencySupply } from "./accept-gate-supply.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 // 快照的 sidecar。非 Git 项目一直靠它把输入清单交给收尾核验,现在**依赖放置计划**也走这里:
@@ -17,7 +18,9 @@ type SourceInput = { path: string; directory: boolean; dependency?: boolean };
 // 本次真实登记并放置的那几条路径。生产收尾(accept-gate.ts)是从 DB 的 commit/fingerprint 重建
 // GateSource 的,`dependencies` 固定为空,所以计划不落盘就根本传不回去,重启恢复更拿不到。
 type GatePlacement = { path: string; mode: DependencyMode };
-type GateSidecar = { inputs?: SourceInput[]; dependencies?: GatePlacement[]; sourceCwd?: string; ambient?: string };
+type GateSidecar = { inputs?: SourceInput[]; dependencies?: GatePlacement[]; sourceCwd?: string; ambient?: string;
+  /** 补给来源的消费者位置。收尾核验要按同一套根重算 ambient,少这一笔就与登记值永远对不上。 */
+  ambientRoots?: string[] };
 
 async function readSidecar(target: string): Promise<GateSidecar | null> {
   // 没有这份文件是正常形态(Git 项目的收尾从 DB 重建)。读不动就不是「没有」:那会让依赖放置计划
@@ -35,6 +38,15 @@ export type GateSource = {
   commit: string | null;
   fingerprint: string;
   dependencies: string[];
+  /**
+   * 工作区上**没有**、这次从同仓参考检出取来的那几棵依赖树（理由与实测见 accept-gate-supply）。
+   *
+   * 它是 `dependencies` 的子集的来源表，不是另一份清单：`dependencies` 仍然是「快照里要放哪几个
+   * 依赖目录」的唯一清单，这里只回答其中哪几条的来源不在工作区、以及在哪。身份（dependencyDigest）
+   * 必须按**来源**读而不是按工作区位置读 —— 按工作区读会摘出「不可达」，于是主检出装/删/升级包
+   * 都不改指纹，上一次的绿结果会被当成同一份输入继续沿用。
+   */
+  supplied?: DependencySupply[];
   /** 源码和实际执行位置的依赖计划身份；不混入源码复制对账。 */
   ambient: string;
   executionCwd?: string;
@@ -130,6 +142,7 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
   const commit = await commitAt(cwd, "HEAD");
   const hash = sourceHash();
   const dependencies: string[] = [];
+  let supplied: DependencySupply[] = [];
   if (commit) {
     const entries = (await git(cwd, ["ls-tree", "-r", "-z", commit])).split("\0").filter(Boolean);
     const paths = entries.map(entry => entry.slice(entry.indexOf("\t") + 1));
@@ -163,7 +176,10 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
         registered.push(dep);
       }
     }
-    dependencies.push(...registered.sort());
+    // 工作区在某个位置上压根没有依赖目录时（worktree 的常态），按同仓参考检出补一份来源。根因、
+    // 两条路线的实测对照、以及「为什么不按命令需要收窄」都写在 accept-gate-supply 顶部。
+    supplied = await dependencySupply(cwd, [...packageDirs], registered);
+    dependencies.push(...[...registered, ...supplied.map(item => item.path)].sort());
     // 未跟踪内容只在**登记的依赖目录之内**被放过。这里有一处相对旧口径的**收窄**:以前靠闭包
     // 把「node_modules -> .local-deps」那种落点补登记成输入,于是一个未跟踪、也没进 .gitignore
     // 的目录被默许;现在它和任何未跟踪文件一样被拒。这是有意的——依赖是产物,产物本来就该在
@@ -180,21 +196,31 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
     // accept-gate-deps 的 dependencyDigest 上方。这里一并换掉的是曾经那一整套为了「把依赖拷进
     // 快照之后、它里面的链还解析得通」而存在的闭包机器：落点补齐、中间链收集、规模预算、父子
     // 消重。依赖改成借用、根本不拷进来之后，它们一条理由都不剩了。
-    for (const dep of dependencies) hash.update(dep).update(await dependencyDigest(cwd, dep));
+    for (const dep of dependencies) {
+      const source = supplied.find(item => item.path === dep);
+      // 补来的那几条按**来源**读:按 `cwd` 读会落到「不可达」那一支,两棵内容不同的参考树摘出同一
+      // 个值,于是依赖升级了却继续沿用旧的绿结果（失败方向是报绿）。口径与 ambientDigest 一致：
+      // 树根自己就是摘要的根，`kind` 取依赖目录名。
+      hash.update(dep).update(source
+        ? await dependencyDigest(source.from, ".", basename(dep))
+        : await dependencyDigest(cwd, dep));
+    }
   } else {
     const inputs = await listInputs(cwd);
     return { commit, fingerprint: await digestInputs(cwd, inputs), dependencies, inputs,
       ambient: await ambientDigest(cwd, executionCwd), executionCwd };
   }
-  return { commit, fingerprint: hash.digest("hex"), dependencies, ambient: await ambientDigest(cwd, executionCwd), executionCwd };
+  return { commit, fingerprint: hash.digest("hex"), dependencies, supplied,
+    ambient: await ambientDigest(cwd, executionCwd, supplyRoots(supplied)), executionCwd };
 }
 
 export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR, taskId, `accept-gate-${runId}.source`);
 
 export async function createGateSnapshot(cwd: string, target: string, source: GateSource): Promise<void> {
   await mkdir(target, { recursive: true });
+  const roots = supplyRoots(source.supplied);
   try {
-    if (await ambientDigest(cwd, target) !== source.ambient) {
+    if (await ambientDigest(cwd, target, roots) !== source.ambient) {
       // 对不上一律拒绝（这一条不打折），但**说法得对得上**，因为出路不是同一条：
       //
       // · 登记位置上**现在**也已经对不上 → 登记之后依赖输入自己变了（装/删/升级了包、改了安装
@@ -206,7 +232,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       // 场面上尤其显眼：漂移是夹具自己造的，报出来的却是位置不对。`executionCwd` 缺失（跨版本重启
       // 读到的旧计划）时归不了因，照旧按位置那一条报——归因不了就不编一个更具体的理由。
       const drifted = source.executionCwd !== undefined
-        && await ambientDigest(cwd, source.executionCwd) !== source.ambient;
+        && await ambientDigest(cwd, source.executionCwd, roots) !== source.ambient;
       throw new Error(drifted
         ? "登记之后依赖输入已变化，请重新验收"
         : "测试快照的实际依赖输入与登记计划不同，请按快照执行位置重新登记后验收");
@@ -226,8 +252,11 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     const includedAsGiven = planFilter(cwd, excluded);
     const includedPhysical = planFilter(await requiredRead(cwd, () => realpath(cwd)), excluded);
     const included = (path: string) => includedAsGiven(path) && includedPhysical(path);
+    // 补来的那几条:来源不在工作区,放置、对账、归属回溯三处必须共用同一个来源路径,否则就是
+    // 「复制那一侧自己猜、对账那一侧另一套判据」—— 口径写在 provideDependency 上方。
+    const supplyOf = (dep: string): string | undefined => source.supplied?.find(item => item.path === dep)?.from;
     const provide = async (dep: string): Promise<void> => {
-      provided.set(dep, await provideDependency(cwd, target, dep, workspace, path => !included(path)));
+      provided.set(dep, await provideDependency(cwd, target, dep, workspace, path => !included(path), supplyOf(dep)));
     };
     let copiedFingerprint: string | null = null;
     if (source.commit) {
@@ -280,7 +309,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     // 账,于是任何 monorepo 都在门禁开跑前就失败。对的是落点不是摘要(摘要在借用形态下恒等,
     // 证明不了任何事);三种形态各自要对的那件事写在 dependencyMismatch 上方。
     for (const [dep, mode] of provided) {
-      const problem = await dependencyMismatch(cwd, target, dep, mode);
+      const problem = await dependencyMismatch(cwd, target, dep, mode, supplyOf(dep));
       if (problem) throw new Error(`测试快照里的依赖没放对：${problem}`);
     }
     const current = await readGateSource(cwd, target);
@@ -298,15 +327,19 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     // 条检查都「通过」,而 node 往上一级找到项目主检出那一份,顺着 workspace 链读到**活的**工作区
     // 源码——快照自带 TASK_NEW、执行输出 MAIN_OLD,改一下工作区就变 MAIN_LIVE,自证全程为真。
     // 理由与实测写在 confineOwnPackages 上方。
+    // 归属回溯:快照里这棵树原来住在哪。`installRecord` 拿它当 `originRoot`,再据此把安装记录里
+    // 的相对 `resolved` 解回绝对路径 —— 补来的树必须回溯到**参考检出**那个位置,回溯到工作区会
+    // 落在一个不存在的路径上(realpath 直接抛),而且安装来源会解到错的根下面去。
     const origins = new Map<string, string>();
     for (const [dep, mode] of provided) {
       if (mode === "absent") continue;
-      origins.set(await realpath(join(target, dep)), await realpath(join(cwd, dep)));
+      origins.set(await realpath(join(target, dep)), await realpath(supplyOf(dep) ?? join(cwd, dep)));
     }
     const unconfined = await confineOwnPackages(target, cwd, origins);
     if (unconfined) throw new Error(`测试快照没能隔离项目自己的包：${unconfined}`);
     const sidecar: GateSidecar = {
       sourceCwd: cwd, ambient: source.ambient,
+      ...(roots.length > 0 ? { ambientRoots: roots } : {}),
       ...(source.inputs ? { inputs: source.inputs } : {}),
       // 路径按 POSIX 分隔符落盘:登记用的是 path.join(Windows 上是 `\`),而收尾比对的 `git diff
       // --name-only` 一律吐 `/`。不归一的话 Windows 上每条嵌套依赖路径都对不上,豁免整个失效。
@@ -328,7 +361,8 @@ export async function removeGateSnapshot(taskId: string, runId: string): Promise
 export async function verifyGateSnapshot(cwd: string, source: GateSource): Promise<boolean> {
   try {
     const sidecar = await readSidecar(cwd);
-    if (sidecar?.sourceCwd && await ambientDigest(sidecar.sourceCwd, cwd) !== sidecar.ambient) return false;
+    if (sidecar?.sourceCwd
+      && await ambientDigest(sidecar.sourceCwd, cwd, sidecar.ambientRoots ?? []) !== sidecar.ambient) return false;
     if (!source.commit) {
       const inputs = source.inputs ?? (await readSidecar(cwd))?.inputs;
       if (!inputs) return false;

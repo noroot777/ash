@@ -94,6 +94,22 @@ function acceptanceMessage(task: TaskListItem, commit = true): string {
 const mergeTargetLabel = (task: TaskListItem): string =>
   task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定（验收时解析）";
 
+/**
+ * 「这次跳过」在确认框里的那句话。**上一次跑成什么样，决定这一按到底意味着什么** ——
+ * 四种结局四句话，少分一种就会出现自相矛盾的提示（原先把「上一次通过」也说成「没有跑出
+ * 结论」）。一次都没跑过（null）是最常见的那一种：用户在卡上就决定这次不验它。
+ */
+function skipConsequence(latest: AcceptGateView | null): string {
+  if (!latest) return "这一按等于这次不验它。";
+  if (latest.status === "failed") return "那条命令上一次是红的，这一按等于明确说「这条红跟这次改动无关」。";
+  if (latest.status === "passed") {
+    return latest.stale
+      ? "那条命令上一次虽然通过，但验的已经不是现在这棵树或这条命令，这一按等于这次不重新验它。"
+      : "那条命令上一次通过了，但跳过之后回执记的是「你明确跳过了」，不会拿那一次当这次验收的凭据。";
+  }
+  return `那条命令上一次${ACCEPT_GATE_STATUS_LABELS[latest.status]}、没有跑出结论，这一按等于这次不验它。`;
+}
+
 function AcceptanceFailureNotice({ failure, disabled, onGateIntent, onRefreshGate }: {
   failure: AcceptTaskFailure;
   disabled: boolean;
@@ -402,11 +418,7 @@ export function AcceptanceControls({
           {/* 这一按跟「普通的验收通过」不是一回事,得在按下去之前说破:一个是明知红着仍然合,
               另一个是再烧十几分钟。 */}
           {gateIntent === "skip" && (
-            <p role="alert">这一次<b>不跑</b>验收前置命令，直接按上面说的合并。{gateLatest?.status === "failed"
-              ? "那条命令上一次是红的，这一按等于明确说「这条红跟这次改动无关」。"
-              : gateLatest
-                ? `那条命令上一次${ACCEPT_GATE_STATUS_LABELS[gateLatest.status]}、没有跑出结论，这一按等于这次不验它。`
-                : "这一按等于这次不验它。"}</p>
+            <p role="alert">这一次<b>不跑</b>验收前置命令，直接按上面说的合并。{skipConsequence(gateLatest)}</p>
           )}
           {gateIntent === "rerun" && (
             <p role="status">这一按先把验收前置命令从头跑一遍（它可能要跑十几分钟），rc=0 才会继续合并；跑的过程中目标分支一动不动。</p>

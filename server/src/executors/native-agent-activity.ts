@@ -1,4 +1,6 @@
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
+import { codexErrorEvent } from "./codex-error-event.js";
+import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
 
 export function childActivity(id: string, event: NativeAgentActivity): AgentEvent {
   return { kind: "tool", name: "Agent", nativeWork: { type: "activity", id, event, at: new Date().toISOString() } };
@@ -45,8 +47,17 @@ export class CodexChildActivity {
         const result = item.error ?? item.result ?? item.contentItems;
         if (result != null) push({ kind: "tool", name: `${item.tool} 结果`, detail: short(result) });
       }
-    } else if (method === "error" && p.error?.message) {
-      push({ kind: "error", message: p.error.message });
+    } else if (method === "error") {
+      // 跟主线程同一份判据(codex-error-event.ts):重试中抬成 level:"notice"。从前这里不看
+      // `willRetry`、一律裸 error —— 一场重连风暴在子智能体抽屉里就是几百条红色「执行异常」,
+      // 而它只是在重试。
+      //
+      // 注意这一层**只改抽屉里的渲染和语义,不改父回合的成败**:下面那个 `push` 会把它包进
+      // `childActivity`(恒为 `kind:"tool"`),所以它既不会写主时间线的红色诊断块、也不会置
+      // `sawExecutionError` —— 子线程在重试不等于父回合有执行故障,这是刻意的。真正要穿过
+      // 这层包装去判的只有回合级停滞看门狗(../turn-stall.ts 的 errorFacts):包装不是进展。
+      const reported = codexErrorEvent(p);
+      if (reported) push(reported.event);
     } else if (method === "turn/completed" && p.turn?.error?.message) {
       push({ kind: "error", message: p.turn.error.message });
     }
@@ -63,7 +74,13 @@ export class ClaudeChildActivity {
     if (!id) return [];
     const out: AgentEvent[] = [];
     const push = (event: NativeAgentActivity) => out.push(childActivity(id, event));
-    if (ev.type === "stream_event") {
+    // **子线程里的重试也得报出来。** 带 `parent_tool_use_id` 的事件在 claude-stream 那边提前
+    // return,不走它的 `system` 分支 —— 少了这一处,一个子智能体连不上上游的回合在 ash 眼里
+    // 全程静默:看门狗一条错误都收不到,报警与熔断都无从谈起(第 2 轮审查 F1 的同类缺口;
+    // codex 那一侧的同一个洞是第 1 轮第 1 条)。措辞与主线程共用一处,见那个文件。
+    if (isClaudeRetry(ev)) {
+      push({ kind: "error", message: claudeRetryMessage(ev), level: "notice" });
+    } else if (ev.type === "stream_event") {
       const stream = ev.event;
       if (stream?.type === "message_start") this.streamed.delete(id);
       const delta = stream?.delta;

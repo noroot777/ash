@@ -31,10 +31,10 @@ try {
       await route.fulfill({ json: [] });
       return true;
     }, "?rail=1");
-    await page.locator('.inspector-rail__tab[data-tab-id="info"]').waitFor();
+    await page.locator('.inspector-rail__tab[data-choice-value="info"]').waitFor();
     await page.waitForTimeout(200);
     assert.equal(
-      await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').count(),
+      await page.locator('.inspector-rail__tab[data-choice-value="monitors"]').count(),
       0,
       "没挂过哨兵的任务，这一格不该占着图标条",
     );
@@ -49,19 +49,19 @@ try {
   {
     // ② 挂过哨兵：自己冒到图标条上（不抢焦点），并带底色。
     const page = await open(undefined, "?rail=1");
-    const tab = page.locator('.inspector-rail__tab[data-tab-id="monitors"]');
+    const tab = page.locator('.inspector-rail__tab[data-choice-value="monitors"]');
     await tab.waitFor();
     assert.equal(
-      await page.locator('.inspector-rail__tab[aria-selected="true"]').getAttribute("data-tab-id"),
+      await page.locator('.inspector-rail__tab[aria-selected="true"]').getAttribute("data-choice-value"),
       "info",
       "自己冒出来的那一格不许抢当前焦点",
     );
     const paint = await page.evaluate(() => {
-      const bg = (id) => getComputedStyle(document.querySelector(`.inspector-rail__tab[data-tab-id="${id}"]`)).backgroundColor;
+      const bg = (id) => getComputedStyle(document.querySelector(`.inspector-rail__tab[data-choice-value="${id}"]`)).backgroundColor;
       return {
         monitors: bg("monitors"),
         info: bg("info"),
-        marked: !!document.querySelector('.inspector-rail__tab[data-tab-id="monitors"] .inspector-rail-icon--used'),
+        marked: !!document.querySelector('.inspector-rail__tab[data-choice-value="monitors"] .inspector-rail-icon--used'),
       };
     });
     assert.ok(paint.marked, "图标上要带 inspector-rail-icon--used——底色全靠它选中");
@@ -83,12 +83,12 @@ try {
       await route.fulfill({ json: [] });
       return true;
     }, "?rail=1");
-    await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').waitFor();
+    await page.locator('.inspector-rail__tab[data-choice-value="monitors"]').waitFor();
     await page.getByRole("button", { name: "切换任务" }).click();
     await page.waitForFunction(() => document.querySelector('[data-testid="task"]')?.textContent === "task-b");
     await page.waitForTimeout(400);
     assert.equal(
-      await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').count(),
+      await page.locator('.inspector-rail__tab[data-choice-value="monitors"]').count(),
       0,
       "切到从没挂过哨兵的任务，图标条不该留着上一个任务带来的那一格",
     );
@@ -107,10 +107,10 @@ try {
       await route.fulfill({ json: aList });
       return true;
     }, "?rail=1");
-    await page.locator('.inspector-rail__tab[data-tab-id="info"]').waitFor();
+    await page.locator('.inspector-rail__tab[data-choice-value="info"]').waitFor();
     await page.waitForTimeout(400);
     assert.equal(
-      await page.locator('.inspector-rail__tab[data-tab-id="monitors"]').count(),
+      await page.locator('.inspector-rail__tab[data-choice-value="monitors"]').count(),
       0,
       "前置条件：task-a 这会儿还没挂过哨兵",
     );
@@ -122,12 +122,12 @@ try {
     await waitIds(page, "m-task-a");
     await page.waitForTimeout(300);
 
-    const tab = page.locator('.inspector-rail__tab[data-tab-id="monitors"]');
+    const tab = page.locator('.inspector-rail__tab[data-choice-value="monitors"]');
     assert.equal(await tab.count(), 1, "切回来时它已经挂上哨兵了，这一格必须自己冒出来");
     assert.equal(await tab.locator(".inspector-rail-icon--used").count(), 1, "冒出来就得带底色记号");
     assert.equal(await tab.locator(".monitor-rail-icon--live").count(), 1, "那条还在跑，活信号也得在");
     assert.equal(
-      await page.locator('.inspector-rail__tab[aria-selected="true"]').getAttribute("data-tab-id"),
+      await page.locator('.inspector-rail__tab[aria-selected="true"]').getAttribute("data-choice-value"),
       "info",
       "自己冒出来仍然不许抢焦点",
     );

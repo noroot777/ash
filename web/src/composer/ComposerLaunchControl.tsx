@@ -5,6 +5,7 @@ import {
   type ScheduleKind,
 } from "../components/ScheduleControl.tsx";
 import { Button } from "../components/ui.tsx";
+import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { ComposerPopover } from "./ComposerPopover.tsx";
 
 // "queue" = 创建并排队:建完入队不起跑,等所选目标任务跑完由队列自动拉起。
@@ -18,6 +19,7 @@ const LAUNCH_OPTIONS: { value: LaunchMode; label: string }[] = [
   { value: "once", label: "一次性定时" },
   { value: "cron", label: "循环 Cron" },
 ];
+const LAUNCH_MODES = LAUNCH_OPTIONS.map((option) => option.value);
 
 function submitLabel(mode: LaunchMode): string {
   if (mode === "run") return "创建并运行";
@@ -67,6 +69,7 @@ export function ComposerLaunchControl({
   /** 非空 = 当前任务模式不支持排队(如团队任务),选项置灰并附上原因。 */
   queueUnavailable?: string | null;
 }) {
+  const launchGroup = useRovingChoice(LAUNCH_MODES, mode, onModeChange);
   return (
     <div className="composer-launch-control">
       <div className="studio-input-tools">
@@ -85,14 +88,14 @@ export function ComposerLaunchControl({
           disabled={busy} className={`studio-submit-mode${mode !== "run" ? " is-configured" : ""}`}
           trigger={<SubmitIcon mode={mode} />}>
         {/* 启动方式平铺成单选 chip(用户 2026-10-10:别再套一层原生下拉,点一下直达)。 */}
-        <div className="composer-launch-mode" role="radiogroup" aria-label="启动方式">
+        <div className="composer-launch-mode" {...launchGroup.groupProps} aria-label="启动方式">
           <span>启动方式</span>
           <div className="composer-launch-mode-grid">
             {LAUNCH_OPTIONS.map((option) => {
               const blocked = option.value === "queue" && !!queueUnavailable;
               return (
-                <button key={option.value} type="button" role="radio"
-                  aria-checked={mode === option.value} disabled={busy || blocked}
+                <button key={option.value} type="button" {...launchGroup.itemProps(option.value)}
+                  disabled={busy || blocked}
                   aria-label={blocked ? `${option.label}（${queueUnavailable}）` : option.label}
                   className={`composer-launch-mode-chip${mode === option.value ? " is-active" : ""}`}
                   onClick={() => onModeChange(option.value)}>

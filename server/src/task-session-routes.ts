@@ -14,6 +14,7 @@ import { backfillArtifactUploads, eventAttachmentPath } from "./uploads.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
+import { turnOutcomesForTask } from "./session-turns.js";
 import { failedTurnNotices, replaysFailureScene, sessionWaiting } from "./session-waiting.js";
 import { turnOutcome } from "./session-turns.js";
 import {
@@ -32,6 +33,7 @@ import { enrichNativeWorkModels } from "./native-work-models.js";
 async function toSession(
   r: typeof sessions.$inferSelect,
   run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
+  turnOutcome: Session["turnOutcome"] = null,
 ): Promise<Session> {
   // 版本得从**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行按当时的
   // 规则解释)。按宿主机默认目录读的话,隔离档下列表恒为「读不出版本」,而起跑守卫那边
@@ -57,13 +59,21 @@ async function toSession(
     // 「此刻还在等上游」跟着会话行一起出门:刷新重建要用它,而不是去 trace 的末条上猜
     // (判据与窄出口同一份,见 Session.awaitingUpstream 与 session-waiting.ts)。
     awaitingUpstream: sessionWaiting(r.id, r.turnStartedAt).length > 0,
+    // 这一轮**自己**的结局也跟着出门:进程退出码答不了「ash 判这一轮成没成」,而重试入口
+    // 要的恰恰是后者(见 Session.turnOutcome;被看门狗终止的回合多半 exit 0)。
+    turnOutcome,
   };
 }
 
+
 export async function sessionsForTask(taskId: string): Promise<Session[]> {
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
-  const runMeta = await sessionRunMeta(taskId, rows);
-  return Promise.all(rows.map((row) => toSession(row, runMeta.get(row.id))));
+  const [runMeta, outcomes] = await Promise.all([sessionRunMeta(taskId, rows), turnOutcomesForTask(taskId)]);
+  return Promise.all(rows.map((row) => toSession(
+    row,
+    runMeta.get(row.id),
+    outcomes.get(`${row.id}@${row.turnStartedAt ?? row.startedAt}`) ?? null,
+  )));
 }
 
 /**
