@@ -10,10 +10,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { IS_WINDOWS, capture, isPidAlive, killPid, sleep } from "./platform.mjs";
+import { IS_WINDOWS, capture, isPidAlive, sleep } from "./platform.mjs";
 import { restartCommand } from "./restart-options.mjs";
 import { runTestProcess } from "./test-process.mjs";
-import { spawnTestFixture } from "./test-process-scope.mjs";
+import { disposeTestScopesSync, spawnTestFixture } from "./test-process-scope.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
@@ -23,18 +23,9 @@ mkdirSync(FAKE_BIN);
 
 const PID_FILE = join(TMP, "server.pid");
 let serverPid = 0;
-// 后半段那个「吃掉 SIGTERM」的假 server:断言中途失败会直接 process.exit,而它既不是
-// detached 也杀不死自己,不在这里记一笔就会漏成僵尸,一直占着 :PORT 让下次跑不起来。
-let stubbornChild = null;
-let protectedPid = 0;
 
 function cleanup() {
-  if (existsSync(PID_FILE)) {
-    try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch {}
-  }
-  if (serverPid) killPid(serverPid);
-  if (protectedPid) killPid(protectedPid);
-  try { stubbornChild?.kill("SIGKILL"); } catch { /* 已经没了 */ }
+  disposeTestScopesSync();
   try { rmSync(TMP, { recursive: true, force: true }); } catch { /* 临时目录,清不掉也无所谓 */ }
 }
 process.on("exit", cleanup);
@@ -124,7 +115,7 @@ if (!IS_WINDOWS) {
   if (ppid !== "1") fail(`detached server 的 ppid 是 ${ppid},没脱离调用方进程组`);
 }
 
-killPid(serverPid);
+await run.dispose();
 rmSync(PID_FILE, { force: true });
 await sleep(200);
 serverPid = 0;
@@ -161,7 +152,6 @@ createServer((req, res) => {
 const stubbornProc = spawnTestFixture(process.execPath, [stubborn], { stdio: "ignore" });
 // 记一笔:上面那条注释说的就是它 —— 断言中途 `fail()` 会直接 process.exit,不登记
 // 就漏成僵尸占着 :PORT。原来只登记了后半段那个回 401 的,这一个漏了。
-stubbornChild = stubbornProc;
 for (let i = 0; i < 50 && !existsSync(STUBBORN_PID); i++) await sleep(100);
 if (!existsSync(STUBBORN_PID)) fail("赖着不走的假 server 没起来,这条回归没法测");
 
@@ -171,8 +161,7 @@ const blocked = await runTestProcess(process.execPath, [join(REPO, "scripts", "r
   encoding: "utf8",
 }, 1);
 const blockedOutput = (blocked.stdout ?? "") + (blocked.stderr ?? "");
-try { stubbornProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
-stubbornChild = null;
+await stubbornProc.dispose();
 await sleep(200);
 
 if (blockedOutput.includes("已就绪")) fail("旧进程还占着端口,却打印了「已就绪」", blockedOutput);
@@ -210,7 +199,6 @@ for (const [forceLabel, forceArgs, forceEnv] of [
 ]) {
 rmSync(REFUSING_PID, { force: true });
 const refusingProc = spawnTestFixture(process.execPath, [refusing], { stdio: "ignore" });
-stubbornChild = refusingProc;
 for (let i = 0; i < 50 && !existsSync(REFUSING_PID); i++) await sleep(100);
 if (!existsSync(REFUSING_PID)) fail("回 401 的假 server 没起来,这条回归没法测");
 const refusingPid = Number(readFileSync(REFUSING_PID, "utf8").trim());
@@ -246,15 +234,14 @@ const forced = await runTestProcess(IS_WINDOWS ? "powershell.exe" : "/bin/sh", r
   preserveScripts: [fakeServer],
 });
 const forcedOutput = (forced.stdout ?? "") + (forced.stderr ?? "");
-try { refusingProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
-stubbornChild = null;
+await refusingProc.dispose();
 try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
 await sleep(200);
 
 if (forcedOutput.includes("问不到「重启会打断谁」")) fail(`${forceLabel} 不该被这道闸挡住`, forcedOutput);
 if (!forcedOutput.includes(`${PORT} 已就绪`)) fail(`${forceLabel} 没把服务端换成新的`, forcedOutput);
 console.log(`✓ ${forceLabel}: 调用无错误/异常信号且输出收集完成`);
-if (serverPid) { killPid(serverPid); serverPid = 0; }
+await forced.dispose(); serverPid = 0;
 rmSync(PID_FILE, { force: true });
 await sleep(200);
 }
@@ -281,7 +268,6 @@ createServer((req, res) => {
 `);
 
 const muteProc = spawnTestFixture(process.execPath, [mute], { stdio: "ignore" });
-stubbornChild = muteProc;
 for (let i = 0; i < 50 && !existsSync(MUTE_PID); i++) await sleep(100);
 if (!existsSync(MUTE_PID)) fail("不作答的假 server 没起来,这条回归没法测");
 const mutePid = Number(readFileSync(MUTE_PID, "utf8").trim());
@@ -293,8 +279,7 @@ const muted = await runTestProcess(process.execPath, [join(REPO, "scripts", "res
 }, 2);
 const mutedOutput = (muted.stdout ?? "") + (muted.stderr ?? "");
 const muteSurvived = isPidAlive(mutePid);
-try { muteProc.kill("SIGKILL"); } catch { /* 已经没了 */ }
-stubbornChild = null;
+await muteProc.dispose();
 await sleep(200);
 
 if (!mutedOutput.includes("问不到「重启会打断谁」")) fail("中止信息没说清「问不到判据」这个成因", mutedOutput);
@@ -328,12 +313,10 @@ createServer((request,response)=>{
   : {ok:true,pid:process.pid}));
 }).listen(${PORT},'127.0.0.1',()=>writeFileSync(${JSON.stringify(statePath)},JSON.stringify({pid:process.pid,agent:agent.pid})));`);
   const service = spawnTestFixture(process.execPath, [servicePath], { stdio: "ignore" });
-  stubbornChild = service;
   try {
     for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt++) await sleep(100);
     if (!existsSync(statePath)) fail("CIM 故障用例的服务没有启动");
     const state = JSON.parse(readFileSync(statePath, "utf8"));
-    protectedPid = state.agent;
     const result = await runTestProcess(process.execPath, [join(REPO, "scripts", "restart.mjs")], {
       cwd: REPO,
       env: { ...env, FORCE: "", WAIT: "", NODE_OPTIONS: `--require "${hookPath.replace(/\\/g, "/")}"` },
@@ -344,10 +327,7 @@ createServer((request,response)=>{
     if (!isPidAlive(state.pid) || !isPidAlive(state.agent)) fail("CIM 失败时动了旧服务或受保护任务", output);
     console.log("✓ HTTP 判据成功但 CIM 查询失败时,完整 restart 在任何终止动作前中止");
   } finally {
-    if (protectedPid) killPid(protectedPid);
-    protectedPid = 0;
-    try { service.kill("SIGKILL"); } catch {}
-    stubbornChild = null;
+    await service.dispose();
     await sleep(200);
   }
 }
@@ -376,7 +356,7 @@ if (!residualOutput.includes("退出意向(收到 SIGTERM)")) fail("没把观察
 if (!residualOutput.includes("最终死因仍然未知")) fail("两档都必须落在「死因未知」上", residualOutput);
 if (residualOutput.includes("是正常停的")) fail("一条进程内的记录定不了性,不许说成正常停", residualOutput);
 if (residualOutput.includes("不是强杀")) fail("同理也不许声称排除强杀", residualOutput);
-if (serverPid) { killPid(serverPid); serverPid = 0; }
+await residualRun.dispose(); serverPid = 0;
 rmSync(PID_FILE, { force: true });
 
 process.stdout.write("✓ restart.mjs 的本机探测绕过代理，且脚本返回后 detached server 仍在运行\n");

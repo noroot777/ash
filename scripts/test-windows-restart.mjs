@@ -48,6 +48,6 @@ if (IS_WINDOWS) {
   } finally {
     childProcess.execFileSync = original;
     syncBuiltinESMExports();
-    try { fixture.kill(); } catch {}
+    await fixture.dispose();
   }
 }

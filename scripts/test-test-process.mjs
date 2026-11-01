@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertProcessResult, runTestProcess } from "./test-process.mjs";
-import { IS_WINDOWS, isPidAlive, killPid } from "./platform.mjs";
-import { delay, spawnTestFixture } from "./test-process-scope.mjs";
+import { IS_WINDOWS, isPidAlive } from "./platform.mjs";
+import { delay, disposeTestScopesSync, spawnTestFixture } from "./test-process-scope.mjs";
 
 const complete = { status: 0, signal: null, stdout: "已就绪\n✅ 完成\n", stderr: "" };
 assert.equal(assertProcessResult(complete), complete);
@@ -52,6 +52,8 @@ try {
   assert.equal(inherited.stderr.trim(), "stderr-complete");
   for (let attempt = 0; attempt < 100 && !existsSync(pidPath); attempt++) await delay(20);
   assert.ok(isPidAlive(Number(readFileSync(pidPath, "utf8"))));
+  await inherited.dispose();
+  assert.ok(!isPidAlive(Number(readFileSync(pidPath, "utf8"))));
 
   const tails = await runTestProcess(process.execPath, ["-e", `
     require('node:child_process').spawn(process.execPath, ['-e',
@@ -113,7 +115,7 @@ try {
   assert.ok(existsSync(descendantPid));
   assert.ok(!isPidAlive(Number(readFileSync(descendantPid, "utf8"))));
 } finally {
-  if (existsSync(pidPath)) killPid(Number(readFileSync(pidPath, "utf8")));
+  disposeTestScopesSync();
   rmSync(temporary, { recursive: true, force: true });
 }
 console.log("✓ 子进程执行域:超时后代/拒绝信号/登记失败均清场,保留诊断及晚写双流,独立日志服务显式登记");

@@ -19,9 +19,9 @@ export function assertProcessResult(result, expectedStatus = 0, label = "子进�
 }
 
 export async function runTestProcess(command, args, options = {}, expectedStatus = 0) {
-  const temporary = mkdtempSync(join(tmpdir(), "ash-test-process-"));
+  let temporary;
   const descriptors = [];
-  const scope = new TestProcessScope();
+  let scope;
   const { timeout = 120_000, preserveScripts = [], ...spawnOptions } = options;
   let completed = false;
   let expired = false;
@@ -30,9 +30,13 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
   let operationError;
   const captured = { stdout: "", stderr: "" };
   const cleanupErrors = [];
-  const stdoutPath = join(temporary, "stdout.log");
-  const stderrPath = join(temporary, "stderr.log");
+  let stdoutPath;
+  let stderrPath;
   try {
+    temporary = mkdtempSync(join(tmpdir(), "ash-test-process-"));
+    scope = new TestProcessScope();
+    stdoutPath = join(temporary, "stdout.log");
+    stderrPath = join(temporary, "stderr.log");
     const stdout = openSync(stdoutPath, "w");
     descriptors.push(stdout);
     const stderr = openSync(stderrPath, "w");
@@ -51,10 +55,11 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
       if (timeout > 0) timer = setTimeout(() => { expired = true; resolveTimeout(null); }, timeout);
     });
     result = await Promise.race([finished, expiration]);
+    scope.sealed = true;
     if (result && !result.error && !result.signal && result.status === expectedStatus) {
       while (true) {
         const active = await scope.active();
-        const spared = preservedPids(scope, preserveScripts, capturedStreams);
+        const spared = preservedPids(scope, preserveScripts, capturedStreams, active);
         if (!active.some((row) => !spared.has(row.pid))) break;
         if (expired || Date.now() >= deadline) { expired = true; break; }
         await delay(30);
@@ -73,12 +78,13 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
   finally {
     clearTimeout(timer);
     const cleanupScope = async () => {
-      if (!existsSync(scope.directory)) return;
+      if (!scope || !existsSync(scope.directory)) return;
       try { await scope.stop(); scope.remove(); }
       catch (error) { cleanupErrors.push(error); }
     };
     if (!completed) await cleanupScope();
     for (const [stream, path] of [["stdout", stdoutPath], ["stderr", stderrPath]]) {
+      if (!path) continue;
       try { captured[stream] = readFileSync(path, "utf8"); }
       catch (error) { cleanupErrors.push(error); }
     }
@@ -87,7 +93,7 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
       try { closeSync(descriptor); }
       catch (error) { cleanupErrors.push(error); }
     }
-    try { rmSync(temporary, { recursive: true, force: true }); }
+    try { if (temporary) rmSync(temporary, { recursive: true, force: true }); }
     catch (error) { cleanupErrors.push(error); }
   }
   if (expired) result = { ...result, error: Object.assign(new Error("测试执行超时"), { code: "ETIMEDOUT" }) };
@@ -104,5 +110,7 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
       code: cause.code, ...captured, cleanupErrors,
     });
   }
-  return { ...result, ...captured };
+  return { ...result, ...captured, dispose: async () => {
+    if (scope && existsSync(scope.directory)) { await scope.stop(); scope.remove(); }
+  } };
 }
