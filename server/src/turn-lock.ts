@@ -533,6 +533,26 @@ export function whenTurnIdle(taskId: string, fn: () => void): () => void {
 }
 
 /**
+ * **这一次投递为什么没成功** —— 四种原因里只有 `turn-taken` 是**瞬时**条件。
+ *
+ * 为什么必须分开报:四种在调用方眼里完全不是一件事,而老签名只给一个字符串,于是每个调用方
+ * 都只能一视同仁地落终态。瞬时那一种因此被当成永久失败(2026-10-31 实例 IZk5yKUHpR2G:
+ * 预约复审建好 run 之后 148ms 落 failed,只因为同一个释放点上另一条 waiter 先抢到了锁)。
+ *
+ *  · `turn-taken`   —— 排到队头时 `claimOwnTurn` 失败。**此刻锁在别人手上**,而这一侧到这
+ *    一刻一个字节都没动(没查库、没建会话、没碰状态),所以重排是安全的;而且锁总会被还回来
+ *    (持有者自己的 finally,或人工放开 / 幽灵锁巡检的 `forceReleaseTurn` —— 它们走的也是
+ *    `endOwnTurn`,一样会放 `afterTurn` 的 waiter 走),所以「排到下一个空闲窗口」一定还有
+ *    下一次机会。
+ *  · `withdrawn`    —— 起跑前的冻结闸撤回(分组已暂停 / 任务已归档或删除)。那是用户的动作,
+ *    重排只会把它的决定磨掉。
+ *  · `not-delivered`—— `continueTask` 自己答了「一个字没送出去」。它的几种成因(历史审查退役、
+ *    接力出去、输入交付期中断的 uncertain、验收互斥退避)在这一层分不开,所以不猜,照旧上报。
+ *  · `failed`       —— 抛了。
+ */
+export type TurnDeliveryFailure = "turn-taken" | "withdrawn" | "not-delivered" | "failed";
+
+/**
  * 结算钩子里给同一个任务续跑的**唯一安全写法**：等它这一轮退干净再送消息。
  *
  * 直接 `continueTask` 会被单飞锁静默挡回（结算钩子跑在 run loop 的 try 里，锁还锁着），
@@ -547,7 +567,15 @@ export function continueWhenIdle(
   taskId: string,
   text: string,
   opts: ContinueOpts = {},
-  onError?: (message: string) => void | Promise<unknown>,
+  onError?: (message: string, failure: TurnDeliveryFailure) => void | Promise<unknown>,
+  /**
+   * `continueTask` 真的接过了这一轮(送出去了)。
+   *
+   * 为什么要有它:老接口只报失败,于是「这一轮的输入到底送进会话了没有」在外面无法回答 ——
+   * 而凡是把派发记成**持久意图**的调用方都要靠这一声去把意图了结掉,不然重启后的补办会
+   * 对着一条已经在跑的审查再投一次任务书。
+   */
+  onDelivered?: () => void | Promise<unknown>,
 ): void {
   whenTurnIdle(taskId, () => {
     // 排到队头的一瞬间**同步**锁定所有权（turnHeld 传递给 continueTask 接管）：不占的
@@ -564,7 +592,9 @@ export function continueWhenIdle(
     const owner = claimOwnTurn(taskId, turnSourceRole(source), turnSourceReview(source));
     if (!owner) {
       console.error(`[ash] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
-      void onError?.("回合被其它执行抢占，消息未能投递");
+      // **瞬时**:锁此刻在别人手上,而这一侧一个字节都没动。分类交给调用方决定要不要重排
+      // (见 `TurnDeliveryFailure`);不想重排的照旧按失败收场,行为与老签名一致。
+      void onError?.("回合被其它执行抢占，消息未能投递", "turn-taken");
       return;
     }
     void import("./turn-freeze.js")
@@ -579,7 +609,15 @@ export function continueWhenIdle(
         //（第 4 轮审查确定性复现）。所以这里按事实查库权威复查一次。
         const freeze = await turnFreezeReason(taskId, true);
         if (!freeze) {
-          return (await import("./orchestrator.js")).continueTask(taskId, text, { ...opts, turnHeld: owner });
+          const delivered = await (await import("./orchestrator.js"))
+            .continueTask(taskId, text, { ...opts, turnHeld: owner });
+          // continueTask 返回 false = 一个字都没送出去（验收互斥退避等）。吞掉它，
+          // 调用方的时间线就会停在「意见已发回会话」而消息实际没了——必须当失败上报。
+          if (delivered === false) {
+            console.error(`[ash] continueWhenIdle(${taskId}) not delivered`);
+            return { failure: "not-delivered" as const, message: "回合被其它执行抢占，消息未能投递" };
+          }
+          return null;
         }
         // 撤回，且**不标停止落位**：这一轮一个字都没送出去，任务状态还停在上一轮的终态，
         // 标了就会被下一次真启动误读成「上一轮是被停的」。当作投递失败上报，调用方那套
@@ -587,17 +625,22 @@ export function continueWhenIdle(
         // 「正在验证」而验证从未开始。
         releaseTurn(taskId, owner);
         console.error(`[ash] continueWhenIdle(${taskId}) withdrawn: ${freeze.reason}`);
-        try { await onError?.(`${freeze.reason}，这一轮在启动前被撤回`); } catch { /* 上报失败不再连锁 */ }
-        return true;
+        // **撤回不再冒充 delivered**:老代码在这儿先 `onError` 再 `return true`,靠「true 不等于
+        // false」绕过下面那道判定 —— 于是「送出去了」和「被撤回了」在返回值上长得一模一样,
+        // 新接进来的成功回调会在撤回时也被叫一次(那正是持久意图被误了结的形状)。
+        return { failure: "withdrawn" as const, message: `${freeze.reason}，这一轮在启动前被撤回` };
       })
       .then(
-        async (delivered) => {
-          // continueTask 返回 false = 一个字都没送出去（验收互斥退避等）。吞掉它，
-          // 调用方的时间线就会停在「意见已发回会话」而消息实际没了——必须当失败上报。
-          if (delivered === false) {
-            console.error(`[ash] continueWhenIdle(${taskId}) not delivered`);
-            try { await onError?.("回合被其它执行抢占，消息未能投递"); } catch { /* 上报失败不再连锁 */ }
+        async (outcome) => {
+          if (!outcome) {
+            // 真的交出去了。失败回调在这条路上一次都没被叫过,所以这一声是「投递成功」的
+            // 唯一凭据(见 `onDelivered`)。
+            try { await onDelivered?.(); } catch (error) {
+              console.error(`[ash] continueWhenIdle(${taskId}) 投递成功的回执处理失败:`, error);
+            }
+            return;
           }
+          try { await onError?.(outcome.message, outcome.failure); } catch { /* 上报失败不再连锁 */ }
         },
         async (error) => {
           // 只有 import 失败或 continueTask 进入自己的 try/finally 之前抛错才会到这——
@@ -606,7 +649,7 @@ export function continueWhenIdle(
           releaseTurn(taskId, owner);
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[ash] continueWhenIdle(${taskId}) failed:`, error);
-          try { await onError?.(message); } catch { /* 上报失败不再连锁 */ }
+          try { await onError?.(message, "failed"); } catch { /* 上报失败不再连锁 */ }
         },
       );
   });

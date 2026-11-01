@@ -69,6 +69,42 @@ export const freeReviewRuns = sqliteTable(
   (t) => ({ taskIdx: index("free_review_runs_task_idx").on(t.taskId, t.createdAt) }),
 );
 
+/**
+ * 「这一轮的任务书已经交给回合锁,还没送进会话」—— 一次**尚未完成的派发意图**。
+ *
+ * 为什么不能靠现场推断:派发是个两段式动作。`launchReviewRound` 建好 run/round 行、写下
+ * 「审查开始」,真正的投递却留在 `continueWhenIdle` 的异步回调里等回合锁空出来。那一刻之后
+ * 这一行与「审查正在跑」长得一模一样 —— 两者的 run/round 都是 `reviewing`。
+ *
+ * 不落下来的代价实测过(2026-10-31,任务 IZk5yKUHpR2G):预约复审在释放点上输给另一条排队
+ * 续跑,`claimOwnTurn` 失败 → 148ms 后 round 落 error、run 落 failed,预约早已被消费,自动链
+ * 就地停住,要用户手动再开一轮。瞬时条件(别人正占着回合)变成了永久后果,而输赢纯属时序运气。
+ *
+ * 所以把意图本身落在这一行上:交出去就记,送进会话(或重试次数用尽)才清。非空 =
+ * **这一轮还在等一个空闲窗口**,于是:
+ *  · 重排不必重算 —— 同进程里消息还在闭包里,直接再排一次;
+ *  · 跨重启能补办 —— `reconcileFreeReviews` 据它把「还没投递」和「跑着跑着死了」分开,后者
+ *    照旧收尸,前者补投一次(本进程是否还armed 由内存那张表回答,见 free-review-dispatch.ts);
+ *  · 放弃有交代 —— `attempts` 就是「输了几次」,写进时间线和终态说明。
+ *
+ * 为什么住在 round 行上而不是另起一张表(对比 `queue_advance_intents`):队列推进的意图讲的是
+ * 一条队列,而队列没有自己的行可挂(请求写在候选任务身上),所以才要一张表加一套代次协议。
+ * 这里不一样 —— 意图讲的正是**这一轮**,round 行就是它天然的主人:身份现成(`run_id`+`round`
+ * 唯一),生命周期现成(轮次一结束这几个字段自动失去意义),不需要代次去分辨「这一行代表哪一次」。
+ */
+export type FreeReviewDispatchIntent = {
+  /** 已经把这一轮交给回合锁几次（含第一次）。有界重试的全部凭据,也是放弃时的交代。 */
+  attempts: number;
+  /** 第一次交出去的时刻（写给时间线;**不是**重试的时间上界,理由见 free-review-dispatch.ts）。 */
+  since: string;
+  /**
+   * 重跑崩掉的那一轮时的两个入参。跨重启补办要原样重放它们:丢了 `resumeSessionId`,
+   * 「让同一位审查者接着做」就会变成「换条空会话从头再来」(白烧一遍上下文)。
+   */
+  resumeSessionId?: string | null;
+  retry?: boolean;
+};
+
 export const freeReviewRounds = sqliteTable(
   "free_review_rounds",
   {
@@ -100,6 +136,8 @@ export const freeReviewRounds = sqliteTable(
     disputeResolutionNote: text("dispute_resolution_note"),
     // deferred 裁定建出的那个 backlog 派生任务；非空即幂等返回同一任务（同 repair_task_id）。
     disputeDeferredTaskId: text("dispute_deferred_task_id"),
+    // 非空 = 这一轮的任务书还没送进会话,正在等一个空闲回合窗口（见 `FreeReviewDispatchIntent`）。
+    dispatch: text("dispatch", { mode: "json" }).$type<FreeReviewDispatchIntent>(),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
   },
@@ -197,7 +235,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
       dispute_summary TEXT,
       dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
       dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
-      dispute_deferred_task_id TEXT,
+      dispute_deferred_task_id TEXT, dispatch TEXT,
       started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
@@ -251,6 +289,9 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution_note TEXT",
     // 驳回与每段辩论发言的「人话摘要」：裁定屏第一行字。老行留 null，界面降级显示正文。
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_summary TEXT",
+    // 「这一轮的任务书交出去了、还没送进会话」那份未完成的派发意图（见 `FreeReviewDispatchIntent`）。
+    // 老行留 null = 没有在途派发,照旧按原路对账。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispatch TEXT",
     "ALTER TABLE free_review_debate_turns ADD COLUMN summary TEXT",
   ]) {
     try {

@@ -42,6 +42,7 @@ import {
   latestWorkspaceRun,
   launchReviewRound,
   nextRound,
+  redeliverReviewRound,
   reviewingRun,
 } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
@@ -288,6 +289,12 @@ export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> 
       return reviewContinuationPending(transaction, task, evidence, !!round?.conclusion, true);
     }, { behavior: "immediate" });
     if (waiting) continue;
+    // **「任务书还没送进会话」和「跑着跑着死了」不是一件事** —— 库里这两种长得一模一样(run/round
+    // 都挂在 reviewing),区别只在 round 上那份在途派发意图。上一个进程排着等空闲窗口、自己没了的
+    // 那一轮,审查者压根没见过任务书,下面那条「已经没有任何东西能把它跑完」的收尸对它是误判:
+    // 补投一次才是它该得的(判据与边界见 free-review-dispatch.ts / `redeliverReviewRound`)。
+    // 返回 false = 不该由这里补(本进程还盯着 / 没有意图 / 次数已用尽),照原路往下走。
+    if (round && await redeliverReviewRound(task, run, round)) continue;
     if (round?.conclusion) {
       await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer");
       continue;

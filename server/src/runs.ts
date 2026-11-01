@@ -14,7 +14,7 @@ export {
   releaseHeldTurn, releaseTurn, SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, turnIdentity,
   turnRole, turnSourceReview, turnSourceRole, waitForTurnIdle, whenTurnIdle,
 } from "./turn-lock.js";
-export type { TurnIdentity, TurnOwner, TurnReview, TurnSource } from "./turn-lock.js";
+export type { TurnDeliveryFailure, TurnIdentity, TurnOwner, TurnReview, TurnSource } from "./turn-lock.js";
 
 // Registry of in-flight agent subprocesses, keyed by task, so a running task can
 // be killed on demand (manual stop / group pause) — the orchestrator/duet

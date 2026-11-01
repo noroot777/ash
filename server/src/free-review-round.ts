@@ -12,12 +12,15 @@ import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, projects, sessions, tasks } from "./db/schema.js";
 import { freeReviewPrompt, freeReviewResumeMessage } from "./free-review-prompts.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
+// 「任务书交出去了没有」那一段(有界重排、意图落库、留痕)住在 free-review-dispatch.ts;
+// 依赖是单向的 —— 那边收 `onFail` 回调,不认识 failReviewStart,所以不成环。
+import { clearReviewDispatchIntent, dispatchReviewRound, reviewDispatchRecovery } from "./free-review-dispatch.js";
 import { evidenceState, restartRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { headCommit } from "./git.js";
 import { cleanupPostMergeReviewWorktree, preparePostMergeReviewWorktree } from "./post-merge-review-worktree.js";
-import { claimOwnTurn, continueWhenIdle, releaseTurn } from "./runs.js";
+import { claimOwnTurn, releaseTurn } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { turnProducedWork } from "./transcript.js";
@@ -129,7 +132,16 @@ export async function launchReviewRound(
   run: ReviewRunRow,
   // 重跑崩掉的那一轮时传：落回**那一条**审查会话（挑错人等于换个审查者从头看），
   // 且必须关掉 freshSession —— 第 1 轮崩了的话它本来会新开一条空会话。
-  opts: { resumeSessionId?: string; retry?: boolean } = {},
+  opts: {
+    resumeSessionId?: string; retry?: boolean;
+    /**
+     * 上一个进程把这一轮交出去了、还没送进会话就没了 —— 这一次是**补投**(由
+     * `redeliverReviewRound` 传进来)。两处差别:时间线说的是「重新投递」而不是「审查开始」,
+     * 以及接着上一次的次数往下数(不是从 1 重新开始)。其余一概照常走 —— 证据目录、
+     * 合并结果 worktree、MCP 预检都是幂等的,任务书也必须按**此刻**的工作区重算。
+     */
+    redeliver?: { attempts: number; since: string };
+  } = {},
 ): Promise<{ resumed: boolean }> {
   await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
@@ -169,40 +181,107 @@ export async function launchReviewRound(
   // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。
   const resumed = !!opts.retry && !!opts.resumeSessionId && await reviewTurnResumable(task.id, opts.resumeSessionId);
   const label = run.targetKind === "accepted_merge" ? "合并结果审查" : `自由工作流第 ${run.currentRound} 轮审查`;
-  await appendTaskTimeline(task.id, opts.retry
-    ? resumed
-      ? `${label}从中断处继续：${run.reviewerName}。`
-      : `${label}重跑上一回合：${run.reviewerName}。`
-    : run.targetKind === "accepted_merge"
-      ? `合并结果审查开始：${run.reviewerName} · ${run.targetBranch}@${run.targetCommit?.slice(0, 8)} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`
-      : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
+  await appendTaskTimeline(task.id, opts.redeliver
+    // 补投不写「审查开始」:那一句上一次已经写过了,再写一遍会让时间线读成开了两轮。
+    ? `${label}的任务书重新投递：服务上次中断时它还没送进会话（已尝试 ${opts.redeliver.attempts} 次）。`
+    : opts.retry
+      ? resumed
+        ? `${label}从中断处继续：${run.reviewerName}。`
+        : `${label}重跑上一回合：${run.reviewerName}。`
+      : run.targetKind === "accepted_merge"
+        ? `合并结果审查开始：${run.reviewerName} · ${run.targetBranch}@${run.targetCommit?.slice(0, 8)} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`
+        : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
   bus.publish({ type: "task.review", taskId: task.id });
   const message = !opts.retry
     ? prompt
     : resumed
       ? freeReviewResumeMessage(task, run, run.currentRound)
       : `上一回合异常结束，本轮审查从头继续。\n\n${prompt}`;
-  continueWhenIdle(task.id, message, {
-    system: "run",
-    sideTurn: true,
-    agent: run.agentType as AgentType,
-    executorId: run.executorId,
-    model: run.model,
-    reasoningEffort: run.reasoningEffort,
-    // **这一轮是谁起的、为哪一次审查的哪一轮起的** —— 由这里交代,因为只有这里手里同时握着
-    // run 和轮次。创建入口过后只能查「现在是哪一次」,而那两者在派审交接期不是同一个
-    // (第 10 轮审查 F1:旧审查者提交的哨兵被绑到新派的审查者上)。两样同在一个对象里,
-    // 所以恢复那几条路也不可能只带到一半(本轮审查 F2)。
-    turnSource: { role: "reviewer", review: { run: run.id, round: run.currentRound } },
-    freshSession: !opts.retry && (run.currentRound === 1 || run.targetKind === "accepted_merge"),
+  // 投递本身走 `dispatchReviewRound`:它在回合锁上抢不到位时**重排**而不是落终态(瞬时条件
+  // 不该变成永久失败,整段理由见 free-review-dispatch.ts 文件头)。抢不到以外的失败照旧
+  // `failReviewStart`,行为与改之前一致。
+  await dispatchReviewRound({
+    taskId: task.id,
+    run: { id: run.id, currentRound: run.currentRound },
+    label,
+    message,
+    opts: {
+      system: "run",
+      sideTurn: true,
+      agent: run.agentType as AgentType,
+      executorId: run.executorId,
+      model: run.model,
+      reasoningEffort: run.reasoningEffort,
+      // **这一轮是谁起的、为哪一次审查的哪一轮起的** —— 由这里交代,因为只有这里手里同时握着
+      // run 和轮次。创建入口过后只能查「现在是哪一次」,而那两者在派审交接期不是同一个
+      // (第 10 轮审查 F1:旧审查者提交的哨兵被绑到新派的审查者上)。两样同在一个对象里,
+      // 所以恢复那几条路也不可能只带到一半(本轮审查 F2)。
+      turnSource: { role: "reviewer", review: { run: run.id, round: run.currentRound } },
+      freshSession: !opts.retry && !opts.redeliver
+        && (run.currentRound === 1 || run.targetKind === "accepted_merge"),
+      resumeSessionId: opts.resumeSessionId,
+      cwd,
+      // 重跑这一路的预检查（freeReviewRetryBlocker）离真正拉起 CLI 很远，中间还要经过
+      // 「先释放重试路由那把锁、排队再起」的交接——那段时间里分组可能已经被暂停。起跑前
+      // 再核一遍冻结事实（turn-freeze.ts）；命中就撤回，这条链留在 failed，仍可再重试。
+      //
+      // 补投也开着它:那一次重启之后分组同样可能已经被暂停、任务已经被归档。
+      freezeGuard: !!opts.retry || !!opts.redeliver,
+    },
     resumeSessionId: opts.resumeSessionId,
-    cwd,
-    // 重跑这一路的预检查（freeReviewRetryBlocker）离真正拉起 CLI 很远，中间还要经过
-    // 「先释放重试路由那把锁、排队再起」的交接——那段时间里分组可能已经被暂停。起跑前
-    // 再核一遍冻结事实（turn-freeze.ts）；命中就撤回，这条链留在 failed，仍可再重试。
-    freezeGuard: !!opts.retry,
-  }, (error) => failReviewStart(run, error));
+    retry: opts.retry,
+    attempts: opts.redeliver?.attempts,
+    since: opts.redeliver?.since,
+    onFail: (error) => failReviewStart(run, error),
+  });
   return { resumed };
+}
+
+/**
+ * 上一个进程死在「任务书交出去了、还没送进会话」中间 —— 这一轮**补投一次**。
+ *
+ * 为什么不能让它照原路收尸:`reconcileFreeReviews` 对一条挂在 reviewing 的 run 的判词是
+ * 「已经没有任何东西能把它跑完」,对**跑着跑着死掉**的那一轮是对的 —— 可对这一轮不是:它一个
+ * 字都还没送出去,审查者压根没见过任务书。两者在库里长得一模一样,区别只在 round 上那份派发
+ * 意图(`FreeReviewDispatchIntent`)。
+ *
+ * 为什么重走整个 `launchReviewRound` 而不是只重发那段话:任务书必须按**此刻**的工作区重算
+ * (重启之间 HEAD 完全可能已经变了,`reviewedCommit` 也要跟着重锚),而它那几步副作用都是幂等的
+ * ——证据目录 `evidenceState` 命中已有行就返回,合并结果 worktree 的 HEAD 对得上就原样复用,
+ * MCP 预检只是问一句。
+ *
+ * 返回 false = 这一轮不该由这里补(没有在途意图 / 本进程还盯着它 / 次数已用尽),调用方照原路
+ * 往下走。
+ */
+export async function redeliverReviewRound(
+  task: TaskRow,
+  run: ReviewRunRow,
+  round: ReviewRoundRow,
+): Promise<boolean> {
+  const verdict = reviewDispatchRecovery(run.id, round.round, round.dispatch);
+  if (verdict.kind === "none") return false;
+  const { intent } = verdict;
+  if (verdict.kind === "exhausted") {
+    // 界用尽了才落终态,而且**说得出原因**:通用收尸那句「未能正常给出结论」会让用户以为审查者
+    // 跑过、没交卷,实际上它一个字都没收到。
+    // 清不掉也照旧落终态:failReviewStart 把 run 打成 failed,而对账只看 reviewing 的链,
+    // 那一行留着也不会再被谁捞起来补投。
+    await clearReviewDispatchIntent(run.id, round.round);
+    await failReviewStart(run, `任务书始终没能送进会话 —— 连续 ${intent.attempts} 次都没抢到空闲回合窗口（含服务重启后的补投），不再重试`);
+    return true;
+  }
+  // 次数接着上一次往下数:补投也是一次尝试,否则重启反复发生时这条链会永远重投下去。
+  try {
+    await launchReviewRound(task, run, {
+      resumeSessionId: intent.resumeSessionId ?? undefined,
+      retry: intent.retry,
+      redeliver: { attempts: intent.attempts, since: intent.since },
+    });
+  } catch (error) {
+    // 起不来就按原路收尾(round→error、run→failed、写明原因),和首次派发失败同一条出路。
+    await failReviewStart(run, error instanceof Error ? error.message : String(error));
+  }
+  return true;
 }
 
 export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
