@@ -15,6 +15,7 @@
 //   ⑥ 被挡回的用户操作留下持久可见的痕迹,**包括从没跑过、没有会话可写的任务**(F4);
 //   ⑦ 久久发不出去的待发送消息会出声(pending-delivery-timing)。
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,6 +24,8 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
 const root = mkdtempSync(join(tmpdir(), "ash-turn-reclaim-"));
+const approvalKey = generateKeyPairSync("ed25519");
+process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = approvalKey.publicKey.export({ type: "spki", format: "der" }).toString("base64");
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 // 把判据窗口压到毫秒级,好让 HTTP 放开那条真实路径也测得动(见 SUSPECT_TURN_MS)。
@@ -67,12 +70,21 @@ const baseTask = {
 const api = new Hono();
 mountTaskRunRoutes(api);
 mountTaskRoutes(api);
-const post = (path: string, body?: unknown) =>
-  api.request(path, {
+const post = async (path: string, body?: unknown) => {
+  let approval;
+  if (body === undefined && path.endsWith("/reclaim-turn")) {
+    const response = await api.request(`${path}/approval`);
+    if (response.ok) {
+      const challenge = await response.json() as { challengeId: string; payload: string };
+      approval = { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
+    }
+  }
+  return api.request(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true } : {})),
+    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true, approval } : {})),
   });
+};
 
 /** 给任务造一条会话行 —— appendTaskTimeline 只往已有会话里写,没有会话的任务只留日志。 */
 async function seedSession(taskId: string, id = `s-${taskId}`): Promise<string> {
@@ -301,13 +313,13 @@ await seedSession("t-http");
 {
   const idle = await post("/tasks/t-http/reclaim-turn");
   assert.equal(idle.status, 409, "没有锁被占着时应 409");
-  assert.match((await idle.json() as { error: string }).error, /没有被占着的回合占位/);
+  assert.match((await idle.json() as { error: string }).error, /没有可放开的占位/);
 }
 assert.equal(claimTurn("t-http"), true);
 {
   const tooEarly = await post("/tasks/t-http/reclaim-turn");
   assert.equal(tooEarly.status, 409, "刚占下还不到阈值,不许强行放开");
-  assert.match((await tooEarly.json() as { error: string }).error, /正常起跑的时间范围/);
+  assert.match((await tooEarly.json() as { error: string }).error, /没有可放开的占位/);
 }
 await sleep(SUSPECT_TURN_MS * 3);
 {

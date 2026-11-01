@@ -250,10 +250,14 @@ async function runnableAfterRelease(taskId: string): Promise<{ runnable: boolean
 export async function releaseSuspectTurn(
   taskId: string,
   thresholdMs = SUSPECT_TURN_MS,
+  authorization?: { seq: number; keyFingerprint: string },
 ): Promise<ReleaseSuspectResult> {
   const now = Date.now();
   const current = heldTurns().find((h) => h.taskId === taskId);
   if (!current) return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
+  if (authorization && authorization.seq !== current.seq) {
+    return { ok: false, why: "not-suspect", reason: "授权对应的回合占位已变化，请重新申请人工授权" };
+  }
   // 重算判据 → 条件释放,这中间一个 await 都没有。
   const suspect = suspectTurns(now, thresholdMs).find((s) => s.taskId === taskId);
   if (!suspect) {
@@ -275,7 +279,9 @@ export async function releaseSuspectTurn(
     taskId,
     `released-turn:${suspect.claimedAt}:${suspect.seq}`,
     "回合占位已放开",
-    `这个任务的回合占位已通过显式请求放开（${detail}）。`
+    (authorization
+      ? `这个任务的回合占位已凭离机授权签名放开（授权公钥 ${authorization.keyFingerprint}；${detail}）。`
+      : `这个任务的回合占位已通过显式请求放开（${detail}）。`)
     + (after.runnable ? "现在可以继续运行了。" : `但它还点不动运行：${after.nextStep ?? "请刷新查看当前状态"}。`)
     + SIDE_EFFECT,
   );

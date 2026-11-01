@@ -31,7 +31,7 @@ import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js"
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimTurn, freezeStartingTurn, releaseTurn, stopTask, waitForTurnIdle } from "./runs.js";
 import { noteRejectedUserAction, noteUserActionOutcome, type RejectedAction } from "./user-action-rejection.js";
-import { releaseSuspectTurn } from "./turn-lock-reclaim.js";
+import { mountTurnReclaimRoutes } from "./turn-reclaim-routes.js";
 
 /**
  * 停止在没有进程可杀时,等这个任务的回合锁空出来等多久。
@@ -63,6 +63,7 @@ import { actorOf, ownerIdOf } from "./auth/context.js";
 // (第 6/7 轮审查)。
 
 export function mountTaskRunRoutes(api: Hono): void {
+  mountTurnReclaimRoutes(api);
   mountTaskArchiveRoutes(api);
   mountTaskRetryTurnRoutes(api);
   mountTaskScheduleRoutes(api);
@@ -264,54 +265,6 @@ api.post("/tasks/:id/stop", async (c) => {
     return c.json({ stopped: true, note, strandedTurn: !released });
   }
   return c.json({ error: "任务没有在运行的进程可停止", status: r.status }, 409);
-});
-
-// 用户主动放开一把**占着不动的回合锁**。
-//
-// 为什么需要这个入口:这种锁占着的任务点运行一律 409「任务回合正在进行」,而 `stop` 只杀
-// 进程、碰不到它 —— 2026-10-26 实测,全仓当时没有任何入口能救,唯一解法是重启整个 server。
-//
-// **为什么只有这一条路,没有自动回收**:判据(没句柄、没令牌、占得久)证不了原持有者已经
-// 结束 —— duet 等人工裁决门可以等几小时,dispatch 等仓库锁建 worktree 也没有时长上界,
-// 两者在判据眼里和卡死一模一样。拔错一把 = 解除互斥,同一个任务两个回合并跑。所以照
-// AGENTS.md 对这类不可逆又外溢操作的口径:巡检只如实上报,放开由用户自己按,响应里明示
-// 副作用(理由与判据见 turn-lock-reclaim.ts)。
-//
-// **判据不因为「是人点的」就放宽**:用户看到的也只是「可疑」,他同样不知道原持有者死没死。
-// 不满足判据时如实 409 并说清是哪一条没过,而不是迁就这一次点击。
-api.post("/tasks/:id/reclaim-turn", async (c) => {
-  const taskId = c.req.param("id");
-  const r = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!r) return c.json({ error: "not found" }, 404);
-  const consent = await c.req.json().catch(() => null);
-  if (consent?.acknowledgeDuplicateRisk !== true) {
-    return c.json(await noted(taskId, "放开回合占位", { error: "请先确认：放开互斥可能导致同一个任务的两个回合并行修改工作区" }), 400);
-  }
-  const outcome = await releaseSuspectTurn(taskId);
-  if (!outcome.ok) {
-    await noteRejectedUserAction(taskId, "放开回合占位", outcome.reason);
-    return c.json({ error: outcome.reason, reclaimed: false }, 409);
-  }
-  // 明示副作用:这一下解除的是互斥本身,不是「清理了一个垃圾」。
-  const effect = "；如果原来那一位其实还活着，互斥就没了，同一个任务可能有两个回合并行改同一个工作区";
-  // **锁放开了 ≠ 任务点得动了**(判据见 turn-lock-reclaim.ts 的 `runnable`)。没恢复的那一档
-  // 要留痕:它只有一次性的响应文案的话,开关随 remedy 变 null 一起从界面上消失,用户刷新
-  // 后既看不到自己按过、也看不到接着该做什么(第 1 轮审查 F3)。
-  const note = outcome.runnable
-    ? "已放开这个任务的回合占位，现在可以继续运行" + effect
-    : `已放开这个任务的回合占位，但它还点不动运行：${outcome.nextStep ?? "请刷新查看当前状态"}` + effect;
-  if (!outcome.runnable) {
-    await noteUserActionOutcome(taskId, "放开回合占位", "incomplete", note);
-  }
-  return c.json({
-    reclaimed: true,
-    role: outcome.role,
-    heldMs: outcome.heldMs,
-    runnable: outcome.runnable,
-    status: outcome.status,
-    nextStep: outcome.nextStep,
-    note,
-  });
 });
 
 // 检查点续跑：agent 在执行中调用，写下「下次继续时该喂给我的指令」。任务这一回合

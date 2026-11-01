@@ -40,13 +40,16 @@ export type ReclaimTurnResult = {
   note: string;
 };
 
+export type HumanApprovalChallenge = { challengeId: string; payload: string; expiresAt: number };
+export type HumanApprovalProof = { challengeId: string; signature: string };
+
 export const taskNoticeApi = {
   // 这个任务被挡回/没做到位的那些操作。**无条件调**:它是任务历史的一部分,不按「对话流
   // 有没有正文」取舍(server/src/user-action-rejection.ts)。
   taskNotices: (taskId: string): Promise<TaskNoticesResult> =>
     request(`/tasks/${id(taskId)}/notices`),
-  // 放开一把占着不动的回合占位。**判据在服务端,不因为是人点的就放宽**;而且只有账号
-  // 本人按得动 —— agent 的回合凭证会被 403 挡掉(server/src/auth/personal-gate.ts)。
-  reclaimTurn: (taskId: string, acknowledgeDuplicateRisk: boolean): Promise<ReclaimTurnResult> =>
-    request(`/tasks/${id(taskId)}/reclaim-turn`, json("POST", { acknowledgeDuplicateRisk })),
+  requestTurnApproval: (taskId: string): Promise<HumanApprovalChallenge> =>
+    request(`/tasks/${id(taskId)}/reclaim-turn/approval`),
+  reclaimTurn: (taskId: string, approval: HumanApprovalProof): Promise<ReclaimTurnResult> =>
+    request(`/tasks/${id(taskId)}/reclaim-turn`, json("POST", { acknowledgeDuplicateRisk: true, approval })),
 };

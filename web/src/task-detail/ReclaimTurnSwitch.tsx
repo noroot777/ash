@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { LockOpen } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import type { HumanApprovalChallenge, HumanApprovalProof } from "../lib/taskNoticeApi.ts";
 
 // 「放开回合占位」那个开关。
 //
@@ -16,12 +17,34 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
   const [busy, setBusy] = useState(false);
   const [released, setReleased] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [challenge, setChallenge] = useState<HumanApprovalChallenge | null>(null);
+  const [proof, setProof] = useState("");
+
+  const requestApproval = async () => {
+    setBusy(true);
+    setResult(null);
+    setChallenge(null);
+    setProof("");
+    try {
+      setChallenge(await api.requestTurnApproval(taskId));
+    } catch (error) {
+      setResult(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const release = async () => {
     setBusy(true);
     setResult(null);
     try {
-      const r = await api.reclaimTurn(taskId, true);
+      let approval: HumanApprovalProof | null;
+      try { approval = JSON.parse(proof) as HumanApprovalProof | null; }
+      catch { throw new Error("请粘贴有效的授权 JSON"); }
+      if (!challenge || !approval || approval.challengeId !== challenge.challengeId || typeof approval.signature !== "string") {
+        throw new Error("请粘贴当前申请对应的授权结果");
+      }
+      const r = await api.reclaimTurn(taskId, approval);
       setResult(r.note);
       setReleased(r.reclaimed);
       // **锁放开了不等于任务点得动了。** 放开只撤内存里那把锁,库里的状态归另一个人负责,
@@ -50,9 +73,17 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
           <strong>代价是万一那一位还活着，互斥就没了，同一个任务会有两个回合并行改同一个工作区。</strong>
         </span>
       </p>
-      <button type="button" onClick={() => void release()} disabled={busy || released}>
-        {busy ? "正在放开…" : released ? "已放开" : "放开回合占位"}
+      <button type="button" onClick={() => void requestApproval()} disabled={busy || released}>
+        {released ? "已放开" : busy ? "处理中…" : challenge ? "重新申请授权" : "申请人工授权"}
       </button>
+      {challenge && !released && <>
+        <p>将申请保存为 JSON，在不受本机 agent 控制的设备上核对并签名，五分钟内贴回授权结果。</p>
+        <textarea aria-label="人工授权申请" readOnly value={JSON.stringify(challenge, null, 2)} rows={5} />
+        <textarea aria-label="人工授权结果" value={proof} onChange={(event) => setProof(event.target.value)} placeholder="粘贴签名授权 JSON" rows={3} disabled={busy} />
+        <button type="button" onClick={() => void release()} disabled={busy || !proof.trim()}>
+          {busy ? "正在放开…" : "确认风险并放开回合占位"}
+        </button>
+      </>}
       {result && <p className="task-turn-remedy__result" role="status">{result}</p>}
     </div>
   );

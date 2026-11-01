@@ -296,6 +296,7 @@
 .task-turn-remedy svg { flex: none; margin-top: 3px; }
 .task-turn-remedy strong { color: var(--text); font-weight: 600; }
 .task-turn-remedy__result { color: var(--text); }
+.task-turn-remedy textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; font-size: 12px; }
 
 .task-conversation-empty { display: grid; min-height: 150px; place-content: center; justify-items: center; color: var(--faint); }
 .task-conversation-empty p,

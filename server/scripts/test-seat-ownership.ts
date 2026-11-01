@@ -20,6 +20,7 @@
 // 名字也不叫 turn-ownership —— 那个名字已经被第 11/12 轮审查那份回归占着(讲的是回合锁与
 // 预约槽的原子性,不是队列占位)。两份各自起隔离库,`npm run test:turn-reclaim` 依次跑。
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,8 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
 const root = mkdtempSync(join(tmpdir(), "ash-turn-ownership-"));
+const approvalKey = generateKeyPairSync("ed25519");
+process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = approvalKey.publicKey.export({ type: "spki", format: "der" }).toString("base64");
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_SUSPECT_TURN_MS = "20";
@@ -68,12 +71,21 @@ const baseTask = {
 
 const api = new Hono();
 mountTaskRunRoutes(api);
-const post = (path: string, body?: unknown) =>
-  api.request(path, {
+const post = async (path: string, body?: unknown) => {
+  let approval;
+  if (body === undefined && path.endsWith("/reclaim-turn")) {
+    const response = await api.request(`${path}/approval`);
+    if (response.ok) {
+      const challenge = await response.json() as { challengeId: string; payload: string };
+      approval = { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
+    }
+  }
+  return api.request(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true } : {})),
+    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true, approval } : {})),
   });
+};
 
 const statusOf = async (taskId: string): Promise<string | undefined> =>
   (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.status;
@@ -349,10 +361,11 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   assert.equal(crossSite.status, 403, "跨站请求不能冒充用户确认");
   assert.equal(claimTurn("t-gate"), false, "授权失败不能释放锁");
 
-  // 同一条路,真人(自用模式的隐式本地用户)照常放行。
+  const challenge = await (await gated.request("/api/tasks/t-gate/reclaim-turn/approval")).json() as { challengeId: string; payload: string };
+  const approval = { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
   const asHuman = await gated.request("/api/tasks/t-gate/reclaim-turn", {
     method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
-    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval }),
   });
   assert.equal(asHuman.status, 200, "账号本人该按得动");
   assert.equal((await asHuman.json() as { reclaimed: boolean }).reclaimed, true);
