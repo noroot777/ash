@@ -569,11 +569,21 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
     { queueId: "scheduled-gate-queue-12", taskId: oA, position: 0, createdAt: at },
     { queueId: "scheduled-gate-queue-12", taskId: oB, position: 1, createdAt: at },
   ]);
+  // 推进责任先落库、再由本次调用带进来 —— 生产里「续跑交接补推」那条入口的形状
+  // (queue-advance-retry.ts 的 replayQueueAdvances)。**少了它这条用例考不到自己那件事**:
+  // 整库写不进去时第一笔失败的是 claimOwnTurn 之前的 `requestQueueAdvance`,回合锁都还没
+  // 认领过,红在准入拒绝上;带着请求进来,写锁第一次咬到的才是占位那一笔。
+  const oRow = (await db.select().from(tasks).where(eq(tasks.id, oB))).at(0)!;
+  const oRequest = {
+    id: "scheduled-gate-ob-advance", queueId: "scheduled-gate-queue-12",
+    resumePromptGeneration: oRow.resumePromptGeneration, prevStatus: oRow.status,
+  };
+  await db.update(tasks).set({ queueAdvanceRequest: oRequest }).where(eq(tasks.id, oB));
   // 另一条真实 SQLite 连接持写锁,耗尽服务端 5s busy timeout(与审查同手法,不 stub)。
   const { DatabaseSync } = await import("node:sqlite");
   const ext = new DatabaseSync(process.env.ASH_DB!);
   ext.exec("BEGIN IMMEDIATE");
-  const advanceDone = scheduler.advanceQueue("scheduled-gate-queue-12");
+  const advanceDone = scheduler.advanceQueue("scheduled-gate-queue-12", { ...oRequest, taskId: oB });
   await advanceDone; // setQueued 超时失败,但函数自己收口,不外抛
   assert.equal(runs.isTurnClaimed(oB), false, "占位写入失败后预认领的回合必须释放(409 永锁)");
   assert.equal(await taskStatusOf(oB), "paused", "写入失败时任务应保持原状态");
