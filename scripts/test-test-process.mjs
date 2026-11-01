@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { assertProcessResult, runTestProcess } from "./test-process.mjs";
 import { IS_WINDOWS, isPidAlive } from "./platform.mjs";
 import { delay, disposeTestScopesSync, spawnTestFixture } from "./test-process-scope.mjs";
+import { cleanupTestResourcesSync } from "./test-process-resources.mjs";
 
 const complete = { status: 0, signal: null, stdout: "已就绪\n✅ 完成\n", stderr: "" };
 assert.equal(assertProcessResult(complete), complete);
@@ -23,6 +24,7 @@ for (const result of [
 
 const temporary = mkdtempSync(join(tmpdir(), "ash-test-process-fixture-"));
 const pidPath = join(temporary, "child.pid");
+let operationError;
 try {
   const output = await runTestProcess(process.execPath, ["-e", `
     require('node:fs').writeSync(1, 'x'.repeat(2 * 1024 * 1024) + 'stdout-tail');
@@ -114,8 +116,8 @@ try {
   await broken.dispose();
   assert.ok(existsSync(descendantPid));
   assert.ok(!isPidAlive(Number(readFileSync(descendantPid, "utf8"))));
-} finally {
-  disposeTestScopesSync();
-  rmSync(temporary, { recursive: true, force: true });
+} catch (error) { operationError = error; }
+finally {
+  cleanupTestResourcesSync([disposeTestScopesSync, () => rmSync(temporary, { recursive: true, force: true })], operationError);
 }
 console.log("✓ 子进程执行域:超时后代/拒绝信号/登记失败均清场,保留诊断及晚写双流,独立日志服务显式登记");

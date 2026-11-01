@@ -14,6 +14,7 @@ import { IS_WINDOWS, capture, isPidAlive, sleep } from "./platform.mjs";
 import { restartCommand } from "./restart-options.mjs";
 import { runTestProcess } from "./test-process.mjs";
 import { disposeTestScopesSync, spawnTestFixture } from "./test-process-scope.mjs";
+import { cleanupTestResourcesSync, reportTestResourceError } from "./test-process-resources.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
@@ -25,8 +26,8 @@ const PID_FILE = join(TMP, "server.pid");
 let serverPid = 0;
 
 function cleanup() {
-  disposeTestScopesSync();
-  try { rmSync(TMP, { recursive: true, force: true }); } catch { /* 临时目录,清不掉也无所谓 */ }
+  try { cleanupTestResourcesSync([disposeTestScopesSync, () => rmSync(TMP, { recursive: true, force: true })]); }
+  catch (error) { reportTestResourceError(error); process.exitCode ||= 1; }
 }
 process.on("exit", cleanup);
 
@@ -150,8 +151,6 @@ createServer((req, res) => {
 `);
 
 const stubbornProc = spawnTestFixture(process.execPath, [stubborn], { stdio: "ignore" });
-// 记一笔:上面那条注释说的就是它 —— 断言中途 `fail()` 会直接 process.exit,不登记
-// 就漏成僵尸占着 :PORT。原来只登记了后半段那个回 401 的,这一个漏了。
 for (let i = 0; i < 50 && !existsSync(STUBBORN_PID); i++) await sleep(100);
 if (!existsSync(STUBBORN_PID)) fail("赖着不走的假 server 没起来,这条回归没法测");
 

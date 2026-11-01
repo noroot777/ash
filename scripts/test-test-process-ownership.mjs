@@ -56,12 +56,16 @@ try {
 
   if (process.platform !== "win32") {
     const marker = join(temporary, "native-started");
-    for (const command of [process.execPath, "/usr/bin/python3", "/bin/sh"]) {
+    for (const [command, args] of [
+      [process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`]],
+      ["/usr/bin/python3", ["-c", `from pathlib import Path; Path(${JSON.stringify(marker)}).write_text('started')`]],
+      ["/bin/sh", ["-c", `printf started > '${marker.replaceAll("'", "'\\''")}'`]],
+    ]) {
       const created = [];
       fs.mkdtempSync = (...args) => { const directory = original.mkdtempSync(...args); created.push(directory); return directory; };
       syncBuiltinESMExports();
       try {
-        await assert.rejects(() => runTestProcess(command, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`]), { code: "EOWNERSHIP" });
+        await assert.rejects(() => runTestProcess(command, args), { code: "EOWNERSHIP" });
         assert.deepEqual(created.filter((directory) => fs.existsSync(directory)), []);
         assert.equal(fs.existsSync(marker), false);
       } finally { Object.assign(fs, original); syncBuiltinESMExports(); }
@@ -69,7 +73,7 @@ try {
     const before = fs.readdirSync(tmpdir()).filter((name) => name.startsWith("ash-test-scope-"));
     assert.throws(() => spawnTestFixture(process.execPath, ["-e", "process.exit()"]), { code: "EOWNERSHIP" });
     assert.deepEqual(fs.readdirSync(tmpdir()).filter((name) => name.startsWith("ash-test-scope-")), before);
-    console.log(`✓ ${process.platform}: 无原生所有权后端时启动前明确失败,不生成子进程或遗留目录`);
+    console.log(`⏭ ${process.platform}: 原生进程/重启业务未覆盖（无所有权后端）; 仅验证 EOWNERSHIP 启动前拒绝与回滚,不代表业务通过`);
   } else {
     const created = [];
     const originalSpawnSync = childProcess.spawnSync;
@@ -192,6 +196,24 @@ try {
       `$ErrorActionPreference='Stop'; Add-Type -Path ${quote(fixtureSource)} -OutputAssembly ${quote(fixtureExe)} -OutputType ConsoleApplication`, "utf16le").toString("base64")], { encoding: "utf8", timeout: 30_000 });
     assert.ifError(compilation.error);
     assert.equal(compilation.status, 0, compilation.stderr);
+    const churning = new TestProcessScope();
+    try {
+      const root = churning.spawn(fixtureExe, ["churn", join(temporary, "unused-marker"), join(temporary, "unused-pid")], { stdio: "ignore" });
+      let finished = false;
+      const completion = new Promise((resolveExit, rejectExit) => {
+        root.once("exit", (status) => { finished = true; status === 0 ? resolveExit() : rejectExit(new Error(`churn root ${status}`)); });
+        root.once("error", rejectExit);
+      });
+      let queries = 0;
+      while (!finished) {
+        await churning.active();
+        queries++;
+        await delay(10);
+      }
+      await completion;
+      assert.ok(queries > 2);
+    } finally { await churning.stop(); churning.remove(); }
+    console.log("✓ 原生后代持续出生/退出期间重复查询不会耗尽无退避短循环,不能证明时仍明确失败");
     for (const mode of ["normal", "timeout", "chain"]) {
       const marker = join(temporary, `${mode}.marker`);
       const pidFile = join(temporary, `${mode}.pid`);

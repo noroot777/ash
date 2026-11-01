@@ -14,7 +14,14 @@ public static class NativeFixture {
     var mode = args[0];
     var marker = args[1];
     var pid = args[2];
-    if (mode == "normal" || mode == "timeout" || mode == "chain") {
+    if (mode == "churn") {
+      for (int generation = 0; generation < 120; generation++) {
+        Spawn("transient", marker, pid, generation);
+        Thread.Sleep(10);
+      }
+    } else if (mode == "transient") {
+      Thread.Sleep(15);
+    } else if (mode == "normal" || mode == "timeout" || mode == "chain") {
       Spawn(mode == "chain" ? "generation" : "leaf", marker, pid, 0);
       Console.WriteLine("NATIVE_ROOT");
       if (mode == "timeout") Thread.Sleep(20000);

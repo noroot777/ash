@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import native from "./test-process-native.cjs";
+import { cleanupTestResourcesSync, reportTestResourceError } from "./test-process-resources.mjs";
 
 const registerPath = fileURLToPath(new URL("test-process-register.cjs", import.meta.url));
 const cleanupPath = fileURLToPath(new URL("test-process-cleanup.mjs", import.meta.url));
 const scopes = new Set();
+const cleanupFailures = new Map();
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 export const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 
@@ -40,7 +42,13 @@ export class TestProcessScope {
   }
 
   initialize() {
+    if (this.initializationError) throw this.initializationError;
     if (this.domain) return;
+    try { this.initializeDomain(); }
+    catch (error) { this.initializationError = error; throw error; }
+  }
+
+  initializeDomain() {
     const executable = native.executable();
     const name = `Local\\ash-test-${randomUUID()}`;
     const owner = native.invoke(executable, ["identity", String(process.pid)]);
@@ -129,10 +137,11 @@ export class TestProcessScope {
       const active = JSON.parse(native.invoke(this.domain.executable, ["list", this.domain.name]));
       if (active.length) throw new Error("不能回收尚有活动进程的执行域");
       writeFileSync(join(this.directory, "release"), "");
-      waitFile(join(this.directory, "closed"));
+      waitFile(join(this.directory, "closed"), join(this.directory, "failed"));
     }
     rmSync(this.directory, { recursive: true, force: true });
     for (const scope of scopes) if (scope.directory === this.directory) scopes.delete(scope);
+    cleanupFailures.delete(this.directory);
   }
 }
 
@@ -158,16 +167,33 @@ export function preservedPids(scope, scripts, capturedStreams, active) {
 
 export function disposeTestScopesSync() {
   if (!scopes.size) return;
-  const result = spawnSync(process.execPath, [cleanupPath, ...[...scopes].map((scope) => scope.directory)], {
-    stdio: "inherit", timeout: 120_000, killSignal: "SIGKILL", windowsHide: true,
-    env: { ...process.env, ASH_TEST_PROCESS_SCOPE: "" },
-  });
-  if (result.error || result.signal || result.status !== 0) throw new Error("测试执行域退出清理失败");
-  scopes.clear();
+  const pending = [...new Set([...scopes].map((scope) => scope.directory))].filter((directory) => !cleanupFailures.has(directory));
+  let processError;
+  if (pending.length) {
+    const result = spawnSync(process.execPath, [cleanupPath, ...pending], {
+      encoding: "utf8", timeout: 120_000, killSignal: "SIGKILL", windowsHide: true,
+      env: { ...process.env, ASH_TEST_PROCESS_SCOPE: "" },
+    });
+    if (result.error || result.signal || result.status !== 0) {
+      processError = Object.assign(new Error(`测试执行域退出清理失败\n${result.stdout ?? ""}${result.stderr ?? ""}`, { cause: result.error }), {
+        code: result.error?.code ?? "ETESTCLEANUP", result,
+      });
+    }
+    for (const directory of pending) {
+      if (existsSync(directory)) cleanupFailures.set(directory, processError ?? new Error(`测试执行域未退役: ${directory}`));
+      else for (const scope of scopes) if (scope.directory === directory) scopes.delete(scope);
+    }
+  }
+  const errors = [...new Set([processError, ...cleanupFailures.values()].filter(Boolean))];
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, "测试执行域退出清理失败", { cause: errors[0] });
+}
+
+export function disposeTestProcessResourcesSync() {
+  cleanupTestResourcesSync([disposeTestScopesSync, () => { if (!scopes.size) native.dispose(); }]);
 }
 
 process.once("exit", () => {
   if (process.argv[1] && resolve(process.argv[1]) === cleanupPath) return;
-  try { disposeTestScopesSync(); } catch (error) { console.error(error); process.exitCode = 1; }
-  try { native.dispose(); } catch (error) { console.error(error); process.exitCode = 1; }
+  try { disposeTestProcessResourcesSync(); } catch (error) { reportTestResourceError(error); process.exitCode = 1; }
 });

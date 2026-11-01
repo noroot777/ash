@@ -183,7 +183,11 @@ public static class TestProcessNative {
     } finally { if (info.Process != IntPtr.Zero) CloseHandle(info.Process); }
   }
   static string Rows(IntPtr job) {
-    for (int attempt = 0; attempt < 100; attempt++) {
+    var deadline = DateTime.UtcNow.AddSeconds(5);
+    bool retry = false;
+    while (DateTime.UtcNow < deadline) {
+      if (retry) Thread.Sleep(10);
+      retry = true;
       uint count = Active(job);
       int size = checked(8 + ((int)count + 256) * IntPtr.Size);
       var buffer = Marshal.AllocHGlobal(size);
