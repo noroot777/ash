@@ -11,6 +11,13 @@ export type SessionRole =
   | "implementer" // legacy: retained so historical sessions still decode
   | "reviewer"; // 独立审查会话（自由工作流复用，也兼容历史记录）
 
+/**
+ * 一个回合**自己**的结局(`session_turns.outcome`)。进程最后一次怎么没的另记在会话行上
+ * (`exitStatus` / `stoppedAs`),**两件事不混** —— 语义与「为什么不能拿退出码投影」写在
+ * `server/src/db/schema-sessions.ts` 的 `sessionTurns.outcome` 上。
+ */
+export type TurnOutcome = "completed" | "failed" | "stopped";
+
 export interface Session {
   id: string;
   taskId: string;
@@ -42,6 +49,19 @@ export interface Session {
   stoppedAs?: string | null;
   // 这一轮是旁路回合（审查 / 就地验证 / 斜杠命令），不是任务本体的执行。
   sideTurn?: boolean;
+  /**
+   * 这一轮**自己**的权威结局(`session_turns.outcome`,服务端收口时写下的那一位)。
+   *
+   * 为什么要带出门:`exitStatus` 记的是**进程**最后一次怎么没的,它答不了「ash 判这一轮成
+   * 没成」。被回合级停滞看门狗终止的那一轮正是两者分家的现场 —— 我们判它失败、区间记
+   * failed,而被终止的进程往多半以 **exit 0** 收流(claude 走信号退出时是 `code ?? 0`)。
+   * 重试入口照退出码判,就会在页面明写「本次续聊因上游连不上被自动终止」的同时,不给任何
+   * 重跑按钮(审查 F2,已实测 409「上一回合不是异常结束」)。
+   *
+   * null/undefined = 不知道(回合还开着、存量行、收口那一下没写成、不提供它的快照来源)。
+   * 读端一律按「没有明确失败结局」处理。
+   */
+  turnOutcome?: TurnOutcome | null;
   /**
    * 这条会话**此刻**还卡在上游等回话吗 —— 服务端那份权威状态(server/src/session-waiting.ts)
    * 按回合身份判出来的一位,不是数据库里的列。

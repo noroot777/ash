@@ -33,7 +33,10 @@ export function nativeAgentSegments(activity: NativeAgentActivity[]): AgentConte
       current.events = appendExecutionEvent(current.events, event.kind === "tool"
         ? { kind: "tool", label: event.name, detail: event.detail }
         : event.kind === "error"
-          ? { kind: "error", label: event.message }
+          // `level:"notice"` 是**过程提示**(上游在重试),不是执行故障 —— 这一位从主会话到
+          // 子线程一路带到了这里(shared/src/native-work.ts),末端却曾经一律归约成 error:
+          // 一场重连风暴在子智能体抽屉里就是几百条红色「执行异常」,而它只是在重试(审查 N1)。
+          ? { kind: event.level === "notice" ? "notice" : "error", label: event.message }
           : { kind: "thinking", label: "思考过程", detail: event.text });
     }
   }

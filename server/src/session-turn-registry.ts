@@ -190,6 +190,34 @@ function rememberClosed(sessionId: string, startedAt: string): void {
 }
 
 /**
+ * **这一行开始记录是本进程写的吗** —— 由 `openTurn` 登记,`clearTurnActive` 注销。
+ *
+ * 为什么要这么一张册子:判决恢复那一路要分「全新起跑的回合」和「上一个 ash 进程留下来的回合」,
+ * 而这两者的差别只有一个客观事实 —— **那一行开始记录是谁写的**。`activeTurns` 分不出来:
+ * `reattach.ts` 接回一个存活回合时也会 `markTurnActive`(它必须,否则起点分配器会重发那个起点)。
+ *
+ * 上一版是让调用方自己申报一个 `adopted` 布尔。那个设计的默认值落在**不安全那一侧**:新增一条
+ * 消费路径忘了传,判决恢复就静默退回「读不到就当没有」—— 而那正是第 5 轮审查 F1 本身。现在这个
+ * 问题由事实回答,没有人需要记得申报:不在册上就按「上一个进程留下来的」算(保守那一侧)。
+ */
+const openedHere = new Set<string>();
+
+const openedKey = (sessionId: string, startedAt: string): string => `${sessionId}\u0000${startedAt}`;
+
+/** `openTurn` 落那一行开始记录时登记一次(幂等)。 */
+export function markTurnOpenedHere(sessionId: string, startedAt: string | null | undefined): void {
+  if (startedAt) openedHere.add(openedKey(sessionId, startedAt));
+}
+
+/**
+ * 这个回合身份是**本进程开出来的**吗。`false` 同时覆盖两种情形:上一个进程留下来的,以及
+ * 「本进程开过但已经收口了」(收口即注销 —— 那之后没有人再问这个问题,问到也该按保守那侧答)。
+ */
+export function turnOpenedHere(sessionId: string, startedAt: string | null | undefined): boolean {
+  return !!startedAt && openedHere.has(openedKey(sessionId, startedAt));
+}
+
+/**
  * 这个身份**已经被本进程收过口了吗**。
  *
  * 用在撞号判据上（`openTurn`）：库里那条「已经收过口」的行,到底是别人（上一次运行、
@@ -217,6 +245,9 @@ function capWatermarks(): void {
 export function clearTurnActive(sessionId: string, startedAt: string | null | undefined): void {
   if (!startedAt) return;
   rememberClosed(sessionId, startedAt);
+  // 「本进程开的」这件事随收口一起作废:收过口的身份不会再有人问(单飞那一问发生在消费开头),
+  // 留着只会让这张集合跟着进程寿命一直长。两个批量注销口都汇到这里,所以这一处就够。
+  openedHere.delete(openedKey(sessionId, startedAt));
   const seen = activeTurns.get(sessionId);
   if (!seen) return;
   seen.starts.delete(startedAt);

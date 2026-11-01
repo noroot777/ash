@@ -67,6 +67,16 @@
   animation: task-status-dot-pulse 1.35s ease-in-out infinite;
   will-change: opacity, transform;
 }
+/* 停滞 = 它看着在跑，其实在干等模型上游：红色空心环。
+   照上面那套语法读就是对的 —— 红说「出事了」，环说「等你动手」（重试或换执行器），
+   而**不呼吸**正好说「它没在动」，所以跟会呼吸的 --active / --working 一眼分得开；
+   跟实心红的 --error 也分得开，那一档是已经收场了。 */
+.workspace-status-dot--stalled {
+  border: 1.5px solid var(--red);
+  background: color-mix(in lch, var(--red) 16%, transparent);
+}
+.workspace-status-dot--stalled.workspace-status-dot--small { border-width: 1px; }
+
 /* 未验收 = 干完了但还没盖章：靛蓝空心环。空心是刻意的 —— 实心点在这套界面里表示
    「系统替你记的状态」，环表示「等你动手」，一眼能跟绿色的完成点分开。 */
 .workspace-status-dot--unaccepted {
@@ -97,6 +107,8 @@
 .team-status-dot--attention { background: var(--amber); }
 /* 同 .workspace-status-dot--working：静止黄=等你说话，呼吸黄=等一件会自己回来的事。 */
 .team-status-dot--working { background: var(--amber); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
+/* 同 .workspace-status-dot--stalled：红环=在干等上游，不呼吸因为它没在动。 */
+.team-status-dot--stalled { border: 1.5px solid var(--red); background: color-mix(in lch, var(--red) 16%, transparent); }
 .team-status-dot--unaccepted { border: 1.5px solid var(--accent); background: color-mix(in lch, var(--accent) 16%, transparent); }
 .team-status-dot--success { background: var(--green); }
 .team-status-dot--error { background: var(--red); }

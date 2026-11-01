@@ -63,4 +63,43 @@ const said = parseAttachmentText(withFiles.turns[0].text);
 assert.equal(said.body, "看这张图");
 assert.deepEqual(said.paths, ["/tmp/uploads/a-image.png"]);
 
+// 发言**还没结束**时刷新页面:那条停滞诊断必须还在(第 1 轮审查 F4)。
+// 讨论页首次进入和刷新都只读 transcript.jsonl,而一轮发言的完整记录要等 runTurn 收尾才追加 ——
+// 停滞警告出现到发言结束之间按定义很长(上游一直连不上才会报警),这段窗口里刷新一下警告就
+// 不见了,只剩「正在组织本轮观点」。所以服务端在警告/熔断那一刻就把**与实时 SSE 一模一样**的
+// 那条 agent.event 落进同一份 transcript(server/src/duet/timeline.ts 的 recordTurnDiagnostic),
+// 回放这里认它。
+const WARN = { kind: "error", message: "上游已连续 5 次重试、4 分钟没有任何回话", level: "notice", affectsTurn: false };
+const TRIP = { kind: "error", message: "已自动终止本回合并按失败结算:只收到错误事件" };
+// 警告档:发言还开着,刷新之后那句提示和「正在等上游」两样都得在。警告是「过程里的一句提示」,
+// 跟实时同一个去处 —— 进执行过程的 notice,不进 error(那条口径上面几段已经钉过)。
+const warned = rebuildDuetState([start, agent(WARN)]);
+assert.equal(warned.turns.length, 1, "回放把那条诊断当成了别的回合");
+assert.equal(warned.turns[0].done, false, "发言还没结束,回合却被标成了已完成");
+assert.deepEqual(warned.turns[0].events, [{ kind: "notice", label: "提示", detail: WARN.message }],
+  "发言进行中刷新页面,停滞警告没了 —— 警告档承诺的「持久可见、刷新仍在」在讨论页上没兑现");
+assert.equal(warned.turns[0].awaiting, true, "刷新后那条「正在等上游」的等待状态没跟着回来");
+// 熔断档:红字也得跨得过刷新。它顺带把「正在等」撤掉 —— 这一轮已经被我们终止,不再是在等谁。
+const midStatement = rebuildDuetState([start, agent(WARN), agent(TRIP)]);
+assert.equal(midStatement.turns.length, 1, "回放把那两条诊断当成了别的回合");
+assert.equal(midStatement.turns[0].error, TRIP.message, "刷新之后熔断那条红字没了");
+assert.equal(midStatement.turns[0].awaiting, false, "都已经熔断了还显示「正在等上游」");
+
+// 这一轮真收尾之后:整轮记录把同一个回合**整体替掉**,不许出现两份。
+const afterStatement = rebuildDuetState([
+  start,
+  agent(WARN),
+  agent(TRIP),
+  { round: 1, speaker: "A", text: "我的观点是…", raised: false, at: "2026-08-06T01:02:00.000Z",
+    error: TRIP.message,
+    events: [{ kind: "tool", label: "exec", detail: "npm test" }, { kind: "notice", label: "提示", detail: WARN.message }] },
+]);
+assert.equal(afterStatement.turns.length, 1, "那两条诊断和整轮记录各占了一个回合 —— 同一轮发言显示成了两条");
+assert.equal(afterStatement.turns[0].done, true, "整轮记录没把这个回合收口");
+assert.equal(afterStatement.turns[0].text, "我的观点是…", "落盘那份正文没盖上去");
+assert.equal(afterStatement.turns[0].error, TRIP.message, "收尾之后熔断那条红字反而没了");
+assert.deepEqual(afterStatement.turns[0].events,
+  [{ kind: "tool", label: "exec", detail: "npm test" }, { kind: "notice", label: "提示", detail: WARN.message }],
+  "落盘那份执行过程没盖上去(诊断在里面,所以不能只看条数)");
+
 console.log("duet timeline ok");

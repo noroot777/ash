@@ -175,6 +175,29 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       and (${acceptGateRuns.status} = 'running' or ${acceptGateRuns.processPending} = 1))`.mapWith(Boolean),
     monitorRunning: sql<boolean>`exists(select 1 from ${monitors} where ${monitors.taskId} = ${tasks.id}
       and ${monitors.status} = 'running')`.mapWith(Boolean),
+    // 「这个任务其实在干等上游」(回合级停滞看门狗,见 turn-stall.ts)。四个条件缺一不可:
+    // 标记在、那条会话还没收尾、任务此刻真的在跑、而且**那条会话就是此刻这一轮用的那条** ——
+    // 后三条是残值闸:ash 被硬杀时标记留在库里没人撤,少了它们那颗点会永久亮在卡片上。
+    //
+    // 最后一条是第 5 轮审查 F5:前三条挡不住「旧行还挂着标记、新回合已经在跑」。换执行器重试
+    // 或者旧执行器不能复用时会**新建一条会话行**(task-run.ts / orchestrator.ts),旧行一个字
+    // 不动;新会话正常输出只撤得掉自己那一行的标记(CAS 认的是置标记的那一次停滞),于是旧行
+    // 跟着新任务的 running 一起又把红环点亮,一直亮到下一次有人恰好清了旧行。
+    //
+    // **「取代了它」按角色认,不按时间先后**(第 1 轮审查 F3,已实测)。上一版写的是「任务名下
+    // 存在任何更晚开始的会话」,而讨论首轮本来就是两个声部**合法并行**(duet/index.ts 里两条
+    // `runTurn` 一起起跑):A 卡在上游连不上、B 正常答完,B 只是晚了 100 毫秒开始,于是 A 那条
+    // 仍然有效的停滞被当成旧残值过滤掉 —— 任务卡片只显示普通运行中,刷新也一样。
+    // 时间戳回答不了「谁取代了谁」,角色才回答得了:一个任务上同一个角色(`single` / `voiceA` /
+    // `voiceB` / `lead` …)**同时只有一条会话在执行**,换执行器重试换的就是同一个角色的下一条;
+    // 而另一个声部压根不是同一个位置上的人,它多晚开始都挡不住这一条。
+    upstreamStalled: sql<boolean>`exists(select 1 from ${sessions} where ${sessions.taskId} = ${tasks.id}
+      and ${sessions.upstreamStalledSince} is not null and ${sessions.endedAt} is null
+      and ${tasks.status} = 'running'
+      and not exists(select 1 from sessions newer where newer.task_id = ${tasks.id}
+        and newer.role = ${sessions.role}
+        and coalesce(newer.turn_started_at, newer.started_at)
+          > coalesce(${sessions.turnStartedAt}, ${sessions.startedAt})))`.mapWith(Boolean),
   }).from(tasks).leftJoin(taskBackgroundRevisions, eq(tasks.id, taskBackgroundRevisions.taskId))
     .where(inArray(tasks.id, rows.map(row => row.id)))).map(row => [row.taskId, row]));
   return rows.map((r) => {
@@ -187,6 +210,7 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
       backgroundRevision: background.get(r.id)?.backgroundRevision ?? 0,
       acceptGateRunning: background.get(r.id)?.acceptGateRunning ?? false,
       monitorRunning: background.get(r.id)?.monitorRunning ?? false,
+      upstreamStalled: background.get(r.id)?.upstreamStalled ?? false,
     };
   });
 }
