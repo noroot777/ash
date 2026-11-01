@@ -9,6 +9,7 @@
 // 实现方式是「把隐式本地用户实名化」:自用模式下所有归属列都是 null,转换时一次
 // UPDATE 把 null 填成管理员 id。这样读写点只有一套归属逻辑,不必到处写 `if (multi)`。
 import { isNull, sql } from "drizzle-orm";
+import { getAppSettings } from "../app-settings.js";
 import { db } from "../db/index.js";
 import {
   agents,
@@ -20,6 +21,7 @@ import {
   taskMemos,
   tasks,
   teamPresets,
+  userSettings,
   workflows,
 } from "../db/schema.js";
 import { claimExistingUploads } from "../uploads.js";
@@ -113,6 +115,17 @@ export async function claimExistingDataFor(userId: string): Promise<Record<strin
   // 得照着目录逐个登记(uploads.ts),顺带按任务正文回填 taskId,老任务里的截图
   // 转换后照常对项目成员可见。
   claimed.uploads = await claimExistingUploads(userId);
+
+  // 「走过首启向导」也是一条存量事实:转多人之前独自用这台机器的就是这位管理员。
+  // 多人模式下这个键按人存(`personal-settings.ts` 的 `ownPersonalSetting` 不落回
+  // 全局那行),不显式过户的话,他下次登录会被从头领一遍向导。
+  const onboardedAt = (await getAppSettings()).onboardedAt;
+  if (onboardedAt) {
+    await db
+      .insert(userSettings)
+      .values({ userId, key: "onboardedAt", value: JSON.stringify(onboardedAt) })
+      .onConflictDoNothing({ target: [userSettings.userId, userSettings.key] });
+  }
 
   // 存量项目要显式登记成员行:实例管理员本来就看得见一切,但他日后被降级成普通用户
   // 时不该连自己建的项目都进不去。

@@ -152,13 +152,18 @@ export function codexMcpEvidence(text: string): Evidence {
     .filter(Boolean);
   if (!hits.length) return null;
   // 同一份 stderr 里往往混着别的 server 的报错（实测最多的是 linear 的 OAuth）。
-  // 点名 ash 的那几行才是这里要的，没有再退回最后两行。「点名」认的是引号里的 server 名，
-  // 不是整行里出现过这个词（见 Evidence 上面那段）。
+  // 点名 ash 的那几行才是这里要的。「点名」认的是引号里的 server 名，不是整行里出现过这个
+  // 词（见 Evidence 上面那段）。
   const named = hits.filter((line) => CODEX_NAMED_ASH.some((alias) => alias.named.test(line)));
+  // **一行都没点名就不作证**,不退回「最后两行」:那会把别家 server 的报错原文贴进 ash 的
+  // 诊断里(实测最多的是 linear 的 OAuth)。没有证据时收尾那句会改用「没查到直接证据、最
+  // 可能是…」的推断措辞 —— 比贴一段别人的报错准(本任务 af6ec688;同一处也被这条审查链记
+  // 成 N3)。
+  if (!named.length) return null;
   const failed = CODEX_NAMED_ASH.filter((alias) => hits.some((line) => alias.startFailed.test(line)));
   const silent = CODEX_NAMED_ASH.filter((alias) => !failed.includes(alias));
-  const picked = (named.length ? named : hits).slice(-2);
-  const detail = `codex 的 stderr 里有这些跟 MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`;
+  const picked = named.slice(-2);
+  const detail = `codex 的 stderr 里有这些跟 ash MCP 有关的报错：\n${picked.map((line) => line.slice(0, 300)).join("\n")}`;
   // 全部兼容名都明确启动失败了，才敢替整个通道下结论；只坏了一份时**只说这一份的事实**，
   // 剩下那个名字登记了没有、连上没有，这份证据看不出来（见 Evidence 上面那段）。
   if (!silent.length) return { connected: false, definite: true, detail };

@@ -23,7 +23,7 @@ import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { tasks, uploads } from "./db/schema.js";
 import { UPLOADS_DIR } from "./paths.js";
-import { scanUploadNames } from "./handoff-uploads.js";
+import { scanUploadNames, scanUploadRuns } from "./handoff-uploads.js";
 import type { Actor } from "./auth/context.js";
 import { ANONYMOUS_ACTOR, isAccountHolder, isAdminActor } from "./auth/context.js";
 import { isMultiUser } from "./auth/mode.js";
@@ -103,6 +103,21 @@ export async function registerUpload(
   // 补空位这一步自己也得是「比较后再写」:读到空、写回去之间另一次登记可能刚填上它,
   // 没有这道 where 就会把先到的那个归属盖掉(先到先得是这整段的判据)。
   if (Object.keys(patch).length) await db.update(uploads).set(patch).where(and(...guards));
+}
+
+/**
+ * 这条任务名下的附件 —— **接力打包的权威名单**(`handoff-uploads.ts` 的 `collectUploads`)。
+ *
+ * 为什么不从任务正文里扫:`attachmentsPrompt` 写进正文的是附件的绝对路径,看着像个文本
+ * 问题,但文件名的字符集和正文的字符集重叠(汉字两边都合法),中文说明能直接粘在路径
+ * 后面 —— 「这段文本到哪里为止」在文本层不可判定,沿那条路修了三轮都是补丁(推演见
+ * `collectUploads`)。归属这件事这张表本来就记着,而且比正文全:agent 落的图、讨论回合的
+ * 图压根不在正文里,靠 `backfillArtifactUploads` / `watchAgentUploads` 登记进来。
+ */
+export async function taskUploadNames(taskId: string): Promise<string[]> {
+  if (!taskId) return [];
+  const rows = await db.select({ file: uploads.file }).from(uploads).where(eq(uploads.taskId, taskId));
+  return rows.map((row) => row.file);
 }
 
 /**
@@ -345,9 +360,21 @@ export async function claimExistingUploads(userId: string): Promise<number> {
   const orphanRows = rows.filter((row) => !row.ownerUserId || !row.taskId);
   if (!pending.length && !orphanRows.length) return 0;
   // 一次扫完任务正文建反向索引,别对每个文件各扫一遍(存量库两边都是上千条)。
+  //
+  // **只认恰好是一个已知名字的那一段。** 正文里的路径后面可能紧跟着中文说明、中间一个
+  // 标点都没有,而「这段文本到哪里为止」在文本层不可判定(推演见 handoff-uploads.ts 的
+  // `collectUploads`)。按前缀收敛会把「正文里写明一条已经没了的长路径」算成另一份短名字
+  // 附件的归属 —— 回填的是**授权面**,认错一行就是把某人的文件敞开给另一条任务看得见的
+  // 所有人。这一档要回填的本来就是存量任务创建时带的附件,那些路径由 `attachmentsPrompt`
+  // 一行一条写下去,精确。已知 = 盘上有 ∪ 有登记行(文件被删、行还在的也得认得出自己
+  // 属于哪条任务)。
+  const onDisk = new Set(files);
   const byFile = new Map<string, string>();
   for (const task of await db.select({ id: tasks.id, body: tasks.body }).from(tasks)) {
-    for (const name of scanUploadNames(task.body)) if (!byFile.has(name)) byFile.set(name, task.id);
+    for (const run of scanUploadRuns(task.body)) {
+      if (byFile.has(run) || !(onDisk.has(run) || known.has(run))) continue;
+      byFile.set(run, task.id);
+    }
   }
   const at = now();
   if (pending.length) {

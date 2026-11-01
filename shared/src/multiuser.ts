@@ -68,6 +68,14 @@ export interface AuthState {
   rootDir: string | null;
   /** 当前用户自己的目录绝对路径。single 模式为 null。 */
   homeDir: string | null;
+  /**
+   * 实例模式定完之后还缺的那几步(供应商 / 执行器 / 项目)。判据在
+   * `server/src/onboarding.ts` —— 它和 `needsSetup` 是同一条首启链上的前后两段,
+   * 所以放在一起交出去:多一个端点就多一个 RTT,而这一屏正卡在首屏空窗期上。
+   *
+   * 多人模式下没登录时恒为 false(那时该渲染登录页,「我还缺什么」也答不上)。
+   */
+  needsOnboarding: boolean;
 }
 
 /** 领取邀请链接时先看到的说明页数据(还没生成 key)。 */

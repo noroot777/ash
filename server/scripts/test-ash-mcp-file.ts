@@ -67,8 +67,23 @@ try {
     // 判不了的一律 doubt：拦人只能落在「确定没有」上。
     assert.equal(scan('note = """\n[mcp_servers.ash]\n"""\n').doubt, true,
       "多行字符串里像表头的东西：扫描器不认、兜底也不许说「没有」");
-    assert.equal(scan('mcp_servers = { ash = { command = "node" } }\n').doubt, true, "整个 mcp_servers 写成内联");
     assert.equal(scan('[profiles.p.mcp_servers.ash]\ncommand = "node"\n').doubt, true, "挂在别的表底下");
+    assert.equal(scan('profiles.p.mcp_servers.ash.command = "node"\n').doubt, true, "点号键挂在别的表底下");
+    // ── 别的命名空间里**恰好**有个字段叫 mcp_servers：合法、与 ash 无关，一个字都不许算到
+    //    我们头上（第 2 轮审查 F1，真机取证）。上一版对任何位置的 mcp_servers 段都答 doubt，
+    //    于是一份接得好好的配置被判成「看不准」：注入目标变 null、Windows 上派审当场被拒、
+    //    mac 上审查跑完交不了卷。值得提示的只有「紧跟着兼容名」那种 —— 用户以为接好了，而
+    //    codex 并不读那个位置（上面两条）。
+    for (const unrelated of [
+      '[profiles.mcp_servers]\nmodel = "gpt"\n',
+      '[model_providers.mcp_servers]\nbase_url = "http://x"\n',
+      '[profiles.foo.mcp_servers]\nkb = { command = "uv" }\n',
+      'profiles.mcp_servers.model = "gpt"\n',
+      '[profiles.p]\nmcp_servers = { kb = { command = "uv" } }\n',
+    ]) {
+      assert.deepEqual(scan(`[mcp_servers.ash]\ncommand = "node"\n${unrelated}`), yes,
+        `无关命名空间不许污染判据：${JSON.stringify(unrelated)}`);
+    }
     // codex 自己记项目信任就是路径型表头；路径里有 harness/ash 不是登记（新链第 3 轮第 1 条：
     // 上一版兜底拿「行首 `[` + 行内有这两个词」当信号，跑过这个仓库的机器整份配置都成了「看不准」）。
     for (const path of ["/Users/champion/code/harness", "/Users/x/ash/y", "C:\\\\ash"]) {
@@ -78,12 +93,190 @@ try {
     }
     assert.equal(scan('note = """\nmcp_servers.harness.command = "x"\n"""\n').doubt, true,
       "多行字符串里的点号键登记：照旧判不了");
+    // ── 多行字符串在哪收尾：**转义引号、连续引号、行尾续行**（第 5 轮 F2）。上一版见到三个
+    // 引号就收尾，于是一段合法指令里带转义三引号的接入示例被升级成真登记 —— 真 codex
+    // `mcp list` 只列出 kb，而执行器照着那条假登记注入 `-c mcp_servers.ash.env_vars=…`，
+    // 同一份本来读得动的配置当场拒载（`invalid transport in mcp_servers.ash`），这台机器上
+    // 别的 MCP 一起没了。
+    const escaped = 'developer_instructions = """\nAn escaped triple quote: \\"""\n'
+      + '[mcp_servers.ash]\ncommand = "node"\n"""\n[mcp_servers.kb]\ncommand = "node"\n';
+    assert.deepEqual(scan(escaped).names, {}, "转义引号不收尾 ⇒ 里面那段是示例，不是登记");
+    assert.deepEqual(scan('note = """a""""\n[mcp_servers.ash]\ncommand = "node"\n'), yes,
+      "四个引号里只有后三个是收尾符（内容末尾留一个）⇒ 下一行是真表头");
+    assert.equal(scan('note = """a""""""\n[mcp_servers.ash]\ncommand = "node"\n').doubt, true,
+      "六个连续引号：这份 TOML 本身不合法，codex 也读不动 —— 别替它猜");
+    assert.deepEqual(scan("note = '''\\'''\n[mcp_servers.ash]\ncommand = \"node\"\n"), yes,
+      "多行字面量串里反斜杠不是转义 ⇒ 第一行就收尾了");
+    assert.deepEqual(
+      scan('note = """\\\n  still inside \\"""\n[mcp_servers.ash]\nc = 1\n"""\n[mcp_servers.harness]\ncommand = "node"\n'),
+      { names: { harness: true }, doubt: false }, "行尾续行是合法写法，字符串收尾之后那个才是登记");
+    assert.deepEqual(scan('mcp_servers = { ash = { command = "node", note = """a"""" } }\n'),
+      yes, "内联表里的连续引号也得按同一条规矩收尾（上一版在这里答「拆不开」）");
+    // ── 转义键：**codex 自己会解**（0.153 真机实测：`[mcp_servers."\u0061sh"]` 它读成 ash，
+    // rc=0、`mcp mcp list --json` 列得出来）。扫描器不解的话，这份配置里明明有 ash，预检却答
+    // 「确定没有」—— 拦下一整轮审查；补写那一侧还会再追加一份同名表，那是 TOML 的重复定义，
+    // codex 整份拒载、用户别的 MCP 一起没了（本轮 F1）。
+    assert.deepEqual(scan('[mcp_servers."\\u0061sh"]\ncommand = "node"\n'), yes, "\\u 转义键");
+    assert.deepEqual(scan('[mcp_servers."as\\u0068"]\ncommand = "node"\n'), yes, "转义只占键的一截");
+    assert.deepEqual(scan('[mcp_servers."\\U00000061sh"]\ncommand = "node"\n'), yes, "\\U 八位转义");
+    assert.deepEqual(scan('mcp_servers."\\u0061sh".command = "node"\n'), yes, "点号键里的转义");
+    assert.deepEqual(scan('[mcp_servers]\n"\\u0061sh" = { command = "node" }\n'), yes, "内联表名里的转义");
+    assert.deepEqual(scan('[mcp_servers."a\\tsh"]\ncommand = "node"\n'), { names: {}, doubt: false },
+      "解出来是别的名字就不是 ash —— 解错方向反了也一样错（这个名字里是真制表符）");
+    assert.deepEqual(scan('[mcp_servers.ash]\ncommand = "no\\"de"\n'), yes, "值里的转义引号不影响读键");
+    // 反过来：**codex 读不动的，我们也不准据此说「没有」**。
+    assert.equal(scan('[mcp_servers."a\\qsh"]\ncommand = "node"\n').doubt, true, "TOML 不认的转义");
+    assert.equal(scan('[mcp_servers."ash]\ncommand = "node"\n').doubt, true, "引号没收尾");
+    assert.equal(scan('[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.ash]\ncommand = "b"\n').doubt, true,
+      "同名表定义两次：codex 报 duplicate key 整份拒载（setup 旧版追加重复表就是这个形状）");
+    assert.deepEqual(scan('[[x]]\na = 1\n[[x]]\na = 2\n[mcp_servers.ash]\ncommand = "node"\n'), yes,
+      "数组表重复出现是合法的，不准当成重复定义");
+    // ── 整张表写成一个内联值：**必须拆开读**。codex 自己认得（真机 rc=0、`mcp list` 列得出
+    // ash，`-c mcp_servers.ash.env_vars=[...]` 也落得上去），上一版只拿 `\bash\b` 扫值文本、
+    // 一律答 doubt：派审误拒、身份注不进去；而「确实没有 ash」那一半是对的时候，补写追加
+    // 一段普通表头，codex 报 `cannot extend value of type inline table with a dotted key`
+    // 整份拒载（第 2 轮审查 F1 的三组实测形状）。
+    assert.deepEqual(scan('mcp_servers = { ash = { command = "node", args = [] } }\n'), yes, "根内联表里的 ash");
+    assert.deepEqual(scan('mcp_servers = { "\\u0061sh" = { command = "node" } }\n'), yes, "根内联表 + 转义键");
+    assert.deepEqual(scan('mcp_servers = { ash = { command = "node", enabled = false } }\n'),
+      { names: { ash: false }, doubt: false }, "根内联表里关着的登记");
+    assert.deepEqual(scan('mcp_servers = { kb = { command = "node" } }\n'), { names: {}, doubt: false },
+      "根内联表里确实没有 ash —— 这一半要答得准，补写那边才知道「缺」是真的");
+    assert.equal(scan('mcp_servers = { ash = \n').doubt, true, "内联表拆不开:不准据此说没有");
+    // **封闭性**:我们唯一会写的东西是追加一段普通表头,而内联值定义过的表不许这么扩展。
+    // 封的只有「整张表是一个内联值」这一种 —— 另四种形状真机都扩展得了(rc=0)。
+    const sealed = (t: string) => !!scanCodexToml(t).sealed;
+    assert.equal(sealed('mcp_servers = { kb = { command = "node" } }\n'), true, "整张表是内联值 ⇒ 封住了");
+    assert.equal(sealed('mcp_servers = {}\n'), true, "空内联值一样封住");
+    for (const open of [
+      'mcp_servers.kb = { command = "node" }\n',
+      'mcp_servers.kb.command = "node"\n',
+      '[mcp_servers]\nkb = { command = "node" }\n',
+      '[mcp_servers.kb]\ncommand = "uv"\n',
+      'model = "gpt"\n',
+    ]) assert.equal(sealed(open), false, `这种写法还扩展得了，不准说封住：${JSON.stringify(open)}`);
+    // 文件结尾处值还没收尾：后面那些行全成了这个值的续行，看不见的 ash 不等于没有 ash。
+    assert.equal(scan('x = [\n  "a",\n').doubt, true, "数组少一个 ]");
+    assert.equal(scan('x = [\n  "a",\n[mcp_servers.ash]\ncommand = "node"\n').doubt, true,
+      "没收尾的数组把后面的表头吞了 —— 不准答「没有」");
+  }
+
+  // ── 1b. 执行器注入回合身份用的同一份判据 ─────────────────────────────────
+  // 上一版注入侧是 `^\[mcp_servers\.ash\]` 行首正则：带引号的写法预检放行、注入却认不出，
+  // MCP 拿不到回合身份，交卷 409（新链第 4 轮审查第 1 条）。预检认得的写法，注入必须都认得。
+  {
+    const { codexAshMcpServerName } = await import("../src/executors/codex-mcp.js");
+    const home = join(stage, "inject");
+    mkdirSync(home, { recursive: true });
+    const target = (toml: string) => { writeFileSync(join(home, "config.toml"), toml); return codexAshMcpServerName(home); };
+    for (const toml of [
+      '[mcp_servers.ash]\ncommand = "node"\n',
+      '[mcp_servers."ash"]\ncommand = "node"\n\n[mcp_servers."ash".env]\nASH_URL = "x"\n',
+      '  [ mcp_servers . \'ash\' ]  # 注释\n  command = "node"\n',
+      '[mcp_servers]\nash = { command = "node" }\n',
+      'mcp_servers.ash.command = "node"\n',
+      // 整张表写成内联值:真 codex 不仅列得出,`-c mcp_servers.ash.env_vars=[...]` 也落得
+      // 上去(本轮真机 rc=0 + env_vars 列得出来),所以注入目标必须给得出来。
+      'mcp_servers = { ash = { command = "node" } }\n',
+    ]) {
+      assert.equal(scanCodexToml(toml).servers.has("ash"), true, `预检认得：${JSON.stringify(toml)}`);
+      assert.equal(target(toml), "ash", `注入也必须认得：${JSON.stringify(toml)}`);
+    }
+    assert.equal(target('[mcp_servers."harness"]\ncommand = "node"\n'), "harness", "只有历史名时注入历史名");
+    assert.equal(target('[mcp_servers.ash]\nenabled = false\n[mcp_servers.harness]\ncommand = "node"\n'), "harness",
+      "规范名关着、历史名开着：注入开着的那个（工具从它那里来）");
+    assert.equal(target('[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.harness]\ncommand = "b"\n'), "ash", "都开着取规范名");
+    // 往没声明的名字里塞 `-c` 会让 codex 整份配置起不来：认不出来的一律不注入。
+    assert.equal(target('note = """\n[mcp_servers.ash]\n"""\n'), null, "多行字符串里的假表头不是登记");
+    assert.equal(
+      target('developer_instructions = """\nAn escaped triple quote: \\"""\n'
+        + '[mcp_servers.ash]\ncommand = "node"\n"""\n[mcp_servers.kb]\ncommand = "node"\n'),
+      null, "带转义三引号的示例更不许据此注入身份（第 5 轮 F2 的本体）");
+    // **切不开才不注入**（第 5 轮 F2 + 第 2 轮 F1）：整份文本切不成语句时，认出来的可能是
+    // 字符串里的示例；而「某处有疑问」不算 —— 那一档连别的命名空间里恰好叫 mcp_servers 的
+    // 字段都算进去，真 codex 读得好好的、也接受这条 `-c`，上一版却把身份注入整个取消了。
+    assert.equal(target('note = """\n[mcp_servers.ash]\ncommand = "node"\n'), null,
+      "多行串到文件结尾还没收尾：切不开 ⇒ 不注入");
+    assert.equal(target('[mcp_servers."ash]\ncommand = "node"\n'), null,
+      "表头按 TOML 读不通：切不开 ⇒ 不注入");
+    assert.equal(target('[mcp_servers.ash]\ncommand = "a"\n[mcp_servers.ash]\ncommand = "b"\n'), "ash",
+      "重复定义 codex 会整份拒载，但那条 ash 是正面认出来的 —— 注入与否无差，不算「不可信」");
+    for (const unrelated of [
+      '[profiles.mcp_servers]\nmodel = "gpt"\n',
+      '[model_providers.mcp_servers]\nbase_url = "http://x"\n',
+      '[profiles.foo.mcp_servers]\nkb = { command = "uv" }\n',
+      'profiles.mcp_servers.model = "gpt"\n',
+    ]) {
+      assert.equal(target(`[mcp_servers.ash]\ncommand = "node"\n${unrelated}`), "ash",
+        `无关命名空间不许取消身份注入：${JSON.stringify(unrelated)}`);
+    }
+    assert.equal(target('[mcp_servers.kb]\ncommand = "uv"\n[projects."/x/ash"]\ntrust_level = "trusted"\n'), null);
+    assert.equal(codexAshMcpServerName(join(stage, "no-such-home")), null, "没有配置文件");
   }
 
   // ── 2. codex 文件判据 ────────────────────────────────────────────────────
   const codexHome = join(stage, "codex");
   mkdirSync(codexHome, { recursive: true });
   const writeCodex = (toml: string) => writeFileSync(join(codexHome, "config.toml"), toml);
+  {
+    const inlineHome = join(stage, "codex-inline");
+    mkdirSync(inlineHome, { recursive: true });
+    const { codexInjectionTarget } = await import("../src/codex-toml.js");
+    const { ashMcpRegistration } = await import("../src/auth/user-cli-mcp.js");
+    const cases: [string, boolean][] = [
+      ['tools = { get_task = { enabled = false } }', true],
+      ['env = { ASH_NOTE = "enabled = false" }', true],
+      ['some = { enabled = false }', true],
+      ['note = "enabled = false, command = \\"fake\\""', true],
+      ["note = 'enabled = false, command = \"fake\"'", true],
+      ['args = ["enabled = false", "}", ","]', true],
+      ['x_enabled = false', true],
+      ['tools.get_task.enabled = false', true],
+      ['"enabled.flag" = false', true],
+      ['enabled = true, tools = { get_task = { enabled = false } }', true],
+      ['"enabled" = false', false],
+      ['enabled = false, tools = { get_task = { enabled = true } }', false],
+    ];
+    for (const [fields, enabled] of cases) {
+      const config = `[mcp_servers]\nash = { command = "node", ${fields} }\n`;
+      const scanned = scanCodexToml(config);
+      assert.equal(scanned.doubt, null, fields);
+      assert.equal(scanned.servers.get("ash")?.enabled, enabled, fields);
+      assert.equal(scanned.servers.get("ash")?.spec.command, "node", fields);
+      writeFileSync(join(inlineHome, "config.toml"), config);
+      assert.equal(fileAshMcpVerdict("codex", { CODEX_HOME: inlineHome }, [undefined]).state,
+        enabled ? "present" : "disabled", fields);
+      assert.equal(ashMcpRegistration(inlineHome, "codex").state, enabled ? "present" : "disabled", fields);
+      assert.equal(codexInjectionTarget(`${config}[mcp_servers.harness]\ncommand = "node"\n`),
+        enabled ? "ash" : "harness", fields);
+    }
+    // 文件判据消费的是同一份扫描:无关命名空间在这里也不许把「有」降成「看不准」(第 2 轮 F1)。
+    for (const unrelated of ['[profiles.mcp_servers]\nmodel = "gpt"\n', '[model_providers.mcp_servers]\nbase_url = "http://x"\n']) {
+      writeFileSync(join(inlineHome, "config.toml"), `[mcp_servers.ash]\ncommand = "node"\n${unrelated}`);
+      assert.equal(fileAshMcpVerdict("codex", { CODEX_HOME: inlineHome }, [undefined]).state, "present",
+        `文件判据:${JSON.stringify(unrelated)}`);
+      assert.equal(ashMcpRegistration(inlineHome, "codex").state, "present", `个人登记读取:${JSON.stringify(unrelated)}`);
+    }
+    const specs: [string, unknown][] = [
+      ['some = { command = "fake", ASH_URL = "fake" }, command = "node", args = ["mcp.js", "a,b"], env = { nested = { ASH_URL = "fake" }, ASH_URL = "http://localhost:4317" }',
+        { command: "node", args: ["mcp.js", "a,b"], ashUrl: "http://localhost:4317" }],
+      ['note = \'command = "fake", ASH_URL = "fake"\', env = { nested = { ASH_URL = "fake" } }', {}],
+      ['"command" = "node", env."ASH_URL" = "http://localhost:4317"',
+        { command: "node", ashUrl: "http://localhost:4317" }],
+      ['command = "node", "env.ASH_URL" = "fake"', { command: "node" }],
+    ];
+    for (const [fields, spec] of specs) {
+      const scanned = scanCodexToml(`[mcp_servers]\nash = { ${fields} }\n`);
+      assert.equal(scanned.doubt, null, fields);
+      assert.deepEqual(scanned.servers.get("ash")?.spec, spec, fields);
+    }
+    assert.deepEqual(scanCodexToml('[mcp_servers.ash]\nenv = { nested = { ASH_URL = "fake" }, ASH_URL = "real" }\n')
+      .servers.get("ash")?.spec, { ashUrl: "real" });
+    for (const config of ['[mcp_servers]\nash = { command = "node"\n', '[mcp_servers.ash]\nenv = { broken }\n']) {
+      assert.ok(scanCodexToml(config).doubt, "未识别的内联表不据此拦人");
+    }
+    console.log("✅ 内联表开关与启动字段只读取对应层级，四个消费口径一致");
+  }
   {
     const env = { CODEX_HOME: codexHome };
     assert.equal(fileAshMcpVerdict("codex", env, [undefined]).state, "absent", "没有 config.toml = 没有登记");
@@ -235,6 +428,20 @@ try {
     assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true);
     writeCodex('note = """\n[mcp_servers.ash]\n"""\n');
     assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true, "判不了就放行");
+
+    // 登记只在项目的 .codex/config.toml 里：这一档判不了 ⇒ 放行，但执行器只往用户级那份里
+    // 的登记注入回合身份 —— 至少说一句（新链第 5 轮审查第 3 条）。用户级有登记时不啰嗦。
+    const projCodex = join(stage, "proj-codex");
+    mkdirSync(join(projCodex, ".codex"), { recursive: true });
+    writeFileSync(join(projCodex, ".codex", "config.toml"), '[mcp_servers.ash]\ncommand = "node"\n');
+    writeCodex('model = "x"\n');
+    const projOnly = await ashMcpReachability({ agentType: "codex", cwdCandidates: [projCodex] });
+    assert.equal(projOnly.reachable, true, "项目里配了 mcp_servers ⇒ 判不了 ⇒ 放行");
+    assert.match(projOnly.warning ?? "", /回合身份/, "但要说清身份注不进去的风险");
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\n');
+    const both = await ashMcpReachability({ agentType: "codex", cwdCandidates: [projCodex] });
+    assert.equal(both.reachable, true);
+    assert.equal(both.warning, null, "用户级那份注得进去 ⇒ 没什么好提醒的");
 
     // 带 extraArgs：文件里看不到命令行覆盖，不下硬结论（同 claude 那条）。
     writeCodex('model = "x"\n');

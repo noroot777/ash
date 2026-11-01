@@ -175,9 +175,13 @@ async function installRecord(tree: string, project: ProjectSources, origin = tre
   return { usable: true, ...links };
 }
 
-const commandRemedy = (item: Entry) => `命令入口 ${join(item.tree, item.entry)} 不是包名。请检查这条入口：`
+// 说明里点名的一律是**原树**而不是快照里那份副本:依赖整棵克隆进快照之后 `item.tree` 就是副本,
+// 而拒绝的那条路上快照整个会被丢掉 —— 叫用户去「删除 <快照>/node_modules/.bin/orphan」是一句
+// 无从照做的话。origins 本来就记着「副本 → 原树」,两处(安装记录读取、这几句说明)共用它。
+const commandRemedy = (item: Entry, tree: string) => `命令入口 ${join(tree, item.entry)} 不是包名。请检查这条入口：`
   + `若为遗留或损坏项，删除该入口后重试；若仍需使用，在任务工作区重新安装提供该命令的工具`
-  + `并使入口被就近遮蔽，或将 ASH_RUNS_DIR 移出 ${item.tree} 的解析祖先链`;
+  + `并使入口被就近遮蔽，或把工作区里不完整的依赖目录整个移走、让门禁按同仓参考检出整棵克隆进快照`
+  + `（见 accept-gate-supply），或将 ASH_RUNS_DIR 移出 ${tree} 的解析祖先链`;
 
 
 /**
@@ -285,10 +289,13 @@ export async function confineOwnPackages(target: string, sourceRoot: string, ori
   const project = await projectSources(sourceRoot);
   const realTarget = await requiredRead(target, () => realpath(target));
   const records = new Map<string, InstallRecord>();
+  /** 这棵树原来住在哪（副本 → 原树）。安装记录的来源解析与所有拒绝说明共用这一份映射。 */
+  const originOf = (tree: string): string => {
+    const origin = [...origins].find(([copy]) => insideTree(copy, tree));
+    return origin ? join(origin[1], relative(origin[0], tree)) : tree;
+  };
   const recordFor = async (item: Entry): Promise<InstallRecord> => {
-    const origin = [...origins].find(([tree]) => insideTree(tree, item.tree));
-    const originTree = origin ? join(origin[1], relative(origin[0], item.tree)) : item.tree;
-    const record = records.get(item.tree) ?? await installRecord(item.tree, project, originTree);
+    const record = records.get(item.tree) ?? await installRecord(item.tree, project, originOf(item.tree));
     records.set(item.tree, record);
     return record;
   };
@@ -354,15 +361,15 @@ export async function confineOwnPackages(target: string, sourceRoot: string, ori
       if (location.kind === "external") continue;
       if (item.kind === "command") return `${item.entry} 指向本项目的活源码 ${item.landing}，`
         + `${record.usable ? "安装记录没有这个入口" : "没有 npm 的安装记录 .package-lock.json"}，无法证明安装来源。`
-        + commandRemedy(item);
+        + commandRemedy(item, originOf(item.tree));
       return record.usable
         // 记录读到了,它既没把这个入口认成项目内的包、又没法解释一条指着活源码的入口:那就是记录
         // 和实际装出来的东西不一致(装完之后手加过链),同样是**证明不了**。
         ? `${item.entry} 现在解析到 ${item.landing}（快照之外的活工作区源码），但那棵依赖树`
-          + `（${item.tree}）的安装记录里没有这个入口 —— 装出来的依赖和安装记录不一致（多半是装完`
+          + `（${originOf(item.tree)}）的安装记录里没有这个入口 —— 装出来的依赖和安装记录不一致（多半是装完`
           + `之后手工加过链），无从证明它该解析到哪份源码，请重新安装依赖后验收`
         : `${item.entry} 现在解析到 ${item.landing}（快照之外的活工作区源码），而那棵依赖树`
-          + `（${item.tree}）没有 npm 的安装记录 .package-lock.json，无从证明它是本项目自己的包`
+          + `（${originOf(item.tree)}）没有 npm 的安装记录 .package-lock.json，无从证明它是本项目自己的包`
           + `还是第三方包 —— 依赖布局无法证明隔离，请在标准安装布局下（重新安装依赖）验收`;
     }
     // 这棵树上摆着本项目的源码入口。树落在快照之外时，往快照根补绑定只覆盖「从快照根出发」的
@@ -428,7 +435,9 @@ export async function confineOwnPackages(target: string, sourceRoot: string, ori
         + `${outsider.entry} 只在那棵树里有、而本次提交已经不需要它时，npm install / npm prune 会把`
         + `它清掉，这棵树就不再摆着它（本次提交删掉过依赖的场合走这一条，不要把刚删掉的那条装回来）；`
         + `或在任务工作区安装提供 ${outsider.entry} 的依赖，使该入口被快照就近遮蔽；`
-        + `或将 ASH_RUNS_DIR 移到解析祖先链不经过 ${tree} 的目录后验收`;
+        + `或把任务工作区里那几个**不完整**的依赖目录整个移走 —— 某个位置上完全没有依赖目录时，`
+        + `门禁会按同仓参考检出把整棵树克隆进快照（见 accept-gate-supply），解析根就落在快照内，`
+        + `这一条不再适用；或将 ASH_RUNS_DIR 移到解析祖先链不经过 ${tree} 的目录后验收`;
     }
   }
   for (const binding of plan) {

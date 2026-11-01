@@ -48,6 +48,16 @@
 @import "./duet.css";
 @import "./settings.css";
 @import "./settings-skill-scan.css";
+/* 供应商表单与本地 CLI 检测结果这两个组件被首启向导复用了(web/src/onboarding/),
+   所以这三份从 SettingsPage.tsx 搬到这里 —— 挂在组件文件上的话,「谁先 import」
+   会决定层叠胜负,而它们之间**本来就有顺序要求**(providers 必须排在 agents 之后,
+   见 providers-settings.css 顶部)。顺序在一处写死,两边的消费者都对。 */
+@import "../settings/agents-settings.css";
+@import "../settings/providers-settings.css";
+@import "../settings/executors-settings.css";
+/* 首启向导排在它们之后:里面有几条是把那两个组件从「设置页的卡片里」改装成
+   「向导卡片上」的覆盖。 */
+@import "./onboarding.css";
 @import "./handoff.css";
 @import "./handoff-settings.css";
 @import "./remote-task.css";

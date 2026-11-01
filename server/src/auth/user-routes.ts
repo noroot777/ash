@@ -113,7 +113,7 @@ export function mountUserRoutes(api: Hono): void {
       gitEmail: (b.gitEmail ?? "").trim() || suggestGitEmail(name, dirName),
       createdBy: actorOf(c).userId,
     });
-    initUserCliEnv(user.id);
+    await initUserCliEnv(user.id);
     const token = await issueInvite(user.id, actorOf(c).userId);
     return c.json({ user: toUserView(user, true), inviteUrl: `/claim/${token}` }, 201);
   });

@@ -4,8 +4,8 @@ import { ArrowUUpLeft, CaretDown, CaretUp, ChatsCircle, Clock, Pulse, Queue, Spi
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { formatInstant } from "../task-detail/utils.ts";
 import {
-  bySendTime, scheduledMessageCounts, scheduledMessageExitCode, scheduledMessageMatches, scheduledMessageSummary, scheduledMessageText,
-  type ScheduledMessageFilter,
+  bySendTime, scheduledMessageCounts, scheduledMessageExitCode, scheduledMessageMatches, scheduledMessageSource,
+  scheduledMessageSummary, scheduledMessageText, type ScheduledMessageFilter,
 } from "./scheduledMessagePresentation.ts";
 
 type TrayProps = {
@@ -34,7 +34,10 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
   const label = displayText || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]");
   const summary = scheduledMessageSummary(message) || label;
   const queued = message.mode === "queued";
-  const fromMonitor = !!message.origin;
+  // 哨兵口径（脉冲图标、「取消这次唤醒」、「不执行停止哨兵操作」）只许落在真哨兵上，
+  // 判据与后端同源，见 scheduledMessageSource。
+  const source = scheduledMessageSource(message);
+  const fromMonitor = source === "monitor";
   const exitCode = scheduledMessageExitCode(message);
   const when = queued ? "排队中" : formatInstant(message.sendAt);
   return <div className="scheduled-message-row">
@@ -42,12 +45,12 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
     {fromMonitor ? <Pulse size={12} aria-hidden="true" />
       : queued ? <Queue size={12} aria-hidden="true" /> : <Clock size={12} aria-hidden="true" />}
     {fromMonitor ? <em>哨兵</em>
-      : message.sessionRole ? <em>审查答复</em> : queued ? <em>我的消息</em>
+      : source === "managed" ? <em>审查答复</em> : source === "system" ? <em>系统</em> : queued ? <em>我的消息</em>
         : <time dateTime={message.sendAt}>{formatInstant(message.sendAt)}</time>}
     {message.agent && <span className="scheduled-message-agent">@{message.agent}</span>}
     <b>{onInspect ? <button type="button" className="scheduled-message-inspect" onClick={onInspect} aria-label={`查看完整输入：${summary}`}>{summary}</button> : summary}</b>
     {previewIndex !== undefined && exitCode !== null && <span className={`scheduled-message-preview-exit${exitCode !== 0 ? " is-attention" : ""}`}>exit {exitCode}</span>}
-    {!fromMonitor && !message.sessionRole && steerable && onSteer && <button type="button" className="scheduled-message-guide" disabled={busy}
+    {source === "mine" && steerable && onSteer && <button type="button" className="scheduled-message-guide" disabled={busy}
       aria-label={`用最早的排队消息“${displayText || "附件"}”引导会话`} onClick={() => onSteer(message.id)}>
       {steering ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <ChatsCircle size={13} weight="duotone" aria-hidden="true" />}
       <span>{steering ? "引导中" : "引导会话"}</span>
@@ -55,7 +58,8 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
     {fromMonitor ? onCancel && <button type="button" disabled={busy}
       aria-label={`取消哨兵事件“${displayText}”这一次唤醒（仅移除本条输入，不执行停止哨兵操作）`} onClick={() => onCancel(message.id)}>
       {busy ? <SpinnerGap size={12} className="is-spinning" /> : <X size={12} weight="bold" />}
-    </button> : message.sessionRole ? <small className="scheduled-message-managed">审查会话的答复 · 由审查链投递</small>
+    </button> : source === "managed" ? <small className="scheduled-message-managed">审查会话的答复 · 由审查链投递</small>
+      : source === "system" ? <small className="scheduled-message-managed">由系统排入 · 不可撤回</small>
       : <button type="button" className="scheduled-message-withdraw" disabled={busy}
         aria-label={`撤回${when}的待发送消息“${displayText || "附件"}”，内容放回输入框`} onClick={() => onWithdraw(message)}>
         {busy ? <SpinnerGap size={12} className="is-spinning" /> : <ArrowUUpLeft size={12} weight="bold" />}
@@ -75,20 +79,20 @@ export function ScheduledMessageTray(props: TrayProps) {
   const toggleRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
   const ordered = bySendTime(messages);
-  const previews = ordered.filter((message, index) => index < 2 || (!message.origin && !message.sessionRole));
+  const previews = ordered.filter((message, index) => index < 2 || scheduledMessageSource(message) === "mine");
   const counts = scheduledMessageCounts(ordered);
   const hasMessages = ordered.length > 0;
   const open = hasMessages && expanded;
   const cancelMessage = ordered.find((message) => message.id === pendingCancel);
-  const steerable = ordered.find((message) => message.mode === "queued" && !message.sessionRole && !message.origin);
+  const steerable = ordered.find((message) => message.mode === "queued" && scheduledMessageSource(message) === "mine");
 
   useEffect(() => {
     if (!hasMessages) {
       setExpanded(false);
     }
-    if (!hasMessages || (filter === "managed" && !counts.managed)) setFilter("all");
+    if (!hasMessages || ((filter === "managed" || filter === "system") && !counts[filter])) setFilter("all");
     if (!cancelMessage) setPendingCancel(null);
-  }, [hasMessages, filter, counts.managed, cancelMessage]);
+  }, [hasMessages, filter, counts.managed, counts.system, cancelMessage]);
 
   useEffect(() => {
     setReadableIds((current) => {
@@ -139,10 +143,12 @@ export function ScheduledMessageTray(props: TrayProps) {
     {message.attachments.length > 0 && <ul aria-label="消息附件">{message.attachments.map((path, index) => <li key={`${index}:${path}`}>{path}</li>)}</ul>}
   </details>;
   const filters: [ScheduledMessageFilter, string][] = [["all", "全部"], ["mine", "我的消息"], ["monitor", "哨兵"],
-    ...(counts.managed ? [["managed", "审查答复"] as [ScheduledMessageFilter, string]] : []), ["attention", "需留意"]];
+    ...(counts.managed ? [["managed", "审查答复"] as [ScheduledMessageFilter, string]] : []),
+    ...(counts.system ? [["system", "系统"] as [ScheduledMessageFilter, string]] : []), ["attention", "需留意"]];
   const timed = ordered.filter((message) => message.mode === "timed").length;
   const sources = [counts.mine ? `我的消息 ${counts.mine}` : "", counts.monitor ? `哨兵 ${counts.monitor}` : "",
-    counts.managed ? `审查答复 ${counts.managed}` : "", timed ? `含 ${timed} 条定时` : ""].filter(Boolean).join(" · ");
+    counts.managed ? `审查答复 ${counts.managed}` : "", counts.system ? `系统 ${counts.system}` : "",
+    timed ? `含 ${timed} 条定时` : ""].filter(Boolean).join(" · ");
 
   return <>
     <div ref={trayRef} className="scheduled-message-tray" aria-label="待发送消息" onKeyDown={(event) => {

@@ -1,4 +1,5 @@
-// `test-ash-mcp-probe.ts` 第 9、11 块：探测层的**结构约束**，以及「没启动」/门闩扫地两条。
+// `test-ash-mcp-probe.ts` 的第 9、10、11、12 块：探测层的**结构约束**，「没启动」/门闩扫地、
+// 按号下刀的身份关，以及读数与下刀走异步版那一块。
 // 单拆出来只是为了让主测试文件守住 700 行上限 —— 它们仍由主测试调用、跟着
 // `test:ash-mcp-probe` 一起跑，不是独立的回归。
 //
@@ -6,9 +7,10 @@
 // 跑。断言刻意写成**否定式**（危险形状不存在）而不是某一种写法 —— 上一轮钉
 // `return gone ?? byClose` 的表达式形状，实现一换就恒红，而恒红的断言钉不住任何东西。
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import type { probeCli as ProbeCli } from "../src/ash-mcp-probe.js";
 import { sweepStaleGates } from "../src/ash-mcp-gate.js";
 
@@ -61,6 +63,25 @@ export function checkProbeStructure(): void {
     "不准杀完就核销 —— 中间必须有一次读数（第 2 轮 B1）");
   assert.match(settleBody, /while \([\s\S]*?unitResidue\(unit\)[\s\S]*?\}/,
     "复核要成环地问，直到证空或者预算用完");
+  // **这个文件里一次都不准按进程号下刀**（第 1、2 轮 F2）：`killTree(pid)` 在 Windows 上是
+  // 异步起一个 `taskkill /PID n /T /F`，真正按这个号 `OpenProcess` 的是稍后才启动的另一个
+  // 进程 —— 「我发起调用时它还没被回收」证不到那一刻，这中间号可以已经归别人。要下刀只有
+  // 两条路：走圈（`cutRun` → `cutUnit`，号由内核现读），或者走 `child.kill()`（锚在 libuv
+  // 握着的句柄上，不是号）。
+  assert.ok(!/killTree\(/.test(code),
+    "不准再按进程号起树击杀 —— 走圈或走 child 自己的句柄（第 2 轮 F2）");
+  const ownKill = fnBody(code, "export function killOwnProcess");
+  const knives = (body: string): number => (body.match(/\.kill\(/g) ?? []).length;
+  assert.ok(knives(ownKill) > 0 && /child\.kill\(/.test(ownKill),
+    "killOwnProcess 必须用 child 自己的句柄下刀（第 2 轮 F2）");
+  assert.equal(knives(code), knives(ownKill),
+    "下刀只许在 killOwnProcess 这一处 —— 别的位置走圈（第 2 轮 F2）");
+  assert.ok(/stillOurs\(child\)/.test(ownKill),
+    "下刀之前仍要确认这是我们这次运行的子进程（第 1 轮 F2）");
+  // 收壳那一档也不准按号探活:号被复用之后它答的是别人的生死。
+  const shellBody = fnBody(code, "async function discardShell");
+  assert.ok(!/isPidRunning\(/.test(shellBody),
+    "壳的死亡证明只认「已被回收」，不认按号探活（第 1 轮 F2）");
   // **钉函数体里有哪几件事，不钉它们写成什么样。** 这一轮和上一轮各被形状断言咬过一次：
   // 钉 `return gone ?? byClose`、钉 `confine.read().kind === …` 的那两条，实现一换写法就
   // 恒红，而恒红的断言钉不住任何东西。
@@ -98,6 +119,119 @@ export function checkProbeStructure(): void {
     "没拿到答案的那一问要退到配置文件那一档，不是放行");
   assert.ok(!/state === "unknown"\) return ok\(/.test(cliTier), "unknown 不准直接放行");
   assert.ok(!/if \(!complete\) return ok\(/.test(cliTier), "目录被截断时不准直接放行");
+}
+
+/**
+ * 第 10 块：**读数与下刀一律走异步版** —— 探测期间事件循环不准被同步 PowerShell 堵住。
+ * 搬到这个文件只是为了让主测试文件守住 700 行上限，它仍由主测试调用。
+ */
+export async function checkAsyncUnitCalls(probeCli: typeof ProbeCli): Promise<void> {
+  const stage = mkdtempSync(join(tmpdir(), "ash-mcp-async-unit-"));
+  const pause = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
+  try {
+  // 新链第 1 轮审查第 4 条：Windows 上 Job 的每次读数、每一刀都要起 PowerShell（实测 1~1.7
+  // 秒），探测走同步版时派审请求处理期间整个 server 卡住。这里拿一台替身把那个形状摆出来：
+  // 同步版**真的**同步堵 900 ms（跟 PowerShell 一样占住线程），异步版同样耗时但不占线程。
+  // 探测期间挂一个 50 ms 的心跳，断言最大间隔远小于 900 —— 退回同步版这条当场就红。
+  // 正常结束（读数）和超时（下刀 + 复核）两条路各走一遍。不分平台：验的是探测层自己的选择。
+  {
+    const BLOCK_MS = 900;
+    const calls = { syncRead: 0, syncKill: 0, asyncRead: 0, asyncKill: 0 };
+    const hog = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+    // **这台替身必须真的下刀**：它伪装的是「每一问都慢」，不是「不杀」。真设备
+    // （cgroup.kill / TerminateJobObject）都真杀，而收尾现在**只通过执行单元下刀**
+    // （本轮 F2 撤掉了按旧根号的补刀），替身不杀就没有任何东西会杀 —— 那个挂住的假 CLI
+    // 会攥着输出管道活下来，这个测试进程从此退不出去（实测：整套回归卡死在这一块）。
+    let slowRoot = 0;
+    const cutTree = (pid: number): void => {
+      if (!pid) return;
+      try {
+        if (process.platform === "win32") execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+        else process.kill(-pid, "SIGKILL");
+      } catch { /* 已经没了 */ }
+    };
+    const slowStand = (token: string) => ({
+      id: token,
+      enroll: (pid: number) => { slowRoot = pid; return true; },
+      preExecEnv: () => null,
+      read: () => { calls.syncRead++; hog(BLOCK_MS); return { kind: "members", members: [], coverage: "since-enroll" }; },
+      readAsync: async () => {
+        calls.asyncRead++;
+        await pause(BLOCK_MS);
+        return { kind: "members" as const, members: [], coverage: "since-enroll" as const };
+      },
+      killAll: () => { calls.syncKill++; hog(BLOCK_MS); cutTree(slowRoot); return 1; },
+      killAllAsync: async () => { calls.asyncKill++; await pause(BLOCK_MS); cutTree(slowRoot); return 1; },
+      dispose: () => {},
+    }) as unknown as NonNullable<ReturnType<NonNullable<Parameters<typeof probeCli>[5]>>>;
+
+    const dir = join(stage, "slow-cli");
+    mkdirSync(dir, { recursive: true });
+    const hang = join(dir, "hang.mjs");
+    const hangPid = join(dir, "hang.pid");
+    writeFileSync(hang,
+      'import { writeFileSync } from "node:fs";\n'
+      + `writeFileSync(${JSON.stringify(hangPid)}, String(process.pid));\n`
+      + "setInterval(() => {}, 1000);\n");
+    const shim = (posix: string, windows: string): void => {
+      if (process.platform === "win32") writeFileSync(join(dir, "codex.cmd"), windows);
+      else { const f = join(dir, "codex"); writeFileSync(f, posix); chmodSync(f, 0o755); }
+    };
+    const pathWas = process.env.PATH;
+    process.env.PATH = `${dir}${delimiter}${pathWas ?? ""}`;
+    /** 跑一次探测，返回那段时间里心跳的最大间隔。 */
+    const gapDuring = async (timeoutMs: number): Promise<number> => {
+      let last = Date.now();
+      let worst = 0;
+      const tick = setInterval(() => { const t = Date.now(); worst = Math.max(worst, t - last); last = t; }, 50);
+      try {
+        await probeCli("codex", ["mcp", "list", "--json"], process.env, undefined, timeoutMs, slowStand);
+        await pause(BLOCK_MS * 3);                     // 正常结束那条的收尾在后台跑，等它走完
+      } finally { clearInterval(tick); }
+      return worst;
+    };
+    try {
+      shim("#!/bin/sh\nprintf '[]'\n", "@echo off\r\n<nul set /p=[]\r\nexit /b 0\r\n");
+      const ended = await gapDuring(8_000);
+      shim(`#!/bin/sh\nexec "${process.execPath}" "${hang}"\n`,
+        `@echo off\r\n"${process.execPath}" "${hang}"\r\n`);
+      const timedOut = await gapDuring(1_500);
+      assert.equal(calls.syncRead + calls.syncKill, 0,
+        `有异步版时一次都不准走同步版（${JSON.stringify(calls)}）`);
+      assert.ok(calls.asyncRead > 0 && calls.asyncKill > 0, `两条路都该走到：${JSON.stringify(calls)}`);
+      assert.ok(ended < BLOCK_MS / 2 && timedOut < BLOCK_MS / 2,
+        `探测期间事件循环不准被读数/下刀堵住：正常结束最大间隔 ${ended} ms、超时 ${timedOut} ms`);
+    } finally {
+      process.env.PATH = pathWas;
+      // 兜底：替身那一刀万一没打到（Windows 的 `/T` 在父子树断掉时就打不到），测试自己收。
+      if (existsSync(hangPid)) {
+        const leftover = Number(readFileSync(hangPid, "utf8").trim());
+        if (leftover > 1) { try { process.kill(leftover, "SIGKILL"); } catch { /* 已经没了 */ } }
+      }
+    }
+  }
+  } finally { rmSync(stage, { recursive: true, force: true }); }
+}
+
+/**
+ * **下刀只认我们自己攥着的子进程句柄**（第 1、2 轮审查 F2）。
+ *
+ * 结构断言钉的是「别处不准出现按号下刀」，这一条钉的是这把刀本身答得对不对：活着的下得去、
+ * 真的死掉；已经退出并被回收的一刀都不发（那一刻那个号可能已经是别人的）。两个平台都跑得
+ * 出来，不依赖内核圈定 —— Windows 上 `child.kill` 打的是 libuv 握着的句柄，连号都不经手。
+ */
+export async function checkKillIdentity(killOwnProcess: (child: ChildProcess) => boolean): Promise<void> {
+  // ① 活着的:下得去刀,而且真的被收掉。
+  const alive = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  await new Promise<void>((r) => { alive.once("spawn", r); });
+  assert.equal(killOwnProcess(alive), true, "还活着 ⇒ 下得去刀");
+  await new Promise<void>((r) => { alive.once("exit", () => r()); });
+  // ② 已经被回收的:一刀都不准发 —— 这个号此刻可能已经是别人的了。
+  assert.equal(killOwnProcess(alive), false, "退出并被回收之后一刀都不准发（号复用，F2）");
+  // ③ 压根没起来(spawn 失败)就没有号可杀。
+  const nope = spawn(join(tmpdir(), `ash-no-such-binary-${Date.now()}`), [], { stdio: "ignore" });
+  nope.once("error", () => {});
+  assert.equal(killOwnProcess(nope), false, "压根没起来的时候不准下刀");
 }
 
 /**

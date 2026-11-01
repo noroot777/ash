@@ -70,13 +70,13 @@ export function mountPersonalCliRoutes(api: Hono): void {
     const hostAsh = sharedHostCli
       ? PERSONAL_CLI_TYPES.map((agentType) => ({ agentType, ...hostAshMcp(agentType) }))
       : [];
-    return c.json({ mode: "multi", sharedHostCli, hostAshMcp: hostAsh, envs: listPersonalCliEnv(userId) });
+    return c.json({ mode: "multi", sharedHostCli, hostAshMcp: hostAsh, envs: await listPersonalCliEnv(userId) });
   });
 
   api.get("/me/cli-env/:agentType", async (c) => {
     const userId = selfId(c);
     if (!userId) return refuseSelf(c);
-    return c.json(personalCliEnv(userId, c.req.param("agentType") as AgentType));
+    return c.json(await personalCliEnv(userId, c.req.param("agentType") as AgentType));
   });
 
   // ── 个人技能 ─────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ export function mountPersonalCliRoutes(api: Hono): void {
     } catch (error) {
       return c.json({ error: (error as Error).message }, ((error as { status?: number }).status ?? 400) as 400);
     }
-    return c.json(personalCliEnv(userId, c.req.param("agentType") as AgentType));
+    return c.json(await personalCliEnv(userId, c.req.param("agentType") as AgentType));
   });
 
   api.delete("/me/cli-env/:agentType/skills/:name", async (c) => {
@@ -109,7 +109,7 @@ export function mountPersonalCliRoutes(api: Hono): void {
     } catch (error) {
       return c.json({ error: (error as Error).message }, ((error as { status?: number }).status ?? 400) as 400);
     }
-    return c.json(personalCliEnv(userId, c.req.param("agentType") as AgentType));
+    return c.json(await personalCliEnv(userId, c.req.param("agentType") as AgentType));
   });
 
   // ── 个人全局 CLAUDE.md / AGENTS.md ───────────────────────────────────────
@@ -211,7 +211,7 @@ function mountConfigTransferRoutes(api: Hono): void {
     if (kinds.includes("cliEnv")) {
       const userId = actor.userId;
       bundle.items.cliEnv = userId
-        ? listPersonalCliEnv(userId)
+        ? (await listPersonalCliEnv(userId))
             .filter((env) => env.supported)
             .map((env) => ({
               agentType: env.agentType,

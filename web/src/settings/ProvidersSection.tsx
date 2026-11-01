@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { LlmProtocol, LlmProvider, ProviderModelListMode } from "@ash/shared";
+import type { AgentExecutorProfile, LlmProtocol, LlmProvider, ProviderModelListMode } from "@ash/shared";
 import {
   ArrowsClockwise,
   CheckCircle,
@@ -12,16 +12,21 @@ import { Button, Toggle } from "../components/ui.tsx";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { protocolLabel } from "./agentProviderRules.ts";
+import { agentsForProtocol, protocolLabel } from "./agentProviderRules.ts";
 import { refreshProviders } from "../lib/modelCatalog.ts";
 import { clearProviderModelCache } from "./ProviderModelInput.tsx";
 import { ProviderPinnedModels } from "./ProviderPinnedModels.tsx";
 import { ProviderContext1mModels } from "./ProviderContext1mModels.tsx";
+import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { useProviderCatalog, type ProviderCatalog } from "./useProviderCatalog.ts";
+
+/** 一份远端数据此刻的处境。`ready` 之外都不许拿来下断言。 */
+export type LoadState = "loading" | "ready" | "failed";
 
 type ProviderDraft = {
   name: string;
-  protocol: LlmProtocol;
+  /** `""` = 还没选。**新建时故意没有默认值**,理由见 ProtocolChoice。 */
+  protocol: LlmProtocol | "";
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -175,7 +180,52 @@ function ProviderModelField({
   );
 }
 
-function ProviderForm({
+const PROTOCOL_CHOICES: LlmProtocol[] = ["anthropic", "openai"];
+
+/**
+ * 协议二选一。
+ *
+ * 原先它是「名称」右边一颗预选着 Anthropic 的 `<select>`:一个看起来已经填好的小控件
+ * 没人会再点开,于是 codex 的中转站被存成 anthropic 协议,直到执行器那边的下拉里一个
+ * 都挑不着才发现。所以改了两处 ——
+ *
+ * 1. **新建时不给默认值**(`""`),没选就存不下去(门禁在按钮和 `save` 两头);
+ * 2. **按「这家供应商给谁用」来标**:协议名是实现细节,用户心里记着的是自己要跑哪个
+ *    CLI。名单从 `PROVIDER_PROTOCOL` 反推(`agentsForProtocol`),不手抄第二份。
+ *
+ * 编辑已有供应商时照常带出原值,不逼人把已经选对的东西再选一遍。
+ */
+function ProtocolChoice({
+  value,
+  onChange,
+}: {
+  value: LlmProtocol | "";
+  onChange: (protocol: LlmProtocol) => void;
+}) {
+  // 方向键换选等键盘语义走公共那一份(换掉的那颗原生 <select> 本来就有,按钮没有)。
+  const { groupProps, itemProps } = useRovingChoice(PROTOCOL_CHOICES, value, onChange);
+
+  return (
+    <div className="is-wide provider-protocol-pick">
+      <span>协议</span>
+      <div {...groupProps} aria-label="协议">
+        {PROTOCOL_CHOICES.map((protocol) => (
+          <button key={protocol} type="button" {...itemProps(protocol)} onClick={() => onChange(protocol)}>
+            <b>{protocolLabel(protocol)}</b>
+            <small>{agentsForProtocol(protocol).join(" · ")}</small>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 供应商表单本体。导出是给首启向导用的(`src/onboarding/ProviderStep.tsx`):
+ * 「添加供应商」这件事全应用只该有一份表单 —— 协议/BaseURL/Key/模型目录/1M 声明
+ * 这几项的联动规则抄第二份的话,两边迟早说出不一样的话。
+ */
+export function ProviderForm({
   provider,
   onCancel,
   onSaved,
@@ -188,7 +238,8 @@ function ProviderForm({
 }) {
   const [draft, setDraft] = useState<ProviderDraft>({
     name: provider?.name ?? "",
-    protocol: provider?.protocol ?? "anthropic",
+    // 编辑已有的那一份照常带出原值 —— 逼人把已经选对的东西再选一遍不是引导,是刁难。
+    protocol: provider?.protocol ?? "",
     baseUrl: provider?.baseUrl ?? "",
     apiKey: "",
     model: provider?.model ?? "",
@@ -216,33 +267,36 @@ function ProviderForm({
   };
 
   const save = async () => {
-    if (!draft.name.trim() || !draft.baseUrl.trim()) return;
+    // 门禁同时落在按钮和这里(web/CLAUDE.md「主工作区」同款理由):只 disable 按钮的话,
+    // 回车/程序化触发照样能把一条没选协议的记录存进去。
+    if (!draft.protocol || !draft.name.trim() || !draft.baseUrl.trim()) return;
+    const protocol = draft.protocol;
     setSaving(true);
     try {
       if (provider) {
         await api.patchLlmProvider(provider.id, {
           name: draft.name.trim(),
-          protocol: draft.protocol,
+          protocol,
           baseUrl: draft.baseUrl.trim(),
           model: draft.model.trim(),
-          protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
+          protocolConversionEnabled: protocol === "openai" && draft.protocolConversionEnabled,
           modelListMode: draft.modelListMode,
           pinnedModels: draft.pinnedModels,
-          context1mModels: draft.protocol === "anthropic" ? draft.context1mModels : [],
+          context1mModels: protocol === "anthropic" ? draft.context1mModels : [],
           ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
         });
         clearProviderModelCache(provider.id);
       } else {
         await api.createLlmProvider({
           name: draft.name.trim(),
-          protocol: draft.protocol,
+          protocol,
           baseUrl: draft.baseUrl.trim(),
           apiKey: draft.apiKey.trim(),
           model: draft.model.trim(),
-          protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
+          protocolConversionEnabled: protocol === "openai" && draft.protocolConversionEnabled,
           modelListMode: draft.modelListMode,
           pinnedModels: draft.pinnedModels,
-          context1mModels: draft.protocol === "anthropic" ? draft.context1mModels : [],
+          context1mModels: protocol === "anthropic" ? draft.context1mModels : [],
         });
       }
       // 供应商是模型目录的来源:改完要让页面上其它选模型的地方当场跟着变。
@@ -257,16 +311,10 @@ function ProviderForm({
   return (
     <div className="provider-form">
       <div className="provider-form-grid">
-        <label>
+        <ProtocolChoice value={draft.protocol} onChange={(protocol) => set("protocol", protocol)} />
+        <label className="is-wide">
           <span>名称</span>
           <input value={draft.name} onChange={(event) => set("name", event.target.value)} placeholder="例如 公司自建" />
-        </label>
-        <label>
-          <span>协议</span>
-          <select value={draft.protocol} onChange={(event) => set("protocol", event.target.value as LlmProtocol)}>
-            <option value="anthropic">Anthropic 兼容</option>
-            <option value="openai">OpenAI 兼容</option>
-          </select>
         </label>
         <label className="is-wide">
           <span>Base URL</span>
@@ -300,47 +348,53 @@ function ProviderForm({
             />
           </div>
         )}
-        <ProviderModelField
-          providerId={provider?.id}
-          providerName={draft.name}
-          protocol={draft.protocol}
-          baseUrl={draft.baseUrl}
-          apiKey={draft.apiKey}
-          model={draft.model}
-          knownModels={draft.pinnedModels}
-          context1mModels={draft.context1mModels}
-          protocolConversionEnabled={draft.protocolConversionEnabled}
-          catalog={catalog}
-          onModelChange={(model) => set("model", model)}
-        />
-        <ProviderPinnedModels
-          providerId={provider?.id}
-          protocol={draft.protocol}
-          baseUrl={draft.baseUrl}
-          apiKey={draft.apiKey}
-          protocolConversionEnabled={draft.protocolConversionEnabled}
-          catalog={catalog}
-          mode={draft.modelListMode}
-          pinned={draft.pinnedModels}
-          onModeChange={(mode) => set("modelListMode", mode)}
-          onPinnedChange={(models) => set("pinnedModels", models)}
-        />
-        {draft.protocol === "anthropic" && (
-          <ProviderContext1mModels
-            providerId={provider?.id}
-            defaultModel={draft.model}
-            pinnedModels={draft.pinnedModels}
-            catalog={catalog}
-            selectedModels={draft.context1mModels}
-            onChange={(models) => set("context1mModels", models)}
-          />
+        {/* 模型那几块等协议选完再出现:它们答不上话 —— 探模型目录要靠协议决定请求
+            打哪条路径,1M 上下文声明又只有 anthropic 这边有。 */}
+        {draft.protocol && (
+          <>
+            <ProviderModelField
+              providerId={provider?.id}
+              providerName={draft.name}
+              protocol={draft.protocol}
+              baseUrl={draft.baseUrl}
+              apiKey={draft.apiKey}
+              model={draft.model}
+              knownModels={draft.pinnedModels}
+              context1mModels={draft.context1mModels}
+              protocolConversionEnabled={draft.protocolConversionEnabled}
+              catalog={catalog}
+              onModelChange={(model) => set("model", model)}
+            />
+            <ProviderPinnedModels
+              providerId={provider?.id}
+              protocol={draft.protocol}
+              baseUrl={draft.baseUrl}
+              apiKey={draft.apiKey}
+              protocolConversionEnabled={draft.protocolConversionEnabled}
+              catalog={catalog}
+              mode={draft.modelListMode}
+              pinned={draft.pinnedModels}
+              onModeChange={(mode) => set("modelListMode", mode)}
+              onPinnedChange={(models) => set("pinnedModels", models)}
+            />
+            {draft.protocol === "anthropic" && (
+              <ProviderContext1mModels
+                providerId={provider?.id}
+                defaultModel={draft.model}
+                pinnedModels={draft.pinnedModels}
+                catalog={catalog}
+                selectedModels={draft.context1mModels}
+                onChange={(models) => set("context1mModels", models)}
+              />
+            )}
+          </>
         )}
       </div>
       <div className="provider-form-actions">
         <Button variant="ghost" disabled={saving} onClick={onCancel}>取消</Button>
         <Button
           variant="primary"
-          disabled={saving || !draft.name.trim() || !draft.baseUrl.trim()}
+          disabled={saving || !draft.protocol || !draft.name.trim() || !draft.baseUrl.trim()}
           onClick={() => void save()}
         >
           {saving ? "保存中…" : provider ? "保存供应商" : "添加供应商"}
@@ -352,10 +406,19 @@ function ProviderForm({
 
 function ProviderRow({
   provider,
+  mountedBy,
+  onOpenExecutors,
   onChanged,
   notify,
 }: {
   provider: LlmProvider;
+  /**
+   * 把这家供应商挂上去的执行器 Profile —— 一条都没有时它在任务里是选不到的。
+   * **null = 还不知道**(执行器清单没读成功 / 还在读):那是「未知」,不是「没有」,
+   * 这一格什么都不说,由卡片上那一句统一交代。
+   */
+  mountedBy: AgentExecutorProfile[] | null;
+  onOpenExecutors?: () => void;
   onChanged: () => Promise<void>;
   notify: (message: string) => void;
 }) {
@@ -403,9 +466,33 @@ function ProviderRow({
             {provider.context1mModels.length ? ` · ${provider.context1mModels.length} 个 1M` : ""}
           </small>
         </div>
-        <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>
-          {provider.hasKey && <CheckCircle size={12} weight="fill" />}
-          {provider.hasKey ? "Key 已保存" : "缺少 Key"}
+        {/* 一家供应商能用,要 Key 和「被某条执行器挂上」两件事同时成立 —— ash 自己不直连
+            大模型,供应商只是执行器启动时注入的 base_url + key(server executors/index.ts)。
+            所以这两件事是同一级别的前置条件,并排摆、各自绿掉,缺哪个一眼看得见。
+            没人挂它时任务里**根本列不出**它的模型(lib/modelCatalog.ts 的 groupSeeds),
+            这句话必须在这里说,否则用户加完供应商只会得出「加了但用不了」。 */}
+        <span className="provider-state-stack">
+          <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>
+            {provider.hasKey && <CheckCircle size={12} weight="fill" />}
+            {provider.hasKey ? "Key 已保存" : "缺少 Key"}
+          </span>
+          {!mountedBy ? null : mountedBy.length ? (
+            <span className="provider-mount-state is-ready">
+              <CheckCircle size={12} weight="fill" />
+              {mountedBy.length} 个执行器在用
+            </span>
+          ) : onOpenExecutors ? (
+            <button
+              type="button"
+              className="provider-mount-state"
+              aria-label={`${provider.name} 还没有执行器挂它，任务里选不到它的模型；去执行器设置挂上`}
+              onClick={onOpenExecutors}
+            >
+              未挂到执行器
+            </button>
+          ) : (
+            <span className="provider-mount-state">未挂到执行器</span>
+          )}
         </span>
         <span className="provider-default-model">{provider.model || "未设默认模型"}</span>
         <button
@@ -437,7 +524,13 @@ function ProviderRow({
       {confirmDelete && (
         <ConfirmDialog
           title="删除供应商"
-          message={`删除“${provider.name}”后，绑定它的执行器会退回 CLI 官方账号。`}
+          // 后果按**这一行真实的挂载情况**说:没人挂它时那句「执行器会退回官方账号」
+          // 是空话,而真有人挂着时用户想知道的恰好是「是哪几个」。
+          message={!mountedBy
+            ? `删除“${provider.name}”后，挂着它的执行器会退回 CLI 官方账号。`
+            : mountedBy.length
+              ? `删除“${provider.name}”后，挂着它的 ${mountedBy.map((profile) => profile.name).join("、")} 会退回 CLI 官方账号。`
+              : `删除“${provider.name}”。目前没有执行器挂着它。`}
           confirmLabel="删除"
           danger
           busy={deleting}
@@ -451,14 +544,27 @@ function ProviderRow({
 
 export function ProvidersSection({
   providers,
+  profiles,
+  profilesState = "ready",
+  onRetryProfiles,
+  onOpenExecutors,
   onChanged,
   notify,
 }: {
   providers: LlmProvider[];
+  /** 全部执行器 Profile:用来回答每一行「有没有人挂它」。 */
+  profiles: AgentExecutorProfile[];
+  /** 上面那份清单此刻的处境。只有 ready 时才允许在行上下「挂没挂」的断言。 */
+  profilesState?: LoadState;
+  onRetryProfiles?: () => void;
+  onOpenExecutors?: () => void;
   onChanged: () => Promise<void>;
   notify: (message: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  // 没读成功就没有「挂载情况」这件事可说 —— 行上一个字都不写,原因在卡片上说一次。
+  const mountedBy = (provider: LlmProvider) =>
+    profilesState === "ready" ? profiles.filter((profile) => profile.providerId === provider.id) : null;
   return (
     <section className="settings-section">
       <h2>模型供应商</h2>
@@ -474,6 +580,13 @@ export function ProvidersSection({
             </Button>
           )}
         </div>
+        {profilesState === "failed" && (
+          // 「不知道挂没挂」说一次就够,不要每行重复一遍;重试也只需要一颗。
+          <p className="settings-muted providers-mount-unknown" role="status">
+            执行器清单读取失败，暂时无法确认哪些供应商已挂上执行器。
+            {onRetryProfiles && <Button variant="ghost" onClick={onRetryProfiles}>重试</Button>}
+          </p>
+        )}
         {!providers.length && !adding && (
           <p className="settings-muted">还没有供应商；现有 Profile 继续使用各 CLI 的官方登录账号。</p>
         )}
@@ -481,6 +594,8 @@ export function ProvidersSection({
           <ProviderRow
             key={provider.id}
             provider={provider}
+            mountedBy={mountedBy(provider)}
+            onOpenExecutors={onOpenExecutors}
             onChanged={onChanged}
             notify={notify}
           />

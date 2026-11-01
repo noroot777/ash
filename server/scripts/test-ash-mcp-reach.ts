@@ -58,24 +58,7 @@ const runCli = (bin: string, args: string[], opts: { cwd?: string; env: NodeJS.P
   });
 };
 
-// ── 先问一句：这台机器问得了 CLI 本人吗 ─────────────────────────────────────
-// 探测层的规矩是「拿不到可核销的归属设备就不启动查询」(第 1 轮审查 B1)。macOS 上内核圈定
-// 如实弃权 ⇒ 一次 CLI 都不跑 ⇒ 判据层换成读配置文件那一档(`ash-mcp-file.ts`)。
-// 这份文件钉的全是**问 CLI 那一档**的判据,所以在这种机器上整份跳过;配置文件那一档
-// 由 `test-ash-mcp-file.ts` 钉(它强制关掉圈定,在哪个平台上都跑同一套)。
-//
-// 写成整份跳过、而不是把那十几条「该拦」的断言改成别的预期：后者会让这个文件看着还在
-// 守着什么，实际上守的是另一条路。
-const { confineAbstention } = await import("../src/executors/kernel-confine.js");
-const abstention = confineAbstention();
-if (abstention) {
-  console.log(`⚠ 整份跳过「问 CLI 本人」那一档的判据用例：${abstention}`);
-  console.log("  ⇒ 这台机器上预检走配置文件那一档，那一档的用例在 test:ash-mcp-file。");
-  rmSync(stage, { recursive: true, force: true });
-  process.exit(0);
-}
-
-try {
+async function checkCliReachability(): Promise<void> {
   const { ensureSchema } = await import("../src/db/index.js");
   await ensureSchema();
   const { db } = await import("../src/db/index.js");
@@ -89,9 +72,6 @@ try {
   const useCodexHome = () => { process.env.CODEX_HOME = codexHome; };
   const reach = (over: Record<string, unknown> = {}) =>
     ashMcpReachability({ agentType: "codex", ...over } as Parameters<typeof ashMcpReachability>[0]);
-
-  // ── 1. 不是 claude/codex ──────────────────────────────────────────────────
-  assert.equal((await reach({ agentType: "grok" })).reachable, true, "别的执行器一律放行");
 
   const hasCodex = has("codex");
   if (!hasCodex) console.log("⚠ 跳过 codex 各条：这台机器上没有 codex CLI");
@@ -133,9 +113,20 @@ try {
       id: "ex-codex-override", name: "codex+override", type: "codex",
       extraArgs: JSON.stringify(["-c", 'mcp_servers.ash.command="node"']),
     });
+    // 命令行覆盖带来的 ash 要带上去问（codex 列得出它）—— 但它不在 $CODEX_HOME/config.toml 里，
+    // 执行器注不进回合身份，跑完上报照样被拒（新链第 5 轮审查第 3 条），所以结论是「拦」，
+    // 而且要说清是身份注不进去，不是「没有登记」。登记自己声明了 env_vars 才算交得了卷。
+    const overridden = await reach({ executorId: "ex-codex-override" });
+    assert.equal(overridden.reachable, false, "F1：-c 带来的 ash 注不进回合身份 → 拦");
+    assert.match(overridden.problem ?? "", /注入回合身份/, "要说清卡在身份注入上");
+    await db.insert(agents).values({
+      id: "ex-codex-override-wired", name: "codex+override+env_vars", type: "codex",
+      extraArgs: JSON.stringify(["-c", 'mcp_servers.ash.command="node"',
+        "-c", 'mcp_servers.ash.env_vars=["ASH_TASK_ID","ASH_TURN_TOKEN","ASH_DIRECTION_TOKEN"]']),
+    });
     assert.equal(
-      (await reach({ executorId: "ex-codex-override" })).reachable, true,
-      "F1：命令行覆盖带来的 ash 必须算数",
+      (await reach({ executorId: "ex-codex-override-wired" })).reachable, true,
+      "F1：覆盖里自己声明了 env_vars → 身份进得去，必须算数",
     );
     // 无关的 `-c` 不该被带上去（带了也只是噪音，但判定不能因此翻转）
     await db.insert(agents).values({
@@ -191,46 +182,6 @@ try {
     );
     await db.delete(agents);                         // 同上:别让它成为后面用例的默认 profile
     delete process.env.CLAUDE_CONFIG_DIR;
-  }
-
-  // ── 9. F1:候选目录是 orchestrator 可能选中目录的**超集** ──────────────────
-  // 前两轮都栽在「再维护一份近似的目录选择」上(第 1 版压根不传目录;第 2 版照抄 recorded
-  // 那条 || 链,仍跟真货差三处)。这一版不猜哪一个,只保证罩得住 —— 所以这里钉两件事:
-  // 超集本身的形状,以及它凭什么是超集(orchestrator 的取值来源没变)。
-  {
-    const { reviewCwdCandidates } = await import("../src/free-review-round.js");
-    const sessionsDesc = [
-      { cwd: null, worktreePath: null },                 // 诊断会话:最新、两个字段都空(本轮 F1 的形状)
-      { cwd: "/w/new", worktreePath: "/wt/new" },
-      { cwd: "/w/old", worktreePath: "/wt/old" },
-      { cwd: "/w/new", worktreePath: null },             // 跟上面重复
-    ];
-    assert.deepEqual(
-      reviewCwdCandidates("/explicit", sessionsDesc, "/workspace"),
-      ["/explicit", "/w/new", "/wt/new", "/w/old", "/wt/old", "/workspace"],
-      "超集:**所有**会话的两个目录字段都要在里面,去重、丢空值",
-    );
-    assert.deepEqual(
-      reviewCwdCandidates(undefined, [], "/workspace"),
-      ["/workspace"],
-      "一条会话都没有时也要有任务工作区兜底(第 1 版在普通分支就是全空)",
-    );
-
-    // 不变量:超集之所以成立,靠的是 orchestrator 只从这几处取运行目录。哪天它多一个
-    // 来源(比如直接用 project.repoPath),这条就该红 —— 否则预检又会悄悄开始误拦。
-    const orch = readFileSync(new URL("../src/orchestrator.ts", import.meta.url), "utf8");
-    const line = /const recorded = (opts\.cwd[^;]*);/.exec(orch)?.[1];
-    assert.ok(line, "orchestrator 里 `const recorded = opts.cwd || …` 那行必须找得到");
-    assert.deepEqual(
-      line!.split("||").map((x) => x.trim()),
-      ["opts.cwd", "prev?.cwd", "prev?.worktreePath", "all[0]?.cwd", "all[0]?.worktreePath", '""'],
-      "recorded 的取值来源变了:要么把新来源也收进 reviewCwdCandidates 的超集,要么预检会误拦",
-    );
-    assert.match(
-      orch.slice(orch.indexOf("const recorded = opts.cwd")),
-      /if \(!existsSync\(cwd\)\)[\s\S]{0,400}?taskWorkspace\(/,
-      "失效目录的唯一回退必须还是 taskWorkspace() —— 超集末尾那个工作区正是据此放的",
-    );
   }
 
   // ── 10. F1:传了目录,项目级登记才看得见;不传就只剩用户级 ───────────────────
@@ -310,9 +261,24 @@ try {
     assert.equal(off.reachable, false, "F3：禁用的答案也不能被 stderr 冲掉");
     assert.match(off.problem ?? "", /turned off/, "要把 CLI 给的停用原因带出来");
 
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\n');
     fake('[{"name":"ash","enabled":true}]');
     const on = await ashMcpReachability({ agentType: "codex" });
     assert.equal(on.reachable, true, "F3：正常登记照样放行");
+
+    // 证据面 = 生效面（新链第 5 轮审查第 3 条）：CLI 列得出的登记不在 $CODEX_HOME/config.toml 里
+    // （受信任项目的 .codex/config.toml 合进来的那种），执行器注不进回合身份 → 交不了卷。
+    writeCodex('model = "x"\n');
+    const elsewhere = await ashMcpReachability({ agentType: "codex" });
+    assert.equal(elsewhere.reachable, false, "CLI 列得出、注入那一侧看不见 → 拦");
+    assert.match(elsewhere.problem ?? "", /注入回合身份/);
+    fake('[{"name":"ash","enabled":true,"transport":{"type":"stdio","env_vars":["ASH_TASK_ID","ASH_TURN_TOKEN"]}}]');
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true,
+      "登记自己声明了把身份变量放进来 → 放行");
+    writeCodex('[mcp_servers.harness]\ncommand = "node"\n');
+    fake('[{"name":"harness","enabled":true},{"name":"ash","enabled":true}]');
+    assert.equal((await ashMcpReachability({ agentType: "codex" })).reachable, true,
+      "列出来的几条里有一条注得进去就够");
 
     // 超集太大时的收口:问不全就不准拦(拿假 CLI 测,每次 ~10ms,真 claude 要 800ms×2×N)。
     fake("[]");
@@ -336,7 +302,10 @@ try {
     writeCodex('model = "x"\n');
     const truncated = await ashMcpReachability({ agentType: "codex", cwdCandidates: many });
     assert.equal(truncated.reachable, false, "问不全 + 配置里确定没有 → 拦");
-    assert.match(truncated.problem ?? "", /读配置文件得出[\s\S]*只问了前 8 个/, "文案写明证据来源和为什么没问全");
+    // 慢机器(Windows 上每问一次假 CLI 要 1~2 秒)可能先撞上 20 秒总时限、问不到第 8 个 —— 那是
+    // 同一个出口(退文件档、照样拦),只是没问全的原因不同。两种都认,撞时限时如实说一声。
+    assert.match(truncated.problem ?? "", /读配置文件得出[\s\S]*(?:只问了前 8 个|时限用完)/, "文案写明证据来源和为什么没问全");
+    if (/时限用完/.test(truncated.problem ?? "")) console.log("⚠ 这台机器 8 问没在时限内问完：截断那条退成了时限那条（同一个出口）");
 
     // CLI 给了答案、但看不懂(以及超时、被打断、预算用完,同一条路):同样先过配置文件那一档。
     fake("这不是 JSON");
@@ -359,6 +328,9 @@ try {
     // ── B2:两个兼容名是**集合**,不是「取第一个」──────────────────────────
     // 真机实测过的形状:新名那份被关掉、旧名那份还连着,codex app-server 确实列出了
     // harness 的 report_stage,派审却因为第一份被禁用而整轮 409(第 3 轮审查 B2)。
+    // 配置文件跟着 CLI 的说法写:注入那一侧读的就是它(上面 delete 过 CODEX_HOME,不设回来就读到宿主真实配置)。
+    useCodexHome();
+    writeCodex('[mcp_servers.ash]\ncommand = "node"\nenabled = false\n[mcp_servers.harness]\ncommand = "node"\n');
     fake('[{"name":"ash","enabled":false,"disabled_reason":"turned off"},{"name":"harness","enabled":true}]');
     assert.equal(
       (await ashMcpReachability({ agentType: "codex" })).reachable, true,
@@ -378,35 +350,6 @@ try {
     process.env.PATH = pathWas;
   }
 
-  // ── 12. F2:预检必须走启动计划层,不能直接起 resolveBin 找到的文件 ───────────
-  // Windows 的真实行为在 macOS 上测不出来（`.cmd` 垫片要 cmd.exe 才起得来），而这条
-  // 缺陷恰恰只在那边发作：直接 execFile 一个 `.cmd` 得到 EINVAL，被当成「问不出来」
-  // 放行（第 2 位审查者 F2，真机实测）。所以这里钉的是**依赖方向** —— 它只准用
-  // resolveLaunch。bin-resolve.ts 的文件头写着 resolveBin「只回答在不在，不回答怎么起」。
-  // 判据层和探测层都要钉：真正 spawn 的那一行现在住在 ash-mcp-probe.ts。
-  for (const file of ["../src/ash-mcp-reachability.ts", "../src/ash-mcp-probe.ts"]) {
-    const src = readFileSync(new URL(file, import.meta.url), "utf8");
-    assert.match(src, /import \{ resolveLaunch \} from "[^"]*bin-resolve\.js"/,
-      `${file} 必须从 bin-resolve 取 resolveLaunch`);
-    // 只看代码行 —— 注释里当然会提到 resolveBin（那段说明讲的就是为什么不能用它）。
-    const code = src.split("\n")
-      .filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line))
-      .join("\n");
-    assert.ok(!/\bresolveBin\b/.test(code),
-      `${file} 不准碰 resolveBin —— 它只回答「在不在」，Windows 上据此 spawn 会 EINVAL`);
-  }
-  // 超时与进程回收只准有一份实现：判据层不许自己再起进程。
-  {
-    const judge = readFileSync(new URL("../src/ash-mcp-reachability.ts", import.meta.url), "utf8")
-      .split("\n").filter((line) => !/^\s*(?:\/\/|\/?\*)/.test(line)).join("\n");
-    assert.ok(!/\b(?:execFile|spawn|spawnSync|execFileSync)\b/.test(judge),
-      "判据层不准自己起进程：超时和整棵进程树的生命周期只归 ash-mcp-probe.ts 管（B3）");
-    // 不准再长出「挑哪些参数跟 MCP 有关」的投影层：整份 argv 原样交给 CLI 自己判，
-    // 认不得就让它非零退出（→ 问不出来 → 放行）。补正则只会等下一种写法（B1）。
-    assert.match(judge, /probeCli\(bin, \[\.\.\.extraArgs, "mcp", "list", "--json"\]/,
-      "codex 探测必须原样带上整份归一后的 extraArgs，不准再挑子集");
-  }
-
   // ── 13. B1:预检必须消费**运行时那份**有效执行上下文 ─────────────────────
   // 第 3 轮审查用真实 HTTP 打穿的形状:接好的**默认**执行器(extraArgs 里带着
   // `-c mcp_servers.ash.command=node`)被预检判成没有登记,派审当场 409。病根是预检
@@ -422,11 +365,15 @@ try {
     const { eq: eqOp } = await import("drizzle-orm");
 
     assert.equal((await reach()).reachable, false, "基准:配置和参数里都没有 ash → 拦");
+    // 每种写法都附带一条声明了身份变量的 `env_vars`:光有 `-c …command=node` 的登记注不进回合
+    // 身份,本来就该拦(第 5 轮审查第 3 条,见上面 F1)。这里钉的是「参数有没有被带上去问」——
+    // command 那条没被认出来时,codex 只看到一条缺 command 的登记、整份报错 → 退文件档 → 拦。
+    const WIRED = ["-c", 'mcp_servers.ash.env_vars=["ASH_TURN_TOKEN"]'];
 
     // 唯一的 ash 来源是这条默认 profile 的 extraArgs(分词形态)
     await db.insert(agentsTable).values({
       id: "b1-default", name: "codex-default", type: "codex", isDefault: true,
-      extraArgs: JSON.stringify(["-c", "mcp_servers.ash.command=node"]),
+      extraArgs: JSON.stringify(["-c", "mcp_servers.ash.command=node", ...WIRED]),
     });
     assert.equal(
       (await reach({ executorId: null })).reachable, true,
@@ -438,7 +385,7 @@ try {
     );
 
     // 整段参数:库里是**一个元素**,运行时 normalizeProfileExtraArgs 会拆成两个 token
-    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-c mcp_servers.ash.command=node"]) })
+    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-c mcp_servers.ash.command=node", ...WIRED]) })
       .where(eqOp(agentsTable.id, "b1-default"));
     assert.equal(
       (await reach()).reachable, true,
@@ -448,7 +395,7 @@ try {
     // **紧贴写法**:真实 codex 吃 `-cKEY=VAL`(实测 rc=0 且列出 ash),上一版的子集筛选
     // 只认 `-c VALUE` / `--config VALUE` / 带等号那三种,把这条整个丢掉,于是探测问的是
     // 另一份配置,再拿那份的「没有」去拒真实执行器(第 4 轮审查 B1)。
-    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-cmcp_servers.ash.command=node"]) })
+    await db.update(agentsTable).set({ extraArgs: JSON.stringify(["-cmcp_servers.ash.command=node", ...WIRED]) })
       .where(eqOp(agentsTable.id, "b1-default"));
     assert.equal(
       (await reach()).reachable, true,
@@ -463,24 +410,6 @@ try {
 
     await db.delete(agentsTable).where(eqOp(agentsTable.id, "b1-default"));
     delete process.env.CODEX_HOME;
-  }
-
-  // ── 14. B2 同类:诊断读 init 事件也要按集合判,不取第一项 ────────────────
-  {
-    const { claudeMcpEvidence } = await import("../src/review-channel-gap.js");
-    const init = (servers: string) =>
-      `{"type":"system","subtype":"init","mcp_servers":${servers}}`;
-    const mixed = claudeMcpEvidence(init(
-      '[{"name":"ash","status":"failed"},{"name":"harness","status":"connected"}]',
-    ));
-    assert.equal(mixed?.connected, true, "B2 同类:旧名那份连上了,就不能说通道没连上");
-    assert.match(mixed?.detail ?? "", /2 份兼容登记/, "要如实说明这条会话里有两份登记");
-    const bothBad = claudeMcpEvidence(init(
-      '[{"name":"ash","status":"failed"},{"name":"harness","status":"failed"}]',
-    ));
-    assert.equal(bothBad?.connected, false, "两份都没连上才算没连上");
-    const none = claudeMcpEvidence(init('[{"name":"linear","status":"connected"}]'));
-    assert.equal(none?.connected, false, "一份兼容登记都没有 → 照旧如实说没有");
   }
 
   // 探测层自己那几条（超时回收、包装先退出、正常退出也收尾、信号、跨块解码、
@@ -515,6 +444,19 @@ try {
   });
 
   console.log("✅ ash MCP 预检（真实 CLI 对照 F1/F2 全部形状）通过");
+}
+
+try {
+  const { checkPortableReachability } = await import("./ash-mcp-reach-portable.js");
+  await checkPortableReachability();
+  const { confineAbstention } = await import("../src/executors/kernel-confine.js");
+  const abstention = confineAbstention();
+  if (abstention) {
+    console.log(`⚠ 仅跳过需要启动 CLI 的预检用例：${abstention}`);
+    console.log("  ⇒ 平台无关断言已执行；配置文件退路另由 test:ash-mcp-file 覆盖。");
+  } else {
+    await checkCliReachability();
+  }
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
