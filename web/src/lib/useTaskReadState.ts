@@ -26,6 +26,14 @@ export type TaskStatusIndicator =
   | "attention"
   /** 有东西在后台替它跑着、而且会自己回来：挂着的哨兵、正在跑的验收前置命令。 */
   | "working"
+  /**
+   * 它看着在跑,其实在**干等模型上游**(回合级停滞看门狗,见 server/src/turn-stall.ts)。
+   *
+   * 跟 "working" 正相反:那是「有东西会自己回来」,这是「大概回不来,到点会被熔断」。
+   * 跟 "error" 也不是一回事 —— 那一档是已经收场了,这一档还在倒计时、还能救(重试或换
+   * 执行器)。所以颜色用红、形状用环:红说「出事了」,环说「等你动手」。
+   */
+  | "stalled"
   | "unaccepted"
   | "success"
   | "error";
@@ -67,6 +75,16 @@ export function readEventForTask(task: TaskListItem, workers: TaskListItem[] = [
 
 const liveWork = (task: TaskListItem): boolean => !!task.acceptGateRunning || !!task.monitorRunning;
 
+/**
+ * 「它此刻在干等上游」。
+ *
+ * 停滞是**派生事实**(标记在 + 那条会话没收尾 + 任务真的在跑,三条都在 server/src/task-store.ts
+ * 的投影里),可后台水位只盯那个标记列 —— 乱序到达的旧响应于是能把「旧的 true」和「新的状态」
+ * 拼在一起,卡片上亮一个过期的红环(第 3 轮审查 N1,未实测、按代码推断)。这里跟服务端**同一个
+ * 口径**再问一次:条件一致,正常情形下一个字都不变,只是不让陈旧的 true 自己说话。
+ */
+const stalledNow = (task: TaskListItem): boolean => !!task.upstreamStalled && task.status === "running";
+
 export function deriveTaskStatusIndicator(
   task: TaskListItem,
   workers: TaskListItem[] = [],
@@ -75,6 +93,9 @@ export function deriveTaskStatusIndicator(
   if (task.mode === "team" && !task.parentId) {
     // 「等你说话」和「等一件会自己回来的事」分开，判据见下面单飞那一段。
     if (task.question || workers.some((worker) => worker.question)) return "attention";
+    // 排在 working/active 之前:一台卡在上游的调度台这三档全都成立,而「它其实没在动」是
+    // 其中唯一需要用户做点什么的那一位。
+    if (stalledNow(task) || workers.some(stalledNow)) return "stalled";
     if (liveWork(task) || workers.some(liveWork)) return "working";
     const leadLive = task.status === "running";
     if (leadLive || workers.some((worker) => worker.status === "running" || worker.status === "queued")) {
@@ -96,6 +117,7 @@ export function deriveTaskStatusIndicator(
   }
 
   if (task.question) return "attention";
+  if (stalledNow(task)) return "stalled"; // 同上:排在 working/active 之前
   if (liveWork(task)) return "working";
   if (task.status === "paused") return "attention";
   if (task.status === "running" || task.status === "queued") return "active";

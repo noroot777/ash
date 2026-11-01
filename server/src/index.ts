@@ -146,6 +146,18 @@ async function initializeServer() {
     );
   }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
+  // 回合级停滞看门狗的判决从此自动落库:**加载那个模块就等于装上了**(理由见它顶部 ——
+  // 显式装配只在一条启动路径上成立,换个入口就静默不落库,而那正是审查 F3 的形状)。
+  // 这一句只为副作用,而且排在接管之前:接管回来的那些会话随后要是又熔断,判决同样得留得下来。
+  const stallPersist = await import("./turn-stall-persist.js");
+  // 顺手把判决日志压到「只剩还没销账的那些」。**必须排在接管之前**:这一刻本进程还没作出过
+  // 任何判决、也没有任何人在读,读-改-写才是安全的。判据是日志自己记的销账记录(由结算之后那
+  // 一句 `clearStallFailure` 追加),不是任何代理指标 —— 为什么不能是条数、年龄,或者「回合区间
+  // 收口了」,见 turn-stall-journal.ts 文件头那四条(四个都是审查实测打回来的)。
+  await stallPersist.compactStallVerdicts().catch((error) => {
+    console.warn("[ash] 判决日志压缩跳过(内容一个字没动):", error);
+    return null;
+  });
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
   // 一个 server 进程一起死），再 reconcile 剩下那些真被打断的。反过来的话，一个
   // 正在干活的 agent 会先被判 failed，用户一点重试就有第二个 agent 进同一个

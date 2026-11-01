@@ -20,6 +20,31 @@ assert.deepEqual(
 );
 assert.equal(target(task(), [agentItem(sess({ exitStatus: 0 }))]), null, "正常结束不出");
 assert.equal(target(task(), [agentItem(sess({ exitStatus: null }))]), null, "没结算的回合不算崩溃");
+// ── 权威结局优先于退出码(审查 F2,已实测) ──────────────────────────────────────
+// 回合级停滞看门狗终止掉的那一轮:ash 已经判它失败,而被终止的进程多半以 exit 0 收流
+// (claude 走信号退出时是 `code ?? 0`)。照退出码判,页面明写「本次续聊因上游连不上被自动
+// 终止」的同时却一个重跑入口都没有 —— 这颗按钮本来就是为了补这种洞才存在的。
+assert.deepEqual(
+  target(task(), [agentItem(sess({ exitStatus: 0, turnOutcome: "failed" }))]),
+  { sessionId: "s1", kind: "turn", exitStatus: 0 },
+  "被看门狗终止的那一轮(exit 0 + 区间 failed)必须给重跑入口",
+);
+assert.deepEqual(
+  target(task(), [agentItem(sess({ exitStatus: null, turnOutcome: "failed" }))]),
+  { sessionId: "s1", kind: "turn", exitStatus: null },
+  "退出码没来得及写、但 ash 已判这一轮失败,同样要给入口",
+);
+// 反方向不许放水:权威结局说这一轮好着呢,就别因为退出码非零冒出按钮之外的新口子。
+assert.equal(
+  target(task(), [agentItem(sess({ exitStatus: 0, turnOutcome: "completed" }))]),
+  null,
+  "正常完成的回合不该出按钮",
+);
+assert.equal(
+  target(task(), [agentItem(sess({ exitStatus: 0, turnOutcome: "stopped" }))]),
+  null,
+  "受控停止的回合不是异常结束",
+);
 assert.equal(target(task({ status: "failed" }), [agentItem(sess())]), null, "failed 归头部那颗重试");
 assert.equal(target(task({ status: "running" }), [agentItem(sess())]), null, "跑着的不出");
 assert.equal(target(task({ status: "queued" }), [agentItem(sess())]), null, "排队的不出");

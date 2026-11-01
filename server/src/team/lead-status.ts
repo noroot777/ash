@@ -14,6 +14,7 @@
  */
 import { Writable } from "node:stream";
 import { clearSessionWaiting } from "../session-waiting.js";
+import { clearTurnStall } from "../turn-stall.js";
 import { setTaskStatus } from "../status.js";
 import { now } from "../util.js";
 import { closeLeadTurns } from "./lead-turns.js";
@@ -83,6 +84,11 @@ export function createLeadStatus({ leads, releasePending }: {
     // 后面任何一条迟到事件都会去动新台的状态(闸在 session-waiting.ts 的持有者判定,这里
     // 是**主动交牌**那一半:旧台自己攥着的那份当场作废,不等它什么时候才收尾)。
     clearSessionWaiting(lead.sessId, lead);
+    // 回合级停滞看门狗那一份同理,而且不撤的后果更重:旧台攥着的那个计时器还会醒,它既可能
+    // 替**新台正在答的那一轮**熔断(`trip` 走的是 `lead.handle`,而摘牌后那是旧进程),也会把
+    // 新台刚置上的持久标记撤掉。库里那一侧另有一道回合身份 CAS(session-stall-flag.ts),这里
+    // 是**主动交牌**那一半:旧台自己攥着的那份当场作废(第 1 轮审查第 5 条)。
+    clearTurnStall(lead.sessId, lead);
     clearStatusRetry(lead);
     lead.wantedStatus = null;
     // 手上这批待送消息的**所有权**跟着牌子一起交出去(见 releasePending)。

@@ -3,6 +3,7 @@ type TaskSnapshot = {
   backgroundRevision?: number;
   acceptGateRunning?: boolean;
   monitorRunning?: boolean;
+  upstreamStalled?: boolean;
 };
 
 export function mergeTaskSnapshotFields<T extends TaskSnapshot>(current: T, incoming: T, keepEqual = false): T {
@@ -11,5 +12,6 @@ export function mergeTaskSnapshotFields<T extends TaskSnapshot>(current: T, inco
   const background = (current.backgroundRevision ?? -1) > (incoming.backgroundRevision ?? -1) ? current : incoming;
   if (background.backgroundRevision === undefined) return base;
   return { ...base, backgroundRevision: background.backgroundRevision,
-    acceptGateRunning: background.acceptGateRunning, monitorRunning: background.monitorRunning };
+    acceptGateRunning: background.acceptGateRunning, monitorRunning: background.monitorRunning,
+    upstreamStalled: background.upstreamStalled };
 }
