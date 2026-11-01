@@ -73,7 +73,7 @@ mountTaskRoutes(api);
 const post = async (path: string, body?: unknown) => {
   let approval;
   if (body === undefined && path.endsWith("/reclaim-turn")) {
-    const response = await api.request(`${path}/approval`);
+    const response = await api.request(`${path}/approval`, { method: "POST" });
     if (response.ok) {
       const challenge = await response.json() as { challengeId: string; payload: string };
       approval = { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
@@ -313,13 +313,13 @@ await seedSession("t-http");
 {
   const idle = await post("/tasks/t-http/reclaim-turn");
   assert.equal(idle.status, 409, "没有锁被占着时应 409");
-  assert.match((await idle.json() as { error: string }).error, /没有可放开的占位/);
+  assert.match((await idle.json() as { error: string }).error, /没有被占着的回合占位/);
 }
 assert.equal(claimTurn("t-http"), true);
 {
   const tooEarly = await post("/tasks/t-http/reclaim-turn");
   assert.equal(tooEarly.status, 409, "刚占下还不到阈值,不许强行放开");
-  assert.match((await tooEarly.json() as { error: string }).error, /没有可放开的占位/);
+  assert.match((await tooEarly.json() as { error: string }).error, /正常起跑的时间范围/);
 }
 await sleep(SUSPECT_TURN_MS * 3);
 {

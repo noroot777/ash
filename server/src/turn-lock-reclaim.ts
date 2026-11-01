@@ -109,10 +109,7 @@ export type SuspectTurn = {
  */
 export function suspectTurns(at = Date.now(), thresholdMs = SUSPECT_TURN_MS): SuspectTurn[] {
   return heldTurns()
-    .filter((held) => !UNBOUNDED_WAIT_ROLES.has(held.role))
-    .filter((held) => held.token === null)
-    .filter((held) => !isRunning(held.taskId))
-    .filter((held) => at - held.claimedAt > thresholdMs)
+    .filter((held) => notSuspectReason(held, at, thresholdMs) === null)
     .map((held) => ({ taskId: held.taskId, role: held.role, seq: held.seq, claimedAt: held.claimedAt, heldMs: at - held.claimedAt }));
 }
 
@@ -239,6 +236,16 @@ async function runnableAfterRelease(taskId: string): Promise<{ runnable: boolean
   };
 }
 
+export function inspectTurnReclaim(taskId: string, thresholdMs = SUSPECT_TURN_MS):
+  { ok: true; turn: SuspectTurn } | Extract<ReleaseSuspectResult, { ok: false }> {
+  const now = Date.now();
+  const current = heldTurns().find((turn) => turn.taskId === taskId);
+  if (!current) return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
+  const reason = notSuspectReason(current, now, thresholdMs);
+  if (reason) return { ok: false, why: "not-suspect", reason };
+  return { ok: true, turn: { taskId, seq: current.seq, role: current.role, claimedAt: current.claimedAt, heldMs: now - current.claimedAt } };
+}
+
 /**
  * **用户主动点的放开。** 判据不因为「是人点的」就放宽 —— 人看到的那条提示也只是「可疑」,
  * 它同样证不了原持有者已经结束。所以这里照样过一遍判据,过不了就如实 409。
@@ -252,17 +259,13 @@ export async function releaseSuspectTurn(
   thresholdMs = SUSPECT_TURN_MS,
   authorization?: { seq: number; keyFingerprint: string },
 ): Promise<ReleaseSuspectResult> {
-  const now = Date.now();
-  const current = heldTurns().find((h) => h.taskId === taskId);
-  if (!current) return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
-  if (authorization && authorization.seq !== current.seq) {
+  const inspection = inspectTurnReclaim(taskId, thresholdMs);
+  if (!inspection.ok) return inspection;
+  const suspect = inspection.turn;
+  if (authorization && authorization.seq !== suspect.seq) {
     return { ok: false, why: "not-suspect", reason: "授权对应的回合占位已变化，请重新申请人工授权" };
   }
   // 重算判据 → 条件释放,这中间一个 await 都没有。
-  const suspect = suspectTurns(now, thresholdMs).find((s) => s.taskId === taskId);
-  if (!suspect) {
-    return { ok: false, why: "not-suspect", reason: notSuspectReason(current, now, thresholdMs) };
-  }
   const released = forceReleaseTurn(suspect);
   if (!released) {
     // 号码对不上 = 判定到这一行之间换了主人。这是条件释放该有的样子,不是错误。
@@ -293,12 +296,15 @@ function notSuspectReason(
   current: { taskId: string; role: string; token: string | null; claimedAt: number },
   now: number,
   thresholdMs: number,
-): string {
+): string | null {
   if (UNBOUNDED_WAIT_ROLES.has(current.role)) {
     return `这个回合占位的身份是 ${current.role}，它正常就会长时间持有（等人工裁决、等仓库锁、等打包传输），`
       + "系统无法按「占了多久」判断它是不是卡住了。确认那一侧确实不动了，用停止任务来收它";
   }
   if (current.token !== null) return "这一轮已经绑过回合令牌，它有正常的结算路径，不该从旁边拔掉";
   if (isRunning(current.taskId)) return "这个任务此刻真有 CLI 进程在跑，要收掉它请用停止任务";
-  return `这个回合占位才持有了 ${held(now - current.claimedAt)}，还在正常起跑的时间范围内（阈值 ${held(thresholdMs)}），再等一会儿`;
+  if (now - current.claimedAt <= thresholdMs) {
+    return `这个回合占位才持有了 ${held(now - current.claimedAt)}，还在正常起跑的时间范围内（阈值 ${held(thresholdMs)}），再等一会儿`;
+  }
+  return null;
 }

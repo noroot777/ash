@@ -74,7 +74,7 @@ mountTaskRunRoutes(api);
 const post = async (path: string, body?: unknown) => {
   let approval;
   if (body === undefined && path.endsWith("/reclaim-turn")) {
-    const response = await api.request(`${path}/approval`);
+    const response = await api.request(`${path}/approval`, { method: "POST" });
     if (response.ok) {
       const challenge = await response.json() as { challengeId: string; payload: string };
       approval = { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
@@ -255,6 +255,7 @@ await db.insert(queueItems).values({ id: "qi-guard2", queueId: "q-guard2", taskI
 // 这条路存在的全部理由是「系统判不了原持有者死没死,所以交给知情的人判」,把一次 agent
 // 发来的请求当成用户知情同意,等于把这个设计的唯一前提抽掉。
 assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn"), true);
+assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/approval"), true);
 assert.equal(isHumanOnlyPath("/api/tasks/abc/stop"), false, "停止不在真人专属之列");
 assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只认那条路径本身");
 
@@ -361,7 +362,7 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   assert.equal(crossSite.status, 403, "跨站请求不能冒充用户确认");
   assert.equal(claimTurn("t-gate"), false, "授权失败不能释放锁");
 
-  const challenge = await (await gated.request("/api/tasks/t-gate/reclaim-turn/approval")).json() as { challengeId: string; payload: string };
+  const challenge = await (await gated.request("/api/tasks/t-gate/reclaim-turn/approval", { method: "POST" })).json() as { challengeId: string; payload: string };
   const approval = { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
   const asHuman = await gated.request("/api/tasks/t-gate/reclaim-turn", {
     method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },

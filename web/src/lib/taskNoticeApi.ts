@@ -49,7 +49,7 @@ export const taskNoticeApi = {
   taskNotices: (taskId: string): Promise<TaskNoticesResult> =>
     request(`/tasks/${id(taskId)}/notices`),
   requestTurnApproval: (taskId: string): Promise<HumanApprovalChallenge> =>
-    request(`/tasks/${id(taskId)}/reclaim-turn/approval`),
+    request(`/tasks/${id(taskId)}/reclaim-turn/approval`, json("POST")),
   reclaimTurn: (taskId: string, approval: HumanApprovalProof): Promise<ReclaimTurnResult> =>
     request(`/tasks/${id(taskId)}/reclaim-turn`, json("POST", { acknowledgeDuplicateRisk: true, approval })),
 };

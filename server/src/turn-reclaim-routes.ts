@@ -1,36 +1,38 @@
 import { eq } from "drizzle-orm";
-import type { Context, Hono } from "hono";
-import { actorOf, isAccountHolder } from "./auth/context.js";
+import type { Hono } from "hono";
+import { actorOf } from "./auth/context.js";
 import { humanApproval, HUMAN_APPROVAL_UNAVAILABLE } from "./auth/human-approval.js";
+import { humanRequestRejection } from "./auth/human-request.js";
 import { canSeeProject } from "./auth/visibility.js";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { releaseSuspectTurn, suspectTurns } from "./turn-lock-reclaim.js";
+import { inspectTurnReclaim, releaseSuspectTurn } from "./turn-lock-reclaim.js";
 import { noteRejectedUserAction, noteUserActionOutcome } from "./user-action-rejection.js";
 
-const accountRequest = (context: Context) => isAccountHolder(actorOf(context))
-  && context.req.header("x-ash-source-task-id") === undefined
-  && context.req.header("x-ash-turn-token") === undefined;
-
 export function mountTurnReclaimRoutes(api: Hono): void {
-  api.get("/tasks/:id/reclaim-turn/approval", async (context) => {
-    if (!accountRequest(context)) return context.json({ error: "回合身份不能申请人工授权" }, 403);
+  api.post("/tasks/:id/reclaim-turn/approval", async (context) => {
     const taskId = context.req.param("id");
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task || !(await canSeeProject(actorOf(context), task.projectId))) return context.json({ error: "not found" }, 404);
+    const reject = async (error: string, status: 403 | 409 | 503) => {
+      await noteRejectedUserAction(taskId, "申请人工授权", error);
+      return context.json({ error }, status);
+    };
     context.header("Cache-Control", "no-store");
-    if (!humanApproval.fingerprint) return context.json({ error: HUMAN_APPROVAL_UNAVAILABLE }, 503);
-    const turn = suspectTurns().find((held) => held.taskId === taskId);
-    if (!turn) return context.json({ error: "回合占位已变化，当前没有可放开的占位" }, 409);
+    const rejection = humanRequestRejection(context);
+    if (rejection) return reject(rejection, 403);
+    if (!humanApproval.fingerprint) return reject(HUMAN_APPROVAL_UNAVAILABLE, 503);
+    const inspection = inspectTurnReclaim(taskId);
+    if (!inspection.ok) return reject(inspection.reason, 409);
+    const turn = inspection.turn;
     const challenge = humanApproval.issue({
       action: "reclaim-turn", taskId, turnSeq: turn.seq, claimedAt: turn.claimedAt, userId: actorOf(context).userId,
     }, task.title);
-    if (!challenge) return context.json({ error: "人工授权申请过多，请等已有申请过期后重试" }, 429);
+    if (!challenge) return reject(HUMAN_APPROVAL_UNAVAILABLE, 503);
     return context.json(challenge);
   });
 
   api.post("/tasks/:id/reclaim-turn", async (context) => {
-    if (!accountRequest(context)) return context.json({ error: "回合身份不能代替人工授权" }, 403);
     const taskId = context.req.param("id");
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task || !(await canSeeProject(actorOf(context), task.projectId))) return context.json({ error: "not found" }, 404);
@@ -38,13 +40,16 @@ export function mountTurnReclaimRoutes(api: Hono): void {
       await noteRejectedUserAction(taskId, "放开回合占位", error);
       return context.json({ error, reclaimed: false }, status);
     };
+    const rejection = humanRequestRejection(context);
+    if (rejection) return reject(rejection, 403);
     if (!humanApproval.fingerprint) return reject(HUMAN_APPROVAL_UNAVAILABLE, 503);
     const consent = await context.req.json().catch(() => null);
     if (consent?.acknowledgeDuplicateRisk !== true) {
       return reject("请先确认：放开互斥可能导致同一个任务的两个回合并行修改工作区", 400);
     }
-    const turn = suspectTurns().find((held) => held.taskId === taskId);
-    if (!turn) return reject("当前没有可放开的占位，请刷新查看任务状态", 409);
+    const inspection = inspectTurnReclaim(taskId);
+    if (!inspection.ok) return reject(inspection.reason, 409);
+    const turn = inspection.turn;
     const authorization = humanApproval.consume(consent.approval, {
       action: "reclaim-turn", taskId, turnSeq: turn.seq, claimedAt: turn.claimedAt, userId: actorOf(context).userId,
     });

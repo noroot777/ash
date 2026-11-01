@@ -21,9 +21,11 @@
 // 「拿得到 key」。真正花掉 key 的动作(`POST /llm-providers/models`、`…/test`)是写方法,
 // 被这道闸挡在外面。
 import type { MiddlewareHandler } from "hono";
-import { actorOf, isAccountHolder } from "./context.js";
-import { crossSiteRejection, WRITE_METHODS } from "./middleware.js";
+import { actorOf } from "./context.js";
+import { WRITE_METHODS } from "./middleware.js";
 import { isMultiUser } from "./mode.js";
+import { humanRequestRejection, rejectHumanRequest } from "./human-request.js";
+export { AGENT_HUMAN_ONLY_REFUSAL } from "./human-request.js";
 
 /**
  * 个人面集合的**第一段**。新开一张 `ownerUserId` 的表就顺手加一行 ——
@@ -88,17 +90,13 @@ const PERSONAL_PATHS = [
  * 设计的唯一前提抽掉 —— 界面上那段风险说明也就只是说给没在看的人听。
  */
 const HUMAN_ONLY_PATHS = [
-  /^\/api\/tasks\/[^/]+\/reclaim-turn$/,
+  /^\/api\/tasks\/[^/]+\/reclaim-turn(?:\/approval)?$/,
 ];
 
 /** 导出给回归测试直接钉住:哪几条只有真人按得动。 */
 export function isHumanOnlyPath(path: string): boolean {
   return HUMAN_ONLY_PATHS.some((p) => p.test(path));
 }
-
-export const AGENT_HUMAN_ONLY_REFUSAL =
-  "这个动作只有账号本人按得动：它解除的是回合互斥，系统判不了原来那一位死没死才交给人来判，"
-  + "回合凭证不能代替用户知情同意";
 
 export const AGENT_PERSONAL_REFUSAL =
   "个人资源与账号设置只对账号本人开放：回合凭证代表的是那一条任务，不是这个账号";
@@ -115,17 +113,8 @@ export function personalWriteGate(): MiddlewareHandler {
     if (!WRITE_METHODS.has(c.req.method)) return next();
     // 真人专属动作先判:它**不看单人/多人**(理由见 HUMAN_ONLY_PATHS)。
     if (isHumanOnlyPath(c.req.path)) {
-      if (!isAccountHolder(actorOf(c))
-        || c.req.header("x-ash-source-task-id") !== undefined
-        || c.req.header("x-ash-turn-token") !== undefined) {
-        return c.json({ error: AGENT_HUMAN_ONLY_REFUSAL }, 403);
-      }
-      const rejection = crossSiteRejection({
-        secFetchSite: c.req.header("sec-fetch-site"),
-        origin: c.req.header("origin"),
-        host: new URL(c.req.url).host,
-      });
-      if (rejection) return c.json({ error: rejection }, 403);
+      const rejection = humanRequestRejection(c);
+      if (rejection) return rejectHumanRequest(c, rejection);
     }
     if (!(await isMultiUser())) return next();
     // 只拦 agent:真人(cookie / Bearer)本来就是账号本人,匿名早被 authGate 拦掉了。
