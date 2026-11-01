@@ -30,6 +30,19 @@
 //   ⑥ **投递的凭据取在「原话落盘」那一刻**,不是整轮跑完 —— 后者要等审查者跑几十分钟才
 //      resolve,这中间服务断掉,新进程看到挂着的意图就会对一条已经执行过的审查整份重投。
 //
+// 第 2 轮审查又指出,上面两条各自只堵了「同时开始」那一种时序,真正的不变量还没立起来:
+//
+//   ⑦ **同一份在途意图只许被消费一次** —— 内存认领证不了这件事(它只说「本进程此刻没有第二个
+//      人在办」),所以每一次写意图都是一次按版本的 CAS(`takeIntent`,版本就是 `attempts`),
+//      而补办在认领之后必须去库里**现读**那一份、不许信调用方手里的快照。慢一份的旧快照
+//      无条件写回去 = 把一条已经办完的意图凭空重建,接着再排一份完整任务书(第 2 轮审查 F1:
+//      审查者刚提问、还没等到答复,第二份任务书已经开了一条新会话)。
+//   ⑧ **持久交付凭据是恢复的权威** —— `commitReviewTurnDelivery` 先落
+//      `waitOwnership.deliveredReview`,之后才走到清意图那一步,两者不同事务。把回执提前只是
+//      缩短了窗口,消不掉它:服务断在中间,恢复只看意图就会把一份**审查者已经收到**的任务书
+//      再发一遍。所以补办之前先核对这一轮同代次的交付凭据,对得上就只结清意图、不重投
+//      (判据在 `reviewPromptAlreadyDelivered`)。
+//
 // ## 为什么界是「次数」而不是「时长」
 //
 // 这一侧等的是**另一个回合跑完**,而回合的时长没有上界(一轮审查几十分钟,duet 的人工裁决门
@@ -43,7 +56,7 @@
 // 那一侧(CKjeps4QSRTE)治「赢家占着锁不干活」,这一侧治「输家一次就放弃」。两者独立成立:
 // 幽灵修好了,也仍然会有合法的赢家让我们输一次;重排做好了,也仍然需要有人把幽灵锁放开,
 // 否则重排等的那次释放永远不来。
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, type FreeReviewDispatchIntent } from "./db/schema.js";
 import { continueWhenIdle } from "./runs.js";
@@ -107,19 +120,47 @@ export function releaseReviewDispatchClaim(runId: string, round: number): void {
 }
 
 /**
- * 写下/刷新这一轮的派发意图。
+ * 写下/刷新这一轮的派发意图 —— **按版本 CAS**,不是无条件覆盖。
  *
- * 落库失败**不拦路**:这一刻 `continueWhenIdle` 的 waiter 已经(或马上)挂上了,同进程的重排
- * 不靠这一行;它欠的只是「跨重启还能补办」与「放弃时说得出输了几次」。为此把整次派发判成失败,
- * 等于用一次库故障换掉一轮本来跑得动的审查。
+ * `from` 是「我手里这份快照说库里现在是第几次」(第一次派发传 null = 库里应当还没有意图)。
+ * 这一位是整条链唯一的持久不变量:**同一份在途意图只许被消费一次**。内存认领
+ * (`claimReviewDispatch`)证不了这件事 —— 它只能证明「本进程此刻没有第二个人在办」,
+ * 而对账那一侧是先读 round 快照、再 await 几次才走到补办的:先到的一份完全可以在这期间
+ * 把任务书送出去、把意图清掉、把内存认领也放掉,后到的那一份才从 await 里回来。它手里的
+ * 快照仍然写着 `attempts: 1`,于是无条件写回去 = 把一条**已经办完**的意图凭空重建,接着
+ * 再排一份完整任务书(第 2 轮审查 F1 实测:审查者刚提了问题还没等到答复,第二份任务书就
+ * 开了一条新会话)。CAS 之后那一份会在这里输掉,就地让出。
  *
- * (这一点与 `queue_advance_intents` 的口径刻意不同:那边的推进是**丢出去就不管**的后台动作,
- * 凭据没落下就真的没有任何人会补办,所以必须抛;这边第二段的等待者是活的。)
+ * `attempts` 当版本够用:它只增不减,而同一轮上的意图只有这一条链在推进。
+ *
+ * 三种回答要分开,**别把库写不下来算成「别人办了」**:
+ *  · `taken`      —— 这一版归我了;
+ *  · `lost`       —— 库里已经不是那一版(别人办过了 / 轮次落了终态):让出,不投递也不落终态;
+ *  · `unwritable` —— 库写不下来。同进程的等待者是活的,所以照旧排(行为与改之前一致);
+ *    欠的只是「跨重启还能补办」与「放弃时说得出排了几次」,这一条记在文件头的留白里。
  */
-async function writeIntent(runId: string, round: number, intent: FreeReviewDispatchIntent): Promise<void> {
-  await db.update(freeReviewRounds).set({ dispatch: intent })
-    .where(and(eq(freeReviewRounds.runId, runId), eq(freeReviewRounds.round, round)))
-    .catch((error) => console.error(`[ash] 审查派发意图落库失败 run=${runId} round=${round}:`, error));
+type IntentTake = "taken" | "lost" | "unwritable";
+
+async function takeIntent(
+  runId: string, round: number, from: number | null, intent: FreeReviewDispatchIntent,
+): Promise<IntentTake> {
+  try {
+    const taken = await db.update(freeReviewRounds).set({ dispatch: intent })
+      .where(and(
+        eq(freeReviewRounds.runId, runId),
+        eq(freeReviewRounds.round, round),
+        // 落了终态的轮次不接受在途意图:写进去等于让对账去补投一条已经宣告结束的审查。
+        eq(freeReviewRounds.status, "reviewing"),
+        from === null
+          ? isNull(freeReviewRounds.dispatch)
+          : sql`json_extract(${freeReviewRounds.dispatch}, '$.attempts') = ${from}`,
+      ))
+      .returning({ id: freeReviewRounds.id });
+    return taken.length ? "taken" : "lost";
+  } catch (error) {
+    console.error(`[ash] 审查派发意图落库失败 run=${runId} round=${round}:`, error);
+    return "unwritable";
+  }
 }
 
 /**
@@ -156,6 +197,11 @@ export type ReviewDispatch = {
   attempts?: number;
   /** 第一次交出去的时刻(补办时沿用库里那个,别把等待时长重置掉)。 */
   since?: string;
+  /**
+   * 调用方**已经认领过**这一轮的派发(`claimReviewDispatch`)。只有补办那一路传:它要在
+   * 一长串异步准备之前就占住,不能等到这里。其余入口在这里认领。
+   */
+  claimed?: boolean;
   /** 这一轮彻底起不来了,按原路收尾(`failReviewStart`)。 */
   onFail: (message: string) => Promise<unknown>;
 };
@@ -171,6 +217,16 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<voi
   const key = keyOf(run.id, run.currentRound);
   const since = dispatch.since ?? now();
   let attempts = dispatch.attempts ?? 0;
+  /** 库里此刻该是哪一版在途意图 —— 每一次写都按它做 CAS(见 `takeIntent`)。 */
+  let expected: number | null = dispatch.attempts ?? null;
+
+  // **这一轮的派发归谁** —— 同步认领,排在任何 await 之前(所以也排在任何库写之前:对账
+  // 区分「该补投」与「别碰」靠的就是「库里有意图」与「内存里有人盯着」这一对线索,反过来
+  // 写就会开出一个两边都说「没人在途」的窗口)。认不到 = 这一轮已经有人在办。
+  if (!dispatch.claimed && !claimReviewDispatch(run.id, run.currentRound)) {
+    console.error(`[ash] ${label}派发让出 task=${taskId} run=${run.id}：这一轮已经有在途派发`);
+    return;
+  }
 
   /**
    * 这一轮的派发收摊 —— **先清库、再放内存**,顺序是这两步的全部要点。
@@ -186,21 +242,31 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<voi
     if (await clearReviewDispatchIntent(run.id, run.currentRound)) armed.delete(key);
   };
 
+  /** 这一轮不归我们办了(在途意图已经不是手里那一份):认领还回去,一个字都不写。 */
+  const handOff = (why: string): void => {
+    releaseReviewDispatchClaim(run.id, run.currentRound);
+    console.error(`[ash] ${label}派发让出 task=${taskId} run=${run.id}：${why}`);
+  };
+
   const giveUp = async (message: string, failure: string): Promise<void> => {
-    await settled();
+    // **先落终态、再了结意图**:`failReviewStart` 把 round/run 的终态与 `dispatch=null` 写在
+    // 同一个事务里,所以让它先走;这里的 `settled` 随后只负责收掉内存那一半(清库成了空操作)。
+    // 反过来(先清意图)会开出一个「意图没了、终态还没写」的中断窗口 —— 放弃的次数和原因
+    // 一起丢掉,这一轮只剩对账那句通用的「未能正常给出结论」(第 2 轮审查的不拦验收事项)。
     await dispatch.onFail(message);
+    await settled();
     console.error(`[ash] ${label}派发放弃 task=${taskId} run=${run.id} attempts=${attempts}: ${failure}`);
   };
 
   const hand = async (): Promise<void> => {
-    attempts += 1;
-    // 同样的顺序,反方向:**先占内存、再写库**。先写库会开出「库里有意图、内存还没认领」的
-    // 窗口,对账落在里面就会抢着补投一条本进程正排着队的派发(同一个双线索判据)。
-    armed.add(key);
-    await writeIntent(run.id, run.currentRound, {
-      attempts, since, resumeSessionId: dispatch.resumeSessionId ?? null, retry: dispatch.retry,
+    const next = attempts + 1;
+    const taken = await takeIntent(run.id, run.currentRound, expected, {
+      attempts: next, since, resumeSessionId: dispatch.resumeSessionId ?? null, retry: dispatch.retry,
       freshSession: dispatch.freshSession,
     });
+    if (taken === "lost") return handOff("在途意图已经不是我们手里那一份（这一轮已经被办过了）");
+    attempts = next;
+    if (taken === "taken") expected = next;
     continueWhenIdle(taskId, dispatch.message, dispatch.opts, async (message, failure) => {
       // 瞬时以外的四种(撤回 / continueTask 答了没送出去 / 抛错)照旧落终态:它们不是「这一刻
       // 轮不到我们」,重排只会把同一个拒绝理由再撞一遍,而撤回那一种还会磨掉用户的决定。
@@ -243,21 +309,27 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<voi
  *    一轮会落回通用收尸路,用户只看到「审查未能正常给出结论」—— 而真相是「任务书连一次回合
  *    窗口都没抢到」,两句话对他下一步该做什么的指示完全不同。
  *
+ * **判词不带意图本体**:调用方拿到 `redeliver` 之后必须自己去库里现读那一份(见
+ * `redeliverReviewRound`)。这是故意的 —— 传进来的 `intent` 来自一份快照,而从读到快照到真正
+ * 动手之间隔着好几次 await,把它当真就是第 2 轮审查 F1 那条路(已经办完的意图被旧快照重建)。
+ *
  * 判据故意不含「任务忙不忙」:那一问由 `reconcileFreeReviews` 在它自己那一串判据里回答过了
  * (reviewer 还活着就压根走不到这里)。
  */
-export type ReviewDispatchRecovery =
-  | { kind: "none" }
-  | { kind: "in-flight" }
-  | { kind: "redeliver"; intent: FreeReviewDispatchIntent }
-  | { kind: "exhausted"; intent: FreeReviewDispatchIntent };
+export type ReviewDispatchRecovery = "none" | "in-flight" | "redeliver" | "exhausted";
+
+/** 单看这一份意图该怎么办(不问「有没有人盯着」)。认领之后按**库里现读的那一份**问它。 */
+export function reviewDispatchVerdict(
+  intent: FreeReviewDispatchIntent | null | undefined,
+): "none" | "redeliver" | "exhausted" {
+  if (!intent) return "none";
+  return intent.attempts < MAX_REVIEW_DISPATCH_ATTEMPTS ? "redeliver" : "exhausted";
+}
 
 export function reviewDispatchRecovery(
   runId: string, round: number, intent: FreeReviewDispatchIntent | null | undefined,
 ): ReviewDispatchRecovery {
-  if (!intent) return { kind: "none" };
-  if (reviewDispatchArmed(runId, round)) return { kind: "in-flight" };
-  return intent.attempts < MAX_REVIEW_DISPATCH_ATTEMPTS
-    ? { kind: "redeliver", intent }
-    : { kind: "exhausted", intent };
+  if (!intent) return "none";
+  if (reviewDispatchArmed(runId, round)) return "in-flight";
+  return reviewDispatchVerdict(intent);
 }

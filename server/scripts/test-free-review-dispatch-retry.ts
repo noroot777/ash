@@ -16,7 +16,10 @@
 //  ⑦ **合法排队中遇上周期对账** → 不收尸、不动意图,而且那一笔重排照旧有效(第 1 轮审查 F1);
 //  ⑧ **投递的凭据取在「原话落盘」那一刻** → 不是整轮跑完(第 1 轮审查 F2);
 //  ⑨ 两个恢复入口同时到 → 只补投一次;而迟到的启动失败不许覆盖已有结论(第 1 轮审查 F3);
-//  ⑩ 补办把**原派发的会话策略**原样重放 → 新链第 1 轮不接上一条链的旧对话(第 1 轮审查 F4)。
+//  ⑩ 补办把**原派发的会话策略**原样重放 → 新链第 1 轮不接上一条链的旧对话(第 1 轮审查 F4);
+//  ⑪ **慢一份恢复手里的旧快照** → 不许把一条已经办完的意图重建出来再投一遍(第 2 轮审查 F1);
+//  ⑫ **交付凭据已确认、意图还没清** → 结清意图而不是重发任务书(第 2 轮审查 F2);
+//  ⑬ **写意图那一刻版本已经变了** → 按 `attempts` 做 CAS,不写不投(第 2 轮审查 F1 的第二道)。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
 // (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。PATH 上那个立刻退出的 `codex` 桩管的是
@@ -46,13 +49,15 @@ process.env.PATH = `${stubBin}:${process.env.PATH ?? ""}`;
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRounds, freeReviewRuns, groups, projects, reviewerProfiles, sessions, tasks } =
-    await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, groups, projects, regressionEvidence,
+    reviewerProfiles, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { handleFreeWorkflowSettlement, reconcileFreeReviews, reserveFreeReview } =
     await import("../src/free-workflow.js");
-  const { MAX_REVIEW_DISPATCH_ATTEMPTS, reviewDispatchArmed } = await import("../src/free-review-dispatch.js");
-  const { failReviewStart } = await import("../src/free-review-round.js");
+  const { claimReviewDispatch, MAX_REVIEW_DISPATCH_ATTEMPTS, reviewDispatchArmed } =
+    await import("../src/free-review-dispatch.js");
+  const { failReviewStart, launchReviewRound, redeliverReviewRound } =
+    await import("../src/free-review-round.js");
   const { claimOwnTurn, claimTurn, continueWhenIdle, releaseTurn, turnIdentity, whenTurnIdle } = await import("../src/runs.js");
   // 人工放开 / 幽灵锁巡检走的那条放锁路（用例⑥）。turn-lock.ts 直取：runs.js 不转出它。
   const { forceReleaseTurn } = await import("../src/turn-lock.js");
@@ -457,6 +462,91 @@ try {
     console.log("✓ ⑩ 补办重放原派发的会话策略：新链第 1 轮仍然新开会话");
   }
 
+  // ── ⑪ 慢一份恢复手里的旧快照:不许重建一条已经办完的意图 ──────────────────────
+  // 第 2 轮审查 F1:内存认领只能证明「本进程此刻没有第二个人在办」,证不了手里那份 round 快照
+  // 还是库里当前那一份。对账是先读 round、再 await 几次才走到补办的 —— 先到的一份完全可以在
+  // 这期间把任务书送出去、把意图清掉、把认领也放掉,慢的那一份才从 await 里回来。它手里的快照
+  // 仍写着 attempts:1,于是无条件写回去 = 把一条已经办完的派发凭空重建,接着再排一份完整任务书
+  // (实测现场:审查者刚提了问题、还没等到答复,第二份任务书就开了一条新会话)。
+  //
+  // 「先到的那一份已经办完」直接写进库,不绕路去真跑两条恢复:要钉的就是**手里这份快照已经
+  // 过期**这一个事实,而时序由构造表达比由 sleep 表达准。
+  {
+    const id = "free-dispatch-stale";
+    const runId = await restarted(id, 1);
+    const stale = await roundOf(runId);
+    assert.equal(stale.dispatch?.attempts, 1, "这就是慢的那一份手里的快照");
+    await db.update(freeReviewRounds).set({ dispatch: null })
+      .where(eq(freeReviewRounds.id, `${runId}-round`));
+
+    const task = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+    const verdict = await redeliverReviewRound(task, await runRow(runId), stale);
+
+    assert.equal(verdict, "none", "旧快照不该把一条已经办完的派发再办一遍");
+    assert.equal((await roundOf(runId)).dispatch, null, "更不许把已经清掉的意图写回来");
+    assert.equal(await reviewerSessions(id), 0, "一个字都不该再送出去");
+    assert.equal(reviewDispatchArmed(runId, 1), false, "认领要还回去，否则这一轮在本进程里永远「在途」");
+    assert.doesNotMatch(timeline(id), /任务书重新投递/, "压根没补投，就不该写这一句");
+    console.log("✓ ⑪ 慢一份恢复手里的旧快照：认领后按库里现读的那一份办事，不重建已办完的意图");
+  }
+
+  // ── ⑫ 交付凭据已确认、意图还没清:结清意图,不重发 ───────────────────────────
+  // 第 2 轮审查 F2:投递是两次写而且不同事务 —— `commitReviewTurnDelivery` 紧挨着 spawn 之后先
+  // 持久记下 deliveredReview,之后才落盘、回执、清意图。服务断在中间,留下的就是这副组合:
+  // 凭据已确认 + 意图还挂着。只看意图的恢复会把这份**审查者已经读过**的任务书整份再发一遍。
+  // 把回执提前到落盘那一刻只缩短了窗口,消不掉它,所以恢复必须认持久交付事实为权威。
+  {
+    const id = "free-dispatch-delivered";
+    const runId = await restarted(id, 1);
+    const directory = freeReviewEvidenceDir(id, runId, 1);
+    const evidence = (await db.select().from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, directory))).at(0)!;
+    const task = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+    await db.update(tasks).set({
+      waitOwnership: {
+        deliveredReview: {
+          directory, generation: evidence.generation,
+          identity: { turnToken: task.activeTurnToken, directionToken: task.activeDirectionToken,
+            directionEpoch: task.directionEpoch },
+          confirmedAt: at,
+        },
+      },
+    }).where(eq(tasks.id, id));
+
+    await reconcileFreeReviews(id);
+
+    assert.equal((await roundOf(runId)).dispatch, null, "凭据对得上就把意图结清");
+    assert.equal(await reviewerSessions(id), 0, "审查者已经收到过这份任务书，不许再发一遍");
+    assert.doesNotMatch(timeline(id), /任务书重新投递/, "这不是「还没送出去」，不该按补投处理");
+    // 它确实跑过一轮,所以接下来归对账原路处理:「跑着跑着死了」才是它真实的分类。
+    assert.equal((await runRow(runId)).status, "failed", "送达过又没人能跑完它，照原路收尾");
+    console.log("✓ ⑫ 交付凭据已确认、意图还没清：结清意图而不是重发任务书");
+  }
+
+  // ── ⑬ 写意图那一刻版本已经变了:按版本 CAS 兜住 ──────────────────────────────
+  // ⑪ 钉的是「认领之后去库里现读」那一道。可现读之后到真正写意图之间还隔着一长串准备(证据
+  // 目录、工作区、MCP 预检、任务书重算),先到的那一份完全可以**在这段里**才办完 —— 那一种
+  // 时序上面那次读挡不住,只能由写本身来挡:`takeIntent` 按 `attempts` 做 CAS,版本对不上就一
+  // 个字都不写、把认领还回去。所以这里直接从 `launchReviewRound` 进去(它就是现读之后那一段),
+  // 手里拿着一份已经过期的 attempts。
+  {
+    const id = "free-dispatch-cas";
+    const runId = await restarted(id, 1);
+    const task = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+    await db.update(freeReviewRounds).set({ dispatch: null })
+      .where(eq(freeReviewRounds.id, `${runId}-round`));
+    assert.equal(claimReviewDispatch(runId, 1), true, "先认领（模拟现读之后、写意图之前的那一段）");
+
+    await launchReviewRound(task, await runRow(runId), {
+      redeliver: { attempts: 1, since: at, freshSession: false },
+    });
+
+    assert.equal((await roundOf(runId)).dispatch, null, "版本对不上就一个字都不写");
+    assert.equal(await reviewerSessions(id), 0, "更不许把第二份任务书送出去");
+    assert.equal(reviewDispatchArmed(runId, 1), false, "让出的时候认领要还回去");
+    console.log("✓ ⑬ 写意图那一刻版本已经变了：按 attempts 做 CAS，不写不投、认领还回去");
+  }
+
   // 几条用例会真起一个回合(投递成功那一刻),而它的收尾还要再写几次库。**等它们退干净再拆台**:
   // 不等的话临时库在它们写到一半时就关了,日志里会多出几条「database is not open」—— 那是拆台
   // 的噪声,不是产品问题,但它会把真问题埋掉。
@@ -467,7 +557,8 @@ try {
   if (process.env.ASH_DUMP_TIMELINE) {
     for (const id of ["free-dispatch-retry", "free-dispatch-exhaust", "free-dispatch-recover",
       "free-dispatch-recover-exhausted", "free-dispatch-withdrawn", "free-dispatch-ghost",
-      "free-dispatch-reconcile", "free-dispatch-concurrent", "free-dispatch-late", "free-dispatch-fresh"]) {
+      "free-dispatch-reconcile", "free-dispatch-concurrent", "free-dispatch-late", "free-dispatch-fresh",
+      "free-dispatch-stale", "free-dispatch-delivered", "free-dispatch-cas"]) {
       console.log(`\n──── ${id} ────\n${timeline(id)}`);
     }
   }

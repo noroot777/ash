@@ -9,12 +9,15 @@ import { and, desc, eq } from "drizzle-orm";
 import { gateAshMcpBeforeLaunch } from "./ash-mcp-launch-gate.js";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { freeReviewRounds, freeReviewRuns, projects, sessions, tasks } from "./db/schema.js";
+import { freeReviewRounds, freeReviewRuns, projects, regressionEvidence, sessions, tasks } from "./db/schema.js";
 import { freeReviewPrompt, freeReviewResumeMessage } from "./free-review-prompts.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
 // 「任务书交出去了没有」那一段(有界重排、意图落库、留痕)住在 free-review-dispatch.ts;
 // 依赖是单向的 —— 那边收 `onFail` 回调,不认识 failReviewStart,所以不成环。
-import { claimReviewDispatch, dispatchReviewRound, releaseReviewDispatchClaim, reviewDispatchRecovery } from "./free-review-dispatch.js";
+import {
+  claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound,
+  releaseReviewDispatchClaim, reviewDispatchRecovery, reviewDispatchVerdict,
+} from "./free-review-dispatch.js";
 import { evidenceState, restartRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
@@ -262,9 +265,35 @@ export async function launchReviewRound(
     freshSession,
     attempts: opts.redeliver?.attempts,
     since: opts.redeliver?.since,
+    // 补办那一路在开工之前就已经认领过这一轮的派发(`redeliverReviewRound`),别再认一次。
+    claimed: !!opts.redeliver,
     onFail: (error) => failReviewStart(run, error),
   });
   return { resumed };
+}
+
+/**
+ * **这一轮的任务书其实已经送到审查者手上了** —— 库里那份在途意图只是没来得及清掉。
+ *
+ * 为什么非得问这一句:投递是两次写,而且不同事务 —— `commitReviewTurnDelivery` 先持久记下
+ * `waitOwnership.deliveredReview`(紧挨着 spawn 之后),之后才经过落盘、回执,最后才清意图。
+ * 服务断在这两次写中间,留下的组合就是「凭据已确认 + 意图还挂着」。只看意图的恢复会把这份
+ * **审查者已经读过**的任务书整份再发一遍,白烧一轮(第 2 轮审查 F2 实测:无需任何磁盘故障,
+ * 恢复即再次拉起执行器)。把回执提前到落盘那一刻只缩短了窗口,消不掉它 —— 所以恢复这一侧
+ * 必须认持久交付事实为权威。
+ *
+ * 判据是**目录 + 代次**:目录里带着 run 与轮次,所以第 2 轮、合并结果审查各不相同;代次区分
+ * 同一轮的不同次「重跑」(`reopenFailedFreeReview` 走 `restartRegressionEvidence` 换代次),
+ * 上一次的旧凭据因此配不上这一次。
+ */
+async function reviewPromptAlreadyDelivered(task: TaskRow, run: ReviewRunRow, round: number): Promise<boolean> {
+  const receipt = task.waitOwnership?.deliveredReview;
+  if (!receipt) return false;
+  const directory = freeReviewEvidenceDir(task.id, run.id, round);
+  if (receipt.directory !== directory) return false;
+  const evidence = (await db.select({ generation: regressionEvidence.generation })
+    .from(regressionEvidence).where(eq(regressionEvidence.directory, directory))).at(0);
+  return !!evidence && evidence.generation === receipt.generation;
 }
 
 /**
@@ -281,7 +310,7 @@ export async function launchReviewRound(
  * MCP 预检只是问一句。
  *
  * 三种回答,调用方据它决定要不要往下走:
- *  · `none`    —— 这一轮没有在途意图,照原路对账;
+ *  · `none`    —— 这一轮没有在途意图(或者那份意图已经被别人办完了、其实早已送达),照原路对账;
  *  · `hold`    —— 有在途派发而且有人负责(本进程正排队,或另一个恢复入口刚认领走):**什么都
  *    别碰**,这一轮既不该补投也不该收尸;
  *  · `handled` —— 这一次由这里处理了(补投出去了,或者次数用尽已落终态)。
@@ -293,11 +322,35 @@ export async function redeliverReviewRound(
   run: ReviewRunRow,
   round: ReviewRoundRow,
 ): Promise<ReviewRoundRecovery> {
-  const verdict = reviewDispatchRecovery(run.id, round.round, round.dispatch);
-  if (verdict.kind === "none") return "none";
-  if (verdict.kind === "in-flight") return "hold";
-  const { intent } = verdict;
-  if (verdict.kind === "exhausted") {
+  // 先按调用方手里那份快照粗筛:没有意图、或者本进程还盯着,都不必往下读库。
+  const screened = reviewDispatchRecovery(run.id, round.round, round.dispatch);
+  if (screened === "none") return "none";
+  if (screened === "in-flight") return "hold";
+  // **先同步认领,再做任何 await** —— 下面整条路是一长串异步准备(读库、证据目录、工作区、
+  // MCP 预检、任务书重算),中途另一个恢复入口(定时对账 / 单任务中断恢复 / 答复提问各有一条
+  // 路)完全可能也读到「没人盯着」。认领就是 `armed` 那张表,所以「谁在途」只有一个答案。
+  if (!claimReviewDispatch(run.id, round.round)) return "hold";
+  // **认领之后一律按库里现读的那一份办事**:调用方那个 round 是读完之后又 await 过几次才到
+  // 这里的快照 —— 先到的一份恢复完全可以在这期间把任务书送出去、把意图清掉、把内存认领也
+  // 放掉,我们这一份才从 await 里回来。信那份快照就会把一条**已经办完**的意图重建出来,再排
+  // 一份完整任务书(第 2 轮审查 F1)。库里现读 + 下游写意图时的版本 CAS 是同一个不变量的两道。
+  const current = (await db.select().from(freeReviewRounds)
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, round.round)))).at(0);
+  const intent = current?.status === "reviewing" ? current.dispatch : null;
+  const verdict = reviewDispatchVerdict(intent);
+  if (verdict === "none" || !intent) {
+    releaseReviewDispatchClaim(run.id, round.round);
+    return "none";
+  }
+  // 交付凭据对得上 = 这份任务书审查者已经收到了,意图只是没来得及清:结清它,不重投。
+  // 这一轮接下来归对账原路处理(它跑过,所以「跑着跑着死了」才是它真实的分类)。
+  if (await reviewPromptAlreadyDelivered(task, run, round.round)) {
+    await clearReviewDispatchIntent(run.id, round.round);
+    releaseReviewDispatchClaim(run.id, round.round);
+    console.error(`[ash] 审查任务书已确认送达，补投取消 run=${run.id} round=${round.round}`);
+    return "none";
+  }
+  if (verdict === "exhausted") {
     // 界用尽了才落终态,而且**说得出原因**:通用收尸那句「未能正常给出结论」会让用户以为审查者
     // 跑过、没交卷,实际上它一个字都没收到。意图由 `failReviewStart` 在终态那一个事务里一并清掉。
     //
@@ -305,13 +358,9 @@ export async function redeliverReviewRound(
     // 完全可能只排上队、还没等到释放点服务就断了 —— 那一次没有真的被谁抢走,说成「被抢 N 次」
     // 就是把没发生的事算进去了。
     await failReviewStart(run, `任务书始终没能送进会话 —— 已经排了 ${intent.attempts} 次队都没抢到空闲回合窗口（含服务重启后的补投），不再重试`);
+    releaseReviewDispatchClaim(run.id, round.round);
     return "handled";
   }
-  // **先同步认领,再做任何 await** —— 下面整条 `launchReviewRound` 是一长串异步准备,中途另一个
-  // 恢复入口(定时对账 / 单任务中断恢复 / 答复提问各有一条路)完全可能也读到「没人盯着」,于是
-  // 同一轮排两份任务书,而迟到那一份的失败回调又会去覆盖先那一份已经拿到的结论
-  // (第 1 轮审查 F3)。认领就是 `armed` 那张表,所以「谁在途」只有一个答案。
-  if (!claimReviewDispatch(run.id, round.round)) return "hold";
   // 次数接着上一次往下数:补投也是一次尝试,否则重启反复发生时这条链会永远重投下去。
   try {
     await launchReviewRound(task, run, {
