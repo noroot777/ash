@@ -103,6 +103,17 @@ export type FreeReviewDispatchIntent = {
    */
   resumeSessionId?: string | null;
   retry?: boolean;
+  /**
+   * **原派发要的是一条新会话还是续旧的** —— 这一位也必须跟着落下来。
+   *
+   * 补办不是另一种派发,是**同一次派发的第二次投递**,所以会话策略只能照原样重放。漏了它
+   * 那一次就只剩「没指名 resumeSessionId」这一个事实,而下游的默认动作是按 agentType+role
+   * 挑**最近**的历史会话(`turn-session-pick.ts`,不按 run 隔离):新链第 1 轮、合并结果审查
+   * 本该各开一条空会话,补办后却接进了上一条链的旧对话 —— 换了上下文的同一位审查者。
+   *
+   * 老行(加这一位之前写下的意图)留 undefined,读端按原公式回落(见 `launchReviewRound`)。
+   */
+  freshSession?: boolean;
 };
 
 export const freeReviewRounds = sqliteTable(

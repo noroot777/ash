@@ -21,6 +21,15 @@
 //      `forceReleaseTurn` 全走 `endOwnTurn`。只挂「下次执行回合正常结束」是不够的 —— 那次实例
 //      里抢赢的就有可能是个占了锁什么都不起的幽灵,它永远没有「下一次回合结束」。
 //
+// 后来补上的两条不变量,它们各自都曾把上面四条抵消掉(第 1 轮审查 F1/F2):
+//
+//   ⑤ **在途 ≠ 没在干活** —— 「本进程还盯着」必须是恢复状态机里独立的一档(`in-flight`),对账
+//      看到它要 `continue`。并进「没有意图」那一档的话,合法排队中的审查会在约 30 秒后被周期
+//      对账按孤儿收尸,自动链照样断。而认领必须是**同步** test-and-set(`claimReviewDispatch`):
+//      补办要重走一长串 await,只在开头读一次等于没有占位,两个恢复入口会各排一份同样的任务书。
+//   ⑥ **投递的凭据取在「原话落盘」那一刻**,不是整轮跑完 —— 后者要等审查者跑几十分钟才
+//      resolve,这中间服务断掉,新进程看到挂着的意图就会对一条已经执行过的审查整份重投。
+//
 // ## 为什么界是「次数」而不是「时长」
 //
 // 这一侧等的是**另一个回合跑完**,而回合的时长没有上界(一轮审查几十分钟,duet 的人工裁决门
@@ -77,6 +86,27 @@ export function reviewDispatchArmed(runId: string, round: number): boolean {
 }
 
 /**
+ * **抢下「这一轮的补办归我」** —— 同步的 test-and-set,没抢到返回 false。
+ *
+ * 为什么非得有这一下:补办要重走整个 `launchReviewRound`(证据目录、工作区、MCP 预检、
+ * 任务书重算),那是一长串 await。只在开头读一次 `reviewDispatchArmed` 等于没有占位 ——
+ * 两个恢复入口(30 秒定时对账、单任务中断恢复、答复提问各有一条路)落在同一段时间里,
+ * 都会读到「没人盯着」,各排一份同样的任务书。认领必须排在**任何 await 之前**,所以它是
+ * 同步的,也必须就是 `armed` 这同一张表 —— 否则「谁在途」会有两个彼此不同步的答案。
+ */
+export function claimReviewDispatch(runId: string, round: number): boolean {
+  const key = keyOf(runId, round);
+  if (armed.has(key)) return false;
+  armed.add(key);
+  return true;
+}
+
+/** 认领了却没能交出去(补办在准备阶段就抛了):把认领还回去,否则这一轮在本进程里永远「在途」。 */
+export function releaseReviewDispatchClaim(runId: string, round: number): void {
+  armed.delete(keyOf(runId, round));
+}
+
+/**
  * 写下/刷新这一轮的派发意图。
  *
  * 落库失败**不拦路**:这一刻 `continueWhenIdle` 的 waiter 已经(或马上)挂上了,同进程的重排
@@ -118,9 +148,10 @@ export type ReviewDispatch = {
   /** 送进会话的那段话。重排原样重放它 —— 同进程里不必、也不该重算。 */
   message: string;
   opts: ContinueOpts;
-  /** 跨重启补办要原样重放的两个入参(见 `FreeReviewDispatchIntent`)。 */
+  /** 跨重启补办要原样重放的三个入参(见 `FreeReviewDispatchIntent`)。 */
   resumeSessionId?: string | null;
   retry?: boolean;
+  freshSession?: boolean;
   /** 已经输过几次(补办时从库里读回来);缺省 0 = 这是第一次交出去。 */
   attempts?: number;
   /** 第一次交出去的时刻(补办时沿用库里那个,别把等待时长重置掉)。 */
@@ -168,6 +199,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<voi
     armed.add(key);
     await writeIntent(run.id, run.currentRound, {
       attempts, since, resumeSessionId: dispatch.resumeSessionId ?? null, retry: dispatch.retry,
+      freshSession: dispatch.freshSession,
     });
     continueWhenIdle(taskId, dispatch.message, dispatch.opts, async (message, failure) => {
       // 瞬时以外的四种(撤回 / continueTask 答了没送出去 / 抛错)照旧落终态:它们不是「这一刻
@@ -186,8 +218,9 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<voi
         + `已重新排到下一个空闲窗口，不需要你动手；连续 ${MAX_REVIEW_DISPATCH_ATTEMPTS} 次都抢不到才会停下来。`);
       await hand();
     }, async () => {
-      // 真的送进会话了 —— 意图到此了结。少了这一声,库里那一行会一直挂着,于是重启后的对账
-      // 会对着一条**已经在跑**的审查再投一次任务书。
+      // 真的送进会话了 —— 意图到此了结。这一声取在**原话落盘**那一刻(而不是整轮跑完,
+      // 理由在 `continueWhenIdle` 的 `onDelivered` 上):取后者的话,这一轮审查跑着的几十
+      // 分钟里库里都挂着意图,服务在中间断掉,新进程就会对一条**已经执行过**的审查整份重投。
       await settled();
     });
   };
@@ -198,16 +231,24 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<voi
 /**
  * 上一个进程死在「交出去了、还没送进会话」中间的那些轮次 —— 这一轮该怎么办。
  *
- * 三档,**`exhausted` 单独成一档不是为了好看**:它要的是一句说得出来的终态理由。并进 `none`
- * 的话,这一轮会落回对账那条通用收尸路,用户只看到「审查未能正常给出结论」—— 而真相是「任务书
- * 连续 N 次都没抢到回合窗口」,两句话对他下一步该做什么的指示完全不同。
+ * 四档,每一档对应一个**不同的动作**,合并任意两档都会出事:
+ *
+ *  · `none`      —— 压根没有在途意图(普通审查)。调用方照原路往下走。
+ *  · `in-flight` —— 有意图,而且**本进程还盯着它**:它正排在回合锁的等待队列里等下一个空闲
+ *    窗口。既不该补投(同一轮任务书送两遍),**也不该收尸** —— 这一条当初并进 `none` 过,于是
+ *    合法排队中的审查落回对账的通用收尸路,约 30 秒后自己 failed、自动链照样断在那里
+ *    (第 1 轮审查 F1)。「有人负责等待」不等于「没有在途工作」。
+ *  · `redeliver` —— 有意图、没人盯着(= 上一个进程没了):补投一次。
+ *  · `exhausted` —— 同上,但次数已经用尽:落终态,并且**说得出一句理由**。并进 `none` 的话这
+ *    一轮会落回通用收尸路,用户只看到「审查未能正常给出结论」—— 而真相是「任务书连一次回合
+ *    窗口都没抢到」,两句话对他下一步该做什么的指示完全不同。
  *
  * 判据故意不含「任务忙不忙」:那一问由 `reconcileFreeReviews` 在它自己那一串判据里回答过了
  * (reviewer 还活着就压根走不到这里)。
  */
 export type ReviewDispatchRecovery =
-  /** 没有在途意图(普通审查),或者**本进程还盯着它** —— 两种都不许碰(见 `armed`)。 */
   | { kind: "none" }
+  | { kind: "in-flight" }
   | { kind: "redeliver"; intent: FreeReviewDispatchIntent }
   | { kind: "exhausted"; intent: FreeReviewDispatchIntent };
 
@@ -215,7 +256,7 @@ export function reviewDispatchRecovery(
   runId: string, round: number, intent: FreeReviewDispatchIntent | null | undefined,
 ): ReviewDispatchRecovery {
   if (!intent) return { kind: "none" };
-  if (reviewDispatchArmed(runId, round)) return { kind: "none" };
+  if (reviewDispatchArmed(runId, round)) return { kind: "in-flight" };
   return intent.attempts < MAX_REVIEW_DISPATCH_ATTEMPTS
     ? { kind: "redeliver", intent }
     : { kind: "exhausted", intent };

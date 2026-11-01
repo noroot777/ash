@@ -6,13 +6,17 @@
 // 手动再开一轮。而「抢不到锁」是个纯瞬时条件 —— 同一个释放点上注册在前的那条 waiter 先同步
 // 抢走了锁,谁先注册纯属时序运气。
 //
-// 五条用例对着验收标准:
+// 十条用例对着验收标准:
 //  ① 输一次 → 不落终态、派发意图留着、下一个空闲窗口自动重试并真的送出去;
 //  ② 连输到界 → 落终态,而且终态说得出「输了几次」,每一次重排都在时间线上留了痕;
 //  ③ 跨重启补办 → 库里挂着意图、内存里没人盯着(= 重启后的现场),对账补投一次而不是收尸;
 //  ④ 重启前就已输光 → 落终态,理由说的是「任务书没送进会话」而不是通用的「没给出结论」;
 //  ⑤ 旧路径不变 → 抢不到以外的失败(这里用分组暂停的撤回)照旧一次就落终态,不重排;
-//  ⑥ 重排等的那次释放不限于「回合正常结束」 → 幽灵锁被人工放开 / 巡检拔掉时它一样被放走。
+//  ⑥ 重排等的那次释放不限于「回合正常结束」 → 幽灵锁被人工放开 / 巡检拔掉时它一样被放走;
+//  ⑦ **合法排队中遇上周期对账** → 不收尸、不动意图,而且那一笔重排照旧有效(第 1 轮审查 F1);
+//  ⑧ **投递的凭据取在「原话落盘」那一刻** → 不是整轮跑完(第 1 轮审查 F2);
+//  ⑨ 两个恢复入口同时到 → 只补投一次;而迟到的启动失败不许覆盖已有结论(第 1 轮审查 F3);
+//  ⑩ 补办把**原派发的会话策略**原样重放 → 新链第 1 轮不接上一条链的旧对话(第 1 轮审查 F4)。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
 // (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。PATH 上那个立刻退出的 `codex` 桩管的是
@@ -48,7 +52,8 @@ try {
   const { handleFreeWorkflowSettlement, reconcileFreeReviews, reserveFreeReview } =
     await import("../src/free-workflow.js");
   const { MAX_REVIEW_DISPATCH_ATTEMPTS, reviewDispatchArmed } = await import("../src/free-review-dispatch.js");
-  const { claimOwnTurn, claimTurn, releaseTurn, whenTurnIdle } = await import("../src/runs.js");
+  const { failReviewStart } = await import("../src/free-review-round.js");
+  const { claimOwnTurn, claimTurn, continueWhenIdle, releaseTurn, turnIdentity, whenTurnIdle } = await import("../src/runs.js");
   // 人工放开 / 幽灵锁巡检走的那条放锁路（用例⑥）。turn-lock.ts 直取：runs.js 不转出它。
   const { forceReleaseTurn } = await import("../src/turn-lock.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
@@ -232,7 +237,7 @@ try {
    * 直接写库而不是「先派发再抹掉内存」:那张 armed 表是私有的,从外面抹不掉;而这副样子本身
    * 就是重启后的全部事实,照着摆出来比绕路更准。
    */
-  const restarted = async (id: string, attempts: number) => {
+  const restarted = async (id: string, attempts: number, patch: Record<string, unknown> = {}) => {
     await freeTask(id);
     const runId = `${id}-run`;
     await db.insert(freeReviewRuns).values({
@@ -242,7 +247,7 @@ try {
     });
     await db.insert(freeReviewRounds).values({
       id: `${runId}-round`, runId, round: 1, status: "reviewing", startedAt: at,
-      dispatch: { attempts, since: at, resumeSessionId: null },
+      dispatch: { attempts, since: at, resumeSessionId: null, ...patch },
     });
     await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, id));
     // 这一行是 `launchReviewRound` 开头就落下的（`evidenceState`），所以重启后的现场一定有它。
@@ -330,9 +335,139 @@ try {
     await until("审查会话真的起来了", async () => (await reviewerSessions(id)) > 0);
     console.log("✓ ⑥ 幽灵锁被人工放开 / 巡检拔掉时，重排的那一笔同样被放走（不只靠「回合正常结束」）");
   }
+
+  // ── ⑦ 合法排队中遇上周期对账:不收尸、不动意图 ────────────────────────────────
+  // 第 1 轮审查 F1 的现场:审查在释放点上输给一个 single 回合、已经合法排到第二次,而对方跑得
+  // 久一点(或者成为幽灵)。`reconcileFreeReviews` 每 30 秒一拍,这一拍落在那段等待里 ——
+  // 「本进程有人负责等待」当初并进了「没有在途意图」那一档,于是这条链被按孤儿收尸,自动链
+  // 照样断在那里。判据是**在途不等于没在干活**。
+  {
+    const id = "free-dispatch-reconcile";
+    await armedTask(id);
+    const rival = camper(id, 1);
+    await handleFreeWorkflowSettlement(id, "done", true, true, "single");
+    const run = await runOf(id);
+    releaseTurn(id, undefined);
+    await until("审查这一侧输掉一次并重排", async () => (await roundOf(run.id)).dispatch?.attempts === 2);
+    assert.equal(reviewDispatchArmed(run.id, 1), true, "这一刻正有一条 waiter 排着");
+    assert.ok(claimOwnTurn(id, "single") === null, "竞争者还占着回合——这正是那一拍对账看到的现场");
+
+    await reconcileFreeReviews(id);
+
+    assert.equal((await runRow(run.id)).status, "reviewing", "合法排队中的审查不许被对账收尸");
+    const held = await roundOf(run.id);
+    assert.equal(held.status, "reviewing", "同理不许把 round 落成 error");
+    assert.equal(held.dispatch?.attempts, 2, "对账不该动那份在途意图（它不是孤儿，也不该被补投）");
+    assert.doesNotMatch(timeline(id), /审查启动失败|未能正常给出结论/,
+      "排队中被对账扫到一次，不该留下任何终态说法");
+    // 而且那一笔重排没被对账搅掉:竞争者让位之后它照样把任务书交出去。
+    releaseTurn(id, rival.held!);
+    await until("对账之后那一笔重排仍然有效", async () => (await roundOf(run.id)).dispatch == null);
+    await until("审查会话真的起来了", async () => (await reviewerSessions(id)) > 0);
+    console.log("✓ ⑦ 合法排队中遇上周期对账：不收尸、不动意图，那一笔重排照旧有效");
+  }
+
+  // ── ⑧ 投递的凭据取在「原话落盘」那一刻,不是整轮跑完 ─────────────────────────
+  // 第 1 轮审查 F2:老写法在 `continueTask` **返回之后**才认投递成功,而它要等执行器收流、
+  // 结算做完才 resolve —— 一轮审查几十分钟。于是整轮期间库里都挂着在途意图,服务在这中间
+  // 断掉,新进程看到「有意图、没人盯着」就会对一条**已经执行过**的审查整份重投,白烧一轮额度。
+  //
+  // 钉在 `continueWhenIdle` 这一层(而不是绕回派审入口):时机差别只能靠「回执到手的那一刻,
+  // 这一轮结束了没有」来证,而那要在回调里取快照。派审一侧的接法由①③钉住(送出去那一刻意图
+  // 就了结)。判据用 `sessions.endedAt` —— 它是回合收尾写的,落盘那一刻必然还是空的。
+  // 用普通 single 回合而不是审查回合:回执的时机与角色无关,而 reviewer 回合要求库里真有一条
+  // 在跑的审查证据(`assertReviewTurnStart`),为这一条摆出来只会把判据埋进夹具。
+  {
+    const id = "free-dispatch-receipt";
+    await freeTask(id);
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, id));
+    const endedAtOf = async () =>
+      (await db.select().from(sessions).where(eq(sessions.taskId, id))).map((row) => row.endedAt);
+    let atDelivery: Array<string | null> = ["回执压根没到"];
+    let failure: string | null = null;
+    continueWhenIdle(id, "一句话", { system: "run", agent: "codex", executorId: "ex" },
+      (message) => { failure = message; }, async () => { atDelivery = await endedAtOf(); });
+
+    await until("这一轮跑完（测试隔离闸不许起真执行器，所以它必然失败收尾）",
+      async () => (await endedAtOf()).some((endedAt) => !!endedAt));
+    assert.equal(failure, null, "这一轮是送出去了的，不该报投递失败");
+    assert.deepEqual(atDelivery.filter((endedAt) => endedAt !== null), [],
+      "回执到手的那一刻这一轮还没收尾——取在整轮返回之后就会看到已经写下的 endedAt");
+    console.log("✓ ⑧ 投递回执取在「原话落盘」那一刻，不是整轮跑完");
+  }
+
+  // ── ⑨ 两个恢复入口同时到:只补投一次;迟到的启动失败不覆盖已有结论 ──────────────
+  // 第 1 轮审查 F3:补办要重走整个 `launchReviewRound`(证据目录、工作区、MCP 预检、任务书
+  // 重算),那是一长串 await。只在开头读一次「有没有人盯着」等于没有占位 —— 30 秒定时对账与
+  // 单任务中断恢复落在同一段时间里,各排一份同样的任务书;而迟到那一份的失败回调又会把先那
+  // 一份已经拿到的结论覆盖成「启动失败」。
+  {
+    const id = "free-dispatch-concurrent";
+    const runId = await restarted(id, 1);
+    // 两条恢复路同时进来(现场是定时对账 + task-reconcile/task-resume/task-answer 各自那条)。
+    await Promise.all([reconcileFreeReviews(id), reconcileFreeReviews(id)]);
+    await until("补投把意图了结", async () => (await roundOf(runId)).dispatch == null);
+    assert.equal((timeline(id).match(/任务书重新投递/g) ?? []).length, 1, "同一轮只许补投一次");
+    assert.equal(await reviewerSessions(id), 1, "补投两份的形状就是两条审查会话——额度要白烧一倍");
+    console.log("✓ ⑨a 两个恢复入口同时到：按 run/round 原子认领，只补投一次");
+  }
+  {
+    const id = "free-dispatch-late";
+    await freeTask(id);
+    const runId = `${id}-run`;
+    // 这一轮**已经有结论了**(审查通过)。改之前,一条迟到的失败收尾会把它覆盖成 error/failed,
+    // 界面上就是「审查通过」后面紧跟一句「审查启动失败」。
+    await db.insert(freeReviewRuns).values({
+      id: runId, taskId: id, reviewerId: "reviewer", reviewerName: "reviewer", agentType: "codex",
+      executorId: "ex", checkMode: "logic", retryLimit: 1, currentRound: 1, status: "passed",
+      createdAt: at, updatedAt: at, finishedAt: at,
+    });
+    await db.insert(freeReviewRounds).values({
+      id: `${runId}-round`, runId, round: 1, status: "passed", conclusion: "verified",
+      startedAt: at, endedAt: at,
+    });
+    await failReviewStart(await runRow(runId), "迟到的投递失败");
+
+    assert.equal((await roundOf(runId)).status, "passed", "已有结论的轮次不许被迟到的失败改写");
+    assert.equal((await roundOf(runId)).conclusion, "verified", "结论本体更不许动");
+    assert.equal((await runRow(runId)).status, "passed", "run 也该原样停在 passed");
+    assert.doesNotMatch(timeline(id), /审查启动失败/, "迟到的失败连一句话都不该留下（它只会和结论打架）");
+    console.log("✓ ⑨b 迟到的启动失败只认「这一轮还停在 reviewing」，不覆盖已有结论");
+  }
+
+  // ── ⑩ 补办把原派发的会话策略原样重放 ──────────────────────────────────────────
+  // 第 1 轮审查 F4:补办当初无条件关掉 freshSession,而没指名 resumeSessionId 时下游会按
+  // agentType+role 挑**最近**的历史会话(不按 run 隔离)。于是新链第 1 轮(以及合并结果审查)
+  // 本该各开一条空会话,重启补投后却接进了上一条链的旧对话 —— 同一位审查者,换了上下文。
+  {
+    const id = "free-dispatch-fresh";
+    const runId = await restarted(id, 1, { freshSession: true });
+    // 上一条链留下的那条可续审查会话(有 cliSessionId = 真的接得上)。
+    await db.insert(sessions).values({
+      id: `${id}-old-reviewer`, taskId: id, role: "reviewer", agentType: "codex", executor: "test",
+      cwd: root, cliSessionId: "old-cli", startedAt: at, turnStartedAt: at, endedAt: at,
+    });
+
+    await reconcileFreeReviews(id);
+    await until("补投把意图了结", async () => (await roundOf(runId)).dispatch == null);
+
+    assert.equal(await reviewerSessions(id), 2, "新链第 1 轮的补办要另开会话，不许接进上一条链的旧对话");
+    const old = (await db.select().from(sessions).where(eq(sessions.id, `${id}-old-reviewer`))).at(0)!;
+    assert.equal(old.cliSessionId, "old-cli", "旧会话原样留着，这次补办没把它接走");
+    console.log("✓ ⑩ 补办重放原派发的会话策略：新链第 1 轮仍然新开会话");
+  }
+
+  // 几条用例会真起一个回合(投递成功那一刻),而它的收尾还要再写几次库。**等它们退干净再拆台**:
+  // 不等的话临时库在它们写到一半时就关了,日志里会多出几条「database is not open」—— 那是拆台
+  // 的噪声,不是产品问题,但它会把真问题埋掉。
+  const launched = ["free-dispatch-retry", "free-dispatch-recover", "free-dispatch-ghost",
+    "free-dispatch-reconcile", "free-dispatch-receipt", "free-dispatch-concurrent", "free-dispatch-fresh"];
+  await until("在跑的回合都退干净", () => launched.every((id) => !turnIdentity(id)));
+
   if (process.env.ASH_DUMP_TIMELINE) {
     for (const id of ["free-dispatch-retry", "free-dispatch-exhaust", "free-dispatch-recover",
-      "free-dispatch-recover-exhausted", "free-dispatch-withdrawn", "free-dispatch-ghost"]) {
+      "free-dispatch-recover-exhausted", "free-dispatch-withdrawn", "free-dispatch-ghost",
+      "free-dispatch-reconcile", "free-dispatch-concurrent", "free-dispatch-late", "free-dispatch-fresh"]) {
       console.log(`\n──── ${id} ────\n${timeline(id)}`);
     }
   }

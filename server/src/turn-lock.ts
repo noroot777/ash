@@ -574,6 +574,12 @@ export function continueWhenIdle(
    * 为什么要有它:老接口只报失败,于是「这一轮的输入到底送进会话了没有」在外面无法回答 ——
    * 而凡是把派发记成**持久意图**的调用方都要靠这一声去把意图了结掉,不然重启后的补办会
    * 对着一条已经在跑的审查再投一次任务书。
+   *
+   * **时机是「原话落盘」那一刻,不是这一轮跑完**:`continueTask` 要等执行器收流、结算做完
+   * 才 resolve,一轮审查动辄几十分钟。取后者等于在整轮期间都把意图挂着,服务在这中间断掉,
+   * 新进程看到「有意图、没人盯着」就会对一条**已经执行过**的审查整份重投(第 1 轮审查 F2)。
+   * 所以这里接的是 `continueTask` 自己的 `onDelivered`(orchestrator 里 spawn + 落盘之后的
+   * 那一声),整轮返回只作兜底 —— 见下面 `confirmDelivered`。
    */
   onDelivered?: () => void | Promise<unknown>,
 ): void {
@@ -597,6 +603,21 @@ export function continueWhenIdle(
       void onError?.("回合被其它执行抢占，消息未能投递", "turn-taken");
       return;
     }
+    /**
+     * 「这一轮的输入已经落盘」只报一次。
+     *
+     * 两处会叫它:`continueTask` 自己的 `onDelivered`(原话写进会话那一刻,**权威**),以及
+     * 整轮返回之后的兜底 —— 后者只为「走了一条没经过那一声的投递路径」留条活路:那一轮
+     * 确实跑过了,不报的话调用方的持久意图会一直挂着,重启后又整份重投一次。
+     */
+    let handed = false;
+    const confirmDelivered = async (): Promise<void> => {
+      if (handed) return;
+      handed = true;
+      try { await onDelivered?.(); } catch (error) {
+        console.error(`[ash] continueWhenIdle(${taskId}) 投递成功的回执处理失败:`, error);
+      }
+    };
     void import("./turn-freeze.js")
       .then(async ({ turnFreezeReason }) => {
         // 这条路上的启动**全是系统发起的**（就地验证、自由派审、修复、验收冲突叫醒），
@@ -610,7 +631,16 @@ export function continueWhenIdle(
         const freeze = await turnFreezeReason(taskId, true);
         if (!freeze) {
           const delivered = await (await import("./orchestrator.js"))
-            .continueTask(taskId, text, { ...opts, turnHeld: owner });
+            .continueTask(taskId, text, {
+              ...opts,
+              turnHeld: owner,
+              // 调用方自己的记账先走(排队消息标 sent 那一类),再报「送出去了」。它抛了就
+              // 不报,留给下面的兜底 —— 那一侧还会把异常记下来。
+              onDelivered: async () => {
+                await opts.onDelivered?.();
+                await confirmDelivered();
+              },
+            });
           // continueTask 返回 false = 一个字都没送出去（验收互斥退避等）。吞掉它，
           // 调用方的时间线就会停在「意见已发回会话」而消息实际没了——必须当失败上报。
           if (delivered === false) {
@@ -633,11 +663,11 @@ export function continueWhenIdle(
       .then(
         async (outcome) => {
           if (!outcome) {
-            // 真的交出去了。失败回调在这条路上一次都没被叫过,所以这一声是「投递成功」的
-            // 唯一凭据(见 `onDelivered`)。
-            try { await onDelivered?.(); } catch (error) {
-              console.error(`[ash] continueWhenIdle(${taskId}) 投递成功的回执处理失败:`, error);
-            }
+            // 真的交出去了。正常路径上「原话落盘」那一刻已经报过,这里只兜底:整轮都跑完了
+            // 却一声没报,说明这一轮走的是一条没经过那个点的投递路径 —— 它确实跑过,所以照样
+            // 报(否则持久意图会一直挂着),但要留一行日志,别让这条异常路静默下去。
+            if (!handed) console.error(`[ash] continueWhenIdle(${taskId}) 整轮已结束却没收到落盘回执，按已投递了结`);
+            await confirmDelivered();
             return;
           }
           try { await onError?.(outcome.message, outcome.failure); } catch { /* 上报失败不再连锁 */ }

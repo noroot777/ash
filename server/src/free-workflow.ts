@@ -45,6 +45,9 @@ import {
   redeliverReviewRound,
   reviewingRun,
 } from "./free-review-round.js";
+// 「这一轮的任务书还在等空闲回合窗口吗」只有内存那张表答得出(库里那一行分不出「有人排着」
+// 与「排的人没了」),对账的第一道闸要问它 —— 说明在 free-review-dispatch.ts 的 `armed`。
+import { reviewDispatchArmed } from "./free-review-dispatch.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { NO_REMINDER, type TurnReminder } from "./turn-prompt.js";
 import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
@@ -277,6 +280,19 @@ export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> 
       ? held.role === "reviewer" && (!held.review || held.review.run === run.id)
       : task.status === "running" || task.status === "queued";
     if (reviewerAlive) continue;
+    // **本进程还盯着这一轮的派发就什么都别碰** —— 它正排在回合锁的等待队列里等下一个空闲窗口。
+    // 「有人负责等待」不等于「没有在途工作」:下面每一条判据问的都是「还有没有东西能把它跑完」,
+    // 而这一轮的答案是「有,就是那条 waiter」—— 它只是还没轮到。并进「没有意图」那一档的代价
+    // 实测过:派审在释放点上输给一个 single 回合、已经合法排到第二次,而对方跑得久一点(或者
+    // 成为幽灵),下一拍对账就把这条链按孤儿收尸,约 30 秒后自己 failed,自动链照样断在那里
+    // (第 1 轮审查 F1)。
+    //
+    // 这一问排在**退役与收尸全部判据之前**,而不是跟补投那一档合在一处,为的是堵上重排的那段
+    // 空档:输掉一次之后、下一个 waiter 挂上之前,中间隔着「写时间线」和「写意图」两次 await
+    // (free-review-dispatch.ts 的 `hand`)。那段时间里 armed 是真的,但等待队列里一个人都没有
+    // —— 占锁者恰在此时放手,锁就会在「有人盯着」的同时空出来,于是 `retireHistoricalReview`
+    // 能抢到锁、把这条还活着的链按老审查退役掉(本进程的意图随后投给一条已死的 run)。
+    if (reviewDispatchArmed(run.id, run.currentRound)) continue;
     if (await retireHistoricalReview(task, { role: "reviewer", review: { run: run.id, round: run.currentRound } })) continue;
     // 已交卷（当前 round 有结论）且回合确实死了：直接补结算，不能因遗留的
     // question/等待态被永远跳过——那会让验收持续被 active review 409 挡住（审查实测）。
@@ -293,8 +309,8 @@ export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> 
     // 都挂在 reviewing),区别只在 round 上那份在途派发意图。上一个进程排着等空闲窗口、自己没了的
     // 那一轮,审查者压根没见过任务书,下面那条「已经没有任何东西能把它跑完」的收尸对它是误判:
     // 补投一次才是它该得的(判据与边界见 free-review-dispatch.ts / `redeliverReviewRound`)。
-    // 返回 false = 不该由这里补(本进程还盯着 / 没有意图 / 次数已用尽),照原路往下走。
-    if (round && await redeliverReviewRound(task, run, round)) continue;
+    // 返回 `none` = 没有在途意图,照原路往下走;`hold` = 有人负责了,这一拍什么都别做。
+    if (round && await redeliverReviewRound(task, run, round) !== "none") continue;
     if (round?.conclusion) {
       await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer");
       continue;

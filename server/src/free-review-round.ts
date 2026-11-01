@@ -14,7 +14,7 @@ import { freeReviewPrompt, freeReviewResumeMessage } from "./free-review-prompts
 import { freeReviewEvidenceDir } from "./free-review-files.js";
 // 「任务书交出去了没有」那一段(有界重排、意图落库、留痕)住在 free-review-dispatch.ts;
 // 依赖是单向的 —— 那边收 `onFail` 回调,不认识 failReviewStart,所以不成环。
-import { clearReviewDispatchIntent, dispatchReviewRound, reviewDispatchRecovery } from "./free-review-dispatch.js";
+import { claimReviewDispatch, dispatchReviewRound, releaseReviewDispatchClaim, reviewDispatchRecovery } from "./free-review-dispatch.js";
 import { evidenceState, restartRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
@@ -96,12 +96,34 @@ export async function stopReviewRunMonitors(runId: string, reason: string, stric
     });
 }
 
+/**
+ * 这一轮**起都没起来**:round 落 error、run 落 failed,写明原因。
+ *
+ * 开头那道闸是必须的:这个函数的几个调用点都挂在**异步**投递链上(抢锁失败、冻结撤回、补办
+ * 抛错),而「这一轮」在那期间完全可能已经有了结论 —— 迟到的失败收尾会把 `passed` 覆盖成
+ * `error`,界面上就是「审查通过」后面紧跟一句「审查启动失败」(第 1 轮审查 F3 实测)。所以只
+ * 认一种形状:那一轮此刻还停在 `reviewing`。轮次行压根不存在也放行 —— `nextRound` 建行失败
+ * 时正是这副样子,而那条 run 仍然必须落终态。
+ *
+ * 三处写入合在一个事务里(round 终态 + run 终态 + 清在途意图):进程死在中间的话,留下的会是
+ * 「终态已落、意图还挂着」—— 下一次对账据那份意图又去补投一条已经宣告失败的轮次。
+ */
 export async function failReviewStart(run: ReviewRunRow, message: string): Promise<void> {
   const at = now();
-  await db.update(freeReviewRounds).set({ status: "error", endedAt: at })
-    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
-  await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at })
-    .where(eq(freeReviewRuns.id, run.id));
+  const settled = await db.transaction(async (transaction) => {
+    const current = (await transaction.select().from(freeReviewRounds)
+      .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
+    if (current && current.status !== "reviewing") return false;
+    await transaction.update(freeReviewRounds).set({ status: "error", endedAt: at, dispatch: null })
+      .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
+    await transaction.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at })
+      .where(eq(freeReviewRuns.id, run.id));
+    return true;
+  }, { behavior: "immediate" });
+  if (!settled) {
+    console.error(`[ash] 迟到的审查启动失败不落账 run=${run.id} round=${run.currentRound}（这一轮已有结论）：${message}`);
+    return;
+  }
   await stopReviewRunMonitors(run.id, "这次审查启动失败，它挂的哨兵一并收回");
   await appendTaskTimeline(run.taskId, `${run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`}审查启动失败：${message}`);
   await cleanupAcceptedMergeRun(run);
@@ -136,11 +158,12 @@ export async function launchReviewRound(
     resumeSessionId?: string; retry?: boolean;
     /**
      * 上一个进程把这一轮交出去了、还没送进会话就没了 —— 这一次是**补投**(由
-     * `redeliverReviewRound` 传进来)。两处差别:时间线说的是「重新投递」而不是「审查开始」,
-     * 以及接着上一次的次数往下数(不是从 1 重新开始)。其余一概照常走 —— 证据目录、
-     * 合并结果 worktree、MCP 预检都是幂等的,任务书也必须按**此刻**的工作区重算。
+     * `redeliverReviewRound` 传进来)。三处差别:时间线说的是「重新投递」而不是「审查开始」,
+     * 接着上一次的次数往下数(不是从 1 重新开始),以及**会话策略照原派发重放**(见下面
+     * `freshSession`)。其余一概照常走 —— 证据目录、合并结果 worktree、MCP 预检都是幂等的,
+     * 任务书也必须按**此刻**的工作区重算。
      */
-    redeliver?: { attempts: number; since: string };
+    redeliver?: { attempts: number; since: string; freshSession: boolean };
   } = {},
 ): Promise<{ resumed: boolean }> {
   await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
@@ -180,6 +203,13 @@ export async function launchReviewRound(
   // 重跑分两档，差别不在按钮而在**送进去的那句话**：上下文还在就只说「接着做」（一条崩在
   // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。
   const resumed = !!opts.retry && !!opts.resumeSessionId && await reviewTurnResumable(task.id, opts.resumeSessionId);
+  // **会话策略由原派发定,补办只是重放它** —— 所以这里不能自己带上 `&& !opts.redeliver`:那样
+  // 新链第 1 轮、合并结果审查在补办时会从「新开一条空会话」变成「按 agentType+role 挑最近的
+  // 历史会话」(下游默认动作,不按 run 隔离),于是接进了上一条链的旧对话(第 1 轮审查 F4)。
+  // 原值跟着意图落库,补办时原样传回来(老行的回落见 `redeliverReviewRound`)。
+  const freshSession = opts.redeliver
+    ? opts.redeliver.freshSession
+    : !opts.retry && (run.currentRound === 1 || run.targetKind === "accepted_merge");
   const label = run.targetKind === "accepted_merge" ? "合并结果审查" : `自由工作流第 ${run.currentRound} 轮审查`;
   await appendTaskTimeline(task.id, opts.redeliver
     // 补投不写「审查开始」:那一句上一次已经写过了,再写一遍会让时间线读成开了两轮。
@@ -217,8 +247,7 @@ export async function launchReviewRound(
       // (第 10 轮审查 F1:旧审查者提交的哨兵被绑到新派的审查者上)。两样同在一个对象里,
       // 所以恢复那几条路也不可能只带到一半(本轮审查 F2)。
       turnSource: { role: "reviewer", review: { run: run.id, round: run.currentRound } },
-      freshSession: !opts.retry && !opts.redeliver
-        && (run.currentRound === 1 || run.targetKind === "accepted_merge"),
+      freshSession,
       resumeSessionId: opts.resumeSessionId,
       cwd,
       // 重跑这一路的预检查（freeReviewRetryBlocker）离真正拉起 CLI 很远，中间还要经过
@@ -230,6 +259,7 @@ export async function launchReviewRound(
     },
     resumeSessionId: opts.resumeSessionId,
     retry: opts.retry,
+    freshSession,
     attempts: opts.redeliver?.attempts,
     since: opts.redeliver?.since,
     onFail: (error) => failReviewStart(run, error),
@@ -250,38 +280,59 @@ export async function launchReviewRound(
  * ——证据目录 `evidenceState` 命中已有行就返回,合并结果 worktree 的 HEAD 对得上就原样复用,
  * MCP 预检只是问一句。
  *
- * 返回 false = 这一轮不该由这里补(没有在途意图 / 本进程还盯着它 / 次数已用尽),调用方照原路
- * 往下走。
+ * 三种回答,调用方据它决定要不要往下走:
+ *  · `none`    —— 这一轮没有在途意图,照原路对账;
+ *  · `hold`    —— 有在途派发而且有人负责(本进程正排队,或另一个恢复入口刚认领走):**什么都
+ *    别碰**,这一轮既不该补投也不该收尸;
+ *  · `handled` —— 这一次由这里处理了(补投出去了,或者次数用尽已落终态)。
  */
+export type ReviewRoundRecovery = "none" | "hold" | "handled";
+
 export async function redeliverReviewRound(
   task: TaskRow,
   run: ReviewRunRow,
   round: ReviewRoundRow,
-): Promise<boolean> {
+): Promise<ReviewRoundRecovery> {
   const verdict = reviewDispatchRecovery(run.id, round.round, round.dispatch);
-  if (verdict.kind === "none") return false;
+  if (verdict.kind === "none") return "none";
+  if (verdict.kind === "in-flight") return "hold";
   const { intent } = verdict;
   if (verdict.kind === "exhausted") {
     // 界用尽了才落终态,而且**说得出原因**:通用收尸那句「未能正常给出结论」会让用户以为审查者
-    // 跑过、没交卷,实际上它一个字都没收到。
-    // 清不掉也照旧落终态:failReviewStart 把 run 打成 failed,而对账只看 reviewing 的链,
-    // 那一行留着也不会再被谁捞起来补投。
-    await clearReviewDispatchIntent(run.id, round.round);
-    await failReviewStart(run, `任务书始终没能送进会话 —— 连续 ${intent.attempts} 次都没抢到空闲回合窗口（含服务重启后的补投），不再重试`);
-    return true;
+    // 跑过、没交卷,实际上它一个字都没收到。意图由 `failReviewStart` 在终态那一个事务里一并清掉。
+    //
+    // 措辞只说「排了几次队」而不说「输了几次」:`attempts` 记的是**已登记的尝试**,而最后一次
+    // 完全可能只排上队、还没等到释放点服务就断了 —— 那一次没有真的被谁抢走,说成「被抢 N 次」
+    // 就是把没发生的事算进去了。
+    await failReviewStart(run, `任务书始终没能送进会话 —— 已经排了 ${intent.attempts} 次队都没抢到空闲回合窗口（含服务重启后的补投），不再重试`);
+    return "handled";
   }
+  // **先同步认领,再做任何 await** —— 下面整条 `launchReviewRound` 是一长串异步准备,中途另一个
+  // 恢复入口(定时对账 / 单任务中断恢复 / 答复提问各有一条路)完全可能也读到「没人盯着」,于是
+  // 同一轮排两份任务书,而迟到那一份的失败回调又会去覆盖先那一份已经拿到的结论
+  // (第 1 轮审查 F3)。认领就是 `armed` 那张表,所以「谁在途」只有一个答案。
+  if (!claimReviewDispatch(run.id, round.round)) return "hold";
   // 次数接着上一次往下数:补投也是一次尝试,否则重启反复发生时这条链会永远重投下去。
   try {
     await launchReviewRound(task, run, {
       resumeSessionId: intent.resumeSessionId ?? undefined,
       retry: intent.retry,
-      redeliver: { attempts: intent.attempts, since: intent.since },
+      redeliver: {
+        attempts: intent.attempts,
+        since: intent.since,
+        // 老行(加这一位之前写下的意图)没有记会话策略,按原公式回落 —— 当初唯一会把它压成
+        // false 的就是补办自己,所以去掉那一项就是原值。
+        freshSession: intent.freshSession
+          ?? (!intent.retry && (run.currentRound === 1 || run.targetKind === "accepted_merge")),
+      },
     });
   } catch (error) {
     // 起不来就按原路收尾(round→error、run→failed、写明原因),和首次派发失败同一条出路。
+    // 认领要还回去:那一笔压根没排进等待队列,留着它只会让这一轮在本进程里永远「在途」。
+    releaseReviewDispatchClaim(run.id, round.round);
     await failReviewStart(run, error instanceof Error ? error.message : String(error));
   }
-  return true;
+  return "handled";
 }
 
 export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
