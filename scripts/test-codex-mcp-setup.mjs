@@ -6,6 +6,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { denyReadAcl } from "./acl-probe.mjs";
 import { parseCodexList, registerCodexMcp } from "./codex-mcp.mjs";
 import { IS_WINDOWS, which } from "./platform.mjs";
 
@@ -24,21 +25,6 @@ const removesInSandbox = (left, watch) => (name, home) => {
   writeFileSync(join(home, "config.toml"), left);
   return true;
 };
-
-/**
- * 在这台机器上给 `f` 设一条「某个具名账号禁止读取」的扩展 ACL,并给出怎么把它打印出来。
- * 设不上(文件系统不支持、没有这个命令)就返回 null,由调用方跳过并说明 —— 这种本机能力
- * 不该让回归整条红。
- */
-function denyReadAcl(f) {
-  const plan = process.platform === "darwin"
-    ? { set: ["chmod", ["+a", "user:nobody deny read", f]], show: ["ls", ["-le", f]], mark: "nobody deny read" }
-    : { set: ["setfacl", ["-m", "u:nobody:---", f]], show: ["getfacl", ["-c", f]], mark: "user:nobody:---" };
-  const show = () => spawnSync(plan.show[0], plan.show[1], { encoding: "utf8" }).stdout ?? "";
-  const put = spawnSync(plan.set[0], plan.set[1], { encoding: "utf8" });
-  if (put.status !== 0 || !show().includes(plan.mark)) return null;
-  return { show, mark: plan.mark, how: plan.set[0] };
-}
 
 try {
   assert.deepEqual(parseCodexList(0, '[{"name":"ash","enabled":false}]'), { ok: true, servers: [{ name: "ash", enabled: false }] });
@@ -128,6 +114,10 @@ try {
   }
   // codex 删不掉(沙盘里那份没变) → 两个名字并存也能用,如实报「没删掉」,不说「已迁移」。
   writeFileSync(file, `[mcp_servers.harness]\ncommand = "node"\n`);
+  // 上一格那次成功发布已经在固定名字上留了一份备份。**它是用户手里的旧版本,不许被盖掉**
+  // (本轮审查 F2:备份也是独占创建的自有对象,名字被占住就换一个唯一名字)。
+  const plainBackup = `${file}.bak-ash-setup`;
+  const keptEarlier = readFileSync(plainBackup, "utf8");
   const kept = registerCodexMcp({
     ...base,
     listServers: answers(listed("harness"), listed("harness", "ash")),
@@ -135,7 +125,9 @@ try {
   });
   assert.equal(kept.action, "added");
   assert.equal(kept.legacyLeft, true);
-  assert.equal(kept.backup, `${file}.bak-ash-setup`, "真写了就把备份在哪交出来");
+  assert.ok(kept.backup.startsWith(plainBackup), `真写了就把备份在哪交出来:${kept.backup}`);
+  assert.notEqual(kept.backup, plainBackup, "那个名字被上一次的备份占着 ⇒ 换一个唯一名字");
+  assert.equal(readFileSync(plainBackup, "utf8"), keptEarlier, "上一次那份备份一个字节都不许动");
 
   // **换上去那份要跟原来那份同身份**(审查第 3/4/5 轮)。现在一律就地写,但「身份」在两边
   // 由不同的东西构成(DACL / mode + 扩展 ACL + 链接),所以各自钉各自那几样。
@@ -216,7 +208,7 @@ try {
     } else {
       assert.equal(registerCodexMcp({ ...base, configFile: acled, listServers: answers(listed(), listed("ash")) }).action, "added");
       assert.match(readFileSync(acled, "utf8"), /\[mcp_servers\.ash\]/);
-      assert.ok(acl.show().includes(acl.mark), `那条禁读写完还得在:\n${acl.show()}`);
+      assert.deepEqual(acl.list(), acl.aces, `那条禁读写完还得在:\n${acl.show()}`);
     }
     // ⑦ 软链跟满 8 层还没到头(成环/异常长):定位不了就**不写**,别把中间那环换成普通文件
     //    (审查第 5 轮 N9:上一版返回当前这一环,于是 rename 把它替换掉了)。

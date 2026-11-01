@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
-import { registerKimiMcp } from "./kimi-mcp.mjs";
+import { HOST_SITES, registerHostMcp } from "./mcp-hosts.mjs";
 import { parseCodexList, registerCodexMcp } from "./codex-mcp.mjs";
 
 // setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
@@ -250,20 +250,27 @@ if (process.env.SKIP_MCP) {
     warn("没装 codex CLI,跳过它的 MCP 注册");
   }
 
-  const kimiBin = which("kimi") || (!IS_WINDOWS && which(join(process.env.KIMI_INSTALL_DIR || join(homedir(), ".kimi-code"), "bin", "kimi")));
-  if (kimiBin) {
+  // ── 其余各家 ───────────────────────────────────────────────────────────────
+  //
+  // 一张表走完(`mcp-host-sources.mjs` 的 `HOST_SITES`,`mcp-hosts.mjs` 转一手):claude 走它自己的 `mcp add`(那是它的
+  // 原生入口),codex 走 `codex-mcp.mjs`(发布前要让 codex 本人读一遍),**其余十二家都在
+  // 这里**。2026-10-30 之前这里只有 kimi 一家,所以换别的 agent 跑任务一律交不了卷。
+  //
+  // 只给**这台机器上真装了**的那几家写:没装就建目录等于在用户家里乱留垃圾。
+  for (const [agentType, site] of Object.entries(HOST_SITES)) {
+    const bin = site.bins.map((b) => which(b)).find(Boolean)
+      // kimi 的安装器不往 PATH 里放,官方装法是 `~/.kimi-code/bin`。
+      || (agentType === "kimi" && !IS_WINDOWS
+        ? which(join(process.env.KIMI_INSTALL_DIR || join(homedir(), ".kimi-code"), "bin", "kimi"))
+        : null);
+    if (!bin) continue;
     try {
-      const result = registerKimiMcp({
-        configDir: process.env.KIMI_CODE_HOME || join(homedir(), ".kimi-code"),
-        mcpEntry,
-        url: URL_BASE,
-      });
-      ok(`kimi:${result.added ? "已注册 ash MCP" : "已有 ash/harness MCP，不动它"} (${result.file})`);
+      const result = registerHostMcp({ agentType, mcpEntry, url: URL_BASE });
+      if (result.added) ok(`${agentType}:已注册 ash MCP (${result.file})`);
+      else warn(`${agentType}:${result.why || "没有写入"}`);
     } catch (error) {
-      warn(`kimi MCP 注册失败：${error.message}；手动接入见 docs/install.md`);
+      warn(`${agentType} MCP 注册失败：${error.message}；手动接入见 docs/install.md`);
     }
-  } else {
-    warn("没装 kimi CLI,跳过它的 MCP 注册");
   }
 }
 

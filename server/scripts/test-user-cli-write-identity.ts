@@ -8,15 +8,16 @@
  * 单独一个文件而不是塞进 `test-user-cli-mcp.ts`:那份已经 663 行,贴着单文件 700 行的上限。
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import {
   chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync,
-  readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+  readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ProbeOutcome } from "../src/ash-mcp-probe.js";
 import { ensureAshMcp } from "../src/auth/user-cli-mcp.js";
+import { REPO_DIR } from "../src/paths.js";
 
 // 不用临时库:这条 import 链(写入器 → 探测层 / TOML 扫描器 / 端口)一个字都不碰数据库,
 // 要是在这里 `releaseTmpDb()` 反而会把真的 data/ash.db 连上。
@@ -43,21 +44,15 @@ function bench() {
 const ensure = (dir: string, host: string) => ensureAshMcp(dir, "codex", host, async () => LISTS_ASH);
 
 /**
- * 给 `f` 设一条「某个具名账号禁止读取」的扩展 ACL,并给出怎么把它打印出来。设不上(文件系统
- * 不支持、没这个命令)就返回 null,由调用方跳过并说明 —— 这种本机能力不该让回归整条红。
+ * ACL 怎么探测、怎么比,在 `scripts/acl-probe.mjs` 里只有一份 —— 安装器那一侧的
+ * `test-codex-mcp-setup.mjs` 钉的是同一条不变量,而它在裸 Node 上跑、导不进 TS。
  *
  * 子进程只出现在**测试**里:被测的那个文件自己不许起进程(第 4 轮 F2,`test-user-cli-mcp.ts`
  * 第 ㉓ 组有结构断言钉着),所以写入器没法「读一下 ACL 再决定」,只能就地写把它整条留住。
  */
-function denyReadAcl(f: string) {
-  const plan = process.platform === "darwin"
-    ? { set: ["chmod", ["+a", "user:nobody deny read", f]], show: ["ls", ["-le", f]], mark: "nobody deny read" }
-    : { set: ["setfacl", ["-m", "u:nobody:---", f]], show: ["getfacl", ["-c", f]], mark: "user:nobody:---" };
-  const show = () => spawnSync(plan.show[0]!, plan.show[1] as string[], { encoding: "utf8" }).stdout ?? "";
-  const put = spawnSync(plan.set[0]!, plan.set[1] as string[], { encoding: "utf8" });
-  if (put.status !== 0 || !show().includes(plan.mark)) return null;
-  return { show, mark: plan.mark };
-}
+const { denyReadAcl } = await import(pathToFileURL(join(REPO_DIR, "scripts", "acl-probe.mjs")).href) as {
+  denyReadAcl: (f: string) => { show: () => string; list: () => string[]; aces: string[] } | null;
+};
 
 if (process.platform === "win32") {
   // Windows 上就地写：rename 换上去的新文件 ACL 继承父目录，原文件单独收紧过的 DACL 会当场
@@ -125,14 +120,17 @@ if (process.platform === "win32") {
     assert.equal(statSync(file).ino, ino, "inode 不许换");
     assert.match(readFileSync(twin, "utf8"), /\[mcp_servers\.ash\]/, "另一端跟着更新");
   }
-  // ⑤ 原来没有这个文件：新建那一路照旧(没有可抄的权限,按 umask 来)。
+  // ⑤ 原来没有这个文件：新建那一路**只给自己读**(0600)。这一档没有「原来那份」可抄,所以
+  //    不是就地写那条规矩在管 —— 是「这个文件装着 MCP 接法,别按 umask 摊开给同机器上别的
+  //    账号」。裸 Node 那侧(安装器)同口径,`mcp-publish-cases.ts` 第 ③ 组 ⒟ 和
+  //    `test-ash-mcp-registry.ts` 第 ③ 组各钉着自己那一边。
   {
     const { host, dir } = bench();
     const file = join(dir, "config.toml");
     const state = await ensure(dir, host);
     assert.equal(state.configured, true);
     assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/, "原来没有就新建一份");
-    assert.equal(statSync(file).mode & 0o777, 0o666 & ~process.umask(), "新建的按 umask 来,跟基线一致");
+    assert.equal(statSync(file).mode & 0o777, 0o600, "新建的只给自己读,不按 umask 摊开");
   }
   // ⑥ **扩展 ACL 也得留下** —— mode 相等不等于有效权限相等(审查第 5 轮 F1:macOS 上
   //    `user:nobody deny read` 随 rename 消失,mode 还是 420,只比 mode 一点看不出来,而那
@@ -148,7 +146,20 @@ if (process.platform === "win32") {
       const state = await ensure(dir, host);
       assert.equal(state.configured, true);
       assert.match(readFileSync(file, "utf8"), /\[mcp_servers\.ash\]/);
-      assert.ok(acl.show().includes(acl.mark), `那条禁读写完还得在:\n${acl.show()}`);
+      assert.deepEqual(acl.list(), acl.aces, `那条禁读写完还得在:\n${acl.show()}`);
+      // 顺手钉住**这个探测本身是灵敏的**:同一个路径被 rename 换掉时 ACL 会整条丢掉,那必须
+      // 比出不一样。否则哪天 `ls -le` 换了格式、一条 ACE 都解析不出来,这一组会在「两边都是
+      // 空」上静悄悄变成永远通过 —— 正是本轮要根治的那种坏法。探测是两份测试共用的
+      // (`scripts/acl-probe.mjs`),所以这条灵敏度断言也只放一份,放在这里。
+      const probe = join(dir, "probe.toml");
+      writeFileSync(probe, BEFORE, "utf8");
+      const canary = denyReadAcl(probe);
+      if (canary) {
+        const swap = join(dir, "probe-swap.toml");
+        writeFileSync(swap, BEFORE, "utf8");
+        renameSync(swap, probe);
+        assert.notDeepEqual(canary.list(), canary.aces, "rename 换掉文件就该比出 ACL 已经丢了");
+      }
     }
   }
   // ⑦ 软链跟满 8 层还没到头(成环/异常长)：定位不了就**不写**,别把中间那环换成普通文件

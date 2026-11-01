@@ -14,6 +14,7 @@ import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { db } from "../db/index.js";
 import { agents, projects, users, tasks } from "../db/schema.js";
 import { taskFileRoot } from "../file-browser.js";
+import { withoutTurnIdentity } from "../turn-identity.js";
 import { ChatBoundaryError, readOnlyChatTool, watchChatWorkspace, type ChatWorkspaceObserver } from "./boundary.js";
 
 export interface ChatInvocation {
@@ -103,7 +104,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
       prompt: withGlobalBrowserPolicy(prompt, "full"),
       extraArgs: (purpose === "assistant" || purpose === "side-authorization") && executor.type === "claude"
         ? ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-chrome"] : undefined,
-      env: { ...env, ASH_TASK_ID: undefined, ASH_TURN_TOKEN: undefined, ASH_DIRECTION_TOKEN: undefined },
+      env: withoutTurnIdentity({ ...env }),
     });
     signal.addEventListener("abort", abort, { once: true });
     process.once("exit", abort);

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
+import { ASH_TURN_IDENTITY_FILE, ASH_TURN_IDENTITY_PATH_DIR } from "@ash/shared/mcp";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-handoff-gate-"));
@@ -54,6 +55,13 @@ try {
   writeFileSync(`${log}.launch.json`, '{"phase":"armed","pid":1234}');
   mkdirSync(join(dirname(log), "accept-gate-gate-passed.source"));
   writeFileSync(join(dirname(log), "accept-gate-gate-passed.source", "private.txt"), "not a transfer artifact");
+  // 回合身份那个目录(给只继承 PATH 的 CLI 搭的桥,见 `@ash/shared/mcp` 的
+  // `ASH_TURN_IDENTITY_PATH_DIR`)里是**这一回合还能用的令牌**,接力是发到另一台机器 ——
+  // 一起打包就等于把身份递出去。下面那条 deepEqual 就是它的闸。
+  const identityDir = join(dirname(log), ASH_TURN_IDENTITY_PATH_DIR, "turn-abc");
+  mkdirSync(identityDir, { recursive: true });
+  writeFileSync(join(identityDir, ASH_TURN_IDENTITY_FILE),
+    JSON.stringify({ taskId, turnToken: "turn-abc", directionToken: "dir-abc" }));
   const history = await collectGateRuns(taskId);
   assert.equal(history.length, 2);
   assert.ok(history.every(run => !("pid" in run) && !("cwd" in run) && !("sourceFingerprint" in run)));
@@ -62,7 +70,7 @@ try {
   // 写到一半的 .part 一律留在本机 —— 带过去只会在对端造出假的进程身份。
   assert.deepEqual(artifacts.map(file => file.rel).sort(),
     ["accept-gate-gate-passed.log", "accept-gate-gate-passed.log.notes", "accept-gate-gate-passed.log.scene"],
-    "接力包里只剩命令原始输出 = 对端看不到停在哪一条（第 8 轮 F1 实例 A）");
+    "接力包里只剩命令原始输出 = 对端看不到停在哪一条（第 8 轮 F1 实例 A）；回合身份目录也不在里面");
   assert.deepEqual(await collectRunArtifactTexts(taskId, []), [], "gate logs are transferred but not scanned for attachments");
   const reportText = JSON.stringify({ attachment: join(root, "uploads", "artifact-only.txt") });
   writeFileSync(join(dirname(log), "report.json"), reportText);
