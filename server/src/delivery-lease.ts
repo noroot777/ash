@@ -56,11 +56,18 @@ import type { InputAcceptance } from "./executors/types.js";
  * 而「accepted 在补偿失败很多次之后仍然不许退回重投」这条不变量得接着真实投递链钉,按真实
  * 节奏钉一次要一分多钟(审查的端到端复现用了 63.7 秒)。真实运行一律用下面这份默认。
  */
-const RETRY_MS = (() => {
-  const raw = (process.env.ASH_DELIVERY_RETRY_MS ?? "").split(",")
-    .map((x) => Number(x.trim())).filter((x) => Number.isFinite(x) && x >= 0);
-  return raw.length ? raw : [200, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 15_000, 15_000];
-})();
+export const DEFAULT_RETRY_MS = [200, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 15_000, 15_000];
+/**
+ * **空段先剔掉再转数**(第 1 轮自由审查 F4,实测):`Number("")` 是 0,于是没设这个变量时
+ * `"".split(",")` 得到的那一个空段被读成 `[0]`,默认退避表一次都没用上 —— 存储一抖,补偿就按
+ * 毫秒连发、刷满日志。空串、纯空格、多余的逗号同理。
+ */
+export function parseRetryMs(raw: string | undefined): number[] {
+  const parsed = (raw ?? "").split(",").map((x) => x.trim()).filter((x) => x !== "")
+    .map(Number).filter((x) => Number.isFinite(x) && x >= 0);
+  return parsed.length ? parsed : DEFAULT_RETRY_MS;
+}
+const RETRY_MS = parseRetryMs(process.env.ASH_DELIVERY_RETRY_MS);
 
 export interface DeliveryLease {
   /** 接 `ContinueTaskOptions.onInputSettled`:初次与迟到都喂进来。 */
