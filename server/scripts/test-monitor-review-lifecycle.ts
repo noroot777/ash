@@ -27,6 +27,8 @@ const { afterSettlement, settleTaskStatus } = await import("../src/settle-status
 const { deliveryOptions, monitorWakeGuard } = await import("../src/pending-verdict.js");
 const { stopReviewRunMonitors } = await import("../src/free-review-round.js");
 const { monitorSourceGate } = await import("../src/monitor-session.js");
+const { evidenceState } = await import("../src/regression-evidence-lifecycle.js");
+const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
 
 /** 真实的 pause 路由：审查者按提示 `pause_task` 收尾走的就是它。 */
 const api = new Hono();
@@ -47,6 +49,14 @@ async function reviewInFlight(
   await db.insert(schema.freeReviewRounds).values({
     id: `round-${opts.runId}`, runId: opts.runId, round: 1, status: "reviewing", startedAt: now(),
   });
+  // 真实的审查轮**起跑时就落一行证据**(free-review-round.ts 的 `evidenceState`):代次、
+  // 目标身份、续跑交接全挂在它上面。夹具少这一行,整条链就两头都读不到这一轮:pause 写下的
+  // 检查点归属只能记成 `unknown`(task-wait-ownership.ts 的 `writerOrigin` 读不到 state),
+  // 结算这一侧 `reviewContinuationPending` 第一句 `!state` 直接判「没人在等」,于是审查者
+  // 刚挂好的哨兵连带这一轮一起被结掉 —— 那是夹具缺一行,不是产品回归。所以这里调生产那个
+  // 函数,别手写一行冒充。
+  const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+  await evidenceState(taskId, freeReviewEvidenceDir(taskId, opts.runId, 1), row);
   if (opts.live !== false) {
     await db.insert(sessions).values({
       id: `s-${opts.runId}`, taskId, role: "reviewer", agentType: opts.agentType ?? "codex",
