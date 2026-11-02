@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { readSource } from "../../scripts/read-source.mjs";
+import { readSource, readSourceChain } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { parseSessionOutput } from "@ash/shared";
@@ -252,7 +252,11 @@ for (const [chain, owner] of Object.entries(CHAIN_OWNER)) {
 ok("每条续跑链都有人负责清失效 id");
 
 for (const chain of ["orchestrator.ts", "team/session.ts", "duet/turn.ts"]) {
-  const code = readSource(join(SRC, chain));
+  // 按**这条链**读,不按单个文件读:这三样是入口,那段识别逻辑住在入口自己身上还是住在
+  // 它直接 import 的某个文件里,对要钉的契约没有区别 —— 而「单文件不超过 700 行就拆」是
+  // 硬规则,按文件名钉等于每次合规拆分都假红一次(readSourceChain 的注释里有这条的现场:
+  // single 那一路已经被拆进 turn-session-pick.ts)。
+  const code = readSourceChain(join(SRC, chain));
   assert.ok(code.includes("affectedCodexResumeVersion"), `${chain} 没在起跑前识别受影响的 Codex 会话`);
   // 第三个参数是**开这条会话的那个人**。少了它,多用户模式下守卫会去宿主机默认
   // CODEX_HOME 找 rollout,必然扑空 —— 而扑空是 fail-open,受影响的会话被静默放行。
@@ -269,7 +273,9 @@ for (const chain of ["orchestrator.ts", "team/session.ts", "duet/turn.ts"]) {
 }
 ok("single / team / duet 都在持久说明后替换受影响的 Codex 会话");
 
-const teamSessionCode = readSource(join(SRC, "team/session-consumer.ts"));
+// 同样按**链**读(见下面那三条入口旁边的理由):三条收尾路里 `retireLead` 那一条已经住进
+// 了 session-consumer 直接 import 的 team/lead-status.ts,按单文件数就只数得到两条。
+const teamSessionCode = readSourceChain(join(SRC, "team/session-consumer.ts"));
 assert.match(
   teamSessionCode,
   /async function closeLead[\s\S]*?updateOwnSession\([\s\S]*?if \(!persisted && dropSession\) dropNote = SESSION_DROP_PERSISTENCE_FAILED_NOTE/,
