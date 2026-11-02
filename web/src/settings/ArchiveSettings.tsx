@@ -5,6 +5,7 @@ import type { AppSettings, ProjectView, Task, TaskListItem } from "@ash/shared";
 import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import { ArrowCounterClockwise, Archive } from "@phosphor-icons/react";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
+import { CopyButton } from "../components/CopyButton.tsx";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { toggleArchive } from "../lib/archive.ts";
@@ -70,7 +71,19 @@ export function ArchiveSettings({ project, tasks, onTaskUpdated, notify }: {
       </section>
       <section className="settings-section"><h2>{archived.length} 个归档任务</h2><div className="settings-card settings-archive-card">
         {!archived.length && <div className="settings-empty"><Archive size={22} /><span>这里还没有归档任务。</span></div>}
-        {archived.map((task) => <article key={task.id}><span className="settings-archive-icon"><Archive size={14} /></span><div><b>{task.title}</b><small>{task.mode === "team" ? "团队" : task.mode === "duet" ? "讨论" : "任务"} · {task.archivedAt ? new Date(task.archivedAt).toLocaleString("zh-CN") : "归档时间未知"}</small></div><Button onClick={() => void restore(task)}><ArrowCounterClockwise size={13} />取回</Button></article>)}
+        {archived.map((task) => (
+          <article key={task.id}>
+            <span className="settings-archive-icon"><Archive size={14} /></span>
+            <div>
+              <b>{task.title}</b>
+              <small>
+                {task.mode === "team" ? "团队" : task.mode === "duet" ? "讨论" : "任务"} · {task.archivedAt ? new Date(task.archivedAt).toLocaleString("zh-CN") : "归档时间未知"} ·{" "}
+                <CopyButton className="settings-archive-id" value={task.id} label={task.id} ariaLabel="复制任务 id" />
+              </small>
+            </div>
+            <Button onClick={() => void restore(task)}><ArrowCounterClockwise size={13} />取回</Button>
+          </article>
+        ))}
       </div></section>
     </>
   );
