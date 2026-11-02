@@ -42,6 +42,7 @@ import { isAcceptingTask } from "./acceptance-lock.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
+import { acknowledgeTaskStart } from "./task-start-receipt.js";
 import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { assembleFreshPrompt } from "./turn-prompt.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
@@ -343,6 +344,19 @@ export async function runTask(
     const status = stopped ?? (goalHeld || (failedTask?.goalTurn && restored?.followUpFrom === "paused") ? "paused" : "failed");
     await setTaskStatus(taskId, status);
     await afterSettlement(taskId, status, false, false, "single", true, !stopped);
+    // **这一轮已经给出结论了,别再对调用方说「尚未启动」**。
+    //
+    // 启动回执平时由 `trackRun` → `adoptRun` 发(「真 agent 被消费循环接手」),所以 spawn
+    // 之前就抛错的那几类一个回执都没有,`queue-seat.ts` 于是回 409「任务未通过启动检查,尚未
+    // 启动,请稍后重试」。可走到这里时这一轮**已经收口**:诊断会话落了库、失败交代写进了
+    // 时间线、状态也落定了 —— 那句话两头都不对。界面上最常见的现场是给任务发一条带参数的
+    // `/status`:用户看到的是「尚未启动,请稍后重试」,而不是真正的原因「/status 不接受参数」,
+    // 而且重试一百次都是同一句。
+    //
+    // 所以在结算之后补一张回执:它答的是「这一次调用确实启动并跑完了」,不是「agent 起来了」。
+    // 回执没发的就只剩「start() 正常返回、却一个结论都没留下」那几类(早退),那时 409 仍然
+    // 对。放在 afterSettlement 之后,调用方拿到 202 时结论已经可读。
+    acknowledgeTaskStart(taskId);
   } finally {
     // 这一轮归谁:到 consumeSingleRun 认领之前都归起跑方,所以**失败出口必须连进程一起
     // 收掉**,只注销会留下一个没人读输出、停止按钮也碰不到的 CLI(第 1 轮审查 F1;三态

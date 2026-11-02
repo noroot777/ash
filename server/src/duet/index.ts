@@ -24,6 +24,7 @@ import { canSettleDuet as canSettle, duetConsensusBy as consensusBy, isDuetConse
 import { recordGateEvent, recordUserTurn } from "./timeline.js";
 import { runTurn, type Turn } from "./turn.js";
 import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "../auth/dispatch-gate.js";
+import { acknowledgeTaskStart } from "../task-start-receipt.js";
 import { runEnvForOwner } from "../auth/run-env.js";
 
 // duet 的所有权与 single 共用 runs.ts 那把单飞锁。这里原来是个模块内的 `running`
@@ -249,6 +250,12 @@ export async function runDuet(
   } catch (err) {
     failDuet(taskId, err);
   } finally {
+    // 这一轮已经给出结论(成败都落进了任务状态),对调用方就是「真的启动过」—— 把那张
+    // 启动回执补上。它平时由 `trackRun` 发,而 duet 在一个进程都没起就被闸拦下时压根走不到
+    // 那里,于是 `seatThenStart` 回 409「任务未通过启动检查,尚未启动,请稍后重试」:两头都
+    // 不对,而且重试多少次都是同一句。「一步都没跑」那一种在上面 `if (!turn) return false`
+    // 就分走了,走到这儿的每条出路都已经结算过。
+    acknowledgeTaskStart(taskId);
     releaseTurn(taskId, turn);
   }
   return true; // 取得所有权并跑完了(成败已落进任务状态),对调用方就是「真的启动过」
@@ -358,6 +365,12 @@ export async function resumeDuet(
   } catch (err) {
     failDuet(taskId, err);
   } finally {
+    // 这一轮已经给出结论(成败都落进了任务状态),对调用方就是「真的启动过」—— 把那张
+    // 启动回执补上。它平时由 `trackRun` 发,而 duet 在一个进程都没起就被闸拦下时压根走不到
+    // 那里,于是 `seatThenStart` 回 409「任务未通过启动检查,尚未启动,请稍后重试」:两头都
+    // 不对,而且重试多少次都是同一句。「一步都没跑」那一种在上面 `if (!turn) return false`
+    // 就分走了,走到这儿的每条出路都已经结算过。
+    acknowledgeTaskStart(taskId);
     if (!handedOff) releaseTurn(taskId, turn);
   }
   return true;
@@ -462,6 +475,12 @@ export async function resumeAtGate(
   } catch (err) {
     failDuet(taskId, err);
   } finally {
+    // 这一轮已经给出结论(成败都落进了任务状态),对调用方就是「真的启动过」—— 把那张
+    // 启动回执补上。它平时由 `trackRun` 发,而 duet 在一个进程都没起就被闸拦下时压根走不到
+    // 那里,于是 `seatThenStart` 回 409「任务未通过启动检查,尚未启动,请稍后重试」:两头都
+    // 不对,而且重试多少次都是同一句。「一步都没跑」那一种在上面 `if (!turn) return false`
+    // 就分走了,走到这儿的每条出路都已经结算过。
+    acknowledgeTaskStart(taskId);
     releaseTurn(taskId, turn);
   }
   return true;
