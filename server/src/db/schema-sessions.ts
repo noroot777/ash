@@ -182,6 +182,9 @@ export const sessions = sqliteTable("sessions", {
   usageReasoning: integer("usage_reasoning"),
   usageCostUsd: real("usage_cost_usd"),
   usageTurns: integer("usage_turns"),
+  // `usage_turns` 里有几轮记在哨兵唤醒的回合上。跟它同一笔入账里加(`usage.ts`),所以天然是
+  // 它的子集;历史由 `monitor-wake-turns-backfill.ts` 按 trace 里的用量事件补。
+  usageMonitorWakeTurns: integer("usage_monitor_wake_turns"),
   // ── 上下文水位（同一个文件里的 setSessionContext）────────────────────────
   // 上面那组是**累加**的流水，这三列是**覆盖**的水位：最近一次 API 调用带进模型
   // 的输入有多大。两者差着数量级（流水 18M / 水位 12 万），别拿流水去算「还剩
@@ -268,6 +271,15 @@ export const sessionTurns = sqliteTable(
      * 诊断价值(读端一律按 `outcome` 办)。
      */
     stallReason: text("stall_reason"),
+    /**
+     * 这一回合是**哨兵唤醒**起的(投递的是哨兵事件,不是人说的话)。报账时按回合身份问这一位,
+     * 决定这笔账记不记进 `sessions.usage_monitor_wake_turns`(`usage.ts`)。
+     *
+     * 开回合那一刻写(`openTurn`),而且只升不降:同一身份的行可能先由收尾那一下补插出来、
+     * 不知道这件事,迟到的开始信息再把它补上;开始行没落成时由欠账带着(`persistTurn` 合并)。
+     * 存量行由 `monitor-wake-turns-backfill.ts` 按转录里的唤醒回合回填。
+     */
+    monitorWake: integer("monitor_wake", { mode: "boolean" }).notNull().default(false),
   },
   (t) => ({
     taskIdx: index("session_turns_task_idx").on(t.taskId, t.startedAt),

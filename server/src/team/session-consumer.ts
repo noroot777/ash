@@ -189,7 +189,7 @@ async function consume(lead: Lead): Promise<void> {
       }
       else {
         const emittedEvent = event.kind === "usage"
-          ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId)
+          ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId, lead.turnStart)
           : event;
         flushTraceText();
         if (emittedEvent.kind === "system") {

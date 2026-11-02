@@ -373,4 +373,9 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 这一行意图代表的是哪一次接受(queue-advance-admission.ts)。旧行 NULL = 没有代次,
   // 按「谁观察到它、谁就按 NULL 条件了结」处理,不会被另一趟的代次条件误删。
   "ALTER TABLE queue_advance_intents ADD COLUMN generation TEXT",
+  // 这一回合是不是哨兵唤醒起的(见 schema-sessions.ts 同名列)。存量行由
+  // monitor-wake-turns-backfill.ts 按转录回填一次。
+  "ALTER TABLE session_turns ADD COLUMN monitor_wake INTEGER NOT NULL DEFAULT 0",
+  // usage_turns 里记在哨兵唤醒回合上的那几轮(见 schema-sessions.ts 同名列)。
+  "ALTER TABLE sessions ADD COLUMN usage_monitor_wake_turns INTEGER",
 ];

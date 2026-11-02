@@ -3,7 +3,7 @@
 // 串行、以及「打断与投递必须是同一个动作」,它们的理由都在下面那段注释里,跟事件消费循环
 // 放一起只会被淹掉(而且 session-consumer.ts 已经顶到 700 行上限)。
 import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
-import { nextTurnStart } from "../session-turns.js";
+import { bindTurnSource, nextTurnStart } from "../session-turns.js";
 import { holdTurn } from "./lead-turns.js";
 import type { Lead } from "./session-types.js";
 
@@ -33,7 +33,7 @@ export type LeadDelivery = { sent: boolean; interrupted: boolean; at: string | n
  * 调度者却要跑完整个旧回合才理他,steering 名存实亡(第 7 链第 2 轮审查 P1:codex 常驻一次
  * 只跑一个回合,忙时 send 只是进 waiting,真正转向必须 interrupt)。
  */
-export async function sendToLead(lead: Lead, text: string, opts: { steer?: boolean } = {}): Promise<LeadDelivery> {
+export async function sendToLead(lead: Lead, text: string, opts: { steer?: boolean; monitorWake?: boolean } = {}): Promise<LeadDelivery> {
   const delivery = (lead.sending ?? Promise.resolve()).then(async (): Promise<LeadDelivery> => {
     try {
       // 授权现读:开台时带的是「已授权 x.com」,后续消息若还注入默认拒绝,调度台收到的
@@ -57,7 +57,13 @@ export async function sendToLead(lead: Lead, text: string, opts: { steer?: boole
       // 只置 busy 不持有身份是不够的(第 8 轮那一版):旧回合的 turnEnd 可能恰好落在这里和
       // beginTurn 之间,那时队列里还没有这一轮,`releaseHeldTurn` 会把 busy 清回 false,消费
       // 者于是对新回合的第一条输出另开一个起点 —— 真实起点(投入这一刻)就此丢掉。
-      if (sent) holdTurn(lead, at);
+      //
+      // 来源跟身份同一刻绑上(哨兵唤醒,见 session-turns.ts「回合来源」):消费循环可能比
+      // beginTurn 那几次写库先读到这一轮的用量,这一位不在身份上就会被当成普通回合入账。
+      if (sent) {
+        bindTurnSource({ sessionId: lead.sessId, taskId: lead.taskId, startedAt: at, monitorWake: opts.monitorWake });
+        holdTurn(lead, at);
+      }
       return { sent, interrupted, at: sent ? at : null };
     } catch (error) {
       console.error(`[ash] team send(${lead.taskId}) failed:`, error);

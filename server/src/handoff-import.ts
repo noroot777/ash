@@ -438,6 +438,7 @@ async function importValidated(
     usageReasoning: s.usageReasoning,
     usageCostUsd: s.usageCostUsd,
     usageTurns: s.usageTurns,
+    usageMonitorWakeTurns: s.usageMonitorWakeTurns ?? null,
     contextUsed: s.contextUsed,
     contextWindow: s.contextWindow,
     contextWindowEstimated: s.contextWindowEstimated,

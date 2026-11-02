@@ -32,7 +32,7 @@ import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
-import { recordUserConversationTurn } from "./conversation-turn.js";
+import { isMonitorWakeTurn, recordUserConversationTurn } from "./conversation-turn.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
@@ -526,7 +526,11 @@ export async function continueTask(
     if (!sideTurn) void hintAshMcpForTurn({ taskId, agentType: agent, executorId: profileId, ownerUserId: runOwner ?? null, cwd, sessionId: sessId });
     if (handoffNotice) await clearHandoffNotice(taskId);
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
-    await openTurn({ sessionId: sessId, taskId, cwd, startedAt: turnStart });
+    await openTurn({
+      sessionId: sessId, taskId, cwd, startedAt: turnStart,
+      // 跟下面落转录那一句同一个判据:系统回合不落用户发言,也就不算唤醒。
+      monitorWake: !opts.system && isMonitorWakeTurn({ bySystem: opts.byBackend, monitorWake: opts.monitorWake }),
+    });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     if (opts.system) {
