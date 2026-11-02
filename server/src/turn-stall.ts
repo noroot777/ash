@@ -34,7 +34,27 @@
 // 同一件事,只有「怎么把上游在重试这件事说出来」各家不同。三条消费链(single-run / duet /
 // team)共用这一份,别再各内联一份;**也别在某个 adapter 里另抄一个计时器**。
 //
-// ── 各执行器喂进来的是什么(2026-10-30 盘点,看门狗只认 error 事件) ──────────────
+// ── 静默档(2026-11-02 补):一条进展都没有过 ─────────────────────────────────────
+// 上面那句「纯静默在这一层分辨不出『上游挂住』和『工具在跑』」只对**半途安静**成立。还有一种
+// 现场它分辨得很清楚:**这一轮从开始到现在,一条进展事件都没有过**。健康的回合不长这样 ——
+// 哪怕第一个动作就是一条跑半小时的命令,工具调用本身也是一条 `tool` 事件,瞬间就到;长思考
+// 有 reasoning 增量。零进展只有两种成因,而且都是坏的:回合输入压根没送进 agent,或者连接从头
+// 没建起来。
+//
+// 2026-11-02 任务 WfLfTjaGzcA8 就是前者(旧服务端死在「恢复线程」与「送出回合输入」之间,
+// 新服务端按 pid 接管了那个闲置进程):1.5 小时零输出、零报错,`willRetry` 一条都没有,所以
+// 上面那套「只认 error 事件」的判据**一拍都不会动**,界面一直显示「当前回合仍在进行」。
+//
+// 所以这一档的判据刻意收得极窄,窄到不可能误杀正常长回合:
+//   · 由消费链在**回合开始**时显式挂上(`watchTurnSilence`),起点取回合真实起点而不是挂上的
+//     那一刻 —— 接管回来的会话挂得晚,但它欠的时间是真欠的;
+//   · **第一条进展事件就摘掉它**(同 `isProgress` 那份判据,`session`/`context`/`system` 不算
+//     进展,这正是接管时唯一会出现的那种事件);
+//   · 阈值另一套、比错误档更宽(警告 10 分钟 / 熔断 45 分钟):纯静默是更弱的证据,宁可晚杀;
+//   · 期间**来了一条错误事件**就把它换成错误档那一份(`openStall`)—— 前提被推翻了,而且那边的
+//     口径校得更准;沿用静默档的起点会让它比错误档该有的时刻提早熔断。
+//
+// ── 各执行器喂进来的是什么(2026-10-30 盘点,错误档只认 error 事件) ──────────────
 // 按**错误什么时候发得出来**分三档,这三档决定了看门狗在哪几家身上真的有用:
 //   ① **活动期就发错误**(回合还在跑、进程还活着就发 —— 看门狗接得住的只有这一档):
 //      claude 的 `api_retry`(已抬成 `level:"notice"`,外加一个 waitTimer 专治「requesting
@@ -47,9 +67,9 @@
 //      的是另一种毛病:**报了错又不收尾**(反复报错却永不结束的回合,照总时长判抓不到)。
 //   ② **只在收尾时发错误**(`catalog/parsers.ts` 的共用 `finish()`:spawn 失败、非零退出、
 //      exit 0 却零输出、流没收尾)—— 全是验尸式的,那时回合已经结束,看门狗不参与。
-//   ③ **重试被咽掉、一个字都不发**(真正的盲区):pi 的 `auto_retry_*` 只落原始 trace 不进
-//      事件流(它自己的注释也写着「长时间重试时界面会显得静默」)。要补得先有真实样本,
-//      本轮没动。codex 主线程从前也在这一档,就是这次事故。
+//   ③ **重试被咽掉、一个字都不发**:pi 的 `auto_retry_*` 只落原始 trace 不进事件流(它自己的
+//      注释也写着「长时间重试时界面会显得静默」)。半途安静的那一半仍然是盲区(要补得先有真实
+//      样本);但这一轮**从头到尾**都没动静的那一半已经由上面的静默档盖住了,与执行器无关。
 // 结论:**判据与两档动手在这一份里,一处都不重复;而「我在等上游」要由各 adapter 说出来**
 // —— 落在第 ③ 档的那几家,这一层给不出结论也不会乱猜(纯静默不动手,见上面一段)。
 //
@@ -62,6 +82,7 @@ import { isExecutionNotice } from "./session-notice.js";
 import { producesWork } from "@ash/shared/waiting";
 import { markStallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import {
+  silentTurnTripText, silentTurnWarningText,
   stallEscalateText, stallResumeText, stallTripText, stallVolatileVerdictText, stallWarningText,
 } from "./turn-stall-text.js";
 import { now } from "./util.js";
@@ -155,6 +176,12 @@ export interface StallActions {
 }
 
 type Stall = StallFacts & {
+  /**
+   * 哪一档在盯它。两档的**判据、阈值和措辞都不同**,所以这一位不是装饰:
+   *   · `errors`  —— 自上次有进展以来只收到错误事件(原始那一档,起点 = 第一条错误);
+   *   · `silence` —— 这一轮一条进展事件都没有过(起点 = 回合真实起点,见文件头静默档那一节)。
+   */
+  kind: "errors" | "silence";
   owner: StallOwner;
   sinceMs: number;
   /** 已经**通知**过了(时间线/执行过程那一条)。一次性的,不重发。 */
@@ -208,6 +235,15 @@ function thresholds() {
     tripMs: num("ASH_STALL_TRIP_MS", 30 * 60_000),
     /** 熔断之后留给「这一轮真的结束」的宽限期,过了就回收句柄(见 StallActions.escalate)。 */
     graceMs: num("ASH_STALL_TRIP_GRACE_MS", 60_000),
+    /** 静默档·警告:回合开始这么久还没有过任何进展事件就报。 */
+    silentWarnMs: num("ASH_STALL_SILENT_WARN_MS", 10 * 60_000),
+    /**
+     * 静默档·熔断:同上,终止本回合。
+     *
+     * **刻意比错误档的 30 分钟宽**:那一档手里有几百条错误事件当证据,这一档只有「什么都没有」,
+     * 是更弱的证据 —— 同一个方向上的取舍(宁可晚杀不可早杀)在这里要再让一步。
+     */
+    silentTripMs: num("ASH_STALL_SILENT_TRIP_MS", 45 * 60_000),
   };
 }
 
@@ -325,6 +361,9 @@ export function trackTurnStall(
   if (!err) {
     // 第三档:既不是进展也不是错误(适配器的辅助通知)—— 一个字都不动,连 lastProgressKind
     // 都不记,否则熔断诊断会把「卡在哪一步」说成那句身份通知。
+    //
+    // **静默档靠的正是这一条**:重启接管时唯一会出现的事件就是 `session`(会话身份报一遍),
+    // 它在这里原地返回,所以那一轮仍然算「一条进展都没有」。
     if (!isProgress(event)) return;
     if (turnStartedAt) lastProgress.set(owner, { turn: turnStartedAt, kind: event.kind });
     if (stalls.size === 0) return; // 热路径(正文 delta)在这儿就走掉
@@ -349,7 +388,11 @@ export function trackTurnStall(
   if (!turnStartedAt) return;
   const held = stalls.get(sessionId);
   // 换台或换轮都从这一条重新起:新持有者报的第一条错误就是**认领**。
-  const stall = held && held.owner === owner && held.turnStartedAt === turnStartedAt
+  //
+  // **静默档也在这里换掉**(`kind !== "errors"`):一条错误事件推翻了它的前提(「什么都没有」),
+  // 而错误档的起点校得更准。沿用静默档那个起点(= 回合真实起点)会让熔断比错误档该有的时刻
+  // 提早整整一个「回合已经跑了多久」,正好踩在「宁可晚杀不可早杀」的反面。
+  const stall = held && held.owner === owner && held.turnStartedAt === turnStartedAt && held.kind === "errors"
     ? held
     : openStall(sessionId, owner, turnStartedAt, actions);
   stall.actions = actions;
@@ -360,14 +403,50 @@ export function trackTurnStall(
   evaluate(sessionId, stall);
 }
 
+/**
+ * **回合开始了,盯住「它到底有没有真的跑起来」** —— 静默档的入口(判据与取舍见文件头那一节)。
+ *
+ * 三条消费链在**开始消费这一轮的事件流之前**各调一次。幂等:同一条会话同一轮重复调是空转。
+ *
+ * 为什么必须由消费链显式挂、而不是等第一条事件来开:这一档要抓的恰恰是**一条事件都不来**的
+ * 回合 —— 事件驱动的开法在这种现场永远不会被触发,而那正是 2026-11-02 那次 1.5 小时零输出的
+ * 形状。起点取 `turnStartedAt`(回合真实起点)而不是此刻:重启接管回来的会话挂得晚,但它欠的
+ * 时间是真欠的,按此刻起算等于把已经静默掉的那段一笔勾销。
+ */
+export function watchTurnSilence(
+  sessionId: string,
+  owner: StallOwner,
+  turnStartedAt: string | null,
+  actions: StallActions,
+): void {
+  // 没有回合身份就不盯(同 trackTurnStall):记在一个与它无关的回合名下只会误杀。
+  if (!turnStartedAt) return;
+  // 起点读不出来也不盯 —— 拿一个 NaN 起点去算 elapsed 就是「见面就熔断」,比不盯坏得多
+  // (同 `num()` 对坏 env 的态度)。
+  if (!Number.isFinite(Date.parse(turnStartedAt))) return;
+  const held = stalls.get(sessionId);
+  // 已经在盯这一轮了(含接管回来、带着未兑现终止义务的那一条)→ 空转。
+  if (held && held.owner === owner && held.turnStartedAt === turnStartedAt) return;
+  // 别顶掉一条**还背着终止义务**的停滞:那份义务只有两个出口,摘牌不是其中之一(见
+  // trackTurnStall 里那段)。
+  if (held && held.trippedAtMs !== null) return;
+  // 这一轮已经有过进展(消费链晚挂、而事件先到) → 静默档压根没有适用对象。
+  if (lastProgress.get(owner)?.turn === turnStartedAt) return;
+  openStall(sessionId, owner, turnStartedAt, actions, "silence");
+}
+
 function openStall(
   sessionId: string,
   owner: StallOwner,
   turnStartedAt: string,
   actions: StallActions,
+  kind: "errors" | "silence" = "errors",
 ): Stall {
-  const at = now();
+  // 静默档的起点是**回合真实起点**(欠的时间从那时起算,接管回来挂得晚也不打折);错误档取
+  // 「第一条错误到达的时刻」,理由见下面那段。
+  const at = kind === "silence" ? turnStartedAt : now();
   const stall: Stall = {
+    kind,
     sessionId,
     taskId: actions.taskId,
     turnStartedAt,
@@ -428,14 +507,17 @@ function close(sessionId: string, stall: Stall): void {
 }
 
 function evaluate(sessionId: string, stall: Stall): void {
-  const { warnErrors, warnMs, tripMs, graceMs } = thresholds();
+  const { warnErrors, warnMs, tripMs, graceMs, silentWarnMs, silentTripMs } = thresholds();
+  const silent = stall.kind === "silence";
   stall.elapsedMs = Math.max(0, Date.now() - stall.sinceMs);
   const facts = factsOf(stall);
-  const warnDue = (warnErrors > 0 && stall.errors >= warnErrors) || (warnMs > 0 && stall.elapsedMs >= warnMs);
+  const warnDue = silent
+    ? silentWarnMs > 0 && stall.elapsedMs >= silentWarnMs
+    : (warnErrors > 0 && stall.errors >= warnErrors) || (warnMs > 0 && stall.elapsedMs >= warnMs);
   if (!stall.warned && warnDue) {
     stall.warned = true;
     try {
-      stall.actions.warn(stallWarningText(facts), facts);
+      stall.actions.warn(silent ? silentTurnWarningText(facts) : stallWarningText(facts), facts);
     } catch (error) {
       console.warn(`[ash] 落会话 ${sessionId} 的上游停滞警告失败:`, error);
     }
@@ -474,9 +556,10 @@ function evaluate(sessionId: string, stall: Stall): void {
     }
     return;
   }
-  if (tripMs <= 0 || stall.elapsedMs < tripMs) return;
+  const tripDue = silent ? silentTripMs : tripMs;
+  if (tripDue <= 0 || stall.elapsedMs < tripDue) return;
   stall.trippedAtMs = Date.now();
-  const verdict = stallTripText(facts);
+  const verdict = silent ? silentTurnTripText(facts) : stallTripText(facts);
   // **先把「这一轮失败」存住,再动手终止。** 顺序是刻意的,而且两层都靠它:
   //   · 同进程 —— trip 会杀进程,流随即结束、消费链当场走到收尾结算,那一刻它必须已经读得到
   //     这个结论(见 turn-stall-verdict.ts);

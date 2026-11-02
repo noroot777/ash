@@ -80,6 +80,27 @@ export function stallTripText(facts: StallFacts): string {
 }
 
 /**
+ * 静默档的文案(警告)。这一档的前提是**这一轮一条进展事件都还没有过**,所以措辞不提
+ * 「上游停滞」那套重试统计 —— 那边有错误事件可数,这边一个字都没有。
+ */
+export function silentTurnWarningText(facts: StallFacts): string {
+  return `〔回合无输出〕这一回合已经开始 ${minutes(facts.elapsedMs)},到现在一条模型输出、`
+    + "思考或工具调用都没有过。正常的长回合也会有安静的时候,但那是在它先说过些什么之后;"
+    + "一条都没有通常意味着这一轮的输入压根没送进 agent,或者连接从头就没建起来。"
+    + `会话 ${facts.sessionId},回合起于 ${facts.turnStartedAt}。`;
+}
+
+/** 静默档的文案(熔断):完整诊断 + 原始日志落点 + 阈值怎么调。 */
+export function silentTurnTripText(facts: StallFacts): string {
+  return `〔回合无输出·已自动终止本回合〕自 ${facts.turnStartedAt} 开始连续 ${minutes(facts.elapsedMs)}`
+    + "一条模型输出、思考或工具调用都没有过,判定这一轮压根没真正跑起来(最常见的两种:"
+    + "回合输入没送到 agent,以及连接从头没建起来),已终止本回合并按失败结算。\n"
+    + `原始事件流:${rawLogHint(facts)}(会话 ${facts.sessionId})\n`
+    + "可直接重试续跑。静默熔断时长由 ASH_STALL_SILENT_TRIP_MS 配置"
+    + "(默认 45 分钟,置 0 关闭);警告档是 ASH_STALL_SILENT_WARN_MS(默认 10 分钟)。";
+}
+
+/**
  * **一份上一次运行留下的判决,要怎么对用户讲** —— 共同那一句加判决原文,由这一处出。
  *
  * 为什么不许各处自己措辞(第 2 轮续聊自审):这条链上反复出事的形状就是**同一个结论在两处被

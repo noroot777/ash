@@ -35,7 +35,7 @@ import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verific
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
-import { clearTurnStall, trackTurnStall, type StallActions } from "../turn-stall.js";
+import { clearTurnStall, trackTurnStall, watchTurnSilence, type StallActions } from "../turn-stall.js";
 import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
 import { clearStallFailure } from "../turn-stall-verdict.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
@@ -323,6 +323,9 @@ export async function runTurn(args: {
       },
       resolve: (facts) => clearSessionStalled(taskId, rowId, facts.since),
     };
+    // 静默档同上(single-run.ts 同一句):讨论这一路也是一个句柄一个回合,零进展的发言跟
+    // 单飞是同一个毛病 —— 判据一个字都不在这儿,见 ../turn-stall.ts 文件头。
+    watchTurnSilence(rowId, handle, turnStart, stallActions);
     try {
       for await (const event of handle.events) {
         // 窄出口的「此刻还在等上游」同一处口径(见 session-waiting.ts):讨论这一路的正文

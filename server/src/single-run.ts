@@ -32,7 +32,7 @@ import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import {
-  clearTurnStall, resumeTrippedTurn, trackTurnStall, type StallActions,
+  clearTurnStall, resumeTrippedTurn, trackTurnStall, watchTurnSilence, type StallActions,
 } from "./turn-stall.js";
 import { stallUnverifiableText } from "./turn-stall-text.js";
 import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
@@ -305,6 +305,13 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       if (carried.kind === "tripped") resumeTrippedTurn(sessId, a.handle, a.turnStart, carried, stallActions);
       else emitTurnError(stallUnverifiableText(carried.reason));
     }
+    // **静默档**:这一轮到底有没有真的跑起来(判据见 turn-stall.ts 文件头那一节)。必须在这里
+    // 显式挂上、而不是等第一条事件来开 —— 它要抓的恰恰是一条事件都不来的回合。
+    //
+    // 这一句同时覆盖**接管回来的会话**:接管走的是同一条消费链(reattach.ts 调的就是这个函数),
+    // 而起点取库里那一轮的真实起点,所以重启前已经静默掉的那段照样算在里面。2026-11-02 那次
+    // 1.5 小时零输出就是接管出来的闲置进程,错误档一拍都不会动。
+    watchTurnSilence(sessId, a.handle, a.turnStart, stallActions);
     for await (const event of a.handle.events) {
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
       // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
