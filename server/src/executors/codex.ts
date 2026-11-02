@@ -236,6 +236,7 @@ export class CodexExecutor implements AgentExecutor {
           reviewTurnId: recovered.reviewTurnId,
           completedTurn: recovered.completedTurn,
           goal: recovered.goal,
+          evidence: recovered.evidence,
         },
         startProcess: () => child,
       });
