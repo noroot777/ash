@@ -5,13 +5,13 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TestProcessScope, disposeTestProcessResourcesSync, disposeTestScopesSync } from "./test-process-scope.mjs";
-import { cleanupTestResourcesSync, reportTestResourceError } from "./test-process-resources.mjs";
+import { cleanupTestResources, cleanupTestResourcesSync, reportTestResourceError, withTestResources } from "./test-process-resources.mjs";
 import native from "./test-process-native.cjs";
 
 const temporary = fs.mkdtempSync(join(tmpdir(), "ash-test-cleanup-"));
-const original = { spawnSync: childProcess.spawnSync, dispose: native.dispose, executable: native.executable, error: console.error };
+const original = { spawnSync: childProcess.spawnSync, dispose: native.dispose, executable: native.executable, invoke: native.invoke, error: console.error };
 const owned = [];
-try {
+await withTestResources(async () => {
   const fixture = join(temporary, "business-fixture");
   fs.mkdirSync(fixture);
   const businessError = Object.assign(new Error("BUSINESS_ASSERTION"), { code: "EBUSINESS", stdout: "BUSINESS_OUT", stderr: "BUSINESS_ERR" });
@@ -114,12 +114,16 @@ try {
   assert.equal(attempts, 1);
   initialization.remove();
   console.log("✓ 同一执行域初始化失败后保持原始诊断,重复启动不被 EEXIST 等次生错误替换");
-} finally {
-  childProcess.spawnSync = original.spawnSync;
-  native.dispose = original.dispose;
-  native.executable = original.executable;
-  console.error = original.error;
-  syncBuiltinESMExports();
-  for (const scope of owned) if (fs.existsSync(scope.directory)) scope.remove();
-  fs.rmSync(temporary, { recursive: true, force: true });
-}
+}, [
+  () => {
+    childProcess.spawnSync = original.spawnSync;
+    native.dispose = original.dispose;
+    native.executable = original.executable;
+    console.error = original.error;
+    native.invoke = (target, args) => args[1] === "retired-job" ? JSON.stringify({ exists: false, processes: [] }) : original.invoke(target, args);
+    syncBuiltinESMExports();
+  },
+  () => cleanupTestResources(owned.flatMap((scope) => [() => scope.stop(), () => scope.remove()])),
+  () => { native.invoke = original.invoke; },
+  () => fs.rmSync(temporary, { recursive: true, force: true }),
+]);

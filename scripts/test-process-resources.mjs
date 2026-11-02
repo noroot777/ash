@@ -13,6 +13,28 @@ export function cleanupTestResourcesSync(cleanups, operationError) {
     try { cleanup(); }
     catch (error) { cleanupErrors.push(error); }
   }
+  throwResourceErrors(operationError, cleanupErrors);
+}
+
+export async function cleanupTestResources(cleanups, operationError) {
+  const cleanupErrors = [];
+  for (const cleanup of cleanups) {
+    try { await cleanup(); }
+    catch (error) { cleanupErrors.push(error); }
+  }
+  throwResourceErrors(operationError, cleanupErrors);
+}
+
+export async function withTestResources(operation, cleanups) {
+  let result;
+  let operationError;
+  try { result = await operation(); }
+  catch (error) { operationError = error; }
+  await cleanupTestResources(cleanups, operationError);
+  return result;
+}
+
+function throwResourceErrors(operationError, cleanupErrors) {
   const errors = [operationError, ...cleanupErrors].filter(Boolean);
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) {

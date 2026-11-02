@@ -5,12 +5,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { syncBuiltinESMExports } from "node:module";
 import { runTestProcess } from "./test-process.mjs";
-import { TestProcessScope, delay } from "./test-process-scope.mjs";
+import { TestProcessScope, delay, disposeTestProcessResourcesSync } from "./test-process-scope.mjs";
+import { withTestResources } from "./test-process-resources.mjs";
 import { IS_WINDOWS, isPidAlive } from "./platform.mjs";
 
 const temporary = fs.mkdtempSync(join(tmpdir(), "ash-test-process-failures-"));
 const cleanup = fileURLToPath(new URL("test-process-cleanup.mjs", import.meta.url));
-try {
+await withTestResources(async () => {
   for (const timeout of [false, true]) {
     const marker = join(temporary, `marker-${timeout}`);
     const pid = join(temporary, `pid-${timeout}`);
@@ -60,17 +61,17 @@ try {
     child.once("error", (error) => { clearTimeout(timer); rejectReady(error); });
   });
   const fixture = ["-e", "process.send('ready'); setInterval(() => {}, 1000)"];
-  const firstChild = first.spawn(process.execPath, fixture, { stdio: ["ignore", "ignore", "pipe", "ipc"] });
-  const firstReady = ready(firstChild);
-  const child = second.spawn(process.execPath, fixture, { stdio: ["ignore", "ignore", "pipe", "ipc"] });
-  const secondReady = ready(child);
-  const hook = join(temporary, "cleanup-fault.cjs");
-  fs.writeFileSync(hook, `const fs = require('node:fs'); const write = fs.writeFileSync;
+  await withTestResources(async () => {
+    const firstChild = first.spawn(process.execPath, fixture, { stdio: ["ignore", "ignore", "pipe", "ipc"] });
+    const firstReady = ready(firstChild);
+    const child = second.spawn(process.execPath, fixture, { stdio: ["ignore", "ignore", "pipe", "ipc"] });
+    const secondReady = ready(child);
+    const hook = join(temporary, "cleanup-fault.cjs");
+    fs.writeFileSync(hook, `const fs = require('node:fs'); const write = fs.writeFileSync;
     fs.writeFileSync = function(target, ...args) {
       if (String(target) === ${JSON.stringify(join(first.directory, "stopped"))}) throw Object.assign(new Error('injected stopped EACCES'), { code: 'EACCES' });
       return write.call(this, target, ...args);
     }; require('node:module').syncBuiltinESMExports();`);
-  try {
     await Promise.all([firstReady, secondReady]);
     if (!IS_WINDOWS) fs.chmodSync(first.directory, 0o500);
     const output = await runTestProcess(process.execPath, [cleanup, first.directory, second.directory], {
@@ -82,12 +83,11 @@ try {
     assert.ok(!isPidAlive(child.pid), "第一域失败不能跳过第二域");
     assert.equal(fs.existsSync(second.directory), false);
     assert.equal(fs.existsSync(first.directory), true, "保留失败登记");
-  } finally {
-    fs.chmodSync(first.directory, 0o700);
-    await first.stop(); first.remove();
-    if (fs.existsSync(second.directory)) await second.stop();
-    second.remove();
-  }
+  }, [
+    () => { if (fs.existsSync(first.directory)) fs.chmodSync(first.directory, 0o700); },
+    () => first.stop(), () => first.remove(),
+    () => second.stop(), () => second.remove(),
+  ]);
   console.log("✓ 单域停止标记失败不短路其他域清理,失败记录保留");
 
   const originalWrite = fs.writeFileSync;
@@ -100,7 +100,8 @@ try {
     return originalWrite.call(this, target, ...args);
   };
   syncBuiltinESMExports();
-  try {
+  let failedScope;
+  await withTestResources(async () => {
     await assert.rejects(() => runTestProcess(process.execPath, ["-e", "console.log('BUSINESS_STDOUT'); console.error('BUSINESS_STDERR'); setInterval(() => {}, 1000)"], { timeout: 500 }), (error) => {
       assert.equal(error.code, "ETIMEDOUT");
       assert.match(error.stdout, /BUSINESS_STDOUT/);
@@ -110,13 +111,13 @@ try {
       assert.ok(error.errors.some(entry => /清理失败/.test(entry.message)));
       return true;
     });
-  } finally {
-    fs.writeFileSync = originalWrite;
-    syncBuiltinESMExports();
-    if (failedDirectory && fs.existsSync(failedDirectory)) {
-      const scope = new TestProcessScope(failedDirectory);
-      await scope.stop(); scope.remove();
-    }
-  }
+  }, [
+    () => { fs.writeFileSync = originalWrite; syncBuiltinESMExports(); },
+    () => { if (failedDirectory) failedScope = new TestProcessScope(failedDirectory); },
+    () => failedScope?.stop(), () => failedScope?.remove(),
+  ]);
   console.log("✓ 清理异常保留原超时/原因/诊断双流,并汇总清理失败");
-} finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+}, [
+  disposeTestProcessResourcesSync,
+  () => fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 }),
+]);

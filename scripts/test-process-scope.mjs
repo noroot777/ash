@@ -30,18 +30,15 @@ export class TestProcessScope {
     this.directory = directory ?? mkdtempSync(join(tmpdir(), "ash-test-scope-"));
     try {
       if (owned) writeFileSync(join(this.directory, "started"), String(Date.now()), { flag: "wx" });
-      else if (existsSync(this.directory)) {
-        readFileSync(join(this.directory, "started"), "utf8");
-        if (existsSync(join(this.directory, "domain.json"))) this.domain = JSON.parse(readFileSync(join(this.directory, "domain.json"), "utf8"));
+      else {
+        try { readFileSync(join(this.directory, "started"), "utf8"); }
+        catch (error) { if (error.code !== "ENOENT") throw error; }
+        try { this.domain = JSON.parse(readFileSync(join(this.directory, "domain.json"), "utf8")); }
+        catch (error) { if (error.code !== "ENOENT") throw error; }
       }
       this.domain = domain ?? this.domain;
       scopes.add(this);
     } catch (error) {
-      if (!owned && error.code === "ENOENT" && !existsSync(this.directory)) {
-        this.domain = domain ?? this.domain;
-        scopes.add(this);
-        return;
-      }
       if (owned) rmSync(this.directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 });
       throw error;
     }

@@ -14,7 +14,7 @@ import { IS_WINDOWS, capture, isPidAlive, sleep } from "./platform.mjs";
 import { restartCommand } from "./restart-options.mjs";
 import { runTestProcess } from "./test-process.mjs";
 import { disposeTestScopesSync, spawnTestFixture } from "./test-process-scope.mjs";
-import { cleanupTestResourcesSync, reportTestResourceError } from "./test-process-resources.mjs";
+import { cleanupTestResourcesSync, reportTestResourceError, withTestResources } from "./test-process-resources.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
@@ -312,7 +312,7 @@ createServer((request,response)=>{
   : {ok:true,pid:process.pid}));
 }).listen(${PORT},'127.0.0.1',()=>writeFileSync(${JSON.stringify(statePath)},JSON.stringify({pid:process.pid,agent:agent.pid})));`);
   const service = spawnTestFixture(process.execPath, [servicePath], { stdio: "ignore" });
-  try {
+  await withTestResources(async () => {
     for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt++) await sleep(100);
     if (!existsSync(statePath)) fail("CIM 故障用例的服务没有启动");
     const state = JSON.parse(readFileSync(statePath, "utf8"));
@@ -325,10 +325,7 @@ createServer((request,response)=>{
     if (output.includes("已就绪")) fail("CIM 失败却宣称重启成功", output);
     if (!isPidAlive(state.pid) || !isPidAlive(state.agent)) fail("CIM 失败时动了旧服务或受保护任务", output);
     console.log("✓ HTTP 判据成功但 CIM 查询失败时,完整 restart 在任何终止动作前中止");
-  } finally {
-    await service.dispose();
-    await sleep(200);
-  }
+  }, [() => service.dispose(), () => sleep(200)]);
 }
 
 // ── 「上一轮留下了单例锁」怎么说给用户听 ─────────────────────────────────────

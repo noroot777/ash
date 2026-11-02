@@ -5,6 +5,7 @@ import { windowsRestartTargets, windowsTerminateScript } from "./windows-restart
 import { IS_WINDOWS, killServerProcess, listProcesses } from "./platform.mjs";
 import { runTestProcess } from "./test-process.mjs";
 import { spawnTestFixture } from "./test-process-scope.mjs";
+import { withTestResources } from "./test-process-resources.mjs";
 
 const row = (pid, ppid, created, command = "node fixture.mjs") => ({ pid, ppid, created: String(created), command });
 const rows = [row(10, 1, 100), row(11, 10, 110), row(12, 10, 90), row(13, 12, 120), row(14, 11, 120)];
@@ -17,9 +18,9 @@ console.log("✓ 逐边排除陈旧父号,未知代次/命令行拒绝生成终�
 
 if (IS_WINDOWS) {
   const fixture = spawnTestFixture(process.execPath, ["-e", "setInterval(()=>{},1000);\nvoid 'tab\t汉字';"], { stdio: "ignore" });
-  await new Promise((resolve, reject) => { fixture.once("spawn", resolve); fixture.once("error", reject); });
   const original = childProcess.execFileSync;
-  try {
+  await withTestResources(async () => {
+    await new Promise((resolve, reject) => { fixture.once("spawn", resolve); fixture.once("error", reject); });
     for (const protect of [[], [fixture.pid]]) {
       let kills = 0;
       childProcess.execFileSync = (file, args, options) => {
@@ -45,9 +46,8 @@ if (IS_WINDOWS) {
     assert.doesNotThrow(() => process.kill(fixture.pid, 0), "代次不符时不能下刀");
     assert.equal(killServerProcess(fixture.pid), "selective");
     console.log("✓ 原生 Windows:查询失败不下刀,代次变化拒杀,绑定句柄正常终止");
-  } finally {
-    childProcess.execFileSync = original;
-    syncBuiltinESMExports();
-    await fixture.dispose();
-  }
+  }, [
+    () => { childProcess.execFileSync = original; syncBuiltinESMExports(); },
+    () => fixture.dispose(),
+  ]);
 }

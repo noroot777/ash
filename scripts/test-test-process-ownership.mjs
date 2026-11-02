@@ -9,10 +9,11 @@ import { TestProcessScope, delay, preservedPids, spawnTestFixture } from "./test
 import { runTestProcess } from "./test-process.mjs";
 import { isPidAlive } from "./platform.mjs";
 import native from "./test-process-native.cjs";
+import { withTestResources } from "./test-process-resources.mjs";
 
 const temporary = fs.mkdtempSync(join(tmpdir(), "ash-test-ownership-"));
 const original = { mkdtempSync: fs.mkdtempSync, writeFileSync: fs.writeFileSync, readFileSync: fs.readFileSync };
-try {
+await withTestResources(async () => {
   for (const code of ["ENOSPC", "EACCES"]) {
     const created = [];
     fs.mkdtempSync = (...args) => { const directory = original.mkdtempSync(...args); created.push(directory); return directory; };
@@ -114,7 +115,7 @@ try {
     assert.deepEqual(outputDirectories.filter((directory) => fs.existsSync(directory)), []);
     console.log("✓ 捕获文件缺失明确失败,不以空双流冒充收集成功,输出/域目录仍回收");
     const concurrent = new TestProcessScope();
-    try {
+    await withTestResources(async () => {
       const child = concurrent.spawn(process.execPath, ["-e", `
         const cp = require('node:child_process');
         for (let index = 0; index < 24; index++) cp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 100)'], { stdio: 'inherit' });
@@ -136,11 +137,11 @@ try {
       assert.equal(concurrent.records().length, 25);
       assert.deepEqual(await concurrent.active(), []);
       assert.equal(fs.readdirSync(concurrent.directory).some((name) => name.endsWith(".pending")), false);
-    } finally { await concurrent.stop(); concurrent.remove(); }
+    }, [() => concurrent.stop(), () => concurrent.remove()]);
     console.log("✓ Windows 25 进程并发不可变登记,只读取完整记录,无覆盖发布或占位协议");
 
     const ipcScope = new TestProcessScope();
-    try {
+    await withTestResources(async () => {
       const ipc = ipcScope.spawn(process.execPath, ["-e", "process.send('ready'); process.disconnect()"], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
       await new Promise((resolveReady, rejectReady) => {
         const timer = setTimeout(() => rejectReady(new Error("IPC fixture not ready")), 10_000);
@@ -148,13 +149,13 @@ try {
         ipc.once("error", (error) => { clearTimeout(timer); rejectReady(error); });
         ipc.once("exit", (status) => { clearTimeout(timer); rejectReady(new Error(`IPC fixture exited before ready: ${status}`)); });
       });
-    } finally { await ipcScope.stop(); ipcScope.remove(); }
+    }, [() => ipcScope.stop(), () => ipcScope.remove()]);
     console.log("✓ 原生根启动保持 Node IPC 消息通道");
 
     const crashed = new TestProcessScope();
     const crashReady = join(temporary, "crash-ready");
     const crashMarker = join(temporary, "crash-late");
-    try {
+    await withTestResources(async () => {
       crashed.spawn(process.execPath, ["-e", `
         const env = { ...process.env }; delete env.NODE_OPTIONS; delete env.ASH_TEST_PROCESS_SCOPE;
         require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(`
@@ -182,10 +183,7 @@ try {
       await crashed.stop();
       await delay(2200);
       assert.equal(fs.existsSync(crashMarker), false);
-    } finally {
-      if (crashed.holder?.exitCode === null && crashed.holder?.signalCode === null) await crashed.stop();
-      crashed.remove();
-    }
+    }, [() => crashed.stop(), () => crashed.remove()]);
     console.log("✓ 监督进程崩溃时启动器不延长 Job 句柄寿命,内核终止未登记后代且权威确认域已消失");
 
     const fixtureSource = fileURLToPath(new URL("test-process-native-fixture.cs", import.meta.url));
@@ -196,7 +194,7 @@ try {
     assert.ifError(compilation.error);
     assert.equal(compilation.status, 0, compilation.stderr);
     const churning = new TestProcessScope();
-    try {
+    await withTestResources(async () => {
       const root = churning.spawn(fixtureExe, ["churn", join(temporary, "unused-marker"), join(temporary, "unused-pid")], { stdio: "ignore" });
       let finished = false;
       const completion = new Promise((resolveExit, rejectExit) => {
@@ -211,7 +209,7 @@ try {
       }
       await completion;
       assert.ok(queries > 2);
-    } finally { await churning.stop(); churning.remove(); }
+    }, [() => churning.stop(), () => churning.remove()]);
     console.log("✓ 原生后代持续出生/退出期间重复查询不会耗尽无退避短循环,不能证明时仍明确失败");
     for (const mode of ["normal", "timeout", "chain"]) {
       const marker = join(temporary, `${mode}.marker`);
@@ -244,8 +242,9 @@ try {
     console.log("✓ 清空 preload/登记环境仍由内核持有所有后代");
 
     const sentinel = spawnTestFixture(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-    const stale = new TestProcessScope();
-    try {
+    let stale;
+    await withTestResources(async () => {
+      stale = new TestProcessScope();
       const root = stale.spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
       await new Promise((resolveExit, rejectExit) => { root.once("exit", resolveExit); root.once("error", rejectExit); });
       fs.writeFileSync(join(stale.directory, "stale.json"), JSON.stringify({ kind: "process", domain: stale.domain.name,
@@ -256,14 +255,10 @@ try {
       await stale.stop(); stale.remove();
       assert.ok(isPidAlive(sentinel.pid));
       assert.equal(fs.existsSync(stale.directory), false);
-    } finally {
-      if (fs.existsSync(stale.directory)) { await stale.stop(); stale.remove(); }
-      await sentinel.dispose();
-    }
+    }, [() => stale?.stop(), () => stale?.remove(), () => sentinel.dispose()]);
     console.log("✓ 陈旧 PID/错误出生代次登记不恢复归属,整域终止不触碰另一实例域,完成后立即退役");
   }
-} finally {
-  Object.assign(fs, original);
-  syncBuiltinESMExports();
-  fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 });
-}
+}, [
+  () => { Object.assign(fs, original); syncBuiltinESMExports(); },
+  () => fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 }),
+]);

@@ -239,8 +239,7 @@ public static class TestProcessNative {
       using (var gate = new Mutex(false, name + "-gate"))
       using (var stopped = new EventWaitHandle(false, EventResetMode.ManualReset, name + "-stopped")) {
         File.WriteAllText(Path.Combine(directory, "ready"), "ready");
-        while (WaitForSingleObject(owner, 20) == 258 && !stopped.WaitOne(0)
-          && Directory.Exists(directory) && !File.Exists(Path.Combine(directory, "release"))) {}
+        while (WaitForSingleObject(owner, 20) == 258 && !stopped.WaitOne(0)) {}
         Stop(job, stopped, gate);
         File.WriteAllText(Path.Combine(directory, "closed"), "closed");
       }

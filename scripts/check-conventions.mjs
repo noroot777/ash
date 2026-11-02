@@ -6,6 +6,7 @@ import { readdirSync, statSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { testCleanupViolations } from "./test-process-conventions.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "web/src");
@@ -123,6 +124,16 @@ for (const file of files) {
 }
 
 let failed = false;
+
+const cleanupHits = readdirSync(join(ROOT, "scripts"))
+  .filter((name) => /^test-.*\.mjs$/.test(name))
+  .flatMap((name) => testCleanupViolations(readFileSync(join(ROOT, "scripts", name), "utf8"), `scripts/${name}`));
+if (cleanupHits.length) {
+  failed = true;
+  console.error(`\n✗ 测试 finally 直接析构会遮盖原始错误并短路其他资源（${cleanupHits.length} 处）：`);
+  for (const hit of cleanupHits) console.error("   " + hit);
+  console.error("   test-process-resources.mjs 提供独立结算每项回收并保留原始错误的资源边界。\n");
+}
 
 // shell 脚本里 `$VAR` 紧跟非 ASCII 字符（典型：中文标点）会被 bash 吞掉一个字节
 // 当成变量名的一部分：macOS 的 bash 扫描标识符时不认多字节边界，于是
