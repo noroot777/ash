@@ -434,6 +434,9 @@ export function FreeWorkflowInspector({
 
           {disputedRound && disputedRun && notify && (
             <FreeReviewDisputeCard
+              // 一张卡 = 一条驳回：换成另一条（轮询、另一个窗口裁掉了这条）就整张重建，
+              // 开着的确认框、写了一半的要点都跟着旧那条走掉，不留给新那条。
+              key={`${task.id}:${disputedRun.id}:${disputedRound.round}`}
               taskId={task.id}
               run={disputedRun}
               round={disputedRound}

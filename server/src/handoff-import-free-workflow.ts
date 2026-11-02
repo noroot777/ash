@@ -125,8 +125,9 @@ export async function buildFreeWorkflowRows(
     // `disputeDeferredTaskId` 是机器本地外键（对端库里没有那行任务），不随载荷走——
     // 同 repairTaskId 的规矩，见 handoff-types.ts 顶部。
     disputeSummary: round.disputeSummary ?? null,
-    disputeReason: round.disputeReason ?? null,
-    disputeDeferReason: round.disputeDeferReason ?? null,
+    // 空串归一成 null：「没驳回」在本地库里只有一种写法（判据见 free-review-dispute.ts hasDispute）。
+    disputeReason: round.disputeReason || null,
+    disputeDeferReason: round.disputeDeferReason || null,
     disputeAt: round.disputeAt ?? null,
     disputeResolution: round.disputeResolution ?? null,
     disputeResolvedAt: round.disputeResolvedAt ?? null,

@@ -88,6 +88,14 @@ try {
   assert.equal(rows.rounds[0].runId, "run-1", "run id 原样保留，证据文件才对得上号");
   assert.equal(rows.events.length, 1);
 
+  // ⑤ 对端用空串表示「没驳回」：落地归一成 null，免得裁定闸认「有驳回」、界面认「没驳回」。
+  rows = await buildFreeWorkflowRows("t5-empty-dispute", {
+    ...payload({}),
+    runs: [{ ...run, rounds: [{ ...run.rounds[0], disputeReason: "", disputeDeferReason: "" }] }],
+  }, []);
+  assert.equal(rows.rounds[0].disputeReason, null, "空串驳回理由落地是 null");
+  assert.equal(rows.rounds[0].disputeDeferReason, null, "空串转出理由落地是 null");
+
   console.log("✓ 审查历史翻译:续轮预约不受审查者缺失影响，手动预约撤销留痕，本机外键各按各的规矩重解析");
 } finally {
   await releaseTmpDb();

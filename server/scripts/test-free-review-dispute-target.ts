@@ -8,7 +8,8 @@
 // ② 好几条待裁定时不带目标一律拒，目标已经不在待裁定之列也拒，不替用户挑；
 // ③ 老的「按意见修复」按钮只维持它修的那一轮自己的驳回；
 // ④ 辩论开场认目标，续段认开场记下的那一轮；转独立任务的时间线写对轮次；
-// ⑤ 驳回时间为空的老数据，服务端排序与界面上那张卡同一个兜底。
+// ⑤ 驳回时间为空的老数据，服务端排序与界面上那张卡同一个兜底；
+// ⑥ 理由是空串的老行：查询、CAS 与界面判「有没有驳回」同一个口径。
 //
 // 修复要真走到投递那一步（它就是被测对象），所以起跑链会跑到执行器边界：ASH_RUNS_DIR 指向
 // 临时目录时 spawn 一律被拦（executors/spawn.ts `guardAgentSpawn`），PATH 上再垫一个只会
@@ -41,7 +42,7 @@ try {
   } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { claimTurn } = await import("../src/runs.js");
-  const { openDisputeOf, resolveFreeReviewDispute } = await import("../src/free-review-dispute.js");
+  const { disputeFreeReview, openDisputeOf, resolveFreeReviewDispute } = await import("../src/free-review-dispute.js");
   const { startFreeReviewDebate } = await import("../src/free-review-debate.js");
   const { startManualFreeReviewRepair } = await import("../src/free-review-manual-repair.js");
   const { freeReviewReportPath } = await import("../src/free-review-files.js");
@@ -192,6 +193,17 @@ try {
   ]);
   assert.equal((await openDisputeOf("t-order"))?.round.id, "t-order-b-r1", "时间为空的那条按结束时间排");
 
+  // ── ⑥ 理由是空串的老行：查询、CAS 与 hasDispute 同一个判据——不算驳回，也不挡新的驳回 ──
+  await seed("t-empty", [{ run: "chain", round: 1 }]);
+  await db.update(freeReviewRounds).set({ disputeReason: "", disputeDeferReason: "" })
+    .where(eq(freeReviewRounds.id, "t-empty-chain-r1"));
+  assert.equal(await openDisputeOf("t-empty"), null, "空串不是一条等裁定的驳回（界面也不会给它卡）");
+  await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "t-empty"));
+  assert.equal(claimTurn("t-empty", "single"), true);
+  await disputeFreeReview("t-empty", { summary: "这条我不认，报告看错了文件。", reason: "看错了文件", deferReason: null });
+  assert.equal((await openDisputeOf("t-empty"))?.round.id, "t-empty-chain-r1", "空串挡不住真正写下的那条驳回");
+
+  console.log("✓ 驳回存在与否：SQL 查询、CAS 与界面同一个判据（空串不算）");
   console.log("✓ 裁定带目标：只裁那一条，修复按那一轮的报告与要点投递（旧链、历史轮、最新已通过都对）");
   console.log("✓ 好几条待裁定时不替用户挑；老按钮只维持它修的那一轮；辩论认目标；转出时间线写对轮次");
 } catch (error) {

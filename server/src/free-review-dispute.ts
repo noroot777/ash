@@ -39,7 +39,7 @@
 // ④ 提出之后停下来等人——与驳回共用同一条停顿，撤自动复审预约的规矩也共用。
 import type { FreeReviewDisputeResolution, FreeReviewDisputeTarget, Task } from "@ash/shared";
 import { MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE } from "@ash/shared/free-workflow";
-import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
@@ -125,6 +125,13 @@ export function hasDispute(round: ReviewRoundRow | null | undefined): boolean {
 }
 
 /**
+ * 同一个判据的 SQL 版：查询与 CAS 都用它，不各写一份 `IS NOT NULL`。两边口径一偏（老数据
+ * 或接力载荷里理由是空串），裁定闸按 SQL 认定「有驳回、等裁定」挡住预约，界面按
+ * `hasDispute` 认定「没驳回」不给卡——用户看得见「等裁定」，却找不到能裁的那一条。
+ */
+const disputeWritten = sql`(coalesce(${freeReviewRounds.disputeReason}, '') <> '' or coalesce(${freeReviewRounds.disputeDeferReason}, '') <> '')`;
+
+/**
  * 「执行者到底说了什么」——发给辩论双方的那一份完整材料。
  *
  * 必须**三段都带**，而且必须是一个函数：辩论提示原来直接取 `round.disputeReason!`，
@@ -169,7 +176,7 @@ async function unresolvedDisputes(taskId: string): Promise<{ run: ReviewRunRow; 
     .where(and(
       eq(freeReviewRuns.taskId, taskId),
       eq(freeReviewRuns.targetKind, "workspace"),
-      or(isNotNull(freeReviewRounds.disputeReason), isNotNull(freeReviewRounds.disputeDeferReason)),
+      disputeWritten,
       isNull(freeReviewRounds.disputeResolution),
       isNull(freeReviewRounds.disputeSupersededAt),
     ))
@@ -316,8 +323,7 @@ async function disputeFreeReviewHeld(
     .set({ disputeSummary: summary, disputeReason: reason || null, disputeDeferReason: deferReason, disputeAt: at })
     .where(and(
       eq(freeReviewRounds.id, round.id),
-      isNull(freeReviewRounds.disputeReason),
-      isNull(freeReviewRounds.disputeDeferReason),
+      not(disputeWritten),
     ))
     .returning({ id: freeReviewRounds.id });
   if (!written.length) throw new Error("这一轮意见已经驳回过了；还有话要说就等用户开辩论，别重复驳回");
@@ -412,7 +418,7 @@ export async function upholdDisputeOn(taskId: string, round: ReviewRoundRow): Pr
     .set({ disputeResolution: "upheld", disputeResolvedAt: now() })
     .where(and(
       eq(freeReviewRounds.id, round.id),
-      or(isNotNull(freeReviewRounds.disputeReason), isNotNull(freeReviewRounds.disputeDeferReason)),
+      disputeWritten,
       isNull(freeReviewRounds.disputeResolution),
       isNull(freeReviewRounds.disputeSupersededAt),
     ))
