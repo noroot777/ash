@@ -18,6 +18,7 @@ import { monitorsBlockingComplete } from "../src/task-complete-monitors.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "../src/transcript.js";
 import { id } from "../src/util.js";
 import { hasPendingDeliveryRecovery } from "../src/pending-delivery-recovery.js";
+import { recordTaskWait } from "../src/task-wait-ownership.js";
 import { tick } from "../src/schedules.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
@@ -333,6 +334,17 @@ try {
         const second = await eventMessage(taskId, `${label}_SECOND`);
         const checkpoint = `${label}_CHECKPOINT`;
         await db.update(tasks).set({ resumePrompt: checkpoint }).where(eq(tasks.id, taskId));
+        // 真实的检查点是 agent 在自己那一轮里 pause 出来的,**归属跟着落库**(生产的
+        // `recordTaskWait`)。裸写 `resume_prompt` 少了这一半:归属未知的那一格,只有在任务
+        // 身上「一点审查痕迹都没有」时才允许被动用(task-resume-prompt.ts 的
+        // `checkpointOwnershipUsable` 第三支),而下面 cancel 那一档为了把 `second` 的来源
+        // 做成失效,偏偏会在这个任务上插一条自由审查 run —— 于是交代被判成「可能是审查的」,
+        // 一直留在任务行上没人送(审计 2026-11-02:hits(checkpoint)=0,其余五档都正常)。
+        // 所以这里照生产那样记一笔普通回合的归属。
+        await db.transaction(async (transaction) => {
+          const row = (await transaction.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+          await recordTaskWait(transaction, row, "checkpoint", { kind: "ordinary" });
+        }, { behavior: "immediate" });
         if (fault === "prepare") {
           const { monitorWakeCheckpoint } = await import("../src/monitor-session.js");
           assert.ok(await monitorWakeCheckpoint(first));
@@ -363,12 +375,25 @@ try {
         const batch = dbClient.batch;
         let injected = 0;
         let readInjected = 0;
+        // 读故障只注入在**领到租约之后**那一段:这两档模拟的都是「批次已经归我了,接下来
+        // 那一问却读不到状态」,补偿(还租约)因此才有东西可做。领租约之前的那些读属于
+        // `beginPendingBatch` 自己的准入(`preparePendingCheckpointStart`),打中它只会让这一趟
+        // 压根不领批次。
+        let leased = false;
+        // `prepare` 档打的是**起跑资格那一问**(turn-entry-guard.ts 两处
+        // `pendingCheckpointBlockReason`,读的是这个任务未送达的续跑凭证),所以按它的谓词
+        // 认人。别改回「整行读任务」那种认法:取走检查点、回填检查点都会顺手
+        // `announceResumePrompt` → `publishTaskUpdated` 整行读一遍任务,而那一处的异常是
+        // 记完日志就咽掉的 —— 一次性注入花在那儿,要测的那条路永远不会发生
+        // (审计 2026-11-02:readInjected=1、injected=0,日志里只剩「实时通知失败」)。
+        const startGateRead = (sql: string) => /^select /i.test(sql)
+          && sql.includes('from "scheduled_messages"') && /"checkpoint_taken" is not null/i.test(sql);
         dbClient.execute = async function (statement, ...rest) {
           const sql = typeof statement === "string" ? statement : statement.sql;
           const args = typeof statement === "string" ? [] : statement.args;
           const own = Array.isArray(args) && args.includes(taskId);
-          if (!readInjected && own && ((fault === "checkpoint" && /^select "resume_prompt",/i.test(sql))
-            || (fault === "prepare" && /^select "id", "project_id",/i.test(sql)))) {
+          if (!readInjected && own && leased && ((fault === "checkpoint" && /^select "resume_prompt",/i.test(sql))
+            || (fault === "prepare" && startGateRead(sql)))) {
             readInjected += 1;
             throw new Error(`injected ${label} read`);
           }
@@ -394,7 +419,8 @@ try {
         };
         try {
           await dispatchPendingMessage(first, {
-            spans: { dueAt: Date.now(), busyMs: 0, queuedAt: Date.now() }, team, onClaim: () => {},
+            spans: { dueAt: Date.now(), busyMs: 0, queuedAt: Date.now() }, team,
+            onClaim: () => { leased = true; },
           });
           assert.equal(injected, 1);
           if (fault !== "release-once") await until("补偿失败后仍有主动重试者", async () => injected >= 3);
