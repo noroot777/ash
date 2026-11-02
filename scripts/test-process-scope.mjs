@@ -1,8 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import native from "./test-process-native.cjs";
 import { cleanupTestResourcesSync, reportTestResourceError } from "./test-process-resources.mjs";
@@ -23,25 +23,64 @@ function waitFile(path, failurePath) {
   }
 }
 
+function directoryOwnershipError(directory) {
+  return Object.assign(new Error(`拒绝清理无法确认归属的测试执行域目录: ${directory}`), { code: "EOWNERSHIP", directory });
+}
+
+function directoryIdentity(directory) {
+  try {
+    const stat = lstatSync(directory, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw directoryOwnershipError(directory);
+    return Object.freeze({ dev: String(stat.dev), ino: String(stat.ino) });
+  } catch (error) { if (error.code === "ENOENT") return null; throw error; }
+}
+
+function sameDirectory(expected, actual) {
+  return expected && actual && expected.dev === actual.dev && expected.ino === actual.ino;
+}
+
 export class TestProcessScope {
-  constructor(directory, domain) {
+  #directoryIdentity;
+
+  constructor(directory, domain, expectedDirectoryIdentity) {
     const owned = directory === undefined;
     this.children = [];
-    this.directory = directory ?? mkdtempSync(join(tmpdir(), "ash-test-scope-"));
+    Object.defineProperty(this, "directory", { value: resolve(directory ?? mkdtempSync(join(tmpdir(), "ash-test-scope-"))), enumerable: true });
     try {
+      const identity = directoryIdentity(this.directory);
+      if (identity && expectedDirectoryIdentity !== undefined && !sameDirectory(expectedDirectoryIdentity, identity)) throw directoryOwnershipError(this.directory);
+      let marked = owned;
       if (owned) writeFileSync(join(this.directory, "started"), String(Date.now()), { flag: "wx" });
       else {
-        try { readFileSync(join(this.directory, "started"), "utf8"); }
+        try {
+          if (!/^\d+$/.test(readFileSync(join(this.directory, "started"), "utf8"))) throw directoryOwnershipError(this.directory);
+          marked = true;
+        }
         catch (error) { if (error.code !== "ENOENT") throw error; }
-        try { this.domain = JSON.parse(readFileSync(join(this.directory, "domain.json"), "utf8")); }
+        try {
+          this.domain = JSON.parse(readFileSync(join(this.directory, "domain.json"), "utf8"));
+          if (!this.domain || typeof this.domain.name !== "string" || !this.domain.name
+            || typeof this.domain.executable !== "string" || !this.domain.executable) throw directoryOwnershipError(this.directory);
+          marked = true;
+        }
         catch (error) { if (error.code !== "ENOENT") throw error; }
       }
+      const temporaryScope = dirname(this.directory) === resolve(tmpdir()) && /^ash-test-scope-[a-zA-Z0-9]{6}$/.test(basename(this.directory));
+      if (identity && !marked && !temporaryScope && !sameDirectory(expectedDirectoryIdentity, identity)) throw directoryOwnershipError(this.directory);
+      this.#directoryIdentity = identity ?? (expectedDirectoryIdentity ? Object.freeze({ ...expectedDirectoryIdentity }) : null);
       this.domain = domain ?? this.domain;
       scopes.add(this);
     } catch (error) {
       if (owned) rmSync(this.directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 });
       throw error;
     }
+  }
+
+  get directoryIdentity() { return this.#directoryIdentity; }
+
+  assertDirectoryOwnership() {
+    const identity = directoryIdentity(this.directory);
+    if (identity && !sameDirectory(this.#directoryIdentity, identity)) throw directoryOwnershipError(this.directory);
   }
 
   initialize() {
@@ -146,10 +185,10 @@ export class TestProcessScope {
   async stop() {
     this.sealed = true;
     const errors = [];
-    if (existsSync(this.directory)) {
-      try { writeFileSync(join(this.directory, "stopped"), ""); }
-      catch (error) { if (error.code !== "ENOENT" || existsSync(this.directory)) errors.push(error); }
-    }
+    try {
+      this.assertDirectoryOwnership();
+      if (existsSync(this.directory)) writeFileSync(join(this.directory, "stopped"), "");
+    } catch (error) { if (error.code !== "ENOENT" || existsSync(this.directory)) errors.push(error); }
     if (this.domain) {
       try { native.invoke(this.domain.executable, ["stop", this.domain.name]); } catch (error) { errors.push(error); }
     }
@@ -168,6 +207,7 @@ export class TestProcessScope {
   }
 
   remove() {
+    this.assertDirectoryOwnership();
     const state = this.state();
     if (state.exists) {
       if (state.processes.length) throw new Error("不能回收尚有活动进程的执行域");
@@ -207,7 +247,9 @@ export function preservedPids(scope, scripts, capturedStreams, active) {
 export function disposeTestScopesSync() {
   if (!scopes.size) return;
   const domains = new Map();
-  for (const scope of scopes) if (!domains.has(scope.directory) || scope.domain) domains.set(scope.directory, { directory: scope.directory, domain: scope.domain });
+  for (const scope of scopes) if (!domains.has(scope.directory) || scope.domain) domains.set(scope.directory, {
+    directory: scope.directory, domain: scope.domain, directoryIdentity: scope.directoryIdentity,
+  });
   const pending = [...domains.values()]
     .filter(({ directory }) => !cleanupFailures.has(directory));
   let processError;

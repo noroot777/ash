@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 const errors = [];
 const retired = [];
 const pending = process.argv.length > 2 ? process.argv.slice(2).map((directory) => ({ directory })) : JSON.parse(readFileSync(0, "utf8"));
-for (const { directory, domain } of pending) {
+for (const { directory, domain, directoryIdentity } of pending) {
   try {
-    const scope = new TestProcessScope(directory, domain);
+    const scope = new TestProcessScope(directory, domain, directoryIdentity);
     await scope.stop();
     scope.remove();
     retired.push(directory);
