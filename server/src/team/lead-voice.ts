@@ -7,6 +7,7 @@ import { noteAgentEventUpload } from "../uploads.js";
 import type { Lead } from "./session-types.js";
 import type { StallActions } from "../turn-stall.js";
 import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
+import { noteTurnProgress } from "../turn-progress-mark.js";
 
 // 一台调度台**对外说话的三个出口**：实时 SSE（`publish`）、执行过程面板（`traceLead`）、
 // 以及会话正文 `.md`（`writeTurn` / `writeRunError`）。
@@ -136,6 +137,11 @@ export function leadStallActions(
       if (lead.retired) return Promise.resolve(true);
       return markSessionStalled(lead.taskId, lead.sessId, facts.since);
     },
+    // 「这一轮产出过东西」这个事实必须留在进程之外:接管回来的台看不到重启前那一段
+    // (理由与实测见 ../turn-progress-mark.ts 文件头)。返回落盘确认了没有 —— 看门狗据此
+    // 在下一条进展事件上重试。摘过牌的台不写:这条会话现在归接管的那台(同 project 那道闸)。
+    noteProgress: () => !lead.retired && !!lead.turnStart
+      && noteTurnProgress(lead.taskId, lead.sessId, lead.turnStart),
     trip: (text) => {
       diagnose(text);
       lead.handle.interrupt();

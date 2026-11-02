@@ -44,6 +44,7 @@
  *     （第 2 轮审查 F1）。
  */
 import { clearTurnActive, markTurnActive } from "../session-turns.js";
+import { openTurnProgress } from "../turn-progress-mark.js";
 import type { Lead } from "./session-types.js";
 
 /**
@@ -56,12 +57,30 @@ import type { Lead } from "./session-types.js";
  */
 const closedScopes = new WeakSet<Lead>();
 
-/** 队首 = 执行器此刻在跑的那一轮。`Set` 保持插入序，所以它就是最早那个还没结束的身份。 */
+/**
+ * 队首 = 执行器此刻在跑的那一轮。`Set` 保持插入序,所以它就是最早那个还没结束的身份。
+ *
+ * 顺手记下**它什么时候成为队首**(`frontSince`):静默档的钟要从这一刻起算,不能从这一轮的
+ * 身份(= 投入那一刻)起算 —— 常驻台是串行跑回合的,用户插话那一轮可能在队里排了半小时,
+ * 按身份起算就是「刚轮到它就已经超时」,当场误杀。只有**排过队**的那一轮才需要这个偏移:
+ * 从一开始就是队首的(投入时手上没有别的回合、以及接管回来那一路)保留它的真实起点,
+ * 那样重启前已经静默掉的那一段照样算在里面(同 single-run 的口径)。
+ */
 function adoptFront(lead: Lead): void {
   const front: string | undefined = lead.held?.values().next().value;
+  const changed = front !== undefined && front !== lead.turnStart;
   lead.busy = front !== undefined;
   lead.turnStart = front ?? null;
+  if (front === undefined) { lead.frontSince = null; return; }
+  if (changed) lead.frontSince = queuedBehindFront.has(front) ? new Date().toISOString() : front;
+  queuedBehindFront.delete(front);
 }
+
+/**
+ * 入队时**后面还有别人在跑**的那些身份(= 它排过队)。清在 `adoptFront` 里:轮到它的那一刻
+ * 这件事就用完了。WeakSet 装不了字符串,所以用 Set,而它的生命周期只有「从入队到成为队首」。
+ */
+const queuedBehindFront = new Set<string>();
 
 /**
  * 这台开始持有 `at` 这个回合身份 —— 投入的那一刻就调（`sendToLead` 收下消息之后、
@@ -89,7 +108,16 @@ export function holdTurn(lead: Lead, at: string): boolean {
   // **先问身份层,再入队**。顺序反了就是 F2 那个形状：队列收下了、活动册拒了,两份账从此
   // 不一致 —— 多出来的那个队首会被下一次结束消耗,真正在跑的那一轮永远注销不掉。
   if (!markTurnActive({ sessionId: lead.sessId, taskId: lead.taskId, startedAt: at })) return false;
+  // 入队时手上已经有在跑的回合 = 这一轮要排队。静默档的钟据此从「轮到它」那一刻起算,
+  // 而不是从投入那一刻(见 adoptFront)。
+  if (held.size) queuedBehindFront.add(at);
   held.add(at);
+  // **本进程开了这一轮**:落下静默档要的那份参与证明(判据与实测见 ../turn-progress-mark.ts)。
+  //
+  // 放在这儿而不是三个调用点各写一句:这是持有的唯一赋值处,新调用点漏不掉。常驻台这条链上
+  // 「持有 = 本进程开的」恒成立 —— 团队回合不走进程接管(重启后是 `openLead` 重新 spawn 并
+  // resume,见 restartImpact 把 team 归进 `resumes`),所以这里不需要单飞那条链的 `adopted` 闸。
+  openTurnProgress(lead.taskId, lead.sessId, at);
   adoptFront(lead);
   return true;
 }

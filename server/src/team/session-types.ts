@@ -25,6 +25,11 @@ export interface Lead {
    */
   turnStart: string | null;
   /**
+   * 队首那一轮**什么时候轮到它的**(静默档的钟从这一刻起算,见 lead-turns.ts 的 adoptFront)。
+   * 没排过队的那一轮 = 它自己的起点;null = 手上一个回合都没有。
+   */
+  frontSince?: string | null;
+  /**
    * 这台**此刻持有**的回合身份队列（`started_at`,`Set` 的插入序即投入顺序）。只由
    * `lead-turns.ts` 读写,别处不碰。
    *
