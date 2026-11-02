@@ -145,10 +145,13 @@ async function initializeServer() {
       + `Claude ${usageRepair.repairedClaudeSessions} 条，证据不足跳过 ${usageRepair.skippedSessions} 条`,
     );
   }
-  // 只影响「N 轮里几轮是哨兵唤醒」那一行拆分,失败就下次启动再来,不拦启动。
+  // 只影响「N 轮里几轮是哨兵唤醒」那一行拆分,没做完就下次启动再来,不拦启动。
   try {
     const wakes = await (await import("./monitor-wake-turns-backfill.js")).backfillMonitorWakeTurns();
-    if (!wakes.alreadyApplied) console.log(`[ash] 哨兵唤醒回合已回填：${wakes.sessions} 条会话、${wakes.turns} 轮`);
+    if (!wakes.alreadyApplied) {
+      console.log(`[ash] 哨兵唤醒回合已回填：${wakes.sessions} 条会话、${wakes.turns} 轮`
+        + (wakes.retry ? `；${wakes.retry} 条会话这次没读到证据，下次启动再补` : ""));
+    }
   } catch (error) {
     console.warn(`[ash] 哨兵唤醒回合回填失败（下次启动重试）: ${String(error)}`);
   }

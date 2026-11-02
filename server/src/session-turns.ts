@@ -98,8 +98,9 @@ export function unconfirmedTurns(sessionId: string): number {
 
 function rememberUnconfirmed(input: TurnStartInput): void {
   const { sessionId, taskId, cwd, startedAt } = input;
-  const who = { taskId, cwd: cwd ?? null, monitorWake: !!input.monitorWake };
   const seen = unconfirmed.get(sessionId);
+  // 「哨兵唤醒」同身份只升不降:另一次不带它的失败重放不许把先记下的那一位覆盖掉。
+  const who = { taskId, cwd: cwd ?? null, monitorWake: !!input.monitorWake || !!seen?.get(startedAt)?.monitorWake };
   if (seen) seen.set(startedAt, who);
   else unconfirmed.set(sessionId, new Map([[startedAt, who]]));
 }
@@ -136,6 +137,14 @@ async function flushUnconfirmed(sessionId: string): Promise<void> {
  * 恢复的事实继续被算成缺口,整条会话寿命被重新算进候选区间,停工期间别人在同一个目录里做的东西
  * 又被收进来,面板还说「有一次连开始都没留下记录」（第 2 轮审查 F3）。
  */
+/**
+ * 这个身份欠着的开始意图里记着「哨兵唤醒」吗。开始行还没落成时,报账(`usage.ts`)和收尾补插
+ * 都只能从这里知道这件事。
+ */
+export function pendingMonitorWake(sessionId: string, startedAt: string): boolean {
+  return !!unconfirmed.get(sessionId)?.get(startedAt)?.monitorWake;
+}
+
 function confirmTurn(sessionId: string, startedAt: string): void {
   const owed = unconfirmed.get(sessionId);
   if (!owed) return;
@@ -319,16 +328,6 @@ export async function turnOutcomesForTask(taskId: string): Promise<Map<string, T
   return new Map(read.rows.map((row) => [`${String(row.session_id)}@${String(row.started_at)}`, readOutcome(row.outcome)]));
 }
 
-/** 一个任务名下每条会话有几轮是哨兵唤醒起的。没有唤醒的会话不在表里。 */
-export async function monitorWakeTurnsForTask(taskId: string): Promise<Map<string, number>> {
-  const read = await dbClient.execute({
-    sql: `SELECT session_id, COUNT(*) AS n FROM session_turns
-            WHERE task_id = :tid AND monitor_wake = 1 GROUP BY session_id`,
-    args: { tid: taskId },
-  });
-  return new Map(read.rows.map((row) => [String(row.session_id), Number(row.n)]));
-}
-
 /** 一个回合的身份,加上落这一行所需要的其余事实。 */
 type TurnStartInput = {
   sessionId: string;
@@ -462,7 +461,10 @@ async function persistTurn(
   close: TurnClose | null = null,
   fresh = false,
 ): Promise<TurnWrite> {
-  const wrote = await writeTurnRow(input, close, fresh);
+  // 欠账里记着的来源事实由这里合进去,不靠调用方知道:收尾补插那一路不知道这一轮是不是唤醒,
+  // 而它落成之后紧接着就要划掉那笔欠账 —— 不在这里合,那一位就跟着欠账一起没了。
+  const monitorWake = !!input.monitorWake || pendingMonitorWake(input.sessionId, input.startedAt);
+  const wrote = await writeTurnRow({ ...input, monitorWake }, close, fresh);
   confirmTurn(input.sessionId, input.startedAt);
   return wrote;
 }

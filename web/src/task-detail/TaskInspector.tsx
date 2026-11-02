@@ -35,10 +35,10 @@ function InspectorRow({
   return <div className={`task-inspector-row${danger ? " is-danger" : ""}`}><span>{label}</span><div>{children}</div></div>;
 }
 
-// 「N 轮」里被哨兵叫醒的那几轮只在悬停里拆开；唤醒数按轮数封顶（账本修复可能改过轮数）。
+// 「N 轮」里被哨兵叫醒的那几轮只在悬停里拆开。服务端在同一笔入账里数这两个数，M 本来就是 N 的子集。
 function UsageLine({ label, usage, wakes, showLabel }: { label: string; usage: TokenUsage; wakes: number; showLabel: boolean }) {
   const tip = useHoverTip();
-  const note = usage.turns && wakes > 0 ? `${usage.turns} 轮，其中哨兵唤醒 ${Math.min(wakes, usage.turns)} 轮` : null;
+  const note = usage.turns && wakes > 0 ? `${usage.turns} 轮，其中哨兵唤醒 ${wakes} 轮` : null;
   return (
     <>
       <span

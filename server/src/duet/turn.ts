@@ -331,7 +331,7 @@ export async function runTurn(args: {
         trackTurnStall(rowId, handle, turnStart, event, stallActions);
         const sessionNotice = isSessionScopeNotice(event);
         const emittedEvent = event.kind === "usage"
-          ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
+          ? await recordSessionUsageEvent(rowId, event, executor.type, cliId, turnStart)
           : event;
         const publishedEvent = event.kind === "error" && sessionNotice
           ? { kind: "system" as const, text: event.message, at: now() }

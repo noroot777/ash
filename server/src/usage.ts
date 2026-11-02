@@ -7,10 +7,11 @@
 //
 // **这个文件里还住着上下文水位（setSessionContext），它是覆盖式的**——两组列摆在
 // 一起是为了让下一个人一眼看见「有两种账，加法只适用于其中一种」。
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { AgentEvent, AgentType, ContextUsage, TokenUsage, UsageAccountingMark } from "@ash/shared";
 import { db } from "./db/index.js";
-import { sessions, usageCumulativeSnapshots } from "./db/schema.js";
+import { sessions, sessionTurns, usageCumulativeSnapshots } from "./db/schema.js";
+import { pendingMonitorWake } from "./session-turns.js";
 
 type SessionRow = typeof sessions.$inferSelect;
 type UsageEvent = Extract<AgentEvent, { kind: "usage" }>;
@@ -108,15 +109,23 @@ export function usageAccountingFor(agentType: AgentType, cliSessionId: string | 
 /**
  * 把这一回合的账加到会话行上。**best-effort**：账本坏了不能反过来改变 agent 的
  * 执行结果，所以这里自己吞异常，只留一条 warn。
+ *
+ * `turnStartedAt` = 这笔账属于哪个回合。给了就按那个身份问「它是不是哨兵唤醒起的」,是的话
+ * 同一笔里把 `usage_monitor_wake_turns` 也加上 —— 「N 轮,其中哨兵唤醒 M 轮」的 M 因此只会是
+ * N 所数的那批回合的子集。开始行还没落成时,那一位在欠账里(`pendingMonitorWake`)。
  */
 export async function addSessionUsage(
   sessId: string,
   usage: TokenUsage,
   accounting: UsageAccounting = { kind: "incremental" },
+  turnStartedAt?: string | null,
 ): Promise<BookedUsage> {
   const reported = roundedUsage(usage);
   try {
     return await db.transaction(async (tx) => {
+      const wake = !!turnStartedAt && (pendingMonitorWake(sessId, turnStartedAt) || !!(await tx
+        .select({ wake: sessionTurns.monitorWake }).from(sessionTurns)
+        .where(and(eq(sessionTurns.sessionId, sessId), eq(sessionTurns.startedAt, turnStartedAt))).get())?.wake);
       let booked = reported;
       let mark: UsageAccountingMark = "incremental";
       if (accounting.kind === "cumulative") {
@@ -173,6 +182,7 @@ export async function addSessionUsage(
           ? sql`${sessions.usageCostUsd}`
           : sql`COALESCE(${sessions.usageCostUsd}, 0) + ${booked.costUsd}`,
         usageTurns: sql`COALESCE(${sessions.usageTurns}, 0) + ${booked.turns}`,
+        ...(wake ? { usageMonitorWakeTurns: sql`COALESCE(${sessions.usageMonitorWakeTurns}, 0) + ${booked.turns}` } : {}),
       }).where(eq(sessions.id, sessId));
       return { usage: booked, accounting: mark };
     });
@@ -196,8 +206,9 @@ export async function recordSessionUsageEvent(
   event: UsageEvent,
   agentType: AgentType,
   cliSessionId: string | null | undefined,
+  turnStartedAt: string | null,
 ): Promise<UsageEvent> {
-  const booked = await addSessionUsage(sessId, event.usage, usageAccountingFor(agentType, cliSessionId));
+  const booked = await addSessionUsage(sessId, event.usage, usageAccountingFor(agentType, cliSessionId), turnStartedAt);
   return { ...event, usage: booked.usage, accounting: booked.accounting };
 }
 

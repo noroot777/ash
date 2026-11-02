@@ -350,7 +350,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
         // **落盘要等到 writeTurnEnd 之后**：重建时 agentEnd 只往「最后一段是 agent」的
         // 气泡上盖时间戳（shared/src/index.ts），夹在正文和 agentEnd 之间会让本回合用时失准。
         const emittedEvent = event.kind === "usage"
-          ? await recordSessionUsageEvent(sessId, event, agentType, cliSessionId)
+          ? await recordSessionUsageEvent(sessId, event, agentType, cliSessionId, a.turnStart)
           : event;
         if (emittedEvent.kind === "done") {
           exitStatus = emittedEvent.exitStatus;
