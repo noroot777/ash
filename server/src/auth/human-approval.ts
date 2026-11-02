@@ -1,6 +1,6 @@
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolveAshDbFile } from "../db/path.js";
+import { configuredHumanApprovalKey } from "./human-approval-key.js";
+export { humanApprovalPublicKeyFile } from "./human-approval-key.js";
 
 export type HumanApprovalScope = {
   action: "reclaim-turn";
@@ -19,7 +19,7 @@ export type HumanApprovalChallenge = {
 export type HumanApprovalProof = { challengeId: string; signature: string };
 
 export const HUMAN_APPROVAL_UNAVAILABLE =
-  "放开回合占位需要离机人工授权；实例尚未配置有效公钥。可将离机公钥写入服务的 .human-approval.pub 文件后重试，无需重启；也支持启动配置 ASH_HUMAN_APPROVAL_PUBLIC_KEY。当前不会放开互斥";
+  "放开回合占位需要离机人工授权；实例尚未配置有效公钥。请管理员检查 ASH_HUMAN_APPROVAL_PUBLIC_KEY，或显式配置服务运行账号无法修改的 ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE；安全公钥文件可热加载，无需重启。当前不会放开互斥";
 
 const bucketOf = (scope: HumanApprovalScope) => JSON.stringify([scope.userId, scope.action, scope.taskId]);
 const sameScope = (left: HumanApprovalScope, right: HumanApprovalScope) => bucketOf(left) === bucketOf(right)
@@ -28,6 +28,7 @@ const sameScope = (left: HumanApprovalScope, right: HumanApprovalScope) => bucke
 export class HumanApprovalAuthority {
   private key: KeyObject | null = null;
   private encodedKey: string | undefined;
+  private sourceError: string | null = null;
   private keyFingerprint: string | null = null;
   private readonly instance = randomUUID();
   private readonly pending = new Map<string, HumanApprovalChallenge & { scope: HumanApprovalScope }>();
@@ -43,9 +44,13 @@ export class HumanApprovalAuthority {
 
   private refresh(): void {
     let publicKey: string | undefined;
-    try { publicKey = typeof this.publicKey === "function" ? this.publicKey() : this.publicKey; } catch {}
-    if (publicKey === this.encodedKey) return;
+    let sourceError: string | null = null;
+    try { publicKey = typeof this.publicKey === "function" ? this.publicKey() : this.publicKey; }
+    catch (error) { sourceError = error instanceof Error ? error.message : String(error); }
+    if (publicKey === this.encodedKey && sourceError === this.sourceError) return;
+    const previous = this.keyFingerprint;
     this.encodedKey = publicKey;
+    this.sourceError = sourceError;
     this.pending.clear();
     let key: KeyObject | null = null;
     try {
@@ -58,6 +63,7 @@ export class HumanApprovalAuthority {
     this.keyFingerprint = key
       ? createHash("sha256").update(key.export({ type: "spki", format: "der" })).digest("hex")
       : null;
+    console.warn(`[ash] 人工授权信任锚变化：${previous ?? "关闭"} → ${this.keyFingerprint ?? "关闭"}；${sourceError ?? (key ? "公钥已加载" : publicKey ? "公钥格式或算法无效" : "未配置公钥")}；在途申请已失效`);
   }
 
   issue(scope: HumanApprovalScope, taskTitle: string): HumanApprovalChallenge | null {
@@ -109,11 +115,4 @@ export class HumanApprovalAuthority {
   }
 }
 
-export function humanApprovalPublicKeyFile(): string {
-  return process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE || `${resolveAshDbFile()}.human-approval.pub`;
-}
-
-export const humanApproval = new HumanApprovalAuthority(() => {
-  if (process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY) return process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY;
-  try { return readFileSync(humanApprovalPublicKeyFile(), "utf8").trim(); } catch { return undefined; }
-});
+export const humanApproval = new HumanApprovalAuthority(configuredHumanApprovalKey);

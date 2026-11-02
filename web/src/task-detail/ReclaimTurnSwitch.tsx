@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LockOpen } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import type { HumanApprovalChallenge, HumanApprovalProof } from "../lib/taskNoticeApi.ts";
@@ -19,14 +19,23 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
   const [result, setResult] = useState<string | null>(null);
   const [challenge, setChallenge] = useState<HumanApprovalChallenge | null>(null);
   const [proof, setProof] = useState("");
+  const [now, setNow] = useState(Date.now);
+  const remaining = challenge ? Math.max(0, Math.ceil((challenge.expiresAt - now) / 1000)) : 0;
+  useEffect(() => {
+    if (!challenge || released) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [challenge, released]);
 
   const requestApproval = async () => {
     setBusy(true);
     setResult(null);
-    setChallenge(null);
-    setProof("");
     try {
-      setChallenge(await api.requestTurnApproval(taskId));
+      const next = await api.requestTurnApproval(taskId);
+      if (next.challengeId !== challenge?.challengeId) setProof("");
+      setChallenge(next);
+      setNow(Date.now());
     } catch (error) {
       setResult(error instanceof Error ? error.message : String(error));
     } finally {
@@ -74,13 +83,15 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
         </span>
       </p>
       <button type="button" onClick={() => void requestApproval()} disabled={busy || released}>
-        {released ? "已放开" : busy ? "处理中…" : challenge ? "重新申请授权" : "申请人工授权"}
+        {released ? "已放开" : busy ? "处理中…" : challenge && remaining > 0 ? "查看当前申请" : "申请人工授权"}
       </button>
       {challenge && !released && <>
-        <p>将申请保存为 JSON，在不受本机 agent 控制的设备上核对并签名，五分钟内贴回授权结果。</p>
+        <p>将申请保存为 JSON，在不受本机 agent 控制的设备上核对并签名。{remaining > 0
+          ? `剩余有效期 ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}，查看申请不会延长有效期。`
+          : "当前申请已过期，请重新申请。"}</p>
         <textarea aria-label="人工授权申请" readOnly value={JSON.stringify(challenge, null, 2)} rows={5} />
         <textarea aria-label="人工授权结果" value={proof} onChange={(event) => setProof(event.target.value)} placeholder="粘贴签名授权 JSON" rows={3} disabled={busy} />
-        <button type="button" onClick={() => void release()} disabled={busy || !proof.trim()}>
+        <button type="button" onClick={() => void release()} disabled={busy || !proof.trim() || remaining === 0}>
           {busy ? "正在放开…" : "确认风险并放开回合占位"}
         </button>
       </>}

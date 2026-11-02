@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Hono } from "hono";
+import type { HumanApprovalKeyFiles } from "../src/auth/human-approval-key.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-human-approval-"));
 const keys = generateKeyPairSync("ed25519");
@@ -15,6 +16,7 @@ process.env.ASH_SUSPECT_TURN_MS = "1";
 process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = publicKey;
 
 const { HumanApprovalAuthority, humanApproval, humanApprovalPublicKeyFile } = await import("../src/auth/human-approval.js");
+const { readTrustedHumanApprovalKeyFile } = await import("../src/auth/human-approval-key.js");
 const { ensureSchema, db, dbClient } = await import("../src/db/index.js");
 const { projects } = await import("../src/db/schema.js");
 const { createTasks } = await import("../src/task-store.js");
@@ -76,6 +78,75 @@ assert.equal(bounded.consume(makeProof(oldGeneration), scope), null, "新占位�
 clock += 5 * 60_000;
 assert.notEqual(bounded.issue(scope, "target")!.challengeId, oldGeneration.challengeId);
 
+const virtualPath = join(root, "administrator", "approval.pub");
+const entries = new Map<string, ReturnType<HumanApprovalKeyFiles["inspect"]>>();
+const writablePaths = new Set<string>();
+let serviceOwner: number | undefined = 42;
+let storedKey: string | undefined = publicKey;
+let keyReads = 0;
+const files: HumanApprovalKeyFiles = {
+  serviceOwner: () => serviceOwner,
+  inspect: (path) => {
+    if (storedKey === undefined && path === virtualPath) throw new Error("ENOENT");
+    return entries.get(path) ?? { owner: 0, file: path === virtualPath, directory: path !== virtualPath, symlink: false };
+  },
+  writable: (path) => writablePaths.has(path),
+  read: () => { keyReads++; return storedKey!; },
+};
+assert.equal(readTrustedHumanApprovalKeyFile(virtualPath, files), publicKey);
+for (const configure of [
+  () => { serviceOwner = undefined; },
+  () => { entries.set(virtualPath, { owner: 42, file: true, directory: false, symlink: false }); },
+  () => { entries.set(dirname(virtualPath), { owner: 42, file: false, directory: true, symlink: false }); },
+  () => { writablePaths.add(virtualPath); },
+  () => { writablePaths.add(dirname(virtualPath)); },
+  () => { entries.set(virtualPath, { owner: 0, file: true, directory: false, symlink: true }); },
+  () => { entries.set(dirname(virtualPath), { owner: 0, file: false, directory: true, symlink: true }); },
+  () => { entries.set(virtualPath, { owner: 0, file: false, directory: true, symlink: false }); },
+]) {
+  configure();
+  const before = keyReads;
+  assert.throws(() => readTrustedHumanApprovalKeyFile(virtualPath, files));
+  assert.equal(keyReads, before, "任何不可信路径在读取密钥之前就拒绝");
+  serviceOwner = 42;
+  entries.clear();
+  writablePaths.clear();
+}
+assert.throws(() => readTrustedHumanApprovalKeyFile("relative.pub", files));
+const warnings: string[] = [];
+const warn = console.warn;
+console.warn = (message) => { warnings.push(String(message)); };
+try {
+  const hot = new HumanApprovalAuthority(() => readTrustedHumanApprovalKeyFile(virtualPath, files), () => clock);
+  const loaded = hot.issue(scope, "hot config")!;
+  assert.ok(loaded);
+  storedKey = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  assert.equal(hot.consume(makeProof(loaded), scope), null);
+  storedKey = publicKey;
+  assert.equal(hot.consume(makeProof(loaded), scope), null, "恢复旧钥不恢复旧申请");
+  const beforeInvalid = hot.issue(scope, "invalid")!;
+  storedKey = "invalid-public-key";
+  assert.equal(hot.fingerprint, null);
+  storedKey = publicKey;
+  assert.equal(hot.consume(makeProof(beforeInvalid), scope), null);
+  const beforeDeletion = hot.issue(scope, "deleted")!;
+  storedKey = undefined;
+  assert.equal(hot.fingerprint, null);
+  const count = warnings.length;
+  assert.equal(hot.fingerprint, null);
+  assert.equal(warnings.length, count, "相同拒绝原因不逐请求刷日志");
+  storedKey = publicKey;
+  assert.equal(hot.consume(makeProof(beforeDeletion), scope), null);
+  writablePaths.add(dirname(virtualPath));
+  assert.equal(hot.fingerprint, null, "父目录权限变化立即关闭入口");
+  assert.ok(warnings.some((message) => message.includes("可被服务运行账号修改")));
+  assert.ok(warnings.some((message) => message.includes("ENOENT")));
+  assert.ok(warnings.some((message) => message.includes("公钥格式或算法无效")));
+  assert.ok(warnings.every((message) => message.includes("信任锚变化") && !message.includes(publicKey)));
+} finally {
+  console.warn = warn;
+}
+
 await ensureSchema();
 const stamp = new Date().toISOString();
 await db.insert(projects).values({ id: "p1", name: "approval", repoPath: root, createdAt: stamp });
@@ -108,27 +179,20 @@ assert.ok(claimTurn("other"));
 await wait();
 const heldBeforeConfig = heldTurns().find((turn) => turn.taskId === "target")!;
 delete process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY;
-assert.equal(humanApprovalPublicKeyFile(), `${process.env.ASH_DB}.human-approval.pub`);
+delete process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE;
+assert.equal(humanApprovalPublicKeyFile(), undefined, "数据目录不再默认充当信任锚");
 assert.equal((await requestApproval()).status, 503);
 assert.ok((await recentRejectionNotices("target")).some((notice) => notice.action === "申请人工授权" && notice.reason.includes("有效公钥")));
-const keyFile = join(root, "trusted-public-key");
+writeFileSync(`${process.env.ASH_DB}.human-approval.pub`, publicKey);
+assert.equal((await requestApproval()).status, 503, "agent 向旧默认位置写自己的公钥不能开启入口");
+const keyFile = join(root, "agent-writable-public-key");
 process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE = keyFile;
 writeFileSync(keyFile, publicKey);
-const loaded = await nextChallenge();
-assert.deepEqual(heldTurns().find((turn) => turn.taskId === "target"), heldBeforeConfig, "热加载不需要重启或替换占位");
-assert.deepEqual(await nextChallenge(), loaded);
-writeFileSync(keyFile, "invalid-key");
-assert.equal((await requestApproval()).status, 503);
-writeFileSync(keyFile, publicKey);
-assert.equal((await post("target", makeProof(loaded))).status, 403, "修复公钥不能复活旧申请");
-const beforeRotation = await nextChallenge();
-writeFileSync(keyFile, generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64"));
-assert.equal((await post("target", makeProof(beforeRotation))).status, 403, "轮换立即使旧申请失效");
-writeFileSync(keyFile, publicKey);
-const beforeDeletion = await nextChallenge();
-rmSync(keyFile);
-assert.equal((await post("target", makeProof(beforeDeletion))).status, 503, "删除配置立即关闭入口");
-writeFileSync(keyFile, publicKey);
+assert.equal((await requestApproval()).status, 503, "显式配置也不能加载服务账号可写的文件");
+chmodSync(keyFile, 0o444);
+assert.equal((await requestApproval()).status, 503, "服务自己拥有的只读文件仍能被自己 chmod，不可信");
+chmodSync(keyFile, 0o644);
+assert.deepEqual(heldTurns().find((turn) => turn.taskId === "target"), heldBeforeConfig);
 process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = "invalid-inline-key";
 assert.equal((await requestApproval()).status, 503, "无效非空启动配置也不回退文件");
 process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = publicKey;
