@@ -108,6 +108,10 @@ export function settleLateTurnInput(
  * 交代结成「交付不明」,而它本该原样归还。
  *
  * `soFar` 是初次拿到的那一档:已经是终局(accepted/refused)就直接用它,不必再等。
+ *
+ * `receipt` 缺席 = **还没交接**(执行器没有这条缝时交的是一个显式 accepted,见
+ * turn-input-settlement.ts),那就说不上来:`unknown`,交给对账去判。上一版把它读成 accepted,
+ * 于是 spawn 之前就抛掉的那一轮把续跑交代当成已送达消费了(第 2 轮自由审查 F1)。
  */
 export async function lastWordOnInput(
   receipt: Promise<InputAcceptance> | undefined,
@@ -115,7 +119,7 @@ export async function lastWordOnInput(
   waitMs = 2_000,
 ): Promise<InputAcceptance> {
   if (soFar && soFar !== "unknown") return soFar;
-  if (!receipt) return soFar ?? "accepted";
+  if (!receipt) return soFar ?? "unknown";
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([

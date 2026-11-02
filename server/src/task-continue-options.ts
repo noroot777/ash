@@ -135,13 +135,15 @@ export type ContinueTaskOptions = {
    * `../delivery-lease.ts` 那一份(它就是为了不让三个入口各漏一处而存在的)。
    */
   /**
-   * 这一轮输入回执**本体**,起跑后立刻交出来(没有这条缝的执行器给 undefined)。
+   * 这一轮输入回执**本体**,run() 一返回就交出来 —— 排在任何可失败的本地记账之前(第 2 轮自由
+   * 审查 F1:排在末尾时,记账一抛它就没被调到,调用方把「还没交接」读成了「执行器没有回执」)。
+   * 没有这条缝的执行器给一个显式的 accepted 承诺,所以调用方手上没拿到 = 只有「还没交接」一个意思。
    *
    * 给**结算方**用:结算发生在回合结束之后,那时回执早就落定了,而初次那一档是几十秒前有界
    * 等待的结果。拿过期的 `unknown` 去结算,会把一段明确被拒收的交代结成「交付不明」,而它本该
    * 原样归还(第 2 轮自由审查 F1 的那一半)。问法见 ../turn-input-acceptance.ts 的 lastWordOnInput。
    */
-  onInputReceipt?: (receipt: Promise<InputAcceptance> | undefined) => void;
+  onInputReceipt?: (receipt: Promise<InputAcceptance>) => void;
   /**
    * 「这个任务此刻还能不能被**这条消息**叫醒」——**占住回合之后**再问一次，返回理由
    * 字符串就撤回这一轮（返回 false，一个字都不送）。

@@ -30,9 +30,8 @@ import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
-import { DeliveryCrossingUnwritable, noteDeliveryAccepted, noteDeliveryRefusal, recordDeliveryCrossing } from "./delivery-crossing.js";
-import { awaitTurnInput, logTurnInputAcceptance, settleLateTurnInput } from "./turn-input-acceptance.js";
-import type { InputAcceptance } from "./executors/types.js";
+import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
+import { createTurnInputSettlement } from "./turn-input-settlement.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { workerPreambleFor } from "./team/dispatch.js";
@@ -150,6 +149,7 @@ export async function continueTask(
   let frozenBeforeSpawn = false;
   let reviewStart: ReviewStartReceipt | undefined;
   let checkingReviewStart = false;
+  const inputSettlement = createTurnInputSettlement(taskId, opts);
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
@@ -409,6 +409,9 @@ export async function continueTask(
       env: runEnv,
     });
     trackRun(taskId, handle);
+    // 回执责任**此刻**就交出去,不等下面那一串可失败的本地记账(第 2 轮自由审查 F1,见
+    // turn-input-settlement.ts 文件头)。
+    inputSettlement.handOver(handle);
     // 前言已经随 prompt 交到 agent 手上，这一刻起就该划掉（放在 spawn 之后：起跑前
     // 还有 takeFreeze 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
 
@@ -523,52 +526,13 @@ export async function continueTask(
     // 原文已经写进会话落盘文件了,但「落 sent」还缺最后一个事实:**agent 到底收下了没有**。
     // `run()` 返回只证明进程起来了 —— codex app-server 的回合输入是 spawn 之后才走协议发出去
     // 的,服务端死在那条缝里就会留下「进程活着、输入一个字没出去、消息却已经是终态 sent」的
-    // 现场(2026-11-02 WfLfTjaGzcA8,1.5 小时零输出)。所以这一刻先问一句回执,三态与取舍整份
-    // 住在 turn-input-acceptance.ts;没有这条缝的执行器当场返回 accepted,零额外延迟。
+    // 现场(2026-11-02 WfLfTjaGzcA8,1.5 小时零输出)。三态与取舍整份住在 turn-input-acceptance.ts;
+    // 没有这条缝的执行器当场返回 accepted,零额外延迟。
     //
-    // **三档一律如实往上报,这一层不替调用方做决定**(第 1 轮自由审查 F2/F3)。上一版在
-    // `refused` 时干脆不调回调,于是续跑那一路只知道「没走到送达确认」、不知道「协议层明确
-    // 拒收了」,它的 finally 照旧拿本地回合行反推成「已送达」并补写 sent —— 一段本该继续执行
-    // 的续跑交代就这么消失了。各档的调用方义务写在 task-continue-options.ts 的 onInputSettled 上。
-    // 回调自己出错不许影响这一轮(它只是记账)。
-    if (opts.onInputSettled) {
-      // 回执本身也交给调用方:结算发生在回合结束之后,那时它早就落定了,拿初次那一档
-      // (有界等待的结果)去结算会把明确拒收的交代结成「交付不明」(见 lastWordOnInput)。
-      opts.onInputReceipt?.(handle.inputAccepted);
-      const acceptance = await awaitTurnInput(handle);
-      logTurnInputAcceptance(acceptance, `任务 ${taskId}`);
-      const settled = opts.onInputSettled;
-      const ids = opts.pendingMessageIds ?? [];
-      // **先把协议层那个事实落盘,再去记账。** 进程内那一份只够当场处置:
-      //   · refused  —— 判出拒收之后、归还落库之前进程没了,重启对账手上只有越线记号(线确实
-      //     越过了),少了这张记号它会判成已送达并补记(第 1 轮自由审查 F2);
-      //   · accepted —— 对称的那一半:协议确认了、而 `markSent` 还没落库就崩,重启对账必须仍然
-      //     判 `delivered`(只能往前走,绝不归还)。这张记号现在是「已送达」**唯一**的凭据 ——
-      //     本地会话行已经退出那一问(第 2 轮自由审查 F1)。
-      const noteFact = (fact: InputAcceptance): void => {
-        if (!ids.length) return;
-        if (fact === "refused") noteDeliveryRefusal(taskId, ids);
-        else if (fact === "accepted") noteDeliveryAccepted(taskId, ids);
-      };
-      noteFact(acceptance);
-      // **失败不许静默**(第 3 轮自由审查 F4):记账失败照旧不拖累这一轮(这里不抛),但它得
-      // 留下痕迹 —— 租约那条路自己带退避补偿(delivery-lease.ts),能走到这儿的是**它之外**
-      // 的记账炸了,咽下去就等于「消息永久卡在待发送」这类现场连一行线索都没有。
-      try { await settled(acceptance); } catch (error) {
-        console.error(`[ash] 任务 ${taskId} 的投递记账(${acceptance})出错，这一轮照常继续:`, error);
-      }
-      if (acceptance === "unknown") {
-        // **接着等那份凭据**(不阻塞这一轮),**三档一律转给调用方**:它最终落定成 `accepted`
-        // 就是补记账,落定成 `refused` 就是归还重投 —— 上一版只转 accepted,于是迟到的拒收
-        // 把那张租约永远留在「在途」(第 2 轮自由审查 F3,已实测)。各档的调用点都做成幂等。
-        settleLateTurnInput(handle, `任务 ${taskId}`, async (late) => {
-          noteFact(late);
-          try { await settled(late); } catch (error) {
-            console.error(`[ash] 任务 ${taskId} 的迟到投递记账(${late})出错:`, error); // 同上,不静默
-          }
-        });
-      }
-    }
+    // **三档一律如实往上报,这一层不替调用方做决定**(第 1 轮自由审查 F2/F3),各档的调用方义务
+    // 写在 task-continue-options.ts 的 onInputSettled 上。这里只是正常出口;异常出口在 catch
+    // 里结同一笔(turn-input-settlement.ts)。
+    await inputSettlement.settle(handle);
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
@@ -604,6 +568,13 @@ export async function continueTask(
       },
     });
   } catch (err) {
+    // **spawn 之后才抛的,输入事实照样要交给调用方**(第 2 轮自由审查 F1):会话持久化、交接提示、
+    // 登记回合任何一步失败都会跳到这里,而协议层可能早就收下(或明确拒收)了这一轮。先把进程收掉
+    // —— 这一轮反正要按失败收口,进程一关,未完成的请求一律落定 —— 再按协议定论结算。
+    if (handle && !inputSettlement.settled()) {
+      discardStartingRun(taskId, handle);
+      await inputSettlement.settle(handle);
+    }
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
     if (err instanceof ReviewSuperseded) {
