@@ -253,11 +253,16 @@ export function ConversationFeed({
     pending: pendingExecutor,
     fallback: task.executorLabel ?? task.agentType,
   });
-  // 崩掉的那一回合挂在会话最后一条 agent 气泡上；不满足条件时是 null，一颗按钮都不出。
-  const retry = onRetryTurn ? turnRetryTarget(task, items, { reviewRetryable }) : null;
+  // 崩掉的那一回合挂在**它自己那条会话**最后一条 agent 气泡上；那条会话一个气泡都没有（审查
+  // 一句没说就断了）就挂在会话末尾单独一行 —— 能继续就必须有处可点。不满足条件时一颗都不出。
+  const retry = onRetryTurn ? turnRetryTarget(task, items, { reviewRetryable, sessions }) : null;
   const retryItemId = retry
-    ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
+    ? [...items].reverse().find((item) => item.kind === "agent"
+      && (retry.kind !== "review" || item.session?.id === retry.sessionId))?.id ?? null
     : null;
+  const retryButton = retry ? (
+    <TurnRetryButton exitStatus={retry.exitStatus} kind={retry.kind} onRetry={() => onRetryTurn!(retry)} />
+  ) : null;
   const search = typeof window === "undefined" ? "" : window.location.search;
   const modeFromUrl = SYSTEM_NOTICE_DEMO_REQUESTED;
   const noticeMode = systemNoticeMode ?? INITIAL_SYSTEM_NOTICE_MODE;
@@ -320,13 +325,7 @@ export function ConversationFeed({
           hideTime={hiddenTimes.has(item.id)}
           laneRole={laneRole}
           onFork={onForkReply && !loading && !error && !forkBlockedReason && canForkReply(item) ? () => onForkReply(item.id) : undefined}
-          retry={retry && item.id === retryItemId ? (
-            <TurnRetryButton
-              exitStatus={retry.exitStatus}
-              kind={retry.kind}
-              onRetry={() => onRetryTurn!(retry)}
-            />
-          ) : undefined}
+          retry={item.id === retryItemId ? retryButton : undefined}
         />
       );
     }
@@ -396,6 +395,7 @@ export function ConversationFeed({
               </ReviewerLane>
             );
           })}
+          {retryButton && !retryItemId && <footer className="task-message-footer">{retryButton}</footer>}
           {activityPhase && !loading && !error && (
             <RunActivity
               status={task.status}

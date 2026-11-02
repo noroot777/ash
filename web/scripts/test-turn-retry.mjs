@@ -108,4 +108,28 @@ assert.equal(freeReviewRetryable([run({ status: "reviewing", rounds: [{ round: 2
 assert.equal(freeReviewRetryable([awaiting({ rounds: [{ round: 1, status: "reviewing", awaitsInputDecision: true },
   { round: 2, status: "reviewing" }] })]), false, "标记不在当前轮 → 不给");
 
+// ── 审查档认会话，不认气泡(自由审查第 2 轮 R1)──────────────────────────────────
+// 一句正文都没吐就断掉的审查回合不产生 agent 气泡:按「最后一条气泡」找,要么找不到,要么找到
+// 前面实现者那一条 —— 服务端标了「等你拿主意」、retry-turn 也收,页面上却一颗按钮都没有。
+const at = (id, role, t, over = {}) => sess({ id, role, startedAt: t, turnStartedAt: t, ...over });
+const sessions = [at("impl", "single", "2026-11-01T00:00:00Z", { exitStatus: 0 }),
+  at("rev", "reviewer", "2026-11-01T01:00:00Z", { exitStatus: null })];
+const free = task({ workflowMode: "free" });
+assert.deepEqual(target(free, [], { reviewRetryable: true, sessions }),
+  { sessionId: "rev", kind: "review", exitStatus: null }, "审查会话一个气泡都没有 → 照样给入口,绑在审查会话上");
+assert.deepEqual(target(free, [agentItem(sessions[0])], { reviewRetryable: true, sessions }),
+  { sessionId: "rev", kind: "review", exitStatus: null }, "最后一条气泡是实现者的 → 入口仍绑最新的审查会话");
+assert.equal(target(free, [agentItem(sessions[0])], { reviewRetryable: false, sessions }), null,
+  "审查链不等人拿主意 → 不出(不拿「有会话」推「能继续」)");
+assert.equal(target(free, [], { reviewRetryable: true, sessions: [...sessions,
+  at("impl2", "single", "2026-11-01T02:00:00Z", { exitStatus: 0 })] }), null,
+"审查之后又跑过实现者回合 → 上一回合不是审查,服务端会 409,前端不出");
+assert.equal(target(free, [], { reviewRetryable: true, sessions: [sessions[0],
+  at("rev", "reviewer", "2026-11-01T01:00:00Z", { stoppedAs: "canceled" })] }), null, "手动停掉的审查回合不出");
+// 排序按回合起点(续聊复用老会话):老审查会话刚续过一回合,它才是「上一回合」。
+assert.equal(target(free, [], { reviewRetryable: true, sessions: [
+  at("rev", "reviewer", "2026-11-01T00:00:00Z", { turnStartedAt: "2026-11-01T03:00:00Z" }),
+  at("impl", "single", "2026-11-01T02:00:00Z", { exitStatus: 0 })] })?.sessionId, "rev",
+"上一回合按 turnStartedAt 认,与服务端 latestSessionOf 同口径");
+
 console.log("✓ turn-retry gate (web)");

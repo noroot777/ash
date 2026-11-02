@@ -26,6 +26,10 @@
 // **写不下来**(同上 R1):凭据在 spawn 那一笔就带着显式的 unknown;协议事实先进内存(`unwritten`),
 // 再落库;库写失败就留在内存里供本进程读。进程没了它才随之消失 —— 库里剩下的是 unknown,读成说
 // 不清,同样按住、交给用户。
+//
+// **缺席 = unknown**(下一次审查第 2 轮 R2):加这一位之前落下的老凭据没有 acceptance。缺席不是
+// 「收下了」,只是「当时没记」—— 照老口径放行,补办会清掉意图、下一拍对账把这一轮结成失败,正是
+// 上面那条不变量要防的事。所以只有真实的 accepted/refused 定论能离开说不清,老数据也一样。
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { regressionEvidence, tasks } from "./db/schema.js";
@@ -117,10 +121,9 @@ export function reviewInputHold(
   const delivered = task.waitOwnership?.deliveredReview;
   if (!delivered || delivered.directory !== directory || !generation || delivered.generation !== generation) return null;
   const key = keyOf(taskId, delivered);
-  // 缺席 = 加这一位之前落下的老凭据,照老口径走原路。新凭据在 spawn 那一笔就显式记成 unknown
-  // (review-continuation.ts),所以回执写不进库留下的是 unknown,不会落到这一档。
-  if (!delivered.acceptance) return null;
-  const fact = unwritten.get(key) ?? (delivered.acceptance === "unknown" ? undefined : delivered.acceptance);
+  // 缺席(老凭据)与 unknown 同读:都不是定论(见文件头「缺席 = unknown」)。
+  const fact = unwritten.get(key) ?? (delivered.acceptance === "accepted" || delivered.acceptance === "refused"
+    ? delivered.acceptance : undefined);
   if (fact === "accepted") return null;
   if (fact === "refused") return "refused";
   return waiting.has(key) ? "hold" : "unconfirmed";

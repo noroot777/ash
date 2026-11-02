@@ -409,8 +409,8 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
       // **说不清 ≠ 送到了,也 ≠ 没送到**:意图不清(那等于宣布送到),也不落终态、不重排(那等于
       // 宣布没送到)。这里只把内存那张证还掉 —— 这一轮已经结束,「本进程还盯着这个回合」不再
       // 成立;留着它,对账见 `armed` 就永远跳过。之后谁都不替协议下结论(review-input-verdict.ts):
-      // 定论还可能到,结算与补办都按住(意图留着、不重投);迟到的定论由上面两档收口;通道关了
-      // (回执落定成 unknown、或者进程没了),补办才结清意图,结算照实写「说不清」。
+      // 结算与补办一律按住(意图留着、不判失败、不重投);迟到的定论由上面两档收口;通道关了
+      // (回执落定成 unknown、或者进程没了),也照样按住,只是改由用户点「继续本轮审查」决定重投。
       onUnconfirmed: (message) => {
         releaseReviewDispatchClaim(run.id, run.currentRound, token);
         console.error(`[ash] ${label}派发交付说不清 task=${taskId} run=${run.id}：${message}`

@@ -21,7 +21,7 @@
 //  D4/D5 审查派发 · 说不清 → 对账两拍之后才到的收下 / 拒收:收下只了结意图、对账照常结算;
 //     拒收带着真实原因落终态(从前那一轮已被结掉,这一声被挡回去);
 //  D8 换一个进程(重启)读同一份持久记录:照样按住、交给用户 —— 有派发意图(补办那一头)与没有
-//     (结算那一头)两种都钉;
+//     (结算那一头)两种都钉;D9 同一现场换成没有 acceptance 这一位的老凭据:缺席照 unknown 读;
 //  D6/D7 回执写不进库:悬着的照样按住、定论照样按定论结算 —— 缺席不许被读成「没这回事」;
 //  I1/I2 输入身份与代次(第 2 轮 R2):前一次输入迟到的定论写不进后一次的凭据,上一代次的不当这一代读。
 //
@@ -257,8 +257,10 @@ try {
   }
 
   // ── D8 换一个进程(重启)读同一份持久记录:内存里谁都没在等,照样按住、交给用户 ───────────
-  {
-    const id = "verdict-dispatch-restart";
+  // D9 同一现场,凭据换成加 acceptance 之前落下的老样子(这一位整个缺席)。下一次审查第 2 轮 R2:
+  // 缺席照老口径放行 → 补办清掉意图、下一拍按孤儿结成失败。缺席不是定论,只能照 unknown 读。
+  for (const [label, legacy] of [["D8", false], ["D9", true]] as const) {
+    const id = legacy ? "verdict-dispatch-legacy" : "verdict-dispatch-restart";
     stage = { acceptance: deferred<InputAcceptance>().promise };
     const run = await dispatch(id);
     await until("这一轮收尾", () => turnOver(id));
@@ -270,7 +272,10 @@ try {
       const { freeReviewRounds, freeReviewRuns, tasks } = await import(${source("../src/db/schema.js")});
       const { reconcileFreeReviews } = await import(${source("../src/free-review-reconcile.js")});
       const { reviewAwaitsInputDecision } = await import(${source("../src/free-review-round.js")});
-      const { eq } = await import("drizzle-orm");
+      const { eq, sql } = await import("drizzle-orm");
+      if (${legacy}) await db.update(tasks)
+        .set({ waitOwnership: sql\`json_remove(\${tasks.waitOwnership}, '$.deliveredReview.acceptance')\` })
+        .where(eq(tasks.id, ${JSON.stringify(id)}));
       for (let tick = 0; tick < 2; tick++) await reconcileFreeReviews(${JSON.stringify(id)});
       const task = (await db.select().from(tasks).where(eq(tasks.id, ${JSON.stringify(id)})))[0];
       const run = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, task.id)))[0];
@@ -278,8 +283,10 @@ try {
       const report = async (tag) => {
         const run = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, task.id)))[0];
         const round = (await db.select().from(freeReviewRounds).where(eq(freeReviewRounds.runId, run.id)))[0];
+        const now = (await db.select().from(tasks).where(eq(tasks.id, task.id)))[0];
         console.log(tag + JSON.stringify({ run: run.status, round: round.status, dispatch: !!round.dispatch,
-          awaits: await reviewAwaitsInputDecision(task, run, round) }));
+          awaits: await reviewAwaitsInputDecision(now, run, round),
+          acceptance: now.waitOwnership?.deliveredReview?.acceptance ?? null }));
       };
       await report("STATE=");
       // 没有派发意图的那一种(例如答复提问续跑起来的审查回合):对账直接走到结算,结算自己也得按住。
@@ -289,14 +296,17 @@ try {
       process.exit(0);
     `], { env: process.env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     const state = JSON.parse(out.split("\n").find((line) => line.startsWith("STATE="))!.slice("STATE=".length));
-    assert.deepEqual(state, { run: "reviewing", round: "reviewing", dispatch: true, awaits: true },
-      "再下一次审查的 R1:持久记录一个字没变,只因观察进程换了一个,就清意图、判失败");
+    const acceptance = legacy ? null : "unknown";
+    assert.deepEqual(state, { run: "reviewing", round: "reviewing", dispatch: true, awaits: true, acceptance },
+      legacy ? "下一次审查第 2 轮 R2:老凭据缺 acceptance 被当成「收下了」,补办清意图、结算判失败"
+        : "再下一次审查的 R1:持久记录一个字没变,只因观察进程换了一个,就清意图、判失败");
     const bare = JSON.parse(out.split("\n").find((line) => line.startsWith("BARE="))!.slice("BARE=".length));
-    assert.deepEqual(bare, { run: "reviewing", round: "reviewing", dispatch: false, awaits: true },
+    assert.deepEqual(bare, { run: "reviewing", round: "reviewing", dispatch: false, awaits: true, acceptance },
       "没有派发意图时对账直接走结算 —— 结算也不许把说不清结成失败");
     assert.match(timeline(id), /已经确认不了.*「继续本轮审查」/, "新进程接手时把「交给你了」写进时间线");
     assert.equal(await reviewerSessions(id), 1, "新进程也不自动重投");
-    console.log("✓ D8 换一个进程读同一份持久记录:照样按住、不判失败不重投,交给用户");
+    console.log(`✓ ${label} 换一个进程读同一份持久记录${legacy ? "(老凭据,缺 acceptance)" : ""}:`
+      + "照样按住、不判失败不重投,交给用户");
   }
 
   // ── D4/D5 说不清 → 对账两拍之后才到的定论:各走各的出口 ─────────────────────────

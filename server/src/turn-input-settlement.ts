@@ -90,7 +90,8 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
             console.error(`[ash] 任务 ${taskId} 的迟到投递记账(${late})出错:`, error); // 同上,不静默
           }
         });
-        // 落定成 unknown 或者抛了:定论再也不会到,审查那一侧别再按着(定论那一档由上面先记)。
+        // 落定成 unknown 或者抛了:定论再也不会到。审查那一侧照样按住,只是从「等迟到的定论」
+        // 换成「等用户拿主意」(review-input-verdict.ts 的 unconfirmed;定论那一档由上面先记)。
         void handle.inputAccepted?.then((late) => {
           if (late === "unknown") closeReviewInputWait(taskId, reviewReceipt?.());
         }, () => closeReviewInputWait(taskId, reviewReceipt?.()));

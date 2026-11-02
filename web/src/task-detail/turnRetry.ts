@@ -1,4 +1,4 @@
-import type { FreeReviewRun, TaskListItem } from "@ash/shared";
+import type { FreeReviewRun, Session, TaskListItem } from "@ash/shared";
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import type { ConversationItem } from "./conversationModel.ts";
 
@@ -35,12 +35,19 @@ export function freeReviewRetryable(reviews: FreeReviewRun[] | undefined): boole
   return run?.status === "failed" && current?.status === "error";
 }
 
+/** 「上一回合」是哪条会话 —— 与服务端 `latestSessionOf` 同一口径（按最近一次回合起点）。 */
+function latestSessionOf(sessions: Session[]): Session | null {
+  const turnAt = (session: Session) => session.turnStartedAt ?? session.startedAt;
+  return [...sessions].sort((left, right) => turnAt(left).localeCompare(turnAt(right))).at(-1) ?? null;
+}
+
 export function turnRetryTarget(
   task: TaskListItem,
   items: ConversationItem[],
   // 自由工作流的审查链状态（来自共享缓存的 useFreeWorkflowState，不额外发请求）。
   // 不给 = 按「审查链不可重跑」处理，reviewer 会话上就不出按钮。
-  opts: { reviewRetryable?: boolean } = {},
+  // `sessions` = 这个任务的会话行；审查档按它认「上一回合」，不按气泡认（理由见下）。
+  opts: { reviewRetryable?: boolean; sessions?: Session[] } = {},
 ): TurnRetryTarget | null {
   // duet/团队各有自己的回合形状（gate、常驻调度台），服务端也只接单飞。
   if (task.mode !== "single" || task.archived) return null;
@@ -50,6 +57,16 @@ export function turnRetryTarget(
   if (task.question || task.resumePrompt) return null;
   // 就地验证轮还挂着号 = 那一轮没出结论，它是旁路回合，重跑它得走验证那条路。
   if (task.verifyRound != null) return null;
+  // **审查档认会话，不认气泡**：一句正文都没吐出来就断掉的审查回合（任务书送没送到都说不清）
+  // 不产生 agent 气泡，按「最后一条气泡」找会话，要么找不到，要么找到前面实现者那一条 —— 服务端
+  // 明明标了「等你拿主意」、时间线也让用户点这颗按钮，页面上却一颗都没有。「有输出」推不出
+  // 「能不能继续」，权威判据是审查链状态 + 上一回合是不是审查会话（服务端同口径）。
+  if (opts.sessions && opts.reviewRetryable && task.workflowMode === "free") {
+    const latest = latestSessionOf(opts.sessions);
+    if (latest?.role === "reviewer" && !latest.stoppedAs) {
+      return { sessionId: latest.id, kind: "review", exitStatus: latest.exitStatus };
+    }
+  }
   const last = [...items].reverse().find((item) => item.kind === "agent");
   if (last?.kind !== "agent") return null;
   const session = last.session;

@@ -58,9 +58,9 @@ try {
     const evidence = (await db.select().from(regressionEvidence)
       .where(eq(regressionEvidence.directory, directory))).at(0)!;
     // 正常投递流程落下的那份凭据(`commitReviewTurnDelivery` 紧挨着 spawn 之后写的那一笔):
-    // 目录 + 代次 + 这一轮的目标身份。
+    // 目录 + 代次 + 这一轮的目标身份;协议回执也收下了(说不清的那一种归 test:idle-delivery-verdict)。
     await db.update(tasks).set({ waitOwnership: { deliveredReview: {
-      directory, generation, identity: evidence.targetIdentity!, confirmedAt: at,
+      directory, generation, identity: evidence.targetIdentity!, confirmedAt: at, acceptance: "accepted",
     } } }).where(eq(tasks.id, id));
 
     // ① **落库那一笔**:身份、代次、版本全对,只差「这一份已经送过了」——它就该输在 WHERE 上。

@@ -358,7 +358,7 @@ try {
           directory, generation: evidence.generation,
           identity: { turnToken: task.activeTurnToken, directionToken: task.activeDirectionToken,
             directionEpoch: task.directionEpoch },
-          confirmedAt: at,
+          confirmedAt: at, acceptance: "accepted",
         },
       },
     }).where(eq(tasks.id, id));
