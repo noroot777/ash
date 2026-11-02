@@ -190,6 +190,8 @@ export interface HandoffSessionRow {
   usageReasoning: number | null;
   usageCostUsd: number | null;
   usageTurns: number | null;
+  // usageTurns 里记在哨兵唤醒回合上的那几轮。可选:老版本对端不带,接收端按「不知道」落 null。
+  usageMonitorWakeTurns?: number | null;
   contextUsed: number | null;
   contextWindow: number | null;
   contextWindowEstimated: boolean | null;
