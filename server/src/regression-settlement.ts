@@ -52,13 +52,36 @@ export type CheckedSettlement = {
  * 只是 round/run,撤不回前一个事务(第 4 轮审查 F1 实测)。所以条件由调用方声明一次,**结算层
  * 在每一次持久写之前自己核**。
  */
-export type SettlementFence = { taskId: string; directionEpoch: number };
+export type SettlementFence = {
+  taskId: string;
+  directionEpoch: number;
+  /**
+   * **「这一轮此刻没有任何派发责任」** —— 孤儿收尾的另一半前提,也要在落笔那一刻自己成立。
+   *
+   * 为什么 `directionEpoch` 一位不够:它答的是「这中间有没有又起过**回合**」,而一次合法的接手
+   * 压根不起回合 —— 公开 reviewing 的那一笔带着持久责任落库(`preparingReviewDispatch`),重跑
+   * 也只是在同一段同步代码里换代次、重新登记。两者都不增长 epoch,于是「读完没人负责、下笔前
+   * 有人接手了」这条路照样提交得了,把一个**活着的准备**打成 failed/error(第 2 轮审查问题 2
+   * 复现 B:零故障注入,两次普通查询的返回顺序就够了)。
+   *
+   * 条件写成「**不存在**一行带着在途意图」而不是「存在一行且意图为空」:轮次行可能还没建
+   * (对账那条路会在落笔前补建),而「行不在」本身并不意味着有人负责。
+   */
+  review?: { runId: string; round: number };
+};
 
 /** 落笔条件到此刻还成立吗。没有条件(正常结算)恒真。 */
 async function fenceHeld(transaction: ConclusionTransaction, fence: SettlementFence | undefined): Promise<boolean> {
   if (!fence) return true;
-  return !!(await transaction.select({ id: tasks.id }).from(tasks)
-    .where(and(eq(tasks.id, fence.taskId), directionEpochUnchangedSince(fence.directionEpoch)))).length;
+  if (!(await transaction.select({ id: tasks.id }).from(tasks)
+    .where(and(eq(tasks.id, fence.taskId), directionEpochUnchangedSince(fence.directionEpoch)))).length) return false;
+  if (!fence.review) return true;
+  return !(await transaction.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
+    .where(and(
+      eq(freeReviewRounds.runId, fence.review.runId),
+      eq(freeReviewRounds.round, fence.review.round),
+      isNotNull(freeReviewRounds.dispatch),
+    ))).length;
 }
 
 export async function regressionSettlementConclusion(taskId: string, directory: string, input: {
@@ -196,7 +219,7 @@ export async function recordInterruptedRegressionReview(task: typeof tasks.$infe
 
 export async function reconcileRegressionSettlements(ownerTaskId?: string): Promise<void> {
   await reconcileReviewStarts(ownerTaskId);
-  await (await import("./free-workflow.js")).reconcileFreeReviews(ownerTaskId)
+  await (await import("./free-review-reconcile.js")).reconcileFreeReviews(ownerTaskId)
     .catch((error) => console.error("[ash] 自由审查发现待重试:", error));
   const candidates = await db.select().from(tasks).where(or(isNotNull(tasks.verifyRound), isNotNull(tasks.reviewOf)));
   for (const task of candidates) {

@@ -296,7 +296,12 @@ try {
       id: `${runId}-round`, runId, round: 1, status: "passed", conclusion: "verified",
       startedAt: at, endedAt: at,
     });
-    await failReviewStart(await runRow(runId), "迟到的投递失败");
+    // **身份要给对的那一个**:失败收尾的闸是两道(还停在 reviewing + 证据行就是这一代次),
+    // 要钉的是前一道,所以后一道必须成立 —— 不然这几句会被「代次读不出来」顺手挡掉,
+    // 断言照样绿,测的却不是「已有结论不许被改写」。
+    const evidence = await evidenceState(id, freeReviewEvidenceDir(id, runId, 1),
+      (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!);
+    await failReviewStart(await runRow(runId), "迟到的投递失败", { generation: evidence.generation });
 
     assert.equal((await roundOf(runId)).status, "passed", "已有结论的轮次不许被迟到的失败改写");
     assert.equal((await roundOf(runId)).conclusion, "verified", "结论本体更不许动");
@@ -411,7 +416,7 @@ try {
     assert.ok(token, "先领证（模拟现读之后、写意图之前的那一段）");
 
     await launchReviewRound(task, await runRow(runId), {
-      claimToken: token!,
+      responsibility: { generation, claimToken: token!, since: at },
       redeliver: { attempts: 1, since: at, freshSession: false },
     });
 

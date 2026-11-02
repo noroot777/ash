@@ -82,13 +82,30 @@
 //       · 准备阶段**压根没有认领**:`launchReviewRound` 要走证据行、工作区、HEAD、MCP 预检、
 //         任务书重算一长串 await,而 run/round 在它之前就已经是 reviewing。那段时间里对账看到
 //         的正是「reviewing + 没有意图 + 没有等待者」= 孤儿的全部特征,于是把一个**活着的准备**
-//         收尸(第 1 轮审查问题 2 实测:准备完成后 dispatched=false,再也不会自动开始)。所以
-//         认领挪到 launch 的第一行、任何 await 之前,代次待定(`null`)也先占住,读到证据行再
-//         `adoptReviewDispatchGeneration` 填上。「有人在准备」从此和「有人在排队」是同一份责任。
+//         收尸(第 1 轮审查问题 2 实测:准备完成后 dispatched=false,再也不会自动开始)。
+//         「有人在准备」从此和「有人在排队」是同一份责任(`DispatchClaim.phase` 两档都算)。
 //       · 等待者**起跑前不问所有权**:回合锁只回答「此刻谁能跑一轮」,它不认识派发。过期的那一
 //         笔照样能在释放点上抢到锁、把作废的任务书送进会话。所以投递前过一道
 //         `ownership` 闸(`turn-idle-delivery.ts`):同步问内存认领还是不是我,再问库里那份在途
 //         意图此刻属于谁。不是我的 → `superseded`,就地让出,不重排也不落终态。
+//
+// 第 2 轮审查指出 ⑬ 把认领挪到 launch 第一行只补住了**本进程内**那一段,而「有人负责」这件事
+// 本身还只活在内存里:
+//
+//   ⑭ **责任要先登记、才许公开这一轮,而且登记的那一份必须是持久的** —— 公开 reviewing 与
+//      「谁负责」之间不许有任何缝,包括跨进程那一道:
+//       · 持久的那一半是 round 行上的 `dispatch`(`preparingReviewDispatch`),和公开 reviewing
+//         同在一笔写里落下。非空 = 这一轮有人负责,孤儿路一律不许收(`reviewOrphanStillUnowned`);
+//         上一个进程死在准备阶段的那一种,由 `redeliverReviewRound` 照补投重走一遍 —— 「死在
+//         准备」和「死在排队」本来就是同一回事。没有它,对账只要落在「读完 armed」与「下笔」
+//         之间,活着的准备照样被收尸(第 2 轮审查问题 2 复现 B,零故障注入),重启之后更没人补办。
+//       · 认领因此由**公开这一轮的人**同步领下(三条入口:即时派审、升轮、重跑),领证的人负责
+//         还证;`launchReviewRound` 不再自己领,只核一句「这张证还是不是负责人」。代次也随之
+//         先有后公开,所以认领证上的代次不再有「待定」这一档。
+//       · 孤儿结算的落笔条件里要带上**同一份持久责任**(`SettlementFence.review`):它的前提就是
+//         「此刻没有任何派发责任」,那就让这句话在提交那一刻自己成立 —— 否则「检查完再动手」
+//         之间那段 await 里谁都可以合法接手,而拿任务 epoch 去核是答另一个问题(准备责任不
+//         增长 epoch)。
 //
 // ## 为什么界是「次数」而不是「时长」
 //
@@ -134,11 +151,11 @@ type DispatchClaim = {
    * 这一轮的**持久代次** —— 证据行(`regression_evidence.generation`)上那个值,
    * `reopenFailedFreeReview` 重跑时换成新的。它就是「这一轮的这一次」的身份。
    *
-   * **`null` = 代次待定**:`launchReviewRound` 在读证据行之前就得先占住这一轮(不然那一长串
-   * 准备全裸着,见文件头 ⑬ 第二条),而代次要等那一行读出来才知道。读到之后由
-   * `adoptReviewDispatchGeneration` 补上,在那之前这张证只说「有人在准备」。
+   * 领证的时候就一定知道它(文件头 ⑭ 第二条):公开这一轮之前先建证据行、再领证,所以不存在
+   * 「证已经领了、代次还没读到」那一档 —— 原先那张「代次待定」的占位证连带它的 `adopt`
+   * 一起去掉了。
    */
-  generation: string | null;
+  generation: string;
   /** 这张证本身的编号。归还只认它:上一张证归还不了别人后来领的那一张。 */
   token: string;
   /**
@@ -204,33 +221,18 @@ export function reviewDispatchOwned(runId: string, round: number, token: string)
  * 一笔)知道上一代是谁,由它撕掉那一张(`supersedeReviewDispatch`),然后同步抢自己这一张。接管
  * 因此只有一条有权威依据的出路,而不是「谁后来谁有理」。
  *
- * `generation` 传 `null` = **代次待定**的准备占位(见 `DispatchClaim.generation`)。
+ * **领它的人是公开这一轮的那一个**(文件头 ⑭ 第二条),所以代次此刻一定已经知道了,而且领证要
+ * 排在「公开 reviewing」那一笔写之前 —— 反过来写就会留下一段「库里已经 reviewing、谁都没在
+ * 负责」的时间,那正是孤儿收尸的全部依据。
  */
 export function claimReviewDispatch(
-  runId: string, round: number, generation: string | null, phase: DispatchClaim["phase"] = "preparing",
+  runId: string, round: number, generation: string, phase: DispatchClaim["phase"] = "preparing",
 ): string | null {
   const key = keyOf(runId, round);
   if (armed.has(key)) return null;
-  const token = `${generation ?? "preparing"}#${++claimSeq}`;
+  const token = `${generation}#${++claimSeq}`;
   armed.set(key, { generation, token, phase });
   return token;
-}
-
-/**
- * 准备占位读到证据行了:把**代次**补到自己那张证上。token 已经不是负责人就返回 false ——
- * 调用方据它就地让出(一个字都别写)。
- *
- * 为什么不能默默填上:中间可能正好有一次重跑把这张证撕掉了(`supersedeReviewDispatch` 对
- * 代次待定的证也生效,理由在那边)。那一刻这一次准备已经作废,拿新代次填上去就等于冒充现任,
- * 接着会和重跑自己那一份各送一份任务书。
- */
-export function adoptReviewDispatchGeneration(
-  runId: string, round: number, token: string, generation: string,
-): boolean {
-  const held = armed.get(keyOf(runId, round));
-  if (held?.token !== token) return false;
-  held.generation = generation;
-  return true;
 }
 
 /**
@@ -240,14 +242,14 @@ export function adoptReviewDispatchGeneration(
  * 是谁」在它手上是**权威**而不是猜测。撕完要在**同一段同步代码**里抢下自己那一张 —— 中间插进
  * 任何 await,就又开出一个「谁都没在负责」的窗口给对账收尸。
  *
- * **代次待定的那种证也一并撕掉**:它的持有者还没读到证据行,放着不动的话它随后读到的会是
- * **新**代次、以现任身份继续准备,于是重跑自己那一份和它各送一份任务书。它的 `adopt` 会在那
- * 一刻失败,就地让出(那条出路就是为这里留的)。
+ * **只撕上一代那一张**:认领证上的代次自领证那一刻就定下来了(文件头 ⑭ 第二条),所以这里不必
+ * 再照顾「代次待定」那一档 —— 它已经不存在。撕不掉(手里那张属于别人)就返回 false,调用方据它
+ * 知道自己没能接管。
  */
 export function supersedeReviewDispatch(runId: string, round: number, generation: string): boolean {
   const key = keyOf(runId, round);
   const held = armed.get(key);
-  if (!held || (held.generation !== null && held.generation !== generation)) return false;
+  if (held?.generation !== generation) return false;
   armed.delete(key);
   return true;
 }
@@ -267,6 +269,31 @@ function markReviewDispatchQueued(runId: string, round: number, token: string): 
 export function releaseReviewDispatchClaim(runId: string, round: number, token: string): void {
   const key = keyOf(runId, round);
   if (armed.get(key)?.token === token) armed.delete(key);
+}
+
+/**
+ * **公开 reviewing 那一笔里一起落下的「有人负责」** —— 准备阶段持久的那一半(文件头 ⑭)。
+ *
+ * 为什么非得持久:内存认领(`armed`)只答得出「**本进程**此刻有没有人在办」。公开 reviewing
+ * 之后、派发真正排上队之前,这一轮在库里长的是「reviewing + 没有意图」—— 那正是孤儿的全部
+ * 特征,于是
+ *  · 同进程里,对账只要落在「读完 armed」与「下笔」之间,活着的准备照样被收尸(第 2 轮审查
+ *    问题 2 复现 B:零故障注入,两次普通查询的返回顺序就够了);
+ *  · 跨重启更没救 —— 内存那张表随进程一起没了,这一轮再也没人补办。
+ * 所以责任和「公开 reviewing」同在一笔写里落进库。上一个进程死在准备阶段的那一种,由
+ * `redeliverReviewRound` 照补投那条路重走一遍 —— 「死在准备」和「死在排队」本来就是同一回事。
+ *
+ * `attempts: 0` 不是凑数:它同时是**第一次排队那一笔写的 CAS 版本**(`takeIntent` 的 `from`),
+ * 所以准备与排队是同一条意图链上的第 0 次与第 1 次,不是各写一次的两份意图。
+ *
+ * `replay` 三位照 `FreeReviewDispatchIntent` 的原意写:补办必须重放**原派发**的会话策略,
+ * 所以登记的时候就得算准(公式只有 `freshSessionFor` 一处,别在调用点自己拼)。
+ */
+export function preparingReviewDispatch(
+  generation: string, since: string,
+  replay: { resumeSessionId?: string | null; retry?: boolean; freshSession: boolean },
+): FreeReviewDispatchIntent {
+  return { attempts: 0, since, generation, phase: "preparing", ...replay };
 }
 
 /**
@@ -311,6 +338,7 @@ async function takeIntent(
   // `json_extract` 在「没有意图」和「老意图没这一位」两种现场都给 NULL,所以这里一律用
   // SQLite 的 `IS` / `IS NOT`(对 NULL 也成立),别换成 `=`:那样两种现场会静静地都不匹配。
   const mine = sql`json_extract(${freeReviewRounds.dispatch}, '$.generation')`;
+  const version = sql`json_extract(${freeReviewRounds.dispatch}, '$.attempts')`;
   try {
     const taken = await db.update(freeReviewRounds).set({ dispatch: intent })
       .where(and(
@@ -324,7 +352,11 @@ async function takeIntent(
         from === null
           ? sql`${mine} is not ${generation}`
           : and(
-            sql`json_extract(${freeReviewRounds.dispatch}, '$.attempts') = ${from}`,
+            // `from === 0` = **第一次排队**,CAS 的对象是登记责任那一笔写下的准备意图
+            // (`preparingReviewDispatch`)。意图不在也放行:那一份没落下来(`unwritable` 那一档)
+            // 时同进程的等待者仍然是活的,在这里把它判成「别人办过了」等于拿一次写库故障换掉
+            // 一整轮审查 —— 和改之前(`from === null` 对空意图放行)一个口径。
+            from === 0 ? sql`(${version} is null or ${version} = 0)` : sql`${version} = ${from}`,
             sql`(${mine} is ${generation} or ${mine} is null)`,
           ),
       ))
@@ -511,7 +543,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
     const next = attempts + 1;
     const taken = await takeIntent(run.id, run.currentRound, generation, expected, {
       attempts: next, since, resumeSessionId: dispatch.resumeSessionId ?? null, retry: dispatch.retry,
-      freshSession: dispatch.freshSession, generation,
+      freshSession: dispatch.freshSession, generation, phase: "queued",
     }, freeReviewEvidenceDir(taskId, run.id, run.currentRound));
     if (taken === "lost") {
       return handOff("在途意图已经不是我们手里那一份（这一轮已经被办过了，或者这一轮已经被重跑成另一次）");

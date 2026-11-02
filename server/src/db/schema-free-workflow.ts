@@ -125,6 +125,16 @@ export type FreeReviewDispatchIntent = {
    * 老行(加这一位之前写下的意图)留 undefined,读端按原公式回落(见 `launchReviewRound`)。
    */
   freshSession?: boolean;
+  /**
+   * 办到哪一步了 —— `preparing` = 还在算任务书(工作区、HEAD、MCP 预检),`queued` = 已经排进
+   * 回合锁的等待队列。
+   *
+   * **两档都是「这一轮有人负责」**,这一位只决定措辞:补投时说得清上次中断在哪一段。为什么
+   * 准备阶段也要落库,见 `preparingReviewDispatch`(没有它,一个活着的准备在对账眼里就是孤儿)。
+   *
+   * 老行(加这一位之前写下的意图)留 undefined,按 `queued` 读 —— 那时候只有排上队才会落意图。
+   */
+  phase?: "preparing" | "queued";
 };
 
 export const freeReviewRounds = sqliteTable(

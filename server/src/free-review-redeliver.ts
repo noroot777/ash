@@ -130,7 +130,9 @@ export async function redeliverReviewRound(
       const launched = await launchReviewRound(task, run, {
         resumeSessionId: intent.resumeSessionId ?? undefined,
         retry: intent.retry,
-        claimToken: token,
+        // 这一路的责任是上面那一段自己领的(代次现读 + 同步认领),`since` 沿用库里那一份 ——
+        // 补办不是另一次派发,是同一次派发的第二次投递,等待时长不能被重置。
+        responsibility: { generation, claimToken: token, since: intent.since },
         redeliver: {
           attempts: intent.attempts,
           since: intent.since,

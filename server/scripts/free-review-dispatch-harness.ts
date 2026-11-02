@@ -32,9 +32,9 @@ export async function startHarness() {
   const { agents, freeReviewRounds, freeReviewRuns, groups, projects, regressionEvidence,
     reviewerProfiles, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
-  const { handleFreeWorkflowSettlement, reconcileFreeReviews, reserveFreeReview } =
-    await import("../src/free-workflow.js");
-  const { adoptReviewDispatchGeneration, claimReviewDispatch, dispatchReviewRound,
+  const { handleFreeWorkflowSettlement, reserveFreeReview } = await import("../src/free-workflow.js");
+  const { reconcileFreeReviews } = await import("../src/free-review-reconcile.js");
+  const { claimReviewDispatch, dispatchReviewRound, preparingReviewDispatch,
     MAX_REVIEW_DISPATCH_ATTEMPTS, reviewDispatchArmed, reviewDispatchOwned, supersedeReviewDispatch } =
     await import("../src/free-review-dispatch.js");
   const { reviewLifecycle } = await import("../src/review-lifecycle-lock.js");
@@ -216,7 +216,7 @@ export async function startHarness() {
   return {
     db, freeReviewRounds, freeReviewRuns, groups, regressionEvidence, sessions, tasks,
     handleFreeWorkflowSettlement, reconcileFreeReviews, reserveFreeReview,
-    adoptReviewDispatchGeneration, claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound,
+    claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound, preparingReviewDispatch,
     MAX_REVIEW_DISPATCH_ATTEMPTS, releaseReviewDispatchClaim, reviewDispatchArmed, reviewDispatchOwned,
     reviewLifecycle, supersedeReviewDispatch,
     completeRegressionSettlement, regressionSettlementConclusion,

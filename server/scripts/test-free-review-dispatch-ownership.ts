@@ -5,7 +5,7 @@
 // **重跑**(`reopenFailedFreeReview` 把它放回 reviewing 并换一个新的证据代次),于是「这一行」会
 // 先后代表同一轮的好几次派发 —— 认领、意图、资源处置、失败收尾、孤儿收尾各自都得分得清是哪一次。
 //
-// 十条用例:
+// 十三条用例:
 //  ⑭ **认领 / 清意图 / 失败收尾按代次隔离** → 上一次重跑的收尾碰不到新一次(第 3 轮审查 F2);
 //  ⑮ **旧收尾还没放手时点「继续本轮审查」** → 新一次照样派得出去,不被静静吞掉(同上);
 //  ⑯ **认领之后现读抛异常** → 证还回去、意图留着,健康之后补办得了(第 3 轮审查 F3);
@@ -16,7 +16,11 @@
 //  ⑳ **代次的权威在证据行** → 旧的那一次从长 await 里回来,覆盖不了新一代写下的意图(同上);
 //  ㉑ **旧那一次挤不掉新一次的认领** → 内存那一半也有权威,不是「谁后来谁有理」(第 1 轮审查问题 1);
 //  ㉒ **准备阶段就有人负责** → 任务书还在算的那一轮不是孤儿,证一还掉才该收尸(第 1 轮审查问题 2);
-//  ㉓ **失去所有权的等待者不起回合** → 作废的那一笔在释放点上就地让出,不送、不清、不落终态(问题 1)。
+//  ㉓ **失去所有权的等待者不起回合** → 作废的那一笔在释放点上就地让出,不送、不清、不落终态(问题 1);
+//  ㉔ **失败收尾没有无身份兜底** → 两种身份各自可核,说不清自己是哪一次就一个字都不写(第 2 轮审查问题 1);
+//  ㉕ **准备责任是持久的** → 重启后「死在准备」照补投走,不按孤儿收尸(第 2 轮审查问题 2);
+//  ㉖ **孤儿结算按同一份持久责任 CAS** → 读完没人管、下笔前有人接手的,那一笔自己不成立(同上,复现 B);
+//  ㉗ **真派审入口公开这一轮的同一笔就带着责任** → 一次普通对账收不走刚公开、还在准备的那一轮(同上,复现 A)。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
 // (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。
@@ -34,13 +38,14 @@ try {
   const {
     db, freeReviewRounds, freeReviewRuns, regressionEvidence, tasks,
     handleFreeWorkflowSettlement,
-    claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound,
+    claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound, preparingReviewDispatch,
     releaseReviewDispatchClaim, reviewDispatchArmed, reviewDispatchOwned, supersedeReviewDispatch,
     failReviewStart, redeliverReviewRound, reopenFailedFreeReview, reviewOrphanStillUnowned,
     reconcileFreeReviews, claimTurn, forceReleaseTurn, freeReviewEvidenceDir, launchReviewRound,
     turnIdentity,
     completeRegressionSettlement, regressionSettlementConclusion,
-    at, timeline, until, runRow, roundOf, reviewerSessions, holdLifecycle, restarted, finish,
+    at, timeline, until, armedTask, runOf, runRow, roundOf, reviewerSessions, holdLifecycle,
+    restarted, finish,
   } = await startHarness();
 
   // ── ⑭ 认领 / 清意图 / 失败收尾按代次隔离 ──────────────────────────────────────
@@ -385,30 +390,37 @@ try {
   // 第 1 轮审查问题 2:`launchReviewRound` 要走证据行、工作区、HEAD、MCP 预检、任务书重算一长
   // 串 await,而 run/round 在它之前就已经是 reviewing。那段时间里对账看到的正是「reviewing +
   // 没有意图 + 没有等待者」= 孤儿的全部特征,于是把一个**活着的准备**收尸成 failed/error ——
-  // 准备完成后 dispatched=false,这一轮再也不会自动开始。认领因此挪到 launch 的第一行,代次
-  // 待定也先占住。反面那一半(证一还掉就该照常收尸)同在这条用例里,否则它会变成一条空测。
-  // 甲:**真 launch**,真卡在准备里。判据必须压在生产那一行上 —— 只摆一张手工占位的证,钉住的
-  // 只是「有占位时不收尸」(那一问上一轮就有了),钉不住「launch 到底有没有在准备前领证」,而那
-  // 正是这一条缺陷的所在。卡住的办法不碰任何库函数:把 PATH 上那个 codex 桩改慢 —— ash MCP
-  // 预检那一步会真的 spawn 它,于是准备阶段真的被拉长(报告里那条长 await 就是它)。
+  // 准备完成后 dispatched=false,这一轮再也不会自动开始。
+  //
+  // 第 2 轮审查把责任又往前挪了一步:**登记责任的人是公开这一轮的那一个**,而且登记的那一份是
+  // **持久的**(round 行上的 `preparing` 意图,与公开 reviewing 同一笔写)。所以这条用例按
+  // publisher 的样子布置现场(证 + 持久意图),再让真 launch 卡在准备里。卡住的办法不碰任何库
+  // 函数:把 PATH 上那个 codex 桩改慢 —— ash MCP 预检那一步会真的 spawn 它。
   {
     const id = "free-dispatch-preparing-live";
     const runId = await restarted(id, 1);
-    await db.update(freeReviewRounds).set({ dispatch: null })
+    const generation = (await roundOf(runId)).dispatch!.generation!;
+    // publisher 登记责任的那两下:同步领证 + 公开 reviewing 的同一笔里带上持久意图。
+    await db.update(freeReviewRounds)
+      .set({ dispatch: preparingReviewDispatch(generation, at, { retry: false, freshSession: true }) })
       .where(eq(freeReviewRounds.id, `${runId}-round`));
+    const claimToken = claimReviewDispatch(runId, 1, generation);
+    assert.ok(claimToken, "公开这一轮之前就领到了证");
     const stub = join(root, "bin", "codex");
     writeFileSync(stub, "#!/bin/sh\nsleep 0.6\nexit 1\n");
     chmodSync(stub, 0o755);
     try {
       const launching = launchReviewRound(
-        (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!, await runRow(runId), {});
-      // 缺陷形态在这里就等不到:那一版的认领落在准备**之后**(dispatchReviewRound 里),所以
-      // 准备期间内存里一个人都没有。
-      await until("launch 真的进了准备阶段", async () => reviewDispatchArmed(runId, 1));
-      assert.equal((await roundOf(runId)).dispatch, null,
-        "这一刻库里还没有意图 —— 「reviewing + 没有意图 + 没有等待者」正是收尸的全部依据");
+        (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!, await runRow(runId),
+        { responsibility: { generation, claimToken: claimToken!, since: at } });
+      await until("launch 真的进了准备阶段", async () => !!(await roundOf(runId)).dispatch);
+      assert.equal((await roundOf(runId)).dispatch?.phase, "preparing",
+        "持久那一半:库里这一行自己就说得出「有人在准备」（重启后唯一的线索）");
+      assert.equal(reviewDispatchArmed(runId, 1), true, "内存那一半:本进程此刻确实有人盯着");
       assert.equal(await reviewOrphanStillUnowned(await runRow(runId)), null,
-        "可它明明在干活:判据给出凭据就等于放行收尸");
+        "它明明在干活:判据给出凭据就等于放行收尸");
+      // 内存那一半单独成立(意图没落库时)由下面的乙钉 —— 这里抹掉它会把第一次排队的 CAS 对象
+      // 也一起抹了,后面那句「准备走完就该真排出去」会因此变成假红。
       await reconcileFreeReviews(id);
       assert.equal((await roundOf(runId)).status, "reviewing", "活着的准备不许被收尸（问题 2）");
       assert.equal((await runRow(runId)).status, "reviewing", "run 也不许被它改掉");
@@ -421,16 +433,15 @@ try {
     }
   }
 
-  // 乙:反面那一半 —— 准备那一次崩了/让出了(证还回去),这一轮才真的没人管,对账照常收尸。
-  // 没有它,甲那几句就分不清「判据起作用」和「这条路压根收不了尸」。
+  // 乙:反面那一半 —— 准备那一次崩了/让出了(证还回去、意图也没落下),这一轮才真的没人管,
+  // 对账照常收尸。没有它,甲那几句就分不清「判据起作用」和「这条路压根收不了尸」。
   {
     const id = "free-dispatch-preparing";
     const runId = await restarted(id, 1);
-    // 首次派审的准备阶段现场:库里还没有任何意图(它要等准备走完才写)。
+    const generation = (await roundOf(runId)).dispatch!.generation!;
     await db.update(freeReviewRounds).set({ dispatch: null })
       .where(eq(freeReviewRounds.id, `${runId}-round`));
-    // 代次待定的准备占位 —— `launchReviewRound` 第一行领的就是这一张(代次要等证据行读出来)。
-    const token = claimReviewDispatch(runId, 1, null);
+    const token = claimReviewDispatch(runId, 1, generation);
     assert.ok(token, "准备阶段领得到证");
     assert.equal(reviewDispatchArmed(runId, 1), true, "准备中也算「有人负责」");
     assert.equal(await reviewOrphanStillUnowned(await runRow(runId)), null, "有人准备着就不是孤儿");
@@ -480,13 +491,147 @@ try {
     console.log("✓ ㉓ 失去所有权的等待者在释放点上就地让出：不送、不清、不落终态");
   }
 
+  // ── ㉔ 失败收尾没有无身份兜底 ───────────────────────────────────────────────
+  // 第 2 轮审查问题 1:三处 catch(升轮、重跑、即时派审)挂的都是**异步**准备链,异常可以在这一轮
+  // 已经失败、被重跑成另一次之后才到。它们原先都省掉身份,于是那一笔绕过代次闸把**现任**打成
+  // error,还按整轮(run 级)把新一代刚挂上的哨兵停掉(实测:新审查者仍在输出,它等的后台检查被
+  // 停)。必填只解决「写不出省略形」,还要让剩下的两种形状各自**可核** —— 否则「没公开过」就是
+  // 换个名字的兜底。
+  {
+    const id = "free-dispatch-fail-identity";
+    const runId = await restarted(id, 1);
+    const run = await runRow(runId);
+    const directory = freeReviewEvidenceDir(id, runId, 1);
+    const generation = (await roundOf(runId)).dispatch!.generation!;
+
+    // 甲:`"unpublished"` 的闸是「轮次行**真的不存在**」。行在那里就说明它已经被公开过(很可能
+    // 还被重跑成了另一次),这一笔没有资格碰它 —— 报告里那条路正是从这儿走通的。
+    await failReviewStart(run, "旧准备的迟到异常", "unpublished");
+    assert.equal((await roundOf(runId)).status, "reviewing",
+      "公开过的轮次不许被「没公开过」那一笔改写 —— 打死的会是现任那一次");
+    assert.equal((await runRow(runId)).status, "reviewing", "run 也不许");
+    assert.doesNotMatch(timeline(id), /审查启动失败/, "连一句话都不该留下");
+
+    // 乙:带身份的那一笔,代次**读不出来**也不放行。原先这里写的是「证据行不在就只看形状」,
+    // 而那一档恰恰是无身份兜底的最后一个入口:说不清自己是哪一次,就没有落账的资格。
+    await db.delete(regressionEvidence).where(eq(regressionEvidence.directory, directory));
+    await failReviewStart(run, "代次读不出来的失败", { generation });
+    assert.equal((await roundOf(runId)).status, "reviewing", "读不出代次就一个字都不写");
+    assert.equal((await runRow(runId)).status, "reviewing", "run 也不许");
+    console.log("✓ ㉔ 失败收尾没有无身份兜底：两种身份各自可核，说不清是哪一次就不落账");
+  }
+
+  // ── ㉕ 准备责任是持久的：重启后「死在准备」照补投走 ─────────────────────────
+  // 内存那张证只答得出「**本进程**此刻有没有人在办」,进程一没就什么都不剩。所以责任还有持久的
+  // 一半:公开 reviewing 的同一笔里落下 `attempts: 0` 的准备意图。有它,「死在准备」和「死在
+  // 排队」在恢复眼里就是同一回事 —— 照补投重走一遍,而不是按孤儿收尸。
+  {
+    const id = "free-dispatch-preparing-restart";
+    const runId = await restarted(id, 0, { phase: "preparing" });
+    const task = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+    const run = await runRow(runId);
+    assert.equal(reviewDispatchArmed(runId, 1), false, "重启后内存里一个人都没有");
+    assert.equal(await reviewOrphanStillUnowned(run), null,
+      "库里那一行自己就说得出「有人负责」—— 重启之后这是唯一的线索");
+
+    // 先占住回合,好让补投只排进等待队列(真投递会去起执行器,那是另一件事)。
+    assert.equal(claimTurn(id, "single"), true, "先占住回合");
+    assert.equal(await redeliverReviewRound(task, run, await roundOf(runId)), "handled",
+      "「死在准备」归补投管,不归收尸管");
+    assert.equal((await roundOf(runId)).status, "reviewing", "一个终态都不许落");
+    assert.match(timeline(id), /还在准备阶段/,
+      "措辞得说得出上次中断在哪一段 —— 「已尝试 0 次」会让用户以为计数坏了");
+    forceReleaseTurn({ taskId: id, seq: turnIdentity(id)!.seq });
+    console.log("✓ ㉕ 准备责任是持久的：重启后照补投走，不按孤儿收尸");
+  }
+
+  // ── ㉖ 孤儿结算按同一份持久责任 CAS ─────────────────────────────────────────
+  // 第 2 轮审查问题 2 复现 B(零故障注入):⑰ 那几问读完之后,到落笔之间还隔着几次 await,而这中间
+  // 一次**合法的接手**压根不起回合 —— 公开 reviewing 的那一笔带着持久责任落库,重跑也只是换代次
+  // 再登记一次。两者都不增长 `directionEpoch`,所以 ⑱ 那道闸答的是另一个问题,放行它。硬保证只能
+  // 是:把「此刻没有任何派发责任」这句前提本身写进落笔那个事务。
+  {
+    const id = "free-dispatch-orphan-cas";
+    const runId = await restarted(id, 1);
+    const generation = (await roundOf(runId)).dispatch!.generation!;
+    await db.update(freeReviewRounds).set({ dispatch: null })
+      .where(eq(freeReviewRounds.id, `${runId}-round`));
+    const run = await runRow(runId);
+    const fence = await reviewOrphanStillUnowned(run);
+    assert.ok(fence, "判断那一刻确实没人管");
+
+    // 这就是那一次接手:它不起回合,所以 `directionEpoch` 一位都没动。
+    await db.update(freeReviewRounds)
+      .set({ dispatch: preparingReviewDispatch(generation, at, { retry: false, freshSession: true }) })
+      .where(eq(freeReviewRounds.id, `${runId}-round`));
+    await handleFreeWorkflowSettlement(id, "done", false, null, "reviewer", true, false, fence!);
+    assert.equal((await runRow(runId)).status, "reviewing", "迟到的收尾一个字都不许写");
+    assert.equal((await roundOf(runId)).status, "reviewing", "轮次也不许被它改掉");
+    // 两段式结算:上半场那一笔(settlement/continuation)也得被同一个条件挡住,否则那条正在准备
+    // 的审查随后上报结论会被「本轮已进入结算」拒掉(第 4 轮审查 F1 的形状)。
+    const poisoned = (await db.select().from(regressionEvidence)
+      .where(eq(regressionEvidence.directory, freeReviewEvidenceDir(id, runId, 1)))).at(0)!;
+    assert.equal(poisoned.settlement, null, "连首次持久写都不许落");
+    assert.equal(poisoned.continuation?.phase, "running", "续跑相位也不许被它改成 exited");
+
+    // 没人接手时,同一条路照常把它收掉 —— 闸挡的是迟到者,不是收尾本身。
+    await db.update(freeReviewRounds).set({ dispatch: null })
+      .where(eq(freeReviewRounds.id, `${runId}-round`));
+    const again = await reviewOrphanStillUnowned(run);
+    assert.ok(again, "这一拍仍然没人管");
+    await handleFreeWorkflowSettlement(id, "done", false, null, "reviewer", true, false, again!);
+    assert.equal((await runRow(runId)).status, "failed", "没人接手时照常收尾");
+    console.log("✓ ㉖ 孤儿结算按同一份持久责任 CAS：下笔前有人接手的，那一笔自己不成立");
+  }
+
+  // ── ㉗ 真派审入口：公开这一轮的同一笔就带着责任 ─────────────────────────────
+  // 第 2 轮审查问题 2 复现 A(零故障注入):`startFreeReview` 先插 run、再插 round,然后还要清预约、
+  // 可选写时间线,最后才调 launch。那几步之间 run/round 都已经是 reviewing,而责任一处也没有 ——
+  // 一次普通对账就把它判成 failed/error,随后 POST 照样回 201,任务书一个字都没送出去。
+  //
+  // 前面几条用例的现场都是手工摆的,钉不住「**生产那三个 publisher** 到底有没有在公开的同一笔里
+  // 登记责任」。这一条走真入口:预约消费 → startFreeReview → 公开 → launch。卡住的办法还是那个
+  // 慢桩(MCP 预检会真 spawn 它),所以观察窗口落在「已经公开、还在准备」上。
+  {
+    const id = "free-dispatch-publish-atomic";
+    await armedTask(id);
+    const stub = join(root, "bin", "codex");
+    writeFileSync(stub, "#!/bin/sh\nsleep 0.8\nexit 1\n");
+    chmodSync(stub, 0o755);
+    try {
+      const settling = handleFreeWorkflowSettlement(id, "done", true, true, "single");
+      await until("派审真的把这一轮公开了", async () => !!(await runOf(id)));
+      const run = await runOf(id);
+      await until("round 行也落下来了", async () => !!(await roundOf(run.id)));
+      const round = await roundOf(run.id);
+      assert.equal(round.status, "reviewing", "这一刻它确实已经公开了（用户那边能看到「审查中」）");
+      assert.ok(round.dispatch, "**公开的同一笔就带着责任** —— 复现 A 就是从这个缺口进来的");
+      assert.equal(round.dispatch?.phase, "preparing", "而且说得出它此刻还在准备阶段");
+      assert.equal(await reviewOrphanStillUnowned(run), null, "所以孤儿路一个字都不许写");
+      await reconcileFreeReviews(id);
+      assert.equal((await roundOf(run.id)).status, "reviewing", "一次普通对账收不走它（复现 A）");
+      assert.equal((await runRow(run.id)).status, "reviewing", "run 也不许被它改掉");
+      await settling;
+      assert.equal((await roundOf(run.id)).dispatch?.phase, "queued", "准备走完,相位往前走一格");
+      // 回合是 armedTask 刻意占着的(复刻结算钩子跑在锁里那一刻);放开它,这一笔才有结局,
+      // 认领证也才还得回来 —— `finish` 那一扫等的就是它。
+      forceReleaseTurn({ taskId: id, seq: turnIdentity(id)!.seq });
+    } finally {
+      writeFileSync(stub, "#!/bin/sh\nexit 1\n");
+      chmodSync(stub, 0o755);
+    }
+    console.log("✓ ㉗ 真派审入口：公开这一轮的同一笔就带着责任，对账收不走还在准备的那一轮");
+  }
+
   await finish(["free-dispatch-generation", "free-dispatch-reopen", "free-dispatch-claim-leak",
     "free-dispatch-settle-guard", "free-dispatch-fence", "free-dispatch-lifecycle",
     "free-dispatch-fence-commit", "free-dispatch-lifecycle-late", "free-dispatch-lifecycle-reopen",
     "free-dispatch-authority", "free-dispatch-claim-authority", "free-dispatch-preparing-live",
-    "free-dispatch-preparing", "free-dispatch-waiter-ownership"],
+    "free-dispatch-preparing", "free-dispatch-waiter-ownership", "free-dispatch-fail-identity",
+    "free-dispatch-preparing-restart", "free-dispatch-orphan-cas", "free-dispatch-publish-atomic"],
     ["free-dispatch-reopen", "free-dispatch-claim-leak", "free-dispatch-lifecycle-reopen",
-      "free-dispatch-preparing-live"]);
+      "free-dispatch-preparing-live", "free-dispatch-preparing-restart",
+      "free-dispatch-publish-atomic"]);
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
