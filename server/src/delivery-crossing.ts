@@ -193,9 +193,61 @@ function crossingTurnOf(text: string): CrossingTurn | null {
   } catch { return null; }
 }
 
+/**
+ * ── 协议层**明确拒收**的记号 ──────────────────────────────────────────────────
+ *
+ * 越线记号(上面那一整套)回答的是「这段输入交出去了吗」,而它只到 spawn 那条线为止。codex
+ * app-server 的回合输入是 spawn **之后**再走 JSON-RPC 发出去的,于是存在一个越线记号答不了的
+ * 现场:**线越过了,输入却一个字都没写出去**(协议握手就断了)。这一位就补这一格。
+ *
+ * 为什么要落盘、而不是只在进程内判(第 1 轮自由审查 F2 要的「不变量放在持久化层」):进程内
+ * 那一份只够当场归还。判出拒收之后、`returnCheckpointRun` 落库之前进程要是没了,重启对账手上
+ * 又只有越线记号 —— 记号在、会话行也在,它会判成 `delivered` 并补记送达,那段续跑交代就没了。
+ * 窗口窄,但这条链上出事的形状一直都是窄窗口。
+ *
+ * **尽力而为档**:写不成只告警。失败的代价是那条窄缝退回改动之前的样子(按越线记号判),而不是
+ * 把一次正常的拒收处理整个拦掉 —— 进程内那一半已经归还了,这里只是给重启留个凭据。
+ */
+const refusalDir = (taskId: string): string => join(RUNS_DIR, taskId, "refused");
+const refusalPath = (taskId: string, messageId: string): string => join(refusalDir(taskId), messageId);
+
+export function noteDeliveryRefusal(taskId: string, messageIds: readonly string[]): void {
+  if (!messageIds.length) return;
+  try {
+    mkdirSync(refusalDir(taskId), { recursive: true });
+    for (const messageId of messageIds) {
+      const fd = openSync(refusalPath(taskId, messageId), "w");
+      try {
+        writeSync(fd, JSON.stringify({ at: new Date().toISOString() }));
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    }
+    fsyncDir(refusalDir(taskId));
+  } catch (error) {
+    console.warn(`[ash] 协议拒收记号写入失败 task=${taskId}:`, error);
+  }
+}
+
+/**
+ * 协议层明确拒收过这一条吗。**只有「记号确实在」才算数** —— 读不出来一律当假:这一位是用来
+ * 推翻「已送达」那个结论的,拿一次 I/O 故障去推翻它就是另一个方向的误判。
+ */
+export function deliveryRefused(taskId: string, messageId: string): boolean {
+  try {
+    return statSync(refusalPath(taskId, messageId)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /** 这一条投递已经有定论了(标 sent / 已归还),记号留着只是垃圾。 */
 export function forgetDeliveryCrossing(taskId: string, messageIds: readonly string[]): void {
   for (const messageId of messageIds) {
+    // 拒收记号跟越线记号同一个生命周期:定论一下,两张都是垃圾。
+    try { rmSync(refusalPath(taskId, messageId), { force: true }); }
+    catch (error) { console.warn(`[ash] 协议拒收记号清理失败 task=${taskId} message=${messageId}:`, error); }
     try { rmSync(crossingPath(taskId, messageId), { force: true }); }
     catch (error) { console.warn(`[ash] 投递越线记号清理失败 task=${taskId} message=${messageId}:`, error); }
   }

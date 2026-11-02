@@ -4,7 +4,9 @@ import { scheduledMessages, sessionTurns, sessions, tasks } from "./db/schema.js
 import {
   checkpointSeizureReason, describeCheckpointOwner, mintCheckpointOwner,
 } from "./checkpoint-ownership.js";
-import { crossingProvesAbsence, readDeliveryCrossing, type CrossingTurn } from "./delivery-crossing.js";
+import {
+  crossingProvesAbsence, deliveryRefused, readDeliveryCrossing, type CrossingTurn,
+} from "./delivery-crossing.js";
 import { restoreMonitorCheckpoint } from "./monitor-checkpoint-handoff.js";
 
 export const CHECKPOINT_RUN_ORIGIN = "checkpoint:resume";
@@ -67,6 +69,12 @@ export async function checkpointDeliveryVerdict(
   receipt: { id: string; taskId: string; deliveringSince: string | null; crossingProtocol: string | null },
 ): Promise<CheckpointDelivery> {
   if (!receipt.deliveringSince) return "not-started";
+  // **协议层明确拒收的记号排在越线记号前面。** 两者问的不是同一件事:越线只到 spawn 那条线为止,
+  // 而 codex 的回合输入是 spawn 之后才发的 —— 「线越过了、输入一个字都没写出去」这个现场只有
+  // 拒收记号答得出来。少了这一句,那种凭证会因为「记号在、会话行也在」被判成已送达并补记,
+  // 交代就没了(第 1 轮自由审查 F2;进程内那一半在 orchestrator 判出 refused 时当场归还,
+  // 这里管的是它没来得及归还就重启的那条窄缝)。
+  if (deliveryRefused(receipt.taskId, receipt.id)) return "not-started";
   const crossing = readDeliveryCrossing(receipt.taskId, receipt.id);
   if (crossing.state === "crossed") {
     return crossing.about && await turnRecorded(crossing.about) ? "delivered" : "uncertain";

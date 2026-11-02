@@ -290,9 +290,22 @@ function rescheduleCheckpointSettle(receipt: Row, why: string, attempts: number,
  * 四个地方各错一遍(第 1 轮审查 F1 点名的同类入口)。
  */
 export async function settleStrandedCheckpointRun(receipt: Row, why: string,
-  /** 调用方**确知**这一轮一个字都没送出去(continueTask 返回 false:起跑前被冻结闸撤回、
-   *  或者越线凭据根本写不下来)。那是比任何事后读取都强的否证,直接归还。 */
-  notLaunched = false, attempts = 0): Promise<void> {
+  /**
+   * **调用方自己掌握的投递事实**,比任何事后读取都强,所以排在 `checkpointDeliveryVerdict` 前面:
+   *   · `not-launched` —— 这一轮一个字都没送出去(continueTask 返回 false:起跑前被冻结闸撤回,
+   *     或者越线凭据根本写不下来)。
+   *   · `refused`      —— **协议层明确拒收**:进程起来了、回合输入却从未写出去(codex app-server
+   *     死在握手里,或接管时协议日志证明这一轮从未启动)。两者都是确证的否证,直接归还。
+   *   · `unknown`      —— 调用方也说不上来(默认)。这一档才轮到事后对账:越线记号 + 会话行。
+   *
+   * 把 `refused` 单独接进来是第 1 轮自由审查 F2:上一版只有「启动了没有」这一位,于是协议层
+   * 明确拒收的那一轮照旧走对账 —— 越线记号在、会话行也在,判成 `delivered` 并补写送达,一段本该
+   * 继续执行的续跑交代就这么没了(实测日志里先打印「输入没能送进 agent」,紧接着打印「原文已
+   * 送达,补记这一笔确认」)。`unknown` 仍然走对账、仍然可能判 delivered,那是刻意的:越线记号
+   * 是比「等不到回执」更强的事实,而 agent 自己的流水线交接宁可不重放(见 pending-messages.ts
+   * 的 reclaimStaleDeliveries)。
+   */
+  fact: "not-launched" | "refused" | "unknown" = "unknown", attempts = 0): Promise<void> {
   // **失权方不许再写账**(第 2 轮自由审查 F1 的第 5 条):这个出口会归还、会补记、会就地
   // 了结 —— 三种都在改那张票和任务上的交代。票已经不在我名下时一个字都不许动:那边可能
   // 已经按别的结论处置过了,再写一遍就是「原文既被归还、又被标成已送达」。
@@ -308,8 +321,11 @@ export async function settleStrandedCheckpointRun(receipt: Row, why: string,
     rescheduleCheckpointSettle(receipt, why, attempts, new Error("所有权归属读不出来"));
     return;
   }
-  if (notLaunched) {
-    console.warn(`[ash] ${why} task=${receipt.taskId} message=${receipt.id}：这一轮在 spawn 之前就撤回了，归还给任务`);
+  if (fact !== "unknown") {
+    console.warn(`[ash] ${why} task=${receipt.taskId} message=${receipt.id}：`
+      + (fact === "not-launched"
+        ? "这一轮在 spawn 之前就撤回了，归还给任务"
+        : "协议层明确拒收（回合输入一个字都没写出去），归还给任务"));
     await returnCheckpointRun(receipt);
     return;
   }
