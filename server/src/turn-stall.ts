@@ -619,6 +619,36 @@ export function resumeTrippedTurn(
  * 身份不符就是空转(被接管的旧台收尾时会走到这里,那一刻状态已经归新台了)。
  */
 /**
+ * **「核实不了」后来读成了「确证零进展」**:把那条只警告的观察就地换回正常静默档。
+ *
+ * 两个结论都得有出边(第 2 轮自由审查 F1,实测):读出 `seen` 撤掉它(`withdrawTurnSilence`),
+ * 读出 `none` 就不再是历史未知 —— 参与证明完整、记号不在,整轮确实一条进展都没有,该恢复的是
+ * 正常静默计时与熔断责任。上一版只接了 `seen`,`none` 一来核验就停了,`unverifiedHistory`
+ * 永远留着,一个零输出回合于是永远「进行中」。
+ *
+ * 不能旁路再挂一条 `watchTurnSilence`:同一持有者同一轮已经在盯,它会原地返回。所以就在这一条
+ * 上换:钟改回回合真实起点(重启前欠的时间是真欠的,同 watchTurnSilence 的起算口径),警告按
+ * 正常静默档的措辞重报一次;已经投影出去的红环身份(`projectedSince`)不动,撤的时候照旧认它。
+ * 只换**这一轮、这个持有者、还背着未知豁免**的那一条。返回真 = 真换了。
+ */
+export function confirmTurnSilence(
+  sessionId: string,
+  owner: StallOwner,
+  turnStartedAt: string,
+): boolean {
+  const held = stalls.get(sessionId);
+  if (!held || held.owner !== owner || held.turnStartedAt !== turnStartedAt) return false;
+  if (held.kind !== "silence" || !held.unverifiedHistory) return false;
+  held.unverifiedHistory = false;
+  held.since = turnStartedAt;
+  held.sinceMs = Date.parse(turnStartedAt);
+  held.warned = false; // 先前那句「接管前核实不了」已经不准了,按确证零输出重报
+  evaluate(sessionId, held);
+  arm();
+  return true;
+}
+
+/**
  * **撤掉一条「只为核实不了而开」的静默观察** —— 那张进展证明后来读出来了「有过产出」。
  *
  * 和 `clearTurnStall` 的区别就是它那几道闸:只撤**这一轮、这个持有者、静默档、而且还没熔断**

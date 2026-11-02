@@ -32,7 +32,7 @@ import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import {
-  clearTurnStall, resumeTrippedTurn, trackTurnStall, watchAdoptedSilence, watchTurnSilence, withdrawTurnSilence,
+  clearTurnStall, confirmTurnSilence, resumeTrippedTurn, trackTurnStall, watchAdoptedSilence, watchTurnSilence, withdrawTurnSilence,
   type StallActions,
 } from "./turn-stall.js";
 import { progressUnreadableText, stallUnverifiableText } from "./turn-stall-text.js";
@@ -380,13 +380,19 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       // 这一刻起盯、到阈值警告并亮红环,但不熔断、不说「没跑起来」—— 接管之后没看到新东西是
       // 亲眼所见,接管之前有没有却仍然不知道(见 turn-stall.ts 的 `watchAdoptedSilence`)。
       //
-      // 同时接着重读那张证明(不设上限,见 verify-until-known.ts):真读出 `seen` 就把这条观察
-      // 就地撤掉 —— 它本来就只是为「核实不了」开的。
+      // 同时接着重读那张证明(不设上限,见 verify-until-known.ts),两个结论各有出边:读出 `seen`
+      // 就把这条观察撤掉;读出 `none` 就换回正常静默档、恢复熔断责任(第 2 轮自由审查 F1)。
       emitTurnError(progressUnreadableText());
       watchAdoptedSilence(sessId, a.handle, a.turnStart, stallActions, new Date().toISOString());
       const watchedTurn = a.turnStart;
       recoverTurnProgress(taskId, sessId, watchedTurn, (progress) => {
-        if (progress !== "seen") return; // 确证没产出:那条观察本来就该在,什么都不用动
+        if (progress === "none") {
+          if (confirmTurnSilence(sessId, a.handle, watchedTurn)) {
+            console.warn(`[ash] 会话 ${sessId} 本轮的进展证明后来读出来了「确证零进展」，`
+              + "那条按「核实不了」开的观察换回正常静默档(含熔断)");
+          }
+          return;
+        }
         progressSecured = true;
         if (withdrawTurnSilence(sessId, a.handle, watchedTurn)) {
           console.warn(`[ash] 会话 ${sessId} 本轮的进展证明后来读出来了「有过产出」，`
