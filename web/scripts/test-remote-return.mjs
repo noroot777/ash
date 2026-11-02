@@ -58,6 +58,16 @@ try {
       if (path === "/api/settings") {
         return await route.fulfill({ json: { composerSendKey: "enter" } });
       }
+      // 会话流本来就会无条件读一次「被挡回的操作」（useRejectionNotices.ts：那是任务历史
+      // 的一部分，不按有没有正文取舍），并挂上全应用共享的那条 SSE（events.ts）。两样都跟
+      // 这条用例要钉的「移回」无关，所以给固定应答——不给的话它们会被算进「未预期请求」，
+      // 而真正要防的是**移回端点**被轮询重试。
+      if (path.endsWith("/notices")) {
+        return await route.fulfill({ json: { notices: [], remedy: null } });
+      }
+      if (path === "/api/events") {
+        return await route.fulfill({ status: 200, contentType: "text/event-stream", body: ": fixture\n\n" });
+      }
       if (path.endsWith("/remote-return")) {
         requests.push(route.request().postDataJSON());
         requestedTaskIds.push(path.split("/").at(-2));
