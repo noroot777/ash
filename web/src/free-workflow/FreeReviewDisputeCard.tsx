@@ -93,11 +93,13 @@ export function FreeReviewDisputeCard({
   if (!dispute) return null;
   const blocked = disabled || debateRunning;
   const deferReason = dispute.deferReason;
+  // 这张卡代表的那一条：裁定和辩论都带上它，服务端不替用户挑「当前那条」。
+  const target = { runId: run.id, round: round.round };
 
   const startDebate = async () => {
     setBusy(true);
     try {
-      const result = await api.startFreeReviewDebate(taskId, exchanges);
+      const result = await api.startFreeReviewDebate(taskId, exchanges, target);
       onChanged(result.state);
       setPending(null);
       notify(`已开始辩论：审查者先答辩，共 ${exchanges * 2 + 1} 段发言；说完还是由你裁定`);
@@ -112,7 +114,7 @@ export function FreeReviewDisputeCard({
     setBusy(true);
     try {
       const written = note.trim();
-      const result = await api.resolveFreeReviewDispute(taskId, resolution, written || null);
+      const result = await api.resolveFreeReviewDispute(taskId, resolution, written || null, target);
       onChanged(result.state);
       setPending(null);
       setNote("");

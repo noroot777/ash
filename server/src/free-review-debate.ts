@@ -24,20 +24,23 @@ import type {
   FreeReviewDebateVerdict,
 } from "@ash/shared";
 import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { gateAshMcpBeforeLaunch } from "./ash-mcp-launch-gate.js";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import {
   freeReviewDebateTurns,
   freeReviewDebates,
+  freeReviewRounds,
   freeReviewRuns,
   projects,
   tasks,
 } from "./db/schema.js";
 import { debatePrompt, type DebateClosing } from "./free-review-prompts.js";
 // `plainSummaryOf`：发言摘要与驳回摘要是同一条规范，共用同一处校验（见那边的注释）。
-import { disputeBriefOf, openDisputeOf, plainSummaryOf, type ReviewRunRow } from "./free-review-dispute.js";
+import {
+  disputeBriefOf, disputeTargetOf, plainSummaryOf, targetedOpenDispute, type ReviewRunRow,
+} from "./free-review-dispute.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { claimOwnTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
@@ -195,10 +198,13 @@ async function launchSegment(
  */
 export async function startFreeReviewDebate(
   taskId: string,
-  input: { exchanges?: unknown } = {},
+  // `target`：用户在哪张驳回卡上点的（审查链 + 轮次）。任务上可以同时挂着好几条未裁定
+  // 驳回，按任务挑「当前那条」辩的就未必是他点的那条（理由见 targetedOpenDispute）。
+  input: { exchanges?: unknown; target?: unknown } = {},
   opts: { holdTurn?: boolean } = {},
 ): Promise<{ debateId: string; exchanges: number }> {
   const exchanges = exchangesOf(input.exchanges ?? 1);
+  const target = disputeTargetOf(input.target);
   // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
   // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
@@ -221,8 +227,7 @@ export async function startFreeReviewDebate(
       // 遗留的提问/续跑指令必须先处理：辩论回合的结算会把它们当成「这一段还没说完」，
       // 带着旧字段开辩论会让这条辩论永远收不了尾（同派审的门禁，理由见 free-workflow.ts）。
       if (task.question || task.resumePrompt) throw new Error("任务正等待答复或续跑，处理后再开辩论");
-      const open = await openDisputeOf(taskId);
-      if (!open) throw new Error("现在没有等待裁定的驳回，没有可辩的对象");
+      const open = await targetedOpenDispute(taskId, target, "现在没有等待裁定的驳回，没有可辩的对象");
       if (await activeDebateOf(taskId)) throw new Error("已经有一轮辩论正在进行");
       // 好好辩完的那条挡住再辩：同一份报告挂两条辩完的记录，只会让「到底以哪条为准」
       // 变成新问题——该裁定了，或者再派一轮审查。**中断的不挡**：那是系统没让人说完
@@ -366,7 +371,13 @@ export async function settleDebateTurn(taskId: string, turnOk: boolean): Promise
 
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   const run = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, debate.runId))).at(0);
-  const open = await openDisputeOf(taskId);
+  // 被辩对象就是开场时记下的那一轮（debate.roundId），不按任务重挑「当前那条」：
+  // 任务上挂着别的未裁定驳回时，重挑会把后面几段的驳回原文换成另一条的。
+  const open = (await db.select().from(freeReviewRounds).where(and(
+    eq(freeReviewRounds.id, debate.roundId),
+    isNull(freeReviewRounds.disputeResolution),
+    isNull(freeReviewRounds.disputeSupersededAt),
+  ))).at(0);
   if (!task || !run || !open) {
     await failDebate(debate, null, "辩论的被辩对象已经不在了（任务、审查链或驳回被改动）；");
     return true;
@@ -380,7 +391,7 @@ export async function settleDebateTurn(taskId: string, turnOk: boolean): Promise
     .where(eq(freeReviewDebates.id, debate.id));
   await launchSegment(
     task, run, { ...debate, currentSeq: next.seq }, next as DebateTurnRow,
-    disputeBriefOf(open.round), await debateTurnsOf(debate.id),
+    disputeBriefOf(open), await debateTurnsOf(debate.id),
   );
   return true;
 }

@@ -37,9 +37,9 @@
 // ③ 不能变成逃避修复的捷径——没写 `deferReason` 就拒绝这个裁定（判据是**边界**不是
 //    **工作量**，措辞见 free-review-prompts.ts 的 disputeOption）；
 // ④ 提出之后停下来等人——与驳回共用同一条停顿，撤自动复审预约的规矩也共用。
-import type { FreeReviewDisputeResolution, Task } from "@ash/shared";
+import type { FreeReviewDisputeResolution, FreeReviewDisputeTarget, Task } from "@ash/shared";
 import { MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE } from "@ash/shared/free-workflow";
-import { and, desc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
@@ -173,15 +173,58 @@ async function unresolvedDisputes(taskId: string): Promise<{ run: ReviewRunRow; 
       isNull(freeReviewRounds.disputeResolution),
       isNull(freeReviewRounds.disputeSupersededAt),
     ))
-    .orderBy(desc(freeReviewRounds.disputeAt));
+    // 排序键与界面上那张卡的 `dispute.at` 同一个兜底（free-workflow-state.ts）：接力载荷允许
+    // 驳回时间为空，两边各按各的排，显示的那条和「默认那条」就会是两条。
+    .orderBy(desc(sql`coalesce(${freeReviewRounds.disputeAt}, ${freeReviewRounds.endedAt}, ${freeReviewRounds.startedAt})`));
 }
 
 /**
- * 「现在有没有一条等着用户裁定的驳回」（判据见 `unresolvedDisputes`）。
- * 裁定闸、界面上的几颗按钮、辩论入口、修复入口全读它，一处定义。
+ * 「现在有没有一条等着用户裁定的驳回」（判据见 `unresolvedDisputes`），裁定闸读它。
+ * 它只回答「有没有」：要对**某一条**动手（裁定、辩论）走 `targetedOpenDispute`，别拿这里
+ * 排第一的那条当用户点的那条。
  */
 export async function openDisputeOf(taskId: string): Promise<{ run: ReviewRunRow; round: ReviewRoundRow } | null> {
   return (await unresolvedDisputes(taskId)).at(0) ?? null;
+}
+
+/** 一次用户动作指向的那条驳回：哪条审查链的第几轮。 */
+export type DisputeTarget = FreeReviewDisputeTarget;
+
+/** 请求体里的 `target`；没带是 null，带了却不完整就拒（半个目标比没有目标更容易指错）。 */
+export function disputeTargetOf(raw: unknown): DisputeTarget | null {
+  if (raw == null) return null;
+  const { runId, round } = (typeof raw === "object" ? raw : {}) as { runId?: unknown; round?: unknown };
+  if (typeof runId !== "string" || !runId || typeof round !== "number" || !Number.isInteger(round) || round < 1) {
+    throw new Error("驳回目标无效：要带上那条驳回所在的审查链 id 和轮次");
+  }
+  return { runId, round };
+}
+
+/**
+ * 用户这次动作要处理的**那一条**未裁定驳回。一次动作的目标在这里定死，之后的裁定、修复
+ * 校验、修复提示、辩论都只认它，下游**不许再按任务去挑「当前那条」**。
+ *
+ * 为什么不能直接用 `openDisputeOf`：未裁定驳回是任务级的，可以同时挂着好几条（升级前的
+ * 老数据就有），「最近那条」只是排序的结果，不是用户点的那张卡。第 2 轮审查实测：对旧
+ * 第 1 轮点「让它接着改」，修复却按更新的第 2 轮报告发出，另一条旧驳回也被顺手记成维持。
+ *
+ * 带了目标：必须仍在未裁定之列，否则如实拒（多半是别处已经裁过或被新一轮审查取代）。
+ * 没带目标（老客户端、脚本）：只在恰好一条时放行，有好几条就拒，不替用户挑。
+ */
+export async function targetedOpenDispute(
+  taskId: string,
+  target: DisputeTarget | null,
+  none = "现在没有等待裁定的驳回",
+): Promise<{ run: ReviewRunRow; round: ReviewRoundRow }> {
+  const open = await unresolvedDisputes(taskId);
+  if (!open.length) throw new Error(none);
+  if (!target) {
+    if (open.length > 1) throw new Error(`现在有 ${open.length} 条驳回在等裁定，请在审查面板里对具体那一条操作`);
+    return open[0]!;
+  }
+  const hit = open.find(({ run, round }) => run.id === target.runId && round.round === target.round);
+  if (!hit) throw new Error(`第 ${target.round} 轮那条驳回已经不在等裁定了（已被裁定，或被新一轮审查取代），刷新后再看`);
+  return hit;
 }
 
 /**
@@ -356,20 +399,27 @@ function summarize(reason: string): string {
 }
 
 /**
- * 「按意见修复」= 维持审查意见（幂等，没有待裁定的驳回时空转）。
+ * 「按意见修复」= 维持**这一轮**的审查意见（幂等，这一轮没有待裁定的驳回时空转）。
  *
- * 两个入口都经这一处：用户可以点「让它接着改」，也可以直接点那颗老的「按意见修复」。
- * 不在第二个入口上记裁定的话，驳回会一直挂着「等你裁定」——而用户其实已经用行动
- * 裁定过了，界面却还在催他做一件已经做完的事。
+ * 用户可以点「让它接着改」（裁定那一路自己记账），也可以直接点那颗老的「按意见修复」。
+ * 后者不在这里记裁定的话，驳回会一直挂着「等你裁定」——而用户其实已经用行动裁定过了，
+ * 界面却还在催他做一件已经做完的事。
  */
-export async function upholdOpenDispute(taskId: string): Promise<boolean> {
-  const open = await openDisputeOf(taskId);
-  if (!open) return false;
-  await db.update(freeReviewRounds)
+export async function upholdDisputeOn(taskId: string, round: ReviewRoundRow): Promise<boolean> {
+  // 只裁**要修的这一轮**自己身上的驳回。按任务去找「下一条未裁定」的话，别的轮次上的
+  // 驳回会被这一下顺手记成维持——用户根本没看过那一条（第 2 轮审查实测）。
+  const ruled = await db.update(freeReviewRounds)
     .set({ disputeResolution: "upheld", disputeResolvedAt: now() })
-    .where(eq(freeReviewRounds.id, open.round.id));
+    .where(and(
+      eq(freeReviewRounds.id, round.id),
+      or(isNotNull(freeReviewRounds.disputeReason), isNotNull(freeReviewRounds.disputeDeferReason)),
+      isNull(freeReviewRounds.disputeResolution),
+      isNull(freeReviewRounds.disputeSupersededAt),
+    ))
+    .returning({ id: freeReviewRounds.id });
+  if (!ruled.length) return false;
   await appendTaskTimeline(taskId,
-    `按第 ${open.round.round} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`);
+    `按第 ${round.round} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`);
   bus.publish({ type: "task.review", taskId });
   return true;
 }
@@ -415,13 +465,13 @@ export async function resolveFreeReviewDispute(
   taskId: string,
   resolution: FreeReviewDisputeResolution,
   note: string | null = null,
+  target: DisputeTarget | null = null,
 ): Promise<{ resolution: FreeReviewDisputeResolution; repairError: string | null; deferredTask: Task | null }> {
   const task = await freeTask(taskId);
   if (task.archived) throw new Error("归档任务不能裁定审查驳回");
   const handedOff = handoffBlockReason(task.handoff);
   if (handedOff) throw new Error(handedOff);
-  const open = await openDisputeOf(taskId);
-  if (!open) throw new Error("现在没有等待裁定的驳回");
+  const open = await targetedOpenDispute(taskId, target);
   const { activeDebateOf } = await import("./free-review-debate.js");
   if (await activeDebateOf(taskId)) throw new Error("辩论正在进行，等它结束再裁定");
 
@@ -450,7 +500,10 @@ export async function resolveFreeReviewDispute(
   if (resolution === "upheld") {
     try {
       const { startManualFreeReviewRepair } = await import("./free-review-manual-repair.js");
-      await startManualFreeReviewRepair(taskId, { holdTurn: true });
+      // 目标原样交下去：修复只按用户刚裁定的这一轮来（校验、报告、要点都取它）。
+      await startManualFreeReviewRepair(taskId, {
+        holdTurn: true, target: { runId: open.run.id, round: open.round.round },
+      });
     } catch (error) {
       repairError = error instanceof Error ? error.message : String(error);
       await appendTaskTimeline(taskId,

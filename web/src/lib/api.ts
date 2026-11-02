@@ -11,6 +11,7 @@ import type {
   ExecutorDowngradeItem,
   FreeReviewDispatchInput,
   FreeReviewDisputeResolution,
+  FreeReviewDisputeTarget,
   GateAction,
   Group,
   Note,
@@ -323,20 +324,27 @@ export const api = {
   // `note` 是裁定时写给执行者的要点（选填）：三档裁定表达不了「这条我认，但按辩论里
   // 达成的方案做」，它是那部分结论唯一的结构化出口——upheld 时整段进修复提示（并声明
   // 压过报告），deferred 时跟着派生任务走，withdrawn 时留在审查记录与时间线里。
+  // `target` 是卡片所在的那条审查链和轮次：任务上可以同时挂着好几条未裁定驳回，不带它
+  // 服务端只在恰好一条时放行（不替用户挑）。辩论同理。
   resolveFreeReviewDispute: (
     taskId: string,
     resolution: FreeReviewDisputeResolution,
-    note?: string | null,
+    note: string | null | undefined,
+    target: FreeReviewDisputeTarget,
   ): Promise<{
     resolution: FreeReviewDisputeResolution;
     repairError: string | null;
     deferredTask: Task | null;
     state: FreeWorkflowApiState;
   }> =>
-    request(`/tasks/${id(taskId)}/free-workflow/review/dispute/resolution`, json("POST", { resolution, note })),
+    request(`/tasks/${id(taskId)}/free-workflow/review/dispute/resolution`, json("POST", { resolution, note, target })),
   // 让审查者和执行者就这条驳回各说几段。exchanges 是来回数，发言段数 = exchanges*2+1。
-  startFreeReviewDebate: (taskId: string, exchanges: number): Promise<{ debateId: string; state: FreeWorkflowApiState }> =>
-    request(`/tasks/${id(taskId)}/free-workflow/review/debate`, json("POST", { exchanges })),
+  startFreeReviewDebate: (
+    taskId: string,
+    exchanges: number,
+    target: FreeReviewDisputeTarget,
+  ): Promise<{ debateId: string; state: FreeWorkflowApiState }> =>
+    request(`/tasks/${id(taskId)}/free-workflow/review/debate`, json("POST", { exchanges, target })),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
   cancelFreeReviewReservation: (taskId: string): Promise<FreeWorkflowApiState> =>

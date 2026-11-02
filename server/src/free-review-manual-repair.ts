@@ -8,9 +8,11 @@
 import { and, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { freeReviewRounds, tasks } from "./db/schema.js";
+import { freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
 import { activeDebateOf, debateClosingOf } from "./free-review-debate.js";
-import { currentRoundOf, upholdOpenDispute, waivedDisputeOf } from "./free-review-dispute.js";
+import {
+  currentRoundOf, upholdDisputeOn, type DisputeTarget, type ReviewRoundRow,
+} from "./free-review-dispute.js";
 import { readFreeReviewReport } from "./free-review-files.js";
 import { freeManualRepairPrompt } from "./free-review-prompts.js";
 import { latestWorkspaceRun, reviewingRun, type ReviewRunRow } from "./free-review-round.js";
@@ -26,68 +28,107 @@ import { appendTaskTimeline } from "./task-timeline.js";
 const pendingRepairs = new Set<string>();
 
 /**
- * 「这份未通过报告仍对应当前代码」的完整证明，返回错误文案或 null（可修复）。
+ * 一次修复钉死的对象：哪条审查链的第几轮。`ruled` = 它是用户刚在裁定里点名的那一轮
+ * （「让它接着改」）；否则是入口那一刻「最近一条链停下的那一轮」（老的「按意见修复」）。
+ *
+ * 入口定下之后，投递回调重验、修复提示、报告路径、裁定要点全都只认它，**不许再按任务
+ * 去挑一遍**：未裁定驳回是任务级的，可以同时挂着好几条，「再挑一遍」挑到的未必是用户点的
+ * 那张卡（第 2 轮审查实测：对旧第 1 轮裁定接着改，修复却按更新的第 2 轮报告发出）。
+ */
+type RepairTarget = DisputeTarget & { ruled: boolean };
+type RepairSubject = { run: ReviewRunRow; round: ReviewRoundRow };
+
+async function pinnedSubject(taskId: string, target: RepairTarget): Promise<RepairSubject | string> {
+  const run = (await db.select().from(freeReviewRuns).where(and(
+    eq(freeReviewRuns.id, target.runId), eq(freeReviewRuns.taskId, taskId), eq(freeReviewRuns.targetKind, "workspace"),
+  ))).at(0);
+  const round = run && (await db.select().from(freeReviewRounds)
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, target.round)))).at(0);
+  if (!run || !round) return `第 ${target.round} 轮审查记录已经不在了`;
+  if (target.ruled) {
+    // 用户裁定的是**这一轮**：它必须仍是「维持意见」。别处把它改了（重跑取代、再裁一次）
+    // 就停下，不换一份报告顶上。
+    return round.disputeResolution === "upheld" || round.disputeResolution === "withdrawn" ||
+      round.disputeResolution === "deferred" ? { run, round } : `第 ${target.round} 轮意见已经不是「让它接着改」的裁定了`;
+  }
+  // 老按钮修的是「最近一条链的结论」：投递时那已经不是最近的结论，就该如实取消。
+  const latest = await latestWorkspaceRun(taskId);
+  if (!latest || latest.status !== "stopped") return "最近一轮审查没有停在未通过状态";
+  if (latest.id !== run.id || latest.currentRound !== target.round) return "这轮之后又有了新的审查结论";
+  return { run, round };
+}
+
+/**
+ * 「这份未通过报告仍对应当前代码」的完整证明，返回错误文案或要修的那一轮。
  * 入口校验与**投递回调**各跑一遍：入口占着 turn 校验（下面），但修复消息可能排在别的
  * 回合之后才真正投递——那个回合可以改代码，排队前的证明到投递时已经过期，不重验就会
  * 让实现 agent 按旧版报告改新版代码（审查实测：占住 turn 的普通回合结束后旧意见照发）。
+ * `target` 为空只在老按钮的入口那一次：从最近一条链定下对象，之后一律带着它来。
  */
-async function manualRepairBlocker(taskId: string): Promise<string | null> {
+async function manualRepairSubject(taskId: string, target: RepairTarget | null): Promise<RepairSubject | string> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return "任务不存在";
   if (task.stage === "accepted" || task.stage === "merged") return "任务已进入验收结果";
   if (await reviewingRun(taskId)) return "审查回合正在进行";
   if (await activeDebateOf(taskId)) return "审查意见辩论正在进行，等它说完再决定";
+  let subject: RepairSubject | string;
+  if (target) subject = await pinnedSubject(taskId, target);
+  else {
+    const run = await latestWorkspaceRun(taskId);
+    const round = run?.status === "stopped" ? await currentRoundOf(run) : null;
+    subject = run && round ? { run, round } : "最近一轮审查没有停在未通过状态";
+  }
+  if (typeof subject === "string") return subject;
+  const { run, round } = subject;
   // 用户已经裁定「不在本任务里修」的那一轮不能再拿去修：确认框写的是「执行者不再按它
   // 修改」，修复入口却照单放行的话，用户点一下就把自己刚下的裁定推翻了（第 1 轮审查实测）。
   // 转成了独立任务的那档更硬——那几条已经有别的任务在承接，这里再修一遍就是两处各改一版。
-  const waived = await waivedDisputeOf(taskId);
-  if (waived) {
-    return waived.round.disputeResolution === "deferred"
-      ? `这一轮意见已被你裁定转为独立任务（${waived.round.disputeDeferredTaskId ?? "待办任务"}），不在本任务里修；要继续推进请再派一轮审查`
-      : "这一轮意见已被你裁定作废（采纳了执行者的说法），不再按它修复；要继续推进请再派一轮审查";
+  if (round.disputeResolution === "deferred") {
+    return `这一轮意见已被你裁定转为独立任务（${round.disputeDeferredTaskId ?? "待办任务"}），不在本任务里修；要继续推进请再派一轮审查`;
   }
-  const run = await latestWorkspaceRun(taskId);
-  if (!run || run.status !== "stopped") return "最近一轮审查没有停在未通过状态";
+  if (round.disputeResolution === "withdrawn") {
+    return "这一轮意见已被你裁定作废（采纳了执行者的说法），不再按它修复；要继续推进请再派一轮审查";
+  }
   // 报告读取走安全解析（拒 symlink 祖先），且必须有非空正文——raw existsSync 会被
   // 换成 symlink 的 round 目录骗过，把外部路径写进发给实现 agent 的提示。
-  if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
-    return "最近一轮审查报告不存在或为空";
+  if (!readFreeReviewReport(taskId, run.id, round.round).trim()) {
+    return target?.ruled ? `第 ${round.round} 轮审查报告不存在或为空` : "最近一轮审查报告不存在或为空";
   }
   // 只有能**证明**意见仍对应当前代码才放行修复（失败向「不确定」开，不向「没问题」开）：
   // 锚点缺失（老数据）、工作区读不到（已清理/非 git）都无从证明——正确动作是再派一轮
   // 「审查新改动」，而不是按一份无法核对的报告唤醒实现 agent 改代码。
-  const concluded = (await db.select().from(freeReviewRounds)
-    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
-  if (!concluded?.reviewedCommit) return "这轮审查缺少基准 commit，无法确认意见仍对应当前代码";
+  if (!round.reviewedCommit) return "这轮审查缺少基准 commit，无法确认意见仍对应当前代码";
   const workspace = await workspaceStateOf(task);
   if (!workspace.head || workspace.dirty == null) return "工作区不可读，无法确认审查意见仍对应当前代码";
-  if (workspace.head !== concluded.reviewedCommit || workspace.dirty) {
+  if (workspace.head !== round.reviewedCommit || workspace.dirty) {
     return "审查意见针对的代码已变化（新提交或未提交改动）";
   }
-  return null;
+  return subject;
 }
 
-async function deliverManualRepair(taskId: string, run: ReviewRunRow): Promise<void> {
+async function deliverManualRepair(taskId: string, target: RepairTarget): Promise<void> {
   const abort = async (message: string) => {
     pendingRepairs.delete(taskId);
     await appendTaskTimeline(taskId, `自由工作流审查意见修复已取消：${message}；请再派一轮审查。`);
     bus.publish({ type: "task.review", taskId });
   };
   try {
-    const blocker = await manualRepairBlocker(taskId);
-    if (blocker) return void await abort(blocker);
+    const subject = await manualRepairSubject(taskId, target);
+    if (typeof subject === "string") return void await abort(subject);
+    const { run, round } = subject;
     const { continueTask } = await import("./orchestrator.js");
     // 用户裁定「维持审查意见」之后的这一趟不再给驳回这条路（措辞见 free-review-prompts）。
     // 辩论的收尾发言与用户写的裁定要点也在这里一并带上：前者执行者的会话里结构上没有，
     // 后者是三档裁定表达不了的那部分结论。少任何一边，「辩完达成的共识」都到不了真正
     // 去改代码的那一方，用户点完「让它接着改」只会看到执行者照原报告改。
-    const round = await currentRoundOf(run);
+    // 三样都取**钉死的那一轮**，不取链的当前轮（历史轮被裁定时两者不是一轮）。
     const delivered = await continueTask(
       taskId,
       await freeManualRepairPrompt(taskId, run, {
-        disputeUpheld: round?.disputeResolution === "upheld",
-        resolutionNote: round?.disputeResolutionNote ?? null,
-        debateClosing: round ? await debateClosingOf(round.id) : null,
+        round: round.round,
+        disputeUpheld: round.disputeResolution === "upheld",
+        resolutionNote: round.disputeResolutionNote ?? null,
+        debateClosing: await debateClosingOf(round.id),
       }),
       { byBackend: true },
     );
@@ -99,7 +140,8 @@ async function deliverManualRepair(taskId: string, run: ReviewRunRow): Promise<v
 
 export async function startManualFreeReviewRepair(
   taskId: string,
-  opts: { holdTurn?: boolean } = {},
+  // `target`：用户在裁定里点名的那一轮（「让它接着改」）。不带 = 老按钮，修最近一条链的结论。
+  opts: { holdTurn?: boolean; target?: DisputeTarget | null } = {},
 ): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
@@ -124,20 +166,21 @@ export async function startManualFreeReviewRepair(
     if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
     try {
       if (pendingRepairs.has(taskId)) throw new Error("修复消息已在途，等它开始执行后再操作");
-      const blocker = await manualRepairBlocker(taskId);
-      if (blocker) {
-        throw new Error(blocker === "审查意见针对的代码已变化（新提交或未提交改动）"
-          ? `${blocker}；请再派一轮审查，而不是按旧意见修复`
-          : blocker === "最近一轮审查报告不存在或为空" ? `${blocker}，无法按意见发起修复`
-          : blocker.includes("无法确认") ? `${blocker}；请再派一轮审查` : blocker);
+      const subject = await manualRepairSubject(taskId, opts.target ? { ...opts.target, ruled: true } : null);
+      if (typeof subject === "string") {
+        throw new Error(subject === "审查意见针对的代码已变化（新提交或未提交改动）"
+          ? `${subject}；请再派一轮审查，而不是按旧意见修复`
+          : subject.endsWith("审查报告不存在或为空") ? `${subject}，无法按意见发起修复`
+          : subject.includes("无法确认") ? `${subject}；请再派一轮审查` : subject);
       }
-      const run = (await latestWorkspaceRun(taskId))!;
-      // 点下修复 = 用户维持审查意见（幂等；已裁定或没驳回过时空转）。
-      await upholdOpenDispute(taskId);
-      await appendTaskTimeline(taskId, `已按自由工作流第 ${run.currentRound} 轮审查意见发起修复。`);
+      // 点下老按钮 = 用户维持**这一轮**的审查意见（幂等；已裁定或没驳回过时空转）。
+      // 裁定那一路已经自己记过账，这里不再碰任何驳回。
+      if (!opts.target) await upholdDisputeOn(taskId, subject.round);
+      const target: RepairTarget = { runId: subject.run.id, round: subject.round.round, ruled: !!opts.target };
+      await appendTaskTimeline(taskId, `已按自由工作流第 ${target.round} 轮审查意见发起修复。`);
       bus.publish({ type: "task.review", taskId });
       pendingRepairs.add(taskId);
-      whenTurnIdle(taskId, () => { void deliverManualRepair(taskId, run); });
+      whenTurnIdle(taskId, () => { void deliverManualRepair(taskId, target); });
       // 投递回调真正执行（continueTask 被调）时任务即进入 running；在那之前的窗口全靠
       // pendingRepairs 挡。这里挂一个同队回调来清标记。
       whenTurnIdle(taskId, () => pendingRepairs.delete(taskId));

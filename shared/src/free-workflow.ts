@@ -295,6 +295,12 @@ export interface FreeReviewExecutorOverride {
  * - `resolution`：**用户**的裁定。审查者在辩论收尾时给的 `verdict` 只是它自己的立场，
  *   两者分开存 —— 让被驳回的一方替用户签字，等于绕过用户裁定这件事本身。
  */
+/**
+ * 一次裁定 / 辩论指向的那条驳回：哪条审查链的第几轮。未裁定驳回是任务级的，可以同时
+ * 挂着好几条，所以用户动作必须带上它，服务端不替用户挑「当前那条」。
+ */
+export type FreeReviewDisputeTarget = { runId: string; round: number };
+
 export type FreeReviewDisputeResolution =
   /** 维持审查意见：照报告修 */
   | "upheld"
