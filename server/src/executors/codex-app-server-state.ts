@@ -7,7 +7,8 @@
 // 文件只留运行时那一半。
 //
 // 为什么不能只看 stdout offset:接管时 offset 可能早已越过启动通知(`thread/started`、
-// `turn/started`),所以必须从头整份重放一遍;日志行可能半行、可能损坏,逐行 try/catch 跳过。
+// `turn/started`),所以必须从头整份重放一遍;日志行可能半行、可能损坏,逐行 try/catch 跳过 ——
+// 但**跳过的行要记账**:坏行里可能正是那张开始凭据(见 evidence 那一档)。
 import { readFileSync } from "node:fs";
 import type { CliGoal } from "@ash/shared/cli-commands";
 
@@ -21,6 +22,11 @@ import type { CliGoal } from "@ash/shared/cli-commands";
  *   · `unreadable`    —— 日志读不出来(权限/IO/文件不在)。这一档必须跟上面分开:两者混在一起
  *     时,一次磁盘故障会被诊断成「输入一个字都没到 agent」并当场杀掉一个健康回合
  *     (第 1 轮自由审查 F5 与「失败面」那一条)。
+ *     **读到了、但有行解析不了**(损坏行、还没写完的半行)且没找到任何开始凭据,也落这一档
+ *     (第 1 轮自由审查 F2):「文件读成功」不等于「整份记录核验过」,坏掉的那一行里可能正是
+ *     开始凭据。把它说成 `never-started` 会被账本落成 refused —— 确证一个字没进去 —— 原文随即
+ *     重投。说不上来就交给持续核验(./codex-app-server-adopt.ts 的 `wireAdoptionRecovery`)。
+ *     肯定凭据照旧优先:找到了就是 `started`,坏行不翻盘。
  */
 export function readCodexAppServerState(
   path: string,
@@ -56,10 +62,11 @@ export function readCodexAppServerState(
     console.warn(`[ash] 读 Codex 协议日志 ${path} 失败，这一轮有没有启动过核实不了：${detail}`);
     return { threadId, turnId, evidence: "unreadable" };
   }
+  let damaged = false;
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     let message: any;
-    try { message = JSON.parse(line); } catch { continue; }
+    try { message = JSON.parse(line); } catch { damaged = true; continue; }
     if (message.params?.threadId === threadId && message.method === "thread/goal/updated") goal = message.params.goal;
     if (message.params?.threadId === threadId && message.method === "thread/goal/cleared") goal = null;
     if (message.result?.reviewThreadId === threadId && typeof message.result?.turn?.id === "string") reviewTurnId = message.result.turn.id;
@@ -97,6 +104,6 @@ export function readCodexAppServerState(
     threadId, turnId,
     ...(reviewTurnId ? { reviewTurnId } : {}), ...(completedTurn ? { completedTurn } : {}),
     ...(goal !== undefined ? { goal } : {}),
-    evidence: started ? "started" : "never-started",
+    evidence: started ? "started" : damaged ? "unreadable" : "never-started",
   };
 }

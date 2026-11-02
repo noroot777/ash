@@ -80,6 +80,30 @@ export function adoptionUnverifiable(reattach: AdoptedTurn | undefined): boolean
 }
 
 /**
+ * 服务端对**某一个请求**明确答了 error(JSON-RPC error 应答)—— 它听见了,并且说不。这跟超时、
+ * 断链是两回事:后两者是「写出去了、不知道对面怎么样」,这一个是协议层给出的否定事实。
+ */
+export class CodexRpcRefusal extends Error {
+  constructor(readonly method: string, message: string) {
+    super(message);
+    this.name = "CodexRpcRefusal";
+  }
+}
+
+/** 承载这一轮输入的那几个请求:它们被明确答 error = 这一轮没开起来。 */
+const INPUT_CARRIERS = new Set(["turn/start", "review/start", "thread/compact/start"]);
+
+/**
+ * 这次失败**确证输入被拒收**了吗。只认承载输入的那个请求被明确答 error(第 1 轮自由审查 F3,
+ * 实测:`turn/start` 返回 `-32602`,上一版因为已经 `wrote()` 一律落 unknown,消息永久停在在途)。
+ * 原生命令里别的请求(先 `thread/goal/set`、再 `turn/start`、再把目标置 active)报错不算 ——
+ * 那时输入可能早已开跑,只能照旧按「写出去过」记成说不上来。
+ */
+export function refusesInput(error: unknown): boolean {
+  return error instanceof CodexRpcRefusal && INPUT_CARRIERS.has(error.method);
+}
+
+/**
  * 「这一轮的输入到底有没有进 agent 手里」的**单调账本**(三档语义见 ./types.ts 的
  * `InputAcceptance`)。
  *
@@ -96,8 +120,11 @@ export interface TurnInputLedger {
   wrote(): void;
   /** 看到本回合的**开始凭据**:当场落 `accepted`,并放行等身份的那一路。 */
   reached(): void;
-  /** 这条路走不通了(握手失败、连接断开、启动被拒):按**已掌握的事实**落定。 */
-  failed(): void;
+  /**
+   * 这条路走不通了(握手失败、连接断开、启动被拒):按**已掌握的事实**落定。传进来的那个错误
+   * 若是承载输入的请求被明确拒绝(`refusesInput`),写出去过也落 refused —— 开始凭据仍然优先。
+   */
+  failed(error?: unknown): void;
   /** 接管时协议日志读不出来:当场落 `unknown`(别等任何本地流程),身份另走有界恢复。 */
   unverifiable(): void;
   /** 有没有开始凭据。给「应答迟到但 `turn/started` 已经到了」那一档当判据。 */
@@ -127,8 +154,8 @@ export function createTurnInputLedger(): TurnInputLedger {
       settle?.("accepted"); // 协议点过头 = 那串字已经出去了,后面怎么断链都不许退回重投
       release?.();
     },
-    failed: () => {
-      settle?.(reached ? "accepted" : written ? "unknown" : "refused");
+    failed: (error) => {
+      settle?.(reached ? "accepted" : written && !refusesInput(error) ? "unknown" : "refused");
       release?.(); // 等身份的那一路也得放行,否则完成事件永远结算不了
     },
     unverifiable: () => {

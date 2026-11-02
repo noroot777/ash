@@ -15,7 +15,7 @@ import { detachedInfo, spawnControllableForRun } from "./detached.js";
 import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import { codexErrorEvent } from "./codex-error-event.js";
 import {
-  adoptionDriven, adoptionUnverifiable, createTurnInputLedger, wireAdoptionRecovery,
+  adoptionDriven, adoptionUnverifiable, CodexRpcRefusal, createTurnInputLedger, wireAdoptionRecovery,
 } from "./codex-app-server-adopt.js";
 import {
   ADOPT_NEVER_STARTED, CODEX_ADOPT_REREAD_MS, CODEX_TURN_START_ACK_MS, short, usageEvent,
@@ -34,7 +34,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
     ?? spawnControllableForRun(opts.cwd, opts.bin, opts.args, "", opts.env, opts.detach);
   const trace = new RunTraceRecorder(opts.trace);
-  const pending = new Map<string, { resolve(value: any): void; reject(error: Error): void }>();
+  const pending = new Map<string, { method: string; resolve(value: any): void; reject(error: Error): void }>();
   const seenAgentDeltas = new Set<string>();
   const seenReasoningDeltas = new Set<string>();
   const seenImages: ImageStore = imageStore();
@@ -115,6 +115,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         reject(new Error(`Codex ${method} 超时`));
       }, timeoutMs);
       pending.set(String(id), {
+        method,
         resolve: (value) => { clearTimeout(timer); resolve(value); },
         reject: (error) => { clearTimeout(timer); reject(error); },
       });
@@ -419,7 +420,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       const waiter = pending.get(String(message.id));
       if (!waiter) return;
       pending.delete(String(message.id));
-      if (message.error) waiter.reject(new Error(short(message.error?.message ?? message.error)));
+      // 服务端**明确答了 error**,跟超时/断链分开记(第 1 轮自由审查 F3):输入账本要据此判拒收。
+      if (message.error) waiter.reject(new CodexRpcRefusal(waiter.method, short(message.error?.message ?? message.error)));
       else waiter.resolve(message.result);
       return;
     }
@@ -566,9 +568,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     }
   })();
   void ready.catch((error) => {
-    // 这条路走不通了:账本按**已掌握的事实**落定(reached⇒accepted / 写出去过⇒unknown /
-    // 协议从没通⇒refused),并放行等身份的那一路 —— 它绝不许悬在一个已经失败的流程上。
-    input.failed();
+    // 这条路走不通了:账本按**已掌握的事实**落定(reached⇒accepted / 写出去过⇒unknown,除非
+    // 承载输入的那个请求被服务端明确答了 error / 协议从没通⇒refused),并放行等身份的那一路 ——
+    // 它绝不许悬在一个已经失败的流程上。
+    input.failed(error);
     if (isGoalExecution(opts.cliCommand ?? null) && opts.cliState?.goal) {
       native.goal = { ...opts.cliState.goal, status: "blocked" };
       push({ kind: "system", level: "notice", aside: true, at: new Date().toISOString(), text: "原生目标启动失败，目标已保留；修复执行器配置后可 /goal resume。" });
