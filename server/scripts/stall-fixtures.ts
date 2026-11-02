@@ -47,6 +47,35 @@ export function spy(taskId = "task-1", projectFails = 0): { actions: StallAction
 }
 
 /**
+ * 投影**由测试自己放行**的那一版(放行前那一笔一直悬着),用来钉「撤标记必须排在置标记之后」。
+ *
+ * 为什么这件事值得单独一条:库那一侧撤是 CAS —— `WHERE upstream_stalled_since = ?`
+ * (session-stall-flag.ts)。撤跑在置之前,它一个字都碰不到,随后那笔 UPDATE 把红环**永久**
+ * 留在卡片上(刷新还在,下一轮复用同一行时 `ended_at` 一清又亮)。所以「置的那一笔确认落库」
+ * 既是记身份的时机,也是撤的前置条件。
+ */
+export function deferredSpy(taskId = "task-1"): {
+  actions: StallActions; log: Log; settleProjection: () => Promise<void>;
+} {
+  const base = spy(taskId);
+  const waiting: (() => void)[] = [];
+  return {
+    log: base.log,
+    actions: {
+      ...base.actions,
+      project: (facts) => {
+        base.log.projects.push(facts);
+        return new Promise<boolean>((resolve) => waiting.push(() => resolve(true)));
+      },
+    },
+    settleProjection: async () => {
+      for (const go of waiting.splice(0)) go();
+      await sleep(0);
+    },
+  };
+}
+
+/**
  * 每段各自设口径,免得上一段的 env 漏到下一段。各档 0 = 关掉。
  *
  * **静默档也在这里一起归零**(`silentWarnMs`/`silentTripMs`):不然错误档那几段一挂上静默观察

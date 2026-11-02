@@ -2,7 +2,7 @@
 //
 // 两个假进程,各管一件事:
 //   · `codex`(PATH 上那个垫片)—— 走**真实 CodexExecutor 生产路径**的那一端。按 mode 文件
-//     分两种行为:`accept` 照协议把回合跑完,`refuse` 一个应答都不给当场退出(于是
+//     分三种行为:`accept` 照协议把回合跑完,`refuse` 一个应答都不给当场退出(于是
 //     `ready` 以「连接已关闭」拒掉 —— 这就是「输入一个字都没进去」的可控现场)。
 //   · `idle-app-server.mjs` —— **接管**那一端。照常应答 `initialize` / `thread/resume`,
 //     然后再不主动说话:旧服务端死在「恢复线程 → 送出回合输入」空当时留下的就是它。
@@ -10,12 +10,11 @@
 // mode 走文件而不是 env:垫片是真被 `spawnForRun` 起的,测试进程改不了它那一次的环境。
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { IS_WINDOWS } from "../src/platform.js";
 
 const MODE_FILE = "mode";
 
 /** 下一次起跑的假 codex 按哪种行为走。 */
-export function codexMode(binDir: string, mode: "accept" | "refuse"): void {
+export function codexMode(binDir: string, mode: "accept" | "refuse" | "stall" | "started-then-drop"): void {
   writeFileSync(join(binDir, MODE_FILE), mode);
 }
 
@@ -60,6 +59,19 @@ function receive(message) {
     return;
   }
   if (message.method === "turn/start") {
+    // stall:握手照常答、**回合输入收下却一声不吭也不断线**。ash 侧那条 turn/start 的应答
+    // 永远等不到 → 有界等待到期 → unknown(说不上来)。这是 F3 那条路的真实现场:既不能当送达
+    // 写终态 sent,也不能当没送达退回重投。(注:这段注释活在模板字符串里,不许用反引号。)
+    if (mode === "stall") return;
+    // started-then-drop:**只发开始通知、不发应答,随即断线**。这一轮的输入已经在 agent 手里
+    // (甚至可能已经开跑),只是那个应答永远回不来 —— 按「没送出去」退回重投就是把同一段输入
+    // 送第二遍。adapter 自己的 turnStartVersion 本来就在处理这种乱序,说明两者不是同一个
+    // 原子事件。(注:这段注释活在模板字符串里,不许用反引号。)
+    if (mode === "started-then-drop") {
+      send({ method: "turn/started", params: { threadId: THREAD, turn: { id: TURN } } });
+      setTimeout(() => process.exit(0), 50);
+      return;
+    }
     send({ id: message.id, result: { turn: { id: TURN } } });
     send({ method: "turn/started", params: { threadId: THREAD, turn: { id: TURN } } });
     setTimeout(() => {
@@ -91,13 +103,14 @@ function receive(message) {
 ${reader}
 `);
 
-  // Windows 上没有 shebang 这一档,等价物是 `.cmd` 垫片(`%*` 原样转发参数) —— `resolveLaunch`
-  // 认得它、会按 cmd.exe 的规则起,跟真 CLI 装出来的垫片同一条路(同 test-reattach.ts)。
+  // POSIX 垫片。**刻意没有 Windows 那一档**:`.cmd` + `cmd.exe` 的参数转义是另一套规则,
+  // 而这台机器上验不了它 —— 根 AGENTS.md 说得明白,碰了 win32 分支就得上 192.168.1.187 真跑
+  // 一遍再交付,不许在 macOS 上读代码断言「Windows 应该也对」。写一个没真跑过的 `.cmd` 垫片
+  // 只会让 Windows 上的失败看起来像产品缺陷(第 1 轮自由审查 N3 点的就是这个留白)。
+  // 需要 Windows 覆盖时:上那台机器真跑一次,通了再把这一档加回来。调用方在 win32 上整条跳过。
   writeFileSync(
-    join(binDir, IS_WINDOWS ? "codex.cmd" : "codex"),
-    IS_WINDOWS
-      ? `@echo off\r\n"${process.execPath}" "${appServer}" %*\r\n`
-      : `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(appServer)} "$@"\n`,
+    join(binDir, "codex"),
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(appServer)} "$@"\n`,
     { mode: 0o755 },
   );
   codexMode(binDir, "accept");

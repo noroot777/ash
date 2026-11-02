@@ -30,7 +30,7 @@ import {
 import { __resetStallFailures, clearStallFailure, markStallFailure, stallFailure } from "../src/turn-stall-verdict.js";
 // 夹具与**解除条件那一组**分别住在 stall-fixtures.ts / test-turn-stall-progress.ts:这份文件
 // 顶到过单文件上限,而「判据」和「两档动手」本来就是两件事(根 CLAUDE.md 的 700 行)。
-import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtures.js";
+import { configure, deferredSpy, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtures.js";
 
 
 // ── ① 警告档·条数路径:连续错误、期间上游一次都没真回话 ───────────────────────────
@@ -54,6 +54,8 @@ import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtur
 
   // 上游真回话 = 停滞解除,报过警就得把卡片上那个标记撤掉。
   trackTurnStall("s1", owner, TURN, { kind: "text", text: "上游回来了，继续回答。" }, actions);
+  // 撤那一笔**排在置那一笔确认落库之后**(见 ①c),所以这里要把那个微任务放掉再问。
+  await sleep(0);
   assert.deepEqual(log.resolves, [TURN], "上游已经在吐正文了,卡片上那个停滞标记没撤");
   // 解除之后重新起算:下一轮重试要能再报一次(真的又挂了就得再说一声)。
   for (let i = 0; i < 5; i += 1) trackTurnStall("s1", owner, TURN, notice(), actions);
@@ -82,6 +84,28 @@ import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtur
   assert.equal(log.projects.length, settled, "投影已经确认落库了,看门狗还在一拍一笔地重投");
   assert.equal(log.projects[0]!.since, log.projects[settled - 1]!.since,
     "重投换了停滞身份 —— 那会写出一条撤不掉的标记(撤按 since 做 CAS)");
+}
+
+// ── ①c 撤标记必须排在置标记**之后**,而且用置上它的那个身份 ────────────────────
+// 库那一侧撤是 CAS(`WHERE upstream_stalled_since = ?`,session-stall-flag.ts):顺序倒过来,
+// 撤的那一笔一个字都碰不到,随后那笔 UPDATE 把红环永久留在卡片上。所以「置那一笔确认落库」
+// 既是记下身份的时机,也是撤的前置条件 —— 回合在投影落定之前就收口的,由投影那一头补撤。
+{
+  configure({ warnErrors: 1 });
+  const { actions, log, settleProjection } = deferredSpy();
+  const owner = {};
+  trackTurnStall("s1c", owner, TURN, notice(), actions);
+  assert.equal(log.projects.length, 1, "报警那一刻没去投影");
+
+  // 投影还悬着,这一轮就收口了。
+  clearTurnStall("s1c", owner);
+  await sleep(0);
+  assert.deepEqual(log.resolves, [], "投影还没落库就先撤了 —— 那一笔 CAS 碰不到任何行,红环会留下来");
+
+  await settleProjection();
+  assert.deepEqual(log.resolves, [TURN], "投影落库之后没人补撤 —— 红环留在库里再也没人管");
+  assert.deepEqual(log.resolveSince, [log.projects[0]!.since],
+    "撤的时候换了停滞身份 —— 按 since 做的那道 CAS 一个字都碰不到");
 }
 
 // ── ②「只有错误事件」逐字成立:真故障也计入,notice 与否只影响措辞 ──────────────
@@ -381,6 +405,7 @@ import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtur
   clearTurnStall(shared, a); // 不是持有者:空转
   assert.equal(newLead.log.resolves.length, 0, "不是持有者也撤得动别人的标记");
   clearTurnStall(shared, b);
+  await sleep(0); // 同 ①:撤排在投影确认之后
   assert.deepEqual(newLead.log.resolves, [TURN], "持有者自己也撤不掉,或者没把回合身份交出来");
 
   // 换轮同理:新回合的第一条错误是**认领**,上一轮悬着的计数不许跟着带过来。
