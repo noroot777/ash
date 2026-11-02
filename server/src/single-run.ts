@@ -32,9 +32,13 @@ import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
 import {
-  clearTurnStall, resumeTrippedTurn, trackTurnStall, type StallActions,
+  clearTurnStall, confirmTurnSilence, resumeTrippedTurn, trackTurnStall, watchAdoptedSilence, watchTurnSilence, withdrawTurnSilence,
+  type StallActions,
 } from "./turn-stall.js";
-import { stallUnverifiableText } from "./turn-stall-text.js";
+import { progressUnreadableText, stallUnverifiableText } from "./turn-stall-text.js";
+import {
+  noteTurnProgress, openTurnProgress, recoverTurnProgress, turnProgressFor,
+} from "./turn-progress-mark.js";
 import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import { restoreStallVerdict } from "./turn-stall-persist.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
@@ -62,6 +66,15 @@ export type SingleRunArgs = {
   turnStart: string;
   cliSessionId: string;
   autoTitle: boolean;
+  /**
+   * 这一轮是**接回来的**(reattach),不是本进程开的。
+   *
+   * 静默档的进展参与证明只许由「从头消费这一轮」的那个进程落(`openTurnProgress`):接管方
+   * 看不到 `agentOffset` 之前那一段,自己补一张证明就等于替上一个进程声明「它没产出过」——
+   * 第 2 轮自由审查 F2 实测的升级误杀正是这么来的。这一位只有这一个用途,所以不复用
+   * `autoTitle`(那是「标题解析过了没有」,两件事迟早会分叉)。
+   */
+  adopted?: boolean;
   role?: SessionRole;
   nativeSteer?: {
     prepare?(text: string): string | Promise<string>;
@@ -228,6 +241,14 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     publishEvent(event);
   };
 
+  /**
+   * **这一轮「有过进展」已经落在进程之外了吗**(记号写成,或接管时就读出 `seen`)。没落之前
+   * 水位一个字节都不许推进(理由见下面 offsetTimer 那段)。不盯进展的回合(没有回合身份)
+   * 没有这件事要等。
+   */
+  let progressSecured = !a.turnStart;
+  /** 这一轮还在消费吗。进展证明的恢复核验据此收手(回合结束后再撤观察只会撤错下一轮)。 */
+  let turnLive = true;
   // 回合级停滞看门狗(判据与两档动手见 turn-stall.ts)。这三件动作是这条链专属的部分 ——
   // 判据一个字都不在这儿,三条消费链共用同一份。
   const stallActions: StallActions = {
@@ -241,6 +262,17 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     },
     // 持久那一半单独一个动作:它要报成败,看门狗据此重投到确认(理由见 StallActions.project)。
     project: (facts) => markSessionStalled(taskId, sessId, facts.since),
+    // 「这一轮产出过东西」这个事实必须留在进程之外:接管回来的新句柄看不到 `agentOffset`
+    // 之前那一段(理由与实测见 turn-progress-mark.ts 文件头)。
+    // 返回落盘确认了没有:看门狗据此在下一条进展事件上重试(见 StallActions.noteProgress)。
+    noteProgress: () => {
+      if (!a.turnStart) return false;
+      const recorded = noteTurnProgress(taskId, sessId, a.turnStart);
+      // **欠着这一笔时,水位不许越过这段输出**(第 2 轮自由审查 F2 的那一半):见下面 offset
+      // 那段注释 —— 这是「进展事实与持久消费水位一起前进」的落点。
+      if (recorded) progressSecured = true;
+      return recorded;
+    },
     // 熔断档:说出来 + 杀进程。「这一轮失败」这个结论**不在这儿记** —— 看门狗在调 trip 之前
     // 就已经把它钉在回合身份上了(turn-stall-verdict.ts),下面收尾那一段连 `executionFailed` 带
     // 结算用的退出码一起从那一份读。从前这里是 `sawExecutionError = true`:那一位只喂得到
@@ -271,12 +303,27 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 定期把「已消费到哪个字节」写进库。真正重要的是**崩溃/被杀时**那一份——
   // 正常收尾会在下面再写一次终值。1s 一次：最坏情况重启后重放不到 1 秒的输出，
   // 而 offset 永远落在换行边界，所以重放只会重复整行、不会劈坏一行 JSON。
+  //
+  // **进展记号落盘之前就不推进**(第 2 轮自由审查 F2;第 1 轮自由审查 F1 收紧)。水位推过去
+  // 意味着「这段输出下一个进程再也看不到了」,而它正是那一轮「有过进展」的全部凭据。上一版只在
+  // 「记号写过、写失败了」时压住水位,漏了另一半:`committed()` 是**读到换行的原始字节**,而语义
+  // 事件还隔着增量合并、队列和异步消费 —— 一段不到 240 字的思考停在合并缓冲里,水位已经越过它、
+  // 记号却还没人去写(实测 offset=114、进展 none)。这时重启,新进程从 114 读起,那段思考再也
+  // 重放不到,又是「证明在、记号不在」= 确证零进展。
+  //
+  // 「哪个字节是第一条进展」在原始流里认不出来,也不必认:**进展事实单调**,只有第一条要紧。
+  // 所以按事实闸住整段 —— 记号落盘之前一个字节都不提交(之前只有握手/身份这类非进展行,重放
+  // 无害);落盘之后它覆盖整轮,水位放开追。代价是记号写不进去时会多重放几行(trace 里重复几行,
+  // offset 永远落在换行边界),比「误杀一个在干活的 agent」便宜得多。
   const detached = a.handle.detached;
+  const committedOffset = (): number | null => (detached && progressSecured ? detached.committed() : null);
   const offsetTimer = detached
     ? setInterval(() => {
+        const at = committedOffset();
+        if (at === null) return; // 欠着进展记号:这一拍不推进(见上面那段)
         void db
           .update(sessions)
-          .set({ agentOffset: detached.committed() })
+          .set({ agentOffset: at })
           .where(eq(sessions.id, sessId))
           .catch(() => {});
       }, 1000)
@@ -304,6 +351,56 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       // `restoreStallVerdict` 做完了,结算那一段读的是同一张表,这里不再另写判据。
       if (carried.kind === "tripped") resumeTrippedTurn(sessId, a.handle, a.turnStart, carried, stallActions);
       else emitTurnError(stallUnverifiableText(carried.reason));
+    }
+    // **静默档**:这一轮到底有没有真的跑起来(判据见 turn-stall.ts 文件头那一节)。必须在这里
+    // 显式挂上、而不是等第一条事件来开 —— 它要抓的恰恰是一条事件都不来的回合。
+    //
+    // 这一句同时覆盖**接管回来的会话**:接管走的是同一条消费链(reattach.ts 调的就是这个函数),
+    // 而起点取库里那一轮的真实起点,所以重启前已经静默掉的那段照样算在里面。2026-11-02 那次
+    // 1.5 小时零输出就是接管出来的闲置进程,错误档一拍都不会动。
+    //
+    // **进程外那份进展事实**:本进程开的这一轮由我们落「参与证明」(那张证明才是「记号不在 =
+    // 确证没产出」的前提);接管回来的那一轮**只读不写** —— 判据与实测见 turn-progress-mark.ts。
+    //
+    // 判据只认**事件语义层**那张记号,不认字节(第 2 轮自由审查 F2:握手就能把水位从 0 推到
+    // 249,拿它当进展等于把零输出那一轮永久排除在静默档之外)。「记号写不进去」那条缝由上面
+    // 那道水位闸补 —— 欠着就不推进,输出留给下一个进程重放。
+    if (!a.adopted) openTurnProgress(taskId, sessId, a.turnStart);
+    const progressFact = turnProgressFor({
+      taskId, sessionId: sessId, turnStartedAt: a.turnStart, watchedFromStart: !a.adopted,
+    });
+    if (progressFact === "seen") progressSecured = true; // 进程外已经记着「有过」,水位不必再等
+    if (a.turnStart && progressFact === "unreadable") {
+      // **「说不上来」的独立恢复档**(第 2 轮自由审查 F2)。只有接管这一路会走到这儿:上一个
+      // 进程留下的证明读不出来(升级前那一代压根没有这套记号、或者权限/磁盘坏了)。
+      //
+      // 两边都不许认:认「产出过」= 这一轮永久排除在静默档外,正是原始那个 1.5 小时;认「从未
+      // 产出」= 替上一个进程追认,会误杀一个正在跑长工具的健康回合(第 1 轮 F1)。所以只认
+      // **我盯得住的那段窗口**,而且**不借「整轮零产出」那一档**(第 1 轮自由审查 F1):从接管
+      // 这一刻起盯、到阈值警告并亮红环,但不熔断、不说「没跑起来」—— 接管之后没看到新东西是
+      // 亲眼所见,接管之前有没有却仍然不知道(见 turn-stall.ts 的 `watchAdoptedSilence`)。
+      //
+      // 同时接着重读那张证明(不设上限,见 verify-until-known.ts),两个结论各有出边:读出 `seen`
+      // 就把这条观察撤掉;读出 `none` 就换回正常静默档、恢复熔断责任(第 2 轮自由审查 F1)。
+      emitTurnError(progressUnreadableText());
+      watchAdoptedSilence(sessId, a.handle, a.turnStart, stallActions, new Date().toISOString());
+      const watchedTurn = a.turnStart;
+      recoverTurnProgress(taskId, sessId, watchedTurn, (progress) => {
+        if (progress === "none") {
+          if (confirmTurnSilence(sessId, a.handle, watchedTurn)) {
+            console.warn(`[ash] 会话 ${sessId} 本轮的进展证明后来读出来了「确证零进展」，`
+              + "那条按「核实不了」开的观察换回正常静默档(含熔断)");
+          }
+          return;
+        }
+        progressSecured = true;
+        if (withdrawTurnSilence(sessId, a.handle, watchedTurn)) {
+          console.warn(`[ash] 会话 ${sessId} 本轮的进展证明后来读出来了「有过产出」，`
+            + "撤掉那条按「核实不了」开的静默观察");
+        }
+      }, () => turnLive);
+    } else {
+      watchTurnSilence(sessId, a.handle, a.turnStart, stallActions, progressFact);
     }
     for await (const event of a.handle.events) {
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
@@ -388,6 +485,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 崩溃；预约若撤销，再把原异常交回原来的失败路径。
     streamError = error;
   } finally {
+    turnLive = false; // 这一轮不消费了:进展证明的恢复核验到此收手(见上面那段 unreadable)
     // 流异常中断时 done 事件压根不会来,内存里那条等待状态就得在这儿撤(见 session-waiting.ts)。
     clearSessionWaiting(sessId, a.handle);
     // **判决在这一刻就取走,不留到下面去读**(第 2 轮审查 F3,已实测)。流结束了 = 不会再有
@@ -459,7 +557,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       // 留着也不会让重启误接:接回那条路的前提是 pid 非空,而 pid 这就清了。
       // (同一个判据在哨兵那边叫 traceless:只许收档,不许删掉身份行。)
       agentPid: null,
-      agentOffset: detached ? detached.committed() : null,
+      // 同上面那道闸:进展记号没落盘就**连终值也不写**(留着库里那个更小的值),让下一个进程
+      // 仍然重放得到那段输出。`detached` 不存在时照旧清空(这一路没有可接的进程)。
+      ...(detached ? (progressSecured ? { agentOffset: detached.committed() } : {}) : { agentOffset: null }),
       ...(dropSession ? LOST_SESSION_PATCH : {}),
     })
     .where(eq(sessions.id, sessId));

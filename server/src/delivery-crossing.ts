@@ -193,9 +193,90 @@ function crossingTurnOf(text: string): CrossingTurn | null {
   } catch { return null; }
 }
 
-/** 这一条投递已经有定论了(标 sent / 已归还),记号留着只是垃圾。 */
+/**
+ * ── 协议确认与协议拒收:**送达这件事唯一的凭据** ────────────────────────────────
+ *
+ * 越线记号(上面那一整套)回答的是「这段输入交出去了吗」,而它只到 spawn 那条线为止。codex
+ * app-server 的回合输入是 spawn **之后**再走 JSON-RPC 发出去的,于是有两个现场它都答不了:
+ * 线越过了而输入一个字都没写出去(握手就断了),以及线越过了、输入写出去了、却不知道到没到。
+ *
+ * 第 1 轮改动只补了「拒收」那一格,留下的洞第 2 轮当场被实测出来(F1):`unknown` 收尾仍走
+ * 对账,而对账拿「越线记号在 + **会话行/回合行**在」判 `delivered` 并补记 sent —— 那两张行
+ * 是**我们自己在 spawn 之后记的账**,它们证明「我起过这一轮」,不证明「对方收下了那串字」。
+ * 垫片只读了 `initialize` 就退出的那一跑里,日志先打印「输入没能送进 agent」,紧接着打印
+ * 「原文已送达,补记这一笔确认」,`resumePrompt` 随即清空 —— 续跑交代就这么消失了。
+ *
+ * 所以判据换成一句话:**送达只认协议确认**。确认和拒收各自落一张记号,两张都不在就是
+ * 「交付不明」(由人裁定,见 pending-checkpoint-recovery.ts 的三态),绝不再由本地记账反推。
+ *
+ * 三张记号同一个生命周期、同一套写法(`writeFact`/`hasFact`),定论时一起清。
+ *
+ * **都是尽力而为档**:写不成只告警。失败的代价是那条窄缝退回「交付不明」(保守的那一边),
+ * 而不是把一次正常的投递处置整个拦掉 —— 进程内那一半当场就办完了,这里只是给重启留凭据。
+ */
+const factDir = (kind: string, taskId: string): string => join(RUNS_DIR, taskId, kind);
+const factPath = (kind: string, taskId: string, messageId: string): string =>
+  join(factDir(kind, taskId), messageId);
+
+function writeFact(kind: string, what: string, taskId: string, messageIds: readonly string[]): void {
+  if (!messageIds.length) return;
+  try {
+    mkdirSync(factDir(kind, taskId), { recursive: true });
+    for (const messageId of messageIds) {
+      const fd = openSync(factPath(kind, taskId, messageId), "w");
+      try {
+        writeSync(fd, JSON.stringify({ at: new Date().toISOString() }));
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    }
+    fsyncDir(factDir(kind, taskId));
+  } catch (error) {
+    console.warn(`[ash] ${what}记号写入失败 task=${taskId}:`, error);
+  }
+}
+
+/**
+ * 这张记号确实在吗。**只有「在」才算数** —— 读不出来一律当假:这两位各自是用来推翻一个结论
+ * 的(拒收推翻「已送达」,确认推翻「交付不明」),拿一次 I/O 故障去推翻它就是另一个方向的误判。
+ */
+function hasFact(kind: string, taskId: string, messageId: string): boolean {
+  try {
+    return statSync(factPath(kind, taskId, messageId)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** 协议层**明确收下了**这一轮的输入(`InputAcceptance` 的 accepted)。 */
+export function noteDeliveryAccepted(taskId: string, messageIds: readonly string[]): void {
+  writeFact("delivered", "协议送达确认", taskId, messageIds);
+}
+
+/** 协议层明确**收下过**这一条吗 —— 这是「已送达」唯一的凭据。 */
+export function deliveryAccepted(taskId: string, messageId: string): boolean {
+  return hasFact("delivered", taskId, messageId);
+}
+
+/** 协议层**明确拒收**(回合输入一个字都没写出去)。 */
+export function noteDeliveryRefusal(taskId: string, messageIds: readonly string[]): void {
+  writeFact("refused", "协议拒收", taskId, messageIds);
+}
+
+/** 协议层明确拒收过这一条吗。 */
+export function deliveryRefused(taskId: string, messageId: string): boolean {
+  return hasFact("refused", taskId, messageId);
+}
+
+/** 这一条投递已经有定论了(标 sent / 已归还),三张记号留着都只是垃圾。 */
 export function forgetDeliveryCrossing(taskId: string, messageIds: readonly string[]): void {
   for (const messageId of messageIds) {
+    // 三张记号同一个生命周期:定论一下,谁都不该留给下一次投递。
+    for (const kind of ["refused", "delivered"] as const) {
+      try { rmSync(factPath(kind, taskId, messageId), { force: true }); }
+      catch (error) { console.warn(`[ash] 投递记号(${kind})清理失败 task=${taskId} message=${messageId}:`, error); }
+    }
     try { rmSync(crossingPath(taskId, messageId), { force: true }); }
     catch (error) { console.warn(`[ash] 投递越线记号清理失败 task=${taskId} message=${messageId}:`, error); }
   }

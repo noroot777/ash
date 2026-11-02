@@ -5,6 +5,14 @@ import type { ModelEffortMap } from "@ash/shared/cli-presets";
 import type { RunTracePaths } from "./diagnostics.js";
 import type { DetachedPaths } from "./detached.js";
 import type { CliCommand, CliGoal, CliSessionState } from "@ash/shared/cli-commands";
+/**
+ * 「这一轮的输入到底有没有进 agent 手里」的三档。语义、单调性与各档的调用方义务写在下面
+ * `RunHandle.inputAccepted` 上(有界等待那一层在 ../turn-input-acceptance.ts)。
+ *
+ * 住在执行器契约里而不是消费侧:判出这三档的是**协议适配器**,消费侧只是读它。
+ */
+export type InputAcceptance = "accepted" | "refused" | "unknown";
+
 // 惰性正文的类型与它配套的解析函数住在一起,见 steer-text.ts 的文件头。
 import type { SteerText } from "./steer-text.js";
 
@@ -57,6 +65,35 @@ export interface RunHandle {
    * `cleanupSettled(result)`:只有 `empty` 才允许放手。
    */
   cleanup?: () => Promise<CleanupResult>;
+  /**
+   * 「这一轮的输入**真的进了 agent 手里**吗」——`run()` 返回不等于送达。
+   *
+   * 大多数执行器把 prompt 在 spawn 那一刻就交出去了(argv / stdin),于是「进程起来了」和
+   * 「输入送到了」是同一件事,这一项留空即可(调用方按「已送达」处理,行为与从前一致)。
+   *
+   * **codex app-server 不是这样**:它的回合输入是 spawn 之后再走 JSON-RPC 发出去的
+   * (`initialize` → `thread/resume` → `turn/start`),中间任何一刻服务端被重启,进程照样活着、
+   * 输入却一个字都没出去 —— 2026-11-02 任务 WfLfTjaGzcA8 的 1.5 小时零输出就是这个缝
+   * (旧服务端死在 `resumeThread` 应答之后、回合输入之前)。所以这类执行器必须把「协议层面
+   * 收下了」这件事单独交出来,让投递记账等到它为止(见 ../turn-input-acceptance.ts)。
+   *
+   * **三态,而且 `accepted` 单调** —— 这一位的形状是第 1 轮自由审查 F4 定的:
+   *   · `accepted`  —— 收下了(协议层有回合开始凭据:`turn/start` 的应答,**或者**先到的
+   *     `turn/started` 通知)。一旦确认就不许退回:乱序和断链都不能把它改回去。
+   *   · `refused`   —— **确证**一个字都没进去(协议从头没通、回合输入压根没写出去,或者接管时
+   *     协议日志证明这一轮从未启动)。调用方据此把原文退回待发送、立刻重投。
+   *   · `unknown`   —— 说不上来(回合输入已经写出去、应答还没回来就断链)。**既不能当送达、
+   *     也不能当没送达**:那一轮可能已经在 agent 手里跑起来了,退回重投就是重复执行。调用方
+   *     把这条消息留在「在途」(租约不还、`sent` 不写),等迟到的凭据或下次开机对账给结论。
+   *
+   * 留空 = 这类执行器在 spawn 那一刻就把 prompt 交出去了(argv / stdin),「进程起来了」和
+   * 「输入送到了」是同一件事,调用方按 `accepted` 处理。
+   *
+   * 把 `reject` 一律读成「没送出去」的那一版错在这里(F4):`ready` 的最后一步是 `turn/start`
+   * 的**应答**,而 adapter 自己就用 `turnStartVersion` 处理过「通知先于应答」——两者不是同一个
+   * 原子事件。回合已经开跑、应答还在路上时断链,按 `refused` 退回去就会把同一段输入送第二遍。
+   */
+  inputAccepted?: Promise<InputAcceptance>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
   // `unitToken` = 这一次运行的资源记号(executors/unit-token.ts):pid 认得出根,记号才认得出

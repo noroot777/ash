@@ -8,7 +8,7 @@ import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { retryBlocked } from "./pending-redelivery.js";
 import { isDueForDelivery } from "./pending-verdict.js";
-import { now } from "./util.js";
+import { mintLeaseStamp } from "./delivery-fence.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
 
@@ -53,7 +53,8 @@ export async function beginPendingBatch(message: Row): Promise<Row[]> {
       selected.push(candidate);
     }
     if (!selected.length) return [];
-    const claimed = await transaction.update(scheduledMessages).set({ deliveringSince: now() })
+    // 同一笔领取铸一个租约值,整批共用:后面的归还/确认凭它证明「还是这一次」(delivery-fence.ts)。
+    const claimed = await transaction.update(scheduledMessages).set({ deliveringSince: mintLeaseStamp() })
       .where(and(
         inArray(scheduledMessages.id, selected.map((candidate) => candidate.id)),
         eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince),

@@ -6,7 +6,9 @@ import {
   api, db, dbClient, failCheckpointAck, hits, pending, rowOf, scenario, scheduledMessages,
   schema, settled, taskOf, until,
 } from "./checkpoint-recovery-fixture.js";
-import { deliveryCrossing, ensureCrossingDir, noteDeliveryCrossing } from "../src/delivery-crossing.js";
+import {
+  deliveryCrossing, ensureCrossingDir, noteDeliveryAccepted, noteDeliveryCrossing,
+} from "../src/delivery-crossing.js";
 import { RUNS_DIR } from "../src/paths.js";
 import { sessionTranscriptPath } from "../src/transcript.js";
 import { claimCheckpointForRun, returnCheckpointRun } from "../src/task-checkpoint-delivery.js";
@@ -129,10 +131,16 @@ export async function checkpointAckFailureCases(): Promise<void> {
     console.log("PASS: a lease with no turn after it is proven undelivered and returned to the task");
   }
 
-  // ④ **「送达」只认带身份的那一份证据**(第 1 轮逻辑审查 4)。早先的判据是「这个任务在租约之后
-  //    开过任何一个回合」,同一个任务上别的回合(审查旁路、续聊、再点一次运行)也会命中,那段
-  //    交代于是被当成已送达划掉:agent 从没收到,时间线上也不留带原文的「交付不明」。
-  //    三个现场只差记号上写着的那一轮,判据必须分别给出三种结论。
+  // ④ **「送达」只认协议层那一声确认**(第 2 轮自由审查 F1;前身是第 1 轮逻辑审查 4)。
+  //
+  //    这一问被收紧过两次,方向是同一个:**别拿 ash 自己的记账当 agent 的点头**。
+  //      · 第一代判据是「这个任务在租约之后开过任何一个回合」——同一个任务上别的回合(审查旁路、
+  //        续聊、再点一次运行)也会命中,那段交代于是被当成已送达划掉;
+  //      · 第二代收紧成「记号上写着的那一轮开起来过」——仍然是本地记账:越线、会话行、回合行
+  //        三样都只证明「可能已经产生外部效果」,而回合输入是 spawn **之后**才走协议发出去的
+  //        (codex app-server 死在握手里那次实测:会话行在、回合行在、那串字一个都没出去);
+  //      · 现在只认 `delivered` 记号 —— 协议层确认收下了这一轮的输入才算送达。
+  //    三个现场各给一种结论:没越线 → 归还;越线了但没点头 → 交付不明;点头了 → 只往前走。
   const otherTurnAfterLease = async (taskId: string, sessionId: string) => db.insert(schema.sessions).values({
     id: sessionId, taskId, role: "single", agentType: "claude",
     executor: "claude", cwd: ".", startedAt: now(), turnStartedAt: now(),
@@ -150,13 +158,19 @@ export async function checkpointAckFailureCases(): Promise<void> {
     console.log("PASS: an unrelated turn after the lease does not count as delivery when nothing crossed");
   }
   {
-    // ④b 记号在,写着的那一轮却没开起来;同一个任务上另有一条晚于租约的回合。按时间窗会判送达
-    //    并静默划掉 —— 现在必须落「交付不明」,原文留在用户看得见的地方。
+    // ④b 记号在、协议层没点头。**连「记号上写着的那一轮确实开起来了」也不算送达**(第 2 轮
+    //    自由审查 F1):会话行、回合行都是 ash 自己的记账,证明不了那串字进了 agent 手里。
+    //    必须落「交付不明」,原文留在用户看得见的地方。
     const test = await scenario(0);
     const generation = (await taskOf(test.taskId)).resumePromptGeneration;
     const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
-    noteDeliveryCrossing(test.taskId, [receipt.id], { sessionId: `sess-${receipt.id}`, turnStart: now() });
-    await otherTurnAfterLease(test.taskId, `other-${receipt.id}`);
+    const marked = { sessionId: `sess-${receipt.id}`, turnStart: now() };
+    noteDeliveryCrossing(test.taskId, [receipt.id], marked);
+    await otherTurnAfterLease(test.taskId, marked.sessionId);
+    await db.insert(schema.sessionTurns).values({
+      id: `turn-${receipt.id}`, sessionId: marked.sessionId, taskId: test.taskId,
+      cwd: ".", startedAt: marked.turnStart,
+    });
     forgetCheckpointDelivering(receipt.id);
     await reconcileCheckpointDeliveries(test.taskId);
     await until("交付不明就地了结", async () => (await rowOf(receipt.id)).status === "sent");
@@ -167,22 +181,20 @@ export async function checkpointAckFailureCases(): Promise<void> {
     console.log("PASS: another turn after the lease is not proof the marked turn received the handoff");
   }
   {
-    // ④c 记号上那一轮确实开起来了(回合表里有那个「会话 + 起点」):这才是送达,只往前走。
+    // ④c **协议层确认收下了**(`delivered` 记号):这才是送达,只往前走。
     const test = await scenario(0);
     const generation = (await taskOf(test.taskId)).resumePromptGeneration;
     const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
     const turn = { sessionId: `sess-${receipt.id}`, turnStart: now() };
     noteDeliveryCrossing(test.taskId, [receipt.id], turn);
+    noteDeliveryAccepted(test.taskId, [receipt.id]);
     await otherTurnAfterLease(test.taskId, turn.sessionId);
-    await db.insert(schema.sessionTurns).values({
-      id: `turn-${receipt.id}`, sessionId: turn.sessionId, taskId: test.taskId, cwd: ".", startedAt: turn.turnStart,
-    });
     forgetCheckpointDelivering(receipt.id);
     await reconcileCheckpointDeliveries(test.taskId);
     await until("已送达那一侧只往前走", async () => (await rowOf(receipt.id)).status === "sent");
-    assert.equal((await taskOf(test.taskId)).resumePrompt, null, "记号上那一轮开起来过 = 已送达,不许归还");
+    assert.equal((await taskOf(test.taskId)).resumePrompt, null, "协议层点过头 = 已送达,不许归还");
     assert.doesNotMatch(await transcript(test.taskId), /不会自动再送一遍/, "真送达了就不是交付不明");
-    console.log("PASS: the lease flips to delivered once the marked turn itself is on record");
+    console.log("PASS: the lease flips to delivered only once the protocol itself acknowledged the input");
   }
 
   // ⑤ 本进程还有一条路正在送它时,别人不许接管 —— 否则一条正在送的交代会被归还、送完再送一遍。
@@ -207,10 +219,13 @@ export async function checkpointAckFailureCases(): Promise<void> {
   //    「租约之后有没有回合开起来过」这个判据于此失效 —— 它问的是事后记账,而不可逆的那一步
   //    是 spawn 本身。
   //
-  //    这里钉的是**判定**:越线记号确实在 spawn 之前落了盘,于是收场按第三态走(就地结成一条
-  //    带原文的可见记录),而不是按「一定没送出去」归还。同一个进程里 agent 进程会被失败出口
-  //    收掉(continueTask 的 discardStartingRun),所以「被收到两遍」那个后果只在 ash 自己被
-  //    SIGKILL 时才看得到(审查者的跨进程复现);下面 ⑦ 按那个现场判。
+  //    这里钉的是**判定**:会话行没落下只影响面板,**改不了送达这个事实** —— 绝不许按「一定
+  //    没送出去」归还重投(那正是实测到的重放)。
+  //
+  //    **同一个进程里,这一问现在由第一手回执答**(第 2 轮自由审查 F1):执行器自己说「收下了」
+  //    比任何事后读取都强,所以收场是「已送达,补记这一笔」,不留交付不明的记录 —— 话真到了
+  //    agent 手里,拿一条「交付不明」去打扰用户是另一种撒谎。「交付不明」那一档改由**没有回执**
+  //    的现场钉:下面 ⑦(上一个进程被 SIGKILL,只剩磁盘上那张越线记号)与 ⑨(记号读不出来)。
   {
     const test = await scenario(0);
     const fault = failSessionPersist(test.taskId);
@@ -220,20 +235,24 @@ export async function checkpointAckFailureCases(): Promise<void> {
       // 旧口径就会把它重投一遍。
       assert.equal((await api.request(`/tasks/${test.taskId}/run`, { method: "POST" })).status, 409);
       await until("这一轮的会话行确实没落下", async () => fault.count() === 1);
-      await until("交付不明就地了结", async () => (await receiptOf(test.taskId)).status === "sent");
+      await until("送达之后补记上账", async () => (await receiptOf(test.taskId)).status === "sent");
     } finally {
       fault.restore();
     }
     const settledRow = await receiptOf(test.taskId);
     assert.equal(settledRow.deliveringSince, null, "不许永久挂着:租约留着就等于这个任务此后一律起不来");
-    assert.equal((await taskOf(test.taskId)).resumePrompt, null, "交付不明不许被回填成待执行输入");
+    assert.equal((await taskOf(test.taskId)).resumePrompt, null, "送出去的那段话不许被回填成待执行输入");
     assert.equal(await preparePendingCheckpointStart(test.taskId), null, "了结之后这个任务能再启动");
     assert.equal(deliveryCrossing(test.taskId, settledRow.id), "absent", "有了定论,越线记号就该收走");
+    // 这里**刻意不**断言 agent 收到过几次:同一个进程里那棵 agent 进程会被失败出口当场收掉
+    // (continueTask 的 discardStartingRun),它来不来得及把那一次记下来是竞态 —— 判据是回执
+    // (执行器契约:claude 这一类在 spawn 那一刻就把原话交出去了,见 turn-input-acceptance.ts),
+    // 不是事后数数。「真被收到两遍」那个后果归 ⑦ 那个跨进程现场。
     const told = await transcript(test.taskId);
-    assert.match(told, /不会自动再送一遍/, "交付不明必须留下可见交代");
-    assert.match(told, new RegExp(test.checkpoint), "原文必须留在用户看得见的地方 —— 要不要再送由他判断");
+    assert.doesNotMatch(told, /不会自动再送一遍/,
+      "有第一手回执就按「已送达」记账,不拿一条交付不明去打扰用户");
     await settled(test.taskId);
-    console.log("PASS: an input that crossed spawn without a session row is settled as uncertain, not returned");
+    console.log("PASS: a first-hand accepted receipt settles as delivered even when the session row never landed");
   }
 
   // ⑦ 跟 ③ **同一个现场,只差一张越线记号**:上一个进程把输入交出去了(记号在磁盘上),随后

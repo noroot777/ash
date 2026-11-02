@@ -35,7 +35,8 @@ import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verific
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
-import { clearTurnStall, trackTurnStall, type StallActions } from "../turn-stall.js";
+import { noteTurnProgress, openTurnProgress, turnProgressFor } from "../turn-progress-mark.js";
+import { clearTurnStall, trackTurnStall, watchTurnSilence, type StallActions } from "../turn-stall.js";
 import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
 import { clearStallFailure } from "../turn-stall-verdict.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
@@ -305,6 +306,10 @@ export async function runTurn(args: {
       },
       // 持久那一半单独一个动作:它要报成败,看门狗据此重投到确认(理由见 StallActions.project)。
       project: (facts) => markSessionStalled(taskId, rowId, facts.since),
+    // 「这一轮产出过东西」这个事实必须留在进程之外:接管回来的新句柄看不到 `agentOffset`
+    // 之前那一段(理由与实测见 turn-progress-mark.ts 文件头)。
+    // 返回落盘确认了没有:看门狗据此在下一条进展事件上重试(见 StallActions.noteProgress)。
+    noteProgress: () => (!!turnStart && noteTurnProgress(taskId, rowId, turnStart)),
       // `errorMsg` 非空 = 这一轮按失败结算(见下面 recordTurnSpan 的 outcome),而讨论链据此
       // 中止整场 —— 对一个上游连不上的回合这正是想要的:接着往下发言只会把空话喂给对手。
       // 所以讨论这一路不需要从 `turn-stall-verdict.ts` 读回结论:它的结算判据(`errorMsg`)本来就在
@@ -323,6 +328,20 @@ export async function runTurn(args: {
       },
       resolve: (facts) => clearSessionStalled(taskId, rowId, facts.since),
     };
+    // 静默档同上(single-run.ts 同一句):讨论这一路也是一个句柄一个回合,零进展的发言跟
+    // 单飞是同一个毛病 —— 判据一个字都不在这儿,见 ../turn-stall.ts 文件头。
+    //
+    // **进程外那份进展事实**:讨论这一路没有接管入口(reattach 只接单飞),每一轮都是本进程
+    // 从头开的,所以这里一律落参与证明 —— 它才是「记号不在 = 确证没产出」的前提
+    // (turn-progress-mark.ts;接管方为什么不许写同见那里)。
+    openTurnProgress(taskId, rowId, turnStart);
+    // 读也走「我是不是从头看着这一轮的」那一问(第 2 轮自由审查 F2):这条链没有接管入口,所以
+    // 事实在手上 —— 上面那张证明万一没写成,也不该因此把静默档关掉(那是拿一次写盘故障换
+    // 「它可能已经产出过」)。判据见 ../turn-progress-mark.ts 的 `turnProgressFor`。
+    watchTurnSilence(
+      rowId, handle, turnStart, stallActions,
+      turnProgressFor({ taskId, sessionId: rowId, turnStartedAt: turnStart, watchedFromStart: true }),
+    );
     try {
       for await (const event of handle.events) {
         // 窄出口的「此刻还在等上游」同一处口径(见 session-waiting.ts):讨论这一路的正文

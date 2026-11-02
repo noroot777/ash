@@ -25,9 +25,11 @@
 // 消失 = 用户那句话凭空蒸发,连「我发过」都无从证明(2026-08-07 事故,见
 // docs/incidents.md「排队消息凭空消失」)。做法是把「有人正在送」拆成一个**独立的租约字段**
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
-import { and, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
+import { createDeliveryLease } from "./delivery-lease.js";
+import { leasesHeldBy, mintLeaseStamp } from "./delivery-fence.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks, groups } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
@@ -188,6 +190,10 @@ function forgetDeliveryBookkeeping(messageId: string): void {
 
 // 抢下之后最终没能送出去:把租约还回去(托盘里它压根没消失过),下一次触发再送。
 // **宁可晚发,不能不发。**
+//
+// **只还自己那一次**(./delivery-fence.ts):传进来的必须是领取那一刻的行。上一版只按 id 写,
+// 第一次投递迟到的补偿能把第二次已被收下的投递的租约清掉 —— 同一条消息执行两遍
+// (第 1 轮自由审查 F1,端到端实测)。
 export async function abortDelivery(message: Row | Row[]): Promise<void> {
   const messages = Array.isArray(message) ? message : [message];
   if (!messages.length) return;
@@ -195,7 +201,7 @@ export async function abortDelivery(message: Row | Row[]): Promise<void> {
   await db
     .update(scheduledMessages)
     .set({ deliveringSince: null })
-    .where(and(inArray(scheduledMessages.id, messages.map((current) => current.id)), eq(scheduledMessages.status, "pending")));
+    .where(and(leasesHeldBy(messages), eq(scheduledMessages.status, "pending")));
 }
 
 export async function cancelPendingMessage(message: Row, reason: string): Promise<void> {
@@ -245,7 +251,8 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
 export async function beginDelivery(messageId: string): Promise<Row | null> {
   const claimed = await db
     .update(scheduledMessages)
-    .set({ deliveringSince: now() })
+    // 每次领取一个不可复用的租约值:后面的归还/确认都凭它证明「还是我这一次」。
+    .set({ deliveringSince: mintLeaseStamp() })
     .where(
       and(
         eq(scheduledMessages.id, messageId),
@@ -258,7 +265,8 @@ export async function beginDelivery(messageId: string): Promise<Row | null> {
 }
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
-// 消息不该被这一步复活。
+// 消息不该被这一步复活。迟到的确认同样**只认自己那一次**(./delivery-fence.ts):事务里重读
+// 当前行再调的那一路天然满足,投递链上的调用点传领取那一刻的行。
 export async function markSent(message: Row | Row[], transaction?: ConclusionTransaction): Promise<void> {
   const messages = Array.isArray(message) ? message : [message];
   if (!messages.length) return;
@@ -268,7 +276,7 @@ export async function markSent(message: Row | Row[], transaction?: ConclusionTra
     // (续跑凭证之外的消息这一列本来就是 null,写它是空转)。
     .set({ status: "sent", sentAt: now(), deliveringSince: null, deliveringOwner: null })
     .where(and(
-      inArray(scheduledMessages.id, messages.map((current) => current.id)),
+      leasesHeldBy(messages),
       or(
         eq(scheduledMessages.status, "pending"),
         and(
@@ -556,8 +564,22 @@ export async function handDuePendingMessageToRun(
   const queuedAt = Date.now();
   const dueAt = markDue(due.id, queuedAt);
   const busyMs = settleBusyAgain(due.id, queuedAt);
-  let delivered = false;
   let handedOff = false;
+  // 在途租约:三档回执怎么处置这张租约、迟到的那一次怎么收口,统一在 ./delivery-lease.ts
+  // (三个投递入口各写一遍就会各漏一处 —— 那正是第 2 轮自由审查 F3)。
+  const lease = createDeliveryLease({
+    label: `任务 ${taskId} 的定时消息`,
+    onAccepted: async () => {
+      const sentAt = Date.now();
+      await markSent(claimed);
+      // 这条路由调用方在回合空着时拉起,没有「等回合退干净」一段,两个时间点同值。
+      noteDeliveryTiming(taskId, { dueAt, busyMs, queuedAt, idleAt: queuedAt, at: sentAt });
+    },
+    onReturn: async (why) => {
+      await abortDelivery(claimed);
+      scheduleRedelivery(due, why);
+    },
+  });
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0) ?? null;
     const execution = pendingExecutionIntent({ ...due, execution: true }, task && { ...task, status: taskStartStatus(task) });
@@ -581,24 +603,21 @@ export async function handDuePendingMessageToRun(
       // 是用户显式动作,不加闸,与隔壁 RESUME/fresh 路径保持一致。
       freezeGuard: opts.freezeGuard ?? !opts.turnHeld,
       turnHeld: opts.turnHeld,
-      onDelivered: async () => {
-        delivered = true;
-        const sentAt = Date.now();
-        await markSent(due);
-        // 这条路由调用方在回合空着时拉起,没有「等回合退干净」一段,两个时间点同值。
-        noteDeliveryTiming(taskId, { dueAt, busyMs, queuedAt, idleAt: queuedAt, at: sentAt });
-      },
+      // 三档处置见 ./delivery-lease.ts(上面那只租约)。
+      onInputSettled: (acceptance) => lease.settle(acceptance),
     });
-    if (!delivered) {
+    if (lease.callerMustReturn()) {
       // 同 deliverWhenIdle:「已接管回合」≠「已送达」,唯一可信的送达信号是 onDelivered。
+      // 判据只看协议定论:accepted 一次都不授权归还(第 2 轮自由审查 F1)。
       // 起跑异常被 continueTask 内部吸收(结算 failed 后返回 true)时必须归还租约,
       // 否则恢复后的重试与扫描(都只看无租约的 pending 行)永远绕开这条消息。
-      await abortDelivery(due);
+      await abortDelivery(claimed);
+      lease.callerReturned(); // 这一次我已经还了:租约那条补偿到此了结,不许再醒来碰这一行
       scheduleRedelivery(due, started ? "回合起跑失败，原文退回待发送" : "回合被其它执行抢占或工作区正被验收占用");
     }
     return true;
   } catch (error) {
-    if (delivered) return true; // 已进会话之后才炸的是运行事故,不是未送达
+    if (!lease.callerMustReturn()) return true; // 已进会话之后才炸的是运行事故,不是未送达
     if (!handedOff && opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     const detail = error instanceof Error ? error.message : String(error);
     await cancelPendingMessage(due, `续跑失败：${detail}`).catch(() => {});
