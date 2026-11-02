@@ -22,6 +22,7 @@ import { gateExitPath, readGateLaunch } from "../src/accept-gate-launch.js";
 import { gateExitOutcome } from "../src/accept-gate-exit.js";
 import { overrideGateWatchTimings } from "../src/accept-gate-watch.js";
 import { sessionTranscriptPath } from "../src/transcript.js";
+import { makeStep } from "@ash/shared/workflow";
 import { isTurnClaimed, releaseTurn } from "../src/turn-lock.js";
 import type { GateFixture } from "./test-accept-gate-lifecycle.js";
 
@@ -62,7 +63,8 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
    * 活着等命令按 `code` 退出、自己去结算，死在终态那一句之前 / 之后。
    */
   async function crash(s: Awaited<ReturnType<typeof stage>>,
-    phase: "armed" | "before-final" | "after-final" | "after-merged" | "after-handoff-mark", code?: string) {
+    phase: "armed" | "before-final" | "after-final" | "after-merged" | "after-handoff-mark" | "after-tail-mark"
+      | "before-delivered-clear" | "after-delivery-claim", code?: string) {
     const worker = spawn(process.execPath, ["--import", "tsx", crashWorker, s.taskId, phase],
       { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     let diagnostic = "";
@@ -250,5 +252,110 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
     await settled(s.taskId);
     assert.equal((await collectGateRuns(s.taskId)).length, 1, "办完就能接力");
   }
-  console.log("accept gate takeover settle: 停机越过时限按超时 / 收尾中途崩溃照认领结论收完 / 终态后崩溃补办合并且只补一次 / 补办交回修复 / 合并后清理前崩溃续完验收 / 记了交接时间未送达补发 / 补办读失败不销账 / 欠后续不许接力 passed");
+  // ——第 3 轮审查：「走完了」要有证据，「送到了」要有证据。
+
+  /** 这次运行的修复输入作为用户回合在会话里出现了几次（时间线旁注里也有日志路径，不算）。 */
+  async function deliveries(taskId: string, logPath: string): Promise<number> {
+    let count = 0;
+    for (const { id } of await db.select({ id: sessions.id }).from(sessions).where(eq(sessions.taskId, taskId))) {
+      for (const chunk of read(sessionTranscriptPath(taskId, id)).split("\x1e")) {
+        try {
+          const turn = JSON.parse(chunk.split("\n")[0]!) as { t?: string; text?: string };
+          if (turn.t === "user" && turn.text?.includes(logPath)) count++;
+        } catch { /* 不是回合记录 */ }
+      }
+    }
+    return count;
+  }
+
+  // 续验收内部第一次读项目临时失败（acceptTask 抛出来了）→ 不是「验收没过」的结果：记号留着，下次补上。
+  {
+    const s = await stage("owed-inner");
+    const row = await crash(s, "after-final", "0");
+    assert.ok(row.settlement);
+    const execute = dbClient.execute.bind(dbClient);
+    let failures = 0;
+    Object.defineProperty(dbClient, "execute", { configurable: true, writable: true, value: async (...args: Parameters<typeof execute>) => {
+      const sql = typeof args[0] === "string" ? args[0] : (args[0] as { sql?: string }).sql ?? "";
+      if (failures === 0 && /^select .* from "projects"/i.test(sql) && JSON.stringify(args).includes(`gate-project-${s.taskId}`)) {
+        failures++;
+        throw new Error("temporary project read failure");
+      }
+      return execute(...args);
+    } });
+    try {
+      await recoverAcceptGates();
+      await settled(s.taskId);
+    } finally { Object.defineProperty(dbClient, "execute", { configurable: true, writable: true, value: execute }); }
+    assert.equal(failures, 1, "故障打在了续验收内部");
+    assert.equal((await taskRow(s.taskId)).stage, "verified");
+    assert.ok((await runOf(s.taskId)).settlement, "抛出来的异常不是结果：记号留着");
+    assert.match(s.timeline(), /自动继续验收时出错.*这一步还欠着/);
+    await recoverAcceptGates();
+    await settled(s.taskId);
+    assert.equal((await taskRow(s.taskId)).stage, "accepted", "故障消失后补上合并");
+    assert.equal((await runOf(s.taskId)).settlement, null);
+  }
+
+  // accepted 已落、「点头之后」的发布命令还没跑就崩溃 → accepted 不是走完的证明：补跑尾段。
+  {
+    const s = await stage("owed-tail");
+    const marker = join(root, "takeover-settle-owed-tail.published");
+    const script = join(root, "takeover-settle-owed-tail.cjs");
+    writeFileSync(script, `require("fs").appendFileSync(${JSON.stringify(marker)}, "1");`);
+    const accept = makeStep("accept", "accept");
+    if (accept.kind === "accept") accept.p = { strategy: "safe", clean: "none" };
+    const publish = makeStep("command", "after-accept");
+    if (publish.kind === "command") publish.p = { cmd: `"${process.execPath}" "${script}"`, where: "repo" };
+    await db.update(tasks).set({ workflowAt: "gate", workflow: JSON.stringify({ workspace: "isolated",
+      steps: [makeStep("run", "run"), makeStep("human", "gate"), accept, publish] }) }).where(eq(tasks.id, s.taskId));
+    const row = await crash(s, "after-tail-mark", "0");
+    const half = await taskRow(s.taskId);
+    assert.equal(half.stage, "accepted");
+    assert.equal(half.acceptedTailPending, true);
+    assert.equal(existsSync(marker), false, "发布命令还没跑");
+    assert.ok(row.settlement);
+    await recoverAcceptGates();
+    await settled(s.taskId);
+    assert.equal(read(marker), "1", "重启后补跑那一次从没发生过的发布，只跑一次");
+    assert.equal((await taskRow(s.taskId)).acceptedTailPending, false);
+    assert.equal((await runOf(s.taskId)).settlement, null);
+  }
+
+  // 修复输入已经落进会话、回执到了、记号还没清就崩溃 → 不重发。
+  {
+    const s = await stage("owed-delivered");
+    const row = await crash(s, "before-delivered-clear", "3");
+    assert.equal(JSON.parse(row.settlement!).delivering, true, "起跑前记下了「开始投递」");
+    await until(async () => await deliveries(s.taskId, row.logPath) === 1, "原话落盘");
+    const sessionsBefore = (await db.select().from(sessions).where(eq(sessions.taskId, s.taskId))).length;
+    await recoverAcceptGates();
+    await settled(s.taskId);
+    await sleep(500);
+    assert.equal(await deliveries(s.taskId, row.logPath), 1, "同一次失败只交一遍");
+    assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, s.taskId))).length, sessionsBefore);
+    const done = await runOf(s.taskId);
+    assert.equal(done.settlement, null);
+    assert.equal(done.handoffError, null, "有送达证据就是送到了，不报「说不清」");
+    // 那一轮是死掉的旧进程起的，没人替它收口：测试替它落终态，别留一个挂着的回合。
+    await db.update(sessions).set({ endedAt: new Date().toISOString() }).where(eq(sessions.taskId, s.taskId));
+    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, s.taskId));
+    releaseTurn(s.taskId);
+  }
+
+  // 记下「开始投递」、还没起跑就崩溃 → 说不清有没有送到：不重发，如实记一笔，出路交给用户。
+  {
+    const s = await stage("owed-uncertain");
+    const row = await crash(s, "after-delivery-claim", "3");
+    assert.equal(JSON.parse(row.settlement!).delivering, true);
+    await recoverAcceptGates();
+    await settled(s.taskId);
+    await sleep(500);
+    assert.equal(await deliveries(s.taskId, row.logPath), 0, "不自动重发");
+    const done = await runOf(s.taskId);
+    assert.equal(done.settlement, null);
+    assert.match(done.handoffError ?? "", /说不清有没有送到/);
+    assert.match(s.timeline(), /点「再交一次」/);
+  }
+  console.log("accept gate takeover settle: 停机越过时限按超时 / 收尾中途崩溃照认领结论收完 / 终态后崩溃补办合并且只补一次 / 补办交回修复 / 合并后清理前崩溃续完验收 / 记了交接时间未送达补发 / 补办读失败不销账 / 欠后续不许接力 / 续验收内部异常不销账 / 尾段未跑补跑 / 已送达不重发 / 说不清不重发 passed");
 }

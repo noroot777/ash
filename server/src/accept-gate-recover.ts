@@ -47,50 +47,60 @@ export async function recoverAcceptGates(): Promise<{ interrupted: number; resum
     attachGateProcess(row.id, row.pid, row.pidStartedAt, true);
   }
   const tally = { interrupted: 0, resumed: 0, settled: 0 };
+  // 一行收拾失败（读写库临时出错）不能让后面的行没人接：逐行隔离，失败的那一行照旧被上面的
+  // 进程登记占着（工作区受保护），已知结论的那几条另有重试负责者（settleDurably）。
   for (const row of rows) {
-    if (row.status !== "running" && !row.processPending) { await followUpOwed(row); continue; }
-    const claimed = row.status === "running" ? parseGateSettlement(row.settlement) : null;
-    if (claimed) {
-      appendGateLog(row.logPath, `\n[ash] ash 重启时这一次正在收尾，结论已经认领（${claimed.status}），接着收完。\n`);
-      await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 正在收尾，结论已经落库，按那一份接着收完。`);
-      if (await settleDurably(row.id, claimed)) tally.settled++;
-      continue;
-    }
-    const fate = row.status === "running" ? gateRecoveryFate(row) : { kind: "lost" as const };
-    if (fate.kind === "running") { await resumeGate(row); tally.resumed++; continue; }
-    if (fate.kind === "exited") {
-      appendGateLog(row.logPath, `\n[ash] ash 重启后读到命令自己留下的退出结果（rc=${fate.exit.code}），按它结算。\n`);
-      await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 已经跑完（rc=${fate.exit.code}），`
-        + "结果由它的启动器留在了磁盘上，按它照常结算。");
-      if (await settleDurably(row.id, gateExitOutcome(fate.exit))) tally.settled++;
-      continue;
-    }
-    // 跨重启**必须先核身份**：ash 停了几小时再起来，那个 pid 多半已经是别的进程了，
-    // 盲发信号打死的是无辜的人（第 1 轮审查）。核不出来就不发，并在日志里说清。
-    // 先把行落成「被打断」再动刀（同超时那条路）：这个收拾动作在同一个进程里也可能撞上
-    // 那条命令自己的退出回调，而那个回调会把它收成一条**红**并交给 agent 去修 —— 被打断
-    // 不是红，它根本没有结论。
-    if (row.status === "running") {
-      await db.update(acceptGateRuns)
-        .set({ status: "interrupted", failure: "server_restarted", finishedAt: now(), processPending: true })
-        .where(eq(acceptGateRuns.id, row.id));
-      tally.interrupted++;
-    }
-    const stopped = await stopGateRun(row.id);
-    if (stopped) await cleanupGateSnapshot(row.taskId, row.id);
-    const stoppedSummary = gateStoppedSummary(row.executionMode);
-    appendGateLog(row.logPath, `\n[ash] ash 重启后核对进程，执行状态为 ${row.status === "running" ? "interrupted" : row.status}（${
-      stopped ? stoppedSummary : "残留进程尚未确认退出，工作区仍被占用"}）。\n`);
-    await appendTaskTimeline(
-      row.taskId,
-      (row.status === "running"
-        ? `验收前置命令被打断：ash 重启时它还在跑（\`${row.command}\`），已按未完成收尾。`
-        : `ash 重启后继续核对验收前置命令 \`${row.command}\` 的停止责任（原状态 ${row.status}）。`)
-      + (stopped ? `${stoppedSummary}，工作区占用已释放。` : "尚未确认进程退出，合并和清理仍被阻止。"),
-    );
-    announceGate(row.taskId);
+    await recoverRow(row, tally).catch((error) => {
+      console.error(`[ash] 验收前置命令重启收拾失败（${row.id}），这一行先保持占用:`, error);
+    });
   }
   return tally;
+}
+
+async function recoverRow(row: GateRow, tally: { interrupted: number; resumed: number; settled: number }): Promise<void> {
+  if (row.status !== "running" && !row.processPending) { await followUpOwed(row); return; }
+  const claimed = row.status === "running" ? parseGateSettlement(row.settlement) : null;
+  if (claimed) {
+    appendGateLog(row.logPath, `\n[ash] ash 重启时这一次正在收尾，结论已经认领（${claimed.status}），接着收完。\n`);
+    // 说明是旁注：它写不进去不能拦着结算挂上负责者。
+    await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 正在收尾，结论已经落库，按那一份接着收完。`)
+      .catch(() => {});
+    if (await settleDurably(row.id, claimed)) tally.settled++;
+    return;
+  }
+  const fate = row.status === "running" ? gateRecoveryFate(row) : { kind: "lost" as const };
+  if (fate.kind === "running") { await resumeGate(row); tally.resumed++; return; }
+  if (fate.kind === "exited") {
+    appendGateLog(row.logPath, `\n[ash] ash 重启后读到命令自己留下的退出结果（rc=${fate.exit.code}），按它结算。\n`);
+    await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 已经跑完（rc=${fate.exit.code}），`
+      + "结果由它的启动器留在了磁盘上，按它照常结算。").catch(() => {});
+    if (await settleDurably(row.id, gateExitOutcome(fate.exit))) tally.settled++;
+    return;
+  }
+  // 跨重启**必须先核身份**：ash 停了几小时再起来，那个 pid 多半已经是别的进程了，
+  // 盲发信号打死的是无辜的人（第 1 轮审查）。核不出来就不发，并在日志里说清。
+  // 先把行落成「被打断」再动刀（同超时那条路）：这个收拾动作在同一个进程里也可能撞上
+  // 那条命令自己的退出回调，而那个回调会把它收成一条**红**并交给 agent 去修 —— 被打断
+  // 不是红，它根本没有结论。
+  if (row.status === "running") {
+    await db.update(acceptGateRuns)
+      .set({ status: "interrupted", failure: "server_restarted", finishedAt: now(), processPending: true })
+      .where(eq(acceptGateRuns.id, row.id));
+    tally.interrupted++;
+  }
+  const stopped = await stopGateRun(row.id);
+  if (stopped) await cleanupGateSnapshot(row.taskId, row.id);
+  const stoppedSummary = gateStoppedSummary(row.executionMode);
+  appendGateLog(row.logPath, `\n[ash] ash 重启后核对进程，执行状态为 ${row.status === "running" ? "interrupted" : row.status}（${
+    stopped ? stoppedSummary : "残留进程尚未确认退出，工作区仍被占用"}）。\n`);
+  await appendTaskTimeline(
+    row.taskId,
+    (row.status === "running"
+      ? `验收前置命令被打断：ash 重启时它还在跑（\`${row.command}\`），已按未完成收尾。`
+      : `ash 重启后继续核对验收前置命令 \`${row.command}\` 的停止责任（原状态 ${row.status}）。`)
+    + (stopped ? `${stoppedSummary}，工作区占用已释放。` : "尚未确认进程退出，合并和清理仍被阻止。"),
+  );
+  announceGate(row.taskId);
 }
 
 /** 结论已经落库、续验收 / 交修没办完就重启了：补上（还欠不欠由 followUpGate 判）。 */
@@ -108,9 +118,9 @@ async function followUpOwed(row: GateRow): Promise<void> {
  * 这里补上（第 2 轮审查 N2 残余）。
  */
 async function settleDurably(runId: string, outcome: GateSettlement): Promise<boolean> {
-  await settleGate(runId, outcome, false);
-  if (await gateSettled(runId)) return true;
-  let busy = false;
+  // 负责者**先挂上**再试第一次：第一次的写库和随后那句确认读可能栽在同一段故障里，先试后挂
+  // 的话那句读一抛，就没有人接着管它了（第 3 轮审查 N2 残余）。
+  let busy = true;
   const retry = setInterval(() => {
     if (busy) return;
     busy = true;
@@ -121,7 +131,12 @@ async function settleDurably(runId: string, outcome: GateSettlement): Promise<bo
     })().catch(() => {}).finally(() => { busy = false; });
   }, SETTLE_RETRY_MS);
   retry.unref?.();
-  return false;
+  try {
+    await settleGate(runId, outcome, false);
+    if (!await gateSettled(runId)) return false;
+    clearInterval(retry);
+    return true;
+  } catch { return false; } finally { busy = false; }
 }
 
 /**
@@ -150,6 +165,8 @@ async function resumeGate(row: GateRow): Promise<void> {
       await appendTaskTimeline(row.taskId, `验收前置命令接管降级：${why}`);
     })() });
   // 时限从启动器起来那一刻算（启动记录里记着），旧记录没有就退到这一行的开跑时刻。
+  // 已知边界：跨进程只有墙钟可比，ash 不在场时主机大幅校时会让接管后的超时看护提前或推后。
+  // 命令一旦退出就不受影响 —— 那时按启动器自己量的单调用时判（accept-gate-exit.ts）。
   const launchedAt = Date.parse(readGateLaunch(row.logPath)?.launchedAt ?? row.startedAt);
   superviseGate(row.taskId, row.id, row.logPath, pid, pidStartedAt,
     { elapsedMs: Number.isFinite(launchedAt) ? Math.max(0, Date.now() - launchedAt) : 0, exit });

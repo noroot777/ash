@@ -17,23 +17,13 @@ import { readGateLaunch } from "./accept-gate-launch.js";
 import { gateScopeNotice } from "./accept-gate-confinement.js";
 import { diagnoseGateFailure } from "./accept-gate-attribution.js";
 import { followUpGate } from "./accept-gate-continue.js";
-import { gateExitOutcome, readGateExit, type GateOutcome } from "./accept-gate-exit.js";
+import { gateExitOutcome, parseGateSettlement, readGateExit, type GateSettlement } from "./accept-gate-exit.js";
 import { freezeGateScene } from "./accept-gate-diagnosis.js";
 import { now } from "./util.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 
-/** 认领下来的结论。scene = 撞上时限那一刻的完整现场，结算一开头就冻结存盘，不追加进日志。 */
-export type GateSettlement = GateOutcome & { scene?: string };
-
-/** 库里那份认领下来的结论。读不出（旧行、坏 JSON）就当没有。 */
-export function parseGateSettlement(value: string | null): GateSettlement | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as GateSettlement;
-    return typeof parsed?.status === "string" && (parsed.status as string) !== "running" ? parsed : null;
-  } catch { return null; }
-}
+export { parseGateSettlement, type GateSettlement } from "./accept-gate-exit.js";
 
 const readRun = async (runId: string): Promise<GateRow | undefined> =>
   (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);

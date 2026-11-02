@@ -36,6 +36,22 @@ const EXIT_POLL_MS = 1_000;
 export type GateOutcome = { status: Exclude<AcceptGateStatus, "running">; exitCode: number | null; failure: AcceptGateFailure | null;
   /** 「为什么是这个结论」的一句话，落进任务时间线。 */
   note?: string };
+/**
+ * 认领下来、落进 settlement 列的结论。scene = 撞上时限那一刻的完整现场，结算一开头就冻结存盘，
+ * 不追加进日志；delivering = 红了之后那份修复输入**已经开始投递**（拿到回合、即将起跑），
+ * 重启时据此分辨「从没送过、可以补发」和「可能已经送到、不许重发」（accept-gate-handoff.ts）。
+ */
+export type GateSettlement = GateOutcome & { scene?: string; delivering?: boolean };
+
+/** 库里那份认领下来的结论。读不出（旧行、坏 JSON）就当没有。 */
+export function parseGateSettlement(value: string | null | undefined): GateSettlement | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as GateSettlement;
+    return typeof parsed?.status === "string" && (parsed.status as string) !== "running" ? parsed : null;
+  } catch { return null; }
+}
+
 export type GateFate = { kind: "exited"; exit: GateExit } | { kind: "running" } | { kind: "lost" };
 
 const minutes = (ms: number): string => (ms / 60_000).toFixed(1);
