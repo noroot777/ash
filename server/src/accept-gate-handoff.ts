@@ -60,7 +60,16 @@ export function gateHandoffTimeline(view: AcceptGateView, logPath: string, again
     + `${again ? "这是你在验收台上手动再交一次。" : ""}${next}${stale}`;
 }
 
-export async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = false): Promise<void> {
+/**
+ * 把一条红交回任务去修。交接落定（投递已落进会话 / 已持久入队 / 失败已记账）时顺带清掉这一行
+ * 欠着的后续记号（settlement，见 accept-gate-continue.ts），并叫一声 `onFinal`。
+ */
+export async function handOffGateFailure(row: GateRow, view: AcceptGateView, again = false,
+  onFinal?: () => void): Promise<void> {
+  const settle = async () => {
+    try { await db.update(acceptGateRuns).set({ settlement: null }).where(eq(acceptGateRuns.id, row.id)); }
+    finally { onFinal?.(); }
+  };
   const authority = !again ? parseChoices(row.acceptOptions).reviewAuthority : undefined;
   const task = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
   const project = (await db.select().from(projects).where(eq(projects.id, row.projectId))).at(0);
@@ -71,15 +80,19 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
       const { enqueueFinalizationRepair } = await import("./regression-finalization.js");
       await enqueueFinalizationRepair(authority.directory, authority.generation, row.taskId, prompt, authority.target!,
         async (transaction) => {
-          await transaction.update(acceptGateRuns).set({ handoffAt: now(), handoffError: null }).where(eq(acceptGateRuns.id, row.id));
+          // 入队和销账同一个事务：入队即送达（按 key 幂等），两者不会只成一半。
+          await transaction.update(acceptGateRuns).set({ handoffAt: now(), handoffError: null, settlement: null })
+            .where(eq(acceptGateRuns.id, row.id));
         }, `gate-${row.id}`);
       bus.publish({ type: "task.acceptGate", taskId: row.taskId });
       await appendTaskTimeline(row.taskId, `门禁交接：修复输入已持久入队，按原审查权限等待投递（日志 ${row.logPath}）。`);
+      onFinal?.();
       await (await import("./pending-messages.js")).deliverPendingMessages(row.taskId);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       await markHandoff(row.id, { at: now(), error: reason });
       await appendTaskTimeline(row.taskId, `门禁交接失败：${reason}。日志在 ${row.logPath}，可核对后手动再交。`);
+      await settle();
     }
     return;
   }
@@ -88,13 +101,22 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
   await markHandoff(row.id, { at: now(), error: null });
   await appendTaskTimeline(row.taskId, gateHandoffTimeline(view, row.logPath, again));
   // byBackend：占真人回合，但字是后端写的（同验收冲突交接）。
+  // handoff_at 只说明「发起了」：投递在等回合空闲，进程这时候死掉的话话一个字都没送出去。
+  // 所以欠着的记号等 onDelivered（原话落进会话那一刻）或失败记完账才清（第 2 轮审查）。
   continueWhenIdle(row.taskId, prompt, { byBackend: true }, async (why) => {
-    await markHandoff(row.id, { at: now(), error: why });
-    await appendTaskTimeline(
-      row.taskId,
-      `门禁交接失败：没能叫醒该任务（${why}）。日志在 ${row.logPath}，请手动点运行或直接回复它。`,
-    );
-  });
+    try {
+      await markHandoff(row.id, { at: now(), error: why });
+      await appendTaskTimeline(
+        row.taskId,
+        `门禁交接失败：没能叫醒该任务（${why}）。日志在 ${row.logPath}，请手动点运行或直接回复它。`,
+      );
+    } catch (error) {
+      // 失败没记上账就不算落定：记号留给下次启动，只把「正在办」放开。
+      onFinal?.();
+      throw error;
+    }
+    await settle();
+  }, settle);
 }
 
 async function markHandoff(runId: string, value: { at: string; error: string | null }): Promise<void> {

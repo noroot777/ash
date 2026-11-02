@@ -11,25 +11,50 @@ import { appendTaskTimeline } from "./task-timeline.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 
+// 正在办的 runId。红了那一笔要等到投递落定才算办完，比 followUpGate 返回得晚，所以记号一直
+// 挂到那时；同一进程里再进来一次（重复恢复、结算与补办撞上）直接让开，不会交两遍、合两遍。
+const following = new Set<string>();
+
+const clearOwed = (runId: string) =>
+  db.update(acceptGateRuns).set({ settlement: null }).where(eq(acceptGateRuns.id, runId));
+
 /**
- * 办掉一次结论欠下的那一步，办完（不论成败）清掉 settlement 记号。**幂等**：重启补办时上一次
- * 可能已经办了一半 —— 合并已经落了、交接已经发了 —— 所以先核「还欠不欠」：
- *  · 绿：任务还没验收、凭据不是这一次、它仍是这个任务最近的一次（后来又跑过的，以后来的为准）；
- *  · 红：这一行还没有交接记录（交接一发起就先落 handoff_at，见 accept-gate-handoff.ts）。
- * 进程中途被杀的话记号还在，下次启动再补；办完才清，所以不会补两遍。
+ * 办掉一次结论欠下的那一步。结算当场（accept-gate-settle.ts）和重启补办（accept-gate-recover.ts）
+ * 共用这一份，`resumeNote` 只在补办时给：真的要动手了才往时间线上说一句。
+ *
+ * **销账只认办完的证明**（第 2 轮审查）。settlement 记号是重启后唯一的线索，清早了就再也补不上：
+ *  · 绿：任务已经 accepted（最终阶段）。merged、验收凭据已写这些都是 acceptTask 走到一半的
+ *    中间态 —— 合并落了、清理和最终验收还没做 —— 它们照样进 acceptTask，由它自己的 merged
+ *    续做路径收完；
+ *  · 红：修复输入已经落进会话（continueWhenIdle 的 onDelivered），或者带审查权限那条已经持久
+ *    入队，或者交接失败已经可见地记了账（同没重启过时那一次失败一样，用户手里有「再交一次」）。
+ *    handoff_at 只说明「发起过」，不说明送到了，所以不拿它当证明；
+ *  · 都不欠了：任务没了，或者这一次已经不是它最近的那一次（后来的那一次说了算）。
+ * 判之前的读库失败、续办自己抛出来的异常一律**不销账**：记号留着，下次启动再补。
  */
-export async function followUpGate(row: GateRow, view: AcceptGateView): Promise<void> {
+export async function followUpGate(row: GateRow, view: AcceptGateView, resumeNote?: string): Promise<void> {
+  if (following.has(row.id)) return;
+  following.add(row.id);
+  let handedOff = false;
   try {
+    const task = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
+    const owed = !!task && (await latestRun(row.taskId))?.id === row.id
+      && (row.status === "passed" ? task.stage !== "accepted" : row.status === "failed");
+    if (!owed) { await clearOwed(row.id); return; }
+    if (resumeNote) await appendTaskTimeline(row.taskId, resumeNote);
     if (row.status === "passed") {
-      const task = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
-      if (task && task.stage !== "accepted" && task.stage !== "merged" && task.acceptedGateRunId !== row.id
-        && (await latestRun(row.taskId))?.id === row.id) await continueAcceptance(row);
-    } else if (row.status === "failed") {
-      const current = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, row.id))).at(0);
-      if (current && !current.handoffAt) await handOffGateFailure(row, view);
+      await continueAcceptance(row);
+      await clearOwed(row.id);
+      return;
     }
+    // 交接自己在投递落定时销账（accept-gate-handoff.ts），这里只把「正在办」的记号交给它收。
+    handedOff = true;
+    await handOffGateFailure(row, view, false, () => following.delete(row.id));
+  } catch (error) {
+    handedOff = false;
+    throw error;
   } finally {
-    await db.update(acceptGateRuns).set({ settlement: null }).where(eq(acceptGateRuns.id, row.id));
+    if (!handedOff) following.delete(row.id);
   }
 }
 

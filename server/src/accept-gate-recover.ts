@@ -13,10 +13,13 @@ import { gateExitOutcome, gateRecoveryFate, watchGateExit } from "./accept-gate-
 import { appendGateNote } from "./accept-gate-diagnosis.js";
 import { followUpGate } from "./accept-gate-continue.js";
 import { announceGate, cleanupGateSnapshot, gateSettled, live, parseGateSettlement, settleGate, superviseGate,
-  trackGateFollowUp } from "./accept-gate-settle.js";
+  trackGateFollowUp, type GateSettlement } from "./accept-gate-settle.js";
 import { now } from "./util.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
+
+/** 启动时已知结论却没写进库的那几条，多久再试一次。 */
+const SETTLE_RETRY_MS = 5_000;
 
 /**
  * ash 重启后的收拾。顺序就是可信度的顺序：
@@ -32,7 +35,7 @@ type GateRow = typeof acceptGateRuns.$inferSelect;
  *  · 已经不是 running、只是还欠着停止责任（processPending）的行，照旧只核对停止。
  *
  * 结算与补办都**不等**「跑完之后那一步」：那是一次完整的验收，不该压在启动路径上。计数只认
- * 落了库的结论，不认「结算调用返回了」（第 1 轮审查 N2）。
+ * 落了库的结论，不认「结算调用返回了」（第 1 轮审查 N2）；没落成的留重试负责者（settleDurably）。
  */
 export async function recoverAcceptGates(): Promise<{ interrupted: number; resumed: number; settled: number }> {
   const rows = await db.select().from(acceptGateRuns).where(or(
@@ -50,8 +53,7 @@ export async function recoverAcceptGates(): Promise<{ interrupted: number; resum
     if (claimed) {
       appendGateLog(row.logPath, `\n[ash] ash 重启时这一次正在收尾，结论已经认领（${claimed.status}），接着收完。\n`);
       await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 正在收尾，结论已经落库，按那一份接着收完。`);
-      await settleGate(row.id, claimed, false);
-      if (await gateSettled(row.id)) tally.settled++;
+      if (await settleDurably(row.id, claimed)) tally.settled++;
       continue;
     }
     const fate = row.status === "running" ? gateRecoveryFate(row) : { kind: "lost" as const };
@@ -60,8 +62,7 @@ export async function recoverAcceptGates(): Promise<{ interrupted: number; resum
       appendGateLog(row.logPath, `\n[ash] ash 重启后读到命令自己留下的退出结果（rc=${fate.exit.code}），按它结算。\n`);
       await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 已经跑完（rc=${fate.exit.code}），`
         + "结果由它的启动器留在了磁盘上，按它照常结算。");
-      await settleGate(row.id, gateExitOutcome(fate.exit), false);
-      if (await gateSettled(row.id)) tally.settled++;
+      if (await settleDurably(row.id, gateExitOutcome(fate.exit))) tally.settled++;
       continue;
     }
     // 跨重启**必须先核身份**：ash 停了几小时再起来，那个 pid 多半已经是别的进程了，
@@ -92,17 +93,35 @@ export async function recoverAcceptGates(): Promise<{ interrupted: number; resum
   return tally;
 }
 
-/** 结论已经落库、续验收 / 交修没办完就重启了：补上。 */
+/** 结论已经落库、续验收 / 交修没办完就重启了：补上（还欠不欠由 followUpGate 判）。 */
 async function followUpOwed(row: GateRow): Promise<void> {
-  if (row.status !== "passed" && row.status !== "failed") {
-    await db.update(acceptGateRuns).set({ settlement: null }).where(eq(acceptGateRuns.id, row.id));
-    return;
-  }
-  await appendTaskTimeline(row.taskId, `ash 重启前验收前置命令 \`${row.command}\` 已经${row.status === "passed" ? "通过" : "红了"}，`
-    + `但随后的${row.status === "passed" ? "自动验收" : "交回修复"}还没办完，现在补上。`);
-  trackGateFollowUp(row.id, followUpGate(row, gateView(row)).catch((error) => {
-    console.error(`[ash] 验收前置命令补办失败（${row.id}）:`, error);
+  const note = `ash 重启前验收前置命令 \`${row.command}\` 已经${row.status === "passed" ? "通过" : "红了"}，`
+    + `但随后的${row.status === "passed" ? "自动验收" : "交回修复"}还没办完，现在补上。`;
+  trackGateFollowUp(row.id, followUpGate(row, gateView(row), note).catch((error) => {
+    console.error(`[ash] 验收前置命令补办失败（${row.id}），记号保留，下次启动再补:`, error);
   }));
+}
+
+/**
+ * 按已知结论结算，没落成库（写库临时失败）就留一个重试负责者，直到它落成、或者别人先收了它
+ * （取消、删任务）。接管那条路由等待者自己重交（watchGateExit），这两条路没有等待者，所以在
+ * 这里补上（第 2 轮审查 N2 残余）。
+ */
+async function settleDurably(runId: string, outcome: GateSettlement): Promise<boolean> {
+  await settleGate(runId, outcome, false);
+  if (await gateSettled(runId)) return true;
+  let busy = false;
+  const retry = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void (async () => {
+      const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
+      if (row?.status !== "running") { clearInterval(retry); return; }
+      await settleGate(runId, outcome, false);
+    })().catch(() => {}).finally(() => { busy = false; });
+  }, SETTLE_RETRY_MS);
+  retry.unref?.();
+  return false;
 }
 
 /**

@@ -14,9 +14,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
-import { db } from "../src/db/index.js";
+import { db, dbClient } from "../src/db/index.js";
 import { acceptGateRuns, sessions, tasks } from "../src/db/schema.js";
 import { recoverAcceptGates } from "../src/accept-gate.js";
+import { collectGateRuns } from "../src/handoff-accept-gate.js";
 import { gateExitPath, readGateLaunch } from "../src/accept-gate-launch.js";
 import { gateExitOutcome } from "../src/accept-gate-exit.js";
 import { overrideGateWatchTimings } from "../src/accept-gate-watch.js";
@@ -60,7 +61,8 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
    * 旧 ash 发起验收；`phase` 决定它死在哪：armed = 命令放行之后立刻死；before-final / after-final =
    * 活着等命令按 `code` 退出、自己去结算，死在终态那一句之前 / 之后。
    */
-  async function crash(s: Awaited<ReturnType<typeof stage>>, phase: "armed" | "before-final" | "after-final", code?: string) {
+  async function crash(s: Awaited<ReturnType<typeof stage>>,
+    phase: "armed" | "before-final" | "after-final" | "after-merged" | "after-handoff-mark", code?: string) {
     const worker = spawn(process.execPath, ["--import", "tsx", crashWorker, s.taskId, phase],
       { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     let diagnostic = "";
@@ -179,5 +181,74 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
     assert.equal(main(s.repo), s.before);
     assert.match(s.timeline(), /已经红了，但随后的交回修复还没办完，现在补上/);
   }
-  console.log("accept gate takeover settle: 停机越过时限按超时 / 收尾中途崩溃照认领结论收完 / 终态后崩溃补办合并且只补一次 / 补办交回修复 passed");
+  // ——以下是续办**开始之后**的三个窗口（第 2 轮审查）：中间态、读失败都不能当成办完了。
+
+  // 合并已经提交、清理和最终验收还没做 → 不是办完：补办走 acceptTask 自己的 merged 续做路径收完。
+  {
+    const s = await stage("owed-merged");
+    const row = await crash(s, "after-merged", "0");
+    const half = await taskRow(s.taskId);
+    assert.equal(half.stage, "merged");
+    assert.equal(half.acceptedGateRunId, row.id, "凭据已经写下，但这不是验收完成的证明");
+    assert.notEqual(main(s.repo), s.before, "目标分支已经真的动了");
+    assert.ok(row.settlement);
+    await recoverAcceptGates();
+    await settled(s.taskId);
+    assert.equal((await taskRow(s.taskId)).stage, "accepted", "重启后把清理和最终验收做完");
+    assert.equal((await runOf(s.taskId)).settlement, null);
+  }
+
+  // 记下了 handoff_at、修复输入一个字都没送出去 → 不是办完：补发一次。
+  {
+    const s = await stage("owed-mark");
+    const row = await crash(s, "after-handoff-mark", "3");
+    assert.ok(row.handoffAt, "「发起过」已经落盘");
+    assert.ok(row.settlement, "送达之前记号不清");
+    assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, s.taskId))).length, 1, "一个字都没送出去");
+    await recoverAcceptGates();
+    await settled(s.taskId);
+    await drainHandoff(s.taskId);
+    assert.equal((await runOf(s.taskId)).settlement, null, "送达之后才销账");
+    assert.match(s.timeline(), /已经红了，但随后的交回修复还没办完，现在补上/);
+  }
+
+  // 补办第一次读库就临时失败 → 记号留着；故障消失后下一次启动照样补上。
+  {
+    const s = await stage("owed-flaky");
+    const row = await crash(s, "after-final", "0");
+    assert.ok(row.settlement);
+    const execute = dbClient.execute.bind(dbClient);
+    let failures = 0;
+    Object.defineProperty(dbClient, "execute", { configurable: true, writable: true, value: async (...args: Parameters<typeof execute>) => {
+      const sql = typeof args[0] === "string" ? args[0] : (args[0] as { sql?: string }).sql ?? "";
+      if (failures === 0 && /^select .* from "tasks"/i.test(sql) && JSON.stringify(args).includes(s.taskId)) {
+        failures++;
+        throw new Error("temporary follow-up read failure");
+      }
+      return execute(...args);
+    } });
+    try {
+      await recoverAcceptGates();
+      await settled(s.taskId);
+    } finally { Object.defineProperty(dbClient, "execute", { configurable: true, writable: true, value: execute }); }
+    assert.equal(failures, 1);
+    assert.equal((await taskRow(s.taskId)).stage, "verified");
+    assert.ok((await runOf(s.taskId)).settlement, "读失败不是办完：记号留给下次启动");
+    await recoverAcceptGates();
+    await settled(s.taskId);
+    assert.equal((await taskRow(s.taskId)).stage, "accepted", "故障消失后补上合并");
+    assert.equal((await runOf(s.taskId)).settlement, null);
+  }
+
+  // 欠着后续的那一行不许跨机接力带走（带走了这份责任就丢在两台机器之间）。
+  {
+    const s = await stage("owed-relay");
+    const row = await crash(s, "after-final", "0");
+    assert.ok(row.settlement);
+    await assert.rejects(collectGateRuns(s.taskId), /办完后才能接力/);
+    await recoverAcceptGates();
+    await settled(s.taskId);
+    assert.equal((await collectGateRuns(s.taskId)).length, 1, "办完就能接力");
+  }
+  console.log("accept gate takeover settle: 停机越过时限按超时 / 收尾中途崩溃照认领结论收完 / 终态后崩溃补办合并且只补一次 / 补办交回修复 / 合并后清理前崩溃续完验收 / 记了交接时间未送达补发 / 补办读失败不销账 / 欠后续不许接力 passed");
 }
