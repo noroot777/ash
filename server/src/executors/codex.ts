@@ -237,6 +237,12 @@ export class CodexExecutor implements AgentExecutor {
           completedTurn: recovered.completedTurn,
           goal: recovered.goal,
           evidence: recovered.evidence,
+          // 「读不出来」那一档的身份有界恢复:同一份日志过几秒再读一次
+          // (见 codex-app-server-adopt.ts 的 recoverAdoptedIdentity)。
+          reread: () => {
+            const again = readCodexAppServerState(detached.ashPaths!.out, opts.sessionId);
+            return { turnId: again.turnId ?? "", reviewTurnId: again.reviewTurnId, completedTurn: again.completedTurn };
+          },
         },
         startProcess: () => child,
       });

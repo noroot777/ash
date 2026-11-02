@@ -16,7 +16,10 @@ import {
 import { detachedInfo, spawnControllableForRun, type DetachedPaths } from "./detached.js";
 import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import { codexErrorEvent } from "./codex-error-event.js";
-import type { InputAcceptance, RunHandle } from "./types.js";
+import {
+  adoptionDriven, adoptionUnverifiable, createTurnInputLedger, recoverAdoptedIdentity,
+} from "./codex-app-server-adopt.js";
+import type { RunHandle } from "./types.js";
 import { resolveSteerText, type SteerText } from "./steer-text.js";
 import { findArchivedRollout, findRollout, readCodexContext } from "./codex-rollout.js";
 import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
@@ -61,6 +64,12 @@ export type CodexAppServerOpts = {
     completedTurn?: { id: string; status: string; error?: unknown }; goal?: CliGoal | null;
     /** 协议日志给出的三档(见 ./codex-app-server-state.ts)。缺省按「确证没启动」—— 那是老调用方的口径。 */
     evidence?: "started" | "never-started" | "unreadable";
+    /**
+     * **再读一次协议日志**。只有「读不出来」那一档用得上:身份的有界恢复靠它
+     * (见 ./codex-app-server-adopt.ts 的 recoverAdoptedIdentity)。不给 = 不恢复,
+     * 那一档就只剩「认领完成事件」这条路。
+     */
+    reread?: () => { turnId: string; reviewTurnId?: string; completedTurn?: { id: string; status: string; error?: unknown } };
   };
   startProcess?: () => ChildProcess;
 };
@@ -312,6 +321,16 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     completedTurns.add(completedId);
     await ready;
     if (settling || finished) return;
+    // **身份未定时认领它**(第 2 轮自由审查 F4):接管时协议日志读不出来,我们手上没有 turnId,
+    // 于是这一轮真正的完成事件会在下面那道身份检查上被丢掉 —— 常驻进程还活着、进展记号又是
+    // `seen`(重启前确实产出过,静默档按判据不该开),「连答完了都不结算」就成了新的无界等待。
+    // 认它是安全的:一个 app-server 进程同一时刻只跑一个回合(这整份文件的前提),而我们接回来
+    // 的就是那一个,所以这个 thread 上下一条完成事件只能是它。
+    if (unverifiable && !turnId && !reviewTurnId && typeof turn?.id === "string" && turn.id) {
+      turnId = turn.id;
+      console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 时身份读不出来，`
+        + `按「这个 thread 上的完成事件就是这一轮」认领（turn=${turnId}）`);
+    }
     if (completedId !== (reviewTurnId || turnId)) return;
     turnCompleted = true;
     const status = turn?.status;
@@ -386,7 +405,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       // `turn/started` 到了就证明**这一轮的输入已经在 agent 手里**(它可能先于 `turn/start`
       // 的应答到达,adapter 自己的 turnStartVersion 就是为这个乱序准备的)。置上之后不许退回:
       // 后面断链只能是 unknown,不能冒充「一个字都没进去」(F4)。
-      case "turn/started": turnId = p.turn?.id ?? turnId; turnStartVersion += 1; turnCompleted = false; inputReached = true; break;
+      case "turn/started": turnId = p.turn?.id ?? turnId; turnStartVersion += 1; turnCompleted = false; input.reached(); break;
       case "thread/tokenUsage/updated": latestUsage = p.tokenUsage ?? latestUsage; break;
       case "item/started": handleItemStarted(p.item); break;
       case "item/completed": handleItemCompleted(p.item); break;
@@ -467,56 +486,37 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     finish(exit, "Codex App Server 输出流未正常收尾");
   });
 
-  /**
-   * 接管一个**还活着**的 app-server 进程时,这一轮的输入到底送出去了没有。
-   *
-   * 「进程还在」证明不了这件事。回合输入是 spawn 之后再走协议发出去的
-   * (`initialize` → `thread/unarchive` → `thread/resume` → `turn/start`),服务端要是死在最后
-   * 那一步**之前**,新服务端按 pid 认回来的就是一个「会话已恢复、回合从未开始」的闲置进程:
-   * 它不会说话,我们也不会再对它说话 —— 旧代码在这里给的是 `Promise.resolve()`,于是接管之后
-   * 既没有驱动也没有超时,`finish` 的四个触发源(连接关闭、流收尾兜底、`turn/completed`、
-   * `ready` 失败)一个都不会来。2026-11-02 任务 WfLfTjaGzcA8 就卡在这里 1.5 小时:零输出、
-   * 零报错、界面一直「当前回合仍在进行」,看门狗也没形状可认。
-   *
-   * 凭据在协议日志里:**这个 thread 上出现过 turn 开始记录** —— `turn/started` 通知,或
-   * `turn/start` / review 的**应答**(两类都认,见 `readCodexAppServerState`;只认通知的那一版
-   * 会把「应答已落盘、通知还没来」的健康回合当场杀掉,第 1 轮自由审查 F5)。
-   *   · 有凭据 → 回合确实在飞,照旧什么都不做,等它自己把 `turn/completed` 发出来;
-   *   · **日志读不出来**(权限/IO/被截断)→ 同样什么都不做:那是「核实不了」,不是「没启动」。
-   *     拿一个核实不了的前提去杀一个可能完全健康的 agent 比让它跑完更坏;有界性由回合级停滞
-   *     看门狗的静默档兜(turn-stall.ts)。
-   *   · 确证没凭据 → 输入从未到达 agent,**当场按失败结算**(不是继续等):`ready` 抛出去之后
-   *     `finish(1, …)` 会落红字诊断、收掉这个闲置进程,这一轮按正常失败路径结算。原文那一半
-   *     由投递侧负责 —— 它在 agent 点头之前不落 `sent`(见 ../turn-input-acceptance.ts),所以
-   *     那条待发送消息还在托盘里,开机回收租约之后会被重新投递。
-   *
-   * 为什么不是「幂等重发一次回合输入」:重发要的是**这一轮完整的那串字**(任务书 + 每回合提醒 +
-   * 完成协议,见 ../turn-prompt.ts),而接管这条路上只有一个进程句柄,手头压根没有它;按会话行
-   * 反解出来的半截 prompt 比按失败重试更坏。走失败结算,重投那一趟会由 `continueTask` 原样重拼。
-   */
-  const reattachDriven = (): boolean => {
-    const r = opts.reattach;
-    return !!r && (!!r.turnId || !!r.reviewTurnId || !!r.completedTurn);
-  };
-  /**
-   * **这一轮的输入到底有没有进 agent 手里**(三档语义见 ./types.ts 的 `InputAcceptance`)。
-   *
-   * 两位都是单调的,顺序也只能从下往上读:
-   *   · `inputReached` —— 看到过本回合的开始凭据(`turn/start` 应答 **或** 先到的 `turn/started`
-   *     通知)。一旦为真,后面怎么断链都是 `accepted`:那串字已经出去了,退回重投就是重复执行。
-   *   · `inputWritten` —— 回合输入已经写进 stdin,只是还没拿到应答。断链落在这之后 = `unknown`
-   *     (说不上来),落在这之前 = `refused`(协议从头没通,确证一个字都没出去)。
-   * 这正是 F4 要钉的那条线:把 `ready` 的 reject 一律读成「没送出去」会把已经开跑的回合的输入
-   * 再送一遍。
-   */
-  let inputWritten = false;
-  let inputReached = false;
-  const reattachUnverifiable = !!opts.reattach && !reattachDriven() && opts.reattach.evidence === "unreadable";
-  if (reattachUnverifiable) {
+  // 接管这一轮的身份与回执判定整份住在 ./codex-app-server-adopt.ts(连同「进程还在证明不了
+  // 任何事」那段现场、三档各走哪条路、以及「读不出来不许冒充成功」的理由)。
+  const input = createTurnInputLedger();
+  const adopted = adoptionDriven(opts.reattach);
+  const unverifiable = adoptionUnverifiable(opts.reattach);
+  if (unverifiable) {
     console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 时读不出协议日志，`
-      + "这一轮有没有真的启动核实不了：不按失败结算，交给回合级停滞看门狗的静默档兜");
+      + "这一轮有没有真的启动核实不了：不按失败结算，回执按「说不上来」记，身份走有界恢复");
+    // **身份的有界恢复**:拿回 turnId 这一轮就不再是「身份未定」,完成事件也就认得出来了。
+    if (opts.reattach?.reread) {
+      recoverAdoptedIdentity(
+        () => ({ ...opts.reattach!.reread!(), evidence: "started" }),
+        (state) => {
+          if (turnCompleted || finished || settling) return true; // 已经收口,不必再恢复
+          if (turnId || reviewTurnId) return true;                // 中途已经认回来了
+          turnId = state.turnId;
+          if (state.reviewTurnId) reviewTurnId = state.reviewTurnId;
+          console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 的回合身份已经重读回来（turn=${turnId}）`);
+          if (state.completedTurn) void completeTurn(state.completedTurn).catch((error) => finish(1, String(error)));
+          return true;
+        },
+        () => {
+          if (turnId || reviewTurnId || turnCompleted || finished || settling) return;
+          console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 的回合身份几次都读不回来：`
+            + "改由「这个 thread 上下一条完成事件就是这一轮」认领（见 codex-app-server-adopt.ts）");
+        },
+      );
+    }
   }
-  const ready = opts.reattach ? ((reattachDriven() || reattachUnverifiable) ? Promise.resolve() : Promise.reject(new Error(
+
+  const ready = opts.reattach ? ((adopted || unverifiable) ? Promise.resolve() : Promise.reject(new Error(
     "重启接管这条 Codex 会话时，协议日志里没有任何「回合已开始」的凭据（线程已恢复、回合从未启动）"
     + "——上一个服务端死在「恢复会话」与「送出回合输入」之间，这一轮的输入一个字都没到 agent。"
     + "本轮按失败结算，原文仍在待发送里，稍后会自动重新投递；也可以直接重试。",
@@ -549,9 +549,9 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (opts.sessionId || opts.cliCommand) await native.prepare(opts.cliCommand);
     const startVersion = turnStartVersion;
     if (opts.cliCommand) {
-      inputWritten = true;
+      input.wrote();
       const result = await native.start(opts.cliCommand);
-      inputReached = true;
+      input.reached();
       if (opts.cliCommand.name === "review") reviewTurnId = result.turnId ?? turnId;
       if (turnStartVersion === startVersion) turnId = result.turnId ?? turnId;
       if (result.immediate) {
@@ -563,7 +563,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       return;
     }
     // 这一行之后那串字就交给 stdin 了:断链从此只能是 unknown(见上面 inputWritten)。
-    inputWritten = true;
+    input.wrote();
     const started = await request("turn/start", {
       threadId,
       input: textInput(opts.prompt),
@@ -576,7 +576,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       ...(opts.cliState?.serviceTier || opts.serviceTier ? { serviceTierForTurn: opts.cliState?.serviceTier ?? opts.serviceTier } : {}),
     });
     if (turnStartVersion === startVersion) turnId = started.turn?.id ?? "";
-    inputReached = true;
+    input.reached();
     if (!threadId || !turnId) throw new Error("Codex App Server 没有返回 threadId/turnId");
   })();
   void ready.catch((error) => {
@@ -600,17 +600,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       return native.control(command);
     },
     sessionId: replacingSession ? "" : opts.sessionId ?? "",
-    // 「协议层面收下了这一轮的输入」的三档回执(语义与单调性见 ./types.ts 的 InputAcceptance)。
-    //
-    // `ready` 成功 = 拿到了 `turn/start` 的应答 = accepted。它失败时**不能一律当成「没送出去」**
-    // (F4):按上面那两位单调状态判 —— 看到过开始凭据就仍是 accepted,输入已经写出去只是没等到
-    // 应答就是 unknown,协议从头没通才是 refused。接管那一路:有凭据 = 上一个进程已经送到过
-    // (accepted);确证没凭据 = refused;读不出来走的是上面 `reattachUnverifiable`,`ready` 不
-    // 抛、这里也就是 accepted —— 那一档的有界性归静默档,不归投递记账。
-    inputAccepted: ready.then(
-      (): InputAcceptance => "accepted",
-      (): InputAcceptance => (inputReached ? "accepted" : inputWritten ? "unknown" : "refused"),
-    ),
+    // 「协议层面收下了这一轮的输入」的三档回执:判据与单调性整份在
+    // ./codex-app-server-adopt.ts(含「`ready` 成功 ≠ 送到了」那一条 —— 接管读不出来那一档
+    // 让 ready resolve,但我们什么都不知道,只能报 unknown)。
+    inputAccepted: input.acceptanceOf(ready, unverifiable),
     commandLine: opts.commandLine
       ?? redactSecrets(`${opts.bin} ${opts.args.map(shq).join(" ")} <App Server JSONL via stdin>`),
     events,
