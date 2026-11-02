@@ -301,7 +301,8 @@ try {
     assert.equal((await acceptGateState(taskId)).running, null);
   }
 
-  // 6. ash 重启：上一轮留在「正在跑」的行一律落成「被打断」，不留永远转圈的幽灵。
+  // 6. ash 重启时命令还在跑：接管它，不打断、不重跑（真跨进程的四条分流在
+  //    test-accept-gate-takeover.ts；被打断那一档只留给拿不到真实结果的情形）。
   {
     const repo = makeRepo("gate-restart");
     const projectId = await seedProject("gate-restart", repo, "sleep 120");
@@ -310,17 +311,17 @@ try {
     await acceptTask(taskId);
     const pid = (await runsOf(taskId)).at(0)!.pid!;
     const recovered = await recoverAcceptGates();
-    assert.equal(recovered.interrupted, 1);
-    const row = (await runsOf(taskId)).at(0)!;
-    assert.equal(row.status, "interrupted");
-    assert.equal(row.failure, "server_restarted");
-    for (let i = 0; i < 100 && alive(pid); i++) await sleep(25);
-    assert.equal(alive(pid), false, "被打断的那条命令也要收掉，不然它在后台接着烧机器");
-    // 被打断不算结果：再点验收要从头跑一遍。
+    assert.equal(recovered.interrupted, 0);
+    assert.equal(recovered.resumed, 1);
+    assert.equal((await runsOf(taskId)).at(0)!.status, "running", "还在跑的那条接着跑，不落「被打断」");
+    assert.equal(alive(pid), true, "接管不动刀");
     const again = await acceptTask(taskId);
     assert.equal(again.accepted, false);
-    assert.equal(again.reason, "accept_gate_running", "打断过的不复用，重新跑一遍");
-    await cancelAcceptGate(taskId);
+    if (!again.accepted) assert.equal(again.reason, "accept_gate_running", "接管的那一次照常占着，不另起一轮");
+    assert.equal((await runsOf(taskId)).length, 1);
+    assert.equal((await cancelAcceptGate(taskId)).outcome, "canceled", "接管的那一次照常能取消");
+    for (let i = 0; i < 100 && alive(pid); i++) await sleep(25);
+    assert.equal(alive(pid), false);
   }
 
   // 7. 命令起不来：如实落成失败，不许当成通过放行。
@@ -592,11 +593,14 @@ try {
   //      （第 2 轮审查 F1 用上一轮两条真实诊断实测：卡片和交接照旧端出「一行都没跑到」）。
   await (await import("./test-accept-gate-legacy.js")).testGateLegacyDiagnosis({ makeRepo, createdAt });
 
-  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启打断 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 / 命令没跑到≠测试红了 全部通过");
+  console.log("accept gate: 不设=老行为 / 绿了自动续验收 / 红了不合并且回流 / 新鲜度 / 跳过与重跑 / 取消 / 重启接管 / 起不来 / 跑动期间树变了 / 换了命令 / 统一验收 / 跑着时删不掉且跳过要先收掉 / 列表看得见在跑 / 回执只认本次凭据 / 取消等整棵树退出 / 命令没跑到≠测试红了 全部通过");
   await (await import("./test-accept-gate-lifecycle.js")).testGateLifecycle({
     root, makeRepo, seedProject, seedTask, taskRow, settled,
   });
   await (await import("./test-accept-gate-startup.js")).testGateStartup({
+    root, makeRepo, seedProject, seedTask, taskRow, settled,
+  });
+  await (await import("./test-accept-gate-takeover.js")).testGateTakeover({
     root, makeRepo, seedProject, seedTask, taskRow, settled,
   });
 } finally {

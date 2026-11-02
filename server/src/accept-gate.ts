@@ -26,7 +26,6 @@ import {
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
-import { freezeGateScene } from "./accept-gate-diagnosis.js";
 import {
   acceptGateLogPath, appendGateLog, stampAshNote,
   spawnAcceptGate,
@@ -49,7 +48,10 @@ import { prepareGateLaunch, readGateLaunch } from "./accept-gate-launch.js";
 import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
 import { releaseGateOwnership } from "./accept-gate-release.js";
 import { diagnoseGateFailure } from "./accept-gate-attribution.js";
-import { handOffGateFailure, parseChoices } from "./accept-gate-handoff.js";
+import { handOffGateFailure } from "./accept-gate-handoff.js";
+import { continueAcceptance } from "./accept-gate-continue.js";
+import { gateExitOutcome, gateRecoveryFate, watchGateExit } from "./accept-gate-exit.js";
+import { appendGateNote, freezeGateScene } from "./accept-gate-diagnosis.js";
 export { rehandOffAcceptGate } from "./accept-gate-handoff.js";
 export type { AcceptGateChoices } from "./accept-gate-handoff.js";
 import type { AcceptGateChoices } from "./accept-gate-handoff.js";
@@ -80,7 +82,7 @@ type PendingStart = {
 };
 
 const pendingStarts = new Map<string, PendingStart>();
-// 正在跑的那条：看门的（超时 + 静默）只活在内存里（重启后由 recoverAcceptGates 收拾残留）。
+// 正在跑的那条：看门的（超时 + 静默）只活在内存里（重启后由 recoverAcceptGates 接管或收拾）。
 const live = new Map<string, { runId: string; watch: GateWatch; pid: number; pidStartedAt: string | null }>();
 // runId → 这一次「跑完 + 跑完之后那一步（自动续验收 / 回流）」都做完了。只给回归用。
 const settlements = new Map<string, Promise<void>>();
@@ -317,11 +319,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       cwd: snapshotCwd,
       logPath,
       hold: true,
-      onExit: (exit) => void settleGate(runId, exit.code === 0
-        ? { status: "passed", exitCode: 0, failure: null }
-        // 信号打死的那一条可能是取消/超时先发的刀 —— 那两条路自己会落更准的理由，
-        // 这里的结论会被 settleGate 的幂等挡掉，只有「命令自己被外人杀了」才落到这儿。
-        : { status: "failed", exitCode: exit.code, failure: exit.signal ? "canceled" : exit.code === null ? "spawn_failed" : "exit_code" }),
+      onExit: (exit) => void settleGate(runId, gateExitOutcome(exit)),
     });
   } catch (error) {
     appendGateLog(logPath, `\n[ash] 起不来：${error instanceof Error ? error.message : String(error)}\n`);
@@ -330,19 +328,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     const failed = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
     return failed ? gateView(failed) : null;
   }
-  // 看门的只管一件事：撞上限时交出一段「现场」（停在哪一行、静了多久、产出节奏）。只写
-  // 一句「超时」的话，事后分不出是某一步卡住还是整台机器在爬，而这两种的处置完全相反。
-  // 它**不自己写日志**：现场必须排在所有人后面写，否则会被停止期的清理输出顶出尾巴
-  // （第 1 轮审查 F2）。它也不拿静默去掐命令，理由见 ACCEPT_GATE_SILENCE_MS。
-  const watch = startGateWatch({ logPath, onVerdict: (verdict) => void (async () => {
-    appendGateLog(logPath, `\n[ash] 超过 ${Math.round(ACCEPT_GATE_TIMEOUT_MS / 60_000)} 分钟，按超时处理，正在收掉它。\n`);
-    // **先认领终态、再动刀**（同取消那条路）：反过来的话，刀落下去触发的退出回调会先把
-    // 这一次收成「命令被外人杀了」，连带把日志当成一条红交给 agent 去修 —— 而它其实是
-    // 超时。占用不会因此漏空：stopAcceptGate 从进场就立起「还没确认退出」那条记号。
-    await settleGate(runId, { status: "failed", exitCode: null, failure: "timeout",
-      note: verdict.note, scene: verdict.scene });
-  })() });
-  live.set(taskId, { runId, watch, pid: started.pid, pidStartedAt: started.startedAt });
+  superviseGate(taskId, runId, logPath, started.pid, started.startedAt);
   attachGateProcess(runId, started.pid, started.startedAt);
 
   try {
@@ -367,6 +353,29 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     await noteIfStillAlive(taskId, logPath, await stopGateRun(runId));
   }
   return row ? gateView(row) : null;
+}
+
+/**
+ * 给一条在跑的门禁挂上看门的。起跑和跨重启接管共用这一份：接管时 `resumed.elapsedMs` 带上
+ * 重启前已经跑掉的时长（90 分钟那条线照旧从开跑那一刻算），`resumed.exit` 是替代退出回调的
+ * 那个等待者，跟看门的一起停。
+ */
+function superviseGate(taskId: string, runId: string, logPath: string, pid: number, pidStartedAt: string | null,
+  resumed?: { elapsedMs: number; exit: GateWatch }): void {
+  // 看门的只管一件事：撞上限时交出一段「现场」（停在哪一行、静了多久、产出节奏）。只写
+  // 一句「超时」的话，事后分不出是某一步卡住还是整台机器在爬，而这两种的处置完全相反。
+  // 它**不自己写日志**：现场必须排在所有人后面写，否则会被停止期的清理输出顶出尾巴
+  // （第 1 轮审查 F2）。它也不拿静默去掐命令，理由见 ACCEPT_GATE_SILENCE_MS。
+  const watch = startGateWatch({ logPath, elapsedMs: resumed?.elapsedMs, onVerdict: (verdict) => void (async () => {
+    appendGateLog(logPath, `\n[ash] 超过 ${Math.round(ACCEPT_GATE_TIMEOUT_MS / 60_000)} 分钟，按超时处理，正在收掉它。\n`);
+    // **先认领终态、再动刀**（同取消那条路）：反过来的话，刀落下去触发的退出回调会先把
+    // 这一次收成「命令被外人杀了」，连带把日志当成一条红交给 agent 去修 —— 而它其实是
+    // 超时。占用不会因此漏空：stopAcceptGate 从进场就立起「还没确认退出」那条记号。
+    await settleGate(runId, { status: "failed", exitCode: null, failure: "timeout",
+      note: verdict.note, scene: verdict.scene });
+  })() });
+  const both = resumed ? { stop: () => { watch.stop(); resumed.exit.stop(); } } : watch;
+  live.set(taskId, { runId, watch: both, pid, pidStartedAt });
 }
 
 /** 停不掉就**如实说**：工作区仍被占着，用户刷新后也看得见这句（根 AGENTS.md 那条）。 */
@@ -489,42 +498,6 @@ async function settleGate(
   await (waitForContinuation ? settle : written);
 }
 
-/**
- * 绿了：把用户那一下点的验收接着做完。
- *
- * 必须带上当初的选择（commit / confirmUnverified）——他在确认框里选的是什么，这一次就
- * 该发生什么；也必须带上 `passedRunId`，否则非 git 项目定不出 HEAD，会再触发一次门禁。
- */
-async function continueAcceptance(row: GateRow): Promise<void> {
-  const choices = parseChoices(row.acceptOptions);
-  const { acceptTask } = await import("./task-accept.js");
-  const result = await acceptTask(row.taskId, choices.by, {
-    commit: choices.commit,
-    confirmUnverified: choices.confirmUnverified,
-    acceptGatePassedRunId: row.id,
-    reviewAuthority: choices.reviewAuthority,
-  }).catch((error) => ({ accepted: false as const, error: error instanceof Error ? error.message : String(error) }));
-  if (!result.accepted) {
-    const reason = "reason" in result ? result.reason : null;
-    // 「又要跑一遍门禁」不是失败：它跑着的这十几分钟里树又动了（或者命令被换了一条），
-    // 于是这一按按新的那一份重跑。说清这件事，别让用户以为验收砸了。
-    if (reason === "accept_gate_required" || reason === "accept_gate_running") {
-      await appendTaskTimeline(
-        row.taskId,
-        `验收前置命令通过了，但它验的已经不是现在这一份（命令跑的那十几分钟里工作区又有了新提交，`
-          + `或者这条命令被改过）。所以没有直接合并，而是按**现在**这一份重新跑一遍；绿了仍会自动接着合。`,
-      );
-      return;
-    }
-    // acceptTask 自己已经把失败原因写进时间线了，这里只补一句「这是门禁之后自动续的那一次」，
-    // 否则用户只看见一条没头没尾的验收失败，不知道是谁点的。
-    await appendTaskTimeline(
-      row.taskId,
-      `验收前置命令通过后自动继续验收，但没能完成：${"error" in result ? result.error : "未知原因"}。处理完上面那条原因后再点一次验收即可。`,
-    );
-  }
-}
-
 
 /**
  * 这个任务现在有没有一条门禁真的在跑。**同步**判据（读进程内那张表），因为问这句话的
@@ -607,11 +580,17 @@ export async function forceReleaseAcceptGate(taskId: string, runId: string) {
 }
 
 /**
- * ash 重启后的收拾：上一轮留下的 `running` 行一律落成「被打断」，并把那个 pid 的进程树
- * 收掉。**不接着跑**（理由见 accept-gate-process.ts 顶部）——留一行刷新后看得见的
- * 「上次没跑完」，比留一个永远转圈的幽灵诚实。
+ * ash 重启后的收拾。上一轮留在 `running` 的行先问一句「它其实怎么样了」（判据与可信条件在
+ * accept-gate-exit.ts）：
+ *
+ *  · 命令还在跑、身份核得上 → **接管**：重挂看门的、接着等它退出，结论跟没重启过一样；
+ *  · 命令已经退了、留下了退出档 → 按真实 rc **结算**：绿了照样自动合并，红了照样交回去修；
+ *  · 拿不到真实结果 → 落成「被打断」，并把那个 pid 的进程树收掉 —— 留一行刷新后看得见的
+ *    「上次没跑完」，比留一个永远转圈的幽灵、或者编一个结论都诚实。
+ *
+ * 已经不是 running、只是还欠着停止责任（processPending）的行，照旧只核对停止。
  */
-export async function recoverAcceptGates(): Promise<{ interrupted: number }> {
+export async function recoverAcceptGates(): Promise<{ interrupted: number; resumed: number; settled: number }> {
   const rows = await db.select().from(acceptGateRuns).where(or(
     eq(acceptGateRuns.status, "running"), eq(acceptGateRuns.processPending, true),
   ));
@@ -619,15 +598,30 @@ export async function recoverAcceptGates(): Promise<{ interrupted: number }> {
     claimGateProcess(row.id, row.taskId, row.logPath);
     attachGateProcess(row.id, row.pid, row.pidStartedAt, true);
   }
+  const tally = { interrupted: 0, resumed: 0, settled: 0 };
   for (const row of rows) {
+    const fate = row.status === "running" ? gateRecoveryFate(row) : { kind: "lost" as const };
+    if (fate.kind === "running") { await resumeGate(row); tally.resumed++; continue; }
+    if (fate.kind === "exited") {
+      appendGateLog(row.logPath, `\n[ash] ash 重启后读到命令自己留下的退出结果（rc=${fate.exit.code}），按它结算。\n`);
+      await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 已经跑完（rc=${fate.exit.code}），`
+        + "结果由它的启动器留在了磁盘上，按它照常结算。");
+      // 不等「跑完之后那一步」（自动续验收 / 交回去修）：那是一次完整的验收，不该压在启动路径上。
+      await settleGate(row.id, gateExitOutcome(fate.exit), false);
+      tally.settled++;
+      continue;
+    }
     // 跨重启**必须先核身份**：ash 停了几小时再起来，那个 pid 多半已经是别的进程了，
     // 盲发信号打死的是无辜的人（第 1 轮审查）。核不出来就不发，并在日志里说清。
     // 先把行落成「被打断」再动刀（同超时那条路）：这个收拾动作在同一个进程里也可能撞上
     // 那条命令自己的退出回调，而那个回调会把它收成一条**红**并交给 agent 去修 —— 被打断
     // 不是红，它根本没有结论。
-    if (row.status === "running") await db.update(acceptGateRuns)
-      .set({ status: "interrupted", failure: "server_restarted", finishedAt: now(), processPending: true })
-      .where(eq(acceptGateRuns.id, row.id));
+    if (row.status === "running") {
+      await db.update(acceptGateRuns)
+        .set({ status: "interrupted", failure: "server_restarted", finishedAt: now(), processPending: true })
+        .where(eq(acceptGateRuns.id, row.id));
+      tally.interrupted++;
+    }
     const stopped = await stopGateRun(row.id);
     if (stopped) await cleanupGateSnapshot(row.taskId, row.id);
     const stoppedSummary = gateStoppedSummary(row.executionMode);
@@ -642,7 +636,32 @@ export async function recoverAcceptGates(): Promise<{ interrupted: number }> {
     );
     announceGate(row.taskId);
   }
-  return { interrupted: rows.filter(row => row.status === "running").length };
+  return tally;
+}
+
+/**
+ * 接管一条还在跑的门禁：把起跑时那一套（退出回调 + 看门的）接回来。退出回调随旧 ash 没了，
+ * 换成盯退出档的等待者；它等到启动器没留档就消失时，拿不到真实结果，按「被打断」收。
+ *
+ * 这一段**不往门禁日志里写**：命令还在写它，看门的靠「日志只有命令一个写入者」算产出和
+ * 静默（accept-gate-watch.ts 边界 ②）。接管这件事记在旁边的 .notes 和时间线上。
+ */
+async function resumeGate(row: GateRow): Promise<void> {
+  const pid = row.pid!;
+  const pidStartedAt = row.pidStartedAt!;
+  live.get(row.taskId)?.watch.stop();
+  // 它在跑，不是在停：取消、超时、删任务照常能收它，验收照常按「正在跑」拦住。
+  attachGateProcess(row.id, pid, pidStartedAt);
+  const exit = watchGateExit({ logPath: row.logPath, pid, startedAt: pidStartedAt,
+    onExit: (result) => void settleGate(row.id, result ? gateExitOutcome(result)
+      : { status: "interrupted", exitCode: null, failure: "server_restarted" }) });
+  const startedAt = Date.parse(row.startedAt);
+  superviseGate(row.taskId, row.id, row.logPath, pid, pidStartedAt,
+    { elapsedMs: Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0, exit });
+  appendGateNote(row.logPath, `[ash] ${now()} ash 重启，新实例接管了这条仍在跑的命令，接着等它退出。`);
+  await appendTaskTimeline(row.taskId, `ash 重启时验收前置命令 \`${row.command}\` 还在跑，新实例已经接管：`
+    + "继续等它跑完并按真实结果结算（绿了照常自动合并，红了照常交回这个任务去修），超时仍从开跑那一刻算。");
+  announceGate(row.taskId);
 }
 
 /** 只给回归用：等这一次门禁连同「跑完之后那一步」全部做完。 */

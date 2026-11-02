@@ -19,6 +19,9 @@ if (mode === "recover-legacy") {
 } else if (mode === "macos-flow") {
   const { testMacGateFlow } = await import("./accept-gate-macos-flow.js");
   console.log(JSON.stringify(await testMacGateFlow(directory)));
+} else if (mode === "macos-takeover") {
+  const { testMacGateTakeover } = await import("./accept-gate-macos-takeover.js");
+  console.log(JSON.stringify(await testMacGateTakeover(directory)));
 } else if (mode === "macos-release") {
   const { testMacGateRelease } = await import("./accept-gate-macos-release.js");
   console.log(JSON.stringify(await testMacGateRelease(directory)));
