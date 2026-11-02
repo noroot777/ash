@@ -42,6 +42,17 @@ export function useRovingChoice<T extends string>(
   role: ChoiceRole = "radio",
 ) {
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    // 单选在表单里按回车 = 提交这张表单(`<input type=radio>` 的隐式提交)。按钮自己的
+    // 回车是「再点我一下」,点过之后焦点正停在它上面,不接管的话用户选完按回车只会
+    // 重选一遍同一项,表单纹丝不动。
+    if (role === "radio" && event.key === "Enter" && !event.nativeEvent.isComposing) {
+      const form = (event.currentTarget as HTMLButtonElement).form;
+      if (form) {
+        event.preventDefault();
+        form.requestSubmit();
+        return;
+      }
+    }
     const delta = STEP[event.key] ?? 0;
     const home = event.key === "Home";
     const end = event.key === "End";

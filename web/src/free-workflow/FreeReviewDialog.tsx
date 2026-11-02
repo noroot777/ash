@@ -9,6 +9,7 @@ import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { reviewerProfilesStore } from "./reviewerProfilesStore.ts";
 import { selectAllOnFocus } from "../lib/selectAllOnFocus.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -156,6 +157,14 @@ export function FreeReviewDialog({
     setSaveMode("once");
     setNewName("");
   };
+
+  const pickReviewer = (id: string) => {
+    const reviewer = reviewers.find((item) => item.id === id);
+    if (!reviewer) return;
+    selectReviewer(reviewer);
+    setCreating(false);
+  };
+  const reviewerGroup = useRovingChoice(reviewers.map((item) => item.id), selectedId, pickReviewer);
 
   useEffect(() => { dialog.current?.focus(); }, []);
 
@@ -427,10 +436,10 @@ export function FreeReviewDialog({
           <div className="free-review-dialog-body">
             <section className="free-review-reviewers">
               <div className="free-review-section-title"><b>审查者</b><button type="button" onClick={() => setCreating((value) => !value)}><Plus size={11} />新建</button></div>
-              <div className="free-review-reviewer-list">
+              <div className="free-review-reviewer-list" {...reviewerGroup.groupProps} aria-label="审查者">
                 {reviewers.map((reviewer) => (
                   <div key={reviewer.id} className="free-review-reviewer-row">
-                    <button className="free-review-reviewer-pick" type="button" aria-selected={selectedId === reviewer.id} onClick={() => { selectReviewer(reviewer); setCreating(false); }}>
+                    <button className="free-review-reviewer-pick" type="button" {...reviewerGroup.itemProps(reviewer.id)} onClick={() => pickReviewer(reviewer.id)}>
                       <span><b>{reviewer.name}</b><ReviewerProfileSummary reviewer={reviewer} profiles={profiles} /></span>
                       {selectedId === reviewer.id && <CheckCircle size={16} weight="fill" />}
                     </button>
