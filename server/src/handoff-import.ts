@@ -23,7 +23,7 @@ import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 import { applyUploadRewrites, buildUploadRewrites, hasUploadRewrites, writeUploads } from "./handoff-uploads.js";
 import { localUploadNames, registerUploads } from "./uploads.js";
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
-import { findRollout } from "./executors/codex-rollout.js";
+import { findResumableRollout } from "./executors/codex-rollout.js";
 import { assertHandoffNotCanceled, beginHandoffImport, endHandoffImport } from "./handoff-transfer-state.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { createTasks, publishTaskUpdated } from "./task-store.js";
@@ -252,7 +252,7 @@ async function importValidated(
   for (const s of m.sessions) {
     let ok = hasFile(s);
     if (ok && s.agentType === "codex") {
-      ok = !!(await findRollout(s.cliSessionId!, cliDirs.codex));
+      ok = !!(await findResumableRollout(s.cliSessionId!, cliDirs.codex));
       if (!ok) notes.push(`codex 会话 ${s.id} 的 rollout 已写盘但无法按标准目录定位,按未迁移处理`);
     }
     if (ok && s.agentType === "claude") {
