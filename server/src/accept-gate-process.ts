@@ -28,7 +28,9 @@ export function acceptGateLogPath(taskId: string, runId: string): string {
   return join(RUNS_DIR, taskId, `accept-gate-${runId}.log`);
 }
 
-export type GateExit = { code: number | null; signal: NodeJS.Signals | null };
+export type GateExit = { code: number | null; signal: NodeJS.Signals | null;
+  /** 启动器自己量的「起来到退出」用时（单调时钟，只有退出档里有）。时限按它判，见 accept-gate-exit.ts。 */
+  elapsedMs?: number };
 
 /**
  * 起一条门禁命令。返回 pid 和它的**启动时间**（拿不到 pid 视为没起来，抛错）。

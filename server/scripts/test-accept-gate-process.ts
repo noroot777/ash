@@ -86,7 +86,9 @@ try {
       // 起它的控制器已经死了，命令自己 rc=0 退出：结果只能从启动器落的退出档里认（accept-gate-exit.ts）。
       if (mode === "reopen") {
         await until(() => readGateExit(`${directory}.log`, started.pid) !== null);
-        assert.deepEqual(readGateExit(`${directory}.log`, started.pid), { code: 0, signal: null });
+        const recorded = readGateExit(`${directory}.log`, started.pid)!;
+        assert.deepEqual({ code: recorded.code, signal: recorded.signal }, { code: 0, signal: null });
+        assert.ok(Number.isFinite(recorded.elapsedMs) && recorded.elapsedMs! >= 0, "退出档带着启动器自己量的用时");
       }
       const recovered = JSON.parse((await runWorker("recover", directory)).stdout.trim().split("\n").at(-1)!);
       assert.equal(recovered.aliveBefore, true, "recovery must see surviving descendants before stopping");

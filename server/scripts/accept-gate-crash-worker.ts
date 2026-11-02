@@ -7,9 +7,12 @@ Object.defineProperty(dbClient, "execute", { value: async (...args: Parameters<t
   const statement = args[0];
   const sql = typeof statement === "string" ? statement : (statement as { sql?: string }).sql ?? "";
   const pidUpdate = /^update "accept_gate_runs" set "pid"/i.test(sql);
-  if (pidUpdate && phase === "before-pid") process.kill(process.pid, "SIGKILL");
+  // 结算的终态那一句（accept-gate-settle.ts）：之前死 = 结论已认领、进程已收、还没落终态；
+  // 之后死 = 终态落了、续验收 / 交修还没办。
+  const finalUpdate = /^update "accept_gate_runs" set "status"/i.test(sql);
+  if ((pidUpdate && phase === "before-pid") || (finalUpdate && phase === "before-final")) process.kill(process.pid, "SIGKILL");
   const result = await execute(...args);
-  if (pidUpdate && phase === "after-pid") process.kill(process.pid, "SIGKILL");
+  if ((pidUpdate && phase === "after-pid") || (finalUpdate && phase === "after-final")) process.kill(process.pid, "SIGKILL");
   return result;
 } });
 await acceptTask(taskId);

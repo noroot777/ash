@@ -209,13 +209,16 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     const run = { pid: strangerPid, pidStartedAt: "earlier-generation", logPath: log };
     assert.equal(gateRecoveryFate(run).kind, "lost", "pid 还在但启动时间是别人的：不是我们那条命令");
     const record = (pid: number, code: number) => writeFileSync(gateExitPath(log),
-      JSON.stringify({ version: 1, pid, code, childSignal: null, finishedAt: new Date().toISOString() }));
+      JSON.stringify({ version: 1, pid, code, childSignal: null, elapsedMs: 1_000, finishedAt: new Date().toISOString() }));
     record(strangerPid + 1, 0);
     assert.equal(gateRecoveryFate(run).kind, "lost", "别的启动器写的退出档不认");
     writeFileSync(gateExitPath(log), "{\"version\":1,\"pid\":");
     assert.equal(gateRecoveryFate(run).kind, "lost", "半截档不认");
     record(strangerPid, 0);
-    assert.deepEqual(gateRecoveryFate(run), { kind: "exited", exit: { code: 0, signal: null } },
+    writeFileSync(gateExitPath(log), JSON.stringify({ version: 1, pid: strangerPid, code: 0, childSignal: null }));
+    assert.equal(gateRecoveryFate(run).kind, "lost", "没有用时的档不认：拿它结算就绕过了时限");
+    record(strangerPid, 0);
+    assert.deepEqual(gateRecoveryFate(run), { kind: "exited", exit: { code: 0, signal: null, elapsedMs: 1_000 } },
       "这一次的启动器留下的完整退出档，不受之后 pid 被谁复用影响");
     writeFileSync(gateAbortPath(log), "abort");
     assert.equal(gateRecoveryFate(run).kind, "lost", "ash 自己喊过停：退出档里的不是命令自己的结论");
@@ -231,7 +234,8 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     // 接管期间 pid 被复用：认定它已经没了（给 null = 拿不到结果），绝不朝复用者发信号、也不干等。
     rmSync(gateExitPath(log));
     const waited = (startedAt: string, within: number) => new Promise<GateExit | null | "pending">(resolve => {
-      const watch = watchGateExit({ logPath: log, pid: strangerPid, startedAt, onExit: resolve });
+      const watch = watchGateExit({ logPath: log, pid: strangerPid, startedAt, onResumeFailed: () => {},
+        onExit: async (exit) => { resolve(exit); return true; } });
       setTimeout(() => { watch.stop(); resolve("pending"); }, within);
     });
     assert.equal(await waited("earlier-generation", 3_000), null);
@@ -239,7 +243,15 @@ export async function testGateTakeover(fixture: GateFixture): Promise<void> {
     const identity = inspectProcessSync(strangerPid)!.startedAt!;
     assert.equal(await waited(identity, 1_500), "pending", "身份核得上就继续等");
     record(strangerPid, 7);
-    assert.deepEqual(await waited(identity, 3_000), { code: 7, signal: null });
+    assert.deepEqual(await waited(identity, 3_000), { code: 7, signal: null, elapsedMs: 1_000 });
+    // 结论没落成库（onExit 答 false）就接着盯、下一拍拿同一份结果再交一次；落成了才停（第 1 轮审查 N2）。
+    const handed: number[] = [];
+    const retrying = watchGateExit({ logPath: log, pid: strangerPid, startedAt: identity, onResumeFailed: () => {},
+      onExit: async (exit) => { handed.push(exit!.code!); return handed.length >= 2; } });
+    await until(() => handed.length >= 2, "写库失败后重交", 5_000);
+    await sleep(2_500);
+    retrying.stop();
+    assert.deepEqual(handed, [7, 7], "交到落成为止，落成之后不再交");
 
     // 整条恢复路径上同样如此：库里一条 running 行指着被复用的 pid，还带着一份对不上的退出档。
     const repo = makeRepo("takeover-reused");

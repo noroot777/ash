@@ -11,6 +11,8 @@ export type GateLaunch = {
   confinementId?: string | null;
   confinementEnrolled?: boolean;
   stoppedEvidence?: "never-authorized" | "kernel-empty" | "observed-empty";
+  /** 启动器起来的墙上时间。跨重启接管时从它折算已经跑掉多久（时限从这一刻算）。 */
+  launchedAt?: string;
 };
 
 const confinements = new Map<string, GateConfinement>();
@@ -60,7 +62,7 @@ export function migrateGateLaunch(logPath: string, launch: GateLaunch): GateLaun
 
 export function registerGateLaunch(logPath: string, pid: number, startedAt: string | null): void {
   launches.set(pid, logPath);
-  writeGateLaunch(logPath, { version: 1, phase: "prepared", pid, startedAt });
+  writeGateLaunch(logPath, { version: 1, phase: "prepared", pid, startedAt, launchedAt: new Date().toISOString() });
 }
 
 export const gateLaunchOf = (pid: number | null | undefined, logPath?: string): string | undefined =>
@@ -130,12 +132,13 @@ const timer = setInterval(() => {
 }, 20);
 // 退出码除了转发给起我的那个 ash，还要**先落盘**：那个 ash 可能已经重启了，新实例只能从这里
 // 认领结果。tmp+rename 保证要么整份、要么没有；写不进去也照常转发，不拿落盘失败改写结论。
+// elapsedMs 是本进程起来到现在的单调用时：时限按它判，跟 ash 在不在场、墙上时间有没有被校正都无关。
 function finish(code, childSignal) {
   if (config.exit) try {
     const temporary = config.exit + "." + process.pid + ".tmp";
     const fd = fs.openSync(temporary, "w");
     fs.writeSync(fd, JSON.stringify({ version: 1, pid: process.pid, code, childSignal: childSignal || null,
-      finishedAt: new Date().toISOString() }));
+      elapsedMs: Math.round(performance.now()), finishedAt: new Date().toISOString() }));
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fs.renameSync(temporary, config.exit);

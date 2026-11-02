@@ -603,6 +603,9 @@ try {
   await (await import("./test-accept-gate-takeover.js")).testGateTakeover({
     root, makeRepo, seedProject, seedTask, taskRow, settled,
   });
+  await (await import("./test-accept-gate-takeover-settle.js")).testGateTakeoverSettle({
+    root, makeRepo, seedProject, seedTask, taskRow, settled,
+  });
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

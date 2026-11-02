@@ -59,6 +59,9 @@ export function overrideGateWatchTimings(timings: Partial<GateWatchTimings> | nu
   overrides = timings;
 }
 
+/** 这一刻生效的门禁时限。看门的、退出档的时限判定（accept-gate-exit.ts）共用这一个数。 */
+export const gateTimeoutMs = (): number => timingsNow().timeoutMs;
+
 function timingsNow(): GateWatchTimings {
   return {
     timeoutMs: ACCEPT_GATE_TIMEOUT_MS, silenceMs: ACCEPT_GATE_SILENCE_MS,
