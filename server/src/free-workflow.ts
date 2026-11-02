@@ -40,6 +40,7 @@ import { activeDebateOf, settleDebateTurn } from "./free-review-debate.js";
 //
 // 启动期 / 周期对账（`reconcileFreeReviews`：一条挂在 reviewing 的链此刻还有没有人能把它跑完）
 // 住在 free-review-reconcile.ts —— 它反过来用这里的结算入口，所以切出去才不成环。
+// 入口仍从这里导出（见文件末尾那个转发），老调用方不必知道它搬了家。
 import {
   failReviewStart,
   freshSessionFor,
@@ -587,4 +588,15 @@ export async function startFreeReview(
   } finally {
     if (turn) releaseTurn(taskId, turn);
   }
+}
+
+/**
+ * 启动期 / 周期对账的**旧入口**:本体已搬到 free-review-reconcile.ts,但 server/scripts 下一批既有
+ * 回归仍从这里取它。那些脚本不在 tsconfig 的 include 里,出口一删它们只会在运行时拿到 undefined、
+ * 报「不是函数」,构建一声不响 —— 所以出口留着,只做转发。
+ *
+ * 用懒加载而不是 `export … from`:那边静态 import 了这里的结算入口,静态转出会把刚切开的环接回去。
+ */
+export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> {
+  await (await import("./free-review-reconcile.js")).reconcileFreeReviews(ownerTaskId);
 }
