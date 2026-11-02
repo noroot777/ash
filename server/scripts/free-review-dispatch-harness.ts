@@ -34,15 +34,17 @@ export async function startHarness() {
   const { createTasks } = await import("../src/task-store.js");
   const { handleFreeWorkflowSettlement, reconcileFreeReviews, reserveFreeReview } =
     await import("../src/free-workflow.js");
-  const { claimReviewDispatch, dispatchReviewRound, MAX_REVIEW_DISPATCH_ATTEMPTS, reviewDispatchArmed } =
+  const { adoptReviewDispatchGeneration, claimReviewDispatch, dispatchReviewRound,
+    MAX_REVIEW_DISPATCH_ATTEMPTS, reviewDispatchArmed, reviewDispatchOwned, supersedeReviewDispatch } =
     await import("../src/free-review-dispatch.js");
   const { reviewLifecycle } = await import("../src/review-lifecycle-lock.js");
   const { completeRegressionSettlement, regressionSettlementConclusion } =
     await import("../src/regression-settlement.js");
   const { clearReviewDispatchIntent, releaseReviewDispatchClaim } =
     await import("../src/free-review-dispatch.js");
-  const { failReviewStart, launchReviewRound, redeliverReviewRound, reopenFailedFreeReview,
+  const { failReviewStart, launchReviewRound, reopenFailedFreeReview,
     reviewOrphanStillUnowned } = await import("../src/free-review-round.js");
+  const { redeliverReviewRound } = await import("../src/free-review-redeliver.js");
   const { claimOwnTurn, claimTurn, continueWhenIdle, releaseTurn, turnIdentity, whenTurnIdle } = await import("../src/runs.js");
   // 人工放开 / 幽灵锁巡检走的那条放锁路（用例⑥）。turn-lock.ts 直取：runs.js 不转出它。
   const { forceReleaseTurn } = await import("../src/turn-lock.js");
@@ -200,7 +202,10 @@ export async function startHarness() {
     for (const taskId of ids) {
       for (const run of await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
         .where(eq(freeReviewRuns.taskId, taskId))) {
-        assert.equal(reviewDispatchArmed(run.id, 1), false, `${taskId} 收摊后还挂着认领证`);
+        // **要等,不能读一次就断言**:真投递出去的那几条,认领证是在**投递有了结局之后**才还的
+        // (`giveUp` → `onFail` → `settled`),而那一段排在回合释放之后 —— 读一次的写法会随用例
+        // 顺序时灵时不灵(靠后面几条用例耗的时间凑巧把它等过去)。等不到就按原话报红。
+        await until(`${taskId} 的认领证收摊时还回来`, async () => !reviewDispatchArmed(run.id, 1), 5_000);
       }
     }
     if (process.env.ASH_DUMP_TIMELINE) {
@@ -211,8 +216,9 @@ export async function startHarness() {
   return {
     db, freeReviewRounds, freeReviewRuns, groups, regressionEvidence, sessions, tasks,
     handleFreeWorkflowSettlement, reconcileFreeReviews, reserveFreeReview,
-    claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound, MAX_REVIEW_DISPATCH_ATTEMPTS,
-    releaseReviewDispatchClaim, reviewDispatchArmed, reviewLifecycle,
+    adoptReviewDispatchGeneration, claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound,
+    MAX_REVIEW_DISPATCH_ATTEMPTS, releaseReviewDispatchClaim, reviewDispatchArmed, reviewDispatchOwned,
+    reviewLifecycle, supersedeReviewDispatch,
     completeRegressionSettlement, regressionSettlementConclusion,
     failReviewStart, launchReviewRound, redeliverReviewRound, reopenFailedFreeReview,
     reviewOrphanStillUnowned,

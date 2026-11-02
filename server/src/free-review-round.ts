@@ -1,6 +1,9 @@
 // 自由工作流「一轮审查」的生命周期：查在跑的 run、起一轮、续下一轮、启动失败收尾，
 // 以及**把崩掉的那一轮重新拉起来**（reopenFailedFreeReview）。
 //
+// 崩溃补投（`redeliverReviewRound`，上一个进程死在「交出去了、还没送进会话」中间那一种）
+// 住在 `free-review-redeliver.ts` —— 它反过来用这里的 launchReviewRound/failReviewStart。
+//
 // 从 `free-workflow.ts` 切出来的原因：那份文件已经贴着 700 行上限，而重跑审查回合需要
 // 复用 launchReviewRound/failReviewStart 这一组。依赖是单向的（free-workflow.ts →
 // 本文件），`task-retry-turn.ts` 直接从这里取重跑入口，不用绕回去。
@@ -15,8 +18,8 @@ import { freeReviewEvidenceDir } from "./free-review-files.js";
 // 「任务书交出去了没有」那一段(有界重排、意图落库、留痕)住在 free-review-dispatch.ts;
 // 依赖是单向的 —— 那边收 `onFail` 回调,不认识 failReviewStart,所以不成环。
 import {
-  claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound, releaseReviewDispatchClaim,
-  reviewDispatchArmed, reviewDispatchRecovery, reviewDispatchVerdict,
+  adoptReviewDispatchGeneration, claimReviewDispatch, dispatchReviewRound,
+  releaseReviewDispatchClaim, reviewDispatchArmed, supersedeReviewDispatch,
 } from "./free-review-dispatch.js";
 import { evidenceState, restartRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
@@ -205,251 +208,146 @@ export async function launchReviewRound(
     claimToken?: string;
   } = {},
 ): Promise<{ resumed: boolean; dispatched: boolean }> {
-  // 这一行同时交出**这一轮的这一次**的身份(`generation`):认领、意图 CAS、清理、失败收尾都按
-  // 它认人(理由见 free-review-dispatch.ts 文件头 ⑨)。命中已有行就返回,所以重跑换过的代次
-  // 这里读到的就是新的那个。
-  const evidence = await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
-  const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-  let cwd: string | undefined;
-  let workspacePath: string | undefined;
-  // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，
-  // 全靠它跟当前 HEAD 比，不靠任何状态字段。取不到（工作区缺失）就留 null。
-  if (run.targetKind === "accepted_merge") {
-    if (!project || !run.targetCommit) throw new Error("合并结果审查缺少项目或验收 commit");
-    cwd = await preparePostMergeReviewWorktree(project.repoPath, task.id, run.id, run.targetCommit);
-    await db.update(freeReviewRounds).set({ reviewedCommit: run.targetCommit })
-      .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
-  } else if (project) {
-    const workspace = await taskWorkspace(task, project.repoPath).catch(() => null);
-    workspacePath = workspace?.path;
-    const head = workspace ? await headCommit(workspace.path) : null;
-    if (head) {
-      await db.update(freeReviewRounds).set({ reviewedCommit: head })
-        .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
-    }
+  // **先占住这一轮,再开始准备** —— 下面整段(证据行、工作区、HEAD、MCP 预检、任务书重算)全是
+  // await,而 run/round 在进这个函数之前就已经是 reviewing 了。不占的那一版里,这段时间在对账
+  // 眼里就是「reviewing + 没有意图 + 没有等待者」= 孤儿的全部特征,于是一个**活着的准备**会被
+  // 收尸成 failed/error,准备完成后 dispatched=false、再也不会自动开始(第 1 轮审查问题 2 实测)。
+  // 代次此刻还不知道(它在证据行上,读它就是第一个 await),所以先按「代次待定」占,读到再补上。
+  // 补办那一路在更早的地方就领过证了(`redeliverReviewRound`),原样沿用。
+  const claimToken = opts.claimToken ?? claimReviewDispatch(run.id, run.currentRound, null);
+  if (!claimToken) {
+    // 这一轮真有另一次派发在办(并发入口撞上了)。一个字都不写、也不落终态:那一次会把它办完。
+    console.error(`[ash] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：这一轮已经有在途派发在准备`);
+    return { resumed: false, dispatched: false };
   }
-  // 审查者交卷靠 ash MCP 的 report_stage，而那条登记在**它自己的 CLI 配置里**，ash 只能
-  // 问、不能替它注入。缺了的话这一轮会完整跑完、报告也写得好好的，最后一步才发现没有
-  // 工具可调 —— 一轮审查动辄几十分钟、几百万 token（2026-10-28 现场）。所以在这儿拦，
-  // 抛出去由三个调用点统一走 failReviewStart。验证轮、辩论走的是同一道闸（ash-mcp-launch-gate.ts）。
-  //
-  // **排在 cwd 算出来之后**：claude 的项目级登记（`--scope local`）只在那个目录下看得见，
-  // 在它之前问等于拿「别的目录没有」去拦这一轮（第 1 轮审查 F1）。只传单个 `cwd` 不够 ——
-  // 普通工作区分支的 `cwd` 一直是 undefined，于是预检在 **server 进程**的目录里问，
-  // 任务目录里接好的 claude 被判成没登记（第 2 位审查者 F1），所以闸那边按超集问。
-  await gateAshMcpBeforeLaunch(task, { agentType: run.agentType, executorId: run.executorId }, "审查者", {
-    cwd,
-    workspacePath,
-  });
-  const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
-  // 重跑分两档，差别不在按钮而在**送进去的那句话**：上下文还在就只说「接着做」（一条崩在
-  // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。
-  const resumed = !!opts.retry && !!opts.resumeSessionId && await reviewTurnResumable(task.id, opts.resumeSessionId);
-  // **会话策略由原派发定,补办只是重放它** —— 所以这里不能自己带上 `&& !opts.redeliver`:那样
-  // 新链第 1 轮、合并结果审查在补办时会从「新开一条空会话」变成「按 agentType+role 挑最近的
-  // 历史会话」(下游默认动作,不按 run 隔离),于是接进了上一条链的旧对话(第 1 轮审查 F4)。
-  // 原值跟着意图落库,补办时原样传回来(老行的回落见 `redeliverReviewRound`)。
-  const freshSession = opts.redeliver
-    ? opts.redeliver.freshSession
-    : !opts.retry && (run.currentRound === 1 || run.targetKind === "accepted_merge");
-  const label = run.targetKind === "accepted_merge" ? "合并结果审查" : `自由工作流第 ${run.currentRound} 轮审查`;
-  await appendTaskTimeline(task.id, opts.redeliver
-    // 补投不写「审查开始」:那一句上一次已经写过了,再写一遍会让时间线读成开了两轮。
-    ? `${label}的任务书重新投递：服务上次中断时它还没送进会话（已尝试 ${opts.redeliver.attempts} 次）。`
-    : opts.retry
-      ? resumed
-        ? `${label}从中断处继续：${run.reviewerName}。`
-        : `${label}重跑上一回合：${run.reviewerName}。`
-      : run.targetKind === "accepted_merge"
-        ? `合并结果审查开始：${run.reviewerName} · ${run.targetBranch}@${run.targetCommit?.slice(0, 8)} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`
-        : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
-  bus.publish({ type: "task.review", taskId: task.id });
-  const message = !opts.retry
-    ? prompt
-    : resumed
-      ? freeReviewResumeMessage(task, run, run.currentRound)
-      : `上一回合异常结束，本轮审查从头继续。\n\n${prompt}`;
-  // 投递本身走 `dispatchReviewRound`:它在回合锁上抢不到位时**重排**而不是落终态(瞬时条件
-  // 不该变成永久失败,整段理由见 free-review-dispatch.ts 文件头)。抢不到以外的失败照旧
-  // `failReviewStart`,行为与改之前一致。
-  const outcome = await dispatchReviewRound({
-    taskId: task.id,
-    run: { id: run.id, currentRound: run.currentRound },
-    generation: evidence.generation,
-    label,
-    message,
-    opts: {
-      system: "run",
-      sideTurn: true,
-      agent: run.agentType as AgentType,
-      executorId: run.executorId,
-      model: run.model,
-      reasoningEffort: run.reasoningEffort,
-      // **这一轮是谁起的、为哪一次审查的哪一轮起的** —— 由这里交代,因为只有这里手里同时握着
-      // run 和轮次。创建入口过后只能查「现在是哪一次」,而那两者在派审交接期不是同一个
-      // (第 10 轮审查 F1:旧审查者提交的哨兵被绑到新派的审查者上)。两样同在一个对象里,
-      // 所以恢复那几条路也不可能只带到一半(本轮审查 F2)。
-      turnSource: { role: "reviewer", review: { run: run.id, round: run.currentRound } },
-      freshSession,
-      resumeSessionId: opts.resumeSessionId,
-      cwd,
-      // 重跑这一路的预检查（freeReviewRetryBlocker）离真正拉起 CLI 很远，中间还要经过
-      // 「先释放重试路由那把锁、排队再起」的交接——那段时间里分组可能已经被暂停。起跑前
-      // 再核一遍冻结事实（turn-freeze.ts）；命中就撤回，这条链留在 failed，仍可再重试。
-      //
-      // 补投也开着它:那一次重启之后分组同样可能已经被暂停、任务已经被归档。
-      freezeGuard: !!opts.retry || !!opts.redeliver,
-    },
-    resumeSessionId: opts.resumeSessionId,
-    retry: opts.retry,
-    freshSession,
-    attempts: opts.redeliver?.attempts,
-    since: opts.redeliver?.since,
-    // 补办那一路在开工之前就已经领过证(`redeliverReviewRound`),别再领一张。
-    claimToken: opts.claimToken,
-    // 这一笔失败只说**这一次**:代次对不上(中间被用户重跑过)就不许落账,否则刚重跑起来的
-    // 那一次会被上一次的迟到失败打成 error(第 3 轮审查 F2)。
-    onFail: (error) => failReviewStart(run, error, { generation: evidence.generation }),
-  });
-  return { resumed, dispatched: outcome === "dispatched" };
-}
-
-/**
- * **这一轮的任务书其实已经送到审查者手上了** —— 库里那份在途意图只是没来得及清掉。
- *
- * 为什么非得问这一句:投递是两次写,而且不同事务 —— `commitReviewTurnDelivery` 先持久记下
- * `waitOwnership.deliveredReview`(紧挨着 spawn 之后),之后才经过落盘、回执,最后才清意图。
- * 服务断在这两次写中间,留下的组合就是「凭据已确认 + 意图还挂着」。只看意图的恢复会把这份
- * **审查者已经读过**的任务书整份再发一遍,白烧一轮(第 2 轮审查 F2 实测:无需任何磁盘故障,
- * 恢复即再次拉起执行器)。把回执提前到落盘那一刻只缩短了窗口,消不掉它 —— 所以恢复这一侧
- * 必须认持久交付事实为权威。
- *
- * 判据是**目录 + 代次**:目录里带着 run 与轮次,所以第 2 轮、合并结果审查各不相同;代次区分
- * 同一轮的不同次「重跑」(`reopenFailedFreeReview` 走 `restartRegressionEvidence` 换代次),
- * 上一次的旧凭据因此配不上这一次。
- */
-async function reviewPromptAlreadyDelivered(task: TaskRow, run: ReviewRunRow, round: number): Promise<boolean> {
-  const receipt = task.waitOwnership?.deliveredReview;
-  if (!receipt) return false;
-  const directory = freeReviewEvidenceDir(task.id, run.id, round);
-  if (receipt.directory !== directory) return false;
-  const evidence = (await db.select({ generation: regressionEvidence.generation })
-    .from(regressionEvidence).where(eq(regressionEvidence.directory, directory))).at(0);
-  return !!evidence && evidence.generation === receipt.generation;
-}
-
-/**
- * 上一个进程死在「任务书交出去了、还没送进会话」中间 —— 这一轮**补投一次**。
- *
- * 为什么不能让它照原路收尸:`reconcileFreeReviews` 对一条挂在 reviewing 的 run 的判词是
- * 「已经没有任何东西能把它跑完」,对**跑着跑着死掉**的那一轮是对的 —— 可对这一轮不是:它一个
- * 字都还没送出去,审查者压根没见过任务书。两者在库里长得一模一样,区别只在 round 上那份派发
- * 意图(`FreeReviewDispatchIntent`)。
- *
- * 为什么重走整个 `launchReviewRound` 而不是只重发那段话:任务书必须按**此刻**的工作区重算
- * (重启之间 HEAD 完全可能已经变了,`reviewedCommit` 也要跟着重锚),而它那几步副作用都是幂等的
- * ——证据目录 `evidenceState` 命中已有行就返回,合并结果 worktree 的 HEAD 对得上就原样复用,
- * MCP 预检只是问一句。
- *
- * 三种回答,调用方据它决定要不要往下走:
- *  · `none`    —— 这一轮没有在途意图(或者那份意图已经被别人办完了、其实早已送达),照原路对账;
- *  · `hold`    —— 有在途派发而且有人负责(本进程正排队,或另一个恢复入口刚认领走):**什么都
- *    别碰**,这一轮既不该补投也不该收尸;
- *  · `handled` —— 这一次由这里处理了(补投出去了,或者次数用尽已落终态)。
- */
-export type ReviewRoundRecovery = "none" | "hold" | "handled";
-
-export async function redeliverReviewRound(
-  task: TaskRow,
-  run: ReviewRunRow,
-  round: ReviewRoundRow,
-): Promise<ReviewRoundRecovery> {
-  // 先按调用方手里那份快照粗筛:没有意图、或者本进程还盯着,都不必往下读库。
-  const screened = reviewDispatchRecovery(run.id, round.round, round.dispatch);
-  if (screened === "none") return "none";
-  if (screened === "in-flight") return "hold";
-  // **这一轮的这一次**的身份:认领、意图 CAS、清理、失败收尾全按它认人(见
-  // free-review-dispatch.ts 文件头 ⑨)。证据行还没建就谈不上补办,交回原路。
-  const directory = freeReviewEvidenceDir(task.id, run.id, round.round);
-  const generation = (await db.select({ generation: regressionEvidence.generation })
-    .from(regressionEvidence).where(eq(regressionEvidence.directory, directory))).at(0)?.generation;
-  if (!generation) return "none";
-  // **先同步领证,再做任何 await** —— 下面整条路是一长串异步准备(读库、证据目录、工作区、
-  // MCP 预检、任务书重算),中途另一个恢复入口(定时对账 / 单任务中断恢复 / 答复提问各有一条
-  // 路)完全可能也读到「没人盯着」。领证就是 `armed` 那张表,所以「谁在途」只有一个答案。
-  const token = claimReviewDispatch(run.id, round.round, generation);
-  if (!token) return "hold";
-  // **只有「真的排进了等待队列」才把证留给派发层**,其余每一条出路(含抛异常)都在 finally 里
-  // 把它还回去 —— 领了证却没人负责等待,对账见 `armed` 就跳过这一轮,库里那份没消费的意图
-  // 再也没人补办,数据库早恢复健康也救不回来(第 3 轮审查 F3)。重复归还是安全的:认领证按
-  // token 认人,中间若已有新一次派发接管,还掉的也不会是它那张。
-  let dispatched = false;
+  /** 责任有没有真的交给派发层(交了就由它在投递成功/放弃/让出时还证,见那边的 `settled`)。 */
+  let handedToDispatch = false;
   try {
-    // **领证之后一律按库里现读的那一份办事**:调用方那个 round 是读完之后又 await 过几次才到
-    // 这里的快照 —— 先到的一份恢复完全可以在这期间把任务书送出去、把意图清掉、把内存认领也
-    // 放掉,我们这一份才从 await 里回来。信那份快照就会把一条**已经办完**的意图重建出来,再排
-    // 一份完整任务书(第 2 轮审查 F1)。库里现读 + 下游写意图时的版本 CAS 是同一个不变量的两道。
-    const current = (await db.select().from(freeReviewRounds)
-      .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, round.round)))).at(0);
-    const intent = current?.status === "reviewing" ? current.dispatch : null;
-    const verdict = reviewDispatchVerdict(intent);
-    // **「这份意图已经被别人办掉了」不能回答成「压根没有派发」** —— 后者是「照原路按孤儿往下
-    // 走」的通行证,而此刻的真相恰恰相反:刚刚有人把这一轮投递出去了,审查者很可能正在输出。
-    // 调用方开头那次「reviewer 还活着吗」是几次 await 之前读的,它不会再问第二遍,于是这一轮
-    // 会被按孤儿落成 failed/error —— 用户看到的是「审查刚开始就提前判失败」(第 3 轮审查 F1)。
-    // 答 `hold` = 这一拍的信息已经过期,什么都别做;下一拍按新读到的状态重新判。
-    if (verdict === "none" || !intent) return "hold";
-    // 交付凭据对得上 = 这份任务书审查者已经收到了,意图只是没来得及清:结清它,不重投。
-    // 同样答 `hold`(而不是 `none`):刚投出去的那一份此刻可能正在跑,结不结算等下一拍按新状态判。
-    if (await reviewPromptAlreadyDelivered(task, run, round.round)) {
-      await clearReviewDispatchIntent(run.id, round.round, generation);
-      console.error(`[ash] 审查任务书已确认送达，补投取消 run=${run.id} round=${round.round}`);
-      return "hold";
+    // 这一行同时交出**这一轮的这一次**的身份(`generation`):认领、意图 CAS、清理、失败收尾都按
+    // 它认人(理由见 free-review-dispatch.ts 文件头 ⑨)。命中已有行就返回,所以重跑换过的代次
+    // 这里读到的就是新的那个。
+    const evidence = await evidenceState(task.id, freeReviewEvidenceDir(task.id, run.id, run.currentRound), task);
+    // 代次补到自己那张证上。填不上 = 这张证已经被一次重跑定向撤销(那一次正拿着新代次自己办),
+    // 就地让出:一个字都不写,也不落终态 —— 否则两份任务书会各送一次(见 `adoptReviewDispatchGeneration`)。
+    if (!adoptReviewDispatchGeneration(run.id, run.currentRound, claimToken, evidence.generation)) {
+      console.error(`[ash] 审查派发让出 task=${task.id} run=${run.id} round=${run.currentRound}：准备期间这一轮被重跑成另一次`);
+      return { resumed: false, dispatched: false };
     }
-    if (verdict === "exhausted") {
-      // 界用尽了才落终态,而且**说得出原因**:通用收尸那句「未能正常给出结论」会让用户以为审查者
-      // 跑过、没交卷,实际上它一个字都没收到。意图由 `failReviewStart` 在终态那一个事务里一并清掉。
-      //
-      // 措辞只说「排了几次队」而不说「输了几次」:`attempts` 记的是**已登记的尝试**,而最后一次
-      // 完全可能只排上队、还没等到释放点服务就断了 —— 那一次没有真的被谁抢走,说成「被抢 N 次」
-      // 就是把没发生的事算进去了。
-      await failReviewStart(run, `任务书始终没能送进会话 —— 已经排了 ${intent.attempts} 次队都没抢到空闲回合窗口（含服务重启后的补投），不再重试`, { generation });
-      return "handled";
+    const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+    let cwd: string | undefined;
+    let workspacePath: string | undefined;
+    // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，
+    // 全靠它跟当前 HEAD 比，不靠任何状态字段。取不到（工作区缺失）就留 null。
+    if (run.targetKind === "accepted_merge") {
+      if (!project || !run.targetCommit) throw new Error("合并结果审查缺少项目或验收 commit");
+      cwd = await preparePostMergeReviewWorktree(project.repoPath, task.id, run.id, run.targetCommit);
+      await db.update(freeReviewRounds).set({ reviewedCommit: run.targetCommit })
+        .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
+    } else if (project) {
+      const workspace = await taskWorkspace(task, project.repoPath).catch(() => null);
+      workspacePath = workspace?.path;
+      const head = workspace ? await headCommit(workspace.path) : null;
+      if (head) {
+        await db.update(freeReviewRounds).set({ reviewedCommit: head })
+          .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
+      }
     }
-    // 次数接着上一次往下数:补投也是一次尝试,否则重启反复发生时这条链会永远重投下去。
+    // 审查者交卷靠 ash MCP 的 report_stage，而那条登记在**它自己的 CLI 配置里**，ash 只能
+    // 问、不能替它注入。缺了的话这一轮会完整跑完、报告也写得好好的，最后一步才发现没有
+    // 工具可调 —— 一轮审查动辄几十分钟、几百万 token（2026-10-28 现场）。所以在这儿拦，
+    // 抛出去由三个调用点统一走 failReviewStart。验证轮、辩论走的是同一道闸（ash-mcp-launch-gate.ts）。
     //
-    // **只有这一段的异常才算「这一轮起不来」** —— 工作区没了、MCP 没登记、任务书算不出来,
-    // 落终态并写明原因是对的。上面那几步(现读、凭据查询)抛的是另一回事:见外层 catch。
-    try {
-      const launched = await launchReviewRound(task, run, {
-        resumeSessionId: intent.resumeSessionId ?? undefined,
-        retry: intent.retry,
-        claimToken: token,
-        redeliver: {
-          attempts: intent.attempts,
-          since: intent.since,
-          // 老行(加这一位之前写下的意图)没有记会话策略,按原公式回落 —— 当初唯一会把它压成
-          // false 的就是补办自己,所以去掉那一项就是原值。
-          freshSession: intent.freshSession
-            ?? (!intent.retry && (run.currentRound === 1 || run.targetKind === "accepted_merge")),
-        },
-      });
-      dispatched = launched.dispatched;
-    } catch (error) {
-      // 起不来就按原路收尾(round→error、run→failed、写明原因),和首次派发失败同一条出路。
-      await failReviewStart(run, error instanceof Error ? error.message : String(error), { generation });
-    }
-    return "handled";
-  } catch (error) {
-    // **准备阶段抛的不算「这一轮起不来」,一个终态都别写** —— 现读、交付凭据查询抛出来的多半
-    // 是瞬时读库故障(SQLITE_BUSY 一类),把这一轮打成 error 等于拿一次锁争用换掉一轮审查。
-    // 认领在 finally 里还回去、库里那份没消费的意图原样留着,下一拍健康的对账照样能补办;
-    // 答 `hold` 是因为这一拍什么都没问清,收尸的判据也就谈不上成立(第 3 轮审查 F3)。
-    console.error(`[ash] 审查补投准备阶段出错 run=${run.id} round=${round.round}`
-      + `（认领已归还，意图留着等下一拍重试）:`, error);
-    return "hold";
+    // **排在 cwd 算出来之后**：claude 的项目级登记（`--scope local`）只在那个目录下看得见，
+    // 在它之前问等于拿「别的目录没有」去拦这一轮（第 1 轮审查 F1）。只传单个 `cwd` 不够 ——
+    // 普通工作区分支的 `cwd` 一直是 undefined，于是预检在 **server 进程**的目录里问，
+    // 任务目录里接好的 claude 被判成没登记（第 2 位审查者 F1），所以闸那边按超集问。
+    await gateAshMcpBeforeLaunch(task, { agentType: run.agentType, executorId: run.executorId }, "审查者", {
+      cwd,
+      workspacePath,
+    });
+    const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
+    // 重跑分两档，差别不在按钮而在**送进去的那句话**：上下文还在就只说「接着做」（一条崩在
+    // 10M token 上的审查，重来一次就是再烧 10M）；上下文是空的才把任务书整份重发。
+    const resumed = !!opts.retry && !!opts.resumeSessionId && await reviewTurnResumable(task.id, opts.resumeSessionId);
+    // **会话策略由原派发定,补办只是重放它** —— 所以这里不能自己带上 `&& !opts.redeliver`:那样
+    // 新链第 1 轮、合并结果审查在补办时会从「新开一条空会话」变成「按 agentType+role 挑最近的
+    // 历史会话」(下游默认动作,不按 run 隔离),于是接进了上一条链的旧对话(第 1 轮审查 F4)。
+    // 原值跟着意图落库,补办时原样传回来(老行的回落见 `redeliverReviewRound`)。
+    const freshSession = opts.redeliver
+      ? opts.redeliver.freshSession
+      : !opts.retry && (run.currentRound === 1 || run.targetKind === "accepted_merge");
+    const label = run.targetKind === "accepted_merge" ? "合并结果审查" : `自由工作流第 ${run.currentRound} 轮审查`;
+    await appendTaskTimeline(task.id, opts.redeliver
+      // 补投不写「审查开始」:那一句上一次已经写过了,再写一遍会让时间线读成开了两轮。
+      ? `${label}的任务书重新投递：服务上次中断时它还没送进会话（已尝试 ${opts.redeliver.attempts} 次）。`
+      : opts.retry
+        ? resumed
+          ? `${label}从中断处继续：${run.reviewerName}。`
+          : `${label}重跑上一回合：${run.reviewerName}。`
+        : run.targetKind === "accepted_merge"
+          ? `合并结果审查开始：${run.reviewerName} · ${run.targetBranch}@${run.targetCommit?.slice(0, 8)} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`
+          : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
+    bus.publish({ type: "task.review", taskId: task.id });
+    const message = !opts.retry
+      ? prompt
+      : resumed
+        ? freeReviewResumeMessage(task, run, run.currentRound)
+        : `上一回合异常结束，本轮审查从头继续。\n\n${prompt}`;
+    // 投递本身走 `dispatchReviewRound`:它在回合锁上抢不到位时**重排**而不是落终态(瞬时条件
+    // 不该变成永久失败,整段理由见 free-review-dispatch.ts 文件头)。抢不到以外的失败照旧
+    // `failReviewStart`,行为与改之前一致。
+    const outcome = await dispatchReviewRound({
+      taskId: task.id,
+      run: { id: run.id, currentRound: run.currentRound },
+      generation: evidence.generation,
+      label,
+      message,
+      opts: {
+        system: "run",
+        sideTurn: true,
+        agent: run.agentType as AgentType,
+        executorId: run.executorId,
+        model: run.model,
+        reasoningEffort: run.reasoningEffort,
+        // **这一轮是谁起的、为哪一次审查的哪一轮起的** —— 由这里交代,因为只有这里手里同时握着
+        // run 和轮次。创建入口过后只能查「现在是哪一次」,而那两者在派审交接期不是同一个
+        // (第 10 轮审查 F1:旧审查者提交的哨兵被绑到新派的审查者上)。两样同在一个对象里,
+        // 所以恢复那几条路也不可能只带到一半(本轮审查 F2)。
+        turnSource: { role: "reviewer", review: { run: run.id, round: run.currentRound } },
+        freshSession,
+        resumeSessionId: opts.resumeSessionId,
+        cwd,
+        // 重跑这一路的预检查（freeReviewRetryBlocker）离真正拉起 CLI 很远，中间还要经过
+        // 「先释放重试路由那把锁、排队再起」的交接——那段时间里分组可能已经被暂停。起跑前
+        // 再核一遍冻结事实（turn-freeze.ts）；命中就撤回，这条链留在 failed，仍可再重试。
+        //
+        // 补投也开着它:那一次重启之后分组同样可能已经被暂停、任务已经被归档。
+        freezeGuard: !!opts.retry || !!opts.redeliver,
+      },
+      resumeSessionId: opts.resumeSessionId,
+      retry: opts.retry,
+      freshSession,
+      attempts: opts.redeliver?.attempts,
+      since: opts.redeliver?.since,
+      // 认领在这个函数第一行就领过了(补办/重跑那两路更早,原样沿用),派发层只核一句它还是不是
+      // 负责人 —— 这里**必须传本地那一张**:传 `opts.claimToken` 的话,直接派审那一路是 undefined,
+      // 派发层会去重领一张,而本函数自己那一张正占着 → 它当场判「这一轮已经有在途派发」并让出,
+      // 一次正常派审就这么丢了(本轮 ㉒甲 一写就抓到)。
+      claimToken,
+      // 这一笔失败只说**这一次**:代次对不上(中间被用户重跑过)就不许落账,否则刚重跑起来的
+      // 那一次会被上一次的迟到失败打成 error(第 3 轮审查 F2)。
+      onFail: (error) => failReviewStart(run, error, { generation: evidence.generation }),
+    });
+    // **只有真排进去了**才算责任交出去(那之后由派发层在投递成功/放弃/让出时还证)。让出那一种
+    // 一律当没交出去:派发层几条让出分支里有的还了证、有的本来就不是它的证,统一由下面的 finally
+    // 按 token 兜一次 —— 重复归还是安全的(按 token 认人),漏掉才是永久「在途」。
+    handedToDispatch = outcome === "dispatched";
+    return { resumed, dispatched: outcome === "dispatched" };
   } finally {
-    if (!dispatched) releaseReviewDispatchClaim(run.id, round.round, token);
+    // 准备阶段抛了(工作区没了、MCP 没登记、任务书算不出来)或者就地让出了:**证必须还回去**。
+    // 不还的话这一轮在本进程里永远「在途」—— 对账见 `armed` 就跳过,库里那份没消费的意图再也
+    // 没人补办(free-review-dispatch.ts 文件头 ⑩)。按 token 还,撤不掉别人后来领的那张。
+    if (!handedToDispatch) releaseReviewDispatchClaim(run.id, run.currentRound, claimToken);
   }
 }
 
@@ -599,20 +497,28 @@ export async function reopenFailedFreeReview(
       // 不排队的话,换完代次拉起来的新一代资源会被旧收尾顺手收掉。只把这一笔放进链里 ——
       // 下面的 `launchReviewRound` 以及它 catch 里的 `failReviewStart` 都要取同一把锁,
       // 一起放进来就是自锁(判据见那个文件的「不许重入」)。
+      /** 重跑换代次那一笔同步抢下来的认领证 —— 一路传给 `launchReviewRound`。 */
+      let claimToken: string | null = null;
       await reviewLifecycle(run!.id, async () => {
-        const previous = await db.transaction(async (transaction) => {
+        const { previous, current } = await db.transaction(async (transaction) => {
           // 换代次之前先记下**上一次是谁**:它退场时留下的哨兵与排着的结果得有人收,而它自己
           // 的收尾此刻要么已经做完、要么会被代次闸整段挡住(就是这把锁保证的)。送它退场的人
           // 负责收 —— 否则那几条会一直空烧到自己到期,新一次的收尾又只认自己那一代次。
           const before = (await transaction.select({ generation: regressionEvidence.generation })
             .from(regressionEvidence).where(eq(regressionEvidence.directory, directory))).at(0)?.generation;
-          await restartRegressionEvidence(taskId, directory, transaction);
+          const after = await restartRegressionEvidence(taskId, directory, transaction);
           await transaction.update(freeReviewRounds).set({ status: "reviewing", conclusion: null, endedAt: null })
             .where(eq(freeReviewRounds.id, round!.id));
           await transaction.update(freeReviewRuns).set({ status: "reviewing", updatedAt: at, finishedAt: null })
             .where(eq(freeReviewRuns.id, run!.id));
-          return before;
+          return { previous: before, current: after };
         }, { behavior: "immediate" });
+        // **撤旧证 + 抢新证必须是同一段同步代码**:中间插进任何 await,这一轮就有一段「run/round
+        // 已经放回 reviewing、却谁都没在负责」的时间 —— 那正是对账收尸的全部依据。
+        // 撤只撤上一代那一张(连「代次待定」的准备占位一起,理由见 `supersedeReviewDispatch`):
+        // 接管在这条链上只有这一条有权威依据的出路,因为「上一代是谁」是这一笔自己刚换掉的。
+        if (previous) supersedeReviewDispatch(run!.id, run!.currentRound, previous);
+        claimToken = claimReviewDispatch(run!.id, run!.currentRound, current);
         if (previous) {
           await stopReviewRunMonitors(run!.id, "这一轮被重跑，上一次挂的哨兵一并收回", false,
             { round: run!.currentRound, generation: previous });
@@ -621,7 +527,7 @@ export async function reopenFailedFreeReview(
       const revived = { ...run!, status: "reviewing", updatedAt: at, finishedAt: null };
       try {
         const { resumed, dispatched } = await launchReviewRound(task, revived,
-          { resumeSessionId: opts.resumeSessionId, retry: true });
+          { resumeSessionId: opts.resumeSessionId, retry: true, ...(claimToken ? { claimToken } : {}) });
         // 让出要**留得下痕**:只在返回值里说一句,用户刷新页面后看到的仍是「我点了，然后什么都
         // 没发生」。时间线是持久的那一半。
         if (!dispatched) {

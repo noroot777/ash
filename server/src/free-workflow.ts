@@ -42,11 +42,12 @@ import {
   latestWorkspaceRun,
   launchReviewRound,
   nextRound,
-  redeliverReviewRound,
   reviewerTurnHeld,
   reviewOrphanStillUnowned,
   reviewingRun,
 } from "./free-review-round.js";
+// 崩溃补投单独一份(见那个文件的头):它要用 free-review-round.ts 的起一轮/收尾,切出去才不成环。
+import { redeliverReviewRound } from "./free-review-redeliver.js";
 // 「这一轮的任务书还在等空闲回合窗口吗」只有内存那张表答得出(库里那一行分不出「有人排着」
 // 与「排的人没了」),对账的第一道闸要问它 —— 说明在 free-review-dispatch.ts 的 `armed`。
 import { reviewDispatchArmed } from "./free-review-dispatch.js";
