@@ -138,8 +138,8 @@ export function TaskReviewWorkspace({
           验证证据也在 inspector 里点得开，再套一张卡片铺一遍只会把真正要看的 diff 往下推。
           返回口只留任务顶栏那一个（验收台开着时「验收」主按钮就变成「返回对话」），这里
           不再重复第二个。 */}
-      <header className="single-review-subbar">
-        <div><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "验证证据见右侧审查记录；这里核对任务分支相对基线的提交与 diff"}</small></div>
+      <header className="single-review-subbar acceptance-host">
+        <div className="acceptance-host-title"><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "验证证据见右侧审查记录；这里核对任务分支相对基线的提交与 diff"}</small></div>
         {sharedParent
           ? <span className="single-review-shared-badge">随团队验收</span>
           : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} acceptanceBlock={acceptanceBlock} />}
