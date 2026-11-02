@@ -178,23 +178,33 @@ assert.ok(claimTurn("target"));
 assert.ok(claimTurn("other"));
 await wait();
 const heldBeforeConfig = heldTurns().find((turn) => turn.taskId === "target")!;
+const assertUnavailable = async (expected: string, excluded: string) => {
+  for (const response of [await requestApproval(), await post("target")]) {
+    assert.equal(response.status, 503);
+    const { error } = await response.json() as { error: string };
+    assert.ok(error.includes(expected), error);
+    assert.ok(!error.includes(excluded), error);
+  }
+  assert.deepEqual(heldTurns().find((turn) => turn.taskId === "target"), heldBeforeConfig);
+};
 delete process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY;
 delete process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE;
 assert.equal(humanApprovalPublicKeyFile(), undefined, "数据目录不再默认充当信任锚");
-assert.equal((await requestApproval()).status, 503);
+await assertUnavailable("补配需要重启服务；重启会清除内存中的回合占位", "无需重启");
 assert.ok((await recentRejectionNotices("target")).some((notice) => notice.action === "申请人工授权" && notice.reason.includes("有效公钥")));
 writeFileSync(`${process.env.ASH_DB}.human-approval.pub`, publicKey);
 assert.equal((await requestApproval()).status, 503, "agent 向旧默认位置写自己的公钥不能开启入口");
 const keyFile = join(root, "agent-writable-public-key");
 process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE = keyFile;
+await assertUnavailable("已预配 ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE", "补配需要重启");
 writeFileSync(keyFile, publicKey);
-assert.equal((await requestApproval()).status, 503, "显式配置也不能加载服务账号可写的文件");
+await assertUnavailable("符合安全条件的公钥文件可热加载，无需重启", "补配需要重启");
 chmodSync(keyFile, 0o444);
 assert.equal((await requestApproval()).status, 503, "服务自己拥有的只读文件仍能被自己 chmod，不可信");
 chmodSync(keyFile, 0o644);
 assert.deepEqual(heldTurns().find((turn) => turn.taskId === "target"), heldBeforeConfig);
 process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = "invalid-inline-key";
-assert.equal((await requestApproval()).status, 503, "无效非空启动配置也不回退文件");
+await assertUnavailable("启动公钥 ASH_HUMAN_APPROVAL_PUBLIC_KEY 无效", "无需重启");
 process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = publicKey;
 assert.equal((await app.request("/api/tasks/target/reclaim-turn/approval")).status, 404, "GET 不再创建申请");
 assert.equal((await requestApproval("missing")).status, 404);

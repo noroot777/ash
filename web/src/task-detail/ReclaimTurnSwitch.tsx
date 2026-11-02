@@ -83,15 +83,15 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
         </span>
       </p>
       <button type="button" onClick={() => void requestApproval()} disabled={busy || released}>
-        {released ? "已放开" : busy ? "处理中…" : challenge && remaining > 0 ? "查看当前申请" : "申请人工授权"}
+        {released ? "已放开" : busy ? "处理中…" : challenge ? "查看当前申请" : "申请人工授权"}
       </button>
       {challenge && !released && <>
         <p>将申请保存为 JSON，在不受本机 agent 控制的设备上核对并签名。{remaining > 0
-          ? `剩余有效期 ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}，查看申请不会延长有效期。`
-          : "当前申请已过期，请重新申请。"}</p>
+          ? `预计剩余有效期 ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}，以服务端校验为准，查看申请不会延长有效期。`
+          : "本机计时显示可能已过期，仍可提交签名，由服务端校验；也可查看当前申请。"}</p>
         <textarea aria-label="人工授权申请" readOnly value={JSON.stringify(challenge, null, 2)} rows={5} />
         <textarea aria-label="人工授权结果" value={proof} onChange={(event) => setProof(event.target.value)} placeholder="粘贴签名授权 JSON" rows={3} disabled={busy} />
-        <button type="button" onClick={() => void release()} disabled={busy || !proof.trim() || remaining === 0}>
+        <button type="button" onClick={() => void release()} disabled={busy || !proof.trim()}>
           {busy ? "正在放开…" : "确认风险并放开回合占位"}
         </button>
       </>}

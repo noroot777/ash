@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { actorOf } from "./auth/context.js";
-import { humanApproval, HUMAN_APPROVAL_UNAVAILABLE } from "./auth/human-approval.js";
+import { humanApproval, humanApprovalUnavailableReason } from "./auth/human-approval.js";
 import { humanRequestRejection } from "./auth/human-request.js";
 import { canSeeProject } from "./auth/visibility.js";
 import { db } from "./db/index.js";
@@ -21,14 +21,14 @@ export function mountTurnReclaimRoutes(api: Hono): void {
     context.header("Cache-Control", "no-store");
     const rejection = humanRequestRejection(context);
     if (rejection) return reject(rejection, 403);
-    if (!humanApproval.fingerprint) return reject(HUMAN_APPROVAL_UNAVAILABLE, 503);
+    if (!humanApproval.fingerprint) return reject(humanApprovalUnavailableReason(), 503);
     const inspection = inspectTurnReclaim(taskId);
     if (!inspection.ok) return reject(inspection.reason, 409);
     const turn = inspection.turn;
     const challenge = humanApproval.issue({
       action: "reclaim-turn", taskId, turnSeq: turn.seq, claimedAt: turn.claimedAt, userId: actorOf(context).userId,
     }, task.title);
-    if (!challenge) return reject(HUMAN_APPROVAL_UNAVAILABLE, 503);
+    if (!challenge) return reject(humanApprovalUnavailableReason(), 503);
     return context.json(challenge);
   });
 
@@ -42,7 +42,7 @@ export function mountTurnReclaimRoutes(api: Hono): void {
     };
     const rejection = humanRequestRejection(context);
     if (rejection) return reject(rejection, 403);
-    if (!humanApproval.fingerprint) return reject(HUMAN_APPROVAL_UNAVAILABLE, 503);
+    if (!humanApproval.fingerprint) return reject(humanApprovalUnavailableReason(), 503);
     const consent = await context.req.json().catch(() => null);
     if (consent?.acknowledgeDuplicateRisk !== true) {
       return reject("请先确认：放开互斥可能导致同一个任务的两个回合并行修改工作区", 400);

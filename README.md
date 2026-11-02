@@ -222,6 +222,8 @@ scripts/  setup / restart / package（.mjs，跨平台）
 
 所有持久化数据存放在 `data/` 目录（数据库、运行记录、上传文件），该目录不入 git。备份迁移只需拷贝此目录。
 
+回合占位的人工放开使用离机签名，公钥或可信文件路径在启动环境中预配；部署与操作见[人工授权](docs/human-approval.md)。
+
 ## 开发
 
 ```bash
