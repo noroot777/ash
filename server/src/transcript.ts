@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { AgentEvent, AgentType } from "@ash/shared";
-import { isTokenUsage } from "@ash/shared/usage";
+import { isTokenUsage, isUsageAccountingMark } from "@ash/shared/usage";
 import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
@@ -216,7 +216,8 @@ function validTraceEvent(event: unknown): boolean {
         && (e.affectsTurn === undefined || e.affectsTurn === false);
     case "usage":
       // 口径和判据都归 shared/src/usage.ts —— 账本那边怎么定义，这里就怎么验。
-      return isTokenUsage(e.usage) && (e.accounting === undefined || e.accounting === "incremental");
+      // 缺省 = 标记出现之前的旧 trace,仍然合法。
+      return isTokenUsage(e.usage) && (e.accounting === undefined || isUsageAccountingMark(e.accounting));
     case "run":
       return (e.model === null || isString(e.model))
         && (e.reasoningEffort === null || isString(e.reasoningEffort))

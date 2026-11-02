@@ -1,27 +1,18 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+// kimi 的宿主登记 —— 现在只是 `mcp-hosts.mjs` 那张通用表的一个薄壳。
+//
+// 为什么留着这个名字:`setup.mjs` 和 `test-kimi-mcp.mjs` 都在用它,而 kimi 这一家本身没有
+// 任何特殊性(`<KIMI_CODE_HOME>/mcp.json` + `mcpServers`,跟 gemini/cursor 同一个格式族)。
+// 2026-10-31 把实现收进通用那份:原来这里是**唯一**一家有写入器的「其它 CLI」,再多接一家
+// 就会变成第二份拷贝。
+import { registerHostMcp } from "./mcp-hosts.mjs";
 
 export function registerKimiMcp({ configDir, mcpEntry, url, nodeBin = process.execPath }) {
-  const file = join(configDir, "mcp.json");
-  const existing = existsSync(file) ? readFileSync(file, "utf8") : null;
-  const config = existing === null ? {} : JSON.parse(existing);
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    throw new Error(`${file} 不是 JSON 对象，未修改`);
-  }
-  if (config.mcpServers !== undefined &&
-    (!config.mcpServers || typeof config.mcpServers !== "object" || Array.isArray(config.mcpServers))) {
-    throw new Error(`${file} 的 mcpServers 不是对象，未修改`);
-  }
-  const servers = config.mcpServers ?? {};
-  if (Object.hasOwn(servers, "ash") || Object.hasOwn(servers, "harness")) {
-    return { file, added: false };
-  }
-  servers.ash = { command: nodeBin, args: [mcpEntry], env: { ASH_URL: url } };
-  config.mcpServers = servers;
-  mkdirSync(configDir, { recursive: true });
-  if (existing !== null) copyFileSync(file, `${file}.bak-ash-setup`);
-  const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, file);
-  return { file, added: true };
+  return registerHostMcp({
+    agentType: "kimi",
+    mcpEntry,
+    url,
+    nodeBin,
+    // 调用方给的就是最终那个配置目录,所以直接当 KIMI_CODE_HOME 交进去。
+    env: { KIMI_CODE_HOME: configDir },
+  });
 }

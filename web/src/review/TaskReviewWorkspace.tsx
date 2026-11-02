@@ -14,6 +14,7 @@ import { ChangeMetaBar } from "./ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "./ReviewDiffViewer.tsx";
 import { sharedTeamParent } from "./reviewModel.ts";
 import { BranchAcceptancePanel } from "./BranchAcceptancePanel.tsx";
+import { useWorkspaceCommitVersion } from "./workspaceCommit.ts";
 
 type ReviewData = {
   branch: string | null;
@@ -51,6 +52,7 @@ export function TaskReviewWorkspace({
   notify: (message: string) => void;
   onPostMergeReview?: () => void;
 }) {
+  const commitVersion = useWorkspaceCommitVersion(task.id);
   const [data, setData] = useState<ReviewData | null>(null);
   const [sharedBranch, setSharedBranch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -127,7 +129,7 @@ export function TaskReviewWorkspace({
       (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
     ).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [sharedParent?.id, task.id, task.updatedAt]);
+  }, [sharedParent?.id, task.id, task.updatedAt, commitVersion]);
 
   return (
     <section className="single-review-workspace">

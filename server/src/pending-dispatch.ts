@@ -56,6 +56,7 @@ export async function dispatchPendingMessage(
     const guards = claimed.map((current) => ({ current, guard: monitorWakeGuard(current) }));
     const started = await continueTask(message.taskId, texts.join("\n\n"), {
       ...deliveryOptions(claimed[0]!),
+      pendingMessageIds: claimed.map((current) => current.id),
       monitorWake: batchMonitorWake(claimed, checkpoints.map((checkpoint) => checkpoint.checkpoint)),
       ...(guards.some(({ guard }) => guard) ? {
         wakeGuard: async () => {

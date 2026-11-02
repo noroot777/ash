@@ -18,6 +18,7 @@ import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, 
 import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
+import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
@@ -265,27 +266,15 @@ async function* claudeStreamEvents(
       // 带 `level:"notice"` 而不是裸 error:重试期间回合仍然正常进行中,理由同上面
       // waitTimer 那段。真的重试耗尽,收尾的 result / synthetic 消息会照旧把失败报成
       // 故障级 error ——「最终失败了没有」由那条答,这里只负责把过程留在它发生的位置上。
-      if (ev.subtype === "api_retry") {
-        const attempt = Number(ev.attempt) || 0;
-        const max = Number(ev.max_retries) || 0;
-        const status = Number(ev.error_status) || 0;
-        // error 常常就是字符串 "unknown"(连接挂住、没有响应体),那时它不比「没有响应」
-        // 多说什么,别原样抬给用户看。
-        const reason = typeof ev.error === "string" && ev.error.trim() && ev.error !== "unknown" ? ev.error.trim() : "";
-        const cause = status
-          ? `上游返回 ${status}${reason ? ` ${reason}` : ""}`
-          : reason ? `上游报 ${reason}` : "上游没有响应";
-        const wait = Number(ev.retry_delay_ms) || 0;
-        const parts: string[] = [];
-        if (attempt) parts.push(max ? `第 ${attempt}/${max} 次` : `第 ${attempt} 次`);
-        if (wait) parts.push(`等 ${wait >= 1000 ? `${Math.round(wait / 1000)} 秒` : `${(wait / 1000).toFixed(1)} 秒`}`);
-        push({
-          kind: "error",
-          message: `${cause}，正在重试${parts.length ? `（${parts.join("，")}）` : ""}`,
-          level: "notice",
-          affectsTurn: false,
-        });
+      // 措辞与子智能体那一路共用一处(claude-retry-notice.ts):同一条原始事件有两个入口。
+      if (isClaudeRetry(ev)) {
+        push({ kind: "error", message: claudeRetryMessage(ev), level: "notice", affectsTurn: false });
       }
+      // **这一条紧跟在上面那句重试提示后面**,而它只是把 CLI 会话身份报一遍 —— 不是上游回话了。
+      // 停滞看门狗因此不能把「不是错误」当成「有进展」:那样每一条重试都被自己后面这一句当场
+      // 解除,一条永远连不上的 Claude 会话于是报警和熔断都不会发生(第 2 轮审查 F1,已实测)。
+      // 判据共用 `@ash/shared/waiting` 的 `resumesWaiting`(session/context/system 都不算回话),
+      // 落点在 ../turn-stall.ts。
       push({ kind: "session", cliSessionId: ev.session_id });
     } else if (ev.type === "assistant" && ev.message?.content) {
       flushText(); // settle this message's text-delta tail before its tools

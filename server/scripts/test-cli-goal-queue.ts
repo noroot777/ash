@@ -29,7 +29,7 @@ const { claimQueueSeat } = await import("../src/queue-seat.js");
 const { queueBlockers } = await import("../src/queues.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { taskStartStatus } = await import("../src/task-start-status.js");
-const { claimTurn, isTurnClaimed, releaseTurn, stopTask } = await import("../src/runs.js");
+const { claimOwnTurn, claimTurn, isTurnClaimed, releaseTurn, stopTask } = await import("../src/runs.js");
 await ensureSchema();
 
 const invocations = new Map<string, RunOpts[]>();
@@ -151,13 +151,22 @@ try {
         const endpoint = path === "retry-turn" ? path : status === "failed" ? "retry" : "run";
         const response = await request(`/tasks/${taskId}/${endpoint}`);
         const result = await response.json();
-        assert.equal(response.status, 202, JSON.stringify(result));
+        // /run 与 /retry 走 seatThenStart,那里 **202 的含义是「这一轮真的起来了」**(启动
+        // 回执,见 task-start-receipt.ts:回执在消费循环 adoptRun 的那一刻盖下)。所以
+        // fixture 把起跑掐掉的两档只能是 409 + 「尚未启动」那句真话,谎报 202 正是那道闸要
+        // 拦的事;回滚照旧在下面查。/retry-turn 是交接档:它连错误处理一起把 continueTask
+        // 交出去,起跑失败发生在 202 之后,由时间线交代,所以仍是 202。
+        const gatedByReceipt = path === "run" && phase !== "success";
+        assert.equal(response.status, gatedByReceipt ? 409 : 202, `${taskId} /${endpoint}: ${JSON.stringify(result)}`);
+        if (gatedByReceipt) assert.deepEqual(result.blockedBy, ["任务未通过启动检查，尚未启动，请稍后重试"]);
         if (path === "retry-turn") assert.equal(result.mode, "resume");
       } else {
-        assert.equal(claimTurn(taskId), true);
+        // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+        const directTurn = claimOwnTurn(taskId);
+        assert.ok(directTurn);
         await setTaskStatus(taskId, "queued");
         assert.equal(taskStartStatus(await row(taskId)), status);
-        direct = handDuePendingMessageToRun(taskId, { turnHeld: true, freezeGuard: false });
+        direct = handDuePendingMessageToRun(taskId, { turnHeld: directTurn, freezeGuard: false });
       }
       if (phase === "success") {
         const running = await active(taskId);
@@ -204,13 +213,14 @@ try {
         if (delivery === "legacy") await deliverPendingMessages(taskId);
         else {
           await db.update(groups).set({ paused: true }).where(eq(groups.id, taskId));
-          assert.equal(claimTurn(taskId), true);
+          const handoffTurn = claimOwnTurn(taskId);
+          assert.ok(handoffTurn);
           const claim = await claimQueueSeat(taskId);
           assert.equal(claim.ok, true);
           if (!claim.ok) assert.fail("handoff queue seat unavailable");
           const seat = claim.seat;
           assert.equal(seat?.prevStatus, status);
-          handoff = handDuePendingMessageToRun(taskId, { turnHeld: true, freezeGuard: false })
+          handoff = handDuePendingMessageToRun(taskId, { turnHeld: handoffTurn, freezeGuard: false })
             .finally(async () => { await seat?.release(); });
         }
       }
@@ -346,7 +356,8 @@ try {
       await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, siblingId));
       failStarts.set(taskId, phase);
       const start = await request(`/tasks/${taskId}/${status === "failed" ? "retry" : "run"}`);
-      assert.equal(start.status, 202);
+      // 同上:起跑被掐掉 = 启动回执没盖上,/run 与 /retry 只能回 409「尚未启动」。
+      assert.equal(start.status, 409, JSON.stringify(await start.json()));
       const restored = await waitFor(taskId, (task) => (failures.get(taskId) ?? 0) > 0 && !isTurnClaimed(taskId) && task.status === status);
       assertPreserved(restored, agentType, saved, foreign);
       assert.equal(restored.followUpFrom, null);
@@ -388,7 +399,10 @@ try {
         releaseTurn(taskId);
       }
       await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, siblingId));
-      assert.equal((await request(`/tasks/${taskId}/${status === "failed" ? "retry" : "run"}`)).status, 202);
+      // 作废的目标恢复被准入挡回时**一个 CLI 都不起**(下面 calls 不变那条),所以这颗按钮
+      // 同样拿不到启动回执:409「尚未启动」才是真话。
+      const stale = await request(`/tasks/${taskId}/${status === "failed" ? "retry" : "run"}`);
+      assert.equal(stale.status, 409, JSON.stringify(await stale.json()));
       const restored = await waitFor(taskId, (task) => task.status === status && !isTurnClaimed(taskId));
       const message = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, result.message.id)))[0]!;
       assert.equal(message.status, "canceled", "stale recovery is rejected, not delivered or retried forever");

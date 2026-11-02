@@ -3,6 +3,7 @@ import { STRICT_DONE_PROTOCOL } from "./settle-status.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { railStalledAtRun } from "./workflows.js";
 import { EXECUTOR_REGRESSION_RECORDING } from "@ash/shared/free-workflow";
+import { craftRulesFor, type CraftContext } from "./craft-rules.js";
 
 // 单任务每一轮 prompt 上下拼的那些**固定措辞**:前言、完成协议、续聊尾巴、工作目录
 // 重建的告警。跟 team/prompts.ts 同一个位置 —— orchestrator.ts 只留「什么时候拼哪一段」
@@ -13,6 +14,16 @@ import { EXECUTOR_REGRESSION_RECORDING } from "@ash/shared/free-workflow";
 // needs input it can still ask, and the user replies via continueTask (resume).
 export const AUTONOMY =
   "你在一个无人值守的自动化环境中运行，没有人能实时回复你。请尽量自主完成：遇到多个合理方案时，选最稳妥的一个并在结果中说明假设与取舍；不要停下来等待人工确认，除非信息确实不足以继续。\n\n";
+// 规划回合（`/plan on`）的正文。整条消息只有用户正文加这一句 —— 完成协议、方向身份、
+// 审查提醒一概不拼，这是这条路一贯的形态（见 orchestrator.ts 的 `planning` 分支）。
+//
+// 产出质量规则**必须经过这里**：一条全新会话的第一条消息完全可能就是规划回合（用户先
+// `/plan on` 讨论方案、再 `/plan off` 动手），而动手那一轮走的是同一条会话的续跑、按
+// 「规则只贴一次」不会再贴 —— 不接这一处，「先规划后实施」整条路一个字都收不到。
+export const PLANNING_TURN = (craft: CraftContext, userText: string) =>
+  craftRulesFor(craft) + userText +
+  "\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。";
+
 // Prefix for an agent invited into an existing task via @-mention. It joins in
 // the SAME working directory, so it should read the current state before acting.
 export const COLLAB_INVITE =

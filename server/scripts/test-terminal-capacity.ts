@@ -72,7 +72,7 @@ const { dbClient } = await import("../src/db/index.js");
 const projectId = "terminal-capacity";
 const windows = process.platform === "win32";
 const keepAlive = windows ? "Start-Sleep -Seconds 120" : "sleep 120";
-const command = { id: "keep", name: "keep", command: keepAlive, restartCommand: null };
+const command = { id: "keep", name: "keep", command: keepAlive, restartCommand: null, stopCommand: null };
 
 async function waitExit(sessionId: string): Promise<void> {
   const deadline = Date.now() + 15_000;
@@ -108,6 +108,9 @@ try {
     assert.equal((await restartCommand(projectId, temporary, command)).status, 201,
       "restart must replace its own record even when all sixteen slots are occupied");
     assert.notEqual(manager.liveCommandSession(projectId, command.id)?.id, previous.id);
+    // 这条命令的进程组是 ash 自己起的,停止时 terminate 把成员列全了、组也确实探不到了,
+    // 所以照旧是干净的「已停止」 —— 不留历史记录,这个数稳定在 16(判据见
+    // terminal-stop-notices.ts 的 processStopVerdict ②)。
     assert.equal(manager.listForProject(projectId).length, 16);
     assert.deepEqual((await stopCommand(projectId, command.id)).body, { stopped: true });
     assert.equal((await startCommand(projectId, temporary, command)).status, 201,
@@ -157,7 +160,7 @@ try {
   }
 
   const firstRecord = manager.listForProject(projectId).find((session) => session.commandId === "done-0")!;
-  assert.deepEqual(await manager.destroy(firstRecord.id, projectId), { ok: true });
+  assert.equal((await manager.destroy(firstRecord.id, projectId)).ok, true);
   const cancelled = manager.reserveCommand(projectId, "cancelled");
   assert.equal(manager.hasSlotForCommand(projectId, "extra"), false);
   cancelled.release();
@@ -184,8 +187,27 @@ try {
   assert.equal(manager.liveCommandSession(projectId, command.id)?.id, surviving.id);
 
   const secondRecord = manager.listForProject(projectId).find((session) => session.commandId === "done-1")!;
-  assert.deepEqual(await manager.destroy(secondRecord.id, projectId), { ok: true });
-  await assert.rejects(manager.createAsync(projectId, temporary, { shell: join(temporary, "missing-shell.exe") }));
+  assert.equal((await manager.destroy(secondRecord.id, projectId)).ok, true);
+  // 起不来的 shell:两边的形状不一样,断言得各写一份(2026-10-26 实测)。
+  const brokenShell = join(temporary, "missing-shell.exe");
+  if (windows) {
+    // Windows 走隔离启动(windowsPty):进程起不来当场 reject,名额跟着退回去。
+    await assert.rejects(manager.createAsync(projectId, temporary, { shell: brokenShell }));
+  } else {
+    // POSIX 上 pty.spawn **不校验**可执行文件(node-pty 1.1.0 实测:fork 成功、pid 也有,
+    // 子进程 execvp 失败后带 exitCode=1 退出),所以这里拿到的是一条「生下来就死了」的
+    // 会话,而不是一个异常 —— 它照常占着名额,直到被回收。原先这里不分平台一律要求
+    // reject,在 macOS 上从写下那天(4c92aa33)就没绿过,而门禁只跑前端那套回归,
+    // 没人撞见(本轮发现)。真正要钉的是名额账:生下来就死的会话回收后名额必须回来。
+    const stillborn = await manager.createAsync(projectId, temporary, { shell: brokenShell });
+    const deadline = Date.now() + 15_000;
+    while (manager.get(stillborn.id, projectId)?.exitCode === null) {
+      assert.ok(Date.now() < deadline, "起不来的 shell 应当立刻退出,而不是挂着");
+      await delay(25);
+    }
+    assert.notEqual(manager.get(stillborn.id, projectId)?.exitCode, 0, "execvp 失败要带非零退出码");
+    assert.equal((await manager.destroy(stillborn.id, projectId)).ok, true);
+  }
   assert.equal(manager.hasSlotForCommand(projectId, "after-failure"), true,
     "failed startup must release its reserved slot");
   assert.equal((await startCommand(projectId, temporary, { ...command, id: "after-failure" })).status, 201);
@@ -193,7 +215,7 @@ try {
 
   for (const commandId of ["done-2", "done-3"]) {
     const record = manager.listForProject(projectId).find((session) => session.commandId === commandId)!;
-    assert.deepEqual(await manager.destroy(record.id, projectId), { ok: true });
+    assert.equal((await manager.destroy(record.id, projectId)).ok, true);
   }
   const duplicateCommand = { ...command, id: "duplicates" };
   const duplicateSessions = [];
@@ -202,7 +224,7 @@ try {
       command: { id: duplicateCommand.id, name: duplicateCommand.name, script: keepAlive },
     }));
   }
-  for (const session of duplicateSessions) assert.deepEqual(await manager.terminate(session.id, projectId), { ok: true });
+  for (const session of duplicateSessions) assert.equal((await manager.terminate(session.id, projectId)).ok, true);
   assert.equal(manager.listForProject(projectId).length, 16);
   const duplicateReservation = manager.reserveCommand(projectId, duplicateCommand.id);
   try {

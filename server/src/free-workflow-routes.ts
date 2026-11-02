@@ -11,7 +11,7 @@ import {
   startManualFreeReviewRepair,
 } from "./free-workflow.js";
 import { startFreeReviewDebate, submitDebateStatement } from "./free-review-debate.js";
-import { noteRejectedUserAction } from "./user-action-rejection.js";
+import { noted } from "./user-action-rejection.js";
 import {
   disputeFreeReview,
   disputeInputOf,
@@ -89,20 +89,17 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
   api.post("/tasks/:id/free-workflow/review", async (c) => {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
+    // 挡回的那一刻往任务历史写一条(`noted`):只弹 toast 的话,用户刷新页面后看不出
+    // 「点过、没成、为什么」—— 2026-10-26 他因此两次误判(以为按钮坏了 / 以为任务已经
+    // 跑完)。下面每颗**用户点的**按钮同理;agent 自己调的那两个口子不记,理由见 noted。
     try { return c.json(await startFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>(), { holdTurn: true, actor: actorOf(c) }), 201); }
-    catch (error) {
-      // 挡回的那一刻往时间线写一条:只弹 toast 的话,用户刷新页面后看不出「点过、没成、
-      // 为什么」—— 2026-10-26 他因此两次误判(以为按钮坏了 / 以为任务已经跑完)。
-      const body = errorBody(error);
-      await noteRejectedUserAction(c.req.param("id"), "派审查", body.error);
-      return c.json(body, 409);
-    }
+    catch (error) { return c.json(await noted(c.req.param("id"), "派审查", errorBody(error)), 409); }
   });
   api.post("/tasks/:id/free-workflow/post-merge-review", async (c) => {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
     try { return c.json(await startPostMergeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>(), actorOf(c)), 201); }
-    catch (error) { return c.json(errorBody(error), 409); }
+    catch (error) { return c.json(await noted(c.req.param("id"), "派审查", errorBody(error)), 409); }
   });
   api.post("/tasks/:id/free-workflow/post-merge-review/repair", async (c) => {
     const blocked = await blockedByHandoff(c);
@@ -110,13 +107,13 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     try {
       const body = await c.req.json<{ runId?: string }>();
       return c.json(await createPostMergeRepairTask(c.req.param("id"), body.runId ?? ""), 201);
-    } catch (error) { return c.json(errorBody(error), 409); }
+    } catch (error) { return c.json(await noted(c.req.param("id"), "建修复任务", errorBody(error)), 409); }
   });
   api.post("/tasks/:id/free-workflow/review/repair", async (c) => {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
     try { return c.json(await startManualFreeReviewRepair(c.req.param("id"), { holdTurn: true })); }
-    catch (error) { return c.json(errorBody(error), 409); }
+    catch (error) { return c.json(await noted(c.req.param("id"), "按审查意见修复", errorBody(error)), 409); }
   });
 
   // ── 驳回与辩论 ──
@@ -147,7 +144,7 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
         disputeResolutionNoteOf(body.note),
       );
       return c.json({ ...result, state: await freeWorkflowState(c.req.param("id")) });
-    } catch (error) { return c.json(errorBody(error), 409); }
+    } catch (error) { return c.json(await noted(c.req.param("id"), "裁定驳回", errorBody(error)), 409); }
   });
   api.post("/tasks/:id/free-workflow/review/debate", async (c) => {
     const blocked = await blockedByHandoff(c);
@@ -156,7 +153,7 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
       const body = await c.req.json<{ exchanges?: unknown }>().catch(() => ({} as { exchanges?: unknown }));
       const started = await startFreeReviewDebate(c.req.param("id"), body, { holdTurn: true });
       return c.json({ ...started, state: await freeWorkflowState(c.req.param("id")) }, 201);
-    } catch (error) { return c.json(errorBody(error), 409); }
+    } catch (error) { return c.json(await noted(c.req.param("id"), "让双方辩论", errorBody(error)), 409); }
   });
   api.post("/tasks/:id/free-workflow/review/debate/reply", async (c) => {
     const blocked = await blockedByHandoff(c);
@@ -174,8 +171,9 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
     try { return c.json(await reserveFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>(), actorOf(c))); }
-    catch (error) { return c.json(errorBody(error), 409); }
+    catch (error) { return c.json(await noted(c.req.param("id"), "预约派审", errorBody(error)), 409); }
   });
+  // 取消预约刻意不记:取消是清理动作,它失败时界面上那张预约卡还在,原因看得见。
   api.delete("/tasks/:id/free-workflow/review-reservation", async (c) => {
     try { return c.json(await cancelFreeReviewReservation(c.req.param("id"))); }
     catch (error) { return c.json(errorBody(error), 409); }

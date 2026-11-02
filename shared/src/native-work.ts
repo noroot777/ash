@@ -13,7 +13,11 @@ export function nativeWorkStatus(value: unknown): NativeWorkStatus {
 export type NativeAgentActivity =
   | { kind: "text" | "thinking"; text: string }
   | { kind: "tool"; name: string; detail?: string }
-  | { kind: "error"; message: string }
+  // `level:"notice"` 跟主会话那一层同义(见 shared/src/events.ts 的 error 变体):
+  // **上游在重试、这一轮还在正常进行**,不是执行故障。子线程也必须带得住这一位 ——
+  // 少了它,一条「Reconnecting…」和一条真失败在包装里长得一模一样,读端(回合级停滞
+  // 看门狗 server/src/turn-stall.ts)只能二选一地猜。
+  | { kind: "error"; message: string; level?: "notice" }
   // source/ref/path 的语义见 shared/src/events.ts 的同名字段(子智能体那一层同样要带:
   // 抽屉里的正文跟主会话走同一套配对,少一个字段就配不上)。
   // `field` = 这条记录属于哪份**快照式**正文:子智能体的 message / 返回结果 result(它们
@@ -33,6 +37,10 @@ export type NativeWorkEvent = (
   // messageId:这份 message 快照在原生协议里的身份(codex 的 item.id)。两条**不同**的完整
   // 消息哪怕后一条是前一条的文字延长,也是两份独立快照 —— 文字前缀不能证明同一份正文,
   // 图片账据此换代重拍(第 9 轮复审 R1 distinctPrefixMessages)。
+  // 这一类是**状态投影**,不是产出的载体:它驱动侧栏/抽屉那张子智能体卡片(身份、档位、进度)。
+  // 同一份定位写在下面的 `isVisibleExecutionEvent`(只有顶层 `call` 算执行过程里的一步),
+  // 以及 `waiting.ts` 的 `producesWork`(这一类一律不算「上游回话了」)。子线程真说了话走的是
+  // 上面那个 `activity`,生产侧对同一条原始通知成对 push。
   | { type: "agent"; id: string; nativeId?: string; parentId?: string; title?: string; description?: string;
       status: NativeWorkStatus; closed?: boolean; message?: string; messageId?: string; result?: string;
       model?: string; requestedModel?: string; effort?: string; requestedEffort?: string; agentType?: string }

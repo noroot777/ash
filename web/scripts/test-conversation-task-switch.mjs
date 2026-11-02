@@ -54,6 +54,9 @@ try {
       const output = /^\/api\/sessions\/([^/]+)\/output$/.exec(path);
       if (output) return route.fulfill({ body: outputFor(output[1]) });
       if (/^\/api\/sessions\/[^/]+\/trace$/.test(path)) return route.fulfill({ json: [] });
+      // 任务历史里的挡回记录:生产组件**无条件**读它(见 useRejectionNotices.ts),这一屏
+      // 不验它,给一份空的就行。
+      if (/^\/api\/tasks\/[^/]+\/notices$/.test(path)) return route.fulfill({ json: { notices: [], remedy: null } });
       failures.push(`unexpected API request: ${path}`);
       await route.fulfill({ status: 500, json: { error: "unexpected request" } });
     });

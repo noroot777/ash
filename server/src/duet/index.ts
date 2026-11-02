@@ -9,7 +9,8 @@ import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
 import { setTaskStatus } from "../status.js";
-import { takeCanceled, CanceledRun, claimTurn, reclaimTurn, releaseTurn } from "../runs.js";
+import { takeCanceled, CanceledRun, claimOwnTurn, reclaimTurn, releaseTurn } from "../runs.js";
+import type { TurnIdentity } from "../runs.js";
 import { isAcceptingTask } from "../acceptance-lock.js";
 import { reopenAcceptedStage } from "../task-stage.js";
 import { taskWorkspace } from "../task-workspace.js";
@@ -31,12 +32,15 @@ import { runEnvForOwner } from "../auth/run-env.js";
 // 正在合并/清理 worktree 时 loadBase/taskWorkspace 还能与它并发跑。
 //   turnHeld  = 入口在最后一个 await 之后已原子占位(并已镜像检查过验收锁),这里接管;
 //   自己占    = 占不到 → 确有回合在跑;占到后再镜像检查验收锁,撞上就退位。
-// 返回是否取得所有权:false = 一步都没跑,调用方据此回 409 / 不消费调度班次。
-function acquireDuetTurn(taskId: string, turnHeld?: boolean): boolean {
-  if (turnHeld) { reclaimTurn(taskId, "duet"); return true; }
-  if (!claimTurn(taskId, "duet")) return false;
-  if (isAcceptingTask(taskId)) { releaseTurn(taskId); return false; }
-  return true;
+// 返回**取得的那把锁的身份**:null = 一步都没跑,调用方据此回 409 / 不消费调度班次。
+// 身份要一路带到 finally 的释放点 —— 按任务 id 还锁会撤掉人工放开之后那一轮的互斥
+// (本轮审查 F1,理由在 turn-lock.ts 的 `endOwnTurn`)。
+function acquireDuetTurn(taskId: string, turnHeld?: TurnIdentity | null): TurnIdentity | null {
+  if (turnHeld) return reclaimTurn(taskId, turnHeld, "duet");
+  const turn = claimOwnTurn(taskId, "duet");
+  if (!turn) return null;
+  if (isAcceptingTask(taskId)) { releaseTurn(taskId, turn); return null; }
+  return turn;
 }
 
 async function setStatus(taskId: string, status: TaskStatus) {
@@ -211,9 +215,10 @@ async function loadBase(taskId: string, actingUserId?: string | null) {
 // (A-first) → optional consensus gate G1 → conclusion.
 export async function runDuet(
   taskId: string,
-  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
 ): Promise<boolean> {
-  if (!acquireDuetTurn(taskId, opts.turnHeld)) return false;
+  const turn = acquireDuetTurn(taskId, opts.turnHeld);
+  if (!turn) return false;
   try {
     const base = await loadBase(taskId, opts.actingUserId);
     const { cfg, exA, exB, cwd, runOwner } = base;
@@ -244,7 +249,7 @@ export async function runDuet(
   } catch (err) {
     failDuet(taskId, err);
   } finally {
-    releaseTurn(taskId);
+    releaseTurn(taskId, turn);
   }
   return true; // 取得所有权并跑完了(成败已落进任务状态),对调用方就是「真的启动过」
 }
@@ -255,9 +260,10 @@ export async function runDuet(
 // and re-run (resuming the same CLI session so context is retained).
 export async function resumeDuet(
   taskId: string,
-  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
 ): Promise<boolean> {
-  if (!acquireDuetTurn(taskId, opts.turnHeld)) return false;
+  const turn = acquireDuetTurn(taskId, opts.turnHeld);
+  if (!turn) return false;
   // 交棒给 runDuet 时由它释放:两边都释放会把**下一次**运行占的锁误删。
   let handedOff = false;
   try {
@@ -276,7 +282,7 @@ export async function resumeDuet(
     const failedIndex = rows.findLastIndex((row) =>
       !row.type && ["A", "B", "impl", "review"].includes(row.speaker));
     // 交棒也要把「这次是谁点的」带过去,否则 fresh 那一路又静默退回任务归属人。
-    if (failedIndex < 0) { handedOff = true; void runDuet(taskId, { turnHeld: true, actingUserId: opts.actingUserId }); return true; } // no completed turn → fresh
+    if (failedIndex < 0) { handedOff = true; void runDuet(taskId, { turnHeld: turn, actingUserId: opts.actingUserId }); return true; } // no completed turn → fresh
     const failedTurn = rows[failedIndex];
     rows.splice(failedIndex, 1); // drop the failed turn; it will be re-run
     writeFileSync(tpath, rows.length ? rows.map((r) => JSON.stringify(r)).join("\n") + "\n" : "");
@@ -352,7 +358,7 @@ export async function resumeDuet(
   } catch (err) {
     failDuet(taskId, err);
   } finally {
-    if (!handedOff) releaseTurn(taskId);
+    if (!handedOff) releaseTurn(taskId, turn);
   }
   return true;
 }
@@ -413,11 +419,12 @@ async function genDuetTitle(
 export async function resumeAtGate(
   taskId: string,
   action: GateAction,
-  opts: { turnHeld?: boolean; actingUserId?: string | null } = {},
+  opts: { turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
 ): Promise<boolean> {
   // 占不到 = 确有回合在跑(活着的 duet 停在闸口时也占着这把锁,那种情况 resolveGate
   // 已经就地处理了,根本走不到这儿)。
-  if (!acquireDuetTurn(taskId, opts.turnHeld)) return false;
+  const turn = acquireDuetTurn(taskId, opts.turnHeld);
+  if (!turn) return false;
   try {
     const base = await loadBase(taskId, opts.actingUserId);
     const sess = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
@@ -455,7 +462,7 @@ export async function resumeAtGate(
   } catch (err) {
     failDuet(taskId, err);
   } finally {
-    releaseTurn(taskId);
+    releaseTurn(taskId, turn);
   }
   return true;
 }

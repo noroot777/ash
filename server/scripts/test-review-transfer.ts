@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { db, tasks, schema, runs, teardown, until } from "./monitors-fixture.js";
+import { db, dbClient, tasks, schema, runs, teardown, until } from "./monitors-fixture.js";
 import { setupRegressionReviews } from "./regression-review-fixture.js";
 
 const { importHandoff } = await import("../src/handoff-import.js");
@@ -44,8 +44,10 @@ try {
       if (existingSession) await db.insert(schema.sessions).values({ id: `old-${imported.taskId}`, taskId: imported.taskId,
         role: "single", agentType: "claude", executor: "test", cliSessionId: "old-single", startedAt: new Date().toISOString() });
       const old = await row(imported.taskId);
-      assert(runs.claimTurn(imported.taskId));
-      await resumeOrRunTask(imported.taskId, { reason: existingSession ? "wake" : "run", turnHeld: true });
+      // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+      const importedTurn = runs.claimOwnTurn(imported.taskId);
+      assert(importedTurn);
+      await resumeOrRunTask(imported.taskId, { reason: existingSession ? "wake" : "run", turnHeld: importedTurn });
       assert.equal((await row(imported.taskId)).directionEpoch, old.directionEpoch);
       assert.equal((await row(imported.taskId)).resumePrompt, null);
       assert.equal(runs.isTurnClaimed(imported.taskId), false);
@@ -79,30 +81,38 @@ try {
 
   const ordinary = await importHandoff({ ...manifest, transferId: "checkpoint-cas-race",
     task: { ...manifest.task, id: "checkpoint-cas-race", waitOrigins: { checkpoint: "ordinary" } } });
-  const update = db.update;
+  const transaction = dbClient.transaction;
   let raced = false;
-  db.update = function (table: any) {
-    const builder = update.call(this, table);
-    const set = builder.set.bind(builder);
-    builder.set = function (patch: any) {
-      if (!raced && table === tasks && patch.resumePrompt === null) {
+  dbClient.transaction = async function (...args) {
+    const active = await transaction.apply(dbClient, args);
+    const execute = active.execute.bind(active);
+    active.execute = async (statement) => {
+      if (!raced && typeof statement !== "string" && /^update "tasks" set /i.test(statement.sql)
+        && /"resume_prompt" = \?/i.test(statement.sql.split(" where ")[0]!)
+        && Array.isArray(statement.args) && statement.args.includes(null) && statement.args.includes(ordinary.taskId)) {
         raced = true;
-        const query = set(patch);
-        const where = query.where.bind(query);
-        query.where = () => where(eq(tasks.id, "checkpoint-already-taken"));
-        return query;
+        return execute({ ...statement, args: statement.args.map((value) =>
+          value === ordinary.taskId ? "checkpoint-already-taken" : value) });
       }
-      return set(patch);
+      return execute(statement);
     };
-    return builder;
-  } as typeof db.update;
+    return active;
+  };
   const old = await row(ordinary.taskId);
-  assert(runs.claimTurn(ordinary.taskId));
-  try { await resumeOrRunTask(ordinary.taskId, { reason: "run", turnHeld: true }); }
-  finally { db.update = update; }
+  const ordinaryTurn = runs.claimOwnTurn(ordinary.taskId);
+  assert(ordinaryTurn);
+  try { await resumeOrRunTask(ordinary.taskId, { reason: "run", turnHeld: ordinaryTurn }); }
+  finally { dbClient.transaction = transaction; }
   assert(raced);
-  assert.equal((await row(ordinary.taskId)).directionEpoch, old.directionEpoch);
+  const rejected = await row(ordinary.taskId);
+  assert.equal(rejected.directionEpoch, old.directionEpoch);
+  assert.equal(rejected.resumePrompt, old.resumePrompt);
+  assert.equal(rejected.resumePromptAuto, old.resumePromptAuto);
+  assert.equal(rejected.resumePromptGeneration, old.resumePromptGeneration);
   assert.equal(runs.isTurnClaimed(ordinary.taskId), false);
+  assert.equal(runs.isRunning(ordinary.taskId), false);
+  assert.deepEqual(await db.select().from(schema.sessions).where(eq(schema.sessions.taskId, ordinary.taskId)), []);
+  assert.deepEqual(await db.select().from(schema.scheduledMessages).where(eq(schema.scheduledMessages.taskId, ordinary.taskId)), []);
   console.log("✓ a rejected checkpoint CAS releases its own reservation without starting a different input");
 
   const review = await open("preset");

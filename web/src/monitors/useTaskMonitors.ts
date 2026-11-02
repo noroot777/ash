@@ -6,7 +6,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MonitorRecovery, MonitorWakeTarget, TaskMonitor } from "@ash/shared/monitor";
 import { ApiError, api } from "../lib/api.ts";
+import { catchUpAbortKind } from "../lib/catchUp.ts";
 import { useServerEvents } from "../lib/events.ts";
+import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 
 export const MONITOR_ENDED_LABEL: Record<string, string> = {
   exited: "命令自己跑完了",
@@ -117,8 +119,16 @@ export function useTaskMonitors(taskId: string) {
    */
   const stamp = useRef({ gen: 0, seq: 0, taskId: "" });
 
-  const reload = useCallback(async () => {
-    if (stamp.current.taskId !== taskId) return;
+  /**
+   * 读一趟。**重试、单飞、代次、超时掐断都不在这里** —— 它们在追平层(lib/catchUp.ts),
+   * 这个函数只回答「这一份能不能写进 state」和「这一趟算不算读到了」。
+   *
+   * 上一版这里是自己一套:读失败就停在那儿不重试(于是一次抖动之后面板永远停在报错上,
+   * 服务端恢复了也不会自己回来),连上只认 false→true 那一下,断线不作废在途那一发
+   * —— 第 5 轮审查 N1 点到的五种写法之一。
+   */
+  const read = useCallback(async (signal: AbortSignal): Promise<boolean> => {
+    if (stamp.current.taskId !== taskId) return true;
     const gen = stamp.current.gen;
     const seq = ++stamp.current.seq;
     const mine = () => stamp.current.gen === gen && stamp.current.seq === seq;
@@ -130,8 +140,8 @@ export function useTaskMonitors(taskId: string) {
       // 知道」，必须如实留成 null——上一版一律 catch 成 null 并当作 `pending:false`，等于
       // 把暂态读失败说成「确实没有待恢复的」（第 7 轮审查）。
       const [next, pending] = await Promise.all([
-        api.taskMonitors(taskId),
-        api.monitorRecovery(taskId).then(
+        api.taskMonitors(taskId, signal),
+        api.monitorRecovery(taskId, signal).then(
           (value): MonitorRecovery | null => value,
           (reason): MonitorRecovery | null => (
             reason instanceof ApiError && reason.status === 404
@@ -140,39 +150,53 @@ export function useTaskMonitors(taskId: string) {
           ),
         ),
       ]);
-      if (!mine()) return;
+      if (!mine()) return true;
       setMonitors(next);
       setRecovery(pending);
       // 只收走自己那条。用户动作的回执不归它管——抹掉就等于那句话只闪了一下。
       setFailure((current) => (current?.kind === "list" ? null : current));
       setLoadedTaskId(taskId);
+      return true;
     } catch (reason) {
-      if (!mine()) return;
+      if (!mine()) return true;
+      // 追平层掐的那一发不是服务端出错:换了代次的那一种一个字都不往面板上贴,等到点的
+      // 那一种照实说(它的 reason 本身就是人话)—— 理由见 catchUpAbortKind。两种都返回
+      // 「没读到」,让追平层按自己的节奏接着来。
+      if (catchUpAbortKind(signal, reason) === "stale") return false;
       failed("list", reason);
       // 读失败也算「这一轮读完了」：`ready` 说的是「这一轮有没有结束」而不是「有没有成功」
       // （跟 useConversation 同义）。少了这句，读失败的任务会永远停在「还没读到」。
       setLoadedTaskId(taskId);
+      return false;
     }
   }, [failed, taskId]);
+  const catchUp = useCatchUp(read, taskId);
+  /**
+   * 「该重读了」。返回的 promise 在这一趟落地后兑现 —— stop/start 收尾处 `await reload()`
+   * 等的就是它,所以取**抢占式**那一个:那两处是人正等着的,不该排在一发背景读取后面
+   * (见 CatchUp.runNow)。
+   */
+  const reload = catchUp.runNow;
 
   useEffect(() => {
     // 换任务：在途的那些请求当场作废，它们回来时已经不是「这个任务的列表」了。
+    // (追平层那一侧也换了代次并掐断在途那一发;这里的 stamp 兜住「掐之前就已经 resolve」。)
     stamp.current = { gen: stamp.current.gen + 1, seq: 0, taskId };
     setMonitors([]);
     setRecovery(null);
     setFailure(null);
     setStoppingIds(new Set());
-    void reload();
-  }, [reload, taskId]);
+    void catchUp.run();
+  }, [catchUp, taskId]);
 
   // 权威信号只有服务端这一条：起了、推了一批、结束了，都发 task.monitors。
   const connected = useServerEvents((event) => {
     if (event.type !== "task.monitors" || event.taskId !== taskId) return;
-    void reload();
+    void catchUp.run();
   });
 
   /**
-   * **每次连上都重新对账一遍**（第 11 轮审查 F2）。
+   * **每次连上都重新对账一遍**（第 11 轮审查 F2）,**断线就把这一代次作废**（第 5 轮 N1）。
    *
    * 「又连上了」不等于「这份快照还完整」：事件流没有历史回放（server/src/routes.ts 只订阅
    * 当前 bus、不带事件 id、没有 Last-Event-ID），断线期间起的哨兵、结束的哨兵、变化的恢复
@@ -180,14 +204,9 @@ export function useTaskMonitors(taskId: string) {
    * 断线重连 + 真页面实测：open 次数增加、请求数一条没多、卡片数不变）。
    *
    * 首次连上也要对一次：挂载时那一发列表请求和事件流的建立是并发的，中间那段的事件同样
-   * 没人接。重读走的是同一套 gen/seq 保护，旧响应盖不了新的。
+   * 没人接。两件事统一在 useCatchUpLink 里接线,别在这里手写。
    */
-  const linked = useRef(connected);
-  useEffect(() => {
-    const was = linked.current;
-    linked.current = connected;
-    if (connected && !was) void reload();
-  }, [connected, reload]);
+  useCatchUpLink(catchUp, connected);
 
   const stop = useCallback(async (monitorId: string) => {
     const gen = stamp.current.gen;

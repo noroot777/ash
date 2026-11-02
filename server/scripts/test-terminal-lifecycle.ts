@@ -48,6 +48,7 @@ async function restartAcrossLifecycle(scenario: "closing" | "deleted" | "rollbac
   const command = {
     id: "service", name: "service", command: keepAlive,
     restartCommand: windows ? `[IO.File]::WriteAllText('${escaped}', 'INVALID')` : `printf INVALID > '${escaped}'`,
+    stopCommand: null,
   };
   const stopped = deferred();
   const resume = deferred();

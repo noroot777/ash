@@ -67,7 +67,7 @@ try {
     }
     await reply([]);
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/notes-upload.html`);
+  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/notes-panel.html`);
 
   const pasteInto = async (name) => {
     await page.locator(".note-editor-preview").click();

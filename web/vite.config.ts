@@ -5,13 +5,15 @@ import { dirname } from "node:path";
 import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { ashBackendUrl, pageTokenPlugin } from "./vite/page-token.ts";
 
 const require = createRequire(import.meta.url);
 // npm workspace 的字体包真实路径在主仓库 node_modules，worktree 默认白名单无法覆盖。
 const interPackageRoot = dirname(require.resolve("@fontsource-variable/inter/package.json"));
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  // 真人动作凭据:dev / preview 交出的文档上也得有(理由见 vite/page-token.ts)。
+  plugins: [react(), tailwindcss(), pageTokenPlugin()],
   server: {
     // 端口不写死。两件事都得让开：
     // ① ash 起预览时会借一个空闲端口用环境变量 PORT 递进来（server/src/preview.ts 的
@@ -32,12 +34,13 @@ export default defineConfig({
     },
     proxy: {
       "/preview": {
-        target: process.env.ASH_PROXY ?? process.env.HARNESS_PROXY ?? "http://localhost:4317",
+        target: ashBackendUrl(),
         changeOrigin: false,
         ws: true,
       },
       "/api": {
-        target: process.env.ASH_PROXY ?? process.env.HARNESS_PROXY ?? "http://localhost:4317",
+        // 凭据也从这个后端取(同一个实例才认),所以地址解析是共用的那一份。
+        target: ashBackendUrl(),
         changeOrigin: true,
       },
     },

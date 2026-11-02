@@ -38,6 +38,7 @@ import { bus } from "../bus.js";
 import { id, now, attachmentsPrompt } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { trackRun, discardStartingRun, stopTask } from "../runs.js";
+import { acknowledgeTaskStart } from "../task-start-receipt.js";
 import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
@@ -45,7 +46,7 @@ import { LOST_SESSION_PATCH } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
-import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
+import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET, leadFirstMessage } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
@@ -84,7 +85,7 @@ const leads = new Map<string, Lead>();
  * 起进程、`beginTurn` 又把状态写回 running:用户点了停止、页面刷新后却还是「运行中」
  * (第 4 轮审查 P1)。所以把那一次停止记在这里,由开台自己在**起进程之前**消费掉。
  * `turn-freeze` 那套(freezeStartingTurn/abortIfFrozen)解的是同一类问题,但它要求回合已经
- * claimTurn,而团队开台没有占回合,用不上。
+ * claimOwnTurn,而团队开台没有占回合,用不上。
  *
  * 标记必须挂在**这一次**开台上,不能是一个按 taskId 的全局 Set:停止之后用户另发一句就会
  * 开出新的一台,全局标记会被那台误消费,等于用户的新指令刚起步就被上一次的停止撤回。
@@ -125,10 +126,10 @@ export async function sendInbound(taskId: string, text: string): Promise<void> {
 // 当唤醒语);已经在线就只当一次唤醒,绝不开第二个进程。
 export async function startTeam(taskId: string): Promise<void> {
   if (teamIsLive(taskId)) {
-    await deliver(taskId, LEAD_NUDGE, "inbound");
+    if (await deliver(taskId, LEAD_NUDGE, "inbound")) acknowledgeTaskStart(taskId);
     return;
   }
-  await deliver(taskId, "", "start");
+  if (await deliver(taskId, "", "start")) acknowledgeTaskStart(taskId);
 }
 
 // 「停止全组」:调度台进程 + 所有执行者一起停。执行者走分组暂停(落 paused,占住
@@ -439,7 +440,14 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   // 还在但文件已经不在,必须打断这个连续性。
   const rawMessage = resuming
     ? LEAD_RESUMED + promptedText + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
-    : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (promptedText ? `\n\n【新消息】${promptedText}` : "");
+    : leadFirstMessage({
+      preamble: LEAD_PREAMBLE(taskId, cfg.worker),
+      // 开台这一条是「没有旧上下文的首条消息」,判据跟下面那句浏览器策略同源(`resuming`)。
+      // 调度台不走审查链路,所以 `verifying` 恒假。
+      craft: { freshContext: !resuming, verifying: false },
+      objective,
+      newMessage: promptedText,
+    });
   const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), ASH_TASK_ID: taskId };
   await ex.prepareResume?.({ cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined, env: runEnv });
   // 授权现读、且读在开台之前的最后一刻:正文(rawMessage)拼好之后还隔着 runEnv 和

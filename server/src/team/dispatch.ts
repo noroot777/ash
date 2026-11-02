@@ -14,7 +14,7 @@ import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
 import { db } from "../db/index.js";
 import { tasks, groups, queueItems } from "../db/schema.js";
 import { id, now } from "../util.js";
-import { runGroup } from "../scheduler.js";
+import { runGroupInBackground } from "../scheduler.js";
 import { TEAM_WORKER_PREAMBLE } from "./prompts.js";
 import { createTasks } from "../task-store.js";
 import { reopenAcceptedStage } from "../task-stage.js";
@@ -167,7 +167,7 @@ export async function dispatchWorkers(
   // 执行者唤醒调度者后它自己派活,这条路不经过用户消息,所以要单独钩一下。
   await reopenAcceptedStage(leadTaskId);
 
-  if (opts.run !== false) void runGroup(groupId);
+  if (opts.run !== false) void runGroupInBackground(groupId);
   return { groupId, mode, tasks: created };
   } finally {
     endAccepting(leadTaskId);

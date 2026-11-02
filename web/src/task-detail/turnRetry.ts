@@ -1,4 +1,5 @@
 import type { FreeReviewRun, TaskListItem } from "@ash/shared";
+import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import type { ConversationItem } from "./conversationModel.ts";
 
 // 「上一回合崩了」的判据，和会话尾栏那颗重试按钮共用一份。判据必须跟服务端
@@ -65,8 +66,13 @@ export function turnRetryTarget(
     if (task.workflowMode !== "free" || !opts.reviewRetryable) return null;
     return { sessionId: session.id, kind: "review", exitStatus };
   }
-  // exitStatus 为 null = 回合还没结算（或 server 重启时断的），那不是「异常结束」。
-  if (exitStatus == null || exitStatus === 0) return null;
+  // 「算不算异常结束」**跟服务端读同一份判据**（`@ash/shared/turn-outcome`，三个信号的
+  // 优先级写在那里）。两边各写一份 if 就是在等下一次漂开 —— 审查 F2 要修的那一条恰恰是
+  // 同一句判据在两端各错一次（都只看退出码，于是被看门狗终止、以 exit 0 收流的那一轮
+  // 既没有按钮、点了也 409）。
+  if (!turnEndedAbnormally({ exitStatus, turnOutcome: session.turnOutcome, stoppedAs: session.stoppedAs })) {
+    return null;
+  }
   // 剩下的只放行普通实现回合：lead/voiceA/voiceB 这些身份连「上一回合」的形状都不同。
   if (session.role !== "single") return null;
   // 旁路回合（就地验证、`/compact` 这类 CLI 原生命令）重投会按任务当前配置另跑一段普通

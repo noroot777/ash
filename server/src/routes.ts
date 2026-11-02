@@ -39,6 +39,7 @@ import { mountSkillRoutes } from "./skill-routes.js";
 import { mountAnthropicContext1mRoutes, stripContext1mSuffix } from "./anthropic-context-1m.js";
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
+import { mountTaskMemoRoutes } from "./task-memos.js";
 import { detachTaskRefs } from "./task-refs.js";
 import { mountGroupRoutes } from "./group-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
@@ -244,17 +245,23 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
   isDefault: r.isDefault,
 });
 
-// 执行器是**个人面**资源(§八):每人自带供应商 key,别人的执行器既看不见也用不了。
 // 隔离档下再叠一层「能不能派发」的标注(dispatchBlocked),前端据此把它标灰 ——
 // 宿主机订阅被抹去后,没接 relay 的 CLI 与没挂供应商的执行器都跑不起来。
 // 实例选了「共用宿主机 CLI」时这一层整个不加:那时没挂供应商恰恰是常态。
+//
+// **读和写返回同一形状。** 写路径曾经只回 `toAgent`,于是「刚注册出来的那一条」是
+// 全应用唯一答不上「它能不能派活」的执行器记录 —— 首启向导据此把一个在隔离档下根本
+// 跑不起来的 gemini 显示成已就绪(第 1 轮审查实测)。差一个字段的返回体等于逼每个
+// 调用方写完再 GET 一次列表,而漏掉那一次的表现正是「界面说好了,派任务才知道不行」。
+const toGatedAgent = async (r: typeof agents.$inferSelect) => ({
+  ...toAgent(r),
+  ...((await isHostCliIsolated()) ? { dispatchBlocked: dispatchBlockReason(r.type, r.providerId) } : {}),
+});
+
+// 执行器是**个人面**资源(§八):每人自带供应商 key,别人的执行器既看不见也用不了。
 api.get("/agents", async (c) => {
   const rows = await filterOwned(await db.select().from(agents), actorOf(c));
-  const gated = await isHostCliIsolated();
-  return c.json(rows.map((r) => ({
-    ...toAgent(r),
-    ...(gated ? { dispatchBlocked: dispatchBlockReason(r.type, r.providerId) } : {}),
-  })));
+  return c.json(await Promise.all(rows.map(toGatedAgent)));
 });
 
 // Detect which agent CLIs are installed on the local machine (§5).
@@ -333,7 +340,7 @@ api.post("/agents", async (c) => {
   const insert = db.insert(agents).values(row);
   if (clearDefault) await db.batch([clearDefault, insert]);
   else await insert;
-  return c.json(toAgent(row as typeof agents.$inferSelect), 201);
+  return c.json(await toGatedAgent(row as typeof agents.$inferSelect), 201);
 });
 
 api.patch("/agents/:id", async (c) => {
@@ -388,7 +395,7 @@ api.patch("/agents/:id", async (c) => {
   const written = clearDefault ? (await db.batch([clearDefault, write]))[1] : await write;
   const updated = written.at(0);
   if (!updated) return c.json({ error: "not found" }, 404); // 与开头预读那条同一句话
-  return c.json(toAgent(updated));
+  return c.json(await toGatedAgent(updated));
 });
 
 api.delete("/agents/:id", async (c) => {
@@ -489,6 +496,8 @@ api.post("/groups/resolve", async (c) => {
 });
 
 mountTaskRoutes(api);
+// 任务备忘:挂在任务上、不进任何 prompt 的手写条目(见 shared/src/task-memo.ts)。
+mountTaskMemoRoutes(api);
 // 分组(批次容器)路由:列表/运行/暂停/批量建任务(从 task-routes.ts 拆出)。
 mountGroupRoutes(api);
 mountTaskRunRoutes(api);

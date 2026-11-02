@@ -65,8 +65,8 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IS_WINDOWS, powerShellSync } from "../platform.js";
-import { processGenerationsSync } from "../process-generation.js";
+import { IS_WINDOWS, powerShell, powerShellSync } from "../platform.js";
+import { processGenerationsAsync, processGenerationsSync } from "../process-generation.js";
 import type { ConfineMember, ConfineRead, Confinement } from "./kernel-confine.js";
 
 /** Job Object 的名字。`Local\` = 当前登录会话的命名空间(跨会话不可见,正是我们要的边界)。 */
@@ -227,6 +227,36 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
       sleepSync(50);
     }
   };
+  /** 同上,等的时候不占事件循环。跟同步版共用「整轮至多等一次」那个标记。 */
+  const settleHeldAsync = async (): Promise<void> => {
+    if (held || reopened || !asked || settledOnce) return;
+    settledOnce = true;
+    for (let waited = 0; waited < HELD_WAIT_MS; waited += 50) {
+      if (existsSync(ready)) { held = true; return; }
+      if (holderDead()) return;
+      await new Promise((r) => { setTimeout(r, 50); });   // 不 unref:见 ash-mcp-probe.ts 的 wait
+    }
+  };
+  /**
+   * 读数里「不是成员名单」的那几种答案怎么解释 —— 同步/异步两版共用一份,口径漂不了。
+   */
+  const notMembers = (line: string): ConfineRead => {
+    // ERROR_FILE_NOT_FOUND:名字不在了。名字是句柄撑着的,所以这件事只有两种解释。
+    if (/^err:open:2$/.test(line)) {
+      // ① 建起来过、现在名字没了 ⇒ 句柄那一侧出了事(守圈进程被杀 / 已经 drop 过),
+      //    圈里还有没有成员**再也查不回来** ⇒ 如实记成这一问没答出来(可重试)。
+      if (held) {
+        return { kind: "unqueryable", why: `Job Object ${name} 的句柄已经不在了,集合查不回来` };
+      }
+      // ② 压根没建起来(请求没发出去 / 还没来得及 / 这是重新打开的圈)⇒ 这台设备弃权。
+      //    刻意**不**记成 `unqueryable`:那是一句「再问多少次都一样」的话,记成「这一次
+      //    没答出来」会让那一行永远停在可重试状态上,每一轮清扫都重跑同样的查询、永远
+      //    销不掉(弃权与重试的处置相反,见 cleanup-result.ts 顶部那四档)。
+      return { kind: "absent", why: `Job Object ${name} 查不到(圈没建起来,或者句柄已经交还)` };
+    }
+    if (!line) return { kind: "unqueryable", why: "这台机器上 PowerShell 没答出来" };
+    return { kind: "unqueryable", why: `Job Object ${name} 这一刻读不出成员:${line}` };
+  };
   return {
     id: name,
     enroll(pid: number): boolean {
@@ -256,26 +286,19 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
     },
     read(): ConfineRead {
       settleHeld();
-      const out = powerShellSync(jobScript(name, "list"), 15_000).trim();
-      const line = out.split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
+      const line = lastLine(powerShellSync(jobScript(name, "list"), 15_000));
       if (line.startsWith("pids:")) {
         return { kind: "members", members: parseMembers(line.slice(5)), coverage: "since-enroll" };
       }
-      // ERROR_FILE_NOT_FOUND:名字不在了。名字是句柄撑着的,所以这件事只有两种解释。
-      if (/^err:open:2$/.test(line)) {
-        // ① 建起来过、现在名字没了 ⇒ 句柄那一侧出了事(守圈进程被杀 / 已经 drop 过),
-        //    圈里还有没有成员**再也查不回来** ⇒ 如实记成这一问没答出来(可重试)。
-        if (held) {
-          return { kind: "unqueryable", why: `Job Object ${name} 的句柄已经不在了,集合查不回来` };
-        }
-        // ② 压根没建起来(请求没发出去 / 还没来得及 / 这是重新打开的圈)⇒ 这台设备弃权。
-        //    刻意**不**记成 `unqueryable`:那是一句「再问多少次都一样」的话,记成「这一次
-        //    没答出来」会让那一行永远停在可重试状态上,每一轮清扫都重跑同样的查询、永远
-        //    销不掉(弃权与重试的处置相反,见 cleanup-result.ts 顶部那四档)。
-        return { kind: "absent", why: `Job Object ${name} 查不到(圈没建起来,或者句柄已经交还)` };
+      return notMembers(line);
+    },
+    async readAsync(): Promise<ConfineRead> {
+      await settleHeldAsync();
+      const line = lastLine(await powerShell(jobScript(name, "list"), 15_000));
+      if (line.startsWith("pids:")) {
+        return { kind: "members", members: await parseMembersAsync(line.slice(5)), coverage: "since-enroll" };
       }
-      if (!line) return { kind: "unqueryable", why: "这台机器上 PowerShell 没答出来" };
-      return { kind: "unqueryable", why: `Job Object ${name} 这一刻读不出成员:${line}` };
+      return notMembers(line);
     },
     killAll(): number {
       // **这一刀成功过就不再下**(第 1 轮审查 F4)。Windows 上只有一档刀:`sig` 根本没用上,
@@ -290,6 +313,14 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
       terminated = true;
       return 1;
     },
+    async killAllAsync(): Promise<number> {
+      if (terminated) return 0;                     // 口径同 killAll
+      await settleHeldAsync();
+      const out = (await powerShell(jobScript(name, "terminate"), 15_000)).trim();
+      if (!/(^|\n)ok\s*$/.test(out)) return -1;
+      terminated = true;
+      return 1;
+    },
     dispose(): void {
       // 判空成功之后才会走到这里(见 kill.ts)。把句柄交还给守圈进程 —— 不交还的话这台
       // 机器上每跑一次就多攒一个句柄,名字也一直占着。
@@ -298,6 +329,10 @@ function jobConfinement(name: string, reopened: boolean): Confinement {
     },
   };
 }
+
+/** PowerShell 输出的最后一个非空行 —— C# 那一侧每个动作只答一行。 */
+const lastLine = (out: string): string =>
+  out.trim().split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
 
 /** 交给守圈进程的凭据前缀(它自己拼 `.ready`)—— 跟 `readyPath` 必须一致。 */
 const readyBase = (name: string): string => readyPath(name).replace(/\.ready$/, "");
@@ -317,17 +352,31 @@ const readyBase = (name: string): string => readyPath(name).replace(/\.ready$/, 
  */
 function parseMembers(raw: string): ConfineMember[] {
   const members: ConfineMember[] = [];
-  const pids: number[] = [];
-  for (const part of raw.split(",")) {
-    const pid = Number(part.trim());
-    if (Number.isInteger(pid) && pid > 1) pids.push(pid);
-  }
+  const pids = memberPids(raw);
   if (!pids.length) return members;
   const gens = processGenerationsSync(pids);
   // 取不到代次的照旧记 `null`(进程刚退掉、或者这一刻问不出来):那一档只能等那个号彻底
   // 空掉才核销,是**更保守**的一侧,不会把一笔责任提前销掉。
   for (const pid of pids) members.push({ pid, gen: gens.get(pid) ?? null });
   return members;
+}
+
+/** `parseMembers` 的异步版:代次那一问不再同步起 PowerShell。 */
+async function parseMembersAsync(raw: string): Promise<ConfineMember[]> {
+  const pids = memberPids(raw);
+  if (!pids.length) return [];
+  const gens = await processGenerationsAsync(pids);
+  return pids.map((pid) => ({ pid, gen: gens.get(pid) ?? null }));
+}
+
+/** 名单里的号(去掉 0/1 和解析不了的)。 */
+function memberPids(raw: string): number[] {
+  const pids: number[] = [];
+  for (const part of raw.split(",")) {
+    const pid = Number(part.trim());
+    if (Number.isInteger(pid) && pid > 1) pids.push(pid);
+  }
+  return pids;
 }
 
 /** PowerShell 单引号字面量的转义(同 scripts/win-remote/ps.mjs 的 psq)。 */

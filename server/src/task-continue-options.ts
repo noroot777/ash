@@ -1,6 +1,6 @@
 import type { AgentType } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
-import type { TurnSource } from "./runs.js";
+import type { TurnIdentity, TurnSource } from "./runs.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -64,6 +64,16 @@ export type ContinueTaskOptions = {
    */
   byBackend?: boolean;
   monitorWake?: MonitorWakeData;
+  pendingMessageIds?: readonly string[];
+  /**
+   * 这几条输入的**越线记号是必要凭据**,不是尽力而为的记账。
+   *
+   * 续跑交代走这一档:它的恢复策略是「没有可靠的未投喂证明就不得归还」,所以记号写不下来时
+   * 必须在 spawn 之前原地撤回 —— 凭据缺失 + 照常投喂 = 恢复侧必然误判成「没送出去」并重放
+   * (delivery-crossing.ts 的文件头)。普通待发送消息不传这一位:它们的既有策略是「宁可重发
+   * 一次也不丢一句话」,为记号缺失把用户的「继续」整个拦掉反而更伤人。
+   */
+  crossingRequired?: boolean;
   /**
    * **这一回合是谁点的**(多人模式)。共享项目里 B 可以在 A 的任务上回复/重跑/派审,
    * 而那一轮烧的是 B 自己的 key —— 所以执行器、供应商、个人 CLI 环境与 git 署名
@@ -74,11 +84,15 @@ export type ContinueTaskOptions = {
    */
   actingUserId?: string | null;
   /**
-   * 调用方已在入口**原子占住** turn（claimTurn 成功后传 true）：这里不再抢锁，用
+   * 调用方已在入口**原子占住** turn（传 `claimOwnTurn` 交回来的那份身份）：这里不再抢锁，用
    * sessionRole 接管（reclaimTurn）并照常在 finally 释放。入口占位是并发双 202 谎报
    * 的唯一解——只读预检查后的任何 await 间隙都可能被另一次启动抢先。
+   *
+   * **为什么是身份不是 true**(本轮审查 F1):交接与释放之间隔着整整一回合,人工放开可以在
+   * 那段间隙里把锁拔走、让下一轮占上;按任务 id 还锁撤掉的就是后来者那把互斥。接管与释放
+   * 都按这份身份核(理由整段在 turn-lock.ts 的 `endOwnTurn`)。
    */
-  turnHeld?: boolean;
+  turnHeld?: TurnIdentity | null;
   /**
    * 起跑前再查一遍冻结事实（分组暂停 / 任务被删或归档），命中就在 spawn 之前撤回。
    *

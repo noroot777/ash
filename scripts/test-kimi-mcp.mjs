@@ -35,10 +35,15 @@ try {
   assert.deepEqual(merged.mcpServers.other, { url: "https://example.invalid/mcp" });
   assert.ok(merged.mcpServers.ash);
 
+  // 读不通 / 根不是对象 / 容器不是对象:**不写 + 如实回一句**,文件一个字节不动。
+  // (2026-10-31 统一到十五家同一个契约:原来这里是抛错,而 setup 全家都走 `registerHostMcp`
+  // 的 `{ added, why }`,抛错那条路只有这份测试在用。)
   for (const invalid of ["{", "null", "[]", '{"mcpServers":null}', '{"mcpServers":[]}']) {
     writeFileSync(file, invalid);
-    assert.throws(() => registerKimiMcp(options));
-    assert.equal(readFileSync(file, "utf8"), invalid);
+    const r = registerKimiMcp(options);
+    assert.equal(r.added, false, `${invalid}:不许写`);
+    assert.ok((r.why || "").length > 0, `${invalid}:要如实说一句`);
+    assert.equal(readFileSync(file, "utf8"), invalid, `${invalid}:一个字节都不许动`);
   }
   console.log("kimi MCP registration tests passed");
 } finally {

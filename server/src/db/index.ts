@@ -53,6 +53,9 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, source_commit TEXT NOT NULL, merge_commit TEXT NOT NULL, target_branch TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS task_branch_receipts_task ON task_branch_receipts(task_id);
+    CREATE TABLE IF NOT EXISTS queue_advance_intents (
+      queue_id TEXT PRIMARY KEY, accepted_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL, created_at TEXT NOT NULL
     );
@@ -80,6 +83,11 @@ export async function ensureSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS note_tasks_note_task_idx
       ON note_tasks (note_id, task_id);
     CREATE INDEX IF NOT EXISTS note_tasks_task_idx ON note_tasks (task_id);
+    CREATE TABLE IF NOT EXISTS task_memos (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, body TEXT NOT NULL,
+      owner_user_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS task_memos_task_idx ON task_memos (task_id);
     CREATE TABLE IF NOT EXISTS groups (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
       mode TEXT NOT NULL DEFAULT 'parallel',

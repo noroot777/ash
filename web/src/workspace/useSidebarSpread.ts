@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TaskFollowUp, TaskListItem } from "@ash/shared";
+import type { TaskMemoDigest } from "@ash/shared/task-memo";
 import { TASK_BATCH_LIMIT } from "@ash/shared";
 import { api } from "../lib/api.ts";
+import { onTaskMemoWrite, taskMemoWrites } from "../task-memos/taskMemoStore.ts";
 import { indexWorkers, spreadBucket, workersFrom, type SpreadBucket, type WorkerIndex } from "../lib/taskAttention.ts";
 import { scopeHasFilters, scopeTasks, visibleInScope, type TaskScope } from "./taskScope.ts";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
@@ -77,6 +79,44 @@ export function spreadVisibleTasks(tasks: TaskListItem[], scope: TaskScope, filt
   ).filter((task) => matchesSpreadFilter(task, filter, workersFrom(workers, task.id)));
 }
 
+// 分批把一列填满：一批到一批、边到边显示，读不到的那批留白（铺开是「扫一眼」的动作，
+// 为它弹错误提示更吵）。正文和备忘都是按主键 / 索引的库查询，不摸盘，所以**取完整批** ——
+// 只有追问那一列每条都要摸一次盘，才有理由只问头一批。
+function fillByBatch<Row extends { taskId: string }, Value>(
+  ids: readonly string[],
+  load: (batch: string[]) => Promise<Row[]>,
+  pick: (row: Row) => Value,
+  write: (apply: (current: Map<string, Value>) => Map<string, Value>) => void,
+  alive: () => boolean,
+  /**
+   * 这一格的「写入版本」。给了的话每批**发出前**逐任务记下，应答回来时某个任务的版本
+   * 已经变了就跳过那一格 —— 那次写一定已经推了一发只问它的新请求（onTaskMemoWrite），
+   * 等那一发才是真的新。少了这道边界，迟到的 bulk 应答会把界面倒退回旧摘要：第 3 轮
+   * 审查 N1 实测「显示第三版 → 旧 bulk 一到退回第二版，而库里仍是第三版」。
+   * 口径与 taskMemoStore 的读写边界同源（那边是整份快照，这里要逐任务）。
+   */
+  version?: (taskId: string) => number,
+): void {
+  write(() => new Map());
+  void (async () => {
+    for (let at = 0; at < ids.length; at += TASK_BATCH_LIMIT) {
+      const batch = ids.slice(at, at + TASK_BATCH_LIMIT);
+      const sentAt = version && new Map(batch.map((taskId) => [taskId, version(taskId)]));
+      const rows = await load(batch).catch((): Row[] => []);
+      if (!alive()) return;
+      if (!rows.length) continue;
+      write((current) => {
+        const next = new Map(current);
+        for (const row of rows) {
+          if (sentAt && version && version(row.taskId) !== sentAt.get(row.taskId)) continue;
+          next.set(row.taskId, pick(row));
+        }
+        return next;
+      });
+    }
+  })();
+}
+
 export type SidebarSpread = {
   open: boolean;
   // 铺开态的排版是否生效（open，或者收起动画还没跑完）。
@@ -87,6 +127,9 @@ export type SidebarSpread = {
   filter: SpreadFilter;
   setFilter: (filter: SpreadFilter) => void;
   followUps: Map<string, TaskFollowUp>;
+  // 备忘跟追问**合用那一格**（用户 2026-10-28）：两者哪个新显示哪个，悬浮卡里追问在上、
+  // 备忘在下。但**取法跟正文那一列一样**（分批取完整批），不跟追问走 —— 理由见下面。
+  memos: Map<string, TaskMemoDigest>;
   // 「原始需求」列的正文。列表接口不带正文，铺开时才按需批量取（见 api.taskBodies）。
   bodies: Map<string, string>;
   // 已经问过后端的任务 —— 「问过但我没追问过」和「还没问后端」得分开说，
@@ -104,6 +147,7 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
   const [laidOut, setLaidOut] = useState(false);
   const [filter, setFilter] = useState<SpreadFilter>("all");
   const [followUps, setFollowUps] = useState<Map<string, TaskFollowUp>>(new Map());
+  const [memos, setMemos] = useState<Map<string, TaskMemoDigest>>(new Map());
   const [bodies, setBodies] = useState<Map<string, string>>(new Map());
   const [loaded, setLoaded] = useState<Set<string>>(new Set());
   const closeTimer = useRef<number | null>(null);
@@ -154,25 +198,42 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
       })
       // 读不到就让那一列留白。铺开是个扫一眼的动作，为它弹一条错误提示更吵。
       .catch(() => {});
-    // 正文与追问各走各的（一个查库、一个摸盘），谁先回来谁先填上，互不拖累。
+    // 备忘虽然跟追问合用那一格，取法却跟**正文**一样：分批取完整批。按 `asked` 问
+    // （本轮第一版）会让第 TASK_BATCH_LIMIT 行之后的任务永远显示不出备忘 —— 而
+    // 写备忘只动 task_memos.updated_at、不动 tasks 行的排序时间，给一个旧任务记一条
+    // 新备忘也不会把它挪进头一批，于是「记了却永远看不到」（独立审查第 1 轮实测 201 个
+    // 任务的那个）。它是一次按索引的库查询，不摸盘，没有理由套追问的首批上限。
     //
-    // 正文**分批取完整批**：它只是一次按主键的查询，不摸盘，所以没有理由让第
-    // TASK_BATCH_LIMIT 行之后的任务永远显示「还没读到」。一批填一次，边到边显示。
-    setBodies(new Map());
-    void (async () => {
-      for (let at = 0; at < ids.length; at += TASK_BATCH_LIMIT) {
-        const rows = await api.taskBodies(ids.slice(at, at + TASK_BATCH_LIMIT)).catch(() => []);
-        if (!alive) return;
-        if (!rows.length) continue;
-        setBodies((current) => {
-          const next = new Map(current);
-          for (const row of rows) next.set(row.taskId, row.body);
-          return next;
-        });
-      }
-    })();
+    // 三列各走各的：谁先回来谁先填上，一列挂了不耽误另一列。
+    fillByBatch(ids, api.taskMemoDigests, (row) => row, setMemos, () => alive, taskMemoWrites);
+    fillByBatch(ids, api.taskBodies, (row) => row.body, setBodies, () => alive);
     return () => { alive = false; };
   }, [idsKey, open, revision]);
+
+  // 本页动了某个任务的备忘，就只补那一个任务的摘要。这一列自己存一份缓存、也不订阅
+  // 那个 store（口径在服务端，而且它关心的任务远不止当前打开的那一个），不接这根线的话
+  // 刚存上的那条要等收起重开才出现（第 2 轮审查 N1 实测）。
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    const stop = onTaskMemoWrite((taskId) => {
+      // 同一道版本边界：两次写各推一发，应答逆序返回时先发那一发带的是旧摘要。
+      const sentAt = taskMemoWrites(taskId);
+      void api.taskMemoDigests([taskId])
+        .then((rows) => {
+          if (!alive || taskMemoWrites(taskId) !== sentAt) return;
+          setMemos((current) => {
+            const next = new Map(current);
+            // 删到一条不剩的任务不在返回里（跟 /tasks/follow-ups 同一条规矩），那一格要跟着清掉。
+            if (rows.length) next.set(taskId, rows[0]);
+            else next.delete(taskId);
+            return next;
+          });
+        })
+        .catch(() => {});
+    });
+    return () => { alive = false; stop(); };
+  }, [open]);
 
   const toggle = useCallback(() => setOpen((value) => !value), []);
   const close = useCallback(() => setOpen(false), []);
@@ -180,5 +241,5 @@ export function useSidebarSpread(tasks: TaskListItem[], scope: TaskScope, revisi
   // 存的还是原值 —— 从单项目态挑了「在跑」、切进任务模式看一圈再切回来，那一档还在。
   // 用派生而不是 effect 归零：后者会先渲染一帧被筛过的列表，再自己弹回去。
   const effectiveFilter: SpreadFilter = scopeHasFilters(scope) ? filter : "all";
-  return { open, laidOut: open || laidOut, filter: effectiveFilter, setFilter, followUps, bodies, loaded, toggle, close };
+  return { open, laidOut: open || laidOut, filter: effectiveFilter, setFilter, followUps, memos, bodies, loaded, toggle, close };
 }

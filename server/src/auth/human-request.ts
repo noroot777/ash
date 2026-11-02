@@ -20,7 +20,9 @@ export function humanRequestRejection(context: Context): string | null {
 }
 
 export async function rejectHumanRequest(context: Context, error: string): Promise<Response> {
-  const taskId = decodeURIComponent(context.req.path.split("/")[3]!);
+  const match = /^\/api\/tasks\/([^/]+)\/reclaim-turn(?:\/approval)?$/.exec(context.req.path);
+  if (!match) return context.json({ error }, 403);
+  const taskId = decodeURIComponent(match[1]!);
   const task = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (task && await canSeeProject(actorOf(context), task.projectId)) {
     await noteRejectedUserAction(taskId, context.req.path.endsWith("/approval") ? "申请人工授权" : "放开回合占位", error);

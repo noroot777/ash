@@ -1,5 +1,5 @@
 import type { Group, Session, Task, TaskListItem } from "@ash/shared";
-import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, Pulse, Robot, Chats } from "@phosphor-icons/react";
+import { Browser, FolderOpen, GitPullRequest, Images, Info, MagnifyingGlass, NotePencil, Pulse, Robot, Chats } from "@phosphor-icons/react";
 import { WorkflowIcon } from "../components/WorkflowIcon.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import { PreviewWorkspaceEntry } from "../preview-workspace/PreviewWorkspace.tsx";
@@ -16,6 +16,7 @@ import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.ts
 import { SideChatPane } from "../side-chat/SideChatPane.tsx";
 import { monitorBlockedReason } from "@ash/shared/monitor";
 import { MonitorInspector } from "../monitors/MonitorInspector.tsx";
+import { TaskMemoInspector } from "../task-memos/TaskMemoInspector.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import type { TaskMonitorsState } from "../monitors/useTaskMonitors.ts";
 
@@ -75,7 +76,7 @@ function MonitorInspectorPane({ context }: { context: TaskInspectorContext }) {
 
 // 图标条的顺序就是这个数组的顺序（`orderedValidTabs` 按它归位，localStorage 里存的次序
 // 不作数）。排法是「看任务本身 → 看它改了什么 → 跟它一起干活」：
-// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 侧聊 · 工作流 · 审查 · 预览指正 · 哨兵。
+// 信息 · 文件 · 生成物 · 改动 · 子智能体 · 备忘 · 侧聊 · 工作流 · 审查 · 预览指正 · 哨兵。
 // 每一格都带快捷键（`I` 加面板名首字母），键位表在 inspector/shortcuts.ts。
 //
 // 子智能体和哨兵这两格的 `defaultOpen` 是动态的（见 inspector/usedTabs.tsx）：全部面板一直
@@ -148,6 +149,16 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     icon: <Robot size={14} />,
     shortcut: "s",
     render: (context) => <NativeWorkInspector {...context.nativeWork} />,
+  },
+  {
+    // 备忘跟旁边两样东西的分界见 shared/src/task-memo.ts：它不进任何 prompt，所以**不走
+    // 「用过才浮现」**——手写一条的入口只在这一格里，藏起来等于这条路只能从会话选文进。
+    id: "memos",
+    title: "备忘",
+    icon: <NotePencil size={14} />,
+    defaultOpen: true,
+    shortcut: "b",
+    render: (context) => <TaskMemoInspector taskId={context.task.id} notify={context.notify} />,
   },
   {
     id: "side-chat",

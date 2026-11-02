@@ -98,8 +98,7 @@
 
 .agent-profile-create-grid input,
 .agent-profile-create-grid select,
-.provider-form-grid input,
-.provider-form-grid select {
+.provider-form-grid input {
   width: 100%;
   min-width: 0;
   height: 29px;
@@ -115,7 +114,6 @@
 .agent-profile-create-grid input:focus,
 .agent-profile-create-grid select:focus,
 .provider-form-grid input:focus,
-.provider-form-grid select:focus,
 .agent-arg-token input:focus {
   border-color: var(--accent);
 }
@@ -441,6 +439,7 @@
 
 .agent-profile-create-grid label > span,
 .provider-form-grid label > span,
+.provider-protocol-pick > span,
 .provider-model-field > label,
 .agent-args-head > span {
   color: var(--faint);
@@ -490,8 +489,7 @@
     display: none;
   }
 
-  .agent-profile-create-grid,
-  .provider-form-grid {
+  .agent-profile-create-grid {
     grid-template-columns: 1fr;
   }
 

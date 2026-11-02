@@ -4,6 +4,7 @@
 // F4:697 + 11 = 708 行就越了线)。拆分的口径与 `handoffApi` / `monitorApi` / `fileApi`
 // 一样 —— 调用点仍然只认 `api.xxx`,`api.ts` 把这里展开进去,契约一个字都不变。
 import { id, json, request } from "./apiClient.ts";
+import { humanAction } from "./humanActionToken.ts";
 
 /**
  * 一条任务通知。`outcome` 是两件不同的事,前端据它选措辞而不是去猜 reason 的字面:
@@ -13,7 +14,8 @@ import { id, json, request } from "./apiClient.ts";
 export type TaskNotice = {
   id: string;
   action: string;
-  outcome: "rejected" | "incomplete" | "system";
+  /** `unknown`:服务端读库时认不出那一格的值 —— 不猜方向(server/src/user-action-rejection.ts)。 */
+  outcome: "rejected" | "incomplete" | "system" | "unknown";
   reason: string;
   occurredAt: string;
 };
@@ -46,10 +48,14 @@ export type HumanApprovalProof = { challengeId: string; signature: string };
 export const taskNoticeApi = {
   // 这个任务被挡回/没做到位的那些操作。**无条件调**:它是任务历史的一部分,不按「对话流
   // 有没有正文」取舍(server/src/user-action-rejection.ts)。
-  taskNotices: (taskId: string): Promise<TaskNoticesResult> =>
-    request(`/tasks/${id(taskId)}/notices`),
+  taskNotices: (taskId: string, signal?: AbortSignal): Promise<TaskNoticesResult> =>
+    request(`/tasks/${id(taskId)}/notices`, { signal }),
   requestTurnApproval: (taskId: string): Promise<HumanApprovalChallenge> =>
-    request(`/tasks/${id(taskId)}/reclaim-turn/approval`, json("POST")),
+    humanAction(`/tasks/${id(taskId)}/reclaim-turn/approval`, json("POST")),
+  // 放开一把占着不动的回合占位。**判据在服务端,不因为是人点的就放宽**;而且只有账号
+  // 本人按得动 —— agent 的回合凭证会被 403 挡掉(server/src/auth/personal-gate.ts)。
+  // `humanAction` 而不是 `request`:这条端点在真人专属闸后面,要带上随页面下发的凭据并
+  // 把响应里给回的下一份换上(server/src/auth/human-action-token.ts)。
   reclaimTurn: (taskId: string, approval: HumanApprovalProof): Promise<ReclaimTurnResult> =>
-    request(`/tasks/${id(taskId)}/reclaim-turn`, json("POST", { acknowledgeDuplicateRisk: true, approval })),
+    humanAction(`/tasks/${id(taskId)}/reclaim-turn`, json("POST", { acknowledgeDuplicateRisk: true, approval })),
 };

@@ -13,7 +13,7 @@
 // ## 为什么这里只诊断、不自动放开
 //
 // **年龄证不了持有者已经死了。** 瞬时快照分不出「卡住了」和「正常起跑中」—— 两者都是
-// 「锁占着、进程还没在册、令牌还没绑」:`claimTurn` 排在 `trackRun` 之前(所以 `isRunning`
+// 「锁占着、进程还没在册、令牌还没绑」:`claimOwnTurn` 排在 `trackRun` 之前(所以 `isRunning`
 // 答不了「有没有人正在起跑」,见 runs.ts `claimReconcileTurn`),`bindTurnToken` 排在它之后。
 // 于是只剩「这个状态持续了多久」可用,而**有一整类持有者的等待本来就没有时长上界**:
 //   · duet 的人工裁决门 —— `duet/index.ts` `runGate` 里 `await waitForGate(taskId)`,
@@ -57,6 +57,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
+import { bus } from "./bus.js";
 import { isRunning, isTurnClaimed } from "./runs.js";
 import { forceReleaseTurn, heldTurns } from "./turn-lock.js";
 import { noteSystemNotice } from "./user-action-rejection.js";
@@ -64,7 +65,7 @@ import { noteSystemNotice } from "./user-action-rejection.js";
 /**
  * 一把「无句柄、无令牌」的锁占多久开始报可疑。
  *
- * 为什么 60 秒够:两条起跑路径从 `claimTurn` 到 `bindTurnToken` 之间只有几次库读加一个
+ * 为什么 60 秒够:两条起跑路径从 `claimOwnTurn` 到 `bindTurnToken` 之间只有几次库读加一个
  * 事务(task-run.ts、orchestrator.ts 都是先绑令牌、再去准备工作目录和 spawn),毫秒级。
  * 留这么宽只为兜住一种已知的慢:SQLite 写锁撞上时那个事务会卡几秒(第 6、7 轮审查注入
  * 过 7 秒)。等待无上界的那几种角色不走年龄判据,见 `UNBOUNDED_WAIT_ROLES`。
@@ -109,16 +110,38 @@ export type SuspectTurn = {
  */
 export function suspectTurns(at = Date.now(), thresholdMs = SUSPECT_TURN_MS): SuspectTurn[] {
   return heldTurns()
-    .filter((held) => notSuspectReason(held, at, thresholdMs) === null)
+    .filter((current) => notSuspectReason(current, at, thresholdMs) === null)
     .map((held) => ({ taskId: held.taskId, role: held.role, seq: held.seq, claimedAt: held.claimedAt, heldMs: at - held.claimedAt }));
+}
+
+export type TurnReclaimStatus =
+  | { kind: "absent" }
+  | { kind: "eligible"; turn: SuspectTurn }
+  | { kind: "blocked"; turn: SuspectTurn; reason: string };
+
+export function turnReclaimStatus(taskId: string, at = Date.now(), thresholdMs = SUSPECT_TURN_MS): TurnReclaimStatus {
+  const current = heldTurns().find((entry) => entry.taskId === taskId);
+  if (!current) return { kind: "absent" };
+  const turn = { taskId, role: current.role, seq: current.seq, claimedAt: current.claimedAt, heldMs: at - current.claimedAt };
+  const reason = notSuspectReason(current, at, thresholdMs);
+  return reason === null ? { kind: "eligible", turn } : { kind: "blocked", turn, reason };
 }
 
 // 不满一分钟就按秒说 —— 阈值被调低时(回归测试、临时排查)「约 0 分钟」读起来像没发生。
 const held = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)} 秒` : `${Math.round(ms / 60_000)} 分钟`);
 
+/**
+ * 放开那一下的**副作用**,单独一句。
+ *
+ * 刻意不含「放开之后这个任务就能再次运行」—— 那句话属于**预告**(还没放开时说「按了会
+ * 怎样」),把它焊进副作用里,就会在「已经放开、但它还点不动」那一档跟着被附上去:同一条
+ * 记录前半句说「它还点不动运行」,后半句紧跟一句「放开之后这个任务就能再次运行」,自相
+ * 矛盾(上一轮审查点名)。能不能运行由 `runnableAfterRelease` 现场核对,那一档各自说自己
+ * 的话,这里只说代价。
+ */
 const SIDE_EFFECT =
-  "放开之后这个任务就能再次运行；代价是万一原来那一位其实还活着（比如正在等一个很慢的"
-  + "准备步骤），互斥就没了，同一个任务会有两个回合并行改同一个工作区。";
+  "代价是万一原来那一位其实还活着（比如正在等一个很慢的准备步骤），互斥就没了，"
+  + "同一个任务会有两个回合并行改同一个工作区。";
 
 /**
  * 已经报过的占用(`taskId:seq`)。按**占用身份号**去重,所以同一把锁只报一次 —— 配 30 秒
@@ -135,6 +158,7 @@ const reporting = new Set<string>();
  */
 export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise<number> {
   const suspects = suspectTurns(Date.now(), thresholdMs);
+  publishRemedyChanges(suspects);
   // 已经不在占着的那些从去重表里清掉,免得这张表随进程寿命单调增长。
   const alive = new Set(heldTurns().map((h) => `${h.taskId}:${h.seq}`));
   for (const key of told) if (!alive.has(key)) told.delete(key);
@@ -159,7 +183,7 @@ export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise
         + "没有进程在册、也没有绑过回合令牌，但系统**无法确认**原来那一位是否真的已经结束，"
         + "所以不会自动放开。确认它确实不动了，用任务详情页上的「放开回合占位」手动解开"
         + `（或 POST /api/tasks/${suspect.taskId}/reclaim-turn）——**点运行是解不开的**，那条路只会继续被挡回。`
-        + SIDE_EFFECT,
+        + "放开之后这个任务通常就能再次运行。" + SIDE_EFFECT,
       );
       if (persisted) {
         told.add(key);
@@ -170,6 +194,33 @@ export async function reportSuspectTurns(thresholdMs = SUSPECT_TURN_MS): Promise
     }
   }
   return reported;
+}
+
+/**
+ * 上一趟巡检时「这个任务该不该显示那个人工放开开关」是什么样。
+ *
+ * 这一问的答案由**时间**决定(锁占到超过可疑年龄就出现,原持有者回来放手就消失),没有
+ * 任何数据库写入可以挂信号 —— 而 `GET /tasks/:id/notices` 里的 `remedy` 正是现算的。少了
+ * 这条信号,一直开着详情页的人只能看到打开那一刻的答案:该出现的入口不出现,已经失效的
+ * 旧入口继续摆着、按下去只得到 409(第 1 轮审查 F5)。
+ *
+ * **不挂在留痕写入上**:那条路要留痕真的写成了才会发声,而这一问的答案和留痕成不成功
+ * 是两件事。巡检是这台机器上唯一的时钟,所以在这里按「答案变了没有」发信号。
+ */
+const remedyShown = new Set<string>();
+
+function publishRemedyChanges(suspects: SuspectTurn[]): void {
+  const shown = new Set(suspects.map((suspect) => suspect.taskId));
+  for (const taskId of shown) {
+    if (remedyShown.has(taskId)) continue;
+    remedyShown.add(taskId);
+    bus.publish({ type: "task.notices", taskId });
+  }
+  for (const taskId of [...remedyShown]) {
+    if (shown.has(taskId)) continue;
+    remedyShown.delete(taskId);
+    bus.publish({ type: "task.notices", taskId });
+  }
 }
 
 /** `releaseSuspectTurn` 的结果。`ok:false` 带 `why` 给路由映射状态码与话术。 */
@@ -218,10 +269,22 @@ async function runnableAfterRelease(taskId: string): Promise<{ runnable: boolean
     return { runnable: true, status: null, nextStep: null };
   }
   let row: { status: string } | undefined;
+  let readFailed = false;
   try {
     row = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   } catch (error) {
+    readFailed = true;
     console.warn(`[ash] 放开回合占位后读状态失败 task=${taskId}:`, error);
+  }
+  // **隔了一次 await,持有者就得再核一次**(本轮审查 N2)。上面那一道只证到「读之前没人持有」,
+  // 而读库这一段里完全可以有新回合接手(放开之后紧接着就是调度推进)。下面每一句话的前提都是
+  // 「此刻没人持有、没人会再来改状态」—— 前提没了,读到的 queued/running 很可能正是新那一轮
+  // 自己写的,照旧劝用户「点一次停止」等于劝他去停一个刚起来的回合。读失败那一条同理:那句
+  // 「要是还停在排队中就停一次」也是建立在同一个前提上的。
+  if (isTurnClaimed(taskId)) {
+    return { runnable: true, status: row?.status ?? null, nextStep: null };
+  }
+  if (readFailed) {
     return { runnable: false, status: null, nextStep: "刷新一下页面看它现在的状态；要是还停在「排队中」，点一次停止把它收成「已取消」，然后就能重新运行" };
   }
   if (!row) return { runnable: false, status: null, nextStep: null };
@@ -238,12 +301,10 @@ async function runnableAfterRelease(taskId: string): Promise<{ runnable: boolean
 
 export function inspectTurnReclaim(taskId: string, thresholdMs = SUSPECT_TURN_MS):
   { ok: true; turn: SuspectTurn } | Extract<ReleaseSuspectResult, { ok: false }> {
-  const now = Date.now();
-  const current = heldTurns().find((turn) => turn.taskId === taskId);
-  if (!current) return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
-  const reason = notSuspectReason(current, now, thresholdMs);
-  if (reason) return { ok: false, why: "not-suspect", reason };
-  return { ok: true, turn: { taskId, seq: current.seq, role: current.role, claimedAt: current.claimedAt, heldMs: now - current.claimedAt } };
+  const status = turnReclaimStatus(taskId, Date.now(), thresholdMs);
+  if (status.kind === "absent") return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
+  if (status.kind === "blocked") return { ok: false, why: "not-suspect", reason: status.reason };
+  return { ok: true, turn: status.turn };
 }
 
 /**
@@ -257,22 +318,32 @@ export function inspectTurnReclaim(taskId: string, thresholdMs = SUSPECT_TURN_MS
 export async function releaseSuspectTurn(
   taskId: string,
   thresholdMs = SUSPECT_TURN_MS,
+  /**
+   * 这一下**能证到哪一层**。`"page"` 由真人专属闸填(它核验过那份随页面下发的一次性凭据);
+   * 缺省 `"unverified"` 留给不过闸的内部直调与回归 —— 措辞照实说,不替它升一档。
+   */
+  origin: "page" | "unverified" = "unverified",
   authorization?: { seq: number; keyFingerprint: string },
 ): Promise<ReleaseSuspectResult> {
-  const inspection = inspectTurnReclaim(taskId, thresholdMs);
-  if (!inspection.ok) return inspection;
-  const suspect = inspection.turn;
+  const status = turnReclaimStatus(taskId, Date.now(), thresholdMs);
+  if (status.kind === "absent") return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
+  // 重算判据 → 条件释放,这中间一个 await 都没有。
+  if (status.kind === "blocked") return { ok: false, why: "not-suspect", reason: status.reason };
+  const suspect = status.turn;
   if (authorization && authorization.seq !== suspect.seq) {
     return { ok: false, why: "not-suspect", reason: "授权对应的回合占位已变化，请重新申请人工授权" };
   }
-  // 重算判据 → 条件释放,这中间一个 await 都没有。
   const released = forceReleaseTurn(suspect);
   if (!released) {
     // 号码对不上 = 判定到这一行之间换了主人。这是条件释放该有的样子,不是错误。
     return { ok: false, why: "not-suspect", reason: "这个回合占位刚刚换了主人，已经有新的一轮接手了" };
   }
   const detail = `占位身份 ${released.role}、已持有约 ${held(suspect.heldMs)}`;
-  console.warn(`[ash] 显式请求放开回合占位 task=${taskId}（${detail}）`);
+  // 措辞只说得出**这一层能证的那一档**。`origin: "page"` = 真人专属闸核验过一份随页面
+  // 下发的一次性凭据(auth/human-action-token.ts);它证的是「这一下来自一个页面文档」,
+  // **不是**「某个人按了鼠标」—— 所以也不能写成「用户主动放开」。拿不出凭据的请求压根
+  // 走不到这里(闸上 403),剩下的只有不过闸的内部直调,那一档如实写「来源无法确认」。
+  console.warn(`[ash] ${origin === "page" ? "页面发起的" : "来源无法确认的"}请求放开回合占位 task=${taskId}（${detail}）`);
   // 核对后置条件(理由见 `runnable`)。排在释放之后 —— 释放那两行一个 await 都不能隔。
   const after = await runnableAfterRelease(taskId);
   if (!after.runnable) {
@@ -283,8 +354,8 @@ export async function releaseSuspectTurn(
     `released-turn:${suspect.claimedAt}:${suspect.seq}`,
     "回合占位已放开",
     (authorization
-      ? `这个任务的回合占位已凭离机授权签名放开（授权公钥 ${authorization.keyFingerprint}；${detail}）。`
-      : `这个任务的回合占位已通过显式请求放开（${detail}）。`)
+      ? `这个任务的回合占位已凭离机授权签名放开（${origin === "page" ? "由本机页面发起" : "请求来源无法确认"}；授权公钥 ${authorization.keyFingerprint}；${detail}）。`
+      : `这个任务的回合占位已放开，${origin === "page" ? "由本机页面发起" : "请求来源无法确认"}（${detail}）。`)
     + (after.runnable ? "现在可以继续运行了。" : `但它还点不动运行：${after.nextStep ?? "请刷新查看当前状态"}。`)
     + SIDE_EFFECT,
   );
@@ -299,10 +370,10 @@ function notSuspectReason(
 ): string | null {
   if (UNBOUNDED_WAIT_ROLES.has(current.role)) {
     return `这个回合占位的身份是 ${current.role}，它正常就会长时间持有（等人工裁决、等仓库锁、等打包传输），`
-      + "系统无法按「占了多久」判断它是不是卡住了。确认那一侧确实不动了，用停止任务来收它";
+      + "系统无法按「占了多久」判断它是不是卡住了，不提供手动放开；请等待原持有者结束，长期不结束时查看对应流程的日志";
   }
   if (current.token !== null) return "这一轮已经绑过回合令牌，它有正常的结算路径，不该从旁边拔掉";
-  if (isRunning(current.taskId)) return "这个任务此刻真有 CLI 进程在跑，要收掉它请用停止任务";
+  if (isRunning(current.taskId)) return "这个任务此刻仍有 CLI 进程在运行，不能从旁边拔掉它的回合占位";
   if (now - current.claimedAt <= thresholdMs) {
     return `这个回合占位才持有了 ${held(now - current.claimedAt)}，还在正常起跑的时间范围内（阈值 ${held(thresholdMs)}），再等一会儿`;
   }

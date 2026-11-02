@@ -16,7 +16,7 @@ import { freeManualRepairPrompt } from "./free-review-prompts.js";
 import { latestWorkspaceRun, reviewingRun, type ReviewRunRow } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { claimTurn, releaseTurn, whenTurnIdle } from "./runs.js";
+import { claimOwnTurn, releaseTurn, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
 // 「按意见修复」按钮 = 代发一条带报告链接的修复消息，**不翻转任何状态**。
@@ -113,8 +113,11 @@ export async function startManualFreeReviewRepair(
   // 与即时派审同级的原子互斥：只查 DB status 挡不住「普通回合已 claim、尚未落 running」
   // 的窗口（审查实测：窗口里修复照样 200 并排到那个回合之后）。占位身份 dispatch，
   // 校验与排队注册整段占住；释放后修复消息才可能真正投递，投递回调里再重验一遍锚点。
+  // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
+  // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  if (holdingTurn && !claimTurn(taskId, "dispatch")) {
+  const turn = holdingTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再发起修复");
   }
   try {
@@ -143,6 +146,6 @@ export async function startManualFreeReviewRepair(
       releaseFreeWorkflowAction(taskId);
     }
   } finally {
-    if (holdingTurn) releaseTurn(taskId);
+    if (turn) releaseTurn(taskId, turn);
   }
 }

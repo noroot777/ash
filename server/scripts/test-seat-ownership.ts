@@ -40,13 +40,19 @@ const { createTasks } = await import("../src/task-store.js");
 const { claimTurn, releaseTurn } = await import("../src/runs.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { bus } = await import("../src/bus.js");
-const { claimQueueSeat, queueClaimError, seatGeneration } = await import("../src/queue-seat.js");
+const { claimQueueSeat, queueClaimError } = await import("../src/queue-seat.js");
 const { reclaimStrandedSeat } = await import("../src/scheduler.js");
 const { releaseSuspectTurn } = await import("../src/turn-lock-reclaim.js");
 const { noteUserActionOutcome, recentRejectionNotices } = await import("../src/user-action-rejection.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { mountTaskRoutes } = await import("../src/task-routes.js");
 const { personalWriteGate, isHumanOnlyPath } = await import("../src/auth/personal-gate.js");
+const {
+  issueHumanActionToken,
+  liveHumanActionTokenCount,
+  HUMAN_ACTION_TOKEN_HEADER,
+  HUMAN_ACTION_TOKEN_NEXT_HEADER,
+} = await import("../src/auth/human-action-token.js");
 const { actorOf } = await import("../src/auth/context.js");
 const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
@@ -89,6 +95,16 @@ const post = async (path: string, body?: unknown) => {
 
 const statusOf = async (taskId: string): Promise<string | undefined> =>
   (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.status;
+
+/**
+ * 「这具 queued 有没有主」的判据:**库里那份占位凭证**。
+ *
+ * 不是内存里的代次表 —— 重启之后代次表是空的、而遗留还在库里,那条判据就答不了这一问了。
+ * 凭证由 `taskQueueReservation` 发、跟着 `queue_seat_token` 落库,回滚那一笔的 WHERE 里带着
+ * 它:所以「只撤我自己那一代」是由 SQL 核验的,查几次都不算。
+ */
+const seatTokenOf = async (taskId: string): Promise<string | null | undefined> =>
+  (await db.select({ token: tasks.queueSeatToken }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.token;
 
 // ── 窄缝注入 ─────────────────────────────────────────────────────────────────
 // 要测的那个交错只存在于 `setTaskStatus` 内部:整行 SELECT 已经返回、CAS UPDATE 还没发出。
@@ -160,8 +176,10 @@ await db.insert(queueItems).values({ id: "qi-stopwin", queueId: "q-stopwin", tas
   assert.ok(claim.ok && claim.seat, "占位该认领得到");
   assert.equal(await statusOf("t-stopwin"), "queued");
   // 停止直接写库 —— 它就是不走 claimTurn 的那一类写入者,这是本节的要点。
+  // 连凭证一起清掉:生产里这条路是 `setTaskStatus(canceled)`,它每次写都会把
+  // `queue_seat_token` 置空。这里用裸 UPDATE 只为把注入点钉在那一瞬,口径要跟生产一致。
   inject = async () => {
-    await db.update(tasks).set({ status: "canceled" }).where(eq(tasks.id, "t-stopwin"));
+    await db.update(tasks).set({ status: "canceled", queueSeatToken: null }).where(eq(tasks.id, "t-stopwin"));
   };
   await claim.seat!.release();
   assert.equal(inject, null, "注入必须真的发生过,否则这一节什么都没测到");
@@ -170,7 +188,7 @@ await db.insert(queueItems).values({ id: "qi-stopwin", queueId: "q-stopwin", tas
     "canceled",
     "旧回滚不许盖掉用户点停止写下的 canceled —— 那正是实测里「已取消又跳回失败」",
   );
-  assert.equal(seatGeneration("t-stopwin"), 0, "这一代不再有负责人,号码必须清掉");
+  assert.equal(await seatTokenOf("t-stopwin"), null, "这一代不再有负责人,凭证必须清掉");
 }
 
 // ── ③ 一个任务不许叠出第二代占位 ────────────────────────────────────────────
@@ -184,7 +202,8 @@ await db.insert(queueItems).values({ id: "qi-regen", queueId: "q-regen", taskId:
 {
   const first = await claimQueueSeat("t-regen");
   assert.ok(first.ok && first.seat);
-  const genBefore = seatGeneration("t-regen");
+  const tokenBefore = await seatTokenOf("t-regen");
+  assert.ok(tokenBefore, "认领成功就该在库里留下一份占位凭证");
 
   // 同一条链上直接再认领一次:挡回,且话术说真话(不许套用「同队有人在跑」—— 挡路的
   // 是它自己,用户会去等一个不存在的前项)。
@@ -192,7 +211,7 @@ await db.insert(queueItems).values({ id: "qi-regen", queueId: "q-regen", taskId:
   assert.equal(again.ok, false, "这个任务已经有一代活着的占位,不许叠第二代");
   assert.equal(again.ok === false && again.self, true, "要标明挡路的是自己那一代");
   assert.match(queueClaimError(again as { blockers: string[]; self?: boolean }), /另一条启动路径/);
-  assert.equal(seatGeneration("t-regen"), genBefore, "被挡的认领不许换代");
+  assert.equal(await seatTokenOf("t-regen"), tokenBefore, "被挡的认领不许换掉凭证");
 
   // 窄缝里也一样:回滚正在提交时另一条入口来认领,照样挡回,于是旧回滚的归属仍然成立。
   let inWindow: Awaited<ReturnType<typeof claimQueueSeat>> | null = null;
@@ -201,7 +220,7 @@ await db.insert(queueItems).values({ id: "qi-regen", queueId: "q-regen", taskId:
   assert.equal(inject, null, "注入必须真的发生过,否则这一节什么都没测到");
   assert.equal(inWindow !== null && (inWindow as { ok: boolean }).ok, false, "窄缝里的认领同样被挡");
   assert.equal(await statusOf("t-regen"), "failed", "没有后来者抢走,第一代的回滚照常提交");
-  assert.equal(seatGeneration("t-regen"), 0, "回滚落地后号码必须清掉,否则兜底会一直让位");
+  assert.equal(await seatTokenOf("t-regen"), null, "回滚落地后凭证必须清掉,否则兜底会一直让位");
 
   // 号码清了之后,下一次认领就该正常放行 —— 挡的是「同时」,不是「以后」。
   const later = await claimQueueSeat("t-regen");
@@ -235,7 +254,7 @@ await db.insert(queueItems).values({ id: "qi-guard2", queueId: "q-guard2", taskI
   await reclaimStrandedSeat("t-guard2", "q-guard2", "failed", { repush: "never" });
   assert.equal(inject, null, "注入必须真的发生过");
   assert.ok(claimed && (claimed as { ok: boolean }).ok, "窗口里的认领该成功(此刻还没有活着的占位)");
-  assert.notEqual(seatGeneration("t-guard2"), 0, "认领之后这具 queued 就有主了");
+  assert.ok(await seatTokenOf("t-guard2"), "认领之后这具 queued 就有主了");
   assert.equal(await statusOf("t-guard2"), "queued", "有主的 queued 不许被守卫撤回终态");
   // 这一代的 `prevStatus` 就是它认领之前读到的那个 queued(它接手的本来就是一具遗留),
   // 所以它的 release 是空转:任务仍停在 queued,号码清掉。这是对的 —— seat 的回滚目标
@@ -244,7 +263,7 @@ await db.insert(queueItems).values({ id: "qi-guard2", queueId: "q-guard2", taskI
   // 号码一清它下一趟就接得上。本节要钉的是**守卫那一笔没有写进去**。
   await (claimed as { seat: { release(): Promise<void> } }).seat.release();
   assert.equal(await statusOf("t-guard2"), "queued");
-  assert.equal(seatGeneration("t-guard2"), 0, "号码必须清掉,否则守卫永远在读库之前让位");
+  assert.equal(await seatTokenOf("t-guard2"), null, "凭证必须清掉,否则守卫永远在读库之前让位");
   await reclaimStrandedSeat("t-guard2", "q-guard2", "failed", { repush: "never" });
   assert.equal(await statusOf("t-guard2"), "failed", "持有正确回滚目标的那一方来收,才收得干净");
 }
@@ -256,6 +275,7 @@ await db.insert(queueItems).values({ id: "qi-guard2", queueId: "q-guard2", taskI
 // 发来的请求当成用户知情同意,等于把这个设计的唯一前提抽掉。
 assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn"), true);
 assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/approval"), true);
+assert.equal(isHumanOnlyPath("/api/tasks/abc/team/kill-cua"), true, "杀 CUA 旁路会话同样只有真人按得动");
 assert.equal(isHumanOnlyPath("/api/tasks/abc/stop"), false, "停止不在真人专属之列");
 assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只认那条路径本身");
 
@@ -275,6 +295,15 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   mountTaskRunRoutes(inner);
   mountTaskRoutes(inner);
   gated.route("/api", inner);
+  const signedGateApproval = async () => {
+    const response = await gated.request("/api/tasks/t-gate/reclaim-turn/approval", {
+      method: "POST", headers: { [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken() },
+    });
+    assert.equal(response.status, 200);
+    assert.ok(response.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER), "申请也必须续发页面凭据");
+    const challenge = await response.json() as { challengeId: string; payload: string };
+    return { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
+  };
 
   await createTasks([
     { ...baseTask, id: "t-gate", title: "gate", status: "queued" },
@@ -298,6 +327,149 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
     assert.equal(claimTurn("t-gate"), false, "403 之后那把锁必须还在");
   }
 
+  // ── 不申报身份的裸请求:默认必须是拒绝 ──────────────────────────────────────
+  // 这一格是上一轮的缺口。三段旧判据判的都是「调用方自己说了什么」——没自称 agent、没带
+  // 浏览器头 —— 于是一个什么头都不带的 `curl` 把三段全满足了:**诚实申报的 403、一言不发
+  // 的 200**(审查实测 `200 {reclaimed:true, role:"single", heldMs:45}`,锁确实被放开)。
+  // agent 手里有 shell,这不是理论缺口。
+  //
+  // 钉的是不变量本身:**身份判定不能建立在调用方自愿申报上** —— 要一份本服务自己发出去
+  // 的凭据,拿不出来就是拒绝。所以这里不去穷举「哪些头没带」,只问「没凭据的通不通」。
+  for (const mode of ["multi", "single"]) {
+    await writeSystemSetting("instanceMode", mode);
+    invalidateInstanceConfig();
+    const bare = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    });
+    // 多人模式下 `authGate` 先把匿名请求兜住(401),自用模式下走到凭据这一关(403)。
+    // 两档都是拒绝 —— 这一节钉的是「裸请求通不通」,不是具体哪个码。
+    assert.ok([401, 403].includes(bare.status), `${mode} 模式下不带凭据的裸请求必须被拒绝`);
+    if (mode === "single") {
+      assert.equal(bare.status, 403, "自用模式下该由真人专属闸拒绝(那里原本是放行的)");
+      assert.match((await bare.json() as { error: string }).error, /页面凭据/);
+    }
+    assert.equal(claimTurn("t-gate"), false, "被拒之后那把锁必须还在");
+  }
+  await writeSystemSetting("instanceMode", "single");
+  invalidateInstanceConfig();
+
+  // 伪造的、上次启动发的(前缀对不上)、以及空串,一律不算凭据。
+  for (const forged of ["", "deadbeef", "AAAAAAAAAAA.ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"]) {
+    const bad = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: forged },
+      body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    });
+    assert.equal(bad.status, 403, "编出来的凭据不算凭据");
+  }
+
+  // 自称 agent **而且**手里有一份真凭据:仍然 403 —— 两道判据是与关系,不是或关系。
+  // (真实形态:agent 从页面文档里抄到一份,再带上自己的回合凭证。)
+  const stolen = issueHumanActionToken();
+  const agentWithToken = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-ash-source-task-id": "source-agent",
+      "x-ash-turn-token": "valid-turn",
+      [HUMAN_ACTION_TOKEN_HEADER]: stolen,
+    },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(agentWithToken.status, 403, "自称 agent 的请求有凭据也不许按");
+  assert.match((await agentWithToken.json() as { error: string }).error, /只有账号本人/);
+
+  // 带着一份页面凭据:放行,并且**响应头**里给回下一份(烧一份换一份,不然按完一次就按不动了)。
+  const pageApproval = await signedGateApproval();
+  const pageToken = issueHumanActionToken();
+  const liveBefore = liveHumanActionTokenCount();
+  const byPage = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+    method: "POST",
+    headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: pageToken },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval: pageApproval }),
+  });
+  assert.equal(byPage.status, 200, "带着页面凭据的请求该放行");
+  const reclaimBody = await byPage.json() as Record<string, unknown>;
+  assert.equal(reclaimBody.reclaimed, true);
+  const rotated = byPage.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER);
+  assert.equal(typeof rotated, "string", "响应必须给回下一份凭据");
+  assert.notEqual(rotated, pageToken, "给回的必须是新的一份");
+  assert.equal(reclaimBody.nextHumanActionToken, undefined,
+    "下一份凭据不许再塞在响应体里:那条路只覆盖成功分支,正是 N2 的成因");
+  assert.equal(liveHumanActionTokenCount(), liveBefore, "烧掉一份、发回一份,在册数不该涨");
+  // **记录只说得出凭据能证的那一档。** 过了闸 = 这一下来自一个本服务发过文档的页面,
+  // 所以痕迹里写「由本机页面发起」;但它仍然证不了「某个人按了鼠标」(本机程序读得到
+  // 那份文档),所以照样不许升格成「用户主动放开」。不过闸的内部直调写「来源无法确认」
+  // (test-turn-reclaim.ts ⑤ 钉的是那一档)。
+  {
+    const released = (await recentRejectionNotices("t-gate")).find((n) => n.action === "回合占位已放开");
+    assert.ok(released, "过闸放开也必须持久留痕");
+    assert.match(released.reason, /由本机页面发起/, "核验过页面凭据的那一下,措辞该说到这一档");
+    assert.doesNotMatch(released.reason, /用户主动|由你/, "页面凭据证不到「人按的」,不许替它升一档");
+    assert.doesNotMatch(
+      released.reason,
+      /还点不动运行[^。]*放开之后这个任务就能再次运行/,
+      "同一条记录不许前半句说点不动、后半句说能运行",
+    );
+  }
+
+  // ── **N2 本体**:过了闸之后,业务怎么回都得把下一份凭据交回去 ────────────────────
+  //
+  // 凭据是闸烧的,而上一版的续发写在各条路由的**成功分支**里:400(没确认重复风险)、
+  // 409(没有占位可放)、500 这几条路径一个字都不发 —— 于是同一个页面的下一次点击必然 403
+  // 「需要页面凭据」,用户只能刷新页面,而他上一步做的其实是一次完全正常的操作。
+  //
+  // 这里走 400 那条:故意不确认重复风险。它必须 ① 带回下一份凭据,② 那一份真的按得动。
+  {
+    const beforeReject = issueHumanActionToken();
+    const liveAtReject = liveHumanActionTokenCount();
+    const rejected = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: beforeReject },
+      body: JSON.stringify({ acknowledgeDuplicateRisk: false }),
+    });
+    assert.equal(rejected.status, 400, "台子前提:没确认重复风险的那一次是业务拒绝");
+    const afterReject = rejected.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER);
+    assert.equal(typeof afterReject, "string", "业务拒绝也必须给回下一份凭据(闸烧掉的那一份)");
+    assert.notEqual(afterReject, beforeReject, "给回的必须是新的一份");
+    assert.equal(liveHumanActionTokenCount(), liveAtReject, "烧一份发一份,在册数不该涨");
+    // 那一份真的按得动:这才是 N2 要的结论 —— 一次普通的业务拒绝之后不必刷新页面。
+    assert.equal(claimTurn("t-gate"), true);
+    await new Promise((r) => setTimeout(r, 40));
+    const retryApproval = await signedGateApproval();
+    const retried = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+      method: "POST",
+      headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: afterReject! },
+      body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval: retryApproval }),
+    });
+    assert.equal(retried.status, 200, "拒绝之后给回的那一份必须按得动,不能逼用户刷新页面");
+    assert.equal(typeof retried.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER), "string", "这一次照样要续一份");
+  }
+
+  // 重放刚用过的那一份:403。日志、截图、历史记录里抄到的那一串按不动第二次。
+  assert.equal(claimTurn("t-gate"), true);
+  await new Promise((r) => setTimeout(r, 40));
+  const replay = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+    method: "POST",
+    headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: pageToken },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+  });
+  assert.equal(replay.status, 403, "用过的凭据不许重放");
+  assert.equal(claimTurn("t-gate"), false, "重放被拒之后那把锁必须还在");
+  // 轮换给回的那一份接着就能用 —— 页面因此不会撞上一个按不动的开关。
+  const rotatedApproval = await signedGateApproval();
+  const withRotated = await gated.request("/api/tasks/t-gate/reclaim-turn", {
+    method: "POST",
+    headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: rotated as string },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval: rotatedApproval }),
+  });
+  assert.equal(withRotated.status, 200, "轮换给回的那一份必须接着能用");
+  // 这一节放开过两次锁,后面几节仍按「锁占着不动」那个前提断言 —— 把前提摆回去。
+  assert.equal(claimTurn("t-gate"), true);
+  await new Promise((r) => setTimeout(r, 40)); // 过了可疑阈值
+
   const invalidCredentials: Record<string, string>[] = [
     { "x-ash-source-task-id": "source-agent", "x-ash-turn-token": "expired" },
     { "x-ash-source-task-id": "source-agent" },
@@ -309,7 +481,8 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
     const invalid = await gated.request("/api/tasks/t-gate/reclaim-turn", {
       method: "POST", headers, body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
     });
-    assert.equal(invalid.status, 403, "真人专属闸必须拒绝无效或不完整的任务凭证");
+    assert.equal(invalid.status, 403,
+      "真人专属闸必须拒绝无效或不完整的任务凭证(申报了 agent 身份的那几格先被挡;剩下的在凭据那一关)");
   }
 
   for (const headers of invalidCredentials) {
@@ -351,8 +524,12 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   await writeSystemSetting("instanceMode", "single");
   invalidateInstanceConfig();
 
+  // 带着真凭据、但没勾风险确认:凭据证的是「这一下来自页面」,不是「用户知情同意」,
+  // 两关各管一件事,所以这里必须仍然 400。
   const noConsent = await gated.request("/api/tasks/t-gate/reclaim-turn", {
-    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    method: "POST",
+    headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken() },
+    body: "{}",
   });
   assert.equal(noConsent.status, 400, "默认本机身份不等于确认风险");
   const crossSite = await gated.request("/api/tasks/t-gate/reclaim-turn", {
@@ -362,10 +539,14 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   assert.equal(crossSite.status, 403, "跨站请求不能冒充用户确认");
   assert.equal(claimTurn("t-gate"), false, "授权失败不能释放锁");
 
-  const challenge = await (await gated.request("/api/tasks/t-gate/reclaim-turn/approval", { method: "POST" })).json() as { challengeId: string; payload: string };
-  const approval = { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
+  const approval = await signedGateApproval();
   const asHuman = await gated.request("/api/tasks/t-gate/reclaim-turn", {
-    method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken(),
+    },
     body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval }),
   });
   assert.equal(asHuman.status, 200, "账号本人该按得动");
@@ -453,7 +634,7 @@ for (const firstWriter of ["claim", "reclaim"]) {
     if (firstWriter === "claim") {
       claim = claimQueueSeat(taskId);
       await writeStarted;
-      assert.equal(seatGeneration(taskId), 0, "认领写门被占时尚未发号");
+      assert.equal(await seatTokenOf(taskId), null, "认领写门被占时凭证还没落库");
       reclaim = reclaimStrandedSeat(taskId, taskId, "failed", { repush: "never" });
     } else {
       reclaim = reclaimStrandedSeat(taskId, taskId, "failed", { repush: "never" });
@@ -467,8 +648,20 @@ for (const firstWriter of ["claim", "reclaim"]) {
   await reclaim!;
   assert.ok(claimed.ok && claimed.seat, "两个合法提交次序中认领都必须成功");
   assert.equal(await statusOf(taskId), "queued", "补偿不能撤销刚认领成功的 queued");
-  assert.notEqual(seatGeneration(taskId), 0);
-  assert.deepEqual(published, firstWriter === "claim" ? ["queued"] : ["failed", "queued"], "过期补偿不能发布终态副作用");
+  assert.ok(await seatTokenOf(taskId), "认领提交之后这具 queued 就有主了");
+  // 要钉的是「**过期的那一方**一个副作用都不发布」。
+  //
+  // · claim 先写:补偿读到的那份凭证已经被认领那一笔换掉,它的 WHERE 不命中 —— 必须一个字
+  //   都不写、一条都不发,所以这一档是精确的 `["queued"]`。
+  // · reclaim 先写:它当时收的确实是一具**无主**的 queued(凭证为空),那一笔合法,`failed`
+  //   该发;随后认领把它重新占成 queued,也合法。两笔都该发,但它们是两条独立的写,各自
+  //   「UPDATE → 读 sessions → publish」,**发布先后不由提交先后决定**,所以这一档只核对
+  //   发了哪两条 + 库里最后是谁,不钉顺序(钉顺序测的是调度运气,不是不变量)。
+  if (firstWriter === "claim") {
+    assert.deepEqual(published, ["queued"], "过期补偿不能发布终态副作用");
+  } else {
+    assert.deepEqual([...published].sort(), ["failed", "queued"], "两笔合法的写都该发布");
+  }
   unsubscribe();
   await claimed.seat!.release();
 }

@@ -33,11 +33,13 @@ import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
+import { autoCommitAcceptanceWorkspace } from "./accept-workspace-commit.js";
 import { mergePreflight } from "./task-accept-merge-preflight.js";
 import { gateMergeSource } from "./accept-gate-state.js";
 import { acceptGateCheck, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
 import { discardPendingAcceptanceGate, finishAcceptanceGate } from "./task-accept-gate-launch.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
+import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 
 export type AcceptSuccess = {
   accepted: true;
@@ -69,7 +71,7 @@ export type AcceptSuccess = {
 
 
 
-export type AcceptTaskResult = AcceptSuccess | AcceptFailure;
+export type AcceptTaskResult = (AcceptSuccess | AcceptFailure) & { autoCommit?: AcceptanceAutoCommitOutcome };
 
 const mergeLabel: Record<string, string> = {
   already_merged: "任务分支此前已合并",
@@ -111,6 +113,7 @@ async function acceptTaskUnlocked(
   gateIntent?: AcceptGateIntent,
   gatePassedRunId?: string,
   reviewAuthority?: ReviewAuthority,
+  onAutoCommit?: (outcome: AcceptanceAutoCommitOutcome) => void,
 ): Promise<AcceptTaskResult> {
   const preflight = await acceptancePreflight(taskId);
   if (preflight) return preflight;
@@ -179,6 +182,12 @@ async function acceptTaskUnlocked(
   const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const cheap = await mergePreflight(task, gateProject, by, commitOverride);
   if (cheap) return cheap;
+  if (gateProject?.acceptAutoCommit) {
+    const autoCommitFailure = await autoCommitAcceptanceWorkspace(task, true, onAutoCommit);
+    if (autoCommitFailure) return autoCommitFailure;
+    const afterCommit = await mergePreflight(task, gateProject, by, commitOverride);
+    if (afterCommit) return afterCommit;
+  }
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
     choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority },
@@ -621,6 +630,7 @@ export async function acceptTask(
     };
   }
   let result: AcceptTaskResult;
+  let autoCommit: AcceptanceAutoCommitOutcome | undefined;
   let freeWorkflowLocked = false;
   try {
     try {
@@ -650,6 +660,7 @@ export async function acceptTask(
             taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit,
             advanceOpts.acceptGate, advanceOpts.acceptGatePassedRunId,
             advanceOpts.reviewAuthority,
+            outcome => { autoCommit = outcome; },
           );
         });
       }
@@ -678,5 +689,5 @@ export async function acceptTask(
   // 验收前置命令的发射点。**必须在这儿**（仓库锁之外、验收互斥之外）：那条命令要跑十几
   // 分钟，占着仓库锁会让同仓库其它任务的验收全部干等；而它跑完之后还要自己再发起一次
   // 验收，占着验收互斥的话那一次会被自己挡回来。判定仍在锁里做（acceptGateCheck）。
-  return finishAcceptanceGate(taskId, result);
+  return { ...await finishAcceptanceGate(taskId, result), ...(autoCommit ? { autoCommit } : {}) };
 }

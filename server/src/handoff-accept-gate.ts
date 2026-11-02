@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { acceptGateRuns } from "./db/schema.js";
+import { gateLogFileNames } from "./accept-gate-diagnosis.js";
 import { acceptGateLogPath } from "./accept-gate-process.js";
 import { hasOwnedGateProcess, reconcileGateProcesses } from "./accept-gate-ownership.js";
 import { HandoffError, type HandoffManifest } from "./handoff-types.js";
@@ -8,7 +9,14 @@ import { HandoffError, type HandoffManifest } from "./handoff-types.js";
 type GateRow = typeof acceptGateRuns.$inferSelect;
 export type HandoffGateRun = Pick<GateRow, "id" | "command" | "status" | "exitCode" | "failure" | "sourceCommit"
   | "targetBranch" | "targetCommit" | "fastForward" | "startedAt" | "finishedAt" | "handoffAt" | "handoffError">
-  & { executionMode?: GateRow["executionMode"] };
+  // diagnosis 可选：旧 manifest 没有这个字段，迁入后按 null 处理（没归类过）。不带上它的话
+  // 迁入页面仍说「出路见下面那段结论」而下面什么都没有（第 1 轮审查 N2）。
+  & { executionMode?: GateRow["executionMode"]; diagnosis?: GateRow["diagnosis"];
+    entryProbe?: GateRow["entryProbe"]; missAttribution?: GateRow["missAttribution"];
+    // 那段结论是哪一代判据生成的。**必须跟着搬**：不搬的话迁入后全变 null=旧代,一份当代
+    // 的结论会在对端被当成失效历史;而对端版本比本机老时,它本机的闸照旧认不出我们的代号,
+    // 两头都停在保守的那一边(第 2 轮审查 F1)。旧 manifest 没这个字段 → null → 按旧代待。
+    diagnosisGeneration?: GateRow["diagnosisGeneration"] };
 const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 
 export function validateGatePayload(manifest: HandoffManifest): void {
@@ -22,9 +30,11 @@ export function validateGatePayload(manifest: HandoffManifest): void {
   for (const run of runs) {
     if (!run || !validId(run.id) || seen.has(run.id) || !["passed", "failed", "interrupted", "canceled"].includes(run.status)
       || typeof run.command !== "string" || typeof run.startedAt !== "string"
-      || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived"].includes(run.failure)
+      // `command_missing` 这个类别已经撤掉了(第 10 轮审查 F1),但**旧机器导出的 payload 里
+      // 可能还有**:读得进来、不许卡住导入;产生端再也不会写它。
+      || ![null, "exit_code", "timeout", "spawn_failed", "server_restarted", "canceled", "source_changed", "process_unconfirmed", "ownership_waived", "command_missing"].includes(run.failure)
       || (run.exitCode != null && !Number.isInteger(run.exitCode))) throw new HandoffError("acceptGateRuns 记录非法");
-    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError"] as const) {
+    for (const field of ["sourceCommit", "targetBranch", "targetCommit", "finishedAt", "handoffAt", "handoffError", "diagnosis", "entryProbe", "missAttribution", "diagnosisGeneration"] as const) {
       if (run[field] != null && typeof run[field] !== "string") throw new HandoffError(`acceptGateRuns.${field} 非法`);
     }
     if (run.fastForward != null && typeof run.fastForward !== "boolean") throw new HandoffError("acceptGateRuns.fastForward 非法");
@@ -45,7 +55,23 @@ export async function collectGateRuns(taskId: string): Promise<HandoffGateRun[]>
   return rows.map(row => ({ id: row.id, command: row.command, status: row.status, exitCode: row.exitCode,
     failure: row.failure, sourceCommit: row.sourceCommit, targetBranch: row.targetBranch, targetCommit: row.targetCommit,
     fastForward: row.fastForward, startedAt: row.startedAt, finishedAt: row.finishedAt,
-    handoffAt: row.handoffAt, handoffError: row.handoffError, executionMode: row.executionMode }));
+    handoffAt: row.handoffAt, handoffError: row.handoffError, executionMode: row.executionMode,
+    diagnosis: row.diagnosis, entryProbe: row.entryProbe, missAttribution: row.missAttribution,
+    diagnosisGeneration: row.diagnosisGeneration }));
+}
+
+/**
+ * 这一次接力把这份日志的文件带过来没有。
+ *
+ * 判据是**整组产物**而不是那个 `.log`（第 8 轮审查 F1）：现场和进度是单独的文件，只有
+ * 它们到了也照样看得出「停在哪一条、静了多久」，这时候给路径挂上 `.not-transferred`
+ * 等于把到手的证据判成没来，连带 `.notes`/`.scene` 的路径也一起拼歪。一个都没到才标。
+ */
+function transferredLogPath(manifest: HandoffManifest, runId: string): string {
+  const path = acceptGateLogPath(manifest.task.id, runId);
+  const names = new Set(gateLogFileNames(`accept-gate-${runId}.log`));
+  const arrived = manifest.files.some(file => file.kind === "run-artifact" && names.has(file.rel));
+  return arrived ? path : `${path}.not-transferred`;
 }
 
 export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete" | "insert">,
@@ -58,8 +84,11 @@ export async function replaceGateRuns(store: Pick<typeof db, "select" | "delete"
   await store.delete(acceptGateRuns).where(eq(acceptGateRuns.taskId, manifest.task.id));
   if (rows.length) await store.insert(acceptGateRuns).values(rows.map(row => ({
     ...row, taskId: manifest.task.id, projectId: manifest.targetProjectId,
-    cwd: "（跨机迁入的历史快照，当前机器不可重跑）", logPath: acceptGateLogPath(manifest.task.id, row.id)
-      + (manifest.files.some(file => file.kind === "run-artifact" && file.rel === `accept-gate-${row.id}.log`) ? "" : ".not-transferred"),
+    cwd: "（跨机迁入的历史快照，当前机器不可重跑）", logPath: transferredLogPath(manifest, row.id),
+    diagnosis: row.diagnosis ?? null,
+    entryProbe: row.entryProbe ?? null,
+    missAttribution: row.missAttribution ?? null,
+    diagnosisGeneration: row.diagnosisGeneration ?? null,
     sourceFingerprint: null, pid: null, pidStartedAt: null, processPending: false, acceptOptions: null,
   })));
 }

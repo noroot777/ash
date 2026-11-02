@@ -27,6 +27,7 @@ const { mountTurnReclaimRoutes } = await import("../src/turn-reclaim-routes.js")
 const { authGate } = await import("../src/auth/middleware.js");
 const { resourceGate } = await import("../src/auth/resource-gate.js");
 const { personalWriteGate } = await import("../src/auth/personal-gate.js");
+const { issueHumanActionToken, HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_NEXT_HEADER } = await import("../src/auth/human-action-token.js");
 const { recentRejectionNotices } = await import("../src/user-action-rejection.js");
 
 let clock = Date.now();
@@ -162,15 +163,16 @@ const api = new Hono();
 mountTurnReclaimRoutes(api);
 app.route("/api", api);
 const post = (taskId: string, approval?: unknown, headers: Record<string, string> = {}) => app.request(`/api/tasks/${taskId}/reclaim-turn`, {
-  method: "POST", headers: { "content-type": "application/json", ...headers },
+  method: "POST", headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken(), ...headers },
   body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval }),
 });
 const requestApproval = (taskId = "target", headers: Record<string, string> = {}) =>
-  app.request(`/api/tasks/${taskId}/reclaim-turn/approval`, { method: "POST", headers });
+  app.request(`/api/tasks/${taskId}/reclaim-turn/approval`, { method: "POST", headers: { [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken(), ...headers } });
 const nextChallenge = async (taskId = "target") => {
   const response = await requestApproval(taskId);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.ok(response.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER), "申请成功也轮换页面凭据");
   return response.json() as Promise<{ challengeId: string; payload: string }>;
 };
 const wait = () => new Promise((resolveWait) => setTimeout(resolveWait, 8));
@@ -223,6 +225,15 @@ const publicChallenge = await nextChallenge();
 for (let count = 0; count < 1050; count++) assert.deepEqual(await nextChallenge(), publicChallenge, "HTTP 连刷申请不能耗尽配额或作废用户申请");
 assert.equal((await post("target", makeProof(publicChallenge, generateKeyPairSync("ed25519").privateKey))).status, 403, "能读页面和申请也不能伪造");
 const validProof = makeProof(publicChallenge);
+for (const path of ["reclaim-turn/approval", "reclaim-turn"]) {
+  const withoutPage = await app.request(`/api/tasks/target/${path}`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval: validProof }),
+  });
+  assert.equal(withoutPage.status, 403, "离机签名不绕过主分支的页面凭据闸");
+  assert.match((await withoutPage.json() as { error: string }).error, /页面凭据/);
+  assert.ok(isTurnClaimed("target"));
+}
 assert.equal((await post("target", validProof, { "x-ash-source-task-id": "agent" })).status, 403);
 assert.equal((await post("target", validProof, { origin: "https://other.example" })).status, 403);
 assert.equal((await post("other", validProof)).status, 403, "不能换任务复用");
@@ -241,7 +252,7 @@ releaseTurn("target");
 assert.ok(claimTurn("target"));
 await wait();
 assert.equal((await post("target", stale)).status, 403, "签名尚未消费时换主也拒绝");
-assert.equal((await releaseSuspectTurn("target", undefined, { seq: previous.seq, keyFingerprint: humanApproval.fingerprint! })).ok, false, "释放函数复核签名占位身份");
+assert.equal((await releaseSuspectTurn("target", undefined, "unverified", { seq: previous.seq, keyFingerprint: humanApproval.fingerprint! })).ok, false, "释放函数复核签名占位身份");
 assert.equal(isTurnClaimed("target"), true);
 const parallel = makeProof(await nextChallenge());
 const results = await Promise.all([post("target", parallel), post("target", parallel)]);
@@ -257,7 +268,7 @@ const expectReason = async (pattern: RegExp) => {
 };
 await expectReason(/没有被占着的回合占位/);
 assert.ok(claimTurn("target", "duet"));
-await expectReason(/身份是 duet.*用停止任务/);
+await expectReason(/身份是 duet.*不提供手动放开/);
 releaseTurn("target");
 assert.ok(claimTurn("target"));
 bindTurnToken("target", "bound-token");
@@ -266,7 +277,7 @@ releaseTurn("target");
 assert.ok(claimTurn("target"));
 const liveHandle = { kill: () => {} };
 trackRun("target", liveHandle);
-await expectReason(/真有 CLI 进程在跑.*停止任务/);
+await expectReason(/仍有 CLI 进程在运行.*不能从旁边拔掉/);
 untrackRun("target", liveHandle);
 releaseTurn("target");
 const realNow = Date.now;

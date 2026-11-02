@@ -8,6 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { request } from "node:http";
+import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { windowsRestartPlan, windowsTerminateScript } from "./windows-restart.mjs";
 
@@ -27,17 +28,63 @@ export function capture(file, args, opts = {}) {
   }
 }
 
-function candidates(cmd) {
+export function candidates(cmd) {
   if (!IS_WINDOWS || /\.[a-z0-9]+$/i.test(cmd)) return [cmd];
   // Windows 上 `npm` 这种名字实际是 `npm.cmd`，不展开 PATHEXT 就一个都找不到。
+  //
+  // **不含裸名**：跟 `bin-resolve.ts` 的 `candidatesIn` 一致。npm 全局目录里同名的
+  // 无后缀文件是给 POSIX shell 用的脚本，Windows 的 CreateProcess 起不来它 —— 把它
+  // 排在前面，`which` 会返回那一个、`run` 据此 spawn，拿到 ENOENT（第 1 轮审查 N2，
+  // Windows 真机实测：which 给 `ash-review-cli`、resolveBin 给 `ash-review-cli.cmd`）。
   const exts = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
-  return [cmd, ...exts.map((ext) => cmd + ext.toLowerCase())];
+  return exts.map((ext) => cmd + ext.toLowerCase());
 }
 
-/** `command -v` 的跨平台版本：在 PATH 里找可执行文件，找不到返回 null。 */
+/**
+ * CLI 常见安装目录。**与 `server/src/executors/bin-resolve.ts` 的 `extraPaths` 必须
+ * 一字不差**（那边是真相,理由和事故经过都写在它头上;两份由
+ * `server/scripts/test-win-launch.ts` 最后一节钉住）。
+ *
+ * `env` / `home` 可注入只为让那条回归翻转着比两份实现,生产路径一律用默认值。
+ */
+export function extraPaths(env = process.env, home = homedir()) {
+  if (!IS_WINDOWS) {
+    return [
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      `${home}/.local/bin`,
+      `${home}/.bun/bin`,
+      `${home}/.deno/bin`,
+      join(env.KIMI_INSTALL_DIR || join(home, ".kimi-code"), "bin"),
+    ];
+  }
+  const { APPDATA, LOCALAPPDATA, ProgramFiles, ChocolateyInstall } = env;
+  const programFiles = [ProgramFiles, env["ProgramFiles(x86)"], env["ProgramFiles(Arm)"]];
+  return [
+    APPDATA && join(APPDATA, "npm"),
+    LOCALAPPDATA && join(LOCALAPPDATA, "pnpm"),
+    LOCALAPPDATA && join(LOCALAPPDATA, "Microsoft", "WindowsApps"),
+    join(home, ".bun", "bin"),
+    join(home, ".deno", "bin"),
+    join(home, ".local", "bin"),
+    join(home, "scoop", "shims"),
+    ...programFiles.map((dir) => dir && join(dir, "nodejs")),
+    ChocolateyInstall ? join(ChocolateyInstall, "bin") : "C:\\ProgramData\\chocolatey\\bin",
+  ].filter(Boolean);
+}
+
+/**
+ * `command -v` 的跨平台版本：找不到返回 null。
+ *
+ * **扫 PATH 之后接着扫 `extraPaths()`** —— 跟 ash 自己派活时用的 `resolveBin` 同一套
+ * 候选目录。少了这一截,装机脚本会把「装了、只是不在这个 shell 的 PATH 里」判成
+ * 「没装」:`setup.mjs` 据此跳过 MCP 注册,而 ash 照样派得出任务,结果是每个任务都
+ * 交不了卷(见 bin-resolve.ts 的 extraPaths 头部)。
+ */
 export function which(cmd) {
   if (cmd.includes("/") || cmd.includes("\\")) return executable(cmd) ? cmd : null;
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+  for (const dir of [...(process.env.PATH ?? "").split(delimiter), ...extraPaths()]) {
     if (!dir) continue;
     for (const name of candidates(cmd)) {
       const full = join(dir, name);

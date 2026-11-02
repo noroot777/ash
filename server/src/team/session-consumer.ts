@@ -3,9 +3,10 @@ import type { AgentEvent } from "@ash/shared";
 import { NO_RESUMABLE_SESSION_NOTE, ROTATION_ALREADY_ANNOUNCED } from "@ash/shared/session-notes";
 import { db } from "../db/index.js";
 import { sessions } from "../db/schema.js";
-import { closedAlready, nextTurnStart, openTurn, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
-import { closeLeadTurns, heldTurns, holdTurn, releaseHeldTurn } from "./lead-turns.js";
+import { recordTurnSpan } from "../session-turns.js";
+import { closeLeadTurns, heldTurns, releaseHeldTurn } from "./lead-turns.js";
 import { IDLE_MS, createLeadStatus } from "./lead-status.js";
+import { createLeadTurnStart } from "./lead-turn-begin.js";
 import { now } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { untrackRun, takeStopped, type StopSettle } from "../runs.js";
@@ -20,6 +21,7 @@ import { writeRunError, writeTurnEnd } from "../transcript.js";
 import type { SessionTraceEvent } from "../transcript.js";
 import { isExecutionNotice, isSessionScopeNotice } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
+import { clearTurnStall, trackTurnStall } from "../turn-stall.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
@@ -38,12 +40,15 @@ import type { Lead } from "./session-types.js";
 // 说话的三个出口（SSE / trace / .md）住在 lead-voice.ts,见那份顶部。
 import {
   flushSessionNotices,
+  leadStallActions,
   noteSessionNotice,
   publish,
   recordSystemTurn,
   reportLeadFailure,
   traceLead,
 } from "./lead-voice.js";
+// 看门狗熔断掉的那一轮的「这一轮是失败的」—— 由下结论的一方写下,收尾这两处各自读。
+import { clearStallFailure, stallFailure } from "../turn-stall-verdict.js";
 
 // 待命中的常驻会话冒出这几种事件 = CLI 自己又开工了(见 consume 里的补开回合)。
 //
@@ -84,6 +89,8 @@ export function createSessionConsumer({ leads, adoptInbound, flushUnqueued, rele
 // 「这台说了算吗」那一组（状态重试、摘牌、空闲回收）住在 lead-status.ts,见那份顶部。
 const { armIdle, armStatusRetry, clearIdle, clearStatusRetry, retireLead, setLeadStatus } =
   createLeadStatus({ leads, releasePending });
+// 回合开始那一半(三道「这个身份还在跑吗」的闸)住在 lead-turn-begin.ts,见那份顶部。
+const beginTurn = createLeadTurnStart({ setLeadStatus });
 async function consume(lead: Lead): Promise<void> {
   await adoptInbound(lead); // 上一台/上一个进程没送出去的消息,先接回来
   let exitStatus = 0;
@@ -116,6 +123,7 @@ async function consume(lead: Lead): Promise<void> {
     traceInTurn({ kind: "text", text: pendingTraceText });
     pendingTraceText = "";
   };
+  const stallActions = leadStallActions(lead, traceInTurn, releasePending);
   // 兜底:上面每个写库点都已经各自把失败咽下了(persistOrReport),这里管的是**剩下**
   // 那些没预料到的抛出 —— 执行器解析、用量记账、乃至 events 流自己炸掉。掀翻循环本身
   // 不致命,**跳过 closeLead 才致命**(理由见 reportLeadFailure 顶部),所以这里只如实说
@@ -126,6 +134,7 @@ async function consume(lead: Lead): Promise<void> {
         // 回合收口 = 这一轮不再「在等」了。常驻调度台没有 done 事件,这里是它唯一的边界;
         // 不清的话一台答完待命的调度台会一直在手机上挂着「正在重试」(第 3 轮审查 F1)。
         clearSessionWaiting(lead.sessId, lead);
+        clearTurnStall(lead.sessId, lead); // 同理:回合收口是常驻台唯一的「这一轮结束了」边界
         flushTraceText();
         await endTurn(lead);
         // 上一回合欠着的新会话凭据在这儿补:补上了,轮换事宜这才算真翻篇。
@@ -172,6 +181,8 @@ async function consume(lead: Lead): Promise<void> {
       // session-waiting.ts —— 没有身份的提示一律不记)。
       // 摘牌的台一个字都不许写,内存这份同理:它的等待状态归接管的那台(同 traceLead/updateOwnSession)。
       if (!lead.retired) trackSessionWaiting(lead.sessId, lead, lead.turnStart, event);
+      // 摘牌的台同样不许动手:它的停滞状态归接管的那台(同上面那道闸)。
+      if (!lead.retired) trackTurnStall(lead.sessId, lead, lead.turnStart, event, stallActions);
       if (event.kind === "text") {
         lead.out.write(event.text);
         pendingTraceText += event.text;
@@ -307,92 +318,6 @@ async function flushPendingCredential(lead: Lead): Promise<boolean> {
 
 
 
-/**
- * 回合**开始**那一半的库侧动作。
- *
- * `at` 必须是**这一轮真正的身份**：走投递口那几条路（用户插话、执行者汇报、回合收尾的合并
- * 汇报）要原样传 `sendToLead` 回来的 `at` —— 那一刻 `holdTurn` 已经把这个身份持有住了,这里
- * 再要一个新起点就等于同一轮登记两个,其中一个谁都不会来收。CLI 自发的那一轮没有投递口可问,
- * 只能以第一条输出的时刻为起点（见 consume 里的补开回合）—— 但那个起点也得从身份层的分配器
- * 拿：同一条会话上两个起点撞了毫秒,队列和唯一键会把两轮合成一轮（第 2 轮审查 F1）。
- */
-async function beginTurn(lead: Lead, at = nextTurnStart(lead.sessId)): Promise<void> {
-  // 状态与活动身份在同一个同步段里绑定;同一个身份重复持有是幂等的（openLead 先在
-  // attachLead 里持有首轮,紧接着这里又用同一个 turnStart 调一次）—— 判据与机制都在
-  // lead-turns.ts。
-  const owned = holdTurn(lead, at);
-  if (!owned) {
-    // **迟到的开始信息**：这个身份在所有权层已经终结（刚被 `turnEnd` 关掉,或者整台已经关了/
-    // 摘了牌）。开台那条路天生有这个窗口 —— 先持有首轮身份,再隔着两次写库才轮到这里,中间
-    // 完全可能已经收到首轮的结束事件。这时只补持久记录:那一行记录照落（开过就是开过,而且
-    // 按身份幂等）,但「这条会话正在跑」那组状态一个字都不许改 —— 重开一个已经终结的所有权
-    // 就是 F2:凭空多出来的队首会被下一次结束消耗,真正在跑的那一轮永远注销不掉。
-    //
-    // `register: false` 是这一档的**要害**,不是顺手：`openTurn` 默认会把身份登进活动册,而
-    // 这条路上已经没有任何所有者会来注销它了（`holdTurn` 答 false 就意味着队列不收,
-    // `releaseHeldTurn` 此后永远碰不到它）。留下的那个活动身份让读端判「这条会话一直在写」,
-    // 区间从那个起点开到无穷、而且算**精确**,停工之后别人在同一目录里做的东西全归到这个
-    // 任务名下,面板一个字都不披露（本轮审查第 1 条,已实测）。
-    //
-    // 判据也不能只看 `retired`：**正常关台**（非换台）走的是 `closeLeadTurns`,它不摘牌,
-    // 于是 `retired` 一直是假,这一句照样放行 —— 实测的那条路正是它。
-    if (!lead.retired) {
-      await openTurn(
-        { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at },
-        { register: false },
-      );
-    }
-    return;
-  }
-  // **每一次写库前都重问一次「这个身份还在跑吗」**,不能只信进函数时那一问。
-  //
-  // `holdTurn` 答 true 之后这里还有两次 await,而事件消费是并发的：被持有的这一轮完全可能
-  // 在这两次之间就被 `turnEnd` 关掉（打断后立刻结束的那一轮就这样）、或者整台被关掉。
-  // 那之后这两笔写各自会造成：`resumedTurnFields` 把刚写上的 `ended_at` 又抹成 null
-  // （会话行变成「还在跑」,产物区间跟着开到无穷）、`setLeadStatus` 把任务状态从已收尾改回
-  // `running`。老判据只挡 `retired`,而这两条路都不摘牌（本轮审查第 2 条）。
-  //
-  // 已关就只补那一行持久记录——它是「开过这一轮」的第一手证据,而且按身份幂等（撞上已收口
-  // 的行只会合并,不会多记一轮,见 session-turns.ts 的四语句批）——其余一个字都不写。
-  if (closedAlready(lead.sessId, at)) {
-    if (!lead.retired) {
-      await openTurn(
-        { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at },
-        { register: false },
-      );
-    }
-    return;
-  }
-  // **返回值不能丢**：这一路的 session 写入是被捕获后继续的（`updateOwnSession` 不抛），
-  // 丢掉它就等于把「写成功」当默认（第 5 轮审查必须修 2.3）。
-  const stamped = await updateOwnSession(lead, "回合开始状态", { ...resumedTurnFields(at) }, at);
-  if (!stamped && !lead.retired) {
-    // 会话行上的回合起点没刷上。第一手证据是下面那行回合记录,所以照落;产物面板判「还在
-    // 写」用的是内存里登记的活动身份、区间起点也从那儿取,都不靠这一列,所以这里只报一句。
-    console.warn(`[ash] 团队 ${lead.taskId} 的回合起点没写进会话行（产物区间按逐回合记录算）`);
-  }
-  // 摘牌的台一个字都不写（同 `updateOwnSession` 顶部那道闸）：旧台晚到的事件要是落下一行
-  // 回合记录,接管那条会话的新台名下就凭空多出一段运行区间,把那期间别人的产出收进来。
-  // 上面那次 await 之后身份可能已经被关掉了（同上一段）：行照落,但不再登记活动身份,
-  // 也不再往后写状态。
-  const stillOpen = !closedAlready(lead.sessId, at);
-  if (!lead.retired) {
-    // 开始行照样要落：它是「开过这一轮」的第一手证据,计数那一道跟它同批写（见 session-turns.ts）。
-    await openTurn(
-      { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at },
-      stillOpen ? {} : { register: false },
-    );
-  }
-  // trace 照写：它是**事实记录**（这一轮由哪个模型跑的）,按自己的 turnStart 归组,不是
-  // 「现在在跑」那种状态。状态那一笔到此为止。
-  traceLead(lead, at, {
-    kind: "run",
-    model: lead.model,
-    reasoningEffort: lead.reasoningEffort,
-  });
-  if (!stillOpen) return;
-  await setLeadStatus(lead, "running", at);
-}
 
 // 一个回合说完了(进程还活着)。有攒下的执行者消息就立刻合并成一条继续跑,
 // 否则落 idle(待命)并起空闲回收计时。
@@ -403,6 +328,10 @@ async function endTurn(lead: Lead): Promise<void> {
   // 新回合提前收口（机制与后果见 lead-turns.ts 顶部,第 1 轮审查 F1）。注销排在写库之前：
   // 下面那两次写都可能失败,失败时照样不能留一个「还在跑」的身份给读端（第 6 轮必须修 1）。
   const turnStart = releaseHeldTurn(lead);
+  // **判决在这一刻就取走**(第 2 轮审查 F3,同一条不变量):调用方刚刚 `clearTurnStall` 让它退场,
+  // 而下面到写区间之间隔着一次写库 await —— 那段窗口里另一轮熔断的回收扫描完全可能把这条
+  // **还有读者**的判决扫掉,于是被我们熔断的这一轮记成 completed。读者自己持一份独立事实。
+  const watchdogFailed = turnStart ? stallFailure(lead.sessId, turnStart) : null;
   const spent = turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(turnStart)) : 0;
   // 手上还攥着别的回合 = 插话那一轮还排着/跑着,这台**并没有空下来**。
   const idleNow = !lead.busy;
@@ -421,17 +350,23 @@ async function endTurn(lead: Lead): Promise<void> {
     endIso,
   );
   // 这一回合的区间（产物归属按它认人，不按会话寿命——常驻调度台那一行从开台活到收工）。
-  // 走到这里就是**执行器自己报的「这一轮说完了」**,所以结局是 completed:进程继续待命,
-  // 它后来怎么没的(空闲回收、异常退出)属于另一件事,不许回头改写这一轮(门禁在
-  // `writeTurnRow` 的收尾合并上;后果见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  // 走到这里通常就是**执行器自己报的「这一轮说完了」**,结局 completed:进程继续待命,它后来
+  // 怎么没的(空闲回收、异常退出)属于另一件事,不许回头改写这一轮(门禁在 `writeTurnRow` 的
+  // 收尾合并上;后果见 db/schema-sessions.ts 的 sessionTurns.outcome)。
+  //
+  // **唯一的例外是看门狗熔断掉的那一轮**:那个 turnEnd 正是我们请求来的,不是它自己答完的。
+  // 无条件记 completed 的那一版于是让时间线红着写「已按失败结算」、区间却是成功
+  // (第 1 轮审查第 2 条,已实测)。结论由下结论的一方钉在回合身份上(../turn-stall-verdict.ts),
+  // 这里只用上面取走的那一份;写完销账 —— 这一轮的区间已经落定,不会再有人来读。
   await recordTurnSpan({
     sessionId: lead.sessId,
     taskId: lead.taskId,
     cwd: lead.cwd,
     startedAt: turnStart,
     endedAt: endIso,
-    outcome: "completed",
+    outcome: watchdogFailed ? "failed" : "completed",
   });
+  clearStallFailure(lead.sessId, turnStart);
   writeTurnEnd(lead.out, endIso);
   flushSessionNotices(lead);
   // 还有回合在手：攒着的执行者汇报等它真正空下来再合并送（省一轮模型调用本来就是这么来的）,
@@ -489,6 +424,7 @@ async function closeLead(
 ): Promise<void> {
   clearIdle(lead);
   clearSessionWaiting(lead.sessId, lead); // 这台进程没了,**自己那条**等待状态跟着撤
+  clearTurnStall(lead.sessId, lead);
   untrackRun(lead.taskId, lead.handle);
   // 工作目录被抽走时我们会主动收掉旧进程、立刻开新的,旧进程的 close 事件晚一步
   // 才到 —— 它不能把已经接管的新会话摘掉,更不能把新回合的 running 改回 idle。
@@ -540,15 +476,24 @@ async function closeLead(
   // `writeTurnRow` 的收尾合并上,它正是 F3 那条链的闸:常驻调度台成功答完待命、后来才以非零
   // 码退出,从前那个退出码被读成「上一轮失败」,整轮的「正在重试」重新挂回手机上。
   const closeOutcome = (lead.closing ?? stopSettle) ? "stopped" : aborted || exitStatus !== 0 ? "failed" : "completed";
+  // 看门狗熔断/回收掉的那一轮**逐轮**单独认(../turn-stall-verdict.ts):`closeOutcome` 是整台的
+  // 口径,而被我们回收的进程多半报不出非零退出码(claude 走信号退出时是 `code ?? 0` = 0),
+  // 照整台口径会把它记成 completed。手上同时攥着好几轮时也只该改熔断那一轮。
+  //
+  // **整批判决在进循环之前一次取走**(第 2 轮审查 F3):循环体里有 await,第二轮往后再去读就
+  // 落在回收窗口之后了 —— 上面的 `clearTurnStall` 已经让它退场,而退场不等于读者读过。
+  const watchdogFailures = new Map(closing.map((at) => [at, stallFailure(lead.sessId, at)]));
   for (const startedAt of closing) {
+    const watchdogFailed = watchdogFailures.get(startedAt) ?? null;
     await recordTurnSpan({
       sessionId: lead.sessId,
       taskId: lead.taskId,
       cwd: lead.cwd,
       startedAt,
       endedAt: endIso,
-      outcome: closeOutcome,
+      outcome: watchdogFailed ? "failed" : closeOutcome,
     });
+    clearStallFailure(lead.sessId, startedAt);
   }
   // CLI 否认了这条会话:把失效的 id 连同由它派生的三件套恢复命令一起清掉,下一次说话
   // 就会开一条全新会话(openResident 的判据就是「这行上有没有 cli_session_id」)。

@@ -5,6 +5,8 @@ import { chromeLaunchOptions } from "./chrome-path.mjs";
 import { createServer } from "vite";
 import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
+import { testAcceptGateWaitBar } from "./test-accept-gate-wait-bar.mjs";
+import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
 
 // 验收台上那张「验收前置命令」卡。钉住的是四件在真实页面上才看得出来的事：
 //
@@ -28,6 +30,14 @@ import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
 //    仍是那条绿的，而真正放行的理由是「现在没有门禁」）。
 // ⑩ 并发读取只有**最后发出**的那一次能落地（第 1 轮审查 F3）：迟到的旧响应会把已经结束
 //    的那次又写回「正在跑」，而此后没有任何事件会来纠正它。
+// ⑪ **权限读不到 ≠ 没有权限**（C3）：②那条「没权限就不摆入口」的前提是「已经读到了
+//    角色」。读取本身失败时上一版落的是 `false`，于是一次 503 被当成「已确认你不是管理员」
+//    —— 而「还没读到」和「确认没权限」在界面上长得一模一样，所以这个错判看都看不出来，
+//    服务端恢复了那颗按钮也不会自己回来。这一条钉的是：失败只是还没读到，它自己会重试到读到。
+//
+// 姊妹文件装的是**另外几个表面**（这份贴着 700 行上限，按表面拆）：主会话页那条「正在跑」
+// 的折叠条在 test-accept-gate-wait-bar.mjs（⑩ 那条并发读取就在那边），断线重连与任务投影
+// 对账在 test-accept-gate-recovery.mjs，真人动作那一道闸在 test-accept-gate-actions.mjs。
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
@@ -73,7 +83,7 @@ try {
 
   // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
   // 带 delay（响应体迟到多久）或 status（直接给个 500）。不给就一直回 store.gate。
-  const open = async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled" } = {}) => {
+  const open = async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled", projectDown = false } = {}) => {
     const page = await browser.newPage({ viewport: { width: 980, height: 820 } });
     if (events) await page.addInitScript(() => {
       const streams = new Set();
@@ -86,7 +96,8 @@ try {
       };
     });
     const store = { patches: [], canceled: 0, handoffs: 0, reads: 0, tasks, taskReads: 0, taskPlan: null,
-      requestIds: [], status: 0, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate };
+      requestIds: [], status: 0, logText: "checking 42 / 640", command: command === undefined ? gate?.command ?? null : command, gate,
+      projectReads: 0, projectDown };
     await page.route("**/api/tasks", async route => {
       const snapshot = store.tasks;
       const plan = store.taskPlan;
@@ -100,8 +111,11 @@ try {
     }));
     // SSE 在这一屏里只负责「有变化就重读」，测试里不发事件，挂一条空流免得它反复重连。
     await page.route("**/api/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
-    await page.route("**/api/projects", (route) =>
-      json(route, [{ id: "proj-1", name: "kb", repoPath: "/repo", myRole: role, acceptGateCommand: store.command }]));
+    await page.route("**/api/projects", (route) => {
+      store.projectReads += 1;
+      if (store.projectDown) return json(route, { error: "数据库忙" }, 503);
+      return json(route, [{ id: "proj-1", name: "kb", repoPath: "/repo", myRole: role, acceptGateCommand: store.command }]);
+    });
     await page.route("**/api/projects/proj-1", async (route) => {
       store.patches.push(JSON.parse(route.request().postData() ?? "{}"));
       store.command = store.patches.at(-1).acceptGateCommand;
@@ -180,6 +194,25 @@ try {
     await page.waitForTimeout(300);
     assert.match(await page.locator(".accept-gate-command").innerText(), /未设置/);
     assert.equal(await page.getByRole("button", { name: "设一条" }).count(), 0);
+    await page.close();
+  }
+
+  // ⑪ 角色读失败只是「还没读到」：卡不许就此当成「你不是管理员」，它自己要重试到读到。
+  //    反过来说这一条也钉住了 ②：②那颗按钮之所以可以不摆，靠的是**读到了** member。
+  {
+    const { page, store } = await open({ gate: { command: null, running: null, latest: null }, projectDown: true });
+    const card = page.locator(".accept-gate-card");
+    await card.waitFor();
+    assert.match(await card.textContent(), /没设验收前置命令/, "角色没读到不该连卡一起不显示");
+    // 先证「它真的在自己重试」：不碰页面，等到读取次数自己涨过首发那一拨。
+    const baseline = store.projectReads;
+    const deadline = Date.now() + CATCH_UP_RETRY_MS + 10_000;
+    while (store.projectReads <= baseline && Date.now() < deadline) await page.waitForTimeout(200);
+    assert(store.projectReads > baseline, `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms)，不是等下一次交互`);
+    assert.equal(await card.getByRole("button", { name: "设一条" }).count(), 0, "还没读到角色时不摆必然 403 的按钮");
+    // 服务端恢复之后那颗按钮要自己回来 —— 旧实现把 503 记成 `false`，它永远不再出现。
+    store.projectDown = false;
+    await card.getByRole("button", { name: "设一条" }).waitFor({ timeout: CATCH_UP_RETRY_MS + 10_000 });
     await page.close();
   }
 
@@ -387,78 +420,7 @@ try {
     await page.close();
   }
 
-  // ⑮ 主会话页那条折叠条（用户 2026-10-23 的 04-A）：门禁跑的十几分钟里任务本身
-  //    status/stage 一个字都不变，这条是会话页上**唯一**看得出「有东西在跑」的东西。
-  //    折叠态要把命令和已经跑了多久都写在一行；展开能就地收掉它。
-  {
-    const running = run({ status: "running", exitCode: null, finishedAt: null, logTail: "RUN x_post\n" });
-    const { page, store } = await open({ gate: { command: running.command, running, latest: null }, query: "?wait=1" });
-    const bar = page.locator(".accept-gate-wait");
-    await bar.waitFor();
-    const text = await bar.innerText();
-    assert.match(text, /验收前置命令在跑/);
-    assert.match(text, /\.\/kb\.sh test full/, "折叠那一行要说清在跑的是哪条命令");
-    assert.match(text, /已经 1 分 30 秒/, "秒表要自己走，不能定在点下去那一刻");
-    // 折叠态不许把出路摆出来占地方，但点开就得有。
-    assert.equal(await bar.getByRole("button", { name: /不等了/ }).count(), 0);
-    await bar.locator(".wait-bar__bar").click();
-    await bar.getByRole("button", { name: /不等了/ }).click();
-    await page.waitForTimeout(200);
-    assert.equal(store.canceled, 1, "收掉它要真打那一发 cancel");
-    assert.equal(await page.locator(".accept-gate-wait").count(), 0, "收掉之后这条就该消失 —— 它只说「正在跑」");
-    await page.close();
-  }
-
-  // ⑯ 没在跑就彻底不占地方：跑完之后该看的是验收台上那张回执，不是这条。
-  {
-    const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run() }, query: "?wait=1" });
-    await page.locator("h1").waitFor();
-    await page.waitForTimeout(300);
-    assert.equal(await page.locator(".accept-gate-wait").count(), 0);
-    await page.close();
-  }
-
-  // ⑰ **第 1 轮审查 F3**：并发读取乱序。页面一打开天然就有两次读取（挂载那一次 + SSE
-  //    连上之后的对账那一次）。让**先发出**的那一次响应体迟到、并且回的是「正在跑」，
-  //    后发出的那一次先回来、回的是「已通过」—— 落地的必须是后者。从前旧响应会把它写回
-  //    「正在跑」，秒表接着加，而此后没有任何事件会来纠正它。
-  {
-    const running = run({ status: "running", exitCode: null, finishedAt: null });
-    const { page } = await open({
-      gate: { command: running.command, running: null, latest: run(), basis: null },
-      query: "?wait=1&expected=1",
-      states: [
-        // 第 1 次（挂载）：慢，而且说「在跑」。
-        { delay: 1200, body: { command: running.command, running, latest: running, basis: null } },
-        // 第 2 次（连上之后对账）：快，说「已经通过了」。
-        { body: { command: running.command, running: null, latest: run(), basis: null } },
-      ],
-    });
-    await page.locator("h1").waitFor();
-    // 等那条迟到的响应落回来（1200ms + 余量），期间它一旦落地就会把这条重新画出来。
-    await page.waitForTimeout(1800);
-    assert.equal(await page.locator(".accept-gate-wait").count(), 0,
-      "迟到的旧响应不许把已经结束的那次又写回「正在跑」");
-    await page.close();
-  }
-
-  // ⑱ 状态读不出来、而任务投影说有命令在跑：这条**仍然要出现**并如实说读不出来。从前
-  //    一次 500 之后它整个消失，跟「什么都没在跑」长得一模一样（第 1 轮审查不拦项 3）。
-  {
-    const { page, store } = await open({
-      gate: { command: "./kb.sh test full", running: null, latest: null, basis: null },
-      query: "?wait=1&expected=1",
-      states: [{ status: 500 }, { status: 500 }, { status: 500 }, { status: 500 }],
-    });
-    const bar = page.locator(".accept-gate-wait");
-    await bar.waitFor();
-    assert.match(await bar.innerText(), /状态读不出来/);
-    const before = store.reads;
-    await bar.getByRole("button", { name: "重试" }).click();
-    await page.waitForTimeout(200);
-    assert.ok(store.reads > before, "重试要真的再读一次");
-    await page.close();
-  }
+  await testAcceptGateWaitBar({ open, run });
 
   for (const event of [
     { type: "task.acceptGate", taskId: "gate-task" },

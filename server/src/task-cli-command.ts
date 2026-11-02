@@ -5,7 +5,7 @@ import type { Context } from "hono";
 import { ownerIdOf, actorOf } from "./auth/context.js";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
-import { claimTurn, nativeCommandRun, releaseTurn, stopTask, whenTurnIdle } from "./runs.js";
+import { claimOwnTurn, nativeCommandRun, releaseTurn, stopTask, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { preflightCliGoalCommand, readCliState, renameCliTask, resolvedCliState, saveCliState } from "./task-cli-state.js";
 import { formatClaudeGoal } from "./executors/claude-goal.js";
@@ -40,7 +40,8 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
       const scope = target;
       if (scope && !await runnableCliGoalScope(scope, userId)) {
         if (body.sendAt) throw new Error(`原执行器已不可用，请直接发送 /goal clear --scope ${scope.selector} 清除保存的目标`);
-        if (!claimTurn(task.id, "native")) throw new Error("当前回合正在启动或收尾，请稍后再清除目标");
+        const turn = claimOwnTurn(task.id, "native");
+        if (!turn) throw new Error("当前回合正在启动或收尾，请稍后再清除目标");
         try {
           const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));
           if (!fresh || ["running", "queued"].includes(fresh.status)) throw new Error("任务状态已改变，请稍后再清除目标");
@@ -56,7 +57,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
           const recorded = await appendTaskTimeline(task.id, `${text}\n命令：${command.text}`, { agentType: scope.agentType });
           return c.json({ started: false, command: true, text, recorded });
         } finally {
-          releaseTurn(task.id);
+          releaseTurn(task.id, turn);
           void advanceQueueFromTask(task.id).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
         }
       }

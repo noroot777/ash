@@ -6,10 +6,10 @@ import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 import type { TaskWorkflowMode } from "./free-workflow.ts";
 import type { HandoffAudit, TaskHandoff } from "./handoff.ts";
-export type { Session, SessionNotice, SessionRole } from "./session.ts";
+export type { Session, SessionNotice, SessionRole, TurnOutcome } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@ash/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
-export type { ContextUsage, TokenUsage } from "./usage.ts";
+export type { ContextUsage, TokenUsage, UsageAccountingMark } from "./usage.ts";
 export type {
   ReviewConclusion,
   ReviewDispatchInput,
@@ -46,6 +46,7 @@ export type {
 export type { AppSettings, ComposerSendKey } from "./app-settings.ts";
 export { MAX_BROWSER_CDP_DOMAINS, normalizeBrowserCdpDomains, browserCdpHostOf, browserCdpDomainAllowed } from "./project.ts";
 export { COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "./app-settings.ts";
+export { HUMAN_ACTION_TOKEN_HEADER, HUMAN_ACTION_TOKEN_META, HUMAN_ACTION_TOKEN_NEXT_HEADER } from "./human-action.ts";
 
 // ── 多人模式 ────────────────────────────────────────────────────────────────
 // 类型本体在 ./multiuser.ts;运行时判据(目录名校验、权限判据)走子路径
@@ -404,6 +405,13 @@ export interface Task {
    */
   acceptGateRunning?: boolean;
   monitorRunning?: boolean;
+  /**
+   * 这个任务此刻**卡在模型上游连不上**(回合级停滞看门狗,见 server/src/turn-stall.ts)。
+   *
+   * 跟 `monitorRunning` 同一档语义:后台事实,随 `backgroundRevision` 一起刷新。区别是它
+   * 不是「有东西会自己回来」,而是「它在干等,大概回不来」—— 所以圆点是另一档。
+   */
+  upstreamStalled?: boolean;
   backgroundRevision?: number;
 }
 

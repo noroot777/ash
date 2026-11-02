@@ -168,6 +168,30 @@ try {
   assert.equal(runs.isTurnClaimed(frozen.ownerTaskId), false);
   console.log("✓ a legitimate startup freeze restores paused state and retains the authorized checkpoint for retry");
 
+  // 同一个 ReviewSuperseded 也可能在 spawn **之后**抛(commitReviewTurnDelivery 那笔事务前方向变了):
+  // 输入已经交到 CLI 手上,continueTask 不许再说「一个字没送出去」—— 调用方据 false 归还
+  // 检查点或把原话退回托盘,同一段输入就会执行两遍(第 1 轮自由审查 ukEvngoK6Yvh 必须修)。
+  const late = await open("legacy");
+  await db.delete(schema.scheduledMessages);
+  await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, late.ownerTaskId));
+  await occupyResumePrompt(late.ownerTaskId, "Superseded after spawn", false);
+  runs.releaseTurn(late.ownerTaskId);
+  const committing = db.transaction;
+  let superseded = false;
+  db.transaction = async function (...args) {
+    if (!superseded && new Error().stack?.includes("commitReviewTurnDelivery")) {
+      superseded = true;
+      const owner = await row(late.ownerTaskId);
+      await db.update(tasks).set({ directionEpoch: owner.directionEpoch + 1 }).where(eq(tasks.id, late.ownerTaskId));
+    }
+    return committing.apply(this, args);
+  };
+  try { assert.equal(await continueTask(late.ownerTaskId, "Continue superseded review"), true, "越过 spawn 的撤回不许报「没送出去」"); }
+  finally { db.transaction = committing; }
+  assert(superseded);
+  assert.equal(runs.isTurnClaimed(late.ownerTaskId), false);
+  console.log("✓ a review superseded after spawn reports the input as crossed, not as never sent");
+
   const native = await open("preset");
   await db.delete(schema.scheduledMessages);
   await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, native.taskId));

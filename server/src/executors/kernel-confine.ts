@@ -135,8 +135,16 @@ export type Confinement = {
   preExecEnv(): Record<string, string> | null;
   /** 这一刻的成员集合。 */
   read(): ConfineRead;
+  /**
+   * `read()` 的异步版,语义逐字一致。**只有读数要起进程的平台才实现**(Windows:每读一次
+   * 起一个 PowerShell,实测 1~1.7 秒,同步跑会把整个 server 的事件循环堵住);Linux 读的是
+   * cgroupfs,本来就不起进程,不实现。调用方没拿到就退回 `read()`。
+   */
+  readAsync?(): Promise<ConfineRead>;
   /** 整圈下刀。返回这一刀发给了几个号(-1 = 这一刀自己没发出去)。 */
   killAll(sig: NodeJS.Signals): number;
+  /** `killAll` 的异步版。实现与否的口径同 `readAsync`。 */
+  killAllAsync?(sig: NodeJS.Signals): Promise<number>;
   /** 圈空了就把圈撤掉。**没空不撤** —— 它还是这次运行唯一的权威身份。 */
   dispose(): void;
 };

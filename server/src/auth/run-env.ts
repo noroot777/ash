@@ -31,7 +31,7 @@ export async function runEnvForTask(taskId: string, agentType: string): Promise<
 
 export async function runEnvForOwner(ownerUserId: string | null, agentType: string): Promise<OwnerRunEnv> {
   if (!(await isMultiUser()) || !ownerUserId) return {};
-  const env: OwnerRunEnv = (await isHostCliIsolated()) ? { ...cliConfigEnvFor(ownerUserId, agentType) } : {};
+  const env: OwnerRunEnv = (await isHostCliIsolated()) ? { ...(await cliConfigEnvFor(ownerUserId, agentType)) } : {};
   const user = (await db.select().from(users).where(eq(users.id, ownerUserId))).at(0);
   if (user) {
     const name = user.gitName.trim() || user.name;

@@ -32,6 +32,7 @@ import {
   toUserView,
   touchUser,
 } from "./store.js";
+import { needsOnboarding } from "../onboarding.js";
 import { initUserCliEnv } from "./user-cli.js";
 import { claimExistingDataFor, conversionPreflight } from "./conversion.js";
 
@@ -55,7 +56,14 @@ async function stateFor(c: Context): Promise<AuthState> {
   const config = await instanceConfig();
   const actor = actorOf(c);
   if (config.mode !== "multi") {
-    return { mode: "single", needsSetup: config.mode === "", user: null, rootDir: null, homeDir: null };
+    return {
+      mode: "single",
+      needsSetup: config.mode === "",
+      user: null,
+      rootDir: null,
+      homeDir: null,
+      needsOnboarding: await needsOnboarding(actor),
+    };
   }
   const user = actor.kind === "user" && actor.userId ? await getUser(actor.userId) : null;
   const needs = await needsSetup();
@@ -67,6 +75,8 @@ async function stateFor(c: Context): Promise<AuthState> {
     // 只能靠用户凭记忆填对,填错就是一个 409。
     rootDir: user?.role === "admin" || needs ? config.rootDir : null,
     homeDir: user ? await userHomeDir(user.dirName) : null,
+    // 没登录就答不上「我还缺什么」,也不该答:那一屏是登录页。
+    needsOnboarding: user ? await needsOnboarding(actor) : false,
   };
 }
 
@@ -213,7 +223,7 @@ export function mountAuthRoutes(api: Hono): void {
     });
     // 认领来的那行的目录名可能与表单里填的不同(锁死的是库里那个),按它再保一次。
     if (half) await ensureUserHomeDir(half.dirName);
-    initUserCliEnv(admin.id);
+    await initUserCliEnv(admin.id);
     // 存量项目/随手记/供应商/执行器等一律归初始管理员(§十三);项目路径一律不动。
     const claimed = await claimExistingDataFor(admin.id);
     const key = await resetUserKey(admin.id);

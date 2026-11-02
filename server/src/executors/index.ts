@@ -148,6 +148,33 @@ export async function resolveExecutorProfileId(opts: ExecutorResolveOpts): Promi
   return (await pickProfile(opts)).profile?.id ?? null;
 }
 
+/**
+ * 「这一轮**真正会用**的那份执行上下文」—— 只读、不 build、不碰 relay,给派审前的
+ * ash MCP 预检用(`ash-mcp-reachability.ts`)。
+ *
+ * 为什么非走这里不可:预检自己读 `agents.extraArgs` 被第 3 轮审查用真实 HTTP 打穿 ——
+ * 空 id 和悬空 id 它都当「没有额外参数」,而 `pickProfile` 在这两种情况下都会落到该类型
+ * **当前默认 profile**,而那条 profile 的 extraArgs 可能正是 ash MCP 的来源
+ * (实测:默认执行器带 `-c mcp_servers.ash.command=node`,真 codex 列得出 ash,预检却说
+ * 没有,派审 409)。同理它也没走 `normalizeProfileExtraArgs`,库里合法的整段参数
+ * (一个元素写着 `-c mcp_servers.ash.command=node`)在运行时会拆成两个 token,预检认不出。
+ *
+ * 所以默认选择、归属收窄、参数归一这三件事只留这一份实现;预检只消费结果。
+ * 返回 null = 这条 profile 的 extraArgs 连 JSON 都不是(真起跑也会在 `build` 里炸),
+ * 预检据此放行 —— 判不了就不拦。
+ */
+export async function effectiveExecutorContext(
+  opts: ExecutorResolveOpts,
+): Promise<{ type: AgentType; extraArgs: string[] } | null> {
+  const { profile, type } = await pickProfile(opts);
+  if (!profile) return { type, extraArgs: [] };
+  try {
+    return { type, extraArgs: normalizeProfileExtraArgs(JSON.parse(profile.extraArgs)) };
+  } catch {
+    return null;
+  }
+}
+
 async function build(
   profile: AgentRow | null,
   type: AgentType,

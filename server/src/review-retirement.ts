@@ -5,7 +5,7 @@ import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
 import { activeReviewScope, type ReviewDelivery } from "./review-ownership.js";
 import { assertConclusionTask } from "./regression-conclusion-commit.js";
 import { RegressionConclusionRejected } from "./regression-conclusion-errors.js";
-import { claimTurn, releaseTurn, type TurnSource } from "./runs.js";
+import { claimOwnTurn, releaseTurn, type TurnIdentity, type TurnSource } from "./runs.js";
 import { announceResumePrompt } from "./task-resume-prompt.js";
 import { clearReviewWait, reviewWaitForExit } from "./review-wait.js";
 import { taskStartStatus } from "./task-start-status.js";
@@ -35,7 +35,7 @@ function closedHistoricalReview(owner: TaskRow, state: EvidenceRow | undefined, 
 }
 
 export async function retireHistoricalReview(expected: TaskRow, source: TurnSource = { role: "single" },
-  delivery?: ReviewDelivery, turnHeld = false): Promise<boolean> {
+  delivery?: ReviewDelivery, turnHeld: TurnIdentity | null = null): Promise<boolean> {
   if (delivery?.kind === "repair") return false;
   if (!expected.verifyRound && !expected.reviewOf && source.role !== "reviewer") return false;
   const candidate = await withTurnPreflight(expected.id, turnHeld, () => db.transaction(async (transaction) => {
@@ -46,8 +46,12 @@ export async function retireHistoricalReview(expected: TaskRow, source: TurnSour
     return !evidence?.targetIdentity && !evidence?.settlement?.target
       ? { ...scope, generation: evidence?.generation ?? null } : undefined;
   }, { behavior: "immediate" }));
-  if (!candidate || (!turnHeld && !claimTurn(expected.id, source.role,
-    source.role === "reviewer" && source.review !== "unbound" ? source.review : null))) return false;
+  if (!candidate) return false;
+  // 自己占的那一把,或者调用方交下来的那一把 —— 两条路都要把身份留住:还锁只能还自己
+  // 那一把(本轮审查 F1,理由在 turn-lock.ts 的 `endOwnTurn`)。
+  const turn = turnHeld ?? claimOwnTurn(expected.id, source.role,
+    source.role === "reviewer" && source.review !== "unbound" ? source.review : null);
+  if (!turn) return false;
   let retired = false;
   try {
     const owner = await db.transaction(async (transaction) => {
@@ -102,6 +106,6 @@ export async function retireHistoricalReview(expected: TaskRow, source: TurnSour
     retired = true;
     throw error;
   } finally {
-    if (!turnHeld || retired) releaseTurn(expected.id);
+    if (!turnHeld || retired) releaseTurn(expected.id, turn);
   }
 }

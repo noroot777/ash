@@ -1,8 +1,10 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { CaretDown, CheckCircle } from "@phosphor-icons/react";
 import { formatQuestionAnswers, legacyQuestionRecord, questionItems, questionOptionSelected, type QuestionRecord } from "@ash/shared/questions";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
+import { catchUpAbortKind } from "../lib/catchUp.ts";
+import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { formatInstant } from "./utils.ts";
@@ -30,39 +32,55 @@ function LocalQuestionHistory({ taskId, history, messages, children }: {
   taskId: string; history?: QuestionRecord[]; messages: QuestionMessage[]; children: ReactNode;
 }) {
   const [state, setState] = useState<{ taskId: string; records: QuestionRecord[]; error?: string }>({ taskId, records: history ?? [] });
-  const generation = useRef(0);
+  // 连上过没有。连上过之后就不再走那条「没连上时延迟兜底读一次」的路 —— 断线期间读也读
+  // 不到,而追平那一层会自己重试到读到。
   const connectedOnce = useRef(false);
   useEffect(() => {
     if (history !== undefined) setState((current) => ({ taskId, records: mergeRecords(current.records, history) }));
   }, [taskId, history]);
-  const reload = useCallback(() => {
-    const token = ++generation.current;
-    void api.taskQuestionHistory(taskId).then((records) => {
-      if (token !== generation.current) return;
+  // 读取、重试、代次都交给追平层(lib/catchUp.ts):这个组件原先自己写了一套 generation +
+  // connectedOnce + setTimeout,而读失败不重试、断线也不作废在途那一发(第 5 轮审查 N1 点到
+  // 的五处写法之一)。`taskId` 作身份:它一变就是新一代次。
+  const catchUp = useCatchUp((signal) => api.taskQuestionHistory(taskId, signal).then(
+    (records) => {
       setState((current) => ({ taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], records) }));
-    }).catch((error) => {
-      if (token !== generation.current) return;
-      setState((current) => ({ taskId, records: current.taskId === taskId ? current.records : [], error: String(error.message ?? error) }));
-    });
-  }, [taskId]);
-  useEffect(() => () => { generation.current += 1; }, [taskId]);
+      return true;
+    },
+    (error) => {
+      // **主动取消不是读取失败**(本轮审查 N1)。断线作废这一代次、以及有人点「重试」把在途
+      // 那一发接替掉(`runNow`),都会 abort 这一发 —— 它的 rejection 一路冒上来被写成「加载
+      // 失败」,而那一刻压根没有任何读取失败,得等下一发成功才消掉。追平层的其它四个消费者
+      // (useTasks / useTaskMonitors / useRejectionNotices / useAcceptGate)都接了这一道,
+      // 问答历史漏接了同一个协议。
+      //
+      // 换代次的那一种一个字都不说:新代次会自己追平。等到点的那一种照实说 —— 它的 reason
+      // 本身就是人话,而且追平层还会接着重试。
+      if (catchUpAbortKind(signal, error) === "stale") return false;
+      // 如实显示「这一份没读到」,同时让追平层接着重试 —— 两件事不冲突(上一版只做了前者)。
+      setState((current) => ({ taskId, records: current.taskId === taskId ? current.records : [], error: String(error?.message ?? error) }));
+      return false;
+    },
+  ), taskId);
+  // 交给「重试」按钮的是抢占式那一个:人点了就该立刻去读,不排在一发背景读取后面。
+  const reload = catchUp.runNow;
   const connected = useServerEvents((event) => {
     const records = event.type === "task.question" && event.taskId === taskId && event.answeredQuestion
       ? [event.answeredQuestion]
       : event.type === "task.updated" && event.task.id === taskId ? event.task.questionHistory : undefined;
     if (records) setState((current) => ({ taskId, records: mergeRecords(current.taskId === taskId ? current.records : [], records) }));
   });
+  // 连上就对账、断线就作废(统一接线,见 lib/useCatchUp.ts)。
+  useCatchUpLink(catchUp, connected);
   useEffect(() => {
     if (connected) {
       connectedOnce.current = true;
-      const timer = setTimeout(reload, 0);
-      return () => clearTimeout(timer);
+      return;
     }
     if (connectedOnce.current) return;
-    // 调用方快照可能早于最近一次答复；每次挂载用轻量读取补齐，事件流未连上时延迟兜底。
-    const timer = setTimeout(reload, 1000);
+    // 调用方快照可能早于最近一次答复;事件流还没连上时用一次轻量读取补齐。
+    const timer = setTimeout(() => { void catchUp.run(); }, 1000);
     return () => clearTimeout(timer);
-  }, [connected, reload]);
+  }, [catchUp, connected]);
   const local = state.taskId === taskId ? state : { records: [], error: undefined };
   return <HistoryContext value={{ records: local.records, messages, error: local.error, retry: reload }}>{children}</HistoryContext>;
 }
@@ -78,7 +96,9 @@ export function AnsweredQuestionCard({ record }: { record: QuestionRecord }) {
         <CheckCircle className="task-question-record-icon" size={18} weight="duotone" aria-hidden="true" />
         <span className="task-question-record-summary">
           <span><b>你的答复</b>{partial && <small>已部分答复</small>}{record.answeredAt && <time>{formatInstant(record.answeredAt)}</time>}</span>
-          <span className="task-question-record-preview">{answerText}</span>
+          {/* 折起来时这一行就是整张卡的全部可见内容，不能跟着外面那层 `<summary>` 一起被
+              当成界面装置剔掉（见 side-chat/selectionContent.ts）。 */}
+          <span className="task-question-record-preview" data-selection-content="">{answerText}</span>
         </span>
         <span className="task-question-record-action">查看问答</span>
         <CaretDown className="task-question-record-caret" size={14} aria-hidden="true" />

@@ -64,13 +64,16 @@
 // **这个不变量依赖「先入队、后销凭证」那个顺序**（monitor-events.ts 的 `deliverResultHandoff`）：
 // 反过来就又空出一个两边都看不见的瞬间。两处各自钉了回归：这里数语句条数（拆回多条就红），
 // 那边钉顺序。
-import { and, desc, eq, isNotNull, isNull, like, or, sql } from "drizzle-orm";
-import { unionAll } from "drizzle-orm/sqlite-core";
+//
+// 这条语句本身住在 `monitor-responsibility.ts`：第 3 轮审查 F2 发现审查等待那一侧只认了第一
+// 类，而它问的正是同一个集合，所以搬出去共用一份（那边只多一道「限定本轮 run+round」的过滤）。
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { monitorEventTally } from "@ash/shared/monitor-silence";
 import { monitorIdFromOrigin } from "@ash/shared/monitor";
 import { db } from "./db/index.js";
 import { monitorLogBytes } from "./monitors.js";
-import { monitors, scheduledMessages, sessions } from "./db/schema.js";
+import { monitors, sessions } from "./db/schema.js";
+import { unsettledMonitorResponsibility, type MonitorResponsibilityRow } from "./monitor-responsibility.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
 type MonitorFacts = {
@@ -110,10 +113,10 @@ const factsOf = (r: MonitorRow): MonitorFacts => ({
 });
 
 /** 同一口径，但吃的是 UNION 出来的行：第二类的哨兵行可能已经没了，那就退回 origin 里的 id。 */
-const labelOfRow = (r: BlockingRow): string =>
+const labelOfRow = (r: MonitorResponsibilityRow): string =>
   (r.description ?? "").trim() || (r.command ?? "").trim() || monitorIdFromOrigin(r.origin) || "（已删除的哨兵）";
 
-const factsOfRow = (r: BlockingRow): MonitorFacts => ({
+const factsOfRow = (r: MonitorResponsibilityRow): MonitorFacts => ({
   id: r.monitorId ?? "", label: labelOfRow(r), events: r.events ?? 0,
   logBytes: r.logPath ? monitorLogBytes(r.logPath) : null, endedReason: r.endedReason,
 });
@@ -142,61 +145,6 @@ async function sparedByReview(r: Pick<MonitorRow, "sourceReviewRun" | "sourceRev
  * 张表、日志字节要读文件）—— **这两样都不影响快照一致性**：它们只会把已经读出来的行筛掉或
  * 装饰，不会让一份正在转移的责任从指缝里漏过去。
  */
-type BlockingRow = {
-  cls: string;
-  monitorId: string | null;
-  origin: string | null;
-  description: string | null;
-  command: string | null;
-  events: number | null;
-  logPath: string | null;
-  endedReason: string | null;
-  reviewRun: string | null;
-  reviewRound: number | null;
-};
-
-/** `monitor:` 这个前缀的长度；SQL 里按它从 origin 切出哨兵 id（`substr` 的下标从 1 起）。 */
-const ORIGIN_PREFIX = "monitor:";
-
-async function blockingRows(taskId: string): Promise<BlockingRow[]> {
-  const shape = {
-    monitorId: monitors.id,
-    description: monitors.description,
-    command: monitors.command,
-    events: monitors.events,
-    logPath: monitors.logPath,
-    endedReason: monitors.endedReason,
-    reviewRun: monitors.sourceReviewRun,
-    reviewRound: monitors.sourceReviewRound,
-  };
-  // 第一类：还在盯的进程。**不按 `results_abandoned_at` 筛** —— 那一列是「不要这条哨兵的结果
-  // 了」，而 `stop_monitor` 对一条 running 的哨兵同时会把进程停掉，所以这个组合实际不出现；
-  // 真出现（停进程失败）时它仍然在盯，仍然会被这次完成毁掉，该拦。
-  const live = db.select({ cls: sql<string>`'live'`.as("cls"), origin: sql<string | null>`NULL`.as("origin"), ...shape })
-    .from(monitors)
-    .where(and(eq(monitors.taskId, taskId), eq(monitors.kind, "ash"), eq(monitors.status, "running")));
-  // 第三类：结局已写定、结束通知还没入队的（凭证还在）。
-  const handoff = db.select({ cls: sql<string>`'handoff'`.as("cls"), origin: sql<string | null>`NULL`.as("origin"), ...shape })
-    .from(monitors)
-    .where(and(
-      eq(monitors.taskId, taskId), eq(monitors.kind, "ash"),
-      isNotNull(monitors.resultHandoffAt), isNull(monitors.resultsAbandonedAt),
-    ));
-  // 第二类：还排在待发送托盘里的哨兵结果。
-  const unread = db.select({ cls: sql<string>`'unread'`.as("cls"), origin: scheduledMessages.origin, ...shape })
-    .from(scheduledMessages)
-    .leftJoin(monitors, eq(monitors.id, sql`substr(${scheduledMessages.origin}, ${ORIGIN_PREFIX.length + 1})`))
-    .where(and(
-      eq(scheduledMessages.taskId, taskId),
-      eq(scheduledMessages.status, "pending"),
-      like(scheduledMessages.origin, `${ORIGIN_PREFIX}%`),
-      // 哨兵行没了的照样算；行还在但已经被明确放弃的不算（下面那段长注释）。
-      or(isNull(monitors.id), isNull(monitors.resultsAbandonedAt)),
-    ));
-  // **最宽的那一支放第一位**:`unionAll` 的结果类型取第一支,而第二类是 LEFT JOIN(哨兵行可能
-  // 没了),它的列全是可空的。另外两支的非空列可以赋进可空类型,反过来编译不过。
-  return await unionAll(unread, live, handoff);
-}
 
 /**
  * 第一类：还在盯的进程。
@@ -232,7 +180,7 @@ type Blocking = { live: MonitorFacts[]; unread: { label: string }[]; inflight: M
 
 async function blockingSets(taskId: string): Promise<Blocking> {
   const out: Blocking = { live: [], unread: [], inflight: [] };
-  for (const r of await blockingRows(taskId)) {
+  for (const r of await unsettledMonitorResponsibility(db, taskId)) {
     if (await sparedByReview({ sourceReviewRun: r.reviewRun, sourceReviewRound: r.reviewRound })) continue;
     if (r.cls === "unread") out.unread.push({ label: labelOfRow(r) });
     else if (r.cls === "handoff") out.inflight.push(factsOfRow(r));

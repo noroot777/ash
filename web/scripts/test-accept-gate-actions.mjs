@@ -142,6 +142,51 @@ export async function testAcceptGateActions({ browser, base, run }) {
       await page.close();
     }
   }
+  // 「跳过」这条出路不该等到红了才出现（用户 2026-10-31）：命令设着、这棵树上一次都没跑过
+  // 的时候，点验收就是眼看它烧十几分钟，而那正是最想直接合的时刻。判据是**这一按会不会真的
+  // 撞上这道门**，所以同一颗按钮在「没跑过」「绿了但过期了」都在，唯独在「有一次能原样复用
+  // 的绿」时不许出现 —— 那时跳过只会把一份真凭据换成一句「你明确跳过了」。
+  for (const [label, latest, offered] of [
+    ["一次都没跑过", null, true],
+    ["绿了但过期了", run({ stale: true }), true],
+    ["有一次能复用的绿", run(), false],
+  ]) {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 820 } });
+    const store = { requests: [] };
+    await page.addInitScript(() => {
+      window.EventSource = class { constructor() { queueMicrotask(() => this.onopen?.()); } close() {} };
+    });
+    await page.route("**/api/**", route => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === "/api/projects") return json(route, [{ id: "proj-1", myRole: "member", acceptCommit: true }]);
+      if (pathname.endsWith("/branch-plan")) return json(route, { task: { blocker: null, dependency: null, strategy: "safe" } });
+      if (pathname.endsWith("/accept-gate")) return json(route, { command: "./kb.sh test full", running: null, latest, basis: null });
+      if (pathname.endsWith("/accept")) {
+        store.requests.push(JSON.parse(route.request().postData()));
+        return json(route, { accepted: false, taskId: "gate-task", reason: "target_unresolved", error: "模拟验收响应" }, 409);
+      }
+      return json(route, { error: `Unexpected request: ${pathname}` }, 404);
+    });
+    try {
+      await page.goto(`${base}?controls=1`);
+      const card = page.locator(".accept-gate-card");
+      await card.locator(".accept-gate-command").getByText("./kb.sh test full", { exact: true }).waitFor();
+      const skip = card.getByRole("button", { name: "这次跳过它，直接合并", exact: true });
+      assert.equal(await skip.count(), offered ? 1 : 0, `${label}：跳过入口`);
+      // 「重跑一次」只在有一次结论摆着时才是一句话，没跑过时不许冒出来（点验收本来就会跑它）。
+      assert.equal(await card.getByRole("button", { name: "重跑一次", exact: true }).count(), 0, `${label}：没有红就没有「重跑一次」`);
+      if (!offered) continue;
+      await skip.click();
+      const dialog = page.getByRole("dialog");
+      assert.match(await dialog.innerText(), latest ? /这一次不跑.*不重新验它/s : /这一次不跑.*这一按等于这次不验它/s);
+      assert.equal(store.requests.length, 0, "打开确认框不动任何东西");
+      await dialog.getByRole("button", { name: "跳过前置命令并验收", exact: true }).click();
+      await page.locator(".team-accept-failure").filter({ hasText: "模拟验收响应" }).waitFor();
+      assert.deepEqual(store.requests, [{ confirmUnverified: false, commit: true, gate: "skip" }], `${label}：这一按要带 gate=skip`);
+    } finally {
+      await page.close();
+    }
+  }
   await testAcceptGateReads({ browser, base });
-  console.log("accept gate failure actions: inline recovery, explicit confirmation, guards and projection refresh covered");
+  console.log("accept gate failure actions: inline recovery, explicit confirmation, guards, pre-run skip entry and projection refresh covered");
 }

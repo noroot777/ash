@@ -9,6 +9,7 @@
 //   F1 空行竞争 / 已有空行 / 已有结束行 / 反序重放 四个分支 + 用户看得见的那条清单；
 //   F2 重启后墙钟回拨到历史同一毫秒:接回水位就不撞;真撞上了照实降级成未知,绝不静默;
 //   N3 任务真被删了,内存里那几笔欠账跟着收。
+// 加上第 1 轮审查 N4：`register: false` 那一档**只补那一行持久记录**,不许登记任何内存身份。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -278,7 +279,25 @@ try {
     turns.forgetTaskUnconfirmed("DeleteDebt1"); // 幂等
   }
 
-  console.log("✓ turn persist: 并发/顺序/重放四分支都不丢收尾事实、结束时刻认第一次、撞上历史身份照实降级成未知、接回水位后另发身份、删任务收欠账");
+  // ── ⑧ N4：`register: false` 不登记任何内存身份 ─────────────────────────────────
+  // 那一档是给「迟到的开始信息」用的(团队开台那条路:身份在所有权层已经终结,只是那一行开始
+  // 记录还没补上)。它原先照样登记 `openedHere` —— 而那个集合只在收口时注销,这一路压根不会有
+  // 收口,于是每条这样的历史回合都在里面留一个**永久**条目(长命进程只增不减)。语义上也反了:
+  // 「本进程开出来的」这个事实正是判决恢复用来分辨「上一个进程留下来的」的那一问
+  // (session-turn-registry.ts 的 `openedHere`),补录一行历史记录不该让它变成真。
+  {
+    const root = await seed("LateOpen1");
+    const sid = await addSession("LateOpen1", root);
+    await turns.openTurn({ sessionId: sid, taskId: "LateOpen1", cwd: root, startedAt: at(0) }, { register: false });
+    assert.equal(turns.turnOpenedHere(sid, at(0)), false,
+      "补录一行历史开始记录,把这个身份说成了「本进程开出来的」—— 判决恢复据此分辨上一个进程留下来的回合");
+    assert.equal(turns.activeTurnStarts(sid).size, 0, "`register: false` 那一档把身份登进了活动册");
+    // 对照:正常那一档照旧登记,否则上面那条等于把功能关了也能绿。
+    await turns.openTurn({ sessionId: sid, taskId: "LateOpen1", cwd: root, startedAt: at(1) });
+    assert.equal(turns.turnOpenedHere(sid, at(1)), true, "正常那一档不登记了 —— 上一条拦过头了");
+  }
+
+  console.log("✓ turn persist: 并发/顺序/重放四分支都不丢收尾事实、结束时刻认第一次、撞上历史身份照实降级成未知、接回水位后另发身份、删任务收欠账、补录历史行不登记内存身份");
 } finally {
   await dbClient.close();
   await releaseTmpDb();

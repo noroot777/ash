@@ -25,6 +25,7 @@ import type {
 } from "@ash/shared";
 import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
 import { and, asc, eq } from "drizzle-orm";
+import { gateAshMcpBeforeLaunch } from "./ash-mcp-launch-gate.js";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import {
@@ -39,7 +40,7 @@ import { debatePrompt, type DebateClosing } from "./free-review-prompts.js";
 import { disputeBriefOf, openDisputeOf, plainSummaryOf, type ReviewRunRow } from "./free-review-dispute.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
+import { claimOwnTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
@@ -198,8 +199,11 @@ export async function startFreeReviewDebate(
   opts: { holdTurn?: boolean } = {},
 ): Promise<{ debateId: string; exchanges: number }> {
   const exchanges = exchangesOf(input.exchanges ?? 1);
+  // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
+  // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  if (holdingTurn && !claimTurn(taskId, "dispatch")) {
+  const turn = holdingTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再开辩论");
   }
   try {
@@ -228,6 +232,17 @@ export async function startFreeReviewDebate(
         throw new Error("这一轮意见已经辩完了；先裁定它，或者再派一轮审查");
       }
 
+      // 两边都靠 ash MCP 的 `debate_reply` 交卷，任一边够不着，这场辩论就会在那一段「没说话」
+      // 中止。起跑前两边一起核（并发：各自最多等一个预检预算），排在任何一行落库之前 ——
+      // 拦下时什么都还没写，驳回照旧等裁定。只在开场核这一次，理由见 ash-mcp-launch-gate.ts。
+      // 两边都够不着时两句都说，免得修好一边再撞另一边。
+      const gates = await Promise.allSettled([
+        gateAshMcpBeforeLaunch(task, { agentType: open.run.agentType, executorId: open.run.executorId }, "审查者"),
+        gateAshMcpBeforeLaunch(task, { agentType: task.agentType ?? "claude", executorId: task.executorId }, "执行者"),
+      ]);
+      const blocked = gates.flatMap((g) => g.status === "rejected"
+        ? [g.reason instanceof Error ? g.reason.message : String(g.reason)] : []);
+      if (blocked.length) throw new Error(blocked.join("；"));
       const at = now();
       const debate: typeof freeReviewDebates.$inferInsert = {
         id: id(), roundId: open.round.id, taskId, runId: open.run.id, round: open.run.currentRound,
@@ -253,7 +268,7 @@ export async function startFreeReviewDebate(
       releaseFreeWorkflowAction(taskId);
     }
   } finally {
-    if (holdingTurn) releaseTurn(taskId);
+    if (turn) releaseTurn(taskId, turn);
   }
 }
 

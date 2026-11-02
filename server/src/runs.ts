@@ -3,17 +3,18 @@ import type { AgentType } from "@ash/shared";
 import type { SteerText } from "./executors/types.js";
 import type { CliCommand, CliGoal } from "@ash/shared/cli-commands";
 import { RECONCILE_TURN_ROLE, claimNonTurn, whenTurnIdle } from "./turn-lock.js";
+import { acknowledgeStartReceipt, registerStartReceipt } from "./task-start-receipt.js";
 
 // 回合占位锁那一半(单飞锁、几种不是回合的预占、起跑冻结、等这一轮跑完再续跑)住在
 // turn-lock.ts —— 两摊各自的使用方几乎不重叠,挤在一个文件里已经过了 700 行上限
 // (第 3 轮审查 F3)。八十多个文件照旧从这里 import,所以原样转出去。
 export {
-  bindTurnToken, claimIdleWorkspaceTurns, claimTurn, claimWakeTurn, claimWorkspaceTurn,
-  continueWhenIdle, freezeStartingTurn, isTurnClaimed, reclaimTurn, releaseTurn,
-  SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, turnIdentity, turnRole, turnSourceReview,
-  turnSourceRole, waitForTurnIdle, whenTurnIdle,
+  bindTurnToken, claimIdleWorkspaceTurns, claimOwnTurn, claimTurn, claimWakeTurn,
+  claimWorkspaceTurn, continueWhenIdle, freezeStartingTurn, isTurnClaimed, reclaimTurn,
+  releaseHeldTurn, releaseTurn, SEAT_ROLLBACK_ROLE, claimNonTurn, takeStartFreeze, turnIdentity,
+  turnRole, turnSourceReview, turnSourceRole, waitForTurnIdle, whenTurnIdle,
 } from "./turn-lock.js";
-export type { TurnIdentity, TurnReview, TurnSource } from "./turn-lock.js";
+export type { TurnIdentity, TurnOwner, TurnReview, TurnSource } from "./turn-lock.js";
 
 // Registry of in-flight agent subprocesses, keyed by task, so a running task can
 // be killed on demand (manual stop / group pause) — the orchestrator/duet
@@ -63,6 +64,7 @@ export function trackRun(taskId: string, h: Killable): void {
   let set = handles.get(taskId);
   if (!set) handles.set(taskId, (set = new Set()));
   set.add(h);
+  registerStartReceipt(taskId, h);
 }
 
 export function nativeCommandRun(taskId: string): Killable | null {
@@ -102,6 +104,7 @@ const discardedRuns = new WeakSet<Killable>();
 /** ②:消费循环已经真正接手这个 handle,之后的回收由它的 finally 负责。 */
 export function adoptRun(h: Killable): void {
   adoptedRuns.add(h);
+  acknowledgeStartReceipt(h);
 }
 
 /**

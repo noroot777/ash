@@ -44,8 +44,14 @@ export async function ensureTaskNoticeSchema(client: Client): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS task_notices_task_idx ON task_notices (task_id, occurred_at);
   `);
-  // 这张表在上一版就建过(只有 rejected 一档),所以补列要幂等:已经有了就吞掉。
-  await client
-    .executeMultiple("ALTER TABLE task_notices ADD COLUMN outcome TEXT NOT NULL DEFAULT 'rejected';")
-    .catch(() => undefined);
+  // 这张表在上一版就建过(只有 rejected 一档),所以旧库要补列。
+  //
+  // **先问再补**,不是「无条件 ALTER 然后吞掉报错」:那种写法让每一次正常启动都产生一次
+  // 预期内的异常 —— 既在日志里制造噪音,又把真正的失败(表坏了、库只读)一起吞掉,
+  // 于是「补列没成功」这件事永远不会有人知道,直到某条 INSERT 报 no such column。
+  const columns = await client.execute("PRAGMA table_info(task_notices);");
+  const hasOutcome = columns.rows.some((row) => String((row as Record<string, unknown>).name) === "outcome");
+  if (!hasOutcome) {
+    await client.executeMultiple("ALTER TABLE task_notices ADD COLUMN outcome TEXT NOT NULL DEFAULT 'rejected';");
+  }
 }

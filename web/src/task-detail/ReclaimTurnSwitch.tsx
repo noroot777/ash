@@ -17,6 +17,7 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
   const [busy, setBusy] = useState(false);
   const [released, setReleased] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [needsReload, setNeedsReload] = useState(false);
   const [challenge, setChallenge] = useState<HumanApprovalChallenge | null>(null);
   const [proof, setProof] = useState("");
   const [now, setNow] = useState(Date.now);
@@ -31,13 +32,16 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
   const requestApproval = async () => {
     setBusy(true);
     setResult(null);
+    setNeedsReload(false);
     try {
       const next = await api.requestTurnApproval(taskId);
       if (next.challengeId !== challenge?.challengeId) setProof("");
       setChallenge(next);
       setNow(Date.now());
     } catch (error) {
-      setResult(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setResult(message);
+      setNeedsReload(message.includes("页面凭据"));
     } finally {
       setBusy(false);
     }
@@ -46,6 +50,7 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
   const release = async () => {
     setBusy(true);
     setResult(null);
+    setNeedsReload(false);
     try {
       let approval: HumanApprovalProof | null;
       try { approval = JSON.parse(proof) as HumanApprovalProof | null; }
@@ -66,7 +71,12 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
       // 刷新之后照样在)。收起来等于让他对着一个消失的开关猜。
       if (r.runnable) onDone?.();
     } catch (error) {
-      setResult(error instanceof Error ? error.message : String(error));
+      // 凭据对不上(用过了、过期了、或者这一份是上次启动发的)时服务端回 403。恢复路径就是
+      // 重新加载一次页面文档——那一刻会换到新的一份。这句得说出口:否则用户看到的是一个
+      // 按下去没反应的开关(server/src/auth/human-action-token.ts)。
+      const message = error instanceof Error ? error.message : String(error);
+      setResult(message.includes("页面凭据") ? `${message}。` : message);
+      setNeedsReload(message.includes("页面凭据"));
     } finally {
       setBusy(false);
     }
@@ -95,7 +105,14 @@ export function ReclaimTurnSwitch({ taskId, onDone }: { taskId: string; onDone?:
           {busy ? "正在放开…" : "确认风险并放开回合占位"}
         </button>
       </>}
-      {result && <p className="task-turn-remedy__result" role="status">{result}</p>}
+      {result && (
+        <p className="task-turn-remedy__result" role="status">
+          {result}
+          {needsReload && (
+            <button type="button" onClick={() => location.reload()}>重新加载页面</button>
+          )}
+        </p>
+      )}
     </div>
   );
 }

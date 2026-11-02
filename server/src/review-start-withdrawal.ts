@@ -10,7 +10,7 @@ import { announceResumePrompt } from "./task-resume-prompt.js";
 import { recordTaskStatus } from "./task-start-status.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
-import { claimTurn, isTurnClaimed, releaseTurn } from "./runs.js";
+import { claimOwnTurn, isTurnClaimed, releaseTurn } from "./runs.js";
 import { clearGuardedStart, withdrawRepairStart } from "./guarded-turn-start.js";
 import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
 
@@ -18,7 +18,7 @@ export type ReviewStartReceipt = { directory: string; generation: string; identi
   repair?: true; acceptedRepair?: true; delivery?: ReviewDelivery };
 
 export async function withdrawReviewStart(taskId: string, receipt: ReviewStartReceipt | undefined,
-  priorStatus: TaskStatus | null): Promise<void> {
+  priorStatus: TaskStatus | null, spawned = false): Promise<void> {
   if (!receipt) return;
   if (receipt.repair) return withdrawRepairStart(taskId, receipt);
   const withdrawn = await db.transaction(async (transaction) => {
@@ -52,7 +52,9 @@ export async function withdrawReviewStart(taskId: string, receipt: ReviewStartRe
   if (!withdrawn) return;
   recordTaskStatus(withdrawn.owner, withdrawn.status);
   await announceResumePrompt(taskId);
-  await appendTaskTimeline(taskId, "审查在启动前撤回（原方向失效或起跑中断）；本轮没有启动，旧等待已作废，可重新派审。");
+  await appendTaskTimeline(taskId, spawned
+    ? "审查在交出输入之后撤回（原方向在起跑途中失效）；这一轮的 CLI 已收到输入、随即被收掉，旧等待已作废，可重新派审。"
+    : "审查在启动前撤回（原方向失效或起跑中断）；本轮没有启动，旧等待已作废，可重新派审。");
   if (withdrawn.free) await (await import("./free-workflow.js")).handleFreeWorkflowSettlement(taskId,
     withdrawn.status, false, false, "reviewer");
   else await (await import("./review.js")).handleTaskSettlement(taskId, withdrawn.status, false, false);
@@ -62,20 +64,26 @@ export async function reconcileReviewStarts(ownerTaskId?: string): Promise<void>
   const owners = await db.select().from(tasks).where(ownerTaskId ? eq(tasks.id, ownerTaskId) : isNotNull(tasks.waitOwnership));
   for (const owner of owners) {
     const start = owner.waitOwnership?.start;
-    if (!start || isTurnClaimed(owner.id) || !claimTurn(owner.id)) continue;
+    if (!start || isTurnClaimed(owner.id)) continue;
+    // 自己占下的那一把,自己还(核验在 releaseTurn 里按 seq 做):这中间要查库、要写时间线,
+    // 人工放开可以在其间把锁拔走、另一轮占上(本轮审查 F1)。
+    const turn = claimOwnTurn(owner.id);
+    if (!turn) continue;
     try {
       if (!await restoreUndeliveredReviewStart(owner.id, start)) await withdrawReviewStart(owner.id, start, start.priorStatus);
     }
-    finally { releaseTurn(owner.id); }
+    finally { releaseTurn(owner.id, turn); }
   }
   const states = await db.select().from(regressionEvidence).where(isNotNull(regressionEvidence.continuation));
   for (const state of states) {
     const start = state.continuation?.start;
     if (!start || state.settlement || state.continuation?.phase === "uncertain" || (ownerTaskId && ownerTaskId !== start.ownerTaskId)
-      || isTurnClaimed(start.ownerTaskId) || !claimTurn(start.ownerTaskId)) continue;
+      || isTurnClaimed(start.ownerTaskId)) continue;
+    const turn = claimOwnTurn(start.ownerTaskId);
+    if (!turn) continue;
     try {
       await withdrawReviewStart(start.ownerTaskId, { directory: state.directory, generation: state.generation,
         identity: start.identity }, null);
-    } finally { releaseTurn(start.ownerTaskId); }
+    } finally { releaseTurn(start.ownerTaskId, turn); }
   }
 }

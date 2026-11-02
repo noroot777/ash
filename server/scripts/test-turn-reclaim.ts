@@ -13,15 +13,18 @@
 //   ⑤ 队列占位:不再因「释放那一瞬锁被占着」而永久放弃,**且延期回滚只撤自己那一代**
 //      (F3:endTurn 按注册顺序跑回调,排在前面的合法回调已抢到新锁,旧回滚照样写);
 //   ⑥ 被挡回的用户操作留下持久可见的痕迹,**包括从没跑过、没有会话可写的任务**(F4);
-//   ⑦ 久久发不出去的待发送消息会出声(pending-delivery-timing)。
+//   ⑦ 久久发不出去的待发送消息会出声(pending-delivery-timing);
+//   ⑧ 补偿责任**延续时整份身份一起带走** —— 重排到顶那一趟旧版只传了 repush,占位凭证
+//      在那里掉了,下一趟于是把自己那份凭证误读成「别人还持有」,撒手不管(第 1 轮审查 F4)。
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { turnReclaimPost } from "./turn-reclaim-test-client.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-turn-reclaim-"));
 const approvalKey = generateKeyPairSync("ed25519");
@@ -41,7 +44,8 @@ const {
 const { forceReleaseTurn } = await import("../src/turn-lock.js");
 const { SUSPECT_TURN_MS, releaseSuspectTurn, reportSuspectTurns, suspectTurns } =
   await import("../src/turn-lock-reclaim.js");
-const { claimQueueSeat, seatGeneration } = await import("../src/queue-seat.js");
+const { claimQueueSeat } = await import("../src/queue-seat.js");
+const { reserveQueuedTask, taskQueueReservation } = await import("../src/task-queue-reservation.js");
 const { reclaimStrandedSeat } = await import("../src/scheduler.js");
 const { noteRejectedUserAction, noteSystemNotice, recentRejectionNotices } = await import("../src/user-action-rejection.js");
 const { forgetStalled, noteStalledPending } = await import("../src/pending-delivery-timing.js");
@@ -70,21 +74,7 @@ const baseTask = {
 const api = new Hono();
 mountTaskRunRoutes(api);
 mountTaskRoutes(api);
-const post = async (path: string, body?: unknown) => {
-  let approval;
-  if (body === undefined && path.endsWith("/reclaim-turn")) {
-    const response = await api.request(`${path}/approval`, { method: "POST" });
-    if (response.ok) {
-      const challenge = await response.json() as { challengeId: string; payload: string };
-      approval = { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
-    }
-  }
-  return api.request(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true, approval } : {})),
-  });
-};
+const post = turnReclaimPost(api, approvalKey.privateKey);
 
 /** 给任务造一条会话行 —— appendTaskTimeline 只往已有会话里写,没有会话的任务只留日志。 */
 async function seedSession(taskId: string, id = `s-${taskId}`): Promise<string> {
@@ -273,7 +263,7 @@ releaseTurn("t-ghost");
   const released = notices.find((notice) => notice.action === "回合占位已放开");
   assert.ok(released, "没有会话的人工放开也必须持久留痕");
   assert.equal(released.outcome, "system");
-  assert.match(released.reason, /已通过显式请求放开/);
+  assert.match(released.reason, /已放开，请求来源无法确认/);
   assert.doesNotMatch(released.reason, /由你|手动放开/, "没有独立的人类身份凭据时不得把请求归因给用户");
   assert.match(released.reason, /互斥就没了/, "痕迹里必须明示副作用,别让用户以为只是清了个垃圾");
 }
@@ -282,6 +272,30 @@ releaseTurn("t-ghost");
   const again = await releaseSuspectTurn("t-ghost");
   assert.equal(again.ok, false, "没有锁被占着时应如实失败");
   assert.equal(again.ok === false && again.why, "no-lock");
+}
+
+// ── ⑤b 交接正好发生在读库那一瞬:下一步建议的前提是「此刻没人持有」 ─────────────
+// **本轮审查 N2 的回归。** 核对后置条件要读库,`await` 一让出,新回合完全可以在这段间隙里
+// 接手(放开之后紧接着就是调度推进)。那之后读到的 queued/running 很可能正是新那一轮自己
+// 写下的,而「没有人会再来把它改回去了,点一次停止」这句话的前提恰恰是没人持有 —— 前提
+// 没了还照旧劝,就是劝用户去停掉一个刚起来的回合。
+await createTasks([{ ...baseTask, id: "t-takeover", title: "takeover during status read", status: "queued" }]);
+assert.equal(claimTurn("t-takeover"), true, "先造一把判得上可疑的锁");
+await sleep(SUSPECT_TURN_MS * 3);
+{
+  // 不 await:releaseSuspectTurn 同步走到 forceReleaseTurn 之后,停在「读库核对状态」那个
+  // await 上 —— 此刻锁已经空了。那个窗口是确定存在的,不靠时序巧合。
+  const releasing = releaseSuspectTurn("t-takeover");
+  assert.equal(claimTurn("t-takeover", "single"), true, "读库这段间隙里新回合占到了锁");
+  const outcome = await releasing;
+  assert.ok(outcome.ok, "放开本身照常成功");
+  assert.equal(outcome.ok && outcome.nextStep, null,
+    "状态由新接手那一轮负责,不许再劝用户「点一次停止」—— 那停掉的是刚起来的回合");
+  assert.equal(outcome.ok && outcome.runnable, true, "有人接手就算恢复了可运行");
+  const notice = (await recentRejectionNotices("t-takeover")).find((n) => n.action === "回合占位已放开");
+  assert.ok(notice, "放开照常留痕");
+  assert.doesNotMatch(notice.reason, /点一次停止/, "持久痕迹里同样不许留下那条过期建议");
+  releaseTurn("t-takeover");
 }
 
 // 判据不因为是人点的就放宽:有令牌 / 有句柄 / 刚占下,三种都要挡回并说清是哪一条没过
@@ -294,7 +308,7 @@ assert.equal(claimTurn("t-token"), false, "t-token 的锁还占着(它有令牌)
 {
   const refused = await releaseSuspectTurn("t-handle");
   assert.equal(refused.ok, false, "真有 CLI 在跑时不许拔锁");
-  assert.match(refused.ok === false ? refused.reason : "", /进程在跑/);
+  assert.match(refused.ok === false ? refused.reason : "", /CLI 进程在运行/);
 }
 {
   const refused = await releaseSuspectTurn("t-fresh", 60_000);
@@ -357,6 +371,9 @@ await db.insert(queueItems).values([
 ]);
 const statusOf = async (taskId: string): Promise<string | undefined> =>
   (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)?.status;
+/** 「这具 queued 有没有主」的判据是库里那份占位凭证(详见 test-seat-ownership.ts 的同名助手)。 */
+const seatTokenOf = async (taskId: string): Promise<string | null | undefined> =>
+  (await db.select({ token: tasks.queueSeatToken }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.token;
 
 {
   const claim = await claimQueueSeat("t-seat");
@@ -403,13 +420,13 @@ const statusOf = async (taskId: string): Promise<string | undefined> =>
   // 时它不许插手 —— 那具 queued 是那个 seat 的,撤掉它同样是撤后来者的占位。
   const live = await claimQueueSeat("t-live");
   assert.ok(live.ok && live.seat, "应认领到执行占位");
-  assert.notEqual(seatGeneration("t-live"), 0, "认领成功应发出一个世代号");
+  assert.ok(await seatTokenOf("t-live"), "认领成功应在库里留下一份占位凭证");
   await reclaimStrandedSeat("t-live", "q3", "failed");
   assert.equal(await statusOf("t-live"), "queued", "有活着的 seat 时守卫不许替它回滚");
   await live.seat!.release();
   await sleep(30);
   assert.equal(await statusOf("t-live"), "failed", "seat 自己的 release 负责回滚");
-  assert.equal(seatGeneration("t-live"), 0, "回滚落地后世代号要清掉");
+  assert.equal(await seatTokenOf("t-live"), null, "回滚落地后占位凭证要清掉");
 }
 
 {
@@ -454,9 +471,10 @@ await db.insert(queueItems).values([{ queueId: "q4", taskId: "t-commit", positio
 }
 
 // ── ⑦c 责任交回:幽灵锁压着的占位,放开之后要被收拾 ─────────────────────────
-// **第 2 轮审查 F2 的回归。** 回滚被一把没人还的锁挡住时,责任仍在这个 seat 手上(世代
-// 号非 0),scheduler 的兜底据此让位。问题出在「放弃时留着号码」—— 那就成了谁都不来收。
-// 现在放弃路径会清号并交接;而正常的恢复路径是:用户手动放开那把锁,被冻住的回滚跟着放走。
+// **第 2 轮审查 F2 的回归。** 回滚被一把没人还的锁挡住时,责任仍在这个 seat 手上(库里那份
+// 占位凭证还在),scheduler 的兜底据此让位。问题出在「放弃时把凭证留着」—— 那就成了谁都
+// 不来收。现在放弃路径会交接给兜底;而正常的恢复路径是:用户手动放开那把锁,被冻住的回滚
+// 跟着放走、凭证随那一笔清掉。
 await createTasks([{ ...baseTask, id: "t-ghostseat", title: "seat under ghost lock", status: "failed" }]);
 await db.insert(queueItems).values([{ queueId: "q5", taskId: "t-ghostseat", position: 0, createdAt: stamp }]);
 {
@@ -465,7 +483,7 @@ await db.insert(queueItems).values([{ queueId: "q5", taskId: "t-ghostseat", posi
   assert.equal(claimTurn("t-ghostseat", "single"), true, "一把没人会来还的锁压在上面");
   await claim.seat!.release();
   assert.equal(await statusOf("t-ghostseat"), "queued", "锁占着,回滚只能排队等");
-  assert.notEqual(seatGeneration("t-ghostseat"), 0, "责任还在这个 seat 手上,兜底该让位");
+  assert.ok(await seatTokenOf("t-ghostseat"), "责任还在这个 seat 手上,兜底该让位");
   await reclaimStrandedSeat("t-ghostseat", "q5", "failed");
   assert.equal(await statusOf("t-ghostseat"), "queued", "有活着的 seat 负责时兜底不插手");
   // 恢复:用户手动放开那把锁 → afterTurn 回调放走 → 回滚跑完 → 号码交回
@@ -474,7 +492,34 @@ await db.insert(queueItems).values([{ queueId: "q5", taskId: "t-ghostseat", posi
   await sleep(30);
   assert.equal(await statusOf("t-ghostseat"), "failed",
     "锁一放开,被它冻住的占位回滚必须跑完 —— 否则任务永久停在「排队中」");
-  assert.equal(seatGeneration("t-ghostseat"), 0, "责任交回后号码要清掉,不能永久屏蔽兜底");
+  assert.equal(await seatTokenOf("t-ghostseat"), null, "责任交回后凭证要清掉,不能永久屏蔽兜底");
+}
+
+// ── ⑦d 延期到顶:凭证必须跟着那一趟一起走 ───────────────────────────────────
+// **第 1 轮审查 F4 的回归。** 锁被占着时补偿排到 whenTurnIdle,重排有上限;到顶那一趟
+// 旧版写的是 `scheduleSeatReclaim(taskId, queueId, prevStatus, 30_000, { repush })` ——
+// **自己那份占位凭证在这里掉了**。丢了凭证的下一趟会撞上「库里这具 queued 带着凭证 =
+// 它有主、外人不插手」那一道门,而那份凭证正是它自己的:于是直接 return,这具遗留从此
+// 没有任何负责人,任务永久停在「排队中」——正是这条补偿路存在要防的那个结局。
+// 现在延续入口只收完整的 `SeatReclaim`,漏带一项编译就不过。
+await createTasks([{ ...baseTask, id: "t-defer", title: "deferral keeps credential", status: "paused" }]);
+await db.insert(queueItems).values([{ queueId: "q6", taskId: "t-defer", position: 0, createdAt: stamp }]);
+{
+  const before = (await db.select().from(tasks).where(eq(tasks.id, "t-defer"))).at(0)!;
+  const reservation = taskQueueReservation(before);
+  await reserveQueuedTask(reservation);
+  assert.equal(await statusOf("t-defer"), "queued", "占位落库");
+  assert.ok(await seatTokenOf("t-defer"), "凭证落库 —— 它是「这具 queued 有主」的唯一依据");
+  // 锁被占着,这一趟必进延期分支;deferrals 直接给满,打的就是「重排到顶」那一步
+  // (deferMs 压到毫秒级,否则要等现实里的 30s)。
+  assert.equal(claimTurn("t-defer", "single"), true, "一把压着补偿的锁");
+  await reclaimStrandedSeat("t-defer", "q6", "paused", { reservation, deferrals: 5, deferMs: 40 });
+  assert.equal(await statusOf("t-defer"), "queued", "锁占着时不动");
+  releaseTurn("t-defer");
+  await sleep(300);
+  assert.equal(await statusOf("t-defer"), "paused",
+    "到顶那一趟必须带着凭证回来 —— 丢了它就会把自己那份占位读成别人的,撒手不管");
+  assert.equal(await seatTokenOf("t-defer"), null, "回滚落地后占位凭证要清掉");
 }
 
 // ── ⑦d 停止:等到真的释放才说「可以重新运行」 ────────────────────────────────

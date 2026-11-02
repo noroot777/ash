@@ -83,7 +83,7 @@ export async function cleanupArchivedWorkspaces(
 /**
  * 占住这个工作目录全部共用者的回合锁,并复核任务确实还处于归档态。
  *
- * 两件事必须一起做、而且**顺序是先占后查**:`claimTurn` 不要仓库锁,先查后占的话查完到
+ * 两件事必须一起做、而且**顺序是先占后查**:`claimOwnTurn` 不要仓库锁,先查后占的话查完到
  * 占住之间另一次启动完全可以合法插进来(runs.ts `claimWorkspaceTurn` 的注释里记着同一个
  * 窗口的两次复现)。占不到 = 此刻有人在这个目录里干活,这一项就别清。
  *

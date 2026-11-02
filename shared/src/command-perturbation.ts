@@ -1,0 +1,405 @@
+// **「默认执行环境」这个前提还成立吗** —— 硬拦判据的最后一道（见 command-never-exits.ts
+// 文件头 ⑪⑫）。从那个文件拆出来（全局约定:单文件不超过 700 行），接口只有 `perturbed` 一个:
+// 读不懂这条命令的执行语义 ⇒ 整条证明失效 ⇒ 降级成提示。
+//
+// 为什么单独成层:硬拦的证明压着一个说不出口的前提 —— shell 按常规语义执行每一段、工具找得到、
+// 没人把这个进程结束掉。那个前提**不是待证项**,它是哨兵这个功能本身的运行假设（否则磁盘满、
+// 外部信号、ulimit 都能让任何命令退出，闸直接归零）。可**命令自己就能把这个假设掀翻**，而那
+// 几种写法全都写在 argv 里、这一层本来就看得见。
+import { type Segment, type Token } from "./command-lex.ts";
+import { BRANCH, LOOP_HEADS, SKELETON, headOf } from "./command-scan.ts";
+import { commandOf } from "./command-wrappers.ts";
+
+/**
+ * **shell 自己的词**(内建命令)。这一道判据按「这个空间之内的白名单」走,理由是空间封闭:
+ * 能改掉「后面那几段按什么规矩执行」的东西只有 shell 自己的词 —— 外部程序改不动调用它的那个
+ * shell 的执行语义,它唯一能做的是**结束这个进程**，而「没人把这个进程结束掉」正是上面那条
+ * 不作待证项的背景前提（`kill` 仍单独记在 `NOTES` 里:它是把那件事写进 argv 的那一种）。
+ *
+ * 所以这张表不需要穷举「哪些词危险」,只需要穷举「shell 有哪些自己的词」—— 后者是封闭的、
+ * 查得到的,前者永远差下一个。
+ *
+ * **这替掉了原先那张「我见过的会掀翻前提的词」表**（eval/source/trap/kill/ulimit/shopt/
+ * setopt）。那是列反例,于是同一族的下一个照旧硬拦 —— 本轮实测两条(`sh -lc`,都退出 0 并打出
+ * DONE,却都吃 409):
+ *   · `unset PATH; tail -F /dev/null; printf 'DONE\n'` —— `unset` 把 PATH 整个去掉,
+ *     那个 tail 压根没启动（`sh: tail: No such file or directory`）。赋值那一侧早就认了
+ *     (`PATH_ASSIGN`)，取消那一侧没人认。
+ *   · `hash -p /usr/bin/true tail; tail -F /dev/null; printf 'DONE\n'` —— `hash -p` 把
+ *     `tail` 这个名字钉到另一个可执行文件上,跑的根本不是 tail。
+ * 再补两条进黑名单的话，`builtin`/`enable`/`let`/`local`/`alias` 还排着队。
+ *
+ * 表里收的是 sh(dash)/bash/zsh/ksh 的内建词并集。**宁可多收**:多收一个 ⇒ 那条命令从硬拦
+ * 降成提示（人照样提交得了），少收一个 ⇒ 一件做得成的事做不成（见那边文件头的不对称那段）。
+ */
+/**
+ * **POSIX 特殊内建**。两处要用到它,所以单列一张表而不是在 `SHELL_WORDS` 里数第一组:
+ *  · 报错就把非交互 shell 带走（`SPECIAL_TAIL`）;
+ *  · 挂在它们身上的**赋值前缀**出错同样致命（`assignPrefixNote`）。
+ */
+const SPECIAL_BUILTINS = new Set([
+  "break", ":", "continue", ".", "eval", "exec", "exit", "export", "readonly", "return",
+  "set", "shift", "times", "trap", "unset",
+]);
+const SHELL_WORDS = new Set([
+  // POSIX 特殊内建
+  ...SPECIAL_BUILTINS,
+  // POSIX 常规内建
+  "alias", "bg", "cd", "command", "false", "fc", "fg", "getopts", "hash", "jobs", "kill",
+  "newgrp", "pwd", "read", "true", "umask", "unalias", "wait",
+  // bash
+  "bind", "builtin", "caller", "compgen", "complete", "compopt", "declare", "dirs", "disown",
+  "echo", "enable", "help", "history", "let", "local", "logout", "mapfile", "popd", "printf",
+  "pushd", "readarray", "shopt", "source", "suspend", "test", "[", "type", "typeset", "ulimit",
+  // zsh / ksh
+  "autoload", "bindkey", "compdef", "disable", "echotc", "emulate", "float", "functions",
+  "getln", "integer", "limit", "log", "print", "rehash", "sched", "setopt", "stat", "ttyctl",
+  "unfunction", "unhash", "unlimit", "unsetopt", "vared", "whence", "zcompile", "zle",
+  "zmodload", "zparseopts", "zstyle", "redirect",
+]);
+
+/**
+ * 这一层**确实有处置**的那几个 shell 词 —— 其余任何一个都算未知。
+ *
+ * 每一个的理由都得是「它的执行语义这一层已经算进去了」,不是「它看起来没害」:
+ *  · `:`/`true`/`false`/`test`/`[` —— 只产出一个退出码,而退出码这一层有处置（`errexitAt`）;
+ *  · `echo`/`printf` —— 只往流里写字;
+ *  · `cd`/`pwd` —— 只动工作目录,而「它盯的那个东西在不在」整档已经移出硬拦（文件头 ⑩）;
+ *  · `wait`/`umask` —— 不改后面那几段怎么执行;
+ *  · `read`/`printf`/`export`/`shift`/`times` —— **要看参数**才算得清,见 `ARGV_PROOF`;
+ *  · `break`/`continue`/`exit`/`return`/`exec` —— 形状那一层专门处置过（`JUMPS`/`TERMINATORS`/
+ *    `ESCAPES`),这里再算一次只会把真阳性也降级;
+ *  · `set` —— 有自己那道白名单（`setShaken`）。
+ *
+ * **在这张表里不等于整词放行**（第 4 轮审查 F3）:`HANDLED` 答的是「这个词的执行语义这一层有
+ * 处置」,而有几个词的语义**压在参数上** —— 实测 `read PATH; tail -F /dev/null; printf 'DONE\n'`
+ * 退出 0 并打出 DONE（`sh: tail: No such file or directory`）却照旧吃 409:`read PATH` 把 PATH
+ * 读成了空,后面那个 tail 压根没启动。所以进了这张表还要再过 `ARGV_PROOF`。
+ */
+const HANDLED = new Set([
+  ":", "true", "false", "test", "[", "echo", "printf", "cd", "pwd", "read", "wait",
+  "shift", "umask", "times", "export", "break", "continue", "exit", "return", "exec", "set",
+]);
+
+/** 值得多说一句的那几个（其余走 `shellWordNote` 那句通用的）。 */
+const NOTES = new Map<string, string>([
+  ["eval", "那个 eval 跑的是一段这一层读不进去的代码"],
+  ["source", "那个 source 把另一个文件的内容当代码跑"],
+  [".", "那个 . 把另一个文件的内容当代码跑"],
+  ["trap", "那个 trap 挂的是一段收到信号才跑的代码"],
+  ["kill", "那个 kill 可以把这条命令自己结束掉"],
+  ["ulimit", "那个 ulimit 改掉了这条命令自己的资源上限"],
+  ["shopt", "那个 shopt 改掉了 shell 的执行选项"],
+  ["setopt", "那个 setopt 改掉了 shell 的执行选项"],
+  ["unset", "那个 unset 可以把 PATH 一类变量整个去掉，后面那些工具还找不找得到"],
+  ["hash", "那个 hash 可以把一个命令名钉到别的可执行文件上"],
+]);
+// 收尾那半句由调用方接（「它会不会让这条命令提前结束，这一层读不出来」），所以这儿**不要**
+// 自己再写一遍「读不出来」—— 两句接起来会结巴。
+const shellWordNote = (name: string): string =>
+  `那个 ${name} 是 shell 自己的词，这一层没有它的处置 —— 它改不改得动后面每一条的执行语义`;
+
+/**
+ * 给 `PATH` 赋值 ⇒ 后面那些工具还找不找得到,这一层读不出来（`PATH=/missing; tail -F x` 实测 127）。
+ *
+ * **引号不反向证明「这不是赋值」**（第 5 轮审查 F2,与 `ARGV_PROOF` 里 printf 那一侧同一条）。
+ * 上一版这道判据只扫**不带引号**的词,而词法层的 `quoted` 是「这个词里出现过引号」,不是
+ * 「那个 `=` 被引起来了」—— 于是 `PATH="/missing"` 这种最常见的写法整词带上 `quoted`,一路放行,
+ * 实测（`sh -lc`）PATH 真的被改掉、后面那个 tail 找不到、整条退 0 并打出 DONE。
+ *
+ * 所以判据改成**位置**:
+ *  · **赋值前缀区**（POSIX XCU 2.10.2 规则 7:命令词之前那几个 `名字=值`）里的词,带不带引号都算
+ *    赋值 —— `PATH="/x"`、`PATH=/x` 同判;
+ *  · 命令词**之后**的词只在不带引号时算 —— `env PATH=/x cmd` 要算（它真的改环境）,而
+ *    `printf 'PATH=1\n'`、`grep "PATH=x" log` 里那是个字面量,一个字都没改（这正是文件尾
+ *    「口径按命令词位置」那条:闸不许被一句 `grep` 拆掉）。
+ *  · `export "PATH=/x"` 这一类**不靠这道扫**:内建自己做赋值解析,整条由 `ARGV_PROOF` 的
+ *    `export` 那一项按「带操作数就算未知」接住（带不带引号一个判法）。
+ */
+const PATH_ASSIGN = /^PATH=/;
+/** `名字=值` 这个形状（赋值前缀区的右边界靠它定,见 `PATH_ASSIGN`）。 */
+const ASSIGN_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/**
+ * **赋值自己就能把 shell 带走** —— 所以「这一段只有赋值」不等于「这一段什么都不执行」。
+ *
+ * 上一版把「整段没有命令词」如实算成了没有扰动(注释里写的是「`action=break` 自己一个字都不
+ * 跑」),可赋值失败那一刻 shell 当场退出,后面那几条一条都跑不到。本机 `/bin/sh` 实测:
+ *  · `SHELLOPTS=x; printf AFTER` ⇒ rc=127 `readonly variable`,**AFTER 没打出来**;
+ *    `UID=1` 同样(两个都是 shell 自己钉成只读的名字);
+ *  · 而且这件事**对任何名字都证明不了**:前面一句 `readonly FOO=1` 就能把任意名字变成只读
+ *    —— `readonly FOO=1; FOO=2 :; printf AFTER` 实测 rc=1 且 AFTER 没打出来。
+ *
+ * 所以这一层不去列「哪几个名字只读」(那是列反例:`SHELLOPTS`/`UID`/`PPID`/`BASH_VERSINFO`
+ * 排着队,还轮不到 `readonly` 现场造的那些),而是按**位置**封闭:
+ *  · **赋值自成一条语句**(`NAME=值;`)⇒ 证明不了,打这个标记;
+ *  · **赋值前缀挂在特殊内建身上**(`FOO=1 :`)⇒ 同样致命(POSIX XCU 2.8.1;实测 rc=1、后面
+ *    没跑)⇒ 打标记;
+ *  · **赋值前缀挂在普通命令身上**(`LC_ALL=C tail -F x`)⇒ 实测**不致命**:`SHELLOPTS=x true;
+ *    printf AFTER` rc=0 并打出 AFTER(错照报、命令照跑)。这一档照旧有硬拦资格 —— 哨兵命令里
+ *    `LC_ALL=C`、`TZ=UTC` 这种前缀太常见,跟着一起降级等于把闸拆了。
+ */
+const ASSIGN_ALONE =
+  "那一段只有赋值、没有命令词，而赋值失败自己就能让 shell 当场走人（`SHELLOPTS=x` 实测 rc=127 readonly variable，后面一条都没跑；而前面随便一句 `readonly 名字=值` 就能把任何名字变成只读，所以「这个名字赋得上」这一层对谁都证明不了）";
+const assignPrefixNote = (name: string): string =>
+  `那个赋值前缀挂在特殊内建 ${name} 身上，这个位置上赋值一失败就是整条命令结束（POSIX 的规定，实测 \`readonly FOO=1; FOO=2 :\` 退 1 且后面一条都没跑；挂在普通命令上才不会）`;
+/**
+ * 这一道**不自己扫文本了,只读词法层打在词上的标记**（第 4 轮审查 F3）。
+ *
+ * 上一版三条判据（`${…?…}`、`$( )`、`$…`）全是拿正则去扫 `Token.text`,而词法层**按设计**把
+ * 不带引号的展开抹成了占位符 `?`、还把 `${` 当成分段符 —— 于是这三条正则只对**带引号**的那一半
+ * 有效。我自己那三条 `${…:?…}` 回归恰好全写成了 `"${X:?required}"`（引号里的内容原样留在
+ * `text` 里）,所以它们一直是绿的,而审查实测不带引号的同一件事照旧吃 409。
+ *
+ * 结论跟 D1 是同一条:**未知要向上传播,不能让中间某一层把它抹平**。标记的定义见
+ * command-lex.ts 的 `Token.expanded` / `substitution` / `arithmetic` / `errorForm`。
+ */
+/** 这一段开头那几个**结构骨架词**:要跳过它们才轮到真正的命令词（判据同 `provableBlocker`）。 */
+const isSkeleton = (head: string): boolean =>
+  SKELETON.has(head) || LOOP_HEADS.has(head) || BRANCH.has(head);
+
+/**
+ * `set` 的开关里**第一个这一层没有处置的** —— 全都有处置就是 `null`。
+ *
+ * **白名单,不是黑名单**:认得的那几个放过,其余一律算未知（同⑩在下游那一侧的口径）。反过来
+ * 列「哪几个危险」就是列反例 —— `set -n`（读完一条都不执行，实测退出 0 而恒真循环照旧被 409）
+ * 只是第一个被抓到的,`-C` 挡得住重定向、`-f` 改通配展开,一张黑名单永远差下一个。
+ *
+ * 放过的三件事各有理由:`errexit` 那边有专门的处置（`errexitAt`）;`xtrace`/`verbose` 只是把执行
+ * 过程打出来,一个字的执行语义都不改。**`+` 那一侧同样放过** —— 它是关掉,而这三个本来就默认
+ * 关着（`set +e; false; tail -F x` 真 shell 里照旧挂住，是选定要拦的真阳性）。
+ *
+ * **明知的误降级:`set -eu` 这一类**。`-u`（未定义变量当错误）只在命令里真的引用了未定义变量
+ * 时才改变结局,而「有没有引用、引用的定义了没有」这一层答不出来 —— 于是 `set -eu; tail -F x`
+ * 从硬拦降成提示。代价方向是对的那一侧:提示照样说得清,人照样能提交（见那边文件头的不对称）。
+ * 想把它收回硬拦,得先拿出「这条命令里每个变量都定义过」的证明,而不是把 `-u` 塞进白名单。
+ */
+const SET_HANDLED = new Set(["errexit", "xtrace", "verbose"]);
+const SET_SHORT = /^[-+][exv]+$/;
+function setShaken(argv: readonly Token[]): string | null {
+  for (let i = 0; i < argv.length; i += 1) {
+    const t = argv[i]!;
+    if (t.quoted) return t.text;                 // 引号里的开关这一层读不出来
+    // 开关本身是个展开 ⇒ 它到底开的是什么要等执行时才知道（`set $VAR`，VAR=-n 就是 noexec）。
+    if (t.expanded) return t.text;
+    if (!/^[-+]/.test(t.text)) break;            // 开关列表到此为止（后面是位置参数）
+    if (/^[-+]o$/.test(t.text)) {
+      const name = argv[i + 1];
+      if (name && !name.quoted && SET_HANDLED.has(name.text)) { i += 1; continue; }
+      return name ? `${t.text} ${name.text}` : t.text;
+    }
+    if (!SET_SHORT.test(t.text)) return t.text;
+  }
+  return null;
+}
+
+/**
+ * `HANDLED` 里那几个**语义压在参数上**的词:给出第一个这一层证明不了的参数，全都证明得了就 `null`。
+ *
+ * 判据跟 `SET_HANDLED` 一个路子 —— **白名单,不是黑名单**。反过来写「哪些变量名危险」就是列反例:
+ * `PATH` 之外还有 `IFS`（改词分割）、`ENV`/`BASH_ENV`（起 shell 时读的脚本）、`LD_PRELOAD`/
+ * `DYLD_*`（动态库注入）排着队,而「哪些环境变量会改掉后面那几条怎么执行」这个集合压根不封闭。
+ * 所以这里要的是**封闭的那一侧**:证明得出它谁都没赋值。
+ *
+ * · `read` —— 带操作数就算未知（`read X` 也算:这一层证明不出 X 不改执行语义）。
+ *   不带操作数的 `read` 写的是固定的 `REPLY`,那是证明得出来的。
+ * · `printf` —— bash 的 `printf -v 名字 …` 同样是赋值;没有 `-v` 就只往流里写字。
+ *
+ * **引号不反向证明「这不是开关」**（第 2 轮审查第 2 条）。上一版 printf 那一侧搜的是「不带引号
+ * 且文本以 `-v` 开头」的参数,于是实测这两条都被当成「压根没赋值」、照旧硬拦,而真 shell 里
+ * 赋值确实发生了（后面那个 tail 因此找不到,随后正常打出 DONE 退出 0）:
+ *   · `printf '-v' PATH '%s' /no-such-directory; tail -F /dev/null; printf 'DONE\n'`
+ *     —— `'-v'` 和 `-v` 是同一个开关,引号只影响它算不算命令词/关键字,不影响它的字面值;
+ *   · `flag=-v; printf $flag PATH …` —— 开关本身是个展开,这一层压根读不出它是什么。
+ * 要证明的是**封闭的那一侧**:「这条 printf 的选项区里不可能出现 `-v`」。证得出来才放行。
+ */
+/**
+ * 证明没过的那个参数,以及**这一层对它到底知道到什么程度**。
+ *
+ * 三档不能用同一句话说(报告第 2 条的措辞要求):把「我读不出来」说成「它在给变量赋值」是替
+ * 用户编了一个事实 —— 他照着这条提示去找一个可能压根不存在的赋值;反过来把读得出来的
+ * `printf -v PATH` 说成「可能」,又把一件确定的事说软了。
+ *  · `assigns`    —— 读出来了,它确实在赋值（`printf -v NAME`）;
+ *  · `operand`    —— 它落在操作数位置上,而这一层**分不开**「变量名」和「某个选项的参数」
+ *    （`read -p 提示 X` 里那个提示跟 X 长在同一个位置），所以只说位置,不替它断定是哪一种;
+ *  · `unreadable` —— 它是个展开,是什么要等执行时才知道（`printf $flag`）。
+ */
+type ArgvFlaw = { arg: string; claim: "assigns" | "operand" | "unreadable"; tail?: string };
+/**
+ * **特殊内建报错 ⇒ 非交互 shell 当场走人**(POSIX XCU 2.14:special built-in 的重定向/赋值/
+ * 操作数错误会让非交互 shell 退出)。这不是「这一条失败、后面接着跑」,而是整条命令到此结束
+ * —— 哨兵那条「它自己永远不会结束」的证明当场失效。
+ *
+ * 为什么只能算未知:哨兵走的是 `sh -lc`,而 `sh` 在不同机器上是不同的 shell(macOS 上是 bash
+ * 的 sh 模式,Debian 上是 dash),**退不退出、哪些选项认得,正是随它变的那一档**。本机实测
+ * (第 5 轮审查 F2 给的两条输入):
+ *   · `/bin/sh -c 'export -not-an-option; echo AFTER'` ⇒ rc=2,**AFTER 没打出来**(走人了);
+ *     同一条在 `/bin/bash` 下 rc=0 并打出 AFTER,在 `zsh` 下也照跑 —— 三家三个结果;
+ *   · `/bin/sh -c 'shift not_a_number; echo AFTER'` ⇒ rc=1,AFTER 没打出来;`/bin/bash` 同样。
+ */
+const SPECIAL_TAIL = "而特殊内建一报错，非交互 shell 当场就走人（`export -not-an-option` 实测退 2、`shift not_a_number` 实测退 1，后面一条都没跑），这一层证明不了这个参数一定合法";
+/** `export` 的操作数两头都不封闭:既可能是赋值,也可能是一个报错就带走 shell 的选项。 */
+const BOTH_TAIL = "既证明不了它没在给变量赋值，也证明不了特殊内建不会因为它报错走人（`export -not-an-option` 实测退 2）";
+/** 特殊内建的「带操作数就算未知」:封闭的那一侧只有「压根没有操作数」。 */
+const specialOperand = (argv: readonly Token[]): ArgvFlaw | null => {
+  const first = argv[0];
+  if (!first) return null;
+  return { arg: first.text, claim: first.expanded ? "unreadable" : "operand", tail: SPECIAL_TAIL };
+};
+const ARGV_PROOF = new Map<string, (argv: readonly Token[]) => ArgvFlaw | null>([
+  // 引号同样不反向证明「这不是开关」(与 printf 一个口径)。**选项的参数和变量名这一层分不开**
+  // (`read -p 提示 X` 里那个提示落在同一个位置上),分不开就一起算未知 —— 结论是同一个,而
+  // 文案只说「带着操作数」,不替用户断定那个词就是变量名。
+  ["read", (argv) => {
+    for (const t of argv) {
+      if (t.expanded) return { arg: t.text, claim: "unreadable" }; // 操作数展开成什么读不出来
+      if (!/^-/.test(t.text)) return { arg: t.text, claim: "operand" }; // 不是开关 ⇒ 落在操作数位置上
+    }
+    return null;
+  }],
+  // 只看**选项区**:选项得排在格式串前面（POSIX 的工具语法,`--` 显式收口),格式串之后的
+  // `-v` 是操作数,printf 会把它当字打出去。所以这一侧两个方向都能证:
+  //  · 选项区里读得出一个 `-v` ⇒ 它在赋值（引号照样算);
+  //  · 选项区里有个读不出来的词 ⇒ 证明不了它不是 `-v` ⇒ 未知;
+  //  · 选项区收口了（撞上 `--`、或撞上一个读得出来且不以 `-` 开头的词) ⇒ 证明得出谁都没赋值。
+  // 上一版连「选项区」这个概念都没有,于是 `printf '%s\n' -v` 和 `printf -- -v PATH` 这两条
+  // 不是赋值的也被当成了赋值（方向相反的同一个错:拿「长得像 -v」代替「它是不是开关」)。
+  ["printf", (argv) => {
+    for (let i = 0; i < argv.length; i += 1) {
+      const t = argv[i]!;
+      if (t.expanded) return { arg: t.text, claim: "unreadable" };
+      if (t.text === "--") return null;
+      if (!t.text.startsWith("-")) return null;
+      if (/^-v/.test(t.text)) {
+        const arg = t.text === "-v" ? `-v ${argv[i + 1]?.text ?? ""}`.trim() : t.text;
+        return { arg, claim: "assigns" };
+      }
+    }
+    return null;
+  }],
+  // `export`:**两件事同时压在参数上**,所以封闭的那一侧只有「压根没有参数」(那时它只把已导出
+  // 的变量列出来)。
+  //  · **赋值效果** —— `export NAME=值` 改的是后面每一条看得见的环境。`PATH` 单独有一道扫
+  //    (`PATH_ASSIGN`),但「哪些环境变量会改掉后面怎么执行」这个集合压根不封闭:`IFS`(词分割)、
+  //    `ENV`/`BASH_ENV`(起 shell 时读的脚本)、`LD_PRELOAD`/`DYLD_*`(动态库注入)排着队 ——
+  //    上一版按「只有 PATH 要紧」放行,正是列反例那条老路(第 5 轮审查 F2 点名的「赋值效果」)。
+  //  · **特殊内建的错误退出** —— 见 `SPECIAL_TAIL`:`export -not-an-option` 实测退 2 且后面一条
+  //    都没跑。连 `export -n PATH`(取消导出)也在这一类里:选项认不认得、报不报错随 shell 变。
+  ["export", (argv) => {
+    const first = argv[0];
+    if (!first) return null;
+    if (first.expanded) return { arg: first.text, claim: "unreadable", tail: BOTH_TAIL };
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first.text)) return { arg: first.text, claim: "assigns" };
+    return { arg: first.text, claim: "operand", tail: BOTH_TAIL };
+  }],
+  // `shift`/`times`:不赋值,但都是**特殊内建**,带操作数就可能当场把 shell 带走(`SPECIAL_TAIL`)。
+  //  · `shift n` —— `n` 合不合法要看 `$#`,这一层读不出来(`shift not_a_number` 实测退 1,
+  //    `/bin/sh` 与 `/bin/bash` 两边都没跑到后面那一条);不带操作数的 `shift` 证明得出来。
+  //  · `times` —— 按 POSIX 不收操作数。给了操作数之后各家不一样(本机 `/bin/sh` 吞掉照跑,
+  //    `zsh` 报 too many arguments),而「随 shell 而变」正是这一层证明不了的那一档。
+  ["shift", specialOperand],
+  ["times", specialOperand],
+]);
+const TAIL = "而被赋值的那个名字改不改得动后面每一条的执行语义";
+const argvNote = (name: string, flaw: ArgvFlaw): string => {
+  const tail = flaw.tail ?? TAIL;
+  if (flaw.claim === "assigns") return `那个 ${name} ${flaw.arg} 是在给变量赋值，${tail}`;
+  if (flaw.claim === "operand") return `那个 ${name} 带着操作数 ${flaw.arg}，${tail}`;
+  return `那个 ${name} ${flaw.arg} 这一层读不出它是什么，${flaw.tail ? tail : `证明不了它没在给变量赋值 —— ${tail}`}`;
+};
+
+/**
+ * 这一段**要跑的那个命令词**:读出来了给 `cmd`，有词却读不出来给 `unreadable`，整段压根没有
+ * 命令词给 `null`（见 `perturbed` 里那段说明）。
+ *
+ * 读不出来有三种,每一种都是「它到底是哪个命令」要等执行时才定下来:
+ *  · 命令词在引号里（`"$action"`、`'tail'`）—— 词法层按设计不把引号里的字当执行节点;
+ *  · 命令词里有展开或替换（`$action`、`$(which tail)`）;
+ *  · 包装命令的开关这一层认不出来（`commandOf` 自己答不出来，见 command-wrappers.ts）。
+ */
+type CommandWord =
+  | { cmd: { name: string; argv: Token[] }; unreadable?: undefined }
+  | { cmd?: undefined; unreadable: string };
+function commandWord(tokens: Token[], at: number): CommandWord | null {
+  let i = at;
+  // 赋值前缀（`FOO=1 cmd …`）不是命令词,跳过去找真正那个。
+  while (i < tokens.length && !tokens[i]!.quoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!.text)) i += 1;
+  const head = tokens[i];
+  if (!head) return null;                        // 整段没有命令词 ⇒ 什么都不执行
+  if (head.quoted) return { unreadable: "那一段要跑的命令词藏在引号里，这一层读不出它是哪个命令" };
+  if (head.expanded) return { unreadable: "那一段要跑的命令词是个展开，它展开成哪个命令要等执行时才知道" };
+  const cmd = commandOf(tokens, i);
+  return cmd ? { cmd } : { unreadable: "那一段的包装命令这一层认不出来，剥不出真正要跑的是谁" };
+}
+
+/**
+ * 整条命令里第一处「执行语义这一层读不懂」的地方 —— 没有就是 `null`。
+ *
+ * 问的不是「它会不会结束」,而是「我这一层还读得懂它的执行语义吗」。读不懂 ⇒ 硬拦的那条证明
+ * 失效 ⇒ 降级成提示。
+ *
+ * **不管执行资格,每一段都看**:`if false; then eval x; fi` 里那个 `eval` 确实跑不到,可
+ * 「跑不到」这个结论本身也是这一层算出来的 —— 真要分清就得先读懂 eval。偏放行那一侧 ⇒ 一律算。
+ *
+ * **只认命令词位置**（文件头 ①）:`find . -name x`、`grep kill log` 里那两个词是参数,不是
+ * 执行节点。`PATH=` 是唯一一个按整段词扫的 —— 它作为赋值前缀时压根不在命令词位置上。
+ */
+export function perturbed(segs: Segment[]): string | null {
+  for (const seg of segs) {
+    let at = 0;
+    while (at < seg.tokens.length && isSkeleton(headOf(seg.tokens, at))) at += 1;
+    // 赋值前缀区 = 骨架词之后那几个连续的 `名字=值`。这一区里**不看引号**（见 `PATH_ASSIGN`）。
+    let prefixEnd = at;
+    while (prefixEnd < seg.tokens.length && ASSIGN_WORD.test(seg.tokens[prefixEnd]!.text)) prefixEnd += 1;
+    for (let i = 0; i < seg.tokens.length; i += 1) {
+      const t = seg.tokens[i]!;
+      if (PATH_ASSIGN.test(t.text) && (!t.quoted || (i >= at && i < prefixEnd))) {
+        return "前面有一段改过 PATH，后面那些工具还找不找得到";
+      }
+      // 两种都在这个标记下(见 command-lex.ts 的 parameterForm):`${X:?字}` 是变量没定义时走人,
+      // `${1:=值}` 是往位置参数上赋值当场报错走人 —— 对判据而言是同一件事:它自己会结束。
+      if (t.errorForm) return "那个参数展开自己就能让 shell 当场走人（`${X:?字}` 变量没定义、`${1:=值}` 不能这样赋值，实测都是立刻退出）";
+      if (t.substitution) return "那段命令替换跑的是一段这一层读不进去的代码";
+      if (t.arithmetic) return "那段算术展开自己就能让 shell 当场出错走人（`$((1/0))` 实测 127）";
+      // 两道封闭判定都冒到这个标记上:`$` 后面那一个字符(dollarForm)、以及 `${…}` 里那个参数
+      // 形式(parameterForm)。两者都是「这一层没正面证明过」,不是「没什么可担心的」。
+      if (t.unknownForm) return "那个展开形式这一层没有正面识别（`$[1/0]` 这类旧式算术实测除零退 127、`${X@Q}` / `${X!}` 实测 bad substitution 退 1），读不懂就证明不了它不出错";
+    }
+    // **「这一段的命令词是谁」答不出来 ⇒ 未知,不是「没什么可担心的」**。原先这里是 `continue`,
+    // 于是 `action=break; while true; do "$action"; done; printf 'DONE\n'`（实测退出 0 并打出
+    // DONE）照旧硬拦:那个命令词藏在引号里的展开后面,这一层压根没读出它是 `break`。
+    //
+    // 两种 null 要分开:**有词却读不出来**是未知;**整段没有命令词**里还要再分一次 ——
+    // 只有空段（多打一个 `;`）才真是「什么都不执行」,**只有赋值的那一种会执行赋值**,而赋值
+    // 失败就是整条命令到此结束（见 `ASSIGN_ALONE`;上一版把这两种一起 `continue` 掉了,于是
+    // `SHELLOPTS=x; tail -F /dev/null; printf DONE` 被硬拦,而实测 shell 在第一段就走人了）。
+    const word = commandWord(seg.tokens, at);
+    const assigned = prefixEnd > at;
+    if (word === null) {
+      if (assigned) return ASSIGN_ALONE;
+      continue;                                  // 真的空段（多打一个 `;`）⇒ 接着看下一段
+    }
+    if (word.unreadable !== undefined) return word.unreadable;
+    const { cmd } = word;
+    // 赋值前缀 + 特殊内建 ⇒ 同一件事的前缀形态（见 `ASSIGN_ALONE` 第二条）。**要排在
+    // `HANDLED` 前面**:`:`/`exit`/`set`/`shift` 这几个特殊内建在那张表里是「形状层已经处置
+    // 过」,可处置的是它们自己的语义,不是挂在它们身上的赋值。
+    if (assigned && SPECIAL_BUILTINS.has(cmd.name)) return assignPrefixNote(cmd.name);
+    if (cmd.name === "set") {
+      const flag = setShaken(cmd.argv);
+      if (flag !== null) return `那个 set 开的是 ${flag}，它改掉了后面每一条的执行语义（这一层只认得 errexit）`;
+      continue;
+    }
+    // **进了 `HANDLED` 不等于整词放行**:语义压在参数上的那几个还要按 argv 证明一遍（F3）。
+    const proof = ARGV_PROOF.get(cmd.name);
+    if (proof) {
+      const flaw = proof(cmd.argv);
+      if (flaw !== null) return argvNote(cmd.name, flaw);
+      continue;
+    }
+    const note = NOTES.get(cmd.name);
+    if (note) return note;
+    // **空间内的白名单**:shell 自己的词里凡是这一层没有处置的,一律算读不懂（见 `SHELL_WORDS`）。
+    if (SHELL_WORDS.has(cmd.name) && !HANDLED.has(cmd.name)) return shellWordNote(cmd.name);
+  }
+  return null;
+}

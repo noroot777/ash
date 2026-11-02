@@ -277,3 +277,90 @@ export function loopReadable(scan: Scan, from: number, end: number): boolean {
   if (scan.doAt[from] !== from + 1) return false;
   return startProvable(scan.segs[from]!.tokens) && startProvable(scan.segs[end]!.tokens);
 }
+
+/**
+ * 这条命令的**结构凑齐了吗** —— 凑不齐的话 shell 连语法都过不去,一条都不会执行。
+ *
+ * 为什么非要在扫之前单问一遍:shell 是**先把整条命令解析完、再开始执行**的。所以「结构有没有
+ * 凑齐」是一件**整条**的事,不是「扫到那一区时放行」就完了 —— 上一版正是后者(配不上对就
+ * `return` 手里那个判定),于是排在**前面**的那一段 `tail -F` 自己证明得出「会跑」,硬拦照旧
+ * 成立。本机 `/bin/sh` 实测,下面这几条全是 syntax error、stdout 一个字都没有,而创建闸 409:
+ * `tail -F /dev/null; if` / `; fi` / `; done` / `; then` / `; if true; fi` / `; while :; done` /
+ * `; case x in` / `; case x; esac`。跟 `Lexed.unclosed`(引号/`$(` 没收口)是同一条口径的两半:
+ * 那边是**词法**没收口,这边是**结构**没收口,代价和处置都一样 —— 整条放行。
+ *
+ * 判的是**封闭证明**,不是列反例:这一层认得的结构只有 `if`、`case`、循环三种,每一种都要求
+ * 它的骨架词按顺序凑齐、而且**每两个骨架词之间那一区不是空的**(空条件 `if; then :; fi`、空
+ * 循环体 `while :; do done` 实测都是语法错误)。凑不齐、出现一个放不进任何结构的骨架词、或者
+ * 扫完还有没关上的 —— 一律算**证明不了**,由调用方整条放行。
+ *
+ * **循环外的 `break`/`continue` 不在此列**:实测它们不是语法错误(`tail -F /dev/null; break`
+ * 里那个 tail 照旧挂住),所以这两个词这一层不碰 —— 它们的处置在 `JUMPS`/`ESCAPES`。
+ */
+export function structureProven(segs: Segment[]): boolean {
+  type Frame = {
+    kind: "if" | "loop" | "case";
+    /** 这个结构的**骨架词**凑齐到可以收尾了吗(`if`→见过 `then`、循环→见过 `do`、`case`→见过 `in`)。 */
+    ready: boolean;
+    /** 从**它自己上一个骨架词**到现在,这一区里有东西吗(一条命令、或者一个关上了的子结构)。 */
+    filled: boolean;
+  };
+  const stack: Frame[] = [];
+  const top = (): Frame | undefined => stack[stack.length - 1];
+  /** 走到一个骨架词:它前面那一区必须非空;过了它之后重新开始数。 */
+  const step = (frame: Frame): boolean => {
+    if (!frame.filled) return false;
+    frame.filled = false;
+    return true;
+  };
+  const close = (kind: Frame["kind"]): boolean => {
+    const frame = top();
+    if (frame?.kind !== kind || !frame.ready || !frame.filled) return false;
+    stack.pop();
+    // 关上的子结构算它外面那一区的内容(`if x; then if y; then :; fi; fi` 的外层 `fi`
+    // 之前除了那个内层 `if` 什么都没有,而它是合法的)。
+    const parent = top();
+    if (parent) parent.filled = true;
+    return true;
+  };
+  for (const seg of segs) {
+    const keywords = headKeywords(seg.tokens);
+    for (const w of keywords) {
+      if (w === "!") continue;                   // 取反只作用在后面那条命令上,不开结构
+      if (w === "if") { stack.push({ kind: "if", ready: false, filled: false }); continue; }
+      if (LOOP_HEADS.has(w)) { stack.push({ kind: "loop", ready: false, filled: false }); continue; }
+      if (w === "case") {
+        // `case WORD in` 里那个 `in` 排在命令词后面,`headKeywords` 读不到它 —— 所以按整段的
+        // 词判一次;写成 `case WORD` 换行 `in …` 的话,等后面那一段的 `in`。
+        const inHere = seg.tokens.some((t) => !t.quoted && t.text === "in");
+        stack.push({ kind: "case", ready: inHere, filled: false });
+        continue;
+      }
+      const frame = top();
+      if (w === "then" || w === "else" || w === "elif") {
+        if (frame?.kind !== "if" || !step(frame)) return false;
+        frame.ready = w !== "elif";              // `elif` 之后还要再来一个 `then`
+        continue;
+      }
+      if (w === "do") {
+        if (frame?.kind !== "loop" || !step(frame)) return false;
+        frame.ready = true;
+        continue;
+      }
+      if (w === "in") {
+        // `for x` 换行再 `in a b`(以及 `case` 的那一种)。`if` 那一侧压根没有这个词。
+        if (frame === undefined || frame.kind === "if" || !step(frame)) return false;
+        frame.ready = true;
+        continue;
+      }
+      if (w === "fi" && !close("if")) return false;
+      if (w === "done" && !close("loop")) return false;
+      if (w === "esac" && !close("case")) return false;
+    }
+    // 骨架词之后还有词 ⇒ 这一区有东西了(一条简单命令,或者只有一个重定向 —— `> out` 自己
+    // 就是一条合法命令)。
+    const frame = top();
+    if (frame && seg.tokens.length > keywords.length) frame.filled = true;
+  }
+  return stack.length === 0;
+}

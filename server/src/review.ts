@@ -26,6 +26,7 @@ import { inheritExecutorOverrides, pickExecutor } from "@ash/shared/executors";
 import { anchorAt } from "@ash/shared/workflow-policy";
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
+import { gateAshMcpBeforeLaunch } from "./ash-mcp-launch-gate.js";
 import { bus } from "./bus.js";
 import { evidenceHeaders } from "./evidence-path.js";
 import { db } from "./db/index.js";
@@ -48,7 +49,7 @@ import {
   shouldAutoDispatchReview,
   withVerifyExecutor,
 } from "./review-policy.js";
-import { claimTurn, continueWhenIdle, releaseTurn } from "./runs.js";
+import { claimOwnTurn, continueWhenIdle, releaseTurn } from "./runs.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { advanceWorkflowFrom, settleFrom } from "./workflow-advance.js";
 import { applyRunFailPolicy } from "./workflow-steps.js";
@@ -149,8 +150,11 @@ export async function startVerifyRound(
   // 到那个回合之后——UI 与验收门禁提前宣称「正在验证」（审查实测）。占位身份 dispatch
   // 覆盖校验到排队注册，finally 释放后验证投递自然开跑。结算内部的自动触发不走这里
   //（那时收尾回合正占着 turn，天然互斥；gate 放行路径由验收锁互斥）。
+  // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
+  // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  if (holdingTurn && !claimTurn(targetId, "dispatch")) {
+  const turn = holdingTurn ? claimOwnTurn(targetId, "dispatch") : null;
+  if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再派验证");
   }
   try {
@@ -184,6 +188,10 @@ export async function startVerifyRound(
   // 第二站头上，用户在第二站写的「没过就重做 2 轮」一进门就用完了。
   const station = anchorAt(taskWorkflowDef(target.workflow), target.workflowAt, "verify")?.id ?? null;
   const execution = await reviewExecution(target, withVerifyExecutor(target, override));
+  // 验证者交卷靠 report_stage（ash MCP）。缺了的话这一轮会完整跑完、最后才发现报不上结论，
+  // 所以跟派审同一道闸，排在**任何状态提交之前**：拦下时这一轮什么都还没写（见 ash-mcp-launch-gate.ts）。
+  await gateAshMcpBeforeLaunch(target, { agentType: execution.agentType, executorId: execution.executorId ?? null },
+    `第 ${round} 轮验证的验证者`);
   const project = (await db.select().from(projects).where(eq(projects.id, target.projectId))).at(0);
 
   // 协议/证据目录准备（可失败：目录被 symlink 换掉等）必须在**任何状态提交之前**——
@@ -263,7 +271,7 @@ export async function startVerifyRound(
   );
   return { round };
   } finally {
-    if (holdingTurn) releaseTurn(targetId);
+    if (turn) releaseTurn(targetId, turn);
   }
 }
 
@@ -355,7 +363,14 @@ export async function handleTaskSettlement(
     existingRounds: await reviewRoundsOf(task),
     workflow,
   })) {
-    await startVerifyRound(task.id);
+    // 结算钩子里起的这一轮没有人在等它的返回值：起不来（含交不了卷被闸拦下）只写进
+    // afterSettlement 的错误日志的话，用户看到的就是「说好的验证没开」且没有一个字的原因。
+    // 结算恢复（regression-settlement）会重放这个钩子，同一次结算、同一个原因只说一句。
+    await startVerifyRound(task.id).catch((error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      return appendTaskTimeline(task.id, `想自动开一轮验证，但没开起来（${reason}）。`,
+        { eventKey: `auto-verify-start-failed:${task.endedAt ?? ""}:${reason}` });
+    });
   }
 }
 

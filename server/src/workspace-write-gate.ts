@@ -16,7 +16,7 @@ import { isolatedWorkspaceOwner, workspaceParticipants, type WorkspacePeer } fro
 //     worktree、但目录还没建出来）时一律只读——在那儿写等于改到项目主工作区上。
 //   • **在飞档（要用户明知故犯）**：这个目录上有任务在跑就先拒，前端弹一次说明后果的
 //     确认框，用户确认后带 force 重来。
-//   • 「在飞」的判据是 **DB status 或 turn 锁**，两个都要看（`claimTurn` 到 status 落
+//   • 「在飞」的判据是 **DB status 或 turn 锁**，两个都要看（`claimOwnTurn` 到 status 落
 //     `running` 之间有真实窗口，而团队常驻调度台根本不占 turn 锁，status 是它唯一凭据）。
 //   • **问的对象是「这个目录」而不是「这个任务」**：调度台、跟它的执行者、各自的审查任务
 //     都落在同一个 worktree 里，只问当前这一位，兄弟执行者的成果就会被无声抹掉。
@@ -98,7 +98,7 @@ export interface WorkspaceClaimOptions {
 }
 
 /**
- * 锁内**占位**（不是复查）：占住之后启动会被 `claimTurn` 挡回、归档会被
+ * 锁内**占位**（不是复查）：占住之后启动会被 `claimOwnTurn` 挡回、归档会被
  * `task-archive-routes` 的 `isTurnClaimed` 挡回，于是接下来读到的归档位和在飞状态到动手
  * 做完为止都不会再变。占的是**全部共用者**——只占自己那把，兄弟执行者照样能在同一时刻
  * 起跑。

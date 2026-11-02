@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { actorOf } from "./auth/context.js";
+import { humanActionOrigin } from "./auth/human-action-token.js";
 import { humanApproval, humanApprovalUnavailableReason } from "./auth/human-approval.js";
 import { humanRequestRejection } from "./auth/human-request.js";
 import { canSeeProject } from "./auth/visibility.js";
@@ -54,7 +55,7 @@ export function mountTurnReclaimRoutes(api: Hono): void {
       action: "reclaim-turn", taskId, turnSeq: turn.seq, claimedAt: turn.claimedAt, userId: actorOf(context).userId,
     });
     if (!authorization) return reject("缺少有效的离机人工授权，或授权已过期、已使用、占位已变化；请重新申请", 403);
-    const outcome = await releaseSuspectTurn(taskId, undefined, { seq: turn.seq, ...authorization });
+    const outcome = await releaseSuspectTurn(taskId, undefined, humanActionOrigin(context), { seq: turn.seq, ...authorization });
     if (!outcome.ok) return reject(outcome.reason, 409);
     const effect = "；如果原来那一位其实还活着，互斥就没了，同一个任务可能有两个回合并行改同一个工作区";
     const note = outcome.runnable

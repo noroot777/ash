@@ -1,9 +1,10 @@
-import { mkdirSync, createWriteStream, existsSync } from "node:fs";
+import { mkdirSync, createWriteStream } from "node:fs";
 import { loadMarkdownImageSeed, markdownImageAccounting } from "./agent-image-journal.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@ash/shared";
 import { isGoalRecovery } from "@ash/shared/cli-commands";
+import { deliverLeadInterjection } from "./team/lead-interjection.js";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -20,7 +21,8 @@ import { ReviewSuperseded } from "./review-ownership.js";
 import { withdrawReviewStart, type ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { retireHistoricalReview } from "./review-retirement.js";
 import { consumeSingleRun } from "./single-run.js";
-import { refreshTaskBase, taskWorkspace } from "./task-workspace.js";
+import { pickTurnSession } from "./turn-session-pick.js";
+import { pickTurnWorkspace } from "./turn-workspace-pick.js";
 import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import { dispatchRejection, executorOwnerScope, noteExecutorDowngrade } from "./auth/dispatch-gate.js";
@@ -28,9 +30,9 @@ import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
+import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
-import { deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
@@ -38,6 +40,7 @@ import { peerNoticeFor } from "./peer-context.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
+import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { abortFrozen, freezeFacts, takeFreeze, FrozenTurn } from "./turn-freeze.js";
 import { recoverFailedTurnStart } from "./turn-start-failure.js";
 import { freeReviewReminder } from "./free-workflow.js";
@@ -45,25 +48,21 @@ import { NO_REMINDER, assembleTurnPrompt } from "./turn-prompt.js";
 import { withSkillInvocation } from "./skills.js";
 import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
-import { cliGoalSessionCandidates } from "./task-cli-goal-scopes.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
-import { enterLeadDelivery, enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
-import { isDiagnosticSession } from "./turn-failure.js";
-import { cliConfigDirColumn, runEnvForOwner, sessionCliConfigDir, sessionResumableHere } from "./auth/run-env.js";
+import { enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
+import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
+import { turnIdentityEnv } from "./turn-identity.js";
 import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
-  COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote,
+  COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote, PLANNING_TURN,
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
 import { baseFallbackNote } from "./base-fallback-notice.js";
-import { LOST_SESSION_PATCH } from "./executors/session-lost.js";
-import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "./session-version-guard.js";
-import { announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "./session-notice.js";
 
 // 这一回合的**调用契约**(连 ResumeReason 一起)住在 task-continue-options.ts；这里原样
 // 再导出，调用方（task-resume、runs 那几处）不用跟着改导入路径。
@@ -118,50 +117,23 @@ export async function continueTask(
   });
   opts = options;
   if (retired) return false;
-  // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
-  // 感觉不断线。于是 /reply、/answer、@提及全都自动生效。入口那串闸(验收互斥、
-  // 唤醒资格、以及**只给唤醒类投递**的那把互斥锁)在 turn-entry-guard.ts 的
-  // `enterLeadDelivery`:常驻调度台没有「一个回合」可以托管占位,所以它把要还的锁
-  // 当返回值交出来,这里用 finally 还 —— 含 deliverToLead 抛错那条出路。
-  if (head?.mode === "team") {
-    const releaseLead = await enterLeadDelivery({
-      taskId,
-      turnHeld: opts.turnHeld,
-      wakeGuard: opts.wakeGuard,
-    });
-    if (!releaseLead) return false;
-    try {
-      // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令;
-      // 或者进程正在收尾、stdin 已经关了)时,这一句**一个字都没送出去** —— 绝不能顺手
-      // onDelivered():那是 pending → sent 的唯一写点,标了 sent 排队/定时的那条就从托盘里
-      // 消失、会话里也没有,用户的话凭空蒸发(docs/incidents.md「排队消息凭空消失」)。
-      // 跟单飞锁挡回同一口径:返回 false。
-      const delivered = await deliverToLead(taskId, userText, {
-        attachments: opts.attachments,
-        bySystem: opts.byBackend,
-        monitorWake: opts.monitorWake,
-        throwOnOpenFailure: opts.throwOnTeamUnavailable,
-      });
-      if (!delivered) return false;
-      if (opts.onDelivered) {
-        try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
-      }
-      return true;
-    } finally {
-      releaseLead();
-    }
-  }
+  // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 整条在 team/lead-interjection.ts。
+  if (head?.mode === "team") return await deliverLeadInterjection(taskId, userText, opts);
   // 起跑前的那串闸（接力存档 / 回合占位 / 验收互斥 / 唤醒资格）收在一处，见
   // turn-entry-guard.ts 的文件头：它们共享的不变量是「从占住位到交给下面那个大 try
   // 之间，每一条出路都得自己把位还回去」，散着写时新加一道闸就会漏掉这件事。
   const sessionRole = turnSourceRole(opts.turnSource) as Extract<SessionRole, "single" | "reviewer">;
-  if (!await enterTurn({
+  // 交回来的是**这一把锁的身份**:这一整轮里凡是要还锁、要转正的地方都拿它核(本轮审查
+  // F1 —— 按任务 id 还锁会撤掉人工放开之后那一轮的互斥,见 turn-lock.ts `endOwnTurn`)。
+  const turn = await enterTurn({
     taskId,
     handoff: head?.handoff,
     turnHeld: opts.turnHeld,
     wakeGuard: opts.wakeGuard,
+    pendingMessageIds: opts.pendingMessageIds,
     source: opts.turnSource ?? { role: "single" },
-  })) return false;
+  });
+  if (!turn) return false;
   // catch 那边署名用的就是它：出错时 task 可能压根没读出来，所以按 head 的快照兜底，
   // 而不是硬写 "claude"（该任务是 codex 时，错误会挂到一个从没参与过的智能体名下）。
   const agentType = opts.agent ?? (head?.agentType as AgentType) ?? "claude";
@@ -214,7 +186,7 @@ export async function continueTask(
     let sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
     // DB 里的 verifyRound/nativeTurn 会在结算中途先清，handle/turn 要到 finally 才释放。
     // 把旁路身份也钉进运行时 turn role，关闭那段“标记已清、进程仍可被引导”的小窗口。
-    if (sideTurn && sessionRole === "single") reclaimTurn(taskId, nativeCommand ? "native" : "side");
+    if (sideTurn && sessionRole === "single") reclaimTurn(taskId, turn, nativeCommand ? "native" : "side");
     // 「这一回合是任务的执行」:system(后端代写的续跑)或 executionTurn(让位交接
     // 把用户回复当启动输入)。只影响续聊判定,输入来源各自另算(见 opts.executionTurn)。
     const execution = !!opts.system || !!opts.executionTurn || isGoalRecovery(slash);
@@ -269,90 +241,25 @@ export async function continueTask(
     const planning = !resetPlan && !goalExecution && !sideTurn && readCliState(task.cliState, agent, profileId, runOwner).plan === true;
     if (planning) {
       sideTurn = true;
-      if (sessionRole === "single") reclaimTurn(taskId, "side");
+      if (sessionRole === "single") reclaimTurn(taskId, turn, "side");
       await db.update(tasks).set({ nativeTurn: true, followUpFrom: ["running", "queued"].includes(task.status) ? null : task.status }).where(eq(tasks.id, taskId));
     }
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
-    // A single task can now host several agents — one session line per agentType,
-    // each invited via @-mention. Newest first.
-    const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-      .filter((session) => !isDiagnosticSession(session))
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    // 「这一条接得上吗」不止看 agentType+role:CLI 的会话文件躺在**开它的那个人**的配置
-    // 目录里,而共享项目里 B 可以回复 A 的任务(runOwner 上面刚算过)。拿 A 的 session id
-    // 去 B 的 CLAUDE_CONFIG_DIR 里 --resume,CLI 只会回一句 "No conversation found" ——
-    // 与 2026-08-29 那次接力事故同一堵墙,换了个触发口。判据在 auth/run-env.ts
-    // (自用模式两边恒为 null,这一层永远放行,行为不变)。
-    // 第二个触发口是实例把「CLI 额度」换了档(共用宿主 CLI ⇄ 每人自带 key):人没变,
-    // 目录整体挪了位置。所以比的是**会话行记下的那个目录**,不是按归属人现算一遍。
-    // 存量会话没有这两列,回落到任务归属人:它们本来就是按归属人跑的。
-    const resumableHere = async (s: typeof all[number]) =>
-      !s.cliSessionId || await sessionResumableHere(s, runOwner, agent);
-    // 指名道姓要续哪一条会话行（「重跑上一回合」）：按 agentType+role 挑会在同一位
-    // 智能体有多条会话时挑错人，而重投必须落回**崩掉的那一条**，否则等于换个人重说。
-    const candidates = opts.freshSession
-      ? []
-      : opts.resumeSessionId
-        ? all.filter((s) => s.id === opts.resumeSessionId)
-        : cliGoalSessionCandidates(task, agent, profileId, runOwner, slash, all.filter((session) => session.agentType === agent && session.role === sessionRole));
-    let prev: typeof all[number] | undefined;
-    for (const s of candidates) {
-      if (await resumableHere(s)) { prev = s; break; }
-      // 接不上就另开一条 —— 但**不能一声不吭**:这一轮起跑后界面上会凭空多出一条会话行,
-      // 而旧会话看着好好的却再没人续。理由写进旧会话的时间线,刷新后仍在。
-      await announceSessionNote({
-        taskId, sessionId: s.id, role: s.role as SessionRole, agentType: agent,
-        text: CROSS_OWNER_SESSION_NOTE,
-      });
-    }
-    // 版本守卫要去**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行回落到
-    // 按归属人现算)——不传等于按宿主机默认目录找,隔离档下必然扑空、静默放行。
-    const affectedSessionVersion = await affectedCodexResumeVersion(
-      agent, prev?.cliSessionId,
-      prev ? await sessionCliConfigDir(prev, agent) : null,
-    );
-    if (prev && affectedSessionVersion) {
-      // 说明必须先持久写进旧会话，凭据后清；否则下面任一 await 抛错都会留下一个
-      // 「上下文没了、但没有解释」的永久状态。
-      await announceAffectedSessionReplacement({
-        taskId, sessionId: prev.id, role: sessionRole, agentType: agent, version: affectedSessionVersion,
-      });
-      await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
-      prev = undefined;
-    }
-    const resuming = !!prev?.cliSessionId && !["fork", "new", "clear"].includes(slash?.name ?? "");
-
+    // 这一轮续哪一条会话行(同一位智能体可能有好几条;接不接得上还要看 CLI 配置目录与
+    // codex 版本守卫)——判据与两处持久说明都在 turn-session-pick.ts。
+    const { all, prev, resuming } = await pickTurnSession({
+      taskId, task, agent, sessionRole, profileId, runOwner, slash,
+      freshSession: opts.freshSession, resumeSessionId: opts.resumeSessionId,
+    });
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
     const recorded = opts.cwd || prev?.cwd || prev?.worktreePath || all[0]?.cwd || all[0]?.worktreePath || "";
-    // A recorded cwd that has since vanished (worktree cleaned up, project moved)
-    // used to be handed to spawn as-is — which stuck the task in 'running' forever.
-    // Re-resolve through the same path a fresh run takes: it RESTORES the worktree
-    // when the branch outlived the directory, and only rebuilds an empty one when
-    // the branch is gone too.
-    let cwd = recorded;
-    let workspaceReset = false;
-    let freshWorkspace = false;
-    if (!existsSync(cwd)) {
-      if (project) {
-        const ws = await taskWorkspace(task, project.repoPath);
-        cwd = ws.path;
-        freshWorkspace = !!ws.fresh;
-        baseFallback = ws.baseFallback;
-        // Only a resumed session carries stale memory worth correcting; a fresh
-        // session starts empty-handed and needs no warning.
-        workspaceReset = freshWorkspace && resuming;
-      } else if (!cwd) {
-        cwd = ".";
-      }
-    } else if (project) {
-      // 目录还在 = 这一轮不重新解析工作目录，可登记的**验收目标**照样可能已经没了
-      //（验收合并后目标分支被删，worktree 却留着）。不查的话这一轮跑得好好的，用户
-      // 到 diff / 验收那头才撞墙 —— 那正是上一轮修的「起得来但交不掉」。
-      baseFallback = await refreshTaskBase(task, project.repoPath);
-    }
-
+    // 目录没了怎么办、还在又要刷什么,都在 turn-workspace-pick.ts。
+    const { cwd, workspaceReset, freshWorkspace, baseFallback: resolvedFallback } = await pickTurnWorkspace({
+      task, project, recorded, resuming,
+    });
+    baseFallback = resolvedFallback;
     await setStatus(taskId, "running");
     // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。摘牌
     // 刻意排在**所有可能抛错的解析之后**(执行器解析、工作目录解析都会抛):解析失败时
@@ -420,14 +327,19 @@ export async function continueTask(
     // 这一句到 executor.run 之间隔着三个 await(runEnv / prepareResume / prepareCliInvocation),
     // 在这里就把授权拼死,用户在启动期间收回授权就拦不住了 —— 撤销已落库,发出去的
     // 第一条消息却还写着「已预先授权 x.com」(第 3 轮审查 P1)。
+    // 产出质量规则这一轮的事实(判据本体见 craft-rules.ts):`!resuming` 跟下面 `promptLevel`
+    // 发全文还是缩略版是同一个判据,为真的那几种(首次被 @ 进来、旧会话接不上、/clear 之后
+    // 新开)都是没有旧上下文的首条消息。原生命令那一支拿不到它 —— 它独占整条 prompt(见上)。
+    const craft = { freshContext: !resuming, verifying };
     const promptBody = nativeCommand
       ? promptedUserTurnText
-      : planning ? `${promptedUserTurnText}\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。`
+      : planning ? PLANNING_TURN(craft, promptedUserTurnText)
       : assembleTurnPrompt({
         invite: invited ? COLLAB_INVITE : "",
         brief: invitedTaskBrief(task.body, invited, verifying),
         handoffNotice,
         peerNotice,
+        craft,
         userText: promptedUserTurnText,
         workspaceReset: workspaceReset ? WORKSPACE_RESET(cwd) : "",
         completion: followUpFrom
@@ -437,7 +349,10 @@ export async function continueTask(
         reviewReminder,
       });
     const promptLevel = planning || resuming ? "reminder" as const : "full" as const;
-    const runEnv = { ...(await runEnvForOwner(runOwner, agent)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
+    const runEnv = {
+      ...(await runEnvForOwner(runOwner, agent)),
+      ...turnIdentityEnv({ taskId, turnToken, directionToken }),
+    };
     await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
     const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState });
     // 复用同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
@@ -473,6 +388,12 @@ export async function continueTask(
     // 一半是 resume 回合，全都还挂在匿名管道上）。
     const detach = detachedPathsFor(runDir, sessId, turnStart);
     const run = ex.runSteerable?.bind(ex) ?? ex.run.bind(ex);
+    // **交出 prompt 之前**把「这几条输入即将越线」同步落到磁盘:下面这一句 run(...) 才是不可逆
+    // 的那一刻,它之后的 persistRunner / onDelivered 都只是记账。两档策略(凭据档写不成当场抛,
+    // 走下面 catch 的「一个字都没送出去」那一支)与跨进程实测都在 delivery-crossing.ts 的文件头。
+    if (opts.pendingMessageIds?.length) {
+      recordDeliveryCrossing(taskId, opts.pendingMessageIds, { sessionId: sessId, turnStart }, opts.crossingRequired);
+    }
     handle = run({
       prompt,
       ...cli,
@@ -573,6 +494,8 @@ export async function continueTask(
     };
     if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner);
     else await persistRunner(db);
+    // 后台问一句够不够得着 ash MCP:只提示不拦、不等(ash-mcp-turn-hint.ts);旁路回合在起跑处已过闸。
+    if (!sideTurn) void hintAshMcpForTurn({ taskId, agentType: agent, executorId: profileId, ownerUserId: runOwner ?? null, cwd, sessionId: sessId });
     if (handoffNotice) await clearHandoffNotice(taskId);
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
     await openTurn({ sessionId: sessId, taskId, cwd, startedAt: turnStart });
@@ -639,8 +562,11 @@ export async function continueTask(
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
     if (err instanceof ReviewSuperseded) {
-      await withdrawReviewStart(taskId, reviewStart, priorStatus);
-      return false;
+      // 两个抛出点:起跑前的 assertReviewTurnStart,和 spawn **之后**的 commitReviewTurnDelivery。后一种
+      // 输入已交到 CLI 手上(finally 收掉它之前它可能已经动过),只能交给越线记号去判,不许说「没送出去」。
+      await withdrawReviewStart(taskId, reviewStart, priorStatus, !!handle);
+      frozenBeforeSpawn = !handle;
+      return !frozenBeforeSpawn;
     }
     const steered = await takeSteered(taskId);
     const stopped = takeStopped(taskId);
@@ -649,7 +575,9 @@ export async function continueTask(
     // 调用方就是「没送出去」—— 返回 true 会让 resumePrompt 那路把检查点当已消费,
     // 暂停撤回一次、指定继续内容永久丢失,恢复分组后只剩通用「继续」(第 7 轮审查)。
     // 状态结算(落回 paused)仍由失败恢复完成,只是返回值改说实话。
-    frozenBeforeSpawn = err instanceof FrozenTurn;
+    // 越线凭据写不下来(DeliveryCrossingUnwritable)同属这一类:它也只在 spawn 之前抛,
+    // 而且**必须**说实话 —— 调用方据此确知「没投喂」,直接归还,不必再去读那张读不出来的记号。
+    frozenBeforeSpawn = err instanceof FrozenTurn || err instanceof DeliveryCrossingUnwritable;
     if (!handle && (frozenBeforeSpawn || checkingReviewStart)) {
       await recordReviewStartNotLaunched(taskId, reviewStart);
       if (await restoreUndeliveredReviewStart(taskId, reviewStart, true)) return false;
@@ -673,13 +601,13 @@ export async function continueTask(
     // 收掉**,只注销会留下一个没人读输出、停止按钮也碰不到的 CLI(第 1 轮审查 F1;三态
     // 和「为什么认领过的只注销不杀」见 runs.ts 顶部)。认领过的走到这里只是注销。
     if (handle) discardStartingRun(taskId, handle);
-    releaseTurn(taskId);
+    releaseTurn(taskId, turn);
     // 同 task-run：全出口注销,不依赖走到收尾函数（第 6 轮审查必须修 1）。
     closeTaskTurns(taskId);
     if (slash?.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(slash.args)) void import("./scheduler.js").then(({ advanceQueueFromTask }) => advanceQueueFromTask(taskId)).catch((error) => console.error("[ash] 清除目标后的队列推进失败:", error));
   }
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
-  // 落到时间线/状态上)。返回 false 的只有两类「一个字没送出去」:被单飞锁挡回,和
-  // 起跑前被冻结闸撤回(后者让 resumePrompt/待发送消息的调用方把原文安全放回)。
+  // 落到时间线/状态上)。返回 false 的只有「一个字没送出去」的几类:被单飞锁挡回,起跑前
+  // 被冻结闸撤回,以及 spawn 之前的审查撤回(让 resumePrompt/待发送消息的调用方把原文安全放回)。
   return !frozenBeforeSpawn;
 }

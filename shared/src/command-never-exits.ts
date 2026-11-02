@@ -157,6 +157,34 @@
 //    不按 eval / kill / set 各补一条字符串特判:那条路本轮审查明确点掉了（「不要再分别添加
 //    eval、kill、set 的字符串特判」),补一条它就再长出第四种。
 //
+// ⑫ **「我认得的那一种」要对着一个封闭的空间说,不然它还是黑名单**（本轮 D1）。⑪ 把「执行环境
+//    被掀翻」这一层立起来了,可它落地成了一张「我见过的会掀翻前提的词」表
+//    （eval/source/trap/kill/ulimit/shopt/setopt）—— 对 `set` 的开关用的是白名单,对**命令词**
+//    用的是黑名单。于是同一族的下一个照旧硬拦（本轮 `sh -lc` 实测,两条都退出 0 并打出 DONE）:
+//      · `unset PATH; tail -F /dev/null; printf 'DONE\n'` —— `unset` 把 PATH 整个去掉,那个
+//        tail 压根没启动。给 PATH **赋值**那一侧早就认了,**取消**那一侧没人认。
+//      · `hash -p /usr/bin/true tail; tail -F /dev/null; printf 'DONE\n'` —— `hash -p` 把
+//        `tail` 这个名字钉到别的可执行文件上,跑的根本不是 tail。
+//    补这两条进黑名单就又是列反例（`builtin`/`enable`/`let`/`local`/`alias` 还排着队）。所以
+//    这一版把判据换成**空间内的白名单**:能改掉「后面那几段按什么规矩执行」的东西只有 **shell
+//    自己的词**（外部程序改不动调用它的那个 shell,它唯一能做的是结束这个进程 —— 而那正是上面
+//    那条不作待证项的背景前提）,而「shell 有哪些自己的词」是封闭可枚举的。于是:shell 词里这一
+//    层确实有处置的那几个放过,**其余任何一个都算未知** ⇒ 降级（见 command-perturbation.ts 的
+//    `SHELL_WORDS` / `HANDLED`）。代价方向照旧:多收一个词 ⇒ 硬拦降成提示,人照样提交得了。
+//
+// ⑬ **未知要一路传播,中间任何一层都不许把它抹平**（第 4 轮审查 F3）。⑫ 把判据改对了,可它落在
+//    「拿正则扫 `Token.text`」上 —— 而**词法层按设计就是在抹掉未知**:不带引号的 `$( )` / 反引号 /
+//    `$(( ))` 被换成占位符 `?`（跟用户自己打的一个 `?` 长得一样）,`${` 还被当成分段符。于是那几条
+//    判据只对**带引号**的那一半有效,而我自己那三条 `${…:?…}` 回归恰好全写了引号,所以一直是绿的。
+//    真 shell 实测被硬拦的三条:
+//      · `: $((1/0)); while true; do :; done` —— 算术除零,127,循环一次都没跑;
+//      · `: ${1:?required}; while true; do :; done` —— 整个展开被 `${` 切成两段,判据面前根本不存在;
+//      · `read PATH; tail -F /dev/null; printf 'DONE\n'` —— 0 + DONE,那个 tail 压根没启动。
+//    两处落点:① 词法层**抹掉之前**把「这里有个什么」记在词上（command-lex.ts 的 `Token.expanded` /
+//    `substitution` / `arithmetic` / `errorForm`）,判据只读标记、不再扫文本;② 白名单里的词再按
+//    **argv** 证一遍（`ARGV_PROOF`）—— 「`read` 这个词有处置」不等于「`read PATH` 有处置」,语义
+//    压在参数上的那几个,得证明得出它谁都没赋值才算放行。
+//
 //
 //    ①–⑪ 合起来是同一条不变量:**硬拦只用「盖得住整条命令必要执行与退出语义」的那种证明**
 //    —— 执行资格（这一条跑不跑得到）、argv（它到底有没有开始跟随）、输入来源（它盯的是谁）、
@@ -184,8 +212,9 @@
 
 // **词法层在隔壁**(command-lex.ts,单文件 700 行的约定):分词、分段、引号骨架、抹注释。
 // 这个文件只收它的结果 —— 「每个字符在不在引号外」这件事由那边负责记下来(见 `Token.bare`)。
-import { blankComments, blankQuoted, segments, type Segment, type Token } from "./command-lex.ts";
+import { blankComments, blankQuoted, lex, type Segment, type Token } from "./command-lex.ts";
 import { followerOf, readsToEof } from "./command-followers.ts";
+import { perturbed } from "./command-perturbation.ts";
 import { commandOf } from "./command-wrappers.ts";
 
 // **另外两张表在隔壁**（单文件 700 行的约定）:哪些命令的语义是「盯着不走」、它们的 argv 读不
@@ -217,6 +246,7 @@ const HERE_DOC = /<</;
 import {
   BRANCH, ESCAPES, JUMPS, LOOP_HEADS, SKELETON, TERMINATORS,
   branchEnd, headOf, loopEnd, loopReadable, loopShape, regionHas, scanOf, startProvable,
+  structureProven,
   type Scan,
 } from "./command-scan.ts";
 
@@ -308,7 +338,11 @@ function provableBlocker(scan: Scan): Found | null {
       if (close) {
         // 分支区:整区不扫。区里有 `exit`/`exec` ⇒ 区后面的也证明不出来（那一支可能真的跑了）。
         const end = branchEnd(scan, i, head);
-        if (end < 0) return pipeline;
+        // 配不上对 ⇒ 整条命令在 shell 那边就是个语法错误,**手里那个判定也跟着作废**
+        // (本轮审查 F1;同一条口径见下面那个循环、函数尾的组括号、以及 `judge` 里的
+        // `structureProven`/`unclosed`)。交出 `pipeline` 等于拿「前面那一段会跑」去硬拦一条
+        // 压根跑不起来的命令。
+        if (end < 0) return null;
         if (regionHas(scan, i, end, TERMINATORS)) return pipeline;
         i = end;
         at = tokens.length;
@@ -316,7 +350,8 @@ function provableBlocker(scan: Scan): Found | null {
       }
       if (LOOP_HEADS.has(head)) {
         const end = loopEnd(scan, i);
-        if (end < 0) return pipeline;
+        if (end < 0) return null;                // 判据同上:配不上对 ⇒ 整条放行
+
         // **读得懂才轮到下结论**（见 `loopReadable`）:条件列表、挂在循环身上的重定向,
         // 两样里有一样读不出来,这个循环跑不跑得到就答不出来 ⇒ 整区不扫。
         const { bodyRuns, endless } = loopReadable(scan, i, end)
@@ -439,95 +474,6 @@ function pipeTarget(segs: Segment[], at: number): { name: string; argv: Token[];
 const downstreamNote = (name: string | null): string =>
   `下游${name ? `那个 ${name} ` : ""}会不会一直读到头，这一层读不出来 —— 它先收工就把管子关掉了`;
 
-/**
- * **这条命令自己动摇了「默认执行环境」这个前提吗** —— 动摇了就说是哪一处（见文件头 ⑪）。
- *
- * 硬拦的证明压着一个说不出口的前提:shell 按常规语义执行每一段、工具找得到、没人把这个进程
- * 结束掉。那个前提不是待证项,它是哨兵这个功能本身的运行假设 —— 不然任何命令都可能因为磁盘
- * 满、信号、ulimit 而退出,硬拦就归零了。可**命令自己就能把这个假设掀翻**,而那几种写法全都
- * 写在 argv 里、这一层本来就看得见。
- *
- * 所以这里问的不是「它会不会结束」,而是「我这一层还读得懂它的执行语义吗」。读不懂 ⇒ 整条
- * 证明失效 ⇒ 降级成提示。**判的是「我认得的那一种」而不是「我见过的反例」**:`set` 只认得
- * errexit 这一种语义,别的开关(`-n` 就是「读而不执行」)一律算未知 —— 列反例的那条路第 1 轮
- * 审查已经点明是走不通的。
- */
-const SHAKERS = new Map<string, string>([
-  ["eval", "那个 eval 跑的是一段这一层读不进去的代码"],
-  ["source", "那个 source 把另一个文件的内容当代码跑"],
-  [".", "那个 . 把另一个文件的内容当代码跑"],
-  ["trap", "那个 trap 挂的是一段收到信号才跑的代码"],
-  ["kill", "那个 kill 可以把这条命令自己结束掉"],
-  ["ulimit", "那个 ulimit 改掉了这条命令自己的资源上限"],
-  ["shopt", "那个 shopt 改掉了 shell 的执行选项"],
-  ["setopt", "那个 setopt 改掉了 shell 的执行选项"],
-]);
-/** 给 `PATH` 赋值 ⇒ 后面那些工具还找不找得到,这一层读不出来（`PATH=/missing; tail -F x` 实测 127）。 */
-const PATH_ASSIGN = /^PATH=/;
-/** 这一段开头那几个**结构骨架词**:要跳过它们才轮到真正的命令词（判据同 `provableBlocker`）。 */
-const isSkeleton = (head: string): boolean =>
-  SKELETON.has(head) || LOOP_HEADS.has(head) || BRANCH.has(head);
-
-/**
- * `set` 的开关里**第一个这一层没有处置的** —— 全都有处置就是 `null`。
- *
- * **白名单,不是黑名单**:认得的那几个放过,其余一律算未知（同⑩在下游那一侧的口径）。反过来
- * 列「哪几个危险」就是列反例 —— `set -n`（读完一条都不执行，实测退出 0 而恒真循环照旧被 409）
- * 只是第一个被抓到的,`-C` 挡得住重定向、`-f` 改通配展开,一张黑名单永远差下一个。
- *
- * 放过的三件事各有理由:`errexit` 这边有专门的处置（`errexitAt`）;`xtrace`/`verbose` 只是把执行
- * 过程打出来,一个字的执行语义都不改。**`+` 那一侧同样放过** —— 它是关掉,而这三个本来就默认
- * 关着（`set +e; false; tail -F x` 真 shell 里照旧挂住，是选定要拦的真阳性）。
- *
- * **明知的误降级:`set -eu` 这一类**。`-u`（未定义变量当错误）只在命令里真的引用了未定义变量
- * 时才改变结局,而「有没有引用、引用的定义了没有」这一层答不出来 —— 于是 `set -eu; tail -F x`
- * 从硬拦降成提示。代价方向是对的那一侧:提示照样说得清,人照样能提交（见文件头那段不对称）。
- * 想把它收回硬拦,得先拿出「这条命令里每个变量都定义过」的证明,而不是把 `-u` 塞进白名单。
- */
-const SET_HANDLED = new Set(["errexit", "xtrace", "verbose"]);
-const SET_SHORT = /^[-+][exv]+$/;
-function setShaken(argv: readonly Token[]): string | null {
-  for (let i = 0; i < argv.length; i += 1) {
-    const t = argv[i]!;
-    if (t.quoted) return t.text;                 // 引号里的开关这一层读不出来
-    if (!/^[-+]/.test(t.text)) break;            // 开关列表到此为止（后面是位置参数）
-    if (/^[-+]o$/.test(t.text)) {
-      const name = argv[i + 1];
-      if (name && !name.quoted && SET_HANDLED.has(name.text)) { i += 1; continue; }
-      return name ? `${t.text} ${name.text}` : t.text;
-    }
-    if (!SET_SHORT.test(t.text)) return t.text;
-  }
-  return null;
-}
-
-/**
- * 整条命令里第一处「执行语义这一层读不懂」的地方 —— 没有就是 `null`（见 `SHAKERS`）。
- *
- * **不管执行资格,每一段都看**:`if false; then eval x; fi` 里那个 `eval` 确实跑不到,可
- * 「跑不到」这个结论本身也是这一层算出来的 —— 真要分清就得先读懂 eval。偏放行那一侧 ⇒ 一律算。
- *
- * **只认命令词位置**（文件头 ①）:`find . -name x`、`grep kill log` 里那两个词是参数,不是
- * 执行节点。`PATH=` 是唯一一个按整段词扫的 —— 它作为赋值前缀时压根不在命令词位置上。
- */
-function perturbed(segs: Segment[]): string | null {
-  for (const seg of segs) {
-    for (const t of seg.tokens) {
-      if (!t.quoted && PATH_ASSIGN.test(t.text)) return "前面有一段改过 PATH，后面那些工具还找不找得到";
-    }
-    let at = 0;
-    while (at < seg.tokens.length && isSkeleton(headOf(seg.tokens, at))) at += 1;
-    const cmd = at < seg.tokens.length ? commandOf(seg.tokens, at) : null;
-    if (!cmd) continue;
-    const note = SHAKERS.get(cmd.name);
-    if (note) return note;
-    if (cmd.name === "set") {
-      const flag = setShaken(cmd.argv);
-      if (flag !== null) return `那个 set 开的是 ${flag}，它改掉了后面每一条的执行语义（这一层只认得 errexit）`;
-    }
-  }
-  return null;
-}
 
 function judge(command: string): Found | null {
   // **读不出执行资格的结构 ⇒ 整条命令放行**（见文件头 ②）。here-doc 的终止词、函数体到底
@@ -537,7 +483,20 @@ function judge(command: string): Found | null {
   // 前提核不核得了这一问**不在这一层**:它压根不该由「哪个路径 + 谁动过它」这种拼写分析来
   // 答（第 2 轮审查证伪,见文件头 ⑩）。工具目录那一层直接交出「这件事没人核得了」那句话,
   // 这里只负责把它一路带出去。
-  const segs = segments(command);
+  const { segments: segs, unclosed } = lex(command);
+  // **有结构没收口 ⇒ 整条命令在 shell 那边连语法都过不去,一条都不会执行**(本轮审查 F3)。
+  // 实测七种写法(`"${X`、`'${X`、反引号、`$(`、`$((`、裸 `${`、`"${X%ok"`)全是 rc=2、stdout
+  // 一个字都没有;**没收口在后面那一段也一样** —— `echo A; tail -F /dev/null; : "${Y"` 里那个
+  // tail 一次都没跑。所以这件事必须按**整条**处置:只给那个词打个未知标记不够,前面那段
+  // `tail -F` 自己就证明得出「会跑」,硬拦照旧成立(这正是上一版的实测误拦形状,接口 409)。
+  // 跟下面 `provableBlocker` 里「组括号没配上对就放行」同一条口径,那一档实测同样 rc=2。
+  if (unclosed) return null;
+  // **结构没收口的那一半,同一条口径**(本轮审查 F1)。`unclosed` 答的是词法(引号、`$(`),
+  // 这一道答的是结构(`if`/`case`/循环的骨架词凑没凑齐)—— 两件事在 shell 那边是同一个结局:
+  // 解析阶段就报语法错误,**整条命令一个字都不执行**,所以处置也只能是整条放行。判据和实测
+  // 见 `structureProven`;上一版把它当成「扫到那一区时放行」,于是排在前面那一段
+  // `tail -F /dev/null` 照旧被硬拦(接口 409,而 shell 连 tail 都没启动)。
+  if (!structureProven(segs)) return null;
   const found = provableBlocker(scanOf(segs));
   // **扰动这一问排在最后,而且只改硬拦那一档**（见文件头 ⑪）。压根没判定 ⇒ 没什么可提示的;
   // 已经降过级 ⇒ 它自己那句话更具体（说的是哪个文件、哪个下游）,不拿这句通用的盖掉它。

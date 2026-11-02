@@ -28,10 +28,15 @@ try {
       if (!injected) { injected = true; throw new Error("ONCE_REVIEW_PREFLIGHT_FAULT"); }
       return original.apply(this, args);
     };
+    // `turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。这一轮的锁是派审那一侧占下的
+    // (所以这里再 claim 一次是占不到的),交下去的就是它那一份 —— 本节验的正是「读失败要把
+    // 调用方那把锁还回去」。
+    const entryTurn = runs.turnIdentity(review.taskId);
+    assert.ok(entryTurn, "台子前提:派审已经占住这一轮");
     try {
       await assert.rejects(entry === "continue"
-        ? continueTask(review.taskId, "Continue", { turnHeld: true })
-        : resumeOrRunTask(review.taskId, { reason: "run", turnHeld: true }), /ONCE_REVIEW_PREFLIGHT_FAULT/);
+        ? continueTask(review.taskId, "Continue", { turnHeld: entryTurn })
+        : resumeOrRunTask(review.taskId, { reason: "run", turnHeld: entryTurn }), /ONCE_REVIEW_PREFLIGHT_FAULT/);
     } finally { db.transaction = original; }
     assert(injected);
     assert.equal(runs.isTurnClaimed(review.taskId), false);
@@ -45,6 +50,7 @@ try {
       const review = await open("preset");
       await db.update(tasks).set({ status: route === "run" ? "paused" : "failed" }).where(eq(tasks.id, review.taskId));
       await occupyResumePrompt(review.taskId, "Continue this review", false);
+      const checkpoint = await row(review.taskId);
       runs.releaseTurn(review.taskId);
       const sessionId = `entry-${review.taskId}`;
       await db.insert(schema.sessions).values({ id: sessionId, taskId: review.taskId, role: "single", agentType: "codex",
@@ -63,16 +69,21 @@ try {
       };
       try {
         const first = await api.request(`/tasks/${review.taskId}/${route}`, { method: "POST" });
-        assert.equal(first.status, 202);
+        assert.equal(first.status, 409, "a failed preflight must not acknowledge an unstarted review");
+        assert.match((await first.json()).error, /尚未启动/);
         await until("HTTP preflight fails once and publishes a durable retry notice", async () => injected
           && !runs.isTurnClaimed(review.taskId) && existsSync(transcript) && readFileSync(transcript, "utf8").includes(message));
       } finally { db.transaction = original; }
-      assert.equal((await row(review.taskId)).status, route === "run" ? "paused" : "failed");
+      const rejected = await row(review.taskId);
+      assert.equal(rejected.status, route === "run" ? "paused" : "failed");
+      assert.equal(rejected.resumePrompt, checkpoint.resumePrompt);
+      assert.equal(rejected.resumePromptGeneration, checkpoint.resumePromptGeneration);
+      assert.equal(runs.isRunning(review.taskId), false);
       const second = await api.request(`/tasks/${review.taskId}/${route}`, { method: "POST" });
       assert.equal(second.status, 202, "a recovered database must not leave /run or /retry permanently blocked");
       await until("retried review releases its test-only turn", async () => !runs.isTurnClaimed(review.taskId)
         && (await row(review.taskId)).verifyRound === null);
-      console.log(`✓ HTTP /${route} ${fault}: transient preflight failure is visible and the next request starts`);
+      console.log(`✓ HTTP /${route} ${fault}: rejected startup preserves the checkpoint, reports failure and the next request starts`);
     }
   }
 

@@ -22,7 +22,7 @@
 //   ① **这次调用是不是本任务当前这一回合**——`x-ash-source-task-id` + `x-ash-turn-token`
 //      对上 `tasks.active_turn_token`(agent 回连那条既有通道,`auth/middleware.ts`),由创建
 //      入口核验后以 `MonitorCaller` 交上来;
-//   ② **这一回合是什么角色**——`turnRole()`,`claimTurn` 落下的**运行时事实**(审查结论的
+//   ② **这一回合是什么角色**——`turnRole()`,`claimOwnTurn` 落下的**运行时事实**(审查结论的
 //      归属检查 `report_stage` 读的也是它);
 //   ③ **它属于哪一次、哪一轮审查**——核验那一刻这个任务上正在进行的那次 run 与 round。
 // 三截都**绑在被核验的那一轮上**(`VerifiedTurn`),并在落库处再核对一遍它仍然有效:创建要

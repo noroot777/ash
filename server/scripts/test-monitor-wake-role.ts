@@ -575,7 +575,9 @@ const byUser: MonitorCaller = { kind: "external" };
 
   // ③ 带着这份身份续起来的回合,**挂得上下一条哨兵**。走生产那道入口闸(它才是把
   //    `TurnSource` 翻译成回合身份的地方),然后照生产顺序绑令牌、再提交创建。
-  assert.equal(await enterTurn({ taskId, source: deliveryOptions(queued).turnSource! }), true,
+  // enterTurn 交回的是**这一把锁的身份**(第 2 轮审查 F1:按任务 id 还锁会撤掉后来者的
+  // 互斥),起不来是 null。
+  assert.ok(await enterTurn({ taskId, source: deliveryOptions(queued).turnSource! }),
     "台子前提:这一轮起得来");
   const resumed = runs.turnIdentity(taskId);
   assert.deepEqual(resumed && { role: resumed.role, review: resumed.review },
