@@ -11,7 +11,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { AgentEvent, AgentType, ContextUsage, TokenUsage, UsageAccountingMark } from "@ash/shared";
 import { db } from "./db/index.js";
 import { sessions, sessionTurns, usageCumulativeSnapshots } from "./db/schema.js";
-import { pendingMonitorWake } from "./session-turns.js";
+import { boundMonitorWake } from "./session-turns.js";
 
 type SessionRow = typeof sessions.$inferSelect;
 type UsageEvent = Extract<AgentEvent, { kind: "usage" }>;
@@ -112,7 +112,7 @@ export function usageAccountingFor(agentType: AgentType, cliSessionId: string | 
  *
  * `turnStartedAt` = 这笔账属于哪个回合。给了就按那个身份问「它是不是哨兵唤醒起的」,是的话
  * 同一笔里把 `usage_monitor_wake_turns` 也加上 —— 「N 轮,其中哨兵唤醒 M 轮」的 M 因此只会是
- * N 所数的那批回合的子集。开始行还没落成时,那一位在欠账里(`pendingMonitorWake`)。
+ * N 所数的那批回合的子集。开始行还没落成时,那一位绑在身份上(`boundMonitorWake`)。
  */
 export async function addSessionUsage(
   sessId: string,
@@ -123,7 +123,7 @@ export async function addSessionUsage(
   const reported = roundedUsage(usage);
   try {
     return await db.transaction(async (tx) => {
-      const wake = !!turnStartedAt && (pendingMonitorWake(sessId, turnStartedAt) || !!(await tx
+      const wake = !!turnStartedAt && (boundMonitorWake(sessId, turnStartedAt) || !!(await tx
         .select({ wake: sessionTurns.monitorWake }).from(sessionTurns)
         .where(and(eq(sessionTurns.sessionId, sessId), eq(sessionTurns.startedAt, turnStartedAt))).get())?.wake);
       let booked = reported;

@@ -89,7 +89,7 @@ export {
  * 回合起点,窄得多,照实标 approx;而走**补插**那条路补齐的是一行完整记录,连那一句「算不准」
  * 都不必再说。
  */
-const unconfirmed = new Map<string, Map<string, { taskId: string; cwd: string | null; monitorWake: boolean }>>();
+const unconfirmed = new Map<string, Map<string, { taskId: string; cwd: string | null }>>();
 
 /** 这条会话有几个开始意图还没被确认落账（读端把它算进缺口）。 */
 export function unconfirmedTurns(sessionId: string): number {
@@ -99,8 +99,7 @@ export function unconfirmedTurns(sessionId: string): number {
 function rememberUnconfirmed(input: TurnStartInput): void {
   const { sessionId, taskId, cwd, startedAt } = input;
   const seen = unconfirmed.get(sessionId);
-  // 「哨兵唤醒」同身份只升不降:另一次不带它的失败重放不许把先记下的那一位覆盖掉。
-  const who = { taskId, cwd: cwd ?? null, monitorWake: !!input.monitorWake || !!seen?.get(startedAt)?.monitorWake };
+  const who = { taskId, cwd: cwd ?? null };
   if (seen) seen.set(startedAt, who);
   else unconfirmed.set(sessionId, new Map([[startedAt, who]]));
 }
@@ -120,7 +119,7 @@ async function flushUnconfirmed(sessionId: string): Promise<void> {
   if (!owed?.size) return;
   for (const [startedAt, who] of [...owed]) {
     try {
-      await persistTurn({ sessionId, taskId: who.taskId, cwd: who.cwd, startedAt, monitorWake: who.monitorWake });
+      await persistTurn({ sessionId, taskId: who.taskId, cwd: who.cwd, startedAt });
     } catch (error) {
       // 还是写不进去：这一笔和它后面那些都留在内存里,读端照样看得见缺口。
       console.warn(`[ash] 欠着的 ${owed.size} 笔「漏了一个回合」还没补进库（这一段按未知披露）: ${String(error)}`);
@@ -137,14 +136,6 @@ async function flushUnconfirmed(sessionId: string): Promise<void> {
  * 恢复的事实继续被算成缺口,整条会话寿命被重新算进候选区间,停工期间别人在同一个目录里做的东西
  * 又被收进来,面板还说「有一次连开始都没留下记录」（第 2 轮审查 F3）。
  */
-/**
- * 这个身份欠着的开始意图里记着「哨兵唤醒」吗。开始行还没落成时,报账(`usage.ts`)和收尾补插
- * 都只能从这里知道这件事。
- */
-export function pendingMonitorWake(sessionId: string, startedAt: string): boolean {
-  return !!unconfirmed.get(sessionId)?.get(startedAt)?.monitorWake;
-}
-
 function confirmTurn(sessionId: string, startedAt: string): void {
   const owed = unconfirmed.get(sessionId);
   if (!owed) return;
@@ -170,6 +161,42 @@ export function forgetTaskUnconfirmed(taskId: string): void {
     }
     if (!owed.size) unconfirmed.delete(sessionId);
   }
+  for (const [sessionId, bound] of [...wakeSources]) {
+    for (const [startedAt, owner] of [...bound]) {
+      if (owner === taskId) bound.delete(startedAt);
+    }
+    if (!bound.size) wakeSources.delete(sessionId);
+  }
+}
+
+// ── 回合来源:身份一分配就绑上 ─────────────────────────────────────────────────
+//
+// 「这一轮是哨兵唤醒起的」是**回合身份**自带的事实,不是开始行落库之后才有的事实。报账
+// (`usage.ts`)按身份问它,而用量事件可以比开始行先到:团队调度台在投递口一收下消息就放开了
+// 消费,开始行还隔着几次写库(第 2 轮审查 F1,不注入任何延迟也复现)。所以分配身份的那一处
+// **同步**把它绑在这里(投递口 `sendToLead`、开台 `openLead`、单飞 `openTurn` 开头),落库那一批
+// (`persistTurn`)从这里合进去,**写成了才解绑**——之后就由库里那一位回答。
+//
+// 只记「是唤醒」的那些(值 = 任务 id,删任务时一起扔):不是唤醒是默认,不需要占位。
+const wakeSources = new Map<string, Map<string, string>>();
+
+export function bindTurnSource(input: { sessionId: string; taskId: string; startedAt: string; monitorWake?: boolean }): void {
+  if (!input.monitorWake) return;
+  const bound = wakeSources.get(input.sessionId);
+  if (bound) bound.set(input.startedAt, input.taskId);
+  else wakeSources.set(input.sessionId, new Map([[input.startedAt, input.taskId]]));
+}
+
+export function unbindTurnSource(sessionId: string, startedAt: string): void {
+  const bound = wakeSources.get(sessionId);
+  if (!bound) return;
+  bound.delete(startedAt);
+  if (!bound.size) wakeSources.delete(sessionId);
+}
+
+/** 这个身份绑着「哨兵唤醒」、还没落进库吗。 */
+export function boundMonitorWake(sessionId: string, startedAt: string): boolean {
+  return !!wakeSources.get(sessionId)?.has(startedAt);
 }
 
 /**
@@ -244,6 +271,8 @@ export async function openTurn(input: {
   if (!input.startedAt) return;
   const startedAt = input.startedAt;
   const register = opts.register ?? true;
+  // 来源先于任何 await 绑上(见上面「回合来源」那段):下面每一步都可能让出执行权。
+  bindTurnSource({ ...input, startedAt });
   // **这一行开始记录是本进程写的** —— 判决恢复那一路靠它分辨「全新起跑」和「上一个进程留下来
   // 的」,理由见 session-turn-registry.ts 的 `openedHere`。登记在写库之前:下面那几步都可能抛,
   // 而「是我开的」这个事实跟它们成不成没关系(开始行没落下的回合照样要认得出是本进程开的)。
@@ -461,11 +490,12 @@ async function persistTurn(
   close: TurnClose | null = null,
   fresh = false,
 ): Promise<TurnWrite> {
-  // 欠账里记着的来源事实由这里合进去,不靠调用方知道:收尾补插那一路不知道这一轮是不是唤醒,
-  // 而它落成之后紧接着就要划掉那笔欠账 —— 不在这里合,那一位就跟着欠账一起没了。
-  const monitorWake = !!input.monitorWake || pendingMonitorWake(input.sessionId, input.startedAt);
+  // 绑在身份上的来源由这里合进去,不靠调用方知道:收尾补插、补欠账那几路都不知道这一轮是不是
+  // 唤醒。写成了(行在、那一位已置上)才解绑,之后由库里那一位回答。
+  const monitorWake = !!input.monitorWake || boundMonitorWake(input.sessionId, input.startedAt);
   const wrote = await writeTurnRow({ ...input, monitorWake }, close, fresh);
   confirmTurn(input.sessionId, input.startedAt);
+  if (monitorWake) unbindTurnSource(input.sessionId, input.startedAt);
   return wrote;
 }
 

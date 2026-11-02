@@ -4,7 +4,8 @@
 // (`usage_monitor_wake_turns`)。覆盖:
 //   ① 报账按回合身份判唤醒;开了却没报账的唤醒回合(失败/被停)不占 N 里的位置;
 //   ② 回合行上那一位只升不降 —— 收尾先补插的行由迟到的开始信息补上,不带它的重放不抹回 0;
-//   ③ 开始行写失败时那一位在欠账里:报账照样认得出,收尾补插把它落进库,之后才消账;
+//   ③ 开始行写失败时那一位绑在身份上:报账照样认得出,收尾补插把它落进库,之后才解绑;
+//   ⑥ 团队调度台投递口一收下就放开消费:用量先于开始行到,也按身份认得出是唤醒(第 2 轮审查 F1);
 //   ④ 历史回填按转录(哪几轮是唤醒)× trace(哪几轮报过账)精确对身份,只做一次;
 //   ⑤ 回填遇到读不动的证据不写完成标记,恢复后下次补上;确实不存在的文件算处理完。
 import assert from "node:assert/strict";
@@ -23,7 +24,9 @@ const { eq } = await import("drizzle-orm");
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { appSettings, projects, sessions, tasks } = await import("../src/db/schema.js");
 const turns = await import("../src/session-turns.js");
-const { addSessionUsage } = await import("../src/usage.js");
+const { addSessionUsage, recordSessionUsageEvent } = await import("../src/usage.js");
+const { sendToLead } = await import("../src/team/lead-delivery.js");
+const { createLeadTurnStart } = await import("../src/team/lead-turn-begin.js");
 const { sessionsForTask } = await import("../src/task-session-routes.js");
 const { backfillMonitorWakeTurns } = await import("../src/monitor-wake-turns-backfill.js");
 const { TURN_SENTINEL } = await import("../src/transcript.js");
@@ -84,7 +87,7 @@ try {
     assert.equal(await wakeOf(sid, at(1)), 1, "不带这一位的重放把它抹回了 0");
   }
 
-  // ── ③ 开始行写失败:来源事实在欠账里,收尾补插继承它(第 1 轮审查 F2) ────────────
+  // ── ③ 开始行写失败:来源绑在身份上,收尾补插继承它(第 1 轮审查 F2) ────────────
   {
     const sid = await seed("Owed");
     const realBatch = dbClient.batch;
@@ -97,7 +100,7 @@ try {
     }
     assert.equal(injected, 2, "注入没覆盖到开始写库和立即重试两次");
     assert.equal(turns.unconfirmedTurns(sid), 1);
-    assert.equal(turns.pendingMonitorWake(sid, at(1)), true, "欠账里没记下「哨兵唤醒」");
+    assert.equal(turns.boundMonitorWake(sid, at(1)), true, "开始行没落成,身份上没绑着「哨兵唤醒」");
     // 不带这一位的同身份失败重放不许把它覆盖掉:直接再失败一次开始。
     dbClient.batch = (async () => { throw new Error("注入:再失败一次"); }) as typeof dbClient.batch;
     try {
@@ -105,12 +108,42 @@ try {
     } finally {
       dbClient.batch = realBatch;
     }
-    assert.equal(turns.pendingMonitorWake(sid, at(1)), true, "不带标记的失败重放覆盖掉了欠账里的「哨兵唤醒」");
+    assert.equal(turns.boundMonitorWake(sid, at(1)), true, "不带标记的失败重放把身份上的「哨兵唤醒」解掉了");
     await addSessionUsage(sid, USAGE, { kind: "incremental" }, at(1));
     await turns.recordTurnSpan({ sessionId: sid, taskId: "Owed", cwd: stage, startedAt: at(1), endedAt: at(2), outcome: "completed" });
     assert.equal(turns.unconfirmedTurns(sid), 0, "收尾补插之后欠账没消");
     assert.equal(await wakeOf(sid, at(1)), 1, "收尾补插把欠账里的「哨兵唤醒」丢了");
     assert.deepEqual(await split("Owed"), { turns: 1, wakes: 1 }, "开始行没落成时报账认不出这是唤醒回合");
+    assert.equal(turns.boundMonitorWake(sid, at(1)), false, "落进库之后身份上的绑定没解,内存只增不减");
+  }
+
+  // ── ⑥ 团队调度台:投递口收下就放开消费,用量先于开始行到 ─────────────────────────
+  // 生产顺序原样走一遍,不注入延迟:`push` 里 `await sendToLead` → `void beginTurn(...)`,消费循环
+  // 同时就可能读到这一轮的用量。两次唤醒都完成了,就该是两次。
+  {
+    const sid = await seed("Lead");
+    await db.update(tasks).set({ mode: "team" }).where(eq(tasks.id, "Lead"));
+    const lead = {
+      taskId: "Lead", sessId: sid, cwd: stage, retired: false, busy: false, turnStart: null as string | null,
+      model: null, reasoningEffort: null, agentType: "claude",
+      handle: { send: () => true, interrupt: () => {} },
+    } as unknown as Parameters<typeof sendToLead>[0];
+    const beginTurn = createLeadTurnStart({ setLeadStatus: async () => {} });
+    for (const second of [10, 20]) {
+      const delivery = await sendToLead(lead, "【哨兵事件】", { steer: true, monitorWake: true });
+      assert.ok(delivery.at);
+      const starting = beginTurn(lead, delivery.at);
+      await recordSessionUsageEvent(sid, { kind: "usage", usage: USAGE }, "claude", null, delivery.at);
+      await starting;
+      await turns.recordTurnSpan({ sessionId: sid, taskId: "Lead", cwd: stage, startedAt: delivery.at, endedAt: at(second), outcome: "completed" });
+      assert.equal(await wakeOf(sid, delivery.at), 1);
+      assert.equal(turns.boundMonitorWake(sid, delivery.at), false, "落库之后身份上的绑定没解");
+    }
+    assert.deepEqual(await split("Lead"), { turns: 2, wakes: 2 }, "用量先于开始行到的那一轮被当成了普通回合");
+    // 对照:普通插话不带来源,不许被算成唤醒。
+    const plain = await sendToLead(lead, "普通插话", { steer: true });
+    await recordSessionUsageEvent(sid, { kind: "usage", usage: USAGE }, "claude", null, plain.at);
+    assert.deepEqual(await split("Lead"), { turns: 3, wakes: 2 }, "普通插话被算成了哨兵唤醒");
   }
 
   const line = (turn: Record<string, unknown>) => `\n${TURN_SENTINEL}${JSON.stringify(turn)}\n`;
@@ -169,7 +202,7 @@ try {
     assert.ok(await db.select().from(appSettings).get(), "全部处理完仍没写完成标记");
   }
 
-  console.log("✓ monitor wake turns: 报账按回合身份判唤醒且是总轮数的子集、只升不降、欠账带着来源直到落库、历史按转录×trace 精确回填、读不动不封存");
+  console.log("✓ monitor wake turns: 报账按回合身份判唤醒且是总轮数的子集、只升不降、来源绑在身份上直到落库(含团队用量先到)、历史按转录×trace 精确回填、读不动不封存");
 } finally {
   await dbClient.close();
   await releaseTmpDb();
