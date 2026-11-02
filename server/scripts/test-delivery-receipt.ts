@@ -265,6 +265,113 @@ console.log("④ 进展记号欠着时,持久消费水位不许往前走(第 2 �
   await db.delete(scheduledMessages).where(eq(scheduledMessages.id, row2.id));
 }
 
+console.log("⑤ 迟到的写只许落在自己那一次上(第 1 轮自由审查 F1:旧补偿清掉了新一轮的租约)");
+{
+  // 审查端到端复现:第一次起跑被拒,归还那一笔第一次写失败 → 租约自排补偿;调用点自己还成、
+  // 消息重投并被第二次投递收下;旧补偿这才醒来,按「消息 id + pending」把**新一轮**的租约
+  // 清掉 → 周期扫描看见一条无人在送的 pending,同一条消息进了第二个回合。
+  //
+  // 两层各钉一遍,任一层单独撤掉都会红:库那一侧的身份条件、生命周期那一侧的责任交接。
+  const { abortDelivery, beginDelivery, markSent } = await import("../src/pending-messages.js");
+  const { mintLeaseStamp } = await import("../src/delivery-fence.js");
+  const taskId = "t-fence";
+  await seedTask(taskId, "验证旧投递动不了新投递");
+  const row = pendingMessageRow({ taskId, text: "perform-operation-once", mode: "queued" });
+  await db.insert(scheduledMessages).values(row as never);
+  const current = async () => (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, row.id))).at(0)!;
+
+  const stamps = Array.from({ length: 50 }, () => mintLeaseStamp());
+  check(new Set(stamps).size === stamps.length,
+    "同一毫秒里先后领取 50 次,租约值两两不同(它原来只是时刻,同毫秒就撞值、当不了身份)");
+
+  // ⑤a 库那一侧:第一次投递的行动不了第二次投递的租约
+  const first = (await beginDelivery(row.id))!;
+  await abortDelivery(first); // 调用点自己还掉了第一次
+  const second = (await beginDelivery(row.id))!;
+  check(!!second?.deliveringSince && second.deliveringSince !== first.deliveringSince,
+    "前提:第二次投递领到了一个新租约值");
+  await abortDelivery(first); // 第一次投递迟到的那笔补偿
+  check((await current()).deliveringSince === second.deliveringSince,
+    `旧投递迟到的归还写不中新一轮(租约=${(await current()).deliveringSince ?? "被清掉了"});`
+    + "上一版:按 id 写,新一轮的租约被清掉,扫描再送一遍");
+  await markSent(first); // 第一次投递迟到的送达确认同理
+  check((await current()).status === "pending",
+    "旧投递迟到的送达确认也写不中新一轮(否则一条还在送的消息被提前标成已送达)");
+  await markSent(second);
+  check((await current()).status === "sent", "自己那一次照常写得中(别把栅栏修成谁都写不进)");
+
+  // ⑤b 生命周期那一侧:调用点还掉之后,租约那条补偿必须了结,不许再醒来
+  const calls: string[] = [];
+  let failNext = true;
+  const lease = createDeliveryLease({
+    label: "单元·调用点代为归还", retryMs: [60],
+    onAccepted: () => { calls.push("sent"); },
+    onReturn: () => {
+      calls.push("return");
+      if (failNext) { failNext = false; throw new Error("database is locked"); }
+    },
+  });
+  await lease.settle("refused"); // 第一次归还失败 → 60ms 后补偿
+  check(lease.callerMustReturn(), "前提:拒收且归还没落盘 → 调用点该自己还");
+  lease.callerReturned(); // 调用点还成了
+  await sleep(250);
+  check(calls.join(",") === "return",
+    `补偿到此了结,没有再醒来(动作:${calls.join(",")});上一版:旧补偿照样醒来去还一次`);
+  check(!lease.callerMustReturn() && !lease.owes(), "责任交接完:不再欠账,也不再授权归还");
+}
+
+console.log("⑥ 真实投递入口:调用点还掉之后,旧补偿不再去碰这一行(F1 的调用点那一半)");
+{
+  // 起跑被拒(假 codex 一个应答都不给就退出)→ 租约那条路先去归还,第一笔 UPDATE 注入失败 →
+  // 自排补偿;`dispatchPendingMessage` 的善后接着自己还成。之后补偿醒来:有责任交接就一笔都
+  // 不写,没有就会再发一笔归还 —— 这一行此刻可能已经被下一次投递领走了。
+  const taskId = "t-fence-dispatch";
+  await seedTask(taskId, "验证调用点归还后旧补偿了结");
+  codexMode(fakeBin, "refuse");
+  const row = pendingMessageRow({ taskId, text: "继续:这一条第一次会被拒收", mode: "queued" });
+  await db.insert(scheduledMessages).values(row as never);
+  const execute = dbClient.execute.bind(dbClient);
+  const argsOf = (statement: unknown): unknown[] => (statement as { args?: unknown[] }).args ?? [];
+  const isReturn = (statement: unknown): boolean => typeof statement !== "string"
+    && /^update "scheduled_messages" set "delivering_since" = \?/i.test((statement as { sql: string }).sql)
+    && argsOf(statement).includes(row.id) && argsOf(statement)[0] === null;
+  // 只数**第一次投递**那一张租约上的归还:假 codex 一直拒收,重投那几次各有自己的归还,那是
+  // 它们自己那一次的事,不是旧补偿。租约值在 WHERE 的参数里(delivery-fence.ts)。
+  let firstLease: string | null = null;
+  // 补偿链发出的归还一律失败,直到调用点自己还成 —— 这样被测的才是「调用点代为归还之后,补偿
+  // 了结了没有」,而不是「补偿抢先还成了」(那一支调用点压根不会被授权)。
+  let callerReturned = false;
+  let staleAfterCaller = 0;
+  (dbClient as { execute: typeof execute }).execute = async (statement) => {
+    if (isReturn(statement)) {
+      const stamp = argsOf(statement).find((arg) => typeof arg === "string" && arg !== row.id && arg !== "pending");
+      firstLease ??= (stamp as string | undefined) ?? null;
+      if (stamp === firstLease) {
+        const fromCompensation = (new Error().stack ?? "").includes("attemptDispose");
+        if (fromCompensation && callerReturned) staleAfterCaller += 1;
+        if (fromCompensation && !callerReturned) throw new Error("ASH_TEST_INJECT_TRANSIENT_RETURN_FAILURE");
+        if (!fromCompensation) callerReturned = true;
+      }
+    }
+    return execute(statement);
+  };
+  try {
+    await dispatchPendingMessage(row as never, {
+      spans: { dueAt: Date.now(), busyMs: 0, queuedAt: Date.now() }, onClaim: () => {},
+    });
+    await sleep(600); // 补偿节奏是 100ms 一拍(见文件头),六拍足够它醒好几次
+    check(!!firstLease && callerReturned,
+      "前提:补偿那条路的归还一直失败,调用点自己把第一次投递还成了(否则钉不到这一支)");
+    check(staleAfterCaller === 0,
+      `调用点还掉之后,旧补偿一笔都没再写(实际 ${staleAfterCaller} 笔);`
+      + "上一版:它照样醒来去还 —— 那一行此刻可能已经被下一次投递领走了");
+  } finally {
+    (dbClient as { execute: typeof execute }).execute = execute;
+    await db.delete(scheduledMessages).where(eq(scheduledMessages.id, row.id));
+  }
+}
+
 if (originalPath === undefined) delete process.env.PATH;
 else process.env.PATH = originalPath;
 

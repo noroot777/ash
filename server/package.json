@@ -56,7 +56,7 @@
     "test:turn-stall-progress": "tsx scripts/test-turn-stall-progress.ts",
     "test:claude-retry-stall": "tsx scripts/test-claude-retry-stall.ts",
     "test:stall-restart": "tsx scripts/test-stall-restart.ts",
-    "test:undriven-turn": "tsx scripts/test-silence-tier.ts && tsx scripts/test-undriven-turn.ts && tsx scripts/test-delivery-receipt.ts",
+    "test:undriven-turn": "tsx scripts/test-silence-tier.ts && tsx scripts/test-undriven-turn.ts && tsx scripts/test-delivery-receipt.ts && tsx scripts/test-adopt-replay.ts && tsx scripts/test-steer-refused-reply.ts",
     "test:team-silence-tier": "tsx scripts/test-team-silence-tier.ts",
     "test:turn-ownership": "tsx scripts/test-turn-ownership.ts",
     "test:turn-reclaim": "tsx scripts/test-turn-reclaim.ts && tsx scripts/test-seat-ownership.ts && tsx scripts/test-stop-turn-observation.ts && tsx scripts/test-turn-release-ownership.ts",
