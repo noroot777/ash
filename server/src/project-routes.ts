@@ -134,6 +134,7 @@ export function mountProjectRoutes(api: Hono): void {
       previewConfig: null,
       commandsConfig: null,
       acceptCommit: true,
+      acceptAutoCommit: false,
       // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
       acceptGateCommand: null,
       // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
@@ -210,6 +211,7 @@ export function mountProjectRoutes(api: Hono): void {
       previewConfig: null,
       commandsConfig: null,
       acceptCommit: true,
+      acceptAutoCommit: false,
       // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
       acceptGateCommand: null,
       // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
@@ -303,6 +305,10 @@ export function mountProjectRoutes(api: Hono): void {
     if (b.acceptCommit !== undefined) {
       if (typeof b.acceptCommit !== "boolean") return c.json({ error: "acceptCommit 必须是布尔值" }, 400);
       patch.acceptCommit = b.acceptCommit;
+    }
+    if (b.acceptAutoCommit !== undefined) {
+      if (typeof b.acceptAutoCommit !== "boolean") return c.json({ error: "acceptAutoCommit 必须是布尔值" }, 400);
+      patch.acceptAutoCommit = b.acceptAutoCommit;
     }
     // 验收前置命令：空串/null 都是「这个项目不设门禁」，跟 previewCommand 一样只存一种写法。
     // 同样不校验命令本身能不能跑 —— 跑不起来由那一次门禁如实报，而不是在设置页拦着不让存。

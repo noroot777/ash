@@ -10,7 +10,7 @@ import {
   type MarkdownImageRef,
 } from "@ash/shared/markdown-images";
 import { UPLOADS_DIR } from "./paths.js";
-import { id } from "./util.js";
+import { newUploadName, sanitizeUploadStem } from "./upload-names.js";
 
 const MIME_EXT: Record<string, string> = {
   "image/png": "png",
@@ -68,15 +68,13 @@ function resultImages(value: unknown, allowBareBase64: boolean): ImageBytes[] {
  * 把它剥掉再显示（web `attachmentView`），所以这一段的长度不能随便改。
  *
  * 后半段优先用源文件自己的名字：卡片上写「wake-input-desktop.png」比「agent-image-1.png」
- * 有用得多。只保留文件名里安全的那部分，并强制用 mime 对应的扩展名 —— uploads 是按
- * 扩展名定 Content-Type 的，名字里写的扩展名不算数。
+ * 有用得多。字符集与上传接口共用一份（`upload-names.ts`）——两边各写一套的那段日子里，
+ * 这里早就放行了汉字，而扫描端按上传接口的 ASCII 集切，agent 图的中文名一律被拦腰截断。
+ * 扩展名一律用 mime 对应的那个：uploads 是按扩展名定 Content-Type 的，名字里写的不算数。
  */
 function uploadFileNameFor(name: string | undefined, ext: string, index: number): string {
-  const stem = basename(name ?? "", extname(name ?? ""))
-    .replace(/[^\w.\u4e00-\u9fa5-]+/g, "-")
-    .replace(/^[-.]+|[-.]+$/g, "")
-    .slice(0, 60);
-  return `${id()}-${stem || `agent-image-${index + 1}`}.${ext}`;
+  const stem = sanitizeUploadStem(name);
+  return newUploadName(`${stem || `agent-image-${index + 1}`}.${ext}`);
 }
 
 /**

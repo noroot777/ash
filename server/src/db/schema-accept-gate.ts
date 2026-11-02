@@ -21,8 +21,28 @@ export const acceptGateRuns = sqliteTable(
     /** running | passed | failed | interrupted | canceled */
     status: text("status").notNull(),
     exitCode: integer("exit_code"),
-    /** exit_code | timeout | spawn_failed | server_restarted | canceled */
+    /** exit_code | timeout | spawn_failed | server_restarted | canceled | …(旧记录可能还有 command_missing) */
     failure: text("failure"),
+    /**
+     * 这一次红了之后的归类结论（人话，见 accept-gate-miss.ts）。
+     *
+     * 为什么落盘：里面有几条**当时**的 git 事实（目标分支那会儿在哪个提交、落后几个），
+     * 而仓库此后还会动。现算会让一条已经结案的记录跟着漂，用户翻回来看到的就不是当时
+     * 那个结论了。
+     */
+    diagnosis: text("diagnosis"),
+    // 起跑**前**核到的入口事实(accept-gate-entry.ts 的 GateEntryProbe,JSON)。必须落盘:
+    // 结算可能发生在 server 重启之后,而跑完再核一次拿到的是跑完之后的状态 —— 第 2 轮
+    // 审查那条「打印启动提示、删掉自己、再报断言失败」的脚本就是这么被说成「没启动」的。
+    entryProbe: text("entry_probe"),
+    // 起跑前核到「这条命令点名的东西不在这份快照里」之后,这件事看起来是不是这次改动造成的
+    // (mine/unknown,两档都是「去核」)。**非空就等于起跑前核到它不在**,卡片据此分叉。
+    // 旧记录里可能还有 not-mine —— 那一档撤掉了(第 10 轮审查 F2),读的那几处都按 unknown 待。
+    missAttribution: text("miss_attribution"),
+    // 上面那两个结论(diagnosis / miss_attribution)是**哪一代判据**生成的,代号本体与为什么
+    // 需要它见 shared/src/accept-gate.ts 的 ACCEPT_GATE_DIAGNOSIS_GENERATION。空 = 旧代:
+    // 读侧一律不拿它当当前事实,只当历史原文摆出来(第 2 轮审查 F1)。
+    diagnosisGeneration: text("diagnosis_generation"),
     pid: integer("pid"),
     /**
      * 那个 pid 的**启动时间**：重启之后拿它核对「这个号还是不是当初那条命令」。
@@ -37,6 +57,12 @@ export const acceptGateRuns = sqliteTable(
     /** 被测的那棵树（任务工作区当时的 HEAD）。它一变，这次结果就不再算数。 */
     sourceCommit: text("source_commit"),
     sourceFingerprint: text("source_fingerprint"),
+    /**
+     * 当时**向上继承**的那些依赖树的安装声明摘要（工作区没装依赖时，它们就是全部依赖输入）。
+     * 和 source_fingerprint 分开存:那一项还要被「副本按原样复现」的对账重算，而快照住在 runs
+     * 目录下、向上继承的是另一条链。旧行 null = 换口径之前记的，一律当作不匹配、重跑一次。
+     */
+    sourceAmbient: text("source_ambient"),
     targetBranch: text("target_branch"),
     targetCommit: text("target_commit"),
     /** 当时合并会不会是纯 fast-forward（null = 这个任务没有合并目标）。 */
@@ -83,7 +109,12 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN pid_started_at TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN process_pending INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE accept_gate_runs ADD COLUMN source_fingerprint TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN source_ambient TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

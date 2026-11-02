@@ -11,7 +11,7 @@ import { mkdirSync, createWriteStream, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { finished } from "node:stream/promises";
 import { eq, sql } from "drizzle-orm";
-import type { DuetSpeaker, SessionRole, TurnImageRef, TurnTraceEvent } from "@ash/shared";
+import type { AgentEvent, DuetSpeaker, SessionRole, TurnImageRef } from "@ash/shared";
 import { isVisibleExecutionEvent } from "@ash/shared/native-work";
 import { db } from "../db/index.js";
 import { closeSessionTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, recordTurnSpan, resumedTurnFields } from "../session-turns.js";
@@ -35,8 +35,13 @@ import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verific
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
+import { clearTurnStall, trackTurnStall, type StallActions } from "../turn-stall.js";
+import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
+import { clearStallFailure } from "../turn-stall-verdict.js";
 import { cliConfigDirColumn, runEnvForOwner, sessionResumableHere } from "../auth/run-env.js";
-import { recordTurnStart } from "./timeline.js";
+import { recordTurnDiagnostic, recordTurnStart } from "./timeline.js";
+import { createTurnTrace } from "./turn-trace.js";
+import { withoutTurnIdentity } from "../turn-identity.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
 const AGREE_RE = /与对方一致[：:]\s*是/; // self-declared agreement with the opponent's conclusion
@@ -194,17 +199,13 @@ export async function runTurn(args: {
     cwd,
     sessionId: resumeCliId || undefined,
     // 个人 CLI 配置目录 + git 署名(§八)。
-    env: {
-      ...runEnv,
-      // **不给讨论者回合身份,并且要确保它是真的没有**:讨论者没有完成协议,duet 的结算
-      // 由这条流水线自己做,凭空发一个没登记进 tasks.activeTurnToken 的令牌只会让每个
-      // 消费者都拒收。但「不设」不等于「没有」—— 子进程默认继承 server 自己的环境,
-      // 而 ash 从一个 ash 任务里启动时那三个变量是有值的(实测:duet 的假 CLI 收到了
-      // **另一个任务**的 ASH_TASK_ID)。借来的身份比没有身份更糟,所以显式清掉。
-      ASH_TASK_ID: undefined,
-      ASH_TURN_TOKEN: undefined,
-      ASH_DIRECTION_TOKEN: undefined,
-    },
+    // **不给讨论者回合身份,并且要确保它是真的没有**:讨论者没有完成协议,duet 的结算
+    // 由这条流水线自己做,凭空发一个没登记进 tasks.activeTurnToken 的令牌只会让每个
+    // 消费者都拒收。但「不设」不等于「没有」—— 子进程默认继承 server 自己的环境,
+    // 而 ash 从一个 ash 任务里启动时那几个变量是有值的(实测:duet 的假 CLI 收到了
+    // **另一个任务**的 ASH_TASK_ID)。借来的身份比没有身份更糟,所以显式清掉 ——
+    // 清哪几个由 `withoutTurnIdentity` 一处说了算(别在这里自己列名字)。
+    env: withoutTurnIdentity({ ...runEnv }),
   });
   trackRun(taskId, handle);
   let cliId = handle.sessionId;
@@ -280,8 +281,9 @@ export async function runTurn(args: {
     // 库里那份喂下一次 /retry,返回值里那份喂本次运行的后续轮次,两处都要清。
     let sessionFault: SessionResumeFault | null = null;
     // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
-    const trace: TurnTraceEvent[] = [];
-    const TRACE_CAP = 200;
+    // 条数上限和「关键生命周期事件不被上限砍掉」归 `turn-trace.ts` 一处管(第 1 轮审查 F4)。
+    const traceLog = createTurnTrace();
+    const trace = traceLog.events;
     // 正文引用到的图:**逐处引用一条**,原样随回合落盘(见 TurnImageRef)。讨论区不走分段
     // 模型,这是它唯一能把「说那句话时的那一张」留住的地方。
     const images: TurnImageRef[] = [];
@@ -289,11 +291,44 @@ export async function runTurn(args: {
     // 回收责任归下面那道 finally,外层兜底只负责注销。认领之前(落库、建日志目录、开写流)
     // 任何一条出口都归起跑方,它必须连进程一起收 —— 三态见 runs.ts 顶部。
     adoptRun(handle);
+    // 回合级停滞看门狗(判据见 ../turn-stall.ts)。讨论这一路有自己的消费循环与结算,所以
+    // 落点也是它自己那两样:结构化过程 `trace` + 会话 trace(手机的失败现场从后者回放)。
+    const stallActions: StallActions = {
+      taskId,
+      warn: (text) => {
+        traceLog.push({ kind: "notice", label: "提示", detail: text }, true);
+        const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
+        appendSessionTrace(taskId, rowId, turnStart, event);
+        // **即时落进讨论页读的那份记录**,不等发言收尾(第 1 轮审查 F4):那段窗口按定义很长,
+        // 而刷新一下警告就没了的话,警告档承诺的「持久可见」在讨论这条链上压根没兑现。
+        recordTurnDiagnostic({ type: "agent.event", taskId, sessionId: rowId, role, event });
+      },
+      // 持久那一半单独一个动作:它要报成败,看门狗据此重投到确认(理由见 StallActions.project)。
+      project: (facts) => markSessionStalled(taskId, rowId, facts.since),
+      // `errorMsg` 非空 = 这一轮按失败结算(见下面 recordTurnSpan 的 outcome),而讨论链据此
+      // 中止整场 —— 对一个上游连不上的回合这正是想要的:接着往下发言只会把空话喂给对手。
+      // 所以讨论这一路不需要从 `turn-stall-verdict.ts` 读回结论:它的结算判据(`errorMsg`)本来就在
+      // 手边,而且退出码碰巧是 0 也照样判失败(见下面的 outcome 与 afterTurn)。
+      //
+      // 也不实现 `escalate`:这里的 `trip` 本身就是硬终止(单飞同理,见 single-run.ts)。
+      trip: (text) => {
+        errorMsg = `${errorMsg ?? ""}\n${text}`.trim();
+        out.write("✕ " + text + "\n");
+        const event: AgentEvent = { kind: "error", message: text };
+        traceLog.push({ kind: "notice", label: "执行诊断", detail: text }, true);
+        appendSessionTrace(taskId, rowId, turnStart, event);
+        // 同警告:熔断到这一轮真的收尾之间也有窗口(终止请求不是瞬时的),刷新得看得见。
+        recordTurnDiagnostic({ type: "agent.event", taskId, sessionId: rowId, role, event });
+        handle.kill();
+      },
+      resolve: (facts) => clearSessionStalled(taskId, rowId, facts.since),
+    };
     try {
       for await (const event of handle.events) {
         // 窄出口的「此刻还在等上游」同一处口径(见 session-waiting.ts):讨论这一路的正文
         // 也是攒在内存里的,照落盘产物反推一样会在恢复之后还说正在重试。
         trackSessionWaiting(rowId, handle, turnStart, event);
+        trackTurnStall(rowId, handle, turnStart, event, stallActions);
         const sessionNotice = isSessionScopeNotice(event);
         const emittedEvent = event.kind === "usage"
           ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
@@ -321,9 +356,9 @@ export async function runTurn(args: {
         } else if (event.kind === "attachment") {
           if (event.source) images.push({ path: event.path, source: event.source, ref: event.ref, pos: event.pos, lost: event.lost });
         } else if (event.kind === "tool") {
-          if (isVisibleExecutionEvent(event) && trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
+          if (isVisibleExecutionEvent(event)) traceLog.push({ kind: "tool", label: event.name, detail: event.detail });
         } else if (event.kind === "thinking") {
-          if (trace.length < TRACE_CAP) trace.push({ kind: "thinking", label: "思考过程", detail: event.text });
+          traceLog.push({ kind: "thinking", label: "思考过程", detail: event.text });
           out.write("〔思考〕" + event.text + "\n");
         } else if (event.kind === "system") {
           noticeMsg = `${noticeMsg ?? ""}\n${event.text}`.trim();
@@ -339,7 +374,7 @@ export async function runTurn(args: {
           // 也不会消失(第 5 轮审查 F1,已实测)。单飞与团队早就不写了,讨论是最后一处。
           // 等待期间手机看到的那句提示由窄出口 `/sessions/:id/notices` 给(权威状态在
           // session-waiting.ts)。
-          if (trace.length < TRACE_CAP) trace.push({ kind: "notice", label: "提示", detail: event.message });
+          traceLog.push({ kind: "notice", label: "提示", detail: event.message });
           // 同一条也进**会话** trace:讨论自己那份 transcript 只有讨论界面读,而窄出口的
           // 「失败现场」(真收在失败上的那一轮,照给它卡在哪儿)从会话 trace 回放 ——
           // 不落这一笔,手机在一场**真失败**的讨论上一条线索都拿不到(F1 要的「为当前等待
@@ -363,6 +398,7 @@ export async function runTurn(args: {
     } finally {
       untrackRun(taskId, handle);
       clearSessionWaiting(rowId, handle); // 这一轮的消费结束了,等待状态跟着撤(见 session-waiting.ts)
+      clearTurnStall(rowId, handle);
       // 消费循环结束 = 这一轮不再写盘,**这一刻**就撤:后面那些收尾写库再慢再失败,读端
       // 也不会把这条会话继续当成「还在写」（第 6 轮审查必须修 1）。保证由外面那道 finally
       // 给（它盖住全部出口),这里只是把窗口收窄到真实的「还在写」那一段。
@@ -436,6 +472,11 @@ export async function runTurn(args: {
       endedAt: endIso,
       outcome: peekStopped(taskId) ? "stopped" : exit !== 0 || errorMsg ? "failed" : "completed",
     });
+    // 这一轮结算完了,销账。讨论自己不读那份判决(判据是手边的 `errorMsg`,见上面 trip 的注释),
+    // 但**写是共享状态机写的** —— 熔断过的回合在那张表里有一条,不撤就一直占着(第 2 轮审查 F2:
+    // 三条链里只有这一条没销账)。撤在 `recordTurnSpan` 之后而不是消费循环的 finally 里:那一刻
+    // 还没结算,提前撤等于把「留到结算完」这条不变量在讨论这一路上破例。
+    clearStallFailure(rowId, turnStart);
     // Persist the turn so a reloaded duet can rebuild its timeline (no live
     // events). Includes errors and non-fatal notices so reload preserves the same meaning as live SSE.
     try {

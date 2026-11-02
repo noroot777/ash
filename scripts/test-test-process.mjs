@@ -1,11 +1,11 @@
+import { cleanupTestResources, withTestResources } from "./test-process-resources.mjs";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertProcessResult, runTestProcess } from "./test-process.mjs";
 import { IS_WINDOWS, isPidAlive } from "./platform.mjs";
-import { delay, disposeTestScopesSync, spawnTestFixture } from "./test-process-scope.mjs";
-import { cleanupTestResourcesSync, withTestResources } from "./test-process-resources.mjs";
+import { delay, disposeTestScopesSync, spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
 
 const complete = { status: 0, signal: null, stdout: "已就绪\n✅ 完成\n", stderr: "" };
 assert.equal(assertProcessResult(complete), complete);
@@ -24,8 +24,16 @@ for (const result of [
 
 const temporary = mkdtempSync(join(tmpdir(), "ash-test-process-fixture-"));
 const pidPath = join(temporary, "child.pid");
-let operationError;
-try {
+/**
+ * 按约定保留下来的那个后台进程,连同执行域交出来的**实例凭据**。
+ *
+ * 停它由调用方负责,但不许照 PID 文件里的号码裸杀(第 5 轮审查 F4:号码换了主人就会关掉
+ * 无关程序)—— 凭据里带着停它的那条路(POSIX 上是它自己的自退通道),`terminateInstance`
+ * 递纸条,这边核实它真的退了(第 6 轮审查 F1)。
+ */
+let preservedBackground = [];
+const cleanupProblems = [];
+await withTestResources(async () => {
   const output = await runTestProcess(process.execPath, ["-e", `
     require('node:fs').writeSync(1, 'x'.repeat(2 * 1024 * 1024) + 'stdout-tail');
     require('node:fs').writeSync(2, 'stderr-tail');
@@ -53,9 +61,14 @@ try {
   assert.equal(inherited.stdout.trim(), "stdout-complete");
   assert.equal(inherited.stderr.trim(), "stderr-complete");
   for (let attempt = 0; attempt < 100 && !existsSync(pidPath); attempt++) await delay(20);
-  assert.ok(isPidAlive(Number(readFileSync(pidPath, "utf8"))));
-  await inherited.dispose();
-  assert.ok(!isPidAlive(Number(readFileSync(pidPath, "utf8"))));
+  const backgroundPid = Number(readFileSync(pidPath, "utf8"));
+  assert.ok(isPidAlive(backgroundPid));
+  // 保留下来的进程必须**带着实例身份**交回调用方:这是它收尾时唯一该用的东西。
+  preservedBackground = inherited.preserved;
+  assert.deepEqual(preservedBackground.map((instance) => instance.pid), [backgroundPid],
+    "保留下来的那个后台进程没有连实例凭据一起交回来");
+  assert.ok(IS_WINDOWS ? preservedBackground[0].created : Number.isFinite(preservedBackground[0].born),
+    "实例凭据里没有出生时刻/代次,核不了身份就等于没有凭据");
 
   const tails = await runTestProcess(process.execPath, ["-e", `
     require('node:child_process').spawn(process.execPath, ['-e',
@@ -67,9 +80,17 @@ try {
   assert.match(tails.stderr, /late-stderr-tail/);
   const inheritedService = join(temporary, "inherited-service.cjs");
   writeFileSync(inheritedService, "setInterval(() => {}, 1000)");
+  // 继承了捕获流的服务**不算保留**(它占着我们要收的那两个流),所以这一档必须失败。
+  // 失败的名目是**遗留**而不是超时:父进程自己 0 退出收场得好好的,到点还没停的是它留下
+  // 的那个服务。两种诊断指向完全不同的两件事(一个该去看子进程为什么不结束,一个该去看
+  // 谁没清干净),混成一句「超时」只会把人支到错的地方。
   await assert.rejects(() => runTestProcess(process.execPath, ["-e", `
     require('node:child_process').spawn(process.execPath, [${JSON.stringify(inheritedService)}], { detached: true, stdio: 'inherit' }).unref();
-  `], { timeout: 800, preserveScripts: [inheritedService] }), /ETIMEDOUT/);
+  `], { timeout: 800, preserveScripts: [inheritedService] }), (error) => {
+    assert.equal(error.code, "ESTRANDED", "父进程正常退出、后代没停 = 遗留,不是超时");
+    assert.match(error.message, /仍在运行/);
+    return true;
+  });
 
   const sideEffect = join(temporary, "late-side-effect");
   const descendantPid = join(temporary, "descendant.pid");
@@ -116,8 +137,20 @@ try {
   await broken.dispose();
   assert.ok(existsSync(descendantPid));
   assert.ok(!isPidAlive(Number(readFileSync(descendantPid, "utf8"))));
-} catch (error) { operationError = error; }
-finally {
-  cleanupTestResourcesSync([disposeTestScopesSync, () => rmSync(temporary, { recursive: true, force: true })], operationError);
-}
+}, [async () => {
+  // 保留下来的那些由**实例凭据**停(不是 PID 文件里的号码)。`finally` 里不 assert:上面
+  // 真出错时那个错才是主报告,这里只记一笔,出了 finally 再断言。
+  for (const instance of preservedBackground) {
+    const shot = terminateInstance(instance);
+    if (shot.error) cleanupProblems.push(`保留进程 ${shot.pid} 终止失败: ${shot.error.message}`);
+    else if (!shot.sent && !shot.requested) cleanupProblems.push(`保留进程 ${shot.pid} ${shot.why}`);
+  }
+  // 自退那条路是**请求**:请完要核实它真的退了,不许把「纸条递出去了」当成「它停了」。
+  for (const instance of preservedBackground) {
+    for (let round = 0; round < 50 && isPidAlive(instance.pid); round += 1) await delay(40);
+    if (isPidAlive(instance.pid)) cleanupProblems.push(`保留进程 ${instance.pid} 请它自己退之后 2s 还在,本层不按号码补刀`);
+  }
+  if (cleanupProblems.length) process.stderr.write(`${cleanupProblems.join("\n")}\n`);
+  assert.deepEqual(cleanupProblems, [], "保留进程没能按实例停掉");
+}, disposeTestScopesSync, () => rmSync(temporary, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 })]);
 console.log("✓ 子进程执行域:超时后代/拒绝信号/登记失败均清场,保留诊断及晚写双流,独立日志服务显式登记");

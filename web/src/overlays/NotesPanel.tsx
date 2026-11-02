@@ -13,19 +13,15 @@ import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { Button } from "../components/ui.tsx";
-import { api } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
 import { filterNotes, NOTE_CONVERSION_FILTERS, type NoteConversionFilter } from "./notesFilter.ts";
+import { uniquePaths, useNoteDrafts } from "./useNoteDrafts.ts";
 
 const titleOf = (body: string) => body.split(/\r?\n/).map((line) => line.trim()).find(Boolean)?.slice(0, 42) || "无标题随手记";
-const ordered = (rows: Note[]) => [...rows].sort((a, b) => b.updatedAt - a.updatedAt);
-const uniquePaths = (paths: string[]) => [...new Set(paths)];
 const noteTime = (value: number) => new Date(value).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-type NoteDraft = { id: string | null; body: string; attachments: string[] };
-type SaveState = "saved" | "pending" | "saving" | "error";
 type Position = { left: number; top: number };
 type DragState = {
   pointerId: number;
@@ -158,11 +154,6 @@ function useMovableNotesPanel() {
   return { panelRef, panelStyle, isFullscreen, toggleFullscreen, onPointerDown };
 }
 
-const sameDraft = (left: NoteDraft, right: NoteDraft) => left.id === right.id
-  && left.body === right.body
-  && left.attachments.length === right.attachments.length
-  && left.attachments.every((path, index) => path === right.attachments[index]);
-
 export type NoteTaskDraft = {
   body: string;
   attachments: string[];
@@ -177,124 +168,31 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
   onConvert: (draft: NoteTaskDraft) => void;
   notify: (message: string) => void;
 }) {
-  const emptyDraft = (): NoteDraft => ({ id: null, body: "", attachments: [] });
-  const initialDraft = emptyDraft();
-  const [rows, setRows] = useState<Note[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [draft, setDraft] = useState<NoteDraft>(initialDraft);
   const [query, setQuery] = useState("");
   const [conversionFilter, setConversionFilter] = useState<NoteConversionFilter>("all");
-  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(true);
-  const [saveState, setSaveState] = useState<SaveState>("saved");
-  const [deleting, setDeleting] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const movable = useMovableNotesPanel();
   const uploads = useAttachments();
-  const rowsRef = useRef<Note[]>([]);
-  const draftRef = useRef<NoteDraft>(initialDraft);
-  const savedDraftRef = useRef<NoteDraft>(initialDraft);
-  const saveInFlightRef = useRef<Promise<boolean> | null>(null);
-
-  const updateRows = useCallback((update: (current: Note[]) => Note[]) => {
-    const next = update(rowsRef.current);
-    rowsRef.current = next;
-    setRows(next);
-  }, []);
-  const updateDraft = useCallback((next: NoteDraft) => {
-    draftRef.current = next;
-    setDraft(next);
-    setSaveState(sameDraft(next, savedDraftRef.current) ? "saved" : "pending");
-  }, []);
-
-  const flushDraft = useCallback(async (): Promise<boolean> => {
-    while (true) {
-      if (saveInFlightRef.current) {
-        if (!await saveInFlightRef.current) return false;
-        continue;
-      }
-      const snapshot = draftRef.current;
-      if (sameDraft(snapshot, savedDraftRef.current)) return true;
-      const isNew = snapshot.id === null;
-      if (!snapshot.body.trim()) {
-        if (isNew) return true;
-        setSaveState("error");
-        notify("随手记内容不能为空");
-        return false;
-      }
-      setSaveState("saving");
-      let request: Promise<boolean>;
-      const persist = isNew
-        ? api.createNote({ projectId: project.id, body: snapshot.body, attachments: snapshot.attachments })
-        : api.patchNote(snapshot.id!, { body: snapshot.body, attachments: snapshot.attachments });
-      request = persist.then(
-        (saved) => {
-          updateRows((current) => ordered(current.some((note) => note.id === saved.id)
-            ? current.map((note) => note.id === saved.id ? saved : note)
-            : [saved, ...current]));
-          if (isNew && draftRef.current.id === null) {
-            const promoted = { ...draftRef.current, id: saved.id };
-            draftRef.current = promoted;
-            setDraft(promoted);
-            setActiveId(saved.id);
-          }
-          savedDraftRef.current = { id: saved.id, body: saved.body, attachments: saved.attachments };
-          setSaveState(sameDraft(draftRef.current, savedDraftRef.current) ? "saved" : "pending");
-          return true;
-        },
-        (reason: unknown) => {
-          setSaveState("error");
-          notify(reason instanceof Error ? reason.message : "随手记保存失败");
-          return false;
-        },
-      ).finally(() => {
-        if (saveInFlightRef.current === request) saveInFlightRef.current = null;
-      });
-      saveInFlightRef.current = request;
-      if (!await request) return false;
-    }
-  }, [notify, project.id, updateRows]);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    void api.notes(project.id).then((notes) => {
-      if (!alive) return;
-      const nextRows = ordered(notes);
-      const startNew = initialNoteId === "__new__";
-      const first = startNew ? null : (initialNoteId ? nextRows.find((note) => note.id === initialNoteId) : undefined) ?? nextRows[0] ?? null;
-      const nextDraft = first ? { id: first.id, body: first.body, attachments: first.attachments } : emptyDraft();
-      rowsRef.current = nextRows;
-      draftRef.current = nextDraft;
-      savedDraftRef.current = nextDraft;
-      setRows(nextRows);
-      setActiveId(first?.id ?? null);
-      setDraft(nextDraft);
-      setPicked(new Set());
-      setSaveState("saved");
-      setEditing(startNew || !first);
-      uploads.clear();
-    }).catch((reason: unknown) => {
-      if (alive) notify(reason instanceof Error ? reason.message : "随手记读取失败");
-    }).finally(() => {
-      if (alive) setLoading(false);
-    });
-    return () => { alive = false; };
-  }, [initialNoteId, notify, project.id, uploads.clear]);
-
-  useEffect(() => {
-    if (sameDraft(draft, savedDraftRef.current)) return;
-    const timer = window.setTimeout(() => { void flushDraft(); }, 800);
-    return () => window.clearTimeout(timer);
-  }, [draft, flushDraft]);
+  // 草稿、落盘、删除全归这一层：它只留 rows 和 draft 两份真相，其余（脏不脏、存没存上、
+  // 当前选中哪条）一律推导。见 useNoteDrafts.ts 顶部那段说明。
+  // 逐项取出来用：返回的函数都是稳定身份，可以直接写进 effect 依赖。
+  const {
+    rows, draft, active, loading, saveState, dirty, deleting, pendingDelete,
+    edit, flush, leave, latest, openNote, openNew, askDelete, cancelDelete, confirmDelete,
+  } = useNoteDrafts({
+    projectId: project.id,
+    initialNoteId,
+    notify,
+    onLoaded: (blank) => { setEditing(blank); setPicked(new Set()); uploads.clear(); },
+  });
 
   useEffect(() => {
     if (!uploads.attachments.length) return;
-    const attachments = uniquePaths([...draftRef.current.attachments, ...uploads.attachments.map((item) => item.path)]);
-    updateDraft({ ...draftRef.current, attachments });
+    const paths = uploads.attachments.map((item) => item.path);
+    edit((current) => ({ ...current, attachments: uniquePaths([...current.attachments, ...paths]) }));
     uploads.clear();
-  }, [updateDraft, uploads.attachments, uploads.clear]);
+  }, [edit, uploads.attachments, uploads.clear]);
 
   // 传上来的附件是由上面那个 effect 折进**当前**草稿的，所以「换一条 / 关掉面板 / 转任务」
   // 都不能在上传落地前发生：面板已经关了就没人接住结果（附件白传），中途换了一条就会
@@ -324,10 +222,6 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     void action?.();
   }, [deferred, notify, uploads.error, uploadsSettled]);
 
-  useEffect(() => () => { void flushDraft(); }, [flushDraft]);
-
-  const active = rows.find((note) => note.id === activeId) ?? null;
-  const dirty = !sameDraft(draft, savedDraftRef.current);
   const newDraft = draft.id === null;
   const filtered = useMemo(
     () => filterNotes(rows, query, conversionFilter, draft),
@@ -339,9 +233,10 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
         : "还没有随手记";
   const saveStatus = newDraft && !draft.body.trim() && !draft.attachments.length ? "输入后自动保存"
     : saveState === "saving" ? "正在保存…"
-      : saveState === "pending" ? "等待自动保存"
-        : saveState === "error" ? "保存失败，可重试"
-          : "已自动保存";
+      : saveState === "empty" ? "随手记不能为空，这次清空没保存"
+        : saveState === "pending" ? "等待自动保存"
+          : saveState === "error" ? "保存失败，可重试"
+            : "已自动保存";
   const saveButtonLabel = !draft.body.trim() ? "保存"
     : saveState === "saving" ? "保存中…"
       : saveState === "error" ? "重试保存"
@@ -349,82 +244,51 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
           : "已保存";
 
   const close = useCallback(() => {
-    afterUploads(async () => { if (await flushDraft()) onClose(); });
-  }, [afterUploads, flushDraft, onClose]);
+    afterUploads(async () => { if (await leave()) onClose(); });
+  }, [afterUploads, leave, onClose]);
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (confirmDelete) return;
+      if (pendingDelete) return;
       if (event.key === "Escape") close();
       // 这一下**故意不跟**「输入框发送键」那一档（设置 → 默认规则 → 输入框）：笔记本来就
       // 自动保存，这里的 ⌘/Ctrl+回车只是「现在就存」，而笔记里换行是最常用的一个键 ——
       // 把裸回车也算进来，等于每敲一个换行就存一次盘，还顺手把焦点以外的回车都接走。
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
-        void flushDraft();
+        void flush();
       }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [close, confirmDelete, flushDraft]);
+  }, [close, flush, pendingDelete]);
 
   const openTask = (taskId: string) => {
-    afterUploads(async () => { if (await flushDraft()) onTask(taskId); });
+    afterUploads(async () => { if (await leave()) onTask(taskId); });
   };
   const select = (note: Note) => afterUploads(async () => {
-    if (note.id === draftRef.current.id || !await flushDraft()) return;
-    const target = rowsRef.current.find((item) => item.id === note.id);
-    if (!target) return;
-    const next = { id: target.id, body: target.body, attachments: target.attachments };
-    savedDraftRef.current = next;
-    draftRef.current = next;
-    setActiveId(target.id);
-    setDraft(next);
-    setSaveState("saved");
+    if (!await openNote(note.id)) return;
     setEditing(false);
     uploads.clear();
   });
   const create = () => afterUploads(async () => {
-    if (!await flushDraft()) return;
-    const next = emptyDraft();
-    savedDraftRef.current = next;
-    draftRef.current = next;
-    setActiveId(null);
-    setDraft(next);
-    setSaveState("saved");
+    if (!await openNew()) return;
     setEditing(true);
     setQuery("");
     setConversionFilter("all");
     uploads.clear();
   });
-  const remove = async () => {
-    const targetId = draftRef.current.id;
-    if (!targetId) return;
-    setDeleting(true);
-    try {
-      await api.deleteNote(targetId);
-      const remaining = rowsRef.current.filter((note) => note.id !== targetId);
-      updateRows(() => remaining);
+  const remove = () => {
+    void confirmDelete().then(({ deleted, blank }) => {
+      if (!deleted) return;
       setPicked((current) => {
-        const nextPicked = new Set(current);
-        nextPicked.delete(targetId);
-        return nextPicked;
+        const next = new Set(current);
+        next.delete(deleted);
+        return next;
       });
-      const first = remaining[0] ?? null;
-      const nextDraft = first ? { id: first.id, body: first.body, attachments: first.attachments } : emptyDraft();
-      savedDraftRef.current = nextDraft;
-      draftRef.current = nextDraft;
-      setActiveId(first?.id ?? null);
-      setDraft(nextDraft);
-      setSaveState("saved");
-      setEditing(!first);
+      setEditing(blank);
       uploads.clear();
-      notify("随手记已删除");
-    } catch (reason) {
-      notify(reason instanceof Error ? reason.message : "随手记删除失败");
-    } finally {
-      setDeleting(false);
-    }
+    });
   };
   const togglePicked = (noteId: string) => {
     setPicked((current) => {
@@ -435,15 +299,18 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     });
   };
   const convert = () => afterUploads(async () => {
-    if (deleting || !await flushDraft()) return;
-    const selectedNotes = rowsRef.current.filter((note) => picked.has(note.id));
-    const current = rowsRef.current.find((note) => note.id === draftRef.current.id) ?? null;
-    const notes = selectedNotes.length ? selectedNotes : current ? [current] : [];
-    if (!notes.length) return;
+    if (deleting || !await leave()) return;
+    // 取的是**服务端那份**而不是草稿：没落盘的改动不该跟着进新任务。而且要读 latest()
+    // —— 刚才那次 leave() 可能已经把内容存上去并更新了列表。
+    const snapshot = latest();
+    const selected = snapshot.rows.filter((note) => picked.has(note.id));
+    const editingNote = snapshot.rows.find((note) => note.id === snapshot.draft.id) ?? null;
+    const chosen = selected.length ? selected : editingNote ? [editingNote] : [];
+    if (!chosen.length) return;
     onConvert({
-      body: notes.map((note) => note.body).join("\n\n---\n\n"),
-      attachments: uniquePaths(notes.flatMap((note) => note.attachments)),
-      noteIds: notes.map((note) => note.id),
+      body: chosen.map((note) => note.body).join("\n\n---\n\n"),
+      attachments: uniquePaths(chosen.flatMap((note) => note.attachments)),
+      noteIds: chosen.map((note) => note.id),
     });
   });
   return (
@@ -496,7 +363,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
               ) : null}
             </div>
             {editing ? (
-              <textarea autoFocus value={draft.body} onChange={(event) => updateDraft({ ...draftRef.current, body: event.target.value })} onPaste={uploads.onPaste} onBlur={() => setEditing(false)} placeholder="记下临时想法、路径、验证清单…" />
+              <textarea autoFocus value={draft.body} onChange={(event) => edit((current) => ({ ...current, body: event.target.value }))} onPaste={uploads.onPaste} onBlur={() => setEditing(false)} placeholder="记下临时想法、路径、验证清单…" />
             ) : (
               <div
                 className="note-editor-preview"
@@ -518,7 +385,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
             )}
             <ImagePreviewGroup isolated>
               <div className="note-attachments">
-                {draft.attachments.map((path) => { const view = attachmentView(path); return <div key={path}>{view.image && view.url ? <PreviewableImage src={view.url} alt={view.name} /> : <span><File size={16} />{view.name}</span>}<button type="button" onClick={() => updateDraft({ ...draftRef.current, attachments: draftRef.current.attachments.filter((item) => item !== path) })} aria-label={`移除 ${view.name}`}><X size={11} /></button></div>; })}
+                {draft.attachments.map((path) => { const view = attachmentView(path); return <div key={path}>{view.image && view.url ? <PreviewableImage src={view.url} alt={view.name} /> : <span><File size={16} />{view.name}</span>}<button type="button" onClick={() => edit((current) => ({ ...current, attachments: current.attachments.filter((item) => item !== path) }))} aria-label={`移除 ${view.name}`}><X size={11} /></button></div>; })}
               </div>
               <UploadAttachmentList
                 attachments={uploads.attachments}
@@ -537,13 +404,13 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
                 : `${saveStatus} · 正文失焦后显示 Markdown`}</span>
           <div className="notes-footer-actions">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={deleting} />
-            {active && <Button variant="danger" disabled={deleting} onClick={() => afterUploads(async () => { if (await flushDraft()) setConfirmDelete(true); })}><Trash size={13} />删除</Button>}
+            {active && <Button variant="danger" disabled={deleting} onClick={() => afterUploads(askDelete)}><Trash size={13} />删除</Button>}
             <Button variant={picked.size ? "primary" : "secondary"} disabled={deleting || (!picked.size && !draft.body.trim())} onClick={() => convert()}><NotePencil size={13} />{picked.size ? `创建任务（${picked.size}）` : "转为新任务"}</Button>
-            <Button variant={picked.size ? "secondary" : "primary"} disabled={!dirty || !draft.body.trim() || deleting || saveState === "saving"} onClick={() => { void flushDraft().then((saved) => { if (saved) notify("随手记已保存"); }); }}>{saveButtonLabel}</Button>
+            <Button variant={picked.size ? "secondary" : "primary"} disabled={!dirty || !draft.body.trim() || deleting || saveState === "saving"} onClick={() => { void flush().then((result) => { if (result === "saved") notify("随手记已保存"); else if (result === "unsavable") notify("随手记不能为空"); }); }}>{saveButtonLabel}</Button>
           </div>
         </footer>
       </section>
-      {confirmDelete && active && <ConfirmDialog title="删除随手记" message={`确定删除“${titleOf(active.body)}”？此操作不可撤销。`} confirmLabel="删除" danger busy={deleting} onClose={() => setConfirmDelete(false)} onConfirm={() => { setConfirmDelete(false); void remove(); }} />}
+      {pendingDelete && active && <ConfirmDialog title="删除随手记" message={`确定删除“${titleOf(active.body)}”？此操作不可撤销。`} confirmLabel="删除" danger busy={deleting} onClose={cancelDelete} onConfirm={remove} />}
     </div>
   );
 }

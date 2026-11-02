@@ -29,7 +29,7 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 const { ensureSchema, db } = await import("../src/db/index.js");
 const { projects, sessions, tasks } = await import("../src/db/schema.js");
 const { continueTask, runTask } = await import("../src/orchestrator.js");
-const { claimTurn, freezeStartingTurn } = await import("../src/runs.js");
+const { claimOwnTurn, freezeStartingTurn } = await import("../src/runs.js");
 
 await ensureSchema();
 const stamp = new Date().toISOString();
@@ -204,9 +204,11 @@ console.log("✓ 起跑失败留下持久可见的说明，并把没送达的原
   git("branch", "-D", "feat/gone-too");
 
   // 冻结标记只对「已占位、还没 spawn」的回合有效，所以先替调用方占住这一回合。
-  assert.ok(claimTurn("t-base-continue"), "前提：这一回合占得住");
+  // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+  const held = claimOwnTurn("t-base-continue");
+  assert.ok(held, "前提：这一回合占得住");
   assert.ok(freezeStartingTurn("t-base-continue"), "前提：撤回标记落在了这一回合上");
-  await continueTask("t-base-continue", "接着做", { agent: "codex", turnHeld: true });
+  await continueTask("t-base-continue", "接着做", { agent: "codex", turnHeld: held });
 
   const row = (await db.select().from(tasks).where(eq(tasks.id, "t-base-continue"))).at(0);
   assert.equal(row?.worktreeBase, "main", "前提：这一轮同样把登记的基线落库换成了当前分支");

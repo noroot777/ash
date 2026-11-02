@@ -76,6 +76,12 @@ const SETTING_SPECS = {
   // 它是实例面的键(不在 PERSONAL_SETTING_KEYS 里),所以 personal-settings.ts 天然
   // 只让实例管理员改 —— 不需要在这里再写一道权限。
   sharedHostCli: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
+  // 首启向导走完没有。个人面的键,所以多人模式下各人各一份(personal-settings.ts)。
+  // 写它的只有向导自己那一下「进入 ash」,所以不校验内容,只拦住长度。
+  onboardedAt: {
+    ok: (v: unknown) => typeof v === "string" && v.length <= 40,
+    hint: "必须是不超过 40 字符的字符串（ISO 时间串，空串 = 还没走完向导）",
+  },
 } satisfies { [K in keyof AppSettings]: { ok: (v: unknown) => boolean; hint: string } };
 
 // 上面两项对 PATCH 永远说不,但读取仍要认得住盘里的值 —— 所以读侧另有一份校验。

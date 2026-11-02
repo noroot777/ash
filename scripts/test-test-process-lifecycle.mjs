@@ -1,3 +1,4 @@
+import { TestProcessScope as JobScope } from "./test-process-job.mjs";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -29,6 +30,32 @@ await withTestResources(async () => {
   disposeTestProcessResourcesSync();
   console.log("✓ 已删除目录的恢复/重复清理/退出清理均幂等,不再产生 started ENOENT");
 
+  if (process.platform !== "win32") {
+    const retired = makeScope();
+    assert.ok(retired.boundaryId);
+    await retired.stop();
+    retired.remove();
+    assert.equal(retired.boundaryId, null);
+    retired.records = () => { throw new Error("RETIRED_SCOPE_RESCANNED"); };
+    fs.mkdirSync(retired.directory);
+    const victim = join(retired.directory, "unrelated");
+    fs.writeFileSync(victim, "retained");
+    await withTestResources(async () => {
+      assert.deepEqual(await retired.inspect(), { rows: [], escaped: [] });
+      assert.deepEqual(await retired.active(), []);
+      assert.deepEqual(await retired.survey(), { ok: true, rows: [] });
+      await retired.stop();
+      retired.strikeBoundSync();
+      assert.equal(fs.existsSync(join(retired.directory, "stopped")), false);
+      assert.equal(fs.readFileSync(victim, "utf8"), "retained");
+      assert.throws(() => retired.remove(), { code: "EOWNERSHIP" });
+    }, [() => fs.rmSync(retired.directory, { recursive: true, force: true })]);
+    const completed = await runTestProcess(process.execPath, ["-e", "console.log('RETIRED_RESULT')"]);
+    await completed.dispose();
+    await completed.dispose();
+    console.log("✓ POSIX 退役后不再扫描已释放的边界 inode,重复 dispose 幂等,旧路径替换不被写入或删除");
+  }
+
   const partial = makeScope();
   fs.writeFileSync(join(partial.directory, "leftover.lock"), "partial removal");
   const remove = fs.rmSync;
@@ -50,16 +77,18 @@ await withTestResources(async () => {
   assert.equal(fs.existsSync(partial.directory), false);
   const damaged = makeScope();
   fs.unlinkSync(join(damaged.directory, "started"));
-  fs.writeFileSync(join(damaged.directory, "domain.json"), "{broken");
+  const metadata = process.platform === "win32" ? "domain.json" : "boundary.id";
+  fs.writeFileSync(join(damaged.directory, metadata), "{broken");
   assert.throws(() => new TestProcessScope(damaged.directory), SyntaxError);
-  assert.equal(fs.readFileSync(join(damaged.directory, "domain.json"), "utf8"), "{broken");
-  fs.unlinkSync(join(damaged.directory, "domain.json"));
+  assert.equal(fs.readFileSync(join(damaged.directory, metadata), "utf8"), "{broken");
+  fs.unlinkSync(join(damaged.directory, metadata));
   damaged.remove();
   console.log("✓ 部分删除缺少 started 的残壳经真实退出子进程恢复并回收,重复清理不缓存永久失败");
 
   const simulatedScopes = [];
   await withTestResources(async () => {
-    const simulated = makeScope();
+    const simulated = new JobScope();
+    owned.push(simulated);
     simulatedScopes.push(simulated);
     const domain = { name: "simulated-domain", executable: "simulated-controller" };
     simulated.domain = domain;
@@ -71,7 +100,7 @@ await withTestResources(async () => {
       assert.equal(operation, "state");
       return JSON.stringify({ exists, processes });
     };
-    assert.deepEqual(await simulated.active(), processes);
+    assert.deepEqual(await simulated.active(), processes.map((row) => ({ ...row, created: row.born })));
     assert.throws(() => simulated.remove(), /尚有活动进程/);
     await simulated.stop();
     assert.deepEqual(await simulated.active(), []);
@@ -79,7 +108,8 @@ await withTestResources(async () => {
     await simulated.stop();
     simulated.remove();
 
-    const denied = makeScope();
+    const denied = new JobScope();
+    owned.push(denied);
     simulatedScopes.push(denied);
     denied.domain = domain;
     const queryError = Object.assign(new Error("INJECTED_ACCESS_DENIED"), { code: "EACCES" });

@@ -16,6 +16,7 @@ import {
 } from "./diagnostics.js";
 import { detachedInfo, spawnControllableForRun, type DetachedPaths } from "./detached.js";
 import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
+import { codexErrorEvent } from "./codex-error-event.js";
 import type { RunHandle } from "./types.js";
 import { resolveSteerText, type SteerText } from "./steer-text.js";
 import { findArchivedRollout, findRollout, readCodexContext } from "./codex-rollout.js";
@@ -394,12 +395,15 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       case "item/plan/delta":
         if (p.delta) push({ kind: "thinking", text: p.delta });
         break;
-      case "error":
-        if (!p.willRetry && p.error?.message) {
-          structuredErrors.push(p.error.message);
-          push({ kind: "error", message: p.error.message });
-        }
+      case "error": {
+        // 判据(重试中 = notice、重试完了还是错 = 裸 error)在 codex-error-event.ts ——
+        // 子智能体那条路(native-agent-activity.ts)读的是同一份,别在这儿再内联一次。
+        const reported = codexErrorEvent(p);
+        if (!reported) break;
+        if (reported.counted) structuredErrors.push(reported.event.message);
+        push(reported.event);
         break;
+      }
       case "turn/completed": void completeTurn(p.turn).catch((error) => finish(1, String(error))); break;
     }
   };

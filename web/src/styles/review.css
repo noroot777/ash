@@ -4,15 +4,20 @@
    执行者记录卡等)。 */
 .single-review-workspace,.team-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
 .single-review-subbar,.team-review-subbar { display:flex; min-height:52px; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
-/* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。失败详情排在
-   整行操作之后再换行铺满顶栏下沿,不去挤验收按钮那一行。 */
-.single-review-subbar .team-accept-failure,.team-review-subbar .team-accept-failure { order:1; flex:1 0 100%; margin:0; }
-/* 「合并后不提交」那张常驻卡同理:它是一整段说明加动作,排在验收按钮那一行之后铺满顶栏下沿。 */
-.single-review-subbar .pending-merge-card,.team-review-subbar .pending-merge-card { order:2; flex:1 0 100%; margin:0; }
-/* 验收前置命令那张卡同理:它是一整段状态加动作(还可能带日志尾巴和一个输入框),
-   必须自己占满顶栏下沿的一整行,不能当成验收按钮旁边的一个 flex 项挤在那一行里。 */
-.single-review-subbar .accept-gate-card,.team-review-subbar .accept-gate-card { order:3; flex:1 0 100%; margin:0; }
-.single-review-subbar > div:first-child,.team-review-subbar > div:first-child { min-width:0; flex:1; }
+.accept-workspace-commit { display: flex; flex: 1 0 100%; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in lch, var(--amber) 35%, var(--line)); border-radius: 9px; background: color-mix(in lch, var(--amber) 6%, var(--panel)); padding: 11px 12px; color: var(--amber); font-size: 11px; }
+.accept-workspace-commit > svg { flex-shrink: 0; margin-top: 2px; }
+.accept-workspace-commit > div:first-of-type { min-width: 0; flex: 1; }
+.accept-workspace-commit p { margin: 5px 0; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
+.accept-workspace-commit small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.6; }
+.accept-workspace-commit-actions { display: flex; flex-shrink: 0; gap: 5px; }
+.accept-workspace-commit button { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); padding: 4px 8px; color: var(--ink); font-size: 11px; }
+.accept-workspace-commit button:disabled { cursor: not-allowed; opacity: .5; }
+.accept-workspace-commit button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) { .accept-workspace-commit { flex-wrap: wrap; } .accept-workspace-commit-actions { width: 100%; justify-content: flex-end; } }
+/* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。它带来的那串状态卡
+   (失败详情、待提交、验收前置命令…)各自铺满顶栏下沿一整行,摆放次序就是它们在
+   AcceptanceControls 里出现的次序 —— 这些由两个顶栏都带的 .acceptance-host 统一管,
+   原先在这里逐张卡列的那三条白名单已并入它(见 team-review.css)。 */
 .single-review-subbar b,.single-review-subbar small,.team-review-subbar b,.team-review-subbar small { display:block; }
 .single-review-subbar b,.team-review-subbar b { font-size:12.5px; }
 .single-review-subbar small,.team-review-subbar small { color:var(--faint); font-size:10px; }

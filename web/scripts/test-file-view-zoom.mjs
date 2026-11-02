@@ -7,9 +7,11 @@ import { createServer } from "vite";
 // 中间栏摊开的文件全文 / 单文件 diff 也能放大：跟审查里的分支 diff 同一种层（`.zoom-layer`）
 // ——铺满窗口、盖住左边的任务栏、让开右边的 inspector（文件树还要接着点）、Esc 退出。
 //
-// 放大态挂在 `useFileView` 上而不是各自组件里，所以这里重点钉两条别处测不到的：
+// 放大态挂在 `useFileView` 上而不是各自组件里，所以这里重点钉三条别处测不到的：
 // ① 在文件树里换一个文件、在 diff 与全文之间互切，放大都不该掉（组件换了，状态没换地方）；
-// ② 关掉这一块内容就退出放大，下次打开是原样。
+// ② 关掉这一块内容就退出放大，下次打开是原样；
+// ③ 把右侧面板一个个关光（整条 inspector 从 DOM 里消失）时，三个查看器都该铺满而不是挤
+//    成左缘一条细条——它们共用同一个 `useZoomLayer`，修在共用层，就得三处各验一遍。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
@@ -41,10 +43,12 @@ const entry = (path) => ({
   symlink: false,
 });
 
+const dirEntry = (path) => ({ ...entry(path), kind: "dir", size: 0 });
+
 const listing = {
   root: { path: "/tmp/file-view-zoom", branch: "feature/zoom", gitRepo: true, source: "session" },
   path: "",
-  entries: [entry("changed.ts"), entry("clean.ts")],
+  entries: [dirEntry("nested"), entry("changed.ts"), entry("clean.ts")],
   truncated: false,
   git: {
     changes: [{ path: "changed.ts", origPath: null, kind: "modified", source: "unstaged" }],
@@ -65,6 +69,19 @@ try {
     const url = new URL(route.request().url());
     const json = (body) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
     if (url.pathname.endsWith("/files")) return json(listing);
+    if (url.pathname.endsWith("/file/overview")) {
+      const path = url.searchParams.get("path");
+      return json({
+        root: listing.root,
+        target: { path, name: path.split("/").at(-1), kind: "dir", size: 0, mtime: "2026-09-15T00:00:00.000Z", absPath: `/tmp/file-view-zoom/${path}`, symlink: false },
+        stats: { files: 2, dirs: 0, bytes: 128, truncated: false },
+        entries: [entry(`${path}/inner.ts`)],
+        git: { repo: true, tracked: 2, dirty: 0, untracked: 0, untrackedSamples: [], error: null },
+        trash: { available: true, label: "废纸篓", reason: null },
+        readOnly: null,
+        busy: { running: false, reason: null },
+      });
+    }
     if (url.pathname.endsWith("/scm/diff")) {
       return json({
         path: url.searchParams.get("path"),
@@ -104,7 +121,58 @@ try {
   const exitButton = page.getByRole("button", { name: "退出放大 · Esc" });
   const diffView = page.locator("[aria-label='工作区改动']");
   const fileView = page.locator("[aria-label='文件查看']");
-  const inspector = page.locator("#fixture-inspector");
+  const folderView = page.locator("[aria-label='文件夹详情']");
+  // 真的 `InspectorHost`，不是手搓的常驻壳：面板关光时整条会从 DOM 里消失（见 fixture 头注）。
+  const inspector = page.locator(".inspector-host");
+  const dock = page.locator("#fixture-dock");
+
+  // 「让位跟对了」的判据：右缘顶住 inspector 的左缘（一条都没有时顶住窗口右缘，也就是
+  // 铺满），下缘顶住工作区那一行的下缘（底部坞在那条线之下）。两轴都是观察器 → setState →
+  // 重渲染，尺寸刚变完的那一帧层还落后一拍，不等它追上就读数值会偶发。
+  const settle = async (what) => {
+    try {
+      await page.waitForFunction(() => {
+        const layer = document.querySelector(".zoom-layer")?.getBoundingClientRect();
+        if (!layer) return false;
+        const host = document.querySelector(".inspector-host")?.getBoundingClientRect();
+        const dockRow = document.querySelector(".workspace-system-layout > .workspace-shell").getBoundingClientRect();
+        return Math.round(layer.right) === Math.round(host ? host.left : window.innerWidth)
+          && Math.round(layer.bottom) === Math.round(dockRow.bottom);
+      }, undefined, { timeout: 2000 });
+    } catch {
+      const now = await page.evaluate(() => {
+        const layer = document.querySelector(".zoom-layer")?.getBoundingClientRect();
+        const host = document.querySelector(".inspector-host")?.getBoundingClientRect();
+        return { layerRight: layer && Math.round(layer.right), hostLeft: host ? Math.round(host.left) : null, width: layer && Math.round(layer.width) };
+      });
+      assert.fail(`${what}：放大层没有贴上该让的位，实测 ${JSON.stringify(now)}`);
+    }
+  };
+
+  // 把面板一个个关光，整条 inspector 卸载 → 放大层该铺满可用宽度；再从底部坞重开，让位
+  // 该回来。旧实现在进放大态时就把 host 节点捕获进闭包，节点卸载后 rect 全是 0，right 被
+  // 算成整个视口宽，层当场挤成左缘一条细条（实测 width=25，文字一字一行竖排）。
+  const closeAllPanelsAndReopen = async (what) => {
+    await inspector.getByRole("button", { name: "关闭文件" }).click();
+    await inspector.getByText("这一轮没有备忘。").waitFor();
+    await settle(`${what}：关掉第一个面板后`);
+    await inspector.getByRole("button", { name: "关闭备忘" }).click();
+    await inspector.waitFor({ state: "detached" });
+    await settle(`${what}：关光所有面板后`);
+    const spread = await zoomLayer.boundingBox();
+    assert.equal(
+      Math.round(spread.width),
+      page.viewportSize().width,
+      `${what}：没有 inspector 时放大层该铺满可用宽度，而不是挤成左缘一条细条`,
+    );
+    assert.ok(
+      Math.round(spread.height) < page.viewportSize().height,
+      `${what}：下缘该仍让开底部坞，不能跟着一起退化`,
+    );
+    await dock.getByRole("button", { name: "重开右侧面板" }).click();
+    await inspector.waitFor();
+    await settle(`${what}：重开面板后`);
+  };
 
   await page.getByText("feature/zoom", { exact: true }).waitFor();
   await row("changed.ts").click();
@@ -113,6 +181,7 @@ try {
 
   await zoomButton.click();
   await zoomLayer.waitFor();
+  await settle("刚进放大态");
 
   // 铺满窗口，右边让开 inspector 那一列：放大是把文件铺开来看，文件树得留着继续点。
   const viewport = page.viewportSize();
@@ -121,11 +190,12 @@ try {
     viewport.width - (inspectorBox.x + inspectorBox.width) >= 8,
     "fixture 该保留右侧内边距，inspector 不能正好贴死窗口右缘",
   );
+  const dockBox = await dock.boundingBox();
   const box = await zoomLayer.boundingBox();
   assert.deepEqual(
-    { x: box.x, y: box.y, width: box.width, height: box.height },
-    { x: 0, y: 0, width: inspectorBox.x, height: viewport.height },
-    "放大层该占满 inspector 左边的整块窗口",
+    { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) },
+    { x: 0, y: 0, width: Math.round(inspectorBox.x), height: Math.round(dockBox.y) },
+    "放大层该占满 inspector 左边、底部坞上边的那整块窗口",
   );
   assert.equal(await zoomLayer.locator("[aria-label='工作区改动']").count(), 1, "放大的该是那份 diff 本身");
 
@@ -137,15 +207,24 @@ try {
   );
   assert.ok(overRail, "放大层该压住左边的任务栏");
   const overInspector = await page.evaluate(
-    ([x, y]) => !!document.elementFromPoint(x, y)?.closest("#fixture-inspector"),
+    ([x, y]) => !!document.elementFromPoint(x, y)?.closest(".inspector-host"),
     [inspectorBox.x + inspectorBox.width / 2, inspectorBox.y + 20],
   );
   assert.ok(overInspector, "inspector 不该被放大层盖住");
+  const overDock = await page.evaluate(
+    ([x, y]) => !!document.elementFromPoint(x, y)?.closest("#fixture-dock"),
+    [40, dockBox.y + dockBox.height / 2],
+  );
+  assert.ok(overDock, "底部坞不该被放大层盖住");
+
+  // 三个查看器各走一遍「把面板一个个关光再重开」：共用层改对了，三处才都跟得上。
+  await closeAllPanelsAndReopen("单文件 diff");
 
   // 放大态下点「查看文件全文」：换的是同一块内容的另一种读法，放大不该掉。
   await zoomLayer.getByRole("button", { name: "查看文件全文" }).click();
   await zoomLayer.locator("[aria-label='文件查看']").waitFor();
   assert.equal(await zoomLayer.count(), 1, "diff → 全文 切换把放大态弄丢了");
+  await closeAllPanelsAndReopen("文件全文");
   await zoomLayer.getByRole("button", { name: "查看改动" }).click();
   await zoomLayer.locator("[aria-label='工作区改动']").waitFor();
   assert.equal(await zoomLayer.count(), 1, "全文 → diff 切回来把放大态弄丢了");
@@ -155,10 +234,20 @@ try {
   await zoomLayer.locator("[aria-label='文件查看']").waitFor();
   assert.equal(await zoomLayer.count(), 1, "点文件树换文件不该把放大层关掉");
 
+  // 文件夹详情跟它们抢同一块位置，也共用同一个放大层：从文件树里点开那颗行尾按钮。
+  // 行尾那颗按钮平时不占位（行高只有 24px），hover 才露出来——真实用户也是先划过去。
+  await row("nested").hover();
+  await inspector.getByRole("button", { name: "打开 nested 文件夹详情" }).click();
+  await zoomLayer.locator("[aria-label='文件夹详情']").waitFor();
+  assert.equal(await zoomLayer.count(), 1, "点开文件夹详情不该把放大层关掉");
+  await settle("文件夹详情放大");
+  await closeAllPanelsAndReopen("文件夹详情");
+  assert.equal(await folderView.count(), 1, "关面板那一串走完，摊开的还该是文件夹详情");
+
   // Esc 退出，内容回到原位。
   await page.keyboard.press("Escape");
   await zoomLayer.waitFor({ state: "detached" });
-  assert.equal(await page.locator("#fixture-main [aria-label='文件查看']").count(), 1, "退出放大后内容该回到原位");
+  assert.equal(await page.locator("#fixture-main [aria-label='文件夹详情']").count(), 1, "退出放大后内容该回到原位");
 
   // 也能用按钮退出：只用鼠标的用户得有出口。
   await zoomButton.click();
@@ -169,7 +258,7 @@ try {
   // 关掉这一块内容就退出放大：下次打开是原样，而不是莫名其妙又铺满一屏。
   await zoomButton.click();
   await zoomLayer.waitFor();
-  await zoomLayer.getByRole("button", { name: "关闭文件，回到会话" }).click();
+  await zoomLayer.getByRole("button", { name: "关闭文件夹，回到会话" }).click();
   await zoomLayer.waitFor({ state: "detached" });
   await page.getByTestId("center-empty").waitFor();
   await row("changed.ts").click();

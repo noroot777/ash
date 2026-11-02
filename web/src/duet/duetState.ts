@@ -48,9 +48,11 @@ export type DuetState = { turns: DuetTurn[]; gate: DuetGate | null };
 // 落盘的回合行:events 是后加的,旧 transcript 里没有(缺省当作没有执行过程)。
 // awaiting 只在回合进行中有意义,落盘的都是已结束的回合,所以不进这份投影。
 export type PersistedDuetTurn = Omit<DuetTurn, "events" | "done" | "raised" | "awaiting"> & { raised?: boolean; events?: ExecutionEvent[] };
+// `agent.event` 也会**单独**落进 transcript:发言还没结束就得让人看见的那些(停滞警告、熔断
+// 诊断),见服务端 `duet/timeline.ts` 的 `recordTurnDiagnostic`。
 export type PersistedDuetEntry =
   | PersistedDuetTurn
-  | Extract<ServerEvent, { type: "duet.gate" | "duet.progress" }>;
+  | Extract<ServerEvent, { type: "duet.gate" | "duet.progress" | "agent.event" }>;
 
 export const emptyDuet = (): DuetState => ({ turns: [], gate: null });
 
@@ -60,6 +62,18 @@ function isPersistedGate(entry: PersistedDuetEntry): entry is Extract<ServerEven
 
 function isPersistedProgress(entry: PersistedDuetEntry): entry is Extract<ServerEvent, { type: "duet.progress" }> {
   return (entry as { type?: string }).type === "duet.progress";
+}
+
+/**
+ * 发言进行中就落下来的那条诊断(停滞警告 / 熔断)。
+ *
+ * 为什么回放也认它:讨论页刷新只读 transcript,而整轮记录要等发言收尾才写 —— 警告出现到发言
+ * 结束之间刷新,警告就没了(第 1 轮审查 F4)。它的形状跟实时 SSE 那条**一模一样**,所以这里
+ * 不需要第二套解释,直接交给同一个 `applyDuetEvent`;发言真收尾时整轮记录会把这个回合整体
+ * 替掉(`events` 以落盘那份为准),所以不会出现两份。
+ */
+function isPersistedAgentEvent(entry: PersistedDuetEntry): entry is Extract<ServerEvent, { type: "agent.event" }> {
+  return (entry as { type?: string }).type === "agent.event";
 }
 
 function speakerOf(role: string): DuetSpeaker {
@@ -188,6 +202,7 @@ export function rebuildDuetState(entries: PersistedDuetEntry[]): DuetState {
   for (const entry of entries) {
     if (isPersistedGate(entry)) state = applyDuetEvent(state, entry);
     else if (isPersistedProgress(entry)) state = applyDuetEvent(state, entry);
+    else if (isPersistedAgentEvent(entry)) state = applyDuetEvent(state, entry);
     else {
       const completed: DuetTurn = { ...entry, raised: !!entry.raised, events: entry.events ?? [], awaiting: false, done: true };
       const turns = [...state.turns];

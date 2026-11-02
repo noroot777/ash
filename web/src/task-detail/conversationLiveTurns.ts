@@ -214,6 +214,8 @@ export function appendLiveTimeline(
         isAnswer: entry.isAnswer,
         bySystem: entry.bySystem,
         monitorWake: entry.monitorWake,
+        sessionId: entry.sessionId,
+        sessionRole: entry.sessionRole ?? sessions.find((session) => session.id === entry.sessionId)?.role,
       });
       continue;
     }

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AuthState } from "@ash/shared";
 import { authApi } from "../lib/authApi.ts";
 import { ApiError } from "../lib/apiClient.ts";
+import { FirstRunWizard } from "../onboarding/FirstRunWizard.tsx";
 import { AuthShell } from "./AuthShell.tsx";
 import { ClaimPage } from "./ClaimPage.tsx";
 import { LoginPage } from "./LoginPage.tsx";
@@ -40,10 +41,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
     try {
       setState(await authApi.state());
       setError(null);
+      return true;
     } catch (e) {
       // 拿不到状态 = 服务端不可达或比前端旧。**不放行** —— 放行会让工作台带着一堆
       // 401 渲染出来,那种画面看不出成因。
       setError(e instanceof ApiError ? e.message : "连不上 ash 服务端");
+      // 已经有旧状态时下面那块错误屏不出来(它只认 `!state`),所以失败必须**回给
+      // 调用方**:等着这一次刷新换屏的人只有它自己知道该怎么收场。
+      return false;
     }
   }, []);
 
@@ -86,6 +91,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return <LoginPage pendingJoin={route?.kind === "join" ? route.token : null} onDone={refresh} />;
   }
   if (route?.kind === "join") return <ProjectJoinPage token={route.token} onDone={leaveRoute} />;
+
+  // 首启向导的后半段(供应商 / 执行器 / 项目)。它在 Provider **里面** —— 那三步都要
+  // 读「我是谁」(多人模式下新建项目的路径前缀锁死在自己的目录里),而读 context 的前提
+  // 是身份已经确认。前半段(SetupWizard)相反:那时还没确认,所以它在外面。
+  if (state.needsOnboarding) {
+    return (
+      <AuthContext.Provider value={{ state, refresh }}>
+        <FirstRunWizard onDone={refresh} />
+      </AuthContext.Provider>
+    );
+  }
 
   return <AuthContext.Provider value={{ state, refresh }}>{children}</AuthContext.Provider>;
 }

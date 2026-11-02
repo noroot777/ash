@@ -68,7 +68,7 @@ try {
         sourceTaskId: source.id, expectedSourceTask: source }), /方向身份/);
       await db.update(tasks).set({ activeDirectionToken: null }).where(eq(tasks.id, review.ownerTaskId));
     }
-    const checked = await checkRegressionConclusion(review.taskId, review.directory, "verified", mode === "accepted_merge", review.basis);
+    const checked = await checkRegressionConclusion(review.taskId, review.directory, "verified", review.basis);
     await db.update(schema.regressionEvidence).set({ generation: "changed-generation" })
       .where(eq(schema.regressionEvidence.directory, review.directory));
     let attempted = false;

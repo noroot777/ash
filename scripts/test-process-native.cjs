@@ -6,7 +6,7 @@ let build;
 
 function requirePlatform() {
   if (process.platform !== "win32") {
-    throw Object.assign(new Error(`EOWNERSHIP: ${process.platform} 缺少可证明完整所有权的原生测试执行域; 未启动测试命令`), { code: "EOWNERSHIP" });
+    throw Object.assign(new Error(`EOWNERSHIP: 原生 Job 工具仅支持 Windows，当前平台 ${process.platform}`), { code: "EOWNERSHIP" });
   }
 }
 

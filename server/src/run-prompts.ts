@@ -3,6 +3,7 @@ import { STRICT_DONE_PROTOCOL } from "./settle-status.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { railStalledAtRun } from "./workflows.js";
 import { EXECUTOR_REGRESSION_RECORDING } from "@ash/shared/free-workflow";
+import { craftRulesFor, type CraftContext } from "./craft-rules.js";
 
 // 单任务每一轮 prompt 上下拼的那些**固定措辞**:前言、完成协议、续聊尾巴、工作目录
 // 重建的告警。跟 team/prompts.ts 同一个位置 —— orchestrator.ts 只留「什么时候拼哪一段」
@@ -13,6 +14,16 @@ import { EXECUTOR_REGRESSION_RECORDING } from "@ash/shared/free-workflow";
 // needs input it can still ask, and the user replies via continueTask (resume).
 export const AUTONOMY =
   "你在一个无人值守的自动化环境中运行，没有人能实时回复你。请尽量自主完成：遇到多个合理方案时，选最稳妥的一个并在结果中说明假设与取舍；不要停下来等待人工确认，除非信息确实不足以继续。\n\n";
+// 规划回合（`/plan on`）的正文。整条消息只有用户正文加这一句 —— 完成协议、方向身份、
+// 审查提醒一概不拼，这是这条路一贯的形态（见 orchestrator.ts 的 `planning` 分支）。
+//
+// 产出质量规则**必须经过这里**：一条全新会话的第一条消息完全可能就是规划回合（用户先
+// `/plan on` 讨论方案、再 `/plan off` 动手），而动手那一轮走的是同一条会话的续跑、按
+// 「规则只贴一次」不会再贴 —— 不接这一处，「先规划后实施」整条路一个字都收不到。
+export const PLANNING_TURN = (craft: CraftContext, userText: string) =>
+  craftRulesFor(craft) + userText +
+  "\n\n本回合只讨论计划，不实施、不确认任务完成。使用 /plan off 后再开始实施。";
+
 // Prefix for an agent invited into an existing task via @-mention. It joins in
 // the SAME working directory, so it should read the current state before acting.
 export const COLLAB_INVITE =
@@ -39,19 +50,19 @@ export const SYS_MARKER = "〔系统〕继续（从中断处）";
 // 宽松模式(ASH_LAX_DONE,典型:预览实例)下这三段一律退化成空串 —— 那台 ash
 // 的 MCP 对 agent 不可达,交代了它也做不到,理由见 single-run.ts 的 STRICT_DONE_PROTOCOL。
 export const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
-  ? "验收辅路:验证回合不适用 accept_task；这一轮只负责给出验证结论并留证。"
+  ? "验收辅路:验证回合不适用 accept_task；这一轮只给验证结论并留证。"
   : free
-    ? EXECUTOR_REGRESSION_RECORDING + "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task。派审和预览由用户按需触发，任务完成后由用户从统一验收页验收。"
+    ? EXECUTOR_REGRESSION_RECORDING + "自由工作流:完成后只调 complete_task，不要调 report_stage / accept_task；派审、预览与验收都由用户触发。"
   : sharedTeamWorker
     ? EXECUTOR_REGRESSION_RECORDING + "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
-    : EXECUTOR_REGRESSION_RECORDING + `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance", directionToken="<最新【当前方向身份】token>")；` +
-      `只有用户明确表示「验收通过/可以合并」时，调用 accept_task(taskId="${taskId}")，不要自行运行 git merge、worktree remove 或 branch -d。`;
+    : EXECUTOR_REGRESSION_RECORDING + `验收辅路:交人工验收前可调 report_stage(taskId="${taskId}", stage="awaiting_acceptance", directionToken="<最新【当前方向身份】token>")；` +
+      `只有用户明确说「验收通过/可以合并」时才调 accept_task(taskId="${taskId}")，不要自行 git merge / worktree remove / branch -d。`;
 export const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `【完成协议】本任务在 ash 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 ash MCP 的 complete_task(taskId="${taskId}", directionToken="<最新【当前方向身份】token>")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 并同样传最新 directionToken 写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)}\n\n`;
+  `【完成协议】本任务在 ash 的 taskId 是 ${taskId}。确定目标已达成时,结束前调用 ash MCP 的 complete_task(taskId="${taskId}", directionToken="<最新【当前方向身份】token>");不确认就结束,本回合按未完成记为 failed。要等外部条件就改用 pause_task,同样传最新 directionToken 并写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)}\n\n`;
 export const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(ash 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 并传最新【当前方向身份】directionToken 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task 并传同一 token。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
+  `\n\n(ash 完成协议:taskId=${taskId}。本回合结束时目标已达成就先调 complete_task 并传最新【当前方向身份】directionToken,否则按未完成记 failed;要等外部条件则用 pause_task 并传同一 token。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
 
 export const DIRECTION_PROTOCOL = (token: string) =>
   !STRICT_DONE_PROTOCOL ? "" :
@@ -73,11 +84,11 @@ export const FOLLOW_UP_REMINDER = (
 ) =>
   !STRICT_DONE_PROTOCOL ? "" :
   `\n\n(ash:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。` +
-  `不确认不会把这一轮判失败 —— 没调 complete_task,任务状态就原样留在「${FOLLOW_UP_LABEL[from] ?? from}」。` +
-  `但**只要你这一轮动了代码(改了文件、提交),结束前就必须调用 complete_task(taskId="${taskId}")确认**:` +
+  `不确认不会判这一轮失败 —— 没调 complete_task,状态就原样留在「${FOLLOW_UP_LABEL[from] ?? from}」。` +
+  `但**只要这一轮动了代码(改了文件、提交),结束前就必须调用 complete_task(taskId="${taskId}")**:` +
   (free
-    ? `确认用于记录本轮任务完成；已预约的审查会在执行回合正常结束后独立触发。`
-    : `任务身上可能挂着等这声确认才往下跑的执行链,你未必看得见它们,不确认它们就一直停在原地。`) +
+    ? `这声确认用于记录本轮完成；已预约的审查会在执行回合正常结束后独立触发。`
+    : `任务身上可能挂着等这声确认才往下跑的执行链,你未必看得见,不确认它们就停在原地。`) +
   `纯回答问题、没动代码则不用确认。` +
   `${rail}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
 

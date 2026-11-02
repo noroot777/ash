@@ -16,7 +16,7 @@ import { bus } from "./bus.js";
 import { closeSessionTurns, recordTurnSpan } from "./session-turns.js";
 import { scanForTitle } from "./auto-title.js";
 import {
-  adoptRun, bindNativeSteer, finalizeAbandonedRun, takeSteered, takeStopped,
+  adoptRun, bindNativeSteer, finalizeAbandonedRun, takeSteered, takeStopped, turnIdentity,
 } from "./runs.js";
 import { now } from "./util.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
@@ -31,10 +31,18 @@ import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "./tr
 import { noteAgentEventUpload } from "./uploads.js";
 import { isExecutionNotice, isSessionScopeNotice } from "./session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "./session-waiting.js";
+import {
+  clearTurnStall, resumeTrippedTurn, trackTurnStall, type StallActions,
+} from "./turn-stall.js";
+import { stallUnverifiableText } from "./turn-stall-text.js";
+import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
+import { restoreStallVerdict } from "./turn-stall-persist.js";
+import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
 import { createExecutionCloser, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
+import { noteReviewerChannelGap, noteTurnChannelGap } from "./review-channel-gap.js";
 import { afterSettlement, settleTaskStatus } from "./settle-status.js";
 import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 import { markCliGoalStarted, persistRunGoal } from "./task-cli-state.js";
@@ -136,6 +144,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // executors/session-lost.ts）。认下来的话这一轮收尾时要把失效 id 从库里清掉，
   // 否则每一次重试都在 --resume 同一条坏会话。
   let sessionFault: SessionResumeFault | null = null;
+  // 看门狗熔断掉这一轮的话,**收流那一刻**取走的那份结论(赋值点在下面的 finally,理由在那儿)。
+  let watchdogFailure: StallVerdict | null = null;
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
   let head = "";
   let pendingTraceText = "";
@@ -208,6 +218,43 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     }
   };
 
+  // 一条**持久可见**的红字:trace(按它发生的位置回放)+ `.md`(落盘产物)+ 当场推送。三处缺
+  // 一不可 —— 项目规矩是「判据是用户刷新页面后仍能看出」,少了 trace 那一笔刷新就没了。
+  // 熔断和「结局核实不了」两条路都用它,所以只留一份:措辞归 turn-stall.ts,送达归这里。
+  const emitTurnError = (text: string) => {
+    const event: AgentEvent = { kind: "error", message: text };
+    persistTrace(event);
+    writeRunError(out, text);
+    publishEvent(event);
+  };
+
+  // 回合级停滞看门狗(判据与两档动手见 turn-stall.ts)。这三件动作是这条链专属的部分 ——
+  // 判据一个字都不在这儿,三条消费链共用同一份。
+  const stallActions: StallActions = {
+    taskId,
+    // 警告档走 trace:它排在执行过程里它发生的那个位置(不是回合结尾),而且 level:"notice"
+    // 保证它不改变这一轮的成败 —— 上游恢复后正常答完的那一轮仍然算成功。
+    warn: (text) => {
+      const event: AgentEvent = { kind: "error", message: text, level: "notice", affectsTurn: false };
+      persistTrace(event);
+      publishEvent(event);
+    },
+    // 持久那一半单独一个动作:它要报成败,看门狗据此重投到确认(理由见 StallActions.project)。
+    project: (facts) => markSessionStalled(taskId, sessId, facts.since),
+    // 熔断档:说出来 + 杀进程。「这一轮失败」这个结论**不在这儿记** —— 看门狗在调 trip 之前
+    // 就已经把它钉在回合身份上了(turn-stall-verdict.ts),下面收尾那一段连 `executionFailed` 带
+    // 结算用的退出码一起从那一份读。从前这里是 `sawExecutionError = true`:那一位只喂得到
+    // 会话行和回合区间,`settleTaskStatus` 压根看不见它(它只收到原始退出码),于是被我们杀掉
+    // 的回合照样能落 done —— 被杀的 CLI 多半报不出非零(第 1 轮审查第 2 条)。
+    //
+    // 不实现 `escalate`:单飞的 `trip` 本身就是硬终止(三层击杀),没有「请求了没人理」那一档。
+    trip: (text) => {
+      emitTurnError(text);
+      a.handle.kill();
+    },
+    resolve: (facts) => clearSessionStalled(taskId, sessId, facts.since),
+  };
+
   if (a.nativeSteer) {
     bindNativeSteer(taskId, a.handle, {
       agentType,
@@ -237,10 +284,34 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   (offsetTimer as { unref?: () => void } | null)?.unref?.();
 
   try {
+    // **接管一个仍然存活的回合时,先把尚未兑现的熔断判决装回来,并且接着把它终止掉。**
+    //
+    // detached 的 agent 活得过 server 重启(executors/detached.ts),而判决原先只活在进程内存
+    // 里:熔断已经作出、终止请求还没兑现(codex 的 kill 先发 interrupt,另设 2 秒回收)时 server
+    // 退出,重启接管那个还活着的进程,新进程的 Map 空着 —— 上游一恢复,这一轮就按成功结算、
+    // 任务落 done,而用户那边早已看到「已自动终止本回合并按失败结算」(审查 F3,已实测)。
+    //
+    // 装回来只是让结算读得到结论;**终止义务也得接着兑现** —— 判决已经作出、话已经说出去了,
+    // 让它继续跑下去就是第二次失信。正常起跑走到这里一律是 null(那一轮没有落盘的判决)。
+    //
+    // 兑现走 `resumeTrippedTurn`,**不在这里手抄一遍「发句诊断 + 杀一次」**:那四步跟
+    // `stallActions.trip` 一模一样,抄一份就会跟它漂;更要紧的是义务本身的语义(终止义务只有
+    // 两个出口、宽限回收、退场销账)全住在看门狗那张表里,手动杀一次拿不到(见那个函数的注释)。
+    const carried = await restoreStallVerdict(sessId, a.turnStart);
+    if (carried && a.turnStart) {
+      // 确凿熔断过的 → 接着兑现那份终止义务;只是**核实不了**的 → 只说不杀:我们并不知道它
+      // 熔断过没有,拿一个不确定的义务去杀一个可能完全健康的 agent 比让它跑完更糟。登记已经由
+      // `restoreStallVerdict` 做完了,结算那一段读的是同一张表,这里不再另写判据。
+      if (carried.kind === "tripped") resumeTrippedTurn(sessId, a.handle, a.turnStart, carried, stallActions);
+      else emitTurnError(stallUnverifiableText(carried.reason));
+    }
     for await (const event of a.handle.events) {
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
       // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
       trackSessionWaiting(sessId, a.handle, a.turnStart, event);
+      // 「这一轮还在往前走吗」(turn-stall.ts):同一条事件流、同一个持有者语义,只是它要
+      // 回答的不是「此刻在等」而是「等到该动手了没有」。
+      trackTurnStall(sessId, a.handle, a.turnStart, event, stallActions);
       if (goalStartPending && a.handle.goalStarted?.()) { await markCliGoalStarted(taskId, agentType, event.kind === "session" ? event.cliSessionId : cliSessionId); goalStartPending = false; }
       if (event.kind === "session") {
         if (event.cliSessionId !== cliSessionId) {
@@ -319,6 +390,14 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   } finally {
     // 流异常中断时 done 事件压根不会来,内存里那条等待状态就得在这儿撤(见 session-waiting.ts)。
     clearSessionWaiting(sessId, a.handle);
+    // **判决在这一刻就取走,不留到下面去读**(第 2 轮审查 F3,已实测)。流结束了 = 不会再有
+    // 新的熔断写进这个回合身份,所以此刻读到的就是最终结论;而从这里到下面结算之间隔着
+    // `cleanup()` 和一串写库 await。判决的回收现在只认「读者自己销账」(下面那句
+    // `clearStallFailure`),所以这一笔取值已经不是必需的 —— 留着是因为它把「读」和「销」摆成
+    // 了同一段里的一对,下一个人改结算顺序时看得见配对关系,不必再去 turn-stall-verdict.ts 确认
+    // 回收策略。
+    watchdogFailure = stallFailure(sessId, a.turnStart);
+    clearTurnStall(sessId, a.handle);
     if (offsetTimer) clearInterval(offsetTimer);
     const cleaned = await a.handle.cleanup?.().catch((error): CleanupResult => {
       console.warn(`[ash] failed to clean descendants after task ${taskId}:`, error);
@@ -352,7 +431,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   // 会话 UPDATE 都可能抛,抛了就走不到 `recordTurnSpan`,残留的活动登记会让读端把这条会话
   // 当成「还在写」（第 6 轮审查必须修 1）。入口的 finally 还兜一道。
   closeSessionTurns(sessId);
-  const executionFailed = !stopped && (exitStatus !== 0 || sawExecutionError);
+  // 看门狗熔断掉的这一轮:结论由它写下,**上面收流那一刻就取走了**(理由见那里)。
+  const executionFailed = !stopped && (exitStatus !== 0 || sawExecutionError || !!watchdogFailure);
   // CLI 否认了这条会话：把失效的 id 连同由它派生的三件套恢复命令一起清掉。清了之后
   // orchestrator 的 `resuming`（判据就是「这条会话行上有没有 cli_session_id」）自然为
   // 假，下一次运行走全新会话那条路 —— 不必在别处再加一个「要不要续」的开关。
@@ -435,7 +515,21 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     agentType,
   }).catch(() => 0);
   await persistRunGoal(taskId, agentType, a.handle, exitStatus, stopped);
-  const settled = await settleTaskStatus(taskId, exitStatus, stopped, sessId);
+  // **结算看的退出码必须反映熔断**。库里那一列(上面刚写的 `exitStatus`)记真实值不动;
+  // 结算这一笔得换成非零,因为被我们杀掉的 CLI 报不出非零 —— claude 走信号退出时
+  // `claude-stream.ts` 写的是 `code ?? 0`(信号退出 `code` 为 null,于是 0)。照原样交进去,
+  // 一个永远连不上上游的回合会走进「exit 0」那几支:本轮早先交过卷就落 done,名下还有活动
+  // 哨兵就落 paused —— 时间线上红着写「按失败结算」,任务却显示完成(第 1 轮审查第 2 条)。
+  const settleExit = watchdogFailure && exitStatus === 0 ? 1 : exitStatus;
+  // 退出码只够让它**不落 done**;要让它别落成「检查点暂停」,得把原因本身交进去 ——
+  // 提问 / 续跑指令 / 持续目标那三支都排在非零退出之前,一个留过续跑指令的回合于是显示
+  // 「暂停中 + 继续」,而同一轮区间记 failed(第 3 轮审查 F1,已实测)。落位规则仍然只有
+  // 结算那一个单点,这里只负责如实报原因。
+  const settled = await settleTaskStatus(taskId, settleExit, stopped, sessId,
+    // 原因原样交进去:判决自己带着种类,这里不做翻译 —— 两份同义枚举之间的手工映射,加一种
+    // 原因时漏掉就会被 `else` 静默吞掉(上一版就是那个形状)。
+    watchdogFailure ? { kind: watchdogFailure.kind, detail: watchdogFailure.reason } : null);
+  clearStallFailure(sessId, a.turnStart); // 这一轮结算完了,销账(见那个文件里的水位)
   clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
   // 这一轮到底改没改东西:账在回合开头就清过了,这里只管「白清了要放回去」——
   // 一个字节没改就把游标/轮数/验收阶段原样放回,屋子是临时搭的还顺手拆掉。
@@ -461,6 +555,17 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       executionFailed,
     );
   }
+  // 审查旁路回合收尾了，却一次 ash MCP 都没调过：把原因说出来（review-channel-gap.ts）。
+  // **排在 afterSettlement 之后** —— 那一步里自由工作流才写下「未能正常给出结论，已停止
+  // 自动链」，这一句紧跟其后才读得通（先结果、后原因）。说不出来就什么都不说，绝不因此
+  // 影响这一轮的落位。
+  if (role === "reviewer") {
+    // 回合身份在结算期间还占着（orchestrator 在 consumeSingleRun 之后才 releaseTurn），
+    // 这一轮绑的是哪一次审查就从那里整份读。
+    const review = turnIdentity(taskId)?.review ?? null;
+    await noteReviewerChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType, stopped: !!stopped, review })
+      .catch((error) => { console.error(`[ash] noteReviewerChannelGap(${taskId}) failed:`, error); return false; });
+  }
   if (settled.note) {
     // 结算说明落成**会话旁注**（持久 system 行 + SSE），跟会话轮换旁注同一条道：
     // 它讲的是「这一轮为什么落成这个状态」，不是 agent 干的活，也不是执行器报的错。
@@ -475,6 +580,12 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   flushSessionNotices();
   out.end();
+  // 普通回合 exit 0 却没交卷：会话证据点名 ash MCP 没连上时，把原因接在结算说明后面说出来
+  // （先结果、后原因；只认确定证据，见 review-channel-gap.ts 的 noteTurnChannelGap）。
+  if (role !== "reviewer" && settled.failureReason === "missing_completion_confirmation") {
+    await noteTurnChannelGap({ taskId, sessId, turnStart: a.turnStart, agentType })
+      .catch((error) => { console.error(`[ash] noteTurnChannelGap(${taskId}) failed:`, error); return false; });
+  }
   } finally {
     // 正常路径上上面那句已经把旁注清空了，这里是**异常路径**的保险：清库、重放、结算
     // 任何一步抛错，都不能让「这条会话作废了、下次会丢上下文」只活在实时 SSE 里 ——

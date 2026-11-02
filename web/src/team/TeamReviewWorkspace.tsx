@@ -21,7 +21,11 @@ import { AcceptCommitChoice, useAcceptCommitDefault } from "../review/AcceptComm
 import { PendingMergeCard } from "../review/PendingMergeCard.tsx";
 import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { ACCEPT_GATE_STATUS_LABELS } from "@ash/shared/accept-gate";
-import { AcceptGateCard } from "../review/AcceptGateCard.tsx";
+import { AcceptGateCardView } from "../review/AcceptGateCard.tsx";
+import { useAcceptGate } from "../review/useAcceptGate.ts";
+import { AcceptanceWorkspaceCommit, AutoCommitOutcomeNotice } from "../review/AcceptanceWorkspaceCommit.tsx";
+import { acceptanceAutoCommitMessage, type AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
+import { useWorkspaceCommitVersion } from "../review/workspaceCommit.ts";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -90,7 +94,29 @@ function acceptanceMessage(task: TaskListItem, commit = true): string {
 const mergeTargetLabel = (task: TaskListItem): string =>
   task.acceptedTargetBranch || task.mergeTargetBranch || task.worktreeBase || "未确定（验收时解析）";
 
-function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {  const handedOff = failure.reason === "merge_conflict" && failure.conflictHandoff?.notified === true;
+/**
+ * 「这次跳过」在确认框里的那句话。**上一次跑成什么样，决定这一按到底意味着什么** ——
+ * 四种结局四句话，少分一种就会出现自相矛盾的提示（原先把「上一次通过」也说成「没有跑出
+ * 结论」）。一次都没跑过（null）是最常见的那一种：用户在卡上就决定这次不验它。
+ */
+function skipConsequence(latest: AcceptGateView | null): string {
+  if (!latest) return "这一按等于这次不验它。";
+  if (latest.status === "failed") return "那条命令上一次是红的，这一按等于明确说「这条红跟这次改动无关」。";
+  if (latest.status === "passed") {
+    return latest.stale
+      ? "那条命令上一次虽然通过，但验的已经不是现在这棵树或这条命令，这一按等于这次不重新验它。"
+      : "那条命令上一次通过了，但跳过之后回执记的是「你明确跳过了」，不会拿那一次当这次验收的凭据。";
+  }
+  return `那条命令上一次${ACCEPT_GATE_STATUS_LABELS[latest.status]}、没有跑出结论，这一按等于这次不验它。`;
+}
+
+function AcceptanceFailureNotice({ failure, disabled, onGateIntent, onRefreshGate }: {
+  failure: AcceptTaskFailure;
+  disabled: boolean;
+  onGateIntent: (intent: "rerun" | "skip", latest: AcceptGateView | null) => void;
+  onRefreshGate: () => void;
+}) {
+  const handedOff = failure.reason === "merge_conflict" && failure.conflictHandoff?.notified === true;
   const manualConflict = failure.reason === "merge_conflict" && !handedOff;
   return (
     <div className={`team-accept-failure${handedOff ? " is-handed-off" : ""}`} role={handedOff ? "status" : "alert"}>
@@ -108,10 +134,22 @@ function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) { 
               {manualConflict && <p className="team-accept-failure-guidance">未能唤醒任务，请手动解决冲突并提交，然后重新验收。</p>}
               {failure.conflictHandoff?.message && <p>{failure.conflictHandoff.message}</p>}
               <p style={{ whiteSpace: "pre-line" }}>{failure.error}</p>
+              {failure.reason === "accept_gate_failed" && <p>以上是这次验收返回的失败信息，最新项目配置和运行状态尚未核对；可刷新重新读取。</p>}
             </>
           )}
         </div>
       </div>
+      {failure.reason === "accept_gate_failed" && !failure.gate?.processPending && (
+        <div className="pending-merge-actions">
+          <button type="button" disabled={disabled} onClick={() => onGateIntent("rerun", failure.gate ?? null)}>
+            <ArrowsClockwise size={13} />重跑一次
+          </button>
+          <button type="button" disabled={disabled} onClick={() => onGateIntent("skip", failure.gate ?? null)}>
+            这次跳过它，直接合并
+          </button>
+          <button type="button" onClick={onRefreshGate}>刷新前置命令状态</button>
+        </div>
+      )}
       {/* 冲突文件和挡路文件是同一类信息——「验收停在这儿，该去动的是这几个文件」。前者来自
           合并撞冲突，后者来自目标分支/任务 worktree 里还有没提交的东西，所以一副样子渲染。 */}
       {([
@@ -141,6 +179,7 @@ export function AcceptanceControls({
   // 停在中途那道关口时，这一按是「放行」不是「验收」：按钮、确认框、提示三处一起改口，
   // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
   const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
+  const gate = useAcceptGate(task.id);
   const branchPlan = useBranchPlan(task, !midGate && task.stage !== "accepted");
   // 后台静默重验不算「正在检查」：branchPlan 每 15 秒重验一次，把它算进来会让这颗主按钮
   // 每隔 15 秒把字换成「检查验收依赖」再换回去（宽度跟着变），点击也在那一瞬间被吞掉。
@@ -175,6 +214,17 @@ export function AcceptanceControls({
   const [busy, setBusy] = useState(false);
   const confirmExecutorSwap = useExecutorGate();
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
+  const [autoCommit, setAutoCommit] = useState<{ taskId: string; outcome: AcceptanceAutoCommitOutcome } | null>(null);
+  const gateFailure = failure?.taskId === task.id && failure.reason === "accept_gate_failed"
+    && task.stage !== "accepted" && task.stage !== "merged";
+  const gateFallback = gateFailure && !gate.running && (!gate.state || !!gate.error || !gate.latest);
+  const gateUnknown = !midGate && (!gate.state || !!gate.error) && !(gateIntent && gateLatest);
+  const openGateIntent = (intent: "skip" | "rerun", latest: AcceptGateView | null) => {
+    if (archived || inFlight || busy || checkingDependencies || acceptanceBlock) return;
+    setGateIntent(intent);
+    setGateLatest(latest);
+    setAction("accept");
+  };
   const duet = task.mode === "duet";
   const inFlight = task.status === "running" || task.status === "queued";
   // Archived = frozen/read-only：后端验收/打回都会 409，按钮必须一致地禁掉，不给假按钮。
@@ -202,6 +252,7 @@ export function AcceptanceControls({
   };
   const accept = async () => {
     if (checkingDependencies || acceptanceBlock || archived || inFlight || busy) return;
+    if (gateUnknown) return;
     if (verification.loading || verification.error || (needsVerificationConfirmation && !verification.acknowledged)) return;
     // 项目默认还没读到（或读失败）时绝不发：那一刻界面上那句话是没有依据的。
     if (canChooseCommit && commitChoice === null && commitDefault.value === null) return;
@@ -220,11 +271,11 @@ export function AcceptanceControls({
         canChooseCommit ? commitChoice ?? commitDefault.value ?? undefined : undefined,
         gateIntent ?? undefined,
       );
+      setAutoCommit(result.autoCommit ? { taskId: task.id, outcome: result.autoCommit } : null);
       if (!result.accepted) {
-        // 门禁那三种失败由门禁卡自己完整地讲(状态、日志、出路),这里再贴一条红条只会
-        // 把同一件事说两遍,还会把「正在跑」说成「验收未完成」。
         const gateReason = result.reason.startsWith("accept_gate");
-        setFailure(gateReason ? null : result);
+        setFailure(gateReason && result.reason !== "accept_gate_failed" ? null : result);
+        if (gateReason) void gate.reload();
         if (result.confirmationRequired === "confirmUnverified") {
           verification.setAcknowledged(false);
           await refreshAfterMutation();
@@ -235,7 +286,7 @@ export function AcceptanceControls({
           notify(result.reason === "accept_gate_running"
             ? "验收前置命令已开跑；绿了这次验收会自动做完，不用再点"
             : result.reason === "accept_gate_failed"
-              ? "验收前置命令没通过，没有合并——详情和出路见下面那张卡"
+              ? "验收前置命令没通过，没有合并；下方可重跑或选择这次跳过"
               : result.error);
           return;
         }
@@ -258,7 +309,8 @@ export function AcceptanceControls({
           // 而改动其实还躺在他的工作区里没提交。
           : result.merge === "no_commit"
             ? "验收通过：改动已合进目标分支工作区并暂存，还没提交"
-            : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过") + stale);
+            : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过")
+        + (result.autoCommit ? `；${acceptanceAutoCommitMessage(result.autoCommit)}` : "") + stale);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -314,17 +366,23 @@ export function AcceptanceControls({
           </>
         )}
       </div>
-      {failure && <AcceptanceFailureNotice failure={failure} />}
+      {failure?.taskId === task.id && (failure.reason !== "accept_gate_failed" || gateFallback) && (
+        <AcceptanceFailureNotice failure={failure} onGateIntent={openGateIntent}
+          onRefreshGate={() => void gate.reload()}
+          disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock} />
+      )}
       {/* 「合并后不提交」那一档的常驻状态与出路。它自己判要不要出现（不适用就渲染 null），
           所以每个有验收动作的表面都自动带上，不用各处再判一遍。 */}
       <PendingMergeCard task={task} notify={notify} onTaskUpdated={onTaskUpdated} />
-      {/* 验收前置命令的状态与出路。没设这条命令、也没跑过时它自己渲染 null。 */}
-      <AcceptGateCard
+      {autoCommit?.taskId === task.id && <AutoCommitOutcomeNotice outcome={autoCommit.outcome} />}
+      {!midGate && task.stage !== "accepted" && task.stage !== "merged" && <AcceptanceWorkspaceCommit key={task.id} task={task} notify={notify} disabled={archived || inFlight || busy} />}
+      {!gateFallback && <AcceptGateCardView
         task={task}
         notify={notify}
-        disabled={archived || inFlight || busy}
-        onIntent={(intent, latest) => { setGateIntent(intent); setGateLatest(latest); setAction("accept"); }}
-      />
+        disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock}
+        gate={gate}
+        onIntent={openGateIntent}
+      />}
       {verification.verification && action !== "accept" && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate} />}
       {action === "accept" && (
         <ConfirmDialog
@@ -341,18 +399,26 @@ export function AcceptanceControls({
               : midGate ? "放行" : needsVerificationConfirmation ? "知情并验收" : commitChecked ? "验收通过" : "验收通过（不提交）"}
           danger={!midGate && !!task.useWorktree}
           busy={busy}
-          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight || verification.loading || !!verification.error || (needsVerificationConfirmation && !verification.acknowledged) || commitDefault.pending}
+          confirmDisabled={checkingDependencies || !!acceptanceBlock || archived || inFlight || gateUnknown || verification.loading || !!verification.error || (needsVerificationConfirmation && !verification.acknowledged) || commitDefault.pending}
           onConfirm={() => void accept()}
           onClose={() => setAction(null)}
         >
+          {!midGate && (
+            <p role={gate.error ? "alert" : "status"}>
+              {gate.state && !(gate.stale && gateIntent && gateLatest)
+                ? <>{gate.stale ? "上次读取的项目命令" : "项目配置的前置命令"}：<code>{gate.state.command ?? "未设置"}</code>。
+                  {gateIntent === "skip" ? "本次明确跳过此命令。" : gateIntent === "rerun" ? "本次会从头重跑此命令。" : gate.state.command
+                    ? "是否重跑取决于当前源码和已有结果；未通过不会合并。" : "本次验收不会运行前置命令。"}
+                  {gate.stale && (gate.error ? `状态暂时无法核对：${gate.error}。可关闭后在下方卡片刷新重试。` : "正在后台核对配置；确认后服务端仍会再次校验。")}</>
+                : gateIntent && gateLatest
+                  ? <>上次验收使用的命令：<code>{gateLatest.command}</code>。当前配置尚未重新核对；本次{gateIntent === "skip" ? "明确跳过前置命令" : "按项目当前配置重跑前置命令"}。</>
+                  : gate.error ? `前置命令暂时无法读取：${gate.error}。可关闭后在下方卡片刷新重试。` : "正在读取本次验收的前置命令…"}
+            </p>
+          )}
           {/* 这一按跟「普通的验收通过」不是一回事,得在按下去之前说破:一个是明知红着仍然合,
               另一个是再烧十几分钟。 */}
           {gateIntent === "skip" && (
-            <p role="alert">这一次<b>不跑</b>验收前置命令，直接按上面说的合并。{gateLatest?.status === "failed"
-              ? "那条命令上一次是红的，这一按等于明确说「这条红跟这次改动无关」。"
-              : gateLatest
-                ? `那条命令上一次${ACCEPT_GATE_STATUS_LABELS[gateLatest.status]}、没有跑出结论，这一按等于这次不验它。`
-                : "这一按等于这次不验它。"}</p>
+            <p role="alert">这一次<b>不跑</b>验收前置命令，直接按上面说的合并。{skipConsequence(gateLatest)}</p>
           )}
           {gateIntent === "rerun" && (
             <p role="status">这一按先把验收前置命令从头跑一遍（它可能要跑十几分钟），rc=0 才会继续合并；跑的过程中目标分支一动不动。</p>
@@ -385,6 +451,7 @@ export function AcceptanceControls({
 }
 
 function useReviewChanges(task: TaskListItem) {
+  const commitVersion = useWorkspaceCommitVersion(task.id);
   const [data, setData] = useState<ReviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -400,7 +467,7 @@ function useReviewChanges(task: TaskListItem) {
       (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
     ).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [task.id, task.updatedAt]);
+  }, [task.id, task.updatedAt, commitVersion]);
   return { data, loading, error };
 }
 
@@ -470,10 +537,10 @@ function ReviewRecord({
   }, [onReadTask, open, task]);
   return (
     <article className="team-review-record">
-      <header>
+      <header className="acceptance-host">
         <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}><CaretDown size={13} weight="bold" /></button>
         {visibleIndicator && <TaskStatusDot indicator={visibleIndicator} surface="team" />}
-        <button type="button" className="team-review-record-title" onClick={() => setOpen((value) => !value)}>
+        <button type="button" className="team-review-record-title acceptance-host-title" onClick={() => setOpen((value) => !value)}>
           <span><b>{task.title}</b><em>{role}</em><small>{display.label}</small></span>
           {objective && <p>{objective}</p>}
         </button>
@@ -522,8 +589,8 @@ export function TeamReviewWorkspace({
     : "核对共享分支与独立 worktree 后分别验收或打回。";
   return (
     <section className="team-review-workspace">
-      <header className="team-review-subbar">
-        <div><b>团队验收台</b><small>{sharedNote}</small></div>
+      <header className="team-review-subbar acceptance-host">
+        <div className="acceptance-host-title"><b>团队验收台</b><small>{sharedNote}</small></div>
         <AcceptanceControls task={lead} onTaskUpdated={onTaskUpdated} notify={notify} acceptanceBlock={leadAcceptanceBlock} />
       </header>
       <div className="team-review-scroll">

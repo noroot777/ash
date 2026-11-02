@@ -16,8 +16,10 @@
 .team-review-record-title p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .team-review-record-body { display: grid; gap: 12px; border-top: .5px solid var(--line); background: color-mix(in lch,var(--canvas) 72%,var(--panel)); padding: 12px; }
 
-.team-accept-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
-.team-accept-actions > button, .team-accept-actions > span { display: inline-flex; height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.team-accept-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 5px; }
+/* min-height 而不是 height:按钮上写的是状态文案(「验收受阻」的整句理由就直接当标签),
+   定高遇到换行会被文字顶穿。 */
+.team-accept-actions > button, .team-accept-actions > span { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 3px 8px; color: var(--muted); font-size: 10.5px; font-weight: 600; text-align: left; }
 .team-accept-actions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .team-accept-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
 .team-accept-actions > button:disabled { cursor: not-allowed; opacity: .52; }
@@ -31,6 +33,7 @@
 .team-accept-failure-heading b { display: block; color: color-mix(in lch,var(--red) 76%,var(--ink)); font-size: 11px; }
 .team-accept-failure.is-handed-off .team-accept-failure-heading b { color: color-mix(in lch,var(--amber) 76%,var(--ink)); }
 .team-accept-failure p { margin: 3px 0 0; color: var(--muted); line-height: 1.5; white-space: pre-wrap; }
+.team-accept-failure > .pending-merge-actions { margin: 9px 0 0 32px; }
 .team-accept-failure .team-accept-handoff-message { color: color-mix(in lch,var(--amber) 62%,var(--ink)); font-weight: 600; }
 .team-accept-failure .team-accept-failure-guidance { color: color-mix(in lch,var(--red) 60%,var(--muted)); }
 .team-accept-failure.is-handed-off .team-accept-failure-guidance { color: color-mix(in lch,var(--amber) 66%,var(--muted)); }
@@ -187,6 +190,19 @@
 .accept-gate-card b { display: block; color: var(--ink); font-size: 11px; }
 .accept-gate-card p { margin: 3px 0 0; color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
 .accept-gate-card .pending-merge-actions { margin-top: 1px; }
+.accept-gate-command { display: grid; gap: 4px; margin: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 9px; }
+.accept-gate-command dt { color: var(--faint); font-size: 10px; }
+.accept-gate-command dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.accept-gate-command code { white-space: pre-wrap; }
+/* 门禁归类结论：「这条命令在快照里不存在」那一类的出路。它是用户在这张卡上唯一能读到
+   「不用我修、该怎么办」的地方，所以不折起来。原文是**纯文本**（gateCommandMissNotice
+   不发 markdown：同一份字还要进门禁日志和 MCP 回执，星号反引号在那两处只会原样显示
+   —— 第 1 轮审查 N4），自带换行与序号，所以 pre-line。 */
+.accept-gate-diagnosis { border: 1px solid color-mix(in lch,var(--amber) 34%,var(--line)); border-radius: 7px; background: rgb(181 123 0 / 6%); padding: 7px 9px; color: var(--ink); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+.accept-gate-diagnosis > span { display: block; margin-bottom: 3px; color: var(--amber); font-size: 9.5px; font-weight: 650; }
+/* 已失效的历史结论:虚线 + 灰调,一眼看出它跟上面那块当前结论不是同一回事。 */
+.accept-gate-diagnosis.is-obsolete { border-style: dashed; border-color: var(--line2); background: var(--panel); color: var(--muted); }
+.accept-gate-diagnosis.is-obsolete > span { color: var(--faint); }
 .accept-gate-log > span { display: flex; align-items: center; justify-content: space-between; color: var(--faint); font-size: 9.5px; font-weight: 650; }
 .accept-gate-log > span > button { border: 0; background: transparent; padding: 0; color: var(--accent); font-size: 9.5px; }
 .accept-gate-log pre { max-height: 180px; overflow: auto; margin: 4px 0 0; border-radius: 6px; background: var(--canvas); padding: 6px 8px; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }

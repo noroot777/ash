@@ -1,3 +1,4 @@
+import { TestProcessScope as JobScope } from "./test-process-job.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -167,7 +168,8 @@ await withTestResources(async () => {
   ]);
   console.log("✓ 同路径替换目录在直接停止/回收和退出子进程均拒写拒删,恢复原目录后可正常退役");
 
-  const raced = makeScope();
+  const raced = new JobScope();
+  owned.push(raced);
   const racedOriginal = join(temporary, "raced-original");
   const invoke = native.invoke;
   await withTestResources(async () => {
@@ -234,7 +236,7 @@ await withTestResources(async () => {
     assert.equal(fs.existsSync(active.directory), false);
     assert.deepEqual(JSON.parse(native.invoke(native.executable(), ["state", domain.name])), { exists: false, processes: [] });
     console.log("✓ Windows 目录实例跨进程身份一致,仅剩 domain.json 仍恢复并终止真实活动 Job");
-  } else console.log(`⏭ ${process.platform}: 无原生后端,不声称 Windows Job 业务通过`);
+  } else console.log(`⏭ ${process.platform}: POSIX 可观测监管已启用,Windows Job 专属断言留给真机`);
 }, [
   () => cleanupTestResources(owned.flatMap((scope) => [() => scope.stop(), () => scope.remove()])),
   disposeTestProcessResourcesSync,

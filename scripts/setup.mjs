@@ -14,15 +14,16 @@
 // 2026-08-14 从 setup.sh 改写成 .mjs:新机器上第一条命令必须是**每个平台都跑得动**的,
 // 而 Windows 没有 bash。平台差异集中在 scripts/platform.mjs。
 import { spawnSync } from "node:child_process";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
 import { WORKSPACE_FAIL_HINT, inspectNpmConfig, inspectWorkspaces, npmConfigValue } from "./workspace-check.mjs";
-import { registerKimiMcp } from "./kimi-mcp.mjs";
+import { HOST_SITES, registerHostMcp } from "./mcp-hosts.mjs";
+import { parseCodexList, registerCodexMcp } from "./codex-mcp.mjs";
 
 // setup 必须能在声明支持的 Node 22.16 上裸跑；那一版不能无 flag 导入 .ts。
 // 运行时代码的同名常量在 shared/src/mcp.ts，回归测试会把规范名钉为 ash。
@@ -61,16 +62,6 @@ function run(cmd, args, opts = {}) {
 
 function npm(args, opts = {}) {
   return spawnSync(NPM, args, { stdio: "inherit", ...NPM_SPAWN_OPTS, ...opts }).status ?? 1;
-}
-
-function withoutMcpServer(config, name) {
-  const sections = new Set([`mcp_servers.${name}`, `mcp_servers.${name}.env`]);
-  let skip = false;
-  return config.split(/(?<=\n)/).filter((line) => {
-    const header = /^\[([^\]]+)\]/.exec(line)?.[1];
-    if (header) skip = sections.has(header);
-    return !skip;
-  }).join("");
 }
 
 say("▶ 1/5 检查运行环境");
@@ -223,47 +214,63 @@ if (process.env.SKIP_MCP) {
   // ── codex ─────────────────────────────────────────────────────────────────
   const codexCfg = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
   if (which("codex")) {
-    const existing = existsSync(codexCfg) ? readFileSync(codexCfg, "utf8") : "";
-    const canonicalSection = new RegExp(`^\\[mcp_servers\\.${ASH_MCP_SERVER_NAME}\\]`, "m");
-    const legacySection = new RegExp(`^\\[mcp_servers\\.${LEGACY_ASH_MCP_SERVER_NAME}\\]`, "m");
-    if (canonicalSection.test(existing)) {
-      ok(`codex:ash 已在 ${codexCfg} 里,不动它`);
+    // 在临时目录里问:codex 会把 cwd 那份项目级 `.codex/config.toml` 也合进来,这里只关心用户级。
+    // 给了 home 就是在问(或改)沙盘里那份副本 —— cwd 也设成它,免得把谁的项目配置合进来。
+    const listServers = (home) => {
+      const res = run("codex", ["mcp", "list", "--json"], {
+        cwd: home ?? tmpdir(), timeout: 60_000,
+        ...(home ? { env: { ...process.env, CODEX_HOME: home } } : {}),
+      });
+      return parseCodexList(res.status, res.stdout);
+    };
+    // 删历史名只在沙盘里做(审查第 4 轮 F2):让 codex 去改用户真文件,它自己的 temp+rename
+    // 会断掉硬链接,删到一半失败还会把那份配置留在中间状态。
+    const removeServer = (name, home) =>
+      run("codex", ["mcp", "remove", name], {
+        cwd: home, timeout: 60_000, env: { ...process.env, CODEX_HOME: home },
+      }).status === 0;
+    const r = registerCodexMcp({
+      configFile: codexCfg, mcpEntry, url: URL_BASE,
+      name: ASH_MCP_SERVER_NAME, legacyName: LEGACY_ASH_MCP_SERVER_NAME, listServers, removeServer,
+    });
+    if (r.action === "kept") {
+      if (r.enabled) ok(`codex:ash 已在 ${codexCfg} 里,不动它`);
+      else warn(`codex:${codexCfg} 里的 ash 写着 enabled = false,没有替你打开`);
+    } else if (r.action === "foreignChange") {
+      warn(`codex:${r.why}${r.backup ? `(补写前的备份在 ${r.backup})` : ""};先看一眼 ${codexCfg} 现在的内容,再决定要不要重跑 setup`);
+    } else if (r.action === "blocked") {
+      // 现在「批准」发生在写之前(整条迁移在沙盘里做),所以没写成只有一种收场:一个字节都没动。
+      warn(`codex:${r.why};没有动 ${codexCfg};先跑 codex mcp list 看它报什么、修好再重跑 setup`);
+    } else if (r.legacyLeft) {
+      warn(`codex:已写入 ash,但旧 harness 条目没删掉(两个名字都能用);可手动执行 codex mcp remove harness`);
     } else {
-      mkdirSync(dirname(codexCfg), { recursive: true });
-      // 先备份再追加:改的是用户自己的配置文件,出错要能一键还原。
-      const backup = `${codexCfg}.bak-ash-setup`;
-      if (existing) copyFileSync(codexCfg, backup);
-      // TOML 的字符串是转义的,Windows 路径里的 `\` 必须成对写,否则 `\d`、`\n`
-      // 会被当转义序列吞掉 —— 装完看着成功,codex 起 MCP 时才报路径不存在。
-      const tomlPath = JSON.stringify(mcpEntry);
-      if (legacySection.test(existing)) {
-        writeFileSync(codexCfg, withoutMcpServer(existing, LEGACY_ASH_MCP_SERVER_NAME));
-      }
-      appendFileSync(
-        codexCfg,
-        `\n[mcp_servers.${ASH_MCP_SERVER_NAME}]\ncommand = "node"\nargs = [${tomlPath}]\n\n`
-        + `[mcp_servers.${ASH_MCP_SERVER_NAME}.env]\nASH_URL = "${URL_BASE}"\n`,
-      );
-      ok(`codex:${legacySection.test(existing) ? "旧 harness 条目已迁移为 ash" : "已写入"} ${codexCfg}${existing ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
+      ok(`codex:${r.action === "migrated" ? "旧 harness 条目已迁移为 ash" : "已写入"} ${codexCfg}${r.backup ? "(原文件备份在同名 .bak-ash-setup)" : ""}`);
     }
   } else {
     warn("没装 codex CLI,跳过它的 MCP 注册");
   }
 
-  const kimiBin = which("kimi") || (!IS_WINDOWS && which(join(process.env.KIMI_INSTALL_DIR || join(homedir(), ".kimi-code"), "bin", "kimi")));
-  if (kimiBin) {
+  // ── 其余各家 ───────────────────────────────────────────────────────────────
+  //
+  // 一张表走完(`mcp-host-sources.mjs` 的 `HOST_SITES`,`mcp-hosts.mjs` 转一手):claude 走它自己的 `mcp add`(那是它的
+  // 原生入口),codex 走 `codex-mcp.mjs`(发布前要让 codex 本人读一遍),**其余十二家都在
+  // 这里**。2026-10-30 之前这里只有 kimi 一家,所以换别的 agent 跑任务一律交不了卷。
+  //
+  // 只给**这台机器上真装了**的那几家写:没装就建目录等于在用户家里乱留垃圾。
+  for (const [agentType, site] of Object.entries(HOST_SITES)) {
+    const bin = site.bins.map((b) => which(b)).find(Boolean)
+      // kimi 的安装器不往 PATH 里放,官方装法是 `~/.kimi-code/bin`。
+      || (agentType === "kimi" && !IS_WINDOWS
+        ? which(join(process.env.KIMI_INSTALL_DIR || join(homedir(), ".kimi-code"), "bin", "kimi"))
+        : null);
+    if (!bin) continue;
     try {
-      const result = registerKimiMcp({
-        configDir: process.env.KIMI_CODE_HOME || join(homedir(), ".kimi-code"),
-        mcpEntry,
-        url: URL_BASE,
-      });
-      ok(`kimi:${result.added ? "已注册 ash MCP" : "已有 ash/harness MCP，不动它"} (${result.file})`);
+      const result = registerHostMcp({ agentType, mcpEntry, url: URL_BASE });
+      if (result.added) ok(`${agentType}:已注册 ash MCP (${result.file})`);
+      else warn(`${agentType}:${result.why || "没有写入"}`);
     } catch (error) {
-      warn(`kimi MCP 注册失败：${error.message}；手动接入见 docs/install.md`);
+      warn(`${agentType} MCP 注册失败：${error.message}；手动接入见 docs/install.md`);
     }
-  } else {
-    warn("没装 kimi CLI,跳过它的 MCP 注册");
   }
 }
 

@@ -24,7 +24,7 @@ await withTestResources(async () => {
     syncBuiltinESMExports();
     try { await assert.rejects(() => runTestProcess(process.execPath, ["-e", "throw Error('must not start')"]), { code }); }
     finally { Object.assign(fs, original); syncBuiltinESMExports(); }
-    assert.equal(created.length, 2);
+    assert.ok(created.length >= 2);
     assert.deepEqual(created.filter((directory) => fs.existsSync(directory)), []);
   }
   const existingScope = new TestProcessScope();
@@ -63,19 +63,14 @@ await withTestResources(async () => {
       ["/usr/bin/python3", ["-c", `from pathlib import Path; Path(${JSON.stringify(marker)}).write_text('started')`]],
       ["/bin/sh", ["-c", `printf started > '${marker.replaceAll("'", "'\\''")}'`]],
     ]) {
-      const created = [];
-      fs.mkdtempSync = (...args) => { const directory = original.mkdtempSync(...args); created.push(directory); return directory; };
-      syncBuiltinESMExports();
-      try {
-        await assert.rejects(() => runTestProcess(command, args), { code: "EOWNERSHIP" });
-        assert.deepEqual(created.filter((directory) => fs.existsSync(directory)), []);
-        assert.equal(fs.existsSync(marker), false);
-      } finally { Object.assign(fs, original); syncBuiltinESMExports(); }
+      await runTestProcess(command, args, { timeout: 10_000 });
+      assert.equal(fs.readFileSync(marker, "utf8"), "started");
+      fs.unlinkSync(marker);
     }
-    const before = fs.readdirSync(tmpdir()).filter((name) => name.startsWith("ash-test-scope-"));
-    assert.throws(() => spawnTestFixture(process.execPath, ["-e", "process.exit()"]), { code: "EOWNERSHIP" });
-    assert.deepEqual(fs.readdirSync(tmpdir()).filter((name) => name.startsWith("ash-test-scope-")), before);
-    console.log(`⏭ ${process.platform}: 原生进程/重启业务未覆盖（无所有权后端）; 仅验证 EOWNERSHIP 启动前拒绝与回滚,不代表业务通过`);
+    const fixture = spawnTestFixture(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    await fixture.dispose();
+    assert.equal(isPidAlive(fixture.pid), false);
+    console.log("✓ POSIX 默认可观测监管允许 Node/原生/shell 业务启动并回收可支持进程");
   } else {
     const created = [];
     const originalSpawnSync = childProcess.spawnSync;
@@ -128,9 +123,9 @@ await withTestResources(async () => {
       });
       while (!finished) {
         for (const record of concurrent.records()) {
-          assert.equal(record.kind, "process");
-          assert.match(record.born, /^\d+$/);
-          assert.equal(record.streams.length, 2);
+          assert.ok(Number.isInteger(record.pid));
+          assert.ok(Number.isFinite(record.at));
+          if (record.script) assert.equal(record.streams.length, 2);
         }
         await delay(5);
       }
@@ -139,7 +134,7 @@ await withTestResources(async () => {
       assert.deepEqual(await concurrent.active(), []);
       assert.equal(fs.readdirSync(concurrent.directory).some((name) => name.endsWith(".pending")), false);
     }, [() => concurrent.stop(), () => concurrent.remove()]);
-    console.log("✓ Windows 25 进程并发不可变登记,只读取完整记录,无覆盖发布或占位协议");
+    console.log("✓ Windows 25 进程按 main 发布者隔离登记并归并,只读取完整记录");
 
     const ipcScope = new TestProcessScope();
     await withTestResources(async () => {

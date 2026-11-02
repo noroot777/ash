@@ -103,7 +103,9 @@ export function SystemEventDigest({
   const collapsedLabel = important ? `系统记录 · ${lead.text}` : `系统记录 · ${items.length} 条`;
   const line = (
     <>
-      <span>{mode === "collapsed" ? collapsedLabel : lead.text}</span>
+      {/* 折起来时这一行就是这组旁注的全部可见内容（底下那张明细列表藏着），所以它要
+          声明成正文，别跟着 `<summary>` 一起被剔掉（见 side-chat/selectionContent.ts）。 */}
+      <span data-selection-content="">{mode === "collapsed" ? collapsedLabel : lead.text}</span>
       {mode !== "collapsed" && <small>{items.length > 1 ? `${items.length} 条记录` : "查看完整内容"}</small>}
       {hiddenIssueCount > 0 && <small className="system-event-issues">其中 {hiddenIssueCount} 条异常</small>}
       {lastAt && <time>{formatInstant(lastAt)}</time>}

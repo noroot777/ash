@@ -20,6 +20,8 @@ import { readDuetTurns } from "./duet/transcript-reads.js";
 import { resolveGate } from "./duet/gates.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
+import { preparePendingCheckpointStart, recoverPendingCheckpoints } from "./pending-checkpoint-recovery.js";
+import { cancelQueueAdvance } from "./queue-advance-retry.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
 import { confirmTaskComplete } from "./task-complete.js";
 import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
@@ -29,9 +31,12 @@ import { mountTaskSteerRoutes } from "./task-steer.js";
 import { publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
-import { claimTurn, releaseTurn, stopTask } from "./runs.js";
+import { claimOwnTurn, releaseTurn, stopTask } from "./runs.js";
+import { noted } from "./user-action-rejection.js";
+import { mountTurnReclaimRoutes } from "./turn-reclaim-routes.js";
+import { stopStartingTurn } from "./stop-starting-turn.js";
 import { handoffBlockReason } from "./handoff-guard.js";
-import { advanceQueue } from "./scheduler.js";
+import { advanceQueueInBackground } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { replyToTask } from "./task-reply.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
@@ -52,6 +57,7 @@ import { actorOf, ownerIdOf } from "./auth/context.js";
 // (第 6/7 轮审查)。
 
 export function mountTaskRunRoutes(api: Hono): void {
+  mountTurnReclaimRoutes(api);
   mountTaskArchiveRoutes(api);
   mountTaskRetryTurnRoutes(api);
   mountTaskScheduleRoutes(api);
@@ -75,6 +81,7 @@ api.get("/tasks/:id/duet", async (c) => c.json(await readDuetTurns(c.req.param("
 // ── run a task (§1/§12) ─────────────────────────────────────────────────────
 // 队列前置检查(queueBlockers)、queue 的增删改端点都在 ./queues.ts。
 
+// 用户主动操作被**状态性挡板**拦下时的统一出口:409 之外再往任务时间线写一条。
 api.post("/tasks/:id/run", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -93,10 +100,12 @@ api.post("/tasks/:id/run", async (c) => {
       ? !["running", "queued", "awaiting_review"].includes(r.status)
       : canSingleRun(r.status as TaskStatus);
   if (!runnable) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
-      { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy },
+      await noted(taskId, "运行", { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy }),
       409,
     );
   }
@@ -105,38 +114,41 @@ api.post("/tasks/:id/run", async (c) => {
   // team 分支会立刻还回来）—— 它只为让 202 是真话:早先 team 分支排在这两道检查**之前**
   // 直接 202,验收进行中照样 startTeam,用户看到「已启动」而调度台其实撞上验收锁(审查实测)。
   if (r.mode === "team") {
-    if (!claimTurn(taskId, "team")) {
-      return c.json({ error: "任务回合正在进行，结束后再运行", status: r.status }, 409);
+    const turn = claimOwnTurn(taskId, "team");
+    if (!turn) {
+      return c.json(await noted(taskId, "运行", { error: "任务回合正在进行，结束后再运行", status: r.status }), 409);
     }
     if (isAcceptingTask(taskId)) {
-      releaseTurn(taskId);
-      return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
+      releaseTurn(taskId, turn);
+      return c.json(await noted(taskId, "运行", { error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }), 409);
     }
-    void resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
+    void resumeOrRunTask(taskId, { reason: "run", turnHeld: turn, actingUserId: ownerIdOf(actorOf(c)) });
     return c.json({ started: true }, 202);
   }
   // **最后一个 await 之后**原子占位再启动：只读预检查后的任何 await 间隙里另一次启动
   // 都可能抢先——两个并发请求会双双 202 而只有一个真的开跑（审查实测）。占到 = 202 是
   // 真话；占不到 = 此刻确有回合在跑，409。duet 走同一把锁（它模块内那个 running Set
   // 调用方看不见，验收锁也挡不住它）。
-  if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
-    return c.json({ error: "任务回合正在进行，结束后再运行", status: r.status }, 409);
+  // 占到的那把锁的**身份**要一路带到启动与收尾(本轮审查 F1:按任务 id 还锁会撤掉人工
+  // 放开之后那一轮的互斥,理由在 turn-lock.ts 的 `endOwnTurn`)。
+  const turn = claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
+  if (!turn) {
+    return c.json(await noted(taskId, "运行", { error: "任务回合正在进行，结束后再运行", status: r.status }), 409);
   }
   // 占位后镜像检查验收锁（验收侧先占己锁再查 turn）：runTask/runDuet 撞上验收锁只会
   // 静默 return，202 就成了「已启动」的谎报（审查实测：/run 与 /retry 均复现）。
   if (isAcceptingTask(taskId)) {
-    releaseTurn(taskId);
-    return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
+    releaseTurn(taskId, turn);
+    return c.json(await noted(taskId, "运行", { error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }), 409);
   }
   // 起跑占位 + 启动:认领队列执行占位后才真正拉起(见 seatThenStart 顶注)。
   const acting = ownerIdOf(actorOf(c));
-  const started = await seatThenStart(taskId, () =>
+  const started = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
-      ? runDuet(taskId, { turnHeld: true, actingUserId: acting })
-      : resumeOrRunTask(taskId, { reason: "run", turnHeld: true, actingUserId: acting }));
+      ? runDuet(taskId, { turnHeld: turn, actingUserId: acting })
+      : resumeOrRunTask(taskId, { reason: "run", turnHeld: turn, actingUserId: acting }));
   if (!started.ok) {
-    releaseTurn(taskId);
-    return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
+    return c.json(await noted(taskId, "运行", { error: queueClaimError(started), blockedBy: started.blockers }), 409);
   }
   return c.json({ started: true }, 202);
 });
@@ -167,34 +179,36 @@ api.post("/tasks/:id/fire", async (c) => {
     return c.json({ error: `第 ${r.verifyRound} 轮就地验证还没出结论，等它结束再触发新一轮`, status: r.status }, 409);
   if (r.question)
     return c.json({ error: "任务有待答复的提问，先答复再触发新一轮", status: r.status }, 409);
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   // runTask 遇验收锁/单飞锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
   if (isAcceptingTask(taskId))
-    return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
+    return c.json(await noted(taskId, "触发新一轮", { error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }), 409);
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
-      { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy },
+      await noted(taskId, "触发新一轮", { error: "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列", blockedBy }),
       409,
     );
   }
   // 同 /run:最后一个 await 之后原子占位,202 才是真话。duet 与 single 共用这把锁。
-  if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
-    return c.json({ error: "任务回合正在进行，结束后再触发", status: r.status }, 409);
+  const turn = claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
+  if (!turn) {
+    return c.json(await noted(taskId, "触发新一轮", { error: "任务回合正在进行，结束后再触发", status: r.status }), 409);
   }
   // 队列检查之后验收锁可能刚刚落下:占位后再查一遍(与验收侧互为镜像)。
   if (isAcceptingTask(taskId)) {
-    releaseTurn(taskId);
-    return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
+    releaseTurn(taskId, turn);
+    return c.json(await noted(taskId, "触发新一轮", { error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }), 409);
   }
   // 起跑占位 + 启动,理由同 /run(检查与占位同临界区,堵并发双跑窗口)。
   const firedBy = ownerIdOf(actorOf(c));
-  const fired = await seatThenStart(taskId, () =>
+  const fired = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
-      ? runDuet(taskId, { turnHeld: true, actingUserId: firedBy })
-      : runTask(taskId, { turnHeld: true, actingUserId: firedBy })); // 全新一轮,永不 resume
+      ? runDuet(taskId, { turnHeld: turn, actingUserId: firedBy })
+      : runTask(taskId, { turnHeld: turn, actingUserId: firedBy })); // 全新一轮,永不 resume
   if (!fired.ok) {
-    releaseTurn(taskId);
-    return c.json({ error: queueClaimError(fired), blockedBy: fired.blockers }, 409);
+    return c.json(await noted(taskId, "触发新一轮", { error: queueClaimError(fired), blockedBy: fired.blockers }), 409);
   }
   return c.json({ started: true, fresh: true }, 202);
 });
@@ -207,10 +221,27 @@ api.post("/tasks/:id/stop", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  if (await cancelQueueAdvance(taskId)) return c.json({ stopped: true, note: "已撤销待启动的队列运行请求" });
   if (stopTask(taskId)) return c.json({ stopped: true });
   if (r.status === "queued" || r.status === "running") {
     await setTaskStatus(taskId, "canceled");
-    return c.json({ stopped: true, note: "没有存活的 agent 进程,已直接标记为 canceled" });
+    // 杀不到进程 ≠ 没有东西在起跑:回合可能已占位、CLI 还没 spawn(status 还停在占位
+    // 的 queued)。那一档既没有句柄可杀、也不会被状态写入拦住,所以补一个起跑冻结标记,
+    // 由 spawn 前的最后一道闸消费 —— 与 pauseGroup 同一口径(scheduler.ts)。不补的话
+    // 这条 200「已停止」是假话:CLI 随后照样被拉起来,而界面显示 canceled。
+    //
+    // **但「标记竖起来了」不等于「这一轮撤回了」。** `freezeStartingTurn` 只要看见一个
+    // 非预占身份就返回 true —— 活着的起跑流程和一把没人管的锁在它眼里一模一样,它证明
+    // 不了有谁会来消费这个标记(第 2 轮审查 F3:真正泄漏的锁也被说成「已撤回它的启动」,
+    // 用户据此去点运行,仍是 409)。
+    //
+    // 真正的区别是**会不会有人来还锁**:活着的起跑流程走到 spawn 前那道闸会消费掉标记、
+    // 撤回这一轮、在自己的 catch 里 releaseTurn。所以这里等一会儿,看锁空不空 —— 这是
+    // 停止唯一能拿到的证据,而且它不靠年龄猜测,靠的是**观察到释放**。等到了就如实说
+    // 「可以重新运行了」;等不到也不猜、更不强拔,如实说它还占着并把放开交给用户。
+    // 没等到释放的那一种要留痕:只弹一次 toast 的话,用户刷新之后看不出自己停过、
+    // 也看不出为什么点运行还是不行(AGENTS.md「停止/暂停必须留下持久可见的状态」)。
+    return c.json(await stopStartingTurn(taskId));
   }
   return c.json({ error: "任务没有在运行的进程可停止", status: r.status }, 409);
 });
@@ -395,6 +426,7 @@ api.post("/tasks/:id/team/kill-cua", async (c) => {
     after: result.after,
     status: result.status,
     warning: result.sideEffect,
+    // 下一份凭据同样由闸发(这条端点也在真人专属闸后面)。
   });
 });
 
@@ -448,6 +480,7 @@ api.delete("/scheduled-messages/:mid", async (c) => {
     return c.json({ error: "消息刚被开始投递或已发送，本次取消未生效" }, 409);
   }
   publishPendingMessages(m.taskId);
+  await recoverPendingCheckpoints(m.taskId);
   return c.json({ canceled: true });
 });
 
@@ -463,14 +496,17 @@ api.post("/tasks/:id/retry", async (c) => {
     if (blocked) return c.json({ error: blocked, handoff: true }, 409);
   }
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) return c.json({ error: checkpointBlocked, checkpoint: true }, 409);
   // 同 /run:原子占位,并发重试只有一个能 202;duet 走同一把锁。
-  if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
-    return c.json({ error: "任务回合正在进行，结束后再重试", status: r.status }, 409);
+  const turn = claimOwnTurn(taskId, r.mode === "duet" ? "duet" : "single");
+  if (!turn) {
+    return c.json(await noted(taskId, "重跑上一回合", { error: "任务回合正在进行，结束后再重试", status: r.status }), 409);
   }
   // 占位后镜像检查验收锁:否则 runTask/resumeDuet 撞上验收锁静默 return,202 是谎报。
   if (isAcceptingTask(taskId)) {
-    releaseTurn(taskId);
-    return c.json({ error: "任务正在验收（含发布尾段），结束后再重试", status: r.status }, 409);
+    releaseTurn(taskId, turn);
+    return c.json(await noted(taskId, "重跑上一回合", { error: "任务正在验收（含发布尾段），结束后再重试", status: r.status }), 409);
   }
   // 「这一次是谁点的」四个人工入口(run / fire / retry / 闸口重放)一个都不能漏:漏掉
   // 就退回任务归属人,于是共享项目里 B 点「重试」烧的是 A 的 key、提交署 A 的名
@@ -478,13 +514,12 @@ api.post("/tasks/:id/retry", async (c) => {
   const acting = ownerIdOf(actorOf(c));
   // 起跑占位 + 启动,同 /run:失败成员的重试也是一次执行,同队有人在跑/已占位时不得
   // 再起第二个 —— 此前这里连队列检查都没有,是与第 7 轮审查同类的跨入口窗口。
-  const started = await seatThenStart(taskId, () =>
+  const started = await seatThenStart(taskId, turn, () =>
     r.mode === "duet"
-      ? resumeDuet(taskId, { turnHeld: true, actingUserId: acting })
-      : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true, actingUserId: acting }));
+      ? resumeDuet(taskId, { turnHeld: turn, actingUserId: acting })
+      : resumeOrRunTask(taskId, { reason: "retry", turnHeld: turn, actingUserId: acting }));
   if (!started.ok) {
-    releaseTurn(taskId);
-    return c.json({ error: queueClaimError(started), blockedBy: started.blockers }, 409);
+    return c.json(await noted(taskId, "重跑上一回合", { error: queueClaimError(started), blockedBy: started.blockers }), 409);
   }
   return c.json({ started: true }, 202);
 });
@@ -532,7 +567,7 @@ api.post("/tasks/:id/requeue", async (c) => {
 
   await setTaskStatus(taskId, "backlog");
   // 前面若还有人在跑,advanceQueue 会被 selectNextInQueue 的守卫挡住,什么都不做。
-  void advanceQueue(queueId);
+  advanceQueueInBackground(queueId);
 
   const updated = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
   const task = (await enrichTasks([updated]))[0];
@@ -554,14 +589,15 @@ api.post("/tasks/:id/gate", async (c) => {
     const blocked = handoffBlockReason(t.handoff);
     if (blocked) return c.json({ error: blocked, handoff: true }, 409);
     // 同 /run:先原子占位再启动,占不到说明确有回合在跑(闸口重放会真的续跑讨论)。
-    if (!claimTurn(taskId, "duet")) {
+    const turn = claimOwnTurn(taskId, "duet");
+    if (!turn) {
       return c.json({ error: "任务回合正在进行，稍后再处理裁决", status: t.status }, 409);
     }
     if (isAcceptingTask(taskId)) {
-      releaseTurn(taskId);
+      releaseTurn(taskId, turn);
       return c.json({ error: "任务正在验收（含发布尾段），结束后再处理裁决", status: t.status }, 409);
     }
-    void resumeAtGate(taskId, action, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
+    void resumeAtGate(taskId, action, { turnHeld: turn, actingUserId: ownerIdOf(actorOf(c)) });
     return c.json({ ok: true, resumed: true });
   }
   // 讨论已经收口后，验收打回仍沿用同一对讨论者和同一份 transcript 回炉；这不是
@@ -574,14 +610,15 @@ api.post("/tasks/:id/gate", async (c) => {
     if (t.archived) return c.json({ error: "讨论已归档，先取消归档再继续", archived: true }, 409);
     const blocked = handoffBlockReason(t.handoff);
     if (blocked) return c.json({ error: blocked, handoff: true }, 409);
-    if (!claimTurn(taskId, "duet")) {
+    const turn = claimOwnTurn(taskId, "duet");
+    if (!turn) {
       return c.json({ error: "讨论回合正在进行，稍后再提交验收意见", status: t.status }, 409);
     }
     if (isAcceptingTask(taskId)) {
-      releaseTurn(taskId);
+      releaseTurn(taskId, turn);
       return c.json({ error: "讨论正在验收，结束后再提交意见", status: t.status }, 409);
     }
-    void resumeAtGate(taskId, action, { turnHeld: true, actingUserId: ownerIdOf(actorOf(c)) });
+    void resumeAtGate(taskId, action, { turnHeld: turn, actingUserId: ownerIdOf(actorOf(c)) });
     return c.json({ ok: true, resumed: true, revision: true }, 202);
   }
   return c.json({ error: "no open gate for this task" }, 409);

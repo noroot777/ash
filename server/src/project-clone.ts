@@ -176,6 +176,7 @@ export async function cloneProject(input: CloneProjectInput, actor?: Actor): Pro
     useWorktreeDefault: true,
     previewCommand: null,
     acceptCommit: true,
+    acceptAutoCommit: false,
     // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
     acceptGateCommand: null,
     createdAt: now(),

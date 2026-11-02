@@ -284,11 +284,11 @@ export function CommandPalette({
           }),
         });
       }
-      if (!selectedTask.archived && selectedTask.status === "running") {
+      if (!selectedTask.archived && (selectedTask.status === "running" || selectedTask.status === "queued")) {
         result.push({
           key: "task:stop",
           group: taskGroup,
-          label: selectedTask.mode === "team" ? "停止全组" : "停止运行",
+          label: selectedTask.mode === "team" ? "停止全组" : selectedTask.status === "queued" ? "停止排队" : "停止运行",
           icon: <Stop size={14} weight="fill" />,
           run: closeRun(async () => {
             if (selectedTask.mode === "team") await api.teamHalt(selectedTask.id);

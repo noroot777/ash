@@ -14,30 +14,28 @@
 // `CODEX_HOME` 里连 `config.toml` 都没有,`codexAshMcpServerName()` 于是返回 null ——
 // 丢的不只是工具,连回合身份 `env_vars` 都跟着不注了。
 //
-// 边界,两条:
+// **这个文件现在只是个门面**:怎么判、怎么拼、怎么落盘都在 `mcp-registry/`(按 agentType
+// 的单源表 + 三个格式族 + 一份发布事务),2026-10-31 从这里搬出去的 —— 原来 claude 和 codex
+// 各一条写死的路,另外十三家执行器一行注册逻辑都没有,换它们跑任务全是 failed。
+// 门面留下来是因为调用方(设置页、起跑前补档、启动自检)认的是 `PersonalAshMcp` 这个形状。
+//
+// 边界,两条(搬家后仍由 `mcp-registry/register.ts` 保着):
 //  · **只搬 ash 这一条**,不搬宿主的其它 mcpServers。隔离档的意义是抹去宿主的订阅和
 //    凭证,把别人的 server 一起搬过去就把那层意义破坏了;ash 自己这条是**完成协议的
 //    一部分**,不是用户装的第三方能力。
 //  · **已有登记一律不覆盖**(含历史名 `harness`)——用户可能自己改过 URL 或路径。
 //
 // 幂等,所以挂在 `ensureUserCliDir()` 上每次起跑都过一遍:已经有了就是两次文件读,
-// 缺了才写。写一律走临时文件 + rename —— 这份 `.claude.json` 同时也是 CLI 自己在写的
-// 文件,半截内容比缺一条登记更糟。
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+// 缺了才写。
 import { homedir } from "node:os";
-import { join } from "node:path";
 import type { PersonalAshMcp } from "@ash/shared";
-import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
-import { codexAshMcpServerName } from "../executors/codex-mcp.js";
-import { currentListeningPort } from "../listening-port.js";
-import { REPO_DIR } from "../paths.js";
+import { ashMcpConfigDir } from "../mcp-registry/catalog.js";
+import { registerAshMcp } from "../mcp-registry/register.js";
+import { ashMcpHostFile, ashMcpStateIn } from "../mcp-registry/sources.js";
+import { askCodexHere, codexAccepts, type CodexAsk } from "./codex-approve.js";
 
-/** 本仓库这份 MCP 服务的入口。宿主没登记过时按它现拼一条。 */
-const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
-
-const NO_SOURCE =
-  `宿主机的配置里没有 ash MCP，仓库里也没有 ${MCP_ENTRY}(先在仓库根跑一次 npm run build，` +
-  `或按 docs/install.md 走一遍 MCP 接入)`;
+export { extractTomlTables } from "../codex-toml.js";
+export type { CodexAsk } from "./codex-approve.js";
 
 const ok = (serverName: string): PersonalAshMcp => ({ configured: true, serverName, problem: null });
 const fail = (problem: string): PersonalAshMcp => ({ configured: false, serverName: null, problem });
@@ -47,12 +45,25 @@ const fail = (problem: string): PersonalAshMcp => ({ configured: false, serverNa
  *
  * `hostHome` 只为回归测试留:产品代码永远用真 `homedir()`,测试拿一个假 HOME 来跑,
  * 免得测试碰宿主机那份 `~/.claude.json`(那是用户的真配置,一个字节都不该动)。
+ *
+ * `ask` 同样只为回归测试留 —— macOS 上探测层如实弃权,codex 那几条路在开发机上一条都
+ * 跑不了,所以测试拿一个替身把它们逐个驱动起来(理由同 `probeCli` 的 `openUnit`)。
  */
-export function ensureAshMcp(dir: string, agentType: string, hostHome: string = homedir()): PersonalAshMcp {
+export async function ensureAshMcp(
+  dir: string,
+  agentType: string,
+  hostHome: string = homedir(),
+  ask: CodexAsk = askCodexHere,
+): Promise<PersonalAshMcp> {
   try {
-    if (agentType === "claude") return ensureClaudeAshMcp(dir, hostHome);
-    if (agentType === "codex") return ensureCodexAshMcp(dir, hostHome);
-    return fail(`${agentType} 没有个人配置目录，这一问不适用`);
+    const result = await registerAshMcp({
+      agentType,
+      dir,
+      hostHome,
+      // 「发布前先问 CLI 本人」只有 codex 有:它的格式是 TOML,判官在它进程里。
+      ...(agentType === "codex" ? { approve: (candidate: string) => codexAccepts(candidate, ask) } : {}),
+    });
+    return result.ok ? ok(result.serverName) : fail(result.why);
   } catch (e) {
     return fail(`补写 ash MCP 登记失败：${(e as Error).message}`);
   }
@@ -65,169 +76,65 @@ export function ensureAshMcp(dir: string, agentType: string, hostHome: string = 
  * 而宿主那份 `~/.claude.json` 是用户自己的配置 —— 检查可以,写一个字都不行。
  */
 export function readAshMcp(dir: string, agentType: string): PersonalAshMcp {
-  try {
-    if (agentType === "claude") {
-      const file = join(dir, ".claude.json");
-      const doc = readJsonObject(file);
-      if (!doc) return fail(`${file} 解析不了`);
-      const name = claudeServerName(doc);
-      return name ? ok(name) : fail("这个配置目录里没有 ash MCP 登记");
-    }
-    if (agentType === "codex") {
-      const name = codexAshMcpServerName(dir);
-      return name ? ok(name) : fail("这个配置目录里没有 ash MCP 登记");
-    }
-    return fail(`${agentType} 没有个人配置目录，这一问不适用`);
-  } catch (e) {
-    return fail(`读 ash MCP 登记失败：${(e as Error).message}`);
-  }
+  const found = ashMcpRegistration(dir, agentType);
+  return found.state === "present" ? ok(found.serverName!) : fail(found.detail);
+}
+
+export type AshMcpRegistration = {
+  /**
+   * present=登记在且没关 / absent=确实没有 / disabled=登记在但显式关掉了 /
+   * unknown=读不出来，别据此下结论
+   */
+  state: "present" | "absent" | "disabled" | "unknown";
+  serverName: string | null;
+  detail: string;
+};
+
+/**
+ * 同一个问题的**三态**版本。
+ *
+ * 为什么 `PersonalAshMcp` 那两态不够用：它把「确实没有登记」和「文件读不出来」一起记成
+ * `configured:false`，只有文案能把它们分开。设置页拿它显示没问题 —— 两种都该提示用户去看
+ * 一眼。但起跑前的预检要据此**拦下一整轮审查**，而拦错的代价是一条根本跑不起来的链，
+ * 所以这两种必须分得开，由调用方自己决定向哪边开（预检一律向放行开，见
+ * `ash-mcp-reachability.ts`）。
+ */
+export function ashMcpRegistration(dir: string, agentType: string): AshMcpRegistration {
+  const found = ashMcpStateIn(dir, agentType);
+  return {
+    state: found.state,
+    serverName: found.serverName,
+    detail: found.detail || (found.state === "present" ? "" : "这个配置目录里没有 ash MCP 登记"),
+  };
 }
 
 /**
  * 宿主机那份配置里的 ash MCP —— 共用档下 agent 真正用的就是它。
  *
  * claude 的用户级配置是 `~/.claude.json`(在 home 根,不在 `~/.claude` 里),codex 的是
- * `~/.codex/config.toml`;两条路径差一层,所以这里不能拿 home 当 dir 直接问。
+ * `~/.codex/config.toml`;各家路径深浅不一,所以这里不能拿 home 当 dir 直接问。
  */
 export function hostAshMcp(agentType: string, hostHome: string = homedir()): PersonalAshMcp {
-  if (agentType === "claude") return readAshMcp(hostHome, "claude");
-  if (agentType === "codex") return readAshMcp(join(hostHome, ".codex"), "codex");
-  return fail(`${agentType} 没有宿主级配置目录，这一问不适用`);
-}
-
-// ── claude:~/.claude.json 的 mcpServers ────────────────────────────────────
-
-function ensureClaudeAshMcp(dir: string, hostHome: string): PersonalAshMcp {
-  const file = join(dir, ".claude.json");
-  const doc = readJsonObject(file);
-  if (!doc) return fail(`${file} 解析不了，没敢动它 —— 手工修好或删掉它再重启`);
-  const already = claudeServerName(doc);
-  if (already) return ok(already);
-  const entry = hostClaudeEntry(hostHome) ?? builtinClaudeEntry();
-  if (!entry) return fail(NO_SOURCE);
-  const servers = (doc.mcpServers ?? {}) as Record<string, unknown>;
-  // 规范名落地:宿主那份即使是历史名 harness,定义搬过来也按 ash 登记(同一个 server,
-  // setup 迟早要迁;两边都叫 ash 之后,提示词里那句「ash MCP」才对得上工具名)。
-  doc.mcpServers = { ...servers, [ASH_MCP_SERVER_NAME]: entry };
-  writeAtomic(file, `${JSON.stringify(doc, null, 2)}\n`);
-  return ok(ASH_MCP_SERVER_NAME);
-}
-
-function claudeServerName(doc: Record<string, unknown>): string | null {
-  const servers = doc.mcpServers as Record<string, unknown> | undefined;
-  if (!servers || typeof servers !== "object") return null;
-  if (servers[ASH_MCP_SERVER_NAME]) return ASH_MCP_SERVER_NAME;
-  if (servers[LEGACY_ASH_MCP_SERVER_NAME]) return LEGACY_ASH_MCP_SERVER_NAME;
-  return null;
-}
-
-/** 宿主机上那条(装 ash 时 `claude mcp add` 写下的)。读不出来就当没有。 */
-function hostClaudeEntry(hostHome: string): unknown | null {
-  const doc = readJsonObject(join(hostHome, ".claude.json"));
-  if (!doc) return null;
-  const servers = doc.mcpServers as Record<string, unknown> | undefined;
-  if (!servers || typeof servers !== "object") return null;
-  return servers[ASH_MCP_SERVER_NAME] ?? servers[LEGACY_ASH_MCP_SERVER_NAME] ?? null;
-}
-
-function builtinClaudeEntry(): unknown | null {
-  if (!existsSync(MCP_ENTRY)) return null;
-  return { type: "stdio", command: "node", args: [MCP_ENTRY], env: { ASH_URL: localUrl() } };
-}
-
-// ── codex:$CODEX_HOME/config.toml 的 [mcp_servers.*] ───────────────────────
-
-function ensureCodexAshMcp(dir: string, hostHome: string): PersonalAshMcp {
-  // 「有没有」的判据跟执行器用的是同一份(codex-mcp.ts),免得两边对 TOML 的理解漂移。
-  const already = codexAshMcpServerName(dir);
-  if (already) return ok(already);
-  const block = hostCodexBlock(hostHome) ?? builtinCodexBlock();
-  if (!block) return fail(NO_SOURCE);
-  const file = join(dir, "config.toml");
-  const current = readTextOrEmpty(file);
-  writeAtomic(file, current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`);
-  return ok(ASH_MCP_SERVER_NAME);
-}
-
-function hostCodexBlock(hostHome: string): string | null {
-  const config = readTextOrEmpty(join(hostHome, ".codex", "config.toml"));
-  if (!config) return null;
-  return (
-    extractTomlTables(config, ASH_MCP_SERVER_NAME) ??
-    // 历史名的定义照搬,但表头改成规范名(理由同 claude 那边)。
-    extractTomlTables(config, LEGACY_ASH_MCP_SERVER_NAME)?.replaceAll(
-      `[mcp_servers.${LEGACY_ASH_MCP_SERVER_NAME}`,
-      `[mcp_servers.${ASH_MCP_SERVER_NAME}`,
-    ) ??
-    null
-  );
-}
-
-function builtinCodexBlock(): string | null {
-  if (!existsSync(MCP_ENTRY)) return null;
-  return (
-    `[mcp_servers.${ASH_MCP_SERVER_NAME}]\n` +
-    `command = "node"\n` +
-    `args = [${JSON.stringify(MCP_ENTRY)}]\n\n` +
-    `[mcp_servers.${ASH_MCP_SERVER_NAME}.env]\n` +
-    `ASH_URL = ${JSON.stringify(localUrl())}\n`
-  );
+  const dir = hostCliConfigDir(agentType, hostHome);
+  return dir ? readAshMcp(dir, agentType) : fail(`${agentType} 没有宿主级配置目录，这一问不适用`);
 }
 
 /**
- * 把 `[mcp_servers.<name>]` 连同它的子表(`.env` 等)整段抠出来。
+ * 宿主机上这个 CLI 真正读的配置目录。
  *
- * 只认**行首的表头**来切段:`[[…]]` 数组表也算一次切换,否则紧跟在目标段后面的
- * 数组表会被当成正文一起搬走。
+ * **必须尊重 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` 那一族变量**:它们由 ash 进程原样继承给
+ * 子进程,CLI 认的就是它们。写死 `homedir()` 会两头都错(第 1 轮审查 F1 的同类位置)——
+ * 实际目录有登记却报缺失,默认目录有登记而实际目录没有时又漏报。哪家认哪个变量在
+ * `mcp-registry/catalog.ts` 那张表里。
  */
-export function extractTomlTables(config: string, name: string): string | null {
-  const wanted = `mcp_servers.${name}`;
-  const picked: string[] = [];
-  let inside = false;
-  for (const line of config.split(/\r?\n/)) {
-    const header = /^\s*\[\[?([^\]]+)\]\]?\s*$/.exec(line);
-    if (header) {
-      const path = header[1].trim();
-      inside = path === wanted || path.startsWith(`${wanted}.`);
-    }
-    if (inside) picked.push(line);
-  }
-  while (picked.length && !picked[picked.length - 1].trim()) picked.pop();
-  return picked.length ? picked.join("\n") : null;
+export function hostCliConfigDir(agentType: string, hostHome: string = homedir()): string | null {
+  return ashMcpConfigDir(agentType, process.env, hostHome);
 }
 
-// ── 小工具 ────────────────────────────────────────────────────────────────
-
-const localUrl = () => `http://127.0.0.1:${currentListeningPort() ?? 4317}`;
-
-/** 文件不存在 = 空文档(我们来建);解析不了 = null(**别动它**,上层如实报错)。 */
-function readJsonObject(file: string): Record<string, unknown> | null {
-  let raw: string;
-  try {
-    raw = readFileSync(file, "utf8");
-  } catch {
-    return {};
-  }
-  if (!raw.trim()) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
-function readTextOrEmpty(file: string): string {
-  try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
-}
-
-/** 同目录临时文件 + rename:CLI 自己也在写这份文件,不能让它读到半截。 */
-function writeAtomic(file: string, body: string): void {
-  const tmp = `${file}.ash-tmp`;
-  writeFileSync(tmp, body, "utf8");
-  renameSync(tmp, file);
+/**
+ * 宿主机上这个 CLI 的用户级配置文件在哪（跟着 `hostCliConfigDir` 走）。
+ * 启动自检告警时拿它把路径指给用户（它不存在不代表 CLI 没装，见 `warnHostAshMcp`）。
+ */
+export function hostCliConfigFile(agentType: string, hostHome: string = homedir()): string | null {
+  return ashMcpHostFile(agentType, process.env, hostHome);
 }

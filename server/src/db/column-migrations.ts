@@ -2,9 +2,21 @@
 // 每条独立执行、"column already exists" 一律吞掉 —— 顺序只在**同表同列有依赖**时才要紧,
 // 列的语义注释全部住在这里,改列先读上下文。真正的一次性数据搬运在 migrations.ts。
 export const COLUMN_MIGRATIONS: string[] = [
+  "ALTER TABLE tasks ADD COLUMN queue_advance_request TEXT",
+  "ALTER TABLE tasks ADD COLUMN queue_seat_token TEXT",
+  "ALTER TABLE tasks ADD COLUMN wait_ownership TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN process_pending INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE accept_gate_runs ADD COLUMN source_fingerprint TEXT",
+  // 当时向上继承的依赖树安装声明摘要(第 3 轮审查 F2)。旧行 NULL = 换口径之前记的,一律当作
+  // 不匹配、各重跑一次 —— 那时「依赖没换过」证明不了。
+  "ALTER TABLE accept_gate_runs ADD COLUMN source_ambient TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN execution_mode TEXT",
+  // 门禁红了之后的归类结论(「命令在快照里不存在」那一类的出路)。旧行 NULL = 当初没归类过。
+  "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis TEXT",
+  "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
+  "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
+  // 上面那两个结论是哪一代判据生成的。旧行 NULL = 旧代,读侧不拿它当当前事实(第 2 轮审查 F1)。
+  "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
   // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
   "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",
@@ -225,6 +237,10 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 一样是「重启后找回」的线索,但它回答的是另一个问题:pid 只认得出根,记号跟着 exec
   // 继承到每一个后代 —— 根死了之后还留在后台的那些仍然自证身份。
   "ALTER TABLE sessions ADD COLUMN agent_unit_token TEXT",
+  // 这一轮卡在上游连不上的起点(回合级停滞看门狗,见 turn-stall.ts)。存量行一律 NULL =
+  // 没有在停滞 —— 这一列只在当前回合内有意义,上游回话或回合收尾就撤回 NULL。
+  "ALTER TABLE sessions ADD COLUMN upstream_stalled_since TEXT",
+  "ALTER TABLE session_turns ADD COLUMN stall_reason TEXT",
   // OpenAI 兼容供应商：把 Codex 的 Responses API 适配到仅有 Chat Completions 的上游。
   "ALTER TABLE llm_providers ADD COLUMN protocol_conversion_enabled INTEGER NOT NULL DEFAULT 0",
   // 选模型面板的候选来源：api=每次现调 /models；pinned=只用固定下来的这几个。
@@ -301,6 +317,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE projects ADD COLUMN commands_config TEXT",
   // 验收合并完落不落提交（1 = 老行为，落提交）。见 db/schema.ts 同名列。
   "ALTER TABLE projects ADD COLUMN accept_commit INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE projects ADD COLUMN accept_auto_commit INTEGER NOT NULL DEFAULT 0",
   // 验收前置命令（点验收之后、动 git 之前跑，rc=0 才合并）。null = 不设门禁 = 老行为。
   "ALTER TABLE projects ADD COLUMN accept_gate_command TEXT",
   // 那一按**实际**拿什么当凭据放的行（passed / skipped / unset + 真的跑绿的那一次）。
@@ -329,6 +346,12 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 投递时按显式的「不绑」处理,不退回「查最新那一轮」(本轮审查 F2)。
   "ALTER TABLE scheduled_messages ADD COLUMN review_run TEXT",
   "ALTER TABLE scheduled_messages ADD COLUMN review_round INTEGER",
+  // 这张凭证开出来时走的是哪一代投递协议。旧行 NULL = 强制前置还不存在的那一代,
+  // 「越线记号不在」对它不构成否证(第 2 轮自由审查 F1)。
+  "ALTER TABLE scheduled_messages ADD COLUMN crossing_protocol TEXT",
+  // 续跑凭证的投递所有权身份(checkpoint-ownership.ts)。旧行 NULL = 开出来时还没有身份,
+  // 接管资格只能靠单例锁判(多开实例时就不许接管它)。
+  "ALTER TABLE scheduled_messages ADD COLUMN delivering_owner TEXT",
   // 这一轮实际跑在谁名下(= 注入 CLAUDE_CONFIG_DIR/CODEX_HOME 的那个人)。接力搬会话
   // 文件按它找,不按任务归属人 —— 跨人回合两者不是一回事(见 db/schema.ts 同名列)。
   "ALTER TABLE sessions ADD COLUMN run_owner_user_id TEXT",
@@ -343,4 +366,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 主人就不受理,所以空值只见于单人时期或升级前的存量行(见 handoff-peers.ts
   // peerAudience)。
   "ALTER TABLE handoff_peers ADD COLUMN requested_by_user_id TEXT",
+  // 这一行意图代表的是哪一次接受(queue-advance-admission.ts)。旧行 NULL = 没有代次,
+  // 按「谁观察到它、谁就按 NULL 条件了结」处理,不会被另一趟的代次条件误删。
+  "ALTER TABLE queue_advance_intents ADD COLUMN generation TEXT",
 ];

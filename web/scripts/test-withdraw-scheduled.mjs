@@ -86,14 +86,16 @@ try {
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/withdraw-scheduled.html`);
 
   const input = page.getByRole("textbox", { name: "回复任务" });
-  await page.getByText("排队里的原话", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "展开全部 3 条" }).click();
+  const rows = page.locator(".scheduled-message-row");
+  await rows.getByText("排队里的原话", { exact: true }).waitFor();
   await input.fill("我后来又写的草稿");
 
   // ① 取消失败：消息还挂在队列上，输入框一个字都不能变（否则同一句话会发两遍）。
   await page.getByRole("button", { name: /撤回.*撤不掉的那条/ }).click();
   await page.getByText("消息已经发出去了").waitFor();
   assert.equal(await input.inputValue(), "我后来又写的草稿", "撤回失败不得改动草稿");
-  assert.equal(await page.getByText("撤不掉的那条", { exact: true }).count(), 1, "撤回失败的消息必须留在托盘上");
+  assert.equal(await rows.getByText("撤不掉的那条", { exact: true }).count(), 1, "撤回失败的消息必须留在托盘上");
 
   // ② 取消成功：正文接回草稿前面，图片和文件都变回可再次发送的附件卡片。
   await page.getByRole("button", { name: /撤回.*排队里的原话/ }).click();
@@ -101,7 +103,7 @@ try {
   assert.equal(await input.inputValue(), "排队里的原话\n\n我后来又写的草稿", "撤回的正文应排在已有草稿前面");
   assert.equal(await page.getByText("spec.pdf", { exact: true }).count(), 1, "非图片附件也要放回对话框");
   assert.equal(await page.locator(".task-upload-chip img").count(), 1, "图片附件应还原成可预览的缩略图");
-  assert.equal(await page.getByText("排队里的原话", { exact: true }).count(), 0, "撤回成功后托盘上不该再留这一行");
+  assert.equal(await rows.getByText("排队里的原话", { exact: true }).count(), 0, "撤回成功后托盘上不该再留这一行");
   assert.deepEqual(deleted, ["msg-fail", "msg-ok"], "每次撤回都必须真的调用取消端点");
   const sendButton = page.getByRole("button", { name: "排队发送，任务跑完自动发出" });
   assert.equal(await sendButton.isEnabled(), true, "撤回回来的内容应能直接再排一次队");

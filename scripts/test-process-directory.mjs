@@ -48,9 +48,9 @@ function verifyOwnership(directory, ownership) {
 }
 
 export class TestDirectory {
-  constructor(directory, ownership) {
+  constructor(directory, ownership, prefix) {
     const owned = directory === undefined;
-    this.path = resolve(directory ?? mkdtempSync(join(tmpdir(), "ash-test-scope-")));
+    this.path = resolve(directory ?? mkdtempSync(prefix ?? join(tmpdir(), "ash-test-scope-")));
     let recordDirectory;
     try {
       const identity = directoryIdentity(this.path);

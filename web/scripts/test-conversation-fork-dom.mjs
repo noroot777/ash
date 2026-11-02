@@ -40,6 +40,9 @@ try {
     if (path === "/api/agents") return json([{ id: "exec-codex", name: "codex@local", type: "codex", isDefault: true }]);
     if (path === "/api/settings") return json({ defaultWorkflowId: null });
     if (path.endsWith("/run")) return json({ ok: true });
+    // 任务历史里的挡回记录:生产组件**无条件**读它(见 useRejectionNotices.ts),这一屏
+    // 不验它。不能落到下面那条兜底 —— 那条回的是 `[]`,形状不对。
+    if (path.endsWith("/notices")) return json({ notices: [], remedy: null });
     return json([]);
   });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/conversation-fork.html`);

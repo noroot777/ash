@@ -3,7 +3,8 @@ import type { AgentType } from "@ash/shared";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { releaseTurn } from "./runs.js";
+import { withTurnPreflight } from "./turn-entry-guard.js";
+import type { TurnIdentity } from "./runs.js";
 import { nativeCliCommand } from "./skills.js";
 import { preflightCliGoalCommand } from "./task-cli-state.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -15,7 +16,7 @@ type ContinuationEntryOptions = {
   reasoningEffort?: string | null;
   attachments?: string[];
   actingUserId?: string | null;
-  turnHeld?: boolean;
+  turnHeld?: TurnIdentity | null;
 };
 
 export async function prepareContinuationEntry<Options extends ContinuationEntryOptions>(
@@ -23,7 +24,7 @@ export async function prepareContinuationEntry<Options extends ContinuationEntry
   userText: string,
   options: Options,
 ) {
-  try {
+  return withTurnPreflight(taskId, options.turnHeld, async () => {
     const head = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     await bindUploadsToTask(options.attachments, taskId, options.actingUserId ?? null);
     const agentType = options.agent ?? (head?.agentType as AgentType) ?? "claude";
@@ -38,8 +39,5 @@ export async function prepareContinuationEntry<Options extends ContinuationEntry
       head, nativeCommand, slash, goalExecution: isGoalExecution(slash),
       options: goalRoute ? { ...options, ...goalRoute } : options,
     };
-  } catch (error) {
-    if (options.turnHeld) releaseTurn(taskId);
-    throw error;
-  }
+  });
 }

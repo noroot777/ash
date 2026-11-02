@@ -3,6 +3,7 @@
 import { isAbsolute } from "node:path";
 import type { HandoffGateRun } from "./handoff-accept-gate.js";
 import type { HandoffErrorCode, HandoffPeerCapabilities, HandoffPingProject } from "@ash/shared";
+import type { HandoffWaitOrigins } from "./handoff-wait.js";
 
 export class HandoffError extends Error {
   // 导入侧专用:true = 这次失败**不证明**本机没留下半截产物(补偿回滚自身失败)。
@@ -38,7 +39,7 @@ export interface HandoffFilePayload {
 // 任务文本/会话文件里被引用的上传附件(data/uploads 下的文件)。收集与改写逻辑在
 // handoff-uploads.ts。
 export interface HandoffUploadPayload {
-  // uploads 目录直下的文件名(id()+净化名生成,字符集 [A-Za-z0-9._-],无目录成分)。
+  // uploads 目录直下的文件名(id()+净化名生成,字符集见 upload-names.ts,无目录成分)。
   name: string;
   // 源机上的绝对路径:导入侧据此把各处文本里的旧路径改写成本机新路径。
   sourcePath: string;
@@ -50,6 +51,9 @@ export interface HandoffUploadPayload {
 // 实测)。不带 id(导入侧重新生成)、不带 executorId(源机 agents 表外键,对端没有意义,
 // 按 agent 类型默认执行器解析)、不带 status/sentAt/deliveringSince(导入即 pending)。
 export interface HandoffMessagePayload {
+  origin?: string | null;
+  reviewRun?: string | null;
+  reviewRound?: number | null;
   text: string;
   // JSON string[]:上传附件的源机绝对路径,导入侧按 JSON 上下文改写成本机路径。
   attachments: string;
@@ -248,6 +252,7 @@ export interface HandoffManifest {
      * 一侧:宁可留着让人手点,也不要替它清掉一段可能是 agent 自己留的交代。
      */
     resumePromptAuto?: boolean;
+    waitOrigins?: HandoffWaitOrigins;
     question: string | null;
     questionOptions: string | null;
     questionItems: string | null;

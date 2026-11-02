@@ -1,8 +1,9 @@
-import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Plus } from "@phosphor-icons/react";
 import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { Menu, MenuItem } from "../components/ui.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { inspectorShortcutLabel } from "./shortcuts.ts";
 import type { InspectorShortcutKey } from "./shortcuts.ts";
 
@@ -18,8 +19,6 @@ export interface InspectorRailItem {
   shortcut?: InspectorShortcutKey;
 }
 
-const ARROW_KEYS = ["ArrowUp", "ArrowDown", "Home", "End"];
-
 function tabLabel(item: InspectorRailItem) {
   return item.shortcut ? `${item.title}，快捷键 ${inspectorShortcutLabel(item.shortcut)}` : item.title;
 }
@@ -29,12 +28,15 @@ function InspectorRailTab({
   active,
   tabId,
   contentId,
+  tabProps,
   onSelect,
 }: {
   item: InspectorRailItem;
   active: boolean;
   tabId: string;
   contentId: string;
+  /** 方向键漫游那套 props(lib/useRovingChoice.ts),由图标条统一发下来。 */
+  tabProps: Record<string, unknown>;
   onSelect: (id: string) => void;
 }) {
   const tip = useHoverTip({ placement: "left" });
@@ -43,13 +45,10 @@ function InspectorRailTab({
       <button
         id={tabId}
         type="button"
-        role="tab"
-        data-tab-id={item.id}
+        {...tabProps}
         className={`inspector-rail__tab${active ? " is-active" : ""}`}
-        aria-selected={active}
         aria-controls={contentId}
         aria-label={tabLabel(item)}
-        tabIndex={active ? 0 : -1}
         {...tip.anchorProps}
         onClick={() => onSelect(item.id)}
       >
@@ -85,8 +84,11 @@ export function InspectorRail({
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
-  const tabList = useRef<HTMLDivElement>(null);
   const addTip = useHoverTip({ placement: "left" });
+  // 上下键漫游走公共那一份(lib/useRovingChoice.ts)。这里原本自带一套一模一样的
+  // 实现,是全应用第四份拷贝 —— 契约只该有一个出处,否则补过的那几处好用、没补的
+  // 照旧,而差别从代码上看不出来。
+  const tabs = useRovingChoice(items.map((item) => item.id), activeId ?? "", onSelect, "tab");
 
   useDismissable({
     enabled: menuOpen,
@@ -95,34 +97,13 @@ export function InspectorRail({
     restoreFocusRef: menuButton,
   });
 
-  // 竖排 tablist 的上下键漫游。roving tabindex 只让当前页签可 Tab 到，没有这段的话
-  // 键盘用户根本走不到其它图标——横排时代它就缺，改竖排时一并补上。
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!ARROW_KEYS.includes(event.key)) return;
-    const tabs = Array.from(tabList.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
-    if (tabs.length === 0) return;
-    const focused = tabs.indexOf(document.activeElement as HTMLButtonElement);
-    const from = focused >= 0 ? focused : Math.max(0, tabs.findIndex((tab) => tab.dataset.tabId === activeId));
-    const next = event.key === "ArrowUp"
-      ? (from - 1 + tabs.length) % tabs.length
-      : event.key === "ArrowDown"
-        ? (from + 1) % tabs.length
-        : event.key === "Home" ? 0 : tabs.length - 1;
-    event.preventDefault();
-    tabs[next]?.focus();
-    const id = tabs[next]?.dataset.tabId;
-    if (id) onSelect(id);
-  };
-
   return (
     <nav className="inspector-host__rail" aria-label="Inspector 面板">
       <div
-        ref={tabList}
+        {...tabs.groupProps}
         className="inspector-host__rail-tabs"
-        role="tablist"
         aria-orientation="vertical"
         aria-label="已打开的 Inspector 面板"
-        onKeyDown={onKeyDown}
       >
         {items.map((item) => (
           <InspectorRailTab
@@ -131,6 +112,7 @@ export function InspectorRail({
             active={item.id === activeId}
             tabId={tabIdFor(item.id)}
             contentId={contentIdFor(item.id)}
+            tabProps={tabs.itemProps(item.id)}
             onSelect={onSelect}
           />
         ))}

@@ -14,7 +14,6 @@ import {
   freeWorkflowStates,
   reviewerProfiles,
   regressionEvidence,
-  scheduledMessages,
   tasks,
 } from "./db/schema.js";
 import { clearReservationForDispatch, noteReservationStillWaiting, readFreeReviewReservation, consumeFreeReviewReservation, reservationWaitReason, startReservedFreeReview } from "./free-review-reservations.js";
@@ -46,16 +45,19 @@ import {
   reviewingRun,
 } from "./free-review-round.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
+import { NO_REMINDER, type TurnReminder } from "./turn-prompt.js";
 import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
 import { completeRegressionSettlement, regressionSettlementConclusion } from "./regression-settlement.js";
+import { retireHistoricalReview } from "./review-retirement.js";
+import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { claimTurn, isTurnClaimed, releaseTurn, turnRole } from "./runs.js";
+import { claimOwnTurn, releaseTurn, turnIdentity, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
-import { reviewSweepReminder } from "./review-sweep.js";
+import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { id, now } from "./util.js";
 import type { Actor } from "./auth/context.js";
 import { canUseOwned } from "./auth/owned.js";
@@ -122,22 +124,25 @@ export async function freeReviewResumeOptions(taskId: string): Promise<ReviewRes
   };
 }
 
-export async function freeReviewReminder(taskId: string): Promise<string> {
+export async function freeReviewReminder(taskId: string): Promise<TurnReminder> {
   const run = await reviewingRun(taskId);
-  if (!run) return "";
-  const { reference } = await refreshRegressionEvidence(taskId,
+  if (!run) return NO_REMINDER;
+  const { reference, manifestEntry } = await refreshRegressionEvidence(taskId,
     freeReviewEvidenceDir(taskId, run.id, run.currentRound), run.targetKind === "accepted_merge");
   // 中途提问后续跑那条路上，只有这条提醒还在重贴要求（崩掉重拉走 freeReviewResumeMessage，
   // 两条路各带一份），所以报告格式和扫描义务两份契约都得在 —— 原先这里只有浏览器提醒，
   // 而就地验证那侧的 `verifyReminderFor` 一直带着摘要契约：两个对称端点只做了一个。
   // 浏览器提醒由投递点统一贴(带项目授权),这里不内嵌 —— 理由同 review-prompts.ts。
-  return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
-    `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +
-    REPORT_SUMMARY_REMINDER +
-    reviewSweepReminder(run.targetKind !== "accepted_merge") +
-    reference +
-    `结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
-    `不要调用 complete_task 或 accept_task。`;
+  return {
+    text: `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
+      `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +
+      REPORT_SUMMARY_REMINDER +
+      REVIEW_SWEEP_REMINDER +
+      reference +
+      `结束前调用 report_stage(verified|verify_failed) 并传最新【当前方向身份】directionToken，` +
+      `不要调用 complete_task 或 accept_task。`,
+    manifestEntry,
+  };
 }
 
 // 预约在下一次执行回合正常结束时消费；任务完成确认仍由 complete_task 单独记账。
@@ -236,9 +241,10 @@ export async function cancelFreeReviewReservation(taskId: string): Promise<FreeW
  * - 任务挂着 question / resumePrompt → 审查回合在等答复或续跑，是正常的等待态；
  * - 其余 → 这条审查已经没有任何东西能把它跑完，落 failed 并撤预约，用户可再派一轮。
  */
-export async function reconcileFreeReviews(): Promise<void> {
+export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> {
   const stuck = await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.status, "reviewing"));
   for (const run of stuck) {
+    if (ownerTaskId && run.taskId !== ownerTaskId) continue;
     const task = (await db.select().from(tasks).where(eq(tasks.id, run.taskId))).at(0);
     if (!task) {
       // 任务行已不存在（旧版删除没做级联）：审查链永远无人结算，原地收尸自愈。
@@ -246,29 +252,48 @@ export async function reconcileFreeReviews(): Promise<void> {
       await db.delete(freeReviewRuns).where(eq(freeReviewRuns.id, run.id));
       continue;
     }
-    // **回合活着就不碰**——这一条必须排在最前面：reviewer 可能已上报结论、但回合被
+    // **审查那一轮还活着就不碰**——这一条必须排在最前面：reviewer 可能已上报结论、但回合被
     // reattach 接回还在跑，此刻按 turnOk=true 补结算是提前放行——reviewer 随后非零
     // 退出/被停止时，正常结算已找不到 reviewing run，错误结论无法撤销（审查实测）。
-    if (task.status === "running" || task.status === "queued" || isTurnClaimed(task.id)) continue;
+    //
+    // 判据是**回合身份**而不是「这个任务忙不忙」：这两件事在自由工作流里经常不是一件事 ——
+    // 执行者挂着哨兵，哨兵结果回来把它 resume 去跑**实现回合**，而这条审查早就交卷死透了。
+    // 旧判据只看 `status==="running"`，于是这种 owner 一直在干活的任务永远跳过，round 挂在
+    // reviewing：验收 409、自动复审不开、修复交接不发，只有重启那一次对账能救（现场实测挂
+    // 了一整天，经过见 docs/incidents.md「审查交卷后 round 挂死」）。
+    //
+    // 身份读不出来（没有回合在册）却还 running/queued：这一拍说不清在跑的是谁，照旧让它自己
+    // 结算，下一拍再来——保守的那一边是「多等 30 秒」，激进的那一边是撤不掉的错误结论。
+    //
+    // 顺带回答「审查窗口内排队消息把执行者 resume 要不要挡」：正常路径上不需要另加挡板——
+    // `afterSettlement` 是在**回合锁里面**调的（turn-lock.ts 顶部那段），放锁排在它之后
+    // （orchestrator 的 finally），所以排队消息最早也只能在结算做完之后才拿到回合。现场那条
+    // 消息能在 reviewer 退出后 143ms 插进来，恰恰是因为结算被上面那条后门提前 return 了。
+    // 剩下的唯一例外就是这条自愈路径（结算发生在执行者回合**之中**），而那时结论早已写定、
+    // 报告也早落盘，挡住用户的输入只会换来一个说不出理由的滞留。
+    const held = turnIdentity(task.id);
+    const reviewerAlive = held
+      ? held.role === "reviewer" && (!held.review || held.review.run === run.id)
+      : task.status === "running" || task.status === "queued";
+    if (reviewerAlive) continue;
+    if (await retireHistoricalReview(task, { role: "reviewer", review: { run: run.id, round: run.currentRound } })) continue;
     // 已交卷（当前 round 有结论）且回合确实死了：直接补结算，不能因遗留的
     // question/等待态被永远跳过——那会让验收持续被 active review 409 挡住（审查实测）。
     const round = (await db.select().from(freeReviewRounds)
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
+    // `ignoreActive=true`：「owner 在跑」已经由上面那道身份判据回答过了（在跑的不是 reviewer
+    // 才会走到这里），这里再按 status 拦一次就等于把刚修好的那条路又关上。
+    const waiting = await db.transaction(async (transaction) => {
+      const evidence = await activeReviewEvidence(transaction, task);
+      return reviewContinuationPending(transaction, task, evidence, !!round?.conclusion, true);
+    }, { behavior: "immediate" });
+    if (waiting) continue;
     if (round?.conclusion) {
       await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer");
       continue;
     }
-    if (task.question || task.resumePrompt) continue;
-    // /answer 可能已清掉 question、答复正躺在排队消息里等投递（reviewer 提问回合还没
-    // release turn 时的正常路径）：那条链在等答案，不是孤儿——对账先于 scheduler 恢复
-    // 投递，杀了它答复就无处可去了（审查实测）。
-    const pendingReviewerAnswer = (await db.select({ id: scheduledMessages.id }).from(scheduledMessages)
-      .where(and(
-        eq(scheduledMessages.taskId, run.taskId),
-        eq(scheduledMessages.status, "pending"),
-        eq(scheduledMessages.sessionRole, "reviewer"),
-      )).limit(1)).at(0);
-    if (pendingReviewerAnswer) continue;
+    if (await db.transaction(async (transaction) => reviewContinuationPending(transaction, task,
+      await activeReviewEvidence(transaction, task), false, true), { behavior: "immediate" })) continue;
     if (!round) await db.insert(freeReviewRounds).values({ id: id(), runId: run.id, round: run.currentRound,
       status: "reviewing", startedAt: run.createdAt }).onConflictDoNothing();
     await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer")
@@ -293,7 +318,7 @@ export async function reportFreeReviewConclusion(
   if (stage !== "verified" && stage !== "verify_failed") {
     throw new Error("自由工作流审查回合只能上报 verified 或 verify_failed");
   }
-  // 结论必须出自**活跃的审查回合**：读 turn 的运行时身份（claimTurn 时由 opts 显式落下），
+  // 结论必须出自**活跃的审查回合**：读 turn 的运行时身份（claimOwnTurn 时由 opts 显式落下），
   // 不查 sessions 表——session 行的 endedAt 既不代表进程活着、也不代表回合归属（reattach
   // 收尾先写 endedAt 再结算，正是误判窗口）。迟到重放（审查回合已结束 → turn 已释放）和
   // 普通回合的误投（turnRole=single）都拒。MCP 补捞豁免这一检查——它发生在回合收尾、
@@ -307,7 +332,7 @@ export async function reportFreeReviewConclusion(
     throw new Error(`审查结论必须先落报告：请把非空报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
   }
   const checked = await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
-    run.targetKind === "accepted_merge", opts.verificationBasis);
+    opts.verificationBasis);
   await commitRegressionConclusion(checked, async (transaction) => {
     await assertConclusionTask(transaction, task);
     const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];
@@ -326,7 +351,7 @@ export async function reportFreeReviewConclusion(
 }
 
 // 自由工作流的回合结算只分两种回合，**按回合自己的 role 分流**，不按「库里有没有
-// reviewing run」猜——派审请求可能在普通回合 claimTurn 之后才插入 reviewing run
+// reviewing run」猜——派审请求可能在普通回合 claimOwnTurn 之后才插入 reviewing run
 // （TOCTOU），靠查库会把普通回合冒充成审查回合、把没有结论的审查链错杀成 failed：
 // - role=reviewer（审查旁路回合）：按 conclusion 落 round/run，未通过且还有轮数时
 //   发修复消息并挂**自动续轮预约**（runId）。
@@ -381,7 +406,7 @@ export async function handleFreeWorkflowSettlement(
       // 审查该看的是它们都说完之后的工作区，而不是半截的。
       //
       // 让路必须发生在这里（结算内），不能指望两条路在释放点上「公平竞争」——它们抢的是
-      // 同一把单飞锁，而审查走的 `continueWhenIdle` 排到队头就**同步** claimTurn
+      // 同一把单飞锁，而审查走的 `continueWhenIdle` 排到队头就**同步** claimOwnTurn
       // （runs.ts），消息投递第一步却是 `await beginDelivery`，于是审查一定赢、消息被挡回
       // 托盘（`abortDelivery`）等下一轮。谁先注册 waiter 都改不了这个结果。
       //
@@ -446,11 +471,18 @@ export async function handleFreeWorkflowSettlement(
   // 提问守卫只保护「审查回合以提问/检查点收尾」的场景（等答复回来续跑再结算）。
   // reviewer 已交卷（round 有结论）就必须结算——question 可能是实现回合遗留的旧字段，
   // 拿它挡住已有结论的审查会让链永远停在 reviewing（审查实测复现）。
-  if (turnOk !== false && (task.question || task.resumePrompt) && !round.conclusion) return true;
+  const waitingEvidence = await db.transaction((transaction) => activeReviewEvidence(transaction, task), { behavior: "immediate" });
+  if (turnOk !== false && await db.transaction((transaction) => reviewContinuationPending(transaction, task,
+    waitingEvidence, !!round.conclusion, true), { behavior: "immediate" })) {
+    await preserveReviewWait(task); return true;
+  }
   const directory = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   const checked = await regressionSettlementConclusion(taskId, directory, {
     outcome: turnOk === null ? undefined : turnOk ? "done" : "failed", round: run.currentRound,
     freeRoundId: round.id, acceptedMerge: run.targetKind === "accepted_merge",
+    // 这一分支的审查是同一个任务上的旁路回合,「活回合」那一问上面刚判过(reviewer 自己那轮
+    // 死没死),不要在恢复路径里再按 owner 的 status 拦一次 —— 见该参数的说明。
+    ignoreActive: true,
   });
   if (!checked) return true;
   const at = now();
@@ -474,8 +506,7 @@ export async function handleFreeWorkflowSettlement(
       reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
     }).where(eq(freeWorkflowStates.taskId, taskId));
     return true;
-  }, finalization("free", { run, outcome, at, turnToken: task.activeTurnToken,
-    directionToken: task.activeDirectionToken, directionEpoch: task.directionEpoch }));
+  }, finalization("free", { run, outcome, at }));
   await drainRegressionFinalization(directory);
   return true;
 }
@@ -516,8 +547,11 @@ export async function startFreeReview(
   // 是 TOCTOU：检查后普通回合仍能 claim 成功，两边同时启动（审查实测五连中）。审查
   // 投递（whenTurnIdle）在自己占着 turn 时排队，finally 释放后自然开跑。
   // 结算内部的派审（预约消费）不走这里：那时收尾回合正占着 turn，天然互斥。
+  // 占到的那把锁的身份一路带到 finally:这中间全是 await,人工放开可以把锁拔走、另一轮
+  // 合法占上,按任务 id 还锁撤掉的就是后来者那把(本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
   const holdingTurn = opts.holdTurn === true;
-  if (holdingTurn && !claimTurn(taskId, "dispatch")) {
+  const turn = holdingTurn ? claimOwnTurn(taskId, "dispatch") : null;
+  if (holdingTurn && !turn) {
     throw new Error("任务回合正在进行，结束后再派审");
   }
   try {
@@ -573,6 +607,6 @@ export async function startFreeReview(
     releaseFreeWorkflowAction(taskId);
   }
   } finally {
-    if (holdingTurn) releaseTurn(taskId);
+    if (turn) releaseTurn(taskId, turn);
   }
 }

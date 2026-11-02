@@ -1,0 +1,23 @@
+/* AcceptanceControls 的宿主形状,四处共用:普通任务验收台顶栏、团队验收台顶栏、团队里
+   每个独立执行者那张记录卡的 header、讨论结论那条横条。
+
+   它不是一个节点,而是展开成一串兄弟:动作簇,外加随任务状态出现的若干状态卡(失败详情、
+   待提交、验收前置命令、自动提交结论…)——出现哪几张宿主事先并不知道。所以这里按**默认**
+   写,不按 class 列白名单:默认每个成员自己占满一整行,只有标题块和这一屏的控件留在第一行。
+   白名单漏掉一个成员的后果不是它排错位置,而是它用 max-content 霸着第一行,把 flex-basis
+   为 0 的标题块挤到只剩内边距,中文逐字竖排、整条顶栏被撑到几百像素高(2026-11-02 现场:
+   AutoCommitOutcomeNotice 是个裸 <p>,连 class 都没有,任何白名单都收不进它)。按默认写,
+   漏网的新成员只是多占一行——失效方向是安全的。
+
+   第一行那几个按标签和固定成员列得起:控件就是展开钮、状态点、链接和那一个动作簇,数量
+   是定的;可变的那一堆全是块级状态卡。标题块另给一道地板宽,因为动作簇的主按钮文案会被
+   填上「验收受阻」的整句理由,长度没有上限 —— 有地板才保证放不下时是动作簇换行,而不是
+   标题被碾平;min() 让地板在窄容器里退回 100%,不会反过来把自己顶出去。
+   地板走的是 min-width 而不是 flex-basis:宿主竖过来时(duet 的窄屏档)主轴变成纵向,
+   flex-basis:100% 会变成「高度占满」。
+
+   纵向排布的宿主(.wf-vgate 那种 block 流)天生每个成员一行,不需要也不该套这副形状。 */
+.acceptance-host { flex-wrap: wrap; }
+.acceptance-host > * { min-width: 100%; margin: 0; }
+.acceptance-host > :is(button, a, span, i, .team-accept-actions) { min-width: 0; flex: 0 1 auto; }
+.acceptance-host > .acceptance-host-title { min-width: min(100%, 15rem); flex: 1 1 auto; }

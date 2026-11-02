@@ -6,6 +6,7 @@ import { AcceptGateWaitCard } from "../../src/review/AcceptGateWaitCard.tsx";
 import { TaskStatusDot } from "../../src/components/TaskStatusDot.tsx";
 import { useTasks } from "../../src/lib/useTasks.ts";
 import { deriveTaskStatusIndicator } from "../../src/lib/useTaskReadState.ts";
+import { AcceptanceControls } from "../../src/team/TeamReviewWorkspace.tsx";
 import "../../src/styles/global.css";
 
 // 验收前置命令那两处表面的测试舞台：验收台上那张卡，以及主会话页回复框上方那条折叠条
@@ -52,7 +53,26 @@ function Fixture() {
   const [intent, setIntent] = useState("");
   const [taskId, setTaskId] = useState("gate-task");
   const [mounted, setMounted] = useState(true);
+  const [acceptedTask, setAcceptedTask] = useState<Task | null>(null);
+  const [guard, setGuard] = useState("none");
   if (params.get("dots") === "1") return <TaskDotsFixture />;
+  if (params.get("controls") === "1") {
+    const current = acceptedTask ?? task({});
+    return <main className="single-review-workspace" style={{ minHeight: "100vh" }}>
+      <header className="single-review-subbar">
+        <div><b>改动与提交</b><small>验收前置命令失败后的恢复入口</small></div>
+        <AcceptanceControls
+          task={{ ...current, archived: guard === "archived", status: guard === "running" ? "running" : current.status }}
+          onTaskUpdated={setAcceptedTask} notify={setNotice} acceptanceBlock={guard === "blocked" ? "审查进行中" : null}
+        />
+      </header>
+      <label>保护状态<select aria-label="保护状态" value={guard} onChange={event => setGuard(event.target.value)}>
+        <option value="none">正常</option><option value="archived">已归档</option>
+        <option value="running">执行中</option><option value="blocked">审查进行中</option>
+      </select></label>
+      <p role="status" aria-label="操作结果">{notice}</p>
+    </main>;
+  }
   if (params.get("wait") === "1") {
     return <main style={{ maxWidth: 760, padding: 24, margin: "auto" }}>
       <h1>验收前置命令卡</h1>

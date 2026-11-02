@@ -110,7 +110,8 @@ import {
   );
 
   // 投递链路两处发送都必须用抢到的那一行，不能用调用方手里的快照。
-  const deliverySrc = readSource(join(HERE, "../src/pending-messages.ts"));
+  const deliverySrc = readSource(join(HERE, "../src/pending-dispatch.ts"));
+  assert.ok(deliverySrc.includes("texts.push(checkpoint?.text ?? current.text)"));
   assert.equal(
     /continueTask\((?:message|m)\.taskId, (?:message|m)\.text/.test(deliverySrc),
     false,
@@ -322,14 +323,17 @@ import {
   // 调用方那一侧的两件事也钉住：两条投递分支都挂了闸，被挡下的一律取消而不是退回托盘
   // （任务已经结束，退回去下一次、下一百次都是同一个结果，只会一直挂在用户的托盘里）。
   const deliverySrc = readSource(join(HERE, "../src/pending-messages.ts"));
+  const dispatchSrc = readSource(join(HERE, "../src/pending-dispatch.ts"));
   assert.equal(
-    (deliverySrc.match(/wakeGuard: async \(\) => \(refused = await guard\(\)\)/g) ?? []).length,
+    (deliverySrc.match(/dispatchPendingMessage\(m,/g) ?? []).length,
     2,
-    "单任务和团队两条真实投递分支都要带上这道闸，少一条就等于那条路没防",
+    "单任务和团队两条真实投递分支都要经过共享投递器",
   );
-  assert.equal(
-    (deliverySrc.match(/if \(refused\) await cancelPendingMessage\(/g) ?? []).length,
-    2,
+  assert.ok(dispatchSrc.includes("guard: monitorWakeGuard(current)"));
+  assert.ok(dispatchSrc.includes("wakeGuard: async () =>"));
+  assert.ok(dispatchSrc.includes("const reason = refused.get(current.id)"));
+  assert.ok(
+    dispatchSrc.includes("if (reason) await cancelPendingMessage(current, reason)"),
     "被终态挡下的不能 abortDelivery 退回托盘重投——那是一条永远送不出去的消息",
   );
   console.log("✓ 抢到租约不等于已送达：等回合期间任务被标完成，运行入口上再挡一道");

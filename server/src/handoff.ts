@@ -16,13 +16,14 @@
 // V1 明确不做:team/duet 模式。跨机器的身份与鉴权见 handoff-identity.ts(本机身份)、
 // handoff-peer-client.ts(出站核对对端)、handoff-peers.ts(入站审批)。
 import { hostname } from "node:os";
+import { exportHandoffMessage } from "./handoff-messages.js";
 import { existsSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { win32 } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, queueItems, scheduledMessages, schedules, sessions, tasks } from "./db/schema.js";
-import { claimTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
+import { claimOwnTurn, isTurnClaimed, releaseTurn, stopTask } from "./runs.js";
 import { setTaskStatus } from "./status.js";
 import { expandHome, worktreePathFor } from "./git.js";
 import { discardMigratedWorkspace } from "./workspace-cleanup.js";
@@ -31,6 +32,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { handoffActorId } from "./auth/handoff-outbound.js";
 import { resolveTargetsFor, toPublicTarget } from "./auth/handoff-scope.js";
 import { id, now } from "./util.js";
+import { checkpointReadyTask, preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import type {
   HandoffExportResult, HandoffPreflightResult, HandoffPeerIdentity, TaskHandoff,
 } from "@ash/shared";
@@ -50,13 +52,14 @@ import {
 } from "./handoff-peer-client.js";
 import { localIdentity, shortFingerprint } from "./handoff-identity.js";
 import { collectUploads, isTextRel } from "./handoff-uploads.js";
-import { readableUploads } from "./uploads.js";
+import { readableUploads, taskUploadNames } from "./uploads.js";
 import { beginHandoffPrepare, endHandoffPrepare } from "./handoff-guard.js";
 import { capabilityReportFor } from "./handoff-capability.js";
 import { capabilityBlockMessage, HANDOFF_CAPABILITY_BLOCKED } from "@ash/shared/handoff";
 import { cancelPendingMessage } from "./pending-messages.js";
 import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
+import { exportWaitOrigins } from "./handoff-wait.js";
 import { collectGateRuns } from "./handoff-accept-gate.js";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
@@ -266,15 +269,18 @@ export async function preflightHandoff(
   const pendingMsgs = await db.select().from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
   const scheduleRow = (await db.select().from(schedules).where(eq(schedules.taskId, taskId))).at(0);
-  // 上传附件盘点:正文/续跑提示/提问/待发送消息 + run 产物文本就够了(回复回合的附件
-  // 路径必然出现在任务 transcript 里);会话 JSONL 留给真正导出时全量扫。
+  // 上传附件盘点:挂在这条任务名下的一律带走(权威名单),文本只用来找出**别的**任务/
+  // 随手记的附件被粘了路径进来的那些 —— 正文/续跑提示/提问/待发送消息 + run 产物文本
+  // 就够了;会话 JSONL 留给真正导出时全量扫。
   const uploadTexts = [
     task.body, task.resumePrompt ?? "", task.question ?? "",
     ...pendingMsgs.flatMap((x) => [x.text, x.attachments]),
   ];
   uploadTexts.push(...await collectRunArtifactTexts(taskId, notes));
   // 盘点也过授权闸:对话框里报的数字必须就是真会带走的那批(uploads.ts readableUploads)。
-  const uploads = await collectUploads(uploadTexts, notes, true, await packGateFor(task));
+  const uploads = await collectUploads(
+    await taskUploadNames(taskId), uploadTexts, notes, true, await packGateFor(task),
+  );
   // 能力握手:对端跑不跑得动这个任务。判据与身份核对同档 —— 在打包之前就要知道
   // (详见 handoff-capability.ts 顶部)。它永不抛,读不出来就是 unknown 不拦。
   const capability = await capabilityReportFor(taskId, ping.capabilities);
@@ -397,8 +403,16 @@ export async function exportHandoff(
 
     task = await stopAndSettle(taskId);
     // 占住回合:导出期间队列/调度器不能再把它拉起来;占不到 = 有回合在收尾,让用户重试。
-    if (!claimTurn(taskId, "handoff")) throw new HandoffError("任务回合还在收尾,稍等几秒再试", 409);
+    // 身份留住:导出整段都是 await(对端预检、打包、传输),还锁只能还自己那一把
+    // (本轮审查 F1,见 turn-lock.ts `endOwnTurn`)。
+    const turn = claimOwnTurn(taskId, "handoff");
+    if (!turn) throw new HandoffError("任务回合还在收尾,稍等几秒再试", 409);
     try {
+      const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+      if (checkpointBlocked) throw new HandoffError(checkpointBlocked, 409);
+      const ready = await checkpointReadyTask(taskId);
+      if (!ready) throw new HandoffError("续跑交代正在交接或任务已删除，请稍后重试接力", 409);
+      task = ready;
       const notes: string[] = [];
       if (returnContext && !taskScopedReturn) {
         notes.push("原机任务存档已删除，本次经整机审批通道重新导入原项目");
@@ -437,6 +451,8 @@ export async function exportHandoff(
       // 任务文本和文本类载荷(会话 JSONL/产物)里引用的上传附件一并打包——不带走的话,
       // 对端 agent 照着 prompt 里的源机绝对路径 Read 只会得到「文件不存在」。
       const uploads = await collectUploads(
+        // 身份的权威出处是归属表,不是正文里那些路径(推演见 collectUploads)。
+        await taskUploadNames(taskId),
         [
           task.body, task.resumePrompt ?? "", task.question ?? "",
           task.questionOptions ?? "", task.questionItems ?? "", task.questionHistory ?? "",
@@ -476,6 +492,7 @@ export async function exportHandoff(
           reviewStep: task.reviewStep, verifyRounds: task.verifyRounds, verifyStationRounds: task.verifyStationRounds,
           verifyCompletedSteps: task.verifyCompletedSteps,
           resumePrompt: task.resumePrompt, resumePromptAuto: task.resumePromptAuto, question: task.question,
+          waitOrigins: await exportWaitOrigins(task),
           questionOptions: task.questionOptions, questionItems: task.questionItems,
           questionHistory: task.questionHistory,
           acceptedTargetBranch: task.acceptedTargetBranch,
@@ -505,11 +522,7 @@ export async function exportHandoff(
         acceptGateRuns: await collectGateRuns(task.id),
         git: gitState,
         uploads,
-        messages: pendingMsgs.map((x) => ({
-          text: x.text, attachments: x.attachments, agent: x.agent, model: x.model,
-          reasoningEffort: x.reasoningEffort, sessionRole: x.sessionRole,
-          mode: x.mode, sendAt: x.sendAt, createdAt: x.createdAt,
-        })),
+        messages: pendingMsgs.map(exportHandoffMessage),
         schedule: scheduleRow
           ? {
               kind: scheduleRow.kind, at: scheduleRow.at, cron: scheduleRow.cron,
@@ -672,7 +685,7 @@ export async function exportHandoff(
         notes,
       };
     } finally {
-      releaseTurn(taskId);
+      releaseTurn(taskId, turn);
     }
   } finally {
     endHandoffPrepare(taskId);

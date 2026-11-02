@@ -3,7 +3,7 @@
 // 重跑上一回合(retry-turn)、消息补投扫描(pending-messages)、队列推进(advanceQueue)。
 //
 // 为什么:这些入口各自都是「先读库检查、隔着若干 await、再把状态落库/把任务拉起」。检查
-// 读的是 tasks.status,而另一个入口在自己的窗口里只占了**任务级**回合锁(claimTurn)、
+// 读的是 tasks.status,而另一个入口在自己的窗口里只占了**任务级**回合锁(claimOwnTurn)、
 // 状态还停在终态 —— 于是两个入口各自读到「整队空闲」,同一条串行队列上两个成员一起跑
 // (第 7 轮审查:重跑上一回合在异步读旧记录期间保持 done,扫描判定整队空闲并启动另一个
 // 失败成员,普通 HTTP 并发 10/10 复现)。任务级锁解决不了跨成员互斥;多查几次也关不掉
@@ -26,8 +26,11 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { queueItems, tasks } from "./db/schema.js";
 import { manualStartBlockers } from "./queues.js";
-import { isTurnClaimed, whenTurnIdle } from "./runs.js";
-import { setTaskStatus } from "./status.js";
+import { SEAT_ROLLBACK_ROLE, claimNonTurn, releaseTurn, whenTurnIdle } from "./runs.js";
+import type { TurnOwner } from "./runs.js";
+import { appendTaskTimeline } from "./task-timeline.js";
+import { reserveQueuedTask, restoreQueuedTask, taskQueueReservation, type TaskQueueReservation } from "./task-queue-reservation.js";
+import { waitForStartReceipt } from "./task-start-receipt.js";
 
 export type QueueSeat = {
   taskId: string;
@@ -70,13 +73,22 @@ export function noteMissedAdvance(taskId: string, queueId: string): void {
 
 export type QueueSeatClaim =
   | { ok: true; seat: QueueSeat | null } // seat=null:任务不在任何队列,没有同队语义
-  | { ok: false; blockers: string[]; transient?: boolean }; // transient:数据库临时故障,不是同队在跑
+  | {
+    ok: false;
+    blockers: string[];
+    /** 数据库临时故障,不是同队在跑。 */
+    transient?: boolean;
+    /** 挡路的是**这个任务自己的另一代占位**,不是同队别的成员。 */
+    self?: boolean;
+  };
 
 // 手动启动入口(/run、/fire、/retry、重跑上一回合)的认领失败话术。transient(数据库
 // 临时故障)时必须说真话:把一次可重试的写失败报成「同队有人在跑」,用户会去等一个
 // 不存在的前项(第 ll7XKsu_ps0n 链第 2 轮指出)。
-export function queueClaimError(r: { blockers: string[]; transient?: boolean }): string {
-  return r.transient
+export function queueClaimError(r: { blockers: string[]; transient?: boolean; self?: boolean }): string {
+  // transient(数据库临时故障)和 self(这个任务自己的另一代占位)都必须说真话:套用
+  // 「同队有人在跑」会让用户去等一个不存在的前项。
+  return r.transient || r.self
     ? r.blockers.join("；")
     : "同一队列里还有未完成或正在运行的任务，先等它们结束、处理完，或把本任务移出队列";
 }
@@ -115,16 +127,34 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
       taskId,
     );
     if (blockers.length) return { ok: false, blockers };
-    const prevStatus = rows.find((r) => r.id === taskId)?.status ?? "backlog";
+    const current = rows.find((row) => row.id === taskId);
+    if (!current) return { ok: false, blockers: ["任务已删除"] };
+    // 同一个任务不许叠第二代占位。`manualStartBlockers(rows, taskId)` 不把 taskId 自己算作
+    // 挡路者 —— 那对终态续聊是对的,但顺带意味着「这个任务已经被占成 queued」也不挡它自己,
+    // 于是两条入口能在同一个任务上各占一代:第二代读到的 `prevStatus` 是**第一代占下的那个
+    // queued**,它的回滚于是成了「写回 queued」,什么也没回滚,任务停在排队中。
+    //
+    // 判据用持久凭证而不是内存里的代次表:`queueSeatToken` 非空 = 有一具活着的占位带着自己
+    // 的凭证占着这一行;advanceQueue 自己 setQueued 出来的那种凭证为 null(setTaskStatus 每
+    // 次写都把它清掉),照旧放行给占位接管。重启也不会把这条判据丢掉。
+    if (current.status === "queued" && current.queueSeatToken) {
+      return {
+        ok: false,
+        self: true,
+        blockers: ["这个任务已经有另一条启动路径占着执行位，等它那一轮起完再试"],
+      };
+    }
+    const reservation = taskQueueReservation(current);
+    const prevStatus = reservation.prevStatus;
     try {
-      await setTaskStatus(taskId, "queued");
+      await reserveQueuedTask(reservation);
     } catch (err) {
       // 占位写入失败 ≠ 肯定没写入:setTaskStatus 写完 status 还要读 sessions 广播,
       // UPDATE 已提交、附带读取才超时的话任务已经是 queued(第 7 轮审查同款)。这里
-      // 异常若直接外抛,手动启动入口(/run 等)在 claimTurn 之后的 await 就会把 500
+      // 异常若直接外抛,手动启动入口(/run 等)在 claimOwnTurn 之后的 await 就会把 500
       // 抛给用户、回合锁没人释放,此后一律 409「回合正在进行」(第 ll7XKsu_ps0n 链
       // 第 1 轮)。按失败认领返回,让调用方走统一的「认领失败」收口(释放自己的锁/
-      // 暂存消息);可能的 queued 遗留延迟交给 scheduler 的守卫补偿按持久结果收拾。
+      // 暂存消息);可能的 queued 遗留延迟交给 queue-seat-reclaim 的守卫补偿按持久结果收拾。
       //
       // 补偿必须 repush:"never" —— 本函数的调用方全是带自身语义的入口(/fire 全新
       // 一轮、/run 续跑、扫描投递消息),记账重推走的是 advanceQueue 的 resumeOrRunTask,
@@ -132,39 +162,78 @@ export async function claimQueueSeat(taskId: string): Promise<QueueSeatClaim> {
       // 链第 2 轮实测:409 之后任务自行续上旧检查点)。失败就只回滚遗留,让原入口按
       // 原语义重试(用户重点、扫描重投、定时不消费班次)。
       console.error(`[ash] 队列占位写入失败(${taskId}),按认领失败返回并安排遗留回收:`, err);
-      void import("./scheduler.js").then(({ reclaimStrandedSeat }) => {
+      void import("./queue-seat-reclaim.js").then(({ reclaimStrandedSeat }) => {
         const timer = setTimeout(
-          () => void reclaimStrandedSeat(taskId, item.queueId, prevStatus as Parameters<typeof reclaimStrandedSeat>[2], { repush: "never" }),
+          () => void reclaimStrandedSeat(taskId, item.queueId, prevStatus, { repush: "never", reservation }),
           1_000,
         );
         timer.unref?.();
       });
       return { ok: false, transient: true, blockers: ["队列占位写入失败，请稍后重试"] };
     }
-    return { ok: true, seat: makeSeat(taskId, prevStatus) };
+    return { ok: true, seat: makeSeat(reservation, item.queueId) };
   });
 }
 
-function makeSeat(taskId: string, prevStatus: string): QueueSeat {
+/**
+ * 延期回滚最多再排几次。每一次重排都要等一个完整的「占锁 → 放锁」周期,所以现实里它本就
+ * 收敛;这个上限只为挡住病态的来回(两个入口在同一个释放点上反复互相接手)。到顶**不是
+ * 撒手**:把补偿交给 queue-seat-reclaim 那条带重试的路。
+ */
+const MAX_ROLLBACK_DEFERRALS = 5;
+
+function makeSeat(reservation: TaskQueueReservation, queueId: string): QueueSeat {
+  const { taskId, prevStatus } = reservation;
   let released = false;
+
+  // 本 seat 不再为这具占位负责了,交给 queue-seat-reclaim 兜底那条带重试的路。只要还有人接手,
+  // 「占位没人回滚」就不会变成永久的「排队中」。
+  const handOff = (why: string): void => {
+    console.warn(`[ash] 队列占位回滚交给兜底补偿(${taskId}):${why}`);
+    // 动态 import:queue-seat-reclaim 静态依赖本模块。repush:"never" —— 本模块的调用方全是
+    // 带自身语义的入口,补办重推会把 /fire 的「全新一轮」偷换成续跑旧会话(见 claimQueueSeat)。
+    void import("./queue-seat-reclaim.js").then(({ reclaimStrandedSeat }) =>
+      reclaimStrandedSeat(taskId, queueId, prevStatus as Parameters<typeof reclaimStrandedSeat>[2],
+        { repush: "never", reservation }),
+    ).catch((err) => console.error(`[ash] 队列占位回滚交接失败(${taskId}):`, err));
+  };
+
+  const rollback = async (deferrals: number): Promise<void> => {
+    // **占住回合锁再提交**(理由写在 turn-lock.ts 的 `SEAT_ROLLBACK_ROLE` 上):`setTaskStatus`
+    // 自己内部就隔着 await(先整行 SELECT 再 UPDATE),占着锁写才没有那段窗口 —— 持久凭证
+    // 是 SQL 那一层的兜底,这把锁是把窗口整个关掉,两道都要。
+    //
+    // 占不到 = 有人正拿着这个占位真正起跑,它的结算会覆盖状态,这里不动。但**不许就这么
+    // 走掉**:释放那一瞬哪怕只是 PATCH status 那种几毫秒的预占,这具 queued 就再也没人回滚,
+    // 任务永久停在「排队中」、投递判定永远是「等它空下来」(2026-10-26 实测 70+ 分钟)。
+    // 所以排到锁释放之后再看一眼:那时状态要么已被真实结算覆盖(凭证对不上,回滚自然是
+    // no-op),要么确实还孤零零停在我占下的那个 queued。
+    const releaseLock = claimNonTurn(taskId, SEAT_ROLLBACK_ROLE);
+    if (!releaseLock) {
+      if (deferrals >= MAX_ROLLBACK_DEFERRALS) { handOff("重排已达上限"); return; }
+      whenTurnIdle(taskId, () => void rollback(deferrals + 1));
+      return;
+    }
+    try {
+      // 回滚的所有权由**持久凭证**核验:WHERE 里带着我这一份 `queueSeatToken`,所以延期
+      // 之后库里那个 queued 若已经是后来者占下的,这一笔自然不命中、一个副作用都不发。
+      await restoreQueuedTask(reservation);
+    } catch (err) {
+      handOff(`回滚出错(${err instanceof Error ? err.message : String(err)})`);
+    } finally {
+      releaseLock();
+    }
+  };
+
   return {
     taskId,
     prevStatus,
     async release() {
       if (released) return;
       released = true;
-      // 回合锁被人占着 = 有人正拿着这个占位真正起跑,它的结算会覆盖状态,这里不动;
-      // 锁空着才查状态回滚 —— 把别人正要跑的任务翻回终态,结算钩子会放行下一个成员,
-      // 反而造出双跑。
-      if (isTurnClaimed(taskId)) return;
-      try {
-        const cur = (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-        if (cur?.status === "queued") {
-          await setTaskStatus(taskId, prevStatus as Parameters<typeof setTaskStatus>[1]);
-        }
-      } catch {
-        /* 回滚失败只能留给重启 reconcile */
-      }
+      // `void` 不 await 延期分支:本函数可能在队列认领的临界区内被调用,await 一个会触发
+      // advanceQueue 的回滚就会死等自己(见模块头的 ⚠)。
+      await rollback(0);
     },
   };
 }
@@ -175,22 +244,40 @@ function makeSeat(taskId: string, prevStatus: string): QueueSeat {
 // 回滚占位,别让任务卡在 queued(真跑起来了 release 是 no-op)。
 export async function seatThenStart(
   taskId: string,
+  // 调用方刚刚 `claimOwnTurn` 占下的那把锁的**身份**。早先这里是自己现读一次
+  // (`turnIdentity(taskId)`)—— 读到的必然是「现在占着的那一把」,也就是说人工放开拔走
+  // 之后另一轮占上时,读到的是后来者,收尾时还掉的就是后来者那把互斥(本轮审查 F1)。
+  // 凭据只能由占位那一刻产生,所以它是参数。
+  owner: TurnOwner,
   start: (seat: QueueSeat | null) => Promise<unknown>,
-): Promise<{ ok: true } | { ok: false; blockers: string[]; transient?: boolean }> {
+): Promise<{ ok: true } | { ok: false; blockers: string[]; transient?: boolean; self?: boolean }> {
   let claim: QueueSeatClaim;
   try {
     claim = await claimQueueSeat(taskId);
   } catch (err) {
-    // 临界区里的读也可能撞锁:异常传出去就是手动入口 claimTurn 之后的 500 + 锁泄漏
-    // (调用方的「认领失败 → releaseTurn」分支走不到)。读失败没有写入遗留,按失败
+    // 临界区里的读也可能撞锁:异常传出去就是手动入口 claimOwnTurn 之后的 500 + 锁泄漏
+    // (调用方的「认领失败」分支走不到)。读失败没有写入遗留,按失败
     // 认领返回即可,下一次点运行就是干净的重试。
     console.error(`[ash] 队列占位认领读取失败(${taskId}):`, err);
+    releaseTurn(taskId, owner);
     return { ok: false, transient: true, blockers: ["队列占位读写失败，请稍后重试"] };
   }
-  if (!claim.ok) return claim;
+  if (!claim.ok) {
+    releaseTurn(taskId, owner);
+    return claim;
+  }
   const seat = claim.seat;
-  void start(seat)
-    .catch((err) => console.error(`[ash] 任务 ${taskId} 启动异常:`, err))
-    .finally(() => { if (seat) void seat.release(); });
-  return { ok: true };
+  const started = await waitForStartReceipt(taskId, async () => {
+    try {
+      await start(seat);
+    } catch (err) {
+      console.error(`[ash] 任务 ${taskId} 启动异常:`, err);
+      await appendTaskTimeline(taskId, `本次启动失败，未能继续执行：${err instanceof Error ? err.message : String(err)}。可稍后重试运行。`);
+    } finally {
+      releaseTurn(taskId, owner);
+      await seat?.release();
+    }
+  });
+  return started ? { ok: true }
+    : { ok: false, transient: true, blockers: ["任务未通过启动检查，尚未启动，请稍后重试"] };
 }

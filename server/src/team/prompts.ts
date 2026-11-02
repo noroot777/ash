@@ -1,6 +1,7 @@
 // §Team 的所有文案:调度者前言、执行者前言、入站消息模板。
 // 只放纯模板(不碰 DB),读库的包装在 dispatch.ts / inbox.ts。
 import type { TaskStatus } from "@ash/shared";
+import { craftRulesFor, type CraftContext } from "../craft-rules.js";
 
 // 调度者前言。只在 fresh run 注入(第一条消息);之后进程常驻/--resume 接回,
 // CLI 自己带着上下文,不需要重注。
@@ -26,6 +27,24 @@ export const LEAD_PREAMBLE = (taskId: string, worker: string) =>
 审查默认由 ash 在团队执行者确认完成后自动派给独立审查者；dispatch 的每个任务可用 review:false 关闭这一项，团队配置也可整体关闭默认审查。审查者会真实运行验证并留下报告（改动看得见时另附截图）；未通过时最多自动打回修复并复审一次。你仍可在任务详情手动补派审查。
 
 **你没有「完成」这个状态,也不要调 complete_task**(团队任务不参与完成协议)。手头的事处理完就正常结束回合 —— 你会保持待命,用户或执行者再说话时自动醒来接着干。整件事收尾了就告诉用户,由用户归档这支团队。\n\n`;
+
+// 开台**第一条**消息的拼装(接回那一条只补一句「你被中断过」,仍拼在 session.ts)。
+//
+// 单独一个纯函数的理由跟 `turn-prompt.ts` 文件头一样:这条消息也是由几个常量拼起来的,
+// 而「调度台开台那条到底带了什么、有多大」原先在任何地方都量不到 —— 而团队在
+// `task-run.ts` 开头就分流走了,凡是只接在 `runTask` 上的开场段落,这条拼装一个字都收不到。
+// 现在体积闸直接调它量投递态。
+export const leadFirstMessage = (parts: {
+  preamble: string;
+  /** 产出质量规则这一轮的事实;接回那条路不走本函数。判据本体见 craft-rules.ts。 */
+  craft: CraftContext;
+  objective: string;
+  newMessage: string;
+}): string =>
+  // 落在前言之后:调度台自己不写界面,但它写执行者的任务书,带着这两条只会让它把需求
+  // 交代得更清楚。`LEAD_PREAMBLE` 自带尾部空行,这个位置不需要额外分隔。
+  parts.preamble + craftRulesFor(parts.craft) + parts.objective +
+  (parts.newMessage ? `\n\n【新消息】${parts.newMessage}` : "");
 
 // 执行者前言:dispatch 建的任务在 fresh run 时自动拼上(见 dispatch.workerPreambleFor)。
 // 对称放权:调度者被要求「给目标不给步骤」,这里就要告诉执行者「目标内的做法你说了算」,

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { File, Gavel, ShieldCheck, GitFork } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
@@ -43,6 +43,8 @@ import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
 import { canForkReply } from "./conversationFork.ts";
 import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
 import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
+import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts";
+import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -183,7 +185,7 @@ function UserMessage({
 
 export function ConversationFeed({
   task,
-  items,
+  items: feedItems,
   sessions,
   pendingExecutor,
   loading,
@@ -240,6 +242,11 @@ export function ConversationFeed({
   historyReady?: boolean;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
+  // 被挡回的用户操作合进同一条任务历史。**无条件合** —— 「有没有正文」跟「这段历史该不该
+  // 可见」没有关系,上一版拿它当判据,任务一跑出正文第一次被拒的记录就再也显示不出来
+  // (第 2 轮审查 F4)。合流之后它和会话正文里的 aside 旁注走同一套渲染。
+  const { items: noticeItems, remedy: turnRemedy, reload: reloadNotices } = useRejectionNotices(task.id);
+  const items = useMemo(() => mergeNoticeItems(feedItems, noticeItems), [feedItems, noticeItems]);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
   const activityExecutor = runActivityExecutor({
     sessions,
@@ -409,6 +416,9 @@ export function ConversationFeed({
           {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}
           {forkBlockedReason && <p className="task-conversation-error" role="status">{forkBlockedReason}</p>}
           {error && <p className="task-conversation-error">{error.message}</p>}
+          {/* 回合占位占着不动时,界面上得真有那个开关 —— 不然诊断说了「手动放开」,用户
+              却只能去点运行,而那条路只会继续被挡回。 */}
+          {turnRemedy === "reclaim-turn" && <ReclaimTurnSwitch key={task.id} taskId={task.id} onDone={reloadNotices} />}
           {historyReady && <QuestionHistoryRemainder messages={items.flatMap((item) => item.kind === "user" ? [item.text] : [])} />}
           {footer}
         </div>

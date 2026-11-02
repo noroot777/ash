@@ -13,6 +13,7 @@
 //   - handoff-uploads.ts:上传附件本体与各处文本里的路径改写
 import { and, eq, inArray } from "drizzle-orm";
 import { existsSync } from "node:fs";
+import { importMessageOrigin } from "./handoff-messages.js";
 import { db } from "./db/index.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
@@ -39,6 +40,7 @@ import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@ash/shared";
+import { importWaitOwnership } from "./handoff-wait.js";
 import { collectGateRuns, replaceGateRuns } from "./handoff-accept-gate.js";
 
 export interface HandoffImportResult {
@@ -362,10 +364,8 @@ async function importValidated(
     verifyCompletedSteps: jsonOr(m.task.verifyCompletedSteps, "[]"),
     resumePrompt,
     resumePromptAuto,
-    // **代次从 1 起（有文字）/ 0（没有）**：这台机器上的那一格是新建的，不可能有在途的凭证
-    // （取走只发生在本机进程里），所以从哪个数起都安全 —— 取 1 是为了让「有文字 = 被占用过」
-    // 这件事在库里看得出来。代次本身不进 manifest：它是本机那一格的局部事实，跨机没有意义。
-    resumePromptGeneration: resumePrompt ? 1 : 0,
+    // 首次导入的占用从 1/0 起；移回的本机槽可能仍有在途凭证，递增代次使旧凭证失效。
+    resumePromptGeneration: returning ? (existing?.resumePromptGeneration ?? 0) + 1 : resumePrompt ? 1 : 0,
     question: m.task.question,
     questionOptions: jsonOr(m.task.questionOptions, "") || null,
     questionItems: jsonOr(m.task.questionItems, "") || null,
@@ -387,12 +387,18 @@ async function importValidated(
     handoff: JSON.stringify(marker),
     scheduleId,
   };
+  const waitOwnership = importWaitOwnership({ ...taskValues, id: m.task.id }, m.task.waitOrigins);
+  if ([waitOwnership?.question?.origin, waitOwnership?.checkpoint?.origin]
+    .some((origin) => origin && origin.kind !== "ordinary")) {
+    notes.push("接力保留了审查等待来源，但原机审查权限不能迁移；这些旧等待需在本机重新派审。");
+  }
+  const importedTaskValues = { ...taskValues, waitOwnership };
   const taskRow = {
     id: m.task.id,
     mode: "single" as const,
     executorId: null,
     reportBack: false,
-    ...taskValues,
+    ...importedTaskValues,
     // 接力导入的任务归对端那个人:之后它在本机重跑、回复,烧的都是他自己的 key。
     ownerUserId: context.ownerUserId ?? null,
   };
@@ -454,6 +460,7 @@ async function importValidated(
   // 自由工作流的审查历史(翻译成本机行,落库在下面两条路径里各自执行)。
   const freeWorkflowRows = await buildFreeWorkflowRows(m.task.id, m.freeWorkflow, notes);
   const messageRows = messages.map((msg) => ({
+    ...importMessageOrigin(msg, notes),
     id: id(),
     taskId: m.task.id,
     text: msg.text,
@@ -477,7 +484,7 @@ async function importValidated(
         // 安全移回只覆盖 manifest 真正携带的任务字段。分组与依赖是**整组一起挪**的东西，
         // 不在单任务协议里（用户 2026-08-27 确认），整行删除再插入会把它们静默清空。
         await tx.update(tasks).set({
-          ...taskValues,
+          ...importedTaskValues,
           // 执行器 id 只在本机有意义；agent 类型没变才保留原机选择，否则按类型重新解析。
           executorId: existing?.agentType === m.task.agentType ? existing.executorId : null,
         }).where(eq(tasks.id, m.task.id));

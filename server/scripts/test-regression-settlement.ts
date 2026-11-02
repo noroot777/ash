@@ -28,6 +28,8 @@ try {
     assert.equal(migrated.revoked, 1);
     assert.equal(migrated.unavailable, "EACCES");
     assert.equal(migrated.settlement, null);
+    assert.equal(migrated.target_identity, null);
+    assert.equal(migrated.continuation, null);
   } finally { legacyDb.close(); }
   const { open } = await setupRegressionReviews();
   const api = new Hono();
@@ -127,7 +129,7 @@ try {
     return true;
   }), false);
   assert.equal(consumedOldAttempt, false, "old attempt cannot consume a new epoch");
-  await assert.rejects(checkRegressionConclusion(unknown.taskId, unknown.directory, "verified", false, unknown.basis), /依据无效/);
+  await assert.rejects(checkRegressionConclusion(unknown.taskId, unknown.directory, "verified", unknown.basis), /依据无效/);
 } finally {
   if (restricted) chmodSync(restricted, 0o600);
   await teardown();

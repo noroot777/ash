@@ -179,9 +179,7 @@ export function crossSiteRejection(headers: {
  * 光有 taskId 谁都能填。
  *
  * **导出是给自用模式下的回调端点用的**(claude 的 PreToolUse hook,见 monitor-routes.ts):
- * 自用模式在上面那个 gate 里一行不拦、直接 set 成 `SINGLE_ACTOR`,这条路根本不走 ——
- * 于是「这次回调是哪条任务的哪一轮」在自用模式下无从得知。要它的地方自己再问一次,
- * 但**判据只能有这一份**:抄一遍到别处,两边迟早对 token 的要求就分家了。
+ * 自用模式也保留有效回合身份,其余请求的回合凭证由各路由核验。
  */
 export async function agentActor(c: Context): Promise<Actor | null> {
   const taskId = c.req.header("x-ash-source-task-id")?.trim();
@@ -240,8 +238,7 @@ export function authGate(): MiddlewareHandler {
     const path = new URL(c.req.url).pathname;
 
     if (!(await isMultiUser())) {
-      // 自用模式一行不拦(§二)。仍然 set 一个 actor,好让下游统一走 actorOf()。
-      setActor(c, SINGLE_ACTOR);
+      setActor(c, (await agentActor(c)) ?? SINGLE_ACTOR);
       return next();
     }
 

@@ -1,20 +1,19 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ASH_MCP_SERVER_NAME, LEGACY_ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
+import { codexInjectionTarget } from "../codex-toml.js";
 
-const hasServer = (config: string, name: string): boolean =>
-  new RegExp(`^\\[mcp_servers\\.${name}\\]`, "m").test(config);
+const readConfig = (codexHome?: string): string => {
+  const configPath = join(codexHome?.trim() || join(homedir(), ".codex"), "config.toml");
+  try { return readFileSync(configPath, "utf8"); } catch { return ""; }
+};
 
 /**
  * 新安装统一叫 ash；尚未重跑 setup 的机器可能仍只有历史 harness 条目。
- * 只在规范名确实不存在时回退，避免给一个未声明的 server 塞配置导致 Codex 整体拒载。
+ * 判据和派审预检是同一份（`codex-toml.ts`）：预检说「接好了」的写法，这里一定认得出来。
+ * 作用域只有 `$CODEX_HOME/config.toml` 这一份 —— 项目级配置、`-c` 里的登记这里看不见，
+ * 派审预检会把「CLI 列得出、这里注不进身份」的登记判成交不了卷（`ash-mcp-reachability.ts`）。
  */
 export function codexAshMcpServerName(codexHome = process.env.CODEX_HOME): string | null {
-  const configPath = join(codexHome?.trim() || join(homedir(), ".codex"), "config.toml");
-  let config = "";
-  try { config = readFileSync(configPath, "utf8"); } catch { /* 新安装按规范名 */ }
-  if (hasServer(config, ASH_MCP_SERVER_NAME)) return ASH_MCP_SERVER_NAME;
-  if (hasServer(config, LEGACY_ASH_MCP_SERVER_NAME)) return LEGACY_ASH_MCP_SERVER_NAME;
-  return null;
+  return codexInjectionTarget(readConfig(codexHome));
 }

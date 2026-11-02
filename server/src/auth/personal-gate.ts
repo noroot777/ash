@@ -22,8 +22,17 @@
 // 被这道闸挡在外面。
 import type { MiddlewareHandler } from "hono";
 import { actorOf } from "./context.js";
+import {
+  HUMAN_ACTION_TOKEN_HEADER,
+  HUMAN_ACTION_TOKEN_NEXT_HEADER,
+  consumeHumanActionToken,
+  issueHumanActionToken,
+  markHumanActionVerified,
+} from "./human-action-token.js";
 import { WRITE_METHODS } from "./middleware.js";
 import { isMultiUser } from "./mode.js";
+import { humanRequestRejection, rejectHumanRequest } from "./human-request.js";
+export { AGENT_HUMAN_ONLY_REFUSAL } from "./human-request.js";
 
 /**
  * 个人面集合的**第一段**。新开一张 `ownerUserId` 的表就顺手加一行 ——
@@ -68,7 +77,51 @@ const PERSONAL_PATHS = [
   // 是一条待审批通知,而是任务正文、会话历史和仓库状态**直接迁移**过去(第 3 轮审查 P1)。
   // 精确到末尾:`/handoff/preflight` 只探路不动任务,派活要用,留给它。
   /^\/api\/tasks\/[^/]+\/handoff$/,
+  //  · 任务备忘是**人写给自己看的私有批注**(shared/src/task-memo.ts 顶部那份分界):它不进
+  //    任何 prompt,agent 压根读不到,自然也没有任何理由改得动。而 `canUseOwned` 判的是
+  //    `ownerUserId` 相等 —— 回合凭证身上恰好挂着 owner 的归属戳,于是只凭
+  //    `x-ash-source-task-id` + `x-ash-turn-token` 就能改写、删掉用户自己记的东西
+  //    (第 2 轮审查 F2 实测:对照 `POST /api/notes` 返 403,备忘这三条却 201/200/200)。
+  //    随手记走的是第一段(PERSONAL_COLLECTIONS 里的 "notes"),备忘挂在任务下面所以在这里。
+  //    **末尾那条摘要端点不在内**:`/api/tasks/memos` 是只读集合查询(POST 只因为要带一批
+  //    taskId),下面这条正则要求中间那段是任务 id,正好不会误伤它。
+  /^\/api\/tasks\/[^/]+\/memos(?:\/|$)/,
 ];
+
+/**
+ * **只有账号本人按得动的危险动作。** 跟上面那两段的差别有两处,都是刻意的:
+ *
+ * ① **不看单人/多人。** 上面那张清单防的是「别人家的 agent 动了我的私产」,自用模式下
+ *    没有「别人」,所以整道闸放行。这里防的是另一件事 —— **agent 替用户点了那个只有
+ *    用户能点的开关**,而它在自用模式下一模一样地成立:同项目另一条任务只凭
+ *    `x-ash-source-task-id` + `x-ash-turn-token` 就按得动(第 1 轮审查 F2 实测:
+ *    `kind:"agent"` 的请求拿到 200、目标任务的锁被放开,日志还记成「用户主动放开」)。
+ * ② 回合身份不能代替人工授权。自用模式没有账号鉴权边界,本机默认身份本身不证明
+ *    用户同意;入口仍核验来源,路由另要求显式确认风险。
+ *
+ * 为什么这类动作必须这样收:`reclaim-turn` 解除的是**互斥本身**。判据(没句柄、没令牌、
+ * 占得久)证不了原持有者已经结束,按错一次就是同一个任务两个回合并行改同一个工作区。
+ * 它之所以存在,全部理由就是「系统判不了,所以让知情的人来判」(AGENTS.md 对这类不可逆
+ * 又外溢操作的口径)。那么把一次 agent 发来的 HTTP 请求当成「用户知情同意」,等于把这个
+ * 设计的唯一前提抽掉 —— 界面上那段风险说明也就只是说给没在看的人听。
+ */
+const HUMAN_ONLY_PATHS = [
+  /^\/api\/tasks\/[^/]+\/reclaim-turn(?:\/approval)?$/,
+  // 杀掉 CUA 旁路会话:AGENTS.md 对它的口径就是「不可逆又外溢,默认必须是告诉用户 + 给
+  // 一个他自己按的开关」—— 它杀的是**开机级全局单例**,外溢到用户在 ChatGPT 里的其它会话。
+  // 既然那条规矩写的是「他自己按」,这道闸就得真的只让他按得动,否则那句话只是说给没在看
+  // 的人听的(同 reclaim-turn 的理由)。
+  /^\/api\/tasks\/[^/]+\/team\/kill-cua$/,
+];
+
+/** 导出给回归测试直接钉住:哪几条只有真人按得动。 */
+export function isHumanOnlyPath(path: string): boolean {
+  return HUMAN_ONLY_PATHS.some((p) => p.test(path));
+}
+
+export const HUMAN_ACTION_TOKEN_REFUSAL =
+  "这个动作需要本次会话的页面凭据：请在 ash 页面上点这个开关。"
+  + "凭据随页面下发、用一次就失效，刷新页面可以换一份新的";
 
 export const AGENT_PERSONAL_REFUSAL =
   "个人资源与账号设置只对账号本人开放：回合凭证代表的是那一条任务，不是这个账号";
@@ -83,10 +136,42 @@ export function personalWriteGate(): MiddlewareHandler {
   return async (c, next) => {
     if (!c.req.path.startsWith("/api/")) return next();
     if (!WRITE_METHODS.has(c.req.method)) return next();
-    if (!(await isMultiUser())) return next();
+    /**
+     * 烧掉一份就得发下一份 —— **由这道闸发,不分成功失败**(第 5 轮审查 N2)。
+     *
+     * 原先是各条路由在自己的成功分支里 `[HUMAN_ACTION_TOKEN_FIELD]: issueHumanActionToken()`:
+     * 消费在闸这一处、续发散在 N 条路由的 happy path 上,于是一次业务拒绝(400/409)或异常
+     * (500)之后,凭据已经烧了、页面手里还攥着废号,同一个页面的下一次点击必然 403「需要页面
+     * 凭据」——而那句话读起来像是开关坏了。收回这里之后,新增一条真人端点不需要记得做任何事。
+     */
+    let issued: string | null = null;
+    const handoff = async () => {
+      await next();
+      if (issued) c.header(HUMAN_ACTION_TOKEN_NEXT_HEADER, issued);
+    };
+    // 真人专属动作先判:它**不看单人/多人**(理由见 HUMAN_ONLY_PATHS)。
+    if (isHumanOnlyPath(c.req.path)) {
+      const rejection = humanRequestRejection(c);
+      if (rejection) return rejectHumanRequest(c, rejection);
+      // **正面凭据,默认拒绝。** 上面那三段判的全是「调用方自己说了什么」:没自称 agent、
+      // 没带浏览器头 —— 于是一个什么头都不带的裸请求把三段全满足了,诚实申报的 403、
+      // 一言不发的 200(审查实测)。穷举「哪些头没带算可疑」救不了这个形状:少一种组合
+      // 就是一个缺口。所以改成要一份**本服务自己发出去**的凭据,拿不出来就是拒绝;
+      // 它的能力边界写在 human-action-token.ts 顶部,别把它当密码学边界用。
+      //
+      // 这几条 403 都**不发**下一份:凭据没被烧掉(或者这根本不是本人),页面手里那份还能用。
+      if (!consumeHumanActionToken(c.req.header(HUMAN_ACTION_TOKEN_HEADER))) {
+        return rejectHumanRequest(c, HUMAN_ACTION_TOKEN_REFUSAL);
+      }
+      // 核验过了盖个戳。路由拿它决定留痕的措辞 —— 别让路由自己去重读请求头推断
+      // (那是第二份判据,而且推断不出「闸到底跑没跑」,见 humanActionOrigin)。
+      markHumanActionVerified(c);
+      issued = issueHumanActionToken();
+    }
+    if (!(await isMultiUser())) return handoff();
     // 只拦 agent:真人(cookie / Bearer)本来就是账号本人,匿名早被 authGate 拦掉了。
-    if (actorOf(c).kind !== "agent") return next();
-    if (!isPersonalWritePath(c.req.path)) return next();
+    if (actorOf(c).kind !== "agent") return handoff();
+    if (!isPersonalWritePath(c.req.path)) return handoff();
     return c.json({ error: AGENT_PERSONAL_REFUSAL }, 403);
   };
 }

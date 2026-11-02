@@ -137,11 +137,6 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   await stopWhenLive(gE);
   console.log("✓ 提问答复过队列认领:前项在跑时答复落托盘等待,结束后首轮送达一次;独立任务照旧立即续跑");
 
-  // ── 旁路答复不占位:队列中已完成任务的审查提问(第 9 轮审查拦验收)──────────────
-  // 队列 [gF(done), gG(done)],gF 的提问来自 reviewer 会话:答复续跑是旁路回合,不是
-  // 任务的执行 —— 不得过队列认领落 queued,否则 orchestrator 读不到原终态,followUpFrom
-  // 写成 null,停止这轮审查会把 done 结算成 canceled(审查实测:队列场景 stop 后变
-  // 已取消,不在队列的对照保持 done)。
   const gF = "scheduled-single-gate-f";
   const gG = "scheduled-single-gate-g";
   const gFAnswer = "请覆盖取消与恢复(review-gate);只继续审查,保持运行等待引导";
@@ -149,7 +144,6 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
     { ...taskRow(gF, "claude", "done"), mode: "single", team: null, question: "审查时希望覆盖哪些失败路径？" },
     { ...taskRow(gG, "claude", "done"), mode: "single", team: null },
   ]);
-  // 提问者是审查旁路会话(role=reviewer):askingAgentFor 按最近回合选中它。
   await db.insert(sessions).values({
     id: "scheduled-gate-f-reviewer", taskId: gF, role: "reviewer", agentType: "claude",
     executor: "claude@test", cwd: root, cliSessionId: "scheduled-gate-f-reviewer-cli", startedAt: at,
@@ -158,21 +152,24 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
     { queueId: "scheduled-gate-queue-3", taskId: gF, position: 0, createdAt: at },
     { queueId: "scheduled-gate-queue-3", taskId: gG, position: 1, createdAt: at },
   ]);
+  const { seedScheduledReviewQuestion } = await import("./scheduled-review-fixture.js");
+  await seedScheduledReviewQuestion(gF, "审查时希望覆盖哪些失败路径？", at);
   const reviewRes = await api.request(`/tasks/${gF}/answer`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answer: gFAnswer }),
   });
   assert.equal(reviewRes.status, 200, "审查提问的答复应被接住");
-  assert.equal((await reviewRes.json() as { queued?: boolean }).queued, undefined, "旁路答复不走队列认领,不该报排队");
+  assert.equal((await reviewRes.json() as { queued?: boolean }).queued, true, "审查答复应通过来源绑定消息投递");
   await waitFor(() => countIn(leadLog, gFAnswer) > 0, "审查答复没有直送进审查会话");
   await waitFor(async () => (await taskStatusOf(gF)) === "running", "答复送达后审查续跑应在运行");
   const gFRow = (await db.select().from(tasks).where(eq(tasks.id, gF))).at(0)!;
   assert.equal(gFRow.followUpFrom, "done", "旁路答复必须保住原终态 —— 占位落 queued 会把 followUpFrom 吃成 null");
   await stopWhenLive(gF);
   assert.equal(await taskStatusOf(gF), "done", "停止这轮审查后任务必须回到原来的「已完成」,不是已取消");
-  assert.equal(
-    (await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, gF))).length,
-    0, "旁路答复不该在托盘留下执行型消息",
-  );
+  const reviewMessages = await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, gF));
+  assert.equal(reviewMessages.length, 1);
+  assert.equal(reviewMessages[0]!.status, "sent");
+  assert.equal(reviewMessages[0]!.execution, false);
+  assert(reviewMessages[0]!.origin?.startsWith("review-answer:"));
   console.log("✓ 旁路答复不占位:队列中 done 任务答复审查提问,直送续跑、停止后仍是已完成");
 
   // ── 直接回复与手动运行并发(第 ln9Q6IJEgmWf 链第 1 轮拦验收 1)──────────────────
@@ -527,11 +524,13 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
   ]);
   await db.insert(scheduledMessages).values({ ...messageRow("scheduled-gate-nb-msg", nB, nBText, "queued"), execution: true });
   // 模拟推进临界区的产物(已认领 + 已落位),随后组才被暂停 —— 正是预检查看不见的窗口。
-  assert.equal(runs.claimTurn(nB), true, "测试前提:应能预认领 nB 的回合");
+  // 凭据从占位那一刻拿:`turnHeld` 现在是**那把锁的身份**(第 2 轮审查 F1)。
+  const nTurn = runs.claimOwnTurn(nB);
+  assert.ok(nTurn, "测试前提:应能预认领 nB 的回合");
   await db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, nB));
   await db.update(schema.groups).set({ paused: true }).where(eq(schema.groups.id, nGroup));
   const taskResume = await import("../src/task-resume.js");
-  await taskResume.resumeOrRunTask(nB, { reason: "queue", turnHeld: true });
+  await taskResume.resumeOrRunTask(nB, { reason: "queue", turnHeld: nTurn });
   await new Promise((resolve) => setTimeout(resolve, 600));
   assert.equal(await taskStatusOf(nB), "paused", "组已暂停,自动交接必须被 spawn 前的持久复查挡回");
   assert.equal(runs.isTurnClaimed(nB), false, "挡回后预认领的回合必须释放");
@@ -570,11 +569,21 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
     { queueId: "scheduled-gate-queue-12", taskId: oA, position: 0, createdAt: at },
     { queueId: "scheduled-gate-queue-12", taskId: oB, position: 1, createdAt: at },
   ]);
+  // 推进责任先落库、再由本次调用带进来 —— 生产里「续跑交接补推」那条入口的形状
+  // (queue-advance-retry.ts 的 replayQueueAdvances)。**少了它这条用例考不到自己那件事**:
+  // 整库写不进去时第一笔失败的是 claimOwnTurn 之前的 `requestQueueAdvance`,回合锁都还没
+  // 认领过,红在准入拒绝上;带着请求进来,写锁第一次咬到的才是占位那一笔。
+  const oRow = (await db.select().from(tasks).where(eq(tasks.id, oB))).at(0)!;
+  const oRequest = {
+    id: "scheduled-gate-ob-advance", queueId: "scheduled-gate-queue-12",
+    resumePromptGeneration: oRow.resumePromptGeneration, prevStatus: oRow.status,
+  };
+  await db.update(tasks).set({ queueAdvanceRequest: oRequest }).where(eq(tasks.id, oB));
   // 另一条真实 SQLite 连接持写锁,耗尽服务端 5s busy timeout(与审查同手法,不 stub)。
   const { DatabaseSync } = await import("node:sqlite");
   const ext = new DatabaseSync(process.env.ASH_DB!);
   ext.exec("BEGIN IMMEDIATE");
-  const advanceDone = scheduler.advanceQueue("scheduled-gate-queue-12");
+  const advanceDone = scheduler.advanceQueue("scheduled-gate-queue-12", { ...oRequest, taskId: oB });
   await advanceDone; // setQueued 超时失败,但函数自己收口,不外抛
   assert.equal(runs.isTurnClaimed(oB), false, "占位写入失败后预认领的回合必须释放(409 永锁)");
   assert.equal(await taskStatusOf(oB), "paused", "写入失败时任务应保持原状态");
@@ -618,10 +627,11 @@ export async function runQueueGateCases(ctx: HandoffCaseContext): Promise<void> 
     { queueId: "scheduled-gate-queue-13", taskId: pA, position: 0, createdAt: at },
     { queueId: "scheduled-gate-queue-13", taskId: pB, position: 1, createdAt: at },
   ]);
-  assert.equal(runs.claimTurn(pB), true, "测试前提:应能预认领 pB 的回合");
+  const pTurn = runs.claimOwnTurn(pB);
+  assert.ok(pTurn, "测试前提:应能预认领 pB 的回合");
   await db.update(tasks).set({ status: "queued" }).where(eq(tasks.id, pB));
   await db.update(schema.groups).set({ paused: true }).where(eq(schema.groups.id, pGroup));
-  await taskResume.resumeOrRunTask(pB, { reason: "queue", turnHeld: true });
+  await taskResume.resumeOrRunTask(pB, { reason: "queue", turnHeld: pTurn });
   await new Promise((resolve) => setTimeout(resolve, 600));
   assert.equal(await taskStatusOf(pB), "paused", "组已暂停,检查点续跑必须被挡回");
   assert.equal(runs.isTurnClaimed(pB), false, "挡回后预认领的回合必须释放");

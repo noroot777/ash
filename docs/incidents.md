@@ -319,3 +319,19 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 心跳有两条边界，都别越：**它不能参与存活判据**——事件循环被同步活儿堵住时心跳也会停，拿它判陈旧就会把一个还活着的 server 判死，然后两个实例调度同一份库（存活判据始终是 pid + 进程启动时间 + 命令形状那三条）；**它也不是死亡时刻的上界**，只是「最后已知存活」——堵塞、睡眠、心跳落盘失败都能让间隔任意长，审查实测过权限失败导致心跳停更而进程照活。
 
 两个顺带的坑：zsh 里 `log` 被占用（报 `too many arguments`），查系统日志必须写全路径 `/usr/bin/log`；那份 12:53 的 `JetsamEvent` 里 ash 的 `lifetimeMax` 是 182030 页（≈2.85 GB 峰值），不是这次的死因，但值得留意。
+
+## 重启后的对账把 112 条老审查改写成 failed（2026-10-26）
+
+早上看侧栏，三条 8 月就跑完的 `审查:*` 任务排在 harness 最前面，怎么都折不掉。第一反应是折叠坏了——不是，是那几行的数据在凌晨被改写过。
+
+`data/ash.db.exits.jsonl` 记着 02:16:50 一次 SIGTERM，6 秒后数据库里 114 行 `updated_at` 被写成 `02:16:56.6～56.8`，**毫秒彼此相差 ~8ms**（逐条写，不是一条 `UPDATE`——同一毫秒才是 bulk SQL，这一条差别就能把「谁干的」分成两类）。`tasks` 里 `review_of` 非空的共 112 条，**无一幸免**：107 条 `done`、5 条 `canceled` 全被写成 `failed`。
+
+路径是启动对账 `reconcileRegressionSettlements`：它捞出所有 `reviewOf`/`verifyRound` 非空的任务，逐条先交给 `retireHistoricalReview`（10-24 的 `1ca4796d`）。退休要拦的是**在飞**的旧轮次——缺目标身份、却还能靠等待/检查点以审查权限续跑的那种；它的收口判据 `closedHistoricalReview` 只认「有证据行且 `settlement.pending === false`」。而这批老审查跑完时轮次目录这套东西**还不存在**，`regression_evidence` 一行都没有，于是判不出「已收口」，被当成未结算逐条退休，`reviewOf` 那一支直接把任务状态写成结算结果 `failed`。
+
+讽刺的是同一个函数里本来就有这道闸（`regression-settlement.ts` 的 `!task.verifyRound && !state`，意思正是「没有证据行就是历史遗留，跳过」）——**只是退休扫描排在它前面**，先一步把人收走了。往一条成熟的扫描链前面插新步骤时，这是默认要查的一件事：前面那步的收口判据，覆不覆盖后面那道闸要放过的形状。
+
+侧栏那头是**两条规则叠加**才让它们赖着不走：列表按 `updated_at` 倒序 → 顶到当下就排最前；而 `failed` 在 `keepVisibleInPreview` 的豁免名单里（失败越老越该被看见）→ 24 小时年龄闸从此也折不掉。单独改一个字段都不会这么显眼。
+
+回填口径：**恢复成「这次写之前那一刻的值」**，源按优先级 `data/ash.db.bak-before-updatedat-restore`（2026-10-20；其中 `2026-10-19T13:39:05.339Z` 本身是上一次污染的值，要跳过）→ `data/ash.db.bak-before-daily-report-accept`（2026-08-26，8-26 前建的任务的真值）→ `ended_at`。这个口径不是猜的：10-19 那次污染后用户自己恢复过一轮，命中 8-26 备份的 201 行逐字节一致，照着走即可。回填前先 `.backup` 一份。
+
+做进系统的是判据本身：没有待结算记录（证据行不存在、或存在但从没落过结算）且任务自己已终态、没有在飞的 `verifyRound`/`resumePrompt` 时，一律算已收口。回归用例在 `server/scripts/test-review-history.ts`（注意：harness 的验收前置命令只有 `npm run test:web`，覆盖不到它，得显式跑 `npm -w server run test:regression-evidence`）。

@@ -24,8 +24,12 @@ import type { Workspace } from "./git.js";
 import { afterSettlement } from "./settle-status.js";
 import { now } from "./util.js";
 import { interruptCliGoal } from "./task-cli-state.js";
+import { forgetGuardedStart, recordReviewStartNotLaunched } from "./guarded-turn-start.js";
+import { withdrawReviewStart, type ReviewStartReceipt } from "./review-start-withdrawal.js";
+import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
 
 export async function recoverFailedTurnStart(input: {
+  startReceipt?: ReviewStartReceipt;
   taskId: string;
   message: string;
   sessionRole: SessionRole;
@@ -54,6 +58,15 @@ export async function recoverFailedTurnStart(input: {
     target: { sessionId: input.resumeSessionId, agentType, role: sessionRole },
   });
   await reconcileTurnBaseline(taskId, false).catch(() => undefined);
+  if (!input.spawned && input.startReceipt) {
+    const current = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+    if (current?.nativeTurn) {
+      await recordReviewStartNotLaunched(taskId, input.startReceipt);
+      if (await restoreUndeliveredReviewStart(taskId, input.startReceipt, true)) return;
+    }
+    await withdrawReviewStart(taskId, input.startReceipt, null);
+    return;
+  }
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   const goalHeld = row && await interruptCliGoal(row, agentType, input.goalStarted ?? false);
   const restored = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -73,6 +86,7 @@ export async function recoverFailedTurnStart(input: {
     }
     await setTaskStatus(taskId, status, !input.stopped && back === "paused" ? { quietAdvance: true } : undefined);
   });
+  await forgetGuardedStart(taskId, input.startReceipt);
   // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
   // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、
   // 涨 verifyRounds,却给不出 verified/verify_failed),白耗用户一轮验证配额。

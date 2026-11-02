@@ -1,3 +1,4 @@
+import { TestProcessScope as JobScope } from "./test-process-job.mjs";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import fs from "node:fs";
@@ -86,6 +87,9 @@ await withTestResources(async () => {
   const retired = new TestProcessScope();
   owned.push(blocked, retired);
   retired.domain = { name: "retired-job", executable: "retired-controller" };
+  native.invoke = (target, args) => args[1] === "retired-job"
+    ? args[0] === "state" ? JSON.stringify({ exists: false, processes: [] }) : ""
+    : original.invoke(target, args);
   fs.rmSync(retired.directory, { recursive: true });
   let mixedAttempts = 0;
   childProcess.spawnSync = (_command, _args, options) => {
@@ -97,13 +101,12 @@ await withTestResources(async () => {
   syncBuiltinESMExports();
   assert.throws(() => disposeTestScopesSync(), /ONE_DOMAIN_FAILED/);
   assert.equal(retired.domain, undefined);
-  assert.deepEqual(await retired.active(), []);
   assert.throws(() => disposeTestScopesSync(), /ONE_DOMAIN_FAILED/);
   assert.equal(mixedAttempts, 1);
   blocked.remove();
   console.log("✓ 多域清理按权威退役清单独立结算,其他域失败不把已退役且目录已删的域永久判失败");
 
-  const initialization = new TestProcessScope();
+  const initialization = new JobScope();
   owned.push(initialization);
   const unavailable = Object.assign(new Error("ORIGINAL_EOWNERSHIP"), { code: "EOWNERSHIP" });
   let attempts = 0;

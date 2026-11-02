@@ -6,6 +6,11 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { resolveAshDbFile } from "./db/path.js";
 import { monitors, regressionChecks, tasks } from "./db/schema.js";
+import {
+  REGRESSION_MANIFEST_READING,
+  REVIEWER_REGRESSION_CLAUSE,
+  regressionManifestEntry,
+} from "@ash/shared/free-workflow";
 import { RUNS_DIR } from "./paths.js";
 import { previewShell } from "./preview-shell.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -34,12 +39,24 @@ export async function prepareRegressionCommand(taskId: string, monitorId: string
   return `${shell.quote(process.execPath)} -e "eval(Buffer.from('${encoded}','base64').toString())"`;
 }
 
+/**
+ * 这份清单落在哪 —— 写它的人和「这一句入口是什么」的人共用这一处。
+ *
+ * 去重要拿**完整入口**整串比对（见 `turn-prompt.ts`），而完整入口 = 前缀 + 这个路径；
+ * 两边各拼一次路径就会漂移，所以路径只在这里拼一次。
+ */
+export const regressionManifestPath = (evidenceDir: string): string =>
+  join(evidenceDir, "regression-evidence.json");
+
 export async function regressionEvidenceReference(
   task: typeof tasks.$inferSelect, repoPath: string, evidenceDir: string, acceptedMerge = false,
-  verification?: { generation: string; independentRequired: boolean; acceptedMonitorIds: string[] },
+  // 同一条消息里已经有 `REVIEW_VALIDATION_REQUIREMENT`（派审正文、就地验证正文）时传 false：
+  // 口径只讲一遍。每回合提醒那两条消息里没有它，仍然要由这份清单说明把口径带上。
+  restatePolicy = true,
 ): Promise<string> {
-  if (acceptedMerge) return "合并结果审查不得复用任务分支的回归结果，必须检查当前合并快照。";
-  if (!(await safeRunDirectory(evidenceDir, true))) return "回归证据清单不可用：目录安全检查不通过，禁止复用旧清单，请按缺口补跑。";
+  const clause = restatePolicy ? REVIEWER_REGRESSION_CLAUSE : "";
+  if (acceptedMerge) return "合并结果审查没有执行者登记清单可核对，回归面整面留白。" + clause;
+  if (!(await safeRunDirectory(evidenceDir, true))) return "回归证据清单不可用：目录安全检查不通过；把回归面写成留白，不要自己跑测试去填。";
   const rows = acceptedMerge ? [] : await db.select().from(regressionChecks).where(eq(regressionChecks.taskId, task.id))
     .orderBy(desc(regressionChecks.generation));
   const workspace = rows.length ? await taskWorkspace(task, repoPath).catch(() => null) : null;
@@ -64,13 +81,15 @@ export async function regressionEvidenceReference(
     records.push({ ...record, reusable: false, passed, latest: supersededBy === null, supersededBy,
       reason: `${result}；${reason}；${regressionInputRejection(record.inputIdentity)}` });
   }
-  const path = join(evidenceDir, "regression-evidence.json");
-  if (!(await safeRunDirectory(evidenceDir))) return "回归证据清单不可用：写入前目录安全检查不通过，禁止复用旧清单，请按缺口补跑。";
+  const path = regressionManifestPath(evidenceDir);
+  if (!(await safeRunDirectory(evidenceDir))) return "回归证据清单不可用：写入前目录安全检查不通过；把回归面写成留白，不要自己跑测试去填。";
   await replaceEvidenceFile(path, JSON.stringify({ protocol: 2, inputPolicy: "immutable-closed-inputs-required",
-    taskId: task.id, generatedAt: new Date().toISOString(), acceptedMerge, snapshot, records, verification }, null, 2));
-  return `执行者回归证据清单：${path}。后端以数据库中的执行者身份、原始命令、真实退出码和代码树为权威，并校验完整日志摘要。` +
-    "reusable=true 只表示证据可引用，不代表测试通过；通过必须同时满足 passed=true 且 exitCode=0，失败必须照实报告，不得给通过结论。" +
-    "当前 runner 没有不可变且闭合的输入证明，所有记录均禁止自动复用；前后 Git 树相等不构成证明。" +
-    "generation 是数据库分配的单调登记代次，latest 标记同命令/目录的最新登记，旧失败仍完整保留，未完成的新代次也不能回退到旧通过。" +
-    "按 logPath 读取完整输出；清单为空或失效时按缺口补跑，不能用对话自述、被改写的 JSON 或旧审查结果代替。";
+    taskId: task.id, generatedAt: new Date().toISOString(), acceptedMerge, snapshot, records }, null, 2));
+  // 「为什么 reusable 恒为 false」「generation 怎么分配」「后端凭什么说自己是权威」这些
+  // **论证与实现说明**不进正文（它们是讲给维护者的，不是给模型的指令），留在本文件头与
+  // `regression-evidence-lifecycle.ts`。正文只留读这份清单时用得上的几条判据。
+  // 入口那一句（动态：路径随轮次变）和读法全文（静态判据）分开拼：每回合提醒里的这一份
+  // 要不要去重，判据不一样 —— 读法正文讲过就够，入口与**本轮状态**必须跟着提醒走
+  // （两者都在 `@ash/shared/free-workflow`，去重判据在 `turn-prompt.ts`）。
+  return regressionManifestEntry(path) + clause + REGRESSION_MANIFEST_READING;
 }

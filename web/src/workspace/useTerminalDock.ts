@@ -222,8 +222,10 @@ export function useTerminalDock({
           const status = info ? attachStatusOf(info) : "ended";
           const exitCode = info ? info.exitCode : tab.exitCode;
           const stoppedByUser = info?.stoppedByUser ?? tab.stoppedByUser;
-          if (status === tab.status && exitCode === tab.exitCode && stoppedByUser === tab.stoppedByUser) return tab;
-          return { ...tab, status, exitCode, stoppedByUser };
+          const stop = info?.stop ?? tab.stop;
+          if (status === tab.status && exitCode === tab.exitCode && stoppedByUser === tab.stoppedByUser
+            && stop?.kind === tab.stop?.kind) return tab;
+          return { ...tab, status, exitCode, stoppedByUser, stop };
         }) }; });
       }).catch(() => undefined) // 拿不到事实就不动,下一轮再试
         .finally(() => {

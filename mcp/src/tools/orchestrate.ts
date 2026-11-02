@@ -64,7 +64,9 @@ server.registerTool(
   "batch_create_tasks",
   {
     title: "批量建任务到已有分组",
-    description: "往一个已存在的分组里批量创建 single 任务。chain:true → 创建一个 queue 把这批任务按数组顺序串成 A→B→C→D(前一个 done 后下一个自动启动)。**chain:true 只能用于 serial group**,parallel group 会返回 400。想真正并行就别开 chain。run:true 建完立即开跑。建出来的任务默认走**自由工作流**(workflowMode=free);要那条固定的站点线才传 preset。",
+    // workflowMode 的选型判据只住在 `WORKFLOW_MODE` 的字段说明里(它本来就渲染进同一份
+    // 工具清单),这段正文不复述 —— 两处各写一遍就会漂,还要在每个编排工具上各付一次。
+    description: "往一个已存在的分组里批量创建 single 任务。chain:true → 建一个 queue 把这批按数组顺序串成 A→B→C→D(前一个 done 后下一个自动起跑),**只能用于 serial group**,parallel group 返回 400;要真并行就别开 chain。run:true 建完立即开跑。",
     inputSchema: {
       groupId: z.string(),
       tasks: z.array(taskShape).min(1),
@@ -72,15 +74,15 @@ server.registerTool(
       run: z.boolean().optional().describe("建完立即运行该分组"),
       defaults: z.object({
         agentType: AGENT_TYPE.optional(),
-        executorId: z.string().nullable().optional().describe("默认执行器 profile(agents.id)。任务自身 executorId 可覆盖；为空/悬空时按 agentType 默认执行器降级"),
-        model: z.string().nullable().optional().describe("覆盖执行器 profile 的默认模型；缺省/null=跟随执行器，任务自身可覆盖"),
-        reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的默认思考强度；缺省/null=跟随执行器，任务自身可覆盖"),
-        useWorktree: z.boolean().optional().describe("默认是否使用 worktree；缺省跟随全局默认，任务自身可覆盖"),
-        worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref；任务自身可覆盖"),
+        executorId: z.string().nullable().optional().describe("默认执行器 profile(agents.id)；为空/悬空按 agentType 默认执行器降级"),
+        model: z.string().nullable().optional().describe("默认模型；缺省/null=跟随执行器"),
+        reasoningEffort: z.string().nullable().optional().describe("默认思考强度；缺省/null=跟随执行器"),
+        useWorktree: z.boolean().optional().describe("默认是否使用 worktree；缺省跟随全局默认"),
+        worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref"),
         mergeTargetBranch: z.string().nullable().optional().describe("默认最终合入分支，独立于开工起点"),
         workflowMode: WORKFLOW_MODE.optional(),
         labels: z.array(z.string()).optional(),
-      }).optional().describe("每个任务的兜底值，任务自身可覆盖"),
+      }).optional().describe("每个任务的兜底值，任务自身同名字段可覆盖"),
     },
   },
   async ({ groupId, ...body }) => {
@@ -172,8 +174,11 @@ server.registerTool(
   "patch_task",
   {
     title: "更新任务",
+    // 「为什么 running/queued 不许 patch status」:直接 patch canceled 只改数据库、不停进程,
+    // 队列会提前推进、活着的 agent 撞 409、结算再把 canceled 覆盖成 failed —— 2026-07-21
+    // 「complete_task 409 → failed 错乱」事故的根因,经过见 docs/incidents.md。正文只留禁令。
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/groupId/agentType/executorId/model/reasoningEffort。model/reasoningEffort 覆盖执行器 profile 的模型/思考强度，缺省或 null=跟随执行器；ash 拉起的当前 agent 可在运行中修改，下一回合解析执行器时生效；Claude Desktop/Cursor 等没有 ash 回合身份的外部 MCP 客户端只能在任务空闲后修改。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
+      "更新单个任务的可编辑字段:title/body/status/labels/groupId/agentType/executorId/model/reasoningEffort。executorId 指执行器 profile(agents.id),为空/悬空按 agentType 默认执行器降级;model/reasoningEffort 覆盖该 profile,缺省/null=跟随执行器。这三项 ash 拉起的当前 agent 可在运行中改(下一回合生效),外部 MCP 客户端只能在任务空闲后改。\n**改不了的**:队列归属走 queue_insert / queue_remove / queue_reorder;failed/canceled 回队列等待用 requeue_task(它顺带处理位置);running/queued/awaiting_review 不能手动设。**running/queued 的 status 一律 409**——停止/取消用 stop_task(只有它会杀掉 agent 进程树),确认完成用 complete_task(回合结算只认它),都不要 patch status。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
@@ -198,20 +203,20 @@ server.registerTool(
   {
     title: "一步建任务批次",
     description:
-      "便利工具:按 repoPath 找到/创建项目 → 找到或复用分组 → 把一批任务建进去,一次调用搞定。返回 {project, group, tasks}。chain 默认 true=创建一个 queue 串成 A→B→C(前一个 done 后下一个自动启动);想真正并行就传 chain:false 并把 mode 设 parallel。run:true 立即开跑。多步编排首选这个。建出来的任务默认走**自由工作流**(workflowMode=free);要那条固定的站点线才传 preset。",
+      "便利工具:按 repoPath 找到/创建项目 → 找到或复用分组 → 把一批任务建进去,一次调用搞定,多步编排首选。返回 {project, group, tasks}。chain 默认 true=建一个 queue 串成 A→B→C(前一个 done 后下一个自动起跑);要真并行就传 chain:false 并把 mode 设 parallel。run:true 立即开跑。",
     inputSchema: {
       repoPath: z.string().describe("git 仓库绝对路径；项目按它找到或创建"),
       tasks: z.array(taskShape).min(1).describe("按顺序排列；chain 时即依赖链顺序"),
       groupName: z.string().optional().describe("分组名,缺省 task-chain。已存在同名分组会复用(不会重复建组)"),
       mode: MODE.optional(),
       chain: z.boolean().optional().describe("默认 true=创建 queue 串成依赖链(serial 才允许);false=互不依赖(配 mode=parallel 才真正并行)"),
-      agentType: AGENT_TYPE.optional().describe("所有任务的默认 agent（任务可逐个覆盖）"),
-      executorId: z.string().nullable().optional().describe("所有任务的默认执行器 profile(agents.id)，任务可逐个覆盖；为空/悬空时按 agentType 默认执行器降级"),
-      model: z.string().nullable().optional().describe("所有任务的默认模型覆盖；缺省/null=跟随执行器，任务可逐个覆盖"),
-      reasoningEffort: z.string().nullable().optional().describe("所有任务的默认思考强度覆盖；缺省/null=跟随执行器，任务可逐个覆盖"),
-      useWorktree: z.boolean().optional().describe("所有任务是否使用 worktree；缺省跟随全局默认，任务可逐个覆盖"),
-      worktreeBase: z.string().nullable().optional().describe("所有任务的默认 worktree base ref；任务可逐个覆盖"),
-      mergeTargetBranch: z.string().nullable().optional().describe("所有任务的默认最终合入分支"),
+      agentType: AGENT_TYPE.optional().describe("批次默认 agent（任务可逐个覆盖，下同）"),
+      executorId: z.string().nullable().optional().describe("默认执行器 profile(agents.id)；为空/悬空按 agentType 默认执行器降级"),
+      model: z.string().nullable().optional().describe("默认模型；缺省/null=跟随执行器"),
+      reasoningEffort: z.string().nullable().optional().describe("默认思考强度；缺省/null=跟随执行器"),
+      useWorktree: z.boolean().optional().describe("默认是否使用 worktree；缺省跟随全局默认"),
+      worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref"),
+      mergeTargetBranch: z.string().nullable().optional().describe("默认最终合入分支"),
       workflowMode: WORKFLOW_MODE.optional(),
       run: z.boolean().optional(),
     },
@@ -247,7 +252,7 @@ server.registerTool(
   {
     title: "派活给执行者(团队调度者专用)",
     description:
-      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),默认与调度台在同一个工作目录里干活;团队开启 worktree 时也共享它。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• **body 写目标、背景、约束、验收标准,不写实现步骤**——执行者是和你同级智能的完整 agent,how 留给它;用户指定的做法、已确认的硬约束、已证伪的路线属于约束要传达,开放的实现选择才留给它。body 要自带完整上下文(执行者彼此不知情,也看不到你和用户的对话)。只有 parallel 时才需要在各自 body 里划清文件/模块边界,否则并行的执行者会互相踩;serial 不必划界。\n• review 缺省跟随团队配置（默认开启）；单项传 false 可跳过该执行者的自动审查。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
+      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务绑到自己名下,默认立刻起跑。每个执行者是完整的 CLI agent(自己还能开子代理),默认与调度台共用工作目录。返回它们的 id + 标题,后续用 get_task / run_task / answer_question 引用。\n\n• mode 多个任务时默认 serial(串成 A→B→C,前一个 done 后下一个自动起跑);parallel 才是真并行(限流 4 个),且必须在各自 body 里划清文件/模块边界,否则会互相踩。\n• **body 写目标、背景、约束、验收标准,不写实现步骤**——执行者是和你同级智能的 agent,how 留给它;用户指定的做法、已确认的硬约束、已证伪的路线是约束,要传达。body 必须自带完整上下文:执行者彼此不知情,也看不到你和用户的对话。\n• 你会被唤醒只有三种时机:执行者提问、执行者失败、reportBack 的执行者完成。",
     inputSchema: {
       leadTaskId: z.string().describe("你自己的 taskId(团队任务,prompt 前言里有)"),
       tasks: z
@@ -256,10 +261,10 @@ server.registerTool(
             body: z.string().min(1).describe("给执行者的完整指令:目标、背景、约束、验收标准(不写实现步骤;parallel 时另加文件边界)"),
             title: z.string().optional().describe("简短标题(界面上显示);省略则取 body 第一行"),
             agentType: AGENT_TYPE.optional().describe("覆盖团队默认的执行者类型"),
-            executorId: z.string().nullable().optional().describe("覆盖团队执行者任务的默认执行器 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行器降级"),
-            model: z.string().nullable().optional().describe("覆盖执行器 profile 的模型；缺省=跟随团队默认，null=跟随执行器"),
-            reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省=跟随团队默认，null=跟随执行器"),
-            reportBack: z.boolean().optional().describe("true=它完成时叫醒你;默认 false 静默完成"),
+            executorId: z.string().nullable().optional().describe("覆盖团队默认执行器 profile(agents.id)；为空/悬空按 agentType 默认执行器降级"),
+            model: z.string().nullable().optional().describe("覆盖模型；缺省=跟随团队默认，null=跟随执行器"),
+            reasoningEffort: z.string().nullable().optional().describe("覆盖思考强度；缺省=跟随团队默认，null=跟随执行器"),
+            reportBack: z.boolean().optional().describe("true=它完成时叫醒你(你要接着安排下一步时用);默认 false 静默完成,随时用 list_tasks 查"),
             useWorktree: z.boolean().optional().describe("true=这个执行者在团队共享目录之上再单独开 worktree 隔离(默认 false,继承调度台目录)"),
             review: z.boolean().optional().describe("是否在执行者确认完成后自动派审；缺省跟随团队配置（默认开启）"),
           }),
@@ -296,7 +301,7 @@ server.registerTool(
   {
     title: "重新排队",
     description:
-      "把一个 failed/canceled 的任务放回它所在队列等待,轮到它时自动启动(有会话就从中断处续跑)。跟 run_task 的区别:run 是现在就跑,requeue 是回队列排着。**位置**:失败任务是被队列透明跳过的,如果后面已经有任务开跑过(它的原位置名存实亡),服务端会自动把它移到**队尾**;后面没人跑过则原位不动。别再用 patch_task(status=backlog) + queue_reorder 手拼——留在原位会让它抢在正在跑的那个前面,同一条串行队列上两个任务并跑。",
+      "把一个 failed/canceled 的任务放回它所在队列等待,轮到它时自动起跑(有会话就从中断处续跑)。run_task 是现在就跑,requeue 是回队列排着。位置由服务端定:后面已经有任务开跑过就移到队尾,没有则原位不动——别用 patch_task(status=backlog) + queue_reorder 手拼,留在原位会让它抢在正在跑的那个前面,同一条串行队列上两个任务并跑。",
     inputSchema: { taskId: z.string().describe("要重新排队的任务 id(必须是 failed/canceled 且在某个 queue 里)") },
   },
   async ({ taskId }) => {

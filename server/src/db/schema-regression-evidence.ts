@@ -14,7 +14,28 @@ export type RegressionSettlement = {
   round: number;
   freeRoundId?: string;
   pending: boolean;
+  target?: ReviewTargetIdentity | null;
 };
+
+export type ReviewTargetIdentity = {
+  turnToken: string | null;
+  directionToken: string | null;
+  directionEpoch: number;
+};
+
+export type ReviewContinuation = {
+  phase: "running" | "waiting" | "delivery" | "uncertain" | "exited";
+  start?: { ownerTaskId: string; identity: ReviewTargetIdentity };
+  messageId?: string;
+  wait?: {
+    owner?: ReviewTargetIdentity;
+    question: { text: string; options: string | null; items: string | null } | null;
+    checkpoint: { text: string; generation: number } | null;
+  };
+};
+
+export type ReviewDelivery = { generation: string; kind: "answer" | "repair"; messageId: string }
+  | { generation: string | null; kind: "checkpoint"; text: string; promptGeneration: number };
 
 export type RegressionFinalization = {
   kind: "preset" | "free";
@@ -22,19 +43,28 @@ export type RegressionFinalization = {
   done: string[];
   steps: string[];
   runningStep?: string;
+  blockedStep?: string;
+  acceptance?: { token: string; stepId: string; stage: "merged" | "accepted" };
+  repair?: { messageId: string; token: string; stepId: string; attempt: number; identity: ReviewTargetIdentity };
   completed?: boolean;
+  superseded?: boolean;
 };
 
 export const regressionEvidence = sqliteTable("regression_evidence", {
   directory: text("directory").primaryKey(),
   taskId: text("task_id").notNull(),
   generation: text("generation").notNull(),
+  // 祖父标记(用户 2026-10-26 改回归口径):**没有写入方了,但读取方全在**。新轮次恒为 0;口径
+  // 切换前的存量行可能是 1,那些旧轮次的结论仍要附一份本轮真实执行依据。别按「恒为 0」化简
+  // 任何判据 —— 原委见 `regression-evidence-lifecycle.ts` 的 `evidenceState`。
   revoked: integer("revoked", { mode: "boolean" }).notNull().default(false),
   excludedMonitors: text("excluded_monitors", { mode: "json" }).$type<string[]>().notNull(),
   acceptedBasis: text("accepted_basis", { mode: "json" }).$type<IndependentVerificationBasis>(),
   unavailable: text("unavailable"),
   settlement: text("settlement", { mode: "json" }).$type<RegressionSettlement>(),
   finalization: text("finalization", { mode: "json" }).$type<RegressionFinalization>(),
+  targetIdentity: text("target_identity", { mode: "json" }).$type<ReviewTargetIdentity>(),
+  continuation: text("continuation", { mode: "json" }).$type<ReviewContinuation>(),
 });
 
 export async function ensureRegressionEvidenceSchema(client: Client): Promise<void> {
@@ -49,5 +79,8 @@ export async function ensureRegressionEvidenceSchema(client: Client): Promise<vo
   }
   if (!columns.some((column) => column.name === "finalization")) {
     await client.execute("ALTER TABLE regression_evidence ADD COLUMN finalization TEXT");
+  }
+  for (const column of ["target_identity", "continuation"]) {
+    if (!columns.some((entry) => entry.name === column)) await client.execute(`ALTER TABLE regression_evidence ADD COLUMN ${column} TEXT`);
   }
 }

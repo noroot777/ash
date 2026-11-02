@@ -8,7 +8,17 @@ import { continueTask, runTask, type ResumeReason } from "./orchestrator.js";
 import { handDuePendingMessageToRun } from "./pending-messages.js";
 import { RESUME_PROMPT } from "./run-prompts.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
-import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
+import {
+  acknowledgeCheckpointRun, claimCheckpointForRun, type CheckpointHold, holdCheckpointOwnership,
+  settleStrandedCheckpointRun,
+} from "./task-checkpoint-delivery.js";
+import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
+import { activeReviewEvidence } from "./review-continuation.js";
+import { takeResumePrompt } from "./task-resume-prompt.js";
+import { withTurnPreflight } from "./turn-entry-guard.js";
+import { checkpointWaitOrigin } from "./task-wait-ownership.js";
+import { releaseTurn } from "./runs.js";
+import type { TurnIdentity } from "./runs.js";
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
 // that was interrupted keeps a session row with a cliSessionId (server restart
@@ -20,11 +30,20 @@ import { restoreResumePrompt, takeResumePrompt } from "./task-resume-prompt.js";
 // scheduler) keep chaining on the same promise.
 export async function resumeOrRunTask(
   taskId: string,
-  opts: { reason?: ResumeReason; turnHeld?: boolean; actingUserId?: string | null } = {},
+  // turnHeld:入口占下的那把锁的身份(不是 true),见 continueTask 同名选项。
+  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null } = {},
 ): Promise<void> {
+  return withTurnPreflight(taskId, opts.turnHeld, () => resumeOrRunClaimedTask(taskId, opts));
+}
+
+async function resumeOrRunClaimedTask(taskId: string,
+  opts: { reason?: ResumeReason; turnHeld?: TurnIdentity | null; actingUserId?: string | null }): Promise<void> {
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) throw new Error(checkpointBlocked);
   // `actingUserId` 一路原样往下传:它决定这一轮烧谁的 key(§八)。这里只是个中转,
   // 不给默认值 —— 后端触发的那几路本来就该退回任务归属人。
   const acting = opts.actingUserId ?? undefined;
+  const held = opts.turnHeld ?? null;
   // 启动来源与回合所有权是两件事,不能共用 turnHeld 当判据(第 6 轮审查:队列推进带
   // turnHeld 后,待发送交接误享了手动运行的冻结豁免,穿透分组暂停)。无人值守的启动
   // (队列推进/恢复分组/上游唤醒)从预检查到 spawn 隔着一串 await,用户可能在认领之前
@@ -40,27 +59,62 @@ export async function resumeOrRunTask(
   // 回合：续跑必须带回 reviewer 身份与配置，否则以 single 恢复实现会话，审查链收不了尾。
   const rp = task.resumePrompt;
   if (rp) {
-    const reviewerRoute = await freeReviewResumeOptions(taskId);
-    // 取走这段 checkpoint 指令要 CAS(`resume_prompt = rp`)：读到 rp 之后到清空之间隔着
-    // 至少一个 await，两路触发(HTTP /run 与队列推进)会双双读到同一段、双双清空、于是
-    // 一路送出、另一路把它当「没送出去」回填，下次触发再送一遍(审查实测:同一段指令投递两次)。
-    // CAS 与整行广播都在 takeResumePrompt/restoreResumePrompt 里（见那个文件顶部：这一列
-    // 是前端的门禁，改了不广播，长开的页面会一直把任务读成「在等续跑」）。
-    // 凭证随身（见 task-resume-prompt.ts 文件头）：取走拿到 `{text, auto, generation}`，没送
-    // 出去就原样带着它退回去 —— 只填回同一次占用腾出的那个空。
-    const receipt = await takeResumePrompt(taskId, rp);
+    const origin = await db.transaction((transaction) => checkpointWaitOrigin(transaction, task), { behavior: "immediate" });
+    const ordinary = origin.kind === "ordinary";
+    const reviewerRoute = ordinary ? null : await freeReviewResumeOptions(taskId);
+    if (!ordinary) {
+      const evidence = await db.transaction((transaction) => activeReviewEvidence(transaction, task), { behavior: "immediate" });
+      const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
+        actingUserId: acting, ...(reviewerRoute ?? {}),
+        reviewDelivery: { kind: "checkpoint", generation: evidence?.generation ?? null, text: rp, promptGeneration: task.resumePromptGeneration },
+        onDelivered: async () => { await takeResumePrompt(taskId, rp, task.resumePromptGeneration); },
+      });
+      if (!started) await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId);
+      return;
+    }
+    const receipt = await claimCheckpointForRun(taskId, rp, task.resumePromptGeneration);
     if (receipt) {
-      const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting, ...(reviewerRoute ?? {}) });
-      if (!started) {
-        // 回合被别人抢了（典型：上一回合的 turn 还没 release）：checkpoint 指令一个字都没
-        // 送出去，必须放回原位等下一次触发——清了不回写就是永久丢失（审查实测复现）。
-        await restoreResumePrompt(taskId, receipt);
+      let delivered = false;
+      // `continueTask` 返回 false = 这一轮**一个字都没送出去**(起跑前被冻结闸撤回,或者越线
+      // 凭据写不下来而原地撤回)。抛错那条路不给这个结论,所以初值按「不知道」算。
+      let launched = true;
+      // 这一轮的账还该不该由我来结。失权之后一个字都不许写:那边可能已经按别的结论处置过
+      // 这张票了(第 2 轮自由审查 F1 的第 5 条 —— 早先这里 return 之后 finally 照旧了结旧票)。
+      // 三态:`mine` 才由我结账;`lost`/`unknown` 两条路的善后(交回本地投递登记、必要时
+      // 退避重排一趟对账)都已经在 holdCheckpointOwnership 里做完,这里只负责不起跑、不写账。
+      let hold: CheckpointHold = "mine";
+      try {
+        // 认领与起跑之间隔着几个 await:这段里对账可能已经把这张凭证接管走、并按「没送出去」
+        // 把交代还给了任务(多开实例时尤其)。那种情况下再送一遍就是执行两遍。资格这一问是
+        // 一次**条件写**而不是一次读,问不出来也一律不起跑(holdCheckpointOwnership 的头部)。
+        hold = await holdCheckpointOwnership(receipt);
+        if (hold !== "mine") {
+          console.warn(`[ash] 续跑凭证${hold === "lost" ? "已不在本进程名下" : "的归属这会儿问不出来"}`
+            + ` task=${taskId} message=${receipt.id}：这一趟不再起跑`);
+          return;
+        }
+        launched = await continueTask(taskId, rp, {
+          system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
+          actingUserId: acting, ...(reviewerRoute ?? {}),
+          pendingMessageIds: [receipt.id], crossingRequired: true,
+          onDelivered: async () => {
+            delivered = true;
+            await acknowledgeCheckpointRun(receipt);
+          },
+        });
+      } finally {
+        // 没走到送达回调 ≠ 没送出去:spawn 排在 persistRunner 与 onDelivered **之前**,崩在
+        // 中间那条缝里时这段话已经在 agent 手上了。三态判定与三条出路统一在
+        // settleStrandedCheckpointRun(第 1 轮审查 F1:这里原先一律归还)。
+        if (!delivered && hold === "mine") {
+          await settleStrandedCheckpointRun(receipt, "本轮续跑交代未走到送达确认", !launched);
+        }
       }
       return;
     }
-    // CAS 没抢到 = 这段指令被另一路取走了(或 agent 刚换了新的一段)。**不能直接 return**:
-    // turnHeld 时回合已经原子占在我头上,返回就把它永久漏掉了。落到下面的通用路径
-    // (resume/fresh),turn 由 continueTask/runTask 照常接管并释放。
+    // 还的只能是入口交给我们的那一把(核验在 releaseTurn 里按 seq 做)。
+    if (held) releaseTurn(taskId, held);
+    return;
   }
   const agent = (task.agentType as AgentType) ?? "claude";
   // 让位交接:托盘里已有**到期**的用户回复时,这次(队列推进/手动运行/重试)启动的

@@ -43,7 +43,7 @@ function segmentsOf(pathname: string): string[] {
 // 靠通读维护不住,所以 `test:multi-user-git` 会把 `api.routes` 里所有这种形状枚举出来,
 // 逐条比对这张表;新加一条 `/projects/xxx` 而忘了登记,那条测试直接红。
 export const NOT_AN_ID = new Set([
-  "follow-ups", "bodies", "batch", "check", "resolve", "search", "archived", "clone", "outbound-state",
+  "follow-ups", "bodies", "memos", "batch", "check", "resolve", "search", "archived", "clone", "outbound-state",
 ]);
 
 async function projectOfTask(taskId: string): Promise<string | null> {

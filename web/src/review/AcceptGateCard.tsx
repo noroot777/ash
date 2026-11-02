@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowClockwise, ArrowUUpLeft, CheckCircle, FileText, PencilSimple, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
 import type { AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
 import { ACCEPT_GATE_STATUS_LABELS, acceptGateCancelMessage, summarizeAcceptGate } from "@ash/shared/accept-gate";
 import type { Task, TaskListItem } from "@ash/shared";
 import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { api } from "../lib/api.ts";
+import { useCatchUp } from "../lib/useCatchUp.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
 import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 
@@ -20,19 +21,29 @@ import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 // 而人想起这件事的时刻就是站在验收台前的那一刻 —— 为了设它跳去项目设置再找回来，中间
 // 隔着三次跳转。所以同一份设置两个入口：项目设置里那份带完整说明，这里是就地改。两边
 // 写的是同一个字段，改完都立刻生效（它是**项目级**的，卡里会把这句说破）。
-export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
+type AcceptGateCardProps = {
   task: TaskListItem | Task;
   notify: (message: string) => void;
   /**
-   * 红了之后的两条出路：重跑一次 / 这一次跳过。点下去走的仍是正常那道验收确认框。
+   * 绕开这道门的两条出路：重跑一次 / 这一次跳过。点下去走的仍是正常那道验收确认框。
    *
-   * 把**上一次跑成什么样**一起带出去：确认框要据它说话。「跳过」在红了之后和在被取消
-   * 之后是两句不同的话（一个是明知红着仍然合，另一个是上一次根本没有结论）。
+   * 把**上一次跑成什么样**一起带出去（没跑过就是 null）：确认框要据它说话。「跳过」在
+   * 红了之后、被取消之后、和一次都没跑过时是三句不同的话（明知红着仍然合 / 上一次根本
+   * 没有结论 / 这次干脆不验）。
    */
   onIntent: (intent: "rerun" | "skip", latest: AcceptGateView | null) => void;
   disabled?: boolean;
+};
+
+export function AcceptGateCard(props: AcceptGateCardProps) {
+  const gate = useAcceptGate(props.task.id);
+  return <AcceptGateCardView {...props} gate={gate} />;
+}
+
+export function AcceptGateCardView({ task, notify, onIntent, disabled = false, gate }: AcceptGateCardProps & {
+  gate: ReturnType<typeof useAcceptGate>;
 }) {
-  const { state, error, stale, running, latest, basis, runningFor, reload } = useAcceptGate(task.id);
+  const { state, error, stale, running, latest, basis, runningFor, reload } = gate;
   const [busy, setBusy] = useState(false);
   // 全文按**哪一次**缓着：切任务、或者同一个任务又跑了一次之后，上一次的全文不能接着
   // 摆在那儿（标题写的是新的那条路径，正文却是旧的 —— 第 1 轮审查不拦项 2）。
@@ -45,19 +56,34 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
 
   // 能不能在这儿改这条命令 = 这个项目的管理权限。走列表接口而不是 `/projects/:id`
   // （后者不存在，见 AcceptCommitChoice 顶部），列表本身就带着 myRole。
-  useEffect(() => {
-    let alive = true;
-    api.projects().then(
-      (list) => { if (alive) setCanManage(list.find((row) => row.id === task.projectId)?.myRole === "admin"); },
-      () => { if (alive) setCanManage(false); },
+  //
+  // **读失败一律保持 `null`，并自己重试到读到**（C3）。上一版的失败分支是 `setCanManage(false)`，
+  // 等于把一次读取失败说成「已确认你不是管理员」:那颗「改这条命令」从此不再出现，页面上一个
+  // 字都不会说为什么，服务端恢复了也不会自己回来 —— 而 `null`（还没读到）和 `false`（确认没
+  // 权限）在界面上恰好长得一样，所以这个错判连看都看不出来。重试策略与任务列表那一条共用
+  // 同一份（`useCatchUp` → `createCatchUp`）:恢复责任不许由每个调用点自己决定。
+  //
+  // 这一条不接「连上就对账」:管理权限不随 SSE 变化(改成员要刷新页面),它只要「读到为止」。
+  const projectRef = useRef(task.projectId);
+  projectRef.current = task.projectId;
+  const manageCatchUp = useCatchUp((signal) => {
+    const mine = task.projectId;
+    return api.projects(signal).then(
+      (list) => {
+        // 换了项目之后才回来的那一份不许写进来(掐断那一瞬它可能已经 resolve)。
+        if (projectRef.current === mine) setCanManage(list.find((row) => row.id === mine)?.myRole === "admin");
+        return true;
+      },
+      () => false,
     );
-    return () => { alive = false; };
-  }, [task.projectId]);
+  }, task.projectId);
+  useEffect(() => {
+    setCanManage(null);
+    void manageCatchUp.run();
+  }, [manageCatchUp]);
   // 停在中途那道「等我点头」上时，那一按是**放行**不是验收：不会碰门禁，所以别在这儿
   // 预告「这一按要先跑十几分钟」—— 那句话在那一站上是假的。跑过的记录仍然照常显示。
   const atFinalGate = isFinalHumanGate(task.workflow, task.workflowAt);
-  // 没设、也没跑过：只有能改它的人才看得到这张卡（那时它是一个入口）；改不了的人看到的
-  // 是一句跟自己无关的话，纯噪音。
   const idle = !!state && !state.command && !running && !settled;
   // 验收做完之后这张卡**留着**（用户 2026-10-23 指定）：它换成一张只读回执 —— 跑过没有、
   // 什么结果、日志在哪。原先在盖章那一刻整个消失，于是「通过了」和「我明确跳过了那条红」
@@ -70,14 +96,15 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
   // 状态读不出来时**先把这件事说出来**：从前这里直接 return null，于是一次 500 之后页面
   // 上什么都没有，看起来就跟「没设门禁」一样（第 1 轮审查不拦项 3）。
   if (!state) {
-    if (!error) return null;
     return (
-      <section className="accept-gate-card" aria-label="验收前置命令">
+      <section className="accept-gate-card" aria-label="验收前置命令" aria-busy={error ? undefined : true}>
         <header>
-          <span><WarningCircle size={14} weight="fill" /></span>
+          <span>{error ? <WarningCircle size={14} weight="fill" /> : <SpinnerGap size={14} className="is-spinning" />}</span>
           <div>
-            <b>验收前置命令的状态读不出来</b>
-            <p role="alert">{error}。这不等于「没有命令在跑」—— 点一下刷新再看。</p>
+            <b>{error ? "验收前置命令的状态读不出来" : "正在读取验收前置命令…"}</b>
+            {error
+              ? <p role="alert">{error}。这不等于「没有命令在跑」—— 点一下刷新再看。</p>
+              : <p role="status">正在核对项目配置和最近运行结果，读取完成后会在这里显示验收使用的命令。</p>}
           </div>
           <button type="button" className="pending-merge-refresh" disabled={busy} onClick={() => void reload()}>
             <ArrowClockwise size={12} aria-hidden="true" />刷新
@@ -86,15 +113,21 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
       </section>
     );
   }
-  if (settled && !running) {
-    // 凭据和历史都没有：这一按没什么可回执的（从来没设过门禁的任务就落在这儿）。
-    if (!receipt && !latest) return null;
-  } else {
-    if (idle && !latest && (!canManage || !atFinalGate)) return null;
-    if (!latest && !atFinalGate) return null;
-  }
   // 卡上摆的是哪一次：正在跑的 > 本次凭据那一次 > 最近一次（最后这种只作历史，措辞里说破）。
   const shown = running ?? receipt?.run ?? latest;
+
+  // 这一按到底会不会撞上这道门 —— 会撞，「跳过」才是一条出路。
+  //
+  // 从前这颗按钮只摆在枚举出来的两种场面上（上一次红了/被取消了、本机能力不可用且一次都
+  // 没跑过），于是最常见的那一种反而没有：命令设着、这棵树上一次都还没跑过。那时用户唯一
+  // 的走法是先点验收、眼看它烧十几分钟，红了之后才摆出跳过（用户 2026-10-31 要求补上）。
+  // 所以这里改成按事实判，不再枚举。
+  //
+  // 不会撞的只有两种：项目没设这条命令，以及这棵树上已经有一次能原样复用的绿 —— 那时点
+  // 验收既不跑它也不被它挡，摆「跳过」只会把一份真凭据换成一句「你明确跳过了」。能力不可用
+  // 或源码输入读不出来时那份绿也复用不了（验收会在更早一步被挡下），所以照样要给出路。
+  const reusablePass = !state.unavailable && !state.sourceError && latest?.status === "passed" && !latest.stale;
+  const gateAhead = atFinalGate && !!state.command && !running && !settled && !reusablePass;
 
   const cancel = async () => {
     if (busy || !running) return;
@@ -115,9 +148,19 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
     if (busy) return;
     setBusy(true);
     try {
-      await api.rehandOffAcceptGate(task.id);
+      // 通知要跟**后端实际交回的那一行**对上（第 7 轮审查 N1）：卡上这份 latest 是按下按钮
+      // 之前读到的，而后端是请求到达时才重新取最近一次 —— 中间若有另一轮真失败刚好结束，
+      // 交回去的是那一行，照旧版就会把一条真红说成「不会为此改代码」。
+      const handed = (await api.rehandOffAcceptGate(task.id)).gate;
       await reload();
-      notify("已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令");
+      // 提示要跟这一次交回去的那份输入对上（第 1 轮审查 N3）：两边说反了，用户看到的是两句
+      // 相反的话。「不会为此改代码」这句**已经没有了**（第 10 轮审查 F1 撤掉了免修那副面孔），
+      // 所以这里只按归因说它第一步会先看什么。归因非空 = 起跑前核到那个名字不在这份快照里。
+      notify(handed.missAttribution === null
+        ? "已把这条红交回给智能体去修；修完再点验收，会自动重跑一遍这条命令"
+        : handed.missAttribution === "mine"
+          ? "已把这条结论交回给智能体；结论指向是这次改动把命令弄没的，它会先核这件事"
+          : "已把这条结论交回给智能体；结论说这条命令起跑前就解析不出来，它会先核这件事");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -188,12 +231,15 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
                     : <FileText size={14} />}
         </span>
         <div>
-          <b>{stale ? "验收前置命令状态待核对" : idle ? "这个项目没设验收前置命令" : heading(state, running, latest, receipt, settled, runningFor)}</b>
-          <p>{stale ? "以下为上次读取的记录，当前状态尚未确认。" : idle && latest
+          <b>{stale ? "验收前置命令状态待核对" : !settled && !running && !atFinalGate ? "此处只放行，不运行前置命令" : idle ? "这个项目没设验收前置命令" : heading(state, running, latest, receipt, settled, runningFor)}</b>
+          <p>{stale ? "以下为上次读取的记录，当前状态尚未确认。" : !settled && !running && !atFinalGate
+            ? "这次只放行到下一站；项目配置的前置命令在最终验收时才生效。"
+            : idle && latest
             ? `项目当前没有验收前置命令，下次验收不会跑它。历史记录：${summarizeAcceptGate(latest)}；这不是下次验收的测试凭据。`
             : idle
-            ? "设一条之后，点「验收通过」会先在独立源码快照里跑它，rc=0 且进程监督收尾后才合并。"
+            ? "本次验收不会运行前置命令。项目管理员可在这里或项目设置中配置。"
             : detail(state, running, latest, receipt, settled)}</p>
+          {shown && <p aria-label="验收命令运行记录">运行记录：{shown.id} · 开始于 {new Date(shown.startedAt).toLocaleString()}{shown.finishedAt ? ` · 结束于 ${new Date(shown.finishedAt).toLocaleString()}` : ""}</p>}
           {shown?.executionNotice && <p role="note">{running ? "本次运行：" : settled ? "本次验收运行：" : "历史运行："}{shown.executionNotice}</p>}
           {!settled && !running && state.command && state.executionNotice && state.executionNotice !== shown?.executionNotice
             && <p role="note">下次运行：{state.executionNotice}</p>}
@@ -204,6 +250,31 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
           <ArrowClockwise size={12} aria-hidden="true" />刷新
         </button>
       </header>
+      {!settled && (
+        <dl className="accept-gate-command">
+          <dt>{running ? "本次正在运行" : stale ? "上次读取的项目命令" : "项目配置的前置命令"}</dt>
+          <dd><code>{running?.command ?? state.command ?? (stale ? "当时未设置，当前配置待核对" : "未设置（验收时不运行前置命令）")}</code></dd>
+        </dl>
+      )}
+      {shown?.diagnosis && (
+        <div className="accept-gate-diagnosis" role="note">
+          <span>这条红是怎么来的</span>
+          {shown.diagnosis}
+        </div>
+      )}
+      {/*
+        旧判据那一代的结论。**不能当当前事实摆**（第 2 轮审查 F1）：它当时可能把一条真跑过
+        的红说成「一行都没跑到、不用改代码」。原文保留是为了让人核对当时到底说了什么，所以
+        标题和第一句都先把失效说破，再给原文。
+      */}
+      {shown?.legacyDiagnosis && (
+        <div className="accept-gate-diagnosis is-obsolete" role="note">
+          <span>历史结论（已失效，不是当前判断）</span>
+          {`这段是旧版本按已经撤回的判据写的，它可能把真跑过的红说成「没跑起来、不用改代码」。只留着给你核对当时的说法，请以日志为准。
+
+${shown.legacyDiagnosis}`}
+        </div>
+      )}
       {shown?.logTail && (
         <div className="accept-gate-log">
           <span>日志末尾{receipt?.run ? "（本次验收凭据那一次）" : settled || idle ? "（历史记录，不是本次凭据）" : ""}</span>
@@ -240,21 +311,25 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
               <button type="button" disabled={busy} onClick={() => void cancel()}>
                 <XCircle size={13} />不等了，收掉它
               </button>
-            ) : state.command && latest && latest.status !== "passed" && !settled ? (
+            ) : gateAhead ? (
               <>
-                <button type="button" disabled={busy || disabled || !!state.unavailable} onClick={() => onIntent("rerun", latest)}>
-                  <ArrowClockwise size={13} />重跑一次
-                </button>
+                {/* 「重跑一次」只在**有一次结论摆在那儿**时才是一句话：没跑过的时候没有「再」
+                    可言（点验收本来就会跑它），而那次是绿的时候这颗按钮的名字应该是别的。 */}
+                {latest && latest.status !== "passed" && (
+                  <button type="button" disabled={busy || disabled || !!state.unavailable} onClick={() => onIntent("rerun", latest)}>
+                    <ArrowClockwise size={13} />重跑一次
+                  </button>
+                )}
                 <button type="button" disabled={busy || disabled} onClick={() => onIntent("skip", latest)}>
                   这次跳过它，直接合并
                 </button>
               </>
             ) : null}
-            {state.unavailable && !running && !settled && !latest && <button type="button" disabled={busy || disabled} onClick={() => onIntent("skip", null)}>这次跳过它，直接合并</button>}
             {running && running.status !== "running" && running.processPending && <AcceptGateForceRelease key={running.id} taskId={task.id} runId={running.id} reload={reload} notify={notify} />}
             {state.command && latest?.status === "failed" && !running && !settled && !state.unavailable && (
               <button type="button" className={latest.handoff?.error ? "is-primary" : ""} disabled={busy || disabled} onClick={() => void handOff()}>
-                <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次" : "交给智能体去修"}
+                <ArrowUUpLeft size={13} />{latest.handoff && !latest.handoff.error ? "再交给智能体一次"
+                  : latest.missAttribution ? "把结论交给智能体" : "交给智能体去修"}
               </button>
             )}
             {shown && (
@@ -264,7 +339,7 @@ export function AcceptGateCard({ task, notify, onIntent, disabled = false }: {
                 摆在那儿只会让人以为能中途换一条。 */}
             {/* 验收做完之后不摆「改这条命令」：改的是**项目**设置，而这张卡此刻是这一个
                 任务的历史回执，在这儿改会让人以为是在改这条记录。设置页那一份照常能改。 */}
-            {canManage && !running && !settled && (
+            {canManage && !running && !settled && atFinalGate && (
               <button type="button" className={idle ? "is-primary" : ""} disabled={busy} onClick={() => setDraft(state.command ?? "")}>
                 <PencilSimple size={13} />{idle ? "设一条" : "改这条命令"}
               </button>
@@ -306,6 +381,12 @@ function heading(
     if (!latest.stale) return "验收前置命令已通过";
     return latest.command !== state.command ? "上次通过的不是现在这条命令" : "上次通过的不是现在这棵树";
   }
+  // 「起跑前核到这份快照里没有它」跟「某条断言红了」在卡上要分开说：出路完全不同，而原先
+  // 两者都只写「验收前置命令未通过」，于是用户只能去翻 npm 的原始报错自己猜。
+  //
+  // **但不说「没能启动」**（第 10 轮审查 F1）：那句话需要能绑到真跑那一次执行身份上的证据，
+  // ash 没有。所以这儿只陈述起跑前读到的那件事，归因非空就是它。
+  if (latest.missAttribution) return "验收前置命令没过：起跑前核到这份快照里没有它";
   return `验收前置命令${ACCEPT_GATE_STATUS_LABELS[latest.status]}`;
 }
 
@@ -349,8 +430,36 @@ function detail(
       : latest.handoff.error
         ? `已经试过把日志交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）——那条红现在没人在管。`
         : "日志已经交回这个任务的智能体去修了。";
+  // 起跑前核到这份快照里没有它的时候，用户最容易做的事是去按「重跑一次」。那一问的答案
+  // 这儿**不预测**（见下面那段注释），但要把「出路在结论里」说破，否则他只会按着按钮空转。
+  if (latest.missAttribution) {
+    // 交过去的面孔只有一副（去定位、去修，见 accept-gate-messages.ts），所以这句话只说
+    // 它第一步会先核什么。「被要求不要改代码」那句已经撤掉了（第 10 轮审查 F1）。
+    const charge = latest.missAttribution === "mine"
+      ? "（结论指向是这次改动把它弄没的，它会先核这件事）"
+      : "（它会先核这件事：结论证明不了这条命令一行都没跑到）";
+    const told = !latest.handoff ? "结论还没交给智能体。"
+      : latest.handoff.error ? `已经试过把结论交回这个任务的智能体，但没叫醒它（${latest.handoff.error}）。`
+        : `结论已经交回这个任务的智能体了${charge}。`;
+    // **这里不摆出路**（第 1 轮审查 F4）：出路取决于「目标分支上到底有没有这条命令」，
+    // 而那件事只有下面那段结论核对过。在这儿补一句「合进来就行」，就是一句没核过的保证。
+    // 同理，末句只说「核到哪一步写在结论里」，不替它声称两边都核过了。
+    //
+    // **不预测重跑的结果**（第 6 轮审查 N1 实测）：这一档说的是「起跑前核过、这份快照里没有
+    // 它」，而那一问的答案还取决于 runner 的有效配置 —— 审查只改了隔离的那份用户 `.npmrc`
+    // （仓库、命令、依赖一个字没动），同一条命令就从红变绿；而 `stale` 比的是命令加源码/
+    // 依赖指纹（accept-gate-source.ts），里面既没有用户 npmrc 也没有进程环境，照旧报「没过
+    // 期」。指纹盖不住的输入就不能拿它当「输入没变」的证明，所以这儿只陈述当次那件事，剩下
+    // 的留给下一次真的执行。
+    const changed = latest.command !== state.command
+      ? `那次跑的是另一条命令（\`${latest.command}\`）。现在这条 \`${state.command}\` 在这棵树上一次都没跑过。`
+      : latest.stale ? "当前源码或依赖输入已经变了。" : "";
+    const predicts = `${changed}再点验收会重新执行这条命令，不会复用这次的结论；`
+      + "出路以下面那段结论为准 —— 它写了核到哪一步、哪几件没核出来。";
+    return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${told}${predicts}`;
+  }
   return `${summarizeAcceptGate(latest)}。这次没有合并、也没有清理，目标分支一动没动。${handoff}`
-    + (latest.status === "failed" ? "改完再点验收会自动重跑；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
+    + (latest.status === "failed" ? "重新点「验收通过」会重新执行命令，即使代码没有变化，也不会直接复用这次失败；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
 }
 
 /** 已验收那张回执的正文：只陈述**本次验收那一按**的凭据，历史一律标清「不是凭据」。 */

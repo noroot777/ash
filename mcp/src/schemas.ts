@@ -13,9 +13,9 @@ export const TASK_STAGE = z.enum(STAGE_ORDER);
 // 说成「free / preset 二选一」它就会随便挑一个。所以直接写「默认 free，什么时候才该改」。
 export const WORKFLOW_MODE = z.enum(TASK_WORKFLOW_MODES).describe(
   "工作方式,缺省 free。free=自由工作流:建完就跑,跑完由人在界面上随时派审查、开预览、" +
-  "驳回审查意见——**绝大多数活都该用这个**。preset=预设工作流:按一条排好的站点线走" +
-  "(实现→验证→预览→人工→验收),只有在你确实要那条固定流程、或者要指定 workflowId " +
-  "起手式时才选它。选了 preset 的任务在界面上没有「派审查/打开预览」入口。",
+  "驳回审查意见——**绝大多数活都该用这个**。preset=预设工作流:按固定站点线走" +
+  "(实现→验证→预览→人工→验收),只在你确实要那条线、或要指定 workflowId 起手式时才选;" +
+  "选了它界面上没有「派审查/打开预览」入口。",
 );
 
 // One task spec, reused by batch_create_tasks and create_task_chain.
@@ -26,7 +26,7 @@ export const taskShape = z.object({
   title: z.string().optional().describe("省略则首次运行时由 agent 自动起名"),
   body: z.string().optional().describe("交给 agent 执行的 prompt / 目标"),
   agentType: AGENT_TYPE.optional().describe("覆盖批次默认 agent"),
-  executorId: z.string().nullable().optional().describe("覆盖批次默认执行器 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行器降级"),
+  executorId: z.string().nullable().optional().describe("覆盖批次默认执行器 profile(agents.id)；为空/悬空按 agentType 默认执行器降级"),
   model: z.string().nullable().optional().describe("覆盖执行器 profile 的模型；缺省/null=跟随执行器"),
   reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省/null=跟随执行器"),
   useWorktree: z.boolean().optional().describe("是否在独立 worktree 中运行；缺省跟随全局默认，非 git 项目始终为 false"),

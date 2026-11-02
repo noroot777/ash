@@ -14,6 +14,7 @@ import {
 } from "./singleton.js";
 import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSync } from "./platform.js";
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
+import { stampHumanActionToken } from "./auth/human-action-token.js";
 import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
 import { recordListeningPort } from "./listening-port.js";
 import { guardMonitorHook } from "./monitor-hook-failsafe.js";
@@ -145,6 +146,18 @@ async function initializeServer() {
     );
   }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
+  // 回合级停滞看门狗的判决从此自动落库:**加载那个模块就等于装上了**(理由见它顶部 ——
+  // 显式装配只在一条启动路径上成立,换个入口就静默不落库,而那正是审查 F3 的形状)。
+  // 这一句只为副作用,而且排在接管之前:接管回来的那些会话随后要是又熔断,判决同样得留得下来。
+  const stallPersist = await import("./turn-stall-persist.js");
+  // 顺手把判决日志压到「只剩还没销账的那些」。**必须排在接管之前**:这一刻本进程还没作出过
+  // 任何判决、也没有任何人在读,读-改-写才是安全的。判据是日志自己记的销账记录(由结算之后那
+  // 一句 `clearStallFailure` 追加),不是任何代理指标 —— 为什么不能是条数、年龄,或者「回合区间
+  // 收口了」,见 turn-stall-journal.ts 文件头那四条(四个都是审查实测打回来的)。
+  await stallPersist.compactStallVerdicts().catch((error) => {
+    console.warn("[ash] 判决日志压缩跳过(内容一个字没动):", error);
+    return null;
+  });
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
   // 一个 server 进程一起死），再 reconcile 剩下那些真被打断的。反过来的话，一个
   // 正在干活的 agent 会先被判 failed，用户一点重试就有第二个 agent 进同一个
@@ -153,6 +166,12 @@ async function initializeServer() {
   if (!IS_PREVIEW_INSTANCE) {
     await reattachRunningTasks();
     await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+
+    // 撞在故障窗口里丢掉的那次队列推进补回来(判据与边界见 scheduler.ts 的
+    // recoverQueueAdvances)。**必须排在 reconcileInterrupted 之后**:被打断的
+    // running/queued 要先落 failed,这里读到的才是结算完的现场。
+    await (await import("./scheduler.js")).recoverQueueAdvances()
+      .catch((err) => console.error("[ash] 队列推进补办失败（不影响启动）:", err));
 
     // 哨兵接回来。它们的进程本来就没跟着死（那是整件事的全部意义），这里只是把 tail
     // 和定时器重新挂上；认不出来的落 lost，不冒充还在盯。
@@ -246,12 +265,20 @@ async function initializeServer() {
     const { reconcileFreeReviewDebates } = await import("./free-review-debate.js");
     await reconcileFreeReviewDebates().catch((err) => console.error("[ash] 审查辩论对账失败（不影响启动）:", err));
   }
-  // 个人 CLI 配置目录里的 ash MCP 登记（隔离档专属的一位）。放在这里是因为它跟任务
-  // 能不能交卷直接相关：缺了它 agent 干完活也记 failed，而这一趟能在第一个任务起跑
-  // 之前就补好。best-effort，出错只出声不拦启动。
+  // ash MCP 登记自检。放在这里是因为它跟任务能不能交卷直接相关：缺了它 agent 干完活
+  // 也记 failed，而这一趟能在第一个任务起跑之前就说出来。两档各做一件事：隔离档的目录
+  // 是 ash 自己建的，缺了直接补上；自用/共用档读的是用户自己的 CLI 配置，**一个字节都
+  // 不改**，只把缺口点名到文件路径。best-effort，出错只出声不拦启动。
+  //
+  // **不 await**：确认缺口要问 CLI 本人（起一次子进程，CLI 挂住时要等到预算用完），排在
+  // 监听前面就是把这段时间整个加到启动上 —— 而它要提醒的恰恰是缺登记的那些机器（新链
+  // 第 1 轮审查第 5 条）。它跟监听没有先后依赖：隔离档每次起跑前还会再补一遍
+  // （`ensureUserCliDir`），告警晚几秒出来不改变任何结论。
   if (!IS_PREVIEW_INSTANCE) {
-    const { sweepPersonalAshMcp } = await import("./auth/user-cli.js");
-    await sweepPersonalAshMcp().catch((err) => console.error("[ash] 个人 CLI 的 ash MCP 自检失败（不影响启动）:", err));
+    void (async () => {
+      const { sweepPersonalAshMcp } = await import("./auth/user-cli.js");
+      await sweepPersonalAshMcp();
+    })().catch((err) => console.error("[ash] 个人 CLI 的 ash MCP 自检失败（不影响启动）:", err));
   }
   // 上一个 ash 留下的逃逸追踪文件(tmpdir 里的空文件)。证据的寿命跟着「还能不能取到人」
   // 走、不再有硬期限(见 executors/kill.ts),所以「进程整个没了、内存里的租约也没了」这条
@@ -262,6 +289,13 @@ async function initializeServer() {
     const removed = await sweepOrphanTrackFiles();
     if (removed) console.log(`[ash] 回收 ${removed} 个上一轮遗留的逃逸追踪文件`);
   })().catch((err) => console.error("[ash] 逃逸追踪文件回收失败（不影响运行）:", err));
+  // ash MCP 预检的门闩目录(tmpdir/ash-mcp-gate)。正常结束那条路是后台收的,进程赶上那段窗口
+  // 退出就会留下来(见 ash-mcp-gate.ts 的 sweepStaleGates)。只收十分钟以前的。
+  void (async () => {
+    const { sweepStaleGates } = await import("./ash-mcp-gate.js");
+    const removed = sweepStaleGates();
+    if (removed) console.log(`[ash] 回收 ${removed} 个上一轮遗留的 ash MCP 预检临时目录`);
+  })().catch((err) => console.error("[ash] ash MCP 预检临时目录回收失败（不影响运行）:", err));
   // 上一辈子没收干净的 agent 后代:那一轮的清理明确答出「还有残留」或者「没问清楚」,
   // 责任落在 `agent_cleanup_debts` 上(见那张表的注释)。**排在接管之后**:接回来的那些
   // 运行自己还会再走一次清理,这里只追真正没人管的。best-effort,不影响启动。
@@ -537,6 +571,16 @@ async function serveSpa(c: Context, dist: string, rel: string) {
       ? candidate
       : join(dist, "index.html");
   const body = await readFile(file);
+  if (extname(file) === ".html") {
+    // 真人专属动作的凭据**只在交出页面文档这一刻发**(理由与能力边界见
+    // auth/human-action-token.ts):页面从 meta 里读走它,发那几个只有用户按得动的开关时
+    // 带上。刻意不开一个「领凭据」的 JSON 端点 —— 那等于把「先拿到页面文档」这一步也省掉。
+    //
+    // 带凭据的文档一律 no-cache(cacheHeader 对 .html 已经是),否则浏览器会把一份用过的
+    // 凭据一直端出来,开关就按不动了。
+    const stamped = stampHumanActionToken(body.toString("utf8"));
+    return c.body(stamped, 200, { "content-type": MIME[".html"]!, "cache-control": "no-cache" });
+  }
   return c.body(body, 200, {
     "content-type": MIME[extname(file)] ?? "application/octet-stream",
     "cache-control": cacheHeader(file),

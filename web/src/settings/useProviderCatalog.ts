@@ -15,7 +15,8 @@ import { api } from "../lib/api.ts";
  */
 export interface ProviderCatalogIdentity {
   providerId?: string;
-  protocol: LlmProtocol;
+  /** `""` = 协议还没选(新建表单的初始态)。那时探不了:请求打哪条路径由它决定。 */
+  protocol: LlmProtocol | "";
   baseUrl: string;
   apiKey: string;
 }
@@ -53,6 +54,10 @@ export function useProviderCatalog(identity: ProviderCatalogIdentity): ProviderC
 
   const probe = useCallback(() => {
     const current = identityRef.current;
+    if (!current.protocol) {
+      setError("先选协议");
+      return Promise.resolve(null);
+    }
     if (!current.baseUrl.trim()) {
       setError("先填写 Base URL");
       return Promise.resolve(null);

@@ -60,6 +60,13 @@ const ledgerReceipt = (m: {
   generation: m.checkpointGeneration ?? null,
 });
 
+export async function restoreMonitorCheckpoint(message: {
+  id: string; taskId: string; checkpointTaken: string | null;
+  checkpointAuto?: boolean | null; checkpointGeneration?: number | null;
+}): Promise<void> {
+  if (message.checkpointTaken !== null) await restoreCheckpoint(message, ledgerReceipt(message));
+}
+
 export async function monitorWakeCheckpoint(
   message: {
     id: string; taskId: string; origin: string | null; text: string;
@@ -213,6 +220,8 @@ async function restoreCheckpoint(
   const ledgerOurs = and(
     eq(scheduledMessages.id, message.id),
     eq(scheduledMessages.checkpointTaken, checkpoint),
+    receipt.auto === null ? isNull(scheduledMessages.checkpointAuto) : eq(scheduledMessages.checkpointAuto, receipt.auto),
+    receipt.generation === null ? isNull(scheduledMessages.checkpointGeneration) : eq(scheduledMessages.checkpointGeneration, receipt.generation),
     isNull(scheduledMessages.deliveringSince),
     ne(scheduledMessages.status, "sent"),
   );
@@ -259,5 +268,6 @@ async function restoreCheckpoint(
       message.taskId,
       `续跑交代没能放回任务行（${detail}）。它仍记在那条待发送的哨兵事件的账本列上，下一次投递会带着它走。`,
     ).catch(() => {});
+    throw error;
   }
 }

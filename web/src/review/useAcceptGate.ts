@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
 import { api } from "../lib/api.ts";
+import { type CatchUpOptions, catchUpAbortKind } from "../lib/catchUp.ts";
 import { useServerEvents } from "../lib/events.ts";
+import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 
 /**
  * 「这个任务的验收前置命令此刻怎么样」—— 两处表面共用的那一份状态。
@@ -20,6 +22,21 @@ import { useServerEvents } from "../lib/events.ts";
  * 所以每次读取带一个代次，只有**最后一次发出**的那个结果可以落地；切任务时连代次带状态
  * 一起换掉（上一个任务的状态一秒都不许出现在新任务的卡上）。
  */
+/**
+ * 这一屏自己的节奏与措辞。
+ *
+ * **重试**:退五次(1 → 2 → 4 → 8 → 10 秒)之后停下来 —— 跟任务列表那几条静默追平不一样,
+ * 这条等待条是用户正盯着的,读不到时它会如实写「状态待核对」并给一颗「刷新状态」按钮:有人
+ * 在看、有出路,就不该在后台无限地敲服务端(实测确立过的行为)。按下那颗按钮是一次新的
+ * `run()`,额度跟着清零(见 CatchUpRetry)。
+ *
+ * **超时那句话**由这一屏自己说:它要讲出秒数和出路,而追平层并不知道这一屏有没有刷新按钮。
+ */
+const GATE_CATCH_UP: CatchUpOptions = {
+  retry: (failures) => (failures > 5 ? null : Math.min(1000 * 2 ** (failures - 1), 10_000)),
+  deadlineMessage: "读取验收前置命令超时（15 秒），可刷新重试",
+};
+
 export function useAcceptGate(taskId: string): {
   state: AcceptGateState | null;
   error: string | null;
@@ -35,6 +52,7 @@ export function useAcceptGate(taskId: string): {
    * 漏到调用方就变成一个必须被转手传进某个函数、否则就会被当成未使用变量的累赘。
    */
   runningFor: string | null;
+  /** 「该重读了」。返回的 promise 在这一趟落地后兑现(调用方 await 它来解锁按钮)。 */
   reload: () => Promise<void>;
 } {
   // 状态自带它属于哪个任务：`taskId` 一变，上一个任务那份立刻不作数（清不清都一样安全），
@@ -43,62 +61,57 @@ export function useAcceptGate(taskId: string): {
   const [failure, setFailure] = useState<{ taskId: string; error: string } | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  // 发出去的第几次。只有号最大的那一次（= 最后发出的）能落地，迟到的旧响应一律丢掉。
-  const issued = useRef(0);
+  // 这一份**属于谁**。读取的单飞、代次、重试、超时掐断全在追平层(lib/catchUp.ts),这里只
+  // 剩「这一份能不能写进 state」——追平层掐断那一瞬,请求可能已经 resolve 了。
   const activeTask = useRef<string | null>(null);
-  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryCount = useRef(0);
 
-  const reload = useCallback(async (retry = false): Promise<void> => {
-    if (activeTask.current !== taskId) return;
-    if (retryTimer.current) clearTimeout(retryTimer.current);
-    retryTimer.current = null;
-    if (!retry) retryCount.current = 0;
-    const mine = ++issued.current;
+  /**
+   * 读一趟。
+   *
+   * 上一版这里是自己一套:AbortController + 15 秒超时 + 最多 5 次指数退避 + issued 序号,
+   * 而「连上就对账」只认 false→true 那一下、断线不作废在途那一发(第 5 轮审查 N1 点到的
+   * 五种写法之一)。那四样东西现在都是追平层的职责,它们只该有一份实现。
+   */
+  const read = useCallback(async (signal: AbortSignal): Promise<boolean> => {
+    if (activeTask.current !== taskId) return true;
     setChecking(taskId);
     try {
-      const next = await api.acceptGate(taskId);
-      if (issued.current !== mine) return;
+      const next = await api.acceptGate(taskId, signal);
+      if (activeTask.current !== taskId) return true;
       setSnap({ taskId, state: next, readAt: Date.now() });
       setFailure(null);
       setChecking(null);
-      retryCount.current = 0;
+      return true;
     } catch (reason) {
-      if (issued.current !== mine) return;
-      setFailure({ taskId, error: reason instanceof Error ? reason.message : String(reason) });
+      if (activeTask.current !== taskId) return true;
       setChecking(null);
-      if (retryCount.current < 5) {
-        const delay = Math.min(1000 * 2 ** retryCount.current++, 10000);
-        retryTimer.current = setTimeout(() => { void reload(true); }, delay);
-      }
+      // 换了代次的那一发不作数(断线/切任务/卸载):一个字都不说,新代次会自己追平。
+      // 等到点的那一种照实说 —— 它的 reason 本身就是人话,而且追平层还会接着重试。
+      if (catchUpAbortKind(signal, reason) === "stale") return false;
+      setFailure({ taskId, error: reason instanceof Error ? reason.message : String(reason) });
+      return false;
     }
   }, [taskId]);
+  const catchUp = useCatchUp(read, taskId, GATE_CATCH_UP);
+  // 交出去的是**抢占式**那一个:它的调用方全是「人正等着」—— 那颗刷新按钮,以及几个动作
+  // 「做完 → 等状态刷新 → 解锁按钮」的 await(见 CatchUp.runNow 为什么不能跟背景触发合流:
+  // 实测过一发挂住的背景读取把「验收通过」这一按拖到 30 秒之后才发出去)。
+  const reload = catchUp.runNow;
 
   useEffect(() => {
     activeTask.current = taskId;
-    issued.current += 1;
-    void reload();
-    return () => {
-      activeTask.current = null;
-      issued.current += 1;
-      if (retryTimer.current) clearTimeout(retryTimer.current);
-      retryTimer.current = null;
-    };
-  }, [taskId, reload]);
+    void catchUp.run();
+    return () => { activeTask.current = null; };
+  }, [catchUp, taskId]);
   // 服务端的权威信号只有这一条：起了、结束了、被取消了，都发 task.acceptGate。
   const connected = useServerEvents((event) => {
     const relevant = event.type === "task.updated" ? event.task.id === taskId
       : (event.type === "task.acceptGate" || event.type === "task.stage") && event.taskId === taskId;
     if (!relevant) return;
-    void reload();
+    void catchUp.run();
   });
-  // 每次（重新）连上都对一次账，理由见文件头。
-  const linked = useRef(connected);
-  useEffect(() => {
-    const was = linked.current;
-    linked.current = connected;
-    if (connected && !was) void reload();
-  }, [connected, reload]);
+  // 每次（重新）连上都对一次账、断线就把这一代次作废，理由见文件头与 lib/useCatchUp.ts。
+  useCatchUpLink(catchUp, connected);
 
   const state = snap?.taskId === taskId ? snap.state : null;
   const error = failure?.taskId === taskId ? failure.error : null;

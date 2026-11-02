@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, type SQL } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -12,6 +12,7 @@ import { previewStopFailure } from "./preview-process-stop.js";
 import { recordTaskStatus } from "./task-start-status.js";
 import { releaseTerminalLanding } from "./task-complete.js";
 import { directionIdentityCleared } from "./task-direction-epoch.js";
+import { clearStallFailure } from "./turn-stall-verdict.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -24,22 +25,79 @@ const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 //   • → paused   : 跑到检查点（非终止），startedAt/endedAt 都不动；下次 resume
 //                  会走 → running 路径自动清掉 endedAt。
 //   • otherwise  : leave the timestamps untouched.
+export type SetTaskStatusOptions = {
+  /**
+   * **条件写**:只有库里当前状态仍是这里列的值之一,这一笔才提交。
+   *
+   * 为什么需要它:本函数自己内部就隔着 await(先整行 SELECT 再 UPDATE),所以调用方
+   * 「先查一次归属、紧接着调我」是挡不住交错的 —— 真正的权威后来者(用户点停止写
+   * canceled)能在那段窗口里落库,随后这一笔照样把它盖掉,还连带发布终态、停哨兵、
+   * 推进队列(本轮审查 F1 实测:停止回 200 且库里是 canceled,旧回滚结束后变成 failed)。
+   *
+   * 给了它之后,「核验」和「写」争的是同一条 UPDATE 语句(WHERE 里带状态),没有窗口。
+   * 不命中 = 这一笔过期了:**一个副作用都不触发**,返回 false 让调用方自己收场。
+   */
+  expectStatus?: TaskStatus | TaskStatus[];
+  /**
+   * 由所有权层包住实际数据库提交,失去所有权时返回 false。
+   * 数据库驱动可能等待写门,同步谓词不能覆盖这个窗口。队列占位通过共用认领链,
+   * 把核验、等待写门、提交及广播串在一起;队列推进异步排到链尾,不在这里等待重入。
+   */
+  commitGuard?: (commit: () => Promise<boolean>) => Promise<boolean>;
+  /**
+   * 这次写 paused 是续聊/旁路回合**恢复原状态**,不是「刚跑到检查点落位」——别触发
+   * 队列推进钩子。推进会把一个本就静静等着的 paused 成员(典型:队列 head 上带
+   * resumePrompt 的检查点)当作新到位的立即续跑:检查点被一句「怎么样了」间接消费、
+   * 无确认结算成 failed、后项被放行(第 ln9Q6IJEgmWf 链第 2 轮)。
+   * 已知代价:追问回合期间前项恰好结束的话,那次推进被 running 的旁路回合冻结,
+   * 恢复时又不补推 —— 任务静止等下一个队列事件或用户手点。保守方向:少做不会丢
+   * 检查点,误做会。恢复终态不走这个口子:让位与待发送消息的 flush 都靠那次推进。
+   */
+  quietAdvance?: boolean;
+  /**
+   * 这一笔落位**同时消费掉**的那几项回合输入事实(续聊前的原状态、原生回合标记、完成确认)。
+   *
+   * 为什么非得挤进同一条 UPDATE(main 那一轮第 2 轮审查 F2,已实测):结算侧原先是「先清
+   * `followUpFrom`、下一句再写 status」两条语句。两句之间任务是 `running + followUpFrom=null`
+   * —— 此刻进程没了,**恢复原终态所需的那个事实已经永久消失**,重启后的对账只能把一个本该
+   * 回到 `done` 的任务落成 failed。用户那边唯一的区别只是 ash 有没有在那条缝里重启。
+   *
+   * 起跑侧一直是对的(`guarded-turn-start.ts` / `review-start-retry.ts`:status 与这三列在同一笔
+   * 事务里写),结算侧照它对齐。类型只允许「清掉」那几个值:这个口子不是通用的字段补写入口。
+   */
+  consume?: { followUpFrom?: null; nativeTurn?: false; completeConfirmedAt?: null };
+  /**
+   * 这一笔落位**兑现掉**的熔断失败义务(会话 + 回合起点)。
+   *
+   * 为什么销账只能从这个口子走(main 那一轮第 2 轮审查 F1,已实测):判决的回收条件是「这个执行
+   * 身份的任务落位已经持久确认」,而全仓唯一知道这件事的就是**真把那一行写进库的那一次**。启动
+   * 对账原先在算出落位之前就销了账(`interruptedTurnVerdict` 里),后面还隔着持续目标善后、时间线、
+   * 基线恢复和最终状态写入 —— 这中间重启一次、或者任何一个 await 抛一次,盘上就留下「任务仍
+   * running、失败义务已销账」:下一次启动只看到一个已经闭合的回合,一个提示过「已自动终止」的
+   * 持续目标回来显示「暂停中 + 继续」。
+   *
+   * 做成这个函数的参数,而不是「记得在 setStatus 之后再调一句」:后者的正确性靠调用顺序,而
+   * 这条链上每一轮审查都在证明调用顺序护不住这件事。写在这儿,销账与落位同生共死 ——
+   * UPDATE 没改到行(被 guard/expectStatus 挡下、任务已被删)就一个字都不销。
+   *
+   * 回合区间自己就是权威结局的那几条链(duet 的一轮发言、团队那台的一个回合)不走这里:
+   * 它们的失败由各自的区间与返回值承载,跟任务那一行什么时候落位无关(见
+   * turn-stall-verdict.ts 的 `clearStallFailure`)。
+   */
+  settleStallTurns?: { sessionId: string; turnStartedAt: string }[];
+};
+
+/** 只有 `writeGuardedTaskStatus` 这一条内部入口用得到的两档:调用方自带谓词 + 占位凭证。 */
+type WriteStatusOptions = SetTaskStatusOptions & {
+  guard?: SQL;
+  queueSeatToken?: string | null;
+};
+
 export async function setTaskStatus(
   taskId: string,
   status: TaskStatus,
-  opts?: {
-    /**
-     * 这次写 paused 是续聊/旁路回合**恢复原状态**,不是「刚跑到检查点落位」——别触发
-     * 队列推进钩子。推进会把一个本就静静等着的 paused 成员(典型:队列 head 上带
-     * resumePrompt 的检查点)当作新到位的立即续跑:检查点被一句「怎么样了」间接消费、
-     * 无确认结算成 failed、后项被放行(第 ln9Q6IJEgmWf 链第 2 轮)。
-     * 已知代价:追问回合期间前项恰好结束的话,那次推进被 running 的旁路回合冻结,
-     * 恢复时又不补推 —— 任务静止等下一个队列事件或用户手点。保守方向:少做不会丢
-     * 检查点,误做会。恢复终态不走这个口子:让位与待发送消息的 flush 都靠那次推进。
-     */
-    quietAdvance?: boolean;
-  },
-): Promise<void> {
+  opts?: SetTaskStatusOptions,
+): Promise<boolean> {
   const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   // 又开跑了:这一段里不许有新的自由工作流动作(起预览、验收、派审…)。**同步竖起来、
   // 状态落库之后才放下**——收预览和写 running 是两步,中间那条缝里库里那行还是 `done`,
@@ -47,7 +105,8 @@ export async function setTaskStatus(
   const rerun = status === "running" && !!cur && cur.status !== "running";
   if (rerun) beginRerunGate(taskId);
   try {
-    await writeTaskStatus(taskId, status, cur, rerun, opts?.quietAdvance);
+    const commit = () => writeTaskStatus(taskId, status, cur, rerun, opts);
+    return await (opts?.commitGuard ? opts.commitGuard(commit) : commit());
   } finally {
     if (rerun) endRerunGate(taskId);
   }
@@ -58,12 +117,16 @@ async function writeTaskStatus(
   status: TaskStatus,
   cur: typeof tasks.$inferSelect | undefined,
   rerun: boolean,
-  quietAdvance?: boolean,
-): Promise<void> {
+  opts?: WriteStatusOptions,
+): Promise<boolean> {
+  const quietAdvance = opts?.quietAdvance;
+  const expect = opts?.expectStatus === undefined
+    ? null
+    : (Array.isArray(opts.expectStatus) ? opts.expectStatus : [opts.expectStatus]);
   const updatedAt = now();
   let startedAt = cur?.startedAt ?? null;
   let endedAt = cur?.endedAt ?? null;
-  const patch: Record<string, unknown> = { status, updatedAt };
+  const patch: Record<string, unknown> = { status, updatedAt, queueSeatToken: opts?.queueSeatToken ?? null };
 
   if (status === "running") {
     if (!startedAt) patch.startedAt = startedAt = updatedAt;
@@ -74,13 +137,14 @@ async function writeTaskStatus(
     // **旁路回合例外**：审查轮/验证轮只读工作区、不产出新一版代码，页面不会在用户眼皮
     // 底下变成别的东西。收掉它等于每派一次审查就把用户正看着的预览关掉——而那十几分钟
     // 恰恰是最该自己点开看一眼的时候（见 review-turn.ts）。身份在这一刻已经落下：
-    // claimTurn/reclaimTurn 都排在 setStatus(running) 之前。
+    // claimOwnTurn/reclaimTurn 都排在 setStatus(running) 之前。
     if (rerun && !reviewTurnInFlight(taskId)) {
       try { await stopPreviewOnRerun(taskId); }
       catch (error) { await appendTaskTimeline(taskId, `旧预览回收暂缓，任务继续运行。${previewStopFailure(error).message}`); }
     }
   } else if (TERMINAL.includes(status)) {
     patch.endedAt = endedAt = updatedAt;
+    patch.queueAdvanceRequest = null;
   }
   if (status !== "running") {
     // 回合内的身份随回合结束作废。**`direction_epoch` 不在此列,那不是漏写**:它正是为了
@@ -90,7 +154,29 @@ async function writeTaskStatus(
     Object.assign(patch, directionIdentityCleared());
   }
 
-  await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
+  // 回合输入事实跟着这一笔一起消费(见 `SetTaskStatusOptions.consume`):同一条 UPDATE,所以
+  // 「落位写下了」和「输入被消费了」永远同时成立或同时不成立,中间没有可以崩进去的缝。
+  if (opts?.consume) Object.assign(patch, opts.consume);
+  // ── 条件写的那一条语句 ───────────────────────────────────────────────────────
+  // 两档条件是两条独立链路各自带进来的,互不替代,这里取并集:
+  //   · `expectStatus` —— 库里当前状态必须还是它列的那几个之一(执行占位认领)
+  //   · `guard`      —— 调用方自带的归属谓词(队列预留、推进重放)
+  const written = await db
+    .update(tasks)
+    .set(patch)
+    .where(and(eq(tasks.id, taskId), opts?.guard, expect ? inArray(tasks.status, expect) : undefined))
+    .returning({ id: tasks.id });
+  // 一行都没改到 = 要么状态在我读到它之后被别人改了、要么这一行已经不在了,这一笔过期。
+  // **就此收手**:下面每一件事(撤落地闩、记状态、停哨兵、广播、推进队列、flush 待发送)
+  // 都是「状态真的变了」的后果,过期的写发布它们就等于用一次没发生的变更去驱动整条链。
+  //
+  // 这条对无条件调用方也生效(跟 main 一致):那种情形下 WHERE 里只剩 id,写不中就只有
+  // 一种解释——任务行已经被删了。对一个不存在的任务广播状态、推进它的队列没有一点好处。
+  if (!written.length) return false;
+  // **落位这一行确实写进去了** —— 这是熔断判决唯一的合法回收条件(见
+  // `SetTaskStatusOptions.settleStallTurns`)。紧跟在这个判断之后,中间不插任何 await:再往后
+  // 挪一步就又给出一条「落位已写、义务还欠着」的缝,而那条缝正是 main 那一轮拦下的东西。
+  for (const turn of opts?.settleStallTurns ?? []) clearStallFailure(turn.sessionId, turn.turnStartedAt);
   // 这一行落库了 ⇒ 结算那一关置的闩可以撤了(见 task-complete.ts 的 `beginTerminalLanding`):
   // 它护的就是「核完阻塞物」到「这一笔写进库」之间那条缝。从这一刻起,库里这一行自己就答得了
   // 「还能不能挂哨兵」—— 终态由 `monitorSourceGate` 挡住,非终态本来就该放行。
@@ -151,4 +237,11 @@ async function writeTaskStatus(
   if (status !== "running" && status !== "queued" && status !== "awaiting_review") {
     void import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId));
   }
+  return true;
+}
+
+export async function writeGuardedTaskStatus(taskId: string, status: TaskStatus, guard: SQL,
+  queueSeatToken: string | null = null): Promise<boolean> {
+  const current = (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0];
+  return writeTaskStatus(taskId, status, current, false, { quietAdvance: true, guard, queueSeatToken });
 }

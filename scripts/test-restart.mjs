@@ -13,8 +13,7 @@ import { fileURLToPath } from "node:url";
 import { IS_WINDOWS, capture, isPidAlive, sleep } from "./platform.mjs";
 import { restartCommand } from "./restart-options.mjs";
 import { runTestProcess } from "./test-process.mjs";
-import { disposeTestScopesSync, spawnTestFixture } from "./test-process-scope.mjs";
-import { cleanupTestResourcesSync, reportTestResourceError, withTestResources } from "./test-process-resources.mjs";
+import { disposeTestScopesSync, spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
@@ -22,12 +21,86 @@ const TMP = mkdtempSync(join(tmpdir(), "ash-restart-test-"));
 const FAKE_BIN = join(TMP, "bin");
 mkdirSync(FAKE_BIN);
 
+/** 退出钩子里唯一能用的「等一会儿」:同步阻塞,不需要事件循环(它这时候已经不转了)。 */
+const sleepSync = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
 const PID_FILE = join(TMP, "server.pid");
 let serverPid = 0;
+/**
+ * detached 起来的那个假 server 的**实例凭据**(号码、出生时刻,以及**停它的那条路** ——
+ * 执行域目录 + 它装没装上自退通道,由执行域交出来)。
+ *
+ * 停它只认这一份:照 PID 文件里的号码裸杀,号码换了主人就会关掉一个无关程序
+ * (第 5 轮审查 F4;第 6 轮审查 F1 进一步把「按号码下刀」整条路撤掉了)。凭据来自
+ * `runTestProcess` 的 `preserved` —— 那是它在域内观察到的身份,不是事后读文件猜的。
+ */
+let serverInstance = null;
+
+/** 收下这一轮 detached server 的实例凭据(号码仍要读一份:后面几条断言按号码查它还活着)。 */
+function takeServerInstance(run) {
+  try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { serverPid = 0; }
+  serverInstance = run.preserved.find((instance) => instance.pid === serverPid) ?? null;
+  if (serverPid && !serverInstance) fail(`没拿到 detached server(${serverPid})的实例凭据 —— 按号码裸杀是 F4 明禁的那条路`);
+}
+
+/**
+ * 停掉它 —— **请它自己退,再核实它真的退了**。
+ *
+ * 本层对一个 detached 的后代没有「按号码下刀」的权力(窗口关不掉、macOS 的尺子只有秒,
+ * 理由见 scripts/test-process-terminate.mjs 文件头):所以这里递的是那张写在执行域目录里的
+ * 纸条,它自己读到之后自己退。绑不住、或者请完还在,一律当场失败 —— 宁可留一个让人自己确认,
+ * 也不拿一个号码去赌。
+ */
+async function stopServer() {
+  if (!serverInstance) return;
+  const instance = serverInstance;
+  const shot = terminateInstance(instance);
+  serverInstance = null;
+  serverPid = 0;
+  if (shot.error) fail(`detached server(${shot.pid})终止失败: ${shot.error.message}`);
+  if (!shot.sent && !shot.requested) fail(`detached server(${shot.pid})${shot.why}`);
+  for (let round = 0; round < 50 && isPidAlive(instance.pid); round += 1) await sleep(40);
+  if (isPidAlive(instance.pid)) {
+    fail(`detached server(${instance.pid})请它自己退之后 2s 还在,本层不按号码补刀 —— 请自行确认 :${PORT} 上没有残留`);
+  }
+}
+
+/** 停掉一个 fixture:整个执行域(它自己 + 它的后代)按实例收走,清不干净当场失败。 */
+async function disposeFixture(fixture, label) {
+  try { await fixture.dispose(); }
+  catch (error) { fail(`${label} 清场失败`, String(error?.message ?? error)); }
+}
 
 function cleanup() {
-  try { cleanupTestResourcesSync([disposeTestScopesSync, () => rmSync(TMP, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 })]); }
-  catch (error) { reportTestResourceError(error); process.exitCode ||= 1; }
+  // 断言中途 `fail()` 会直接 process.exit,所以这里是最后一道。两件事与上一版不同:
+  //  · detached server 只按实例凭据停(上一版在这里重读 PID 文件再 `killPid`,正是 F4 点名的
+  //    裸号码入口)。没凭据就只报出来、不下刀:宁可留一个,也不去关一个可能无关的程序。
+  //  · `spawnTestFixture` 建的那些执行域**不必在这儿管** —— test-process-scope.mjs 自己的退出
+  //    钩子会按实例把它们整域收走(连后代),比在这儿按句柄杀一层更严。
+  if (serverInstance) {
+    const instance = serverInstance;
+    const shot = terminateInstance(instance);
+    serverInstance = null;
+    if (shot.error || (!shot.sent && !shot.requested)) {
+      process.exitCode = 1;
+      process.stderr.write(`⚠ detached server(${shot.pid})没能停掉:${shot.error?.message ?? shot.why}\n`);
+    } else {
+      // 退出钩子里只能同步等。纸条已经递出去了,它自己那个轮询在另一个进程里照常跑 ——
+      // 所以这里卡一会儿、把结果**核实**出来,而不是写一句「已请求」就算完(核不实的清理
+      // 报告跟没清理一样危险)。
+      for (let round = 0; round < 40 && isPidAlive(instance.pid); round += 1) sleepSync(40);
+      if (isPidAlive(instance.pid)) {
+        process.exitCode = 1;
+        process.stderr.write(`⚠ detached server(${instance.pid})请它自己退之后仍在,本层不按号码补刀 —— 请自行确认 :${PORT}\n`);
+      }
+    }
+  } else if (existsSync(PID_FILE)) {
+    process.exitCode = 1;
+    process.stderr.write(`⚠ ${PID_FILE} 里还有号码,但手上没有实例凭据 —— 按 F4 不下刀,请自行确认 :${PORT} 上没有残留\n`);
+  }
+  try { disposeTestScopesSync(); } catch (error) { process.exitCode = 1; process.stderr.write(`${error.stack ?? error}\n`); }
+  try { rmSync(TMP, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 }); }
+  catch (error) { process.exitCode = 1; process.stderr.write(`${error.stack ?? error}\n`); }
 }
 process.on("exit", cleanup);
 
@@ -94,8 +167,9 @@ const run = await runTestProcess(process.execPath, [join(REPO, "scripts", "resta
 });
 const output = (run.stdout ?? "") + (run.stderr ?? "");
 
-// server 是 detached 起来的,脚本返回之后才读得到 pid;先记下来,后面的断言失败也能清理。
-try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
+// server 是 detached 起来的,脚本返回之后才读得到 pid;连实例凭据一起记下来,后面的断言
+// 失败也停得掉(见 `takeServerInstance`)。
+takeServerInstance(run);
 
 if (!output.includes(`${PORT} 已就绪`)) fail("没等到「已就绪」——本机探活可能被代理劫走了", output);
 if (!output.includes("✅ 完成")) fail("没跑到最后一步", output);
@@ -116,10 +190,9 @@ if (!IS_WINDOWS) {
   if (ppid !== "1") fail(`detached server 的 ppid 是 ${ppid},没脱离调用方进程组`);
 }
 
-await run.dispose();
+await stopServer();
 rmSync(PID_FILE, { force: true });
 await sleep(200);
-serverPid = 0;
 
 // ── 旧进程没下线时，绝不许报成功 ──────────────────────────────────────────────
 // 2026-08-21 的真实故障：Rocky 容器里没装 lsof(ss/fuser 也可能没有)，listenerPids
@@ -129,7 +202,7 @@ serverPid = 0;
 // lsof，它都杀不死，端口始终有人应答 —— 脚本必须失败退出，而不是报就绪。
 //
 // **这一段是 POSIX 专用的**:整个局面建立在「进程能忽略停止信号」之上,而 Windows
-// 没有 SIGTERM,`killPid` 走的是无条件的 `taskkill /F` —— 赖着不走这个前提在那边
+// 没有 SIGTERM,那边停进程走的是无条件的 `TerminateProcess` —— 赖着不走这个前提在那边
 // 根本搭不出来,硬跑只会得到一条假失败,还会把后面几条用例挡在门外(2026-10-20 真机
 // 验证时实测)。那条闸本身在 Windows 上照样有效,只是这个复现手法不适用。
 const stubbornSkipped = IS_WINDOWS;
@@ -150,6 +223,8 @@ createServer((req, res) => {
 });
 `);
 
+// 它是一个执行域 fixture:断言中途 `fail()` 直接退出时,test-process-scope.mjs 的退出钩子
+// 会按实例把这一域整个收走(它自己 + 后代),不必在本文件里另记一笔号码。
 const stubbornProc = spawnTestFixture(process.execPath, [stubborn], { stdio: "ignore" });
 for (let i = 0; i < 50 && !existsSync(STUBBORN_PID); i++) await sleep(100);
 if (!existsSync(STUBBORN_PID)) fail("赖着不走的假 server 没起来,这条回归没法测");
@@ -160,7 +235,7 @@ const blocked = await runTestProcess(process.execPath, [join(REPO, "scripts", "r
   encoding: "utf8",
 }, 1);
 const blockedOutput = (blocked.stdout ?? "") + (blocked.stderr ?? "");
-await stubbornProc.dispose();
+await disposeFixture(stubbornProc, "赖着不走的假 server");
 await sleep(200);
 
 if (blockedOutput.includes("已就绪")) fail("旧进程还占着端口,却打印了「已就绪」", blockedOutput);
@@ -233,14 +308,14 @@ const forced = await runTestProcess(IS_WINDOWS ? "powershell.exe" : "/bin/sh", r
   preserveScripts: [fakeServer],
 });
 const forcedOutput = (forced.stdout ?? "") + (forced.stderr ?? "");
-await refusingProc.dispose();
-try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
+await disposeFixture(refusingProc, "回 401 的假 server");
+takeServerInstance(forced);
 await sleep(200);
 
 if (forcedOutput.includes("问不到「重启会打断谁」")) fail(`${forceLabel} 不该被这道闸挡住`, forcedOutput);
 if (!forcedOutput.includes(`${PORT} 已就绪`)) fail(`${forceLabel} 没把服务端换成新的`, forcedOutput);
 console.log(`✓ ${forceLabel}: 调用无错误/异常信号且输出收集完成`);
-await forced.dispose(); serverPid = 0;
+await stopServer();
 rmSync(PID_FILE, { force: true });
 await sleep(200);
 }
@@ -278,7 +353,7 @@ const muted = await runTestProcess(process.execPath, [join(REPO, "scripts", "res
 }, 2);
 const mutedOutput = (muted.stdout ?? "") + (muted.stderr ?? "");
 const muteSurvived = isPidAlive(mutePid);
-await muteProc.dispose();
+await disposeFixture(muteProc, "不答复判据的假 server");
 await sleep(200);
 
 if (!mutedOutput.includes("问不到「重启会打断谁」")) fail("中止信息没说清「问不到判据」这个成因", mutedOutput);
@@ -312,7 +387,7 @@ createServer((request,response)=>{
   : {ok:true,pid:process.pid}));
 }).listen(${PORT},'127.0.0.1',()=>writeFileSync(${JSON.stringify(statePath)},JSON.stringify({pid:process.pid,agent:agent.pid})));`);
   const service = spawnTestFixture(process.execPath, [servicePath], { stdio: "ignore" });
-  await withTestResources(async () => {
+  try {
     for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt++) await sleep(100);
     if (!existsSync(statePath)) fail("CIM 故障用例的服务没有启动");
     const state = JSON.parse(readFileSync(statePath, "utf8"));
@@ -325,7 +400,13 @@ createServer((request,response)=>{
     if (output.includes("已就绪")) fail("CIM 失败却宣称重启成功", output);
     if (!isPidAlive(state.pid) || !isPidAlive(state.agent)) fail("CIM 失败时动了旧服务或受保护任务", output);
     console.log("✓ HTTP 判据成功但 CIM 查询失败时,完整 restart 在任何终止动作前中止");
-  }, [() => service.dispose(), () => sleep(200)]);
+  } finally {
+    // 受保护的那个 agent 是这个服务的子进程,**在同一个执行域里** —— 整域交给 fixture 的
+    // disposer 按实例收走就够了。上一版在这儿按 `state.agent` 这个号码裸杀(F4 点名的入口):
+    // 号码是从文件里读出来的,核都没核。
+    await disposeFixture(service, "CIM 故障用例的服务");
+    await sleep(200);
+  }
 }
 
 // ── 「上一轮留下了单例锁」怎么说给用户听 ─────────────────────────────────────
@@ -346,13 +427,13 @@ const residualRun = await runTestProcess(process.execPath, [join(REPO, "scripts"
   encoding: "utf8",
 });
 const residualOutput = (residualRun.stdout ?? "") + (residualRun.stderr ?? "");
-try { serverPid = Number(readFileSync(PID_FILE, "utf8").trim()); } catch { /* 下面统一报错 */ }
+takeServerInstance(residualRun);
 
 if (!residualOutput.includes("退出意向(收到 SIGTERM)")) fail("没把观察到的那条意向报出来", residualOutput);
 if (!residualOutput.includes("最终死因仍然未知")) fail("两档都必须落在「死因未知」上", residualOutput);
 if (residualOutput.includes("是正常停的")) fail("一条进程内的记录定不了性,不许说成正常停", residualOutput);
 if (residualOutput.includes("不是强杀")) fail("同理也不许声称排除强杀", residualOutput);
-await residualRun.dispose(); serverPid = 0;
+await stopServer();
 rmSync(PID_FILE, { force: true });
 
 process.stdout.write("✓ restart.mjs 的本机探测绕过代理，且脚本返回后 detached server 仍在运行\n");

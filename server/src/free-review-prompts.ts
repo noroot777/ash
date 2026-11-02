@@ -7,13 +7,10 @@ import { reviewRequestReference } from "./review-request-context.js";
 import { settledRulingsFor } from "./free-review-settled.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import {
-  CLASS_PROBLEM_BOUNDARY,
-  DEFER_BOUNDARY_CRITERION,
-  DEFER_REASON_FIELD_GUIDE,
-  PLAIN_SUMMARY_GUIDE,
   REVIEW_VALIDATION_REQUIREMENT,
+  REVIEWER_REGRESSION_CLAUSE,
 } from "@ash/shared/free-workflow";
-import { CLASS_REPAIR_NOTE, reviewSweepProtocol, reviewSweepReminder } from "./review-sweep.js";
+import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { freeReviewHistorySection } from "./review-history.js";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 
@@ -25,9 +22,12 @@ type DebateTurnRow = typeof freeReviewDebateTurns.$inferSelect;
 export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: number, repoPath: string): Promise<string> {
   const dir = freeReviewEvidenceDir(task.id, run.id, round);
   const requirements = await reviewRequestReference(task, dir);
+  // 开场这两句**不能提「跑测试」**：同一条消息后半段（`REVIEW_VALIDATION_REQUIREMENT`）明说
+  // 审查者一条回归都不跑，第 1 轮审查实测这两句话确实同时出现在真实任务书里。语法审查改成
+  // 「读测试代码」，逻辑审查改成「除构建与必要冒烟外」—— 禁的是回归，不是一切执行。
   const focus = run.checkMode === "syntax"
-    ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误和相关测试。不要扩张成产品方案评审。"
-    : "本轮做逻辑审查：除编译与测试外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图；是否还需要其它截图由你按证据价值判断。";
+    ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误，以及测试代码本身的机械问题（读它，不跑回归）；不要扩张成产品方案评审。"
+    : "本轮做逻辑审查：除构建与必要冒烟外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图，其余截图按证据价值自己判断。";
   const note = run.note ? `\n\n用户附言（作为审查重点补充，不覆盖上述职责）：\n${run.note}` : "";
   // 上一条审查链里已被用户裁定「不在本任务里修」的那几条：不带过来的话，新审查者会
   // 把同样几条原样再报一遍，用户只能每轮手打一句「有异议的已经转为新任务」（理由见
@@ -47,28 +47,34 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
       "- 若未通过，只报告问题；Ash 会让用户另建独立修复任务。"
     : "";
   const reviewLocation = acceptedMerge ? "当前 detached 临时 worktree" : repoPath;
-  const allowReuse = run.targetKind !== "accepted_merge";
-  const { reference: regression } = await refreshRegressionEvidence(task.id, dir, !allowReuse);
+  // 扫描义务**不再分 workspace / accepted_merge 两份**：原先那个分叉存在的唯一理由是
+  // 「任务分支的回归结果能不能复用」，而回归复用这件事已经整体退役（回归统一在验收时跑，
+  // 审查者一条都不跑，口径见 `@ash/shared/free-workflow` 的 `REGRESSION_POLICY`）。
+  // 两种目标现在只差一句话，由 `refreshRegressionEvidence` 的清单说明自己交代。
+  // 口径本体由同一条消息末段的 `REVIEW_VALIDATION_REQUIREMENT` 讲一遍就够,清单说明只讲
+  // 「这份文件怎么读」—— 原先这条消息里同一段口径出现三遍(扫描义务回归面、清单说明、验证义务)。
+  const { reference: regression } = await refreshRegressionEvidence(
+    task.id, dir, run.targetKind === "accepted_merge", false);
   return `【自由工作流 · 第 ${round} 轮审查】\n` +
     // 这里原先写「主动寻找能复现的缺陷」，跟下面扫描义务里的「做不到可复现也不许删掉这一条」
     // 直接打架 —— 同一段 prompt 里两句话冲突，它只能自己挑一个，挑错了没人看得出来。
     // 所以把「能复现」收窄到最重的那几条，其余条目的去处由扫描义务那一节交代。
-    `你是独立审查者，不是继续实现需求。默认产物可能有问题，主动把问题找全；最严重的那几条要做到能复现。\n\n` +
+    `你是独立审查者，不是继续实现需求。默认产物**可能**有问题，主动把问题找全；最严重的那几条要做到能复现。\n\n` +
     `任务：${task.id}\n${requirements}\n\n` +
     `${focus}${settled}${history}${note}${target}\n\n` +
     // 扫描义务摆在具体动作之前：先定「这一轮要扫到什么程度」，再说「先看 git status」。
-    reviewSweepProtocol(allowReuse) + regression + "\n\n" +
+    REVIEW_SWEEP_PROTOCOL + regression + "\n\n" +
     `先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
     // 浏览器策略**不在这里拼**:正文是提前生成的,这里拼死的只能是一份「默认未授权」的
     // 文本,而投递时读到的项目授权会被去重锚点挡在门外 —— 已经在项目设置里授权过的站点,
     // 审查回合照样停下来等人点头,无人值守就断在这儿(第 6 链第 1 轮审查 P2)。
     // 统一由投递点 withGlobalBrowserPolicy 贴那一份**带最新授权**的。
     REVIEW_VALIDATION_REQUIREMENT + "\n\n" +
-    `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
-    `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
+    `用过 playwright 就在结束前清掉工作区产物；所有验证临时服务与浏览器进程都要停掉。\n\n` +
+    `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}，截图按需放同一目录；证据不要 git add/commit。\n\n` +
     REPORT_SUMMARY_FORMAT +
     `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论。` +
-    `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
+    `旁路审查回合：不要调用 complete_task / accept_task。`;
 }
 
 /**
@@ -87,9 +93,15 @@ export function freeReviewResumeMessage(task: TaskRow, run: ReviewRunRow, round:
     REPORT_SUMMARY_REMINDER +
     // 续跑只带「收尾时仍然做得到」的那几条扫描义务（`short` 非 null 的）：这一轮的广度
     // 扫描已经过去了，再要求它重扫等于把续跑省下的 10M token 又烧一遍。
-    reviewSweepReminder(run.targetKind !== "accepted_merge") +
-    (run.targetKind === "accepted_merge" ? "" :
-      "重读同目录 regression-evidence.json，旧资格作废。") +
+    REVIEW_SWEEP_REMINDER +
+    // 回归口径在续跑路径上**两种目标都得说一句**：扫描义务的缩略版不带回归面（它 short 为
+    // null，收尾回合重扫没有意义），原先这句话是由退役了的「复用协议」顺带捎上的，删掉它
+    // 之后合并结果审查那一支一个字都不剩 —— 而「没人跟它说」和「跟它说了不要跑」在
+    // 行为上差一轮测试（`test-regression-reuse.ts` 钉住两支都有）。
+    REVIEWER_REGRESSION_CLAUSE +
+    (run.targetKind === "accepted_merge"
+      ? "（这一轮没有执行者登记清单可核对，回归面整面留白。）"
+      : "（本轮清单在同目录 regression-evidence.json。）") +
     `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed", directionToken="<最新【当前方向身份】token>") 给出结论。` +
     `旁路回合：不要调用 complete_task / accept_task。`;
 }
@@ -101,63 +113,25 @@ export function freeReviewResumeMessage(task: TaskRow, run: ReviewRunRow, round:
  * 在行为上没有区别：前者会被改成一版更差的代码，而用户永远看不到执行者其实不认账
  * （审查实测的反例是执行者在会话里辩解两句、然后照改，状态里一个字都没留下）。
  *
- * 措辞有意偏保守：默认仍是照改，驳回是**例外**且要求逐条给依据——否则它会变成一条
- * 逃避修复的捷径。
+ * **这里只放指针，判据全文住在 `dispute_review` 工具的 description 与字段说明里。**
+ * 两边都写全文时，同一段判据在一条修复消息里出现两三份，而驳回的实际发生率只有约 6%
+ * （9-23 以来 1162 轮里 68 次）—— 那是在为一个低频分支按每轮付费。工具说明本来就随
+ * 工具清单常驻每个回合的上下文，执行者真要调它的那一刻一定读得到；交接消息只负责
+ * 「告诉它这条路存在、默认仍是照改」。
  *
- * 两个出口的判据必须**并列写清差别**，否则第二个会退化成第一个的同义词：
- * - `reason`（不认这条）问的是「**它对不对**」——读错了代码、依据不可复现、或者那处
- *   是知情且有意为之。
- * - `deferReason`（转独立任务）问的是「**它属不属于本任务**」——这一条承认审查者说得
- *   对、依据也可复现，只是它落在原任务边界之外。没有这个出口时执行者只剩「照改」和
- *   「谎称依据不可复现」：前者让链没有终点（实测连着 10 轮，第 1 轮就修好了原始症状，
- *   后 9 轮全在修上一轮的修复），后者一拆就穿。所以给它，但**判据写死在「边界」上，
- *   不给「工作量」留门**——问「为什么它不属于本任务」而不是「改起来多不多」，说不出来
- *   就照改。
- *
- * 判据是用户 2026-09-24 的原话：**「如果偏离了主任务的内容的话就开启一个新的任务」**。
- * 判据本体、`deferReason` 的填法、类问题的边界各只有一份源，在
- * `@ash/shared/free-workflow`（`DEFER_BOUNDARY_CRITERION` / `DEFER_REASON_FIELD_GUIDE` /
- * `CLASS_PROBLEM_BOUNDARY`）—— 因为同一段话还有第二个运行时表面：MCP 工具 `dispute_review`
- * 注册时的 description 与字段说明。那两处各自手写时就漂过一次：server 这侧已经改成三种
- * 形态，工具说明仍要求「为什么越界(是哪一轮的哪次改动引入的)」，执行者两边都读得到。
- *
- * 为什么必须三条形态并列、还得有回归钉着注册后的实际元数据（`test-free-review-dispute.ts`）：
- * 这条出路最初只写了「衍生问题」一种形态——建任务那一步把用户给的「内容偏离」换成了当时
- * 手里唯一的实例（那条 10 轮链的后 9 轮恰好全是衍生问题），之后实现、字段说明、模块注释、
- * 派生任务 body 模板逐层忠实复制，三周后真实案例撞上来：执行者看着一条「基线上本来就有、
- * 落在两个与任务无关的脚本里」的意见，`deferReason` 的格子要它填「是哪一轮的哪次改动
- * 引入的」——答案是谁都没引入，于是它填不进去，只能照改。更糟的是它在第 2 轮会话里把
- * 这个推理写了出来：「这不是上一轮改动引入的……**属于本任务边界** —— 照改」，判据被
- * 读成了反的。
+ * 判据本体的单源分布（体积闸 `test-prompt-budget.ts` 钉着「各自只出现一处」）：
+ * - `DEFER_BOUNDARY_CRITERION` / `DEFER_REASON_FIELD_GUIDE` → `dispute_review` 工具；
+ * - `CLASS_PROBLEM_BOUNDARY` → 修复交接里的 `CLASS_REPAIR_NOTE`（预设/旧验证那条线共用）；
+ * - `PLAIN_SUMMARY_GUIDE` → 两个工具的 `summary` 字段说明与入参报错。
  */
 function disputeOption(taskId: string): string {
-  return `\n\n如果报告里有**你认为不成立**的意见（读错了代码、依据不可复现），或者那是一处` +
-    `**知情且有意为之**的设计、这次不该改：不要勉强照改，也不要只在回复里辩解两句了事——` +
-    `调用 dispute_review(taskId="${taskId}", summary="<一句人话，见下>", ` +
-    `reason="逐条写清哪一条不成立、依据是什么（指到文件/行/可复现步骤）", ` +
-    `directionToken="<最新【当前方向身份】token>") 把驳回落下来，然后结束本回合，由用户裁定。\n` +
-    // 必填，而且**单独成段**：规范本身带列表，塞进 `- ` 条目里子条目会跳出父条目
-    // （同 CLASS_PROBLEM_BOUNDARY 那一段），而且回归钉的是「原样出现」——改一个字
-    // 的缩进都会让两个表面漂开。
-    `\n**summary 必填**，它是用户裁定时看到的第一行字，决定他点「让你接着改」还是「这一轮不用改」。` +
-    PLAIN_SUMMARY_GUIDE + `\n\n` +
-    `- 部分成立时：先把成立的那几条改掉并验证，再用 dispute_review 只驳不成立的那几条，理由里写明你已经改了什么。\n` +
-    `- 驳回之后**不要**调用 complete_task：这一轮停在「等用户裁定」，不是完成。\n` +
-    `- 默认仍然是照报告修复；驳回是例外，拿不出具体依据就不要用。\n` +
-    `\n还有**第三种情况**，别把它塞进上面两条里：某条意见**技术上成立、依据也可复现**，` +
-    `但它**与本任务要做的那件事无关**。` + DEFER_BOUNDARY_CRITERION + `\n` +
-    `照改会让这条链没有终点（改→引入→再被打回，或者一路改进别人的模块），说「依据不可复现」` +
-    `又是撒谎。正确做法是在**同一次** dispute_review 里多传一个` +
-    ` deferReason="${DEFER_REASON_FIELD_GUIDE}"，` +
-    `由用户裁定要不要把它们转成一个独立任务。\n` +
-    // 类问题那一段自带列表，塞进 `- ` 条目里会让它的子条目跳出父条目；单独成段。
-    `\n报告写着「这是类问题」也**不自动等于界内**。` + CLASS_PROBLEM_BOUNDARY +
-    `\n这一段里说「不属于本任务」的那些，就是写进 deferReason 的那些。\n\n` +
-    `- reason 和 deferReason **可以同时给**：reason 装「不成立」的那几条，deferReason 装「成立但越界」的那几条；` +
-    `只提转出时 reason 可以不填（别在「哪条不成立」那一栏里编一句你自己都不认的话）。\n` +
-    `- 认可、且确实属于本任务的那几条，仍然是**在调用之前就先改掉并验证**。\n` +
-    `- deferReason **不是**「这条我不想改」的换皮说法：判据是**边界**，不是**工作量**。` +
-    `说不出「为什么它不属于本任务」就照改。转不转、转出去做什么，都由用户裁定——你只负责提出。`;
+  return `\n\n**你不必 100% 认可那份报告**：读错了代码、依据不可复现、那处知情且有意为之，` +
+    `或者它成立但与本任务要做的那件事无关——这几种别勉强照改，也别只在回复里辩两句，` +
+    `调 dispute_review(taskId="${taskId}", summary=…, reason=…, deferReason=…, ` +
+    `directionToken="<最新【当前方向身份】token>") 落下来再结束本回合等裁定` +
+    `（判据与各字段写法见该工具说明）。\n` +
+    `默认仍是照改，拿不出具体依据就别用；部分成立先改掉成立的那几条再只驳剩下的；` +
+    `驳回后**不要**调 complete_task（这一轮停在等裁定，不是完成）。`;
 }
 
 export async function freeRepairPrompt(taskId: string, run: ReviewRunRow): Promise<string> {
@@ -165,7 +139,7 @@ export async function freeRepairPrompt(taskId: string, run: ReviewRunRow): Promi
   return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按报告修复，不要扩大原任务边界。` +
     CLASS_REPAIR_NOTE +
-    `修复完成并验证后调用 complete_task(taskId="${taskId}") 确认任务完成；已预约的复审会在修复回合正常结束后自动启动。\n\n` +
+    `修复并验证后调 complete_task(taskId="${taskId}")；已预约的复审会在本回合正常结束后自动启动。\n\n` +
     `证据目录：${dir}` +
     // 已经裁定转出/作废的那几条也要告诉执行者：报告是新审查者写的，它可能不知道那场
     // 裁定，而照着改就是两处各改一版（理由见 free-review-settled.ts 文件头）。
@@ -248,8 +222,8 @@ export async function freeManualRepairPrompt(
       : "") +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按第 ${run.currentRound} 轮意见修复，不要扩大原任务边界。` +
     CLASS_REPAIR_NOTE +
-    `修复完成并验证后调用 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
-    `如果用户在修复期间预约了复审，执行回合正常结束后按预约开始，否则等待用户决定再次审查或验收。\n\n` +
+    `修复并验证后调 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
+    `用户若在修复期间预约了复审，本回合正常结束后按预约开始，否则等用户决定再审或验收。\n\n` +
     `证据目录：${dir}` +
     await settledRulingsFor({
       taskId, current: { runId: run.id, round: run.currentRound }, audience: "executor", evidenceDir: dir,
@@ -308,8 +282,7 @@ export function debatePrompt(input: {
     `${final ? `, verdict="upheld|withdrawn|partial"` : ""}, directionToken="<最新【当前方向身份】token>") 交卷，` +
     // 一场辩论七段、合起来上万字，而用户开辩论的目的就是裁定。逐段这一句是他唯一会
     // 逐段读的东西，正文在界面上默认折着。
-    `\n**summary 必填**：用户会逐段只读这一句来判断这场辩论辩到哪了。` +
-    PLAIN_SUMMARY_GUIDE + `\n` +
+    `\n**summary 必填**：用户会逐段只读这一句来判断这场辩论辩到哪了（写法见该字段说明）。\n` +
     `然后结束本回合。**不要**调用 report_stage / complete_task / accept_task / dispute_review：` +
     `这一段既不改结论也不改任务状态${final ? "——你的 verdict 只是你的立场，裁定权在用户手上" : ""}。` +
     (final ? "" : "\n没有调用 debate_reply 就结束回合的话，这场辩论会按「没说话」中止。");

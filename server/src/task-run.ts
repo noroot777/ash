@@ -1,5 +1,6 @@
 import { mkdirSync, createWriteStream } from "node:fs";
 import { markdownImageAccounting } from "./agent-image-journal.js";
+import { hintAshMcpForTurn } from "./ash-mcp-turn-hint.js";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
@@ -8,8 +9,10 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, discardStartingRun, takeSteered, takeStopped, claimTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, claimOwnTurn, reclaimTurn, releaseTurn, bindTurnToken } from "./runs.js";
+import type { TurnIdentity } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
+import { snapshotReviewWait } from "./review-wait.js";
 import { consumeSingleRun } from "./single-run.js";
 import { afterSettlement } from "./settle-status.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn } from "./session-turns.js";
@@ -36,12 +39,15 @@ import { initialTaskObjective } from "./invited-task-brief.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
+import { assembleFreshPrompt } from "./turn-prompt.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
+import { turnIdentityEnv } from "./turn-identity.js";
 
 // 单任务的 **fresh run**:从任务描述起一条全新会话。续聊/召唤那一路(resume 已有会话、
 // 把用户原话送进去)在 orchestrator.ts 的 continueTask —— 两条路的前置条件、prompt 拼法
@@ -54,8 +60,16 @@ import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 // 队列推进、上游唤醒)不传,退回任务归属人。
 export async function runTask(
   taskId: string,
-  opts: { turnHeld?: boolean; freezeGuard?: boolean; actingUserId?: string | null } = {},
+  // turnHeld:入口占下的那把锁的**身份**(不是 true)—— 接管与释放都按它核,理由见
+  // continueTask 同名选项与 turn-lock.ts 的 `endOwnTurn`。
+  opts: { turnHeld?: TurnIdentity | null; freezeGuard?: boolean; actingUserId?: string | null } = {},
 ): Promise<void> {
+  const checkpointBlocked = await preparePendingCheckpointStart(taskId);
+  if (checkpointBlocked) {
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
+    console.warn(`[ash] 任务 ${taskId} 未启动：${checkpointBlocked}`);
+    return;
+  }
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
   const head = (await db
@@ -67,22 +81,23 @@ export async function runTask(
   // cwd),验收正在合并/删 worktree 时把它拉起来,跟单飞撞上是同一类破坏。早先这道检查
   // 排在 team 分支之后,team 完全绕过(审查实测:验收锁下仍真的 startTeam)。
   if (isAcceptingTask(taskId)) {
-    if (opts.turnHeld) releaseTurn(taskId);
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     return; // 验收(含尾段)进行中,不与合并/清理抢工作区
   }
   if (mode === "team") {
-    if (opts.turnHeld) releaseTurn(taskId);
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     return startTeam(taskId);
   }
   // 接力出去的任务在本机只是历史存档 —— 路由层各有 409,但队列推进/定时班次/重试
   // 等程序化路径全都汇到这里,必须在 spawn 之前收口,否则就是双机并跑。
   if (handoffBlockReason(head?.handoff)) {
-    if (opts.turnHeld) releaseTurn(taskId);
+    if (opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     return;
   }
-  // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。
-  if (opts.turnHeld) reclaimTurn(taskId, "single");
-  else if (!claimTurn(taskId)) return;
+  // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。接管返回 null =
+  // 那把锁已经不在手上(人工放开拔走之后另一轮占上),这一轮不起,也没有东西要还。
+  const turn = opts.turnHeld ? reclaimTurn(taskId, opts.turnHeld, "single") : claimOwnTurn(taskId);
+  if (!turn) return;
   let handle: RunHandle | undefined;
   let invocationAgent: AgentType | undefined;
   // 解析工作目录那一刻就可能把登记的基线**落库换掉**了(persistBaseFallback)，而说明写在
@@ -105,12 +120,15 @@ export async function runTask(
     // 也从来不是 CLI 原生命令 —— 上一轮崩在半路留下的标记必须在这里归零)。
     const turnToken = id();
     const directionToken = id();
-    await db
+    await db.transaction(async (transaction) => {
+      await snapshotReviewWait(transaction, task, { turnToken, directionToken, directionEpoch: task.directionEpoch + 1 });
+      await transaction
       .update(tasks)
       // 方向身份那几列连同永不归零的世代一起走 `turnDirectionStart`:**新回合开跑也是一次新方
       // 向**,世代漏推的话,一轮完整跑完的回合在迟到回滚眼里什么都没发生过(见 task-direction-epoch.ts)。
       .set({ followUpFrom: null, nativeTurn: false, goalTurn: false, completeConfirmedAt: null, ...turnDirectionStart(turnToken, directionToken), updatedAt: now() })
       .where(eq(tasks.id, taskId));
+    }, { behavior: "immediate" });
     // 跟 orchestrator 起一轮同一条规矩:令牌落库处顺手绑到内存里这一轮的身份上。
     bindTurnToken(taskId, turnToken);
     await setTaskStatus(taskId, "running");
@@ -171,13 +189,24 @@ export async function runTask(
     // 这里只拼正文,浏览器策略留到起跑前最后一刻(takeFreeze 那一段)用现读的授权来贴 ——
     // 这一句到 spawn 之间还隔着两个 await,在这里拼死授权的话,用户在启动期间收回授权就
     // 拦不住了(同第 3 轮审查 P1 的续聊路径)。
-    const promptBody =
-      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + DIRECTION_PROTOCOL(directionToken) + teamPreamble + reviewProtocol +
-      (handoffNotice ? `${handoffNotice}\n\n` : "") +
-      peerNotice +
-      (autoTitle ? TITLE_HINT + objective : objective);
+    const promptBody = assembleFreshPrompt({
+      autonomy: AUTONOMY,
+      // fresh run 一律是一条全新的 CLI 会话,所以 `freshContext` 恒真;这一轮交结论还是
+      // 交代码由 `reviewTask`(历史独立审查任务)定。判据本体见 craft-rules.ts。
+      craft: { freshContext: true, verifying: reviewTask },
+      completion: COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free"),
+      direction: DIRECTION_PROTOCOL(directionToken),
+      teamPreamble,
+      reviewProtocol,
+      handoffNotice,
+      peerNotice,
+      objective: autoTitle ? TITLE_HINT + objective : objective,
+    });
     const cli = await prepareCliInvocation({ ...task, status: "running" }, agentType, commandText, profileId, runOwner ?? null, { resetPlan: true });
-    const runEnv = { ...(await runEnvForOwner(runOwner, agentType)), ASH_TASK_ID: taskId, ASH_TURN_TOKEN: turnToken, ASH_DIRECTION_TOKEN: directionToken };
+    const runEnv = {
+      ...(await runEnvForOwner(runOwner, agentType)),
+      ...turnIdentityEnv({ taskId, turnToken, directionToken }),
+    };
     // 启动末段的顺序是**定死的**:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论
     // → spawn。三样东西互相挤,只有这一种排法同时满足:
     //   · 授权必须是**最后一个** await 读到的。放在查冻结事实之前的话,那次查库的工夫里
@@ -265,6 +294,8 @@ export async function runTask(
       agentUnitToken: handle.detached?.unitToken ?? null,
     };
     await db.insert(sessions).values(sessRow);
+    // 这一轮够不够得着 ash MCP：后台问，只提示、不拦、不等（ash-mcp-turn-hint.ts）。排在会话行之后：提示写进这一条。
+    if (!localCommand) void hintAshMcpForTurn({ taskId, agentType, executorId: profileId, ownerUserId: runOwner ?? null, cwd: ws.path, sessionId: sessId });
     // 回合开始就落一行：收尾那下写不成时,「开了没收口」才有据可查(光靠计数对不出位置)。
     await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
 
@@ -317,7 +348,7 @@ export async function runTask(
     // 收掉**,只注销会留下一个没人读输出、停止按钮也碰不到的 CLI(第 1 轮审查 F1;三态
     // 和「为什么认领过的只注销不杀」见 runs.ts 顶部)。认领过的走到这里只是注销。
     if (handle) discardStartingRun(taskId, handle);
-    releaseTurn(taskId);
+    releaseTurn(taskId, turn);
     // 这一次调用结束了 = 它名下不再有回合在写。**注销不能只挂在正常收尾那条路上**：
     // stream 抛错、结算写库失败、被停都走不到 `recordTurnSpan`,残留的活动登记会让读端把这条
     // 早就死掉的会话当成「还在写」,下次跑起来就从老起点开到无穷、把中间别人做的东西收进来

@@ -1,20 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowsClockwise, CircleNotch, Play, Scroll, Square } from "@phosphor-icons/react";
+import { ArrowsClockwise, CircleNotch, HandPalm, Play, Scroll, Square } from "@phosphor-icons/react";
 import type { ProjectView } from "@ash/shared";
 import { parseCommandPlaceholders, SERVICE_COMMAND_ID } from "@ash/shared/project-commands";
 import { api, type TerminalSessionInfo } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { CommandArgsDialog } from "./CommandArgsDialog.tsx";
+import { LaunchAbandonDialog } from "./LaunchAbandonDialog.tsx";
 import { COMMANDS_SHORTCUT_LABEL } from "./goChord.ts";
+import {
+  bestSession, managedOpen, needsHandoff, sessionRunning, sessionState,
+} from "./commandSessionState.ts";
 
 // 常用命令的启动入口:侧栏顶行、项目名和分支胶囊右边那颗 ▶。点开是项目级「运行现场」——
 // 启停/重启/看日志都在这一个弹层里,不挤进任务尺度的 inspector 或任务顶栏。
 // (它从窗口底部的全局状态栏搬上来:那里离项目上下文太远,用户点名要摆在项目头一行。)
 //
-// 弹层分三段:头部 = 项目 + **service(启动/重启)的 ▶/⟳ 图标按钮**(项目级一对,
+// 弹层分三段:头部 = 项目 + **service(启动/停止/重启)的图标按钮**(项目级一组,
 // 没配置就置灰 —— 用户点名要独立按钮,不当普通命令摆一行);正文 = 普通常用命令的
-// 行列表;底部 = 管理入口。快捷键 G C 开合弹层、G Z 开合终端(workspace/goChord.ts),
+// 行列表;底部 = 管理入口。服务起着的时候 ▶ **就地**换成红框的停止(用户 2026-10-26
+// 点名:同一个位置换一颗按钮,不在旁边另摆一颗),默认停法是杀掉启动会话的整个进程组,
+// 项目设置里填了停止命令就改跑那段脚本。
+// 快捷键 G C 开合弹层、G Z 开合终端(workspace/goChord.ts),
 // G C 由 openSignal 从外面递进来 —— 弹层的开合状态住在这里,快捷键的分发住在
 // useWorkspaceShortcuts,两边用一个递增序号说话。**收起侧栏 / 去设置页会把这颗按钮
 // 连同组件一起卸载**,所以 openSignal 要按「挂载时那一格」做基准比对,否则重新挂载
@@ -51,39 +58,11 @@ type CommandRow = {
   session: TerminalSessionInfo | null;
 };
 
-// 同一条命令可能挂着「一条活会话」或「一条刚退出的」——一处只说一件事,活的优先。
-// 判「活」用 groupAlive:组长退了但后台子进程还在(daemonize)也算活,那正是要能停的现场。
-function bestSession(sessions: TerminalSessionInfo[], projectId: string, commandId: string): TerminalSessionInfo | null {
-  const mine = sessions.filter((s) => s.projectId === projectId && s.commandId === commandId);
-  return mine.find((s) => s.groupAlive) ?? mine.sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
-}
-
 /** 命令可能是整段多行脚本,行里只摆得下一行:首行 + 还有几行,细节去设置里看。 */
 function commandSummary(script: string): string {
   const lines = script.split("\n").map((line) => line.trim()).filter(Boolean);
   if (lines.length <= 1) return lines[0] ?? "";
   return `${lines[0]} … 共 ${lines.length} 行`;
-}
-
-/**
- * 会话事实 → 状态点/文案。service 头部和普通命令行共用,口径才不会劈叉。
- * text 为 null = **没什么可说**:从没跑过的命令旁边就摆着「执行」按钮、点也是灰的,
- * 再写一句「未启动」是把默认态当事件播报(用户 2026-09-18 点名删掉)。
- */
-function sessionState(session: TerminalSessionInfo | null): { tone: string; text: string | null } {
-  if (session?.groupAlive) {
-    return session.exitCode === null
-      ? { tone: "on", text: "运行中" }
-      : { tone: "on", text: "运行中（启动脚本已退出）" };
-  }
-  if (session) {
-    // 用户自己点的停止不是异常 —— 哪怕进程死于信号带回非零退出码。
-    if (session.stoppedByUser) return { tone: "off", text: "已停止" };
-    return session.exitCode === 0
-      ? { tone: "off", text: "已退出" }
-      : { tone: "err", text: `已退出（${session.exitCode}）` };
-  }
-  return { tone: "off", text: null };
 }
 
 function rowsOf(current: ProjectView | null, sessions: TerminalSessionInfo[]): CommandRow[] {
@@ -127,6 +106,8 @@ export function CommandsLauncher({
     action: "start" | "restart";
     script: string;
   } | null>(null);
+  /** 开着的「我自己处理了」确认框打在哪条命令上。 */
+  const [handoff, setHandoff] = useState<CommandTarget | null>(null);
   const root = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   // 挂载时把当前信号记成基准:只有**挂载之后**再按的 G C 才算数。
@@ -166,11 +147,6 @@ export function CommandsLauncher({
     setOpen((value) => !value);
   }, [openSignal]);
 
-  // 按钮亮不亮和每行的「活/死」都看 groupAlive,不看 exitCode:daemonize 形状
-  // (启动脚本把服务放后台后自己退出)下组长退了、服务还在跑,那也是在跑。
-  const live = sessions.some((session) => session.groupAlive);
-  const rows = rowsOf(currentProject, sessions);
-
   // 项目级「启动/重启」(service):配置在 commandsConfig.service,会话身份是保留
   // commandId "service"。置灰只由**配置**决定(没配置就灰 —— 这正是用户要的「没设置就
   // 灰掉」);重启不要求服务在跑:后端冷态 restart 用 restartCommand ?? command 直接起
@@ -178,12 +154,24 @@ export function CommandsLauncher({
   // 是合法且常用的路径(第 1 轮逻辑审查)。
   const serviceConfig = currentProject?.commandsConfig?.service ?? null;
   const serviceSession = currentProject ? bestSession(sessions, currentProject.id, SERVICE_COMMAND_ID) : null;
-  const serviceLive = serviceSession?.groupAlive ? serviceSession : null;
+  // 「服务还开着」——▶ 要不要换成停止看它。**口径与服务端的 openSession 逐字对齐**
+  // (server/src/terminal-commands.ts),两边不一致就会出现「按钮在那儿、点下去什么都没发生」。
+  // 三档:① 活会话 = 确定在跑;② 启动脚本退了但它打印过的端口还有人听 —— 真·守护化的服务
+  // (双 fork + setsid)从进程归属里全逃了,端口是仅剩的线索,顺着它能真杀到,所以这一档
+  // **不要求配停止命令**;③ 配了停止命令时,正常退出又没被停过的那次启动也算开着 ——
+  // `docker compose up -d` 这类连端口都未必打在本机,那条命令就是用户给的线索。
+  const serviceOpen = managedOpen(serviceSession, serviceConfig?.stopCommand);
   const serviceTarget = currentProject
     ? { projectId: currentProject.id, commandId: SERVICE_COMMAND_ID, name: "服务" }
     : null;
   const serviceKey = currentProject ? `${currentProject.id}:${SERVICE_COMMAND_ID}` : "";
-  const serviceState = serviceConfig || serviceSession ? sessionState(serviceSession) : null;
+  const serviceState = serviceConfig || serviceSession ? sessionState(serviceSession, serviceOpen !== null, true) : null;
+
+  // 按钮亮不亮和每行的「活/死」都看 sessionRunning,不看 exitCode:daemonize 形状
+  // (启动脚本把服务放后台后自己退出)下组长退了、服务还在跑,那也是在跑;service 另按
+  // serviceOpen 算 —— 弹层里说它开着,外面那颗按钮就不该是灰的。
+  const live = sessions.some(sessionRunning) || serviceOpen !== null;
+  const rows = rowsOf(currentProject, sessions);
 
   const rowState = (row: CommandRow) => sessionState(row.session);
   // 红点口径 = 弹层里实际显示的现场:锚定项目的 service 或某条命令处于异常退出态才亮。
@@ -194,7 +182,7 @@ export function CommandsLauncher({
   const act = (target: CommandTarget, action: "start" | "stop" | "restart", values: Record<string, string> = {}) => {
     const key = `${target.projectId}:${target.commandId}`;
     setBusy(key);
-    const call: Promise<{ session?: TerminalSessionInfo; stopped?: boolean }> = action === "start"
+    const call: Promise<{ session?: TerminalSessionInfo; stopped?: boolean; notice?: string }> = action === "start"
       ? api.startProjectCommand(target.projectId, target.commandId, values)
       : action === "stop"
         ? api.stopProjectCommand(target.projectId, target.commandId)
@@ -202,6 +190,9 @@ export function CommandsLauncher({
     call
       .then((result) => {
         refresh();
+        // 「停下来了,但同组还有几个核不上归属、没敢杀的进程」—— 成功路径上的话,但必须说出来:
+        // 咽下去就等于拿「端口让出来了」冒充「这次启动起来的东西都停了」(第 2 轮审查发现 2)。
+        if (result.notice) notify(result.notice);
         // 启动/重启成功就把日志直接摆到眼前:关弹层、开终端抽屉并聚焦这条会话的 tab
         // (VSCode 跑任务的习惯 —— 点了「执行」却要自己再去找日志,等于没执行完这个动作)。
         // stop 没有新现场,留在弹层。
@@ -253,24 +244,24 @@ export function CommandsLauncher({
               {serviceConfig || serviceSession
                 ? serviceState?.text && <span className={`cmd-pop__svc-state is-${serviceState.tone}`}>{serviceState.text}</span>
                 : <span className="cmd-pop__svc-state is-unset">未配置启动命令</span>}
-              <div className="cmd-pop__svc" role="group" aria-label="启动 / 重启">
+              <div className="cmd-pop__svc" role="group" aria-label="启动 / 停止 / 重启">
                 {busy === serviceKey ? <CircleNotch size={14} className="is-spinning" aria-label="执行中" /> : (
                   <>
-                    {serviceLive && (
+                    {serviceSession && (
                       <button
                         type="button"
                         className="cmd-pop__svc-btn"
-                        aria-label="查看启动日志"
-                        onClick={() => { setOpen(false); onOpenCommandLog(serviceLive); }}
+                        aria-label={serviceOpen ? "查看启动日志" : "查看上次启动的日志"}
+                        onClick={() => { setOpen(false); onOpenCommandLog(serviceSession); }}
                       ><Scroll size={14} /></button>
                     )}
-                    {serviceLive ? (
+                    {serviceOpen ? (
                       <button
                         type="button"
                         className="cmd-pop__svc-btn is-stop"
-                        aria-label="停止"
+                        aria-label={serviceConfig?.stopCommand ? "停止（跑停止命令）" : "停止"}
                         onClick={() => serviceTarget && act(serviceTarget, "stop")}
-                      ><Square size={11} weight="fill" /></button>
+                      ><Square size={12} weight="bold" /></button>
                     ) : (
                       <button
                         type="button"
@@ -279,6 +270,14 @@ export function CommandsLauncher({
                         disabled={!serviceConfig}
                         onClick={() => serviceTarget && serviceConfig && requestRun(serviceTarget, "start", serviceConfig.command)}
                       ><Play size={14} /></button>
+                    )}
+                    {serviceSession && needsHandoff(serviceSession) && serviceTarget && (
+                      <button
+                        type="button"
+                        className="cmd-pop__svc-btn is-stop"
+                        aria-label="这次启动 ash 停不掉也删不掉：我自己处理，放弃管理责任"
+                        onClick={() => setHandoff(serviceTarget)}
+                      ><HandPalm size={13} /></button>
                     )}
                     <button
                       type="button"
@@ -295,8 +294,8 @@ export function CommandsLauncher({
           <div className="cmd-pop__body">
             {rows.length === 0 && (
               <p className="cmd-pop__empty">
-                dev server 这类常驻服务：在「管理常用命令」里配置启动/重启命令后，上面的 ▶ / ⟳ 一键启停；
-                watch、tunnel 这些再各配一条常用命令，在这里逐条启停。
+                dev server 这类常驻服务：在「管理常用命令」里配置启动/重启命令后，上面的按钮一键启停
+                （服务起着的时候 ▶ 会变成停止）；watch、tunnel 这些再各配一条常用命令，在这里逐条启停。
               </p>
             )}
             {rows.length > 0 && (
@@ -304,7 +303,7 @@ export function CommandsLauncher({
                 {rows.map((row) => {
                   const state = rowState(row);
                   const key = `${row.projectId}:${row.commandId}`;
-                  const running = row.session?.groupAlive ? row.session : null;
+                  const running = row.session && sessionRunning(row.session) ? row.session : null;
                   return (
                     <div className="cmd-pop__row" key={key}>
                       <span className={`cmd-pop__row-dot is-${state.tone}`} aria-hidden="true" />
@@ -319,11 +318,17 @@ export function CommandsLauncher({
                             <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(running); }} aria-label={`查看 ${row.name} 日志`}><Scroll size={13} />日志</button>
                             <button type="button" onClick={() => requestRun(row, "restart", row.command)} aria-label={`重启 ${row.name}`}><ArrowsClockwise size={13} />重启</button>
                             <button type="button" className="is-danger" onClick={() => act(row, "stop")} aria-label={`停止 ${row.name}`}><Square size={12} weight="fill" />停止</button>
+                            {needsHandoff(running) && (
+                              <button type="button" onClick={() => setHandoff(row)} aria-label={`${row.name} ash 停不掉也删不掉：我自己处理`}><HandPalm size={13} />我自己处理…</button>
+                            )}
                           </>
                         ) : (
                           <>
                             {row.session && <button type="button" onClick={() => { setOpen(false); onOpenCommandLog(row.session!); }} aria-label={`查看 ${row.name} 退出日志`}><Scroll size={13} />日志</button>}
                             <button type="button" className="is-primary" onClick={() => requestRun(row, "start", row.command)} aria-label={`执行 ${row.name}`}><Play size={12} weight="fill" />执行</button>
+                            {row.session && needsHandoff(row.session) && (
+                              <button type="button" onClick={() => setHandoff(row)} aria-label={`${row.name} 上次停止没能确认停净：我自己处理`}><HandPalm size={13} />我自己处理…</button>
+                            )}
                           </>
                         )}
                       </div>
@@ -342,6 +347,16 @@ export function CommandsLauncher({
             </div>
           )}
         </div>
+      )}
+
+      {handoff && (
+        <LaunchAbandonDialog
+          projectId={handoff.projectId}
+          commandId={handoff.commandId}
+          notify={notify}
+          onDone={refresh}
+          onClose={() => setHandoff(null)}
+        />
       )}
 
       {pendingRun && (

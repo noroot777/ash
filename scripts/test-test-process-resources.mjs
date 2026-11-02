@@ -28,7 +28,7 @@ await assert.rejects(() => cleanupTestResources([async () => { throw stopError; 
 console.log("✓ 异步资源层保留原断言/双流/原因,多个回收失败独立聚合且后续资源仍执行");
 
 const lifecycleURL = new URL("test-test-process-lifecycle.mjs", import.meta.url);
-const assertion = "assert.deepEqual(await simulated.active(), processes);";
+const assertion = "assert.deepEqual(await simulated.active(), processes.map((row) => ({ ...row, created: row.born })));";
 const source = readFileSync(lifecycleURL, "utf8");
 assert.equal(source.split(assertion).length, 2);
 const injected = source.replace(assertion, "assert.deepEqual(await simulated.active(), [{ pid: 999, born: '999' }], 'INJECTED_BUSINESS_ASSERTION');")

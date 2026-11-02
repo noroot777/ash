@@ -14,8 +14,8 @@ import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
 import { cachedModelEfforts } from "./executors/model-probe.js";
 import { monitorBlockedReason } from "@ash/shared/monitor";
-import { claimTurn, releaseTurn } from "./runs.js";
-import { advanceQueue } from "./scheduler.js";
+import { claimOwnTurn, releaseTurn } from "./runs.js";
+import { advanceQueueInBackground } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
 import { bindUploadsToTask } from "./uploads.js";
@@ -28,6 +28,8 @@ import { executorDowngradePreflight } from "./auth/dispatch-gate.js";
 import { inheritOwner } from "./auth/run-env.js";
 import { requestTaskCreationOrigin } from "./task-creation-origin.js";
 import { mountTaskDeleteRoutes } from "./task-delete-routes.js";
+import { recentRejectionNotices } from "./user-action-rejection.js";
+import { suspectTurns } from "./turn-lock-reclaim.js";
 
 export function mountTaskRoutes(api: Hono): void {
   // 删除那一族(连带关联行 + DELETE 本体)住在 task-delete-routes.ts —— 只是为了行数,
@@ -110,6 +112,19 @@ api.get("/tasks/:id", async (c) => {
   // 只是不是我的项目」。
   if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
   return c.json((await enrichTasks([r]))[0]);
+});
+
+// 这个任务被挡回/没做到位的那些用户操作。前端**无条件**读它,按时间合进同一条任务历史 ——
+// 不去问「对话流有没有正文」:从没跑过的任务没有会话时间线可写,而「有正文就不显示」会让
+// 那条已经入库的记录再也显示不出来(第 2 轮审查 F4)。判据见 user-action-rejection.ts 文件头。
+api.get("/tasks/:id/notices", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r || !(await canSeeProject(actorOf(c), r.projectId))) return c.json({ error: "not found" }, 404);
+  // `remedy` 是**此刻**算出来的,不是存下来的:它回答的是「现在按那个开关有没有用」。
+  // 存进库就会出现「当时卡着、现在早好了,按钮还挂在那里」的死按钮。
+  const remedy = suspectTurns().some((t) => t.taskId === taskId) ? "reclaim-turn" as const : null;
+  return c.json({ notices: await recentRejectionNotices(taskId), remedy });
 });
 
 api.get("/tasks/:id/question-history", async (c) => {
@@ -371,7 +386,7 @@ api.post("/tasks", async (c) => {
   }
   if (b.appendToQueue) {
     // 追加到队尾后立刻推进:若前序全 done,新 task 应立刻起跑
-    void advanceQueue(b.appendToQueue);
+    advanceQueueInBackground(b.appendToQueue);
   }
   // 附件跟着任务走进项目轴:同项目的人在会话里看得见这张图,就该读得到它(uploads.ts)。
   // 只认「还没归属」或「本来就是我的」文件 —— 否则把别人私有随手记的附件路径写进
@@ -578,11 +593,11 @@ api.patch("/tasks/:id", async (c) => {
   if (!starOnly) patch.updatedAt = now();
   // 手动把任务改成**终态**，要和「起这一轮」争同一把回合锁。
   //
-  // 上面那道反向守卫只看库里是不是 running/queued，而 `claimTurn` 到 status 落 running
+  // 上面那道反向守卫只看库里是不是 running/queued，而 `claimOwnTurn` 到 status 落 running
   // 之间有真实窗口：一条还没送达的哨兵事件此刻正握着占位往下走，库里却还是 paused。
   // 只「再查一次 isTurnClaimed」关不掉它 —— 查是观察式的，查完到真正写库之间对方照样
   // 能合法占位（同 `claimWorkspaceTurn` 的理由）。所以这里也占同一把锁，两种顺序才都收口：
-  //   · 这边先占 → 那条事件的 `claimTurn` 失败，`continueTask` 回 false，消息留在托盘里，
+  //   · 这边先占 → 那条事件的 `claimOwnTurn` 失败，`continueTask` 回 false，消息留在托盘里，
   //     下一次扫描按终态作废它（第 3 轮那道闸）；
   //   · 那边先占 → 这里 409，用户等这一轮结束再标完成。
   // 不然就是第 5 轮审查实测的那条：最终检查读到 paused、完成操作照样 200，放开之后
@@ -593,7 +608,8 @@ api.patch("/tasks/:id", async (c) => {
   // 队列拉起来」那一步抢自己的锁。判据直接用 `monitorBlockedReason`，与起跑那一侧
   // 同一份，两边永远不会对「哪算结束」分家。
   const lockTurn = b.status !== undefined && monitorBlockedReason({ status: b.status }) !== null;
-  if (lockTurn && !claimTurn(tid, "status")) {
+  const turn = lockTurn ? claimOwnTurn(tid, "status") : null;
+  if (lockTurn && !turn) {
     return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再改状态", status: existing.status }, 409);
   }
   try {
@@ -608,7 +624,7 @@ api.patch("/tasks/:id", async (c) => {
     }
   } finally {
     // 每一条出路都得还回去（含上面那个 409 early return），否则任务就被一次 PATCH 锁死。
-    if (lockTurn) releaseTurn(tid);
+    if (turn) releaseTurn(tid, turn);
   }
   const updated = await publishTaskUpdated(tid);
   return c.json(updated!);

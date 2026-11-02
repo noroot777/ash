@@ -22,8 +22,9 @@ import { imageStore, persistToolResultImages, type ImageStore } from "../agent-a
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { codexAshMcpServerName } from "./codex-mcp.js";
+import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
 
-const ASH_MCP_IDENTITY_ENV_VARS = ["ASH_TASK_ID", "ASH_TURN_TOKEN", "ASH_DIRECTION_TOKEN"] as const;
+const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
 import { openCodexAppServer, readCodexAppServerState } from "./codex-app-server.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进

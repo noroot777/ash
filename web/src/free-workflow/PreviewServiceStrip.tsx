@@ -1,11 +1,11 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEventHandler, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { CaretLeft, CaretRight } from "@phosphor-icons/react";
 
-export function PreviewServiceStrip({ children, label, tabs = false, onKeyDown }: {
+export function PreviewServiceStrip({ children, label, tabs = false }: {
   children: ReactNode;
   label: string;
+  /** true = 这条是 tablist(键盘漫游由 lib/useRovingChoice.ts 落在按钮上,不经这里)。 */
   tabs?: boolean;
-  onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
 }) {
   const strip = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
@@ -31,7 +31,7 @@ export function PreviewServiceStrip({ children, label, tabs = false, onKeyDown }
 
   return <div className="preview-service-strip" ref={strip}>
     {overflow && <button type="button" className="preview-service-scroll-control" tabIndex={-1} aria-label="向左查看服务" disabled={edges.start} onClick={() => scroll(-1)}><CaretLeft size={13} /></button>}
-    <div className="preview-service-scroll" ref={viewport} role={tabs ? "tablist" : "group"} aria-label={label} onScroll={measure} onKeyDown={onKeyDown}>
+    <div className="preview-service-scroll" ref={viewport} role={tabs ? "tablist" : "group"} aria-label={label} onScroll={measure}>
       {children}
     </div>
     {overflow && <button type="button" className="preview-service-scroll-control" tabIndex={-1} aria-label="向右查看服务" disabled={edges.end} onClick={() => scroll(1)}><CaretRight size={13} /></button>}

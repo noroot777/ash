@@ -78,3 +78,70 @@ export function noteDeliveryTiming(
     + ` + 拉起回合 ${secs(at - idleAt)}）`,
   );
 }
+
+// ── 久久发不出去的那一条:出声 + 留痕 ─────────────────────────────────────────
+// 上面那套计时只在**送成之后**结算,所以「一直没送成」正好落在它的盲区里:2026-10-26
+// 一条排队消息在托盘里躺了 70 多分钟,日志从头到尾一声不吭,界面上也只是「待发送」——
+// 用户无从知道它卡住了,更无从知道卡在什么上。(根因是一把无主的回合锁把任务钉在 queued,
+// 投递判定于是永远是「等它空下来」;那条链已经由 turn-lock-reclaim.ts 兜住,但「卡住了
+// 要说出来」本身是独立的一条:兜底修好之后仍会有别的理由让一条消息久久发不出去。)
+//
+// 判据刻意用**消息自己的年龄**,不是上面的 `dueSince`:判了「等」的消息压根没有 dueSince,
+// 而那正是这里要抓的形态。定时消息从 `sendAt` 起算 —— 它在那之前「没发出去」是本意,
+// 不是卡住。
+const STALLED_MS = 600_000;
+
+/** 已经出过声的,不再刷屏(时间线那条另有 eventKey 兜持久幂等)。 */
+const stalledTold = new Set<string>();
+const stalledWriting = new Set<string>();
+
+export function forgetStalled(messageId: string): void {
+  stalledTold.delete(messageId);
+}
+
+/**
+ * 一条还没送出去的消息,如果已经躺了够久,出一声并往任务时间线写一条。
+ *
+ * 在投递扫描判「这一轮还不能发」的那个分支上调(pending-messages)。`why` 是这一轮的
+ * 判定理由 —— 它就是用户想知道的那句话,所以照原样带进时间线。
+ */
+export async function noteStalledPending(
+  message: { id: string; taskId: string; mode: string; createdAt: string; sendAt: string | null },
+  why: string,
+  at = Date.now(),
+): Promise<void> {
+  // 「本该发出去的那一刻」:排队消息是它被排下的时候,定时消息是 sendAt(两者取晚的那个 ——
+  // 一条排在未来的定时消息,创建得再早也不算等待)。
+  const createdAt = new Date(message.createdAt).getTime();
+  const sendAt = message.sendAt ? new Date(message.sendAt).getTime() : NaN;
+  const dueFrom = message.mode === "queued" || !Number.isFinite(sendAt)
+    ? createdAt
+    : Math.max(createdAt, sendAt);
+  const age = at - dueFrom;
+  if (!Number.isFinite(age) || age < STALLED_MS) return;
+  if (stalledTold.has(message.id) || stalledWriting.has(message.id)) return;
+  stalledWriting.add(message.id);
+  const label = message.mode === "queued" ? "排队消息" : "定时消息";
+  const waited = `${Math.round(age / 60_000)} 分钟`;
+  console.warn(
+    `[ash] ${label}等了 ${waited} 还没送出去 task=${message.taskId} message=${message.id}`
+    + `（这一轮的判定：${why}）—— 原话仍在托盘里,不会丢`,
+  );
+  // 持久可见:用户刷新页面后也要能看出「我那句话还没送到、卡在什么上」。eventKey 让它
+  // 每条消息最多写一次,重启后重扫也不会写出第二条。
+  try {
+    const { noteSystemNotice } = await import("./user-action-rejection.js");
+    const persisted = await noteSystemNotice(
+      message.taskId,
+      `stalled-message:${message.id}`,
+      `${label}滞留`,
+      `你的${label}已经等了约 ${waited} 还没发出去：${why}。`
+      + "原话仍在待发送托盘里（不会丢），任务恢复空闲后会自动送出；也可以在托盘里取消它。",
+    );
+    if (persisted) stalledTold.add(message.id);
+  } catch (error) {
+    console.warn(`[ash] 滞留消息留痕失败 task=${message.taskId} message=${message.id}:`, error);
+  } finally {
+    stalledWriting.delete(message.id);
+  }
+}

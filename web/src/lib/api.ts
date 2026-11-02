@@ -21,7 +21,6 @@ import type {
   ReviewerProfile,
   Schedule,
   ScheduledMessage,
-  SearchHit,
   Session,
   SkillList,
   SkillScanOverview,
@@ -39,16 +38,22 @@ import type { BaseUpdateRecovery } from "@ash/shared/branch-plan";
 import type { WorkflowDef, WorkflowItem } from "@ash/shared/workflow";
 import type { CliHostEnv } from "@ash/shared/cli-overrides";
 import type { CliModelCatalog } from "@ash/shared/cli-presets";
-import type { SearchStreamLine, SearchSort } from "@ash/shared/search";
 import { ApiError, apiError, apiPath, id, json, parseBody, postWithProgress, request } from "./apiClient.ts";
 import { readSettings, writeSettings } from "./settingsSync.ts";
 import { llmApi } from "./apiLlm.ts";
 import { monitorApi } from "./apiMonitors.ts";
+import { taskMemoApi } from "./apiTaskMemos.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
 import { fileApi } from "./fileApi.ts";
 import { pendingMergeApi } from "./pendingMergeApi.ts";
+import { humanAction } from "./humanActionToken.ts";
+import { scmApi } from "./apiScm.ts";
+import { searchApi } from "./searchApi.ts";
+import { taskNoticeApi } from "./taskNoticeApi.ts";
+import { terminalApi } from "./apiTerminal.ts";
 export type { TaskScopedHandoffPreflightResult } from "./handoffApi.ts";
+export type { ReclaimTurnResult, TaskNotice, TaskNoticesResult } from "./taskNoticeApi.ts";
 
 import type {
   AcceptGateState,
@@ -65,19 +70,12 @@ import type {
   ProjectGitState,
   PullStrategy,
   ReplyTaskResult,
-  ScmCommitResult,
-  ScmDiffSource,
-  ScmFileDiff,
-  ScmOverview,
-  ScmPushResult,
-  ScmWriteResult,
   SessionTraceEntry,
   TaskCommit,
   TaskDiffResult,
   TaskFileDiffResult,
   TaskWorkspaceProbe,
   TeamCuaStatus,
-  TerminalSessionInfo,
   VerifyOverrideResult,
 } from "./apiTypes.ts";
 
@@ -85,19 +83,6 @@ import type {
 // 清单为了守住 700 行上限拆出去的实现细节，不该逼着几十个 import 跟着改路径。
 export { ApiError } from "./apiClient.ts";
 export type * from "./apiTypes.ts";
-// 搜索的查询串。界面只走流式那条(`/search/stream`);服务端另有一条整份返回的
-// `/search`,参数完全同形,留给脚本和 curl —— 所以这里单独拎出来,两边不会漂。
-const searchQueryParams = (
-  query: string,
-  scope?: { projectId?: string; type?: "tasks" | "notes"; prefer?: string | null; sort?: SearchSort },
-) => {
-  const params = new URLSearchParams({ q: query });
-  if (scope?.projectId) params.set("projectId", scope.projectId);
-  if (scope?.type) params.set("type", scope.type);
-  if (scope?.prefer) params.set("prefer", scope.prefer);
-  if (scope?.sort) params.set("sort", scope.sort);
-  return params;
-};
 
 function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
   return typeof body === "object" && body !== null && "accepted" in body &&
@@ -116,7 +101,7 @@ export const api = {
   pickDirectory: (startIn: string): Promise<DirectoryPick> =>
     request("/host/pick-directory", json("POST", { startIn })),
 
-  projects: (): Promise<ProjectView[]> => request("/projects"),
+  projects: (signal?: AbortSignal): Promise<ProjectView[]> => request("/projects", { signal }),
   // `createDir` 为真时服务端会把不存在的目录（连同缺失的上级）建出来；不带它就是老行为
   // ——目录不存在也照记不误。只有在界面上明确告诉过用户「这个目录会被建出来」时才带上。
   createProject: (name: string, repoPath: string, createDir = false): Promise<ProjectView> =>
@@ -141,7 +126,7 @@ export const api = {
     request(`/projects/${id(projectId)}/preview/detect`),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "acceptGateCommand" | "browserCdpDomains">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId" | "useWorktreeDefault" | "previewCommand" | "previewConfig" | "commandsConfig" | "acceptCommit" | "acceptAutoCommit" | "acceptGateCommand" | "browserCdpDomains">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -180,35 +165,9 @@ export const api = {
     request(`/projects/${id(projectId)}/git-credential`, json("PUT", { username, secret })),
   deleteProjectGitCredential: (projectId: string): Promise<ProjectGitConfig> =>
     request(`/projects/${id(projectId)}/git-credential`, json("DELETE")),
-  createTerminalSession: (
-    projectId: string,
-    size: { cols: number; rows: number },
-  ): Promise<TerminalSessionInfo> =>
-    request(`/projects/${id(projectId)}/terminal/sessions`, json("POST", size)),
-  terminalEventsUrl: (projectId: string, sessionId: string): string =>
-    apiPath(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/events`),
-  writeTerminalSession: (projectId: string, sessionId: string, data: string): Promise<void> =>
-    request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/input`, json("POST", { data })),
-  resizeTerminalSession: (
-    projectId: string,
-    sessionId: string,
-    size: { cols: number; rows: number },
-  ): Promise<void> =>
-    request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/resize`, json("POST", size)),
-  closeTerminalSession: (projectId: string, sessionId: string): Promise<void> =>
-    request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}`, { method: "DELETE" }),
-  listTerminalSessions: (projectId: string, signal?: AbortSignal): Promise<{ sessions: TerminalSessionInfo[] }> =>
-    request(`/projects/${id(projectId)}/terminal/sessions`, signal ? { signal } : undefined),
-  listCommandSessions: (): Promise<{ sessions: TerminalSessionInfo[] }> =>
-    request("/terminal-commands"),
-  // values = 命令里 `{{占位符}}` 的取值（shared/project-commands.ts）。只送取值不送脚本：
-  // 跑什么永远以库里存的那条命令为准。
-  startProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo; alreadyRunning?: boolean }> =>
-    request(`/projects/${id(projectId)}/commands/${id(commandId)}/start`, json("POST", { values })),
-  stopProjectCommand: (projectId: string, commandId: string): Promise<{ stopped: boolean }> =>
-    request(`/projects/${id(projectId)}/commands/${id(commandId)}/stop`, json("POST", {})),
-  restartProjectCommand: (projectId: string, commandId: string, values: Record<string, string> = {}): Promise<{ session: TerminalSessionInfo }> =>
-    request(`/projects/${id(projectId)}/commands/${id(commandId)}/restart`, json("POST", { values })),
+  // 终端会话 + 常用命令(含「我自己处理了」那个显式出口)那一族在 `apiTerminal.ts` ——
+  // 整份 spread 进来,调用点写法不变。
+  ...terminalApi,
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     request("/projects/check", json("POST", { repoPath })),
   discardTaskWorkspace: (
@@ -239,10 +198,11 @@ export const api = {
     request(`/groups/${id(groupId)}/tasks/batch`, json("POST", body)),
 
   // 列表不带正文（见 shared 的 TaskListItem）；正文走 api.task(id)。
-  tasks: (): Promise<TaskListItem[]> => request("/tasks"),
+  tasks: (signal?: AbortSignal): Promise<TaskListItem[]> => request("/tasks", { signal }),
   task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
-  taskQuestionHistory: (taskId: string): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
-    request(`/tasks/${id(taskId)}/question-history`),
+  taskQuestionHistory: (taskId: string, signal?: AbortSignal): Promise<import("@ash/shared/questions").QuestionRecord[]> =>
+    request(`/tasks/${id(taskId)}/question-history`, { signal }),
+  ...taskNoticeApi,
   // 侧边栏铺开那一下才调：一批任务各自「我发的最后一条追问」。没有的任务不在返回里。
   followUps: (taskIds: string[]): Promise<TaskFollowUp[]> =>
     request("/tasks/follow-ups", json("POST", { taskIds })),
@@ -323,8 +283,9 @@ export const api = {
     request(`/tasks/${id(taskId)}/team/halt`, { method: "POST" }),
   teamCuaStatus: (taskId: string): Promise<TeamCuaStatus> =>
     request(`/tasks/${id(taskId)}/team/cua-status`),
+  // 真人专属闸后面的第二条(它杀的是开机级全局单例):同样走 `humanAction` 带凭据 + 轮换。
   killTeamCua: (taskId: string): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/team/kill-cua`, { method: "POST" }),
+    humanAction(`/tasks/${id(taskId)}/team/kill-cua`, { method: "POST" }),
 
   // 任务接力(跨机器 handoff)那一族在 `handoffApi.ts` —— 整份 spread 进来,
   // `api.handoffPeers()` 这类调用点一字不动。
@@ -421,7 +382,7 @@ export const api = {
     if (isAcceptTaskResult(body)) return body;
     throw apiError(response, body);
   },
-  acceptGate: (taskId: string): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`),
+  acceptGate: (taskId: string, signal?: AbortSignal): Promise<AcceptGateState> => request(`/tasks/${id(taskId)}/accept-gate`, { signal }),
   // 整份日志单独取：状态接口每隔几秒拉一次，几十 MB 的回归输出不能搭在它上面。
   // runId 指定某一次（已验收那张回执看的是**凭据那一次**，不是最近一次）。
   acceptGateLog: async (taskId: string, runId?: string): Promise<string> => {
@@ -469,36 +430,9 @@ export const api = {
   // 整份 spread 进来，`api.taskFiles()` 这类调用点一字不动。
   ...fileApi,
 
-  // 工作区源代码管理。写操作在任务运行中会被后端拦成 409（body 带 needsForce），
-  // 由调用点弹确认框后带 force 重试——别在这一层偷偷补 force。
-  taskScm: (taskId: string): Promise<ScmOverview> =>
-    request(`/tasks/${id(taskId)}/scm`),
-  taskScmDiff: (
-    taskId: string,
-    path: string,
-    source: ScmDiffSource,
-    origPath?: string | null,
-  ): Promise<ScmFileDiff> =>
-    request(`/tasks/${id(taskId)}/scm/diff?path=${id(path)}&source=${source}${origPath ? `&origPath=${id(origPath)}` : ""}`),
-  scmStage: (taskId: string, paths: string[], force = false): Promise<ScmWriteResult> =>
-    request(`/tasks/${id(taskId)}/scm/stage`, json("POST", { paths, force })),
-  scmUnstage: (taskId: string, paths: string[], force = false): Promise<ScmWriteResult> =>
-    request(`/tasks/${id(taskId)}/scm/unstage`, json("POST", { paths, force })),
-  scmDiscard: (
-    taskId: string,
-    paths: string[],
-    deleteUntracked: string[] = [],
-    force = false,
-  ): Promise<ScmWriteResult> =>
-    request(`/tasks/${id(taskId)}/scm/discard`, json("POST", { paths, deleteUntracked, force })),
-  scmCommit: (
-    taskId: string,
-    message: string,
-    options: { stagePaths?: string[]; amend?: boolean; force?: boolean } = {},
-  ): Promise<ScmCommitResult> =>
-    request(`/tasks/${id(taskId)}/scm/commit`, json("POST", { message, ...options })),
-  scmPush: (taskId: string, remote: string | null, force = false): Promise<ScmPushResult> =>
-    request(`/tasks/${id(taskId)}/scm/push`, json("POST", { remote, force })),
+  // 工作区源代码管理那一族住在 `apiScm.ts`（同样是为了守住 700 行），整份 spread
+  // 进来，`api.taskScm()` / `api.scmCommit()` 这类调用点一字不动。
+  ...scmApi,
 
   notes: (projectId?: string): Promise<Note[]> =>
     request(`/notes${projectId ? `?projectId=${id(projectId)}` : ""}`),
@@ -511,49 +445,7 @@ export const api = {
   deleteNote: (noteId: string): Promise<{ deleted: true }> =>
     request(`/notes/${id(noteId)}`, { method: "DELETE" }),
 
-  /**
-   * 流式搜索：命中一条回调一条，本项目那一段扫完时回调一次 `onLocalDone`。
-   *
-   * 语料 2.2 GB，一次全盘扫要几秒。整份返回意味着这几秒里 ⌘K 是空的；边扫边出意味着
-   * 本项目的命中第一时间就在列表里了。**`signal` 不是可选的礼貌** —— 用户每敲一个字就是
-   * 一次新的全盘扫，不中断上一次，服务端会同时跑几十个扫描，把事件循环占死。
-   */
-  searchStream: async (
-    query: string,
-    scope: { projectId?: string; type?: "tasks" | "notes"; prefer?: string | null; sort?: SearchSort } | undefined,
-    handlers: { onHit: (hit: SearchHit) => void; onLocalDone?: () => void },
-    signal: AbortSignal,
-  ): Promise<void> => {
-    const response = await fetch(apiPath(`/search/stream?${searchQueryParams(query, scope)}`), { signal });
-    if (!response.ok || !response.body) throw new Error(`搜索失败（${response.status}）`);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffered = "";
-    const take = (line: string) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      let parsed: SearchStreamLine;
-      try {
-        parsed = JSON.parse(trimmed) as SearchStreamLine;
-      } catch {
-        return; // 半行/坏行:丢掉这一条，别把整条流拆了
-      }
-      if ("marker" in parsed) {
-        if (parsed.marker === "local-done") handlers.onLocalDone?.();
-        return;
-      }
-      handlers.onHit(parsed);
-    };
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffered += decoder.decode(value, { stream: true });
-      const lines = buffered.split("\n");
-      buffered = lines.pop() ?? "";
-      for (const line of lines) take(line);
-    }
-    take(buffered);
-  },
+  ...searchApi,
   // 上传走带进度的通道（postWithProgress）：粘贴一张图在远程访问时可能要传十几秒，
   // 调用方得拿到百分比才能把「正在传」说清楚。
   uploadFile: (
@@ -675,6 +567,8 @@ export const api = {
   ...llmApi,
   // 预览的「AI 协助」同理，住在 apiPreviewAssist.ts。
   ...previewAssistApi,
+  // 任务备忘同理，住在 apiTaskMemos.ts。
+  ...taskMemoApi,
 
   queue: (queueId: string): Promise<{
     queueId: string;

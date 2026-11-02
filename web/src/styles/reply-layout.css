@@ -1,0 +1,10 @@
+.task-reply-shell, .team-reply-shell { display: flex; min-height: 0; max-height: var(--reply-layout-height, none); flex: 0 1 auto; flex-direction: column; }
+.reply-context { min-height: 0; flex: 0 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.reply-context:empty { display: none; }
+.task-reply-shell > .task-reply-box, .team-reply-shell > .team-reply-box { display: flex; flex: 0 1 auto; flex-direction: column; }
+.task-reply-shell > .task-reply-box { min-height: 98px; }
+.team-reply-shell > .team-reply-box { min-height: 80px; }
+.task-reply-box > textarea, .team-reply-box > textarea { flex: 1 1 auto; }
+.reply-context ~ .task-reply-box > textarea, .reply-context ~ .team-reply-box > textarea { overflow-y: auto !important; }
+.task-reply-actions, .team-reply-box > footer { flex-shrink: 0; }
+.team-reply-shell > .reply-context > p { margin: 0 0 5px; color: var(--red); font-size: 10.5px; }

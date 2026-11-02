@@ -82,6 +82,15 @@ export const sessions = sqliteTable("sessions", {
   activeMs: integer("active_ms"),
   turnStartedAt: text("turn_started_at"),
   /**
+   * 这一轮**卡在上游连不上**的起点(ISO)。非空 = 看门狗已经为当前回合报过停滞警告
+   * (判据见 `turn-stall.ts`),上游一回话或回合一收尾就撤回 null。
+   *
+   * 落库的理由只有一个:任务列表要在卡片上一眼看出「这个任务其实在干等」,而内存里那份
+   * (`session-waiting.ts`)是转瞬状态、重启就没。读侧(`task-store.ts`)再叠一道
+   * `ended_at IS NULL` + 任务仍 running —— 于是 ash 被硬杀留下的残值不会永久挂在卡片上。
+   */
+  upstreamStalledSince: text("upstream_stalled_since"),
+  /**
    * 这条会话**开过几个回合**（本列出现之后的那些；之前的历史在 `turns_base` 里）。
    *
    * 完整性的**第一手证据不是它**，而是 `session_turns` 里那一行：回合一开始就落行、收尾
@@ -237,6 +246,28 @@ export const sessionTurns = sqliteTable(
      * 进程自身怎么没的仍然单独记在会话行上（`exit_status` / `stopped_as`），两件事不混。
      */
     outcome: text("outcome"),
+    /**
+     * 这一回合被**回合级停滞看门狗**判了熔断,以及那份诊断原文(`server/src/turn-stall.ts`)。
+     * null = 没被熔断过。
+     *
+     * 为什么判决非得存在进程之外(第 3 轮审查 F3,已实测):判决原先只活在进程内存里,而
+     * **detached 执行器活得过 server 重启**(`executors/detached.ts`,这是 ash 的既有能力)。
+     * 于是:熔断已经作出、终止请求还没兑现时 server 退出 → 重启接管那个仍然存活的进程 →
+     * 新进程的 Map 是空的 → 上游恰好恢复并正常答完,这一轮就按 `completed` 结算、任务落
+     * `done`,看门狗说过的话一句都没兑现。退出码重建不出这个事实(被我们杀掉的进程多半 exit 0)。
+     *
+     * **但这一格不是那个事实的来源**(第 4 轮审查 F1,已实测):这里的写要过 `whenIdle`
+     * (`db/node-sqlite-client.ts`:写不许借别人的事务),别人开着长事务时它排在队里 —— 既没
+     * 抛错也没落盘,而判决作出之后紧接着就是不可撤销的终止。所以事实落在
+     * `turn-stall-journal.ts`(另一个文件、同步写、写完 fsync),这一格是**同一笔顺手补的第二份
+     * 记录**:给 SQL 取证和将来的读者用(今天没有别的读者),写失败只记一句、不补账。
+     * 恢复时两边都看(`turn-stall-persist.ts` 的 `restoreStallVerdict`),哪边有判决都算有。
+     *
+     * 与 `outcome` 的分工:`outcome` 是**收口**时写的最终结局,这一格是**判决作出**那一刻写的、
+     * 尚未兑现的义务 —— 所以恢复判据是「有判决 **且** `ended_at` 还是 null」。收口之后它只剩
+     * 诊断价值(读端一律按 `outcome` 办)。
+     */
+    stallReason: text("stall_reason"),
   },
   (t) => ({
     taskIdx: index("session_turns_task_idx").on(t.taskId, t.startedAt),

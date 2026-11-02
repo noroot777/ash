@@ -6,7 +6,7 @@ import { maxBytesFor, attachmentKind } from "@ash/shared";
 import { UPLOADS_DIR } from "./paths.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { canReadUpload, registerUpload, repairUploadClaim, watchAgentUploads } from "./uploads.js";
-import { id } from "./util.js";
+import { newUploadName, sanitizeUploadName } from "./upload-names.js";
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
 // Agents take text on stdin, not binaries — so we persist the pasted image/file
@@ -37,9 +37,13 @@ const EXT_MIME: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
 };
 
-// Keep stored filenames to a single safe path segment and bounded length.
-const sanitizeName = (name: string): string =>
-  (name || "").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._-]+/, "").slice(-80);
+/**
+ * 下载时报给浏览器的名字:去掉我们自己加的 `<id>-` 前缀,还原用户当初那个文件名
+ * (展示端 `attachmentView` 剥的是同一段)。RFC 5987 的 `filename*` 才带得动非 ASCII,
+ * `inline` 保住图片/PDF 在标签页里直接预览的老行为。
+ */
+const contentDisposition = (file: string): string =>
+  `inline; filename*=UTF-8''${encodeURIComponent(file.replace(/^[A-Za-z0-9_-]{12}-/, "") || file)}`;
 
 export function mountUploadRoutes(api: Hono): void {
   // 读得到的那一刻起,归属登记就在管着:广播出去的 agent 附件一律登记(见 uploads.ts 的
@@ -63,9 +67,9 @@ export function mountUploadRoutes(api: Hono): void {
         413,
       );
     }
-    const display = sanitizeName(name ?? "") || `pasted.${MIME_EXT[mime] ?? "bin"}`;
+    const display = sanitizeUploadName(name ?? "") || `pasted.${MIME_EXT[mime] ?? "bin"}`;
     mkdirSync(UPLOADS_DIR, { recursive: true });
-    const file = `${id()}-${display}`;
+    const file = newUploadName(display);
     writeFileSync(join(UPLOADS_DIR, file), bytes);
     // 谁上传的就归谁(§八)。目录是扁平的、文件名就是全部信息,不登记这一句的话
     // 「谁能读它」在多人模式下无从判起 —— 判据见 uploads.ts。
@@ -73,7 +77,9 @@ export function mountUploadRoutes(api: Hono): void {
     return c.json({
       id: file,
       path: join(UPLOADS_DIR, file),
-      url: `/api/uploads/${file}`,
+      // 名字可以含中文/非 ASCII(upload-names.ts),URL 段必须转义:展示端拿它直接当
+      // `src`/`href` 用,浏览器会替你转,但别的消费方(日志、导出、非浏览器客户端)不会。
+      url: `/api/uploads/${encodeURIComponent(file)}`,
       name: display,
       kind: attachmentKind(mime),
     });
@@ -106,7 +112,10 @@ export function mountUploadRoutes(api: Hono): void {
     if (!(await canReadUpload(actorOf(c), file))) return c.json({ error: "not found" }, 404);
     try {
       const body = await readFile(join(UPLOADS_DIR, file));
-      return c.body(body, 200, { "content-type": EXT_MIME[extname(file).toLowerCase()] ?? "application/octet-stream" });
+      return c.body(body, 200, {
+        "content-type": EXT_MIME[extname(file).toLowerCase()] ?? "application/octet-stream",
+        "content-disposition": contentDisposition(file),
+      });
     } catch {
       return c.json({ error: "not found" }, 404);
     }

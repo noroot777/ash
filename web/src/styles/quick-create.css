@@ -84,6 +84,9 @@
   font-size: 11px;
   line-height: 1.45;
 }
+.create-project-advanced { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; }
+.create-project-advanced summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.create-project-advanced[open] summary { margin-bottom: 12px; }
 
 .create-project-row {
   display: grid;

@@ -18,6 +18,7 @@ import {
 } from "./ReplyResizeHandle.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
+import { useReplyLayout } from "./useReplyLayout.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
@@ -97,6 +98,7 @@ export function ReplyBox({
   conversationItems?: ConversationItem[];
 }) {
   const draft = useTaskReplyDraft(task.id);
+  const shellRef = useReplyLayout();
   const value = draft.text;
   const setValue = draft.setText;
   const [sending, setSending] = useState(false);
@@ -461,7 +463,7 @@ export function ReplyBox({
   };
 
   return (
-    <div className={`task-reply-shell${topRail ? " has-top-rail" : ""}`}>
+    <div ref={shellRef} className={`task-reply-shell${topRail ? " has-top-rail" : ""}`}>
       {menuOpen && (
         <SlashMenu
           className="task-reply-command-menu"
@@ -514,8 +516,10 @@ export function ReplyBox({
           onSubmit={() => void send(new Date(sendAt).toISOString())}
         />
       )}
+      <div className="reply-context">
       {inlinePanel && !menuOpen && !mention.open && !picker && !scheduleOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
+        key={task.id}
         messages={scheduled.messages}
         loading={scheduled.loading}
         error={scheduled.error}
@@ -535,6 +539,7 @@ export function ReplyBox({
       {sendError && <p className="task-reply-error">{sendError}</p>}
       {commandResult?.taskId === task.id && <p className="task-reply-command-result" role="status" aria-label="命令结果">{commandResult.text}</p>}
       {topRail}
+      </div>
       <div className="task-reply-box">
         <ReplyResizeHandle targetRef={textareaRef} {...replyHeight} />
         <AgentPlate name={activeAgent} />

@@ -26,9 +26,14 @@ try {
     const handle = await open(record.logPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     try {
       const launch = userShellLaunch(record.command);
+      const environment = { ...process.env };
+      for (const key of Object.keys(environment)) {
+        if (/^ASH_(?:DB|RUNS_DIR)$/i.test(key)) delete environment[key];
+      }
       code = await new Promise<number | null>((resolve, reject) => {
         const child = spawn(launch.file, launch.args, {
           cwd: record.cwd, stdio: ["ignore", handle.fd, handle.fd], windowsHide: true,
+          env: environment,
           windowsVerbatimArguments: launch.windowsVerbatimArguments,
         });
         child.once("error", reject);

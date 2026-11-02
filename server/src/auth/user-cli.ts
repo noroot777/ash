@@ -21,7 +21,7 @@ import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync
 import { join } from "node:path";
 import type { AgentType, PersonalCliEnv, PersonalSkill } from "@ash/shared";
 import { DATA_DIR } from "../paths.js";
-import { ensureAshMcp } from "./user-cli-mcp.js";
+import { ensureAshMcp, ashMcpRegistration, hostCliConfigDir, hostCliConfigFile } from "./user-cli-mcp.js";
 
 /** 个人配置目录的根。刻意放 data/ 下 —— 见文件顶部。 */
 export const USER_CLI_ROOT = join(DATA_DIR, "user-cli");
@@ -41,9 +41,18 @@ const MEMORY_FILE: Partial<Record<AgentType, string>> = {
 /** 有个人配置目录的 CLI(管理面按它列节)。 */
 export const PERSONAL_CLI_TYPES = Object.keys(CONFIG_DIR_ENV) as AgentType[];
 
-/** 没有等价环境变量时,如实说明原因(界面上原样显示)。 */
+/**
+ * 个人档没接这家 CLI 时,如实说明原因(界面上原样显示)。
+ *
+ * 注意**别把「没接」写成「做不到」**:2026-10-31 实测,gemini 有 `GEMINI_CLI_HOME`、grok 有
+ * `GROK_HOME`、kimi 有 `KIMI_CODE_HOME`、copilot 有 `COPILOT_HOME`(各家见
+ * `mcp-registry/catalog.ts` 那张表的 `dirEnv`)—— 技术上都能隔离。没接是**有意的**:那些变量
+ * 整体取代配置目录,一接上,用户宿主机上这些 CLI 的登录态就一起被隔掉(claude 实测如此),
+ * 那是另一件要单独验的事。这里只如实说现状。
+ */
 const UNSUPPORTED_REASON: Partial<Record<AgentType, string>> = {
-  gemini: "gemini CLI 没有「整体取代配置目录」的环境变量，个人级技能/指令暂时做不到，只有项目级生效",
+  gemini: "gemini 有 GEMINI_CLI_HOME（2026-10-31 实测整体取代配置目录），但个人档还没接它 —— "
+    + "接上会把宿主机上的 gemini 登录态一起隔掉，要单独一轮；现在只有项目级生效",
 };
 
 export const configDirEnvVar = (agentType: string): string | null =>
@@ -66,7 +75,23 @@ export function userCliDir(userId: string, agentType: string): string {
  *    协议本身 —— 没有它 agent 调不到 `complete_task`,干完的活一律显示成失败。缺了
  *    才写、已有不覆盖,所以对已经跑起来的目录也是安全的补做。
  */
-export function ensureUserCliDir(userId: string, agentType: AgentType): string | null {
+export async function ensureUserCliDir(userId: string, agentType: AgentType): Promise<string | null> {
+  const dir = seedUserCliDir(userId, agentType);
+  if (!dir) return null;
+  await ensureAshMcp(dir, agentType);
+  return dir;
+}
+
+/**
+ * 只建目录、只写 seed,**不碰 ash MCP 登记**。
+ *
+ * 为什么分出来:补登记那一步要把候选配置交给 CLI 本人解析一遍(`user-cli-mcp.ts` 的
+ * `codexAccepts`),那是一次带归属的异步子进程 —— 于是 `ensureUserCliDir` 必须 await。
+ * 而「存个人技能 / 存个人全局指令」这类调用只需要「目录在」,没有理由为此起一次 codex,
+ * 所以它们走这一条同步的。**起跑前(`cliConfigEnvFor`)、设置页(`personalCliEnv`)、
+ * 启动补做(`sweepPersonalAshMcp`)三处必须走上面那条**,登记缺了要在那三处补上。
+ */
+function seedUserCliDir(userId: string, agentType: AgentType): string | null {
   if (!configDirEnvVar(agentType)) return null;
   const dir = userCliDir(userId, agentType);
   mkdirSync(join(dir, "skills"), { recursive: true });
@@ -81,15 +106,14 @@ export function ensureUserCliDir(userId: string, agentType: AgentType): string |
     }
   }
   if (agentType === "codex") mkdirSync(join(dir, "sessions"), { recursive: true });
-  ensureAshMcp(dir, agentType);
   return dir;
 }
 
 /** 建用户时把他所有 CLI 的个人环境初始化出来。 */
-export function initUserCliEnv(userId: string): void {
+export async function initUserCliEnv(userId: string): Promise<void> {
   for (const type of PERSONAL_CLI_TYPES) {
     try {
-      ensureUserCliDir(userId, type);
+      await ensureUserCliDir(userId, type);
     } catch (e) {
       console.warn(`[ash] 初始化 ${userId} 的 ${type} 个人配置目录失败:`, e);
     }
@@ -100,11 +124,11 @@ export function initUserCliEnv(userId: string): void {
  * spawn 这个用户的任务时要注入的 CLI 配置目录环境变量。
  * 自用模式(userId 为 null)返回空对象 —— 那条路继续用宿主机默认目录,订阅照用(§九)。
  */
-export function cliConfigEnvFor(userId: string | null, agentType: string): Record<string, string> {
+export async function cliConfigEnvFor(userId: string | null, agentType: string): Promise<Record<string, string>> {
   if (!userId) return {};
   const key = configDirEnvVar(agentType);
   if (!key) return {};
-  const dir = ensureUserCliDir(userId, agentType as AgentType);
+  const dir = await ensureUserCliDir(userId, agentType as AgentType);
   return dir ? { [key]: dir } : {};
 }
 
@@ -147,7 +171,7 @@ function readPlugins(dir: string): string[] {
   }
 }
 
-export function personalCliEnv(userId: string, agentType: AgentType): PersonalCliEnv {
+export async function personalCliEnv(userId: string, agentType: AgentType): Promise<PersonalCliEnv> {
   const envVar = configDirEnvVar(agentType);
   if (!envVar) {
     return {
@@ -164,7 +188,9 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
       ashMcp: null,
     };
   }
-  const dir = ensureUserCliDir(userId, agentType)!;
+  // 目录先建出来,登记那一问下面只走**一次**(`ensureUserCliDir` 自己也会补,在这儿调它就是
+  // 问两遍;这一屏正是用来看「补上了没有」的,所以答案要现问的那一份)。
+  const dir = seedUserCliDir(userId, agentType)!;
   const memoryName = MEMORY_FILE[agentType] ?? null;
   const memoryFile = memoryName ? join(dir, memoryName) : null;
   return {
@@ -177,36 +203,86 @@ export function personalCliEnv(userId: string, agentType: AgentType): PersonalCl
     memoryName,
     hasMemory: !!memoryFile && existsSync(memoryFile),
     plugins: readPlugins(dir),
-    // 现读一遍(不是复用 ensureUserCliDir 那次的结果):这一屏正是用来看「补上了没有」的,
-    // 用户手工改完刷新页面就该看到新状态。
-    ashMcp: ensureAshMcp(dir, agentType),
+    // 用户手工改完刷新页面就该看到新状态,所以这里是现问的,不是启动那次的缓存结果。
+    ashMcp: await ensureAshMcp(dir, agentType),
   };
 }
 
 /**
- * 启动自检:隔离档下把每个人的个人配置目录补齐 ash MCP,补不上的**在日志里点名**。
+ * 共用宿主 CLI 的那一档（含自用模式）：宿主配置里缺 ash MCP 时**出声，但一个字节都不改**。
  *
- * 为什么补做之外还要单独扫一趟:`ensureUserCliDir` 只在「有人起任务 / 打开设置页」时
- * 才跑到,而缺这条登记的表现是**任务照跑、干完记 failed** —— 等第一个任务白跑一轮才
- * 发现,已经晚了一轮。启动时扫一遍,机器起来就是好的;补不上(没 build 过 mcp、配置
- * 文件坏了)则必须出声,否则用户只会看到一堆莫名其妙的失败任务。
- *
- * best-effort:任何一步出错都不许影响启动。
+ * 边界见 `user-cli-mcp.ts` 开头那条：那些是用户自己的配置文件。但「不该改」不等于
+ * 「不该说」—— 2026-10-28 现场正是一台 `~/.codex/config.toml` 里从来没有过
+ * `[mcp_servers.ash]` 的机器：codex 任务干完活交不了卷、一律记 failed，一轮审查更是
+ * 跑满 35 分钟写完报告，最后才发现没有 `report_stage` 可调，而 ash 全程一言不发。
  */
+async function warnHostAshMcp(): Promise<void> {
+  const gaps: { line: string; basis: "cli" | "file"; agentType: string }[] = [];
+  // **逐家问,不再只问 claude / codex**(2026-10-31):另外十三家原来压根没有登记逻辑,
+  // 预检也一律放行,于是「换个 agent 跑任务全是 failed」这件事启动日志一个字都不说。
+  // 这台机器上没装的那几家不会出现在这里 —— `hostAshMcpGap` 找不到 CLI 就不报缺口。
+  const { AGENT_TYPES } = await import("@ash/shared");
+  for (const agentType of AGENT_TYPES) {
+    const file = hostCliConfigFile(agentType);
+    // **不拿「配置文件在不在」当「这个 CLI 用没用过」**：装了 codex、从没写过 config.toml 的
+    // 机器正是最该出声的那种 —— 派审那道门禁对同一个形状答的是「确实没有」（新链第 2 轮审查
+    // 第 3 条）。「这台机器上有没有这个 CLI」由 `hostAshMcpGap` 自己判（找不到 CLI 就不报缺口），
+    // 跟派审用同一份解析，这里不另起一份。
+    if (!file) continue;
+    const dir = hostCliConfigDir(agentType);
+    // 两道判据，顺序有意：**先用配置文件快速放过**（已经接好的机器零开销），只有它说
+    // 「没有」或「关着」才去确认。快速通道**只许省掉那次确认，不许替它下「没问题」的结论**：
+    // 上一版只看「不是 absent」就放过，`enabled = false` 的登记读出来是「在」，于是那道
+    // 本来算得出「没启用」的 CLI 确认被跳过（新链第 1 轮审查第 2 条）。所以只有明确的
+    // present 才放过；读不出来（unknown）也放过 —— 那时确认那一道同样问不出结论。
+    const quick = dir ? ashMcpRegistration(dir, agentType).state : "unknown";
+    if (quick === "present" || quick === "unknown") continue;
+    const { hostAshMcpGap } = await import("../ash-mcp-reachability.js");
+    const gap = await hostAshMcpGap(agentType);
+    if (!gap) continue;
+    gaps.push({ line: `${agentType}（${file}）：${gap.problem}`, basis: gap.basis, agentType });
+  }
+  if (!gaps.length) return;
+  // 措辞里的「这台机器的默认配置下」不是客套：这里问的是**宿主默认上下文** ——
+  // `hostAshMcpGap` 没有任务目录、没有执行器 profile，而 claude 的项目级登记
+  // (`--scope local`)和 codex 的 `-c mcp_servers.…` 覆盖都能让某条具体任务照样有工具。
+  // 派审那道门禁(`ashMcpReachability`)才问得到那些,所以这行启动日志只敢说默认配置。
+  //
+  // 证据来源也要说实话：问不了 CLI 本人的机器上（macOS 等，见 ash-mcp-reachability.ts
+  // 「问不了 CLI 时」）结论来自配置文件，措辞降一档成「看配置像是没登记」。
+  const fromCli = gaps.every((g) => g.basis === "cli");
+  console.warn((fromCli
+    ? "[ash] 这些 CLI 在这台机器的默认配置下自己报告没有可用的 ash MCP 登记，"
+    : "[ash] 看这台机器的默认配置，这些 CLI 像是没有可用的 ash MCP 登记（读配置得出，没经 CLI 本人确认），")
+    + "这么跑起来的 agent 交不了卷"
+    + "（没有 complete_task，干完的活会记 failed；派出去的审查跑完也给不出结论）：");
+  for (const g of gaps) console.warn(`  · ${g.line}`);
+  const named = gaps.map((g) => g.agentType);
+  const selfCheck = [
+    named.includes("claude") ? "claude mcp get ash" : null,
+    named.includes("codex") ? "codex mcp list --json" : null,
+  ].filter(Boolean).join(" / ");
+  console.warn(`  自查：${selfCheck ? `${selfCheck}，其余几家看上面那几个路径。` : "看上面那几个路径。"}`
+    + "接法见 docs/install.md，或在仓库根跑一次 npm run setup（已有登记不会被覆盖）。");
+}
+
 export async function sweepPersonalAshMcp(): Promise<void> {
   // 动态 import:mode.ts / db 都在 auth 这一圈里绕回来,顶层导入会绕出一个环。
   const { isHostCliIsolated } = await import("./mode.js");
-  if (!(await isHostCliIsolated())) return;
+  if (!(await isHostCliIsolated())) return await warnHostAshMcp();
   const { db } = await import("../db/index.js");
   const { users } = await import("../db/schema.js");
   const rows = await db.select({ id: users.id, name: users.name }).from(users);
   const broken: string[] = [];
   for (const row of rows) {
     for (const type of PERSONAL_CLI_TYPES) {
-      const dir = ensureUserCliDir(row.id, type);
+      const dir = await ensureUserCliDir(row.id, type);
       if (!dir) continue;
-      const state = ensureAshMcp(dir, type);
-      if (!state.configured) broken.push(`${row.name} 的 ${type}：${state.problem ?? "原因不明"}`);
+      const state = await ensureAshMcp(dir, type);
+      // 只取第一行:补不上时那句话里会带上「要手工加的那段」(整段 TOML),一台机器上每个用户
+      // 都印一遍会把启动日志冲掉。完整的那一份在设置页/`GET /me/cli-env` 里。
+      const why = (state.problem ?? "原因不明").split("\n")[0]!;
+      if (!state.configured) broken.push(`${row.name} 的 ${type}：${why}`);
     }
   }
   if (!broken.length) return;
@@ -214,9 +290,9 @@ export async function sweepPersonalAshMcp(): Promise<void> {
   for (const line of broken) console.warn(`  · ${line}`);
 }
 
-export function listPersonalCliEnv(userId: string): PersonalCliEnv[] {
+export async function listPersonalCliEnv(userId: string): Promise<PersonalCliEnv[]> {
   const all: AgentType[] = [...PERSONAL_CLI_TYPES, "gemini"];
-  return all.map((type) => personalCliEnv(userId, type));
+  return await Promise.all(all.map((type) => personalCliEnv(userId, type)));
 }
 
 // 技能名同样落成磁盘目录名,校验从严(理由同用户目录名)。
@@ -226,7 +302,7 @@ export function writePersonalSkill(userId: string, agentType: AgentType, name: s
   if (!SKILL_NAME_RE.test(name)) {
     throw Object.assign(new Error("技能名只能用字母、数字、点、下划线和连字符，1~64 个字符"), { status: 400 });
   }
-  const dir = ensureUserCliDir(userId, agentType);
+  const dir = seedUserCliDir(userId, agentType);
   if (!dir) throw Object.assign(new Error(`${agentType} 不支持个人级技能`), { status: 400 });
   const target = join(dir, "skills", name);
   mkdirSync(target, { recursive: true });
@@ -287,7 +363,7 @@ export function readPersonalMemory(userId: string, agentType: AgentType): string
 export function writePersonalMemory(userId: string, agentType: AgentType, body: string): void {
   const name = MEMORY_FILE[agentType];
   if (!name) throw Object.assign(new Error(`${agentType} 没有个人级全局指令文件`), { status: 400 });
-  const dir = ensureUserCliDir(userId, agentType);
+  const dir = seedUserCliDir(userId, agentType);
   if (!dir) throw Object.assign(new Error(`${agentType} 不支持个人级配置目录`), { status: 400 });
   writeFileSync(join(dir, name), body, "utf8");
 }

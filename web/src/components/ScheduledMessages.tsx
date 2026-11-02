@@ -1,22 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ScheduledMessage } from "@ash/shared";
-import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
-import { ArrowUUpLeft, ChatsCircle, Clock, Pulse, Queue, SpinnerGap, X } from "@phosphor-icons/react";
+import { Clock, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { toLocalDateTime } from "./ScheduleControl.tsx";
-import { formatInstant } from "../task-detail/utils.ts";
-
-function messageOrder(left: ScheduledMessage, right: ScheduledMessage): number {
-  return left.sendAt.localeCompare(right.sendAt)
-    || left.createdAt.localeCompare(right.createdAt)
-    || left.id.localeCompare(right.id);
-}
-
-function bySendTime(messages: ScheduledMessage[]): ScheduledMessage[] {
-  return [...messages].sort(messageOrder);
-}
+import { bySendTime } from "./scheduledMessagePresentation.ts";
+export { ScheduledMessageTray } from "./ScheduledMessageTray.tsx";
 
 type ScheduledMessageActionError = { messageId: string; message: string };
 
@@ -142,114 +132,6 @@ export function useScheduledMessages(taskId: string) {
     steer,
     reload,
   };
-}
-
-export function ScheduledMessageTray({
-  messages,
-  loading,
-  error,
-  cancelingIds,
-  steeringIds,
-  onSteer,
-  onWithdraw,
-  onCancel,
-}: {
-  messages: ScheduledMessage[];
-  loading: boolean;
-  error: string | null;
-  cancelingIds: ReadonlySet<string>;
-  steeringIds?: ReadonlySet<string>;
-  onSteer?: (messageId: string) => void;
-  // 撤回:把这条消息从队列上取下来,内容(正文 + 附件)放回对话框继续编辑。
-  onWithdraw: (message: ScheduledMessage) => void;
-  // 纯取消:只把这条取下来,不往输入框里放任何东西。给**不是用户写的**那些消息用
-  // (眼下只有哨兵事件)——「放回输入框继续编辑」对它们是假承诺:那不是你写的句子。
-  onCancel?: (messageId: string) => void;
-}) {
-  if (!loading && !error && messages.length === 0) return null;
-  const orderedMessages = bySendTime(messages);
-  // 引导会话跟撤回一样只对用户自己那条排队消息开放：带会话角色的（审查链的 reviewer
-  // 答复）不归这个对话框管，把它推进当前会话同样是送错地方。
-  const steerable = orderedMessages.find((message) => message.mode === "queued" && !message.sessionRole && !message.origin);
-  return (
-    <div className="scheduled-message-tray" aria-label="待发送消息">
-      {loading && messages.length === 0 && <small>正在加载待发送消息…</small>}
-      {error && <p role="alert">待发送消息：{error}</p>}
-      {orderedMessages.map((message) => {
-        const displayText = annotationBatchDisplayText(message.text) ?? message.text;
-        const canceling = cancelingIds.has(message.id);
-        const steering = steeringIds?.has(message.id) ?? false;
-        const busy = canceling || steering;
-        // 排队消息没有「几点发」可言——它等的是任务空下来,所以那一格写它在等什么。
-        const queued = message.mode === "queued";
-        const when = queued ? "排队中" : formatInstant(message.sendAt);
-        // 带会话角色 = 这条不是用户在这个对话框里写的，是审查链排给 reviewer 会话的
-        // 答复。撤回承诺「放回输入框、改完再发一次」，可这个框再发只会走普通 /reply，
-        // 角色就丢了——答复进错会话，审查链等不到它。做不到就不提供入口，只如实标出来。
-        const managed = !!message.sessionRole;
-        // 哨兵推来的事件：不是用户打的字，所以没有「撤回后接着编辑」这回事。它能做的
-        // 只有取消这一次唤醒；要让它别再来，去上面的哨兵条把那个哨兵停掉。
-        const fromMonitor = !!message.origin;
-        return (
-          <div className="scheduled-message-row" key={message.id}>
-            {fromMonitor
-              ? <Pulse size={12} weight="fill" aria-hidden="true" />
-              : queued ? <Queue size={12} aria-hidden="true" /> : <Clock size={12} aria-hidden="true" />}
-            {fromMonitor
-              ? <em>哨兵事件 · 任务空闲后唤醒</em>
-              : queued
-                ? <em>排队 · 当前回合结束后发送</em>
-                : <time dateTime={message.sendAt}>{formatInstant(message.sendAt)}</time>}
-            {message.agent && <span>@{message.agent}</span>}
-            <b title={displayText || message.attachments.join("\n")}>
-              {displayText || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]")}
-            </b>
-            {!fromMonitor && message.id === steerable?.id && onSteer && (
-              <button
-                type="button"
-                className="scheduled-message-guide"
-                disabled={busy}
-                aria-label={`用最早的排队消息“${displayText || "附件"}”引导会话`}
-                onClick={() => onSteer(message.id)}
-              >
-                {steering
-                  ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" />
-                  : <ChatsCircle size={13} weight="duotone" aria-hidden="true" />}
-                <span>{steering ? "引导中" : "引导会话"}</span>
-              </button>
-            )}
-            {fromMonitor
-              ? (onCancel && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  aria-label={`取消哨兵事件“${displayText}”这一次唤醒（哨兵仍在盯，下一条事件还会来）`}
-                  onClick={() => onCancel(message.id)}
-                >
-                  {canceling ? <SpinnerGap size={12} className="is-spinning" /> : <X size={12} weight="bold" />}
-                </button>
-              ))
-              : managed
-              ? <small className="scheduled-message-managed">审查会话的答复 · 由审查链投递</small>
-              : (
-                <button
-                  type="button"
-                  className="scheduled-message-withdraw"
-                  disabled={busy}
-                  title={queued ? "撤回这条排队消息，内容放回输入框" : "撤回这条定时消息，内容放回输入框"}
-                  aria-label={`撤回${when}的待发送消息“${displayText || "附件"}”，内容放回输入框`}
-                  onClick={() => onWithdraw(message)}
-                >
-                  {canceling
-                    ? <SpinnerGap size={12} className="is-spinning" />
-                    : <ArrowUUpLeft size={12} weight="bold" />}
-                </button>
-              )}
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 export function ScheduledSendPanel({

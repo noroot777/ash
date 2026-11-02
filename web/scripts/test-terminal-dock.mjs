@@ -41,6 +41,19 @@ try {
   const tabs = bar.locator(".status-bar__tab");
   const calls = async () => JSON.parse(await page.getByTestId("calls").textContent());
 
+  const states = await page.evaluate(async () => {
+    const { attachStatusOf, createAttachTab } = await import("/src/workspace/terminalTabs.ts");
+    const base = { exitCode: 0, groupAlive: false, portsAlive: false, stop: { kind: "none" } };
+    return [
+      attachStatusOf({ ...base, running: true }),
+      attachStatusOf({ ...base, portUncertain: true }),
+      attachStatusOf({ ...base, groupAlive: true, running: false }),
+      attachStatusOf(base),
+      createAttachTab({ ...base, id: "uncertain", name: "service", cwd: "/workspace", commandId: "service", stoppedByUser: false, running: true, portUncertain: true }).status,
+    ];
+  });
+  assert.deepEqual(states, ["detached", "detached", "ended", "ended", "detached"]);
+
   // ① 收着也看得见:server 上那两条会话原样列在状态栏上。
   await tabs.first().waitFor();
   assert.equal(await tabs.count(), 2, "server 上开着的两个终端都应当列在状态栏");
