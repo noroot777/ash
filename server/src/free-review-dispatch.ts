@@ -150,7 +150,7 @@ import {
   releaseReviewDispatchClaim, reviewDispatchArmed, reviewDispatchOwned,
   reviewPromptDelivered, takeIntent,
 } from "./free-review-responsibility.js";
-import { continueWhenIdle } from "./runs.js";
+import { continueWhenIdle, type TurnDeliveryFailure } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -356,7 +356,14 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
     // 排进等待队列之前把相位标成「排着」:准备阶段到此结束(两档都算有人负责,分开记只为
     // 日志读得出它卡在哪一段)。
     markReviewDispatchQueued(run.id, run.currentRound, token);
-    continueWhenIdle(taskId, dispatch.message, dispatch.opts, async (message, failure) => {
+    /**
+     * 这一笔没能交出去 —— 起跑前那一族(`TurnDeliveryFailure`),外加交出去之后协议层明确拒收
+     * (`refused`)。拒收那一档照「瞬时以外」落终态:这一代次的交付凭据在 spawn 之后就已经落下
+     * (`commitReviewTurnDelivery`),重排会被 `takeIntent` 的 WHERE 当成「已经送过」挡回去、退化
+     * 成让出,这一轮就只剩对账那句通用的「未能正常给出结论」。落终态反而说得出真话 —— 审查者
+     * 一个字都没收到,用户重跑这一轮(换代次)就是重投。
+     */
+    const failed = async (message: string, failure: TurnDeliveryFailure | "refused"): Promise<void> => {
       // **整段包在异常出路里**:这是回合锁回调上的一段,抛出去只会变成一条没人接的 rejection
       // (抢占那一支不等它),而认领证跟着漏掉的话,这一轮在本进程里就永远「在途」—— 对账见
       // `armed` 即跳过,库里那份没消费的意图再也没人补办(文件头 ⑩)。还掉证反而全身而退:
@@ -368,7 +375,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
         // 话这一下是空操作,撤不掉别人后来领的那张)。
         if (failure === "superseded") return void handOff(message);
         // 瞬时以外的几种照旧落终态:撤回(磨掉用户的决定)、退避(原地再撞同一个拒绝理由)、
-        // 交付说不清(一个字都不许重投)、抛错。**它们各自带着自己那句话**(分档表在
+        // 交付说不清(一个字都不许重投)、抛错、交出去之后被拒收(理由见上)。**它们各自带着自己那句话**(分档表在
         // `turn-idle-delivery.ts` 的 `DELIVERY_FAILURE`),所以终态上写的是真实原因,不再是
         // 一句统一的「被其它执行抢占」—— 尤其 `uncertain` 那一档绝不许说「一个字都没送出去」。
         if (failure !== "turn-taken") return await giveUp(message, failure);
@@ -389,11 +396,24 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
         console.error(`[ash] ${label}派发重排出错 task=${taskId} run=${run.id}（认领已归还，`
           + `库里的意图留着等下一拍对账补办）:`, error);
       }
-    }, async () => {
-      // 真的送进会话了 —— 意图到此了结。这一声取在**原话落盘**那一刻(而不是整轮跑完,
-      // 理由在 `continueWhenIdle` 的 `onDelivered` 上):取后者的话,这一轮审查跑着的几十
-      // 分钟里库里都挂着意图,服务在中间断掉,新进程就会对一条**已经执行过**的审查整份重投。
-      await settled();
+    };
+    continueWhenIdle(taskId, dispatch.message, dispatch.opts, failed, {
+      // 审查者真的收下了 —— 意图到此了结。时机是回执落定那一刻(而不是整轮跑完,理由在
+      // `IdleDeliveryVerdict` 上):等整轮的话,这一轮审查跑着的几十分钟里库里都挂着意图,服务
+      // 在中间断掉,新进程就会对一条**已经执行过**的审查整份重投。
+      onAccepted: () => settled(),
+      onRefused: (message) => failed(message, "refused"),
+      // **说不清 ≠ 送到了,也 ≠ 没送到**:意图不清(那等于宣布送到),也不落终态、不重排(那等于
+      // 宣布没送到)。只把内存那张证还掉 —— 这一轮已经结束,「本进程还盯着」这句话不再成立;
+      // 留着它,对账见 `armed` 就永远跳过,这一轮卡在 reviewing 直到重启。还掉之后对账按
+      // 「有意图、没人盯着」接手,而补办那一侧先问持久交付凭据(文件头 ⑮):spawn 之后才有的
+      // 那张凭据对得上就只结清意图、不重投;压根没走到 spawn 的那一种则照常补投 —— 送没送到
+      // 由持久事实说话,不由这里猜。
+      onUnconfirmed: (message) => {
+        releaseReviewDispatchClaim(run.id, run.currentRound, token);
+        console.error(`[ash] ${label}派发交付说不清 task=${taskId} run=${run.id}：${message}`
+          + "（认领已归还，意图留给对账按交付凭据裁决）");
+      },
     }, ownershipGate);
     // 排进等待队列了 = 责任（连那张认领证一起）归派发层：它在投递成功、放弃、让出时各自了结。
     return "dispatched";

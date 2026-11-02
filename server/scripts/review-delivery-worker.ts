@@ -51,7 +51,9 @@ db.transaction = async function (...args) {
 };
 const delivered = await continueTask(input.taskId, input.text, {
   ...(input.message ? { ...deliveryOptions(input.message), wakeGuard: monitorWakeGuard(input.message) } : input.options),
-  onDelivered: async () => {
+  // 只有协议层「收下了」才记账(三档契约见 task-continue-options.ts 的 onInputSettled)。
+  onInputSettled: async (acceptance) => {
+    if (acceptance !== "accepted") return;
     if (input.message) await markSent(input.message);
     else if (input.options?.reviewDelivery?.kind === "checkpoint") {
       await takeResumePrompt(input.taskId, input.text, input.options.reviewDelivery.promptGeneration);

@@ -56,7 +56,11 @@ try {
         const text = message?.text ?? checkpoint.resumePrompt!;
         runs.releaseTurn(taskId);
         const transaction = db.transaction;
-        let injected = false, failed = false, delivered = false;
+        let injected = false, failed = false;
+        // 这一句输入交到执行器之后拿到的回执(三档,契约见 task-continue-options.ts 的 onInputSettled)。
+        // 测试隔离闸起不来真 codex,协议层会如实答「拒收」—— 所以这里钉的是「越过了那条线、回执
+        // 交到了调用方手上」,而只有「收下」才记账,别把拒收也记成送达。
+        const receipts: string[] = [];
         db.transaction = async function (...args) {
           if (!injected && new Error().stack?.includes("assertReviewTurnStart")) {
             injected = true;
@@ -70,13 +74,13 @@ try {
           return transaction.apply(this, args);
         };
         const start = () => continueTask(taskId, text, { ...options, freezeGuard: true,
-          onDelivered: async () => { delivered = true; } });
+          onInputSettled: (acceptance) => { receipts.push(acceptance); } });
         try {
           if (fault === "rollback") await assert.rejects(start(), /ONCE_DELIVERY_RESTORE_FAILURE/);
           else assert.equal(await start(), false);
         } finally { db.transaction = transaction; }
         assert(injected);
-        assert.equal(delivered, false);
+        assert.deepEqual(receipts, [], "nothing crossed the line, so no receipt of any kind");
         if (fault === "rollback") recover();
         await reconcileRegressionSettlements(taskId);
         const state = await review.state();
@@ -88,8 +92,9 @@ try {
         assert.equal(await reviewDeliveryBlocked(options.reviewDelivery, taskId), null);
         assert.equal(await start(), false, "a paused group cannot spawn even though the same input retains authority");
         await db.update(schema.groups).set({ paused: false }).where(eq(schema.groups.id, groupId));
-        assert.equal(await continueTask(taskId, text, { ...options, freezeGuard: true, onDelivered: async () => {
-          delivered = true;
+        assert.equal(await continueTask(taskId, text, { ...options, freezeGuard: true, onInputSettled: async (acceptance) => {
+          receipts.push(acceptance);
+          if (acceptance !== "accepted") return;
           if (message) await db.update(schema.scheduledMessages).set({ status: "sent", deliveringSince: null })
             .where(eq(schema.scheduledMessages.id, message.id));
           else {
@@ -97,7 +102,7 @@ try {
             assert.equal((await row(taskId)).resumePrompt, null);
           }
         } }), true);
-        assert(delivered);
+        assert(receipts.length > 0, "the retry crosses the line once and hands its receipt to the caller");
         assert.equal((await row(taskId)).waitOwnership?.start, undefined);
         assert(await reviewDeliveryBlocked(options.reviewDelivery, taskId), "actual delivery loses the old retry authority");
         console.log(`✓ ${mode} ${input}: real group pause preserves undelivered authority, retry delivers once (${fault})`);

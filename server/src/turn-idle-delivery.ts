@@ -11,6 +11,8 @@ import {
   claimOwnTurn, releaseTurn, turnSourceRole, turnSourceReview, whenTurnIdle, type TurnSource,
 } from "./turn-lock.js";
 import type { TurnStartDecline } from "./task-continue-options.js";
+// 运行时依赖只有这一个纯函数模块(它自己只引类型),不碰 orchestrator —— 那一条留给下面的 dynamic import。
+import { lastWordOnInput, type InputAcceptance } from "./turn-input-acceptance.js";
 
 /**
  * **这一次投递为什么没成功** —— 四种原因里只有 `turn-taken` 是**瞬时**条件。
@@ -63,6 +65,101 @@ const DELIVERY_FAILURE: Record<TurnStartDecline, { failure: TurnDeliveryFailure;
 };
 
 /**
+ * 交接成功之后,**这一轮的输入到底有没有进 agent 手里** —— 三档裁决,每档一个出口,三个都必填。
+ *
+ * 这里从前是一个 `onDelivered`:`continueTask` 那一声「落盘了」叫一次,整轮返回还没叫过就兜底再
+ * 叫一次(「按已投递了结」)。那正是上游把 `onDelivered` 改名成三态 `onInputSettled` 要杀的歧义
+ * (task-continue-options.ts 那段 F2/F3:把「回调被调到」读成「已送达」)—— 它在这一层换了个
+ * 名字照样活着:协议层**明确拒收**的那一轮,整轮返回之后被兜底当成送到,派审那一侧据此把在途
+ * 意图了结掉,这一轮审查从此既没人重投、也没人说得出它其实一个字都没收到。
+ *
+ * 三个都必填,用意与上游改名相同:让每个调用点在编译期把三档各自想一遍。
+ *  · `onAccepted`    —— 协议层收下了。回执一落定就报(正常是原话落盘之后几百毫秒),**不等这一轮
+ *    跑完**:一轮审查几十分钟,等整轮的话持久意图一直挂着,服务在中间一断,新进程就会对一条已经
+ *    执行过的审查整份重投(第 1 轮审查 F2)。
+ *  · `onRefused`     —— 确证一个字都没进去,原文可以放心重投。**这一轮结束之后**才报:被拒收的那一
+ *    轮此刻还在收尾,调用方现在就去落终态或重排,会和它自己的结算抢同一批状态。
+ *  · `onUnconfirmed` —— 这一轮已经结束,回执仍然说不上来(写出去了没等到应答;或者压根没走到交接
+ *    回执那一步 —— 起跑在 spawn 之前就失败了,失败交代由 `continueTask` 自己写)。**既不是成功也
+ *    不是失败**:不许据此了结任何东西,也不许据此重投;该做的是把「我在盯着」这句话收回来,交给
+ *    持久凭据和对账去判。
+ *
+ * `onAccepted`/`onRefused` 合起来**至多一次**(协议定论单调,先落定的算)。`onUnconfirmed` 至多一次,
+ * 但它之后**仍可能迟到一句定论**(回执在有界等待之外才落定,见 turn-input-acceptance.ts)——
+ * 所以三档的处置都必须幂等。
+ *
+ * 不传 = 调用方没有要了结的账(就地验证、打回重做、验收交接这几条):这一轮的成败由它自己的
+ * 结算钩子收口,这里只记日志。`onError` 管的始终只是「这一轮没起来」那一族(见 `TurnDeliveryFailure`),
+ * 不会被拿来报「跑过了、输入被拒收」—— 那些调用方的失败回调是按「启动失败、一切回滚」写的,
+ * 在一轮已经结算过之后再回滚一次,会把它结算出来的新状态抹掉。
+ */
+export interface IdleDeliveryVerdict {
+  onAccepted: () => void | Promise<unknown>;
+  onRefused: (message: string) => void | Promise<unknown>;
+  onUnconfirmed: (message: string) => void | Promise<unknown>;
+}
+
+const REFUSED_MESSAGE = "协议层明确拒收：这一轮的输入一个字都没送进 agent，原文可以放心重投";
+const UNCONFIRMED_MESSAGE = "这一轮已经结束，但拿不到「agent 收下了」的回执，送没送到说不上来";
+
+/**
+ * 一次交接的三档裁决状态机。**协议事实先记、再做任何可失败的事**(上游 895b1ea4 的同一条:回执
+ * 排在本地记账之前),所以调用方自己的记账抛了也不会让这一句定论丢掉。
+ */
+function trackVerdict(taskId: string, hooks: IdleDeliveryVerdict | undefined) {
+  /** 协议层说过的最新一句。accepted/refused 是定论,不翻盘;unknown 等后话。 */
+  let fact: InputAcceptance | null = null;
+  let receipt: Promise<InputAcceptance> | undefined;
+  let turnOver = false;
+  let concluded = false;
+  let unconfirmed = false;
+  const report = async (what: string, hook: (() => void | Promise<unknown>) | undefined): Promise<void> => {
+    try { await hook?.(); } catch (error) {
+      console.error(`[ash] continueWhenIdle(${taskId}) ${what}的处置失败:`, error);
+    }
+  };
+  const conclude = async (): Promise<void> => {
+    if (concluded || !fact) return;
+    if (fact === "accepted") {
+      concluded = true;
+      return report("「agent 收下了」", hooks && (() => hooks.onAccepted()));
+    }
+    if (!turnOver) return; // 拒收 / 说不上来:等这一轮自己收完尾再交代
+    if (fact === "refused") {
+      concluded = true;
+      console.error(`[ash] continueWhenIdle(${taskId}) 输入被拒收：${REFUSED_MESSAGE}`);
+      return report("「协议层拒收」", hooks && (() => hooks.onRefused(REFUSED_MESSAGE)));
+    }
+    if (unconfirmed) return;
+    unconfirmed = true;
+    console.error(`[ash] continueWhenIdle(${taskId}) 交付说不清：${UNCONFIRMED_MESSAGE}`);
+    return report("「交付说不清」", hooks && (() => hooks.onUnconfirmed(UNCONFIRMED_MESSAGE)));
+  };
+  const hear = (word: InputAcceptance): void => {
+    if (fact === "accepted" || fact === "refused") return;
+    fact = word;
+  };
+  return {
+    /** `onInputReceipt`:回执本体,回合结束时再问它最后一句。 */
+    keep: (promise: Promise<InputAcceptance>): void => { receipt = promise; },
+    /** 同步记下协议事实 —— 必须排在调用方任何可失败的记账之前。 */
+    hear,
+    /** 记完、调用方记账也走过之后,按当下所知交代一次(初次与迟到都走这里)。 */
+    conclude,
+    /**
+     * `continueTask` 交回 true:这一轮结束了。初次那一档可能是几十秒前有界等待的结果,进程关掉
+     * 之后回执多半已经落定,所以结算之前再问它最后一句(同 task-resume.ts 的 finally)。没交接过
+     * 回执 = 这一轮没走到 spawn 之后,`lastWordOnInput` 照样答 unknown —— 不许再被读成「送到了」。
+     */
+    async turnEnded(): Promise<void> {
+      turnOver = true;
+      hear(await lastWordOnInput(receipt, fact));
+      await conclude();
+    },
+  };
+}
+
+/**
  * 结算钩子里给同一个任务续跑的**唯一安全写法**：等它这一轮退干净再送消息。
  *
  * 直接 `continueTask` 会被单飞锁静默挡回（结算钩子跑在 run loop 的 try 里，锁还锁着），
@@ -78,20 +175,8 @@ export function continueWhenIdle(
   text: string,
   opts: ContinueOpts = {},
   onError?: (message: string, failure: TurnDeliveryFailure) => void | Promise<unknown>,
-  /**
-   * `continueTask` 真的接过了这一轮(送出去了)。
-   *
-   * 为什么要有它:老接口只报失败,于是「这一轮的输入到底送进会话了没有」在外面无法回答 ——
-   * 而凡是把派发记成**持久意图**的调用方都要靠这一声去把意图了结掉,不然重启后的补办会
-   * 对着一条已经在跑的审查再投一次任务书。
-   *
-   * **时机是「原话落盘」那一刻,不是这一轮跑完**:`continueTask` 要等执行器收流、结算做完
-   * 才 resolve,一轮审查动辄几十分钟。取后者等于在整轮期间都把意图挂着,服务在这中间断掉,
-   * 新进程看到「有意图、没人盯着」就会对一条**已经执行过**的审查整份重投(第 1 轮审查 F2)。
-   * 所以这里接的是 `continueTask` 自己的 `onDelivered`(orchestrator 里 spawn + 落盘之后的
-   * 那一声),整轮返回只作兜底 —— 见下面 `confirmDelivered`。
-   */
-  onDelivered?: () => void | Promise<unknown>,
+  /** 交接成功之后那三档裁决各自交给谁(见 `IdleDeliveryVerdict`)。 */
+  verdict?: IdleDeliveryVerdict,
   /**
    * **起跑前的最后一道闸:这一笔交接现在还归我吗** —— 返回理由字符串 = 不归了,一个字都别送。
    *
@@ -132,21 +217,7 @@ export function continueWhenIdle(
         .catch((error) => console.error(`[ash] continueWhenIdle(${taskId}) 抢占后的重排处理失败:`, error));
       return;
     }
-    /**
-     * 「这一轮的输入已经落盘」只报一次。
-     *
-     * 两处会叫它:`continueTask` 自己的 `onDelivered`(原话写进会话那一刻,**权威**),以及
-     * 整轮返回之后的兜底 —— 后者只为「走了一条没经过那一声的投递路径」留条活路:那一轮
-     * 确实跑过了,不报的话调用方的持久意图会一直挂着,重启后又整份重投一次。
-     */
-    let handed = false;
-    const confirmDelivered = async (): Promise<void> => {
-      if (handed) return;
-      handed = true;
-      try { await onDelivered?.(); } catch (error) {
-        console.error(`[ash] continueWhenIdle(${taskId}) 投递成功的回执处理失败:`, error);
-      }
-    };
+    const tracked = trackVerdict(taskId, verdict);
     void import("./turn-freeze.js")
       .then(async ({ turnFreezeReason }) => {
         // 所有权排在冻结之前:不归我的那一笔,连「用户有没有撤回」都不该由它来问 —— 它问出
@@ -174,11 +245,19 @@ export function continueWhenIdle(
               ...opts,
               turnHeld: owner,
               onDecline: (reason) => { declined = reason; },
-              // 调用方自己的记账先走(排队消息标 sent 那一类),再报「送出去了」。它抛了就
-              // 不报,留给下面的兜底 —— 那一侧还会把异常记下来。
-              onDelivered: async () => {
-                await opts.onDelivered?.();
-                await confirmDelivered();
+              onInputReceipt: (promise) => {
+                tracked.keep(promise);
+                opts.onInputReceipt?.(promise);
+              },
+              // 三档、初次与迟到都会进来(契约见 task-continue-options.ts)。顺序:协议事实先记 →
+              // 调用方自己的记账(排队消息标 sent 那一类)→ 再交代裁决。调用方记账抛了不拦裁决:
+              // 「agent 收没收下」是协议事实,不因为本地一笔账没记上就变成另一档。
+              onInputSettled: async (acceptance) => {
+                tracked.hear(acceptance);
+                try { await opts.onInputSettled?.(acceptance); } catch (error) {
+                  console.error(`[ash] continueWhenIdle(${taskId}) 调用方的投递记账(${acceptance})失败:`, error);
+                }
+                await tracked.conclude();
               },
             });
           // continueTask 返回 false = 一个字都没送出去（验收互斥退避等）。吞掉它，
@@ -210,11 +289,10 @@ export function continueWhenIdle(
       .then(
         async (outcome) => {
           if (!outcome) {
-            // 真的交出去了。正常路径上「原话落盘」那一刻已经报过,这里只兜底:整轮都跑完了
-            // 却一声没报,说明这一轮走的是一条没经过那个点的投递路径 —— 它确实跑过,所以照样
-            // 报(否则持久意图会一直挂着),但要留一行日志,别让这条异常路静默下去。
-            if (!handed) console.error(`[ash] continueWhenIdle(${taskId}) 整轮已结束却没收到落盘回执，按已投递了结`);
-            await confirmDelivered();
+            // 这一轮接过去、跑完了。**「跑完了」不等于「送到了」**:这里从前兜底「按已投递
+            // 了结」,于是被拒收的那一轮也被当成送到。现在按协议定论交代 —— 收下的多半已经
+            // 报过(这里空转),拒收/说不清的在这一刻才交代。
+            await tracked.turnEnded();
             return;
           }
           try { await onError?.(outcome.message, outcome.failure); } catch { /* 上报失败不再连锁 */ }

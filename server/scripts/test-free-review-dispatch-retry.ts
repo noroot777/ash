@@ -14,7 +14,7 @@
 //  ⑤ 旧路径不变 → 抢不到以外的失败(这里用分组暂停的撤回)照旧一次就落终态,不重排;
 //  ⑥ 重排等的那次释放不限于「回合正常结束」 → 幽灵锁被人工放开 / 巡检拔掉时它一样被放走;
 //  ⑦ **合法排队中遇上周期对账** → 不收尸、不动意图,而且那一笔重排照旧有效(第 1 轮审查 F1);
-//  ⑧ **投递的凭据取在「原话落盘」那一刻** → 不是整轮跑完(第 1 轮审查 F2);
+//  ⑧ (已搬到 test-idle-delivery-verdict.ts:回执的时机与三档,要能控制回执的执行器桩);
 //  ⑨ 两个恢复入口同时到 → 只补投一次;而迟到的启动失败不许覆盖已有结论(第 1 轮审查 F3);
 //  ⑩ 补办把**原派发的会话策略**原样重放 → 新链第 1 轮不接上一条链的旧对话(第 1 轮审查 F4);
 //  ⑪ **慢一份恢复手里的旧快照** → 不许把一条已经办完的意图重建出来再投一遍(第 2 轮审查 F1);
@@ -237,34 +237,10 @@ try {
     console.log("✓ ⑦ 合法排队中遇上周期对账：不收尸、不动意图，那一笔重排照旧有效");
   }
 
-  // ── ⑧ 投递的凭据取在「原话落盘」那一刻,不是整轮跑完 ─────────────────────────
-  // 第 1 轮审查 F2:老写法在 `continueTask` **返回之后**才认投递成功,而它要等执行器收流、
-  // 结算做完才 resolve —— 一轮审查几十分钟。于是整轮期间库里都挂着在途意图,服务在这中间
-  // 断掉,新进程看到「有意图、没人盯着」就会对一条**已经执行过**的审查整份重投,白烧一轮额度。
-  //
-  // 钉在 `continueWhenIdle` 这一层(而不是绕回派审入口):时机差别只能靠「回执到手的那一刻,
-  // 这一轮结束了没有」来证,而那要在回调里取快照。派审一侧的接法由①③钉住(送出去那一刻意图
-  // 就了结)。判据用 `sessions.endedAt` —— 它是回合收尾写的,落盘那一刻必然还是空的。
-  // 用普通 single 回合而不是审查回合:回执的时机与角色无关,而 reviewer 回合要求库里真有一条
-  // 在跑的审查证据(`assertReviewTurnStart`),为这一条摆出来只会把判据埋进夹具。
-  {
-    const id = "free-dispatch-receipt";
-    await freeTask(id);
-    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, id));
-    const endedAtOf = async () =>
-      (await db.select().from(sessions).where(eq(sessions.taskId, id))).map((row) => row.endedAt);
-    let atDelivery: Array<string | null> = ["回执压根没到"];
-    let failure: string | null = null;
-    continueWhenIdle(id, "一句话", { system: "run", agent: "codex", executorId: "ex" },
-      (message) => { failure = message; }, async () => { atDelivery = await endedAtOf(); });
-
-    await until("这一轮跑完（测试隔离闸不许起真执行器，所以它必然失败收尾）",
-      async () => (await endedAtOf()).some((endedAt) => !!endedAt));
-    assert.equal(failure, null, "这一轮是送出去了的，不该报投递失败");
-    assert.deepEqual(atDelivery.filter((endedAt) => endedAt !== null), [],
-      "回执到手的那一刻这一轮还没收尾——取在整轮返回之后就会看到已经写下的 endedAt");
-    console.log("✓ ⑧ 投递回执取在「原话落盘」那一刻，不是整轮跑完");
-  }
+  // ── ⑧ 投递回执的时机与三档 ──────────────────────────────────────────────────
+  // 已搬到 `test-idle-delivery-verdict.ts`(V1 钉「回执落定就报、不等整轮」)。这里摆不出来:测试
+  // 隔离闸给的是一个起不来的子进程,codex 那一侧据此如实答「拒收」—— 从前这条用例在这个现场里
+  // 断言「送出去了」,断言的正是那个被三态回执杀掉的歧义。
 
   // ── ⑨ 两个恢复入口同时到:只补投一次;迟到的启动失败不覆盖已有结论 ──────────────
   // 第 1 轮审查 F3:补办要重走整个 `launchReviewRound`(证据目录、工作区、MCP 预检、任务书
@@ -428,12 +404,12 @@ try {
 
   await finish(["free-dispatch-retry", "free-dispatch-exhaust", "free-dispatch-recover",
     "free-dispatch-recover-exhausted", "free-dispatch-withdrawn", "free-dispatch-ghost",
-    "free-dispatch-reconcile", "free-dispatch-receipt", "free-dispatch-concurrent",
+    "free-dispatch-reconcile", "free-dispatch-concurrent",
     "free-dispatch-late", "free-dispatch-fresh", "free-dispatch-stale", "free-dispatch-delivered",
     "free-dispatch-cas"],
     // 真起过审查回合的就这几条(投递成功那一刻),只等它们。
     ["free-dispatch-retry", "free-dispatch-recover", "free-dispatch-ghost", "free-dispatch-reconcile",
-      "free-dispatch-receipt", "free-dispatch-concurrent", "free-dispatch-fresh"]);
+      "free-dispatch-concurrent", "free-dispatch-fresh"]);
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

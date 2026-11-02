@@ -67,7 +67,7 @@ try {
   const row = (await db.select().from(tasks).where(eq(tasks.id, "team-offline"))).at(0)!;
   assert.equal(row.status, "idle", "只是没送出去,任务状态不该被动过");
 
-  // 「没送出去」必须一路传回调用方。以前这里返回 void,上层照样 onDelivered() 把排队
+  // 「没送出去」必须一路传回调用方。以前这里返回 void,上层照样记一笔「已送达」把排队
   // /定时的那条标成 sent —— 托盘里没了、会话里也没有,用户的话凭空蒸发。
   assert.equal(await deliverToLead("team-offline", "/compact"), false, "明确拒收要返回 false");
   await assert.rejects(
@@ -77,10 +77,12 @@ try {
   );
 
   const { continueTask } = await import("../src/orchestrator.js");
-  let delivered = 0;
-  const passed = await continueTask("team-offline", "/compact", { onDelivered: async () => { delivered++; } });
+  // 三档里任何一档都不该来:压根没起跑,就没有「输入收没收下」这一问(回执契约见
+  // task-continue-options.ts 的 onInputSettled)。
+  const settled: string[] = [];
+  const passed = await continueTask("team-offline", "/compact", { onInputSettled: (acceptance) => { settled.push(acceptance); } });
   assert.equal(passed, false, "上层同样要返回 false(跟抢不到单飞锁一个口径)");
-  assert.equal(delivered, 0, "一个字都没送出去时,绝不能记账成已送达");
+  assert.deepEqual(settled, [], "一个字都没送出去时,绝不能记账成已送达");
 
   // 普通消息不受影响:它会把调度台开起来(这里没有真 CLI,能开到哪一步不重要 ——
   // 要钉的是「拒收只针对原生命令」,别把整条投递路径一起判死)。

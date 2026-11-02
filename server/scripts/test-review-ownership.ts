@@ -248,7 +248,8 @@ try {
   const queued = (await messages(racing.taskId)).find((message) => message.origin?.startsWith("review-answer:"))!;
   let delivered = false;
   assert.equal(await continueTask(racing.taskId, queued.text, { ...deliveryOptions(queued), wakeGuard: monitorWakeGuard(queued),
-    onDelivered: async () => {
+    onInputSettled: async (acceptance) => {
+      if (acceptance !== "accepted") return;
       delivered = true;
       await db.update(schema.scheduledMessages).set({ status: "sent", deliveringSince: null }).where(eq(schema.scheduledMessages.id, queued.id));
     },

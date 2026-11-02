@@ -31,6 +31,16 @@ try {
     turnIdentity,
     at, until, freeTask, runRow, roundOf, reviewerSessions, restarted, finish,
   } = await startHarness();
+  /**
+   * 压根没起跑的那几条:交接之后的三档裁决一档都不许来。记下来再断言,而不是在回调里 `assert.fail`
+   * —— 裁决出口的异常会被 `continueWhenIdle` 接住记日志,在那里抛等于什么都没钉。
+   */
+  const stray: string[] = [];
+  const neverStarted = (why: string) => ({
+    onAccepted: () => { stray.push(`收下：${why}`); },
+    onRefused: () => { stray.push(`拒收：${why}`); },
+    onUnconfirmed: () => { stray.push(`说不清：${why}`); },
+  });
 
   // ── ㉘ 交付凭据是权威:已经送到的那一份不许再排一次 ───────────────────────────
   // 第 1 轮审查问题 1:清意图那一笔**失败**时(`settled` 刻意不因此卡住,见那里的注释),库里那份
@@ -93,7 +103,7 @@ try {
     let rival: ReturnType<typeof claimOwnTurn> = null;
     continueWhenIdle(id, "这一轮的任务书", { system: "run", sideTurn: true },
       (message, failure) => { seen.push({ failure, message }); },
-      () => assert.fail("锁已经不在手上了，一个字都不该送出去"),
+      neverStarted("锁已经不在手上了，一个字都不该送出去"),
       async () => {
         // 外层此刻已经占到锁(排到队头那一瞬同步占的)。放掉它,让另一回合合法占上。
         const outer = turnIdentity(id)!;
@@ -113,9 +123,10 @@ try {
     const backoff: string[] = [];
     continueWhenIdle(id, "这一轮的任务书", {
       system: "run", sideTurn: true, wakeGuard: async () => "这个任务此刻不该被叫醒",
-    }, (_message, failure) => { backoff.push(failure); }, () => assert.fail("退避也不该送出去"));
+    }, (_message, failure) => { backoff.push(failure); }, neverStarted("退避也不该送出去"));
     await until("退避那一笔也有了结局", () => backoff.length > 0);
     assert.equal(backoff[0], "not-delivered", "退避不许蹭上「瞬时、可重排」那一档");
+    assert.deepEqual(stray, [], "没起跑的投递不该走到任何一档交接裁决");
     console.log("✓ ㉙ 内层抢占是瞬时的：确证没送出去的那一种要重排，退避照旧落终态");
   }
 
