@@ -151,6 +151,7 @@ try {
 
   for (const mode of ["preset", "legacy", "free", "accepted_merge"] as const) {
     const unknown = await open(mode);
+    await unknown.releaseResult();
     await db.update(tasks).set({ status: "paused", waitOwnership: null, question: "Unknown pre-upgrade live question" })
       .where(eq(tasks.id, unknown.ownerTaskId));
     await unknown.settle(true);
@@ -162,6 +163,7 @@ try {
 
   for (const mode of ["preset", "legacy", "free", "accepted_merge"] as const) {
     const unknown = await open(mode);
+    await unknown.releaseResult();
     const previous = await row(unknown.ownerTaskId);
     await db.update(tasks).set({ status: "paused", waitOwnership: null, resumePrompt: "Unknown pre-upgrade checkpoint" })
       .where(eq(tasks.id, unknown.ownerTaskId));
@@ -176,6 +178,7 @@ try {
 
   for (const mode of ["preset", "legacy", "free", "accepted_merge"] as const) {
     const review = await open(mode);
+    await review.releaseResult();
     const previous = await row(review.ownerTaskId);
     await db.update(schema.regressionEvidence).set({ continuation: { phase: "waiting" } })
       .where(eq(schema.regressionEvidence.directory, review.directory));

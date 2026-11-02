@@ -13,6 +13,7 @@ const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
 const { reviewRoundDir } = await import("../src/review-evidence.js");
 const { handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
 const { handleTaskSettlement } = await import("../src/review.js");
+const { stopMonitor } = await import("../src/monitor-stop.js");
 
 export type ReviewMode = "free" | "accepted_merge" | "preset" | "legacy";
 
@@ -78,7 +79,16 @@ export async function setupRegressionReviews() {
     const settle = (turnOk: boolean) => free
       ? handleFreeWorkflowSettlement(taskId, "done", false, turnOk, "reviewer")
       : handleTaskSettlement(ownerTaskId, turnOk ? "done" : "failed", false, turnOk);
-    return { mode, taskId, ownerTaskId, round, runId, roundId, directory, monitor, basis, stage, state, conclusion, settle };
+    // 「这一轮的哨兵结果我不要了」。上面那条验证依据哨兵一建出来就让这一轮**欠着一份结果**
+    // (结局已写定、结果还排在待发送托盘里),而「名下还欠着结果就不许结算」是自由审查那一侧
+    // 独立的一道保护(review-continuation 的 roundOwesResult,第 3 轮自由审查 F2)。想单独观察
+    // 别的结算判据(比如「未知归属的等待挡不挡得住」)就得先把它了结,否则看到的永远是这一条。
+    // 走产品自己那条放弃路径,不手改库:它对已经结束的哨兵正是「撤掉『必须先收下它』这条放行
+    // 条件」,语义正好,而且幂等。preset/legacy 不受这条保护约束(它们的证据目录形状压根匹配不
+    // 上轮次归属),调了也无害。
+    const releaseResult = async () => { await stopMonitor(monitor.id, "这一轮不再等它的结果"); };
+    return { mode, taskId, ownerTaskId, round, runId, roundId, directory, monitor, basis, stage, state, conclusion,
+      settle, releaseResult };
   };
   return { ...fixture, open };
 }
