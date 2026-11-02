@@ -9,7 +9,11 @@
 .studio-aux-caret { color:var(--faint); }
 .studio-tool-divider { width:1px; height:14px; flex:0 0 1px; margin:0 5px; background:var(--line); }
 .studio-template-tool { margin-left:auto; }
-.studio-mode-tabs { display:flex; align-items:center; gap:2px; }
+/* 允许折行:这一栏的格数不固定(`MODES` 三格 + 聊天 / 助手两个外挂入口),按钮本身
+   `white-space:nowrap`、不能压缩,窄屏上一旦摆不下就整条捅出容器 —— 320px 下实测
+   258 > 247,最后那格「助手」被裁在视口外且页面并不横向滚动,等于点不到。外层
+   `.studio-accessories` 本来就是 wrap,这里跟上同一套办法。 */
+.studio-mode-tabs { display:flex; flex-wrap:wrap; align-items:center; gap:2px; }
 .studio-mode-tabs > button { display:inline-flex; height:30px; align-items:center; gap:6px; border:0; border-radius:7px; padding:0 9px; background:transparent; color:var(--faint); font-size:11px; white-space:nowrap; }
 .studio-mode-tabs > button:hover { background:var(--raised); color:var(--muted); }
 .studio-mode-tabs > button[aria-selected="true"] { background:var(--raised); color:var(--ink); box-shadow:inset 0 0 0 1px color-mix(in lch,var(--line2) 70%,transparent); font-weight:550; }

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { markFixtureOnboarded } from "./fixture-onboarding.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-assistant-browser-"));
 const primaryRepo = join(stage, "primary");
@@ -23,6 +24,7 @@ const { setInstanceMode } = await import("../src/auth/mode.js");
 
 await ensureSchema();
 await setInstanceMode("single", stage);
+await markFixtureOnboarded();
 
 const timestamp = new Date().toISOString();
 const activeTaskId = "authactive01";

@@ -170,7 +170,10 @@ try {
   assert.equal(await objective.count(), 1, "合并后只保留新版目标输入框");
   assert.equal(await page.locator(".studio-card").count(), 1);
   assert.equal(await modeTabs.count(), 1, "聊天与任务模式共用新版内联模式栏");
-  assert.equal(await modeTabs.getByRole("tab").count(), 4);
+  // 模式栏 = `MODES` 那三格 + 外挂的两个入口(`extraModeTabs`:聊天、助手)。按**名字**钉
+  // 而不是数个数:2026-09-09 加「助手」那一刀把数字从 4 变成 5,而「4 不等于 5」说不出
+  // 是多了谁还是少了谁 —— 这条用例要盯的本来就是「聊天入口跟任务模式并排在同一栏里」。
+  assert.deepEqual(await modeTabs.getByRole("tab").allInnerTexts(), ["单任务", "团队", "讨论", "聊天", "助手"]);
   for (const name of ["团队", "讨论", "单任务"]) {
     await modeTabs.getByRole("tab", { name, exact: true }).click();
     assert.equal(await objective.inputValue(), "切换聊天后，这份任务草稿仍然保留。");
@@ -205,8 +208,11 @@ try {
   await input.waitFor();
   await page.getByRole("button", { name: "单任务", exact: true }).click();
   assert.equal(await objective.inputValue(), "切换聊天后，这份任务草稿仍然保留。");
-  await page.locator(".composer-seed-attachment").getByText("merge-draft.txt", { exact: true }).waitFor();
-  assert.equal(await page.locator(".composer-seed-attachment").count(), 1, "聊天往返保留附件且不重复");
+  // 种子附件与上传附件在 2026-09-08(ec832dcf「新建任务框草稿暂存」)合并成了同一列表,
+  // `SeedAttachmentList` 随之删掉 —— 往返之后要在**同一个** `.task-upload-chip` 列表里
+  // 原样找到它,`.composer-seed-attachment` 这一档前端已经不存在了。
+  await page.locator(".task-upload-chip").getByText("merge-draft.txt", { exact: true }).waitFor();
+  assert.equal(await page.locator(".task-upload-chip").count(), 1, "聊天往返保留附件且不重复");
   await chatTab.click();
   await input.waitFor();
   const currentRoomId = await page.evaluate(() => localStorage.getItem("ash:chat:chat-demo"));
