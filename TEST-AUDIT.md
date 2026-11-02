@@ -18,7 +18,7 @@
 
 **最要紧的一条**:门禁第 ① 步里的 #267 是稳定红,而 `scripts/accept-test.mjs` 在第一个失败步骤上 `process.exit` —— 于是第 ② 步「前端全量回归」**一条都不会跑**。这不是巧合性的红,是「谁也没见过完整测试健康面貌」的机制性原因。配合「门禁范围之外有一整片无人看管的测试」(38 条稳定红里 31 条在范围外,其中 3 条已红约六周),两者叠加解释了本次普查为什么必要。
 
-**三条真缺陷**(产品/测试违反了被钉死的不变量):#397 浏览器授权窗口被插了 `await`、#208 代次助手被裸 `.set` 绕过、#481 一条测试会 SIGKILL 掉调用者的整个进程组。
+**七条真缺陷**(产品/测试违反了被钉死的不变量):#397 浏览器授权窗口被插了 `await`、#208 代次助手被裸 `.set` 绕过、#481 一条测试会 SIGKILL 掉调用者的整个进程组,以及 #156/#157/#371/#491 这一族 —— 原生命令那条路不产出「启动回执」,于是接口回 409 说「尚未启动，请稍后重试」,而回合其实已经跑完了(机制见 T2,三处独立证据)。另有 7 条「待查」:失败形态无法用「测试陈旧」解释,但还没定位到机制。
 
 **两条系统性问题**(不是单条红):源码文本扫描型测试与「单文件 700 行就拆」的硬规则正面冲突(T11,两条独立实例);扫宿主进程表的测试要求「测试窗口内本机没有其它同属主新进程」,这在任何有人在用的机器上都不成立(T12)。
 
@@ -218,11 +218,15 @@ spawn("sh", ["-c", `${leaf.cmd}\n__rc=$?; exit $__rc`], { detached: true, ... })
 | 85 | ✓ | `test-assistant-entry.mjs` | 稳 (红→红) | 23s | 契约过时 | 测试末笔 95d95489(09-09) | T6 |
 | 122 | ✓ | `test-branch-acceptance.mjs` | 稳 (红→红) | 78s | 契约过时 | 测试末笔 af0f7437(09-08) | T6 |
 | 267 | ✓ | `run-accept-gate-tests.mjs` | 稳 (红→红) | 93s | 契约过时 | ae69818f(10-26) ↔ 80a8a2c5/4441e44a/bb1aa507(10-27) | T1 |
-| 284 | ✓ | `test-review-wait-storage.ts` | 稳 (红→红) | 11s | 待查 | 6bde853c(10-24) | T2 |
+| 284 | ✓ | `test-review-wait-storage.ts` | 稳 (红→红) | 11s | 待查 | 6bde853c(10-24) | T2b |
 | 281 | ✓ | `test-review-ownership.ts` | 稳 (红→红) | 14s | 已有主 | 任务 Wv2NXsDKnFgC | — |
+| 156 |  | `test-cli-command-startup.ts` | 稳 (红→红) | 1s | 真缺陷 | queue-seat.ts:282 + task-start-receipt.ts:22 + task-run.ts:244 | T2 |
+| 157 |  | `test-cli-plan-scheduling.ts` | 稳 (红→红) | 2s | 真缺陷 | 同 #156 | T2 |
 | 208 |  | `test-monitor-complete-gate.ts` | 稳 (红→红) | 4s | 真缺陷 | review-continuation.ts | T4 |
+| 371 |  | `test-native-command-turn.ts` | 稳 (红→红) | 1s | 真缺陷 | 同 #156 | T2 |
 | 397 |  | `test-browser-grant-timing.ts` | 稳 (红→红) | 1s | 真缺陷 | f716e83e(10-30) | T3 |
 | 481 |  | `test-service-ports-script.ts` | 闪 (红→绿) | 18s | 真缺陷 | test-service-ports-script.ts:75-76 + test-service-ports-fixtures.ts:85 | T13 |
+| 491 |  | `test-multi-user-run.ts` | 稳 (红→红) | 3s | 真缺陷 | 同 #156 | T2 |
 | 257 |  | `test-branch-worktree-state.ts` | 稳 (红→红) | 2s | 契约过时 | 6bb6bdab(10-23) | T7 |
 | 258 |  | `test-base-update-recovery.ts` | 稳 (红→红) | 35s | 契约过时 | 6bb6bdab(10-23) | T7 |
 | 261 |  | `test-branch-plan-creation.ts` | 稳 (红→红) | 2s | 契约过时 | 6bb6bdab(10-23) | T7 |
@@ -239,16 +243,12 @@ spawn("sh", ["-c", `${leaf.cmd}\n__rc=$?; exit $__rc`], { detached: true, ... })
 | 571 |  | `test-git-workbench-review-fixes.mjs` | 稳 (红→红) | 19s | 契约过时 | abf768ff(09-17) | T17 |
 | 574 |  | `verify-git-workbench-refresh-paths.mjs` | 稳 (红→红) | 34s | 契约过时 | abf768ff(09-17) | T17 |
 | 576 |  | `verify-git-workbench-design.mjs` | 稳 (红→红) | 17s | 契约过时 | abf768ff(09-17) | T17 |
-| 156 |  | `test-cli-command-startup.ts` | 稳 (红→红) | 1s | 待查 | 候选 17038491(10-24)/f27f1648(10-31) | T2 |
-| 157 |  | `test-cli-plan-scheduling.ts` | 稳 (红→红) | 2s | 待查 | 同上 | T2 |
 | 180 |  | `test-monitor-delivery-batch.ts` | 稳 (红→红) | 53s | 待查 | b6f37590(10-24) | T5 |
 | 203 |  | `test-monitor-races.ts` | 稳 (红→红) | 8s | 待查 | e54376dd(10-24) | T5 |
 | 322 |  | `test-handoff.ts` | 稳 (红→红) | 6s | 待查 | 测试末笔 8986a12c(10-17) | T8 |
-| 371 |  | `test-native-command-turn.ts` | 稳 (红→红) | 1s | 待查 | 同上;测试末笔 cbd219bb(08-21) | T2 |
 | 406 |  | `test-holder-scan.ts` | 稳 (红→红) | 14s | 待查 | — | T19 |
 | 480 |  | `test-service-ports.ts` | 稳 (红→红) | 18s | 待查 | — | T18 |
 | 482 |  | `test-terminal-capacity.ts` | 稳 (红→红) | 13s | 待查 | — | T18 |
-| 491 |  | `test-multi-user-run.ts` | 稳 (红→红) | 3s | 待查 | 同 #156 族 | T2 |
 | 503 |  | `test-team-turn-artifacts.ts` | 稳 (红→红) | 1s | 待查 | server/src/team/lead-status.ts:46 | T14 |
 | 195 |  | `test-monitor-end-condition.ts` | 闪 (红→绿) | 8s | 环境问题 | 测试自陈 | T9 |
 | 475 |  | `test-project-commands.ts` | 稳 (红→红) | 6s | 环境问题 | 台子假设:测试窗口内本机不得有其它同属主新进程 | T12 |
@@ -288,18 +288,18 @@ spawn("sh", ["-c", `${leaf.cmd}\n__rc=$?; exit $__rc`], { detached: true, ... })
 - 日志:`.audit/logs/281-server-test-review-ownership.log`(6.5 KB)
 
 **#284 `server: test-review-wait-storage.ts`** — 待查・门禁内・稳定红
-- 归因:等待所有权落库后读回 pending 得 undefined(期望 false),疑似同一笔 review 所有权改造留下的字段形状缺口,与 #281 同族。
-- 责任笔:6bde853c(10-24)　建议单:T2
+- 归因:等待所有权落库后读回 `pending` 得 `undefined`(期望 `false`)。**与 #156 那一族无关**(它不走启动回执那条路),疑似 10-24 那轮 review 所有权改造留下的字段形状缺口,与 #281 同族。
+- 责任笔:6bde853c(10-24)　建议单:T2b
 - 日志:`.audit/logs/284-server-test-review-wait-storage.log`(1.9 KB)
 
-**#156 `server: test-cli-command-startup.ts`** — 待查・稳定红
-- 归因:首次 POST /tasks/:id/run 就 409 而非 202(全新任务、干净库),嫌疑在 preparePendingCheckpointStart 或回合占位口径。
-- 责任笔:候选 17038491(10-24)/f27f1648(10-31)　建议单:T2
+**#156 `server: test-cli-command-startup.ts`** — 真缺陷・稳定红
+- 归因:全新任务、干净库,**首次** POST /tasks/:id/run 就 409 而非 202。机制已定位:启动回执缺失:409 来自 `queue-seat.ts:282`「任务未通过启动检查，尚未启动，请稍后重试」,而那一句**只在 `waitForStartReceipt` 解析为 false 时**发出;`task-start-receipt.ts:22` 的回执只有在 `adoptRun(handle)` → `acknowledgeStartReceipt` 在起跑作用域内跑过才算有 —— 也就是**只有真 agent handle 被消费循环接手**才算。原生命令(`/status` 这类)在 `task-run.ts` 走到 `trackRun`(:244)之前就收口了,于是回合确实跑了、也确实按预期落了 failed,HTTP 那一侧却回 409 说「尚未启动」。日志里没有 `[ash] 任务 … 启动异常`,证明 `start()` 没抛,是**正常返回但没人发回执**。 用户可感知后果:在界面上给任务发一条带参数的 `/status`,看到的是「任务未通过启动检查，尚未启动，请稍后重试」,而不是真正的原因「/status 不接受参数」。本轮单独复跑一次原样复现(409 at :97,首次 run)。
+- 责任笔:queue-seat.ts:282 + task-start-receipt.ts:22 + task-run.ts:244　建议单:T2
 - 日志:`.audit/logs/156-server-test-cli-command-startup.log`(0.6 KB)
 
-**#157 `server: test-cli-plan-scheduling.ts`** — 待查・稳定红
-- 归因:任务停在 running 没到 done,与 #156 同族:占位没还回来。
-- 责任笔:同上　建议单:T2
+**#157 `server: test-cli-plan-scheduling.ts`** — 真缺陷・稳定红
+- 归因:任务停在 `running` 没到 `done` —— 同一条路的另一面:没发回执那一侧也没把占位还回来。
+- 责任笔:同 #156　建议单:T2
 - 日志:`.audit/logs/157-server-test-cli-plan-scheduling.log`(0.8 KB)
 
 **#180 `server: test-monitor-delivery-batch.ts`** — 待查・稳定红
@@ -357,9 +357,9 @@ spawn("sh", ["-c", `${leaf.cmd}\n__rc=$?; exit $__rc`], { detached: true, ... })
 - 责任笔:f19395a6(10-24)　建议单:T8
 - 日志:`.audit/logs/324-server-test-handoff-auth.log`(0.5 KB)
 
-**#371 `server: test-native-command-turn.ts`** — 待查・稳定红
-- 归因:「这一回合确实由本次调用接管了」false:原生命令插话没接管回合。测试已 2.5 个月未动,也可能是口径有意改过。
-- 责任笔:同上;测试末笔 cbd219bb(08-21)　建议单:T2
+**#371 `server: test-native-command-turn.ts`** — 真缺陷・稳定红
+- 归因:「这一回合确实由本次调用接管了(错误落在时间线上,不是「没送出去」)」false —— **独立第三处证据**:原生命令这条路没有「接管回合」这个事实,正是因为它不产出启动回执。
+- 责任笔:同 #156　建议单:T2
 - 日志:`.audit/logs/371-server-test-native-command-turn.log`(0.5 KB)
 
 **#373 `server: test-cli-overrides.ts`** — 契约过时・稳定红
@@ -407,9 +407,9 @@ spawn("sh", ["-c", `${leaf.cmd}\n__rc=$?; exit $__rc`], { detached: true, ... })
 - 责任笔:时序　建议单:T12
 - 日志:`.audit/logs/484-server-test-launch-abandon.log`(0.9 KB)
 
-**#491 `server: test-multi-user-run.ts`** — 待查・稳定红
-- 归因:409「任务未通过启动检查，尚未启动，请稍后重试」—— 与 #156 的 409 同一道闸,是 T2 的第二处独立证据。
-- 责任笔:同 #156 族　建议单:T2
+**#491 `server: test-multi-user-run.ts`** — 真缺陷・稳定红
+- 归因:409「任务未通过启动检查，尚未启动，请稍后重试」—— 与 #156 命中同一行(`queue-seat.ts:282`),第二处独立证据。
+- 责任笔:同 #156　建议单:T2
 - 日志:`.audit/logs/491-server-test-multi-user-run.log`(0.7 KB)
 
 **#503 `server: test-team-turn-artifacts.ts`** — 待查・稳定红
@@ -491,10 +491,15 @@ spawn("sh", ["-c", `${leaf.cmd}\n__rc=$?; exit $__rc`], { detached: true, ... })
 - 范围:`server/scripts/test-monitor-delivery-batch.ts`(#180)、`test-monitor-races.ts`(#203);嫌疑笔 `b6f37590`、`e54376dd`(均 10-24,批量兼容待投递结果那一轮)
 - 两条症状:① 补偿结果等不到真的进入执行器 stdin;② 待投递结果让结算侧把任务判成「还有话要说」。需要先判定是产品回归还是台子假设过时。
 
-**T2 回合占位/启动检查闸:全新任务首次 `run` 就被拦**
-- 范围:`server/src/task-run-routes.ts` 的 409 分支链、`preparePendingCheckpointStart`(`17038491`,10-24)、回合占位放锁核代次(`f27f1648`,10-31);涉及 `server/src/review-wait-*`(#284)
-- 四处独立证据:#156 全新任务、干净库,**首次** `POST /tasks/:id/run` 就 409 而非 202;#491 同样被 409「任务未通过启动检查，尚未启动，请稍后重试」拦下;#157 任务停在 `running` 没到 `done`(占位没还回来);#371 原生命令插话没接管回合。#284「等待所有权落库后读回 `pending` 得 `undefined`(期望 `false`)」疑为同一轮改造的字段形状缺口。
-- 建议先派**一个诊断任务**定位是哪一道闸、再决定拆几张修复单——这几条的责任笔候选不唯一,现在归因只能到「族」。
+**T2 原生命令那条路不产出「启动回执」,于是 HTTP 回 409 说「尚未启动」(机制已定位,不必再派诊断)**
+- 范围:`server/src/queue-seat.ts:282`、`server/src/task-start-receipt.ts:22`、`server/src/task-run.ts`(走到 `trackRun` :244 之前的收口路径)、`server/src/runs.ts` 的 `adoptRun`
+- **机制**:那句 409 只在 `waitForStartReceipt` 解析为 `false` 时发出;而回执只有在 `adoptRun(handle)` → `acknowledgeStartReceipt` 于起跑作用域内跑过才算有 —— 也就是**只有真 agent handle 被消费循环接手**才算。原生命令(`/status` 这类)在 `task-run.ts` 走到 `trackRun` 之前就收口了,于是回合确实跑了、也确实按预期落了 `failed`,HTTP 那一侧却回 409。日志里没有 `[ash] 任务 … 启动异常`,证明 `start()` 没抛 —— 是**正常返回但没人发回执**,不是启动失败。
+- **三处独立证据**:#156(全新任务、干净库,首次 `POST /run` 就 409;本轮单独复跑原样复现)、#491(命中同一行 409)、#371(「这一回合确实由本次调用接管了」false —— 正是因为没有回执这个事实)。#157 是同一条路的另一面:任务停在 `running` 没把占位还回来。
+- **用户可感知后果**:在界面上给任务发一条带参数的 `/status`,看到的是「任务未通过启动检查，尚未启动，请稍后重试」,而真正的原因是「/status 不接受参数」。提示把人引向「重试」,而重试永远不会成功。
+- 要拍的板是修哪一侧:① 原生命令这条路在收口前也发一次回执(倾向这条,因为它确实起跑了);② 或者把 409 的条件改成「只有真的没起跑才算」。
+
+**T2b `test-review-wait-storage` 的字段形状(#284,与 T2 无关)**
+- 等待所有权落库后读回 `pending` 得 `undefined`(期望 `false`)。它不走启动回执那条路,疑似 `6bde853c`(10-24)那轮 review 所有权改造留下的字段形状缺口,与 #281(已有主 `Wv2NXsDKnFgC`)同族 —— 先确认是不是同一个主在修。
 
 ### P2 — 测试契约过时(红绿信号失真)
 
