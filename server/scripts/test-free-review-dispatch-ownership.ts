@@ -5,7 +5,7 @@
 // **重跑**(`reopenFailedFreeReview` 把它放回 reviewing 并换一个新的证据代次),于是「这一行」会
 // 先后代表同一轮的好几次派发 —— 认领、意图、资源处置、失败收尾、孤儿收尾各自都得分得清是哪一次。
 //
-// 十六条用例:
+// 十四条用例:
 //  ⑭ **认领 / 清意图 / 失败收尾按代次隔离** → 上一次重跑的收尾碰不到新一次(第 3 轮审查 F2);
 //  ⑮ **旧收尾还没放手时点「继续本轮审查」** → 新一次照样派得出去,不被静静吞掉(同上);
 //  ⑯ **认领之后现读抛异常** → 证还回去、意图留着,健康之后补办得了(第 3 轮审查 F3);
@@ -20,9 +20,10 @@
 //  ㉔ **失败收尾没有无身份兜底** → 两种身份各自可核,说不清自己是哪一次就一个字都不写(第 2 轮审查问题 1);
 //  ㉕ **准备责任是持久的** → 重启后「死在准备」照补投走,不按孤儿收尸(第 2 轮审查问题 2);
 //  ㉖ **孤儿结算按同一份持久责任 CAS** → 读完没人管、下笔前有人接手的,那一笔自己不成立(同上,复现 B);
-//  ㉗ **真派审入口公开这一轮的同一笔就带着责任** → 一次普通对账收不走刚公开、还在准备的那一轮(同上,复现 A);
-//  ㉘ **交付凭据是权威** → 已经送到的那一份既不许重排,也不许被次数 CAS 放过(第 1 轮审查问题 1);
-//  ㉙ **内层抢占是瞬时的** → 锁在交接途中被合法接走时要重排,退避照旧落终态(第 1 轮审查问题 2)。
+//  ㉗ **真派审入口公开这一轮的同一笔就带着责任** → 一次普通对账收不走刚公开、还在准备的那一轮(同上,复现 A)。
+//
+// **投递结果**那一半(「这一份送出去了没有、没送出去是哪一种」,㉘㉙)在
+// `test-free-review-dispatch-delivery.ts`:它问的不是「这是哪一次」,台子同一个。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
 // (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。
@@ -43,11 +44,11 @@ try {
     claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound, preparingReviewDispatch,
     releaseReviewDispatchClaim, reviewDispatchArmed, reviewDispatchOwned, supersedeReviewDispatch,
     failReviewStart, redeliverReviewRound, reopenFailedFreeReview, reviewOrphanStillUnowned,
-    reconcileFreeReviews, claimOwnTurn, claimTurn, continueWhenIdle, forceReleaseTurn,
-    freeReviewEvidenceDir, launchReviewRound, releaseTurn, turnIdentity,
+    reconcileFreeReviews, claimTurn, forceReleaseTurn, freeReviewEvidenceDir, launchReviewRound,
+    turnIdentity,
     completeRegressionSettlement, regressionSettlementConclusion,
-    at, timeline, until, armedTask, freeTask, runOf, runRow, roundOf, reviewerSessions,
-    holdLifecycle, restarted, finish,
+    at, timeline, until, armedTask, runOf, runRow, roundOf, reviewerSessions, holdLifecycle,
+    restarted, finish,
   } = await startHarness();
 
   // ── ⑭ 认领 / 清意图 / 失败收尾按代次隔离 ──────────────────────────────────────
@@ -625,93 +626,6 @@ try {
     console.log("✓ ㉗ 真派审入口：公开这一轮的同一笔就带着责任，对账收不走还在准备的那一轮");
   }
 
-
-  // ── ㉘ 交付凭据是权威:已经送到的那一份不许再排一次 ───────────────────────────
-  // 第 1 轮审查问题 1:清意图那一笔**失败**时(`settled` 刻意不因此卡住,见那里的注释),库里那份
-  // **已经交付过**的意图原样留着。于是一份慢恢复的次数 CAS 会从 2 正常地走到 3 —— 它根本不会
-  // 输,接着就对一条**审查者已经读过**的任务书再排一份完整的(实测:两条 reviewer 会话、两次壳
-  // 桩调用,第一份审查登记的问题还没等到答复)。次数证不了「这一份没送过」,凭据才是权威。
-  //
-  // 两道都要钉,顺序是**先钉落库那一笔**:只测早筛的话,把 WHERE 里那一条删掉照样全绿 ——
-  // 而幂等恰恰只能由那一笔自己担保(早筛问完到下笔之间隔着工作区、MCP 预检、任务书重算)。
-  {
-    const id = "free-dispatch-receipt";
-    const runId = await restarted(id, 2);
-    const directory = freeReviewEvidenceDir(id, runId, 1);
-    const generation = (await roundOf(runId)).dispatch!.generation!;
-    const evidence = (await db.select().from(regressionEvidence)
-      .where(eq(regressionEvidence.directory, directory))).at(0)!;
-    // 正常投递流程落下的那份凭据(`commitReviewTurnDelivery` 紧挨着 spawn 之后写的那一笔):
-    // 目录 + 代次 + 这一轮的目标身份。
-    await db.update(tasks).set({ waitOwnership: { deliveredReview: {
-      directory, generation, identity: evidence.targetIdentity!, confirmedAt: at,
-    } } }).where(eq(tasks.id, id));
-
-    // ① **落库那一笔**:身份、代次、版本全对,只差「这一份已经送过了」——它就该输在 WHERE 上。
-    const outcome = await dispatchReviewRound({
-      taskId: id, run: { id: runId, currentRound: 1 }, label: "自由工作流第 1 轮",
-      message: "已经送达过的任务书", generation, attempts: 2, since: at,
-      opts: {} as never,
-      onFail: async () => assert.fail("送到过的那一份只能让出，不该落终态"),
-    });
-    assert.equal(outcome, "handed-off", "已经交付过的那一份只能让出");
-    assert.equal((await roundOf(runId)).dispatch?.attempts, 2,
-      "**次数一位都不许往前走** —— 它正常 CAS 到 3 就是那条重复交付的入口");
-    assert.equal(await reviewerSessions(id), 0, "更不许把同一份任务书送第二遍");
-    assert.equal(reviewDispatchArmed(runId, 1), false, "让出的时候认领证要还回去");
-
-    // ② **早筛**:补投那一侧现读凭据,结清意图、不重投。它只收 taskId —— 调用方那份 task 快照
-    //    是好几次 await 之前读的,签名收窄之后拿它授权这件事**类型上就办不到**了。
-    assert.equal(await redeliverReviewRound(id, await runRow(runId), await roundOf(runId)), "hold",
-      "送到过的这一轮既不该补投,也不该就地收尸(它此刻很可能正跑着)");
-    assert.equal((await roundOf(runId)).dispatch, null, "那份没清掉的意图由这一次结清");
-    assert.equal(await reviewerSessions(id), 0, "还是一个字都没送出去");
-    console.log("✓ ㉘ 交付凭据是权威：已经送到的那一份既不许重排，也不许被次数 CAS 放过");
-  }
-
-  // ── ㉙ 内层抢占是瞬时的:确证没送出去的那一种要重排 ──────────────────────────
-  // 第 1 轮审查问题 2:外层在释放点上占到了锁,**交接到内层之间**还隔着所有权闸、冻结复查、
-  // 起跑预检 —— 这把锁完全可以在那期间被合法放开(人工 reclaim / 幽灵锁巡检)、另一回合占上。
-  // 内层 `reclaimTurn` 拒绝接管恰恰是对的,但它返回的 null 过去被压成一个光秃秃的 false,再被
-  // 压成 `not-delivered` —— 实测:POST 仍回 201,而这一轮 run=failed / round=error,只尝试过
-  // 1 次,时间线写的是「回合被其它执行抢占，消息未能投递」却再也不会重排。
-  //
-  // 这里不伪造 `continueTask` 的返回值:用真的 `forceReleaseTurn`(人工放开与幽灵巡检走的同一
-  // 条路)按快照 seq 放掉外层那一把,再用真的 `claimOwnTurn` 让竞争者占上。注入点是所有权闸,
-  // 因为生产里那几个 await 正落在同一个位置。
-  {
-    const id = "free-dispatch-inner-preempt";
-    await freeTask(id);
-    await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, id));
-    const seen: Array<{ failure: string; message: string }> = [];
-    let rival: ReturnType<typeof claimOwnTurn> = null;
-    continueWhenIdle(id, "这一轮的任务书", { system: "run", sideTurn: true },
-      (message, failure) => { seen.push({ failure, message }); },
-      () => assert.fail("锁已经不在手上了，一个字都不该送出去"),
-      async () => {
-        // 外层此刻已经占到锁(排到队头那一瞬同步占的)。放掉它,让另一回合合法占上。
-        const outer = turnIdentity(id)!;
-        assert.ok(forceReleaseTurn({ taskId: id, seq: outer.seq }), "放开的得是外层那一把");
-        rival = claimOwnTurn(id, "single");
-        assert.ok(rival, "竞争者必须真占上，否则这条用例压根没复现");
-        return null;    // 所有权没换人:换的只是回合锁那一把
-      });
-    await until("这一笔投递有了结局", () => seen.length > 0);
-    assert.equal(seen[0]!.failure, "turn-taken",
-      "**锁被别的执行接走是瞬时的**：压成 not-delivered 就等于一次合法的锁交替打死一轮审查");
-    assert.equal(await reviewerSessions(id), 0, "确证没送出去：一条会话都不许起");
-    releaseTurn(id, rival!);
-
-    // 反向也要钉住:**不是所有 false 都该重排**。唤醒资格不成立是退避,重排只会原地再撞一遍
-    // 同一个拒绝理由 —— 它必须照旧按 `not-delivered` 上报,而不是蹭上瞬时那一档。
-    const backoff: string[] = [];
-    continueWhenIdle(id, "这一轮的任务书", {
-      system: "run", sideTurn: true, wakeGuard: async () => "这个任务此刻不该被叫醒",
-    }, (_message, failure) => { backoff.push(failure); }, () => assert.fail("退避也不该送出去"));
-    await until("退避那一笔也有了结局", () => backoff.length > 0);
-    assert.equal(backoff[0], "not-delivered", "退避不许蹭上「瞬时、可重排」那一档");
-    console.log("✓ ㉙ 内层抢占是瞬时的：确证没送出去的那一种要重排，退避照旧落终态");
-  }
 
   await finish(["free-dispatch-generation", "free-dispatch-reopen", "free-dispatch-claim-leak",
     "free-dispatch-settle-guard", "free-dispatch-fence", "free-dispatch-lifecycle",
