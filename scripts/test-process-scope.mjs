@@ -24,19 +24,25 @@ function waitFile(path, failurePath) {
 }
 
 export class TestProcessScope {
-  constructor(directory) {
+  constructor(directory, domain) {
     const owned = directory === undefined;
     this.children = [];
     this.directory = directory ?? mkdtempSync(join(tmpdir(), "ash-test-scope-"));
     try {
       if (owned) writeFileSync(join(this.directory, "started"), String(Date.now()), { flag: "wx" });
-      else {
+      else if (existsSync(this.directory)) {
         readFileSync(join(this.directory, "started"), "utf8");
         if (existsSync(join(this.directory, "domain.json"))) this.domain = JSON.parse(readFileSync(join(this.directory, "domain.json"), "utf8"));
       }
+      this.domain = domain ?? this.domain;
       scopes.add(this);
     } catch (error) {
-      if (owned) rmSync(this.directory, { recursive: true, force: true });
+      if (!owned && error.code === "ENOENT" && !existsSync(this.directory)) {
+        this.domain = domain ?? this.domain;
+        scopes.add(this);
+        return;
+      }
+      if (owned) rmSync(this.directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 });
       throw error;
     }
   }
@@ -53,20 +59,50 @@ export class TestProcessScope {
     const name = `Local\\ash-test-${randomUUID()}`;
     const owner = native.invoke(executable, ["identity", String(process.pid)]);
     const domain = { name, executable };
-    writeFileSync(join(this.directory, "domain.json"), JSON.stringify(domain), { flag: "wx" });
-    const holder = spawn(executable, ["hold", name, this.directory, String(process.pid), owner], {
-      stdio: "ignore", windowsHide: true,
-    });
-    holder.on("error", () => {});
-    if (!holder.pid) throw Object.assign(new Error("原生测试监督进程未启动"), { code: "EOWNERSHIP" });
     this.domain = domain;
-    this.holder = holder;
-    holder.unref();
-    try { waitFile(join(this.directory, "ready"), join(this.directory, "failed")); }
+    try {
+      const holder = spawn(executable, ["hold", name, this.directory, String(process.pid), owner], {
+        stdio: "ignore", windowsHide: true,
+      });
+      this.holder = holder;
+      holder.on("error", () => {});
+      if (!holder.pid) throw Object.assign(new Error("原生测试监督进程未启动"), { code: "EOWNERSHIP" });
+      holder.unref();
+      waitFile(join(this.directory, "ready"), join(this.directory, "failed"));
+      writeFileSync(join(this.directory, "domain.json"), JSON.stringify(domain), { flag: "wx" });
+    }
     catch (error) {
-      writeFileSync(join(this.directory, "release"), "");
-      if (existsSync(join(this.directory, "failed"))) this.domain = undefined;
+      try {
+        if (!existsSync(join(this.directory, "failed")) && this.holder?.pid
+          && this.holder.exitCode === null && this.holder.signalCode === null && !this.holder.kill()
+          && !existsSync(join(this.directory, "failed"))) {
+          throw Object.assign(new Error("无法终止未就绪的原生监督进程"), { code: "EOWNERSHIP" });
+        }
+        native.invoke(executable, ["stop", name]);
+        this.waitRetired();
+        rmSync(join(this.directory, "domain.json"), { force: true });
+        this.domain = undefined;
+      } catch (cleanupError) {
+        throw Object.assign(new AggregateError([error, cleanupError], "测试执行域初始化与回滚失败", { cause: error }), { code: error.code });
+      }
       throw error;
+    }
+  }
+
+  state() {
+    if (!this.domain) return { exists: false, processes: [] };
+    const state = JSON.parse(native.invoke(this.domain.executable, ["state", this.domain.name]));
+    if (typeof state.exists !== "boolean" || !Array.isArray(state.processes) || (!state.exists && state.processes.length)) {
+      throw Object.assign(new Error("原生测试执行域状态无效"), { code: "EOWNERSHIP" });
+    }
+    return state;
+  }
+
+  waitRetired() {
+    const deadline = Date.now() + 20_000;
+    while (this.state().exists) {
+      if (Date.now() >= deadline) throw Object.assign(new Error("原生测试执行域未退役"), { code: "EOWNERSHIP" });
+      Atomics.wait(sleeper, 0, 0, 10);
     }
   }
 
@@ -107,15 +143,17 @@ export class TestProcessScope {
   }
 
   async active() {
-    if (!this.domain || existsSync(join(this.directory, "closed"))) return [];
-    return JSON.parse(native.invoke(this.domain.executable, ["list", this.domain.name]));
+    return this.state().processes;
   }
 
   async stop() {
     this.sealed = true;
     const errors = [];
-    try { writeFileSync(join(this.directory, "stopped"), ""); } catch (error) { errors.push(error); }
-    if (this.domain && !existsSync(join(this.directory, "closed"))) {
+    if (existsSync(this.directory)) {
+      try { writeFileSync(join(this.directory, "stopped"), ""); }
+      catch (error) { if (error.code !== "ENOENT" || existsSync(this.directory)) errors.push(error); }
+    }
+    if (this.domain) {
       try { native.invoke(this.domain.executable, ["stop", this.domain.name]); } catch (error) { errors.push(error); }
     }
     if (!errors.length || this.children.length) {
@@ -133,14 +171,18 @@ export class TestProcessScope {
   }
 
   remove() {
-    if (this.domain && !existsSync(join(this.directory, "closed"))) {
-      const active = JSON.parse(native.invoke(this.domain.executable, ["list", this.domain.name]));
-      if (active.length) throw new Error("不能回收尚有活动进程的执行域");
-      writeFileSync(join(this.directory, "release"), "");
-      waitFile(join(this.directory, "closed"), join(this.directory, "failed"));
+    const state = this.state();
+    if (state.exists) {
+      if (state.processes.length) throw new Error("不能回收尚有活动进程的执行域");
+      native.invoke(this.domain.executable, ["stop", this.domain.name]);
+      this.waitRetired();
     }
-    rmSync(this.directory, { recursive: true, force: true });
-    for (const scope of scopes) if (scope.directory === this.directory) scopes.delete(scope);
+    rmSync(this.directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 });
+    for (const scope of scopes) if (scope.directory === this.directory) {
+      scope.domain = undefined;
+      scope.sealed = true;
+      scopes.delete(scope);
+    }
     cleanupFailures.delete(this.directory);
   }
 }
@@ -167,10 +209,14 @@ export function preservedPids(scope, scripts, capturedStreams, active) {
 
 export function disposeTestScopesSync() {
   if (!scopes.size) return;
-  const pending = [...new Set([...scopes].map((scope) => scope.directory))].filter((directory) => !cleanupFailures.has(directory));
+  const domains = new Map();
+  for (const scope of scopes) if (!domains.has(scope.directory) || scope.domain) domains.set(scope.directory, { directory: scope.directory, domain: scope.domain });
+  const pending = [...domains.values()]
+    .filter(({ directory }) => !cleanupFailures.has(directory));
   let processError;
   if (pending.length) {
-    const result = spawnSync(process.execPath, [cleanupPath, ...pending], {
+    const result = spawnSync(process.execPath, [cleanupPath], {
+      input: JSON.stringify(pending),
       encoding: "utf8", timeout: 120_000, killSignal: "SIGKILL", windowsHide: true,
       env: { ...process.env, ASH_TEST_PROCESS_SCOPE: "" },
     });
@@ -179,9 +225,20 @@ export function disposeTestScopesSync() {
         code: result.error?.code ?? "ETESTCLEANUP", result,
       });
     }
-    for (const directory of pending) {
-      if (existsSync(directory)) cleanupFailures.set(directory, processError ?? new Error(`测试执行域未退役: ${directory}`));
-      else for (const scope of scopes) if (scope.directory === directory) scopes.delete(scope);
+    const report = result.stdout?.split(/\r?\n/).find((line) => line.startsWith("ASH_TEST_SCOPE_CLEANUP="));
+    let retired = new Set();
+    try {
+      const directories = JSON.parse(report?.slice("ASH_TEST_SCOPE_CLEANUP=".length));
+      if (!Array.isArray(directories) || directories.some((directory) => typeof directory !== "string")) throw new Error("清理退役清单无效");
+      retired = new Set(directories);
+    } catch (error) { processError ??= new Error("测试执行域退出清理缺少有效退役清单", { cause: error }); }
+    for (const { directory } of pending) {
+      if (!retired.has(directory) || existsSync(directory)) cleanupFailures.set(directory, processError ?? new Error(`测试执行域未退役: ${directory}`));
+      else for (const scope of scopes) if (scope.directory === directory) {
+        scope.domain = undefined;
+        scope.sealed = true;
+        scopes.delete(scope);
+      }
     }
   }
   const errors = [...new Set([processError, ...cleanupFailures.values()].filter(Boolean))];

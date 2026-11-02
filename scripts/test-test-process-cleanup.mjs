@@ -47,15 +47,16 @@ try {
   let cleanups = 0;
   let disposals = 0;
   native.dispose = () => { disposals++; fs.rmSync(artifact, { force: true }); };
-  childProcess.spawnSync = (_command, args) => {
+  childProcess.spawnSync = (_command, _args, options) => {
     cleanups++;
+    const directories = JSON.parse(options.input).map((scope) => scope.directory);
     if (cleanups === 1) {
-      assert.deepEqual(args.slice(1), [failed.directory]);
+      assert.deepEqual(directories, [failed.directory]);
       return { status: 1, signal: null, stdout: "", stderr: "ORIGINAL_CLEANUP_FAILURE" };
     }
-    assert.ok(!args.includes(failed.directory));
-    for (const directory of args.slice(1)) fs.rmSync(directory, { recursive: true });
-    return { status: 0, signal: null, stdout: "", stderr: "" };
+    assert.ok(!directories.includes(failed.directory));
+    for (const directory of directories) fs.rmSync(directory, { recursive: true });
+    return { status: 0, signal: null, stdout: `ASH_TEST_SCOPE_CLEANUP=${JSON.stringify(directories)}\n`, stderr: "" };
   };
   syncBuiltinESMExports();
   let originalFailure;
@@ -80,6 +81,27 @@ try {
   assert.equal(disposals, 1);
   assert.equal(fs.existsSync(artifact), false);
   console.log("✓ 失败执行域不隐式重试/不删除原生工具,新执行域仍清理,全部退役后才回收编译产物");
+
+  const blocked = new TestProcessScope();
+  const retired = new TestProcessScope();
+  owned.push(blocked, retired);
+  retired.domain = { name: "retired-job", executable: "retired-controller" };
+  fs.rmSync(retired.directory, { recursive: true });
+  let mixedAttempts = 0;
+  childProcess.spawnSync = (_command, _args, options) => {
+    mixedAttempts++;
+    const pending = JSON.parse(options.input);
+    assert.equal(pending.find((scope) => scope.directory === retired.directory).domain.name, "retired-job");
+    return { status: 1, signal: null, stdout: `ASH_TEST_SCOPE_CLEANUP=${JSON.stringify([retired.directory])}\n`, stderr: "ONE_DOMAIN_FAILED" };
+  };
+  syncBuiltinESMExports();
+  assert.throws(() => disposeTestScopesSync(), /ONE_DOMAIN_FAILED/);
+  assert.equal(retired.domain, undefined);
+  assert.deepEqual(await retired.active(), []);
+  assert.throws(() => disposeTestScopesSync(), /ONE_DOMAIN_FAILED/);
+  assert.equal(mixedAttempts, 1);
+  blocked.remove();
+  console.log("✓ 多域清理按权威退役清单独立结算,其他域失败不把已退役且目录已删的域永久判失败");
 
   const initialization = new TestProcessScope();
   owned.push(initialization);

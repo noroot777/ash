@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, fstatSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TestProcessScope, delay, preservedPids } from "./test-process-scope.mjs";
@@ -78,7 +78,7 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
   finally {
     clearTimeout(timer);
     const cleanupScope = async () => {
-      if (!scope || !existsSync(scope.directory)) return;
+      if (!scope) return;
       try { await scope.stop(); scope.remove(); }
       catch (error) { cleanupErrors.push(error); }
     };
@@ -93,7 +93,7 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
       try { closeSync(descriptor); }
       catch (error) { cleanupErrors.push(error); }
     }
-    try { if (temporary) rmSync(temporary, { recursive: true, force: true }); }
+    try { if (temporary) rmSync(temporary, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 }); }
     catch (error) { cleanupErrors.push(error); }
   }
   if (expired) result = { ...result, error: Object.assign(new Error("测试执行超时"), { code: "ETIMEDOUT" }) };
@@ -111,6 +111,6 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
     });
   }
   return { ...result, ...captured, dispose: async () => {
-    if (scope && existsSync(scope.directory)) { await scope.stop(); scope.remove(); }
+    if (scope) { await scope.stop(); scope.remove(); }
   } };
 }

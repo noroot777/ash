@@ -100,6 +100,9 @@ public static class TestProcessNative {
     Enter(gate, true);
     try { stopped.Set(); Check(TerminateJobObject(job, 86)); }
     finally { gate.ReleaseMutex(); }
+    WaitEmpty(job);
+  }
+  static void WaitEmpty(IntPtr job) {
     var deadline = DateTime.UtcNow.AddSeconds(15);
     while (Active(job) != 0) {
       if (DateTime.UtcNow >= deadline) throw new Exception("Job has not reached ACTIVE_PROCESS_ZERO");
@@ -236,7 +239,8 @@ public static class TestProcessNative {
       using (var gate = new Mutex(false, name + "-gate"))
       using (var stopped = new EventWaitHandle(false, EventResetMode.ManualReset, name + "-stopped")) {
         File.WriteAllText(Path.Combine(directory, "ready"), "ready");
-        while (WaitForSingleObject(owner, 20) == 258 && !File.Exists(Path.Combine(directory, "release"))) {}
+        while (WaitForSingleObject(owner, 20) == 258 && !stopped.WaitOne(0)
+          && Directory.Exists(directory) && !File.Exists(Path.Combine(directory, "release"))) {}
         Stop(job, stopped, gate);
         File.WriteAllText(Path.Combine(directory, "closed"), "closed");
       }
@@ -250,11 +254,25 @@ public static class TestProcessNative {
         var process = Process(UInt32.Parse(args[1]), QueryProcess);
         try { Console.WriteLine(Born(process)); return 0; } finally { CloseHandle(process); }
       }
-      var job = Job(args[1]);
+      IntPtr job;
+      try { job = Job(args[1]); }
+      catch (Win32Exception error) {
+        if (error.NativeErrorCode != 2) throw;
+        if (args[0] == "state") { Console.WriteLine("{\"exists\":false,\"processes\":[]}"); return 0; }
+        if (args[0] == "stop") return 0;
+        throw;
+      }
       try {
+        if (args[0] == "state") { Console.WriteLine("{\"exists\":true,\"processes\":" + Rows(job) + "}"); return 0; }
+        if (args[0] == "stop") {
+          try {
+            using (var gate = Mutex.OpenExisting(args[1] + "-gate"))
+            using (var stopped = EventWaitHandle.OpenExisting(args[1] + "-stopped")) Stop(job, stopped, gate);
+          } catch (WaitHandleCannotBeOpenedException) { Check(TerminateJobObject(job, 86)); WaitEmpty(job); }
+          return 0;
+        }
         using (var gate = Mutex.OpenExisting(args[1] + "-gate"))
         using (var stopped = EventWaitHandle.OpenExisting(args[1] + "-stopped")) {
-          if (args[0] == "stop") { Stop(job, stopped, gate); return 0; }
           if (args[0] == "list") { Console.WriteLine(Rows(job)); return 0; }
           if (args[0] == "run") return Run(args, ref job, stopped, gate);
           if (args[0] == "inspect") {

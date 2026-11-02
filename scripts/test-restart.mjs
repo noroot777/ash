@@ -26,7 +26,7 @@ const PID_FILE = join(TMP, "server.pid");
 let serverPid = 0;
 
 function cleanup() {
-  try { cleanupTestResourcesSync([disposeTestScopesSync, () => rmSync(TMP, { recursive: true, force: true })]); }
+  try { cleanupTestResourcesSync([disposeTestScopesSync, () => rmSync(TMP, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 })]); }
   catch (error) { reportTestResourceError(error); process.exitCode ||= 1; }
 }
 process.on("exit", cleanup);

@@ -178,16 +178,15 @@ try {
           timeout = setTimeout(() => reject(new Error("监督进程崩溃后执行域仍存活")), 5000);
         })]);
       } finally { clearTimeout(timeout); }
-      await assert.rejects(() => crashed.active(), { code: "EOWNERSHIP" });
-      await assert.rejects(() => crashed.stop(), /测试执行域清理失败/);
+      assert.deepEqual(await crashed.active(), []);
+      await crashed.stop();
       await delay(2200);
       assert.equal(fs.existsSync(crashMarker), false);
     } finally {
       if (crashed.holder?.exitCode === null && crashed.holder?.signalCode === null) await crashed.stop();
-      crashed.domain = undefined;
       crashed.remove();
     }
-    console.log("✓ 监督进程崩溃时启动器不延长 Job 句柄寿命,内核终止未登记后代且清理明确失败");
+    console.log("✓ 监督进程崩溃时启动器不延长 Job 句柄寿命,内核终止未登记后代且权威确认域已消失");
 
     const fixtureSource = fileURLToPath(new URL("test-process-native-fixture.cs", import.meta.url));
     const fixtureExe = join(temporary, "native-fixture.exe");
