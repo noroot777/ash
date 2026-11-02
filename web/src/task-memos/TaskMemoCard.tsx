@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, PencilSimple, TrashSimple, X } from "@phosphor-icons/react";
 import type { TaskMemo } from "@ash/shared/task-memo";
 import { TASK_MEMO_MAX_LEN } from "@ash/shared/task-memo";
+import { isModEnterEvent } from "../lib/sendKey.ts";
 import { formatInstant } from "../task-detail/utils.ts";
 
 /** 折起来时露几行。再少就看不出这条在说什么，再多就等于没折。 */
@@ -105,16 +106,23 @@ export function TaskMemoCard({ memo, busy, highlight, draft, onDraft, onSave, on
             rows={Math.min(16, Math.max(4, (draft ?? "").split("\n").length + 1))}
             disabled={busy}
             onChange={(event) => onDraft(event.target.value)}
-            // Esc 撤销这次编辑。回车留给换行 —— 备忘天生是多行的东西。
+            // Esc 撤销这次编辑，⌘/Ctrl+回车保存。裸回车留给换行 —— 备忘天生是多行的东西。
             onKeyDown={(event) => {
               if (event.key === "Escape") { event.stopPropagation(); onDraft(null); }
+              else if (isModEnterEvent(event)) { event.preventDefault(); if (!busy) void save(); }
             }}
           />
           <div className="task-memo-card__edit-actions">
             <button type="button" disabled={busy} onClick={() => onDraft(null)}>
               <X size={12} />取消
             </button>
-            <button type="button" className="is-primary" disabled={busy || !(draft ?? "").trim()} onClick={() => void save()}>
+            <button
+              type="button"
+              className="is-primary"
+              disabled={busy || !(draft ?? "").trim()}
+              aria-keyshortcuts="Meta+Enter Control+Enter"
+              onClick={() => void save()}
+            >
               <Check size={12} />保存
             </button>
           </div>
