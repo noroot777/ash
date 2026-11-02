@@ -10,6 +10,30 @@ import type { TurnIdentity, TurnSource } from "./runs.js";
 export type ResumeReason = "group" | "run" | "retry" | "wake" | "queue";
 
 /**
+ * **这一轮没能起跑,是哪一种**(`continueTask` 返回 false 时必定带一个)。
+ *
+ * 为什么非得分开:那个 false 原先把四件完全不同的事压成一个布尔 —— 于是**确证一个字节都没动
+ * 的瞬时抢占**和「用户撤回」在调用方眼里长得一模一样,只能一视同仁地落终态。第 1 轮审查问题 2
+ * 实测:外层占到 reviewer 锁之后、交接到内层之前,这把锁被合法放开、另一回合占上,内层
+ * `reclaimTurn` 正确地拒绝接管 —— 而这一轮审查就此 run=failed / round=error,只尝试过 1 次。
+ * 「所有 false 都重试」是反过来的错:撤回被磨掉,拒绝理由被原地再撞一遍。
+ *
+ *  · `turn-taken` —— 锁此刻在**别的执行**手上(入口占位已被拔走,或这一刻正跑着另一轮)。
+ *    瞬时,而且这一侧到这一刻一个字节都没动;锁总会被还回来(持有者自己的 finally、人工放开、
+ *    幽灵锁巡检都走 `endOwnTurn`),所以「排到下一个空闲窗口」一定还有下一次机会 —— **唯一
+ *    一种重排是安全的**。
+ *  · `withdrawn`  —— 用户的动作把这一轮撤了(起跑前的冻结闸、spawn 之前的审查撤回)。重排只会
+ *    把他的决定磨掉。
+ *  · `backoff`    —— 其它退避:接力出去的存档、验收互斥、检查点待恢复、唤醒资格不再成立、
+ *    历史审查退役、读不到状态、团队插话没送达。**确证没送出去**,但重排是原地再撞同一个
+ *    拒绝理由,该让调用方自己交代。
+ *  · `uncertain`  —— 这个任务上挂着一次**说不清有没有投喂**的交付(`waitOwnership.start`
+ *    停在 `uncertain`:服务死在交付期,原输入按「不会自动重发」保留着)。这一档一个字都不许
+ *    重投,而且**不许声称「一个字都没送出去」**。
+ */
+export type TurnStartDecline = "turn-taken" | "withdrawn" | "backoff" | "uncertain";
+
+/**
  * `continueTask` 的**调用契约**:这一回合由谁发起、代谁跑、能不能被撤回、落盘之后要回调谁。
  *
  * 单独一个文件,不是因为代码放不下,而是因为这一份是**给调用方读的**:排队消息、哨兵事件、
@@ -124,5 +148,17 @@ export type ContinueTaskOptions = {
    * 它的意思），给它挂这道闸等于把他的话吞了。
    */
   wakeGuard?: () => Promise<string | null>;
+  /**
+   * **这一轮没起跑的原因** —— 返回 false 时必定叫一次,而且只叫一次(见 `TurnStartDecline`)。
+   *
+   * 为什么是回调而不是把返回值换成联合类型:`continueTask` 的 `Promise<boolean>` 有十几个
+   * 调用方,而它们里面只有一个(审查派发)需要按原因分路;换返回值会把那十几处全改一遍,而每
+   * 一处的收尾语义都不一样 —— 收益全在这一处,风险摊到所有人。回调是加法:不传的照旧只看
+   * 布尔,行为与改之前逐字一致。
+   *
+   * **原因本身不是尽力而为的**:`enterTurn` 那一侧的每条拒绝出路都由类型强制带上原因
+   * (见 turn-entry-guard.ts 的 `decideTurnEntry`),所以新加一道闸漏报在编译期就过不去。
+   */
+  onDecline?: (reason: TurnStartDecline) => void;
   throwOnTeamUnavailable?: boolean;
 };

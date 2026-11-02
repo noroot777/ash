@@ -82,7 +82,9 @@ export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> 
     // 补投一次才是它该得的(判据与边界见 free-review-dispatch.ts / `redeliverReviewRound`)。
     // 返回 `none` = 压根没有在途意图，照原路往下走；`hold` = 有人负责了（包括「刚刚被另一份
     // 恢复投递出去」），这一拍什么都别做，下一拍按新状态重判。
-    if (round && await redeliverReviewRound(task, run, round) !== "none") continue;
+    // **传 id 不传 task 行**:上面那份快照是逐条扫 run 之前读的,补投那一侧要据此回答「这一份
+    // 送到过没有」,拿快照答就是第 1 轮审查问题 1 那条路(签名已经收窄,这里只是顺带说明)。
+    if (round && await redeliverReviewRound(run.taskId, run, round) !== "none") continue;
     // **下笔之前再问一次「这一轮真的没人管了吗」** —— 开头那次「reviewer 活着吗」是好几次
     // await 之前读的，这中间另一份恢复完全可能已经把任务书送进会话、审查者正在输出
     // （第 3 轮审查 F1）。失去投递权不等于获得结算权，判据整段在 `reviewOrphanStillUnowned`。

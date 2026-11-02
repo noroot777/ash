@@ -1,6 +1,9 @@
 // 自由工作流审查的**崩溃补投**:上一个进程死在「任务书交出去了、还没送进会话」中间时,
-// 把这一轮重新拉起来一次(`redeliverReviewRound`),以及它判「其实早就送到了」所依据的
-// 持久交付凭据(`reviewPromptAlreadyDelivered`)。
+// 把这一轮重新拉起来一次(`redeliverReviewRound`)。
+//
+// 「其实早就送到了」那一问的判据不在这里 —— 它和**准许排队**那一笔 CAS 是同一份不变量的两道,
+// 所以两道都住在 `free-review-dispatch.ts`(`reviewPromptDelivered` / `takeIntent` 的 WHERE,
+// 文件头 ⑮)。这里只负责在动手之前先问一句,省掉一整段准备。
 //
 // 从 `free-review-round.ts` 切出来的原因:那份文件已经贴着 700 行上限。依赖是单向的
 // (本文件 → free-review-round.ts 取 launchReviewRound/failReviewStart),所以不成环;
@@ -11,38 +14,12 @@ import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
 import {
   claimReviewDispatch, clearReviewDispatchIntent, releaseReviewDispatchClaim,
-  reviewDispatchRecovery, reviewDispatchVerdict,
+  reviewDispatchRecovery, reviewDispatchVerdict, reviewPromptDelivered,
 } from "./free-review-dispatch.js";
 import {
   failReviewStart, launchReviewRound,
   type ReviewRoundRow, type ReviewRunRow,
 } from "./free-review-round.js";
-
-type TaskRow = typeof tasks.$inferSelect;
-
-/**
- * **这一轮的任务书其实已经送到审查者手上了** —— 库里那份在途意图只是没来得及清掉。
- *
- * 为什么非得问这一句:投递是两次写,而且不同事务 —— `commitReviewTurnDelivery` 先持久记下
- * `waitOwnership.deliveredReview`(紧挨着 spawn 之后),之后才经过落盘、回执,最后才清意图。
- * 服务断在这两次写中间,留下的组合就是「凭据已确认 + 意图还挂着」。只看意图的恢复会把这份
- * **审查者已经读过**的任务书整份再发一遍,白烧一轮(第 2 轮审查 F2 实测:无需任何磁盘故障,
- * 恢复即再次拉起执行器)。把回执提前到落盘那一刻只缩短了窗口,消不掉它 —— 所以恢复这一侧
- * 必须认持久交付事实为权威。
- *
- * 判据是**目录 + 代次**:目录里带着 run 与轮次,所以第 2 轮、合并结果审查各不相同;代次区分
- * 同一轮的不同次「重跑」(`reopenFailedFreeReview` 走 `restartRegressionEvidence` 换代次),
- * 上一次的旧凭据因此配不上这一次。
- */
-async function reviewPromptAlreadyDelivered(task: TaskRow, run: ReviewRunRow, round: number): Promise<boolean> {
-  const receipt = task.waitOwnership?.deliveredReview;
-  if (!receipt) return false;
-  const directory = freeReviewEvidenceDir(task.id, run.id, round);
-  if (receipt.directory !== directory) return false;
-  const evidence = (await db.select({ generation: regressionEvidence.generation })
-    .from(regressionEvidence).where(eq(regressionEvidence.directory, directory))).at(0);
-  return !!evidence && evidence.generation === receipt.generation;
-}
 
 /**
  * 上一个进程死在「任务书交出去了、还没送进会话」中间 —— 这一轮**补投一次**。
@@ -66,7 +43,13 @@ async function reviewPromptAlreadyDelivered(task: TaskRow, run: ReviewRunRow, ro
 export type ReviewRoundRecovery = "none" | "hold" | "handled";
 
 export async function redeliverReviewRound(
-  task: TaskRow,
+  /**
+   * **只收 id,不收 task 行** —— 调用方那份快照是好几次 await 之前读的(对账在读完它之后还要
+   * 逐条扫 run、读 round),拿它去回答「送到过没有」就是第 1 轮审查问题 1 那条路:快照里回执
+   * 为 null、库里非空且同代次,于是对一条审查者已经读过的任务书再排一份完整的。签名收窄到 id
+   * 之后,这件事**类型上就办不到**了 —— 下面要用的 task 行由这里自己现读。
+   */
+  taskId: string,
   run: ReviewRunRow,
   round: ReviewRoundRow,
 ): Promise<ReviewRoundRecovery> {
@@ -76,7 +59,7 @@ export async function redeliverReviewRound(
   if (screened === "in-flight") return "hold";
   // **这一轮的这一次**的身份:认领、意图 CAS、清理、失败收尾全按它认人(见
   // free-review-dispatch.ts 文件头 ⑨)。证据行还没建就谈不上补办,交回原路。
-  const directory = freeReviewEvidenceDir(task.id, run.id, round.round);
+  const directory = freeReviewEvidenceDir(taskId, run.id, round.round);
   const generation = (await db.select({ generation: regressionEvidence.generation })
     .from(regressionEvidence).where(eq(regressionEvidence.directory, directory))).at(0)?.generation;
   if (!generation) return "none";
@@ -98,6 +81,10 @@ export async function redeliverReviewRound(
     const current = (await db.select().from(freeReviewRounds)
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, round.round)))).at(0);
     const intent = current?.status === "reviewing" ? current.dispatch : null;
+    // 任务行也**现读**:下面要拿它重算任务书、算工作区,而调用方那份同样是几次 await 之前的。
+    // 读不出来(任务被删了)= 这一拍什么都没问清,照准备阶段那一档交回 `hold`。
+    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!task) return "hold";
     const verdict = reviewDispatchVerdict(intent);
     // **「这份意图已经被别人办掉了」不能回答成「压根没有派发」** —— 后者是「照原路按孤儿往下
     // 走」的通行证,而此刻的真相恰恰相反:刚刚有人把这一轮投递出去了,审查者很可能正在输出。
@@ -107,7 +94,7 @@ export async function redeliverReviewRound(
     if (verdict === "none" || !intent) return "hold";
     // 交付凭据对得上 = 这份任务书审查者已经收到了,意图只是没来得及清:结清它,不重投。
     // 同样答 `hold`(而不是 `none`):刚投出去的那一份此刻可能正在跑,结不结算等下一拍按新状态判。
-    if (await reviewPromptAlreadyDelivered(task, run, round.round)) {
+    if (await reviewPromptDelivered(taskId, directory, generation)) {
       await clearReviewDispatchIntent(run.id, round.round, generation);
       console.error(`[ash] 审查任务书已确认送达，补投取消 run=${run.id} round=${round.round}`);
       return "hold";

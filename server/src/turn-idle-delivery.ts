@@ -10,6 +10,7 @@
 import {
   claimOwnTurn, releaseTurn, turnSourceRole, turnSourceReview, whenTurnIdle, type TurnSource,
 } from "./turn-lock.js";
+import type { TurnStartDecline } from "./task-continue-options.js";
 
 /**
  * **这一次投递为什么没成功** —— 四种原因里只有 `turn-taken` 是**瞬时**条件。
@@ -25,8 +26,11 @@ import {
  *    下一次机会。
  *  · `withdrawn`    —— 起跑前的冻结闸撤回(分组已暂停 / 任务已归档或删除)。那是用户的动作,
  *    重排只会把它的决定磨掉。
- *  · `not-delivered`—— `continueTask` 自己答了「一个字没送出去」。它的几种成因(历史审查退役、
- *    接力出去、输入交付期中断的 uncertain、验收互斥退避)在这一层分不开,所以不猜,照旧上报。
+ *  · `not-delivered`—— `continueTask` 自己答了「一个字没送出去」,而且是**重排也没用**的那几种
+ *    (历史审查退役、接力出去的存档、验收互斥、检查点待恢复、唤醒资格不再成立、读不到状态)。
+ *    它们都确证没送出去,但重排是原地再撞同一个拒绝理由。
+ *  · `uncertain`    —— `continueTask` 答了「这个任务上挂着一次**说不清有没有投喂**的交付」。
+ *    一个字都不许重投,而且报给用户的话里不许出现「一个字都没送出去」。
  *  · `failed`       —— 抛了。
  *  · `superseded`   —— 排到队头时**这一笔交接已经不归调用方负责了**(`ownership` 闸给的答复)。
  *    跟 `turn-taken` 一样一个字节都没动,但出路相反:重排只会把同一笔过期交接再排一遍,而
@@ -34,7 +38,29 @@ import {
  *    的 `handOff`)。
  */
 export type TurnDeliveryFailure =
-  "turn-taken" | "withdrawn" | "not-delivered" | "failed" | "superseded";
+  "turn-taken" | "withdrawn" | "not-delivered" | "uncertain" | "failed" | "superseded";
+
+/**
+ * `continueTask` 那个 false 的原因 → 这一层的失败分类。
+ *
+ * 为什么必须有这张表(第 1 轮审查问题 2):`continueTask` 的 false 原先在这里被**一律**压成
+ * `not-delivered`,而它的成因里有一种是**瞬时**的 —— 外层在这里占到了锁,交接到内层
+ * `reclaimTurn` 之间隔着所有权闸、冻结复查、起跑预检,这把锁完全可以在那期间被合法放开、
+ * 另一回合占上。那一种和「这一刻轮不到我们」(上面 `turn-taken`)是同一件事,出路也该一样:
+ * 重排。实测压扁的代价:一次这样的争用就让整轮审查 run=failed / round=error,只尝试过 1 次。
+ *
+ * 反过来「所有 false 都重排」也是错的,所以这里是一张**逐档**的表,不是一个兜底。
+ */
+const DELIVERY_FAILURE: Record<TurnStartDecline, { failure: TurnDeliveryFailure; message: string }> = {
+  "turn-taken": { failure: "turn-taken", message: "回合被其它执行抢占，消息未能投递" },
+  withdrawn: { failure: "withdrawn", message: "这一轮在起跑前被撤回，消息未能投递" },
+  backoff: { failure: "not-delivered", message: "这一轮此刻起不来（起跑前的闸没放行），消息未能投递" },
+  uncertain: {
+    failure: "uncertain",
+    // 不许说「一个字都没送出去」:这个任务上悬着的那一次交付到底有没有执行,此刻谁都不知道。
+    message: "这个任务上还挂着一次无法确认是否已执行的交付，这一轮没有起跑",
+  },
+};
 
 /**
  * 结算钩子里给同一个任务续跑的**唯一安全写法**：等它这一轮退干净再送消息。
@@ -141,10 +167,13 @@ export function continueWhenIdle(
         //（第 4 轮审查确定性复现）。所以这里按事实查库权威复查一次。
         const freeze = await turnFreezeReason(taskId, true);
         if (!freeze) {
+          /** 内层说的「为什么没起跑」。它和那个 false 同一笔交回来(见 `DELIVERY_FAILURE`)。 */
+          let declined: TurnStartDecline | null = null;
           const delivered = await (await import("./orchestrator.js"))
             .continueTask(taskId, text, {
               ...opts,
               turnHeld: owner,
+              onDecline: (reason) => { declined = reason; },
               // 调用方自己的记账先走(排队消息标 sent 那一类),再报「送出去了」。它抛了就
               // 不报,留给下面的兜底 —— 那一侧还会把异常记下来。
               onDelivered: async () => {
@@ -154,9 +183,16 @@ export function continueWhenIdle(
             });
           // continueTask 返回 false = 一个字都没送出去（验收互斥退避等）。吞掉它，
           // 调用方的时间线就会停在「意见已发回会话」而消息实际没了——必须当失败上报。
+          //
+          // **按它自己给的原因分档**,不替它猜:那一侧确证一个字节都没动的瞬时抢占(内层
+          // `reclaimTurn` 没接上)和用户撤回压成同一个 `not-delivered`,就是第 1 轮审查
+          // 问题 2 —— 一次合法的锁交替让整轮审查落了终态。原因缺席(老调用路径、或者那边
+          // 漏报)时照旧按 `not-delivered` 走,行为与改之前一致。
           if (delivered === false) {
-            console.error(`[ash] continueWhenIdle(${taskId}) not delivered`);
-            return { failure: "not-delivered" as const, message: "回合被其它执行抢占，消息未能投递" };
+            const classified: TurnStartDecline | null = declined;
+            const mapped = classified ? DELIVERY_FAILURE[classified] : null;
+            console.error(`[ash] continueWhenIdle(${taskId}) not delivered: ${classified ?? "原因未报"}`);
+            return mapped ?? { failure: "not-delivered" as const, message: "回合被其它执行抢占，消息未能投递" };
           }
           return null;
         }

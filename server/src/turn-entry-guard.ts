@@ -11,6 +11,15 @@
 //   身份  = 占位在手，调用方负责在自己的 finally 里拿**这份身份**还锁(`releaseTurn`)
 //   `null` = 这一轮不起，**占位已经还回去了**（或者压根没占）
 //
+// 第 1 轮审查问题 2 又给这里加了一条同形的不变量:**不起的那一条还得说出是哪一种**。原先四
+// 五条拒绝出路共用一个 `null`,到了 `continueTask` 变成一个 `false`,到了投递层变成
+// `not-delivered` —— 于是「锁被别的执行接走」(瞬时、确证一个字节都没动、重排一定还有下一次
+// 机会)和「用户撤回」在调用方眼里完全一样,只能一视同仁地落终态。实测:外层占到 reviewer 锁
+// 之后这把锁被合法放开、另一回合占上,内层 `reclaimTurn` 正确拒绝接管,而那一轮审查就此
+// failed,只尝试过 1 次。所以判定本体(`decideTurnEntry`)**返回的是身份或原因**,漏报在编译期
+// 就过不去;`enterTurn` 只负责把原因交给回调、把出口压回老形状(`TurnIdentity | null`),于是
+// 不看原因的调用方一个字都不用改。
+//
 // 为什么交出去的是身份而不是 true(本轮审查 F1):从这里到调用方的 finally 之间隔着整整
 // 一回合,人工放开可以合法地把这把锁拔走、让下一轮占上 —— 按任务 id 还锁撤掉的就是后来者
 // 那把互斥(理由整段在 turn-lock.ts 的 `endOwnTurn`)。
@@ -21,6 +30,7 @@
 // 语义)必须逐字一致 —— 分家一次就是第 6 轮审查那两条:单飞这侧全部修好,团队那侧照旧。
 import { claimOwnTurn, claimWakeTurn, reclaimTurn, releaseTurn, turnSourceRole, turnSourceReview } from "./runs.js";
 import type { TurnIdentity, TurnOwner, TurnSource } from "./runs.js";
+import type { TurnStartDecline } from "./task-continue-options.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { pendingCheckpointBlockReason } from "./pending-checkpoint-recovery.js";
@@ -56,15 +66,34 @@ export type TurnEntryInput = {
   /** 「这个任务此刻还能不能被这条消息叫醒」——占住位之后才问（见 orchestrator 的 opts）。 */
   wakeGuard?: () => Promise<string | null>;
   pendingMessageIds?: readonly string[];
+  /** 这一轮不起时说一句**是哪一种**(见 `TurnStartDecline`);不关心的调用方不传。 */
+  onDecline?: (reason: TurnStartDecline) => void;
 };
 
 export async function enterTurn(input: TurnEntryInput): Promise<TurnIdentity | null> {
+  const outcome = await decideTurnEntry(input);
+  // 原因只报给**要分路的那个调用方**,出口照旧是老形状:不看原因的那十几处一个字都不用改。
+  if (typeof outcome === "string") {
+    input.onDecline?.(outcome);
+    return null;
+  }
+  return outcome;
+}
+
+/**
+ * 判定本体 —— **出口是「身份」或「原因」,没有第三种**。
+ *
+ * 为什么不直接返回 `null`:原因要是可选的,新加一道闸就会漏报,而漏报的表现恰恰是老缺陷
+ * (瞬时抢占被当成永久失败)。写成联合类型之后,每一条 `return` 都必须自己说清是哪一种,
+ * 漏了编译不过。
+ */
+async function decideTurnEntry(input: TurnEntryInput): Promise<TurnIdentity | TurnStartDecline> {
   const { taskId } = input;
   // 接力出去的任务：路由层各有 409，但队列推进/排队消息投递等程序化续聊全汇到这里，
   // 必须在占位之前收口（消息按「未投递」留在托盘，事实不丢）。
   if (handoffBlockReason(input.handoff)) {
     if (input.turnHeld) releaseTurn(taskId, input.turnHeld);
-    return null;
+    return "backoff";
   }
   // 抢不到 = 这个任务此刻正跑着别的回合，这一句话没送出去。调用方必须知道。
   // turnHeld 那条路用真实身份接管——只读预检查代替不了原子所有权（审查实测：两个并发
@@ -74,7 +103,10 @@ export async function enterTurn(input: TurnEntryInput): Promise<TurnIdentity | n
   const owner = input.turnHeld
     ? reclaimTurn(taskId, input.turnHeld, turnSourceRole(input.source), turnSourceReview(input.source))
     : claimOwnTurn(taskId, turnSourceRole(input.source), turnSourceReview(input.source));
-  if (!owner) return null;
+  // **这一条就是那个瞬时档**:锁此刻在别人手上(或者入口占下的那把已经被人工放开拔走、另一轮
+  // 合法占上)。这一侧到这一刻一个字节都没动,而锁总会被还回来 —— 所以它和下面几条退避不是
+  // 一件事,压成同一个 `null` 就是第 1 轮审查问题 2。
+  if (!owner) return "turn-taken";
 
   // 验收互斥：**先占己锁（turn），再查彼锁（acceptance），两步之间没有 await**——
   // acceptTask 那边是镜像（beginAccepting 先占，acceptanceGuard 再查 isTurnClaimed）。
@@ -82,7 +114,7 @@ export async function enterTurn(input: TurnEntryInput): Promise<TurnIdentity | n
   // 通过验收就开始，回复照样启动并摘牌）。退避 = 消息按「未投递」排队，验收事实原封不动。
   if (isAcceptingTask(taskId)) {
     releaseTurn(taskId, owner);
-    return null;
+    return "backoff";
   }
 
   // 同一个位置、同一个理由：占住回合之后才问「这一轮还该不该起」。排在这里而不是更后面，
@@ -105,7 +137,9 @@ export async function enterTurn(input: TurnEntryInput): Promise<TurnIdentity | n
     }
     if (blocked) {
       releaseTurn(taskId, owner);
-      return null;
+      // 退避而不是撤回:这几种(检查点待恢复、唤醒资格不再成立、读不到状态)都确证没送出去,
+      // 但都不是「锁被抢走了」—— 重排只会原地再撞同一个拒绝理由,该让调用方自己交代。
+      return "backoff";
     }
   }
   return owner;

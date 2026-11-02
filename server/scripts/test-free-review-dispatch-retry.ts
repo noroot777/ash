@@ -350,7 +350,7 @@ try {
       .where(eq(freeReviewRounds.id, `${runId}-round`));
 
     const task = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
-    const verdict = await redeliverReviewRound(task, await runRow(runId), stale);
+    const verdict = await redeliverReviewRound(task.id, await runRow(runId), stale);
 
     // 答 `hold` 而不是 `none`:「这份意图刚被别人办掉了」与「压根没有派发」是两件事,后者是
     // 调用方「照原路按孤儿收尸」的通行证 —— 而此刻真相恰恰相反(第 3 轮审查 F1)。

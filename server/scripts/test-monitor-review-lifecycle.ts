@@ -12,12 +12,15 @@
 //    定位会话：审查者可以是另一个执行器（codex 审 claude 写的代码），续跑于是回落到任务
 //    自己的配置，新建一条 claude 的 reviewer 会话（F2）。
 // ③ 新加的「续跑交代」读写一旦临时失败，通知会被永久取消、或者带着租约卡住不再投递（F4）。
+// ④ 代次这一位落在了创建记账、事件出口、按代次清理上,**唯一直接授权命令开工的那条 SQL 却没有**
+//    (自由工作流审查第 1 轮问题 3):一条还在创建中的旧请求可以在重跑换完代次之后照样上膛,
+//    命令真的跑起来,事后才被清理置成 stopped —— 而**事后停止撤不回一条已经执行的命令**。
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import {
-  db, inTurnCaller, monitors, pending, root, runs, schema, scheduledMessages, sessions, tasks,
-  makeTask, now, pendingOf, startMonitor, until, teardown,
+  db, inTurnCaller, insertMonitorRow, monitors, pending, root, runs, schema, scheduledMessages,
+  sessions, tasks, makeTask, now, pendingOf, startMonitor, until, teardown,
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
 import { freeReviewEvidenceDir } from "../src/free-review-files.js";
@@ -28,6 +31,8 @@ const { afterSettlement, settleTaskStatus } = await import("../src/settle-status
 const { deliveryOptions, monitorWakeGuard } = await import("../src/pending-verdict.js");
 const { stopReviewRunMonitors } = await import("../src/free-review-round.js");
 const { monitorSourceGate } = await import("../src/monitor-session.js");
+const { armRow, diagnoseArm } = await import("../src/monitor-create-arm.js");
+const { REVIEW_SOURCE_GONE } = await import("../src/monitor-session.js");
 
 /** 真实的 pause 路由：审查者按提示 `pause_task` 收尾走的就是它。 */
 const api = new Hono();
@@ -298,5 +303,48 @@ async function reviewInFlight(
   assert.equal((await pendingOf(taskId)).length, 0, "它排着的结果跟着作废");
 }
 
+// ⑦ **过期创建根本不许开工** —— 放行 SQL 自己得核代次(自由工作流审查第 1 轮问题 3)。
+//
+// 上一条测的是「旧收尾只收自己那一次」,这一条是**相反方向**的安全约束:旧的那一次创建还在路
+// 上(身份行已落库、pid 还空着 = 创建意图,完整进程身份刚拿到),用户这时重跑了这一轮 —— run
+// 和轮次两样都不变,换掉的只有证据行的代次。放行 SQL 过去只查 run 的 `status/current_round`,
+// 于是那条旧命令照样上膛、真的开工,事后才被重跑清理置成 stopped。实测当时
+// `rowsAffected=1`、`startMonitor` 回 ok=true、旧命令真的写出了标记文件。
+//
+// 为什么不能靠回合 token 兜:面板创建(external)压根没有 token,而「叫审查者」正是它允许的
+// 用法(上一条用例挂的就是这一种)。
+{
+  const taskId = await makeTask();
+  await reviewInFlight(taskId, { runId: "run-arm", generation: "gen-1" });
+  const directory = freeReviewEvidenceDir(taskId, "run-arm", 1);
+  const rowOf = async (id: string) => (await db.select().from(monitors).where(eq(monitors.id, id))).at(0)!;
+  // 一条**还在创建中**的哨兵:生产里这正是 `completeIdentity` 之后、放行 SQL 之前那个 await
+  // 上的现场(行已落库、pid 空着、身份三件套绑的是 gen-1)。
+  const inFlight = await insertMonitorRow(taskId, { reviewRun: "run-arm", round: 1, generation: "gen-1" });
+  const startedAt = inspectProcess(process.pid)?.startedAt ?? now();
+  const arm = async () => await armRow({ ...await rowOf(inFlight), pid: process.pid }, startedAt, null);
+
+  // 对照组先过:代次还对得上就该照常放行 —— 少了这一句,一个「永远不放行」的实现也能骗过下面。
+  assert.equal(await arm(), true, "代次对得上，这次创建照常放行");
+  assert.equal((await rowOf(inFlight)).pidStartedAt, startedAt, "放行那一笔把完整身份写进了行里");
+  await db.update(monitors).set({ pid: null, pidStartedAt: null }).where(eq(monitors.id, inFlight));
+
+  // 用户重跑这一轮:`restartRegressionEvidence` 换掉证据行的代次,run / 轮次一位都不动。
+  await db.update(schema.regressionEvidence).set({ generation: "gen-2" })
+    .where(eq(schema.regressionEvidence.directory, directory));
+  assert.equal(await arm(), false,
+    "这一轮已经被重跑成另一次：上一次的创建不许开工（事后停止撤不回一条已经执行的命令）");
+  assert.equal((await rowOf(inFlight)).pid, null, "没放行就不许把这一行写成已上膛");
+  assert.equal(await diagnoseArm(inFlight, taskId, null), REVIEW_SOURCE_GONE,
+    "措辞要指到真正的原因，不是兜底那句「被别的写入改过了」");
+
+  // 证据行整个读不到时同样不放行:这一问的严格方向和 `isReviewSourceActive` 相反(那一问答的是
+  // 「要不要作废一个已有结果」,读不出就放行;这一问答的是「要不要让一条命令开工」)。
+  await db.delete(schema.regressionEvidence).where(eq(schema.regressionEvidence.directory, directory));
+  assert.equal(await arm(), false, "读不出「现在是第几次」就不许开工");
+  assert.equal(await diagnoseArm(inFlight, taskId, null), REVIEW_SOURCE_GONE,
+    "这一档的措辞也得跟上：`isReviewSourceActive` 在这里是放行的，照它说话就只剩兜底那一句");
+}
+
 await teardown();
-console.log("✓ 审查哨兵的生命周期：审查回合退出不收它 / 审查收尾才收它 / 唤醒用那次审查的执行器 / 等待中补挂也认审查 / 读交代失败归还租约 / 重跑换代次后旧收尾只动自己那一次");
+console.log("✓ 审查哨兵的生命周期：审查回合退出不收它 / 审查收尾才收它 / 唤醒用那次审查的执行器 / 等待中补挂也认审查 / 读交代失败归还租约 / 重跑换代次后旧收尾只动自己那一次 / 过期创建的命令压根不许开工");
