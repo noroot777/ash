@@ -90,6 +90,17 @@ export function silentTurnWarningText(facts: StallFacts): string {
     + `会话 ${facts.sessionId},回合起于 ${facts.turnStartedAt}。`;
 }
 
+/**
+ * 接管前那段核实不了时的静默警告。只说**亲眼所见**的那一段(接管以来),不说「整轮没有输出」,
+ * 也不许诺自动终止 —— 这一档不熔断(见 turn-stall.ts 的 `watchAdoptedSilence`)。
+ */
+export function adoptedSilenceWarningText(facts: StallFacts): string {
+  return `〔接管后无新进展〕自 ${facts.since} 接管以来 ${minutes(facts.elapsedMs)}没有新的模型输出、`
+    + "思考或工具调用。接管之前这一轮有没有产出核实不了(进展证明读不到),所以不按「没跑起来」"
+    + "处理、也不会自动终止:它可能正在跑一个很长的工具,也可能早就卡住了 —— 请看一眼,确认卡住"
+    + `就手动停止后重试。会话 ${facts.sessionId},回合起于 ${facts.turnStartedAt}。`;
+}
+
 /** 静默档的文案(熔断):完整诊断 + 原始日志落点 + 阈值怎么调。 */
 export function silentTurnTripText(facts: StallFacts): string {
   return `〔回合无输出·已自动终止本回合〕自 ${facts.turnStartedAt} 开始连续 ${minutes(facts.elapsedMs)}`
@@ -160,7 +171,7 @@ export function stallUnverifiableText(why: string): string {
 export function progressUnreadableText(): string {
   return "〔接管·这一轮此前有没有产出核实不了〕上一个进程留下的进展证明读不到"
     + "(多半是权限、磁盘或者它是升级前那一代开的回合)。重启之前那段不追认也不勾销:"
-    + "改从接管这一刻起盯「还有没有新进展」,到阈值会先警告、再终止本轮并按失败结算。"
+    + "改从接管这一刻起盯「还有没有新进展」,到阈值会警告并亮红环,但不会自动终止(核实不了就不替它判失败)。"
     + "期间只要有一条正文、思考或工具调用,这条观察立即解除;证明本身要是恢复了,也会就地撤掉。";
 }
 

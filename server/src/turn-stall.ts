@@ -82,11 +82,12 @@ import { isExecutionNotice } from "./session-notice.js";
 import { producesWork } from "@ash/shared/waiting";
 import { markStallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import {
-  silentTurnTripText, silentTurnWarningText,
+  adoptedSilenceWarningText, silentTurnTripText, silentTurnWarningText,
   stallEscalateText, stallResumeText, stallTripText, stallVolatileVerdictText, stallWarningText,
 } from "./turn-stall-text.js";
 import type { StallActions, StallFacts, StallOwner } from "./turn-stall-contract.js";
 import { now } from "./util.js";
+import { pollMs, resetStallThresholdWarnings, thresholds } from "./turn-stall-thresholds.js";
 
 export type { StallActions, StallFacts, StallOwner } from "./turn-stall-contract.js";
 
@@ -97,6 +98,11 @@ type Stall = StallFacts & {
    *   · `silence` —— 这一轮一条进展事件都没有过(起点 = 回合真实起点,见文件头静默档那一节)。
    */
   kind: "errors" | "silence";
+  /**
+   * 静默档里**接管前那段核实不了**的那一种(`watchAdoptedSilence`):只警告、不熔断。它看见的只是
+   * 「接管以来没有新进展」,说成「整轮零输出」并据此判失败就是替上一个进程追认(第 1 轮自由审查 F1)。
+   */
+  unverifiedHistory?: boolean;
   owner: StallOwner;
   sinceMs: number;
   /** 已经**通知**过了(时间线/执行过程那一条)。一次性的,不重发。 */
@@ -123,58 +129,6 @@ type Stall = StallFacts & {
 };
 
 const stalls = new Map<string, Stall>();
-
-/** 配过一次的坏值只报一次,别让看门狗自己变成刷屏源。 */
-const badEnvReported = new Set<string>();
-
-/**
- * 读一个毫秒/条数阈值。**非有限数一律退回默认值**。
- *
- * 不校验的那一版有个很糟的失效方向(第 1 轮审查非拦项):`ASH_STALL_TRIP_MS=30m` 解析成
- * `NaN`,而 `NaN <= 0` 和 `elapsedMs < NaN` **都是 false** —— 两道闸同时放行,于是第一条
- * 错误事件就当场熔断。看门狗配错一个字就变成「见错就杀」,这比不设看门狗更坏。
- */
-function num(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw === "") return fallback;
-  const value = Number(raw);
-  if (Number.isFinite(value)) return value;
-  if (!badEnvReported.has(name)) {
-    badEnvReported.add(name);
-    console.warn(`[ash] ${name}=${JSON.stringify(raw)} 不是数字,这一档按默认值 ${fallback} 走`);
-  }
-  return fallback;
-}
-
-/**
- * 阈值**每次现读**而不是模块加载时定格:回归测试要在一个进程里分阶段改口径(先钉条数档、
- * 再钉时间档),定格了就得为每一档各起一个进程。读 env 的开销只落在真有停滞时(见 evaluate)。
- *
- * 各档 `<= 0` = 关掉这一档。
- */
-function thresholds() {
-  return {
-    /** 警告档:连续这么多条错误事件(期间上游一次都没真回话)就报。 */
-    warnErrors: num("ASH_STALL_WARN_ERRORS", 5),
-    /** 警告档:这种状态持续这么久也报(两个条件取或)。 */
-    warnMs: num("ASH_STALL_WARN_MS", 5 * 60_000),
-    /** 熔断档:这种状态持续这么久就终止本回合。 */
-    tripMs: num("ASH_STALL_TRIP_MS", 30 * 60_000),
-    /** 熔断之后留给「这一轮真的结束」的宽限期,过了就回收句柄(见 StallActions.escalate)。 */
-    graceMs: num("ASH_STALL_TRIP_GRACE_MS", 60_000),
-    /** 静默档·警告:回合开始这么久还没有过任何进展事件就报。 */
-    silentWarnMs: num("ASH_STALL_SILENT_WARN_MS", 10 * 60_000),
-    /**
-     * 静默档·熔断:同上,终止本回合。
-     *
-     * **刻意比错误档的 30 分钟宽**:那一档手里有几百条错误事件当证据,这一档只有「什么都没有」,
-     * 是更弱的证据 —— 同一个方向上的取舍(宁可晚杀不可早杀)在这里要再让一步。
-     */
-    silentTripMs: num("ASH_STALL_SILENT_TRIP_MS", 45 * 60_000),
-  };
-}
-
-const pollMs = () => Math.min(30_000, Math.max(200, num("ASH_STALL_POLL_MS", 15_000)));
 
 let timer: NodeJS.Timeout | null = null;
 
@@ -410,6 +364,29 @@ export function watchTurnSilence(
   openStall(sessionId, owner, turnStartedAt, actions, "silence", clockFrom ?? turnStartedAt);
 }
 
+/**
+ * 接管回来、**这一轮此前有没有产出核实不了**时的静默观察:从接管这一刻起盯「还有没有新进展」。
+ *
+ * 跟 `watchTurnSilence` 的 `none` 不是一件事(第 1 轮自由审查 F1):`none` 是确证整轮零产出,
+ * 才有资格说「这一轮压根没跑起来」并按失败结算;这里只知道接管之后没看到新东西 —— 一个升级前
+ * 开始、接管后还在跑的长工具完全合法。所以只警告(时间线一条 + 卡片红环,刷新后仍在),不熔断,
+ * 让人来决定;一有进展或证明恢复读出「有过」就撤(`trackTurnStall` / `withdrawTurnSilence`)。
+ */
+export function watchAdoptedSilence(
+  sessionId: string,
+  owner: StallOwner,
+  turnStartedAt: string | null,
+  actions: StallActions,
+  clockFrom: string,
+): void {
+  if (!turnStartedAt || !Number.isFinite(Date.parse(turnStartedAt))) return;
+  const held = stalls.get(sessionId);
+  if (held && held.owner === owner && held.turnStartedAt === turnStartedAt) return;
+  if (held && held.trippedAtMs !== null) return;
+  if (lastProgress.get(owner)?.turn === turnStartedAt) return;
+  openStall(sessionId, owner, turnStartedAt, actions, "silence", clockFrom).unverifiedHistory = true;
+}
+
 function openStall(
   sessionId: string,
   owner: StallOwner,
@@ -522,7 +499,8 @@ function evaluate(sessionId: string, stall: Stall): void {
   if (!stall.warned && warnDue) {
     stall.warned = true;
     try {
-      stall.actions.warn(silent ? silentTurnWarningText(facts) : stallWarningText(facts), facts);
+      stall.actions.warn(stall.unverifiedHistory ? adoptedSilenceWarningText(facts)
+        : silent ? silentTurnWarningText(facts) : stallWarningText(facts), facts);
     } catch (error) {
       console.warn(`[ash] 落会话 ${sessionId} 的上游停滞警告失败:`, error);
     }
@@ -570,6 +548,7 @@ function evaluate(sessionId: string, stall: Stall): void {
     }
     return;
   }
+  if (stall.unverifiedHistory) return; // 只警告、不熔断(见 watchAdoptedSilence)
   const tripDue = silent ? silentTripMs : tripMs;
   if (tripDue <= 0 || stall.elapsedMs < tripDue) return;
   stall.trippedAtMs = Date.now();
@@ -670,6 +649,6 @@ export function clearTurnStall(sessionId: string, owner: StallOwner): void {
 /** 只给回归测试:把表清干净,免得上一段的残留影响下一段。 */
 export function __resetTurnStalls(): void {
   stalls.clear();
-  badEnvReported.clear();
+  resetStallThresholdWarnings();
   disarm();
 }

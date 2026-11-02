@@ -40,6 +40,13 @@ export type EventQueueOptions = {
    * 行数放大一百倍。思考取更粗的一档:它在折叠块里只显示一行摘要,不像正文那样要逐字顺滑。
    */
   coalesce?: Partial<Record<DeltaKind, number>>;
+  /**
+   * 攒着的增量**最多压多久**就自己收口,缺省 1 秒。阈值只管「攒够了就发」,不管「一直攒不够」:
+   * 一段不到 240 字的思考之后模型安静下来(跑长工具、上游慢),它就一直压在缓冲里,下游一条进展
+   * 都看不到 —— 静默看门狗据此判「从头到尾没有输出」并终止本轮(第 1 轮自由审查 F1,实测)。
+   * 字节已经在协议层读到了,这里压着的只是一份「它说过话」的事实,不许无限期扣住。
+   */
+  maxHoldMs?: number;
 };
 
 export type EventQueue = {
@@ -58,7 +65,8 @@ export type EventQueue = {
 };
 
 export function eventQueue(options: EventQueueOptions = {}): EventQueue {
-  const { images, activity, coalesce } = options;
+  const { images, activity, coalesce, maxHoldMs = 1_000 } = options;
+  let holdTimer: NodeJS.Timeout | null = null;
   const queue: AgentEvent[] = [];
   let wake: (() => void) | null = null;
   let closed = false;
@@ -76,6 +84,7 @@ export function eventQueue(options: EventQueueOptions = {}): EventQueue {
   };
 
   const flush = () => {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
     const pending = buffered;
     if (!pending) return;
     buffered = null;
@@ -92,6 +101,10 @@ export function eventQueue(options: EventQueueOptions = {}): EventQueue {
       buffered = { kind, text: joined };
       const threshold = coalesce?.[kind];
       if (!threshold || joined.length >= threshold || joined.includes("\n")) flush();
+      else if (!holdTimer) {
+        holdTimer = setTimeout(() => { holdTimer = null; if (!closed) flush(); }, maxHoldMs);
+        holdTimer.unref?.(); // 收口计时器不许拖住进程
+      }
     },
     push(event) {
       // 攒着的增量必须排在**任何**后到的事件之前,否则思考会漂到它引出的工具调用后面。
