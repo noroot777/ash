@@ -165,7 +165,7 @@ async function provenInside(target: string, realTarget: string, destination: str
  * 「记录读到了，它说这棵树里一个自有包都没有」（纯第三方树，正常布局），后者是「无从证明」。
  */
 async function installRecord(tree: string, project: ProjectSources, origin = tree): Promise<InstallRecord> {
-  const unusable = (): InstallRecord => ({ usable: false, owned: [], external: [], unknown: [] });
+  const unusable = (): InstallRecord => ({ usable: false, owned: [], external: [], borrowed: [], unknown: [] });
   const raw = await optionalRead(join(tree, ".package-lock.json"), () => readFile(join(tree, ".package-lock.json"), "utf8"));
   if (raw === null) return unusable();
   try {

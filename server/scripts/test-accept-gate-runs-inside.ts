@@ -32,13 +32,27 @@ try {
   writeFileSync(join(repo, "probe.mjs"), 'import { build } from "@demo/lib";\nconsole.log(build);\n');
   mkdirSync(join(repo, "node_modules", "@demo"), { recursive: true });
   linkDir(join("..", "..", "packages", "lib"), join(repo, "node_modules", "@demo", "lib"));
-  mkdirSync(join(repo, "node_modules", "plain"), { recursive: true });
-  writeFileSync(join(repo, "node_modules", "plain", "package.json"), '{"name":"plain","version":"1.0.0"}');
-  writeFileSync(join(repo, "node_modules", ".package-lock.json"),
-    '{"packages":{"node_modules/plain":{"version":"1.0.0"}}}');
-  // runs 住在依赖目录里,而且里面先放一个**被跟踪**的文件:排除计划按相对路径记一次、三处各按
-  // 自己的根解释,所以副本回算那一侧也得排除它,否则会判「没能按原样复现」。
-  const runs = join(repo, "node_modules", "runs");
+  // workspace 包按真实 npm 的形状记成 link + resolved:归属只认这份记录(理由见 accept-gate-relocate
+  // 顶部①)。手铺一份不含 link 条目的记录等于没有证据,门禁会拒绝「一条指着活源码、却证明不了来源
+  // 的入口」——而本用例要钉的是运行产物目录的排除,别让它被归属那条判据遮住。
+  writeFileSync(join(repo, "node_modules", ".package-lock.json"), JSON.stringify({
+    packages: {
+      "node_modules/@demo/lib": { resolved: "packages/lib", link: true },
+      "packages/lib": { name: "@demo/lib", version: "1.0.0" },
+    },
+  }));
+  // runs 住在依赖目录里,而且里面先放一个文件:排除计划按相对路径记一次、三处各按自己的根解释,
+  // 所以副本回算那一侧也得排除它,否则会判「没能按原样复现」。
+  //
+  // **名字必须以点开头,而且这棵树里不能再摆别的第三方包**,否则撞的是另一条不变量而不是本用例要
+  // 钉的那条:这棵树落在快照之外、里面摆着本项目自己的包,于是门禁要证明「树内的消费者不会读到活
+  // 源码」(accept-gate-confine 不变量③)。判据是「树里除自有包之外还有没有**实际可解析的**别的
+  // 入口」,而运行产物目录本身就会被数成这样一个入口 —— 点开头的不算(accept-gate-resolution 只对
+  // 非点名字和 `@`、`.bin` 建入口),真实工具往依赖目录里放东西也一律这么放(`.vite`、`.cache`、
+  // `.bin`)。摆了普通名字的第三方包就凑成「既有自有包又有外来入口」,门禁按设计拒绝整次验收,并
+  // 在拒绝里给出「把 ASH_RUNS_DIR 移到解析祖先链不经过那棵树的目录」这条出路 —— 那条路由
+  // test-accept-gate-plan/confine 负责钉,不在这里。
+  const runs = join(repo, "node_modules", ".ash-runs");
   mkdirSync(runs, { recursive: true });
   writeFileSync(join(runs, ".keep"), "runs lives inside the dependency directory\n");
   git("add", "-A");
@@ -57,7 +71,7 @@ try {
   const elapsed = Date.now() - started;
 
   // 建得出来、而且没把自己拷进去:快照里既不该有 runs,也不该有嵌套的第二层快照。
-  assert.equal(existsSync(join(target, "node_modules", "runs")), false,
+  assert.equal(existsSync(join(target, "node_modules", ".ash-runs")), false,
     "运行产物目录不该跟着进副本——它既不是测试输入,而且本次快照就住在里面");
   assert.equal(readFileSync(join(target, "packages", "lib", "index.mjs"), "utf8").trim(),
     'export const build = "certified";', "源码照旧冻进快照");
