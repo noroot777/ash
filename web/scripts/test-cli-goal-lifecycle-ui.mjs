@@ -24,7 +24,11 @@ await ensureSchema();
 await mkdir(workspace);
 await mkdir(screenshots, { recursive: true });
 const at = new Date().toISOString();
-await db.insert(appSettings).values({ key: "instanceMode", value: JSON.stringify("single") });
+// 首启向导的放行判据是一条持久表态(`server/src/onboarding.ts`),存量盖章只认
+// `ensureSchema()` 那一刻库里已有执行器/项目 —— 夹具是之后才插数据的,所以得自己盖:
+// 不盖 `AuthGate` 就把整个工作区换成首启向导,用例只能等到超时。
+await db.insert(appSettings).values([{ key: "instanceMode", value: JSON.stringify("single") },
+  { key: "onboardedAt", value: JSON.stringify(at) }]);
 await db.insert(projects).values({ id: "goal-ui", name: "目标生命周期验证", repoPath: workspace, useWorktreeDefault: false, createdAt: at });
 for (const agentType of ["codex", "claude"]) {
   await db.insert(agents).values({ id: `${agentType}-ui`, name: `${agentType}@验证`, type: agentType, isDefault: true, extraArgs: "[]", configOverrides: "{}" });
