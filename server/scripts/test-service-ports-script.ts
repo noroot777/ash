@@ -26,7 +26,7 @@ import { launchMembers, survivingMembers } from "../src/service-ports.js";
 import { mergeStop } from "../src/terminal-stop-facts.js";
 import { terminalSessions } from "../src/terminal.js";
 import {
-  alive, cleanup, cwd, daemonScript, freePort, leftoversOf, listening, pidIn, service,
+  alive, cleanup, cwd, daemonScript, freePort, leftoversOf, listening, pidFrom, pidIn, service,
   serviceSession, strays, waitFor,
 } from "./test-service-ports-fixtures.js";
 
@@ -72,10 +72,11 @@ const timer = setInterval(() => {
       201,
     );
     await waitFor("守护进程听上了端口", async () => (await listening(scriptPort2)).length > 0);
-    const litePid = pidIn(litePidfile);
+    // 「听上了端口」早于「pidfile 落盘」,所以这里必须自己等一次号 —— 不等就会读到 0,
+    // 而下面那条停止脚本里的 `kill -9 0` 打的是**调用方自己的整个进程组**(见 pidIn)。
+    const litePid = await pidFrom(litePidfile, "守护进程");
     strays.add(litePid);
-    await waitFor("洗掉环境的工人也起来了", () => { try { return pidIn(liteWorker) > 0; } catch { return false; } });
-    const liteWorkerPid = pidIn(liteWorker);
+    const liteWorkerPid = await pidFrom(liteWorker, "洗掉环境的工人");
     strays.add(liteWorkerPid);
     await waitFor("启动脚本退出", () => serviceSession("ports14")?.exitCode !== null);
     // 一条**只收监听者**的停止命令:它 exit 0,端口也真的让出来了。
@@ -102,10 +103,9 @@ const timer = setInterval(() => {
     201,
   );
   await waitFor("守护进程听上了端口", async () => (await listening(failPort)).length > 0);
-  const failPid = pidIn(failPidfile);
+  const failPid = await pidFrom(failPidfile, "守护进程");
   strays.add(failPid);
-  await waitFor("洗掉环境的工人也起来了", () => { try { return pidIn(failWorker) > 0; } catch { return false; } });
-  const failWorkerPid = pidIn(failWorker);
+  const failWorkerPid = await pidFrom(failWorker, "洗掉环境的工人");
   strays.add(failWorkerPid);
   await waitFor("启动脚本退出", () => serviceSession("ports15")?.exitCode !== null);
 
@@ -148,19 +148,14 @@ const timer = setInterval(() => {
         `echo http://127.0.0.1:${secondPort}`,
       ].join("\n"), "exit 0");
       assert.equal((await startCommand(projectId, cwd, command)).status, 201);
-      await waitFor("启动脚本退出并留下守护化启动器", () => {
-        try { return serviceSession(projectId)?.exitCode !== null && pidIn(gate + ".pid") > 0; } catch { return false; }
-      });
-      strays.add(pidIn(gate + ".pid"));
+      await waitFor("启动脚本退出", () => serviceSession(projectId)?.exitCode !== null);
+      strays.add(await pidFrom(gate + ".pid", "守护化启动器"));
       writeFileSync(gate, "launch");
-      await waitFor("两个监听者和同组工人启动", async () => {
-        try {
-          return pidIn(workerFile) > 0 && (await listening(firstPort)).length > 0 && (await listening(secondPort)).length > 0;
-        } catch { return false; }
-      });
-      const firstPid = pidIn(firstFile);
-      const secondPid = pidIn(secondFile);
-      const workerPid = pidIn(workerFile);
+      await waitFor("两个端口都听上了", async () =>
+        (await listening(firstPort)).length > 0 && (await listening(secondPort)).length > 0);
+      const firstPid = await pidFrom(firstFile, "第一个监听者");
+      const secondPid = await pidFrom(secondFile, "第二个监听者");
+      const workerPid = await pidFrom(workerFile, "同组工人");
       for (const pid of [firstPid, secondPid, workerPid]) strays.add(pid);
       await waitFor("启动脚本已经退出且端口事实已更新", () => {
         const session = serviceSession(projectId);
@@ -211,7 +206,7 @@ const timer = setInterval(() => {
     await waitFor("自己的完整服务启动", async () => {
       try { return pidIn(workerFile) > 0 && (await listening(ownPort)).length > 0; } catch { return false; }
     });
-    for (const file of [ownFile, workerFile]) strays.add(pidIn(file));
+    for (const file of [ownFile, workerFile]) strays.add(await pidFrom(file));
     await waitFor("启动脚本退出", () => serviceSession(projectId)?.exitCode !== null);
     const open = serviceSession(projectId)!;
     const token = terminalSessions.launchTokenOf(open.id);
@@ -233,14 +228,18 @@ const timer = setInterval(() => {
     assert.ok(alive(outsider.pid!));
     const oldWorkerPid = pidIn(workerFile);
     assert.equal((await startCommand(projectId, cwd, command)).status, 201);
-    await waitFor("再次启动服务", async () =>
-      pidIn(workerFile) !== oldWorkerPid && alive(pidIn(workerFile)) && (await listening(ownPort)).length > 0);
-    for (const file of [ownFile, workerFile]) strays.add(pidIn(file));
+    await waitFor("再次启动服务", async () => {
+      try { return pidIn(workerFile) !== oldWorkerPid && alive(pidIn(workerFile)) && (await listening(ownPort)).length > 0; }
+      catch { return false; }
+    });
+    for (const file of [ownFile, workerFile]) strays.add(await pidFrom(file));
     const restartedWorkerPid = pidIn(workerFile);
     assert.equal((await restartCommand(projectId, cwd, command)).status, 201);
-    await waitFor("重启服务", async () =>
-      pidIn(workerFile) !== restartedWorkerPid && alive(pidIn(workerFile)) && (await listening(ownPort)).length > 0);
-    for (const file of [ownFile, workerFile]) strays.add(pidIn(file));
+    await waitFor("重启服务", async () => {
+      try { return pidIn(workerFile) !== restartedWorkerPid && alive(pidIn(workerFile)) && (await listening(ownPort)).length > 0; }
+      catch { return false; }
+    });
+    for (const file of [ownFile, workerFile]) strays.add(await pidFrom(file));
     assert.equal((await terminalSessions.destroyProject(projectId)).ok, true);
     assert.ok(alive(outsider.pid!));
   }

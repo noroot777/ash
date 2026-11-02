@@ -53,7 +53,7 @@ import { terminalSessions } from "../src/terminal.js";
 import { TerminalWatcher } from "../src/terminal-session-watch.js";
 import { restartCommand, startCommand, stopCommand, type RunnableCommand } from "../src/terminal-commands.js";
 import {
-  alive, cleanup, cwd, daemonScript, freePort, leftoversOf, listening, outside, pidIn,
+  alive, cleanup, cwd, daemonScript, freePort, leftoversOf, listening, outside, pidFrom, pidIn,
   service, serviceSession, strays, waitFor,
 } from "./test-service-ports-fixtures.js";
 
@@ -73,11 +73,12 @@ try {
   assert.equal((await startCommand("ports1", cwd, service(daemonScript(port, pidfile, [], workerPidfile)))).status, 201);
   await waitFor("启动脚本自己退出(守护化形状)", () => serviceSession("ports1")?.exitCode !== null);
   await waitFor("服务真的听上了端口", async () => (await listening(port)).length > 0);
-  const servicePid = pidIn(pidfile);
+  // 首次读 pidfile 一律走 pidFrom:「听上了端口」早于「pidfile 落盘」,直接 pidIn 会读到
+  // 空文件,而那个 0 一旦进了任何组级信号,打的就是调用方自己的整个进程组(见 pidIn)。
+  const servicePid = await pidFrom(pidfile, "守护进程");
   strays.add(servicePid);
-  assert.ok(servicePid > 0 && alive(servicePid), "守护进程应当活着");
-  await waitFor("洗掉环境的那个工人也起来了", () => { try { return pidIn(workerPidfile) > 0; } catch { return false; } });
-  const washedPid = pidIn(workerPidfile);
+  assert.ok(alive(servicePid), "守护进程应当活着");
+  const washedPid = await pidFrom(workerPidfile, "洗掉环境的那个工人");
   strays.add(washedPid);
 
   const session = serviceSession("ports1")!;
@@ -136,7 +137,7 @@ try {
     cwd: outside, detached: true, stdio: "ignore",
   }).unref();
   await waitFor("旁人把端口占上", async () => (await listening(strayPort)).length > 0);
-  const strayPid = pidIn(strayPidfile);
+  const strayPid = await pidFrom(strayPidfile, "旁人的服务");
   strays.add(strayPid);
 
   // 直接问 stopByPorts:记号核不上就只能进 spared,并且说清为什么。
@@ -175,8 +176,8 @@ try {
   await waitFor("两个端口都记上了", () => (serviceSession("ports2")?.ports.length ?? 0) === 2);
   await waitFor("两份都听上了", async () =>
     (await listening(minePort)).length > 0 && (await listening(mine2Port)).length > 0);
-  const minePid = pidIn(minePidfile);
-  const mine2Pid = pidIn(mine2Pidfile);
+  const minePid = await pidFrom(minePidfile, "第一个守护进程");
+  const mine2Pid = await pidFrom(mine2Pidfile, "第二个守护进程");
   strays.add(minePid);
   strays.add(mine2Pid);
   await waitFor("启动脚本退出", () => serviceSession("ports2")?.exitCode !== null);
@@ -198,7 +199,7 @@ try {
   // `true` 返回零但什么都不做 —— 旧实现据此报「已停止」、按钮消失,服务还在听。
   assert.equal((await startCommand("ports3", cwd, service(daemonScript(scriptPort, scriptPidfile), "true"))).status, 201);
   await waitFor("服务听上了端口", async () => (await listening(scriptPort)).length > 0);
-  const scriptPid = pidIn(scriptPidfile);
+  const scriptPid = await pidFrom(scriptPidfile, "守护进程");
   strays.add(scriptPid);
   await waitFor("启动脚本退出", () => serviceSession("ports3")?.exitCode !== null);
   await waitFor("它认为服务开着", () => serviceSession("ports3")?.portsAlive === true);
@@ -233,7 +234,7 @@ try {
     .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
   assert.equal((await startCommand("ports4", cwd, worker)).status, 201);
   await waitFor("工人守护起来了", async () => (await listening(livePort)).length > 0);
-  const livePid = pidIn(livePidfile);
+  const livePid = await pidFrom(livePidfile, "工人守护进程");
   strays.add(livePid);
   await waitFor("启动脚本退出", () => workerSession()?.exitCode !== null);
   await waitFor("端口那一拍认出它还在跑", () => workerSession()?.portsAlive === true);
@@ -258,7 +259,7 @@ try {
   await waitFor("旧的守护进程被收掉了", () => !alive(livePid));
   strays.delete(livePid);
   await waitFor("新的守护进程接上了同一个端口", () => { const pid = pidIn(livePidfile); return pid !== livePid && alive(pid); });
-  const freshPid = pidIn(livePidfile);
+  const freshPid = await pidFrom(livePidfile);
   strays.add(freshPid);
   assert.equal((await listening(livePort))[0], freshPid, "端口上坐着的应当是新起的那一份");
 
@@ -278,7 +279,7 @@ try {
   ].join("\n");
   assert.equal((await startCommand("ports6", cwd, service(truncScript))).status, 201);
   await waitFor("服务听上了它那个端口", async () => (await listening(truncPort)).length > 0);
-  const truncPid = pidIn(truncPidfile);
+  const truncPid = await pidFrom(truncPidfile);
   strays.add(truncPid);
   await waitFor("启动脚本退出", () => serviceSession("ports6")?.exitCode !== null);
   const truncated = serviceSession("ports6")!;
@@ -307,7 +308,7 @@ try {
   const quiet = service(`${process.execPath} quiet.js "${quietPidfile}"`, quietStop);
   assert.equal((await startCommand("ports7", cwd, quiet)).status, 201);
   await waitFor("常驻进程起来了", () => { try { return alive(pidIn(quietPidfile)); } catch { return false; } });
-  const quietPid = pidIn(quietPidfile);
+  const quietPid = await pidFrom(quietPidfile);
   strays.add(quietPid);
   await waitFor("启动脚本自己退出", () => serviceSession("ports7")?.exitCode !== null);
   const quietSession = serviceSession("ports7")!;
@@ -330,7 +331,7 @@ try {
     "停过之后再点启动,该起新的那一份(第四档认的是「没被停过」)",
   );
   await waitFor("新的那份起来了", () => { const pid = pidIn(quietPidfile); return pid !== quietPid && alive(pid); });
-  const quietFresh = pidIn(quietPidfile);
+  const quietFresh = await pidFrom(quietPidfile);
   strays.add(quietFresh);
   await stopCommand("ports7", SERVICE_COMMAND_ID, { script: quietStop, cwd, timeoutMs: 15_000 });
   await waitFor("收尾:新的那份也停掉", () => !alive(quietFresh));
@@ -364,7 +365,7 @@ try {
   const closePidfile = join(cwd, "close.pid");
   assert.equal((await startCommand("ports10", cwd, service(daemonScript(closePort, closePidfile)))).status, 201);
   await waitFor("守护进程听上了端口", async () => (await listening(closePort)).length > 0);
-  const closePid = pidIn(closePidfile);
+  const closePid = await pidFrom(closePidfile);
   strays.add(closePid);
   await waitFor("启动脚本退出", () => serviceSession("ports10")?.exitCode !== null);
   const closeId = serviceSession("ports10")!.id;
@@ -388,7 +389,7 @@ try {
     });
     guard.unref();
     await waitFor("带记号的监听者起来了", async () => (await listening(guardPort)).length > 0);
-    const guardPid = pidIn(guardPidfile);
+    const guardPid = await pidFrom(guardPidfile);
     strays.add(guardPid);
     const watched = {
       process: { pid: process.pid },
@@ -436,10 +437,10 @@ try {
     201,
   );
   await waitFor("守护进程听上了端口", async () => (await listening(owedPort)).length > 0);
-  const owedPid = pidIn(owedPidfile);
+  const owedPid = await pidFrom(owedPidfile);
   strays.add(owedPid);
   await waitFor("洗掉环境的工人也起来了", () => { try { return pidIn(owedWorkerPidfile) > 0; } catch { return false; } });
-  const owedWorker = pidIn(owedWorkerPidfile);
+  const owedWorker = await pidFrom(owedWorkerPidfile);
   strays.add(owedWorker);
   await waitFor("启动脚本退出", () => serviceSession("ports12")?.exitCode !== null);
   assert.equal((await stopCommand("ports12", SERVICE_COMMAND_ID, null, { portGraceMs: 500 })).status, 200);
@@ -475,7 +476,7 @@ try {
     });
     failing.unref();
     await waitFor("带记号的监听者起来了", async () => (await listening(failPort)).length > 0);
-    const failPid = pidIn(failPidfile);
+    const failPid = await pidFrom(failPidfile);
     strays.add(failPid);
     // 对照组:ps 正常时答案必须是 ours,否则下面那半个断言什么都没证明。
     const healthy = await probeOwnedPorts([failPort], failToken);
@@ -520,8 +521,8 @@ try {
     assert.equal((await startCommand("ports13", cwd, service(start))).status, 201);
     await waitFor("两个端口都听上了", async () =>
       (await listening(pairPort)).length > 0 && (await listening(pairWorkerPort)).length > 0);
-    const pairPid = pidIn(pairPidfile);
-    const pairWorker = pidIn(pairWorkerPidfile);
+    const pairPid = await pidFrom(pairPidfile);
+    const pairWorker = await pidFrom(pairWorkerPidfile);
     strays.add(pairPid);
     strays.add(pairWorker);
     await waitFor("启动脚本退出", () => serviceSession("ports13")?.exitCode !== null);
@@ -587,7 +588,7 @@ process.on("SIGTERM", () => {
     201,
   );
   await waitFor("守护进程听上了端口", async () => (await listening(termPort)).length > 0);
-  const termPid = pidIn(termPidfile);
+  const termPid = await pidFrom(termPidfile);
   strays.add(termPid);
   await waitFor("启动脚本自己退出(守护化形状)", () => serviceSession("ports16")?.exitCode !== null);
   // 默认停止(没配停止命令)。宽限要够那 400ms,否则 TERM 还没来得及生出接班进程就被 KILL 了,
@@ -596,7 +597,7 @@ process.on("SIGTERM", () => {
   assert.equal(closed.status, 200, "停止要成功");
   assert.deepEqual(closed.body, { stopped: true }, "收到不动点了就该是干干净净的「已停止」");
   await waitFor("TERM 期间新生的接班进程也被收掉了", () => { try { return !alive(pidIn(heirPidfile)); } catch { return false; } });
-  const heirPid = pidIn(heirPidfile);
+  const heirPid = await pidFrom(heirPidfile);
   assert.ok(!alive(heirPid), `接班进程 ${heirPid} 必须被重新收集那一轮收掉`);
   assert.equal(leftoversOf("ports16"), null, "都收干净了,账上不该挂着没核销的责任");
   assert.equal(await probePorts([termPort]), "free", "端口要真的让出来");
@@ -610,7 +611,7 @@ process.on("SIGTERM", () => {
   const exitPidfile = join(cwd, "exit.pid");
   assert.equal((await startCommand("ports11", cwd, service(daemonScript(exitPort, exitPidfile)))).status, 201);
   await waitFor("守护进程听上了端口", async () => (await listening(exitPort)).length > 0);
-  const exitPid = pidIn(exitPidfile);
+  const exitPid = await pidFrom(exitPidfile);
   strays.add(exitPid);
   await waitFor("启动脚本退出", () => serviceSession("ports11")?.exitCode !== null);
   terminalSessions.shutdown();
