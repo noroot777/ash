@@ -138,5 +138,11 @@ export function macGateConfinement(logPath: string, pid: number, startedAt: stri
       } catch {}
     },
     async prepare() { executable = await gateMacScannerExecutable(); },
+    async resume() {
+      executable = await gateMacScannerExecutable();
+      if (timer) return;
+      timer = setInterval(() => { reading(); }, 250);
+      timer.unref();
+    },
   };
 }

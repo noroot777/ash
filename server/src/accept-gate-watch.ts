@@ -59,6 +59,9 @@ export function overrideGateWatchTimings(timings: Partial<GateWatchTimings> | nu
   overrides = timings;
 }
 
+/** 这一刻生效的门禁时限。看门的、退出档的时限判定（accept-gate-exit.ts）共用这一个数。 */
+export const gateTimeoutMs = (): number => timingsNow().timeoutMs;
+
 function timingsNow(): GateWatchTimings {
   return {
     timeoutMs: ACCEPT_GATE_TIMEOUT_MS, silenceMs: ACCEPT_GATE_SILENCE_MS,
@@ -243,12 +246,15 @@ export function gateWatchReport(scene: GateWatchScene): GateWatchVerdict {
  * 起一个看门的。`onVerdict` 只会被叫到一次（撞上时限），**它不负责收掉命令**，也不负责
  * 存现场 —— 现场由调用方在结算的第一步冻结存盘（settleGate → freezeGateScene）。
  */
-export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: GateWatchVerdict) => void }): GateWatch {
+export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: GateWatchVerdict) => void;
+  /** 跨重启接管时，开跑到现在已经过去多久。时限照旧从开跑那一刻算；这段时间我们没看着，按「后来才接上」处理。 */
+  elapsedMs?: number }): GateWatch {
   const timings = timingsNow();
   // 累计时长和两道时限走**单调时钟**：跑的过程中系统时间被校正（不是改时区）会让
   // Date.now() 的差值凭空变长变短，90 分钟这条线跟着提前或延后（第 3 轮审查 N2）。
-  // 墙上时间只在一处用：把文件 mtime 换算回单调轴。
-  const startedMono = now();
+  // 墙上时间只在两处用：把文件 mtime 换算回单调轴，和接管时折算重启前已经跑掉的那段。
+  const attachedMono = now();
+  const startedMono = attachedMono - Math.max(0, opts.elapsedMs ?? 0);
   // 日志长度只分两段，中间没有第三方：
   //   base   开跑前就在那儿的启动说明（命令原文、快照路径…），一个字节都不算命令的
   //   命令产出 = 截止长度 - base
@@ -261,10 +267,11 @@ export function startGateWatch(opts: { logPath: string; onVerdict: (verdict: Gat
   let base = first?.length ?? null;
   let identity = first?.identity ?? null;
   // baseMono 同时是**静默计量的起点**：在它之前我们看不见这份日志，看不见就什么都证不了。
-  let baseMono = startedMono;
+  // 接管时它是接上的那一刻：重启前那段的产出全算进 base，「接上之前写没写过」由 sinceMs 说破。
+  let baseMono = attachedMono;
   // 亲眼见过输出才有「最后一次输出时刻」；没见过就是 null，不拿开跑时刻冒充（第 6 轮 F1）。
   let lastOutputMono: number | null = null;
-  let lastSightMono = startedMono;
+  let lastSightMono = attachedMono;
   let seen: (Omit<GateSeen, "agoMs"> & { atMono: number }) | null = null;
   let noticedSilence = false;
   let noticedBlind = false;

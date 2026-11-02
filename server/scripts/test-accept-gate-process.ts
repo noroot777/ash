@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gateTreeAlive, spawnAcceptGate, stopAcceptGate } from "../src/accept-gate-process.js";
 import { gateGoPath, prepareGateLaunch, readGateLaunch, writeGateLaunch } from "../src/accept-gate-launch.js";
+import { readGateExit } from "../src/accept-gate-exit.js";
 import { gateJobEvidencePath, readGateJobEvidence } from "../src/accept-gate-confinement-job.js";
 import { gateJobSupervisorExecutable } from "../src/accept-gate-confinement-supervisor.js";
 import { reopenConfinement } from "../src/executors/kernel-confine.js";
@@ -26,7 +27,7 @@ async function until(predicate: () => boolean, timeout = 20_000): Promise<void> 
 const worker = fileURLToPath(new URL("./accept-gate-process-worker.ts", import.meta.url));
 const runWorker = (mode: string, directory: string, allowFailure = false) => new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
   const child = spawn(process.execPath, ["--import", "tsx", worker, mode, directory], {
-    stdio: ["ignore", "pipe", "pipe"], env: mode === "macos-flow" || mode === "macos-release"
+    stdio: ["ignore", "pipe", "pipe"], env: mode === "macos-flow" || mode === "macos-release" || mode === "macos-takeover"
       ? { ...process.env, ASH_DB: join(directory, "ash.db"), ASH_RUNS_DIR: join(directory, "runs") } : process.env,
     windowsHide: true,
   });
@@ -71,6 +72,8 @@ try {
     results.push(JSON.parse(flow.stdout.trim().split("\n").at(-1)!));
     const released = await runWorker("macos-release", join(root, "macos-release"));
     results.push(JSON.parse(released.stdout.trim().split("\n").at(-1)!));
+    const takeover = await runWorker("macos-takeover", join(root, "macos-takeover"));
+    results.push(JSON.parse(takeover.stdout.trim().split("\n").at(-1)!));
     for (const mode of ["normal", "orphan", "reopen", "preload", "group-exit", "group-crash"]) {
       const directory = join(root, mode);
       const control = await runWorker(mode === "normal" ? "controller-normal"
@@ -80,6 +83,13 @@ try {
       const started = JSON.parse(readFileSync(`${directory}.controller.json`, "utf8"));
       const descendant = Number(readFileSync(`${directory}.pid`, "utf8"));
       assert.equal(isPidAlive(descendant), true);
+      // 起它的控制器已经死了，命令自己 rc=0 退出：结果只能从启动器落的退出档里认（accept-gate-exit.ts）。
+      if (mode === "reopen") {
+        await until(() => readGateExit(`${directory}.log`, started.pid) !== null);
+        const recorded = readGateExit(`${directory}.log`, started.pid)!;
+        assert.deepEqual({ code: recorded.code, signal: recorded.signal }, { code: 0, signal: null });
+        assert.ok(Number.isFinite(recorded.elapsedMs) && recorded.elapsedMs! >= 0, "退出档带着启动器自己量的用时");
+      }
       const recovered = JSON.parse((await runWorker("recover", directory)).stdout.trim().split("\n").at(-1)!);
       assert.equal(recovered.aliveBefore, true, "recovery must see surviving descendants before stopping");
       assert.equal(recovered.stopped, true, JSON.stringify(recovered));
