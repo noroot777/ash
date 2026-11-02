@@ -187,7 +187,10 @@ try {
     const scroll = page.locator(scrollSelector);
     const before = await scroll.evaluate(node => node.scrollTop);
     await scroll.evaluate(node => node.scrollBy(0, 500));
-    assert((await scroll.evaluate(node => node.scrollTop)) > before, `${view} list must actually scroll`);
+    // 滚不动时要说得出是「容器压根没有可滚区间」还是「滚了但没动」——光一句 must scroll
+    // 查起来得重跑一遍整条用例(前半段还要真丢弃文件)。
+    const after = await scroll.evaluate(node => ({ top: node.scrollTop, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }));
+    assert(after.top > before, `${view} list must actually scroll (before=${before} after=${JSON.stringify(after)})`);
     await menu.waitFor({ state: "detached" });
     await page.screenshot({ path: join(output, `${screenshot}-closed.png`) });
   };

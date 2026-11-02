@@ -9,7 +9,12 @@
       body { margin: 0; }
       .fixture-project { min-height: 100vh; padding: 32px; }
       .fixture-project-card { width: min(520px, calc(100vw - 64px)); padding: 24px; }
-      .fixture-workbench { min-height: 100vh; }
+      /* 全屏工作台这一档要**定高**:真应用里它住在 .workspace-git-page 里,高度是窗口减
+         底部状态栏那条确定值,所以 .gwb 的 height:100% 有东西可依,内部 flex 一级级压到
+         .history-rows 自己出滚动条。夹具原先写 min-height:100vh,height:100% 就落到 auto,
+         列表长到 2506px 把整页撑开 —— 面板内滚动、「菜单跟着滚动关掉」「窄屏里按钮不出
+         视口」这几条全都测不到真东西(审计 2026-11-02 实测 scrollHeight==clientHeight)。 */
+      .fixture-workbench { height: 100vh; }
       [data-testid="fixture-notice"], [data-testid="fixture-opened-task"] {
         position: fixed; width: 1px; height: 1px; overflow: hidden;
         clip-path: inset(50%); pointer-events: none;
