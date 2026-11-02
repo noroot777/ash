@@ -107,7 +107,10 @@ await withTestResources(async () => {
     const child = external.spawn(process.execPath, ["-e", "process.exit()"], { stdio: "ignore" });
     await external.children[0].closed;
     assert.equal(child.exitCode, 0);
-    const retired = childProcess.spawnSync(process.execPath, ["scripts/test-process-cleanup.mjs", external.directory], { encoding: "utf8", timeout: 30_000 });
+    const retired = childProcess.spawnSync(process.execPath, ["scripts/test-process-cleanup.mjs"], {
+      encoding: "utf8", timeout: 30_000,
+      input: JSON.stringify([{ directory: external.directory, directoryOwnership: external.directoryOwnership }]),
+    });
     assert.ifError(retired.error);
     assert.equal(retired.status, 0, retired.stderr);
     assert.equal(fs.existsSync(external.directory), false);

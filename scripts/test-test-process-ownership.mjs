@@ -27,8 +27,8 @@ await withTestResources(async () => {
     assert.equal(created.length, 2);
     assert.deepEqual(created.filter((directory) => fs.existsSync(directory)), []);
   }
-  const existing = fs.mkdtempSync(join(temporary, "existing-"));
-  fs.writeFileSync(join(existing, "started"), "12345");
+  const existingScope = new TestProcessScope();
+  const existing = existingScope.directory;
   fs.readFileSync = (target, ...args) => {
     if (target === join(existing, "started")) throw Object.assign(new Error("injected read EACCES"), { code: "EACCES" });
     return original.readFileSync(target, ...args);
@@ -36,8 +36,9 @@ await withTestResources(async () => {
   syncBuiltinESMExports();
   try { assert.throws(() => new TestProcessScope(existing), { code: "EACCES" }); }
   finally { Object.assign(fs, original); syncBuiltinESMExports(); }
-  assert.equal(fs.readFileSync(join(existing, "started"), "utf8"), "12345");
+  assert.match(fs.readFileSync(join(existing, "started"), "utf8"), /^\d+$/);
   assert.equal(fs.existsSync(existing), true);
+  existingScope.remove();
   console.log("✓ 初始化 ENOSPC/EACCES 回滚自有两目录,恢复失败不删除或改写已有域");
 
   for (const phase of ["output", "scope"]) {

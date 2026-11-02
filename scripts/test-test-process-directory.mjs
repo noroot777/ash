@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TestProcessScope, disposeTestProcessResourcesSync, disposeTestScopesSync } from "./test-process-scope.mjs";
 import { cleanupTestResources, withTestResources } from "./test-process-resources.mjs";
@@ -13,6 +15,7 @@ const cleanup = fileURLToPath(new URL("test-process-cleanup.mjs", import.meta.ur
 const scopeURL = new URL("test-process-scope.mjs", import.meta.url).href;
 const owned = [];
 const links = [];
+const victims = [];
 const makeScope = () => { const scope = new TestProcessScope(); owned.push(scope); return scope; };
 const runCleanup = (directory, input) => spawnSync(process.execPath, [cleanup, ...(input ? [] : [directory])], {
   encoding: "utf8", input: input && JSON.stringify(input), timeout: 30_000,
@@ -54,6 +57,61 @@ await withTestResources(async () => {
   assertVictim(lookalike);
   console.log("✓ 无关目录在构造/argv/stdin/正常退出均拒收,不写 stopped、不递归删除,异地同名前缀也不算归属");
 
+  const credentials = makeScope();
+  for (const shape of ["started", "domain", "temporary-name", "copied-record"]) {
+    const directory = shape === "temporary-name" ? fs.mkdtempSync(join(tmpdir(), "ash-test-scope-")) : join(temporary, shape);
+    victims.push(directory);
+    makeVictim(directory);
+    if (shape === "started") fs.writeFileSync(join(directory, "started"), "1762000000000");
+    if (shape === "domain") fs.writeFileSync(join(directory, "domain.json"), JSON.stringify({ name: "x", executable: "y" }));
+    if (shape === "copied-record") fs.copyFileSync(credentials.directoryOwnership.record, join(directory, "ownership.json"));
+    assert.throws(() => new TestProcessScope(directory), { code: "EOWNERSHIP" });
+    const stat = fs.lstatSync(directory, { bigint: true });
+    const identity = { dev: String(stat.dev), ino: String(stat.ino) };
+    assert.throws(() => new TestProcessScope(directory, undefined, identity), { code: "EOWNERSHIP" });
+    const borrowed = { ...credentials.directoryOwnership, directoryIdentity: identity };
+    assert.throws(() => new TestProcessScope(directory, undefined, borrowed), { code: "EOWNERSHIP" });
+    for (const input of [undefined, [{ directory }], [{ directory, directoryOwnership: borrowed }]]) {
+      const result = runCleanup(directory, input);
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stderr);
+      assertVictim(directory);
+    }
+  }
+  console.log("✓ 数字 started/完整 domain/临时目录名/复制凭证文件均不授予归属,仅知道 dev:ino 或借用别域凭证也拒收");
+
+  const authorized = makeScope();
+  const proof = authorized.directoryOwnership;
+  const originalRecord = fs.readFileSync(proof.record, "utf8");
+  const wrongProof = { ...proof, token: randomBytes(32).toString("hex") };
+  assert.notEqual(wrongProof.token, proof.token);
+  assert.throws(() => new TestProcessScope(authorized.directory, undefined, wrongProof), { code: "EOWNERSHIP" });
+  assert.equal(runCleanup(authorized.directory, [{ directory: authorized.directory, directoryOwnership: wrongProof }]).status, 1);
+  assert.equal(fs.existsSync(join(authorized.directory, "stopped")), false);
+  await withTestResources(async () => {
+    fs.writeFileSync(proof.record, JSON.stringify({ ...JSON.parse(originalRecord), token: wrongProof.token }));
+    await assert.rejects(() => authorized.stop(), (error) => error.errors.some((entry) => entry.code === "EOWNERSHIP"));
+    assert.throws(() => authorized.remove(), { code: "EOWNERSHIP" });
+    assert.equal(fs.existsSync(join(authorized.directory, "stopped")), false);
+    fs.unlinkSync(proof.record);
+    assert.throws(() => authorized.remove(), { code: "ENOENT" });
+  }, [() => fs.writeFileSync(proof.record, originalRecord)]);
+  assert.throws(() => { authorized.directoryOwnership.token = "changed"; }, TypeError);
+  assert.throws(() => { authorized.directoryOwnership.directoryIdentity.ino = "0"; }, TypeError);
+  fs.unlinkSync(join(authorized.directory, "started"));
+  const request = [{ directory: authorized.directory, directoryOwnership: proof }];
+  const result = spawnSync(process.execPath, [cleanup, "--scopes", JSON.stringify(request)], { encoding: "utf8", timeout: 30_000 });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(authorized.directory), false);
+  assert.equal(fs.existsSync(dirname(proof.record)), false);
+  await withTestResources(async () => {
+    makeVictim(authorized.directory);
+    assert.equal(runCleanup(authorized.directory, request).status, 1);
+    assertVictim(authorized.directory);
+  }, [() => fs.rmSync(authorized.directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 })]);
+  console.log("✓ 随机凭证不匹配/丢失时拒写拒删,有效跨进程凭证可回收残壳和独立凭证目录,旧凭证不能重放删除新目录");
+
   for (const [filename, content] of [["started", "not-a-timestamp"], ["domain.json", "null"], ["domain.json", "{}"]]) {
     const malformed = join(temporary, `malformed-${filename}-${content.length}`);
     makeVictim(malformed);
@@ -81,11 +139,8 @@ await withTestResources(async () => {
   await recovered.stop();
   recovered.remove();
   assert.equal(fs.existsSync(partial.directory), false);
-  const marked = join(temporary, "marked-domain");
-  fs.mkdirSync(marked);
-  fs.writeFileSync(join(marked, "started"), "12345");
-  const remembered = new TestProcessScope(marked);
-  owned.push(remembered);
+  const remembered = makeScope();
+  const marked = remembered.directory;
   assert.throws(() => { remembered.directory = victim; }, TypeError);
   assert.throws(() => { remembered.directoryIdentity.ino = "0"; }, TypeError);
   fs.unlinkSync(join(marked, "started"));
@@ -94,7 +149,7 @@ await withTestResources(async () => {
   disposeTestScopesSync();
   assert.equal(fs.existsSync(marked), false);
   assertVictim(victim);
-  console.log("✓ 精确临时命名空间的残壳与原进程记住的目录实例仍可回收,路径/身份不可改写");
+  console.log("✓ 两份域元数据缺失时仍由独立凭证恢复残壳,路径/实例身份不可改写");
 
   const replaced = makeScope();
   const saved = join(temporary, "original-scope");
@@ -112,6 +167,26 @@ await withTestResources(async () => {
   ]);
   console.log("✓ 同路径替换目录在直接停止/回收和退出子进程均拒写拒删,恢复原目录后可正常退役");
 
+  const raced = makeScope();
+  const racedOriginal = join(temporary, "raced-original");
+  const invoke = native.invoke;
+  await withTestResources(async () => {
+    raced.domain = { name: "raced-domain", executable: "raced-controller" };
+    native.invoke = () => {
+      fs.renameSync(raced.directory, racedOriginal);
+      makeVictim(raced.directory);
+      return JSON.stringify({ exists: false, processes: [] });
+    };
+    assert.throws(() => raced.remove(), { code: "EOWNERSHIP" });
+    assertVictim(raced.directory);
+  }, [
+    () => { native.invoke = invoke; raced.domain = undefined; },
+    () => { if (fs.existsSync(racedOriginal)) fs.rmSync(raced.directory, { recursive: true, force: true }); },
+    () => { if (fs.existsSync(racedOriginal)) fs.renameSync(racedOriginal, raced.directory); },
+    () => raced.stop(), () => raced.remove(),
+  ]);
+  console.log("✓ 内核状态查询期间发生目录替换时,递归删除前再次核对凭证与实例并拒绝误删");
+
   const vanished = makeScope();
   fs.rmSync(vanished.directory, { recursive: true, force: true });
   const absent = new TestProcessScope(vanished.directory);
@@ -125,6 +200,26 @@ await withTestResources(async () => {
     assertVictim(absent.directory);
   }, [() => fs.rmSync(absent.directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 })]);
   console.log("✓ 已消失路径可幂等清理,无原实例的旧对象不能删除后来新建的同路径目录");
+
+  const originals = { mkdtempSync: fs.mkdtempSync, writeFileSync: fs.writeFileSync };
+  for (const phase of ["record-directory", "record-write"]) {
+    const created = [];
+    fs.mkdtempSync = (prefix, ...args) => {
+      if (phase === "record-directory" && prefix.includes("ash-test-owner-")) throw Object.assign(new Error("INJECTED_OWNER_EACCES"), { code: "EACCES" });
+      const directory = originals.mkdtempSync(prefix, ...args);
+      created.push(directory);
+      return directory;
+    };
+    fs.writeFileSync = (target, ...args) => {
+      if (phase === "record-write" && String(target).endsWith("ownership.json")) throw Object.assign(new Error("INJECTED_OWNER_ENOSPC"), { code: "ENOSPC" });
+      return originals.writeFileSync(target, ...args);
+    };
+    syncBuiltinESMExports();
+    try { assert.throws(() => new TestProcessScope(), { code: phase === "record-directory" ? "EACCES" : "ENOSPC" }); }
+    finally { Object.assign(fs, originals); syncBuiltinESMExports(); }
+    assert.deepEqual(created.filter((directory) => fs.existsSync(directory)), []);
+  }
+  console.log("✓ 凭证目录创建/记录写入失败保留初始化原错,自有域目录及独立凭证目录均回滚");
 
   if (process.platform === "win32") {
     const active = makeScope();
@@ -144,5 +239,6 @@ await withTestResources(async () => {
   () => cleanupTestResources(owned.flatMap((scope) => [() => scope.stop(), () => scope.remove()])),
   disposeTestProcessResourcesSync,
   () => cleanupTestResources(links.map((link) => () => fs.rmSync(link, { recursive: true, force: true }))),
+  () => cleanupTestResources(victims.map((directory) => () => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 }))),
   () => fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 }),
 ]);

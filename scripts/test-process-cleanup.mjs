@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 
 const errors = [];
 const retired = [];
-const pending = process.argv.length > 2 ? process.argv.slice(2).map((directory) => ({ directory })) : JSON.parse(readFileSync(0, "utf8"));
-for (const { directory, domain, directoryIdentity } of pending) {
+const args = process.argv.slice(2);
+const pending = args.length === 2 && args[0] === "--scopes" ? JSON.parse(args[1])
+  : args.length ? args.map((directory) => ({ directory })) : JSON.parse(readFileSync(0, "utf8"));
+for (const { directory, domain, directoryOwnership } of pending) {
   try {
-    const scope = new TestProcessScope(directory, domain, directoryIdentity);
+    const scope = new TestProcessScope(directory, domain, directoryOwnership);
     await scope.stop();
     scope.remove();
     retired.push(directory);

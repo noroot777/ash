@@ -74,7 +74,9 @@ await withTestResources(async () => {
     }; require('node:module').syncBuiltinESMExports();`);
     await Promise.all([firstReady, secondReady]);
     if (!IS_WINDOWS) fs.chmodSync(first.directory, 0o500);
-    const output = await runTestProcess(process.execPath, [cleanup, first.directory, second.directory], {
+    const output = await runTestProcess(process.execPath, [cleanup, "--scopes", JSON.stringify([first, second].map((scope) => ({
+      directory: scope.directory, directoryOwnership: scope.directoryOwnership,
+    })))], {
       timeout: 30_000,
       env: { ...process.env, NODE_OPTIONS: `--require ${JSON.stringify(hook)} ${process.env.NODE_OPTIONS ?? ""}` },
     }, 1);
