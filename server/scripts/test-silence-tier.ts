@@ -100,7 +100,7 @@ const turnAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
 
 console.log("② 接管·这一轮在别的进程里已经有过进展 → 静默档压根不该开(第 1 轮自由审查 F1)");
 {
-  const { openTurnProgress, noteTurnProgress, turnProgress, __resetTurnProgressMarks } =
+  const { openTurnProgress, noteTurnProgress, turnProgress, turnProgressFor, __resetTurnProgressMarks } =
     await import("../src/turn-progress-mark.js");
   __resetTurnProgressMarks();
   // 这一档刻意只在「确证没有过进展」时开:接管回来的新句柄看不到 agentOffset 之前那一段,
@@ -182,29 +182,103 @@ console.log("② 接管·这一轮在别的进程里已经有过进展 → 静�
   check(turnProgress("t-fragile", "s-fragile", fragile) === "unreadable",
     "参与证明被撤掉 → 这一轮退回「核实不了」,宁可漏判也不误杀");
 
-  // ②g **连撤销也失败时,水位替它说话**(第 3 轮自由审查 F5)
+  // ②g **进展的判据只在事件语义层,字节一个字都不参与**(第 2 轮自由审查 F2)
   //
-  // ②f 那条撤销自己也会失败,而且失败得成对:目录变只读、文件系统切只读 —— 同一个原因让
-  // 「写进展」和「撤证明」一起失败。于是 `.watch` 留在那里继续声明「会记的人在盯,它没记过」,
-  // 而那一轮其实正在产出、输出甚至已经被消费并提交了水位 → 接管回来按旧起点计时,长工具照杀。
-  // 所以「确证没产出」要两个事实:证明在,**而且持久消费水位一字未动**。
+  // 上一版拿「已消费的原始 stdout 字节比开轮时高」当保险。那个水位是**换行位置**
+  // (executors/detached-child.ts):握手应答、线程通知、错误行全算字节。审查实测:一个只做完
+  // 握手、一个字正文都没有的回合,水位从 0 走到 249 → 读出 `seen`、静默档被永久排除 ——
+  // **正是这条任务要抓的那个 1.5 小时零输出现场,被那层「保险」挡在了门外**。
+  //
+  // 所以这一问只认记号,**连接口上都没有字节可传**(多传一个参数就编译不过)。可靠性改从另一头
+  // 补:记号欠着时消费链不推进 `agentOffset`,那段输出留给下一个进程重放 —— 那一半在
+  // test-delivery-receipt.ts §④ 按真实投递链钉。
   __resetTurnProgressMarks();
-  const longTool = new Date(Date.now() - 90 * 60_000).toISOString();
-  openTurnProgress("t-watermark", "s-watermark", longTool, 454); // 开轮那一刻已消费 454 字节
-  check(turnProgress("t-watermark", "s-watermark", longTool, 454) === "none",
-    "前提:水位一字未动 → 照旧是「确证零进展」(这一档没被修没)");
-  check(turnProgress("t-watermark", "s-watermark", longTool, 1_200) === "seen",
-    "水位从 454 前进到 1200 → 这一轮产出过(即使进展记号没写成、证明也撤不掉)");
-  const burntSpy = spy("t-watermark");
-  watchTurnSilence("s-watermark", {}, longTool, burntSpy.actions,
-    turnProgress("t-watermark", "s-watermark", longTool, 1_200));
+  const handshakeOnly = new Date(Date.now() - 90 * 60_000).toISOString();
+  openTurnProgress("t-bytes", "s-bytes", handshakeOnly);
+  check(turnProgress("t-bytes", "s-bytes", handshakeOnly) === "none",
+    "只做完握手(有字节、没有任何正文/思考/工具事件)→ 照旧是「确证零进展」,字节不冒充进展");
+  const bytesSpy = spy("t-bytes");
+  watchTurnSilence("s-bytes", {}, handshakeOnly, bytesSpy.actions,
+    turnProgress("t-bytes", "s-bytes", handshakeOnly));
   await sleep(700);
-  check(burntSpy.log.trips.length === 0,
-    "于是那个正跑长工具的回合不会被杀(F5 实测形状:进展写失败 + 撤销也失败)");
-  // 老格式的证明(没记水位)照旧只按记号判 —— 升级不改判据。
-  openTurnProgress("t-watermark", "s-legacy", longTool);
-  check(turnProgress("t-watermark", "s-legacy", longTool, 9_999) === "none",
-    "没记水位的旧证明:仍按记号判「确证零进展」,不因为给了个水位就改口");
+  check(bytesSpy.log.trips.length === 1,
+    "于是那个零输出的回合照旧被抓住并熔断(上一版:水位 0→249 读成 seen,一拍都不会动)");
+  clearTurnStall("s-bytes", {});
+
+  // ②h **证明不完整就不是证明**(同一轮 F2 的另一半):半张、或者上一代格式的 `.watch`
+  // 只能证明「我不知道」,不许当成「完整、可靠地记下了零进展」。
+  const { writeFileSync } = await import("node:fs");
+  const dir = join(root, "runs", "t-broken", "progressed");
+  const half = new Date(Date.now() - 90 * 60_000).toISOString();
+  const elderFormat = new Date(Date.now() - 91 * 60_000).toISOString();
+  openTurnProgress("t-broken", "s-broken", half); // 先让目录与一张完整证明存在
+  const nameOf = (turn: string) => `s-broken-${turn.replace(/[^0-9]/g, "")}.watch`;
+  writeFileSync(join(dir, nameOf(half)), "ash-turn-progress-watch/v2 " + half + "\n"); // 缺末行
+  check(turnProgress("t-broken", "s-broken", half) === "unreadable",
+    "写一半的证明(截断后写失败)→ 核实不了,不是「确证零进展」");
+  writeFileSync(join(dir, nameOf(elderFormat)), elderFormat + "\n"); // 上一代:没有版本行
+  check(turnProgress("t-broken", "s-broken", elderFormat) === "unreadable",
+    "上一代格式的证明(没有版本行)→ 核实不了;升级不迁移,也不许就此追认它没产出");
+
+  // ②i **从头看着这一轮的那个进程不必问盘**:证明写不成也不改变它手上的事实
+  // (否则一次写盘故障就把静默档关掉 —— 那正是这一档要抓的形状)。
+  const fresh = new Date(Date.now() - 90 * 60_000).toISOString();
+  check(turnProgressFor({
+    taskId: "t-no-proof", sessionId: "s-no-proof", turnStartedAt: fresh, watchedFromStart: true,
+  }) === "none", "fresh run / 讨论 / 常驻台:一张证明都没有也照旧是「确证零进展」");
+  check(turnProgressFor({
+    taskId: "t-no-proof", sessionId: "s-no-proof", turnStartedAt: fresh, watchedFromStart: false,
+  }) === "unreadable", "接管回来的那一轮才真的要问盘:没有证明 → 核实不了(两条路不许混)");
+
+  // ②j **未知有自己的恢复路**:接着重读,读出结论就交回调用方(第 2 轮自由审查 F2)。
+  // 在 `seen` 与 `none` 里任选一边都是错的:选 seen = 这一轮永久排除在静默档外(原始那个
+  // 1.5 小时),选 none = 替上一个进程追认「它从未产出」(第 1 轮 F1 那个误杀)。
+  const { recoverTurnProgress } = await import("../src/turn-progress-mark.js");
+  const late = new Date(Date.now() - 90 * 60_000).toISOString();
+  const heard: string[] = [];
+  recoverTurnProgress("t-recover", "s-recover", late, (progress) => heard.push(progress),
+    () => true, { everyMs: 5, maxMs: 10, steadyAfter: 2 });
+  await sleep(60);
+  check(heard.length === 0, "证明还是读不出来 → 不交结论,也不自行退场(接着重读)");
+  openTurnProgress("t-recover", "s-recover", late); // 存储恢复:上一个进程那张证明读得到了
+  for (let i = 0; i < 60 && heard.length === 0; i += 1) await sleep(20);
+  check(heard.join(",") === "none", `恢复之后把结论交回调用方(实际:${heard.join(",") || "一次都没交"})`);
+
+  const quit: string[] = [];
+  recoverTurnProgress("t-recover", "s-gone", late, (progress) => quit.push(progress),
+    () => false, { everyMs: 5 });
+  openTurnProgress("t-recover", "s-gone", late);
+  await sleep(60);
+  check(quit.length === 0, "这一轮已经不消费了 → 恢复核验收手(回合结束后再撤观察只会撤错下一轮)");
+
+  // ②k **按「我盯得住的那段窗口」起算**,并且证明一恢复就把那条观察撤掉。
+  const { withdrawTurnSilence } = await import("../src/turn-stall.js");
+  configure({ silentWarnMs: 100, silentTripMs: 400, pollMs: 200 });
+  const blindTurn = new Date(Date.now() - 90 * 60_000).toISOString(); // 欠了 90 分钟
+  const windowSpy = spy("t-window");
+  const windowOwner = {};
+  watchTurnSilence("s-window", windowOwner, blindTurn, windowSpy.actions, "none",
+    new Date().toISOString()); // 钟从此刻起算:重启前那段既不追认也不勾销
+  await sleep(50);
+  check(windowSpy.log.warns.length === 0,
+    "钟从接管这一刻起算 → 不会见面就报警(按回合真实起点算的话,90 分钟的欠账当场熔断)");
+  check(withdrawTurnSilence("s-window", windowOwner, blindTurn),
+    "证明后来读出来「有过产出」→ 这条只为核实不了而开的观察当场撤掉");
+  await sleep(700);
+  check(windowSpy.log.warns.length === 0 && windowSpy.log.trips.length === 0,
+    "撤掉之后一档都不许再动(正在跑长工具的健康回合不会被这条路误杀)");
+  check(!withdrawTurnSilence("s-window", windowOwner, blindTurn), "撤过的不再重复撤");
+
+  // 错误档不许被这条路撤掉:它有自己的判据,撤了就等于把上游停滞悄悄放过。
+  configure({ warnErrors: 1, warnMs: 0, tripMs: 300_000, silentWarnMs: 600_000, silentTripMs: 600_000, pollMs: 200 });
+  const errOwner = {};
+  const errSpy = spy("t-window-err");
+  const errTurn = new Date(Date.now() - 60_000).toISOString();
+  trackTurnStall("s-window-err", errOwner, errTurn, notice(), errSpy.actions);
+  check(errSpy.log.warns.length === 1, "前提:错误档真的开着(否则下面那条是假绿)");
+  check(!withdrawTurnSilence("s-window-err", errOwner, errTurn),
+    "这一手只撤静默档那一条,错误档一个字都不碰");
+  clearTurnStall("s-window-err", errOwner);
 }
 
 console.log("③ 换档不许丢掉已经发出去的红环(第 1 轮自由审查 F6)");

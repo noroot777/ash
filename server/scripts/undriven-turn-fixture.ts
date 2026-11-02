@@ -8,10 +8,26 @@
 //     然后再不主动说话:旧服务端死在「恢复线程 → 送出回合输入」空当时留下的就是它。
 //
 // mode 走文件而不是 env:垫片是真被 `spawnForRun` 起的,测试进程改不了它那一次的环境。
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const MODE_FILE = "mode";
+/** 每收到一次 `turn/start` 记一行。**同一条消息被执行两遍**只能从这里看出来。 */
+const STARTS_FILE = "turn-starts.log";
+
+/** 这套假 codex 一共收下过几次回合输入(每次 `turn/start` 一行)。 */
+export function turnStarts(binDir: string): number {
+  try {
+    return readFileSync(join(binDir, STARTS_FILE), "utf8").split("\n").filter((x) => x.trim()).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** 把计数清零(一段开始前调,免得读进上一段的次数)。 */
+export function resetTurnStarts(binDir: string): void {
+  writeFileSync(join(binDir, STARTS_FILE), "");
+}
 
 /** 下一次起跑的假 codex 按哪种行为走。 */
 export function codexMode(
@@ -27,6 +43,7 @@ export function installFakeCodexAppServer(root: string): string {
   const appServer = join(binDir, "app-server.mjs");
   const idle = join(binDir, "idle-app-server.mjs");
   const modePath = join(binDir, MODE_FILE);
+  const startsPath = join(binDir, STARTS_FILE);
 
   // 一条共用的 JSONL 读行器:两个假进程都靠它按行吃 stdin。
   const reader = `
@@ -45,7 +62,7 @@ setInterval(() => {}, 1000);
 `;
 
   writeFileSync(appServer, `
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
 let mode = "accept";
 try { mode = readFileSync(${JSON.stringify(modePath)}, "utf8").trim(); } catch { /* 缺省 accept */ }
@@ -68,6 +85,8 @@ function receive(message) {
     return;
   }
   if (message.method === "turn/start") {
+    // 先记一行再分档:**不管哪种 mode,输入到了这个进程就算一次执行**(重复执行就是从这儿数的)。
+    try { appendFileSync(${JSON.stringify(startsPath)}, Date.now() + "\\n"); } catch { /* 记不下也别把假 CLI 弄崩 */ }
     // stall:握手照常答、**回合输入收下却一声不吭也不断线**。ash 侧那条 turn/start 的应答
     // 永远等不到 → 有界等待到期 → unknown(说不上来)。这是 F3 那条路的真实现场:既不能当送达
     // 写终态 sent,也不能当没送达退回重投。(注:这段注释活在模板字符串里,不许用反引号。)
@@ -123,6 +142,7 @@ ${reader}
     { mode: 0o755 },
   );
   codexMode(binDir, "accept");
+  resetTurnStarts(binDir);
   // 读一次确认装好了(写不下去的话后面每一段都会红在一个跟产品无关的理由上)。
   readFileSync(join(binDir, MODE_FILE), "utf8");
   return binDir;

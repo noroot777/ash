@@ -45,6 +45,10 @@ process.env.ASH_TURN_INPUT_ACK_MS = "5000";
 // §⑰ 两段都按它定位:a 段要在期限**之前**就凭完成事件收口(所以断言给 2.5 秒),b 段要的正是
 // 期限本身到期。压成 5 秒 = 两边各留一半余量,谁跑到期限之外都读得出来。
 process.env.ASH_CODEX_TURN_START_ACK_MS = "5000";
+// 接管后**重读协议日志**的节奏(codex-app-server-contract.ts 的 CODEX_ADOPT_REREAD_MS;真实
+// 默认 2 秒)。§⑩b 要的是「两头都读不出来时那条可见提示按节奏出现」,20ms 一拍 ⇒ 第 5 拍开口
+// 大约 100ms,不必为了一条提示等满十秒。
+process.env.ASH_CODEX_ADOPT_REREAD_MS = "20";
 const originalPath = process.env.PATH;
 
 const { installFakeCodexAppServer, codexMode } = await import("./undriven-turn-fixture.js");
@@ -252,16 +256,65 @@ console.log("⑩ 接管·日志读不出来 → 不按失败结算(交给静默�
     startProcess: () => child,
   });
   const kinds: string[] = [];
-  const consume = (async () => { for await (const event of handle.events) kinds.push(event.kind); })();
+  // 「不按失败结算」= 没有 done,**而且**没有任何会影响结算的错误。按节奏报出来的那条提示是
+  // `notice`(`affectsTurn:false`,见 §⑩b):它必须在,但它不参与结算 —— 中途真恢复了、这一轮
+  // 正常答完仍然算成功。把两者混成一句 `!includes("error")` 就会把「让用户看见」误判成「杀它」。
+  let fatal = 0;
+  const consume = (async () => {
+    for await (const event of handle.events) {
+      kinds.push(event.kind);
+      if (event.kind === "error" && (event.level !== "notice" || event.affectsTurn !== false)) fatal += 1;
+    }
+  })();
   await Promise.race([consume, sleep(1_500)]);
-  check(!kinds.includes("done") && !kinds.includes("error"),
-    `核实不了就不杀它(收到:${kinds.join(",") || "无"}) —— 一次磁盘故障不该被诊断成「输入一个字都没到」`);
+  check(!kinds.includes("done") && fatal === 0,
+    `核实不了就不杀它(收到:${kinds.join(",") || "无"};影响结算的错误 ${fatal} 条)`
+    + " —— 一次磁盘故障不该被诊断成「输入一个字都没到」");
   // **这一档不许冒充成功**(第 2 轮自由审查 F4):上一版让 `ready` 直接 resolve,于是回执报
   // `accepted`、投递侧据此落终态 `sent` —— 而那串字到没到压根不知道。放行自己的等待不等于
   // 对方的确认,只能是「说不上来」。
   const adoptAcceptance = await awaitTurnInput(handle);
   check(adoptAcceptance === "unknown",
     `读不出来 → 回执是 unknown(实际 ${adoptAcceptance});"accepted" = 把自己的放行当成对方的确认`);
+  handle.kill();
+  await Promise.race([consume, sleep(3_000)]);
+}
+{
+  // ⑩b **「核实不了」不许变成「谁都不管」**(第 2 轮自由审查 F3)。
+  //
+  // 上一条断言的保守做法是对的(不杀一个核实不了的回合),但它跟另一个保守分支叠在一起就出事:
+  // 进展证明读不出来 ⇒ 静默档也不开(turn-stall.ts)。两个一叠,这一轮既不报错、也不产出、
+  // 也没人兜 —— 而「零输出零报错」恰恰是看门狗唯一认不出的形状。所以适配器现在隔一会儿就报
+  // 一条 notice:它让用户看得见,而**错误档据此计时**(notice 同样计入 trackTurnStall ——
+  // 那一半在 test-silence-tier.ts §① 的换档那段钉着),到阈值先警告、再终止并按失败结算。
+  const child = idleAppServer();
+  const handle = openCodexAppServer({
+    bin: "codex", args: [], cwd: root, prompt: "",
+    sessionId: "th-voiced",
+    // 重读也一直读不出来:这正是「两头都没结论」那一档。
+    reattach: {
+      threadId: "th-voiced", turnId: "", evidence: "unreadable",
+      reread: () => ({ turnId: "", evidence: "unreadable" as const }),
+    },
+    startProcess: () => child,
+  });
+  const notices: string[] = [];
+  const kinds: string[] = [];
+  const consume = (async () => {
+    for await (const event of handle.events) {
+      kinds.push(event.kind);
+      if (event.kind === "error" && event.level === "notice") notices.push(event.message);
+    }
+  })();
+  // 重读节奏压到 20ms(ASH_CODEX_ADOPT_REREAD_MS,见文件头),第 5 拍开口 ⇒ 100ms 上下。
+  for (let i = 0; i < 60 && notices.length === 0; i += 1) await sleep(50);
+  check(notices.length >= 1,
+    `核实不了的回合会按节奏报出可见提示(收到 ${notices.length} 条);上一版只打一行 console,`
+    + "用户刷新页面什么都看不见,看门狗也没有形状可认");
+  check(/核实不了/.test(notices[0] ?? "") && /失败结算/.test(notices[0] ?? ""),
+    "提示如实说清:此刻还核实不了、会继续核验、到阈值由看门狗终止并按失败结算");
+  check(!kinds.includes("done"),
+    `这一轮没有被当场结算掉(收到:${[...new Set(kinds)].join(",")}) —— 可见不等于误杀`);
   handle.kill();
   await Promise.race([consume, sleep(3_000)]);
 }
@@ -453,105 +506,9 @@ console.log("⑮ 身份读不出来时,这个 thread 上的完成事件就是这
   await Promise.race([consume, sleep(2_000)]);
 }
 
-console.log("⑯ unknown 之后迟到的拒收必须把租约还回去(第 2 轮自由审查 F3)");
-{
-  // ⑯a 在途租约本体:三档各自的处置,以及「终局不可翻盘」。
-  const { createDeliveryLease } = await import("../src/delivery-lease.js");
-  const unit = (): { lease: ReturnType<typeof createDeliveryLease>; log: string[] } => {
-    const log: string[] = [];
-    return {
-      log,
-      lease: createDeliveryLease({
-        label: "单元", onAccepted: () => { log.push("sent"); }, onReturn: () => { log.push("return"); },
-      }),
-    };
-  };
-  const inflight = unit();
-  await inflight.lease.settle("unknown");
-  check(inflight.lease.handled() && inflight.log.length === 0,
-    `unknown → 留在在途:既不落 sent 也不归还(动作:${inflight.log.join(",") || "无"})`);
-  await inflight.lease.settle("refused");
-  check(inflight.log.join(",") === "return",
-    `迟到的拒收把租约还回去(动作:${inflight.log.join(",") || "无"});丢掉它 = 那条消息永久在途`);
-  await inflight.lease.settle("refused");
-  check(inflight.log.join(",") === "return", `重复的拒收只归还一次(动作:${inflight.log.join(",")})`);
-  const done = unit();
-  await done.lease.settle("accepted");
-  await done.lease.settle("refused");
-  check(done.log.join(",") === "sent",
-    `accepted 是终局:迟到的拒收不许把已送达的行退回重投(动作:${done.log.join(",")})`);
-
-  // ⑯c **协议定论 ≠ 副作用完成**(第 3 轮自由审查 F4):确认/归还那一笔写库失败时,
-  // 定论照旧不翻盘,但欠账得自己补上 —— 上一版一次失败就把消息永久卡在「待发送 + 租约还在」。
-  const flaky = (fails: number, retryMs = [1, 1, 1]) => {
-    const log: string[] = [];
-    let left = fails;
-    return {
-      log,
-      lease: createDeliveryLease({
-        label: "单元", retryMs,
-        onAccepted: () => { if (left-- > 0) { log.push("sent-fail"); throw new Error("database is locked"); } log.push("sent"); },
-        onReturn: () => { if (left-- > 0) { log.push("return-fail"); throw new Error("database is locked"); } log.push("return"); },
-      }),
-    };
-  };
-  const once = flaky(1);
-  await once.lease.settle("accepted");
-  for (let i = 0; i < 100 && once.lease.owes(); i += 1) await sleep(20);
-  check(once.log.join(",") === "sent-fail,sent" && !once.lease.owes(),
-    `送达确认第一次没落盘 → 退避补上(动作:${once.log.join(",")});上一版:这一条永久 sent 不了`);
-  check(once.lease.handled(), "补上了就仍然归回执这条路管(调用点的善后照旧不碰它)");
-
-  const backOnce = flaky(1);
-  await backOnce.lease.settle("refused");
-  for (let i = 0; i < 100 && backOnce.lease.owes(); i += 1) await sleep(20);
-  check(backOnce.log.join(",") === "return-fail,return" && !backOnce.lease.owes(),
-    `归还第一次没落盘 → 退避补上(动作:${backOnce.log.join(",")});上一版:租约永远留着,补发扫描领不走`);
-
-  const hopeless = flaky(99, [1, 1]);
-  await hopeless.lease.settle("refused");
-  for (let i = 0; i < 100 && !hopeless.lease.acceptance(); i += 1) await sleep(20);
-  for (let i = 0; i < 100 && hopeless.lease.handled(); i += 1) await sleep(20);
-  check(hopeless.log.filter((x) => x === "return-fail").length === 3,
-    `补到上限(1 + 2 拍)才放弃(实际 ${hopeless.log.filter((x) => x === "return-fail").length} 次)`);
-  check(!hopeless.lease.handled() && hopeless.lease.owes(),
-    "放弃不等于假装完成:交回调用点并留给开机对账(handled 转假、欠账如实报着)");
-  check(hopeless.lease.acceptance() === "refused", "协议定论本身不翻盘(欠账与定论是两个状态)");
-
-  // ⑯b 真实链路:初次有界等待读到 unknown、最终回执落定成 refused —— 行必须回到可领取状态。
-  // 垫片答完 initialize 就对 `thread/resume` 一声不吭(于是回合输入一个字都没写出去),两秒半
-  // 后断线 → 最终回执是确证的 refused。实测过的那条洞:租约永远留着,消息停在待发送、任务
-  // 已经失败、再扫一遍也领不走它,只有重启能解。
-  const taskId = "t-late-refuse";
-  codexMode(fakeBin, "resume-silent");
-  process.env.ASH_TURN_INPUT_ACK_MS = "800"; // 有界等待要先到期,迟到的那一次才有「迟到」可言
-  mkdirSync(join(root, "runs", taskId), { recursive: true });
-  await db.insert(tasks).values({
-    id: taskId, projectId: "p-undriven", title: taskId, body: "验证迟到的拒收归还租约",
-    mode: "single", status: "paused", agentType: "codex", createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(), useWorktree: false,
-  } as never);
-  const row = pendingMessageRow({ taskId, text: "继续:这一条不许卡在在途", mode: "queued" });
-  await db.insert(scheduledMessages).values(row as never);
-  await deliverPendingMessages(taskId);
-  const current = async () => (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, row.id))).at(0)!;
-  for (let i = 0; i < 60 && !(await current()).deliveringSince; i += 1) await sleep(100);
-  check(!!(await current()).deliveringSince, "前提:这一条真的被领走了(租约在,否则下面是假绿)");
-  for (let i = 0; i < 160 && (await current()).deliveringSince; i += 1) await sleep(100);
-  const after = await current();
-  // 断言完立刻收掉:挡回那条路会自排重投(pending-redelivery.ts),留着它会在后面几段里
-  // 又起一轮真 CLI。
-  await db.delete(scheduledMessages).where(eq(scheduledMessages.id, row.id));
-  process.env.ASH_TURN_INPUT_ACK_MS = "5000";
-// `turn/start` 的**应答期限**(codex-app-server.ts 的 CODEX_TURN_START_ACK_MS;真实默认一分钟)。
-// §⑰ 两段都按它定位:a 段要在期限**之前**就凭完成事件收口(所以断言给 2.5 秒),b 段要的正是
-// 期限本身到期。压成 5 秒 = 两边各留一半余量,谁跑到期限之外都读得出来。
-process.env.ASH_CODEX_TURN_START_ACK_MS = "5000";
-  check(!after.deliveringSince,
-    `迟到的拒收归还了租约(deliveringSince=${after.deliveringSince ?? "已清"}),下一轮扫描领得走它`);
-  check(after.status === "pending" && !after.sentAt,
-    `行回到待发送、没有被提升成 sent(status=${after.status}, sentAt=${after.sentAt ?? "无"})`);
-}
+// ⑯ 投递租约那一组(在途/迟到/欠账补偿、真实投递入口、消费水位一致性)搬去了
+// test-delivery-receipt.ts —— 这一份顶到了单文件上限(根 CLAUDE.md 的 700 行),而那一组跟
+// 这边的依赖只重合在夹具上。同一条命令里接着跑(package.json 的 test:undriven-turn)。
 
 console.log("⑰ 协议点过头、应答却不回来:回执与结算都不许挂在那段本地流程上(第 3 轮自由审查 F3)");
 {
@@ -653,31 +610,58 @@ setInterval(() => {}, 1000);
   await Promise.race([quietConsume, sleep(2_000)]);
 }
 
-console.log("⑰c 接管后的重读:否证也是结论,不能只认肯定那一头(第 3 轮自由审查 F3)");
+console.log("⑰c 接管后的重读:两头都是结论,而且核验不设上限(第 1、2 轮自由审查 F3)");
 {
   const { recoverAdoptedIdentity } = await import("../src/executors/codex-app-server-adopt.js");
   type Adopted = Parameters<Parameters<typeof recoverAdoptedIdentity>[1]>[0];
-  const run = (reads: Adopted[]) => new Promise<{ got: Adopted[]; gaveUp: boolean }>((resolve) => {
-    const got: Adopted[] = [];
-    let gaveUp = false;
-    let i = 0;
-    recoverAdoptedIdentity(
-      () => reads[Math.min(i++, reads.length - 1)]!,
-      (state) => { got.push(state); resolve({ got, gaveUp }); return true; },
-      () => { gaveUp = true; resolve({ got, gaveUp }); },
-      { attempts: 4, everyMs: 5 },
-    );
-  });
+  /** 按 `reads` 顺序喂读取结果(用完了就一直给最后那个),记下每一拍的「仍然说不上来」。 */
+  const run = (reads: Adopted[], stopAfter = 40) =>
+    new Promise<{ got: Adopted[]; unknowns: number[]; reads: number }>((resolve) => {
+      const got: Adopted[] = [];
+      const unknowns: number[] = [];
+      let i = 0;
+      // **自己带一个闹钟**:核验要是又变成「几次之后收手」,这里等的那个结论就永远不来 ——
+      // 没有闹钟的话这一段是**挂住**(顶层 await 不落定、rc=13),而挂住比红字难查得多:
+      // 下一个人只看到跑不完,不知道是哪一条判据没了。到点就拿手上的交卷,让断言说话。
+      const alarm = setTimeout(() => resolve({ got, unknowns, reads: i }), 1_500);
+      alarm.unref?.();
+      recoverAdoptedIdentity(
+        () => reads[Math.min(i++, reads.length - 1)]!,
+        (state) => { got.push(state); clearTimeout(alarm); resolve({ got, unknowns, reads: i }); return true; },
+        (attempt) => {
+          unknowns.push(attempt);
+          if (attempt < stopAfter) return true;
+          clearTimeout(alarm);
+          resolve({ got, unknowns, reads: i }); // 钉完收手,免得这条链在测试退出后还在转
+          return false;
+        },
+        { everyMs: 2, maxMs: 4, steadyAfter: 2 },
+      );
+    });
   const blind: Adopted = { turnId: "", evidence: "unreadable" };
+
   const negative = await run([blind, { turnId: "", evidence: "never-started" }]);
-  check(negative.got.at(0)?.evidence === "never-started" && !negative.gaveUp,
+  check(negative.got.at(0)?.evidence === "never-started",
     `日志读得动了、确证没凭据 → 这个结论交到调用方手上(实际 ${negative.got.at(0)?.evidence ?? "一次都没交"});`
     + "上一版一律包装成 started,于是否证永远走不到拒收那条路");
   const positive = await run([blind, { turnId: "t-back", evidence: "started" }]);
   check(positive.got.at(0)?.turnId === "t-back", "肯定那一头照旧(身份读回来了就停,这一档没被改坏)");
-  const hopelessRead = await run([blind]);
-  check(hopelessRead.gaveUp && hopelessRead.got.length === 0,
-    "一直读不出来 → 几次之后交代一句收手(剩下那条路是认领完成事件)");
+
+  // **耗尽之后仍然要有人管**(第 2 轮自由审查 F3,审查实测:协议文件藏 10.6 秒再放回来,
+  // 此时直接读已经能得到 never-started,而适配器的读取次数永远停在 5)。
+  const late: Adopted[] = [blind, blind, blind, blind, blind, blind, blind, blind,
+    { turnId: "", evidence: "never-started" }];
+  const recovered = await run(late);
+  check(recovered.got.at(0)?.evidence === "never-started" && recovered.reads >= 9,
+    `读了 ${recovered.reads} 次、过了上一版那 5 次的上限仍在核验,存储一恢复就当场收口`
+    + "(上一版:第 5 次之后不再安排读取,这一轮永久挂着)");
+
+  const forever = await run([blind], 12);
+  check(forever.unknowns.length >= 12 && forever.got.length === 0,
+    `一直读不出来 → 一直核验(${forever.unknowns.length} 拍),不自行退场;` +
+    "每一拍都把「仍然说不上来」交给调用方,它据此让这件事可见(见 §⑩b)");
+  check(forever.unknowns[0] === 1 && forever.unknowns[1] === 2,
+    "交的是第几拍,调用方据此决定什么时候开口、隔多久再说一遍");
 }
 
 for (const child of strays) { try { child.kill("SIGKILL"); } catch { /* 已经没了 */ } }
