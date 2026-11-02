@@ -12,6 +12,16 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   const review = () => page.getByRole("region", { name: "审查页入口", exact: true });
   const inspector = () => page.getByRole("region", { name: "工作流侧栏入口", exact: true });
   const output = name => page.locator(`output[aria-label="${name}"]`);
+  // 读一条 alert 的文案:**按它自己的特征词指名**,先等它出现再读。
+  // 页面上同时挂着别的 alert 是常态(例:工作区目录被故意弄坏的那几组,`/tasks/:id/scm`
+  // 如实回 404,面板于是另有一条「未能检查未提交改动」),而 `getByRole("alert")` 多命中时
+  // 按 Playwright 的 strict mode 直接抛 —— 那不是回归,是台子没说清要读哪一条。
+  const alertText = async (hasText, scope = page) => {
+    const one = scope.getByRole("alert").filter({ hasText });
+    await one.first().waitFor({ state: "visible" });
+    return (await one.allInnerTexts()).join("\n");
+  };
+  const reviewAlertText = hasText => alertText(hasText, review());
   const settled = async count => {
     await output("依赖响应次数").filter({ hasText: new RegExp(`^${count}$`) }).waitFor({ state: "visible" });
     ensure(await output("依赖请求次数").innerText() === String(count), "subscribers issued duplicate requests");
@@ -98,8 +108,11 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   ensure(await page.getByRole("option", { name: "main", exact: true }).count() === 1, "final target must remain selectable");
 
   await go("case12-child");
-  await page.getByRole("alert").filter({ hasText: "目标分支 ash/case12-p 仍在工作区" }).waitFor({ state: "visible" });
-  ensure((await page.getByRole("alert").innerText()).includes("git worktree repair"), "broken target must explain how to repair the link");
+  // **读文案要指名读哪一条 alert**:这个场景里工作区目录是故意弄坏的,`/tasks/:id/scm`
+  // 因此如实回 404,面板上于是另有一条「未能检查未提交改动」的 alert —— 两条都对,而
+  // `getByRole("alert").innerText()` 在多命中时按 strict mode 直接抛(审计实测的那条红)。
+  ensure((await alertText("目标分支 ash/case12-p 仍在工作区")).includes("git worktree repair"),
+    "broken target must explain how to repair the link");
   ensure(!await review().getByRole("button", { name: "目标工作区仍被占用", exact: true }).isEnabled(), "broken backlink with surviving files must block child acceptance");
   await go("case12-parent");
   await button("释放工作区目录（保留分支）").click();
@@ -111,21 +124,20 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
   await review().getByRole("alert").filter({ hasText: "目录及文件已保留" }).waitFor({ state: "visible" });
   await review().getByText("合并已完成，清理未完成", { exact: true }).waitFor({ state: "visible" });
-  ensure(/成果已合入 main（提交 [a-f0-9]{40,64}）/.test(await review().getByRole("alert").innerText()), "partial success must disclose the actual target and commit");
+  ensure(/成果已合入 main（提交 [a-f0-9]{40,64}）/.test(await reviewAlertText("目录及文件已保留")), "partial success must disclose the actual target and commit");
   ensure(await review().getByText("验收完成", { exact: true }).count() === 0, "unreadable cleanup must not report success");
 
   await go("case13-parent");
-  await page.getByRole("alert").filter({ hasText: "占用登记尚未解除" }).waitFor({ state: "visible" });
-  ensure((await page.getByRole("alert").innerText()).includes("git worktree unlock"), "missing locked checkout must explain unlocking");
-  ensure(!/请先停止任务|再单独验收本任务|释放工作区目录/.test(await page.getByRole("alert").innerText()), "parent recovery must not send users back to the same panel");
+  const lockedText = await alertText("占用登记尚未解除");
+  ensure(lockedText.includes("git worktree unlock"), "missing locked checkout must explain unlocking");
+  ensure(!/请先停止任务|再单独验收本任务|释放工作区目录/.test(lockedText), "parent recovery must not send users back to the same panel");
   ensure(!/可继续验收子任务|工作区占用已解除/.test(await page.locator("main").innerText()), "locked checkout cannot advertise successful release");
   await go("case13-child");
   await page.getByRole("alert").filter({ hasText: "git worktree unlock" }).waitFor({ state: "visible" });
   ensure(!await review().getByRole("button", { name: "目标工作区仍被占用", exact: true }).isEnabled(), "locked target must remain blocked");
 
   await go("case14-child");
-  await page.getByRole("alert").filter({ hasText: "gitdir:" }).waitFor({ state: "visible" });
-  ensure((await page.getByRole("alert").innerText()).includes("actual-parent-entry"), "moved missing backlink must identify the real registration");
+  ensure((await alertText("gitdir:")).includes("actual-parent-entry"), "moved missing backlink must identify the real registration");
   await go("case14-parent");
   await button("释放工作区目录（保留分支）").click();
   await page.getByRole("dialog").getByRole("button", { name: "释放目录，保留分支", exact: true }).click();
@@ -137,8 +149,9 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   await review().getByRole("button", { name: "验收通过", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).click();
   await review().getByText("标签已创建，清理未完成", { exact: true }).waitFor({ state: "visible" });
-  ensure((await review().getByRole("alert").innerText()).includes("ash-accepted/"), "tag partial success must name the created tag");
-  ensure(!/合并已完成|验收未完成/.test(await review().getByRole("alert").innerText()), "tag result must agree with its actual completed action");
+  const tagText = await reviewAlertText("ash-accepted/");
+  ensure(tagText.includes("ash-accepted/"), "tag partial success must name the created tag");
+  ensure(!/合并已完成|验收未完成/.test(tagText), "tag result must agree with its actual completed action");
 
   await checkBaseUpdateRecovery(page, fixtureUrl, checkpoint);
 
@@ -199,7 +212,9 @@ export async function checkBranchAcceptance(page, fixtureUrl, checkpoint = async
   await review().getByRole("button", { name: "验收依赖读取失败" }).waitFor({ state: "visible" });
   ensure(!await review().getByRole("button", { name: "验收依赖读取失败" }).isEnabled(), "shared errors must block acceptance");
   await settled(4);
-  await button("重试").click();
+  // **指名点依赖面板那一个「重试」**:`AcceptanceWorkspaceCommit` 在 `/tasks/:id/scm` 读不出来时
+  // 也给一个同名按钮(就在审查页入口里),page 级的 exact 名字因此命中 2 个、按 strict mode 抛。
+  await page.getByRole("region", { name: "派生与验收依赖" }).getByRole("button", { name: "重试", exact: true }).click();
   await settled(5);
   await button("延迟下次依赖响应").click();
   await button("刷新依赖").click();
