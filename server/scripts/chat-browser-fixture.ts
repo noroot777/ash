@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { eq } from "drizzle-orm";
+import { markFixtureOnboarded } from "./fixture-onboarding.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-chat-browser-"));
 mkdirSync(join(stage, "node_modules", "pkg"), { recursive: true });
@@ -19,6 +20,7 @@ const { setTaskStatus } = await import("../src/status.js");
 await ensureSchema();
 const { setInstanceMode } = await import("../src/auth/mode.js");
 await setInstanceMode("single", stage);
+await markFixtureOnboarded();
 const timestamp = new Date().toISOString();
 await db.insert(projects).values({ id: "chat-demo", name: "Studio / 研发空间", repoPath: stage, createdAt: timestamp });
 await db.insert(agents).values([

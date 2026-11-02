@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { readSourceChain } from "../../scripts/read-source.mjs";
 
 export async function checkPortableReachability(): Promise<void> {
   const { ashMcpReachability } = await import("../src/ash-mcp-reachability.js");
@@ -19,13 +21,16 @@ export async function checkPortableReachability(): Promise<void> {
   );
   assert.deepEqual(reviewCwdCandidates(undefined, [], "/workspace"), ["/workspace"],
     "一条会话都没有时也要有任务工作区兜底");
-  const orchestrator = readFileSync(new URL("../src/orchestrator.ts", import.meta.url), "utf8");
-  const recorded = /const recorded = (opts\.cwd[^;]*);/.exec(orchestrator)?.[1];
-  assert.ok(recorded, "orchestrator 里 recorded 的取值来源必须找得到");
+  // 读的是**起跑这条链**(orchestrator 加它直接 import 的那些),不是单个文件:挑目录这一段
+  // 已经被拆进 turn-workspace-pick.ts 了,而「写到 700 行就拆」是硬规则 —— 按文件名钉的话
+  // 每次合规拆分都假红一次(经过见 scripts/read-source.mjs 的 readSourceChain)。
+  const startup = readSourceChain(fileURLToPath(new URL("../src/orchestrator.ts", import.meta.url)));
+  const recorded = /const recorded = (opts\.cwd[^;]*);/.exec(startup)?.[1];
+  assert.ok(recorded, "起跑链里 recorded 的取值来源必须找得到");
   assert.deepEqual(recorded.split("||").map((value) => value.trim()),
     ["opts.cwd", "prev?.cwd", "prev?.worktreePath", "all[0]?.cwd", "all[0]?.worktreePath", '""'],
     "候选目录覆盖 recorded 的所有取值来源");
-  assert.match(orchestrator.slice(orchestrator.indexOf("const recorded = opts.cwd")),
+  assert.match(startup,
     /if \(!existsSync\(cwd\)\)[\s\S]{0,400}?taskWorkspace\(/,
     "失效目录的回退仍是候选超集末尾的任务工作区");
   console.log("✅ 平台无关预检：执行器放行与候选目录超集");

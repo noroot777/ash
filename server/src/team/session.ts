@@ -620,11 +620,23 @@ export function attachLead(lead: Lead): void {
 // adoptInbound 认领):托盘先建、失败上报晚绑定 —— 两边都只在运行时才互相调用。
 const { adoptInbound, queueInbound, flushUnqueued, releasePending, stashUnqueued } =
   createPendingInbox((lead, text, at) => reportLeadFailure(lead, text, at));
-const {
-  beginTurn,
-  clearIdle,
-  consume,
-  recordSystemTurn,
-  reportLeadFailure,
-  retireLead,
-} = createSessionConsumer({ leads, adoptInbound, flushUnqueued, releasePending });
+// 消费者**懒建**:这个模块身处一个真实的导入环里(team/lead-status → status →
+// task-complete → monitors → monitor-consume → monitor-events → pending-messages →
+// orchestrator → team/lead-interjection → 这里 → session-consumer → 回到 lead-status),
+// 而在模块体里直接调 `createSessionConsumer(...)` 就等于「环里另一个模块还没求值完就调用它
+// 导出的函数」。tsx/esbuild 的 keepNames 会在函数体里插一句 `__name(...)`,那个助手是模块级
+// 的 `var` —— 从环里先求值的一方调过来时它还是 undefined,于是 `__name is not a function`,
+// **整个模块加载期就炸**(test-team-turn-artifacts 从那一侧进来时必现)。打包产物里没有这个
+// 助手,所以 `npm run build` 四个工作区一直全绿,只有走 tsx 的那条路炸 —— 这正是它能长期潜伏
+// 的原因。改成第一次真用到时再建,两条路都不再依赖求值顺序。
+type SessionConsumer = ReturnType<typeof createSessionConsumer>;
+let consumerCell: SessionConsumer | null = null;
+const consumer = (): SessionConsumer => (consumerCell ??= createSessionConsumer({
+  leads, adoptInbound, flushUnqueued, releasePending,
+}));
+const beginTurn: SessionConsumer["beginTurn"] = (...args) => consumer().beginTurn(...args);
+const clearIdle: SessionConsumer["clearIdle"] = (...args) => consumer().clearIdle(...args);
+const consume: SessionConsumer["consume"] = (...args) => consumer().consume(...args);
+const recordSystemTurn: SessionConsumer["recordSystemTurn"] = (...args) => consumer().recordSystemTurn(...args);
+const reportLeadFailure: SessionConsumer["reportLeadFailure"] = (...args) => consumer().reportLeadFailure(...args);
+const retireLead: SessionConsumer["retireLead"] = (...args) => consumer().retireLead(...args);

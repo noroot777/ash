@@ -394,13 +394,44 @@ export async function relocationFor(root: string, target: string, dep: string,
   from = join(root, dep)): Promise<Relocation | null> {
   const treeRoot = await optionalRead(from, () => realpath(from), ["ENOENT", "ENOTDIR", "ELOOP"]);
   if (treeRoot === null) return null;
+  const links = await recordedLinks(treeRoot, dep, await projectSources(root));
   return {
     realRoot: await requiredRead(root, () => realpath(root)),
     target,
     treeRoot,
     treeDest: join(target, dep),
-    owned: await ownedLinks(treeRoot, dep, await projectSources(root)),
+    owned: [...links.owned, ...await taskCounterparts(root, links.borrowed)],
+    borrowed: links.borrowed,
   };
+}
+
+const portable = (path: string) => path.split(sep).join("/");
+
+/**
+ * 借来那棵树认下的自有包，在**被冻结项目自己**的声明里对应哪个位置。给得出来的才参与改写。
+ *
+ * 借用另一个检出的依赖树时，它的 workspace 链落在**那个检出**的活源码上（Windows 的 npm 把这种链
+ * 建成绝对 junction）。同一个仓库的另一个 worktree 由 `projectSources` 按 Git common directory 对齐、
+ * 直接认成自有包走 `owned` 那条路；**布局相同但不是同一个仓库**的检出对齐不上，于是快照里那条链被
+ * 照抄过去 —— 门禁跑的是别人工作区的源码，而任务自己的源码明明已经 checkout 在快照里了，还报绿。
+ * 那正是 accept-gate-relocate 顶部①那一类错，只是来源从「同名的第三方包」换成了「另一个检出」。
+ *
+ * 归属的证明分两半，缺一不可：
+ *   · 「这个入口是自有包」由**借来那棵树的安装记录**证明（resolved 指向安装根之内，见 borrowed 那格）；
+ *   · 「本项目自己的那份在哪」只认**本项目自己的声明**（workspaces glob / `file:`、`link:` 依赖规格），
+ *     而且必须正好声明在记录里那个相对位置上 —— 借来的记录描述的是那个检出的布局，拿它当本项目的
+ *     位置用就又是按路径形状猜归属了。
+ * 第二半与 accept-gate-confine 的 `sourceFor` 同一个口径：来源身份此刻已由安装记录证明过，声明只
+ * 回答「本项目的那份在哪」。不照搬它那一步「原位置没了就按包名找唯一同名的替代位置」：那一步为的是
+ * 「包在本次提交里搬过位置而依赖没重装」，而这里连记录都不是本项目的，再放宽一档就没有东西兜着了。
+ *
+ * 声明读**工作区**而不是快照：非 Git 项目那一条路上依赖先放、源码后拷（见 createGateSnapshot），
+ * 那时快照里还没有可读的声明。工作树必须干净是门禁的前置条件，所以两者在此刻是同一份声明。
+ */
+async function taskCounterparts(root: string, borrowed: OwnedPackage[]): Promise<OwnedPackage[]> {
+  if (borrowed.length === 0) return [];
+  const declared = await declaredPackageDirs(root);
+  return borrowed.filter(pkg => (declared.get(portable(pkg.entry)) ?? []).includes(portable(pkg.inside)));
 }
 
 /**
@@ -424,16 +455,27 @@ export type RecordedLinks = {
   owned: OwnedPackage[];
   /** 记录说装自项目外的包入口及其真实包根；派生命令通过包内落点共享来源身份。 */
   external: OwnedPackage[];
+  /**
+   * `external` 的子集:落点在**安装根之内**(即这棵依赖树物理上所属的那个检出),却在被冻结项目
+   * 之外。两者在 `project.locate` 眼里一模一样,但性质差得很远:
+   *   · `file:../另一个无关仓库` —— 落点在安装根**之外**,借一条链出去是安全的,快照的身份不依赖它;
+   *   · 借来另一个检出的整棵树,而那个检出用 `file:./packages/x` 装了自己的包 —— 落点在安装根
+   *     **之内**。这种必须克隆:借用之后收口会发现自有包解析到快照外、要重绑定,而主干是一条落在
+   *     别人工作区的链,只能拒绝,于是一个本来能跑的共享安装布局在门禁开跑前被永久卡死。
+   * 这一格就是这两者的分界。它和 `external` **有意重叠**(不从那一格里搬走):`accept-gate-confine`
+   * 按 `external` 认来源身份,那个口径不变。
+   */
+  borrowed: OwnedPackage[];
   unknown: (OwnedPackage & { location: UnknownSource })[];
 };
 
 export async function recordedLinks(treeRoot: string, dep: string, project: ProjectSources, originRoot = treeRoot): Promise<RecordedLinks> {
   const raw = await optionalRead(join(treeRoot, ".package-lock.json"), () => readFile(join(treeRoot, ".package-lock.json"), "utf8"));
-  if (raw === null) return { owned: [], external: [], unknown: [] };
+  if (raw === null) return { owned: [], external: [], borrowed: [], unknown: [] };
   let packages: Record<string, unknown> = {};
   try {
     packages = (JSON.parse(raw) as { packages?: Record<string, unknown> }).packages ?? {};
-  } catch { return { owned: [], external: [], unknown: [] }; }
+  } catch { return { owned: [], external: [], borrowed: [], unknown: [] }; }
   const installationRoot = await requiredRead(dirname(originRoot), () => realpath(dirname(originRoot)));
   // 键前缀取**登记名**而不是 realpath 后的 basename:依赖根自己是条链时(pnpm 的
   // `node_modules -> .store` 就是这个形状)realpath 后的 basename 是 `.store`,拼出来的前缀
@@ -441,6 +483,7 @@ export async function recordedLinks(treeRoot: string, dep: string, project: Proj
   const prefix = `${basename(dep).split(sep).join("/")}/`;
   const owned: OwnedPackage[] = [];
   const external: OwnedPackage[] = [];
+  const borrowed: OwnedPackage[] = [];
   const unknown: RecordedLinks["unknown"] = [];
   for (const [key, value] of Object.entries(packages)) {
     const record = value as { link?: unknown; resolved?: unknown };
@@ -455,11 +498,14 @@ export async function recordedLinks(treeRoot: string, dep: string, project: Proj
     if (landing === null) continue;
     const location = await project.locate(landing);
     const source = { entry, inside: location.kind === "owned" ? location.inside : record.resolved.split("/").join(sep), landing };
-    if (location.kind === "external") external.push(source);
-    else if (location.kind === "owned") owned.push(source);
+    if (location.kind === "external") {
+      external.push(source);
+      // 落点在安装根之内 = 这棵树所属的那个检出认下的自有包(见 borrowed 那段)。
+      if (insideTree(installationRoot, landing)) borrowed.push(source);
+    } else if (location.kind === "owned") owned.push(source);
     else unknown.push({ ...source, location });
   }
-  return { owned, external, unknown };
+  return { owned, external, borrowed, unknown };
 }
 
 /** 只要自有包那一格的调用方（搬运改写）用这个。 */
@@ -547,8 +593,18 @@ export async function provideDependency(root: string, target: string, dep: strin
   // 判据不能换成「树在本检出之外就克隆」:纯粹的共享安装目录(里面全是第三方包、没有任何自有包)
   // 借用是安全的,而克隆要多拷整棵树——那条用例在 test-accept-gate-borrow「依赖根自己就是一条链」
   // 的第一种落点上。两者的分界正是安装记录:认下自有包就克隆,认不下再扫落点兜底。
-  const offender = relocation.owned.length > 0
-    ? relocation.owned[0].entry
+  // 两格都算「认下自有包」:`owned` 是能改写到快照里的那些(被冻结项目自己的源码,外加借来的树里
+  // 已经证出本项目对应位置的,见 taskCounterparts),`borrowed` 是借来那棵树所属检出认下的全部 ——
+  // **包括证不出对应位置的**。后者也必须克隆:它们一条都不会被改写,借出去整棵树只是让同一份外来
+  // 源码换个方式被跑到。少了 `borrowed` 这一格,「借来另一个检出的树」这种布局恰好一条都认不出来。
+  // **已知缺口**:`borrowed` 里证不出本项目对应位置的那些,克隆之后链被照抄,仍然落在别人检出的活
+  // 源码上,而收口那一侧按 `external` 认来源身份、直接放过(accept-gate-confine 的 `record.external`
+  // 那一支),于是门禁跑着外来源码还报绿。这里不顺手拦:拦它要在收口那一侧新开一条拒绝,得连带定
+  // 「怎么让用户走出去」,不是改放法能解决的。本项目自己不会走到它 —— worktree 借主仓那一份由
+  // `projectSources` 按 Git common directory 认成自有包,走 `owned`。
+  const claimed = relocation.owned[0] ?? relocation.borrowed[0];
+  const offender = claimed !== undefined
+    ? claimed.entry
     : await linksIntoSource(relocation.treeRoot, relocation.realRoot);
   // `supplied` 那一路**不许借**:来源在参考检出里,借一条链出去等于把解析根放回那个检出 —— 正是
   // accept-gate-supply 顶部①②③要消掉的那件事。借用形态的对账口径也写明「那条链必须正好落在工作区

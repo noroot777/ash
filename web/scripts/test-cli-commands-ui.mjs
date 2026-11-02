@@ -22,7 +22,11 @@ await ensureSchema();
 await mkdir(workspace);
 await mkdir(screenshots, { recursive: true });
 const at = new Date().toISOString();
-await db.insert(appSettings).values({ key: "instanceMode", value: JSON.stringify("single") });
+// 首启向导的放行判据是一条持久表态(`server/src/onboarding.ts`),存量盖章只认
+// `ensureSchema()` 那一刻库里已有执行器/项目 —— 夹具是之后才插数据的,所以得自己盖:
+// 不盖 `AuthGate` 就把整个工作区换成首启向导,用例只能等到超时。
+await db.insert(appSettings).values([{ key: "instanceMode", value: JSON.stringify("single") },
+  { key: "onboardedAt", value: JSON.stringify(at) }]);
 await db.insert(projects).values({ id: "cli-ui", name: "原生命令验证", repoPath: workspace, useWorktreeDefault: false, createdAt: at });
 await db.insert(agents).values([{ id: "codex-ui", name: "codex@验证", type: "codex", isDefault: true, extraArgs: "[]", configOverrides: "{}" }, { id: "claude-ui", name: "claude@验证", type: "claude", isDefault: true, extraArgs: "[]", configOverrides: "{}" }]);
 await db.insert(agents).values({ id: "codex-ui-other", name: "codex@验证备用", type: "codex", extraArgs: "[]", configOverrides: "{}" });
@@ -608,7 +612,8 @@ try {
     await page.goto(`${base}/?project=cli-ui&task=${taskId}`);
     const runResponse = page.waitForResponse((response) => response.url().endsWith(`/tasks/${taskId}/run`) && response.request().method() === "POST");
     await page.getByRole("button", { name: "运行", exact: true }).click();
-    assert.equal((await runResponse).status(), 202);
+    const started = await runResponse;
+    assert.equal(started.status(), 202, `${taskId} 起跑应答该是 202,实得 ${started.status()}:${await started.text()}`);
     await page.getByText(reason).first().waitFor();
     assert.equal(await page.getByText(/执行输出会实时显示在这里/).count(), 0);
     await page.screenshot({ path: join(screenshots, `${taskId}-failure-live.png`), fullPage: true });

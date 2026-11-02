@@ -1,0 +1,478 @@
+{
+  "stat": {
+    "green": 370,
+    "red": 32,
+    "timeout": 2,
+    "missing": 174,
+    "spawn-error": 0
+  },
+  "gStat": {
+    "green": 179,
+    "red": 8,
+    "timeout": 0,
+    "missing": 0
+  },
+  "bad": [
+    {
+      "id": 38,
+      "pkg": "web",
+      "cmd": "node scripts/test-remote-return.mjs",
+      "entries": [
+        "root:test:web",
+        "web:test",
+        "web:test:remote-task"
+      ],
+      "inGate": true,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 38604,
+      "log": ".audit/logs/038-web-test-remote-return.log"
+    },
+    {
+      "id": 43,
+      "pkg": "web",
+      "cmd": "tsx scripts/test-monitor-wake.tsx",
+      "entries": [
+        "root:test:web",
+        "web:test",
+        "web:test:conversation",
+        "web:test:monitor-wake"
+      ],
+      "inGate": true,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 1685,
+      "log": ".audit/logs/043-web-test-monitor-wake.log"
+    },
+    {
+      "id": 85,
+      "pkg": "web",
+      "cmd": "node scripts/test-assistant-entry.mjs",
+      "entries": [
+        "root:test:web",
+        "web:test",
+        "web:test:assistant-entry"
+      ],
+      "inGate": true,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 27153,
+      "log": ".audit/logs/085-web-test-assistant-entry.log"
+    },
+    {
+      "id": 122,
+      "pkg": "web",
+      "cmd": "node scripts/test-branch-acceptance.mjs",
+      "entries": [
+        "root:test:web",
+        "web:test",
+        "web:test:branch-acceptance"
+      ],
+      "inGate": true,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 129087,
+      "log": ".audit/logs/122-web-test-branch-acceptance.log"
+    },
+    {
+      "id": 136,
+      "pkg": "web",
+      "cmd": "node scripts/test-free-review-delete.mjs",
+      "entries": [
+        "root:test:web",
+        "web:test",
+        "web:test:free-review-delete"
+      ],
+      "inGate": true,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 42228,
+      "log": ".audit/logs/136-web-test-free-review-delete.log"
+    },
+    {
+      "id": 267,
+      "pkg": "server",
+      "cmd": "node scripts/run-accept-gate-tests.mjs",
+      "entries": [
+        "server:test:accept-merge",
+        "server:test:accept"
+      ],
+      "inGate": true,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 178508,
+      "log": ".audit/logs/267-server-run-accept-gate-tests.log"
+    },
+    {
+      "id": 281,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-review-ownership.ts",
+      "entries": [
+        "server:test:accept",
+        "server:test:review",
+        "server:test:regression-evidence"
+      ],
+      "inGate": true,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 24699,
+      "log": ".audit/logs/281-server-test-review-ownership.log"
+    },
+    {
+      "id": 284,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-review-wait-storage.ts",
+      "entries": [
+        "server:test:accept",
+        "server:test:review",
+        "server:test:regression-evidence"
+      ],
+      "inGate": true,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 15668,
+      "log": ".audit/logs/284-server-test-review-wait-storage.log"
+    },
+    {
+      "id": 156,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-cli-command-startup.ts",
+      "entries": [
+        "server:test:cli-commands"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 1429,
+      "log": ".audit/logs/156-server-test-cli-command-startup.log"
+    },
+    {
+      "id": 157,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-cli-plan-scheduling.ts",
+      "entries": [
+        "server:test:cli-commands"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 2067,
+      "log": ".audit/logs/157-server-test-cli-plan-scheduling.log"
+    },
+    {
+      "id": 180,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-monitor-delivery-batch.ts",
+      "entries": [
+        "server:test:monitor-delivery-batch"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 60470,
+      "log": ".audit/logs/180-server-test-monitor-delivery-batch.log"
+    },
+    {
+      "id": 184,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-singleton.ts",
+      "entries": [
+        "server:test:singleton"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 284,
+      "log": ".audit/logs/184-server-test-singleton.log"
+    },
+    {
+      "id": 185,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-detached-survival.ts",
+      "entries": [
+        "server:test:detached"
+      ],
+      "inGate": false,
+      "verdict": "timeout",
+      "exitCode": null,
+      "ms": 600012,
+      "log": ".audit/logs/185-server-test-detached-survival.log"
+    },
+    {
+      "id": 186,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-controllable-detached.ts",
+      "entries": [
+        "server:test:detached"
+      ],
+      "inGate": false,
+      "verdict": "timeout",
+      "exitCode": null,
+      "ms": 600012,
+      "log": ".audit/logs/186-server-test-controllable-detached.log"
+    },
+    {
+      "id": 190,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-reattach.ts",
+      "entries": [
+        "server:test:reattach"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 2230,
+      "log": ".audit/logs/190-server-test-reattach.log"
+    },
+    {
+      "id": 203,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-monitor-races.ts",
+      "entries": [
+        "server:test:monitors",
+        "server:test:monitor-races"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 8139,
+      "log": ".audit/logs/203-server-test-monitor-races.log"
+    },
+    {
+      "id": 207,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-monitor-review-lifecycle.ts",
+      "entries": [
+        "server:test:monitors"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 2949,
+      "log": ".audit/logs/207-server-test-monitor-review-lifecycle.log"
+    },
+    {
+      "id": 208,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-monitor-complete-gate.ts",
+      "entries": [
+        "server:test:monitors"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 3565,
+      "log": ".audit/logs/208-server-test-monitor-complete-gate.log"
+    },
+    {
+      "id": 257,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-branch-worktree-state.ts",
+      "entries": [
+        "server:test:branch-acceptance"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 2383,
+      "log": ".audit/logs/257-server-test-branch-worktree-state.log"
+    },
+    {
+      "id": 258,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-base-update-recovery.ts",
+      "entries": [
+        "server:test:branch-acceptance"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 52683,
+      "log": ".audit/logs/258-server-test-base-update-recovery.log"
+    },
+    {
+      "id": 261,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-branch-plan-creation.ts",
+      "entries": [
+        "server:test:branch-plan-creation"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 2647,
+      "log": ".audit/logs/261-server-test-branch-plan-creation.log"
+    },
+    {
+      "id": 320,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-handoff-capability.ts",
+      "entries": [
+        "server:test:handoff",
+        "server:test:handoff-capability"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 4514,
+      "log": ".audit/logs/320-server-test-handoff-capability.log"
+    },
+    {
+      "id": 322,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-handoff.ts",
+      "entries": [
+        "server:test:handoff"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 10215,
+      "log": ".audit/logs/322-server-test-handoff.log"
+    },
+    {
+      "id": 324,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-handoff-auth.ts",
+      "entries": [
+        "server:test:handoff"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 8705,
+      "log": ".audit/logs/324-server-test-handoff-auth.log"
+    },
+    {
+      "id": 326,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-handoff-outbound-key.ts",
+      "entries": [
+        "server:test:handoff",
+        "server:test:handoff-outbound-key"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 736,
+      "log": ".audit/logs/326-server-test-handoff-outbound-key.log"
+    },
+    {
+      "id": 352,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-worktree-recovery.ts",
+      "entries": [
+        "server:test:worktree-recovery"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 3956,
+      "log": ".audit/logs/352-server-test-worktree-recovery.log"
+    },
+    {
+      "id": 371,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-native-command-turn.ts",
+      "entries": [
+        "server:test:native-turn"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 2471,
+      "log": ".audit/logs/371-server-test-native-command-turn.log"
+    },
+    {
+      "id": 373,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-cli-overrides.ts",
+      "entries": [
+        "server:test:cli-overrides"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 6546,
+      "log": ".audit/logs/373-server-test-cli-overrides.log"
+    },
+    {
+      "id": 375,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-claude-relay-settings-live.ts",
+      "entries": [
+        "server:test:claude-relay-settings-live"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 1777,
+      "log": ".audit/logs/375-server-test-claude-relay-settings-live.log"
+    },
+    {
+      "id": 377,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-cli-catalog.ts",
+      "entries": [
+        "server:test:cli-catalog"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 3591,
+      "log": ".audit/logs/377-server-test-cli-catalog.log"
+    },
+    {
+      "id": 392,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-codex-mcp-turn-token.ts",
+      "entries": [
+        "server:test:scheduled-messages"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 688,
+      "log": ".audit/logs/392-server-test-codex-mcp-turn-token.log"
+    },
+    {
+      "id": 393,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-native-steer.ts",
+      "entries": [
+        "server:test:scheduled-messages"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 1054,
+      "log": ".audit/logs/393-server-test-native-steer.log"
+    },
+    {
+      "id": 397,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-browser-grant-timing.ts",
+      "entries": [
+        "server:test:browser-grant-timing"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 1358,
+      "log": ".audit/logs/397-server-test-browser-grant-timing.log"
+    },
+    {
+      "id": 399,
+      "pkg": "server",
+      "cmd": "tsx scripts/test-session-lost.ts",
+      "entries": [
+        "server:test:session-lost"
+      ],
+      "inGate": false,
+      "verdict": "red",
+      "exitCode": 1,
+      "ms": 970,
+      "log": ".audit/logs/399-server-test-session-lost.log"
+    }
+  ]
+}

@@ -40,8 +40,23 @@ export type Relocation = {
   treeRoot: string;
   /** 那棵树在快照里的位置。 */
   treeDest: string;
-  /** 安装记录认下的自有包。**空数组 = 没有可证明的归属,一条都不改写**(理由见上面①)。 */
+  /**
+   * 改写认下的自有包：源码在快照里有一个**已证明**的对应位置，`inside` 就是那个位置。
+   *
+   * 两个来源：被冻结项目自己的源码（安装记录的 resolved 指向项目内），以及借自另一个检出的树里
+   * 已经证出本项目对应位置的那些（见 `taskCounterparts`）。**空数组 = 没有可证明的归属，一条都
+   * 不改写**（理由见上面①）。
+   */
   owned: OwnedPackage[];
+  /**
+   * 借来的那棵树**自己所属检出**认下的自有包:落点在安装根之内、却在被冻结项目之外。
+   *
+   * 只用来定放法 —— 认下自有包就必须克隆:借出去整棵树,里面每一条这样的链都落在别人的活工作区上。
+   * 它和 `owned` **有意重叠**:证出了本项目对应位置的那些两格都在(那一格负责改写,这一格负责定
+   * 放法),证不出来的只在这一格 —— 那些克隆之后照抄原文,仍然落在别人的源码上(已知缺口,见
+   * `provideDependency` 上方)。为什么非得单列一格见 `recordedLinks` 的 `borrowed` 那一段。
+   */
+  borrowed: OwnedPackage[];
 };
 
 const fold = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);

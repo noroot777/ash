@@ -18,6 +18,7 @@ import { TerminalSessionManager, terminalSessions } from "../src/terminal.js";
 import { restartCommand, startCommand, stopCommand, type RunnableCommand } from "../src/terminal-commands.js";
 import { powerShellCommandCases } from "./project-command-powershell-cases.js";
 import { commandLaunch } from "../src/terminal-shell.js";
+import { assertStopBody } from "./terminal-stop-assert.js";
 
 // ── parse ──────────────────────────────────────────────────────────────────
 assert.equal(parseProjectCommands(null), null);
@@ -232,7 +233,7 @@ if (IS_WINDOWS) {
     assert.equal(restarted.status, 201);
     assert.notEqual((restarted.body as { session: { id: string } }).session.id, startedId, "restart 换的是新会话");
     assert.equal(liveKeep().length, 1, "重启后同一条命令只能有一个活会话");
-    assert.deepEqual((await stopCommand("pcw", "keep")).body, { stopped: true });
+    assertStopBody((await stopCommand("pcw", "keep")).body, true);
     assert.equal(liveKeep().length, 0);
 
     // ⑤ 占位符:取值由**服务端**填进脚本再跑;必填缺失原地 400 且不留会话。
@@ -244,7 +245,7 @@ if (IS_WINDOWS) {
     const filled = await startCommand("pcw2", cwd, req, { 秒: "60" });
     assert.equal(filled.status, 201);
     assert.equal((filled.body as { session: { name: string } }).session.name, "带参命令 · 60");
-    assert.deepEqual((await stopCommand("pcw2", "holder")).body, { stopped: true });
+    assertStopBody((await stopCommand("pcw2", "holder")).body, true);
 
     console.log("project commands test passed (windows)");
   } finally {
@@ -352,7 +353,7 @@ try {
   // 已在跑:两边都拿到同一条会话(幂等),谁都不另起一份。
   assert.ok([start1, start2].every((result) => (result.body as { session: { id: string } }).session.id === liveKeep()[0].id));
   const stopKeep = await stopCommand("pc", "keep");
-  assert.deepEqual(stopKeep.body, { stopped: true });
+  assertStopBody(stopKeep.body, true, "并发启停后的停止");
   assert.equal(liveKeep().length, 0);
 
   // 占位符命令的端到端:取值由服务端填进脚本再跑,必填缺失一律 400 且**不动现场**。
@@ -384,7 +385,7 @@ try {
   assert.ok(terminalSessions.liveCommandSession("pc4", "holder"), "取值非法的重启不得把在跑的服务停掉");
   const reRun = await restartCommand("pc4", cwd, holder, { 文本: "beta" });
   assert.equal(reRun.status, 201);
-  assert.deepEqual((await stopCommand("pc4", "holder")).body, { stopped: true });
+  assertStopBody((await stopCommand("pc4", "holder")).body, true);
 
   // daemonize 形状:组长自然退出(exit 0),忽略信号的子进程还握着 tty。命令会话包
   // TTY_COMMAND_WRAPPER(第 5 轮):wrapper 不杀合法保活的服务,但**持续拥有**它 ——
@@ -494,7 +495,7 @@ try {
   const restarted = await restartCommand("pc3", cwd, nohCmd);
   assert.equal(restarted.status, 201);
   await assertProcessGone(n2, "restart 必须先真正杀掉旧的 nohup 服务");
-  assert.deepEqual((await stopCommand("pc3", "noh2")).body, { stopped: true });
+  assertStopBody((await stopCommand("pc3", "noh2")).body, true);
 
   // ── service 的停止命令 ────────────────────────────────────────────────────
   // 默认停法(杀进程组)上面已经盖满了,这里只钉配了 stopCommand 之后多出来的四条语义。
@@ -509,7 +510,7 @@ try {
   // ① 脚本先跑,**杀进程仍是兜底**:这段脚本压根不碰 sleep,停完会话照样得死透 ——
   //    否则「停止命令」就成了「停不干净也算停了」的免责条款。
   assert.equal((await startCommand("pcs", cwd, graceful)).status, 201);
-  assert.deepEqual((await stopCommand("pcs", "graceful", { script: graceful.stopCommand!, cwd })).body, { stopped: true });
+  assertStopBody((await stopCommand("pcs", "graceful", { script: graceful.stopCommand!, cwd })).body, true);
   assert.equal(readFileSync(stopFlag, "utf8"), "ran", "停止命令必须真的跑过");
   assert.equal(terminalSessions.liveCommandSession("pcs", "graceful"), null, "脚本没带走的前台进程,仍要被杀掉兜底");
 
@@ -522,7 +523,7 @@ try {
   assert.match(stopError, /退出码 3/);
   assert.match(stopError, /停不下来/, "失败时要把脚本最后几行输出带回去,否则用户不知道改哪");
   assert.ok(terminalSessions.liveCommandSession("pcs", "graceful"), "停止命令失败时绝不偷偷强杀");
-  assert.deepEqual((await stopCommand("pcs", "graceful")).body, { stopped: true });
+  assertStopBody((await stopCommand("pcs", "graceful")).body, true);
 
   // ③ `docker compose up -d` 形状:启动脚本自己 exit 0,服务活在 ash 的进程树之外。
   const detached: RunnableCommand = {
@@ -548,7 +549,7 @@ try {
     "没被停过的 service 退出记录必须扛过闲置清扫,否则「服务开着」就没东西承载了",
   );
   // 没配停止命令时不作任何推断:会话死透了就是停了。
-  assert.deepEqual((await stopCommand("pcs", SERVICE_COMMAND_ID)).body, { stopped: false });
+  assertStopBody((await stopCommand("pcs", SERVICE_COMMAND_ID)).body, false);
   // 配了停止命令:正常退出、又没被停过的那次启动仍算「开着」—— 否则那条停止命令永远按不到。
   rmSync(stopFlag, { force: true });
   // 脚本跑了,但这次启动既没有活进程、也没有端口线索,服务本来就在 ash 的进程树之外 ——
@@ -559,7 +560,10 @@ try {
     { stopped: boolean; unresolved: number[]; notice: string };
   assert.equal(detachedStop.stopped, true);
   assert.deepEqual(detachedStop.unresolved, [], "没有活号可举:这一档是证据不全,不是点到了谁");
-  assert.match(detachedStop.notice, /没法确认是否停净/);
+  // 两种措辞都算这一档:安静的机器上走 processStopVerdict ③(「没法确认是否停净」),本机
+  // 有核不上的孤儿时先被 ② 截住(「可能有漏 —— 所以没法说这次启动起来的东西都停了」)。
+  // 用例要钉的是**不许宣称停净**,而不是哪一条前因先命中(口径见 terminal-stop-assert.ts)。
+  assert.match(detachedStop.notice, /没法确认是否停净|没法说这次启动起来的东西都停了/);
   assert.equal(readFileSync(stopFlag, "utf8"), "down");
   assert.equal(
     terminalSessions.listCommandSessions().find((session) => session.id === detachedId)?.stoppedByUser,
@@ -568,7 +572,7 @@ try {
   );
   // ④ 停过之后就不再算开着:再点一次不会把停止脚本又跑一遍。
   rmSync(stopFlag, { force: true });
-  assert.deepEqual((await stopCommand("pcs", SERVICE_COMMAND_ID, { script: detached.stopCommand!, cwd })).body, { stopped: false });
+  assertStopBody((await stopCommand("pcs", SERVICE_COMMAND_ID, { script: detached.stopCommand!, cwd })).body, false);
   assert.equal(existsSync(stopFlag), false, "已经停过的服务不该再跑一遍停止脚本");
   // 停过之后它不再是「可能还开着」,但也**不是一份可丢的退出日志**:这次停止没能确认停净,
   // 那句话得在刷新之后还看得见(根 AGENTS.md「停止/暂停必须留下持久可见的状态」),所以闲置
@@ -599,7 +603,7 @@ try {
   assert.ok(Date.now() - hungAt < 10_000, "超时必须自己收敛,不能等一个不认 TERM 的脚本自愿退出");
   await assertProcessGone(Number(readFileSync(hungPid, "utf8").trim()), "超时那一发要打在整个进程组上");
   // promise 落地 = withCommandLock 释放:下一次启停不被上一次卡住。
-  assert.deepEqual((await stopCommand("pcs", "graceful")).body, { stopped: true });
+  assertStopBody((await stopCommand("pcs", "graceful")).body, true);
 
   // 第 7 轮审查探针固化:TERM handler 在解冻窗口 fork 出新的独立 PGID。停止顺序是
   // 冻结→枚举→TERM→解冻(给收尾机会)→等待→升级 KILL;可捕获 TERM 的 shell 在解冻后
@@ -648,7 +652,7 @@ try {
   const churnLive = terminalSessions.listCommandSessions()
     .filter((session) => session.projectId === "pc2" && session.commandId === "churn" && session.groupAlive);
   assert.equal(churnLive.length, 1, "连环重启后同一条命令只有一条活会话");
-  assert.deepEqual((await stopCommand("pc2", "churn")).body, { stopped: true });
+  assertStopBody((await stopCommand("pc2", "churn")).body, true);
 
   // server 退出路径:shutdown() 必须整组收割,忽略信号的孤儿也不能漏 —— 否则 ash 重启后
   // 会话表清零(内存态),旧进程却被 PID 1 收养继续占端口。三种形状都要盖:组长还活着的

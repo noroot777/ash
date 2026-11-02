@@ -3,13 +3,17 @@ import { mergeFetchedTasks, upsertTask } from "../src/lib/useTasks.ts";
 import { mergeCreatedTask, mergeTaskSnapshot } from "../src/workspace/createdTaskMerge.ts";
 import { mergeTaskSnapshotFields } from "../src/lib/taskSnapshot.ts";
 
+// 独立计版的那几格要**一个不缺**地摆进夹具:`mergeTaskSnapshotFields` 是整份拷过去的
+// (缺的那格会带着 undefined 落进结果),夹具漏一格就只能靠 deepEqual 报「多了个
+// upstreamStalled: undefined」—— 2026 年加停滞看门狗那一刀就是这么把它搞红的,而那句话
+// 说不出「这一格到底该不该跟着版本号走」。答案是该:它跟另外两格同一个版本号。
 const base = { id: "task", projectId: "project", title: "same", updatedAt: "2026-10-24T00:00:00Z",
-  backgroundRevision: 0, acceptGateRunning: false, monitorRunning: false };
+  backgroundRevision: 0, acceptGateRunning: false, monitorRunning: false, upstreamStalled: false };
 const mergers = [mergeFetchedTasks, (current, incoming) => upsertTask(current, incoming[0]),
   (current, incoming) => mergeCreatedTask(current, incoming[0]),
   (current, incoming) => mergeTaskSnapshot(current, incoming[0])];
 
-for (const field of ["acceptGateRunning", "monitorRunning"]) {
+for (const field of ["acceptGateRunning", "monitorRunning", "upstreamStalled"]) {
   const started = { ...base, [field]: true, backgroundRevision: 1 };
   const ended = { ...base, backgroundRevision: 2 };
   for (const merge of mergers) {
@@ -32,7 +36,7 @@ for (const field of ["acceptGateRunning", "monitorRunning"]) {
     assert.deepEqual(merge([started], [started])[0], started);
   }
 }
-const both = { ...base, acceptGateRunning: true, monitorRunning: true, backgroundRevision: 3 };
+const both = { ...base, acceptGateRunning: true, monitorRunning: true, upstreamStalled: true, backgroundRevision: 3 };
 assert.deepEqual(mergeTaskSnapshotFields(both, base), both);
 assert.equal(mergeTaskSnapshot([], both).length, 0);
 assert.deepEqual(mergeCreatedTask([], both), [both]);

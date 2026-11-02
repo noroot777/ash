@@ -12,6 +12,7 @@ import { activeReviewEvidence, assertReviewAuthority, reviewDeliveryAuthority, r
 import { recordReviewWait, reviewWaitAuthorized, reviewWaitAtTurnStart, snapshotReviewWait } from "./review-wait.js";
 import { autoCheckpointOwner, questionWaitMatches, questionWaitOrigin, reviewWaitOrigin,
   startTaskWaitTurn } from "./task-wait-ownership.js";
+import { resumePromptHeldBy, resumePromptTakePatch } from "./task-resume-prompt.js";
 import { rememberGuardedStart, clearGuardedStart } from "./guarded-turn-start.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { now } from "./util.js";
@@ -274,9 +275,13 @@ export async function commitReviewTurnDelivery(taskId: string, receipt: ReviewSt
       || JSON.stringify(start.identity) !== JSON.stringify(receipt.identity) || !reviewIdentityMatches(task, receipt.identity)) throw new ReviewSuperseded();
     await persistRunner?.(transaction);
     if (receipt.delivery?.kind === "checkpoint") {
-      await transaction.update(tasks).set({ resumePrompt: null, updatedAt: now() })
-        .where(and(eq(tasks.id, taskId), eq(tasks.resumePrompt, receipt.delivery.text),
-          eq(tasks.resumePromptGeneration, receipt.delivery.promptGeneration)));
+      // 这三列只许由 `task-resume-prompt.ts` 导出的 patch/条件助手写:自己拼 `.set` 会漏掉代次,
+      // 而「文字」压根证明不了「还是同一次占用」(那边 `resumePromptHeldBy` 的说明)。
+      // `test-monitor-complete-gate` 的 F1-A 按语句扫 `server/src` 全树钉这一条,所以这里没有
+      // 「改断言」那条路 —— 只能换成助手。
+      await transaction.update(tasks).set(resumePromptTakePatch())
+        .where(and(eq(tasks.id, taskId), ...resumePromptHeldBy({ text: receipt.delivery.text,
+          generation: receipt.delivery.promptGeneration })));
     } else if (receipt.delivery) {
       const message = (await transaction.select().from(scheduledMessages)
         .where(eq(scheduledMessages.id, receipt.delivery.messageId)))[0];

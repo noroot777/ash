@@ -124,15 +124,22 @@ try {
         historyList: box(".history-list"),
         detailPane: box(".detail-pane"),
         scrollColumn: box(".scroll-col"),
+        statusBar: box(".status-bar"),
         workspaceSidebarCount: document.querySelectorAll(".workspace-sidebar").length,
       };
     });
   }
 
+  // 全屏工作台占的不是整个窗口:底部那条全局状态栏(2026-09-17 abf768ff)横贯整个 app,
+  // Git 路由也压在它上面。所以舞台高度按**实测的状态栏**扣 —— 早先这里写死 1000,状态栏
+  // 落地那天就红了,而「974 !== 1000」说不出少掉的那一截去了哪。
+  const statusBar = report.views.changes.statusBar;
+  assert.ok(statusBar && statusBar.height > 0, "底部全局状态栏应当在场");
+  const stage = viewport.height - statusBar.height;
   for (const value of Object.values(report.views)) {
-    assert.deepEqual(value.workbench, { x: 0, y: 0, width: 1440, height: 1000 });
+    assert.deepEqual(value.workbench, { x: 0, y: 0, width: 1440, height: stage });
     assert.deepEqual(value.header, { x: 0, y: 0, width: 1440, height: 46 });
-    assert.deepEqual(value.shell, { x: 0, y: 46, width: 1440, height: 954 });
+    assert.deepEqual(value.shell, { x: 0, y: 46, width: 1440, height: stage - 46 });
     assert.equal(value.document.width, viewport.width, "workbench must not overflow horizontally");
     assert.equal(value.workspaceSidebarCount, 0, "Git route must not render the ash task sidebar");
   }
@@ -161,7 +168,7 @@ try {
     const rect = element.getBoundingClientRect();
     return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
   });
-  assert.deepEqual(workspacePage, { x: 0, y: 0, width: 1440, height: 1000 });
+  assert.deepEqual(workspacePage, { x: 0, y: 0, width: 1440, height: stage });
   assert.equal(await page.locator(".workspace-sidebar").count(), 0, "real WorkspaceShell Git route must remove the task sidebar");
   await page.reload();
   await page.locator(".workspace-git-page").waitFor();

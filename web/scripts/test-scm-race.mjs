@@ -35,8 +35,8 @@ const overviewOf = (staged) => ({
   commits: [],
 });
 
-const until = async (probe, hint) => {
-  for (let i = 0; i < 100; i += 1) {
+const until = async (probe, hint, attempts = 100) => {
+  for (let i = 0; i < attempts; i += 1) {
     if (probe()) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -88,10 +88,11 @@ async function race(browser, url, { writeStatus }) {
   await stageOne.waitFor();
   await page.locator(".scm-commit textarea").fill("先写一句提交信息");
 
-  // ① 用户点了刷新，这次 GET 被扣在路上。
+  // ① 一次 GET 被扣在路上。扣的是**自动轮询**那一次：手动刷新按钮在 2026-09-18
+  //    （d8f6ab5f）连同推送一起撤掉了，面板本来就每 5 秒自己读一次，这一局要的
+  //    「写之前发出的那次读」照旧成立。等的窗口因此要盖得住一个轮询周期。
   holdNext = true;
-  await page.getByRole("button", { name: "刷新 git 状态" }).click();
-  await until(() => heldArrived, "被扣住的那次 GET 到达服务端");
+  await until(() => heldArrived, "被扣住的那次 GET 到达服务端", 240);
 
   // ② 紧接着点暂存，写先回来。
   await stageOne.click();

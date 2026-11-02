@@ -21,6 +21,8 @@ const { applyFailPolicy } = await import("../src/workflow-steps.js");
 const { continueTask } = await import("../src/orchestrator.js");
 const { saveCliState } = await import("../src/task-cli-state.js");
 const { isTurnClaimed } = await import("../src/runs.js");
+const { evidenceState } = await import("../src/regression-evidence-lifecycle.js");
+const { reviewRoundDir } = await import("../src/review-evidence.js");
 await ensureSchema();
 const originalRun = CodexExecutor.prototype.runSteerable;
 const invocations = new Map<string, RunOpts>();
@@ -98,6 +100,10 @@ try {
   }
   console.log("automatic side/reviewer turns execute without changing saved plan: passed");
   await create("verification-task", { status: "done", verifyRound: 1 });
+  // 产品里派一轮就地验证**先建证据行、再写 verifyRound**(review.ts),而那一行带着目标身份。
+  // 台子只写 verifyRound 的话,这一轮在起跑前就会被 `retireHistoricalReview` 当成「缺目标
+  // 身份、却还在飞的旧轮次」收走,`continueTask` 直接返回 false,一个字都不会送进 CLI。
+  await evidenceState("verification-task", reviewRoundDir("verification-task", 1), await row("verification-task"));
   const verificationState = (await row("verification-task")).cliState;
   await continueTask("verification-task", "继续独立验证", { system: "wake" });
   assert.equal((await row("verification-task")).cliState, verificationState);

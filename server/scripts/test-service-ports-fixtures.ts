@@ -82,7 +82,26 @@ export async function waitFor(label: string, check: () => boolean | Promise<bool
 }
 
 export const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-export const pidIn = (file: string) => Number(readFileSync(file, "utf8").trim());
+/**
+ * pidfile 里的那个号。**读不出一个真号就抛,绝不返回 0。**
+ *
+ * `Number("")` 是 `0`,而 pid `0` 送进任何**组级**信号打的就是**调用方自己的整个进程组**:
+ * `npm run test:service-ports-script` 会连着开发者的 shell 一起被 SIGKILL 掉,而且没有任何
+ * 输出说明原因(日志 0 字节)。守护进程「听上了端口」早于「pidfile 落盘」,所以这个空窗真
+ * 存在 —— 本轮审计两次复现。要「等它落下来」用下面的 `pidFrom`。
+ */
+export const pidIn = (file: string) => {
+  const raw = readFileSync(file, "utf8").trim();
+  const pid = Number(raw);
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error(`pidfile 里还没有真号:${file}(读到 ${JSON.stringify(raw)})`);
+  return pid;
+};
+
+/** 等到 pidfile 真落下一个号为止,再把它读出来(「听上了端口」早于「pidfile 落盘」,那一刻直接 `pidIn` 会抛)。 */
+export const pidFrom = async (file: string, label = file): Promise<number> => {
+  await waitFor(`pidfile 落下真号:${label}`, () => { try { pidIn(file); return true; } catch { return false; } });
+  return pidIn(file);
+};
 export const listening = async (port: number) => {
   const found = await listeningPids(port);
   return found.ok ? found.pids : [];
@@ -126,7 +145,12 @@ export const service = (command: string, stopScript: string | null = null): Runn
 /** 整场收尾:停掉会话管理器、杀光活口、删掉临时目录。每个测试文件的 finally 都调它。 */
 export function cleanup(): void {
   terminalSessions.shutdown();
-  for (const pid of strays) { try { process.kill(pid, "SIGKILL"); } catch { /* 已经走了 */ } }
+  // `pid > 0` 这道闸是最后一层:0 和 NaN 都会让这一行变成「SIGKILL 调用方自己的进程组」。
+  // 上游 `pidIn` 已经不可能交出 0,这里仍然拦一道 —— 这一行的代价不对称到不值得省。
+  for (const pid of strays) {
+    if (!Number.isInteger(pid) || pid <= 0) { console.error(`[台子] 跳过一个不是真号的活口登记:${pid}`); continue; }
+    try { process.kill(pid, "SIGKILL"); } catch { /* 已经走了 */ }
+  }
   rmSync(cwd, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
 }

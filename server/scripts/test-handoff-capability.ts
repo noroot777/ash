@@ -174,10 +174,15 @@ if (fakeCliDir) {
         `${agent.type} 标了 preset,清单却不是内置快照`);
       continue;
     }
-    // 反过来:标了 probe 就必须真的是问来的那一份,不能是快照换个名字 —— 那是修复前
-    // 的原样,会让整个 model-missing 分支继续是死代码。
-    assert.notDeepEqual([...agent.models], [...CLI_MODEL_PRESETS[agent.type]],
-      `${agent.type} 标了 probe,清单却和内置快照一模一样`);
+    // 反过来「标了 probe 就必须真的是问来的那一份,不能是快照换个名字」这一条,**不能拿
+    // 「跟快照不相等」当判据**:内置快照本来就是同一个 CLI 的快照,它准的时候两份当然一模
+    // 一样(本机 codex 实测就是:probe 回来的六个型号跟 CLI_MODEL_PRESETS.codex 完全重合)。
+    // 那个写法等于「快照一旦跟上现实,这条就红」。
+    //
+    // 这件事的地面真相只在下面 `fakeCliDir` 那一节存在:摆一个 PATH 上的假 CLI,它的型号
+    // (FAKE_MODELS)故意跟任何快照都不一样,再断言报上来的正是那一份 —— 那才真的证明了
+    // probe 这条路读的是 CLI 而不是快照,也是 model-missing 分支不是死代码的完整判据。
+    // 这里只留下**跟宿主机无关**的那一半。
     assert.ok(agent.models.length > 0, `${agent.type} 探到了实时目录,清单不该是空的`);
   }
 

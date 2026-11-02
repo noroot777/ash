@@ -40,7 +40,7 @@ import { releaseTurn, turnSourceReview, whenTurnIdle } from "./runs.js";
 import type { TurnIdentity, TurnSource } from "./runs.js";
 import { forgetStalled, forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, noteStalledPending, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
-import { monitorIdFromOrigin } from "@ash/shared/monitor";
+import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import { deliveryOptions, deliveryVerdict, isDueForDelivery, pendingExecutionIntent } from "./pending-verdict.js";
@@ -640,14 +640,27 @@ export async function handDuePendingMessageToRun(
  */
 export async function hasDeliverablePendingMessages(taskId: string, at = new Date()): Promise<boolean> {
   const task = (await db
-    .select({ mode: tasks.mode, archived: tasks.archived })
+    .select({ mode: tasks.mode, status: tasks.status, archived: tasks.archived })
     .from(tasks)
     .where(eq(tasks.id, taskId))).at(0);
   if (!task || task.archived) return false;
   if (task.mode !== "single" && task.mode !== "team") return false;
   const rows = await db
-    .select({ mode: scheduledMessages.mode, sendAt: scheduledMessages.sendAt })
+    .select({ mode: scheduledMessages.mode, sendAt: scheduledMessages.sendAt, origin: scheduledMessages.origin })
     .from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
-  return rows.some((m) => isDueForDelivery(m, at));
+  for (const m of rows) {
+    if (!isDueForDelivery(m, at)) continue;
+    // 哨兵事件那一档:它唯一的出口是「唤醒这个任务」,任务已经结束(且没有在跑的审查替它
+    // 兜着)时下一次投递只会被 `deliveryVerdict` 取消掉 —— 跟上面「归档 / 类型不支持回复」
+    // 同一类,算进来就是让一条注定作废的消息把预约审查挡住。判据不另写一份,原样用投递端
+    // 那两句(来源失效 → 终态闸)。
+    if (monitorIdFromOrigin(m.origin) !== null) {
+      const source = await monitorEventSourceState(m.origin);
+      if (source === "stale") continue;
+      if (monitorBlockedReason(task, { activeReview: source === "live" }) !== null) continue;
+    }
+    return true;
+  }
+  return false;
 }

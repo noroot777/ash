@@ -52,10 +52,26 @@ export function findArchivedRollout(threadId: string, configDir?: string | null)
   return findInSessionDirectory("archived_sessions", threadId, configDir);
 }
 
+/**
+ * 「**codex 自己 resume 得到吗**」的口径,比 `findRollout` 严:活动会话它只认
+ * `sessions/YYYY/MM/DD`,平铺在 `sessions` 根上的 rollout 在它眼里等于不存在
+ * (`thread/resume` 只拿到 threadId,定位是 codex 那边做的,ash 给不了路径)。
+ * 归档目录仍两种布局都认 —— 起跑前 ash 会先 `thread/unarchive`(codex-app-server.ts)。
+ *
+ * 上面那个宽松版是「**文件在盘上的哪儿**」:读版本号、搬文件、判桌面可见性都该用它。
+ * 两者别混用:接力导入要答的是前一问,用宽松版就会把「盘上有、codex 找不到」的会话
+ * 当成迁移成功,`cliSessionId` 保留下来,续跑换一句「找不到线程」后整回合空转。
+ */
+export async function findResumableRollout(threadId: string, configDir?: string | null): Promise<string | null> {
+  return await findInSessionDirectory("sessions", threadId, configDir, true)
+    ?? await findArchivedRollout(threadId, configDir);
+}
+
 async function findInSessionDirectory(
   directory: "sessions" | "archived_sessions",
   threadId: string,
   configDir?: string | null,
+  datedOnly = false,
 ): Promise<string | null> {
   if (!threadId || !/^[A-Za-z0-9_-]+$/.test(threadId)) return null;
   const root = path.join(codexHome(configDir), directory);
@@ -69,7 +85,8 @@ async function findInSessionDirectory(
       return null;
     }
     const hit = entries.find((entry) => entry.isFile() && entry.name.startsWith("rollout-") && entry.name.endsWith(suffix));
-    if (hit) return path.join(dir, hit.name);
+    // datedOnly:只认日期三层那一格,浅层命中照旧往下钻(别在半路返回一个 codex 找不到的文件)。
+    if (hit && (!datedOnly || depth === 3)) return path.join(dir, hit.name);
     if (depth === 3) return null;
     const dirs = entries
       .filter((entry) => entry.isDirectory())

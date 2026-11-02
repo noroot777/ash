@@ -477,8 +477,18 @@ assert.equal(
 );
 assert.ok(injected.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "换算后的百分比同样要走这一档");
 
+// 「不该多出来的」按**内容**认,不按有没有这个参数认:5bca1ec3(10-16)起,起跑那一次
+// 无条件把 Monitor 改道的钩子拼进这同一份 `--settings`(claude 只认最后一个,所以它只能
+// 跟覆盖项挤在一起,见 claude-monitor-hook.ts)。那段钩子是 ash 自己的观测,不是用户配的
+// 覆盖项、也不是加速档 —— 这一条要钉的是「用户没配就别替他配」,所以钉 key 集合。
+// (「复制到终端接着聊」那条命令反过来:给人手跑的命令里连这段钩子都不该有,见上面
+// `plainFields.resumeArgs` 那一条和 executors/claude.ts 的 resumeFields。)
 await probeEnvFor("claude-plain");
-assert.ok(!lastCommandLine.includes("--settings"), "没配覆盖项、也没开加速档时不该凭空多一个 --settings");
+assert.deepEqual(
+  Object.keys(settingsOf(lastCommandLine)),
+  ["hooks"],
+  `没配覆盖项、也没开加速档时,那一截里除了 Monitor 钩子不该有别的,实际:${lastCommandLine}`,
+);
 
 // 加速档和覆盖项必须在**同一个** --settings 里:claude 只认最后一个,分开推等于二选一。
 await probeEnvFor("claude-fast-overridden");
@@ -533,7 +543,10 @@ writeFileSync(
   JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "10000" } }),
 );
 await probeEnvFor("claude-pct-local", pctProject);
-const ranWith = settingsOf(lastCommandLine);
+// 比的是**用户那一截**:ash 自己的 Monitor 改道钩子只进真跑的那一条,手跑的命令里没有它
+// (executors/claude.ts 的 resumeFields 说明了为什么)。要钉的不变量是「同一个 cwd 下,
+// 两边算出来的压缩水位必须是同一份」,钩子在不在不影响它。
+const { hooks: _ranHooks, ...ranWith } = settingsOf(lastCommandLine);
 const pctExecutor = await resolveExecutorFor({ executorId: "claude-pct-local", type: "claude" });
 const pasted = pctExecutor.resumeFields(pctProject, "sid-1");
 assert.deepEqual(

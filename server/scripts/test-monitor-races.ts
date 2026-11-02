@@ -423,8 +423,11 @@ import {
 
   // 路由那一侧占的得是**同一把**锁，而且得在 finally 里还 —— 这两件事钉住。
   const routeSrc = readSource(join(HERE, "../src/task-routes.ts"));
-  assert.match(routeSrc, /claimTurn\(tid, "status"\)/, "手动改终态要占的是同一把回合锁");
-  assert.match(routeSrc, /\} finally \{\n    \/\/[^\n]*\n    if \(lockTurn\) releaseTurn\(tid\);/,
+  // 这两条读的是**源码**,钉的是「占的是同一把锁」和「还锁在 finally 里」,所以别把行距和
+  // 注释也写进判据:占位后来改成了带凭据的 `claimOwnTurn`(凭据只能由占位那一刻产生,见
+  // queue-seat.ts 的说明),还锁那句跟着带上了它,而原先那条正则连注释占几行都钉死了。
+  assert.match(routeSrc, /claimOwnTurn\(tid, "status"\)/, "手动改终态要占的是同一把回合锁");
+  assert.match(routeSrc, /\} finally \{[^}]*releaseTurn\(tid, turn\);/,
     "每一条出路都得还回去——含被挡回的那次 early return");
   console.log("✓ 完成操作与起这一轮争同一把锁：两种顺序都收口，锁不留手");
 }
@@ -512,8 +515,10 @@ import {
   }
 
   // 锁要覆盖到**真正写进 stdin 那一刻**，不是只盖住那一问：所以释放必须在 finally 里。
-  const orchSrc = readSource(join(HERE, "../src/orchestrator.ts"));
-  assert.match(orchSrc, /\} finally \{\n      releaseLead\(\);\n    \}/,
+  // 这一段 2026 年从 `orchestrator.ts` 搬进了 `team/lead-interjection.ts`(那边顶到了 700 行
+  // 的约定上,逻辑一个字没改),所以读那个文件;缩进别写进判据。
+  const interjectionSrc = readSource(join(HERE, "../src/team/lead-interjection.ts"));
+  assert.match(interjectionSrc, /\} finally \{\s*releaseLead\(\);\s*\}/,
     "deliverToLead 抛错那条出路也得把锁还回去,否则这个任务的状态从此改不动");
   console.log("✓ 团队任务:完成操作与哨兵通知互斥,两种顺序都不开台、不记已发送");
 }

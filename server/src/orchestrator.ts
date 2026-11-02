@@ -12,7 +12,7 @@ import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
 import type { ContinueTaskOptions, TurnStartDecline } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceRole } from "./runs.js";
+import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceReview, turnSourceRole } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
 import { assertReviewTurnStart, beginReviewContinuation, commitReviewTurnDelivery } from "./review-continuation.js";
 import { restoreUndeliveredReviewStart } from "./review-start-retry.js";
@@ -128,8 +128,16 @@ export async function continueTask(
   };
   const { head, nativeCommand, slash, goalExecution, options, retired } = await withTurnPreflight(taskId, opts.turnHeld, async () => {
     const prepared = await prepareContinuationEntry(taskId, userText, opts);
-    const retired = prepared.head?.mode === "single" && await retireHistoricalReview(prepared.head,
-      prepared.options.turnSource, prepared.options.reviewDelivery, prepared.options.turnHeld);
+    // **原生命令不退休任何审查轮**。退休要拦的是「新方向来了,旧轮次不许回来把它改回去」
+    // (review-retirement.ts 顶部),而原生命令整条归 CLI 本地执行、不进模型,既不是执行也
+    // 不是新指令(上面那段注释)——它一个字都不改工作区,没有任何东西需要被它作废。
+    //
+    // 少这一道的代价是双份的:在飞的就地验证轮被它收口(verifyRound 清掉、凭空记一轮验证
+    // 账),而且 `continueTask` 会返回 false 说「这一轮没被接管」,于是调用方把原话当成没送
+    // 出去——可它明明已经送进 CLI 跑过了。test-native-command-turn 两头都钉着。
+    const retired = !prepared.nativeCommand && prepared.head?.mode === "single"
+      && await retireHistoricalReview(prepared.head,
+        prepared.options.turnSource, prepared.options.reviewDelivery, prepared.options.turnHeld);
     return { ...prepared, retired };
   });
   opts = options;
@@ -393,14 +401,27 @@ export async function continueTask(
     // 续聊接回正文图片的身份种子(要读 trace,异步):子智能体的文档跨回合累加,不接上,
     // 重开后的第一处引用又从 0 号发起,跟刷新重建那一路撞身份(agent-image-journal.ts)。
     const imageSeed = resuming ? await loadMarkdownImageSeed(taskId, prev!.id) : undefined;
+    // **这道闸必须排在读浏览器授权之前**:那之后到 spawn 之间只许剩撤回那一个 await(判据由
+    // test-browser-grant-timing 的顺序不变量扫源码钉住)—— 多一个查库的 await,用户在这段时间
+    // 收回授权就拦不住,撤销已落库而首条消息仍写着「已预先授权」。排早一点的代价只是「授权读取
+    // 这两步期间审查被顶掉」照样起跑,那一种由 spawn 之后的 `commitReviewTurnDelivery` 接着拦。
+    checkingReviewStart = true;
+    // 这道闸要问的是「**我属于的那一轮审查**还是当下这一轮吗」,所以只对**绑定了审查**的回合
+    // 开:收据在手,或者任务自己挂着就地验证轮 / 是审查任务,或者回合身份里写明了是哪一次审查。
+    // 显式写 `"unbound"` 的 reviewer 回合(duet 研讨、辩论、审查者哨兵唤醒)不在其列——它那句
+    // 话的意思正是「这一轮不代表任何审查」(turn-lock.ts 的 TurnSource),而这道闸在缺少身份时
+    // 退回去查「现在活跃的是哪一轮」,那恰是 pending-verdict.ts 明令禁止的补绑。
+    // 少这一条的代价实测:一个 unbound 的 reviewer 旁路回合会被判成「原目标方向已失效」而抛,
+    // 而那条 catch 分支只撤回收据——没有收据就什么都不做,任务从此**卡在 running**、回合锁却
+    // 已经放掉,连 PATCH status 都会被 409 挡回(test-cli-plan-scheduling 钉的就是这一条)。
+    const boundReviewTurn = !!turnSourceReview(opts.turnSource);
+    await assertReviewTurnStart(taskId, turnToken, directionToken, opts.reviewDelivery,
+      !!reviewStart || (!nativeCommand && (!!task.verifyRound || boundReviewTurn || !!task.reviewOf)));
+    checkingReviewStart = false;
     // 顺序定死:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论 → spawn。为什么只能这
     // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
     const browserGrant = await browserGrantForProject(task.projectId);
-    checkingReviewStart = true;
-    await assertReviewTurnStart(taskId, turnToken, directionToken, opts.reviewDelivery,
-      !!reviewStart || (!nativeCommand && (!!task.verifyRound || freeReviewTurn || !!task.reviewOf)));
-    checkingReviewStart = false;
     // ↓ 这里往下到 `trackRun` 全同步(撤回那条岔路除外,它不起进程):暂停请求要么在
     // takeFreeze 被消费、要么之后才到 —— 那时已有 handle 可杀。
     const freeze = takeFreeze(taskId, frozen);
@@ -609,9 +630,24 @@ export async function continueTask(
     }
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
-    if (err instanceof ReviewSuperseded) {
-      // 两个抛出点:起跑前的 assertReviewTurnStart,和 spawn **之后**的 commitReviewTurnDelivery。后一种
-      // 输入已交到 CLI 手上(finally 收掉它之前它可能已经动过),只能交给越线记号去判,不许说「没送出去」。
+    // 两个抛出点:起跑前的 assertReviewTurnStart,和 spawn **之后**的 commitReviewTurnDelivery。后一种
+    // 输入已交到 CLI 手上(finally 收掉它之前它可能已经动过),只能交给越线记号去判,不许说「没送出去」。
+    const superseded = err instanceof ReviewSuperseded;
+    // 撤回那条路**自己**写结算、自己把状态恢复到原值 —— 但它第一行就是「没有收据直接
+    // return」(review-start-withdrawal.ts)。于是「**闸**抛了、而这一轮压根没拿到收据」那一支
+    // 过去什么都不做:任务早在上面 setStatus 那一步改成了 running,回合锁又在下面 finally 里
+    // 放掉,从此**卡在 running**,连 PATCH status 都会被 409 挡回(server/CLAUDE.md)。这形状
+    // 真能走到:一个历史审查任务(reviewOf 挂着、轮次目录那套上线前跑完的那批压根没有证据行)
+    // 收到任何一条回复 —— 退休扫描按「已收口」放它过去,闸这边却因为查不到证据行而判「原目标
+    // 方向已失效」。所以这一支落回通用失败恢复:失败交代照发,状态按 followUpFrom 回到原值,
+    // 返回值仍然如实说「一个字没送出去」(下面 frozenBeforeSpawn)。
+    //
+    // **判据必须是 `checkingReviewStart`,不能只问「有没有收据」**:同一个异常还有一个更早的
+    // 抛出点 —— `beginReviewContinuation` 在**同一笔事务里**抛(过期的投递世代、身份被顶掉),
+    // 那时状态一个字都还没改、followUpFrom 也随事务回滚了,没有任何东西需要恢复。那一支要是
+    // 也走进通用恢复,`back` 读回 null 就会把一个 paused 的任务按 failed 结算掉,检查点连带
+    // 被清空(test-review-history「过期检查点世代不许清掉同文本的新检查点」钉的就是这条)。
+    if (superseded && !(checkingReviewStart && !reviewStart && !handle)) {
       await withdrawReviewStart(taskId, reviewStart, priorStatus, !!handle);
       frozenBeforeSpawn = !handle;
       // spawn 之前的审查撤回 = 这一笔已经不是当事人了,按撤回报(重排只会把同一笔过期的
@@ -627,10 +663,13 @@ export async function continueTask(
     // 状态结算(落回 paused)仍由失败恢复完成,只是返回值改说实话。
     // 越线凭据写不下来(DeliveryCrossingUnwritable)同属这一类:它也只在 spawn 之前抛,
     // 而且**必须**说实话 —— 调用方据此确知「没投喂」,直接归还,不必再去读那张读不出来的记号。
-    frozenBeforeSpawn = err instanceof FrozenTurn || err instanceof DeliveryCrossingUnwritable;
-    // 两种都**确证没投喂**,但不是一件事:冻结闸是用户的动作(分组暂停 / 归档 / 删除),越线
-    // 凭据写不下来是一次写库故障。按原因分开报,别让调用方把一次故障读成「用户撤回」。
-    if (frozenBeforeSpawn) frozenReason = err instanceof FrozenTurn ? "withdrawn" : "backoff";
+    // 走到这里的 ReviewSuperseded 必然是「闸抛的、且没有收据」那一支(上面已经把另外几种拦走
+    // 了),输入同样一个字都没送出去,所以跟冻结撤回同一档。
+    frozenBeforeSpawn = superseded || err instanceof FrozenTurn || err instanceof DeliveryCrossingUnwritable;
+    // 三种都**确证没投喂**,但不是一件事:冻结闸是用户的动作(分组暂停 / 归档 / 删除),审查被
+    // 顶替与上面那支同一个异常、同报撤回;越线凭据写不下来是一次写库故障。按原因分开报,别让
+    // 调用方把一次故障读成「用户撤回」。
+    if (frozenBeforeSpawn) frozenReason = err instanceof DeliveryCrossingUnwritable ? "backoff" : "withdrawn";
     if (!handle && (frozenBeforeSpawn || checkingReviewStart)) {
       await recordReviewStartNotLaunched(taskId, reviewStart);
       if (await restoreUndeliveredReviewStart(taskId, reviewStart, true)) return decline("withdrawn");
