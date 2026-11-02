@@ -187,8 +187,8 @@ export function AcceptanceControls({
     && (branchPlan.loading || branchPlan.refreshing || !branchPlan.view);
   // 前置命令在跑（或还没确认整棵进程树退出）时，再点一次什么也推进不了：绿了会自动做完。
   // 判据取同一份门禁状态（SSE 推着走），不等 branchPlan 15 秒一次的重验，也覆盖非 worktree 任务。
-  if (gate.running && task.stage !== "accepted") {
-    acceptanceBlock ??= gate.running.status === "running" ? "验收前置命令运行中" : "验收前置命令收尾中";
+  if (gate.occupied && task.stage !== "accepted") {
+    acceptanceBlock ??= gate.running && gate.running.status !== "running" ? "验收前置命令收尾中" : "验收前置命令运行中";
   }
   if (!midGate && task.useWorktree && task.stage !== "accepted") {
     acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : null;
@@ -280,8 +280,9 @@ export function AcceptanceControls({
       if (!result.accepted) {
         const gateReason = result.reason.startsWith("accept_gate");
         setFailure(gateReason && result.reason !== "accept_gate_failed" ? null : result);
-        // 等门禁状态落地再解锁按钮（finally 里的 setBusy(false)）：否则「验收中」结束到
-        // 「运行中」出现之间有一段空窗，按钮又能点了。reload 至多等一发读取超时，不会吊死。
+        // 回执已经说「在跑」就先把这份事实留住，再解锁（finally 里的 setBusy(false)）：
+        // 只等 reload 不够，它在读失败/超时时同样兑现，按钮会在读不到状态时重新放开。
+        if (result.reason === "accept_gate_running") gate.holdRunning(result.gate?.status === "running" ? result.gate : null);
         if (gateReason) await gate.reload();
         if (result.confirmationRequired === "confirmUnverified") {
           verification.setAcknowledged(false);
