@@ -65,6 +65,7 @@ import { drainRegressionFinalization, finalization } from "./regression-finaliza
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimOwnTurn, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { reviewInputHold, reviewInputNote } from "./review-input-verdict.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { id, now } from "./util.js";
@@ -431,6 +432,19 @@ export async function handleFreeWorkflowSettlement(
     await preserveReviewWait(task); return true;
   }
   const directory = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
+  // **没交卷 ≠ 审查者没给结论** —— 也可能是任务书压根没进它手里(判据与收口见 review-input-verdict.ts)。
+  // 说不清、派发还在负责:这一轮不结,交给派发那一侧按迟到的定论或交付凭据收口。确证拒收 / 到头
+  // 仍说不清:照常结算,但先把真实原因写进时间线,别让它只剩一句「未能正常给出结论」。
+  const input = round.conclusion ? null : reviewInputHold(task, directory, round.dispatch);
+  if (input === "hold") {
+    console.error(`[ash] 审查回合结束但任务书送没送到还说不清，暂不结算 task=${taskId} run=${run.id} round=${run.currentRound}`);
+    return true;
+  }
+  if (input) {
+    await appendTaskTimeline(taskId, reviewInputNote(input,
+      run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`),
+    { eventKey: `review-input-${input}:${directory}:${task.waitOwnership?.deliveredReview?.generation ?? ""}` });
+  }
   const checked = await regressionSettlementConclusion(taskId, directory, {
     // 孤儿收尾那一路的落笔条件:上下两个事务由结算层各核一次(见那边的 `SettlementFence`)。
     ...(orphanFence ? { fence: orphanFence } : {}),

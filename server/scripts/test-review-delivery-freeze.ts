@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { db, tasks, schema, runs, teardown } from "./monitors-fixture.js";
 import { setupRegressionReviews } from "./regression-review-fixture.js";
+import type { InputAcceptance, RunHandle } from "../src/executors/types.js";
 
 const { setTaskQuestion } = await import("../src/task-question.js");
 const { occupyResumePrompt, takeResumePrompt } = await import("../src/task-resume-prompt.js");
@@ -15,7 +16,22 @@ const { reviewDeliveryBlocked } = await import("../src/review-ownership.js");
 const { reconcileRegressionSettlements } = await import("../src/regression-settlement.js");
 const { freeReviewResumeOptions } = await import("../src/free-workflow.js");
 const { mountGroupRoutes } = await import("../src/group-routes.js");
+const { ClaudeExecutor } = await import("../src/executors/claude.js");
+const { CodexExecutor } = await import("../src/executors/codex.js");
 const row = async (taskId: string) => (await db.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
+// 测试隔离闸给的是一个起不来的子进程,codex 那一侧据此如实答「拒收」—— 那样「重试这一次
+// 真的送到了」就摆不出来,记账那一半也就钉不住。换成一个**协议层收下**的执行器桩。
+const accepting = function (): RunHandle {
+  return {
+    sessionId: "freeze-accepting", commandLine: "freeze stub", kill() {},
+    inputAccepted: Promise.resolve<InputAcceptance>("accepted"),
+    events: (async function* () { yield { kind: "done" as const, exitStatus: 0 }; })(),
+  };
+};
+for (const executor of [ClaudeExecutor, CodexExecutor]) {
+  executor.prototype.run = accepting;
+  executor.prototype.runSteerable = accepting;
+}
 const recoveryUrl = new URL("../src/regression-settlement.ts", import.meta.url).href;
 const recover = () => execFileSync(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e",
   `await (await import(${JSON.stringify(recoveryUrl)})).reconcileRegressionSettlements();`], { env: process.env, stdio: "pipe" });
@@ -58,9 +74,7 @@ try {
         const transaction = db.transaction;
         let injected = false, failed = false;
         // 这一句输入交到执行器之后拿到的回执(三档,契约见 task-continue-options.ts 的 onInputSettled)。
-        // 测试隔离闸起不来真 codex,协议层会如实答「拒收」—— 所以这里钉的是「越过了那条线、回执
-        // 交到了调用方手上」,而只有「收下」才记账,别把拒收也记成送达。
-        const receipts: string[] = [];
+        const receipts: InputAcceptance[] = [];
         db.transaction = async function (...args) {
           if (!injected && new Error().stack?.includes("assertReviewTurnStart")) {
             injected = true;
@@ -102,7 +116,10 @@ try {
             assert.equal((await row(taskId)).resumePrompt, null);
           }
         } }), true);
-        assert(receipts.length > 0, "the retry crosses the line once and hands its receipt to the caller");
+        assert.deepEqual(receipts, ["accepted"], "the retry crosses the line once and is accepted exactly once");
+        if (message) assert.equal((await db.select().from(schema.scheduledMessages)
+          .where(eq(schema.scheduledMessages.id, message.id)))[0]?.status, "sent", "accepted input is accounted as sent");
+        else assert.equal((await row(taskId)).resumePrompt, null, "accepted checkpoint is consumed");
         assert.equal((await row(taskId)).waitOwnership?.start, undefined);
         assert(await reviewDeliveryBlocked(options.reviewDelivery, taskId), "actual delivery loses the old retry authority");
         console.log(`✓ ${mode} ${input}: real group pause preserves undelivered authority, retry delivers once (${fault})`);

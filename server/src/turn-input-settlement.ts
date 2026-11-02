@@ -19,12 +19,14 @@
 //      等待通常当场返回)。只结一次,哪条出口先到算哪条。
 import { noteDeliveryAccepted, noteDeliveryRefusal } from "./delivery-crossing.js";
 import type { InputAcceptance, RunHandle } from "./executors/types.js";
+import { noteReviewInputAcceptance } from "./review-input-verdict.js";
+import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { awaitTurnInput, logTurnInputAcceptance, settleLateTurnInput } from "./turn-input-acceptance.js";
 
 export interface TurnInputSettlement {
   /** run() 一返回就调:回执本体交给 `onInputReceipt`(同步,不许有 await 夹在前面)。 */
   handOver(handle: RunHandle): void;
-  /** 按协议定论结算一次;第二次调用是空转。没有 `onInputSettled` 的回合什么都不做。 */
+  /** 按协议定论结算一次;第二次调用是空转。既没有 `onInputSettled`、又不是审查回合的,什么都不做。 */
   settle(handle: RunHandle): Promise<void>;
   /** 结过了没有(异常出口据此判断还欠不欠这一笔)。 */
   settled(): boolean;
@@ -34,7 +36,13 @@ export function createTurnInputSettlement(taskId: string, opts: {
   pendingMessageIds?: readonly string[];
   onInputSettled?: (acceptance: InputAcceptance) => void | Promise<unknown>;
   onInputReceipt?: (receipt: Promise<InputAcceptance>) => void;
-}): TurnInputSettlement {
+},
+/**
+ * 这一轮若是审查回合:它的起跑收据(spawn 之后才有,所以是个取值函数)。有就把回执同时记到
+ * 审查的交付凭据上 —— 审查结算在这一轮结束前就要读它(../review-input-verdict.ts)。
+ */
+reviewReceipt?: () => ReviewStartReceipt | undefined,
+): TurnInputSettlement {
   let done = false;
   const ids = opts.pendingMessageIds ?? [];
   // **先把协议层那个事实落盘,再去记账。** 进程内那一份只够当场处置:
@@ -43,10 +51,15 @@ export function createTurnInputSettlement(taskId: string, opts: {
   //   · accepted —— 对称的那一半:协议确认了、而 `markSent` 还没落库就崩,重启对账必须仍然
   //     判 `delivered`(只能往前走,绝不归还)。这张记号是「已送达」**唯一**的凭据 ——
   //     本地会话行已经退出那一问(第 2 轮自由审查 F1)。
-  const noteFact = (fact: InputAcceptance): void => {
-    if (!ids.length) return;
-    if (fact === "refused") noteDeliveryRefusal(taskId, ids);
-    else if (fact === "accepted") noteDeliveryAccepted(taskId, ids);
+  const noteFact = async (fact: InputAcceptance): Promise<void> => {
+    if (ids.length) {
+      if (fact === "refused") noteDeliveryRefusal(taskId, ids);
+      else if (fact === "accepted") noteDeliveryAccepted(taskId, ids);
+    }
+    // 写不下来不拦这一轮(同下面的记账):结算读不到时按「没有凭据」走原路,只是少了这一层分辨。
+    try { await noteReviewInputAcceptance(taskId, reviewReceipt?.(), fact); } catch (error) {
+      console.error(`[ash] 任务 ${taskId} 的审查输入回执(${fact})没能记到交付凭据上:`, error);
+    }
   };
   return {
     handOver(handle) {
@@ -55,15 +68,17 @@ export function createTurnInputSettlement(taskId: string, opts: {
     settled: () => done,
     async settle(handle) {
       const settled = opts.onInputSettled;
-      if (done || !settled) return;
+      if (done) return;
       done = true;
+      // 没有调用方要记账的回合也照样问回执:审查回合的结算要读它(见 `reviewReceipt`)。
+      if (!settled && !reviewReceipt?.()) return;
       const acceptance = await awaitTurnInput(handle);
       logTurnInputAcceptance(acceptance, `任务 ${taskId}`);
-      noteFact(acceptance);
+      await noteFact(acceptance);
       // **失败不许静默**(第 3 轮自由审查 F4):记账失败照旧不拖累这一轮(这里不抛),但它得
       // 留下痕迹 —— 租约那条路自己带退避补偿(delivery-lease.ts),能走到这儿的是**它之外**
       // 的记账炸了,咽下去就等于「消息永久卡在待发送」这类现场连一行线索都没有。
-      try { await settled(acceptance); } catch (error) {
+      try { await settled?.(acceptance); } catch (error) {
         console.error(`[ash] 任务 ${taskId} 的投递记账(${acceptance})出错，这一轮照常继续:`, error);
       }
       if (acceptance === "unknown") {
@@ -71,8 +86,8 @@ export function createTurnInputSettlement(taskId: string, opts: {
         // 就是补记账,落定成 `refused` 就是归还重投 —— 上一版只转 accepted,于是迟到的拒收
         // 把那张租约永远留在「在途」(第 2 轮自由审查 F3,已实测)。各档的调用点都做成幂等。
         settleLateTurnInput(handle, `任务 ${taskId}`, async (late) => {
-          noteFact(late);
-          try { await settled(late); } catch (error) {
+          await noteFact(late);
+          try { await settled?.(late); } catch (error) {
             console.error(`[ash] 任务 ${taskId} 的迟到投递记账(${late})出错:`, error); // 同上,不静默
           }
         });

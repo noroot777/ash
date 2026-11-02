@@ -1,5 +1,6 @@
 import type { ReviewDelivery, ReviewTargetIdentity } from "./schema-regression-evidence.js";
 import type { TaskStatus } from "@ash/shared";
+import type { InputAcceptance } from "../executors/types.js";
 
 export type WaitOrigin = { kind: "ordinary" } | {
   kind: "review" | "unknown";
@@ -11,7 +12,9 @@ export type TaskWaitOwnership = {
   acceptedFinalization?: { directory: string; generation: string; token: string };
   repairDelivery?: { messageId: string; generation: string; identity: ReviewTargetIdentity };
   deliveredReview?: { directory: string; generation: string; identity: ReviewTargetIdentity;
-    input?: ReviewDelivery; pid?: number; unitToken?: string | null; confirmedAt: string };
+    input?: ReviewDelivery; pid?: number; unitToken?: string | null; confirmedAt: string;
+    /** 协议回执(spawn 之后才落定,所以后补;语义与读法见 ../review-input-verdict.ts)。 */
+    acceptance?: InputAcceptance };
   start?: {
     directory: string;
     generation: string;

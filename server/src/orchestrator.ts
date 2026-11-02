@@ -182,7 +182,7 @@ export async function continueTask(
   let frozenReason: TurnStartDecline = "withdrawn";
   let reviewStart: ReviewStartReceipt | undefined;
   let checkingReviewStart = false;
-  const inputSettlement = createTurnInputSettlement(taskId, opts);
+  const inputSettlement = createTurnInputSettlement(taskId, opts, () => reviewStart);
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");

@@ -358,10 +358,13 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
     markReviewDispatchQueued(run.id, run.currentRound, token);
     /**
      * 这一笔没能交出去 —— 起跑前那一族(`TurnDeliveryFailure`),外加交出去之后协议层明确拒收
-     * (`refused`)。拒收那一档照「瞬时以外」落终态:这一代次的交付凭据在 spawn 之后就已经落下
-     * (`commitReviewTurnDelivery`),重排会被 `takeIntent` 的 WHERE 当成「已经送过」挡回去、退化
-     * 成让出,这一轮就只剩对账那句通用的「未能正常给出结论」。落终态反而说得出真话 —— 审查者
-     * 一个字都没收到,用户重跑这一轮(换代次)就是重投。
+     * (`refused`)。拒收那一档照「瞬时以外」落终态,不重排:这一代次的交付凭据在 spawn 之后就已经
+     * 落下(`commitReviewTurnDelivery`),重排会被 `takeIntent` 的 WHERE 当成「已经送过」挡回去、
+     * 退化成让出。重投的出路是用户重跑这一轮(换代次)。
+     *
+     * 初次就拒收的那一轮,通常在走到这里之前已经被审查结算按真实原因结掉了(时间线写着「被协议层
+     * 明确拒收」,见 review-input-verdict.ts),这一声落账会被挡回去,只收内存与意图那一半;真正
+     * 靠这里落终态的是**先说不清、后迟到拒收**的那一种 —— 那一轮被结算按住了,等的就是这句。
      */
     const failed = async (message: string, failure: TurnDeliveryFailure | "refused"): Promise<void> => {
       // **整段包在异常出路里**:这是回合锁回调上的一段,抛出去只会变成一条没人接的 rejection
@@ -404,11 +407,12 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
       onAccepted: () => settled(),
       onRefused: (message) => failed(message, "refused"),
       // **说不清 ≠ 送到了,也 ≠ 没送到**:意图不清(那等于宣布送到),也不落终态、不重排(那等于
-      // 宣布没送到)。只把内存那张证还掉 —— 这一轮已经结束,「本进程还盯着」这句话不再成立;
-      // 留着它,对账见 `armed` 就永远跳过,这一轮卡在 reviewing 直到重启。还掉之后对账按
-      // 「有意图、没人盯着」接手,而补办那一侧先问持久交付凭据(文件头 ⑮):spawn 之后才有的
-      // 那张凭据对得上就只结清意图、不重投;压根没走到 spawn 的那一种则照常补投 —— 送没送到
-      // 由持久事实说话,不由这里猜。
+      // 宣布没送到)。审查结算那一侧此刻按住了这一轮(交付凭据上记着「说不清」、意图还挂着,见
+      // review-input-verdict.ts),所以 round 仍是 reviewing。这里只把内存那张证还掉 —— 这一轮
+      // 已经结束,「本进程还盯着」不再成立;留着它,对账见 `armed` 就永远跳过。还掉之后对账按
+      // 「有意图、没人盯着」接手,补办那一侧先问持久交付凭据(文件头 ⑮):越过了线的就只结清
+      // 意图、**不重投**(说不清时重投就是重复执行),之后意图已空,按孤儿照常结算;压根没走到
+      // spawn 的那一种则照常补投。迟到的定论在那之前到了,就由上面两档收口。
       onUnconfirmed: (message) => {
         releaseReviewDispatchClaim(run.id, run.currentRound, token);
         console.error(`[ash] ${label}派发交付说不清 task=${taskId} run=${run.id}：${message}`

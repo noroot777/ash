@@ -14,9 +14,12 @@
 //  V4 说不清 → 迟到的拒收:同上,补报拒收;
 //  V5 压根没交接回执(spawn 之前就失败):报说不清 —— 不许再被兜底成「送到了」;
 //  D1 审查派发 · 收下:意图在这一轮跑完之前就了结、认领证还回来;
-//  D2 审查派发 · 说不清:认领证还回来(不卡在「本进程还盯着」),意图不被宣布送到,对账按交付
-//     凭据裁决 —— 不重投第二份任务书;
-//  D3 审查派发 · 拒收:认领证还回来,这一轮不停在 reviewing,也不重投第二份任务书。
+//  D2 审查派发 · 说不清:回合结束时**按住不结**(第 1 轮自由审查 R1:结算从前只问「有没有结论」,
+//     当场结成「未能正常给出结论」,意图晾在终态轮次上);认领证还回来,对账按交付凭据只结清
+//     意图、不重投,下一拍照实结算;
+//  D3 审查派发 · 拒收:结算当场收尾,时间线写明拒收;不停在 reviewing,也不重投;
+//  D4/D5 审查派发 · 说不清 → 迟到的收下 / 拒收:按住期间定论到了 —— 收下只了结意图、对账照常
+//     结算;拒收带着真实原因落终态(从前那一轮已被结掉,这一声被挡回去)。
 //
 // 跑：npm -w server run test:idle-delivery-verdict
 import assert from "node:assert/strict";
@@ -44,7 +47,7 @@ try {
   const {
     db, sessions, tasks, handleFreeWorkflowSettlement, reconcileFreeReviews,
     reviewDispatchArmed, continueWhenIdle, releaseTurn, turnIdentity,
-    until, runOf, roundOf, reviewerSessions, freeTask, armedTask, finish,
+    timeline, until, runOf, roundOf, reviewerSessions, freeTask, armedTask, finish,
   } = await startHarness();
   const { CodexExecutor } = await import("../src/executors/codex.js");
   const run = function (_opts: RunOpts): RunHandle {
@@ -182,22 +185,89 @@ try {
     hold.resolve();
     console.log("✓ D1 审查派发 · 收下:意图在这一轮跑完之前了结,认领证归还");
   }
-  for (const [label, acceptance] of [["D2", "unknown"], ["D3", "refused"]] as const) {
-    const id = `verdict-dispatch-${acceptance}`;
-    stage = { acceptance: acceptance === "unknown" ? deferred<InputAcceptance>().promise : Promise.resolve("refused") };
+  /** 这一轮审查此刻在库里的样子:轮次状态、在途意图、交付凭据上记着的回执。 */
+  const reviewState = async (id: string, runId: string) => {
+    const round = await roundOf(runId);
+    const task = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+    return { status: round.status, dispatch: round.dispatch, acceptance: task.waitOwnership?.deliveredReview?.acceptance };
+  };
+  /** 回合结束、审查者没交卷,而任务书送没送到还说不清:这一轮必须被**按住**,不许当场结成终态。 */
+  const assertHeld = async (id: string, runId: string) => {
+    const state = await reviewState(id, runId);
+    assert.equal(state.acceptance, "unknown", "说不清这件事要落在持久交付凭据上,结算读的就是它");
+    assert.equal(state.status, "reviewing",
+      "第 1 轮自由审查 R1:结算只问「有没有结论」,把输入说不清的一轮当场结成「未能正常给出结论」");
+    assert.notEqual(state.dispatch, null, "按住期间意图还归派发负责,不许被晾在一个终态轮次上");
+  };
+
+  // ── D2 说不清,到头也说不清:按住 → 认领证归还 → 对账只结清意图、不重投 → 下一拍照实结算 ──
+  {
+    const id = "verdict-dispatch-unknown";
+    stage = { acceptance: deferred<InputAcceptance>().promise };
     const run = await dispatch(id);
     await until("这一轮收尾", () => turnOver(id));
+    await assertHeld(id, run.id);
     await until("认领证还回来", () => !reviewDispatchArmed(run.id, 1));
-    // 对账接手:交付凭据(spawn 之后落下)说这一份已经送过,只能结清、不许再投一份。
+    await assertHeld(id, run.id);
     await reconcileFreeReviews(id);
-    await sleep(200);
-    assert.equal(await reviewerSessions(id), 1, "送没送到说不清 / 被拒收,都不许自动再投第二份任务书");
-    assert.notEqual((await roundOf(run.id)).status === "reviewing" && (await roundOf(run.id)).dispatch != null
-      && reviewDispatchArmed(run.id, 1), true, "不许卡在「有意图 + 本进程还盯着」");
-    console.log(`✓ ${label} 审查派发 · ${acceptance === "unknown" ? "说不清" : "拒收"}:认领证归还、不重投,交给持久凭据裁决`);
+    let state = await reviewState(id, run.id);
+    assert.deepEqual([state.status, state.dispatch], ["reviewing", null], "交付凭据说越过了线:只结清意图");
+    await reconcileFreeReviews(id);
+    state = await reviewState(id, run.id);
+    assert.notEqual(state.status, "reviewing", "意图已空、没人负责了:下一拍按孤儿结算,不许永远挂着");
+    assert.match(timeline(id), /送没送进审查者手里说不清/, "时间线要说真话,不是只剩「未能正常给出结论」");
+    assert.equal(await reviewerSessions(id), 1, "说不清时重投就是重复执行");
+    console.log("✓ D2 审查派发 · 说不清:回合结束时按住不结,对账结清意图不重投,随后照实结算");
   }
 
-  await finish(["verdict-dispatch-accepted", "verdict-dispatch-unknown", "verdict-dispatch-refused"]);
+  // ── D4/D5 说不清 → 迟到的定论:按住期间到了,各走各的出口 ───────────────────────
+  for (const [label, late] of [["D4", "accepted"], ["D5", "refused"]] as const) {
+    const id = `verdict-dispatch-late-${late}`;
+    const receipt = deferred<InputAcceptance>();
+    stage = { acceptance: receipt.promise };
+    const run = await dispatch(id);
+    await until("这一轮收尾", () => turnOver(id));
+    await assertHeld(id, run.id);
+    receipt.resolve(late);
+    if (late === "accepted") {
+      await until("意图了结", async () => (await reviewState(id, run.id)).dispatch == null);
+      const state = await reviewState(id, run.id);
+      assert.deepEqual([state.status, state.acceptance], ["reviewing", "accepted"],
+        "收下了只了结意图;这一轮的结论由结算给,不由投递层替它下");
+      await until("认领证还回来", () => !reviewDispatchArmed(run.id, 1));
+      await reconcileFreeReviews(id);
+      assert.notEqual((await reviewState(id, run.id)).status, "reviewing", "没人负责了,对账照常结算");
+      assert.doesNotMatch(timeline(id), /拒收|说不清/, "确实收下了,就不许冒出「没收到」那类话");
+    } else {
+      await until("落了终态", async () => (await reviewState(id, run.id)).status !== "reviewing");
+      const state = await reviewState(id, run.id);
+      assert.deepEqual([state.status, state.dispatch, state.acceptance], ["error", null, "refused"]);
+      assert.match(timeline(id), /拒收.*放心重投/,
+        "迟到的拒收必须落得下账 —— 从前那一轮早被结掉,这一声被「这一轮已有结论」挡回去");
+      await until("认领证还回来", () => !reviewDispatchArmed(run.id, 1));
+    }
+    assert.equal(await reviewerSessions(id), 1, "不自动再投第二份任务书");
+    console.log(`✓ ${label} 审查派发 · 说不清 → 迟到的${late === "accepted" ? "收下:了结意图,对账照常结算" : "拒收:带着真实原因落终态"}`);
+  }
+
+  // ── D3 拒收:结算当场照实收尾,不停在 reviewing,也不重投 ─────────────────────────
+  {
+    const id = "verdict-dispatch-refused";
+    stage = { acceptance: Promise.resolve("refused") };
+    const run = await dispatch(id);
+    await until("这一轮收尾", () => turnOver(id));
+    const state = await reviewState(id, run.id);
+    assert.equal(state.acceptance, "refused");
+    assert.notEqual(state.status, "reviewing", "确证没送进去,用不着等:当场收尾");
+    assert.match(timeline(id), /协议层明确拒收，审查者一个字都没收到/, "时间线写的是真实原因");
+    await until("认领证还回来", () => !reviewDispatchArmed(run.id, 1));
+    await until("意图了结", async () => (await reviewState(id, run.id)).dispatch == null);
+    assert.equal(await reviewerSessions(id), 1, "被拒收也不许自动重投 —— 重投的出路是用户重跑这一轮");
+    console.log("✓ D3 审查派发 · 拒收:当场照实收尾,时间线写明拒收,不重投");
+  }
+
+  await finish(["verdict-dispatch-accepted", "verdict-dispatch-unknown", "verdict-dispatch-late-accepted",
+    "verdict-dispatch-late-refused", "verdict-dispatch-refused"]);
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
