@@ -27,6 +27,24 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
   if (!state || state.settlement) return false;
   if (!await reviewWaitAuthorized(transaction, state)) return false;
   if (state.continuation?.phase === "uncertain") return true;
+  // **这一轮的续跑交接已经立下、还没落地**:`beginReviewContinuation` 把它同时写进证据行的
+  // `continuation.start` 和任务的 `wait_ownership.start`,只有三条路能销它 ——
+  // `commitReviewTurnDelivery`(输入确实交到 CLI 手上了)、`restoreUndeliveredReviewStart`
+  // (没送到,原答复留着下次再投)、`withdrawReviewStart`(自己写 settlement 收尾)。三条路
+  // 都会把这一轮的账结清或原样留好,所以在它落地之前,这一轮**不是**无人认领的死账。
+  //
+  // 这一问跟「有没有回合在跑」是两件事,所以 `ignoreActive` 不许把它一起忽略掉:交接凭证是
+  // 库里的持久事实,回合锁只活在内存里。两者分家的现场是答复续跑的那一瞬 —— 交接事务里,
+  // 答复消息从 pending 翻成 sent 和交接凭证落库是同一笔,而「挂着一条待投递的答复」正是
+  // 下面那条 pending 判据唯一的依据。凭证不算数的话,这一拍就谁都不认领:对账器按
+  // 「reviewer 回合不在、owner 跑的是实现回合」把 round 记成 failed / conclusion:null,
+  // 用户的答复连带整轮审查一起作废,而撤回路径(reconcileReviewStarts)因为回合锁被别人占着
+  // 根本没机会跑 —— 它那一侧 `isTurnClaimed` 就跳过了。
+  //
+  // 身份核一遍再算:凭证的方向身份已经被新方向顶掉时,它既不可能再被确认、也不会被撤回
+  // (restore/withdraw 两边都按身份核),拿这种过期凭证挡住结算就成了永久挂死 —— 那正是
+  // 「交卷后 round 挂在 reviewing」那一类伤害。过期的一律不挡,按原判据继续往下走。
+  if (continuationLeaseHeld(owner, state)) return true;
   const ownsWait = (origin: WaitOrigin | undefined) =>
     origin?.kind === "review" && origin.directory === state.directory && origin.generation === state.generation;
   const question = owner.question && questionWaitMatches(owner) && ownsWait(owner.waitOwnership?.question?.origin);
@@ -68,9 +86,30 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
   //
   // 判据回到这个文件本来就写着的那一句(free-workflow.ts 审查旁路分支):**reviewer 已交卷
   // 就必须结算**。执行者的等待不归这一轮审查管 —— 消费它的是实现会话的续跑,不会有任何人
-  // 回来替这一轮审查落账。交卷之前的等待照旧挡住(下一行的 hasConclusion),审查自己以提问/
+  // 回来替这一轮审查落账。交卷之前的等待照旧挡住(下面两档各自那一问),审查自己以提问/
   // 检查点收尾、还没给结论的那种场景一个字都没变。
-  if ((question || checkpoint) && !hasConclusion) return true;
+  //
+  // 但**提问**与检查点在这一点上不是一回事,`hasConclusion` 只该管后者:
+  //
+  //  · 检查点(含系统代写那一格)是「这一轮还想接着做」,交卷之后它说的话已经不改变任何结论,
+  //    D6 明说的取舍就是让它让路 —— 上面那段讲的全是这一类。
+  //  · 提问是一笔**还没完成的人工交接**:答复回来要续跑的正是这一轮(`/answer` →
+  //    `review-answer:*` → 交接凭证 → 同一轮续跑)。这一轮要是先结掉,`queueReviewAnswer` 下一步
+  //    就按 `state.settlement` 抛 ReviewSuperseded —— 用户照着界面上的问题写完答复,换来一句
+  //    「原目标方向已失效」,问题悬着、答复丢掉、整轮审查记成 failed/conclusion:null。
+  //
+  // 同一条链的下半截(本函数最后那条 `review-answer:*` 判据)本来就不看交卷:答复一旦入队,
+  // 交卷与否都挡得住。只有「问了、还没答」这一小段漏着,两头对不上。
+  //
+  // 另一头的旁证:preset / legacy 两条路的交卷退出(review-settlement.ts 的 `waitingForReview`)
+  // 一直是写死 `hasConclusion=false` 调进来的 —— 也就是说「提问挡住结算」在那两条路上从来成立,
+  // 只有自由工作流这一条按 round 的结论把它一起关掉了。这里把提问那一档拉回一致。
+  //
+  // 「别人遗留的旧 question」不靠这一位拦:`ownsWait(question.origin)` 已经答过了 —— 归属
+  // 只在**写它的那一回合就是这一轮审查**时才记成 review(task-wait-ownership.ts 的
+  // `writerOrigin`:先认回合身份,认不出来记 unknown,而 unknown 不满足 `ownsWait`)。
+  if (question) return true;
+  if (checkpoint && !hasConclusion) return true;
   // **一格等待都没留下、而这一轮自己的哨兵结果还排在托盘里**:同一类伤害的另一个入口(第 3 轮
   // 自由审查 F2 的旁证)。上面那三格全靠 `wait_ownership` 记着「有人在等」,可回合是会直接死的
   // (崩溃/被杀,landCheckpoint 那一笔没落成),此时等待格为空,而结果仍确凿地欠着。下面那条
@@ -87,6 +126,21 @@ export async function reviewContinuationPending(transaction: ConclusionTransacti
     || (!message.origin && message.mode === "queued" && (owner.verifyRound || owner.reviewOf
       ? message.sessionRole !== "reviewer"
       : message.sessionRole === "reviewer" && state?.directory === freeReviewEvidenceDir(owner.id, message.reviewRun ?? "", message.reviewRound ?? 0))));
+}
+
+/**
+ * **续跑交接凭证还握在这一轮手里吗** —— 只认当前方向身份的那一份。
+ *
+ * 两处记录同生同死(`beginReviewContinuation` 一笔写下、销毁的三条路各自一笔清掉),所以任一
+ * 处还在就算握着;分开读是为了覆盖 `assertReviewTurnStart` 那条按 `wait_ownership.start`
+ * 在不在来决定要不要清 `continuation.start` 的分支。
+ */
+function continuationLeaseHeld(owner: TaskRow, state: EvidenceRow): boolean {
+  const start = owner.waitOwnership?.start;
+  if (start && start.directory === state.directory && start.generation === state.generation
+    && reviewIdentityMatches(owner, start.identity)) return true;
+  const handoff = state.continuation?.start;
+  return !!handoff && handoff.ownerTaskId === owner.id && reviewIdentityMatches(owner, handoff.identity);
 }
 
 /**
