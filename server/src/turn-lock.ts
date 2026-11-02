@@ -600,7 +600,12 @@ export function continueWhenIdle(
       console.error(`[ash] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
       // **瞬时**:锁此刻在别人手上,而这一侧一个字节都没动。分类交给调用方决定要不要重排
       // (见 `TurnDeliveryFailure`);不想重排的照旧按失败收场,行为与老签名一致。
-      void onError?.("回合被其它执行抢占，消息未能投递", "turn-taken");
+      //
+      // 这一声不等它(重排是异步的,等于等整条链),但 rejection 必须接住:底下另外几条出路都
+      // try/catch 过,只有这一条漏着 —— 重排路上任何一步抛出来就是一条没人接的 rejection
+      // (进程级 unhandledRejection),而那一侧的清理也跟着跳过(第 3 轮审查 F3)。
+      void Promise.resolve(onError?.("回合被其它执行抢占，消息未能投递", "turn-taken"))
+        .catch((error) => console.error(`[ash] continueWhenIdle(${taskId}) 抢占后的重排处理失败:`, error));
       return;
     }
     /**

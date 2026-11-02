@@ -43,6 +43,8 @@ import {
   launchReviewRound,
   nextRound,
   redeliverReviewRound,
+  reviewerTurnHeld,
+  reviewOrphanStillUnowned,
   reviewingRun,
 } from "./free-review-round.js";
 // 「这一轮的任务书还在等空闲回合窗口吗」只有内存那张表答得出(库里那一行分不出「有人排着」
@@ -58,7 +60,7 @@ import { retireHistoricalReview } from "./review-retirement.js";
 import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { claimOwnTurn, releaseTurn, turnIdentity, turnRole } from "./runs.js";
+import { claimOwnTurn, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
@@ -260,14 +262,7 @@ export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> 
     // reattach 接回还在跑，此刻按 turnOk=true 补结算是提前放行——reviewer 随后非零
     // 退出/被停止时，正常结算已找不到 reviewing run，错误结论无法撤销（审查实测）。
     //
-    // 判据是**回合身份**而不是「这个任务忙不忙」：这两件事在自由工作流里经常不是一件事 ——
-    // 执行者挂着哨兵，哨兵结果回来把它 resume 去跑**实现回合**，而这条审查早就交卷死透了。
-    // 旧判据只看 `status==="running"`，于是这种 owner 一直在干活的任务永远跳过，round 挂在
-    // reviewing：验收 409、自动复审不开、修复交接不发，只有重启那一次对账能救（现场实测挂
-    // 了一整天，经过见 docs/incidents.md「审查交卷后 round 挂死」）。
-    //
-    // 身份读不出来（没有回合在册）却还 running/queued：这一拍说不清在跑的是谁，照旧让它自己
-    // 结算，下一拍再来——保守的那一边是「多等 30 秒」，激进的那一边是撤不掉的错误结论。
+    // 判据是**回合身份**而不是「这个任务忙不忙」（整段理由在 `reviewerTurnHeld` 上）。
     //
     // 顺带回答「审查窗口内排队消息把执行者 resume 要不要挡」：正常路径上不需要另加挡板——
     // `afterSettlement` 是在**回合锁里面**调的（turn-lock.ts 顶部那段），放锁排在它之后
@@ -275,11 +270,7 @@ export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> 
     // 消息能在 reviewer 退出后 143ms 插进来，恰恰是因为结算被上面那条后门提前 return 了。
     // 剩下的唯一例外就是这条自愈路径（结算发生在执行者回合**之中**），而那时结论早已写定、
     // 报告也早落盘，挡住用户的输入只会换来一个说不出理由的滞留。
-    const held = turnIdentity(task.id);
-    const reviewerAlive = held
-      ? held.role === "reviewer" && (!held.review || held.review.run === run.id)
-      : task.status === "running" || task.status === "queued";
-    if (reviewerAlive) continue;
+    if (reviewerTurnHeld(task, run.id)) continue;
     // **本进程还盯着这一轮的派发就什么都别碰** —— 它正排在回合锁的等待队列里等下一个空闲窗口。
     // 「有人负责等待」不等于「没有在途工作」:下面每一条判据问的都是「还有没有东西能把它跑完」,
     // 而这一轮的答案是「有,就是那条 waiter」—— 它只是还没轮到。并进「没有意图」那一档的代价
@@ -309,8 +300,13 @@ export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> 
     // 都挂在 reviewing),区别只在 round 上那份在途派发意图。上一个进程排着等空闲窗口、自己没了的
     // 那一轮,审查者压根没见过任务书,下面那条「已经没有任何东西能把它跑完」的收尸对它是误判:
     // 补投一次才是它该得的(判据与边界见 free-review-dispatch.ts / `redeliverReviewRound`)。
-    // 返回 `none` = 没有在途意图,照原路往下走;`hold` = 有人负责了,这一拍什么都别做。
+    // 返回 `none` = 压根没有在途意图，照原路往下走；`hold` = 有人负责了（包括「刚刚被另一份
+    // 恢复投递出去」），这一拍什么都别做，下一拍按新状态重判。
     if (round && await redeliverReviewRound(task, run, round) !== "none") continue;
+    // **下笔之前再问一次「这一轮真的没人管了吗」** —— 开头那次「reviewer 活着吗」是好几次
+    // await 之前读的，这中间另一份恢复完全可能已经把任务书送进会话、审查者正在输出
+    // （第 3 轮审查 F1）。失去投递权不等于获得结算权，判据整段在 `reviewOrphanStillUnowned`。
+    if (!await reviewOrphanStillUnowned(run)) continue;
     if (round?.conclusion) {
       await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer");
       continue;

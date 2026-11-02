@@ -88,9 +88,13 @@ export const freeReviewRuns = sqliteTable(
  *  · 放弃有交代 —— `attempts` 就是「输了几次」,写进时间线和终态说明。
  *
  * 为什么住在 round 行上而不是另起一张表(对比 `queue_advance_intents`):队列推进的意图讲的是
- * 一条队列,而队列没有自己的行可挂(请求写在候选任务身上),所以才要一张表加一套代次协议。
- * 这里不一样 —— 意图讲的正是**这一轮**,round 行就是它天然的主人:身份现成(`run_id`+`round`
- * 唯一),生命周期现成(轮次一结束这几个字段自动失去意义),不需要代次去分辨「这一行代表哪一次」。
+ * 一条队列,而队列没有自己的行可挂(请求写在候选任务身上),所以才要一张表。这里不一样 ——
+ * 意图讲的正是**这一轮**,round 行就是它天然的主人:身份现成(`run_id`+`round` 唯一),生命周期
+ * 现成(轮次一结束这几个字段自动失去意义)。
+ *
+ * 但**代次省不掉**(原先这里写的是「不需要代次」,第 3 轮审查 F2 证伪了它):同一个 round 行会被
+ * 用户重跑(`reopenFailedFreeReview` 把它放回 reviewing 并换新的证据代次),于是「这一行」会先后
+ * 代表同一轮的好几次派发。少了代次,上一次的收尾清掉的就是新一次刚写下的意图。
  */
 export type FreeReviewDispatchIntent = {
   /** 已经把这一轮交给回合锁几次（含第一次）。有界重试的全部凭据,也是放弃时的交代。 */
@@ -103,6 +107,13 @@ export type FreeReviewDispatchIntent = {
    */
   resumeSessionId?: string | null;
   retry?: boolean;
+  /**
+   * **这一轮的哪一次** —— 证据行(`regression_evidence.generation`)上那个值,用户重跑同一轮时
+   * 换新。清意图、写意图的 CAS、失败收尾全按它认人(理由见 free-review-dispatch.ts 文件头 ⑨)。
+   *
+   * 老行(加这一位之前写下的意图)留 undefined:那时整条链只有一代,读写两端按版本放行。
+   */
+  generation?: string;
   /**
    * **原派发要的是一条新会话还是续旧的** —— 这一位也必须跟着落下来。
    *
