@@ -14,7 +14,7 @@ import { backfillArtifactUploads, eventAttachmentPath } from "./uploads.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { turnOutcomesForTask } from "./session-turns.js";
+import { monitorWakeTurnsForTask, turnOutcomesForTask } from "./session-turns.js";
 import { failedTurnNotices, replaysFailureScene, sessionWaiting } from "./session-waiting.js";
 import { turnOutcome } from "./session-turns.js";
 import {
@@ -34,6 +34,7 @@ async function toSession(
   r: typeof sessions.$inferSelect,
   run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
   turnOutcome: Session["turnOutcome"] = null,
+  monitorWakeTurns = 0,
 ): Promise<Session> {
   // 版本得从**这条会话的 rollout 实际写在的那个目录**里读(会话行记着;老行按当时的
   // 规则解释)。按宿主机默认目录读的话,隔离档下列表恒为「读不出版本」,而起跑守卫那边
@@ -53,6 +54,7 @@ async function toSession(
       : r.resumeCommand,
     ...run,
     usage: sessionUsage(r),
+    monitorWakeTurns,
     context: sessionContext(r),
     cliVersion,
     versionWarning: affectedCodexSessionWarning(cliVersion),
@@ -68,11 +70,16 @@ async function toSession(
 
 export async function sessionsForTask(taskId: string): Promise<Session[]> {
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
-  const [runMeta, outcomes] = await Promise.all([sessionRunMeta(taskId, rows), turnOutcomesForTask(taskId)]);
+  const [runMeta, outcomes, wakes] = await Promise.all([
+    sessionRunMeta(taskId, rows),
+    turnOutcomesForTask(taskId),
+    monitorWakeTurnsForTask(taskId),
+  ]);
   return Promise.all(rows.map((row) => toSession(
     row,
     runMeta.get(row.id),
     outcomes.get(`${row.id}@${row.turnStartedAt ?? row.startedAt}`) ?? null,
+    wakes.get(row.id) ?? 0,
   )));
 }
 

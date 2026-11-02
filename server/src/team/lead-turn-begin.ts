@@ -26,7 +26,12 @@ export function createLeadTurnStart({ setLeadStatus }: Deps) {
    * 只能以第一条输出的时刻为起点（见 consume 里的补开回合）—— 但那个起点也得从身份层的分配器
    * 拿：同一条会话上两个起点撞了毫秒,队列和唯一键会把两轮合成一轮（第 2 轮审查 F1）。
    */
-  async function beginTurn(lead: Lead, at = nextTurnStart(lead.sessId)): Promise<void> {
+  async function beginTurn(
+    lead: Lead,
+    at = nextTurnStart(lead.sessId),
+    // 这一轮是哨兵唤醒投进来的（见 `db/schema-sessions.ts` 的 `sessionTurns.monitorWake`）。
+    turn: { monitorWake?: boolean } = {},
+  ): Promise<void> {
     // 状态与活动身份在同一个同步段里绑定;同一个身份重复持有是幂等的（openLead 先在
     // attachLead 里持有首轮,紧接着这里又用同一个 turnStart 调一次）—— 判据与机制都在
     // lead-turns.ts。
@@ -48,7 +53,7 @@ export function createLeadTurnStart({ setLeadStatus }: Deps) {
       // 于是 `retired` 一直是假,这一句照样放行 —— 实测的那条路正是它。
       if (!lead.retired) {
         await openTurn(
-          { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at },
+          { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at, monitorWake: turn.monitorWake },
           { register: false },
         );
       }
@@ -67,7 +72,7 @@ export function createLeadTurnStart({ setLeadStatus }: Deps) {
     if (closedAlready(lead.sessId, at)) {
       if (!lead.retired) {
         await openTurn(
-          { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at },
+          { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at, monitorWake: turn.monitorWake },
           { register: false },
         );
       }
@@ -96,7 +101,7 @@ export function createLeadTurnStart({ setLeadStatus }: Deps) {
     if (!lead.retired) {
       // 开始行照样要落：它是「开过这一轮」的第一手证据,计数那一道跟它同批写（见 session-turns.ts）。
       await openTurn(
-        { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at },
+        { sessionId: lead.sessId, taskId: lead.taskId, cwd: lead.cwd, startedAt: at, monitorWake: turn.monitorWake },
         stillOpen ? {} : { register: false },
       );
     }

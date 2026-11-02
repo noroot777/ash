@@ -45,7 +45,7 @@ import { resolveExecutorFor } from "../executors/index.js";
 import { LOST_SESSION_PATCH } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeRunError } from "../transcript.js";
-import { recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
+import { isMonitorWakeTurn, recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET, leadFirstMessage } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
@@ -359,7 +359,7 @@ async function push(lead: Lead, text: string, kind: Kind, origin: UserTurnOrigin
     // 时间线上那条用户发言仍用 `at`（他说话的时刻,早于投递）。取不到投递口那一刻时交给
     // `beginTurn` 的默认值（身份层分配器),别回退到 `at` —— 它是直接 `now()` 来的,不保证在
     // 这条会话上唯一（第 2 轮审查 F1）。
-    void beginTurn(lead, turnAt ?? undefined);
+    void beginTurn(lead, turnAt ?? undefined, { monitorWake: isMonitorWakeTurn(origin) });
     return true;
   }
   if (lead.busy) {
@@ -574,12 +574,13 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     //
     // 活动登记已经在 `attachLead` 里跟首轮状态一起绑好了（见 lead-turns.ts）,这里只剩「把这
     // 一轮记进库」这一半:同一身份再开一次既不插行也不加数,写不成也只按缺口披露。
-    await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart });
+    const monitorWake = kind === "user" && isMonitorWakeTurn(origin);
+    await openTurn({ sessionId: sessId, taskId, cwd: ws.path, startedAt: turnStart, monitorWake });
     // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
     // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
     if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart, ...origin });
     else if (resuming) recordSystemTurn(lead, text, turnStart);
-    void beginTurn(lead, turnStart);
+    void beginTurn(lead, turnStart, { monitorWake });
     return lead;
   } catch (error) {
     if (!attached) discardStartingRun(taskId, handle);

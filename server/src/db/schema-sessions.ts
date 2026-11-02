@@ -268,6 +268,15 @@ export const sessionTurns = sqliteTable(
      * 诊断价值(读端一律按 `outcome` 办)。
      */
     stallReason: text("stall_reason"),
+    /**
+     * 这一回合是**哨兵唤醒**起的(投递的是哨兵事件,不是人说的话)。会话面板的「N 轮」里有多少
+     * 是被叫醒看一眼的,就数这一位(`monitorWakeTurnsForTask`)。
+     *
+     * 开回合那一刻写(`openTurn`),而且只升不降:同一身份的行可能先由收尾那一下补插出来、
+     * 不知道这件事,迟到的开始信息再把它补上。存量行由 `monitor-wake-turns-backfill.ts` 按
+     * 转录里的唤醒回合回填一次。
+     */
+    monitorWake: integer("monitor_wake", { mode: "boolean" }).notNull().default(false),
   },
   (t) => ({
     taskIdx: index("session_turns_task_idx").on(t.taskId, t.startedAt),

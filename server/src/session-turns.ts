@@ -89,7 +89,7 @@ export {
  * 回合起点,窄得多,照实标 approx;而走**补插**那条路补齐的是一行完整记录,连那一句「算不准」
  * 都不必再说。
  */
-const unconfirmed = new Map<string, Map<string, { taskId: string; cwd: string | null }>>();
+const unconfirmed = new Map<string, Map<string, { taskId: string; cwd: string | null; monitorWake: boolean }>>();
 
 /** 这条会话有几个开始意图还没被确认落账（读端把它算进缺口）。 */
 export function unconfirmedTurns(sessionId: string): number {
@@ -98,7 +98,7 @@ export function unconfirmedTurns(sessionId: string): number {
 
 function rememberUnconfirmed(input: TurnStartInput): void {
   const { sessionId, taskId, cwd, startedAt } = input;
-  const who = { taskId, cwd: cwd ?? null };
+  const who = { taskId, cwd: cwd ?? null, monitorWake: !!input.monitorWake };
   const seen = unconfirmed.get(sessionId);
   if (seen) seen.set(startedAt, who);
   else unconfirmed.set(sessionId, new Map([[startedAt, who]]));
@@ -119,7 +119,7 @@ async function flushUnconfirmed(sessionId: string): Promise<void> {
   if (!owed?.size) return;
   for (const [startedAt, who] of [...owed]) {
     try {
-      await persistTurn({ sessionId, taskId: who.taskId, cwd: who.cwd, startedAt });
+      await persistTurn({ sessionId, taskId: who.taskId, cwd: who.cwd, startedAt, monitorWake: who.monitorWake });
     } catch (error) {
       // 还是写不进去：这一笔和它后面那些都留在内存里,读端照样看得见缺口。
       console.warn(`[ash] 欠着的 ${owed.size} 笔「漏了一个回合」还没补进库（这一段按未知披露）: ${String(error)}`);
@@ -229,6 +229,8 @@ export async function openTurn(input: {
   taskId: string;
   cwd: string | null | undefined;
   startedAt: string | null | undefined;
+  /** 这一轮是哨兵唤醒起的（见 `db/schema-sessions.ts` 的 `sessionTurns.monitorWake`）。 */
+  monitorWake?: boolean;
 }, opts: { register?: boolean } = {}): Promise<void> {
   if (!input.startedAt) return;
   const startedAt = input.startedAt;
@@ -317,12 +319,24 @@ export async function turnOutcomesForTask(taskId: string): Promise<Map<string, T
   return new Map(read.rows.map((row) => [`${String(row.session_id)}@${String(row.started_at)}`, readOutcome(row.outcome)]));
 }
 
+/** 一个任务名下每条会话有几轮是哨兵唤醒起的。没有唤醒的会话不在表里。 */
+export async function monitorWakeTurnsForTask(taskId: string): Promise<Map<string, number>> {
+  const read = await dbClient.execute({
+    sql: `SELECT session_id, COUNT(*) AS n FROM session_turns
+            WHERE task_id = :tid AND monitor_wake = 1 GROUP BY session_id`,
+    args: { tid: taskId },
+  });
+  return new Map(read.rows.map((row) => [String(row.session_id), Number(row.n)]));
+}
+
 /** 一个回合的身份,加上落这一行所需要的其余事实。 */
 type TurnStartInput = {
   sessionId: string;
   taskId: string;
   cwd: string | null | undefined;
   startedAt: string;
+  /** 只有开始那一下知道；收尾补插不知道就给 undefined,不会把已记下的那一位抹掉。 */
+  monitorWake?: boolean;
 };
 
 /** 收口那一下知道的两件事:什么时候收的、收在什么结局上。开始那一下给 null。 */
@@ -379,6 +393,7 @@ async function writeTurnRow(
     at: input.startedAt,
     end: close?.endedAt ?? null,
     outcome: close?.outcome ?? null,
+    wake: input.monitorWake ? 1 : 0,
   };
   const [, inserted, merged, collided] = await dbClient.batch([
     {
@@ -390,8 +405,8 @@ async function writeTurnRow(
       args: { sid: args.sid, at: args.at },
     },
     {
-      sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at, outcome)
-              VALUES (:row, :sid, :task, :cwd, :at, :end, :outcome)`,
+      sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at, outcome, monitor_wake)
+              VALUES (:row, :sid, :task, :cwd, :at, :end, :outcome, :wake)`,
       args,
     },
     {
@@ -418,6 +433,13 @@ async function writeTurnRow(
                     WHERE session_id = :sid AND started_at = :at AND ended_at IS NOT NULL
                 )`,
       args: { sid: args.sid, at: args.at, end: args.end, fresh: fresh ? 1 : 0 },
+    },
+    {
+      // 「哨兵唤醒」只升不降:行可能先由收尾补插出来(那一下不知道这件事),迟到的开始信息
+      // 再来时把它补上。排在最后,不占上面那几条的结果位。
+      sql: `UPDATE session_turns SET monitor_wake = 1
+              WHERE session_id = :sid AND started_at = :at AND :wake = 1 AND monitor_wake = 0`,
+      args: { sid: args.sid, at: args.at, wake: args.wake },
     },
   ]);
   if (inserted.rowsAffected > 0) return "inserted";

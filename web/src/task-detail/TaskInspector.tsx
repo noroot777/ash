@@ -8,6 +8,7 @@ import { isSendKeyEvent } from "../lib/sendKey.ts";
 import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { canJoinQueue, placeTaskAfter, queueAfterOptions } from "../lib/queueAfter.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
+import { HoverTip, useHoverTip } from "../components/HoverTip.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
@@ -32,6 +33,24 @@ function InspectorRow({
   danger?: boolean;
 }) {
   return <div className={`task-inspector-row${danger ? " is-danger" : ""}`}><span>{label}</span><div>{children}</div></div>;
+}
+
+// 「N 轮」里被哨兵叫醒的那几轮只在悬停里拆开；唤醒数按轮数封顶（账本修复可能改过轮数）。
+function UsageLine({ label, usage, wakes, showLabel }: { label: string; usage: TokenUsage; wakes: number; showLabel: boolean }) {
+  const tip = useHoverTip();
+  const note = usage.turns && wakes > 0 ? `${usage.turns} 轮，其中哨兵唤醒 ${Math.min(wakes, usage.turns)} 轮` : null;
+  return (
+    <>
+      <span
+        aria-label={[`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`, note].filter(Boolean).join("，")}
+        {...(note ? { tabIndex: 0, ...tip.anchorProps } : {})}
+      >
+        {showLabel && <em className="task-usage-who">{label}</em>}
+        {[formatTokens(usageTotal(usage)), usage.turns ? `${usage.turns} 轮` : ""].filter(Boolean).join(" · ")}
+      </span>
+      {note && <HoverTip at={tip.at}>{note}</HoverTip>}
+    </>
+  );
 }
 
 function ResumePromptEditor({
@@ -148,16 +167,20 @@ export function TaskInspector({
   );
   // 一个 agent 一行，**不同 agent 绝不相加**：单价、上下文、缓存策略都不是一回事，
   // 加出来那个数不代表任何东西（用户 2026-08-07 明确要求分开看）。同一个执行器名下的
-  // 多条会话（重跑、续跑各开一行）才合并 —— 那才是同一副账。
+  // 多条会话（重跑、续跑各开一行）才合并 —— 那才是同一副账。哨兵唤醒的轮数跟着同一份
+  // 分组累加：唤醒照样计费、照样算进轮数，只在悬停里拆开。
   const usageByExecutor = useMemo(() => {
-    const groups = new Map<string, TokenUsage>();
+    const groups = new Map<string, { usage: TokenUsage; wakes: number }>();
     for (const session of sessions) {
       if (!session.usage) continue;
       const label = session.executor || session.agentType;
       const previous = groups.get(label);
-      groups.set(label, previous ? addUsage(previous, session.usage) : session.usage);
+      const wakes = session.monitorWakeTurns ?? 0;
+      groups.set(label, previous
+        ? { usage: addUsage(previous.usage, session.usage), wakes: previous.wakes + wakes }
+        : { usage: session.usage, wakes });
     }
-    return [...groups].filter(([, usage]) => hasUsage(usage));
+    return [...groups].filter(([, group]) => hasUsage(group.usage));
   }, [sessions]);
   const queuePosition = queueItems.findIndex((item) => item.taskId === task.id);
   const nextQueueItem = queuePosition >= 0 ? queueItems[queuePosition + 1] : undefined;
@@ -285,12 +308,9 @@ export function TaskInspector({
               </span>
             </InspectorRow>
           ) : <InspectorRow label="创建"><span>{formatInstant(task.createdAt)}</span></InspectorRow>}
-          {usageByExecutor.map(([label, usage], index) => (
+          {usageByExecutor.map(([label, { usage, wakes }], index) => (
             <InspectorRow key={label} label={index === 0 ? "Token 用量" : ""}>
-              <span aria-label={`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`}>
-                {usageByExecutor.length > 1 && <em className="task-usage-who">{label}</em>}
-                {[formatTokens(usageTotal(usage)), usage.turns ? `${usage.turns} 轮` : ""].filter(Boolean).join(" · ")}
-              </span>
+              <UsageLine label={label} usage={usage} wakes={wakes} showLabel={usageByExecutor.length > 1} />
             </InspectorRow>
           ))}
           {latestSession?.branch && (

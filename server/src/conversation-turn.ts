@@ -5,6 +5,12 @@ import { writeTurn } from "./transcript.js";
 
 export type UserTurnOrigin = { bySystem?: boolean; monitorWake?: MonitorWakeData };
 
+/**
+ * 这一句是不是**哨兵唤醒**。跟下面落转录的条件是同一份:回合记录上那一位
+ * (`session_turns.monitor_wake`)和历史回填都按转录里的这一位认,两边口径不许漂。
+ */
+export const isMonitorWakeTurn = (origin: UserTurnOrigin): boolean => !!(origin.bySystem && origin.monitorWake);
+
 export function recordUserConversationTurn(input: UserTurnOrigin & {
   taskId: string;
   sessionId: string;
@@ -19,7 +25,7 @@ export function recordUserConversationTurn(input: UserTurnOrigin & {
     agent: input.agentType,
     text: input.text,
     ...(input.bySystem ? { by: "system" as const } : {}),
-    ...(input.bySystem && input.monitorWake ? { monitorWake: input.monitorWake } : {}),
+    ...(isMonitorWakeTurn(input) ? { monitorWake: input.monitorWake } : {}),
   }, input.at);
   bus.publish({
     type: "conversation.turn",
@@ -30,6 +36,6 @@ export function recordUserConversationTurn(input: UserTurnOrigin & {
     text: input.text,
     at: input.at,
     ...(input.bySystem ? { bySystem: true as const } : {}),
-    ...(input.bySystem && input.monitorWake ? { monitorWake: input.monitorWake } : {}),
+    ...(isMonitorWakeTurn(input) ? { monitorWake: input.monitorWake } : {}),
   });
 }
