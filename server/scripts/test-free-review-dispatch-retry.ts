@@ -23,7 +23,8 @@
 //  ⑭ **认领 / 清意图 / 失败收尾按代次隔离** → 上一次重跑的收尾碰不到新一次(第 3 轮审查 F2);
 //  ⑮ **旧收尾还没放手时点「继续本轮审查」** → 新一次照样派得出去,不被静静吞掉(同上);
 //  ⑯ **认领之后现读抛异常** → 证还回去、意图留着,健康之后补办得了(第 3 轮审查 F3);
-//  ⑰ **结算下笔之前再问一次所有权** → 正在输出 / 有人领证 / 又挂上意图都不许收尸(第 3 轮审查 F1)。
+//  ⑰ **结算之前先问一遍所有权** → 正在输出 / 有人领证 / 又挂上意图都不许收尸(第 3 轮审查 F1);
+//  ⑱ **落笔那一刻按方向世代 CAS** → 判断之后又起过回合的,那一笔自己就不成立(同上,硬保证那一道)。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
 // (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。PATH 上那个立刻退出的 `codex` 桩管的是
@@ -542,24 +543,54 @@ try {
     await db.update(freeReviewRounds).set({ dispatch: null })
       .where(eq(freeReviewRounds.id, `${runId}-round`));
     const run = await runRow(runId);
-    assert.equal(await reviewOrphanStillUnowned(run), true, "谁都没在管：这一拍确实该它收尾");
+    assert.ok(await reviewOrphanStillUnowned(run), "谁都没在管：这一拍确实该它收尾");
 
     assert.equal(claimTurn(id, "reviewer", { run: runId, round: 1 }), true, "审查者刚起来");
-    assert.equal(await reviewOrphanStillUnowned(run), false, "正在输出的审查不许被收尸");
+    assert.equal(await reviewOrphanStillUnowned(run), null, "正在输出的审查不许被收尸");
     forceReleaseTurn(id);
 
     const token = claimReviewDispatch(runId, 1, "g-another");
-    assert.equal(await reviewOrphanStillUnowned(run), false, "刚有人领证接手这一轮，就不是孤儿");
+    assert.equal(await reviewOrphanStillUnowned(run), null, "刚有人领证接手这一轮，就不是孤儿");
     releaseReviewDispatchClaim(runId, 1, token!);
 
     await db.update(freeReviewRounds).set({ dispatch: { attempts: 1, since: at } })
       .where(eq(freeReviewRounds.id, `${runId}-round`));
-    assert.equal(await reviewOrphanStillUnowned(run), false, "又挂上在途意图的轮次归补投管");
+    assert.equal(await reviewOrphanStillUnowned(run), null, "又挂上在途意图的轮次归补投管");
 
     await db.update(freeReviewRounds).set({ dispatch: null, status: "passed" })
       .where(eq(freeReviewRounds.id, `${runId}-round`));
-    assert.equal(await reviewOrphanStillUnowned(run), false, "已经落了终态的轮次不该再被收尾");
-    console.log("✓ ⑰ 结算下笔之前再问一次所有权：正在输出 / 有人领证 / 又挂上意图都不收尸");
+    assert.equal(await reviewOrphanStillUnowned(run), null, "已经落了终态的轮次不该再被收尾");
+    console.log("✓ ⑰ 结算之前先问一遍所有权：正在输出 / 有人领证 / 又挂上意图都不收尸");
+  }
+
+  // ── ⑱ 落笔那一刻按方向世代 CAS ───────────────────────────────────────────────
+  // ⑰ 那一问再细也只是「检查完再动手」——读完到提交之间仍然隔着几次 await,而那正是这条缺陷
+  // 的形状。硬保证得写进落笔那个事务:判断时手里的 `directionEpoch` 当条件核,而每个回合起跑
+  // (含审查旁路回合)都在自己那笔事务里把这一格 +1(`turnDirectionStart`),所以「这中间有回合
+  // 起来了」和「这一笔写得成」互斥 —— 两份恢复怎么交错都不可能判死一条正在输出的审查。
+  //
+  // 这里直接把那一格 +1 来代表「另一份恢复刚把任务书送进会话、审查者回合起来了」:要钉的就是
+  // **落笔条件**本身,而真起一个回合除了把这一格 +1 之外还会带来一堆与这一问无关的状态。
+  {
+    const id = "free-dispatch-fence";
+    const runId = await restarted(id, 1);
+    await db.update(freeReviewRounds).set({ dispatch: null })
+      .where(eq(freeReviewRounds.id, `${runId}-round`));
+    const run = await runRow(runId);
+    const fence = await reviewOrphanStillUnowned(run);
+    assert.ok(fence, "判断那一刻确实没人管");
+
+    await db.update(tasks).set({ directionEpoch: fence!.directionEpoch + 1 }).where(eq(tasks.id, id));
+    await handleFreeWorkflowSettlement(id, "done", false, null, "reviewer", true, false, fence!);
+    assert.equal((await runRow(runId)).status, "reviewing", "迟到的收尾一个字都不许写");
+    assert.equal((await roundOf(runId)).status, "reviewing", "轮次也不许被它改掉");
+
+    // 没人插队时,同一条路照常把它收掉 —— 闸挡的是迟到者,不是收尾本身。
+    const again = await reviewOrphanStillUnowned(run);
+    assert.ok(again, "这一拍仍然没人管");
+    await handleFreeWorkflowSettlement(id, "done", false, null, "reviewer", true, false, again!);
+    assert.equal((await runRow(runId)).status, "failed", "没人插队时照常收尾");
+    console.log("✓ ⑱ 落笔那一刻按方向世代 CAS：判断之后又起过回合的，那一笔自己不成立");
   }
 
   // 几条用例会真起一个回合(投递成功那一刻),而它的收尾还要再写几次库。**等它们退干净再拆台**:
@@ -570,13 +601,29 @@ try {
     "free-dispatch-reopen", "free-dispatch-claim-leak"];
   await until("在跑的回合都退干净", () => launched.every((id) => !turnIdentity(id)));
 
+  // **收摊前把认领表扫干净**:一张没有活负责人的认领证就等于「这一轮永远在途」—— 对账见它就
+  // 跳过,库里那份没消费的意图再也没人补办(free-review-dispatch.ts 文件头 ⑩)。归还的出路有七
+  // 八条(投递成功、放弃、让出、准备阶段抛、回调里抛…),逐条写断言钉不住「以后新加的那一条」,
+  // 这一扫才是:任何一条漏了归还,它就红。
+  for (const taskId of ["free-dispatch-retry", "free-dispatch-exhaust", "free-dispatch-recover",
+    "free-dispatch-recover-exhausted", "free-dispatch-withdrawn", "free-dispatch-ghost",
+    "free-dispatch-reconcile", "free-dispatch-receipt", "free-dispatch-concurrent", "free-dispatch-late",
+    "free-dispatch-fresh", "free-dispatch-stale", "free-dispatch-delivered", "free-dispatch-cas",
+    "free-dispatch-generation", "free-dispatch-reopen", "free-dispatch-claim-leak",
+    "free-dispatch-settle-guard", "free-dispatch-fence"]) {
+    for (const run of await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
+      .where(eq(freeReviewRuns.taskId, taskId))) {
+      assert.equal(reviewDispatchArmed(run.id, 1), false, `${taskId} 收摊后还挂着认领证`);
+    }
+  }
+
   if (process.env.ASH_DUMP_TIMELINE) {
     for (const id of ["free-dispatch-retry", "free-dispatch-exhaust", "free-dispatch-recover",
       "free-dispatch-recover-exhausted", "free-dispatch-withdrawn", "free-dispatch-ghost",
       "free-dispatch-reconcile", "free-dispatch-concurrent", "free-dispatch-late", "free-dispatch-fresh",
       "free-dispatch-stale", "free-dispatch-delivered", "free-dispatch-cas",
       "free-dispatch-generation", "free-dispatch-reopen", "free-dispatch-claim-leak",
-      "free-dispatch-settle-guard"]) {
+      "free-dispatch-settle-guard", "free-dispatch-fence"]) {
       console.log(`\n──── ${id} ────\n${timeline(id)}`);
     }
   }

@@ -452,29 +452,39 @@ export function reviewerTurnHeld(task: TaskRow, runId: string): boolean {
 }
 
 /**
- * **孤儿收尾在提交之前再问一次:这一轮真的没人管了吗。**
+ * **这一轮真的没人管了吗** —— 答「是」的同时交出一张**落笔时要核的凭据**。
  *
- * 为什么非得再问:对账那一串判据是**异步**的 —— 开头读一次「reviewer 活着吗」,之后还要 await
- * 退役检查、轮次读取、等待检查、补办。两份恢复同时进来时,快的那一份完全可以在这期间把任务书
- * 送进会话、拉起审查者;慢的那一份带着开头那个「没人在跑」的结论一路走到收尾,把一条**正在
- * 输出**的审查落成 failed/error(第 3 轮审查 F1 实测:没有任何磁盘故障,两个恢复者正常交错即可)。
- * **失去投递权不等于获得结算权**,所以把这一问挪到真正下笔之前,按**此刻**的状态答。
+ * 为什么不能只答一句「是」:对账那一串判据全是**异步**的 —— 开头读一次「reviewer 活着吗」,
+ * 之后还要 await 退役检查、轮次读取、等待检查、补办,最后才下笔。两份恢复同时进来时,快的那
+ * 一份完全可以在这期间把任务书送进会话、拉起审查者;慢的那一份带着开头那个「没人在跑」的结论
+ * 一路走到收尾,把一条**正在输出**的审查落成 failed/error(第 3 轮审查 F1 实测:没有任何磁盘
+ * 故障,两个恢复者正常交错即可)。**失去投递权不等于获得结算权。**
  *
- * 五样一起看,少一样就有一条绕过去的路:任务行(状态可能已经变了)、回合身份(审查者可能刚起来)、
- * 内存认领(可能刚有人接手这一轮的派发)、轮次行(可能已经落了终态、或者又挂上了在途意图)、
- * run 行(可能已经被别人结算过、或者已经翻到下一轮)。
+ * 所以这里做的是两件事,而且第二件才是硬保证:
+ *  · 现读五样做**早退**:任务行、回合身份、内存认领、轮次行(终态 / 又挂上在途意图)、run 行
+ *    (已被结算 / 已翻到下一轮)。少一样就有一条白跑一趟、还顺手写一句误导时间线的路。
+ *  · 交出 `directionEpoch` 当**落笔条件**:再怎么现读,读完到提交之间仍然隔着几次 await ——
+ *    「检查完再动手」本身就是这条缺陷的形状,多读一遍只是把窗口变窄。而「这中间有没有又起过
+ *    回合」在库里有一个一次只增的持久凭据:每个回合起跑(含审查旁路回合)都在同一笔事务里把
+ *    `tasks.direction_epoch` +1(`orchestrator.ts` / `task-run.ts` 的 `turnDirectionStart`)。
+ *    把它当条件写进结算那个事务,检查-然后-动作就变成了一次 CAS:窗口里真有回合起来,那一笔
+ *    自己就不成立(判据 `directionEpochUnchangedSince`,用法见 `handleFreeWorkflowSettlement`
+ *    的 `orphanFence`)。
+ *
+ * 返回 null = 别收;返回凭据 = 可以往下走,但**必须把它带到落笔那一刻**。
  */
-export async function reviewOrphanStillUnowned(run: ReviewRunRow): Promise<boolean> {
+export async function reviewOrphanStillUnowned(run: ReviewRunRow): Promise<{ directionEpoch: number } | null> {
   const fresh = (await db.select().from(tasks).where(eq(tasks.id, run.taskId))).at(0);
-  if (!fresh) return false;
-  if (reviewerTurnHeld(fresh, run.id)) return false;
-  if (reviewDispatchArmed(run.id, run.currentRound)) return false;
+  if (!fresh) return null;
+  if (reviewerTurnHeld(fresh, run.id)) return null;
+  if (reviewDispatchArmed(run.id, run.currentRound)) return null;
   const round = (await db.select().from(freeReviewRounds)
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
-  if (round && (round.status !== "reviewing" || round.dispatch)) return false;
+  if (round && (round.status !== "reviewing" || round.dispatch)) return null;
   const current = (await db.select({ status: freeReviewRuns.status, currentRound: freeReviewRuns.currentRound })
     .from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id))).at(0);
-  return current?.status === "reviewing" && current.currentRound === run.currentRound;
+  if (current?.status !== "reviewing" || current.currentRound !== run.currentRound) return null;
+  return { directionEpoch: fresh.directionEpoch };
 }
 
 export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void> {

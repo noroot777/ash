@@ -185,8 +185,10 @@ export function releaseReviewDispatchClaim(runId: string, round: number, token: 
  * 三种回答要分开,**别把库写不下来算成「别人办了」**:
  *  · `taken`      —— 这一版归我了;
  *  · `lost`       —— 库里已经不是那一版(别人办过了 / 轮次落了终态):让出,不投递也不落终态;
- *  · `unwritable` —— 库写不下来。同进程的等待者是活的,所以照旧排(行为与改之前一致);
- *    欠的只是「跨重启还能补办」与「放弃时说得出排了几次」,这一条记在文件头的留白里。
+ *  · `unwritable` —— 库写不下来。同进程的等待者是活的,所以照旧排(行为与改之前一致);欠的是
+ *    「跨重启还能补办」与「放弃时说得出排了几次」。这一档**不再闷着**:调用侧写一句时间线把
+ *    降级说清(见 `dispatchReviewRound` 的 `warnedUnwritable`)—— 时间线落在会话文件上,跟库是
+ *    两个故障域,库写不下来时它大概率还写得进去。
  */
 type IntentTake = "taken" | "lost" | "unwritable";
 
@@ -219,8 +221,9 @@ async function takeIntent(
 }
 
 /**
- * 这一轮的派发有了结局(送进会话了,或者次数用尽放弃了):意图到此了结。返回是否真的清掉了 ——
- * 调用方要靠它决定敢不敢放手(见 `settled`)。
+ * 这一轮的派发有了结局(送进会话了,或者次数用尽放弃了):意图到此了结。
+ *
+ * 不返回成败:清不掉**不改变任何人的下一步**(理由见 `settled`),写失败只记日志。
  *
  * **只清自己那一行**(run+round),不按 taskId 扫:同一个任务上同时只有一条审查链在跑,但
  * 对账路径可能正拿着另一轮的快照在手里。
@@ -229,22 +232,19 @@ async function takeIntent(
  * 就是新一次刚写下的意图 —— 那一轮随后既没有等待者也没有意图,只能等对账按孤儿收尸
  * (第 3 轮审查 F2)。老意图没有代次,照旧清(那时整条链只有一代)。
  *
- * 返回的是「这次写**成功**了吗」,不是「清掉了几行」:一行都没匹配 = 那份意图已经不是我们的,
- * 内存那一半照样该放手。
  */
 export async function clearReviewDispatchIntent(
   runId: string, round: number, generation?: string,
-): Promise<boolean> {
+): Promise<void> {
   const mine = sql`json_extract(${freeReviewRounds.dispatch}, '$.generation')`;
   return await db.update(freeReviewRounds).set({ dispatch: null })
     .where(and(
       eq(freeReviewRounds.runId, runId), eq(freeReviewRounds.round, round),
       ...(generation ? [sql`(${mine} is ${generation} or ${mine} is null)`] : []),
     ))
-    .then(() => true)
+    .then(() => undefined)
     .catch((error) => {
       console.error(`[ash] 审查派发意图清理失败 run=${runId} round=${round}:`, error);
-      return false;
     });
 }
 
@@ -301,6 +301,8 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
   let attempts = dispatch.attempts ?? 0;
   /** 库里此刻该是哪一版在途意图 —— 每一次写都按它做 CAS(见 `takeIntent`)。 */
   let expected: number | null = dispatch.attempts ?? null;
+  /** 「意图没存进库」这句话说过了没有(重排会反复走到那里)。 */
+  let warnedUnwritable = false;
 
   // **这一轮的这一次派发归谁** —— 同步领证,排在任何 await 之前(所以也排在任何库写之前:对账
   // 区分「该补投」与「别碰」靠的就是「库里有意图」与「内存里有人盯着」这一对线索,反过来
@@ -318,13 +320,16 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
    * (`reviewDispatchRecovery`)。反过来写就会开出一个两边都说「没人在途」的窗口:对账的 30 秒
    * 定时器正好落在里面,就会对着一条**刚刚送进会话**的审查再投一次任务书。
    *
-   * 清库没成功就**不放手**:那一行还挂着,内存这一侧就得继续认领它,代价只是一条 Set 记录
-   * 活到进程结束。
+   * **清库失败也照样放手**(原先是「不清掉就不放」):那条分支留下的正是文件头 ⑩ 要除掉的东西
+   * —— 一张没有活负责人的认领证,对账见它就跳过这一轮,再也没人补办。而「别重复投递」这件事
+   * 现在有更硬的担保:送进会话那一刻落下的**持久交付凭据**(`reviewPromptAlreadyDelivered`),
+   * 补办据它只结清意图、不重投;放弃那一路更不用担心,终态与清意图同在一个事务里,而落了终态
+   * 的轮次压根没有补投资格(`takeIntent` 的 `status='reviewing'`、`redeliverReviewRound` 的
+   * 现读)。内存那张证从此只回答「此刻有没有活负责人」这一件事。
    */
   const settled = async (): Promise<void> => {
-    if (await clearReviewDispatchIntent(run.id, run.currentRound, generation)) {
-      releaseReviewDispatchClaim(run.id, run.currentRound, token);
-    }
+    await clearReviewDispatchIntent(run.id, run.currentRound, generation);
+    releaseReviewDispatchClaim(run.id, run.currentRound, token);
   };
 
   /** 这一轮不归我们办了(在途意图已经不是手里那一份):认领还回去,一个字都不写。 */
@@ -358,6 +363,17 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
     if (taken === "lost") return handOff("在途意图已经不是我们手里那一份（这一轮已经被办过了）");
     attempts = next;
     if (taken === "taken") expected = next;
+    // **落不下来就说一句**:同进程的等待者仍然是活的,所以照旧排(这一支的行为与改之前一致);
+    // 丢掉的是「跨重启还能补办」那条担保 —— 此刻服务一断,这一轮就只剩库里一个 reviewing。
+    // 时间线落在会话文件上,跟库是两个故障域,所以库写不下来时它大概率还写得进去。只说一次:
+    // 重排会反复走到这里,每次都说等于把真问题埋进刷屏里。
+    if (taken === "unwritable" && !warnedUnwritable) {
+      warnedUnwritable = true;
+      await appendTaskTimeline(taskId,
+        `${label}的任务书正在等一个空闲回合窗口，但这一轮的派发意图没能存进库里（写库失败，`
+        + `详情在服务日志）。等待本身照旧有效；只是服务若在送出去之前重启，这一轮不会被自动补投，`
+        + `需要你手动再开一轮。`);
+    }
     continueWhenIdle(taskId, dispatch.message, dispatch.opts, async (message, failure) => {
       // **整段包在异常出路里**:这是回合锁回调上的一段,抛出去只会变成一条没人接的 rejection
       // (抢占那一支不等它),而认领证跟着漏掉的话,这一轮在本进程里就永远「在途」—— 对账见

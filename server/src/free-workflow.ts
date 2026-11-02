@@ -57,6 +57,7 @@ import { checkRegressionConclusion, refreshRegressionEvidence } from "./regressi
 import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
 import { completeRegressionSettlement, regressionSettlementConclusion } from "./regression-settlement.js";
 import { retireHistoricalReview } from "./review-retirement.js";
+import { directionEpochUnchangedSince } from "./task-direction-epoch.js";
 import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
@@ -306,16 +307,19 @@ export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> 
     // **下笔之前再问一次「这一轮真的没人管了吗」** —— 开头那次「reviewer 活着吗」是好几次
     // await 之前读的，这中间另一份恢复完全可能已经把任务书送进会话、审查者正在输出
     // （第 3 轮审查 F1）。失去投递权不等于获得结算权，判据整段在 `reviewOrphanStillUnowned`。
-    if (!await reviewOrphanStillUnowned(run)) continue;
+    const fence = await reviewOrphanStillUnowned(run);
+    if (!fence) continue;
     if (round?.conclusion) {
-      await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer");
+      await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer",
+        true, false, fence);
       continue;
     }
     if (await db.transaction(async (transaction) => reviewContinuationPending(transaction, task,
       await activeReviewEvidence(transaction, task), false, true), { behavior: "immediate" })) continue;
     if (!round) await db.insert(freeReviewRounds).values({ id: id(), runId: run.id, round: run.currentRound,
       status: "reviewing", startedAt: run.createdAt }).onConflictDoNothing();
-    await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer")
+    await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer",
+      true, false, fence)
       .catch((error) => console.error(`[ash] 孤儿审查收尾待重试 ${run.id}:`, error));
   }
 }
@@ -384,6 +388,17 @@ export async function handleFreeWorkflowSettlement(
   role: SessionRole = "single",
   exitObserved = true,
   executionFailed = false,
+  /**
+   * **孤儿收尾专用的落笔条件**(只有 `reconcileFreeReviews` 那一路传)。
+   *
+   * 正常结算跑在**回合锁里面**,它写的就是刚刚结束的那一轮,不存在「写的时候情况已经变了」。
+   * 孤儿收尾不一样:它是从外面判断「已经没有任何东西能把这一轮跑完」,而这个判断从读到写之间
+   * 隔着好几次 await —— 另一份恢复完全可以在这中间把任务书送进会话、把审查者拉起来
+   * (第 3 轮审查 F1)。多读一遍只是把窗口变窄,所以把判断那一刻的 `tasks.direction_epoch`
+   * 带进来,**在落笔那个事务里当条件核**:每个回合起跑(含审查旁路回合)都在自己那笔事务里把
+   * 这一格 +1,所以「这中间起过回合」与「这一笔写得成」互斥。来源见 `reviewOrphanStillUnowned`。
+   */
+  orphanFence?: { directionEpoch: number },
 ): Promise<boolean> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
@@ -515,6 +530,13 @@ export async function handleFreeWorkflowSettlement(
     const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];
     const currentRound = (await transaction.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, round.id)))[0];
     if (currentRun?.status !== "reviewing" || currentRun.currentRound !== run.currentRound || currentRound?.status !== "reviewing") return false;
+    // 孤儿收尾那一路还要过这道闸:判断之后又起过回合 = 这一笔是迟到者,一个字都不许写
+    // (那条正在输出的审查就是被它判死的)。条件在事务里核,所以不存在「核完又变」。
+    if (orphanFence && !(await transaction.select({ id: tasks.id }).from(tasks)
+      .where(and(eq(tasks.id, taskId), directionEpochUnchangedSince(orphanFence.directionEpoch)))).length) {
+      console.error(`[ash] 孤儿审查收尾撤回 ${run.id}：判断之后这条任务又起过回合`);
+      return false;
+    }
     await transaction.update(freeReviewRounds).set({ conclusion: checked.conclusion,
       status: outcome === "failed" ? "error" : outcome === "passed" ? "passed" : "failed", endedAt: at,
     }).where(eq(freeReviewRounds.id, round.id));
