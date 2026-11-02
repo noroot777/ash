@@ -245,7 +245,7 @@ export async function startFreeReviewDebate(
       if (blocked.length) throw new Error(blocked.join("；"));
       const at = now();
       const debate: typeof freeReviewDebates.$inferInsert = {
-        id: id(), roundId: open.round.id, taskId, runId: open.run.id, round: open.run.currentRound,
+        id: id(), roundId: open.round.id, taskId, runId: open.run.id, round: open.round.round,
         status: "running", exchanges, currentSeq: 1, verdict: null,
         startedAt: at, updatedAt: at, finishedAt: null,
       };
@@ -256,7 +256,7 @@ export async function startFreeReviewDebate(
       };
       await db.insert(freeReviewDebateTurns).values(turn);
       await appendTaskTimeline(taskId,
-        `开始辩论第 ${open.run.currentRound} 轮审查意见：${exchanges} 个来回，` +
+        `开始辩论第 ${open.round.round} 轮审查意见：${exchanges} 个来回，` +
         `审查者（${open.run.reviewerName}）先答辩，最后由它收尾给出立场；结论仍由你裁定。`);
       await launchSegment(
         task, open.run,

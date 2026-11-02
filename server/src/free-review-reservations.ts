@@ -4,6 +4,7 @@ import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeWorkflowStates, type FreeReviewReservationSource } from "./db/schema.js";
+import { withRulingGate } from "./free-review-ruling-gate.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -98,6 +99,10 @@ export async function readFreeReviewReservation(taskId: string): Promise<Reserve
   }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)))
     .map(({ agentType, executorId, model, reasoningEffort, ...rest }) => ({
       ...rest,
+      // 来源列加上之前的老预约由启动迁移回填（migrations.ts backfillReservationSource）。那一步
+      // 失败只告警、不拦启动，于是可能留下 armed 却没有来源的行——按回填的同一条规则补读，
+      // 否则老的自动续轮在驳回 / 修复失败时会被当成手存预约留下来。
+      source: rest.source ?? (rest.armed ? (rest.runId ? "follow_up" as const : "user" as const) : null),
       // agentType 为空 = 没有覆盖；四列一套，不拼半截。
       override: agentType ? { agentType, executorId, model, reasoningEffort } : null,
     })).at(0);
@@ -282,6 +287,8 @@ export async function armFollowUpFreeReview(
 // 走到这儿——闸放在外面，下一个新加的触发点就会再漏一次（实例：MNW4en5L0iPP，驳回后 20 秒
 // 用户手存的那条预约照常开审，裁定还没做）。驳回只撤自动续轮（见 disputeFreeReview），用户
 // 手存的那条留着，等裁定落地后的下一个执行回合正常结束再走（选「让它接着改」就是那一轮修复）。
+// 「查争议 → 消费 → 起审」整段与驳回写入互斥（withRulingGate，理由见 free-review-ruling-gate.ts）：
+// 只查一次再消费，驳回落在两者之间时预约照样被消费掉（第 1 轮审查实测）。
 //
 // **先 CAS 消费、消费成功才启动**：反过来（先启动、后清槽）无法保证清掉的就是自己读到
 // 的那一条。CAS 失败 = 槽在这中间被改过（用户保存了新预约 / 别处已消费）：重读一次按
@@ -300,6 +307,14 @@ export async function startReservedFreeReview(
   },
 ): Promise<void> {
   if (!reservation?.armed) return;
+  await withRulingGate(taskId, () => startReservedFreeReviewHeld(taskId, reservation, handlers));
+}
+
+async function startReservedFreeReviewHeld(
+  taskId: string,
+  reservation: ReservedFreeReview,
+  handlers: Parameters<typeof startReservedFreeReview>[2],
+): Promise<void> {
   // 动态 import：驳回那一侧静态依赖本文件（撤自动续轮要用这里的 CAS 消费）。
   const { openDisputeOf } = await import("./free-review-dispute.js");
   if (await openDisputeOf(taskId)) {

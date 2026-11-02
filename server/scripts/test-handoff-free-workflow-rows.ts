@@ -76,6 +76,8 @@ try {
   assert.equal(rows.state?.reviewSource, "handoff", "老版本对端没带来源：来源说不清，记作 handoff（驳回时按手存留着）");
   rows = await buildFreeWorkflowRows("t4-user", payload({ reviewSource: "user" }), []);
   assert.equal(rows.state?.reviewSource, "user", "对端带了来源就原样照搬");
+  rows = await buildFreeWorkflowRows("t4-user-run", payload({ reviewSource: "user", reviewRunId: "run-1" }), []);
+  assert.equal(rows.state?.reviewSource, "user", "对端明说的来源不许被本机按 runId 再推断一遍改写");
   rows = await buildFreeWorkflowRows("t4-dangling", payload({ reviewSource: "follow_up", reviewRunId: "run-not-in-payload" }), []);
   assert.equal(rows.state?.reviewSource, "handoff",
     "对端记的是续轮、却没把那条 run 带过来：到了本机只能开新链，不能还叫续轮（否则驳回会把它当自动续轮撤掉）");

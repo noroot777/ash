@@ -31,7 +31,7 @@ try {
   const { createTasks } = await import("../src/task-store.js");
   const { claimTurn } = await import("../src/runs.js");
   const { disputeFreeReview, openDisputeOf, resolveFreeReviewDispute } = await import("../src/free-review-dispute.js");
-  const { handleFreeWorkflowSettlement, reserveFreeReview } = await import("../src/free-workflow.js");
+  const { handleFreeWorkflowSettlement, reserveFreeReview, startFreeReview } = await import("../src/free-workflow.js");
   const {
     armFollowUpFreeReview, readFreeReviewReservation, startReservedFreeReview,
   } = await import("../src/free-review-reservations.js");
@@ -214,9 +214,93 @@ try {
   await handleFreeWorkflowSettlement("g-exec-failed-user", "done", true, true, "single", true, true);
   assert.equal((await runsOf("g-exec-failed-user")).length, 2, "修复执行失败不撤用户手存的预约（照旧按预约开审）");
 
+  // ── ④ 驳回与执行结算交错（第 1 轮审查问题 1） ──
+  // 驳回是执行回合里的 MCP 调用，回合一结束结算就去消费预约，两者真会同时发生。不论谁先
+  // 走到哪一步，结果只能是两种之一：驳回落账、预约留着；或者审查已开、驳回按迟到拒收。
+  // 「审查开了、驳回也落账」就是那条抢跑（审查实测在偏移 -2 复现）。直接打消费点、用计数
+  // handler 代替真正起审，偏移覆盖两侧各自走完全程所需的微任务数。
+  const tick = async (count: number) => { for (let i = 0; i < count; i++) await Promise.resolve(); };
+  for (let offset = -40; offset <= 40; offset++) {
+    const id = `g-race-${offset + 40}`;
+    await seed(id);
+    await reserveAsUser(id);
+    const reservation = await readFreeReviewReservation(id);
+    let dispatched = false;
+    const [disputed] = await Promise.all([
+      tick(Math.max(0, -offset)).then(() => dispute(id)).then(() => true, () => false),
+      tick(Math.max(0, offset)).then(() => startReservedFreeReview(id, reservation, {
+        // 真实下游会把审查链切进 reviewing，之后的驳回按「最近一轮没停在未通过」迟到拒收。
+        continueRun: async () => { dispatched = true; },
+        startNew: async () => {
+          dispatched = true;
+          await db.update(freeReviewRuns).set({ status: "reviewing" }).where(eq(freeReviewRuns.id, `${id}-run`));
+        },
+      })),
+    ]);
+    assert.equal(disputed, !!(await openDisputeOf(id)), `偏移 ${offset}：驳回说落账了，库里就得有它`);
+    assert.ok(!(dispatched && disputed), `偏移 ${offset}：驳回落账了就不许开审（裁定还没做）`);
+    assert.ok(dispatched || disputed, `偏移 ${offset}：两者总得有一个成立`);
+    if (!dispatched) assert.equal((await slotOf(id))?.reviewArmed, true, `偏移 ${offset}：没开审时预约原样留着`);
+  }
+
+  // ── ⑤ 旧驳回不许被更新的审查链遮住（第 1 轮审查问题 2） ──
+  // 一条更新的工作区审查链（这里直接造一条失败的，现场 GraLv8AC2dKx 就是这个形态）压在
+  // 未裁定的驳回上面：判据是任务级的，闸照样挡，裁定入口照样找得到它。
+  const shadow = await seed("g-shadow");
+  await dispute("g-shadow");
+  const later = new Date(Date.now() + 1_000).toISOString();
+  await db.insert(freeReviewRuns).values({
+    id: "g-shadow-newer", taskId: "g-shadow", reviewerId: "reviewer", reviewerName: "逻辑审查者", agentType: "codex",
+    executorId: "ex", checkMode: "logic", retryLimit: 1, currentRound: 1,
+    status: "failed", createdAt: later, updatedAt: later, finishedAt: later,
+  });
+  assert.equal((await openDisputeOf("g-shadow"))?.round.id, shadow.roundId, "更新的审查链遮不住还没裁定的旧驳回");
+  await reserveAsUser("g-shadow");
+  await settleTurn("g-shadow");
+  assert.equal((await runsOf("g-shadow")).length, 2, "被遮住的旧驳回照样挡住预约");
+  assert.equal((await slotOf("g-shadow"))?.reviewArmed, true);
+  await resolveFreeReviewDispute("g-shadow", "withdrawn");
+  assert.equal(await openDisputeOf("g-shadow"), null, "裁定入口找得到被遮住的那条，裁完就了结");
+
+  // 用户自己派一轮新的工作区审查 = 显式取代：不挡这次派审，但记一笔、写时间线，驳回不再等裁定。
+  const superseded = await seed("g-superseded");
+  await dispute("g-superseded");
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "g-superseded"));
+  await startFreeReview("g-superseded", { reviewerId: "reviewer", checkMode: "logic", retryLimit: 1 });
+  const supersededRound = (await db.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, superseded.roundId)))[0];
+  assert.ok(supersededRound?.disputeSupersededAt, "用户新派的审查把旧驳回记成「被取代」");
+  assert.equal(supersededRound?.disputeResolution, null, "取代不是裁定：不替用户签任何一档");
+  assert.equal(await openDisputeOf("g-superseded"), null, "被取代之后不再等裁定");
+  assert.match(timeline("g-superseded"), /驳回还没裁定，你派了新一轮审查：这条驳回不再等裁定/, "取代必须写进时间线，不能静默");
+
+  // 派审 / 重跑 / 修复投递占着的 dispatch 身份不是执行回合：此刻送达的驳回只能是迟到的调用。
+  await createTasks([{
+    id: "g-dispatch-role", projectId: "p", title: "g-dispatch-role", body: "test", mode: "single", status: "done",
+    agentType: "codex", executorId: "ex", autoTitle: false, workflowMode: "free", useWorktree: false, createdAt: at, updatedAt: at,
+  }]);
+  await db.insert(freeReviewRuns).values({
+    id: "g-dispatch-role-run", taskId: "g-dispatch-role", reviewerId: "reviewer", reviewerName: "逻辑审查者",
+    agentType: "codex", executorId: "ex", checkMode: "logic", retryLimit: 1, currentRound: 1,
+    status: "stopped", createdAt: at, updatedAt: at, finishedAt: at,
+  });
+  await db.insert(freeReviewRounds).values({
+    id: "g-dispatch-role-round", runId: "g-dispatch-role-run", round: 1, status: "failed", conclusion: "verify_failed",
+    startedAt: at, endedAt: at,
+  });
+  assert.equal(claimTurn("g-dispatch-role", "dispatch"), true);
+  await assert.rejects(() => dispute("g-dispatch-role"), /审查正在派发/, "dispatch 占位身份下的驳回一律拒收");
+
+  // 来源回填没跑成的老行（armed、来源为空）：读侧按回填的同一条规则补，老的自动续轮照样被驳回撤掉。
+  const legacy = await seed("g-legacy-null-source");
+  await writeSlot("g-legacy-null-source", null, legacy.runId);
+  assert.equal((await readFreeReviewReservation("g-legacy-null-source"))?.source, "follow_up");
+  await dispute("g-legacy-null-source");
+  assert.equal((await slotOf("g-legacy-null-source"))?.reviewArmed, false, "来源为空的老续轮也按续轮撤");
+
   console.log("✓ 预约各写入点记下来源；驳回按来源撤自动续轮、留用户手存");
   console.log("✓ 驳回未裁定时任意来源的预约都不开审，原样保留并在时间线留痕");
   console.log("✓ 裁定落地后预约照常触发；既有触发、回滚、执行失败路径不变");
+  console.log("✓ 驳回与执行结算任意交错都不抢跑；旧驳回不被更新的链遮住，用户新派审查显式取代");
 } catch (error) {
   failure = error;
 } finally {

@@ -180,6 +180,11 @@ export const freeReviewRounds = sqliteTable(
     disputeResolutionNote: text("dispute_resolution_note"),
     // deferred 裁定建出的那个 backlog 派生任务；非空即幂等返回同一任务（同 repair_task_id）。
     disputeDeferredTaskId: text("dispute_deferred_task_id"),
+    // 非空 = 驳回还没裁定时，**用户自己**又派了一轮新的工作区审查（或重跑了一条更新的链），
+    // 这条驳回不再等裁定。它不是裁定（resolution 仍为 null，不冒充用户签了哪一档），只记
+    // 「被取代」这件事和时刻；派审那一刻同时写时间线。没有它时，更新的审查链会把旧驳回
+    // 静默遮住：最近一轮看不到、任务级又算不清它还欠不欠一个裁定（第 1 轮审查问题 2）。
+    disputeSupersededAt: text("dispute_superseded_at"),
     // 非空 = 这一轮的任务书还没送进会话,正在等一个空闲回合窗口（见 `FreeReviewDispatchIntent`）。
     dispatch: text("dispatch", { mode: "json" }).$type<FreeReviewDispatchIntent>(),
     startedAt: text("started_at").notNull(),
@@ -279,7 +284,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
       dispute_summary TEXT,
       dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
       dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
-      dispute_deferred_task_id TEXT, dispatch TEXT,
+      dispute_deferred_task_id TEXT, dispute_superseded_at TEXT, dispatch TEXT,
       started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
@@ -335,6 +340,8 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution_note TEXT",
     // 驳回与每段辩论发言的「人话摘要」：裁定屏第一行字。老行留 null，界面降级显示正文。
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_summary TEXT",
+    // 驳回未裁定时被用户新派的一轮审查取代的时刻。老行留 null = 没被取代过。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_superseded_at TEXT",
     // 「这一轮的任务书交出去了、还没送进会话」那份未完成的派发意图（见 `FreeReviewDispatchIntent`）。
     // 老行留 null = 没有在途派发,照旧按原路对账。
     "ALTER TABLE free_review_rounds ADD COLUMN dispatch TEXT",

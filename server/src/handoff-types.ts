@@ -106,6 +106,8 @@ export interface HandoffFreeReviewRound {
   // 裁定时用户写给执行者的要点。它跟发言不同，是**用户**的话而不是两条会话之间的对话，
   // 会话历史带不过去，所以必须随载荷走——对端接着修的时候还得按它改。
   disputeResolutionNote?: string | null;
+  // 驳回未裁定时被用户新派的审查取代的时刻；不带过去，对端会把它当成还欠着裁定。
+  disputeSupersededAt?: string | null;
   startedAt: string;
   endedAt: string | null;
 }

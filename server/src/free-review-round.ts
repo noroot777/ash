@@ -601,6 +601,11 @@ export async function reopenFailedFreeReview(
         return { generation: current, claimToken };
       });
       const revived = { ...run!, status: "reviewing", updatedAt: at, finishedAt: null };
+      // 用户重跑一条工作区审查 = 他自己又开了一轮：挂着的未裁定驳回被取代（同 startFreeReview）。
+      if (run!.targetKind === "workspace") {
+        const { supersedeOpenDisputes } = await import("./free-review-dispute.js");
+        await supersedeOpenDisputes(taskId, "重跑了一轮审查");
+      }
       // 证抢不到 = 这一轮真有另一次派发在负责(上面那一撕没撕着:这一轮的证属于别人)。
       // **一个字都不写、也不落终态**,但要留得下痕:只在返回值里说一句,用户刷新页面后看到的
       // 仍是「我点了，然后什么都没发生」。时间线是持久的那一半。

@@ -110,6 +110,7 @@ function disputeSuffix(round: FreeReviewRound): string {
   if (dispute.resolution === "withdrawn") return " · 意见已作废";
   if (dispute.resolution === "deferred") return " · 已转独立任务";
   if (dispute.resolution === "upheld") return " · 驳回未获支持";
+  if (dispute.supersededAt) return " · 已被新一轮审查取代";
   if (dispute.debates.at(-1)?.status === "running") return " · 辩论中";
   return deferOnly(round) ? " · 执行者提出越界" : " · 执行者已驳回";
 }
@@ -123,6 +124,7 @@ function disputeStateText(round: FreeReviewRound): string {
   if (dispute.resolution === "withdrawn") return `${who} · 你判了这一轮不用改`;
   if (dispute.resolution === "deferred") return `${who} · 你把它转成了独立任务`;
   if (dispute.resolution === "upheld") return `${who} · 你让它接着改了`;
+  if (dispute.supersededAt) return `${who} · 你没裁定，另派了一轮审查`;
   return dispute.debates.at(-1)?.status === "running" ? `${who} · 双方辩论中` : `${who} · 等你拍板`;
 }
 
@@ -177,7 +179,7 @@ export function FreeWorkflowInspector({
     ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
     : null;
   const view = freeReviewView(state, task);
-  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, waivedRound, debateRunning } = view;
+  const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, disputedRun, waivedRound, debateRunning } = view;
   const taskReady = task.status !== "backlog";
   // waiting 只锁「立即派审/修复」，预约与取消预约照常（同 Toolbar，也与后端口径一致）。
   // waiting / reservationMode 都由 freeReviewCopy.ts 的 freeReviewView 算,两个表面共用
@@ -430,17 +432,17 @@ export function FreeWorkflowInspector({
             )}
           </section>
 
-          {disputedRound && stoppedRun && notify && (
+          {disputedRound && disputedRun && notify && (
             <FreeReviewDisputeCard
               taskId={task.id}
-              run={stoppedRun}
+              run={disputedRun}
               round={disputedRound}
               disabled={locked || taskBusy || !!reviewing}
               onChanged={free.setState}
               notify={notify}
               // 卡上只有执行者的说法；审查者那一半在报告里，用户不该为了读它先去
               // 「审查记录」列表里认第几轮。
-              onOpenReport={() => selectReview(stoppedRun, disputedRound)}
+              onOpenReport={() => selectReview(disputedRun, disputedRound)}
             />
           )}
 

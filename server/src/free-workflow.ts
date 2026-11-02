@@ -558,6 +558,12 @@ export async function startFreeReview(
             { retry: false, freshSession: freshSessionFor(run, 1, false) }),
         });
       }, { behavior: "immediate" });
+      // 用户自己派的工作区审查：挂着的未裁定驳回被这一轮取代，记一笔并写时间线（见
+      // supersedeOpenDisputes）。按预约开审（带 slotToken）的那一路在裁定闸后面，碰不到驳回。
+      if (!opts.target && !opts.slotToken) {
+        const { supersedeOpenDisputes } = await import("./free-review-dispute.js");
+        await supersedeOpenDisputes(taskId, "派了新一轮审查");
+      }
       // 派审即刻消费掉预约槽的一切（含覆盖四列）；从预约消费进来时沿用它的版本令牌，
       // 好让下面启动失败的回滚还能认出这个空位是自己腾的，也好让用户抢在这之前保存的
       // 新预约留在槽里不被抹掉（两者都在 clearReservationForDispatch 里靠同一次 CAS）。
