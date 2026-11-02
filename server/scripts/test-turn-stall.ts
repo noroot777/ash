@@ -543,4 +543,4 @@ import { configure, hard, notice, RETRY, sleep, spy, TURN } from "./stall-fixtur
 }
 
 __resetTurnStalls();
-console.log("test:turn-stall ok：两档按「自上次上游真回话以来」判,长回合与纯静默一档都不触发");
+console.log("test:turn-stall ok：错误档两档按「自上次上游真回话以来」判,长回合不触发;纯静默不进这一档 —— 它归静默档(test:undriven-turn)");

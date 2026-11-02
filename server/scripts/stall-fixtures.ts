@@ -46,9 +46,15 @@ export function spy(taskId = "task-1", projectFails = 0): { actions: StallAction
   };
 }
 
-/** 每段各自设口径,免得上一段的 env 漏到下一段。各档 0 = 关掉。 */
+/**
+ * 每段各自设口径,免得上一段的 env 漏到下一段。各档 0 = 关掉。
+ *
+ * **静默档也在这里一起归零**(`silentWarnMs`/`silentTripMs`):不然错误档那几段一挂上静默观察
+ * 就会被另一档抢着报警,红的是夹具而不是判据。
+ */
 export function configure(opts: {
   warnErrors?: number; warnMs?: number; tripMs?: number; graceMs?: number; pollMs?: number;
+  silentWarnMs?: number; silentTripMs?: number;
 }) {
   __resetTurnStalls();
   __resetStallFailures();
@@ -56,5 +62,7 @@ export function configure(opts: {
   process.env.ASH_STALL_WARN_MS = String(opts.warnMs ?? 0);
   process.env.ASH_STALL_TRIP_MS = String(opts.tripMs ?? 0);
   process.env.ASH_STALL_TRIP_GRACE_MS = String(opts.graceMs ?? 0);
+  process.env.ASH_STALL_SILENT_WARN_MS = String(opts.silentWarnMs ?? 0);
+  process.env.ASH_STALL_SILENT_TRIP_MS = String(opts.silentTripMs ?? 0);
   process.env.ASH_STALL_POLL_MS = String(opts.pollMs ?? 20);
 }
