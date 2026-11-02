@@ -181,6 +181,30 @@ console.log("② 接管·这一轮在别的进程里已经有过进展 → 静�
     "落盘失败如实答 false(看门狗据此在下一条进展事件上重试)");
   check(turnProgress("t-fragile", "s-fragile", fragile) === "unreadable",
     "参与证明被撤掉 → 这一轮退回「核实不了」,宁可漏判也不误杀");
+
+  // ②g **连撤销也失败时,水位替它说话**(第 3 轮自由审查 F5)
+  //
+  // ②f 那条撤销自己也会失败,而且失败得成对:目录变只读、文件系统切只读 —— 同一个原因让
+  // 「写进展」和「撤证明」一起失败。于是 `.watch` 留在那里继续声明「会记的人在盯,它没记过」,
+  // 而那一轮其实正在产出、输出甚至已经被消费并提交了水位 → 接管回来按旧起点计时,长工具照杀。
+  // 所以「确证没产出」要两个事实:证明在,**而且持久消费水位一字未动**。
+  __resetTurnProgressMarks();
+  const longTool = new Date(Date.now() - 90 * 60_000).toISOString();
+  openTurnProgress("t-watermark", "s-watermark", longTool, 454); // 开轮那一刻已消费 454 字节
+  check(turnProgress("t-watermark", "s-watermark", longTool, 454) === "none",
+    "前提:水位一字未动 → 照旧是「确证零进展」(这一档没被修没)");
+  check(turnProgress("t-watermark", "s-watermark", longTool, 1_200) === "seen",
+    "水位从 454 前进到 1200 → 这一轮产出过(即使进展记号没写成、证明也撤不掉)");
+  const burntSpy = spy("t-watermark");
+  watchTurnSilence("s-watermark", {}, longTool, burntSpy.actions,
+    turnProgress("t-watermark", "s-watermark", longTool, 1_200));
+  await sleep(700);
+  check(burntSpy.log.trips.length === 0,
+    "于是那个正跑长工具的回合不会被杀(F5 实测形状:进展写失败 + 撤销也失败)");
+  // 老格式的证明(没记水位)照旧只按记号判 —— 升级不改判据。
+  openTurnProgress("t-watermark", "s-legacy", longTool);
+  check(turnProgress("t-watermark", "s-legacy", longTool, 9_999) === "none",
+    "没记水位的旧证明:仍按记号判「确证零进展」,不因为给了个水位就改口");
 }
 
 console.log("③ 换档不许丢掉已经发出去的红环(第 1 轮自由审查 F6)");

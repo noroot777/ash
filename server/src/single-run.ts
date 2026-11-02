@@ -328,10 +328,15 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     //
     // **进程外那份进展事实**:本进程开的这一轮由我们落「参与证明」(那张证明才是「记号不在 =
     // 确证没产出」的前提);接管回来的那一轮**只读不写** —— 判据与实测见 turn-progress-mark.ts。
-    if (!a.adopted) openTurnProgress(taskId, sessId, a.turnStart);
+    //
+    // **水位跟进展一起走**(第 3 轮自由审查 F5):开轮时把已提交字节记进那张证明,接管时拿当下
+    // 那一份跟它比 —— 「进展写不进去、证明也撤不掉」的那一档于此被水位识破,不必再指望一次
+    // 可能失败的删除(判据见 turn-progress-mark.ts 文件头最后一节)。
+    const watermark = (): number | undefined => detached?.committed();
+    if (!a.adopted) openTurnProgress(taskId, sessId, a.turnStart, watermark());
     watchTurnSilence(
       sessId, a.handle, a.turnStart, stallActions,
-      a.turnStart ? turnProgress(taskId, sessId, a.turnStart) : "none",
+      a.turnStart ? turnProgress(taskId, sessId, a.turnStart, watermark()) : "none",
     );
     for await (const event of a.handle.events) {
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
