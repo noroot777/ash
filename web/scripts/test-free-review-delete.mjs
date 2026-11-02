@@ -30,6 +30,8 @@ import { createServer } from "vite";
 //    拿发起时捕获的旧清单把谁贴回来，也不许留下一个「谁都没选中」的死角。
 // ⑫ 核对面：派出去之前跟权威清单核一次 —— 选中的那位刚在别处被删，就别发一个注定被
 //    服务端退回的请求。
+// ⑬ 回车面：点选别的审查者后焦点停在那张卡上，这时按回车要发起派审，而不是把那张卡
+//    再点一遍；方向键换选之后同理，派出去的是换到的那位。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
@@ -123,7 +125,7 @@ try {
       row: (name) => page.locator(".free-review-reviewer-row").filter({ hasText: name }),
       trash: (name) => page.getByRole("button", { name: `删除审查者「${name}」` }),
       confirmDelete: () => confirm.getByRole("button", { name: "删除", exact: true }),
-      selectedName: () => dialog.locator(".free-review-reviewer-pick[aria-selected='true'] b").innerText(),
+      selectedName: () => dialog.locator(".free-review-reviewer-pick[aria-checked='true'] b").innerText(),
       submit: () => dialog.locator("footer button[type='submit']"),
       note: () => dialog.locator(".free-review-note textarea"),
       closeButton: () => dialog.getByRole("button", { name: "关闭派审查" }),
@@ -522,6 +524,29 @@ try {
     assert.match(await page.getByTestId("notices").innerText(), /这一次没有派出去/);
     assert.equal(await ui.selectedName(), "顶级审查", "核对完要替用户改选到还在的那位");
     assert.equal(await ui.submit().isDisabled(), false, "改选之后要能接着派");
+    await page.close();
+  }
+
+  // ── ⑬ 回车面：点选审查者之后回车就派审 ─────────────────────────────────
+  {
+    const ui = await open();
+    const { page, store } = ui;
+    await ui.row("grok4.6").locator(".free-review-reviewer-pick").click();
+    assert.equal(await ui.selectedName(), "grok4.6");
+    await page.keyboard.press("Enter");
+    await waitFor(() => store.dispatched.length === 1, "点选审查者后按回车要发起派审");
+    assert.equal(store.dispatched[0].body.reviewerId, "reviewer-3", "派出去的是刚点选的那位");
+    await page.close();
+  }
+  {
+    const ui = await open();
+    const { page, store } = ui;
+    await ui.row("grok4.6").locator(".free-review-reviewer-pick").click();
+    await page.keyboard.press("ArrowUp");
+    assert.equal(await ui.selectedName(), "opus5", "方向键在审查者之间换选");
+    await page.keyboard.press("Enter");
+    await waitFor(() => store.dispatched.length === 1, "方向键换选后按回车要发起派审");
+    assert.equal(store.dispatched[0].body.reviewerId, "reviewer-2", "派出去的是换到的那位");
     await page.close();
   }
 
