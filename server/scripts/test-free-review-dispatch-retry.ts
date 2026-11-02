@@ -6,7 +6,7 @@
 // 手动再开一轮。而「抢不到锁」是个纯瞬时条件 —— 同一个释放点上注册在前的那条 waiter 先同步
 // 抢走了锁,谁先注册纯属时序运气。
 //
-// 十七条用例对着验收标准(台子在 `free-review-dispatch-harness.ts`):
+// 十三条用例对着验收标准(台子在 `free-review-dispatch-harness.ts`):
 //  ① 输一次 → 不落终态、派发意图留着、下一个空闲窗口自动重试并真的送出去;
 //  ② 连输到界 → 落终态,而且终态说得出「输了几次」,每一次重排都在时间线上留了痕;
 //  ③ 跨重启补办 → 库里挂着意图、内存里没人盯着(= 重启后的现场),对账补投一次而不是收尸;
@@ -20,11 +20,9 @@
 //  ⑪ **慢一份恢复手里的旧快照** → 不许把一条已经办完的意图重建出来再投一遍(第 2 轮审查 F1);
 //  ⑫ **交付凭据已确认、意图还没清** → 结清意图而不是重发任务书(第 2 轮审查 F2);
 //  ⑬ **写意图那一刻版本已经变了** → 按 `attempts` 做 CAS,不写不投(第 2 轮审查 F1 的第二道);
-//  ⑭ **认领 / 清意图 / 失败收尾按代次隔离** → 上一次重跑的收尾碰不到新一次(第 3 轮审查 F2);
-//  ⑮ **旧收尾还没放手时点「继续本轮审查」** → 新一次照样派得出去,不被静静吞掉(同上);
-//  ⑯ **认领之后现读抛异常** → 证还回去、意图留着,健康之后补办得了(第 3 轮审查 F3);
-//  ⑰ **结算之前先问一遍所有权** → 正在输出 / 有人领证 / 又挂上意图都不许收尸(第 3 轮审查 F1);
-//  ⑱ **落笔那一刻按方向世代 CAS** → 判断之后又起过回合的,那一笔自己就不成立(同上,硬保证那一道)。
+//
+// **「这一轮的这一次」那一半在隔壁** —— 代次隔离、所有权、落笔条件(⑭～⑳)在
+// `test-free-review-dispatch-ownership.ts`,台子是同一个。两份分开是因为单文件七百行封顶。
 //
 // **不碰真 CLI**:投递成功那一刻会真走到 `continueTask`,而起真执行器由测试隔离闸拦着
 // (`ASH_ALLOW_REAL_AGENT` 没设 = 直接判 turn_failed)。PATH 上那个立刻退出的 `codex` 桩管的是
@@ -44,11 +42,11 @@ try {
     handleFreeWorkflowSettlement, reconcileFreeReviews, reserveFreeReview,
     claimReviewDispatch, clearReviewDispatchIntent, MAX_REVIEW_DISPATCH_ATTEMPTS,
     releaseReviewDispatchClaim, reviewDispatchArmed,
-    failReviewStart, launchReviewRound, redeliverReviewRound, reopenFailedFreeReview,
-    reviewOrphanStillUnowned,
-    claimOwnTurn, claimTurn, continueWhenIdle, forceReleaseTurn, releaseTurn, turnIdentity, whenTurnIdle,
+    failReviewStart, launchReviewRound, redeliverReviewRound,
+    claimOwnTurn, claimTurn, continueWhenIdle, forceReleaseTurn, releaseTurn, whenTurnIdle,
     evidenceState, freeReviewEvidenceDir,
-    at, timeline, until, runOf, runRow, roundOf, reviewerSessions, freeTask, armedTask, camper, restarted,
+    at, timeline, until, runOf, runRow, roundOf, reviewerSessions, freeTask, armedTask, camper,
+    restarted, finish,
   } = await startHarness();
 
   // ── ① 输一次:不落终态、意图留着、下一个空闲窗口自动重试成功 ──────────────────
@@ -423,210 +421,14 @@ try {
     console.log("✓ ⑬ 写意图那一刻版本已经变了：按 attempts 做 CAS，不写不投、认领还回去");
   }
 
-  // ── ⑭ 认领 / 清意图 / 失败收尾按代次隔离 ──────────────────────────────────────
-  // 第 3 轮审查 F2:同一个 round 行会被用户**重跑**(`reopenFailedFreeReview` 把它放回 reviewing
-  // 并换新的证据代次),于是「这一行」会先后代表同一轮的好几次派发。认领只记一个布尔、清意图
-  // 和失败收尾都无代次的话,上一次的收尾(它先提交终态,再做哨兵/时间线/工作区清理,中间全是
-  // await)就会把新一次的证撕掉、把新一次刚写下的意图清掉、把新一次打成 error。三件事各钉一条。
-  {
-    const id = "free-dispatch-generation";
-    const runId = await restarted(id, 1);
-    const directory = freeReviewEvidenceDir(id, runId, 1);
-    const g1 = (await roundOf(runId)).dispatch!.generation!;
-    const g2 = `${g1}-reopened`;
-
-    const t1 = claimReviewDispatch(runId, 1, g1);
-    assert.ok(t1, "第一张证领得到");
-    assert.equal(claimReviewDispatch(runId, 1, g1), null, "同代次的第二个人要被挡住");
-    const t2 = claimReviewDispatch(runId, 1, g2);
-    assert.ok(t2, "换了代次 = 上一次重跑的证已经没有权限，新一次直接接管");
-    releaseReviewDispatchClaim(runId, 1, t1!);
-    assert.equal(reviewDispatchArmed(runId, 1), true, "上一次的收尾撕不掉新一次的证");
-
-    await db.update(freeReviewRounds).set({ dispatch: { attempts: 1, since: at, generation: g2 } })
-      .where(eq(freeReviewRounds.id, `${runId}-round`));
-    await clearReviewDispatchIntent(runId, 1, g1);
-    assert.ok((await roundOf(runId)).dispatch, "上一代次清不掉新一代次的意图");
-    await clearReviewDispatchIntent(runId, 1, g2);
-    assert.equal((await roundOf(runId)).dispatch, null, "自己那一代次照常清");
-    releaseReviewDispatchClaim(runId, 1, t2!);
-
-    // 证据行换代次 = 用户重跑过这一轮(`restartRegressionEvidence` 做的就是这一下)。
-    await db.update(regressionEvidence).set({ generation: g2 })
-      .where(eq(regressionEvidence.directory, directory));
-    await failReviewStart(await runRow(runId), "上一代次的迟到失败", { generation: g1 });
-    assert.equal((await roundOf(runId)).status, "reviewing", "上一代次的迟到失败不许打断重跑起来的那一次");
-    assert.equal((await runRow(runId)).status, "reviewing", "run 也不许被它改掉");
-    await failReviewStart(await runRow(runId), "这一代次自己的失败", { generation: g2 });
-    assert.equal((await roundOf(runId)).status, "error", "自己那一代次照常落账");
-    console.log("✓ ⑭ 认领 / 清意图 / 失败收尾按代次隔离：上一次重跑的收尾碰不到新一次");
-  }
-
-  // ── ⑮ 旧收尾还没放手时点「继续本轮审查」 ─────────────────────────────────────
-  // 第 3 轮审查 F2 的用户现场:上一次失败**已经提交**(界面和重试闸都放行了),它的收尾还在做
-  // 哨兵/时间线/工作区清理 —— 认领证就在这个合法窗口里挂着。那时点「继续本轮审查」,老写法把
-  // 新一次当成重复派发静默吞掉(HTTP 还回 202),于是 reviewing + 没有意图 + 没有等待者,三十秒
-  // 后被对账按孤儿收掉。这里要的就是「它真的派出去了」。
-  {
-    const id = "free-dispatch-reopen";
-    const runId = await restarted(id, 1);
-    const stale = (await roundOf(runId)).dispatch!.generation!;
-    await db.update(freeReviewRounds).set({ status: "error", dispatch: null, endedAt: at })
-      .where(eq(freeReviewRounds.id, `${runId}-round`));
-    await db.update(freeReviewRuns).set({ status: "failed", finishedAt: at }).where(eq(freeReviewRuns.id, runId));
-    const held = claimReviewDispatch(runId, 1, stale);
-    assert.ok(held, "上一次的认领证还挂着（它的收尾还没做完）");
-
-    const { dispatched } = await reopenFailedFreeReview(id);
-
-    assert.equal(dispatched, true, "新一次必须真的派出去，不许被上一次的证静静吞掉");
-    assert.doesNotMatch(timeline(id), /没有另起投递/, "这一次是真派出去了，不该写那句让出");
-    // **任务书真的走到了投递那一步**:沙箱里起不了真执行器,所以它以「启动失败」收场 —— 关键
-    // 是这一句只可能由投递那一侧写出来。缺陷形态恰恰相反:一个字都没送、也没有任何交代,
-    // round 停在 reviewing + 没有意图 + 没人等着,三十秒后才被对账按孤儿收掉。
-    // 投递是异步的(`continueWhenIdle` 排完就返回),所以等它真的落到一条审查会话上再问。
-    // 缺陷形态在这里永远等不到:一个字都没送出去,round 停在 reviewing + 没有意图 + 没人等着,
-    // 三十秒后才被对账按孤儿收掉。
-    await until("任务书送进一条审查会话", async () => await reviewerSessions(id) === 1);
-    releaseReviewDispatchClaim(runId, 1, held!);
-    console.log("✓ ⑮ 旧收尾还没放手时点「继续本轮审查」：新一次照样派得出去");
-  }
-
-  // ── ⑯ 认领之后现读抛异常:证还回去、意图留着 ─────────────────────────────────
-  // 第 3 轮审查 F3:领证到「责任交给等待者」之间每一步都可能抛(现读、凭据查询、耗尽收尾)。
-  // 抛了不还证,`armed` 就从「有人负责等待」退化成一条谁都读不懂的真值 —— 对账见它就跳过,
-  // 库里那份没消费的意图再也没人补办,数据库早恢复健康也救不回来,只能靠重启丢掉内存。
-  // 一次瞬时读库故障也不该把这一轮打成失败:那是拿一次锁争用换掉一轮审查。
-  {
-    const id = "free-dispatch-claim-leak";
-    const runId = await restarted(id, 1);
-    const task = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
-    const run = await runRow(runId);
-    const round = await roundOf(runId);
-    // 先把要用的行全读出来再下钩子:钩子按**第几次 select** 认人 —— 第 1 次是读代次(领证之前),
-    // 第 2 次正是领证之后那一条现读。
-    const patched = db as unknown as { select: typeof db.select };
-    const original = db.select.bind(db);
-    let calls = 0;
-    patched.select = ((...args: Parameters<typeof db.select>) => {
-      if (++calls === 2) throw new Error("注入：SQLITE_BUSY");
-      return original(...args);
-    }) as typeof db.select;
-    let verdict: string;
-    try {
-      verdict = await redeliverReviewRound(task, run, round);
-    } finally {
-      delete (patched as Partial<typeof patched>).select;
-    }
-
-    assert.equal(verdict, "hold", "一次瞬时读库故障不该把这一轮打成失败");
-    assert.equal(reviewDispatchArmed(runId, 1), false, "认领证必须还回去");
-    assert.ok((await roundOf(runId)).dispatch, "没消费的意图原样留着");
-    assert.equal((await roundOf(runId)).status, "reviewing", "一个终态都别写");
-    assert.equal((await runRow(runId)).status, "reviewing", "run 也别动");
-    // 数据库已经健康了,下一拍照样补办得了 —— 这才是「异常之后还能自愈」的判据。
-    assert.equal(await redeliverReviewRound(task, await runRow(runId), await roundOf(runId)), "handled",
-      "健康之后的那一拍该接着办");
-    await until("补办真的把任务书送出去了", async () => await reviewerSessions(id) === 1);
-    console.log("✓ ⑯ 认领之后现读抛异常：证还回去、意图留着，健康之后补办得了");
-  }
-
-  // ── ⑰ 结算下笔之前再问一次所有权 ────────────────────────────────────────────
-  // 第 3 轮审查 F1:对账那一串判据是异步的 —— 开头读一次「reviewer 活着吗」,之后还要 await
-  // 退役检查、轮次读取、等待检查、补办。两份恢复同时进来时,快的那一份完全可以在这期间把任务书
-  // 送进会话、拉起审查者;慢的那一份带着开头那个「没人在跑」的结论一路走到收尾,把一条**正在
-  // 输出**的审查落成 failed/error。**失去投递权不等于获得结算权**,所以下笔之前按此刻的状态
-  // 再问一遍。四种形状各钉一条(前三种都曾能一路走到结算)。
-  {
-    const id = "free-dispatch-settle-guard";
-    const runId = await restarted(id, 1);
-    await db.update(freeReviewRounds).set({ dispatch: null })
-      .where(eq(freeReviewRounds.id, `${runId}-round`));
-    const run = await runRow(runId);
-    assert.ok(await reviewOrphanStillUnowned(run), "谁都没在管：这一拍确实该它收尾");
-
-    assert.equal(claimTurn(id, "reviewer", { run: runId, round: 1 }), true, "审查者刚起来");
-    assert.equal(await reviewOrphanStillUnowned(run), null, "正在输出的审查不许被收尸");
-    forceReleaseTurn(id);
-
-    const token = claimReviewDispatch(runId, 1, "g-another");
-    assert.equal(await reviewOrphanStillUnowned(run), null, "刚有人领证接手这一轮，就不是孤儿");
-    releaseReviewDispatchClaim(runId, 1, token!);
-
-    await db.update(freeReviewRounds).set({ dispatch: { attempts: 1, since: at } })
-      .where(eq(freeReviewRounds.id, `${runId}-round`));
-    assert.equal(await reviewOrphanStillUnowned(run), null, "又挂上在途意图的轮次归补投管");
-
-    await db.update(freeReviewRounds).set({ dispatch: null, status: "passed" })
-      .where(eq(freeReviewRounds.id, `${runId}-round`));
-    assert.equal(await reviewOrphanStillUnowned(run), null, "已经落了终态的轮次不该再被收尾");
-    console.log("✓ ⑰ 结算之前先问一遍所有权：正在输出 / 有人领证 / 又挂上意图都不收尸");
-  }
-
-  // ── ⑱ 落笔那一刻按方向世代 CAS ───────────────────────────────────────────────
-  // ⑰ 那一问再细也只是「检查完再动手」——读完到提交之间仍然隔着几次 await,而那正是这条缺陷
-  // 的形状。硬保证得写进落笔那个事务:判断时手里的 `directionEpoch` 当条件核,而每个回合起跑
-  // (含审查旁路回合)都在自己那笔事务里把这一格 +1(`turnDirectionStart`),所以「这中间有回合
-  // 起来了」和「这一笔写得成」互斥 —— 两份恢复怎么交错都不可能判死一条正在输出的审查。
-  //
-  // 这里直接把那一格 +1 来代表「另一份恢复刚把任务书送进会话、审查者回合起来了」:要钉的就是
-  // **落笔条件**本身,而真起一个回合除了把这一格 +1 之外还会带来一堆与这一问无关的状态。
-  {
-    const id = "free-dispatch-fence";
-    const runId = await restarted(id, 1);
-    await db.update(freeReviewRounds).set({ dispatch: null })
-      .where(eq(freeReviewRounds.id, `${runId}-round`));
-    const run = await runRow(runId);
-    const fence = await reviewOrphanStillUnowned(run);
-    assert.ok(fence, "判断那一刻确实没人管");
-
-    await db.update(tasks).set({ directionEpoch: fence!.directionEpoch + 1 }).where(eq(tasks.id, id));
-    await handleFreeWorkflowSettlement(id, "done", false, null, "reviewer", true, false, fence!);
-    assert.equal((await runRow(runId)).status, "reviewing", "迟到的收尾一个字都不许写");
-    assert.equal((await roundOf(runId)).status, "reviewing", "轮次也不许被它改掉");
-
-    // 没人插队时,同一条路照常把它收掉 —— 闸挡的是迟到者,不是收尾本身。
-    const again = await reviewOrphanStillUnowned(run);
-    assert.ok(again, "这一拍仍然没人管");
-    await handleFreeWorkflowSettlement(id, "done", false, null, "reviewer", true, false, again!);
-    assert.equal((await runRow(runId)).status, "failed", "没人插队时照常收尾");
-    console.log("✓ ⑱ 落笔那一刻按方向世代 CAS：判断之后又起过回合的，那一笔自己不成立");
-  }
-
-  // 几条用例会真起一个回合(投递成功那一刻),而它的收尾还要再写几次库。**等它们退干净再拆台**:
-  // 不等的话临时库在它们写到一半时就关了,日志里会多出几条「database is not open」—— 那是拆台
-  // 的噪声,不是产品问题,但它会把真问题埋掉。
-  const launched = ["free-dispatch-retry", "free-dispatch-recover", "free-dispatch-ghost",
-    "free-dispatch-reconcile", "free-dispatch-receipt", "free-dispatch-concurrent", "free-dispatch-fresh",
-    "free-dispatch-reopen", "free-dispatch-claim-leak"];
-  await until("在跑的回合都退干净", () => launched.every((id) => !turnIdentity(id)));
-
-  // **收摊前把认领表扫干净**:一张没有活负责人的认领证就等于「这一轮永远在途」—— 对账见它就
-  // 跳过,库里那份没消费的意图再也没人补办(free-review-dispatch.ts 文件头 ⑩)。归还的出路有七
-  // 八条(投递成功、放弃、让出、准备阶段抛、回调里抛…),逐条写断言钉不住「以后新加的那一条」,
-  // 这一扫才是:任何一条漏了归还,它就红。
-  for (const taskId of ["free-dispatch-retry", "free-dispatch-exhaust", "free-dispatch-recover",
+  await finish(["free-dispatch-retry", "free-dispatch-exhaust", "free-dispatch-recover",
     "free-dispatch-recover-exhausted", "free-dispatch-withdrawn", "free-dispatch-ghost",
-    "free-dispatch-reconcile", "free-dispatch-receipt", "free-dispatch-concurrent", "free-dispatch-late",
-    "free-dispatch-fresh", "free-dispatch-stale", "free-dispatch-delivered", "free-dispatch-cas",
-    "free-dispatch-generation", "free-dispatch-reopen", "free-dispatch-claim-leak",
-    "free-dispatch-settle-guard", "free-dispatch-fence"]) {
-    for (const run of await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
-      .where(eq(freeReviewRuns.taskId, taskId))) {
-      assert.equal(reviewDispatchArmed(run.id, 1), false, `${taskId} 收摊后还挂着认领证`);
-    }
-  }
-
-  if (process.env.ASH_DUMP_TIMELINE) {
-    for (const id of ["free-dispatch-retry", "free-dispatch-exhaust", "free-dispatch-recover",
-      "free-dispatch-recover-exhausted", "free-dispatch-withdrawn", "free-dispatch-ghost",
-      "free-dispatch-reconcile", "free-dispatch-concurrent", "free-dispatch-late", "free-dispatch-fresh",
-      "free-dispatch-stale", "free-dispatch-delivered", "free-dispatch-cas",
-      "free-dispatch-generation", "free-dispatch-reopen", "free-dispatch-claim-leak",
-      "free-dispatch-settle-guard", "free-dispatch-fence"]) {
-      console.log(`\n──── ${id} ────\n${timeline(id)}`);
-    }
-  }
+    "free-dispatch-reconcile", "free-dispatch-receipt", "free-dispatch-concurrent",
+    "free-dispatch-late", "free-dispatch-fresh", "free-dispatch-stale", "free-dispatch-delivered",
+    "free-dispatch-cas"],
+    // 真起过审查回合的就这几条(投递成功那一刻),只等它们。
+    ["free-dispatch-retry", "free-dispatch-recover", "free-dispatch-ghost", "free-dispatch-reconcile",
+      "free-dispatch-receipt", "free-dispatch-concurrent", "free-dispatch-fresh"]);
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

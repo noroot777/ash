@@ -4,6 +4,7 @@ import { freeReviewRuns, regressionEvidence, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { cleanupAcceptedMergeRun, stopReviewRunMonitors } from "./free-review-round.js";
 import { armFollowUpFreeReview } from "./free-review-reservations.js";
+import { reviewLifecycle } from "./review-lifecycle-lock.js";
 import { freeRepairPrompt } from "./free-review-prompts.js";
 import { appendFinalizationTimeline, enqueueFinalizationRepair, finalizationStep } from "./regression-finalization.js";
 import { reviewIdentityMatches, settlementAuthority } from "./review-ownership.js";
@@ -14,8 +15,15 @@ export async function finalizeFreeReview(state: typeof regressionEvidence.$infer
     at: string;
   };
   const step = (name: string, action: () => Promise<unknown>) => finalizationStep(state.directory, state.generation, name, action);
-  await step("monitors", () => stopReviewRunMonitors(run.id, "这次审查已结束，它挂的哨兵一并收回", true));
-  await step("cleanup", () => cleanupAcceptedMergeRun(run, true));
+  // **资源处置那两步跟「下一次重跑换代次」互斥**(第 4 轮审查 F2 的同类位置)。收尾是异步排空的
+  // (`drainRegressionFinalization` / 启动期对账),这两刀又都是 **run 级**的 —— 哪一轮、哪一次全
+  // 不认。`finalizationStep` 里那道「代次还是不是我」是读完再动手,读到下刀之间隔着仓库锁和
+  // `git worktree remove`,用户的重跑完全可以插在中间:于是上一次的收尾把新一代刚挂上的哨兵停掉、
+  // 把它等的结果作废、把它正在读的工作区删掉。排进链里之后,那道代次判据到动手那一刻仍然成立。
+  await reviewLifecycle(run.id, async () => {
+    await step("monitors", () => stopReviewRunMonitors(run.id, "这次审查已结束，它挂的哨兵一并收回", true));
+    await step("cleanup", () => cleanupAcceptedMergeRun(run, true));
+  });
   const task = (await db.select().from(tasks).where(eq(tasks.id, run.taskId)))[0];
   const authority = settlementAuthority(state);
   const repairCurrent = task && !task.archived && !["accepted", "merged"].includes(task.stage ?? "")

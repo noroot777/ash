@@ -55,9 +55,8 @@ import { NO_REMINDER, type TurnReminder } from "./turn-prompt.js";
 import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
-import { completeRegressionSettlement, regressionSettlementConclusion } from "./regression-settlement.js";
+import { completeRegressionSettlement, regressionSettlementConclusion, type SettlementFence } from "./regression-settlement.js";
 import { retireHistoricalReview } from "./review-retirement.js";
-import { directionEpochUnchangedSince } from "./task-direction-epoch.js";
 import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
@@ -395,10 +394,15 @@ export async function handleFreeWorkflowSettlement(
    * 孤儿收尾不一样:它是从外面判断「已经没有任何东西能把这一轮跑完」,而这个判断从读到写之间
    * 隔着好几次 await —— 另一份恢复完全可以在这中间把任务书送进会话、把审查者拉起来
    * (第 3 轮审查 F1)。多读一遍只是把窗口变窄,所以把判断那一刻的 `tasks.direction_epoch`
-   * 带进来,**在落笔那个事务里当条件核**:每个回合起跑(含审查旁路回合)都在自己那笔事务里把
-   * 这一格 +1,所以「这中间起过回合」与「这一笔写得成」互斥。来源见 `reviewOrphanStillUnowned`。
+   * 带进来当落笔条件。
+   *
+   * **条件交给结算层,不在这里手写**:结算是两段式的,上半场
+   * (`regressionSettlementConclusion`)就已经把 settlement/continuation 写进证据行 —— 只守下半场
+   * 那一笔,迟到者照样能在上半场把一条正在输出的审查的结算状态写成失败,而后续上报和正常退出
+   * 都沿用它(第 4 轮审查 F1)。声明一次、每一次持久写之前各核一遍,判据见 `SettlementFence`。
+   * 来源见 `reviewOrphanStillUnowned`。
    */
-  orphanFence?: { directionEpoch: number },
+  orphanFence?: SettlementFence,
 ): Promise<boolean> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
@@ -512,6 +516,8 @@ export async function handleFreeWorkflowSettlement(
   }
   const directory = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   const checked = await regressionSettlementConclusion(taskId, directory, {
+    // 孤儿收尾那一路的落笔条件:上下两个事务由结算层各核一次(见那边的 `SettlementFence`)。
+    ...(orphanFence ? { fence: orphanFence } : {}),
     outcome: turnOk === null ? undefined : turnOk ? "done" : "failed", round: run.currentRound,
     freeRoundId: round.id, acceptedMerge: run.targetKind === "accepted_merge",
     // 这一分支的审查是同一个任务上的旁路回合,「活回合」那一问上面刚判过(reviewer 自己那轮
@@ -530,13 +536,6 @@ export async function handleFreeWorkflowSettlement(
     const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];
     const currentRound = (await transaction.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, round.id)))[0];
     if (currentRun?.status !== "reviewing" || currentRun.currentRound !== run.currentRound || currentRound?.status !== "reviewing") return false;
-    // 孤儿收尾那一路还要过这道闸:判断之后又起过回合 = 这一笔是迟到者,一个字都不许写
-    // (那条正在输出的审查就是被它判死的)。条件在事务里核,所以不存在「核完又变」。
-    if (orphanFence && !(await transaction.select({ id: tasks.id }).from(tasks)
-      .where(and(eq(tasks.id, taskId), directionEpochUnchangedSince(orphanFence.directionEpoch)))).length) {
-      console.error(`[ash] 孤儿审查收尾撤回 ${run.id}：判断之后这条任务又起过回合`);
-      return false;
-    }
     await transaction.update(freeReviewRounds).set({ conclusion: checked.conclusion,
       status: outcome === "failed" ? "error" : outcome === "passed" ? "passed" : "failed", endedAt: at,
     }).where(eq(freeReviewRounds.id, round.id));

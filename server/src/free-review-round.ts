@@ -23,6 +23,8 @@ import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { headCommit } from "./git.js";
 import { cleanupPostMergeReviewWorktree, preparePostMergeReviewWorktree } from "./post-merge-review-worktree.js";
+import type { SettlementFence } from "./regression-settlement.js";
+import { reviewLifecycle } from "./review-lifecycle-lock.js";
 import { claimOwnTurn, releaseTurn, turnIdentity } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -115,8 +117,20 @@ export async function stopReviewRunMonitors(runId: string, reason: string, stric
  * 同一轮会被用户重跑,而重跑把 round 放回的恰好也是 reviewing —— 上一次的迟到失败于是能把刚
  * 重跑起来的那一次打成 error(第 3 轮审查 F2)。没传(nextRound / 重跑入口自己的 catch)照旧只看
  * 形状:那两处就在自己这一代次里同步收尾,不存在隔代误伤。
+ *
+ * **整段排进这条 run 的生命周期链**(`reviewLifecycle`):那道代次闸原先只管得住落账那一笔,
+ * 它提交之后的哨兵/时间线/工作区清理全是 run 级的、一个代次都不认,而那段 await 里用户完全
+ * 可以重跑这一轮 —— 旧收尾于是把新一代刚挂上的哨兵停掉、把它等的结果作废(第 4 轮审查 F2
+ * 实测)。排进链里之后两种时序都收口:要么这一段整个做完才轮到重跑换代次,要么重跑先换完、
+ * 这一段进来时被代次闸整段挡住(连资源都不碰)。判据与锁序规矩见那个文件。
  */
 export async function failReviewStart(
+  run: ReviewRunRow, message: string, owner?: { generation: string },
+): Promise<void> {
+  await reviewLifecycle(run.id, () => failReviewStartHeld(run, message, owner));
+}
+
+async function failReviewStartHeld(
   run: ReviewRunRow, message: string, owner?: { generation: string },
 ): Promise<void> {
   const at = now();
@@ -473,7 +487,7 @@ export function reviewerTurnHeld(task: TaskRow, runId: string): boolean {
  *
  * 返回 null = 别收;返回凭据 = 可以往下走,但**必须把它带到落笔那一刻**。
  */
-export async function reviewOrphanStillUnowned(run: ReviewRunRow): Promise<{ directionEpoch: number } | null> {
+export async function reviewOrphanStillUnowned(run: ReviewRunRow): Promise<SettlementFence | null> {
   const fresh = (await db.select().from(tasks).where(eq(tasks.id, run.taskId))).at(0);
   if (!fresh) return null;
   if (reviewerTurnHeld(fresh, run.id)) return null;
@@ -484,7 +498,7 @@ export async function reviewOrphanStillUnowned(run: ReviewRunRow): Promise<{ dir
   const current = (await db.select({ status: freeReviewRuns.status, currentRound: freeReviewRuns.currentRound })
     .from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id))).at(0);
   if (current?.status !== "reviewing" || current.currentRound !== run.currentRound) return null;
-  return { directionEpoch: fresh.directionEpoch };
+  return { taskId: fresh.id, directionEpoch: fresh.directionEpoch };
 }
 
 export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
@@ -574,13 +588,18 @@ export async function reopenFailedFreeReview(
       const at = now();
       const directory = freeReviewEvidenceDir(taskId, run!.id, run!.currentRound);
       await evidenceState(taskId, directory);
-      await db.transaction(async (transaction) => {
+      // **换代次这一笔要跟上一次的收尾互斥**(`reviewLifecycle`,第 4 轮审查 F2):上一次失败已经
+      // 提交(所以重试闸放行了),它的哨兵/待发结果/工作区清理可能还在做,而那几刀全是 run 级的。
+      // 不排队的话,换完代次拉起来的新一代资源会被旧收尾顺手收掉。只把这一笔放进链里 ——
+      // 下面的 `launchReviewRound` 以及它 catch 里的 `failReviewStart` 都要取同一把锁,
+      // 一起放进来就是自锁(判据见那个文件的「不许重入」)。
+      await reviewLifecycle(run!.id, () => db.transaction(async (transaction) => {
         await restartRegressionEvidence(taskId, directory, transaction);
         await transaction.update(freeReviewRounds).set({ status: "reviewing", conclusion: null, endedAt: null })
           .where(eq(freeReviewRounds.id, round!.id));
         await transaction.update(freeReviewRuns).set({ status: "reviewing", updatedAt: at, finishedAt: null })
           .where(eq(freeReviewRuns.id, run!.id));
-      }, { behavior: "immediate" });
+      }, { behavior: "immediate" }));
       const revived = { ...run!, status: "reviewing", updatedAt: at, finishedAt: null };
       try {
         const { resumed, dispatched } = await launchReviewRound(task, revived,

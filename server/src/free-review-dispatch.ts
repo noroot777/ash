@@ -58,6 +58,16 @@
 //   ⑪ **「没派出去」不许冒充「安排好了」** —— 让出要有返回值(`ReviewDispatchOutcome`);用户亲手
 //      点出来的那一次还要留一句时间线,否则他只能得出「按钮坏了」(见 `reopenFailedFreeReview`)。
 //
+// 第 4 轮审查指出 ⑨ 那一位只落在「比两份代次」上,而代次这件事本身还缺一个权威:
+//
+//   ⑫ **派发权与资源处置权只属于「证据行此刻那一代次」** —— 「不同代次」不等于「更新的代次」。
+//      两头都要钉:写意图那一笔在同一条 WHERE 里要求证据行当下就是我这一代(见 `takeIntent`),
+//      否则旧的那一次 launch 从长 await 里回来能反向覆盖新一代的意图;而终态之后的**资源处置**
+//      (哨兵、待发结果、合并结果审查工作区)全是 run 级的、一个代次都不认,靠的是把「代次闸 +
+//      处置」整段与「重跑换代次」互斥(`review-lifecycle-lock.ts`)—— 只在动手前多读一次代次
+//      仍然是检查与动作分离,读完到下刀之间隔着仓库锁和 git 命令(第 4 轮审查 F2 实测:旧收尾
+//      把新一代刚挂上的哨兵停掉,新一代审查者还在跑,它等的结果再也不会来)。
+//
 // ## 为什么界是「次数」而不是「时长」
 //
 // 这一侧等的是**另一个回合跑完**,而回合的时长没有上界(一轮审查几十分钟,duet 的人工裁决门
@@ -73,7 +83,8 @@
 // 否则重排等的那次释放永远不来。
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { freeReviewRounds, type FreeReviewDispatchIntent } from "./db/schema.js";
+import { freeReviewRounds, regressionEvidence, type FreeReviewDispatchIntent } from "./db/schema.js";
+import { freeReviewEvidenceDir } from "./free-review-files.js";
 import { continueWhenIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -182,6 +193,12 @@ export function releaseReviewDispatchClaim(runId: string, round: number, token: 
  * 这一版。少了代次这一位,上一次重跑遗留的意图会把新一次的第一次写挡成「别人办过了」,或者
  * 反过来被新一次悄悄覆盖(第 3 轮审查 F2)。老意图(加这一位之前写下的)没有代次,按版本放行。
  *
+ * **「不同代次」不等于「更新的代次」**(第 4 轮审查 F2):光比意图上那一位,方向是反的也照样放行
+ * —— 旧的那一次 launch 在读完证据行之后卡住(MCP 预检、任务书重算都是长 await),这一轮期间失败
+ * 并被重跑,它从 await 里回来仍然以为自己是当事人,于是把新一代写下的意图覆盖掉。所以条件里还
+ * 要钉住**权威**那一份:证据行此刻的代次就得是我这一代。它跟上面两问同在一条 UPDATE 的
+ * WHERE 里,所以不存在「核完又变」—— 派发权只属于**证据行此刻那一代次**。
+ *
  * 三种回答要分开,**别把库写不下来算成「别人办了」**:
  *  · `taken`      —— 这一版归我了;
  *  · `lost`       —— 库里已经不是那一版(别人办过了 / 轮次落了终态):让出,不投递也不落终态;
@@ -194,6 +211,8 @@ type IntentTake = "taken" | "lost" | "unwritable";
 
 async function takeIntent(
   runId: string, round: number, generation: string, from: number | null, intent: FreeReviewDispatchIntent,
+  /** 这一轮的证据目录:代次的**权威**那一份在它那行上(见上面「不同代次 ≠ 更新代次」)。 */
+  directory: string,
 ): Promise<IntentTake> {
   // `json_extract` 在「没有意图」和「老意图没这一位」两种现场都给 NULL,所以这里一律用
   // SQLite 的 `IS` / `IS NOT`(对 NULL 也成立),别换成 `=`:那样两种现场会静静地都不匹配。
@@ -205,6 +224,9 @@ async function takeIntent(
         eq(freeReviewRounds.round, round),
         // 落了终态的轮次不接受在途意图:写进去等于让对账去补投一条已经宣告结束的审查。
         eq(freeReviewRounds.status, "reviewing"),
+        // 权威代次:证据行此刻就得是我这一代,否则我是上一次重跑的迟到者。
+        sql`exists (select 1 from ${regressionEvidence} where ${regressionEvidence.directory} = ${directory}
+          and ${regressionEvidence.generation} = ${generation})`,
         from === null
           ? sql`${mine} is not ${generation}`
           : and(
@@ -359,8 +381,10 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
     const taken = await takeIntent(run.id, run.currentRound, generation, expected, {
       attempts: next, since, resumeSessionId: dispatch.resumeSessionId ?? null, retry: dispatch.retry,
       freshSession: dispatch.freshSession, generation,
-    });
-    if (taken === "lost") return handOff("在途意图已经不是我们手里那一份（这一轮已经被办过了）");
+    }, freeReviewEvidenceDir(taskId, run.id, run.currentRound));
+    if (taken === "lost") {
+      return handOff("在途意图已经不是我们手里那一份（这一轮已经被办过了，或者这一轮已经被重跑成另一次）");
+    }
     attempts = next;
     if (taken === "taken") expected = next;
     // **落不下来就说一句**:同进程的等待者仍然是活的,所以照旧排(这一支的行为与改之前一致);

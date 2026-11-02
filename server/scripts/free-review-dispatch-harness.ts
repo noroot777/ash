@@ -34,8 +34,11 @@ export async function startHarness() {
   const { createTasks } = await import("../src/task-store.js");
   const { handleFreeWorkflowSettlement, reconcileFreeReviews, reserveFreeReview } =
     await import("../src/free-workflow.js");
-  const { claimReviewDispatch, MAX_REVIEW_DISPATCH_ATTEMPTS, reviewDispatchArmed } =
+  const { claimReviewDispatch, dispatchReviewRound, MAX_REVIEW_DISPATCH_ATTEMPTS, reviewDispatchArmed } =
     await import("../src/free-review-dispatch.js");
+  const { reviewLifecycle } = await import("../src/review-lifecycle-lock.js");
+  const { completeRegressionSettlement, regressionSettlementConclusion } =
+    await import("../src/regression-settlement.js");
   const { clearReviewDispatchIntent, releaseReviewDispatchClaim } =
     await import("../src/free-review-dispatch.js");
   const { failReviewStart, launchReviewRound, redeliverReviewRound, reopenFailedFreeReview,
@@ -145,6 +148,17 @@ export async function startHarness() {
     return state;
   };
 
+  /**
+   * 占住一条 run 的生命周期链,直到 `open()`。`job` 在放手那一刻才跑(用来代表「重跑换代次」)。
+   *
+   * 排在它后面的那一段(旧收尾)因此必须等 —— 这正是用例⑲要钉的东西。
+   */
+  const holdLifecycle = (runId: string, job: () => Promise<unknown> = async () => {}) => {
+    let open = () => {};
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    return { open, done: reviewLifecycle(runId, () => gate.then(job)) };
+  };
+
   const restarted = async (id: string, attempts: number, patch: Record<string, unknown> = {}) => {
     await freeTask(id);
     const runId = `${id}-run`;
@@ -167,16 +181,44 @@ export async function startHarness() {
     return runId;
   };
 
+  /**
+   * **拆台前的清场**(每份用例文件结束时调一次,传它用过的全部 task id)。
+   *
+   * 两件事都不是摆设:
+   *  · **等回合退干净** —— 几条用例会真起一个回合(投递成功那一刻),它的收尾还要再写几次库。
+   *    不等的话临时库在它们写到一半时就关了,日志里会多出几条「database is not open」:那是
+   *    拆台的噪声,不是产品问题,但它会把真问题埋掉。
+   *  · **扫认领表** —— 一张没有活负责人的认领证就等于「这一轮永远在途」:对账见它就跳过,库里
+   *    那份没消费的意图再也没人补办(free-review-dispatch.ts 文件头 ⑩)。归还的出路有七八条
+   *    (投递成功、放弃、让出、准备阶段抛、回调里抛…),逐条写断言钉不住「以后新加的那一条」,
+   *    这一扫才是:任何一条漏了归还,它就红。
+   */
+  const finish = async (ids: string[], launched: string[] = ids): Promise<void> => {
+    // 等的只能是**真起过审查回合**的那几条(`launched`)。别拿全部 id 去等:`armedTask` / `camper`
+    // 刻意把单飞锁占在手上没还(那是它们复刻的现场),那几条永远等不到空。
+    await until("在跑的回合都退干净", () => launched.every((taskId) => !turnIdentity(taskId)));
+    for (const taskId of ids) {
+      for (const run of await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
+        .where(eq(freeReviewRuns.taskId, taskId))) {
+        assert.equal(reviewDispatchArmed(run.id, 1), false, `${taskId} 收摊后还挂着认领证`);
+      }
+    }
+    if (process.env.ASH_DUMP_TIMELINE) {
+      for (const taskId of ids) console.log(`\n──── ${taskId} ────\n${timeline(taskId)}`);
+    }
+  };
+
   return {
     db, freeReviewRounds, freeReviewRuns, groups, regressionEvidence, sessions, tasks,
     handleFreeWorkflowSettlement, reconcileFreeReviews, reserveFreeReview,
-    claimReviewDispatch, clearReviewDispatchIntent, MAX_REVIEW_DISPATCH_ATTEMPTS,
-    releaseReviewDispatchClaim, reviewDispatchArmed,
+    claimReviewDispatch, clearReviewDispatchIntent, dispatchReviewRound, MAX_REVIEW_DISPATCH_ATTEMPTS,
+    releaseReviewDispatchClaim, reviewDispatchArmed, reviewLifecycle,
+    completeRegressionSettlement, regressionSettlementConclusion,
     failReviewStart, launchReviewRound, redeliverReviewRound, reopenFailedFreeReview,
     reviewOrphanStillUnowned,
     claimOwnTurn, claimTurn, continueWhenIdle, forceReleaseTurn, releaseTurn, turnIdentity, whenTurnIdle,
     evidenceState, freeReviewEvidenceDir,
     at, timeline, until, runOf, runRow, roundOf, reviewerSessions,
-    freeTask, armedTask, camper, restarted,
+    freeTask, armedTask, camper, holdLifecycle, restarted, finish,
   };
 }
