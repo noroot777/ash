@@ -555,6 +555,21 @@
   font-size: 10px;
 }
 
+.settings-archive-id {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  user-select: text;
+}
+
+.settings-archive-id:hover {
+  color: var(--ink);
+}
+
 .settings-archive-card article .ui-button {
   margin-left: auto;
 }
