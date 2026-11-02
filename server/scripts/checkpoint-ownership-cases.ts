@@ -5,7 +5,7 @@ import {
   api, db, dbClient, hits, rowOf, scenario, scheduledMessages, schema, settled, taskOf, until,
 } from "./checkpoint-recovery-fixture.js";
 import type { InStatement, ResultSet, Transaction, TransactionMode } from "../src/db/node-sqlite-client.js";
-import { deliveryCrossing, noteDeliveryCrossing } from "../src/delivery-crossing.js";
+import { deliveryCrossing, noteDeliveryAccepted, noteDeliveryCrossing } from "../src/delivery-crossing.js";
 import {
   claimCheckpointForRun, holdCheckpointOwnership, settleStrandedCheckpointRun,
 } from "../src/task-checkpoint-delivery.js";
@@ -51,12 +51,21 @@ function probeAtReceiptInsert(taskId: string, probe: () => Promise<void>) {
   return { fired: () => fired, restore: () => { dbClient.transaction = open; } };
 }
 
-/** 定点让**判定自己读不出来**:三态判定问「记号上那一轮开起来过没有」的第一笔读(回合表)。 */
+/**
+ * 定点让**收尾那一问读不出来**:「这张票还在我名下吗」那一笔(`checkpointOwnershipState`,
+ * 只选 `delivering_owner` 那一列,所以这条正则碰不到夹具自己的 `select *`)。
+ *
+ * 原先打的是三态判定的第一笔读(回合表):那一版的送达判据是「记号上那一轮开起来过没有」。
+ * 第 2 轮自由审查 F1 把会话行/回合行整个从判据里拿掉了(它们是 ash 自己的记账,证明不了那串
+ * 字进了 agent 手里),于是判定压根不再读库 —— 旧定点从此一次都打不中,这条用例会变成假绿。
+ * 要钉的不变量没变:**这一问读不出来时不许把任务钉死**(所有权交回 + 退避重排),所以定点挪到
+ * 现存的那一笔读上,两条路在 `settleStrandedCheckpointRun` 里本来就归同一个出口。
+ */
 function failVerdictRead(times = 1) {
   const execute = dbClient.execute;
   let failures = 0;
   dbClient.execute = async function (statement, ...rest) {
-    if (failures < times && /from "session_turns"/i.test(sqlOf(statement))) {
+    if (failures < times && /^select "delivering_owner"/i.test(sqlOf(statement))) {
       failures++;
       throw new Error("INJECT_CHECKPOINT_VERDICT_READ_FAILURE");
     }
@@ -135,18 +144,17 @@ export async function checkpointOwnershipCases(): Promise<void> {
     const test = await scenario(0);
     const generation = (await taskOf(test.taskId)).resumePromptGeneration;
     const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
-    // 记号在、记号上那一轮也确实开起来过 ⇒ 判定一旦读得动,结论是「已送达,补记这一笔」。
+    // 越线记号 + **协议层的送达确认** ⇒ 判定一旦读得动,结论是「已送达,补记这一笔」。
+    // 会话行刻意不插:它已经不在判据里了(第 2 轮自由审查 F1),插它只会让这条用例看起来
+    // 像是靠它才绿的。
     const turn = { sessionId: `sess-${receipt.id}`, turnStart: now() };
     noteDeliveryCrossing(test.taskId, [receipt.id], turn);
-    await db.insert(schema.sessions).values({
-      id: turn.sessionId, taskId: test.taskId, role: "single", agentType: "claude",
-      executor: "claude", cwd: ".", startedAt: now(), turnStartedAt: turn.turnStart,
-    });
+    noteDeliveryAccepted(test.taskId, [receipt.id]);
     const fault = failVerdictRead();
     try {
       // 不许抛:抛出去就等于没人兜底(它是 task-resume.ts 的 finally 与对账的共同出路)。
       await settleStrandedCheckpointRun(receipt, "测试：判定阶段读失败");
-      assert.equal(fault.count(), 1, "判定确实在读回合表那一步失败了");
+      assert.equal(fault.count(), 1, "定点确实打在收尾那一问上");
       const kept = await rowOf(receipt.id);
       assert.ok(kept.deliveringSince, "一个字都不消费:租约原样留着(它是「这张凭证还没了结」的凭据)");
       assert.equal(kept.checkpointTaken, test.checkpoint);
@@ -243,6 +251,7 @@ export async function checkpointOwnershipCases(): Promise<void> {
     const generation = (await taskOf(test.taskId)).resumePromptGeneration;
     const receipt = (await claimCheckpointForRun(test.taskId, test.checkpoint, generation))!;
     noteDeliveryCrossing(test.taskId, [receipt.id], { sessionId: `sess-${receipt.id}`, turnStart: now() });
+    noteDeliveryAccepted(test.taskId, [receipt.id]); // 读得动之后的结论:已送达(判据见上面那条用例)
     const said: string[] = [];
     const warn = console.warn;
     console.warn = (...args: unknown[]) => { said.push(args.map(String).join(" ")); warn(...args); };

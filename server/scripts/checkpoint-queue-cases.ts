@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { tsxLoaderPath } from "./tsx-loader.js";
 import { eq } from "drizzle-orm";
 import {
   api, db, hits, now, pending, rowOf, runs, scenario, schema, settled, taskOf, tasks, until,
@@ -14,7 +15,7 @@ import { id } from "../src/util.js";
 
 function owner(phase: string, options: object): void {
   const child = spawnSync(process.execPath, [
-    "--import", fileURLToPath(new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url)),
+    "--import", tsxLoaderPath(), // 写死 ../../node_modules 的那一版在 worktree 里必炸,见 ./tsx-loader.ts
     fileURLToPath(new URL("./checkpoint-queue-owner.ts", import.meta.url)), phase, JSON.stringify(options),
   ], { env: process.env, encoding: "utf8", timeout: 35_000 });
   process.stdout.write(child.stdout ?? "");

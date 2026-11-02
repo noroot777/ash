@@ -14,7 +14,10 @@ import { join } from "node:path";
 const MODE_FILE = "mode";
 
 /** 下一次起跑的假 codex 按哪种行为走。 */
-export function codexMode(binDir: string, mode: "accept" | "refuse" | "stall" | "started-then-drop"): void {
+export function codexMode(
+  binDir: string,
+  mode: "accept" | "refuse" | "stall" | "started-then-drop" | "resume-silent",
+): void {
   writeFileSync(join(binDir, MODE_FILE), mode);
 }
 
@@ -49,10 +52,16 @@ try { mode = readFileSync(${JSON.stringify(modePath)}, "utf8").trim(); } catch {
 // refuse:一个应答都不给,当场退出。连接一关,ash 侧那条 \`initialize\` 以
 // 「Codex App Server 连接已关闭」被拒 —— 回合输入一个字都没出去。
 if (mode === "refuse") process.exit(0);
+// resume-silent:initialize 照答,**thread/resume 永远不答**,过两秒半自己断线。
+// 于是回合输入一个字都没写出去(ledger 的 wrote 从未置位),而有界等待先到期 —— 初次回执
+// 是 unknown、最终回执是 refused。这就是「迟到的拒收」那条路的可控现场(第 2 轮审查 F3):
+// 它必须把租约还回去,不然那条消息永久在途。(注:这段注释活在模板字符串里,不许用反引号。)
+if (mode === "resume-silent") setTimeout(() => process.exit(0), 2500);
 const THREAD = "th-accept";
 const TURN = "t-accept";
 function receive(message) {
   if (message.id === undefined) return; // 通知(initialized 之类)不用答
+  if (mode === "resume-silent" && message.method !== "initialize") return;
   if (message.method === "thread/start" || message.method === "thread/resume") {
     send({ id: message.id, result: { thread: { id: THREAD }, model: "fake-codex" } });
     send({ method: "thread/started", params: { thread: { id: THREAD } } });
