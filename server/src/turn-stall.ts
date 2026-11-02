@@ -396,11 +396,14 @@ export function watchTurnSilence(
   if (held && held.trippedAtMs !== null) return;
   // 这一轮已经有过进展(消费链晚挂、而事件先到) → 静默档压根没有适用对象。
   if (lastProgress.get(owner)?.turn === turnStartedAt) return;
-  // **进程外那份事实同理,而且它才是接管那条路上唯一看得见前半段的东西。** 读不出来也不开:
-  // 宁可漏判(退回修复前的行为),不可拿一个核实不了的前提去杀一个可能完全健康的回合。
+  // **进程外那份事实同理,而且它才是接管那条路上唯一看得见前半段的东西。** 这个状态机不替
+  // 「说不上来」做决定:`unreadable` 在这儿一律不开 —— 拿一个核实不了的前提去杀一个可能完全
+  // 健康的回合比漏判更坏。未知那一档有自己的出路,而且在**调用方**手上:它知道自己是不是从头
+  // 看着这一轮的,也只有它能一边重读证明一边按「我盯得住的那段窗口」起算(见 single-run.ts
+  // 那段 `unreadable` 的注释,以及 ../turn-progress-mark.ts 的 `recoverTurnProgress`)。
   if (hadProgress !== "none") {
     if (hadProgress === "unreadable") {
-      console.warn(`[ash] 会话 ${sessionId} 本轮有无进展核实不了,这一轮不启用静默档`);
+      console.warn(`[ash] 会话 ${sessionId} 本轮有无进展核实不了,这一档不替它下结论(出路在调用方)`);
     }
     return;
   }
@@ -636,6 +639,28 @@ export function resumeTrippedTurn(
  *
  * 身份不符就是空转(被接管的旧台收尾时会走到这里,那一刻状态已经归新台了)。
  */
+/**
+ * **撤掉一条「只为核实不了而开」的静默观察** —— 那张进展证明后来读出来了「有过产出」。
+ *
+ * 和 `clearTurnStall` 的区别就是它那几道闸:只撤**这一轮、这个持有者、静默档、而且还没熔断**
+ * 的那一条。错误档不撤(它有自己的判据)、已经熔断的不撤(终止义务只有两个出口,摘牌不是其中
+ * 之一,见 `trackTurnStall` 里那段)。撤掉的同时把已经投影出去的红环一起收(`close` 负责)。
+ *
+ * 返回真 = 真撤掉了一条。
+ */
+export function withdrawTurnSilence(
+  sessionId: string,
+  owner: StallOwner,
+  turnStartedAt: string,
+): boolean {
+  const held = stalls.get(sessionId);
+  if (!held || held.owner !== owner) return false;
+  if (held.kind !== "silence" || held.turnStartedAt !== turnStartedAt) return false;
+  if (held.trippedAtMs !== null) return false;
+  close(sessionId, held);
+  return true;
+}
+
 export function clearTurnStall(sessionId: string, owner: StallOwner): void {
   const held = stalls.get(sessionId);
   if (!held || held.owner !== owner) return;

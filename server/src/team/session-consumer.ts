@@ -22,7 +22,7 @@ import type { SessionTraceEvent } from "../transcript.js";
 import { isExecutionNotice, isSessionScopeNotice } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
 import { clearTurnStall, trackTurnStall, watchTurnSilence } from "../turn-stall.js";
-import { turnProgress } from "../turn-progress-mark.js";
+import { turnProgressFor } from "../turn-progress-mark.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
@@ -147,7 +147,13 @@ async function consume(lead: Lead): Promise<void> {
     if (!lead.turnStart || lead.retired) return;
     watchTurnSilence(
       lead.sessId, lead, lead.turnStart, stallActions,
-      turnProgress(lead.taskId, lead.sessId, lead.turnStart),
+      turnProgressFor({
+        taskId: lead.taskId, sessionId: lead.sessId, turnStartedAt: lead.turnStart,
+        // 常驻台的回合**一律本进程从头开**(团队不走进程接管:重启后是 openLead 重新 spawn
+        // 并 resume,见 restartImpact 把 team 归进 `resumes`),所以事实在手上 —— 证明写不成
+        // 也不该把静默档关掉。判据见 ../turn-progress-mark.ts 的 `turnProgressFor`。
+        watchedFromStart: true,
+      }),
       lead.frontSince ?? lead.turnStart,
     );
   };

@@ -36,25 +36,43 @@
 // 人没资格声明「它没产出」,读侧于此退回 `unreadable`,也就退回修复前的行为(该抓的抓不到),
 // 而不是误杀。
 //
-// ── 否证不许只靠一次「删得掉」(第 3 轮自由审查 F5)──────────────────────────
+// ── 否证不许只靠一次「删得掉」,也不许拿字节冒充进展 ────────────────────────
 //
 // 上面那条撤销自己也会失败,而且失败得**成对**:`progressed` 目录变只读、文件系统切只读、
-// 配额满 —— 同一个原因让「写进展」和「撤证明」一起失败。于是 `.watch` 留在那里继续发出
-// 「会记的人在盯,它没记过」这句话,而那一轮其实正在产出,输出甚至已经被消费并提交了水位;
-// 恢复写权限再重启,新 owner 读到 `none`、按旧回合起点计时,长工具照样被杀。
+// 配额满 —— 同一个原因让「写进展」和「撤证明」一起失败。于是 `.watch` 留在那里继续声明
+// 「会记的人在盯,它没记过」,而那一轮其实正在产出(第 1 轮自由审查 F5)。
 //
-// 所以「确证没产出」现在要**两个**事实同时成立:参与证明在,**而且持久消费水位没有前进过**。
-// 水位就是 agent-out 的已提交字节(`sessions.agent_offset`,`executors/detached.ts` 每秒回盘),
-// 它是**单调前进**的,而且**不需要任何人删得掉东西** —— 这正是撤销所缺的那一半:进展落不了盘
-// 时,水位仍然替它说话。`.watch` 里记下开轮那一刻的水位,读的时候跟当下那一份比:
-//   · 水位比开轮时高 → 这一轮确实产出过(被消费过),无论进展记号写成了没有 → `seen`;
-//   · 一字未动       → 这才是 `none`。
-// 还剩一个窗口:输出被消费、而那 1 秒的回盘没来得及发生就被杀。那一档退回旧判据(可能误杀),
-// 但它要求「进展写失败 + 撤销失败 + 回盘窗口」三件同时撞上,而不再是「撤销失败」一件。
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
-import { existsSync } from "node:fs";
+// 上一版拿**已消费的 stdout 字节**当保险:水位比开轮时高就算产出过。那是错的,而且错在要命的
+// 方向上 —— 那个水位是**原始 stdout 的换行位置**(executors/detached-child.ts),握手应答、
+// 线程通知、错误行全算字节。审查实测:一个只做完握手、一个字正文都没有的回合,水位从 0 走到
+// 249,于是读出 `seen`、静默档被永久排除 —— **正是这条任务要抓的那个 1.5 小时零输出现场**,
+// 被我自己的「保险」挡在门外了(第 2 轮自由审查 F2,证据 protocol-smoke.log)。
+//
+// 所以进展的判据只有一个,而且在**事件语义层**:`trackTurnStall` 认的那几种事件(正文、思考、
+// 工具调用)—— 也就是 `noteTurnProgress` 这张记号本身。字节一个字都不参与。
+//
+// 可靠性改从另一头解决:**让持久消费水位跟着进展事实一起走**。记号写不进去时,消费链就
+// **不推进 `agentOffset`**(见 single-run.ts 那段注释)—— 那段还没被「确认记下」的输出于此留在
+// 水位之外,接管回来的新进程会把它重放一遍,同一份语义判据在新进程里当场认出进展。于是
+// 「进展写失败 + 撤销失败」不再等于「下一个进程确证它没产出」,而且不需要任何人删得掉东西。
+//
+// 证明本身也要**完整才算证明**(同一轮 F2 的另一半):`openSync("w")` 先截断再写,写一半就断电
+// 会留下半张 `.watch`;上一代代码写的 `.watch` 压根没有版本行,升级也不迁移。两种都不是
+// 「完整、可靠地记下了零进展」,所以读侧一律按 `unreadable` 处理 —— 缺失或损坏的证明只能证明
+// 「我不知道」。
+import {
+  closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { RUNS_DIR } from "./paths.js";
+import { verifyUntilKnown, type VerifyPace } from "./verify-until-known.js";
+
+/**
+ * 参与证明的**完整性标记**。第一行认版本与回合身份,末行认「写完了」:
+ * 半张证明(截断后写失败)、以及上一代没有版本行的证明,都读不出它 → `unreadable`。
+ */
+const WATCH_HEAD = "ash-turn-progress-watch/v2";
+const WATCH_TAIL = "complete";
 
 /** 读出来的三档。`none` 是**确证**没有过进展(目录在、这一轮的记号不在)。 */
 export type TurnProgressRead = "seen" | "none" | "unreadable";
@@ -87,24 +105,16 @@ function fsyncDir(path: string): void {
  * 必须先于第一条事件。失败只告警:没有这张证明,读侧此后一律 `unreadable`、静默档这一轮不开
  * —— 退回修复前的行为(该抓的抓不到),不会误杀。
  *
- * `watermark` = **开轮这一刻的持久消费水位**(agent-out 的已提交字节)。记在证明里,读侧据此
- * 识破「进展写失败、证明又撤不掉」那一档(见文件头最后一节)。给不出来就不记,读侧退回只看
- * 记号的旧判据 —— 少一道保险,不会多一道误杀。
  */
-export function openTurnProgress(
-  taskId: string,
-  sessionId: string,
-  turnStartedAt: string | null,
-  watermark?: number,
-): void {
+export function openTurnProgress(taskId: string, sessionId: string, turnStartedAt: string | null): void {
   if (!turnStartedAt) return; // 没有回合身份就没有可证明的对象(同 watchTurnSilence 的头一道闸)
   try {
     mkdirSync(progressDir(taskId), { recursive: true });
     const path = join(progressDir(taskId), watchName(sessionId, turnStartedAt));
     const fd = openSync(path, "w");
     try {
-      const mark = Number.isFinite(watermark) ? `${Math.trunc(watermark as number)}` : "";
-      writeSync(fd, `${turnStartedAt}\n${mark}\n`);
+      // 末行是「写完了」的印:截断之后写失败留下的半张证明读不出它(见 WATCH_TAIL)。
+      writeSync(fd, `${WATCH_HEAD} ${turnStartedAt}\n${WATCH_TAIL}\n`);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -115,15 +125,18 @@ export function openTurnProgress(
   }
 }
 
-/** 参与证明里记着的开轮水位(第二行)。没有/读不出 = `null`,读侧退回只看记号的旧判据。 */
-function watchedWatermark(dir: string, sessionId: string, turnStartedAt: string): number | null {
+/**
+ * 这张参与证明**完整吗**(判据见文件头最后一节)。不完整 = 不是证明,读侧按「核实不了」处理。
+ *
+ * 认两件事:版本行(上一代没有,所以不会被当成新判据的证明)、以及末行那个「写完了」的印
+ * (半张证明读不出它)。回合身份也核一遍 —— 文件名已经带它,这里是第二道。
+ */
+function watchIsComplete(dir: string, sessionId: string, turnStartedAt: string): boolean {
   try {
-    const line = readFileSync(join(dir, watchName(sessionId, turnStartedAt)), "utf8").split("\n")[1] ?? "";
-    if (!line.trim()) return null;
-    const value = Number(line.trim());
-    return Number.isFinite(value) && value >= 0 ? value : null;
+    const lines = readFileSync(join(dir, watchName(sessionId, turnStartedAt)), "utf8").split("\n");
+    return lines[0] === `${WATCH_HEAD} ${turnStartedAt}` && lines.includes(WATCH_TAIL);
   } catch {
-    return null; // 证明在不在由调用方的 existsSync 判;这里只回答「它记了水位没有」
+    return false; // 读不动也是「说不上来」,不是「它没产出」
   }
 }
 
@@ -175,31 +188,74 @@ export function noteTurnProgress(taskId: string, sessionId: string, turnStartedA
  * (旧代、或者记号系统坏了)。少了这一道,接管方自己建个目录就能把「从未产出」追认给任何
  * 一轮 —— 第 2 轮自由审查 F2 实测到的升级误杀正是这么来的。
  *
- * **而且还要水位也没动过**:`watermark` = 当下的持久消费水位。它比证明里记的那一份高,就说明
- * 这一轮产出过并被消费过 —— 即使进展记号没写成、那张证明也撤不掉(第 3 轮自由审查 F5,理由与
- * 剩余窗口见文件头最后一节)。调用方给不出水位就只按记号判,同修复前。
+ * **而且那张证明得是完整的**:上一代写的 `.watch` 没有版本行、写一半断电的只剩半张 ——
+ * 两种都只能证明「我不知道」(第 2 轮自由审查 F2)。真正把「写不进去」那条缝补上的不在这儿:
+ * 记号欠着时消费链**不推进水位**,那段输出留给下一个进程重放(见文件头最后一节)。
  */
-export function turnProgress(
-  taskId: string,
-  sessionId: string,
-  turnStartedAt: string,
-  watermark?: number,
-): TurnProgressRead {
+export function turnProgress(taskId: string, sessionId: string, turnStartedAt: string): TurnProgressRead {
   try {
     const dir = progressDir(taskId);
     if (existsSync(join(dir, markName(sessionId, turnStartedAt)))) return "seen";
     if (!existsSync(join(dir, watchName(sessionId, turnStartedAt)))) return "unreadable";
-    const opened = watchedWatermark(dir, sessionId, turnStartedAt);
-    if (opened !== null && Number.isFinite(watermark) && (watermark as number) > opened) {
-      console.warn(`[ash] 会话 ${sessionId} 本轮没有进展记号,但消费水位已经从 ${opened} 前进到 `
-        + `${Math.trunc(watermark as number)}:按「产出过」处理(记号多半是写不进去了)`);
-      return "seen";
-    }
-    return "none";
+    return watchIsComplete(dir, sessionId, turnStartedAt) ? "none" : "unreadable";
   } catch (error) {
     console.warn(`[ash] 读会话 ${sessionId} 本轮进展记号失败,按「核实不了」处理:`, error);
     return "unreadable";
   }
+}
+
+/**
+ * 同一问,但先问一句「**这一轮是谁从头看着的**」(第 2 轮自由审查 F2)。
+ *
+ * `watchedFromStart` = 本进程从这一轮第一条事件起就在消费它(fresh run、讨论、常驻台自己开的
+ * 那一轮 —— 这三条链都没有进程接管入口,`reattach` 只接单飞)。那就**不必问盘**:事实在手上,
+ * 「到此刻为止一条进展都没见过」是确证。盘上那张证明写失败了也不改变这一点 —— 拿「证明没写
+ * 成」去换「这一轮可能已经产出过」,等于一次写盘故障就把静默档关掉,而那正是这一档要抓的形状。
+ *
+ * 只有**接管**回来的那一轮才真的需要问盘:它看不到 `agentOffset` 之前那一段,全部指望上一个
+ * 进程留下的那张证明。读出 `unreadable` 时的出路见 `recoverTurnProgress`。
+ */
+export function turnProgressFor(opts: {
+  taskId: string;
+  sessionId: string;
+  turnStartedAt: string | null;
+  watchedFromStart: boolean;
+}): TurnProgressRead {
+  if (!opts.turnStartedAt) return "none";
+  if (opts.watchedFromStart) return "none";
+  return turnProgress(opts.taskId, opts.sessionId, opts.turnStartedAt);
+}
+
+/**
+ * **「说不上来」的独立恢复路**:接着重读那张证明,直到它给出结论(第 2 轮自由审查 F2)。
+ *
+ * 为什么不能在 `seen` 与 `none` 里任选一边:选 `seen` = 这一轮永久排除在静默档之外(那就是
+ * 原始那个 1.5 小时);选 `none` = 替上一个进程追认「它从未产出」,那是第 1 轮 F1 的误杀。所以
+ * 未知自己有一条路 —— 读不出来多半是暂时的(目录权限、短暂 I/O、磁盘忙),过一会儿就好了;
+ * 真恢复出 `seen` 的时候,调用方据此把那条「只为核实不了而开」的观察撤掉
+ * (turn-stall.ts 的 `withdrawTurnSilence`)。
+ *
+ * 不设上限、计时器 `unref`:口径与另一处未知共用一份,见 ./verify-until-known.ts。
+ */
+export function recoverTurnProgress(
+  taskId: string,
+  sessionId: string,
+  turnStartedAt: string,
+  onKnown: (progress: "seen" | "none") => void,
+  stillWatching: () => boolean,
+  pace: VerifyPace = {},
+): void {
+  verifyUntilKnown<TurnProgressRead>({
+    read: () => turnProgress(taskId, sessionId, turnStartedAt),
+    fallback: "unreadable",
+    known: (progress) => progress !== "unreadable",
+    onKnown: (progress) => {
+      if (stillWatching()) onKnown(progress as "seen" | "none");
+      return true;
+    },
+    onUnknown: () => stillWatching(),
+    pace,
+  });
 }
 
 /** 测试用:清掉进程内那层短路缓存。 */

@@ -35,7 +35,7 @@ import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verific
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
-import { noteTurnProgress, openTurnProgress, turnProgress } from "../turn-progress-mark.js";
+import { noteTurnProgress, openTurnProgress, turnProgressFor } from "../turn-progress-mark.js";
 import { clearTurnStall, trackTurnStall, watchTurnSilence, type StallActions } from "../turn-stall.js";
 import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
 import { clearStallFailure } from "../turn-stall-verdict.js";
@@ -335,9 +335,12 @@ export async function runTurn(args: {
     // 从头开的,所以这里一律落参与证明 —— 它才是「记号不在 = 确证没产出」的前提
     // (turn-progress-mark.ts;接管方为什么不许写同见那里)。
     openTurnProgress(taskId, rowId, turnStart);
+    // 读也走「我是不是从头看着这一轮的」那一问(第 2 轮自由审查 F2):这条链没有接管入口,所以
+    // 事实在手上 —— 上面那张证明万一没写成,也不该因此把静默档关掉(那是拿一次写盘故障换
+    // 「它可能已经产出过」)。判据见 ../turn-progress-mark.ts 的 `turnProgressFor`。
     watchTurnSilence(
       rowId, handle, turnStart, stallActions,
-      turnStart ? turnProgress(taskId, rowId, turnStart) : "none",
+      turnProgressFor({ taskId, sessionId: rowId, turnStartedAt: turnStart, watchedFromStart: true }),
     );
     try {
       for await (const event of handle.events) {
