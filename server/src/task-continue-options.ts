@@ -125,6 +125,24 @@ export type ContinueTaskOptions = {
    */
   onInputSettled?: (acceptance: InputAcceptance) => void | Promise<unknown>;
   /**
+   * **同一个回调会被调第二次** —— 初次给的是有界等待的结果,迟到那一次才是终局。
+   *
+   * 初次 `unknown` 之后回执还在落定:落成 `accepted` 就是补记账,落成 `refused` 就是归还重投。
+   * 上一版只把迟到的 accepted 转回来,于是迟到的拒收没人管 —— 那张租约永远留在「在途」,消息
+   * 停在待发送、任务已经失败、再扫一遍也领不走它,只有重启能解(第 2 轮自由审查 F3,已实测)。
+   *
+   * 所以调用方的三档处置**必须幂等**,而且别假设只会被调一次。排队/定时/真人回合三条路共用
+   * `../delivery-lease.ts` 那一份(它就是为了不让三个入口各漏一处而存在的)。
+   */
+  /**
+   * 这一轮输入回执**本体**,起跑后立刻交出来(没有这条缝的执行器给 undefined)。
+   *
+   * 给**结算方**用:结算发生在回合结束之后,那时回执早就落定了,而初次那一档是几十秒前有界
+   * 等待的结果。拿过期的 `unknown` 去结算,会把一段明确被拒收的交代结成「交付不明」,而它本该
+   * 原样归还(第 2 轮自由审查 F1 的那一半)。问法见 ../turn-input-acceptance.ts 的 lastWordOnInput。
+   */
+  onInputReceipt?: (receipt: Promise<InputAcceptance> | undefined) => void;
+  /**
    * 「这个任务此刻还能不能被**这条消息**叫醒」——**占住回合之后**再问一次，返回理由
    * 字符串就撤回这一轮（返回 false，一个字都不送）。
    *

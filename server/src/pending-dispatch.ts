@@ -1,4 +1,5 @@
 import { continueTask } from "./orchestrator.js";
+import { createDeliveryLease } from "./delivery-lease.js";
 import { abortDelivery, cancelPendingMessage, markSent } from "./pending-messages.js";
 import { beginPendingBatch, batchMonitorWake } from "./pending-monitor-batch.js";
 import { recoverPendingDelivery } from "./pending-delivery-recovery.js";
@@ -23,7 +24,6 @@ export async function dispatchPendingMessage(
     onSettled?: () => void;
   },
 ): Promise<void> {
-  let delivered = false;
   const refused = new Map<string, string>();
   const checkpoints: Checkpoint[] = [];
   let claimed: Row[] = [];
@@ -38,6 +38,18 @@ export async function dispatchPendingMessage(
     const at = Date.now();
     for (const current of claimed) scheduleRedelivery(current, reason, at);
   };
+  // 在途租约:三档回执怎么处置这张租约、迟到的那一次怎么收口,统一在 ./delivery-lease.ts
+  // (三个投递入口各写一遍就会各漏一处 —— 那正是第 2 轮自由审查 F3)。
+  // `handled()` 取代了原来那个 `delivered` 布尔:它答的是「这张租约归回执这条路管了吗」,
+  // accepted / unknown / 已归还三种都算,所以善后那几支照旧只在「回执压根没来」时动手。
+  const lease = createDeliveryLease({
+    label: `任务 ${message.taskId} 的待发送消息`,
+    onAccepted: async () => {
+      await markSent(claimed);
+      noteDeliveryTiming(message.taskId, { ...context.spans, idleAt, at: Date.now() });
+    },
+    onReturn: async (why) => { await retry(why); },
+  });
   try {
     claimed = await beginPendingBatch(message);
     if (!claimed.length) return;
@@ -68,20 +80,11 @@ export async function dispatchPendingMessage(
         },
       } : {}),
       ...(context.team ? { throwOnTeamUnavailable: true } : {}),
-      // **三档分开处置**(义务见 task-continue-options.ts 的 onInputSettled):
-      //   · accepted → 落 sent;
-      //   · refused  → 确证没送出去,什么都不记,下面 `!delivered` 那一支归还租约并重投;
-      //   · unknown  → **留在在途**:不写 sent(写了就永久消失),也不走归还重投那一支
-      //     (那才是重复执行)。租约留着 = 本仓既有的「在途」表示法,出口是迟到的凭据或开机对账。
-      onInputSettled: async (acceptance) => {
-        if (acceptance === "refused") return;
-        delivered = true;
-        if (acceptance !== "accepted") return;
-        await markSent(claimed);
-        noteDeliveryTiming(message.taskId, { ...context.spans, idleAt, at: Date.now() });
-      },
+      // 三档处置整份在 ./delivery-lease.ts(含「迟到的拒收由回执这条路自己归还」—— 三个入口
+      // 各写一遍就会各漏一处,那正是第 2 轮自由审查 F3)。
+      onInputSettled: (acceptance) => lease.settle(acceptance),
     });
-    if (!delivered) {
+    if (!lease.handled()) {
       if (!monitor) {
         for (const current of claimed) {
           const reason = refused.get(current.id);
@@ -96,7 +99,7 @@ export async function dispatchPendingMessage(
           : "回合被其它执行抢占、工作区正被验收占用，或起跑前的资格检查读不到状态");
     }
   } catch (error) {
-    if (delivered) {
+    if (lease.handled()) {
       if (context.team) throw error;
       return;
     }
@@ -110,10 +113,10 @@ export async function dispatchPendingMessage(
       await cancelPendingMessage(current, `${context.team ? "调度台不可用" : "续跑失败"}：${detail}`).catch(() => {});
     }
   } finally {
-    if (!delivered && !monitor) {
+    if (!lease.handled() && !monitor) {
       for (const checkpoint of checkpoints.reverse()) await checkpoint.restore().catch(() => {});
     }
     context.onSettled?.();
-    if (context.seat && !delivered) await context.seat.release();
+    if (context.seat && !lease.handled()) await context.seat.release();
   }
 }

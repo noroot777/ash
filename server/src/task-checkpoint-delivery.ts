@@ -296,14 +296,18 @@ export async function settleStrandedCheckpointRun(receipt: Row, why: string,
    *     或者越线凭据根本写不下来)。
    *   · `refused`      —— **协议层明确拒收**:进程起来了、回合输入却从未写出去(codex app-server
    *     死在握手里,或接管时协议日志证明这一轮从未启动)。两者都是确证的否证,直接归还。
-   *   · `unknown`      —— 调用方也说不上来(默认)。这一档才轮到事后对账:越线记号 + 会话行。
+   *   · `unknown`      —— 调用方也说不上来(默认)。这一档才轮到事后对账(判据见
+   *     pending-checkpoint-recovery.ts 的 `checkpointDeliveryVerdict`:**只认协议层那一声确认**)。
    *
    * 把 `refused` 单独接进来是第 1 轮自由审查 F2:上一版只有「启动了没有」这一位,于是协议层
    * 明确拒收的那一轮照旧走对账 —— 越线记号在、会话行也在,判成 `delivered` 并补写送达,一段本该
    * 继续执行的续跑交代就这么没了(实测日志里先打印「输入没能送进 agent」,紧接着打印「原文已
-   * 送达,补记这一笔确认」)。`unknown` 仍然走对账、仍然可能判 delivered,那是刻意的:越线记号
-   * 是比「等不到回执」更强的事实,而 agent 自己的流水线交接宁可不重放(见 pending-messages.ts
-   * 的 reclaimStaleDeliveries)。
+   * 送达,补记这一笔确认」)。
+   *
+   * **`unknown` 现在走不到 `delivered` 那一支了,除非协议层真的确认过**(第 2 轮自由审查 F1):
+   * 上一版拿「越线 + 会话行 + 回合行」当送达证据,可那三样全是 ash 自己的记账 —— 它们只证明
+   * 「可能已经产生外部效果」,证明不了那串字进了 agent 手里。说不上来就得结成「交付不明」的
+   * 可见记录,交给人看一眼,而不是替 agent 点头(也不盲目归还重放)。
    */
   fact: "not-launched" | "refused" | "unknown" = "unknown", attempts = 0): Promise<void> {
   // **失权方不许再写账**(第 2 轮自由审查 F1 的第 5 条):这个出口会归还、会补记、会就地
@@ -345,15 +349,15 @@ export async function settleStrandedCheckpointRun(receipt: Row, why: string,
   // 判定读得动了:这张票的退避代次清零(下一次故障重新从头退避)。
   settleRetries.delete(receipt.id);
   if (verdict === "delivered") {
-    console.warn(`${head}原文已送达（租约之后有回合开起来过），补记这一笔确认`);
+    console.warn(`${head}原文已送达（协议层确认收下了这一轮的输入），补记这一笔确认`);
     await acknowledgeCheckpointRun(receipt);
     return;
   }
   if (verdict === "uncertain") {
-    console.warn(`${head}越线记号没能给出否证、这一轮又没落下会话行 —— 交付不明，就地结成可见记录`);
+    console.warn(`${head}没有协议层的送达确认、越线记号也给不出否证 —— 交付不明，就地结成可见记录`);
     await settleUncertainCheckpointRun(receipt);
     return;
   }
-  console.warn(`${head}越线记号给出否证、回合行也没有（证明没送出去），归还给任务`);
+  console.warn(`${head}越线记号给出否证（这一轮压根没越过 spawn），归还给任务`);
   await returnCheckpointRun(receipt);
 }

@@ -28,6 +28,7 @@
 import { and, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@ash/shared";
 import { bus } from "./bus.js";
+import { createDeliveryLease } from "./delivery-lease.js";
 import { db, dbClient } from "./db/index.js";
 import { scheduledMessages, tasks, groups } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
@@ -556,8 +557,22 @@ export async function handDuePendingMessageToRun(
   const queuedAt = Date.now();
   const dueAt = markDue(due.id, queuedAt);
   const busyMs = settleBusyAgain(due.id, queuedAt);
-  let delivered = false;
   let handedOff = false;
+  // 在途租约:三档回执怎么处置这张租约、迟到的那一次怎么收口,统一在 ./delivery-lease.ts
+  // (三个投递入口各写一遍就会各漏一处 —— 那正是第 2 轮自由审查 F3)。
+  const lease = createDeliveryLease({
+    label: `任务 ${taskId} 的定时消息`,
+    onAccepted: async () => {
+      const sentAt = Date.now();
+      await markSent(due);
+      // 这条路由调用方在回合空着时拉起,没有「等回合退干净」一段,两个时间点同值。
+      noteDeliveryTiming(taskId, { dueAt, busyMs, queuedAt, idleAt: queuedAt, at: sentAt });
+    },
+    onReturn: async (why) => {
+      await abortDelivery(due);
+      scheduleRedelivery(due, why);
+    },
+  });
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0) ?? null;
     const execution = pendingExecutionIntent({ ...due, execution: true }, task && { ...task, status: taskStartStatus(task) });
@@ -581,22 +596,10 @@ export async function handDuePendingMessageToRun(
       // 是用户显式动作,不加闸,与隔壁 RESUME/fresh 路径保持一致。
       freezeGuard: opts.freezeGuard ?? !opts.turnHeld,
       turnHeld: opts.turnHeld,
-      // **三档分开处置**(义务见 task-continue-options.ts 的 onInputSettled):
-      //   · accepted → 落 sent;
-      //   · refused  → 确证没送出去,什么都不记,下面 `!delivered` 那一支归还租约并重投;
-      //   · unknown  → **留在在途**:不写 sent(写了就永久消失),也不走归还重投那一支
-      //     (那才是重复执行)。租约留着 = 本仓既有的「在途」表示法,出口是迟到的凭据或开机对账。
-      onInputSettled: async (acceptance) => {
-        if (acceptance === "refused") return;
-        delivered = true;
-        if (acceptance !== "accepted") return;
-        const sentAt = Date.now();
-        await markSent(due);
-        // 这条路由调用方在回合空着时拉起,没有「等回合退干净」一段,两个时间点同值。
-        noteDeliveryTiming(taskId, { dueAt, busyMs, queuedAt, idleAt: queuedAt, at: sentAt });
-      },
+      // 三档处置见 ./delivery-lease.ts(上面那只租约)。
+      onInputSettled: (acceptance) => lease.settle(acceptance),
     });
-    if (!delivered) {
+    if (!lease.handled()) {
       // 同 deliverWhenIdle:「已接管回合」≠「已送达」,唯一可信的送达信号是 onDelivered。
       // 起跑异常被 continueTask 内部吸收(结算 failed 后返回 true)时必须归还租约,
       // 否则恢复后的重试与扫描(都只看无租约的 pending 行)永远绕开这条消息。
@@ -605,7 +608,7 @@ export async function handDuePendingMessageToRun(
     }
     return true;
   } catch (error) {
-    if (delivered) return true; // 已进会话之后才炸的是运行事故,不是未送达
+    if (lease.handled()) return true; // 已进会话之后才炸的是运行事故,不是未送达
     if (!handedOff && opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     const detail = error instanceof Error ? error.message : String(error);
     await cancelPendingMessage(due, `续跑失败：${detail}`).catch(() => {});

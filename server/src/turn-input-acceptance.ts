@@ -72,27 +72,62 @@ export async function awaitTurnInput(
 }
 
 /**
- * `unknown` 之后**接着等那份凭据**:它最终落定成 `accepted` 就把记账补上(那条消息确实送到了)。
+ * `unknown` 之后**接着等那份凭据**,三档一律回传。
  *
- * 不阻塞调用方 —— 有界等待那一层存在的理由就是不让投递链挂在一个可能永不落定的回执上。落定成
- * `refused`/`unknown` 这里什么都不做:行留在「在途」,由开机对账给结论(见文件头两个出口)。
+ * 上一版只回传 `accepted`、把 `refused`/`unknown` 一起丢掉 —— 而「迟到的拒收」正是那条缝里
+ * 最常见的结局(握手超时在前,进程断开在后):丢掉它之后那张租约就永远留在「在途」,消息停在
+ * 待发送、任务已经失败、再扫一遍也领不走,只有重启能解(第 2 轮自由审查 F3,已实测)。
+ *
+ * 不阻塞调用方 —— 有界等待那一层存在的理由就是不让投递链挂在一个可能永不落定的回执上。
+ * 落定成 `unknown` 这里什么都不做:那一档只能等开机对账(见文件头两个出口)。
  */
 export function settleLateTurnInput(
   handle: Pick<RunHandle, "inputAccepted">,
   label: string,
-  onAccepted: () => Promise<void> | void,
+  onSettled: (acceptance: InputAcceptance) => Promise<void> | void,
 ): void {
   const receipt = handle.inputAccepted;
   if (!receipt) return;
   void receipt
     .then(async (acceptance) => {
-      if (acceptance !== "accepted") return;
-      console.warn(`[ash] ${label} 迟到的回执确认 agent 收下了这一轮的输入，补记这一笔送达`);
-      await onAccepted();
+      if (acceptance === "unknown") return;
+      console.warn(`[ash] ${label} 迟到的回执落定成 ${acceptance === "accepted" ? "「agent 收下了」" : "「协议层拒收」"}，按它收口`);
+      await onSettled(acceptance);
     })
     .catch((error: unknown) => {
       console.warn(`[ash] ${label} 等迟到的输入回执时出错（这一条留在在途，开机对账再判）:`, error);
     });
+}
+
+/**
+ * **这一轮输入的最后一句话**:结算之前再问一次,有界。
+ *
+ * 为什么不能拿初次那一档去结算(第 2 轮自由审查 F1 的那一半):初次是**有界等待的结果**,
+ * `unknown` 多半只是「应答还没回来」。而结算发生在回合都结束之后 —— 那时回执早就落定了
+ * (进程一关,未完成的请求一律 reject)。拿过期的 `unknown` 去结算,就会把一段明确被拒收的
+ * 交代结成「交付不明」,而它本该原样归还。
+ *
+ * `soFar` 是初次拿到的那一档:已经是终局(accepted/refused)就直接用它,不必再等。
+ */
+export async function lastWordOnInput(
+  receipt: Promise<InputAcceptance> | undefined,
+  soFar: InputAcceptance | null,
+  waitMs = 2_000,
+): Promise<InputAcceptance> {
+  if (soFar && soFar !== "unknown") return soFar;
+  if (!receipt) return soFar ?? "accepted";
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      receipt.catch((): InputAcceptance => "unknown"),
+      new Promise<InputAcceptance>((resolve) => {
+        timer = setTimeout(() => resolve(soFar ?? "unknown"), waitMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** `unknown`/`refused` 各自该说的那一句(调用方只负责记,不负责措辞)。 */

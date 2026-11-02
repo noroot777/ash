@@ -30,8 +30,9 @@ import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
-import { DeliveryCrossingUnwritable, noteDeliveryRefusal, recordDeliveryCrossing } from "./delivery-crossing.js";
+import { DeliveryCrossingUnwritable, noteDeliveryAccepted, noteDeliveryRefusal, recordDeliveryCrossing } from "./delivery-crossing.js";
 import { awaitTurnInput, logTurnInputAcceptance, settleLateTurnInput } from "./turn-input-acceptance.js";
+import type { InputAcceptance } from "./executors/types.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { workerPreambleFor } from "./team/dispatch.js";
@@ -531,23 +532,33 @@ export async function continueTask(
     // 的续跑交代就这么消失了。各档的调用方义务写在 task-continue-options.ts 的 onInputSettled 上。
     // 回调自己出错不许影响这一轮(它只是记账)。
     if (opts.onInputSettled) {
+      // 回执本身也交给调用方:结算发生在回合结束之后,那时它早就落定了,拿初次那一档
+      // (有界等待的结果)去结算会把明确拒收的交代结成「交付不明」(见 lastWordOnInput)。
+      opts.onInputReceipt?.(handle.inputAccepted);
       const acceptance = await awaitTurnInput(handle);
       logTurnInputAcceptance(acceptance, `任务 ${taskId}`);
       const settled = opts.onInputSettled;
-      // **先把「协议层明确拒收」这个事实落盘,再去记账。** 进程内那一份只够当场归还:判出拒收
-      // 之后、归还落库之前进程没了,重启对账手上只有越线记号(线确实越过了),它会判成已送达并
-      // 补记 —— 一段本该继续执行的续跑交代就这么没了(F2 要的「不变量放在持久化层」那一半)。
-      if (acceptance === "refused" && opts.pendingMessageIds?.length) {
-        noteDeliveryRefusal(taskId, opts.pendingMessageIds);
-      }
+      const ids = opts.pendingMessageIds ?? [];
+      // **先把协议层那个事实落盘,再去记账。** 进程内那一份只够当场处置:
+      //   · refused  —— 判出拒收之后、归还落库之前进程没了,重启对账手上只有越线记号(线确实
+      //     越过了),少了这张记号它会判成已送达并补记(第 1 轮自由审查 F2);
+      //   · accepted —— 对称的那一半:协议确认了、而 `markSent` 还没落库就崩,重启对账必须仍然
+      //     判 `delivered`(只能往前走,绝不归还)。这张记号现在是「已送达」**唯一**的凭据 ——
+      //     本地会话行已经退出那一问(第 2 轮自由审查 F1)。
+      const noteFact = (fact: InputAcceptance): void => {
+        if (!ids.length) return;
+        if (fact === "refused") noteDeliveryRefusal(taskId, ids);
+        else if (fact === "accepted") noteDeliveryAccepted(taskId, ids);
+      };
+      noteFact(acceptance);
       try { await settled(acceptance); } catch { /* 记账失败不拖累这一轮 */ }
       if (acceptance === "unknown") {
-        // **接着等那份凭据**(不阻塞这一轮):它最终落定成 `accepted` 时,把 accepted 那一档
-        // 再走一遍就是补记账 —— 各调用点那一档都是幂等的(`markSent` 的 WHERE 带
-        // `status='pending'`,`acknowledgeCheckpointRun` 走 CAS)。这一步让「在途」有第一个
-        // 出口;第二个出口是开机对账(见 turn-input-acceptance.ts 文件头)。
-        settleLateTurnInput(handle, `任务 ${taskId}`, async () => {
-          try { await settled("accepted"); } catch { /* 同上 */ }
+        // **接着等那份凭据**(不阻塞这一轮),**三档一律转给调用方**:它最终落定成 `accepted`
+        // 就是补记账,落定成 `refused` 就是归还重投 —— 上一版只转 accepted,于是迟到的拒收
+        // 把那张租约永远留在「在途」(第 2 轮自由审查 F3,已实测)。各档的调用点都做成幂等。
+        settleLateTurnInput(handle, `任务 ${taskId}`, async (late) => {
+          noteFact(late);
+          try { await settled(late); } catch { /* 同上 */ }
         });
       }
     }

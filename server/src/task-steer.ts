@@ -10,6 +10,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
+import { createDeliveryLease } from "./delivery-lease.js";
 import { abortDelivery, beginDelivery, deliveryOptions, flushPendingForTask, markSent } from "./pending-messages.js";
 import {
   isRunning,
@@ -60,41 +61,58 @@ async function recoverUndeliveredSteer(taskId: string): Promise<void> {
 function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageResult> {
   return new Promise((resolve) => {
     let settled = false;
-    let delivered = false;
     const finish = (result: SteerQueuedMessageResult) => {
       if (settled) return;
       settled = true;
       resolve(result);
     };
+    // 在途租约:三档回执怎么处置这张租约、迟到的那一次怎么收口,统一在 ./delivery-lease.ts
+    // (三个投递入口各写一遍就会各漏一处 —— 那正是第 2 轮自由审查 F3)。
+    //
+    // `unknown` 那一档的含义在这条路上是:原话已经作为真人回合落进会话了,只是协议回执没等到
+    // —— 不写 sent(写了那句话就永久消失)、也不归还(归还即重投),托盘里照旧显示排队中,比
+    // 谎称已送达保守。HTTP 这一侧照旧当场答「已送达」:那句话确实进了会话。
+    const lease = createDeliveryLease({
+      label: `任务 ${message.taskId} 的新方向`,
+      onAccepted: () => markSent(message),
+      onReturn: async (why) => {
+        await recoverUndeliveredSteer(message.taskId);
+        await abortDelivery(message);
+        console.warn(`[ash] 任务 ${message.taskId} 的新方向${why}`);
+      },
+    });
 
     void (async () => {
       try {
         const started = await continueTask(message.taskId, message.text, {
           ...deliveryOptions(message),
-          // 三档义务见 task-continue-options.ts 的 onInputSettled。
           onInputSettled: async (acceptance) => {
-            // 确证没送出去 → 什么都不记,下面那一支归还租约并如实报「仍在排队」。
-            if (acceptance === "refused") return;
-            // `unknown` = 原话已经作为真人回合落进会话了,只是协议回执没等到。**不写 sent**
-            // (写了那句话就永久消失),也**不归还**(归还即重投,那才是重复执行):这一条留在
-            // 在途,托盘里照旧显示排队中 —— 比谎称已送达保守。出口是迟到的凭据或开机对账。
-            if (acceptance === "accepted") await markSent(message);
-            delivered = true;
-            finish({ ok: true, taskId: message.taskId, messageId: message.id });
+            await lease.settle(acceptance);
+            // 「原话进了会话」这件事在 accepted/unknown 两档都成立,HTTP 那一侧据此放行;
+            // refused 由下面那一支如实报「仍在排队」。
+            if (acceptance !== "refused") {
+              finish({ ok: true, taskId: message.taskId, messageId: message.id });
+            }
           },
         });
-        if (started && delivered) return;
-        await recoverUndeliveredSteer(message.taskId);
-        await abortDelivery(message);
+        if (started && lease.handled()) return;
+        // 回执压根没来(起跑失败/被抢占)才由这里归还;refused 那一档租约自己已经归还过了,
+        // 两条路都幂等(`abortDelivery` 的 WHERE 带租约),撞上也只是空转。
+        if (!lease.handled()) {
+          await recoverUndeliveredSteer(message.taskId);
+          await abortDelivery(message);
+        }
         finish({
           ok: false,
           status: 409,
-          error: started
-            ? "新方向未能落进会话，消息已保留在排队中"
-            : "当前回合被其它执行抢占，消息已保留在排队中",
+          error: lease.acceptance() === "refused"
+            ? "新方向没能送进 agent（协议层拒收），消息已保留在排队中，稍后会自动重投"
+            : started
+              ? "新方向未能落进会话，消息已保留在排队中"
+              : "当前回合被其它执行抢占，消息已保留在排队中",
         });
       } catch (error) {
-        if (!delivered) {
+        if (!lease.handled()) {
           await recoverUndeliveredSteer(message.taskId).catch(() => undefined);
           await abortDelivery(message).catch(() => undefined);
         }
