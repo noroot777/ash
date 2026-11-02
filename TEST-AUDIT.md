@@ -1,6 +1,7 @@
 # 全量测试健康普查 — 当前 main(基点 `10d4b34d`)
 
 > 纯审计产物:**没有修任何东西,没有改任何测试或产品代码**。全部 578 个叶子脚本真实执行,红的重跑一轮定稳定红/闪红。
+> **第一~六章是审计当时(2026-11-02 中午)的原样,不回改**;用户随后要求「全解决」,38 条稳定红已全部修完,记在 §七。
 > 执行日期 2026-11-02 · 基点 `10d4b34d` · 工作区 `.worktrees/1GYkm4-K_7zu`
 
 ## 摘要
@@ -602,6 +603,100 @@ locator.click: Timeout 30000ms exceeded.
   waiting for getByRole('button', { name: '打开任务：手机命令 empty', exact: true })
 ```
 `exact: true` 的可访问名 `打开任务：手机命令 empty` 对不上了。`empty` 这个词看起来是把某个状态标记拼进了按钮名,这类"状态 + 标题"拼出来的可访问名一旦渲染逻辑改动就会整条失配,而 `exact: true` 让它一点容错都没有。建议并入 T16(同一类:web/mobile 的 UI 回归按可访问名定位,名字随渲染改动漂移)。
+
+## 七、后续回合:38 条稳定红全部修完
+
+> 第一~六章是**审计当时**的原样,不回改 —— 它记录的是「2026-11-02 中午那一刻 main 的测试健康面貌」,
+> 那份快照本身是结论的一部分。用户随后要求「全解决」,这一章记后续回合实际做了什么。
+
+### 7.1 验证口径
+
+41 条非绿叶子(38 稳定红 + 3 闪红)全部重跑:`green=39 red=2`,两条红各有已知的台子条件,补跑后同样全绿 ——
+
+- **#373 要 bare 环境**:它指望真 spawn 出自己摆在 PATH 上的假 `claude`,而全局设 `ASH_RUNS_DIR` 会被产品的
+  `guardAgentSpawn` 当成「我在测试隔离环境里」一律拒绝起执行器(§3 缺陷②同一条)。`--bare-env` 下 4/4 全绿。
+- **#481 不可与同类并行**:3 并发那一轮它被 SIGTERM、日志 0 字节;单独跑 22 秒绿。它和 #475/#482/#406 同属
+  「扫宿主进程表 / 按进程组发信号」这一族,**本来就不该并行**(T12 建议的标注现在仍然只是建议,见 7.4)。
+
+**一条如实交代**:复核跑的是同一套 runner,所以 §4.3 里引用的那些 `.audit/logs/<id>-*.log` **已被这一轮的绿日志
+覆盖**(日志文件按叶子名固定)。红的那一刻的断言原文仍完整留在 §4.3 的「归因」里,引用路径只对还没被重跑过的
+那些叶子仍然成立。
+
+### 7.2 逐条结论与责任笔
+
+| # | 叶子 | 现在的结论 | 修法 | 哪一笔 |
+|---|---|---|---|---|
+| 267 | `run-accept-gate-tests.mjs` | 真缺陷(产品) | 借来另一个检出的依赖树时,把自有包改写回快照自己那份源码 | `4f0181e2` |
+| 156 | `test-cli-command-startup.ts` | 真缺陷(产品) | 回合已经结算就别再回「尚未启动,请稍后重试」 | `73110f10` |
+| 371 | `test-native-command-turn.ts` | 同上(第二处证据) | 同上 | `73110f10` |
+| 491 | `test-multi-user-run.ts` | 同上(第三处证据) | 同上 | `73110f10` |
+| 157 | `test-cli-plan-scheduling.ts` | 真缺陷(产品)**· 归因订正** | 没绑审查的 reviewer 回合不再被判「方向失效」卡死 | `74dcc32e` |
+| 397 | `test-browser-grant-timing.ts` | 真缺陷(产品) | 把那道资格闸**挪出**「读授权 → spawn」窗口(不是去掉它) | `74dcc32e` |
+| 208 | `test-monitor-complete-gate.ts` | 真缺陷(产品) | 检查点清空走代次助手,不再裸 `.set` | `74dcc32e` |
+| 324 | `test-handoff-auth.ts` | 真缺陷(产品) | 接力导入时「清单里没写 `waitOrigins`」的兼容值从 `unknown` 改成 `ordinary` —— 导入任务挂着的提问不再一律 409 | `9d007ed8` |
+| 322 | `test-handoff.ts` | 真缺陷(产品) | `findRollout`(文件在盘上哪儿)与 `findResumableRollout`(codex 定位得到吗)拆成两个口径,接力导入改用后者 | `38880a41` |
+| 320 | `test-handoff-capability.ts` | 契约过时(判据本身不成立) | 去掉「probe 清单必须跟内置快照不同」这条宿主机相关的代理判据 —— 快照一准就红;地面真相在 `fakeCliDir` 那一节 | `38880a41` |
+| 481 | `test-service-ports-script.ts` | 真缺陷(台子,高危) | `pidIn` 读不出真号就抛,不再把 pid `0` 送进组级信号 | `96bd5d93` |
+| 503 | `test-team-turn-artifacts.ts` | 真缺陷(产品) | 团队消费者懒建,解开导入环(`__name is not a function` 的真因) | `96bd5d93` |
+| 516 | `test-chat-browser.mjs` | 真缺陷(产品 UI) + 首启向导 | 模式栏窄屏折行:320px 下最后那格「助手」被裁在视口外,页面又不横向滚动,等于点不到;夹具另补「向导走过了」那一格 | `982384fa` |
+| 203 | `test-monitor-races.ts` | 真缺陷(产品) | 结算那一侧也按投递口径看哨兵事件(`hasDeliverablePendingMessages` 与投递端判据漂移) | `3ea4369f` |
+| 373 | `test-cli-overrides.ts` | 真缺陷(产品) | 「复制到终端接着聊」那条命令不再带 ash 自己的 Monitor 钩子 | `fd929af7` |
+| 284 | `test-review-wait-storage.ts` | 台子缺一半 | 单独观察等待归属判据前,先把这一轮欠着的哨兵结果了结 | `81989069` |
+| 207 | `test-monitor-review-lifecycle.ts` | 台子缺一半 | 证据行改由生产的 `evidenceState` 建,别裸插 | `3ea4369f` |
+| 180 | `test-monitor-delivery-batch.ts` | 台子缺一半 | 检查点归属照生产 `recordTaskWait` 落库;`prepare` 档改打起跑资格那一问 | `d7b065c1` |
+| 475 | `test-project-commands.ts` | 台子假设 | 口径收到一处,夹具别再磨平 `lstart` | `add11aa8` |
+| 482 | `test-terminal-capacity.ts` | 台子假设 | 同上 | `add11aa8` |
+| 406 | `test-holder-scan.ts` | 台子假设 | 同上 | `add11aa8` |
+| 480 | `test-service-ports.ts` | 台子假设 | 同上 + pidfile 口径 | `add11aa8` `96bd5d93` |
+| 122 | `test-branch-acceptance.mjs` | 契约过时 | 按区域指名读 alert / 点「重试」,别让新面板撞成 strict mode 违例 | `e35f0da5` |
+| 85 | `test-assistant-entry.mjs` | 契约过时(首启向导) | 夹具自己盖「这台机器走过首启向导」(新建共用 `fixture-onboarding.ts`) | `982384fa` |
+| 513 | `test-cli-commands-ui.mjs` | 契约过时(首启向导) | 同上 + 起跑应答不对时把 409 正文打出来 | `5cb63ecb` |
+| 514 | `test-cli-goal-lifecycle-ui.mjs` | 契约过时(首启向导) | 同上 | `5cb63ecb` |
+| 560 | `test-scm-race.mjs` | 契约过时 | 手动刷新按钮 `d8f6ab5f` 已撤,那次 GET 改扣自动轮询 | `fe0abf87` |
+| 571 | `test-git-workbench-review-fixes.mjs` | 契约过时(状态栏) | 夹具定高 `100vh`(`min-height` 让 `.gwb{height:100%}` 解析成 auto) | `fe0abf87` |
+| 574 | `verify-git-workbench-refresh-paths.mjs` | 契约过时(状态栏) | 同上 | `fe0abf87` |
+| 576 | `verify-git-workbench-design.mjs` | 契约过时(状态栏) | 舞台高度按「视口 − 状态栏」算,并把状态栏自己也量进报告 | `fe0abf87` |
+| 38 | `test-remote-return.mjs` | 契约过时 | 夹具补上详情页本来就有的两条读(`/notices`、`/api/events`) | `151b70eb` |
+| 43 | `test-monitor-wake.tsx` | 契约过时 | 断言别钉在「元素上没有别的属性」 | `151b70eb` |
+| 535 | `test-task-sync.mjs` | 契约过时 | 同步契约补上 `upstreamStalled` | `151b70eb` |
+| 399 | `test-session-lost.ts` | 契约过时(系统性 T11) | 源码扫描按 **import 链**读,不按文件名读 | `46ffc82e` |
+| 508 | `test-ash-mcp-reach.ts` | 契约过时(系统性 T11) | 同上 | `46ffc82e` |
+| 257 | `test-branch-worktree-state.ts` | 真缺陷(产品) | 验收前置那道闸插在合并路径**前面**后漏了三件:占用者与 `git worktree repair` 提示、目标先冻结、`expandHome` | `9d007ed8` |
+| 258 | `test-base-update-recovery.ts` | 同上 | 同上 | `9d007ed8` |
+| 261 | `test-branch-plan-creation.ts` | 同上 | 同上 | `9d007ed8` |
+| 281 | `test-review-ownership.ts` | 已有主 | 未自己动手:`6dc06401` 合 main 带进了 `8c24f166`「续跑交接凭证与审查自己的提问,都不许被对账器当成死账」,复跑即绿 | `8c24f166` |
+| 195 | `test-monitor-end-condition.ts` | 闪红(台子前提) | 未改:它的断言自陈「台子前提不成立」,T9 建议仍然有效 | — |
+| 484 | `test-launch-abandon.ts` | 闪红(时序) | 未改:单并发下绿 | — |
+
+### 7.3 归因订正与新发现的几类
+
+- **#157 订正**:审计把它归到「同 #156(启动回执)」。实测不是 —— 它是**另一条独立机制**:reviewer 角色的回合在
+  没绑到具体审查轮时被判「方向失效」,于是整轮卡死。启动回执那一族只有 #156/#371/#491 三条。
+- **#475 订正**(审计第三章已记):不是并发污染捞到审计自己的 pid,而是测试假设「测试窗口内本机没有其它同属主
+  新进程」,这比并发问题严重 —— 这一族(#475/#482/#406/#480)的修法是把判据收到一处、夹具不再磨平 `lstart`。
+- **新类:首启向导闸**(#85/#513/#514/#516 共四条)。`c742d95b`(10-31)给工作区加了首启向导,放行判据是一条
+  **持久表态**(个人设置 `onboardedAt`),而存量盖章(`stampOnboardingBaseline`)只认 `ensureSchema()` 那一刻库里
+  已有执行器/项目 —— 浏览器夹具一律是**先建库、后插数据**,于是整个工作区被换成向导页,用例只能等到超时。
+  修法是给这类夹具一个共用的 `markFixtureOnboarded()`(`server/scripts/fixture-onboarding.ts`),**不是给产品开后门**。
+- **新类:夹具的 `min-height` 与全局状态栏**(#571/#574/#576)。除了 T17 说的 26px,还有一半在夹具自己身上:
+  `.fixture-workbench` 用 `min-height` 时,子元素 `.gwb{height:100%}` 解析成 auto,历史列表撑到 2506px、
+  `scrollHeight == clientHeight`,于是「列表必须真的能滚」永远不成立。
+- **新类:`server/dist` 过期**(#513/#514)。这两条起的是**构建产物** `server/dist/index.js`(`ASH_PREVIEW=1`)并
+  serve `web/dist`,所以源码修好了也照旧红(实测 dist 比修复早四小时,接口一直回 409)。这类叶子的跑法前提是
+  「先 build」,审计那一轮没有这个前提。
+- **新类:投递口径漂移**(#203)。`hasPendingMessages` 这一侧判「有没有可投递的哨兵事件」时没按投递端那两句
+  (`monitorEventSourceState` + `monitorBlockedReason`)看,于是任务已结束、没有在跑的审查替它兜着时,
+  结算侧仍认为「还有东西要送」。这是**产品**缺陷,不是测试陈旧。
+- **新发现的台子陷阱:`announceResumePrompt` 吞错**(#180 的 `prepare` 档)。取走/回填检查点都会顺手整行读一遍
+  任务行去推 SSE,而那一处的异常是**记完日志就咽掉**的 —— 按「整行读任务」注入一次性读故障,注入必然花在
+  这条无害路径上,要测的那条路永远不会发生(日志里只剩一句「实时通知失败」)。故障注入要认**真正那一问**。
+
+### 7.4 仍然留给用户拍板的两件
+
+1. **门禁范围**(§5「一条比单条红更要紧的结构性结论」那一问,原样有效):范围外这 31 条现在全绿了,但它们
+   **仍然不在任何自动闸里** —— 下一次腐烂只是时间问题。纳入门禁,还是明确标注「手动/诊断用,不保证绿」。
+2. **T12 的约定面**:「扫宿主进程表 / 按进程组发信号的测试不可并行」这句话要落成规则(或落成 runner 能读的
+   标注)才有约束力,而加规则按根 `AGENTS.md` 要先经你同意。这一轮只把四条测试本身的判据收紧了,**没有加规则**。
 
 ---
 
