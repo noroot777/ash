@@ -224,6 +224,10 @@ export function AcceptanceControls({
     && task.stage !== "accepted" && task.stage !== "merged";
   const gateFallback = gateFailure && !gate.running && (!gate.state || !!gate.error || !gate.latest);
   const gateUnknown = !midGate && (!gate.state || !!gate.error) && !(gateIntent && gateLatest);
+  // 主按钮同样不能把「没读到门禁」当「没在跑」：刷新页面/换个实例后，开跑回执那份事实
+  // 已经不在了，此刻读不到就只能是待核对（第 2 轮审查）。跳过/重跑的出口不受它挡
+  // （它们自带上次那份现场，确认框按 gateIntent && gateLatest 放行），刷新与取消在门禁卡上。
+  const gateUnread = !midGate && (!gate.state || !!gate.error);
   const openGateIntent = (intent: "skip" | "rerun", latest: AcceptGateView | null) => {
     if (archived || inFlight || busy || checkingDependencies || acceptanceBlock) return;
     setGateIntent(intent);
@@ -366,9 +370,10 @@ export function AcceptanceControls({
           ) : <span><CheckCircle size={13} weight="fill" />验收完成</span>
         ) : (
           <>
-            <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock} onClick={() => setAction("accept")}>
+            <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock || gateUnread} onClick={() => setAction("accept")}>
               {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
-              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (checkingDependencies ? "检查验收依赖" : midGate ? "放行，继续下一站" : "验收通过")}
+              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (checkingDependencies ? "检查验收依赖"
+                : gateUnread ? (gate.error ? "前置命令状态待核对" : "读取前置命令状态") : midGate ? "放行，继续下一站" : "验收通过")}
             </button>
             <button type="button" disabled={archived || inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />{duet ? "打回再讨论" : "打回修改"}</button>
           </>
