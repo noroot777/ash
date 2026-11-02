@@ -204,13 +204,17 @@ export async function freeManualRepairPrompt(
   // 驳回这条路了，照改。`resolutionNote` / `debateClosing` 是那场裁定与辩论真正留给
   // 执行者的东西，理由见上面两个 section —— 少任何一边，「双方辩完达成的共识」都到
   // 不了改代码的那一方。
+  // `round`：要修的那一轮，缺省是链的当前轮。用户裁定的是一条链的历史轮时两者不同，
+  // 报告、证据目录、已裁定清单都必须跟着它走，不能落回当前轮那份报告。
   opts: {
+    round?: number;
     disputeUpheld?: boolean;
     resolutionNote?: string | null;
     debateClosing?: DebateClosing | null;
   } = {},
 ): Promise<string> {
-  const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
+  const round = opts.round ?? run.currentRound;
+  const dir = freeReviewEvidenceDir(taskId, run.id, round);
   // 有要点时开场白不能再写「照报告修复」：用户写要点，多半正是因为要改的不是报告那版。
   // 两句话打架时执行者只能自己挑一个，而挑错了没人会发现（两边看着都「按要求改了」）。
   const noted = !!opts.resolutionNote?.trim();
@@ -220,13 +224,13 @@ export async function freeManualRepairPrompt(
         (noted ? `按下面【用户裁定时写给你的要点】和报告来改` : `这一次请照报告修复`) +
         `，不要再驳回；确有做不到的地方就用 ask_question 说清楚，别默默跳过。\n`
       : "") +
-    `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按第 ${run.currentRound} 轮意见修复，不要扩大原任务边界。` +
+    `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, round)})，再按第 ${round} 轮意见修复，不要扩大原任务边界。` +
     CLASS_REPAIR_NOTE +
     `修复并验证后调 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
     `用户若在修复期间预约了复审，本回合正常结束后按预约开始，否则等用户决定再审或验收。\n\n` +
     `证据目录：${dir}` +
     await settledRulingsFor({
-      taskId, current: { runId: run.id, round: run.currentRound }, audience: "executor", evidenceDir: dir,
+      taskId, current: { runId: run.id, round }, audience: "executor", evidenceDir: dir,
       disputeUpheld: opts.disputeUpheld === true,
     }) +
     debateClosingSection(opts.debateClosing) +

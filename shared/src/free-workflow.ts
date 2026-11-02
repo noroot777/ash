@@ -295,6 +295,12 @@ export interface FreeReviewExecutorOverride {
  * - `resolution`：**用户**的裁定。审查者在辩论收尾时给的 `verdict` 只是它自己的立场，
  *   两者分开存 —— 让被驳回的一方替用户签字，等于绕过用户裁定这件事本身。
  */
+/**
+ * 一次裁定 / 辩论指向的那条驳回：哪条审查链的第几轮。未裁定驳回是任务级的，可以同时
+ * 挂着好几条，所以用户动作必须带上它，服务端不替用户挑「当前那条」。
+ */
+export type FreeReviewDisputeTarget = { runId: string; round: number };
+
 export type FreeReviewDisputeResolution =
   /** 维持审查意见：照报告修 */
   | "upheld"
@@ -389,6 +395,11 @@ export interface FreeReviewDispute {
   resolutionNote: string | null;
   /** `deferred` 裁定后建出的那个 backlog 派生任务；其它裁定恒为 null。 */
   deferredTaskId: string | null;
+  /**
+   * 非空 = 还没裁定时，用户自己又派（或重跑）了一轮审查，这条驳回不再等裁定。它不是裁定：
+   * `resolution` 仍为 null，界面按「被新一轮审查取代」显示，不再当待办。
+   */
+  supersededAt: string | null;
   /** 这一条驳回上开过的辩论，按开始时间排；空数组 = 还没辩过。中断过的可以重开，
    *  所以同一条驳回上可能有多条（辩完的那条会挡住再开，判据在服务端）。 */
   debates: FreeReviewDebate[];

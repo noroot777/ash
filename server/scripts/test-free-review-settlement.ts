@@ -96,7 +96,7 @@ try {
       });
       await db.insert(freeWorkflowStates).values({
         taskId: id, selectedReviewerId: "reviewer", reviewArmed: true,
-        reviewCheckMode: "logic", reviewRetryLimit: 1, reviewRunId: runId, updatedAt: at,
+        reviewCheckMode: "logic", reviewRetryLimit: 1, reviewRunId: runId, reviewSource: "follow_up", updatedAt: at,
       });
     } else if (options.reserve !== false) {
       await reserveFreeReview(id, { reviewerId: "reviewer", checkMode: "logic", retryLimit: 1 });

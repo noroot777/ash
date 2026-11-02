@@ -194,7 +194,7 @@ export async function reserveFreeReview(
     // 预约的残值会拼出用户从没选过的执行器组合。
     const slot = {
       selectedReviewerId: profile.id, reviewArmed: true, reviewCheckMode: mode, reviewRetryLimit: retries,
-      reviewNote: note, reviewRunId: null,
+      reviewNote: note, reviewRunId: null, reviewSource: "user" as const,
       reviewAgentType: override?.agentType ?? null,
       reviewExecutorId: override?.executorId ?? null,
       reviewModel: override?.model ?? null,
@@ -225,7 +225,7 @@ export async function cancelFreeReviewReservation(taskId: string): Promise<FreeW
       const at = now();
       await db.update(freeWorkflowStates)
         .set({
-          reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: at,
+          reviewArmed: false, reviewNote: null, reviewRunId: null, reviewSource: null, updatedAt: at,
           // 覆盖跟着这条预约一起作废，否则会在下一条预约的表单里复活。
           reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
         })
@@ -344,7 +344,7 @@ export async function handleFreeWorkflowSettlement(
     // 快照 CAS 取消这一条自动预约；用户并发改成的手动预约不碰，仍走下面的等待语义。
     if (executionFailed) {
       const reservation = await readFreeReviewReservation(taskId);
-      if (reservation?.armed && reservation.runId) {
+      if (reservation?.armed && reservation.source === "follow_up") {
         const canceled = await consumeFreeReviewReservation(taskId, reservation);
         if (canceled) {
           await appendTaskTimeline(taskId, "修复执行回合异常结束，自动复审已取消；修复成功后可重新派审。");
@@ -458,7 +458,7 @@ export async function handleFreeWorkflowSettlement(
     await transaction.update(freeReviewRuns).set({ status: outcome === "failed" ? "failed" : outcome === "passed" ? "passed" : "stopped",
       updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));
     if (turnOk === null && !round.conclusion) await transaction.update(freeWorkflowStates).set({
-      reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: at,
+      reviewArmed: false, reviewNote: null, reviewRunId: null, reviewSource: null, updatedAt: at,
       reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
     }).where(eq(freeWorkflowStates.taskId, taskId));
     return true;
@@ -558,6 +558,12 @@ export async function startFreeReview(
             { retry: false, freshSession: freshSessionFor(run, 1, false) }),
         });
       }, { behavior: "immediate" });
+      // 用户自己派的工作区审查：挂着的未裁定驳回被这一轮取代，记一笔并写时间线（见
+      // supersedeOpenDisputes）。按预约开审（带 slotToken）的那一路在裁定闸后面，碰不到驳回。
+      if (!opts.target && !opts.slotToken) {
+        const { supersedeOpenDisputes } = await import("./free-review-dispute.js");
+        await supersedeOpenDisputes(taskId, "派了新一轮审查");
+      }
       // 派审即刻消费掉预约槽的一切（含覆盖四列）；从预约消费进来时沿用它的版本令牌，
       // 好让下面启动失败的回滚还能认出这个空位是自己腾的，也好让用户抢在这之前保存的
       // 新预约留在槽里不被抹掉（两者都在 clearReservationForDispatch 里靠同一次 CAS）。

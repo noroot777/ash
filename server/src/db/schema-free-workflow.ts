@@ -7,6 +7,16 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { Client } from "./node-sqlite-client.js";
 
+/**
+ * 一条预约是**谁挂上的**。驳回要撤哪条、要留哪条，按它判，不按 runId 空不空猜：
+ * - `follow_up`：审查未通过、还有轮数时结算自动挂的续轮（`armFollowUpFreeReview`，以及
+ *   老库 repairing 状态迁移回填的那批）；
+ * - `user`：用户在审查面板里保存的预约（`reserveFreeReview`）；
+ * - `handoff`：接力导入、对端载荷没带来源的那条（老版本对端），来源说不清，按手存对待。
+ * 启动失败回滚（`restoreFreeReviewReservation`）原样带回消费前的来源，不另起一类。
+ */
+export type FreeReviewReservationSource = "follow_up" | "user" | "handoff";
+
 export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   taskId: text("task_id").primaryKey(),
   selectedReviewerId: text("selected_reviewer_id"),
@@ -23,6 +33,8 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   reviewReasoningEffort: text("review_reasoning_effort"),
   // 非空 = 自动复审链的续轮预约：修复确认完成后在这条 run 上续下一轮，而不是开新 run。
   reviewRunId: text("review_run_id"),
+  // 这条预约的来源（见 `FreeReviewReservationSource`）；只在 armed 时有意义，清槽时一并置空。
+  reviewSource: text("review_source").$type<FreeReviewReservationSource>(),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -168,6 +180,11 @@ export const freeReviewRounds = sqliteTable(
     disputeResolutionNote: text("dispute_resolution_note"),
     // deferred 裁定建出的那个 backlog 派生任务；非空即幂等返回同一任务（同 repair_task_id）。
     disputeDeferredTaskId: text("dispute_deferred_task_id"),
+    // 非空 = 驳回还没裁定时，**用户自己**又派了一轮新的工作区审查（或重跑了一条更新的链），
+    // 这条驳回不再等裁定。它不是裁定（resolution 仍为 null，不冒充用户签了哪一档），只记
+    // 「被取代」这件事和时刻；派审那一刻同时写时间线。没有它时，更新的审查链会把旧驳回
+    // 静默遮住：最近一轮看不到、任务级又算不清它还欠不欠一个裁定（第 1 轮审查问题 2）。
+    disputeSupersededAt: text("dispute_superseded_at"),
     // 非空 = 这一轮的任务书还没送进会话,正在等一个空闲回合窗口（见 `FreeReviewDispatchIntent`）。
     dispatch: text("dispatch", { mode: "json" }).$type<FreeReviewDispatchIntent>(),
     startedAt: text("started_at").notNull(),
@@ -242,7 +259,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
       review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
       review_retry_limit INTEGER, review_note TEXT, review_run_id TEXT,
       review_agent_type TEXT, review_executor_id TEXT,
-      review_model TEXT, review_reasoning_effort TEXT,
+      review_model TEXT, review_reasoning_effort TEXT, review_source TEXT,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS free_workflow_events (
@@ -267,7 +284,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
       dispute_summary TEXT,
       dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
       dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
-      dispute_deferred_task_id TEXT, dispatch TEXT,
+      dispute_deferred_task_id TEXT, dispute_superseded_at TEXT, dispatch TEXT,
       started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
@@ -302,6 +319,8 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_workflow_states ADD COLUMN review_executor_id TEXT",
     "ALTER TABLE free_workflow_states ADD COLUMN review_model TEXT",
     "ALTER TABLE free_workflow_states ADD COLUMN review_reasoning_effort TEXT",
+    // 预约来源（自动续轮 / 用户手存 / 接力导入）；老行由 migrations.ts 按当时的形态回填。
+    "ALTER TABLE free_workflow_states ADD COLUMN review_source TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'workspace'",
     "ALTER TABLE free_review_runs ADD COLUMN target_branch TEXT",
@@ -321,6 +340,8 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_resolution_note TEXT",
     // 驳回与每段辩论发言的「人话摘要」：裁定屏第一行字。老行留 null，界面降级显示正文。
     "ALTER TABLE free_review_rounds ADD COLUMN dispute_summary TEXT",
+    // 驳回未裁定时被用户新派的一轮审查取代的时刻。老行留 null = 没被取代过。
+    "ALTER TABLE free_review_rounds ADD COLUMN dispute_superseded_at TEXT",
     // 「这一轮的任务书交出去了、还没送进会话」那份未完成的派发意图（见 `FreeReviewDispatchIntent`）。
     // 老行留 null = 没有在途派发,照旧按原路对账。
     "ALTER TABLE free_review_rounds ADD COLUMN dispatch TEXT",

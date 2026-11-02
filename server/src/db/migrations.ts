@@ -47,9 +47,10 @@ async function migrateFreeReviewStatuses(client: Client): Promise<void> {
     );
     for (const row of repairing.rows) {
       await client.execute({
-        sql: `INSERT INTO free_workflow_states (task_id, selected_reviewer_id, review_armed, review_run_id, updated_at)
-              SELECT task_id, reviewer_id, 1, id, updated_at FROM free_review_runs WHERE id=:id
-              ON CONFLICT(task_id) DO UPDATE SET review_armed=1, review_run_id=excluded.review_run_id`,
+        sql: `INSERT INTO free_workflow_states (task_id, selected_reviewer_id, review_armed, review_run_id, review_source, updated_at)
+              SELECT task_id, reviewer_id, 1, id, 'follow_up', updated_at FROM free_review_runs WHERE id=:id
+              ON CONFLICT(task_id) DO UPDATE SET review_armed=1, review_run_id=excluded.review_run_id,
+                review_source='follow_up'`,
         args: { id: String(row.id) },
       });
     }
@@ -120,6 +121,23 @@ async function migrateWorktreeDefaultToProjects(client: Client): Promise<void> {
     }
   } catch (e) {
     console.warn("[ash] worktree 默认值搬迁失败,忽略:", e);
+  }
+}
+
+// 预约来源列（review_source）加上之前挂着的预约补上来源。那时 armed=1 只有两种形态：
+// 自动续轮（armFollowUpFreeReview / 上面的 repairing 回填，runId 必非空）与用户手存
+// （reserveFreeReview，runId 必为空）；启动失败的原样回滚、接力导入照搬对端的那一行，
+// 也都落在这两种形态里——所以按 runId 回填这一次是精确的。之后每个写入点都显式写来源，
+// 再也不靠 runId 反推。幂等：只补空的。
+async function backfillReservationSource(client: Client): Promise<void> {
+  try {
+    await client.execute(
+      `UPDATE free_workflow_states
+       SET review_source = CASE WHEN review_run_id IS NOT NULL THEN 'follow_up' ELSE 'user' END
+       WHERE review_armed=1 AND review_source IS NULL`,
+    );
+  } catch (e) {
+    console.warn("[ash] 预约来源回填失败,忽略:", e);
   }
 }
 
@@ -623,6 +641,7 @@ export async function runDataMigrations(client: Client): Promise<void> {
   await migrateWorktreeDefaultToProjects(client);
   await migrateDebateToDuet(client);
   await migrateFreeReviewStatuses(client);
+  await backfillReservationSource(client);
   const mergeStatesMigrated = await migrateFreeWorkflowMergeStates(client);
   // 无条件跑:部分失败(mergeStatesMigrated=false)时也已经有任务落了 stage,那几条同样得清。
   try {
