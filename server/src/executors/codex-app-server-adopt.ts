@@ -54,6 +54,7 @@
 // 只落一次、与任何本地流程无关。`started` 是同一份账本的另一面:**回合身份已经有凭据可认**,
 // 完成事件等的是它(通知和应答哪个先到都算),不是等那段本地流程返回。
 import type { InputAcceptance } from "./types.js";
+import { verifyUntilKnown, type VerifyPace } from "../verify-until-known.js";
 
 /** 协议日志给出的三档(产出方见 ./codex-app-server-state.ts)。 */
 export type AdoptEvidence = "started" | "never-started" | "unreadable";
@@ -141,43 +142,110 @@ export function createTurnInputLedger(): TurnInputLedger {
 }
 
 /**
- * **身份的有界恢复**:协议日志刚才读不出来,过一会儿再读几次。
+ * **身份的持续核验**:协议日志刚才读不出来,过一会儿再读 —— 一直读到读出结论为止。
  *
- * 为什么有界而不是一直重读:这一档的作用是把「一瞬的 I/O 故障」跟「这份日志真的没了」分开,
- * 前者几秒内就会自己好。读出**结论**就停;几次都读不出来就停下并说一句 —— 剩下那条路是等
- * `adoptCompletion` 认领完成事件。
- *
- * 「结论」是**两头**都算(第 3 轮自由审查 F3):读回身份(肯定)**和**读出 `never-started`
+ * 「结论」是**两头**都算(第 1 轮自由审查 F3):读回身份(肯定)**和**读出 `never-started`
  * (否证)。上一版只认肯定那一头,于是重读明明已经能确证「这一轮的输入一个字都没出去」,也
  * 只会打印一句日志就算了:没有拒收、没有失败结算,那个「线程已恢复、回合从未启动」的闲置
- * 进程照旧原地等到天荒地老 —— 正是这条任务要消灭的形状,只不过晚了几秒才成立。
+ * 进程照旧原地等到天荒地老。
  *
- * 计时器一律 `unref`:它绝不该让进程多活一毫秒(同 ../turn-input-acceptance.ts 的有界等待)。
+ * **为什么不再「几次之后收手」**(第 2 轮自由审查 F3,已实测):上一版试五次、每次 2 秒,
+ * 之后 `onGiveUp` 只打一行日志,转而「等未来的完成事件」。而那条路上同时有两个保守分支:
+ * 进展证明读不出来 ⇒ 静默档也不开(turn-stall.ts)。两个保守分支叠在一起,就是**谁都不负责**:
+ * 审查把协议文件藏了 10.6 秒再放回来,此时直接读已经能得到 `never-started`,而适配器的读取
+ * 次数永远停在 5、没有 done、没有 error、进程还活着 —— 原始需求里那个「恢复了线程却从未送出
+ * 输入」的闲置进程又回来了,只是晚了 10 秒才成立。
+ *
+ * 所以核验**不设上限**,节奏与交接口径共用一份:../verify-until-known.ts(那边还写了另一处
+ * 同形状的未知 —— 进展证明读不出来)。
+ *
+ * `onStillUnknown` 是**这一拍仍然说不上来**:调用方据此让这件事**可见**(往时间线上写一条
+ * 提示,顺带给看门狗一个它认得的形状),返回 `false` = 不必再核验了(它自己已经收口)。
  */
 export function recoverAdoptedIdentity(
   reread: () => AdoptedTurn,
   apply: (state: AdoptedTurn) => boolean,
-  onGiveUp: () => void,
-  opts: { attempts?: number; everyMs?: number } = {},
+  onStillUnknown: (attempt: number, nextMs: number) => boolean,
+  pace: VerifyPace = {},
 ): void {
-  const attempts = opts.attempts ?? 5;
-  const everyMs = opts.everyMs ?? 2_000;
-  let left = attempts;
-  const tick = (): void => {
-    left -= 1;
-    let state: AdoptedTurn;
-    try {
-      state = reread();
-    } catch {
-      state = { turnId: "", evidence: "unreadable" }; // 读本身抛了:跟读不出来同档
-    }
-    // 肯定与否证都是结论,都交给调用方(它负责各自的出路);`unreadable` 才继续重读。
-    const conclusive = adoptionDriven(state) || state.evidence === "never-started";
-    if (conclusive && apply(state)) return;
-    if (left <= 0) { onGiveUp(); return; }
-    const timer = setTimeout(tick, everyMs);
-    timer.unref?.();
-  };
-  const first = setTimeout(tick, everyMs);
-  first.unref?.();
+  verifyUntilKnown<AdoptedTurn>({
+    read: reread,
+    fallback: { turnId: "", evidence: "unreadable" }, // 读本身抛了:跟读不出来同档
+    // 肯定与否证都是结论,都交给调用方(它负责各自的出路);`unreadable` 才继续核验。
+    known: (state) => adoptionDriven(state) || state.evidence === "never-started",
+    onKnown: apply,
+    onUnknown: onStillUnknown,
+    pace,
+  });
+}
+
+/** 接管「核实不了」时:第几拍开始往时间线上报提示、之后每几拍报一次(判据见下面)。 */
+const VOICE_AFTER = 5;
+const VOICE_EVERY = 10;
+
+/** `wireAdoptionRecovery` 要的那几件事:这一轮的现状怎么问、三条出路各自怎么走。 */
+export interface AdoptionRecoveryWiring {
+  sessionId?: string;
+  /** 重读协议日志。**没有这个能力也要接线**:恒答「读不出来」,见下面。 */
+  reread?: () => AdoptedTurn;
+  /** 这一轮已经收口了(答完 / 已失败 / 正在结算)? */
+  settled: () => boolean;
+  /** 回合身份已经认回来了? */
+  claimed: () => boolean;
+  /** 读回了身份:接上这一轮(并处理日志里已经摆着的那条完成事件)。 */
+  claim: (state: AdoptedTurn) => void;
+  /** 确证从未启动:按失败收口,原文交回投递侧重投。 */
+  neverStarted: () => void;
+  /** 两头都读不出来:往时间线上报一条**可见**的提示。 */
+  voice: (message: string) => void;
+}
+
+/**
+ * 把「核实不了」这一档接起来:持续核验身份,核验不出来时让它**可见且有界**。
+ *
+ * **为什么非得有第三条出路**(第 2 轮自由审查 F3):这一档有两个各自都对的保守分支 —— 不杀
+ * 一个核实不了的回合(adoptionUnverifiable 那段),进展证明读不出来就不开静默档(turn-stall.ts
+ * 的 `hadProgress`)。两个叠起来等于**谁都不负责**,而「零输出零报错」恰恰是看门狗唯一认不出
+ * 的形状,也正是这条任务要消灭的那个 1.5 小时。
+ *
+ * 所以每隔一会儿报一条 `notice`:① 用户刷新页面也看得见这一轮正卡在「核实不了」上(根
+ * AGENTS.md「停止/暂停必须留下持久可见的状态」同一个判据);② **错误档据此计时** ——
+ * `trackTurnStall` 把 notice 一并计入,到阈值先警告、再到阈值终止本轮并按失败结算。终局责任人
+ * 从此是看门狗,不再是「一个永远不会到来的完成事件」。它是 `notice`(`affectsTurn:false`),
+ * 所以中途真恢复了、这一轮正常答完仍然算成功。
+ */
+export function wireAdoptionRecovery(
+  w: AdoptionRecoveryWiring,
+  opts: { everyMs?: number; maxMs?: number; steadyAfter?: number } = {},
+): void {
+  // 没给 reread 的调用方走同一条路:身份恢复那一半没有,「可见 + 有界」照旧 —— 不能因为少传
+  // 了个回调就退回「谁都不管」。
+  const reread = w.reread ?? ((): AdoptedTurn => ({ turnId: "", evidence: "unreadable" }));
+  recoverAdoptedIdentity(
+    reread,
+    (state) => {
+      if (w.settled()) return true;                  // 已经收口,不必再恢复
+      if (w.claimed()) return true;                  // 中途已经认回来了:凭据优先于这一问
+      if (state.evidence === "never-started") {
+        console.warn(`[ash] 接管会话 ${w.sessionId ?? ""} 的协议日志现在读得动了：`
+          + "逐行扫完没有任何「回合已开始」的凭据，按确证未启动收口");
+        w.neverStarted();
+        return true;
+      }
+      console.warn(`[ash] 接管会话 ${w.sessionId ?? ""} 的回合身份已经重读回来（turn=${state.turnId}）`);
+      w.claim(state);
+      return true;
+    },
+    (attempt, nextMs) => {
+      if (w.settled() || w.claimed()) return false;
+      const voiced = attempt - VOICE_AFTER;
+      if (voiced === 0 || (voiced > 0 && voiced % VOICE_EVERY === 0)) {
+        w.voice(`接管这条会话时读不到协议记录，已经第 ${attempt} 次核实不了这一轮启动过没有`
+          + `（${Math.max(1, Math.round(nextMs / 1000))} 秒后继续核验）。它要么自己恢复，`
+          + "要么由看门狗按「有动静却没有进展」终止本轮并按失败结算；原文仍在待发送里等重投。");
+      }
+      return true;
+    },
+    opts,
+  );
 }

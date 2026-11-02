@@ -15,10 +15,10 @@ import { detachedInfo, spawnControllableForRun } from "./detached.js";
 import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import { codexErrorEvent } from "./codex-error-event.js";
 import {
-  adoptionDriven, adoptionUnverifiable, createTurnInputLedger, recoverAdoptedIdentity,
+  adoptionDriven, adoptionUnverifiable, createTurnInputLedger, wireAdoptionRecovery,
 } from "./codex-app-server-adopt.js";
 import {
-  ADOPT_NEVER_STARTED, CODEX_TURN_START_ACK_MS, short, usageEvent,
+  ADOPT_NEVER_STARTED, CODEX_ADOPT_REREAD_MS, CODEX_TURN_START_ACK_MS, short, usageEvent,
   type CodexAppServerOpts, type ThreadUsage,
 } from "./codex-app-server-contract.js";
 import type { RunHandle } from "./types.js";
@@ -457,46 +457,36 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const unverifiable = adoptionUnverifiable(opts.reattach);
   // 接管三档**当场落账本**(回执不再由 `ready` 推导,理由见 ./codex-app-server-adopt.ts):
   //   · 有凭据    → 协议日志里就摆着「这一轮开过」= accepted;
-  //   · 读不出来  → unknown(投递侧留在在途),身份走下面的有界恢复;
+  //   · 读不出来  → unknown(投递侧留在在途),身份走下面的持续核验;
   //   · 确证没开过 → 下面的 `ready` 直接 reject,`input.failed()` 把它落成 refused。
   if (adopted) input.reached();
   else if (unverifiable) input.unverifiable();
   if (unverifiable) {
     console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 时读不出协议日志，`
-      + "这一轮有没有真的启动核实不了：不按失败结算，回执按「说不上来」记，身份走有界恢复");
-    // **身份的有界恢复**:拿回 turnId 这一轮就不再是「身份未定」,完成事件也就认得出来了。
-    if (opts.reattach?.reread) {
-      recoverAdoptedIdentity(
-        // **原样传 evidence**(第 3 轮自由审查 F3):上一版一律包装成 `started`,于是重读哪怕
-        // 已经确证「这一轮的输入一个字都没出去」,也只会打印一句就算了 —— 那个闲置进程照旧
-        // 原地等下去。肯定与否证现在走两条明确的路(见下面)。
-        () => opts.reattach!.reread!(),
-        (state) => {
-          if (turnCompleted || finished || settling) return true; // 已经收口,不必再恢复
-          if (state.evidence === "never-started") {
-            // 日志现在读得动了,而且逐行扫完没有任何凭据 = 确证输入从未到达 agent。跟起跑时
-            // 就读出这一档走同一条路:按失败结算、收掉这个闲置进程,原文由投递侧重投。
-            if (turnId || reviewTurnId) return true; // 中途已经认回来了:凭据优先于这一问
-            console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 的协议日志现在读得动了：`
-              + "逐行扫完没有任何「回合已开始」的凭据，按确证未启动收口");
-            input.failed();
-            finish(1, ADOPT_NEVER_STARTED);
-            return true;
-          }
-          if (turnId || reviewTurnId) return true;                // 中途已经认回来了
-          turnId = state.turnId;
-          if (state.reviewTurnId) reviewTurnId = state.reviewTurnId;
-          console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 的回合身份已经重读回来（turn=${turnId}）`);
-          if (state.completedTurn) void completeTurn(state.completedTurn).catch((error) => finish(1, String(error)));
-          return true;
-        },
-        () => {
-          if (turnId || reviewTurnId || turnCompleted || finished || settling) return;
-          console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 的回合身份几次都读不回来：`
-            + "改由「这个 thread 上下一条完成事件就是这一轮」认领（见 codex-app-server-adopt.ts）");
-        },
-      );
-    }
+      + "这一轮有没有真的启动核实不了：不按失败结算，回执按「说不上来」记，身份走持续核验");
+    // 这一档往下全在 ./codex-app-server-adopt.ts 的 `wireAdoptionRecovery`:持续重读协议日志
+    // 认回身份、读出否证就收口、两头都读不出来时让它可见且有界(为什么非得有第三条出路、
+    // 为什么 notice 就是那个终局责任人,都在那份注释里)。
+    wireAdoptionRecovery({
+      sessionId: opts.sessionId,
+      reread: opts.reattach?.reread,
+      settled: () => turnCompleted || finished || settling,
+      claimed: () => Boolean(turnId || reviewTurnId),
+      claim: (state) => {
+        turnId = state.turnId;
+        if (state.reviewTurnId) reviewTurnId = state.reviewTurnId;
+        // 日志里摆着这一轮的开始凭据 = 那串字确实到了 agent 手里:回执这一刻才拿到肯定依据
+        // (已经落定成 unknown 的那一份不翻盘,理由见那份账本)。
+        input.reached();
+        if (state.completedTurn) void completeTurn(state.completedTurn).catch((error) => finish(1, String(error)));
+      },
+      neverStarted: () => {
+        // 确证输入从未到达 agent:按失败结算、收掉这个闲置进程,原文由投递侧重投。
+        input.failed();
+        finish(1, ADOPT_NEVER_STARTED);
+      },
+      voice: (message) => push({ kind: "error", level: "notice", affectsTurn: false, message }),
+    }, { everyMs: CODEX_ADOPT_REREAD_MS });
   }
 
   const ready = opts.reattach ? ((adopted || unverifiable) ? Promise.resolve() : Promise.reject(new Error(ADOPT_NEVER_STARTED))) : (async () => {

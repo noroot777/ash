@@ -24,6 +24,16 @@ export const CODEX_TURN_START_ACK_MS = (() => {
 })();
 
 /**
+ * 接管后**重读协议日志**的节奏(毫秒)。真实默认 2 秒;回归脚本压到几十毫秒,否则那条
+ * 「读不出来也得有人负责」的提示要等十秒才出现(见 ./codex-app-server-adopt.ts 的
+ * `wireAdoptionRecovery`)。前几拍按这个节奏,之后翻倍退避封顶,核验不设上限。
+ */
+export const CODEX_ADOPT_REREAD_MS = (() => {
+  const raw = Number(process.env.ASH_CODEX_ADOPT_REREAD_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 2_000;
+})();
+
+/**
  * 「确证这一轮从未启动」那段诊断。**起跑时就读出这一档**和**接管后重读才读出来**说的是同一
  * 件事,所以只能有一份话(第 3 轮自由审查 F3:重读那条路从前连结算都没有)。
  */
