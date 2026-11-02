@@ -628,7 +628,6 @@
 .wf-vfail { display: flex; align-items: center; gap: 3px; margin-top: 4px; color: var(--faint); font-size: 9.5px; }
 .wf-vnote { margin: 4px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
 .wf-vgate { margin-top: 7px; }
-.wf-vgate .team-accept-actions { flex-wrap: wrap; }
 /* 线路图上一站底下那排按钮（验证站的「再验一轮 / 人工强制通过」、预览站的「重启预览」）：
    跟人工关口那副（.team-accept-actions）同一副长相——它们都是「这条线走到我这儿了，你
    来处理」，长得不一样只会让人以为是两类东西。多出来的只有红色那一档：线上画着「合并

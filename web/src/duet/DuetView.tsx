@@ -403,8 +403,8 @@ export function DuetView({
         />
       ) : ["done", "failed", "canceled"].includes(task.status) ? (
         <div className="duet-terminal-handoff">
-          <div className="duet-terminal-acceptance">
-            <div><b>讨论结论</b><small>确认这份结论，或带着意见让双方继续讨论。</small></div>
+          <div className="duet-terminal-acceptance acceptance-host">
+            <div className="acceptance-host-title"><b>讨论结论</b><small>确认这份结论，或带着意见让双方继续讨论。</small></div>
             <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />
           </div>
           <DuetHandoffBar
