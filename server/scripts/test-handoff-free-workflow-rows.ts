@@ -49,6 +49,7 @@ try {
   assert.equal(rows.state?.reviewArmed, true, "续轮预约不依赖审查者 profile，不能因为本机没有同名审查者就撤掉");
   assert.equal(rows.state?.reviewRunId, "run-1", "续轮预约必须继续指向同一条 run");
   assert.equal(rows.state?.selectedReviewerId, null, "审查者 profile 是本机主键，解析不到就置空");
+  assert.equal(rows.state?.reviewSource, "follow_up", "续轮那条 run 落了地，来源就是自动续轮");
   assert.equal(notes.some((n) => n.includes("取消了预约复审")), false, "没撤销就不能报「已取消预约」");
 
   // ② 本机没有同名审查者 + 手动预约(没有 runId):这一条确实只能撤,并如实说明。
@@ -72,6 +73,12 @@ try {
   rows = await buildFreeWorkflowRows("t4", payload({}), notes);
   assert.equal(rows.state?.selectedReviewerId, "rp-1", "同名审查者应按名字解析回本机 profile");
   assert.equal(rows.state?.reviewArmed, true, "解析得到就照常 armed");
+  assert.equal(rows.state?.reviewSource, "handoff", "老版本对端没带来源：来源说不清，记作 handoff（驳回时按手存留着）");
+  rows = await buildFreeWorkflowRows("t4-user", payload({ reviewSource: "user" }), []);
+  assert.equal(rows.state?.reviewSource, "user", "对端带了来源就原样照搬");
+  rows = await buildFreeWorkflowRows("t4-dangling", payload({ reviewSource: "follow_up", reviewRunId: "run-not-in-payload" }), []);
+  assert.equal(rows.state?.reviewSource, "handoff",
+    "对端记的是续轮、却没把那条 run 带过来：到了本机只能开新链，不能还叫续轮（否则驳回会把它当自动续轮撤掉）");
   assert.equal(rows.runs[0].reviewerId, "rp-1", "历史 run 的审查者同名时也挂回本机 profile");
   assert.equal(rows.runs[0].executorId, null, "执行器 profile 一律置空，按 agentType 走本机默认解析");
   assert.equal(rows.runs[0].repairTaskId, null, "修复任务没随本次接力迁移，幂等锁必须置空");

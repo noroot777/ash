@@ -135,6 +135,7 @@ export function mountReviewerProfileRoutes(api: Hono): void {
       selectedReviewerId: null,
       reviewArmed: false,
       reviewNote: null,
+      reviewSource: null,
       // 覆盖是「相对这位审查者的这一次改动」，审查者没了它就没有参照系，跟着预约一起清。
       reviewAgentType: null,
       reviewExecutorId: null,

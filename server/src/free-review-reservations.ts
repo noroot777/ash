@@ -3,7 +3,7 @@ import type { SQL } from "drizzle-orm";
 import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { freeWorkflowStates } from "./db/schema.js";
+import { freeWorkflowStates, type FreeReviewReservationSource } from "./db/schema.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -17,6 +17,8 @@ export type ReservedFreeReview = {
   override?: unknown;
   /** 非空 = 自动复审链的续轮预约：在该 run 上续下一轮，而不是开新 run。 */
   runId?: string | null;
+  /** 谁挂的这条预约（见 `FreeReviewReservationSource`）：撤销按它判，不按 runId 猜。 */
+  source?: FreeReviewReservationSource | null;
   /** 读到这条预约时的版本令牌（updatedAt）；消费用它做 CAS。 */
   updatedAt?: string | null;
 } | null | undefined;
@@ -32,7 +34,7 @@ export async function disarmFreeReviewReservation(taskId: string): Promise<boole
   if (!state?.reviewArmed) return false;
   await db.update(freeWorkflowStates)
     .set({
-      reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: now(),
+      reviewArmed: false, reviewNote: null, reviewRunId: null, reviewSource: null, updatedAt: now(),
       // 执行器覆盖跟着预约一起作废：留着它，下一条预约的表单会带上一套用户没选过的配置。
       reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
     })
@@ -41,13 +43,21 @@ export async function disarmFreeReviewReservation(taskId: string): Promise<boole
   return true;
 }
 
-/** 中断后保留预约，同时把等待原因落在时间线上。 */
-export async function noteReservationStillWaiting(taskId: string, reason: string): Promise<boolean> {
+const RESUMES_ON_NEXT_TURN = "后续执行回合正常结束后自动开始，也可在审查面板里直接开审";
+
+/**
+ * 中断后保留预约，同时把等待原因落在时间线上。`resumes` = 「它什么时候会接着走」，
+ * 缺省是下一个执行回合正常结束；等的是别的事（如用户裁定）时由调用方说清。
+ */
+export async function noteReservationStillWaiting(
+  taskId: string,
+  reason: string,
+  resumes = RESUMES_ON_NEXT_TURN,
+): Promise<boolean> {
   const slot = (await db.select({ armed: freeWorkflowStates.reviewArmed })
     .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
   if (!slot?.armed) return false;
-  await appendTaskTimeline(taskId,
-    `预约审查仍在等待：${reason}。预约已保留，后续执行回合正常结束后自动开始，也可在审查面板里直接开审。`);
+  await appendTaskTimeline(taskId, `预约审查仍在等待：${reason}。预约已保留，${resumes}。`);
   return true;
 }
 
@@ -79,6 +89,7 @@ export async function readFreeReviewReservation(taskId: string): Promise<Reserve
     retryLimit: freeWorkflowStates.reviewRetryLimit,
     note: freeWorkflowStates.reviewNote,
     runId: freeWorkflowStates.reviewRunId,
+    source: freeWorkflowStates.reviewSource,
     updatedAt: freeWorkflowStates.updatedAt,
     agentType: freeWorkflowStates.reviewAgentType,
     executorId: freeWorkflowStates.reviewExecutorId,
@@ -115,7 +126,7 @@ export async function consumeFreeReviewReservation(
   if (!snapshot?.armed) return null;
   const token = now();
   const consumed = await db.update(freeWorkflowStates)
-    .set({ reviewArmed: false, reviewRunId: null, updatedAt: token })
+    .set({ reviewArmed: false, reviewRunId: null, reviewSource: null, updatedAt: token })
     .where(and(
       eq(freeWorkflowStates.taskId, taskId),
       eq(freeWorkflowStates.reviewArmed, true),
@@ -163,6 +174,9 @@ export async function restoreFreeReviewReservation(
       reviewModel: textOrNull(override?.model),
       reviewReasoningEffort: textOrNull(override?.reasoningEffort),
       reviewRunId: consumed?.runId ?? null,
+      // 回滚的是「同一条预约」，来源跟着原样回来——否则一条用户手存的预约启动失败一次，
+      // 就会在下次驳回时被当成自动续轮撤掉（或者反过来）。
+      reviewSource: consumed?.source ?? null,
       updatedAt: now(),
     })
     .where(and(
@@ -201,7 +215,7 @@ export async function clearReservationForDispatch(taskId: string, slot: {
   const cleared = {
     selectedReviewerId: slot.reviewerId, reviewArmed: false,
     reviewCheckMode: slot.checkMode, reviewRetryLimit: slot.retryLimit,
-    reviewNote: null, reviewRunId: null,
+    reviewNote: null, reviewRunId: null, reviewSource: null,
     reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
     updatedAt: slot.token || now(),
   };
@@ -243,7 +257,8 @@ export async function armFollowUpFreeReview(
 ): Promise<boolean> {
   const slot = {
     selectedReviewerId: run.reviewerId, reviewArmed: true, reviewCheckMode: run.checkMode,
-    reviewRetryLimit: run.retryLimit, reviewNote: null, reviewRunId: run.id, updatedAt: at,
+    reviewRetryLimit: run.retryLimit, reviewNote: null, reviewRunId: run.id, reviewSource: "follow_up" as const,
+    updatedAt: at,
     // 续轮在同一个 run 上跑，执行器早已冻结在 run 行里；槽里留着上一条手动预约的覆盖，
     // 只会在 UI 的「调整预约复审」表单里冒出来。
     reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
@@ -261,6 +276,13 @@ export async function armFollowUpFreeReview(
 // - runId 非空：自动复审链的续轮（round 未通过、还有轮数时由结算自动挂上）
 // - runId 为空：用户手动预约的新一条审查链
 //
+// **裁定闸**：最近一轮挂着一条还没裁定的驳回时，不论哪种来源的预约都不消费，原样留在槽里、
+// 把「等你裁定」写进时间线（刷新可见）。闸放在这里而不是某个调用点上，是因为它管的是
+// 「这一刻能不能开审」，与谁来触发无关：驳回回合本身就是一个正常结束的执行回合，结算照常
+// 走到这儿——闸放在外面，下一个新加的触发点就会再漏一次（实例：MNW4en5L0iPP，驳回后 20 秒
+// 用户手存的那条预约照常开审，裁定还没做）。驳回只撤自动续轮（见 disputeFreeReview），用户
+// 手存的那条留着，等裁定落地后的下一个执行回合正常结束再走（选「让它接着改」就是那一轮修复）。
+//
 // **先 CAS 消费、消费成功才启动**：反过来（先启动、后清槽）无法保证清掉的就是自己读到
 // 的那一条。CAS 失败 = 槽在这中间被改过（用户保存了新预约 / 别处已消费）：重读一次按
 // 最新那条再来，两次都抢不到就放手（此时槽里的预约仍然 armed，下次执行回合正常结束照常触发），
@@ -277,7 +299,15 @@ export async function startReservedFreeReview(
     }) => Promise<unknown>;
   },
 ): Promise<void> {
-  let snapshot = reservation;
+  if (!reservation?.armed) return;
+  // 动态 import：驳回那一侧静态依赖本文件（撤自动续轮要用这里的 CAS 消费）。
+  const { openDisputeOf } = await import("./free-review-dispute.js");
+  if (await openDisputeOf(taskId)) {
+    await noteReservationStillWaiting(taskId, "执行者驳回了上一轮审查意见，正等你裁定",
+      "裁定之后的下一个执行回合正常结束时自动开始（选「让它接着改」就是那一轮修复）");
+    return;
+  }
+  let snapshot: ReservedFreeReview = reservation;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!snapshot?.armed) return;
     // 预约的审查者已被删除：这条预约永远执行不了，同样按 CAS 消费掉（消费不到就是

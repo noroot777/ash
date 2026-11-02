@@ -4,6 +4,7 @@ import { isAbsolute } from "node:path";
 import type { HandoffGateRun } from "./handoff-accept-gate.js";
 import type { HandoffErrorCode, HandoffPeerCapabilities, HandoffPingProject } from "@ash/shared";
 import type { HandoffWaitOrigins } from "./handoff-wait.js";
+import type { FreeReviewReservationSource } from "./db/schema-free-workflow.js";
 
 export class HandoffError extends Error {
   // 导入侧专用:true = 这次失败**不证明**本机没留下半截产物(补偿回滚自身失败)。
@@ -153,6 +154,8 @@ export interface HandoffFreeWorkflowState {
   reviewReasoningEffort: string | null;
   // 指向本清单里的某条 run(自动复审续轮预约)。
   reviewRunId: string | null;
+  // 预约来源。可选:老版本对端的载荷没有这一项,导入端按 `handoff` 记(来源说不清)。
+  reviewSource?: FreeReviewReservationSource | null;
   updatedAt: string;
 }
 

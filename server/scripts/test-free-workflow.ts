@@ -352,10 +352,10 @@ try {
   await db.insert(freeWorkflowStates).values({
     taskId: "free-rework-task", selectedReviewerId: reviewer.id, reviewArmed: true,
     reviewCheckMode: "logic", reviewRetryLimit: 1, reviewNote: null, reviewRunId: reworkRun.id,
-    updatedAt: new Date().toISOString(),
+    reviewSource: "follow_up", updatedAt: new Date().toISOString(),
   }).onConflictDoUpdate({
     target: freeWorkflowStates.taskId,
-    set: { reviewArmed: true, reviewRunId: reworkRun.id, updatedAt: new Date().toISOString() },
+    set: { reviewArmed: true, reviewRunId: reworkRun.id, reviewSource: "follow_up", updatedAt: new Date().toISOString() },
   });
   assert.equal(claimTurn("free-rework-task"), true);
   await handleFreeWorkflowSettlement("free-rework-task", "done", false, true);

@@ -7,6 +7,16 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { Client } from "./node-sqlite-client.js";
 
+/**
+ * 一条预约是**谁挂上的**。驳回要撤哪条、要留哪条，按它判，不按 runId 空不空猜：
+ * - `follow_up`：审查未通过、还有轮数时结算自动挂的续轮（`armFollowUpFreeReview`，以及
+ *   老库 repairing 状态迁移回填的那批）；
+ * - `user`：用户在审查面板里保存的预约（`reserveFreeReview`）；
+ * - `handoff`：接力导入、对端载荷没带来源的那条（老版本对端），来源说不清，按手存对待。
+ * 启动失败回滚（`restoreFreeReviewReservation`）原样带回消费前的来源，不另起一类。
+ */
+export type FreeReviewReservationSource = "follow_up" | "user" | "handoff";
+
 export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   taskId: text("task_id").primaryKey(),
   selectedReviewerId: text("selected_reviewer_id"),
@@ -23,6 +33,8 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   reviewReasoningEffort: text("review_reasoning_effort"),
   // 非空 = 自动复审链的续轮预约：修复确认完成后在这条 run 上续下一轮，而不是开新 run。
   reviewRunId: text("review_run_id"),
+  // 这条预约的来源（见 `FreeReviewReservationSource`）；只在 armed 时有意义，清槽时一并置空。
+  reviewSource: text("review_source").$type<FreeReviewReservationSource>(),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -242,7 +254,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
       review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
       review_retry_limit INTEGER, review_note TEXT, review_run_id TEXT,
       review_agent_type TEXT, review_executor_id TEXT,
-      review_model TEXT, review_reasoning_effort TEXT,
+      review_model TEXT, review_reasoning_effort TEXT, review_source TEXT,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS free_workflow_events (
@@ -302,6 +314,8 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     "ALTER TABLE free_workflow_states ADD COLUMN review_executor_id TEXT",
     "ALTER TABLE free_workflow_states ADD COLUMN review_model TEXT",
     "ALTER TABLE free_workflow_states ADD COLUMN review_reasoning_effort TEXT",
+    // 预约来源（自动续轮 / 用户手存 / 接力导入）；老行由 migrations.ts 按当时的形态回填。
+    "ALTER TABLE free_workflow_states ADD COLUMN review_source TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'workspace'",
     "ALTER TABLE free_review_runs ADD COLUMN target_branch TEXT",

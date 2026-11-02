@@ -229,9 +229,10 @@ export async function disputeFreeReview(
 
   // 自动复审预约必须撤掉：执行者没有按意见改代码，续上的那一轮只会对着同一份代码
   // 再写一遍同一份报告，还会把「等你裁定」这个停顿冲掉。**只撤自动续轮那条**
-  // （runId 非空）；用户自己手存的预约是他明确的意思，一个字都不动。
+  // （按预约自己记的来源判）；用户自己手存的预约是他明确的意思，一个字都不动——它留在槽里，
+  // 由消费点的裁定闸挡到裁定落地（见 startReservedFreeReview）。
   const reservation = await readFreeReviewReservation(taskId);
-  const canceledAuto = reservation?.armed && reservation.runId
+  const canceledAuto = reservation?.armed && reservation.source === "follow_up"
     ? await consumeFreeReviewReservation(taskId, reservation)
     : null;
 
@@ -282,6 +283,18 @@ export function disputeTimelineNote(input: {
     + `它的说法：${input.summary}\n`
     + `现在由你裁定：${choices.join(" / ")}；拿不准就先让双方辩一轮。`
     + (input.canceledAuto ? "（自动复审已取消，等你拍板。）" : "");
+}
+
+/**
+ * 裁定落地、而这一档不会顺带起一个执行回合（采纳执行者 / 转独立任务）时，告诉用户那条被
+ * 裁定闸挡着的预约现在去哪了：它没有在裁定这一刻开审，而是回到「下一个执行回合正常结束时
+ * 开始」。不说的话，用户裁定完看着亮着的「已预约」等一轮不会立刻来的审查。
+ */
+async function noteHeldReservationAfterRuling(taskId: string): Promise<void> {
+  const reservation = await readFreeReviewReservation(taskId);
+  if (!reservation?.armed) return;
+  await appendTaskTimeline(taskId,
+    "已预约的审查仍保留：下一个执行回合正常结束时开始；不想等就在审查面板里取消预约后直接派审。");
 }
 
 /** 时间线里只放一句话的摘要，全文留在审查记录里（时间线不是正文的第二个家）。 */
@@ -363,6 +376,7 @@ export async function resolveFreeReviewDispute(
   if (resolution === "deferred") {
     const { deferOpenDispute } = await import("./free-review-defer.js");
     const deferredTask = await deferOpenDispute(task, open, note);
+    await noteHeldReservationAfterRuling(taskId);
     return { resolution, repairError: null, deferredTask };
   }
 
@@ -377,6 +391,7 @@ export async function resolveFreeReviewDispute(
       `${note ? "按你写的要点和报告修复" : "照报告修复"}。`)
     // 时间线只放摘要，全文留在那一轮的审查记录里（时间线不是正文的第二个家）。
     + (note ? `你写下的裁定要点：${summarize(note)}` : ""));
+  if (resolution === "withdrawn") await noteHeldReservationAfterRuling(taskId);
   bus.publish({ type: "task.review", taskId });
 
   let repairError: string | null = null;

@@ -67,6 +67,11 @@ export async function buildFreeWorkflowRows(
         reviewModel: payload.state.reviewModel,
         reviewReasoningEffort: payload.state.reviewReasoningEffort,
         reviewRunId: followUpRunId,
+        // 续轮那条 run 落了地就是自动续轮;对端明说是用户手存的照搬。其余(老版本对端没带来源、
+        // 记的是续轮却没把 run 带过来、或者认不出的值)到了本机都只能开一条新链,来源说不清 → handoff。
+        reviewSource: followUpRunId
+          ? "follow_up" as const
+          : payload.state.reviewSource === "user" ? "user" as const : "handoff" as const,
         updatedAt: payload.state.updatedAt,
       }
     : null;

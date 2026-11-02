@@ -325,6 +325,7 @@ export async function collectFreeWorkflow(taskId: string): Promise<HandoffFreeWo
           reviewModel: stateRow.reviewModel,
           reviewReasoningEffort: stateRow.reviewReasoningEffort,
           reviewRunId: stateRow.reviewRunId,
+          reviewSource: stateRow.reviewSource,
           updatedAt: stateRow.updatedAt,
         }
       : null,

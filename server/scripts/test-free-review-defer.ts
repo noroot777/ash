@@ -78,6 +78,8 @@ try {
       await db.insert(freeWorkflowStates).values({
         taskId: id, selectedReviewerId: "reviewer", reviewArmed: true, reviewCheckMode: "logic",
         reviewRetryLimit: 1, reviewRunId: opts.reservation.runId, updatedAt: at,
+        // 照真实写入点的形态：挂着 runId 的只会是结算自动挂的续轮，没有的是用户手存。
+        reviewSource: opts.reservation.runId ? "follow_up" : "user",
       });
     }
     return { runId, roundId };
