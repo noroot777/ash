@@ -95,13 +95,21 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
             }
           },
         });
-        if (started && !lease.callerMustReturn()) return;
-        // 判据只看协议定论(delivery-lease.ts):accepted/unknown 一个字都不许碰,回执压根没来
-        // (起跑失败/被抢占)、或者确证拒收而归还还没落盘,才由这里归还 —— 两条路都幂等
-        // (`abortDelivery` 的 WHERE 带租约),跟租约自己那笔补偿撞上也只是空转。
+        // **HTTP 答复与租约处置是两件事**(第 1 轮自由审查 F3,实测):上一版这里写的是
+        // `started && !callerMustReturn() → return`,而「拒收且租约那边已经还成」同样让
+        // callerMustReturn 答假 —— 于是直接返回,下面那句 409 一次都没走到,回执那一支对拒收
+        // 又不答复,引导按钮就一直等下去(任务都已经失败了)。「不必由我归还」推不出「请求
+        // 已经答复」。所以出口按协议定论分:进了会话的两档已经在回执那一支答过了,其余一律
+        // 在这里答失败 —— 不管租约是谁还的。
+        const outcome = lease.acceptance();
+        if (outcome === "accepted" || outcome === "unknown") return;
+        // 判据只看协议定论(delivery-lease.ts):回执压根没来(起跑失败/被抢占)、或者确证拒收
+        // 而归还还没落盘,才由这里归还。归还只还自己那一次(delivery-fence.ts),跟租约自己那笔
+        // 补偿撞上也只是空转;还成了就把补偿了结掉。
         if (lease.callerMustReturn()) {
           await recoverUndeliveredSteer(message.taskId);
           await abortDelivery(message);
+          lease.callerReturned();
         }
         finish({
           ok: false,
@@ -115,7 +123,7 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
       } catch (error) {
         if (lease.callerMustReturn()) {
           await recoverUndeliveredSteer(message.taskId).catch(() => undefined);
-          await abortDelivery(message).catch(() => undefined);
+          await abortDelivery(message).then(() => lease.callerReturned(), () => undefined);
         }
         finish({
           ok: false,
@@ -162,10 +170,13 @@ async function deliverNativeSteer(
   let previous: PreviousDirectionState | null = null;
   let delivered = false;
   try {
-    if (!(await beginDelivery(message.id))) {
+    const leased = await beginDelivery(message.id);
+    if (!leased) {
       reservation.cancel();
       return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
     }
+    // 后面的归还/确认都凭领取那一刻的租约值证明「还是我这一次」(delivery-fence.ts)。
+    Object.assign(message, leased);
     const attachments = steerAttachments(message) ?? [];
     // 普通投递的这一步在 continueTask 里（上传归属这条任务，多人模式下的可读范围也靠它）；
     // 原生引导绕过了 continueTask，得自己补上，否则同一张图从托盘走和从输入框走归属不一样。
@@ -336,10 +347,13 @@ export async function steerQueuedMessage(messageId: string, options: { nativeOnl
   }
 
   try {
-    if (!(await beginDelivery(message.id))) {
+    const leased = await beginDelivery(message.id);
+    if (!leased) {
       reservation.cancel();
       return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
     }
+    // 同上:换成领取那一刻的行(reservation 的回调闭包里拿的也是这一个对象)。
+    Object.assign(message, leased);
     previousDirectionState = await clearPreviousDirectionState(task.id);
     const committed = reservation.commit();
     if (committed !== "committed") {
