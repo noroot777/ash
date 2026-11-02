@@ -1,5 +1,4 @@
 import type { ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { codexChildWork, codexNativeWork, codexSubAgentWork, nativeAgentProfile, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
 import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
@@ -460,7 +459,38 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     finish(exit, "Codex App Server 输出流未正常收尾");
   });
 
-  const ready = opts.reattach ? Promise.resolve() : (async () => {
+  /**
+   * 接管一个**还活着**的 app-server 进程时,这一轮的输入到底送出去了没有。
+   *
+   * 「进程还在」证明不了这件事。回合输入是 spawn 之后再走协议发出去的
+   * (`initialize` → `thread/unarchive` → `thread/resume` → `turn/start`),服务端要是死在最后
+   * 那一步**之前**,新服务端按 pid 认回来的就是一个「会话已恢复、回合从未开始」的闲置进程:
+   * 它不会说话,我们也不会再对它说话 —— 旧代码在这里给的是 `Promise.resolve()`,于是接管之后
+   * 既没有驱动也没有超时,`finish` 的四个触发源(连接关闭、流收尾兜底、`turn/completed`、
+   * `ready` 失败)一个都不会来。2026-11-02 任务 WfLfTjaGzcA8 就卡在这里 1.5 小时:零输出、
+   * 零报错、界面一直「当前回合仍在进行」,看门狗也没形状可认。
+   *
+   * 凭据在协议日志里,而且只有一条:**这个 thread 上出现过 turn 开始记录**
+   * (`turn/started` 通知,或 `turn/start` / review 的应答,见 `readCodexAppServerState`)。
+   *   · 有凭据 → 回合确实在飞,照旧什么都不做,等它自己把 `turn/completed` 发出来;
+   *   · 没凭据 → 输入从未到达 agent,**当场按失败结算**(不是继续等):`ready` 抛出去之后
+   *     `finish(1, …)` 会落红字诊断、收掉这个闲置进程,这一轮按正常失败路径结算。原文那一半
+   *     由投递侧负责 —— 它在 agent 点头之前不落 `sent`(见 ../turn-input-acceptance.ts),所以
+   *     那条待发送消息还在托盘里,开机回收租约之后会被重新投递。
+   *
+   * 为什么不是「幂等重发一次回合输入」:重发要的是**这一轮完整的那串字**(任务书 + 每回合提醒 +
+   * 完成协议,见 ../turn-prompt.ts),而接管这条路上只有一个进程句柄,手头压根没有它;按会话行
+   * 反解出来的半截 prompt 比按失败重试更坏。走失败结算,重投那一趟会由 `continueTask` 原样重拼。
+   */
+  const reattachDriven = (): boolean => {
+    const r = opts.reattach;
+    return !!r && (!!r.turnId || !!r.reviewTurnId || !!r.completedTurn);
+  };
+  const ready = opts.reattach ? (reattachDriven() ? Promise.resolve() : Promise.reject(new Error(
+    "重启接管这条 Codex 会话时，协议日志里没有任何「回合已开始」的凭据（线程已恢复、回合从未启动）"
+    + "——上一个服务端死在「恢复会话」与「送出回合输入」之间，这一轮的输入一个字都没到 agent。"
+    + "本轮按失败结算，原文仍在待发送里，稍后会自动重新投递；也可以直接重试。",
+  ))) : (async () => {
     await request("initialize", {
       clientInfo: { name: "ash", title: "ash", version: "0.0.0" },
       capabilities: { experimentalApi: true, requestAttestation: false },
@@ -535,6 +565,9 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       return native.control(command);
     },
     sessionId: replacingSession ? "" : opts.sessionId ?? "",
+    // 「协议层面收下了这一轮的输入」——`ready` 的最后一步就是 `turn/start`(或原生命令的
+    // `native.start`)拿到应答,所以它**就是**那个回执(见 ./types.ts 的 inputAccepted)。
+    inputAccepted: ready,
     commandLine: opts.commandLine
       ?? redactSecrets(`${opts.bin} ${opts.args.map(shq).join(" ")} <App Server JSONL via stdin>`),
     events,
@@ -617,43 +650,3 @@ const short = (value: unknown): string => {
   const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
   return text.length > 1_500 ? `${text.slice(0, 1_497)}…` : text;
 };
-
-/** 重启接管时从完整协议日志找回当前 turn id；stdout offset 可能早已越过启动通知。 */
-export function readCodexAppServerState(
-  path: string,
-  knownThreadId = "",
-): { threadId: string | null; turnId: string | null; reviewTurnId?: string; completedTurn?: { id: string; status: string; error?: unknown }; goal?: CliGoal | null } {
-  let threadId: string | null = knownThreadId || null;
-  let turnId: string | null = null;
-  let completedTurn: { id: string; status: string; error?: unknown } | undefined;
-  let reviewTurnId: string | null = null;
-  let goal: CliGoal | null | undefined;
-  let raw = "";
-  try { raw = readFileSync(path, "utf8"); } catch { return { threadId, turnId }; }
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let message: any;
-    try { message = JSON.parse(line); } catch { continue; }
-    if (message.params?.threadId === threadId && message.method === "thread/goal/updated") goal = message.params.goal;
-    if (message.params?.threadId === threadId && message.method === "thread/goal/cleared") goal = null;
-    if (message.result?.reviewThreadId === threadId && typeof message.result?.turn?.id === "string") reviewTurnId = message.result.turn.id;
-    if (message.method === "thread/started" && !threadId && typeof message.params?.thread?.id === "string") {
-      threadId = message.params.thread.id;
-    } else if (message.method === "turn/started"
-      && (!threadId || message.params?.threadId === threadId)
-      && typeof message.params?.turn?.id === "string") {
-      threadId = message.params?.threadId ?? threadId;
-      turnId = message.params.turn.id;
-      completedTurn = undefined;
-    } else if (message.method === "turn/completed"
-      && message.params?.threadId === threadId
-      && typeof message.params?.turn?.id === "string"
-      && (!turnId || turnId === message.params.turn.id || reviewTurnId === message.params.turn.id)
-      && typeof message.params.turn.status === "string") {
-      turnId = message.params.turn.id;
-      completedTurn = message.params.turn;
-      reviewTurnId = null;
-    }
-  }
-  return { threadId, turnId, ...(reviewTurnId ? { reviewTurnId } : {}), ...(completedTurn ? { completedTurn } : {}), ...(goal !== undefined ? { goal } : {}) };
-}

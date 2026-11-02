@@ -31,6 +31,7 @@ import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
+import { awaitTurnInput, logTurnInputAcceptance } from "./turn-input-acceptance.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { workerPreambleFor } from "./team/dispatch.js";
@@ -518,11 +519,21 @@ export async function continueTask(
     if (!opts.system && !opts.byBackend && task.resumePrompt && task.status !== "paused") {
       await takeResumePrompt(taskId, task.resumePrompt);
     }
-    // 到这里这句话已经**两处落地**:agent 进程早在上面就带着它起来了,原文也刚写进会话
-    // 落盘文件。排队/定时消息就是在这一刻、而不是更早,才把库里那条标成 sent。
+    // 原文已经写进会话落盘文件了,但「落 sent」还缺最后一个事实:**agent 到底收下了没有**。
+    // `run()` 返回只证明进程起来了 —— codex app-server 的回合输入是 spawn 之后才走协议发出去
+    // 的,服务端死在那条缝里就会留下「进程活着、输入一个字没出去、消息却已经是终态 sent」的
+    // 现场(2026-11-02 WfLfTjaGzcA8,1.5 小时零输出)。所以这一刻先问一句回执,三态与取舍整份
+    // 住在 turn-input-acceptance.ts;没有这条缝的执行器当场返回 accepted,零额外延迟。
+    //
+    // 拿不到「收下了」就**不落 sent**:行留在 pending,`dispatchPendingMessage` 看到
+    // `delivered` 为假会把它退回待发送并自己重投 —— 这正是「承诺的重投」不该丢的那一半。
     // 回调自己出错不许影响这一轮(它只是记账)。
     if (opts.onDelivered) {
-      try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
+      const acceptance = await awaitTurnInput(handle);
+      logTurnInputAcceptance(acceptance, `任务 ${taskId}`);
+      if (acceptance !== "refused") {
+        try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
+      }
     }
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,

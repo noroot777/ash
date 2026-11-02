@@ -57,6 +57,22 @@ export interface RunHandle {
    * `cleanupSettled(result)`:只有 `empty` 才允许放手。
    */
   cleanup?: () => Promise<CleanupResult>;
+  /**
+   * 「这一轮的输入**真的进了 agent 手里**吗」——`run()` 返回不等于送达。
+   *
+   * 大多数执行器把 prompt 在 spawn 那一刻就交出去了(argv / stdin),于是「进程起来了」和
+   * 「输入送到了」是同一件事,这一项留空即可(调用方按「已送达」处理,行为与从前一致)。
+   *
+   * **codex app-server 不是这样**:它的回合输入是 spawn 之后再走 JSON-RPC 发出去的
+   * (`initialize` → `thread/resume` → `turn/start`),中间任何一刻服务端被重启,进程照样活着、
+   * 输入却一个字都没出去 —— 2026-11-02 任务 WfLfTjaGzcA8 的 1.5 小时零输出就是这个缝
+   * (旧服务端死在 `resumeThread` 应答之后、回合输入之前)。所以这类执行器必须把「协议层面
+   * 收下了」这件事单独交出来,让投递记账等到它为止(见 ../turn-input-acceptance.ts)。
+   *
+   * resolve = 收下了;reject = 一个字都没进去(调用方据此把原文退回待发送);一直不落定 =
+   * 「说不上来」,调用方有界等待后按从前的口径走,余下的交给回合级停滞看门狗兜。
+   */
+  inputAccepted?: Promise<unknown>;
   // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
   // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
   // `unitToken` = 这一次运行的资源记号(executors/unit-token.ts):pid 认得出根,记号才认得出

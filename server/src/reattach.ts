@@ -255,6 +255,14 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         // 直接掀掉进程)。收尾动作本身不该连累整个 server。
         .catch((error) => console.error(`[ash] 接管 ${task.id} 的收尾出错:`, error));
       console.log(`[ash] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
+      // 上面这句只证明「**进程**还在」。它曾经是假话:2026-11-02 任务 WfLfTjaGzcA8 接管的是一个
+      // 线程已恢复、回合输入却从未送出的 codex 进程 —— 日志照样说接管成功,之后 1.5 小时零输出。
+      // 执行器给得出投递回执的(见 executors/types.ts 的 inputAccepted),失败时如实补一句,
+      // 别让终端里只剩那句乐观的「已接管」。回执自身另有去处(执行器当场按失败结算),这里只负责说。
+      void adoptedHandle.inputAccepted?.catch((error) => console.warn(
+        `[ash] 接管 ${task.id} 后发现这一轮的输入从未送达 agent,本回合按失败结算:`,
+        error instanceof Error ? error.message : error,
+      ));
     } catch (err) {
       console.error(`[ash] 接管 ${task.id} 失败:`, err);
       adopted.delete(task.id);
