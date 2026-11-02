@@ -30,6 +30,14 @@ export interface Lead {
    */
   frontSince?: string | null;
   /**
+   * **队首激活时同步挂静默观察**(由消费者安装,所有权层在 `adoptFront` 里调用)。
+   *
+   * 为什么是回调而不是让消费者自己找时机:待命的台再收到消息时,消费循环正停在
+   * `events.next()` 上 —— 它不会经过任何一个「收到事件」的挂载点,而那一轮可能一条事件都
+   * 不来(第 3 轮自由审查 F2 实测)。观察责任因此必须跟队首的赋值绑在一处。
+   */
+  onFrontTurn?: (turnStart: string) => void;
+  /**
    * 这台**此刻持有**的回合身份队列（`started_at`,`Set` 的插入序即投入顺序）。只由
    * `lead-turns.ts` 读写,别处不碰。
    *

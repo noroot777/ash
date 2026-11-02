@@ -39,7 +39,8 @@ const { projects, sessions, tasks } = await import("../src/db/schema.js");
 const { freshTurnFields } = await import("../src/session-turns.js");
 const { holdTurn, releaseHeldTurn } = await import("../src/team/lead-turns.js");
 const { turnProgress } = await import("../src/turn-progress-mark.js");
-const { attachLead, teamIsLive } = await import("../src/team/session.js");
+const { attachLead, sendInbound, teamIsLive } = await import("../src/team/session.js");
+const { noteTurnProgress } = await import("../src/turn-progress-mark.js");
 const { configure, spy, sleep } = await import("./stall-fixtures.js");
 const { watchTurnSilence, clearTurnStall } = await import("../src/turn-stall.js");
 const { eq } = await import("drizzle-orm");
@@ -155,7 +156,7 @@ async function seedDesk(taskId: string, sessId: string, turnStart: string) {
   attachLead(desk as never);
   const stalledSince = async () =>
     (await db.select().from(sessions).where(eq(sessions.id, sessId))).at(0)!.upstreamStalledSince;
-  return { push, handle, stalledSince, interrupts: () => interrupts };
+  return { push, handle, desk, stalledSince, interrupts: () => interrupts };
 }
 
 console.log("③ 消费链真的挂上了这一档:一条事件都不来的常驻台会被熔断,并留下红环");
@@ -201,6 +202,59 @@ console.log("④ 熔断之前上游开口 → 红环当场撤掉(常驻台跑长
   check(!(await desk.stalledSince()),
     "来了一条真产出 → 红环撤掉(撤的是置上它的那一刻,CAS 才匹配得上)");
   check(desk.interrupts() === 0, `还没到熔断线,一次都没终止(interrupt 次数=${desk.interrupts()})`);
+  desk.handle.close();
+  for (let i = 0; i < 60 && teamIsLive(taskId); i += 1) await sleep(100);
+}
+
+console.log("⑤ 两个团队撞上同一个毫秒:排队事实不许串用(第 3 轮自由审查 F1)");
+{
+  // `nextTurnStart` 的唯一性是**每会话**的,不是全局的 —— 两台调度台合法地拥有同一个毫秒。
+  // 上一版拿那个时间字符串当全局键记「它排过队」,于是 A 出队时把 B 的那一份一起删掉:
+  // B 随后成为队首就把**入队时间**当开工时间,一上来就欠了半小时 → 当场误杀。
+  const same = ago(30 * 60_000); // 两台都在这一毫秒收到了插话
+  const deskOf = (taskId: string, sessId: string) => {
+    mkdirSync(join(stage, "runs", taskId), { recursive: true });
+    return { taskId, sessId, busy: false, turnStart: null } as never as
+      Parameters<typeof holdTurn>[0] & { frontSince?: string | null };
+  };
+  const a = deskOf("team-collide-a", "sess-collide-a");
+  const b = deskOf("team-collide-b", "sess-collide-b");
+  holdTurn(a, ago(50 * 60_000));  // A 手上正在跑一轮
+  holdTurn(b, ago(45 * 60_000));  // B 手上也正在跑一轮
+  check(holdTurn(a, same) && holdTurn(b, same), "前提:两台各自收下了同一个毫秒的插话");
+  releaseHeldTurn(a); // A 的队首说完了 → 插话那一轮在 A 上顶上来(并清掉 A 自己那份排队事实)
+  releaseHeldTurn(b); // B 同样
+  const gap = (desk: { frontSince?: string | null }) => Date.now() - Date.parse(desk.frontSince ?? same);
+  check(a.turnStart === same && gap(a) < 5_000,
+    `A 的钟从「轮到它」起算(欠 ${Math.round(gap(a) / 1000)} 秒)`);
+  check(b.frontSince !== same && gap(b) < 5_000,
+    `B 的那份排队事实没被 A 带走(欠 ${Math.round(gap(b) / 1000)} 秒;串用时读出 1800 秒,一成为队首就被杀)`);
+  releaseHeldTurn(a);
+  releaseHeldTurn(b);
+}
+
+console.log("⑥ 答完一轮落回待命的台:再收到消息、一条事件都不来,照样有人盯(第 3 轮自由审查 F2)");
+{
+  const taskId = "team-silence-idle";
+  const sessId = "sess-idle";
+  const first = ago(60_000);
+  // 这一段要钉的是**第二轮**。先让第一轮带上进展记号 → 读侧 `seen`,静默档对它压根不适用,
+  // 省得它先熔断一次把断言搅浑(夹具干净,判据不动)。
+  mkdirSync(join(stage, "runs", taskId), { recursive: true });
+  check(noteTurnProgress(taskId, sessId, first), "前提:第一轮的进展记号落了盘(它不该被盯)");
+  configure({ silentWarnMs: 100, silentTripMs: 500, graceMs: 600_000, pollMs: 200 });
+  const desk = await seedDesk(taskId, sessId, first);
+  desk.push({ kind: "turnEnd" } as AgentEvent); // 调度台答完了 → 落回待命
+  for (let i = 0; i < 60 && desk.desk.busy; i += 1) await sleep(100);
+  check(!desk.desk.busy, "前提:这台已经落回待命(队首空着)");
+  check(desk.interrupts() === 0, "前提:到这儿为止一次都没终止过");
+
+  // **走真实投递口**(执行者汇报 → sendInbound → sendToLead → 所有权层持有新队首),
+  // 而且**一条事件都不推**:消费循环此刻正停在 events.next() 上 —— 上一版在这里永远没人盯。
+  await sendInbound(taskId, "执行者汇报:第 3 步做完了");
+  for (let i = 0; i < 60 && desk.interrupts() === 0; i += 1) await sleep(100);
+  check(desk.interrupts() === 1,
+    `待命的台再收到消息也有人盯(interrupt 次数=${desk.interrupts()});旧代码:零事件 ⇒ 永远不挂`);
   desk.handle.close();
   for (let i = 0; i < 60 && teamIsLive(taskId); i += 1) await sleep(100);
 }

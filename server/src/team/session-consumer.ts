@@ -151,6 +151,11 @@ async function consume(lead: Lead): Promise<void> {
       lead.frontSince ?? lead.turnStart,
     );
   };
+  // **交给所有权层**,不在这儿枚举挂载点:队首是在 `adoptFront` 里换的,那也是唯一一处。
+  // 从前这里按「收到 turnEnd」「收到第一条自发事件」两个事件位置补挂,于是待命的台再被
+  // `sendToLead`/`deliverToLead`/`sendInbound` 投进一轮时没人盯 —— 消费循环正停在
+  // `events.next()` 上,而那一轮要是一条事件都不来(正是要抓的形状),它就永远不会醒。
+  lead.onFrontTurn = watchSilence;
   // 兜底:上面每个写库点都已经各自把失败咽下了(persistOrReport),这里管的是**剩下**
   // 那些没预料到的抛出 —— 执行器解析、用量记账、乃至 events 流自己炸掉。掀翻循环本身
   // 不致命,**跳过 closeLead 才致命**(理由见 reportLeadFailure 顶部),所以这里只如实说
@@ -168,8 +173,7 @@ async function consume(lead: Lead): Promise<void> {
         await endTurn(lead);
         // 上一回合欠着的新会话凭据在这儿补:补上了,轮换事宜这才算真翻篇。
         if (await flushPendingCredential(lead)) rotation = onFreshSession(rotation);
-        // 队首换人了(排在后面的那一轮顶上来):给新队首重挂一次静默档。
-        watchSilence();
+        // 队首换人(排在后面的那一轮顶上来)由所有权层的 onFrontTurn 自己重挂,这里不补。
         continue;
       }
       if (event.kind === "session") {
@@ -206,10 +210,7 @@ async function consume(lead: Lead): Promise<void> {
       // 那几条路一律用投入那一刻的真实起点,见 beginTurn 的注释。
       if (!lead.busy && ownedByTurn(event)) {
         clearIdle(lead);
-        await beginTurn(lead);
-        // CLI 自发的那一轮:身份刚补出来,静默档也得跟上(这一轮的第一条事件就在手上,所以
-        // 紧接着那次 trackTurnStall 多半当场就把它解除了 —— 空转,但不漏挂)。
-        watchSilence();
+        await beginTurn(lead); // 静默档由所有权层的 onFrontTurn 跟上(beginTurn → holdTurn → adoptFront)
       }
       // 排在 beginTurn 之后:自发回合的第一条事件就可能是提示,回合身份得先有(见
       // session-waiting.ts —— 没有身份的提示一律不记)。
