@@ -35,7 +35,8 @@ async function entry(task: BranchTask, repo: string, fingerprintTarget?: string 
   const plan = acceptPlan(taskWorkflowDef(task.workflow), "human", task.workflowAt);
   const guard = await acceptanceGuard(task.id, "before_accept");
   let blocker = guard.failure?.error ?? null;
-  let blockerLabel: string | undefined = guard.failure?.reason === "base_update_pending" ? "基线更新待处理" : undefined;
+  let blockerLabel: string | undefined = guard.failure?.reason === "base_update_pending" ? "基线更新待处理"
+    : guard.failure?.reason === "accept_gate_running" ? "验收前置命令运行中" : undefined;
   if (!blocker && !isFinalHumanGate(taskWorkflowDef(task.workflow), task.workflowAt)) blocker = "尚在中途关口，请先完成任务流程";
   if (!blocker && task.workflowMode === "free" && !["done", "failed", "canceled"].includes(task.status)
     && task.stage !== "accepted" && task.stage !== "merged") blocker = "任务尚未结束";

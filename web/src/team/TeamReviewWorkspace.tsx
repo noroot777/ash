@@ -185,6 +185,11 @@ export function AcceptanceControls({
   // 每隔 15 秒把字换成「检查验收依赖」再换回去（宽度跟着变），点击也在那一瞬间被吞掉。
   const checkingDependencies = !midGate && !!task.useWorktree && task.stage !== "accepted"
     && (branchPlan.loading || branchPlan.refreshing || !branchPlan.view);
+  // 前置命令在跑（或还没确认整棵进程树退出）时，再点一次什么也推进不了：绿了会自动做完。
+  // 判据取同一份门禁状态（SSE 推着走），不等 branchPlan 15 秒一次的重验，也覆盖非 worktree 任务。
+  if (gate.occupied && task.stage !== "accepted") {
+    acceptanceBlock ??= gate.running && gate.running.status !== "running" ? "验收前置命令收尾中" : "验收前置命令运行中";
+  }
   if (!midGate && task.useWorktree && task.stage !== "accepted") {
     acceptanceBlock ??= branchPlan.error ? "验收依赖读取失败" : null;
     acceptanceBlock ??= branchPlan.view?.task.blockerLabel ?? branchPlan.view?.task.blocker ?? null;
@@ -219,6 +224,10 @@ export function AcceptanceControls({
     && task.stage !== "accepted" && task.stage !== "merged";
   const gateFallback = gateFailure && !gate.running && (!gate.state || !!gate.error || !gate.latest);
   const gateUnknown = !midGate && (!gate.state || !!gate.error) && !(gateIntent && gateLatest);
+  // 主按钮同样不能把「没读到门禁」当「没在跑」：刷新页面/换个实例后，开跑回执那份事实
+  // 已经不在了，此刻读不到就只能是待核对（第 2 轮审查）。跳过/重跑的出口不受它挡
+  // （它们自带上次那份现场，确认框按 gateIntent && gateLatest 放行），刷新与取消在门禁卡上。
+  const gateUnread = !midGate && (!gate.state || !!gate.error);
   const openGateIntent = (intent: "skip" | "rerun", latest: AcceptGateView | null) => {
     if (archived || inFlight || busy || checkingDependencies || acceptanceBlock) return;
     setGateIntent(intent);
@@ -275,7 +284,10 @@ export function AcceptanceControls({
       if (!result.accepted) {
         const gateReason = result.reason.startsWith("accept_gate");
         setFailure(gateReason && result.reason !== "accept_gate_failed" ? null : result);
-        if (gateReason) void gate.reload();
+        // 回执已经说「在跑」就先把这份事实留住，再解锁（finally 里的 setBusy(false)）：
+        // 只等 reload 不够，它在读失败/超时时同样兑现，按钮会在读不到状态时重新放开。
+        if (result.reason === "accept_gate_running") gate.holdRunning(result.gate?.status === "running" ? result.gate : null);
+        if (gateReason) await gate.reload();
         if (result.confirmationRequired === "confirmUnverified") {
           verification.setAcknowledged(false);
           await refreshAfterMutation();
@@ -358,9 +370,10 @@ export function AcceptanceControls({
           ) : <span><CheckCircle size={13} weight="fill" />验收完成</span>
         ) : (
           <>
-            <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock} onClick={() => setAction("accept")}>
+            <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock || gateUnread} onClick={() => setAction("accept")}>
               {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
-              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (checkingDependencies ? "检查验收依赖" : midGate ? "放行，继续下一站" : "验收通过")}
+              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (checkingDependencies ? "检查验收依赖"
+                : gateUnread ? (gate.error ? "前置命令状态待核对" : "读取前置命令状态") : midGate ? "放行，继续下一站" : "验收通过")}
             </button>
             <button type="button" disabled={archived || inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />{duet ? "打回再讨论" : "打回修改"}</button>
           </>

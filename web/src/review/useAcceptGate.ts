@@ -52,7 +52,18 @@ export function useAcceptGate(taskId: string): {
    * 漏到调用方就变成一个必须被转手传进某个函数、否则就会被当成未使用变量的累赘。
    */
   runningFor: string | null;
-  /** 「该重读了」。返回的 promise 在这一趟落地后兑现(调用方 await 它来解锁按钮)。 */
+  /**
+   * 前置命令此刻占着工作区：读到的 running，或一份还没被后续成功读取接替的开跑回执。
+   * 验收按钮该锁不该锁只看它 —— `running` 只是读到的那一份，读失败时它还是开跑前的 null。
+   */
+  occupied: boolean;
+  /**
+   * 「验收回执说它已经开跑了」。之后发出的读取**成功落地**才接替这份事实；失败、超时、
+   * 断线作废都不算 —— 那些也会让 reload 兑现,把「读取结束」当「已核对」就会在读不到
+   * 状态时把验收重新放开(第 1 轮审查 F1)。view 缺省 = 回执没带现场(仍在收尾的那种)。
+   */
+  holdRunning: (view?: AcceptGateView | null) => void;
+  /** 「该重读了」。返回的 promise 在这一趟落地后兑现 —— 落地不等于读到,见 holdRunning。 */
   reload: () => Promise<void>;
 } {
   // 状态自带它属于哪个任务：`taskId` 一变，上一个任务那份立刻不作数（清不清都一样安全），
@@ -61,6 +72,9 @@ export function useAcceptGate(taskId: string): {
   const [failure, setFailure] = useState<{ taskId: string; error: string } | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  // 开跑回执那份事实，和它之前已经发出的读取的序号：只有序号更大的成功读取才接替它。
+  const [held, setHeld] = useState<{ taskId: string; view: AcceptGateView | null; after: number } | null>(null);
+  const reads = useRef(0);
   // 这一份**属于谁**。读取的单飞、代次、重试、超时掐断全在追平层(lib/catchUp.ts),这里只
   // 剩「这一份能不能写进 state」——追平层掐断那一瞬,请求可能已经 resolve 了。
   const activeTask = useRef<string | null>(null);
@@ -74,11 +88,13 @@ export function useAcceptGate(taskId: string): {
    */
   const read = useCallback(async (signal: AbortSignal): Promise<boolean> => {
     if (activeTask.current !== taskId) return true;
+    const seq = ++reads.current;
     setChecking(taskId);
     try {
       const next = await api.acceptGate(taskId, signal);
       if (activeTask.current !== taskId) return true;
       setSnap({ taskId, state: next, readAt: Date.now() });
+      setHeld((prev) => prev && prev.taskId === taskId && seq > prev.after ? null : prev);
       setFailure(null);
       setChecking(null);
       return true;
@@ -116,7 +132,11 @@ export function useAcceptGate(taskId: string): {
   const state = snap?.taskId === taskId ? snap.state : null;
   const error = failure?.taskId === taskId ? failure.error : null;
   const stale = !!state && (checking === taskId || !!error);
-  const running = state?.running ?? null;
+  const hold = held?.taskId === taskId ? held : null;
+  const running = state?.running ?? hold?.view ?? null;
+  const holdRunning = useCallback((view?: AcceptGateView | null) => {
+    setHeld({ taskId, view: view ?? null, after: reads.current });
+  }, [taskId]);
   // 「已经跑了 N 分 N 秒」要自己走：这中间服务端一个事件都不会发（命令还在跑），
   // 不走就会定在点下去那一刻的 0 秒上，看着像卡死了。
   useEffect(() => {
@@ -134,6 +154,8 @@ export function useAcceptGate(taskId: string): {
     running,
     latest: state?.latest ?? null,
     basis: state?.basis ?? null,
+    occupied: !!running || !!hold,
+    holdRunning,
     runningFor: running ? elapsedSince(running.startedAt, stale ? snap!.readAt : Date.now()) : null,
     reload,
   };
