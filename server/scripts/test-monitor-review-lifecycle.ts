@@ -20,6 +20,7 @@ import {
   makeTask, now, pendingOf, startMonitor, until, teardown,
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
+import { freeReviewEvidenceDir } from "../src/free-review-files.js";
 
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
@@ -34,10 +35,21 @@ api.use("*", async (c, next) => { setActor(c, SINGLE_ACTOR); await next(); });
 mountTaskRunRoutes(api);
 const app = new Hono().route("/api", api);
 
-/** 一次正在进行的自由工作流审查 + 它那条活着的审查会话。 */
+/**
+ * 一次正在进行的自由工作流审查 + 它那条活着的审查会话 + **它那一轮的证据行**。
+ *
+ * 证据行不是可选的摆设:派一轮审查一定会建它(`launchReviewRound` → `restartRegressionEvidence`),
+ * 而「这一轮此刻是第几次」「审查者的等待算不算数」两问的权威全在那一行 —— 少了它,
+ * `reviewContinuationPending` 第一问就按「没人在等」返回,审查者刚 pause 的那一轮会被当场
+ * 结算掉。`targetIdentity` 照生产取**此刻**这个任务的方向身份(`reviewTargetIdentity`),
+ * 否则 `reviewWaitAuthorized` 认不出这份等待是这一轮的。
+ */
 async function reviewInFlight(
   taskId: string,
-  opts: { runId: string; agentType?: string; executorId?: string; model?: string; live?: boolean } = { runId: "run-x" },
+  opts: {
+    runId: string; agentType?: string; executorId?: string; model?: string; live?: boolean;
+    generation?: string;
+  } = { runId: "run-x" },
 ): Promise<void> {
   await db.insert(schema.freeReviewRuns).values({
     id: opts.runId, taskId, reviewerName: "审查者", agentType: opts.agentType ?? "codex",
@@ -46,6 +58,16 @@ async function reviewInFlight(
   });
   await db.insert(schema.freeReviewRounds).values({
     id: `round-${opts.runId}`, runId: opts.runId, round: 1, status: "reviewing", startedAt: now(),
+  });
+  const owner = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+  await db.insert(schema.regressionEvidence).values({
+    directory: freeReviewEvidenceDir(taskId, opts.runId, 1), taskId,
+    generation: opts.generation ?? `gen-${opts.runId}`, excludedMonitors: [],
+    targetIdentity: {
+      turnToken: owner.activeTurnToken, directionToken: owner.activeDirectionToken,
+      directionEpoch: owner.directionEpoch,
+    },
+    continuation: { phase: "running" },
   });
   if (opts.live !== false) {
     await db.insert(sessions).values({
@@ -208,5 +230,73 @@ async function reviewInFlight(
   assert.equal(task.resumePrompt, "醒了接着看套件结果", "一个字都没送出去，交代要原样留着");
 }
 
+// ── ⑥ 同一轮被重跑：资源身份带满三件套，旧收尾只动自己那一次的 ────────────────
+//
+// `run.id` 跨轮复用，重跑连轮次都不变（`reopenFailedFreeReview` 只换证据行的代次）。收尾
+// 又全是**异步**的：落完终态之后才停哨兵、才作废它排着的结果，中间全是 await。于是上一次
+// 的收尾能把新一次刚挂上的哨兵停掉、把它等的结果作废，而新一次的审查者还在跑 —— 它等的
+// 东西再也不会来（第 4 轮审查 F2 实测：NEW_MONITOR_AFTER_OLD_CLEANUP stopped）。
+//
+// 根因是**资源身份少了一位**，不是少一把锁：所以哨兵行记满 run + 轮次 + 代次，每一处收尾
+// 只动身份对得上的那些行，每一处唤醒也只认身份还对得上的那些事件。
+{
+  const taskId = await makeTask();
+  await reviewInFlight(taskId, { runId: "run-gen", generation: "gen-1" });
+  const directory = freeReviewEvidenceDir(taskId, "run-gen", 1);
+
+  const hang = async (description: string): Promise<string> => {
+    const started = await startMonitor({
+      taskId, command: "sleep 120", description, timeoutMs: 180_000,
+      caller: { kind: "external", wake: "reviewer" },   // 审查者/用户在面板上挂的
+    });
+    assert.ok(started.ok, `起不来：${started.ok ? "" : started.error}`);
+    return started.ok ? started.monitor.id : "";
+  };
+  const rowOf = async (id: string) => (await db.select().from(monitors).where(eq(monitors.id, id))).at(0)!;
+  // 命令还活着、结果却已经排在托盘里等投递，是审查者挂的哨兵最常见的形态；归属判错时这一
+  // 份是另一半损失（新一次等的结果被上一次作废）。所以两条都各排一条，分开看谁被收走。
+  const result = async (monitorId: string) => {
+    await db.insert(scheduledMessages).values({
+      id: `msg-${monitorId}`, taskId, text: "【哨兵事件】READY", attachments: "[]",
+      origin: `monitor:${monitorId}`, mode: "queued", status: "pending", sendAt: now(), createdAt: now(),
+    });
+  };
+
+  const old = await hang("上一次审查等外部套件");
+  assert.equal((await rowOf(old)).sourceReviewRound, 1, "轮次照旧要记");
+  assert.equal((await rowOf(old)).sourceReviewGeneration, "gen-1",
+    "代次也要记在行上：没有它，「这是上一次挂的」谁都认不出来");
+  await result(old);
+
+  // 用户重跑这一轮：run 是同一个、轮次也是同一个，只有证据行换了代次。
+  await db.update(schema.regressionEvidence).set({ generation: "gen-2" })
+    .where(eq(schema.regressionEvidence.directory, directory));
+  const fresh = await hang("重跑这一次审查等外部套件");
+  assert.equal((await rowOf(fresh)).sourceReviewGeneration, "gen-2", "新挂的归新一次");
+  await result(fresh);
+
+  // 上一次的收尾这会儿才跑到（它那段 await 里用户已经重跑过了）。
+  const stopped = await stopReviewRunMonitors(
+    "run-gen", "上一次审查启动失败，收回它挂的哨兵", false, { round: 1, generation: "gen-1" });
+  assert.equal(stopped, 1, "收的只能是它自己那一次挂的那一个");
+  assert.equal((await rowOf(old)).status, "stopped", "上一次的哨兵该它自己收走");
+  assert.equal((await rowOf(fresh)).status, "running",
+    "新一次刚挂上的哨兵不许被上一次的收尾停掉（第 4 轮审查 F2）");
+  const left = (await pendingOf(taskId)).map((m) => m.origin);
+  assert.deepEqual(left, [`monitor:${fresh}`],
+    "排着的结果同理：作废上一次的，新一次等的那一条必须留着（第 4 轮审查 F2）");
+
+  // 唤醒侧用的是同一份身份：身份对不上的事件不再叫人，对得上的照旧叫。
+  const guard = (id: string) => monitorWakeGuard({ taskId, origin: `monitor:${id}` } as never)!;
+  assert.ok(await guard(old)() !== null, "上一次的遗留事件不许送进重跑起来的那一次的会话");
+  assert.equal(await guard(fresh)(), null, "新一次自己的事件照旧要唤醒任务");
+
+  // 新一次自己的收尾照旧收得走它（身份是「只收自己那一次」，不是「谁都收不走」）。
+  assert.equal(await stopReviewRunMonitors("run-gen", "这一次审查收尾", false,
+    { round: 1, generation: "gen-2" }), 1, "新一次收尾时收走自己那一个");
+  assert.equal((await rowOf(fresh)).status, "stopped");
+  assert.equal((await pendingOf(taskId)).length, 0, "它排着的结果跟着作废");
+}
+
 await teardown();
-console.log("✓ 审查哨兵的生命周期：审查回合退出不收它 / 审查收尾才收它 / 唤醒用那次审查的执行器 / 等待中补挂也认审查 / 读交代失败归还租约");
+console.log("✓ 审查哨兵的生命周期：审查回合退出不收它 / 审查收尾才收它 / 唤醒用那次审查的执行器 / 等待中补挂也认审查 / 读交代失败归还租约 / 重跑换代次后旧收尾只动自己那一次");

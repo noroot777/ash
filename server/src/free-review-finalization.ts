@@ -21,7 +21,8 @@ export async function finalizeFreeReview(state: typeof regressionEvidence.$infer
   // `git worktree remove`,用户的重跑完全可以插在中间:于是上一次的收尾把新一代刚挂上的哨兵停掉、
   // 把它等的结果作废、把它正在读的工作区删掉。排进链里之后,那道代次判据到动手那一刻仍然成立。
   await reviewLifecycle(run.id, async () => {
-    await step("monitors", () => stopReviewRunMonitors(run.id, "这次审查已结束，它挂的哨兵一并收回", true));
+    await step("monitors", () => stopReviewRunMonitors(run.id, "这次审查已结束，它挂的哨兵一并收回", true,
+      { round: run.currentRound, generation: state.generation }));
     await step("cleanup", () => cleanupAcceptedMergeRun(run, true));
   });
   const task = (await db.select().from(tasks).where(eq(tasks.id, run.taskId)))[0];

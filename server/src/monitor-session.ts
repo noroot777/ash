@@ -35,7 +35,8 @@ import { and, eq } from "drizzle-orm";
 import { MONITOR_WAKE_TARGETS, monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
 import { db, dbClient } from "./db/index.js";
-import { freeReviewRuns, monitors } from "./db/schema.js";
+import { freeReviewRuns, monitors, regressionEvidence } from "./db/schema.js";
+import { freeReviewEvidenceDir } from "./free-review-files.js";
 import { turnIdentity } from "./runs.js";
 import type { TurnSource } from "./runs.js";
 
@@ -198,6 +199,8 @@ export async function monitorSourceGate(
   role: string | null;
   reviewRun: string | null;
   reviewRound: number | null;
+  /** 这一轮的**这一次**(证据行此刻的代次)。见 schema 的 `source_review_generation`。 */
+  reviewGeneration?: string | null;
   /** 真为「拒绝的理由是说不清叫谁」:入口据此告诉调用方「指定一个再来」。 */
   needsWake?: true;
 }> {
@@ -254,6 +257,10 @@ export async function monitorSourceGate(
         : null)
     : (asksReview ? await reviewingRun(task.id) : null);
   const reviewRun = review?.id ?? null;
+  // 绑哪一次:身份三件套(run + 轮次 + 代次)一起记下来,所以后面那几处都不可能只拿到一半。
+  const reviewGeneration = review && reviewRun
+    ? await reviewGenerationOf(task.id, reviewRun, review.round)
+    : null;
   // 权威角色是审查者,而那一次审查已经不在了 ⇒ 拒(见 `REVIEW_SOURCE_GONE`)。
   if (turn === "reviewer" && !reviewRun) {
     return { blocked: REVIEW_SOURCE_GONE, role: null, reviewRun: null, reviewRound: null };
@@ -267,6 +274,8 @@ export async function monitorSourceGate(
     reviewRun: role === "reviewer" ? reviewRun : null,
     // 轮次一起记:run.id 跨轮复用,只有它认不出「这是上一轮遗留的」(见 schema 注释)。
     reviewRound: role === "reviewer" ? review?.round ?? null : null,
+    // 代次一起记:同一轮会被重跑,run 和轮次两样都不变(见 schema 注释)。
+    reviewGeneration: role === "reviewer" ? reviewGeneration : null,
   });
 
   // ①② 当前回合的角色是运行时事实。不在可唤醒的两种里 = 确定地不表达,退回默认。
@@ -306,21 +315,22 @@ export async function monitorSourceGate(
  * 启动一轮 reviewer 回合（第 2 轮审查 F5）。
  *
  * 轮次一起核：`run.id` 跨轮复用（`nextRound` 把同一个 run 推回 reviewing 并把轮次加 1），
- * 只有 runId 认不出「这是上一轮遗留的结果」。
+ * 只有 runId 认不出「这是上一轮遗留的结果」。**代次也一起核** —— 同一轮会被重跑,那时 run 和
+ * 轮次两样都不变(见 schema 的 `source_review_generation`)。
  *
  * 归档是唯一一条压过来源资格的：任务都被收走了，审查链也没有续下去的地方。
  */
 export async function monitorWakeGate(
   task: { id: string; status: string; archived?: boolean | null },
   // `null` = 这条哨兵没有记下来源(执行者自己挂的,或行已经不在了):照终态老规矩。
-  source: { reviewRun: string | null; reviewRound?: number | null } | null,
+  source: { reviewRun: string | null; reviewRound?: number | null; reviewGeneration?: string | null } | null,
 ): Promise<string | null> {
   // 同一份撤销资格(见创建那一侧)。任务正在被删,它的事件已经没有出口可言 —— 推出去只会
   // 变成一条紧接着被删掉的待发消息,或者把一个马上就不存在的任务叫起来。
   if (isTaskRevoked(task.id)) return TASK_REVOKED;
   if (task.archived) return monitorBlockedReason({ ...task, archived: true });
   if (source?.reviewRun) {
-    return await isReviewSourceActive(source.reviewRun, source.reviewRound ?? null)
+    return await isReviewSourceActive(source.reviewRun, source.reviewRound ?? null, source.reviewGeneration)
       ? null
       : REVIEW_FINISHED;
   }
@@ -343,15 +353,33 @@ async function reviewingRun(taskId: string): Promise<{ id: string; round: number
  * `round` 为 null（存量行）时只按 run 判 —— 那是这一列加上之前的行为。给了轮次就必须
  * 对上：同一个 run 续到下一轮时，上一轮遗留的结果不再是有效输入（见 schema 的
  * `source_review_round`）。
+ *
+ * **代次同理,而且是同一课的第三遍**(第 4 轮审查 F2):同一轮会被用户重跑,run 和轮次两样都
+ * 原封不动,只有证据行的 `generation` 换掉。所以「这一次还在不在」的权威是那一行 —— 给了代次
+ * 就必须跟它此刻的值对上,否则这条哨兵属于**上一次**,它等的那件事的结果不该送进新一次的会话。
+ * `generation` 省略/为 null(存量行、或不是审查挂的)时不判这一位,也就是这一列加上之前的行为;
+ * 证据行压根不在时也不判 —— 那时谁也回答不了「现在是第几次」,不能据此否掉一条来源。
  */
-export async function isReviewSourceActive(runId: string, round: number | null): Promise<boolean> {
+export async function isReviewSourceActive(
+  runId: string, round: number | null, generation?: string | null,
+): Promise<boolean> {
   if (dbClient.closed) return false;
   const run = (await db
-    .select({ status: freeReviewRuns.status, round: freeReviewRuns.currentRound })
+    .select({ status: freeReviewRuns.status, round: freeReviewRuns.currentRound, taskId: freeReviewRuns.taskId })
     .from(freeReviewRuns)
     .where(eq(freeReviewRuns.id, runId))).at(0);
   if (run?.status !== "reviewing") return false;
-  return round === null || run.round === round;
+  if (round !== null && run.round !== round) return false;
+  if (!generation) return true;
+  const current = await reviewGenerationOf(run.taskId, runId, round ?? run.round);
+  return current === null || current === generation;
+}
+
+/** 这一轮**此刻**是第几次(证据行上的 `generation`)。读不到就 null —— 见上面那一问的末段。 */
+async function reviewGenerationOf(taskId: string, runId: string, round: number): Promise<string | null> {
+  if (dbClient.closed) return null;
+  return (await db.select({ generation: regressionEvidence.generation }).from(regressionEvidence)
+    .where(eq(regressionEvidence.directory, freeReviewEvidenceDir(taskId, runId, round)))).at(0)?.generation ?? null;
 }
 
 /** 一条哨兵事件的来源资格。`none` = 执行者自己挂的（按任务状态老规矩）。 */
@@ -370,17 +398,19 @@ export type MonitorSourceState = "live" | "stale" | "none";
 export async function monitorEventSourceState(origin: string | null): Promise<MonitorSourceState> {
   const source = await monitorEventSource(origin);
   if (!source?.reviewRun) return "none";
-  return await isReviewSourceActive(source.reviewRun, source.reviewRound) ? "live" : "stale";
+  return await isReviewSourceActive(source.reviewRun, source.reviewRound, source.reviewGeneration)
+    ? "live" : "stale";
 }
 
-/** 这条哨兵事件所属哨兵记下的来源审查与轮次（`null` = 执行者自己挂的，或哨兵行已经没了）。 */
+/** 这条哨兵事件所属哨兵记下的来源审查、轮次与代次（`null` = 执行者自己挂的，或哨兵行已经没了）。 */
 export async function monitorEventSource(
   origin: string | null,
-): Promise<{ reviewRun: string | null; reviewRound: number | null } | null> {
+): Promise<{ reviewRun: string | null; reviewRound: number | null; reviewGeneration: string | null } | null> {
   const monitorId = monitorIdFromOrigin(origin);
   if (!monitorId || dbClient.closed) return null;
   const row = (await db
-    .select({ reviewRun: monitors.sourceReviewRun, reviewRound: monitors.sourceReviewRound })
+    .select({ reviewRun: monitors.sourceReviewRun, reviewRound: monitors.sourceReviewRound,
+      reviewGeneration: monitors.sourceReviewGeneration })
     .from(monitors)
     .where(eq(monitors.id, monitorId))).at(0);
   return row ?? null;

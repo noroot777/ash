@@ -92,6 +92,7 @@ const MONITOR_COLUMNS = {
   logPath: monitors.logPath, resultsAbandonedAt: monitors.resultsAbandonedAt,
   resultHandoffAt: monitors.resultHandoffAt,
   sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
+  sourceReviewGeneration: monitors.sourceReviewGeneration,
 };
 
 type MonitorRow = {
@@ -101,6 +102,7 @@ type MonitorRow = {
   resultsAbandonedAt: string | null;
   resultHandoffAt: string | null;
   sourceReviewRun: string | null; sourceReviewRound: number | null;
+  sourceReviewGeneration: string | null;
 };
 
 /** 描述是 agent 自己写的「我在盯什么」，没写就退回命令原文（跟 `liveMonitorSummary` 同一口径）。 */
@@ -128,10 +130,12 @@ const factsOfRow = (r: MonitorResponsibilityRow): MonitorFacts => ({
  * 一次仍在进行的审查的哨兵既不该拦住完成，也不该被算进「撤了几个」—— 它根本不是这次完成
  * 的受害者。
  */
-async function sparedByReview(r: Pick<MonitorRow, "sourceReviewRun" | "sourceReviewRound">): Promise<boolean> {
+async function sparedByReview(
+  r: Pick<MonitorRow, "sourceReviewRun" | "sourceReviewRound" | "sourceReviewGeneration">,
+): Promise<boolean> {
   if (r.sourceReviewRun === null) return false;
   const { isReviewSourceActive } = await import("./monitor-session.js");
-  return await isReviewSourceActive(r.sourceReviewRun, r.sourceReviewRound);
+  return await isReviewSourceActive(r.sourceReviewRun, r.sourceReviewRound, r.sourceReviewGeneration);
 }
 
 /**
@@ -181,7 +185,8 @@ type Blocking = { live: MonitorFacts[]; unread: { label: string }[]; inflight: M
 async function blockingSets(taskId: string): Promise<Blocking> {
   const out: Blocking = { live: [], unread: [], inflight: [] };
   for (const r of await unsettledMonitorResponsibility(db, taskId)) {
-    if (await sparedByReview({ sourceReviewRun: r.reviewRun, sourceReviewRound: r.reviewRound })) continue;
+    if (await sparedByReview({ sourceReviewRun: r.reviewRun, sourceReviewRound: r.reviewRound,
+      sourceReviewGeneration: r.reviewGeneration })) continue;
     if (r.cls === "unread") out.unread.push({ label: labelOfRow(r) });
     else if (r.cls === "handoff") out.inflight.push(factsOfRow(r));
     else out.live.push(factsOfRow(r));

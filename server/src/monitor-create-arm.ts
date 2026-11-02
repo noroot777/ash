@@ -103,7 +103,7 @@ export async function diagnoseArm(monitorId: string, taskId: string, token: stri
     if (task?.token !== token) return CALLER_EXPIRED;
   }
   if (fresh.sourceReviewRun
-    && !await isReviewSourceActive(fresh.sourceReviewRun, fresh.sourceReviewRound)) {
+    && !await isReviewSourceActive(fresh.sourceReviewRun, fresh.sourceReviewRound, fresh.sourceReviewGeneration)) {
     return REVIEW_SOURCE_GONE;
   }
   return "创建还没完成，这条登记行被别的写入改过了（没有放行，那条命令没有开工）";

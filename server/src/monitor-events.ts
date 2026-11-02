@@ -56,6 +56,7 @@ export async function pushToTask(
     .where(eq(tasks.id, row.taskId))).at(0);
   if (!task || await monitorWakeGate(task, {
     reviewRun: row.sourceReviewRun, reviewRound: row.sourceReviewRound,
+    reviewGeneration: row.sourceReviewGeneration,
   }) !== null) return false;
 
   const origin = monitorMessageOrigin(row.id);

@@ -85,15 +85,20 @@ export async function cleanupAcceptedMergeRun(run: ReviewRunRow, strict = false)
  * 审查者刚挂好的等待会被当场停掉，第 1 轮审查 F1），所以这一刀必须在审查真正结束时补上。
  *
  * 审查落终态的写点有四处（`handleFreeWorkflowSettlement` 的三种结局 + 下面的启动失败），
- * 每一处结束后都调它；按 runId 收，调用方只需知道「哪一次审查结束了」。
+ * 每一处结束后都调它。`owner` 是**调用方自己是哪一次**（轮次 + 代次）:只按 runId 收是越界的
+ * 刀 —— run 既跨轮复用又会被同轮重跑,而收尾是异步的,于是上一次的收尾会把后来那一次刚挂上的
+ * 哨兵停掉(第 4 轮审查 F2,判据整段在 `stopMonitorsForReviewRun`)。
  *
  * **动态 import**：`monitors.ts` → `pending-messages.ts` → 这一侧，静态引用会把环连起来
  * （同 `status.ts` 的那一处）。收不回来只记日志：审查本身已经结算完了，不该被它拖住；
  * 漏下的哨兵仍有自己的到期时间，而它推的事件会被出口闸按「来源审查已结束」拒掉。
  */
-export async function stopReviewRunMonitors(runId: string, reason: string, strict = false): Promise<number> {
+export async function stopReviewRunMonitors(
+  runId: string, reason: string, strict = false,
+  owner?: { round?: number | null; generation?: string | null },
+): Promise<number> {
   return await import("./monitor-reclaim.js")
-    .then(({ stopMonitorsForReviewRun }) => stopMonitorsForReviewRun(runId, reason))
+    .then(({ stopMonitorsForReviewRun }) => stopMonitorsForReviewRun(runId, reason, owner))
     .catch((error) => {
       if (strict) throw error;
       console.error(`[ash] stopMonitorsForReviewRun(${runId}) failed:`, error);
@@ -155,7 +160,8 @@ async function failReviewStartHeld(
       + `（这一轮已有结论，或者已经被重跑成另一次）：${message}`);
     return;
   }
-  await stopReviewRunMonitors(run.id, "这次审查启动失败，它挂的哨兵一并收回");
+  await stopReviewRunMonitors(run.id, "这次审查启动失败，它挂的哨兵一并收回", false,
+    { round: run.currentRound, generation: owner?.generation });
   await appendTaskTimeline(run.taskId, `${run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`}审查启动失败：${message}`);
   await cleanupAcceptedMergeRun(run);
   bus.publish({ type: "task.review", taskId: run.taskId });
@@ -593,13 +599,25 @@ export async function reopenFailedFreeReview(
       // 不排队的话,换完代次拉起来的新一代资源会被旧收尾顺手收掉。只把这一笔放进链里 ——
       // 下面的 `launchReviewRound` 以及它 catch 里的 `failReviewStart` 都要取同一把锁,
       // 一起放进来就是自锁(判据见那个文件的「不许重入」)。
-      await reviewLifecycle(run!.id, () => db.transaction(async (transaction) => {
-        await restartRegressionEvidence(taskId, directory, transaction);
-        await transaction.update(freeReviewRounds).set({ status: "reviewing", conclusion: null, endedAt: null })
-          .where(eq(freeReviewRounds.id, round!.id));
-        await transaction.update(freeReviewRuns).set({ status: "reviewing", updatedAt: at, finishedAt: null })
-          .where(eq(freeReviewRuns.id, run!.id));
-      }, { behavior: "immediate" }));
+      await reviewLifecycle(run!.id, async () => {
+        const previous = await db.transaction(async (transaction) => {
+          // 换代次之前先记下**上一次是谁**:它退场时留下的哨兵与排着的结果得有人收,而它自己
+          // 的收尾此刻要么已经做完、要么会被代次闸整段挡住(就是这把锁保证的)。送它退场的人
+          // 负责收 —— 否则那几条会一直空烧到自己到期,新一次的收尾又只认自己那一代次。
+          const before = (await transaction.select({ generation: regressionEvidence.generation })
+            .from(regressionEvidence).where(eq(regressionEvidence.directory, directory))).at(0)?.generation;
+          await restartRegressionEvidence(taskId, directory, transaction);
+          await transaction.update(freeReviewRounds).set({ status: "reviewing", conclusion: null, endedAt: null })
+            .where(eq(freeReviewRounds.id, round!.id));
+          await transaction.update(freeReviewRuns).set({ status: "reviewing", updatedAt: at, finishedAt: null })
+            .where(eq(freeReviewRuns.id, run!.id));
+          return before;
+        }, { behavior: "immediate" });
+        if (previous) {
+          await stopReviewRunMonitors(run!.id, "这一轮被重跑，上一次挂的哨兵一并收回", false,
+            { round: run!.currentRound, generation: previous });
+        }
+      });
       const revived = { ...run!, status: "reviewing", updatedAt: at, finishedAt: null };
       try {
         const { resumed, dispatched } = await launchReviewRound(task, revived,
