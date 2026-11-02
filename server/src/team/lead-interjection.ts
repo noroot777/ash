@@ -43,8 +43,11 @@ export async function deliverLeadInterjection(
       throwOnOpenFailure: opts.throwOnTeamUnavailable,
     });
     if (!delivered) return false;
-    if (opts.onDelivered) {
-      try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
+    // 走到这里 = `deliverToLead` 报了真 = 那句话确实写进了调度台的 stdin。**这就是这条链的
+    // 协议回执**(单飞那边要等 `inputAccepted`,是因为 codex 的回合输入在 spawn 之后才发;团队
+    // 这边 send 自己就报成败),所以如实给 `accepted`。拒收那一档在上面就 return false 了。
+    if (opts.onInputSettled) {
+      try { await opts.onInputSettled("accepted"); } catch { /* 记账失败不拖累这一轮 */ }
     }
     return true;
   } finally {

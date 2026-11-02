@@ -71,8 +71,14 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
       try {
         const started = await continueTask(message.taskId, message.text, {
           ...deliveryOptions(message),
-          onDelivered: async () => {
-            await markSent(message);
+          // 三档义务见 task-continue-options.ts 的 onInputSettled。
+          onInputSettled: async (acceptance) => {
+            // 确证没送出去 → 什么都不记,下面那一支归还租约并如实报「仍在排队」。
+            if (acceptance === "refused") return;
+            // `unknown` = 原话已经作为真人回合落进会话了,只是协议回执没等到。**不写 sent**
+            // (写了那句话就永久消失),也**不归还**(归还即重投,那才是重复执行):这一条留在
+            // 在途,托盘里照旧显示排队中 —— 比谎称已送达保守。出口是迟到的凭据或开机对账。
+            if (acceptance === "accepted") await markSent(message);
             delivered = true;
             finish({ ok: true, taskId: message.taskId, messageId: message.id });
           },

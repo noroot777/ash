@@ -1,3 +1,4 @@
+import type { InputAcceptance } from "./executors/types.js";
 import type { AgentType } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import type { TurnIdentity, TurnSource } from "./runs.js";
@@ -103,14 +104,26 @@ export type ContinueTaskOptions = {
    */
   freezeGuard?: boolean;
   /**
-   * 「用户这句话已经**落盘**了」的回调 —— 在原话作为一个真人回合写进会话之后立刻调，
-   * 不等这一轮跑完（`continueTask` 要等整轮结束才 resolve，那时早过了）。
+   * 「这一轮的输入**到底有没有进 agent 手里**」的回执回调 —— 在原话作为一个真人回合写进会话、
+   * 并且问过协议层之后立刻调,不等这一轮跑完（`continueTask` 要等整轮结束才 resolve,那时早过了）。
    *
-   * 给排队/定时消息用：它们要在这一刻、而不是更早，才把库里那条标成 sent。早一步标，
-   * 进程死在中间就是「托盘里没了、会话里也没有」——用户那句话凭空蒸发
+   * 给排队/定时消息和续跑凭证用:它们要在这一刻、而不是更早,才决定那条库行怎么处置。早一步标
+   * `sent`,进程死在中间就是「托盘里没了、会话里也没有」——用户那句话凭空蒸发
    * （见 docs/incidents.md「排队消息凭空消失」）。
+   *
+   * **三档都会调到,调用方必须三档都处置**（第 1 轮自由审查 F2/F3:上一版只在「不是 refused」
+   * 时调,于是续跑那一路的 finally 和开机对账压根看不到「明确拒收」这个事实,照旧拿本地回合行
+   * 反推出「已送达」并补写 sent —— 日志里先打印「输入没能送进 agent」紧接着打印「原文已送达,
+   * 补记这一笔确认」）：
+   *   · `accepted` → 落 `sent` / 确认消费;
+   *   · `refused`  → 确证没送出去,归还原文、立刻可重投;
+   *   · `unknown`  → **留在在途**:不写 `sent`、也不归还（还了就重投,那才是重复执行）。语义与
+   *     两个出口见 ../turn-input-acceptance.ts 文件头。
+   *
+   * 从前叫 `onDelivered`。改名是刻意的:那个名字把「回调被调到」读成了「已送达」,而这正是
+   * F2/F3 两条的共同根因 —— 新名字让每个调用点在编译期被迫重新想一遍三档各自该干什么。
    */
-  onDelivered?: () => void | Promise<unknown>;
+  onInputSettled?: (acceptance: InputAcceptance) => void | Promise<unknown>;
   /**
    * 「这个任务此刻还能不能被**这条消息**叫醒」——**占住回合之后**再问一次，返回理由
    * 字符串就撤回这一轮（返回 false，一个字都不送）。
