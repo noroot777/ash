@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
+import { reviewInputHold } from "./review-input-verdict.js";
 import {
   claimReviewDispatch, clearReviewDispatchIntent, releaseReviewDispatchClaim,
   reviewDispatchRecovery, reviewDispatchVerdict, reviewPromptDelivered,
@@ -92,11 +93,14 @@ export async function redeliverReviewRound(
     // 会被按孤儿落成 failed/error —— 用户看到的是「审查刚开始就提前判失败」(第 3 轮审查 F1)。
     // 答 `hold` = 这一拍的信息已经过期,什么都别做;下一拍按新读到的状态重新判。
     if (verdict === "none" || !intent) return "hold";
-    // 交付凭据对得上 = 这份任务书审查者已经收到了,意图只是没来得及清:结清它,不重投。
-    // 同样答 `hold`(而不是 `none`):刚投出去的那一份此刻可能正在跑,结不结算等下一拍按新状态判。
+    // 交付凭据对得上 = 这份任务书越过了交付线:**不重投**(送没送到都不许,说不清时重投就是重复
+    // 执行)。越过了线却还不等于送到了 —— 协议定论还可能到(review-input-verdict.ts)就连意图一起
+    // 留着,谁都别替它下结论;定论到了、或者再也不会到,才结清意图。两种都答 `hold`(而不是
+    // `none`):刚投出去的那一份此刻可能正在跑,结不结算等下一拍按新状态判。
     if (await reviewPromptDelivered(taskId, directory, generation)) {
+      if (reviewInputHold(taskId, task, directory, generation) === "hold") return "hold";
       await clearReviewDispatchIntent(run.id, round.round, generation);
-      console.error(`[ash] 审查任务书已确认送达，补投取消 run=${run.id} round=${round.round}`);
+      console.error(`[ash] 审查任务书已越过交付线，补投取消 run=${run.id} round=${round.round}`);
       return "hold";
     }
     if (verdict === "exhausted") {

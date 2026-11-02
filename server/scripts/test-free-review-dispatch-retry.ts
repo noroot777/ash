@@ -85,7 +85,9 @@ try {
     // 竞争者那一轮退出 → 重排的这一笔在同一把锁上拿到位,真的把任务书交了出去。
     releaseTurn(id, rival.held!);
     await until("意图被了结（任务书送进会话）", async () => (await roundOf(run.id)).dispatch == null);
-    assert.equal(reviewDispatchArmed(run.id, 1), false, "送出去之后本进程不再盯着它");
+    // 认领证由派发那一侧按回执收口时归还;意图可能先被这一轮的结算在终态事务里清掉(测试隔离闸
+    // 起不来真 codex,协议层答拒收,结算当场照实收尾),所以这里等它,而不是要求两件事同一刻发生。
+    await until("送出去之后本进程不再盯着它", () => !reviewDispatchArmed(run.id, 1));
     await until("审查会话真的起来了", async () => (await reviewerSessions(id)) > 0);
     assert.doesNotMatch(timeline(id), /审查启动失败/, "送出去了就不该留下一句启动失败");
     console.log("✓ ① 释放点上输一次：不落终态、意图留着、下一个空闲窗口自动重试并送出");

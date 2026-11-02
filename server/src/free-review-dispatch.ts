@@ -407,12 +407,10 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
       onAccepted: () => settled(),
       onRefused: (message) => failed(message, "refused"),
       // **说不清 ≠ 送到了,也 ≠ 没送到**:意图不清(那等于宣布送到),也不落终态、不重排(那等于
-      // 宣布没送到)。审查结算那一侧此刻按住了这一轮(交付凭据上记着「说不清」、意图还挂着,见
-      // review-input-verdict.ts),所以 round 仍是 reviewing。这里只把内存那张证还掉 —— 这一轮
-      // 已经结束,「本进程还盯着」不再成立;留着它,对账见 `armed` 就永远跳过。还掉之后对账按
-      // 「有意图、没人盯着」接手,补办那一侧先问持久交付凭据(文件头 ⑮):越过了线的就只结清
-      // 意图、**不重投**(说不清时重投就是重复执行),之后意图已空,按孤儿照常结算;压根没走到
-      // spawn 的那一种则照常补投。迟到的定论在那之前到了,就由上面两档收口。
+      // 宣布没送到)。这里只把内存那张证还掉 —— 这一轮已经结束,「本进程还盯着这个回合」不再
+      // 成立;留着它,对账见 `armed` 就永远跳过。之后谁都不替协议下结论(review-input-verdict.ts):
+      // 定论还可能到,结算与补办都按住(意图留着、不重投);迟到的定论由上面两档收口;通道关了
+      // (回执落定成 unknown、或者进程没了),补办才结清意图,结算照实写「说不清」。
       onUnconfirmed: (message) => {
         releaseReviewDispatchClaim(run.id, run.currentRound, token);
         console.error(`[ash] ${label}派发交付说不清 task=${taskId} run=${run.id}：${message}`

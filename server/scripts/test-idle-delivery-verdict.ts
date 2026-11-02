@@ -14,12 +14,13 @@
 //  V4 说不清 → 迟到的拒收:同上,补报拒收;
 //  V5 压根没交接回执(spawn 之前就失败):报说不清 —— 不许再被兜底成「送到了」;
 //  D1 审查派发 · 收下:意图在这一轮跑完之前就了结、认领证还回来;
-//  D2 审查派发 · 说不清:回合结束时**按住不结**(第 1 轮自由审查 R1:结算从前只问「有没有结论」,
-//     当场结成「未能正常给出结论」,意图晾在终态轮次上);认领证还回来,对账按交付凭据只结清
-//     意图、不重投,下一拍照实结算;
+//  D2 审查派发 · 说不清:回合结束时**按住不结**(第 1 轮自由审查 R1),对账两拍也不许拿「越过了
+//     线」清意图、按孤儿结掉(第 2 轮 R1);回执落定成说不清(通道关了)才结清意图、照实结算;
 //  D3 审查派发 · 拒收:结算当场收尾,时间线写明拒收;不停在 reviewing,也不重投;
-//  D4/D5 审查派发 · 说不清 → 迟到的收下 / 拒收:按住期间定论到了 —— 收下只了结意图、对账照常
-//     结算;拒收带着真实原因落终态(从前那一轮已被结掉,这一声被挡回去)。
+//  D4/D5 审查派发 · 说不清 → 对账两拍之后才到的收下 / 拒收:收下只了结意图、对账照常结算;
+//     拒收带着真实原因落终态(从前那一轮已被结掉,这一声被挡回去);
+//  D6/D7 回执写不进库:悬着的照样按住、定论照样按定论结算 —— 缺席不许被读成「没这回事」;
+//  I1/I2 输入身份与代次(第 2 轮 R2):前一次输入迟到的定论写不进后一次的凭据,上一代次的不当这一代读。
 //
 // 跑：npm -w server run test:idle-delivery-verdict
 import assert from "node:assert/strict";
@@ -192,49 +193,63 @@ try {
     return { status: round.status, dispatch: round.dispatch, acceptance: task.waitOwnership?.deliveredReview?.acceptance };
   };
   /** 回合结束、审查者没交卷,而任务书送没送到还说不清:这一轮必须被**按住**,不许当场结成终态。 */
-  const assertHeld = async (id: string, runId: string) => {
+  const assertHeld = async (id: string, runId: string, acceptance: InputAcceptance | null = "unknown") => {
     const state = await reviewState(id, runId);
-    assert.equal(state.acceptance, "unknown", "说不清这件事要落在持久交付凭据上,结算读的就是它");
+    assert.equal(state.acceptance ?? null, acceptance, "说不清这件事要落在持久交付凭据上,结算读的就是它");
     assert.equal(state.status, "reviewing",
       "第 1 轮自由审查 R1:结算只问「有没有结论」,把输入说不清的一轮当场结成「未能正常给出结论」");
     assert.notEqual(state.dispatch, null, "按住期间意图还归派发负责,不许被晾在一个终态轮次上");
   };
+  /**
+   * 回执还悬着的时候连跑两拍对账:**谁都不许替协议下结论**(第 2 轮自由审查 R1:第一拍拿「越过了
+   * 线」当「送到了」清掉意图,第二拍按孤儿结成失败,之后迟到的收下再也救不回来)。
+   */
+  const holdsThroughReconcile = async (id: string, runId: string, acceptance: InputAcceptance | null = "unknown") => {
+    await until("认领证还回来", () => !reviewDispatchArmed(runId, 1));
+    for (let tick = 0; tick < 2; tick++) {
+      await reconcileFreeReviews(id);
+      await assertHeld(id, runId, acceptance);
+    }
+    assert.match(timeline(id), /协议层还没给回执；这一轮先保持进行中/, "按住要留下用户看得见的理由");
+    assert.equal(await reviewerSessions(id), 1, "说不清时重投就是重复执行");
+  };
 
-  // ── D2 说不清,到头也说不清:按住 → 认领证归还 → 对账只结清意图、不重投 → 下一拍照实结算 ──
+  // ── D2 说不清,对账两拍都按住;回执最终落定成 unknown(通道关了)才结清意图、照实结算 ─────
   {
     const id = "verdict-dispatch-unknown";
-    stage = { acceptance: deferred<InputAcceptance>().promise };
+    const receipt = deferred<InputAcceptance>();
+    stage = { acceptance: receipt.promise };
     const run = await dispatch(id);
     await until("这一轮收尾", () => turnOver(id));
     await assertHeld(id, run.id);
-    await until("认领证还回来", () => !reviewDispatchArmed(run.id, 1));
-    await assertHeld(id, run.id);
+    await holdsThroughReconcile(id, run.id);
+    receipt.resolve("unknown");
+    await sleep(50);
     await reconcileFreeReviews(id);
     let state = await reviewState(id, run.id);
-    assert.deepEqual([state.status, state.dispatch], ["reviewing", null], "交付凭据说越过了线:只结清意图");
+    assert.deepEqual([state.status, state.dispatch], ["reviewing", null], "再也不会知道了:只结清意图,不重投");
     await reconcileFreeReviews(id);
     state = await reviewState(id, run.id);
-    assert.notEqual(state.status, "reviewing", "意图已空、没人负责了:下一拍按孤儿结算,不许永远挂着");
+    assert.notEqual(state.status, "reviewing", "通道关了还按着,这一轮就永远停在 reviewing —— 用户没有按钮能放下它");
     assert.match(timeline(id), /送没送进审查者手里说不清/, "时间线要说真话,不是只剩「未能正常给出结论」");
-    assert.equal(await reviewerSessions(id), 1, "说不清时重投就是重复执行");
-    console.log("✓ D2 审查派发 · 说不清:回合结束时按住不结,对账结清意图不重投,随后照实结算");
+    assert.equal(await reviewerSessions(id), 1);
+    console.log("✓ D2 审查派发 · 说不清:对账两拍都按住不清意图;回执落定成说不清才照实结算,不重投");
   }
 
-  // ── D4/D5 说不清 → 迟到的定论:按住期间到了,各走各的出口 ───────────────────────
+  // ── D4/D5 说不清 → 对账两拍之后才到的定论:各走各的出口 ─────────────────────────
   for (const [label, late] of [["D4", "accepted"], ["D5", "refused"]] as const) {
     const id = `verdict-dispatch-late-${late}`;
     const receipt = deferred<InputAcceptance>();
     stage = { acceptance: receipt.promise };
     const run = await dispatch(id);
     await until("这一轮收尾", () => turnOver(id));
-    await assertHeld(id, run.id);
+    await holdsThroughReconcile(id, run.id);
     receipt.resolve(late);
     if (late === "accepted") {
       await until("意图了结", async () => (await reviewState(id, run.id)).dispatch == null);
       const state = await reviewState(id, run.id);
       assert.deepEqual([state.status, state.acceptance], ["reviewing", "accepted"],
         "收下了只了结意图;这一轮的结论由结算给,不由投递层替它下");
-      await until("认领证还回来", () => !reviewDispatchArmed(run.id, 1));
       await reconcileFreeReviews(id);
       assert.notEqual((await reviewState(id, run.id)).status, "reviewing", "没人负责了,对账照常结算");
       assert.doesNotMatch(timeline(id), /拒收|说不清/, "确实收下了,就不许冒出「没收到」那类话");
@@ -244,10 +259,82 @@ try {
       assert.deepEqual([state.status, state.dispatch, state.acceptance], ["error", null, "refused"]);
       assert.match(timeline(id), /拒收.*放心重投/,
         "迟到的拒收必须落得下账 —— 从前那一轮早被结掉,这一声被「这一轮已有结论」挡回去");
-      await until("认领证还回来", () => !reviewDispatchArmed(run.id, 1));
     }
     assert.equal(await reviewerSessions(id), 1, "不自动再投第二份任务书");
-    console.log(`✓ ${label} 审查派发 · 说不清 → 迟到的${late === "accepted" ? "收下:了结意图,对账照常结算" : "拒收:带着真实原因落终态"}`);
+    console.log(`✓ ${label} 审查派发 · 说不清 → 对账两拍之后才到的${late === "accepted" ? "收下:了结意图,对账照常结算" : "拒收:带着真实原因落终态"}`);
+  }
+
+  // ── D6/D7 回执写不进库:不许被读成「缺席 = 没这回事」 ─────────────────────────────
+  const realUpdate = db.update;
+  let receiptWritesFail = false;
+  db.update = function (...args: Parameters<typeof realUpdate>) {
+    if (receiptWritesFail && new Error().stack?.includes("review-input-verdict")) {
+      throw new Error("回执那一笔写不进库（用例注入）");
+    }
+    return realUpdate.apply(this, args);
+  } as typeof realUpdate;
+  {
+    // D6 悬着的那一次写不下来:本进程照样知道「还在等」,这一轮照样按住。
+    const id = "verdict-dispatch-write-fail-pending";
+    const receipt = deferred<InputAcceptance>();
+    stage = { acceptance: receipt.promise };
+    receiptWritesFail = true;
+    const run = await dispatch(id);
+    await until("这一轮收尾", () => turnOver(id));
+    receiptWritesFail = false;
+    await holdsThroughReconcile(id, run.id, null); // 「说不清」那一笔也没写进库
+    receipt.resolve("accepted");
+    await until("意图了结", async () => (await reviewState(id, run.id)).dispatch == null);
+    assert.equal((await reviewState(id, run.id)).acceptance, "accepted", "库恢复之后,迟到的定论照常落下");
+    console.log("✓ D6 回执写不进库 · 还悬着:照样按住,不被当成缺席结掉;库恢复后迟到的收下照常落账");
+  }
+  {
+    // D7 定论写不下来:本进程内照定论结算,不被读成「说不清」。
+    const id = "verdict-dispatch-write-fail-accepted";
+    const hold = deferred<void>();
+    stage = { acceptance: Promise.resolve("accepted"), hold: hold.promise };
+    receiptWritesFail = true;
+    const run = await dispatch(id);
+    await until("意图了结", async () => (await reviewState(id, run.id)).dispatch == null);
+    hold.resolve();
+    await until("这一轮收尾", () => turnOver(id));
+    receiptWritesFail = false;
+    const state = await reviewState(id, run.id);
+    assert.equal(state.acceptance, undefined, "这一笔确实没写进库");
+    assert.notEqual(state.status, "reviewing", "收下了、审查者没交卷:照原路结算");
+    assert.doesNotMatch(timeline(id), /说不清|还没给回执/, "协议明明收下了,写库失败不许把它说成「不知道」");
+    console.log("✓ D7 回执写不进库 · 已收下:本进程照定论结算,不被说成「送没送到说不清」");
+  }
+  db.update = realUpdate;
+
+  // ── I1/I2 输入身份:同一轮审查的前后两次输入,定论各归各的 ──────────────────────────
+  {
+    const { noteReviewInputAcceptance, reviewInputHold } = await import("../src/review-input-verdict.js");
+    const id = "verdict-identity";
+    await freeTask(id);
+    const now = { turnToken: "turn-now", directionToken: "dir-now", directionEpoch: 2 };
+    const before = { turnToken: "turn-before", directionToken: "dir-before", directionEpoch: 1 };
+    const receiptOf = (identity: typeof now, generation = "g") =>
+      ({ directory: "d", generation, identity }) as Parameters<typeof noteReviewInputAcceptance>[1];
+    const deliver = async (identity: typeof now, generation = "g") => db.update(tasks).set({ waitOwnership: {
+      deliveredReview: { directory: "d", generation, identity, confirmedAt: new Date().toISOString() },
+    } }).where(eq(tasks.id, id));
+    const stored = async () => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+    for (const [stale, actual] of [["refused", "accepted"], ["accepted", "refused"]] as const) {
+      await deliver(now);
+      await noteReviewInputAcceptance(id, receiptOf(before), stale);
+      assert.equal((await stored()).waitOwnership?.deliveredReview?.acceptance, undefined,
+        "第 2 轮自由审查 R2:上一次输入迟到的定论写进了这一次输入的凭据");
+      await noteReviewInputAcceptance(id, receiptOf(now), actual);
+      assert.equal((await stored()).waitOwnership?.deliveredReview?.acceptance, actual, "这一次输入自己的定论照常落下");
+      assert.equal(reviewInputHold(id, await stored(), "d", "g"), actual === "refused" ? "refused" : null);
+    }
+    console.log("✓ I1 输入身份:上一次输入迟到的定论写不进这一次的凭据,也挡不住这一次的真实定论");
+    await deliver(before, "g-old");
+    await noteReviewInputAcceptance(id, receiptOf(before, "g-old"), "refused");
+    assert.equal(reviewInputHold(id, await stored(), "d", "g-new"), null,
+      "上一代次的拒收不当这一代的事实读 —— 否则结算会说「审查者一个字都没收到」");
+    console.log("✓ I2 代次:上一代次的凭据不当这一代的事实读");
   }
 
   // ── D3 拒收:结算当场照实收尾,不停在 reviewing,也不重投 ─────────────────────────
@@ -267,7 +354,8 @@ try {
   }
 
   await finish(["verdict-dispatch-accepted", "verdict-dispatch-unknown", "verdict-dispatch-late-accepted",
-    "verdict-dispatch-late-refused", "verdict-dispatch-refused"]);
+    "verdict-dispatch-late-refused", "verdict-dispatch-write-fail-pending", "verdict-dispatch-write-fail-accepted",
+    "verdict-dispatch-refused"]);
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

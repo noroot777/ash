@@ -65,7 +65,7 @@ import { drainRegressionFinalization, finalization } from "./regression-finaliza
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimOwnTurn, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { reviewInputHold, reviewInputNote } from "./review-input-verdict.js";
+import { reviewInputHoldNow, reviewInputNote } from "./review-input-verdict.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { id, now } from "./util.js";
@@ -433,17 +433,15 @@ export async function handleFreeWorkflowSettlement(
   }
   const directory = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   // **没交卷 ≠ 审查者没给结论** —— 也可能是任务书压根没进它手里(判据与收口见 review-input-verdict.ts)。
-  // 说不清、派发还在负责:这一轮不结,交给派发那一侧按迟到的定论或交付凭据收口。确证拒收 / 到头
-  // 仍说不清:照常结算,但先把真实原因写进时间线,别让它只剩一句「未能正常给出结论」。
-  const input = round.conclusion ? null : reviewInputHold(task, directory, round.dispatch);
-  if (input === "hold") {
-    console.error(`[ash] 审查回合结束但任务书送没送到还说不清，暂不结算 task=${taskId} run=${run.id} round=${run.currentRound}`);
-    return true;
-  }
+  // 说不清、定论还可能到:这一轮不结(连意图一起留着),时间线说一声为什么还挂着。确证拒收 / 再也
+  // 不会知道:照常结算,但先把真实原因写进时间线,别让它只剩一句「未能正常给出结论」。
+  const input = round.conclusion ? null : await reviewInputHoldNow(taskId, task, directory);
   if (input) {
+    const delivered = task.waitOwnership?.deliveredReview;
     await appendTaskTimeline(taskId, reviewInputNote(input,
       run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`),
-    { eventKey: `review-input-${input}:${directory}:${task.waitOwnership?.deliveredReview?.generation ?? ""}` });
+    { eventKey: `review-input-${input}:${directory}:${delivered?.generation}:${JSON.stringify(delivered?.identity)}` });
+    if (input === "hold") return true;
   }
   const checked = await regressionSettlementConclusion(taskId, directory, {
     // 孤儿收尾那一路的落笔条件:上下两个事务由结算层各核一次(见那边的 `SettlementFence`)。
@@ -468,6 +466,8 @@ export async function handleFreeWorkflowSettlement(
     if (currentRun?.status !== "reviewing" || currentRun.currentRound !== run.currentRound || currentRound?.status !== "reviewing") return false;
     await transaction.update(freeReviewRounds).set({ conclusion: checked.conclusion,
       status: outcome === "failed" ? "error" : outcome === "passed" ? "passed" : "failed", endedAt: at,
+      // 终态轮次不再挂在途意图(同 `failReviewStart`):留着的话对账只扫 reviewing,它再也没人清。
+      dispatch: null,
     }).where(eq(freeReviewRounds.id, round.id));
     await transaction.update(freeReviewRuns).set({ status: outcome === "failed" ? "failed" : outcome === "passed" ? "passed" : "stopped",
       updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));

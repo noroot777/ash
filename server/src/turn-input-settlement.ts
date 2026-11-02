@@ -19,7 +19,7 @@
 //      等待通常当场返回)。只结一次,哪条出口先到算哪条。
 import { noteDeliveryAccepted, noteDeliveryRefusal } from "./delivery-crossing.js";
 import type { InputAcceptance, RunHandle } from "./executors/types.js";
-import { noteReviewInputAcceptance } from "./review-input-verdict.js";
+import { closeReviewInputWait, noteReviewInputAcceptance } from "./review-input-verdict.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { awaitTurnInput, logTurnInputAcceptance, settleLateTurnInput } from "./turn-input-acceptance.js";
 
@@ -51,15 +51,13 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
   //   · accepted —— 对称的那一半:协议确认了、而 `markSent` 还没落库就崩,重启对账必须仍然
   //     判 `delivered`(只能往前走,绝不归还)。这张记号是「已送达」**唯一**的凭据 ——
   //     本地会话行已经退出那一问(第 2 轮自由审查 F1)。
-  const noteFact = async (fact: InputAcceptance): Promise<void> => {
+  const noteFact = async (fact: InputAcceptance, stillWaiting = false): Promise<void> => {
     if (ids.length) {
       if (fact === "refused") noteDeliveryRefusal(taskId, ids);
       else if (fact === "accepted") noteDeliveryAccepted(taskId, ids);
     }
-    // 写不下来不拦这一轮(同下面的记账):结算读不到时按「没有凭据」走原路,只是少了这一层分辨。
-    try { await noteReviewInputAcceptance(taskId, reviewReceipt?.(), fact); } catch (error) {
-      console.error(`[ash] 任务 ${taskId} 的审查输入回执(${fact})没能记到交付凭据上:`, error);
-    }
+    // 审查回合:定论先进本进程内存再落库,写不下来也不会被读成缺席(review-input-verdict.ts)。
+    await noteReviewInputAcceptance(taskId, reviewReceipt?.(), fact, stillWaiting);
   };
   return {
     handOver(handle) {
@@ -74,7 +72,8 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
       if (!settled && !reviewReceipt?.()) return;
       const acceptance = await awaitTurnInput(handle);
       logTurnInputAcceptance(acceptance, `任务 ${taskId}`);
-      await noteFact(acceptance);
+      // 有界等待超时 ≠ 回执落定:本体还悬着,定论就还可能到 —— 审查结算据此按住这一轮。
+      await noteFact(acceptance, acceptance === "unknown" && !!handle.inputAccepted);
       // **失败不许静默**(第 3 轮自由审查 F4):记账失败照旧不拖累这一轮(这里不抛),但它得
       // 留下痕迹 —— 租约那条路自己带退避补偿(delivery-lease.ts),能走到这儿的是**它之外**
       // 的记账炸了,咽下去就等于「消息永久卡在待发送」这类现场连一行线索都没有。
@@ -91,6 +90,10 @@ reviewReceipt?: () => ReviewStartReceipt | undefined,
             console.error(`[ash] 任务 ${taskId} 的迟到投递记账(${late})出错:`, error); // 同上,不静默
           }
         });
+        // 落定成 unknown 或者抛了:定论再也不会到,审查那一侧别再按着(定论那一档由上面先记)。
+        void handle.inputAccepted?.then((late) => {
+          if (late === "unknown") closeReviewInputWait(taskId, reviewReceipt?.());
+        }, () => closeReviewInputWait(taskId, reviewReceipt?.()));
       }
     },
   };
