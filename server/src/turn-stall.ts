@@ -262,7 +262,7 @@ const isProgress = (event: AgentEvent): boolean => producesWork(event);
  * 确实排在下面那句「热路径在这儿就走掉」之前,所以摆在明处:换来的是熔断诊断说得出「卡在哪
  * 一步」,而不是只能说「什么都没有」。
  */
-const lastProgress = new WeakMap<StallOwner, { turn: string; kind: string }>();
+const lastProgress = new WeakMap<StallOwner, { turn: string; kind: string; noted: boolean }>();
 
 /**
  * 事件消费链上的每一条 agent 事件都过这里。
@@ -293,17 +293,20 @@ export function trackTurnStall(
     // 它在这里原地返回,所以那一轮仍然算「一条进展都没有」。
     if (!isProgress(event)) return;
     if (turnStartedAt) {
-      // **本轮第一条进展事件**:把这个事实落到进程之外去(理由见 StallActions.noteProgress)。
-      // 只首条调,所以不在热路径上 —— 正文 delta 第二条起就只走下面那次 WeakMap.set。
+      // 把「这一轮产出过东西」落到进程之外去(理由见 StallActions.noteProgress)。**重试到
+      // 确认**:落盘报失败就在下一条进展事件上再来一次 —— 只调一次的那一版里,一次写失败就
+      // 永久留下「读侧确证没产出」这个假前提(第 2 轮自由审查 F2)。确认之后只走下面那次
+      // WeakMap.set,所以热路径(正文 delta)不受影响。
       const prior = lastProgress.get(owner);
-      if (prior?.turn !== turnStartedAt) {
+      let noted = prior?.turn === turnStartedAt && prior.noted;
+      if (!noted) {
         try {
-          actions.noteProgress?.();
+          noted = actions.noteProgress?.() ?? true; // 没实现这一档 = 这条链不需要持久那一半
         } catch (error) {
           console.warn(`[ash] 记下会话 ${sessionId} 本轮已有进展失败:`, error);
         }
       }
-      lastProgress.set(owner, { turn: turnStartedAt, kind: event.kind });
+      lastProgress.set(owner, { turn: turnStartedAt, kind: event.kind, noted });
     }
     if (stalls.size === 0) return; // 热路径(正文 delta)在这儿就走掉
     const held = stalls.get(sessionId);
@@ -368,6 +371,17 @@ export function watchTurnSilence(
   turnStartedAt: string | null,
   actions: StallActions,
   hadProgress: "seen" | "none" | "unreadable" = "none",
+  /**
+   * 静默钟**从哪一刻起算**,缺省 = 回合身份自己那一刻。
+   *
+   * 只有常驻调度台要给别的值:它串行跑回合,用户插话那一轮可能在队里排了半小时,而身份就是
+   * 投入那一刻 —— 按身份起算等于「刚轮到它就已经超时」,当场误杀。排过队的那一轮由所有权层
+   * 记下「什么时候轮到它」(team/lead-turns.ts 的 adoptFront),这里按那一刻起算。
+   *
+   * 一次性任务与讨论不传:它们投入即开跑,两个时刻本来就是同一个,而保留身份那一刻才能让
+   * 接管回来的会话把重启前欠的时间算进去。
+   */
+  clockFrom?: string | null,
 ): void {
   // 没有回合身份就不盯(同 trackTurnStall):记在一个与它无关的回合名下只会误杀。
   if (!turnStartedAt) return;
@@ -390,7 +404,7 @@ export function watchTurnSilence(
     }
     return;
   }
-  openStall(sessionId, owner, turnStartedAt, actions, "silence");
+  openStall(sessionId, owner, turnStartedAt, actions, "silence", clockFrom ?? turnStartedAt);
 }
 
 function openStall(
@@ -399,10 +413,15 @@ function openStall(
   turnStartedAt: string,
   actions: StallActions,
   kind: "errors" | "silence" = "errors",
+  /** 静默钟的起点,缺省 = 回合身份(见 watchTurnSilence 的 clockFrom)。 */
+  clockFrom = turnStartedAt,
 ): Stall {
-  // 静默档的起点是**回合真实起点**(欠的时间从那时起算,接管回来挂得晚也不打折);错误档取
-  // 「第一条错误到达的时刻」,理由见下面那段。
-  const at = kind === "silence" ? turnStartedAt : now();
+  // 静默档的起点默认是**回合真实起点**(欠的时间从那时起算,接管回来挂得晚也不打折);常驻台
+  // 排过队的那一轮按「什么时候轮到它」算(clockFrom)。错误档取「第一条错误到达的时刻」,
+  // 理由见下面那段。
+  const at = kind === "silence"
+    ? (Number.isFinite(Date.parse(clockFrom)) ? clockFrom : turnStartedAt)
+    : now();
   // **顶掉的那一条如果已经把红环投影出去了,那份责任跟着走。**(第 1 轮自由审查 F6)
   //
   // 换档(静默档收到第一条错误 → 错误档)必须换起点,否则熔断提早;但撤那颗红环的 CAS 认的是

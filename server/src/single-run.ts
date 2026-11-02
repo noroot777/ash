@@ -35,7 +35,7 @@ import {
   clearTurnStall, resumeTrippedTurn, trackTurnStall, watchTurnSilence, type StallActions,
 } from "./turn-stall.js";
 import { stallUnverifiableText } from "./turn-stall-text.js";
-import { ensureTurnProgressDir, noteTurnProgress, turnProgress } from "./turn-progress-mark.js";
+import { noteTurnProgress, openTurnProgress, turnProgress } from "./turn-progress-mark.js";
 import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import { restoreStallVerdict } from "./turn-stall-persist.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
@@ -63,6 +63,15 @@ export type SingleRunArgs = {
   turnStart: string;
   cliSessionId: string;
   autoTitle: boolean;
+  /**
+   * 这一轮是**接回来的**(reattach),不是本进程开的。
+   *
+   * 静默档的进展参与证明只许由「从头消费这一轮」的那个进程落(`openTurnProgress`):接管方
+   * 看不到 `agentOffset` 之前那一段,自己补一张证明就等于替上一个进程声明「它没产出过」——
+   * 第 2 轮自由审查 F2 实测的升级误杀正是这么来的。这一位只有这一个用途,所以不复用
+   * `autoTitle`(那是「标题解析过了没有」,两件事迟早会分叉)。
+   */
+  adopted?: boolean;
   role?: SessionRole;
   nativeSteer?: {
     prepare?(text: string): string | Promise<string>;
@@ -244,7 +253,8 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     project: (facts) => markSessionStalled(taskId, sessId, facts.since),
     // 「这一轮产出过东西」这个事实必须留在进程之外:接管回来的新句柄看不到 `agentOffset`
     // 之前那一段(理由与实测见 turn-progress-mark.ts 文件头)。
-    noteProgress: () => { if (a.turnStart) noteTurnProgress(taskId, sessId, a.turnStart); },
+    // 返回落盘确认了没有:看门狗据此在下一条进展事件上重试(见 StallActions.noteProgress)。
+    noteProgress: () => (!!a.turnStart && noteTurnProgress(taskId, sessId, a.turnStart)),
     // 熔断档:说出来 + 杀进程。「这一轮失败」这个结论**不在这儿记** —— 看门狗在调 trip 之前
     // 就已经把它钉在回合身份上了(turn-stall-verdict.ts),下面收尾那一段连 `executionFailed` 带
     // 结算用的退出码一起从那一份读。从前这里是 `sawExecutionError = true`:那一位只喂得到
@@ -316,9 +326,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 而起点取库里那一轮的真实起点,所以重启前已经静默掉的那段照样算在里面。2026-11-02 那次
     // 1.5 小时零输出就是接管出来的闲置进程,错误档一拍都不会动。
     //
-    // **进程外那份进展事实先建好再读**:目录是「文件不在 = 确证没有过进展」的前提,少了它
-    // 每一轮都会读成「核实不了」、静默档整体失效(同 delivery-crossing 的 ensureCrossingDir)。
-    ensureTurnProgressDir(taskId);
+    // **进程外那份进展事实**:本进程开的这一轮由我们落「参与证明」(那张证明才是「记号不在 =
+    // 确证没产出」的前提);接管回来的那一轮**只读不写** —— 判据与实测见 turn-progress-mark.ts。
+    if (!a.adopted) openTurnProgress(taskId, sessId, a.turnStart);
     watchTurnSilence(
       sessId, a.handle, a.turnStart, stallActions,
       a.turnStart ? turnProgress(taskId, sessId, a.turnStart) : "none",

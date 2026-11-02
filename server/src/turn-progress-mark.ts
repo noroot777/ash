@@ -17,10 +17,25 @@
 // 正是最容易排队的那一段。熔断判决为此专门搬去了日志文件(`turn-stall-persist.ts` 文件头写的
 // 就是这件事),进展事实是同一类事实,走同一条路。
 //
-// 形态与 `delivery-crossing.ts` 同构,**三态读也是同一道判据**:目录在、文件不在,才算「确证
-// 这一轮没有过进展」;目录不在就是「读不出来」—— 那一档不许用来开熔断(宁可漏判,不可误杀)。
-// 目录由回合开始时的 `ensureTurnProgressDir` 建好并 fsync,所以「目录在」本身是一个可信前提。
-import { closeSync, fsyncSync, mkdirSync, openSync, writeSync } from "node:fs";
+// 形态与 `delivery-crossing.ts` 同构,**三态读也是同一道判据**。但「确证这一轮没有过进展」
+// 的前提不能是**目录在**(第 2 轮自由审查 F2,已跨版本实测):接管那条路会先
+// `ensureTurnProgressDir` 把目录建出来,再拿「目录在、这一轮的文件不在」判确证 —— 而目录只
+// 证明「此刻建得起目录」,证明不了**上一个进程按这套协议记过这一轮的事件**。旧版本(升级前
+// 那一代)压根没有这套记号:它跑着 `sleep 3600`、trace 里工具调用都在,新版接管后自己造出了
+// 判据的前提,于是又把它当成「一条输出都没有过」杀掉 —— 和第 1 轮 F1 一模一样的误杀,只是
+// 换了触发路径。
+//
+// 所以证明力绑在**逐轮的参与证明**上:`openTurnProgress` 由「从头消费这一轮」的那个进程写一张
+// `.watch`,它说的是「这一轮归我盯,我会把进展记在这里」。读的时候:
+//   · 进展记号在        → `seen`;
+//   · 没有进展记号、`.watch` 在 → `none`(**确证**:会记的人在盯,它没记过);
+//   · 两张都没有         → `unreadable`(旧代开的回合、或者记号系统坏了)。
+// 接管那条路**只读不写**:它不许替上一个进程追认「从未产出」。
+//
+// 可靠性也算在同一道判据里:`noteTurnProgress` 写不成时**把 `.watch` 撤掉** —— 记不住进展的
+// 人没资格声明「它没产出」,读侧于此退回 `unreadable`,也就退回修复前的行为(该抓的抓不到),
+// 而不是误杀。
+import { closeSync, fsyncSync, mkdirSync, openSync, rmSync, writeSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { RUNS_DIR } from "./paths.js";
@@ -34,6 +49,10 @@ const progressDir = (taskId: string): string => join(RUNS_DIR, taskId, "progress
 const markName = (sessionId: string, turnStartedAt: string): string =>
   `${sessionId}-${turnStartedAt.replace(/[^0-9]/g, "")}`;
 
+/** 这一轮的**参与证明**:`openTurnProgress` 落它,写不成进展时撤它(判据见文件头)。 */
+const watchName = (sessionId: string, turnStartedAt: string): string =>
+  `${markName(sessionId, turnStartedAt)}.watch`;
+
 /** 已经写过的,不必每条事件都回盘一趟(写入本身幂等,这一层只是省 syscall)。 */
 const written = new Set<string>();
 
@@ -45,31 +64,50 @@ function fsyncDir(path: string): void {
 }
 
 /**
- * 回合开始时建好这棵树。**必须先于第一条事件**,否则「目录不在」分不出「这一轮没进展」和
- * 「这棵树压根没建起来」—— 那正是 `delivery-crossing.ts` 里 `ensureCrossingDir` 存在的理由。
+ * **「这一轮归我盯」** —— 只有**从头消费这一轮**的那个进程才许调(fresh run / 本进程刚开的
+ * 那一轮)。接管回来的进程一个字都不许写:它看不到 `agentOffset` 之前那一段,替上一个进程
+ * 声明「它没产出过」就是第 2 轮审查 F2 那个误杀。
  *
- * 失败只告警:建不起来的代价是此后读到 `unreadable`,而那一档不开熔断 —— 退回修复前的行为
- * (该抓的抓不到),不会误杀。
+ * 必须先于第一条事件。失败只告警:没有这张证明,读侧此后一律 `unreadable`、静默档这一轮不开
+ * —— 退回修复前的行为(该抓的抓不到),不会误杀。
  */
-export function ensureTurnProgressDir(taskId: string): void {
+export function openTurnProgress(taskId: string, sessionId: string, turnStartedAt: string | null): void {
+  if (!turnStartedAt) return; // 没有回合身份就没有可证明的对象(同 watchTurnSilence 的头一道闸)
   try {
     mkdirSync(progressDir(taskId), { recursive: true });
+    const path = join(progressDir(taskId), watchName(sessionId, turnStartedAt));
+    const fd = openSync(path, "w");
+    try {
+      writeSync(fd, `${turnStartedAt}\n`);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     fsyncDir(progressDir(taskId));
   } catch (error) {
-    console.warn(`[ash] 建任务 ${taskId} 的回合进展记号目录失败(静默档将按「核实不了」处理):`, error);
+    console.warn(`[ash] 落会话 ${sessionId} 本轮的进展参与证明失败(静默档这一轮按「核实不了」处理):`, error);
+  }
+}
+
+/** 记不住进展的人没资格声明「它没产出」:撤掉参与证明,读侧退回 `unreadable`(见文件头)。 */
+function dropTurnProgressWatch(taskId: string, sessionId: string, turnStartedAt: string): void {
+  try {
+    rmSync(join(progressDir(taskId), watchName(sessionId, turnStartedAt)), { force: true });
+  } catch (error) {
+    console.warn(`[ash] 撤会话 ${sessionId} 本轮的进展参与证明失败:`, error);
   }
 }
 
 /**
- * 「这一轮真的产出过东西」。由消费链在**本轮第一条进展事件**上调一次(判据共用
- * `@ash/shared/waiting` 的 `producesWork`,由 `turn-stall.ts` 转过来)。
+ * 「这一轮真的产出过东西」。**返回落盘确认了没有** —— 看门狗据此在下一条进展事件上重试,
+ * 直到它确认(同 `StallActions.project` 那条「通知是一次性的、持久状态是要确认的」)。
  *
- * 尽力而为 —— 但写不成要**响亮地说**:这份记号是「接管之后别误杀它」的唯一依据,丢了就等于
- * 把一个健康的长回合重新暴露在静默档下面。
+ * 写不成做两件事:撤掉参与证明(读侧于此退回 `unreadable`,不会误杀),并响亮地说一句 ——
+ * 这份记号是「接管之后别杀它」的唯一依据。
  */
-export function noteTurnProgress(taskId: string, sessionId: string, turnStartedAt: string): void {
+export function noteTurnProgress(taskId: string, sessionId: string, turnStartedAt: string): boolean {
   const key = `${taskId}/${markName(sessionId, turnStartedAt)}`;
-  if (written.has(key)) return;
+  if (written.has(key)) return true;
   written.add(key);
   try {
     mkdirSync(progressDir(taskId), { recursive: true });
@@ -82,22 +120,28 @@ export function noteTurnProgress(taskId: string, sessionId: string, turnStartedA
       closeSync(fd);
     }
     fsyncDir(progressDir(taskId));
+    return true;
   } catch (error) {
     written.delete(key); // 下一条进展事件再试一次
-    console.warn(`[ash] 记下会话 ${sessionId} 本轮已有进展失败(重启接管后可能被静默档误杀):`, error);
+    dropTurnProgressWatch(taskId, sessionId, turnStartedAt);
+    console.warn(`[ash] 记下会话 ${sessionId} 本轮已有进展失败(这一轮的静默档就此退回「核实不了」):`, error);
+    return false;
   }
 }
 
 /**
  * 接管/起跑时问一句:这一轮在**别的进程里**已经产出过东西了吗。
  *
- * `none` 要求目录确实在 —— 同 `readDeliveryCrossing` 的那道判据:文件不在只证明「这一条没
- * 写过」,而只有目录在才排除「整棵树没建起来」。
+ * `none` 要求那张**参与证明**确实在(`openTurnProgress` 由从头消费这一轮的那个进程落的)——
+ * 「进展记号不在」只证明「这一条没写过」,而只有参与证明在才排除「写记号的人压根不在这一轮」
+ * (旧代、或者记号系统坏了)。少了这一道,接管方自己建个目录就能把「从未产出」追认给任何
+ * 一轮 —— 第 2 轮自由审查 F2 实测到的升级误杀正是这么来的。
  */
 export function turnProgress(taskId: string, sessionId: string, turnStartedAt: string): TurnProgressRead {
   try {
-    if (existsSync(join(progressDir(taskId), markName(sessionId, turnStartedAt)))) return "seen";
-    return existsSync(progressDir(taskId)) ? "none" : "unreadable";
+    const dir = progressDir(taskId);
+    if (existsSync(join(dir, markName(sessionId, turnStartedAt)))) return "seen";
+    return existsSync(join(dir, watchName(sessionId, turnStartedAt))) ? "none" : "unreadable";
   } catch (error) {
     console.warn(`[ash] 读会话 ${sessionId} 本轮进展记号失败,按「核实不了」处理:`, error);
     return "unreadable";

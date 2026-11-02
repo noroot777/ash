@@ -218,6 +218,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         turnStart: sess.turnStartedAt ?? sess.startedAt,
         cliSessionId: sess.cliSessionId ?? "",
         autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
+        adopted: true, // 静默档的参与证明只许本进程开的那一轮落(见 SingleRunArgs.adopted)
         nativeSteer: {
           // 接回的会话同样现读:重启不该把一份过期授权一直带下去。
           prepare: async (text) => withGlobalBrowserPolicy(
@@ -257,10 +258,21 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       console.log(`[ash] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
       // 上面这句只证明「**进程**还在」。它曾经是假话:2026-11-02 任务 WfLfTjaGzcA8 接管的是一个
       // 线程已恢复、回合输入却从未送出的 codex 进程 —— 日志照样说接管成功,之后 1.5 小时零输出。
-      // 执行器给得出投递回执的(见 executors/types.ts 的 inputAccepted),失败时如实补一句,
-      // 别让终端里只剩那句乐观的「已接管」。回执自身另有去处(执行器当场按失败结算),这里只负责说。
-      void adoptedHandle.inputAccepted?.catch((error) => console.warn(
-        `[ash] 接管 ${task.id} 后发现这一轮的输入从未送达 agent,本回合按失败结算:`,
+      // 执行器给得出投递回执的(见 executors/types.ts 的 inputAccepted),按**三档**如实补一句,
+      // 别让终端里只剩那句乐观的「已接管」。回执自身另有去处(执行器当场按失败结算/投递侧记账),
+      // 这里只负责说。
+      //
+      // 从前这里挂的是 `.catch(...)`:那是回执还用「抛异常」表示拒收的那一代写法。回执改成三态
+      // (resolve 出 refused/unknown)之后,那条 catch 一次都不会再触发 —— 终端上只剩乐观的那句
+      // (第 2 轮自由审查 N1)。契约换形状时,**所有消费点**都得跟着换,不是只换产出方。
+      void adoptedHandle.inputAccepted?.then((acceptance) => {
+        if (acceptance === "accepted") return;
+        console.warn(acceptance === "refused"
+          ? `[ash] 接管 ${task.id} 后确证这一轮的输入从未送达 agent，本回合按失败结算，原文留在待发送里等重投`
+          : `[ash] 接管 ${task.id} 后仍核实不出这一轮的输入到没到 agent（协议日志读不出来），`
+            + "这一条按在途处理：不写已送达、也不退回重投，身份走有界恢复");
+      }, (error: unknown) => console.warn(
+        `[ash] 接管 ${task.id} 的输入回执本身出错:`,
         error instanceof Error ? error.message : error,
       ));
     } catch (err) {

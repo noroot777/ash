@@ -94,7 +94,10 @@ export interface StallActions {
    */
   project(facts: StallFacts): Promise<boolean>;
   /**
-   * **这一轮产出过东西了** —— 本轮第一条进展事件上调一次(之后不再调)。
+   * **这一轮产出过东西了** —— 本轮进展事件上调,**返回落盘确认了没有**:没确认就在下一条
+   * 进展事件上再来一次(同 `project` 那条「通知是一次性的、持久状态是个要确认的东西」;
+   * 第 2 轮自由审查 F2 点名:上一版只在首条调一次,写失败后再也没人重投,而读侧那时还会把
+   * 「写失败」读成「确证没产出」)。
    *
    * 为什么这件事必须由消费链落盘、而不是留在看门狗里:进程内那份记录(`lastProgress`)挂在
    * **持有者**上,重启接管会造一个新句柄,旧句柄见过的进展一起没了,已消费的输出又落在
@@ -105,5 +108,5 @@ export interface StallActions {
    * 看门狗那一份是纯状态机、一个字节都不落盘(`turn-stall.ts` 文件头最后一段),所以这里只报事实;落盘在 `turn-progress-mark.ts`,读回来
    * 的那一头是 `watchTurnSilence` 的 `hadProgress` 参数。
    */
-  noteProgress?(): void;
+  noteProgress?(): boolean;
 }
