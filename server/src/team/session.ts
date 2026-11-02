@@ -623,9 +623,6 @@ const { adoptInbound, queueInbound, flushUnqueued, releasePending, stashUnqueued
 // **整个模块加载期就炸**(test-team-turn-artifacts 从那一侧进来时必现)。打包产物里没有这个
 // 助手,所以 `npm run build` 四个工作区一直全绿,只有走 tsx 的那条路炸 —— 这正是它能长期潜伏
 // 的原因。改成第一次真用到时再建,两条路都不再依赖求值顺序。
-//
-// **约定:这个模块体里不许再出现「调用环里其它模块导出的函数」。** 要在启动时就绪的东西,
-// 挂到第一次使用那一刻去。
 type SessionConsumer = ReturnType<typeof createSessionConsumer>;
 let consumerCell: SessionConsumer | null = null;
 const consumer = (): SessionConsumer => (consumerCell ??= createSessionConsumer({

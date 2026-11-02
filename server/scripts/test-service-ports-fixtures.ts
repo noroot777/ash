@@ -97,7 +97,7 @@ export const pidIn = (file: string) => {
   return pid;
 };
 
-/** 等到 pidfile 真落下一个号为止,再把它读出来(首次读一律走这条,别自己 `pidIn` 赌时序)。 */
+/** 等到 pidfile 真落下一个号为止,再把它读出来(「听上了端口」早于「pidfile 落盘」,那一刻直接 `pidIn` 会抛)。 */
 export const pidFrom = async (file: string, label = file): Promise<number> => {
   await waitFor(`pidfile 落下真号:${label}`, () => { try { pidIn(file); return true; } catch { return false; } });
   return pidIn(file);

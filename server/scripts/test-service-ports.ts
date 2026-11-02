@@ -74,7 +74,7 @@ try {
   assert.equal((await startCommand("ports1", cwd, service(daemonScript(port, pidfile, [], workerPidfile)))).status, 201);
   await waitFor("启动脚本自己退出(守护化形状)", () => serviceSession("ports1")?.exitCode !== null);
   await waitFor("服务真的听上了端口", async () => (await listening(port)).length > 0);
-  // 首次读 pidfile 一律走 pidFrom:「听上了端口」早于「pidfile 落盘」,直接 pidIn 会读到
+  // 这里用 pidFrom 等号:「听上了端口」早于「pidfile 落盘」,直接 pidIn 会读到
   // 空文件,而那个 0 一旦进了任何组级信号,打的就是调用方自己的整个进程组(见 pidIn)。
   const servicePid = await pidFrom(pidfile, "守护进程");
   strays.add(servicePid);
