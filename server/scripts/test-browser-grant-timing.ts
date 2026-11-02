@@ -515,13 +515,21 @@ for (const [label, rel] of [
     `${label}:消费停止标记之后到 spawn 之间不许有 await —— 停止会落进那个窗口(第 3 轮审查 P2)`);
 }
 const teamSrc = src("../src/team/session.ts");
-assert.match(teamSrc, /await ex\.prepareResume[\s\S]{0,400}?await browserGrantForProject\(/,
-  "团队开台:授权要读在 prepareResume 之后,否则开台期间撤销拦不住");
+// 判据是**顺序**,不是「隔得近」:原先这一条用 `[\s\S]{0,400}?` 卡两者的字距,而那只是
+// 「排在 prepareResume 之后」的一个代理。开台路径后来在中间合法地多了两个 await(接回回合
+// 起点水位、读正文图片身份种子,它们都必须排在授权现读之前),字距一过 400 这条就红,而真正
+// 的保证一个字没破。所以改成按下标比顺序,再把「授权现读之后到那道闸之间不许有 await」单独
+// 钉一条 —— 后者才是这条不变量真正要的东西。
+const teamPrepareAt = teamSrc.indexOf("await ex.prepareResume");
 const teamGrantAt = teamSrc.indexOf("await browserGrantForProject(");
+assert.ok(teamPrepareAt > 0 && teamGrantAt > teamPrepareAt,
+  "团队开台:授权要读在 prepareResume 之后,否则开台期间撤销拦不住");
 const teamGateAt = teamSrc.indexOf("if (cell.halted) throw new TeamOpenHalted();", teamGrantAt);
 const teamStartAt = teamSrc.indexOf("openResident({", teamGateAt);
 assert.ok(teamGrantAt > 0 && teamGateAt > teamGrantAt && teamStartAt > teamGateAt,
   "团队开台:必须是「读授权 → 消费停止标记 → 起进程」的顺序");
+assert.doesNotMatch(teamSrc.slice(teamGrantAt + 10, teamGateAt), /await /,
+  "团队开台:读授权之后到那道闸之间不许再有 await —— 别的 await 都会让这份授权过期");
 assert.doesNotMatch(teamSrc.slice(teamGateAt, teamStartAt), /await /,
   "团队开台:那道闸与 openResident 之间不许有 await,否则停止又会落进新窗口");
 ok("顺序不变量:读授权 → 查取消/闸 → 启动,中间无 await");
