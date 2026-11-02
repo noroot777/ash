@@ -26,7 +26,7 @@
 //      整笔不许往下走(第 3、4 轮审查 F1)。
 //    「不许再创建」是同一条不变量的另一半,在 monitor-session.ts 的资格闸里;「重启之后谁来
 //    问一遍」在 `reattachMonitors`(按同一份出口资格)和启动期的债务清扫里。
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, isNull, ne, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRuns, monitors } from "./db/schema.js";
 import { cancelPendingMonitorEvents } from "./monitor-events.js";
@@ -94,6 +94,7 @@ async function stopMonitorsForTaskLocked(
       // 身份边条就在它旁边:pid 还空着的创建意图行靠它认领(见 `reclaimMonitorProcess`)。
       logPath: monitors.logPath,
       sourceReviewRun: monitors.sourceReviewRun, sourceReviewRound: monitors.sourceReviewRound,
+      sourceReviewGeneration: monitors.sourceReviewGeneration,
     })
     .from(monitors)
     .where(and(eq(monitors.taskId, taskId), isAshKind));
@@ -116,7 +117,7 @@ async function stopMonitorsForTaskLocked(
   const doomed: typeof all = [];
   for (const m of all) {
     const spared = intent === "task-settled" && m.sourceReviewRun !== null
-      && await isReviewSourceActive(m.sourceReviewRun, m.sourceReviewRound);
+      && await isReviewSourceActive(m.sourceReviewRun, m.sourceReviewRound, m.sourceReviewGeneration);
     if (spared) kept.push(m.id);
     else if (m.status === "running") doomed.push(m);
   }
@@ -271,8 +272,23 @@ function finishAccounting(
  *
  * 审查落终态的写点有好几处（`free-workflow.ts` 的三种结局、`free-review-round.ts` 的启动
  * 失败），所以这个函数按 **runId** 收而不是按任务收：调用方只需要知道「哪一次审查结束了」。
+ *
+ * ── `owner`:收**自己那一次**的,不是整条 run 的 ────────────────────────────────
+ *
+ * 只按 runId 收是个越界的刀(第 4 轮审查 F2):`run.id` 既跨轮复用(`nextRound` 把同一个 run
+ * 的轮次加一),同一轮又会被用户重跑(`reopenFailedFreeReview` 换证据代次)—— 两种情况下 run
+ * 都是同一个,而收尾是**异步**的(终态之后才做,中间全是 await)。于是上一次的收尾会把后来那一
+ * 次刚挂上的哨兵停掉、把它排着的结果作废,而后来那一次的审查者还在跑:它等的结果再也不会来
+ * (实测:新哨兵 running → stopped)。
+ *
+ * 所以调用方要说清**自己是哪一次**(轮次 + 代次),这里只动身份对得上的那些行。
+ * 哪一维没给就不按那一维筛;行上那一列是 NULL(存量行,或这一列加上之前挂的)照旧要收 ——
+ * 它压根没有身份,漏在后台比被早收一次更糟(同 `source_review_round` 的口径)。
  */
-export async function stopMonitorsForReviewRun(runId: string, reason: string): Promise<number> {
+export async function stopMonitorsForReviewRun(
+  runId: string, reason: string,
+  owner?: { round?: number | null; generation?: string | null },
+): Promise<number> {
   // **锁谁**：这次审查跑在哪个任务上，哨兵就挂在哪个任务上，所以锁的是那条 `task:<id>`
   // 队列 —— 跟创建、跟终态连坐同一条，一把就够。「归属行一定都在这个任务上」不是巧合：
   // `source_review_run` 只由 `monitorSourceGate` 写，而它取的是**这个任务自己**正在进行
@@ -300,7 +316,15 @@ export async function stopMonitorsForReviewRun(runId: string, reason: string): P
         logPath: monitors.logPath,
       })
       .from(monitors)
-      .where(and(eq(monitors.sourceReviewRun, runId), isAshKind));
+      .where(and(
+        eq(monitors.sourceReviewRun, runId), isAshKind,
+        // 身份对得上的才收(见上面 `owner`)。NULL = 那一行没有这一维的身份,照旧收。
+        ...(owner?.round === undefined || owner.round === null ? []
+          : [or(isNull(monitors.sourceReviewRound), eq(monitors.sourceReviewRound, owner.round))]),
+        ...(owner?.generation === undefined || owner.generation === null ? []
+          : [or(isNull(monitors.sourceReviewGeneration),
+            eq(monitors.sourceReviewGeneration, owner.generation))]),
+      ));
     // 跟任务侧同一条路:`finish` 走记账那一圈,这边再按资源责任核对一遍(见文件头第 ④ 条)。
     // 这一侧不销毁身份(审查结束而已,行还在),所以责任落不下来时只出声,不往上抛。
     let stopped = 0;

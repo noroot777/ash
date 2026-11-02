@@ -171,7 +171,7 @@ export async function ensureSchema() {
       start_evidence TEXT, timeout_ms INTEGER,
       start_anchor_width_ms INTEGER, tool_use_id TEXT,
       source_run TEXT, start_low_at TEXT, source_role TEXT,
-      source_review_run TEXT, source_review_round INTEGER,
+      source_review_run TEXT, source_review_round INTEGER, source_review_generation TEXT,
       unit_token TEXT, ended_by TEXT,
       results_abandoned_at TEXT, results_abandoned_reason TEXT,
       result_handoff_at TEXT, result_handoff_text TEXT,

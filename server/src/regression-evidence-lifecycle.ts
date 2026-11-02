@@ -47,15 +47,22 @@ export async function evidenceState(taskId: string, directory: string, initialTa
   }, { behavior: "immediate" });
 }
 
-export async function restartRegressionEvidence(taskId: string, directory: string, transaction: ConclusionTransaction): Promise<void> {
+/**
+ * 换代次 —— **返回新的那一个**。调用方要它不是为了记日志:重跑那一笔换完代次之后,必须在
+ * **同一段同步代码**里按新代次抢下派发认领(见 free-review-dispatch.ts 的
+ * `supersedeReviewDispatch`),中间插进任何一次 await 就会开出「谁都没在负责」的窗口给对账收尸。
+ */
+export async function restartRegressionEvidence(taskId: string, directory: string, transaction: ConclusionTransaction): Promise<string> {
   const target = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
   const owners = [taskId, ...(await transaction.select({ id: tasks.id }).from(tasks)
     .where(eq(tasks.reviewOf, taskId))).map((task) => task.id)];
-  await transaction.update(regressionEvidence).set({ generation: randomUUID(), acceptedBasis: null, settlement: null, finalization: null,
+  const generation = randomUUID();
+  await transaction.update(regressionEvidence).set({ generation, acceptedBasis: null, settlement: null, finalization: null,
     targetIdentity: target ? reviewTargetIdentity(target) : null, continuation: { phase: "running" },
     excludedMonitors: (await transaction.select({ id: monitors.id }).from(monitors)
       .where(inArray(monitors.taskId, owners))).map((monitor) => monitor.id),
   }).where(eq(regressionEvidence.directory, directory));
+  return generation;
 }
 
 export async function refreshRegressionEvidence(

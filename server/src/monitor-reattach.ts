@@ -60,7 +60,8 @@ async function reattachBlockedReason(row: Row): Promise<string | null> {
     .from(tasks)
     .where(eq(tasks.id, row.taskId))).at(0);
   if (!task) return "它的任务已经不在了";
-  return monitorWakeGate(task, { reviewRun: row.sourceReviewRun, reviewRound: row.sourceReviewRound });
+  return monitorWakeGate(task, { reviewRun: row.sourceReviewRun, reviewRound: row.sourceReviewRound,
+    reviewGeneration: row.sourceReviewGeneration });
 }
 
 

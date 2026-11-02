@@ -227,6 +227,22 @@ export const monitors = sqliteTable("monitors", {
    * NULL = 存量行 —— 只按 run 判,也就是这一列加上之前的行为。
    */
   sourceReviewRound: integer("source_review_round"),
+  /**
+   * 起它的是这一轮的**哪一次**(那一刻 `regression_evidence.generation` 的值)。
+   *
+   * 跟上面那一列是同一课的第三遍:`run.id` 跨轮复用,所以加了轮次;而**同一轮也会被重跑**
+   * —— `reopenFailedFreeReview` 把 round 放回 reviewing 并给证据行换一个新代次,run 和轮次
+   * 两样都原封不动。于是「这一行代表哪一次审查」在这两列上仍然是歧义的,而三处都因此出错:
+   * - 审查收尾按 run 收哨兵(`stopMonitorsForReviewRun`):上一次的收尾把**新一次**刚挂上的
+   *   哨兵停掉、把它排着的结果作废,新一次的审查者还在跑,它等的结果再也不会来
+   *   (第 4 轮审查 F2 实测);
+   * - 事件出口(`isReviewSourceActive`):run 还是 reviewing、轮次也对得上,于是上一次等的
+   *   那件事的结果被送进新一次的会话;
+   * - 完成闸的豁免(`sparedByReview`):上一次遗留的哨兵仍被当成「有一次审查在等它」。
+   *
+   * NULL = 存量行,或者不是审查挂的 —— 只按 run + 轮次判,也就是这一列加上之前的行为。
+   */
+  sourceReviewGeneration: text("source_review_generation"),
 });
 
 // ── 还没配上 `task_started` 的 Monitor 调用 ────────────────────────────────────

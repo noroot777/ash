@@ -255,8 +255,8 @@ async function initializeServer() {
     });
     if (gates.interrupted) console.log(`[ash] 验收前置命令：${gates.interrupted} 条被重启打断，已收尾`);
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
-    // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
-    const { reconcileFreeReviews } = await import("./free-workflow.js");
+    // 收拾死在投递链上的 reviewing run（详见 free-review-reconcile.ts）。
+    const { reconcileFreeReviews } = await import("./free-review-reconcile.js");
     await reconcileFreeReviews().catch((err) => console.error("[ash] 自由审查对账失败（不影响启动）:", err));
     const { reconcileRegressionSettlements, startRegressionSettlementRecovery } = await import("./regression-settlement.js");
     await reconcileRegressionSettlements().catch((err) => console.error("[ash] 延期验证结算对账失败（不影响启动）:", err));
