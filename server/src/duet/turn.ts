@@ -35,6 +35,7 @@ import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verific
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { isExecutionNotice, isSessionScopeNotice, announceSessionNote, CROSS_OWNER_SESSION_NOTE } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
+import { ensureTurnProgressDir, noteTurnProgress, turnProgress } from "../turn-progress-mark.js";
 import { clearTurnStall, trackTurnStall, watchTurnSilence, type StallActions } from "../turn-stall.js";
 import { clearSessionStalled, markSessionStalled } from "../session-stall-flag.js";
 import { clearStallFailure } from "../turn-stall-verdict.js";
@@ -305,6 +306,9 @@ export async function runTurn(args: {
       },
       // 持久那一半单独一个动作:它要报成败,看门狗据此重投到确认(理由见 StallActions.project)。
       project: (facts) => markSessionStalled(taskId, rowId, facts.since),
+    // 「这一轮产出过东西」这个事实必须留在进程之外:接管回来的新句柄看不到 `agentOffset`
+    // 之前那一段(理由与实测见 turn-progress-mark.ts 文件头)。
+    noteProgress: () => { if (turnStart) noteTurnProgress(taskId, rowId, turnStart); },
       // `errorMsg` 非空 = 这一轮按失败结算(见下面 recordTurnSpan 的 outcome),而讨论链据此
       // 中止整场 —— 对一个上游连不上的回合这正是想要的:接着往下发言只会把空话喂给对手。
       // 所以讨论这一路不需要从 `turn-stall-verdict.ts` 读回结论:它的结算判据(`errorMsg`)本来就在
@@ -325,7 +329,14 @@ export async function runTurn(args: {
     };
     // 静默档同上(single-run.ts 同一句):讨论这一路也是一个句柄一个回合,零进展的发言跟
     // 单飞是同一个毛病 —— 判据一个字都不在这儿,见 ../turn-stall.ts 文件头。
-    watchTurnSilence(rowId, handle, turnStart, stallActions);
+    //
+    // **进程外那份进展事实先建好再读**:目录是「文件不在 = 确证没有过进展」的前提,少了它
+    // 每一轮都会读成「核实不了」、静默档整体失效(同 delivery-crossing 的 ensureCrossingDir)。
+    ensureTurnProgressDir(taskId);
+    watchTurnSilence(
+      rowId, handle, turnStart, stallActions,
+      turnStart ? turnProgress(taskId, rowId, turnStart) : "none",
+    );
     try {
       for await (const event of handle.events) {
         // 窄出口的「此刻还在等上游」同一处口径(见 session-waiting.ts):讨论这一路的正文

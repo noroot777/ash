@@ -85,95 +85,10 @@ import {
   silentTurnTripText, silentTurnWarningText,
   stallEscalateText, stallResumeText, stallTripText, stallVolatileVerdictText, stallWarningText,
 } from "./turn-stall-text.js";
+import type { StallActions, StallFacts, StallOwner } from "./turn-stall-contract.js";
 import { now } from "./util.js";
 
-/** 持有者 = 此刻在消费这条会话的那个实例本身(同 session-waiting.ts 的 WaitingOwner)。 */
-export type StallOwner = object;
-
-/** 一次停滞的现场。文本由本模块统一拼(三条链的措辞不许漂),这里只带事实。 */
-export interface StallFacts {
-  sessionId: string;
-  taskId: string;
-  turnStartedAt: string;
-  /** 停滞起点:**第一条错误事件的到达时刻**(见 openStall 的注释,刻意取保守的那一边)。 */
-  since: string;
-  /** 自那以来的错误事件总数。 */
-  errors: number;
-  /** 其中 `level:"notice"` 的那些 —— 「上游在重试」这一类。 */
-  retries: number;
-  /** 其中来自**子智能体线程**的那些(包装成 `nativeWork` 活动的,见 errorFacts)。 */
-  childErrors: number;
-  /** 最后一条错误的原文(已截断)。 */
-  lastMessage: string;
-  /**
-   * 停滞**之前**这一轮最后那条正常事件是什么(`text`/`thinking`/`tool`/…),null = 这一轮从头
-   * 到尾没有过正常事件。
-   *
-   * 诊断里「卡在哪一步」靠它:`tool` 之后挂住(工具跑完等模型总结)和一条正常输出都没有过
-   * (连接从头就没建起来)是两种现场,要查的东西完全不同。
-   *
-   * **原始协议的 method/type 不在这一层**:那个只有 `executors/diagnostics.ts` 的
-   * `RunTraceRecorder.finish()` 产出,而它是**进程退出之后**才跑的 —— 熔断这一刻进程还活着,
-   * 那个对象压根不存在。同一份信息在下面 `rawLogHint` 指名的那个原始事件流文件的最后一行里。
-   */
-  lastProgressKind: string | null;
-  elapsedMs: number;
-}
-
-export interface StallActions {
-  /** 这个任务的 id —— 诊断里要给原始事件流的落点。 */
-  taskId: string;
-  /**
-   * **警告档**:落一条持久可见的提示。
-   *
-   * 落点是**执行过程**(trace)而不是 `.md` 的 system 旁注:后者是回合收口之后才补落盘的,
-   * 一整串提示会糊在会话结尾、离它真正发生的那一步十万八千里(用户 2026-10-21 反馈,
-   * 同一个理由写在 `executors/claude-stream.ts` 的 waitTimer 那段)。
-   */
-  warn(text: string, facts: StallFacts): void;
-  /**
-   * **熔断档**:红色诊断 + 终止这一轮。
-   *
-   * 「这一轮算失败」这件事**本模块已经替实现方钉好了**(熔断前先写 `turn-stall-verdict.ts`,
-   * 三处结算各自去读),实现方不必、也不该再去反推退出码 —— 被杀的 CLI 多半报不出非零,理由
-   * 见那个文件头。这里只负责「说出来 + 让它停下」。
-   */
-  trip(text: string, facts: StallFacts): void;
-  /**
-   * **熔断的兜底**:`trip` 之后过了宽限期,这一轮**还是没真的结束**。
-   *
-   * 为什么要有这一档(第 1 轮审查第 4 条):`trip` 对常驻台走的是 `interrupt()`,而那只是
-   * 往 stdin 写一行请求 —— 没有 ACK、没有「等回合真的结束」、也没有强杀退路。请求没人理
-   * 的话,熔断就只是在时间线上说了句话,回合照旧卡着。所以熔断**以真实结束为成功条件**:
-   * 没结束就在这里回收句柄/台。
-   *
-   * 不实现 = 这条链的 `trip` 本身就是硬终止(单飞/duet 直接 `kill()`),不需要第二档。
-   */
-  escalate?(text: string, facts: StallFacts): void;
-  /**
-   * 停滞解除(上游回话了)或回合收尾:撤掉卡片上那个持久标记。只在真的报过警时才会被调。
-   *
-   * **熔断之后同样会走到这里**(回合真结束时)—— 那个标记说的是「此刻正卡着」,回合都结束了
-   * 它就该撤掉,持久可见的那份证据是时间线上的熔断诊断 + 任务落的失败态。不撤的那一版会把
-   * 标记留在会话行上,下一轮复用同一行时 `ended_at` 一清,它又亮起来:页面上一边是正常答完
-   * 的新回合、一边是红色停滞环,刷新还在(第 1 轮审查第 3 条,已实测)。
-   */
-  resolve(facts: StallFacts): void;
-  /**
-   * 警告档的**持久投影**:把「这条会话此刻卡在上游连不上」落进库(卡片上那颗红环)。
-   *
-   * 为什么它跟 `warn` 分开、而且要报成败(本轮审查 N1):上一版两件事挤在 `warn` 里,而
-   * `warned` 在调用动作之前就置 true 了 —— 投影那笔 UPDATE 一次失败(I/O、权限、库忙)只写一行
-   * console,之后再也不会有人重投。于是上游继续断着、时间线上的警告也在,卡片却一直没有红环:
-   * **「已经通知过」被当成了「持久状态已经确认」**,而这两件事的失败模式完全不同 —— 通知是一次性
-   * 的,投影是个需要确认的状态。
-   *
-   * 拆开之后看门狗每一拍重投一次,直到它确认落库(置标记那笔按定义幂等:同一个 `since` 写第二次
-   * 结果一样)。**必填**,不是可选增强:做成可选的话新增一条消费链忘了传就静默没有持久那一半,
-   * 而那正是这一条本身的形状。
-   */
-  project(facts: StallFacts): Promise<boolean>;
-}
+export type { StallActions, StallFacts, StallOwner } from "./turn-stall-contract.js";
 
 type Stall = StallFacts & {
   /**
@@ -188,6 +103,18 @@ type Stall = StallFacts & {
   warned: boolean;
   /** 持久投影已经**确认**落库了。没确认就每拍重投一次 —— 跟 `warned` 是两件事(见 `project`)。 */
   projected: boolean;
+  /**
+   * 已经投影出去的那个**身份**(库里 `upstream_stalled_since` 存的就是这个值),没投过是 null。
+   *
+   * 为什么不能直接用 `since`:换档时(静默档收到第一条错误 → 错误档)起点必须换成错误到达的
+   * 时刻,否则熔断会提早整整一个「回合已经跑了多久」。可撤销那颗红环的 CAS 认的是**置上它的
+   * 那一刻**(`session-stall-flag.ts` 的 `unsetStalled`),于是起点一换,旧标记就再也撤不掉 ——
+   * 页面上任务已经恢复正常输出、红环却永久亮着,刷新还在(第 1 轮自由审查 F6)。
+   *
+   * 所以投影责任跟着这一位走、而不是跟着 `since` 走:换档时整个迁移给新的那一条(见
+   * `openStall` 的 `inherit`),`close` 撤的也是这一位。
+   */
+  projectedSince: string | null;
   /** 此刻有一笔投影在途:别叠第二笔。 */
   projecting: boolean;
   trippedAtMs: number | null;
@@ -365,7 +292,19 @@ export function trackTurnStall(
     // **静默档靠的正是这一条**:重启接管时唯一会出现的事件就是 `session`(会话身份报一遍),
     // 它在这里原地返回,所以那一轮仍然算「一条进展都没有」。
     if (!isProgress(event)) return;
-    if (turnStartedAt) lastProgress.set(owner, { turn: turnStartedAt, kind: event.kind });
+    if (turnStartedAt) {
+      // **本轮第一条进展事件**:把这个事实落到进程之外去(理由见 StallActions.noteProgress)。
+      // 只首条调,所以不在热路径上 —— 正文 delta 第二条起就只走下面那次 WeakMap.set。
+      const prior = lastProgress.get(owner);
+      if (prior?.turn !== turnStartedAt) {
+        try {
+          actions.noteProgress?.();
+        } catch (error) {
+          console.warn(`[ash] 记下会话 ${sessionId} 本轮已有进展失败:`, error);
+        }
+      }
+      lastProgress.set(owner, { turn: turnStartedAt, kind: event.kind });
+    }
     if (stalls.size === 0) return; // 热路径(正文 delta)在这儿就走掉
     const held = stalls.get(sessionId);
     // 持有者不符 = 迟到的旧台输出,无权解除接管那台的停滞(同 session-waiting.ts 的换台闸)。
@@ -392,9 +331,13 @@ export function trackTurnStall(
   // **静默档也在这里换掉**(`kind !== "errors"`):一条错误事件推翻了它的前提(「什么都没有」),
   // 而错误档的起点校得更准。沿用静默档那个起点(= 回合真实起点)会让熔断比错误档该有的时刻
   // 提早整整一个「回合已经跑了多久」,正好踩在「宁可晚杀不可早杀」的反面。
-  const stall = held && held.owner === owner && held.turnStartedAt === turnStartedAt && held.kind === "errors"
-    ? held
-    : openStall(sessionId, owner, turnStartedAt, actions);
+  //
+  // **但背着未兑现终止义务的那一条不许被顶掉**(本轮审查 N2):熔断已经作出、话已经说出去了,
+  // 顶掉它等于把 `trippedAtMs`/`escalated` 一起清零 —— 同一轮会被重新警告、重新判决一遍,
+  // 宽限回收那一档也从头开始。终止义务只有两个出口(见上面那段),换档不是其中之一。
+  const reusable = held && held.owner === owner && held.turnStartedAt === turnStartedAt
+    && (held.kind === "errors" || held.trippedAtMs !== null);
+  const stall = reusable ? held! : openStall(sessionId, owner, turnStartedAt, actions);
   stall.actions = actions;
   stall.errors += 1;
   if (err.notice) stall.retries += 1;
@@ -412,12 +355,19 @@ export function trackTurnStall(
  * 回合 —— 事件驱动的开法在这种现场永远不会被触发,而那正是 2026-11-02 那次 1.5 小时零输出的
  * 形状。起点取 `turnStartedAt`(回合真实起点)而不是此刻:重启接管回来的会话挂得晚,但它欠的
  * 时间是真欠的,按此刻起算等于把已经静默掉的那段一笔勾销。
+ *
+ * `hadProgress` 是**这一轮在别的进程里有没有产出过东西**,由消费链从进程外那份事实读进来
+ * (`turn-progress-mark.ts`;本模块不碰盘)。三档里只有「确证没有过」才允许开这一档 ——
+ * 「有过」和「读不出来」一律不开:接管一个正在跑长工具的健康回合时,本进程一条进展都看不到
+ * (都在 `agentOffset` 之前),光凭内存里那张 WeakMap 判等于把它和「输入压根没送到」混为一谈,
+ * 而静默钟按回合真实起点算 —— 10 分钟报警、45 分钟当场杀掉(第 1 轮自由审查 F1 实测)。
  */
 export function watchTurnSilence(
   sessionId: string,
   owner: StallOwner,
   turnStartedAt: string | null,
   actions: StallActions,
+  hadProgress: "seen" | "none" | "unreadable" = "none",
 ): void {
   // 没有回合身份就不盯(同 trackTurnStall):记在一个与它无关的回合名下只会误杀。
   if (!turnStartedAt) return;
@@ -432,6 +382,14 @@ export function watchTurnSilence(
   if (held && held.trippedAtMs !== null) return;
   // 这一轮已经有过进展(消费链晚挂、而事件先到) → 静默档压根没有适用对象。
   if (lastProgress.get(owner)?.turn === turnStartedAt) return;
+  // **进程外那份事实同理,而且它才是接管那条路上唯一看得见前半段的东西。** 读不出来也不开:
+  // 宁可漏判(退回修复前的行为),不可拿一个核实不了的前提去杀一个可能完全健康的回合。
+  if (hadProgress !== "none") {
+    if (hadProgress === "unreadable") {
+      console.warn(`[ash] 会话 ${sessionId} 本轮有无进展核实不了,这一轮不启用静默档`);
+    }
+    return;
+  }
   openStall(sessionId, owner, turnStartedAt, actions, "silence");
 }
 
@@ -445,6 +403,18 @@ function openStall(
   // 静默档的起点是**回合真实起点**(欠的时间从那时起算,接管回来挂得晚也不打折);错误档取
   // 「第一条错误到达的时刻」,理由见下面那段。
   const at = kind === "silence" ? turnStartedAt : now();
+  // **顶掉的那一条如果已经把红环投影出去了,那份责任跟着走。**(第 1 轮自由审查 F6)
+  //
+  // 换档(静默档收到第一条错误 → 错误档)必须换起点,否则熔断提早;但撤那颗红环的 CAS 认的是
+  // **置上它的那一刻**,起点一换旧标记就再也撤不掉 —— 任务恢复正常输出后红环永久亮着。所以
+  // 把身份整个继承过来:红环期间不灭(它确实一直卡着),`close` 撤的也是这一位。
+  //
+  // 只继承**同一轮、同一持有者**的那一份:换台/换轮是另一回事,那一份的销账归旧消费链
+  // (同下面那段「顶掉的那一条什么都不做」的口径)。
+  const displaced = stalls.get(sessionId);
+  const inherited = displaced && displaced.owner === owner && displaced.turnStartedAt === turnStartedAt
+    ? displaced.projectedSince
+    : null;
   const stall: Stall = {
     kind,
     sessionId,
@@ -465,7 +435,9 @@ function openStall(
     owner,
     warned: false,
     trippedAtMs: null,
-    projected: false,
+    // 继承来的那颗红环已经在库里了:不必重投,但**必须记着它**,否则没人撤得掉。
+    projected: inherited !== null,
+    projectedSince: inherited,
     projecting: false,
     escalated: false,
     actions,
@@ -493,17 +465,28 @@ const factsOf = (stall: Stall): StallFacts => ({
   elapsedMs: stall.elapsedMs,
 });
 
+/** 把**已经投影出去的那颗红环**撤掉。`close` 与迟到的投影共用,所以只有一份(身份口径见 Stall.projectedSince)。 */
+function discardProjection(sessionId: string, stall: Stall): void {
+  if (!stall.projectedSince) return;
+  const since = stall.projectedSince;
+  stall.projectedSince = null;
+  try {
+    stall.actions.resolve({ ...factsOf(stall), since });
+  } catch (error) {
+    console.warn(`[ash] 撤销会话 ${sessionId} 的上游停滞标记失败:`, error);
+  }
+}
+
 /** 停滞结束(上游回话 / 回合收尾 / 熔断后回合真的结束了):报过警就得把那个标记撤掉。 */
 function close(sessionId: string, stall: Stall): void {
   stalls.delete(sessionId);
   if (stalls.size === 0) disarm();
   // 判决不在这里碰:离开状态机不等于「消费链已经读过它」,销账只能由读者自己做。
-  if (!stall.warned) return;
-  try {
-    stall.actions.resolve(factsOf(stall));
-  } catch (error) {
-    console.warn(`[ash] 撤销会话 ${sessionId} 的上游停滞标记失败:`, error);
-  }
+  //
+  // 撤的是**已经投影出去的那个身份**而不是当前起点(F6):换过档的那一条,库里存的还是上一档
+  // 置上它的那一刻,拿新起点去 CAS 一个字都碰不到。没投影过(只通知过、投影还没确认落库)就
+  // 没有东西要撤 —— 那一笔本来就没成功。
+  discardProjection(sessionId, stall);
 }
 
 function evaluate(sessionId: string, stall: Stall): void {
@@ -530,7 +513,16 @@ function evaluate(sessionId: string, stall: Stall): void {
     // 微任务的唯一后果是把「卡片上要亮红环」这件事排到别人后面去。
     try {
       void stall.actions.project(facts)
-        .then((ok) => { stall.projected = ok; })
+        // 落库确认了才记身份 —— 撤的时候要拿它做 CAS(见 close)。
+        .then((ok) => {
+          stall.projected = ok;
+          if (!ok) return;
+          stall.projectedSince = facts.since;
+          // **投影是异步的,`close` 可能已经发生**:那一趟因为身份还没落定、什么都没撤,所以
+          // 这颗红环现在得由这里收 —— 不然它留在库里没人管(刷新后仍亮,下一轮复用同一行时
+          // `ended_at` 一清又亮起来,正是 F6 那个形状的另一条窄路)。
+          if (stalls.get(sessionId) !== stall) discardProjection(sessionId, stall);
+        })
         .catch((error: unknown) => {
           console.warn(`[ash] 置会话 ${sessionId} 的上游停滞标记失败(下一拍重投):`, error);
         })

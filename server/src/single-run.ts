@@ -35,6 +35,7 @@ import {
   clearTurnStall, resumeTrippedTurn, trackTurnStall, watchTurnSilence, type StallActions,
 } from "./turn-stall.js";
 import { stallUnverifiableText } from "./turn-stall-text.js";
+import { ensureTurnProgressDir, noteTurnProgress, turnProgress } from "./turn-progress-mark.js";
 import { clearStallFailure, stallFailure, type StallVerdict } from "./turn-stall-verdict.js";
 import { restoreStallVerdict } from "./turn-stall-persist.js";
 import { clearSessionStalled, markSessionStalled } from "./session-stall-flag.js";
@@ -241,6 +242,9 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     },
     // 持久那一半单独一个动作:它要报成败,看门狗据此重投到确认(理由见 StallActions.project)。
     project: (facts) => markSessionStalled(taskId, sessId, facts.since),
+    // 「这一轮产出过东西」这个事实必须留在进程之外:接管回来的新句柄看不到 `agentOffset`
+    // 之前那一段(理由与实测见 turn-progress-mark.ts 文件头)。
+    noteProgress: () => { if (a.turnStart) noteTurnProgress(taskId, sessId, a.turnStart); },
     // 熔断档:说出来 + 杀进程。「这一轮失败」这个结论**不在这儿记** —— 看门狗在调 trip 之前
     // 就已经把它钉在回合身份上了(turn-stall-verdict.ts),下面收尾那一段连 `executionFailed` 带
     // 结算用的退出码一起从那一份读。从前这里是 `sawExecutionError = true`:那一位只喂得到
@@ -311,7 +315,14 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // 这一句同时覆盖**接管回来的会话**:接管走的是同一条消费链(reattach.ts 调的就是这个函数),
     // 而起点取库里那一轮的真实起点,所以重启前已经静默掉的那段照样算在里面。2026-11-02 那次
     // 1.5 小时零输出就是接管出来的闲置进程,错误档一拍都不会动。
-    watchTurnSilence(sessId, a.handle, a.turnStart, stallActions);
+    //
+    // **进程外那份进展事实先建好再读**:目录是「文件不在 = 确证没有过进展」的前提,少了它
+    // 每一轮都会读成「核实不了」、静默档整体失效(同 delivery-crossing 的 ensureCrossingDir)。
+    ensureTurnProgressDir(taskId);
+    watchTurnSilence(
+      sessId, a.handle, a.turnStart, stallActions,
+      a.turnStart ? turnProgress(taskId, sessId, a.turnStart) : "none",
+    );
     for await (const event of a.handle.events) {
       // 「此刻还在等上游」只有这里数得准:正文要到下一条非正文事件才冲进 trace,落盘产物
       // 反推不出「这条提示之后有没有新东西来」(见 session-waiting.ts)。
