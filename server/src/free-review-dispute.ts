@@ -37,9 +37,9 @@
 // ③ 不能变成逃避修复的捷径——没写 `deferReason` 就拒绝这个裁定（判据是**边界**不是
 //    **工作量**，措辞见 free-review-prompts.ts 的 disputeOption）；
 // ④ 提出之后停下来等人——与驳回共用同一条停顿，撤自动复审预约的规矩也共用。
-import type { FreeReviewDisputeResolution, Task } from "@ash/shared";
+import type { FreeReviewDisputeResolution, FreeReviewDisputeTarget, Task } from "@ash/shared";
 import { MAX_PLAIN_SUMMARY_LEN, PLAIN_SUMMARY_GUIDE } from "@ash/shared/free-workflow";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
@@ -48,6 +48,7 @@ import {
   consumeFreeReviewReservation,
   readFreeReviewReservation,
 } from "./free-review-reservations.js";
+import { withRulingGate } from "./free-review-ruling-gate.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -124,6 +125,13 @@ export function hasDispute(round: ReviewRoundRow | null | undefined): boolean {
 }
 
 /**
+ * 同一个判据的 SQL 版：查询与 CAS 都用它，不各写一份 `IS NOT NULL`。两边口径一偏（老数据
+ * 或接力载荷里理由是空串），裁定闸按 SQL 认定「有驳回、等裁定」挡住预约，界面按
+ * `hasDispute` 认定「没驳回」不给卡——用户看得见「等裁定」，却找不到能裁的那一条。
+ */
+const disputeWritten = sql`(coalesce(${freeReviewRounds.disputeReason}, '') <> '' or coalesce(${freeReviewRounds.disputeDeferReason}, '') <> '')`;
+
+/**
  * 「执行者到底说了什么」——发给辩论双方的那一份完整材料。
  *
  * 必须**三段都带**，而且必须是一个函数：辩论提示原来直接取 `round.disputeReason!`，
@@ -155,15 +163,97 @@ export async function currentRoundOf(run: ReviewRunRow): Promise<ReviewRoundRow 
 }
 
 /**
- * 「现在有没有一条等着用户裁定的驳回」——驳回已写下、用户还没裁定。
- * 界面上的几颗按钮、辩论入口、修复入口全读它，一处定义。
+ * 这个任务上所有「驳回已写下、用户还没裁定、也没被用户新派的审查取代」的轮次，最近的在前。
+ *
+ * 判据是**任务级**的，不是「最近一条审查链的当前轮」：后者只是界面上最显眼的那一条，
+ * 一条更新的审查链（哪怕只开了个头就停了）就能把旧驳回遮住，于是裁定闸放行、裁定入口
+ * 也找不到它——欠着的那个裁定就这么静默没了（第 1 轮审查问题 2）。合并结果审查是验收后的
+ * 独立只读链，不参与。
+ */
+async function unresolvedDisputes(taskId: string): Promise<{ run: ReviewRunRow; round: ReviewRoundRow }[]> {
+  return db.select({ run: freeReviewRuns, round: freeReviewRounds }).from(freeReviewRounds)
+    .innerJoin(freeReviewRuns, eq(freeReviewRuns.id, freeReviewRounds.runId))
+    .where(and(
+      eq(freeReviewRuns.taskId, taskId),
+      eq(freeReviewRuns.targetKind, "workspace"),
+      disputeWritten,
+      isNull(freeReviewRounds.disputeResolution),
+      isNull(freeReviewRounds.disputeSupersededAt),
+    ))
+    // 排序键与界面上那张卡的 `dispute.at` 同一个兜底（free-workflow-state.ts）：接力载荷允许
+    // 驳回时间为空，两边各按各的排，显示的那条和「默认那条」就会是两条。
+    .orderBy(desc(sql`coalesce(${freeReviewRounds.disputeAt}, ${freeReviewRounds.endedAt}, ${freeReviewRounds.startedAt})`));
+}
+
+/**
+ * 「现在有没有一条等着用户裁定的驳回」（判据见 `unresolvedDisputes`），裁定闸读它。
+ * 它只回答「有没有」：要对**某一条**动手（裁定、辩论）走 `targetedOpenDispute`，别拿这里
+ * 排第一的那条当用户点的那条。
  */
 export async function openDisputeOf(taskId: string): Promise<{ run: ReviewRunRow; round: ReviewRoundRow } | null> {
-  const run = await latestWorkspaceRun(taskId);
-  if (!run || run.status !== "stopped") return null;
-  const round = await currentRoundOf(run);
-  if (!hasDispute(round) || round?.disputeResolution) return null;
-  return { run, round: round! };
+  return (await unresolvedDisputes(taskId)).at(0) ?? null;
+}
+
+/** 一次用户动作指向的那条驳回：哪条审查链的第几轮。 */
+export type DisputeTarget = FreeReviewDisputeTarget;
+
+/** 请求体里的 `target`；没带是 null，带了却不完整就拒（半个目标比没有目标更容易指错）。 */
+export function disputeTargetOf(raw: unknown): DisputeTarget | null {
+  if (raw == null) return null;
+  const { runId, round } = (typeof raw === "object" ? raw : {}) as { runId?: unknown; round?: unknown };
+  if (typeof runId !== "string" || !runId || typeof round !== "number" || !Number.isInteger(round) || round < 1) {
+    throw new Error("驳回目标无效：要带上那条驳回所在的审查链 id 和轮次");
+  }
+  return { runId, round };
+}
+
+/**
+ * 用户这次动作要处理的**那一条**未裁定驳回。一次动作的目标在这里定死，之后的裁定、修复
+ * 校验、修复提示、辩论都只认它，下游**不许再按任务去挑「当前那条」**。
+ *
+ * 为什么不能直接用 `openDisputeOf`：未裁定驳回是任务级的，可以同时挂着好几条（升级前的
+ * 老数据就有），「最近那条」只是排序的结果，不是用户点的那张卡。第 2 轮审查实测：对旧
+ * 第 1 轮点「让它接着改」，修复却按更新的第 2 轮报告发出，另一条旧驳回也被顺手记成维持。
+ *
+ * 带了目标：必须仍在未裁定之列，否则如实拒（多半是别处已经裁过或被新一轮审查取代）。
+ * 没带目标（老客户端、脚本）：只在恰好一条时放行，有好几条就拒，不替用户挑。
+ */
+export async function targetedOpenDispute(
+  taskId: string,
+  target: DisputeTarget | null,
+  none = "现在没有等待裁定的驳回",
+): Promise<{ run: ReviewRunRow; round: ReviewRoundRow }> {
+  const open = await unresolvedDisputes(taskId);
+  if (!open.length) throw new Error(none);
+  if (!target) {
+    if (open.length > 1) throw new Error(`现在有 ${open.length} 条驳回在等裁定，请在审查面板里对具体那一条操作`);
+    return open[0]!;
+  }
+  const hit = open.find(({ run, round }) => run.id === target.runId && round.round === target.round);
+  if (!hit) throw new Error(`第 ${target.round} 轮那条驳回已经不在等裁定了（已被裁定，或被新一轮审查取代），刷新后再看`);
+  return hit;
+}
+
+/**
+ * 用户在驳回还没裁定时**自己**又开了一轮工作区审查（派新链 / 重跑一条失败的链）：把挂着的
+ * 驳回记成「被取代」，并在时间线上说清。
+ *
+ * 为什么不是拒掉这次派审：「驳回了就重新派一轮看看」是用户的常用操作（线上 30 多条驳回
+ * 都是这么收场的），那是他明确的决定，硬挡只会逼他先随手点一档裁定来解锁。为什么不是
+ * 静默放过：那样驳回只是被更新的链遮住，任务级仍然欠着一个没人看得见的裁定。所以记一笔
+ * 「取代」——不是裁定，不冒充用户签了哪一档，报告和驳回原样留着。
+ *
+ * 只给**用户发起**的开审调用；按预约开审的那一路在裁定闸后面，碰不到未裁定的驳回。
+ */
+export async function supersedeOpenDisputes(taskId: string, how: string): Promise<void> {
+  const open = await unresolvedDisputes(taskId);
+  if (!open.length) return;
+  await db.update(freeReviewRounds).set({ disputeSupersededAt: now() })
+    .where(and(inArray(freeReviewRounds.id, open.map(({ round }) => round.id)), isNull(freeReviewRounds.disputeResolution)));
+  const rounds = [...new Set(open.map(({ round }) => `第 ${round.round} 轮`))].join("、");
+  await appendTaskTimeline(taskId,
+    `执行者对${rounds}意见的驳回还没裁定，你${how}：这条驳回不再等裁定（驳回与报告原样留在审查记录里，没有替你选任何一档裁定）。`);
+  bus.publish({ type: "task.review", taskId });
 }
 
 /**
@@ -196,6 +286,15 @@ export async function disputeFreeReview(
   taskId: string,
   input: { summary: string; reason: string; deferReason: string | null },
 ): Promise<{ runId: string; round: number }> {
+  // 与按预约开审互斥（理由见 free-review-ruling-gate.ts）：从「最近一轮停在未通过」这道判据
+  // 到驳回落库、撤自动续轮，整段不许和预约消费交错。
+  return withRulingGate(taskId, () => disputeFreeReviewHeld(taskId, input));
+}
+
+async function disputeFreeReviewHeld(
+  taskId: string,
+  input: { summary: string; reason: string; deferReason: string | null },
+): Promise<{ runId: string; round: number }> {
   const { summary, reason, deferReason } = input;
   const task = await freeTask(taskId);
   if (task.archived) throw new Error("归档任务不能驳回审查意见");
@@ -206,6 +305,9 @@ export async function disputeFreeReview(
   }
   const role = turnRole(taskId);
   if (role === "reviewer") throw new Error("审查回合不能驳回自己的结论；驳回只能由执行回合发起");
+  // dispatch 是派审 / 重跑 / 修复投递那几步的占位身份，不是执行回合：此刻送达的驳回只能是
+  // 上一轮迟到的调用，而它占着的那一段正要开一轮新审查。
+  if (role === "dispatch") throw new Error("审查正在派发，当前没有正在进行的执行回合，驳回已拒收");
   if (!role) throw new Error("当前没有正在进行的执行回合，驳回已拒收（迟到或误投的调用不落账）");
   const run = await latestWorkspaceRun(taskId);
   if (!run || run.status !== "stopped") throw new Error("最近一轮审查没有停在未通过状态，没有可驳回的意见");
@@ -221,17 +323,17 @@ export async function disputeFreeReview(
     .set({ disputeSummary: summary, disputeReason: reason || null, disputeDeferReason: deferReason, disputeAt: at })
     .where(and(
       eq(freeReviewRounds.id, round.id),
-      isNull(freeReviewRounds.disputeReason),
-      isNull(freeReviewRounds.disputeDeferReason),
+      not(disputeWritten),
     ))
     .returning({ id: freeReviewRounds.id });
   if (!written.length) throw new Error("这一轮意见已经驳回过了；还有话要说就等用户开辩论，别重复驳回");
 
   // 自动复审预约必须撤掉：执行者没有按意见改代码，续上的那一轮只会对着同一份代码
   // 再写一遍同一份报告，还会把「等你裁定」这个停顿冲掉。**只撤自动续轮那条**
-  // （runId 非空）；用户自己手存的预约是他明确的意思，一个字都不动。
+  // （按预约自己记的来源判）；用户自己手存的预约是他明确的意思，一个字都不动——它留在槽里，
+  // 由消费点的裁定闸挡到裁定落地（见 startReservedFreeReview）。
   const reservation = await readFreeReviewReservation(taskId);
-  const canceledAuto = reservation?.armed && reservation.runId
+  const canceledAuto = reservation?.armed && reservation.source === "follow_up"
     ? await consumeFreeReviewReservation(taskId, reservation)
     : null;
 
@@ -284,6 +386,18 @@ export function disputeTimelineNote(input: {
     + (input.canceledAuto ? "（自动复审已取消，等你拍板。）" : "");
 }
 
+/**
+ * 裁定落地、而这一档不会顺带起一个执行回合（采纳执行者 / 转独立任务）时，告诉用户那条被
+ * 裁定闸挡着的预约现在去哪了：它没有在裁定这一刻开审，而是回到「下一个执行回合正常结束时
+ * 开始」。不说的话，用户裁定完看着亮着的「已预约」等一轮不会立刻来的审查。
+ */
+async function noteHeldReservationAfterRuling(taskId: string): Promise<void> {
+  const reservation = await readFreeReviewReservation(taskId);
+  if (!reservation?.armed) return;
+  await appendTaskTimeline(taskId,
+    "已预约的审查仍保留：下一个执行回合正常结束时开始；不想等就在审查面板里取消预约后直接派审。");
+}
+
 /** 时间线里只放一句话的摘要，全文留在审查记录里（时间线不是正文的第二个家）。 */
 function summarize(reason: string): string {
   const line = reason.replace(/\s+/g, " ").trim();
@@ -291,20 +405,27 @@ function summarize(reason: string): string {
 }
 
 /**
- * 「按意见修复」= 维持审查意见（幂等，没有待裁定的驳回时空转）。
+ * 「按意见修复」= 维持**这一轮**的审查意见（幂等，这一轮没有待裁定的驳回时空转）。
  *
- * 两个入口都经这一处：用户可以点「让它接着改」，也可以直接点那颗老的「按意见修复」。
- * 不在第二个入口上记裁定的话，驳回会一直挂着「等你裁定」——而用户其实已经用行动
- * 裁定过了，界面却还在催他做一件已经做完的事。
+ * 用户可以点「让它接着改」（裁定那一路自己记账），也可以直接点那颗老的「按意见修复」。
+ * 后者不在这里记裁定的话，驳回会一直挂着「等你裁定」——而用户其实已经用行动裁定过了，
+ * 界面却还在催他做一件已经做完的事。
  */
-export async function upholdOpenDispute(taskId: string): Promise<boolean> {
-  const open = await openDisputeOf(taskId);
-  if (!open) return false;
-  await db.update(freeReviewRounds)
+export async function upholdDisputeOn(taskId: string, round: ReviewRoundRow): Promise<boolean> {
+  // 只裁**要修的这一轮**自己身上的驳回。按任务去找「下一条未裁定」的话，别的轮次上的
+  // 驳回会被这一下顺手记成维持——用户根本没看过那一条（第 2 轮审查实测）。
+  const ruled = await db.update(freeReviewRounds)
     .set({ disputeResolution: "upheld", disputeResolvedAt: now() })
-    .where(eq(freeReviewRounds.id, open.round.id));
+    .where(and(
+      eq(freeReviewRounds.id, round.id),
+      disputeWritten,
+      isNull(freeReviewRounds.disputeResolution),
+      isNull(freeReviewRounds.disputeSupersededAt),
+    ))
+    .returning({ id: freeReviewRounds.id });
+  if (!ruled.length) return false;
   await appendTaskTimeline(taskId,
-    `按第 ${open.run.currentRound} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`);
+    `按第 ${round.round} 轮审查意见发起修复，即维持审查意见（执行者的驳回未被采纳）。`);
   bus.publish({ type: "task.review", taskId });
   return true;
 }
@@ -350,19 +471,20 @@ export async function resolveFreeReviewDispute(
   taskId: string,
   resolution: FreeReviewDisputeResolution,
   note: string | null = null,
+  target: DisputeTarget | null = null,
 ): Promise<{ resolution: FreeReviewDisputeResolution; repairError: string | null; deferredTask: Task | null }> {
   const task = await freeTask(taskId);
   if (task.archived) throw new Error("归档任务不能裁定审查驳回");
   const handedOff = handoffBlockReason(task.handoff);
   if (handedOff) throw new Error(handedOff);
-  const open = await openDisputeOf(taskId);
-  if (!open) throw new Error("现在没有等待裁定的驳回");
+  const open = await targetedOpenDispute(taskId, target);
   const { activeDebateOf } = await import("./free-review-debate.js");
   if (await activeDebateOf(taskId)) throw new Error("辩论正在进行，等它结束再裁定");
 
   if (resolution === "deferred") {
     const { deferOpenDispute } = await import("./free-review-defer.js");
     const deferredTask = await deferOpenDispute(task, open, note);
+    await noteHeldReservationAfterRuling(taskId);
     return { resolution, repairError: null, deferredTask };
   }
 
@@ -371,19 +493,23 @@ export async function resolveFreeReviewDispute(
     .set({ disputeResolution: resolution, disputeResolvedAt: at, disputeResolutionNote: note })
     .where(eq(freeReviewRounds.id, open.round.id));
   await appendTaskTimeline(taskId, (resolution === "withdrawn"
-    ? `你裁定第 ${open.run.currentRound} 轮的未通过意见不用改了（采纳执行者的说法，报告与证据原样保留，审查结论本身不改写）。`
+    ? `你裁定第 ${open.round.round} 轮的未通过意见不用改了（采纳执行者的说法，报告与证据原样保留，审查结论本身不改写）。`
     // 写了要点时不能只说「照报告修复」：用户写要点，多半正是因为要改的不是报告那版。
-    : `你裁定让执行者接着改第 ${open.run.currentRound} 轮的意见（维持审查意见，未采纳驳回）：` +
+    : `你裁定让执行者接着改第 ${open.round.round} 轮的意见（维持审查意见，未采纳驳回）：` +
       `${note ? "按你写的要点和报告修复" : "照报告修复"}。`)
     // 时间线只放摘要，全文留在那一轮的审查记录里（时间线不是正文的第二个家）。
     + (note ? `你写下的裁定要点：${summarize(note)}` : ""));
+  if (resolution === "withdrawn") await noteHeldReservationAfterRuling(taskId);
   bus.publish({ type: "task.review", taskId });
 
   let repairError: string | null = null;
   if (resolution === "upheld") {
     try {
       const { startManualFreeReviewRepair } = await import("./free-review-manual-repair.js");
-      await startManualFreeReviewRepair(taskId, { holdTurn: true });
+      // 目标原样交下去：修复只按用户刚裁定的这一轮来（校验、报告、要点都取它）。
+      await startManualFreeReviewRepair(taskId, {
+        holdTurn: true, target: { runId: open.run.id, round: open.round.round },
+      });
     } catch (error) {
       repairError = error instanceof Error ? error.message : String(error);
       await appendTaskTimeline(taskId,

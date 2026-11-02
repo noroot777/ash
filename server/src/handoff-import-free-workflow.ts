@@ -15,7 +15,10 @@
 //     派过修复任务了」的幂等锁,置空最坏是对端能再派一个新的。
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
+import {
+  freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, reviewerProfiles,
+  type FreeReviewReservationSource,
+} from "./db/schema.js";
 import type { HandoffFreeWorkflowPayload } from "./handoff-types.js";
 import { id } from "./util.js";
 
@@ -27,6 +30,20 @@ export interface FreeWorkflowImportRows {
 }
 
 export const EMPTY_FREE_WORKFLOW_ROWS: FreeWorkflowImportRows = { state: null, runs: [], rounds: [], events: [] };
+
+/**
+ * 预约来源怎么带过来：对端**明说了**就照搬（来源是这条预约的事实，不能被本机再按 runId
+ * 推断一遍改写——那正是这一列要取代的东西）；唯一的例外是对端说续轮、却没把那条 run 带过来，
+ * 到了本机它只能开一条新链，不能还叫续轮。对端没说（老版本）或说了认不出的值时才推断：
+ * 续轮那条 run 落了地就是续轮，否则来源说不清 → handoff。
+ */
+function importedReservationSource(
+  declared: unknown,
+  followUpRunId: string | null,
+): FreeReviewReservationSource {
+  if (declared === "user" || declared === "handoff") return declared;
+  return followUpRunId ? "follow_up" : "handoff";
+}
 
 export async function buildFreeWorkflowRows(
   taskId: string,
@@ -67,6 +84,7 @@ export async function buildFreeWorkflowRows(
         reviewModel: payload.state.reviewModel,
         reviewReasoningEffort: payload.state.reviewReasoningEffort,
         reviewRunId: followUpRunId,
+        reviewSource: importedReservationSource(payload.state.reviewSource, followUpRunId),
         updatedAt: payload.state.updatedAt,
       }
     : null;
@@ -107,12 +125,14 @@ export async function buildFreeWorkflowRows(
     // `disputeDeferredTaskId` 是机器本地外键（对端库里没有那行任务），不随载荷走——
     // 同 repairTaskId 的规矩，见 handoff-types.ts 顶部。
     disputeSummary: round.disputeSummary ?? null,
-    disputeReason: round.disputeReason ?? null,
-    disputeDeferReason: round.disputeDeferReason ?? null,
+    // 空串归一成 null：「没驳回」在本地库里只有一种写法（判据见 free-review-dispute.ts hasDispute）。
+    disputeReason: round.disputeReason || null,
+    disputeDeferReason: round.disputeDeferReason || null,
     disputeAt: round.disputeAt ?? null,
     disputeResolution: round.disputeResolution ?? null,
     disputeResolvedAt: round.disputeResolvedAt ?? null,
     disputeResolutionNote: round.disputeResolutionNote ?? null,
+    disputeSupersededAt: round.disputeSupersededAt ?? null,
     startedAt: round.startedAt,
     endedAt: round.endedAt,
   })));

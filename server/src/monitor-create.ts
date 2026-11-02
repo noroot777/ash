@@ -310,6 +310,9 @@ export async function startMonitor(input: StartMonitorInput): Promise<StartMonit
       // reviewing），所以只记 runId 的话，上一轮遗留的哨兵会被下一轮当成自己的输入重新
       // 解释（见 schema-monitors.ts）。
       sourceReviewRound: source.reviewRound,
+      // **哪一次**:同一轮会被用户重跑(`reopenFailedFreeReview` 换证据代次),run 和轮次两样
+      // 都不变 —— 少了这一位,上一次的收尾会把这一行当成自己的哨兵停掉(见 schema-monitors.ts)。
+      sourceReviewGeneration: source.reviewGeneration ?? null,
       // ash 自己起的：期限是它自己定的，当然知道。
       sourceLifetime: "bounded",
       // ash 自己起的：期限是它自己定的，当然可信；进程就是下面 spawnMonitor 起的那个，

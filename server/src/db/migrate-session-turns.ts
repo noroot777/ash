@@ -26,7 +26,9 @@ const TABLE_DDL = `CREATE TABLE session_turns_rebuilt (
   cwd TEXT,
   started_at TEXT NOT NULL,
   ended_at TEXT,
-  outcome TEXT
+  outcome TEXT,
+  stall_reason TEXT,
+  monitor_wake INTEGER NOT NULL DEFAULT 0
 )`;
 
 async function hasTable(client: Client, table: string): Promise<boolean> {
@@ -55,8 +57,8 @@ async function rebuildWithNullableEnd(client: Client): Promise<void> {
   await client.batch([
     "DROP TABLE IF EXISTS session_turns_rebuilt",
     TABLE_DDL,
-    `INSERT INTO session_turns_rebuilt (id, session_id, task_id, cwd, started_at, ended_at, outcome)
-       SELECT id, session_id, task_id, cwd, started_at, ended_at, outcome FROM session_turns`,
+    `INSERT INTO session_turns_rebuilt (id, session_id, task_id, cwd, started_at, ended_at, outcome, stall_reason, monitor_wake)
+       SELECT id, session_id, task_id, cwd, started_at, ended_at, outcome, stall_reason, monitor_wake FROM session_turns`,
     "DROP TABLE session_turns",
     "ALTER TABLE session_turns_rebuilt RENAME TO session_turns",
     // 重建表会把它自己的索引一起带走,普通索引在这里补回来；唯一索引留给下一步(得先去重)。

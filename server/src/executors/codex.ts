@@ -25,7 +25,8 @@ import { codexAshMcpServerName } from "./codex-mcp.js";
 import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
 
 const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
-import { openCodexAppServer, readCodexAppServerState } from "./codex-app-server.js";
+import { openCodexAppServer } from "./codex-app-server.js";
+import { readCodexAppServerState } from "./codex-app-server-state.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
 // sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
@@ -235,6 +236,20 @@ export class CodexExecutor implements AgentExecutor {
           reviewTurnId: recovered.reviewTurnId,
           completedTurn: recovered.completedTurn,
           goal: recovered.goal,
+          evidence: recovered.evidence,
+          // 「读不出来」那一档的身份有界恢复:同一份日志过几秒再读一次
+          // (见 codex-app-server-adopt.ts 的 recoverAdoptedIdentity)。
+          reread: () => {
+            const again = readCodexAppServerState(detached.ashPaths!.out, opts.sessionId);
+            // **evidence 原样带回去**:重读读出 `never-started` 时接管方要据此按失败收口
+            // (第 3 轮自由审查 F3 —— 上一版在这儿丢掉它,于是否证永远走不到拒收那条路)。
+            return {
+              turnId: again.turnId ?? "",
+              reviewTurnId: again.reviewTurnId,
+              completedTurn: again.completedTurn,
+              evidence: again.evidence,
+            };
+          },
         },
         startProcess: () => child,
       });

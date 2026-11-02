@@ -2,6 +2,8 @@
 // 依赖方向单向：这里 import orchestrator，orchestrator 不回头 import 这里。
 import { eq } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
+import type { InputAcceptance } from "./executors/types.js";
+import { lastWordOnInput } from "./turn-input-acceptance.js";
 import { db } from "./db/index.js";
 import { sessions, tasks } from "./db/schema.js";
 import { continueTask, runTask, type ResumeReason } from "./orchestrator.js";
@@ -67,7 +69,14 @@ async function resumeOrRunClaimedTask(taskId: string,
       const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
         actingUserId: acting, ...(reviewerRoute ?? {}),
         reviewDelivery: { kind: "checkpoint", generation: evidence?.generation ?? null, text: rp, promptGeneration: task.resumePromptGeneration },
-        onDelivered: async () => { await takeResumePrompt(taskId, rp, task.resumePromptGeneration); },
+        // 只有**确认收下**才消费这段交代。`refused`/`unknown` 一律不消费:这条路(审查链的
+        // 续跑)没有 scheduled_messages 那张票可以留在「在途」,交代就在任务行上那一格 ——
+        // 消费掉就再也回不来,而留着最坏是下一次运行重投一遍。审查链卡死不可恢复,重投可以。
+        onInputSettled: async (acceptance) => {
+          if (acceptance === "accepted") { await takeResumePrompt(taskId, rp, task.resumePromptGeneration); return; }
+          console.warn(`[ash] 任务 ${taskId} 审查续跑交代没拿到「agent 收下了」的回执（${acceptance}），`
+            + "这段交代原样留在任务上，下一次运行会重投");
+        },
       });
       if (!started) await (await import("./regression-settlement.js")).reconcileRegressionSettlements(taskId);
       return;
@@ -78,6 +87,11 @@ async function resumeOrRunClaimedTask(taskId: string,
       // `continueTask` 返回 false = 这一轮**一个字都没送出去**(起跑前被冻结闸撤回,或者越线
       // 凭据写不下来而原地撤回)。抛错那条路不给这个结论,所以初值按「不知道」算。
       let launched = true;
+      // 协议层给的那一档(拿不到就是 null)。注意它可能是**几十秒前**有界等待的结果,所以
+      // finally 不拿它直接下结论 —— 见下面 lastWordOnInput 那一段。
+      let settledAs: InputAcceptance | null = null;
+      // 回执本体:结算之前再问它最后一句(回合都结束了,那时它早已落定)。
+      let receiptPromise: Promise<InputAcceptance> | undefined;
       // 这一轮的账还该不该由我来结。失权之后一个字都不许写:那边可能已经按别的结论处置过
       // 这张票了(第 2 轮自由审查 F1 的第 5 条 —— 早先这里 return 之后 finally 照旧了结旧票)。
       // 三态:`mine` 才由我结账;`lost`/`unknown` 两条路的善后(交回本地投递登记、必要时
@@ -97,7 +111,13 @@ async function resumeOrRunClaimedTask(taskId: string,
           system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard,
           actingUserId: acting, ...(reviewerRoute ?? {}),
           pendingMessageIds: [receipt.id], crossingRequired: true,
-          onDelivered: async () => {
+          onInputReceipt: (promise) => { receiptPromise = promise; },
+          // 只有 `accepted` 才确认消费;另两档交给下面的 finally。这个回调**会被调第二次**
+          // (初次 unknown 之后回执还在落定,见 task-continue-options.ts),所以它只记事实 +
+          // 幂等地补记账,不在这里做归还那种一次性动作。
+          onInputSettled: async (acceptance) => {
+            settledAs = acceptance;
+            if (acceptance !== "accepted") return;
             delivered = true;
             await acknowledgeCheckpointRun(receipt);
           },
@@ -107,7 +127,20 @@ async function resumeOrRunClaimedTask(taskId: string,
         // 中间那条缝里时这段话已经在 agent 手上了。三态判定与三条出路统一在
         // settleStrandedCheckpointRun(第 1 轮审查 F1:这里原先一律归还)。
         if (!delivered && hold === "mine") {
-          await settleStrandedCheckpointRun(receipt, "本轮续跑交代未走到送达确认", !launched);
+          // **结算之前再问回执最后一句**(第 2 轮自由审查 F1 的那一半):初次那一档是有界等待的
+          // 结果,`unknown` 多半只是「应答还没回来」;而这一刻回合都结束了,进程一关、未完成的
+          // 请求一律落定。拿过期的 `unknown` 结算,就会把一段**明确被拒收**的交代结成「交付
+          // 不明」,而它本该原样归还 —— 实测那一跑里垫片只读了 initialize 就退出,日志先说
+          // 「输入没能送进 agent」,随后却把交代当成已送达补记掉了。
+          const fact = !launched ? "not-launched" : await lastWordOnInput(receiptPromise, settledAs);
+          if (fact === "accepted") {
+            // 迟到的确认:这段交代确实到了 agent 手里 —— 只能往前走,绝不归还。
+            delivered = true;
+            await acknowledgeCheckpointRun(receipt);
+          } else {
+            await settleStrandedCheckpointRun(receipt, "本轮续跑交代未走到送达确认",
+              fact === "not-launched" ? "not-launched" : fact === "refused" ? "refused" : "unknown");
+          }
         }
       }
       return;

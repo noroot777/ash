@@ -1,72 +1,40 @@
-import type { ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { codexChildWork, codexNativeWork, codexSubAgentWork, nativeAgentProfile, nativePlanSnapshot, NativeWorkTrace } from "./native-work.js";
 import { childActivity, CodexChildActivity } from "./native-agent-activity.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
-import type { AgentEvent, TokenUsage } from "@ash/shared";
+import type { AgentEvent } from "@ash/shared";
 import { imageStore, persistToolResultImages, type ImageStore } from "../agent-attachments.js";
 import { eventQueue } from "./event-queue.js";
-import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting } from "./markdown-image-stream.js";
+import { markdownImageSink, settleMarkdownImages } from "./markdown-image-stream.js";
 import {
   formatFailureForTimeline,
   formatSessionPoisonForTimeline,
   RunTraceRecorder,
-  type RunTracePaths,
 } from "./diagnostics.js";
-import { detachedInfo, spawnControllableForRun, type DetachedPaths } from "./detached.js";
+import { detachedInfo, spawnControllableForRun } from "./detached.js";
 import { cleanupAfterRun, forceFinishOnExit, killChild, redactSecrets, shq, spawnErrorMessage } from "./spawn.js";
 import { codexErrorEvent } from "./codex-error-event.js";
+import {
+  adoptionDriven, adoptionUnverifiable, CodexRpcRefusal, createTurnInputLedger, wireAdoptionRecovery,
+} from "./codex-app-server-adopt.js";
+import {
+  ADOPT_NEVER_STARTED, CODEX_ADOPT_REREAD_MS, CODEX_TURN_START_ACK_MS, short, usageEvent,
+  type CodexAppServerOpts, type ThreadUsage,
+} from "./codex-app-server-contract.js";
 import type { RunHandle } from "./types.js";
 import { resolveSteerText, type SteerText } from "./steer-text.js";
 import { findArchivedRollout, findRollout, readCodexContext } from "./codex-rollout.js";
 import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 import { CodexNativeCommands } from "./codex-native-commands.js";
-import { isGoalExecution, type CliCommand, type CliGoal, type CliSessionState } from "@ash/shared/cli-commands";
+import { isGoalExecution } from "@ash/shared/cli-commands";
 import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
-
-type TokenBreakdown = {
-  totalTokens: number;
-  inputTokens: number;
-  cachedInputTokens: number;
-  outputTokens: number;
-  reasoningOutputTokens: number;
-};
-
-type ThreadUsage = {
-  total: TokenBreakdown;
-  last: TokenBreakdown;
-  modelContextWindow: number | null;
-};
-
-export type CodexAppServerOpts = {
-  bin: string;
-  args: string[];
-  cwd: string;
-  prompt: string;
-  cliCommand?: CliCommand;
-  cliState?: CliSessionState;
-  sessionId?: string;
-  model?: string;
-  reasoningEffort?: string;
-  serviceTier?: string;
-  env?: Record<string, string | undefined>;
-  trace?: RunTracePaths;
-  detach?: DetachedPaths;
-  /** 正文图片的持久账本/身份种子(RunOpts.images),见 markdown-image-stream.ts。 */
-  images?: MarkdownImageAccounting;
-  commandLine?: string;
-  reattach?: { threadId: string; turnId: string; reviewTurnId?: string; completedTurn?: { id: string; status: string; error?: unknown }; goal?: CliGoal | null };
-  startProcess?: () => ChildProcess;
-};
-
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
     ?? spawnControllableForRun(opts.cwd, opts.bin, opts.args, "", opts.env, opts.detach);
   const trace = new RunTraceRecorder(opts.trace);
-  const pending = new Map<string, { resolve(value: any): void; reject(error: Error): void }>();
+  const pending = new Map<string, { method: string; resolve(value: any): void; reject(error: Error): void }>();
   const seenAgentDeltas = new Set<string>();
   const seenReasoningDeltas = new Set<string>();
   const seenImages: ImageStore = imageStore();
@@ -76,6 +44,11 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let turnId = opts.reattach?.turnId ?? "";
   let turnStartVersion = 0;
   let reviewTurnId = opts.reattach?.reviewTurnId ?? "";
+  /**
+   * **这一轮有开始凭据、却拿不到身份**:`turn/start` 的应答迟到/不来而 `turn/started` 已经到了,
+   * 或者通知里没带 id。身份于此改由完成事件认领(同接管「读不出来」那一档,见 completeTurn)。
+   */
+  let identityUnclaimed = false;
   const replacingSession = ["fork", "new", "clear"].includes(opts.cliCommand?.name ?? "");
   let sessionEmitted = !!opts.sessionId && !replacingSession;
   let finished = false;
@@ -142,6 +115,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         reject(new Error(`Codex ${method} 超时`));
       }, timeoutMs);
       pending.set(String(id), {
+        method,
         resolve: (value) => { clearTimeout(timer); resolve(value); },
         reject: (error) => { clearTimeout(timer); reject(error); },
       });
@@ -306,8 +280,22 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     const completedId = turn?.id ?? turnId;
     if (completedTurns.has(completedId) || settling || finished) return;
     completedTurns.add(completedId);
-    await ready;
+    // **等的是「身份有凭据可认」,不是那段本地流程返回**(第 3 轮自由审查 F3):`turn/start` 的
+    // 应答不回来、而 `turn/started` 通知和 `turn/completed` 都到了,是实测存在的形状 —— 旧代码
+    // 在这儿 `await ready`,于是「做完了却永远不结束」,而工具事件早把静默档解除了。
+    // `started` 由账本落定:通知/应答哪个先到算哪个,这条路彻底断了也会放行(见下面那道闸)。
+    await input.started;
     if (settling || finished) return;
+    // **身份未定时认领它**(第 2 轮自由审查 F4):接管时协议日志读不出来,我们手上没有 turnId,
+    // 于是这一轮真正的完成事件会在下面那道身份检查上被丢掉 —— 常驻进程还活着、进展记号又是
+    // `seen`(重启前确实产出过,静默档按判据不该开),「连答完了都不结算」就成了新的无界等待。
+    // 认它是安全的:一个 app-server 进程同一时刻只跑一个回合(这整份文件的前提),而我们接回来
+    // 的就是那一个,所以这个 thread 上下一条完成事件只能是它。
+    if ((unverifiable || identityUnclaimed) && !turnId && !reviewTurnId && typeof turn?.id === "string" && turn.id) {
+      turnId = turn.id;
+      console.warn(`[ash] 会话 ${opts.sessionId ?? ""} 这一轮的身份此前无从得知（${unverifiable ? "接管时协议日志读不出来" : "有开始凭据但应答没给出 turnId"}），`
+        + `按「这个 thread 上的完成事件就是这一轮」认领（turn=${turnId}）`);
+    }
     if (completedId !== (reviewTurnId || turnId)) return;
     turnCompleted = true;
     const status = turn?.status;
@@ -379,7 +367,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         break;
       }
       case "thread/started": emitSession(p.thread?.id); break;
-      case "turn/started": turnId = p.turn?.id ?? turnId; turnStartVersion += 1; turnCompleted = false; break;
+      // `turn/started` 到了就证明**这一轮的输入已经在 agent 手里**(它可能先于 `turn/start`
+      // 的应答到达,adapter 自己的 turnStartVersion 就是为这个乱序准备的)。置上之后不许退回:
+      // 后面断链只能是 unknown,不能冒充「一个字都没进去」(F4)。
+      case "turn/started": turnId = p.turn?.id ?? turnId; turnStartVersion += 1; turnCompleted = false; input.reached(); break;
       case "thread/tokenUsage/updated": latestUsage = p.tokenUsage ?? latestUsage; break;
       case "item/started": handleItemStarted(p.item); break;
       case "item/completed": handleItemCompleted(p.item); break;
@@ -429,7 +420,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       const waiter = pending.get(String(message.id));
       if (!waiter) return;
       pending.delete(String(message.id));
-      if (message.error) waiter.reject(new Error(short(message.error?.message ?? message.error)));
+      // 服务端**明确答了 error**,跟超时/断链分开记(第 1 轮自由审查 F3):输入账本要据此判拒收。
+      if (message.error) waiter.reject(new CodexRpcRefusal(waiter.method, short(message.error?.message ?? message.error)));
       else waiter.resolve(message.result);
       return;
     }
@@ -460,7 +452,46 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     finish(exit, "Codex App Server 输出流未正常收尾");
   });
 
-  const ready = opts.reattach ? Promise.resolve() : (async () => {
+  // 接管这一轮的身份与回执判定整份住在 ./codex-app-server-adopt.ts(连同「进程还在证明不了
+  // 任何事」那段现场、三档各走哪条路、以及「读不出来不许冒充成功」的理由)。
+  const input = createTurnInputLedger();
+  const adopted = adoptionDriven(opts.reattach);
+  const unverifiable = adoptionUnverifiable(opts.reattach);
+  // 接管三档**当场落账本**(回执不再由 `ready` 推导,理由见 ./codex-app-server-adopt.ts):
+  //   · 有凭据    → 协议日志里就摆着「这一轮开过」= accepted;
+  //   · 读不出来  → unknown(投递侧留在在途),身份走下面的持续核验;
+  //   · 确证没开过 → 下面的 `ready` 直接 reject,`input.failed()` 把它落成 refused。
+  if (adopted) input.reached();
+  else if (unverifiable) input.unverifiable();
+  if (unverifiable) {
+    console.warn(`[ash] 接管会话 ${opts.sessionId ?? ""} 时读不出协议日志，`
+      + "这一轮有没有真的启动核实不了：不按失败结算，回执按「说不上来」记，身份走持续核验");
+    // 这一档往下全在 ./codex-app-server-adopt.ts 的 `wireAdoptionRecovery`:持续重读协议日志
+    // 认回身份、读出否证就收口、两头都读不出来时让它可见且有界(为什么非得有第三条出路、
+    // 为什么 notice 就是那个终局责任人,都在那份注释里)。
+    wireAdoptionRecovery({
+      sessionId: opts.sessionId,
+      reread: opts.reattach?.reread,
+      settled: () => turnCompleted || finished || settling,
+      claimed: () => Boolean(turnId || reviewTurnId),
+      claim: (state) => {
+        turnId = state.turnId;
+        if (state.reviewTurnId) reviewTurnId = state.reviewTurnId;
+        // 日志里摆着这一轮的开始凭据 = 那串字确实到了 agent 手里:回执这一刻才拿到肯定依据
+        // (已经落定成 unknown 的那一份不翻盘,理由见那份账本)。
+        input.reached();
+        if (state.completedTurn) void completeTurn(state.completedTurn).catch((error) => finish(1, String(error)));
+      },
+      neverStarted: () => {
+        // 确证输入从未到达 agent:按失败结算、收掉这个闲置进程,原文由投递侧重投。
+        input.failed();
+        finish(1, ADOPT_NEVER_STARTED);
+      },
+      voice: (message) => push({ kind: "error", level: "notice", affectsTurn: false, message }),
+    }, { everyMs: CODEX_ADOPT_REREAD_MS });
+  }
+
+  const ready = opts.reattach ? ((adopted || unverifiable) ? Promise.resolve() : Promise.reject(new Error(ADOPT_NEVER_STARTED))) : (async () => {
     await request("initialize", {
       clientInfo: { name: "ash", title: "ash", version: "0.0.0" },
       capabilities: { experimentalApi: true, requestAttestation: false },
@@ -489,7 +520,9 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
     if (opts.sessionId || opts.cliCommand) await native.prepare(opts.cliCommand);
     const startVersion = turnStartVersion;
     if (opts.cliCommand) {
+      input.wrote();
       const result = await native.start(opts.cliCommand);
+      input.reached();
       if (opts.cliCommand.name === "review") reviewTurnId = result.turnId ?? turnId;
       if (turnStartVersion === startVersion) turnId = result.turnId ?? turnId;
       if (result.immediate) {
@@ -500,6 +533,11 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       } else emitSession(threadId, true);
       return;
     }
+    // 这一行之后那串字就交给 stdin 了:断链从此只能是 unknown(见上面 inputWritten)。
+    input.wrote();
+    // **应答有期限**(第 3 轮自由审查 F3):`turn/start` 的应答是「收下了,这一轮叫这个 id」,
+    // 正常几百毫秒就回来 —— 它不回来、连接又不断,就是那条「谁都不会再说话」的缝。超时本身
+    // **不是**失败结论:下面按有没有开始凭据分两条路走。
     const started = await request("turn/start", {
       threadId,
       input: textInput(opts.prompt),
@@ -510,11 +548,30 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       ...(opts.reasoningEffort ? { effort: opts.reasoningEffort } : {}),
       collaborationMode: native.collaborationMode(opts.cliState?.plan ? "plan" : "default"),
       ...(opts.cliState?.serviceTier || opts.serviceTier ? { serviceTierForTurn: opts.cliState?.serviceTier ?? opts.serviceTier } : {}),
+    }, CODEX_TURN_START_ACK_MS).catch((error: unknown) => {
+      // 没有任何开始凭据 → 这确实是「启动失败」,照常抛出去按失败结算。
+      if (!input.sawStart()) throw error;
+      // 有凭据(`turn/started` 已经到了)→ 这一轮**确实在飞**,应答只是迟到或丢了。杀掉它才是
+      // 误杀;身份改由通知/完成事件给(见 identityUnclaimed)。
+      console.warn(`[ash] 会话 ${opts.sessionId ?? ""} 的 turn/start 应答没回来，`
+        + `但这一轮已有开始凭据：按「它在飞」继续，身份改由后续事件认领（${error instanceof Error ? error.message : String(error)}）`);
+      return null;
     });
-    if (turnStartVersion === startVersion) turnId = started.turn?.id ?? "";
-    if (!threadId || !turnId) throw new Error("Codex App Server 没有返回 threadId/turnId");
+    if (started && turnStartVersion === startVersion) turnId = started.turn?.id ?? "";
+    input.reached();
+    if (!threadId) throw new Error("Codex App Server 没有返回 threadId");
+    if (!turnId) {
+      // 凭据在、身份没拿到:不抛(抛 = 杀一个在跑的回合),交给完成事件认领。
+      identityUnclaimed = true;
+      console.warn(`[ash] 会话 ${opts.sessionId ?? ""} 这一轮拿不到 turnId，`
+        + "身份改由「这个 thread 上下一条完成事件就是这一轮」认领");
+    }
   })();
   void ready.catch((error) => {
+    // 这条路走不通了:账本按**已掌握的事实**落定(reached⇒accepted / 写出去过⇒unknown,除非
+    // 承载输入的那个请求被服务端明确答了 error / 协议从没通⇒refused),并放行等身份的那一路 ——
+    // 它绝不许悬在一个已经失败的流程上。
+    input.failed(error);
     if (isGoalExecution(opts.cliCommand ?? null) && opts.cliState?.goal) {
       native.goal = { ...opts.cliState.goal, status: "blocked" };
       push({ kind: "system", level: "notice", aside: true, at: new Date().toISOString(), text: "原生目标启动失败，目标已保留；修复执行器配置后可 /goal resume。" });
@@ -535,6 +592,10 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
       return native.control(command);
     },
     sessionId: replacingSession ? "" : opts.sessionId ?? "",
+    // 「协议层面收下了这一轮的输入」的三档回执:判据与单调性整份在
+    // ./codex-app-server-adopt.ts(含「`ready` 成功 ≠ 送到了」那一条,以及它为什么不能挂在
+    // `ready` 上 —— 协议点过头、本地流程还没返回时,整条投递链会一动不动)。
+    inputAccepted: input.acceptance,
     commandLine: opts.commandLine
       ?? redactSecrets(`${opts.bin} ${opts.args.map(shq).join(" ")} <App Server JSONL via stdin>`),
     events,
@@ -599,61 +660,4 @@ function threadParams(opts: CodexAppServerOpts, base: Record<string, unknown> = 
       ...(opts.reasoningEffort ? { model_reasoning_effort: opts.reasoningEffort } : {}),
     } } : {}),
   };
-}
-
-function usageEvent(value: TokenBreakdown): TokenUsage {
-  return {
-    input: Math.max(0, value.inputTokens - value.cachedInputTokens),
-    output: value.outputTokens,
-    cacheRead: value.cachedInputTokens,
-    cacheWrite: 0,
-    reasoning: value.reasoningOutputTokens,
-    costUsd: null,
-    turns: 1,
-  };
-}
-
-const short = (value: unknown): string => {
-  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
-  return text.length > 1_500 ? `${text.slice(0, 1_497)}…` : text;
-};
-
-/** 重启接管时从完整协议日志找回当前 turn id；stdout offset 可能早已越过启动通知。 */
-export function readCodexAppServerState(
-  path: string,
-  knownThreadId = "",
-): { threadId: string | null; turnId: string | null; reviewTurnId?: string; completedTurn?: { id: string; status: string; error?: unknown }; goal?: CliGoal | null } {
-  let threadId: string | null = knownThreadId || null;
-  let turnId: string | null = null;
-  let completedTurn: { id: string; status: string; error?: unknown } | undefined;
-  let reviewTurnId: string | null = null;
-  let goal: CliGoal | null | undefined;
-  let raw = "";
-  try { raw = readFileSync(path, "utf8"); } catch { return { threadId, turnId }; }
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    let message: any;
-    try { message = JSON.parse(line); } catch { continue; }
-    if (message.params?.threadId === threadId && message.method === "thread/goal/updated") goal = message.params.goal;
-    if (message.params?.threadId === threadId && message.method === "thread/goal/cleared") goal = null;
-    if (message.result?.reviewThreadId === threadId && typeof message.result?.turn?.id === "string") reviewTurnId = message.result.turn.id;
-    if (message.method === "thread/started" && !threadId && typeof message.params?.thread?.id === "string") {
-      threadId = message.params.thread.id;
-    } else if (message.method === "turn/started"
-      && (!threadId || message.params?.threadId === threadId)
-      && typeof message.params?.turn?.id === "string") {
-      threadId = message.params?.threadId ?? threadId;
-      turnId = message.params.turn.id;
-      completedTurn = undefined;
-    } else if (message.method === "turn/completed"
-      && message.params?.threadId === threadId
-      && typeof message.params?.turn?.id === "string"
-      && (!turnId || turnId === message.params.turn.id || reviewTurnId === message.params.turn.id)
-      && typeof message.params.turn.status === "string") {
-      turnId = message.params.turn.id;
-      completedTurn = message.params.turn;
-      reviewTurnId = null;
-    }
-  }
-  return { threadId, turnId, ...(reviewTurnId ? { reviewTurnId } : {}), ...(completedTurn ? { completedTurn } : {}), ...(goal !== undefined ? { goal } : {}) };
 }

@@ -1,5 +1,5 @@
 import type { ReviewConclusion } from "@ash/shared";
-import { eq, isNotNull, or } from "drizzle-orm";
+import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
 import type { RegressionFinalization, RegressionSettlement } from "./db/schema-regression-evidence.js";
@@ -11,6 +11,7 @@ import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { reconcileRegressionFinalizations } from "./regression-finalization.js";
 import { reviewContinuationPending } from "./review-continuation.js";
+import { directionEpochUnchangedSince } from "./task-direction-epoch.js";
 import { activeReviewScope, reviewIdentityMatches } from "./review-ownership.js";
 import type { ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
 import { retireHistoricalReview } from "./review-retirement.js";
@@ -28,7 +29,60 @@ export type CheckedSettlement = {
   target: ReviewTargetIdentity | null;
   /** 原样带到下半场：「活回合」那一问由调用方回答（见 `regressionSettlementConclusion` 的同名入参）。 */
   ignoreActive?: boolean;
+  /** 原样带到下半场的**落笔条件**：上下两个事务各核一次（见 `SettlementFence`）。 */
+  fence?: SettlementFence;
 };
+
+/**
+ * **这一笔结算的落笔条件** —— 「我判断的时候这条任务停在第几个方向世代」。
+ *
+ * 只有**从外面判断「已经没有任何东西能把这一轮跑完」**的那条路(自由工作流的孤儿收尾)需要它。
+ * 正常结算跑在回合锁里面,写的就是刚刚结束的那一轮,不存在「写的时候情况已经变了」。
+ *
+ * 孤儿收尾从读到写之间隔着好几次 await,另一份恢复完全可以在这中间把任务书送进会话、把审查者
+ * 拉起来(第 3 轮审查 F1)。每个回合起跑(含审查旁路回合)都在自己那笔事务里把
+ * `tasks.direction_epoch` +1(`turnDirectionStart`),所以「这中间起过回合」与「带着这个世代写得
+ * 成」互斥。
+ *
+ * **两个事务都要核**:结算是两段式的 —— 上半场
+ * (`regressionSettlementConclusion`)就已经把 `settlement={outcome,pending:true}` 和
+ * `continuation.phase=exited` 落进证据行,下半场(`completeRegressionSettlement`)才写 round/run。
+ * 只守下半场的话,迟到者照样在上半场把结算状态写成失败:那条正在输出的审查随后上报结论会被
+ * 「本轮已进入结算,不能更改结论」拒掉,正常退出也沿用这份失败 settlement —— 最终那道闸撤回的
+ * 只是 round/run,撤不回前一个事务(第 4 轮审查 F1 实测)。所以条件由调用方声明一次,**结算层
+ * 在每一次持久写之前自己核**。
+ */
+export type SettlementFence = {
+  taskId: string;
+  directionEpoch: number;
+  /**
+   * **「这一轮此刻没有任何派发责任」** —— 孤儿收尾的另一半前提,也要在落笔那一刻自己成立。
+   *
+   * 为什么 `directionEpoch` 一位不够:它答的是「这中间有没有又起过**回合**」,而一次合法的接手
+   * 压根不起回合 —— 公开 reviewing 的那一笔带着持久责任落库(`preparingReviewDispatch`),重跑
+   * 也只是在同一段同步代码里换代次、重新登记。两者都不增长 epoch,于是「读完没人负责、下笔前
+   * 有人接手了」这条路照样提交得了,把一个**活着的准备**打成 failed/error(第 2 轮审查问题 2
+   * 复现 B:零故障注入,两次普通查询的返回顺序就够了)。
+   *
+   * 条件写成「**不存在**一行带着在途意图」而不是「存在一行且意图为空」:轮次行可能还没建
+   * (对账那条路会在落笔前补建),而「行不在」本身并不意味着有人负责。
+   */
+  review?: { runId: string; round: number };
+};
+
+/** 落笔条件到此刻还成立吗。没有条件(正常结算)恒真。 */
+async function fenceHeld(transaction: ConclusionTransaction, fence: SettlementFence | undefined): Promise<boolean> {
+  if (!fence) return true;
+  if (!(await transaction.select({ id: tasks.id }).from(tasks)
+    .where(and(eq(tasks.id, fence.taskId), directionEpochUnchangedSince(fence.directionEpoch)))).length) return false;
+  if (!fence.review) return true;
+  return !(await transaction.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
+    .where(and(
+      eq(freeReviewRounds.runId, fence.review.runId),
+      eq(freeReviewRounds.round, fence.review.round),
+      isNotNull(freeReviewRounds.dispatch),
+    ))).length;
+}
 
 export async function regressionSettlementConclusion(taskId: string, directory: string, input: {
   outcome?: RegressionSettlement["outcome"];
@@ -46,9 +100,16 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
    * 409(D6)。
    */
   ignoreActive?: boolean;
+  /** 见 `SettlementFence`：孤儿收尾那一路的落笔条件，这一笔和下半场各核一次。 */
+  fence?: SettlementFence;
 }): Promise<CheckedSettlement | null> {
   await evidenceState(taskId, directory);
   const stored = await db.transaction(async (transaction) => {
+    // **先问落笔条件,再读、再写**:这一笔要写的 `settlement` / `continuation` 就是后续结算的
+    // 依据,迟到者在这里写下的失败,下半场那道闸撤不回去(见 `SettlementFence`)。上面那句
+    // `evidenceState` 不在闸内:它只在证据行压根不存在时补一行空壳(这条路上它一定已经存在,
+    // 是 `launchReviewRound` 开头落的),不影响任何结算判定。
+    if (!await fenceHeld(transaction, input.fence)) return null;
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0]!;
     const owner = (await transaction.select().from(tasks).where(eq(tasks.id, input.ownerTaskId ?? taskId)))[0];
     if (input.outcome === "done" && owner && !state.settlement
@@ -83,6 +144,7 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
   const checked: CheckedSettlement = { conclusion, outcome, generation: stored.generation, target: stored.target,
     ...(input.outcome === undefined ? { recoveryOwnerTaskId: input.ownerTaskId ?? taskId } : {}),
     ...(input.ignoreActive ? { ignoreActive: true } : {}),
+    ...(input.fence ? { fence: input.fence } : {}),
   };
   if (stored.unknown) await appendTaskTimeline(taskId, "审查缺少持久保存的真实退出结果，不能因已有通过结论推定正常结束；本轮按异常结束处理。");
   if (outcome !== "done" || !checked.target) return checked;
@@ -113,6 +175,12 @@ export async function completeRegressionSettlement(directory: string, checked: C
       if (!owner || await reviewContinuationPending(transaction, owner, state, false, checked.ignoreActive)) return false;
     }
     if (!state?.settlement?.pending || state.generation !== checked.generation || state.settlement.outcome !== checked.outcome) return false;
+    // 上半场声明的落笔条件在这里**再核一遍**:两段之间还隔着结论复核、时间线这些 await,
+    // 而这一笔写的是 round/run 的终态(见 `SettlementFence`)。
+    if (!await fenceHeld(transaction, checked.fence)) {
+      console.error(`[ash] 审查结算撤回 ${directory}：判断之后这条任务又起过回合`);
+      return false;
+    }
     // 同上：存量 revoked=1 的旧轮次，没交依据就不许把通过结论落定（新轮次 revoked 恒为 0，这一支不触发）。
     if (checked.target && checked.outcome === "done" && checked.conclusion === "verified" && state.revoked && !state.acceptedBasis) return false;
     const owner = (await transaction.select().from(tasks).where(eq(tasks.id, state.settlement.ownerTaskId)))[0];
@@ -151,7 +219,7 @@ export async function recordInterruptedRegressionReview(task: typeof tasks.$infe
 
 export async function reconcileRegressionSettlements(ownerTaskId?: string): Promise<void> {
   await reconcileReviewStarts(ownerTaskId);
-  await (await import("./free-workflow.js")).reconcileFreeReviews(ownerTaskId)
+  await (await import("./free-review-reconcile.js")).reconcileFreeReviews(ownerTaskId)
     .catch((error) => console.error("[ash] 自由审查发现待重试:", error));
   const candidates = await db.select().from(tasks).where(or(isNotNull(tasks.verifyRound), isNotNull(tasks.reviewOf)));
   for (const task of candidates) {

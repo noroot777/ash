@@ -53,6 +53,7 @@ async function toSession(
       : r.resumeCommand,
     ...run,
     usage: sessionUsage(r),
+    monitorWakeTurns: r.usageMonitorWakeTurns ?? 0,
     context: sessionContext(r),
     cliVersion,
     versionWarning: affectedCodexSessionWarning(cliVersion),

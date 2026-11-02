@@ -380,9 +380,11 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         // finally 释放这把锁之后才真正开跑，和派审同一条路。
         // resumed = 这一次是「从中断处接着做」还是「重发整份任务书从头再来」，由崩掉那一
         // 回合留下的痕迹决定（见 reviewTurnResumable）。同一颗按钮两种结果，得如实回给前端。
+        // dispatched=false = 同代次已经有一份在途派发在负责,这一次没有另起投递(时间线里
+        // 也写了一句)。如实报出来,别让 202 冒充「我给你安排好了」(第 3 轮审查 F2)。
         try {
-          const { resumed } = await reopenFailedFreeReview(taskId, { resumeSessionId: latest.id });
-          return c.json({ started: true, mode: "review", resumed }, 202);
+          const { resumed, dispatched } = await reopenFailedFreeReview(taskId, { resumeSessionId: latest.id });
+          return c.json({ started: true, mode: "review", resumed, dispatched }, 202);
         } catch (error) {
           return c.json(await noted(taskId, "重跑上一回合", { error: errorText(error) }), 409);
         }

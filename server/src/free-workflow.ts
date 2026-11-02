@@ -37,24 +37,33 @@ export { startManualFreeReviewRepair } from "./free-review-manual-repair.js";
 import { activeDebateOf, settleDebateTurn } from "./free-review-debate.js";
 // 一轮审查的生命周期（起一轮 / 续下一轮 / 启动失败收尾 / 重跑崩掉的那一轮）住在
 // free-review-round.ts；这里只做「派/预约/结算」这一层的编排。
+//
+// 启动期 / 周期对账（`reconcileFreeReviews`：一条挂在 reviewing 的链此刻还有没有人能把它跑完）
+// 住在 free-review-reconcile.ts —— 它反过来用这里的结算入口，所以切出去才不成环。
+// 入口仍从这里导出（见文件末尾那个转发），老调用方不必知道它搬了家。
 import {
   failReviewStart,
+  freshSessionFor,
   latestWorkspaceRun,
   launchReviewRound,
   nextRound,
   reviewingRun,
 } from "./free-review-round.js";
+// 派审入口在公开这一轮**之前**就得把责任登记下来(认领 + 持久的准备意图),整段理由见
+// free-review-dispatch.ts 文件头 ⑭。
+import {
+  claimReviewDispatch, preparingReviewDispatch, releaseReviewDispatchClaim,
+} from "./free-review-dispatch.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { NO_REMINDER, type TurnReminder } from "./turn-prompt.js";
 import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
-import { checkRegressionConclusion, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
+import { checkRegressionConclusion, evidenceState, refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 import { assertConclusionTask, commitRegressionConclusion, type ConclusionTask } from "./regression-conclusion-commit.js";
-import { completeRegressionSettlement, regressionSettlementConclusion } from "./regression-settlement.js";
-import { retireHistoricalReview } from "./review-retirement.js";
+import { completeRegressionSettlement, regressionSettlementConclusion, type SettlementFence } from "./regression-settlement.js";
 import { activeReviewEvidence, preserveReviewWait, reviewContinuationPending } from "./review-continuation.js";
 import { drainRegressionFinalization, finalization } from "./regression-finalization.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { claimOwnTurn, releaseTurn, turnIdentity, turnRole } from "./runs.js";
+import { claimOwnTurn, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
 import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
@@ -185,7 +194,7 @@ export async function reserveFreeReview(
     // 预约的残值会拼出用户从没选过的执行器组合。
     const slot = {
       selectedReviewerId: profile.id, reviewArmed: true, reviewCheckMode: mode, reviewRetryLimit: retries,
-      reviewNote: note, reviewRunId: null,
+      reviewNote: note, reviewRunId: null, reviewSource: "user" as const,
       reviewAgentType: override?.agentType ?? null,
       reviewExecutorId: override?.executorId ?? null,
       reviewModel: override?.model ?? null,
@@ -216,7 +225,7 @@ export async function cancelFreeReviewReservation(taskId: string): Promise<FreeW
       const at = now();
       await db.update(freeWorkflowStates)
         .set({
-          reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: at,
+          reviewArmed: false, reviewNote: null, reviewRunId: null, reviewSource: null, updatedAt: at,
           // 覆盖跟着这条预约一起作废，否则会在下一条预约的表单里复活。
           reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
         })
@@ -227,77 +236,6 @@ export async function cancelFreeReviewReservation(taskId: string): Promise<FreeW
     return freeWorkflowState(taskId);
   } finally {
     releaseFreeWorkflowAction(taskId);
-  }
-}
-
-/**
- * 启动对账（排在 reattach 与 reconcileInterrupted 之后）：`reviewing` 是持久状态，真正的
- * 审查会话却在内存投递链上——进程死在「run 已落 reviewing、reviewer 回合还没起」的当口，
- * 重启后 run 会永远挂在 reviewing，验收与再审持续 409。
- * 判据用**任务的运行事实**，不用 sessions 表（session 行的 endedAt 既不代表进程活着、也
- * 不代表回合归属：reviewer 正常提问后 session 已结束、进程死了行却可能留 null，两个方向
- * 都会判错，审查实测复现）：
- * - 任务 running/queued 或 turn 已被占 → reattach 接回的回合活着，让它自己结算；
- * - 任务挂着 question / resumePrompt → 审查回合在等答复或续跑，是正常的等待态；
- * - 其余 → 这条审查已经没有任何东西能把它跑完，落 failed 并撤预约，用户可再派一轮。
- */
-export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> {
-  const stuck = await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.status, "reviewing"));
-  for (const run of stuck) {
-    if (ownerTaskId && run.taskId !== ownerTaskId) continue;
-    const task = (await db.select().from(tasks).where(eq(tasks.id, run.taskId))).at(0);
-    if (!task) {
-      // 任务行已不存在（旧版删除没做级联）：审查链永远无人结算，原地收尸自愈。
-      await db.delete(freeReviewRounds).where(eq(freeReviewRounds.runId, run.id));
-      await db.delete(freeReviewRuns).where(eq(freeReviewRuns.id, run.id));
-      continue;
-    }
-    // **审查那一轮还活着就不碰**——这一条必须排在最前面：reviewer 可能已上报结论、但回合被
-    // reattach 接回还在跑，此刻按 turnOk=true 补结算是提前放行——reviewer 随后非零
-    // 退出/被停止时，正常结算已找不到 reviewing run，错误结论无法撤销（审查实测）。
-    //
-    // 判据是**回合身份**而不是「这个任务忙不忙」：这两件事在自由工作流里经常不是一件事 ——
-    // 执行者挂着哨兵，哨兵结果回来把它 resume 去跑**实现回合**，而这条审查早就交卷死透了。
-    // 旧判据只看 `status==="running"`，于是这种 owner 一直在干活的任务永远跳过，round 挂在
-    // reviewing：验收 409、自动复审不开、修复交接不发，只有重启那一次对账能救（现场实测挂
-    // 了一整天，经过见 docs/incidents.md「审查交卷后 round 挂死」）。
-    //
-    // 身份读不出来（没有回合在册）却还 running/queued：这一拍说不清在跑的是谁，照旧让它自己
-    // 结算，下一拍再来——保守的那一边是「多等 30 秒」，激进的那一边是撤不掉的错误结论。
-    //
-    // 顺带回答「审查窗口内排队消息把执行者 resume 要不要挡」：正常路径上不需要另加挡板——
-    // `afterSettlement` 是在**回合锁里面**调的（turn-lock.ts 顶部那段），放锁排在它之后
-    // （orchestrator 的 finally），所以排队消息最早也只能在结算做完之后才拿到回合。现场那条
-    // 消息能在 reviewer 退出后 143ms 插进来，恰恰是因为结算被上面那条后门提前 return 了。
-    // 剩下的唯一例外就是这条自愈路径（结算发生在执行者回合**之中**），而那时结论早已写定、
-    // 报告也早落盘，挡住用户的输入只会换来一个说不出理由的滞留。
-    const held = turnIdentity(task.id);
-    const reviewerAlive = held
-      ? held.role === "reviewer" && (!held.review || held.review.run === run.id)
-      : task.status === "running" || task.status === "queued";
-    if (reviewerAlive) continue;
-    if (await retireHistoricalReview(task, { role: "reviewer", review: { run: run.id, round: run.currentRound } })) continue;
-    // 已交卷（当前 round 有结论）且回合确实死了：直接补结算，不能因遗留的
-    // question/等待态被永远跳过——那会让验收持续被 active review 409 挡住（审查实测）。
-    const round = (await db.select().from(freeReviewRounds)
-      .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
-    // `ignoreActive=true`：「owner 在跑」已经由上面那道身份判据回答过了（在跑的不是 reviewer
-    // 才会走到这里），这里再按 status 拦一次就等于把刚修好的那条路又关上。
-    const waiting = await db.transaction(async (transaction) => {
-      const evidence = await activeReviewEvidence(transaction, task);
-      return reviewContinuationPending(transaction, task, evidence, !!round?.conclusion, true);
-    }, { behavior: "immediate" });
-    if (waiting) continue;
-    if (round?.conclusion) {
-      await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer");
-      continue;
-    }
-    if (await db.transaction(async (transaction) => reviewContinuationPending(transaction, task,
-      await activeReviewEvidence(transaction, task), false, true), { behavior: "immediate" })) continue;
-    if (!round) await db.insert(freeReviewRounds).values({ id: id(), runId: run.id, round: run.currentRound,
-      status: "reviewing", startedAt: run.createdAt }).onConflictDoNothing();
-    await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, null, "reviewer")
-      .catch((error) => console.error(`[ash] 孤儿审查收尾待重试 ${run.id}:`, error));
   }
 }
 
@@ -365,6 +303,22 @@ export async function handleFreeWorkflowSettlement(
   role: SessionRole = "single",
   exitObserved = true,
   executionFailed = false,
+  /**
+   * **孤儿收尾专用的落笔条件**(只有 `reconcileFreeReviews` 那一路传)。
+   *
+   * 正常结算跑在**回合锁里面**,它写的就是刚刚结束的那一轮,不存在「写的时候情况已经变了」。
+   * 孤儿收尾不一样:它是从外面判断「已经没有任何东西能把这一轮跑完」,而这个判断从读到写之间
+   * 隔着好几次 await —— 另一份恢复完全可以在这中间把任务书送进会话、把审查者拉起来
+   * (第 3 轮审查 F1)。多读一遍只是把窗口变窄,所以把判断那一刻的 `tasks.direction_epoch`
+   * 带进来当落笔条件。
+   *
+   * **条件交给结算层,不在这里手写**:结算是两段式的,上半场
+   * (`regressionSettlementConclusion`)就已经把 settlement/continuation 写进证据行 —— 只守下半场
+   * 那一笔,迟到者照样能在上半场把一条正在输出的审查的结算状态写成失败,而后续上报和正常退出
+   * 都沿用它(第 4 轮审查 F1)。声明一次、每一次持久写之前各核一遍,判据见 `SettlementFence`。
+   * 来源见 `reviewOrphanStillUnowned`。
+   */
+  orphanFence?: SettlementFence,
 ): Promise<boolean> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
@@ -390,7 +344,7 @@ export async function handleFreeWorkflowSettlement(
     // 快照 CAS 取消这一条自动预约；用户并发改成的手动预约不碰，仍走下面的等待语义。
     if (executionFailed) {
       const reservation = await readFreeReviewReservation(taskId);
-      if (reservation?.armed && reservation.runId) {
+      if (reservation?.armed && reservation.source === "follow_up") {
         const canceled = await consumeFreeReviewReservation(taskId, reservation);
         if (canceled) {
           await appendTaskTimeline(taskId, "修复执行回合异常结束，自动复审已取消；修复成功后可重新派审。");
@@ -478,6 +432,8 @@ export async function handleFreeWorkflowSettlement(
   }
   const directory = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   const checked = await regressionSettlementConclusion(taskId, directory, {
+    // 孤儿收尾那一路的落笔条件:上下两个事务由结算层各核一次(见那边的 `SettlementFence`)。
+    ...(orphanFence ? { fence: orphanFence } : {}),
     outcome: turnOk === null ? undefined : turnOk ? "done" : "failed", round: run.currentRound,
     freeRoundId: round.id, acceptedMerge: run.targetKind === "accepted_merge",
     // 这一分支的审查是同一个任务上的旁路回合,「活回合」那一问上面刚判过(reviewer 自己那轮
@@ -502,7 +458,7 @@ export async function handleFreeWorkflowSettlement(
     await transaction.update(freeReviewRuns).set({ status: outcome === "failed" ? "failed" : outcome === "passed" ? "passed" : "stopped",
       updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));
     if (turnOk === null && !round.conclusion) await transaction.update(freeWorkflowStates).set({
-      reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: at,
+      reviewArmed: false, reviewNote: null, reviewRunId: null, reviewSource: null, updatedAt: at,
       reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
     }).where(eq(freeWorkflowStates.taskId, taskId));
     return true;
@@ -580,11 +536,34 @@ export async function startFreeReview(
       repairTaskId: null,
       currentRound: 1, status: "reviewing", createdAt: at, updatedAt: at, finishedAt: null,
     };
-    await db.insert(freeReviewRuns).values(run);
+    // **代次先有、责任先登记,再公开这一轮** —— 顺序就是第 2 轮审查问题 2 的修法
+    // (free-review-dispatch.ts 文件头 ⑭)。证据行也因此由这里建,而不是等 launch 的第一个 await
+    // ——「公开了却谁都没在负责」那一瞬是孤儿收尸的全部依据(复现 A:run/round 都已 reviewing、
+    // 内存里没有认领、库里没有意图,一次普通对账就把它判成 failed/error,随后 POST 照样回 201,
+    // 任务书一个字都没送出去)。
+    const generation = (await evidenceState(taskId, freeReviewEvidenceDir(taskId, run.id, 1), task)).generation;
+    const claimToken = claimReviewDispatch(run.id, 1, generation);
+    // run.id 是这一行刚生成的,所以领不到只能是同一毫秒里另一条入口撞上了同一个 id ——
+    // 不往下公开任何状态,如实报错。
+    if (!claimToken) throw new Error("这一轮审查已经有在途派发，稍后再试");
+    let handed = false;
     try {
-      await db.insert(freeReviewRounds).values({
-        id: id(), runId: run.id, round: 1, status: "reviewing", conclusion: null, startedAt: at, endedAt: null,
-      });
+      // run 行与 round 行**同一笔事务**:两次 insert 之间若断开,留下的正是「run 已经 reviewing、
+      // 轮次行还没有」—— 那一刻责任没有任何落处,孤儿路照样收得了它。
+      await db.transaction(async (transaction) => {
+        await transaction.insert(freeReviewRuns).values(run);
+        await transaction.insert(freeReviewRounds).values({
+          id: id(), runId: run.id, round: 1, status: "reviewing", conclusion: null, startedAt: at, endedAt: null,
+          dispatch: preparingReviewDispatch(generation, at,
+            { retry: false, freshSession: freshSessionFor(run, 1, false) }),
+        });
+      }, { behavior: "immediate" });
+      // 用户自己派的工作区审查：挂着的未裁定驳回被这一轮取代，记一笔并写时间线（见
+      // supersedeOpenDisputes）。按预约开审（带 slotToken）的那一路在裁定闸后面，碰不到驳回。
+      if (!opts.target && !opts.slotToken) {
+        const { supersedeOpenDisputes } = await import("./free-review-dispute.js");
+        await supersedeOpenDisputes(taskId, "派了新一轮审查");
+      }
       // 派审即刻消费掉预约槽的一切（含覆盖四列）；从预约消费进来时沿用它的版本令牌，
       // 好让下面启动失败的回滚还能认出这个空位是自己腾的，也好让用户抢在这之前保存的
       // 新预约留在槽里不被抹掉（两者都在 clearReservationForDispatch 里靠同一次 CAS）。
@@ -597,10 +576,16 @@ export async function startFreeReview(
       if (override) {
         await appendTaskTimeline(taskId, `本次审查改用 ${overrideLabel(override)}（${profile.name} 的配置未改动）。`);
       }
-      await launchReviewRound(task, run);
+      handed = (await launchReviewRound(task, run,
+        { responsibility: { generation, claimToken, since: at } })).dispatched;
     } catch (error) {
-      await failReviewStart(run, error instanceof Error ? error.message : String(error));
+      // **带着这一次的代次**:省掉身份的那一笔会绕过代次闸,把现任打成 error、还按整轮收掉它的
+      // 资源(第 2 轮审查问题 1)。
+      await failReviewStart(run, error instanceof Error ? error.message : String(error), { generation });
       throw error;
+    } finally {
+      // 领证的人负责还证(同 nextRound 的 finally)。
+      if (!handed) releaseReviewDispatchClaim(run.id, 1, claimToken);
     }
     return freeWorkflowState(taskId);
   } finally {
@@ -609,4 +594,15 @@ export async function startFreeReview(
   } finally {
     if (turn) releaseTurn(taskId, turn);
   }
+}
+
+/**
+ * 启动期 / 周期对账的**旧入口**:本体已搬到 free-review-reconcile.ts,但 server/scripts 下一批既有
+ * 回归仍从这里取它。那些脚本不在 tsconfig 的 include 里,出口一删它们只会在运行时拿到 undefined、
+ * 报「不是函数」,构建一声不响 —— 所以出口留着,只做转发。
+ *
+ * 用懒加载而不是 `export … from`:那边静态 import 了这里的结算入口,静态转出会把刚切开的环接回去。
+ */
+export async function reconcileFreeReviews(ownerTaskId?: string): Promise<void> {
+  await (await import("./free-review-reconcile.js")).reconcileFreeReviews(ownerTaskId);
 }

@@ -41,7 +41,7 @@
 /* 一行 = 选它 + 删它。按钮不能套按钮，所以行是 div；卡片的边框与选中态仍画在选按钮上。 */
 .free-review-reviewer-row { display:flex; min-width:0; align-items:center; gap:4px; }
 .free-review-reviewer-pick { display:flex; min-width:0; flex:1; min-height:50px; align-items:center; gap:8px; border:1px solid var(--line); border-radius:9px; background:var(--canvas); padding:8px 10px; text-align:left; }
-.free-review-reviewer-pick:hover,.free-review-reviewer-pick[aria-selected="true"] { border-color:color-mix(in lch,var(--accent) 44%,var(--line)); background:color-mix(in lch,var(--accent) 4%,var(--panel)); }
+.free-review-reviewer-pick:hover,.free-review-reviewer-pick[aria-checked="true"] { border-color:color-mix(in lch,var(--accent) 44%,var(--line)); background:color-mix(in lch,var(--accent) 4%,var(--panel)); }
 .free-review-reviewer-pick > span { min-width:0; flex:1; }
 .free-review-reviewer-list b { display:block; overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .free-review-reviewer-list svg { flex:0 0 auto; color:var(--accent); }

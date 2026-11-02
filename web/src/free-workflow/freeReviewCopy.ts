@@ -95,8 +95,10 @@ export type FreeReviewView = {
   freshness: FreeReviewFreshness | null;
   /** 结论确定过期（freshness === "stale" 的便捷判断） */
   stale: boolean;
-  /** 执行者驳回了最近一轮未通过意见、用户还没裁定的那一轮；null = 没有待裁定的驳回。 */
+  /** 执行者驳回了、用户还没裁定的那一轮（任务级，见 openDisputeEntryIn）；null = 没有待裁定的驳回。 */
   disputedRound: FreeReviewRound | null;
+  /** `disputedRound` 所在的审查链（不一定是最近那条：更新的链遮不住它）。 */
+  disputedRun: FreeReviewRun | null;
   /** 最近一轮未通过意见已被用户裁定为「不在本任务里修」（作废或转独立任务）；修复入口必须跟着消失。 */
   waivedRound: FreeReviewRound | null;
   /** 待裁定驳回上最近那条辩论（含已结束/已中止的）；没开过为 null。 */
@@ -112,24 +114,28 @@ function concludedRound(run: FreeReviewRun | null | undefined): FreeReviewRound 
 }
 
 /**
- * 「执行者驳回了、等用户裁定」——审查链停在未通过、最新有结论的那一轮挂着未裁定的驳回。
- * 只认最新结论轮：更早轮次的驳回要么已裁定，要么已被后续轮次覆盖。
+ * 「执行者驳回了、等用户裁定」——整个任务上驳回已写下、没裁定、也没被用户新派的审查
+ * 取代的那一轮（有多条时取最近驳回的那条），连同它所在的审查链。
+ *
+ * 口径与服务端 `openDisputeOf` 一致，是**任务级**的：只看最近一条链的话，一条更新的审查
+ * 链就能把旧驳回遮住——服务端的裁定闸照样挡着预约，界面上却找不到那张该点的卡。
+ * 合并结果审查是验收后的独立只读链，不参与验收前的裁定语义（同 freeReviewView）。
  */
-export function openDisputeRound(run: FreeReviewRun | null | undefined): FreeReviewRound | null {
-  const round = concludedRound(run);
-  return round?.dispute && !round.dispute.resolution ? round : null;
+export function openDisputeEntryIn(
+  runs: readonly FreeReviewRun[] | null | undefined,
+): { run: FreeReviewRun; round: FreeReviewRound } | null {
+  const open = (runs ?? []).filter((run) => run.target?.kind !== "accepted_merge")
+    .flatMap((run) => run.rounds.map((round) => ({ run, round })))
+    .filter(({ round }) => round.dispute && !round.dispute.resolution && !round.dispute.supersededAt);
+  return open.sort((a, b) => b.round.dispute!.at.localeCompare(a.round.dispute!.at))[0] ?? null;
 }
 
 /**
- * 同上，但从**整份审查链列表**出发（会话那一侧只拿得到 `reviews`，拿不到整个
- * FreeWorkflowState）。口径必须和 `freeReviewView` 一致——会话里那颗「去裁定」按钮
- * 和审查面板上那张卡必须同生共死，各算各的就会出现「按钮还在、卡片没了」。
+ * 同上只取那一轮（会话那一侧只拿得到 `reviews`）。会话里那颗「去裁定」按钮和审查面板上
+ * 那张卡必须同生共死，所以两边都从这一处取，各算各的就会出现「按钮还在、卡片没了」。
  */
 export function openDisputeIn(runs: readonly FreeReviewRun[] | null | undefined): FreeReviewRound | null {
-  // 合并结果审查是验收后的独立只读链，不参与验收前的裁定语义（同 freeReviewView）。
-  const workspace = (runs ?? []).filter((run) => run.target?.kind !== "accepted_merge");
-  const latest = workspace[0];
-  return openDisputeRound(latest?.status === "stopped" ? latest : null);
+  return openDisputeEntryIn(runs)?.round ?? null;
 }
 
 /**
@@ -174,7 +180,8 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
   const reservationArmed = !!state?.reviewReservation?.armed;
   const autoRereview = reservationArmed && !!state?.reviewReservation?.runId;
   const freshness = freeConclusionFreshness(latestRun, state?.workspaceHead, state?.workspaceDirty);
-  const disputedRound = openDisputeIn(state?.reviews);
+  const disputed = openDisputeEntryIn(state?.reviews);
+  const disputedRound = disputed?.round ?? null;
   const debate = disputedRound?.dispute?.debates.at(-1) ?? null;
   return {
     latestRun,
@@ -191,6 +198,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
     freshness,
     stale: freshness === "stale",
     disputedRound,
+    disputedRun: disputed?.run ?? null,
     waivedRound: waivedDisputeRound(stoppedRun),
     debate,
     debateRunning: debate?.status === "running",

@@ -105,6 +105,16 @@ export function isSendKeyEvent(event: SendKeyEventLike): boolean {
 }
 
 /**
+ * 只认 ⌘/Ctrl+回车、**不跟那一档走**的提交键。给「正文天生多行、裸回车永远是换行」的
+ * 框用(备忘这类):那里切到 `enter` 档就等于每敲一个换行就提交一次。选词中的回车、
+ * 多按了 Shift/Alt 的都不算。
+ */
+export function isModEnterEvent(event: SendKeyEventLike): boolean {
+  return event.key === "Enter" && !composing(event) && !event.shiftKey && !event.altKey
+    && (event.metaKey || event.ctrlKey);
+}
+
+/**
  * 卡片/对话框级的「这一下回车是提交」。跟 `isSendKeyEvent` 的区别是它要照顾
  * **事件从谁身上冒上来的**:
  *  · 里面的输入框已经自己处理掉了(补全菜单选中一条),就别再提交一次 —— 看

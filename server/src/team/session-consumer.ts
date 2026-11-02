@@ -21,7 +21,8 @@ import { writeRunError, writeTurnEnd } from "../transcript.js";
 import type { SessionTraceEvent } from "../transcript.js";
 import { isExecutionNotice, isSessionScopeNotice } from "../session-notice.js";
 import { clearSessionWaiting, trackSessionWaiting } from "../session-waiting.js";
-import { clearTurnStall, trackTurnStall } from "../turn-stall.js";
+import { clearTurnStall, trackTurnStall, watchTurnSilence } from "../turn-stall.js";
+import { turnProgressFor } from "../turn-progress-mark.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { consumeInbound } from "./inbound-queue.js";
 import { sendToLead } from "./lead-delivery.js";
@@ -124,10 +125,49 @@ async function consume(lead: Lead): Promise<void> {
     pendingTraceText = "";
   };
   const stallActions = leadStallActions(lead, traceInTurn, releasePending);
+  /**
+   * **静默档**:这一轮到底有没有真的跑起来(判据见 ../turn-stall.ts 文件头那一节)。
+   *
+   * 第三条消费链原先只有错误档(`trackTurnStall`)—— 一条事件都不来的回合在这台上既不报警也不
+   * 熔断,而那正是 2026-11-02 那次 1.5 小时零输出的形状。第 1 轮自由审查把它记成 N1、按「不扩
+   * 成团队队列重构」放过了一轮,可它跟单飞是同一个根因:**这一档不能靠事件驱动来开,必须在开始
+   * 消费之前显式挂上**。
+   *
+   * 常驻台比另两条链多两件事:
+   *   · 回合是**串行队列**:用户插话那一轮可能在队里排了半小时,而身份就是投入那一刻 ——
+   *     所以钟从「什么时候轮到它」起算(`lead.frontSince`,由所有权层记,见 lead-turns.ts);
+   *   · 一个持有者吃很多轮:每次队首换人都得重挂一次。`watchTurnSilence` 对同一(持有者,回合)
+   *     是空转,所以挂勤一点没有代价。
+   *
+   * 进展那一份的参与证明在所有权层落(`holdTurn` → `openTurnProgress`):那是持有的唯一赋值处。
+   * 这里只**读**,而且读到 `unreadable` 就永不熔断 —— 替一轮没亲眼看过的回合声明「没产出过」
+   * 就是第 2 轮审查 F2 那个误杀。
+   */
+  const watchSilence = (): void => {
+    if (!lead.turnStart || lead.retired) return;
+    watchTurnSilence(
+      lead.sessId, lead, lead.turnStart, stallActions,
+      turnProgressFor({
+        taskId: lead.taskId, sessionId: lead.sessId, turnStartedAt: lead.turnStart,
+        // 常驻台的回合**一律本进程从头开**(团队不走进程接管:重启后是 openLead 重新 spawn
+        // 并 resume,见 restartImpact 把 team 归进 `resumes`),所以事实在手上 —— 证明写不成
+        // 也不该把静默档关掉。判据见 ../turn-progress-mark.ts 的 `turnProgressFor`。
+        watchedFromStart: true,
+      }),
+      lead.frontSince ?? lead.turnStart,
+    );
+  };
+  // **交给所有权层**,不在这儿枚举挂载点:队首是在 `adoptFront` 里换的,那也是唯一一处。
+  // 从前这里按「收到 turnEnd」「收到第一条自发事件」两个事件位置补挂,于是待命的台再被
+  // `sendToLead`/`deliverToLead`/`sendInbound` 投进一轮时没人盯 —— 消费循环正停在
+  // `events.next()` 上,而那一轮要是一条事件都不来(正是要抓的形状),它就永远不会醒。
+  lead.onFrontTurn = watchSilence;
   // 兜底:上面每个写库点都已经各自把失败咽下了(persistOrReport),这里管的是**剩下**
   // 那些没预料到的抛出 —— 执行器解析、用量记账、乃至 events 流自己炸掉。掀翻循环本身
   // 不致命,**跳过 closeLead 才致命**(理由见 reportLeadFailure 顶部),所以这里只如实说
   // 一句、收掉这台已经没人消费事件的进程,然后照常往下走那段收尾。
+  // 开始消费之前先挂上(含接管回来那一路:常驻台重启后由 openLead 重新 attach,这一句同样覆盖)。
+  watchSilence();
   try {
     for await (const event of lead.handle.events) {
       if (event.kind === "turnEnd") {
@@ -139,6 +179,7 @@ async function consume(lead: Lead): Promise<void> {
         await endTurn(lead);
         // 上一回合欠着的新会话凭据在这儿补:补上了,轮换事宜这才算真翻篇。
         if (await flushPendingCredential(lead)) rotation = onFreshSession(rotation);
+        // 队首换人(排在后面的那一轮顶上来)由所有权层的 onFrontTurn 自己重挂,这里不补。
         continue;
       }
       if (event.kind === "session") {
@@ -175,7 +216,7 @@ async function consume(lead: Lead): Promise<void> {
       // 那几条路一律用投入那一刻的真实起点,见 beginTurn 的注释。
       if (!lead.busy && ownedByTurn(event)) {
         clearIdle(lead);
-        await beginTurn(lead);
+        await beginTurn(lead); // 静默档由所有权层的 onFrontTurn 跟上(beginTurn → holdTurn → adoptFront)
       }
       // 排在 beginTurn 之后:自发回合的第一条事件就可能是提示,回合身份得先有(见
       // session-waiting.ts —— 没有身份的提示一律不记)。
@@ -189,7 +230,7 @@ async function consume(lead: Lead): Promise<void> {
       }
       else {
         const emittedEvent = event.kind === "usage"
-          ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId)
+          ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId, lead.turnStart)
           : event;
         flushTraceText();
         if (emittedEvent.kind === "system") {

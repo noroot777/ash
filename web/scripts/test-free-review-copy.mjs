@@ -83,20 +83,25 @@ console.log("free review activity copy tests passed");
 
 // 「已裁定为不在本任务里修」是两档：采纳执行者作废，和转成独立任务。两档都要关掉修复
 // 入口——后者更硬，那几条已经有别的任务在承接，这里再修一遍就是两处各改一版。
-const disputeRun = (resolution, deferReason = null) => ({
+const disputeRun = (resolution, deferReason = null, supersededAt = null) => ({
   ...run,
+  id: "disputed",
   status: "stopped",
   rounds: [{
     round: 1, status: "failed", conclusion: "verify_failed", reviewedCommit: "aaa",
-    dispute: { reason: "读错了行号", deferReason, at: "t", resolution, resolvedAt: null, deferredTaskId: null, debates: [] },
+    dispute: {
+      reason: "读错了行号", deferReason, at: "t", resolution, resolvedAt: null, deferredTaskId: null,
+      supersededAt, debates: [],
+    },
   }],
 });
-const viewOf = (runValue) => freeReviewView({
+const viewOfRuns = (reviews) => freeReviewView({
   workspaceHead: "aaa",
   workspaceDirty: false,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
-  reviews: [runValue],
+  reviews,
 }, { status: "done" });
+const viewOf = (runValue) => viewOfRuns([runValue]);
 assert.equal(viewOf(disputeRun(null)).disputedRound?.round, 1, "没裁定的驳回是「等你裁定」");
 assert.equal(viewOf(disputeRun(null)).waivedRound, null, "没裁定就不算「不在本任务里修」");
 assert.equal(viewOf(disputeRun("withdrawn")).waivedRound?.round, 1, "采纳执行者 = 不在本任务里修");
@@ -110,12 +115,17 @@ assert.equal(openDisputeIn([disputeRun(null)])?.round, 1, "挂着未裁定驳回
 assert.equal(openDisputeIn([disputeRun("deferred")]), null, "裁定完那张卡就没了");
 assert.equal(openDisputeIn([]), null);
 assert.equal(openDisputeIn(null), null);
-// 只认最新那条 run：之前那轮的驳回早已随着新一轮开审翻篇了。
+// 判据是任务级的：更新的一条链遮不住旧驳回（服务端裁定闸照样挡着预约，界面不能找不到那张卡）。
+const newer = { ...run, id: "newer", status: "failed", rounds: [] };
 assert.equal(
-  openDisputeIn([{ ...run, status: "reviewing", rounds: [] }, disputeRun(null)]),
-  null,
-  "又开了新一轮时，旧 run 上的驳回不再是「等你裁定」",
+  openDisputeIn([newer, disputeRun(null)])?.round,
+  1,
+  "更新的审查链遮不住还没裁定的旧驳回",
 );
+assert.equal(viewOfRuns([newer, disputeRun(null)]).disputedRun?.id, "disputed",
+  "被更新的链压着时，裁定卡仍挂在旧驳回所在的那条链上");
+// 用户自己又派了一轮（服务端记 supersededAt）：这条驳回不再等裁定。
+assert.equal(openDisputeIn([newer, disputeRun(null, null, "t2")]), null, "被用户新派的审查取代后不再是待裁定");
 // 合并结果审查是验收后的独立只读链，不参与验收前的裁定语义（与 freeReviewView 同判据）。
 assert.equal(
   openDisputeIn([{ ...disputeRun("deferred"), target: { kind: "accepted_merge" } }, disputeRun(null)])?.round,

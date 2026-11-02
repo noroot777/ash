@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import type { FreeReviewDebateTurn, FreeReviewRound, FreeReviewRun } from "@ash/shared";
+import type { FreeReviewDebateTurn, FreeReviewDisputeTarget, FreeReviewRound, FreeReviewRun } from "@ash/shared";
 import { MAX_FREE_REVIEW_DEBATE_EXCHANGES } from "@ash/shared/free-workflow";
 import {
   ArrowSquareOut, ArrowsOutSimple, ChatsCircle, FileText, HandPalm, SpinnerGap, Wrench,
@@ -15,7 +15,14 @@ import {
 import { FreeReviewDebateReader } from "./FreeReviewDebateReader.tsx";
 import { FreeReviewDebateTranscript } from "./FreeReviewDebateTranscript.tsx";
 
-type Pending = "debate" | DisputeResolutionKind;
+/**
+ * 待确认的动作**连同它针对的那一条驳回**：打开确认框那一刻就定死，提交只认它。
+ *
+ * 只记动作类型的话，目标要到点「确认」时才从当前 props 现算——而确认框开着的时候，
+ * 轮询或另一个窗口的裁定可以把这张卡换成另一条驳回，用户给 B 写的要点就会连同裁定一起
+ * 落到 A 上（第 3 轮审查实测）。目标冻结之后，B 已经不在等裁定时服务端会如实拒，不会换人。
+ */
+type Pending = { kind: "debate" | DisputeResolutionKind; target: FreeReviewDisputeTarget };
 
 /**
  * 「执行者不认这一轮意见」的那张卡：它一句话说了什么 + 完整依据（折着）+ 几个只有用户
@@ -93,11 +100,13 @@ export function FreeReviewDisputeCard({
   if (!dispute) return null;
   const blocked = disabled || debateRunning;
   const deferReason = dispute.deferReason;
+  // 这张卡代表的那一条：裁定和辩论都带上它，服务端不替用户挑「当前那条」。
+  const openConfirm = (kind: Pending["kind"]) => setPending({ kind, target: { runId: run.id, round: round.round } });
 
-  const startDebate = async () => {
+  const startDebate = async (target: FreeReviewDisputeTarget) => {
     setBusy(true);
     try {
-      const result = await api.startFreeReviewDebate(taskId, exchanges);
+      const result = await api.startFreeReviewDebate(taskId, exchanges, target);
       onChanged(result.state);
       setPending(null);
       notify(`已开始辩论：审查者先答辩，共 ${exchanges * 2 + 1} 段发言；说完还是由你裁定`);
@@ -108,11 +117,11 @@ export function FreeReviewDisputeCard({
     }
   };
 
-  const resolve = async (resolution: DisputeResolutionKind) => {
+  const resolve = async (resolution: DisputeResolutionKind, target: FreeReviewDisputeTarget) => {
     setBusy(true);
     try {
       const written = note.trim();
-      const result = await api.resolveFreeReviewDispute(taskId, resolution, written || null);
+      const result = await api.resolveFreeReviewDispute(taskId, resolution, written || null, target);
       onChanged(result.state);
       setPending(null);
       setNote("");
@@ -141,7 +150,7 @@ export function FreeReviewDisputeCard({
   const quote = (turn: FreeReviewDebateTurn) => {
     const quoted = `〔${DEBATE_SIDE_LABEL[turn.side]}第 ${turn.seq} 段〕\n${turn.statement}`;
     setNote((current) => (current.trim() ? `${current.trimEnd()}\n\n${quoted}` : quoted));
-    setPending("upheld");
+    openConfirm("upheld");
   };
 
   /** 三个裁定确认框共用的要点输入框（措辞按档位换，见 RESOLUTIONS）。 */
@@ -168,7 +177,7 @@ export function FreeReviewDisputeCard({
         type="button"
         className={primary ? "is-primary" : ""}
         disabled={blocked || busy}
-        onClick={() => setPending(kind)}
+        onClick={() => openConfirm(kind)}
       >{icon}{RESOLUTIONS[kind].button}</button>
       <small>{RESOLUTIONS[kind].blurb}</small>
     </li>
@@ -256,7 +265,7 @@ export function FreeReviewDisputeCard({
         {deferReason && exit("deferred", <ArrowSquareOut size={12} />)}
         {(canDebate || debateRunning) && (
           <li>
-            <button type="button" disabled={blocked || busy} onClick={() => setPending("debate")}>
+            <button type="button" disabled={blocked || busy} onClick={() => openConfirm("debate")}>
               {debateRunning ? <SpinnerGap size={12} className="is-spinning" /> : <ChatsCircle size={12} />}
               {latestDebate ? "重开辩论" : "让双方辩论"}
             </button>
@@ -273,7 +282,7 @@ export function FreeReviewDisputeCard({
           onClose={() => setReading(null)}
         />
       )}
-      {pending === "debate" && (
+      {pending?.kind === "debate" && (
         <ConfirmDialog
           title="让审查者和执行者辩论"
           eyebrow="CONFIRM ACTION"
@@ -281,7 +290,7 @@ export function FreeReviewDisputeCard({
           message="双方轮流发言，都不改代码；说完还是回到这张卡上由你拍板。"
           confirmLabel="开始辩论"
           busy={busy}
-          onConfirm={() => void startDebate()}
+          onConfirm={() => void startDebate(pending.target)}
           onClose={() => { if (!busy) setPending(null); }}
         >
           <div className="free-review-debate-exchanges">
@@ -301,7 +310,7 @@ export function FreeReviewDisputeCard({
           </div>
         </ConfirmDialog>
       )}
-      {pending === "deferred" && (
+      {pending?.kind === "deferred" && (
         <ConfirmDialog
           title={RESOLUTIONS.deferred.title}
           eyebrow="CONFIRM ACTION"
@@ -309,21 +318,21 @@ export function FreeReviewDisputeCard({
           message={confirmMessage("deferred")}
           confirmLabel={RESOLUTIONS.deferred.confirmLabel}
           busy={busy}
-          onConfirm={() => void resolve("deferred")}
+          onConfirm={() => void resolve("deferred", pending.target)}
           onClose={() => { if (!busy) setPending(null); }}
         >{confirmBody("deferred")}</ConfirmDialog>
       )}
-      {pending === "withdrawn" && (
+      {pending?.kind === "withdrawn" && (
         <ConfirmDialog
           title={RESOLUTIONS.withdrawn.title}
           message={confirmMessage("withdrawn")}
           confirmLabel={RESOLUTIONS.withdrawn.confirmLabel}
           busy={busy}
-          onConfirm={() => void resolve("withdrawn")}
+          onConfirm={() => void resolve("withdrawn", pending.target)}
           onClose={() => { if (!busy) setPending(null); }}
         >{confirmBody("withdrawn")}</ConfirmDialog>
       )}
-      {pending === "upheld" && (
+      {pending?.kind === "upheld" && (
         <ConfirmDialog
           title={RESOLUTIONS.upheld.title}
           message={confirmMessage(
@@ -336,7 +345,7 @@ export function FreeReviewDisputeCard({
           )}
           confirmLabel={RESOLUTIONS.upheld.confirmLabel}
           busy={busy}
-          onConfirm={() => void resolve("upheld")}
+          onConfirm={() => void resolve("upheld", pending.target)}
           onClose={() => { if (!busy) setPending(null); }}
         >{confirmBody("upheld")}</ConfirmDialog>
       )}

@@ -70,6 +70,10 @@ export const COLUMN_MIGRATIONS: string[] = [
   // current_round 加 1、status 推回 reviewing),所以只有 runId 不是跨轮隔离证明:
   // 第 1 轮遗留的事件会在第 2 轮被重新解释成有效输入。存量行 NULL = 只按 run 判。
   "ALTER TABLE monitors ADD COLUMN source_review_round INTEGER",
+  // 起它的是这一轮的**哪一次**。同一轮会被用户重跑(换证据代次),run 和轮次两样都不变 ——
+  // 所以那两列也证不出跨「次」隔离:上一次的收尾会把新一次刚挂上的哨兵停掉、它排着的结果
+  // 作废(第 4 轮审查 F2)。存量行 NULL = 只按 run + 轮次判。
+  "ALTER TABLE monitors ADD COLUMN source_review_generation TEXT",
   // 这一次创建独有的资源记号:归属与整项退出的唯一凭证(见 schema-monitors.ts)。
   // 存量行一律 NULL ⇒ 孤儿后代只能落「证不出」,记责任、不下刀(第 12 轮审查 F1)。
   "ALTER TABLE monitors ADD COLUMN unit_token TEXT",
@@ -369,4 +373,9 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 这一行意图代表的是哪一次接受(queue-advance-admission.ts)。旧行 NULL = 没有代次,
   // 按「谁观察到它、谁就按 NULL 条件了结」处理,不会被另一趟的代次条件误删。
   "ALTER TABLE queue_advance_intents ADD COLUMN generation TEXT",
+  // 这一回合是不是哨兵唤醒起的(见 schema-sessions.ts 同名列)。存量行由
+  // monitor-wake-turns-backfill.ts 按转录回填一次。
+  "ALTER TABLE session_turns ADD COLUMN monitor_wake INTEGER NOT NULL DEFAULT 0",
+  // usage_turns 里记在哨兵唤醒回合上的那几轮(见 schema-sessions.ts 同名列)。
+  "ALTER TABLE sessions ADD COLUMN usage_monitor_wake_turns INTEGER",
 ];

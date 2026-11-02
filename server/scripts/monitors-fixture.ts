@@ -150,7 +150,8 @@ export async function insertMonitorRow(
   // 「归属已证明」的现场,不给或给错就是「证不出归属」的现场 —— 后者只许记责任、不许下刀。
   // `command` 只进日志和存量行的时间锚核对,**不是归属凭证**。
   opts: {
-    reviewRun?: string; round?: number; status?: string; pid?: number; pidStartedAt?: string | null;
+    reviewRun?: string; round?: number; generation?: string | null; status?: string;
+    pid?: number; pidStartedAt?: string | null;
     command?: string; unitToken?: string | null;
   } = {},
 ): Promise<string> {
@@ -163,7 +164,8 @@ export async function insertMonitorRow(
     endedAt: null, endedReason: null, ownerUserId: null, kind: "ash",
     nativeId: null, cliSessionId: null, toolUseId: null, sourceRun: null, startLowAt: null,
     sourceRole: "reviewer", sourceReviewRun: opts.reviewRun ?? null,
-    sourceReviewRound: opts.round ?? null, sourceLifetime: "bounded", lifetimeEvidence: "self",
+    sourceReviewRound: opts.round ?? null, sourceReviewGeneration: opts.generation ?? null,
+    sourceLifetime: "bounded", lifetimeEvidence: "self",
     sourcePid: null, sourcePidStartedAt: null, startEvidence: "observed",
     startAnchorWidthMs: 0, timeoutMs: 600_000,
     unitToken: opts.unitToken ?? null,

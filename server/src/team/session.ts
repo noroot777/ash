@@ -30,7 +30,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { AgentType, TeamConfig } from "@ash/shared";
 import { TEAM_DEFAULTS } from "@ash/shared";
-import { freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "../session-turns.js";
+import { bindTurnSource, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields, unbindTurnSource } from "../session-turns.js";
 import { holdTurn } from "./lead-turns.js";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions, groups } from "../db/schema.js";
@@ -45,7 +45,7 @@ import { resolveExecutorFor } from "../executors/index.js";
 import { LOST_SESSION_PATCH } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeRunError } from "../transcript.js";
-import { recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
+import { isMonitorWakeTurn, recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET, leadFirstMessage } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { browserGrantForProject, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
@@ -347,7 +347,7 @@ async function push(lead: Lead, text: string, kind: Kind, origin: UserTurnOrigin
     // **先确认进程收下了,再往时间线上落**。落早了这一句会以「用户已经说过」的样子留在
     // .md 里,可它接着还要由下一台补送 —— 同一句话在会话里出现两遍,而中间那一遍模型
     // 根本没收到。被拒时只留失败说明:原文还在待发送托盘里,用户看得见也等得到。
-    const { sent, interrupted, at: turnAt } = await sendToLead(lead, promptedText, { steer: true });
+    const { sent, interrupted, at: turnAt } = await sendToLead(lead, promptedText, { steer: true, monitorWake: isMonitorWakeTurn(origin) });
     if (!sent) {
       reportLeadFailure(lead, "这条消息没能送进调度台进程 —— 它正在收尾。这一句留在待发送托盘里,等下一台调度台接手时自动补送。", at);
       return false;
@@ -562,6 +562,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
       idleTimer: null,
       closing: null,
     };
+    // 首轮的来源在开放消费之前绑上:attachLead 一开放,首轮用量就可能先于开始行到
+    //（见 session-turns.ts「回合来源」）。
+    bindTurnSource({ sessionId: sessId, taskId, startedAt: turnStart, monitorWake: kind === "user" && isMonitorWakeTurn(origin) });
     attachLead(lead);
     liveLead = lead;
     // 挂上线了:从这一刻起句柄归这台调度台自己注销(它活得比 openLead 这次调用长)。
@@ -582,7 +585,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     void beginTurn(lead, turnStart);
     return lead;
   } catch (error) {
-    if (!attached) discardStartingRun(taskId, handle);
+    if (!attached) {
+      discardStartingRun(taskId, handle);
+      unbindTurnSource(sessId, turnStart);
+    }
     throw error;
   }
 }

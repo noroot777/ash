@@ -145,6 +145,16 @@ async function initializeServer() {
       + `Claude ${usageRepair.repairedClaudeSessions} 条，证据不足跳过 ${usageRepair.skippedSessions} 条`,
     );
   }
+  // 只影响「N 轮里几轮是哨兵唤醒」那一行拆分,没做完就下次启动再来,不拦启动。
+  try {
+    const wakes = await (await import("./monitor-wake-turns-backfill.js")).backfillMonitorWakeTurns();
+    if (!wakes.alreadyApplied) {
+      console.log(`[ash] 哨兵唤醒回合已回填：${wakes.sessions} 条会话、${wakes.turns} 轮`
+        + (wakes.retry ? `；${wakes.retry} 条会话这次没读到证据，下次启动再补` : ""));
+    }
+  } catch (error) {
+    console.warn(`[ash] 哨兵唤醒回合回填失败（下次启动重试）: ${String(error)}`);
+  }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
   // 回合级停滞看门狗的判决从此自动落库:**加载那个模块就等于装上了**(理由见它顶部 ——
   // 显式装配只在一条启动路径上成立,换个入口就静默不落库,而那正是审查 F3 的形状)。
@@ -255,8 +265,8 @@ async function initializeServer() {
     });
     if (gates.interrupted) console.log(`[ash] 验收前置命令：${gates.interrupted} 条被重启打断，已收尾`);
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
-    // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
-    const { reconcileFreeReviews } = await import("./free-workflow.js");
+    // 收拾死在投递链上的 reviewing run（详见 free-review-reconcile.ts）。
+    const { reconcileFreeReviews } = await import("./free-review-reconcile.js");
     await reconcileFreeReviews().catch((err) => console.error("[ash] 自由审查对账失败（不影响启动）:", err));
     const { reconcileRegressionSettlements, startRegressionSettlementRecovery } = await import("./regression-settlement.js");
     await reconcileRegressionSettlements().catch((err) => console.error("[ash] 延期验证结算对账失败（不影响启动）:", err));

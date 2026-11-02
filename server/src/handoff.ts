@@ -514,7 +514,7 @@ export async function exportHandoff(
           activeMs: s.activeMs, turnStartedAt: s.turnStartedAt,
           usageInput: s.usageInput, usageOutput: s.usageOutput,
           usageCacheRead: s.usageCacheRead, usageCacheWrite: s.usageCacheWrite,
-          usageReasoning: s.usageReasoning, usageCostUsd: s.usageCostUsd, usageTurns: s.usageTurns,
+          usageReasoning: s.usageReasoning, usageCostUsd: s.usageCostUsd, usageTurns: s.usageTurns, usageMonitorWakeTurns: s.usageMonitorWakeTurns,
           contextUsed: s.contextUsed, contextWindow: s.contextWindow,
           contextWindowEstimated: s.contextWindowEstimated,
         })),

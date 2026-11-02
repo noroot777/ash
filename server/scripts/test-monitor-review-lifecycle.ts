@@ -12,14 +12,18 @@
 //    定位会话：审查者可以是另一个执行器（codex 审 claude 写的代码），续跑于是回落到任务
 //    自己的配置，新建一条 claude 的 reviewer 会话（F2）。
 // ③ 新加的「续跑交代」读写一旦临时失败，通知会被永久取消、或者带着租约卡住不再投递（F4）。
+// ④ 代次这一位落在了创建记账、事件出口、按代次清理上,**唯一直接授权命令开工的那条 SQL 却没有**
+//    (自由工作流审查第 1 轮问题 3):一条还在创建中的旧请求可以在重跑换完代次之后照样上膛,
+//    命令真的跑起来,事后才被清理置成 stopped —— 而**事后停止撤不回一条已经执行的命令**。
 import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import {
-  db, inTurnCaller, monitors, pending, root, runs, schema, scheduledMessages, sessions, tasks,
-  makeTask, now, pendingOf, startMonitor, until, teardown,
+  db, inTurnCaller, insertMonitorRow, monitors, pending, root, runs, schema, scheduledMessages,
+  sessions, tasks, makeTask, now, pendingOf, startMonitor, until, teardown,
 } from "./monitors-fixture.js";
 import { inspectProcess } from "../src/proc.js";
+import { freeReviewEvidenceDir } from "../src/free-review-files.js";
 
 const { setActor, SINGLE_ACTOR } = await import("../src/auth/context.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
@@ -27,8 +31,8 @@ const { afterSettlement, settleTaskStatus } = await import("../src/settle-status
 const { deliveryOptions, monitorWakeGuard } = await import("../src/pending-verdict.js");
 const { stopReviewRunMonitors } = await import("../src/free-review-round.js");
 const { monitorSourceGate } = await import("../src/monitor-session.js");
-const { evidenceState } = await import("../src/regression-evidence-lifecycle.js");
-const { freeReviewEvidenceDir } = await import("../src/free-review-files.js");
+const { armRow, diagnoseArm } = await import("../src/monitor-create-arm.js");
+const { REVIEW_SOURCE_GONE } = await import("../src/monitor-session.js");
 
 /** 真实的 pause 路由：审查者按提示 `pause_task` 收尾走的就是它。 */
 const api = new Hono();
@@ -36,10 +40,21 @@ api.use("*", async (c, next) => { setActor(c, SINGLE_ACTOR); await next(); });
 mountTaskRunRoutes(api);
 const app = new Hono().route("/api", api);
 
-/** 一次正在进行的自由工作流审查 + 它那条活着的审查会话。 */
+/**
+ * 一次正在进行的自由工作流审查 + 它那条活着的审查会话 + **它那一轮的证据行**。
+ *
+ * 证据行不是可选的摆设:派一轮审查一定会建它(`launchReviewRound` → `restartRegressionEvidence`),
+ * 而「这一轮此刻是第几次」「审查者的等待算不算数」两问的权威全在那一行 —— 少了它,
+ * `reviewContinuationPending` 第一问就按「没人在等」返回,审查者刚 pause 的那一轮会被当场
+ * 结算掉。`targetIdentity` 照生产取**此刻**这个任务的方向身份(`reviewTargetIdentity`),
+ * 否则 `reviewWaitAuthorized` 认不出这份等待是这一轮的。
+ */
 async function reviewInFlight(
   taskId: string,
-  opts: { runId: string; agentType?: string; executorId?: string; model?: string; live?: boolean } = { runId: "run-x" },
+  opts: {
+    runId: string; agentType?: string; executorId?: string; model?: string; live?: boolean;
+    generation?: string;
+  } = { runId: "run-x" },
 ): Promise<void> {
   await db.insert(schema.freeReviewRuns).values({
     id: opts.runId, taskId, reviewerName: "审查者", agentType: opts.agentType ?? "codex",
@@ -49,14 +64,16 @@ async function reviewInFlight(
   await db.insert(schema.freeReviewRounds).values({
     id: `round-${opts.runId}`, runId: opts.runId, round: 1, status: "reviewing", startedAt: now(),
   });
-  // 真实的审查轮**起跑时就落一行证据**(free-review-round.ts 的 `evidenceState`):代次、
-  // 目标身份、续跑交接全挂在它上面。夹具少这一行,整条链就两头都读不到这一轮:pause 写下的
-  // 检查点归属只能记成 `unknown`(task-wait-ownership.ts 的 `writerOrigin` 读不到 state),
-  // 结算这一侧 `reviewContinuationPending` 第一句 `!state` 直接判「没人在等」,于是审查者
-  // 刚挂好的哨兵连带这一轮一起被结掉 —— 那是夹具缺一行,不是产品回归。所以这里调生产那个
-  // 函数,别手写一行冒充。
-  const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
-  await evidenceState(taskId, freeReviewEvidenceDir(taskId, opts.runId, 1), row);
+  const owner = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+  await db.insert(schema.regressionEvidence).values({
+    directory: freeReviewEvidenceDir(taskId, opts.runId, 1), taskId,
+    generation: opts.generation ?? `gen-${opts.runId}`, excludedMonitors: [],
+    targetIdentity: {
+      turnToken: owner.activeTurnToken, directionToken: owner.activeDirectionToken,
+      directionEpoch: owner.directionEpoch,
+    },
+    continuation: { phase: "running" },
+  });
   if (opts.live !== false) {
     await db.insert(sessions).values({
       id: `s-${opts.runId}`, taskId, role: "reviewer", agentType: opts.agentType ?? "codex",
@@ -218,5 +235,116 @@ async function reviewInFlight(
   assert.equal(task.resumePrompt, "醒了接着看套件结果", "一个字都没送出去，交代要原样留着");
 }
 
+// ── ⑥ 同一轮被重跑：资源身份带满三件套，旧收尾只动自己那一次的 ────────────────
+//
+// `run.id` 跨轮复用，重跑连轮次都不变（`reopenFailedFreeReview` 只换证据行的代次）。收尾
+// 又全是**异步**的：落完终态之后才停哨兵、才作废它排着的结果，中间全是 await。于是上一次
+// 的收尾能把新一次刚挂上的哨兵停掉、把它等的结果作废，而新一次的审查者还在跑 —— 它等的
+// 东西再也不会来（第 4 轮审查 F2 实测：NEW_MONITOR_AFTER_OLD_CLEANUP stopped）。
+//
+// 根因是**资源身份少了一位**，不是少一把锁：所以哨兵行记满 run + 轮次 + 代次，每一处收尾
+// 只动身份对得上的那些行，每一处唤醒也只认身份还对得上的那些事件。
+{
+  const taskId = await makeTask();
+  await reviewInFlight(taskId, { runId: "run-gen", generation: "gen-1" });
+  const directory = freeReviewEvidenceDir(taskId, "run-gen", 1);
+
+  const hang = async (description: string): Promise<string> => {
+    const started = await startMonitor({
+      taskId, command: "sleep 120", description, timeoutMs: 180_000,
+      caller: { kind: "external", wake: "reviewer" },   // 审查者/用户在面板上挂的
+    });
+    assert.ok(started.ok, `起不来：${started.ok ? "" : started.error}`);
+    return started.ok ? started.monitor.id : "";
+  };
+  const rowOf = async (id: string) => (await db.select().from(monitors).where(eq(monitors.id, id))).at(0)!;
+  // 命令还活着、结果却已经排在托盘里等投递，是审查者挂的哨兵最常见的形态；归属判错时这一
+  // 份是另一半损失（新一次等的结果被上一次作废）。所以两条都各排一条，分开看谁被收走。
+  const result = async (monitorId: string) => {
+    await db.insert(scheduledMessages).values({
+      id: `msg-${monitorId}`, taskId, text: "【哨兵事件】READY", attachments: "[]",
+      origin: `monitor:${monitorId}`, mode: "queued", status: "pending", sendAt: now(), createdAt: now(),
+    });
+  };
+
+  const old = await hang("上一次审查等外部套件");
+  assert.equal((await rowOf(old)).sourceReviewRound, 1, "轮次照旧要记");
+  assert.equal((await rowOf(old)).sourceReviewGeneration, "gen-1",
+    "代次也要记在行上：没有它，「这是上一次挂的」谁都认不出来");
+  await result(old);
+
+  // 用户重跑这一轮：run 是同一个、轮次也是同一个，只有证据行换了代次。
+  await db.update(schema.regressionEvidence).set({ generation: "gen-2" })
+    .where(eq(schema.regressionEvidence.directory, directory));
+  const fresh = await hang("重跑这一次审查等外部套件");
+  assert.equal((await rowOf(fresh)).sourceReviewGeneration, "gen-2", "新挂的归新一次");
+  await result(fresh);
+
+  // 上一次的收尾这会儿才跑到（它那段 await 里用户已经重跑过了）。
+  const stopped = await stopReviewRunMonitors(
+    "run-gen", "上一次审查启动失败，收回它挂的哨兵", false, { round: 1, generation: "gen-1" });
+  assert.equal(stopped, 1, "收的只能是它自己那一次挂的那一个");
+  assert.equal((await rowOf(old)).status, "stopped", "上一次的哨兵该它自己收走");
+  assert.equal((await rowOf(fresh)).status, "running",
+    "新一次刚挂上的哨兵不许被上一次的收尾停掉（第 4 轮审查 F2）");
+  const left = (await pendingOf(taskId)).map((m) => m.origin);
+  assert.deepEqual(left, [`monitor:${fresh}`],
+    "排着的结果同理：作废上一次的，新一次等的那一条必须留着（第 4 轮审查 F2）");
+
+  // 唤醒侧用的是同一份身份：身份对不上的事件不再叫人，对得上的照旧叫。
+  const guard = (id: string) => monitorWakeGuard({ taskId, origin: `monitor:${id}` } as never)!;
+  assert.ok(await guard(old)() !== null, "上一次的遗留事件不许送进重跑起来的那一次的会话");
+  assert.equal(await guard(fresh)(), null, "新一次自己的事件照旧要唤醒任务");
+
+  // 新一次自己的收尾照旧收得走它（身份是「只收自己那一次」，不是「谁都收不走」）。
+  assert.equal(await stopReviewRunMonitors("run-gen", "这一次审查收尾", false,
+    { round: 1, generation: "gen-2" }), 1, "新一次收尾时收走自己那一个");
+  assert.equal((await rowOf(fresh)).status, "stopped");
+  assert.equal((await pendingOf(taskId)).length, 0, "它排着的结果跟着作废");
+}
+
+// ⑦ **过期创建根本不许开工** —— 放行 SQL 自己得核代次(自由工作流审查第 1 轮问题 3)。
+//
+// 上一条测的是「旧收尾只收自己那一次」,这一条是**相反方向**的安全约束:旧的那一次创建还在路
+// 上(身份行已落库、pid 还空着 = 创建意图,完整进程身份刚拿到),用户这时重跑了这一轮 —— run
+// 和轮次两样都不变,换掉的只有证据行的代次。放行 SQL 过去只查 run 的 `status/current_round`,
+// 于是那条旧命令照样上膛、真的开工,事后才被重跑清理置成 stopped。实测当时
+// `rowsAffected=1`、`startMonitor` 回 ok=true、旧命令真的写出了标记文件。
+//
+// 为什么不能靠回合 token 兜:面板创建(external)压根没有 token,而「叫审查者」正是它允许的
+// 用法(上一条用例挂的就是这一种)。
+{
+  const taskId = await makeTask();
+  await reviewInFlight(taskId, { runId: "run-arm", generation: "gen-1" });
+  const directory = freeReviewEvidenceDir(taskId, "run-arm", 1);
+  const rowOf = async (id: string) => (await db.select().from(monitors).where(eq(monitors.id, id))).at(0)!;
+  // 一条**还在创建中**的哨兵:生产里这正是 `completeIdentity` 之后、放行 SQL 之前那个 await
+  // 上的现场(行已落库、pid 空着、身份三件套绑的是 gen-1)。
+  const inFlight = await insertMonitorRow(taskId, { reviewRun: "run-arm", round: 1, generation: "gen-1" });
+  const startedAt = inspectProcess(process.pid)?.startedAt ?? now();
+  const arm = async () => await armRow({ ...await rowOf(inFlight), pid: process.pid }, startedAt, null);
+
+  // 对照组先过:代次还对得上就该照常放行 —— 少了这一句,一个「永远不放行」的实现也能骗过下面。
+  assert.equal(await arm(), true, "代次对得上，这次创建照常放行");
+  assert.equal((await rowOf(inFlight)).pidStartedAt, startedAt, "放行那一笔把完整身份写进了行里");
+  await db.update(monitors).set({ pid: null, pidStartedAt: null }).where(eq(monitors.id, inFlight));
+
+  // 用户重跑这一轮:`restartRegressionEvidence` 换掉证据行的代次,run / 轮次一位都不动。
+  await db.update(schema.regressionEvidence).set({ generation: "gen-2" })
+    .where(eq(schema.regressionEvidence.directory, directory));
+  assert.equal(await arm(), false,
+    "这一轮已经被重跑成另一次：上一次的创建不许开工（事后停止撤不回一条已经执行的命令）");
+  assert.equal((await rowOf(inFlight)).pid, null, "没放行就不许把这一行写成已上膛");
+  assert.equal(await diagnoseArm(inFlight, taskId, null), REVIEW_SOURCE_GONE,
+    "措辞要指到真正的原因，不是兜底那句「被别的写入改过了」");
+
+  // 证据行整个读不到时同样不放行:这一问的严格方向和 `isReviewSourceActive` 相反(那一问答的是
+  // 「要不要作废一个已有结果」,读不出就放行;这一问答的是「要不要让一条命令开工」)。
+  await db.delete(schema.regressionEvidence).where(eq(schema.regressionEvidence.directory, directory));
+  assert.equal(await arm(), false, "读不出「现在是第几次」就不许开工");
+  assert.equal(await diagnoseArm(inFlight, taskId, null), REVIEW_SOURCE_GONE,
+    "这一档的措辞也得跟上：`isReviewSourceActive` 在这里是放行的，照它说话就只剩兜底那一句");
+}
+
 await teardown();
-console.log("✓ 审查哨兵的生命周期：审查回合退出不收它 / 审查收尾才收它 / 唤醒用那次审查的执行器 / 等待中补挂也认审查 / 读交代失败归还租约");
+console.log("✓ 审查哨兵的生命周期：审查回合退出不收它 / 审查收尾才收它 / 唤醒用那次审查的执行器 / 等待中补挂也认审查 / 读交代失败归还租约 / 重跑换代次后旧收尾只动自己那一次 / 过期创建的命令压根不许开工");

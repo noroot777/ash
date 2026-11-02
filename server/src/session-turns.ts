@@ -98,8 +98,8 @@ export function unconfirmedTurns(sessionId: string): number {
 
 function rememberUnconfirmed(input: TurnStartInput): void {
   const { sessionId, taskId, cwd, startedAt } = input;
-  const who = { taskId, cwd: cwd ?? null };
   const seen = unconfirmed.get(sessionId);
+  const who = { taskId, cwd: cwd ?? null };
   if (seen) seen.set(startedAt, who);
   else unconfirmed.set(sessionId, new Map([[startedAt, who]]));
 }
@@ -161,6 +161,42 @@ export function forgetTaskUnconfirmed(taskId: string): void {
     }
     if (!owed.size) unconfirmed.delete(sessionId);
   }
+  for (const [sessionId, bound] of [...wakeSources]) {
+    for (const [startedAt, owner] of [...bound]) {
+      if (owner === taskId) bound.delete(startedAt);
+    }
+    if (!bound.size) wakeSources.delete(sessionId);
+  }
+}
+
+// ── 回合来源:身份一分配就绑上 ─────────────────────────────────────────────────
+//
+// 「这一轮是哨兵唤醒起的」是**回合身份**自带的事实,不是开始行落库之后才有的事实。报账
+// (`usage.ts`)按身份问它,而用量事件可以比开始行先到:团队调度台在投递口一收下消息就放开了
+// 消费,开始行还隔着几次写库(第 2 轮审查 F1,不注入任何延迟也复现)。所以分配身份的那一处
+// **同步**把它绑在这里(投递口 `sendToLead`、开台 `openLead`、单飞 `openTurn` 开头),落库那一批
+// (`persistTurn`)从这里合进去,**写成了才解绑**——之后就由库里那一位回答。
+//
+// 只记「是唤醒」的那些(值 = 任务 id,删任务时一起扔):不是唤醒是默认,不需要占位。
+const wakeSources = new Map<string, Map<string, string>>();
+
+export function bindTurnSource(input: { sessionId: string; taskId: string; startedAt: string; monitorWake?: boolean }): void {
+  if (!input.monitorWake) return;
+  const bound = wakeSources.get(input.sessionId);
+  if (bound) bound.set(input.startedAt, input.taskId);
+  else wakeSources.set(input.sessionId, new Map([[input.startedAt, input.taskId]]));
+}
+
+export function unbindTurnSource(sessionId: string, startedAt: string): void {
+  const bound = wakeSources.get(sessionId);
+  if (!bound) return;
+  bound.delete(startedAt);
+  if (!bound.size) wakeSources.delete(sessionId);
+}
+
+/** 这个身份绑着「哨兵唤醒」、还没落进库吗。 */
+export function boundMonitorWake(sessionId: string, startedAt: string): boolean {
+  return !!wakeSources.get(sessionId)?.has(startedAt);
 }
 
 /**
@@ -229,10 +265,14 @@ export async function openTurn(input: {
   taskId: string;
   cwd: string | null | undefined;
   startedAt: string | null | undefined;
+  /** 这一轮是哨兵唤醒起的（见 `db/schema-sessions.ts` 的 `sessionTurns.monitorWake`）。 */
+  monitorWake?: boolean;
 }, opts: { register?: boolean } = {}): Promise<void> {
   if (!input.startedAt) return;
   const startedAt = input.startedAt;
   const register = opts.register ?? true;
+  // 来源先于任何 await 绑上(见上面「回合来源」那段):下面每一步都可能让出执行权。
+  bindTurnSource({ ...input, startedAt });
   // **这一行开始记录是本进程写的** —— 判决恢复那一路靠它分辨「全新起跑」和「上一个进程留下来
   // 的」,理由见 session-turn-registry.ts 的 `openedHere`。登记在写库之前:下面那几步都可能抛,
   // 而「是我开的」这个事实跟它们成不成没关系(开始行没落下的回合照样要认得出是本进程开的)。
@@ -323,6 +363,8 @@ type TurnStartInput = {
   taskId: string;
   cwd: string | null | undefined;
   startedAt: string;
+  /** 只有开始那一下知道；收尾补插不知道就给 undefined,不会把已记下的那一位抹掉。 */
+  monitorWake?: boolean;
 };
 
 /** 收口那一下知道的两件事:什么时候收的、收在什么结局上。开始那一下给 null。 */
@@ -379,6 +421,7 @@ async function writeTurnRow(
     at: input.startedAt,
     end: close?.endedAt ?? null,
     outcome: close?.outcome ?? null,
+    wake: input.monitorWake ? 1 : 0,
   };
   const [, inserted, merged, collided] = await dbClient.batch([
     {
@@ -390,8 +433,8 @@ async function writeTurnRow(
       args: { sid: args.sid, at: args.at },
     },
     {
-      sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at, outcome)
-              VALUES (:row, :sid, :task, :cwd, :at, :end, :outcome)`,
+      sql: `INSERT OR IGNORE INTO session_turns (id, session_id, task_id, cwd, started_at, ended_at, outcome, monitor_wake)
+              VALUES (:row, :sid, :task, :cwd, :at, :end, :outcome, :wake)`,
       args,
     },
     {
@@ -419,6 +462,13 @@ async function writeTurnRow(
                 )`,
       args: { sid: args.sid, at: args.at, end: args.end, fresh: fresh ? 1 : 0 },
     },
+    {
+      // 「哨兵唤醒」只升不降:行可能先由收尾补插出来(那一下不知道这件事),迟到的开始信息
+      // 再来时把它补上。排在最后,不占上面那几条的结果位。
+      sql: `UPDATE session_turns SET monitor_wake = 1
+              WHERE session_id = :sid AND started_at = :at AND :wake = 1 AND monitor_wake = 0`,
+      args: { sid: args.sid, at: args.at, wake: args.wake },
+    },
   ]);
   if (inserted.rowsAffected > 0) return "inserted";
   if (merged.rowsAffected > 0) return "merged";
@@ -440,8 +490,12 @@ async function persistTurn(
   close: TurnClose | null = null,
   fresh = false,
 ): Promise<TurnWrite> {
-  const wrote = await writeTurnRow(input, close, fresh);
+  // 绑在身份上的来源由这里合进去,不靠调用方知道:收尾补插、补欠账那几路都不知道这一轮是不是
+  // 唤醒。写成了(行在、那一位已置上)才解绑,之后由库里那一位回答。
+  const monitorWake = !!input.monitorWake || boundMonitorWake(input.sessionId, input.startedAt);
+  const wrote = await writeTurnRow({ ...input, monitorWake }, close, fresh);
   confirmTurn(input.sessionId, input.startedAt);
+  if (monitorWake) unbindTurnSource(input.sessionId, input.startedAt);
   return wrote;
 }
 

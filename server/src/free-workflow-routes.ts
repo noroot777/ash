@@ -17,6 +17,7 @@ import {
   disputeInputOf,
   disputeResolutionOf,
   disputeResolutionNoteOf,
+  disputeTargetOf,
   resolveFreeReviewDispute,
 } from "./free-review-dispute.js";
 import { freeReviewFile } from "./free-review-files.js";
@@ -136,12 +137,13 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
     try {
-      const body = await c.req.json<{ resolution?: unknown; note?: unknown }>()
-        .catch(() => ({} as { resolution?: unknown; note?: unknown }));
+      type ResolutionBody = { resolution?: unknown; note?: unknown; target?: unknown };
+      const body = await c.req.json<ResolutionBody>().catch(() => ({} as ResolutionBody));
       const result = await resolveFreeReviewDispute(
         c.req.param("id"),
         disputeResolutionOf(body.resolution),
         disputeResolutionNoteOf(body.note),
+        disputeTargetOf(body.target),
       );
       return c.json({ ...result, state: await freeWorkflowState(c.req.param("id")) });
     } catch (error) { return c.json(await noted(c.req.param("id"), "裁定驳回", errorBody(error)), 409); }
@@ -150,7 +152,8 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     const blocked = await blockedByHandoff(c);
     if (blocked) return blocked;
     try {
-      const body = await c.req.json<{ exchanges?: unknown }>().catch(() => ({} as { exchanges?: unknown }));
+      type DebateBody = { exchanges?: unknown; target?: unknown };
+      const body = await c.req.json<DebateBody>().catch(() => ({} as DebateBody));
       const started = await startFreeReviewDebate(c.req.param("id"), body, { holdTurn: true });
       return c.json({ ...started, state: await freeWorkflowState(c.req.param("id")) }, 201);
     } catch (error) { return c.json(await noted(c.req.param("id"), "让双方辩论", errorBody(error)), 409); }

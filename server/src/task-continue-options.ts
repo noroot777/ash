@@ -1,3 +1,4 @@
+import type { InputAcceptance } from "./executors/types.js";
 import type { AgentType } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import type { TurnIdentity, TurnSource } from "./runs.js";
@@ -8,6 +9,30 @@ import type { TurnIdentity, TurnSource } from "./runs.js";
 // (schedules.ts), so it never resumes. `wake` = an upstream task just settled
 // done and the settle hook is auto-resuming this paused dependent.
 export type ResumeReason = "group" | "run" | "retry" | "wake" | "queue";
+
+/**
+ * **这一轮没能起跑,是哪一种**(`continueTask` 返回 false 时必定带一个)。
+ *
+ * 为什么非得分开:那个 false 原先把四件完全不同的事压成一个布尔 —— 于是**确证一个字节都没动
+ * 的瞬时抢占**和「用户撤回」在调用方眼里长得一模一样,只能一视同仁地落终态。第 1 轮审查问题 2
+ * 实测:外层占到 reviewer 锁之后、交接到内层之前,这把锁被合法放开、另一回合占上,内层
+ * `reclaimTurn` 正确地拒绝接管 —— 而这一轮审查就此 run=failed / round=error,只尝试过 1 次。
+ * 「所有 false 都重试」是反过来的错:撤回被磨掉,拒绝理由被原地再撞一遍。
+ *
+ *  · `turn-taken` —— 锁此刻在**别的执行**手上(入口占位已被拔走,或这一刻正跑着另一轮)。
+ *    瞬时,而且这一侧到这一刻一个字节都没动;锁总会被还回来(持有者自己的 finally、人工放开、
+ *    幽灵锁巡检都走 `endOwnTurn`),所以「排到下一个空闲窗口」一定还有下一次机会 —— **唯一
+ *    一种重排是安全的**。
+ *  · `withdrawn`  —— 用户的动作把这一轮撤了(起跑前的冻结闸、spawn 之前的审查撤回)。重排只会
+ *    把他的决定磨掉。
+ *  · `backoff`    —— 其它退避:接力出去的存档、验收互斥、检查点待恢复、唤醒资格不再成立、
+ *    历史审查退役、读不到状态、团队插话没送达。**确证没送出去**,但重排是原地再撞同一个
+ *    拒绝理由,该让调用方自己交代。
+ *  · `uncertain`  —— 这个任务上挂着一次**说不清有没有投喂**的交付(`waitOwnership.start`
+ *    停在 `uncertain`:服务死在交付期,原输入按「不会自动重发」保留着)。这一档一个字都不许
+ *    重投,而且**不许声称「一个字都没送出去」**。
+ */
+export type TurnStartDecline = "turn-taken" | "withdrawn" | "backoff" | "uncertain";
 
 /**
  * `continueTask` 的**调用契约**:这一回合由谁发起、代谁跑、能不能被撤回、落盘之后要回调谁。
@@ -103,14 +128,46 @@ export type ContinueTaskOptions = {
    */
   freezeGuard?: boolean;
   /**
-   * 「用户这句话已经**落盘**了」的回调 —— 在原话作为一个真人回合写进会话之后立刻调，
-   * 不等这一轮跑完（`continueTask` 要等整轮结束才 resolve，那时早过了）。
+   * 「这一轮的输入**到底有没有进 agent 手里**」的回执回调 —— 在原话作为一个真人回合写进会话、
+   * 并且问过协议层之后立刻调,不等这一轮跑完（`continueTask` 要等整轮结束才 resolve,那时早过了）。
    *
-   * 给排队/定时消息用：它们要在这一刻、而不是更早，才把库里那条标成 sent。早一步标，
-   * 进程死在中间就是「托盘里没了、会话里也没有」——用户那句话凭空蒸发
+   * 给排队/定时消息和续跑凭证用:它们要在这一刻、而不是更早,才决定那条库行怎么处置。早一步标
+   * `sent`,进程死在中间就是「托盘里没了、会话里也没有」——用户那句话凭空蒸发
    * （见 docs/incidents.md「排队消息凭空消失」）。
+   *
+   * **三档都会调到,调用方必须三档都处置**（第 1 轮自由审查 F2/F3:上一版只在「不是 refused」
+   * 时调,于是续跑那一路的 finally 和开机对账压根看不到「明确拒收」这个事实,照旧拿本地回合行
+   * 反推出「已送达」并补写 sent —— 日志里先打印「输入没能送进 agent」紧接着打印「原文已送达,
+   * 补记这一笔确认」）：
+   *   · `accepted` → 落 `sent` / 确认消费;
+   *   · `refused`  → 确证没送出去,归还原文、立刻可重投;
+   *   · `unknown`  → **留在在途**:不写 `sent`、也不归还（还了就重投,那才是重复执行）。语义与
+   *     两个出口见 ../turn-input-acceptance.ts 文件头。
+   *
+   * 从前叫 `onDelivered`。改名是刻意的:那个名字把「回调被调到」读成了「已送达」,而这正是
+   * F2/F3 两条的共同根因 —— 新名字让每个调用点在编译期被迫重新想一遍三档各自该干什么。
    */
-  onDelivered?: () => void | Promise<unknown>;
+  onInputSettled?: (acceptance: InputAcceptance) => void | Promise<unknown>;
+  /**
+   * **同一个回调会被调第二次** —— 初次给的是有界等待的结果,迟到那一次才是终局。
+   *
+   * 初次 `unknown` 之后回执还在落定:落成 `accepted` 就是补记账,落成 `refused` 就是归还重投。
+   * 上一版只把迟到的 accepted 转回来,于是迟到的拒收没人管 —— 那张租约永远留在「在途」,消息
+   * 停在待发送、任务已经失败、再扫一遍也领不走它,只有重启能解(第 2 轮自由审查 F3,已实测)。
+   *
+   * 所以调用方的三档处置**必须幂等**,而且别假设只会被调一次。排队/定时/真人回合三条路共用
+   * `../delivery-lease.ts` 那一份(它就是为了不让三个入口各漏一处而存在的)。
+   */
+  /**
+   * 这一轮输入回执**本体**,run() 一返回就交出来 —— 排在任何可失败的本地记账之前(第 2 轮自由
+   * 审查 F1:排在末尾时,记账一抛它就没被调到,调用方把「还没交接」读成了「执行器没有回执」)。
+   * 没有这条缝的执行器给一个显式的 accepted 承诺,所以调用方手上没拿到 = 只有「还没交接」一个意思。
+   *
+   * 给**结算方**用:结算发生在回合结束之后,那时回执早就落定了,而初次那一档是几十秒前有界
+   * 等待的结果。拿过期的 `unknown` 去结算,会把一段明确被拒收的交代结成「交付不明」,而它本该
+   * 原样归还(第 2 轮自由审查 F1 的那一半)。问法见 ../turn-input-acceptance.ts 的 lastWordOnInput。
+   */
+  onInputReceipt?: (receipt: Promise<InputAcceptance>) => void;
   /**
    * 「这个任务此刻还能不能被**这条消息**叫醒」——**占住回合之后**再问一次，返回理由
    * 字符串就撤回这一轮（返回 false，一个字都不送）。
@@ -124,5 +181,17 @@ export type ContinueTaskOptions = {
    * 它的意思），给它挂这道闸等于把他的话吞了。
    */
   wakeGuard?: () => Promise<string | null>;
+  /**
+   * **这一轮没起跑的原因** —— 返回 false 时必定叫一次,而且只叫一次(见 `TurnStartDecline`)。
+   *
+   * 为什么是回调而不是把返回值换成联合类型:`continueTask` 的 `Promise<boolean>` 有十几个
+   * 调用方,而它们里面只有一个(审查派发)需要按原因分路;换返回值会把那十几处全改一遍,而每
+   * 一处的收尾语义都不一样 —— 收益全在这一处,风险摊到所有人。回调是加法:不传的照旧只看
+   * 布尔,行为与改之前逐字一致。
+   *
+   * **原因本身不是尽力而为的**:`enterTurn` 那一侧的每条拒绝出路都由类型强制带上原因
+   * (见 turn-entry-guard.ts 的 `decideTurnEntry`),所以新加一道闸漏报在编译期就过不去。
+   */
+  onDecline?: (reason: TurnStartDecline) => void;
   throwOnTeamUnavailable?: boolean;
 };

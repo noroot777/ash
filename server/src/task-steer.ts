@@ -10,6 +10,7 @@ import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
+import { createDeliveryLease } from "./delivery-lease.js";
 import { abortDelivery, beginDelivery, deliveryOptions, flushPendingForTask, markSent } from "./pending-messages.js";
 import {
   isRunning,
@@ -60,37 +61,69 @@ async function recoverUndeliveredSteer(taskId: string): Promise<void> {
 function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageResult> {
   return new Promise((resolve) => {
     let settled = false;
-    let delivered = false;
     const finish = (result: SteerQueuedMessageResult) => {
       if (settled) return;
       settled = true;
       resolve(result);
     };
+    // 在途租约:三档回执怎么处置这张租约、迟到的那一次怎么收口,统一在 ./delivery-lease.ts
+    // (三个投递入口各写一遍就会各漏一处 —— 那正是第 2 轮自由审查 F3)。
+    //
+    // `unknown` 那一档的含义在这条路上是:原话已经作为真人回合落进会话了,只是协议回执没等到
+    // —— 不写 sent(写了那句话就永久消失)、也不归还(归还即重投),托盘里照旧显示排队中,比
+    // 谎称已送达保守。HTTP 这一侧照旧当场答「已送达」:那句话确实进了会话。
+    const lease = createDeliveryLease({
+      label: `任务 ${message.taskId} 的新方向`,
+      onAccepted: () => markSent(message),
+      onReturn: async (why) => {
+        await recoverUndeliveredSteer(message.taskId);
+        await abortDelivery(message);
+        console.warn(`[ash] 任务 ${message.taskId} 的新方向${why}`);
+      },
+    });
 
     void (async () => {
       try {
         const started = await continueTask(message.taskId, message.text, {
           ...deliveryOptions(message),
-          onDelivered: async () => {
-            await markSent(message);
-            delivered = true;
-            finish({ ok: true, taskId: message.taskId, messageId: message.id });
+          onInputSettled: async (acceptance) => {
+            await lease.settle(acceptance);
+            // 「原话进了会话」这件事在 accepted/unknown 两档都成立,HTTP 那一侧据此放行;
+            // refused 由下面那一支如实报「仍在排队」。
+            if (acceptance !== "refused") {
+              finish({ ok: true, taskId: message.taskId, messageId: message.id });
+            }
           },
         });
-        if (started && delivered) return;
-        await recoverUndeliveredSteer(message.taskId);
-        await abortDelivery(message);
+        // **HTTP 答复与租约处置是两件事**(第 1 轮自由审查 F3,实测):上一版这里写的是
+        // `started && !callerMustReturn() → return`,而「拒收且租约那边已经还成」同样让
+        // callerMustReturn 答假 —— 于是直接返回,下面那句 409 一次都没走到,回执那一支对拒收
+        // 又不答复,引导按钮就一直等下去(任务都已经失败了)。「不必由我归还」推不出「请求
+        // 已经答复」。所以出口按协议定论分:进了会话的两档已经在回执那一支答过了,其余一律
+        // 在这里答失败 —— 不管租约是谁还的。
+        const outcome = lease.acceptance();
+        if (outcome === "accepted" || outcome === "unknown") return;
+        // 判据只看协议定论(delivery-lease.ts):回执压根没来(起跑失败/被抢占)、或者确证拒收
+        // 而归还还没落盘,才由这里归还。归还只还自己那一次(delivery-fence.ts),跟租约自己那笔
+        // 补偿撞上也只是空转;还成了就把补偿了结掉。
+        if (lease.callerMustReturn()) {
+          await recoverUndeliveredSteer(message.taskId);
+          await abortDelivery(message);
+          lease.callerReturned();
+        }
         finish({
           ok: false,
           status: 409,
-          error: started
-            ? "新方向未能落进会话，消息已保留在排队中"
-            : "当前回合被其它执行抢占，消息已保留在排队中",
+          error: lease.acceptance() === "refused"
+            ? "新方向没能送进 agent（协议层拒收），消息已保留在排队中，稍后会自动重投"
+            : started
+              ? "新方向未能落进会话，消息已保留在排队中"
+              : "当前回合被其它执行抢占，消息已保留在排队中",
         });
       } catch (error) {
-        if (!delivered) {
+        if (lease.callerMustReturn()) {
           await recoverUndeliveredSteer(message.taskId).catch(() => undefined);
-          await abortDelivery(message).catch(() => undefined);
+          await abortDelivery(message).then(() => lease.callerReturned(), () => undefined);
         }
         finish({
           ok: false,
@@ -137,10 +170,13 @@ async function deliverNativeSteer(
   let previous: PreviousDirectionState | null = null;
   let delivered = false;
   try {
-    if (!(await beginDelivery(message.id))) {
+    const leased = await beginDelivery(message.id);
+    if (!leased) {
       reservation.cancel();
       return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
     }
+    // 后面的归还/确认都凭领取那一刻的租约值证明「还是我这一次」(delivery-fence.ts)。
+    Object.assign(message, leased);
     const attachments = steerAttachments(message) ?? [];
     // 普通投递的这一步在 continueTask 里（上传归属这条任务，多人模式下的可读范围也靠它）；
     // 原生引导绕过了 continueTask，得自己补上，否则同一张图从托盘走和从输入框走归属不一样。
@@ -311,10 +347,13 @@ export async function steerQueuedMessage(messageId: string, options: { nativeOnl
   }
 
   try {
-    if (!(await beginDelivery(message.id))) {
+    const leased = await beginDelivery(message.id);
+    if (!leased) {
       reservation.cancel();
       return { ok: false, status: 409, error: "消息正在投递或已被处理，请稍后查看" };
     }
+    // 同上:换成领取那一刻的行(reservation 的回调闭包里拿的也是这一个对象)。
+    Object.assign(message, leased);
     previousDirectionState = await clearPreviousDirectionState(task.id);
     const committed = reservation.commit();
     if (committed !== "committed") {

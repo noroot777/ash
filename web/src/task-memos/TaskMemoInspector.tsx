@@ -10,6 +10,7 @@ import type { TaskMemo } from "@ash/shared/task-memo";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import type { Notify } from "../lib/notify.ts";
+import { isModEnterEvent } from "../lib/sendKey.ts";
 import { TaskMemoCard } from "./TaskMemoCard.tsx";
 import { addTaskMemo, clearTaskMemoHighlight, editTaskMemo, removeTaskMemo, useTaskMemos } from "./taskMemoStore.ts";
 import {
@@ -98,6 +99,7 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
             disabled={pendingOn(null)}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
+              if (isModEnterEvent(event)) { event.preventDefault(); submit(); return; }
               if (event.key !== "Escape") return;
               event.stopPropagation();
               if (!pendingOn(null)) setMemoComposerDraft(taskId, null);
@@ -109,6 +111,7 @@ export function TaskMemoInspector({ taskId, notify }: { taskId: string; notify: 
               type="button"
               className="is-primary"
               disabled={pendingOn(null) || !draft.trim()}
+              aria-keyshortcuts="Meta+Enter Control+Enter"
               onClick={() => submit()}
             >
               保存

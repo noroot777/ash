@@ -40,6 +40,7 @@ export type MonitorResponsibilityRow = {
   /** **哨兵行**上记的来源身份。第二类里哨兵行可能已经没了(被删/被清)⇒ null。 */
   reviewRun: string | null;
   reviewRound: number | null;
+  reviewGeneration: string | null;
   /**
    * **那条待发送消息自己带的**那份来源身份(只有第二类非空)。
    *
@@ -69,6 +70,7 @@ export async function unsettledMonitorResponsibility(
     endedReason: monitors.endedReason,
     reviewRun: monitors.sourceReviewRun,
     reviewRound: monitors.sourceReviewRound,
+    reviewGeneration: monitors.sourceReviewGeneration,
   };
   const noMessageSource = {
     messageReviewRun: sql<string | null>`NULL`.as("message_review_run"),

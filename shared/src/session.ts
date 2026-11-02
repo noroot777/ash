@@ -79,6 +79,9 @@ export interface Session {
   // 这条会话行累计的 token 用量(会话可复用,跨多个回合累加)。null = 这家 CLI
   // 不报账,或这条会话建在该功能之前 —— 两种都不该显示成 0。
   usage: TokenUsage | null;
+  // `usage.turns` 里有几轮是哨兵唤醒起的(被叫醒看一眼,不是人说了一句话)。它们照样计费,
+  // 所以照样算进轮数,这里只负责拆得开。缺省 = 这份快照不提供它,按 0 处理。
+  monitorWakeTurns?: number;
   // 上下文水位:最近一次 API 调用装了多少进模型。**覆盖式**,跟上面的累计流水是两
   // 个概念(见 shared/src/usage.ts)。null = 没采到(那家 CLI 不给,或会话建在该功能
   // 之前)。

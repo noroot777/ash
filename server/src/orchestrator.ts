@@ -10,7 +10,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { closeTaskTurns, freshTurnFields, nextTurnStart, openTurn, primeTurnStarts, resumedTurnFields } from "./session-turns.js";
-import type { ContinueTaskOptions } from "./task-continue-options.js";
+import type { ContinueTaskOptions, TurnStartDecline } from "./task-continue-options.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, discardStartingRun, takeSteered, takeStopped, bindTurnToken, reclaimTurn, releaseTurn, turnSourceReview, turnSourceRole } from "./runs.js";
 import { turnDirectionStart } from "./task-direction-epoch.js";
@@ -31,8 +31,9 @@ import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { DeliveryCrossingUnwritable, recordDeliveryCrossing } from "./delivery-crossing.js";
+import { createTurnInputSettlement } from "./turn-input-settlement.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
-import { recordUserConversationTurn } from "./conversation-turn.js";
+import { isMonitorWakeTurn, recordUserConversationTurn } from "./conversation-turn.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
@@ -66,7 +67,7 @@ import { baseFallbackNote } from "./base-fallback-notice.js";
 
 // 这一回合的**调用契约**(连 ResumeReason 一起)住在 task-continue-options.ts；这里原样
 // 再导出，调用方（task-resume、runs 那几处）不用跟着改导入路径。
-export type { ContinueTaskOptions, ResumeReason } from "./task-continue-options.js";
+export type { ContinueTaskOptions, ResumeReason, TurnStartDecline } from "./task-continue-options.js";
 
 async function setStatus(
   taskId: string,
@@ -109,6 +110,22 @@ export async function continueTask(
   // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下
   // 上下文」既会被打成 failed,也会顺手把已验收的牌子摘掉——旁路回合不拍工作目录快照,
   // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
+  /**
+   * **这一轮没起跑的原因,只报一次** —— 返回 false 的每一条出路都要配一个(契约与四个档位
+   * 见 `TurnStartDecline`)。压成一个光秃秃的 false 的代价在第 1 轮审查问题 2 实测过:锁被
+   * 别的执行合法接走(瞬时、确证一个字节都没动)和用户撤回在调用方眼里一样,于是一次瞬时
+   * 争用就让整轮审查落了终态。
+   *
+   * 只报一次是因为 `enterTurn` 那边也会报它自己那一档:两边共用这一个闸门,不会报两声。
+   */
+  let declined = false;
+  const decline = (reason: TurnStartDecline): false => {
+    if (!declined) {
+      declined = true;
+      try { opts.onDecline?.(reason); } catch (error) { console.error(`[ash] 起跑未成的原因上报失败 task=${taskId}:`, error); }
+    }
+    return false;
+  };
   const { head, nativeCommand, slash, goalExecution, options, retired } = await withTurnPreflight(taskId, opts.turnHeld, async () => {
     const prepared = await prepareContinuationEntry(taskId, userText, opts);
     // **原生命令不退休任何审查轮**。退休要拦的是「新方向来了,旧轮次不许回来把它改回去」
@@ -124,9 +141,13 @@ export async function continueTask(
     return { ...prepared, retired };
   });
   opts = options;
-  if (retired) return false;
+  // 历史审查退役:这一笔的目标早就不是「现在那一次」了,确证没送出去,但重排毫无意义。
+  if (retired) return decline("backoff");
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 整条在 team/lead-interjection.ts。
-  if (head?.mode === "team") return await deliverLeadInterjection(taskId, userText, opts);
+  // 团队插话没送达同样是退避(调度台不在线/正忙),不是锁被抢走。
+  if (head?.mode === "team") {
+    return await deliverLeadInterjection(taskId, userText, opts) || decline("backoff");
+  }
   // 起跑前的那串闸（接力存档 / 回合占位 / 验收互斥 / 唤醒资格）收在一处，见
   // turn-entry-guard.ts 的文件头：它们共享的不变量是「从占住位到交给下面那个大 try
   // 之间，每一条出路都得自己把位还回去」，散着写时新加一道闸就会漏掉这件事。
@@ -140,6 +161,9 @@ export async function continueTask(
     wakeGuard: opts.wakeGuard,
     pendingMessageIds: opts.pendingMessageIds,
     source: opts.turnSource ?? { role: "single" },
+    // 那一侧每条拒绝出路都由类型强制带原因(turn-entry-guard.ts 的 `decideTurnEntry`),
+    // 其中 `turn-taken` 是唯一的瞬时档 —— 原样转出去,别在这里压成一个 false。
+    onDecline: decline,
   });
   if (!turn) return false;
   // catch 那边署名用的就是它：出错时 task 可能压根没读出来，所以按 head 的快照兜底，
@@ -154,12 +178,18 @@ export async function continueTask(
   let baseFallbackTold = false;
   // FrozenTurn(spawn 前被冻结闸撤回)= 输入没送出去,函数尾据此返回 false。
   let frozenBeforeSpawn = false;
+  /** 那条 false 该报成哪一种(见 `TurnStartDecline`);默认是用户撤回,写库故障另算。 */
+  let frozenReason: TurnStartDecline = "withdrawn";
   let reviewStart: ReviewStartReceipt | undefined;
   let checkingReviewStart = false;
+  const inputSettlement = createTurnInputSettlement(taskId, opts);
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
-    if (task.waitOwnership?.start?.phase === "uncertain") return false;
+    // 这个任务上挂着一次**说不清有没有投喂**的交付(服务死在交付期,原输入按「不会自动重发」
+    // 保留着)。本次确证没送出去,但调用方不能据此声称「一个字都没送出去」—— 那句话会被读成
+    // 对那次悬着的交付的判词。
+    if (task.waitOwnership?.start?.phase === "uncertain") return decline("uncertain");
     if (task.mode !== "single") throw new Error("reply is for single tasks");
     const startStatus = taskStartStatus(task);
     goalStartFrom = goalExecution && !["running", "queued"].includes(startStatus) ? startStatus : null;
@@ -428,6 +458,9 @@ export async function continueTask(
       env: runEnv,
     });
     trackRun(taskId, handle);
+    // 回执责任**此刻**就交出去,不等下面那一串可失败的本地记账(第 2 轮自由审查 F1,见
+    // turn-input-settlement.ts 文件头)。
+    inputSettlement.handOver(handle);
     // 前言已经随 prompt 交到 agent 手上，这一刻起就该划掉（放在 spawn 之后：起跑前
     // 还有 takeFreeze 那道闸，清早了被冻住的那一轮就把它白白吃掉了）。
 
@@ -519,7 +552,11 @@ export async function continueTask(
     if (!sideTurn) void hintAshMcpForTurn({ taskId, agentType: agent, executorId: profileId, ownerUserId: runOwner ?? null, cwd, sessionId: sessId });
     if (handoffNotice) await clearHandoffNotice(taskId);
     // 两条分支都算开了一个回合：开始就落行,收尾时按同一身份补 ended_at（见 session-turns.ts）。
-    await openTurn({ sessionId: sessId, taskId, cwd, startedAt: turnStart });
+    await openTurn({
+      sessionId: sessId, taskId, cwd, startedAt: turnStart,
+      // 跟下面落转录那一句同一个判据:系统回合不落用户发言,也就不算唤醒。
+      monitorWake: !opts.system && isMonitorWakeTurn({ bySystem: opts.byBackend, monitorWake: opts.monitorWake }),
+    });
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     if (opts.system) {
@@ -539,12 +576,16 @@ export async function continueTask(
     if (!opts.system && !opts.byBackend && task.resumePrompt && task.status !== "paused") {
       await takeResumePrompt(taskId, task.resumePrompt);
     }
-    // 到这里这句话已经**两处落地**:agent 进程早在上面就带着它起来了,原文也刚写进会话
-    // 落盘文件。排队/定时消息就是在这一刻、而不是更早,才把库里那条标成 sent。
-    // 回调自己出错不许影响这一轮(它只是记账)。
-    if (opts.onDelivered) {
-      try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
-    }
+    // 原文已经写进会话落盘文件了,但「落 sent」还缺最后一个事实:**agent 到底收下了没有**。
+    // `run()` 返回只证明进程起来了 —— codex app-server 的回合输入是 spawn 之后才走协议发出去
+    // 的,服务端死在那条缝里就会留下「进程活着、输入一个字没出去、消息却已经是终态 sent」的
+    // 现场(2026-11-02 WfLfTjaGzcA8,1.5 小时零输出)。三态与取舍整份住在 turn-input-acceptance.ts;
+    // 没有这条缝的执行器当场返回 accepted,零额外延迟。
+    //
+    // **三档一律如实往上报,这一层不替调用方做决定**(第 1 轮自由审查 F2/F3),各档的调用方义务
+    // 写在 task-continue-options.ts 的 onInputSettled 上。这里只是正常出口;异常出口在 catch
+    // 里结同一笔(turn-input-settlement.ts)。
+    await inputSettlement.settle(handle);
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
@@ -580,6 +621,13 @@ export async function continueTask(
       },
     });
   } catch (err) {
+    // **spawn 之后才抛的,输入事实照样要交给调用方**(第 2 轮自由审查 F1):会话持久化、交接提示、
+    // 登记回合任何一步失败都会跳到这里,而协议层可能早就收下(或明确拒收)了这一轮。先把进程收掉
+    // —— 这一轮反正要按失败收口,进程一关,未完成的请求一律落定 —— 再按协议定论结算。
+    if (handle && !inputSettlement.settled()) {
+      discardStartingRun(taskId, handle);
+      await inputSettlement.settle(handle);
+    }
     // 与 consumeSingleRun 的正常收流分支对称：有些 CLI 被 kill 后会让 parser 直接抛。
     // 「引导会话」已经在 releaseTurn 后登记了同会话续送，这里不能再把旧回合结算成 failed。
     // 两个抛出点:起跑前的 assertReviewTurnStart,和 spawn **之后**的 commitReviewTurnDelivery。后一种
@@ -602,7 +650,9 @@ export async function continueTask(
     if (superseded && !(checkingReviewStart && !reviewStart && !handle)) {
       await withdrawReviewStart(taskId, reviewStart, priorStatus, !!handle);
       frozenBeforeSpawn = !handle;
-      return !frozenBeforeSpawn;
+      // spawn 之前的审查撤回 = 这一笔已经不是当事人了,按撤回报(重排只会把同一笔过期的
+      // 交接再撞一遍)。spawn 之后不算没送出去,所以那一支返回 true,压根不走这里。
+      return frozenBeforeSpawn ? decline(frozenReason) : true;
     }
     const steered = await takeSteered(taskId);
     const stopped = takeStopped(taskId);
@@ -616,9 +666,13 @@ export async function continueTask(
     // 走到这里的 ReviewSuperseded 必然是「闸抛的、且没有收据」那一支(上面已经把另外几种拦走
     // 了),输入同样一个字都没送出去,所以跟冻结撤回同一档。
     frozenBeforeSpawn = superseded || err instanceof FrozenTurn || err instanceof DeliveryCrossingUnwritable;
+    // 三种都**确证没投喂**,但不是一件事:冻结闸是用户的动作(分组暂停 / 归档 / 删除),审查被
+    // 顶替与上面那支同一个异常、同报撤回;越线凭据写不下来是一次写库故障。按原因分开报,别让
+    // 调用方把一次故障读成「用户撤回」。
+    if (frozenBeforeSpawn) frozenReason = err instanceof DeliveryCrossingUnwritable ? "backoff" : "withdrawn";
     if (!handle && (frozenBeforeSpawn || checkingReviewStart)) {
       await recordReviewStartNotLaunched(taskId, reviewStart);
-      if (await restoreUndeliveredReviewStart(taskId, reviewStart, true)) return false;
+      if (await restoreUndeliveredReviewStart(taskId, reviewStart, true)) return decline("withdrawn");
     }
     // 失败交代 + 基线对账 + 状态恢复,整段住在 turn-start-failure.ts(顺序讲究见其顶部)。
     await recoverFailedTurnStart({
@@ -647,5 +701,5 @@ export async function continueTask(
   // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
   // 落到时间线/状态上)。返回 false 的只有「一个字没送出去」的几类:被单飞锁挡回,起跑前
   // 被冻结闸撤回,以及 spawn 之前的审查撤回(让 resumePrompt/待发送消息的调用方把原文安全放回)。
-  return !frozenBeforeSpawn;
+  return frozenBeforeSpawn ? decline(frozenReason) : true;
 }
