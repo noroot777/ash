@@ -34,7 +34,7 @@ import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
 import { autoCommitAcceptanceWorkspace } from "./accept-workspace-commit.js";
-import { mergePreflight } from "./task-accept-merge-preflight.js";
+import { claimAcceptTarget, mergePreflight } from "./task-accept-merge-preflight.js";
 import { gateMergeSource } from "./accept-gate-state.js";
 import { acceptGateCheck, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
 import { discardPendingAcceptanceGate, finishAcceptanceGate } from "./task-accept-gate-launch.js";
@@ -120,7 +120,9 @@ async function acceptTaskUnlocked(
 
   const initial = await acceptanceGuard(taskId, "initial");
   if (initial.failure) return initial.failure;
-  const task = initial.task!;
+  // `let`:验收目标一旦冻结(mergePreflight / 合并段那一处领取),后面每一步都得拿**带着冻结值**
+  // 的这一份往下走,见 task-accept-merge-preflight.ts 的 claimAcceptTarget。
+  let task = initial.task!;
   if (task.stage === "accepted") {
     // 幂等快路也要补清预约：历史上可能形成 accepted + armed 的组合（旧版合并入口、
     // 或写 accepted 与清预约之间进程退出），不自愈的话 reopen 后会触发幽灵审查。
@@ -181,12 +183,14 @@ async function acceptTaskUnlocked(
   // 同仓库其它任务的验收全部干等，所以这里只登记意图，发射在 acceptTask 的锁外那一段。
   const gateProject = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0) ?? null;
   const cheap = await mergePreflight(task, gateProject, by, commitOverride);
-  if (cheap) return cheap;
+  task = cheap.task;
+  if (cheap.failure) return cheap.failure;
   if (gateProject?.acceptAutoCommit) {
     const autoCommitFailure = await autoCommitAcceptanceWorkspace(task, true, onAutoCommit);
     if (autoCommitFailure) return autoCommitFailure;
     const afterCommit = await mergePreflight(task, gateProject, by, commitOverride);
-    if (afterCommit) return afterCommit;
+    task = afterCommit.task;
+    if (afterCommit.failure) return afterCommit.failure;
   }
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
@@ -278,16 +282,16 @@ async function acceptTaskUnlocked(
     return { accepted: false, httpStatus: 409, taskId, reason: `base_${dependency.state}`, error: dependency.message, status: task.status };
   }
   const retrying = task.stage === "merged";
-  const intendedTarget = await plannedMergeTarget(task, project.repoPath);
+  const resolvedTarget = await plannedMergeTarget(task, project.repoPath);
+  // 跟前置检查同一个领取口:库里已有就以库里为准(并发领取 / 前一步已冻结),没有才写。
+  const intendedTarget = resolvedTarget ? await claimAcceptTarget(taskId, resolvedTarget) : null;
   if (!intendedTarget) {
     return {
       accepted: false, httpStatus: 409, taskId, reason: "target_unresolved",
-      error: "目标分支为空且项目当前处于 detached HEAD", status: task.status,
+      error: resolvedTarget ? "验收目标没能锁定：任务记录已经不在" : "目标分支为空且项目当前处于 detached HEAD", status: task.status,
     };
   }
-  if (!task.acceptedTargetBranch) {
-    await db.update(tasks).set({ acceptedTargetBranch: intendedTarget, updatedAt: now() }).where(eq(tasks.id, taskId));
-  }
+  task = { ...task, acceptedTargetBranch: intendedTarget };
   const testedSource = await gateMergeSource(gateBasis);
   if (!retrying) {
     const source = testedSource ?? await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));

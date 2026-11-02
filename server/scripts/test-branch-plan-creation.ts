@@ -20,6 +20,7 @@ const { createTasks } = await import("../src/task-store.js");
 const { taskWorkspace } = await import("../src/task-workspace.js");
 const { dispatchWorkers } = await import("../src/team/dispatch.js");
 const { acceptTask } = await import("../src/task-accept.js");
+const { claimAcceptTarget, mergePreflight } = await import("../src/task-accept-merge-preflight.js");
 const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
 const { branchDependency, baseRef } = await import("../src/task-branch-plan.js");
 const { readBranchPlan } = await import("../src/task-branch-routes.js");
@@ -225,6 +226,33 @@ try {
     assert.equal((await acceptTask(task.id)).accepted, true);
     assert.equal(git(repo, "show", "main:detached-task.txt"), "detached-task.txt");
     console.log("✓ detached HEAD pins its commit, can start, and resolves its target at acceptance");
+  }
+  {
+    // 旧任务三个目标字段全空 → 目标由项目当前 checkout 推出来。一次验收里前置检查要跑两遍
+    // (自动提交前后)、前置命令和合并还各自要用目标,期间用户在别的终端切了分支:冻结那一刻
+    // 定下的必须一直是结论。早先冻结只写库、不回填手里那份快照,第二遍拿旧快照重算,算出新
+    // 分支还把库里冻结的值盖掉(第 1 轮自由审查 F1,生产函数实测)。
+    const repo = await repository("frozen-target");
+    git(repo, "branch", "other");
+    const task = await create("frozen-target");
+    const ws = await taskWorkspace(task, repo);
+    commit(ws.path, "frozen-target.txt");
+    await db.update(tasks).set({ status: "done", mergeTargetBranch: null, worktreeBase: null }).where(eq(tasks.id, task.id));
+    const project = (await db.select().from(projects).where(eq(projects.id, "frozen-target")))[0]!;
+    const stale = await row(task.id);
+    assert.equal(stale.acceptedTargetBranch, null);
+    const first = await mergePreflight(stale, project, "human");
+    assert.equal(first.failure, null);
+    assert.equal(first.task.acceptedTargetBranch, "main", "回来的快照要带着刚冻结的目标");
+    git(repo, "checkout", "other");
+    const again = await mergePreflight(stale, project, "human");
+    assert.equal(again.task.acceptedTargetBranch, "main", "拿旧快照再查一遍,也得以库里冻结的为准");
+    assert.equal((await row(task.id)).acceptedTargetBranch, "main", "外部切了分支,冻结值不许被重算覆盖");
+    assert.equal(await claimAcceptTarget(task.id, "other"), "main", "后到的领取拿到的是先到的那一个");
+    assert.equal((await acceptTask(task.id)).accepted, true);
+    assert.equal(git(repo, "show", "main:frozen-target.txt"), "frozen-target.txt");
+    assert.throws(() => git(repo, "show", "other:frozen-target.txt"), "成果不许落进验收中途切过去的分支");
+    console.log("✓ acceptance target frozen from the checkout stays authoritative after an external branch switch");
   }
   {
     const repo = await repository("stale");
