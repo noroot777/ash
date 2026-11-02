@@ -18,7 +18,7 @@ Object.defineProperty(dbClient, "execute", { value: async (...args: Parameters<t
   // 交接落定时销账（settlement=null）：之前死 = 原话已经落盘、回执已到，记号还没清。
   const deliveredClear = settlementWrite && values[0] === null;
   // 拿到回合、起跑之前把「开始投递了」记进欠账：之后死 = 可能送到了也可能没有。
-  const deliveryClaim = settlementWrite && typeof values[0] === "string" && values[0].includes("\"delivering\":true");
+  const deliveryClaim = settlementWrite && typeof values[0] === "string" && values[0].includes("\"delivering\":\"");
   // 尾段（「点头之后」那几站）的 durable 进度置位：之后死 = accepted 已落、发布命令还没跑。
   const tailMark = /^update "tasks" set .*"accepted_tail_pending"/i.test(sql) && values.some(value => value === 1 || value === true);
   // 会话文件是异步写流：等它刷进盘里再死，钉的是「原话已经落盘、记号还没清」那一刻。

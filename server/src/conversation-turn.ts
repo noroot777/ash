@@ -19,12 +19,15 @@ export function recordUserConversationTurn(input: UserTurnOrigin & {
   out: NodeJS.WritableStream;
   text: string;
   at: string;
+  /** 调用方给这一句的投递凭据（ContinueTaskOptions.deliveryKey），落盘供事后核对。 */
+  eventKey?: string;
 }): void {
   writeTurn(input.out, {
     t: "user",
     agent: input.agentType,
     text: input.text,
     ...(input.bySystem ? { by: "system" as const } : {}),
+    ...(input.eventKey ? { eventKey: input.eventKey } : {}),
     ...(isMonitorWakeTurn(input) ? { monitorWake: input.monitorWake } : {}),
   }, input.at);
   bus.publish({

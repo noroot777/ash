@@ -88,6 +88,12 @@ export type ContinueTaskOptions = {
    */
   byBackend?: boolean;
   monitorWake?: MonitorWakeData;
+  /**
+   * 这一轮输入的**投递凭据**:原样落进会话里那条用户回合的 `eventKey`(只在原话落盘的那一处写)。
+   * 给「进程死在原话落盘与回执记账之间」的调用方事后核对用 —— 认的是这个键,不是正文里有什么
+   * 字:真人追问、别的系统输入都可能提到同一个路径(验收门禁交接,accept-gate-handoff.ts)。
+   */
+  deliveryKey?: string;
   pendingMessageIds?: readonly string[];
   /**
    * 这几条输入的**越线记号是必要凭据**,不是尽力而为的记账。

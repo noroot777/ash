@@ -10,7 +10,7 @@
 // 在指定那一句 SQL 前后 SIGKILL 自己。
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
@@ -55,7 +55,7 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
     const at = new Date().toISOString();
     await db.insert(sessions).values({ id: sessionId, taskId, role: "single", agentType: "claude", executor: "claude",
       cwd: repo, startedAt: at, turnStartedAt: at, endedAt: at, activeMs: 0 });
-    return { repo, taskId, release, before: main(repo), timeline: () => read(sessionTranscriptPath(taskId, sessionId)) };
+    return { repo, taskId, sessionId, release, before: main(repo), timeline: () => read(sessionTranscriptPath(taskId, sessionId)) };
   }
 
   /**
@@ -254,19 +254,28 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
   }
   // ——第 3 轮审查：「走完了」要有证据，「送到了」要有证据。
 
-  /** 这次运行的修复输入作为用户回合在会话里出现了几次（时间线旁注里也有日志路径，不算）。 */
-  async function deliveries(taskId: string, logPath: string): Promise<number> {
-    let count = 0;
+  /**
+   * 这个任务的会话里有哪些**后端代写**的用户回合（按投递凭据列出）。不看正文：日志路径谁都能
+   * 提，真人追问里贴着它不等于修复输入送到了 —— 送没送、送了几遍，只数系统落下的那几条。
+   */
+  async function systemInputs(taskId: string): Promise<(string | undefined)[]> {
+    const keys: (string | undefined)[] = [];
     for (const { id } of await db.select({ id: sessions.id }).from(sessions).where(eq(sessions.taskId, taskId))) {
       for (const chunk of read(sessionTranscriptPath(taskId, id)).split("\x1e")) {
         try {
-          const turn = JSON.parse(chunk.split("\n")[0]!) as { t?: string; text?: string };
-          if (turn.t === "user" && turn.text?.includes(logPath)) count++;
+          const turn = JSON.parse(chunk.split("\n")[0]!) as { t?: string; by?: string; eventKey?: string };
+          if (turn.t === "user" && turn.by === "system") keys.push(turn.eventKey);
         } catch { /* 不是回合记录 */ }
       }
     }
-    return count;
+    return keys;
   }
+  /** 起跑前记下的那一次投递凭据。 */
+  const claimedKey = (row: { settlement: string | null }): string => {
+    const key = (JSON.parse(row.settlement!) as { delivering?: unknown }).delivering;
+    assert.equal(typeof key, "string", "起跑前记下了「开始投递」和这一次的投递凭据");
+    return key as string;
+  };
 
   // 续验收内部第一次读项目临时失败（acceptTask 抛出来了）→ 不是「验收没过」的结果：记号留着，下次补上。
   {
@@ -326,13 +335,14 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
   {
     const s = await stage("owed-delivered");
     const row = await crash(s, "before-delivered-clear", "3");
-    assert.equal(JSON.parse(row.settlement!).delivering, true, "起跑前记下了「开始投递」");
-    await until(async () => await deliveries(s.taskId, row.logPath) === 1, "原话落盘");
+    const key = claimedKey(row);
+    await until(async () => (await systemInputs(s.taskId)).length === 1, "原话落盘");
+    assert.deepEqual(await systemInputs(s.taskId), [key], "落进会话的就是这一次投递");
     const sessionsBefore = (await db.select().from(sessions).where(eq(sessions.taskId, s.taskId))).length;
     await recoverAcceptGates();
     await settled(s.taskId);
     await sleep(500);
-    assert.equal(await deliveries(s.taskId, row.logPath), 1, "同一次失败只交一遍");
+    assert.deepEqual(await systemInputs(s.taskId), [key], "同一次失败只交一遍");
     assert.equal((await db.select().from(sessions).where(eq(sessions.taskId, s.taskId))).length, sessionsBefore);
     const done = await runOf(s.taskId);
     assert.equal(done.settlement, null);
@@ -347,15 +357,32 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
   {
     const s = await stage("owed-uncertain");
     const row = await crash(s, "after-delivery-claim", "3");
-    assert.equal(JSON.parse(row.settlement!).delivering, true);
+    claimedKey(row);
     await recoverAcceptGates();
     await settled(s.taskId);
     await sleep(500);
-    assert.equal(await deliveries(s.taskId, row.logPath), 0, "不自动重发");
+    assert.deepEqual(await systemInputs(s.taskId), [], "不自动重发");
     const done = await runOf(s.taskId);
     assert.equal(done.settlement, null);
     assert.match(done.handoffError ?? "", /说不清有没有送到/);
     assert.match(s.timeline(), /点「再交一次」/);
   }
-  console.log("accept gate takeover settle: 停机越过时限按超时 / 收尾中途崩溃照认领结论收完 / 终态后崩溃补办合并且只补一次 / 补办交回修复 / 合并后清理前崩溃续完验收 / 记了交接时间未送达补发 / 补办读失败不销账 / 欠后续不许接力 / 续验收内部异常不销账 / 尾段未跑补跑 / 已送达不重发 / 说不清不重发 passed");
+
+  // 同上，但会话里有一条**真人**追问贴着同一份日志路径 → 那不是修复输入的回执：照样说不清、不销成已送达。
+  {
+    const s = await stage("owed-asked");
+    const row = await crash(s, "after-delivery-claim", "3");
+    claimedKey(row);
+    appendFileSync(sessionTranscriptPath(s.taskId, s.sessionId),
+      `\n\x1e${JSON.stringify({ t: "user", agent: "claude", text: `门禁日志 ${row.logPath} 里那个报错是什么意思？`, at: new Date().toISOString() })}\n`);
+    await recoverAcceptGates();
+    await settled(s.taskId);
+    await sleep(500);
+    assert.deepEqual(await systemInputs(s.taskId), [], "不自动重发");
+    const done = await runOf(s.taskId);
+    assert.equal(done.settlement, null);
+    assert.match(done.handoffError ?? "", /说不清有没有送到/, "真人提到日志路径不能当成送达证明");
+    assert.match(s.timeline(), /点「再交一次」/);
+  }
+  console.log("accept gate takeover settle: 停机越过时限按超时 / 收尾中途崩溃照认领结论收完 / 终态后崩溃补办合并且只补一次 / 补办交回修复 / 合并后清理前崩溃续完验收 / 记了交接时间未送达补发 / 补办读失败不销账 / 欠后续不许接力 / 续验收内部异常不销账 / 尾段未跑补跑 / 已送达不重发 / 说不清不重发 / 真人提到日志不算送达 passed");
 }

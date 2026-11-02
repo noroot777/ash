@@ -541,7 +541,7 @@ export async function continueTask(
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.
-      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake });
+      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake, eventKey: opts.deliveryKey });
     }
     // 上一回合尚未结算就收到回复时，消息会先排队，真正送达时任务已不再 paused；这条
     // 路径要在落盘后消费旧检查点，避免它继续挡完成与预约派审。若起点本来就是 paused，

@@ -38,10 +38,11 @@ export type GateOutcome = { status: Exclude<AcceptGateStatus, "running">; exitCo
   note?: string };
 /**
  * 认领下来、落进 settlement 列的结论。scene = 撞上时限那一刻的完整现场，结算一开头就冻结存盘，
- * 不追加进日志；delivering = 红了之后那份修复输入**已经开始投递**（拿到回合、即将起跑），
- * 重启时据此分辨「从没送过、可以补发」和「可能已经送到、不许重发」（accept-gate-handoff.ts）。
+ * 不追加进日志；delivering = 红了之后那份修复输入**已经开始投递**（拿到回合、即将起跑）时的
+ * 投递凭据，重启时据此分辨「从没送过、可以补发」「凭据已落进会话、送到了」和「说不清、不许
+ * 重发」（accept-gate-handoff.ts）。
  */
-export type GateSettlement = GateOutcome & { scene?: string; delivering?: boolean };
+export type GateSettlement = GateOutcome & { scene?: string; delivering?: string };
 
 /** 库里那份认领下来的结论。读不出（旧行、坏 JSON）就当没有。 */
 export function parseGateSettlement(value: string | null | undefined): GateSettlement | null {
