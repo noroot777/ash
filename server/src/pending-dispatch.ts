@@ -40,8 +40,10 @@ export async function dispatchPendingMessage(
   };
   // 在途租约:三档回执怎么处置这张租约、迟到的那一次怎么收口,统一在 ./delivery-lease.ts
   // (三个投递入口各写一遍就会各漏一处 —— 那正是第 2 轮自由审查 F3)。
-  // `handled()` 取代了原来那个 `delivered` 布尔:它答的是「这张租约归回执这条路管了吗」,
-  // accepted / unknown / 已归还三种都算,所以善后那几支照旧只在「回执压根没来」时动手。
+  // `callerMustReturn()` 取代了原来那个 `delivered` 布尔:它答的是「这张租约该不该由我归还并
+  // 重投」,**只按协议定论**算 —— accepted 一次都不授权归还(哪怕 markSent 还欠着,那是本地账,
+  // 只能补不能靠退回来结;第 2 轮自由审查 F1 实测过那次重复执行),unknown 留在在途,
+  // 确证拒收且还没归还成才轮到下面这几支动手(归还幂等,撞上也只是空转)。
   const lease = createDeliveryLease({
     label: `任务 ${message.taskId} 的待发送消息`,
     onAccepted: async () => {
@@ -84,7 +86,7 @@ export async function dispatchPendingMessage(
       // 各写一遍就会各漏一处,那正是第 2 轮自由审查 F3)。
       onInputSettled: (acceptance) => lease.settle(acceptance),
     });
-    if (!lease.handled()) {
+    if (lease.callerMustReturn()) {
       if (!monitor) {
         for (const current of claimed) {
           const reason = refused.get(current.id);
@@ -92,14 +94,17 @@ export async function dispatchPendingMessage(
         }
         claimed = claimed.filter((current) => !refused.has(current.id));
       }
-      if (claimed.length) await retry(context.team
-        ? "这一轮没起：调度台收不下（正在收尾或已离线），或起跑前的资格检查读不到状态"
-        : started
-          ? "回合起跑失败，原文退回待发送"
-          : "回合被其它执行抢占、工作区正被验收占用，或起跑前的资格检查读不到状态");
+      if (claimed.length) await retry(lease.acceptance() === "refused"
+        // 确证拒收:说清是协议层拒了,别拿「起跑失败」盖过去(租约那边也在补同一笔,幂等)。
+        ? "协议层明确拒收：回合输入一个字都没写出去，原文退回待发送"
+        : context.team
+          ? "这一轮没起：调度台收不下（正在收尾或已离线），或起跑前的资格检查读不到状态"
+          : started
+            ? "回合起跑失败，原文退回待发送"
+            : "回合被其它执行抢占、工作区正被验收占用，或起跑前的资格检查读不到状态");
     }
   } catch (error) {
-    if (lease.handled()) {
+    if (!lease.callerMustReturn()) {
       if (context.team) throw error;
       return;
     }
@@ -113,10 +118,10 @@ export async function dispatchPendingMessage(
       await cancelPendingMessage(current, `${context.team ? "调度台不可用" : "续跑失败"}：${detail}`).catch(() => {});
     }
   } finally {
-    if (!lease.handled() && !monitor) {
+    if (lease.callerMustReturn() && !monitor) {
       for (const checkpoint of checkpoints.reverse()) await checkpoint.restore().catch(() => {});
     }
     context.onSettled?.();
-    if (context.seat && !lease.handled()) await context.seat.release();
+    if (context.seat && lease.callerMustReturn()) await context.seat.release();
   }
 }

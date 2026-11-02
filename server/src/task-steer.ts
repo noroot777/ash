@@ -95,10 +95,11 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
             }
           },
         });
-        if (started && lease.handled()) return;
-        // 回执压根没来(起跑失败/被抢占)才由这里归还;refused 那一档租约自己已经归还过了,
-        // 两条路都幂等(`abortDelivery` 的 WHERE 带租约),撞上也只是空转。
-        if (!lease.handled()) {
+        if (started && !lease.callerMustReturn()) return;
+        // 判据只看协议定论(delivery-lease.ts):accepted/unknown 一个字都不许碰,回执压根没来
+        // (起跑失败/被抢占)、或者确证拒收而归还还没落盘,才由这里归还 —— 两条路都幂等
+        // (`abortDelivery` 的 WHERE 带租约),跟租约自己那笔补偿撞上也只是空转。
+        if (lease.callerMustReturn()) {
           await recoverUndeliveredSteer(message.taskId);
           await abortDelivery(message);
         }
@@ -112,7 +113,7 @@ function deliverSteeredMessage(message: MessageRow): Promise<SteerQueuedMessageR
               : "当前回合被其它执行抢占，消息已保留在排队中",
         });
       } catch (error) {
-        if (!lease.handled()) {
+        if (lease.callerMustReturn()) {
           await recoverUndeliveredSteer(message.taskId).catch(() => undefined);
           await abortDelivery(message).catch(() => undefined);
         }

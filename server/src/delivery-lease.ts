@@ -12,9 +12,11 @@
 //     也不归还(归还即重投,那才是重复执行)。等迟到的凭据落定,或开机对账。
 //
 // 「初次回执」和「迟到回执」在这里**不是两条路**:同一个 `settle` 吃两次,最终那一次说了算。
-// 调用方只需要问一句 `handled()` —— 「这张租约归回执这条路管了吗」:
-//   · 真 → 调用点那段善后一个字都不许碰它(accepted/unknown/已经归还过);
-//   · 假 → 回执压根没来过(起跑失败、异常被吞),照调用点原来的口径归还并重投。
+// 调用方只需要问一句 `callerMustReturn()` —— 「这张租约该不该由我归还并重投」:
+//   · 假 → 不许碰它:协议层说收下了(accepted)、或者说不上来(unknown,在途),或者拒收那一笔
+//     已经归还成功了;
+//   · 真 → 两种:回执压根没来过(起跑失败、异常被吞),或者**确证拒收而归还还没落盘** ——
+//     归还幂等(`abortDelivery` 的 WHERE 带租约),调用点那段善后正是它此刻该走的路。
 //
 // 归还本身必须幂等(`abortDelivery` 的 WHERE 带租约),因为迟到的那一次可能撞上调用点的善后。
 //
@@ -30,20 +32,48 @@
 //   · `conclusion` —— 协议事实,单调不可翻盘(accepted/refused 是定论,`unknown` 等后话);
 //   · `owed`       —— 这档定论的**持久处置还欠着**。欠着就按退避一直补,直到它确认落盘。
 // 两件事分开之后,「不撤回 accepted」和「别把失败咽下去」就不再互相为难:定论照旧不动,欠账
-// 自己往前推。补到上限仍不成,就响亮地交给开机对账(`reclaimStaleDeliveries`),绝不假装完成。
+// 自己往前推。
+//
+// ── 欠账不许冒充「没送达」(第 2 轮自由审查 F1,已端到端实测)─────────────────
+//
+// 上一版拆了状态,出口却又把两件事合回了一个布尔:补偿重试耗尽时置 `gaveUp`,而
+// `handled()` 读了它、没读 `conclusion` —— 于是**协议层明确收下、消息也真执行完了**的那一条,
+// 在十次 `markSent` 写失败之后被暴露成「没人管」,三个调用点照它的口径归还租约并重投:
+// 同一条消息进了两个回合,第二次才标 sent(审查实测,证据 delivery-smoke.log)。这比原来那个
+// 「卡住等重启」的洞更坏 —— 它把一次记账故障变成了一次**重复执行**。
+//
+// 所以归还授权现在**只由协议定论说话**(`callerMustReturn`):accepted 永远答假,一次都不授权
+// 归还;欠账是本地账,只能靠补偿往前推,补不动就一直补 —— 不设上限、不自行退场。进程真的没了
+// 也有交接:协议事实在调用这条路之前就已经落盘(orchestrator 的 `noteDeliveryAccepted`),
+// 开机对账按那张记号判「已送达」并补记,不会把它当成未送达重投(pending-checkpoint-recovery.ts)。
 import type { InputAcceptance } from "./executors/types.js";
 
-/** 退避节奏:前几拍快(多半是一瞬的库忙),后面压到 15 秒一拍,总共约 64 秒。 */
-const RETRY_MS = [200, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 15_000, 15_000];
+/**
+ * 退避节奏:前几拍快(多半是一瞬的库忙),后面压到 15 秒一拍。**最后一拍之后按那一拍一直补**
+ * (见 `attemptDispose`:不设上限、不自行退场)。
+ *
+ * `ASH_DELIVERY_RETRY_MS`(逗号分隔的毫秒)只给回归脚本:真实调用点一个都不传 `retryMs`,
+ * 而「accepted 在补偿失败很多次之后仍然不许退回重投」这条不变量得接着真实投递链钉,按真实
+ * 节奏钉一次要一分多钟(审查的端到端复现用了 63.7 秒)。真实运行一律用下面这份默认。
+ */
+const RETRY_MS = (() => {
+  const raw = (process.env.ASH_DELIVERY_RETRY_MS ?? "").split(",")
+    .map((x) => Number(x.trim())).filter((x) => Number.isFinite(x) && x >= 0);
+  return raw.length ? raw : [200, 500, 1_000, 2_000, 5_000, 10_000, 15_000, 15_000, 15_000];
+})();
 
 export interface DeliveryLease {
   /** 接 `ContinueTaskOptions.onInputSettled`:初次与迟到都喂进来。 */
   settle(acceptance: InputAcceptance): Promise<void>;
-  /** 这张租约归回执这条路管了吗(判据见文件头)。 */
-  handled(): boolean;
+  /**
+   * 调用点**该不该**自己归还这张租约并重投(判据见文件头)。
+   *
+   * 只看协议定论,**不看本地欠账** —— 把两者并进一个布尔,就是第 2 轮审查 F1 那次重复执行。
+   */
+  callerMustReturn(): boolean;
   /** 最终落定的那一档(还没落定 = null),给调用点写日志/选措辞用。 */
   acceptance(): InputAcceptance | null;
-  /** 这档定论的持久处置**还欠着吗**(补偿中,或者补到上限放弃了)。 */
+  /** 这档定论的持久处置**还欠着吗**(补偿还在跑)。只用于观测,不参与归还授权。 */
   owes(): boolean;
 }
 
@@ -60,17 +90,21 @@ export function createDeliveryLease(opts: {
   let conclusion: InputAcceptance | null = null;
   let owed: "accepted" | "refused" | null = null;
   let disposing = false;
-  let gaveUp = false;
   let returned = false;
-  let inFlight = false;
   const delays = opts.retryMs?.length ? opts.retryMs : RETRY_MS;
+  /** 退避到最后一拍就按那一拍一直补(见文件头:不设上限、不自行退场)。 */
+  const delayFor = (attempt: number): number => delays[Math.min(attempt, delays.length - 1)]!;
 
   const WHY_RETURN = "协议层明确拒收：回合输入一个字都没写出去，原文退回待发送";
 
   /**
    * 把欠着的那一笔做掉。**只有真的不抛了才算完**;抛了就按退避自己排下一拍 ——
    * 排,而不是在这儿等:`settle` 的调用方(orchestrator 的那一轮)只该等第一次尝试,
-   * 不该被一条 64 秒的退避链拖住。
+   * 不该被一条退避链拖住。
+   *
+   * **没有放弃这条出口**(第 2 轮自由审查 F1):补不动就按最后一拍的节奏一直补。计时器一律
+   * `unref`,所以它绝不会让进程多活一毫秒 —— 进程真的没了,交接的是落盘的协议记号 + 开机对账,
+   * 不是这里打一行「留给开机对账」然后把租约暴露成「没人管」。
    */
   const attemptDispose = async (attempt: number): Promise<void> => {
     const what = owed;
@@ -80,20 +114,18 @@ export function createDeliveryLease(opts: {
       if (what === "accepted") await opts.onAccepted();
       else await opts.onReturn(WHY_RETURN);
       owed = null;
-      if (what === "refused") { returned = true; inFlight = false; }
+      if (what === "refused") returned = true;
+      if (attempt > 0) console.warn(`[ash] ${opts.label} 的${what === "accepted" ? "送达确认" : "租约归还"}`
+        + `在第 ${attempt + 1} 次重试时补上了`);
     } catch (error) {
       const label = what === "accepted" ? "送达确认" : "租约归还";
-      if (attempt >= delays.length) {
-        // 放弃**不等于**假装完成:`handled()` 于此转假,这条租约交回开机对账去清
-        // (`pending-messages.ts` 的 reclaimStaleDeliveries),调用点的日志也看得见。
-        gaveUp = true;
-        console.error(`[ash] ${opts.label} 的${label}重试 ${delays.length + 1} 次仍未落盘，`
-          + "这一条留给开机对账清理:", error);
-        return;
+      const wait = delayFor(attempt);
+      // 前三拍每拍都说,之后每十拍说一次:既不瞒着,也不把日志刷爆。
+      if (attempt < 3 || (attempt + 1) % 10 === 0) {
+        console.warn(`[ash] ${opts.label} 的${label}第 ${attempt + 1} 次没落盘，${wait}ms 后继续补`
+          + `${what === "accepted" ? "（协议层已经收下这一轮，这条绝不会被退回重投）" : ""}:`, error);
       }
-      console.warn(`[ash] ${opts.label} 的${label}第 ${attempt + 1} 次没落盘，`
-        + `${delays[attempt]}ms 后重试:`, error);
-      const timer = setTimeout(() => { void attemptDispose(attempt + 1); }, delays[attempt]);
+      const timer = setTimeout(() => { void attemptDispose(attempt + 1); }, wait);
       timer.unref?.(); // 补偿绝不该让进程多活一毫秒(同 turn-input-acceptance.ts 的有界等待)
     } finally {
       disposing = false;
@@ -102,9 +134,17 @@ export function createDeliveryLease(opts: {
 
   return {
     acceptance: () => conclusion,
-    owes: () => owed !== null || gaveUp,
-    // 欠账还在补 = 仍然归这条路管;补到上限放弃了就交回去(判据见文件头最后一节)。
-    handled: () => (inFlight || returned) && !gaveUp,
+    owes: () => owed !== null,
+    // **只看协议定论**(判据见文件头最后一节):
+    //   · 还没定论 → 回执压根没来过,照调用点原来的口径归还重投;
+    //   · accepted → 永远不授权归还,哪怕 `markSent` 还欠着(欠账只能补,不能靠退回来结);
+    //   · unknown  → 在途,既不写终态也不归还;
+    //   · refused  → 归还还没落盘就交给调用点一起办(两边都幂等),落盘了就收手。
+    callerMustReturn: () => {
+      if (!conclusion) return true;
+      if (conclusion === "refused") return !returned;
+      return false;
+    },
     settle: async (acceptance) => {
       // **终局不可翻盘**:accepted / refused 都是确证,只有 `unknown`(在途)还等后话。
       // 适配器那边的回执本来就是单调的(`reached ⇒ accepted` 永远成立,见
@@ -116,18 +156,15 @@ export function createDeliveryLease(opts: {
       conclusion = acceptance;
       if (acceptance === "unknown") {
         // 在途:什么都不动。两个出口 —— 迟到的凭据(就是下一次 settle)、开机对账。
-        inFlight = true;
         return;
       }
       if (acceptance === "accepted") {
-        inFlight = true;
-        if (owed === null && !gaveUp) owed = "accepted";
+        if (owed === null) owed = "accepted";
       } else {
-        // **确证拒收**:这是唯一一档可以安全重投的。初次就拒收时调用点那段善后还没跑,
-        // 这里先归还它也不冲突(归还幂等,`handled()` 随即为真,善后那一支会跳过)。
+        // **确证拒收**:这是唯一一档可以安全重投的。归还幂等,所以这里补一笔、调用点那段善后
+        // 再走一遍都只是空转 —— 真正重要的是它**不会**发生在 accepted 上。
         if (returned) return;
-        inFlight = true; // 归还落盘之前也归这条路管:别让调用点抢着再归还一次
-        if (owed === null && !gaveUp) owed = "refused";
+        if (owed === null) owed = "refused";
         console.warn(`[ash] ${opts.label} 协议层明确拒收（回合输入一个字都没写出去），归还租约并重投`);
       }
       // 只等**第一次**尝试:后面几拍由 attemptDispose 自己排(调用方是正在跑的那一轮)。

@@ -599,8 +599,9 @@ export async function handDuePendingMessageToRun(
       // 三档处置见 ./delivery-lease.ts(上面那只租约)。
       onInputSettled: (acceptance) => lease.settle(acceptance),
     });
-    if (!lease.handled()) {
+    if (lease.callerMustReturn()) {
       // 同 deliverWhenIdle:「已接管回合」≠「已送达」,唯一可信的送达信号是 onDelivered。
+      // 判据只看协议定论:accepted 一次都不授权归还(第 2 轮自由审查 F1)。
       // 起跑异常被 continueTask 内部吸收(结算 failed 后返回 true)时必须归还租约,
       // 否则恢复后的重试与扫描(都只看无租约的 pending 行)永远绕开这条消息。
       await abortDelivery(due);
@@ -608,7 +609,7 @@ export async function handDuePendingMessageToRun(
     }
     return true;
   } catch (error) {
-    if (lease.handled()) return true; // 已进会话之后才炸的是运行事故,不是未送达
+    if (!lease.callerMustReturn()) return true; // 已进会话之后才炸的是运行事故,不是未送达
     if (!handedOff && opts.turnHeld) releaseTurn(taskId, opts.turnHeld);
     const detail = error instanceof Error ? error.message : String(error);
     await cancelPendingMessage(due, `续跑失败：${detail}`).catch(() => {});
