@@ -32,7 +32,7 @@ export function resetTurnStarts(binDir: string): void {
 /** 下一次起跑的假 codex 按哪种行为走。 */
 export function codexMode(
   binDir: string,
-  mode: "accept" | "refuse" | "stall" | "started-then-drop" | "resume-silent",
+  mode: "accept" | "refuse" | "stall" | "started-then-drop" | "resume-silent" | "reject-turn",
 ): void {
   writeFileSync(join(binDir, MODE_FILE), mode);
 }
@@ -85,6 +85,12 @@ function receive(message) {
     return;
   }
   if (message.method === "turn/start") {
+    // reject-turn:服务端**明确答 error**(参数不合法之类)—— 它听见了,并且说不。不算一次执行,
+    // 所以排在记账那一行之前。(注:这段注释活在模板字符串里,不许用反引号。)
+    if (mode === "reject-turn") {
+      send({ id: message.id, error: { code: -32602, message: "invalid turn params" } });
+      return;
+    }
     // 先记一行再分档:**不管哪种 mode,输入到了这个进程就算一次执行**(重复执行就是从这儿数的)。
     try { appendFileSync(${JSON.stringify(startsPath)}, Date.now() + "\\n"); } catch { /* 记不下也别把假 CLI 弄崩 */ }
     // stall:握手照常答、**回合输入收下却一声不吭也不断线**。ash 侧那条 turn/start 的应答

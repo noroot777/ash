@@ -44,7 +44,7 @@ process.env.PATH = `${fakeBin}${delimiter}${originalPath ?? ""}`;
 
 const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, scheduledMessages, sessions, tasks } = await import("../src/db/schema.js");
-const { createDeliveryLease } = await import("../src/delivery-lease.js");
+const { createDeliveryLease, DEFAULT_RETRY_MS, parseRetryMs } = await import("../src/delivery-lease.js");
 const { deliverPendingMessages, pendingMessageRow } = await import("../src/pending-messages.js");
 const { dispatchPendingMessage } = await import("../src/pending-dispatch.js");
 const { sleep } = await import("./stall-fixtures.js");
@@ -370,6 +370,28 @@ console.log("⑥ 真实投递入口:调用点还掉之后,旧补偿不再去碰�
     (dbClient as { execute: typeof execute }).execute = execute;
     await db.delete(scheduledMessages).where(eq(scheduledMessages.id, row.id));
   }
+}
+
+console.log("⑦ 没配退避就用默认那张表,空段不许读成 0ms(第 1 轮自由审查 F4,实测 120ms 里重试 105 次)");
+{
+  check(parseRetryMs(undefined) === DEFAULT_RETRY_MS, `没设 → 默认表(得到 ${JSON.stringify(parseRetryMs(undefined))});上一版是 [0]`);
+  check(parseRetryMs("") === DEFAULT_RETRY_MS && parseRetryMs("  ") === DEFAULT_RETRY_MS && parseRetryMs(" , ,") === DEFAULT_RETRY_MS,
+    "空串、纯空格、只有逗号 → 默认表");
+  check(JSON.stringify(parseRetryMs("100,,300,")) === "[100,300]", `多余的逗号不引入 0(得到 ${JSON.stringify(parseRetryMs("100,,300,"))})`);
+  check(JSON.stringify(parseRetryMs("0")) === "[0]", "显式写 0 照旧尊重(回归脚本要的就是它)");
+  // 默认节奏下,一次失败之后 120ms 里不该再补第二次(首拍 200ms)。
+  let attempts = 0;
+  const lease = createDeliveryLease({
+    label: "默认退避", retryMs: parseRetryMs(undefined),
+    onAccepted: () => { attempts += 1; throw new Error("库忙"); },
+    onReturn: () => undefined,
+  });
+  const warn = console.warn;
+  console.warn = () => undefined;
+  await lease.settle("accepted");
+  await sleep(120);
+  console.warn = warn;
+  check(attempts === 1, `存储一抖不会变成毫秒级连发(120ms 内 ${attempts} 次)`);
 }
 
 if (originalPath === undefined) delete process.env.PATH;
