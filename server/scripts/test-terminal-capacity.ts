@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertStopBody } from "./terminal-stop-assert.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,6 +84,14 @@ async function waitExit(sessionId: string): Promise<void> {
   assert.equal(manager.get(sessionId, projectId)?.exitCode, 0);
 }
 
+// 这个项目名下**占位置**的记录数 —— 判据跟容量自己那套一致(terminal-capacity.ts 的
+// `pureHistory`):「没能确认停净、名下又什么都不剩」的纯历史记录既不计数也不需要被替换。
+// 为什么不能直接数总行数:这一趟问没问全取决于**本机此刻的忙闲**(terminal-stop-assert.ts
+// 讲了全部口径),于是同一段代码在安静的机器上一条历史记录都不留、在忙的机器上每停一次
+// 留一条,审计实测 17 ≠ 16。容量这条用例要盯的是配额账,不是本机 Spotlight 的忙闲。
+const occupying = () => manager.listForProject(projectId).filter((row) =>
+  !(row.exitCode !== null && row.stop.kind === "unresolved" && row.stop.pids.length === 0));
+
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
@@ -101,7 +110,7 @@ try {
     assert.ok(output.includes(marker));
   }
   assert.equal((await startCommand(projectId, temporary, command)).status, 201);
-  assert.equal(manager.listForProject(projectId).length, 16);
+  assert.equal(occupying().length, 16);
   for (let attempt = 0; attempt < 3; attempt++) {
     const previous = manager.liveCommandSession(projectId, command.id)!;
     assert.ok(manager.subscribe(previous.id, projectId, () => {}));
@@ -111,11 +120,11 @@ try {
     // 这条命令的进程组是 ash 自己起的,停止时 terminate 把成员列全了、组也确实探不到了,
     // 所以照旧是干净的「已停止」 —— 不留历史记录,这个数稳定在 16(判据见
     // terminal-stop-notices.ts 的 processStopVerdict ②)。
-    assert.equal(manager.listForProject(projectId).length, 16);
-    assert.deepEqual((await stopCommand(projectId, command.id)).body, { stopped: true });
+    assert.equal(occupying().length, 16);
+    assertStopBody((await stopCommand(projectId, command.id)).body, true);
     assert.equal((await startCommand(projectId, temporary, command)).status, 201,
       "start must reclaim its own stopped record at capacity");
-    assert.equal(manager.listForProject(projectId).length, 16);
+    assert.equal(occupying().length, 16);
   }
 
   const terminate = manager.terminate.bind(manager);
@@ -152,7 +161,7 @@ try {
     await assert.rejects(manager.createAsync(projectId, temporary), /终端会话数量已达上限/);
     resumeRestart.resolve();
     assert.equal((await restarting).status, 201);
-    assert.equal(manager.listForProject(projectId).length, 16);
+    assert.equal(occupying().length, 16);
   } finally {
     resumeRestart.resolve();
     await restarting;
@@ -170,7 +179,7 @@ try {
     command: { id: "pending", name: "pending", script: keepAlive },
   });
   if (windows) {
-    assert.equal(manager.listForProject(projectId).length, 15);
+    assert.equal(occupying().length, 15);
     assert.equal(manager.hasSlotForCommand(projectId, "extra"), false,
       "in-flight Windows startup must occupy the remaining slot before registration");
     assert.equal((await startCommand(projectId, temporary, { ...command, id: "extra" })).status, 500);
@@ -178,10 +187,10 @@ try {
     await assert.rejects(manager.createAsync(projectId, temporary), /终端会话数量已达上限/);
   }
   await pending;
-  assert.equal(manager.listForProject(projectId).length, 16);
-  assert.deepEqual((await stopCommand(projectId, "pending")).body, { stopped: true });
+  assert.equal(occupying().length, 16);
+  assertStopBody((await stopCommand(projectId, "pending")).body, true);
   assert.equal((await startCommand(projectId, temporary, { ...command, id: "pending" })).status, 201);
-  assert.equal(manager.listForProject(projectId).length, 16);
+  assert.equal(occupying().length, 16);
   const surviving = manager.liveCommandSession(projectId, command.id)!;
   assert.equal((await restartCommand(projectId, temporary, { ...command, id: "extra" })).status, 500);
   assert.equal(manager.liveCommandSession(projectId, command.id)?.id, surviving.id);
@@ -211,7 +220,7 @@ try {
   assert.equal(manager.hasSlotForCommand(projectId, "after-failure"), true,
     "failed startup must release its reserved slot");
   assert.equal((await startCommand(projectId, temporary, { ...command, id: "after-failure" })).status, 201);
-  assert.equal(manager.listForProject(projectId).length, 16);
+  assert.equal(occupying().length, 16);
 
   for (const commandId of ["done-2", "done-3"]) {
     const record = manager.listForProject(projectId).find((session) => session.commandId === commandId)!;
@@ -225,25 +234,25 @@ try {
     }));
   }
   for (const session of duplicateSessions) assert.equal((await manager.terminate(session.id, projectId)).ok, true);
-  assert.equal(manager.listForProject(projectId).length, 16);
+  assert.equal(occupying().length, 16);
   const duplicateReservation = manager.reserveCommand(projectId, duplicateCommand.id);
   try {
     assert.equal((await startCommand(projectId, temporary, { ...command, id: "unrelated-duplicate" })).status, 500);
     await assert.rejects(manager.createAsync(projectId, temporary), /终端会话数量已达上限/);
   } finally { duplicateReservation.release(); }
-  assert.equal(manager.listForProject(projectId).length, 16);
+  assert.equal(occupying().length, 16);
   assert.equal(manager.hasSlotForCommand(projectId, "unrelated-duplicate"), false);
   if (windows) {
     await assert.rejects(manager.createAsync(projectId, join(temporary, "missing-directory"), {
       command: { id: duplicateCommand.id, name: duplicateCommand.name, script: keepAlive },
     }));
-    assert.equal(manager.listForProject(projectId).length, 16);
+    assert.equal(occupying().length, 16);
     assert.equal(manager.hasSlotForCommand(projectId, "unrelated-duplicate"), false);
   }
   assert.equal((await startCommand(projectId, temporary, duplicateCommand)).status, 201);
-  assert.equal(manager.listForProject(projectId).length, 15);
+  assert.equal(occupying().length, 15);
   assert.equal((await startCommand(projectId, temporary, { ...command, id: "unrelated-duplicate" })).status, 201);
-  assert.equal(manager.listForProject(projectId).length, 16);
+  assert.equal(occupying().length, 16);
   console.log("terminal duplicate-record capacity passed with real processes: no early credits, safe cancel/failure, committed reclamation");
   console.log("terminal capacity passed: full start/restart, reserved replacement, pending startup, full rejection, failed-start release");
 } finally {

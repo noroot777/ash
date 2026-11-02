@@ -65,6 +65,21 @@ let orphan = 0;
  * 然后退 2 并写一句它自己的定型故障 —— 这正是「吐了一半再出错」的最小形状。它自己随即退出,
  * 所以那个被报出来的号在调用方探活时已经死了:上一版据此判「空」。
  */
+/**
+ * 「这一行说不出它挂在谁下面」的夹具:把第 2 列(ppid)原地换成另一个号,**其余字符一个
+ * 不动**。
+ *
+ * 为什么不能 `for (i = 3; i <= NF; i++) s = s $i " "` 重新拼行:`lstart` 是定宽的,一位数的
+ * 日子里 `ps` 打的是 `Mon Nov  2 ...`(两个空格)。按字段重拼会把它归一成一个空格,于是
+ * 快照记下的代次跟 `ps -o lstart= -p <pid>` 现读的那一份**不相等** —— 产品按「同坐标系里
+ * 换了代」判「号换了主人 ⇒ 当初那个一定退了」(cleanup-result.ts 的 `provenGone`),把这一笔
+ * 结构化责任当场核销掉。于是这个夹具只在每月 1-9 日把用例搞红(审计 2026-11-02 实测:
+ * 第 9、12 组共 5 项,产品侧一行都不用改)。
+ */
+const unlinkPpidShim = (pid: number | string) => `/bin/ps "$@" | awk -v t=${pid} `
+  + `'{ if ($1 == t) { rest = $0; sub(/^[ ]*[0-9]+[ ]+[0-9]+[ ]/, "", rest);`
+  + ` printf "%s %s %s\\n", $1, $1, rest } else print }'\n`;
+
 function installShim(name: string, body: string): string {
   const dir = mkdtempSync(join(root, `shim-${name}-`));
   writeFileSync(join(dir, name), `#!/bin/sh\n${body}`, { mode: 0o755 });
@@ -403,9 +418,7 @@ try {
     assert.ok(isPidAlive(kidPid), "这一组要一个活着的孩子");
 
     const before = await listAllCleanupDebts();
-    const shim = installShim("ps",
-      `/bin/ps "$@" | awk -v t=${kidPid} '{ if ($1 == t) { s=""; for (i=3; i<=NF; i++) s = s $i " ";`
-      + ` printf "%s %s %s\\n", $1, $1, s } else print }'\n`);
+    const shim = installShim("ps", unlinkPpidShim(kidPid));
     const snap = await processTableSnapshot();
     const swept = await collectEscapees(live);
     const judged = await cleanupAfterRun(live);
@@ -487,9 +500,7 @@ try {
     registerRunOutPath(clean, outPath);
     await new Promise<void>((resolve) => clean.once("exit", () => resolve()));
 
-    const shim = installShim("ps",
-      `/bin/ps "$@" | awk '{ if ($1 == 1) { s=""; for (i=3; i<=NF; i++) s = s $i " ";`
-      + ` printf "%s %s %s\\n", $1, $1, s } else print }'\n`);
+    const shim = installShim("ps", unlinkPpidShim(1));
     const snap = await processTableSnapshot();
     const swept = await collectEscapees(clean);
     const judged = await cleanupAfterRun(clean);
@@ -589,9 +600,7 @@ exec /bin/ps "$@"
     assert.ok(isPidAlive(kidPid), "这一组要一个活着的孩子");
 
     const shim = installShim("ps",
-      `[ -f ${JSON.stringify(psReal)} ] && exec /bin/ps "$@"\n`
-      + `/bin/ps "$@" | awk -v t=${kidPid} '{ if ($1 == t) { s=""; for (i=3; i<=NF; i++) s = s $i " ";`
-      + ` printf "%s %s %s\\n", $1, $1, s } else print }'\n`);
+      `[ -f ${JSON.stringify(psReal)} ] && exec /bin/ps "$@"\n` + unlinkPpidShim(kidPid));
     const beforeTerm = await collectEscapees(live);
     const judged = await cleanupAfterRun(live);
     const afterTerm = await collectEscapees(live);
