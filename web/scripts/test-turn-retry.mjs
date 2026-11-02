@@ -98,5 +98,14 @@ assert.equal(
   false,
   "error 的不是当前轮 → 不重跑",
 );
+// 还挂在 reviewing、但任务书送没送到说不清:系统不替用户结、不替他重投,入口交给这颗按钮。
+const awaiting = (over = {}) => run({ status: "reviewing", rounds: [
+  { round: 1, status: "failed" }, { round: 2, status: "reviewing", awaitsInputDecision: true },
+], ...over });
+assert.equal(freeReviewRetryable([awaiting()]), true, "送达说不清、等用户拿主意 → 给「继续本轮审查」");
+assert.equal(freeReviewRetryable([run({ status: "reviewing", rounds: [{ round: 2, status: "reviewing" }] })]), false,
+  "正常在审的那一轮不给按钮");
+assert.equal(freeReviewRetryable([awaiting({ rounds: [{ round: 1, status: "reviewing", awaitsInputDecision: true },
+  { round: 2, status: "reviewing" }] })]), false, "标记不在当前轮 → 不给");
 
 console.log("✓ turn-retry gate (web)");

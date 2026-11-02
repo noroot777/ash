@@ -27,6 +27,7 @@ import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-st
 import { headCommit } from "./git.js";
 import { cleanupPostMergeReviewWorktree, preparePostMergeReviewWorktree } from "./post-merge-review-worktree.js";
 import type { SettlementFence } from "./regression-settlement.js";
+import { reviewInputHoldNow } from "./review-input-verdict.js";
 import { reviewLifecycle } from "./review-lifecycle-lock.js";
 import { claimOwnTurn, releaseTurn, turnIdentity } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -506,11 +507,27 @@ export async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void>
 export function freeReviewRetryBlocker(
   run: ReviewRunRow | null,
   round: ReviewRoundRow | null,
+  awaitsInputDecision = false,
 ): string | null {
   if (!run) return "这个任务没有审查记录";
+  if (awaitsInputDecision) return null;
   if (run.status !== "failed") return "最近一轮审查没有停在异常结束状态";
   if (!round || round.status !== "error") return "最近一轮审查没有停在异常结束状态";
   return null;
+}
+
+/**
+ * 这一轮停在「任务书送没送到说不清、等用户拿主意」上 —— 审查回合已经结束、没交卷,协议又没给
+ * 定论,系统不替它结也不替它重投(判据整段在 review-input-verdict.ts)。它跟「异常结束」一样
+ * 交给「继续本轮审查」:重投是用户知情之后的显式决定。
+ */
+export async function reviewAwaitsInputDecision(
+  task: TaskRow, run: ReviewRunRow | null, round: ReviewRoundRow | null,
+): Promise<boolean> {
+  if (!run || run.status !== "reviewing" || round?.status !== "reviewing" || round.conclusion) return false;
+  if (round.round !== run.currentRound || reviewerTurnHeld(task, run.id)) return false;
+  const input = await reviewInputHoldNow(task.id, task, freeReviewEvidenceDir(task.id, run.id, round.round));
+  return input === "hold" || input === "unconfirmed";
 }
 
 /**
@@ -556,7 +573,7 @@ export async function reopenFailedFreeReview(
     try {
       const run = await latestRun(taskId);
       const round = run ? await roundOf(run) : null;
-      const blocker = freeReviewRetryBlocker(run, round);
+      const blocker = freeReviewRetryBlocker(run, round, await reviewAwaitsInputDecision(task, run, round));
       if (blocker) throw new Error(blocker);
       const at = now();
       const directory = freeReviewEvidenceDir(taskId, run!.id, run!.currentRound);

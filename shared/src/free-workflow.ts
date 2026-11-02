@@ -417,6 +417,11 @@ export interface FreeReviewRound {
   dispute: FreeReviewDispute | null;
   startedAt: string;
   endedAt: string | null;
+  /**
+   * 审查回合已结束、没交卷,而任务书有没有送进审查者手里协议层没给定论:这一轮保持 reviewing,
+   * 系统不替它结、也不自动重投,等用户点「继续本轮审查」。省略 = 不是这种情形。
+   */
+  awaitsInputDecision?: true;
 }
 
 export interface FreeReviewRun {

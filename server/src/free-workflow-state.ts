@@ -151,6 +151,14 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     roundRows.filter((round) => hasDispute(round))
       .map(async (round) => [round.id, await debateViews(round.id)] as const),
   ));
+  // 还挂在 reviewing 的那一轮是不是停在「送没送到说不清、等用户拿主意」(会话底部那颗「继续本轮
+  // 审查」据此出现)。动态导入:free-review-round.ts 反过来要用这里的状态读取。
+  const { reviewAwaitsInputDecision } = await import("./free-review-round.js");
+  const awaiting = new Set<string>();
+  for (const run of runs.filter((row) => row.status === "reviewing")) {
+    const round = roundRows.find((row) => row.runId === run.id && row.round === run.currentRound) ?? null;
+    if (round && await reviewAwaitsInputDecision(task, run, round)) awaiting.add(round.id);
+  }
   const reviews: FreeReviewRun[] = runs.map((run) => ({
     id: run.id,
     reviewerId: run.reviewerId,
@@ -197,6 +205,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
         : null,
       startedAt: round.startedAt,
       endedAt: round.endedAt,
+      ...(awaiting.has(round.id) ? { awaitsInputDecision: true } : {}),
     })),
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,

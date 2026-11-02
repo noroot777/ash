@@ -13,6 +13,7 @@ const { answerTask } = await import("../src/task-answer.js");
 const { beginDelivery, deliveryOptions, deliveryVerdict, deliverPendingMessages, monitorWakeGuard } = await import("../src/pending-messages.js");
 const { reviewDeliveryBlocked, reviewDeliveryFrom } = await import("../src/review-ownership.js");
 const { beginReviewContinuation, commitReviewTurnDelivery, preserveReviewWait } = await import("../src/review-continuation.js");
+const { noteReviewInputAcceptance } = await import("../src/review-input-verdict.js");
 const { directionIdentityCleared, turnDirectionStart } = await import("../src/task-direction-epoch.js");
 const { continueTask } = await import("../src/orchestrator.js");
 const { setTaskQuestion } = await import("../src/task-question.js");
@@ -191,6 +192,9 @@ try {
       }, { behavior: "immediate" });
       const [receipt] = await Promise.all([resuming, reconcileRegressionSettlements()]);
       await commitReviewTurnDelivery(owner.id, receipt);
+      // 真实链路里紧跟着交付凭据的是协议回执那一笔(continueTask → turn-input-settlement.ts);这里没有
+      // 执行器,照它补上「收下了」—— 否则凭据停在 spawn 时的 unknown,审查结算会按「送没送到说不清」按住。
+      await noteReviewInputAcceptance(owner.id, receipt, "accepted");
       assert(await reviewDeliveryBlocked(reviewDeliveryFrom(answer), owner.id), "an already-consumed answer cannot start another turn");
       assert.equal((await review.state()).settlement, null);
       assert.equal((await review.state()).continuation?.phase, "running");

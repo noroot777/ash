@@ -293,8 +293,11 @@ export async function commitReviewTurnDelivery(taskId: string, receipt: ReviewSt
     await clearGuardedStart(transaction, task);
     const current = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0]!;
     await transaction.update(tasks).set({ waitOwnership: { ...current.waitOwnership,
+      // 协议回执此刻还没落定:显式记成 unknown,跟凭据同一笔落下 —— 之后回执那一笔写不进库,
+      // 留下的也是「说不清」而不是缺席(review-input-verdict.ts)。
       deliveredReview: { directory: receipt.directory, generation: receipt.generation, identity: receipt.identity,
-        input: receipt.delivery, pid: process?.pid, unitToken: process?.unitToken, confirmedAt: now() } } })
+        input: receipt.delivery, pid: process?.pid, unitToken: process?.unitToken, confirmedAt: now(),
+        acceptance: "unknown" } } })
       .where(eq(tasks.id, taskId));
   }, { behavior: "immediate" });
 }

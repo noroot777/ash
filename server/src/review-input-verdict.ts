@@ -8,25 +8,30 @@
 // 一份事实,三个读者 —— 写:回执一落定就记(初次与迟到都记,turn-input-settlement.ts),排在任何
 // 调用方记账之前;读:审查结算(`reviewInputHold`)、补投恢复(free-review-redeliver.ts)。
 //
-// **按住多久**(第 2 轮自由审查 R1):只要协议事实**还可能到**,就谁都不许替它下结论 —— 结算不结,
-// 恢复也不许拿「越过了线」当「送到了」去清意图。「还可能到」是一个**本进程**的事实:回执本体是
-// 一个只活在本进程里的承诺,它还没落定就登记在 `waiting` 里;它落定成 unknown(连接断了、协议再也
-// 答不上来)或者进程没了(重启之后谁都等不到它),这条通道就关了 —— 那时再按着只会让这一轮永远
-// 停在 reviewing,而用户没有任何按钮能把它放下来(没有活进程可停,也不是 failed 可重跑)。通道
-// 关了之后照常结算,时间线照实写「送没送进去说不清」,不自动重投(那可能是重复执行)。
+// **按住多久**:一直按住。unknown 既不是送到了、也不是没送到,本地的任何观察都换不来这个协议
+// 事实 —— 回执落定成 unknown、回执本体抛了、进程重启之后谁都等不到它,都只说明「再也不会知道」,
+// 不说明结果(自由审查第 2 轮 R1,以及再下一次审查的 R1:上一版在「通道关了」之后照常结成失败,
+// 仍是拿本地可观测性顶替协议事实)。所以结算永不把它结掉,补办也不清它的意图(那份意图就是「这件事还没了」的持久
+// 记号),更不自动重投(可能重复执行)。分两档只为说清楚**接下来靠谁**:
+//   · 定论还可能到(回执本体还悬着,登记在本进程的 `waiting` 里):靠迟到的定论自动收口;
+//   · 再也不会到:**交给用户**。这一轮停在「等你拿主意」(free-review-round.ts 的
+//     `reviewAwaitsInputDecision`),会话底部
+//     那颗「继续本轮审查」照常可点 —— 重投是用户知情之后的显式决定,不是系统替他猜的。
 //
 // **身份**(第 2 轮自由审查 R2):同一轮审查的多次续跑(答复提问、检查点续跑)共用目录与代次,
 // 每一次输入却各有自己的 turnToken/directionToken/directionEpoch。回执只属于产生它的那一次输入:
 // 写入在同一条 UPDATE 的 WHERE 里核完整输入身份,前一次输入迟到的定论写不进后一次的凭据;读取先核
 // 权威代次,上一代次的凭据不当这一代的事实读。
 //
-// **写不下来**(同上 R1):协议事实先进内存(`unwritten`),再落库;库写失败就留在内存里供本进程
-// 读,不会被读成「缺席 = 没这回事」。进程没了它才随之消失 —— 那时通道本来也关了,按说不清结算。
+// **写不下来**(同上 R1):凭据在 spawn 那一笔就带着显式的 unknown;协议事实先进内存(`unwritten`),
+// 再落库;库写失败就留在内存里供本进程读。进程没了它才随之消失 —— 库里剩下的是 unknown,读成说
+// 不清,同样按住、交给用户。
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { regressionEvidence, tasks } from "./db/schema.js";
 import type { InputAcceptance } from "./executors/types.js";
 import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 
 type Verdict = Exclude<InputAcceptance, "unknown">;
 type Delivered = NonNullable<NonNullable<typeof tasks.$inferSelect["waitOwnership"]>["deliveredReview"]>;
@@ -93,15 +98,15 @@ export function closeReviewInputWait(taskId: string, receipt: ReviewStartReceipt
   if (receipt) waiting.delete(keyOf(taskId, receipt));
 }
 
-export type ReviewInputHold = "hold" | "refused" | "unknown";
+export type ReviewInputHold = "hold" | "unconfirmed" | "refused";
 
 /**
  * 这一轮**这一代次**最近那一次输入,进没进审查者手里:
- *  · `hold`    —— 还说不清,而且定论还可能到:**别结、别清意图**。收口交给迟到的定论(收下 →
- *    派发了结意图、对账照常结算;拒收 → 派发带着真实原因落终态),或者通道关上。
- *  · `refused` —— 确证一个字都没进去:照常结算,时间线得说真话(不是「没给出结论」)。
- *  · `unknown` —— 说不清,而且再也不会知道了:照常结算,时间线同样照实说;不重投。
- *  · `null`    —— 收下了,或者没有这一代次的凭据(压根没走到 spawn):照原路走。
+ *  · `hold`        —— 还说不清,定论还可能到:**别结、别清意图**。收口交给迟到的定论(收下 →
+ *    派发了结意图、对账照常结算;拒收 → 派发带着真实原因落终态)。
+ *  · `unconfirmed` —— 说不清,而且再也不会知道了:同样别结、别清意图、别重投,等用户拿主意。
+ *  · `refused`     —— 确证一个字都没进去:照常结算,时间线得说真话(不是「没给出结论」)。
+ *  · `null`        —— 收下了,或者没有这一代次的凭据(压根没走到 spawn):照原路走。
  */
 export function reviewInputHold(
   taskId: string,
@@ -112,11 +117,13 @@ export function reviewInputHold(
   const delivered = task.waitOwnership?.deliveredReview;
   if (!delivered || delivered.directory !== directory || !generation || delivered.generation !== generation) return null;
   const key = keyOf(taskId, delivered);
+  // 缺席 = 加这一位之前落下的老凭据,照老口径走原路。新凭据在 spawn 那一笔就显式记成 unknown
+  // (review-continuation.ts),所以回执写不进库留下的是 unknown,不会落到这一档。
+  if (!delivered.acceptance) return null;
   const fact = unwritten.get(key) ?? (delivered.acceptance === "unknown" ? undefined : delivered.acceptance);
   if (fact === "accepted") return null;
   if (fact === "refused") return "refused";
-  // 缺席与 unknown 同读:缺席只可能是「写不下来、进程又没了」或者加这一位之前的老凭据 —— 都说不清。
-  return waiting.has(key) ? "hold" : "unknown";
+  return waiting.has(key) ? "hold" : "unconfirmed";
 }
 
 /** 同上,代次由这里按证据行现读(结算那一侧手上没有权威代次)。 */
@@ -128,6 +135,20 @@ export async function reviewInputHoldNow(
   return reviewInputHold(taskId, task, directory, generation);
 }
 
+/**
+ * 把这一档写进时间线(刷新后还看得见「为什么还挂着 / 为什么没结论」)。同一次输入的同一档只写
+ * 一次:结算与补办两头都会走到这里,周期对账也会反复走到。
+ */
+export async function noteReviewInput(
+  task: Pick<typeof tasks.$inferSelect, "id" | "waitOwnership">,
+  run: { targetKind: string | null; currentRound: number }, directory: string, input: ReviewInputHold,
+): Promise<void> {
+  const delivered = task.waitOwnership?.deliveredReview;
+  await appendTaskTimeline(task.id, reviewInputNote(input,
+    run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`),
+  { eventKey: `review-input-${input}:${directory}:${delivered?.generation}:${JSON.stringify(delivered?.identity)}` });
+}
+
 /** 结算/按住时写进时间线的那一句真话(`label` 是「自由工作流第 N 轮」这类前缀)。 */
 export function reviewInputNote(input: ReviewInputHold, label: string): string {
   if (input === "hold") {
@@ -136,6 +157,6 @@ export function reviewInputNote(input: ReviewInputHold, label: string): string {
   }
   return input === "refused"
     ? `${label}审查的任务书被协议层明确拒收，审查者一个字都没收到，这一轮按未完成收尾；重跑这一轮即可重新投递。`
-    : `${label}审查的任务书送没送进审查者手里说不清（协议层到最后也没给回执），这一轮按未完成收尾；`
-      + "为免重复执行没有自动重投，需要的话重跑这一轮。";
+    : `${label}审查的任务书有没有送进审查者手里，已经确认不了（协议层到最后也没给回执）。这一轮保持进行中，`
+      + "不判失败，也不自动重投（可能重复执行）；要重新投递，请点审查会话底部的「继续本轮审查」。";
 }

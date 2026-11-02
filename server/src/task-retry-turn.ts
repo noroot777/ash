@@ -42,7 +42,7 @@ import { noted } from "./user-action-rejection.js";
 import { db } from "./db/index.js";
 import { groups, sessions, tasks } from "./db/schema.js";
 import { profileDrift } from "./executors/index.js";
-import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, roundOf } from "./free-review-round.js";
+import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, reviewAwaitsInputDecision, roundOf } from "./free-review-round.js";
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import { turnOutcome } from "./session-turns.js";
 import type { TurnOutcome } from "./session-turns.js";
@@ -276,7 +276,8 @@ async function readFacts(
   let reviewBlocker: string | null = null;
   if (latest && retryTurnKindOf(latest) === "review" && task.workflowMode === "free") {
     const run = await latestRun(taskId);
-    reviewBlocker = freeReviewRetryBlocker(run, run ? await roundOf(run) : null);
+    const round = run ? await roundOf(run) : null;
+    reviewBlocker = freeReviewRetryBlocker(run, round, await reviewAwaitsInputDecision(task, run, round));
   }
   return {
     task,

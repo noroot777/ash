@@ -23,13 +23,16 @@ export type TurnRetryTarget = { sessionId: string; kind: TurnRetryKind; exitStat
 /**
  * 这条自由工作流的审查链能不能重跑上一回合（镜像服务端 `freeReviewRetryBlocker`）。
  *
- * 只认一种形状：最近一条 run 停在 failed、且它当前那一轮停在 error —— 那正是「审查回合
- * 异常结束、自动复审已停止」留下的痕迹。已给出结论的轮次是正常结局，要再看一遍得派新一轮。
+ * 两种形状：最近一条 run 停在 failed、且它当前那一轮停在 error —— 那正是「审查回合
+ * 异常结束、自动复审已停止」留下的痕迹；或者当前那一轮还挂在 reviewing、但服务端标了
+ * `awaitsInputDecision`（任务书送没送到说不清，系统不替用户结、也不替他重投）。已给出结论的
+ * 轮次是正常结局，要再看一遍得派新一轮。
  */
 export function freeReviewRetryable(reviews: FreeReviewRun[] | undefined): boolean {
   const run = reviews?.[0]; // 服务端按 createdAt 倒序给，第一条就是最近这条链
-  if (!run || run.status !== "failed") return false;
-  return run.rounds.some((round) => round.round === run.currentRound && round.status === "error");
+  const current = run?.rounds.find((round) => round.round === run.currentRound);
+  if (run?.status === "reviewing") return !!current?.awaitsInputDecision;
+  return run?.status === "failed" && current?.status === "error";
 }
 
 export function turnRetryTarget(
