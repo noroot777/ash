@@ -21,7 +21,7 @@
 // 「拿得到 key」。真正花掉 key 的动作(`POST /llm-providers/models`、`…/test`)是写方法,
 // 被这道闸挡在外面。
 import type { MiddlewareHandler } from "hono";
-import { actorOf, isAccountHolder } from "./context.js";
+import { actorOf } from "./context.js";
 import {
   HUMAN_ACTION_TOKEN_HEADER,
   HUMAN_ACTION_TOKEN_NEXT_HEADER,
@@ -29,8 +29,10 @@ import {
   issueHumanActionToken,
   markHumanActionVerified,
 } from "./human-action-token.js";
-import { crossSiteRejection, WRITE_METHODS } from "./middleware.js";
+import { WRITE_METHODS } from "./middleware.js";
 import { isMultiUser } from "./mode.js";
+import { humanRequestRejection, rejectHumanRequest } from "./human-request.js";
+export { AGENT_HUMAN_ONLY_REFUSAL } from "./human-request.js";
 
 /**
  * 个人面集合的**第一段**。新开一张 `ownerUserId` 的表就顺手加一行 ——
@@ -104,7 +106,7 @@ const PERSONAL_PATHS = [
  * 设计的唯一前提抽掉 —— 界面上那段风险说明也就只是说给没在看的人听。
  */
 const HUMAN_ONLY_PATHS = [
-  /^\/api\/tasks\/[^/]+\/reclaim-turn$/,
+  /^\/api\/tasks\/[^/]+\/reclaim-turn(?:\/approval)?$/,
   // 杀掉 CUA 旁路会话:AGENTS.md 对它的口径就是「不可逆又外溢,默认必须是告诉用户 + 给
   // 一个他自己按的开关」—— 它杀的是**开机级全局单例**,外溢到用户在 ChatGPT 里的其它会话。
   // 既然那条规矩写的是「他自己按」,这道闸就得真的只让他按得动,否则那句话只是说给没在看
@@ -116,10 +118,6 @@ const HUMAN_ONLY_PATHS = [
 export function isHumanOnlyPath(path: string): boolean {
   return HUMAN_ONLY_PATHS.some((p) => p.test(path));
 }
-
-export const AGENT_HUMAN_ONLY_REFUSAL =
-  "这个动作只有账号本人按得动：它解除的是回合互斥，系统判不了原来那一位死没死才交给人来判，"
-  + "回合凭证不能代替用户知情同意";
 
 export const HUMAN_ACTION_TOKEN_REFUSAL =
   "这个动作需要本次会话的页面凭据：请在 ash 页面上点这个开关。"
@@ -153,17 +151,8 @@ export function personalWriteGate(): MiddlewareHandler {
     };
     // 真人专属动作先判:它**不看单人/多人**(理由见 HUMAN_ONLY_PATHS)。
     if (isHumanOnlyPath(c.req.path)) {
-      if (!isAccountHolder(actorOf(c))
-        || c.req.header("x-ash-source-task-id") !== undefined
-        || c.req.header("x-ash-turn-token") !== undefined) {
-        return c.json({ error: AGENT_HUMAN_ONLY_REFUSAL }, 403);
-      }
-      const rejection = crossSiteRejection({
-        secFetchSite: c.req.header("sec-fetch-site"),
-        origin: c.req.header("origin"),
-        host: new URL(c.req.url).host,
-      });
-      if (rejection) return c.json({ error: rejection }, 403);
+      const rejection = humanRequestRejection(c);
+      if (rejection) return rejectHumanRequest(c, rejection);
       // **正面凭据,默认拒绝。** 上面那三段判的全是「调用方自己说了什么」:没自称 agent、
       // 没带浏览器头 —— 于是一个什么头都不带的裸请求把三段全满足了,诚实申报的 403、
       // 一言不发的 200(审查实测)。穷举「哪些头没带算可疑」救不了这个形状:少一种组合
@@ -172,7 +161,7 @@ export function personalWriteGate(): MiddlewareHandler {
       //
       // 这几条 403 都**不发**下一份:凭据没被烧掉(或者这根本不是本人),页面手里那份还能用。
       if (!consumeHumanActionToken(c.req.header(HUMAN_ACTION_TOKEN_HEADER))) {
-        return c.json({ error: HUMAN_ACTION_TOKEN_REFUSAL }, 403);
+        return rejectHumanRequest(c, HUMAN_ACTION_TOKEN_REFUSAL);
       }
       // 核验过了盖个戳。路由拿它决定留痕的措辞 —— 别让路由自己去重读请求头推断
       // (那是第二份判据,而且推断不出「闸到底跑没跑」,见 humanActionOrigin)。

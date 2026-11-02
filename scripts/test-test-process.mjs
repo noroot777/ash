@@ -1,10 +1,11 @@
+import { cleanupTestResources, withTestResources } from "./test-process-resources.mjs";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertProcessResult, runTestProcess } from "./test-process.mjs";
 import { IS_WINDOWS, isPidAlive } from "./platform.mjs";
-import { delay, spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
+import { delay, disposeTestScopesSync, spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
 
 const complete = { status: 0, signal: null, stdout: "已就绪\n✅ 完成\n", stderr: "" };
 assert.equal(assertProcessResult(complete), complete);
@@ -32,7 +33,7 @@ const pidPath = join(temporary, "child.pid");
  */
 let preservedBackground = [];
 const cleanupProblems = [];
-try {
+await withTestResources(async () => {
   const output = await runTestProcess(process.execPath, ["-e", `
     require('node:fs').writeSync(1, 'x'.repeat(2 * 1024 * 1024) + 'stdout-tail');
     require('node:fs').writeSync(2, 'stderr-tail');
@@ -101,7 +102,7 @@ try {
   const shellArgs = IS_WINDOWS ? ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(`& ${quote(process.execPath)} ${quote(descendant)}`, "utf16le").toString("base64")]
     : ["-c", `${quote(process.execPath)} ${quote(descendant)}; exit $?`];
   const sentinel = spawnTestFixture(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-  try {
+  await withTestResources(async () => {
     const started = Date.now();
     await assert.rejects(() => runTestProcess(IS_WINDOWS ? "powershell.exe" : "/bin/sh", shellArgs, { timeout: 800 }), (error) => {
       assert.equal(error.code, "ETIMEDOUT");
@@ -116,7 +117,7 @@ try {
     assert.equal(existsSync(sideEffect), false);
     assert.ok(isPidAlive(sentinel.pid), "不能误杀其他执行域");
     console.log(`✓ shell 超时后代已终止且无延迟副作用,诊断双流保留,其他执行域仍存活 (${Date.now() - started}ms)`);
-  } finally { await sentinel.dispose(); }
+  }, [() => sentinel.dispose()]);
 
   if (!IS_WINDOWS) {
     const started = Date.now();
@@ -136,7 +137,7 @@ try {
   await broken.dispose();
   assert.ok(existsSync(descendantPid));
   assert.ok(!isPidAlive(Number(readFileSync(descendantPid, "utf8"))));
-} finally {
+}, [async () => {
   // 保留下来的那些由**实例凭据**停(不是 PID 文件里的号码)。`finally` 里不 assert:上面
   // 真出错时那个错才是主报告,这里只记一笔,出了 finally 再断言。
   for (const instance of preservedBackground) {
@@ -150,7 +151,6 @@ try {
     if (isPidAlive(instance.pid)) cleanupProblems.push(`保留进程 ${instance.pid} 请它自己退之后 2s 还在,本层不按号码补刀`);
   }
   if (cleanupProblems.length) process.stderr.write(`${cleanupProblems.join("\n")}\n`);
-  rmSync(temporary, { recursive: true, force: true });
-}
-assert.deepEqual(cleanupProblems, [], "保留进程没能按实例停掉");
+  assert.deepEqual(cleanupProblems, [], "保留进程没能按实例停掉");
+}, disposeTestScopesSync, () => rmSync(temporary, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 })]);
 console.log("✓ 子进程执行域:超时后代/拒绝信号/登记失败均清场,保留诊断及晚写双流,独立日志服务显式登记");

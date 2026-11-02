@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { IS_WINDOWS, capture, isPidAlive, sleep } from "./platform.mjs";
 import { restartCommand } from "./restart-options.mjs";
 import { runTestProcess } from "./test-process.mjs";
-import { spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
+import { disposeTestScopesSync, spawnTestFixture, terminateInstance } from "./test-process-scope.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 14317;
@@ -98,7 +98,9 @@ function cleanup() {
     process.exitCode = 1;
     process.stderr.write(`⚠ ${PID_FILE} 里还有号码,但手上没有实例凭据 —— 按 F4 不下刀,请自行确认 :${PORT} 上没有残留\n`);
   }
-  try { rmSync(TMP, { recursive: true, force: true }); } catch { /* 临时目录,清不掉也无所谓 */ }
+  try { disposeTestScopesSync(); } catch (error) { process.exitCode = 1; process.stderr.write(`${error.stack ?? error}\n`); }
+  try { rmSync(TMP, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 }); }
+  catch (error) { process.exitCode = 1; process.stderr.write(`${error.stack ?? error}\n`); }
 }
 process.on("exit", cleanup);
 

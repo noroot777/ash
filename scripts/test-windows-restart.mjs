@@ -1,3 +1,4 @@
+import { withTestResources } from "./test-process-resources.mjs";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
@@ -28,7 +29,7 @@ if (IS_WINDOWS) {
   const fixture = spawnTestFixture(process.execPath, ["-e", "setInterval(()=>{},1000);\nvoid 'tab\t汉字';"], { stdio: "ignore" });
   await new Promise((resolve, reject) => { fixture.once("spawn", resolve); fixture.once("error", reject); });
   const original = childProcess.execFileSync;
-  try {
+  await withTestResources(async () => {
     for (const protect of [[], [fixture.pid]]) {
       let kills = 0;
       childProcess.execFileSync = (file, args, options) => {
@@ -60,7 +61,7 @@ if (IS_WINDOWS) {
     // 真该停的一起拦下(见 test-process-scope.mjs 的「先砍一刀」)。
     const doomed = spawnTestFixture(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
     const spared = spawnTestFixture(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
-    try {
+    await withTestResources(async () => {
       await Promise.all([doomed, spared].map((child) =>
         new Promise((ready, failed) => { child.once("spawn", ready); child.once("error", failed); })));
       const table = listProcesses();
@@ -79,12 +80,11 @@ if (IS_WINDOWS) {
       for (let attempt = 0; attempt < 100 && isPidAlive(doomed.pid); attempt++) await delay(20);
       assert.ok(!isPidAlive(doomed.pid), "区间对得上的照杀,不被另一条拦下");
       console.log("✓ 原生 Windows:代次区间核得准,容错只跳过对不上的那一个");
-    } finally { await doomed.dispose(); await spared.dispose(); }
-  } finally {
+    }, [() => doomed.dispose(), () => spared.dispose()]);
+  }, [() => {
     childProcess.execFileSync = original;
     syncBuiltinESMExports();
-    try { fixture.kill(); } catch {}
-  }
+  }, () => fixture.dispose()]);
 }
 
 if (IS_WINDOWS) await import("./test-windows-restart-preservation.mjs");

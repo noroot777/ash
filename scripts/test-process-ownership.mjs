@@ -1,3 +1,5 @@
+import { withTestResources } from "./test-process-resources.mjs";
+import { TestDirectory } from "./test-process-directory.mjs";
 // ── 所有权与清场的四条不变量 ────────────────────────────────────────────────────
 // 覆盖的是审查里那四条(F3 登记发布、F1 退出证明、F2 实例绑定、N2 初始化回收),
 // 判据与理由在 test-process-scope.mjs 顶部,这里只钉行为。
@@ -227,11 +229,8 @@ if (windows) {
   console.log("- 跳过相邻执行域一节(POSIX 专属:判据里的环境段线索)");
 } else {
   const scope = new TestProcessScope();
-  const sibling = new TestProcessScope((() => {
-    const directory = `${scope.directory}-other`;
-    mkdirSync(directory);
-    return directory;
-  })());
+  const directory = new TestDirectory(undefined, undefined, `${scope.directory}-other`);
+  const sibling = new TestProcessScope(directory.path, undefined, directory.ownership);
   const theirs = sibling.spawn("/bin/sleep", ["5"], { stdio: "ignore" });
   await delay(400);
   const owned = await scope.active();
@@ -294,7 +293,7 @@ if (!python || windows) {
 } else {
   const stage = mkdtempSync(join(tmpdir(), "ash-probe-"));
   const scope = new TestProcessScope();
-  try {
+  await withTestResources(async () => {
     const pidPath = join(stage, "grandchild.pid");
     const grandchild = `import os,time;open(${JSON.stringify(pidPath)},'w').write(str(os.getpid()));time.sleep(6)`;
     const forker = `import os,time\nc=os.fork()\nif c==0:\n os.setsid()\n os.execve(${JSON.stringify(python)},[${JSON.stringify(python)},'-c',${JSON.stringify(grandchild)}],{})\nelse:\n while not os.path.exists(${JSON.stringify(pidPath)}): time.sleep(.01)\n os._exit(0)`;
@@ -323,10 +322,7 @@ setTimeout(() => {}, 5000);
       "认出来之后要把「绑不住、没终止」连号码一起交回调用方",
     );
     assert.ok(alive(pid), `绑不住就不许动手(pid=${pid})`);
-  } finally {
-    scope.remove();
-    rmSync(stage, { recursive: true, force: true });
-  }
+  }, [() => scope.remove(), () => rmSync(stage, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 })]);
   console.log("✓ 退出证明:边界不在 fd 3 上(带 IPC)也照样读出来并往下传,spawnSync 那一代同样接上(认出来之后如实报「绑不住」)");
 }
 

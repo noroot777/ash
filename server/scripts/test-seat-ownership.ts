@@ -20,6 +20,7 @@
 // 名字也不叫 turn-ownership —— 那个名字已经被第 11/12 轮审查那份回归占着(讲的是回合锁与
 // 预约槽的原子性,不是队列占位)。两份各自起隔离库,`npm run test:turn-reclaim` 依次跑。
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,8 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
 const root = mkdtempSync(join(tmpdir(), "ash-turn-ownership-"));
+const approvalKey = generateKeyPairSync("ed25519");
+process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = approvalKey.publicKey.export({ type: "spki", format: "der" }).toString("base64");
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 process.env.ASH_SUSPECT_TURN_MS = "20";
@@ -74,12 +77,21 @@ const baseTask = {
 
 const api = new Hono();
 mountTaskRunRoutes(api);
-const post = (path: string, body?: unknown) =>
-  api.request(path, {
+const post = async (path: string, body?: unknown) => {
+  let approval;
+  if (body === undefined && path.endsWith("/reclaim-turn")) {
+    const response = await api.request(`${path}/approval`, { method: "POST" });
+    if (response.ok) {
+      const challenge = await response.json() as { challengeId: string; payload: string };
+      approval = { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
+    }
+  }
+  return api.request(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true } : {})),
+    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true, approval } : {})),
   });
+};
 
 const statusOf = async (taskId: string): Promise<string | undefined> =>
   (await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.status;
@@ -262,6 +274,7 @@ await db.insert(queueItems).values({ id: "qi-guard2", queueId: "q-guard2", taskI
 // 这条路存在的全部理由是「系统判不了原持有者死没死,所以交给知情的人判」,把一次 agent
 // 发来的请求当成用户知情同意,等于把这个设计的唯一前提抽掉。
 assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn"), true);
+assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/approval"), true);
 assert.equal(isHumanOnlyPath("/api/tasks/abc/team/kill-cua"), true, "杀 CUA 旁路会话同样只有真人按得动");
 assert.equal(isHumanOnlyPath("/api/tasks/abc/stop"), false, "停止不在真人专属之列");
 assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只认那条路径本身");
@@ -282,6 +295,15 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   mountTaskRunRoutes(inner);
   mountTaskRoutes(inner);
   gated.route("/api", inner);
+  const signedGateApproval = async () => {
+    const response = await gated.request("/api/tasks/t-gate/reclaim-turn/approval", {
+      method: "POST", headers: { [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken() },
+    });
+    assert.equal(response.status, 200);
+    assert.ok(response.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER), "申请也必须续发页面凭据");
+    const challenge = await response.json() as { challengeId: string; payload: string };
+    return { challengeId: challenge.challengeId, signature: sign(null, Buffer.from(challenge.payload), approvalKey.privateKey).toString("base64url") };
+  };
 
   await createTasks([
     { ...baseTask, id: "t-gate", title: "gate", status: "queued" },
@@ -360,12 +382,13 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   assert.match((await agentWithToken.json() as { error: string }).error, /只有账号本人/);
 
   // 带着一份页面凭据:放行,并且**响应头**里给回下一份(烧一份换一份,不然按完一次就按不动了)。
+  const pageApproval = await signedGateApproval();
   const pageToken = issueHumanActionToken();
   const liveBefore = liveHumanActionTokenCount();
   const byPage = await gated.request("/api/tasks/t-gate/reclaim-turn", {
     method: "POST",
     headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: pageToken },
-    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval: pageApproval }),
   });
   assert.equal(byPage.status, 200, "带着页面凭据的请求该放行");
   const reclaimBody = await byPage.json() as Record<string, unknown>;
@@ -415,10 +438,11 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
     // 那一份真的按得动:这才是 N2 要的结论 —— 一次普通的业务拒绝之后不必刷新页面。
     assert.equal(claimTurn("t-gate"), true);
     await new Promise((r) => setTimeout(r, 40));
+    const retryApproval = await signedGateApproval();
     const retried = await gated.request("/api/tasks/t-gate/reclaim-turn", {
       method: "POST",
       headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: afterReject! },
-      body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+      body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval: retryApproval }),
     });
     assert.equal(retried.status, 200, "拒绝之后给回的那一份必须按得动,不能逼用户刷新页面");
     assert.equal(typeof retried.headers.get(HUMAN_ACTION_TOKEN_NEXT_HEADER), "string", "这一次照样要续一份");
@@ -435,10 +459,11 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   assert.equal(replay.status, 403, "用过的凭据不许重放");
   assert.equal(claimTurn("t-gate"), false, "重放被拒之后那把锁必须还在");
   // 轮换给回的那一份接着就能用 —— 页面因此不会撞上一个按不动的开关。
+  const rotatedApproval = await signedGateApproval();
   const withRotated = await gated.request("/api/tasks/t-gate/reclaim-turn", {
     method: "POST",
     headers: { "content-type": "application/json", [HUMAN_ACTION_TOKEN_HEADER]: rotated as string },
-    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval: rotatedApproval }),
   });
   assert.equal(withRotated.status, 200, "轮换给回的那一份必须接着能用");
   // 这一节放开过两次锁,后面几节仍按「锁占着不动」那个前提断言 —— 把前提摆回去。
@@ -514,7 +539,7 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
   assert.equal(crossSite.status, 403, "跨站请求不能冒充用户确认");
   assert.equal(claimTurn("t-gate"), false, "授权失败不能释放锁");
 
-  // 同一条路,真人(自用模式的隐式本地用户)照常放行。
+  const approval = await signedGateApproval();
   const asHuman = await gated.request("/api/tasks/t-gate/reclaim-turn", {
     method: "POST",
     headers: {
@@ -522,7 +547,7 @@ assert.equal(isHumanOnlyPath("/api/tasks/abc/reclaim-turn/extra"), false, "只�
       "sec-fetch-site": "same-origin",
       [HUMAN_ACTION_TOKEN_HEADER]: issueHumanActionToken(),
     },
-    body: JSON.stringify({ acknowledgeDuplicateRisk: true }),
+    body: JSON.stringify({ acknowledgeDuplicateRisk: true, approval }),
   });
   assert.equal(asHuman.status, 200, "账号本人该按得动");
   assert.equal((await asHuman.json() as { reclaimed: boolean }).reclaimed, true);

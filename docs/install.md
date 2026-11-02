@@ -238,7 +238,11 @@ Kimi Code 账号需有可用的编码订阅；403 订阅错误会显示在任务
 |---|---|---|
 | `PORT` | `4317` | 服务端口 |
 | `ASH_DB` | `<仓库>/data/ash.db` | 库文件位置 |
+| `ASH_HUMAN_APPROVAL_PUBLIC_KEY` | 未配置 | 回合占位人工放开的 Ed25519 公钥（SPKI DER base64），在可信启动环境中预配，优先于公钥文件 |
+| `ASH_HUMAN_APPROVAL_PUBLIC_KEY_FILE` | 未配置，无默认路径 | 可信公钥文件的绝对路径，在启动环境中预配；文件及全部父目录由独立账号管理，服务账号无权修改且路径不含符号链接。支持独立属主核验的平台可热加载公钥内容 |
 | `ASH_LOCAL_OPEN_ROOTS` | 作者机器上的两个路径 | 「在本机打开文件」允许的根目录,冒号分隔。**换机器基本都要重设**,否则这个功能不可用 |
+
+人工授权的离机密钥生成、部署边界和操作见[回合占位的人工授权](human-approval.md)。未预配公钥或文件路径的实例无法在卡住后直接补文件开启；新增启动配置需要重启，重启会清除内存中的回合占位并中断正在运行的任务。
 
 **常驻**:`npm run restart` 用 detached spawn 起进程,关掉终端也活着。想要开机自启就自己包一层 launchd(macOS)/ systemd(Linux)/ 计划任务(Windows,触发器选「登录时」),`ExecStart` 写 `node <仓库>/server/dist/index.js`,`WorkingDirectory` 写仓库根。
 

@@ -57,7 +57,7 @@
     "test:claude-retry-stall": "tsx scripts/test-claude-retry-stall.ts",
     "test:stall-restart": "tsx scripts/test-stall-restart.ts",
     "test:turn-ownership": "tsx scripts/test-turn-ownership.ts",
-    "test:turn-reclaim": "tsx scripts/test-turn-reclaim.ts && tsx scripts/test-seat-ownership.ts && tsx scripts/test-stop-turn-observation.ts && tsx scripts/test-turn-release-ownership.ts",
+    "test:turn-reclaim": "tsx scripts/test-turn-reclaim.ts && tsx scripts/test-seat-ownership.ts && tsx scripts/test-stop-turn-observation.ts && tsx scripts/test-turn-release-ownership.ts && tsx scripts/test-human-approval.ts",
     "test:turn-output": "tsx scripts/test-turn-output.ts",
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
     "test:branch-acceptance": "tsx scripts/test-branch-acceptance.ts && tsx scripts/test-branch-worktree-state.ts && tsx scripts/test-base-update-recovery.ts && tsx scripts/test-base-update-followups.ts && tsx scripts/test-branch-plan-scale.ts",

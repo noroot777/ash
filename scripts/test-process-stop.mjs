@@ -12,7 +12,7 @@
 // 这里只用 scope 的**公开**面(`directory` / `children` / `creator` / `started` / `unverified` /
 // `unbindable` / `records()` / `active()` / `inspect()`),所以两个文件的边界是一份接口,不是
 // 「把代码搬开」而已。
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { windowsTerminateScript } from "./windows-restart.mjs";
 import { CLOCK_SLACK_MS, fileTime, powerShell } from "./test-process-probe.mjs";
@@ -125,7 +125,10 @@ export async function stopScope(scope) {
     scope.unverified.push(...await terminateRows(rows, force));
   };
 
-  await attempt(() => writeFileSync(join(scope.directory, "stopped"), ""));
+  await attempt(() => {
+    scope.assertDirectoryOwnership();
+    if (existsSync(scope.directory)) writeFileSync(join(scope.directory, "stopped"), "");
+  });
   // ── 先让有自退通道的那些自己收场(**顺序要紧**)────────────────────────────────
   // 纸条要排在下面那一刀**前面**:收到纸条的那一层会先用自己手上的句柄把它自己的孩子带走
   // (preload 的 `takeChildrenDown` —— 那是「detached 之后另起一组」「卡死读不到纸条」这两种

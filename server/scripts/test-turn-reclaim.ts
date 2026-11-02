@@ -17,14 +17,18 @@
 //   ⑧ 补偿责任**延续时整份身份一起带走** —— 重排到顶那一趟旧版只传了 repush,占位凭证
 //      在那里掉了,下一趟于是把自己那份凭证误读成「别人还持有」,撒手不管(第 1 轮审查 F4)。
 import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { turnReclaimPost } from "./turn-reclaim-test-client.js";
 
 const root = mkdtempSync(join(tmpdir(), "ash-turn-reclaim-"));
+const approvalKey = generateKeyPairSync("ed25519");
+process.env.ASH_HUMAN_APPROVAL_PUBLIC_KEY = approvalKey.publicKey.export({ type: "spki", format: "der" }).toString("base64");
 process.env.ASH_DB = join(root, "ash.db");
 process.env.ASH_RUNS_DIR = join(root, "runs");
 // 把判据窗口压到毫秒级,好让 HTTP 放开那条真实路径也测得动(见 SUSPECT_TURN_MS)。
@@ -70,12 +74,7 @@ const baseTask = {
 const api = new Hono();
 mountTaskRunRoutes(api);
 mountTaskRoutes(api);
-const post = (path: string, body?: unknown) =>
-  api.request(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? (path.endsWith("/reclaim-turn") ? { acknowledgeDuplicateRisk: true } : {})),
-  });
+const post = turnReclaimPost(api, approvalKey.privateKey);
 
 /** 给任务造一条会话行 —— appendTaskTimeline 只往已有会话里写,没有会话的任务只留日志。 */
 async function seedSession(taskId: string, id = `s-${taskId}`): Promise<string> {

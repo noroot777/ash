@@ -77,6 +77,10 @@
 @import "./recent-pages.css";
 @import "./dialogs.css";
 @import "./composer-studio.css";
+/* 验收动作宿主的形状。排在最后:它要压住的那几张状态卡(.accept-gate-card /
+   .pending-merge-card / .team-accept-failure)自带 margin,选择器特异性跟它一样重,
+   只有排在它们后面才算数。 */
+@import "./acceptance-host.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,

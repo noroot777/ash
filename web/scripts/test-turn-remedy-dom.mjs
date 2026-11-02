@@ -40,6 +40,16 @@ try {
 
   /** 每次 reclaim 请求带上来的凭据,按顺序记下 —— 轮换对不对全看这串。 */
   const sent = [];
+  const approvals = [];
+  const receiveApproval = async (surface) => {
+    await surface.getByRole("button", { name: "申请人工授权", exact: true }).click();
+    const request = surface.getByRole("textbox", { name: "人工授权申请", exact: true });
+    await request.waitFor();
+    const challenge = JSON.parse(await request.inputValue());
+    await surface.getByRole("textbox", { name: "人工授权结果", exact: true }).fill(JSON.stringify({
+      challengeId: challenge.challengeId, signature: "fixture-signature",
+    }));
+  };
 
   // 事件流**必须在这里截住**:这个 hook 现在订阅 task.notices(失效协议,见
   // useRejectionNotices.ts),而 vite 的 /api 代理会把它接到真正在跑的 :4317 上去 ——
@@ -54,9 +64,19 @@ try {
   ])));
   await page.route("**/api/tasks/t-second/notices", (route) => json(route, notices([])));
   await page.route("**/api/tasks/t-denied/notices", (route) => json(route, notices([])));
+  await page.route("**/api/tasks/t-denied-approval/notices", (route) => json(route, notices([])));
+  await page.route("**/api/tasks/*/reclaim-turn/approval", (route) => {
+    const taskId = new URL(route.request().url()).pathname.split("/")[3];
+    approvals.push(route.request().headers()[HEADER]);
+    if (taskId === "t-denied-approval") return json(route, { error: REFUSAL }, 403);
+    return json(route, { challengeId: `challenge-${taskId}`, payload: "fixture-payload", expiresAt: Date.now() + 300000 }, 200, {
+      [NEXT]: `approval-token-${taskId}`,
+    });
+  });
 
   // 放开成功、但任务仍点不动:这一档必须留在页面上(它是用户唯一看得见的下一步)。
   await page.route("**/api/tasks/t-stale/reclaim-turn", (route) => {
+    assert.deepEqual(route.request().postDataJSON().approval, { challengeId: "challenge-t-stale", signature: "fixture-signature" });
     sent.push(route.request().headers()[HEADER]);
     return json(route, {
       reclaimed: true, role: "single", heldMs: 185_000, runnable: false, status: "queued",
@@ -101,20 +121,24 @@ try {
   // ── ② 放开了却仍点不动:开关留在原地,并说出下一步 ──
   const stale = page.locator('[data-stage="t-stale"] .task-turn-remedy');
   await stale.waitFor();
+  await receiveApproval(stale);
   await stale.locator("button", { hasText: "放开回合占位" }).click();
   const result = stale.locator(".task-turn-remedy__result");
   await result.waitFor();
   assert.match(await result.innerText(), /还点不动运行.*点一次停止/s, "没恢复时必须给出接着该做的那一步");
   assert.equal(await stale.count(), 1, "没恢复就不许把开关收起来 —— 收起来等于让用户对着消失的入口猜");
   assert.equal(await result.locator("button").count(), 0, "这一档不是凭据问题,不该出现重新加载按钮");
-  assert.equal(sent[0], "page-token-1", "请求必须带上页面文档里那份凭据");
+  assert.equal(approvals[0], "page-token-1", "申请必须带上页面文档里那份凭据");
+  assert.equal(sent[0], "approval-token-t-stale", "放开必须带上申请响应轮换的凭据");
 
   // ── 凭据轮换对整页生效:另一个表面接着按,带的是服务端刚给回的那一份 ──
   const second = page.locator('[data-stage="t-second"] .task-turn-remedy');
+  await receiveApproval(second);
   await second.locator("button", { hasText: "放开回合占位" }).click();
   const secondResult = second.locator(".task-turn-remedy__result");
   await secondResult.waitFor();
-  assert.equal(sent[1], "page-token-2", "烧过一份之后,下一个真人动作必须换上响应里给回的那一份");
+  assert.equal(approvals[1], "page-token-2", "烧过一份之后,下一个真人动作必须换上响应里给回的那一份");
+  assert.equal(sent[1], "approval-token-t-second", "申请与放开共用全页轮换链");
 
   // ── ②b **N2 本体**:一次普通的业务拒绝之后,同一页接着按必须还按得动 ──
   // 上一版的轮换只认成功响应,于是 409 之后手里攥着的是已经烧掉的那一串,下一次点击必然
@@ -131,6 +155,7 @@ try {
   await page.goto(`${fixture}?task=t-denied`);
   const denied = page.locator('[data-stage="t-denied"] .task-turn-remedy');
   await denied.waitFor();
+  await receiveApproval(denied);
   await denied.locator("button", { hasText: "放开回合占位" }).click();
   const deniedResult = denied.locator(".task-turn-remedy__result");
   await deniedResult.waitFor();
@@ -143,6 +168,14 @@ try {
     "被拒之后开关要还能再按(换一份凭据就能成)",
   );
   if (process.env.SHOT_DENIED) await page.screenshot({ path: process.env.SHOT_DENIED, fullPage: true });
+
+  await page.goto(`${fixture}?task=t-denied-approval`);
+  const deniedApproval = page.locator('[data-stage="t-denied-approval"] .task-turn-remedy');
+  await deniedApproval.waitFor();
+  await deniedApproval.getByRole("button", { name: "申请人工授权", exact: true }).click();
+  await deniedApproval.getByRole("button", { name: "重新加载页面", exact: true }).waitFor();
+  assert.match(await deniedApproval.getByRole("status").innerText(), /页面凭据/);
+  assert.equal(await deniedApproval.getByRole("textbox", { name: "人工授权申请", exact: true }).count(), 0);
 
   console.log("turn remedy: 读不准的记录照实说、没恢复时开关与下一步都留着、凭据按响应头轮换(业务拒绝之后照样按得动)、凭据 403 给出重新加载入口 ✔");
 } finally {

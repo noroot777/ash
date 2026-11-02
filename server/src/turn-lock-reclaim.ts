@@ -299,6 +299,14 @@ async function runnableAfterRelease(taskId: string): Promise<{ runnable: boolean
   };
 }
 
+export function inspectTurnReclaim(taskId: string, thresholdMs = SUSPECT_TURN_MS):
+  { ok: true; turn: SuspectTurn } | Extract<ReleaseSuspectResult, { ok: false }> {
+  const status = turnReclaimStatus(taskId, Date.now(), thresholdMs);
+  if (status.kind === "absent") return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
+  if (status.kind === "blocked") return { ok: false, why: "not-suspect", reason: status.reason };
+  return { ok: true, turn: status.turn };
+}
+
 /**
  * **用户主动点的放开。** 判据不因为「是人点的」就放宽 —— 人看到的那条提示也只是「可疑」,
  * 它同样证不了原持有者已经结束。所以这里照样过一遍判据,过不了就如实 409。
@@ -315,12 +323,16 @@ export async function releaseSuspectTurn(
    * 缺省 `"unverified"` 留给不过闸的内部直调与回归 —— 措辞照实说,不替它升一档。
    */
   origin: "page" | "unverified" = "unverified",
+  authorization?: { seq: number; keyFingerprint: string },
 ): Promise<ReleaseSuspectResult> {
   const status = turnReclaimStatus(taskId, Date.now(), thresholdMs);
   if (status.kind === "absent") return { ok: false, why: "no-lock", reason: "这个任务没有被占着的回合占位，不需要放开" };
   // 重算判据 → 条件释放,这中间一个 await 都没有。
   if (status.kind === "blocked") return { ok: false, why: "not-suspect", reason: status.reason };
   const suspect = status.turn;
+  if (authorization && authorization.seq !== suspect.seq) {
+    return { ok: false, why: "not-suspect", reason: "授权对应的回合占位已变化，请重新申请人工授权" };
+  }
   const released = forceReleaseTurn(suspect);
   if (!released) {
     // 号码对不上 = 判定到这一行之间换了主人。这是条件释放该有的样子,不是错误。
@@ -341,7 +353,9 @@ export async function releaseSuspectTurn(
     taskId,
     `released-turn:${suspect.claimedAt}:${suspect.seq}`,
     "回合占位已放开",
-    `这个任务的回合占位已放开，${origin === "page" ? "由本机页面发起" : "请求来源无法确认"}（${detail}）。`
+    (authorization
+      ? `这个任务的回合占位已凭离机授权签名放开（${origin === "page" ? "由本机页面发起" : "请求来源无法确认"}；授权公钥 ${authorization.keyFingerprint}；${detail}）。`
+      : `这个任务的回合占位已放开，${origin === "page" ? "由本机页面发起" : "请求来源无法确认"}（${detail}）。`)
     + (after.runnable ? "现在可以继续运行了。" : `但它还点不动运行：${after.nextStep ?? "请刷新查看当前状态"}。`)
     + SIDE_EFFECT,
   );

@@ -300,6 +300,7 @@
 .task-turn-remedy p.task-turn-remedy__result { display: grid; gap: 6px; justify-items: start; color: var(--text); }
 .task-turn-remedy__result button { border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 3px 9px; color: var(--text); font-size: 11px; }
 .task-turn-remedy__result button:hover { background: var(--raised); }
+.task-turn-remedy textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; font-size: 12px; }
 
 .task-conversation-empty { display: grid; min-height: 150px; place-content: center; justify-items: center; color: var(--faint); }
 .task-conversation-empty p,

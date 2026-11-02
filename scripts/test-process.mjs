@@ -127,7 +127,7 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
   finally {
     clearTimeout(timer);
     const cleanupScope = async () => {
-      if (!scope || !existsSync(scope.directory)) return;
+      if (!scope) return;
       try { await scope.stop(); scope.remove(); }
       catch (error) { cleanupErrors.push(error); }
     };
@@ -143,7 +143,7 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
       catch (error) { cleanupErrors.push(error); }
     }
     if (temporary) {
-      try { rmSync(temporary, { recursive: true, force: true }); }
+      try { rmSync(temporary, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 }); }
       catch (error) { cleanupErrors.push(error); }
     }
   }
@@ -165,5 +165,7 @@ export async function runTestProcess(command, args, options = {}, expectedStatus
       code: cause.code, ...captured, cleanupErrors,
     });
   }
-  return { ...result, ...captured, preserved };
+  return { ...result, ...captured, preserved, dispose: async () => {
+    if (scope) { await scope.stop(); scope.remove(); }
+  } };
 }

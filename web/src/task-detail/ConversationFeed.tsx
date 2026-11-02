@@ -418,7 +418,7 @@ export function ConversationFeed({
           {error && <p className="task-conversation-error">{error.message}</p>}
           {/* 回合占位占着不动时,界面上得真有那个开关 —— 不然诊断说了「手动放开」,用户
               却只能去点运行,而那条路只会继续被挡回。 */}
-          {turnRemedy === "reclaim-turn" && <ReclaimTurnSwitch taskId={task.id} onDone={reloadNotices} />}
+          {turnRemedy === "reclaim-turn" && <ReclaimTurnSwitch key={task.id} taskId={task.id} onDone={reloadNotices} />}
           {historyReady && <QuestionHistoryRemainder messages={items.flatMap((item) => item.kind === "user" ? [item.text] : [])} />}
           {footer}
         </div>

@@ -537,10 +537,10 @@ function ReviewRecord({
   }, [onReadTask, open, task]);
   return (
     <article className="team-review-record">
-      <header>
+      <header className="acceptance-host">
         <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}><CaretDown size={13} weight="bold" /></button>
         {visibleIndicator && <TaskStatusDot indicator={visibleIndicator} surface="team" />}
-        <button type="button" className="team-review-record-title" onClick={() => setOpen((value) => !value)}>
+        <button type="button" className="team-review-record-title acceptance-host-title" onClick={() => setOpen((value) => !value)}>
           <span><b>{task.title}</b><em>{role}</em><small>{display.label}</small></span>
           {objective && <p>{objective}</p>}
         </button>
@@ -589,8 +589,8 @@ export function TeamReviewWorkspace({
     : "核对共享分支与独立 worktree 后分别验收或打回。";
   return (
     <section className="team-review-workspace">
-      <header className="team-review-subbar">
-        <div><b>团队验收台</b><small>{sharedNote}</small></div>
+      <header className="team-review-subbar acceptance-host">
+        <div className="acceptance-host-title"><b>团队验收台</b><small>{sharedNote}</small></div>
         <AcceptanceControls task={lead} onTaskUpdated={onTaskUpdated} notify={notify} acceptanceBlock={leadAcceptanceBlock} />
       </header>
       <div className="team-review-scroll">

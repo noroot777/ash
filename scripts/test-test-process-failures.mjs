@@ -1,3 +1,4 @@
+import { cleanupTestResources, withTestResources } from "./test-process-resources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +11,7 @@ import { IS_WINDOWS, isPidAlive } from "./platform.mjs";
 
 const temporary = fs.mkdtempSync(join(tmpdir(), "ash-test-process-failures-"));
 const cleanup = fileURLToPath(new URL("test-process-cleanup.mjs", import.meta.url));
-try {
+await withTestResources(async () => {
   for (const timeout of [false, true]) {
     const marker = join(temporary, `marker-${timeout}`);
     const pid = join(temporary, `pid-${timeout}`);
@@ -70,10 +71,10 @@ try {
       if (String(target) === ${JSON.stringify(join(first.directory, "stopped"))}) throw Object.assign(new Error('injected stopped EACCES'), { code: 'EACCES' });
       return write.call(this, target, ...args);
     }; require('node:module').syncBuiltinESMExports();`);
-  try {
+  await withTestResources(async () => {
     await Promise.all([firstReady, secondReady]);
     if (!IS_WINDOWS) fs.chmodSync(first.directory, 0o500);
-    const output = await runTestProcess(process.execPath, [cleanup, first.directory, second.directory], {
+    const output = await runTestProcess(process.execPath, [cleanup, "--scopes", JSON.stringify([first, second].map((scope) => ({ directory: scope.directory, domain: scope.domain, directoryOwnership: scope.directoryOwnership })))], {
       timeout: 30_000,
       env: { ...process.env, NODE_OPTIONS: `--require ${JSON.stringify(hook)} ${process.env.NODE_OPTIONS ?? ""}` },
     }, 1);
@@ -82,9 +83,11 @@ try {
     // 另一个进程,这些孩子的句柄从来不在它手上:三条绑定一条都拿不出来(见
     // scripts/test-process-terminate.mjs 文件头)。于是它**一个信号都不发**,如实报出来并点名
     // 号码(第 6 轮审查 F1:绑不住就别拿号码去赌,赌输了关掉的是一个无关程序)。
+    if (!IS_WINDOWS) {
     assert.match(output.stderr, /无法安全终止/, "绑不住要如实报,不能静默跳过");
     assert.match(output.stderr, new RegExp(`\\b${firstChild.pid}\\b`), "报告里要点出是哪几个号码");
     assert.ok(isPidAlive(firstChild.pid), "绑不住就不许动手 —— 它必须还在,而不是被按号码杀掉");
+    } else assert.equal(isPidAlive(firstChild.pid), false, "目录写入失败不能阻止内核 Job 停止");
     assert.ok(!isPidAlive(child.pid), "第一域失败不能跳过第二域(那一域的纸条递得进去,它自己退)");
     assert.equal(fs.existsSync(second.directory), false);
     assert.equal(fs.existsSync(first.directory), true, "保留失败登记");
@@ -92,13 +95,11 @@ try {
     fs.chmodSync(first.directory, 0o700);
     await first.stop();
     assert.ok(!isPidAlive(firstChild.pid), "创建者手上有句柄,这一停必须真的把它停掉");
-  } finally {
-    try { fs.chmodSync(first.directory, 0o700); } catch { /* 已经放开了 */ }
-    try { await first.stop(); } catch { /* 上面已经停过 */ }
-    first.remove();
-    if (fs.existsSync(second.directory)) await second.stop();
-    second.remove();
-  }
+  }, [
+    () => { if (fs.existsSync(first.directory)) fs.chmodSync(first.directory, 0o700); },
+    () => first.stop(), () => first.remove(),
+    () => second.stop(), () => second.remove(),
+  ]);
   console.log("✓ 单域停止标记失败不短路其他域清理,失败记录保留,绑不住的如实报");
 
   const originalWrite = fs.writeFileSync;
@@ -111,7 +112,7 @@ try {
     return originalWrite.call(this, target, ...args);
   };
   syncBuiltinESMExports();
-  try {
+  await withTestResources(async () => {
     await assert.rejects(() => runTestProcess(process.execPath, ["-e", "console.log('BUSINESS_STDOUT'); console.error('BUSINESS_STDERR'); setInterval(() => {}, 1000)"], { timeout: 500 }), (error) => {
       assert.equal(error.code, "ETIMEDOUT");
       assert.match(error.stdout, /BUSINESS_STDOUT/);
@@ -121,13 +122,13 @@ try {
       assert.ok(error.errors.some(entry => /清理失败/.test(entry.message)));
       return true;
     });
-  } finally {
+  }, [async () => {
     fs.writeFileSync = originalWrite;
     syncBuiltinESMExports();
     if (failedDirectory && fs.existsSync(failedDirectory)) {
       const scope = new TestProcessScope(failedDirectory);
-      await scope.stop(); scope.remove();
+      await cleanupTestResources([() => scope.stop(), () => scope.remove()]);
     }
-  }
+  }]);
   console.log("✓ 清理异常保留原超时/原因/诊断双流,并汇总清理失败");
-} finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+}, [() => fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 50, retryDelay: 20 })]);

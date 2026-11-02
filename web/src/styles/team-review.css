@@ -16,8 +16,10 @@
 .team-review-record-title p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .team-review-record-body { display: grid; gap: 12px; border-top: .5px solid var(--line); background: color-mix(in lch,var(--canvas) 72%,var(--panel)); padding: 12px; }
 
-.team-accept-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
-.team-accept-actions > button, .team-accept-actions > span { display: inline-flex; height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.team-accept-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 5px; }
+/* min-height 而不是 height:按钮上写的是状态文案(「验收受阻」的整句理由就直接当标签),
+   定高遇到换行会被文字顶穿。 */
+.team-accept-actions > button, .team-accept-actions > span { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 3px 8px; color: var(--muted); font-size: 10.5px; font-weight: 600; text-align: left; }
 .team-accept-actions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .team-accept-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
 .team-accept-actions > button:disabled { cursor: not-allowed; opacity: .52; }
