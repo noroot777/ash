@@ -551,14 +551,21 @@ export async function continueTask(
         else if (fact === "accepted") noteDeliveryAccepted(taskId, ids);
       };
       noteFact(acceptance);
-      try { await settled(acceptance); } catch { /* 记账失败不拖累这一轮 */ }
+      // **失败不许静默**(第 3 轮自由审查 F4):记账失败照旧不拖累这一轮(这里不抛),但它得
+      // 留下痕迹 —— 租约那条路自己带退避补偿(delivery-lease.ts),能走到这儿的是**它之外**
+      // 的记账炸了,咽下去就等于「消息永久卡在待发送」这类现场连一行线索都没有。
+      try { await settled(acceptance); } catch (error) {
+        console.error(`[ash] 任务 ${taskId} 的投递记账(${acceptance})出错，这一轮照常继续:`, error);
+      }
       if (acceptance === "unknown") {
         // **接着等那份凭据**(不阻塞这一轮),**三档一律转给调用方**:它最终落定成 `accepted`
         // 就是补记账,落定成 `refused` 就是归还重投 —— 上一版只转 accepted,于是迟到的拒收
         // 把那张租约永远留在「在途」(第 2 轮自由审查 F3,已实测)。各档的调用点都做成幂等。
         settleLateTurnInput(handle, `任务 ${taskId}`, async (late) => {
           noteFact(late);
-          try { await settled(late); } catch { /* 同上 */ }
+          try { await settled(late); } catch (error) {
+            console.error(`[ash] 任务 ${taskId} 的迟到投递记账(${late})出错:`, error); // 同上,不静默
+          }
         });
       }
     }

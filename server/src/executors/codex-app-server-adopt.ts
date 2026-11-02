@@ -40,6 +40,19 @@
 // 所以这一档现在是:回执 `unknown`(说不上来,投递侧留在在途、不写终态),身份**有界恢复** ——
 // 隔一会儿重读协议日志,拿回 turnId 就算补上了;真等到完成事件而身份仍然空着,就认它
 // (`adoptCompletion`):那一刻这个 thread 上唯一在飞的回合就是我们接回来的这一轮。
+//
+// ── 凭据自己说话,不许挂在另一个本地 Promise 上(第 3 轮自由审查 F3)──────────
+//
+// 上一版把回执写成 `ready.then(...)`:`ready` 是「握手 + 送出回合输入」那段本地流程的
+// Promise,于是**协议层已经点过头、这段流程还没返回**时,整条链一动不动。实测形状(垫片按序
+// 发 `turn/started`、工具事件、回答增量、`turn/completed`,只不回 `turn/start` 的应答并保持
+// 连接):回执停在未落定、`completeTurn` 卡在 `await ready`,而工具事件已经把静默档解除了 ——
+// 「做完了却永远不结束」,正是这条任务要消灭的那个形状。
+//
+// 所以这份账本现在是**一份生命周期**:肯定凭据(`reached`)、否定凭据(`failed` 带着已掌握的
+// 事实)、接管读不出来(`unverifiable`)三个入口各自**当场**把它落定,谁先到算谁 —— 单调、
+// 只落一次、与任何本地流程无关。`started` 是同一份账本的另一面:**回合身份已经有凭据可认**,
+// 完成事件等的是它(通知和应答哪个先到都算),不是等那段本地流程返回。
 import type { InputAcceptance } from "./types.js";
 
 /** 协议日志给出的三档(产出方见 ./codex-app-server-state.ts)。 */
@@ -77,22 +90,53 @@ export function adoptionUnverifiable(reattach: AdoptedTurn | undefined): boolean
  * 这正是第 1 轮自由审查 F4 要钉的那条线:把 `ready` 的 reject 一律读成「没送出去」会把已经
  * 开跑的回合的输入再送一遍。
  */
-export function createTurnInputLedger(): {
+export interface TurnInputLedger {
+  /** 回合输入已经写进 stdin(还没拿到应答)。 */
   wrote(): void;
+  /** 看到本回合的**开始凭据**:当场落 `accepted`,并放行等身份的那一路。 */
   reached(): void;
-  acceptanceOf(ready: Promise<unknown>, unverifiable: boolean): Promise<InputAcceptance>;
-} {
+  /** 这条路走不通了(握手失败、连接断开、启动被拒):按**已掌握的事实**落定。 */
+  failed(): void;
+  /** 接管时协议日志读不出来:当场落 `unknown`(别等任何本地流程),身份另走有界恢复。 */
+  unverifiable(): void;
+  /** 有没有开始凭据。给「应答迟到但 `turn/started` 已经到了」那一档当判据。 */
+  sawStart(): boolean;
+  /** 回执本体(单调,只落一次;三档语义见 ./types.ts)。 */
+  readonly acceptance: Promise<InputAcceptance>;
+  /** **身份有凭据可认了**:`turn/started` 通知或 `turn/start` 应答,哪个先到算哪个;
+   *  这条路彻底断了也会放行(由调用方去看 `finished`/`settling`),绝不悬着。 */
+  readonly started: Promise<void>;
+}
+
+export function createTurnInputLedger(): TurnInputLedger {
   let written = false;
   let reached = false;
+  let settle: ((acceptance: InputAcceptance) => void) | null = null;
+  const acceptance = new Promise<InputAcceptance>((resolve) => {
+    settle = (value) => { resolve(value); settle = null; }; // 单调:第一个落定的赢
+  });
+  let release: (() => void) | null = null;
+  const started = new Promise<void>((resolve) => {
+    release = () => { resolve(); release = null; };
+  });
   return {
     wrote: () => { written = true; },
-    reached: () => { reached = true; },
-    acceptanceOf: (ready, unverifiable) => ready.then(
-      // `ready` 成功**不等于**送到了:接管时「读不出来」那一档也让它 resolve,而那一档我们
-      // 什么都不知道 —— 报 `unknown`,别把自己的放行当成对方的确认(第 2 轮自由审查 F4)。
-      (): InputAcceptance => (unverifiable && !reached ? "unknown" : "accepted"),
-      (): InputAcceptance => (reached ? "accepted" : written ? "unknown" : "refused"),
-    ),
+    reached: () => {
+      reached = true;
+      settle?.("accepted"); // 协议点过头 = 那串字已经出去了,后面怎么断链都不许退回重投
+      release?.();
+    },
+    failed: () => {
+      settle?.(reached ? "accepted" : written ? "unknown" : "refused");
+      release?.(); // 等身份的那一路也得放行,否则完成事件永远结算不了
+    },
+    unverifiable: () => {
+      settle?.("unknown"); // 说不上来 ≠ 成功:投递侧据此留在在途(第 2 轮自由审查 F4)
+      release?.();         // 身份此刻确实没有,但完成事件那一路要能走到「认领」那一步
+    },
+    sawStart: () => reached,
+    acceptance,
+    started,
   };
 }
 
@@ -100,8 +144,13 @@ export function createTurnInputLedger(): {
  * **身份的有界恢复**:协议日志刚才读不出来,过一会儿再读几次。
  *
  * 为什么有界而不是一直重读:这一档的作用是把「一瞬的 I/O 故障」跟「这份日志真的没了」分开,
- * 前者几秒内就会自己好。拿回身份(或拿回一条完成记录)就停;几次都读不出来就停下并说一句 ——
- * 剩下那条路是等 `adoptCompletion` 认领完成事件。
+ * 前者几秒内就会自己好。读出**结论**就停;几次都读不出来就停下并说一句 —— 剩下那条路是等
+ * `adoptCompletion` 认领完成事件。
+ *
+ * 「结论」是**两头**都算(第 3 轮自由审查 F3):读回身份(肯定)**和**读出 `never-started`
+ * (否证)。上一版只认肯定那一头,于是重读明明已经能确证「这一轮的输入一个字都没出去」,也
+ * 只会打印一句日志就算了:没有拒收、没有失败结算,那个「线程已恢复、回合从未启动」的闲置
+ * 进程照旧原地等到天荒地老 —— 正是这条任务要消灭的形状,只不过晚了几秒才成立。
  *
  * 计时器一律 `unref`:它绝不该让进程多活一毫秒(同 ../turn-input-acceptance.ts 的有界等待)。
  */
@@ -122,7 +171,9 @@ export function recoverAdoptedIdentity(
     } catch {
       state = { turnId: "", evidence: "unreadable" }; // 读本身抛了:跟读不出来同档
     }
-    if (adoptionDriven(state) && apply(state)) return;
+    // 肯定与否证都是结论,都交给调用方(它负责各自的出路);`unreadable` 才继续重读。
+    const conclusive = adoptionDriven(state) || state.evidence === "never-started";
+    if (conclusive && apply(state)) return;
     if (left <= 0) { onGiveUp(); return; }
     const timer = setTimeout(tick, everyMs);
     timer.unref?.();

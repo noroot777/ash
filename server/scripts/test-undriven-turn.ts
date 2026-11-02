@@ -41,6 +41,10 @@ process.env.ASH_LAX_DONE = "1"; // 这里验的是投递与接管,不是严格 d
 // detached 的「连接关闭」是按 rc 文件轮询发现的(约 400ms 一拍),压过去 §4a 就会读成
 // `unknown` 而不是 `refused` —— 红的是夹具而不是判据。有界等待本身在 §3 里单独钉。
 process.env.ASH_TURN_INPUT_ACK_MS = "5000";
+// `turn/start` 的**应答期限**(codex-app-server.ts 的 CODEX_TURN_START_ACK_MS;真实默认一分钟)。
+// §⑰ 两段都按它定位:a 段要在期限**之前**就凭完成事件收口(所以断言给 2.5 秒),b 段要的正是
+// 期限本身到期。压成 5 秒 = 两边各留一半余量,谁跑到期限之外都读得出来。
+process.env.ASH_CODEX_TURN_START_ACK_MS = "5000";
 const originalPath = process.env.PATH;
 
 const { installFakeCodexAppServer, codexMode } = await import("./undriven-turn-fixture.js");
@@ -148,6 +152,10 @@ console.log("③ 输入回执三态(turn-input-acceptance.ts)");
   assert.equal(await awaitTurnInput({ inputAccepted: new Promise(() => {}) }), "unknown");
   assert.ok(Date.now() - started >= 300, `有界等待该真的等到期限(配的是 400ms,实测 ${Date.now() - started}ms)`);
   process.env.ASH_TURN_INPUT_ACK_MS = "5000";
+// `turn/start` 的**应答期限**(codex-app-server.ts 的 CODEX_TURN_START_ACK_MS;真实默认一分钟)。
+// §⑰ 两段都按它定位:a 段要在期限**之前**就凭完成事件收口(所以断言给 2.5 秒),b 段要的正是
+// 期限本身到期。压成 5 秒 = 两边各留一半余量,谁跑到期限之外都读得出来。
+process.env.ASH_CODEX_TURN_START_ACK_MS = "5000";
   ok("一直不落定 → unknown(有界等待,不许挂死调用方)");
 }
 
@@ -473,6 +481,43 @@ console.log("⑯ unknown 之后迟到的拒收必须把租约还回去(第 2 轮
   check(done.log.join(",") === "sent",
     `accepted 是终局:迟到的拒收不许把已送达的行退回重投(动作:${done.log.join(",")})`);
 
+  // ⑯c **协议定论 ≠ 副作用完成**(第 3 轮自由审查 F4):确认/归还那一笔写库失败时,
+  // 定论照旧不翻盘,但欠账得自己补上 —— 上一版一次失败就把消息永久卡在「待发送 + 租约还在」。
+  const flaky = (fails: number, retryMs = [1, 1, 1]) => {
+    const log: string[] = [];
+    let left = fails;
+    return {
+      log,
+      lease: createDeliveryLease({
+        label: "单元", retryMs,
+        onAccepted: () => { if (left-- > 0) { log.push("sent-fail"); throw new Error("database is locked"); } log.push("sent"); },
+        onReturn: () => { if (left-- > 0) { log.push("return-fail"); throw new Error("database is locked"); } log.push("return"); },
+      }),
+    };
+  };
+  const once = flaky(1);
+  await once.lease.settle("accepted");
+  for (let i = 0; i < 100 && once.lease.owes(); i += 1) await sleep(20);
+  check(once.log.join(",") === "sent-fail,sent" && !once.lease.owes(),
+    `送达确认第一次没落盘 → 退避补上(动作:${once.log.join(",")});上一版:这一条永久 sent 不了`);
+  check(once.lease.handled(), "补上了就仍然归回执这条路管(调用点的善后照旧不碰它)");
+
+  const backOnce = flaky(1);
+  await backOnce.lease.settle("refused");
+  for (let i = 0; i < 100 && backOnce.lease.owes(); i += 1) await sleep(20);
+  check(backOnce.log.join(",") === "return-fail,return" && !backOnce.lease.owes(),
+    `归还第一次没落盘 → 退避补上(动作:${backOnce.log.join(",")});上一版:租约永远留着,补发扫描领不走`);
+
+  const hopeless = flaky(99, [1, 1]);
+  await hopeless.lease.settle("refused");
+  for (let i = 0; i < 100 && !hopeless.lease.acceptance(); i += 1) await sleep(20);
+  for (let i = 0; i < 100 && hopeless.lease.handled(); i += 1) await sleep(20);
+  check(hopeless.log.filter((x) => x === "return-fail").length === 3,
+    `补到上限(1 + 2 拍)才放弃(实际 ${hopeless.log.filter((x) => x === "return-fail").length} 次)`);
+  check(!hopeless.lease.handled() && hopeless.lease.owes(),
+    "放弃不等于假装完成:交回调用点并留给开机对账(handled 转假、欠账如实报着)");
+  check(hopeless.lease.acceptance() === "refused", "协议定论本身不翻盘(欠账与定论是两个状态)");
+
   // ⑯b 真实链路:初次有界等待读到 unknown、最终回执落定成 refused —— 行必须回到可领取状态。
   // 垫片答完 initialize 就对 `thread/resume` 一声不吭(于是回合输入一个字都没写出去),两秒半
   // 后断线 → 最终回执是确证的 refused。实测过的那条洞:租约永远留着,消息停在待发送、任务
@@ -498,10 +543,141 @@ console.log("⑯ unknown 之后迟到的拒收必须把租约还回去(第 2 轮
   // 又起一轮真 CLI。
   await db.delete(scheduledMessages).where(eq(scheduledMessages.id, row.id));
   process.env.ASH_TURN_INPUT_ACK_MS = "5000";
+// `turn/start` 的**应答期限**(codex-app-server.ts 的 CODEX_TURN_START_ACK_MS;真实默认一分钟)。
+// §⑰ 两段都按它定位:a 段要在期限**之前**就凭完成事件收口(所以断言给 2.5 秒),b 段要的正是
+// 期限本身到期。压成 5 秒 = 两边各留一半余量,谁跑到期限之外都读得出来。
+process.env.ASH_CODEX_TURN_START_ACK_MS = "5000";
   check(!after.deliveringSince,
     `迟到的拒收归还了租约(deliveringSince=${after.deliveringSince ?? "已清"}),下一轮扫描领得走它`);
   check(after.status === "pending" && !after.sentAt,
     `行回到待发送、没有被提升成 sent(status=${after.status}, sentAt=${after.sentAt ?? "无"})`);
+}
+
+console.log("⑰ 协议点过头、应答却不回来:回执与结算都不许挂在那段本地流程上(第 3 轮自由审查 F3)");
+{
+  // ⑰a **实测过的那个形状**:垫片按序发 turn/started、工具事件、回答、turn/completed,
+  // 唯独不回 turn/start 的应答,并且**保持连接**。旧代码:回执停在未落定(投递链一动不动),
+  // completeTurn 卡在 await ready —— 「做完了却永远不结束」,而工具事件早把静默档解除了。
+  const noAck = (quiet: boolean) => spawn(process.execPath, ["-e", `
+const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+let buf = "";
+process.stdin.on("data", (chunk) => {
+  buf += chunk.toString();
+  for (;;) {
+    const nl = buf.indexOf("\\n");
+    if (nl < 0) return;
+    const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+    if (line.trim()) { try { recv(JSON.parse(line)); } catch {} }
+  }
+});
+function recv(m) {
+  if (m.id === undefined) return;
+  if (m.method === "thread/start" || m.method === "thread/resume") {
+    send({ id: m.id, result: { thread: { id: "th-noack" }, model: "fake-codex" } });
+    return;
+  }
+  if (m.method === "turn/start") {
+    if (${quiet ? "true" : "false"}) return; // b 段:连通知都没有,只能靠期限
+    send({ method: "turn/started", params: { threadId: "th-noack", turn: { id: "t-noack" } } });
+    send({ method: "item/started", params: { threadId: "th-noack", turnId: "t-noack",
+      item: { type: "commandExecution", id: "c-1", command: "sleep 3600" } } });
+    setTimeout(() => {
+      send({ method: "item/completed", params: { threadId: "th-noack", turnId: "t-noack",
+        item: { type: "agentMessage", id: "m-1", text: "跑完了。" } } });
+      send({ method: "turn/completed", params: { threadId: "th-noack",
+        turn: { id: "t-noack", status: "completed", error: null } } });
+    }, 30);
+    return; // **应答永远不发**,而且不断线
+  }
+  send({ id: m.id, result: {} });
+}
+setInterval(() => {}, 1000);
+`], { stdio: ["pipe", "pipe", "pipe"] });
+
+  const live = noAck(false);
+  strays.add(live);
+  const began = Date.now();
+  const handle = openCodexAppServer({
+    bin: "codex", args: [], cwd: root, prompt: "跑一条长命令", env: { CODEX_HOME: join(root, "codex-home") },
+    startProcess: () => live,
+  });
+  const receipt = await Promise.race([
+    handle.inputAccepted,
+    sleep(1_000).then(() => "还没落定" as const),
+  ]);
+  check(receipt === "accepted",
+    `开始凭据一到就落 accepted(实际 ${receipt});挂在那段本地流程上 = 投递链一直在途`);
+  const kinds: string[] = [];
+  let exitStatus: number | null = null;
+  const consume = (async () => {
+    for await (const event of handle.events) {
+      kinds.push(event.kind);
+      if (event.kind === "done") exitStatus = event.exitStatus;
+    }
+  })();
+  await Promise.race([consume, sleep(6_000)]);
+  const took = Date.now() - began;
+  check(kinds.includes("done") && exitStatus === 0,
+    `完成事件照旧收口这一轮(kinds=${kinds.join(",") || "无"}, exitStatus=${exitStatus})`);
+  check(took < 2_500,
+    `而且是**凭完成事件**收的,不是等那个 5 秒期限(实际 ${took}ms);旧代码:无限等`);
+  handle.kill();
+  await Promise.race([consume, sleep(2_000)]);
+
+  // ⑰b **一条通知都没有**那一档:凭据一个也没有,只剩期限。它必须在期限上按失败收口 ——
+  // 旧代码里 turn/start 压根没有时限,这条路就是「谁都不会再说话」的无界等待本体。
+  const mute = noAck(true);
+  strays.add(mute);
+  const muteBegan = Date.now();
+  const quiet = openCodexAppServer({
+    bin: "codex", args: [], cwd: root, prompt: "这一句谁都没收下", env: { CODEX_HOME: join(root, "codex-home") },
+    startProcess: () => mute,
+  });
+  const quietKinds: string[] = [];
+  let quietExit: number | null = null;
+  const quietConsume = (async () => {
+    for await (const event of quiet.events) {
+      quietKinds.push(event.kind);
+      if (event.kind === "done") quietExit = event.exitStatus;
+    }
+  })();
+  await Promise.race([quietConsume, sleep(12_000)]);
+  check(quietKinds.includes("done") && quietExit === 1,
+    `到期就按失败收口(kinds=${quietKinds.join(",") || "无"}, exitStatus=${quietExit});不许一直等`);
+  const waited = Date.now() - muteBegan;
+  check(waited < 10_000, `而且是有界的(实际等了 ${waited}ms,期限 5 秒)`);
+  const quietReceipt = await Promise.race([quiet.inputAccepted, sleep(1_000).then(() => "还没落定" as const)]);
+  check(quietReceipt === "unknown",
+    `回执是「说不上来」(实际 ${quietReceipt}):那串字已经写进 stdin 了,不许当成确证拒收去重投`);
+  quiet.kill();
+  await Promise.race([quietConsume, sleep(2_000)]);
+}
+
+console.log("⑰c 接管后的重读:否证也是结论,不能只认肯定那一头(第 3 轮自由审查 F3)");
+{
+  const { recoverAdoptedIdentity } = await import("../src/executors/codex-app-server-adopt.js");
+  type Adopted = Parameters<Parameters<typeof recoverAdoptedIdentity>[1]>[0];
+  const run = (reads: Adopted[]) => new Promise<{ got: Adopted[]; gaveUp: boolean }>((resolve) => {
+    const got: Adopted[] = [];
+    let gaveUp = false;
+    let i = 0;
+    recoverAdoptedIdentity(
+      () => reads[Math.min(i++, reads.length - 1)]!,
+      (state) => { got.push(state); resolve({ got, gaveUp }); return true; },
+      () => { gaveUp = true; resolve({ got, gaveUp }); },
+      { attempts: 4, everyMs: 5 },
+    );
+  });
+  const blind: Adopted = { turnId: "", evidence: "unreadable" };
+  const negative = await run([blind, { turnId: "", evidence: "never-started" }]);
+  check(negative.got.at(0)?.evidence === "never-started" && !negative.gaveUp,
+    `日志读得动了、确证没凭据 → 这个结论交到调用方手上(实际 ${negative.got.at(0)?.evidence ?? "一次都没交"});`
+    + "上一版一律包装成 started,于是否证永远走不到拒收那条路");
+  const positive = await run([blind, { turnId: "t-back", evidence: "started" }]);
+  check(positive.got.at(0)?.turnId === "t-back", "肯定那一头照旧(身份读回来了就停,这一档没被改坏)");
+  const hopelessRead = await run([blind]);
+  check(hopelessRead.gaveUp && hopelessRead.got.length === 0,
+    "一直读不出来 → 几次之后交代一句收手(剩下那条路是认领完成事件)");
 }
 
 for (const child of strays) { try { child.kill("SIGKILL"); } catch { /* 已经没了 */ } }

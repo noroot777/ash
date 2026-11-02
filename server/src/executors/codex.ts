@@ -241,7 +241,14 @@ export class CodexExecutor implements AgentExecutor {
           // (见 codex-app-server-adopt.ts 的 recoverAdoptedIdentity)。
           reread: () => {
             const again = readCodexAppServerState(detached.ashPaths!.out, opts.sessionId);
-            return { turnId: again.turnId ?? "", reviewTurnId: again.reviewTurnId, completedTurn: again.completedTurn };
+            // **evidence 原样带回去**:重读读出 `never-started` 时接管方要据此按失败收口
+            // (第 3 轮自由审查 F3 —— 上一版在这儿丢掉它,于是否证永远走不到拒收那条路)。
+            return {
+              turnId: again.turnId ?? "",
+              reviewTurnId: again.reviewTurnId,
+              completedTurn: again.completedTurn,
+              evidence: again.evidence,
+            };
           },
         },
         startProcess: () => child,
