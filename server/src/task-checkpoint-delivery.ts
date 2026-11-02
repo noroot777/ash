@@ -99,7 +99,8 @@ export type CheckpointHold = "mine" | "lost" | "unknown";
 
 export async function holdCheckpointOwnership(receipt: Row): Promise<CheckpointHold> {
   try {
-    const held = await db.update(scheduledMessages).set({ deliveringSince: now() }).where(and(
+    const stamp = now();
+    const held = await db.update(scheduledMessages).set({ deliveringSince: stamp }).where(and(
       eq(scheduledMessages.id, receipt.id),
       // 老库开出来的凭证没有身份,只能退回比租约戳(它那一代就是这个口径)。
       receipt.deliveringOwner === null
@@ -107,7 +108,12 @@ export async function holdCheckpointOwnership(receipt: Row): Promise<CheckpointH
         : eq(scheduledMessages.deliveringOwner, receipt.deliveringOwner),
       isNotNull(scheduledMessages.checkpointTaken),
     )).returning({ id: scheduledMessages.id });
-    if (held.length) return "mine";
+    if (held.length) {
+      // 手上这张票的租约值跟着换:老库凭证(没有身份)此后的归还/补记凭它证明「还是我这一次」
+      // (delivery-fence.ts),不同步就会把自己那一次也挡在外面。
+      receipt.deliveringSince = stamp;
+      return "mine";
+    }
     console.warn(`[ash] 续跑凭证已被接管 task=${receipt.taskId} message=${receipt.id}`
       + `（这一趟不起跑，本地投递登记交回，这张票由新持有者处置）`);
     forgetCheckpointDelivering(receipt.id);

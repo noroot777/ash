@@ -102,6 +102,9 @@ export async function dispatchPendingMessage(
           : started
             ? "回合起跑失败，原文退回待发送"
             : "回合被其它执行抢占、工作区正被验收占用，或起跑前的资格检查读不到状态");
+      // 这一次由我了结了(归还或取消):租约那条补偿到此为止,不许再醒来碰这几行 ——
+      // 它们可能已经被下一次投递领走了(第 1 轮自由审查 F1)。
+      lease.callerReturned();
     }
   } catch (error) {
     if (!lease.callerMustReturn()) {
@@ -112,11 +115,13 @@ export async function dispatchPendingMessage(
     if (!claimed.length) scheduleRedelivery(message, `领取待发送消息失败：${detail}`);
     else if (monitor) {
       await retry(`续跑尚未送达，原文退回待发送：${detail}`);
+      lease.callerReturned();
       return;
     }
     for (const current of claimed) {
       await cancelPendingMessage(current, `${context.team ? "调度台不可用" : "续跑失败"}：${detail}`).catch(() => {});
     }
+    lease.callerReturned();
   } finally {
     if (lease.callerMustReturn() && !monitor) {
       for (const checkpoint of checkpoints.reverse()) await checkpoint.restore().catch(() => {});

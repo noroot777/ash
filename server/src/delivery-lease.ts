@@ -75,6 +75,15 @@ export interface DeliveryLease {
   acceptance(): InputAcceptance | null;
   /** 这档定论的持久处置**还欠着吗**(补偿还在跑)。只用于观测,不参与归还授权。 */
   owes(): boolean;
+  /**
+   * 调用点**自己已经把这一次还掉了**(`callerMustReturn()` 授权的那一支归还成功)。
+   *
+   * 归还责任从此了结:租约那条补偿要是还排着,醒来就不许再碰这一行(第 1 轮自由审查 F1:
+   * 外层归还成功、消息重投并被新一轮收下之后,旧补偿醒来把**新一轮**的租约清掉,同一条消息
+   * 执行两遍)。库那一侧另有一道条件更新兜着(./delivery-fence.ts),这里是生命周期那一半 ——
+   * 责任要交接,不能靠两边都写、指望谁写中谁算数。
+   */
+  callerReturned(): void;
 }
 
 export function createDeliveryLease(opts: {
@@ -135,6 +144,10 @@ export function createDeliveryLease(opts: {
   return {
     acceptance: () => conclusion,
     owes: () => owed !== null,
+    callerReturned: () => {
+      owed = null;
+      returned = true;
+    },
     // **只看协议定论**(判据见文件头最后一节):
     //   · 还没定论 → 回执压根没来过,照调用点原来的口径归还重投;
     //   · accepted → 永远不授权归还,哪怕 `markSent` 还欠着(欠账只能补,不能靠退回来结);
