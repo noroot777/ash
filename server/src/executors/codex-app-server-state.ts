@@ -35,6 +35,17 @@ export function readCodexAppServerState(
   let completedTurn: { id: string; status: string; error?: unknown } | undefined;
   let reviewTurnId: string | null = null;
   let goal: CliGoal | null | undefined;
+  /**
+   * 进入一个回合。**同一回合的完成事实单调**(第 1 轮自由审查 F2,实测):通知与请求应答会
+   * 交错,`started → completed → turn/start 的应答` 这种顺序在实时协议里本来就有(适配器那边
+   * 专门处理过「通知先到、应答迟到」)。上一版不论 id 一律清掉完成事实,于是一个已经答完的
+   * 回合在重放里只剩「已开始」—— 接管后等一个永远不会再发的完成通知,任务一直停在进行中。
+   * 只有**确证进入了另一个回合**才允许把完成事实清掉。
+   */
+  const enterTurn = (id: string): void => {
+    turnId = id;
+    if (completedTurn && completedTurn.id !== id) completedTurn = undefined;
+  };
   let raw = "";
   try {
     raw = readFileSync(path, "utf8");
@@ -62,8 +73,7 @@ export function readCodexAppServerState(
     // (`detachedPathsFor`),所以不可能把上一轮的凭据算到这一轮头上。`turn/steer` 的应答同样带
     // `turn` —— 那也确实是「这一轮已经开始」的凭据。
     if (message.id !== undefined && !message.result?.reviewThreadId && typeof message.result?.turn?.id === "string") {
-      turnId = message.result.turn.id;
-      completedTurn = undefined;
+      enterTurn(message.result.turn.id);
     }
     if (message.method === "thread/started" && !threadId && typeof message.params?.thread?.id === "string") {
       threadId = message.params.thread.id;
@@ -71,8 +81,7 @@ export function readCodexAppServerState(
       && (!threadId || message.params?.threadId === threadId)
       && typeof message.params?.turn?.id === "string") {
       threadId = message.params?.threadId ?? threadId;
-      turnId = message.params.turn.id;
-      completedTurn = undefined;
+      enterTurn(message.params.turn.id);
     } else if (message.method === "turn/completed"
       && message.params?.threadId === threadId
       && typeof message.params?.turn?.id === "string"

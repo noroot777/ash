@@ -658,4 +658,3 @@ function threadParams(opts: CodexAppServerOpts, base: Record<string, unknown> = 
     } } : {}),
   };
 }
-
