@@ -133,6 +133,8 @@ export async function buildFreeWorkflowRows(
     disputeResolvedAt: round.disputeResolvedAt ?? null,
     disputeResolutionNote: round.disputeResolutionNote ?? null,
     disputeSupersededAt: round.disputeSupersededAt ?? null,
+    historyRefs: Array.isArray(round.historyRefs) ? round.historyRefs : null,
+    carries: Array.isArray(round.carries) ? round.carries : null,
     startedAt: round.startedAt,
     endedAt: round.endedAt,
   })));

@@ -187,6 +187,12 @@ export const freeReviewRounds = sqliteTable(
     disputeSupersededAt: text("dispute_superseded_at"),
     // 非空 = 这一轮的任务书还没送进会话,正在等一个空闲回合窗口（见 `FreeReviewDispatchIntent`）。
     dispatch: text("dispatch", { mode: "json" }).$type<FreeReviewDispatchIntent>(),
+    // 这一轮任务书里「此前报过的发现」清单**实际内联了**哪几个编号（`review-recurrence.ts`）。
+    // 审查者声明承接时只认这里面的：系统发过什么就认什么，不按「库里有这一条」放宽。
+    historyRefs: text("history_refs", { mode: "json" }).$type<string[]>(),
+    // 审查者在 report_stage 里声明、且**校验通过**的承接：本轮第 finding 条拦验收发现是清单里
+    // `from` 那一条的复发。校验不过的一条都不落（失效向不触发，见 review-recurrence.ts）。
+    carries: text("carries", { mode: "json" }).$type<{ finding: number; from: string }[]>(),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
   },
@@ -285,6 +291,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
       dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
       dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
       dispute_deferred_task_id TEXT, dispute_superseded_at TEXT, dispatch TEXT,
+      history_refs TEXT, carries TEXT,
       started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
@@ -345,6 +352,9 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     // 「这一轮的任务书交出去了、还没送进会话」那份未完成的派发意图（见 `FreeReviewDispatchIntent`）。
     // 老行留 null = 没有在途派发,照旧按原路对账。
     "ALTER TABLE free_review_rounds ADD COLUMN dispatch TEXT",
+    // 同类问题承接（review-recurrence.ts）：发过的清单编号 + 审查者声明的承接。老行留 null = 没有。
+    "ALTER TABLE free_review_rounds ADD COLUMN history_refs TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN carries TEXT",
     "ALTER TABLE free_review_debate_turns ADD COLUMN summary TEXT",
   ]) {
     try {

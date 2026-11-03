@@ -539,6 +539,47 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     { domains: ["x.com", "weixin.com", "excalidraw.com"] },
   ));
 
+  // ── 同类问题熔断（review-recurrence.ts）：**只有触发轮**的修复交接多出一段 ──────────
+  //
+  // 种在所有别的样本之后：这两轮挂在 pb-task 名下，早种的话会改掉上面那几份历史清单的形状。
+  // 第 1 轮报两条，第 2 轮的第 1 条承接第 1 轮第 1 条 → 连续两轮 → 熔断。`delivered/repair-breaker`
+  // 与 `delivered/repair` 的差别**只许**是那一段指令（闸里逐字节核），这就是「其余轮投递态一个
+  // 字节不变」的证明。
+  const { chainSequence } = await import("../src/review-recurrence-refs.js");
+  const breakerRun = { ...(run as object), id: "pb-run-breaker", currentRound: 2 } as never;
+  await db.insert(freeReviewRuns).values({ ...(breakerRun as object), createdAt: "2026-10-28T00:00:00.000Z" } as never);
+  const chain = (await chainSequence("pb-task")).get("pb-run-breaker")!;
+  for (const round of [1, 2]) {
+    await db.insert(freeReviewRounds).values({
+      id: `pb-run-breaker-${round}`, runId: "pb-run-breaker", round, status: "failed", conclusion: "verify_failed",
+      reviewedCommit: "0".repeat(40), startedAt: at, endedAt: at,
+      carries: round === 2 ? [{ finding: 1, from: `${chain}.1.1` }] : null,
+    } as never);
+    const report = freeReviewReportPath("pb-task", "pb-run-breaker", round);
+    mkdirSync(dirname(report), { recursive: true });
+    writeFileSync(report, "## 结论\n\n**必须修的问题**：\n\n### 1\n- 你会遇到：切换项目后筛选条件丢失\n\n" +
+      "### 2\n- 你会遇到：导出按钮点了没有反应\n");
+  }
+  // 审查者侧：清单带编号时多出的那一句（`RECURRENCE_HINT`）连同行首编号一起量。
+  add("section/history-refs", await freeReviewHistorySection("pb-task", { runId: "pb-run-breaker", round: 3 }));
+  add("delivered/repair-breaker", withGlobalBrowserPolicy(
+    assembleTurnPrompt({
+      invite: "",
+      brief: "",
+      handoffNotice: "",
+      peerNotice: "",
+      craft: { freshContext: false, verifying: false },
+      userText: await freeRepairPrompt("pb-task", breakerRun),
+      workspaceReset: "",
+      completion: FOLLOW_UP_REMINDER("pb-task", "done", false, false, "", true),
+      backgroundWait: backgroundWaitFor("claude"),
+      direction: DIRECTION_PROTOCOL("pb-token"),
+      reviewReminder: "",
+    }),
+    "full",
+    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
+  ));
+
   const registered = new Map<string, Parameters<typeof toolTexts>[0]>();
   const sink = { registerTool(name: string, config: never) { registered.set(name, config); } } as never;
   (await import("../../mcp/src/tools/task-turn.js")).registerTaskTurnTools(sink);

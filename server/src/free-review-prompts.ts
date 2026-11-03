@@ -1,7 +1,9 @@
 // 自由工作流的三段 prompt 文案（从 free-workflow.ts 拆出，纯行数拆分）：
 // 派审回合、自动修复交接、轮数用尽后的手动修复交接；外加「驳回 / 辩论」那条支线的
 // 措辞（修复交接里的驳回选项、辩论每一段的开场白）。
-import { freeReviewDebateTurns, freeReviewDebates, freeReviewRuns, tasks } from "./db/schema.js";
+import { and, eq } from "drizzle-orm";
+import { db } from "./db/index.js";
+import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
 import { freeReviewEvidenceDir, freeReviewReportPath } from "./free-review-files.js";
 import { reviewRequestReference } from "./review-request-context.js";
 import { settledRulingsFor } from "./free-review-settled.js";
@@ -11,7 +13,8 @@ import {
   REVIEWER_REGRESSION_CLAUSE,
 } from "@ash/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
-import { freeReviewHistorySection } from "./review-history.js";
+import { freeReviewHistory } from "./review-history.js";
+import { recurrenceRepairNote, roundRecurrence } from "./review-recurrence.js";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -38,7 +41,12 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
   });
   // 前面各轮（含别的审查链）报过的现象行：跨 run 的会话是断的，不搬过去它就只能把自己
   // 复现到的那一条当独立缺陷报上来（理由见 review-history.ts 文件头）。
-  const history = await freeReviewHistorySection(task.id, { runId: run.id, round });
+  const history = await freeReviewHistory(task.id, { runId: run.id, round });
+  // 清单里**实际内联了**哪几个编号落到这一轮上：审查者交卷时声明的承接只认这些（review-recurrence.ts）。
+  // 夹具传进来的 run 不在库里时这一笔什么都不改。
+  await db.update(freeReviewRounds).set({ historyRefs: history.refs.length ? history.refs : null })
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, round)))
+    .catch(() => undefined);
   const acceptedMerge = run.targetKind === "accepted_merge" && run.targetBranch && run.targetBaseCommit && run.targetCommit;
   const target = acceptedMerge
     ? `\n\n本轮审查的是已经验收后的合并快照，不是原任务工作区：\n` +
@@ -61,7 +69,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     // 所以把「能复现」收窄到最重的那几条，其余条目的去处由扫描义务那一节交代。
     `你是独立审查者，不是继续实现需求。默认产物**可能**有问题，主动把问题找全；最严重的那几条要做到能复现。\n\n` +
     `任务：${task.id}\n${requirements}\n\n` +
-    `${focus}${settled}${history}${note}${target}\n\n` +
+    `${focus}${settled}${history.text}${note}${target}\n\n` +
     // 扫描义务摆在具体动作之前：先定「这一轮要扫到什么程度」，再说「先看 git status」。
     REVIEW_SWEEP_PROTOCOL + regression + "\n\n" +
     `先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
@@ -134,10 +142,20 @@ function disputeOption(taskId: string): string {
     `驳回后**不要**调 complete_task（这一轮停在等裁定，不是完成）。`;
 }
 
+/**
+ * 同一谱系连续两轮没收口时附在这一条交接里的那段指令（只这一轮，判据见 review-recurrence.ts）。
+ * 摆在「先读报告」之后、类问题边界之前：它改的是这一轮**怎么修**，后面那几段照旧成立。
+ */
+async function recurrenceNote(taskId: string, runId: string, round: number): Promise<string> {
+  const found = await roundRecurrence(taskId, runId, round);
+  return found ? recurrenceRepairNote(found) : "";
+}
+
 export async function freeRepairPrompt(taskId: string, run: ReviewRunRow): Promise<string> {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按报告修复，不要扩大原任务边界。` +
+    await recurrenceNote(taskId, run.id, run.currentRound) +
     CLASS_REPAIR_NOTE +
     `修复并验证后调 complete_task(taskId="${taskId}")；已预约的复审会在本回合正常结束后自动启动。\n\n` +
     `证据目录：${dir}` +
@@ -225,6 +243,7 @@ export async function freeManualRepairPrompt(
         `，不要再驳回；确有做不到的地方就用 ask_question 说清楚，别默默跳过。\n`
       : "") +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, round)})，再按第 ${round} 轮意见修复，不要扩大原任务边界。` +
+    await recurrenceNote(taskId, run.id, round) +
     CLASS_REPAIR_NOTE +
     `修复并验证后调 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
     `用户若在修复期间预约了复审，本回合正常结束后按预约开始，否则等用户决定再审或验收。\n\n` +

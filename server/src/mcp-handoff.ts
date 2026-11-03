@@ -202,7 +202,7 @@ async function applyReplay(
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
       try {
         const freeReview = await reportFreeReviewConclusion(taskId, stage, { bySessionRecovery: true,
-          verificationBasis: call.args.verificationBasis, expectedDirectionToken: directionToken });
+          verificationBasis: call.args.verificationBasis, expectedDirectionToken: directionToken, recurs: call.args.recurs });
         if (freeReview) {
           return `自由审查结论（${stage}）当时因 MCP 通道中断没能写回，已补录到第 ${freeReview.round} 轮。`;
         }

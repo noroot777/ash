@@ -240,8 +240,8 @@ export function mountTaskStageRoutes(api: Hono): void {
   api.post("/tasks/:id/stage", async (c) => {
     const taskId = c.req.param("id");
     const body = await c.req
-      .json<{ stage?: unknown; verificationBasis?: unknown }>()
-      .catch(() => ({}) as { stage?: unknown; verificationBasis?: unknown });
+      .json<{ stage?: unknown; verificationBasis?: unknown; recurs?: unknown }>()
+      .catch(() => ({}) as { stage?: unknown; verificationBasis?: unknown; recurs?: unknown });
     if (!isTaskStage(body.stage)) {
       return c.json({ error: `stage 非法，只能是：${STAGE_ORDER.join(" | ")}` }, 400);
     }
@@ -281,7 +281,9 @@ export function mountTaskStageRoutes(api: Hono): void {
 
     try {
       const { reportFreeReviewConclusion } = await import("./free-workflow.js");
-      const freeReview = await reportFreeReviewConclusion(taskId, body.stage, { verificationBasis: body.verificationBasis, expectedTask: task });
+      const freeReview = await reportFreeReviewConclusion(taskId, body.stage, {
+        verificationBasis: body.verificationBasis, expectedTask: task, recurs: body.recurs,
+      });
       if (freeReview) {
         return c.json({ reported: true, taskId, stage: body.stage, freeReview, timelineRecorded: false });
       }

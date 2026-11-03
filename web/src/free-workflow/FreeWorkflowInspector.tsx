@@ -91,8 +91,14 @@ function executionLabel(execution: FreeWorkflowExecution): string {
 function reviewRoundLabel(round: FreeReviewRound): string {
   if (round.status === "reviewing") return "审查中";
   if (round.conclusion === "verified") return "已通过";
-  if (round.conclusion === "verify_failed") return `未通过${disputeSuffix(round)}`;
+  if (round.conclusion === "verify_failed") return `未通过${disputeSuffix(round)}${recurrenceSuffix(round)}`;
   return "异常";
+}
+
+// 同一类问题连着几轮没收口、这一轮的修复已经换成「改全或交给你选」（服务端熔断，见
+// server/src/review-recurrence.ts）。措辞与时间线那一条同源，刷新后照样在。
+function recurrenceSuffix(round: FreeReviewRound): string {
+  return round.recurrence ? ` · 同类问题第 ${round.recurrence} 轮未收口，已熔断` : "";
 }
 
 // 驳回过的轮次不能只显示「未通过」：那一轮到底是照改了、还是被用户判作废了，是两件

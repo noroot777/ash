@@ -90,6 +90,8 @@ const BUDGETS: Record<string, number> = {
   "section/settled-reviewer-100-nofile": 4750,
   "section/settled-executor-100-nofile": 1050,
   "section/history-100": 3100,
+  // 清单带编号的那一版（同类问题承接，review-recurrence.ts）：行首编号 + 一句 `RECURRENCE_HINT`。
+  "section/history-refs": 1550,
   // ── 投递态（`DELIVERED`）：真正发出去的那一条，片段相加之后的样子 ─────────────
   // 审查这几条在 2026-11-03 各涨了 198B：「跨回合的等待别交给内置后台」那一句（用户拍板
   // 放宽，见 TARGETS 那两行）。
@@ -100,6 +102,9 @@ const BUDGETS: Record<string, number> = {
   // 目录名含「。」：比普通续跑多出用户引的那条旧地址，本轮入口必须照样在。
   "delivered/review-resume-dotdir": 7100,
   "delivered/repair": 6650,
+  // 熔断轮（同一谱系连续两轮没收口）：比上一条只多那一段指令（≤ 300B，逐字节核在
+  // prompt-recurrence-budget.ts）。其余轮次的投递态由上一行原数钉着、一个字节没动。
+  "delivered/repair-breaker": 6950,
   // ── 没有旧上下文的那几条首条消息（产出质量规则唯一的落脚处）─────────────────
   //
   // 四个入口各走一个拼装器，所以各有一份。**口径**：`fresh-*` 那两份量的是所有任务共有
@@ -142,7 +147,9 @@ const BUDGETS: Record<string, number> = {
   "mcp/queue_remove": 190,
   "mcp/queue_reorder": 270,
   "mcp/read_task_transcript": 1150,
-  "mcp/report_stage": 2050,
+  // 2026-11-03 +100（1952 → 2119 实测）：`recurs` 字段说明（`RECURS_FIELD_GUIDE`，≤ 200B），
+  // 审查者声明同类问题承接的唯一入口。用户给的预算是「字段说明 ≤ 200 + 清单旁一句 ≤ 120」。
+  "mcp/report_stage": 2150,
   "mcp/requeue_task": 560,
   "mcp/resolve_group": 530,
   "mcp/resolve_project": 250,
@@ -349,7 +356,7 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
   {
     name: "CLASS_PROBLEM_BOUNDARY",
     where: ["repair/auto-bare", "repair/auto", "repair/manual", "repair/manual-upheld",
-      "stress/repair-auto", "stress/repair-auto-100", "delivered/repair"],
+      "stress/repair-auto", "stress/repair-auto-100", "delivered/repair", "delivered/repair-breaker"],
   },
   { name: "GATE_FAILURE_REGRESSION_CARVE_OUT", where: ["accept/gate-failure"] },
   // 产出质量规则：**只在没有旧 CLI 上下文的执行首条消息里**。这一行同时钉住两面 ——
@@ -365,7 +372,7 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
   {
     name: "BACKGROUND_WAIT_WARNING",
     where: ["turn/background-wait", "delivered/fresh-run", "delivered/fresh-review-run", "delivered/invited-first",
-      "delivered/repair", "delivered/review-dispatch", "delivered/review-resume",
+      "delivered/repair", "delivered/repair-breaker", "delivered/review-dispatch", "delivered/review-resume",
       "delivered/review-resume-nomanifest", "delivered/review-resume-dotdir"],
   },
   {
@@ -395,7 +402,7 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
       "turn/completion-reminder-free", "turn/follow-up-reminder-free",
       // 审查/验证那几条投递消息里没有它：那一轮的完成协议走 `verifying` 分支，执行者
       // 回归登记本来就不是审查者的事（`delivered/fresh-review-run` 同理）。
-      "delivered/repair", "delivered/fresh-run", "delivered/invited-first"],
+      "delivered/repair", "delivered/repair-breaker", "delivered/fresh-run", "delivered/invited-first"],
   },
   {
     name: "REGRESSION_POLICY",
@@ -406,7 +413,7 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
       "turn/completion-reminder-free", "turn/follow-up-reminder-free",
       // 续跑那条只带审查者面的一句话口径（`REVIEWER_REGRESSION_CLAUSE`），不带全文
       // —— 这是 `freeReviewResumeMessage` 一贯的分寸：续跑不重发任务书。
-      "delivered/review-dispatch", "delivered/repair",
+      "delivered/review-dispatch", "delivered/repair", "delivered/repair-breaker",
       "delivered/fresh-run", "delivered/invited-first",
       "mcp/report_stage", "mcp/start_monitor"],
   },
@@ -670,6 +677,9 @@ try {
   //     「这条消息有多大、哪一段落在哪」，它量「拼装有没有把片段弄丢」），顺带让这份
   //     不至于破 700 行（第 2 轮审查 F2）。
   await (await import("./prompt-segment-retention.js")).assertSegmentRetention();
+
+  // ⑥⁵ 同类问题熔断的那几段：字节上限、只在触发轮出现、单源（同样拆出去，理由同上）。
+  await (await import("./prompt-recurrence-budget.js")).assertRecurrenceBudget(samples);
 
   // ⑦ 用户追认的体积目标：硬断言，超过即红（棘轮防回弹）。
   for (const { id, target, what } of TARGETS) {

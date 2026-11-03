@@ -67,6 +67,8 @@ import { claimOwnTurn, releaseTurn, turnRole } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { noteReviewInput, reviewInputHoldNow } from "./review-input-verdict.js";
 import { REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
+import { extractReportFindings } from "./review-history.js";
+import { parseCarries } from "./review-recurrence.js";
 import { REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
 import { id, now } from "./util.js";
 import type { Actor } from "./auth/context.js";
@@ -243,7 +245,11 @@ export async function cancelFreeReviewReservation(taskId: string): Promise<FreeW
 export async function reportFreeReviewConclusion(
   taskId: string,
   stage: string,
-  opts: { bySessionRecovery?: boolean; verificationBasis?: unknown; expectedTask?: ConclusionTask; expectedDirectionToken?: string | null } = {},
+  opts: {
+    bySessionRecovery?: boolean; verificationBasis?: unknown; expectedTask?: ConclusionTask; expectedDirectionToken?: string | null;
+    /** report_stage 的 `recurs`（同类问题承接，见 review-recurrence.ts）：读不懂的一条都不落，从不因它拒收结论。 */
+    recurs?: unknown;
+  } = {},
 ): Promise<{ runId: string; round: number } | null> {
   const run = await reviewingRun(taskId);
   if (!run) return null;
@@ -267,9 +273,14 @@ export async function reportFreeReviewConclusion(
   }
   // report.md 是唯一必交证据——只写在 prompt 里挡不住，结论入口硬校验：读取走安全解析
   // （拒 symlink 祖先），且正文 trim 后非空（两个空白字节的「报告」不算报告）。
-  if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
+  const report = readFreeReviewReport(taskId, run.id, run.currentRound);
+  if (!report.trim()) {
     throw new Error(`审查结论必须先落报告：请把非空报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
   }
+  // 承接只对拦验收的结论有意义；「本轮第 N 条」按报告里真抽得到的条数核，编号按这一轮真发出去的清单核。
+  const carries = stage === "verify_failed"
+    ? parseCarries(opts.recurs, extractReportFindings(report).length, new Set(round.historyRefs ?? []))
+    : [];
   const checked = await checkRegressionConclusion(taskId, freeReviewEvidenceDir(taskId, run.id, run.currentRound), stage,
     opts.verificationBasis);
   await commitRegressionConclusion(checked, async (transaction) => {
@@ -283,7 +294,8 @@ export async function reportFreeReviewConclusion(
     const evidence = checked && (await transaction.select().from(regressionEvidence)
       .where(eq(regressionEvidence.directory, checked.directory)))[0];
     if (evidence?.settlement && currentRound.conclusion !== stage) throw new Error("本轮已进入结算，不能更改结论");
-    await transaction.update(freeReviewRounds).set({ conclusion: stage }).where(eq(freeReviewRounds.id, round.id));
+    await transaction.update(freeReviewRounds).set({ conclusion: stage, carries: carries.length ? carries : null })
+      .where(eq(freeReviewRounds.id, round.id));
   });
   bus.publish({ type: "task.review", taskId });
   return { runId: run.id, round: run.currentRound };

@@ -253,6 +253,18 @@ export const PLAIN_SUMMARY_EXAMPLE =
   + "——用户看不出你要他决定什么。正面：「报告说我漏了一道并发保护，但那段代码只在单线程里跑，"
   + "这一条我认为不成立；另外两条我已经改好了。」";
 
+/**
+ * 审查者侧同类问题承接的两段常驻文案（判据与熔断在服务端 `review-recurrence.ts`）。
+ *
+ * 预算是用户直接问过的（体积闸 `test-prompt-budget.ts` 逐字节钉着）：字段说明 ≤ 200B、清单旁那一句
+ * ≤ 120B。字段说明讲格式，清单旁那一句只讲「编号拿来干什么」—— 那一句只在清单真列出了编号时才发，
+ * 第一轮审查和折成摘要的清单一个字节都不多付。
+ */
+export const RECURS_FIELD_GUIDE =
+  '可选,仅 verify_failed:本轮拦验收第几条承接历史清单哪条,{"本轮条序":"清单行首编号"},如 {"1":"2.3.1"};不是复发别填,填错按没填算';
+export const RECURRENCE_HINT =
+  "哪条拦验收发现是上面某条的复发或没修好，就在 report_stage 的 recurs 里填它行首编号。\n";
+
 // 审查链只落四个持久状态：reviewing 是唯一的「活」态（旁路审查回合正在跑），
 // passed / failed 是链的终局，stopped 是「最后一轮未通过后停住」。
 // 「修复中 / 等待复审 / 结论已过期」这些叙事一律**推导**，不落库：
@@ -415,6 +427,11 @@ export interface FreeReviewRound {
   screenshots: string[];
   /** 执行者对这一轮结论的驳回；null = 没驳回过（绝大多数轮次）。 */
   dispute: FreeReviewDispute | null;
+  /**
+   * 同一类拦验收问题已经连续几轮没收口（审查者在交卷时声明的承接串起来的长度），到了熔断阈值
+   * 才给：这一轮的修复不再按点修。省略 = 没熔断（绝大多数轮次）。判据在服务端 review-recurrence.ts。
+   */
+  recurrence?: number;
   startedAt: string;
   endedAt: string | null;
   /**
