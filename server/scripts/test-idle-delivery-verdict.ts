@@ -24,7 +24,9 @@
 //  D8 换一个进程(重启)读同一份持久记录:照样按住、交给用户 —— 有派发意图(补办那一头)与没有
 //     (结算那一头)两种都钉;D9 同一现场换成没有 acceptance 这一位的老凭据:缺席照 unknown 读;
 //  D6/D7 回执写不进库:悬着的照样按住、定论照样按定论结算 —— 缺席不许被读成「没这回事」;
-//  I1/I2 输入身份与代次(第 2 轮 R2):前一次输入迟到的定论写不进后一次的凭据,上一代次的不当这一代读。
+//  I1/I2 输入身份与代次(第 2 轮 R2):前一次输入迟到的定论写不进后一次的凭据,上一代次的不当这一代读;
+//  D10 「继续本轮审查」续哪条会话只认这一轮输入实际进过的那条:新链起跑前就失败、自己没有会话时,
+//     上一条链的审查会话(停过 / 留过上下文)既挡不住入口,也不被当成这一轮已做过的工作续跑。
 //
 // 跑：npm -w server run test:idle-delivery-verdict
 import assert from "node:assert/strict";
@@ -51,9 +53,9 @@ let stage: Stage = {};
 
 try {
   const {
-    db, sessions, tasks, handleFreeWorkflowSettlement, reconcileFreeReviews,
+    db, sessions, tasks, freeReviewRuns, freeReviewRounds, handleFreeWorkflowSettlement, reconcileFreeReviews,
     reviewDispatchArmed, continueWhenIdle, releaseTurn, turnIdentity,
-    timeline, until, runOf, roundOf, reviewerSessions, freeTask, armedTask, finish, reopenFailedFreeReview,
+    timeline, until, runOf, runRow, roundOf, reviewerSessions, freeTask, armedTask, finish, reopenFailedFreeReview,
   } = await startHarness();
   const { CodexExecutor } = await import("../src/executors/codex.js");
   const run = function (_opts: RunOpts): RunHandle {
@@ -228,7 +230,7 @@ try {
   const stateRetry = async (id: string) => {
     const latest = (await freeWorkflowState(id)).reviews[0];
     const current = latest?.rounds.find((round) => round.round === latest.currentRound);
-    return current?.retry ? { runId: latest!.id, round: current.round, generation: current.retry.generation } : null;
+    return current?.retry ? { runId: latest!.id, round: current.round, ...current.retry } : null;
   };
   const retryRejection = async (id: string, request: RetryRequest) =>
     retryTurnRejection((await readRetryTurnFacts(id, request))!.facts)?.error ?? null;
@@ -458,7 +460,49 @@ try {
     console.log("✓ D3 审查派发 · 拒收:当场照实收尾,时间线写明拒收,不重投");
   }
 
-  await finish(["verdict-dispatch-accepted", "verdict-dispatch-unknown-resolve", "verdict-dispatch-unknown-reject",
+  // ── D10 续哪条会话只认这一轮自己的归属(下一次自由审查第 2 轮 R1) ────────────────────
+  // 上一条链真跑过一回合审查(交付凭据记着它进了哪条会话);之后新派的一条在起跑前就失败了,
+  // 自己一条会话都没有 —— 那时「全任务最近的 reviewer 会话」就是上一条链的那一条。
+  for (const [label, stopped] of [["D10", true], ["D10'", false]] as const) {
+    const id = `verdict-retry-foreign-${stopped ? "stopped" : "context"}`;
+    stage = { acceptance: Promise.resolve("accepted") };
+    const first = await dispatch(id);
+    await until("上一条链没交卷就收尾", async () => (await runRow(first.id)).status === "failed");
+    const old = (await db.select().from(sessions).where(eq(sessions.taskId, id))).find((row) => row.role === "reviewer")!;
+    assert.equal((await stateRetry(id))?.sessionId, old.id, "上一条链自己那一轮:续的就是输入进过的那条会话");
+    if (stopped) await db.update(sessions).set({ stoppedAs: "canceled" }).where(eq(sessions.id, old.id));
+    // 新链起跑前失败留下的样子(`failReviewStart` 收尾后):failed + 当前轮 error,这一轮没有任何会话。
+    const later = new Date(Date.now() + 60_000).toISOString();
+    const fresh = `${first.id}-next`;
+    await db.insert(freeReviewRuns).values({ ...(await runRow(first.id)), id: fresh, createdAt: later, updatedAt: later,
+      status: "failed", currentRound: 1, finishedAt: later });
+    await db.insert(freeReviewRounds).values({ ...(await roundOf(first.id)), id: `${fresh}-r1`, runId: fresh,
+      status: "error", conclusion: null, dispatch: null, startedAt: later, endedAt: later });
+    const retry = await stateRetry(id);
+    assert.deepEqual(retry && { runId: retry.runId, sessionId: retry.sessionId }, { runId: fresh, sessionId: null },
+      "新这一轮还没有会话:不借上一条链的");
+    assert.equal(await retryRejection(id, { review: retry! }), null,
+      stopped ? "上一条链的审查会话停过,不该挡住新这一轮的「继续本轮审查」(从前 409「你手动停止的」)"
+        : "新这一轮照样能继续");
+    assert.equal((await readRetryTurnFacts(id, { review: retry! }))?.latest, null, "落点是「没有会话」,不是上一条链那条");
+    assert.ok(await retryRejection(id, { sessionId: old.id }),
+      "只带 sessionId 的老请求拿上一条链的会话来,同样续不到它");
+    const receipt = deferred<InputAcceptance>();
+    stage = { acceptance: receipt.promise };
+    const reopened = await reopenFailedFreeReview(id);
+    assert.equal(reopened.resumed, false, "新这一轮从头交代任务书,不是「从中断处继续」");
+    assert.doesNotMatch(timeline(id), /从中断处继续/, "时间线不许把上一条链的工作说成这一轮的");
+    await until("新这一轮的审查会话起来了", async () => (await reviewerSessions(id)) === 2);
+    // 意图里记着的会话策略也得是「新开」:补投会原样重放它,否则断电重启后照样接进上一条链。
+    assert.deepEqual((await roundOf(fresh)).dispatch && {
+      freshSession: (await roundOf(fresh)).dispatch!.freshSession, resume: (await roundOf(fresh)).dispatch!.resumeSessionId ?? null,
+    }, { freshSession: true, resume: null }, "持久意图同样不借上一条链的会话");
+    receipt.resolve("accepted");
+    console.log(`✓ ${label} 新链起跑前失败、上一条链的审查会话${stopped ? "被手动停过" : "留着上下文"}:`
+      + "入口照常、不借它的停止记录与上下文,从头交代任务书");
+  }
+
+  await finish(["verdict-dispatch-accepted", "verdict-retry-foreign-stopped", "verdict-retry-foreign-context", "verdict-dispatch-unknown-resolve", "verdict-dispatch-unknown-reject",
     "verdict-dispatch-restart", "verdict-dispatch-late-accepted",
     "verdict-dispatch-late-refused", "verdict-dispatch-write-fail-pending", "verdict-dispatch-write-fail-accepted",
     "verdict-dispatch-refused"]);

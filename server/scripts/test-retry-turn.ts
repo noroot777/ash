@@ -196,7 +196,7 @@ const compactTurn = sess({ id: "c", role: "single", exitStatus: 0, sideTurn: tru
 assert.ok(why(task({ workflowMode: "free" }), compactTurn, { reviewBlocker: null }),
   "老请求(只带 sessionId)照旧按最新会话分档:那条旁路回合不给重跑");
 assert.equal(why(task({ workflowMode: "free" }), reviewer, { kind: "review", reviewBlocker: null }), null,
-  "按审查身份来的:落点是最近那条审查会话,它之后插进来的旁路回合不算数");
+  "按审查身份来的:落点是这一轮输入进过的那条会话(readRetryTurnFacts 按交付凭据给),之后插进来的旁路回合不算数");
 assert.equal(why(task({ workflowMode: "free" }), null, { kind: "review", reviewBlocker: null }), null,
   "一条审查会话都没有(崩在起跑前)也放行:服务端按审查身份重跑,从头交代任务书");
 assert.equal(

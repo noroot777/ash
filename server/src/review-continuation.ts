@@ -264,7 +264,9 @@ export async function beginReviewContinuation(transaction: ConclusionTransaction
 
 export async function commitReviewTurnDelivery(taskId: string, receipt: ReviewStartReceipt | undefined,
   process?: { pid: number; unitToken?: string | null },
-  persistRunner?: (transaction: ConclusionTransaction) => Promise<void>): Promise<void> {
+  persistRunner?: (transaction: ConclusionTransaction) => Promise<void>,
+  /** 输入进了哪条会话:「继续本轮审查」认会话只认这一份归属(free-review-retry-identity.ts)。 */
+  sessionId?: string): Promise<void> {
   if (!receipt) return;
   await db.transaction(async (transaction) => {
     const task = (await transaction.select().from(tasks).where(eq(tasks.id, taskId)))[0];
@@ -297,7 +299,7 @@ export async function commitReviewTurnDelivery(taskId: string, receipt: ReviewSt
       // 留下的也是「说不清」而不是缺席(review-input-verdict.ts)。
       deliveredReview: { directory: receipt.directory, generation: receipt.generation, identity: receipt.identity,
         input: receipt.delivery, pid: process?.pid, unitToken: process?.unitToken, confirmedAt: now(),
-        acceptance: "unknown" } } })
+        acceptance: "unknown", ...(sessionId ? { sessionId } : {}) } } })
       .where(eq(tasks.id, taskId));
   }, { behavior: "immediate" });
 }

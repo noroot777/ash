@@ -69,14 +69,6 @@ import { baseFallbackNote } from "./base-fallback-notice.js";
 // 再导出，调用方（task-resume、runs 那几处）不用跟着改导入路径。
 export type { ContinueTaskOptions, ResumeReason, TurnStartDecline } from "./task-continue-options.js";
 
-async function setStatus(
-  taskId: string,
-  status: Parameters<typeof setTaskStatus>[1],
-  opts?: Parameters<typeof setTaskStatus>[2],
-) {
-  await setTaskStatus(taskId, status, opts);
-}
-
 
 export { reconcileInterrupted } from "./task-reconcile.js";
 
@@ -298,7 +290,7 @@ export async function continueTask(
       task, project, recorded, resuming,
     });
     baseFallback = resolvedFallback;
-    await setStatus(taskId, "running");
+    await setTaskStatus(taskId, "running");
     // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。摘牌
     // 刻意排在**所有可能抛错的解析之后**(执行器解析、工作目录解析都会抛):解析失败时
     // 什么都还没破坏,catch 恢复 status 就是完整恢复(审查实测:claude+haiku+high 在
@@ -546,7 +538,7 @@ export async function continueTask(
         });
       }
     };
-    if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner);
+    if (reviewStart) await commitReviewTurnDelivery(taskId, reviewStart, handle.detached, persistRunner, sessId);
     else await persistRunner(db);
     // 后台问一句够不够得着 ash MCP:只提示不拦、不等(ash-mcp-turn-hint.ts);旁路回合在起跑处已过闸。
     if (!sideTurn) void hintAshMcpForTurn({ taskId, agentType: agent, executorId: profileId, ownerUserId: runOwner ?? null, cwd, sessionId: sessId });

@@ -426,8 +426,9 @@ export interface FreeReviewRound {
    * 服务端判定这一轮此刻能「继续本轮审查」时给出(只出现在最近那条链的当前轮上),带着这一轮
    * 此刻的代次。前端原样带回重跑接口,服务端按它认人 —— 不按「任务最新的会话是不是审查者」认,
    * 那会被 `/compact` 这类不结束审查的旁路回合挤掉。省略 = 不能继续。
+   * `sessionId` = 这一轮输入实际进过的会话(续它的上下文);null = 这一轮还没有,会从头交代任务书。
    */
-  retry?: { generation: string | null };
+  retry?: { generation: string | null; sessionId: string | null };
 }
 
 export interface FreeReviewRun {

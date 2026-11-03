@@ -10,11 +10,23 @@
 // 代次(`regression_evidence.generation`,每次重跑都会换)。服务端在状态里把这份身份发给前端
 // (`FreeReviewRound.retry`),前端原样带回来;对不上 = 页面是旧的(中间被重跑过、换了一轮),
 // 拒绝而不是照跑。能不能继续仍是 `freeReviewRetryBlocker` 那一句,这里不另起一套判据。
+//
+// **续哪条会话**同样只认这一轮自己的归属(下一次自由审查第 2 轮 R1,已实测):从前取「全任务最近
+// 那条 reviewer 会话」—— 新派的审查在起跑前就失败、自己一条会话都没有时,选中的是**上一条链**
+// 的审查会话:它被手动停过,入口就被它的停止记录挡掉(409「你手动停止的」);它产出过正文,
+// 就被当成「这一轮已经做过的工作」从中断处续跑,新审查连任务书都没收到。归属的唯一依据是持久
+// 交付凭据(`deliveredReview`):它记着这份输入**实际进了哪条会话**、属于哪个目录(= 哪条链的
+// 哪一轮)。目录对得上才算这一轮的会话(同轮前几次尝试的上下文可以续用);对不上、或者老凭据
+// 没记会话,就是「这一轮没有可续的会话」—— 重新交代完整任务书,停止记录、执行器指纹也无从借用。
+// 判据只有一份(`reviewRetrySessionId`,住在 free-review-round.ts 里,重跑那一侧直接用它),状态、
+// 重跑接口、真正重跑三处都读它。
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewRounds, regressionEvidence, tasks } from "./db/schema.js";
 import { freeReviewEvidenceDir } from "./free-review-files.js";
-import { freeReviewRetryBlocker, reviewAwaitsInputDecision, type ReviewRunRow } from "./free-review-round.js";
+import {
+  freeReviewRetryBlocker, reviewAwaitsInputDecision, reviewRetrySessionId, type ReviewRunRow,
+} from "./free-review-round.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ReviewRoundRow = typeof freeReviewRounds.$inferSelect;
@@ -27,13 +39,13 @@ async function generationOf(taskId: string, run: ReviewRunRow, round: number): P
     .where(eq(regressionEvidence.directory, freeReviewEvidenceDir(taskId, run.id, round)))).at(0)?.generation ?? null;
 }
 
-/** 这一轮能「继续本轮审查」就给出它此刻的代次,不能就是 null。`run` 必须是最近那条链。 */
+/** 这一轮能「继续本轮审查」就给出它此刻的代次与可续的会话,不能就是 null。`run` 必须是最近那条链。 */
 export async function reviewRetryGeneration(
   task: TaskRow, run: ReviewRunRow | null, round: ReviewRoundRow | null,
-): Promise<{ generation: string | null } | null> {
+): Promise<{ generation: string | null; sessionId: string | null } | null> {
   if (!run || !round || round.round !== run.currentRound) return null;
   if (freeReviewRetryBlocker(run, round, await reviewAwaitsInputDecision(task, run, round))) return null;
-  return { generation: await generationOf(task.id, run, round.round) };
+  return { generation: await generationOf(task.id, run, round.round), sessionId: reviewRetrySessionId(task, run) };
 }
 
 /** 页面带回来的身份还是不是**此刻**那一轮那一次。不是就给出拒绝理由。 */

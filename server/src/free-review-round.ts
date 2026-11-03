@@ -56,8 +56,21 @@ export type ReviewDispatchResponsibility = { generation: string; claimToken: str
  * `FreeReviewDispatchIntent.freshSession`),又要在 `launchReviewRound` 里用来真的拉会话。
  * 两处各写一遍公式,漂了就会变成「补办后接进上一条链的旧对话」那一类静默故障(第 1 轮审查 F4)。
  */
-export function freshSessionFor(run: ReviewRunRow, round: number, retry: boolean): boolean {
-  return !retry && (round === 1 || run.targetKind === "accepted_merge");
+export function freshSessionFor(run: ReviewRunRow, round: number, resuming: boolean): boolean {
+  // `resuming` = 续这一轮自己那条会话(`reviewRetrySessionId`)。重跑而这一轮还没有会话时**照原派发
+  // 的规则来**:从前重跑一律不新开,下游就按「同类型最近的审查会话」挑,新链第 1 轮在起跑前失败
+  // 后重跑,接进的是上一条链的旧对话(下一次自由审查第 2 轮 R1)。
+  return !resuming && (round === 1 || run.targetKind === "accepted_merge");
+}
+
+/**
+ * 这一轮审查的输入实际进过的那条会话;这一轮还没有就是 null。「继续本轮审查」的停止判断、执行器
+ * 指纹、续哪条上下文都只读这一份归属(理由整段在 free-review-retry-identity.ts 文件头)。
+ */
+export function reviewRetrySessionId(task: Pick<TaskRow, "id" | "waitOwnership">, run: ReviewRunRow): string | null {
+  const delivered = task.waitOwnership?.deliveredReview;
+  return delivered?.sessionId && delivered.directory === freeReviewEvidenceDir(task.id, run.id, run.currentRound)
+    ? delivered.sessionId : null;
 }
 
 // 唯一的「活」状态是 reviewing（审查旁路回合正在跑）。修复中/等待复审这些叙事不落库，
@@ -313,7 +326,7 @@ export async function launchReviewRound(
   // 历史会话」(下游默认动作,不按 run 隔离),于是接进了上一条链的旧对话(第 1 轮审查 F4)。
   // 原值跟着意图落库,补办时原样传回来(老行的回落见 `redeliverReviewRound`)。
   const freshSession = opts.redeliver ? opts.redeliver.freshSession
-    : freshSessionFor(run, run.currentRound, !!opts.retry);
+    : freshSessionFor(run, run.currentRound, !!opts.retry && !!opts.resumeSessionId);
   const label = run.targetKind === "accepted_merge" ? "合并结果审查" : `自由工作流第 ${run.currentRound} 轮审查`;
   await appendTaskTimeline(task.id, opts.redeliver
     // 补投不写「审查开始」:那一句上一次已经写过了,再写一遍会让时间线读成开了两轮。
@@ -546,7 +559,7 @@ export async function reviewAwaitsInputDecision(
  */
 export async function reopenFailedFreeReview(
   taskId: string,
-  opts: { holdTurn?: boolean; resumeSessionId?: string } = {},
+  opts: { holdTurn?: boolean } = {},
 ): Promise<{ state: FreeWorkflowApiState; resumed: boolean; dispatched: boolean }> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
@@ -575,6 +588,8 @@ export async function reopenFailedFreeReview(
       const round = run ? await roundOf(run) : null;
       const blocker = freeReviewRetryBlocker(run, round, await reviewAwaitsInputDecision(task, run, round));
       if (blocker) throw new Error(blocker);
+      // 续哪条会话由这里按这一轮自己的归属定,不收调用方挑的:没有就从头交代任务书。
+      const resumeSessionId = reviewRetrySessionId(task, run!) ?? undefined;
       const at = now();
       const directory = freeReviewEvidenceDir(taskId, run!.id, run!.currentRound);
       await evidenceState(taskId, directory);
@@ -598,8 +613,8 @@ export async function reopenFailedFreeReview(
           await transaction.update(freeReviewRounds).set({
             status: "reviewing", conclusion: null, endedAt: null,
             dispatch: preparingReviewDispatch(after, at,
-              { resumeSessionId: opts.resumeSessionId ?? null, retry: true,
-                freshSession: freshSessionFor(run!, run!.currentRound, true) }),
+              { resumeSessionId: resumeSessionId ?? null, retry: true,
+                freshSession: freshSessionFor(run!, run!.currentRound, !!resumeSessionId) }),
           }).where(eq(freeReviewRounds.id, round!.id));
           await transaction.update(freeReviewRuns).set({ status: "reviewing", updatedAt: at, finishedAt: null })
             .where(eq(freeReviewRuns.id, run!.id));
@@ -635,7 +650,7 @@ export async function reopenFailedFreeReview(
       let handed = false;
       try {
         const { resumed, dispatched } = await launchReviewRound(task, revived,
-          { resumeSessionId: opts.resumeSessionId, retry: true, responsibility });
+          { resumeSessionId, retry: true, responsibility });
         handed = dispatched;
         if (!dispatched) {
           await appendTaskTimeline(taskId, "这次「继续本轮审查」没有另起投递：这一轮已经有一份"

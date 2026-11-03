@@ -14,7 +14,12 @@ export type TaskWaitOwnership = {
   deliveredReview?: { directory: string; generation: string; identity: ReviewTargetIdentity;
     input?: ReviewDelivery; pid?: number; unitToken?: string | null; confirmedAt: string;
     /** 协议回执(spawn 之后才落定,所以后补;语义与读法见 ../review-input-verdict.ts)。 */
-    acceptance?: InputAcceptance };
+    acceptance?: InputAcceptance;
+    /**
+     * 这份输入实际进了哪条会话(`sessions.id`)。「继续本轮审查」只续这一条(../free-review-retry-identity.ts);
+     * 缺席 = 加这一位之前的老凭据,按「这一轮没有可续的会话」处理,重新交代完整任务书。
+     */
+    sessionId?: string };
   start?: {
     directory: string;
     generation: string;

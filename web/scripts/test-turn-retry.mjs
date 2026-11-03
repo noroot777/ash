@@ -72,38 +72,41 @@ assert.equal(
 // 服务端把「这一轮能继续」连同代次发在当前轮的 `retry` 上(free-review-retry-identity.ts);
 // 前端原样带回。下一次自由审查第 1 轮 R1:审查等着用户拿主意时跑一条 `/compact`,最新会话成了
 // 那条旁路回合,按「最新会话是不是审查者」认人的入口当场消失、刷新也回不来。
-const identity = { runId: "run-1", round: 2, generation: "g-2" };
+const identity = { runId: "run-1", round: 2, generation: "g-2", sessionId: "rev" };
 const at = (id, role, t, over = {}) => sess({ id, role, startedAt: t, turnStartedAt: t, ...over });
 const free = task({ workflowMode: "free" });
-const reviewTarget = (sessionId, exitStatus = null) => ({ kind: "review", sessionId, exitStatus, review: identity });
+const reviewTarget = (sessionId, exitStatus = null, review = identity) => ({ kind: "review", sessionId, exitStatus, review });
 const impl = at("impl", "single", "2026-11-01T00:00:00Z", { exitStatus: 0 });
 const rev = at("rev", "reviewer", "2026-11-01T01:00:00Z", { exitStatus: null });
 const compact = at("compact", "single", "2026-11-01T02:00:00Z", { exitStatus: 0, sideTurn: true });
 
 assert.deepEqual(target(free, [], { reviewRetry: identity, sessions: [impl, rev] }), reviewTarget("rev"),
-  "审查会话一个气泡都没有 → 照样给入口,续的是那条审查会话");
+  "审查会话一个气泡都没有 → 照样给入口,续的是这一轮输入进过的那条会话");
 assert.deepEqual(target(free, [agentItem(impl)], { reviewRetry: identity, sessions: [impl, rev] }), reviewTarget("rev"),
   "最后一条气泡是实现者的 → 入口仍是那一轮审查");
 assert.deepEqual(target(free, [agentItem(compact)], { reviewRetry: identity, sessions: [impl, rev, compact] }),
-  reviewTarget("rev"), "R1:审查等人时插进一条 /compact 旁路回合,入口不许被挤掉");
+  reviewTarget("rev"), "审查等人时插进一条 /compact 旁路回合,入口不许被挤掉");
 assert.deepEqual(target(free, [agentItem(sess({ id: "r1", role: "reviewer" }))], { reviewRetry: identity }),
-  reviewTarget(null), "不给会话行时照样按审查身份出,只是说不出续哪条会话(服务端自己找)");
-assert.deepEqual(target(free, [], { reviewRetry: identity, sessions: [] }), reviewTarget(null),
-  "连一条审查会话都没有(崩在起跑前)也给入口 —— 服务端按审查身份认人");
+  reviewTarget("rev"), "不给会话行时照样按审查身份出(停止记录无从核对,交给服务端)");
 assert.equal(target(free, [agentItem(rev)], { sessions: [impl, rev] }), null,
   "审查链不能继续(没有 retry)→ 不出:不拿「有审查会话」推「能继续」");
 assert.equal(target(task(), [agentItem(rev)], { reviewRetry: identity, sessions: [impl, rev] }), null,
   "不是自由工作流就没有可继续的链");
 assert.equal(target(free, [], { reviewRetry: identity, sessions: [impl, { ...rev, stoppedAs: "canceled" }] }), null,
-  "手动停掉的审查回合不出(服务端同样 409)");
+  "这一轮自己那条会话是手动停掉的 → 不出(服务端同样 409)");
 assert.equal(
   target(task({ workflowMode: "free", status: "canceled" }), [agentItem(rev)], { reviewRetry: identity, sessions: [rev] })?.kind,
   "review", "审查档不要求任务停在 done(paused 上派审也合法)");
-// 续哪条审查会话按回合起点认(续聊复用老会话):老审查会话刚续过一回合,它才是最近那条。
-assert.equal(target(free, [], { reviewRetry: identity, sessions: [
-  at("rev-old", "reviewer", "2026-11-01T00:00:00Z", { turnStartedAt: "2026-11-01T03:00:00Z" }),
-  at("rev-new", "reviewer", "2026-11-01T02:00:00Z")] })?.sessionId, "rev-old",
-"续哪条审查会话按 turnStartedAt 认,与服务端 latestSessionOf 同口径");
+// 下一次自由审查第 2 轮 R1:新派的审查在起跑前就失败,这一轮一条会话都没有;任务里最近的
+// reviewer 会话属于**上一条链**。借它的停止记录会把入口挡掉,借它的正文会把新审查当成「已经
+// 做过」从中断处续跑 —— 这一轮的会话只认服务端按交付凭据给的那一条。
+const fresh = { ...identity, runId: "run-2", round: 1, sessionId: null };
+const oldStopped = at("rev-old", "reviewer", "2026-11-01T05:00:00Z", { stoppedAs: "canceled" });
+assert.deepEqual(target(free, [agentItem(oldStopped)], { reviewRetry: fresh, sessions: [impl, oldStopped] }),
+  reviewTarget(null, null, fresh), "上一条链的审查会话被手动停过,也挡不住新这一轮的入口");
+const oldWorked = at("rev-old", "reviewer", "2026-11-01T05:00:00Z", { exitStatus: 0 });
+assert.equal(target(free, [agentItem(oldWorked)], { reviewRetry: fresh, sessions: [impl, oldWorked] })?.sessionId, null,
+  "新这一轮没有会话 → 不借上一条链的(服务端从头交代任务书)");
 // 普通回合那颗「重试」排在审查档前面:上一回合是崩掉的普通回合时,那才是用户眼前那件事。
 const crashed = at("crash", "single", "2026-11-01T03:00:00Z", { exitStatus: 1 });
 assert.deepEqual(target(free, [agentItem(crashed)], { reviewRetry: identity, sessions: [rev, crashed] }),
@@ -117,10 +120,10 @@ assert.equal(target(task(), [agentItem(sess({ id: "a" }))], { sessions: [sess({ 
 
 // ── 审查链身份：只读服务端发下来的 retry,不在前端再镜像一份判据 ─────────────────────
 const run = (rounds, over = {}) => ({ id: "run-1", status: "reviewing", currentRound: 2, rounds, ...over });
-assert.deepEqual(freeReviewRetryIdentity([run([{ round: 1 }, { round: 2, retry: { generation: "g-2" } }])]), identity,
-  "当前轮带着 retry → 给出 run/轮次/代次");
-assert.deepEqual(freeReviewRetryIdentity([run([{ round: 2, retry: { generation: null } }])]),
-  { ...identity, generation: null }, "老数据取不到代次也原样带回(服务端按同一口径比)");
+assert.deepEqual(freeReviewRetryIdentity([run([{ round: 1 }, { round: 2, retry: { generation: "g-2", sessionId: "rev" } }])]),
+  identity, "当前轮带着 retry → 给出 run/轮次/代次/这一轮的会话");
+assert.deepEqual(freeReviewRetryIdentity([run([{ round: 2, retry: { generation: null, sessionId: null } }])]),
+  { ...identity, generation: null, sessionId: null }, "老数据取不到代次、这一轮还没有会话,都原样带回");
 assert.equal(freeReviewRetryIdentity(undefined), null, "没有审查记录");
 assert.equal(freeReviewRetryIdentity([]), null, "空列表");
 assert.equal(freeReviewRetryIdentity([run([{ round: 2 }])]), null, "当前轮没有 retry → 不能继续");

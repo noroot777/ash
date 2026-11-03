@@ -17,8 +17,11 @@ import type { ConversationItem } from "./conversationModel.ts";
 // 后来被改过或删了）：那三样前端手上没有权威数据，按钮照出，点下去由 409 如实说明原因。
 
 export type TurnRetryKind = "turn" | "review";
-/** 「继续本轮审查」认的那一轮审查：哪条链、第几轮、这一轮此刻的代次（服务端原样核对）。 */
-export type ReviewRetryIdentity = { runId: string; round: number; generation: string | null };
+/**
+ * 「继续本轮审查」认的那一轮审查：哪条链、第几轮、这一轮此刻的代次（服务端原样核对）；
+ * `sessionId` = 这一轮输入实际进过的会话（服务端按交付凭据给，null = 这一轮还没有）。
+ */
+export type ReviewRetryIdentity = { runId: string; round: number; generation: string | null; sessionId: string | null };
 /**
  * exitStatus 可能是 0/null：审查档不看退出码（见下），按钮文案据此换说法。
  * 审查档的 `sessionId` 只是「续哪条审查会话的上下文」，可能为 null（一条都没有）；认人靠 `review`。
@@ -37,7 +40,9 @@ export type TurnRetryTarget =
 export function freeReviewRetryIdentity(reviews: readonly FreeReviewRun[] | null | undefined): ReviewRetryIdentity | null {
   const run = reviews?.[0]; // 服务端按 createdAt 倒序给，第一条就是最近这条链
   const current = run?.rounds.find((round) => round.round === run.currentRound);
-  return run && current?.retry ? { runId: run.id, round: current.round, generation: current.retry.generation } : null;
+  return run && current?.retry
+    ? { runId: run.id, round: current.round, generation: current.retry.generation, sessionId: current.retry.sessionId }
+    : null;
 }
 
 /** 最近一次回合跑在哪条会话上 —— 与服务端 `latestSessionOf` 同一口径（按最近一次回合起点）。 */
@@ -70,10 +75,14 @@ export function turnRetryTarget(
   // 那一轮失去入口。排在普通回合之后：上一回合是一次崩掉的普通回合时，那颗「重试」才是用户
   // 眼前那件事。
   if (!opts.reviewRetry || task.workflowMode !== "free") return null;
-  const reviewer = latestSessionOf((opts.sessions ?? []).filter((session) => session.role === "reviewer"));
-  // 手动停掉的审查回合不是「没出结论」，入口是「运行」（服务端同样 409）。
+  // 续哪条会话只认**这一轮输入实际进过的那一条**（服务端按交付凭据给）：「最近的 reviewer」可能
+  // 是上一条链的 —— 新审查起跑前就失败时，借它的停止记录会把入口挡掉，借它的正文会把新审查当成
+  // 「已经做过」从中断处续跑。这一轮还没有会话就是 null（服务端从头交代任务书）。
+  const { sessionId } = opts.reviewRetry;
+  const reviewer = sessionId ? opts.sessions?.find((session) => session.id === sessionId) : undefined;
+  // 手动停掉的那一回合不是「没出结论」，入口是「运行」（服务端同样 409）。
   if (reviewer?.stoppedAs) return null;
-  return { kind: "review", sessionId: reviewer?.id ?? null, exitStatus: reviewer?.exitStatus ?? null, review: opts.reviewRetry };
+  return { kind: "review", sessionId, exitStatus: reviewer?.exitStatus ?? null, review: opts.reviewRetry };
 }
 
 /** 普通回合那一档：最后一条 agent 气泡的会话异常结束了。审查会话不归这里。 */

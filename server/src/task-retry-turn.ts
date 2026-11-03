@@ -47,7 +47,9 @@ import { noted } from "./user-action-rejection.js";
 import { db } from "./db/index.js";
 import { groups, sessions, tasks } from "./db/schema.js";
 import { profileDrift } from "./executors/index.js";
-import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, reviewAwaitsInputDecision, roundOf } from "./free-review-round.js";
+import {
+  freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, reviewAwaitsInputDecision, reviewRetrySessionId, roundOf,
+} from "./free-review-round.js";
 import { reviewRetryIdentityMismatch, type ReviewRetryIdentity } from "./free-review-retry-identity.js";
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import { turnOutcome } from "./session-turns.js";
@@ -282,9 +284,9 @@ export async function readRetryTurnFacts(
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return null;
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
-  // 按审查身份来的:落点是最近那条审查会话(续它的上下文),它之后插进来的旁路回合不算数。
-  const latest = request.review ? latestSessionOf(rows.filter((row) => row.role === "reviewer")) : latestSessionOf(rows);
-  const kind: RetryTurnKind = request.review ? "review" : latest ? retryTurnKindOf(latest) : "turn";
+  const overall = latestSessionOf(rows);
+  const kind: RetryTurnKind = request.review ? "review" : overall ? retryTurnKindOf(overall) : "turn";
+  let latest = overall;
   const group = task.groupId
     ? (await db.select({ paused: groups.paused }).from(groups).where(eq(groups.id, task.groupId))).at(0)
     : undefined;
@@ -295,6 +297,12 @@ export async function readRetryTurnFacts(
     const round = run ? await roundOf(run) : null;
     reviewBlocker = freeReviewRetryBlocker(run, round, await reviewAwaitsInputDecision(task, run, round))
       ?? (request.review ? await reviewRetryIdentityMismatch(taskId, run!, request.review) : null);
+    // 审查档的落点(停止记录、执行器指纹、续哪条上下文都读它)只认**这一轮输入实际进过的那条
+    // 会话**,不认「最近的 reviewer」—— 那可能是上一条链的(free-review-retry-identity.ts)。
+    // 这一轮还没有就是 null:从头交代任务书。只带 sessionId 的老请求因此也只能续到这一条,
+    // 页面上那条不是它就 409 刷新。
+    const bound = run ? reviewRetrySessionId(task, run) : null;
+    latest = rows.find((row) => row.id === bound) ?? null;
   }
   return {
     task,
@@ -403,7 +411,8 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         // dispatched=false = 同代次已经有一份在途派发在负责,这一次没有另起投递(时间线里
         // 也写了一句)。如实报出来,别让 202 冒充「我给你安排好了」(第 3 轮审查 F2)。
         try {
-          const { resumed, dispatched } = await reopenFailedFreeReview(taskId, { resumeSessionId: fresh!.latest?.id });
+          // 续哪条会话由它自己按同一份归属定(就是上面判停止/指纹的那一条),这里不另传。
+          const { resumed, dispatched } = await reopenFailedFreeReview(taskId);
           return c.json({ started: true, mode: "review", resumed, dispatched }, 202);
         } catch (error) {
           return c.json(await noted(taskId, "重跑上一回合", { error: errorText(error) }), 409);
