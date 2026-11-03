@@ -10,6 +10,8 @@ import { ScmInspector } from "../scm/ScmInspector.tsx";
 import type { ScmDiffTarget } from "../scm/scmModel.ts";
 import type { Notify } from "../lib/notify.ts";
 import { TaskInspector } from "./TaskInspector.tsx";
+import type { TaskFollowUp } from "./TaskFollowUps.tsx";
+import { FOLLOW_UPS_SECTION_ID } from "./followUpsSection.ts";
 import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
@@ -28,7 +30,7 @@ export interface TaskInspectorContext {
   groups: Group[];
   sessions: Session[];
   allTasks: TaskListItem[];
-  followUps: { text: string; attachments: string[]; at?: string }[];
+  followUps: TaskFollowUp[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
   onOpenPreview: () => void;
@@ -88,6 +90,7 @@ export const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>
     icon: <Info size={14} />,
     defaultOpen: true,
     shortcut: "i",
+    sections: [FOLLOW_UPS_SECTION_ID],
     render: (context) => <TaskInspector {...context} />,
   },
   {

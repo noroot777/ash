@@ -85,6 +85,14 @@ try {
   await type(["c"]);
   assert.match(await log.textContent(), /create$/, "无前缀的 c 仍应新建任务");
 
+  // Q 直达信息面板的「后续追问」；眼下没有哪份 Inspector 有这一节时，按键原样放过、不吞。
+  await type(["q"]);
+  assert.match(await log.textContent(), /section:follow-ups$/, "Q 应直达后续追问那一节");
+  await clickAndBlur("toggle-section");
+  await type(["q"]);
+  assert.match(await log.textContent(), /q-passed-through$/, "没有后续追问那一节时 Q 不应被吞掉");
+  await clickAndBlur("toggle-section");
+
   // 聊天 / 助手 / 设置页把列表导航键关掉（enabled=false）。`G …` 一族的整个存在理由就是
   // 「在任何界面都按得到」，所以它必须穿过这道开关 —— 否则在聊天页按 G T 什么都不会发生。
   await toggleListNavigation("off");
@@ -101,7 +109,7 @@ try {
 
   // 反过来，列表导航那几颗单键在那些界面上没有落点，一颗都不能响。
   const quiet = await log.textContent();
-  await type(["c", "f", "j", "k", "r", "Escape", "Enter"]);
+  await type(["c", "f", "j", "k", "r", "q", "Escape", "Enter"]);
   assert.equal(await log.textContent(), quiet, "列表导航键在聊天 / 助手 / 设置页不应触发");
   // Inspector 的 `I …` 同理：那些界面上根本没有那块面板。
   await type(["i", "g"]);
@@ -123,6 +131,10 @@ try {
   await entry.type("gcgz");
   assert.equal(await entry.inputValue(), "gcgz");
   assert.equal(await log.textContent(), beforeEntry, "输入框里的 g c / g z 不应触发弹层或终端");
+  await entry.fill("");
+  await entry.type("q");
+  assert.equal(await entry.inputValue(), "q");
+  assert.equal(await log.textContent(), beforeEntry, "输入框里的 q 不应跳去后续追问");
 
   console.log("workspace shortcut tests passed");
 
@@ -133,6 +145,12 @@ try {
       { timeout: 2_000 },
     ).catch(() => {});
     assert.equal(await scope.textContent(), expected, message);
+  }
+
+  async function clickAndBlur(testId) {
+    const button = page.getByTestId(testId);
+    await button.click();
+    await button.evaluate((element) => element.blur());
   }
 
   // 切完必须**把焦点交还给页面**：焦点留在那颗按钮上时，后面按的 Enter 会当成点它，

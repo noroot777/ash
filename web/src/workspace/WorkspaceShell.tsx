@@ -527,7 +527,7 @@ export function WorkspaceShell() {
   });
 
   useWorkspaceShortcuts({
-    // 这颗开关只管列表导航那几颗单键（j/k/f/c/r）：换了界面它们就没有落点。
+    // 这颗开关只管列表导航那几颗单键（j/k/f/c/r/q）：换了界面它们就没有落点。
     // `G …` 一族不受它约束，在聊天 / 助手 / 设置页照样按得到（见 useWorkspaceShortcuts）。
     enabled: !gitOpen && !settingsSection && !groupsPanelOpen && !chatOpen && !assistantOpen,
     paletteOpen,
