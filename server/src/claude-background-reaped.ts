@@ -35,21 +35,23 @@
 // `stopped` 本身不说是谁停的（CLI 那边 TaskStop 和收台共用这个词，见 shared 的
 // `CLAUDE_MONITOR_ENDED_REASON`），所以**只按证据归档**，拿不准就说拿不准：
 //
-// - 之前有一次 TaskStop / KillShell 调用指名了它 → 智能体自己停的（不管通知早到晚到）。
-// - 来源明说是进程退出收走的（孤儿补报那两句原话）→ 被收走。
+// - 来源明说是进程退出收走的（孤儿补报那两句原话）→ 被收走，排在一切推断之前。
+// - 有一次 TaskStop / KillShell 指名了它、**且回执成功**→ 智能体自己停的（不管通知早到晚到）。
+//   只发了请求不算：回执带 `is_error`（权限拒绝、目标不存在）就当它没停成，按下面几条定。
 // - 没人请求停它、通知落在回合 `result` 之后、下一段助手输出之前 → 被收走：那个空档里
 //   唯一在动的是 CLI 收台（内置 Monitor 那边实测的行序）。
 // - 流结束时还没有终态 → 被收走（进程都没了）。
 // - 其余（回合进行中停了，又没有任何人请求过）→ **原因不明**，照样记进时间线，不丢。
 //
 // 常驻进程（团队调度台）里后台任务跨回合活着、在空档里 `completed` 也是真跑完，照常算；
-// 下一回合一开始，上一回合已经了结的那些就清出账本，「本轮」不混进旧回合。
+// 下一回合一开始，上一回合已经了结的那些先把该说的写进时间线、再清出账本，「本轮」不混进
+// 旧回合，也不会因为清账把还没说出去的那一笔丢掉。
 //
 // ── 观测不到的档位（降级）──────────────────────────────────────────────────
 //
 // - **接管回来的流**（ash 重启后 detached 续读）从已消费位置之后读起，那之前的
 //   `task_started` 不会重放 → 那些任务这里看不见，不记账（宁可少说，不编）。
-// - **记账是尽力而为**：流结束时写一次时间线，失败重试一次，仍失败只留日志 —— 事实只在
+// - **记账是尽力而为**：回合边界 / 流结束时写时间线，失败重试一次，仍失败只留日志 —— 事实只在
 //   这个进程的内存里，没有恢复账本（内置 Monitor 那套有，是因为它的投影本来就落库）。
 // - **其它执行器**（codex 等）没有这套结构化的后台任务事件，事后这一笔不做；事前那句警告
 //   也只发 claude（见 run-prompts.ts 的 `backgroundWaitFor`）。
@@ -83,6 +85,11 @@ interface Tracked {
   /** 发起它的那次调用已经返回、而它当时还没结束。 */
   background: boolean;
   end: Outcome | null;
+  /**
+   * 停止通知先到、指名它的那次停止调用还没回执时，回执的 tool_use_id。回执成功才改判成
+   * 「被它自己停掉」；失败或一直没有回执，就维持按其它证据定的那一档。
+   */
+  stopCall?: string;
 }
 
 const KIND_LABEL: Record<BackgroundKind, string> = { agent: "后台子代理", bash: "后台 Bash" };
@@ -92,27 +99,33 @@ const STOP_TOOLS = new Set(["TaskStop", "KillShell", "KillBash"]);
 
 /**
  * 来源**明说**是进程退出收走的那两句（claude 实测原文：后台 Bash / Monitor 一句，后台子代理
- * 一句）。一般出现在下一代进程里，那时这里已不在账上；同一条流里真见到了也照认。
+ * 一句）。一般出现在下一代进程里，那时这里已不在账上；同一条流里真见到了也照认，而且排在
+ * 一切推断之前。
  */
 const SESSION_ENDED_RE = /orphaned by a previous claude code process exit|didn't finish before the previous session ended/i;
 
 /**
  * 一条 claude 会话上的后台任务账本。每个 stream 一个实例，跟 `ClaudeMonitorTrace` 喂同样
- * 三样东西（tool_use、tool_result、system 事件）。纯内存、同步，只有 `finish` 落库。
+ * 三样东西（tool_use、tool_result、system 事件）。账本本身纯内存、同步；落库只在回合边界
+ * （常驻进程）和流结束两处。
  */
 export class ClaudeBackgroundTrace {
   /** tool_use_id → 工具名。内置 Monitor 起的 `local_bash` 归 claude-monitor-reaped.ts 管。 */
   private tools = new Map<string, string>();
   /** 已经收到 tool_result 的调用。 */
   private returned = new Set<string>();
-  /** 被 TaskStop / KillShell 指名过的后台任务 id。 */
-  private stopAsked = new Set<string>();
+  /** 还没回执的停止调用：tool_use_id → 它指名的后台任务 id。**请求不等于停成了。** */
+  private stopCalls = new Map<string, string[]>();
+  /** 停止调用回执成功、确实指名过的后台任务 id。 */
+  private stopConfirmed = new Set<string>();
   /** 当前这一条命。 */
   private tasks = new Map<string, Tracked>();
   /** 同一个 task_id 再起一次之前的那几条命（SendMessage 把停掉的子代理续上）——各算各的。 */
   private earlier: Tracked[] = [];
   /** 回合 `result` 之后、下一段助手输出之前（见文件头「是谁停的」）。 */
   private idle = false;
+  /** 时间线写入串成一条链：回合边界那次和流结束那次不能乱序，`finish` 要等它写完。 */
+  private writes: Promise<void> = Promise.resolve();
   private cliSessionId: string;
 
   constructor(cliSessionId?: string) {
@@ -124,14 +137,25 @@ export class ClaudeBackgroundTrace {
     this.tools.set(toolUseId, name);
     if (!STOP_TOOLS.has(name) || !input || typeof input !== "object") return;
     const { task_id: taskId, shell_id: shellId } = input as Record<string, unknown>;
-    for (const target of [taskId, shellId]) if (typeof target === "string" && target) this.stopAsked.add(target);
+    const targets = [taskId, shellId].filter((t): t is string => typeof t === "string" && !!t);
+    if (targets.length) this.stopCalls.set(toolUseId, targets);
   }
 
-  toolResult(toolUseId: unknown): void {
+  /** `isError` 是 tool_result 块上的 `is_error`：停止调用被拒（权限、目标不存在）就是它。 */
+  toolResult(toolUseId: unknown, isError = false): void {
     if (typeof toolUseId !== "string" || !toolUseId) return;
     this.returned.add(toolUseId);
     for (const task of this.tasks.values()) {
       if (task.toolUseId === toolUseId && !task.end) task.background = true;
+    }
+    const targets = this.stopCalls.get(toolUseId);
+    if (!targets) return;
+    this.stopCalls.delete(toolUseId);
+    if (!isError) for (const target of targets) this.stopConfirmed.add(target);
+    for (const task of [...this.earlier, ...this.tasks.values()]) {
+      if (task.stopCall !== toolUseId) continue;
+      task.stopCall = undefined;
+      if (!isError) task.end = "stopped";
     }
   }
 
@@ -155,7 +179,7 @@ export class ClaudeBackgroundTrace {
       const prior = this.tasks.get(taskId);
       if (prior) this.earlier.push(prior);
       // 新的一条命：上一条命挨过的 TaskStop 不能算到它头上。
-      this.stopAsked.delete(taskId);
+      this.stopConfirmed.delete(taskId);
       this.tasks.set(taskId, { kind, toolUseId, background: !!toolUseId && this.returned.has(toolUseId), end: null });
       return;
     }
@@ -164,29 +188,38 @@ export class ClaudeBackgroundTrace {
     if (!task || task.end) return;
     const status = claudeMonitorStatus(ev.status);
     if (status === "running") return;
-    task.end = status !== "stopped" ? "finished"
-      : this.stopAsked.has(taskId) ? "stopped"
-      : SESSION_ENDED_RE.test(String(ev.summary ?? "")) || this.idle ? "reaped"
-      : "unknown";
+    if (status !== "stopped") { task.end = "finished"; return; }
+    // 证据从硬到软：来源明说 > 停止调用回执成功 > 「result 之后没人请求」> 不明。
+    if (SESSION_ENDED_RE.test(String(ev.summary ?? ""))) { task.end = "reaped"; return; }
+    if (this.stopConfirmed.has(taskId)) { task.end = "stopped"; return; }
+    task.end = this.idle ? "reaped" : "unknown";
+    // 停止调用已发、回执还没到：先按上面那档记，回执成功再改判（见 `toolResult`）。
+    for (const [callId, targets] of this.stopCalls) if (targets.includes(taskId)) task.stopCall = callId;
   }
 
-  /** 新回合开始：上一回合已了结的那些清出账本，还在跑的留着（它们仍可能在本代进程里被收走）。 */
+  /**
+   * 新回合开始（只有常驻进程走得到）：先把上一回合**已了结**那些该说的说出去，再清出账本；
+   * 还在跑的留着，它们仍可能在本代进程里被收走。清账前不结算，常驻调度台上「原因不明」的
+   * 那一笔就再也没有投递入口了（流的 finally 要等到进程退出）。
+   *
+   * 调用索引同时回收：它们只在同一回合内配对（tool_use → task_started → tool_result），
+   * 跨回合留着只会随常驻进程的全程调用量无界增长。
+   */
   private nextTurn(): void {
     this.idle = false;
+    const settled = [...this.earlier, ...this.tasks.values()].filter((task) => task.end);
+    this.report(backgroundReapedNotice(tallyOf(settled)));
     this.earlier = this.earlier.filter((task) => !task.end);
     for (const [id, task] of this.tasks) if (task.end) this.tasks.delete(id);
+    this.tools.clear();
+    this.returned.clear();
+    this.stopCalls.clear();
+    for (const id of this.stopConfirmed) if (!this.tasks.has(id)) this.stopConfirmed.delete(id);
   }
 
   /** 这一轮的后台任务分档。只数真正活过发起调用的那些。 */
   tally(): Partial<Record<BackgroundKind, BackgroundTally>> {
-    const out: Partial<Record<BackgroundKind, BackgroundTally>> = {};
-    for (const task of [...this.earlier, ...this.tasks.values()]) {
-      if (!task.background) continue;
-      const entry = out[task.kind] ??= { total: 0, finished: 0, stopped: 0, reaped: 0, unknown: 0 };
-      entry.total += 1;
-      entry[task.end ?? "reaped"] += 1;
-    }
-    return out;
+    return tallyOf([...this.earlier, ...this.tasks.values()]);
   }
 
   /**
@@ -194,10 +227,19 @@ export class ClaudeBackgroundTrace {
    * 全都在回合里正常结束的，是后台命令的正当用法，不去打扰。不抛；尽力而为（见文件头）。
    */
   async finish(): Promise<void> {
-    const notice = backgroundReapedNotice(this.tally());
+    this.report(backgroundReapedNotice(this.tally()));
     this.tasks.clear();
     this.earlier = [];
-    if (!notice || !this.cliSessionId) return;
+    await this.writes;
+  }
+
+  private report(notice: string): void {
+    if (!notice) return;
+    this.writes = this.writes.then(() => this.write(notice));
+  }
+
+  private async write(notice: string): Promise<void> {
+    if (!this.cliSessionId) return;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       if (dbClient.closed) return;
       try {
@@ -215,6 +257,17 @@ export class ClaudeBackgroundTrace {
     }
     console.warn(`[ash] 后台任务收尾记账没写进时间线（session=${this.cliSessionId}），这条说明丢了`);
   }
+}
+
+function tallyOf(list: Iterable<Tracked>): Partial<Record<BackgroundKind, BackgroundTally>> {
+  const out: Partial<Record<BackgroundKind, BackgroundTally>> = {};
+  for (const task of list) {
+    if (!task.background) continue;
+    const entry = out[task.kind] ??= { total: 0, finished: 0, stopped: 0, reaped: 0, unknown: 0 };
+    entry.total += 1;
+    entry[task.end ?? "reaped"] += 1;
+  }
+  return out;
 }
 
 /**

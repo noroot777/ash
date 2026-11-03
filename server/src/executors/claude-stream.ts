@@ -188,7 +188,7 @@ async function* claudeStreamEvents(
         if (block.type === "tool_use") claudeMonitors.toolUse(block.name, block.input, block.id);
         if (block.type === "tool_result") claudeMonitors.toolResult(block.tool_use_id, block.content);
         if (block.type === "tool_use") background.toolUse(block.name, block.id, block.input);
-        if (block.type === "tool_result") background.toolResult(block.tool_use_id);
+        if (block.type === "tool_result") background.toolResult(block.tool_use_id, block.is_error === true);
         // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
         // 收工具结果里那几张 base64 截图 —— 它们不是正文语法,按块交代就是对的。
         if (block.type === "tool_result") {
@@ -319,7 +319,7 @@ async function* claudeStreamEvents(
         // 起手回执里那句 `expires in 20m` 是来源侧唯一说出**生效**期限的地方（入参那个
         // timeout_ms 只是请求值，claude 会自己钳）。见 claude-monitors.ts 的 toolResult。
         claudeMonitors.toolResult(block.tool_use_id, block.content);
-        background.toolResult(block.tool_use_id);
+        background.toolResult(block.tool_use_id, block.is_error === true);
         const activity = nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
         if (activity) push(activity);
         for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });

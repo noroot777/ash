@@ -35,6 +35,11 @@ const returned = (trace: Trace, id: string) => {
   trace.event({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id }] } });
   trace.toolResult(id);
 };
+/** 停止调用被拒（权限、目标不存在）：tool_result 带 `is_error`。 */
+const refused = (trace: Trace, id: string) => {
+  trace.event({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: true }] } });
+  trace.toolResult(id, true);
+};
 const started = (trace: Trace, taskId: string, toolUseId: string, taskType: string) =>
   trace.event({ type: "system", subtype: "task_started", task_id: taskId, tool_use_id: toolUseId, task_type: taskType });
 const notified = (trace: Trace, taskId: string, status: string) =>
@@ -171,6 +176,97 @@ async function main(): Promise<void> {
   orphan.event({ type: "system", subtype: "task_notification", task_id: "ao", status: "stopped",
     summary: "Background agent \"查证\" didn't finish before the previous session ended" });
   check(orphan.tally().agent?.reaped === 1, "来源明说是会话结束收走的，算被收走", JSON.stringify(orphan.tally()));
+
+  // ── ②‴ 请求停止 ≠ 停成了（第 2 轮审查 R1）：两种后台、两个工具名、两个字段名都一样 ──
+  for (const [tool, field, kind, type] of [
+    ["TaskStop", "task_id", "agent", "local_agent"], ["KillShell", "shell_id", "bash", "local_bash"],
+  ] as const) {
+    const failedStop = new ClaudeBackgroundTrace(`failed-${kind}`);
+    call(failedStop, kind === "agent" ? "Agent" : "Bash", "toolu_f");
+    started(failedStop, "f1", "toolu_f", type);
+    returned(failedStop, "toolu_f");
+    call(failedStop, tool, "toolu_fs", { [field]: "f1" });
+    refused(failedStop, "toolu_fs");
+    result(failedStop);
+    failedStop.event({ type: "system", subtype: "task_notification", task_id: "f1", status: "stopped",
+      summary: "Background agent \"查证\" didn't finish before the previous session ended" });
+    const f = failedStop.tally()[kind];
+    check(f?.reaped === 1 && f.stopped === 0, `${tool} 被拒、之后被收走：算收走而不是「它自己停掉」`, JSON.stringify(f));
+    check(backgroundReapedNotice(failedStop.tally()).includes("一并收走"), `${tool} 被拒的那条照样写时间线`);
+
+    const quiet = new ClaudeBackgroundTrace(`quiet-${kind}`);
+    call(quiet, kind === "agent" ? "Agent" : "Bash", "toolu_q");
+    started(quiet, "q1", "toolu_q", type);
+    returned(quiet, "toolu_q");
+    call(quiet, tool, "toolu_qs", { [field]: "q1" });
+    refused(quiet, "toolu_qs");
+    result(quiet);
+    notified(quiet, "q1", "stopped"); // 没有来源原话：只剩「result 之后」这条证据
+    check(quiet.tally()[kind]?.reaped === 1, `${tool} 被拒、收尾时才停：算收走`, JSON.stringify(quiet.tally()));
+
+    const noisy = new ClaudeBackgroundTrace(`noisy-${kind}`);
+    call(noisy, kind === "agent" ? "Agent" : "Bash", "toolu_n");
+    started(noisy, "n1", "toolu_n", type);
+    returned(noisy, "toolu_n");
+    call(noisy, tool, "toolu_ns", { [field]: "n1" });
+    returned(noisy, "toolu_ns");
+    noisy.event({ type: "system", subtype: "task_notification", task_id: "n1", status: "stopped",
+      summary: "Agent orphaned by a previous Claude Code process exit" });
+    check(noisy.tally()[kind]?.reaped === 1, `${tool} 成功但来源明说是进程退出收走的：来源优先`,
+      JSON.stringify(noisy.tally()));
+  }
+
+  const pending = new ClaudeBackgroundTrace("pending");
+  call(pending, "Agent", "toolu_p");
+  started(pending, "ap", "toolu_p", "local_agent");
+  returned(pending, "toolu_p");
+  call(pending, "TaskStop", "toolu_ps", { task_id: "ap" });
+  notified(pending, "ap", "stopped"); // 通知先到，回执后到
+  check(pending.tally().agent?.unknown === 1, "回执未到时先不认作「它自己停掉」", JSON.stringify(pending.tally()));
+  returned(pending, "toolu_ps");
+  check(pending.tally().agent?.stopped === 1, "回执成功后改判成「它自己停掉」", JSON.stringify(pending.tally()));
+  const pendingRefused = new ClaudeBackgroundTrace("pending-refused");
+  call(pendingRefused, "Agent", "toolu_q");
+  started(pendingRefused, "aq", "toolu_q", "local_agent");
+  returned(pendingRefused, "toolu_q");
+  call(pendingRefused, "TaskStop", "toolu_qs", { task_id: "aq" });
+  notified(pendingRefused, "aq", "stopped");
+  refused(pendingRefused, "toolu_qs");
+  check(pendingRefused.tally().agent?.unknown === 1, "回执被拒就维持「原因不明」", JSON.stringify(pendingRefused.tally()));
+
+  // ── ②⁗ 常驻进程的回合边界：清账前先把该说的说出去，调用索引不跨回合累积（第 2 轮审查 N1/N2）
+  const residentCli = "resident-boundary";
+  await db.insert(sessions).values({
+    id: "sess-bg-resident", taskId, role: "single", agentType: "claude", executor: "claude@test",
+    cliSessionId: residentCli, cwd: "/tmp/wt", startedAt: now(),
+  });
+  const said: string[] = [];
+  const unsubscribe = bus.subscribe((ev: any) => {
+    if (ev.type === "agent.event" && ev.taskId === taskId) said.push(String(ev.event?.text ?? ""));
+  });
+  const boundary = new ClaudeBackgroundTrace(residentCli);
+  call(boundary, "Agent", "toolu_r");
+  started(boundary, "ar", "toolu_r", "local_agent");
+  returned(boundary, "toolu_r");
+  notified(boundary, "ar", "stopped"); // 回合中、没人请求：原因不明
+  call(boundary, "Bash", "toolu_rb");
+  started(boundary, "br", "toolu_rb", "local_bash");
+  returned(boundary, "toolu_rb"); // 跨回合还活着
+  result(boundary);
+  call(boundary, "Read", "toolu_next"); // 下一回合开始
+  await new Promise((r) => setTimeout(r, 120));
+  check(said.length === 1 && said[0].includes("后台子代理") && said[0].includes("原因不明"),
+    "上一回合停因不明的那一笔，清账前写进了时间线", JSON.stringify(said));
+  check(!said[0]?.includes("后台 Bash"), "还活着的留到它自己了结再说", String(said[0]));
+  const idx = boundary as any;
+  check(idx.tools.size === 1 && idx.returned.size === 0 && idx.stopCalls.size === 0,
+    "调用索引只留本回合的，不随常驻进程无界增长", `tools=${idx.tools.size} returned=${idx.returned.size}`);
+  check(boundary.tally().bash?.total === 1 && !boundary.tally().agent, "跨回合活着的仍在账上，已说过的不再数",
+    JSON.stringify(boundary.tally()));
+  await boundary.finish();
+  await new Promise((r) => setTimeout(r, 60));
+  unsubscribe();
+  check(said.filter((x) => x.includes("后台子代理")).length === 1, "已说过的那一笔流结束时不重复说", JSON.stringify(said));
 
   // ── ②″ 账本的身份与范围（第 1 轮审查 N1）─────────────────────────────────────
   const again = new ClaudeBackgroundTrace("again");
