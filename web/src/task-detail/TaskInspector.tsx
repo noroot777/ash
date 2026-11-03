@@ -35,18 +35,23 @@ function InspectorRow({
   return <div className={`task-inspector-row${danger ? " is-danger" : ""}`}><span>{label}</span><div>{children}</div></div>;
 }
 
-// 「N 轮」里被哨兵叫醒的那几轮只在悬停里拆开。服务端在同一笔入账里数这两个数，M 本来就是 N 的子集。
+// 「N 轮」只数真人/系统推着走的回合，被哨兵叫醒的那几轮扣掉，在虚线下的悬停里另报。
+// 服务端在同一笔入账里数总轮数和唤醒轮数，唤醒本来就是总数的子集；token 仍按全部回合计。
 function UsageLine({ label, usage, wakes, showLabel }: { label: string; usage: TokenUsage; wakes: number; showLabel: boolean }) {
   const tip = useHoverTip();
-  const note = usage.turns && wakes > 0 ? `${usage.turns} 轮，其中哨兵唤醒 ${wakes} 轮` : null;
+  const total = usage.turns ?? 0;
+  const woken = Math.min(wakes, total);
+  const turns = total - woken;
+  const note = woken > 0 ? `另有哨兵唤醒 ${woken} 轮未计入` : null;
   return (
     <>
-      <span
-        aria-label={[`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`, note].filter(Boolean).join("，")}
-        {...(note ? { tabIndex: 0, ...tip.anchorProps } : {})}
-      >
+      <span aria-label={[`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`, total ? `${turns} 轮` : "", note].filter(Boolean).join("，")}>
         {showLabel && <em className="task-usage-who">{label}</em>}
-        {[formatTokens(usageTotal(usage)), usage.turns ? `${usage.turns} 轮` : ""].filter(Boolean).join(" · ")}
+        {formatTokens(usageTotal(usage))}
+        {total > 0 && " · "}
+        {total > 0 && (note
+          ? <span className="task-usage-turns has-tip" tabIndex={0} {...tip.anchorProps}>{turns} 轮</span>
+          : `${turns} 轮`)}
       </span>
       {note && <HoverTip at={tip.at}>{note}</HoverTip>}
     </>
