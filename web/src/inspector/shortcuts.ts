@@ -3,15 +3,14 @@ import type { KeyChordDecision } from "../lib/keyChord.ts";
 
 // 第二键按面板名取首字母：i 信息 / f 文件 / a 生成物(artifacts) / g Git 改动 / s 子智能体 /
 // c 侧聊 / w 工作流 / r 审查 / p 预览指正 / e 执行者 / t 时间轴 / m 哨兵(monitor) / b 备忘。
-// 面板里的某一节也能有直达键（descriptor.sections），按节名取：q 后续追问(follow-up questions)。
-// 面板键和节键共用这一张表，同一套面板里不许撞键——
+// 同一套面板里不许撞键——
 // 撞了只有排在前面的那一格开得出来，后面那个的 kbd 提示就是句假话。
-export type InspectorShortcutKey = "i" | "f" | "a" | "g" | "w" | "r" | "e" | "s" | "c" | "p" | "t" | "m" | "b" | "q";
+export type InspectorShortcutKey = "i" | "f" | "a" | "g" | "w" | "r" | "e" | "s" | "c" | "p" | "t" | "m" | "b";
 
 export const INSPECTOR_SHORTCUT_PREFIX = "i";
 export const INSPECTOR_SHORTCUT_TIMEOUT_MS = KEY_CHORD_TIMEOUT_MS;
 
-const SHORTCUT_KEYS = new Set<InspectorShortcutKey>(["i", "f", "a", "g", "w", "r", "e", "s", "c", "p", "t", "m", "b", "q"]);
+const SHORTCUT_KEYS = new Set<InspectorShortcutKey>(["i", "f", "a", "g", "w", "r", "e", "s", "c", "p", "t", "m", "b"]);
 
 export function inspectorShortcutLabel(key: InspectorShortcutKey): string {
   return `${INSPECTOR_SHORTCUT_PREFIX.toUpperCase()} ${key.toUpperCase()}`;

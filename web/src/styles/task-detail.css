@@ -227,13 +227,21 @@
 .task-inspector details { margin-top: 5px; border-top: 0.5px solid var(--line); padding-top: 7px; }
 /* 顶线是用来隔开兄弟节的；一节里的头一个 details 上面没有兄弟，画线只会在面板标题下留一道空档。 */
 .task-inspector section > details:first-child { margin-top: 0; border-top: 0; padding-top: 0; }
-.task-inspector details pre { max-height: 240px; overflow: auto; margin: 7px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; }
+.task-inspector details pre,
+.task-inspector-follow-ups pre { max-height: 240px; overflow: auto; margin: 7px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; }
 .task-inspector-attachment-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; margin-top: 6px; font-size: 10.5px; }
 .task-inspector-attachment-links > span:first-child { color: var(--faint); }
 .task-inspector-attachment-link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent); text-underline-offset: 2px; }
 .task-inspector-attachment-link:hover { color: color-mix(in srgb, var(--accent) 76%, var(--ink)); text-decoration-color: currentColor; }
 .task-inspector-attachment-link:focus-visible { border-radius: 2px; outline: 2px solid color-mix(in srgb, var(--accent) 36%, transparent); outline-offset: 2px; }
 .task-inspector-attachment-missing { color: var(--faint); }
+/* 后续追问不是 <details>：收起时也要露出最新一条，原生 details 一收就全藏了。外观跟上面那几节
+   summary 一个样，＋/－ 只在真有更早的可展开时出现。 */
+.task-inspector-follow-ups { margin-top: 5px; border-top: 0.5px solid var(--line); padding-top: 7px; }
+.task-inspector-follow-ups-head { display: block; width: 100%; margin: 0; border: 0; background: transparent; padding: 0; color: var(--faint); font: inherit; font-size: 10.5px; font-weight: 600; text-align: left; }
+button.task-inspector-follow-ups-head { cursor: pointer; }
+button.task-inspector-follow-ups-head::after { content: "＋"; float: right; }
+button.task-inspector-follow-ups-head[aria-expanded="true"]::after { content: "－"; }
 .task-inspector-follow-ups ol { display: grid; gap: 8px; margin: 7px 0 0; padding: 0; list-style: none; }
 .task-inspector-follow-ups li + li { border-top: 0.5px solid var(--line); padding-top: 8px; }
 .task-inspector-follow-ups time { display: block; color: var(--faint); font-size: 9px; }

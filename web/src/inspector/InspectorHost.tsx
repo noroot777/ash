@@ -13,7 +13,7 @@ import { Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { InspectorHeadSlotProvider } from "./headActions.tsx";
 import { InspectorRail } from "./InspectorRail.tsx";
-import { requestInspectorSection } from "./sections.ts";
+import { registerInspectorSectionOwner } from "./sections.ts";
 import { registerInspectorShortcutTarget } from "./shortcuts.ts";
 import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
 
@@ -320,18 +320,18 @@ function InspectorHostState<Context>({
   useEffect(() => registerInspectorShortcutTarget((shortcut) => {
     const current = shortcutContext.current;
     const descriptor = current.descriptors.find((candidate) => candidate.shortcut === shortcut);
-    if (descriptor) {
-      current.openTab(descriptor.id);
-      return true;
-    }
-    for (const owner of current.descriptors) {
-      const section = owner.sections?.find((candidate) => candidate.shortcut === shortcut);
-      if (!section) continue;
-      current.openTab(owner.id);
-      requestInspectorSection(section.id);
-      return true;
-    }
-    return false;
+    if (!descriptor) return false;
+    current.openTab(descriptor.id);
+    return true;
+  }), []);
+
+  useEffect(() => registerInspectorSectionOwner({
+    has: (section) => shortcutContext.current.descriptors.some((candidate) => candidate.sections?.includes(section)),
+    open: (section) => {
+      const current = shortcutContext.current;
+      const owner = current.descriptors.find((candidate) => candidate.sections?.includes(section));
+      if (owner) current.openTab(owner.id);
+    },
   }), []);
 
   const toggleButton = (

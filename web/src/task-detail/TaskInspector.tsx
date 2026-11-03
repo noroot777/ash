@@ -283,7 +283,7 @@ export function TaskInspector({
               <summary>原始需求</summary>
               <InspectorPromptContent text={task.body} emptyText="这个任务没有正文说明。" />
             </details>
-            <TaskFollowUps followUps={followUps} />
+            <TaskFollowUps key={task.id} followUps={followUps} />
           </section>
         </ImagePreviewGroup>
 

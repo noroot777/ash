@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ImagePreviewGroup } from "../../src/components/ImagePreview.tsx";
 import { InspectorPromptContent } from "../../src/task-detail/InspectorPromptContent.tsx";
+import { TaskFollowUps } from "../../src/task-detail/TaskFollowUps.tsx";
 import "../../src/styles/global.css";
 
 const original = [
@@ -21,21 +22,15 @@ createRoot(document.getElementById("root")!).render(
               <summary>原始需求</summary>
               <InspectorPromptContent text={original} emptyText="这个任务没有正文说明。" />
             </details>
-            <details className="task-inspector-follow-ups" open>
-              <summary>后续追问</summary>
-              <ol>
-                <li>
-                  <InspectorPromptContent
-                    text="检查追问里的图片链接。"
-                    attachments={[
-                      "/Users/example/code/ash/data/uploads/R4nd0mAbC123-follow-up.jpg",
-                      "/Users/example/code/ash/data/uploads/D0cumentAb12-spec.pdf",
-                    ]}
-                    emptyText="（空消息）"
-                  />
-                </li>
-              </ol>
-            </details>
+            <TaskFollowUps
+              followUps={[{
+                text: "检查追问里的图片链接。",
+                attachments: [
+                  "/Users/example/code/ash/data/uploads/R4nd0mAbC123-follow-up.jpg",
+                  "/Users/example/code/ash/data/uploads/D0cumentAb12-spec.pdf",
+                ],
+              }]}
+            />
           </section>
         </ImagePreviewGroup>
       </div>
