@@ -165,11 +165,11 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
   const retryRound = latest ? roundRows.find((row) => row.runId === latest.id && row.round === latest.currentRound) ?? null : null;
   const retry = retryRound ? await reviewRetryGeneration(task, latest, retryRound) : null;
   // 熔断按各轮落库的承接现算（刷新后照样在），不另存一份「已熔断」标记：两份状态迟早对不上。
-  const { RECURRENCE_THRESHOLD, recurrenceKey, taskRecurrences } = await import("./review-recurrence.js");
+  const { recurrenceKey, taskRecurrences } = await import("./review-recurrence.js");
   const recurrences = await taskRecurrences(taskId);
   const recurrenceOf = (runId: string, round: number) => {
-    const length = recurrences.get(recurrenceKey(runId, round))?.length ?? 0;
-    return length >= RECURRENCE_THRESHOLD ? { recurrence: length } : {};
+    const found = recurrences.get(recurrenceKey(runId, round));
+    return found ? { recurrence: found.length } : {};
   };
   const reviews: FreeReviewRun[] = runs.map((run) => ({
     id: run.id,

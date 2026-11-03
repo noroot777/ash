@@ -20,8 +20,10 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 delete process.env.ASH_LAX_DONE;
 
 try {
-  const { parseCarries, lineageLengths, recurrenceBreakerActive, recurrenceLabel, RECURRENCE_THRESHOLD } =
-    await import("../src/review-recurrence.js");
+  const { parseCarries, lineageLengths, recurrenceLabel, recurrenceListMarkdown, recurrenceRepairNote,
+    RECURRENCE_LIST_FILE, RECURRENCE_NOTE_CAP, RECURRENCE_THRESHOLD } = await import("../src/review-recurrence.js");
+  const { armRecurrenceBreaker, recurrenceBreakerArmed } = await import("../src/review-recurrence-gate.js");
+  const bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const { checkChoiceQuestion, sentenceCount } = await import("../src/choice-question-check.js");
 
   // ① 承接校验：匹配的计入；没填、填错、对不上的一律忽略，且从不抛错。
@@ -51,9 +53,20 @@ try {
       { key: "b1", refBase: "2.1", conclusion: vf, carries: [{ finding: 1, from: "1.3.2" }] },
     ]);
     assert.equal(chain.get("a1"), undefined);
-    assert.deepEqual(chain.get("a2"), { length: 2, findings: [1] }, `连续 ${RECURRENCE_THRESHOLD} 轮就触发`);
-    assert.deepEqual(chain.get("a3"), { length: 3, findings: [2] }, "第 N 轮 F2 承接 N-1 轮 F1，N-1 轮 F1 承接 N-2 轮 F2：同一谱系");
-    assert.deepEqual(chain.get("b1"), { length: 4, findings: [1] }, "用户另开的审查链照样接着算");
+    assert.deepEqual(chain.get("a2"), { length: 2, findings: [{ finding: 1, length: 2 }] }, `连续 ${RECURRENCE_THRESHOLD} 轮就触发`);
+    assert.deepEqual(chain.get("a3"), { length: 3, findings: [{ finding: 2, length: 3 }] },
+      "第 N 轮 F2 承接 N-1 轮 F1，N-1 轮 F1 承接 N-2 轮 F2：同一谱系");
+    assert.deepEqual(chain.get("b1"), { length: 4, findings: [{ finding: 1, length: 4 }] }, "用户另开的审查链照样接着算");
+
+    // 两条谱系深度不同：A 连着三轮、B 连着两轮，两条都够阈值，都要进触发集合（第 1 轮审查 R1）。
+    const mixed = lineageLengths([
+      { key: "m1", refBase: "1.1", conclusion: vf, carries: [] },
+      { key: "m2", refBase: "1.2", conclusion: vf, carries: [{ finding: 1, from: "1.1.1" }] },
+      { key: "m3", refBase: "1.3", conclusion: vf, carries: [{ finding: 1, from: "1.2.1" }, { finding: 2, from: "1.2.2" }] },
+    ]);
+    assert.deepEqual(mixed.get("m3"), { length: 3, findings: [{ finding: 1, length: 3 }, { finding: 2, length: 2 }] },
+      "每一条够阈值的都在，不只是最长的那条");
+    assert.ok(recurrenceRepairNote(mixed.get("m3")!).text.includes("报告第 1、2 条"), "修复交接点名两条");
 
     const broken = lineageLengths([
       { key: "a1", refBase: "1.1", conclusion: vf, carries: [] },
@@ -66,11 +79,28 @@ try {
       { key: "a2", refBase: "1.2", conclusion: vf, carries: [] },
       { key: "a3", refBase: "1.3", conclusion: vf, carries: [{ finding: 1, from: "1.2.1" }] },
     ]);
-    assert.deepEqual(gap.get("a3"), { length: 2, findings: [1] }, "上一轮那条自己没有承接：谱系从它算起");
+    assert.deepEqual(gap.get("a3"), { length: 2, findings: [{ finding: 1, length: 2 }] }, "上一轮那条自己没有承接：谱系从它算起");
     assert.equal(lineageLengths([
       { key: "a1", refBase: "1.1", conclusion: vf, carries: [] },
       { key: "a2", refBase: "1.2", conclusion: "verified", carries: [{ finding: 1, from: "1.1.1" }] },
     ]).size, 0, "通过的那一轮不算「被标为拦验收」");
+  }
+
+  // ②' 熔断指令有上界：条序压成区间；压不住就只报条数、指向外置清单，一条都不截（第 1 轮审查 R4）。
+  {
+    const of = (findings: number[]) => ({ length: 2, findings: findings.map((finding) => ({ finding, length: 2 })) });
+    const ranged = recurrenceRepairNote(of([1, 2, 3, 5, 7, 8]));
+    assert.ok(ranged.text.includes("报告第 1–3、5、7、8 条") && !ranged.listed, ranged.text);
+    const many = of(Array.from({ length: 40 }, (_, index) => index * 2 + 1));
+    const listed = recurrenceRepairNote(many);
+    assert.ok(listed.listed && listed.text.includes(RECURRENCE_LIST_FILE), listed.text);
+    for (const found of [of([1]), of([1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]), many,
+      { length: 123, findings: Array.from({ length: 999 }, (_, index) => ({ finding: index * 2 + 1, length: 123 })) }]) {
+      assert.ok(bytes(recurrenceRepairNote(found).text) <= RECURRENCE_NOTE_CAP,
+        `熔断指令 ${bytes(recurrenceRepairNote(found).text)}B 超过 ${RECURRENCE_NOTE_CAP}B`);
+    }
+    const list = recurrenceListMarkdown(many, ["第一条现象"]);
+    assert.ok(list.includes("报告第 1 条（连续 2 轮）：第一条现象") && list.includes("报告第 79 条"), "清单里每一条都在");
   }
 
   // ③ 选择题硬格式：含路径 / 标识符 / 分支 / commit / 轮次的被拒并说明；合规的放行。
@@ -85,7 +115,7 @@ try {
     assert.deepEqual(checkChoiceQuestion(good), [], "合规的放行");
     assert.equal(sentenceCount("一句。两句！三句？"), 3);
     const cases: Array<[string, Partial<typeof good>, RegExp]> = [
-      ["路径", { question: "要改 server/src/review-history.ts 的判断。" }, /文件路径/],
+      ["路径", { question: "要改 server/src/review-history.ts 的判断。" }, /路径或分支名「server\/src\/review-history.ts」/],
       ["文件名", { question: "要改 review-history.ts 的判断。" }, /文件路径/],
       ["驼峰标识符", { options: ["改 parseCarries：你会少一轮", good.options[1]!] }, /代码标识符「parseCarries」/],
       ["蛇形标识符", { options: ["加一列 history_refs：会多一次迁移", good.options[1]!] }, /代码标识符「history_refs」/],
@@ -96,6 +126,13 @@ try {
       ["选项太少", { options: ["只有一个：会怎样"] }, /1 个选项/],
       ["选项太多", { options: ["一会", "二会", "三会", "四会", "五会"] }, /5 个选项/],
       ["没有后果句", { options: ["统一改成服务端判断", good.options[1]!] }, /第 1 个没有后果句/],
+      // 第 1 轮审查 R2：中文目录、混排目录、前导下划线标识符、中文文件名。
+      ["中文绝对路径", { question: "需要修改 /用户/配置/入口 后再继续。" }, /文件路径「\/用户\/配置\/入口」/],
+      ["混排相对路径", { question: "需要修改 src/配置 后再继续。" }, /文件路径「src\/配置」/],
+      ["前导下划线", { question: "需要修改 _repair_mode 后再继续。" }, /代码标识符「_repair_mode」/],
+      ["双下划线", { options: ["改 __init__：会快", good.options[1]!] }, /代码标识符「__init__」/],
+      ["中文文件名", { options: ["改 配置.json：会快", good.options[1]!] }, /文件路径「配置\.json」/],
+      ["家目录", { question: "放到 ~/code 下面。" }, /文件路径「~\/code」/],
     ];
     for (const [what, patch, expected] of cases) {
       const problems = checkChoiceQuestion({ ...good, ...patch });
@@ -103,6 +140,9 @@ try {
     }
     assert.deepEqual(checkChoiceQuestion({ ...good, question: "macOS 和 iPhone 上表现不一样，需要你定。" }), [],
       "产品名不算代码标识符");
+    for (const question of ["要不要启用/禁用自动审查？", "A/B 两种方案选哪个？"]) {
+      assert.deepEqual(checkChoiceQuestion({ ...good, question }), [], `口语里的斜杠不算路径：${question}`);
+    }
     assert.ok(checkChoiceQuestion({ question: "两件事要定。", options: [],
       items: [{ question: "先定哪个系统。", options: ["先做 macOS：会快"] }] }).some((p) => /第 1 个问题的选项有 1 个选项/.test(p)),
     "多问题时每个子问题各自是一道选择题");
@@ -211,7 +251,9 @@ try {
     "引用对不上：按不是复发处理，结论照收");
   assert.equal((await repairs()).length, 1);
   assert.ok(!(await repairs())[0]!.text.includes("已熔断"), "没熔断的那一轮，修复交接里没有熔断指令");
-  assert.equal(await recurrenceBreakerActive(id), false);
+  const { reviewDeliveryFrom } = await import("../src/review-ownership.js");
+  await armRecurrenceBreaker(id, "dir-round-1", { reviewDelivery: reviewDeliveryFrom((await repairs())[0]!) });
+  assert.equal(await recurrenceBreakerArmed(id, "dir-round-1"), false, "没熔断那一轮的修复送进去，提问闸不开");
 
   // 第 2 轮：清单里带编号；承接第 1 轮第 2 条 → 连续 2 轮 → 熔断。
   const second = await openRound("run-a", 2, "2026-11-01T00:00:00.000Z", 3);
@@ -227,7 +269,13 @@ try {
   assert.ok(breakerRepair.text.includes("ask_question") && breakerRepair.text.includes("dispute_review"),
     "二选一的出路在，驳回的权利也照旧在");
   assert.ok(timeline().includes(label(2)), "时间线上留了一条");
-  assert.equal(await recurrenceBreakerActive(id), true, "执行者此刻处在熔断修复里");
+  // 熔断交接开跑那一刻（真实起跑在 continueTask 里调这一句），方向记到那一轮上。
+  await armRecurrenceBreaker(id, "dir-breaker", { reviewDelivery: reviewDeliveryFrom(breakerRepair) });
+  assert.equal((await db.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, "run-a-2")))[0]!.breakerDirection,
+    "dir-breaker", "从投递收据反查到熔断那一轮");
+  assert.equal(await recurrenceBreakerArmed(id, "dir-breaker"), true, "熔断交接送进去的那个方向：提问闸开");
+  assert.equal(await recurrenceBreakerArmed(id, "dir-other"), false);
+  assert.equal(await recurrenceBreakerArmed(id, null), false);
 
   // 刷新后可见：重新读状态接口，审查记录那一轮带着熔断状态，没熔断的轮次没有。
   const state = await freeWorkflowState(id);
@@ -243,19 +291,26 @@ try {
     releaseTurn(id, owner!);
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(turnRole(id), null, "没有别的回合趁机占上");
-    await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, id));
     const api = new Hono();
     mountTaskQuestionRoutes(api);
-    const { activeTurnToken, activeDirectionToken } = await taskRow();
-    const ask = (body: unknown) => api.request(`/tasks/${id}/ask`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(activeTurnToken ? { "x-ash-turn-token": activeTurnToken } : {}),
-        ...(activeDirectionToken ? { "x-ash-direction-token": activeDirectionToken } : {}),
-      },
-      body: JSON.stringify(body),
-    });
+    // 执行者回合的身份：方向 = 熔断交接送进去的那个方向。
+    const enter = async (direction: string) => db.update(tasks).set({
+      status: "running", activeTurnToken: "turn-exec", activeDirectionToken: direction, activeDirectionVersion: 1,
+      question: null, questionOptions: null, questionItems: null,
+    }).where(eq(tasks.id, id));
+    await enter("dir-breaker");
+    const ask = async (body: unknown) => {
+      const { activeTurnToken, activeDirectionToken } = await taskRow();
+      return api.request(`/tasks/${id}/ask`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeTurnToken ? { "x-ash-turn-token": activeTurnToken } : {}),
+          ...(activeDirectionToken ? { "x-ash-direction-token": activeDirectionToken } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+    };
     const bad = await ask({ question: "第 2 轮又报了 parseCarries 的问题。", options: ["改掉"] });
     assert.equal(bad.status, 400);
     const error = ((await bad.json()) as { error: string }).error;
@@ -267,7 +322,12 @@ try {
       options: ["统一改成服务端判断：选它你会多等一天", "只补齐剩下的地方：今天就能验收，代价是以后还得补"],
     });
     assert.notEqual(fine.status, 400, "合规的选择题不被格式闸拦");
-    await db.update(tasks).set({ status: "done", question: null, questionOptions: null, questionItems: null }).where(eq(tasks.id, id));
+    // 第 1 轮审查 R3：用户裁定之后让它干别的 —— 那是一个新方向，普通澄清题不再被逼成选择题。
+    await enter("dir-user-next");
+    const ordinary = await ask({ question: "你希望新页面展示哪些内容？" });
+    assert.notEqual(ordinary.status, 400, `换了方向，熔断提问闸落下：${await ordinary.clone().text()}`);
+    await db.update(tasks).set({ status: "done", question: null, questionOptions: null, questionItems: null,
+      activeTurnToken: null, activeDirectionToken: null, activeDirectionVersion: 0 }).where(eq(tasks.id, id));
     owner = claimOwnTurn(id, "reviewer");
     assert.ok(owner, "审查回合重新占得到 turn");
   }
@@ -285,10 +345,40 @@ try {
     (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, "run-a")))[0]!, { round: 1 });
   assert.ok(!manualA.includes("已熔断"), "修的是没熔断的那一轮时不带");
   assert.equal((await freeWorkflowState(id)).reviews.find((run) => run.id === "run-b")!.rounds[0]!.recurrence, 3);
+  // 手动修复点名哪一轮，提问闸就认哪一轮：和交接里带不带指令是同一个判据。
+  await armRecurrenceBreaker(id, "dir-manual-a1", { recurrenceRound: { runId: "run-a", round: 1 } });
+  assert.equal(await recurrenceBreakerArmed(id, "dir-manual-a1"), false, "修没熔断的历史轮：闸不开");
+  await armRecurrenceBreaker(id, "dir-manual-b1", { recurrenceRound: { runId: "run-b", round: 1 } });
+  assert.equal(await recurrenceBreakerArmed(id, "dir-manual-b1"), true, "修熔断的那一轮：闸开");
 
-  // 下一轮审查一开，最近一轮换成新的那一轮，提问格式闸自然落下。
-  await openRound("run-b", 2, "2026-11-02T00:00:00.000Z", 1);
-  assert.equal(await recurrenceBreakerActive(id), false, "新一轮审查在跑：不再处在熔断修复里");
+  // 触发条目多到指令里放不下：完整清单落到报告同目录，指令只报条数，整段仍在上限内（第 1 轮审查 R4）。
+  {
+    const total = 41;
+    const findings = Array.from({ length: total }, (_, index) => `第 ${index + 1} 处现象`);
+    const carried = Array.from({ length: 20 }, (_, index) => index * 2 + 1);
+    for (const round of [1, 2]) {
+      const path = freeReviewReportPath(id, "run-c", round);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, report(findings));
+    }
+    await db.insert(freeReviewRuns).values({
+      id: "run-c", taskId: id, reviewerId: "reviewer", reviewerName: "reviewer", agentType: "codex",
+      executorId: "ex", checkMode: "logic", retryLimit: 0, currentRound: 2, status: "failed",
+      targetKind: "workspace", createdAt: "2026-11-03T00:00:00.000Z", updatedAt: at,
+    });
+    await db.insert(freeReviewRounds).values([1, 2].map((round) => ({
+      id: `run-c-${round}`, runId: "run-c", round, status: "failed", conclusion: "verify_failed", startedAt: at,
+      carries: round === 2 ? carried.map((finding) => ({ finding, from: `3.1.${finding}` })) : null,
+    })));
+    const runC = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, "run-c")))[0]!;
+    const prompt = await freeManualRepairPrompt(id, runC);
+    const start = prompt.indexOf(`\n\n【${label(2)}】`);
+    const note = prompt.slice(start, prompt.indexOf("\n", start + 4) + 1);
+    assert.ok(note.includes(`这 ${carried.length} 条`) && note.includes(RECURRENCE_LIST_FILE), note);
+    assert.ok(bytes(note) <= RECURRENCE_NOTE_CAP, `真实投递里的熔断指令 ${bytes(note)}B`);
+    const list = readFileSync(join(freeReviewEvidenceDir(id, "run-c", 2), RECURRENCE_LIST_FILE), "utf8");
+    for (const finding of carried) assert.ok(list.includes(`报告第 ${finding} 条（连续 2 轮）：第 ${finding} 处现象`), list);
+  }
 
   console.log("✓ 同类问题熔断：承接只认发出去的编号、错填按没填；谱系按紧邻轮次传递且跨链；熔断指令只在触发轮出现并留痕；熔断提问过硬格式校验");
 } finally {

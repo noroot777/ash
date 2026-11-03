@@ -130,7 +130,7 @@ async function deliverManualRepair(taskId: string, target: RepairTarget): Promis
         resolutionNote: round.disputeResolutionNote ?? null,
         debateClosing: await debateClosingOf(round.id),
       }),
-      { byBackend: true },
+      { byBackend: true, recurrenceRound: { runId: run.id, round: round.round } },
     );
     if (delivered === false) await abort("回合被其它执行抢占，消息未能投递");
   } catch (error) {

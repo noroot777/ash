@@ -13,8 +13,10 @@ import {
   REVIEWER_REGRESSION_CLAUSE,
 } from "@ash/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
-import { freeReviewHistory } from "./review-history.js";
-import { recurrenceRepairNote, roundRecurrence } from "./review-recurrence.js";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { extractReportFindings, freeReviewHistory } from "./review-history.js";
+import { RECURRENCE_LIST_FILE, recurrenceListMarkdown, recurrenceRepairNote, roundRecurrence } from "./review-recurrence.js";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -148,7 +150,16 @@ function disputeOption(taskId: string): string {
  */
 async function recurrenceNote(taskId: string, runId: string, round: number): Promise<string> {
   const found = await roundRecurrence(taskId, runId, round);
-  return found ? recurrenceRepairNote(found) : "";
+  if (!found) return "";
+  const note = recurrenceRepairNote(found);
+  // 条目多到指令里放不下：完整清单落到报告同目录，指令只报条数并指过去（不截掉任何一条）。
+  if (note.listed) {
+    const report = await readFile(freeReviewReportPath(taskId, runId, round), "utf8").catch(() => "");
+    const dir = freeReviewEvidenceDir(taskId, runId, round);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, RECURRENCE_LIST_FILE), recurrenceListMarkdown(found, extractReportFindings(report)));
+  }
+  return note.text;
 }
 
 export async function freeRepairPrompt(taskId: string, run: ReviewRunRow): Promise<string> {

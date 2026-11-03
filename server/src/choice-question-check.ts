@@ -28,23 +28,39 @@ const PRODUCT_WORDS = new Set([
   "PowerShell", "WeChat", "YouTube", "ChatGPT", "OpenAI", "DeepSeek", "LinkedIn", "PayPal",
 ]);
 
-/** 每一类禁入字眼：名字（写进退回说明）+ 怎么认。 */
+/** 路径里一段的字符：任何文字（中文目录名照样是目录名）+ 数字 + 常见的文件名符号。 */
+const SEGMENT = String.raw`[\p{L}\p{N}_.@-]+`;
+const EXTENSIONS = "tsx?|jsx?|mjs|cjs|json|md|py|go|rs|java|kt|swift|css|scss|html|sh|ya?ml|toml|sql|lock";
+
+/** 每一类禁入字眼：名字（写进退回说明）+ 怎么认。判词边界一律用「前后不是字/数字」，不用 `\b`（见下）。 */
 const FORBIDDEN: Array<{ what: string; find: (text: string) => string | null }> = [
   {
+    // 四种写法：以 `/`、`~/`、`./`、`../` 起头的（段里可以是中文，`/用户/配置` 也是路径）；
+    // Windows 盘符；不带前缀、字母数字与中文混着的 `src/配置`（纯字母数字的归下面的分支名，
+    // 纯中文的 `启用/禁用` 是口语里的「或」，不算）；带扩展名的文件名（`配置.json`）。
     what: "文件路径",
-    find: (text) => /(?:^|[\s(（"'`“「])((?:~|\.{1,2})?\/[\w.@-]+(?:\/[\w.@-]+)*|[A-Za-z]:\\[^\s]+)/.exec(text)?.[1]
-      ?? /\b[\w-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|py|go|rs|java|kt|swift|css|scss|html|sh|ya?ml|toml|sql|lock)\b/.exec(text)?.[0]
+    find: (text) => new RegExp(String.raw`(?<![\p{L}\p{N}_.\/])(?:~|\.{1,2})?\/${SEGMENT}(?:\/${SEGMENT})*`, "u").exec(text)?.[0]
+      ?? /[A-Za-z]:\\[^\s]+/.exec(text)?.[0]
+      ?? [...text.matchAll(new RegExp(String.raw`(?<![\p{L}\p{N}_.@-])${SEGMENT}(?:\/${SEGMENT})+`, "gu"))]
+        .map((match) => match[0])
+        .find((path) => path.split("/").every((part) => [...part].length >= 2)
+          && /[A-Za-z0-9]/.test(path) && /[^\x00-\x7f]/.test(path))
+      ?? new RegExp(String.raw`(?<![\p{L}\p{N}_-])[\p{L}\p{N}_-]+\.(?:${EXTENSIONS})(?![\p{L}\p{N}_])`, "u").exec(text)?.[0]
       ?? null,
   },
   {
-    // `ash/xxx`、`origin/main`、`feature/foo-bar`：两边都至少两个字符，`A/B` 这种口语不算。
-    what: "分支名",
-    find: (text) => /\b[A-Za-z0-9_.-]{2,}\/[A-Za-z0-9_./-]{2,}/.exec(text)?.[0] ?? null,
+    // `ash/xxx`、`origin/main`、`src/main.ts`：纯字母数字的 `x/y` 分不清是分支还是目录，一起报。
+    // 两边都至少两个字符，`A/B` 这种口语不算。
+    what: "路径或分支名",
+    find: (text) => /(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]{2,}\/[A-Za-z0-9_./-]{2,}/.exec(text)?.[0] ?? null,
   },
   {
+    // 驼峰、帕斯卡、蛇形，以及前导下划线的（`_repair_mode`、`_private`、`__init__`）。边界不能用
+    // `\b`：下划线本身算词字符，`_repair_mode` 的 `_` 和 `r` 之间没有词边界，从中间起匹配不上。
     what: "代码标识符",
     find: (text) => {
-      for (const match of text.matchAll(/\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)\b/g)) {
+      const identifier = /(?<![A-Za-z0-9_])(?:_*[a-z]+[A-Z][A-Za-z0-9]*|_*[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*|_*[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*|_+[A-Za-z][A-Za-z0-9]*)(?![A-Za-z0-9_])/g;
+      for (const match of text.matchAll(identifier)) {
         if (!PRODUCT_WORDS.has(match[0])) return match[0];
       }
       return null;
@@ -54,7 +70,7 @@ const FORBIDDEN: Array<{ what: string; find: (text: string) => string | null }> 
     // 7–40 位十六进制，且字母数字都有（纯数字是数量，纯字母是单词）。
     what: "commit",
     find: (text) => {
-      for (const match of text.matchAll(/\b[0-9a-f]{7,40}\b/gi)) {
+      for (const match of text.matchAll(/(?<![A-Za-z0-9_])[0-9a-f]{7,40}(?![A-Za-z0-9_])/gi)) {
         if (/\d/.test(match[0]) && /[a-f]/i.test(match[0])) return match[0];
       }
       return null;
@@ -75,10 +91,14 @@ export function sentenceCount(text: string): number {
 }
 
 function forbiddenIn(text: string): string[] {
-  return FORBIDDEN.flatMap(({ what, find }) => {
+  const hits = FORBIDDEN.flatMap(({ what, find }) => {
     const hit = find(text);
-    return hit ? [`${what}「${hit}」`] : [];
+    return hit ? [{ what, hit }] : [];
   });
+  // 同一串被两类各认一次（`src/main.ts` 既是分支名的形状又含文件名）只报更长的那一处。
+  return hits.filter(({ hit }, index) => !hits.some((other, at) => at !== index
+    && other.hit.includes(hit) && (other.hit !== hit || at < index)))
+    .map(({ what, hit }) => `${what}「${hit}」`);
 }
 
 /**

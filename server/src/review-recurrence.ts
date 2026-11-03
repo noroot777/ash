@@ -11,8 +11,9 @@
 //    清单里（`history_refs`），N 必须是这份报告里真抽得到的那一条。
 // ② **谱系**：承接按链传递，且只认**紧挨着的上一轮**、两头都是 verify_failed。跨 run 照算（用户点
 //    「再审一轮」开的新链，清单本来就跨链）；中间断一轮（没承接、没结论、通过了）谱系就断了。
-// ③ **熔断**：修复交接里那一轮的谱系够长，就在那一条交接里附一段指令（只这一轮，常驻提示词一个字节
-//    不加）；同时这一轮的审查记录与时间线上都留下「同类问题第 N 轮未收口，已熔断」。
+// ③ **熔断**：修复交接里那一轮有谱系够长的发现，就在那一条交接里附一段指令，点名**每一条**够长的
+//    （只这一轮，常驻提示词一个字节不加）；同时这一轮的审查记录与时间线上都留下「同类问题第 N 轮
+//    未收口，已熔断」。熔断期间的提问要过格式闸，那道闸绑在哪见 `review-recurrence-gate.ts`。
 //
 // **失效向不触发**：没填、填错、格式不对、引用对不上，一律按「不是复发」处理，绝不报错、绝不编一条
 // 假承接（同 `extractReportFindings` 的「宁可说没抽到」）。不填完全合法 —— 熔断是加在按点修上的一道
@@ -68,30 +69,40 @@ export type LineageRound = {
   carries: Carry[];
 };
 
+/** 一轮熔断的结果：达到阈值的**每一条**发现各自连着几轮，外加其中最长的那个（界面与时间线报它）。 */
+export type Recurrence = { length: number; findings: Array<{ finding: number; length: number }> };
+
 /**
- * 每一轮「最长的那条谱系连续几轮被拦」。`rounds` 是这个任务全部轮次的**全局顺序**（链按创建先后，
- * 链内按轮次）；返回值里只有 ≥ 2 的轮次（没承接的轮次谱系长 1，不必记）。
+ * 每一轮里**谱系达到阈值的全部发现**。`rounds` 是这个任务全部轮次的**全局顺序**（链按创建先后，
+ * 链内按轮次）；返回值里只有至少一条达到阈值的轮次。
+ *
+ * 触发集合是「每一条够长的」，不是「最长的那几条」：同一轮里 A 连着三轮、B 连着两轮，两条都得
+ * 进修复交接 —— 只点名最长的那条，B 只要总比 A 晚冒头一轮就永远不会被要求一次修全。`length`
+ * 只是展示用的那个最大值。
  *
  * 一条承接计入的条件，三条缺一不可：来源恰好是**全局顺序里的上一轮**（中间断一轮就断）、两头都是
  * verify_failed（「被标为拦验收」）、来源编号里的那一条存在于上一轮（编号是从它算出来的，到这里只是
  * 再核一次）。
  */
-export function lineageLengths(rounds: readonly LineageRound[]): Map<string, { length: number; findings: number[] }> {
+export function lineageLengths(rounds: readonly LineageRound[], threshold = RECURRENCE_THRESHOLD): Map<string, Recurrence> {
   const depth = new Map<string, number>(); // `${refBase}.${finding}` → 这一条的谱系长度
-  const result = new Map<string, { length: number; findings: number[] }>();
+  const result = new Map<string, Recurrence>();
   rounds.forEach((round, index) => {
     if (round.conclusion !== "verify_failed") return;
     const previous = index > 0 ? rounds[index - 1]! : null;
-    let longest = 1;
-    let findings: number[] = [];
+    const findings: Recurrence["findings"] = [];
     for (const carry of round.carries) {
       if (!previous || previous.conclusion !== "verify_failed" || !carry.from.startsWith(`${previous.refBase}.`)) continue;
       const length = (depth.get(carry.from) ?? 1) + 1;
       depth.set(`${round.refBase}.${carry.finding}`, length);
-      if (length > longest) { longest = length; findings = [carry.finding]; }
-      else if (length === longest) findings.push(carry.finding);
+      if (length >= threshold) findings.push({ finding: carry.finding, length });
     }
-    if (longest >= 2) result.set(round.key, { length: longest, findings: findings.sort((a, b) => a - b) });
+    if (findings.length) {
+      result.set(round.key, {
+        length: Math.max(...findings.map((item) => item.length)),
+        findings: findings.sort((a, b) => a.finding - b.finding),
+      });
+    }
   });
   return result;
 }
@@ -99,33 +110,36 @@ export function lineageLengths(rounds: readonly LineageRound[]): Map<string, { l
 const roundKey = (runId: string, round: number) => `${runId}:${round}`;
 
 /** 任务全部轮次的全局顺序 + 各自的谱系长度。读失败就当没有（熔断是附加的闸，不许拖垮修复交接）。 */
-export async function taskRecurrences(taskId: string): Promise<Map<string, { length: number; findings: number[] }>> {
+export async function taskRecurrences(taskId: string): Promise<Map<string, Recurrence>> {
   try {
     const sequence = await chainSequence(taskId);
     const runIds = [...sequence.keys()];
     if (!runIds.length) return new Map();
+    // 合并结果审查照样在全局顺序里、照样传递承接（审查者声明的承接是真的），但它**自己那一轮
+    // 不熔断**：那条线的修复是另起的独立任务，不走这里的修复交接，只在显示上熔断等于说了没做到的事。
+    const merged = new Set((await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
+      .where(and(eq(freeReviewRuns.taskId, taskId), eq(freeReviewRuns.targetKind, "accepted_merge")))).map((row) => row.id));
     const rows = await db.select({
       runId: freeReviewRounds.runId, round: freeReviewRounds.round,
       conclusion: freeReviewRounds.conclusion, carries: freeReviewRounds.carries,
     }).from(freeReviewRounds).where(inArray(freeReviewRounds.runId, runIds)).orderBy(asc(freeReviewRounds.round));
     const ordered = rows.sort((a, b) => sequence.get(a.runId)! - sequence.get(b.runId)! || a.round - b.round);
-    return lineageLengths(ordered.map((row) => ({
+    const found = lineageLengths(ordered.map((row) => ({
       key: roundKey(row.runId, row.round),
       refBase: findingRefBase(sequence.get(row.runId)!, row.round),
       conclusion: row.conclusion,
       carries: Array.isArray(row.carries) ? row.carries : [],
     })));
+    for (const row of ordered) if (merged.has(row.runId)) found.delete(roundKey(row.runId, row.round));
+    return found;
   } catch {
     return new Map();
   }
 }
 
 /** 某一轮有没有熔断；没有返回 null。 */
-export async function roundRecurrence(
-  taskId: string, runId: string, round: number,
-): Promise<{ length: number; findings: number[] } | null> {
-  const found = (await taskRecurrences(taskId)).get(roundKey(runId, round));
-  return found && found.length >= RECURRENCE_THRESHOLD ? found : null;
+export async function roundRecurrence(taskId: string, runId: string, round: number): Promise<Recurrence | null> {
+  return (await taskRecurrences(taskId)).get(roundKey(runId, round)) ?? null;
 }
 
 export { roundKey as recurrenceKey };
@@ -140,34 +154,41 @@ export function recurrenceTimeline(length: number): string {
   return `${recurrenceLabel(length)}：接下来的修复不再按点修，执行者要么一次改全同类位置，要么把方案选择交给你。`;
 }
 
-/**
- * 熔断那一轮修复交接里附的指令。**只在触发轮出现**，≤ 300 字节（体积闸 `test-prompt-budget.ts`
- * 钉着「去掉这一段就和普通修复交接逐字节相同」）。驳回的权利不在这里重复：同一条交接后面照常带着。
- */
-export function recurrenceRepairNote(found: { length: number; findings: number[] }): string {
-  return `\n\n【${recurrenceLabel(found.length)}】报告第 ${found.findings.join("、")} 条已按点修过没收口，二选一：` +
-    `(a) 没修全——列出全部同类位置，这轮一次改完；(b) 方案本身走不通——用 ask_question 把选择题交给用户。不许再按点修。\n`;
+/** 熔断指令的字节上限（用户定的）。体积闸按真实投递逐字节量，这里是构造时就守住的那一道。 */
+export const RECURRENCE_NOTE_CAP = 300;
+
+/** 条目放不进指令时，完整清单写在报告同目录的这个文件里（`free-review-prompts.ts` 负责落盘）。 */
+export const RECURRENCE_LIST_FILE = "recurrence.md";
+
+/** `1、2、3、5` → `1–3、5`：连续的条序压成一段。 */
+function findingRanges(findings: readonly number[]): string {
+  const parts: string[] = [];
+  for (let index = 0; index < findings.length;) {
+    let end = index;
+    while (end + 1 < findings.length && findings[end + 1] === findings[end]! + 1) end++;
+    parts.push(end > index + 1 ? `${findings[index]}–${findings[end]}` : findings.slice(index, end + 1).join("、"));
+    index = end + 1;
+  }
+  return parts.join("、");
 }
 
 /**
- * 「执行者现在正处在熔断修复里」：任务最近一轮工作区审查已经结掉、且那一轮熔断了。
+ * 熔断那一轮修复交接里附的指令。**只在触发轮出现**，≤ 300 字节（体积闸 `test-prompt-budget.ts`
+ * 钉着「去掉这一段就和普通修复交接逐字节相同」）。驳回的权利不在这里重复：同一条交接后面照常带着。
  *
- * 这是 ask_question 硬格式校验的开关。按**状态**判而不按「交接里有没有那段话」判：执行者可能隔了
- * 几个回合（中途被追问、被打断）才去提问，那时手上的消息早就不是那条交接了。下一轮审查一开，
- * 最近一轮就换成新的那一轮，开关自然落下，不用另外清。
+ * 触发条目全部要有去处，长度又要有上界：条序先压成区间，放得下就内联；放不下（触发的条目多到
+ * 区间也压不住）就只报条数，完整清单指到报告同目录的 `recurrence.md` —— 不截掉任何一条。
  */
-export async function recurrenceBreakerActive(taskId: string): Promise<boolean> {
-  try {
-    const latest = (await db.select({ id: freeReviewRuns.id, currentRound: freeReviewRuns.currentRound })
-      .from(freeReviewRuns)
-      .where(and(eq(freeReviewRuns.taskId, taskId), eq(freeReviewRuns.targetKind, "workspace")))
-      .orderBy(asc(freeReviewRuns.createdAt), asc(freeReviewRuns.id))).at(-1);
-    if (!latest) return false;
-    const round = (await db.select({ status: freeReviewRounds.status }).from(freeReviewRounds)
-      .where(and(eq(freeReviewRounds.runId, latest.id), eq(freeReviewRounds.round, latest.currentRound)))).at(0);
-    if (!round || round.status === "reviewing") return false;
-    return !!(await roundRecurrence(taskId, latest.id, latest.currentRound));
-  } catch {
-    return false;
-  }
+export function recurrenceRepairNote(found: Recurrence): { text: string; listed: boolean } {
+  const note = (which: string) => `\n\n【${recurrenceLabel(found.length)}】${which}已按点修过没收口，二选一：` +
+    `(a) 没修全——列出全部同类位置，这轮一次改完；(b) 方案本身走不通——用 ask_question 把选择题交给用户。不许再按点修。\n`;
+  const inline = note(`报告第 ${findingRanges(found.findings.map((item) => item.finding))} 条`);
+  return Buffer.byteLength(inline, "utf8") <= RECURRENCE_NOTE_CAP ? { text: inline, listed: false }
+    : { text: note(`这 ${found.findings.length} 条（见同目录 ${RECURRENCE_LIST_FILE}）`), listed: true };
+}
+
+/** 外置清单的正文：每条的条序、连着几轮、报告里那句「你会遇到」。 */
+export function recurrenceListMarkdown(found: Recurrence, phenomena: readonly string[]): string {
+  return `# ${recurrenceLabel(found.length)}\n\n` + found.findings.map(({ finding, length }) =>
+    `- 报告第 ${finding} 条（连续 ${length} 轮）：${phenomena[finding - 1] ?? "（报告里没抽到这条的现象）"}`).join("\n") + "\n";
 }

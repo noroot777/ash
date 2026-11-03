@@ -246,6 +246,7 @@ export async function continueTask(
     // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
     // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
     bindTurnToken(taskId, turnToken);
+    await (await import("./review-recurrence-gate.js")).armRecurrenceBreaker(taskId, directionToken, opts);
 
     // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认
     // 执行器,并把这次降级写进时间线 —— 换执行器可能换模型档位,产出会变,不能静默。
