@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { cloneSealedSnapshot, isSealedSnapshot, sealedGit } from "./accept-gate-preview.js";
+import { cloneSealedSnapshot, isSealedSnapshot, readOnlyGit, sealedGit } from "./accept-gate-preview.js";
 import { execFileText } from "./exec.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
@@ -54,8 +54,8 @@ export type GateSource = {
   inputs?: SourceInput[];
 };
 const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
-const git = async (cwd: string, args: string[]) =>
-  (await execFileText("git", ["-C", cwd, ...args], { maxBuffer: 32 * 1024 * 1024 })).stdout;
+// 源码身份（ls-tree / status）与快照准备共用 readOnlyGit 的口径：不调 fsmonitor、不刷新索引（见那里）。
+const git = async (cwd: string, args: string[]) => (await readOnlyGit(cwd, args)).stdout;
 
 async function nonGitFiles(cwd: string): Promise<string[]> {
   return (await readdir(cwd)).filter(name => name !== ".git").sort();
@@ -138,6 +138,75 @@ async function digestInputs(cwd: string, inputs: SourceInput[]): Promise<string>
   return hash.digest("hex");
 }
 
+/**
+ * 这一份提交上快照要借哪几个依赖目录（GateSource.dependencies 与它的补给来源）。只读树与文件系统，
+ * 不跑 `git status` 这类会调起项目配置程序（fsmonitor 等）的命令：验收台在没跑门禁时也要知道它
+ * （合并预览档的基准判定，见 accept-gate-baseline.ts）。
+ */
+export async function gateDependencies(cwd: string, commit: string): Promise<{ dependencies: string[]; supplied: DependencySupply[] }> {
+  const entries = (await git(cwd, ["ls-tree", "-r", "-z", commit])).split("\0").filter(Boolean);
+  const paths = entries.map(entry => entry.slice(entry.indexOf("\t") + 1));
+  if (paths.includes(".gitmodules") || entries.some(entry => entry.startsWith("160000 "))) {
+    throw new Error("验收快照暂不支持 Git 子模块；请使用完整源码检出或明确跳过本次门禁");
+  }
+  const manifests = /(?:^|\/)(?:package\.json|pyproject\.toml|Cargo\.toml|go\.mod|composer\.json|Gemfile)$/;
+  const packageDirs = new Set([".", ...paths.filter(path => manifests.test(path)).map(path => dirname(path))]);
+  // 登记要借用的依赖目录。嵌套包各自那一份也登记，但被**已登记项包住**的要去掉：借用是在快照
+  // 里建一条链，父目录一旦换成链，子路径就落到工作区那一份里去了，再往那个位置建第二条链毫无
+  // 意义（也会 EEXIST）。"." 排在最前，所以父目录总是先登记。
+  const registered: string[] = [];
+  for (const directory of [...packageDirs].sort()) {
+    for (const name of DEPENDENCY_DIRS) {
+      const dep = join(directory, name);
+      const info = await optionalRead(join(cwd, dep), () => lstat(join(cwd, dep)));
+      if (info === null) continue;
+      // 名字不证明类型。在 Git 根提交一个叫 `vendor`/`target` 的**普通文件**,上一版靠 lstat 成功
+      // 就把它登记成依赖目录:随后 linkWhole 把它重建成一条借用原文件的链,那份源码不再冻结,往
+      // 快照这条路径写就写到了工作区。非 Git 分支一直有这道判断,Git 分支漏了,两边对齐。
+      // 判的是**落点**而不是 lstat 的类型:依赖根自己是一条链是合法形状(node_modules -> .store),
+      // 落点读不出来的悬空根也照旧登记——provideDependency 要按原样把它重建成同样解析不通的一条。
+      // 落点「读不出来」只认 ENOENT/ENOTDIR/ELOOP(悬空根的正常形态);读不动必须明确失败,否则一棵
+      // 真实的依赖目录会因为一次 EACCES 落到这条 continue 上 —— 它就不再按依赖登记,改走源码冻结,
+      // 往快照这条路径写就写进了工作区那一份。
+      const landing = await optionalRead(join(cwd, dep), () => stat(join(cwd, dep)),
+        ["ENOENT", "ENOTDIR", "ELOOP"]);
+      if (landing === null ? !info.isSymbolicLink() : !landing.isDirectory()) continue;
+      if (registered.some(other => inside(join(cwd, other), join(cwd, dep)))) continue;
+      registered.push(dep);
+    }
+  }
+  // 工作区在某个位置上压根没有依赖目录时（worktree 的常态），按同仓参考检出补一份来源。根因、
+  // 两条路线的实测对照、以及「为什么不按命令需要收窄」都写在 accept-gate-supply 顶部。
+  const supplied = await dependencySupply(cwd, [...packageDirs], registered);
+  return { dependencies: [...registered, ...supplied.map(item => item.path)].sort(), supplied };
+}
+
+/**
+ * 借进快照的依赖内容实际读自工作区的哪几处（相对工作区、`/` 分隔，"" = 整个工作区）：依赖目录自己、
+ * 链上经过的每一跳，以及它最终解析到的那棵树 —— 依赖根可以是一条指回仓库别处的链（`vendor -> shared`），
+ * 借进来的就是工作区里那棵树（第 2 轮审查 F1）。合并预览据此判断借进来的是不是合并之后那份
+ * （accept-gate-baseline.ts）。树**里面**指回源码的链不用算：克隆时它们被改写到快照自己那份源码上
+ * （accept-gate-relocate 的 relocatedTarget），有这种链的树也不会被整条借出去（provideDependency）。
+ */
+export async function dependencyReads(cwd: string, dependencies: readonly string[]): Promise<string[]> {
+  const root = await requiredRead(cwd, () => realpath(cwd));
+  const reads = new Set<string>();
+  const add = (path: string) => { if (inside(root, path)) reads.add(relative(root, path).split(sep).join("/")); };
+  for (const dep of dependencies) {
+    reads.add(dep.split(sep).join("/"));
+    let hop = join(root, dep);
+    for (let step = 0; step < 40; step++) {
+      const info = await optionalRead(hop, () => lstat(hop), ["ENOENT", "ENOTDIR", "ELOOP"]);
+      if (!info?.isSymbolicLink()) break;
+      add(hop);
+      hop = resolve(dirname(hop), await readlink(hop));
+    }
+    const landing = await optionalRead(join(root, dep), () => realpath(join(root, dep)), ["ENOENT", "ENOTDIR", "ELOOP"]);
+    if (landing !== null) add(landing);
+  }
+  return [...reads];
+}
+
 export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, "identity.source")): Promise<GateSource> {
   if (physicalPath(cwd) === physicalPath(RUNS_DIR)) throw new Error("项目目录不能与 ash 运行产物目录相同");
   const commit = await commitAt(cwd, "HEAD");
@@ -145,42 +214,10 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
   const dependencies: string[] = [];
   let supplied: DependencySupply[] = [];
   if (commit) {
-    const entries = (await git(cwd, ["ls-tree", "-r", "-z", commit])).split("\0").filter(Boolean);
-    const paths = entries.map(entry => entry.slice(entry.indexOf("\t") + 1));
-    if (paths.includes(".gitmodules") || entries.some(entry => entry.startsWith("160000 "))) {
-      throw new Error("验收快照暂不支持 Git 子模块；请使用完整源码检出或明确跳过本次门禁");
-    }
     hash.update(commit);
-    const manifests = /(?:^|\/)(?:package\.json|pyproject\.toml|Cargo\.toml|go\.mod|composer\.json|Gemfile)$/;
-    const packageDirs = new Set([".", ...paths.filter(path => manifests.test(path)).map(path => dirname(path))]);
-    // 登记要借用的依赖目录。嵌套包各自那一份也登记，但被**已登记项包住**的要去掉：借用是在快照
-    // 里建一条链，父目录一旦换成链，子路径就落到工作区那一份里去了，再往那个位置建第二条链毫无
-    // 意义（也会 EEXIST）。"." 排在最前，所以父目录总是先登记。
-    const registered: string[] = [];
-    for (const directory of [...packageDirs].sort()) {
-      for (const name of DEPENDENCY_DIRS) {
-        const dep = join(directory, name);
-        const info = await optionalRead(join(cwd, dep), () => lstat(join(cwd, dep)));
-        if (info === null) continue;
-        // 名字不证明类型。在 Git 根提交一个叫 `vendor`/`target` 的**普通文件**,上一版靠 lstat 成功
-        // 就把它登记成依赖目录:随后 linkWhole 把它重建成一条借用原文件的链,那份源码不再冻结,往
-        // 快照这条路径写就写到了工作区。非 Git 分支一直有这道判断,Git 分支漏了,两边对齐。
-        // 判的是**落点**而不是 lstat 的类型:依赖根自己是一条链是合法形状(node_modules -> .store),
-        // 落点读不出来的悬空根也照旧登记——provideDependency 要按原样把它重建成同样解析不通的一条。
-        // 落点「读不出来」只认 ENOENT/ENOTDIR/ELOOP(悬空根的正常形态);读不动必须明确失败,否则一棵
-        // 真实的依赖目录会因为一次 EACCES 落到这条 continue 上 —— 它就不再按依赖登记,改走源码冻结,
-        // 往快照这条路径写就写进了工作区那一份。
-        const landing = await optionalRead(join(cwd, dep), () => stat(join(cwd, dep)),
-          ["ENOENT", "ENOTDIR", "ELOOP"]);
-        if (landing === null ? !info.isSymbolicLink() : !landing.isDirectory()) continue;
-        if (registered.some(other => inside(join(cwd, other), join(cwd, dep)))) continue;
-        registered.push(dep);
-      }
-    }
-    // 工作区在某个位置上压根没有依赖目录时（worktree 的常态），按同仓参考检出补一份来源。根因、
-    // 两条路线的实测对照、以及「为什么不按命令需要收窄」都写在 accept-gate-supply 顶部。
-    supplied = await dependencySupply(cwd, [...packageDirs], registered);
-    dependencies.push(...[...registered, ...supplied.map(item => item.path)].sort());
+    const planned = await gateDependencies(cwd, commit);
+    supplied = planned.supplied;
+    dependencies.push(...planned.dependencies);
     // 未跟踪内容只在**登记的依赖目录之内**被放过。这里有一处相对旧口径的**收窄**:以前靠闭包
     // 把「node_modules -> .local-deps」那种落点补登记成输入,于是一个未跟踪、也没进 .gitignore
     // 的目录被默许;现在它和任何未跟踪文件一样被拒。这是有意的——依赖是产物,产物本来就该在

@@ -32,8 +32,16 @@ import { execFileText } from "./exec.js";
 import { expandHome } from "./platform.js";
 
 const MAX_BUFFER = 32 * 1024 * 1024;
-const git = (repo: string, args: string[], input?: string) =>
-  execFileText("git", ["-C", expandHome(repo), ...args], { maxBuffer: MAX_BUFFER, input });
+/**
+ * 在项目仓库里跑一条**只读**的 git。`diff-tree`、`check-attr`、`status` 这些看似只读的命令会读索引，
+ * 读索引就会调起项目配的 `core.fsmonitor`（第 2 轮审查 F2 实测），顺手刷新索引还会写回、触发
+ * post-index-change 钩子。所以一律关掉 fsmonitor、不拿可选锁（不刷新不写回）—— 两样都只是缓存，
+ * 关掉不改变任何结果。门禁的准备（基准判定、预演、源码身份）都走这一个口子，别各写各的 `git`。
+ */
+export const readOnlyGit = (repo: string, args: string[], input?: string) =>
+  execFileText("git", ["-C", expandHome(repo), "-c", "core.fsmonitor=false", ...args],
+    { maxBuffer: MAX_BUFFER, input, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+const git = readOnlyGit;
 
 /** 预演可以从项目配置里带过去的内置选项（只影响内置合并的算法，没有一项能指向程序）。 */
 const MERGE_SETTINGS = /^(merge\.(renames|directoryrenames|renamelimit|renormalize)|diff\.(renames|renamelimit)|core\.(autocrlf|eol|ignorecase|precomposeunicode))$/;

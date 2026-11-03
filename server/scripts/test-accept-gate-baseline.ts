@@ -8,7 +8,7 @@
 // 不跑而真按下去跑了（或反过来），统一验收就会停在半路。
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -498,12 +498,49 @@ try {
     commitOnMain(sample.repo, "vendor/value.txt", "SAFE\n", "main commits vendor");
     git(sample.cwd, "merge", "--no-edit", "main");
     commitOnMain(sample.repo, "vendor/value.txt", "BROKEN\n", "main updates vendor");
-    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /依赖目录（vendor）/);
+    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /依赖内容（vendor）/);
     assert.equal(await wouldRun(sample), false);
     const refused = await acceptTask(sample.taskId);
     assert.equal(refused.accepted, false);
     if (!refused.accepted) assert.equal(refused.reason, "accept_gate_preview_unavailable");
     assert.equal((await runs(sample.taskId)).length, 0);
+  }
+
+  // ㉑ 合并预览 · 依赖根是一条指回仓库别处的链（vendor -> shared，第 2 轮审查 F1）：借进来的是工作区里
+  // shared 那棵旧树，比的必须是借用实际读取的落点，不是目录名。
+  {
+    const sample = await fixture("preview-linked-vendor", { baseline: "merge_preview" });
+    mkdirSync(join(sample.repo, "shared"));
+    writeFileSync(join(sample.repo, "shared", "value.txt"), "SAFE\n");
+    symlinkSync("shared", join(sample.repo, "vendor"));
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-m", "main commits vendor -> shared");
+    git(sample.cwd, "merge", "--no-edit", "main");
+    commitOnMain(sample.repo, "shared/value.txt", "BROKEN\n", "main updates shared");
+    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /依赖内容（[^）]*shared/);
+    assert.equal(await wouldRun(sample), false);
+    const refused = await acceptTask(sample.taskId);
+    assert.equal(refused.accepted, false);
+    if (!refused.accepted) assert.equal(refused.reason, "accept_gate_preview_unavailable");
+    assert.equal((await runs(sample.taskId)).length, 0);
+  }
+
+  // ㉒ 只是打开验收台（读门禁状态）不许调起项目程序（第 2 轮审查 F2）：diff-tree / check-attr / status
+  // 读索引就会跑 core.fsmonitor。合并预览档、设了与没设门禁命令都一样。
+  {
+    const sample = await fixture("state-fsmonitor", { baseline: "merge_preview" });
+    const marker = join(root, "fsmonitor-ran");
+    const monitor = join(root, "fsmonitor.sh");
+    writeFileSync(monitor, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    git(sample.repo, "config", "core.fsmonitor", monitor);
+    rmSync(marker, { force: true });
+    await acceptGateState(sample.taskId);
+    assert.equal(await wouldRun(sample), true);
+    assert.equal(existsSync(marker), false, "设了门禁：读状态、预判都没有调起 fsmonitor");
+    await db.update(projects).set({ acceptGateCommand: null }).where(eq(projects.id, sample.projectId));
+    await acceptGateState(sample.taskId);
+    assert.equal(existsSync(marker), false, "没设门禁：读状态没有调起 fsmonitor");
+    git(sample.repo, "config", "--unset", "core.fsmonitor");
   }
 
   // ⑳ 合并预览 · 一个这次没改过、平时一直靠过滤器检出的老文件（第 1 轮审查 F3）：封好的快照检出整棵树，
@@ -561,7 +598,7 @@ try {
 
   console.log(JSON.stringify({ branchDefault: true, containsRefuse: true, containsPass: true, previewCollision: true,
     previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true,
-    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true, rollbackFailure: true, trackedVendor: true, existingFilter: true }));
+    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true, rollbackFailure: true, trackedVendor: true, existingFilter: true, linkedVendor: true, stateFsmonitor: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

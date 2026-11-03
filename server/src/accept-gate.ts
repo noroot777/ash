@@ -125,7 +125,7 @@ export async function acceptGateCheck(
   const head = source.commit;
   // 门禁基准（项目级）：拦在一切复用与登记之前 —— 「没含目标分支」「预演冲突」这两种在跑之前就
   // 说得清，不该先烧十几分钟再告诉用户。明确跳过门禁的那一按不受它管：什么都不跑，就无所谓测哪棵。
-  const baseline = opts.intent === "skip" ? null : await resolveGateBaseline(task, project, head, source.dependencies);
+  const baseline = opts.intent === "skip" ? null : await resolveGateBaseline(task, project, head, { cwd, dependencies: source.dependencies });
   if (baseline?.block) return await baselineRefusal(task, baseline.block);
   const plan = baseline?.plan ?? null;
 
@@ -398,7 +398,7 @@ export async function acceptGateWouldRun(task: TaskRow, project: ProjectRow | nu
   if (!source) return false;
   // 基准拦得下的那一按同理倒向 `false`：真按下去会在门禁之前被拒（没含目标分支 / 预演冲突），
   // 一条运行记录都不建。复用判据也要连基准一起比 —— 预览基准过期的旧绿真按下去会重跑。
-  const baseline = await resolveGateBaseline(task, project, source.commit, source.dependencies);
+  const baseline = await resolveGateBaseline(task, project, source.commit, { cwd, dependencies: source.dependencies });
   if (baseline.block) return false;
   const previous = await latestRun(task.id);
   return !(previous && previous.status === "passed"
