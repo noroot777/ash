@@ -23,6 +23,23 @@ const landGuarded = async (sample: { repo: string; cwd: string; taskId: string }
     { sourceCommit: source, expectedTree, expectedTarget: tested, expectedPhysical }) };
 };
 
+// 只在最终合并那一下生效的 git 包装：命令行里出现 `trigger` 时先（或后）跑一段 shell，只跑一次。
+const wrapGit = (name: string, trigger: string, script: string, after = false) => {
+  const bin = join(root, `${name}-bin`);
+  mkdirSync(bin);
+  const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  const once = join(bin, "fired");
+  const hook = `[ -e '${once}' ] || { touch '${once}'; ${script.replaceAll("GIT", `'${realGit}'`)}; }`;
+  writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *"${trigger}"*) `
+    + (after ? `'${realGit}' "$@"; rc=$?; ${hook}; exit $rc ;; esac\n` : `${hook} ;; esac\n`)
+    + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
+  return bin;
+};
+const withPath = async <T>(bin: string, run: (arm: () => void) => Promise<T>) => {
+  const path = process.env.PATH;
+  try { return await run(() => { process.env.PATH = `${bin}:${path}`; }); } finally { process.env.PATH = path; }
+};
+
 const refusedBeforeGate = async (sample: { taskId: string; projectId: string }, pattern: RegExp) => {
   assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", pattern);
   assert.equal(await wouldRun(sample), false);
@@ -283,7 +300,7 @@ try {
     git(sample.repo, "config", "--remove-section", "filter.late");
   }
 
-  // ㊶ 最终合并 · 写文件写到一半失败（第 6 轮审查 F1：一个目录没有写权限，`a.txt` 已经写成新的、
+  // ㊶ 最终合并 · 写文件写到一半失败（第 6 轮审查 F1：写的时候一个目录没有写权限，`a.txt` 已经写成新的、
   // `locked/z.txt` 写不进去）：这次写下的按原样放回，回执说的就是检出现在的样子，分支和索引都没动。
   {
     const sample = await fixture("landing-partial-write", { baseline: "merge_preview" });
@@ -295,10 +312,13 @@ try {
     for (const file of ["a.txt", "locked/z.txt"]) writeFileSync(join(sample.cwd, file), "new\n");
     git(sample.cwd, "commit", "-qam", "task rewrites both");
     const before = git(sample.repo, "rev-parse", "main");
+    // 核对（含目录能不能写）都过了之后、真正写文件的那一刻才把目录锁上：包装在 `read-tree -m -u` 之前。
+    const bin = wrapGit("partial-write", " read-tree -m -u ", `chmod 555 '${join(sample.repo, "locked")}'`);
     let outcome: Awaited<ReturnType<typeof landGuarded>>;
     try {
-      outcome = await landGuarded(sample, () => chmodSync(join(sample.repo, "locked"), 0o555));
+      outcome = await withPath(bin, arm => landGuarded(sample, arm));
     } finally { chmodSync(join(sample.repo, "locked"), 0o755); }
+    assert.ok(existsSync(join(bin, "fired")), "目录真的在写的那一刻锁上了");
     assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
     if (!outcome.landed.ok) {
       assert.match(outcome.landed.message, /失败[^]*目标分支没动，检出里的文件和合并之前一样（这次写下的已经按原样放回）/);
@@ -326,23 +346,6 @@ try {
     if (!outcome.landed.ok) assert.match(outcome.landed.message, /这次合并不会重写的文件/);
     assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
   }
-
-  // 只在最终合并那一下生效的 git 包装：命令行里出现 `trigger` 时先（或后）跑一段 shell，只跑一次。
-  const wrapGit = (name: string, trigger: string, script: string, after = false) => {
-    const bin = join(root, `${name}-bin`);
-    mkdirSync(bin);
-    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-    const once = join(bin, "fired");
-    const hook = `[ -e '${once}' ] || { touch '${once}'; ${script.replaceAll("GIT", `'${realGit}'`)}; }`;
-    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *"${trigger}"*) `
-      + (after ? `'${realGit}' "$@"; rc=$?; ${hook}; exit $rc ;; esac\n` : `${hook} ;; esac\n`)
-      + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
-    return bin;
-  };
-  const withPath = async <T>(bin: string, run: (arm: () => void) => Promise<T>) => {
-    const path = process.env.PATH;
-    try { return await run(() => { process.env.PATH = `${bin}:${path}`; }); } finally { process.env.PATH = path; }
-  };
 
   // ㊸ 最终合并 · 「工作区干净」核过之后、拿到索引锁之前，另一个终端 `git add` 了一份改动、再把文件改回
   // 原样（第 6 轮审查 F2）：工作区与物理摘要都看不出来，但换上测过的索引会抹掉那份暂存 —— 持锁后核真实
@@ -384,6 +387,37 @@ try {
     assert.equal(git(sample.repo, "status", "--porcelain"), "");
   }
 
+  // ㊺ 最终合并 · 测过之后一个这次合并不碰的源码目录改成 0555（第 6 轮审查第 2 轮 F1）：能读能进、不能写，
+  // 快照里构建往里写缓存成功、合进去之后同一条命令报 EACCES —— 物理身份也记能不能写，发布前就拒。
+  {
+    const sample = await fixture("landing-dir-write", { baseline: "merge_preview" });
+    mkdirSync(join(sample.repo, "build-inputs"));
+    writeFileSync(join(sample.repo, "build-inputs", "entry.js"), "module.exports = 1;\n");
+    git(sample.repo, "add", "build-inputs");
+    git(sample.repo, "commit", "-qm", "main adds build inputs");
+    const before = git(sample.repo, "rev-parse", "main");
+    let outcome: Awaited<ReturnType<typeof landGuarded>>;
+    try {
+      outcome = await landGuarded(sample, () => chmodSync(join(sample.repo, "build-inputs"), 0o555));
+    } finally { chmodSync(join(sample.repo, "build-inputs"), 0o755); }
+    assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
+    if (!outcome.landed.ok) assert.match(outcome.landed.message, /这次合并不会重写的文件/);
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+  }
+
+  // ㊻ 最终合并 · 目标检出开了拆分索引（第 6 轮审查第 2 轮 F2）：主索引文件靠扩展引用旁边的共享索引，
+  // 持锁后读真实索引时连它一起拷 —— 干净的检出照常合进去，不被当成「暂存区多了东西」。
+  {
+    const sample = await fixture("landing-split-index", { baseline: "merge_preview" });
+    const { landed, expectedTree } = await landGuarded(sample, () => {
+      git(sample.repo, "update-index", "--split-index");
+      assert.notEqual(git(sample.repo, "rev-parse", "--shared-index-path"), "");
+    });
+    assert.equal(landed.ok, true, JSON.stringify(landed));
+    assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), expectedTree);
+    assert.equal(git(sample.repo, "status", "--porcelain"), "");
+  }
+
   // ㊲ 合并预览 · 门禁跑着的时候，目标检出里一个这次合并不改的文件被存成另一种换行再暂存（第 5 轮
   // 复审 F2）：树、配置、`git status` 都没变，但字节不是测过的那份 —— 旧绿不拿来合，验收不通过。
   {
@@ -411,7 +445,7 @@ try {
   console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
     hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true,
-    dirAccess: true, indexRace: true, cleanupAfterPublish: true }));
+    dirAccess: true, indexRace: true, cleanupAfterPublish: true, dirWrite: true, splitIndex: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

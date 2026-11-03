@@ -20,7 +20,7 @@
 // 挪完只剩一个同目录 rename；它都失败了，就报「分支和文件已落、索引没换上」这一种确定的状态。
 import { copyFile, mkdtemp, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { type CheckoutSettings, readOnlyGit, sealedGitEnv } from "./accept-gate-preview.js";
 import { execFileText as exec } from "./exec.js";
 import { backupPaths, restoreOwned } from "./git-accept-rollback.js";
@@ -93,16 +93,26 @@ export type SealedMove =
  * `git add` 了东西（再把文件改回原样，工作区与物理摘要都看不出来）。新索引是从目标提交建的，直接换上去
  * 就把那份暂存抹掉了。所以持锁后读一份真实索引的拷贝，它的暂存内容必须正是目标提交那棵树；不是就拒，
  * 什么都还没写。持着锁，之后谁也改不了它。返回 null = 对得上。
+ *
+ * 真实索引不一定自包含（第 6 轮审查第 2 轮 F2）：拆分索引（`core.splitIndex`）的主文件只记增量，靠
+ * 扩展引用旁边的 `sharedindex.<哈希>`，git 按「索引文件所在目录」找它。所以拷贝时把它一起拷到副本旁边；
+ * 读不了就如实说读不了，不当成「多了暂存」。
  */
-async function stagedBeyond(env: Awaited<ReturnType<typeof sealedCheckout>>, attrs: string, index: string,
-  from: string): Promise<string | null> {
+async function stagedBeyond(env: Awaited<ReturnType<typeof sealedCheckout>>, attrs: string, checkout: string,
+  index: string, from: string): Promise<string | null> {
   const copy = join(env.dir, "index.real");
   if (!await copyFile(index, copy).then(() => true, (error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return false;
     throw error;
   })) return null;
-  const staged = await env.run(attrs, ["diff-index", "--cached", "--name-only", "-z", from], copy)
-    .then(zList, (error: unknown) => [`（读不了暂存区：${failure(error)}）`]);
+  let staged: string[];
+  try {
+    const shared = (await readOnlyGit(checkout, ["rev-parse", "--shared-index-path"])).stdout.trim();
+    if (shared) await copyFile(resolve(checkout, shared), join(env.dir, basename(shared)));
+    staged = zList(await env.run(attrs, ["diff-index", "--cached", "--name-only", "-z", from], copy));
+  } catch (error) {
+    return `读不了目标检出的暂存区（${failure(error)}），没法确认换上测过的索引不会抹掉别人的暂存`;
+  }
   if (!staged.length) return null;
   const shown = staged.slice(0, 10).join("、") + (staged.length > 10 ? ` 等 ${staged.length} 个` : "");
   return `目标检出的暂存区在核对之后有了别的内容（${shown}），换上测过的索引会把它们抹掉`;
@@ -129,7 +139,7 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
     let undo: (() => Promise<string[]>) | null = null;
     try {
       const env = sealed = await sealedCheckout(checkout, settings);
-      const drift = await stagedBeyond(env, attrs, index, from);
+      const drift = await stagedBeyond(env, attrs, checkout, index, from);
       if (drift) return { ok: false, stage: "blocked", message: drift, left: [] };
       const changed = zList(await env.run(attrs, ["diff-tree", "-r", "-z", "--name-only", from, to]));
       const backup = await backupPaths(checkout, changed, join(env.dir, "backup"));
@@ -157,7 +167,10 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
     }
   })();
   const lockStuck = !installed && await rm(lock, { force: true }).then(() => false, () => true);
-  await (sealed as Awaited<ReturnType<typeof sealedCheckout>> | null)?.dispose().catch(() => undefined);
+  // 清理失败不改变回执（发布的事实已定），但留一条看得见的记录：里面有改动前文件的原样备份。
+  const done = sealed as Awaited<ReturnType<typeof sealedCheckout>> | null;
+  await done?.dispose().catch((error: unknown) =>
+    console.warn(`[ash] 验收发布的临时目录没能删掉：${done.dir}（${failure(error)}），里面是这次改动前的文件备份，可以手动删掉`));
   if (!lockStuck || outcome.ok) return outcome;
   return { ...outcome, message: `${outcome.message}（另外 ${lock} 没能删掉，它在的时候这个检出里的 git 命令都会拒绝，请手动删掉）` };
 }

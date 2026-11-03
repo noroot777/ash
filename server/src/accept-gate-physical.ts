@@ -6,6 +6,8 @@
 // 枚举「哪些设置会造成这种差」，直接比结果：没被这次改到的每个文件，类型、链接目标、可执行位、字节。
 // 目录也算（第 6 轮审查 F1：目标检出里一个源码目录改成 0111，文件照样按路径读得到，目录却列不出来，
 // 快照里 `readdirSync` 过、合进去之后报 EACCES）：树里的每个目录连同检出根本身，记它能不能读、能不能进。
+// 也记能不能写（第 6 轮审查第 2 轮 F1：源码目录 0555，快照里构建往里写被忽略的缓存成功，合进去之后
+// 同一条命令报 EACCES —— 源码一个字节没变，门禁环境与落地环境却不等价）。文件同理。
 //
 // 这份不变量要从起跑一直守到落地（第 5 轮复审 F2：只在起跑前比一次，门禁跑着时另一个窗口把文件存成
 // 另一种换行再暂存，树、配置、`git status` 全没变，旧绿照样合了进去）。所以起跑时把测过的那份记成
@@ -37,25 +39,25 @@ const digest = (path: string) => new Promise<string>((resolve, reject) => {
 const zList = async (repo: string, args: string[]) => (await readOnlyGit(repo, args)).stdout.split("\0").filter(Boolean);
 
 /**
- * 一个路径在磁盘上是什么：不存在、链接（目标）、目录（能不能读 / 进）、文件（读与执行权限 + 字节）。
- * 两边相等才算同一份。
- * 权限按拥有者 / 组 / 其他各自的读、执行位记（第 5 轮复审第 2 轮 F1：只记「有没有执行位」时 0755 与
- * 0654 是同一个值，快照里 `./check.sh` 跑得起来，合进去之后拥有者却没有执行权限）；写位不记，它不改变
- * 读到什么、跑不跑得起来。
+ * 一个路径在磁盘上是什么：不存在、链接（目标）、目录（能不能读 / 写 / 进）、文件（读与执行权限、
+ * 能不能写 + 字节）。两边相等才算同一份。
+ * 文件的读、执行按拥有者 / 组 / 其他各自的位记（第 5 轮复审第 2 轮 F1：只记「有没有执行位」时 0755 与
+ * 0654 是同一个值，快照里 `./check.sh` 跑得起来，合进去之后拥有者却没有执行权限）；写记的是门禁那个
+ * 用户实际能不能写（access），与目录同一口径。
  */
 export async function entryOf(path: string): Promise<string> {
   const stat = await lstat(path).catch(() => null);
   if (!stat) return "missing";
   if (stat.isSymbolicLink()) return `link:${await readlink(path)}`;
-  // 目录记的是**门禁那个用户**实际能不能列出、能不能进（access），不是权限位：快照根是 ash 新建的
+  const can = (mode: number, flag: string) => access(path, mode).then(() => flag, () => "-");
+  // 目录记的是**门禁那个用户**实际能不能列出、写入、进入（access），不是权限位：快照根是 ash 新建的
   // 临时目录（0700），目标检出根通常是 0755，按位比就永远对不上，对跑起来的程序却没有分别。
   // 子模块（gitlink）同样只是个目录，里面装什么不归这棵树管。
   if (stat.isDirectory()) {
-    const can = (mode: number) => access(path, mode).then(() => true, () => false);
-    return `dir:${await can(constants.R_OK) ? "r" : "-"}${await can(constants.X_OK) ? "x" : "-"}`;
+    return `dir:${await can(constants.R_OK, "r")}${await can(constants.W_OK, "w")}${await can(constants.X_OK, "x")}`;
   }
   if (!stat.isFile()) return "other";
-  return `file:${(stat.mode & 0o555).toString(8)}:${stat.size}:${await digest(path)}`;
+  return `file:${(stat.mode & 0o555).toString(8)}:${await can(constants.W_OK, "w")}:${stat.size}:${await digest(path)}`;
 }
 
 const skipOf = (borrowed: readonly string[]) => borrowed.map(dep => dep.split(sep).join("/")).sort();
