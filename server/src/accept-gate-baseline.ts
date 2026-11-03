@@ -10,7 +10,7 @@
 // 原样放进测试快照（accept-gate-source.ts 的 materializePreview），也是最终合并必须落下的那棵
 // （git-accept.ts 的 expectedTree）—— 合并只在这里定义一次。
 import { type AcceptGateBaseline, normalizeAcceptGateBaseline } from "@ash/shared/accept-gate";
-import { changedPaths, checkoutFilters, conversionDrift, mergeDrivers, previewMerge, readOnlyGit } from "./accept-gate-preview.js";
+import { changedPaths, checkoutFilters, conversionDrift, materializationIdentity, mergeDrivers, previewMerge, readOnlyGit } from "./accept-gate-preview.js";
 import { dependencyReads } from "./accept-gate-source.js";
 import { isAncestor } from "./git-accept.js";
 import { resolveWorktreeBranchName } from "./git.js";
@@ -29,6 +29,8 @@ export type GateBaselinePlan = {
   previewBase: string | null;
   /** 预演出来的合并树。null = 不用合（分支已含目标分支尖端，快照就是分支那棵树）。 */
   previewTree: string | null;
+  /** 合并预览档：快照检出用的转换配置的身份（见 accept-gate-preview.ts 的 materializationIdentity）。 */
+  previewMaterialization: string | null;
 };
 
 export type GateBaselineBlock = {
@@ -54,7 +56,7 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
   // 目标解析与 acceptGateCheck 登记 targetBranch 那一句同源：只有独立 worktree 的任务才有「合并之后」。
   const targetBranch = task.useWorktree ? await plannedMergeTarget(task, project.repoPath) : null;
   const targetCommit = targetBranch ? await commitAt(project.repoPath, targetBranch) : null;
-  const plan: GateBaselinePlan = { mode, targetBranch, targetCommit, previewBase: null, previewTree: null };
+  const plan: GateBaselinePlan = { mode, targetBranch, targetCommit, previewBase: null, previewTree: null, previewMaterialization: null };
   if (mode === "branch" || !targetBranch || !targetCommit || !head) return { plan, block: null };
   const contained = await isAncestor(expandHome(project.repoPath), targetCommit, head);
   if (mode === "contains_target") {
@@ -66,7 +68,7 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
         + `门禁只测任务分支那棵树，缺着这些提交，绿了也说明不了合进去之后还过不过，所以这次没有跑它。`
         + `先让任务在自己的分支上 \`git merge ${targetBranch}\`（有冲突就地解掉并提交），再点验收。` } };
   }
-  const preview = { ...plan, previewBase: targetCommit };
+  const preview = { ...plan, previewBase: targetCommit, previewMaterialization: await materializationIdentity(project.repoPath) };
   const unavailable = (why: string) => ({ plan: null, block: { reason: "accept_gate_preview_unavailable" as const,
     targetBranch, targetCommit, error: `合并预览这次没有预演：${why}。在项目设置 → 验收里换成「要求已含目标分支」`
       + `（任务自己先把 ${targetBranch} 合进来，门禁测的就是合并结果），或者换回「分支快照」。` } });
@@ -129,13 +131,21 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
  *
  * 分支快照与「要求已含目标分支」测的都是分支那棵树（后者另由上面的拒绝保证它含着目标分支），
  * 所以两者的记录互通；合并预览测的是预演出来的那棵树。只比两个提交不够：同样的两个提交在不同的
- * 合并配置下会合出不同的树（第 2 轮审查 F1 实测 merge.directoryRenames），所以树也要相等。
+ * 合并配置下会合出不同的树（第 2 轮审查 F1 实测 merge.directoryRenames），所以树也要相等；同一棵树在
+ * 不同的换行配置下检出的字节不同，所以快照实际用的转换配置也要相等（第 3 轮复审 F1）。
  */
-export function gateBaselineMatches(row: { previewBase?: string | null; previewTree?: string | null },
-  plan: GateBaselinePlan | null): boolean {
+export function gateBaselineMatches(row: GateBaselineRecord, plan: GateBaselinePlan | null): boolean {
   return (row.previewBase ?? null) === (plan?.previewBase ?? null)
-    && (row.previewTree ?? null) === (plan?.previewTree ?? null);
+    && (row.previewTree ?? null) === (plan?.previewTree ?? null)
+    && (row.previewMaterialization ?? null) === (plan?.previewMaterialization ?? null);
 }
+
+type GateBaselineRecord = { previewBase?: string | null; previewTree?: string | null; previewMaterialization?: string | null };
+
+/** 旧绿不作数的原因只差在转换配置上（树还是那棵）：日志里说清楚，别报成「目标分支动了」。 */
+export const gateMaterializationOnlyDrift = (row: GateBaselineRecord, plan: GateBaselinePlan | null): boolean =>
+  (row.previewBase ?? null) === (plan?.previewBase ?? null) && (row.previewTree ?? null) === (plan?.previewTree ?? null)
+    && (row.previewMaterialization ?? null) !== (plan?.previewMaterialization ?? null);
 
 /** 门禁日志 / 时间线里那一句「这一次测的是哪一棵」。 */
 export function gateBaselineNotice(plan: GateBaselinePlan): string | null {

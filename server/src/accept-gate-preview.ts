@@ -24,6 +24,7 @@
 // 却没有那份覆盖）。`checkoutFilters` 只负责把「平时检出要过滤器、快照里写出来的就不一样」提前说清楚。
 //
 // 这几条都要 git 2.40 以上（`--attr-source`、`check-attr --source`），旧 git 结构化拒绝（`previewFailure`）。
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -149,6 +150,37 @@ export async function cloneSealedSnapshot(repo: string, source: string, target: 
   await writeFile(next, "");
   for (const [key, value] of entries) await execFileText("git", ["config", "--file", next, key, value], { env });
   await rename(next, file);
+}
+
+/**
+ * 检出时决定**写出什么字节**的那两项配置。cloneSealedSnapshot 照项目有效值把它们带进快照，所以
+ * 快照写出来的文件 = 树（含树里的 .gitattributes）+ 这两项；属性那一半由 conversionDrift 在每次
+ * 判定时核对，这一半只能记下来：门禁跑的十几分钟里项目把 core.autocrlf 改了，树一个字节没动，
+ * 合进去之后检出的却是另一份（第 3 轮复审 F1 实测）。所以它是门禁凭据的一部分（gateBaselineMatches）。
+ * 别把 ignorecase / precomposeunicode 加进来：它们不改字节，克隆还会按文件系统自己探测一份，
+ * 两边永远对不上，等于这一档的旧绿永远不能复用。
+ */
+const BYTE_SETTINGS = ["core.autocrlf", "core.eol"];
+const materializationOf = (value: (key: string) => string | undefined): string =>
+  createHash("sha256").update("gate-materialization-v1\0")
+    .update(BYTE_SETTINGS.map(key => `${key}=${JSON.stringify(value(key) ?? null)}`).join("\0")).digest("hex");
+
+/** 项目此刻建快照会带进去的转换配置的身份（判定那一刻；与 snapshotMaterialization 同一个口径）。 */
+export async function materializationIdentity(repo: string): Promise<string> {
+  const pairs = await carriedPairs(repo);
+  return materializationOf(key => pairs.filter(([name]) => name === key).at(-1)?.[1]);
+}
+
+/** 这份封好的快照**实际**用的转换配置的身份（读它自己的本地配置，就是检出时生效的那一份）。 */
+export async function snapshotMaterialization(cwd: string): Promise<string> {
+  const { empty } = await scratch();
+  const file = join(cwd, ".git", "config");
+  const values = new Map<string, string | undefined>();
+  for (const key of BYTE_SETTINGS) {
+    values.set(key, (await execFileText("git", ["config", "--file", file, "--get", key], { env: cleanEnv(empty) })
+      .catch(() => null))?.stdout.trim());
+  }
+  return materializationOf(key => values.get(key));
 }
 
 /** 这份快照是不是 `cloneSealedSnapshot` 建的（收尾核验据此决定用哪套环境跑 git）。 */

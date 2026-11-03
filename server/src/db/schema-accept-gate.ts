@@ -82,6 +82,11 @@ export const acceptGateRuns = sqliteTable(
      */
     previewTree: text("preview_tree"),
     /**
+     * 合并预览档：快照检出时实际用的转换配置（core.autocrlf / eol）的身份。同一棵树换一份换行配置
+     * 检出的字节就不同，所以复用判据认它（gateBaselineMatches，第 3 轮复审 F1）。旧行 null = 重跑一次。
+     */
+    previewMaterialization: text("preview_materialization"),
+    /**
      * 用户点那一下带着的验收选择（JSON：by / commit / confirmUnverified）。
      *
      * 必须留：门禁绿了之后是**系统**替他把验收接着做完的，接着做的那一次必须跟他在
@@ -142,6 +147,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_base TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_commit TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

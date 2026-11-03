@@ -26,6 +26,7 @@ import { commitAt } from "./task-branch-plan.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { acceptGateCommandOf, gateView, latestRun, prepareGateCwd, runningRun } from "./accept-gate-state.js";
 import { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, type GateSource } from "./accept-gate-source.js";
+import { snapshotMaterialization } from "./accept-gate-preview.js";
 import { existingTaskWorkspacePath } from "./task-workspace.js";
 export { acceptGateCommandOf, acceptGateRunOf, acceptGateState } from "./accept-gate-state.js";
 import type { AcceptFailure } from "./task-accept-guard.js";
@@ -43,7 +44,7 @@ export { rehandOffAcceptGate } from "./accept-gate-handoff.js";
 export type { AcceptGateChoices } from "./accept-gate-handoff.js";
 import type { AcceptGateChoices } from "./accept-gate-handoff.js";
 import { encodeGateEntryProbe, probeGateEntry } from "./accept-gate-entry.js";
-import { gateBaselineMatches, gateBaselineNotice, resolveGateBaseline, type GateBaselineBlock,
+import { gateBaselineMatches, gateBaselineNotice, gateMaterializationOnlyDrift, resolveGateBaseline, type GateBaselineBlock,
   type GateBaselinePlan } from "./accept-gate-baseline.js";
 import { handOffConflict } from "./accept-conflict.js";
 
@@ -146,7 +147,9 @@ export async function acceptGateCheck(
         recordBasis("passed", row.id);
         return null;
       }
-      await appendTaskTimeline(task.id, `验收前置命令通过了，但它预演的是 ${row.targetBranch ?? "目标分支"}@${row.previewBase?.slice(0, 8) ?? "（分支快照）"}，`
+      if (gateMaterializationOnlyDrift(row, plan)) await appendTaskTimeline(task.id, "验收前置命令通过了，但它跑的那会儿之后项目的换行配置"
+        + "（core.autocrlf / core.eol）变了：同一棵树合进去之后检出的字节已经不是测过的那份。旧结果不拿来合，按现在的配置重新跑一遍。");
+      else await appendTaskTimeline(task.id, `验收前置命令通过了，但它预演的是 ${row.targetBranch ?? "目标分支"}@${row.previewBase?.slice(0, 8) ?? "（分支快照）"}，`
         + `现在要合的已经是 ${plan?.targetBranch ?? "目标分支"}@${plan?.previewBase?.slice(0, 8) ?? "（分支快照）"}。旧结果不拿来合这一棵，按现在的目标分支重新跑一遍。`);
     }
   }
@@ -249,6 +252,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       sourceCommit: plan.sourceCommit, targetBranch: plan.targetBranch, targetCommit: plan.targetCommit,
       sourceFingerprint: plan.source.fingerprint, sourceAmbient: plan.source.ambient,
       fastForward: plan.fastForward, previewBase: plan.baseline.previewBase, previewTree: plan.baseline.previewTree,
+      previewMaterialization: plan.baseline.previewMaterialization,
       acceptOptions: JSON.stringify(plan.choices), startedAt, finishedAt: null,
     });
     inserted = true;
@@ -294,7 +298,9 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     // 实测撤掉（答的是查询那一次的状态，还替用户多跑了两次项目代码）。因此它**不够**单独
     // 授权「测试没启动」，只是三件必要条件之一 —— 另两件在 accept-gate-miss.ts。
     await db.update(acceptGateRuns)
-      .set({ entryProbe: encodeGateEntryProbe(probeGateEntry(snapshotCwd, plan.command)), previewCommit })
+      .set({ entryProbe: encodeGateEntryProbe(probeGateEntry(snapshotCwd, plan.command)), previewCommit,
+        // 凭据记快照**实际**用的那一份，不是判定那一刻读到的：两者之间项目改了配置，记下的就是测过的。
+        ...(plan.baseline.previewBase ? { previewMaterialization: await snapshotMaterialization(snapshotCwd) } : {}) })
       .where(eq(acceptGateRuns.id, runId));
     const prepared = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
     if (prepared?.status !== "running") {

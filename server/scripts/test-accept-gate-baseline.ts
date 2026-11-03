@@ -247,6 +247,34 @@ try {
     assert.equal(accepted.acceptedGateRunId, all[1]!.id);
   }
 
+  // ㉕ 合并预览 · 跑的那会儿项目把 core.autocrlf 打开了（第 3 轮复审 F1）：树一个字节没动，但合进去之后
+  // 检出的是 CRLF。凭据记着快照实际用的转换配置，自动续验收核出它变了，按新配置重跑（这次红了），不合。
+  {
+    const sample = await fixture("preview-autocrlf-drift", { baseline: "merge_preview", delay: 600 });
+    writeFileSync(join(sample.repo, ".gitattributes"), "*.txt text\n");
+    writeFileSync(join(sample.repo, "value.txt"), "good\n");
+    writeFileSync(join(sample.repo, "use-lf.js"),
+      "if (require('node:fs').readFileSync(__dirname + '/value.txt').includes(13)) throw new Error('CRLF');\n");
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-m", "main adds an LF-checked text file");
+    git(sample.cwd, "merge", "--no-edit", "main");
+    commitOnMain(sample.repo, "later.txt", "later\n", "main moves on");
+    const before = git(sample.repo, "rev-parse", "main");
+    await acceptTask(sample.taskId);
+    await sleep(150);
+    git(sample.repo, "config", "core.autocrlf", "true");
+    await settled(sample.taskId, 2);
+    const all = await runs(sample.taskId);
+    assert.equal(all.length, 2);
+    assert.equal(all[0]!.status, "passed");
+    assert.equal(all[0]!.previewTree, all[1]!.previewTree, "树没变");
+    assert.notEqual(all[0]!.previewMaterialization, all[1]!.previewMaterialization);
+    assert.equal(all[1]!.status, "failed", "按新配置检出的是 CRLF，同一条命令红了");
+    assert.notEqual((await taskRow(sample.taskId)).stage, "accepted");
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "没有合进去");
+    git(sample.repo, "config", "--unset", "core.autocrlf");
+  }
+
   // ⑦ 设置入口：只收三档原文；改了立刻作用于下一次验收的判定（门禁卡读的同一份）。
   {
     const sample = await fixture("setting", {});
@@ -647,7 +675,7 @@ try {
   console.log(JSON.stringify({ branchDefault: true, containsRefuse: true, containsPass: true, previewCollision: true,
     previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true,
     isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true, rollbackFailure: true, trackedVendor: true, existingFilter: true, linkedVendor: true, stateFsmonitor: true,
-    infoAttributes: true, containedSealed: true }));
+    infoAttributes: true, containedSealed: true, autocrlfDrift: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
