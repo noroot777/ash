@@ -10,6 +10,7 @@ import type {
   BatchCreateTasksBody,
   ExecutorDowngradeItem,
   FreeReviewDispatchInput,
+  FreeReviewRoundsInput,
   FreeReviewDisputeResolution,
   FreeReviewDisputeTarget,
   GateAction,
@@ -352,6 +353,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/free-workflow/review/debate`, json("POST", { exchanges, target })),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
+  adjustFreeReviewRounds: (taskId: string, input: FreeReviewRoundsInput): Promise<FreeWorkflowApiState> =>
+    request(`/tasks/${id(taskId)}/free-workflow/review/rounds`, json("PUT", input)),
   cancelFreeReviewReservation: (taskId: string): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, { method: "DELETE" }),
   startFreePreview: (taskId: string): Promise<FreeWorkflowApiState["preview"]> =>

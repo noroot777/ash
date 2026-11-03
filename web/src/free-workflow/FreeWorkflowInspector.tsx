@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   FreeReviewRound,
   FreeReviewRun,
@@ -28,6 +28,7 @@ import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewDisputeCard } from "./FreeReviewDisputeCard.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
+import { FreeReviewRoundsDialog } from "./FreeReviewRoundsDialog.tsx";
 import { DISPUTE_PROSE_LABELS } from "./disputeCopy.ts";
 import { freeReviewView } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
@@ -153,7 +154,8 @@ export function FreeWorkflowInspector({
 }) {
   const free = useFreeWorkflowState(task.id);
   const [selectedReviewKey, setSelectedReviewKey] = useState<string | null>(null);
-  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  // 打开时定下是哪一扇（同 Toolbar）：审查在跑 = 调轮数，否则 = 派审/预约。
+  const [reviewDialogOpen, setReviewDialogOpen] = useState<"rounds" | "review" | null>(null);
   const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
   const [repairBusy, setRepairBusy] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -180,6 +182,10 @@ export function FreeWorkflowInspector({
     : null;
   const view = freeReviewView(state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, disputedRound, disputedRun, waivedRound, debateRunning } = view;
+  // 审查结束时调轮数那扇随之作废（同 Toolbar）。
+  useEffect(() => {
+    if (!reviewing) setReviewDialogOpen((open) => open === "rounds" ? null : open);
+  }, [!!reviewing]);
   const taskReady = task.status !== "backlog";
   // waiting 只锁「立即派审/修复」，预约与取消预约照常（同 Toolbar，也与后端口径一致）。
   // waiting / reservationMode 都由 freeReviewCopy.ts 的 freeReviewView 算,两个表面共用
@@ -189,7 +195,7 @@ export function FreeWorkflowInspector({
   const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived
     || task.handoff?.direction === "out";
   const reviewActionLabel = reviewing
-    ? "审查进行中"
+    ? "调整审查轮数"
     : reservationArmed
       ? "调整预约复审"
       : reservationMode
@@ -417,8 +423,8 @@ export function FreeWorkflowInspector({
               )}
               {!locked && <button
                 type="button"
-                disabled={!taskReady || locked || !!reviewing || !notify || (waiting && !reservationMode)}
-                onClick={() => setReviewDialogOpen(true)}
+                disabled={!taskReady || locked || !notify || (!reviewing && waiting && !reservationMode)}
+                onClick={() => setReviewDialogOpen(reviewing ? "rounds" : "review")}
               >
                 {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
                 <span>{reviewActionLabel}</span>
@@ -496,13 +502,16 @@ export function FreeWorkflowInspector({
           )}
         </div>
         {drawer}
-        {reviewDialogOpen && notify && (
+        {reviewDialogOpen === "rounds" && notify && reviewing && (
+          <FreeReviewRoundsDialog taskId={task.id} run={reviewing} onChanged={free.setState} onClose={() => setReviewDialogOpen(null)} notify={notify} />
+        )}
+        {reviewDialogOpen === "review" && notify && (
           <FreeReviewDialog
             taskId={task.id}
             state={state}
             reservationMode={reservationMode}
             onChanged={free.setState}
-            onClose={() => setReviewDialogOpen(false)}
+            onClose={() => setReviewDialogOpen(null)}
             notify={notify}
           />
         )}

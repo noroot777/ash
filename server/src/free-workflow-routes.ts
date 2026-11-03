@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { FreeReviewDispatchInput } from "@ash/shared";
+import type { FreeReviewDispatchInput, FreeReviewRoundsInput } from "@ash/shared";
 import { and, eq } from "drizzle-orm";
 import type { Context, Hono } from "hono";
 import { db } from "./db/index.js";
@@ -11,6 +11,7 @@ import {
   startManualFreeReviewRepair,
 } from "./free-workflow.js";
 import { startFreeReviewDebate, submitDebateStatement } from "./free-review-debate.js";
+import { adjustFreeReviewRounds } from "./free-review-rounds.js";
 import { noted } from "./user-action-rejection.js";
 import {
   disputeFreeReview,
@@ -175,6 +176,15 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     if (blocked) return blocked;
     try { return c.json(await reserveFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>(), actorOf(c))); }
     catch (error) { return c.json(await noted(c.req.param("id"), "预约派审", errorBody(error)), 409); }
+  });
+  // 审查进行中改这条链的轮数上限（见 free-review-rounds.ts）。
+  api.put("/tasks/:id/free-workflow/review/rounds", async (c) => {
+    const blocked = await blockedByHandoff(c);
+    if (blocked) return blocked;
+    try {
+      const body = await c.req.json<Partial<FreeReviewRoundsInput>>().catch(() => ({}));
+      return c.json(await adjustFreeReviewRounds(c.req.param("id"), body));
+    } catch (error) { return c.json(await noted(c.req.param("id"), "调整审查轮数", errorBody(error)), 409); }
   });
   // 取消预约刻意不记:取消是清理动作,它失败时界面上那张预约卡还在,原因看得见。
   api.delete("/tasks/:id/free-workflow/review-reservation", async (c) => {

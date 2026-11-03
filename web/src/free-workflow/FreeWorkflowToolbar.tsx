@@ -8,6 +8,7 @@ import type { Notify } from "../lib/notify.ts";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
+import { FreeReviewRoundsDialog } from "./FreeReviewRoundsDialog.tsx";
 import { PreviewLogDialog } from "./PreviewLogDialog.tsx";
 import { PreviewServiceLinks } from "./PreviewServiceLinks.tsx";
 import { freeReviewView } from "./freeReviewCopy.ts";
@@ -22,7 +23,9 @@ interface PreviewAction {
 
 export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Notify }) {
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
-  const [reviewOpen, setReviewOpen] = useState(false);
+  // 打开时就定下是哪一扇：审查在跑 = 调轮数，否则 = 派审/预约。按渲染时的 reviewing 现判的话，
+  // 审查恰好在对话框开着时结束，调轮数那扇一收、派审那扇就会自己弹出来。
+  const [reviewOpen, setReviewOpen] = useState<"rounds" | "review" | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const logTrigger = useRef<HTMLButtonElement>(null);
   /**
@@ -85,6 +88,10 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
   const view = freeReviewView(free.state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, waiting, reservationArmed, reservationMode, repairing, stale, reviewTurn } = view;
   const taskReady = task.status !== "backlog";
+  // 审查结束时调轮数那扇随之作废，别留着等下一轮审查开始时再自己弹出来。
+  useEffect(() => {
+    if (!reviewing) setReviewOpen((open) => open === "rounds" ? null : open);
+  }, [!!reviewing]);
   // 等待答复/续跑期间**立即发起**的派审/修复后端必拒（409），按钮同步禁用；「预约」不在
   // 其列——后端 reserveFreeReview 根本没有这道门禁，任务正等续跑时预约一轮「跑完就审」
   // 恰恰是该允许的。取消预约、关闭预览是控制类动作，同样不能锁死。
@@ -98,8 +105,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
   // 检查点的任务开预览没有任何危险，工作区没人在动），跟着锁死只会让用户在最想照着页面
   // 回答审查者提问的那一刻点不动按钮。它只认「有没有一个会改代码的回合在飞」。
   const previewBlocked = taskBusy && !reviewTurn;
+  // 审查中带上「第几轮 / 最多几轮」：点它改的正是后面那个数。
   const reviewLabel = reviewing
-    ? "审查中"
+    ? `审查中 ${reviewing.currentRound}/${reviewing.retryLimit + 1}`
     : reservationArmed
       ? "已预约复审"
       : reservationMode
@@ -205,7 +213,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
             notify={notify}
           />
         ) : null}
-        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || locked || !!reviewing || (waiting && !reservationMode)} onClick={() => setReviewOpen(true)}>
+        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || locked || (!reviewing && waiting && !reservationMode)} onClick={() => setReviewOpen(reviewing ? "rounds" : "review")}>
           {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
           <span>{reviewLabel}</span>
           {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
@@ -236,7 +244,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: Noti
         onClose={() => { setLogOpen(false); logTrigger.current?.focus(); }}
         notify={notify}
       />}
-      {reviewOpen && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={reservationMode} onChanged={free.setState} onClose={() => setReviewOpen(false)} notify={notify} />}
+      {/* 审查进行中这颗按钮管的是「这条链还能跑几轮」：那一刻没有新的审查可派，唯一还能改的就是轮数。 */}
+      {reviewOpen === "rounds" && reviewing && <FreeReviewRoundsDialog taskId={task.id} run={reviewing} onChanged={free.setState} onClose={() => setReviewOpen(null)} notify={notify} />}
+      {reviewOpen === "review" && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={reservationMode} onChanged={free.setState} onClose={() => setReviewOpen(null)} notify={notify} />}
     </>
   );
 }

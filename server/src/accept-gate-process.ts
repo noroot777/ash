@@ -1,7 +1,7 @@
 // 验收前置命令的**进程**这一层：起它、看着它、收掉它。编排（什么时候该跑、跑完算什么）
 // 在 accept-gate.ts，这里一个业务判断都没有。
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ACCEPT_GATE_LOG_MAX_BYTES, ACCEPT_GATE_TAIL_BYTES } from "@ash/shared/accept-gate";
 import { augmentedEnv } from "./executors/spawn.js";
@@ -12,7 +12,7 @@ import { MAC_GATE_ENV, macGateToken } from "./accept-gate-confinement-macos.js";
 import { gateDiagnosisFull, gateDiagnosisTail } from "./accept-gate-diagnosis.js";
 import { gateBootstrapEnvironment } from "./accept-gate-process-env.js";
 import { authorizeGateLaunch, finishGateLaunch, GATE_BOOTSTRAP, gateAbortPath, gateConfinement,
-  gateGoPath, gateLaunchOf, gateLaunchPath, migrateGateLaunch, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
+  gateExitPath, gateGoPath, gateLaunchOf, gateLaunchPath, migrateGateLaunch, prepareGateLaunch, readGateLaunch, registerGateLaunch } from "./accept-gate-launch.js";
 
 /** SIGTERM 之后等多久补一刀。给它收尾的时间，但不无限等。 */
 const KILL_GRACE_MS = 5_000;
@@ -28,7 +28,9 @@ export function acceptGateLogPath(taskId: string, runId: string): string {
   return join(RUNS_DIR, taskId, `accept-gate-${runId}.log`);
 }
 
-export type GateExit = { code: number | null; signal: NodeJS.Signals | null };
+export type GateExit = { code: number | null; signal: NodeJS.Signals | null;
+  /** 启动器自己量的「起来到退出」用时（单调时钟，只有退出档里有）。时限按它判，见 accept-gate-exit.ts。 */
+  elapsedMs?: number };
 
 /**
  * 起一条门禁命令。返回 pid 和它的**启动时间**（拿不到 pid 视为没起来，抛错）。
@@ -49,6 +51,7 @@ export async function spawnAcceptGate(opts: {
   mkdirSync(dirname(opts.logPath), { recursive: true });
   if (!existsSync(gateLaunchPath(opts.logPath))) prepareGateLaunch(opts.logPath);
   assertGateConfinementAvailable();
+  rmSync(gateExitPath(opts.logPath), { force: true });
   const fd = openSync(opts.logPath, "a");
   try {
     // 这里**只跑用户那条命令**。第 7 轮曾把「先问一句 runner 认不认这个脚本」的两条 npm
@@ -61,7 +64,7 @@ export async function spawnAcceptGate(opts: {
     const config = Buffer.from(JSON.stringify({ ...launch, cwd: opts.cwd,
       ...await gateSupervisorBootstrap(opts.logPath),
       restoreEnv: environment.restore,
-      go: gateGoPath(opts.logPath), abort: gateAbortPath(opts.logPath) })).toString("base64");
+      go: gateGoPath(opts.logPath), abort: gateAbortPath(opts.logPath), exit: gateExitPath(opts.logPath) })).toString("base64");
     const child = spawn(process.execPath, ["-e", GATE_BOOTSTRAP, config], {
       cwd: dirname(opts.logPath),
       env: environment.bootstrap,

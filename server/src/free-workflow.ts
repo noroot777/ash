@@ -451,16 +451,22 @@ export async function handleFreeWorkflowSettlement(
   });
   if (!checked) return true;
   const at = now();
-  const outcome = freeReviewOutcome({
-    turnOk: checked.outcome === "done",
-    conclusion: checked.conclusion,
-    currentRound: run.currentRound,
-    retryLimit: run.retryLimit,
-  });
+  // 「转修复还是用完」按**落笔事务里**重读的 run 行判，不按开头那份快照：审查进行中用户可以
+  // 改这条链的轮数上限（free-review-rounds.ts）。拿快照判的话，最后一轮跑着时加的那一轮会被
+  // 读漏，这一轮没通过照样判成用完，执行者不会被叫起来修。收尾载荷里的 run 也用这份新行，
+  // 续轮预约记下的轮数才跟 run 行一致。
+  let settled: { run: ReviewRunRow; outcome: ReturnType<typeof freeReviewOutcome> } | null = null;
   await completeRegressionSettlement(directory, checked, async (transaction) => {
     const currentRun = (await transaction.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, run.id)))[0];
     const currentRound = (await transaction.select().from(freeReviewRounds).where(eq(freeReviewRounds.id, round.id)))[0];
     if (currentRun?.status !== "reviewing" || currentRun.currentRound !== run.currentRound || currentRound?.status !== "reviewing") return false;
+    const outcome = freeReviewOutcome({
+      turnOk: checked.outcome === "done",
+      conclusion: checked.conclusion,
+      currentRound: currentRun.currentRound,
+      retryLimit: currentRun.retryLimit,
+    });
+    settled = { run: currentRun, outcome };
     await transaction.update(freeReviewRounds).set({ conclusion: checked.conclusion,
       status: outcome === "failed" ? "error" : outcome === "passed" ? "passed" : "failed", endedAt: at,
       // 终态轮次不再挂在途意图(同 `failReviewStart`):留着的话对账只扫 reviewing,它再也没人清。
@@ -473,7 +479,7 @@ export async function handleFreeWorkflowSettlement(
       reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
     }).where(eq(freeWorkflowStates.taskId, taskId));
     return true;
-  }, finalization("free", { run, outcome, at }));
+  }, () => finalization("free", { ...settled!, at }));
   await drainRegressionFinalization(directory);
   return true;
 }

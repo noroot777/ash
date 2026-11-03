@@ -51,6 +51,11 @@ export async function collectGateRuns(taskId: string): Promise<HandoffGateRun[]>
   if (hasOwnedGateProcess(taskId) || rows.some(row => row.processPending || row.status === "running")) {
     throw new HandoffError("验收前置命令仍占用工作区；确认整次运行停止后才能接力", 409);
   }
+  // 结论之后欠着的那一步（自动验收 / 交回修复）只在本机补办，记号不随接力搬走：带着它接力，
+  // 这份责任就在两台机器之间丢了。办完（或在本机重启补完）再接力。
+  if (rows.some(row => row.settlement)) {
+    throw new HandoffError("验收前置命令的结论之后还有一步没办完（自动验收或交回修复）；办完后才能接力", 409);
+  }
   if (rows.length > 10_000) throw new HandoffError("验收前置命令历史超过接力容量；未丢弃凭据，请先整理历史", 409);
   return rows.map(row => ({ id: row.id, command: row.command, status: row.status, exitCode: row.exitCode,
     failure: row.failure, sourceCommit: row.sourceCommit, targetBranch: row.targetBranch, targetCommit: row.targetCommit,

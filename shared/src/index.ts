@@ -31,6 +31,7 @@ export type {
   FreeReviewDisputeTarget,
   FreeReviewExecutorOverride,
   FreeReviewRound,
+  FreeReviewRoundsInput,
   FreeReviewRun,
   FreeWorkflowExecution,
   FreeWorkflowExecutionStatus,

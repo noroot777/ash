@@ -534,3 +534,13 @@ export interface FreeReviewDispatchInput {
   /** 本次审查的执行器覆盖；缺省/null = 就按审查者自己的配置跑。 */
   override?: FreeReviewExecutorOverride | null;
 }
+
+/**
+ * 审查进行中改这条链还能跑几轮（`retryLimit`，最多跑 `retryLimit + 1` 轮）。结算按落笔那一刻
+ * 的上限判「转修复」还是「轮数用完」，所以最后一轮跑着时加了轮数、这一轮又没通过，照样会
+ * 把意见交给执行者修复、修完自动续审。
+ */
+export interface FreeReviewRoundsInput {
+  runId: string;
+  retryLimit: number;
+}

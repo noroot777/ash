@@ -72,10 +72,23 @@ try {
     await reviewTurnPreview.isEnabled(), true,
     "审查进行中「打开预览」灰着——后端已经放行，这里就是一颗假禁用",
   );
-  assert.equal(
-    await reviewTurnToolbar.getByRole("button", { name: "审查中" }).isEnabled(), false,
-    "审查进行中不该还能再派一轮",
-  );
+  // 审查进行中这颗按钮管「这条链还能跑几轮」：最后一轮（2/2）跑着时加一轮，这一轮没通过
+  // 就会转给执行者修复。它打开的是调轮数，不是再派一轮。
+  const reviewTurnButton = reviewTurnToolbar.getByRole("button", { name: "审查中 2/2" });
+  assert.equal(await reviewTurnButton.isEnabled(), true, "审查进行中应能调整轮数");
+  await reviewTurnButton.click();
+  const roundsDialog = page.getByRole("dialog", { name: "调整审查轮数" });
+  await roundsDialog.waitFor();
+  assert.equal(await page.locator(".free-review-dialog").count(), 0, "审查进行中不该弹出派审对话框");
+  assert.equal(await roundsDialog.getByRole("button", { name: "少一轮" }).isDisabled(), true, "正在跑的第 2 轮本身占一轮，不能再往下减");
+  assert.match(await roundsDialog.innerText(), /第 2 轮是最后一轮/);
+  await roundsDialog.getByRole("button", { name: "多一轮" }).click();
+  assert.match(await roundsDialog.innerText(), /意见交给执行者修复，修完自动审第 3 轮/);
+  await roundsDialog.getByRole("button", { name: "保存" }).click();
+  await page.waitForFunction(() => (window.__roundsRequests ?? []).length === 1);
+  assert.deepEqual(await page.evaluate(() => window.__roundsRequests), [{ runId: "run-review-turn", retryLimit: 2 }]);
+  await roundsDialog.waitFor({ state: "detached" });
+  await reviewTurnToolbar.getByRole("button", { name: "审查中 2/3" }).waitFor();
 
   // 预约模式属于「任务在跑」的场景：修复/修改开跑后从这里预约完成后的复审。
   const chatToolbar = page.locator(".toolbar-chat-rework-fixture");

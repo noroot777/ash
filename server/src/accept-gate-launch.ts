@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { inspectProcessSync } from "./platform.js";
 import { createGateConfinement, reopenGateConfinement, type GateConfinement } from "./accept-gate-confinement.js";
@@ -11,6 +11,8 @@ export type GateLaunch = {
   confinementId?: string | null;
   confinementEnrolled?: boolean;
   stoppedEvidence?: "never-authorized" | "kernel-empty" | "observed-empty";
+  /** 启动器起来的墙上时间。跨重启接管时从它折算已经跑掉多久（时限从这一刻算）。 */
+  launchedAt?: string;
 };
 
 const confinements = new Map<string, GateConfinement>();
@@ -18,9 +20,13 @@ const launches = new Map<number, string>();
 export const gateLaunchPath = (logPath: string): string => `${logPath}.launch.json`;
 export const gateAbortPath = (logPath: string): string => `${logPath}.abort`;
 export const gateGoPath = (logPath: string): string => `${logPath}.go`;
+/** 启动器替命令留下的退出结果（读口和可信条件在 accept-gate-exit.ts）。 */
+export const gateExitPath = (logPath: string): string => `${logPath}.exit.json`;
 
 export function prepareGateLaunch(logPath: string): void {
   mkdirSync(dirname(logPath), { recursive: true });
+  // 同一路径上一次留下的退出档绝不能被这一次认领：它会把一次没跑完的运行结算成那一次的结果。
+  rmSync(gateExitPath(logPath), { force: true });
   writeFileSync(gateLaunchPath(logPath), JSON.stringify({ version: 1, phase: "prepared" }), { flag: "wx" });
 }
 
@@ -56,7 +62,7 @@ export function migrateGateLaunch(logPath: string, launch: GateLaunch): GateLaun
 
 export function registerGateLaunch(logPath: string, pid: number, startedAt: string | null): void {
   launches.set(pid, logPath);
-  writeGateLaunch(logPath, { version: 1, phase: "prepared", pid, startedAt });
+  writeGateLaunch(logPath, { version: 1, phase: "prepared", pid, startedAt, launchedAt: new Date().toISOString() });
 }
 
 export const gateLaunchOf = (pid: number | null | undefined, logPath?: string): string | undefined =>
@@ -121,7 +127,22 @@ const timer = setInterval(() => {
     env: { ...process.env, ...config.restoreEnv },
     windowsVerbatimArguments: config.windowsVerbatimArguments
   });
-  child.once("error", error => { console.error(error.message); process.exit(127); });
-  child.once("exit", (code, signal) => process.exit(code ?? (signal ? 128 : 127)));
+  child.once("error", error => { console.error(error.message); finish(127, null); });
+  child.once("exit", (code, signal) => finish(code ?? (signal ? 128 : 127), signal));
 }, 20);
+// 退出码除了转发给起我的那个 ash，还要**先落盘**：那个 ash 可能已经重启了，新实例只能从这里
+// 认领结果。tmp+rename 保证要么整份、要么没有；写不进去也照常转发，不拿落盘失败改写结论。
+// elapsedMs 是本进程起来到现在的单调用时：时限按它判，跟 ash 在不在场、墙上时间有没有被校正都无关。
+function finish(code, childSignal) {
+  if (config.exit) try {
+    const temporary = config.exit + "." + process.pid + ".tmp";
+    const fd = fs.openSync(temporary, "w");
+    fs.writeSync(fd, JSON.stringify({ version: 1, pid: process.pid, code, childSignal: childSignal || null,
+      elapsedMs: Math.round(performance.now()), finishedAt: new Date().toISOString() }));
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fs.renameSync(temporary, config.exit);
+  } catch {}
+  process.exit(code);
+}
 `;

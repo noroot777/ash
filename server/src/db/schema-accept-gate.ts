@@ -86,6 +86,15 @@ export const acceptGateRuns = sqliteTable(
      */
     handoffAt: text("handoff_at"),
     handoffError: text("handoff_error"),
+    /**
+     * 结算认领下来的那份结论（JSON：status / exitCode / failure / note / scene），**非空 = 还有事没办完**。
+     *
+     * 结算的顺序是「认领结论 → 收进程、清理 → 写终态 → 自动续验收 / 交回去修」，每一步之间 ash 都可能
+     * 被重启。这一列在第一步就写下，到最后一步办完才清空：重启时看见它还是 running，就照这份结论
+     * 把结算续完；已经是终态，就把没办完的续验收 / 交修补上（accept-gate-recover.ts）。只靠
+     * status/process_pending 两样分不出「收尾到一半」和「该补办续验收」（第 1 轮审查 F2/F3）。
+     */
+    settlement: text("settlement"),
   },
   (t) => ({ taskIdx: index("accept_gate_runs_task_idx").on(t.taskId, t.startedAt) }),
 );
@@ -115,6 +124,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN entry_probe TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN settlement TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

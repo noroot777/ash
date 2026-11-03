@@ -256,14 +256,15 @@ async function initializeServer() {
     if (claudeMonitorSweep.kept || claudeMonitorSweep.lost) {
       console.log(`[ash] 内置 Monitor 投影：${claudeMonitorSweep.kept} 个来源仍在跑，${claudeMonitorSweep.lost} 个来源已不在`);
     }
-    // 上一轮留在「正在跑」的验收前置命令：进程多半已经不在了（它不脱离 ash），
-    // 行却还挂着。收掉残留、如实落成「被打断」—— 留一个永远转圈的幽灵最坑人。
+    // 上一轮留在「正在跑」的验收前置命令：还在跑的接管、已经跑完的按退出档结算，
+    // 拿不到真实结果的才如实落成「被打断」—— 留一个永远转圈的幽灵最坑人。
     const { recoverAcceptGates } = await import("./accept-gate.js");
     const gates = await recoverAcceptGates().catch((err) => {
       console.error("[ash] 验收前置命令对账失败（不影响启动）:", err);
-      return { interrupted: 0 };
+      return { interrupted: 0, resumed: 0, settled: 0 };
     });
-    if (gates.interrupted) console.log(`[ash] 验收前置命令：${gates.interrupted} 条被重启打断，已收尾`);
+    if (gates.interrupted || gates.resumed || gates.settled) console.log(`[ash] 验收前置命令：接管 ${gates.resumed} 条，`
+      + `按退出结果结算 ${gates.settled} 条，被重启打断 ${gates.interrupted} 条`);
     // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
     // 收拾死在投递链上的 reviewing run（详见 free-review-reconcile.ts）。
     const { reconcileFreeReviews } = await import("./free-review-reconcile.js");

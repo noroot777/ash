@@ -235,7 +235,13 @@ export async function testGateLifecycle(fixture: GateFixture): Promise<void> {
       assert.equal((await acceptGateState(taskId)).running?.status, "running");
       assert.equal(hasLiveAcceptGate(taskId), true);
       forgetGateProcess(first.runId);
-      await assert.rejects(recoverAcceptGates(), /temporary gate failure/);
+      // 取消那一下已经把结论（canceled）认领进库，恢复照那一份续完；续完同样写不进去时，一条坏行
+      // 不该把整个启动恢复抛断 —— 它不计入结算、日志里再记一笔、照旧占着，等下一次重试。
+      const logPath = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, first.runId)))[0]!.logPath;
+      const failures = () => (readFileSync(logPath, "utf8").match(/终态写入失败/g) ?? []).length;
+      const before = failures();
+      assert.equal((await recoverAcceptGates()).settled, 0, "写库失败不算结算");
+      assert.ok(failures() > before, "恢复时的写入失败同样留在日志里");
       assert.ok(await taskBusyRejection(taskId, "清理"));
       const recovered = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, first.runId)))[0];
       assert.equal(recovered.status, "running");
