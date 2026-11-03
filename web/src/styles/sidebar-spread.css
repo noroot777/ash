@@ -73,10 +73,10 @@
   width: var(--spread-row-w);
   grid-template-columns:
     22px var(--spread-title-w)
-    minmax(0, 1.3fr) minmax(0, 1.5fr) 76px;
+    minmax(0, 1.3fr) minmax(0, 1.5fr) 92px 76px;
 }
 
-/* 缩进的子列表各自把缩进量还回去，右边三列就跟顶层行对齐了。 */
+/* 缩进的子列表各自把缩进量还回去，右边几列就跟顶层行对齐了。 */
 .workspace-sidebar.is-spread .workspace-worker-list { --spread-row-w: calc(100cqw - 50px); }
 .workspace-sidebar.is-spread .workspace-other-project-tasks { --spread-row-w: calc(100cqw - 43px); }
 
@@ -107,7 +107,7 @@
   background: color-mix(in lch, var(--amber) 11%, transparent);
 }
 
-/* ── 右边三格 ─────────────────────────────────────────── */
+/* ── 右边几格 ─────────────────────────────────────────── */
 
 .workspace-spread-cell {
   display: flex;
@@ -167,6 +167,8 @@
    那层底色同族），不靠读字。两者是互斥的——那一格此刻显示的只能是其中一条。 */
 .workspace-spread-who.is-memo { color: var(--amber); }
 
+/* 任务 id 定长 12 位，92px 正好放下，不截断。 */
+.workspace-spread-cell--id,
 .workspace-spread-cell--time {
   padding-right: 8px;
   color: var(--faint);
@@ -405,11 +407,12 @@
   font-size: 10px;
 }
 
-/* 窄屏：先丢时间列，再丢原始需求列 —— 最后一条消息是最不能丢的那一列。 */
+/* 窄屏：先丢 id 和时间列，再丢原始需求列 —— 最后一条消息是最不能丢的那一列。 */
 @container (max-width: 1120px) {
   .workspace-sidebar.is-spread .workspace-task-row-wrap {
-    grid-template-columns: 22px var(--spread-title-w) minmax(0, 1.2fr) minmax(0, 1.4fr) 0;
+    grid-template-columns: 22px var(--spread-title-w) minmax(0, 1.2fr) minmax(0, 1.4fr) 0 0;
   }
+  .workspace-spread-cell--id,
   .workspace-spread-cell--time { display: none; }
 }
 
@@ -420,7 +423,7 @@
        定位才继续跟着实际列宽走,不会按 300px 悬在信息列里。声明在行上而不是侧栏上,
        让缩进子列表各自覆盖过的 --spread-row-w 也能参与计算。 */
     --spread-title-w: calc((var(--spread-row-w) - 22px) / 2.6);
-    grid-template-columns: 22px var(--spread-title-w) 0 minmax(0, 1.6fr) 0;
+    grid-template-columns: 22px var(--spread-title-w) 0 minmax(0, 1.6fr) 0 0;
   }
   .workspace-spread-cell--body { display: none; }
   .workspace-spread-hint { display: none; }

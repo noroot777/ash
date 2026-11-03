@@ -5,7 +5,7 @@ import { NotePencil } from "@phosphor-icons/react";
 import { formatInstant } from "../task-detail/utils.ts";
 
 const FIELD_LABEL: Record<SearchHit["field"], string | null> = {
-  // id 与 title 的证据本身就摆在行里(id 那一行、标题那一行),不用再挂个小标签。
+  // id 与 title 的证据本身就摆在行里(任务行的时间那一行开头总带着 id),不用再挂个小标签。
   id: null,
   title: null,
   body: "正文",
@@ -114,7 +114,7 @@ export function SearchPreview({ hit, query }: { hit: SearchHit | undefined; quer
               {isIdMatch(hit) && <IdMatchBadge />}
             </h2>
             <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] leading-4 text-faint">
-              {isIdMatch(hit) && <><span className="font-mono text-muted"><Highlight text={hit.id} query={query} /></span><span aria-hidden="true">·</span></>}
+              {hit.kind === "task" && <><span className="font-mono text-muted"><Highlight text={hit.id} query={query} /></span><span aria-hidden="true">·</span></>}
               <span>{hit.projectName ?? "未知项目"}</span><span aria-hidden="true">·</span>
               <span>创建于 {formatInstant(hit.createdAt)}</span><span aria-hidden="true">·</span>
               <span>更新于 {formatInstant(hit.updatedAt)}</span>
@@ -177,7 +177,7 @@ export function SearchHitRow({
         {hit.projectName && <span className="ml-auto shrink-0 text-[10px] text-faint">{hit.projectName}</span>}
       </span>
       <span className="flex w-full min-w-0 items-center gap-1.5 pl-[23px] text-[9px] leading-4 text-faint">
-        {isIdMatch(hit) && <><span className="font-mono text-[10px] text-muted"><Highlight text={hit.id} query={query} /></span><span aria-hidden="true">·</span></>}
+        {hit.kind === "task" && <><span className="font-mono text-[10px] text-muted"><Highlight text={hit.id} query={query} /></span><span aria-hidden="true">·</span></>}
         <span>创建于 {formatInstant(hit.createdAt)}</span>
         <span aria-hidden="true">·</span>
         <span>更新于 {formatInstant(hit.updatedAt)}</span>
