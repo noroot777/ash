@@ -4,7 +4,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
-import { freeReviewEvidenceDir, freeReviewReportPath } from "./free-review-files.js";
+import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { reviewRequestReference } from "./review-request-context.js";
 import { settledRulingsFor } from "./free-review-settled.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
@@ -13,8 +13,8 @@ import {
   REVIEWER_REGRESSION_CLAUSE,
 } from "@ash/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { replaceEvidenceFile, safeRunDirectory } from "./review-evidence.js";
 import { extractReportFindings, freeReviewHistory } from "./review-history.js";
 import { RECURRENCE_LIST_FILE, recurrenceListMarkdown, recurrenceRepairNote, roundRecurrence } from "./review-recurrence.js";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
@@ -148,14 +148,21 @@ async function recurrenceNote(taskId: string, runId: string, round: number): Pro
   const found = await roundRecurrence(taskId, runId, round);
   if (!found) return "";
   const note = recurrenceRepairNote(found);
+  if (!note.listed) return note.text;
   // 条目多到指令里放不下：完整清单落到报告同目录，指令只报条数并指过去（不截掉任何一条）。
-  if (note.listed) {
-    const report = await readFile(freeReviewReportPath(taskId, runId, round), "utf8").catch(() => "");
-    const dir = freeReviewEvidenceDir(taskId, runId, round);
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, RECURRENCE_LIST_FILE), recurrenceListMarkdown(found, extractReportFindings(report)));
+  // 那个目录审查者写得进去，所以走证据目录的安全写入（祖先不许是链接、替换目录项而不是顺着
+  // 旧文件上的链接写穿，见 review-evidence.ts）。落不下去就整串内联：超长，但不留打不开的去处。
+  const dir = freeReviewEvidenceDir(taskId, runId, round);
+  try {
+    if (await safeRunDirectory(dir, true)) {
+      await replaceEvidenceFile(join(dir, RECURRENCE_LIST_FILE),
+        recurrenceListMarkdown(found, extractReportFindings(readFreeReviewReport(taskId, runId, round))));
+      return note.text;
+    }
+  } catch (error) {
+    console.error(`[ash] 熔断清单没写进证据目录 task=${taskId}:`, error);
   }
-  return note.text;
+  return recurrenceRepairNote(found, true).text;
 }
 
 export async function freeRepairPrompt(taskId: string, run: ReviewRunRow): Promise<string> {

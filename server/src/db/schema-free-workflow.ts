@@ -193,8 +193,8 @@ export const freeReviewRounds = sqliteTable(
     // 审查者在 report_stage 里声明、且**校验通过**的承接：本轮第 finding 条拦验收发现是清单里
     // `from` 那一条的复发。校验不过的一条都不落（失效向不触发，见 review-recurrence.ts）。
     carries: text("carries", { mode: "json" }).$type<{ finding: number; from: string }[]>(),
-    /** 这一轮的熔断修复交接**实际送进了哪个方向**（方向身份 token）；提问格式闸只认这个方向（review-recurrence-gate.ts）。 */
-    breakerDirection: text("breaker_direction"),
+    /** 这一轮的熔断修复**正处在哪个方向世代**（`tasks.direction_epoch`）；提问格式闸只认这个世代（review-recurrence-gate.ts）。 */
+    breakerEpoch: integer("breaker_epoch"),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
   },
@@ -293,7 +293,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
       dispute_reason TEXT, dispute_defer_reason TEXT, dispute_at TEXT,
       dispute_resolution TEXT, dispute_resolved_at TEXT, dispute_resolution_note TEXT,
       dispute_deferred_task_id TEXT, dispute_superseded_at TEXT, dispatch TEXT,
-      history_refs TEXT, carries TEXT, breaker_direction TEXT,
+      history_refs TEXT, carries TEXT, breaker_epoch INTEGER,
       started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
@@ -357,7 +357,7 @@ export async function ensureFreeWorkflowSchema(client: Client): Promise<void> {
     // 同类问题承接（review-recurrence.ts）：发过的清单编号 + 审查者声明的承接。老行留 null = 没有。
     "ALTER TABLE free_review_rounds ADD COLUMN history_refs TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN carries TEXT",
-    "ALTER TABLE free_review_rounds ADD COLUMN breaker_direction TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN breaker_epoch INTEGER",
     "ALTER TABLE free_review_debate_turns ADD COLUMN summary TEXT",
   ]) {
     try {

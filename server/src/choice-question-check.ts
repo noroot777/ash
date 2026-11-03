@@ -32,27 +32,41 @@ const PRODUCT_WORDS = new Set([
 const SEGMENT = String.raw`[\p{L}\p{N}_.@-]+`;
 const EXTENSIONS = "tsx?|jsx?|mjs|cjs|json|md|py|go|rs|java|kt|swift|css|scss|html|sh|ya?ml|toml|sql|lock";
 
+/** 认路径的几种写法（说明见 FORBIDDEN 里「文件路径」那一项）。 */
+const PATH_SHAPES: Array<{ pattern: RegExp; accept?: (hit: string) => boolean }> = [
+  { pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.~])(?:~|\.{1,2})\/${SEGMENT}(?:\/${SEGMENT})*`, "gu") },
+  { pattern: new RegExp(String.raw`(?<![A-Za-z0-9_.~\/])\/${SEGMENT}(?:\/${SEGMENT})+`, "gu") },
+  { pattern: new RegExp(String.raw`(?<![\p{L}\p{N}_.~\/])\/${SEGMENT}`, "gu") },
+  {
+    pattern: new RegExp(String.raw`(?<![\p{L}\p{N}_.@-])${SEGMENT}(?:\/${SEGMENT})+`, "gu"),
+    accept: (hit) => /[A-Za-z0-9]{2,}/.test(hit) && /[^\x00-\x7f]/.test(hit),
+  },
+  { pattern: /[A-Za-z]:\\[^\s]+/g },
+  { pattern: new RegExp(String.raw`(?<![\p{L}\p{N}_-])[\p{L}\p{N}_-]+\.(?:${EXTENSIONS})(?![\p{L}\p{N}_])`, "gu") },
+];
+
 /** 每一类禁入字眼：名字（写进退回说明）+ 怎么认。判词边界一律用「前后不是字/数字」，不用 `\b`（见下）。 */
 const FORBIDDEN: Array<{ what: string; find: (text: string) => string | null }> = [
   {
-    // 四种写法：以 `/`、`~/`、`./`、`../` 起头的（段里可以是中文，`/用户/配置` 也是路径）；
-    // Windows 盘符；不带前缀、字母数字与中文混着的 `src/配置`（纯字母数字的归下面的分支名，
-    // 纯中文的 `启用/禁用` 是口语里的「或」，不算）；带扩展名的文件名（`配置.json`）。
+    // 按**路径语法本身**认，不看它前面挨着什么字、也不要求每段多长（第 2 轮审查 F3：`请修改/用户/配置`
+    // 紧贴中文、`src/配` 是单字目录，上一版都放过了）：
+    //   · `~/`、`./`、`../` 起头：明确的路径写法，前面是什么都算；
+    //   · `/` 起头且至少两段（`/用户/配置`）：同上；只有一段的（`/用户`）要求前面不是字，
+    //     否则 `启用/禁用` 这种口语里的「或」就成了路径；
+    //   · 不带前缀、但有一段含两个以上连续字母数字、又混着中文的（`src/配`）；
+    //   · Windows 盘符；带扩展名的文件名（`配置.json`）。
+    // 纯字母数字的 `x/y` 归下面的「路径或分支名」。代价是三段以上的口语（`开/关/自动`）也会被当成
+    // 路径退回 —— 方向是对的：多改写一次，好过放过一道看不懂的题。
     what: "文件路径",
-    find: (text) => new RegExp(String.raw`(?<![\p{L}\p{N}_.\/])(?:~|\.{1,2})?\/${SEGMENT}(?:\/${SEGMENT})*`, "u").exec(text)?.[0]
-      ?? /[A-Za-z]:\\[^\s]+/.exec(text)?.[0]
-      ?? [...text.matchAll(new RegExp(String.raw`(?<![\p{L}\p{N}_.@-])${SEGMENT}(?:\/${SEGMENT})+`, "gu"))]
-        .map((match) => match[0])
-        .find((path) => path.split("/").every((part) => [...part].length >= 2)
-          && /[A-Za-z0-9]/.test(path) && /[^\x00-\x7f]/.test(path))
-      ?? new RegExp(String.raw`(?<![\p{L}\p{N}_-])[\p{L}\p{N}_-]+\.(?:${EXTENSIONS})(?![\p{L}\p{N}_])`, "u").exec(text)?.[0]
-      ?? null,
+    find: (text) => PATH_SHAPES.map((shape) => [...text.matchAll(shape.pattern)].map((match) => match[0])
+      .find((hit) => shape.accept?.(hit) ?? true)).find(Boolean) ?? null,
   },
   {
     // `ash/xxx`、`origin/main`、`src/main.ts`：纯字母数字的 `x/y` 分不清是分支还是目录，一起报。
     // 两边都至少两个字符，`A/B` 这种口语不算。
     what: "路径或分支名",
-    find: (text) => /(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]{2,}\/[A-Za-z0-9_./-]{2,}/.exec(text)?.[0] ?? null,
+    find: (text) => [...text.matchAll(/(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]{2,}\/[A-Za-z0-9_./-]{2,}/g)]
+      .map((match) => match[0]).find((hit) => /[A-Za-z]/.test(hit)) ?? null, // `50/50` 是比例，不是路径
   },
   {
     // 驼峰、帕斯卡、蛇形，以及前导下划线的（`_repair_mode`、`_private`、`__init__`）。边界不能用

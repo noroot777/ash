@@ -46,7 +46,7 @@ export type TurnStartDecline = "turn-taken" | "withdrawn" | "backoff" | "uncerta
  */
 export type ContinueTaskOptions = {
   reviewDelivery?: import("./review-ownership.js").ReviewDelivery;
-  /** 这一回合交进去的是哪一轮的**手动**修复交接（自动修复从 `reviewDelivery` 反查）；熔断提问闸认它（review-recurrence-gate.ts）。 */
+  /** 这一回合交进去的是哪一轮的**手动**修复交接（自动修复从 `reviewDelivery` 反查）；熔断提问闸从它起算（review-recurrence-gate.ts）。 */
   recurrenceRound?: { runId: string; round: number };
   agent?: AgentType;
   executorId?: string | null;

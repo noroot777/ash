@@ -108,10 +108,10 @@ api.post("/tasks/:id/ask", async (c) => {
       : "MCP 未携带当前方向身份（请传当前消息附带的 directionToken），提问已拒绝写入" }, 409);
   }
   // 熔断修复里的提问是交给用户拍板的选择题：过机械格式校验，不过就退回并逐条说改什么
-  //（判据见 choice-question-check.ts；只认熔断交接送进去的那个方向，见 review-recurrence-gate.ts）。
+  //（判据见 choice-question-check.ts；只认熔断修复还在继续的那个方向世代，见 review-recurrence-gate.ts）。
   // 审查回合不在此列 —— 熔断卡的是执行者。
   if (r.mode !== "team" && r.workflowMode === "free" && turnRole(taskId) !== "reviewer"
-    && await recurrenceBreakerArmed(taskId, r.activeDirectionToken)) {
+    && await recurrenceBreakerArmed(taskId, r.directionEpoch)) {
     const problems = checkChoiceQuestion({ question: q, options: opts, items: questionItems });
     if (problems.length) return c.json({ error: choiceQuestionRejection(problems), problems }, 400);
   }

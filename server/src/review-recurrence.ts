@@ -178,12 +178,13 @@ function findingRanges(findings: readonly number[]): string {
  *
  * 触发条目全部要有去处，长度又要有上界：条序先压成区间，放得下就内联；放不下（触发的条目多到
  * 区间也压不住）就只报条数，完整清单指到报告同目录的 `recurrence.md` —— 不截掉任何一条。
+ * `inlineAll`：清单落不了盘时调用方要的那一版（整串内联，宁可超长也不指向一个不存在的文件）。
  */
-export function recurrenceRepairNote(found: Recurrence): { text: string; listed: boolean } {
+export function recurrenceRepairNote(found: Recurrence, inlineAll = false): { text: string; listed: boolean } {
   const note = (which: string) => `\n\n【${recurrenceLabel(found.length)}】${which}已按点修过没收口，二选一：` +
     `(a) 没修全——列出全部同类位置，这轮一次改完；(b) 方案本身走不通——用 ask_question 把选择题交给用户。不许再按点修。\n`;
   const inline = note(`报告第 ${findingRanges(found.findings.map((item) => item.finding))} 条`);
-  return Buffer.byteLength(inline, "utf8") <= RECURRENCE_NOTE_CAP ? { text: inline, listed: false }
+  return inlineAll || Buffer.byteLength(inline, "utf8") <= RECURRENCE_NOTE_CAP ? { text: inline, listed: false }
     : { text: note(`这 ${found.findings.length} 条（见同目录 ${RECURRENCE_LIST_FILE}）`), listed: true };
 }
 
