@@ -248,7 +248,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       executionMode: gateExecutionNotice() ? "macos-observed" : null,
       sourceCommit: plan.sourceCommit, targetBranch: plan.targetBranch, targetCommit: plan.targetCommit,
       sourceFingerprint: plan.source.fingerprint, sourceAmbient: plan.source.ambient,
-      fastForward: plan.fastForward, previewBase: plan.baseline.previewBase,
+      fastForward: plan.fastForward, previewBase: plan.baseline.previewBase, previewTree: plan.baseline.previewTree,
       acceptOptions: JSON.stringify(plan.choices), startedAt, finishedAt: null,
     });
     inserted = true;

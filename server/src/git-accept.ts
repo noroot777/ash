@@ -224,6 +224,12 @@ export type TaskMergeOptions = {
    * already_merged。
    */
   retryOfMerged?: boolean;
+  /**
+   * 门禁（合并预览档）测过的那棵合并树。给了就只许落下这一棵：合出来的不是它（合并配置在门禁跑完
+   * 之后变了、主检出里有不进版本库的属性文件、项目配的合并驱动合出了别的…），就撤回这次合并、
+   * 一个字节不留（第 2 轮审查 F1：门禁绿了、合进去的却是没测过的树）。
+   */
+  expectedTree?: string;
 };
 
 export async function mergeTaskBranch(
@@ -434,6 +440,29 @@ async function mergeWithoutCommit(
   return squashInCheckedOutTarget(repo, sourceBranch, targetBranch, false, sourceRef);
 }
 
+/**
+ * 落下来的必须是测过的那棵树（TaskMergeOptions.expectedTree）。只看真正产出合并结果的三种落法；
+ * 对不上就把目标检出复位到合并之前 —— 走到合并这一步的检出事先都核过是干净的，复位丢不了别人的东西。
+ */
+async function landTestedTree(cwd: string, expected: string, fn: (cwd: string) => Promise<TaskMergeResult>): Promise<TaskMergeResult> {
+  const before = (await exec("git", ["-C", cwd, "rev-parse", "HEAD"]).catch(() => null))?.stdout.trim();
+  const result = await fn(cwd);
+  if (!result.ok || !["merge_commit", "squash", "no_commit"].includes(result.method)) return result;
+  const landed = result.method === "no_commit" ? result.stagedTree
+    : (await exec("git", ["-C", cwd, "rev-parse", "HEAD^{tree}"])).stdout.trim();
+  if (landed === expected) return result;
+  if (before) await exec("git", ["-C", cwd, "reset", "--hard", before]).catch(() => {});
+  return {
+    ok: false,
+    reason: "merge_failed",
+    message: `这次真合出来的树（${landed?.slice(0, 12) ?? "未知"}）不是验收前置命令测过的那一棵（${expected.slice(0, 12)}），`
+      + "已撤回、目标分支没动。常见原因是门禁跑完之后仓库的合并配置变了，或者主检出里有不进版本库的属性文件、"
+      + "仓库配的合并驱动合出了别的结果。重新验收会按现在的配置重新预演、重新跑门禁。",
+    sourceBranch: result.sourceBranch,
+    targetBranch: result.targetBranch,
+  };
+}
+
 /** 「只打标签不合并」那一档的标签名。 */
 export function acceptTagName(taskId: string): string {
   return `ash-accepted/${taskId.slice(0, 8)}`;
@@ -514,16 +543,18 @@ async function mergeTaskBranchLocked(
   // 更靠后也更硬——不落提交时，squash 和 --no-ff 在工作区里的结果没有区别（都是「把那
   // 串改动的最终状态放进来」），真正能区别它们的那个动作正是被去掉的那次 commit。
   // 「只打标签不合并」不受影响：它本来就不产生提交，上面已经提前返回了。
+  const landing = (fn: (cwd: string) => Promise<TaskMergeResult>) =>
+    options.expectedTree ? (cwd: string) => landTestedTree(cwd, options.expectedTree!, fn) : fn;
   if (options.commit === false) {
     // 重试上一轮已经合过的那次：目标工作区里躺着的就是上次合进来的改动，别再合一遍
     // （会被自己的产物判成 target_dirty，任务永远卡在 merged）。
     if (options.retryOfMerged) return { ok: true, sourceBranch, targetBranch, method: "no_commit" };
-    return mergeWithoutCommit(repo, sourceBranch, targetBranch, sourceRef);
+    return landing((cwd) => mergeWithoutCommit(cwd, sourceBranch, targetBranch, sourceRef))(repo);
   }
 
   if (strategy === "squash") {
-    return inTargetCheckout(repo, sourceBranch, targetBranch, (cwd) =>
-      squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef));
+    return inTargetCheckout(repo, sourceBranch, targetBranch, landing((cwd) =>
+      squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef)));
   }
 
   // 清掉失效登记后再尝试 fetch，避免首次 FF 被陈旧占用拒绝、第二次却能成功。
@@ -541,7 +572,7 @@ async function mergeTaskBranchLocked(
       targetBranch,
       // 走到临时 worktree 时 fastForward 一定是 false（下面那个 beforeTemp 已经把
       // 「本来能 FF 却失败了」拦掉了），所以这儿直接把它透传下去。
-      (cwd) => mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward, sourceRef),
+      landing((cwd) => mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward, sourceRef)),
       // 目标分支哪儿都没检出、而且本来就该能 fast-forward：那句 ref-only 的 fetch 失败
       // 是真出事了，别再开临时 worktree 拿 merge 去糊。
       () => fastForward

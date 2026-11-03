@@ -141,6 +141,7 @@ export function SettingsPage({
   onSection,
   onBack,
   onProjectUpdated,
+  projectsLagging = false,
   onProjectDeleted,
   onTaskUpdated,
   onGroupsChanged,
@@ -157,6 +158,8 @@ export function SettingsPage({
   onSection: (section: SettingsSection, anchor?: string | null) => void;
   onBack: () => void;
   onProjectUpdated: (project: ProjectView) => void;
+  /** 项目列表最近一次没读到、还在重试：这一屏显示的项目设置可能不是最新的。 */
+  projectsLagging?: boolean;
   onProjectDeleted: (projectId: string) => void;
   onTaskUpdated: (task: Task) => void;
   onGroupsChanged: () => void;
@@ -206,6 +209,7 @@ export function SettingsPage({
             <ProjectSettingsPanel
               project={project}
               onUpdated={onProjectUpdated}
+              stale={projectsLagging}
               onDeleted={() => onProjectDeleted(project.id)}
               notify={notify}
             />

@@ -15,9 +15,12 @@ type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
 
-export async function gateMergeSource(basis: Pick<TaskRow, "acceptedGateMode" | "acceptedGateRunId"> | null): Promise<string | undefined> {
-  if (basis?.acceptedGateMode !== "passed" || !basis.acceptedGateRunId) return undefined;
-  return (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, basis.acceptedGateRunId))).at(0)?.sourceCommit ?? undefined;
+/** 凭据那一次门禁测的是哪一份：任务分支的提交，以及（合并预览档）预演出的合并树。最终合并只认这两样。 */
+export async function gateMergeSource(basis: Pick<TaskRow, "acceptedGateMode" | "acceptedGateRunId"> | null):
+  Promise<{ sourceCommit?: string; previewTree?: string }> {
+  if (basis?.acceptedGateMode !== "passed" || !basis.acceptedGateRunId) return {};
+  const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, basis.acceptedGateRunId))).at(0);
+  return { sourceCommit: row?.sourceCommit ?? undefined, previewTree: row?.previewTree ?? undefined };
 }
 
 /**

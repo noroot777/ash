@@ -8,7 +8,7 @@
 // 不跑而真按下去跑了（或反过来），统一验收就会停在半路。
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -37,6 +37,8 @@ try {
   const { acceptGateState } = await import("../src/accept-gate-state.js");
   const { mountProjectRoutes } = await import("../src/project-routes.js");
   const { bus } = await import("../src/bus.js");
+  const { previewMerge } = await import("../src/accept-gate-preview.js");
+  const { mergeTaskBranch } = await import("../src/git-accept.js");
   await ensureSchema();
   const api = new Hono();
   mountProjectRoutes(api);
@@ -281,7 +283,7 @@ try {
     writeFileSync(join(sample.repo, "data.txt"), "main\n");
     git(sample.repo, "add", "data.txt");
     git(sample.repo, "commit", "-m", "main edits data");
-    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /merge\.review\.driver/);
+    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /合并驱动（review）/);
     assert.equal(await wouldRun(sample), false);
     const refused = await acceptTask(sample.taskId);
     assert.equal(refused.accepted, false);
@@ -312,8 +314,90 @@ try {
     assert.equal(readFileSync(join(sample.repo, "data.txt"), "utf8"), "main\ntask\n", "真合并：目标分支在前");
   }
 
+  // ⑩ 预演执行层本身不执行项目程序：上面⑧那道提前判断漏判时（它只为把话说清楚），预演照样没有
+  // 程序可调 —— 隔离的 git 目录里没有任何驱动定义，属性点名的驱动退回内置合并。
+  {
+    const repo = join(root, "isolated-preview");
+    execFileSync("git", ["init", "-b", "main", repo]);
+    git(repo, "config", "user.name", "Gate Baseline Test");
+    git(repo, "config", "user.email", "baseline@example.test");
+    const marker = join(root, "isolated-driver-ran");
+    git(repo, "config", "merge.review.driver", `touch '${marker}'; false`);
+    writeFileSync(join(repo, ".gitattributes"), "data.txt merge=review\n");
+    writeFileSync(join(repo, "data.txt"), "one\ntwo\nthree\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "seed");
+    git(repo, "checkout", "-b", "task");
+    writeFileSync(join(repo, "data.txt"), "ONE\ntwo\nthree\n");
+    git(repo, "commit", "-am", "task edits the first line");
+    const head = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "main");
+    writeFileSync(join(repo, "data.txt"), "one\ntwo\nTHREE\n");
+    git(repo, "commit", "-am", "main edits the last line");
+    const merged = await previewMerge(repo, git(repo, "rev-parse", "main"), head);
+    assert.ok("tree" in merged, JSON.stringify(merged));
+    assert.equal(existsSync(marker), false, "预演没有执行仓库配的合并驱动");
+    if ("tree" in merged) assert.equal(git(repo, "show", `${merged.tree}:data.txt`), "ONE\ntwo\nTHREE");
+  }
+
+  // ⑪ 合并预览 · 目标分支带进来的文件要过过滤器：在快照里检出它就会执行那段程序，所以预演之前就拒。
+  {
+    const sample = await fixture("preview-filter", { baseline: "merge_preview" });
+    const marker = join(root, "filter-ran");
+    git(sample.repo, "config", "filter.review.smudge", `touch '${marker}'; cat`);
+    git(sample.repo, "config", "filter.review.clean", "cat");
+    writeFileSync(join(sample.repo, ".gitattributes"), "target.txt filter=review\n");
+    writeFileSync(join(sample.repo, "target.txt"), "target\n");
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-m", "main adds a filtered file");
+    rmSync(marker, { force: true });
+    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /过滤器/);
+    assert.equal(await wouldRun(sample), false);
+    const refused = await acceptTask(sample.taskId);
+    assert.equal(refused.accepted, false);
+    if (!refused.accepted) assert.equal(refused.reason, "accept_gate_preview_unavailable");
+    assert.equal(existsSync(marker), false, "没有为预演或快照执行过滤器");
+    assert.equal((await runs(sample.taskId)).length, 0);
+  }
+
+  // ⑫ 合并预览 · 两个提交没动、合并配置变了：合出来的是另一棵树，旧绿不作数；最终合并只许落下测过的那棵。
+  {
+    const sample = await fixture("preview-config", { baseline: "merge_preview", delay: 500 });
+    mkdirSync(join(sample.repo, "dir"));
+    writeFileSync(join(sample.repo, "dir", "a.txt"), "seed\n");
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-m", "main adds dir");
+    git(sample.cwd, "merge", "--no-edit", "main");
+    writeFileSync(join(sample.cwd, "dir", "b.txt"), "task\n");
+    git(sample.cwd, "add", "-A");
+    git(sample.cwd, "commit", "-m", "task adds dir/b.txt");
+    git(sample.repo, "mv", "dir", "renamed");
+    git(sample.repo, "commit", "-m", "main renames dir");
+    git(sample.repo, "config", "merge.directoryRenames", "true");
+    await acceptTask(sample.taskId);
+    writeFileSync(join(sample.repo, "blocker.txt"), "blocks the merge\n");
+    await settled(sample.taskId);
+    const [first] = await runs(sample.taskId);
+    assert.equal(first!.status, "passed");
+    assert.ok(first!.previewTree);
+    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, false);
+    assert.equal(await wouldRun(sample), false);
+    git(sample.repo, "config", "merge.directoryRenames", "false");
+    assert.equal((await acceptGateState(sample.taskId)).latest?.stale, true, "同样两个提交，合并配置变了就不是测过的那棵");
+    assert.equal(await wouldRun(sample), true);
+    rmSync(join(sample.repo, "blocker.txt"));
+    const mainBefore = git(sample.repo, "rev-parse", "main");
+    const landed = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
+      { sourceCommit: first!.sourceCommit!, expectedTree: first!.previewTree! });
+    assert.equal(landed.ok, false, "合出来的不是测过的那棵树就不落");
+    if (!landed.ok) assert.match(landed.message, /不是验收前置命令测过的那一棵/);
+    assert.equal(git(sample.repo, "rev-parse", "main"), mainBefore);
+    assert.equal(git(sample.repo, "status", "--porcelain"), "");
+  }
+
   console.log(JSON.stringify({ branchDefault: true, containsRefuse: true, containsPass: true, previewCollision: true,
-    previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true }));
+    previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true,
+    isolatedPreview: true, previewFilter: true, previewConfig: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

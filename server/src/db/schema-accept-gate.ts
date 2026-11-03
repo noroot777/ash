@@ -76,6 +76,12 @@ export const acceptGateRuns = sqliteTable(
     /** 预演合并在快照里落成的那个提交（快照 HEAD）。收尾核验「副本还是不是当初那一份」认它。 */
     previewCommit: text("preview_commit"),
     /**
+     * 预演核定的合并树，也就是门禁真正测的那一棵。同样两个提交在不同的合并配置下（比如
+     * merge.directoryRenames）会合出不同的树，所以复用判据和最终合并都认它，不只认 previewBase
+     * （第 2 轮审查 F1）。null = 没有合并（分支已含目标分支尖端，或不是合并预览档）。
+     */
+    previewTree: text("preview_tree"),
+    /**
      * 用户点那一下带着的验收选择（JSON：by / commit / confirmUnverified）。
      *
      * 必须留：门禁绿了之后是**系统**替他把验收接着做完的，接着做的那一次必须跟他在
@@ -135,6 +141,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN settlement TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_base TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_commit TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

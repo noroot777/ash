@@ -292,7 +292,8 @@ async function acceptTaskUnlocked(
     };
   }
   task = { ...task, acceptedTargetBranch: intendedTarget };
-  const testedSource = await gateMergeSource(gateBasis);
+  const tested = await gateMergeSource(gateBasis);
+  const testedSource = tested.sourceCommit;
   if (!retrying) {
     const source = testedSource ?? await commitAt(project.repoPath, await resolveWorktreeBranchName(project.repoPath, taskId));
     await db.update(tasks).set({ acceptedSourceCommit: source }).where(eq(tasks.id, taskId));
@@ -301,6 +302,7 @@ async function acceptTaskUnlocked(
     commit: commitOnAccept,
     retryOfMerged: retrying,
     sourceCommit: testedSource,
+    expectedTree: tested.previewTree,
   });
   if (!merge.ok && merge.reason === "target_checked_out" && merge.targetBranch) {
     const owner = await branchOwner(project.repoPath, task.projectId, merge.targetBranch);

@@ -20,9 +20,11 @@ import { ACCEPT_GATE_BASELINE_LABELS, acceptGateBaselineEffect, normalizeAcceptG
 // —— 所以这一屏按 `project.myRole` 分两副面孔(第 6 轮审查 P3)。Git 那一段**同属这条线**:
 // 提交署名、SSH key、HTTPS 令牌改一次,所有人所有任务的 worktree 都跟着变,所以 canManage
 // 一路传下去(第 1 轮审查 P1);读侧仍然全员可见,理由见 ProjectGitSettings 顶部。
-export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: {
+export function ProjectSettingsPanel({ project, onUpdated, stale = false, onDeleted, notify }: {
   project: ProjectView;
   onUpdated: (project: ProjectView) => void;
+  /** 项目列表最近一次没读到（正在自动重试）：别处刚改过的设置可能还没显示出来。 */
+  stale?: boolean;
   onDeleted: () => void;
   notify: (message: string) => void;
 }) {
@@ -131,6 +133,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
   return (
     <>
       <header className="settings-heading"><div><h1>项目设置</h1><p>项目目录是所有任务的默认运行位置，也是 worktree 与 diff 的根。</p></div></header>
+      {stale && <p className="settings-stale" role="status">这一页的项目设置暂时没能和服务端对上，正在自动重试；别处刚改过的（比如验收台上的门禁基准）可能还没显示出来。</p>}
       {!canManage && (
         <section className="settings-section"><div className="settings-card">
           <div className="settings-row"><div>

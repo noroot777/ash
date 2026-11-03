@@ -22,6 +22,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 合并预览档的两样事实(见 schema-accept-gate.ts 同名列)。旧行 NULL = 分支快照。
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_base TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_commit TEXT",
+  "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
   // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
   "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",

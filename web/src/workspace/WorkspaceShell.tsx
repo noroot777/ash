@@ -58,7 +58,7 @@ import { useProjectGitAnnouncer } from "./useProjectGitAnnouncer.ts";
 import { ChatView } from "../chat/ChatView.tsx";
 import { AssistantView } from "../assistant/AssistantView.tsx";
 import { readGitLocation } from "../git-workbench/navigation.ts";
-import { useProjectSync } from "./useProjectSync.ts";
+import { useProjects } from "./useProjects.ts";
 const GitWorkbench = lazy(() => import("../git-workbench/GitWorkbench.tsx").then((module) => ({ default: module.GitWorkbench })));
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
@@ -84,10 +84,9 @@ export function WorkspaceShell() {
   const initial = readUrlSelection();
   const [gitOpen, setGitOpen] = useState(initial.view === "git");
   const [gitLocation, setGitLocation] = useState(readGitLocation);
-  const [projects, setProjects] = useState<ProjectView[]>([]);
-  const [projectsReady, setProjectsReady] = useState(false);
-  const [projectsError, setProjectsError] = useState<Error | null>(null);
   const [projectId, setProjectId] = useState<string | null>(initial.projectId);
+  const { projects, ready: projectsReady, error: projectsError, lagging: projectsLagging, apply: setProjects, setLocal: setProjectsLocal } =
+    useProjects((rows) => setProjectId((current) => current && rows.some((project) => project.id === current) ? current : rows[0]?.id ?? null));
   const currentProject = projects.find((project) => project.id === projectId) ?? null;
   const hasCurrentProject = currentProject !== null;
   const [taskId, setTaskId] = useState<string | null>(initial.taskId);
@@ -162,16 +161,6 @@ export function WorkspaceShell() {
   // 主仓 git 操作落定时那一句话挂在这一层，为的是**盖得住切项目**：分支胶囊跟着当前项目
   // 卸载，操作跑一半切走，结果就没人认领了。
   useProjectGitAnnouncer(notify, () => setGitVersion((value) => value + 1));
-
-  useEffect(() => {
-    let alive = true;
-    api.projects().then((rows) => {
-      if (!alive) return;
-      setProjects(rows);
-      setProjectId((current) => current && rows.some((project) => project.id === current) ? current : rows[0]?.id ?? null);
-    }).catch((reason) => { if (alive) setProjectsError(reason instanceof Error ? reason : new Error("项目列表读取失败")); }).finally(() => { if (alive) setProjectsReady(true); });
-    return () => { alive = false; };
-  }, []);
 
   const refreshGroups = useCallback(() => {
     if (!projectId) { setGroups([]); return; }
@@ -267,7 +256,7 @@ export function WorkspaceShell() {
     let alive = true;
     api.projectHealth(projectId).then((health) => {
       if (!alive) return;
-      setProjects((current) => current.map((project) => project.id === projectId ? { ...project, health } : project));
+      setProjectsLocal((current) => current.map((project) => project.id === projectId ? { ...project, health } : project));
     }).catch(() => {});
     return () => { alive = false; };
   }, [currentProject?.repoPath, gitVersion, projectId, settlementVersion]);
@@ -416,10 +405,8 @@ export function WorkspaceShell() {
   // 下次打开是按 project 重新初始化的（第 1 轮审查 P1）。
   const applyProjectUpdate = (updated: ProjectView) =>
     setProjects((current) => current.map((project) => project.id === updated.id ? updated : project));
-  // 不经过上面那条回调的改动（验收台上就地改门禁基准、别的页面、别的人）靠服务端事件对上。
-  // 只换已有的那几行：项目的增删各有自己的入口。
-  useProjectSync((rows) => setProjects((current) =>
-    current.map((project) => rows.find((row) => row.id === project.id) ?? project)));
+  // 不经过上面那条回调的改动（验收台上就地改门禁基准、别的页面、别的人）由 useProjects 按服务端
+  // 事件重读对上。
   const openSettings = (section: SettingsSection = "executors", anchor: string | null = null) => {
     setGitOpen(false);
     const scopedLabel = projectSectionLabel(section);
@@ -610,6 +597,7 @@ export function WorkspaceShell() {
     onSection={(section, anchor) => { setSettingsSection(section); setSettingsAnchor(anchor ?? null); }}
     onBack={() => setSettingsSection(null)}
     onProjectUpdated={applyProjectUpdate}
+    projectsLagging={projectsLagging}
     onProjectDeleted={(deletedId) => { setProjects((current) => { const next = current.filter((project) => project.id !== deletedId); setProjectId(next[0]?.id ?? null); return next; }); setSettingsSection(null); }}
     onTaskUpdated={updateTask}
     onGroupsChanged={refreshGroups}
