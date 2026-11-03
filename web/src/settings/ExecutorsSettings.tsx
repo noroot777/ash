@@ -6,8 +6,7 @@ import { AgentProfilesSection } from "./AgentProfilesSection.tsx";
 
 function updateById(rows: AgentExecutorProfile[], updated: AgentExecutorProfile) {
   return rows.map((row) => {
-    // `ashMcpProblem` 只有创建返回体带，改一次模型不该把注册时那句提示抹掉。
-    if (row.id === updated.id) return { ashMcpProblem: row.ashMcpProblem, ...updated };
+    if (row.id === updated.id) return updated;
     if (updated.isDefault && row.type === updated.type) return { ...row, isDefault: false };
     return row;
   });

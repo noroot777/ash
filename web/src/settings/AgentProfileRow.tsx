@@ -272,7 +272,7 @@ export function AgentProfileRow({
         {profile.dispatchBlocked && (
           <p className="agent-profile-row-warning is-blocked">{profile.dispatchBlocked}</p>
         )}
-        {/* 注册时 ash MCP 没接上：不说的话，用户要等第一个任务交不了卷才知道。 */}
+        {/* ash MCP 没接上：不说的话，用户要等第一个任务交不了卷才知道。 */}
         {profile.ashMcpProblem && <p className="agent-profile-row-warning">{profile.ashMcpProblem}</p>}
       </article>
       {confirmDelete && (

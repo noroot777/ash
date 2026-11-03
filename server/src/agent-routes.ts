@@ -1,7 +1,7 @@
 // 执行器(agents 表)的增删改查。从 `routes.ts` 拆出来只有一个理由:那个文件到 700 行了。
 //
-// 新建执行器那一刻顺手把这家 CLI 的 ash MCP 登记接上(`ensureExecutorAshMcp`),
-// 接不上就把原因带在返回体的 `ashMcpProblem` 里 —— 理由见那个函数的注释。
+// 新建执行器那一刻顺手把这家 CLI 的 ash MCP 登记接上(`ensureExecutorAshMcp`);每个返回
+// 执行器的响应都带上它现在接没接上(`ashMcpProblem`)—— 理由见 `auth/executor-ash-mcp.ts` 顶部。
 import type { Context, Hono } from "hono";
 import { and, eq, exists, sql } from "drizzle-orm";
 import type { AgentType } from "@ash/shared";
@@ -18,7 +18,7 @@ import { actorOf } from "./auth/context.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 import { isHostCliIsolated } from "./auth/mode.js";
 import { defaultClearScope, dispatchBlockReason } from "./auth/dispatch-gate.js";
-import { ensureExecutorAshMcp } from "./auth/user-cli.js";
+import { ensureExecutorAshMcp, executorAshMcpProblem } from "./auth/executor-ash-mcp.js";
 
 const toAgent = (r: typeof agents.$inferSelect) => ({
   id: r.id,
@@ -44,10 +44,37 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
 // 全应用唯一答不上「它能不能派活」的执行器记录 —— 首启向导据此把一个在隔离档下根本
 // 跑不起来的 gemini 显示成已就绪(第 1 轮审查实测)。差一个字段的返回体等于逼每个
 // 调用方写完再 GET 一次列表,而漏掉那一次的表现正是「界面说好了,派任务才知道不行」。
-const toGatedAgent = async (r: typeof agents.$inferSelect) => ({
+//
+// `ashMcpProblem` 同一个道理,而且不分档:没接上 ash MCP 的执行器两档都交不了卷。
+const toGatedAgent = async (r: typeof agents.$inferSelect, ashMcp: AshMcpProbe = ashMcpProbe()) => ({
   ...toAgent(r),
   ...((await isHostCliIsolated()) ? { dispatchBlocked: dispatchBlockReason(r.type, r.providerId) } : {}),
+  ashMcpProblem: await ashMcp(r),
 });
+
+type AshMcpProbe = (r: typeof agents.$inferSelect) => Promise<string | null>;
+
+/**
+ * 只读诊断,同一次响应里同一家、同一个人、同一组参数只读一次配置 —— 列表里十几个执行器
+ * 多半是同一家 CLI 的几个档位,`.claude.json` 这种文件动辄几 MB,没必要每行都解析一遍。
+ */
+function ashMcpProbe(): AshMcpProbe {
+  const seen = new Map<string, Promise<string | null>>();
+  return (r) => {
+    const key = `${r.type}\0${r.ownerUserId ?? ""}\0${r.extraArgs}`;
+    let hit = seen.get(key);
+    if (!hit) {
+      let extraArgs: string[] = [];
+      try {
+        const parsed = JSON.parse(r.extraArgs);
+        if (Array.isArray(parsed)) extraArgs = parsed.filter((a): a is string => typeof a === "string");
+      } catch { /* 读不出就按没带参数判 */ }
+      hit = executorAshMcpProblem(r.type, r.ownerUserId, extraArgs);
+      seen.set(key, hit);
+    }
+    return hit;
+  };
+}
 
 /**
  * 「这个执行器能不能挂上这个供应商」。
@@ -70,7 +97,8 @@ export function mountAgentRoutes(api: Hono): void {
   // 执行器是**个人面**资源(§八):每人自带供应商 key,别人的执行器既看不见也用不了。
   api.get("/agents", async (c) => {
     const rows = await filterOwned(await db.select().from(agents), actorOf(c));
-    return c.json(await Promise.all(rows.map(toGatedAgent)));
+    const ashMcp = ashMcpProbe();
+    return c.json(await Promise.all(rows.map((r) => toGatedAgent(r, ashMcp))));
   });
 
   // Detect which agent CLIs are installed on the local machine (§5).
@@ -128,13 +156,14 @@ export function mountAgentRoutes(api: Hono): void {
     const insert = db.insert(agents).values(row);
     if (clearDefault) await db.batch([clearDefault, insert]);
     else await insert;
-    // 落库之后才接 MCP:接不上不该让注册本身失败(执行器照样能用,只是交不了卷),
-    // 而原因要跟着这次返回一起回去,让刚注册出来的那一行当场说清楚。
+    // 落库之后才接 MCP:接不上不该让注册本身失败(执行器照样能用,只是交不了卷;
+    // `ensureExecutorAshMcp` 从不抛),原因用补接那一次自己的说法 —— 它比只读诊断多一句
+    // 「为什么没替你写」。
     const ashMcp = await ensureExecutorAshMcp(type, row.ownerUserId);
-    return c.json({
-      ...(await toGatedAgent(row as typeof agents.$inferSelect)),
-      ashMcpProblem: ashMcp.configured ? null : ashMcp.problem,
-    }, 201);
+    return c.json(await toGatedAgent(
+      row as typeof agents.$inferSelect,
+      async () => ashMcp.configured ? null : ashMcp.problem,
+    ), 201);
   });
 
   api.patch("/agents/:id", async (c) => {

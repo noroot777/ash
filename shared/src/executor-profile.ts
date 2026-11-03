@@ -25,7 +25,8 @@ export interface AgentExecutorProfile {
   // 被隔离后,没接 relay 的 CLI 与没挂供应商的执行器都跑不起来 —— 服务端现算,
   // 前端据此标灰并给出下一步(见 auth/dispatch-gate.ts)。
   dispatchBlocked?: string | null;
-  // 注册那一刻没能把 ash MCP 接进这家 CLI 的配置的原因(接上了就是 null)。只有创建执行器的
-  // 返回体带它:接没接上是注册那一下的结果,之后起跑前的预检会再问一次(server/src/agent-routes.ts)。
+  // 这个执行器起跑时读的那份配置里为什么没有可用的 ash MCP 登记(接上了 / 判不准就是 null)。
+  // 列表和每次写入的返回体都现读一次,注册那一下没补成时用补接自己的说法
+  // (server/src/auth/executor-ash-mcp.ts)。
   ashMcpProblem?: string | null;
 }

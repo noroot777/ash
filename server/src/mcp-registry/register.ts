@@ -74,6 +74,29 @@ export function ashMcpUnsupported(
 /** 补接的结果。`ok:false` 时 `why` 是**给用户看**的一句话(会进时间线和设置页)。 */
 export type AshMcpRegisterResult = { ok: true; serverName: string } | { ok: false; why: string };
 
+/**
+ * 「要手工接的话加哪一段、加到哪」—— 只读,不碰文件。只有 TOML 族给得出整段(JSON 族靠
+ * `registerAshMcp` 自己就写得进去,轮不到手工)。仓库里还没 build 出 MCP 产物时也给不出。
+ *
+ * 谁要它:执行器列表那一行的只读诊断。注册那一下没写成的原因里本来就带着这一段
+ * (`byHand`),刷新之后也得照样抄得到,不然用户只剩一句「没有登记」。
+ */
+export function ashMcpHandBlock(
+  agentType: string,
+  dir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { file: string; block: string } | null {
+  const mechanism = ashMcpMechanism(agentType);
+  if (mechanism?.kind !== "file" || !blockShape(mechanism.shape)) return null;
+  const entry = builtinEntry();
+  if (!entry) return null;
+  const block = mechanism.shape.blockFor(entry, {
+    enabled: mechanism.writeEnabled === true,
+    ...(mechanism.writeType ? { type: mechanism.writeType } : {}),
+  });
+  return { file: siteFileFor(agentType, dir, mechanism.site, env), block };
+}
+
 export interface AshMcpRegisterOptions {
   agentType: string;
   /** 要补的那个配置目录(隔离档给个人目录;宿主档给 `ashMcpConfigDir` 算出来的)。 */

@@ -20,7 +20,6 @@ import { isHostCliShared, isMultiUser } from "./mode.js";
 import { filterOwned, ownedScope, ownerStamp } from "./owned.js";
 import {
   deletePersonalSkill,
-  ensureExecutorAshMcp,
   listPersonalCliEnv,
   personalCliEnv,
   readPersonalMemory,
@@ -31,6 +30,7 @@ import {
   PERSONAL_CLI_TYPES,
 } from "./user-cli.js";
 import { hostAshMcp } from "./user-cli-mcp.js";
+import { ensureExecutorAshMcp } from "./executor-ash-mcp.js";
 
 /**
  * 个人 CLI 环境只对**本人**开放 —— 连实例管理员也看不了别人的(§八 个人面)。
