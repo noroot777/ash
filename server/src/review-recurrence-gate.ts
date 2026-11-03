@@ -9,8 +9,10 @@
 // task-direction-epoch.ts），在每次起跑时（`continueTask`，方向身份刚装上）按来源三选一：
 //   · 送进去的是**熔断那一轮的修复交接**（自动修复从投递收据反查，手动修复由调用方点名）
 //     → 把这一轮的世代记到那一轮上：闸开；
-//   · **系统续跑**（检查点续跑、哨兵唤醒、重试，即 `system` / `monitorWake`）且上一个世代正是闸开
-//     的那个 → 世代跟着前进：闸继续开；
+//   · **系统续跑**（检查点续跑、哨兵唤醒、重试，即 `system` / `monitorWake`）或**原生命令**旁路
+//     （`/compact` 一类：整条归 CLI 本地执行，不进模型、不改任务方向，见 orchestrator 的 nativeCommand），
+//     且上一个世代正是闸开的那个 → 世代跟着前进：闸继续开（第 2 次审查第 1 轮 F1：压缩一下就把闸断了，
+//     之后的检查点续跑也接不回来）；
 //   · 其余一切 —— 用户发新消息、答复提问（用户已经拍过板）、裁定后让它接着干、下一轮审查起跑 ——
 //     什么都不写：世代已经前进，记下的那个对不上，闸自然落下。回合中途的改派同理（改派推世代）。
 // 不需要任何「清除」入口：只有上面两种起跑会把世代续上，漏掉一个入口的后果是闸落下（少拦一道题），
@@ -28,6 +30,8 @@ export type RepairSource = {
   recurrenceRound?: { runId: string; round: number };
   system?: string;
   monitorWake?: unknown;
+  /** 这一回合是 CLI 原生命令（`/compact` 等）：不改方向，熔断修复照旧。 */
+  native?: boolean;
 };
 
 const taskRounds = (taskId: string) => db.select({ runId: freeReviewRounds.runId, round: freeReviewRounds.round })
@@ -59,7 +63,7 @@ export async function carryRecurrenceBreaker(taskId: string, source: RepairSourc
         .where(and(eq(freeReviewRounds.runId, target.runId), eq(freeReviewRounds.round, target.round)));
       return;
     }
-    if (!source.system && !source.monitorWake) return;
+    if (!source.system && !source.monitorWake && !source.native) return;
     const live = await db.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
       .innerJoin(freeReviewRuns, eq(freeReviewRuns.id, freeReviewRounds.runId))
       .where(and(eq(freeReviewRuns.taskId, taskId), eq(freeReviewRounds.breakerEpoch, epoch - 1)));

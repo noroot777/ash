@@ -335,7 +335,8 @@ try {
     assert.notEqual(fine.status, 400, "合规的选择题不被格式闸拦");
     // 第 2 轮审查 F2：同一份修复停在检查点、被续跑 / 哨兵 / 重试叫醒 —— 世代换了，闸照样开。
     const badQuestion = { question: "第 2 轮 parseCarries 需要你决定。", options: ["改掉"] };
-    for (const source of [{ system: "run" }, { monitorWake: { monitorId: "m" } }, { system: "retry" }]) {
+    // 中间夹一次原生命令（`/compact`）：它不改方向，之后的检查点续跑照样接得回来（第 2 次审查第 1 轮 F1）。
+    for (const source of [{ system: "run" }, { monitorWake: { monitorId: "m" } }, { native: true }, { system: "run" }, { system: "retry" }]) {
       assert.equal(await start(source), true, `系统续跑继承熔断修复：${JSON.stringify(source)}`);
       await enter();
       assert.equal((await ask(badQuestion)).status, 400, `续跑之后不合格的题照样退回：${JSON.stringify(source)}`);
@@ -414,15 +415,22 @@ try {
         assert.ok(lstatSync(listPath).isFile() && !lstatSync(listPath).isSymbolicLink(), `${link}：清单换成了普通文件`);
         assert.ok(readFileSync(listPath, "utf8").includes("报告第 39 条"), `${link}：清单内容完整`);
       }
-      // 祖先目录被换成链接：安全写入拒绝落盘，指令改为整串内联（超长，但不指向一个不存在的清单）。
+      // 同名位置被一个目录占着：挪开再写，指令照常在上限内（第 2 次审查第 1 轮 F2 的复现形状）。
+      rmSync(listPath, { force: true });
+      mkdirSync(listPath);
+      const displaced = await freeManualRepairPrompt(id, runC);
+      const noteAt = displaced.indexOf(`\n\n【${label(2)}】`);
+      assert.ok(bytes(displaced.slice(noteAt, displaced.indexOf("\n", noteAt + 4) + 1)) <= RECURRENCE_NOTE_CAP);
+      assert.ok(lstatSync(listPath).isFile() && readFileSync(listPath, "utf8").includes("报告第 39 条"), "占位目录挪开后清单写成");
+      // 祖先目录被换成链接：安全写入拒绝落盘。**不改成整串内联**（那会超过 300B），这一次交接不发、
+      // 时间线上说清原因（自动修复由收尾对账重试，手动修复再点一次）。
       const roundDir = freeReviewEvidenceDir(id, "run-c", 2);
       const moved = join(outside, "round-2");
       renameSync(roundDir, moved);
       symlinkSync(moved, roundDir);
       rmSync(join(moved, RECURRENCE_LIST_FILE), { force: true });
-      const fallback = await freeManualRepairPrompt(id, runC);
-      assert.ok(fallback.includes(`报告第 ${carried.join("、")} 条`) && !fallback.includes(RECURRENCE_LIST_FILE),
-        "清单落不了盘：全部条序内联");
+      await assert.rejects(freeManualRepairPrompt(id, runC), /写不进证据目录/, "清单落不了盘：交接不发，而不是超长内联");
+      assert.ok(timeline().includes("同类问题熔断的完整清单写不进证据目录"), "时间线上留了原因");
       assert.ok(!readdirSync(moved).includes(RECURRENCE_LIST_FILE), "没有顺着祖先链接写到根外");
     } finally {
       rmSync(outside, { recursive: true, force: true });

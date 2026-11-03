@@ -13,8 +13,11 @@ import {
   REVIEWER_REGRESSION_CLAUSE,
 } from "@ash/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
+import { lstat, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { replaceEvidenceFile, safeRunDirectory } from "./review-evidence.js";
+import { appendTaskTimeline } from "./task-timeline.js";
+import { id } from "./util.js";
 import { extractReportFindings, freeReviewHistory } from "./review-history.js";
 import { RECURRENCE_LIST_FILE, recurrenceListMarkdown, recurrenceRepairNote, roundRecurrence } from "./review-recurrence.js";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
@@ -150,19 +153,40 @@ async function recurrenceNote(taskId: string, runId: string, round: number): Pro
   const note = recurrenceRepairNote(found);
   if (!note.listed) return note.text;
   // 条目多到指令里放不下：完整清单落到报告同目录，指令只报条数并指过去（不截掉任何一条）。
-  // 那个目录审查者写得进去，所以走证据目录的安全写入（祖先不许是链接、替换目录项而不是顺着
-  // 旧文件上的链接写穿，见 review-evidence.ts）。落不下去就整串内联：超长，但不留打不开的去处。
+  // **指令长度在每条出路上都守 ≤ 300B**：清单落不了盘时不改成整串内联（那正是绕开上限的那条路），
+  // 而是这一次交接不发 —— 时间线上留一句原因，自动修复由收尾对账重试、手动修复可以再点一次。
+  const failure = await writeRecurrenceList(taskId, runId, round, recurrenceListMarkdown(found,
+    extractReportFindings(readFreeReviewReport(taskId, runId, round))));
+  if (!failure) return note.text;
+  const why = `同类问题熔断的完整清单写不进证据目录（${failure}），这一次修复交接先不发`;
+  await appendTaskTimeline(taskId, `${why}：条目太多放不进指令，不给清单执行者就不知道要一次改全哪几条。会自动重试；` +
+    `也可以修好证据目录后再点「按意见修复」。`, { eventKey: `recurrence-list:${runId}:${round}` }).catch(() => false);
+  throw new Error(why);
+}
+
+/**
+ * 把清单写进报告同目录。那个目录审查者写得进去，所以走证据目录的安全写入（祖先不许是链接、替换目录项
+ * 而不是顺着旧文件上的链接写穿，见 review-evidence.ts）；同名位置被别的东西占着（比如一个目录）就先挪开
+ * 再写一次。返回 null = 写好了，否则是写不进去的原因。
+ */
+async function writeRecurrenceList(taskId: string, runId: string, round: number, content: string): Promise<string | null> {
   const dir = freeReviewEvidenceDir(taskId, runId, round);
+  const path = join(dir, RECURRENCE_LIST_FILE);
   try {
-    if (await safeRunDirectory(dir, true)) {
-      await replaceEvidenceFile(join(dir, RECURRENCE_LIST_FILE),
-        recurrenceListMarkdown(found, extractReportFindings(readFreeReviewReport(taskId, runId, round))));
-      return note.text;
+    if (!(await safeRunDirectory(dir, true))) return "证据目录的上级是链接，或不在数据目录里";
+    try {
+      await replaceEvidenceFile(path, content);
+    } catch (error) {
+      const occupied = await lstat(path).catch(() => null);
+      if (!occupied || occupied.isFile() || occupied.isSymbolicLink()) throw error;
+      await rename(path, join(dir, `.${RECURRENCE_LIST_FILE}.${id()}.displaced`));
+      await replaceEvidenceFile(path, content);
     }
+    return null;
   } catch (error) {
     console.error(`[ash] 熔断清单没写进证据目录 task=${taskId}:`, error);
+    return error instanceof Error ? error.message : String(error);
   }
-  return recurrenceRepairNote(found, true).text;
 }
 
 export async function freeRepairPrompt(taskId: string, run: ReviewRunRow): Promise<string> {
