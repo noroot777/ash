@@ -419,7 +419,7 @@ try {
   }
 
   // ⑱ 最终合并 · 落地的同时另一个终端往目标分支提交（第 4 轮复审 F1）：这一按不合，那个外部提交原样
-  // 留着 —— 不许再拿合并之前的位置去复位整个检出；ash 自己写进检出的文件退回去。外部提交用一个 git
+  // 留着 —— 不许再拿合并之前的位置去复位整个检出；挪分支在写文件之前，被拒就一个文件都没写。外部提交用一个 git
   // 包装在「带旧值挪分支」那一刻插进来（commit-tree + update-ref：发布期间检出的 index.lock 在 ash 手里）。
   {
     const sample = await fixture("landing-race", { baseline: "merge_preview" });
@@ -446,9 +446,9 @@ try {
     } finally { process.env.PATH = path; }
     assert.equal(existsSync(marker), true, "外部提交确实插在了挪分支之前");
     assert.equal(landed.ok, false);
-    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了[^]*已经按原样放回/);
+    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了[^]*检出里的文件也一个都没动/);
     assert.equal(git(sample.repo, "log", "-1", "--format=%s", "main"), "external", "外部提交原样留在目标分支上");
-    assert.equal(existsSync(join(sample.repo, "use-b.js")), false, "ash 写进检出的文件退回去了");
+    assert.equal(existsSync(join(sample.repo, "use-b.js")), false, "挪分支在写文件之前，被拒就一个文件都没写");
     assert.equal(git(sample.repo, "status", "--porcelain"), "");
   }
 

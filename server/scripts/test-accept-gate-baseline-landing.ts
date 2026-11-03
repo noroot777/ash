@@ -12,7 +12,8 @@ const { root, git, passesOn, acceptTask, acceptGateState, previewMerge, mergeTas
   commitOnMain, fixture, settled, testedPhysical } = await baselineHarness("ash-gate-landing-");
 
 /** 一次带全部落地约束的最终合并（像验收那样：被测的目标提交、预演出来的树、测过的物理内容）。 */
-const landGuarded = async (sample: { repo: string; cwd: string; taskId: string }, afterTest?: () => void) => {
+const landGuarded = async (sample: { repo: string; cwd: string; taskId: string }, afterTest?: () => void,
+  extra: { commit?: boolean } = {}) => {
   const tested = git(sample.repo, "rev-parse", "main");
   const source = git(sample.cwd, "rev-parse", "HEAD");
   const merged = await previewMerge(sample.repo, tested, source);
@@ -21,7 +22,7 @@ const landGuarded = async (sample: { repo: string; cwd: string; taskId: string }
   const expectedPhysical = await testedPhysical(sample.repo, tested, expectedTree);
   afterTest?.();
   return { tested, expectedTree, landed: await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
-    { sourceCommit: source, expectedTree, expectedTarget: tested, expectedPhysical }) };
+    { sourceCommit: source, expectedTree, expectedTarget: tested, expectedPhysical, ...extra }) };
 };
 
 // 只在最终合并那一下生效的 git 包装：命令行里出现 `trigger` 时先（或后）跑一段 shell，只跑一次。
@@ -302,9 +303,11 @@ try {
   }
 
   // ㊶ 最终合并 · 写文件写到一半失败（第 6 轮审查 F1：写的时候一个目录没有写权限，`a.txt` 已经写成新的、
-  // `locked/z.txt` 写不进去）：这次写下的按原样放回，回执说的就是检出现在的样子，分支和索引都没动。
-  {
-    const sample = await fixture("landing-partial-write", { baseline: "merge_preview" });
+  // `locked/z.txt` 写不进去）。不放回、不删任何东西（用户 2026-11-04 拍板，git-accept-publish.ts 文件头），
+  // 回执照实说检出现在的样子：提交那一档分支已经挪了、索引换成测过那棵，`git status` 显示的正是没写成的
+  // 那个，`git checkout HEAD -- <它>` 补齐；不提交那一档分支和索引都没动，交付已经写下的那些。
+  for (const commit of [true, false]) {
+    const sample = await fixture(`landing-partial-write-${commit ? "commit" : "stage"}`, { baseline: "merge_preview" });
     mkdirSync(join(sample.repo, "locked"));
     for (const file of ["a.txt", "locked/z.txt"]) writeFileSync(join(sample.repo, file), "old\n");
     git(sample.repo, "add", "a.txt", "locked/z.txt");
@@ -313,21 +316,52 @@ try {
     for (const file of ["a.txt", "locked/z.txt"]) writeFileSync(join(sample.cwd, file), "new\n");
     git(sample.cwd, "commit", "-qam", "task rewrites both");
     const before = git(sample.repo, "rev-parse", "main");
-    // 核对（含目录能不能写）都过了之后、真正写文件的那一刻才把目录锁上：包装在 `read-tree -m -u` 之前。
-    const bin = wrapGit("partial-write", " read-tree -m -u ", `chmod 555 '${join(sample.repo, "locked")}'`);
+    // 核对（含目录能不能写）和两树合并的演练（`read-tree -n`）都过了之后、真正写文件的那一刻才把目录锁上。
+    const bin = wrapGit(`partial-write-${commit}`, " read-tree -m -u ", `chmod 555 '${join(sample.repo, "locked")}'`);
     let outcome: Awaited<ReturnType<typeof landGuarded>>;
     try {
-      outcome = await withPath(bin, arm => landGuarded(sample, arm));
+      outcome = await withPath(bin, arm => landGuarded(sample, arm, { commit }));
     } finally { chmodSync(join(sample.repo, "locked"), 0o755); }
     assert.ok(existsSync(join(bin, "fired")), "目录真的在写的那一刻锁上了");
     assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
-    if (!outcome.landed.ok) {
-      assert.match(outcome.landed.message, /失败[^]*目标分支没动，检出里的文件和合并之前一样（这次写下的已经按原样放回）/);
-    }
-    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
-    assert.equal(readFileSync(join(sample.repo, "a.txt"), "utf8"), "old\n", "已经写成新的那个放回去了");
+    const message = outcome.landed.ok ? "" : outcome.landed.message;
+    assert.match(message, /写进 [^]*时失败了[^]*没有自动放回、也没有删任何东西/);
+    assert.equal(readFileSync(join(sample.repo, "a.txt"), "utf8"), "new\n", "已经写下的留着");
     assert.equal(readFileSync(join(sample.repo, "locked/z.txt"), "utf8"), "old\n");
-    assert.equal(git(sample.repo, "status", "--porcelain"), "", "索引与工作区和合并之前一样");
+    if (commit) {
+      assert.match(message, /已经挪到测过的结果[^]*还没写成的 1 个显示成改动：locked\/z\.txt[^]*git checkout HEAD --/);
+      assert.notEqual(git(sample.repo, "rev-parse", "main"), before, "分支已经挪了");
+      assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), outcome.expectedTree, "挪到的是测过的那棵");
+      assert.equal(git(sample.repo, "write-tree"), outcome.expectedTree, "索引换成了测过的那棵");
+      assert.equal(git(sample.repo, "status", "--porcelain"), "M locked/z.txt", "git status 显示的正是没写成的那个");
+      git(sample.repo, "checkout", "HEAD", "--", "locked/z.txt");
+      assert.equal(git(sample.repo, "status", "--porcelain"), "", "照回执补齐之后就干净了");
+    } else {
+      assert.match(message, /目标分支和索引都没动。已经写成测过那份的有 2 个：a\.txt、use-b\.js/);
+      assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+      assert.equal(git(sample.repo, "status", "--porcelain"), "M a.txt\n?? use-b.js", "索引没动，git status 显示的正是已经写下的那些");
+      git(sample.repo, "checkout", "HEAD", "--", "a.txt");
+      rmSync(join(sample.repo, "use-b.js"));
+      assert.equal(git(sample.repo, "status", "--porcelain"), "", "照回执撤掉之后就干净了");
+    }
+  }
+
+  // ㊿ 最终合并 · 核过「工作区干净」之后，另一个终端在这次合并要新增的路径上放了一个未跟踪文件：两树合并
+  // 在挪分支之前先演一遍（`read-tree -n`），git 在演的时候就拒 —— 分支没挪、那个文件原样留着，用不着放回。
+  {
+    const sample = await fixture("landing-dry-run", { baseline: "merge_preview" });
+    const before = git(sample.repo, "rev-parse", "main");
+    const theirs = join(sample.repo, "use-b.js");
+    // 插在最后一道「未跟踪文件」查询**之后**：那道核对看不到它，只剩两树合并自己的核对。
+    const bin = wrapGit("dry-run", " ls-files --others ", `printf 'their draft\\n' > '${theirs}'`, true);
+    const { landed } = await withPath(bin, arm => landGuarded(sample, arm));
+    assert.ok(existsSync(join(bin, "fired")), "未跟踪文件真的在核对之后出现了");
+    assert.equal(landed.ok, false, JSON.stringify(landed));
+    if (!landed.ok) assert.match(landed.message, /would be overwritten[^]*失败在写任何文件之前：目标分支没动/);
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+    assert.equal(readFileSync(theirs, "utf8"), "their draft\n", "别人的文件原样留着");
+    rmSync(theirs);
+    assert.equal(git(sample.repo, "status", "--porcelain"), "");
   }
 
   // ㊼ 合并预览 · 目标分支把一个普通目录 `src` 换成指向 `alternate` 的链（第 6 轮审查第 3 轮 F1）：任务
@@ -367,8 +401,8 @@ try {
     execFileSync("chmod", ["-N", script]);
   }
 
-  // ㊾ 最终合并 · 文件已经写下、挪分支时被拒（另一个终端抢先提交），按原样放回（第 6 轮审查第 3 轮 F3）：
-  // 原样是整个文件 —— 原先禁止执行的访问控制还在（macOS），这次新建的目录也删掉，回执才能说「原样」。
+  // ㊾ 最终合并 · 挪分支时被拒（另一个终端抢先提交，第 6 轮审查第 3 轮 F3）：挪分支在写任何文件之前，
+  // 被拒就一个文件都没写 —— 原先禁止执行的访问控制还在（macOS）、也没有新建目录，什么都不用放回。
   {
     const sample = await fixture("landing-restore-whole", { baseline: "merge_preview" });
     const tool = join(sample.repo, "tool.sh");
@@ -388,73 +422,14 @@ try {
       `c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"`);
     const { landed } = await withPath(bin, arm => landGuarded(sample, arm));
     assert.equal(landed.ok, false, JSON.stringify(landed));
-    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了[^]*和合并之前一样（这次写下的已经按原样放回）/);
+    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了[^]*检出里的文件也一个都没动/);
     assert.equal(readFileSync(tool, "utf8"), "#!/bin/sh\necho base\n");
-    assert.equal(existsSync(join(sample.repo, "created")), false, "这次新建的目录删掉了");
+    assert.equal(existsSync(join(sample.repo, "created")), false, "没有新建目录");
     if (acl) {
       assert.match(execFileSync("ls", ["-le", tool], { encoding: "utf8" }), /deny execute/, "访问控制还在");
       assert.throws(() => execFileSync(tool), /EACCES/, "原先跑不起来的照样跑不起来");
       execFileSync("chmod", ["-N", tool]);
     }
-  }
-
-  // ㊿ 最终合并 · 放回时 `src` 被另一个终端换掉（第 6 轮审查第 4、5 轮 F1）：挪分支被拒、开始放回之前换成
-  // 指向项目外的链 / 换成另一个真目录，或者放回途中（刚把一个文件链回去之后）换成指向项目外的链。三种都
-  // 不许动到项目外和别人的文件；没放回的照实报，原样备份（MANIFEST.json）留给人。
-  for (const when of ["link-before", "dir-before", "link-during"] as const) {
-    const sample = await fixture(`landing-restore-swapped-${when}`, { baseline: "merge_preview" });
-    mkdirSync(join(sample.repo, "src"));
-    writeFileSync(join(sample.repo, "src", "a.txt"), "base\n");
-    git(sample.repo, "add", "src");
-    git(sample.repo, "commit", "-qm", "main adds src");
-    git(sample.cwd, "merge", "-q", "--no-edit", "main");
-    writeFileSync(join(sample.cwd, "src", "a.txt"), "task\n");
-    writeFileSync(join(sample.cwd, "src", "added.txt"), "added\n");
-    git(sample.cwd, "add", "-A");
-    git(sample.cwd, "commit", "-qm", "task edits src");
-    const outside = join(root, `swapped-${when}-outside`);
-    mkdirSync(outside);
-    // 项目外预先有别人的文件：放回途中那种照审查的样本放同名的 a.txt；另外两种只放 added.txt，
-    // a.txt 一旦被放到项目外就看得出来。
-    const theirs = when === "link-during" ? ["a.txt", "added.txt"] : ["added.txt"];
-    for (const name of theirs) writeFileSync(join(outside, name), "unrelated draft\n");
-    const real = `GIT -C '${sample.repo}'`;
-    const src = join(sample.repo, "src");
-    const swap = when === "dir-before" ? `mv '${src}' '${src}-saved' && mkdir '${src}' && echo third > '${src}/a.txt'`
-      : `mv '${src}' '${src}-saved' && ln -s '${outside}' '${src}'`;
-    const bin = wrapGit(`swapped-${when}`, " update-ref -m ash accept",
-      `c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"`
-      + (when === "link-during" ? "" : ` && ${swap}`));
-    // 放回途中：放回子进程里第一次把 a.txt 链回去之后（真调用已成功），插进另一个终端的那两步。
-    const preload = join(root, `swapped-${when}.cjs`);
-    writeFileSync(preload, `const fs = require("fs"); const link = fs.linkSync; let fired = false;
-fs.linkSync = function (from, to) { const result = link.apply(this, arguments);
-  if (!fired && String(to) === "a.txt") { fired = true; fs.renameSync(${JSON.stringify(src)}, ${JSON.stringify(`${src}-saved`)});
-    fs.symlinkSync(${JSON.stringify(outside)}, ${JSON.stringify(src)}); }
-  return result; };\n`);
-    const options = process.env.NODE_OPTIONS;
-    let outcome: Awaited<ReturnType<typeof landGuarded>>;
-    try {
-      outcome = await withPath(bin, arm => landGuarded(sample, () => {
-        arm();
-        if (when === "link-during") process.env.NODE_OPTIONS = `${options ?? ""} --require=${preload}`;
-      }));
-    } finally { process.env.NODE_OPTIONS = options; }
-    const { landed } = outcome;
-    assert.equal(landed.ok, false, JSON.stringify(landed));
-    assert.equal(execFileSync("ls", ["-A", outside], { encoding: "utf8" }), theirs.map(name => `${name}\n`).join(""),
-      `${when}: 项目外没多出、也没少了东西`);
-    for (const name of theirs) assert.equal(readFileSync(join(outside, name), "utf8"), "unrelated draft\n", `${when}: 项目外的文件没被碰`);
-    const message = landed.ok ? "" : landed.message;
-    assert.match(message, /没能回到合并之前的样子[^]*src\/a\.txt[^]*src\//, when);
-    const kept = /原样留在 (.+?)，里面的 MANIFEST\.json/.exec(message)?.[1] ?? "";
-    const manifest = JSON.parse(readFileSync(join(kept, "MANIFEST.json"), "utf8")) as Record<string, string>;
-    const index = Object.keys(manifest).find(key => manifest[key] === "src/a.txt") ?? "";
-    assert.equal(readFileSync(join(kept, index), "utf8"), "base\n", `${when}: 备份里是改之前那份`);
-    if (when === "dir-before") assert.equal(readFileSync(join(src, "a.txt"), "utf8"), "third\n", "换上来的目录里的文件没被碰");
-    else assert.equal(readFileSync(join(`${src}-saved`, "a.txt"), "utf8"), when === "link-during" ? "base\n" : "task\n",
-      `${when}: 挪走的那个目录里只可能是放回的原文件或这次写下的那份`);
-    rmSync(kept, { recursive: true, force: true });
   }
 
   // ㊷ 最终合并 · 测过之后目标检出里一个这次合并不碰的源码目录改成 0111（第 6 轮审查 F1）：文件照样按路径
@@ -497,13 +472,13 @@ fs.linkSync = function (from, to) { const result = link.apply(this, arguments);
     git(sample.repo, "reset", "-q");
   }
 
-  // ㊹ 最终合并 · 分支已经挪到测过的结果，之后清理临时发布目录失败（第 6 轮审查 F3）：清理是发布之后的
-  // 事，它失败不能把回执改成「目标分支没动」—— 照常算合进去了。包装在真正的 update-ref 之后把那个临时
-  // 目录改成 0555，删它时就是真实的 EACCES。
+  // ㊹ 最终合并 · 分支已经挪到测过的结果、文件也写下了，之后清理临时发布目录失败（第 6 轮审查 F3）：清理
+  // 是发布之后的事，它失败不能把回执改成「目标分支没动」—— 照常算合进去了。包装在真正写文件的那条
+  // `read-tree -m -u` 之后把那个临时目录改成 0555，删它时就是真实的 EACCES。
   {
     const sample = await fixture("landing-cleanup-after-publish", { baseline: "merge_preview" });
     const stuck = join(root, "stuck-publish-dir");
-    const bin = wrapGit("cleanup-after", " update-ref -m ash accept",
+    const bin = wrapGit("cleanup-after", " read-tree -m -u ",
       `d=$(ls -dt "\${TMPDIR:-/tmp}"/ash-publish-* | head -n 1) && printf '%s' "$d" > '${stuck}' && chmod 555 "$d"`, true);
     const { landed, expectedTree } = await withPath(bin, arm => landGuarded(sample, arm));
     assert.ok(existsSync(stuck), "临时发布目录真的锁住了");
@@ -574,7 +549,7 @@ fs.linkSync = function (from, to) { const result = link.apply(this, arguments);
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
     hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true,
     dirAccess: true, indexRace: true, cleanupAfterPublish: true, dirWrite: true, splitIndex: true,
-    depParent: true, aclExec: true, restoreWhole: true, swappedParent: true }));
+    depParent: true, aclExec: true, refusedUntouched: true, dryRun: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

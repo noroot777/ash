@@ -3,9 +3,10 @@
 //
 // 不变量：落下的就是门禁测过的那棵树、落在被测时的目标提交之上，目标检出里的字节就是快照里测过的那份；
 // 落不成就**不动目标分支**。所以结果在任何检出之外生成（`commit-tree`，树就是测过的那棵），再只用
-// 「快进到它」发布 —— 检出里改文件再带旧值挪分支，没有检出时带旧值的 `update-ref`。失败时只把这次写进
-// 检出的文件按备份放回，放不回的如实列出，不会把期间另一个终端提交到目标分支上的东西一并撤掉（第 4 轮
-// 复审 F1：旧做法先在用户检出里真合、树不对再 `reset --hard` 回合并前，连带抹掉了外部提交）。
+// 「快进到它」发布 —— 检出里先演一遍两树合并、带旧值挪分支、再写文件，没有检出时带旧值的 `update-ref`。
+// 写文件之前的失败什么都不动；写到一半的失败停在那儿如实交付（git-accept-publish.ts 文件头），不替用户
+// 复位，不会把期间另一个终端提交到目标分支上的东西一并撤掉（第 4 轮复审 F1：旧做法先在用户检出里真合、
+// 树不对再 `reset --hard` 回合并前，连带抹掉了外部提交）。
 //
 // 发布这几条 git 一律不调用户钩子、不调 fsmonitor（landingGit）：门禁就是这一档的检查，`post-merge`
 // 之类在发布那一刻再改一遍目标分支或文件，落下的就又不是测过的那份（第 5 轮复审 F1 实测：钩子落了
@@ -22,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkoutMatches, type GatePhysical } from "./accept-gate-physical.js";
 import { checkoutSettings, materializationIdentity, readOnlyGit } from "./accept-gate-preview.js";
-import { sealedMove } from "./git-accept-publish.js";
+import { type SealedMove, sealedMove } from "./git-accept-publish.js";
 import { execFileText as exec } from "./exec.js";
 import { gitError } from "./git.js";
 import { registeredCheckout } from "./git-worktree-state.js";
@@ -90,7 +91,7 @@ export async function guardedDirtyFiles(repo: string): Promise<string[]> {
 
 /**
  * 在封好的环境里把目标检出从被测的目标提交改成 `to`（git-accept-publish.ts）。`publish` 是挪分支那一步
- * （换上新索引之前做，失败就把文件退回）。成功返回 null。
+ * （演过两树合并之后、写文件之前做）。成功返回 null。
  */
 async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to: string,
   publish?: () => Promise<string | null>): Promise<TaskMergeResult | null> {
@@ -100,26 +101,47 @@ async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to:
       + "照现在的配置写出来的文件就不是测过的那份，所以这次没有合并，目标分支没动。重新验收会按现在的配置重新跑门禁。");
   }
   const moved = await sealedMove(cwd, settings, guard.target, to, guard.tree, publish)
-    .catch((error: unknown) => ({ ok: false as const, stage: "blocked" as const, message: gitError(error), left: [] as string[], backup: undefined as string | undefined }));
+    .catch((error: unknown): SealedMove => ({ ok: false, stage: "blocked", message: gitError(error) }));
   if (moved.ok) return null;
   if (moved.stage === "locked") return refusal(names, `${moved.message}，目标分支和工作区都没动。处理完再重新验收。`);
+  if (moved.stage === "publish") return refusal(names, `${moved.message}检出里的文件也一个都没动。`);
+  if (moved.stage === "blocked") {
+    return refusal(names, `没能把测过的改动写进 ${cwd}（${moved.message}），失败在写任何文件之前：目标分支没动，检出里的文件也没动。处理完再重新验收。`);
+  }
   if (moved.stage === "index") {
+    if (!moved.published) {
+      return refusal(names, `测过的改动已经写进 ${cwd}，但没能暂存（${moved.message}）：目标分支和索引都没动，\`git status\` 会把它们显示成未暂存的改动。`
+        + "请在那个检出里核对后手动处理，再重新验收。");
+    }
     return refusal(names, `目标分支 ${names.targetBranch} 已经挪到 ${to.slice(0, 12)}、${cwd} 里的文件也已经是测过的那份，`
       + `但把新索引换进去失败了（${moved.message}）：索引还停在合并之前，\`git status\` 会把这次的改动显示成未暂存。`
       + "在那个检出里跑一次 `git reset -q`（只改索引、不动文件）就对齐了，再重新验收。");
   }
-  const what = moved.stage === "publish" ? moved.message : `把测过的改动写进 ${cwd} 失败（${moved.message}），目标分支没动，`;
-  return refusal(names, what + leftover(moved.left, guard.target, moved.backup));
+  return refusal(names, halfWritten(moved, cwd, names, to, guard.target));
 }
 
-/** 写文件失败之后检出是什么样：`left` 是没能回到合并之前那份的路径（git-accept-rollback.ts）。 */
-function leftover(left: readonly string[], base: string, backup?: string): string {
-  if (!left.length) return "检出里的文件和合并之前一样（这次写下的已经按原样放回）。处理完再重新验收。";
-  const shown = left.slice(0, 10).join("、") + (left.length > 10 ? ` 等 ${left.length} 个` : "");
-  return `但检出里有 ${left.length} 处没能回到合并之前的样子：${shown}（结尾带 / 的是目录）。索引和分支还在 ${base.slice(0, 12)}，`
-    + "这些文件现在可能是测过的新内容、写了一半、已被删掉或丢了原来的权限设置，目录可能是这次新建的或被重建过，"
-    + "请核对后手动处理（取回旧内容用 `git checkout HEAD -- <路径>`，合并新增的文件和空目录直接删掉），再重新验收。"
-    + (backup ? `改之前的原文件（连同权限设置）原样留在 ${backup}，里面的 MANIFEST.json 写着每个备份文件对应哪个路径，处理完可以删掉这个目录。` : "");
+const listed = (paths: readonly string[]) => paths.slice(0, 10).join("、") + (paths.length > 10 ? ` 等 ${paths.length} 个` : "");
+
+/** 写文件写到一半失败：ash 不放回、不删任何东西（git-accept-publish.ts 文件头），照实说检出现在是什么样、怎么收拾。 */
+function halfWritten(moved: Extract<SealedMove, { stage: "partial" }>, cwd: string, names: Names, to: string, base: string): string {
+  const head = `把测过的改动写进 ${cwd} 时失败了（${moved.message}），ash 没有自动放回、也没有删任何东西。`;
+  const pending = moved.pending ?? [];
+  if (moved.published) {
+    const branch = `目标分支 ${names.targetBranch} 已经挪到测过的结果 ${to.slice(0, 12)}。`;
+    if (!moved.indexInstalled) {
+      return head + branch + `索引还停在合并之前（${base.slice(0, 12)}），在那个检出里先跑 \`git reset -q\`（只改索引），`
+        + (pending.length ? `再用 \`git checkout HEAD -- <路径>\` 补齐还没写成的：${listed(pending)}。` : "再核对文件。") + "然后重新验收。";
+    }
+    if (!moved.written) return head + branch + "没能核出哪些文件已经写成，请在那个检出里看 `git status`，用 `git checkout HEAD -- <路径>` 补齐，再重新验收。";
+    if (!pending.length) return head + branch + "核下来文件其实都已经是测过的那份、索引也换上了，重新验收即可。";
+    return head + branch + `索引已经是测过的那棵，\`git status\` 会把还没写成的 ${pending.length} 个显示成改动：${listed(pending)}。`
+      + "在那个检出里跑 `git checkout HEAD -- <这些路径>` 就补齐了（不碰别的文件），再重新验收。";
+  }
+  const kept = "目标分支和索引都没动。";
+  if (!moved.written) return head + kept + `没能核出哪些文件已经写下，请在那个检出里看 \`git status\`，用 \`git checkout HEAD -- <路径>\` 撤掉、这次新增的文件直接删掉，再重新验收。`;
+  if (!moved.written.length) return head + kept + "核下来一个文件都还没写，重新验收即可。";
+  return head + kept + `已经写成测过那份的有 ${moved.written.length} 个：${listed(moved.written)}，\`git status\` 会把它们显示成未暂存的改动。`
+    + "要撤掉就在那个检出里用 `git checkout HEAD -- <路径>`（这次新增的文件直接删掉），再重新验收。";
 }
 
 /**
