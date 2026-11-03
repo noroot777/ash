@@ -1,10 +1,10 @@
 // 执行器(agents 表)的增删改查。从 `routes.ts` 拆出来只有一个理由:那个文件到 700 行了。
 //
 // 新建执行器那一刻顺手把这家 CLI 的 ash MCP 登记接上(`ensureExecutorAshMcp`);每个返回
-// 执行器的响应都带上它现在接没接上(`ashMcpProblem`)—— 理由见 `auth/executor-ash-mcp.ts` 顶部。
+// 执行器的响应都带上它现在接没接上(`ashMcp`,三态)—— 理由见 `auth/executor-ash-mcp.ts` 顶部。
 import type { Context, Hono } from "hono";
 import { and, eq, exists, sql } from "drizzle-orm";
-import type { AgentType } from "@ash/shared";
+import type { AgentType, ExecutorAshMcp } from "@ash/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@ash/shared/cli-presets";
 import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@ash/shared/cli-overrides";
 import { db } from "./db/index.js";
@@ -18,7 +18,7 @@ import { actorOf } from "./auth/context.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 import { isHostCliIsolated } from "./auth/mode.js";
 import { defaultClearScope, dispatchBlockReason } from "./auth/dispatch-gate.js";
-import { ensureExecutorAshMcp, executorAshMcpProblem } from "./auth/executor-ash-mcp.js";
+import { ensureExecutorAshMcp, executorAshMcpState } from "./auth/executor-ash-mcp.js";
 
 const toAgent = (r: typeof agents.$inferSelect) => ({
   id: r.id,
@@ -45,21 +45,21 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
 // 跑不起来的 gemini 显示成已就绪(第 1 轮审查实测)。差一个字段的返回体等于逼每个
 // 调用方写完再 GET 一次列表,而漏掉那一次的表现正是「界面说好了,派任务才知道不行」。
 //
-// `ashMcpProblem` 同一个道理,而且不分档:没接上 ash MCP 的执行器两档都交不了卷。
+// `ashMcp` 同一个道理,而且不分档:没接上 ash MCP 的执行器两档都交不了卷。
 const toGatedAgent = async (r: typeof agents.$inferSelect, ashMcp: AshMcpProbe = ashMcpProbe()) => ({
   ...toAgent(r),
   ...((await isHostCliIsolated()) ? { dispatchBlocked: dispatchBlockReason(r.type, r.providerId) } : {}),
-  ashMcpProblem: await ashMcp(r),
+  ashMcp: await ashMcp(r),
 });
 
-type AshMcpProbe = (r: typeof agents.$inferSelect) => Promise<string | null>;
+type AshMcpProbe = (r: typeof agents.$inferSelect) => Promise<ExecutorAshMcp>;
 
 /**
  * 只读诊断,同一次响应里同一家、同一个人、同一组参数只读一次配置 —— 列表里十几个执行器
  * 多半是同一家 CLI 的几个档位,`.claude.json` 这种文件动辄几 MB,没必要每行都解析一遍。
  */
 function ashMcpProbe(): AshMcpProbe {
-  const seen = new Map<string, Promise<string | null>>();
+  const seen = new Map<string, Promise<ExecutorAshMcp>>();
   return (r) => {
     const key = `${r.type}\0${r.ownerUserId ?? ""}\0${r.extraArgs}`;
     let hit = seen.get(key);
@@ -69,7 +69,7 @@ function ashMcpProbe(): AshMcpProbe {
         const parsed = JSON.parse(r.extraArgs);
         if (Array.isArray(parsed)) extraArgs = parsed.filter((a): a is string => typeof a === "string");
       } catch { /* 读不出就按没带参数判 */ }
-      hit = executorAshMcpProblem(r.type, r.ownerUserId, extraArgs);
+      hit = executorAshMcpState(r.type, r.ownerUserId, extraArgs);
       seen.set(key, hit);
     }
     return hit;
@@ -157,13 +157,15 @@ export function mountAgentRoutes(api: Hono): void {
     if (clearDefault) await db.batch([clearDefault, insert]);
     else await insert;
     // 落库之后才接 MCP:接不上不该让注册本身失败(执行器照样能用,只是交不了卷;
-    // `ensureExecutorAshMcp` 从不抛),原因用补接那一次自己的说法 —— 它比只读诊断多一句
-    // 「为什么没替你写」。
-    const ashMcp = await ensureExecutorAshMcp(type, row.ownerUserId);
-    return c.json(await toGatedAgent(
-      row as typeof agents.$inferSelect,
-      async () => ashMcp.configured ? null : ashMcp.problem,
-    ), 201);
+    // `ensureExecutorAshMcp` 从不抛)。没补成时三态照只读诊断那一份(跟随后的 GET 同一判据),
+    // 原因用补接那一次自己的说法 —— 它比只读诊断多一句「为什么没替你写」。
+    const ensured = await ensureExecutorAshMcp(type, row.ownerUserId);
+    return c.json(await toGatedAgent(row as typeof agents.$inferSelect, async (r) => {
+      if (ensured.configured) return { state: "connected", detail: null };
+      const read = await ashMcpProbe()(r);
+      // 补接说没成、读出来却是接上的:两边各执一词就是「判不准」,不能报成接上了。
+      return { state: read.state === "connected" ? "unknown" : read.state, detail: ensured.problem };
+    }), 201);
   });
 
   api.patch("/agents/:id", async (c) => {

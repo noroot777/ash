@@ -145,7 +145,7 @@ export type AgentType = (typeof AGENT_TYPES)[number];
 // 这里刻意不转发:服务端跑 shared 的 .ts 源码,index 转发运行时值会让它起不来。
 
 // 执行器 profile(AgentExecutorProfile)的本体在 ./executor-profile.ts(index.ts 的行数有上限)。
-export type { AgentExecutorProfile } from "./executor-profile.ts";
+export type { AgentExecutorProfile, ExecutorAshMcp } from "./executor-profile.ts";
 
 // ── Hierarchy (§3) ──────────────────────────────────────────────────────────
 // 项目、它在磁盘上的工作区残留、分组容器 —— 本体在 ./project.ts(index.ts 的行数有

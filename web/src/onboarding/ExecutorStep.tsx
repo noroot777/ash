@@ -135,7 +135,7 @@ export function ExecutorStep({ profiles, providers, onProfileAdded, onProfileCha
               {/* 注册出来 ≠ 派得动。隔离档下服务端现算的拒绝理由直接摆在这一行上 ——
                   不说的话用户要到真正派任务时才知道它跑不起来。 */}
               {profile.dispatchBlocked && <p className="onboarding-blocked">{profile.dispatchBlocked}</p>}
-              {profile.ashMcpProblem && <p className="onboarding-blocked">{profile.ashMcpProblem}</p>}
+              {profile.ashMcp?.detail && <p className="onboarding-blocked">{profile.ashMcp.detail}</p>}
             </li>
           ))}
         </ul>
