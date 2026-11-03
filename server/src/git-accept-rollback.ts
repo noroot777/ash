@@ -16,8 +16,14 @@
 // 那个 inode（git 改文件是先删再建，原 inode 由这条链接留着），放回就是把它挪回原位：字节、权限、
 // ACL、扩展属性、属主一个不差，核对也按 inode 比。同一个文件系统里留不了硬链接就在写之前拒。
 // 目录也算：这次新建的目录失败后删掉；原有目录被删了重建的，权限位按原样补回，但已不是原来那个，照实报。
-import { chmod, link, lstat, mkdir, readlink, rename, rm, rmdir, symlink } from "node:fs/promises";
-import { dirname, join, posix } from "node:path";
+//
+// 放回只许落在**这个检出里**（第 6 轮审查第 4 轮 F1：失败前另一个窗口把 `src` 挪走、原地换成指向
+// 项目外的链，按字符串路径放回就把旧文件写到了项目外）。所以每动一个路径之前，先核它的整条父目录链
+// 还在这个检出里：从留备份时的检出根逐级解析下来没有经过任何链（realpath 就是字面路径）；动完再核
+// 一遍，变了就把刚放出去的那个文件取回备份。node 没有 openat，核与动之间仍有一个系统调用宽的窗口，
+// 动完的复核正是兜这个窗口的。核不过就不放、记成没回到原样，原样备份留着交给人（git-accept-publish.ts）。
+import { chmod, link, lstat, mkdir, readlink, realpath, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
+import { join, posix } from "node:path";
 
 type Identity = { dev: number; ino: number };
 type Saved = { path: string } & (
@@ -27,17 +33,22 @@ type Saved = { path: string } & (
   | { kind: "other"; id: Identity });
 type Dir = { path: string } & ({ existed: false } | { existed: true; id: Identity; mode: number });
 
-export type Backup = { saved: Saved[]; dirs: Dir[] };
+/** `root` = 检出根解析后的真实位置（留备份那一刻）。 */
+export type Backup = { root: string; saved: Saved[]; dirs: Dir[] };
 
 const idOf = (stat: { dev: number; ino: number }): Identity => ({ dev: stat.dev, ino: stat.ino });
 const same = (stat: { dev: number; ino: number } | null, id: Identity) => !!stat && stat.dev === id.dev && stat.ino === id.ino;
 const depth = (path: string) => path.split("/").length;
 const at = async (path: string) => lstat(path).catch(() => null);
 
-/** 把 `checkout` 里这些路径（及它们的各级父目录）现在的样子留进 `dir`（须与检出同一个文件系统）。 */
+/**
+ * 把 `checkout` 里这些路径（及它们的各级父目录）现在的样子留进 `dir`（须与检出同一个文件系统）。
+ * `dir` 里另写一份 `MANIFEST.txt`（备份文件名 → 检出里的路径），放不回时交给人手动取。
+ */
 export async function backupPaths(checkout: string, paths: readonly string[], dir: string): Promise<Backup> {
   await mkdir(dir, { recursive: true });
   const saved: Saved[] = [];
+  const manifest: string[] = [];
   for (const [index, path] of paths.entries()) {
     const full = join(checkout, path);
     const stat = await at(full);
@@ -50,8 +61,10 @@ export async function backupPaths(checkout: string, paths: readonly string[], di
           + "写坏了就放不回原样，所以这次一个文件都没写");
       });
       saved.push({ path, kind: "file", keep, id: idOf(stat) });
+      manifest.push(`${index}\t${path}`);
     } else saved.push({ path, kind: "other", id: idOf(stat) });
   }
+  await writeFile(join(dir, "MANIFEST.txt"), `${manifest.join("\n")}\n`);
   const parents = new Set<string>();
   for (const path of paths) for (let up = posix.dirname(path); up !== "."; up = posix.dirname(up)) parents.add(up);
   const dirs: Dir[] = [];
@@ -60,25 +73,46 @@ export async function backupPaths(checkout: string, paths: readonly string[], di
     if (!stat) dirs.push({ path, existed: false });
     else if (stat.isDirectory()) dirs.push({ path, existed: true, id: idOf(stat), mode: stat.mode & 0o7777 });
   }
-  return { saved, dirs };
+  return { root: await realpath(checkout), saved, dirs };
 }
 
-async function clear(full: string): Promise<void> {
-  const stat = await at(full);
-  if (!stat) return;
-  await (stat.isDirectory() ? rmdir(full) : rm(full, { force: true }));
+/**
+ * 检出里的目录 `rel`（`.` = 根）现在还在这个检出里：从留备份时的检出根逐级解析下来不经过任何链，
+ * 是个真目录。不要求是原来那个 inode —— 合并删空的目录 git 会顺手删掉，放回时得重建；重建过的由
+ * restoreOwned 的目录那一轮照实报。
+ */
+async function owned(checkout: string, backup: Backup, rel: string): Promise<boolean> {
+  const full = join(checkout, rel);
+  return await realpath(full).catch(() => null) === join(backup.root, rel) && !!(await at(full))?.isDirectory();
 }
 
-async function putBack(full: string, saved: Saved): Promise<void> {
+/** 在核过的父目录链上逐级建出 `rel`（每建一级之前都核它的父目录）。 */
+async function ownedMkdir(checkout: string, backup: Backup, rel: string): Promise<boolean> {
+  if (rel === "." || await owned(checkout, backup, rel)) return true;
+  if (!await ownedMkdir(checkout, backup, posix.dirname(rel))) return false;
+  if (!await owned(checkout, backup, posix.dirname(rel))) return false;
+  await mkdir(join(checkout, rel)).catch(() => undefined);
+  return owned(checkout, backup, rel);
+}
+
+/** 放回一个路径；父目录链核不过就什么都不动。动完链变了就把放出去的文件取回备份。 */
+async function putBack(checkout: string, backup: Backup, saved: Saved): Promise<void> {
   if (saved.kind === "other") return;
-  await clear(full);
+  const parent = posix.dirname(saved.path);
+  const full = join(checkout, saved.path);
+  if (!await ownedMkdir(checkout, backup, parent)) return;
+  const stat = await at(full);
+  if (stat) await (stat.isDirectory() ? rmdir(full) : rm(full, { force: true }));
   if (saved.kind === "missing") return;
-  await mkdir(dirname(full), { recursive: true });
-  if (saved.kind === "link") return symlink(saved.target, full);
-  await rename(saved.keep, full);
+  if (!await owned(checkout, backup, parent)) return;
+  if (saved.kind === "link") await symlink(saved.target, full);
+  else await rename(saved.keep, full);
+  if (saved.kind === "file" && !await owned(checkout, backup, parent)) await rename(full, saved.keep).catch(() => undefined);
 }
 
-async function isBack(full: string, saved: Saved): Promise<boolean> {
+async function isBack(checkout: string, backup: Backup, saved: Saved): Promise<boolean> {
+  if (!await owned(checkout, backup, posix.dirname(saved.path))) return false;
+  const full = join(checkout, saved.path);
   const stat = await at(full);
   if (saved.kind === "missing") return !stat;
   if (saved.kind === "link") return !!stat?.isSymbolicLink() && await readlink(full).then(t => t === saved.target, () => false);
@@ -93,21 +127,23 @@ export async function restoreOwned(checkout: string, backup: Backup, landed: Rea
   const left: string[] = [];
   // 深的先放：文件改成目录时，目录里的东西得先清掉，原来那个文件才放得回去。
   for (const saved of [...backup.saved].sort((a, b) => depth(b.path) - depth(a.path))) {
-    const full = join(checkout, saved.path);
-    if (await isBack(full, saved)) continue;
-    const now = await at(full);
-    if (!now || landed.has(saved.path)) await putBack(full, saved).catch(() => undefined);
-    if (!await isBack(full, saved)) left.push(saved.path);
+    if (await isBack(checkout, backup, saved)) continue;
+    const parentOk = await owned(checkout, backup, posix.dirname(saved.path));
+    const now = parentOk ? await at(join(checkout, saved.path)) : null;
+    if (!parentOk || !now || landed.has(saved.path)) await putBack(checkout, backup, saved).catch(() => undefined);
+    if (!await isBack(checkout, backup, saved)) left.push(saved.path);
   }
   for (const dir of [...backup.dirs].sort((a, b) => depth(b.path) - depth(a.path))) {
     const full = join(checkout, dir.path);
-    const stat = await at(full);
+    const parentOk = await owned(checkout, backup, posix.dirname(dir.path));
+    const stat = parentOk ? await at(full) : null;
     if (!dir.existed) {
-      if (stat?.isDirectory() && !await rmdir(full).then(() => true, () => false)) left.push(`${dir.path}/`);
+      if (!parentOk) left.push(`${dir.path}/`);
+      else if (stat?.isDirectory() && !await rmdir(full).then(() => true, () => false)) left.push(`${dir.path}/`);
       continue;
     }
-    if (same(stat, dir.id)) continue;
-    if (stat?.isDirectory()) await chmod(full, dir.mode).catch(() => undefined);
+    if (parentOk && same(stat, dir.id)) continue;
+    if (parentOk && stat?.isDirectory()) await chmod(full, dir.mode).catch(() => undefined);
     left.push(`${dir.path}/`);
   }
   return left;

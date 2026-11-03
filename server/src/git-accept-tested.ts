@@ -100,7 +100,7 @@ async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to:
       + "照现在的配置写出来的文件就不是测过的那份，所以这次没有合并，目标分支没动。重新验收会按现在的配置重新跑门禁。");
   }
   const moved = await sealedMove(cwd, settings, guard.target, to, guard.tree, publish)
-    .catch((error: unknown) => ({ ok: false as const, stage: "blocked" as const, message: gitError(error), left: [] }));
+    .catch((error: unknown) => ({ ok: false as const, stage: "blocked" as const, message: gitError(error), left: [] as string[], backup: undefined as string | undefined }));
   if (moved.ok) return null;
   if (moved.stage === "locked") return refusal(names, `${moved.message}，目标分支和工作区都没动。处理完再重新验收。`);
   if (moved.stage === "index") {
@@ -109,16 +109,17 @@ async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to:
       + "在那个检出里跑一次 `git reset -q`（只改索引、不动文件）就对齐了，再重新验收。");
   }
   const what = moved.stage === "publish" ? moved.message : `把测过的改动写进 ${cwd} 失败（${moved.message}），目标分支没动，`;
-  return refusal(names, what + leftover(moved.left, guard.target));
+  return refusal(names, what + leftover(moved.left, guard.target, moved.backup));
 }
 
 /** 写文件失败之后检出是什么样：`left` 是没能回到合并之前那份的路径（git-accept-rollback.ts）。 */
-function leftover(left: readonly string[], base: string): string {
+function leftover(left: readonly string[], base: string, backup?: string): string {
   if (!left.length) return "检出里的文件和合并之前一样（这次写下的已经按原样放回）。处理完再重新验收。";
   const shown = left.slice(0, 10).join("、") + (left.length > 10 ? ` 等 ${left.length} 个` : "");
   return `但检出里有 ${left.length} 处没能回到合并之前的样子：${shown}（结尾带 / 的是目录）。索引和分支还在 ${base.slice(0, 12)}，`
     + "这些文件现在可能是测过的新内容、写了一半、已被删掉或丢了原来的权限设置，目录可能是这次新建的或被重建过，"
-    + "请核对后手动处理（取回旧内容用 `git checkout HEAD -- <路径>`，合并新增的文件和空目录直接删掉），再重新验收。";
+    + "请核对后手动处理（取回旧内容用 `git checkout HEAD -- <路径>`，合并新增的文件和空目录直接删掉），再重新验收。"
+    + (backup ? `改之前的原文件（连同权限设置）原样留在 ${backup}，里面的 MANIFEST.txt 写着每个文件对应哪个路径，处理完可以删掉这个目录。` : "");
 }
 
 /**

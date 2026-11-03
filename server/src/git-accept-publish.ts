@@ -79,13 +79,14 @@ async function atTree(sealed: Awaited<ReturnType<typeof sealedCheckout>>, attrs:
 }
 
 /**
- * 失败回执。`left` = 没能回到改之前那份的路径（空 = 检出和改之前一样）。`index` 这一档 = 分支已经挪了、
+ * 失败回执。`left` = 没能回到改之前那份的路径（空 = 检出和改之前一样）；那时原样备份不删，
+ * `backup` 是它的位置（里面的 MANIFEST.txt 写着每个备份文件对应检出里哪个路径）。`index` 这一档 = 分支已经挪了、
  * 文件也是新的那份，只有索引没换上（还停在改之前）。
  */
 export type SealedMove =
   | { ok: true }
   | { ok: false; stage: "locked"; message: string }
-  | { ok: false; stage: "blocked" | "publish"; message: string; left: string[] }
+  | { ok: false; stage: "blocked" | "publish"; message: string; left: string[]; backup?: string }
   | { ok: false; stage: "index"; message: string };
 
 /**
@@ -175,8 +176,11 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
   const kept = keep as string | null;
   await done?.dispose().catch((error: unknown) =>
     console.warn(`[ash] 验收发布的临时目录没能删掉：${done.dir}（${failure(error)}），可以手动删掉`));
-  if (kept) await rm(kept, { recursive: true, force: true }).catch((error: unknown) =>
+  // 有没放回去的，原样备份是找回它们（连同权限设置）的唯一出处：留着交给人。
+  const unrestored = !outcome.ok && "left" in outcome && outcome.left.length > 0;
+  if (kept && !unrestored) await rm(kept, { recursive: true, force: true }).catch((error: unknown) =>
     console.warn(`[ash] 验收发布的原样备份目录没能删掉：${kept}（${failure(error)}），里面是这次改动前的文件，可以手动删掉`));
-  if (!lockStuck || outcome.ok) return outcome;
-  return { ...outcome, message: `${outcome.message}（另外 ${lock} 没能删掉，它在的时候这个检出里的 git 命令都会拒绝，请手动删掉）` };
+  const result: SealedMove = unrestored && kept ? { ...outcome, backup: kept } as SealedMove : outcome;
+  if (!lockStuck || result.ok) return result;
+  return { ...result, message: `${result.message}（另外 ${lock} 没能删掉，它在的时候这个检出里的 git 命令都会拒绝，请手动删掉）` };
 }

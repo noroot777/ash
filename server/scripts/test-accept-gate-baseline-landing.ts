@@ -398,6 +398,39 @@ try {
     }
   }
 
+  // ㊿ 最终合并 · 放回时父目录已被换成指向项目外的链（第 6 轮审查第 4 轮 F1）：挪分支被拒的同时另一个终端
+  // 把 `src` 挪走、原地换成指向项目外空目录的链。放回不许顺着链写到项目外，没放回的照实报，原样备份留给人。
+  {
+    const sample = await fixture("landing-restore-swapped-parent", { baseline: "merge_preview" });
+    mkdirSync(join(sample.repo, "src"));
+    writeFileSync(join(sample.repo, "src", "a.txt"), "base\n");
+    git(sample.repo, "add", "src");
+    git(sample.repo, "commit", "-qm", "main adds src");
+    git(sample.cwd, "merge", "-q", "--no-edit", "main");
+    writeFileSync(join(sample.cwd, "src", "a.txt"), "task\n");
+    writeFileSync(join(sample.cwd, "src", "added.txt"), "added\n");
+    git(sample.cwd, "add", "-A");
+    git(sample.cwd, "commit", "-qm", "task edits src");
+    const outside = join(root, "swapped-parent-outside");
+    mkdirSync(outside);
+    const real = `GIT -C '${sample.repo}'`;
+    const src = join(sample.repo, "src");
+    const bin = wrapGit("swapped-parent", " update-ref -m ash accept",
+      `c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"`
+      + ` && mv '${src}' '${src}-saved' && ln -s '${outside}' '${src}'`);
+    const { landed } = await withPath(bin, arm => landGuarded(sample, arm));
+    assert.equal(landed.ok, false, JSON.stringify(landed));
+    assert.deepEqual(execFileSync("ls", ["-A", outside], { encoding: "utf8" }), "", "项目外什么都没写");
+    const message = landed.ok ? "" : landed.message;
+    assert.match(message, /没能回到合并之前的样子[^]*src\/a\.txt[^]*src\//);
+    const kept = /原样留在 (.+?)，里面的 MANIFEST\.txt/.exec(message)?.[1] ?? "";
+    assert.match(readFileSync(join(kept, "MANIFEST.txt"), "utf8"), /\tsrc\/a\.txt\n/, "原样备份留着");
+    const index = /^(\d+)\tsrc\/a\.txt$/m.exec(readFileSync(join(kept, "MANIFEST.txt"), "utf8"))?.[1] ?? "";
+    assert.equal(readFileSync(join(kept, index), "utf8"), "base\n", "备份里是改之前那份");
+    assert.equal(readFileSync(join(`${src}-saved`, "a.txt"), "utf8"), "task\n", "挪走的那份没被碰");
+    rmSync(kept, { recursive: true, force: true });
+  }
+
   // ㊷ 最终合并 · 测过之后目标检出里一个这次合并不碰的源码目录改成 0111（第 6 轮审查 F1）：文件照样按路径
   // 读得到，目录却列不出来 —— 物理身份连目录能不能读 / 进一起记，发布前就拒。
   {
@@ -515,7 +548,7 @@ try {
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
     hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true,
     dirAccess: true, indexRace: true, cleanupAfterPublish: true, dirWrite: true, splitIndex: true,
-    depParent: true, aclExec: true, restoreWhole: true }));
+    depParent: true, aclExec: true, restoreWhole: true, swappedParent: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
