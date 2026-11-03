@@ -89,7 +89,10 @@ npm run restart      # 构建 + 后台常驻,日志 /tmp/ash-4317.log(Windows �
 
 ash 里的 agent 是靠 **ash MCP 的 `complete_task`** 交卷的:回合结束时没有这个确认,任务一律按未完成记成 `failed`(exit 0 ≠ done)。MCP 没接上 = agent 压根没有那个工具可调 = **每个任务跑完都是红的**。
 
-`setup.mjs` 已经自动接好了。手动接的话:
+`setup.mjs` 已经自动接好了。之后才装的 CLI 不用重跑 setup:在界面「设置 → 执行器」里注册它的那一下,
+ash 就会把登记写进这个执行器起跑时读的那份配置(缺了才写、已有不覆盖),接不上会在那一行下面说清原因。
+例外是 **macOS 上的 codex**:ash 在这台机器上没法安全地起 codex 核对 TOML 读不读得通,所以不替你写,
+那一行会给出要手工加的那段;`npm run setup` 那条路照样能接。手动接的话:
 
 ```bash
 # claude(user 作用域,编排别的仓库时也在)

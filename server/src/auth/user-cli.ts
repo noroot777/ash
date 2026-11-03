@@ -91,7 +91,7 @@ export async function ensureUserCliDir(userId: string, agentType: AgentType): Pr
  * 所以它们走这一条同步的。**起跑前(`cliConfigEnvFor`)、设置页(`personalCliEnv`)、
  * 启动补做(`sweepPersonalAshMcp`)三处必须走上面那条**,登记缺了要在那三处补上。
  */
-function seedUserCliDir(userId: string, agentType: AgentType): string | null {
+export function seedUserCliDir(userId: string, agentType: AgentType): string | null {
   if (!configDirEnvVar(agentType)) return null;
   const dir = userCliDir(userId, agentType);
   mkdirSync(join(dir, "skills"), { recursive: true });

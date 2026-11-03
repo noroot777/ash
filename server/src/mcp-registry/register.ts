@@ -15,7 +15,7 @@
 //  · **「读不出来」绝不当成「没有」**:读不动、解析不了一律如实报,不写 —— 拿它当空去写,
 //    就是一份只剩 MCP 登记的新文件把用户整份配置盖掉。
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ASH_MCP_SERVER_NAME } from "@ash/shared/mcp";
@@ -73,6 +73,40 @@ export function ashMcpUnsupported(
 
 /** 补接的结果。`ok:false` 时 `why` 是**给用户看**的一句话(会进时间线和设置页)。 */
 export type AshMcpRegisterResult = { ok: true; serverName: string } | { ok: false; why: string };
+
+/**
+ * 「要手工接的话加哪一段、加到哪」—— 只读,不碰文件。只有 TOML 族给得出整段(JSON 族靠
+ * `registerAshMcp` 自己就写得进去,轮不到手工)。
+ *
+ * 谁要它:执行器列表那一行的只读诊断。注册那一下没写成的原因里本来就带着这一段
+ * (`byHand`),刷新之后也得照样抄得到,不然用户只剩一句「没有登记」。
+ *
+ * **跟自动补接走同一次合成**(`composeEntry`,对着这份配置的现有正文):这份配置不许往
+ * 末尾接表头时(整张 `mcp_servers` 写成了内联表、扫描器看不准……)自动那条会拒写,手工
+ * 这条也就不能再教人「加到末尾」—— 照做出来的是一份 CLI 整份拒载的配置(第 2 轮审查
+ * 第 1 条)。合不成就把合不成的原因交回去,由调用方原样说给用户。
+ */
+export function ashMcpHandAdvice(
+  agentType: string,
+  dir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  hostHome: string = homedir(),
+): { file: string; block: string } | { file: string; why: string } | null {
+  const mechanism = ashMcpMechanism(agentType);
+  if (mechanism?.kind !== "file" || !blockShape(mechanism.shape)) return null;
+  const file = siteFileFor(agentType, dir, mechanism.site, env);
+  let current: string | null = null;
+  try {
+    current = readFileSync(file, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      return { file, why: `${file} 读不出来（${(e as Error).message}）` };
+    }
+  }
+  const plan = composeEntry(mechanism, current, agentType, hostHome, env);
+  if ("why" in plan) return { file, why: plan.why };
+  return plan.block ? { file, block: plan.block } : null;
+}
 
 export interface AshMcpRegisterOptions {
   agentType: string;
