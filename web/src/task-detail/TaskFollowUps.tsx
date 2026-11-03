@@ -26,8 +26,12 @@ export function TaskFollowUps({ followUps }: { followUps: TaskFollowUp[] }) {
     const details = detailsRef.current;
     if (!details) return;
     details.open = true;
-    summaryRef.current?.focus({ preventScroll: true });
+    const summary = summaryRef.current;
+    summary?.focus({ preventScroll: true });
+    // 先让整节尽量露出来，再保证标题本身在眼前 —— 落焦点的是标题。只滚整节不够：追问一长、
+    // 人又翻到了中段，视口整个落在这一节里面，「nearest」认为它已经可见、一动不动，标题却在上面看不见。
     details.scrollIntoView({ block: "nearest" });
+    summary?.scrollIntoView({ block: "nearest" });
   }), []);
 
   return (
