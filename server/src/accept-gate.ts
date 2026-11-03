@@ -26,7 +26,8 @@ import { commitAt } from "./task-branch-plan.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { acceptGateCommandOf, gateView, latestRun, prepareGateCwd, runningRun } from "./accept-gate-state.js";
 import { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, type GateSource } from "./accept-gate-source.js";
-import { snapshotMaterialization } from "./accept-gate-preview.js";
+import { readOnlyGit, snapshotMaterialization } from "./accept-gate-preview.js";
+import { checkoutDivergence } from "./accept-gate-physical.js";
 import { existingTaskWorkspacePath } from "./task-workspace.js";
 export { acceptGateCommandOf, acceptGateRunOf, acceptGateState } from "./accept-gate-state.js";
 import type { AcceptFailure } from "./task-accept-guard.js";
@@ -64,6 +65,7 @@ type PendingStart = {
   command: string;
   cwd: string;
   projectId: string;
+  repoPath: string;
   sourceCommit: string | null;
   source: GateSource;
   targetBranch: string | null;
@@ -182,7 +184,7 @@ export async function acceptGateCheck(
   // 走到这里一定不是 skip（那一档上面已经返回了），所以 plan 必在。
   const { targetBranch, targetCommit } = plan!;
   pendingStarts.set(task.id, {
-    command, cwd, projectId: project.id,
+    command, cwd, projectId: project.id, repoPath: project.repoPath,
     sourceCommit: head, source,
     targetBranch,
     targetCommit,
@@ -290,6 +292,19 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
       plan.baseline.previewBase && plan.baseline.previewSettings
         ? { targetCommit: plan.baseline.previewBase, tree: plan.baseline.previewTree, settings: plan.baseline.previewSettings } : undefined);
     if (previewCommit) appendGateLog(logPath, `[ash] preview: 快照里的合并结果 ${previewCommit}（tree ${plan.baseline.previewTree}）\n\n`);
+    // 快照是全新写的，真合并只重写改到的文件：目标检出里没改到的那些磁盘上和快照不是同一份，就不跑
+    // （accept-gate-physical.ts）。拦在起进程之前，落成「起不来」并把原因写进日志。
+    if (plan.baseline.previewBase && plan.targetBranch && plan.sourceCommit) {
+      const tree = plan.baseline.previewTree ?? (await readOnlyGit(plan.repoPath, ["rev-parse", `${plan.sourceCommit}^{tree}`])).stdout.trim();
+      const drifted = await checkoutDivergence(plan.repoPath, plan.targetBranch, plan.baseline.previewBase, tree, snapshotCwd, plan.source.dependencies);
+      if (drifted.length) {
+        const named = drifted.slice(0, 5).join("、") + (drifted.length > 5 ? ` 等 ${drifted.length} 个` : "");
+        throw new Error(`合并预览这次没有跑：目标分支 ${plan.targetBranch} 的检出里有文件（${named}）和按现在的检出设置重新写出来的不一样`
+          + "（多半是改换行 / 链接设置之前检出的），合并不会重写它们，快照里却是新写的，测了也说明不了合进去之后怎样。"
+          + "在那个检出里把它们重新检出一遍（比如 `git rm --cached -r -q . && git reset --hard`，会丢掉未提交的改动，先确认工作区干净），"
+          + "或者在项目设置 → 验收里换成「要求已含目标分支」或「分支快照」。");
+      }
+    }
     // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里。「测试压根没启动」这个结论
     // 整副面孔（不要改代码 / 出路是合分支或跳过）都压在这份事实上（第 2 轮审查 F1），所以
     // 它只能是起跑那一刻的事实 —— 跑完之后再核拿到的是跑完之后的状态。

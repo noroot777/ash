@@ -1,7 +1,7 @@
 // 合并预览档「快照忠实代表合进去之后那份」与「最终落下的就是测过的那份」的回归（第 4 轮审查）。
 // 样本与驱动和 test-accept-gate-baseline.ts 共用（accept-gate-baseline-fixture.ts）。
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -111,7 +111,76 @@ try {
     git(sample.repo, "config", "--unset", "core.sparseCheckout");
   }
 
-  console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true }));
+  // ㉛ 合并预览 · 主检出改了换行设置却没重新检出（第 4 轮复审 F2）：树、配置身份都对得上，磁盘上没被
+  // 这次合并改到的文件还是 LF，快照里是新写的 CRLF —— 门禁不跑，落成起不来并说清楚，不验收。
+  {
+    const sample = await fixture("preview-physical-drift", { baseline: "merge_preview" });
+    git(sample.repo, "config", "core.autocrlf", "true");
+    await acceptTask(sample.taskId);
+    await settled(sample.taskId);
+    const [row] = await runs(sample.taskId);
+    assert.equal(row!.status, "failed");
+    assert.equal(row!.failure, "spawn_failed");
+    assert.match(readFileSync(row!.logPath, "utf8"), /合并预览这次没有跑[^\n]*api\.js/);
+    assert.notEqual((await taskRow(sample.taskId)).stage, "accepted");
+    git(sample.repo, "config", "--unset", "core.autocrlf");
+  }
+
+  // ㉜ 合并预览 · 依赖经过名字里带反斜杠的目录（POSIX 上那只是普通字符，F3）：路径照平台切分，
+  // vendor -> pool\name/deps 被目标分支改指向时照样认得出来，门禁之前就拒。
+  {
+    const sample = await fixture("preview-backslash-dep", { baseline: "merge_preview" });
+    for (const pool of ["pool\\name", "pool-b"]) {
+      mkdirSync(join(sample.repo, pool, "deps"), { recursive: true });
+      writeFileSync(join(sample.repo, pool, "deps", "value.txt"), `${pool}\n`);
+    }
+    symlinkSync("pool\\name/deps", join(sample.repo, "vendor"));
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-m", "main commits vendor -> pool\\name/deps");
+    git(sample.cwd, "merge", "--no-edit", "main");
+    rmSync(join(sample.repo, "vendor"));
+    symlinkSync("pool-b/deps", join(sample.repo, "vendor"));
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-m", "main repoints vendor");
+    await refusedBeforeGate(sample, /依赖内容/);
+  }
+
+  // ㉝ 最终合并 · 带落地约束的「合并后不提交」：暂存的正是测过的那棵，HEAD 不动、不落提交。
+  {
+    const sample = await fixture("landing-no-commit", { baseline: "merge_preview" });
+    const tested = git(sample.repo, "rev-parse", "main");
+    const source = git(sample.cwd, "rev-parse", "HEAD");
+    const merged = await previewMerge(sample.repo, tested, source);
+    assert.ok("tree" in merged, JSON.stringify(merged));
+    const expectedTree = "tree" in merged ? merged.tree : "";
+    const staged = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
+      { sourceCommit: source, expectedTree, expectedTarget: tested, commit: false });
+    assert.equal(staged.ok, true, JSON.stringify(staged));
+    if (staged.ok) assert.equal(staged.method, "no_commit");
+    assert.equal(git(sample.repo, "write-tree"), expectedTree);
+    assert.equal(git(sample.repo, "rev-parse", "HEAD"), tested, "没落提交");
+    git(sample.repo, "reset", "--hard", "-q");
+  }
+
+  // ㉞ 最终合并 · 目标分支哪儿都没检出（主检出 detach 了）：带旧值挪 ref，落下的是测过的那棵。
+  {
+    const sample = await fixture("landing-ref-only", { baseline: "merge_preview" });
+    const tested = git(sample.repo, "rev-parse", "main");
+    const source = git(sample.cwd, "rev-parse", "HEAD");
+    const merged = await previewMerge(sample.repo, tested, source);
+    assert.ok("tree" in merged, JSON.stringify(merged));
+    const expectedTree = "tree" in merged ? merged.tree : "";
+    git(sample.repo, "checkout", "-q", "--detach");
+    const landed = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
+      { sourceCommit: source, expectedTree, expectedTarget: tested });
+    assert.equal(landed.ok, true, JSON.stringify(landed));
+    assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), expectedTree);
+    assert.equal(git(sample.repo, "rev-parse", "main^1"), tested);
+    assert.equal(git(sample.repo, "rev-parse", "HEAD"), tested, "detach 的检出没被碰");
+  }
+
+  console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
+    physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

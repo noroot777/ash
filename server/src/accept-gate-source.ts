@@ -196,15 +196,27 @@ export async function dependencyReads(cwd: string, dependencies: readonly string
   const add = (path: string) => { if (inside(root, path)) reads.add(relative(root, path).split(sep).join("/")); };
   for (const dep of dependencies) {
     reads.add(dep.split(sep).join("/"));
-    const landing = await resolveRecording(root, dep.split(/[\\/]/), add);
-    if (landing !== null) add(landing);
+    // 工作区里压根没有这一项（补给来的依赖住在别处，见 accept-gate-supply）：借的不是工作区的东西。
+    if (!(await optionalRead(join(root, dep), () => lstat(join(root, dep)), ["ENOENT", "ENOTDIR"]))) continue;
+    // 读集合不全就不能拿来证明「借进来的就是合并之后那份」：解不到底（不存在、成环、跳数超限），
+    // 或者解到的落点与系统 realpath 不是同一处，都抛出，调用方按「没法确认」拒（第 4 轮复审 F3）。
+    const landing = await resolveRecording(root, splitPath(dep), add);
+    const actual = await optionalRead(join(root, dep), () => realpath(join(root, dep)), ["ENOENT", "ENOTDIR", "ELOOP"]);
+    if (landing === null || actual === null || landing !== actual) {
+      throw new Error(`依赖 ${dep} 的路径没能完整解析${landing && actual ? `（逐级解析到 ${landing}，系统解析到 ${actual}）` : ""}`);
+    }
+    add(landing);
   }
   return [...reads];
 }
 
+/** 按本平台的路径语义拆组件：POSIX 上反斜杠是文件名里的普通字符，只有 Windows 两种都是分隔符。 */
+const splitPath = (path: string): string[] => path.split(process.platform === "win32" ? /[\\/]/ : "/");
+
 /**
  * 从 `base`（已解析的真实目录）出发逐个路径组件解析，遇到链就记下它（`record`，记的是链本身的真实
  * 位置），再把链的内容接到剩下的组件前面继续。返回最终落点；中途不存在 / 成环则返回 null（链照样记下）。
+ * 和系统 realpath 走同一套语义（`..` 作用在已解析的真实目录上），所以两者能交叉核对。
  */
 async function resolveRecording(base: string, components: string[], record: (link: string) => void): Promise<string | null> {
   const pending = components.filter(part => part && part !== ".");
@@ -220,7 +232,7 @@ async function resolveRecording(base: string, components: string[], record: (lin
     record(next);
     const link = await readlink(next);
     if (isAbsolute(link)) resolved = parse(link).root;
-    pending.unshift(...link.split(/[\\/]/).filter(item => item && item !== "."));
+    pending.unshift(...splitPath(link).filter(item => item && item !== "."));
   }
   return resolved;
 }

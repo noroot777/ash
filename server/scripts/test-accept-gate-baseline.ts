@@ -333,9 +333,10 @@ try {
     const mainBefore = git(sample.repo, "rev-parse", "main");
     const landed = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
       { sourceCommit: first!.sourceCommit!, expectedTree: first!.previewTree! });
-    assert.equal(landed.ok, false, "合出来的不是测过的那棵树就不落");
-    if (!landed.ok) assert.match(landed.message, /不是验收前置命令测过的那一棵/);
-    assert.equal(git(sample.repo, "rev-parse", "main"), mainBefore);
+    // 落地不再按现在的合并配置重合一遍：结果直接用测过的那棵树生成（第 4 轮复审 F1），配置变了也一样。
+    assert.equal(landed.ok, true, JSON.stringify(landed));
+    assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), first!.previewTree, "落下的就是测过的那棵");
+    assert.equal(git(sample.repo, "rev-parse", "main^1"), mainBefore);
     assert.equal(git(sample.repo, "status", "--porcelain"), "");
   }
 
@@ -407,6 +408,9 @@ try {
     const sample = await fixture("preview-autocrlf", { baseline: "merge_preview" });
     git(sample.repo, "config", "core.autocrlf", "true");
     commitOnMain(sample.repo, "target.txt", "target\n", "main adds a text file");
+    // 主检出按新配置重新写一遍：不然它磁盘上还是开 autocrlf 之前的 LF，合并预览会如实拒（㉛）。
+    git(sample.repo, "rm", "--cached", "-r", "-q", ".");
+    git(sample.repo, "reset", "--hard", "-q");
     await acceptTask(sample.taskId);
     await settled(sample.taskId);
     const [row] = await runs(sample.taskId);
@@ -414,24 +418,34 @@ try {
     assert.equal((await taskRow(sample.taskId)).stage, "accepted");
   }
 
-  // ⑱ 最终合并 · 树对不上、撤回也失败（第 1 轮审查 F1）：不许再说「目标分支没动」，要如实报出它现在在哪、
-  // 合并之前在哪、怎么退回。撤回失败用合并之后的钩子留一把 index.lock 注入。
+  // ⑱ 最终合并 · 落地的同时另一个终端往目标分支提交（第 4 轮复审 F1）：这一按不合，那个外部提交原样
+  // 留着 —— 不许再拿合并之前的位置去复位整个检出。外部提交用一个 git 包装在「检出里快进」那一刻插进来。
   {
-    const sample = await fixture("rollback-failure", {});
-    const hook = join(sample.repo, ".git", "hooks", "post-merge");
-    writeFileSync(hook, "#!/bin/sh\ntouch \"$(git rev-parse --git-dir)/index.lock\"\n", { mode: 0o755 });
-    const before = git(sample.repo, "rev-parse", "main");
-    const landed = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
-      { sourceCommit: git(sample.cwd, "rev-parse", "HEAD"), expectedTree: git(sample.repo, "rev-parse", "main^{tree}") });
-    const after = git(sample.repo, "rev-parse", "main");
+    const sample = await fixture("landing-race", { baseline: "merge_preview" });
+    const tested = git(sample.repo, "rev-parse", "main");
+    const source = git(sample.cwd, "rev-parse", "HEAD");
+    const merged = await previewMerge(sample.repo, tested, source);
+    assert.ok("tree" in merged, JSON.stringify(merged));
+    const bin = join(root, "race-bin");
+    mkdirSync(bin);
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const marker = join(root, "race-fired");
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ ! -e '${marker}' ] && [ "$3" = merge ] && [ "$4" = --ff-only ]; then\n`
+      + `  touch '${marker}'; echo external > '${sample.repo}/external.txt'\n`
+      + `  '${realGit}' -C '${sample.repo}' add external.txt && '${realGit}' -C '${sample.repo}' commit -qm external || exit 1\nfi\n`
+      + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    let landed: Awaited<ReturnType<typeof mergeTaskBranch>>;
+    try {
+      landed = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
+        { sourceCommit: source, expectedTree: "tree" in merged ? merged.tree : "", expectedTarget: tested });
+    } finally { process.env.PATH = path; }
+    assert.equal(existsSync(marker), true, "外部提交确实插在了快进之前");
     assert.equal(landed.ok, false);
-    assert.notEqual(after, before, "注入成功：撤回确实没做成");
-    if (!landed.ok) {
-      assert.doesNotMatch(landed.message, /目标分支没动/);
-      assert.match(landed.message, /没能撤回/);
-      assert.ok(landed.message.includes(after.slice(0, 12)) && landed.message.includes(before), landed.message);
-    }
-    rmSync(join(sample.repo, ".git", "index.lock"), { force: true });
+    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了/);
+    assert.equal(git(sample.repo, "log", "-1", "--format=%s", "main"), "external", "外部提交原样留在目标分支上");
+    assert.equal(readFileSync(join(sample.repo, "external.txt"), "utf8"), "external\n");
   }
 
   // ⑲ 合并预览 · 目标分支改了随仓库提交的依赖目录（第 1 轮审查 F2）：快照里依赖目录借的是任务工作区那份
@@ -590,7 +604,7 @@ try {
 
   console.log(JSON.stringify({ branchDefault: true, containsRefuse: true, containsPass: true, previewCollision: true,
     previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true,
-    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true, rollbackFailure: true, trackedVendor: true, existingFilter: true, linkedVendor: true, stateFsmonitor: true,
+    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true, landingRace: true, trackedVendor: true, existingFilter: true, linkedVendor: true, stateFsmonitor: true,
     infoAttributes: true, containedSealed: true, autocrlfDrift: true }));
 } finally {
   await releaseTmpDb();

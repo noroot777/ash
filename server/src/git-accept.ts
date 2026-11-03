@@ -25,6 +25,7 @@ import { assertNotPreviewInstance } from "./preview-instance.js";
 import { execFileText as exec } from "./exec.js";
 import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 import { addTemporaryWorktree, removeTemporaryWorktree, type TemporaryWorktree } from "./git-accept-temp.js";
+import { movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
 
 function sameFilesystemPath(a: string, b: string): boolean {
   try { return realpathSync(resolve(a)) === realpathSync(resolve(b)); }
@@ -225,26 +226,17 @@ export type TaskMergeOptions = {
    */
   retryOfMerged?: boolean;
   /**
-   * 门禁（合并预览档）测过的那棵合并树。给了就只许落下这一棵：合出来的不是它（合并配置在门禁跑完
-   * 之后变了、主检出里有不进版本库的属性文件、项目配的合并驱动合出了别的…），就撤回这次合并、
-   * 一个字节不留（第 2 轮审查 F1：门禁绿了、合进去的却是没测过的树）。
+   * 门禁（合并预览档）测过的那棵树。给了就只许落下这一棵（第 2 轮审查 F1：门禁绿了、合进去的却是
+   * 没测过的树）：结果直接用这棵树生成、只用快进发布，落不成就什么都不动（git-accept-tested.ts）。
    */
   expectedTree?: string;
   /**
-   * 门禁测的时候目标分支在哪（合并预览档的 previewBase）。给了就只在目标分支**还在这里**时落下：
-   * 核对之后另一个终端把它挪了，原本要三方合并的可能变成快进、原本要合的可能变成「已经合过」，
-   * 每一种都会落下另一棵树（第 4 轮审查 F2）。与 expectedTree 一起对**所有**成功出口生效，
-   * 无检出的快进用带旧值的 `update-ref` 原子地挪。
+   * 门禁测的时候目标分支在哪（合并预览档的 previewBase）。目标分支不在这里就不合：核对之后另一个
+   * 终端把它挪了，原本要三方合并的可能变成快进、原本要合的可能变成「已经合过」，每一种都会落下
+   * 另一棵树（第 4 轮审查 F2）。不给时以进锁那一刻的目标提交为准。
    */
   expectedTarget?: string;
 };
-
-/** 合并预览档那一按的落地约束：目标分支得还在被测时那里，落下来的得是测过的那棵树。 */
-type LandingGuard = { tree: string; target?: string };
-
-const movedTarget = (targetBranch: string, tested: string, now: string | null) =>
-  `目标分支 ${targetBranch} 在门禁测过之后动了（测的时候在 ${tested.slice(0, 12)}，现在${now ? `在 ${now.slice(0, 12)}` : "读不到"}），`
-  + "这时候合出来的已经不是测过的那一棵，所以没有合并、目标分支没动。重新验收会按现在的目标分支重新预演、重新跑门禁。";
 
 export async function mergeTaskBranch(
   repoPath: string,
@@ -275,7 +267,7 @@ async function inTargetCheckout(
   sourceBranch: string,
   targetBranch: string,
   fn: (cwd: string) => Promise<TaskMergeResult>,
-  beforeTemp?: () => TaskMergeResult | null,
+  beforeTemp?: () => TaskMergeResult | null | Promise<TaskMergeResult | null>,
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
   const checkout = await targetCheckout(repo, targetBranch);
@@ -307,7 +299,7 @@ async function inTargetCheckout(
       targetPath,
     };
   }
-  const early = beforeTemp?.();
+  const early = await beforeTemp?.();
   if (early) return early;
 
   let temp: TemporaryWorktree;
@@ -409,6 +401,7 @@ async function mergeWithoutCommit(
   sourceBranch: string,
   targetBranch: string,
   sourceRef = sourceBranch,
+  stage = (cwd: string) => squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, false, sourceRef),
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
   const checkout = await targetCheckout(repo, targetBranch);
@@ -451,56 +444,7 @@ async function mergeWithoutCommit(
       dirtyFiles,
     };
   }
-  return squashInCheckedOutTarget(repo, sourceBranch, targetBranch, false, sourceRef);
-}
-
-/**
- * 落下来的必须是测过的那棵树（TaskMergeOptions.expectedTree）。检出里产出结果的四种落法都看（快进也算）；
- * 对不上就把目标检出复位到合并之前 —— 走到合并这一步的检出事先都核过是干净的，复位丢不了别人的东西。
- * 复位本身也可能失败（锁、权限、钩子），所以复位之后**核实**HEAD 回到了合并之前、索引与工作区干净，
- * 核实不了就如实说「目标分支已经动了」并给出退回的那一句（消息进任务时间线，刷新后仍在）。
- */
-async function landTestedTree(cwd: string, guard: LandingGuard, fn: (cwd: string) => Promise<TaskMergeResult>,
-  names: { sourceBranch: string; targetBranch: string }): Promise<TaskMergeResult> {
-  const expected = guard.tree;
-  const before = (await exec("git", ["-C", cwd, "rev-parse", "HEAD"]).catch(() => null))?.stdout.trim();
-  // 就在这份检出里、动手之前再核一次目标还在被测时那里：上层那道核对与这里之间隔着检出的准备。
-  if (guard.target && before !== guard.target) {
-    return { ok: false, reason: "merge_failed", message: movedTarget(names.targetBranch, guard.target, before ?? null), ...names };
-  }
-  const result = await fn(cwd);
-  if (!result.ok || !["merge_commit", "squash", "no_commit", "fast_forward"].includes(result.method)) return result;
-  const landed = result.method === "no_commit" ? result.stagedTree
-    : (await exec("git", ["-C", cwd, "rev-parse", "HEAD^{tree}"])).stdout.trim();
-  if (landed === expected) return result;
-  const mismatch = `这次真合出来的树（${landed?.slice(0, 12) ?? "未知"}）不是验收前置命令测过的那一棵（${expected.slice(0, 12)}）`;
-  const resetError = before
-    ? await exec("git", ["-C", cwd, "reset", "--hard", before]).then(() => null, (error) => gitError(error))
-    : "合并之前的提交没读到";
-  const after = (await exec("git", ["-C", cwd, "rev-parse", "HEAD"]).catch(() => null))?.stdout.trim();
-  const clean = (await exec("git", ["-C", cwd, "status", "--porcelain", "--untracked-files=no"]).catch(() => null))?.stdout.trim() === "";
-  if (before && after === before && clean) {
-    return {
-      ok: false,
-      reason: "merge_failed",
-      message: `${mismatch}，已撤回、目标分支没动。常见原因是门禁跑完之后仓库的合并配置变了，或者主检出里有不进版本库的属性文件、`
-        + "仓库配的合并驱动合出了别的结果。重新验收会按现在的配置重新预演、重新跑门禁。",
-      sourceBranch: result.sourceBranch,
-      targetBranch: result.targetBranch,
-    };
-  }
-  const target = result.targetBranch;
-  return {
-    ok: false,
-    reason: "merge_failed",
-    message: `${mismatch}，而且**没能撤回**（${resetError ?? "复位之后索引或工作区仍不干净"}）：`
-      + `目标分支 ${target} 现在${after ? `在 ${after.slice(0, 12)}` : "的位置读不到"}`
-      + `${before ? `，合并之前是 ${before.slice(0, 12)}` : ""}，上面留着的是没测过的合并结果。`
-      + (before ? `请先把它退回去：在检出 ${target} 的目录里 \`git reset --hard ${before}\`（没检出就 \`git branch -f ${target} ${before}\`），` : "请先手动把它退回合并之前，")
-      + "再重新验收。",
-    sourceBranch: result.sourceBranch,
-    targetBranch: target,
-  };
+  return stage(repo);
 }
 
 /** 「只打标签不合并」那一档的标签名。 */
@@ -576,11 +520,11 @@ async function mergeTaskBranchLocked(
   }
 
   // 合并预览档的落地约束（重试已合过的那次除外：目标分支正是被上一次自己的合并挪走的）。
-  const guard: LandingGuard | null = options.expectedTree && !options.retryOfMerged
-    ? { tree: options.expectedTree, target: options.expectedTarget } : null;
-  if (guard?.target) {
-    const now = await commitOf(repo, targetBranch);
-    if (now !== guard.target) return { ok: false, reason: "merge_failed", message: movedTarget(targetBranch, guard.target, now), sourceBranch, targetBranch };
+  const now = await commitOf(repo, targetBranch);
+  const guard: LandingGuard | null = options.expectedTree && !options.retryOfMerged && now
+    ? { tree: options.expectedTree, target: options.expectedTarget ?? now } : null;
+  if (guard && now !== guard.target) {
+    return { ok: false, reason: "merge_failed", message: movedTarget(targetBranch, guard.target, now), sourceBranch, targetBranch };
   }
 
   if (await isAncestor(repo, sourceRef, targetBranch)) {
@@ -595,18 +539,17 @@ async function mergeTaskBranchLocked(
   // 更靠后也更硬——不落提交时，squash 和 --no-ff 在工作区里的结果没有区别（都是「把那
   // 串改动的最终状态放进来」），真正能区别它们的那个动作正是被去掉的那次 commit。
   // 「只打标签不合并」不受影响：它本来就不产生提交，上面已经提前返回了。
-  const landing = (fn: (cwd: string) => Promise<TaskMergeResult>) =>
-    guard ? (cwd: string) => landTestedTree(cwd, guard, fn, { sourceBranch, targetBranch }) : fn;
+  if (guard) return landTested(repo, guard, strategy, options.commit === false, sourceBranch, targetBranch, sourceRef);
   if (options.commit === false) {
     // 重试上一轮已经合过的那次：目标工作区里躺着的就是上次合进来的改动，别再合一遍
     // （会被自己的产物判成 target_dirty，任务永远卡在 merged）。
     if (options.retryOfMerged) return { ok: true, sourceBranch, targetBranch, method: "no_commit" };
-    return landing((cwd) => mergeWithoutCommit(cwd, sourceBranch, targetBranch, sourceRef))(repo);
+    return mergeWithoutCommit(repo, sourceBranch, targetBranch, sourceRef);
   }
 
   if (strategy === "squash") {
-    return inTargetCheckout(repo, sourceBranch, targetBranch, landing((cwd) =>
-      squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef)));
+    return inTargetCheckout(repo, sourceBranch, targetBranch, (cwd) =>
+      squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, true, sourceRef));
   }
 
   // 清掉失效登记后再尝试 fetch，避免首次 FF 被陈旧占用拒绝、第二次却能成功。
@@ -614,8 +557,7 @@ async function mergeTaskBranchLocked(
   // First attempt the ref-only fast-forward. This changes no checked-out files;
   // non-FF and checked-out-target failures fall through to the guarded paths.
   try {
-    if (guard) await guardedFastForward(repo, targetBranch, sourceRef, guard);
-    else await exec("git", ["-C", repo, "fetch", ".", `${sourceRef}:${targetBranch}`]);
+    await exec("git", ["-C", repo, "fetch", ".", `${sourceRef}:${targetBranch}`]);
     return { ok: true, sourceBranch, targetBranch, method: "fast_forward" };
   } catch (fetchError) {
     const fastForward = await isAncestor(repo, targetBranch, sourceRef);
@@ -625,7 +567,7 @@ async function mergeTaskBranchLocked(
       targetBranch,
       // 走到临时 worktree 时 fastForward 一定是 false（下面那个 beforeTemp 已经把
       // 「本来能 FF 却失败了」拦掉了），所以这儿直接把它透传下去。
-      landing((cwd) => mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward, sourceRef)),
+      (cwd) => mergeInCheckedOutTarget(cwd, sourceBranch, targetBranch, fastForward, sourceRef),
       // 目标分支哪儿都没检出、而且本来就该能 fast-forward：那句 ref-only 的 fetch 失败
       // 是真出事了，别再开临时 worktree 拿 merge 去糊。
       () => fastForward
@@ -642,15 +584,19 @@ async function mergeTaskBranchLocked(
 }
 
 /**
- * 有落地约束时那条无检出的快进：快进落下的是任务分支那棵树，不是测过的那棵就不挪；挪的时候带上
- * 被测时的目标提交做旧值（`update-ref <新> <旧>`），核对之后被别人挪过就原子地失败。目标分支在哪儿
- * 检出着（或根本不能快进）就抛出，交给下面检出里的那条路（与 `fetch` 失败时同一个出口）。
+ * 带落地约束的那一按（合并预览档）：结果在检出之外生成、只用快进发布，见 git-accept-tested.ts。
+ * 检出的三种情况（就地 / 别人的 worktree / 哪儿都没检出）与无约束时同一套判断，只是哪儿都没检出时
+ * 不开临时 worktree，直接带旧值挪 ref。
  */
-async function guardedFastForward(repo: string, targetBranch: string, sourceRef: string, guard: LandingGuard): Promise<void> {
-  const current = await commitOf(repo, targetBranch);
-  if (!current || !(await isAncestor(repo, current, sourceRef))) throw new Error(`${targetBranch} 不能快进到 ${sourceRef}`);
-  if ((await targetCheckout(repo, targetBranch)).path) throw new Error(`${targetBranch} 已检出，不做无检出快进`);
-  if (await treeOfCommit(repo, sourceRef) !== guard.tree) throw new Error("快进落下的不是测过的那棵树");
-  await exec("git", ["-C", repo, "update-ref", "-m", `ash accept: fast-forward ${targetBranch}`,
-    `refs/heads/${targetBranch}`, sourceRef, guard.target ?? current]);
+async function landTested(repo: string, guard: LandingGuard, strategy: AcceptStrategy, noCommit: boolean,
+  sourceBranch: string, targetBranch: string, sourceRef: string): Promise<TaskMergeResult> {
+  const names = { sourceBranch, targetBranch };
+  if (noCommit) return mergeWithoutCommit(repo, sourceBranch, targetBranch, sourceRef, (cwd) => stageTestedTree(cwd, guard, names));
+  const method = strategy === "squash" ? "squash" : await isAncestor(repo, targetBranch, sourceRef) ? "fast_forward" : "merge_commit";
+  const message = method === "squash" ? squashCommitMessage(sourceBranch) : `Merge branch '${sourceBranch}' into ${targetBranch}`;
+  const result = await testedResultCommit(repo, method, guard, sourceRef, message, names);
+  if (typeof result !== "string") return result;
+  return inTargetCheckout(repo, sourceBranch, targetBranch,
+    (cwd) => publishInCheckout(cwd, method, guard, result, names),
+    () => publishRefOnly(repo, method, guard, result, names));
 }

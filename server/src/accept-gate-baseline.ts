@@ -119,7 +119,9 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
     // 指回的那棵源码树，借进来的却还是任务分支那份旧的（第 1、2 轮审查 F2/F1）。比的是借用**实际
     // 读取**的那几处（dependencyReads：字面路径、链上每一跳、最终落点），不是目录名。借用没法忠实
     // 放下合并后的内容，就在门禁之前拒。
-    const reads = borrowed?.dependencies.length ? await dependencyReads(borrowed.cwd, borrowed.dependencies) : [];
+    let reads: string[];
+    try { reads = borrowed?.dependencies.length ? await dependencyReads(borrowed.cwd, borrowed.dependencies) : []; }
+    catch (error) { return unavailable(`借用的依赖读自工作区哪几处没能完整求出（${error instanceof Error ? error.message : String(error)}）`); }
     const changed = reads.length ? await changedPaths(project.repoPath, head, merged.tree) : [];
     const stale = reads.filter(read => changed.some(path => read === "" || path === read || path.startsWith(`${read}/`)));
     if (stale.length) {
