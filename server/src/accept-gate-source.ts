@@ -258,7 +258,7 @@ export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR
  * 合并预览档要在快照里合进来的那一份（见 accept-gate-baseline.ts）。`tree` 是仓库里预演出来的合并树：
  * 快照里真合出来的必须跟它一模一样，否则「绿了合进去的」和「门禁测过的」就不是同一棵。
  */
-export type GateSnapshotPreview = { targetCommit: string; tree: string };
+export type GateSnapshotPreview = { targetCommit: string; tree: string | null };
 
 /** 建快照。合并预览档返回快照里落下的合并提交（收尾核验认它当 HEAD），其余档返回 null。 */
 export async function createGateSnapshot(cwd: string, target: string, source: GateSource,
@@ -317,8 +317,9 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
         await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
       }
       await snap(["checkout", "--detach", source.commit]);
-      if (preview) previewCommit = await materializePreview(target, preview);
-      else await git(target, ["remote", "remove", "origin"]);
+      // 封好的克隆自带的配置里本就没有 origin；已含目标分支时（tree 为 null）不合，检出的就是分支那棵树。
+      if (preview?.tree) previewCommit = await materializePreview(target, preview.targetCommit, preview.tree);
+      else if (!preview) await git(target, ["remote", "remove", "origin"]);
       const paths = (await snap(["ls-tree", "-r", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean);
       // 比较基准也必须规范化:落点是 realpath 出来的,拿没规范化的快照路径去比,只要路径祖先里有
       // 一条软链(macOS 的 /var -> /private/var、用户把 repo 放在软链目录下都是),每一条合法的
@@ -419,10 +420,10 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
  * 目标分支带进来的文件点名了过滤器也没有程序可调（见 accept-gate-preview.ts 的 cloneSealedSnapshot）。树对象是
  * 预演写进主仓对象库的，本地克隆整份带过来（worktree 与主仓共用一份）。
  */
-async function materializePreview(target: string, preview: GateSnapshotPreview): Promise<string> {
+async function materializePreview(target: string, targetCommit: string, tree: string): Promise<string> {
   const commit = (await sealedGit(target, ["-c", "user.name=ash", "-c", "user.email=ash@localhost",
-    "commit-tree", "--no-gpg-sign", preview.tree, "-p", "HEAD", "-p", preview.targetCommit,
-    "-m", `ash 验收门禁合并预览：合入 ${preview.targetCommit}`])).trim();
+    "commit-tree", "--no-gpg-sign", tree, "-p", "HEAD", "-p", targetCommit,
+    "-m", `ash 验收门禁合并预览：合入 ${targetCommit}`])).trim();
   await sealedGit(target, ["checkout", "--detach", commit]);
   return commit;
 }

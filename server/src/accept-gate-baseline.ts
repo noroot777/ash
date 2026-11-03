@@ -10,7 +10,7 @@
 // 原样放进测试快照（accept-gate-source.ts 的 materializePreview），也是最终合并必须落下的那棵
 // （git-accept.ts 的 expectedTree）—— 合并只在这里定义一次。
 import { type AcceptGateBaseline, normalizeAcceptGateBaseline } from "@ash/shared/accept-gate";
-import { changedPaths, checkoutFilters, mergeDrivers, previewMerge, readOnlyGit } from "./accept-gate-preview.js";
+import { changedPaths, checkoutFilters, conversionDrift, mergeDrivers, previewMerge, readOnlyGit } from "./accept-gate-preview.js";
 import { dependencyReads } from "./accept-gate-source.js";
 import { isAncestor } from "./git-accept.js";
 import { resolveWorktreeBranchName } from "./git.js";
@@ -67,10 +67,30 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
         + `先让任务在自己的分支上 \`git merge ${targetBranch}\`（有冲突就地解掉并提交），再点验收。` } };
   }
   const preview = { ...plan, previewBase: targetCommit };
-  if (contained) return { plan: preview, block: null };
   const unavailable = (why: string) => ({ plan: null, block: { reason: "accept_gate_preview_unavailable" as const,
     targetBranch, targetCommit, error: `合并预览这次没有预演：${why}。在项目设置 → 验收里换成「要求已含目标分支」`
       + `（任务自己先把 ${targetBranch} 合进来，门禁测的就是合并结果），或者换回「分支快照」。` } });
+  // 这一档的快照**一律**在封好的环境里物化（accept-gate-source 的 cloneSealedSnapshot），不管要不要
+  // 合 —— 已含目标分支时快照就是分支那棵树，照样在那个环境里检出（第 1 轮审查 F2）。所以「封好的
+  // 环境写不出平时那份文件」这两条对两种情形都要问：项目配的过滤器，以及仓库外属性给出的内建转换。
+  const unfaithful = async (tree: string) => {
+    const filters = await checkoutFilters(project.repoPath, tree);
+    if (filters.length) {
+      return unavailable(`要测的文件里有平时要经过仓库配的过滤器（${filters.join("、")}）才能检出的，`
+        + "快照里不执行那段程序，写出来的就不是平时那份文件，测了也说明不了合进去之后怎样");
+    }
+    const drifted = await conversionDrift(project.repoPath, tree);
+    if (drifted.length) {
+      const named = drifted.slice(0, 5).join("、") + (drifted.length > 5 ? ` 等 ${drifted.length} 个` : "");
+      return unavailable(`要测的文件里有平时靠仓库之外的属性设置（主检出的 info/attributes 或全局属性文件）做换行 / 编码`
+        + `转换的（${named}），快照只认树里的 .gitattributes，写出来的字节就不是平时那份。把这些设置写进仓库的 .gitattributes 就能用这一档`);
+    }
+    return null;
+  };
+  if (contained) {
+    return await unfaithful((await git(project.repoPath, ["rev-parse", `${head}^{tree}`])).stdout.trim())
+      ?? { plan: preview, block: null };
+  }
   const drivers = await mergeDrivers(project.repoPath, targetCommit, head);
   if (drivers.length) {
     return unavailable(`这次要合的文件用了仓库自配的合并驱动（${drivers.join("、")}），预演不会执行它，`
@@ -81,11 +101,8 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
     return unavailable(`git 没能预演（${merged.error}）`);
   }
   if ("tree" in merged) {
-    const filters = await checkoutFilters(project.repoPath, merged.tree);
-    if (filters.length) {
-      return unavailable(`合并之后的文件里有平时要经过仓库配的过滤器（${filters.join("、")}）才能检出的，`
-        + "快照里不执行那段程序，写出来的就不是平时那份文件，测了也说明不了合进去之后怎样");
-    }
+    const refused = await unfaithful(merged.tree);
+    if (refused) return refused;
     // 依赖目录在快照里是**借**来的（任务工作区那一份，见 accept-gate-deps）。分支快照档里两者一致由
     // 「工作区干净」保证；合并预览不成立 —— 目标分支完全可以更新随仓库提交的 vendor/，或者依赖根
     // 指回的那棵源码树，借进来的却还是任务分支那份旧的（第 1、2 轮审查 F2/F1）。比的是借用**实际

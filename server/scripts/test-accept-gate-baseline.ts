@@ -565,6 +565,54 @@ try {
     assert.equal((await runs(sample.taskId)).length, 0);
   }
 
+  // ㉓ 合并预览 · 主检出的 info/attributes 给 *.txt 配了 CRLF 转换（第 3 轮审查 F1）：快照只认树里的
+  // .gitattributes，写出来的字节和平时检出的不是一份，门禁之前就拒，不许「快照绿、合进去红」。
+  {
+    const sample = await fixture("preview-info-attributes", { baseline: "merge_preview" });
+    writeFileSync(join(sample.repo, ".git", "info", "attributes"), "*.txt text eol=crlf\n");
+    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /换行 \/ 编码转换的（unrelated\.txt）/);
+    assert.equal(await wouldRun(sample), false);
+    const refused = await acceptTask(sample.taskId);
+    assert.equal(refused.accepted, false);
+    if (!refused.accepted) assert.equal(refused.reason, "accept_gate_preview_unavailable");
+    assert.equal((await runs(sample.taskId)).length, 0);
+  }
+
+  // ㉔ 合并预览 · 任务已含目标分支、不用合（第 3 轮审查 F2）：快照照样走封好的环境。全局配置里定义的
+  // smudge 没被屏蔽时先拒；用 info/attributes 屏蔽后放行，检出快照也不许调起它。
+  {
+    const sample = await fixture("preview-contained-sealed", { baseline: "merge_preview" });
+    writeFileSync(join(sample.repo, ".gitattributes"), "value.txt filter=preview-smudge\n");
+    writeFileSync(join(sample.repo, "value.txt"), "SAFE\n");
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-m", "main adds a filtered file");
+    git(sample.cwd, "merge", "--no-edit", "main");
+    const marker = join(root, "contained-smudge-ran");
+    const globalConfig = join(root, "contained.gitconfig");
+    writeFileSync(globalConfig, `[filter "preview-smudge"]\n\tsmudge = touch '${marker}'; cat\n\tclean = cat\n`);
+    const originalGlobal = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    try {
+      assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /过滤器（preview-smudge）/);
+      assert.equal(await wouldRun(sample), false);
+      writeFileSync(join(sample.repo, ".git", "info", "attributes"), "value.txt -filter\n");
+      assert.equal((await acceptGateState(sample.taskId)).baselineBlock, null);
+      assert.equal(await wouldRun(sample), true);
+      const target = git(sample.repo, "rev-parse", "main");
+      await acceptTask(sample.taskId);
+      await settled(sample.taskId);
+      const [row] = await runs(sample.taskId);
+      assert.equal(row!.status, "passed", row!.failure ?? "");
+      assert.equal(row!.previewBase, target);
+      assert.equal(row!.previewCommit, null, "已含目标分支：不合，测的就是分支那棵树");
+      assert.equal(existsSync(marker), false, "快照检出没有调起全局配置里的 smudge");
+      assert.equal((await taskRow(sample.taskId)).stage, "accepted");
+    } finally {
+      if (originalGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = originalGlobal;
+    }
+  }
+
   // ⑭ SHA-256 仓库也能预演：隔离目录按项目的对象格式建（与上面 SHA-1 的那份并存）。
   {
     const repo = join(root, "sha256-preview");
@@ -598,7 +646,8 @@ try {
 
   console.log(JSON.stringify({ branchDefault: true, containsRefuse: true, containsPass: true, previewCollision: true,
     previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true,
-    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true, rollbackFailure: true, trackedVendor: true, existingFilter: true, linkedVendor: true, stateFsmonitor: true }));
+    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true, rollbackFailure: true, trackedVendor: true, existingFilter: true, linkedVendor: true, stateFsmonitor: true,
+    infoAttributes: true, containedSealed: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

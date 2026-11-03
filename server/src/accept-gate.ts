@@ -282,8 +282,8 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
   let started: Awaited<ReturnType<typeof spawnAcceptGate>>;
   try {
     const previewCommit = await createGateSnapshot(plan.cwd, snapshotCwd, plan.source,
-      plan.baseline.previewTree && plan.baseline.previewBase
-        ? { targetCommit: plan.baseline.previewBase, tree: plan.baseline.previewTree } : undefined);
+      // 合并预览档一律走封好的快照（已含目标分支时 tree 为 null：不合，只在封好的环境里检出分支那棵树）。
+      plan.baseline.previewBase ? { targetCommit: plan.baseline.previewBase, tree: plan.baseline.previewTree } : undefined);
     if (previewCommit) appendGateLog(logPath, `[ash] preview: 快照里的合并结果 ${previewCommit}（tree ${plan.baseline.previewTree}）\n\n`);
     // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里。「测试压根没启动」这个结论
     // 整副面孔（不要改代码 / 出路是合分支或跳过）都压在这份事实上（第 2 轮审查 F1），所以

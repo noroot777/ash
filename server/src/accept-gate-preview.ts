@@ -181,7 +181,7 @@ async function previewFailure(stderr: string): Promise<string> {
 /** 预演「目标分支 ← 任务分支」那次合并。参数顺序与真合并一致（在目标分支上 `git merge` 任务分支）。 */
 export async function previewMerge(repo: string, targetCommit: string, head: string): Promise<PreviewMerge> {
   try {
-    const objects = join((await git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim(), "objects");
+    const objects = await objectsDir(repo);
     const carried = await carriedSettings(repo);
     const { gitDir, empty } = await isolatedGitDir(await objectFormat(repo));
     const { stdout } = await execFileText("git", [`--attr-source=${targetCommit}`, ...sealed(empty), ...carried,
@@ -247,6 +247,12 @@ export async function mergeDrivers(repo: string, targetCommit: string, head: str
   return [...used];
 }
 
+const treePaths = async (repo: string, tree: string): Promise<string[]> =>
+  (await git(repo, ["ls-tree", "-r", "--name-only", "-z", tree])).stdout.split("\0").filter(Boolean);
+
+const objectsDir = async (repo: string): Promise<string> =>
+  join((await git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim(), "objects");
+
 /**
  * 预演树里有没有平时检出要经过项目过滤器的文件（返回过滤器名）。快照里检出不执行它们（`sealedGit`），
  * 写出来的就是未经过滤的 blob，跟真合并之后主检出里的文件不一样，所以提前拒绝。问的是**整棵树**
@@ -257,7 +263,37 @@ export async function mergeDrivers(repo: string, targetCommit: string, head: str
 export async function checkoutFilters(repo: string, tree: string): Promise<string[]> {
   const defined = await definedPrograms(repo, "^filter\\..+\\.(clean|smudge|process)$");
   if (!defined.size) return [];
-  const paths = (await git(repo, ["ls-tree", "-r", "--name-only", "-z", tree])).stdout.split("\0").filter(Boolean);
-  const values = await attributeValues(repo, "filter", paths, tree);
+  const values = await attributeValues(repo, "filter", await treePaths(repo, tree), tree);
   return [...new Set(values.filter(value => defined.has(value)))];
+}
+
+/** 检出时由 git 内建完成、会改写文件字节的那几个属性。 */
+const CONVERSIONS = ["text", "eol", "crlf", "working-tree-encoding", "ident"];
+
+/**
+ * 封好的快照里检出这棵树，内建转换（换行、编码、`$Id$` 展开）会不会跟平时检出不一样（返回对不上
+ * 的路径）。快照只认树里的 `.gitattributes`，主检出的 `info/attributes`、全局 / 系统属性文件一概不读
+ * （它们不进克隆，读进来也违背「环境只含核定配置」），所以那些文件给出的转换在快照里不生效 —— 树
+ * 一样、字节不一样，门禁测的就不是合进去之后那份（第 1 轮审查 F1）。逐路径拿两边的属性对一遍：平时
+ * 检出那边按项目有效属性问，快照那边在同样空的隔离环境里只按树问；有一处不同就提前拒绝。换行相关
+ * 的配置（core.autocrlf / eol）两边是同一份（cloneSealedSnapshot 照项目有效值带过去），不用比。
+ */
+export async function conversionDrift(repo: string, tree: string): Promise<string[]> {
+  const paths = await treePaths(repo, tree);
+  if (!paths.length) return [];
+  const input = paths.join("\0") + "\0";
+  const args = ["check-attr", `--source=${tree}`, "-z", "--stdin", ...CONVERSIONS];
+  const usual = (await git(repo, args, input)).stdout;
+  const objects = await objectsDir(repo);
+  const { gitDir, empty } = await isolatedGitDir(await objectFormat(repo));
+  const snapshot = (await execFileText("git", [...sealed(empty), ...args],
+    { maxBuffer: MAX_BUFFER, input, env: { ...cleanEnv(empty), GIT_DIR: gitDir, GIT_OBJECT_DIRECTORY: objects } })).stdout;
+  if (usual === snapshot) return [];
+  const left = usual.split("\0");
+  const right = snapshot.split("\0");
+  const drifted = new Set<string>();
+  for (let i = 0; i + 2 < Math.max(left.length, right.length); i += 3) {
+    if (left[i] !== right[i] || left[i + 2] !== right[i + 2]) drifted.add(left[i] ?? right[i] ?? "");
+  }
+  return [...drifted];
 }
