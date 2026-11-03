@@ -65,10 +65,6 @@ const BUDGETS: Record<string, number> = {
   "turn/completion-protocol-normal": 1100,
   "turn/completion-reminder-free": 800,
   "turn/follow-up-reminder-free": 1000,
-  // 浏览器策略**不做条件省略**（误判漏注入的代价大于多发几百字），只压文本。
-  "browser/full-ungranted": 2300,
-  "browser/full-granted": 2300,
-  "browser/reminder-granted": 1100,
   "accept/gate-failure": 1450,
   // ── 动态段撑满的那一版（`STRESS`）：量的是**天花板**，不是典型流量 ───────────
   //    20 条是「典型上限」，100 条是「条数压力」。两个都要：第 2 轮审查就是靠 40/60/100
@@ -94,17 +90,18 @@ const BUDGETS: Record<string, number> = {
   "section/history-refs": 1550,
   // ── 投递态（`DELIVERED`）：真正发出去的那一条，片段相加之后的样子 ─────────────
   // 审查这几条在 2026-11-03 各涨了 198B：「跨回合的等待别交给内置后台」那一句（用户拍板
-  // 放宽，见 TARGETS 那两行）。
-  "delivered/review-dispatch": 14700,
-  "delivered/review-resume": 6950,
+  // 放宽，见 TARGETS 那两行）。同日摘掉全局浏览器策略，这一节每份各降 2258B（规划那份
+  // 发的是缩略版，降 1077B），上限随之下调、余量不变。
+  "delivered/review-dispatch": 12400,
+  "delivered/review-resume": 4650,
   // 证据清单读不出来那一轮：续跑正文里一个字都没有，全靠提醒把状态带到。
-  "delivered/review-resume-nomanifest": 6350,
+  "delivered/review-resume-nomanifest": 4050,
   // 目录名含「。」：比普通续跑多出用户引的那条旧地址，本轮入口必须照样在。
-  "delivered/review-resume-dotdir": 7100,
-  "delivered/repair": 6650,
+  "delivered/review-resume-dotdir": 4800,
+  "delivered/repair": 4350,
   // 熔断轮（同一谱系连续两轮没收口）：比上一条只多那一段指令（≤ 300B，逐字节核在
   // prompt-recurrence-budget.ts）。其余轮次的投递态由上一行原数钉着、一个字节没动。
-  "delivered/repair-breaker": 6950,
+  "delivered/repair-breaker": 4650,
   // ── 没有旧上下文的那几条首条消息（产出质量规则唯一的落脚处）─────────────────
   //
   // 四个入口各走一个拼装器，所以各有一份。**口径**：`fresh-*` 那两份量的是所有任务共有
@@ -114,14 +111,14 @@ const BUDGETS: Record<string, number> = {
   //
   // 审查那一份小得多，不止少了这两句：它的完成协议走 `verifying` 分支（没有验收辅路、
   // 没有执行者回归登记）。团队开台那份大，是 `LEAD_PREAMBLE` 本身的体积（派活哲学那一摞）。
-  // 规划那份小，是因为那条路刻意只有正文加一句，且浏览器策略发的是缩略版。
-  "delivered/fresh-run": 4200,
-  "delivered/fresh-review-run": 3550,
+  // 规划那份小，是因为那条路刻意只有正文加一句。
+  "delivered/fresh-run": 1900,
+  "delivered/fresh-review-run": 1250,
   // 这一条比其余几份大约 560B，是**真实的非空同伴告知**（`peerNoticeText`，第 1 轮审查
   // F1 之后换上的真实夹具）；地址已归一成 `<ROOT>`，所以这个数逐机稳定。
-  "delivered/invited-first": 4650,
-  "delivered/team-lead-first": 5900,
-  "delivered/plan-first": 1450,
+  "delivered/invited-first": 2350,
+  "delivered/team-lead-first": 3600,
+  "delivered/plan-first": 350,
   // ── MCP 工具清单：每一条都常驻执行者的每一个回合 ─────────────────────────────
   // 字段说明按 **SDK 真正发出去的那份 JSON Schema** 量（见采样器 `toolTexts`）。
   "mcp/accept_task": 1750,
@@ -175,7 +172,7 @@ const DERIVED = (id: string): boolean =>
 const LONG_PATH = (id: string): boolean => id.startsWith("deep/");
 
 /** 片段集合加起来的顶。单条都压着、总量却靠「多加几份样本」涨回去，也算退步。 */
-const TOTAL_BUDGET = 89_000;
+const TOTAL_BUDGET = 83_400;
 
 /**
  * 动态段的上限：`<撑满的那一版> - <同名 -bare 样本>`。
@@ -276,7 +273,6 @@ const DEDUP_ANCHORS: Array<{ anchor: string; twiceOk?: readonly string[] }> = [
   //（上一版把它们当成同一个入口，删掉了本轮那一份）。其余样本一律至多一次。
   { anchor: "执行者回归证据清单：", twiceOk: ["delivered/review-resume-dotdir"] },
   { anchor: "passed=true 且 exitCode=0" },     // 清单怎么读（只许由清单说明自己讲）
-  { anchor: "浏览器验证必须按以下顺序选择通道" }, // 全局浏览器策略
 ];
 
 /**
@@ -300,7 +296,6 @@ const REQUIRED: Array<{ id: string; must: Array<[string, string]>; forbid?: Arra
       ["证据清单入口", "执行者回归证据清单："],
       ["清单怎么算通过", "passed=true 且 exitCode=0"],
       ["latest 不许被旧通过顶替", "不能回退用旧的通过结果顶替"],
-      ["全局浏览器策略", "浏览器验证必须按以下顺序选择通道"],
       ["结论怎么上报", "report_stage"],
     ],
   },
@@ -314,7 +309,6 @@ const REQUIRED: Array<{ id: string; must: Array<[string, string]>; forbid?: Arra
       ["证据清单入口", "执行者回归证据清单："],
       ["清单怎么算通过", "passed=true 且 exitCode=0"],
       ["latest 不许被旧通过顶替", "不能回退用旧的通过结果顶替"],
-      ["全局浏览器策略", "浏览器验证必须按以下顺序选择通道"],
       ["结论怎么上报", "report_stage"],
     ],
   },
@@ -324,7 +318,6 @@ const REQUIRED: Array<{ id: string; must: Array<[string, string]>; forbid?: Arra
       ["本轮的证据状态", "回归证据清单不可用"],
       ["状态对应的动作", "把回归面写成留白"],
       ["报告格式契约", "报告开头必须"],
-      ["全局浏览器策略", "浏览器验证必须按以下顺序选择通道"],
       ["结论怎么上报", "report_stage"],
     ],
     forbid: [["指向不存在清单的入口", "执行者回归证据清单："]],
@@ -335,7 +328,6 @@ const REQUIRED: Array<{ id: string; must: Array<[string, string]>; forbid?: Arra
       ["类问题的边界判据", "这是类问题"],
       ["驳回/转出那条出路", "dispute_review"],
       ["完成协议", "complete_task"],
-      ["全局浏览器策略", "浏览器验证必须按以下顺序选择通道"],
     ],
   },
 ];
@@ -450,14 +442,15 @@ const TARGETS: Array<{ id: string; target: number; what: string; held: string }>
   },
   {
     // 2026-11-03 用户拍板 +198B（14317 → 14515）：容纳「跨回合的等待别交给内置后台」那一句。
-    id: "delivered/review-dispatch", target: 14_515, what: "首次派审的投递态",
-    held: "正文 + 完成协议 + 方向身份 + 全局浏览器策略（2.2KB，按需求不做条件省略）+ 后台等待警告。",
+    // 同日摘掉全局浏览器策略 −2258B（14515 → 12257）。
+    id: "delivered/review-dispatch", target: 12_257, what: "首次派审的投递态",
+    held: "正文 + 完成协议 + 方向身份 + 后台等待警告。",
   },
   {
     // 这一条**比上一轮大**：上一轮把整条提醒丢掉，续跑因此收不到清单读法（第 2 轮审查 F2）。
     // 多出来的那 1066B 是补回去的协议，不是胖出来的措辞。
-    // 2026-11-03 同上 +198B（6649 → 6847）。
-    id: "delivered/review-resume", target: 6_847, what: "断线续跑的投递态",
+    // 2026-11-03 同上 +198B（6649 → 6847）；同日摘掉全局浏览器策略 −2258B（6847 → 4589）。
+    id: "delivered/review-resume", target: 4_589, what: "断线续跑的投递态",
     held: "续跑正文刻意只有几行，清单入口与读法只能由每回合提醒带到；这部分不能再删。",
   },
 ];

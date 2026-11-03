@@ -75,10 +75,6 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     // 扫描义务摆在具体动作之前：先定「这一轮要扫到什么程度」，再说「先看 git status」。
     REVIEW_SWEEP_PROTOCOL + regression + "\n\n" +
     `先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
-    // 浏览器策略**不在这里拼**:正文是提前生成的,这里拼死的只能是一份「默认未授权」的
-    // 文本,而投递时读到的项目授权会被去重锚点挡在门外 —— 已经在项目设置里授权过的站点,
-    // 审查回合照样停下来等人点头,无人值守就断在这儿(第 6 链第 1 轮审查 P2)。
-    // 统一由投递点 withGlobalBrowserPolicy 贴那一份**带最新授权**的。
     REVIEW_VALIDATION_REQUIREMENT + "\n\n" +
     `用过 playwright 就在结束前清掉工作区产物；所有验证临时服务与浏览器进程都要停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}，截图按需放同一目录；证据不要 git add/commit。\n\n` +

@@ -10,7 +10,6 @@ import { dispatchRejection, executorOwnerScope } from "../auth/dispatch-gate.js"
 import { runEnvForOwner } from "../auth/run-env.js";
 import { canSeeProject } from "../auth/visibility.js";
 import { ANONYMOUS_ACTOR, SINGLE_ACTOR, type Actor } from "../auth/context.js";
-import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { db } from "../db/index.js";
 import { agents, projects, users, tasks } from "../db/schema.js";
 import { taskFileRoot } from "../file-browser.js";
@@ -101,7 +100,7 @@ export async function invokeChat(member: ChatMember, owner: string | null, promp
     signal.throwIfAborted();
     handle = executor.run({
       cwd,
-      prompt: withGlobalBrowserPolicy(prompt, "full"),
+      prompt,
       extraArgs: (purpose === "assistant" || purpose === "side-authorization") && executor.type === "claude"
         ? ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-chrome"] : undefined,
       env: withoutTurnIdentity({ ...env }),

@@ -48,7 +48,6 @@ import { appendSessionTrace, writeRunError } from "../transcript.js";
 import { isMonitorWakeTurn, recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET, leadFirstMessage } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
-import { browserGrantForProject, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { announceSessionNote } from "../session-notice.js";
 import { latestTeamLeadSession } from "./session-selection.js";
@@ -438,11 +437,11 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
   // (哪怕这次是被一条消息带起来的,前言也必须有 —— 否则它不知道自己是调度者)。
   // ws.fresh = 原 worktree 连分支一起没了、这次是重建的空目录,接回的调度者记忆
   // 还在但文件已经不在,必须打断这个连续性。
-  const rawMessage = resuming
+  const message = resuming
     ? LEAD_RESUMED + promptedText + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
     : leadFirstMessage({
       preamble: LEAD_PREAMBLE(taskId, cfg.worker),
-      // 开台这一条是「没有旧上下文的首条消息」,判据跟下面那句浏览器策略同源(`resuming`)。
+      // 开台这一条是「没有旧上下文的首条消息」(`!resuming`)。
       // 调度台不走审查链路,所以 `verifying` 恒假。
       craft: { freshContext: !resuming, verifying: false },
       objective,
@@ -450,21 +449,16 @@ async function openLead(taskId: string, rawText: string, kind: Kind, cell: Openi
     });
   const runEnv = { ...(await runEnvForTask(taskId, cfg.lead)), ASH_TASK_ID: taskId };
   await ex.prepareResume?.({ cwd: ws.path, sessionId: prev?.cliSessionId ?? undefined, env: runEnv });
-  // 授权现读、且读在开台之前的最后一刻:正文(rawMessage)拼好之后还隔着 runEnv 和
-  // prepareResume 两个 await,在那边就把授权拼死的话,用户在开台期间收回授权拦不住
-  // (同第 3 轮审查 P1 的续聊路径)。
   // 接回同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
   // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍（第 1 轮审查 F2,
   // 机制见 session-turns.ts 的 primeTurnStarts）。放在同步段之前:它要读库。
   if (resuming) await primeTurnStarts(prev!.id);
   // 正文图片的身份种子(读 trace,异步):放在同步段之前,同 orchestrator 那条路。
   const imageSeed = resuming ? await loadMarkdownImageSeed(taskId, prev!.id) : undefined;
-  const browserGrant = await browserGrantForProject(project.id);
   // 开台前的最后一道闸:这一句之后到 openResident 之间不再有 await。上面那几个 await
   // 期间可能来过「停止全组」,那时这台调度台还没出生、谁也杀不到它,停止只落在这一次开台
   // 的 cell.halted 上 —— 不在这里消费掉,就会把用户已经停下的团队又拉起来。
   if (cell.halted) throw new TeamOpenHalted();
-  const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full", browserGrant);
 
   const sessId = resuming ? prev!.id : id();
   // 起点从身份层分配（见 session-turns.ts 的 nextTurnStart）：接回同一行会话时,这一轮的起点

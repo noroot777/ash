@@ -21,7 +21,6 @@ const { parseChatReply } = await import("../src/chat/prompt.js");
 const { limitedChatInvoke } = await import("../src/chat/invocation-queue.js");
 const { mountChatRoutes } = await import("../src/chat/routes.js");
 const { SINGLE_ACTOR, setActor } = await import("../src/auth/context.js");
-const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
 await dbClient.executeMultiple(`
   CREATE TABLE chat_context_states (room_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'idle', error TEXT, updated_at TEXT NOT NULL);
   INSERT INTO chat_context_states VALUES ('legacy-failure', 'failed', '旧失败', '2026-09-01T00:00:00.000Z');
@@ -166,7 +165,7 @@ try {
   const histories = prepared.map((call) => call.prompt.split("【当前群较早历史摘要，仅供参考】")[1]!.split("【本次用户消息】")[0]);
   assert.equal(new Set(histories).size, 1);
   assert.ok(prepared.every((call) => call.prompt.includes(version.body)));
-  assert.ok(prepared.every((call) => estimateChatTokens(withGlobalBrowserPolicy(call.prompt, "full")) <= policy.inputTokens));
+  assert.ok(prepared.every((call) => estimateChatTokens(call.prompt) <= policy.inputTokens));
   const allOriginals = await db.select().from(chatMessages).where(eq(chatMessages.roomId, background.id));
   assert.equal(allOriginals.filter((message) => message.body.startsWith("KEEP-")).length, 23);
   console.log("✓ 接近阈值才预压缩；固定摘要供所有成员复用，后续小轮次不重复压缩，原文不删除");
@@ -196,7 +195,7 @@ try {
   assert.ok(foregroundSummaries.length > 1);
   assert.equal(new Set(foregroundSummaries.map((call) => call.prompt)).size, foregroundSummaries.length);
   const foregroundReplies = calls.filter((call) => !call.summary).slice(-3);
-  assert.ok(foregroundReplies.every((call) => estimateChatTokens(withGlobalBrowserPolicy(call.prompt, "full")) <= policy.inputTokens));
+  assert.ok(foregroundReplies.every((call) => estimateChatTokens(call.prompt) <= policy.inputTokens));
   assert.equal(new Set(foregroundReplies.map((call) => call.prompt.split("【当前群较早历史摘要，仅供参考】")[1]!.split("【本次用户消息】")[0])).size, 1);
   console.log("✓ 前台超预算兜底按完整消息分批整理；同群多成员去重，输入保持在估算预算内");
 
@@ -277,7 +276,7 @@ try {
   const tolerantManager = new ChatContextManager(async () => ({ text: '整理结果：\n{"summary":"KEEP-0 与 TASK-1 已确认","extra":"忽略"}' }), policy);
   const tolerantPrompt = await tolerantManager.prepare(tolerant, members[0]!, await captureChatHistory(tolerant.id), "继续", new AbortController().signal);
   assert.ok(tolerantPrompt.includes("KEEP-0 与 TASK-1 已确认"));
-  assert.ok(estimateChatTokens(withGlobalBrowserPolicy(tolerantPrompt, "full")) <= policy.inputTokens);
+  assert.ok(estimateChatTokens(tolerantPrompt) <= policy.inputTokens);
   assert.equal((await chatContextStatus(tolerant.id)).status, "idle");
   assert.equal((await contextState(tolerant.id))?.failedAt, null, "前台冷却期满后整理成功，清除旧失败时间");
   console.log("✓ 长历史前台整理接受带说明及额外字段的合法摘要，不再因输出包装阻塞回复");

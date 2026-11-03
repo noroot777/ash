@@ -64,10 +64,8 @@ export async function freezeFacts(taskId: string, checkFacts = false): Promise<T
  * 定论,**同步**。先消费内存标记(它只可能是这一回合的暂停/停止请求),再回落到上面查来
  * 的事实。
  *
- * 拆成「异步取事实 + 同步定论」两段,是为了让启动末段还能和别的异步活儿并行而不开窗口:
- * 典型的是浏览器授权 —— 它必须读在**最后一个 await 里**(读早了,这段查库的工夫里用户收回
- * 授权就拦不住),而停止标记必须消费在**最后一个同步点**(消费早了,之后收到的停止就会既杀
- * 不到也拦不住)。两条约束只有「并行取、同步定」能同时满足(第 6 链第 1 轮审查 P1)。
+ * 拆成「异步取事实 + 同步定论」两段,是因为停止标记必须消费在**最后一个同步点**(消费早了,
+ * 之后收到的停止就会既杀不到也拦不住),而查库的那半边事实只能在它之前的 await 里取。
  */
 export function takeFreeze(taskId: string, facts: TurnFreeze | null = null): TurnFreeze | null {
   const marked = takeStartFreeze(taskId);

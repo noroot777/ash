@@ -4,11 +4,13 @@ import {
   createInspectorShortcutSequence,
   hasInspectorShortcutTarget,
 } from "../inspector/shortcuts.ts";
+import { revealInspectorSection } from "../inspector/sections.ts";
 import { createKeyChordSequence } from "../lib/keyChord.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
+import { FOLLOW_UPS_SECTION_ID, FOLLOW_UPS_SHORTCUT } from "../task-detail/followUpsSection.ts";
 import { GO_CHORD_KEYS, GO_CHORD_PREFIX, isGoChordKey } from "./goChord.ts";
 
-// enabled 只关**列表导航那几颗单键**（j/k/f/c/r 和铺开态的 Esc/Enter）：它们要么改选中行、
+// enabled 只关**列表导航那几颗单键**（j/k/f/c/r/q 和铺开态的 Esc/Enter）：它们要么改选中行、
 // 要么按在主工作区的按钮上，换了界面就没有落点。`G …` 一族相反 —— 它的整个存在理由就是
 // 「在任何界面上都按得到」（见 goChord.ts），所以它排在 enabled 之前，聊天 / 助手 / 设置页
 // 照样认。护栏仍然有：在输入框里打字、命令面板开着、模态层盖着、带修饰键，一律不算数。
@@ -200,6 +202,12 @@ export function useWorkspaceShortcuts({
       if (event.key === "r" && !composerOpen) {
         event.preventDefault();
         clickVisibleRunAction();
+        return;
+      }
+      // Q 直达信息面板的「后续追问」。铺开态里详情被盖在下面，滚过去也看不见，所以不认；
+      // 眼下没有哪份 Inspector 有这一节（团队页、新建面板）就原样放过这颗键。
+      if (event.key === FOLLOW_UPS_SHORTCUT && !spreadOpen && revealInspectorSection(FOLLOW_UPS_SECTION_ID)) {
+        event.preventDefault();
       }
     };
     window.addEventListener("keydown", onKeyDown, true);

@@ -3,7 +3,6 @@ import type { ChatMember } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { chatRooms, chatSummaries } from "../db/schema.js";
 import { now } from "../util.js";
-import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import type { invokeChat } from "./execution.js";
 import { chatPrompt } from "./prompt.js";
 import { CHAT_CONTEXT_POLICY, SIDE_CHAT_CONTEXT_POLICY, estimateChatTokens, parseChatSummary, summaryPrompt, type ChatContextPolicy } from "./context-format.js";
@@ -67,7 +66,7 @@ export class ChatContextManager {
       sharedSignal.throwIfAborted();
       this.prewarmStopped.delete(room.id);
       if ((await contextState(room.id))?.status === "stopped") await setContextState(room.id, "idle");
-      const overhead = estimateChatTokens(withGlobalBrowserPolicy(format(member, tail, request), "full"));
+      const overhead = estimateChatTokens(format(member, tail, request));
       const policy = this.policyOf(room);
       const budget = policy.inputTokens - overhead - reserveTokens;
       if (budget <= policy.summaryTokens) {
@@ -138,7 +137,7 @@ export class ChatContextManager {
           recent += history.messages[--keep]!.tokens;
         }
         const previous = history.summary?.body ?? "";
-        const batchBudget = Math.min(policy.batchTokens, policy.inputTokens - estimateChatTokens(withGlobalBrowserPolicy(summaryPrompt(previous, [], policy.summaryTokens), "full")));
+        const batchBudget = Math.min(policy.batchTokens, policy.inputTokens - estimateChatTokens(summaryPrompt(previous, [], policy.summaryTokens)));
         const batch = [] as typeof history.messages;
         let batchTokens = 0;
         for (const message of history.messages.slice(0, keep)) {
