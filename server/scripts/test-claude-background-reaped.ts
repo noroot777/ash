@@ -9,6 +9,7 @@
 //    逐字讲过就不重发。体积与单源落款由 test-prompt-budget.ts 管，这里管判据与去重。
 //
 // 事件行序按事故 run 文件原样复刻（字段名、task_type、回执文案都是实测值）。
+import { spawnSync } from "node:child_process";
 import { db, makeTask, now, sessions, teardown } from "./monitors-fixture.js";
 
 const { ClaudeBackgroundTrace, backgroundReapedNotice } = await import("../src/claude-background-reaped.js");
@@ -26,9 +27,9 @@ const check = (ok: boolean, label: string, detail = "") => {
 };
 
 /** 像 claude-stream.ts 那样喂：先 `event()`，再逐块 `toolUse()`/`toolResult()`。 */
-const call = (trace: Trace, name: string, id: string) => {
-  trace.event({ type: "assistant", message: { content: [{ type: "tool_use", name, id }] } });
-  trace.toolUse(name, id);
+const call = (trace: Trace, name: string, id: string, input: Record<string, unknown> = {}) => {
+  trace.event({ type: "assistant", message: { content: [{ type: "tool_use", name, id, input }] } });
+  trace.toolUse(name, id, input);
 };
 const returned = (trace: Trace, id: string) => {
   trace.event({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id }] } });
@@ -89,14 +90,14 @@ async function main(): Promise<void> {
   }
   notified(mixed, "bg1", "completed");
   notified(mixed, "bg2", "failed");
-  call(mixed, "TaskStop", "toolu_stop");
-  notified(mixed, "bg3", "stopped"); // 回合进行中：智能体自己停的
+  call(mixed, "TaskStop", "toolu_stop", { task_id: "bg3" });
+  notified(mixed, "bg3", "stopped"); // 有指名它的 TaskStop 为证：智能体自己停的
   returned(mixed, "toolu_stop");
   result(mixed);
   notified(mixed, "bg4", "stopped"); // `result` 之后：CLI 收台时一并收走
   const m = mixed.tally().bash;
-  check(m?.total === 4 && m.finished === 2 && m.stopped === 1 && m.reaped === 1,
-    "completed/failed 算自己结束，回合中 stopped 算智能体停掉，result 之后的 stopped 算收走", JSON.stringify(m));
+  check(m?.total === 4 && m.finished === 2 && m.stopped === 1 && m.reaped === 1 && m.unknown === 0,
+    "completed/failed 算自己结束，有 TaskStop 为证的算智能体停掉，result 之后无人请求的 stopped 算收走", JSON.stringify(m));
   const mixedNotice = backgroundReapedNotice(mixed.tally());
   check(mixedNotice.includes("2 个自己结束了") && mixedNotice.includes("1 个被它自己停掉")
     && mixedNotice.includes("1 个回合结束时还在跑"), "时间线那句话分档说", mixedNotice);
@@ -139,10 +140,75 @@ async function main(): Promise<void> {
   check(resident2.tally().agent?.reaped === 1, "子代理自己的输出不把空档判成新回合（收台的 stopped 仍算收走）",
     JSON.stringify(resident2.tally()));
 
+  // ── ②′ 停因只按证据归档：没证据就说不明，且照样记（第 1 轮审查 R1）──────────────
+  const unclear = new ClaudeBackgroundTrace("unclear");
+  call(unclear, "Agent", "toolu_u");
+  started(unclear, "au", "toolu_u", "local_agent");
+  returned(unclear, "toolu_u");
+  notified(unclear, "au", "stopped"); // 回合进行中、没有任何 TaskStop
+  result(unclear);
+  const u = unclear.tally().agent;
+  check(u?.unknown === 1 && u.stopped === 0, "没人请求过的中途停止不说成「它自己停掉」", JSON.stringify(u));
+  const unclearNotice = backgroundReapedNotice(unclear.tally());
+  check(unclearNotice.includes("原因不明"), "停因不明也写时间线，不静默丢掉", JSON.stringify(unclearNotice));
+  check(!unclearNotice.includes("一并收走"), "没有被收走的就不说「已一并收走」", unclearNotice);
+
+  const late = new ClaudeBackgroundTrace("late");
+  call(late, "Bash", "toolu_l");
+  started(late, "bl", "toolu_l", "local_bash");
+  returned(late, "toolu_l");
+  call(late, "KillShell", "toolu_kill", { shell_id: "bl" }); // 旧名工具、旧名字段
+  returned(late, "toolu_kill");
+  result(late);
+  notified(late, "bl", "stopped"); // 停止请求在回合中，通知晚到 result 之后
+  check(late.tally().bash?.stopped === 1, "回合中请求的停止、通知晚到，仍算智能体停掉而不是收走",
+    JSON.stringify(late.tally()));
+
+  const orphan = new ClaudeBackgroundTrace("orphan");
+  call(orphan, "Agent", "toolu_o");
+  started(orphan, "ao", "toolu_o", "local_agent");
+  returned(orphan, "toolu_o");
+  orphan.event({ type: "system", subtype: "task_notification", task_id: "ao", status: "stopped",
+    summary: "Background agent \"查证\" didn't finish before the previous session ended" });
+  check(orphan.tally().agent?.reaped === 1, "来源明说是会话结束收走的，算被收走", JSON.stringify(orphan.tally()));
+
+  // ── ②″ 账本的身份与范围（第 1 轮审查 N1）─────────────────────────────────────
+  const again = new ClaudeBackgroundTrace("again");
+  call(again, "Agent", "toolu_a1");
+  started(again, "aa", "toolu_a1", "local_agent");
+  returned(again, "toolu_a1");
+  notified(again, "aa", "completed");
+  call(again, "SendMessage", "toolu_a2"); // 同一个子代理被续上，task_id 不变
+  started(again, "aa", "toolu_a2", "local_agent");
+  returned(again, "toolu_a2");
+  result(again);
+  const a = again.tally().agent;
+  check(a?.total === 2 && a.finished === 1 && a.reaped === 1, "同一 task_id 再起一次，两条命各算各的", JSON.stringify(a));
+
+  const turns = new ClaudeBackgroundTrace("turns");
+  call(turns, "Bash", "toolu_t1");
+  started(turns, "bt1", "toolu_t1", "local_bash");
+  returned(turns, "toolu_t1");
+  notified(turns, "bt1", "completed");
+  result(turns);
+  call(turns, "Bash", "toolu_t2"); // 常驻进程的下一回合
+  started(turns, "bt2", "toolu_t2", "local_bash");
+  returned(turns, "toolu_t2");
+  result(turns);
+  const t = turns.tally().bash;
+  check(t?.total === 1 && t.reaped === 1, "常驻进程：上一回合已了结的不混进「本轮」", JSON.stringify(t));
+
   // ── ⑥ 事前那一句：判据 + 去重 ─────────────────────────────────────────────
   check(backgroundWaitFor("claude", false) === BACKGROUND_WAIT_WARNING, "claude 的执行回合带警告句");
   check(backgroundWaitFor("claude", true) === "", "审查/验证回合不带");
   check(backgroundWaitFor("codex", false) === "", "codex 没有这两样内置后台，不带");
+  // 宽松模式（ASH_LAX_DONE）在模块求值时定，只能另起一个进程量：事实照说，只省掉 ash 的工具。
+  const lax = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
+    `const m = await import(${JSON.stringify(new URL("../src/run-prompts.ts", import.meta.url).href)});`
+    + `process.stdout.write(m.backgroundWaitFor("claude", false));`],
+  { env: { ...process.env, ASH_LAX_DONE: "1" }, encoding: "utf8" });
+  check(lax.status === 0 && lax.stdout.includes("唤不醒任务") && !lax.stdout.includes("start_monitor"),
+    "宽松模式仍说「别交给内置后台」，只是不指 ash 的工具", `${lax.stdout}${lax.stderr.slice(-300)}`);
   const turnParts = {
     invite: "", brief: "", handoffNotice: "", peerNotice: "",
     craft: { freshContext: false, verifying: false }, workspaceReset: "",

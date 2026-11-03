@@ -187,7 +187,7 @@ async function* claudeStreamEvents(
         // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
         if (block.type === "tool_use") claudeMonitors.toolUse(block.name, block.input, block.id);
         if (block.type === "tool_result") claudeMonitors.toolResult(block.tool_use_id, block.content);
-        if (block.type === "tool_use") background.toolUse(block.name, block.id);
+        if (block.type === "tool_use") background.toolUse(block.name, block.id, block.input);
         if (block.type === "tool_result") background.toolResult(block.tool_use_id);
         // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
         // 收工具结果里那几张 base64 截图 —— 它们不是正文语法,按块交代就是对的。
@@ -306,7 +306,7 @@ async function* claudeStreamEvents(
           // Monitor 的入参只有这儿有：system/task_started 只带 tool_use_id，要靠它回指
           // 才分得清「内置 Monitor」和「普通后台 Bash」。
           claudeMonitors.toolUse(block.name, block.input, block.id);
-          background.toolUse(block.name, block.id);
+          background.toolUse(block.name, block.id, block.input);
           push(nativeWork.call(block.name, block.input, block.id)
             ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
         }

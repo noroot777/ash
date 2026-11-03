@@ -30,18 +30,29 @@
 // 不看 `run_in_background` 入参（子代理默认就是后台的，入参里根本没有这个字段），也不看
 // 回执文案。
 //
-// ── 怎么认「被收走」────────────────────────────────────────────────────────
+// ── 怎么认「是谁停的」────────────────────────────────────────────────────────
 //
-// 流结束时还没有终态的 → 被收走（进程都没了）。另有一种：CLI 收台时自己补发 `stopped`，
-// 它落在回合的 `result` **之后**、下一段助手输出之前（内置 Monitor 那边实测的行序）——那
-// 也是被收走，不是智能体自己 TaskStop 的（那一下必然发生在某次助手输出之后、`result` 之前）。
-// 常驻进程（团队调度台）里后台任务跨回合活着、在空档里 `completed` 也是真跑完，照常算。
+// `stopped` 本身不说是谁停的（CLI 那边 TaskStop 和收台共用这个词，见 shared 的
+// `CLAUDE_MONITOR_ENDED_REASON`），所以**只按证据归档**，拿不准就说拿不准：
+//
+// - 之前有一次 TaskStop / KillShell 调用指名了它 → 智能体自己停的（不管通知早到晚到）。
+// - 来源明说是进程退出收走的（孤儿补报那两句原话）→ 被收走。
+// - 没人请求停它、通知落在回合 `result` 之后、下一段助手输出之前 → 被收走：那个空档里
+//   唯一在动的是 CLI 收台（内置 Monitor 那边实测的行序）。
+// - 流结束时还没有终态 → 被收走（进程都没了）。
+// - 其余（回合进行中停了，又没有任何人请求过）→ **原因不明**，照样记进时间线，不丢。
+//
+// 常驻进程（团队调度台）里后台任务跨回合活着、在空档里 `completed` 也是真跑完，照常算；
+// 下一回合一开始，上一回合已经了结的那些就清出账本，「本轮」不混进旧回合。
 //
 // ── 观测不到的档位（降级）──────────────────────────────────────────────────
 //
 // - **接管回来的流**（ash 重启后 detached 续读）从已消费位置之后读起，那之前的
-//   `task_started` 不会重放 → 那些任务这里看不见，不记账（宁可少说，不编）。事前警告兜底。
-// - **其它执行器**（codex 等）没有这套结构化的后台任务事件，不做；同样只有事前警告。
+//   `task_started` 不会重放 → 那些任务这里看不见，不记账（宁可少说，不编）。
+// - **记账是尽力而为**：流结束时写一次时间线，失败重试一次，仍失败只留日志 —— 事实只在
+//   这个进程的内存里，没有恢复账本（内置 Monitor 那套有，是因为它的投影本来就落库）。
+// - **其它执行器**（codex 等）没有这套结构化的后台任务事件，事后这一笔不做；事前那句警告
+//   也只发 claude（见 run-prompts.ts 的 `backgroundWaitFor`）。
 import { desc, eq } from "drizzle-orm";
 import { claudeMonitorStatus } from "@ash/shared/monitor-claude";
 import { isTaskRevoked } from "./claude-monitor-revoked.js";
@@ -51,26 +62,39 @@ import { appendTaskTimeline } from "./task-timeline.js";
 
 export type BackgroundKind = "agent" | "bash";
 
-/** 一种后台任务这一轮的结局分档。三档互斥，`total` 是三者之和。 */
+/** 一种后台任务这一轮的结局分档。各档互斥，`total` 是它们之和。 */
 export interface BackgroundTally {
   total: number;
   /** 自己结束的（completed / failed / 超时）。 */
   finished: number;
-  /** 回合还在进行时被智能体自己停掉的。 */
+  /** 智能体自己停掉的（有指名它的 TaskStop / KillShell 为证）。 */
   stopped: number;
   /** 回合结束时还在跑、随进程一并收走的。 */
   reaped: number;
+  /** 回合中途停了，没人请求过、来源也没说为什么。 */
+  unknown: number;
 }
+
+type Outcome = Exclude<keyof BackgroundTally, "total">;
 
 interface Tracked {
   kind: BackgroundKind;
   toolUseId: string;
   /** 发起它的那次调用已经返回、而它当时还没结束。 */
   background: boolean;
-  end: "finished" | "stopped" | "reaped" | null;
+  end: Outcome | null;
 }
 
 const KIND_LABEL: Record<BackgroundKind, string> = { agent: "后台子代理", bash: "后台 Bash" };
+
+/** 能停掉后台任务的工具。入参里指名目标的字段：`task_id`，旧名 `shell_id`。 */
+const STOP_TOOLS = new Set(["TaskStop", "KillShell", "KillBash"]);
+
+/**
+ * 来源**明说**是进程退出收走的那两句（claude 实测原文：后台 Bash / Monitor 一句，后台子代理
+ * 一句）。一般出现在下一代进程里，那时这里已不在账上；同一条流里真见到了也照认。
+ */
+const SESSION_ENDED_RE = /orphaned by a previous claude code process exit|didn't finish before the previous session ended/i;
 
 /**
  * 一条 claude 会话上的后台任务账本。每个 stream 一个实例，跟 `ClaudeMonitorTrace` 喂同样
@@ -81,8 +105,13 @@ export class ClaudeBackgroundTrace {
   private tools = new Map<string, string>();
   /** 已经收到 tool_result 的调用。 */
   private returned = new Set<string>();
+  /** 被 TaskStop / KillShell 指名过的后台任务 id。 */
+  private stopAsked = new Set<string>();
+  /** 当前这一条命。 */
   private tasks = new Map<string, Tracked>();
-  /** 回合 `result` 之后、下一段助手输出之前（见文件头「被收走」）。 */
+  /** 同一个 task_id 再起一次之前的那几条命（SendMessage 把停掉的子代理续上）——各算各的。 */
+  private earlier: Tracked[] = [];
+  /** 回合 `result` 之后、下一段助手输出之前（见文件头「是谁停的」）。 */
   private idle = false;
   private cliSessionId: string;
 
@@ -90,8 +119,12 @@ export class ClaudeBackgroundTrace {
     this.cliSessionId = cliSessionId ?? "";
   }
 
-  toolUse(name: unknown, toolUseId: unknown): void {
-    if (typeof name === "string" && typeof toolUseId === "string" && toolUseId) this.tools.set(toolUseId, name);
+  toolUse(name: unknown, toolUseId: unknown, input?: unknown): void {
+    if (typeof name !== "string" || typeof toolUseId !== "string" || !toolUseId) return;
+    this.tools.set(toolUseId, name);
+    if (!STOP_TOOLS.has(name) || !input || typeof input !== "object") return;
+    const { task_id: taskId, shell_id: shellId } = input as Record<string, unknown>;
+    for (const target of [taskId, shellId]) if (typeof target === "string" && target) this.stopAsked.add(target);
   }
 
   toolResult(toolUseId: unknown): void {
@@ -107,7 +140,10 @@ export class ClaudeBackgroundTrace {
     if (ev.type === "result") { this.idle = true; return; }
     // 只认主智能体的输出：后台子代理自己的 assistant 事件（带 parent_tool_use_id）在空档里
     // 照样会来，那不是「新的一回合开始了」。
-    if (ev.type === "assistant") { if (!ev.parent_tool_use_id) this.idle = false; return; }
+    if (ev.type === "assistant") {
+      if (!ev.parent_tool_use_id && this.idle) this.nextTurn();
+      return;
+    }
     if (ev.type !== "system") return;
     if (!this.cliSessionId && typeof ev.session_id === "string") this.cliSessionId = ev.session_id;
     const taskId = typeof ev.task_id === "string" ? ev.task_id : "";
@@ -116,7 +152,10 @@ export class ClaudeBackgroundTrace {
       const toolUseId = typeof ev.tool_use_id === "string" ? ev.tool_use_id : "";
       const kind = kindOf(ev.task_type, this.tools.get(toolUseId));
       if (!kind) return;
-      // 同一个 task_id 可以再起一次（SendMessage 把停掉的子代理续上），按新的一条命算。
+      const prior = this.tasks.get(taskId);
+      if (prior) this.earlier.push(prior);
+      // 新的一条命：上一条命挨过的 TaskStop 不能算到它头上。
+      this.stopAsked.delete(taskId);
       this.tasks.set(taskId, { kind, toolUseId, background: !!toolUseId && this.returned.has(toolUseId), end: null });
       return;
     }
@@ -125,15 +164,25 @@ export class ClaudeBackgroundTrace {
     if (!task || task.end) return;
     const status = claudeMonitorStatus(ev.status);
     if (status === "running") return;
-    task.end = status !== "stopped" ? "finished" : this.idle ? "reaped" : "stopped";
+    task.end = status !== "stopped" ? "finished"
+      : this.stopAsked.has(taskId) ? "stopped"
+      : SESSION_ENDED_RE.test(String(ev.summary ?? "")) || this.idle ? "reaped"
+      : "unknown";
+  }
+
+  /** 新回合开始：上一回合已了结的那些清出账本，还在跑的留着（它们仍可能在本代进程里被收走）。 */
+  private nextTurn(): void {
+    this.idle = false;
+    this.earlier = this.earlier.filter((task) => !task.end);
+    for (const [id, task] of this.tasks) if (task.end) this.tasks.delete(id);
   }
 
   /** 这一轮的后台任务分档。只数真正活过发起调用的那些。 */
   tally(): Partial<Record<BackgroundKind, BackgroundTally>> {
     const out: Partial<Record<BackgroundKind, BackgroundTally>> = {};
-    for (const task of this.tasks.values()) {
+    for (const task of [...this.earlier, ...this.tasks.values()]) {
       if (!task.background) continue;
-      const entry = out[task.kind] ??= { total: 0, finished: 0, stopped: 0, reaped: 0 };
+      const entry = out[task.kind] ??= { total: 0, finished: 0, stopped: 0, reaped: 0, unknown: 0 };
       entry.total += 1;
       entry[task.end ?? "reaped"] += 1;
     }
@@ -141,24 +190,30 @@ export class ClaudeBackgroundTrace {
   }
 
   /**
-   * 流结束那一刻调用（`executors/claude-stream.ts` 的 finally）。有被收走的才记一条；
-   * 全都在回合里正常结束的，是后台命令的正当用法，不去打扰。不抛。
+   * 流结束那一刻调用（`executors/claude-stream.ts` 的 finally）。有被收走或停因不明的才记一条；
+   * 全都在回合里正常结束的，是后台命令的正当用法，不去打扰。不抛；尽力而为（见文件头）。
    */
   async finish(): Promise<void> {
     const notice = backgroundReapedNotice(this.tally());
     this.tasks.clear();
-    if (!notice || !this.cliSessionId || dbClient.closed) return;
-    try {
-      const home = (await db
-        .select({ id: sessions.id, taskId: sessions.taskId })
-        .from(sessions)
-        .where(eq(sessions.cliSessionId, this.cliSessionId))
-        .orderBy(desc(sessions.startedAt))).at(0);
-      if (!home || isTaskRevoked(home.taskId)) return;
-      await appendTaskTimeline(home.taskId, notice, { sessionId: home.id });
-    } catch (e) {
-      console.warn(`[ash] 后台任务收尾记账失败（session=${this.cliSessionId}）:`, e);
+    this.earlier = [];
+    if (!notice || !this.cliSessionId) return;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      if (dbClient.closed) return;
+      try {
+        const home = (await db
+          .select({ id: sessions.id, taskId: sessions.taskId })
+          .from(sessions)
+          .where(eq(sessions.cliSessionId, this.cliSessionId))
+          .orderBy(desc(sessions.startedAt))).at(0);
+        if (!home || isTaskRevoked(home.taskId)) return;
+        if (await appendTaskTimeline(home.taskId, notice, { sessionId: home.id })) return;
+      } catch (e) {
+        if (attempt === 2) console.warn(`[ash] 后台任务收尾记账失败（session=${this.cliSessionId}）:`, e);
+      }
+      if (attempt === 1) await new Promise((r) => setTimeout(r, 200));
     }
+    console.warn(`[ash] 后台任务收尾记账没写进时间线（session=${this.cliSessionId}），这条说明丢了`);
   }
 }
 
@@ -173,25 +228,28 @@ function kindOf(taskType: unknown, tool: string | undefined): BackgroundKind | n
 }
 
 /**
- * 时间线上那句话。一个都没被收走就不说（返回空串）。
+ * 时间线上那句话。没有被收走、也没有停因不明的，就不说（返回空串）。
  *
- * 分档照抬内置 Monitor 那句的教训（第 4 轮审查 N1）：自己跑完的和被收走的不能说成同一件
- * 事；结论对所有档一样——通知只注回智能体自己的会话，任务不会被唤醒。
+ * 分档照抬内置 Monitor 那句的教训（第 4 轮审查 N1）：自己跑完的、智能体停掉的、被收走的、
+ * 说不清的，各说各的；结论对所有档一样——通知只注回智能体自己的会话，任务不会被唤醒。
  */
 export function backgroundReapedNotice(tally: Partial<Record<BackgroundKind, BackgroundTally>>): string {
   const kinds = (Object.keys(KIND_LABEL) as BackgroundKind[]).filter((k) => tally[k]?.total);
-  if (!kinds.some((k) => tally[k]!.reaped > 0)) return "";
+  const reaped = kinds.some((k) => tally[k]!.reaped > 0);
+  if (!reaped && !kinds.some((k) => tally[k]!.unknown > 0)) return "";
   const parts = kinds.map((k) => {
-    const { total, finished, stopped, reaped } = tally[k]!;
-    if (reaped === total) return `${total} 个${KIND_LABEL[k]}，回合结束时${total > 1 ? "全都" : ""}还在跑`;
+    const { total, finished, stopped, reaped: gone, unknown } = tally[k]!;
+    if (gone === total) return `${total} 个${KIND_LABEL[k]}，回合结束时${total > 1 ? "全都" : ""}还在跑`;
     const buckets = [
       finished ? `${finished} 个自己结束了` : "",
       stopped ? `${stopped} 个被它自己停掉` : "",
-      reaped ? `${reaped} 个回合结束时还在跑` : "",
+      unknown ? `${unknown} 个中途停了、原因不明` : "",
+      gone ? `${gone} 个回合结束时还在跑` : "",
     ].filter(Boolean);
     return `${total} 个${KIND_LABEL[k]}（${buckets.join("、")}）`;
   });
-  return `本轮智能体起了 ${parts.join("；")}。还在跑的那些已随智能体进程一并收走——`
+  return `本轮智能体起了 ${parts.join("；")}。`
+    + (reaped ? "还在跑的那些已随智能体进程一并收走——" : "")
     + `它们的完成通知只注回智能体自己的会话，从来不会唤醒任务。`
     + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。`;
 }
