@@ -251,6 +251,38 @@ async function main(): Promise<void> {
   check(g?.total === 2 && g.stopped === 1 && g.reaped === 1, "旧停止回执不让续上的那条命也算「它自己停掉」", JSON.stringify(g));
   check(backgroundReapedNotice(regen.tally()).includes("一并收走"), "续上那条命被收走照样写时间线");
 
+  // 续上之后旧那条命的完成通知才到：按通知自带的 tool_use_id 结算各自那条命（第 3 次审查 R1）。
+  // 不带 tool_use_id 的，给最早还没了结的那条——续上只发生在上一条命停了之后。
+  for (const withId of [true, false]) {
+    const both = new ClaudeBackgroundTrace(`both-${withId}`);
+    call(both, "Agent", "toolu_first");
+    started(both, "same", "toolu_first", "local_agent");
+    returned(both, "toolu_first");
+    call(both, "SendMessage", "toolu_second");
+    started(both, "same", "toolu_second", "local_agent");
+    returned(both, "toolu_second");
+    for (const id of ["toolu_first", "toolu_second"]) {
+      both.event({ type: "system", subtype: "task_notification", task_id: "same", status: "completed",
+        ...(withId ? { tool_use_id: id } : {}) });
+    }
+    result(both);
+    const b = both.tally().agent;
+    check(b?.total === 2 && b.finished === 2, `两条命都完成了就都算自己结束（通知${withId ? "带" : "不带"} tool_use_id）`,
+      JSON.stringify(b));
+    check(backgroundReapedNotice(both.tally()) === "", `都完成了不写「被收走」（通知${withId ? "带" : "不带"} tool_use_id）`);
+  }
+  const lateOld = new ClaudeBackgroundTrace("late-old");
+  call(lateOld, "Agent", "toolu_o1");
+  started(lateOld, "lo", "toolu_o1", "local_agent");
+  returned(lateOld, "toolu_o1");
+  call(lateOld, "SendMessage", "toolu_o2");
+  started(lateOld, "lo", "toolu_o2", "local_agent");
+  returned(lateOld, "toolu_o2");
+  lateOld.event({ type: "system", subtype: "task_notification", task_id: "lo", status: "completed", tool_use_id: "toolu_o1" });
+  result(lateOld);
+  const lo = lateOld.tally().agent;
+  check(lo?.finished === 1 && lo.reaped === 1, "旧那条命的迟到通知不替新那条命报完成", JSON.stringify(lo));
+
   // ── ②⁗ 常驻进程的回合边界：清账前先把该说的说出去，调用索引不跨回合累积（第 2 轮审查 N1/N2）
   const residentCli = "resident-boundary";
   await db.insert(sessions).values({

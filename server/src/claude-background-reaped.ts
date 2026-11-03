@@ -39,7 +39,7 @@
 // - 有一次 TaskStop / KillShell 指名了它、**且回执成功**→ 智能体自己停的（不管通知早到晚到）。
 //   只发了请求不算：回执带 `is_error`（权限拒绝、目标不存在）就当它没停成，按下面几条定。
 //   指名的是**发请求那一刻的那条命**：子代理被 SendMessage 续上后 task_id 不变，旧请求的
-//   回执哪怕晚到，也只结算旧的那条命。
+//   回执哪怕晚到，也只结算旧的那条命。终态通知同理，按它自带的 `tool_use_id` 认是哪一条命。
 // - 没人请求停它、通知落在回合 `result` 之后、下一段助手输出之前 → 被收走：那个空档里
 //   唯一在动的是 CLI 收台（内置 Monitor 那边实测的行序）。
 // - 流结束时还没有终态 → 被收走（进程都没了）。
@@ -82,7 +82,9 @@ export interface BackgroundTally {
 type Outcome = Exclude<keyof BackgroundTally, "total">;
 
 interface Tracked {
+  taskId: string;
   kind: BackgroundKind;
+  /** 发起这一条命的那次调用——同一个 task_id 被续上时，靠它分清是哪一条命的事件。 */
   toolUseId: string;
   /** 发起它的那次调用已经返回、而它当时还没结束。 */
   background: boolean;
@@ -152,7 +154,7 @@ export class ClaudeBackgroundTrace {
   toolResult(toolUseId: unknown, isError = false): void {
     if (typeof toolUseId !== "string" || !toolUseId) return;
     this.returned.add(toolUseId);
-    for (const task of this.tasks.values()) {
+    for (const task of this.runs()) {
       if (task.toolUseId === toolUseId && !task.end) task.background = true;
     }
     const targets = this.stopCalls.get(toolUseId);
@@ -185,11 +187,13 @@ export class ClaudeBackgroundTrace {
       if (!kind) return;
       const prior = this.tasks.get(taskId);
       if (prior) this.earlier.push(prior);
-      this.tasks.set(taskId, { kind, toolUseId, background: !!toolUseId && this.returned.has(toolUseId), end: null });
+      this.tasks.set(taskId, {
+        taskId, kind, toolUseId, background: !!toolUseId && this.returned.has(toolUseId), end: null,
+      });
       return;
     }
     if (ev.subtype !== "task_notification") return;
-    const task = this.tasks.get(taskId);
+    const task = this.runOf(taskId, typeof ev.tool_use_id === "string" ? ev.tool_use_id : "");
     if (!task || task.end) return;
     const status = claudeMonitorStatus(ev.status);
     if (status === "running") return;
@@ -213,11 +217,11 @@ export class ClaudeBackgroundTrace {
    */
   private nextTurn(): void {
     this.idle = false;
-    const settled = [...this.earlier, ...this.tasks.values()].filter((task) => task.end);
+    const settled = this.runs().filter((task) => task.end);
     this.report(backgroundReapedNotice(tallyOf(settled)));
     this.earlier = this.earlier.filter((task) => !task.end);
     for (const [id, task] of this.tasks) if (task.end) this.tasks.delete(id);
-    const live = new Set([...this.earlier, ...this.tasks.values()].map((task) => task.toolUseId));
+    const live = new Set(this.runs().map((task) => task.toolUseId));
     for (const id of this.returned) {
       if (live.has(id)) continue;
       this.returned.delete(id);
@@ -225,9 +229,24 @@ export class ClaudeBackgroundTrace {
     }
   }
 
+  private runs(): Tracked[] {
+    return [...this.earlier, ...this.tasks.values()];
+  }
+
+  /**
+   * 终态通知是哪一条命的。通知带着 `tool_use_id` 就只认那一条：续上之后，旧那条命迟到的
+   * 完成通知不能结算到新那条命头上（新那条命真正的终态反倒会被当成重复丢掉）。没带的，
+   * 给同一 task_id 下最早还没了结的那条：续上只发生在上一条命停了之后，先了结的必然是它。
+   */
+  private runOf(taskId: string, toolUseId: string): Tracked | undefined {
+    const same = this.runs().filter((task) => task.taskId === taskId);
+    if (toolUseId) return same.find((task) => task.toolUseId === toolUseId);
+    return same.find((task) => !task.end) ?? same.at(-1);
+  }
+
   /** 这一轮的后台任务分档。只数真正活过发起调用的那些。 */
   tally(): Partial<Record<BackgroundKind, BackgroundTally>> {
-    return tallyOf([...this.earlier, ...this.tasks.values()]);
+    return tallyOf(this.runs());
   }
 
   /**
