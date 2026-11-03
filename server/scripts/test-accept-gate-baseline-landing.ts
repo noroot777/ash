@@ -283,6 +283,32 @@ try {
     git(sample.repo, "config", "--remove-section", "filter.late");
   }
 
+  // ㊶ 最终合并 · 写文件写到一半失败（第 6 轮审查 F1：一个目录没有写权限，`a.txt` 已经写成新的、
+  // `locked/z.txt` 写不进去）：这次写下的按原样放回，回执说的就是检出现在的样子，分支和索引都没动。
+  {
+    const sample = await fixture("landing-partial-write", { baseline: "merge_preview" });
+    mkdirSync(join(sample.repo, "locked"));
+    for (const file of ["a.txt", "locked/z.txt"]) writeFileSync(join(sample.repo, file), "old\n");
+    git(sample.repo, "add", "a.txt", "locked/z.txt");
+    git(sample.repo, "commit", "-qm", "main adds two files");
+    git(sample.cwd, "merge", "-q", "--no-edit", "main");
+    for (const file of ["a.txt", "locked/z.txt"]) writeFileSync(join(sample.cwd, file), "new\n");
+    git(sample.cwd, "commit", "-qam", "task rewrites both");
+    const before = git(sample.repo, "rev-parse", "main");
+    let outcome: Awaited<ReturnType<typeof landGuarded>>;
+    try {
+      outcome = await landGuarded(sample, () => chmodSync(join(sample.repo, "locked"), 0o555));
+    } finally { chmodSync(join(sample.repo, "locked"), 0o755); }
+    assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
+    if (!outcome.landed.ok) {
+      assert.match(outcome.landed.message, /失败[^]*目标分支没动，检出里的文件和合并之前一样（这次写下的已经按原样放回）/);
+    }
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+    assert.equal(readFileSync(join(sample.repo, "a.txt"), "utf8"), "old\n", "已经写成新的那个放回去了");
+    assert.equal(readFileSync(join(sample.repo, "locked/z.txt"), "utf8"), "old\n");
+    assert.equal(git(sample.repo, "status", "--porcelain"), "", "索引与工作区和合并之前一样");
+  }
+
   // ㊲ 合并预览 · 门禁跑着的时候，目标检出里一个这次合并不改的文件被存成另一种换行再暂存（第 5 轮
   // 复审 F2）：树、配置、`git status` 都没变，但字节不是测过的那份 —— 旧绿不拿来合，验收不通过。
   {
@@ -309,7 +335,7 @@ try {
 
   console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
-    hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true }));
+    hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

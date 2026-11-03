@@ -2,10 +2,10 @@
 // 目标分支所在的提交 + 测过的物理内容）时转到这里。
 //
 // 不变量：落下的就是门禁测过的那棵树、落在被测时的目标提交之上，目标检出里的字节就是快照里测过的那份；
-// 落不成就**什么都不动**。所以结果在任何检出之外生成（`commit-tree`，树就是测过的那棵），再只用
-// 「快进到它」发布 —— 检出里 `merge --ff-only`，没有检出时带旧值的 `update-ref`。两种发布要么整份落下、
-// 要么原样失败，失败不需要撤回，也就不会把期间另一个终端提交到目标分支上的东西一并撤掉（第 4 轮复审
-// F1：旧做法先在用户检出里真合、树不对再 `reset --hard` 回合并前，连带抹掉了外部提交）。
+// 落不成就**不动目标分支**。所以结果在任何检出之外生成（`commit-tree`，树就是测过的那棵），再只用
+// 「快进到它」发布 —— 检出里改文件再带旧值挪分支，没有检出时带旧值的 `update-ref`。失败时只把这次写进
+// 检出的文件按备份放回，放不回的如实列出，不会把期间另一个终端提交到目标分支上的东西一并撤掉（第 4 轮
+// 复审 F1：旧做法先在用户检出里真合、树不对再 `reset --hard` 回合并前，连带抹掉了外部提交）。
 //
 // 发布这几条 git 一律不调用户钩子、不调 fsmonitor（landingGit）：门禁就是这一档的检查，`post-merge`
 // 之类在发布那一刻再改一遍目标分支或文件，落下的就又不是测过的那份（第 5 轮复审 F1 实测：钩子落了
@@ -100,14 +100,25 @@ async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to:
       + "照现在的配置写出来的文件就不是测过的那份，所以这次没有合并，目标分支没动。重新验收会按现在的配置重新跑门禁。");
   }
   const moved = await sealedMove(cwd, settings, guard.target, to, guard.tree, publish)
-    .catch((error: unknown) => ({ ok: false as const, stage: "blocked" as const, message: gitError(error), restored: undefined }));
+    .catch((error: unknown) => ({ ok: false as const, stage: "blocked" as const, message: gitError(error), left: [] }));
   if (moved.ok) return null;
-  if (moved.stage === "publish") {
-    return refusal(names, moved.message + (moved.restored ? "检出里的文件已经退回到合并之前。"
-      : `另外，检出里的文件没能退回：它们现在是测过的结果那份，索引和分支还在 ${guard.target.slice(0, 12)}，请核对后手动处理。`));
+  if (moved.stage === "locked") return refusal(names, `${moved.message}，目标分支和工作区都没动。处理完再重新验收。`);
+  if (moved.stage === "index") {
+    return refusal(names, `目标分支 ${names.targetBranch} 已经挪到 ${to.slice(0, 12)}、${cwd} 里的文件也已经是测过的那份，`
+      + `但把新索引换进去失败了（${moved.message}）：索引还停在合并之前，\`git status\` 会把这次的改动显示成未暂存。`
+      + "在那个检出里跑一次 `git reset -q`（只改索引、不动文件）就对齐了，再重新验收。");
   }
-  return refusal(names, `${moved.stage === "locked" ? moved.message : `把测过的改动写进 ${cwd} 失败（${moved.message}）`}，`
-    + "目标分支和工作区都没动。处理完再重新验收。");
+  const what = moved.stage === "publish" ? moved.message : `把测过的改动写进 ${cwd} 失败（${moved.message}），目标分支没动，`;
+  return refusal(names, what + leftover(moved.left, guard.target));
+}
+
+/** 写文件失败之后检出是什么样：`left` 是没能回到合并之前那份的路径（git-accept-rollback.ts）。 */
+function leftover(left: readonly string[], base: string): string {
+  if (!left.length) return "检出里的文件和合并之前一样（这次写下的已经按原样放回）。处理完再重新验收。";
+  const shown = left.slice(0, 10).join("、") + (left.length > 10 ? ` 等 ${left.length} 个` : "");
+  return `但检出里有 ${left.length} 个文件没能回到合并之前的样子：${shown}。索引和分支还在 ${base.slice(0, 12)}，`
+    + "这些文件现在可能是测过的新内容、写了一半或已被删掉，请核对后手动处理（取回旧内容用 `git checkout HEAD -- <路径>`，"
+    + "合并新增的文件直接删掉），再重新验收。";
 }
 
 /**

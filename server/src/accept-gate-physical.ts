@@ -40,7 +40,7 @@ const zList = async (repo: string, args: string[]) => (await readOnlyGit(repo, a
  * 0654 是同一个值，快照里 `./check.sh` 跑得起来，合进去之后拥有者却没有执行权限）；写位不记，它不改变
  * 读到什么、跑不跑得起来。
  */
-async function entryOf(path: string): Promise<string> {
+export async function entryOf(path: string): Promise<string> {
   const stat = await lstat(path).catch(() => null);
   if (!stat) return "missing";
   if (stat.isSymbolicLink()) return `link:${await readlink(path)}`;

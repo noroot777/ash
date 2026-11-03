@@ -446,7 +446,7 @@ try {
     } finally { process.env.PATH = path; }
     assert.equal(existsSync(marker), true, "外部提交确实插在了挪分支之前");
     assert.equal(landed.ok, false);
-    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了[^]*已经退回/);
+    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了[^]*已经按原样放回/);
     assert.equal(git(sample.repo, "log", "-1", "--format=%s", "main"), "external", "外部提交原样留在目标分支上");
     assert.equal(existsSync(join(sample.repo, "use-b.js")), false, "ash 写进检出的文件退回去了");
     assert.equal(git(sample.repo, "status", "--porcelain"), "");
