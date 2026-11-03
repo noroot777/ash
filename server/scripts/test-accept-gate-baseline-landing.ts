@@ -398,10 +398,11 @@ try {
     }
   }
 
-  // ㊿ 最终合并 · 放回时父目录已被换成指向项目外的链（第 6 轮审查第 4 轮 F1）：挪分支被拒的同时另一个终端
-  // 把 `src` 挪走、原地换成指向项目外空目录的链。放回不许顺着链写到项目外，没放回的照实报，原样备份留给人。
-  {
-    const sample = await fixture("landing-restore-swapped-parent", { baseline: "merge_preview" });
+  // ㊿ 最终合并 · 放回时 `src` 被另一个终端换掉（第 6 轮审查第 4、5 轮 F1）：挪分支被拒、开始放回之前换成
+  // 指向项目外的链 / 换成另一个真目录，或者放回途中（刚把一个文件链回去之后）换成指向项目外的链。三种都
+  // 不许动到项目外和别人的文件；没放回的照实报，原样备份（MANIFEST.json）留给人。
+  for (const when of ["link-before", "dir-before", "link-during"] as const) {
+    const sample = await fixture(`landing-restore-swapped-${when}`, { baseline: "merge_preview" });
     mkdirSync(join(sample.repo, "src"));
     writeFileSync(join(sample.repo, "src", "a.txt"), "base\n");
     git(sample.repo, "add", "src");
@@ -411,23 +412,48 @@ try {
     writeFileSync(join(sample.cwd, "src", "added.txt"), "added\n");
     git(sample.cwd, "add", "-A");
     git(sample.cwd, "commit", "-qm", "task edits src");
-    const outside = join(root, "swapped-parent-outside");
+    const outside = join(root, `swapped-${when}-outside`);
     mkdirSync(outside);
+    // 项目外预先有别人的文件：放回途中那种照审查的样本放同名的 a.txt；另外两种只放 added.txt，
+    // a.txt 一旦被放到项目外就看得出来。
+    const theirs = when === "link-during" ? ["a.txt", "added.txt"] : ["added.txt"];
+    for (const name of theirs) writeFileSync(join(outside, name), "unrelated draft\n");
     const real = `GIT -C '${sample.repo}'`;
     const src = join(sample.repo, "src");
-    const bin = wrapGit("swapped-parent", " update-ref -m ash accept",
+    const swap = when === "dir-before" ? `mv '${src}' '${src}-saved' && mkdir '${src}' && echo third > '${src}/a.txt'`
+      : `mv '${src}' '${src}-saved' && ln -s '${outside}' '${src}'`;
+    const bin = wrapGit(`swapped-${when}`, " update-ref -m ash accept",
       `c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"`
-      + ` && mv '${src}' '${src}-saved' && ln -s '${outside}' '${src}'`);
-    const { landed } = await withPath(bin, arm => landGuarded(sample, arm));
+      + (when === "link-during" ? "" : ` && ${swap}`));
+    // 放回途中：放回子进程里第一次把 a.txt 链回去之后（真调用已成功），插进另一个终端的那两步。
+    const preload = join(root, `swapped-${when}.cjs`);
+    writeFileSync(preload, `const fs = require("fs"); const link = fs.linkSync; let fired = false;
+fs.linkSync = function (from, to) { const result = link.apply(this, arguments);
+  if (!fired && String(to) === "a.txt") { fired = true; fs.renameSync(${JSON.stringify(src)}, ${JSON.stringify(`${src}-saved`)});
+    fs.symlinkSync(${JSON.stringify(outside)}, ${JSON.stringify(src)}); }
+  return result; };\n`);
+    const options = process.env.NODE_OPTIONS;
+    let outcome: Awaited<ReturnType<typeof landGuarded>>;
+    try {
+      outcome = await withPath(bin, arm => landGuarded(sample, () => {
+        arm();
+        if (when === "link-during") process.env.NODE_OPTIONS = `${options ?? ""} --require=${preload}`;
+      }));
+    } finally { process.env.NODE_OPTIONS = options; }
+    const { landed } = outcome;
     assert.equal(landed.ok, false, JSON.stringify(landed));
-    assert.deepEqual(execFileSync("ls", ["-A", outside], { encoding: "utf8" }), "", "项目外什么都没写");
+    assert.equal(execFileSync("ls", ["-A", outside], { encoding: "utf8" }), theirs.map(name => `${name}\n`).join(""),
+      `${when}: 项目外没多出、也没少了东西`);
+    for (const name of theirs) assert.equal(readFileSync(join(outside, name), "utf8"), "unrelated draft\n", `${when}: 项目外的文件没被碰`);
     const message = landed.ok ? "" : landed.message;
-    assert.match(message, /没能回到合并之前的样子[^]*src\/a\.txt[^]*src\//);
-    const kept = /原样留在 (.+?)，里面的 MANIFEST\.txt/.exec(message)?.[1] ?? "";
-    assert.match(readFileSync(join(kept, "MANIFEST.txt"), "utf8"), /\tsrc\/a\.txt\n/, "原样备份留着");
-    const index = /^(\d+)\tsrc\/a\.txt$/m.exec(readFileSync(join(kept, "MANIFEST.txt"), "utf8"))?.[1] ?? "";
-    assert.equal(readFileSync(join(kept, index), "utf8"), "base\n", "备份里是改之前那份");
-    assert.equal(readFileSync(join(`${src}-saved`, "a.txt"), "utf8"), "task\n", "挪走的那份没被碰");
+    assert.match(message, /没能回到合并之前的样子[^]*src\/a\.txt[^]*src\//, when);
+    const kept = /原样留在 (.+?)，里面的 MANIFEST\.json/.exec(message)?.[1] ?? "";
+    const manifest = JSON.parse(readFileSync(join(kept, "MANIFEST.json"), "utf8")) as Record<string, string>;
+    const index = Object.keys(manifest).find(key => manifest[key] === "src/a.txt") ?? "";
+    assert.equal(readFileSync(join(kept, index), "utf8"), "base\n", `${when}: 备份里是改之前那份`);
+    if (when === "dir-before") assert.equal(readFileSync(join(src, "a.txt"), "utf8"), "third\n", "换上来的目录里的文件没被碰");
+    else assert.equal(readFileSync(join(`${src}-saved`, "a.txt"), "utf8"), when === "link-during" ? "base\n" : "task\n",
+      `${when}: 挪走的那个目录里只可能是放回的原文件或这次写下的那份`);
     rmSync(kept, { recursive: true, force: true });
   }
 

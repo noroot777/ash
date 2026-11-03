@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { type CheckoutSettings, readOnlyGit, sealedGitEnv } from "./accept-gate-preview.js";
 import { execFileText as exec } from "./exec.js";
-import { backupPaths, restoreOwned } from "./git-accept-rollback.js";
+import { backupPaths, landedIdentities, restoreOwned } from "./git-accept-rollback.js";
 
 const MAX_BUFFER = 32 * 1024 * 1024;
 
@@ -80,7 +80,7 @@ async function atTree(sealed: Awaited<ReturnType<typeof sealedCheckout>>, attrs:
 
 /**
  * 失败回执。`left` = 没能回到改之前那份的路径（空 = 检出和改之前一样）；那时原样备份不删，
- * `backup` 是它的位置（里面的 MANIFEST.txt 写着每个备份文件对应检出里哪个路径）。`index` 这一档 = 分支已经挪了、
+ * `backup` 是它的位置（里面的 MANIFEST.json 写着每个备份文件对应检出里哪个路径）。`index` 这一档 = 分支已经挪了、
  * 文件也是新的那份，只有索引没换上（还停在改之前）。
  */
 export type SealedMove =
@@ -148,8 +148,8 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
       keep = await mkdtemp(join(dirname(index), "ash-publish-backup-"));
       const backup = await backupPaths(checkout, changed, keep);
       // 放回本身也不抛：放不成的路径都算「没回到原样」。
-      undo = async () => restoreOwned(checkout, backup, await atTree(env, attrs, to, changed).catch(() => new Set<string>()))
-        .catch(() => changed);
+      undo = async () => restoreOwned(backup,
+        await landedIdentities(checkout, changed, () => atTree(env, attrs, to, changed)).catch(() => ({})));
       // 新建的索引没有文件状态，先按封好的语义逐个核一遍字节补上（与目标提交对不上的照旧记成「改过」，
       // 下一步要改到它时 git 就拒），两树合并才认得出哪些文件是干净的。
       await env.run(attrs, ["read-tree", from]);

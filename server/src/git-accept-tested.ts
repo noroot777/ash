@@ -119,7 +119,7 @@ function leftover(left: readonly string[], base: string, backup?: string): strin
   return `但检出里有 ${left.length} 处没能回到合并之前的样子：${shown}（结尾带 / 的是目录）。索引和分支还在 ${base.slice(0, 12)}，`
     + "这些文件现在可能是测过的新内容、写了一半、已被删掉或丢了原来的权限设置，目录可能是这次新建的或被重建过，"
     + "请核对后手动处理（取回旧内容用 `git checkout HEAD -- <路径>`，合并新增的文件和空目录直接删掉），再重新验收。"
-    + (backup ? `改之前的原文件（连同权限设置）原样留在 ${backup}，里面的 MANIFEST.txt 写着每个文件对应哪个路径，处理完可以删掉这个目录。` : "");
+    + (backup ? `改之前的原文件（连同权限设置）原样留在 ${backup}，里面的 MANIFEST.json 写着每个备份文件对应哪个路径，处理完可以删掉这个目录。` : "");
 }
 
 /**
