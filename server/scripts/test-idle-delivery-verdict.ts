@@ -16,7 +16,8 @@
 //  D1 审查派发 · 收下:意图在这一轮跑完之前就了结、认领证还回来;
 //  D2 审查派发 · 说不清:回合结束时**按住不结**(第 1 轮自由审查 R1),对账两拍也不许拿「越过了
 //     线」清意图、按孤儿结掉(第 2 轮 R1);回执落定成说不清 / 本体抛了(D2'),再也不会知道,也照样
-//     按住、交给用户(再下一次审查的 R1),「继续本轮审查」重投后照常收口;
+//     按住、交给用户(再下一次审查的 R1),「继续本轮审查」重投后照常收口 —— 中间插进一条
+//     `/compact` 旁路回合也照样能点(下一次审查第 1 轮 R1:入口按审查身份认,不按最新会话认);
 //  D3 审查派发 · 拒收:结算当场收尾,时间线写明拒收;不停在 reviewing,也不重投;
 //  D4/D5 审查派发 · 说不清 → 对账两拍之后才到的收下 / 拒收:收下只了结意图、对账照常结算;
 //     拒收带着真实原因落终态(从前那一轮已被结掉,这一声被挡回去);
@@ -220,6 +221,17 @@ try {
 
   // ── D2/D2' 再也不会知道(回执落定成 unknown / 回执本体抛了):照样按住,交给用户拿主意 ─────
   const { reviewAwaitsInputDecision } = await import("../src/free-review-round.js");
+  const { readRetryTurnFacts, retryTurnRejection } = await import("../src/task-retry-turn.js");
+  const { freeWorkflowState } = await import("../src/free-workflow-state.js");
+  type RetryRequest = Parameters<typeof readRetryTurnFacts>[1];
+  /** 界面拿到的那份「继续本轮审查」身份(状态接口原样发给前端的 `retry`)。 */
+  const stateRetry = async (id: string) => {
+    const latest = (await freeWorkflowState(id)).reviews[0];
+    const current = latest?.rounds.find((round) => round.round === latest.currentRound);
+    return current?.retry ? { runId: latest!.id, round: current.round, generation: current.retry.generation } : null;
+  };
+  const retryRejection = async (id: string, request: RetryRequest) =>
+    retryTurnRejection((await readRetryTurnFacts(id, request))!.facts)?.error ?? null;
   const awaitsDecision = async (id: string, runId: string) => reviewAwaitsInputDecision(
     (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!, await runOf(id), await roundOf(runId));
   for (const [label, close] of [["D2", "resolve"], ["D2'", "reject"]] as const) {
@@ -244,6 +256,22 @@ try {
     assert.match(timeline(id), /已经确认不了.*保持进行中.*「继续本轮审查」/, "交给用户,而且要告诉他按哪颗按钮");
     assert.equal(await awaitsDecision(id, run.id), true, "界面据此给出「继续本轮审查」");
     assert.equal(await reviewerSessions(id), 1, "不自动重投");
+    // 等用户拿主意的时候,用户跑了一条 `/compact`:原生命令不退役审查,只多出一条更新的普通旁路会话。
+    const later = new Date(Date.now() + 60_000).toISOString();
+    await db.insert(sessions).values({ id: `${id}-compact`, taskId: id, role: "single", agentType: "codex",
+      executor: "codex", startedAt: later, turnStartedAt: later, endedAt: later, exitStatus: 0, sideTurn: true });
+    assert.equal(await awaitsDecision(id, run.id), true, "旁路回合不结束这一轮审查");
+    const retry = await stateRetry(id);
+    assert.ok(retry, "下一次审查第 1 轮 R1:状态里得照样给出「继续本轮审查」认的那份身份");
+    const reviewer = (await db.select().from(sessions).where(eq(sessions.taskId, id)))
+      .find((row) => row.role === "reviewer")!;
+    assert.equal(await retryRejection(id, { sessionId: reviewer.id }) !== null, true,
+      "老口径(按最新会话认)在这儿必然被拒 —— 这正是入口被挤掉的原因");
+    assert.equal(await retryRejection(id, { review: retry }), null,
+      "按审查身份来:插进来的旁路回合不挡「继续本轮审查」");
+    assert.equal((await readRetryTurnFacts(id, { review: retry }))?.latest?.id, reviewer.id, "续的是那条审查会话");
+    assert.match(await retryRejection(id, { review: { ...retry, generation: "g-stale" } }) ?? "", /已经变了/,
+      "代次对不上(页面是旧的)→ 拒绝而不是照跑");
     // 用户知情之后的显式决定:重投。这一次协议收下了。
     const generation = (await reviewState(id, run.id)).dispatch?.generation;
     stage = { acceptance: Promise.resolve("accepted") };
@@ -252,6 +280,10 @@ try {
     await until("新一代次收下了", async () => (await reviewState(id, run.id)).acceptance === "accepted");
     assert.notEqual((await reviewState(id, run.id)).dispatch?.generation ?? null, generation ?? "x");
     assert.equal(await awaitsDecision(id, run.id), false, "收下了就不再等用户拿主意");
+    // 重投换了代次:之后这一轮怎么收尾(桩审查者照样不交卷 → 异常结束,又可以继续)都是新一代的事,
+    // 旧页面上那份身份点不动它。
+    assert.notEqual((await stateRetry(id))?.generation, retry.generation, "「继续本轮审查」的身份跟着换代");
+    assert.match(await retryRejection(id, { review: retry }) ?? "", /已经变了|没有停在/, "上一代次的身份点不动新的这一次");
     console.log(`✓ ${label} 审查派发 · 回执${close === "resolve" ? "落定成说不清" : "本体抛错"}:不清意图、不判失败、不重投,`
       + "交给用户;「继续本轮审查」重投后照常收口");
   }

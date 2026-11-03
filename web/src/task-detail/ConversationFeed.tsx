@@ -36,7 +36,7 @@ import {
   type SystemNoticeMode,
 } from "./systemNoticeModel.ts";
 import { openDisputeIn } from "../free-workflow/freeReviewCopy.ts";
-import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
+import { type ReviewRetryIdentity, type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 import { AnsweredQuestionMessage, QuestionHistoryProvider, QuestionHistoryRemainder } from "./QuestionHistory.tsx";
 import { isQuestionAnswer, type QuestionRecord } from "@ash/shared/questions";
@@ -195,7 +195,7 @@ export function ConversationFeed({
   dock,
   onRetryTurn,
   onForkReply,
-  reviewRetryable,
+  reviewRetry,
   reviews,
   onOpenReviewPanel,
   systemNoticeMode,
@@ -221,8 +221,8 @@ export function ConversationFeed({
   /** 重跑上一回合。不给就不出重试按钮（只读的会话视图用得上）。 */
   onRetryTurn?: (target: TurnRetryTarget) => Promise<void> | void;
   onForkReply?: (replyId: string) => void;
-  /** 自由工作流的审查链停在「异常结束」——只有它为真，审查会话上才出重跑按钮。 */
-  reviewRetryable?: boolean;
+  /** 此刻能「继续本轮审查」的那一轮（freeReviewRetryIdentity）；null = 审查档一颗都不出。 */
+  reviewRetry?: ReviewRetryIdentity | null;
   /** 自由派审的落盘记录：折叠卡靠它反查报告的 runId（旁注里只有轮号）。 */
   reviews?: readonly FreeReviewRun[] | null;
   /**
@@ -253,13 +253,13 @@ export function ConversationFeed({
     pending: pendingExecutor,
     fallback: task.executorLabel ?? task.agentType,
   });
-  // 崩掉的那一回合挂在**它自己那条会话**最后一条 agent 气泡上；那条会话一个气泡都没有（审查
-  // 一句没说就断了）就挂在会话末尾单独一行 —— 能继续就必须有处可点。不满足条件时一颗都不出。
-  const retry = onRetryTurn ? turnRetryTarget(task, items, { reviewRetryable, sessions }) : null;
-  const retryItemId = retry
-    ? [...items].reverse().find((item) => item.kind === "agent"
-      && (retry.kind !== "review" || item.session?.id === retry.sessionId))?.id ?? null
-    : null;
+  // 按钮挂在最后一条 agent 气泡上 —— 前提是那条气泡就是这颗按钮要续的那条会话。审查档不是
+  // （审查一句没说就断了，或者之后又跑过 `/compact` 这类旁路回合）就挂在会话末尾单独一行：
+  // 能继续就必须有处可点，也不能挂到别人的气泡底下。不满足条件时一颗都不出。
+  const retry = onRetryTurn ? turnRetryTarget(task, items, { reviewRetry, sessions }) : null;
+  const lastAgent = retry ? [...items].reverse().find((item) => item.kind === "agent") : undefined;
+  const retryItemId = lastAgent && (retry?.kind !== "review" || lastAgent.session?.id === retry.sessionId)
+    ? lastAgent.id : null;
   const retryButton = retry ? (
     <TurnRetryButton exitStatus={retry.exitStatus} kind={retry.kind} onRetry={() => onRetryTurn!(retry)} />
   ) : null;

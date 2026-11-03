@@ -3,7 +3,7 @@
 // 永远 409，前端紧了 = 崩掉的回合没有任何入口（这颗按钮本来就是为了补这个洞才有的）。
 // 跑:npm -w web run test:turn-retry
 import assert from "node:assert/strict";
-import { freeReviewRetryable, turnRetryTarget } from "../src/task-detail/turnRetry.ts";
+import { freeReviewRetryIdentity, turnRetryTarget } from "../src/task-detail/turnRetry.ts";
 
 const task = (over = {}) => ({
   id: "t1", mode: "single", status: "done", archived: false, verifyRound: null, ...over,
@@ -68,68 +68,65 @@ assert.equal(
   "取最后一条 agent 气泡的会话",
 );
 
-// ── 审查回合 ────────────────────────────────────────────────────────────────
-const reviewer = [agentItem(sess({ id: "r1", role: "reviewer" }))];
-assert.deepEqual(
-  target(task({ workflowMode: "free" }), reviewer, { reviewRetryable: true }),
-  { sessionId: "r1", kind: "review", exitStatus: 1 },
-  "自由工作流里崩掉的审查回合 → 出「重跑本轮审查」",
-);
-assert.equal(target(task({ workflowMode: "free" }), reviewer), null, "审查链不在异常结束状态就不出");
-assert.equal(target(task(), reviewer, { reviewRetryable: true }), null, "不是自由工作流就没有可重跑的链");
-// 审查回合是旁路回合,任务停在哪个终态都可能(paused 上派审也合法)。
-assert.equal(
-  target(task({ workflowMode: "free", status: "canceled" }), reviewer, { reviewRetryable: true })?.kind,
-  "review",
-  "审查档不要求任务停在 done",
-);
-
-// ── 审查链能不能重跑（镜像 freeReviewRetryBlocker）────────────────────────────
-const run = (over = {}) => ({ status: "failed", currentRound: 2, rounds: [
-  { round: 1, status: "failed" }, { round: 2, status: "error" },
-], ...over });
-assert.equal(freeReviewRetryable([run()]), true, "run failed + 当前轮 error = 异常结束");
-assert.equal(freeReviewRetryable(undefined), false, "没有审查记录");
-assert.equal(freeReviewRetryable([]), false, "空列表");
-assert.equal(freeReviewRetryable([run({ status: "stopped" })]), false, "已停止但不是异常结束");
-assert.equal(freeReviewRetryable([run({ status: "passed" })]), false, "已通过的轮次不重跑");
-assert.equal(
-  freeReviewRetryable([run({ rounds: [{ round: 1, status: "error" }, { round: 2, status: "failed" }] })]),
-  false,
-  "error 的不是当前轮 → 不重跑",
-);
-// 还挂在 reviewing、但任务书送没送到说不清:系统不替用户结、不替他重投,入口交给这颗按钮。
-const awaiting = (over = {}) => run({ status: "reviewing", rounds: [
-  { round: 1, status: "failed" }, { round: 2, status: "reviewing", awaitsInputDecision: true },
-], ...over });
-assert.equal(freeReviewRetryable([awaiting()]), true, "送达说不清、等用户拿主意 → 给「继续本轮审查」");
-assert.equal(freeReviewRetryable([run({ status: "reviewing", rounds: [{ round: 2, status: "reviewing" }] })]), false,
-  "正常在审的那一轮不给按钮");
-assert.equal(freeReviewRetryable([awaiting({ rounds: [{ round: 1, status: "reviewing", awaitsInputDecision: true },
-  { round: 2, status: "reviewing" }] })]), false, "标记不在当前轮 → 不给");
-
-// ── 审查档认会话，不认气泡(自由审查第 2 轮 R1)──────────────────────────────────
-// 一句正文都没吐就断掉的审查回合不产生 agent 气泡:按「最后一条气泡」找,要么找不到,要么找到
-// 前面实现者那一条 —— 服务端标了「等你拿主意」、retry-turn 也收,页面上却一颗按钮都没有。
+// ── 审查回合：认那一轮审查的身份，不认气泡、也不认「最新会话」 ─────────────────────────
+// 服务端把「这一轮能继续」连同代次发在当前轮的 `retry` 上(free-review-retry-identity.ts);
+// 前端原样带回。下一次自由审查第 1 轮 R1:审查等着用户拿主意时跑一条 `/compact`,最新会话成了
+// 那条旁路回合,按「最新会话是不是审查者」认人的入口当场消失、刷新也回不来。
+const identity = { runId: "run-1", round: 2, generation: "g-2" };
 const at = (id, role, t, over = {}) => sess({ id, role, startedAt: t, turnStartedAt: t, ...over });
-const sessions = [at("impl", "single", "2026-11-01T00:00:00Z", { exitStatus: 0 }),
-  at("rev", "reviewer", "2026-11-01T01:00:00Z", { exitStatus: null })];
 const free = task({ workflowMode: "free" });
-assert.deepEqual(target(free, [], { reviewRetryable: true, sessions }),
-  { sessionId: "rev", kind: "review", exitStatus: null }, "审查会话一个气泡都没有 → 照样给入口,绑在审查会话上");
-assert.deepEqual(target(free, [agentItem(sessions[0])], { reviewRetryable: true, sessions }),
-  { sessionId: "rev", kind: "review", exitStatus: null }, "最后一条气泡是实现者的 → 入口仍绑最新的审查会话");
-assert.equal(target(free, [agentItem(sessions[0])], { reviewRetryable: false, sessions }), null,
-  "审查链不等人拿主意 → 不出(不拿「有会话」推「能继续」)");
-assert.equal(target(free, [], { reviewRetryable: true, sessions: [...sessions,
-  at("impl2", "single", "2026-11-01T02:00:00Z", { exitStatus: 0 })] }), null,
-"审查之后又跑过实现者回合 → 上一回合不是审查,服务端会 409,前端不出");
-assert.equal(target(free, [], { reviewRetryable: true, sessions: [sessions[0],
-  at("rev", "reviewer", "2026-11-01T01:00:00Z", { stoppedAs: "canceled" })] }), null, "手动停掉的审查回合不出");
-// 排序按回合起点(续聊复用老会话):老审查会话刚续过一回合,它才是「上一回合」。
-assert.equal(target(free, [], { reviewRetryable: true, sessions: [
-  at("rev", "reviewer", "2026-11-01T00:00:00Z", { turnStartedAt: "2026-11-01T03:00:00Z" }),
-  at("impl", "single", "2026-11-01T02:00:00Z", { exitStatus: 0 })] })?.sessionId, "rev",
-"上一回合按 turnStartedAt 认,与服务端 latestSessionOf 同口径");
+const reviewTarget = (sessionId, exitStatus = null) => ({ kind: "review", sessionId, exitStatus, review: identity });
+const impl = at("impl", "single", "2026-11-01T00:00:00Z", { exitStatus: 0 });
+const rev = at("rev", "reviewer", "2026-11-01T01:00:00Z", { exitStatus: null });
+const compact = at("compact", "single", "2026-11-01T02:00:00Z", { exitStatus: 0, sideTurn: true });
+
+assert.deepEqual(target(free, [], { reviewRetry: identity, sessions: [impl, rev] }), reviewTarget("rev"),
+  "审查会话一个气泡都没有 → 照样给入口,续的是那条审查会话");
+assert.deepEqual(target(free, [agentItem(impl)], { reviewRetry: identity, sessions: [impl, rev] }), reviewTarget("rev"),
+  "最后一条气泡是实现者的 → 入口仍是那一轮审查");
+assert.deepEqual(target(free, [agentItem(compact)], { reviewRetry: identity, sessions: [impl, rev, compact] }),
+  reviewTarget("rev"), "R1:审查等人时插进一条 /compact 旁路回合,入口不许被挤掉");
+assert.deepEqual(target(free, [agentItem(sess({ id: "r1", role: "reviewer" }))], { reviewRetry: identity }),
+  reviewTarget(null), "不给会话行时照样按审查身份出,只是说不出续哪条会话(服务端自己找)");
+assert.deepEqual(target(free, [], { reviewRetry: identity, sessions: [] }), reviewTarget(null),
+  "连一条审查会话都没有(崩在起跑前)也给入口 —— 服务端按审查身份认人");
+assert.equal(target(free, [agentItem(rev)], { sessions: [impl, rev] }), null,
+  "审查链不能继续(没有 retry)→ 不出:不拿「有审查会话」推「能继续」");
+assert.equal(target(task(), [agentItem(rev)], { reviewRetry: identity, sessions: [impl, rev] }), null,
+  "不是自由工作流就没有可继续的链");
+assert.equal(target(free, [], { reviewRetry: identity, sessions: [impl, { ...rev, stoppedAs: "canceled" }] }), null,
+  "手动停掉的审查回合不出(服务端同样 409)");
+assert.equal(
+  target(task({ workflowMode: "free", status: "canceled" }), [agentItem(rev)], { reviewRetry: identity, sessions: [rev] })?.kind,
+  "review", "审查档不要求任务停在 done(paused 上派审也合法)");
+// 续哪条审查会话按回合起点认(续聊复用老会话):老审查会话刚续过一回合,它才是最近那条。
+assert.equal(target(free, [], { reviewRetry: identity, sessions: [
+  at("rev-old", "reviewer", "2026-11-01T00:00:00Z", { turnStartedAt: "2026-11-01T03:00:00Z" }),
+  at("rev-new", "reviewer", "2026-11-01T02:00:00Z")] })?.sessionId, "rev-old",
+"续哪条审查会话按 turnStartedAt 认,与服务端 latestSessionOf 同口径");
+// 普通回合那颗「重试」排在审查档前面:上一回合是崩掉的普通回合时,那才是用户眼前那件事。
+const crashed = at("crash", "single", "2026-11-01T03:00:00Z", { exitStatus: 1 });
+assert.deepEqual(target(free, [agentItem(crashed)], { reviewRetry: identity, sessions: [rev, crashed] }),
+  { kind: "turn", sessionId: "crash", exitStatus: 1 }, "最近一次是崩掉的普通回合 → 出的是「重试」");
+// 反过来:崩掉的普通回合之后又起过一轮(没出声的审查),那条气泡就不是「上一回合」了。
+assert.deepEqual(target(free, [agentItem({ ...crashed, startedAt: "2026-11-01T00:30:00Z", turnStartedAt: "2026-11-01T00:30:00Z" })],
+  { reviewRetry: identity, sessions: [{ ...crashed, startedAt: "2026-11-01T00:30:00Z", turnStartedAt: "2026-11-01T00:30:00Z" }, rev] }),
+reviewTarget("rev"), "气泡那条会话不是最近一次回合 → 不给它「重试」(服务端会 409),给审查档");
+assert.equal(target(task(), [agentItem(sess({ id: "a" }))], { sessions: [sess({ id: "a", startedAt: "1" }), sess({ id: "b", startedAt: "2", exitStatus: 0 })] }),
+  null, "普通回合:气泡后面还有更近的回合 → 不出");
+
+// ── 审查链身份：只读服务端发下来的 retry,不在前端再镜像一份判据 ─────────────────────
+const run = (rounds, over = {}) => ({ id: "run-1", status: "reviewing", currentRound: 2, rounds, ...over });
+assert.deepEqual(freeReviewRetryIdentity([run([{ round: 1 }, { round: 2, retry: { generation: "g-2" } }])]), identity,
+  "当前轮带着 retry → 给出 run/轮次/代次");
+assert.deepEqual(freeReviewRetryIdentity([run([{ round: 2, retry: { generation: null } }])]),
+  { ...identity, generation: null }, "老数据取不到代次也原样带回(服务端按同一口径比)");
+assert.equal(freeReviewRetryIdentity(undefined), null, "没有审查记录");
+assert.equal(freeReviewRetryIdentity([]), null, "空列表");
+assert.equal(freeReviewRetryIdentity([run([{ round: 2 }])]), null, "当前轮没有 retry → 不能继续");
+assert.equal(freeReviewRetryIdentity([run([{ round: 1, retry: { generation: "g" } }, { round: 2 }])]), null,
+  "retry 不在当前轮 → 不认");
+assert.equal(freeReviewRetryIdentity([run([{ round: 2 }]), run([{ round: 2, retry: { generation: "g" } }], { id: "old" })]),
+  null, "只认最近那条链");
 
 console.log("✓ turn-retry gate (web)");

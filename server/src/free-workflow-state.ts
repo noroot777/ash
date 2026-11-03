@@ -159,6 +159,11 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     const round = roundRows.find((row) => row.runId === run.id && row.round === run.currentRound) ?? null;
     if (round && await reviewAwaitsInputDecision(task, run, round)) awaiting.add(round.id);
   }
+  // 「继续本轮审查」认的那份身份(free-review-retry-identity.ts):只有最近那条链的当前轮才可能有。
+  const { reviewRetryGeneration } = await import("./free-review-retry-identity.js");
+  const latest = runs.at(0) ?? null;
+  const retryRound = latest ? roundRows.find((row) => row.runId === latest.id && row.round === latest.currentRound) ?? null : null;
+  const retry = retryRound ? await reviewRetryGeneration(task, latest, retryRound) : null;
   const reviews: FreeReviewRun[] = runs.map((run) => ({
     id: run.id,
     reviewerId: run.reviewerId,
@@ -206,6 +211,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       startedAt: round.startedAt,
       endedAt: round.endedAt,
       ...(awaiting.has(round.id) ? { awaitsInputDecision: true } : {}),
+      ...(retry && round.id === retryRound?.id ? { retry } : {}),
     })),
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,

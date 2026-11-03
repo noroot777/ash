@@ -31,6 +31,11 @@
 //
 // 反过来，「崩了」的判据两档不同：重投档只有退出码可认；审查档认的是**那一轮有没有给出
 // 结论**（审查链自己的 error/failed），因为 CLI 报错后照样 exit 0，退出码会漏判。
+//
+// 审查档的**对象**也不按「最新会话」认：前端带着那一轮审查的身份来（`review`，判据与理由见
+// free-review-retry-identity.ts），这一档就只问审查链自己 —— 中间插进来一条不结束审查的旁路
+// 回合（`/compact`），不该把还在等用户的那一轮的入口挤掉。只带 sessionId 的老请求照旧按
+// 最新会话分档。
 import { open, stat } from "node:fs/promises";
 import type { AgentType, ConvSeg } from "@ash/shared";
 import { parseSessionOutput } from "@ash/shared";
@@ -43,6 +48,7 @@ import { db } from "./db/index.js";
 import { groups, sessions, tasks } from "./db/schema.js";
 import { profileDrift } from "./executors/index.js";
 import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, reviewAwaitsInputDecision, roundOf } from "./free-review-round.js";
+import { reviewRetryIdentityMismatch, type ReviewRetryIdentity } from "./free-review-retry-identity.js";
 import { turnEndedAbnormally } from "@ash/shared/turn-outcome";
 import { turnOutcome } from "./session-turns.js";
 import type { TurnOutcome } from "./session-turns.js";
@@ -128,7 +134,10 @@ export type RetryTurnSession = {
 /** 判据的全部输入：任务、最新会话，加上三样只有查库才知道的事实。 */
 export type RetryTurnFacts = {
   task: RetryTurnTask;
+  /** 重跑落在哪条会话上。审查档(按审查身份来的)是最近那条审查会话,可能一条都没有。 */
   latest: RetryTurnSession | null;
+  /** 分档。省略 = 按 `latest` 的身份分(只带 sessionId 的老请求)。 */
+  kind?: RetryTurnKind;
   wantedSessionId?: string;
   /** 同队列排在前面、还没完成的任务。 */
   blockedBy?: string[];
@@ -171,6 +180,7 @@ export function latestSessionOf<T extends RetryTurnSession>(rows: T[]): T | null
 // 返回 null = 放行；否则是要原样回给前端的那句拒绝理由。
 export function retryTurnRejection(facts: RetryTurnFacts): { error: string; detail?: Record<string, unknown> } | null {
   const { task, latest } = facts;
+  const kind = facts.kind ?? (latest ? retryTurnKindOf(latest) : "turn");
   if (task.archived) return { error: "任务已归档，先取消归档再重试", detail: { archived: true } };
   {
     const blocked = handoffBlockReason(task.handoff);
@@ -179,11 +189,11 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
   // 只做单飞任务：duet 有自己的 gate 语义、团队调度台是常驻会话，两边的「上一回合」
   // 都不是这里这套 user/agent 交替的形状，硬套只会把它们的状态机搅乱。
   if (task.mode !== "single") return { error: "只有单飞任务支持重跑上一回合", detail: { mode: task.mode } };
-  if (!latest) return { error: "任务还没跑过，没有可重跑的回合" };
+  if (!latest && kind !== "review") return { error: "任务还没跑过，没有可重跑的回合" };
   // 前端按钮挂在某一条会话的尾栏上；带上 sessionId 就是在说「我要重跑的是**我看到的
   // 那一条**」。它不是最新会话就说明中间又跑过一轮，页面是旧的 —— 拒绝而不是照跑。
-  if (facts.wantedSessionId && facts.wantedSessionId !== latest.id) {
-    return { error: "页面上的会话不是最新一次，刷新后再试", detail: { sessionId: latest.id } };
+  if (facts.wantedSessionId && facts.wantedSessionId !== latest?.id) {
+    return { error: "页面上的会话不是最新一次，刷新后再试", detail: { sessionId: latest?.id } };
   }
   if (task.status === "running" || task.status === "queued") {
     return { error: "任务正在运行或排队，结束后再重试", detail: { status: task.status } };
@@ -200,7 +210,7 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
   }
   // **主动停止/暂停也会留下非零退出码**（多数 CLI 吃 SIGTERM 后按 signal 写 exitStatus=1）。
   // 那不是崩溃，重投等于把用户刚亲手停下的那句话再跑一遍；界面上这种状态给的是「运行」。
-  if (latest.stoppedAs) {
+  if (latest?.stoppedAs) {
     return { error: "上一回合是你手动停止的，不是异常结束；要继续请用运行", detail: { stoppedAs: latest.stoppedAs } };
   }
   // 退出码只在**重投档**上当「崩没崩」的判据。审查档另有权威判据，而且更准：那一轮到底
@@ -212,7 +222,7 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
   // 这一轮自己的权威结局 > 退出码)写在那里,**前端那颗按钮读同一份** —— 两边各写一份 if
   // 就是在等下一次漂开,审查 F2 要修的恰恰是同一句判据在两端各错一次(都只看退出码)。
   // 审查档不吃这一条:它另有更准的判据(上面那段注释)。
-  if (retryTurnKindOf(latest) !== "review"
+  if (kind !== "review" && latest
     && !turnEndedAbnormally({ ...latest, turnOutcome: facts.turnOutcome })) {
     return {
       error: "上一回合不是异常结束，不需要重跑",
@@ -236,13 +246,14 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
   if (facts.profileDrift === "changed") {
     return { error: "上一回合用的执行器配置已被改过，重跑不再是原样重放；请在对话框里 @ 它重新发一遍", detail: { profileDrift: "changed" } };
   }
-  if (retryTurnKindOf(latest) === "review") {
+  if (kind === "review") {
     if (task.workflowMode !== "free") {
-      return { error: "上一回合是审查旁路会话，重跑它请走审查那条路", detail: { role: latest.role } };
+      return { error: "上一回合是审查旁路会话，重跑它请走审查那条路", detail: { role: "reviewer" } };
     }
-    if (facts.reviewBlocker) return { error: facts.reviewBlocker, detail: { role: latest.role } };
+    if (facts.reviewBlocker) return { error: facts.reviewBlocker, detail: { role: "reviewer" } };
     return null;
   }
+  if (!latest) return { error: "任务还没跑过，没有可重跑的回合" };
   // 剩下的只放行普通实现回合：lead/voiceA/voiceB 这些身份连「上一回合」的形状都不同。
   if (latest.role !== "single") {
     return { error: "上一回合是旁路会话，这里重跑不了", detail: { role: latest.role } };
@@ -261,31 +272,39 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
 type TaskRow = typeof tasks.$inferSelect;
 type SessionRow = typeof sessions.$inferSelect;
 
-/** 一次性把判据要的东西全查出来。任务不存在返回 null。 */
-async function readFacts(
+export type RetryTurnRequest = { sessionId?: string; review?: ReviewRetryIdentity };
+
+/** 一次性把判据要的东西全查出来。任务不存在返回 null。导出给回归脚本走真库核对。 */
+export async function readRetryTurnFacts(
   taskId: string,
-  wantedSessionId?: string,
-): Promise<{ task: TaskRow; latest: SessionRow | null; facts: RetryTurnFacts } | null> {
+  request: RetryTurnRequest = {},
+): Promise<{ task: TaskRow; latest: SessionRow | null; kind: RetryTurnKind; facts: RetryTurnFacts } | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return null;
-  const latest = latestSessionOf(await db.select().from(sessions).where(eq(sessions.taskId, taskId)));
+  const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
+  // 按审查身份来的:落点是最近那条审查会话(续它的上下文),它之后插进来的旁路回合不算数。
+  const latest = request.review ? latestSessionOf(rows.filter((row) => row.role === "reviewer")) : latestSessionOf(rows);
+  const kind: RetryTurnKind = request.review ? "review" : latest ? retryTurnKindOf(latest) : "turn";
   const group = task.groupId
     ? (await db.select({ paused: groups.paused }).from(groups).where(eq(groups.id, task.groupId))).at(0)
     : undefined;
-  // 审查链的判据只在真的是审查会话时才查（多两条 SQL 换不来任何东西）。
+  // 审查链的判据只在真的走审查档时才查（多两条 SQL 换不来任何东西）。
   let reviewBlocker: string | null = null;
-  if (latest && retryTurnKindOf(latest) === "review" && task.workflowMode === "free") {
+  if (kind === "review" && task.workflowMode === "free") {
     const run = await latestRun(taskId);
     const round = run ? await roundOf(run) : null;
-    reviewBlocker = freeReviewRetryBlocker(run, round, await reviewAwaitsInputDecision(task, run, round));
+    reviewBlocker = freeReviewRetryBlocker(run, round, await reviewAwaitsInputDecision(task, run, round))
+      ?? (request.review ? await reviewRetryIdentityMismatch(taskId, run!, request.review) : null);
   }
   return {
     task,
     latest: latest ?? null,
+    kind,
     facts: {
       task,
       latest: latest ?? null,
-      wantedSessionId,
+      kind,
+      wantedSessionId: request.review ? undefined : request.sessionId,
       blockedBy: await queueBlockers(taskId),
       groupPaused: !!group?.paused,
       // 老会话行没记指纹（null）时返回 null = 无从核对，按老行为放行。
@@ -301,7 +320,7 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
 export function mountTaskRetryTurnRoutes(api: Hono): void {
   api.post("/tasks/:id/retry-turn", async (c) => {
     const taskId = c.req.param("id");
-    const body = await c.req.json<{ sessionId?: string }>().catch(() => ({} as { sessionId?: string }));
+    const body = await c.req.json<RetryTurnRequest>().catch(() => ({} as RetryTurnRequest));
     const checkpointBlocked = await preparePendingCheckpointStart(taskId);
     // 挡回就留痕(`noted`,判据见那边):这颗按钮按下去没反应时,用户刷新页面后要能看出
     // 「点过、没成、因为什么」。下面每条 409 同理,**除了**一眼能从界面读到的那种
@@ -309,11 +328,11 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
     if (checkpointBlocked) {
       return c.json(await noted(taskId, "重跑上一回合", { error: checkpointBlocked, checkpoint: true }), 409);
     }
-    const first = await readFacts(taskId, body.sessionId);
+    const first = await readRetryTurnFacts(taskId, body);
     if (!first) return c.json({ error: "not found" }, 404);
     const rejection = retryTurnRejection(first.facts);
     if (rejection) return c.json(await noted(taskId, "重跑上一回合", { error: rejection.error, ...rejection.detail }), 409);
-    const kind = retryTurnKindOf(first.latest!);
+    const kind = first.kind;
     // 同 /run、/retry：原子占位，并发只有一个能 202。占位身份跟着分支走 —— 审查重跑此刻
     // 还没有审查回合，冒充 reviewer 会让迟到的结论上报被当成本回合的（见
     // reportFreeReviewConclusion 的 turnRole 校验）。
@@ -340,17 +359,17 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       // 回合」，挡不住这些不占 turn 的写操作。实测 20/20：并发归档 + 重试双双成功，任务
       // 落在 archived=true 且 running（第 2 轮审查 finding 3）。所以判据整套重跑一遍，
       // 拒绝走 finally 释放。
-      const fresh = await readFacts(taskId, body.sessionId);
+      const fresh = await readRetryTurnFacts(taskId, body);
       const again = fresh ? retryTurnRejection(fresh.facts) : { error: "任务已被删除", detail: undefined };
       if (!fresh || again) {
         const body = { error: again?.error ?? "任务已被删除", ...(again?.detail ?? {}) };
         // 任务真被删了就没地方留痕了(那条记录读不出来),其余照记。
         return c.json(fresh ? await noted(taskId, "重跑上一回合", body) : body, 409);
       }
-      const { task, latest } = fresh as { task: TaskRow; latest: SessionRow };
+      const { task } = fresh!;
       // 分支在占位前后必须是同一个：占位身份是按它选的，变了就等于按错的身份占了锁。
-      if (retryTurnKindOf(latest) !== kind) {
-        return c.json(await noted(taskId, "重跑上一回合", { error: "上一回合在这中间变了，刷新后再试", sessionId: latest.id }), 409);
+      if (fresh!.kind !== kind) {
+        return c.json(await noted(taskId, "重跑上一回合", { error: "上一回合在这中间变了，刷新后再试", sessionId: fresh!.latest?.id }), 409);
       }
 
       // 交接必须**有人接住错误**：`void continueTask(...)` 在下游接管这把锁之前抛错（它
@@ -384,13 +403,15 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
         // dispatched=false = 同代次已经有一份在途派发在负责,这一次没有另起投递(时间线里
         // 也写了一句)。如实报出来,别让 202 冒充「我给你安排好了」(第 3 轮审查 F2)。
         try {
-          const { resumed, dispatched } = await reopenFailedFreeReview(taskId, { resumeSessionId: latest.id });
+          const { resumed, dispatched } = await reopenFailedFreeReview(taskId, { resumeSessionId: fresh!.latest?.id });
           return c.json({ started: true, mode: "review", resumed, dispatched }, 202);
         } catch (error) {
           return c.json(await noted(taskId, "重跑上一回合", { error: errorText(error) }), 409);
         }
       }
 
+      // 走到这里是重投/续跑档,判据已经保证有那条会话。
+      const latest = fresh!.latest!;
       // 崩掉的那一回合可能跑在**被召唤来的**执行器上（@codex 续聊），也可能任务的配置在
       // 这之后被改过。会话行记着那一轮真正生效的 profile 主键与模型/思考强度，按它整套
       // 重放；`agents.name` 反查是错的 —— 名字非唯一、可改，重名时会选中另一位（finding 5）。

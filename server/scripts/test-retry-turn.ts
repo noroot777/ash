@@ -188,6 +188,25 @@ assert.ok(
   why(task({ workflowMode: "free" }), sess({ id: "a", role: "reviewer", exitStatus: 0, stoppedAs: "canceled" }), { reviewBlocker: null }),
   "手动停掉的审查回合仍不算崩溃",
 );
+// ── 审查档按那一轮审查的身份来(`kind: "review"`),不按最新会话分档 ───────────────────
+// 下一次自由审查第 1 轮 R1:审查等用户拿主意时跑一条 `/compact`,最新会话成了那条普通旁路
+// 回合 —— 按最新会话分档,拿审查会话来点 409「不是最新一次」,拿最新会话来点 409「不是异常
+// 结束」。审查档只问审查链自己(reviewBlocker,里面含身份/代次核对)。
+const compactTurn = sess({ id: "c", role: "single", exitStatus: 0, sideTurn: true });
+assert.ok(why(task({ workflowMode: "free" }), compactTurn, { reviewBlocker: null }),
+  "老请求(只带 sessionId)照旧按最新会话分档:那条旁路回合不给重跑");
+assert.equal(why(task({ workflowMode: "free" }), reviewer, { kind: "review", reviewBlocker: null }), null,
+  "按审查身份来的:落点是最近那条审查会话,它之后插进来的旁路回合不算数");
+assert.equal(why(task({ workflowMode: "free" }), null, { kind: "review", reviewBlocker: null }), null,
+  "一条审查会话都没有(崩在起跑前)也放行:服务端按审查身份重跑,从头交代任务书");
+assert.equal(
+  why(task({ workflowMode: "free" }), reviewer, { kind: "review", reviewBlocker: "页面上的这一轮审查已经变了（被重跑过或换了一轮），刷新后再试" }),
+  "页面上的这一轮审查已经变了（被重跑过或换了一轮），刷新后再试", "身份/代次对不上 → 原样拒绝");
+assert.ok(why(task(), reviewer, { kind: "review", reviewBlocker: null }), "不是自由工作流就没有审查档");
+assert.ok(why(task({ workflowMode: "free", status: "running" }), reviewer, { kind: "review", reviewBlocker: null }),
+  "审查档同样不在任务跑着时插进来");
+assert.ok(why(task({ workflowMode: "free" }), { ...reviewer, stoppedAs: "canceled" }, { kind: "review", reviewBlocker: null }),
+  "审查档:手动停掉的那条审查回合仍不算");
 // 其余身份(团队调度台、duet 双声道)连「上一回合」的形状都不一样。
 assert.ok(why(task(), sess({ id: "a", role: "lead" })), "调度台会话不归这颗按钮");
 assert.ok(why(task(), sess({ id: "a", role: "voiceA" })), "duet 会话不归这颗按钮");

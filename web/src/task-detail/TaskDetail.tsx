@@ -41,7 +41,7 @@ import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 import { TaskReplyRail } from "./TaskReplyRail.tsx";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
-import { freeReviewRetryable } from "./turnRetry.ts";
+import { freeReviewRetryIdentity } from "./turnRetry.ts";
 import { useExecutorGate } from "./ExecutorGate.tsx";
 import type { ComposerDraft } from "../composer/composerDraft.ts";
 import { forkReadBlock, snapshotConversationFork } from "./conversationFork.ts";
@@ -451,7 +451,7 @@ export function TaskDetail({
                     onRetryTurn={async (target) => {
                       try {
                         if (!(await confirmExecutorSwap(task.id))) return;
-                        const result = await api.retryTurn(task.id, target.sessionId);
+                        const result = await api.retryTurn(task.id, target);
                         // 审查档同一颗按钮有两种结果：上下文还在就接着做，上下文是空的
                         // （CLI 当时压根没起来）才重发整份任务书。别只说「已重跑」——
                         // 用户按之前看到的承诺是「继续」，退回从头跑时必须当面说清楚。
@@ -468,7 +468,7 @@ export function TaskDetail({
                         notify(reason instanceof Error ? reason.message : String(reason));
                       }
                     }}
-                    reviewRetryable={freeReviewRetryable(free.state?.reviews)}
+                    reviewRetry={freeReviewRetryIdentity(free.state?.reviews)}
                     reviews={free.state?.reviews}
                     onOpenReviewPanel={() => openTab("review")}
                     // 会话区底部的常驻卡。提问要人答，所以它留在会话里（答案就在那条

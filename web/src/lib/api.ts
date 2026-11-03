@@ -245,11 +245,16 @@ export const api = {
     request(`/tasks/${id(taskId)}/stop`, { method: "POST" }),
   retryTask: (taskId: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/retry`, { method: "POST" }),
-  // 重跑**上一回合**（续聊/审查打回的那一句崩了，但任务还停在 done）。带上气泡上那条
+  // 重跑**上一回合**（续聊/审查打回的那一句崩了，但任务还停在 done）。普通回合带上气泡上那条
   // 会话 id：服务端据此确认「用户看到的就是最新一次」，页面旧了就拒绝而不是照跑。
-  // mode=review = 上一回合是自由工作流的审查回合，重跑的是**那一轮审查**（同一位审查者）。
-  retryTurn: (taskId: string, sessionId?: string): Promise<{ started: true; mode: "resend" | "resume" | "review"; resumed?: boolean }> =>
-    request(`/tasks/${id(taskId)}/retry-turn`, json("POST", { sessionId })),
+  // 审查档带的是**那一轮审查的身份**（`review`）：服务端按它认人、核代次，不按最新会话认 ——
+  // 中间插进来的 `/compact` 不该把还在等人的那一轮挤掉。mode=review = 跑的是那一轮审查。
+  retryTurn: (
+    taskId: string,
+    target: { kind: "turn"; sessionId: string } | { kind: "review"; review: { runId: string; round: number; generation: string | null } },
+  ): Promise<{ started: true; mode: "resend" | "resume" | "review"; resumed?: boolean }> =>
+    request(`/tasks/${id(taskId)}/retry-turn`,
+      json("POST", target.kind === "review" ? { review: target.review } : { sessionId: target.sessionId })),
   requeueTask: (taskId: string): Promise<{ task: Task; movedToEnd: boolean }> =>
     request(`/tasks/${id(taskId)}/requeue`, { method: "POST" }),
   fireTask: (taskId: string): Promise<unknown> =>

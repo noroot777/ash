@@ -17,25 +17,30 @@ import type { ConversationItem } from "./conversationModel.ts";
 // 后来被改过或删了）：那三样前端手上没有权威数据，按钮照出，点下去由 409 如实说明原因。
 
 export type TurnRetryKind = "turn" | "review";
-/** exitStatus 可能是 0/null：审查档不看退出码（见下），按钮文案据此换说法。 */
-export type TurnRetryTarget = { sessionId: string; kind: TurnRetryKind; exitStatus: number | null };
+/** 「继续本轮审查」认的那一轮审查：哪条链、第几轮、这一轮此刻的代次（服务端原样核对）。 */
+export type ReviewRetryIdentity = { runId: string; round: number; generation: string | null };
+/**
+ * exitStatus 可能是 0/null：审查档不看退出码（见下），按钮文案据此换说法。
+ * 审查档的 `sessionId` 只是「续哪条审查会话的上下文」，可能为 null（一条都没有）；认人靠 `review`。
+ */
+export type TurnRetryTarget =
+  | { kind: "turn"; sessionId: string; exitStatus: number | null }
+  | { kind: "review"; sessionId: string | null; exitStatus: number | null; review: ReviewRetryIdentity };
 
 /**
- * 这条自由工作流的审查链能不能重跑上一回合（镜像服务端 `freeReviewRetryBlocker`）。
+ * 这条自由工作流的审查链此刻能不能「继续本轮审查」，能就给出那一轮的身份。
  *
- * 两种形状：最近一条 run 停在 failed、且它当前那一轮停在 error —— 那正是「审查回合
- * 异常结束、自动复审已停止」留下的痕迹；或者当前那一轮还挂在 reviewing、但服务端标了
- * `awaitsInputDecision`（任务书送没送到说不清，系统不替用户结、也不替他重投）。已给出结论的
- * 轮次是正常结局，要再看一遍得派新一轮。
+ * 判据整份在服务端（`freeReviewRetryBlocker`：异常结束，或者送达说不清、等用户拿主意），它在
+ * 状态里把结论连同代次发下来（`FreeReviewRound.retry`）。这里不再镜像一份 if —— 镜像就是在等
+ * 两边漂开。
  */
-export function freeReviewRetryable(reviews: FreeReviewRun[] | undefined): boolean {
+export function freeReviewRetryIdentity(reviews: readonly FreeReviewRun[] | null | undefined): ReviewRetryIdentity | null {
   const run = reviews?.[0]; // 服务端按 createdAt 倒序给，第一条就是最近这条链
   const current = run?.rounds.find((round) => round.round === run.currentRound);
-  if (run?.status === "reviewing") return !!current?.awaitsInputDecision;
-  return run?.status === "failed" && current?.status === "error";
+  return run && current?.retry ? { runId: run.id, round: current.round, generation: current.retry.generation } : null;
 }
 
-/** 「上一回合」是哪条会话 —— 与服务端 `latestSessionOf` 同一口径（按最近一次回合起点）。 */
+/** 最近一次回合跑在哪条会话上 —— 与服务端 `latestSessionOf` 同一口径（按最近一次回合起点）。 */
 function latestSessionOf(sessions: Session[]): Session | null {
   const turnAt = (session: Session) => session.turnStartedAt ?? session.startedAt;
   return [...sessions].sort((left, right) => turnAt(left).localeCompare(turnAt(right))).at(-1) ?? null;
@@ -44,10 +49,10 @@ function latestSessionOf(sessions: Session[]): Session | null {
 export function turnRetryTarget(
   task: TaskListItem,
   items: ConversationItem[],
-  // 自由工作流的审查链状态（来自共享缓存的 useFreeWorkflowState，不额外发请求）。
-  // 不给 = 按「审查链不可重跑」处理，reviewer 会话上就不出按钮。
-  // `sessions` = 这个任务的会话行；审查档按它认「上一回合」，不按气泡认（理由见下）。
-  opts: { reviewRetryable?: boolean; sessions?: Session[] } = {},
+  // `reviewRetry` = 能继续的那一轮审查（freeReviewRetryIdentity，来自共享缓存的
+  // useFreeWorkflowState，不额外发请求）。不给 = 审查档一颗都不出。
+  // `sessions` = 这个任务的会话行：审查档拿它找「续哪条审查会话」。
+  opts: { reviewRetry?: ReviewRetryIdentity | null; sessions?: Session[] } = {},
 ): TurnRetryTarget | null {
   // duet/团队各有自己的回合形状（gate、常驻调度台），服务端也只接单飞。
   if (task.mode !== "single" || task.archived) return null;
@@ -57,35 +62,37 @@ export function turnRetryTarget(
   if (task.question || task.resumePrompt) return null;
   // 就地验证轮还挂着号 = 那一轮没出结论，它是旁路回合，重跑它得走验证那条路。
   if (task.verifyRound != null) return null;
-  // **审查档认会话，不认气泡**：一句正文都没吐出来就断掉的审查回合（任务书送没送到都说不清）
-  // 不产生 agent 气泡，按「最后一条气泡」找会话，要么找不到，要么找到前面实现者那一条 —— 服务端
-  // 明明标了「等你拿主意」、时间线也让用户点这颗按钮，页面上却一颗都没有。「有输出」推不出
-  // 「能不能继续」，权威判据是审查链状态 + 上一回合是不是审查会话（服务端同口径）。
-  if (opts.sessions && opts.reviewRetryable && task.workflowMode === "free") {
-    const latest = latestSessionOf(opts.sessions);
-    if (latest?.role === "reviewer" && !latest.stoppedAs) {
-      return { sessionId: latest.id, kind: "review", exitStatus: latest.exitStatus };
-    }
-  }
+  const turn = crashedTurnTarget(task, items, opts.sessions);
+  if (turn) return turn;
+  // **审查档认那一轮审查，不认气泡、也不认「最新会话」**（服务端同口径，理由整段在
+  // server/src/free-review-retry-identity.ts）：一句没说就断掉的审查回合不产生气泡；审查等着
+  // 用户拿主意时又跑了一条 `/compact`，最新会话就成了那条旁路回合 —— 两种都不该让还在等人的
+  // 那一轮失去入口。排在普通回合之后：上一回合是一次崩掉的普通回合时，那颗「重试」才是用户
+  // 眼前那件事。
+  if (!opts.reviewRetry || task.workflowMode !== "free") return null;
+  const reviewer = latestSessionOf((opts.sessions ?? []).filter((session) => session.role === "reviewer"));
+  // 手动停掉的审查回合不是「没出结论」，入口是「运行」（服务端同样 409）。
+  if (reviewer?.stoppedAs) return null;
+  return { kind: "review", sessionId: reviewer?.id ?? null, exitStatus: reviewer?.exitStatus ?? null, review: opts.reviewRetry };
+}
+
+/** 普通回合那一档：最后一条 agent 气泡的会话异常结束了。审查会话不归这里。 */
+function crashedTurnTarget(task: TaskListItem, items: ConversationItem[], sessions?: Session[]): TurnRetryTarget | null {
   const last = [...items].reverse().find((item) => item.kind === "agent");
   if (last?.kind !== "agent") return null;
   const session = last.session;
   if (!session) return null;
+  // 服务端只重跑**最近一次回合**那条会话：气泡后面还有没出声的回合（比如一句没说就断掉的
+  // 审查），这条气泡就不是「上一回合」，给它按钮只会换来 409。
+  if (sessions && latestSessionOf(sessions)?.id !== session.id) return null;
   // **主动停止/暂停也会留下非零退出码**（CLI 吃 SIGTERM 后按 signal 写 exit 1）。那不是崩溃，
   // 它们的入口是头部那颗「运行」；只有服务端记下的 stoppedAs 分得开这两者。
   if (session.stoppedAs) return null;
   const exitStatus = session.exitStatus;
-  if (session.role === "reviewer") {
-    // 自由工作流的审查回合崩了：按钮把**那一轮**重新拉起来（同一位审查者续跑），而不是
-    // 拿任务自己的实现 agent 顶上。链本身不在「异常结束」状态就不给按钮。
-    //
-    // 这一档**不看退出码**：审查链自己记着「这一轮有没有给出结论」（run=failed +
-    // round=error），那才是权威判据。CLI 打完「API Error: Connection lost mid-response」
-    // 照样 exit 0，拿退出码当门槛的话，时间线上明写「未能正常给出结论，已停止自动链」，
-    // 界面上却一个能重来的入口都没有（2026-09-11 实测）。服务端同口径。
-    if (task.workflowMode !== "free" || !opts.reviewRetryable) return null;
-    return { sessionId: session.id, kind: "review", exitStatus };
-  }
+  // 审查会话归审查档：它**不看退出码**，审查链自己记着「这一轮有没有给出结论」才是权威判据。
+  // CLI 打完「API Error: Connection lost mid-response」照样 exit 0，拿退出码当门槛的话，时间线
+  // 上明写「未能正常给出结论，已停止自动链」，界面上却一个能重来的入口都没有（2026-09-11 实测）。
+  if (session.role === "reviewer") return null;
   // 「算不算异常结束」**跟服务端读同一份判据**（`@ash/shared/turn-outcome`，三个信号的
   // 优先级写在那里）。两边各写一份 if 就是在等下一次漂开 —— 审查 F2 要修的那一条恰恰是
   // 同一句判据在两端各错一次（都只看退出码，于是被看门狗终止、以 exit 0 收流的那一轮
