@@ -40,7 +40,7 @@ async function projectIdOf(taskId: string): Promise<string | null> {
   return row.projectId;
 }
 
-/** 事件挂在哪个任务上。所有 ServerEvent 变体要么带 taskId,要么带整个 task。 */
+/** 事件挂在哪个任务上。除 project.updated 外,所有 ServerEvent 变体要么带 taskId,要么带整个 task。 */
 function taskIdOf(ev: ServerEvent): string | null {
   if ("taskId" in ev && typeof ev.taskId === "string") return ev.taskId;
   if ("task" in ev && ev.task) {
@@ -84,6 +84,8 @@ export function makeEventFilter(actor: Actor): {
   return {
     allow(ev) {
       if (unrestricted) return true;
+      // 挂在项目上、不挂在任务上的事件：直接按项目可见性判。
+      if (ev.type === "project.updated") return !!visible?.has(ev.projectId);
       const taskId = taskIdOf(ev);
       // 认不出归属的事件一律**不推**。宁可漏一条无害的广播,也好过默认放行 ——
       // 将来新增一种事件时,忘了在这里登记的后果是「少显示了点东西」而不是越权。

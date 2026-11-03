@@ -115,6 +115,10 @@ export type ServerEvent =
   // 验收前置命令起了/跑完了。只发信号不带载荷（同 task.monitors）：界面按它重拉
   // `/tasks/:id/accept-gate` —— 载荷里有日志尾巴，几分钟一条的广播不该驮着它。
   | { type: "task.acceptGate"; taskId: string }
+  // 项目设置被改了（PATCH /projects/:id）。只发信号不带载荷：项目视图里有按身份裁掉的字段
+  // （toProject 的 role），广播一份给所有连接会把管理员才看得到的东西推给别人。开着的每个页面
+  // 按它重拉项目列表 —— 门禁基准在验收台和项目设置两处都能改，另一个页面得跟上。
+  | { type: "project.updated"; projectId: string }
   | { type: "task.title"; taskId: string; title: string; updatedAt: string }
   // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
   // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/

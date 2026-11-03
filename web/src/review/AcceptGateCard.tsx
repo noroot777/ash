@@ -10,7 +10,6 @@ import { useCatchUp } from "../lib/useCatchUp.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
 import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
 import { AcceptGateBaselineChoice } from "./AcceptGateBaselineChoice.tsx";
-import { announceProjectUpdate } from "../lib/projectUpdates.ts";
 
 // 「验收前置命令」在验收台上的那张卡。它跟 PendingMergeCard 一样住在每个有验收动作的
 // 表面上，自己判要不要出现。
@@ -209,7 +208,7 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
     if (busy) return;
     setBusy(true);
     try {
-      announceProjectUpdate(await api.updateProject(task.projectId, { acceptGateBaseline: next }));
+      await api.updateProject(task.projectId, { acceptGateBaseline: next });
       await reload();
       notify(`这个项目的门禁基准改成了「${ACCEPT_GATE_BASELINE_LABELS[next]}」：对整个项目之后的每一次验收生效`);
     } catch (reason) {

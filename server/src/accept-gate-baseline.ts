@@ -7,9 +7,13 @@
 //  · acceptGateState（验收台那张卡）—— 「已通过，可以直接验收」还是「要重跑 / 会被拒」。
 //
 // 预演合并用 `git merge-tree --write-tree`：它只往对象库写 blob/tree，不碰任何 ref、索引和工作区，
-// 也不跑钩子 —— 是一次 git 操作，不是用户代码。真正给门禁跑的那份合并结果在测试快照里另合一次
-// （accept-gate-source.ts 的 createGateSnapshot），两边的树必须相等，否则快照建不起来。
+// 也不跑钩子。但「是 git 子命令」不等于「不跑用户程序」：碰到配了外部合并驱动的文件，它照样去
+// 执行那条命令 —— 所以预演之前先过 mergePrograms 那道检查（第 1 轮审查 F1）。预演出来的那棵树
+// 原样放进测试快照（accept-gate-source.ts 的 materializePreview），合并只在这里定义一次。
 import { type AcceptGateBaseline, normalizeAcceptGateBaseline } from "@ash/shared/accept-gate";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join, posix } from "node:path";
 import { execFileText } from "./exec.js";
 import { isAncestor } from "./git-accept.js";
 import { resolveWorktreeBranchName } from "./git.js";
@@ -62,6 +66,45 @@ async function previewMerge(repo: string, targetCommit: string, head: string): P
 }
 
 /**
+ * 预演会调起的项目自配程序（返回它们的配置键）。merge-tree 合到两边都改过的文件时，按属性
+ * `merge=<name>` 去执行 `merge.<name>.driver`；开了 merge.renormalize 还会按 `filter=<name>` 跑
+ * `filter.<name>.clean/process`。这些都是用户程序，门禁命令之外一条都不许多跑。
+ *
+ * 判据取保守的那一边：配置里有这样一条命令，且两棵树、主检出、本地 / 全局属性文件或
+ * `merge.default` 里有一处点了它的名字，就不预演。不逐路径去判「这次到底碰不碰得到」：重命名配对会让被合的路径和两边各自
+ * 改过的路径对不上，猜错一次就是执行了用户程序。配置里一条都没有（绝大多数仓库）时只花一次
+ * `git config`。
+ */
+async function mergePrograms(repo: string, commits: string[]): Promise<string[]> {
+  const listed = await git(repo, ["config", "--get-regexp", "^(merge|filter)\\..+\\.(driver|clean|process)$"]).catch(() => null);
+  const renormalize = (await git(repo, ["config", "--type=bool", "merge.renormalize"]).catch(() => null))?.stdout.trim() === "true";
+  const programs = (listed?.stdout ?? "").split("\n").map(line => line.split(" ")[0]!).filter(Boolean)
+    .map(key => ({ key, match: /^(merge|filter)\.(.+)\.(driver|clean|process)$/.exec(key) }))
+    .filter(({ match }) => match && (match[1] === "merge" || renormalize));
+  if (!programs.length) return [];
+  const texts: string[] = [];
+  for (const commit of commits) {
+    const paths = (await git(repo, ["ls-tree", "-r", "-z", "--name-only", commit])).stdout.split("\0")
+      .filter(path => posix.basename(path) === ".gitattributes");
+    for (const path of paths) texts.push((await git(repo, ["cat-file", "blob", `${commit}:${path}`])).stdout);
+  }
+  const root = expandHome(repo);
+  const onDisk = (await git(repo, ["ls-files", "-z", "-co", "--exclude-standard"])).stdout.split("\0")
+    .filter(path => posix.basename(path) === ".gitattributes").map(path => join(root, path));
+  const info = (await git(repo, ["rev-parse", "--path-format=absolute", "--git-path", "info/attributes"])).stdout.trim();
+  const global = (await git(repo, ["config", "--path", "core.attributesFile"]).catch(() => null))?.stdout.trim()
+    || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "git", "attributes");
+  for (const file of [...onDisk, info, global]) texts.push(await readFile(file, "utf8").catch(() => ""));
+  // `merge.default` 不经属性，直接给所有没写 merge 属性的路径点名一个驱动。
+  const fallback = (await git(repo, ["config", "merge.default"]).catch(() => null))?.stdout.trim();
+  if (fallback) texts.push(`* merge=${fallback}`);
+  const attributes = texts.join("\n");
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return programs.filter(({ match }) =>
+    new RegExp(`(^|\\s)${match![1]}=${escape(match![2]!)}(\\s|$)`, "m").test(attributes)).map(({ key }) => key);
+}
+
+/**
  * 按项目当前的基准，这一按要测哪一棵树，或者在门禁之前就该被拒。
  *
  * `probeConflict: false` 只给验收台的新鲜度用：那里只要知道「预演基准是哪个提交」，冲突要不要
@@ -87,6 +130,13 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
   }
   const preview = { ...plan, previewBase: targetCommit };
   if (contained || opts.probeConflict === false) return { plan: preview, block: null };
+  const programs = await mergePrograms(project.repoPath, [targetCommit, head]);
+  if (programs.length) {
+    return { plan: null, block: { reason: "accept_gate_preview_unavailable", targetBranch, targetCommit,
+      error: `合并预览没有预演：这个仓库给合并配了自定义程序（${programs.join("、")}），预演一合到相关文件就会执行它，`
+        + "而门禁命令之外不许多跑项目自己的程序。这一档对这个仓库用不了：在项目设置 → 验收里换成「要求已含目标分支」"
+        + `（任务自己先把 ${targetBranch} 合进来，门禁测的就是合并结果），或者换回「分支快照」。` } };
+  }
   const merged = await previewMerge(project.repoPath, targetCommit, head);
   if ("tree" in merged) return { plan: { ...preview, previewTree: merged.tree }, block: null };
   if ("error" in merged) {

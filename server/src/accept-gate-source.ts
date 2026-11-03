@@ -272,7 +272,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
       await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
       await git(target, ["checkout", "--detach", source.commit]);
-      if (preview) previewCommit = await mergePreview(target, preview);
+      if (preview) previewCommit = await materializePreview(target, preview);
       await git(target, ["remote", "remove", "origin"]);
       const paths = (await git(target, ["ls-tree", "-r", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean);
       // 比较基准也必须规范化:落点是 realpath 出来的,拿没规范化的快照路径去比,只要路径祖先里有
@@ -364,20 +364,21 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
 }
 
 /**
- * 在快照里把目标分支合进来。只是 git：克隆没带项目的 config（没有自定义合并驱动），钩子目录
- * 上面已经指向一个空位置，所以这一步不执行任何项目代码 —— 门禁命令前后不许多跑用户代码。
- * 目标提交来自克隆源的对象库（worktree 与主仓共用一份，克隆时整份带过来），不再去网络上取。
+ * 把预演核定的那棵合并树原样放进快照，**不在快照里再合一次**。
+ *
+ * 再合一次就是第二份合并定义：方向（谁是 ours）、配置（快照没有项目的 config）、属性都可能跟预演
+ * 与真合并不一样 —— `merge=union` 这类有方向的内置驱动会合出另一棵树，门禁就测不到将要合进去
+ * 的那一棵（第 1 轮审查 F2）。所以只有一处定义合并：accept-gate-baseline.ts 的预演，方向与
+ * git-accept.ts 的真合并相同（在目标分支上合入任务分支）；这里只是给那棵树配一个提交、检出。
+ * `commit-tree` 只写一个提交对象，不跑钩子、不碰合并驱动，也不签名（签名会调 gpg）。树对象是
+ * 预演写进主仓对象库的，本地克隆整份带过来（worktree 与主仓共用一份）。
  */
-async function mergePreview(target: string, preview: GateSnapshotPreview): Promise<string> {
-  await execFileText("git", ["-C", target, "-c", "user.name=ash", "-c", "user.email=ash@localhost",
-    "-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-edit", "--no-verify",
-    "-m", `ash 验收门禁合并预览：合入 ${preview.targetCommit}`, preview.targetCommit]);
-  const tree = (await git(target, ["rev-parse", "HEAD^{tree}"])).trim();
-  if (tree !== preview.tree) {
-    throw new Error(`快照里合出来的树（${tree}）与预演的合并结果（${preview.tree}）不一致，`
-      + "这次测的就不会是将要合进去的那一棵；请重新验收");
-  }
-  return (await git(target, ["rev-parse", "HEAD"])).trim();
+async function materializePreview(target: string, preview: GateSnapshotPreview): Promise<string> {
+  const commit = (await execFileText("git", ["-C", target, "-c", "user.name=ash", "-c", "user.email=ash@localhost",
+    "commit-tree", "--no-gpg-sign", preview.tree, "-p", "HEAD", "-p", preview.targetCommit,
+    "-m", `ash 验收门禁合并预览：合入 ${preview.targetCommit}`])).stdout.trim();
+  await git(target, ["checkout", "--detach", commit]);
+  return commit;
 }
 
 export async function removeGateSnapshot(taskId: string, runId: string): Promise<void> {

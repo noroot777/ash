@@ -350,6 +350,7 @@ export function mountProjectRoutes(api: Hono): void {
       const affected = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, pid));
       for (const task of affected) bus.publish({ type: "task.acceptGate", taskId: task.id });
     }
+    bus.publish({ type: "project.updated", projectId: pid });
     return c.json(toProject(updated, "admin"));
   });
 

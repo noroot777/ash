@@ -36,6 +36,7 @@ try {
   const { acceptGateWouldRun, whenAcceptGateSettled } = await import("../src/accept-gate.js");
   const { acceptGateState } = await import("../src/accept-gate-state.js");
   const { mountProjectRoutes } = await import("../src/project-routes.js");
+  const { bus } = await import("../src/bus.js");
   await ensureSchema();
   const api = new Hono();
   mountProjectRoutes(api);
@@ -251,6 +252,11 @@ try {
       headers: { "content-type": "application/json" }, body: JSON.stringify({ acceptGateBaseline: "preview" }) });
     assert.equal(bad.status, 400);
     assert.equal((await projectRow(sample.projectId)).acceptGateBaseline, "branch");
+    // 每次改都发项目级事件：别的页面（停在项目设置上的那一个）靠它重拉项目，不只是任务卡片。
+    const published: string[] = [];
+    const unsubscribe = bus.subscribe((event) => {
+      if (event.type === "project.updated") published.push(event.projectId);
+    });
     for (const mode of ["contains_target", "merge_preview", "branch"] as const) {
       const response = await api.request(`/projects/${sample.projectId}`, { method: "PATCH",
         headers: { "content-type": "application/json" }, body: JSON.stringify({ acceptGateBaseline: mode }) });
@@ -258,10 +264,56 @@ try {
       assert.equal((await acceptGateState(sample.taskId)).baseline, mode);
       assert.equal(await wouldRun(sample), mode !== "contains_target");
     }
+    unsubscribe();
+    assert.deepEqual(published, [sample.projectId, sample.projectId, sample.projectId]);
+  }
+
+  // ⑧ 合并预览 · 仓库配了外部合并驱动：预演会执行它，所以在预演之前就拒，三个入口（看卡片、批量
+  // 预判、真按下去）一个都不许把它跑起来。
+  {
+    const sample = await fixture("preview-driver", { baseline: "merge_preview" });
+    const marker = join(root, "driver-ran");
+    git(sample.repo, "config", "merge.review.driver", `touch '${marker}'; false`);
+    writeFileSync(join(sample.cwd, ".gitattributes"), "data.txt merge=review\n");
+    writeFileSync(join(sample.cwd, "data.txt"), "task\n");
+    git(sample.cwd, "add", "-A");
+    git(sample.cwd, "commit", "-m", "task edits data");
+    writeFileSync(join(sample.repo, "data.txt"), "main\n");
+    git(sample.repo, "add", "data.txt");
+    git(sample.repo, "commit", "-m", "main edits data");
+    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /merge\.review\.driver/);
+    assert.equal(await wouldRun(sample), false);
+    const refused = await acceptTask(sample.taskId);
+    assert.equal(refused.accepted, false);
+    if (!refused.accepted) assert.equal(refused.reason, "accept_gate_preview_unavailable");
+    assert.equal(existsSync(marker), false, "门禁命令之外没有执行项目配的合并驱动");
+    assert.equal((await runs(sample.taskId)).length, 0);
+  }
+
+  // ⑨ 合并预览 · 有方向的内置驱动（merge=union）：两边改同一个文件、git 能自动合。门禁测的必须
+  // 就是真合并那一棵 —— 快照里反向再合一次会合出 task 在前的另一棵树，从前因此永远建不起快照。
+  {
+    const sample = await fixture("preview-union", { baseline: "merge_preview" });
+    writeFileSync(join(sample.repo, ".gitattributes"), "data.txt merge=union\n");
+    writeFileSync(join(sample.repo, "data.txt"), "seed\n");
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-m", "union attribute");
+    git(sample.cwd, "merge", "--no-edit", "main");
+    writeFileSync(join(sample.cwd, "data.txt"), "task\n");
+    git(sample.cwd, "commit", "-am", "task edits data");
+    writeFileSync(join(sample.repo, "data.txt"), "main\n");
+    git(sample.repo, "commit", "-am", "main edits data");
+    await acceptTask(sample.taskId);
+    await settled(sample.taskId);
+    const [row] = await runs(sample.taskId);
+    assert.equal(row!.status, "passed", row!.failure ?? "");
+    assert.ok(row!.previewCommit);
+    assert.equal((await taskRow(sample.taskId)).stage, "accepted");
+    assert.equal(readFileSync(join(sample.repo, "data.txt"), "utf8"), "main\ntask\n", "真合并：目标分支在前");
   }
 
   console.log(JSON.stringify({ branchDefault: true, containsRefuse: true, containsPass: true, previewCollision: true,
-    previewConflict: true, previewReuse: true, previewDrift: true, setting: true }));
+    previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
