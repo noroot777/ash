@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { cloneSealedSnapshot, isSealedSnapshot, readOnlyGit, sealedGit } from "./accept-gate-preview.js";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { type CheckoutSettings, cloneSealedSnapshot, isSealedSnapshot, readOnlyGit, sealedGit } from "./accept-gate-preview.js";
 import { execFileText } from "./exec.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
@@ -183,10 +183,12 @@ export async function gateDependencies(cwd: string, commit: string): Promise<{ d
 
 /**
  * 借进快照的依赖内容实际读自工作区的哪几处（相对工作区、`/` 分隔，"" = 整个工作区）：依赖目录自己、
- * 链上经过的每一跳，以及它最终解析到的那棵树 —— 依赖根可以是一条指回仓库别处的链（`vendor -> shared`），
- * 借进来的就是工作区里那棵树（第 2 轮审查 F1）。合并预览据此判断借进来的是不是合并之后那份
- * （accept-gate-baseline.ts）。树**里面**指回源码的链不用算：克隆时它们被改写到快照自己那份源码上
- * （accept-gate-relocate 的 relocatedTarget），有这种链的树也不会被整条借出去（provideDependency）。
+ * 把它的路径解析到底途中经过的**每一条链**（不只是末端那一条，父目录上的也算：`vendor -> links/deps`
+ * 而 `links -> pool-a` 时，`links` 改个指向，借进来的就换了一棵，第 4 轮审查 F4），以及最终解析到的
+ * 那棵树 —— 依赖根可以是一条指回仓库别处的链（`vendor -> shared`），借进来的就是工作区里那棵树
+ * （第 2 轮审查 F1）。合并预览据此判断借进来的是不是合并之后那份（accept-gate-baseline.ts）。树**里面**
+ * 指回源码的链不用算：克隆时它们被改写到快照自己那份源码上（accept-gate-relocate 的 relocatedTarget），
+ * 有这种链的树也不会被整条借出去（provideDependency）。
  */
 export async function dependencyReads(cwd: string, dependencies: readonly string[]): Promise<string[]> {
   const root = await requiredRead(cwd, () => realpath(cwd));
@@ -194,17 +196,33 @@ export async function dependencyReads(cwd: string, dependencies: readonly string
   const add = (path: string) => { if (inside(root, path)) reads.add(relative(root, path).split(sep).join("/")); };
   for (const dep of dependencies) {
     reads.add(dep.split(sep).join("/"));
-    let hop = join(root, dep);
-    for (let step = 0; step < 40; step++) {
-      const info = await optionalRead(hop, () => lstat(hop), ["ENOENT", "ENOTDIR", "ELOOP"]);
-      if (!info?.isSymbolicLink()) break;
-      add(hop);
-      hop = resolve(dirname(hop), await readlink(hop));
-    }
-    const landing = await optionalRead(join(root, dep), () => realpath(join(root, dep)), ["ENOENT", "ENOTDIR", "ELOOP"]);
+    const landing = await resolveRecording(root, dep.split(/[\\/]/), add);
     if (landing !== null) add(landing);
   }
   return [...reads];
+}
+
+/**
+ * 从 `base`（已解析的真实目录）出发逐个路径组件解析，遇到链就记下它（`record`，记的是链本身的真实
+ * 位置），再把链的内容接到剩下的组件前面继续。返回最终落点；中途不存在 / 成环则返回 null（链照样记下）。
+ */
+async function resolveRecording(base: string, components: string[], record: (link: string) => void): Promise<string | null> {
+  const pending = components.filter(part => part && part !== ".");
+  let resolved = base;
+  for (let hops = 0; pending.length;) {
+    const part = pending.shift()!;
+    if (part === "..") { resolved = dirname(resolved); continue; }
+    const next = join(resolved, part);
+    const info = await optionalRead(next, () => lstat(next), ["ENOENT", "ENOTDIR", "ELOOP"]);
+    if (!info) return null;
+    if (!info.isSymbolicLink()) { resolved = next; continue; }
+    if (++hops > 40) return null;
+    record(next);
+    const link = await readlink(next);
+    if (isAbsolute(link)) resolved = parse(link).root;
+    pending.unshift(...link.split(/[\\/]/).filter(item => item && item !== "."));
+  }
+  return resolved;
 }
 
 export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, "identity.source")): Promise<GateSource> {
@@ -258,7 +276,7 @@ export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR
  * 合并预览档要在快照里合进来的那一份（见 accept-gate-baseline.ts）。`tree` 是仓库里预演出来的合并树：
  * 快照里真合出来的必须跟它一模一样，否则「绿了合进去的」和「门禁测过的」就不是同一棵。
  */
-export type GateSnapshotPreview = { targetCommit: string; tree: string | null };
+export type GateSnapshotPreview = { targetCommit: string; tree: string | null; settings: CheckoutSettings };
 
 /** 建快照。合并预览档返回快照里落下的合并提交（收尾核验认它当 HEAD），其余档返回 null。 */
 export async function createGateSnapshot(cwd: string, target: string, source: GateSource,
@@ -311,7 +329,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       // cloneSealedSnapshot）：目标分支带进来的文件不在门禁命令之外调起任何程序。其余档原样不动。
       const snap = preview ? (args: string[]) => sealedGit(target, args) : (args: string[]) => git(target, args);
       if (preview) {
-        await cloneSealedSnapshot(cwd, cwd, target);
+        await cloneSealedSnapshot(cwd, target, preview.settings);
       } else {
         await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
         await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);

@@ -129,9 +129,11 @@ async function sealedExec(cwd: string, args: string[]): Promise<string> {
 
 /**
  * 建合并预览档的测试快照：不带模板克隆（`--template=`），随即把本地配置换成核定的那一份
- * （见上）。`repo` 是项目（读它的有效配置决定带哪几项内置转换），`source` 是被克隆的工作区。
+ * （见上）。`source` 是被克隆的工作区；检出语义那几项**不从它读**，由调用方显式给出
+ * （`checkoutSettings`，判定时从目标检出读的那一份）—— 任务工作区与主检出的有效配置可以不同
+ * （extensions.worktreeConfig、按 gitdir 条件 include），从这里重读就成了另一份（第 4 轮审查 F3）。
  */
-export async function cloneSealedSnapshot(repo: string, source: string, target: string): Promise<void> {
+export async function cloneSealedSnapshot(source: string, target: string, settings: CheckoutSettings): Promise<void> {
   await sealedExec(source, ["clone", "--template=", "--no-hardlinks", "--dissociate", "--no-checkout", "--", source, target]);
   const file = join(target, ".git", "config");
   const { empty } = await scratch();
@@ -141,8 +143,7 @@ export async function cloneSealedSnapshot(repo: string, source: string, target: 
     const at = line.indexOf("=");
     return at < 0 ? [line, "true"] : [line.slice(0, at), line.slice(at + 1)];
   }).filter(([key]) => KEPT_SETTINGS.test(key));
-  const conversions = (await carriedPairs(repo)).filter(([key]) => key.startsWith("core."));
-  const entries: [string, string][] = [...kept, ...conversions,
+  const entries: [string, string][] = [...kept, ...settings,
     ["core.hooksPath", join(target, ".git", "ash-no-hooks")],
     ["core.attributesFile", join(target, ".git", "ash-no-attributes")],
     ["core.fsmonitor", "false"], [SEAL_MARK, "true"]];
@@ -152,35 +153,69 @@ export async function cloneSealedSnapshot(repo: string, source: string, target: 
   await rename(next, file);
 }
 
-/**
- * 检出时决定**写出什么字节**的那两项配置。cloneSealedSnapshot 照项目有效值把它们带进快照，所以
- * 快照写出来的文件 = 树（含树里的 .gitattributes）+ 这两项；属性那一半由 conversionDrift 在每次
- * 判定时核对，这一半只能记下来：门禁跑的十几分钟里项目把 core.autocrlf 改了，树一个字节没动，
- * 合进去之后检出的却是另一份（第 3 轮复审 F1 实测）。所以它是门禁凭据的一部分（gateBaselineMatches）。
- * 别把 ignorecase / precomposeunicode 加进来：它们不改字节，克隆还会按文件系统自己探测一份，
- * 两边永远对不上，等于这一档的旧绿永远不能复用。
- */
-const BYTE_SETTINGS = ["core.autocrlf", "core.eol"];
-const materializationOf = (value: (key: string) => string | undefined): string =>
-  createHash("sha256").update("gate-materialization-v1\0")
-    .update(BYTE_SETTINGS.map(key => `${key}=${JSON.stringify(value(key) ?? null)}`).join("\0")).digest("hex");
+// ── 目标检出的文件语义：快照要写出与「合进去之后在目标检出里」同样的文件，靠的是三样东西都一样。
+//
+//  · 树（含树里的 .gitattributes）—— 预演 / 分支 HEAD 给定；
+//  · 树之外的属性 —— 快照不读，所以由 conversionDrift / checkoutFilters 在每次判定时核对，对不上就拒；
+//  · 配置里决定检出结果的那几项 —— 下面 `checkoutSettings` 从目标检出读出来，**显式**交给快照写进
+//    它自己的配置（cloneSealedSnapshot），其身份进门禁凭据（gateBaselineMatches）。
+//
+// 第三样按「影响检出出来的是什么」列全，不按踩过哪个坑往上补：换行字节（core.autocrlf / eol，第 3 轮
+// 复审 F1），文件类型（core.symlinks：false 时链接检出成写着目标路径的普通文件，第 4 轮审查 F1），
+// 路径怎么落盘（ignorecase / precomposeunicode，只照带不进身份 —— 克隆会按文件系统自己探测一份，
+// 两边写法对不上，进了身份等于旧绿永远不能复用）。复现不了的语义不带、直接拒（`checkoutGaps`）。
 
-/** 项目此刻建快照会带进去的转换配置的身份（判定那一刻；与 snapshotMaterialization 同一个口径）。 */
-export async function materializationIdentity(repo: string): Promise<string> {
-  const pairs = await carriedPairs(repo);
-  return materializationOf(key => pairs.filter(([name]) => name === key).at(-1)?.[1]);
+/** 进门禁凭据的那几项：它们一变，同一棵树检出的字节或文件类型就变。 */
+const IDENTITY_SETTINGS = ["core.autocrlf", "core.eol", "core.symlinks"];
+/** 布尔项按有效值归一（git 的默认值），这样「没设」和「设成默认值」是同一份。 */
+const BOOLEAN_DEFAULTS: Record<string, string> = { "core.symlinks": "true" };
+const PATH_SETTINGS = /^core\.(ignorecase|precomposeunicode)$/;
+
+/** 快照检出要照目标检出复现的配置（键、有效值），判定时读一次，快照、凭据都用这一份。 */
+export type CheckoutSettings = [string, string][];
+
+const settingValue = async (args: string[], key: string, run: (args: string[]) => Promise<string | null>): Promise<string | undefined> => {
+  const typed = key in BOOLEAN_DEFAULTS ? ["--type=bool"] : [];
+  return (await run([...args, ...typed, "--get", key]))?.trim() || BOOLEAN_DEFAULTS[key];
+};
+
+/** 目标检出（项目主检出）此刻的检出语义配置。 */
+export async function checkoutSettings(repo: string): Promise<CheckoutSettings> {
+  const run = async (args: string[]) => (await git(repo, args).catch(() => null))?.stdout ?? null;
+  const settings: CheckoutSettings = [];
+  for (const key of IDENTITY_SETTINGS) {
+    const value = await settingValue(["config"], key, run);
+    if (value !== undefined) settings.push([key, value]);
+  }
+  for (const [key, value] of await carriedPairs(repo)) if (PATH_SETTINGS.test(key)) settings.push([key, value]);
+  return settings;
 }
 
-/** 这份封好的快照**实际**用的转换配置的身份（读它自己的本地配置，就是检出时生效的那一份）。 */
+const identityOf = (value: (key: string) => string | undefined): string =>
+  createHash("sha256").update("gate-materialization-v2\0")
+    .update(IDENTITY_SETTINGS.map(key => `${key}=${JSON.stringify(value(key) ?? null)}`).join("\0")).digest("hex");
+
+/** 这份检出语义的身份（判定那一刻；与 snapshotMaterialization 同一个口径）。 */
+export const materializationIdentity = (settings: CheckoutSettings): string =>
+  identityOf(key => settings.filter(([name]) => name === key).at(-1)?.[1]);
+
+/** 这份封好的快照**实际**用的检出语义的身份（读它自己的本地配置，就是检出时生效的那一份）。 */
 export async function snapshotMaterialization(cwd: string): Promise<string> {
   const { empty } = await scratch();
   const file = join(cwd, ".git", "config");
+  const run = async (args: string[]) => (await execFileText("git", args, { env: cleanEnv(empty) }).catch(() => null))?.stdout ?? null;
   const values = new Map<string, string | undefined>();
-  for (const key of BYTE_SETTINGS) {
-    values.set(key, (await execFileText("git", ["config", "--file", file, "--get", key], { env: cleanEnv(empty) })
-      .catch(() => null))?.stdout.trim());
-  }
-  return materializationOf(key => values.get(key));
+  for (const key of IDENTITY_SETTINGS) values.set(key, await settingValue(["config", "--file", file], key, run));
+  return identityOf(key => values.get(key));
+}
+
+/**
+ * 目标检出里有、快照复现不了的检出语义（返回说明）。sparse checkout 下主检出只写出一部分路径，
+ * 快照写的是整棵树 —— 门禁测到的文件合进去之后根本不在磁盘上。
+ */
+export async function checkoutGaps(repo: string): Promise<string[]> {
+  const sparse = (await git(repo, ["config", "--type=bool", "--get", "core.sparseCheckout"]).catch(() => null))?.stdout.trim();
+  return sparse === "true" ? ["主检出开了 sparse checkout（core.sparseCheckout），平时只写出一部分文件"] : [];
 }
 
 /** 这份快照是不是 `cloneSealedSnapshot` 建的（收尾核验据此决定用哪套环境跑 git）。 */
@@ -307,8 +342,8 @@ const CONVERSIONS = ["text", "eol", "crlf", "working-tree-encoding", "ident"];
  * 的路径）。快照只认树里的 `.gitattributes`，主检出的 `info/attributes`、全局 / 系统属性文件一概不读
  * （它们不进克隆，读进来也违背「环境只含核定配置」），所以那些文件给出的转换在快照里不生效 —— 树
  * 一样、字节不一样，门禁测的就不是合进去之后那份（第 1 轮审查 F1）。逐路径拿两边的属性对一遍：平时
- * 检出那边按项目有效属性问，快照那边在同样空的隔离环境里只按树问；有一处不同就提前拒绝。换行相关
- * 的配置（core.autocrlf / eol）两边是同一份（cloneSealedSnapshot 照项目有效值带过去），不用比。
+ * 检出那边按项目有效属性问，快照那边在同样空的隔离环境里只按树问；有一处不同就提前拒绝。检出语义
+ * 配置（core.autocrlf / eol / symlinks…）两边是同一份（checkoutSettings 显式带过去），不在这里比。
  */
 export async function conversionDrift(repo: string, tree: string): Promise<string[]> {
   const paths = await treePaths(repo, tree);

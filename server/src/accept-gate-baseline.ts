@@ -10,7 +10,7 @@
 // 原样放进测试快照（accept-gate-source.ts 的 materializePreview），也是最终合并必须落下的那棵
 // （git-accept.ts 的 expectedTree）—— 合并只在这里定义一次。
 import { type AcceptGateBaseline, normalizeAcceptGateBaseline } from "@ash/shared/accept-gate";
-import { changedPaths, checkoutFilters, conversionDrift, materializationIdentity, mergeDrivers, previewMerge, readOnlyGit } from "./accept-gate-preview.js";
+import { type CheckoutSettings, changedPaths, checkoutFilters, checkoutGaps, checkoutSettings, conversionDrift, materializationIdentity, mergeDrivers, previewMerge, readOnlyGit } from "./accept-gate-preview.js";
 import { dependencyReads } from "./accept-gate-source.js";
 import { isAncestor } from "./git-accept.js";
 import { resolveWorktreeBranchName } from "./git.js";
@@ -29,7 +29,9 @@ export type GateBaselinePlan = {
   previewBase: string | null;
   /** 预演出来的合并树。null = 不用合（分支已含目标分支尖端，快照就是分支那棵树）。 */
   previewTree: string | null;
-  /** 合并预览档：快照检出用的转换配置的身份（见 accept-gate-preview.ts 的 materializationIdentity）。 */
+  /** 合并预览档：快照检出要照着复现的目标检出语义配置（accept-gate-preview.ts 的 checkoutSettings）。 */
+  previewSettings: CheckoutSettings | null;
+  /** 上面那份的身份（materializationIdentity），复用判据的一部分。 */
   previewMaterialization: string | null;
 };
 
@@ -56,7 +58,7 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
   // 目标解析与 acceptGateCheck 登记 targetBranch 那一句同源：只有独立 worktree 的任务才有「合并之后」。
   const targetBranch = task.useWorktree ? await plannedMergeTarget(task, project.repoPath) : null;
   const targetCommit = targetBranch ? await commitAt(project.repoPath, targetBranch) : null;
-  const plan: GateBaselinePlan = { mode, targetBranch, targetCommit, previewBase: null, previewTree: null, previewMaterialization: null };
+  const plan: GateBaselinePlan = { mode, targetBranch, targetCommit, previewBase: null, previewTree: null, previewSettings: null, previewMaterialization: null };
   if (mode === "branch" || !targetBranch || !targetCommit || !head) return { plan, block: null };
   const contained = await isAncestor(expandHome(project.repoPath), targetCommit, head);
   if (mode === "contains_target") {
@@ -68,14 +70,18 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
         + `门禁只测任务分支那棵树，缺着这些提交，绿了也说明不了合进去之后还过不过，所以这次没有跑它。`
         + `先让任务在自己的分支上 \`git merge ${targetBranch}\`（有冲突就地解掉并提交），再点验收。` } };
   }
-  const preview = { ...plan, previewBase: targetCommit, previewMaterialization: await materializationIdentity(project.repoPath) };
   const unavailable = (why: string) => ({ plan: null, block: { reason: "accept_gate_preview_unavailable" as const,
     targetBranch, targetCommit, error: `合并预览这次没有预演：${why}。在项目设置 → 验收里换成「要求已含目标分支」`
       + `（任务自己先把 ${targetBranch} 合进来，门禁测的就是合并结果），或者换回「分支快照」。` } });
+  // 判定读到的那份检出语义原样交给快照（accept-gate.ts → createGateSnapshot），快照不自己再读一遍。
+  const settings = await checkoutSettings(project.repoPath);
+  const preview = { ...plan, previewBase: targetCommit, previewSettings: settings, previewMaterialization: materializationIdentity(settings) };
+  const gaps = await checkoutGaps(project.repoPath);
+  if (gaps.length) return unavailable(`${gaps.join("；")}，快照写的是整棵树，测到的文件合进去之后不一定在磁盘上`);
   // 这一档的快照**一律**在封好的环境里物化（accept-gate-source 的 cloneSealedSnapshot），不管要不要
   // 合 —— 已含目标分支时快照就是分支那棵树，照样在那个环境里检出（第 1 轮审查 F2）。所以「封好的
   // 环境写不出平时那份文件」这两条对两种情形都要问：项目配的过滤器，以及仓库外属性给出的内建转换。
-  const unfaithful = async (tree: string) => {
+  const faithfulness = async (tree: string) => {
     const filters = await checkoutFilters(project.repoPath, tree);
     if (filters.length) {
       return unavailable(`要测的文件里有平时要经过仓库配的过滤器（${filters.join("、")}）才能检出的，`
@@ -89,6 +95,9 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
     }
     return null;
   };
+  // 核对本身跑不动（git 太旧、属性读不出来）也是「没法确认快照忠实」，同样结构化拒，不落成通用报错。
+  const unfaithful = (tree: string) =>
+    faithfulness(tree).catch((error: unknown) => unavailable(`git 没能核对检出属性（${String(error)}）`));
   if (contained) {
     return await unfaithful((await git(project.repoPath, ["rev-parse", `${head}^{tree}`])).stdout.trim())
       ?? { plan: preview, block: null };

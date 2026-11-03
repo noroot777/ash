@@ -7,6 +7,7 @@ import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { gateLogReadable } from "./accept-gate-diagnosis.js";
 import { acceptGateLogTail } from "./accept-gate-process.js";
 import { commitAt } from "./task-branch-plan.js";
+import { treeOfCommit } from "./git-accept.js";
 import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
 import { gateDependencies, gateSnapshotPath, gateSourceMatches, readGateSource } from "./accept-gate-source.js";
 import { gateBaselineMatches, resolveGateBaseline } from "./accept-gate-baseline.js";
@@ -15,12 +16,18 @@ type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
 
-/** 凭据那一次门禁测的是哪一份：任务分支的提交，以及（合并预览档）预演出的合并树。最终合并只认这两样。 */
-export async function gateMergeSource(basis: Pick<TaskRow, "acceptedGateMode" | "acceptedGateRunId"> | null):
-  Promise<{ sourceCommit?: string; previewTree?: string }> {
+/**
+ * 凭据那一次门禁测的是哪一份：任务分支的提交；合并预览档另有测过的那棵树（预演出的合并树，已含目标
+ * 分支时就是任务分支那棵）和测的时候目标分支所在的提交。最终合并只认这几样（git-accept 的落地约束）。
+ */
+export async function gateMergeSource(repoPath: string, basis: Pick<TaskRow, "acceptedGateMode" | "acceptedGateRunId"> | null):
+  Promise<{ sourceCommit?: string; expectedTree?: string; expectedTarget?: string }> {
   if (basis?.acceptedGateMode !== "passed" || !basis.acceptedGateRunId) return {};
   const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, basis.acceptedGateRunId))).at(0);
-  return { sourceCommit: row?.sourceCommit ?? undefined, previewTree: row?.previewTree ?? undefined };
+  const sourceCommit = row?.sourceCommit ?? undefined;
+  if (!row?.previewBase) return { sourceCommit };
+  const expectedTree = row.previewTree ?? (sourceCommit ? await treeOfCommit(repoPath, sourceCommit) ?? undefined : undefined);
+  return { sourceCommit, expectedTree, expectedTarget: row.previewBase };
 }
 
 /**

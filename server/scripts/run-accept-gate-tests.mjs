@@ -8,7 +8,7 @@ if (fixture) console.log("[gate-tests] 编排回归使用进程组夹具，不�
 const commandOnly = process.argv.includes("--command-only");
 const orchestrated = commandOnly ? ["test-accept-gate-command.ts"]
   : ["test-accept-gate.ts", "test-accept-gate-readonly.ts", "test-accept-gate-identity.ts", "test-accept-gate-pending.ts",
-    "test-accept-gate-baseline.ts",
+    "test-accept-gate-baseline.ts", "test-accept-gate-baseline-landing.ts",
     "test-accept-gate-watch.ts", "test-accept-gate-command.ts"];
 for (const script of orchestrated) {
   const result = spawnSync(process.execPath, ["--import", "tsx", fileURLToPath(new URL(script, import.meta.url))], { env, stdio: "inherit" });
