@@ -35,6 +35,7 @@ export type GateBaselineBlock = {
   error: string;
   sourceBranch?: string;
   targetBranch: string;
+  targetCommit: string;
   conflictFiles?: string[];
 };
 
@@ -78,7 +79,7 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
   if (mode === "contains_target") {
     if (contained) return { plan, block: null };
     const behind = (await git(project.repoPath, ["rev-list", "--count", `${head}..${targetCommit}`]).catch(() => null))?.stdout.trim();
-    return { plan: null, block: { reason: "accept_gate_target_behind", targetBranch,
+    return { plan: null, block: { reason: "accept_gate_target_behind", targetBranch, targetCommit,
       error: `这个项目的门禁基准是「要求已含目标分支」：任务分支还没包含 ${targetBranch} 的最新提交`
         + `（${targetBranch} 现在在 ${short(targetCommit)}${behind ? `，有 ${behind} 个提交不在任务分支里` : ""}）。`
         + `门禁只测任务分支那棵树，缺着这些提交，绿了也说明不了合进去之后还过不过，所以这次没有跑它。`
@@ -89,12 +90,12 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
   const merged = await previewMerge(project.repoPath, targetCommit, head);
   if ("tree" in merged) return { plan: { ...preview, previewTree: merged.tree }, block: null };
   if ("error" in merged) {
-    return { plan: null, block: { reason: "accept_gate_preview_unavailable", targetBranch,
+    return { plan: null, block: { reason: "accept_gate_preview_unavailable", targetBranch, targetCommit,
       error: `合并预览没能预演（${merged.error}）。这一档要用 git 2.38 以上的 \`git merge-tree --write-tree\`；`
         + "升级 git，或者在项目设置 → 验收里把门禁基准换回「分支快照」。" } };
   }
   const sourceBranch = await resolveWorktreeBranchName(project.repoPath, task.id);
-  return { plan: null, block: { reason: "merge_conflict", targetBranch, sourceBranch, conflictFiles: merged.conflicts,
+  return { plan: null, block: { reason: "merge_conflict", targetBranch, targetCommit, sourceBranch, conflictFiles: merged.conflicts,
     error: `这个项目的门禁基准是「合并预览」：预演把 ${targetBranch}（${short(targetCommit)}）合进任务分支时有冲突`
       + `（${merged.conflicts.join("、")}），所以没有跑门禁，两个分支都一个字节没动。`
       + `让任务在自己的分支上 \`git merge ${targetBranch}\` 解掉冲突并提交，再点验收。` } };

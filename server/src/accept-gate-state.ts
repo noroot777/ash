@@ -131,7 +131,7 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   // 门禁基准此刻要对照的目标与它会不会拦下这一按。已验收的任务没有「下一按」，不去读 git。
   const head = frozen || !project ? null : await gateHead(task, project.repoPath);
   const judged = command && project && !frozen ? await resolveGateBaseline(task, project, head) : null;
-  const target = judged?.plan ?? null;
+  const target = judged?.plan ?? judged?.block ?? null;
   const baselineView = { baseline, baselineBlock: judged?.block?.error ?? null,
     baselineTarget: target?.targetBranch && target.targetCommit ? { branch: target.targetBranch, commit: target.targetCommit } : null };
   const latestRow = await latestRun(taskId);

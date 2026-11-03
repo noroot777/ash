@@ -42,10 +42,12 @@ export const ACCEPT_GATE_BASELINE_LABELS: Record<AcceptGateBaseline, string> = {
 };
 
 /** 这一档对「点一下验收」意味着什么。两处入口共用这一句，别各写一份。 */
-export function acceptGateBaselineEffect(mode: AcceptGateBaseline, target = "目标分支"): string {
-  if (mode === "contains_target") return `任务分支还没包含 ${target} 最新提交时直接拒绝验收，先让任务把 ${target} 合进来；含了才在分支快照上跑门禁。`;
-  if (mode === "merge_preview") return `先在测试快照里把最新的 ${target} 合进任务分支，再对这份合并结果跑门禁；预演有冲突就不跑，按冲突交回任务去解。`;
-  return `门禁跑在任务分支自己的快照上；${target} 之后进来的改动不在被测范围内。`;
+export function acceptGateBaselineEffect(mode: AcceptGateBaseline, target?: string | null): string {
+  // 有具体分支名就当代码名词嵌进句子（两边留空格，紧跟全角标点那一侧不留）；没有（项目设置页）就用通称，不留空格。
+  const t = target ? ` ${target} ` : "目标分支";
+  if (mode === "contains_target") return `任务分支还没包含${t}的最新提交时直接拒绝验收，先让任务把${t}合进来；含了才在分支快照上跑门禁。`;
+  if (mode === "merge_preview") return `先在测试快照里把最新的${t}合进任务分支，再对这份合并结果跑门禁；预演有冲突就不跑，按冲突交回任务去解。`;
+  return `门禁跑在任务分支自己的快照上；${t.trimStart()}之后进来的改动不在被测范围内。`;
 }
 
 /** 认不出的一律回到 `branch`：这一位只能让门禁更严，绝不能因为一条脏数据悄悄换了被测的树。 */
