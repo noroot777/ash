@@ -33,7 +33,12 @@ export function execFileText(
         resolve({ stdout, stderr });
       },
     );
-    // 有 input 就整份写进 stdin 再关上（路径清单这类可能撑爆命令行长度的参数走这里）。
-    if (input !== undefined) child.stdin?.end(input);
+    // 有 input 就整份写进 stdin 再关上（路径清单这类可能撑爆命令行长度的参数走这里）。子进程没读完
+    // 就退出时写端会报 EPIPE：那是流上的 error 事件，不接住就是未捕获异常；命令本身的失败由上面的
+    // 回调照常结算，这里只收下它。
+    if (input !== undefined) {
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(input);
+    }
   });
 }

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { sealedGit } from "./accept-gate-preview.js";
 import { execFileText } from "./exec.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
@@ -272,7 +273,7 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
       await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
       await git(target, ["checkout", "--detach", source.commit]);
-      if (preview) previewCommit = await materializePreview(target, preview);
+      if (preview) previewCommit = await materializePreview(cwd, target, preview);
       await git(target, ["remote", "remove", "origin"]);
       const paths = (await git(target, ["ls-tree", "-r", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean);
       // 比较基准也必须规范化:落点是 realpath 出来的,拿没规范化的快照路径去比,只要路径祖先里有
@@ -370,14 +371,15 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
  * 与真合并不一样 —— `merge=union` 这类有方向的内置驱动会合出另一棵树，门禁就测不到将要合进去
  * 的那一棵（第 1 轮审查 F2）。所以只有一处定义合并：accept-gate-baseline.ts 的预演，方向与
  * git-accept.ts 的真合并相同（在目标分支上合入任务分支）；这里只是给那棵树配一个提交、检出。
- * `commit-tree` 只写一个提交对象，不跑钩子、不碰合并驱动，也不签名（签名会调 gpg）。树对象是
+ * `commit-tree` 只写一个提交对象，不跑钩子、不碰合并驱动，也不签名（签名会调 gpg）；检出走 `sealedGit`，
+ * 目标分支带进来的文件点名了过滤器也没有程序可调（见 accept-gate-preview.ts 文件头）。树对象是
  * 预演写进主仓对象库的，本地克隆整份带过来（worktree 与主仓共用一份）。
  */
-async function materializePreview(target: string, preview: GateSnapshotPreview): Promise<string> {
-  const commit = (await execFileText("git", ["-C", target, "-c", "user.name=ash", "-c", "user.email=ash@localhost",
+async function materializePreview(cwd: string, target: string, preview: GateSnapshotPreview): Promise<string> {
+  const commit = (await sealedGit(cwd, target, ["-c", "user.name=ash", "-c", "user.email=ash@localhost",
     "commit-tree", "--no-gpg-sign", preview.tree, "-p", "HEAD", "-p", preview.targetCommit,
-    "-m", `ash 验收门禁合并预览：合入 ${preview.targetCommit}`])).stdout.trim();
-  await git(target, ["checkout", "--detach", commit]);
+    "-m", `ash 验收门禁合并预览：合入 ${preview.targetCommit}`])).trim();
+  await sealedGit(cwd, target, ["checkout", "--detach", commit]);
   return commit;
 }
 

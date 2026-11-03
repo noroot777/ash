@@ -395,9 +395,70 @@ try {
     assert.equal(git(sample.repo, "status", "--porcelain"), "");
   }
 
+  // ⑬ 合并预览 · 主检出的本地属性把过滤器掩掉了，克隆里却没有那份覆盖（第 1 轮复审 F1）：提前判断放行，
+  // 快照照样不许执行它 —— 硬边界在实际检出的那个环境里。过滤器定义在全局配置（克隆也读得到的那一层）。
+  {
+    const globalConfig = join(root, "global-gitconfig");
+    const savedGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const marker = join(root, "masked-filter-ran");
+    writeFileSync(globalConfig, `[filter "review"]\n\tsmudge = touch '${marker}'; cat\n\tclean = cat\n`);
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    try {
+      const sample = await fixture("preview-masked-filter", { baseline: "merge_preview" });
+      writeFileSync(join(sample.repo, ".gitattributes"), "target.txt filter=review\n");
+      writeFileSync(join(sample.repo, "target.txt"), "target\n");
+      git(sample.repo, "add", "-A");
+      git(sample.repo, "commit", "-m", "main adds a filtered file");
+      mkdirSync(join(sample.repo, ".git", "info"), { recursive: true });
+      writeFileSync(join(sample.repo, ".git", "info", "attributes"), "target.txt -filter\n");
+      rmSync(marker, { force: true });
+      assert.equal((await acceptGateState(sample.taskId)).baselineBlock, null, "主检出里这个文件确实不过滤");
+      await acceptTask(sample.taskId);
+      await settled(sample.taskId);
+      const [row] = await runs(sample.taskId);
+      assert.equal(row!.status, "passed", row!.failure ?? "");
+      assert.ok(row!.previewCommit);
+      assert.equal(existsSync(marker), false, "快照检出没有执行全局配的过滤器");
+    } finally {
+      if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = savedGlobal;
+    }
+  }
+
+  // ⑭ SHA-256 仓库也能预演：隔离目录按项目的对象格式建（与上面 SHA-1 的那份并存）。
+  {
+    const repo = join(root, "sha256-preview");
+    execFileSync("git", ["init", "-q", "--object-format=sha256", "-b", "main", repo]);
+    git(repo, "config", "user.name", "Gate Baseline Test");
+    git(repo, "config", "user.email", "baseline@example.test");
+    writeFileSync(join(repo, "seed.txt"), "seed\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "seed");
+    git(repo, "checkout", "-b", "task");
+    writeFileSync(join(repo, "task.txt"), "task\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "task");
+    const head = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "main");
+    writeFileSync(join(repo, "main.txt"), "main\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "main");
+    const merged = await previewMerge(repo, git(repo, "rev-parse", "main"), head);
+    assert.ok("tree" in merged, JSON.stringify(merged));
+    if ("tree" in merged) assert.equal(git(repo, "ls-tree", "--name-only", merged.tree), "main.txt\nseed.txt\ntask.txt");
+  }
+
+  // ⑮ 子进程没读完 stdin 就退出：写端的 EPIPE 收在执行助手里，调用方只拿到一次命令失败。
+  {
+    const { execFileText } = await import("../src/exec.js");
+    const failed = await execFileText("git", ["-C", root, "check-attr", "--source=no-such-ref", "-z", "--stdin", "merge"],
+      { input: "some/path/file.txt\0".repeat(100000) }).then(() => false, () => true);
+    assert.equal(failed, true);
+  }
+
   console.log(JSON.stringify({ branchDefault: true, containsRefuse: true, containsPass: true, previewCollision: true,
     previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true,
-    isolatedPreview: true, previewFilter: true, previewConfig: true }));
+    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

@@ -18,11 +18,12 @@
 // （git-accept.ts 的 expectedTree）。下面 `mergeDrivers` 只为把「注定对不上」的情形提前说清楚，
 // 不承担安全 —— 漏判的代价是合并时被拒，不是执行了程序。
 //
-// 物化（快照里检出这棵树）不一样：检出会跑过滤器（smudge/process），那里没有「事后撤回」可言，
-// 所以 `checkoutFilters` 是**放行条件**，用 git 自己的属性解析（`check-attr`，不是文本扫描）逐个
-// 核对检出会写的每一个路径。
+// 物化（快照里检出这棵树）同一个口径：检出会跑过滤器（smudge/process），所以快照里那几条写工作区的
+// git 命令走 `sealedGit`，环境里同样没有过滤器的定义 —— 硬边界在**实际检出的那个环境**里，不在
+// 别处扫描的结论上（第 1 轮复审 F1：主检出 info/attributes 里的本地覆盖能把扫描结果掩掉，克隆里
+// 却没有那份覆盖）。`checkoutFilters` 只负责把「平时检出要过滤器、快照里写出来的就不一样」提前说清楚。
 //
-// 这几条都要 git 2.40 以上（`--attr-source`、`check-attr --source`），旧 git 结构化拒绝，见调用方。
+// 这几条都要 git 2.40 以上（`--attr-source`、`check-attr --source`），旧 git 结构化拒绝（`previewFailure`）。
 import { existsSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -37,21 +38,25 @@ const git = (repo: string, args: string[], input?: string) =>
 /** 预演可以从项目配置里带过去的内置选项（只影响内置合并的算法，没有一项能指向程序）。 */
 const MERGE_SETTINGS = /^(merge\.(renames|directoryrenames|renamelimit|renormalize)|diff\.(renames|renamelimit)|core\.(autocrlf|eol|ignorecase|precomposeunicode))$/;
 
-let isolated: Promise<{ gitDir: string; empty: string }> | null = null;
+const isolated = new Map<string, Promise<{ gitDir: string; empty: string }>>();
 
-/** 进程内共用一份空 git 目录（被清理掉了就重建）。它只当「配置与属性的出处」，从不写入对象。 */
-async function isolatedGitDir(): Promise<{ gitDir: string; empty: string }> {
-  const current = await isolated?.catch(() => null);
+/**
+ * 进程内按对象格式（sha1 / sha256）各共用一份空 git 目录（被清理掉了就重建）。它只当「配置与属性的
+ * 出处」，从不写入对象；格式必须与项目一致，否则借来的对象库在它眼里全是不认识的名字。
+ */
+async function isolatedGitDir(format: string): Promise<{ gitDir: string; empty: string }> {
+  const current = await isolated.get(format)?.catch(() => null);
   if (current && existsSync(current.gitDir) && existsSync(current.empty)) return current;
-  isolated = (async () => {
+  const created = (async () => {
     const root = await mkdtemp(join(tmpdir(), "ash-merge-preview-"));
     const empty = join(root, "empty");
     await writeFile(empty, "");
     const gitDir = join(root, "git");
-    await execFileText("git", ["init", "--bare", "-q", gitDir], { env: cleanEnv(empty) });
+    await execFileText("git", ["init", "--bare", "-q", `--object-format=${format}`, gitDir], { env: cleanEnv(empty) });
     return { gitDir, empty };
   })();
-  return isolated;
+  isolated.set(format, created);
+  return created;
 }
 
 function cleanEnv(empty: string): NodeJS.ProcessEnv {
@@ -62,18 +67,49 @@ function cleanEnv(empty: string): NodeJS.ProcessEnv {
 
 export type PreviewMerge = { tree: string } | { conflicts: string[] } | { error: string };
 
+/** 项目配置里可以带进隔离环境的那几项，摊成 `-c key=value`。 */
+async function carriedSettings(repo: string): Promise<string[]> {
+  const settings = (await git(repo, ["config", "--get-regexp", MERGE_SETTINGS.source]).catch(() => null))?.stdout ?? "";
+  return settings.split("\n").filter(Boolean).flatMap((line) => {
+    const at = line.indexOf(" ");
+    return ["-c", at < 0 ? `${line}=true` : `${line.slice(0, at)}=${line.slice(at + 1)}`];
+  });
+}
+
+/** 隔离环境里那几条把「程序从哪来」全堵上的参数：属性文件、钩子目录指向空文件，fsmonitor 关掉。 */
+const sealed = (empty: string) => ["-c", `core.attributesFile=${empty}`, "-c", `core.hooksPath=${empty}`, "-c", "core.fsmonitor=false"];
+
+/**
+ * 在测试快照（`cwd`，一份新克隆）里跑一条会写工作区的 git 命令，环境与预演同样没有程序可调：
+ * 系统 / 全局配置与属性置空、`GIT_*` 不继承，克隆自己的本地配置里本来就只有 clone 写的那几行。
+ * 属性点名的过滤器因此一个都没有定义，git 按原样写出 blob —— 想执行也没有程序可执行。
+ * 这是硬边界，不靠事先扫描；`checkoutFilters` 只负责把「这样写出来的跟平时检出的不一样」提前说清楚。
+ * 换行这类内置转换照 `repo`（项目）的配置带过来，与快照里其余文件的检出口径一致。
+ */
+export async function sealedGit(repo: string, cwd: string, args: string[]): Promise<string> {
+  const format = await objectFormat(repo);
+  const { empty } = await isolatedGitDir(format);
+  return (await execFileText("git", ["-C", cwd, ...sealed(empty), ...await carriedSettings(repo), ...args],
+    { maxBuffer: MAX_BUFFER, env: cleanEnv(empty) })).stdout;
+}
+
+const objectFormat = async (repo: string): Promise<string> =>
+  (await git(repo, ["rev-parse", "--show-object-format"])).stdout.trim() || "sha1";
+
+/** 预演失败时那句「为什么」：只有 git 真的旧于 2.40 才把版本说出来，别的失败照原样报。 */
+async function previewFailure(stderr: string): Promise<string> {
+  const version = (await execFileText("git", ["version"]).catch(() => null))?.stdout.match(/(\d+)\.(\d+)/);
+  const old = version && (Number(version[1]) < 2 || (Number(version[1]) === 2 && Number(version[2]) < 40));
+  return old ? `${stderr}；这一档要 git 2.40 以上，这台机器上是 ${version[0]}` : stderr;
+}
+
 /** 预演「目标分支 ← 任务分支」那次合并。参数顺序与真合并一致（在目标分支上 `git merge` 任务分支）。 */
 export async function previewMerge(repo: string, targetCommit: string, head: string): Promise<PreviewMerge> {
   try {
     const objects = join((await git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim(), "objects");
-    const settings = (await git(repo, ["config", "--get-regexp", MERGE_SETTINGS.source]).catch(() => null))?.stdout ?? "";
-    const carried = settings.split("\n").filter(Boolean).flatMap((line) => {
-      const at = line.indexOf(" ");
-      return ["-c", at < 0 ? `${line}=true` : `${line.slice(0, at)}=${line.slice(at + 1)}`];
-    });
-    const { gitDir, empty } = await isolatedGitDir();
-    const { stdout } = await execFileText("git", [`--attr-source=${targetCommit}`, "-c", `core.attributesFile=${empty}`,
-      "-c", "core.hooksPath=" + empty, ...carried,
+    const carried = await carriedSettings(repo);
+    const { gitDir, empty } = await isolatedGitDir(await objectFormat(repo));
+    const { stdout } = await execFileText("git", [`--attr-source=${targetCommit}`, ...sealed(empty), ...carried,
       "merge-tree", "--write-tree", "--name-only", "--no-messages", targetCommit, head],
       { maxBuffer: MAX_BUFFER, env: { ...cleanEnv(empty), GIT_DIR: gitDir, GIT_OBJECT_DIRECTORY: objects } });
     return { tree: stdout.split("\n")[0]!.trim() };
@@ -85,7 +121,7 @@ export async function previewMerge(repo: string, targetCommit: string, head: str
       const end = lines.indexOf("", 1);
       return { conflicts: [...new Set(lines.slice(1, end < 0 ? undefined : end).map(line => line.trim()).filter(Boolean))] };
     }
-    return { error: (stderr || String(error)).trim() };
+    return { error: await previewFailure((stderr || String(error)).trim()) };
   }
 }
 
@@ -137,9 +173,10 @@ export async function mergeDrivers(repo: string, targetCommit: string, head: str
 }
 
 /**
- * 快照从任务分支检出到预演树时，会不会跑项目配的过滤器（返回过滤器名）。检出只写两棵树之间
- * 不同的那些路径，逐个按预演树的属性问 git。配置读的是项目的有效配置、属性读的是预演树加项目
- * 本地 / 全局属性 —— 都是快照那边实际生效的那一份的超集。
+ * 预演树里有没有平时检出要经过项目过滤器的文件（返回过滤器名）。快照里检出不执行它们（`sealedGit`），
+ * 写出来的就是未经过滤的 blob，跟真合并之后主检出里的文件不一样，所以提前拒绝。只算两棵树之间
+ * 不同的那些路径；配置与属性读项目主检出的有效值，那正是真合并之后检出时生效的那一份。
+ * 不承担安全（见文件头）。
  */
 export async function checkoutFilters(repo: string, head: string, tree: string): Promise<string[]> {
   const defined = await definedPrograms(repo, "^filter\\..+\\.(clean|smudge|process)$");

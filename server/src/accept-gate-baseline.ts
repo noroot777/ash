@@ -73,13 +73,13 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
   }
   const merged = await previewMerge(project.repoPath, targetCommit, head);
   if ("error" in merged) {
-    return unavailable(`git 没能预演（${merged.error}）。这一档要 git 2.40 以上`);
+    return unavailable(`git 没能预演（${merged.error}）`);
   }
   if ("tree" in merged) {
     const filters = await checkoutFilters(project.repoPath, head, merged.tree);
     if (filters.length) {
-      return unavailable(`${targetBranch} 带进来的文件要经过仓库配的过滤器（${filters.join("、")}）才能检出，`
-        + "在快照里检出它就要执行那段程序，而门禁命令之外不许多跑项目自己的程序");
+      return unavailable(`${targetBranch} 带进来的文件平时要经过仓库配的过滤器（${filters.join("、")}）才能检出，`
+        + "快照里不执行那段程序，写出来的就不是平时那份文件，测了也说明不了合进去之后怎样");
     }
     return { plan: { ...preview, previewTree: merged.tree }, block: null };
   }
