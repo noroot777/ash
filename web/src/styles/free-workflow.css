@@ -278,3 +278,13 @@
 @media (hover:none) {
   .free-review-reviewer-delete { opacity:1; }
 }
+/* 审查进行中调整轮数：一个步进器 + 一句后果。 */
+.free-review-rounds { display:grid; gap:7px; margin-top:14px; }
+.free-review-rounds > b { color:var(--ink); font-size:10px; }
+.free-review-rounds > div { display:flex; align-items:center; gap:6px; }
+.free-review-rounds > div > button { display:grid; width:30px; height:30px; place-items:center; border:1px solid var(--line2); border-radius:8px; background:var(--panel); color:var(--muted); }
+.free-review-rounds > div > button:hover:not(:disabled) { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); color:var(--accent); }
+.free-review-rounds > div > button:disabled { opacity:.45; }
+.free-review-rounds > div > output { min-width:34px; color:var(--ink); font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; text-align:center; }
+.free-review-rounds > div > span { color:var(--muted); font-size:11px; }
+.free-review-rounds > small { color:var(--faint); font-size:10.5px; line-height:1.55; }

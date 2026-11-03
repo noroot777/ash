@@ -233,7 +233,8 @@ const pausedCheckpointState: FreeWorkflowApiState = {
 
 // 审查旁路回合正在跑的样子：任务 status 是 running（审查跑在被审任务自己身上），但服务端
 // 报出 reviewTurn=true —— 那一轮只读代码，预览照常开得了（后端同样放行）。
-const reviewTurnState: FreeWorkflowApiState = {
+// 最后一轮（第 2 轮 / 最多 2 轮）正在跑：用户在这时把轮数加上去，PUT review/rounds 改的是这份。
+let reviewTurnState: FreeWorkflowApiState = {
   ...repairState,
   taskId: "free-review-turn-task",
   reviewTurn: true,
@@ -372,6 +373,20 @@ window.fetch = (input, init) => {
   }
   if (url.pathname.startsWith("/api/tasks/free-paused-task/free-workflow")) {
     return Promise.resolve(new Response(JSON.stringify(pausedCheckpointState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname === "/api/tasks/free-review-turn-task/free-workflow/review/rounds" && init?.method === "PUT") {
+    const body = JSON.parse(String(init.body)) as { runId: string; retryLimit: number };
+    const host = window as Window & { __roundsRequests?: unknown[] };
+    host.__roundsRequests = [...(host.__roundsRequests ?? []), body];
+    reviewTurnState = {
+      ...reviewTurnState,
+      stateVersion: reviewTurnState.stateVersion + 1,
+      reviews: reviewTurnState.reviews.map((run) => run.id === body.runId ? { ...run, retryLimit: body.retryLimit } : run),
+    };
+    return Promise.resolve(new Response(JSON.stringify(reviewTurnState), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));

@@ -164,7 +164,8 @@ export async function regressionSettlementConclusion(taskId: string, directory: 
 
 export async function completeRegressionSettlement(directory: string, checked: CheckedSettlement,
   write: (transaction: ConclusionTransaction) => Promise<boolean> = async () => true,
-  finalization?: RegressionFinalization): Promise<boolean> {
+  /** 函数形态 = 收尾计划要看 `write` 在事务里读到的状态才定得下来，在 `write` 成功之后求值。 */
+  finalization?: RegressionFinalization | (() => RegressionFinalization)): Promise<boolean> {
   let changedOwner: string | undefined;
   const completed = await db.transaction(async (transaction) => {
     const state = (await transaction.select().from(regressionEvidence).where(eq(regressionEvidence.directory, directory)))[0];
@@ -197,7 +198,7 @@ export async function completeRegressionSettlement(directory: string, checked: C
       changedOwner = owner.id;
     }
     await transaction.update(regressionEvidence).set({ settlement: { ...state.settlement, pending: false },
-      ...(finalization ? { finalization } : {}),
+      ...(finalization ? { finalization: typeof finalization === "function" ? finalization() : finalization } : {}),
     })
       .where(eq(regressionEvidence.directory, directory));
     return true;
