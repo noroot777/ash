@@ -470,6 +470,64 @@ try {
     assert.equal((await taskRow(sample.taskId)).stage, "accepted");
   }
 
+  // ⑱ 最终合并 · 树对不上、撤回也失败（第 1 轮审查 F1）：不许再说「目标分支没动」，要如实报出它现在在哪、
+  // 合并之前在哪、怎么退回。撤回失败用合并之后的钩子留一把 index.lock 注入。
+  {
+    const sample = await fixture("rollback-failure", {});
+    const hook = join(sample.repo, ".git", "hooks", "post-merge");
+    writeFileSync(hook, "#!/bin/sh\ntouch \"$(git rev-parse --git-dir)/index.lock\"\n", { mode: 0o755 });
+    const before = git(sample.repo, "rev-parse", "main");
+    const landed = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
+      { sourceCommit: git(sample.cwd, "rev-parse", "HEAD"), expectedTree: git(sample.repo, "rev-parse", "main^{tree}") });
+    const after = git(sample.repo, "rev-parse", "main");
+    assert.equal(landed.ok, false);
+    assert.notEqual(after, before, "注入成功：撤回确实没做成");
+    if (!landed.ok) {
+      assert.doesNotMatch(landed.message, /目标分支没动/);
+      assert.match(landed.message, /没能撤回/);
+      assert.ok(landed.message.includes(after.slice(0, 12)) && landed.message.includes(before), landed.message);
+    }
+    rmSync(join(sample.repo, ".git", "index.lock"), { force: true });
+  }
+
+  // ⑲ 合并预览 · 目标分支改了随仓库提交的依赖目录（第 1 轮审查 F2）：快照里依赖目录借的是任务工作区那份
+  // 旧的，放不下合并后的内容，门禁之前就拒。
+  {
+    const sample = await fixture("preview-tracked-vendor", { baseline: "merge_preview" });
+    mkdirSync(join(sample.repo, "vendor"));
+    commitOnMain(sample.repo, "vendor/value.txt", "SAFE\n", "main commits vendor");
+    git(sample.cwd, "merge", "--no-edit", "main");
+    commitOnMain(sample.repo, "vendor/value.txt", "BROKEN\n", "main updates vendor");
+    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /依赖目录（vendor）/);
+    assert.equal(await wouldRun(sample), false);
+    const refused = await acceptTask(sample.taskId);
+    assert.equal(refused.accepted, false);
+    if (!refused.accepted) assert.equal(refused.reason, "accept_gate_preview_unavailable");
+    assert.equal((await runs(sample.taskId)).length, 0);
+  }
+
+  // ⑳ 合并预览 · 一个这次没改过、平时一直靠过滤器检出的老文件（第 1 轮审查 F3）：封好的快照检出整棵树，
+  // 它也会被写成另一份，所以过滤器检查问整棵树而不只是这次的改动。
+  {
+    const sample = await fixture("preview-existing-filter", { baseline: "merge_preview" });
+    const marker = join(root, "existing-filter-ran");
+    writeFileSync(join(sample.repo, ".gitattributes"), "value.txt filter=review\n");
+    writeFileSync(join(sample.repo, "value.txt"), "SAFE\n");
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-m", "main adds a filtered file");
+    git(sample.cwd, "merge", "--no-edit", "main");
+    commitOnMain(sample.repo, "later.txt", "later\n", "main moves on");
+    git(sample.repo, "config", "filter.review.smudge", `touch '${marker}'; cat`);
+    git(sample.repo, "config", "filter.review.clean", "cat");
+    assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", /过滤器（review）/);
+    assert.equal(await wouldRun(sample), false);
+    const refused = await acceptTask(sample.taskId);
+    assert.equal(refused.accepted, false);
+    if (!refused.accepted) assert.equal(refused.reason, "accept_gate_preview_unavailable");
+    assert.equal(existsSync(marker), false);
+    assert.equal((await runs(sample.taskId)).length, 0);
+  }
+
   // ⑭ SHA-256 仓库也能预演：隔离目录按项目的对象格式建（与上面 SHA-1 的那份并存）。
   {
     const repo = join(root, "sha256-preview");
@@ -503,7 +561,7 @@ try {
 
   console.log(JSON.stringify({ branchDefault: true, containsRefuse: true, containsPass: true, previewCollision: true,
     previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true,
-    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true }));
+    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true, rollbackFailure: true, trackedVendor: true, existingFilter: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

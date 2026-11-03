@@ -8,7 +8,7 @@ import { gateLogReadable } from "./accept-gate-diagnosis.js";
 import { acceptGateLogTail } from "./accept-gate-process.js";
 import { commitAt } from "./task-branch-plan.js";
 import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
-import { gateSnapshotPath, gateSourceMatches, readGateSource } from "./accept-gate-source.js";
+import { gateSnapshotPath, gateSourceMatches, readGateSource, type GateSource } from "./accept-gate-source.js";
 import { gateBaselineMatches, resolveGateBaseline } from "./accept-gate-baseline.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
@@ -133,7 +133,16 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   const baseline = normalizeAcceptGateBaseline(project?.acceptGateBaseline);
   // 门禁基准此刻要对照的目标与它会不会拦下这一按。已验收的任务没有「下一按」，不去读 git。
   const head = frozen || !project ? null : await gateHead(task, project.repoPath);
-  const judged = command && project && !frozen ? await resolveGateBaseline(task, project, head) : null;
+  // 源码只读一次、用到才读：合并预览档的基准要知道这次快照借哪几个依赖目录（与 acceptGateCheck
+  // 同一个入参），新鲜度也要它；其余档在门禁跑着时不去读。
+  const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
+  let sourceError: string | null = null;
+  let sourceRead: Promise<GateSource | null> | null = null;
+  const readSource = () => sourceRead ??= cwd && !unavailable
+    ? readGateSource(cwd, gateSnapshotPath(task.id, "identity")).catch(error => { sourceError = String(error); return null; })
+    : Promise.resolve(null);
+  const dependencies = baseline === "merge_preview" ? (await readSource())?.dependencies : undefined;
+  const judged = command && project && !frozen ? await resolveGateBaseline(task, project, head, dependencies) : null;
   const target = judged?.plan ?? judged?.block ?? null;
   const baselineView = { baseline, baselineBlock: judged?.block?.error ?? null,
     baselineTarget: target?.targetBranch && target.targetCommit ? { branch: target.targetBranch, commit: target.targetCommit } : null };
@@ -146,10 +155,7 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   if (pending) return { command, running: gateView(pending), latest: view, basis, executionNotice, ...baselineView };
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
   const frozenHead = task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null;
-  const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
-  let sourceError: string | null = null;
-  const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity"))
-    .catch(error => { sourceError = String(error); return null; }) : null;
+  const source = await readSource();
   // 基准也算进新鲜度：合并预览那份绿只对当时的目标分支尖端作数（被拦下的那一档没有 plan，旧绿同样不作数）。
   const stale = latestRow.command !== command || (frozen ? !frozenHead || frozenHead !== latestRow.sourceCommit
     : !gateSourceMatches(latestRow, source) || !judged?.plan || !gateBaselineMatches(latestRow, judged.plan));

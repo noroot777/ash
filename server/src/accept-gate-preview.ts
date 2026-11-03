@@ -213,7 +213,7 @@ async function attributeValues(repo: string, attr: string, paths: string[], sour
   return values;
 }
 
-const changedPaths = async (repo: string, from: string, to: string): Promise<string[]> =>
+export const changedPaths = async (repo: string, from: string, to: string): Promise<string[]> =>
   (await git(repo, ["diff-tree", "-r", "--no-renames", "--name-only", "-z", from, to])).stdout.split("\0").filter(Boolean);
 
 /**
@@ -241,13 +241,15 @@ export async function mergeDrivers(repo: string, targetCommit: string, head: str
 
 /**
  * 预演树里有没有平时检出要经过项目过滤器的文件（返回过滤器名）。快照里检出不执行它们（`sealedGit`），
- * 写出来的就是未经过滤的 blob，跟真合并之后主检出里的文件不一样，所以提前拒绝。只算两棵树之间
- * 不同的那些路径；配置与属性读项目主检出的有效值，那正是真合并之后检出时生效的那一份。
- * 不承担安全（见文件头）。
+ * 写出来的就是未经过滤的 blob，跟真合并之后主检出里的文件不一样，所以提前拒绝。问的是**整棵树**
+ * 的每一个路径，不只是这次合并改到的那些：封好的快照检出的是整棵树，一个从没改过、一直靠全局
+ * smudge 生成内容的老文件同样会被写成另一份（第 1 轮审查 F3）。配置与属性读项目主检出的有效值，
+ * 那正是真合并之后检出时生效的那一份。不承担安全（见文件头）。
  */
-export async function checkoutFilters(repo: string, head: string, tree: string): Promise<string[]> {
+export async function checkoutFilters(repo: string, tree: string): Promise<string[]> {
   const defined = await definedPrograms(repo, "^filter\\..+\\.(clean|smudge|process)$");
   if (!defined.size) return [];
-  const values = await attributeValues(repo, "filter", await changedPaths(repo, head, tree), tree);
+  const paths = (await git(repo, ["ls-tree", "-r", "--name-only", "-z", tree])).stdout.split("\0").filter(Boolean);
+  const values = await attributeValues(repo, "filter", paths, tree);
   return [...new Set(values.filter(value => defined.has(value)))];
 }

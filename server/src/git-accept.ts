@@ -443,6 +443,8 @@ async function mergeWithoutCommit(
 /**
  * 落下来的必须是测过的那棵树（TaskMergeOptions.expectedTree）。只看真正产出合并结果的三种落法；
  * 对不上就把目标检出复位到合并之前 —— 走到合并这一步的检出事先都核过是干净的，复位丢不了别人的东西。
+ * 复位本身也可能失败（锁、权限、钩子），所以复位之后**核实**HEAD 回到了合并之前、索引与工作区干净，
+ * 核实不了就如实说「目标分支已经动了」并给出退回的那一句（消息进任务时间线，刷新后仍在）。
  */
 async function landTestedTree(cwd: string, expected: string, fn: (cwd: string) => Promise<TaskMergeResult>): Promise<TaskMergeResult> {
   const before = (await exec("git", ["-C", cwd, "rev-parse", "HEAD"]).catch(() => null))?.stdout.trim();
@@ -451,15 +453,33 @@ async function landTestedTree(cwd: string, expected: string, fn: (cwd: string) =
   const landed = result.method === "no_commit" ? result.stagedTree
     : (await exec("git", ["-C", cwd, "rev-parse", "HEAD^{tree}"])).stdout.trim();
   if (landed === expected) return result;
-  if (before) await exec("git", ["-C", cwd, "reset", "--hard", before]).catch(() => {});
+  const mismatch = `这次真合出来的树（${landed?.slice(0, 12) ?? "未知"}）不是验收前置命令测过的那一棵（${expected.slice(0, 12)}）`;
+  const resetError = before
+    ? await exec("git", ["-C", cwd, "reset", "--hard", before]).then(() => null, (error) => gitError(error))
+    : "合并之前的提交没读到";
+  const after = (await exec("git", ["-C", cwd, "rev-parse", "HEAD"]).catch(() => null))?.stdout.trim();
+  const clean = (await exec("git", ["-C", cwd, "status", "--porcelain", "--untracked-files=no"]).catch(() => null))?.stdout.trim() === "";
+  if (before && after === before && clean) {
+    return {
+      ok: false,
+      reason: "merge_failed",
+      message: `${mismatch}，已撤回、目标分支没动。常见原因是门禁跑完之后仓库的合并配置变了，或者主检出里有不进版本库的属性文件、`
+        + "仓库配的合并驱动合出了别的结果。重新验收会按现在的配置重新预演、重新跑门禁。",
+      sourceBranch: result.sourceBranch,
+      targetBranch: result.targetBranch,
+    };
+  }
+  const target = result.targetBranch;
   return {
     ok: false,
     reason: "merge_failed",
-    message: `这次真合出来的树（${landed?.slice(0, 12) ?? "未知"}）不是验收前置命令测过的那一棵（${expected.slice(0, 12)}），`
-      + "已撤回、目标分支没动。常见原因是门禁跑完之后仓库的合并配置变了，或者主检出里有不进版本库的属性文件、"
-      + "仓库配的合并驱动合出了别的结果。重新验收会按现在的配置重新预演、重新跑门禁。",
+    message: `${mismatch}，而且**没能撤回**（${resetError ?? "复位之后索引或工作区仍不干净"}）：`
+      + `目标分支 ${target} 现在${after ? `在 ${after.slice(0, 12)}` : "的位置读不到"}`
+      + `${before ? `，合并之前是 ${before.slice(0, 12)}` : ""}，上面留着的是没测过的合并结果。`
+      + (before ? `请先把它退回去：在检出 ${target} 的目录里 \`git reset --hard ${before}\`（没检出就 \`git branch -f ${target} ${before}\`），` : "请先手动把它退回合并之前，")
+      + "再重新验收。",
     sourceBranch: result.sourceBranch,
-    targetBranch: result.targetBranch,
+    targetBranch: target,
   };
 }
 

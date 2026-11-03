@@ -9,8 +9,9 @@
 // 预演怎么跑、为什么不会调起项目自己的程序，在 accept-gate-preview.ts 的文件头。预演出来的那棵树
 // 原样放进测试快照（accept-gate-source.ts 的 materializePreview），也是最终合并必须落下的那棵
 // （git-accept.ts 的 expectedTree）—— 合并只在这里定义一次。
+import { sep } from "node:path";
 import { type AcceptGateBaseline, normalizeAcceptGateBaseline } from "@ash/shared/accept-gate";
-import { checkoutFilters, mergeDrivers, previewMerge } from "./accept-gate-preview.js";
+import { changedPaths, checkoutFilters, mergeDrivers, previewMerge } from "./accept-gate-preview.js";
 import { execFileText } from "./exec.js";
 import { isAncestor } from "./git-accept.js";
 import { resolveWorktreeBranchName } from "./git.js";
@@ -43,8 +44,13 @@ export type GateBaselineBlock = {
 const short = (commit: string) => commit.slice(0, 8);
 const git = (repo: string, args: string[]) => execFileText("git", ["-C", expandHome(repo), ...args], { maxBuffer: 8 * 1024 * 1024 });
 
-/** 按项目当前的基准，这一按要测哪一棵树，或者在门禁之前就该被拒。 */
-export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, head: string | null): Promise<{ plan: GateBaselinePlan; block: null } | { plan: null; block: GateBaselineBlock }> {
+/**
+ * 按项目当前的基准，这一按要测哪一棵树，或者在门禁之前就该被拒。`dependencies` 是这次快照要借用的
+ * 依赖目录（GateSource.dependencies）：合并预览改到它们里面随仓库提交的内容时，借来的那份是任务
+ * 分支的旧内容，只能拒（读不到源码时不传，那一按本来就会因源码不可用被拒）。
+ */
+export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, head: string | null,
+  dependencies: readonly string[] = []): Promise<{ plan: GateBaselinePlan; block: null } | { plan: null; block: GateBaselineBlock }> {
   const mode = normalizeAcceptGateBaseline(project.acceptGateBaseline);
   // 目标解析与 acceptGateCheck 登记 targetBranch 那一句同源：只有独立 worktree 的任务才有「合并之后」。
   const targetBranch = task.useWorktree ? await plannedMergeTarget(task, project.repoPath) : null;
@@ -76,10 +82,21 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
     return unavailable(`git 没能预演（${merged.error}）`);
   }
   if ("tree" in merged) {
-    const filters = await checkoutFilters(project.repoPath, head, merged.tree);
+    const filters = await checkoutFilters(project.repoPath, merged.tree);
     if (filters.length) {
-      return unavailable(`${targetBranch} 带进来的文件平时要经过仓库配的过滤器（${filters.join("、")}）才能检出，`
+      return unavailable(`合并之后的文件里有平时要经过仓库配的过滤器（${filters.join("、")}）才能检出的，`
         + "快照里不执行那段程序，写出来的就不是平时那份文件，测了也说明不了合进去之后怎样");
+    }
+    // 依赖目录在快照里是**借**来的（任务工作区那一份，见 accept-gate-deps）。分支快照档里两者一致由
+    // 「工作区干净」保证；合并预览不成立 —— 目标分支完全可以更新随仓库提交的 vendor/，借进来的却还是
+    // 任务分支那份旧的（第 1 轮审查 F2）。借用没法忠实放下合并后的内容，就在门禁之前拒。
+    const portable = dependencies.map(dep => dep.split(sep).join("/"));
+    const touched = portable.filter(dep => dep !== "." && dep !== "");
+    const changed = touched.length ? await changedPaths(project.repoPath, head, merged.tree) : [];
+    const stale = touched.filter(dep => changed.some(path => path === dep || path.startsWith(`${dep}/`)));
+    if (stale.length) {
+      return unavailable(`${targetBranch} 改了随仓库提交的依赖目录（${stale.join("、")}），而快照里的依赖目录借的是任务`
+        + "工作区那一份，放进去的就是改之前的内容，测了也说明不了合进去之后怎样");
     }
     return { plan: { ...preview, previewTree: merged.tree }, block: null };
   }
