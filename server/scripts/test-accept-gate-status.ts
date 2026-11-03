@@ -90,8 +90,23 @@ try {
   if (process.platform !== "win32") {
     chmodSync(join(repo, "asset.dat"), 0o755);
     await quiet("过滤文件加执行位", () => assert.rejects(readGateSource(repo), /未提交/));
+    // 执行位是在 core.filemode 关着时被刷新进记录的：stat 记录逐项（连纳秒）对得上，执行位的差异
+    // 照样在，不许被「证明没改」盖掉（审查 oGZEQlZvnW1N 第 2 轮 F1）。
+    git(repo, "config", "core.filemode", "false");
+    // 换到另一秒（git 按秒比 stat，同一秒里它不刷新记录），带上非零的亚秒部分。
+    stale("asset.dat", undefined, new Date(past.getTime() + 7_123));
+    refresh();
+    git(repo, "config", "core.filemode", "true");
+    await quiet("关着 filemode 刷新过的执行位", () => assert.rejects(readGateSource(repo), /未提交/));
     chmodSync(join(repo, "asset.dat"), 0o644);
     refresh();
+    // 文件名长得像 raw 记录头：按协议它是路径，不是子模块。
+    const lookalike = ":100644 160000 ordinary.txt";
+    writeFileSync(join(repo, lookalike), "lookalike\n");
+    git(repo, "add", "--", `:(literal)${lookalike}`);
+    await quiet("像记录头的文件名", () => assert.rejects(readGateSource(repo), /未提交/));
+    git(repo, "rm", "-q", "--cached", "--", `:(literal)${lookalike}`);
+    rmSync(join(repo, lookalike));
   }
   // 时间戳换一个：和索引记录同一秒的同大小改写，git 自己按秒比 stat 也看不出来，那不是这里要钉的。
   stale("asset.dat", "jello\n", new Date(past.getTime() + 60_000));

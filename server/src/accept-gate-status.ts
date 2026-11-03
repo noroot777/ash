@@ -112,24 +112,34 @@ type Stat = Awaited<ReturnType<typeof statOf>>;
 const statOf = (path: string) => optionalRead(path, () => lstat(path, { bigint: true }), ["ENOENT", "ENOTDIR"]);
 
 /**
- * 不跑过滤器也证明得了的差异（返回 true = 证明改了）。类型、执行位与内容无关；大小只在索引有记录时
- * 才作数 —— 记成 0 是「没有记录」（--cacheinfo 刚放进来的项、git 写索引时抹掉的 racy 项，git 自己也
- * 当没核过，见 read-cache.c 的 ce_match_stat_basic）。
+ * 一个封好环境里报「改了」的过滤文件，不跑过滤器能下的结论。顺序就是不变量：**证明得了的差异先判**，
+ * 「证明没改」只在没有任何差异时才轮得到 —— stat 记录只说明内容没被重写过，不说明类型、执行位此刻
+ * 也对得上（core.filemode 关着时刷新的记录，打开之后执行位的差异照样在，审查 oGZEQlZvnW1N 第 2 轮 F1）。
+ *  · 差异：类型、执行位与内容无关，直接比；大小只在索引有记录时才作数 —— 记成 0 是「没有记录」
+ *    （--cacheinfo 刚放进来的项、git 写索引时抹掉的 racy 项，git 自己也当没核过，见 read-cache.c 的
+ *    ce_match_stat_basic）。
+ *  · 没改：记录逐项对得上磁盘，修改 / 变更时间精确到纳秒（见文件头）。纳秒记成 0 说明文件系统只有粗
+ *    粒度时间（或者根本没有记录），同一刻度里改过也看不出来，不作数。inode 记成 0 的平台不比它。
  */
-function provenChanged(entry: IndexEntry | undefined, info: Stat, filemode: boolean): boolean {
-  if (!entry || !info || !info.isFile() || entry.mode !== "100644" && entry.mode !== "100755") return true;
-  if (filemode && (entry.mode === "100755") !== ((info.mode & 0o100n) !== 0n)) return true;
-  return entry.size !== 0n && info.size % LOW32 !== entry.size;
+function verdict(entry: IndexEntry | undefined, info: Stat, filemode: boolean): "changed" | "same" | "unverified" {
+  if (!entry || !info || !info.isFile() || entry.mode !== "100644" && entry.mode !== "100755") return "changed";
+  if (filemode && (entry.mode === "100755") !== ((info.mode & 0o100n) !== 0n)) return "changed";
+  if (entry.size !== 0n && info.size % LOW32 !== entry.size) return "changed";
+  const recorded = entry.size !== 0n && entry.mtime % 1_000_000_000n !== 0n
+    && info.mtimeNs % (LOW32 * 1_000_000_000n) === entry.mtime && info.ctimeNs % (LOW32 * 1_000_000_000n) === entry.ctime
+    && (entry.ino === 0n || info.ino % LOW32 === entry.ino);
+  return recorded ? "same" : "unverified";
 }
 
-/**
- * 证明没改：记录逐项对得上磁盘，修改 / 变更时间精确到纳秒（见文件头）。纳秒记成 0 说明文件系统只有
- * 粗粒度时间（或者根本没有记录），同一刻度里改过也看不出来，不作数。inode 记成 0 的平台不比它。
- */
-function provenSame(entry: IndexEntry | undefined, info: Stat): boolean {
-  if (!entry || !info || entry.size === 0n || entry.mtime % 1_000_000_000n === 0n) return false;
-  return info.size % LOW32 === entry.size && info.mtimeNs % (LOW32 * 1_000_000_000n) === entry.mtime
-    && info.ctimeNs % (LOW32 * 1_000_000_000n) === entry.ctime && (entry.ino === 0n || info.ino % LOW32 === entry.ino);
+/** `diff-index --raw -z` 里各项的两个模式。按协议逐项读：元数据头一段、路径一段（--no-renames 下只有一个）。 */
+function rawModes(stdout: string): [string, string][] {
+  const fields = stdout.split("\0");
+  const modes: [string, string][] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const [src, dst] = fields[i]!.slice(1).split(" ");
+    modes.push([src!, dst!]);
+  }
+  return modes;
 }
 
 export type WorktreeChanges = {
@@ -157,9 +167,8 @@ export async function worktreeChanges(cwd: string, commit: string): Promise<Work
     const run = async (args: string[]) => (await execFileText("git", ["-C", top, ...args],
       { maxBuffer: MAX_BUFFER, env: { ...sealed.env, GIT_INDEX_FILE: index, GIT_OPTIONAL_LOCKS: "0" } })).stdout;
     // 暂存区对提交只比对象名，不进子模块；`none` 盖过工作区 .gitmodules 里的 ignore，新加进来的也看得见。
-    const staged = (await run(["diff-index", "--cached", "--raw", "-z", "--no-renames", "--ignore-submodules=none", commit]))
-      .split("\0").filter(field => /^:\d+ \d+ /.test(field));
-    if (staged.some(field => /^:(160000 |\d+ 160000 )/.test(field))) {
+    const staged = rawModes(await run(["diff-index", "--cached", "--raw", "-z", "--no-renames", "--ignore-submodules=none", commit]));
+    if (staged.some(modes => modes.includes("160000"))) {
       throw new Error("验收快照暂不支持 Git 子模块，任务工作区的暂存区里加了子模块；请移除它后再验收");
     }
     rows = (await run(["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=all"]))
@@ -181,10 +190,9 @@ export async function worktreeChanges(cwd: string, commit: string): Promise<Work
   const same = new Set<string>();
   const unverified = new Set<string>();
   for (const path of filtered.keys()) {
-    const entry = entries.get(path);
-    const info = await statOf(join(top, path));
-    if (provenSame(entry, info)) same.add(path);
-    else if (!provenChanged(entry, info, filemode)) unverified.add(path);
+    const found = verdict(entries.get(path), await statOf(join(top, path)), filemode);
+    if (found === "same") same.add(path);
+    else if (found === "unverified") unverified.add(path);
   }
   return {
     rows: rows.filter(row => !(row.startsWith(" M") && (same.has(row.slice(3)) || unverified.has(row.slice(3))))),
