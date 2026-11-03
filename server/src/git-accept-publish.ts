@@ -89,9 +89,32 @@ export type SealedMove =
   | { ok: false; stage: "index"; message: string };
 
 /**
+ * 拿到锁之后核真实索引（第 6 轮审查 F2）：「工作区干净」是拿锁之前核的，那之后另一个终端仍可能
+ * `git add` 了东西（再把文件改回原样，工作区与物理摘要都看不出来）。新索引是从目标提交建的，直接换上去
+ * 就把那份暂存抹掉了。所以持锁后读一份真实索引的拷贝，它的暂存内容必须正是目标提交那棵树；不是就拒，
+ * 什么都还没写。持着锁，之后谁也改不了它。返回 null = 对得上。
+ */
+async function stagedBeyond(env: Awaited<ReturnType<typeof sealedCheckout>>, attrs: string, index: string,
+  from: string): Promise<string | null> {
+  const copy = join(env.dir, "index.real");
+  if (!await copyFile(index, copy).then(() => true, (error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  })) return null;
+  const staged = await env.run(attrs, ["diff-index", "--cached", "--name-only", "-z", from], copy)
+    .then(zList, (error: unknown) => [`（读不了暂存区：${failure(error)}）`]);
+  if (!staged.length) return null;
+  const shown = staged.slice(0, 10).join("、") + (staged.length > 10 ? ` 等 ${staged.length} 个` : "");
+  return `目标检出的暂存区在核对之后有了别的内容（${shown}），换上测过的索引会把它们抹掉`;
+}
+
+/**
  * 把目标检出（HEAD 在 `from`）的工作区与索引改成 `to` 那棵树，在封好的环境里。`publish` 在换上新索引
  * 之前调用（挪分支；不提交那一档不传）。写文件或 `publish` 失败都按备份把这次写下的文件放回去，
  * 索引原样不动。`attrs` 是测过的那棵树（属性的唯一出处）。
+ *
+ * 不抛异常（第 6 轮审查 F3）：回执由真实走到了哪一步决定。开始写文件之前的异常 = 什么都没动；之后的
+ * 一律先按备份放回、再如实报剩下的；发布成功之后只剩清理临时目录，它失败不改变「已经落下」这个事实。
  */
 export async function sealedMove(checkout: string, settings: CheckoutSettings, from: string, to: string, attrs: string,
   publish?: () => Promise<string | null>): Promise<SealedMove> {
@@ -102,34 +125,39 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
   await handle.close();
   let installed = false;
   let sealed: Awaited<ReturnType<typeof sealedCheckout>> | null = null;
-  try {
-    const env = sealed = await sealedCheckout(checkout, settings);
-    const changed = zList(await env.run(attrs, ["diff-tree", "-r", "-z", "--name-only", from, to]));
-    const backup = await backupPaths(checkout, changed, join(env.dir, "backup"));
-    const undo = async () => restoreOwned(checkout, backup,
-      await atTree(env, attrs, to, changed).catch(() => new Set<string>()));
-    // 新建的索引没有文件状态，先按封好的语义逐个核一遍字节补上（与目标提交对不上的照旧记成「改过」，
-    // 下一步要改到它时 git 就拒），两树合并才认得出哪些文件是干净的。
-    await env.run(attrs, ["read-tree", from]);
-    await env.run(attrs, ["update-index", "-q", "--refresh"]).catch(() => "");
+  const outcome = await (async (): Promise<SealedMove> => {
+    let undo: (() => Promise<string[]>) | null = null;
     try {
+      const env = sealed = await sealedCheckout(checkout, settings);
+      const drift = await stagedBeyond(env, attrs, index, from);
+      if (drift) return { ok: false, stage: "blocked", message: drift, left: [] };
+      const changed = zList(await env.run(attrs, ["diff-tree", "-r", "-z", "--name-only", from, to]));
+      const backup = await backupPaths(checkout, changed, join(env.dir, "backup"));
+      // 放回本身也不抛：放不成的路径都算「没回到原样」。
+      undo = async () => restoreOwned(checkout, backup, await atTree(env, attrs, to, changed).catch(() => new Set<string>()))
+        .catch(() => changed);
+      // 新建的索引没有文件状态，先按封好的语义逐个核一遍字节补上（与目标提交对不上的照旧记成「改过」，
+      // 下一步要改到它时 git 就拒），两树合并才认得出哪些文件是干净的。
+      await env.run(attrs, ["read-tree", from]);
+      await env.run(attrs, ["update-index", "-q", "--refresh"]).catch(() => "");
       await env.run(attrs, ["read-tree", "-m", "-u", from, to]);
       await copyFile(env.index, lock);
+      const refused = await publish?.().catch(failure) ?? null;
+      if (refused) return { ok: false, stage: "publish", message: refused, left: await undo() };
+      try {
+        await rename(lock, index);
+      } catch (error) {
+        if (!publish) return { ok: false, stage: "blocked", message: failure(error), left: await undo() };
+        return { ok: false, stage: "index", message: failure(error) };
+      }
+      installed = true;
+      return { ok: true };
     } catch (error) {
-      return { ok: false, stage: "blocked", message: failure(error), left: await undo() };
+      return { ok: false, stage: "blocked", message: failure(error), left: undo ? await undo() : [] };
     }
-    const refused = await publish?.().catch(failure) ?? null;
-    if (refused) return { ok: false, stage: "publish", message: refused, left: await undo() };
-    try {
-      await rename(lock, index);
-    } catch (error) {
-      if (!publish) return { ok: false, stage: "blocked", message: failure(error), left: await undo() };
-      return { ok: false, stage: "index", message: failure(error) };
-    }
-    installed = true;
-    return { ok: true };
-  } finally {
-    if (!installed) await rm(lock, { force: true });
-    await sealed?.dispose();
-  }
+  })();
+  const lockStuck = !installed && await rm(lock, { force: true }).then(() => false, () => true);
+  await (sealed as Awaited<ReturnType<typeof sealedCheckout>> | null)?.dispose().catch(() => undefined);
+  if (!lockStuck || outcome.ok) return outcome;
+  return { ...outcome, message: `${outcome.message}（另外 ${lock} 没能删掉，它在的时候这个检出里的 git 命令都会拒绝，请手动删掉）` };
 }

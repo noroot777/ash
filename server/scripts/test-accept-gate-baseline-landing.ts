@@ -309,6 +309,81 @@ try {
     assert.equal(git(sample.repo, "status", "--porcelain"), "", "索引与工作区和合并之前一样");
   }
 
+  // ㊷ 最终合并 · 测过之后目标检出里一个这次合并不碰的源码目录改成 0111（第 6 轮审查 F1）：文件照样按路径
+  // 读得到，目录却列不出来 —— 物理身份连目录能不能读 / 进一起记，发布前就拒。
+  {
+    const sample = await fixture("landing-dir-access", { baseline: "merge_preview" });
+    mkdirSync(join(sample.repo, "restricted"));
+    writeFileSync(join(sample.repo, "restricted", "kept.js"), "module.exports = 1;\n");
+    git(sample.repo, "add", "restricted");
+    git(sample.repo, "commit", "-qm", "main adds a source directory");
+    const before = git(sample.repo, "rev-parse", "main");
+    let outcome: Awaited<ReturnType<typeof landGuarded>>;
+    try {
+      outcome = await landGuarded(sample, () => chmodSync(join(sample.repo, "restricted"), 0o111));
+    } finally { chmodSync(join(sample.repo, "restricted"), 0o755); }
+    assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
+    if (!outcome.landed.ok) assert.match(outcome.landed.message, /这次合并不会重写的文件/);
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+  }
+
+  // 只在最终合并那一下生效的 git 包装：命令行里出现 `trigger` 时先（或后）跑一段 shell，只跑一次。
+  const wrapGit = (name: string, trigger: string, script: string, after = false) => {
+    const bin = join(root, `${name}-bin`);
+    mkdirSync(bin);
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const once = join(bin, "fired");
+    const hook = `[ -e '${once}' ] || { touch '${once}'; ${script.replaceAll("GIT", `'${realGit}'`)}; }`;
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *"${trigger}"*) `
+      + (after ? `'${realGit}' "$@"; rc=$?; ${hook}; exit $rc ;; esac\n` : `${hook} ;; esac\n`)
+      + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
+    return bin;
+  };
+  const withPath = async <T>(bin: string, run: (arm: () => void) => Promise<T>) => {
+    const path = process.env.PATH;
+    try { return await run(() => { process.env.PATH = `${bin}:${path}`; }); } finally { process.env.PATH = path; }
+  };
+
+  // ㊸ 最终合并 · 「工作区干净」核过之后、拿到索引锁之前，另一个终端 `git add` 了一份改动、再把文件改回
+  // 原样（第 6 轮审查 F2）：工作区与物理摘要都看不出来，但换上测过的索引会抹掉那份暂存 —— 持锁后核真实
+  // 索引，对不上就拒，那份暂存原样留着。包装在最后一道「未跟踪文件」查询那一刻插进这次暂存。
+  {
+    const sample = await fixture("landing-index-race", { baseline: "merge_preview" });
+    writeFileSync(join(sample.repo, "other.txt"), "old\n");
+    git(sample.repo, "add", "other.txt");
+    git(sample.repo, "commit", "-qm", "main adds other.txt");
+    const before = git(sample.repo, "rev-parse", "main");
+    const file = join(sample.repo, "other.txt");
+    const bin = wrapGit("index-race", " ls-files --others ",
+      `printf 'user-staged-only\\n' > '${file}' && GIT -C '${sample.repo}' add other.txt && printf 'old\\n' > '${file}'`);
+    const { landed } = await withPath(bin, arm => landGuarded(sample, arm));
+    assert.ok(existsSync(join(bin, "fired")), "暂存真的插进去了");
+    assert.equal(landed.ok, false, JSON.stringify(landed));
+    if (!landed.ok) assert.match(landed.message, /暂存区在核对之后有了别的内容（other\.txt）[^]*目标分支没动/);
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+    assert.equal(git(sample.repo, "show", ":other.txt"), "user-staged-only", "那份暂存原样留着");
+    assert.equal(readFileSync(file, "utf8"), "old\n");
+    git(sample.repo, "reset", "-q");
+  }
+
+  // ㊹ 最终合并 · 分支已经挪到测过的结果，之后清理临时发布目录失败（第 6 轮审查 F3）：清理是发布之后的
+  // 事，它失败不能把回执改成「目标分支没动」—— 照常算合进去了。包装在真正的 update-ref 之后把那个临时
+  // 目录改成 0555，删它时就是真实的 EACCES。
+  {
+    const sample = await fixture("landing-cleanup-after-publish", { baseline: "merge_preview" });
+    const stuck = join(root, "stuck-publish-dir");
+    const bin = wrapGit("cleanup-after", " update-ref -m ash accept",
+      `d=$(ls -dt "\${TMPDIR:-/tmp}"/ash-publish-* | head -n 1) && printf '%s' "$d" > '${stuck}' && chmod 555 "$d"`, true);
+    const { landed, expectedTree } = await withPath(bin, arm => landGuarded(sample, arm));
+    assert.ok(existsSync(stuck), "临时发布目录真的锁住了");
+    const dir = readFileSync(stuck, "utf8");
+    chmodSync(dir, 0o755);
+    rmSync(dir, { recursive: true, force: true });
+    assert.equal(landed.ok, true, JSON.stringify(landed));
+    assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), expectedTree, "测过的那棵落下了");
+    assert.equal(git(sample.repo, "status", "--porcelain"), "");
+  }
+
   // ㊲ 合并预览 · 门禁跑着的时候，目标检出里一个这次合并不改的文件被存成另一种换行再暂存（第 5 轮
   // 复审 F2）：树、配置、`git status` 都没变，但字节不是测过的那份 —— 旧绿不拿来合，验收不通过。
   {
@@ -335,7 +410,8 @@ try {
 
   console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
-    hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true }));
+    hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true,
+    dirAccess: true, indexRace: true, cleanupAfterPublish: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
