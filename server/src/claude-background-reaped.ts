@@ -38,6 +38,8 @@
 // - 来源明说是进程退出收走的（孤儿补报那两句原话）→ 被收走，排在一切推断之前。
 // - 有一次 TaskStop / KillShell 指名了它、**且回执成功**→ 智能体自己停的（不管通知早到晚到）。
 //   只发了请求不算：回执带 `is_error`（权限拒绝、目标不存在）就当它没停成，按下面几条定。
+//   指名的是**发请求那一刻的那条命**：子代理被 SendMessage 续上后 task_id 不变，旧请求的
+//   回执哪怕晚到，也只结算旧的那条命。
 // - 没人请求停它、通知落在回合 `result` 之后、下一段助手输出之前 → 被收走：那个空档里
 //   唯一在动的是 CLI 收台（内置 Monitor 那边实测的行序）。
 // - 流结束时还没有终态 → 被收走（进程都没了）。
@@ -85,6 +87,8 @@ interface Tracked {
   /** 发起它的那次调用已经返回、而它当时还没结束。 */
   background: boolean;
   end: Outcome | null;
+  /** 有一次指名这条命的停止调用回执成功了。 */
+  stopOk?: boolean;
   /**
    * 停止通知先到、指名它的那次停止调用还没回执时，回执的 tool_use_id。回执成功才改判成
    * 「被它自己停掉」；失败或一直没有回执，就维持按其它证据定的那一档。
@@ -114,10 +118,11 @@ export class ClaudeBackgroundTrace {
   private tools = new Map<string, string>();
   /** 已经收到 tool_result 的调用。 */
   private returned = new Set<string>();
-  /** 还没回执的停止调用：tool_use_id → 它指名的后台任务 id。**请求不等于停成了。** */
-  private stopCalls = new Map<string, string[]>();
-  /** 停止调用回执成功、确实指名过的后台任务 id。 */
-  private stopConfirmed = new Set<string>();
+  /**
+   * 还没回执的停止调用：tool_use_id → 发请求那一刻它指名的那几条命（对象本身，不是 task_id，
+   * 见文件头「是谁停的」）。**请求不等于停成了。**
+   */
+  private stopCalls = new Map<string, Tracked[]>();
   /** 当前这一条命。 */
   private tasks = new Map<string, Tracked>();
   /** 同一个 task_id 再起一次之前的那几条命（SendMessage 把停掉的子代理续上）——各算各的。 */
@@ -137,7 +142,9 @@ export class ClaudeBackgroundTrace {
     this.tools.set(toolUseId, name);
     if (!STOP_TOOLS.has(name) || !input || typeof input !== "object") return;
     const { task_id: taskId, shell_id: shellId } = input as Record<string, unknown>;
-    const targets = [taskId, shellId].filter((t): t is string => typeof t === "string" && !!t);
+    const targets = [taskId, shellId]
+      .map((id) => typeof id === "string" ? this.tasks.get(id) : undefined)
+      .filter((task): task is Tracked => !!task && !task.end);
     if (targets.length) this.stopCalls.set(toolUseId, targets);
   }
 
@@ -151,8 +158,8 @@ export class ClaudeBackgroundTrace {
     const targets = this.stopCalls.get(toolUseId);
     if (!targets) return;
     this.stopCalls.delete(toolUseId);
-    if (!isError) for (const target of targets) this.stopConfirmed.add(target);
-    for (const task of [...this.earlier, ...this.tasks.values()]) {
+    for (const task of targets) {
+      if (!isError) task.stopOk = true;
       if (task.stopCall !== toolUseId) continue;
       task.stopCall = undefined;
       if (!isError) task.end = "stopped";
@@ -178,8 +185,6 @@ export class ClaudeBackgroundTrace {
       if (!kind) return;
       const prior = this.tasks.get(taskId);
       if (prior) this.earlier.push(prior);
-      // 新的一条命：上一条命挨过的 TaskStop 不能算到它头上。
-      this.stopConfirmed.delete(taskId);
       this.tasks.set(taskId, { kind, toolUseId, background: !!toolUseId && this.returned.has(toolUseId), end: null });
       return;
     }
@@ -191,10 +196,10 @@ export class ClaudeBackgroundTrace {
     if (status !== "stopped") { task.end = "finished"; return; }
     // 证据从硬到软：来源明说 > 停止调用回执成功 > 「result 之后没人请求」> 不明。
     if (SESSION_ENDED_RE.test(String(ev.summary ?? ""))) { task.end = "reaped"; return; }
-    if (this.stopConfirmed.has(taskId)) { task.end = "stopped"; return; }
+    if (task.stopOk) { task.end = "stopped"; return; }
     task.end = this.idle ? "reaped" : "unknown";
     // 停止调用已发、回执还没到：先按上面那档记，回执成功再改判（见 `toolResult`）。
-    for (const [callId, targets] of this.stopCalls) if (targets.includes(taskId)) task.stopCall = callId;
+    for (const [callId, targets] of this.stopCalls) if (targets.includes(task)) task.stopCall = callId;
   }
 
   /**
@@ -202,8 +207,9 @@ export class ClaudeBackgroundTrace {
    * 还在跑的留着，它们仍可能在本代进程里被收走。清账前不结算，常驻调度台上「原因不明」的
    * 那一笔就再也没有投递入口了（流的 finally 要等到进程退出）。
    *
-   * 调用索引同时回收：它们只在同一回合内配对（tool_use → task_started → tool_result），
-   * 跨回合留着只会随常驻进程的全程调用量无界增长。
+   * 调用索引同时回收已经配对完的那些（有回执、也不是还活着的后台任务的发起调用），否则随常驻
+   * 进程的全程调用量无界增长。**没回执的一个不动**：跨回合活着的子代理还在发调用，主回合
+   * 开始不等于它们配对完了——清掉了，内置 Monitor 的 `local_bash` 就会被认成普通后台 Bash。
    */
   private nextTurn(): void {
     this.idle = false;
@@ -211,10 +217,12 @@ export class ClaudeBackgroundTrace {
     this.report(backgroundReapedNotice(tallyOf(settled)));
     this.earlier = this.earlier.filter((task) => !task.end);
     for (const [id, task] of this.tasks) if (task.end) this.tasks.delete(id);
-    this.tools.clear();
-    this.returned.clear();
-    this.stopCalls.clear();
-    for (const id of this.stopConfirmed) if (!this.tasks.has(id)) this.stopConfirmed.delete(id);
+    const live = new Set([...this.earlier, ...this.tasks.values()].map((task) => task.toolUseId));
+    for (const id of this.returned) {
+      if (live.has(id)) continue;
+      this.returned.delete(id);
+      this.tools.delete(id);
+    }
   }
 
   /** 这一轮的后台任务分档。只数真正活过发起调用的那些。 */

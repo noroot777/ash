@@ -234,6 +234,23 @@ async function main(): Promise<void> {
   refused(pendingRefused, "toolu_qs");
   check(pendingRefused.tally().agent?.unknown === 1, "回执被拒就维持「原因不明」", JSON.stringify(pendingRefused.tally()));
 
+  // 停止回执晚到、其间子代理被 SendMessage 续上（task_id 不变）：旧回执只结算旧的那条命（第 2 轮审查 R1）
+  const regen = new ClaudeBackgroundTrace("regen");
+  call(regen, "Agent", "toolu_g1");
+  started(regen, "ag", "toolu_g1", "local_agent");
+  returned(regen, "toolu_g1");
+  call(regen, "TaskStop", "toolu_gs", { task_id: "ag" });
+  notified(regen, "ag", "stopped");
+  call(regen, "SendMessage", "toolu_g2");
+  started(regen, "ag", "toolu_g2", "local_agent");
+  returned(regen, "toolu_g2");
+  returned(regen, "toolu_gs"); // 旧停止请求的成功回执，这时才到
+  result(regen);
+  notified(regen, "ag", "stopped"); // 新的那条命在收尾时停了，没有人请求过
+  const g = regen.tally().agent;
+  check(g?.total === 2 && g.stopped === 1 && g.reaped === 1, "旧停止回执不让续上的那条命也算「它自己停掉」", JSON.stringify(g));
+  check(backgroundReapedNotice(regen.tally()).includes("一并收走"), "续上那条命被收走照样写时间线");
+
   // ── ②⁗ 常驻进程的回合边界：清账前先把该说的说出去，调用索引不跨回合累积（第 2 轮审查 N1/N2）
   const residentCli = "resident-boundary";
   await db.insert(sessions).values({
@@ -259,9 +276,22 @@ async function main(): Promise<void> {
     "上一回合停因不明的那一笔，清账前写进了时间线", JSON.stringify(said));
   check(!said[0]?.includes("后台 Bash"), "还活着的留到它自己了结再说", String(said[0]));
   const idx = boundary as any;
-  check(idx.tools.size === 1 && idx.returned.size === 0 && idx.stopCalls.size === 0,
-    "调用索引只留本回合的，不随常驻进程无界增长", `tools=${idx.tools.size} returned=${idx.returned.size}`);
+  check(!idx.tools.has("toolu_r") && !idx.returned.has("toolu_r"),
+    "上一回合配对完的调用清出索引，不随常驻进程无界增长", `tools=${[...idx.tools.keys()]}`);
+  check(idx.tools.has("toolu_rb") && idx.tools.has("toolu_next"), "还活着的后台任务、还没回执的调用留着",
+    `tools=${[...idx.tools.keys()]}`);
   check(boundary.tally().bash?.total === 1 && !boundary.tally().agent, "跨回合活着的仍在账上，已说过的不再数",
+    JSON.stringify(boundary.tally()));
+  // 跨回合活着的子代理在上一回合发起的 Monitor，task_started 落在新回合：仍归内置 Monitor，不混进来
+  // （第 2 轮审查 N1）。
+  boundary.event({ type: "assistant", parent_tool_use_id: "toolu_rb2",
+    message: { content: [{ type: "tool_use", name: "Monitor", id: "toolu_sub_mon", input: {} }] } });
+  boundary.toolUse("Monitor", "toolu_sub_mon");
+  result(boundary);
+  call(boundary, "Read", "toolu_next2");
+  started(boundary, "bmon", "toolu_sub_mon", "local_bash");
+  returned(boundary, "toolu_sub_mon");
+  check(boundary.tally().bash?.total === 1, "边界前没回执的子代理 Monitor 调用仍认得出来，不算后台 Bash",
     JSON.stringify(boundary.tally()));
   await boundary.finish();
   await new Promise((r) => setTimeout(r, 60));
