@@ -11,6 +11,7 @@
 // （git-accept.ts 的 expectedTree）—— 合并只在这里定义一次。
 import { type AcceptGateBaseline, normalizeAcceptGateBaseline } from "@ash/shared/accept-gate";
 import { type CheckoutSettings, changedPaths, checkoutFilters, checkoutGaps, checkoutSettings, conversionDrift, materializationIdentity, mergeDrivers, previewMerge, readOnlyGit } from "./accept-gate-preview.js";
+import { decodePhysical, targetPreserved } from "./accept-gate-physical.js";
 import { dependencyReads } from "./accept-gate-source.js";
 import { isAncestor } from "./git-accept.js";
 import { resolveWorktreeBranchName } from "./git.js";
@@ -33,6 +34,11 @@ export type GateBaselinePlan = {
   previewSettings: CheckoutSettings | null;
   /** 上面那份的身份（materializationIdentity），复用判据的一部分。 */
   previewMaterialization: string | null;
+  /**
+   * 目标检出**现在**那些合并不重写的文件的摘要（accept-gate-physical.ts 的 targetPreserved），与凭据里
+   * GatePhysical.preserved 比；目标没检出在被测提交上为 null。复用判据的一部分。
+   */
+  previewPhysical: string | null;
 };
 
 export type GateBaselineBlock = {
@@ -58,7 +64,7 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
   // 目标解析与 acceptGateCheck 登记 targetBranch 那一句同源：只有独立 worktree 的任务才有「合并之后」。
   const targetBranch = task.useWorktree ? await plannedMergeTarget(task, project.repoPath) : null;
   const targetCommit = targetBranch ? await commitAt(project.repoPath, targetBranch) : null;
-  const plan: GateBaselinePlan = { mode, targetBranch, targetCommit, previewBase: null, previewTree: null, previewSettings: null, previewMaterialization: null };
+  const plan: GateBaselinePlan = { mode, targetBranch, targetCommit, previewBase: null, previewTree: null, previewSettings: null, previewMaterialization: null, previewPhysical: null };
   if (mode === "branch" || !targetBranch || !targetCommit || !head) return { plan, block: null };
   const contained = await isAncestor(expandHome(project.repoPath), targetCommit, head);
   if (mode === "contains_target") {
@@ -98,9 +104,15 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
   // 核对本身跑不动（git 太旧、属性读不出来）也是「没法确认快照忠实」，同样结构化拒，不落成通用报错。
   const unfaithful = (tree: string) =>
     faithfulness(tree).catch((error: unknown) => unavailable(`git 没能核对检出属性（${String(error)}）`));
+  // 目标检出现在的字节（复用判据的一部分）。读不出来同样是「没法确认快照忠实」，结构化拒。
+  const physical = async (tree: string) => {
+    try { return { plan: { ...preview, previewTree: contained ? null : tree,
+      previewPhysical: await targetPreserved(project.repoPath, targetBranch, targetCommit, tree, borrowed?.dependencies ?? []) }, block: null }; }
+    catch (error) { return unavailable(`没能读出目标检出里的文件（${error instanceof Error ? error.message : String(error)}）`); }
+  };
   if (contained) {
-    return await unfaithful((await git(project.repoPath, ["rev-parse", `${head}^{tree}`])).stdout.trim())
-      ?? { plan: preview, block: null };
+    const tree = (await git(project.repoPath, ["rev-parse", `${head}^{tree}`])).stdout.trim();
+    return await unfaithful(tree) ?? await physical(tree);
   }
   const drivers = await mergeDrivers(project.repoPath, targetCommit, head);
   if (drivers.length) {
@@ -128,7 +140,7 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
       return unavailable(`${targetBranch} 改了快照要从任务工作区借用的依赖内容（${stale.map(read => read || "整个工作区").join("、")}），`
         + "借进去的就是改之前的那份，测了也说明不了合进去之后怎样");
     }
-    return { plan: { ...preview, previewTree: merged.tree }, block: null };
+    return await physical(merged.tree);
   }
   const sourceBranch = await resolveWorktreeBranchName(project.repoPath, task.id);
   return { plan: null, block: { reason: "merge_conflict", targetBranch, targetCommit, sourceBranch, conflictFiles: merged.conflicts,
@@ -143,20 +155,27 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
  * 分支快照与「要求已含目标分支」测的都是分支那棵树（后者另由上面的拒绝保证它含着目标分支），
  * 所以两者的记录互通；合并预览测的是预演出来的那棵树。只比两个提交不够：同样的两个提交在不同的
  * 合并配置下会合出不同的树（第 2 轮审查 F1 实测 merge.directoryRenames），所以树也要相等；同一棵树在
- * 不同的换行配置下检出的字节不同，所以快照实际用的转换配置也要相等（第 3 轮复审 F1）。
+ * 不同的换行配置下检出的字节不同，所以快照实际用的转换配置也要相等（第 3 轮复审 F1）；配置没变，
+ * 目标检出里合并不重写的那些文件的字节也可能变了，所以它们也要和测的时候是同一份（第 5 轮复审 F2）。
  */
 export function gateBaselineMatches(row: GateBaselineRecord, plan: GateBaselinePlan | null): boolean {
   return (row.previewBase ?? null) === (plan?.previewBase ?? null)
     && (row.previewTree ?? null) === (plan?.previewTree ?? null)
-    && (row.previewMaterialization ?? null) === (plan?.previewMaterialization ?? null);
+    && (row.previewMaterialization ?? null) === (plan?.previewMaterialization ?? null)
+    && (!row.previewBase || (!!row.previewPhysical && (decodePhysical(row.previewPhysical)?.preserved ?? null) === (plan?.previewPhysical ?? null)));
 }
 
-type GateBaselineRecord = { previewBase?: string | null; previewTree?: string | null; previewMaterialization?: string | null };
+type GateBaselineRecord = { previewBase?: string | null; previewTree?: string | null; previewMaterialization?: string | null;
+  previewPhysical?: string | null };
 
-/** 旧绿不作数的原因只差在转换配置上（树还是那棵）：日志里说清楚，别报成「目标分支动了」。 */
-export const gateMaterializationOnlyDrift = (row: GateBaselineRecord, plan: GateBaselinePlan | null): boolean =>
-  (row.previewBase ?? null) === (plan?.previewBase ?? null) && (row.previewTree ?? null) === (plan?.previewTree ?? null)
-    && (row.previewMaterialization ?? null) !== (plan?.previewMaterialization ?? null);
+/**
+ * 旧绿不作数的原因不在目标分支（树还是那棵）：只差在转换配置上，或者只差在目标检出的字节上。日志里
+ * 说清楚是哪一种，别报成「目标分支动了」。null = 目标分支 / 树本身变了。
+ */
+export function gateDriftBesidesTree(row: GateBaselineRecord, plan: GateBaselinePlan | null): "materialization" | "physical" | null {
+  if ((row.previewBase ?? null) !== (plan?.previewBase ?? null) || (row.previewTree ?? null) !== (plan?.previewTree ?? null)) return null;
+  return (row.previewMaterialization ?? null) !== (plan?.previewMaterialization ?? null) ? "materialization" : "physical";
+}
 
 /** 门禁日志 / 时间线里那一句「这一次测的是哪一棵」。 */
 export function gateBaselineNotice(plan: GateBaselinePlan): string | null {

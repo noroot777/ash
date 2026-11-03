@@ -25,6 +25,7 @@ import { assertNotPreviewInstance } from "./preview-instance.js";
 import { execFileText as exec } from "./exec.js";
 import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 import { addTemporaryWorktree, removeTemporaryWorktree, type TemporaryWorktree } from "./git-accept-temp.js";
+import type { GatePhysical } from "./accept-gate-physical.js";
 import { movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
 
 function sameFilesystemPath(a: string, b: string): boolean {
@@ -236,6 +237,8 @@ export type TaskMergeOptions = {
    * 另一棵树（第 4 轮审查 F2）。不给时以进锁那一刻的目标提交为准。
    */
   expectedTarget?: string;
+  /** 门禁测过的那份物理内容（凭据的 preview_physical）：落地前后都按它核目标检出的字节（第 5 轮复审 F2）。 */
+  expectedPhysical?: GatePhysical | null;
 };
 
 export async function mergeTaskBranch(
@@ -522,7 +525,7 @@ async function mergeTaskBranchLocked(
   // 合并预览档的落地约束（重试已合过的那次除外：目标分支正是被上一次自己的合并挪走的）。
   const now = await commitOf(repo, targetBranch);
   const guard: LandingGuard | null = options.expectedTree && !options.retryOfMerged && now
-    ? { tree: options.expectedTree, target: options.expectedTarget ?? now } : null;
+    ? { tree: options.expectedTree, target: options.expectedTarget ?? now, physical: options.expectedPhysical ?? null } : null;
   if (guard && now !== guard.target) {
     return { ok: false, reason: "merge_failed", message: movedTarget(targetBranch, guard.target, now), sourceBranch, targetBranch };
   }

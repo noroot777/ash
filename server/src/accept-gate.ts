@@ -27,7 +27,7 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { acceptGateCommandOf, gateView, latestRun, prepareGateCwd, runningRun } from "./accept-gate-state.js";
 import { createGateSnapshot, gateSnapshotPath, gateSourceMatches, readGateSource, type GateSource } from "./accept-gate-source.js";
 import { readOnlyGit, snapshotMaterialization } from "./accept-gate-preview.js";
-import { checkoutDivergence } from "./accept-gate-physical.js";
+import { checkoutDivergence, encodePhysical, snapshotPhysical } from "./accept-gate-physical.js";
 import { existingTaskWorkspacePath } from "./task-workspace.js";
 export { acceptGateCommandOf, acceptGateRunOf, acceptGateState } from "./accept-gate-state.js";
 import type { AcceptFailure } from "./task-accept-guard.js";
@@ -45,7 +45,7 @@ export { rehandOffAcceptGate } from "./accept-gate-handoff.js";
 export type { AcceptGateChoices } from "./accept-gate-handoff.js";
 import type { AcceptGateChoices } from "./accept-gate-handoff.js";
 import { encodeGateEntryProbe, probeGateEntry } from "./accept-gate-entry.js";
-import { gateBaselineMatches, gateBaselineNotice, gateMaterializationOnlyDrift, resolveGateBaseline, type GateBaselineBlock,
+import { gateBaselineMatches, gateBaselineNotice, gateDriftBesidesTree, resolveGateBaseline, type GateBaselineBlock,
   type GateBaselinePlan } from "./accept-gate-baseline.js";
 import { handOffConflict } from "./accept-conflict.js";
 
@@ -149,8 +149,11 @@ export async function acceptGateCheck(
         recordBasis("passed", row.id);
         return null;
       }
-      if (gateMaterializationOnlyDrift(row, plan)) await appendTaskTimeline(task.id, "验收前置命令通过了，但它跑的那会儿之后项目的换行配置"
+      const besides = gateDriftBesidesTree(row, plan);
+      if (besides === "materialization") await appendTaskTimeline(task.id, "验收前置命令通过了，但它跑的那会儿之后项目的换行配置"
         + "（core.autocrlf / core.eol）变了：同一棵树合进去之后检出的字节已经不是测过的那份。旧结果不拿来合，按现在的配置重新跑一遍。");
+      else if (besides === "physical") await appendTaskTimeline(task.id, `验收前置命令通过了，但它跑的那会儿之后目标分支 ${plan?.targetBranch ?? ""} 的检出里`
+        + "有这次合并不会重写的文件变了（字节和测的时候不是同一份，树和 `git status` 看不出来）。旧结果不拿来合，按现在的检出重新跑一遍。");
       else await appendTaskTimeline(task.id, `验收前置命令通过了，但它预演的是 ${row.targetBranch ?? "目标分支"}@${row.previewBase?.slice(0, 8) ?? "（分支快照）"}，`
         + `现在要合的已经是 ${plan?.targetBranch ?? "目标分支"}@${plan?.previewBase?.slice(0, 8) ?? "（分支快照）"}。旧结果不拿来合这一棵，按现在的目标分支重新跑一遍。`);
     }
@@ -293,7 +296,9 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
         ? { targetCommit: plan.baseline.previewBase, tree: plan.baseline.previewTree, settings: plan.baseline.previewSettings } : undefined);
     if (previewCommit) appendGateLog(logPath, `[ash] preview: 快照里的合并结果 ${previewCommit}（tree ${plan.baseline.previewTree}）\n\n`);
     // 快照是全新写的，真合并只重写改到的文件：目标检出里没改到的那些磁盘上和快照不是同一份，就不跑
-    // （accept-gate-physical.ts）。拦在起进程之前，落成「起不来」并把原因写进日志。
+    // （accept-gate-physical.ts）。拦在起进程之前，落成「起不来」并把原因写进日志。对得上就把测过的这份
+    // 记成摘要进凭据：复用旧绿与最终落地都按它再核目标检出（第 5 轮复审 F2）。
+    let physical: string | null = null;
     if (plan.baseline.previewBase && plan.targetBranch && plan.sourceCommit) {
       const tree = plan.baseline.previewTree ?? (await readOnlyGit(plan.repoPath, ["rev-parse", `${plan.sourceCommit}^{tree}`])).stdout.trim();
       const drifted = await checkoutDivergence(plan.repoPath, plan.targetBranch, plan.baseline.previewBase, tree, snapshotCwd, plan.source.dependencies);
@@ -304,6 +309,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
           + "在那个检出里把它们重新检出一遍（比如 `git rm --cached -r -q . && git reset --hard`，会丢掉未提交的改动，先确认工作区干净），"
           + "或者在项目设置 → 验收里换成「要求已含目标分支」或「分支快照」。");
       }
+      physical = encodePhysical(await snapshotPhysical(plan.repoPath, plan.targetBranch, plan.baseline.previewBase, tree, snapshotCwd, plan.source.dependencies));
     }
     // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里。「测试压根没启动」这个结论
     // 整副面孔（不要改代码 / 出路是合分支或跳过）都压在这份事实上（第 2 轮审查 F1），所以
@@ -316,7 +322,7 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
     await db.update(acceptGateRuns)
       .set({ entryProbe: encodeGateEntryProbe(probeGateEntry(snapshotCwd, plan.command)), previewCommit,
         // 凭据记快照**实际**用的那一份，不是判定那一刻读到的：两者之间项目改了配置，记下的就是测过的。
-        ...(plan.baseline.previewBase ? { previewMaterialization: await snapshotMaterialization(snapshotCwd) } : {}) })
+        ...(plan.baseline.previewBase ? { previewMaterialization: await snapshotMaterialization(snapshotCwd), previewPhysical: physical } : {}) })
       .where(eq(acceptGateRuns.id, runId));
     const prepared = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, runId))).at(0);
     if (prepared?.status !== "running") {

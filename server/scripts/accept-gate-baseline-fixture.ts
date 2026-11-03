@@ -34,6 +34,7 @@ export async function baselineHarness(prefix: string) {
   const { bus } = await import("../src/bus.js");
   const { previewMerge } = await import("../src/accept-gate-preview.js");
   const { mergeTaskBranch } = await import("../src/git-accept.js");
+  const { decodePhysical, snapshotPhysical } = await import("../src/accept-gate-physical.js");
   await ensureSchema();
   const api = new Hono();
   mountProjectRoutes(api);
@@ -86,6 +87,14 @@ export async function baselineHarness(prefix: string) {
       createdAt: stamp, updatedAt: stamp });
     return { repo, cwd, taskId, projectId };
   }
+  /** 像门禁那样把测过的树在一份新目录里检出、记下物理凭据（直接调 mergeTaskBranch 的用例用）。 */
+  async function testedPhysical(repo: string, base: string, tree: string) {
+    const commit = git(repo, "commit-tree", tree, "-m", "tested");
+    const dir = join(root, `tested-${commit.slice(0, 12)}`);
+    git(repo, "worktree", "add", "-q", "--detach", dir, commit);
+    try { return await snapshotPhysical(repo, "main", base, tree, dir, []); }
+    finally { git(repo, "worktree", "remove", "--force", dir); }
+  }
   async function settled(taskId: string, count = 1) {
     for (let attempt = 0; attempt < 800; attempt++) {
       const rows = await runs(taskId);
@@ -99,5 +108,5 @@ export async function baselineHarness(prefix: string) {
   }
   return { root, git, sleep, gateCommand, passesOn, db, acceptGateRuns, projects, tasks, acceptTask, acceptGateState,
     mountProjectRoutes, bus, previewMerge, mergeTaskBranch, api, stamp, runs, taskRow, projectRow, wouldRun, commitOnMain,
-    fixture, settled };
+    fixture, settled, testedPhysical, decodePhysical };
 }

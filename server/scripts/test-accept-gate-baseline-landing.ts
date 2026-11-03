@@ -1,13 +1,26 @@
 // 合并预览档「快照忠实代表合进去之后那份」与「最终落下的就是测过的那份」的回归（第 4 轮审查）。
 // 样本与驱动和 test-accept-gate-baseline.ts 共用（accept-gate-baseline-fixture.ts）。
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 
 const { baselineHarness } = await import("./accept-gate-baseline-fixture.js");
 const { root, git, passesOn, acceptTask, acceptGateState, previewMerge, mergeTaskBranch, runs, taskRow, wouldRun,
-  commitOnMain, fixture, settled } = await baselineHarness("ash-gate-landing-");
+  commitOnMain, fixture, settled, testedPhysical } = await baselineHarness("ash-gate-landing-");
+
+/** 一次带全部落地约束的最终合并（像验收那样：被测的目标提交、预演出来的树、测过的物理内容）。 */
+const landGuarded = async (sample: { repo: string; cwd: string; taskId: string }) => {
+  const tested = git(sample.repo, "rev-parse", "main");
+  const source = git(sample.cwd, "rev-parse", "HEAD");
+  const merged = await previewMerge(sample.repo, tested, source);
+  assert.ok("tree" in merged, JSON.stringify(merged));
+  const expectedTree = "tree" in merged ? merged.tree : "";
+  const expectedPhysical = await testedPhysical(sample.repo, tested, expectedTree);
+  return { tested, expectedTree, landed: await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
+    { sourceCommit: source, expectedTree, expectedTarget: tested, expectedPhysical }) };
+};
 
 const refusedBeforeGate = async (sample: { taskId: string; projectId: string }, pattern: RegExp) => {
   assert.match((await acceptGateState(sample.taskId)).baselineBlock ?? "", pattern);
@@ -78,7 +91,7 @@ try {
     assert.equal(git(sample.repo, "rev-parse", "main"), moved, "目标分支没动");
     git(sample.repo, "reset", "--hard", tested);
     const landed = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
-      { sourceCommit: source, expectedTree, expectedTarget: tested });
+      { sourceCommit: source, expectedTree, expectedTarget: tested, expectedPhysical: await testedPhysical(sample.repo, tested, expectedTree) });
     assert.equal(landed.ok, true, JSON.stringify(landed));
     assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), expectedTree);
   }
@@ -154,7 +167,8 @@ try {
     assert.ok("tree" in merged, JSON.stringify(merged));
     const expectedTree = "tree" in merged ? merged.tree : "";
     const staged = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
-      { sourceCommit: source, expectedTree, expectedTarget: tested, commit: false });
+      { sourceCommit: source, expectedTree, expectedTarget: tested, commit: false,
+        expectedPhysical: await testedPhysical(sample.repo, tested, expectedTree) });
     assert.equal(staged.ok, true, JSON.stringify(staged));
     if (staged.ok) assert.equal(staged.method, "no_commit");
     assert.equal(git(sample.repo, "write-tree"), expectedTree);
@@ -179,8 +193,68 @@ try {
     assert.equal(git(sample.repo, "rev-parse", "HEAD"), tested, "detach 的检出没被碰");
   }
 
+  // ㉟ 最终合并 · 项目配了 post-merge 钩子（在合并之后再改文件、再落一个提交，第 5 轮复审 F1）：受保护的
+  // 发布不调用户钩子，落下的就是测过的那棵，钩子一行都没跑。
+  {
+    const sample = await fixture("landing-hook", { baseline: "merge_preview" });
+    const marker = join(root, "hook-ran");
+    writeFileSync(join(sample.repo, ".git", "hooks", "post-merge"),
+      `#!/bin/sh\ntouch '${marker}'\necho UNTESTED > api.js\ngit add api.js && git commit -qm untested\n`, { mode: 0o755 });
+    const { tested, expectedTree, landed } = await landGuarded(sample);
+    assert.equal(landed.ok, true, JSON.stringify(landed));
+    assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), expectedTree);
+    assert.equal(git(sample.repo, "rev-parse", "main^1"), tested);
+    assert.equal(existsSync(marker), false, "受保护的发布不调用户钩子");
+    rmSync(join(sample.repo, ".git", "hooks", "post-merge"));
+  }
+
+  // ㊱ 最终合并 · 快进刚落下、另一个终端紧跟着往目标分支提交（发布的后置条件，第 5 轮复审 F1）：
+  // 不报成功，那个外部提交原样留着。外部提交由一个 git 包装在真正的快进之后插进来。
+  {
+    const sample = await fixture("landing-after-race", { baseline: "merge_preview" });
+    const bin = join(root, "after-race-bin");
+    mkdirSync(bin);
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" merge --ff-only "*) '${realGit}' "$@"; rc=$?\n`
+      + `  echo external > '${sample.repo}/external.txt'; '${realGit}' -C '${sample.repo}' add external.txt\n`
+      + `  '${realGit}' -C '${sample.repo}' commit -qm external; exit $rc ;; esac\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    let outcome: Awaited<ReturnType<typeof landGuarded>>;
+    try { outcome = await landGuarded(sample); } finally { process.env.PATH = path; }
+    assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
+    if (!outcome.landed.ok) assert.match(outcome.landed.message, /不在刚发布的测过的结果/);
+    assert.equal(git(sample.repo, "log", "-1", "--format=%s", "main"), "external", "外部提交原样留着");
+    assert.equal(git(sample.repo, "rev-parse", "main~1^{tree}"), outcome.expectedTree);
+  }
+
+  // ㊲ 合并预览 · 门禁跑着的时候，目标检出里一个这次合并不改的文件被存成另一种换行再暂存（第 5 轮
+  // 复审 F2）：树、配置、`git status` 都没变，但字节不是测过的那份 —— 旧绿不拿来合，验收不通过。
+  {
+    const sample = await fixture("preview-drift-during-gate", { baseline: "merge_preview", delay: 500 });
+    git(sample.repo, "config", "core.autocrlf", "true");
+    git(sample.repo, "rm", "--cached", "-r", "-q", ".");
+    git(sample.repo, "reset", "--hard", "-q");
+    assert.match(readFileSync(join(sample.repo, "api.js"), "utf8"), /\r\n$/);
+    const before = git(sample.repo, "rev-parse", "main");
+    await acceptTask(sample.taskId);
+    writeFileSync(join(sample.repo, "api.js"), "exports.onDelivered = () => 'ok';\n");
+    git(sample.repo, "add", "api.js");
+    assert.equal(git(sample.repo, "status", "--porcelain"), "");
+    await settled(sample.taskId);
+    await settled(sample.taskId, (await runs(sample.taskId)).length);
+    const all = await runs(sample.taskId);
+    assert.equal(all[0]!.status, "passed", "快照里那份照样绿");
+    assert.notEqual((await taskRow(sample.taskId)).stage, "accepted", JSON.stringify(all.map(row => row.status)));
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "没有合并");
+    assert.equal((await acceptGateState(sample.taskId)).latest?.stale ?? true, true);
+    assert.equal(await wouldRun(sample), true);
+    git(sample.repo, "config", "--unset", "core.autocrlf");
+  }
+
   console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
-    physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true }));
+    physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
+    hookSkipped: true, afterRace: true, driftDuringGate: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

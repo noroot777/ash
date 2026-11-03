@@ -24,6 +24,7 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_commit TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
   "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
+  "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
   "ALTER TABLE monitors ADD COLUMN kind TEXT NOT NULL DEFAULT 'ash'",
   // 读取层的两份独立状态:可续读位置 probe、永久缺口全集 gaps(JSON 数组)。
   "ALTER TABLE monitor_scan_cursors ADD COLUMN probe INTEGER NOT NULL DEFAULT 0",

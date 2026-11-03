@@ -87,6 +87,11 @@ export const acceptGateRuns = sqliteTable(
      */
     previewMaterialization: text("preview_materialization"),
     /**
+     * 合并预览档：快照里被测的那份物理内容的摘要（accept-gate-physical.ts 的 GatePhysical，JSON）。复用旧绿
+     * 与最终落地都拿它核目标检出现在的字节（第 5 轮复审 F2）。旧行 null = 重跑一次。
+     */
+    previewPhysical: text("preview_physical"),
+    /**
      * 用户点那一下带着的验收选择（JSON：by / commit / confirmUnverified）。
      *
      * 必须留：门禁绿了之后是**系统**替他把验收接着做完的，接着做的那一次必须跟他在
@@ -148,6 +153,7 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_commit TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

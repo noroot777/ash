@@ -332,7 +332,7 @@ try {
     rmSync(join(sample.repo, "blocker.txt"));
     const mainBefore = git(sample.repo, "rev-parse", "main");
     const landed = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
-      { sourceCommit: first!.sourceCommit!, expectedTree: first!.previewTree! });
+      { sourceCommit: first!.sourceCommit!, expectedTree: first!.previewTree!, expectedPhysical: h.decodePhysical(first!.previewPhysical) });
     // 落地不再按现在的合并配置重合一遍：结果直接用测过的那棵树生成（第 4 轮复审 F1），配置变了也一样。
     assert.equal(landed.ok, true, JSON.stringify(landed));
     assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), first!.previewTree, "落下的就是测过的那棵");
@@ -430,7 +430,7 @@ try {
     mkdirSync(bin);
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     const marker = join(root, "race-fired");
-    writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ ! -e '${marker}' ] && [ "$3" = merge ] && [ "$4" = --ff-only ]; then\n`
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" merge --ff-only "*) fire=1 ;; esac\nif [ ! -e '${marker}' ] && [ -n "$fire" ]; then\n`
       + `  touch '${marker}'; echo external > '${sample.repo}/external.txt'\n`
       + `  '${realGit}' -C '${sample.repo}' add external.txt && '${realGit}' -C '${sample.repo}' commit -qm external || exit 1\nfi\n`
       + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
@@ -439,7 +439,8 @@ try {
     let landed: Awaited<ReturnType<typeof mergeTaskBranch>>;
     try {
       landed = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
-        { sourceCommit: source, expectedTree: "tree" in merged ? merged.tree : "", expectedTarget: tested });
+        { sourceCommit: source, expectedTree: "tree" in merged ? merged.tree : "", expectedTarget: tested,
+          expectedPhysical: await h.testedPhysical(sample.repo, tested, "tree" in merged ? merged.tree : "") });
     } finally { process.env.PATH = path; }
     assert.equal(existsSync(marker), true, "外部提交确实插在了快进之前");
     assert.equal(landed.ok, false);

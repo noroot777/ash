@@ -11,6 +11,7 @@ import { treeOfCommit } from "./git-accept.js";
 import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
 import { gateDependencies, gateSnapshotPath, gateSourceMatches, readGateSource } from "./accept-gate-source.js";
 import { gateBaselineMatches, resolveGateBaseline } from "./accept-gate-baseline.js";
+import { decodePhysical, type GatePhysical } from "./accept-gate-physical.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
@@ -21,13 +22,13 @@ type ProjectRow = typeof projects.$inferSelect;
  * 分支时就是任务分支那棵）和测的时候目标分支所在的提交。最终合并只认这几样（git-accept 的落地约束）。
  */
 export async function gateMergeSource(repoPath: string, basis: Pick<TaskRow, "acceptedGateMode" | "acceptedGateRunId"> | null):
-  Promise<{ sourceCommit?: string; expectedTree?: string; expectedTarget?: string }> {
+  Promise<{ sourceCommit?: string; expectedTree?: string; expectedTarget?: string; expectedPhysical?: GatePhysical | null }> {
   if (basis?.acceptedGateMode !== "passed" || !basis.acceptedGateRunId) return {};
   const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, basis.acceptedGateRunId))).at(0);
   const sourceCommit = row?.sourceCommit ?? undefined;
   if (!row?.previewBase) return { sourceCommit };
   const expectedTree = row.previewTree ?? (sourceCommit ? await treeOfCommit(repoPath, sourceCommit) ?? undefined : undefined);
-  return { sourceCommit, expectedTree, expectedTarget: row.previewBase };
+  return { sourceCommit, expectedTree, expectedTarget: row.previewBase, expectedPhysical: decodePhysical(row.previewPhysical) };
 }
 
 /**
