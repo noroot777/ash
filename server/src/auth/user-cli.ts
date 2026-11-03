@@ -19,7 +19,7 @@
 //      `server/scripts/test-user-cli-smoke.ts` 的零交互冒烟测试。
 import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentType, PersonalCliEnv, PersonalSkill } from "@ash/shared";
+import type { AgentType, PersonalAshMcp, PersonalCliEnv, PersonalSkill } from "@ash/shared";
 import { DATA_DIR } from "../paths.js";
 import { ensureAshMcp, ashMcpRegistration, hostCliConfigDir, hostCliConfigFile } from "./user-cli-mcp.js";
 
@@ -130,6 +130,30 @@ export async function cliConfigEnvFor(userId: string | null, agentType: string):
   if (!key) return {};
   const dir = await ensureUserCliDir(userId, agentType as AgentType);
   return dir ? { [key]: dir } : {};
+}
+
+/**
+ * 注册执行器时把 ash MCP 接进**这个执行器起跑时真正读的那份配置**,缺了才写、已有不覆盖。
+ *
+ * 原来只有 `npm run setup` 会往宿主机配置里写这条，而 setup 只认得跑它那一刻装好的几家 CLI:
+ * 之后才装的 CLI、换过 `CODEX_HOME` 的机器、压根没跑过 setup 的安装，注册出来的执行器
+ * 第一次交卷才发现没有 `complete_task`。注册执行器是用户亲手说「我要用这家 CLI 跑活」的那一下，
+ * 也就是写这条登记最该发生的时刻 —— 启动自检(`warnHostAshMcp`)仍然只出声不写，
+ * 它不是用户发起的动作。
+ *
+ * 写哪一份跟起跑时 `cliConfigEnvFor` 选的是同一份:隔离档下有个人目录的 CLI 写个人目录，
+ * 其余(含共用档)写宿主机那份(`hostCliConfigDir` 已经尊重 `CLAUDE_CONFIG_DIR` 那一族变量)。
+ * 怎么判、怎么拼、怎么安全落盘全在 `mcp-registry/register.ts`,这里只挑目录。
+ */
+export async function ensureExecutorAshMcp(
+  agentType: AgentType,
+  ownerUserId: string | null,
+): Promise<PersonalAshMcp> {
+  const { isHostCliIsolated } = await import("./mode.js");
+  const personal = ownerUserId && (await isHostCliIsolated()) ? seedUserCliDir(ownerUserId, agentType) : null;
+  const dir = personal ?? hostCliConfigDir(agentType);
+  if (!dir) return { configured: false, serverName: null, problem: `${agentType} 没有可写 MCP 登记的配置目录` };
+  return await ensureAshMcp(dir, agentType);
 }
 
 // ── 管理面(设置页「个人 CLI 环境」节)────────────────────────────────────────

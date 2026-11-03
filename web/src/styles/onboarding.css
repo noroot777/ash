@@ -148,6 +148,8 @@
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--amber);
+  /* 补不上 ash MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
+  white-space: pre-wrap;
 }
 
 /* 初读失败的那几份:就地说清少了什么,并给一颗重试 —— 退成空列表会让用户以为

@@ -20,6 +20,7 @@ import { isHostCliShared, isMultiUser } from "./mode.js";
 import { filterOwned, ownedScope, ownerStamp } from "./owned.js";
 import {
   deletePersonalSkill,
+  ensureExecutorAshMcp,
   listPersonalCliEnv,
   personalCliEnv,
   readPersonalMemory,
@@ -273,6 +274,7 @@ function mountConfigTransferRoutes(api: Hono): void {
       const existing = new Set((await filterOwned(await db.select().from(agents), actor)).map((a) => a.name));
       let n = 0;
       let unlinked = 0;
+      const added: string[] = [];
       for (const a of bundle.items.executors) {
         if (existing.has(a.name)) { skipped.push(`执行器「${a.name}」`); continue; }
         const providerId = a.providerName ? providerByName.get(a.providerName) ?? null : null;
@@ -291,10 +293,16 @@ function mountConfigTransferRoutes(api: Hono): void {
           // 导入的条目**一律不是默认** —— 否则一次导入就把我自己的默认执行器换掉了。
           isDefault: false,
         });
+        added.push(a.type);
         n++;
       }
       imported.executors = n;
       if (unlinked) notes.push(`${unlinked} 个执行器原本挂的供应商在这边找不到同名的，已落成「未挂供应商」`);
+      // 导入也是注册,同样当场接 ash MCP(理由见 `ensureExecutorAshMcp`);同一家只接一次。
+      for (const type of new Set(added)) {
+        const ashMcp = await ensureExecutorAshMcp(type as AgentType, stamp.ownerUserId);
+        if (!ashMcp.configured) notes.push(`${type} 的 ash MCP 没接上，它的执行器交不了卷：${ashMcp.problem}`);
+      }
     }
 
     if (bundle.items.workflows) {
