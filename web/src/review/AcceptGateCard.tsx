@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowClockwise, ArrowUUpLeft, CheckCircle, FileText, PencilSimple, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
-import type { AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
-import { ACCEPT_GATE_STATUS_LABELS, acceptGateCancelMessage, summarizeAcceptGate } from "@ash/shared/accept-gate";
+import type { AcceptGateBaseline, AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_BASELINE_LABELS, ACCEPT_GATE_STATUS_LABELS, acceptGateBaselineEffect, acceptGateCancelMessage,
+  summarizeAcceptGate } from "@ash/shared/accept-gate";
 import type { Task, TaskListItem } from "@ash/shared";
 import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { api } from "../lib/api.ts";
 import { useCatchUp } from "../lib/useCatchUp.ts";
 import { useAcceptGate } from "./useAcceptGate.ts";
 import { AcceptGateForceRelease } from "./AcceptGateForceRelease.tsx";
+import { AcceptGateBaselineChoice } from "./AcceptGateBaselineChoice.tsx";
+import { announceProjectUpdate } from "../lib/projectUpdates.ts";
 
 // 「验收前置命令」在验收台上的那张卡。它跟 PendingMergeCard 一样住在每个有验收动作的
 // 表面上，自己判要不要出现。
@@ -126,7 +129,9 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
   // 不会撞的只有两种：项目没设这条命令，以及这棵树上已经有一次能原样复用的绿 —— 那时点
   // 验收既不跑它也不被它挡，摆「跳过」只会把一份真凭据换成一句「你明确跳过了」。能力不可用
   // 或源码输入读不出来时那份绿也复用不了（验收会在更早一步被挡下），所以照样要给出路。
-  const reusablePass = !state.unavailable && !state.sourceError && latest?.status === "passed" && !latest.stale;
+  const reusablePass = !state.unavailable && !state.sourceError && !state.baselineBlock
+    && latest?.status === "passed" && !latest.stale;
+  const baseline = state.baseline ?? "branch";
   const gateAhead = atFinalGate && !!state.command && !running && !settled && !reusablePass;
 
   const cancel = async () => {
@@ -198,6 +203,22 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
     }
   };
 
+  // 门禁基准同理是**项目级**的（和设置页那一组是同一个字段）：改完让壳层那份项目也换掉，
+  // 回到设置页看到的才是这一档；别的任务的卡由服务端的 task.acceptGate 叫它们重读。
+  const saveBaseline = async (next: AcceptGateBaseline) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      announceProjectUpdate(await api.updateProject(task.projectId, { acceptGateBaseline: next }));
+      await reload();
+      notify(`这个项目的门禁基准改成了「${ACCEPT_GATE_BASELINE_LABELS[next]}」：对整个项目之后的每一次验收生效`);
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // 取消和被打断**不是红**：那两种根本没有结论（用户自己收掉的、ash 重启打断的），
   // 套上失败色会让人以为命令真的跑出了问题，而出路完全不同（重点一次就行）。
   // 验收做完之后这张卡不再是关口：通过的那一次照常是绿的（stale 与否已经不重要，
@@ -255,6 +276,19 @@ export function AcceptGateCardView({ task, notify, onIntent, disabled = false, g
           <dt>{running ? "本次正在运行" : stale ? "上次读取的项目命令" : "项目配置的前置命令"}</dt>
           <dd><code>{running?.command ?? state.command ?? (stale ? "当时未设置，当前配置待核对" : "未设置（验收时不运行前置命令）")}</code></dd>
         </dl>
+      )}
+      {!settled && state.command && atFinalGate && (
+        <div className="accept-gate-basis">
+          <span>门禁基准 · 项目级设置，对整个项目的验收生效</span>
+          <AcceptGateBaselineChoice value={baseline} onChange={(next) => void saveBaseline(next)}
+            disabled={busy || canManage !== true || !!running} />
+          <p>{running
+            ? "这一次按开跑时那一档在跑；改了从下一次验收起生效。"
+            : task.useWorktree === false
+              ? "这个任务直接在项目目录里干活，没有「合并之后」那棵树，三档都按分支快照跑。"
+              : `这一按：${acceptGateBaselineEffect(baseline, state.baselineTarget?.branch)}`}</p>
+          {state.baselineBlock && !running && <p role="alert">{state.baselineBlock}</p>}
+        </div>
       )}
       {shown?.diagnosis && (
         <div className="accept-gate-diagnosis" role="note">
@@ -399,7 +433,10 @@ function detail(
 ): string {
   if (running) {
     if (running.status !== "running") return "尚未确认整棵进程树退出，合并和清理继续阻止；这不是已收干净的证明。";
-    return `\`${running.command}\`（在 ${running.cwd}）。rc=0 才会继续合并：绿了这次验收会自动做完，`
+    return `\`${running.command}\`（在 ${running.cwd}）。`
+      + (running.previewBase && running.targetBranch
+        ? `测的是合并预览：任务分支 + ${running.targetBranch}@${running.previewBase.slice(0, 8)}。` : "")
+      + "rc=0 才会继续合并：绿了这次验收会自动做完，"
       + "不用再点；红了会把日志交回这个任务的智能体去修，目标分支一个字节都不会动。";
   }
   if (receipt) return receiptDetail(receipt, state, latest);
@@ -417,9 +454,12 @@ function detail(
   if (latest.status === "passed") {
     if (!latest.stale) return `${summarizeAcceptGate(latest)}。源码、依赖输入和命令仍与被测快照一致，所以这次验收不会重跑它。`;
     // 「不作数了」有两种，出路一样但原因完全不同，说错一种用户会去查错的地方。
-    return latest.command !== state.command
-      ? `那次跑的是另一条命令（\`${latest.command}\`）。现在这条 \`${state.command}\` 在这棵树上一次都没跑过——再点验收会跑它。`
-      : `那次跑的是 ${latest.sourceCommit?.slice(0, 8) ?? "另一份源码快照"}，当前源码或依赖输入已变化，或旧记录没有可核对的快照身份——再点验收会重跑一遍。`;
+    if (latest.command !== state.command) {
+      return `那次跑的是另一条命令（\`${latest.command}\`）。现在这条 \`${state.command}\` 在这棵树上一次都没跑过——再点验收会跑它。`;
+    }
+    const moved = baselineMoved(state, latest);
+    return moved
+      ?? `那次跑的是 ${latest.sourceCommit?.slice(0, 8) ?? "另一份源码快照"}，当前源码或依赖输入已变化，或旧记录没有可核对的快照身份——再点验收会重跑一遍。`;
   }
   // 红了之后 ash 会**自动**把日志交回那个任务去修。这件事必须写在卡上：用户只看到三颗
   // 按钮时会以为还得自己去催，而时间线里那句话翻几页才找得到。
@@ -462,12 +502,35 @@ function detail(
     + (latest.status === "failed" ? "重新点「验收通过」会重新执行命令，即使代码没有变化，也不会直接复用这次失败；确认这条红跟这次改动无关，也可以明确选择跳过。" : "重新点验收会从头跑一遍。");
 }
 
+/**
+ * 那份绿不作数是因为**门禁基准**跟不上了（而不是源码变了）：合并预览只对当时的目标分支尖端作数，
+ * 项目换档也让它不再是这一档要的那棵树。认不出就 null，交回通用那一句。
+ */
+function baselineMoved(state: AcceptGateState, latest: AcceptGateView): string | null {
+  const target = state.baselineTarget;
+  if (state.baseline === "merge_preview" && target) {
+    if (!latest.previewBase) return `那次测的是任务分支那棵树，项目现在的门禁基准是「合并预览」——再点验收会先把 ${target.branch} 合进快照再跑。`;
+    if (latest.previewBase !== target.commit) {
+      return `那次预演的是 ${target.branch}@${latest.previewBase.slice(0, 8)}，现在 ${target.branch} 已经到 ${target.commit.slice(0, 8)}`
+        + "——旧结果不拿来合新的这一棵，再点验收会按现在的目标分支重新预演再跑一遍。";
+    }
+  }
+  if (latest.previewBase && state.baseline !== "merge_preview") {
+    return `那次测的是合并预览结果，项目现在的门禁基准是「${ACCEPT_GATE_BASELINE_LABELS[state.baseline ?? "branch"]}」——再点验收会按这一档重跑。`;
+  }
+  return null;
+}
+
 /** 已验收那张回执的正文：只陈述**本次验收那一按**的凭据，历史一律标清「不是凭据」。 */
 function receiptDetail(receipt: AcceptGateBasis, state: AcceptGateState, latest: AcceptGateView | null): string {
   if (receipt.mode === "passed") {
     const run = receipt.run;
     // 凭据在、但记录被归档清理带走了：只剩「是拿一次跑绿放的行」这件事本身，说到这儿为止。
     if (!run) return "这一按是拿一次真的跑绿放的行，但那一次的执行记录已经不在了（归档清理），所以没有日志可查。";
+    if (run.previewBase && run.targetBranch) {
+      return `${summarizeAcceptGate(run)}。验的是合并预览：${run.sourceCommit?.slice(0, 8) ?? "任务分支"} 合进 `
+        + `${run.targetBranch}@${run.previewBase.slice(0, 8)} 之后那一棵，本次验收就是拿它放的行。`;
+    }
     return `${summarizeAcceptGate(run)}。${run.sourceCommit ? `验的是 ${run.sourceCommit.slice(0, 8)}，` : ""}`
       + "本次验收就是拿它放的行。"
       + (run.fastForward === false && run.targetBranch

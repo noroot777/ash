@@ -179,6 +179,7 @@ export async function cloneProject(input: CloneProjectInput, actor?: Actor): Pro
     acceptAutoCommit: false,
     // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
     acceptGateCommand: null,
+    acceptGateBaseline: "branch" as const,
     createdAt: now(),
     ownerUserId: actor ? ownerIdOf(actor) : null,
   };

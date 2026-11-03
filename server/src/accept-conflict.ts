@@ -22,10 +22,16 @@ const CONFLICT_PROMPT = (p: {
   sourceBranch: string;
   targetBranch: string;
   conflictFiles: string[];
+  preview?: boolean;
 }) =>
   `【验收未通过 · 需要你解冲突】\n` +
-  `用户点了「验收通过」，后端把你的任务分支 \`${p.sourceBranch}\` 合并到目标分支 \`${p.targetBranch}\` 时发生冲突，` +
-  `已经安全回滚（merge --abort），目标分支一个字没动。\n\n` +
+  (p.preview
+    // 合并预览档（shared/src/accept-gate.ts 的 AcceptGateBaseline）：冲突是在**预演**里撞上的，
+    // 真合并压根没开始。说成「已回滚」会让它去找一次并不存在的合并。
+    ? `用户点了「验收通过」。这个项目的门禁基准是「合并预览」：跑验收前置命令之前，先预演把目标分支 \`${p.targetBranch}\` ` +
+      `合进你的任务分支 \`${p.sourceBranch}\`，预演发生冲突，所以门禁没有跑，两个分支都一个字没动。\n\n`
+    : `用户点了「验收通过」，后端把你的任务分支 \`${p.sourceBranch}\` 合并到目标分支 \`${p.targetBranch}\` 时发生冲突，` +
+      `已经安全回滚（merge --abort），目标分支一个字没动。\n\n`) +
   `冲突文件：\n${p.conflictFiles.map((f) => `- ${f}`).join("\n")}\n\n` +
   `请你来解决：\n` +
   `1. 在你自己的工作目录里 \`git merge ${p.targetBranch}\`（把目标分支合进任务分支），逐个解掉冲突并提交；\n` +
@@ -39,7 +45,7 @@ const CONFLICT_PROMPT = (p: {
 
 export async function handOffConflict(
   task: { id: string; title: string },
-  merge: { reason?: string; sourceBranch?: string; targetBranch?: string | null; conflictFiles?: string[] },
+  merge: { reason?: string; sourceBranch?: string; targetBranch?: string | null; conflictFiles?: string[]; preview?: boolean },
 ): Promise<ConflictHandoff | null> {
   // 只接管真冲突。脏工作区、分支缺失这类是环境/用户侧问题,叫醒 agent 也解决不了。
   if (merge.reason !== "merge_conflict") return null;
@@ -48,7 +54,7 @@ export async function handOffConflict(
   const targetBranch = merge.targetBranch ?? "";
   if (!files.length || !sourceBranch || !targetBranch) return null;
 
-  const prompt = CONFLICT_PROMPT({ sourceBranch, targetBranch, conflictFiles: files });
+  const prompt = CONFLICT_PROMPT({ sourceBranch, targetBranch, conflictFiles: files, preview: merge.preview });
   pending.set(task.id, { prompt, sourceBranch, targetBranch });
   const message = `已叫醒该任务去解冲突：它会在 ${sourceBranch} 上合并 ${targetBranch} 并解决 ${files.length} 个冲突文件，完成后重新点验收即可（届时是 fast-forward）。`;
   await appendTaskTimeline(task.id, `冲突交接：${message}`);

@@ -148,7 +148,8 @@ export async function settleGate(
     if (outcome.status === "passed" && !await verifyGateSnapshot(row.cwd, {
       // ambient 不参与收尾核验:那一项问的是「依赖输入还新不新鲜」(复用判据),这里问的是
       // 「这份副本还是不是当初那一份」。原样带上 DB 里记的那一份，不另算一次。
-      commit: row.sourceCommit, fingerprint: row.sourceFingerprint ?? "", dependencies: [],
+      // 合并预览档的快照 HEAD 是那次预演合并，不是任务分支的提交（见 createGateSnapshot）。
+      commit: row.previewCommit ?? row.sourceCommit, fingerprint: row.sourceFingerprint ?? "", dependencies: [],
       ambient: row.sourceAmbient ?? "",
     })) outcome = { status: "failed", exitCode: outcome.exitCode, failure: "source_changed" };
     // rc≠0 的那一档再问一句「这到底是不是代码红了」：命令点名要跑的东西在被测快照里解析

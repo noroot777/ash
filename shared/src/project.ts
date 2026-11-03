@@ -7,6 +7,7 @@ import type { ProjectRole } from "./multiuser.ts";
 import type { AcceptClean } from "./workflow.ts";
 import type { ProjectPreviewConfig } from "./preview.ts";
 import type { ProjectCommandsConfig } from "./project-commands.ts";
+import type { AcceptGateBaseline } from "./accept-gate.ts";
 
 export interface Project {
   id: string;
@@ -35,6 +36,9 @@ export interface Project {
   // null = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻而不是每轮收尾，
   // 见 shared/src/accept-gate.ts 顶部。
   acceptGateCommand: string | null;
+  // 门禁测哪一棵树(分支快照 / 要求已含目标分支 / 合并预览),语义见 shared/src/accept-gate.ts
+  // 的 AcceptGateBaseline。缺省 = `branch`(老行为)。
+  acceptGateBaseline?: AcceptGateBaseline;
   // 本项目的任务可以用用户已登录的 Chrome **只读**哪些站点（裸主机名，含子域）。
   // 空数组 = 不授权，也是默认值；取舍见本文件末尾 normalizeBrowserCdpDomains。
   browserCdpDomains: string[];

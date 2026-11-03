@@ -11,6 +11,9 @@ import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 import { ProjectPreviewSettings } from "./ProjectPreviewSettings.tsx";
 import { ProjectCommandsSettings } from "./ProjectCommandsSettings.tsx";
 import { ProjectBrowserAccessSettings } from "./ProjectBrowserAccessSettings.tsx";
+import { AcceptGateBaselineChoice } from "../review/AcceptGateBaselineChoice.tsx";
+import { ACCEPT_GATE_BASELINE_LABELS, acceptGateBaselineEffect, normalizeAcceptGateBaseline,
+  type AcceptGateBaseline } from "@ash/shared/accept-gate";
 
 // 改名 / 改目录 / 默认起手式 / 删除项目都是**项目设置**,按权限表只给项目管理员与实例
 // 管理员(§四)。后端本来就会 403,但把必然失败的控件摆在成员面前,他只会以为是自己点坏了
@@ -109,6 +112,15 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
       notify(next ? "以后验收会先跑这条命令，rc=0 才合并" : "已撤掉验收前置命令，验收恢复为直接合并");
     }
     catch (error) { notify(error instanceof Error ? error.message : "验收前置命令保存失败"); }
+    finally { setBusy(false); }
+  };
+  // 门禁基准是一键切换的单选，跟自动提交那颗开关一样点了就存（验收台门禁卡上那一组改的是同一个字段）。
+  const setGateBaseline = async (acceptGateBaseline: AcceptGateBaseline) => {
+    setBusy(true);
+    try {
+      onUpdated(await api.updateProject(project.id, { acceptGateBaseline }));
+      notify(`门禁基准改成了「${ACCEPT_GATE_BASELINE_LABELS[acceptGateBaseline]}」，下一次验收起生效`);
+    } catch (error) { notify(error instanceof Error ? error.message : "门禁基准保存失败"); }
     finally { setBusy(false); }
   };
   const remove = async () => {
@@ -233,10 +245,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
           点「验收通过」之后，先在<b>这个任务自己的工作区</b>里跑一遍它，rc=0 才会继续合并：
           绿了这次验收自动做完，不用再点；红了不合并、不清理，日志会交回那个任务去修。
           命令可能要跑十几分钟，跑的过程中目标分支一个字节都不会动，验收台上能看状态、看日志、也能收掉它。
-        </small>
-        {/* 被测的那棵树只有在 fast-forward 时才等于合并结果：目标分支这中间要是动过，
-            跑过的就不是合并之后那一版。这不拦，只在验收台上如实说一句。 */}
-        <small>被测的是任务分支当下那棵树；要是合并不是纯 fast-forward，它跟合并结果并不完全相同。</small></div></div>
+        </small></div></div>
         {canManage && (
           <div className="settings-card-foot">
             <span>改了只影响之后的验收；已经跑过的记录不受影响。</span>
@@ -247,6 +256,15 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
             >{busy ? "保存中…" : "保存命令"}</Button>
           </div>
         )}
+        <div className="settings-row">
+          <div>
+            <b>门禁基准</b>
+            <small>{acceptGateBaselineEffect(normalizeAcceptGateBaseline(project.acceptGateBaseline))}</small>
+            <small>只对开了独立 worktree 的任务起作用；没设前置命令时三档都一样。</small>
+          </div>
+          <AcceptGateBaselineChoice value={normalizeAcceptGateBaseline(project.acceptGateBaseline)}
+            disabled={busy || !canManage} onChange={(next) => void setGateBaseline(next)} />
+        </div>
       </div></section>
       <ProjectGitSettings projectId={project.id} canManage={canManage} notify={notify} />
       {canManage && (

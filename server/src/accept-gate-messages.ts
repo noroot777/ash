@@ -13,7 +13,12 @@ type GateFailureDetails = { command: string; summary: string; logPath: string; t
    * 所以上面的 `diagnosis` 不会是它）。这里只提一句失效，让 agent 别去捡时间线和日志里
    * 那段话 —— 那两处是 append-only 的历史，改不了（第 2 轮审查 F1）。
    */
-  obsoleteDiagnosis?: boolean };
+  obsoleteDiagnosis?: boolean;
+  /**
+   * 合并预览档（AcceptGateBaseline）：快照里先合进来的那个目标分支提交。红可能只在两边合在一起
+   * 之后才出现（一边改了名、一边还用旧名），在任务工作区原样复现会是绿的 —— 所以要先说破。
+   */
+  preview?: { branch: string; commit: string } | null };
 
 /**
  * 红了之后交回给 agent 的那份 prompt。**只有一副面孔：去定位、去修，或者拿出「跟本次改动
@@ -35,6 +40,10 @@ export const gateFailurePrompt = (details: GateFailureDetails) =>
   `【验收未通过 · 验收前置命令没过】\n` +
   `本次验收触发了项目设置的验收前置命令，ash 在合并**之前**于独立快照 \`${details.cwd}\` 跑了它（${details.executionNotice ? "停止后快照保留，不自动删除" : "停止后快照会删除"}）。\n` +
   (details.executionNotice ? `${details.executionNotice}\n` : "") +
+  (details.preview
+    ? `这个项目的门禁基准是「合并预览」：快照里先把 \`${details.preview.branch}\`@${details.preview.commit.slice(0, 8)} 合进了任务分支，`
+      + `测的是合并结果。红可能来自两边改动合在一起才出现的冲突，复现前先在工作区 \`git merge ${details.preview.branch}\`。\n`
+    : "") +
   `在当前任务工作区复现这条命令：\n\n    cd ${details.sourceCwd} && ${details.command}\n\n` +
   `结果：${details.summary}。所以**没有合并、没有清理**，目标分支一个字节都没动。\n\n` +
   (details.failure === "timeout"
@@ -70,4 +79,5 @@ export const gateFailureInputFor = (view: AcceptGateView, sourceCwd: string): st
     failure: view.failure, diagnosis: view.diagnosis ?? null,
     obsoleteDiagnosis: !!view.legacyDiagnosis,
     tail: view.logTail, cwd: view.cwd, sourceCwd, executionNotice: view.executionNotice,
+    preview: view.previewBase && view.targetBranch ? { branch: view.targetBranch, commit: view.previewBase } : null,
   });

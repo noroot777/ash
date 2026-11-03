@@ -216,7 +216,15 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
 
 export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR, taskId, `accept-gate-${runId}.source`);
 
-export async function createGateSnapshot(cwd: string, target: string, source: GateSource): Promise<void> {
+/**
+ * 合并预览档要在快照里合进来的那一份（见 accept-gate-baseline.ts）。`tree` 是仓库里预演出来的合并树：
+ * 快照里真合出来的必须跟它一模一样，否则「绿了合进去的」和「门禁测过的」就不是同一棵。
+ */
+export type GateSnapshotPreview = { targetCommit: string; tree: string };
+
+/** 建快照。合并预览档返回快照里落下的合并提交（收尾核验认它当 HEAD），其余档返回 null。 */
+export async function createGateSnapshot(cwd: string, target: string, source: GateSource,
+  preview?: GateSnapshotPreview): Promise<string | null> {
   await mkdir(target, { recursive: true });
   const roots = supplyRoots(source.supplied);
   try {
@@ -259,12 +267,14 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       provided.set(dep, await provideDependency(cwd, target, dep, workspace, path => !included(path), supplyOf(dep)));
     };
     let copiedFingerprint: string | null = null;
+    let previewCommit: string | null = null;
     if (source.commit) {
       await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
       await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
       await git(target, ["checkout", "--detach", source.commit]);
+      if (preview) previewCommit = await mergePreview(target, preview);
       await git(target, ["remote", "remove", "origin"]);
-      const paths = (await git(target, ["ls-tree", "-r", "--name-only", "-z", source.commit])).split("\0").filter(Boolean);
+      const paths = (await git(target, ["ls-tree", "-r", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean);
       // 比较基准也必须规范化:落点是 realpath 出来的,拿没规范化的快照路径去比,只要路径祖先里有
       // 一条软链(macOS 的 /var -> /private/var、用户把 repo 放在软链目录下都是),每一条合法的
       // 跟踪软链都会被误判成「指向快照外」,整个门禁对带软链的仓库直接不可用。规则本身不变。
@@ -346,10 +356,28 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       dependencies: [...provided].map(([path, mode]) => ({ path: path.split(sep).join("/"), mode })),
     };
     await writeFile(`${target}.inputs.json`, JSON.stringify(sidecar), { flag: "wx" });
+    return previewCommit;
   } catch (error) {
     await rm(target, { recursive: true, force: true });
     throw error;
   }
+}
+
+/**
+ * 在快照里把目标分支合进来。只是 git：克隆没带项目的 config（没有自定义合并驱动），钩子目录
+ * 上面已经指向一个空位置，所以这一步不执行任何项目代码 —— 门禁命令前后不许多跑用户代码。
+ * 目标提交来自克隆源的对象库（worktree 与主仓共用一份，克隆时整份带过来），不再去网络上取。
+ */
+async function mergePreview(target: string, preview: GateSnapshotPreview): Promise<string> {
+  await execFileText("git", ["-C", target, "-c", "user.name=ash", "-c", "user.email=ash@localhost",
+    "-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-edit", "--no-verify",
+    "-m", `ash 验收门禁合并预览：合入 ${preview.targetCommit}`, preview.targetCommit]);
+  const tree = (await git(target, ["rev-parse", "HEAD^{tree}"])).trim();
+  if (tree !== preview.tree) {
+    throw new Error(`快照里合出来的树（${tree}）与预演的合并结果（${preview.tree}）不一致，`
+      + "这次测的就不会是将要合进去的那一棵；请重新验收");
+  }
+  return (await git(target, ["rev-parse", "HEAD"])).trim();
 }
 
 export async function removeGateSnapshot(taskId: string, runId: string): Promise<void> {

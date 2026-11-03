@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { MAX_PREVIEW_SCRIPT_LENGTH, parsePreviewConfig } from "@ash/shared/preview";
 import { normalizeProjectCommands, parseProjectCommands } from "@ash/shared/project-commands";
 import { normalizeBrowserCdpDomains } from "@ash/shared/project";
-import { MAX_ACCEPT_GATE_COMMAND, normalizeAcceptGateCommand } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_BASELINES, MAX_ACCEPT_GATE_COMMAND, normalizeAcceptGateBaseline, normalizeAcceptGateCommand } from "@ash/shared/accept-gate";
 import { detectPreviewCandidates } from "./preview-command.js";
 import { rmSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -86,6 +86,7 @@ export function mountProjectRoutes(api: Hono): void {
     // 同理:列里可能是手改进去的脏数据,读侧统一归一。认不出形状的整条丢掉,
     // 宁可少放行一个站点,也不让一条坏数据把别的站点带成「已授权」。
     browserCdpDomains: normalizeBrowserCdpDomains(r.browserCdpDomains),
+    acceptGateBaseline: normalizeAcceptGateBaseline(r.acceptGateBaseline),
     health: projectHealthLight(r.repoPath),
     myRole,
   });
@@ -137,6 +138,7 @@ export function mountProjectRoutes(api: Hono): void {
       acceptAutoCommit: false,
       // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
       acceptGateCommand: null,
+      acceptGateBaseline: "branch",
       // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
       browserCdpDomains: [],
       createdAt: now(),
@@ -214,6 +216,7 @@ export function mountProjectRoutes(api: Hono): void {
       acceptAutoCommit: false,
       // 新项目不设验收前置命令（= 老行为）。要设在项目设置 → 验收里填。
       acceptGateCommand: null,
+      acceptGateBaseline: "branch",
       // 新项目一律不授权浏览器登录态 —— 授权必须是用户明确开的那一下。
       browserCdpDomains: [],
       createdAt: now(),
@@ -322,6 +325,14 @@ export function mountProjectRoutes(api: Hono): void {
       }
       patch.acceptGateCommand = normalizeAcceptGateCommand(raw);
     }
+    // 门禁基准。只收三档原文:这一位决定「门禁测哪一棵树」,一个认不出的值悄悄落回某一档,
+    // 用户以为开着合并预览、实际跑的是分支快照,所以宁可 400。
+    if (b.acceptGateBaseline !== undefined) {
+      if (!(ACCEPT_GATE_BASELINES as readonly unknown[]).includes(b.acceptGateBaseline)) {
+        return c.json({ error: `acceptGateBaseline 只能是 ${ACCEPT_GATE_BASELINES.join(" / ")}` }, 400);
+      }
+      patch.acceptGateBaseline = b.acceptGateBaseline;
+    }
     // 浏览器登录态授权白名单。空数组 = 收回授权(不是「不变」)—— 撤销必须有明确的表达方式,
     // 否则只能靠删项目。归一化是宽进严出的:粘一整条 URL 进来也认,认不出形状的那条丢掉。
     // 这里**不**因为丢掉条目而报错:用户填的是一行文本,逐条报错只会让他反复试。
@@ -333,7 +344,9 @@ export function mountProjectRoutes(api: Hono): void {
     }
     if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
     const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
-    if (normalizeAcceptGateCommand(updated.acceptGateCommand) !== normalizeAcceptGateCommand(existing.acceptGateCommand)) {
+    // 命令或基准变了,验收台上那张门禁卡要重读:两处入口改的是同一份项目设置,另一处得立刻跟上。
+    if (normalizeAcceptGateCommand(updated.acceptGateCommand) !== normalizeAcceptGateCommand(existing.acceptGateCommand)
+      || normalizeAcceptGateBaseline(updated.acceptGateBaseline) !== normalizeAcceptGateBaseline(existing.acceptGateBaseline)) {
       const affected = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, pid));
       for (const task of affected) bus.publish({ type: "task.acceptGate", taskId: task.id });
     }

@@ -68,6 +68,14 @@ export const acceptGateRuns = sqliteTable(
     /** 当时合并会不会是纯 fast-forward（null = 这个任务没有合并目标）。 */
     fastForward: integer("fast_forward", { mode: "boolean" }),
     /**
+     * 合并预览档：预演时并进来的目标分支提交。非空 = 被测的是「source_commit + 它」的合并结果。
+     * 它是复用判据的一部分（gateBaselineMatches）：目标分支一动，这份绿就不再是要合的那一棵。
+     * null = 被测的是分支那棵树（另两档、老记录）。
+     */
+    previewBase: text("preview_base"),
+    /** 预演合并在快照里落成的那个提交（快照 HEAD）。收尾核验「副本还是不是当初那一份」认它。 */
+    previewCommit: text("preview_commit"),
+    /**
      * 用户点那一下带着的验收选择（JSON：by / commit / confirmUnverified）。
      *
      * 必须留：门禁绿了之后是**系统**替他把验收接着做完的，接着做的那一次必须跟他在
@@ -125,6 +133,8 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN settlement TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_base TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_commit TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

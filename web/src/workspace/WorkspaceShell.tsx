@@ -58,6 +58,7 @@ import { useProjectGitAnnouncer } from "./useProjectGitAnnouncer.ts";
 import { ChatView } from "../chat/ChatView.tsx";
 import { AssistantView } from "../assistant/AssistantView.tsx";
 import { readGitLocation } from "../git-workbench/navigation.ts";
+import { onProjectUpdate } from "../lib/projectUpdates.ts";
 const GitWorkbench = lazy(() => import("../git-workbench/GitWorkbench.tsx").then((module) => ({ default: module.GitWorkbench })));
 
 const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
@@ -415,6 +416,9 @@ export function WorkspaceShell() {
   // 下次打开是按 project 重新初始化的（第 1 轮审查 P1）。
   const applyProjectUpdate = (updated: ProjectView) =>
     setProjects((current) => current.map((project) => project.id === updated.id ? updated : project));
+  // 就地改项目设置的入口（验收台上的门禁基准）不经过上面那两条回调，靠这一声对上设置页。
+  useEffect(() => onProjectUpdate((updated) =>
+    setProjects((current) => current.map((project) => project.id === updated.id ? updated : project))), []);
   const openSettings = (section: SettingsSection = "executors", anchor: string | null = null) => {
     setGitOpen(false);
     const scopedLabel = projectSectionLabel(section);
