@@ -195,7 +195,7 @@ export async function runTask(
       // fresh run 一律是一条全新的 CLI 会话,所以 `freshContext` 恒真;这一轮交结论还是
       // 交代码由 `reviewTask`(历史独立审查任务)定。判据本体见 craft-rules.ts。
       craft: { freshContext: true, verifying: reviewTask },
-      backgroundWait: backgroundWaitFor(agentType, reviewTask),
+      backgroundWait: backgroundWaitFor(agentType),
       completion: COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free"),
       direction: DIRECTION_PROTOCOL(directionToken),
       teamPreamble,

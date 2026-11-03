@@ -5,7 +5,7 @@
 //
 // ① 事后：回合收尾时数出被收走的那些，在任务时间线上留一笔（claude-background-reaped.ts）。
 //    口径照抬内置 Monitor 那句（第 4 轮审查 N1）：自己结束的、被智能体停掉的、被收走的分档说。
-// ② 事前：每回合注入「跨回合的等待别交给内置后台」那一句，只发 claude 的执行回合；正文里
+// ② 事前：每回合注入「跨回合的等待别交给内置后台」那一句，只发 claude（执行/审查/验证都发）；正文里
 //    逐字讲过就不重发。体积与单源落款由 test-prompt-budget.ts 管，这里管判据与去重。
 //
 // 事件行序按事故 run 文件原样复刻（字段名、task_type、回执文案都是实测值）。
@@ -199,13 +199,12 @@ async function main(): Promise<void> {
   check(t?.total === 1 && t.reaped === 1, "常驻进程：上一回合已了结的不混进「本轮」", JSON.stringify(t));
 
   // ── ⑥ 事前那一句：判据 + 去重 ─────────────────────────────────────────────
-  check(backgroundWaitFor("claude", false) === BACKGROUND_WAIT_WARNING, "claude 的执行回合带警告句");
-  check(backgroundWaitFor("claude", true) === "", "审查/验证回合不带");
-  check(backgroundWaitFor("codex", false) === "", "codex 没有这两样内置后台，不带");
+  check(backgroundWaitFor("claude") === BACKGROUND_WAIT_WARNING, "claude 的回合（执行、审查、验证）都带警告句");
+  check(backgroundWaitFor("codex") === "", "codex 没有这两样内置后台，不带");
   // 宽松模式（ASH_LAX_DONE）在模块求值时定，只能另起一个进程量：事实照说，只省掉 ash 的工具。
   const lax = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
     `const m = await import(${JSON.stringify(new URL("../src/run-prompts.ts", import.meta.url).href)});`
-    + `process.stdout.write(m.backgroundWaitFor("claude", false));`],
+    + `process.stdout.write(m.backgroundWaitFor("claude"));`],
   { env: { ...process.env, ASH_LAX_DONE: "1" }, encoding: "utf8" });
   check(lax.status === 0 && lax.stdout.includes("唤不醒任务") && !lax.stdout.includes("start_monitor"),
     "宽松模式仍说「别交给内置后台」，只是不指 ash 的工具", `${lax.stdout}${lax.stderr.slice(-300)}`);
@@ -232,7 +231,7 @@ async function main(): Promise<void> {
     console.error(`\n${failures} 条断言未通过`);
     process.exit(1);
   }
-  console.log("✓ 后台子代理 / 后台 Bash：被收走时时间线留账且分档、同步与 Monitor 不混入、常驻空档不误判；事前警告只发 claude 执行回合且不重复");
+  console.log("✓ 后台子代理 / 后台 Bash：被收走时时间线留账且分档、同步与 Monitor 不混入、常驻空档不误判；事前警告只发 claude 且不重复");
 }
 
 await main();

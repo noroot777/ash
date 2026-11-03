@@ -91,10 +91,12 @@ const BUDGETS: Record<string, number> = {
   "section/settled-executor-100-nofile": 1050,
   "section/history-100": 3100,
   // ── 投递态（`DELIVERED`）：真正发出去的那一条，片段相加之后的样子 ─────────────
-  "delivered/review-dispatch": 14500,
-  "delivered/review-resume": 6750,
+  // 审查这几条在 2026-11-03 各涨了 198B：「跨回合的等待别交给内置后台」那一句（用户拍板
+  // 放宽，见 TARGETS 那两行）。
+  "delivered/review-dispatch": 14700,
+  "delivered/review-resume": 6950,
   // 证据清单读不出来那一轮：续跑正文里一个字都没有，全靠提醒把状态带到。
-  "delivered/review-resume-nomanifest": 6150,
+  "delivered/review-resume-nomanifest": 6350,
   // 目录名含「。」：比普通续跑多出用户引的那条旧地址，本轮入口必须照样在。
   "delivered/review-resume-dotdir": 7100,
   "delivered/repair": 6650,
@@ -109,7 +111,7 @@ const BUDGETS: Record<string, number> = {
   // 没有执行者回归登记）。团队开台那份大，是 `LEAD_PREAMBLE` 本身的体积（派活哲学那一摞）。
   // 规划那份小，是因为那条路刻意只有正文加一句，且浏览器策略发的是缩略版。
   "delivered/fresh-run": 4200,
-  "delivered/fresh-review-run": 3350,
+  "delivered/fresh-review-run": 3550,
   // 这一条比其余几份大约 560B，是**真实的非空同伴告知**（`peerNoticeText`，第 1 轮审查
   // F1 之后换上的真实夹具）；地址已归一成 `<ROOT>`，所以这个数逐机稳定。
   "delivered/invited-first": 4650,
@@ -359,10 +361,12 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
     where: ["turn/craft-rules", "delivered/fresh-run", "delivered/invited-first",
       "delivered/team-lead-first", "delivered/plan-first"],
   },
-  // 只发给 claude 的执行回合（判据 `backgroundWaitFor`）：审查/验证那几条一份都没有。
+  // 只发给 claude（判据 `backgroundWaitFor`），执行、审查、验证回合都带；团队开台与规划回合不带。
   {
     name: "BACKGROUND_WAIT_WARNING",
-    where: ["turn/background-wait", "delivered/fresh-run", "delivered/invited-first", "delivered/repair"],
+    where: ["turn/background-wait", "delivered/fresh-run", "delivered/fresh-review-run", "delivered/invited-first",
+      "delivered/repair", "delivered/review-dispatch", "delivered/review-resume",
+      "delivered/review-resume-nomanifest", "delivered/review-resume-dotdir"],
   },
   {
     name: "REVIEW_VALIDATION_REQUIREMENT",
@@ -438,13 +442,15 @@ const TARGETS: Array<{ id: string; target: number; what: string; held: string }>
       "清单说明约 700B），而「审查制度本身不在本任务范围内」。事故叙事已全部迁进代码注释。",
   },
   {
-    id: "delivered/review-dispatch", target: 14_317, what: "首次派审的投递态",
-    held: "正文 + 完成协议 + 方向身份 + 全局浏览器策略（2.2KB，按需求不做条件省略）。",
+    // 2026-11-03 用户拍板 +198B（14317 → 14515）：容纳「跨回合的等待别交给内置后台」那一句。
+    id: "delivered/review-dispatch", target: 14_515, what: "首次派审的投递态",
+    held: "正文 + 完成协议 + 方向身份 + 全局浏览器策略（2.2KB，按需求不做条件省略）+ 后台等待警告。",
   },
   {
     // 这一条**比上一轮大**：上一轮把整条提醒丢掉，续跑因此收不到清单读法（第 2 轮审查 F2）。
     // 多出来的那 1066B 是补回去的协议，不是胖出来的措辞。
-    id: "delivered/review-resume", target: 6_649, what: "断线续跑的投递态",
+    // 2026-11-03 同上 +198B（6649 → 6847）。
+    id: "delivered/review-resume", target: 6_847, what: "断线续跑的投递态",
     held: "续跑正文刻意只有几行，清单入口与读法只能由每回合提醒带到；这部分不能再删。",
   },
 ];

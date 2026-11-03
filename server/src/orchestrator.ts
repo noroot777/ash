@@ -375,7 +375,7 @@ export async function continueTask(
         completion: followUpFrom
           ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
           : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow),
-        backgroundWait: backgroundWaitFor(agent, verifying),
+        backgroundWait: backgroundWaitFor(agent),
         direction: DIRECTION_PROTOCOL(directionToken),
         reviewReminder,
       });
