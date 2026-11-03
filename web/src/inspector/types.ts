@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { InspectorSection } from "./sections.ts";
 import type { InspectorShortcutKey } from "./shortcuts.ts";
 
 export interface InspectorDescriptor<Context> {
@@ -8,6 +9,8 @@ export interface InspectorDescriptor<Context> {
   render: (context: Context) => ReactNode;
   defaultOpen?: boolean;
   shortcut?: InspectorShortcutKey;
+  /** 面板里能直达的那几节：按键先切到这一格，再由面板自己展开那一节（见 sections.ts）。 */
+  sections?: readonly InspectorSection<InspectorShortcutKey>[];
 }
 
 export interface InspectorTabPolicy {

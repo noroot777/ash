@@ -13,6 +13,7 @@ import { Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
 import { readRenamedStorage } from "../lib/renamedStorage.ts";
 import { InspectorHeadSlotProvider } from "./headActions.tsx";
 import { InspectorRail } from "./InspectorRail.tsx";
+import { requestInspectorSection } from "./sections.ts";
 import { registerInspectorShortcutTarget } from "./shortcuts.ts";
 import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
 
@@ -319,9 +320,18 @@ function InspectorHostState<Context>({
   useEffect(() => registerInspectorShortcutTarget((shortcut) => {
     const current = shortcutContext.current;
     const descriptor = current.descriptors.find((candidate) => candidate.shortcut === shortcut);
-    if (!descriptor) return false;
-    current.openTab(descriptor.id);
-    return true;
+    if (descriptor) {
+      current.openTab(descriptor.id);
+      return true;
+    }
+    for (const owner of current.descriptors) {
+      const section = owner.sections?.find((candidate) => candidate.shortcut === shortcut);
+      if (!section) continue;
+      current.openTab(owner.id);
+      requestInspectorSection(section.id);
+      return true;
+    }
+    return false;
   }), []);
 
   const toggleButton = (
