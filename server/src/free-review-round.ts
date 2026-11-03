@@ -27,7 +27,8 @@ import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-st
 import { headCommit } from "./git.js";
 import { cleanupPostMergeReviewWorktree, preparePostMergeReviewWorktree } from "./post-merge-review-worktree.js";
 import type { SettlementFence } from "./regression-settlement.js";
-import { reviewInputHoldNow } from "./review-input-verdict.js";
+import { reviewInputHoldNow, reviewInputStillCurrent } from "./review-input-verdict.js";
+import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { reviewLifecycle } from "./review-lifecycle-lock.js";
 import { claimOwnTurn, releaseTurn, turnIdentity } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -164,6 +165,11 @@ export async function stopReviewRunMonitors(
  * 形状各自可核,都不是「不知道就放行」:
  *  · `{ generation }`  这一轮的这一次。闸 = 还停在 reviewing **且**证据行此刻就是这一代次
  *    (权威在证据行,文件头 ⑫)。过期就整段让出 —— 一个终态不写,一份资源不碰。
+ *    带着 `refusedInput`(交出去之后被协议层拒收那一档)时,闸再加一问:被拒收的**那一次输入**
+ *    此刻还是不是这一轮的当前输入(`reviewInputStillCurrent`)。同一轮的答复、检查点续跑不换代次,
+ *    只换输入身份 —— 旧输入迟到的拒收单凭代次闸放得过去,会把已经收下答复、正在跑的现任打成
+ *    error(本次自由审查 R1,已实测)。拒收的事实早已按它自己那次输入的身份记下,这里只是不许它
+ *    越过那一次输入去动整轮。拿不到身份(`null`)同样不放行。
  *  · `"unpublished"`   这一轮**压根没公开过**(连代次都还没取到,`nextRound` 读证据行就抛了)。
  *    闸 = 轮次行**真的不存在**;run 的终态照落(否则那条链永远挂在 reviewing),但不碰任何资源
  *    —— 没公开过的轮次没有自己的哨兵,而「停掉这一轮的哨兵」在没有身份时停的就是别人的。
@@ -174,7 +180,7 @@ export async function stopReviewRunMonitors(
  * 实测)。排进链里之后两种时序都收口:要么这一段整个做完才轮到重跑换代次,要么重跑先换完、
  * 这一段进来时被代次闸整段挡住(连资源都不碰)。判据与锁序规矩见那个文件。
  */
-export type ReviewStartFailureOwner = { generation: string } | "unpublished";
+export type ReviewStartFailureOwner = { generation: string; refusedInput?: ReviewStartReceipt | null } | "unpublished";
 
 export async function failReviewStart(
   run: ReviewRunRow, message: string, owner: ReviewStartFailureOwner,
@@ -200,6 +206,12 @@ async function failReviewStartHeld(
         .where(eq(regressionEvidence.directory, freeReviewEvidenceDir(run.taskId, run.id, run.currentRound)))).at(0);
       // 读不出代次(行没了)也不放行:这一笔说不清自己是哪一次,就没有落账的资格。
       if (evidence?.generation !== owner.generation) return false;
+      if (owner.refusedInput !== undefined) {
+        const task = (await transaction.select({ waitOwnership: tasks.waitOwnership }).from(tasks)
+          .where(eq(tasks.id, run.taskId))).at(0);
+        if (!reviewInputStillCurrent(task, owner.refusedInput,
+          freeReviewEvidenceDir(run.taskId, run.id, run.currentRound), owner.generation)) return false;
+      }
     }
     await transaction.update(freeReviewRounds).set({ status: "error", endedAt: at, dispatch: null })
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
@@ -209,7 +221,7 @@ async function failReviewStartHeld(
   }, { behavior: "immediate" });
   if (!settled) {
     console.error(`[ash] 迟到的审查启动失败不落账 run=${run.id} round=${run.currentRound}`
-      + `（这一轮已有结论，或者已经被重跑成另一次）：${message}`);
+      + `（这一轮已有结论，或者已经被重跑成另一次，或者被拒收的那次输入已经不是这一轮当前的输入）：${message}`);
     return;
   }
   // 没公开过的轮次没有自己的资源可收;**也不许无身份地收**(停掉的会是现任那一代的,见上面)。
@@ -392,7 +404,9 @@ export async function launchReviewRound(
     claimToken,
     // 这一笔失败只说**这一次**:代次对不上(中间被用户重跑过)就不许落账,否则刚重跑起来的
     // 那一次会被上一次的迟到失败打成 error(第 3 轮审查 F2)。
-    onFail: (error) => failReviewStart(run, error, { generation }),
+    // 拒收那一档还带着被拒收的那一次输入(`refusedInput`),落账闸据此核它是不是当前输入。
+    onFail: (error, refusedInput) => failReviewStart(run, error,
+      { generation, ...(refusedInput !== undefined ? { refusedInput } : {}) }),
   });
   // **只有真排进去了**才算责任交出去:那之后由派发层在投递成功/放弃/让出时还证。让出那几种
   // 原样回给调用方 —— 还证的人是领证的那一个(free-review-dispatch.ts 文件头 ⑭ 第二条),

@@ -1,4 +1,5 @@
 import type { InputAcceptance } from "./executors/types.js";
+import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import type { AgentType } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
 import type { TurnIdentity, TurnSource } from "./runs.js";
@@ -147,7 +148,13 @@ export type ContinueTaskOptions = {
    * 从前叫 `onDelivered`。改名是刻意的:那个名字把「回调被调到」读成了「已送达」,而这正是
    * F2/F3 两条的共同根因 —— 新名字让每个调用点在编译期被迫重新想一遍三档各自该干什么。
    */
-  onInputSettled?: (acceptance: InputAcceptance) => void | Promise<unknown>;
+  onInputSettled?: (acceptance: InputAcceptance, reviewInput?: ReviewStartReceipt) => void | Promise<unknown>;
+  /**
+   * 第二个参数 `reviewInput`:这一轮若是审查回合,就是**这一次输入**的起跑收据(目录、代次、
+   * turnToken/directionToken/directionEpoch)。回执只属于产生它的那一次输入 —— 同一轮审查的答复、
+   * 检查点续跑共用目录与代次,只有这份身份分得清「这句迟到的定论说的是哪一次」(用法见
+   * free-review-round.ts 的 `failReviewStart`)。
+   */
   /**
    * **同一个回调会被调第二次** —— 初次给的是有界等待的结果,迟到那一次才是终局。
    *

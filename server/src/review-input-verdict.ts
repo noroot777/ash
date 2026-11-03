@@ -97,6 +97,27 @@ export async function noteReviewInputAcceptance(
   }
 }
 
+/**
+ * 这一次输入此刻还是不是这一轮(`directory` 的 `generation` 那一次)**当前**的输入 —— 一句迟到的
+ * 定论能不能越过它自己那次输入去动整轮状态的判据(free-review-round.ts 的 `failReviewStart` 在
+ * 写终态的同一个事务里问)。两问缺一不可:
+ *  · 交付凭据记的仍是这一次:目录、代次、输入身份三位全对上。同一轮的答复/检查点续跑共用目录与
+ *    代次,只有输入身份分得清;
+ *  · 也没有下一次输入正在起跑:起跑到落凭据之间,凭据还停在上一次,那段窗口里唯一的持久痕迹是
+ *    `start`(guarded-turn-start.ts)—— 它在就必须也是这一次。
+ * `input` 为 null(拒收那一侧说不清是哪一次)不放行。
+ */
+export function reviewInputStillCurrent(
+  task: Pick<typeof tasks.$inferSelect, "waitOwnership"> | undefined,
+  input: ReviewStartReceipt | null, directory: string, generation: string,
+): boolean {
+  const { deliveredReview: delivered, start } = task?.waitOwnership ?? {};
+  if (!input || !delivered || input.directory !== directory || input.generation !== generation) return false;
+  const same = (other: Pick<Delivered, "directory" | "generation" | "identity">) =>
+    keyOf("", other) === keyOf("", input);
+  return same(delivered) && (!start || same(start));
+}
+
 /** 回执本体落定成 unknown 或者抛了:这一次输入的定论再也不会到,通道关上。 */
 export function closeReviewInputWait(taskId: string, receipt: ReviewStartReceipt | undefined): void {
   if (receipt) waiting.delete(keyOf(taskId, receipt));

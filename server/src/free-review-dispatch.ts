@@ -150,6 +150,7 @@ import {
   releaseReviewDispatchClaim, reviewDispatchArmed, reviewDispatchOwned,
   reviewPromptDelivered, takeIntent,
 } from "./free-review-responsibility.js";
+import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 import { continueWhenIdle, type TurnDeliveryFailure } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
@@ -206,8 +207,12 @@ export type ReviewDispatch = {
    * 第二条)。这里只核一句「它还是不是负责人」—— 中间可能已经被一次重跑定向撤销掉。
    */
   claimToken?: string;
-  /** 这一轮彻底起不来了,按原路收尾(`failReviewStart`)。 */
-  onFail: (message: string) => Promise<unknown>;
+  /**
+   * 这一轮彻底起不来了,按原路收尾(`failReviewStart`)。`refusedInput` 只在「交出去之后被协议层
+   * 拒收」那一档给:被拒收的那一次输入的起跑收据(拿不到就是 null —— 说不清是哪一次,落账那一侧
+   * 据此不放行)。起跑前那一族不给:那时还没有任何一次输入。
+   */
+  onFail: (message: string, refusedInput?: ReviewStartReceipt | null) => Promise<unknown>;
 };
 
 /**
@@ -278,7 +283,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
     return "handed-off";
   };
 
-  const giveUp = async (message: string, failure: string): Promise<void> => {
+  const giveUp = async (message: string, failure: string, refusedInput?: ReviewStartReceipt | null): Promise<void> => {
     // **先落终态、再了结意图**:`failReviewStart` 把 round/run 的终态与 `dispatch=null` 写在
     // 同一个事务里,所以让它先走;这里的 `settled` 随后只负责收掉内存那一半(清库成了空操作)。
     // 反过来(先清意图)会开出一个「意图没了、终态还没写」的中断窗口 —— 放弃的次数和原因
@@ -286,7 +291,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
     // `settled` 放在 finally 里:`onFail`(= `failReviewStart`)抛出来的话,认领证不还就等于把
     // 这一轮永久锁在「在途」上(文件头 ⑩)。终态那一笔已经自己带事务,这里只收内存那一半。
     try {
-      await dispatch.onFail(message);
+      await dispatch.onFail(message, refusedInput);
     } finally {
       await settled();
     }
@@ -365,8 +370,16 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
      * 初次就拒收的那一轮,通常在走到这里之前已经被审查结算按真实原因结掉了(时间线写着「被协议层
      * 明确拒收」,见 review-input-verdict.ts),这一声落账会被挡回去,只收内存与意图那一半;真正
      * 靠这里落终态的是**先说不清、后迟到拒收**的那一种 —— 那一轮被结算按住了,等的就是这句。
+     *
+     * **迟到的拒收只说它自己那一次输入**(本次自由审查 R1,已实测):先说不清的那一轮里审查者可能
+     * 提了问、用户答了,同一轮已经送进了下一次输入、回执是收下了、正在跑 —— 这时旧输入迟到的拒收
+     * 再打终态,误杀的是现任那一次。所以拒收带着它那一次输入的收据(`refusedInput`)交下去,
+     * `failReviewStart` 在写终态的同一个事务里核它还是不是这一轮的当前输入;不是就只留日志,
+     * 这一轮的状态与资源一个都不碰。在这里先读一次再决定不行:读与写之间仍有窗口。
      */
-    const failed = async (message: string, failure: TurnDeliveryFailure | "refused"): Promise<void> => {
+    const failed = async (
+      message: string, failure: TurnDeliveryFailure | "refused", refusedInput?: ReviewStartReceipt,
+    ): Promise<void> => {
       // **整段包在异常出路里**:这是回合锁回调上的一段,抛出去只会变成一条没人接的 rejection
       // (抢占那一支不等它),而认领证跟着漏掉的话,这一轮在本进程里就永远「在途」—— 对账见
       // `armed` 即跳过,库里那份没消费的意图再也没人补办(文件头 ⑩)。还掉证反而全身而退:
@@ -381,7 +394,9 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
         // 交付说不清(一个字都不许重投)、抛错、交出去之后被拒收(理由见上)。**它们各自带着自己那句话**(分档表在
         // `turn-idle-delivery.ts` 的 `DELIVERY_FAILURE`),所以终态上写的是真实原因,不再是
         // 一句统一的「被其它执行抢占」—— 尤其 `uncertain` 那一档绝不许说「一个字都没送出去」。
-        if (failure !== "turn-taken") return await giveUp(message, failure);
+        if (failure !== "turn-taken") {
+          return await giveUp(message, failure, failure === "refused" ? refusedInput ?? null : undefined);
+        }
         if (attempts >= MAX_REVIEW_DISPATCH_ATTEMPTS) {
           return await giveUp(
             `${message}；已连续重排 ${attempts} 次（每次都在回合锁的释放点上被其它执行先抢到），不再重试`,
@@ -405,7 +420,7 @@ export async function dispatchReviewRound(dispatch: ReviewDispatch): Promise<Rev
       // `IdleDeliveryVerdict` 上):等整轮的话,这一轮审查跑着的几十分钟里库里都挂着意图,服务
       // 在中间断掉,新进程就会对一条**已经执行过**的审查整份重投。
       onAccepted: () => settled(),
-      onRefused: (message) => failed(message, "refused"),
+      onRefused: (message, input) => failed(message, "refused", input),
       // **说不清 ≠ 送到了,也 ≠ 没送到**:意图不清(那等于宣布送到),也不落终态、不重排(那等于
       // 宣布没送到)。这里只把内存那张证还掉 —— 这一轮已经结束,「本进程还盯着这个回合」不再
       // 成立;留着它,对账见 `armed` 就永远跳过。之后谁都不替协议下结论(review-input-verdict.ts):

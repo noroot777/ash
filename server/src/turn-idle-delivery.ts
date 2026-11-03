@@ -13,6 +13,7 @@ import {
 import type { TurnStartDecline } from "./task-continue-options.js";
 // 运行时依赖只有这一个纯函数模块(它自己只引类型),不碰 orchestrator —— 那一条留给下面的 dynamic import。
 import { lastWordOnInput, type InputAcceptance } from "./turn-input-acceptance.js";
+import type { ReviewStartReceipt } from "./review-start-withdrawal.js";
 
 /**
  * **这一次投递为什么没成功** —— 四种原因里只有 `turn-taken` 是**瞬时**条件。
@@ -95,7 +96,13 @@ const DELIVERY_FAILURE: Record<TurnStartDecline, { failure: TurnDeliveryFailure;
  */
 export interface IdleDeliveryVerdict {
   onAccepted: () => void | Promise<unknown>;
-  onRefused: (message: string) => void | Promise<unknown>;
+  /**
+   * `input` = 被拒收的**那一次输入**的起跑收据(审查回合才有)。拒收是这一次输入的事实,不是整轮
+   * 审查的事实:同一轮里它之后可能已经送进了下一次输入(答复提问、检查点续跑),那时这句迟到的
+   * 拒收只说明旧输入没进去,拿它去终结整轮就误杀了正在跑的那一次(free-review-round.ts 的
+   * `failReviewStart`)。所以必须带着身份交出去,由落账那一侧在同一个事务里核。
+   */
+  onRefused: (message: string, input?: ReviewStartReceipt) => void | Promise<unknown>;
   onUnconfirmed: (message: string) => void | Promise<unknown>;
 }
 
@@ -109,6 +116,8 @@ const UNCONFIRMED_MESSAGE = "这一轮已经结束，但拿不到「agent 收下
 function trackVerdict(taskId: string, hooks: IdleDeliveryVerdict | undefined) {
   /** 协议层说过的最新一句。accepted/refused 是定论,不翻盘;unknown 等后话。 */
   let fact: InputAcceptance | null = null;
+  /** 这一次交接送进去的那一份输入(审查回合的起跑收据)。一个跟踪器只对应一次输入,先到先记。 */
+  let input: ReviewStartReceipt | undefined;
   let receipt: Promise<InputAcceptance> | undefined;
   let turnOver = false;
   let concluded = false;
@@ -128,21 +137,22 @@ function trackVerdict(taskId: string, hooks: IdleDeliveryVerdict | undefined) {
     if (fact === "refused") {
       concluded = true;
       console.error(`[ash] continueWhenIdle(${taskId}) 输入被拒收：${REFUSED_MESSAGE}`);
-      return report("「协议层拒收」", hooks && (() => hooks.onRefused(REFUSED_MESSAGE)));
+      return report("「协议层拒收」", hooks && (() => hooks.onRefused(REFUSED_MESSAGE, input)));
     }
     if (unconfirmed) return;
     unconfirmed = true;
     console.error(`[ash] continueWhenIdle(${taskId}) 交付说不清：${UNCONFIRMED_MESSAGE}`);
     return report("「交付说不清」", hooks && (() => hooks.onUnconfirmed(UNCONFIRMED_MESSAGE)));
   };
-  const hear = (word: InputAcceptance): void => {
+  const hear = (word: InputAcceptance, from?: ReviewStartReceipt): void => {
+    input ??= from;
     if (fact === "accepted" || fact === "refused") return;
     fact = word;
   };
   return {
     /** `onInputReceipt`:回执本体,回合结束时再问它最后一句。 */
     keep: (promise: Promise<InputAcceptance>): void => { receipt = promise; },
-    /** 同步记下协议事实 —— 必须排在调用方任何可失败的记账之前。 */
+    /** 同步记下协议事实(连同它属于哪一次输入)—— 必须排在调用方任何可失败的记账之前。 */
     hear,
     /** 记完、调用方记账也走过之后,按当下所知交代一次(初次与迟到都走这里)。 */
     conclude,
@@ -252,9 +262,9 @@ export function continueWhenIdle(
               // 三档、初次与迟到都会进来(契约见 task-continue-options.ts)。顺序:协议事实先记 →
               // 调用方自己的记账(排队消息标 sent 那一类)→ 再交代裁决。调用方记账抛了不拦裁决:
               // 「agent 收没收下」是协议事实,不因为本地一笔账没记上就变成另一档。
-              onInputSettled: async (acceptance) => {
-                tracked.hear(acceptance);
-                try { await opts.onInputSettled?.(acceptance); } catch (error) {
+              onInputSettled: async (acceptance, reviewInput) => {
+                tracked.hear(acceptance, reviewInput);
+                try { await opts.onInputSettled?.(acceptance, reviewInput); } catch (error) {
                   console.error(`[ash] continueWhenIdle(${taskId}) 调用方的投递记账(${acceptance})失败:`, error);
                 }
                 await tracked.conclude();
