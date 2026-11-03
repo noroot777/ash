@@ -53,7 +53,6 @@ const {
   verifyProtocolFor,
   verifyReminderFor,
 } = await import("../src/review-prompts.js");
-const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
 const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
 // 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
 // 数据库、不起 CLI。
@@ -302,32 +301,6 @@ for (const text of [reviewPrompt, legacyReviewPrompt, (await verifyReminderFor(t
 }
 assert.doesNotMatch(reviewPrompt, /grill-me|原始需求里点名/, "自动验证 prompt 不得原样夹带被审需求里的技能名");
 assert.match(reviewPrompt, /request-context\.md/, "自动验证应通过文件交付需求上下文");
-// 审查/验证的正文与提醒**都不自带**浏览器策略:正文是提前生成的,自带的只能是一份「默认
-// 未授权」文本,而且会把 withGlobalBrowserPolicy 的去重锚点提前占掉 —— 投递时真读到了项目
-// 授权也会被原样挡回,已经在项目设置里授权过的站点照样停下来等人点头(第 6 链第 1 轮审查
-// P2)。所以这里钉的是反面:正文里不许有策略,策略一律由投递点贴。
-const assertNoEmbeddedPolicy = (text: string, source: string) => {
-  assert.doesNotMatch(text, /浏览器验证必须按以下顺序选择通道|浏览器验证固定按|【全局浏览器操作/,
-    `${source} 不得自带浏览器策略 —— 自带的那一份会把投递点带项目授权的那份挡在门外`);
-};
-const assertBrowserOrder = (text: string, source: string) => {
-  const grouped = text.indexOf("扩展具名分组后台标签");
-  const headless = text.indexOf("独立无头浏览器");
-  const headed = text.indexOf("独立有头浏览器");
-  assert.ok(grouped >= 0 && grouped < headless && headless < headed, `${source} 必须保留三级浏览器降级顺序`);
-  assert.match(text, /不得接管、复用或直连用户的普通标签|接管\/复用\/导航普通标签/, `${source} 必须保护用户普通标签`);
-  assert.match(text, /Playwright.*headless/i, `${source} 必须把 Playwright 默认限制为无头`);
-};
-assertNoEmbeddedPolicy(reviewPrompt, "自动验证 prompt");
-assertNoEmbeddedPolicy((await verifyReminderFor(taskId, 1)).text, "自动验证续跑提醒");
-assertNoEmbeddedPolicy((await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })).text, "历史审查续跑提醒");
-// 要求本身一条不能少,只是改由投递点交付。
-assertBrowserOrder(withGlobalBrowserPolicy(reviewPrompt, "full"), "自动验证 prompt 经投递点");
-assertBrowserOrder(withGlobalBrowserPolicy((await verifyReminderFor(taskId, 1)).text, "reminder"), "自动验证续跑提醒经投递点");
-assertBrowserOrder(
-  withGlobalBrowserPolicy((await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })).text, "reminder"),
-  "历史审查续跑提醒经投递点",
-);
 // 续跑提醒是被打断那条路径上**唯一**还在重贴格式要求的东西（完整 prompt 不重发）。
 // 所以凡是「丢了报告就退回改动之前的样子」的规则，都必须在缩略版里也留得住：首句点名
 // 最要命的那条、摘要最多 5 条——只写栏目名的话，续跑出来的报告又会是「有 11 条，自己翻」。
@@ -336,7 +309,7 @@ assertBrowserOrder(
 // 各条 prompt。
 //
 // 断言对象是「原样包含那个常量」而不是「grep 得到几个关键词」：后者会被旁文喂饱,
-// 需求引用、浏览器策略、任务正文里碰巧出现同样的词,格式常量整段删了也照样绿。
+// 需求引用、任务正文里碰巧出现同样的词,格式常量整段删了也照样绿。
 assertSummaryRuleTable();
 assertCarriesSummaryFormat(reviewPrompt, "自动验证 prompt");
 assertCarriesSummaryReminder((await verifyReminderFor(taskId, 1)).text, "自动验证续跑提醒");
@@ -354,54 +327,9 @@ assertCarriesSweepReminder(
   (await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })).text,
   "历史审查续跑提醒",
 );
-const globalFreshPrompt = withGlobalBrowserPolicy("普通任务正文", "full");
-assert.match(globalFreshPrompt, /【全局浏览器操作规范】/, "普通新会话必须收到全局浏览器规范");
-assertBrowserOrder(globalFreshPrompt, "普通新会话");
-assert.match(globalFreshPrompt, /无报告则写进本轮最终回复|没有专门报告产物时/, "普通任务降级原因必须有可见落点");
-const globalResumePrompt = withGlobalBrowserPolicy("用户续聊", "reminder");
-assert.match(globalResumePrompt, /【全局浏览器操作提醒】/, "续聊与修复回合必须重贴浏览器提醒");
-assert.match(globalResumePrompt, /标签保持后台.*禁止激活 Chrome/, "续聊提醒必须保留非打扰约束");
-assert.match(globalResumePrompt, /截图、布局检查或页面点击不算理由/, "续聊提醒必须限制有头浏览器");
-assert.equal(withGlobalBrowserPolicy(globalFreshPrompt, "full"), globalFreshPrompt, "已经贴过一次的文本不得重复注入");
-// B 方案的目的就是让审查/验证也能无人值守:项目里配过的站点,到了这两种回合必须照样算数。
-// 漏掉这一组合,就是「设置页承诺了、审查回合又不认」——用户看到的是功能没做(第 6 链第 1
-// 轮审查 P2)。
-for (const [source, text, level] of [
-  ["自动验证 prompt", reviewPrompt, "full"],
-  ["自动验证续跑提醒", (await verifyReminderFor(taskId, 1)).text, "reminder"],
-  ["历史审查续跑提醒", (await reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 })).text, "reminder"],
-] as const) {
-  const granted = withGlobalBrowserPolicy(text, level, { domains: ["x.com"] });
-  assert.match(granted, /本项目已[\s\S]{0,200}x\.com/, `${source} 必须带上项目已配的授权站点`);
-  assert.doesNotMatch(granted, /用户已在本任务中明确授权|未经用户在本任务显式授权/,
-    `${source} 已有项目授权时,不得再要求「在本任务里点名」—— 那就是停下来等人,无人值守断在这儿`);
-}
-
-const globalPromptCallsites = [
-  ["普通任务 fresh run", new URL("../src/task-run.ts", import.meta.url), 2],
-  // 2 而不是 3:planning 与普通分支合并成了同一个调用点(第 3 轮审查:正文先拼、
-  // 策略留到起跑前用现读的授权贴)。两条路仍然都经过策略,只是不再各调一次。
-  ["普通任务续聊/召唤", new URL("../src/orchestrator.ts", import.meta.url), 2],
-  ["团队调度台开台/接回", new URL("../src/team/session.ts", import.meta.url), 1],
-  ["团队调度台消息注入", new URL("../src/team/lead-delivery.ts", import.meta.url), 1],
-  ["duet 讨论者", new URL("../src/duet/turn.ts", import.meta.url), 1],
-] as const;
-for (const [source, file, expected] of globalPromptCallsites) {
-  const calls = [...readSource(file).matchAll(/withGlobalBrowserPolicy\(/g)].length;
-  assert.equal(calls, expected, `${source} 的所有 prompt 入口必须经过全局浏览器策略`);
-}
-// 调度台的注入只数得清「一共几处调用」是不够的:真正要钉的是**只有一道门**。
-// 用户插话、执行者汇报、回合末合并投递原本各自 handle.send 一次,漏贴一处就是一条
-// 绕过策略的路;现在一律走 sendToLead,策略贴在那里面。
-const teamDeliverySource = readSource(new URL("../src/team/lead-delivery.ts", import.meta.url));
-assert.match(
-  teamDeliverySource,
-  /function sendToLead\([\s\S]{0,900}?withGlobalBrowserPolicy\(text, "reminder", await browserGrantForTask\(/,
-  "sendToLead 必须在注入前贴上全局浏览器策略,且带上**现读**的项目授权 —— " +
-  "开台说了「已授权」、后续投递又注入默认拒绝的话,调度台收到的是一对自相矛盾的指令",
-);
-// 投递口搬进 lead-delivery.ts 之后,「只有一道门」要连着两个文件一起数:消费循环与
-// session.ts 都不许再出现裸 handle.send,全部 stdin 注入只能从投递口过。
+// 调度台的 stdin 注入**只有一道门**(sendToLead):用户插话、执行者汇报、回合末合并投递
+// 一律从投递口过,串行链和回合身份都挂在那里。连着三个文件一起数:消费循环与 session.ts
+// 都不许再出现裸 handle.send。
 for (const [label, rel] of [
   ["投递口", "../src/team/lead-delivery.ts"],
   ["事件消费循环", "../src/team/session-consumer.ts"],
@@ -411,7 +339,7 @@ for (const [label, rel] of [
   assert.equal(
     [...text.matchAll(/\.handle\.send\(/g)].length,
     rel.endsWith("lead-delivery.ts") ? 1 : 0,
-    `${label}:调度台的 stdin 注入只能走 sendToLead 那一处 —— 多一处裸 handle.send 就是一条绕过全局浏览器策略的路`,
+    `${label}:调度台的 stdin 注入只能走 sendToLead 那一处 —— 多一处裸 handle.send 就是一条绕过投递串行链的路`,
   );
 }
 const requestContext = readFileSync(join(base, "request-context.md"), "utf8");

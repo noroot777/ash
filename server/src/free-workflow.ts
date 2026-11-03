@@ -140,9 +140,8 @@ export async function freeReviewReminder(taskId: string): Promise<TurnReminder> 
   const { reference, manifestEntry } = await refreshRegressionEvidence(taskId,
     freeReviewEvidenceDir(taskId, run.id, run.currentRound), run.targetKind === "accepted_merge");
   // 中途提问后续跑那条路上，只有这条提醒还在重贴要求（崩掉重拉走 freeReviewResumeMessage，
-  // 两条路各带一份），所以报告格式和扫描义务两份契约都得在 —— 原先这里只有浏览器提醒，
-  // 而就地验证那侧的 `verifyReminderFor` 一直带着摘要契约：两个对称端点只做了一个。
-  // 浏览器提醒由投递点统一贴(带项目授权),这里不内嵌 —— 理由同 review-prompts.ts。
+  // 两条路各带一份），所以报告格式和扫描义务两份契约都得在 —— 就地验证那侧的
+  // `verifyReminderFor` 一直带着摘要契约：两个对称端点不能只做一个。
   return {
     text: `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
       `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}，` +

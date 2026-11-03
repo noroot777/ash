@@ -57,8 +57,8 @@ const deferred = <T = void>() => {
 const initialDone = deferred();
 const workerDone = deferred();
 const userDone = deferred();
-const grantReached = deferred();
-const grantGate = deferred();
+const sendReached = deferred();
+const sendGate = deferred();
 
 // ── 真实的 codex 常驻泵:一次只跑一个回合,忙时 send 进 waiting ──────────────────
 const started: string[] = [];
@@ -91,52 +91,31 @@ const resident = openCodexResident({
 
 const runDir = join(root, "runs", TASK);
 mkdirSync(runDir, { recursive: true });
-attachLead({
+const lead = {
   taskId: TASK, sessId: SESS, cliSessionId: "thread-a", agentType: "codex", ownerUserId: null,
   executorId: null, model: null, reasoningEffort: null, cwd: root, handle: resident,
   out: createWriteStream(join(runDir, `${SESS}.md`), { flags: "a" }),
   busy: true, turnStart: AT, pending: [], notices: [], pendingCredential: null,
   wantedStatus: null, statusTimer: null, retired: false, idleTimer: null, closing: null,
-});
+};
+attachLead(lead as unknown as Parameters<typeof attachLead>[0]);
 
 await sendInbound(TASK, WORKER); // 调度台正忙 → 只进待送队列
 assert.equal((await pendingInbound(TASK)).length, 1, "前置条件:汇报进了持久待送队列");
 
-// 卡住「投递前现读授权」那次查询(browserGrantForTask 的 select 只取 projectId 一个字段),
-// 于是回合收尾送汇报时必定停在这里,给插话一个确定的插入点。
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const plainSelect = db.select;
-let armed = true;
-(db as any).select = function hookedSelect(this: unknown, fields: unknown) {
-  const builder: any = (plainSelect as any).call(this, fields);
-  const isGrantQuery = !!fields && typeof fields === "object"
-    && Object.keys(fields as object).length === 1 && "projectId" in (fields as object);
-  if (!armed || !isGrantQuery) return builder;
-  armed = false;
-  const realFrom = builder.from.bind(builder);
-  builder.from = (table: unknown) => {
-    const query = realFrom(table);
-    const realWhere = query.where.bind(query);
-    query.where = (cond: unknown) => {
-      const selected = realWhere(cond);
-      const realThen = selected.then.bind(selected);
-      selected.then = (okFn: unknown, errFn: unknown) => {
-        grantReached.resolve();
-        return grantGate.promise.then(() => realThen(okFn, errFn));
-      };
-      return selected;
-    };
-    return query;
-  };
-  return builder;
-} as typeof db.select;
-/* eslint-enable @typescript-eslint/no-explicit-any */
+// 卡住投递串行链的前一环,于是回合收尾送汇报时必定停在这里,给插话一个确定的插入点。
+(lead as { sending?: unknown }).sending = {
+  then(ok: () => unknown, err: (e: unknown) => unknown) {
+    sendReached.resolve();
+    return sendGate.promise.then(ok, err);
+  },
+};
 
 initialDone.resolve();        // 开场那个回合说完了 → endTurn 开始投递汇报
-await grantReached.promise;   // 汇报卡在读授权上
+await sendReached.promise;    // 汇报排在投递链上
 const delivery = deliverToLead(TASK, USER); // 插话:排在那条汇报后面
 await new Promise((r) => setImmediate(r));
-grantGate.resolve();
+sendGate.resolve();
 assert.equal(await delivery, true, "插话要真的送进去");
 await new Promise((r) => setImmediate(r));
 
@@ -150,7 +129,6 @@ assert.deepEqual(killed, ["WORKER"], "转向靠的是打断旧回合,而不是�
 assert.deepEqual(started, ["INITIAL", "WORKER", "USER"], "三个回合的真实启动顺序");
 console.log("   ✓ 排在别的投递后面进来的用户插话,照样当场打断旧回合");
 
-(db as unknown as { select: typeof plainSelect }).select = plainSelect;
 workerDone.resolve();
 userDone.resolve();
 await new Promise((r) => setImmediate(r));
