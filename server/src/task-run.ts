@@ -43,7 +43,7 @@ import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js"
 import { handoffBlockReason } from "./handoff-guard.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 import { acknowledgeTaskStart } from "./task-start-receipt.js";
-import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
+import { AUTONOMY, backgroundWaitFor, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { assembleFreshPrompt } from "./turn-prompt.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
@@ -195,6 +195,7 @@ export async function runTask(
       // fresh run 一律是一条全新的 CLI 会话,所以 `freshContext` 恒真;这一轮交结论还是
       // 交代码由 `reviewTask`(历史独立审查任务)定。判据本体见 craft-rules.ts。
       craft: { freshContext: true, verifying: reviewTask },
+      backgroundWait: backgroundWaitFor(agentType, reviewTask),
       completion: COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free"),
       direction: DIRECTION_PROTOCOL(directionToken),
       teamPreamble,

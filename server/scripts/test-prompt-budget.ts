@@ -59,6 +59,8 @@ const BUDGETS: Record<string, number> = {
   // 棘轮**：口径是「原句一字不改、不加判据不加护栏不加判断表」，所以余量刻意只留 40B。
   // 想往里补一句判据，得先在 diff 里把这个数改大，那一行会被看见、被问一句「谁同意的」。
   "turn/craft-rules": 200,
+  // 「跨回合的等待别交给内置后台」那一句（run-prompts.ts 的 `BACKGROUND_WAIT_WARNING`）。
+  "turn/background-wait": 240,
   "turn/completion-protocol-free": 950,
   "turn/completion-protocol-normal": 1100,
   "turn/completion-reminder-free": 800,
@@ -95,7 +97,7 @@ const BUDGETS: Record<string, number> = {
   "delivered/review-resume-nomanifest": 6150,
   // 目录名含「。」：比普通续跑多出用户引的那条旧地址，本轮入口必须照样在。
   "delivered/review-resume-dotdir": 7100,
-  "delivered/repair": 6450,
+  "delivered/repair": 6650,
   // ── 没有旧上下文的那几条首条消息（产出质量规则唯一的落脚处）─────────────────
   //
   // 四个入口各走一个拼装器，所以各有一份。**口径**：`fresh-*` 那两份量的是所有任务共有
@@ -106,11 +108,11 @@ const BUDGETS: Record<string, number> = {
   // 审查那一份小得多，不止少了这两句：它的完成协议走 `verifying` 分支（没有验收辅路、
   // 没有执行者回归登记）。团队开台那份大，是 `LEAD_PREAMBLE` 本身的体积（派活哲学那一摞）。
   // 规划那份小，是因为那条路刻意只有正文加一句，且浏览器策略发的是缩略版。
-  "delivered/fresh-run": 4000,
+  "delivered/fresh-run": 4200,
   "delivered/fresh-review-run": 3350,
   // 这一条比其余几份大约 560B，是**真实的非空同伴告知**（`peerNoticeText`，第 1 轮审查
   // F1 之后换上的真实夹具）；地址已归一成 `<ROOT>`，所以这个数逐机稳定。
-  "delivered/invited-first": 4450,
+  "delivered/invited-first": 4650,
   "delivered/team-lead-first": 5900,
   "delivered/plan-first": 1450,
   // ── MCP 工具清单：每一条都常驻执行者的每一个回合 ─────────────────────────────
@@ -357,6 +359,11 @@ const PLACEMENT: Array<{ name: string; where: string[] }> = [
     where: ["turn/craft-rules", "delivered/fresh-run", "delivered/invited-first",
       "delivered/team-lead-first", "delivered/plan-first"],
   },
+  // 只发给 claude 的执行回合（判据 `backgroundWaitFor`）：审查/验证那几条一份都没有。
+  {
+    name: "BACKGROUND_WAIT_WARNING",
+    where: ["turn/background-wait", "delivered/fresh-run", "delivered/invited-first", "delivered/repair"],
+  },
   {
     name: "REVIEW_VALIDATION_REQUIREMENT",
     where: ["review/dispatch-bare", "review/dispatch-logic", "review/dispatch-syntax",
@@ -458,7 +465,8 @@ try {
   // 单源常量有两窝：审查/修复那一摞住在 shared，执行者开场那两句住在 `craft-rules.ts`
   //（服务端独用，搬进 shared 只多一跳；零依赖独立成文件的理由见那个文件头）。两边都认。
   const craft = (await import("../src/craft-rules.js")) as unknown as Record<string, string>;
-  const sourceOf = (name: string): string | undefined => shared[name] ?? craft[name];
+  const runPrompts = (await import("../src/run-prompts.js")) as unknown as Record<string, string>;
+  const sourceOf = (name: string): string | undefined => shared[name] ?? craft[name] ?? runPrompts[name];
   const samples = await renderPromptSamples(root);
   const size = new Map(samples.map((sample) => [sample.id, sizeOf(sample.text)]));
 
@@ -564,7 +572,7 @@ try {
   for (const { name, where } of PLACEMENT) {
     const text = sourceOf(name);
     assert.ok(typeof text === "string" && text.length > 0,
-      `${name} 在 @ash/shared/free-workflow 和 server/src/craft-rules.ts 里都找不到`);
+      `${name} 在 @ash/shared/free-workflow、server/src/craft-rules.ts、server/src/run-prompts.ts 里都找不到`);
     const hits = samples.filter((sample) => sample.text.includes(text)).map((sample) => sample.id);
     assert.deepEqual([...hits].sort(), [...where].sort(),
       `${name} 的落脚处变了：现在在 ${hits.join("、") || "(没有任何样本)"}，` +

@@ -206,7 +206,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   const { peerNoticeText } = await import("../src/peer-context.js");
   const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
   const {
-    AUTONOMY, COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL,
+    AUTONOMY, backgroundWaitFor, COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL,
     FOLLOW_UP_REMINDER, PLANNING_TURN,
   } = await import("../src/run-prompts.js");
   const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
@@ -254,6 +254,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   // 产出质量规则本体。单独一份 = 这两句话自己的棘轮:想把它写成判断表,得先在 diff 里把
   // 那个数改大(用户 2026-10-30 的口径是「原句一字不改、不加判据不加护栏」)。
   add("turn/craft-rules", craftRulesFor({ freshContext: true, verifying: false }));
+  add("turn/background-wait", backgroundWaitFor("claude", false));
   add("turn/completion-protocol-free", COMPLETION_PROTOCOL("pb-task", false, false, true));
   add("turn/completion-protocol-normal", COMPLETION_PROTOCOL("pb-task", false, false, false));
   add("turn/completion-reminder-free", COMPLETION_REMINDER("pb-task", false, false, true));
@@ -414,6 +415,8 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       userText,
       workspaceReset: "",
       completion: COMPLETION_REMINDER(taskId, false, true, true),
+      // 审查回合：判据自己否掉（夹具不手传空串，理由同 craft 那一格）。
+      backgroundWait: backgroundWaitFor("claude", true),
       direction: DIRECTION_PROTOCOL("pb-token"),
       reviewReminder,
     }),
@@ -456,6 +459,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
     assembleFreshPrompt({
       autonomy: AUTONOMY,
       craft: { freshContext: true, verifying: reviewTask },
+      backgroundWait: backgroundWaitFor("claude", reviewTask),
       completion: COMPLETION_PROTOCOL("pb-task", false, reviewTask, true),
       direction: DIRECTION_PROTOCOL("pb-token"),
       teamPreamble: "",
@@ -491,6 +495,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       userText: "接着把设置页改完。",
       workspaceReset: "",
       completion: COMPLETION_REMINDER("pb-task", false, false, true),
+      backgroundWait: backgroundWaitFor("claude", false),
       direction: DIRECTION_PROTOCOL("pb-token"),
       reviewReminder: NO_REMINDER,
     }),
@@ -527,6 +532,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       userText: await freeRepairPrompt("pb-task", run),
       workspaceReset: "",
       completion: FOLLOW_UP_REMINDER("pb-task", "done", false, false, "", true),
+      backgroundWait: backgroundWaitFor("claude", false),
       direction: DIRECTION_PROTOCOL("pb-token"),
       reviewReminder: "",
     }),

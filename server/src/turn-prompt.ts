@@ -106,14 +106,21 @@ export interface TurnPromptParts {
   workspaceReset: string;
   /** 完成协议 / 续聊提醒（`COMPLETION_REMINDER` 或 `FOLLOW_UP_REMINDER`）。 */
   completion: string;
+  /** 「跨回合的等待别交给内置后台」那一句（`backgroundWaitFor`）；正文逐字讲过就不重发。 */
+  backgroundWait: string;
   /** 当前方向身份。 */
   direction: string;
   /** 由任务状态派生的审查/验证提醒；正文已逐字讲过的那几段静态契约会被摘掉（见上）。 */
   reviewReminder: TurnReminder;
 }
 
+/** 正文已经逐字讲过的那一段不再拼第二份（同 `DEDUPABLE` 的判据：整串出现才算）。 */
+const unlessSaid = (segment: string, body: string): string =>
+  segment && !body.includes(segment) ? segment : "";
+
 export function assembleTurnPrompt(parts: TurnPromptParts): string {
   const reminder = dedupeReminder(parts.reviewReminder, parts.userText);
+  const backgroundWait = unlessSaid(parts.backgroundWait, parts.userText);
   return parts.invite +
     parts.brief +
     (parts.handoffNotice ? `${parts.handoffNotice}\n\n` : "") +
@@ -130,6 +137,7 @@ export function assembleTurnPrompt(parts: TurnPromptParts): string {
     parts.userText +
     parts.workspaceReset +
     parts.completion +
+    (backgroundWait ? `\n\n${backgroundWait}` : "") +
     parts.direction +
     (reminder ? `\n${reminder}` : "");
 }
@@ -150,6 +158,8 @@ export interface FreshPromptParts {
    * 恒真；交结论还是交代码由审查任务那一位定。
    */
   craft: CraftContext;
+  /** 「跨回合的等待别交给内置后台」那一句（`backgroundWaitFor`）；任务正文逐字讲过就不重发。 */
+  backgroundWait: string;
   /** 完成协议长版（`COMPLETION_PROTOCOL`）。 */
   completion: string;
   /** 当前方向身份。 */
@@ -167,10 +177,12 @@ export interface FreshPromptParts {
 }
 
 export function assembleFreshPrompt(parts: FreshPromptParts): string {
+  const backgroundWait = unlessSaid(parts.backgroundWait, parts.objective);
   return parts.autonomy +
     // 落在自主性前言之后：两段都是「怎么干活」的开场，而且 `AUTONOMY` 自带尾部空行，
     // 这个位置不需要任何额外的分隔处理。
     craftRulesFor(parts.craft) +
+    (backgroundWait ? `${backgroundWait}\n\n` : "") +
     parts.completion +
     parts.direction +
     parts.teamPreamble +

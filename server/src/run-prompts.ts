@@ -1,3 +1,4 @@
+import type { AgentType } from "@ash/shared";
 import { STEP_LABELS } from "@ash/shared/workflow";
 import { STRICT_DONE_PROTOCOL } from "./settle-status.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
@@ -63,6 +64,18 @@ export const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, r
 export const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
   `\n\n(ash 完成协议:taskId=${taskId}。本回合结束时目标已达成就先调 complete_task 并传最新【当前方向身份】directionToken,否则按未完成记 failed;要等外部条件则用 pause_task 并传同一 token。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
+
+// 跨回合的等待别交给 CLI 内置的后台子代理 / 后台 Bash —— 事前那一句。事后那一笔（被收走
+// 时落时间线）在 claude-background-reaped.ts，事故经过也在那个文件头。
+//
+// 只发给 claude：只有它有这两样内置后台（codex 等没有同类结构化的后台任务）。审查/验证
+// 回合不发：那几条投递消息的体积是用户追认过的硬目标（test-prompt-budget.ts 的 TARGETS），
+// 那一轮真派了后台子代理被收走，事后那一笔照样会记。宽松模式下 ash MCP 对 agent 不可达，
+// 指给它 start_monitor 也做不到，同完成协议一起退成空串。
+export const BACKGROUND_WAIT_WARNING =
+  "跨回合的等待别交给内置后台子代理或后台 Bash：回合一结束它们随进程消失，完成通知也唤不醒任务；要等就用 start_monitor 挂哨兵、pause_task 收尾。";
+export const backgroundWaitFor = (agentType: AgentType, verifying: boolean) =>
+  STRICT_DONE_PROTOCOL && agentType === "claude" && !verifying ? BACKGROUND_WAIT_WARNING : "";
 
 export const DIRECTION_PROTOCOL = (token: string) =>
   !STRICT_DONE_PROTOCOL ? "" :

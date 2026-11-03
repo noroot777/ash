@@ -16,6 +16,7 @@ import { imageStore, persistToolResultImages, type ImageStore } from "../agent-a
 import { eventQueue } from "./event-queue.js";
 import { markdownImageSink, settleMarkdownImages, type MarkdownImageAccounting, type MarkdownImageSink } from "./markdown-image-stream.js";
 import { ClaudeControlBridge } from "./claude-control.js";
+import { ClaudeBackgroundTrace } from "../claude-background-reaped.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
 import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
@@ -106,6 +107,9 @@ async function* claudeStreamEvents(
   // 覆盖，落库排在队列上，晚一步读到的就是下一代人的凭据，于是上一轮早结束的监听被新进程
   // 续命成「正在盯着」；整段在 ../claude-monitor-origin.ts 的文件头）。
   const claudeMonitors = new ClaudeMonitorTrace(cliSessionId, runOriginOfChild(child));
+  // 后台子代理 / 后台 Bash 的同类账本：认人同样要 tool_use、tool_result、system 三样一起看。
+  // 它们随回合收尾被收走时在时间线上留一笔（见 ../claude-background-reaped.ts）。
+  const background = new ClaudeBackgroundTrace(cliSessionId);
 
   const rl = createInterface({ input: child.stdout! });
 
@@ -172,6 +176,7 @@ async function* claudeStreamEvents(
     }
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
     claudeMonitors.event(ev);
+    background.event(ev);
     if (ev.parent_tool_use_id) {
       const images = childImages.get(ev.parent_tool_use_id) ?? imageStore();
       childImages.set(ev.parent_tool_use_id, images);
@@ -182,6 +187,8 @@ async function* claudeStreamEvents(
         // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
         if (block.type === "tool_use") claudeMonitors.toolUse(block.name, block.input, block.id);
         if (block.type === "tool_result") claudeMonitors.toolResult(block.tool_use_id, block.content);
+        if (block.type === "tool_use") background.toolUse(block.name, block.id);
+        if (block.type === "tool_result") background.toolResult(block.tool_use_id);
         // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
         // 收工具结果里那几张 base64 截图 —— 它们不是正文语法,按块交代就是对的。
         if (block.type === "tool_result") {
@@ -299,6 +306,7 @@ async function* claudeStreamEvents(
           // Monitor 的入参只有这儿有：system/task_started 只带 tool_use_id，要靠它回指
           // 才分得清「内置 Monitor」和「普通后台 Bash」。
           claudeMonitors.toolUse(block.name, block.input, block.id);
+          background.toolUse(block.name, block.id);
           push(nativeWork.call(block.name, block.input, block.id)
             ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
         }
@@ -311,6 +319,7 @@ async function* claudeStreamEvents(
         // 起手回执里那句 `expires in 20m` 是来源侧唯一说出**生效**期限的地方（入参那个
         // timeout_ms 只是请求值，claude 会自己钳）。见 claude-monitors.ts 的 toolResult。
         claudeMonitors.toolResult(block.tool_use_id, block.content);
+        background.toolResult(block.tool_use_id);
         const activity = nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
         if (activity) push(activity);
         for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
@@ -432,5 +441,7 @@ async function* claudeStreamEvents(
     // 这一代的 open/close，而外面紧跟着就是下一轮的会话更新（新一轮第 1 轮审查点名的同类
     // 收尾位置）。这个 await 不会抛、也不会挂（见 ClaudeMonitorTrace.finishAll）。
     await claudeMonitors.finishAll();
+    // 同理：进程没了，名下还在跑的后台子代理 / 后台 Bash 也全没了。不抛（见 finish）。
+    await background.finish();
   }
 }
