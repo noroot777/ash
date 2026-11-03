@@ -39,13 +39,13 @@ const digest = (path: string) => new Promise<string>((resolve, reject) => {
 const zList = async (repo: string, args: string[]) => (await readOnlyGit(repo, args)).stdout.split("\0").filter(Boolean);
 
 /**
- * 一个路径在磁盘上是什么：不存在、链接（目标）、目录（能不能读 / 写 / 进）、文件（读与执行权限、
- * 能不能写 + 字节）。两边相等才算同一份。
- * 文件的读、执行按拥有者 / 组 / 其他各自的位记（第 5 轮复审第 2 轮 F1：只记「有没有执行位」时 0755 与
- * 0654 是同一个值，快照里 `./check.sh` 跑得起来，合进去之后拥有者却没有执行权限）；写记的是门禁那个
- * 用户实际能不能写（access），与目录同一口径。
+ * 一个路径在磁盘上是什么：不存在、链接（目标）、目录（能不能读 / 写 / 进）、文件（读与执行权限位、
+ * 能不能读 / 写 / 执行 + 字节）。两边相等才算同一份。
+ * 文件的读、执行位按拥有者 / 组 / 其他各自记（第 5 轮复审第 2 轮 F1：只记「有没有执行位」时 0755 与
+ * 0654 是同一个值）；位相等也不等于跑得起来 —— 访问控制列表（ACL）可以单独禁掉某个用户执行，位一个
+ * 没变（第 6 轮审查第 3 轮 F2）。所以另记门禁那个用户**实际**能不能读、写、执行（access），与目录同一口径。
  */
-export async function entryOf(path: string): Promise<string> {
+async function entryOf(path: string): Promise<string> {
   const stat = await lstat(path).catch(() => null);
   if (!stat) return "missing";
   if (stat.isSymbolicLink()) return `link:${await readlink(path)}`;
@@ -57,7 +57,8 @@ export async function entryOf(path: string): Promise<string> {
     return `dir:${await can(constants.R_OK, "r")}${await can(constants.W_OK, "w")}${await can(constants.X_OK, "x")}`;
   }
   if (!stat.isFile()) return "other";
-  return `file:${(stat.mode & 0o555).toString(8)}:${await can(constants.W_OK, "w")}:${stat.size}:${await digest(path)}`;
+  const able = `${await can(constants.R_OK, "r")}${await can(constants.W_OK, "w")}${await can(constants.X_OK, "x")}`;
+  return `file:${(stat.mode & 0o555).toString(8)}:${able}:${stat.size}:${await digest(path)}`;
 }
 
 const skipOf = (borrowed: readonly string[]) => borrowed.map(dep => dep.split(sep).join("/")).sort();

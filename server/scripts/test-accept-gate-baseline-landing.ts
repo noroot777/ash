@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -329,6 +330,74 @@ try {
     assert.equal(git(sample.repo, "status", "--porcelain"), "", "索引与工作区和合并之前一样");
   }
 
+  // ㊼ 合并预览 · 目标分支把一个普通目录 `src` 换成指向 `alternate` 的链（第 6 轮审查第 3 轮 F1）：任务
+  // 工作区里装着的 `src/vendor` 借进快照后落在链的新位置上，合进去之后那里根本没有它。改的是借用读取
+  // 路径的**祖先**，同样算目标分支改了借用的依赖，门禁之前就拒。
+  {
+    const sample = await fixture("preview-dep-parent", { baseline: "merge_preview" });
+    writeFileSync(join(sample.repo, ".gitignore"), ".worktrees/\nvendor/\n");
+    for (const dir of ["src", "alternate"]) mkdirSync(join(sample.repo, dir));
+    writeFileSync(join(sample.repo, "src", "go.mod"), "module sample\n");
+    writeFileSync(join(sample.repo, "alternate", "marker.txt"), "alternate\n");
+    git(sample.repo, "add", "-A");
+    git(sample.repo, "commit", "-qm", "main adds a go module");
+    git(sample.cwd, "merge", "-q", "--no-edit", "main");
+    mkdirSync(join(sample.cwd, "src", "vendor"));
+    writeFileSync(join(sample.cwd, "src", "vendor", "lib.txt"), "installed\n");
+    git(sample.repo, "rm", "-rq", "src");
+    symlinkSync("alternate", join(sample.repo, "src"));
+    git(sample.repo, "add", "src");
+    git(sample.repo, "commit", "-qm", "main replaces src with a link");
+    await refusedBeforeGate(sample, /依赖内容（[^）]*src\/vendor/);
+  }
+
+  // ㊽ 最终合并 · 测过之后目标检出里一个这次合并不碰的脚本被加了「禁止执行」的访问控制（第 6 轮审查
+  // 第 3 轮 F2，macOS ACL）：权限位一个没变，但跑不起来了 —— 物理身份记实际能不能执行，发布前就拒。
+  if (process.platform === "darwin") {
+    const sample = await fixture("landing-acl-exec", { baseline: "merge_preview" });
+    writeFileSync(join(sample.repo, "check.sh"), "#!/bin/sh\necho ok\n", { mode: 0o755 });
+    git(sample.repo, "add", "check.sh");
+    git(sample.repo, "commit", "-qm", "main adds an executable check");
+    const before = git(sample.repo, "rev-parse", "main");
+    const script = join(sample.repo, "check.sh");
+    const { landed } = await landGuarded(sample, () => execFileSync("chmod", ["+a", `user:${userInfo().username} deny execute`, script]));
+    assert.equal(landed.ok, false, JSON.stringify(landed));
+    if (!landed.ok) assert.match(landed.message, /这次合并不会重写的文件/);
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+    execFileSync("chmod", ["-N", script]);
+  }
+
+  // ㊾ 最终合并 · 文件已经写下、挪分支时被拒（另一个终端抢先提交），按原样放回（第 6 轮审查第 3 轮 F3）：
+  // 原样是整个文件 —— 原先禁止执行的访问控制还在（macOS），这次新建的目录也删掉，回执才能说「原样」。
+  {
+    const sample = await fixture("landing-restore-whole", { baseline: "merge_preview" });
+    const tool = join(sample.repo, "tool.sh");
+    writeFileSync(tool, "#!/bin/sh\necho base\n", { mode: 0o755 });
+    git(sample.repo, "add", "tool.sh");
+    git(sample.repo, "commit", "-qm", "main adds a tool");
+    git(sample.cwd, "merge", "-q", "--no-edit", "main");
+    writeFileSync(join(sample.cwd, "tool.sh"), "#!/bin/sh\necho task\n");
+    mkdirSync(join(sample.cwd, "created"));
+    writeFileSync(join(sample.cwd, "created", "new.txt"), "new\n");
+    git(sample.cwd, "add", "-A");
+    git(sample.cwd, "commit", "-qm", "task edits the tool and adds a directory");
+    const acl = process.platform === "darwin";
+    if (acl) execFileSync("chmod", ["+a", `user:${userInfo().username} deny execute`, tool]);
+    const real = `GIT -C '${sample.repo}'`;
+    const bin = wrapGit("restore-whole", " update-ref -m ash accept",
+      `c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"`);
+    const { landed } = await withPath(bin, arm => landGuarded(sample, arm));
+    assert.equal(landed.ok, false, JSON.stringify(landed));
+    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了[^]*和合并之前一样（这次写下的已经按原样放回）/);
+    assert.equal(readFileSync(tool, "utf8"), "#!/bin/sh\necho base\n");
+    assert.equal(existsSync(join(sample.repo, "created")), false, "这次新建的目录删掉了");
+    if (acl) {
+      assert.match(execFileSync("ls", ["-le", tool], { encoding: "utf8" }), /deny execute/, "访问控制还在");
+      assert.throws(() => execFileSync(tool), /EACCES/, "原先跑不起来的照样跑不起来");
+      execFileSync("chmod", ["-N", tool]);
+    }
+  }
+
   // ㊷ 最终合并 · 测过之后目标检出里一个这次合并不碰的源码目录改成 0111（第 6 轮审查 F1）：文件照样按路径
   // 读得到，目录却列不出来 —— 物理身份连目录能不能读 / 进一起记，发布前就拒。
   {
@@ -445,7 +514,8 @@ try {
   console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
     hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true,
-    dirAccess: true, indexRace: true, cleanupAfterPublish: true, dirWrite: true, splitIndex: true }));
+    dirAccess: true, indexRace: true, cleanupAfterPublish: true, dirWrite: true, splitIndex: true,
+    depParent: true, aclExec: true, restoreWhole: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

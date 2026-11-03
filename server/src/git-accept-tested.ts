@@ -116,9 +116,9 @@ async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to:
 function leftover(left: readonly string[], base: string): string {
   if (!left.length) return "检出里的文件和合并之前一样（这次写下的已经按原样放回）。处理完再重新验收。";
   const shown = left.slice(0, 10).join("、") + (left.length > 10 ? ` 等 ${left.length} 个` : "");
-  return `但检出里有 ${left.length} 个文件没能回到合并之前的样子：${shown}。索引和分支还在 ${base.slice(0, 12)}，`
-    + "这些文件现在可能是测过的新内容、写了一半或已被删掉，请核对后手动处理（取回旧内容用 `git checkout HEAD -- <路径>`，"
-    + "合并新增的文件直接删掉），再重新验收。";
+  return `但检出里有 ${left.length} 处没能回到合并之前的样子：${shown}（结尾带 / 的是目录）。索引和分支还在 ${base.slice(0, 12)}，`
+    + "这些文件现在可能是测过的新内容、写了一半、已被删掉或丢了原来的权限设置，目录可能是这次新建的或被重建过，"
+    + "请核对后手动处理（取回旧内容用 `git checkout HEAD -- <路径>`，合并新增的文件和空目录直接删掉），再重新验收。";
 }
 
 /**

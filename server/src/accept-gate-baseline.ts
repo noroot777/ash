@@ -135,7 +135,11 @@ export async function resolveGateBaseline(task: TaskRow, project: ProjectRow, he
     try { reads = borrowed?.dependencies.length ? await dependencyReads(borrowed.cwd, borrowed.dependencies) : []; }
     catch (error) { return unavailable(`借用的依赖读自工作区哪几处没能完整求出（${error instanceof Error ? error.message : String(error)}）`); }
     const changed = reads.length ? await changedPaths(project.repoPath, head, merged.tree) : [];
-    const stale = reads.filter(read => changed.some(path => read === "" || path === read || path.startsWith(`${read}/`)));
+    // 三种相交都算：改的就是这一处、改在它里面、或者改的是它的**祖先**（第 6 轮审查第 3 轮 F1：目标分支把
+    // 普通目录 `src` 换成一条链，任务工作区里 `src/vendor` 借进快照后落在链的新位置上，合进去之后那里根本
+    // 没有它）。目录本身不在逐文件的改动清单里；祖先出现在清单里，就说明它在这一侧改成了文件或链。
+    const stale = reads.filter(read => changed.some(path => read === "" || path === read || path.startsWith(`${read}/`)
+      || read.startsWith(`${path}/`)));
     if (stale.length) {
       return unavailable(`${targetBranch} 改了快照要从任务工作区借用的依赖内容（${stale.map(read => read || "整个工作区").join("、")}），`
         + "借进去的就是改之前的那份，测了也说明不了合进去之后怎样");

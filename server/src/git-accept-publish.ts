@@ -20,7 +20,7 @@
 // 挪完只剩一个同目录 rename；它都失败了，就报「分支和文件已落、索引没换上」这一种确定的状态。
 import { copyFile, mkdtemp, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { type CheckoutSettings, readOnlyGit, sealedGitEnv } from "./accept-gate-preview.js";
 import { execFileText as exec } from "./exec.js";
 import { backupPaths, restoreOwned } from "./git-accept-rollback.js";
@@ -135,6 +135,7 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
   await handle.close();
   let installed = false;
   let sealed: Awaited<ReturnType<typeof sealedCheckout>> | null = null;
+  let keep: string | null = null;
   const outcome = await (async (): Promise<SealedMove> => {
     let undo: (() => Promise<string[]>) | null = null;
     try {
@@ -142,7 +143,9 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
       const drift = await stagedBeyond(env, attrs, checkout, index, from);
       if (drift) return { ok: false, stage: "blocked", message: drift, left: [] };
       const changed = zList(await env.run(attrs, ["diff-tree", "-r", "-z", "--name-only", from, to]));
-      const backup = await backupPaths(checkout, changed, join(env.dir, "backup"));
+      // 原样备份要和检出在同一个文件系统里（硬链接，见 git-accept-rollback.ts）：放在索引旁边。
+      keep = await mkdtemp(join(dirname(index), "ash-publish-backup-"));
+      const backup = await backupPaths(checkout, changed, keep);
       // 放回本身也不抛：放不成的路径都算「没回到原样」。
       undo = async () => restoreOwned(checkout, backup, await atTree(env, attrs, to, changed).catch(() => new Set<string>()))
         .catch(() => changed);
@@ -169,8 +172,11 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
   const lockStuck = !installed && await rm(lock, { force: true }).then(() => false, () => true);
   // 清理失败不改变回执（发布的事实已定），但留一条看得见的记录：里面有改动前文件的原样备份。
   const done = sealed as Awaited<ReturnType<typeof sealedCheckout>> | null;
+  const kept = keep as string | null;
   await done?.dispose().catch((error: unknown) =>
-    console.warn(`[ash] 验收发布的临时目录没能删掉：${done.dir}（${failure(error)}），里面是这次改动前的文件备份，可以手动删掉`));
+    console.warn(`[ash] 验收发布的临时目录没能删掉：${done.dir}（${failure(error)}），可以手动删掉`));
+  if (kept) await rm(kept, { recursive: true, force: true }).catch((error: unknown) =>
+    console.warn(`[ash] 验收发布的原样备份目录没能删掉：${kept}（${failure(error)}），里面是这次改动前的文件，可以手动删掉`));
   if (!lockStuck || outcome.ok) return outcome;
   return { ...outcome, message: `${outcome.message}（另外 ${lock} 没能删掉，它在的时候这个检出里的 git 命令都会拒绝，请手动删掉）` };
 }
