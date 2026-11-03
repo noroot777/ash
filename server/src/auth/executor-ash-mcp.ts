@@ -75,12 +75,17 @@ export async function executorAshMcpState(
     if (!dir) return unknown(`算不出 ${agentType} 的配置目录，看不出 ash MCP 接没接上`);
     const env = envVar ? { ...process.env, [envVar]: dir } : process.env;
     const verdict = fileAshMcpVerdict(agentType, env, []);
-    if (verdict.state === "present") return CONNECTED;
-    // 配置里看不出来,而执行器自己带了 MCP 覆盖参数(codex 的 `-c mcp_servers.…` 一类):
-    // 那几个参数可能正是接法,配置文件这一档说不了「没有」。
+    // 执行器自己带了 MCP 覆盖参数(codex 的 `-c mcp_servers.ash.enabled=false`、claude 的
+    // `--strict-mcp-config` 一类)时,配置文件只是一半事实:参数既能补接,也能把文件里那条
+    // 关掉或整组换掉,而这些参数是真传给 CLI 的(`executors/codex.ts`、`executors/claude.ts`)。
+    // 起跑预检的配置文件档对带参数的执行器同样不下结论,这里一样:两头都说成 unknown。
+    // 上一版文件里有就先说 connected,参数关掉了 ash 也照样显示接上了(新链第 1 轮审查第 1 条)。
     if (extraArgs.some((arg) => /mcp/i.test(arg))) {
-      return unknown("配置文件里没看到可用的 ash MCP 登记，但这个执行器的参数里带了 MCP 相关的覆盖，看不出最终接没接上");
+      return unknown(verdict.state === "present"
+        ? "配置里有 ash MCP 登记，但这个执行器的参数里带了 MCP 相关的覆盖（可能把它关掉或换掉），看不出最终接没接上"
+        : "配置文件里没看到可用的 ash MCP 登记，但这个执行器的参数里带了 MCP 相关的覆盖，看不出最终接没接上");
     }
+    if (verdict.state === "present") return CONNECTED;
     if (verdict.state === "unknown") return unknown(`看不准这个执行器有没有接上 ash MCP：${verdict.why}`);
     if (verdict.state === "disabled") return missing(`${verdict.detail}，ash 没有替你打开`);
     // 手工那段跟自动补接走同一次合成:这份配置不许往末尾接时,给的是原因而不是一段照抄会坏的配置。
@@ -99,3 +104,32 @@ export async function executorAshMcpState(
 const CONNECTED: ExecutorAshMcp = { state: "connected", detail: null };
 const missing = (detail: string): ExecutorAshMcp => ({ state: "missing", detail });
 const unknown = (detail: string): ExecutorAshMcp => ({ state: "unknown", detail });
+
+/**
+ * 注册/导入那一下的最终状态:补接结果 + 这个执行器自己的只读诊断,**两份都要**。
+ *
+ * 补接只管「配置文件里有没有那条」,是按 CLI 类型做的;诊断才看得见这个执行器自己的参数。
+ * 所以补接成功也不能直接当成接上了 —— 一律以诊断为准;补接没成时三态仍取诊断那一份(跟随后
+ * 的 GET 同一判据),原因换成补接自己的说法,它多一句「为什么没替你写」。
+ */
+export async function registeredExecutorAshMcp(
+  ensured: PersonalAshMcp,
+  agentType: string,
+  ownerUserId: string | null,
+  extraArgs: string[],
+): Promise<ExecutorAshMcp> {
+  const read = await executorAshMcpState(agentType, ownerUserId, extraArgs);
+  if (ensured.configured) return read;
+  // 补接说没成、读出来却是接上的:两边各执一词就是「判不准」,不能报成接上了。
+  return { state: read.state === "connected" ? "unknown" : read.state, detail: ensured.problem };
+}
+
+/** 库里那一列 extraArgs(JSON 字符串)→ 参数表。读不出就按没带参数判。 */
+export function storedExtraArgs(raw: string | null | undefined): string[] {
+  try {
+    const parsed = JSON.parse(raw ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((a): a is string => typeof a === "string") : [];
+  } catch {
+    return [];
+  }
+}

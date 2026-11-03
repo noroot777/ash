@@ -18,7 +18,9 @@ import { actorOf } from "./auth/context.js";
 import { canUseOwned, filterOwned, notYours, ownerStamp } from "./auth/owned.js";
 import { isHostCliIsolated } from "./auth/mode.js";
 import { defaultClearScope, dispatchBlockReason } from "./auth/dispatch-gate.js";
-import { ensureExecutorAshMcp, executorAshMcpState } from "./auth/executor-ash-mcp.js";
+import {
+  ensureExecutorAshMcp, executorAshMcpState, registeredExecutorAshMcp, storedExtraArgs,
+} from "./auth/executor-ash-mcp.js";
 
 const toAgent = (r: typeof agents.$inferSelect) => ({
   id: r.id,
@@ -64,12 +66,7 @@ function ashMcpProbe(): AshMcpProbe {
     const key = `${r.type}\0${r.ownerUserId ?? ""}\0${r.extraArgs}`;
     let hit = seen.get(key);
     if (!hit) {
-      let extraArgs: string[] = [];
-      try {
-        const parsed = JSON.parse(r.extraArgs);
-        if (Array.isArray(parsed)) extraArgs = parsed.filter((a): a is string => typeof a === "string");
-      } catch { /* 读不出就按没带参数判 */ }
-      hit = executorAshMcpState(r.type, r.ownerUserId, extraArgs);
+      hit = executorAshMcpState(r.type, r.ownerUserId, storedExtraArgs(r.extraArgs));
       seen.set(key, hit);
     }
     return hit;
@@ -157,15 +154,13 @@ export function mountAgentRoutes(api: Hono): void {
     if (clearDefault) await db.batch([clearDefault, insert]);
     else await insert;
     // 落库之后才接 MCP:接不上不该让注册本身失败(执行器照样能用,只是交不了卷;
-    // `ensureExecutorAshMcp` 从不抛)。没补成时三态照只读诊断那一份(跟随后的 GET 同一判据),
-    // 原因用补接那一次自己的说法 —— 它比只读诊断多一句「为什么没替你写」。
+    // `ensureExecutorAshMcp` 从不抛)。补接成功也不直接算接上 —— 这个执行器自己的参数可能把
+    // ash 关掉,以 `registeredExecutorAshMcp` 合出来的那一份为准。
     const ensured = await ensureExecutorAshMcp(type, row.ownerUserId);
-    return c.json(await toGatedAgent(row as typeof agents.$inferSelect, async (r) => {
-      if (ensured.configured) return { state: "connected", detail: null };
-      const read = await ashMcpProbe()(r);
-      // 补接说没成、读出来却是接上的:两边各执一词就是「判不准」,不能报成接上了。
-      return { state: read.state === "connected" ? "unknown" : read.state, detail: ensured.problem };
-    }), 201);
+    return c.json(await toGatedAgent(
+      row as typeof agents.$inferSelect,
+      (r) => registeredExecutorAshMcp(ensured, r.type, r.ownerUserId, storedExtraArgs(r.extraArgs)),
+    ), 201);
   });
 
   api.patch("/agents/:id", async (c) => {

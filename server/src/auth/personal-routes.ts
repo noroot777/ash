@@ -10,7 +10,7 @@
 // (walk + fingerprintOf 每次现算),写完文件下一次扫描自然错开,不存在陈旧列表。
 import type { Context, Hono } from "hono";
 import { eq } from "drizzle-orm";
-import type { AgentType, ConfigBundle, ConfigBundleKind } from "@ash/shared";
+import type { AgentType, ConfigBundle, ConfigBundleKind, PersonalAshMcp } from "@ash/shared";
 import { CONFIG_BUNDLE_KINDS } from "@ash/shared/multiuser";
 import { db } from "../db/index.js";
 import { agents, llmProviders, reviewerProfiles, teamPresets, workflows } from "../db/schema.js";
@@ -30,7 +30,7 @@ import {
   PERSONAL_CLI_TYPES,
 } from "./user-cli.js";
 import { hostAshMcp } from "./user-cli-mcp.js";
-import { ensureExecutorAshMcp } from "./executor-ash-mcp.js";
+import { ensureExecutorAshMcp, registeredExecutorAshMcp, storedExtraArgs } from "./executor-ash-mcp.js";
 
 /**
  * 个人 CLI 环境只对**本人**开放 —— 连实例管理员也看不了别人的(§八 个人面)。
@@ -274,7 +274,7 @@ function mountConfigTransferRoutes(api: Hono): void {
       const existing = new Set((await filterOwned(await db.select().from(agents), actor)).map((a) => a.name));
       let n = 0;
       let unlinked = 0;
-      const added: string[] = [];
+      const added: { name: string; type: string; extraArgs: string }[] = [];
       for (const a of bundle.items.executors) {
         if (existing.has(a.name)) { skipped.push(`执行器「${a.name}」`); continue; }
         const providerId = a.providerName ? providerByName.get(a.providerName) ?? null : null;
@@ -293,15 +293,25 @@ function mountConfigTransferRoutes(api: Hono): void {
           // 导入的条目**一律不是默认** —— 否则一次导入就把我自己的默认执行器换掉了。
           isDefault: false,
         });
-        added.push(a.type);
+        added.push({ name: a.name, type: a.type, extraArgs: a.extraArgs ?? "[]" });
         n++;
       }
       imported.executors = n;
       if (unlinked) notes.push(`${unlinked} 个执行器原本挂的供应商在这边找不到同名的，已落成「未挂供应商」`);
-      // 导入也是注册,同样当场接 ash MCP(理由见 `ensureExecutorAshMcp`);同一家只接一次。
-      for (const type of new Set(added)) {
-        const ashMcp = await ensureExecutorAshMcp(type as AgentType, stamp.ownerUserId);
-        if (!ashMcp.configured) notes.push(`${type} 的 ash MCP 没接上，它的执行器交不了卷：${ashMcp.problem}`);
+      // 导入也是注册,同样当场接 ash MCP(理由见 `ensureExecutorAshMcp`):补接按 CLI 类型、同一家
+      // 只接一次;接没接上按**每个执行器**判 —— 它自己的参数可能把 ash 关掉,跟注册那条同一个判据
+      // (`registeredExecutorAshMcp`)。同一句原因只说一次,后面列上是哪几个执行器。
+      const ensured = new Map<string, Promise<PersonalAshMcp>>();
+      const byDetail = new Map<string, string[]>();
+      for (const a of added) {
+        if (!ensured.has(a.type)) ensured.set(a.type, ensureExecutorAshMcp(a.type as AgentType, stamp.ownerUserId));
+        const state = await registeredExecutorAshMcp(
+          await ensured.get(a.type)!, a.type, stamp.ownerUserId, storedExtraArgs(a.extraArgs),
+        );
+        if (state.detail) byDetail.set(state.detail, [...(byDetail.get(state.detail) ?? []), a.name]);
+      }
+      for (const [detail, names] of byDetail) {
+        notes.push(`${names.map((name) => `执行器「${name}」`).join("、")}的 ash MCP 没确认接上，可能交不了卷：${detail}`);
       }
     }
 
