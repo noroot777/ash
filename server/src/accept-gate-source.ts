@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { sealedGit } from "./accept-gate-preview.js";
+import { cloneSealedSnapshot, isSealedSnapshot, sealedGit } from "./accept-gate-preview.js";
 import { execFileText } from "./exec.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
@@ -270,12 +270,19 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
     let copiedFingerprint: string | null = null;
     let previewCommit: string | null = null;
     if (source.commit) {
-      await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
-      await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
-      await git(target, ["checkout", "--detach", source.commit]);
-      if (preview) previewCommit = await materializePreview(cwd, target, preview);
-      await git(target, ["remote", "remove", "origin"]);
-      const paths = (await git(target, ["ls-tree", "-r", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean);
+      // 合并预览档的快照整段走封好的环境（克隆、检出、物化、收尾核验，见 accept-gate-preview.ts 的
+      // cloneSealedSnapshot）：目标分支带进来的文件不在门禁命令之外调起任何程序。其余档原样不动。
+      const snap = preview ? (args: string[]) => sealedGit(target, args) : (args: string[]) => git(target, args);
+      if (preview) {
+        await cloneSealedSnapshot(cwd, cwd, target);
+      } else {
+        await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
+        await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
+      }
+      await snap(["checkout", "--detach", source.commit]);
+      if (preview) previewCommit = await materializePreview(target, preview);
+      else await git(target, ["remote", "remove", "origin"]);
+      const paths = (await snap(["ls-tree", "-r", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean);
       // 比较基准也必须规范化:落点是 realpath 出来的,拿没规范化的快照路径去比,只要路径祖先里有
       // 一条软链(macOS 的 /var -> /private/var、用户把 repo 放在软链目录下都是),每一条合法的
       // 跟踪软链都会被误判成「指向快照外」,整个门禁对带软链的仓库直接不可用。规则本身不变。
@@ -372,14 +379,14 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
  * 的那一棵（第 1 轮审查 F2）。所以只有一处定义合并：accept-gate-baseline.ts 的预演，方向与
  * git-accept.ts 的真合并相同（在目标分支上合入任务分支）；这里只是给那棵树配一个提交、检出。
  * `commit-tree` 只写一个提交对象，不跑钩子、不碰合并驱动，也不签名（签名会调 gpg）；检出走 `sealedGit`，
- * 目标分支带进来的文件点名了过滤器也没有程序可调（见 accept-gate-preview.ts 文件头）。树对象是
+ * 目标分支带进来的文件点名了过滤器也没有程序可调（见 accept-gate-preview.ts 的 cloneSealedSnapshot）。树对象是
  * 预演写进主仓对象库的，本地克隆整份带过来（worktree 与主仓共用一份）。
  */
-async function materializePreview(cwd: string, target: string, preview: GateSnapshotPreview): Promise<string> {
-  const commit = (await sealedGit(cwd, target, ["-c", "user.name=ash", "-c", "user.email=ash@localhost",
+async function materializePreview(target: string, preview: GateSnapshotPreview): Promise<string> {
+  const commit = (await sealedGit(target, ["-c", "user.name=ash", "-c", "user.email=ash@localhost",
     "commit-tree", "--no-gpg-sign", preview.tree, "-p", "HEAD", "-p", preview.targetCommit,
     "-m", `ash 验收门禁合并预览：合入 ${preview.targetCommit}`])).trim();
-  await sealedGit(cwd, target, ["checkout", "--detach", commit]);
+  await sealedGit(target, ["checkout", "--detach", commit]);
   return commit;
 }
 
@@ -400,7 +407,10 @@ export async function verifyGateSnapshot(cwd: string, source: GateSource): Promi
       return await digestInputs(cwd, inputs) === source.fingerprint;
     }
     if (await commitAt(cwd, "HEAD") !== source.commit) return false;
-    const changed = (await git(cwd, ["diff", "--no-ext-diff", "--name-only", "-z", "HEAD", "--"]))
+    // 合并预览档的快照用建它时那份封好的环境来读：检出与核验对同一批文件的换行解释必须是同一份
+    // 配置，`git diff` 也不能在门禁命令之后去跑全局配的 clean 过滤器（见 cloneSealedSnapshot）。
+    const diff = await isSealedSnapshot(cwd) ? sealedGit : git;
+    const changed = (await diff(cwd, ["diff", "--no-ext-diff", "--name-only", "-z", "HEAD", "--"]))
       .split("\0").filter(Boolean);
     if (changed.length === 0) return true;
     // 依赖目录不参与这道核验:它问的是「命令有没有改被测源码」,而依赖目录在快照里是**故意**被换掉

@@ -425,6 +425,51 @@ try {
     }
   }
 
+  // ⑯ 合并预览 · 过滤器定义经 init.templateDir 抄进了克隆的本地配置（第 2 轮复审 F1）：快照的本地配置
+  // 整份换成 ash 核定的那一份，模板带进来的东西一行都不留，检出照样没有程序可调。
+  {
+    const globalConfig = join(root, "template-gitconfig");
+    const template = join(root, "git-template");
+    const savedGlobal = process.env.GIT_CONFIG_GLOBAL;
+    const marker = join(root, "template-filter-ran");
+    mkdirSync(template);
+    writeFileSync(join(template, "config"), `[filter "review"]\n\tsmudge = touch '${marker}'; cat\n\tclean = cat\n`);
+    writeFileSync(globalConfig, `[init]\n\ttemplateDir = ${template}\n`);
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    try {
+      const sample = await fixture("preview-template-filter", { baseline: "merge_preview" });
+      writeFileSync(join(sample.repo, ".gitattributes"), "target.txt filter=review\n");
+      writeFileSync(join(sample.repo, "target.txt"), "target\n");
+      git(sample.repo, "add", "-A");
+      git(sample.repo, "commit", "-m", "main adds a filtered file");
+      mkdirSync(join(sample.repo, ".git", "info"), { recursive: true });
+      writeFileSync(join(sample.repo, ".git", "info", "attributes"), "target.txt -filter\n");
+      rmSync(marker, { force: true });
+      assert.equal((await acceptGateState(sample.taskId)).baselineBlock, null);
+      await acceptTask(sample.taskId);
+      await settled(sample.taskId);
+      const [row] = await runs(sample.taskId);
+      assert.equal(row!.status, "passed", row!.failure ?? "");
+      assert.equal(existsSync(marker), false, "模板抄进克隆的过滤器没有被执行");
+    } finally {
+      if (savedGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = savedGlobal;
+    }
+  }
+
+  // ⑰ 合并预览 · 项目本地开了 core.autocrlf（第 2 轮复审 F2）：快照检出与收尾核验读同一份转换配置，
+  // 只读的门禁命令绿了就是绿了，不会把 CRLF 当成「测试改了源码」。
+  {
+    const sample = await fixture("preview-autocrlf", { baseline: "merge_preview" });
+    git(sample.repo, "config", "core.autocrlf", "true");
+    commitOnMain(sample.repo, "target.txt", "target\n", "main adds a text file");
+    await acceptTask(sample.taskId);
+    await settled(sample.taskId);
+    const [row] = await runs(sample.taskId);
+    assert.equal(row!.status, "passed", row!.failure ?? "");
+    assert.equal((await taskRow(sample.taskId)).stage, "accepted");
+  }
+
   // ⑭ SHA-256 仓库也能预演：隔离目录按项目的对象格式建（与上面 SHA-1 的那份并存）。
   {
     const repo = join(root, "sha256-preview");
@@ -458,7 +503,7 @@ try {
 
   console.log(JSON.stringify({ branchDefault: true, containsRefuse: true, containsPass: true, previewCollision: true,
     previewConflict: true, previewReuse: true, previewDrift: true, setting: true, previewDriver: true, previewUnion: true,
-    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true }));
+    isolatedPreview: true, previewFilter: true, previewConfig: true, maskedFilter: true, sha256Preview: true, stdinEpipe: true, templateFilter: true, autocrlf: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

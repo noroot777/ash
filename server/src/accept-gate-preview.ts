@@ -18,14 +18,14 @@
 // （git-accept.ts 的 expectedTree）。下面 `mergeDrivers` 只为把「注定对不上」的情形提前说清楚，
 // 不承担安全 —— 漏判的代价是合并时被拒，不是执行了程序。
 //
-// 物化（快照里检出这棵树）同一个口径：检出会跑过滤器（smudge/process），所以快照里那几条写工作区的
-// git 命令走 `sealedGit`，环境里同样没有过滤器的定义 —— 硬边界在**实际检出的那个环境**里，不在
+// 物化（快照里检出这棵树）同一个口径：合并预览档的快照从克隆到收尾核验都在封好的环境里跑
+// （`cloneSealedSnapshot` / `sealedGit`，说明在它们上方）—— 硬边界在**实际检出的那个环境**里，不在
 // 别处扫描的结论上（第 1 轮复审 F1：主检出 info/attributes 里的本地覆盖能把扫描结果掩掉，克隆里
 // 却没有那份覆盖）。`checkoutFilters` 只负责把「平时检出要过滤器、快照里写出来的就不一样」提前说清楚。
 //
 // 这几条都要 git 2.40 以上（`--attr-source`、`check-attr --source`），旧 git 结构化拒绝（`previewFailure`）。
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileText } from "./exec.js";
@@ -38,6 +38,21 @@ const git = (repo: string, args: string[], input?: string) =>
 /** 预演可以从项目配置里带过去的内置选项（只影响内置合并的算法，没有一项能指向程序）。 */
 const MERGE_SETTINGS = /^(merge\.(renames|directoryrenames|renamelimit|renormalize)|diff\.(renames|renamelimit)|core\.(autocrlf|eol|ignorecase|precomposeunicode))$/;
 
+let scratchRoot: Promise<{ root: string; empty: string }> | null = null;
+
+/** 进程内共用的一个临时目录和里面的空文件（被清理掉了就重建）：空配置、空属性都指向它。 */
+async function scratch(): Promise<{ root: string; empty: string }> {
+  const current = await scratchRoot?.catch(() => null);
+  if (current && existsSync(current.empty)) return current;
+  scratchRoot = (async () => {
+    const root = await mkdtemp(join(tmpdir(), "ash-merge-preview-"));
+    const empty = join(root, "empty");
+    await writeFile(empty, "");
+    return { root, empty };
+  })();
+  return scratchRoot;
+}
+
 const isolated = new Map<string, Promise<{ gitDir: string; empty: string }>>();
 
 /**
@@ -48,11 +63,11 @@ async function isolatedGitDir(format: string): Promise<{ gitDir: string; empty: 
   const current = await isolated.get(format)?.catch(() => null);
   if (current && existsSync(current.gitDir) && existsSync(current.empty)) return current;
   const created = (async () => {
-    const root = await mkdtemp(join(tmpdir(), "ash-merge-preview-"));
-    const empty = join(root, "empty");
-    await writeFile(empty, "");
-    const gitDir = join(root, "git");
-    await execFileText("git", ["init", "--bare", "-q", `--object-format=${format}`, gitDir], { env: cleanEnv(empty) });
+    const { root, empty } = await scratch();
+    const gitDir = join(root, `git-${format}`);
+    if (!existsSync(gitDir)) {
+      await execFileText("git", ["init", "--bare", "-q", "--template=", `--object-format=${format}`, gitDir], { env: cleanEnv(empty) });
+    }
     return { gitDir, empty };
   })();
   isolated.set(format, created);
@@ -67,30 +82,82 @@ function cleanEnv(empty: string): NodeJS.ProcessEnv {
 
 export type PreviewMerge = { tree: string } | { conflicts: string[] } | { error: string };
 
-/** 项目配置里可以带进隔离环境的那几项，摊成 `-c key=value`。 */
-async function carriedSettings(repo: string): Promise<string[]> {
+/** 项目有效配置里可以带进隔离环境的那几项（键已是 git 归一过的小写）。 */
+async function carriedPairs(repo: string): Promise<[string, string][]> {
   const settings = (await git(repo, ["config", "--get-regexp", MERGE_SETTINGS.source]).catch(() => null))?.stdout ?? "";
-  return settings.split("\n").filter(Boolean).flatMap((line) => {
+  return settings.split("\n").filter(Boolean).map((line) => {
     const at = line.indexOf(" ");
-    return ["-c", at < 0 ? `${line}=true` : `${line.slice(0, at)}=${line.slice(at + 1)}`];
+    return at < 0 ? [line, "true"] : [line.slice(0, at), line.slice(at + 1)];
   });
 }
+
+const carriedSettings = async (repo: string): Promise<string[]> =>
+  (await carriedPairs(repo)).flatMap(([key, value]) => ["-c", `${key}=${value}`]);
 
 /** 隔离环境里那几条把「程序从哪来」全堵上的参数：属性文件、钩子目录指向空文件，fsmonitor 关掉。 */
 const sealed = (empty: string) => ["-c", `core.attributesFile=${empty}`, "-c", `core.hooksPath=${empty}`, "-c", "core.fsmonitor=false"];
 
-/**
- * 在测试快照（`cwd`，一份新克隆）里跑一条会写工作区的 git 命令，环境与预演同样没有程序可调：
- * 系统 / 全局配置与属性置空、`GIT_*` 不继承，克隆自己的本地配置里本来就只有 clone 写的那几行。
- * 属性点名的过滤器因此一个都没有定义，git 按原样写出 blob —— 想执行也没有程序可执行。
- * 这是硬边界，不靠事先扫描；`checkoutFilters` 只负责把「这样写出来的跟平时检出的不一样」提前说清楚。
- * 换行这类内置转换照 `repo`（项目）的配置带过来，与快照里其余文件的检出口径一致。
- */
-export async function sealedGit(repo: string, cwd: string, args: string[]): Promise<string> {
-  const format = await objectFormat(repo);
-  const { empty } = await isolatedGitDir(format);
-  return (await execFileText("git", ["-C", cwd, ...sealed(empty), ...await carriedSettings(repo), ...args],
+// ── 合并预览档的测试快照：从克隆到收尾核验，整段生命周期都在「只含核定配置」的环境里跑。
+//
+// 检出会跑过滤器（smudge/process），`git diff` 会跑 clean，所以门禁命令之外快照里的每一条 git 都
+// 得是没有程序可调的。光把系统 / 全局配置置空不够：克隆自己的 `.git/config` 也是配置，而它的来源
+// 不止 clone 本身（`init.templateDir` 能把模板里的 config 抄进去，第 2 轮复审 F1）。所以不去推断
+// 「新克隆里应该有什么」，而是**克隆完就把它的本地配置整份换成 ash 写的那一份**：只留仓库格式
+// 必需的几项（白名单），再加上从项目有效配置带过来的内置转换选项和封口的几项。之后这份快照里
+// 跑的 git —— 物化预演树、收尾核验 —— 都用这一份配置，检出时的换行转换与核验时解释文件的口径
+// 也就天然是同一份（第 2 轮复审 F2：检出临时 `-c` 带配置、核验却读另一份，CRLF 被判成改了源码）。
+// 门禁命令自己在快照里跑 git 时读到的也是这份（加上用户的全局配置，本地这几项优先）。
+
+/** 换掉快照本地配置时保留的那几项：没有它们这份仓库就打不开（格式、对象格式、引用存储）。 */
+const KEPT_SETTINGS = /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|compatobjectformat|refstorage))$/;
+const SEAL_MARK = "ash.sealedsnapshot";
+
+async function sealedExec(cwd: string, args: string[]): Promise<string> {
+  const { empty } = await scratch();
+  return (await execFileText("git", ["-C", cwd, ...sealed(empty), ...args],
     { maxBuffer: MAX_BUFFER, env: cleanEnv(empty) })).stdout;
+}
+
+/**
+ * 建合并预览档的测试快照：不带模板克隆（`--template=`），随即把本地配置换成核定的那一份
+ * （见上）。`repo` 是项目（读它的有效配置决定带哪几项内置转换），`source` 是被克隆的工作区。
+ */
+export async function cloneSealedSnapshot(repo: string, source: string, target: string): Promise<void> {
+  await sealedExec(source, ["clone", "--template=", "--no-hardlinks", "--dissociate", "--no-checkout", "--", source, target]);
+  const file = join(target, ".git", "config");
+  const { empty } = await scratch();
+  const env = cleanEnv(empty);
+  const listed = (await execFileText("git", ["config", "--file", file, "--list"], { env })).stdout;
+  const kept = listed.split("\n").filter(Boolean).map((line): [string, string] => {
+    const at = line.indexOf("=");
+    return at < 0 ? [line, "true"] : [line.slice(0, at), line.slice(at + 1)];
+  }).filter(([key]) => KEPT_SETTINGS.test(key));
+  const conversions = (await carriedPairs(repo)).filter(([key]) => key.startsWith("core."));
+  const entries: [string, string][] = [...kept, ...conversions,
+    ["core.hooksPath", join(target, ".git", "ash-no-hooks")],
+    ["core.attributesFile", join(target, ".git", "ash-no-attributes")],
+    ["core.fsmonitor", "false"], [SEAL_MARK, "true"]];
+  const next = `${file}.ash-sealed`;
+  await writeFile(next, "");
+  for (const [key, value] of entries) await execFileText("git", ["config", "--file", next, key, value], { env });
+  await rename(next, file);
+}
+
+/** 这份快照是不是 `cloneSealedSnapshot` 建的（收尾核验据此决定用哪套环境跑 git）。 */
+export async function isSealedSnapshot(cwd: string): Promise<boolean> {
+  const { empty } = await scratch();
+  return (await execFileText("git", ["config", "--file", join(cwd, ".git", "config"), "--get", SEAL_MARK],
+    { env: cleanEnv(empty) }).catch(() => null))?.stdout.trim() === "true";
+}
+
+/**
+ * 在封好的快照里跑一条 git：系统 / 全局配置与属性置空、`GIT_*` 不继承，本地配置就是 ash 写的那一份，
+ * 属性点名的过滤器一个都没有定义，git 按原样读写 blob —— 想执行也没有程序可执行。这是硬边界，
+ * 不靠事先扫描；`checkoutFilters` 只负责把「这样写出来的跟平时检出的不一样」提前说清楚。
+ */
+export async function sealedGit(cwd: string, args: string[]): Promise<string> {
+  if (!await isSealedSnapshot(cwd)) throw new Error(`不是封好的测试快照：${cwd}`);
+  return sealedExec(cwd, args);
 }
 
 const objectFormat = async (repo: string): Promise<string> =>
