@@ -134,8 +134,6 @@
     "test:review-sweep": "tsx scripts/test-review-sweep.ts",
     "//test:prompt-budget": "注入模型的那几类消息的渲染体积棘轮:预算表、动态段上限、判据单源落款。改提示词措辞后必跑。",
     "test:prompt-budget": "tsx scripts/test-prompt-budget.ts",
-    "test:browser-policy": "tsx scripts/test-browser-policy-grant.ts",
-    "test:browser-grant-timing": "tsx scripts/test-browser-grant-timing.ts",
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
     "test:session-lost": "tsx scripts/test-session-lost.ts",
     "test:duet-session-lost": "tsx scripts/test-duet-session-lost.ts",

@@ -28,7 +28,6 @@ import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 import { CodexNativeCommands } from "./codex-native-commands.js";
 import { isGoalExecution } from "@ash/shared/cli-commands";
-import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const child = opts.startProcess?.()
@@ -606,9 +605,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
         await ready;
         if (finished || settling || stopRequested) throw new Error("Codex 当前回合已经结束");
         if (!threadId || !turnId) throw new Error("Codex App Server 重连后缺少当前 thread/turn 标识");
-        // 正文到这里才定稿(SteerText 可以是惰性函数,见 steer-text.ts):它要现读浏览器授权,
-        // 而上面 steerTail 排队 + await ready 可能已经过去一段时间。**漏掉这一步**的后果不是
-        // 「授权旧了」而是整条路断掉 —— 函数会被 JSON.stringify 丢掉,请求少了必填的 text,
+        // 正文到这里才定稿(SteerText 可以是惰性函数,见 steer-text.ts)。**漏掉这一步**的后果是
+        // 整条路断掉 —— 函数会被 JSON.stringify 丢掉,请求少了必填的 text,
         // 真实 CLI 回 `Invalid request: missing field text`(第 8 链第 2 轮审查 P1)。
         const body = await resolveSteerText(text);
         // 定稿本身也是一次 await:排在它之后再复查一遍,别把新正文送进已经收尾的回合。
@@ -652,7 +650,6 @@ function threadParams(opts: CodexAppServerOpts, base: Record<string, unknown> = 
     cwd: opts.cwd,
     approvalPolicy: "never",
     sandbox: "danger-full-access",
-    developerInstructions: withGlobalBrowserPolicy("", "full"),
     ...(opts.model ? { model: opts.model } : {}),
     ...(opts.cliState?.serviceTier || opts.serviceTier ? { serviceTier: opts.cliState?.serviceTier ?? opts.serviceTier } : {}),
     ...(opts.cliState?.personality || opts.reasoningEffort ? { config: {

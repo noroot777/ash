@@ -1,8 +1,7 @@
 // 调度台的**投递口**:所有写进它 stdin 的消息都从这里过(用户插话、执行者汇报、回合收尾
-// 的合并汇报)。单独成一个文件,是因为这里管着三件互相缠着的事 —— 现读授权、按调用顺序
-// 串行、以及「打断与投递必须是同一个动作」,它们的理由都在下面那段注释里,跟事件消费循环
-// 放一起只会被淹掉(而且 session-consumer.ts 已经顶到 700 行上限)。
-import { browserGrantForTask, withGlobalBrowserPolicy } from "../browser-verification-policy.js";
+// 的合并汇报)。单独成一个文件,是因为这里管着两件互相缠着的事 —— 按调用顺序串行、以及
+// 「打断与投递必须是同一个动作」,它们的理由都在下面那段注释里,跟事件消费循环放一起只会
+// 被淹掉(而且 session-consumer.ts 已经顶到 700 行上限)。
 import { bindTurnSource, nextTurnStart } from "../session-turns.js";
 import { holdTurn } from "./lead-turns.js";
 import type { Lead } from "./session-types.js";
@@ -24,9 +23,9 @@ export type LeadDelivery = { sent: boolean; interrupted: boolean; at: string | n
  * 时直接返回,claude 在 stdin 已关时写不进去。抛错同样按「没收下」算 —— 一次注入失败不该
  * 掀掉整台调度台(理由同 persistOrReport),但更不能被当成送到了。
  *
- * **同一台按调用顺序串行**:这里要 await 一次读库(现读浏览器授权),没有这条链的话,回合
- * 收尾那条合并汇报还卡在读授权上,用户插话就能抢先写进 stdin —— 调度者先看到「新要求」、
- * 后看到本该在它之前的那份执行结果,上下文是倒的(第 7 链第 1 轮审查实测到这个顺序)。
+ * **同一台按调用顺序串行**:没有这条链的话,回合收尾那条合并汇报还没写出去,用户插话就能
+ * 抢先写进 stdin —— 调度者先看到「新要求」、后看到本该在它之前的那份执行结果,上下文是倒的
+ * (第 7 链第 1 轮审查实测到这个顺序)。
  *
  * **打断必须和这次投递是同一个动作**(`steer`)。把判据留在入队那一刻取的话,排队期间前面
  * 那条消息可能刚把一个新回合送出去,等轮到插话时它只是排在队尾 —— 用户看到「已发出」,
@@ -36,18 +35,15 @@ export type LeadDelivery = { sent: boolean; interrupted: boolean; at: string | n
 export async function sendToLead(lead: Lead, text: string, opts: { steer?: boolean; monitorWake?: boolean } = {}): Promise<LeadDelivery> {
   const delivery = (lead.sending ?? Promise.resolve()).then(async (): Promise<LeadDelivery> => {
     try {
-      // 授权现读:开台时带的是「已授权 x.com」,后续消息若还注入默认拒绝,调度台收到的
-      // 就是一对自相矛盾的指令(第 2 轮审查 P3)。同时这也让撤销对常驻调度台即时生效。
-      const message = withGlobalBrowserPolicy(text, "reminder", await browserGrantForTask(lead.taskId));
-      // 判据取在这里:读授权之后、写 stdin 之前,中间不再有 await。
+      // 判据取在这里:轮到这一条之后、写 stdin 之前,中间不再有 await。
       const interrupted = !!opts.steer && lead.busy;
       if (interrupted) lead.handle.interrupt();
-      // 身份从**身份层的分配器**拿,不是 `now()`：这条链上两条消息完全可能落在同一毫秒
-      // (读授权命中缓存时尤其容易),而墙钟毫秒一撞,队列、唯一键和活动册同时把两轮合成一轮
+      // 身份从**身份层的分配器**拿,不是 `now()`：这条链上两条消息完全可能落在同一毫秒,
+      // 而墙钟毫秒一撞,队列、唯一键和活动册同时把两轮合成一轮
       // —— 后开那一轮被前一轮的结束事件提前收口,它做出来的东西永久漏在清单外
       // (第 2 轮审查 F1,机制见 session-turns.ts 的 nextTurnStart)。
       const at = nextTurnStart(lead.sessId);
-      const sent = lead.handle.send(message);
+      const sent = lead.handle.send(text);
       // 送进去了就等于一个回合已经开跑,**身份与状态一起在这儿落账**(holdTurn,见
       // team/lead-turns.ts)。调用方的 beginTurn 还隔着两次写库,在那之前轮到链上下一条消息
       // 时,它读到的 busy 还是 false,就不会打断这个刚起的回合;消费循环的
