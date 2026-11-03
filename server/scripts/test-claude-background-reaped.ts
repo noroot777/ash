@@ -327,6 +327,47 @@ async function main(): Promise<void> {
   const lo = lateOld.tally().agent;
   check(lo?.finished === 1 && lo.reaped === 1, "旧那条命的迟到通知不替新那条命报完成", JSON.stringify(lo));
 
+  // ── ②⁵ 停止回执本身就是证据，不靠终态通知来触发（第 4 次审查 R1）──────────────────
+  for (const [tool, field, kind, type] of [
+    ["TaskStop", "task_id", "agent", "local_agent"], ["KillShell", "shell_id", "bash", "local_bash"],
+    ["KillBash", "shell_id", "bash", "local_bash"],
+  ] as const) {
+    const quietStop = new ClaudeBackgroundTrace(`quiet-stop-${tool}`);
+    call(quietStop, kind === "agent" ? "Agent" : "Bash", "toolu_k");
+    started(quietStop, "k1", "toolu_k", type);
+    returned(quietStop, "toolu_k");
+    call(quietStop, tool, "toolu_ks", { [field]: "k1" });
+    returned(quietStop, "toolu_ks"); // "Successfully stopped task"，之后再没有 stopped 通知
+    result(quietStop);
+    const k = quietStop.tally()[kind];
+    check(k?.stopped === 1 && k.reaped === 0, `${tool} 回执成功、没等到通知：算它自己停掉，不说成被收走`, JSON.stringify(k));
+    check(backgroundReapedNotice(quietStop.tally()) === "", `${tool} 停成了就不写时间线`);
+  }
+  const inFlight = new ClaudeBackgroundTrace("in-flight");
+  call(inFlight, "Agent", "toolu_f2");
+  started(inFlight, "fl", "toolu_f2", "local_agent");
+  returned(inFlight, "toolu_f2");
+  call(inFlight, "TaskStop", "toolu_f2s", { task_id: "fl" }); // 回执到流结束都没来
+  result(inFlight);
+  check(inFlight.tally().agent?.unknown === 1, "请求停了、回执没来：原因不明，不断言被收走", JSON.stringify(inFlight.tally()));
+
+  // 认不出是哪条命、整组落地之后，停止回执才陆续到：照样改判
+  const batch = new ClaudeBackgroundTrace("batch");
+  call(batch, "Agent", "toolu_b1");
+  started(batch, "bb", "toolu_b1", "local_agent");
+  returned(batch, "toolu_b1");
+  call(batch, "TaskStop", "toolu_b1s", { task_id: "bb" });
+  call(batch, "SendMessage", "toolu_b2");
+  started(batch, "bb", "toolu_b2", "local_agent");
+  returned(batch, "toolu_b2");
+  call(batch, "TaskStop", "toolu_b2s", { task_id: "bb" });
+  notified(batch, "bb", "stopped");
+  notified(batch, "bb", "stopped"); // 两条都不带身份，整组落地
+  check(batch.tally().agent?.unknown === 2, "回执都还在路上：两条都原因不明", JSON.stringify(batch.tally()));
+  returned(batch, "toolu_b1s");
+  returned(batch, "toolu_b2s");
+  check(batch.tally().agent?.stopped === 2, "回执都成功了：两条都改判成它自己停掉", JSON.stringify(batch.tally()));
+
   // ── ②⁗ 常驻进程的回合边界：清账前先把该说的说出去，调用索引不跨回合累积（第 2 轮审查 N1/N2）
   const residentCli = "resident-boundary";
   await db.insert(sessions).values({
@@ -351,6 +392,8 @@ async function main(): Promise<void> {
   check(said.length === 1 && said[0].includes("后台子代理") && said[0].includes("原因不明"),
     "上一回合停因不明的那一笔，清账前写进了时间线", JSON.stringify(said));
   check(!said[0]?.includes("后台 Bash"), "还活着的留到它自己了结再说", String(said[0]));
+  check(!!said[0]?.startsWith("这次智能体进程里起了"), "说的是这次进程里起的，不是「本轮」（跨回合活着的也在数里）",
+    String(said[0]));
   const idx = boundary as any;
   check(!idx.tools.has("toolu_r") && !idx.returned.has("toolu_r"),
     "上一回合配对完的调用清出索引，不随常驻进程无界增长", `tools=${[...idx.tools.keys()]}`);
@@ -371,6 +414,29 @@ async function main(): Promise<void> {
     JSON.stringify(boundary.tally()));
   await boundary.finish();
   await new Promise((r) => setTimeout(r, 60));
+
+  // 子代理发的停止请求，回执落在主回合边界之后：边界上不先把它说成原因不明再清掉（第 4 次审查 R1）
+  const lateCli = "resident-late-receipt";
+  await db.insert(sessions).values({
+    id: "sess-bg-late", taskId, role: "single", agentType: "claude", executor: "claude@test",
+    cliSessionId: lateCli, cwd: "/tmp/wt", startedAt: now(),
+  });
+  const before = said.length;
+  const lateReceipt = new ClaudeBackgroundTrace(lateCli);
+  call(lateReceipt, "Agent", "toolu_lr");
+  started(lateReceipt, "lr", "toolu_lr", "local_agent");
+  returned(lateReceipt, "toolu_lr");
+  lateReceipt.toolUse("TaskStop", "toolu_lrs", { task_id: "lr" }); // 子代理里发的
+  notified(lateReceipt, "lr", "stopped");
+  result(lateReceipt);
+  call(lateReceipt, "Read", "toolu_lr_next"); // 主回合边界
+  lateReceipt.toolResult("toolu_lrs");
+  await new Promise((r) => setTimeout(r, 120));
+  check(said.length === before, "回执还在路上的那条，边界上不先写「原因不明」", JSON.stringify(said.slice(before)));
+  check(lateReceipt.tally().agent?.stopped === 1, "回执到了照样改判成它自己停掉", JSON.stringify(lateReceipt.tally()));
+  await lateReceipt.finish();
+  await new Promise((r) => setTimeout(r, 60));
+  check(said.length === before, "停成了的，流结束时也不写", JSON.stringify(said.slice(before)));
   unsubscribe();
   check(said.filter((x) => x.includes("后台子代理")).length === 1, "已说过的那一笔流结束时不重复说", JSON.stringify(said));
 

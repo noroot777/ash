@@ -33,10 +33,12 @@
 // ── 怎么认「是谁停的」────────────────────────────────────────────────────────
 //
 // `stopped` 本身不说是谁停的（CLI 那边 TaskStop 和收台共用这个词，见 shared 的
-// `CLAUDE_MONITOR_ENDED_REASON`），所以**只按证据归档**，拿不准就说拿不准：
+// `CLAUDE_MONITOR_ENDED_REASON`），所以**只按证据归档**，拿不准就说拿不准。证据（终态通知、
+// 停止回执）谁先到、到没到齐都不一定，所以账上只存证据、结论每次现算，后到的随时能改判：
 //
 // - 来源明说是进程退出收走的（孤儿补报那两句原话）→ 被收走，排在一切推断之前。
-// - 有一次 TaskStop / KillShell 指名了它、**且回执成功**→ 智能体自己停的（不管通知早到晚到）。
+// - 有一次 TaskStop / KillShell 指名了它、**且回执成功**→ 智能体自己停的（通知早到、晚到、
+//   没到都一样）。请求发了、回执还在路上 → 原因不明，回执到了再改判。
 //   只发了请求不算：回执带 `is_error`（权限拒绝、目标不存在）就当它没停成，按下面几条定。
 //   指名的是**发请求那一刻的那条命**：子代理被 SendMessage 续上后 task_id 不变，旧请求的
 //   回执哪怕晚到，也只结算旧的那条命。终态通知同理，按它自带的 `tool_use_id` 认是哪一条命；
@@ -45,12 +47,13 @@
 //   一些）那几笔记「原因不明」，不断言是谁被收走。
 // - 没人请求停它、通知落在回合 `result` 之后、下一段助手输出之前 → 被收走：那个空档里
 //   唯一在动的是 CLI 收台（内置 Monitor 那边实测的行序）。
-// - 流结束时还没有终态 → 被收走（进程都没了）。
+// - 流结束时还没有终态、也没人请求停它 → 被收走（进程都没了）。
 // - 其余（回合进行中停了，又没有任何人请求过）→ **原因不明**，照样记进时间线，不丢。
 //
 // 常驻进程（团队调度台）里后台任务跨回合活着、在空档里 `completed` 也是真跑完，照常算；
-// 下一回合一开始，上一回合已经了结的那些先把该说的写进时间线、再清出账本，「本轮」不混进
-// 旧回合，也不会因为清账把还没说出去的那一笔丢掉。
+// 下一回合一开始，上一回合已经了结的那些先把该说的写进时间线、再清出账本，不会因为清账把
+// 还没说出去的那一笔丢掉。时间线那句话说的是「这次智能体进程里起的」：跨回合活着的旧任务
+// 也在数里，说成「本轮」就错了。
 //
 // ── 观测不到的档位（降级）──────────────────────────────────────────────────
 //
@@ -84,6 +87,19 @@ export interface BackgroundTally {
 
 type Outcome = Exclude<keyof BackgroundTally, "total">;
 
+/** 终态通知里分档要用的事实。 */
+interface Note {
+  stopped: boolean;
+  /** 来源明说是进程退出收走的。 */
+  sessionEnded: boolean;
+  /** 落在回合 `result` 之后。 */
+  idle: boolean;
+}
+
+/**
+ * 一条命。只存证据，不存结论：停止回执和终态通知谁先到、到没到齐都不一定，结论每次按手上
+ * 全部证据现算（`verdict`），后到的证据随时能改判。
+ */
 interface Tracked {
   taskId: string;
   kind: BackgroundKind;
@@ -91,23 +107,12 @@ interface Tracked {
   toolUseId: string;
   /** 发起它的那次调用已经返回、而它当时还没结束。 */
   background: boolean;
-  end: Outcome | null;
+  /** 它的终态通知。没有 = 还没等到。 */
+  note?: Note;
+  /** 整组一起落地时：这条通知其实是这几条命里不知哪一条的（见 `absorb`）。 */
+  peers?: Tracked[];
   /** 有一次指名这条命的停止调用回执成功了。 */
   stopOk?: boolean;
-  /**
-   * 停止通知先到、指名它的那次停止调用还没回执时，回执的 tool_use_id。回执成功才改判成
-   * 「被它自己停掉」；失败或一直没有回执，就维持按其它证据定的那一档。
-   */
-  stopCall?: string;
-}
-
-/** 认不出是哪条命的终态通知（见文件头「是谁停的」）：只留分档要用的事实。 */
-interface Loose {
-  stopped: boolean;
-  /** 来源明说是进程退出收走的。 */
-  sessionEnded: boolean;
-  /** 落在回合 `result` 之后。 */
-  idle: boolean;
 }
 
 const KIND_LABEL: Record<BackgroundKind, string> = { agent: "后台子代理", bash: "后台 Bash" };
@@ -142,7 +147,7 @@ export class ClaudeBackgroundTrace {
   /** 同一个 task_id 再起一次之前的那几条命（SendMessage 把停掉的子代理续上）——各算各的。 */
   private earlier: Tracked[] = [];
   /** task_id → 认不出是哪条命、先挂着的终态通知。 */
-  private loose = new Map<string, Loose[]>();
+  private loose = new Map<string, Note[]>();
   /** 回合 `result` 之后、下一段助手输出之前（见文件头「是谁停的」）。 */
   private idle = false;
   /** 时间线写入串成一条链：回合边界那次和流结束那次不能乱序，`finish` 要等它写完。 */
@@ -160,7 +165,7 @@ export class ClaudeBackgroundTrace {
     const { task_id: taskId, shell_id: shellId } = input as Record<string, unknown>;
     const targets = [taskId, shellId]
       .map((id) => typeof id === "string" ? this.tasks.get(id) : undefined)
-      .filter((task): task is Tracked => !!task && !task.end);
+      .filter((task): task is Tracked => !!task);
     if (targets.length) this.stopCalls.set(toolUseId, targets);
   }
 
@@ -169,17 +174,12 @@ export class ClaudeBackgroundTrace {
     if (typeof toolUseId !== "string" || !toolUseId) return;
     this.returned.add(toolUseId);
     for (const task of this.runs()) {
-      if (task.toolUseId === toolUseId && !task.end) task.background = true;
+      if (task.toolUseId === toolUseId && !task.note && !task.stopOk) task.background = true;
     }
     const targets = this.stopCalls.get(toolUseId);
     if (!targets) return;
     this.stopCalls.delete(toolUseId);
-    for (const task of targets) {
-      if (!isError) task.stopOk = true;
-      if (task.stopCall !== toolUseId) continue;
-      task.stopCall = undefined;
-      if (!isError) task.end = "stopped";
-    }
+    if (!isError) for (const task of targets) task.stopOk = true;
   }
 
   event(ev: any): void {
@@ -202,14 +202,14 @@ export class ClaudeBackgroundTrace {
       const prior = this.tasks.get(taskId);
       if (prior) this.earlier.push(prior);
       this.tasks.set(taskId, {
-        taskId, kind, toolUseId, background: !!toolUseId && this.returned.has(toolUseId), end: null,
+        taskId, kind, toolUseId, background: !!toolUseId && this.returned.has(toolUseId),
       });
       return;
     }
     if (ev.subtype !== "task_notification") return;
     const status = claudeMonitorStatus(ev.status);
     if (status === "running") return;
-    const note: Loose = {
+    const note: Note = {
       stopped: status === "stopped", sessionEnded: SESSION_ENDED_RE.test(String(ev.summary ?? "")), idle: this.idle,
     };
     // 通知带着 `tool_use_id` 就只认那一条命：续上之后，旧那条命迟到的通知不能结算到新那条命
@@ -220,19 +220,9 @@ export class ClaudeBackgroundTrace {
       this.loose.set(taskId, [...this.loose.get(taskId) ?? [], note]);
     } else {
       const task = toolUseId ? this.runs().find((t) => t.taskId === taskId && t.toolUseId === toolUseId) : open[0];
-      if (task && !task.end) this.settle(task, note);
+      if (task && !task.note) task.note = note;
     }
     this.absorb(taskId);
-  }
-
-  /** 认得出是哪条命的终态。证据从硬到软：来源明说 > 停止调用回执成功 > 「result 之后没人请求」> 不明。 */
-  private settle(task: Tracked, note: Loose): void {
-    if (!note.stopped) { task.end = "finished"; return; }
-    if (note.sessionEnded) { task.end = "reaped"; return; }
-    if (task.stopOk) { task.end = "stopped"; return; }
-    task.end = note.idle ? "reaped" : "unknown";
-    // 停止调用已发、回执还没到：先按上面那档记，回执成功再改判（见 `toolResult`）。
-    for (const [callId, targets] of this.stopCalls) if (targets.includes(task)) task.stopCall = callId;
   }
 
   /** 挂着的通知能落地了就落：范围缩到一条命，或者每条命都等到了通知。 */
@@ -241,31 +231,44 @@ export class ClaudeBackgroundTrace {
     if (!notes) return;
     const open = this.open(taskId);
     if (open.length > 1 && notes.length < open.length) return;
-    if (open.length === 1) this.settle(open[0], notes[0]);
-    else open.forEach((task, i) => { task.end = this.blind(open, notes[i]); });
+    if (open.length === 1) open[0].note = notes[0];
+    else open.forEach((task, i) => { task.note = notes[i]; task.peers = open; });
     this.loose.delete(taskId);
   }
 
   /**
-   * 不知道是这几条命里哪一条的终态，按哪条都一样的才下结论：完成、来源明说收走、停止回执
-   * 全都成功（或全都没有）。取决于是哪条命的，记「原因不明」。
+   * 一条终态（`note` 缺省 = 没等到通知）落在 `group` 这几条命里的某一条上，该算哪一档。证据
+   * 从硬到软：完成 > 来源明说收走 > 停止回执成功 > 「没人请求，result 之后停的 / 没等到」算
+   * 收走 > 不明。group 不止一条（认不出是谁）时，按哪条都一样的才下结论：停止回执全都成功
+   * 或全都没有；混着的，或者有停止请求的回执还在路上，记「原因不明」。
    */
-  private blind(open: Tracked[], note: Loose): Outcome {
-    if (!note.stopped) return "finished";
-    if (note.sessionEnded) return "reaped";
-    const asked = (task: Tracked) => [...this.stopCalls.values()].some((targets) => targets.includes(task));
-    if (open.every((task) => task.stopOk)) return "stopped";
-    if (open.every((task) => !task.stopOk && !asked(task))) return note.idle ? "reaped" : "unknown";
-    return "unknown";
+  private verdict(note: Note | undefined, group: Tracked[]): Outcome {
+    if (note && !note.stopped) return "finished";
+    if (note?.sessionEnded) return "reaped";
+    if (group.every((task) => task.stopOk)) return "stopped";
+    if (group.some((task) => task.stopOk || this.asked(task))) return "unknown";
+    return !note || note.idle ? "reaped" : "unknown";
+  }
+
+  private outcomeOf(task: Tracked): Outcome {
+    return this.verdict(task.note, task.peers ?? [task]);
+  }
+
+  /** 有指名它的停止调用还没回执。 */
+  private asked(task: Tracked): boolean {
+    for (const targets of this.stopCalls.values()) if (targets.includes(task)) return true;
+    return false;
   }
 
   private open(taskId: string): Tracked[] {
-    return this.runs().filter((task) => task.taskId === taskId && !task.end);
+    return this.runs().filter((task) => task.taskId === taskId && !task.note);
   }
 
   /**
    * 新回合开始（只有常驻进程走得到）：先把上一回合**已了结**那些该说的说出去，再清出账本；
-   * 还在跑的留着，它们仍可能在本代进程里被收走。清账前不结算，常驻调度台上「原因不明」的
+   * 还在跑的留着，它们仍可能在本代进程里被收走。「已了结」= 等到了终态通知、且没有停止回执
+   * 还在路上（回执随时能改判，清出去就改不了了）；只有停止回执、没等到通知的也留着，迟到的
+   * 无身份通知还得靠它把范围缩到正确的那条命。清账前不结算，常驻调度台上「原因不明」的
    * 那一笔就再也没有投递入口了（流的 finally 要等到进程退出）。
    *
    * 调用索引同时回收已经配对完的那些（有回执、也不是还活着的后台任务的发起调用），否则随常驻
@@ -274,10 +277,11 @@ export class ClaudeBackgroundTrace {
    */
   private nextTurn(): void {
     this.idle = false;
-    const settled = this.runs().filter((task) => task.end);
-    this.report(backgroundReapedNotice(tallyOf(settled)));
-    this.earlier = this.earlier.filter((task) => !task.end);
-    for (const [id, task] of this.tasks) if (task.end) this.tasks.delete(id);
+    const settled = new Set(this.runs()
+      .filter((task) => task.note && !(task.peers ?? [task]).some((peer) => this.asked(peer))));
+    this.report(backgroundReapedNotice(tallyOf([...settled].map((task) => [task, this.outcomeOf(task)]))));
+    this.earlier = this.earlier.filter((task) => !settled.has(task));
+    for (const [id, task] of this.tasks) if (settled.has(task)) this.tasks.delete(id);
     const live = new Set(this.runs().map((task) => task.toolUseId));
     for (const id of this.returned) {
       if (live.has(id)) continue;
@@ -291,18 +295,16 @@ export class ClaudeBackgroundTrace {
   }
 
   /**
-   * 这一轮的后台任务分档。只数真正活过发起调用的那些。还挂着的通知按 `blind` 计入（不落到
-   * 哪一条命上），剩下没等到通知的那几条命算回合结束时还在跑。
+   * 后台任务分档。只数真正活过发起调用的那些。还挂着的通知不落到哪一条命上，整组按「认不出
+   * 是谁」算：等到的那几条按各自的通知，没等到的那几条按「没等到」。
    */
   tally(): Partial<Record<BackgroundKind, BackgroundTally>> {
-    const view = this.runs();
+    const outcomes = new Map(this.runs().map((task) => [task, this.outcomeOf(task)] as const));
     for (const [taskId, notes] of this.loose) {
       const open = this.open(taskId);
-      notes.slice(0, open.length).forEach((note, i) => {
-        view[view.indexOf(open[i])] = { ...open[i], end: this.blind(open, note) };
-      });
+      open.forEach((task, i) => outcomes.set(task, this.verdict(notes[i], open)));
     }
-    return tallyOf(view);
+    return tallyOf(outcomes);
   }
 
   /**
@@ -343,13 +345,13 @@ export class ClaudeBackgroundTrace {
   }
 }
 
-function tallyOf(list: Iterable<Tracked>): Partial<Record<BackgroundKind, BackgroundTally>> {
+function tallyOf(list: Iterable<readonly [Tracked, Outcome]>): Partial<Record<BackgroundKind, BackgroundTally>> {
   const out: Partial<Record<BackgroundKind, BackgroundTally>> = {};
-  for (const task of list) {
+  for (const [task, outcome] of list) {
     if (!task.background) continue;
     const entry = out[task.kind] ??= { total: 0, finished: 0, stopped: 0, reaped: 0, unknown: 0 };
     entry.total += 1;
-    entry[task.end ?? "reaped"] += 1;
+    entry[outcome] += 1;
   }
   return out;
 }
@@ -385,7 +387,7 @@ export function backgroundReapedNotice(tally: Partial<Record<BackgroundKind, Bac
     ].filter(Boolean);
     return `${total} 个${KIND_LABEL[k]}（${buckets.join("、")}）`;
   });
-  return `本轮智能体起了 ${parts.join("；")}。`
+  return `这次智能体进程里起了 ${parts.join("；")}。`
     + (reaped ? "还在跑的那些已随智能体进程一并收走——" : "")
     + `它们的完成通知只注回智能体自己的会话，从来不会唤醒任务。`
     + `要跨回合等一件事，得用 ash 的哨兵（start_monitor）并用 pause_task 收尾这一轮。`;
