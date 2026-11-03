@@ -252,7 +252,7 @@ async function main(): Promise<void> {
   check(backgroundReapedNotice(regen.tally()).includes("一并收走"), "续上那条命被收走照样写时间线");
 
   // 续上之后旧那条命的完成通知才到：按通知自带的 tool_use_id 结算各自那条命（第 3 次审查 R1）。
-  // 不带 tool_use_id 的，给最早还没了结的那条——续上只发生在上一条命停了之后。
+  // 不带 tool_use_id 的认不出是哪条命：先挂着，每条命都等到通知再按「哪条都一样」的分档落地。
   for (const withId of [true, false]) {
     const both = new ClaudeBackgroundTrace(`both-${withId}`);
     call(both, "Agent", "toolu_first");
@@ -271,6 +271,50 @@ async function main(): Promise<void> {
       JSON.stringify(b));
     check(backgroundReapedNotice(both.tally()) === "", `都完成了不写「被收走」（通知${withId ? "带" : "不带"} tool_use_id）`);
   }
+  // 旧那条命被停掉（回执成功）、续上那条命完成，两条通知乱序到达（第 3 次审查第 2 轮 R1）。带身份
+  // 就各归各档；不带身份就不猜谁是谁：停掉的那条取决于是哪条命，记原因不明，不说成被收走。
+  for (const withId of [true, false]) {
+    const swap = new ClaudeBackgroundTrace(`swap-${withId}`);
+    call(swap, "Agent", "toolu_s1");
+    started(swap, "sw", "toolu_s1", "local_agent");
+    returned(swap, "toolu_s1");
+    call(swap, "TaskStop", "toolu_sstop", { task_id: "sw" });
+    returned(swap, "toolu_sstop");
+    call(swap, "SendMessage", "toolu_s2");
+    started(swap, "sw", "toolu_s2", "local_agent");
+    returned(swap, "toolu_s2");
+    swap.event({ type: "system", subtype: "task_notification", task_id: "sw", status: "completed",
+      ...(withId ? { tool_use_id: "toolu_s2" } : {}) });
+    result(swap);
+    swap.event({ type: "system", subtype: "task_notification", task_id: "sw", status: "stopped",
+      ...(withId ? { tool_use_id: "toolu_s1" } : {}) });
+    const sw = swap.tally().agent;
+    const swNotice = backgroundReapedNotice(swap.tally());
+    if (withId) {
+      check(sw?.stopped === 1 && sw.finished === 1, "带身份：停掉的归停掉、完成的归完成", JSON.stringify(sw));
+      check(swNotice === "", "带身份：没有被收走的就不写时间线", swNotice);
+    } else {
+      check(sw?.finished === 1 && sw.unknown === 1 && sw.reaped === 0, "不带身份：认不出的停止记原因不明，不按先后猜",
+        JSON.stringify(sw));
+      check(swNotice.includes("原因不明") && !swNotice.includes("一并收走"), "不带身份：不说「已一并收走」", swNotice);
+    }
+  }
+  const halfway = new ClaudeBackgroundTrace("halfway");
+  call(halfway, "Agent", "toolu_h1");
+  started(halfway, "hw", "toolu_h1", "local_agent");
+  returned(halfway, "toolu_h1");
+  call(halfway, "SendMessage", "toolu_h2");
+  started(halfway, "hw", "toolu_h2", "local_agent");
+  returned(halfway, "toolu_h2");
+  notified(halfway, "hw", "completed"); // 不带身份，只等到一条
+  result(halfway);
+  const hw = halfway.tally().agent;
+  check(hw?.finished === 1 && hw.reaped === 1, "只等到一条认不出的通知：一条算完成，另一条算回合结束时还在跑",
+    JSON.stringify(hw));
+  call(halfway, "Read", "toolu_h3"); // 常驻进程进下一回合：挂着的通知不丢
+  notified(halfway, "hw", "completed");
+  check(halfway.tally().agent?.finished === 2, "挂着的通知跨回合仍在，等齐了照常落地", JSON.stringify(halfway.tally()));
+
   const lateOld = new ClaudeBackgroundTrace("late-old");
   call(lateOld, "Agent", "toolu_o1");
   started(lateOld, "lo", "toolu_o1", "local_agent");

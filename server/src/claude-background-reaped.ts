@@ -39,7 +39,10 @@
 // - 有一次 TaskStop / KillShell 指名了它、**且回执成功**→ 智能体自己停的（不管通知早到晚到）。
 //   只发了请求不算：回执带 `is_error`（权限拒绝、目标不存在）就当它没停成，按下面几条定。
 //   指名的是**发请求那一刻的那条命**：子代理被 SendMessage 续上后 task_id 不变，旧请求的
-//   回执哪怕晚到，也只结算旧的那条命。终态通知同理，按它自带的 `tool_use_id` 认是哪一条命。
+//   回执哪怕晚到，也只结算旧的那条命。终态通知同理，按它自带的 `tool_use_id` 认是哪一条命；
+//   没带、同名又有几条命没了结时**不猜**（通知到达的先后不等于结束的先后）：先挂着，等别的
+//   证据把范围缩到一条命，或者每条命都等到了通知；分档取决于是哪条命的（停止回执只给了其中
+//   一些）那几笔记「原因不明」，不断言是谁被收走。
 // - 没人请求停它、通知落在回合 `result` 之后、下一段助手输出之前 → 被收走：那个空档里
 //   唯一在动的是 CLI 收台（内置 Monitor 那边实测的行序）。
 // - 流结束时还没有终态 → 被收走（进程都没了）。
@@ -98,6 +101,15 @@ interface Tracked {
   stopCall?: string;
 }
 
+/** 认不出是哪条命的终态通知（见文件头「是谁停的」）：只留分档要用的事实。 */
+interface Loose {
+  stopped: boolean;
+  /** 来源明说是进程退出收走的。 */
+  sessionEnded: boolean;
+  /** 落在回合 `result` 之后。 */
+  idle: boolean;
+}
+
 const KIND_LABEL: Record<BackgroundKind, string> = { agent: "后台子代理", bash: "后台 Bash" };
 
 /** 能停掉后台任务的工具。入参里指名目标的字段：`task_id`，旧名 `shell_id`。 */
@@ -129,6 +141,8 @@ export class ClaudeBackgroundTrace {
   private tasks = new Map<string, Tracked>();
   /** 同一个 task_id 再起一次之前的那几条命（SendMessage 把停掉的子代理续上）——各算各的。 */
   private earlier: Tracked[] = [];
+  /** task_id → 认不出是哪条命、先挂着的终态通知。 */
+  private loose = new Map<string, Loose[]>();
   /** 回合 `result` 之后、下一段助手输出之前（见文件头「是谁停的」）。 */
   private idle = false;
   /** 时间线写入串成一条链：回合边界那次和流结束那次不能乱序，`finish` 要等它写完。 */
@@ -193,17 +207,60 @@ export class ClaudeBackgroundTrace {
       return;
     }
     if (ev.subtype !== "task_notification") return;
-    const task = this.runOf(taskId, typeof ev.tool_use_id === "string" ? ev.tool_use_id : "");
-    if (!task || task.end) return;
     const status = claudeMonitorStatus(ev.status);
     if (status === "running") return;
-    if (status !== "stopped") { task.end = "finished"; return; }
-    // 证据从硬到软：来源明说 > 停止调用回执成功 > 「result 之后没人请求」> 不明。
-    if (SESSION_ENDED_RE.test(String(ev.summary ?? ""))) { task.end = "reaped"; return; }
+    const note: Loose = {
+      stopped: status === "stopped", sessionEnded: SESSION_ENDED_RE.test(String(ev.summary ?? "")), idle: this.idle,
+    };
+    // 通知带着 `tool_use_id` 就只认那一条命：续上之后，旧那条命迟到的通知不能结算到新那条命
+    // 头上。没带的，同名只有一条命没了结才认得出；不止一条就先挂着（见文件头「是谁停的」）。
+    const toolUseId = typeof ev.tool_use_id === "string" ? ev.tool_use_id : "";
+    const open = this.open(taskId);
+    if (!toolUseId && open.length > 1) {
+      this.loose.set(taskId, [...this.loose.get(taskId) ?? [], note]);
+    } else {
+      const task = toolUseId ? this.runs().find((t) => t.taskId === taskId && t.toolUseId === toolUseId) : open[0];
+      if (task && !task.end) this.settle(task, note);
+    }
+    this.absorb(taskId);
+  }
+
+  /** 认得出是哪条命的终态。证据从硬到软：来源明说 > 停止调用回执成功 > 「result 之后没人请求」> 不明。 */
+  private settle(task: Tracked, note: Loose): void {
+    if (!note.stopped) { task.end = "finished"; return; }
+    if (note.sessionEnded) { task.end = "reaped"; return; }
     if (task.stopOk) { task.end = "stopped"; return; }
-    task.end = this.idle ? "reaped" : "unknown";
+    task.end = note.idle ? "reaped" : "unknown";
     // 停止调用已发、回执还没到：先按上面那档记，回执成功再改判（见 `toolResult`）。
     for (const [callId, targets] of this.stopCalls) if (targets.includes(task)) task.stopCall = callId;
+  }
+
+  /** 挂着的通知能落地了就落：范围缩到一条命，或者每条命都等到了通知。 */
+  private absorb(taskId: string): void {
+    const notes = this.loose.get(taskId);
+    if (!notes) return;
+    const open = this.open(taskId);
+    if (open.length > 1 && notes.length < open.length) return;
+    if (open.length === 1) this.settle(open[0], notes[0]);
+    else open.forEach((task, i) => { task.end = this.blind(open, notes[i]); });
+    this.loose.delete(taskId);
+  }
+
+  /**
+   * 不知道是这几条命里哪一条的终态，按哪条都一样的才下结论：完成、来源明说收走、停止回执
+   * 全都成功（或全都没有）。取决于是哪条命的，记「原因不明」。
+   */
+  private blind(open: Tracked[], note: Loose): Outcome {
+    if (!note.stopped) return "finished";
+    if (note.sessionEnded) return "reaped";
+    const asked = (task: Tracked) => [...this.stopCalls.values()].some((targets) => targets.includes(task));
+    if (open.every((task) => task.stopOk)) return "stopped";
+    if (open.every((task) => !task.stopOk && !asked(task))) return note.idle ? "reaped" : "unknown";
+    return "unknown";
+  }
+
+  private open(taskId: string): Tracked[] {
+    return this.runs().filter((task) => task.taskId === taskId && !task.end);
   }
 
   /**
@@ -234,19 +291,18 @@ export class ClaudeBackgroundTrace {
   }
 
   /**
-   * 终态通知是哪一条命的。通知带着 `tool_use_id` 就只认那一条：续上之后，旧那条命迟到的
-   * 完成通知不能结算到新那条命头上（新那条命真正的终态反倒会被当成重复丢掉）。没带的，
-   * 给同一 task_id 下最早还没了结的那条：续上只发生在上一条命停了之后，先了结的必然是它。
+   * 这一轮的后台任务分档。只数真正活过发起调用的那些。还挂着的通知按 `blind` 计入（不落到
+   * 哪一条命上），剩下没等到通知的那几条命算回合结束时还在跑。
    */
-  private runOf(taskId: string, toolUseId: string): Tracked | undefined {
-    const same = this.runs().filter((task) => task.taskId === taskId);
-    if (toolUseId) return same.find((task) => task.toolUseId === toolUseId);
-    return same.find((task) => !task.end) ?? same.at(-1);
-  }
-
-  /** 这一轮的后台任务分档。只数真正活过发起调用的那些。 */
   tally(): Partial<Record<BackgroundKind, BackgroundTally>> {
-    return tallyOf(this.runs());
+    const view = this.runs();
+    for (const [taskId, notes] of this.loose) {
+      const open = this.open(taskId);
+      notes.slice(0, open.length).forEach((note, i) => {
+        view[view.indexOf(open[i])] = { ...open[i], end: this.blind(open, note) };
+      });
+    }
+    return tallyOf(view);
   }
 
   /**
@@ -257,6 +313,7 @@ export class ClaudeBackgroundTrace {
     this.report(backgroundReapedNotice(this.tally()));
     this.tasks.clear();
     this.earlier = [];
+    this.loose.clear();
     await this.writes;
   }
 
