@@ -256,12 +256,20 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
     // .gitignore 里;放过它等于让门禁在一个谁也没声明过的目录上运行,既不冻结也不登记它的内容。
     // 钉在 test-accept-gate-borrow.ts「依赖根自己就是一条链」的第三种落点上。
     // 不在项目配置下跑 `git status`：它会调起项目的 clean 过滤器（accept-gate-status.ts 顶部）。
-    const dirty = (await worktreeChanges(cwd, commit)).some(row => row.slice(0, 2) !== "??"
+    const changes = await worktreeChanges(cwd, commit);
+    const dirty = changes.rows.some(row => row.slice(0, 2) !== "??"
         || !dependencies.some(dep => {
           const portable = dep.split(sep).join("/");
           return row.slice(3) === portable || row.slice(3).startsWith(`${portable}/`);
         }));
     if (dirty) throw new Error("任务工作区含未提交或未跟踪文件；请先提交或移走它们，再运行验收前置命令");
+    const { paths, filters } = changes.unverified;
+    if (paths.length) {
+      throw new Error(`任务工作区里有 ${paths.length} 个文件（${paths.slice(0, 5).join("、")}${paths.length > 5 ? "…" : ""}）`
+        + `要经过项目配置的过滤器（${filters.join("、")}）才能确认改没改，ash 不在验收前置命令之外运行项目程序，`
+        + "所以没法确认工作区就是已提交的那份；请在任务工作区自己运行一次 git status（它按项目配置核对并刷新记录），"
+        + "或提交这些文件，再验收");
+    }
     // 依赖的身份取**安装声明**，不取 4.5 万个文件的字节——口径、检得出什么、漏检什么，全写在
     // accept-gate-deps 的 dependencyDigest 上方。这里一并换掉的是曾经那一整套为了「把依赖拷进
     // 快照之后、它里面的链还解析得通」而存在的闭包机器：落点补齐、中间链收集、规模预算、父子

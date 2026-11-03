@@ -92,6 +92,9 @@ export async function sealedGitEnv(): Promise<{ env: NodeJS.ProcessEnv; empty: s
   return { env: cleanEnv(empty), empty };
 }
 
+/** git 输出的一行路径：只去掉行尾换行，不动路径本身的字节（目录名可以以空格结尾）。 */
+export const outputLine = (stdout: string): string => stdout.replace(/\n$/, "");
+
 /**
  * 为检出 `checkout` 建一份封好的临时 git 目录：对象库借项目那份（alternates，只读），本地配置只有
  * `entries` 再加封口的几项（空钩子目录、fsmonitor 关；`entries` 没给属性文件就指向空文件），系统 /
@@ -104,7 +107,7 @@ export async function sealedGitDir(checkout: string, entries: [string, string][]
 }> {
   const { empty } = await scratch();
   const base = cleanEnv(empty);
-  const ask = async (args: string[]) => (await git(checkout, args)).stdout.trim();
+  const ask = async (args: string[]) => outputLine((await git(checkout, args)).stdout);
   const format = await ask(["rev-parse", "--show-object-format"]) || "sha1";
   const common = await ask(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   const dir = await mkdtemp(join(tmpdir(), "ash-sealed-"));
