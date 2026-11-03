@@ -142,8 +142,8 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   // 门禁基准此刻要对照的目标与它会不会拦下这一按。已验收的任务没有「下一按」，不去读 git。
   const head = frozen || !project ? null : await gateHead(task, project.repoPath);
   // 合并预览档的基准要知道这次快照借哪几个依赖目录（与 acceptGateCheck 同一个入参）。这里只读
-  // 登记（gateDependencies：树与文件系统），**不**读完整源码身份 —— 后者要跑 `git status`，会调起
-  // 项目配的 fsmonitor 之类（第 2 轮审查 F2）；没设门禁、或者不是这一档时一行都不读。
+  // 登记（gateDependencies：树与文件系统），**不**读完整源码身份 —— 后者要比对整个工作区；没设门禁、
+  // 或者不是这一档时一行都不读。
   const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
   let sourceError: string | null = null;
   const borrowed = command && baseline === "merge_preview" && cwd && head

@@ -11,6 +11,7 @@ import { confineOwnPackages } from "./accept-gate-confine.js";
 import { ambientDigest, DEPENDENCY_DIRS, dependencyDigest, dependencyMismatch,
   provideDependency, workspacePackages, type DependencyMode } from "./accept-gate-deps.js";
 import { optionalRead, requiredRead } from "./accept-gate-fs.js";
+import { worktreeChanges } from "./accept-gate-status.js";
 import { dependencySupply, supplyRoots, type DependencySupply } from "./accept-gate-supply.js";
 
 type SourceInput = { path: string; directory: boolean; dependency?: boolean };
@@ -54,7 +55,8 @@ export type GateSource = {
   inputs?: SourceInput[];
 };
 const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
-// 源码身份（ls-tree / status）与快照准备共用 readOnlyGit 的口径：不调 fsmonitor、不刷新索引（见那里）。
+// 源码身份（ls-tree）与快照准备共用 readOnlyGit 的口径：不调 fsmonitor、不刷新索引（见那里）。工作区比对另走
+// 封好的环境（worktreeChanges）。
 const git = async (cwd: string, args: string[]) => (await readOnlyGit(cwd, args)).stdout;
 
 async function nonGitFiles(cwd: string): Promise<string[]> {
@@ -253,8 +255,8 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
     // 的目录被默许;现在它和任何未跟踪文件一样被拒。这是有意的——依赖是产物,产物本来就该在
     // .gitignore 里;放过它等于让门禁在一个谁也没声明过的目录上运行,既不冻结也不登记它的内容。
     // 钉在 test-accept-gate-borrow.ts「依赖根自己就是一条链」的第三种落点上。
-    const dirty = (await git(cwd, ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]))
-      .split("\0").filter(Boolean).some(row => row.slice(0, 2) !== "??"
+    // 不在项目配置下跑 `git status`：它会调起项目的 clean 过滤器（accept-gate-status.ts 顶部）。
+    const dirty = (await worktreeChanges(cwd, commit)).some(row => row.slice(0, 2) !== "??"
         || !dependencies.some(dep => {
           const portable = dep.split(sep).join("/");
           return row.slice(3) === portable || row.slice(3).startsWith(`${portable}/`);

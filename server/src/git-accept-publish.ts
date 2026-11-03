@@ -6,7 +6,7 @@
 // 做法与测试快照同一个思路（accept-gate-preview.ts 的 cloneSealedSnapshot）：
 //  · 一份临时 git 目录，对象库借项目的（alternates，只读），本地配置只有 ash 写的那几项 —— 门禁测的
 //    时候用的检出语义（换行 / 链接 / 路径，进凭据的那份身份核过才用）、空钩子目录、空属性文件、
-//    fsmonitor 关；系统 / 全局配置与属性不读（sealedGitEnv）。没有任何一项能指向程序：过滤器驱动
+//    fsmonitor 关；系统 / 全局配置与属性不读（sealedGitDir）。没有任何一项能指向程序：过滤器驱动
 //    没定义，带 `filter=` 属性的文件就原样写出 —— 测试快照也正是这么写的。
 //  · 属性只取自测过的那棵树（`--attr-source`），不读工作区里可能被改过的 .gitattributes。
 //  · 目标检出当工作区，索引用一份临时的：从目标提交建起，两树 `read-tree -m -u` 只改这次要改的
@@ -14,10 +14,9 @@
 //
 // 这几步全程持有目标检出的 `index.lock`（与 git 自己的约定相同：拿不到就说明有别的 git 在用这个检出，
 // 拒），最后才把临时索引换进去。分支本身由调用方带旧值挪（update-ref 不读属性、不调过滤器）。
-import { copyFile, mkdtemp, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { copyFile, open, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type CheckoutSettings, readOnlyGit, sealedGitEnv } from "./accept-gate-preview.js";
+import { type CheckoutSettings, readOnlyGit, sealedGitDir } from "./accept-gate-preview.js";
 import { execFileText as exec } from "./exec.js";
 
 const MAX_BUFFER = 32 * 1024 * 1024;
@@ -30,31 +29,15 @@ export type SealedCheckout = {
 
 /** 为目标检出 `checkout` 建一份封好的发布环境。`settings` 是门禁测的时候用的检出语义。 */
 async function sealedCheckout(checkout: string, settings: CheckoutSettings): Promise<SealedCheckout & { index: string }> {
-  const { env: base, empty } = await sealedGitEnv();
-  const ask = async (args: string[]) => (await readOnlyGit(checkout, args)).stdout.trim();
-  const format = await ask(["rev-parse", "--show-object-format"]) || "sha1";
-  const common = await ask(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   const filemode = (await readOnlyGit(checkout, ["config", "--type=bool", "core.filemode"]).catch(() => null))?.stdout.trim() || "true";
-  const dir = await mkdtemp(join(tmpdir(), "ash-publish-"));
-  try {
-    const gitDir = join(dir, "git");
-    await exec("git", ["init", "--bare", "-q", "--template=", `--object-format=${format}`, gitDir], { env: base });
-    await mkdir(join(gitDir, "objects", "info"), { recursive: true });
-    await writeFile(join(gitDir, "objects", "info", "alternates"), `${join(common, "objects")}\n`);
-    const entries: [string, string][] = [["core.bare", "false"], ["core.filemode", filemode], ...settings,
-      ["core.hooksPath", empty], ["core.attributesFile", empty], ["core.fsmonitor", "false"]];
-    for (const [key, value] of entries) await exec("git", ["config", "--file", join(gitDir, "config"), key, value], { env: base });
-    const index = join(dir, "index");
-    const env = { ...base, GIT_DIR: gitDir, GIT_WORK_TREE: checkout, GIT_INDEX_FILE: index };
-    return {
-      index,
-      run: async (attrs, args) => (await exec("git", [`--attr-source=${attrs}`, ...args], { env, maxBuffer: MAX_BUFFER })).stdout,
-      dispose: () => rm(dir, { recursive: true, force: true }),
-    };
-  } catch (error) {
-    await rm(dir, { recursive: true, force: true });
-    throw error;
-  }
+  const sealed = await sealedGitDir(checkout, [["core.filemode", filemode], ...settings]);
+  const index = join(sealed.dir, "index");
+  const env = { ...sealed.env, GIT_INDEX_FILE: index };
+  return {
+    index,
+    run: async (attrs, args) => (await exec("git", [`--attr-source=${attrs}`, ...args], { env, maxBuffer: MAX_BUFFER })).stdout,
+    dispose: sealed.dispose,
+  };
 }
 
 export type SealedMove =

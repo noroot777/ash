@@ -26,7 +26,7 @@
 // 这几条都要 git 2.40 以上（`--attr-source`、`check-attr --source`），旧 git 结构化拒绝（`previewFailure`）。
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, rename, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileText } from "./exec.js";
@@ -90,6 +90,40 @@ async function isolatedGitDir(format: string): Promise<{ gitDir: string; empty: 
 export async function sealedGitEnv(): Promise<{ env: NodeJS.ProcessEnv; empty: string }> {
   const { empty } = await scratch();
   return { env: cleanEnv(empty), empty };
+}
+
+/**
+ * 为检出 `checkout` 建一份封好的临时 git 目录：对象库借项目那份（alternates，只读），本地配置只有
+ * `entries` 再加封口的几项（空钩子目录、fsmonitor 关；`entries` 没给属性文件就指向空文件），系统 /
+ * 全局配置不读。返回的 `env` 已指向它、工作区 = `checkout`；索引与 HEAD 由调用方定。项目配置里的
+ * 过滤器、驱动在这里一个都没有定义，属性点名它们也只能按原样读写 —— 想执行也没有程序可执行。
+ * 最终发布（git-accept-publish.ts）与源码身份的工作区比对（accept-gate-status.ts）共用它。
+ */
+export async function sealedGitDir(checkout: string, entries: [string, string][]): Promise<{
+  dir: string; gitDir: string; env: NodeJS.ProcessEnv; dispose(): Promise<void>;
+}> {
+  const { empty } = await scratch();
+  const base = cleanEnv(empty);
+  const ask = async (args: string[]) => (await git(checkout, args)).stdout.trim();
+  const format = await ask(["rev-parse", "--show-object-format"]) || "sha1";
+  const common = await ask(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const dir = await mkdtemp(join(tmpdir(), "ash-sealed-"));
+  const dispose = () => rm(dir, { recursive: true, force: true });
+  try {
+    const gitDir = join(dir, "git");
+    await execFileText("git", ["init", "--bare", "-q", "--template=", `--object-format=${format}`, gitDir], { env: base });
+    await mkdir(join(gitDir, "objects", "info"), { recursive: true });
+    await writeFile(join(gitDir, "objects", "info", "alternates"), `${join(common, "objects")}\n`);
+    const attributes: [string, string][] = entries.some(([key]) => key === "core.attributesFile") ? [] : [["core.attributesFile", empty]];
+    for (const [key, value] of [["core.bare", "false"], ...entries, ...attributes,
+      ["core.hooksPath", empty], ["core.fsmonitor", "false"]] as [string, string][]) {
+      await execFileText("git", ["config", "--file", join(gitDir, "config"), key, value], { env: base });
+    }
+    return { dir, gitDir, env: { ...base, GIT_DIR: gitDir, GIT_WORK_TREE: checkout }, dispose };
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
 }
 
 function cleanEnv(empty: string): NodeJS.ProcessEnv {
@@ -277,7 +311,7 @@ export async function previewMerge(repo: string, targetCommit: string, head: str
 }
 
 /** 项目有效配置里定义了程序的那些名字（`<section>.<name>.<key>` 里的 name）。 */
-async function definedPrograms(repo: string, pattern: string): Promise<Set<string>> {
+export async function definedPrograms(repo: string, pattern: string): Promise<Set<string>> {
   const listed = (await git(repo, ["config", "--name-only", "--get-regexp", pattern]).catch(() => null))?.stdout ?? "";
   const names = new Set<string>();
   for (const key of listed.split("\n")) {
@@ -288,7 +322,7 @@ async function definedPrograms(repo: string, pattern: string): Promise<Set<strin
 }
 
 /** `check-attr -z` 的输出：path NUL attr NUL value NUL …，按 path 收成 value。 */
-async function attributeValues(repo: string, attr: string, paths: string[], source?: string): Promise<string[]> {
+export async function attributeValues(repo: string, attr: string, paths: string[], source?: string): Promise<string[]> {
   if (!paths.length) return [];
   const args = [...(source ? [`--source=${source}`] : []), "-z", "--stdin", attr];
   const fields = (await git(repo, ["check-attr", ...args], paths.join("\0") + "\0")).stdout.split("\0");
