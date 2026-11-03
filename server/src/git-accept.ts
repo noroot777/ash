@@ -26,7 +26,7 @@ import { execFileText as exec } from "./exec.js";
 import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 import { addTemporaryWorktree, removeTemporaryWorktree, type TemporaryWorktree } from "./git-accept-temp.js";
 import type { GatePhysical } from "./accept-gate-physical.js";
-import { movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
+import { alreadyLandedUntested, guardedDirtyFiles, movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
 
 function sameFilesystemPath(a: string, b: string): boolean {
   try { return realpathSync(resolve(a)) === realpathSync(resolve(b)); }
@@ -265,20 +265,23 @@ export async function mergeTaskBranch(
 // 目标分支得有个检出的地方才跑得了 merge。三种情况按危险程度排：目标就在项目目录上
 // 且干净 → 就地跑；目标在别的 worktree 上 → 一律不碰（那是别人正在用的工作区）；
 // 哪儿都没检出 → 开个临时 worktree，跑完就拆。
+/** 目标检出的「工作区干净」：普通落地照 `git status`（受保护落地换成不调程序的那一版，guardedDirtyFiles）。 */
+const statusDirtyFiles = async (repo: string) => porcelainFiles((await exec("git", ["-C", repo, "status", "--porcelain"])).stdout);
+
 async function inTargetCheckout(
   repo: string,
   sourceBranch: string,
   targetBranch: string,
   fn: (cwd: string) => Promise<TaskMergeResult>,
   beforeTemp?: () => TaskMergeResult | null | Promise<TaskMergeResult | null>,
+  dirty = statusDirtyFiles,
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
   const checkout = await targetCheckout(repo, targetBranch);
   const { path: targetPath, atRepo: targetAtRepo } = checkout;
 
   if (targetAtRepo) {
-    const { stdout } = await exec("git", ["-C", repo, "status", "--porcelain"]);
-    const dirtyFiles = porcelainFiles(stdout);
+    const dirtyFiles = await dirty(repo);
     if (dirtyFiles.length > 0) {
       return {
         ok: false,
@@ -405,6 +408,7 @@ async function mergeWithoutCommit(
   targetBranch: string,
   sourceRef = sourceBranch,
   stage = (cwd: string) => squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, false, sourceRef),
+  dirty = statusDirtyFiles,
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
   const checkout = await targetCheckout(repo, targetBranch);
@@ -432,8 +436,7 @@ async function mergeWithoutCommit(
       targetPath: repo,
     };
   }
-  const { stdout } = await exec("git", ["-C", repo, "status", "--porcelain"]);
-  const dirtyFiles = porcelainFiles(stdout);
+  const dirtyFiles = await dirty(repo);
   if (dirtyFiles.length > 0) {
     return {
       ok: false,
@@ -535,6 +538,8 @@ async function mergeTaskBranchLocked(
       return { ok: false, reason: "merge_failed", sourceBranch, targetBranch,
         message: `目标分支 ${targetBranch} 已经包含任务分支，但它现在那棵树不是验收前置命令测过的那一棵，没有把这次记成验收通过。重新验收会按现在的目标分支重新跑门禁。` };
     }
+    const untested = guard ? await alreadyLandedUntested(repo, guard, { sourceBranch, targetBranch }) : null;
+    if (untested) return untested;
     return { ok: true, sourceBranch, targetBranch, method: "already_merged" };
   }
 
@@ -594,12 +599,12 @@ async function mergeTaskBranchLocked(
 async function landTested(repo: string, guard: LandingGuard, strategy: AcceptStrategy, noCommit: boolean,
   sourceBranch: string, targetBranch: string, sourceRef: string): Promise<TaskMergeResult> {
   const names = { sourceBranch, targetBranch };
-  if (noCommit) return mergeWithoutCommit(repo, sourceBranch, targetBranch, sourceRef, (cwd) => stageTestedTree(cwd, guard, names));
+  if (noCommit) return mergeWithoutCommit(repo, sourceBranch, targetBranch, sourceRef, (cwd) => stageTestedTree(cwd, guard, names), guardedDirtyFiles);
   const method = strategy === "squash" ? "squash" : await isAncestor(repo, targetBranch, sourceRef) ? "fast_forward" : "merge_commit";
   const message = method === "squash" ? squashCommitMessage(sourceBranch) : `Merge branch '${sourceBranch}' into ${targetBranch}`;
   const result = await testedResultCommit(repo, method, guard, sourceRef, message, names);
   if (typeof result !== "string") return result;
   return inTargetCheckout(repo, sourceBranch, targetBranch,
     (cwd) => publishInCheckout(cwd, method, guard, result, names),
-    () => publishRefOnly(repo, method, guard, result, names));
+    () => publishRefOnly(repo, method, guard, result, names), guardedDirtyFiles);
 }

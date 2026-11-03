@@ -419,7 +419,8 @@ try {
   }
 
   // ⑱ 最终合并 · 落地的同时另一个终端往目标分支提交（第 4 轮复审 F1）：这一按不合，那个外部提交原样
-  // 留着 —— 不许再拿合并之前的位置去复位整个检出。外部提交用一个 git 包装在「检出里快进」那一刻插进来。
+  // 留着 —— 不许再拿合并之前的位置去复位整个检出；ash 自己写进检出的文件退回去。外部提交用一个 git
+  // 包装在「带旧值挪分支」那一刻插进来（commit-tree + update-ref：发布期间检出的 index.lock 在 ash 手里）。
   {
     const sample = await fixture("landing-race", { baseline: "merge_preview" });
     const tested = git(sample.repo, "rev-parse", "main");
@@ -430,9 +431,10 @@ try {
     mkdirSync(bin);
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     const marker = join(root, "race-fired");
-    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" merge --ff-only "*) fire=1 ;; esac\nif [ ! -e '${marker}' ] && [ -n "$fire" ]; then\n`
-      + `  touch '${marker}'; echo external > '${sample.repo}/external.txt'\n`
-      + `  '${realGit}' -C '${sample.repo}' add external.txt && '${realGit}' -C '${sample.repo}' commit -qm external || exit 1\nfi\n`
+    const real = `'${realGit}' -C '${sample.repo}'`;
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ash accept"*) fire=1 ;; esac\nif [ ! -e '${marker}' ] && [ -n "$fire" ]; then\n`
+      + `  touch '${marker}'; c=$(${real} commit-tree main^{tree} -p main -m external) || exit 1\n`
+      + `  ${real} update-ref refs/heads/main "$c" || exit 1\nfi\n`
       + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
@@ -442,11 +444,12 @@ try {
         { sourceCommit: source, expectedTree: "tree" in merged ? merged.tree : "", expectedTarget: tested,
           expectedPhysical: await h.testedPhysical(sample.repo, tested, "tree" in merged ? merged.tree : "") });
     } finally { process.env.PATH = path; }
-    assert.equal(existsSync(marker), true, "外部提交确实插在了快进之前");
+    assert.equal(existsSync(marker), true, "外部提交确实插在了挪分支之前");
     assert.equal(landed.ok, false);
-    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了/);
+    if (!landed.ok) assert.match(landed.message, /在门禁测过之后动了[^]*已经退回/);
     assert.equal(git(sample.repo, "log", "-1", "--format=%s", "main"), "external", "外部提交原样留在目标分支上");
-    assert.equal(readFileSync(join(sample.repo, "external.txt"), "utf8"), "external\n");
+    assert.equal(existsSync(join(sample.repo, "use-b.js")), false, "ash 写进检出的文件退回去了");
+    assert.equal(git(sample.repo, "status", "--porcelain"), "");
   }
 
   // ⑲ 合并预览 · 目标分支改了随仓库提交的依赖目录（第 1 轮审查 F2）：快照里依赖目录借的是任务工作区那份

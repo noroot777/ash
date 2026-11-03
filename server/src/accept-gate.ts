@@ -309,7 +309,8 @@ export async function startPendingAcceptGate(taskId: string): Promise<AcceptGate
           + "在那个检出里把它们重新检出一遍（比如 `git rm --cached -r -q . && git reset --hard`，会丢掉未提交的改动，先确认工作区干净），"
           + "或者在项目设置 → 验收里换成「要求已含目标分支」或「分支快照」。");
       }
-      physical = encodePhysical(await snapshotPhysical(plan.repoPath, plan.targetBranch, plan.baseline.previewBase, tree, snapshotCwd, plan.source.dependencies));
+      physical = encodePhysical(await snapshotPhysical(plan.repoPath, plan.targetBranch, plan.baseline.previewBase, tree, snapshotCwd,
+        plan.source.dependencies, await snapshotMaterialization(snapshotCwd)));
     }
     // **起跑前**核一眼这条命令点名要跑的东西在不在这份快照里。「测试压根没启动」这个结论
     // 整副面孔（不要改代码 / 出路是合分支或跳过）都压在这份事实上（第 2 轮审查 F1），所以

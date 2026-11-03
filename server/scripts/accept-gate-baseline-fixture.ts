@@ -32,7 +32,7 @@ export async function baselineHarness(prefix: string) {
   const { acceptGateState } = await import("../src/accept-gate-state.js");
   const { mountProjectRoutes } = await import("../src/project-routes.js");
   const { bus } = await import("../src/bus.js");
-  const { previewMerge } = await import("../src/accept-gate-preview.js");
+  const { checkoutSettings, materializationIdentity, previewMerge } = await import("../src/accept-gate-preview.js");
   const { mergeTaskBranch } = await import("../src/git-accept.js");
   const { decodePhysical, snapshotPhysical } = await import("../src/accept-gate-physical.js");
   await ensureSchema();
@@ -92,7 +92,7 @@ export async function baselineHarness(prefix: string) {
     const commit = git(repo, "commit-tree", tree, "-m", "tested");
     const dir = join(root, `tested-${commit.slice(0, 12)}`);
     git(repo, "worktree", "add", "-q", "--detach", dir, commit);
-    try { return await snapshotPhysical(repo, "main", base, tree, dir, []); }
+    try { return await snapshotPhysical(repo, "main", base, tree, dir, [], materializationIdentity(await checkoutSettings(repo))); }
     finally { git(repo, "worktree", "remove", "--force", dir); }
   }
   async function settled(taskId: string, count = 1) {

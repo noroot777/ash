@@ -2,7 +2,7 @@
 // 样本与驱动和 test-accept-gate-baseline.ts 共用（accept-gate-baseline-fixture.ts）。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { releaseTmpDb } from "./tmp-db.js";
 
@@ -11,13 +11,14 @@ const { root, git, passesOn, acceptTask, acceptGateState, previewMerge, mergeTas
   commitOnMain, fixture, settled, testedPhysical } = await baselineHarness("ash-gate-landing-");
 
 /** 一次带全部落地约束的最终合并（像验收那样：被测的目标提交、预演出来的树、测过的物理内容）。 */
-const landGuarded = async (sample: { repo: string; cwd: string; taskId: string }) => {
+const landGuarded = async (sample: { repo: string; cwd: string; taskId: string }, afterTest?: () => void) => {
   const tested = git(sample.repo, "rev-parse", "main");
   const source = git(sample.cwd, "rev-parse", "HEAD");
   const merged = await previewMerge(sample.repo, tested, source);
   assert.ok("tree" in merged, JSON.stringify(merged));
   const expectedTree = "tree" in merged ? merged.tree : "";
   const expectedPhysical = await testedPhysical(sample.repo, tested, expectedTree);
+  afterTest?.();
   return { tested, expectedTree, landed: await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe",
     { sourceCommit: source, expectedTree, expectedTarget: tested, expectedPhysical }) };
 };
@@ -208,16 +209,17 @@ try {
     rmSync(join(sample.repo, ".git", "hooks", "post-merge"));
   }
 
-  // ㊱ 最终合并 · 快进刚落下、另一个终端紧跟着往目标分支提交（发布的后置条件，第 5 轮复审 F1）：
-  // 不报成功，那个外部提交原样留着。外部提交由一个 git 包装在真正的快进之后插进来。
+  // ㊱ 最终合并 · 分支刚挪到测过的结果、另一个终端紧跟着往目标分支提交（发布的后置条件，第 5 轮复审 F1）：
+  // 不报成功，那个外部提交原样留着。外部提交由一个 git 包装在真正的 update-ref 之后插进来。
   {
     const sample = await fixture("landing-after-race", { baseline: "merge_preview" });
     const bin = join(root, "after-race-bin");
     mkdirSync(bin);
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
-    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" merge --ff-only "*) '${realGit}' "$@"; rc=$?\n`
-      + `  echo external > '${sample.repo}/external.txt'; '${realGit}' -C '${sample.repo}' add external.txt\n`
-      + `  '${realGit}' -C '${sample.repo}' commit -qm external; exit $rc ;; esac\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+    const real = `'${realGit}' -C '${sample.repo}'`;
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" update-ref -m ash accept"*) '${realGit}' "$@"; rc=$?\n`
+      + `  c=$(${real} commit-tree main^{tree} -p main -m external) && ${real} update-ref refs/heads/main "$c"; exit $rc ;; esac\n`
+      + `exec '${realGit}' "$@"\n`, { mode: 0o755 });
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
     let outcome: Awaited<ReturnType<typeof landGuarded>>;
@@ -226,6 +228,59 @@ try {
     if (!outcome.landed.ok) assert.match(outcome.landed.message, /不在刚发布的测过的结果/);
     assert.equal(git(sample.repo, "log", "-1", "--format=%s", "main"), "external", "外部提交原样留着");
     assert.equal(git(sample.repo, "rev-parse", "main~1^{tree}"), outcome.expectedTree);
+  }
+
+  // ㊳ 最终合并 · 测过之后目标检出里一个这次合并不改的脚本被改成 0654（拥有者没了执行权限，第 5 轮复审
+  // 第 2 轮 F1）：只记「有没有执行位」时两者是同一个值；现在按各自的读 / 执行位记，发布前就拒。
+  {
+    const sample = await fixture("landing-owner-exec", { baseline: "merge_preview" });
+    writeFileSync(join(sample.repo, "check.sh"), "#!/bin/sh\necho ok\n", { mode: 0o755 });
+    git(sample.repo, "add", "check.sh");
+    git(sample.repo, "commit", "-qm", "main adds an executable check");
+    const before = git(sample.repo, "rev-parse", "main");
+    const { landed } = await landGuarded(sample, () => chmodSync(join(sample.repo, "check.sh"), 0o654));
+    assert.equal(landed.ok, false, JSON.stringify(landed));
+    if (!landed.ok) assert.match(landed.message, /这次合并不会重写的文件/);
+    assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
+  }
+
+  // ㊴ 最终合并 · 目标分支早已包含任务分支（「已经合入」那个成功出口，第 5 轮复审第 2 轮 F1）：树对上了
+  // 还要核检出里的字节与权限；没变照常算已合入，变了就不算验收通过。
+  {
+    const sample = await fixture("landing-already-merged", { baseline: "merge_preview" });
+    git(sample.repo, "merge", "--no-edit", "-q", git(sample.cwd, "rev-parse", "HEAD"));
+    const tested = git(sample.repo, "rev-parse", "main");
+    const expectedTree = git(sample.repo, "rev-parse", "main^{tree}");
+    const options = { sourceCommit: git(sample.cwd, "rev-parse", "HEAD"), expectedTree, expectedTarget: tested,
+      expectedPhysical: await testedPhysical(sample.repo, tested, expectedTree) };
+    const same = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe", options);
+    assert.equal(same.ok && same.method, "already_merged", JSON.stringify(same));
+    chmodSync(join(sample.repo, "use-b.js"), 0o600);
+    const drifted = await mergeTaskBranch(sample.repo, sample.taskId, "main", "safe", options);
+    assert.equal(drifted.ok, false, JSON.stringify(drifted));
+    if (!drifted.ok) assert.match(drifted.message, /已经包含任务分支、树也是测过的那棵，但/);
+  }
+
+  // ㊵ 最终合并 · 门禁核对之后另一个窗口给仓库配了过滤器（树里早有 `*.txt filter=late`，那时没定义驱动，
+  // 第 5 轮复审第 2 轮 F2）：最终发布在封好的环境里写文件，仓库此刻的配置一项都不读 —— 那段程序一次都
+  // 没跑，写出来的就是测过的那份字节。
+  {
+    const sample = await fixture("landing-late-filter", { baseline: "merge_preview" });
+    writeFileSync(join(sample.repo, ".gitattributes"), "*.txt filter=late\n");
+    git(sample.repo, "add", ".gitattributes");
+    git(sample.repo, "commit", "-qm", "main tags txt files with a filter that has no driver yet");
+    writeFileSync(join(sample.cwd, "added.txt"), "added\n");
+    git(sample.cwd, "add", "added.txt");
+    git(sample.cwd, "commit", "-qm", "task adds a txt file");
+    const marker = join(root, "late-filter-ran");
+    const { landed, expectedTree } = await landGuarded(sample, () => {
+      for (const side of ["smudge", "clean"]) git(sample.repo, "config", `filter.late.${side}`, `touch '${marker}'; cat`);
+    });
+    assert.equal(landed.ok, true, JSON.stringify(landed));
+    assert.equal(existsSync(marker), false, "核对之后才配的过滤器一次都没跑");
+    assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), expectedTree);
+    assert.equal(readFileSync(join(sample.repo, "added.txt"), "utf8"), "added\n");
+    git(sample.repo, "config", "--remove-section", "filter.late");
   }
 
   // ㊲ 合并预览 · 门禁跑着的时候，目标检出里一个这次合并不改的文件被存成另一种换行再暂存（第 5 轮
@@ -254,7 +309,7 @@ try {
 
   console.log(JSON.stringify({ symlinksOff: true, worktreeConfig: true, targetMoved: true, parentLink: true, sparse: true,
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
-    hookSkipped: true, afterRace: true, driftDuringGate: true }));
+    hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

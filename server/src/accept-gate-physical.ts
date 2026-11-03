@@ -22,9 +22,10 @@ import { registeredCheckout } from "./git-worktree-state.js";
 /**
  * 凭据里那份被测物理内容。`preserved` = 合并不重写的那些文件的摘要（目标没检出在被测提交上时为 null），
  * 复用与落地前比它；`full` = 整棵树的摘要，落地之后比它；`skip` = 快照里借自任务工作区的依赖目录
- * （故意与目标检出不同，不比）。
+ * （故意与目标检出不同，不比）；`materialization` = 快照实际用的检出语义身份（snapshotMaterialization），
+ * 最终发布照它复现检出语义前先核目标检出现在还是这一份。
  */
-export type GatePhysical = { skip: string[]; preserved: string | null; full: string };
+export type GatePhysical = { skip: string[]; preserved: string | null; full: string; materialization: string };
 
 const digest = (path: string) => new Promise<string>((resolve, reject) => {
   const hash = createHash("sha256");
@@ -33,7 +34,12 @@ const digest = (path: string) => new Promise<string>((resolve, reject) => {
 
 const zList = async (repo: string, args: string[]) => (await readOnlyGit(repo, args)).stdout.split("\0").filter(Boolean);
 
-/** 一个路径在磁盘上是什么：不存在、链接（目标）、目录、文件（可执行位 + 字节）。两边相等才算同一份。 */
+/**
+ * 一个路径在磁盘上是什么：不存在、链接（目标）、目录、文件（读与执行权限 + 字节）。两边相等才算同一份。
+ * 权限按拥有者 / 组 / 其他各自的读、执行位记（第 5 轮复审第 2 轮 F1：只记「有没有执行位」时 0755 与
+ * 0654 是同一个值，快照里 `./check.sh` 跑得起来，合进去之后拥有者却没有执行权限）；写位不记，它不改变
+ * 读到什么、跑不跑得起来。
+ */
 async function entryOf(path: string): Promise<string> {
   const stat = await lstat(path).catch(() => null);
   if (!stat) return "missing";
@@ -41,7 +47,7 @@ async function entryOf(path: string): Promise<string> {
   // 子模块（gitlink）只是个目录，里面装什么不归这棵树管。
   if (stat.isDirectory()) return "dir";
   if (!stat.isFile()) return "other";
-  return `file:${(stat.mode & 0o111) ? "x" : "-"}:${stat.size}:${await digest(path)}`;
+  return `file:${(stat.mode & 0o555).toString(8)}:${stat.size}:${await digest(path)}`;
 }
 
 const skipOf = (borrowed: readonly string[]) => borrowed.map(dep => dep.split(sep).join("/")).sort();
@@ -87,11 +93,11 @@ export async function checkoutDivergence(repo: string, targetBranch: string, bas
 
 /** 起跑时记下快照里被测的那份（存进凭据的 preview_physical）。 */
 export async function snapshotPhysical(repo: string, targetBranch: string, base: string, tree: string,
-  snapshot: string, borrowed: readonly string[]): Promise<GatePhysical> {
+  snapshot: string, borrowed: readonly string[], materialization: string): Promise<GatePhysical> {
   const skip = skipOf(borrowed);
   const preserved = await checkoutAt(repo, targetBranch, base)
     ? await digestOf(snapshot, await preservedPaths(repo, base, tree, skip), skip) : null;
-  return { skip, preserved, full: await digestOf(snapshot, await treePaths(repo, tree, skip), skip) };
+  return { skip, preserved, full: await digestOf(snapshot, await treePaths(repo, tree, skip), skip), materialization };
 }
 
 /** 目标检出**现在**那份「合并不重写的文件」的摘要，与凭据的 `preserved` 同一口径；没检出在 `base` 上为 null。 */
