@@ -468,6 +468,22 @@ export function TaskDetail({
                         notify(reason instanceof Error ? reason.message : String(reason));
                       }
                     }}
+                    // 只有单个智能体的任务、且此刻没在跑才能删：服务端同样会挡，这里不出按钮是
+                    // 为了不让人点了才知道（团队调度台、duet 还没接「下一轮重建上下文」）。
+                    onDeleteMessage={task.mode === "single" && !handedOut && task.status !== "running" && task.status !== "queued"
+                      ? async (sources) => {
+                        try {
+                          for (const sessionId of new Set(sources.map((source) => source.sessionId))) {
+                            await api.deleteConversationSegments(sessionId, sources.filter((source) => source.sessionId === sessionId)
+                              .map(({ sessionId: _, ...target }) => target));
+                          }
+                          notify("已删除。下一轮会换一条新的会话，只带着删除后留下的记录继续");
+                        } catch (reason) {
+                          notify(reason instanceof Error ? reason.message : String(reason));
+                        }
+                        await conversation.refetch();
+                      }
+                      : undefined}
                     reviewRetry={freeReviewRetryIdentity(free.state?.reviews)}
                     reviews={free.state?.reviews}
                     onOpenReviewPanel={() => openTab("review")}

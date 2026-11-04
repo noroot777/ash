@@ -91,6 +91,14 @@ export const sessions = sqliteTable("sessions", {
    */
   upstreamStalledSince: text("upstream_stalled_since"),
   /**
+   * 用户删过这条会话里的消息、而 CLI 那条会话还记着原话（ISO 时刻；null = 没有）。
+   *
+   * 非空时下一轮**不** `--resume` 旧 CLI 会话：同一行上开一条新的，把删除之后的 .md 重建成
+   * 历史喂进去（orchestrator.ts 的 reseed、history-reseed.ts）。新会话成功跑完一整轮才清回
+   * null（single-run.ts 回合收尾），失败/被停就留着、下一轮再重建。写入端 conversation-redact.ts。
+   */
+  contextRebuildAt: text("context_rebuild_at"),
+  /**
    * 这条会话**开过几个回合**（本列出现之后的那些；之前的历史在 `turns_base` 里）。
    *
    * 完整性的**第一手证据不是它**，而是 `session_turns` 里那一行：回合一开始就落行、收尾

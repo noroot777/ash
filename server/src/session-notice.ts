@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 import { finished } from "node:stream/promises";
 import type { AgentEvent, AgentType, SessionRole } from "@ash/shared";
 import { bus } from "./bus.js";
+import { withRunFileLock } from "./run-file-lock.js";
 import { sessionTranscriptPath, writeTurn } from "./transcript.js";
 import { now } from "./util.js";
 
@@ -92,10 +93,13 @@ export async function announceSessionNote(args: {
   const at = now();
   const transcriptPath = sessionTranscriptPath(args.taskId, args.sessionId);
   mkdirSync(dirname(transcriptPath), { recursive: true });
-  const out = createWriteStream(transcriptPath, { flags: "a" });
-  writeTurn(out, { t: "system", agent: args.agentType, text: args.text }, at);
-  out.end();
-  await finished(out);
+  // 与删除消息的改写排同一把锁（run-file-lock.ts）。
+  await withRunFileLock([transcriptPath], async () => {
+    const out = createWriteStream(transcriptPath, { flags: "a" });
+    writeTurn(out, { t: "system", agent: args.agentType, text: args.text }, at);
+    out.end();
+    await finished(out);
+  });
   if (args.publish !== false) {
     bus.publish({
       type: "agent.event",

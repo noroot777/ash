@@ -7,6 +7,7 @@ import { MessageAttachments } from "./Attachments.tsx";
 import { MonitorWakeInput } from "./MonitorWakeInput.tsx";
 import { monitorWakeInput } from "./monitorWakeModel.ts";
 import type { ConversationItem } from "./conversationModel.ts";
+import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 import {
   SYSTEM_NOTICE_MODES,
@@ -21,7 +22,7 @@ import {
 } from "./systemNoticeModel.ts";
 
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
-type EventLike = Pick<EventItem, "text" | "at" | "tone" | "verify">;
+type EventLike = Pick<EventItem, "text" | "at" | "tone" | "verify" | "sources">;
 
 const IMPORTANCE: Record<SystemEventKind, number> = {
   neutral: 0,
@@ -126,6 +127,7 @@ export function SystemEventDigest({
               <li key={item.id} className={`is-${systemEventKind(item.text, item.tone)}`}>
                 <span>{cleanEventText(item)}</span>
                 {item.at && <time>{formatInstant(item.at)}</time>}
+                <DeleteMessageButton item={item} />
               </li>
             ))}
           </ol>
@@ -150,6 +152,7 @@ export function SystemEventNote({ item, mode = "footnote", action }: { item: Eve
         {recovery ? "原目录已不存在，系统已重建空工作区；会话与用户消息均已保留。" : cleanEventText(item)}
       </p>
       {item.at && <time>{formatInstant(item.at)}</time>}
+      <DeleteMessageButton item={item} />
       {/* 按钮是这条旁注上的最后一件东西：正文、时间都是「发生了什么」，只有它是「你要做
           什么」，插在正文和时间之间会把一行事实截成两段。摘要版同理（在 summary 之后）。 */}
       {action && <span className="system-event-action">{action}</span>}
@@ -172,6 +175,7 @@ export function SystemBoundary({
       <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary notice-mode-aligned is-${kind}`}>
         <span className="system-event-avatar" aria-hidden="true">{eventIcon(kind)}</span>
         <p>{previewNoticeText(item.text)}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+        <DeleteMessageButton item={item} />
         <span className="system-boundary-rule" aria-hidden="true" />
       </div>
     );
@@ -180,6 +184,7 @@ export function SystemBoundary({
     <div className={`${surface === "team" ? "team-feed-event" : "task-event-line"} system-boundary${item.tone === "error" ? " is-error" : ""}`}>
       <span className="system-boundary-rule" aria-hidden="true" />
       <p>{previewNoticeText(item.text)}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+      <DeleteMessageButton item={item} />
       <span className="system-boundary-rule" aria-hidden="true" />
     </div>
   );
@@ -219,6 +224,7 @@ export function SystemAuthoredMessage({ item, related = [], surface = "task", mo
           <div className="system-action-line">
             <p><b>{title}</b>{summary && <span> · {summary}</span>}</p>
             {item.at && <time>{formatInstant(item.at)}</time>}
+            <DeleteMessageButton item={item} />
           </div>
           <div className="system-action-meta">
             {conflict && projectId && taskId && <button type="button" onClick={() => openGitWorkbench({ projectId, taskId, view: "branches" })}>打开 Git 工作台处理</button>}

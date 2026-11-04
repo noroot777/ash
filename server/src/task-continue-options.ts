@@ -98,6 +98,11 @@ export type ContinueTaskOptions = {
    * 字:真人追问、别的系统输入都可能提到同一个路径(验收门禁交接,accept-gate-handoff.ts)。
    */
   deliveryKey?: string;
+  /**
+   * 这一轮输入承载的问答答复（任务问答历史里那几条记录的 id）。原样落进会话里那条用户回合，
+   * 删除消息时按它清问答历史、问答卡按它认记录（shared/questions.ts `pairAnswerMessages`）。
+   */
+  answerIds?: readonly string[];
   pendingMessageIds?: readonly string[];
   /**
    * 这几条输入的**越线记号是必要凭据**,不是尽力而为的记账。
