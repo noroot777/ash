@@ -309,12 +309,13 @@ try {
   for (const commit of [true, false]) {
     const sample = await fixture(`landing-partial-write-${commit ? "commit" : "stage"}`, { baseline: "merge_preview" });
     mkdirSync(join(sample.repo, "locked"));
-    for (const file of ["a.txt", "locked/z.txt"]) writeFileSync(join(sample.repo, file), "old\n");
-    git(sample.repo, "add", "a.txt", "locked/z.txt");
-    git(sample.repo, "commit", "-qm", "main adds two files");
+    for (const file of ["a.txt", "locked/z.txt", "locked/gone.txt"]) writeFileSync(join(sample.repo, file), "old\n");
+    git(sample.repo, "add", "a.txt", "locked");
+    git(sample.repo, "commit", "-qm", "main adds three files");
     git(sample.cwd, "merge", "-q", "--no-edit", "main");
     for (const file of ["a.txt", "locked/z.txt"]) writeFileSync(join(sample.cwd, file), "new\n");
-    git(sample.cwd, "commit", "-qam", "task rewrites both");
+    git(sample.cwd, "rm", "-q", "locked/gone.txt");
+    git(sample.cwd, "commit", "-qam", "task rewrites two and deletes one");
     const before = git(sample.repo, "rev-parse", "main");
     // 核对（含目录能不能写）和两树合并的演练（`read-tree -n`）都过了之后、真正写文件的那一刻才把目录锁上。
     const bin = wrapGit(`partial-write-${commit}`, " read-tree -m -u ", `chmod 555 '${join(sample.repo, "locked")}'`);
@@ -328,22 +329,26 @@ try {
     assert.match(message, /写进 [^]*时失败了[^]*没有自动放回、也没有删任何东西/);
     assert.equal(readFileSync(join(sample.repo, "a.txt"), "utf8"), "new\n", "已经写下的留着");
     assert.equal(readFileSync(join(sample.repo, "locked/z.txt"), "utf8"), "old\n");
+    // 该删的 `locked/gone.txt` 也没删成：测过的那棵里没有它，它成了未跟踪文件，checkout 取不到，回执要说手动删
+    // （第 6 轮审查第 6 轮 N1）。照回执一步步做，检出就干净了。
     if (commit) {
-      assert.match(message, /已经挪到测过的结果[^]*还没写成的 1 个显示成改动：locked\/z\.txt[^]*git checkout HEAD --/);
+      assert.match(message, /已经挪到测过的结果[^]*索引已经是测过的那棵。还有 2 个不是测过的那份 —— 还是合并之前那份的：locked\/gone\.txt、locked\/z\.txt。/);
+      assert.match(message, /用 `git checkout HEAD -- <路径>` 取回 locked\/z\.txt，核对后手动删掉 locked\/gone\.txt（测过的那棵里没有它们）/);
       assert.notEqual(git(sample.repo, "rev-parse", "main"), before, "分支已经挪了");
       assert.equal(git(sample.repo, "rev-parse", "main^{tree}"), outcome.expectedTree, "挪到的是测过的那棵");
       assert.equal(git(sample.repo, "write-tree"), outcome.expectedTree, "索引换成了测过的那棵");
-      assert.equal(git(sample.repo, "status", "--porcelain"), "M locked/z.txt", "git status 显示的正是没写成的那个");
+      assert.equal(git(sample.repo, "status", "--porcelain"), "M locked/z.txt\n?? locked/gone.txt", "git status 显示的正是没写成的那些");
       git(sample.repo, "checkout", "HEAD", "--", "locked/z.txt");
-      assert.equal(git(sample.repo, "status", "--porcelain"), "", "照回执补齐之后就干净了");
+      rmSync(join(sample.repo, "locked/gone.txt"));
     } else {
-      assert.match(message, /目标分支和索引都没动。已经写成测过那份的有 2 个：a\.txt、use-b\.js/);
+      assert.match(message, /目标分支和索引都没动。动过的有 2 个 —— 已经是测过那份的：a\.txt、use-b\.js。/);
+      assert.match(message, /用 `git checkout HEAD -- <路径>` 取回 a\.txt，核对后手动删掉 use-b\.js（合并之前没有它们）/);
       assert.equal(git(sample.repo, "rev-parse", "main"), before, "目标分支没动");
-      assert.equal(git(sample.repo, "status", "--porcelain"), "M a.txt\n?? use-b.js", "索引没动，git status 显示的正是已经写下的那些");
+      assert.equal(git(sample.repo, "status", "--porcelain"), "M a.txt\n?? use-b.js", "索引没动，git status 显示的正是动过的那些");
       git(sample.repo, "checkout", "HEAD", "--", "a.txt");
       rmSync(join(sample.repo, "use-b.js"));
-      assert.equal(git(sample.repo, "status", "--porcelain"), "", "照回执撤掉之后就干净了");
     }
+    assert.equal(git(sample.repo, "status", "--porcelain"), "", "照回执收拾之后就干净了");
   }
 
   // ㊿ 最终合并 · 核过「工作区干净」之后，另一个终端在这次合并要新增的路径上放了一个未跟踪文件：两树合并
@@ -362,6 +367,65 @@ try {
     assert.equal(readFileSync(theirs, "utf8"), "their draft\n", "别人的文件原样留着");
     rmSync(theirs);
     assert.equal(git(sample.repo, "status", "--porcelain"), "");
+  }
+
+  // (52) 最终合并 · 写的那一刻一个目录成了 0600（进不去），里面的文件读不了：核不出来，不能当成「不在了」
+  // 或「还是原样」，要单独列出来（第 6 轮审查第 6 轮 F1 同类）。照回执收拾就干净了。
+  {
+    const sample = await fixture("landing-unreadable", { baseline: "merge_preview" });
+    mkdirSync(join(sample.repo, "locked"));
+    for (const file of ["locked/z.txt", "locked/gone.txt"]) writeFileSync(join(sample.repo, file), "old\n");
+    git(sample.repo, "add", "locked");
+    git(sample.repo, "commit", "-qm", "main adds two files");
+    git(sample.cwd, "merge", "-q", "--no-edit", "main");
+    writeFileSync(join(sample.cwd, "locked/z.txt"), "new\n");
+    git(sample.cwd, "rm", "-q", "locked/gone.txt");
+    git(sample.cwd, "commit", "-qam", "task rewrites one and deletes one");
+    const bin = wrapGit("unreadable", " read-tree -m -u ", `chmod 600 '${join(sample.repo, "locked")}'`);
+    let outcome: Awaited<ReturnType<typeof landGuarded>>;
+    try {
+      outcome = await withPath(bin, arm => landGuarded(sample, arm));
+    } finally { chmodSync(join(sample.repo, "locked"), 0o755); }
+    assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
+    const message = outcome.landed.ok ? "" : outcome.landed.message;
+    assert.match(message, /读不了、核不出来的：locked\/gone\.txt、locked\/z\.txt/);
+    assert.doesNotMatch(message, /都已经是测过的那份/);
+    const fetch = /取回 ([^，。（]+)/.exec(message)?.[1]?.split("、") ?? [];
+    const drop = /手动删掉 ([^（]+)（/.exec(message)?.[1]?.split("、") ?? [];
+    git(sample.repo, "checkout", "HEAD", "--", ...fetch);
+    for (const path of drop) rmSync(join(sample.repo, path), { force: true });
+    assert.equal(git(sample.repo, "status", "--porcelain"), "", "照回执收拾之后就干净了");
+  }
+
+  // (51) 最终合并 · 写文件的那条 git 被文件大小上限截断（第 6 轮审查第 6 轮 F1：文件只写了一半，回执却说
+  // 「一个都还没写」）。每个路径对照合并之前和测过的两份分开报，写了一半的单独列出来；照回执收拾就干净了。
+  for (const commit of [true, false]) {
+    const sample = await fixture(`landing-truncated-${commit ? "commit" : "stage"}`, { baseline: "merge_preview" });
+    const large = join(sample.repo, "large.txt");
+    writeFileSync(large, "original\n");
+    git(sample.repo, "add", "large.txt");
+    git(sample.repo, "commit", "-qm", "main adds a file");
+    git(sample.cwd, "merge", "-q", "--no-edit", "main");
+    const tested = "tested content\n".repeat(4000);
+    writeFileSync(join(sample.cwd, "large.txt"), tested);
+    git(sample.cwd, "commit", "-qam", "task grows the file");
+    const bin = wrapGit(`truncated-${commit}`, " read-tree -m -u ", "ulimit -f 1");
+    const outcome = await withPath(bin, arm => landGuarded(sample, arm, { commit }));
+    assert.ok(existsSync(join(bin, "fired")), "写文件那一下真的受了大小上限");
+    assert.equal(outcome.landed.ok, false, JSON.stringify(outcome.landed));
+    const message = outcome.landed.ok ? "" : outcome.landed.message;
+    const now = readFileSync(large, "utf8");
+    assert.ok(now !== "original\n" && now !== tested, `真的写了一半（${now.length} 字节）`);
+    assert.match(message, /写了一半（既不是原来那份也不是测过那份）的：large\.txt/);
+    assert.doesNotMatch(message, /都还是合并之前那份|都已经是测过的那份/);
+    const fetch = /取回 ([^，。（]+)/.exec(message)?.[1]?.split("、") ?? [];
+    const drop = /手动删掉 ([^（]+)（/.exec(message)?.[1]?.split("、") ?? [];
+    assert.ok(fetch.includes("large.txt"), message);
+    // 照回执一条条做：取回的 checkout、该删的删掉。
+    git(sample.repo, "checkout", "HEAD", "--", ...fetch);
+    for (const path of drop) rmSync(join(sample.repo, path));
+    assert.equal(readFileSync(large, "utf8"), commit ? tested : "original\n", "照回执取回的是该有的那份");
+    assert.equal(git(sample.repo, "status", "--porcelain"), "", "照回执收拾之后就干净了");
   }
 
   // ㊼ 合并预览 · 目标分支把一个普通目录 `src` 换成指向 `alternate` 的链（第 6 轮审查第 3 轮 F1）：任务
@@ -549,7 +613,7 @@ try {
     physicalDrift: true, backslashDep: true, guardedNoCommit: true, refOnly: true,
     hookSkipped: true, afterRace: true, driftDuringGate: true, ownerExec: true, alreadyMerged: true, lateFilter: true, partialWrite: true,
     dirAccess: true, indexRace: true, cleanupAfterPublish: true, dirWrite: true, splitIndex: true,
-    depParent: true, aclExec: true, refusedUntouched: true, dryRun: true }));
+    depParent: true, aclExec: true, refusedUntouched: true, dryRun: true, truncated: true, unreadable: true }));
 } finally {
   await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });

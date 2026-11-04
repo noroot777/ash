@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkoutMatches, type GatePhysical } from "./accept-gate-physical.js";
 import { checkoutSettings, materializationIdentity, readOnlyGit } from "./accept-gate-preview.js";
-import { type SealedMove, sealedMove } from "./git-accept-publish.js";
+import { type PathState, type SealedMove, sealedMove } from "./git-accept-publish.js";
 import { execFileText as exec } from "./exec.js";
 import { gitError } from "./git.js";
 import { registeredCheckout } from "./git-worktree-state.js";
@@ -122,26 +122,46 @@ async function sealedLanding(cwd: string, guard: LandingGuard, names: Names, to:
 
 const listed = (paths: readonly string[]) => paths.slice(0, 10).join("、") + (paths.length > 10 ? ` 等 ${paths.length} 个` : "");
 
-/** 写文件写到一半失败：ash 不放回、不删任何东西（git-accept-publish.ts 文件头），照实说检出现在是什么样、怎么收拾。 */
+const STATE_NAMES: [PathState["state"], string][] = [["target", "已经是测过那份"], ["partial", "写了一半（既不是原来那份也不是测过那份）"],
+  ["unknown", "读不了、核不出来"], ["original", "还是合并之前那份"]];
+/** 按现在的样子分组列出（git-accept-publish.ts 的 classify）。 */
+const described = (paths: readonly PathState[]) => STATE_NAMES
+  .map(([state, name]) => [name, paths.filter(path => path.state === state).map(path => path.path)] as const)
+  .filter(([, group]) => group.length).map(([name, group]) => `${name}的：${listed(group)}`).join("；");
+
+/**
+ * 怎么收拾成某一棵（`toTested` = 测过的那棵 / 否则合并之前那棵）：那棵里有的用 checkout 取，没有的是该删的，
+ * 未跟踪了 checkout 取不到，手动删（第 6 轮审查第 6 轮 N1）。
+ */
+function repair(paths: readonly PathState[], toTested: boolean): string {
+  const fetch = paths.filter(path => toTested ? path.inTo : path.inFrom).map(path => path.path);
+  const drop = paths.filter(path => !(toTested ? path.inTo : path.inFrom)).map(path => path.path);
+  return [fetch.length ? `用 \`git checkout HEAD -- <路径>\` 取回 ${listed(fetch)}` : "",
+    drop.length ? `核对后手动删掉 ${listed(drop)}（${toTested ? "测过的那棵里没有它们" : "合并之前没有它们"}）` : ""].filter(Boolean).join("，");
+}
+
+/**
+ * 写文件写到一半失败：ash 不放回、不删任何东西（git-accept-publish.ts 文件头），照实说每个路径现在是什么样、
+ * 怎么收拾。只有核实了都还是原样才说「没写」；核不出来就把可能动过的全部交出来。
+ */
 function halfWritten(moved: Extract<SealedMove, { stage: "partial" }>, cwd: string, names: Names, to: string, base: string): string {
   const head = `把测过的改动写进 ${cwd} 时失败了（${moved.message}），ash 没有自动放回、也没有删任何东西。`;
-  const pending = moved.pending ?? [];
+  const unknownAll = (goal: string) => `没能核出每个文件现在是什么样${moved.changed?.length ? `，这次要改的这些都可能被动过：${listed(moved.changed)}` : ""}。`
+    + `请在那个检出里核对（\`git status\`），${goal}，再重新验收。`;
   if (moved.published) {
     const branch = `目标分支 ${names.targetBranch} 已经挪到测过的结果 ${to.slice(0, 12)}。`;
-    if (!moved.indexInstalled) {
-      return head + branch + `索引还停在合并之前（${base.slice(0, 12)}），在那个检出里先跑 \`git reset -q\`（只改索引），`
-        + (pending.length ? `再用 \`git checkout HEAD -- <路径>\` 补齐还没写成的：${listed(pending)}。` : "再核对文件。") + "然后重新验收。";
-    }
-    if (!moved.written) return head + branch + "没能核出哪些文件已经写成，请在那个检出里看 `git status`，用 `git checkout HEAD -- <路径>` 补齐，再重新验收。";
-    if (!pending.length) return head + branch + "核下来文件其实都已经是测过的那份、索引也换上了，重新验收即可。";
-    return head + branch + `索引已经是测过的那棵，\`git status\` 会把还没写成的 ${pending.length} 个显示成改动：${listed(pending)}。`
-      + "在那个检出里跑 `git checkout HEAD -- <这些路径>` 就补齐了（不碰别的文件），再重新验收。";
+    const reset = moved.indexInstalled ? "" : `索引还停在合并之前（${base.slice(0, 12)}），先在那个检出里跑 \`git reset -q\`（只改索引）。`;
+    if (!moved.paths) return head + branch + reset + unknownAll("测过的那棵里有的用 `git checkout HEAD -- <路径>` 补齐、没有的手动删掉");
+    const todo = moved.paths.filter(path => path.state !== "target");
+    if (!todo.length) return head + branch + reset + "核下来这次要改的文件其实都已经是测过的那份，重新验收即可。";
+    return head + branch + reset + (moved.indexInstalled ? "索引已经是测过的那棵。" : "")
+      + `还有 ${todo.length} 个不是测过的那份 —— ${described(todo)}。在那个检出里${repair(todo, true)}，再重新验收。`;
   }
   const kept = "目标分支和索引都没动。";
-  if (!moved.written) return head + kept + `没能核出哪些文件已经写下，请在那个检出里看 \`git status\`，用 \`git checkout HEAD -- <路径>\` 撤掉、这次新增的文件直接删掉，再重新验收。`;
-  if (!moved.written.length) return head + kept + "核下来一个文件都还没写，重新验收即可。";
-  return head + kept + `已经写成测过那份的有 ${moved.written.length} 个：${listed(moved.written)}，\`git status\` 会把它们显示成未暂存的改动。`
-    + "要撤掉就在那个检出里用 `git checkout HEAD -- <路径>`（这次新增的文件直接删掉），再重新验收。";
+  if (!moved.paths) return head + kept + unknownAll("合并之前就有的用 `git checkout HEAD -- <路径>` 取回、合并新增的直接删掉");
+  const touched = moved.paths.filter(path => path.state !== "original");
+  if (!touched.length) return head + kept + `核下来这次要改的 ${moved.paths.length} 个文件都还是合并之前那份，重新验收即可。`;
+  return head + kept + `动过的有 ${touched.length} 个 —— ${described(touched)}。要撤掉就在那个检出里${repair(touched, false)}，再重新验收。`;
 }
 
 /**

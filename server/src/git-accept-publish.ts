@@ -23,9 +23,12 @@
 //    在这里就出来，什么都没动；
 //  · 再挪分支（带旧值，被别人挪过就拒）—— 最常见的失败「测过之后目标分支动了」在写任何文件之前出来；
 //  · 最后才写文件、换索引。写到一半失败（权限、磁盘满）就停在那儿如实交付：分支已挪的，换上测过那棵
-//    的索引，`git status` 显示的正是还没写成的那些，`git checkout HEAD -- <路径>` 补齐；不提交那一档
-//    分支和索引都没动，交付已经写下的那些。ash 不删检出里的任何东西。
-import { copyFile, lstat, mkdtemp, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+//    的索引，`git status` 显示的正是还没写成的那些（测过那棵里有的 `git checkout HEAD -- <路径>` 补齐，
+//    没有的是该删没删掉的，手动删）；不提交那一档
+//    分支和索引都没动，交付动过的那些。每个路径按「还是原样 / 已是测过那份 / 两样都不是 / 核不出来」
+//    分开报（classify），只有核实了都还是原样才说没写。ash 不删检出里的任何东西。
+import { constants } from "node:fs";
+import { access, copyFile, lstat, mkdtemp, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { type CheckoutSettings, readOnlyGit, sealedGitEnv } from "./accept-gate-preview.js";
@@ -75,34 +78,53 @@ const zList = (text: string) => text.split("\0").filter(Boolean);
 const failure = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 /**
- * 建一份 `tree` 的索引（`file`），按封好的语义逐个核过工作区字节；返回 `changed` 里还没成那份的路径：
- * 该在的字节不对（或没了），该删的还在。
+ * 写到一半失败之后，这次要改的一个路径现在是什么样（第 6 轮审查第 6 轮 F1：只看「等不等于测过那份」，
+ * 把写了一半截断的文件当成了「还没写」）。`original` = 还是合并之前那份（该删的也还在 / 本来就没有的
+ * 也还没有），`target` = 已经是测过那份，`partial` = 两样都不是（写了一半、或被别人改了），`unknown` =
+ * 读不了、核不出来。`inFrom` / `inTo` = 合并之前 / 测过的那棵树里有没有它。
  */
-async function pendingAgainst(sealed: Awaited<ReturnType<typeof sealedCheckout>>, attrs: string, tree: string,
-  file: string, changed: readonly string[]): Promise<string[]> {
-  await sealed.run(attrs, ["read-tree", tree], file);
-  await sealed.run(attrs, ["update-index", "-q", "--refresh"], file).catch(() => "");
-  const tracked = new Set(zList(await sealed.run(attrs, ["ls-files", "-z"], file)));
-  const dirty = new Set(zList(await sealed.run(attrs, ["diff-files", "--name-only", "-z"], file)));
-  const pending: string[] = [];
+export type PathState = { path: string; state: "original" | "target" | "partial" | "unknown"; inFrom: boolean; inTo: boolean };
+
+/** 按封好的语义把 `changed` 逐个对照合并之前（`from`）和测过的（`to`）两份；测过那份的索引留在 `toIndex`。 */
+async function classify(sealed: Awaited<ReturnType<typeof sealedCheckout>>, attrs: string, from: string, to: string,
+  changed: readonly string[], toIndex: string): Promise<PathState[]> {
+  const side = async (tree: string, file: string) => {
+    await sealed.run(attrs, ["read-tree", tree], file);
+    await sealed.run(attrs, ["update-index", "-q", "--refresh"], file).catch(() => "");
+    return { tracked: new Set(zList(await sealed.run(attrs, ["ls-files", "-z"], file))),
+      dirty: new Set(zList(await sealed.run(attrs, ["diff-files", "--name-only", "-z"], file))) };
+  };
+  const before = await side(from, join(sealed.dir, "index.before"));
+  const after = await side(to, toIndex);
+  const states: PathState[] = [];
   for (const path of changed) {
-    if (tracked.has(path) ? dirty.has(path) : await lstat(join(sealed.checkout, path)).then(() => true, () => false)) pending.push(path);
+    const full = join(sealed.checkout, path);
+    // 在不在要说得准：只有「不存在」才算不存在，别的错误（没权限、读失败）都是核不出来。
+    const present = await lstat(full).then(
+      async stats => stats.isSymbolicLink() || await access(full, constants.R_OK).then(() => true, () => false) ? "yes" : "unknown",
+      (error: NodeJS.ErrnoException) => error.code === "ENOENT" ? "no" : "unknown");
+    const inFrom = before.tracked.has(path);
+    const inTo = after.tracked.has(path);
+    const matches = (side: typeof before, tracked: boolean) => tracked ? present === "yes" && !side.dirty.has(path) : present === "no";
+    const state = present === "unknown" ? "unknown" : matches(after, inTo) ? "target" : matches(before, inFrom) ? "original" : "partial";
+    states.push({ path, state, inFrom, inTo });
   }
-  return pending;
+  return states;
 }
 
 /**
  * 失败回执。`blocked` / `publish` = 分支和检出里的文件都没动。`partial` = 写文件写到一半失败：
- * `published` 说分支挪没挪；`pending` 是还没写成测过那份的路径，`written` 是已经写成的（null = 核不出来）；
- * `indexInstalled` = 已换上测过那棵的索引（只有分支挪了才换）。`index` = 文件都写成了，只有索引没换上。
+ * `published` 说分支挪没挪；`paths` 是这次要改的每个路径现在的样子（null = 核不出来，`changed` 是全部
+ * 可能被动过的路径，也是 null 就连这个都列不出）；`indexInstalled` = 已换上测过那棵的索引（只有分支挪了
+ * 才换）。`index` = 文件都写成了，只有索引没换上。
  */
 export type SealedMove =
   | { ok: true }
   | { ok: false; stage: "locked"; message: string }
   | { ok: false; stage: "blocked"; message: string }
   | { ok: false; stage: "publish"; message: string }
-  | { ok: false; stage: "partial"; message: string; published: boolean; pending: string[] | null;
-    written: string[] | null; indexInstalled: boolean }
+  | { ok: false; stage: "partial"; message: string; published: boolean; paths: PathState[] | null;
+    changed: string[] | null; indexInstalled: boolean }
   | { ok: false; stage: "index"; message: string; published: boolean };
 
 /**
@@ -187,14 +209,13 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
     published: boolean): Promise<SealedMove> {
     const changed = await env.run(attrs, ["diff-tree", "-r", "-z", "--name-only", from, to]).then(zList, () => null);
     const target = join(env.dir, "index.tested");
-    const pending = changed && await pendingAgainst(env, attrs, to, target, changed).catch(() => null);
-    const written = changed && pending ? changed.filter(path => !pending.includes(path)) : null;
+    const paths = changed && await classify(env, attrs, from, to, changed, target).catch(() => null);
     let indexInstalled = false;
-    if (published && pending) {
+    if (published && paths) {
       indexInstalled = await copyFile(target, lock).then(() => rename(lock, index)).then(() => true, () => false);
       installed = indexInstalled;
     }
-    return { ok: false, stage: "partial", message, published, pending: pending ?? changed, written, indexInstalled };
+    return { ok: false, stage: "partial", message, published, paths, changed, indexInstalled };
   }
 
   const lockStuck = !installed && await rm(lock, { force: true }).then(() => false, () => true);
