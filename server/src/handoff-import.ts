@@ -471,7 +471,9 @@ async function importValidated(
     model: msg.model,
     reasoningEffort: msg.reasoningEffort,
     sessionRole: msg.sessionRole,
-    mode: msg.mode === "queued" ? "queued" as const : "timed" as const,
+    // after 绝不能落成 timed:它的 sendAt 只是入队时刻,当成钟点就是一落地立刻发出。
+    mode: msg.mode === "queued" ? "queued" as const : msg.mode === "after" ? "after" as const : "timed" as const,
+    afterTaskId: msg.mode === "after" && typeof msg.afterTaskId === "string" ? msg.afterTaskId : null,
     sendAt: msg.sendAt,
     status: "pending" as const,
     createdAt: msg.createdAt,

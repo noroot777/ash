@@ -16,14 +16,17 @@ export interface Schedule {
 }
 
 // 一条「待发送消息」：不是重跑任务（那是 Schedule），而是等条件到了用
-// continueTask 把这句话送进任务**原来那个会话**。两种到期条件，也就是 mode：
+// continueTask 把这句话送进任务**原来那个会话**。三种到期条件，也就是 mode：
 //   • timed  = 定时发送：等 `sendAt` 这个时刻到了再发（任务此刻在忙就继续等）
 //   • queued = 排队追问：不看时间，任务一空下来就发（运行中还想补一句时用）
+//   • after  = 等另一个任务（`afterTaskId`）完成再发。等的是**这一句话**，不是这个任务：
+//              任务本身照常可跑可聊，发出去之后这层依赖就消失。前置任务失败/取消/被删
+//              不算完成，消息留在托盘里等用户决定（直接发或取消），不悄悄发也不悄悄丢。
 // 两者共用同一张表、同一条投递链路和同一个取消入口——区别只有「什么时候算到期」
 // 这一条，其余（附件、@指派的执行器/模型/思考强度、托盘展示、取消）完全一样。
 // 一个任务可以同时挂多条，按 `sendAt` 升序依次投递，每次只发一条。
 export type ScheduledMessageStatus = "pending" | "sent" | "canceled";
-export type ScheduledMessageMode = "timed" | "queued";
+export type ScheduledMessageMode = "timed" | "queued" | "after";
 // 这条消息该投进哪个会话。null = 任务自己那个会话（用户手写的回复都是这种）；
 // "reviewer" = 自由工作流的审查会话——`/answer` 抢不到回合时把 reviewer 答复排进
 // 同一张表，投递时由 pending-messages 带着这个角色回到 reviewer 会话。
@@ -48,8 +51,10 @@ export interface ScheduledMessage {
   // 写的句子），能做的只有取消这一次唤醒，或者直接去把那个哨兵停掉。
   origin: string | null;
   mode: ScheduledMessageMode;
-  // timed：ISO 到期发送时间。queued：入队时刻（排队消息不看时间，只用它排先后）。
+  // timed：ISO 到期发送时间。queued/after：入队时刻（不看时间，只用它排先后）。
   sendAt: string;
+  // mode=after 时等的那个任务；其余 mode 为 null。
+  afterTaskId: string | null;
   status: ScheduledMessageStatus;
   createdAt: string;
   sentAt: string | null;

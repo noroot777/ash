@@ -62,8 +62,11 @@ export interface HandoffMessagePayload {
   model: string | null;
   reasoningEffort: string | null;
   sessionRole: string | null;
-  mode: string; // timed | queued
+  mode: string; // timed | queued | after
   sendAt: string;
+  // mode=after 等的那个任务。任务 id 跨机原样保留,前置任务一起接力过来时照常生效;
+  // 没过来就在托盘里显示「前置任务不存在」等用户决定。老源机不带这个字段。
+  afterTaskId?: string | null;
   createdAt: string;
 }
 

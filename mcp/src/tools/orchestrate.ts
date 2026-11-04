@@ -356,7 +356,7 @@ server.registerTool(
   "queue_insert",
   {
     title: "插入任务到队列",
-    description: "在指定 position 插入(0 = 队首)。校验:候选 task 必须存在、不在其它 queue、跟 queue 同 group。",
+    description: "在指定 position 插入(0 = 队首)。校验:候选 task 必须存在、未结束(终态会被跳过)、不在其它 queue、跟 queue 同 group。",
     inputSchema: {
       queueId: z.string(),
       taskId: z.string(),
@@ -373,7 +373,7 @@ server.registerTool(
   "create_queue",
   {
     title: "新建队列",
-    description: "用一批已存在的 task id 新建一个 queue,按数组顺序占位置。要求:这批 task 都在同一个 group(或都无 group),且都不在其它 queue 里。",
+    description: "用一批已存在的 task id 新建一个 queue,按数组顺序占位置。要求:这批 task 都未结束(终态会被跳过)、都在同一个 group(或都无 group),且都不在其它 queue 里。",
     inputSchema: { taskIds: z.array(z.string()).min(1) },
   },
   async ({ taskIds }) => {

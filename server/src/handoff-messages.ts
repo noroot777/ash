@@ -7,7 +7,7 @@ export function exportHandoffMessage(message: typeof scheduledMessages.$inferSel
     text: message.text, attachments: message.attachments, agent: message.agent, model: message.model,
     reasoningEffort: message.reasoningEffort, sessionRole: message.sessionRole,
     origin: message.origin, reviewRun: message.reviewRun, reviewRound: message.reviewRound,
-    mode: message.mode, sendAt: message.sendAt, createdAt: message.createdAt,
+    mode: message.mode, sendAt: message.sendAt, createdAt: message.createdAt, afterTaskId: message.afterTaskId,
   };
 }
 

@@ -52,17 +52,27 @@ export type DeliveryTaskView = {
    */
   monitorSource?: MonitorSourceState;
 };
-export type DeliveryMessageView = { mode: string; sendAt: string; execution?: boolean; origin?: string | null };
+export type DeliveryMessageView = {
+  mode: string;
+  sendAt: string;
+  execution?: boolean;
+  origin?: string | null;
+  /** mode=after:前置任务完成了没有。由调用方经 pending-after.ts 查好贴上,纯函数不碰库。 */
+  afterDone?: boolean;
+};
 export type DeliveryVerdict =
   | { action: "deliver" }
   | { action: "wait" }
   | { action: "cancel"; reason: string };
 
 // 「这条消息到点了没」的单点判据:定时消息看钟点,排队消息压根不看(它要的就是
-// 「一空闲就发」)。抽出来是因为结算那边也要问同一句话(hasDeliverablePendingMessages),
+// 「一空闲就发」),after 消息看前置任务完成了没有(sendAt 对它只是入队时刻,绝不能
+// 落进钟点那一支 —— 那样它一入队就「到点」了)。抽出来是因为结算那边也要问同一句话(hasDeliverablePendingMessages),
 // 各写一份迟早漂移——真漂了的后果是一条定在明天的消息把预约审查挡一整天。
 export function isDueForDelivery(message: DeliveryMessageView, at: Date): boolean {
-  return message.mode === "queued" || new Date(message.sendAt) <= at;
+  if (message.mode === "queued") return true;
+  if (message.mode === "after") return message.afterDone === true;
+  return new Date(message.sendAt) <= at;
 }
 
 // 投递判定的纯函数核心(回归在 test-side-chat.ts / test-scheduled-messages.ts 里直喂字面量)。

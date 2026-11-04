@@ -7,6 +7,7 @@ import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
+import { visibleTaskIds } from "./auth/visibility.js";
 import { continueTask } from "./orchestrator.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { queueBlockers } from "./queues.js";
@@ -25,6 +26,8 @@ export type TaskReplyBody = {
   model?: string | null;
   reasoningEffort?: string | null;
   sendAt?: string;
+  /** 等这个任务完成后再发(mode=after,见 pending-after.ts)。与 sendAt 二选一。 */
+  afterTaskId?: string;
   annotationBatchId?: string;
   annotationRevision?: number;
 };
@@ -64,6 +67,18 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     return c.json({ error: error instanceof Error ? error.message : String(error), started: false }, 409);
   }
 
+  if (b.afterTaskId != null) {
+    if (typeof b.afterTaskId !== "string" || !b.afterTaskId) return c.json({ error: "afterTaskId 无效" }, 400);
+    if (b.sendAt) return c.json({ error: "定时发送和等任务完成后发送只能选一个" }, 400);
+    if (b.afterTaskId === taskId) return c.json({ error: "不能等这个任务自己完成后再发给它" }, 400);
+    // 看不见的任务 = 不存在:否则挨个 id 试就能问出别人的任务在不在、何时完成。
+    const after = (await visibleTaskIds(actorOf(c), [b.afterTaskId])).length
+      ? (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, b.afterTaskId))).at(0)
+      : undefined;
+    if (!after) return c.json({ error: "要等的任务不存在" }, 404);
+    if (after.projectId !== r.projectId) return c.json({ error: "只能等同一项目里的任务" }, 400);
+  }
+
   const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
   const goalCommand = parseCliCommand(b.agent ?? (r.agentType as AgentType) ?? "claude", b.text ?? "");
   const goalExecution = !isTeam && isGoalExecution(goalCommand);
@@ -83,7 +98,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     !isTeam && !checkpointFollowUp && !goalControl &&
     (goalRecovery || r.status === "paused" || r.status === "backlog");
   const queueWhileWaiting = executionReply && (await queueBlockers(taskId)).length > 0;
-  if (b.sendAt || queueWhileRunning || queueWhileWaiting) {
+  if (b.sendAt || b.afterTaskId || queueWhileRunning || queueWhileWaiting) {
     let when = new Date();
     if (b.sendAt) {
       when = new Date(b.sendAt);
@@ -100,11 +115,12 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       model: b.model?.trim() || null,
       reasoningEffort: b.reasoningEffort?.trim() || null,
       ownerUserId: ownerIdOf(actorOf(c)),
-      mode: b.sendAt ? "timed" : "queued",
+      mode: b.sendAt ? "timed" : b.afterTaskId ? "after" : "queued",
+      afterTaskId: b.afterTaskId ?? null,
       // 排队等轮次时暂存的回复 = 执行型:投递它就是任务的执行回合,整队守卫与分组
       // 暂停都要挡,失败重投也不丢意图(schema 的 execution 注释)。普通运行中追问
-      // 与定时提醒不是——它们落地是续聊/到点提醒,照旧旁路。
-      execution: goalRecovery || (queueWhileWaiting && !b.sendAt),
+      // 与定时/等前置任务的提醒不是——它们落地是续聊/到点提醒,照旧旁路。
+      execution: goalRecovery || (queueWhileWaiting && !b.sendAt && !b.afterTaskId),
       sendAt: when,
     });
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
