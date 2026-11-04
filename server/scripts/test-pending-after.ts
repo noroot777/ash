@@ -1,7 +1,8 @@
 // 「等某任务完成后发送」(mode=after)与「已结束任务不能入队」的回归。
 //   ① 纯判定:afterGateOf / isDueForDelivery / deliveryVerdict / finishedMembers
 //   ② 落库:/reply 带 afterTaskId 的校验与落行、withAfterGates 批量贴判定、
-//      hasDeliverablePendingMessages 不把没等到前置任务的消息算成「该发」、send-now 改成排队
+//      hasDeliverablePendingMessages 不把没等到前置任务的消息算成「该发」、send-now 改成排队、
+//      前置任务的终态钩子(flushPendingAfterTask)确实把等它的消息扫一遍
 //   ③ 队列写入口:insert / create 拒绝已结束的任务
 // 全程不投递,不会拉起真 agent:send-now 那一下会触发一次扫描,所以先把任务归档,让扫描
 // 判「取消」而不是续跑;队列那一组的队头是 running,推进不会再拉起任何成员。
@@ -20,9 +21,9 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 const { releaseTmpDb } = await import("./tmp-db.js");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, scheduledMessages, queueItems } = await import("../src/db/schema.js");
-const { afterGateOf, withAfterGates } = await import("../src/pending-after.js");
+const { afterGateOf, flushPendingAfterTask, withAfterGates } = await import("../src/pending-after.js");
 const { deliveryVerdict, isDueForDelivery } = await import("../src/pending-verdict.js");
-const { hasDeliverablePendingMessages } = await import("../src/pending-messages.js");
+const { enqueueMessage, hasDeliverablePendingMessages } = await import("../src/pending-messages.js");
 const { finishedMembers, mountQueueRoutes } = await import("../src/queues.js");
 const { replyToTask } = await import("../src/task-reply.js");
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
@@ -84,6 +85,15 @@ try {
   api.post("/tasks/:id/reply", (c) => replyToTask(c, c.req.param("id")));
   mountTaskRunRoutes(api);
   mountQueueRoutes(api);
+  // 投递扫描是后台跑的:轮询到这一行离开 pending(或超时)为止,返回最后看到的状态。
+  const settled = async (messageId: string) => {
+    let status = "pending";
+    for (let i = 0; i < 40 && status === "pending"; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      status = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, messageId))).at(0)!.status;
+    }
+    return status;
+  };
   const post = async (path: string, body: unknown) => {
     const res = await api.request(path, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
@@ -128,7 +138,17 @@ try {
   assert.equal(after.mode, "queued");
   assert.equal(after.afterTaskId, null);
   assert.equal((await post(`/scheduled-messages/${message.id}/send-now`, {})).status, 409);
-  await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, message.id));
+  // send-now 触发的那一扫(任务已归档 → 取消)先收完,下面那条才是干净的现场。
+  assert.equal(await settled(message.id), "canceled");
+
+  // 前置任务落终态的钩子会扫「等它的那些消息所在的任务」:me 已归档,扫描判取消 ——
+  // 取消落库就证明这一扫确实因 pre 而发生(不靠 30s tick)。
+  const waiting = await enqueueMessage({ taskId: "me", text: "第二句", mode: "after", afterTaskId: "pre" });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal((await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, waiting.id))).at(0)!.status,
+    "pending", "没有触发就没人扫它");
+  await flushPendingAfterTask("pre");
+  assert.equal(await settled(waiting.id), "canceled", "前置任务的终态钩子要把等它的消息所在任务扫一遍");
 
   // ── ③ 队列写入口 ──────────────────────────────────────────────────────────
   assert.equal((await post("/queues", { taskIds: ["q-head", "q-done"] })).status, 409, "建队不收已完成的");
