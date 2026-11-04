@@ -47,7 +47,8 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
   const fromMonitor = source === "monitor";
   const exitCode = scheduledMessageExitCode(message);
   const after = message.mode === "after"
-    ? sendAfterState(tasks ? tasks.find((task) => task.id === message.afterTaskId) : { title: "前置任务", status: "running", archived: false })
+    ? sendAfterState(tasks ? tasks.find((task) => task.id === message.afterTaskId) : { title: "前置任务", status: "running", archived: false },
+      message.afterDoneAt)
     : null;
   const when = queued ? "排队中" : after ? after.label : formatInstant(message.sendAt);
   return <div className="scheduled-message-row">

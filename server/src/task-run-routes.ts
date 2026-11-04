@@ -494,7 +494,7 @@ api.post("/scheduled-messages/:mid/send-now", async (c) => {
   if (m.status !== "pending" || m.mode !== "after") {
     return c.json({ error: "只有还在等前置任务的消息能直接发送", status: m.status, mode: m.mode }, 409);
   }
-  const released = await db.update(scheduledMessages).set({ mode: "queued", afterTaskId: null })
+  const released = await db.update(scheduledMessages).set({ mode: "queued", afterTaskId: null, afterDoneAt: null })
     .where(and(
       eq(scheduledMessages.id, mid),
       eq(scheduledMessages.status, "pending"),

@@ -130,6 +130,7 @@ export function pendingMessageRow(input: {
     monitorWake: input.monitorWake ?? null,
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
     afterTaskId: input.mode === "after" ? input.afterTaskId ?? null : null,
+    afterDoneAt: null,
     execution: input.execution ?? false,
     sendAt: (input.sendAt ?? new Date()).toISOString(),
     status: "pending" as const,
@@ -660,7 +661,7 @@ export async function hasDeliverablePendingMessages(taskId: string, at = new Dat
   const rows = await db
     .select({
       mode: scheduledMessages.mode, sendAt: scheduledMessages.sendAt, origin: scheduledMessages.origin,
-      afterTaskId: scheduledMessages.afterTaskId,
+      afterTaskId: scheduledMessages.afterTaskId, afterDoneAt: scheduledMessages.afterDoneAt,
     })
     .from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));

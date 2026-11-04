@@ -483,6 +483,8 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   mode: text("mode").notNull().default("timed"), // timed | queued | after
   // mode=after:等这个任务完成再发(见 shared/src/schedule.ts)。其余 mode 为 null。
   afterTaskId: text("after_task_id"),
+  // mode=after 的前置任务落 done 的那一刻(锁存:之后前置再跑/失败/被删都撤不回,见 pending-after.ts)。
+  afterDoneAt: text("after_done_at"),
   // 执行意图:1 = 这条是任务**排队等轮次时**暂存的回复,投递它 = 开启任务的执行回合
   // —— 整队在跑守卫与分组暂停都挡它,重投也不丢(第 xNb655YqYzcA 链第 5 轮:起跑失败
   // 后的自动重投曾丢掉意图,借终态续聊豁免并行执行/穿透暂停)。0 = 普通消息(运行中

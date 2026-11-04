@@ -237,9 +237,9 @@ async function writeTaskStatus(
   if (status !== "running" && status !== "queued" && status !== "awaiting_review") {
     void import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId));
   }
-  // 别的任务上「等它完成后发送」的消息:完成了就该发;失败/取消了托盘要改口说在等什么。
+  // 别的任务上「等它完成后发送」的消息:完成了就锁存并发;失败/取消了托盘要改口说在等什么。
   if (status === "done" || status === "canceled" || status === "failed") {
-    void import("./pending-after.js").then(({ flushPendingAfterTask }) => flushPendingAfterTask(taskId))
+    void import("./pending-after.js").then(({ flushPendingAfterTask }) => flushPendingAfterTask(taskId, status))
       .catch((err) => console.error(`[ash] flushPendingAfterTask(${taskId}) failed:`, err));
   }
   return true;

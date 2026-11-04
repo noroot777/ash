@@ -9,6 +9,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { continueTask } from "./orchestrator.js";
+import { afterTargetUnsupported } from "./pending-after.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat } from "./queue-seat.js";
@@ -60,23 +61,32 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   const isTeam = r.mode === "team";
   if (!isTeam && r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
   if (b.annotationBatchId) return replyWithAnnotationBatch(c, taskId, b.annotationBatchId, b.annotationRevision ?? 0);
-  try {
-    const command = await taskCliCommand(c, r, b);
-    if (command) return command;
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error), started: false }, 409);
-  }
-
+  // 「稍后发送」的两种方式先校验,再进原生命令旁路:命令处理器见到 sendAt/afterTaskId 就把
+  // 命令留到投递那一刻执行,所以不合法的延期请求必须在它之前拦下,否则命令会当场执行。
   if (b.afterTaskId != null) {
     if (typeof b.afterTaskId !== "string" || !b.afterTaskId) return c.json({ error: "afterTaskId 无效" }, 400);
     if (b.sendAt) return c.json({ error: "定时发送和等任务完成后发送只能选一个" }, 400);
     if (b.afterTaskId === taskId) return c.json({ error: "不能等这个任务自己完成后再发给它" }, 400);
     // 看不见的任务 = 不存在:否则挨个 id 试就能问出别人的任务在不在、何时完成。
     const after = (await visibleTaskIds(actorOf(c), [b.afterTaskId])).length
-      ? (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, b.afterTaskId))).at(0)
+      ? (await db.select({ projectId: tasks.projectId, mode: tasks.mode }).from(tasks).where(eq(tasks.id, b.afterTaskId))).at(0)
       : undefined;
     if (!after) return c.json({ error: "要等的任务不存在" }, 404);
     if (after.projectId !== r.projectId) return c.json({ error: "只能等同一项目里的任务" }, 400);
+    const unsupported = afterTargetUnsupported(after);
+    if (unsupported) return c.json({ error: unsupported }, 400);
+  }
+  if (b.sendAt) {
+    const when = new Date(b.sendAt);
+    if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {
+      return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
+    }
+  }
+  try {
+    const command = await taskCliCommand(c, r, b);
+    if (command) return command;
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : String(error), started: false }, 409);
   }
 
   const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
@@ -99,13 +109,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     (goalRecovery || r.status === "paused" || r.status === "backlog");
   const queueWhileWaiting = executionReply && (await queueBlockers(taskId)).length > 0;
   if (b.sendAt || b.afterTaskId || queueWhileRunning || queueWhileWaiting) {
-    let when = new Date();
-    if (b.sendAt) {
-      when = new Date(b.sendAt);
-      if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {
-        return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
-      }
-    }
+    const when = b.sendAt ? new Date(b.sendAt) : new Date();
     const row = await enqueueMessage({
       taskId,
       text: (b.text ?? "").trim(),

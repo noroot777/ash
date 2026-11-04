@@ -1,8 +1,9 @@
 // 「等某任务完成后发送」(mode=after)与「已结束任务不能入队」的回归。
 //   ① 纯判定:afterGateOf / isDueForDelivery / deliveryVerdict / finishedMembers
-//   ② 落库:/reply 带 afterTaskId 的校验与落行、withAfterGates 批量贴判定、
+//   ② 落库:/reply 带 afterTaskId 的校验与落行(含原生命令不当场执行、团队调度台拒收)、
+//      withAfterGates 批量贴判定并补锁存、完成锁存后前置重跑也撤不回、续聊中的已完成任务不算完成、
 //      hasDeliverablePendingMessages 不把没等到前置任务的消息算成「该发」、send-now 改成排队、
-//      前置任务的终态钩子(flushPendingAfterTask)确实把等它的消息扫一遍
+//      前置任务的终态钩子(flushPendingAfterTask)按事件锁存并把等它的消息扫一遍
 //   ③ 队列写入口:insert / create 拒绝已结束的任务
 // 全程不投递,不会拉起真 agent:send-now 那一下会触发一次扫描,所以先把任务归档,让扫描
 // 判「取消」而不是续跑;队列那一组的队头是 running,推进不会再拉起任何成员。
@@ -31,20 +32,25 @@ await ensureSchema();
 
 try {
   // ── ① 纯判定 ──────────────────────────────────────────────────────────────
-  const facts = (status: string, extra: Partial<Parameters<typeof afterGateOf>[0] & object> = {}) =>
-    ({ id: "p", title: "前置", status, followUpFrom: null, archived: false, endedAt: null, ...extra });
-  assert.equal(afterGateOf(facts("done", { endedAt: "2026-11-04T00:00:00.000Z" })).afterDone, true);
-  assert.equal(afterGateOf(facts("done", { endedAt: "2026-11-04T00:00:00.000Z" })).afterEndedAt, "2026-11-04T00:00:00.000Z");
-  assert.equal(afterGateOf(facts("running", { followUpFrom: "done" })).afterDone, true, "已完成任务的续聊回合仍算完成");
-  assert.equal(afterGateOf(facts("running", { followUpFrom: "failed" })).afterDone, false, "失败任务的续聊不算完成");
+  const facts = (status: string, extra: Partial<NonNullable<Parameters<typeof afterGateOf>[1]>> = {}) =>
+    ({ id: "p", title: "前置", mode: "single", status, archived: false, endedAt: null, ...extra });
+  assert.equal(afterGateOf(null, facts("done", { endedAt: "2026-11-04T00:00:00.000Z" })).afterDone, true);
+  assert.equal(afterGateOf(null, facts("done", { endedAt: "2026-11-04T00:00:00.000Z" })).afterEndedAt, "2026-11-04T00:00:00.000Z");
   for (const status of ["backlog", "running", "queued", "paused", "awaiting_review", "failed", "canceled"]) {
-    const gate = afterGateOf(facts(status));
+    const gate = afterGateOf(null, facts(status));
     assert.equal(gate.afterDone, false, `${status} 不算完成`);
     assert.ok(gate.afterWaitReason, `${status} 要说清在等什么`);
   }
-  assert.match(afterGateOf(facts("canceled")).afterWaitReason!, /重跑完成后才会发/);
-  assert.match(afterGateOf(facts("paused", { archived: true })).afterWaitReason!, /已归档/);
-  assert.match(afterGateOf(null).afterWaitReason!, /已删除/);
+  assert.match(afterGateOf(null, facts("canceled")).afterWaitReason!, /重跑完成后才会发/);
+  assert.match(afterGateOf(null, facts("paused", { archived: true })).afterWaitReason!, /已归档/);
+  assert.match(afterGateOf(null, null).afterWaitReason!, /已删除/);
+  assert.match(afterGateOf(null, facts("idle", { mode: "team" })).afterWaitReason!, /团队调度台/, "调度台收工落 idle,不会完成");
+  // 锁存优先于此刻的状态:等到过就是等到了,前置任务被删/重跑/失败都不撤回。
+  for (const task of [null, facts("running"), facts("failed")]) {
+    const gate = afterGateOf("2026-11-04T09:00:00.000Z", task);
+    assert.equal(gate.afterDone, true);
+    assert.equal(gate.afterEndedAt, "2026-11-04T09:00:00.000Z");
+  }
 
   const at = new Date("2026-11-04T12:00:00.000Z");
   const past = "2026-11-04T11:00:00.000Z";
@@ -78,6 +84,7 @@ try {
     ({ id, projectId, title: id, status, mode: "single", createdAt: ts, updatedAt: ts });
   await db.insert(tasks).values([
     task("me", "done"), task("pre", "running"), task("other", "backlog", "pa-q"),
+    { ...task("lead", "idle"), mode: "team" }, { ...task("fu", "running"), followUpFrom: "done" }, task("pre2", "running"),
     task("q-head", "running"), task("q-done", "done"), task("q-canceled", "canceled"), task("q-fresh", "backlog"),
   ] as never);
 
@@ -106,6 +113,16 @@ try {
   assert.equal((await post("/tasks/me/reply", { text: "x", afterTaskId: "other" })).status, 400, "跨项目");
   assert.equal((await post("/tasks/me/reply", { text: "x", afterTaskId: "pre", sendAt: "2099-01-01T00:00:00.000Z" })).status,
     400, "定时与等任务二选一");
+  assert.equal((await post("/tasks/me/reply", { text: "x", afterTaskId: "lead" })).status, 400, "团队调度台等不到完成,拒收");
+  assert.equal((await post("/tasks/me/reply", { text: "x", sendAt: "2000-01-01T00:00:00.000Z" })).status, 400, "定时须是将来");
+  // 原生命令选了「等任务完成」:不当场执行,落成待发送消息;不合法的延期请求在命令之前就拦下。
+  assert.equal((await post("/tasks/me/reply", { text: "/goal", afterTaskId: "me" })).status, 400, "命令也先过延期校验");
+  const command = await post("/tasks/me/reply", { text: "/goal", afterTaskId: "pre" });
+  assert.equal(command.status, 202, `原生命令不能当场执行:${JSON.stringify(command.body)}`);
+  assert.equal(command.body.command, undefined);
+  assert.equal((command.body.message as { mode: string }).mode, "after");
+  await db.update(scheduledMessages).set({ status: "canceled" })
+    .where(eq(scheduledMessages.id, (command.body.message as { id: string }).id));
 
   // 本任务是 done(空闲)也要落成待发送消息,而不是立刻续聊 —— 等的是前置任务。
   const queued = await post("/tasks/me/reply", { text: "等 pre 跑完再看", afterTaskId: "pre" });
@@ -128,6 +145,21 @@ try {
   assert.equal(ready!.afterDone, true);
   assert.equal(ready!.afterEndedAt, "2026-11-04T10:00:00.000Z");
   assert.equal(await hasDeliverablePendingMessages("me"), true, "前置完成 = 到期");
+  assert.equal((await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, message.id))).at(0)!.afterDoneAt,
+    "2026-11-04T10:00:00.000Z", "读到 done 就补锁存");
+  // 本任务还忙着、前置随后又被重跑(以至失败):已经等到的完成不能被撤回。
+  await db.update(tasks).set({ status: "running", endedAt: null }).where(eq(tasks.id, "pre"));
+  const latched = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, message.id))).at(0)!;
+  assert.equal((await withAfterGates([latched]))[0]!.afterDone, true, "前置重跑不撤回已等到的完成");
+  await db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, "pre"));
+  assert.equal(await hasDeliverablePendingMessages("me"), true, "前置重跑后失败也不撤回");
+
+  // 已完成任务正在处理新消息(续聊):候选里显示「运行中」,这里也不算完成,不锁存。
+  const followUp = await enqueueMessage({ taskId: "me", text: "等 fu 这一轮", mode: "after", afterTaskId: "fu" });
+  const [fuGate] = await withAfterGates([followUp]);
+  assert.equal(fuGate!.afterDone, false, "续聊中的已完成任务不算完成");
+  assert.equal((await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, followUp.id))).at(0)!.afterDoneAt, null);
+  await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, followUp.id));
 
   // 「不等了」:改成普通排队消息,依赖清掉;再按一次是 409。
   await db.update(tasks).set({ status: "canceled" }).where(eq(tasks.id, "pre"));
@@ -147,8 +179,15 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal((await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, waiting.id))).at(0)!.status,
     "pending", "没有触发就没人扫它");
-  await flushPendingAfterTask("pre");
+  await flushPendingAfterTask("pre", "canceled");
   assert.equal(await settled(waiting.id), "canceled", "前置任务的终态钩子要把等它的消息所在任务扫一遍");
+
+  // 落 done 的那个事件就锁存 —— 哪怕库里那一行随后已经又变回 running(紧接着被重跑)。
+  const latchOnEvent = await enqueueMessage({ taskId: "me", text: "第三句", mode: "after", afterTaskId: "pre2" });
+  await flushPendingAfterTask("pre2", "done");
+  assert.ok((await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, latchOnEvent.id))).at(0)!.afterDoneAt,
+    "终态钩子落 done 即锁存");
+  await settled(latchOnEvent.id);
 
   // ── ③ 队列写入口 ──────────────────────────────────────────────────────────
   assert.equal((await post("/queues", { taskIds: ["q-head", "q-done"] })).status, 409, "建队不收已完成的");

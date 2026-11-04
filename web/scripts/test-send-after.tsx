@@ -22,10 +22,11 @@ const tasks = [
   t("other-project", { projectId: "p2" }),
   t("archived", { archived: true }),
   t("worker", { parentId: "team", status: "paused" }),
+  t("lead", { mode: "team", status: "idle" as never }),
 ];
 const options = sendAfterOptions({ tasks, groups: [{ id: "g1", name: "前端" } as never], projectId: "p1", taskId: "me" });
 assert.deepEqual(options.map((option) => option.value), ["running", "worker", "failed", "done"],
-  "还会完成的在前、失败的其次、已完成的沉底;别的项目、归档的、自己都不列");
+  "还会完成的在前、失败的其次、已完成的沉底;别的项目、归档的、自己、团队调度台都不列");
 assert.equal(options.find((option) => option.value === "done")?.disabled, true, "已完成的没什么可等");
 assert.equal(options.find((option) => option.value === "failed")?.disabled, false);
 assert.match(options.find((option) => option.value === "failed")!.detail!, /重跑完成后才发/);
@@ -36,10 +37,15 @@ assert.deepEqual(sendAfterState(t("x", { status: "running" })), { label: "等「
 assert.equal(sendAfterState(t("x", { status: "canceled" })).stuck, true);
 assert.equal(sendAfterState(t("x", { status: "paused", archived: true })).stuck, true);
 assert.equal(sendAfterState(t("x", { status: "done" })).stuck, false);
+// 服务端锁存了完成时刻 = 等到了:前置随后被删、重跑、失败都不改口。
+for (const task of [undefined, t("x", { status: "running" }), t("x", { status: "failed" })]) {
+  assert.deepEqual(sendAfterState(task, "2026-11-04T09:00:00Z").stuck, false);
+  assert.match(sendAfterState(task, "2026-11-04T09:00:00Z").label, /已完成/);
+}
 
-const message = (id: string, afterTaskId: string): ScheduledMessage => ({ id, taskId: "me", text: id, attachments: [],
-  agent: null, executorId: null, model: null, reasoningEffort: null, origin: null, sessionRole: null, mode: "after",
-  afterTaskId, status: "pending", createdAt: "2026-11-04T00:00:00Z", sendAt: "2026-11-04T00:00:00Z", sentAt: null });
+const message = (id: string, afterTaskId: string, afterDoneAt: string | null = null): ScheduledMessage => ({ id, taskId: "me",
+  text: id, attachments: [], agent: null, executorId: null, model: null, reasoningEffort: null, origin: null, sessionRole: null,
+  mode: "after", afterTaskId, afterDoneAt, status: "pending", createdAt: "2026-11-04T00:00:00Z", sendAt: "2026-11-04T00:00:00Z", sentAt: null });
 const tray = (messages: ScheduledMessage[]) => renderToStaticMarkup(<ScheduledMessageTray messages={messages} loading={false}
   error={null} cancelingIds={new Set()} onWithdraw={() => {}} onCancel={() => {}} tasks={tasks} onSendNow={() => {}} />);
 
@@ -54,5 +60,8 @@ assert.match(stuck, /「failed」失败/);
 assert.match(stuck, /is-stuck/);
 assert.match(stuck, /scheduled-message-send-now/);
 assert.match(tray([message("gone", "deleted")]), /前置任务已删除[\s\S]*scheduled-message-send-now/);
+const released = tray([message("latched", "failed", "2026-11-04T09:00:00Z")]);
+assert.match(released, /「failed」已完成/, "锁存过的不因前置后来失败而改口");
+assert.doesNotMatch(released, /scheduled-message-send-now|is-stuck/);
 
 console.log("test-send-after ok");

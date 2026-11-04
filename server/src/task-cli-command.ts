@@ -27,7 +27,9 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
   const running = task.status === "running" || task.status === "queued";
   const userId = ownerIdOf(actorOf(c));
   const clear = command.name === "goal" && /^(clear|stop|off|reset|none|cancel)$/.test(command.args);
-  if (body.sendAt && command.name === "goal" && (command.goalScope || command.args === "--scopes")) throw new Error("目标作用域查询与显式选择不支持定时，请直接发送斜杠命令");
+  // 稍后发送(定时 / 等任务完成)的命令留到投递那一刻执行:这里只做预检,不当场执行。
+  const deferred = !!(body.sendAt || body.afterTaskId);
+  if (deferred && command.name === "goal" && (command.goalScope || command.args === "--scopes")) throw new Error("目标作用域查询与显式选择不支持稍后发送，请直接发送斜杠命令");
   if (command.name === "goal" && command.args === "--scopes") {
     const text = await formatCliGoalScopes(task, userId);
     const recorded = await appendTaskTimeline(task.id, `${command.text}\n${text}`, { agentType });
@@ -39,7 +41,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     if (clear) {
       const scope = target;
       if (scope && !await runnableCliGoalScope(scope, userId)) {
-        if (body.sendAt) throw new Error(`原执行器已不可用，请直接发送 /goal clear --scope ${scope.selector} 清除保存的目标`);
+        if (deferred) throw new Error(`原执行器已不可用，请直接发送 /goal clear --scope ${scope.selector} 清除保存的目标`);
         const turn = claimOwnTurn(task.id, "native");
         if (!turn) throw new Error("当前回合正在启动或收尾，请稍后再清除目标");
         try {
@@ -65,7 +67,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     const route = await preflightCliGoalCommand(task, agentType, command.text, executorId, userId);
     if (route) Object.assign(body, route);
     if (target) body.text = `/goal ${command.args} --scope ${target.selector}`;
-    if (body.sendAt) return null;
+    if (deferred) return null;
     if (command.name === "goal" && !command.args && cliGoalScopes(task).length) {
       const state = await resolvedCliState(task, agentType, executorId, userId);
       if (!state.goal) {
@@ -83,7 +85,7 @@ export async function taskCliCommand(c: Context, task: typeof tasks.$inferSelect
     }
     return null;
   }
-  if (body.sendAt) return null;
+  if (deferred) return null;
   if (!LIVE_COMMANDS.has(command.name)) return null;
   if (isGoalExecution(command) && !task.goalTurn) return null;
   const current = nativeCommandRun(task.id);
