@@ -535,6 +535,9 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // 不适用,于是同一条结束通知变成两条消息、把 agent 叫醒两次。身份跟入队写在同一笔里,所以
   // 「送过没有」这一问有一个原子的答案:库里找得到这个 token ⇒ 已经送过,只补销凭证。
   handoffToken: text("handoff_token"),
+  // 这条消息是哪一条问答的答复（tasks.question_history 里那条记录的 id）。投递时原样落进会话
+  // 那条用户回合（answerIds），删除消息按它清问答历史。null = 不是答复。
+  answerId: text("answer_id"),
   // 这张凭证**是在哪一代投递协议下开出来的**(delivery-crossing.ts 的 CROSSING_PROTOCOL)。
   //
   // 为什么非得落库:恢复侧用「越线记号不在」当否证,而那个否证只有在写记号是**硬前置**

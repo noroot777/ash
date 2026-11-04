@@ -11,7 +11,7 @@
 // 跑：npm -w server run test:settlement-note
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
-import { parseSessionOutput } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared/session-output";
 import { writeTurn } from "../src/transcript.js";
 import { lastInputOf } from "../src/task-retry-turn.js";
 

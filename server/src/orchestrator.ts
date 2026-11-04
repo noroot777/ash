@@ -38,6 +38,7 @@ import { workerPreambleFor } from "./team/dispatch.js";
 import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
+import { reseedHistory } from "./history-reseed.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
@@ -278,10 +279,12 @@ export async function continueTask(
 
     // 这一轮续哪一条会话行(同一位智能体可能有好几条;接不接得上还要看 CLI 配置目录与
     // codex 版本守卫)——判据与两处持久说明都在 turn-session-pick.ts。
-    const { all, prev, resuming } = await pickTurnSession({
+    const { all, prev, resuming, reseed } = await pickTurnSession({
       taskId, task, agent, sessionRole, profileId, runOwner, slash,
       freshSession: opts.freshSession, resumeSessionId: opts.resumeSessionId,
     });
+    // 删过消息(reseed):会话行照旧续,CLI 会话换新的、拿删除后的记录重建(history-reseed.ts)。
+    const cliResume = resuming && !reseed;
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
     const recorded = opts.cwd || prev?.cwd || prev?.worktreePath || all[0]?.cwd || all[0]?.worktreePath || "";
@@ -355,16 +358,18 @@ export async function continueTask(
     // 产出质量规则这一轮的事实(判据本体见 craft-rules.ts):`!resuming` 为真的那几种(首次被
     // @ 进来、旧会话接不上、/clear 之后新开)都是没有旧上下文的首条消息。原生命令那一支拿不到
     // 它 —— 它独占整条 prompt(见上)。
-    const craft = { freshContext: !resuming, verifying };
+    const craft = { freshContext: !cliResume, verifying };
+    const history = reseed ? await reseedHistory(taskId, prev!.id, task.body) : "";
     const prompt = nativeCommand
       ? promptedUserTurnText
-      : planning ? PLANNING_TURN(craft, promptedUserTurnText)
+      : planning ? PLANNING_TURN(craft, history + promptedUserTurnText)
       : assembleTurnPrompt({
         invite: invited ? COLLAB_INVITE : "",
         brief: invitedTaskBrief(task.body, invited, verifying),
         handoffNotice,
         peerNotice,
         craft,
+        history,
         userText: promptedUserTurnText,
         workspaceReset: workspaceReset ? WORKSPACE_RESET(cwd) : "",
         completion: followUpFrom
@@ -378,7 +383,7 @@ export async function continueTask(
       ...(await runEnvForOwner(runOwner, agent)),
       ...turnIdentityEnv({ taskId, turnToken, directionToken }),
     };
-    await ex.prepareResume?.({ cwd, sessionId: resuming ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
+    await ex.prepareResume?.({ cwd, sessionId: cliResume ? prev!.cliSessionId! : undefined, env: runEnv, steerable: !!ex.runSteerable });
     const cli = await prepareCliInvocation(task, agent, userText, profileId, runOwner ?? null, { resetPlan, preserveState: preserveCliState });
     // 复用同一行会话之前,先把库里这条会话用过的最晚起点接回分配水位。重启之后水位是空的,
     // 墙钟又恰好回拨到上一轮开工那一刻时,不接就会把那个历史身份原样重发一遍 —— 开始行被
@@ -431,7 +436,7 @@ export async function continueTask(
       prompt,
       ...cli,
       cwd,
-      sessionId: resuming || slash?.name === "fork" ? prev?.cliSessionId ?? undefined : undefined,
+      sessionId: cliResume || slash?.name === "fork" ? prev?.cliSessionId ?? undefined : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
       // 正文图片的持久账本:交代关系不再跟这条 for-await 消费者同生共死(agent-image-journal.ts)。
       images: markdownImageAccounting(taskId, sessId, turnStart, imageSeed),
@@ -448,7 +453,7 @@ export async function continueTask(
 
     // Reuse the agent's session row when resuming; otherwise open a fresh line,
     // inheriting the task's worktree/branch from its first session.
-    let cliSessionId = resuming ? prev!.cliSessionId! : handle.sessionId;
+    let cliSessionId = cliResume ? prev!.cliSessionId! : handle.sessionId;
     const runningHandle = handle;
     const persistRunner = async (store: Pick<typeof db, "insert" | "update">) => {
       if (resuming) {
@@ -481,6 +486,10 @@ export async function continueTask(
             // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
             // 恢复不了的恢复命令,见 ResumeFields。
             ...ex.resumeFields(cwd, cliSessionId),
+            // 重建上下文那一轮:换上新的 CLI 会话。标记**这里不清** —— 进程起来不等于新会话
+            // 已经收下并存好重建的历史(init 之前就失败、被停、重启时没接回都有可能),这一轮
+            // 成功收尾时才了结(single-run.ts);没了结,下一轮就再按删除后的记录重建一次。
+            ...(reseed ? { cliSessionId } : {}),
             // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
             // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
             agentPid: runningHandle.detached?.pid ?? null,
@@ -549,7 +558,7 @@ export async function continueTask(
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human/backend turn as its own bubble; the matching event keeps every client live.
-      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake, eventKey: opts.deliveryKey });
+      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend, monitorWake: opts.monitorWake, eventKey: opts.deliveryKey, answerIds: opts.answerIds });
     }
     // 上一回合尚未结算就收到回复时，消息会先排队，真正送达时任务已不再 paused；这条
     // 路径要在落盘后消费旧检查点，避免它继续挡完成与预约派审。若起点本来就是 paused，

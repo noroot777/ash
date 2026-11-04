@@ -1,6 +1,5 @@
 // Core domain types shared between server and web.
 import type { TeamConfig } from "./team.ts";
-import type { MonitorWakeData } from "./monitor-wake.ts";
 import type { QuestionRecord } from "./questions.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
@@ -553,25 +552,10 @@ export type { AgentEvent, DuetSpeaker, GateAction, GateName, ServerEvent, TurnIm
 export type { NativeAgentActivity, NativeWorkEvent, NativeWorkStatus } from "./native-work.ts";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────
-// A persisted session .md is mostly agent Markdown, but backend continues and
-// 你→@agent replies are interleaved as their own turns. New runs write each as a
-// \x1e + JSON sentinel line (carrying a timestamp); older runs used inline
-// 〔系统〕…/〔你 → @x〕… markers. Split the blob back into ordered segments so each
-// turn renders as its own bubble instead of bleeding into the agent text around it.
-// Shared by web (TaskDetail) and mobile (log.ts) so the two never drift apart.
+// 会话 .md 的格式与解析住在 ./session-output.ts（运行时函数走 `@ash/shared/session-output`
+// 子路径：本文件不能转发运行时函数）。老会话的「继续」标记仍从这里导出，web 有两处在读它。
 export const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
-
-export type ConvSeg =
-  | { kind: "agent"; text: string; endedAt?: string }
-  // bySystem：走真人回合通道、但作者是后端的那种（验证打回、验收冲突交接）。
-  // 它们**必须**是 user 回合（要 followUpFrom 护住任务原来的终态），所以只能另开一位来标。
-  | { kind: "user"; text: string; at?: string; bySystem?: true; monitorWake?: MonitorWakeData }
-  // level:"notice" = 结算说明（「这一轮为什么落成这个状态」），由 server 结算时写下。
-  // 展示端据此上「提示」的语气，而不是让关键词表去猜——说明里天然带着「未完成」这种词。
-  // aside:true = 任务时间线旁注（appendTaskTimeline 写的那些：预约审查、验收阶段更新、
-  // 预览起停…）。它不是说给 agent 听的话，也不开/不收一个回合——落在哪一秒纯属偶然，
-  // 常常正砸在某一回合说到一半的地方，所以展示端不能拿它当回合边界（见 events.ts）。
-  | { kind: "system"; text: string; at?: string; level?: "notice"; aside?: true };
+export type { ConvSeg } from "./session-output.ts";
 
 // 「答复」是回答 agent 提问的那条，走 /tasks/:id/answer 时由服务端加的前缀。
 export const ANSWER_PREFIX = "【答复】";
@@ -592,84 +576,6 @@ export function isUserFollowUp(seg: { kind: string; text?: string | null; bySyst
   const text = seg.text ?? "";
   if (seg.kind !== "user" || !text.trim() || seg.bySystem) return false;
   return !LEGACY_SYSTEM_AUTHORED.some((prefix) => text.startsWith(prefix));
-}
-
-export function parseSessionOutput(out: string): ConvSeg[] {
-  const segs: ConvSeg[] = [];
-  let buf: string[] = [];
-  let skippingDiagnostic = false;
-  const flush = () => {
-    const t = buf.join("\n").trim();
-    if (t) segs.push({ kind: "agent", text: t });
-    buf = [];
-  };
-  for (const line of out.split("\n")) {
-    const trimmed = line.trim();
-    // Backend failure diagnostics are persisted beside the conversation so they
-    // remain available in the raw run artifacts. They are not agent speech,
-    // though, and rendering them inline makes a normal transcript look like a
-    // stream of repeated reconnect errors. Keep them out of conversation bubbles.
-    if (!skippingDiagnostic && trimmed === "> **执行诊断**") {
-      flush();
-      skippingDiagnostic = true;
-      continue;
-    }
-    if (skippingDiagnostic) {
-      if (!trimmed) {
-        skippingDiagnostic = false;
-        continue;
-      }
-      if (!line.startsWith("\x1e")) continue;
-      skippingDiagnostic = false;
-    }
-    // 老会话专用：2026-08-31 之前，结算说明是直接写进正文的一段引用块，于是「续聊回合
-    // 异常结束(…)」这句会糊在 agent 的话里当正文渲染 —— 只能按前缀藏掉。现在结算说明落成
-    // 独立的 system 旁注行（带 level:"notice"），根本不进气泡，新会话不需要这道过滤。
-    if (trimmed.startsWith("> 续聊回合异常结束(")) continue;
-    if (line.startsWith("\x1e")) {
-      try {
-        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string; by?: string; level?: string; aside?: boolean; monitorWake?: MonitorWakeData };
-        flush();
-        if (j.t === "agentEnd") {
-          // Not a new bubble — it stamps where the agent turn that just flushed
-          // actually finished, so per-turn 用时 excludes the idle wait that follows.
-          const last = segs[segs.length - 1];
-          if (last?.kind === "agent") last.endedAt = j.at;
-          continue;
-        }
-        segs.push(
-          j.t === "system"
-            ? {
-                kind: "system",
-                text: j.text || LEGACY_SYS_MARKER,
-                at: j.at,
-                ...(j.level === "notice" ? { level: "notice" as const } : {}),
-                ...(j.aside === true ? { aside: true as const } : {}),
-              }
-            : { kind: "user", text: j.text ?? "", at: j.at, ...(j.by === "system" ? { bySystem: true as const, ...(j.monitorWake ? { monitorWake: j.monitorWake } : {}) } : {}) },
-        );
-        continue;
-      } catch {
-        /* not a turn line — fall through and treat as ordinary text */
-      }
-    }
-    if (trimmed === LEGACY_SYS_MARKER) {
-      flush();
-      segs.push({ kind: "system", text: LEGACY_SYS_MARKER });
-      continue;
-    }
-    // Legacy reply marker — best-effort (only the first line is recoverable, since
-    // old multi-line replies weren't fenced); the rest folds into the next bubble.
-    const m = /^〔你 → @[^〕]*〕([\s\S]*)$/.exec(trimmed);
-    if (m) {
-      flush();
-      segs.push({ kind: "user", text: m[1] ?? "" });
-      continue;
-    }
-    buf.push(line);
-  }
-  flush();
-  return segs;
 }
 
 export type { BranchPlanEntry, BranchPlanView, BranchDependency, FamilyAcceptanceResult } from "./branch-plan.ts";

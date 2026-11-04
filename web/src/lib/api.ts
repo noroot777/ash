@@ -561,6 +561,13 @@ export const api = {
   },
   sessionTrace: (sessionId: string): Promise<SessionTraceEntry[]> =>
     request(`/sessions/${id(sessionId)}/trace`),
+  // 删会话里的几段（真人专属闸后面，走 humanAction 带凭据）。指名用「第几段 + 指纹」，
+  // 页面上那份正文旧了服务端会 409，而不是删错一段。
+  deleteConversationSegments: (
+    sessionId: string,
+    segments: Array<{ index: number; fingerprint: string; answerId?: string } | { trace: { from: string; to: string; fingerprint: string } }>,
+  ): Promise<{ deleted: number }> =>
+    humanAction(`/sessions/${id(sessionId)}/conversation/delete`, json("POST", { segments })),
   duetTranscript: (taskId: string): Promise<unknown[]> =>
     request(`/tasks/${id(taskId)}/duet`),
 

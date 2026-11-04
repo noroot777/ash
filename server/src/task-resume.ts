@@ -166,7 +166,9 @@ async function resumeOrRunClaimedTask(taskId: string,
     .filter((s) => s.agentType === agent)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     .at(0);
-  if (prev?.cliSessionId) {
+  // 删过消息的会话(contextRebuildAt)即便 cliSessionId 已置空(接力导入、会话失效)也走续聊:
+  // 那条路会拿删除后的记录重建上下文,runTask 则是从任务正文全新起跑、整段历史都丢了。
+  if (prev?.cliSessionId || prev?.contextRebuildAt) {
     const reviewerRoute = await freeReviewResumeOptions(taskId);
     await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, freezeGuard, actingUserId: acting, ...(reviewerRoute ?? {}) });
     return;

@@ -70,6 +70,8 @@ export interface HandoffMessagePayload {
   // 源机上已经等到了(前置完成已锁存):落地后不再去查一个可能没跟过来的前置任务。
   afterDoneAt?: string | null;
   createdAt: string;
+  // 这条是哪一条问答的答复(问答历史跟着任务一起走,id 两边一致);老源机不带 = 不是答复。
+  answerId?: string | null;
 }
 
 // 任务的定时计划(schedules 表)。lastRunAt/enabled 原样带走:触发过的一次性计划
@@ -189,6 +191,10 @@ export interface HandoffSessionRow {
   // 对端只保留「会话文件真的搬过去了」的 cliSessionId,其余置空——否则 --resume
   // 一个不存在的会话,CLI 当场报错,比全新起跑更糟。
   cliSessionId: string | null;
+  // 这条会话里删过消息、旧 CLI 上下文已作废(conversation-redact.ts):导出侧不带原生会话文件、
+  // cliSessionId 置空,对端照样挂着它,下一回合拿删除后的记录重建(turn-session-pick.ts)。
+  // 老源机不带这一项 = 没删过。
+  contextRebuildAt?: string | null;
   commandLine: string | null;
   startedAt: string;
   endedAt: string | null;

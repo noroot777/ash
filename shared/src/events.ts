@@ -178,7 +178,11 @@ export type ServerEvent =
       at: string;
       bySystem?: true;
       monitorWake?: MonitorWakeData;
+      /** 这一句承载的问答答复（记录 id，同 session-output.ts 的 ConvSeg）。 */
+      answerIds?: string[];
     }
+  // 会话里有几段被用户删掉了（盘上已就地抹掉）：开着这个任务的页面整份重读正文。
+  | { type: "conversation.redacted"; taskId: string; sessionId: string }
   | {
       type: "duet.progress";
       taskId: string;
