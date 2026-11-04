@@ -21,6 +21,19 @@ function speaker(seg: ConvSeg): string | null {
   return seg.bySystem ? "系统（代用户发送）" : "用户";
 }
 
+/**
+ * 回合收尾时这条会话行的重建标记了不了结（`sessions.context_rebuild_at`，single-run.ts 收尾写库时并进去）。
+ *
+ * 只在这一轮在新 CLI 会话上完整、成功地跑完，且拿到了它的会话 id 时了结 —— 重建的历史这才确实
+ * 存进了一条接得回的会话。进程起来不算：新 CLI 可能在 init / 收下历史之前就失败（认证、供应商
+ * 连接），也可能被停、被引导、被判会话作废。这些情况标记都留着，下一轮照样拿删除后的记录重建，
+ * 而不是退回只带任务正文从头开始。删除期间不可能有回合在跑，所以收尾时看到的标记就是这一轮
+ * 起跑时兑现的那个。
+ */
+export function settleContextRebuild(turn: { succeeded: boolean; cliSessionId: string }): { contextRebuildAt?: null } {
+  return turn.succeeded && turn.cliSessionId ? { contextRebuildAt: null } : {};
+}
+
 export async function reseedHistory(taskId: string, sessionId: string, taskBody: string): Promise<string> {
   const path = sessionTranscriptPath(taskId, sessionId);
   const raw = await readFile(readableRunPath(path), "utf8").catch((error: NodeJS.ErrnoException) => {
