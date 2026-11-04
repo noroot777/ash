@@ -68,6 +68,30 @@ export const acceptGateRuns = sqliteTable(
     /** 当时合并会不会是纯 fast-forward（null = 这个任务没有合并目标）。 */
     fastForward: integer("fast_forward", { mode: "boolean" }),
     /**
+     * 合并预览档：预演时并进来的目标分支提交。非空 = 被测的是「source_commit + 它」的合并结果。
+     * 它是复用判据的一部分（gateBaselineMatches）：目标分支一动，这份绿就不再是要合的那一棵。
+     * null = 被测的是分支那棵树（另两档、老记录）。
+     */
+    previewBase: text("preview_base"),
+    /** 预演合并在快照里落成的那个提交（快照 HEAD）。收尾核验「副本还是不是当初那一份」认它。 */
+    previewCommit: text("preview_commit"),
+    /**
+     * 预演核定的合并树，也就是门禁真正测的那一棵。同样两个提交在不同的合并配置下（比如
+     * merge.directoryRenames）会合出不同的树，所以复用判据和最终合并都认它，不只认 previewBase
+     * （第 2 轮审查 F1）。null = 没有合并（分支已含目标分支尖端，或不是合并预览档）。
+     */
+    previewTree: text("preview_tree"),
+    /**
+     * 合并预览档：快照检出时实际用的转换配置（core.autocrlf / eol）的身份。同一棵树换一份换行配置
+     * 检出的字节就不同，所以复用判据认它（gateBaselineMatches，第 3 轮复审 F1）。旧行 null = 重跑一次。
+     */
+    previewMaterialization: text("preview_materialization"),
+    /**
+     * 合并预览档：快照里被测的那份物理内容的摘要（accept-gate-physical.ts 的 GatePhysical，JSON）。复用旧绿
+     * 与最终落地都拿它核目标检出现在的字节（第 5 轮复审 F2）。旧行 null = 重跑一次。
+     */
+    previewPhysical: text("preview_physical"),
+    /**
      * 用户点那一下带着的验收选择（JSON：by / commit / confirmUnverified）。
      *
      * 必须留：门禁绿了之后是**系统**替他把验收接着做完的，接着做的那一次必须跟他在
@@ -125,6 +149,11 @@ export async function ensureAcceptGateSchema(client: Client): Promise<void> {
     "ALTER TABLE accept_gate_runs ADD COLUMN miss_attribution TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN diagnosis_generation TEXT",
     "ALTER TABLE accept_gate_runs ADD COLUMN settlement TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_base TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_commit TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_tree TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_materialization TEXT",
+    "ALTER TABLE accept_gate_runs ADD COLUMN preview_physical TEXT",
   ]) {
     try { await client.execute(sql); } catch { /* column already exists */ }
   }

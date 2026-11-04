@@ -94,8 +94,8 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     if (reason === "accept_gate_required" || reason === "accept_gate_running") {
       await appendTaskTimeline(
         row.taskId,
-        `验收前置命令通过了，但它验的已经不是现在这一份（命令跑的那十几分钟里工作区又有了新提交，`
-          + `或者这条命令被改过）。所以没有直接合并，而是按**现在**这一份重新跑一遍；绿了仍会自动接着合。`,
+        `验收前置命令通过了，但它验的已经不是现在这一份（命令跑的那十几分钟里工作区又有了新提交、`
+          + `这条命令被改过，或者合并预览档下目标分支又进了别的合并）。所以没有直接合并，而是按**现在**这一份重新跑一遍；绿了仍会自动接着合。`,
       );
       return;
     }

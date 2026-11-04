@@ -215,3 +215,15 @@
 .accept-gate-edit input:focus { border-color: var(--accent); outline: none; }
 .accept-gate-edit small { color: var(--faint); font-size: 9.5px; line-height: 1.55; }
 .accept-gate-edit small b { display: inline; color: var(--muted); font-size: 9.5px; }
+/* 门禁基准三档（AcceptGateBaselineChoice）。设置页和门禁卡共用；选择器带上 role 是为了压过
+   `.settings-row > div` 那条把直接子 div 一律设成 grid 的规则。 */
+[role="radiogroup"].accept-gate-baseline { display: inline-flex; flex: 0 0 auto; gap: 0; width: fit-content; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); overflow: hidden; }
+.accept-gate-baseline > button { height: 26px; border: 0; border-right: 1px solid var(--line); background: transparent; padding: 0 10px; color: var(--muted); font-size: 10.5px; white-space: nowrap; cursor: pointer; }
+.accept-gate-baseline > button:last-child { border-right: 0; }
+.accept-gate-baseline > button[aria-checked="true"] { background: var(--raised); color: var(--ink); font-weight: 650; }
+.accept-gate-baseline > button:disabled { cursor: default; }
+.accept-gate-baseline > button:disabled:not([aria-checked="true"]) { opacity: .55; }
+.accept-gate-basis { display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 9px; }
+.accept-gate-basis > span { color: var(--faint); font-size: 10px; }
+.accept-gate-basis > p { margin: 0; color: var(--muted); line-height: 1.55; }
+.accept-gate-basis > p[role="alert"] { color: var(--red); }

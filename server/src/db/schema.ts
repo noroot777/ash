@@ -34,6 +34,9 @@ export const projects = sqliteTable("projects", {
   // null/空 = 这个项目不设门禁（默认，也是老行为）。为什么钉在验收那一刻，见
   // shared/src/accept-gate.ts 顶部；执行与判定在 server/src/accept-gate.ts。
   acceptGateCommand: text("accept_gate_command"),
+  // 门禁测哪一棵树(branch / contains_target / merge_preview),语义见 shared/src/accept-gate.ts 的
+  // AcceptGateBaseline。读侧一律过 normalizeAcceptGateBaseline:认不出的值回到 branch(老行为)。
+  acceptGateBaseline: text("accept_gate_baseline").notNull().default("branch"),
   // 本项目的任务可以用用户已登录的 Chrome **只读**哪些站点（JSON 字符串数组，裸主机名）。
   // null/空 = 不授权，也是默认。读侧一律过 normalizeBrowserCdpDomains:这一列能被手改,
   // 而一条脏数据混进来就可能把别的站点也当成已授权(见 shared/src/project.ts)。

@@ -17,13 +17,14 @@ export interface ExecFileTextResult {
 export function execFileText(
   file: string,
   args: readonly string[],
-  options: ExecFileOptionsWithStringEncoding = {},
+  options: ExecFileOptionsWithStringEncoding & { input?: string } = {},
 ): Promise<ExecFileTextResult> {
+  const { input, ...rest } = options;
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       file,
       [...args],
-      { ...options, encoding: options.encoding ?? "utf8", windowsHide: true },
+      { ...rest, encoding: rest.encoding ?? "utf8", windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
           reject(Object.assign(error as ExecFileException, { stdout, stderr }));
@@ -32,5 +33,12 @@ export function execFileText(
         resolve({ stdout, stderr });
       },
     );
+    // 有 input 就整份写进 stdin 再关上（路径清单这类可能撑爆命令行长度的参数走这里）。子进程没读完
+    // 就退出时写端会报 EPIPE：那是流上的 error 事件，不接住就是未捕获异常；命令本身的失败由上面的
+    // 回调照常结算，这里只收下它。
+    if (input !== undefined) {
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(input);
+    }
   });
 }

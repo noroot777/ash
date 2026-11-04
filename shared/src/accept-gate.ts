@@ -9,8 +9,53 @@
 // agent 去修 —— 跟「验收撞冲突叫醒 agent」是同一套退路。
 //
 // 跑的是**任务已提交源码的独立快照**。fast-forward 时它就是合并结果;目标分支此后前进过,
-// 被测树就不等于合并结果 —— 那时只如实记一行,不拦(活跃仓库上拦就是永远验收不了)。
+// 被测树就不等于合并结果 —— 默认档只如实记一行,不拦;要拦、或者要测合并结果,由项目在
+// 「门禁基准」(AcceptGateBaseline)里自己选。
 export type AcceptGateStatus = "running" | "passed" | "failed" | "interrupted" | "canceled";
+
+/**
+ * 门禁基准：这条命令**测的是哪一棵树**。项目级设置（projects.accept_gate_baseline），验收台上
+ * 那张门禁卡和「项目设置 → 验收」改的是同一个字段。
+ *
+ * 由来（2026-11-02 的撞车）：两个并行任务一个把回调改了名、一个还在用旧名，开工基线都早于对方，
+ * 各自在**自己分支的快照**上跑门禁全绿，先后合进 main 之后 main 编译红 —— 合并之后那棵树没有
+ * 任何一道测试跑到过。三档是三种不同的代价：
+ *
+ *  - `branch`          测任务分支那棵树（老行为，也是默认）。目标分支此后进来的改动不在被测范围内。
+ *  - `contains_target` 只放行**已包含目标分支尖端**的任务分支：不含就在跑之前拒绝，让任务先把目标
+ *                      分支合进来。被测的仍是分支那棵树，但此时它就是合并结果（fast-forward）。
+ *  - `merge_preview`   在测试快照里先把最新目标分支合进任务分支（不动真仓库），门禁对**预演的合并
+ *                      结果**跑；预演冲突就按冲突拒绝、不跑。绿了的复用凭据连目标分支尖端一起认：
+ *                      跑的那十几分钟里目标分支又动了，旧绿不能拿来合新的目标分支。
+ *
+ * 只对**有合并目标**的验收生效（独立 worktree 的任务）；在项目目录里直接干活的任务没有「合并之后」
+ * 这件事，三档都按分支快照跑。
+ */
+export type AcceptGateBaseline = "branch" | "contains_target" | "merge_preview";
+
+export const ACCEPT_GATE_BASELINES: readonly AcceptGateBaseline[] = ["branch", "contains_target", "merge_preview"];
+
+export const ACCEPT_GATE_BASELINE_LABELS: Record<AcceptGateBaseline, string> = {
+  branch: "分支快照",
+  contains_target: "要求已含目标分支",
+  merge_preview: "合并预览",
+};
+
+/** 这一档对「点一下验收」意味着什么。两处入口共用这一句，别各写一份。 */
+export function acceptGateBaselineEffect(mode: AcceptGateBaseline, target?: string | null): string {
+  // 有具体分支名就当代码名词嵌进句子（两边留空格，紧跟全角标点那一侧不留）；没有（项目设置页）就用通称，不留空格。
+  const t = target ? ` ${target} ` : "目标分支";
+  if (mode === "contains_target") return `任务分支还没包含${t}的最新提交时直接拒绝验收，先让任务把${t}合进来；含了才在分支快照上跑门禁。`;
+  if (mode === "merge_preview") return `先在测试快照里把最新的${t}合进任务分支，再对这份合并结果跑门禁；预演有冲突就不跑，按冲突交回任务去解。`;
+  return `门禁跑在任务分支自己的快照上；${t.trimStart()}之后进来的改动不在被测范围内。`;
+}
+
+/** 认不出的一律回到 `branch`：这一位只能让门禁更严，绝不能因为一条脏数据悄悄换了被测的树。 */
+export function normalizeAcceptGateBaseline(value: unknown): AcceptGateBaseline {
+  return typeof value === "string" && (ACCEPT_GATE_BASELINES as readonly string[]).includes(value)
+    ? value as AcceptGateBaseline : "branch";
+}
+
 
 /** 没通过时具体是哪一种没通过。日志之外,用户第一眼读的就是这个。 */
 /**
@@ -101,6 +146,11 @@ export interface AcceptGateView {
   targetCommit: string | null;
   /** 当时合并会不会是纯 fast-forward。false = 被测树 ≠ 合并结果,只提示不拦 */
   fastForward: boolean | null;
+  /**
+   * 合并预览档:这一次预演时并进来的目标分支提交。非空 = 被测的是「任务分支 + 它」的合并结果,
+   * 不是分支那棵树;null = 分支快照(另两档与老记录都是)。
+   */
+  previewBase?: string | null;
   stale: boolean;
   logPath: string;
   logAvailable?: boolean;
@@ -245,4 +295,10 @@ export type AcceptGateState = {
    * (老数据如实显示「没留下凭据」,不拿 latest 冒充)。
    */
   basis: AcceptGateBasis | null;
+  /** 项目当前的门禁基准(项目级设置)。 */
+  baseline?: AcceptGateBaseline;
+  /** 这一档此刻要对照的目标分支;null = 这个任务没有合并目标,三档都按分支快照跑。 */
+  baselineTarget?: { branch: string; commit: string } | null;
+  /** 按当前这一档,这一按会在门禁之前被拒的理由(没含目标分支 / 预演冲突);null = 不拦。 */
+  baselineBlock?: string | null;
 };

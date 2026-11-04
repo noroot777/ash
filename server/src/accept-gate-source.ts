@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { type CheckoutSettings, cloneSealedSnapshot, isSealedSnapshot, readOnlyGit, sealedGit } from "./accept-gate-preview.js";
 import { execFileText } from "./exec.js";
 import { RUNS_DIR } from "./paths.js";
 import { commitAt } from "./task-branch-plan.js";
@@ -53,8 +54,8 @@ export type GateSource = {
   inputs?: SourceInput[];
 };
 const sourceHash = () => createHash("sha256").update("gate-snapshot-v3\0");
-const git = async (cwd: string, args: string[]) =>
-  (await execFileText("git", ["-C", cwd, ...args], { maxBuffer: 32 * 1024 * 1024 })).stdout;
+// 源码身份（ls-tree / status）与快照准备共用 readOnlyGit 的口径：不调 fsmonitor、不刷新索引（见那里）。
+const git = async (cwd: string, args: string[]) => (await readOnlyGit(cwd, args)).stdout;
 
 async function nonGitFiles(cwd: string): Promise<string[]> {
   return (await readdir(cwd)).filter(name => name !== ".git").sort();
@@ -137,6 +138,105 @@ async function digestInputs(cwd: string, inputs: SourceInput[]): Promise<string>
   return hash.digest("hex");
 }
 
+/**
+ * 这一份提交上快照要借哪几个依赖目录（GateSource.dependencies 与它的补给来源）。只读树与文件系统，
+ * 不跑 `git status` 这类会调起项目配置程序（fsmonitor 等）的命令：验收台在没跑门禁时也要知道它
+ * （合并预览档的基准判定，见 accept-gate-baseline.ts）。
+ */
+export async function gateDependencies(cwd: string, commit: string): Promise<{ dependencies: string[]; supplied: DependencySupply[] }> {
+  const entries = (await git(cwd, ["ls-tree", "-r", "-z", commit])).split("\0").filter(Boolean);
+  const paths = entries.map(entry => entry.slice(entry.indexOf("\t") + 1));
+  if (paths.includes(".gitmodules") || entries.some(entry => entry.startsWith("160000 "))) {
+    throw new Error("验收快照暂不支持 Git 子模块；请使用完整源码检出或明确跳过本次门禁");
+  }
+  const manifests = /(?:^|\/)(?:package\.json|pyproject\.toml|Cargo\.toml|go\.mod|composer\.json|Gemfile)$/;
+  const packageDirs = new Set([".", ...paths.filter(path => manifests.test(path)).map(path => dirname(path))]);
+  // 登记要借用的依赖目录。嵌套包各自那一份也登记，但被**已登记项包住**的要去掉：借用是在快照
+  // 里建一条链，父目录一旦换成链，子路径就落到工作区那一份里去了，再往那个位置建第二条链毫无
+  // 意义（也会 EEXIST）。"." 排在最前，所以父目录总是先登记。
+  const registered: string[] = [];
+  for (const directory of [...packageDirs].sort()) {
+    for (const name of DEPENDENCY_DIRS) {
+      const dep = join(directory, name);
+      const info = await optionalRead(join(cwd, dep), () => lstat(join(cwd, dep)));
+      if (info === null) continue;
+      // 名字不证明类型。在 Git 根提交一个叫 `vendor`/`target` 的**普通文件**,上一版靠 lstat 成功
+      // 就把它登记成依赖目录:随后 linkWhole 把它重建成一条借用原文件的链,那份源码不再冻结,往
+      // 快照这条路径写就写到了工作区。非 Git 分支一直有这道判断,Git 分支漏了,两边对齐。
+      // 判的是**落点**而不是 lstat 的类型:依赖根自己是一条链是合法形状(node_modules -> .store),
+      // 落点读不出来的悬空根也照旧登记——provideDependency 要按原样把它重建成同样解析不通的一条。
+      // 落点「读不出来」只认 ENOENT/ENOTDIR/ELOOP(悬空根的正常形态);读不动必须明确失败,否则一棵
+      // 真实的依赖目录会因为一次 EACCES 落到这条 continue 上 —— 它就不再按依赖登记,改走源码冻结,
+      // 往快照这条路径写就写进了工作区那一份。
+      const landing = await optionalRead(join(cwd, dep), () => stat(join(cwd, dep)),
+        ["ENOENT", "ENOTDIR", "ELOOP"]);
+      if (landing === null ? !info.isSymbolicLink() : !landing.isDirectory()) continue;
+      if (registered.some(other => inside(join(cwd, other), join(cwd, dep)))) continue;
+      registered.push(dep);
+    }
+  }
+  // 工作区在某个位置上压根没有依赖目录时（worktree 的常态），按同仓参考检出补一份来源。根因、
+  // 两条路线的实测对照、以及「为什么不按命令需要收窄」都写在 accept-gate-supply 顶部。
+  const supplied = await dependencySupply(cwd, [...packageDirs], registered);
+  return { dependencies: [...registered, ...supplied.map(item => item.path)].sort(), supplied };
+}
+
+/**
+ * 借进快照的依赖内容实际读自工作区的哪几处（相对工作区、`/` 分隔，"" = 整个工作区）：依赖目录自己、
+ * 把它的路径解析到底途中经过的**每一条链**（不只是末端那一条，父目录上的也算：`vendor -> links/deps`
+ * 而 `links -> pool-a` 时，`links` 改个指向，借进来的就换了一棵，第 4 轮审查 F4），以及最终解析到的
+ * 那棵树 —— 依赖根可以是一条指回仓库别处的链（`vendor -> shared`），借进来的就是工作区里那棵树
+ * （第 2 轮审查 F1）。合并预览据此判断借进来的是不是合并之后那份（accept-gate-baseline.ts）。树**里面**
+ * 指回源码的链不用算：克隆时它们被改写到快照自己那份源码上（accept-gate-relocate 的 relocatedTarget），
+ * 有这种链的树也不会被整条借出去（provideDependency）。
+ */
+export async function dependencyReads(cwd: string, dependencies: readonly string[]): Promise<string[]> {
+  const root = await requiredRead(cwd, () => realpath(cwd));
+  const reads = new Set<string>();
+  const add = (path: string) => { if (inside(root, path)) reads.add(relative(root, path).split(sep).join("/")); };
+  for (const dep of dependencies) {
+    reads.add(dep.split(sep).join("/"));
+    // 工作区里压根没有这一项（补给来的依赖住在别处，见 accept-gate-supply）：借的不是工作区的东西。
+    if (!(await optionalRead(join(root, dep), () => lstat(join(root, dep)), ["ENOENT", "ENOTDIR"]))) continue;
+    // 读集合不全就不能拿来证明「借进来的就是合并之后那份」：解不到底（不存在、成环、跳数超限），
+    // 或者解到的落点与系统 realpath 不是同一处，都抛出，调用方按「没法确认」拒（第 4 轮复审 F3）。
+    const landing = await resolveRecording(root, splitPath(dep), add);
+    const actual = await optionalRead(join(root, dep), () => realpath(join(root, dep)), ["ENOENT", "ENOTDIR", "ELOOP"]);
+    if (landing === null || actual === null || landing !== actual) {
+      throw new Error(`依赖 ${dep} 的路径没能完整解析${landing && actual ? `（逐级解析到 ${landing}，系统解析到 ${actual}）` : ""}`);
+    }
+    add(landing);
+  }
+  return [...reads];
+}
+
+/** 按本平台的路径语义拆组件：POSIX 上反斜杠是文件名里的普通字符，只有 Windows 两种都是分隔符。 */
+const splitPath = (path: string): string[] => path.split(process.platform === "win32" ? /[\\/]/ : "/");
+
+/**
+ * 从 `base`（已解析的真实目录）出发逐个路径组件解析，遇到链就记下它（`record`，记的是链本身的真实
+ * 位置），再把链的内容接到剩下的组件前面继续。返回最终落点；中途不存在 / 成环则返回 null（链照样记下）。
+ * 和系统 realpath 走同一套语义（`..` 作用在已解析的真实目录上），所以两者能交叉核对。
+ */
+async function resolveRecording(base: string, components: string[], record: (link: string) => void): Promise<string | null> {
+  const pending = components.filter(part => part && part !== ".");
+  let resolved = base;
+  for (let hops = 0; pending.length;) {
+    const part = pending.shift()!;
+    if (part === "..") { resolved = dirname(resolved); continue; }
+    const next = join(resolved, part);
+    const info = await optionalRead(next, () => lstat(next), ["ENOENT", "ENOTDIR", "ELOOP"]);
+    if (!info) return null;
+    if (!info.isSymbolicLink()) { resolved = next; continue; }
+    if (++hops > 40) return null;
+    record(next);
+    const link = await readlink(next);
+    if (isAbsolute(link)) resolved = parse(link).root;
+    pending.unshift(...splitPath(link).filter(item => item && item !== "."));
+  }
+  return resolved;
+}
+
 export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, "identity.source")): Promise<GateSource> {
   if (physicalPath(cwd) === physicalPath(RUNS_DIR)) throw new Error("项目目录不能与 ash 运行产物目录相同");
   const commit = await commitAt(cwd, "HEAD");
@@ -144,42 +244,10 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
   const dependencies: string[] = [];
   let supplied: DependencySupply[] = [];
   if (commit) {
-    const entries = (await git(cwd, ["ls-tree", "-r", "-z", commit])).split("\0").filter(Boolean);
-    const paths = entries.map(entry => entry.slice(entry.indexOf("\t") + 1));
-    if (paths.includes(".gitmodules") || entries.some(entry => entry.startsWith("160000 "))) {
-      throw new Error("验收快照暂不支持 Git 子模块；请使用完整源码检出或明确跳过本次门禁");
-    }
     hash.update(commit);
-    const manifests = /(?:^|\/)(?:package\.json|pyproject\.toml|Cargo\.toml|go\.mod|composer\.json|Gemfile)$/;
-    const packageDirs = new Set([".", ...paths.filter(path => manifests.test(path)).map(path => dirname(path))]);
-    // 登记要借用的依赖目录。嵌套包各自那一份也登记，但被**已登记项包住**的要去掉：借用是在快照
-    // 里建一条链，父目录一旦换成链，子路径就落到工作区那一份里去了，再往那个位置建第二条链毫无
-    // 意义（也会 EEXIST）。"." 排在最前，所以父目录总是先登记。
-    const registered: string[] = [];
-    for (const directory of [...packageDirs].sort()) {
-      for (const name of DEPENDENCY_DIRS) {
-        const dep = join(directory, name);
-        const info = await optionalRead(join(cwd, dep), () => lstat(join(cwd, dep)));
-        if (info === null) continue;
-        // 名字不证明类型。在 Git 根提交一个叫 `vendor`/`target` 的**普通文件**,上一版靠 lstat 成功
-        // 就把它登记成依赖目录:随后 linkWhole 把它重建成一条借用原文件的链,那份源码不再冻结,往
-        // 快照这条路径写就写到了工作区。非 Git 分支一直有这道判断,Git 分支漏了,两边对齐。
-        // 判的是**落点**而不是 lstat 的类型:依赖根自己是一条链是合法形状(node_modules -> .store),
-        // 落点读不出来的悬空根也照旧登记——provideDependency 要按原样把它重建成同样解析不通的一条。
-        // 落点「读不出来」只认 ENOENT/ENOTDIR/ELOOP(悬空根的正常形态);读不动必须明确失败,否则一棵
-        // 真实的依赖目录会因为一次 EACCES 落到这条 continue 上 —— 它就不再按依赖登记,改走源码冻结,
-        // 往快照这条路径写就写进了工作区那一份。
-        const landing = await optionalRead(join(cwd, dep), () => stat(join(cwd, dep)),
-          ["ENOENT", "ENOTDIR", "ELOOP"]);
-        if (landing === null ? !info.isSymbolicLink() : !landing.isDirectory()) continue;
-        if (registered.some(other => inside(join(cwd, other), join(cwd, dep)))) continue;
-        registered.push(dep);
-      }
-    }
-    // 工作区在某个位置上压根没有依赖目录时（worktree 的常态），按同仓参考检出补一份来源。根因、
-    // 两条路线的实测对照、以及「为什么不按命令需要收窄」都写在 accept-gate-supply 顶部。
-    supplied = await dependencySupply(cwd, [...packageDirs], registered);
-    dependencies.push(...[...registered, ...supplied.map(item => item.path)].sort());
+    const planned = await gateDependencies(cwd, commit);
+    supplied = planned.supplied;
+    dependencies.push(...planned.dependencies);
     // 未跟踪内容只在**登记的依赖目录之内**被放过。这里有一处相对旧口径的**收窄**:以前靠闭包
     // 把「node_modules -> .local-deps」那种落点补登记成输入,于是一个未跟踪、也没进 .gitignore
     // 的目录被默许;现在它和任何未跟踪文件一样被拒。这是有意的——依赖是产物,产物本来就该在
@@ -216,7 +284,15 @@ export async function readGateSource(cwd: string, executionCwd = join(RUNS_DIR, 
 
 export const gateSnapshotPath = (taskId: string, runId: string) => join(RUNS_DIR, taskId, `accept-gate-${runId}.source`);
 
-export async function createGateSnapshot(cwd: string, target: string, source: GateSource): Promise<void> {
+/**
+ * 合并预览档要在快照里合进来的那一份（见 accept-gate-baseline.ts）。`tree` 是仓库里预演出来的合并树：
+ * 快照里真合出来的必须跟它一模一样，否则「绿了合进去的」和「门禁测过的」就不是同一棵。
+ */
+export type GateSnapshotPreview = { targetCommit: string; tree: string | null; settings: CheckoutSettings };
+
+/** 建快照。合并预览档返回快照里落下的合并提交（收尾核验认它当 HEAD），其余档返回 null。 */
+export async function createGateSnapshot(cwd: string, target: string, source: GateSource,
+  preview?: GateSnapshotPreview): Promise<string | null> {
   await mkdir(target, { recursive: true });
   const roots = supplyRoots(source.supplied);
   try {
@@ -259,12 +335,22 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       provided.set(dep, await provideDependency(cwd, target, dep, workspace, path => !included(path), supplyOf(dep)));
     };
     let copiedFingerprint: string | null = null;
+    let previewCommit: string | null = null;
     if (source.commit) {
-      await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
-      await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
-      await git(target, ["checkout", "--detach", source.commit]);
-      await git(target, ["remote", "remove", "origin"]);
-      const paths = (await git(target, ["ls-tree", "-r", "--name-only", "-z", source.commit])).split("\0").filter(Boolean);
+      // 合并预览档的快照整段走封好的环境（克隆、检出、物化、收尾核验，见 accept-gate-preview.ts 的
+      // cloneSealedSnapshot）：目标分支带进来的文件不在门禁命令之外调起任何程序。其余档原样不动。
+      const snap = preview ? (args: string[]) => sealedGit(target, args) : (args: string[]) => git(target, args);
+      if (preview) {
+        await cloneSealedSnapshot(cwd, target, preview.settings);
+      } else {
+        await execFileText("git", ["clone", "--no-hardlinks", "--dissociate", "--no-checkout", "--", cwd, target]);
+        await git(target, ["config", "core.hooksPath", join(target, ".git", "ash-no-hooks")]);
+      }
+      await snap(["checkout", "--detach", source.commit]);
+      // 封好的克隆自带的配置里本就没有 origin；已含目标分支时（tree 为 null）不合，检出的就是分支那棵树。
+      if (preview?.tree) previewCommit = await materializePreview(target, preview.targetCommit, preview.tree);
+      else if (!preview) await git(target, ["remote", "remove", "origin"]);
+      const paths = (await snap(["ls-tree", "-r", "--name-only", "-z", "HEAD"])).split("\0").filter(Boolean);
       // 比较基准也必须规范化:落点是 realpath 出来的,拿没规范化的快照路径去比,只要路径祖先里有
       // 一条软链(macOS 的 /var -> /private/var、用户把 repo 放在软链目录下都是),每一条合法的
       // 跟踪软链都会被误判成「指向快照外」,整个门禁对带软链的仓库直接不可用。规则本身不变。
@@ -346,10 +432,30 @@ export async function createGateSnapshot(cwd: string, target: string, source: Ga
       dependencies: [...provided].map(([path, mode]) => ({ path: path.split(sep).join("/"), mode })),
     };
     await writeFile(`${target}.inputs.json`, JSON.stringify(sidecar), { flag: "wx" });
+    return previewCommit;
   } catch (error) {
     await rm(target, { recursive: true, force: true });
     throw error;
   }
+}
+
+/**
+ * 把预演核定的那棵合并树原样放进快照，**不在快照里再合一次**。
+ *
+ * 再合一次就是第二份合并定义：方向（谁是 ours）、配置（快照没有项目的 config）、属性都可能跟预演
+ * 与真合并不一样 —— `merge=union` 这类有方向的内置驱动会合出另一棵树，门禁就测不到将要合进去
+ * 的那一棵（第 1 轮审查 F2）。所以只有一处定义合并：accept-gate-baseline.ts 的预演，方向与
+ * git-accept.ts 的真合并相同（在目标分支上合入任务分支）；这里只是给那棵树配一个提交、检出。
+ * `commit-tree` 只写一个提交对象，不跑钩子、不碰合并驱动，也不签名（签名会调 gpg）；检出走 `sealedGit`，
+ * 目标分支带进来的文件点名了过滤器也没有程序可调（见 accept-gate-preview.ts 的 cloneSealedSnapshot）。树对象是
+ * 预演写进主仓对象库的，本地克隆整份带过来（worktree 与主仓共用一份）。
+ */
+async function materializePreview(target: string, targetCommit: string, tree: string): Promise<string> {
+  const commit = (await sealedGit(target, ["-c", "user.name=ash", "-c", "user.email=ash@localhost",
+    "commit-tree", "--no-gpg-sign", tree, "-p", "HEAD", "-p", targetCommit,
+    "-m", `ash 验收门禁合并预览：合入 ${targetCommit}`])).trim();
+  await sealedGit(target, ["checkout", "--detach", commit]);
+  return commit;
 }
 
 export async function removeGateSnapshot(taskId: string, runId: string): Promise<void> {
@@ -369,7 +475,10 @@ export async function verifyGateSnapshot(cwd: string, source: GateSource): Promi
       return await digestInputs(cwd, inputs) === source.fingerprint;
     }
     if (await commitAt(cwd, "HEAD") !== source.commit) return false;
-    const changed = (await git(cwd, ["diff", "--no-ext-diff", "--name-only", "-z", "HEAD", "--"]))
+    // 合并预览档的快照用建它时那份封好的环境来读：检出与核验对同一批文件的换行解释必须是同一份
+    // 配置，`git diff` 也不能在门禁命令之后去跑全局配的 clean 过滤器（见 cloneSealedSnapshot）。
+    const diff = await isSealedSnapshot(cwd) ? sealedGit : git;
+    const changed = (await diff(cwd, ["diff", "--no-ext-diff", "--name-only", "-z", "HEAD", "--"]))
       .split("\0").filter(Boolean);
     if (changed.length === 0) return true;
     // 依赖目录不参与这道核验:它问的是「命令有没有改被测源码」,而依赖目录在快照里是**故意**被换掉

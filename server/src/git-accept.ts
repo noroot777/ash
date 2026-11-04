@@ -25,6 +25,8 @@ import { assertNotPreviewInstance } from "./preview-instance.js";
 import { execFileText as exec } from "./exec.js";
 import { checkoutRecovery, registeredCheckout, removeMissingWorktreeRegistrations } from "./git-worktree-state.js";
 import { addTemporaryWorktree, removeTemporaryWorktree, type TemporaryWorktree } from "./git-accept-temp.js";
+import type { GatePhysical } from "./accept-gate-physical.js";
+import { alreadyLandedUntested, guardedDirtyFiles, movedTarget, publishInCheckout, publishRefOnly, stageTestedTree, testedResultCommit, type LandingGuard } from "./git-accept-tested.js";
 
 function sameFilesystemPath(a: string, b: string): boolean {
   try { return realpathSync(resolve(a)) === realpathSync(resolve(b)); }
@@ -224,6 +226,19 @@ export type TaskMergeOptions = {
    * already_merged。
    */
   retryOfMerged?: boolean;
+  /**
+   * 门禁（合并预览档）测过的那棵树。给了就只许落下这一棵（第 2 轮审查 F1：门禁绿了、合进去的却是
+   * 没测过的树）：结果直接用这棵树生成、只用快进发布，落不成就什么都不动（git-accept-tested.ts）。
+   */
+  expectedTree?: string;
+  /**
+   * 门禁测的时候目标分支在哪（合并预览档的 previewBase）。目标分支不在这里就不合：核对之后另一个
+   * 终端把它挪了，原本要三方合并的可能变成快进、原本要合的可能变成「已经合过」，每一种都会落下
+   * 另一棵树（第 4 轮审查 F2）。不给时以进锁那一刻的目标提交为准。
+   */
+  expectedTarget?: string;
+  /** 门禁测过的那份物理内容（凭据的 preview_physical）：落地前后都按它核目标检出的字节（第 5 轮复审 F2）。 */
+  expectedPhysical?: GatePhysical | null;
 };
 
 export async function mergeTaskBranch(
@@ -250,20 +265,23 @@ export async function mergeTaskBranch(
 // 目标分支得有个检出的地方才跑得了 merge。三种情况按危险程度排：目标就在项目目录上
 // 且干净 → 就地跑；目标在别的 worktree 上 → 一律不碰（那是别人正在用的工作区）；
 // 哪儿都没检出 → 开个临时 worktree，跑完就拆。
+/** 目标检出的「工作区干净」：普通落地照 `git status`（受保护落地换成不调程序的那一版，guardedDirtyFiles）。 */
+const statusDirtyFiles = async (repo: string) => porcelainFiles((await exec("git", ["-C", repo, "status", "--porcelain"])).stdout);
+
 async function inTargetCheckout(
   repo: string,
   sourceBranch: string,
   targetBranch: string,
   fn: (cwd: string) => Promise<TaskMergeResult>,
-  beforeTemp?: () => TaskMergeResult | null,
+  beforeTemp?: () => TaskMergeResult | null | Promise<TaskMergeResult | null>,
+  dirty = statusDirtyFiles,
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
   const checkout = await targetCheckout(repo, targetBranch);
   const { path: targetPath, atRepo: targetAtRepo } = checkout;
 
   if (targetAtRepo) {
-    const { stdout } = await exec("git", ["-C", repo, "status", "--porcelain"]);
-    const dirtyFiles = porcelainFiles(stdout);
+    const dirtyFiles = await dirty(repo);
     if (dirtyFiles.length > 0) {
       return {
         ok: false,
@@ -287,7 +305,7 @@ async function inTargetCheckout(
       targetPath,
     };
   }
-  const early = beforeTemp?.();
+  const early = await beforeTemp?.();
   if (early) return early;
 
   let temp: TemporaryWorktree;
@@ -389,6 +407,8 @@ async function mergeWithoutCommit(
   sourceBranch: string,
   targetBranch: string,
   sourceRef = sourceBranch,
+  stage = (cwd: string) => squashInCheckedOutTarget(cwd, sourceBranch, targetBranch, false, sourceRef),
+  dirty = statusDirtyFiles,
 ): Promise<TaskMergeResult> {
   await removeMissingWorktreeRegistrations(repo, { branch: targetBranch }).catch(() => {});
   const checkout = await targetCheckout(repo, targetBranch);
@@ -416,8 +436,7 @@ async function mergeWithoutCommit(
       targetPath: repo,
     };
   }
-  const { stdout } = await exec("git", ["-C", repo, "status", "--porcelain"]);
-  const dirtyFiles = porcelainFiles(stdout);
+  const dirtyFiles = await dirty(repo);
   if (dirtyFiles.length > 0) {
     return {
       ok: false,
@@ -431,7 +450,7 @@ async function mergeWithoutCommit(
       dirtyFiles,
     };
   }
-  return squashInCheckedOutTarget(repo, sourceBranch, targetBranch, false, sourceRef);
+  return stage(repo);
 }
 
 /** 「只打标签不合并」那一档的标签名。 */
@@ -506,7 +525,21 @@ async function mergeTaskBranchLocked(
     }
   }
 
+  // 合并预览档的落地约束（重试已合过的那次除外：目标分支正是被上一次自己的合并挪走的）。
+  const now = await commitOf(repo, targetBranch);
+  const guard: LandingGuard | null = options.expectedTree && !options.retryOfMerged && now
+    ? { tree: options.expectedTree, target: options.expectedTarget ?? now, physical: options.expectedPhysical ?? null } : null;
+  if (guard && now !== guard.target) {
+    return { ok: false, reason: "merge_failed", message: movedTarget(targetBranch, guard.target, now), sourceBranch, targetBranch };
+  }
+
   if (await isAncestor(repo, sourceRef, targetBranch)) {
+    if (guard && await treeOfCommit(repo, targetBranch) !== guard.tree) {
+      return { ok: false, reason: "merge_failed", sourceBranch, targetBranch,
+        message: `目标分支 ${targetBranch} 已经包含任务分支，但它现在那棵树不是验收前置命令测过的那一棵，没有把这次记成验收通过。重新验收会按现在的目标分支重新跑门禁。` };
+    }
+    const untested = guard ? await alreadyLandedUntested(repo, guard, { sourceBranch, targetBranch }) : null;
+    if (untested) return untested;
     return { ok: true, sourceBranch, targetBranch, method: "already_merged" };
   }
 
@@ -514,6 +547,7 @@ async function mergeTaskBranchLocked(
   // 更靠后也更硬——不落提交时，squash 和 --no-ff 在工作区里的结果没有区别（都是「把那
   // 串改动的最终状态放进来」），真正能区别它们的那个动作正是被去掉的那次 commit。
   // 「只打标签不合并」不受影响：它本来就不产生提交，上面已经提前返回了。
+  if (guard) return landTested(repo, guard, strategy, options.commit === false, sourceBranch, targetBranch, sourceRef);
   if (options.commit === false) {
     // 重试上一轮已经合过的那次：目标工作区里躺着的就是上次合进来的改动，别再合一遍
     // （会被自己的产物判成 target_dirty，任务永远卡在 merged）。
@@ -555,4 +589,22 @@ async function mergeTaskBranchLocked(
         : null,
     );
   }
+}
+
+/**
+ * 带落地约束的那一按（合并预览档）：结果在检出之外生成、只用快进发布，见 git-accept-tested.ts。
+ * 检出的三种情况（就地 / 别人的 worktree / 哪儿都没检出）与无约束时同一套判断，只是哪儿都没检出时
+ * 不开临时 worktree，直接带旧值挪 ref。
+ */
+async function landTested(repo: string, guard: LandingGuard, strategy: AcceptStrategy, noCommit: boolean,
+  sourceBranch: string, targetBranch: string, sourceRef: string): Promise<TaskMergeResult> {
+  const names = { sourceBranch, targetBranch };
+  if (noCommit) return mergeWithoutCommit(repo, sourceBranch, targetBranch, sourceRef, (cwd) => stageTestedTree(cwd, guard, names), guardedDirtyFiles);
+  const method = strategy === "squash" ? "squash" : await isAncestor(repo, targetBranch, sourceRef) ? "fast_forward" : "merge_commit";
+  const message = method === "squash" ? squashCommitMessage(sourceBranch) : `Merge branch '${sourceBranch}' into ${targetBranch}`;
+  const result = await testedResultCommit(repo, method, guard, sourceRef, message, names);
+  if (typeof result !== "string") return result;
+  return inTargetCheckout(repo, sourceBranch, targetBranch,
+    (cwd) => publishInCheckout(cwd, method, guard, result, names),
+    () => publishRefOnly(repo, method, guard, result, names), guardedDirtyFiles);
 }

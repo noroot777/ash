@@ -1,22 +1,34 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { gateConfinementUnavailable, gateExecutionNotice, gateScopeNotice } from "./accept-gate-confinement.js";
 import { readGateLaunch } from "./accept-gate-launch.js";
-import { ACCEPT_GATE_DIAGNOSIS_GENERATION, normalizeAcceptGateCommand, normalizeAcceptGateFailure, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
+import { ACCEPT_GATE_DIAGNOSIS_GENERATION, normalizeAcceptGateBaseline, normalizeAcceptGateCommand, normalizeAcceptGateFailure, type AcceptGateBasis, type AcceptGateBasisMode, type AcceptGateState, type AcceptGateStatus, type AcceptGateView } from "@ash/shared/accept-gate";
 import { db } from "./db/index.js";
 import { acceptGateRuns, projects, tasks } from "./db/schema.js";
 import { gateLogReadable } from "./accept-gate-diagnosis.js";
 import { acceptGateLogTail } from "./accept-gate-process.js";
 import { commitAt } from "./task-branch-plan.js";
+import { treeOfCommit } from "./git-accept.js";
 import { existingTaskWorkspacePath, taskWorkspace } from "./task-workspace.js";
-import { gateSnapshotPath, gateSourceMatches, readGateSource } from "./accept-gate-source.js";
+import { gateDependencies, gateSnapshotPath, gateSourceMatches, readGateSource } from "./accept-gate-source.js";
+import { gateBaselineMatches, resolveGateBaseline } from "./accept-gate-baseline.js";
+import { decodePhysical, type GatePhysical } from "./accept-gate-physical.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
 
-export async function gateMergeSource(basis: Pick<TaskRow, "acceptedGateMode" | "acceptedGateRunId"> | null): Promise<string | undefined> {
-  if (basis?.acceptedGateMode !== "passed" || !basis.acceptedGateRunId) return undefined;
-  return (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, basis.acceptedGateRunId))).at(0)?.sourceCommit ?? undefined;
+/**
+ * 凭据那一次门禁测的是哪一份：任务分支的提交；合并预览档另有测过的那棵树（预演出的合并树，已含目标
+ * 分支时就是任务分支那棵）和测的时候目标分支所在的提交。最终合并只认这几样（git-accept 的落地约束）。
+ */
+export async function gateMergeSource(repoPath: string, basis: Pick<TaskRow, "acceptedGateMode" | "acceptedGateRunId"> | null):
+  Promise<{ sourceCommit?: string; expectedTree?: string; expectedTarget?: string; expectedPhysical?: GatePhysical | null }> {
+  if (basis?.acceptedGateMode !== "passed" || !basis.acceptedGateRunId) return {};
+  const row = (await db.select().from(acceptGateRuns).where(eq(acceptGateRuns.id, basis.acceptedGateRunId))).at(0);
+  const sourceCommit = row?.sourceCommit ?? undefined;
+  if (!row?.previewBase) return { sourceCommit };
+  const expectedTree = row.previewTree ?? (sourceCommit ? await treeOfCommit(repoPath, sourceCommit) ?? undefined : undefined);
+  return { sourceCommit, expectedTree, expectedTarget: row.previewBase, expectedPhysical: decodePhysical(row.previewPhysical) };
 }
 
 /**
@@ -57,6 +69,7 @@ export function gateView(row: GateRow): AcceptGateView {
     targetBranch: row.targetBranch ?? null,
     targetCommit: row.targetCommit ?? null,
     fastForward: row.fastForward ?? null,
+    previewBase: row.previewBase ?? null,
     stale: false,
     logPath: row.logPath,
     logAvailable: gateLogReadable(row.logPath),
@@ -124,22 +137,36 @@ export async function acceptGateState(taskId: string): Promise<AcceptGateState> 
   const unavailable = command ? gateConfinementUnavailable() : null;
   const executionNotice = command ? gateExecutionNotice() : null;
   const basis = await acceptBasis(task);
+  const frozen = task.archived || task.stage === "accepted" || task.stage === "merged";
+  const baseline = normalizeAcceptGateBaseline(project?.acceptGateBaseline);
+  // 门禁基准此刻要对照的目标与它会不会拦下这一按。已验收的任务没有「下一按」，不去读 git。
+  const head = frozen || !project ? null : await gateHead(task, project.repoPath);
+  // 合并预览档的基准要知道这次快照借哪几个依赖目录（与 acceptGateCheck 同一个入参）。这里只读
+  // 登记（gateDependencies：树与文件系统），**不**读完整源码身份 —— 后者要跑 `git status`，会调起
+  // 项目配的 fsmonitor 之类（第 2 轮审查 F2）；没设门禁、或者不是这一档时一行都不读。
+  const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
+  let sourceError: string | null = null;
+  const borrowed = command && baseline === "merge_preview" && cwd && head
+    ? await gateDependencies(cwd, head).then(planned => ({ cwd, dependencies: planned.dependencies }),
+      (error) => { sourceError = String(error); return undefined; })
+    : undefined;
+  const judged = command && project && !frozen ? await resolveGateBaseline(task, project, head, borrowed) : null;
+  const target = judged?.plan ?? judged?.block ?? null;
+  const baselineView = { baseline, baselineBlock: judged?.block?.error ?? null,
+    baselineTarget: target?.targetBranch && target.targetCommit ? { branch: target.targetBranch, commit: target.targetCommit } : null };
   const latestRow = await latestRun(taskId);
-  if (!latestRow) return { command, running: null, latest: null, basis, unavailable, executionNotice };
+  if (!latestRow) return { command, running: null, latest: null, basis, unavailable, sourceError, executionNotice, ...baselineView };
   const view = gateView(latestRow);
   const pending = (await db.select().from(acceptGateRuns).where(and(eq(acceptGateRuns.taskId, taskId),
     or(eq(acceptGateRuns.status, "running"), eq(acceptGateRuns.processPending, true))))
     .orderBy(desc(acceptGateRuns.startedAt)).limit(1)).at(0);
-  if (pending) return { command, running: gateView(pending), latest: view, basis, executionNotice };
+  if (pending) return { command, running: gateView(pending), latest: view, basis, sourceError, executionNotice, ...baselineView };
   // 新鲜度按**现在**这棵树算：前端据它决定说「已通过，可以直接验收」还是「要重跑」。
-  const frozen = task.archived || task.stage === "accepted" || task.stage === "merged";
-  const head = frozen ? task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null
-    : project ? await gateHead(task, project.repoPath) : null;
-  const cwd = !frozen && project ? await existingTaskWorkspacePath(task, project.repoPath) : null;
-  let sourceError: string | null = null;
+  const frozenHead = task.acceptedSourceCommit ?? basis?.run?.sourceCommit ?? null;
   const source = cwd && !unavailable ? await readGateSource(cwd, gateSnapshotPath(task.id, "identity"))
     .catch(error => { sourceError = String(error); return null; }) : null;
-  const stale = latestRow.command !== command || (frozen ? !head || head !== latestRow.sourceCommit
-    : !gateSourceMatches(latestRow, source));
-  return { command, running: null, latest: { ...view, stale }, basis, unavailable, sourceError, executionNotice };
+  // 基准也算进新鲜度：合并预览那份绿只对当时的目标分支尖端作数（被拦下的那一档没有 plan，旧绿同样不作数）。
+  const stale = latestRow.command !== command || (frozen ? !frozenHead || frozenHead !== latestRow.sourceCommit
+    : !gateSourceMatches(latestRow, source) || !judged?.plan || !gateBaselineMatches(latestRow, judged.plan));
+  return { command, running: null, latest: { ...view, stale }, basis, unavailable, sourceError, executionNotice, ...baselineView };
 }

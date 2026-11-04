@@ -296,6 +296,7 @@
 .settings-heading { margin-bottom: 38px; }
 .settings-heading h1 { font-size: 29px; font-weight: 710; letter-spacing: -.045em; }
 .settings-heading p { font-size: 12.5px; line-height: 1.7; }
+.settings-stale { margin: -26px 0 26px; font-size: 12.5px; line-height: 1.6; color: var(--amber); }
 
 .settings-card {
   border-color: color-mix(in lch, var(--line) 82%, transparent);
