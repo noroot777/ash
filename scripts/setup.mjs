@@ -181,7 +181,7 @@ say("▶ 4/5 接上 ash MCP(agent 靠它交卷)");
 const mcpEntry = join(REPO, "mcp", "dist", "index.js");
 
 if (process.env.SKIP_MCP) {
-  warn("SKIP_MCP=1,跳过。稍后自己接(命令见 docs/install.md),否则任务跑完一律记 failed。");
+  warn("SKIP_MCP=1,跳过。之后在界面「设置 → 执行器」注册执行器时会补接,或按 docs/install.md 手接;没接上的任务跑完一律记 failed。");
 } else {
   // ── claude ────────────────────────────────────────────────────────────────
   if (which("claude")) {

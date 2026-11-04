@@ -213,10 +213,7 @@ export function reserveNativeSteerTask(taskId: string): NativeSteerReservation {
           throw new Error("当前活动回合已经结束");
         }
         await target.beforeDeliver?.(at);
-        // prepare **惰性传进去**:它要现读浏览器授权,而 steer 还要等一个最多 2 秒的打断
-        // 回执。在这里就把正文拼死的话,用户在那几秒里收回授权(PATCH 都 200 了)也拦不住,
-        // 这条还没写进 stdin 的消息照样宣布「已预先授权」(第 8 链第 1 轮审查 P1)。
-        // 执行器保证它在 ACK 与发送前清理都跑完之后、写 stdin 之前才调用。
+        // prepare **惰性传进去**:执行器保证它在 ACK 与发送前清理都跑完之后、写 stdin 之前才调用。
         await target.handle.steer(() => target.prepare(opts?.promptText ?? text), opts?.beforeSend);
         // provider 已确认收到以后，消息就已经是真实投递；实时广播失败不能把它退回队列
         // 再投一次，否则同一句会进入模型两遍。

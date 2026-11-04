@@ -130,7 +130,7 @@ function ClipMark({ count }: { count: number }) {
   );
 }
 
-// 铺开后每一行右边多出来的三格。窄态不渲染，宽态由 CSS 的列模板给出宽度；
+// 铺开后每一行右边多出来的四格。窄态不渲染，宽态由 CSS 的列模板给出宽度；
 // 行高仍然是 34px，上方也不新增任何一行 —— 铺开是「露出右边」，不是「重排」。
 export function SpreadRowCells({ task, ctx, onOpen }: { task: TaskListItem; ctx: SpreadRowContext; onOpen: () => void }) {
   const last = ctx.spread.followUps.get(task.id);
@@ -163,6 +163,7 @@ export function SpreadRowCells({ task, ctx, onOpen }: { task: TaskListItem; ctx:
           : <p className={last ? "" : "is-empty"}>{last ? firstLine(last.text) : (known ? NO_FOLLOW_UP : "—")}</p>}
         {showMemo ? <MemoMark count={showMemo.count} /> : <ClipMark count={last?.attachments.length ?? 0} />}
       </span>
+      <span className="workspace-spread-cell workspace-spread-cell--id" onClick={onOpen}>{task.id}</span>
       <span className="workspace-spread-cell workspace-spread-cell--time" onClick={onOpen}>{compactAge(task.updatedAt)}</span>
     </>
   );

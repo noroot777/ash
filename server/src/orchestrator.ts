@@ -51,7 +51,6 @@ import { prepareCliInvocation, readCliState } from "./task-cli-state.js";
 import { prepareContinuationEntry } from "./task-continuation-entry.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { invitedTaskBrief } from "./invited-task-brief.js";
-import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { enterTurn, withTurnPreflight } from "./turn-entry-guard.js";
 import { cliConfigDirColumn, runEnvForOwner } from "./auth/run-env.js";
 import { turnIdentityEnv } from "./turn-identity.js";
@@ -59,7 +58,7 @@ import { takeResumePrompt } from "./task-resume-prompt.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   COLLAB_INVITE, SYS_MARKER,
-  COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote, PLANNING_TURN,
+  backgroundWaitFor, COMPLETION_REMINDER, DIRECTION_PROTOCOL, FOLLOW_UP_REMINDER, followUpRailNote, PLANNING_TURN,
   WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
 } from "./run-prompts.js";
 // 「登记的基线被换掉了」这句话：说不说、怎么说、失败那条路怎么补，全在这一份里。
@@ -246,6 +245,7 @@ export async function continueTask(
     // 令牌落库的同一处把它绑到这一轮的运行时身份上:来源核验要的是「库里的令牌」和
     // 「内存里这一轮」是同一件事,而不是两份各自独立的读(见 runs.ts `bindTurnToken`)。
     bindTurnToken(taskId, turnToken);
+    await (await import("./review-recurrence-gate.js")).carryRecurrenceBreaker(taskId, { ...opts, native: !!nativeCommand });
 
     // 续聊/重跑同样按**这一回合是谁点的**解析执行器(§八)。跨人时降级到本人的默认
     // 执行器,并把这次降级写进时间线 —— 换执行器可能换模型档位,产出会变,不能静默。
@@ -352,16 +352,11 @@ export async function continueTask(
     const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
     // 原生命令必须**独占整条 prompt**:前面垫一个字它就退化成普通模型请求,压缩不会
     // 发生;后面跟的字则会被 CLI 整条丢弃,拼上去只是自欺(见 skills.ts NATIVE_COMMANDS)。
-    // 浏览器策略那段同理 —— 它也是拼在正文外面的字。
-    // 这里只拼**正文**,浏览器策略留到起跑前最后一刻再贴(见下面 takeFreeze 那一段):
-    // 这一句到 executor.run 之间隔着三个 await(runEnv / prepareResume / prepareCliInvocation),
-    // 在这里就把授权拼死,用户在启动期间收回授权就拦不住了 —— 撤销已落库,发出去的
-    // 第一条消息却还写着「已预先授权 x.com」(第 3 轮审查 P1)。
-    // 产出质量规则这一轮的事实(判据本体见 craft-rules.ts):`!resuming` 跟下面 `promptLevel`
-    // 发全文还是缩略版是同一个判据,为真的那几种(首次被 @ 进来、旧会话接不上、/clear 之后
-    // 新开)都是没有旧上下文的首条消息。原生命令那一支拿不到它 —— 它独占整条 prompt(见上)。
+    // 产出质量规则这一轮的事实(判据本体见 craft-rules.ts):`!resuming` 为真的那几种(首次被
+    // @ 进来、旧会话接不上、/clear 之后新开)都是没有旧上下文的首条消息。原生命令那一支拿不到
+    // 它 —— 它独占整条 prompt(见上)。
     const craft = { freshContext: !resuming, verifying };
-    const promptBody = nativeCommand
+    const prompt = nativeCommand
       ? promptedUserTurnText
       : planning ? PLANNING_TURN(craft, promptedUserTurnText)
       : assembleTurnPrompt({
@@ -375,10 +370,10 @@ export async function continueTask(
         completion: followUpFrom
           ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
           : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow),
+        backgroundWait: backgroundWaitFor(agent),
         direction: DIRECTION_PROTOCOL(directionToken),
         reviewReminder,
       });
-    const promptLevel = planning || resuming ? "reminder" as const : "full" as const;
     const runEnv = {
       ...(await runEnvForOwner(runOwner, agent)),
       ...turnIdentityEnv({ taskId, turnToken, directionToken }),
@@ -393,10 +388,8 @@ export async function continueTask(
     // 续聊接回正文图片的身份种子(要读 trace,异步):子智能体的文档跨回合累加,不接上,
     // 重开后的第一处引用又从 0 号发起,跟刷新重建那一路撞身份(agent-image-journal.ts)。
     const imageSeed = resuming ? await loadMarkdownImageSeed(taskId, prev!.id) : undefined;
-    // **这道闸必须排在读浏览器授权之前**:那之后到 spawn 之间只许剩撤回那一个 await(判据由
-    // test-browser-grant-timing 的顺序不变量扫源码钉住)—— 多一个查库的 await,用户在这段时间
-    // 收回授权就拦不住,撤销已落库而首条消息仍写着「已预先授权」。排早一点的代价只是「授权读取
-    // 这两步期间审查被顶掉」照样起跑,那一种由 spawn 之后的 `commitReviewTurnDelivery` 接着拦。
+    // 这道闸到 spawn 之间还隔着查冻结事实那一个 await:这期间审查被顶掉的那一种照样起跑,由
+    // spawn 之后的 `commitReviewTurnDelivery` 接着拦。
     checkingReviewStart = true;
     // 这道闸要问的是「**我属于的那一轮审查**还是当下这一轮吗」,所以只对**绑定了审查**的回合
     // 开:收据在手,或者任务自己挂着就地验证轮 / 是审查任务,或者回合身份里写明了是哪一次审查。
@@ -410,16 +403,13 @@ export async function continueTask(
     await assertReviewTurnStart(taskId, turnToken, directionToken, opts.reviewDelivery,
       !!reviewStart || (!nativeCommand && (!!task.verifyRound || boundReviewTurn || !!task.reviewOf)));
     checkingReviewStart = false;
-    // 顺序定死:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论 → spawn。为什么只能这
-    // 么排、以及 freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
+    // 顺序定死:查冻结事实(最后一个 await)→ 同步定论 → spawn。为什么只能这么排、以及
+    // freezeGuard 为什么只在那几条路上查库,见 task-run.ts 同一段与 turn-freeze.ts。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
-    const browserGrant = await browserGrantForProject(task.projectId);
     // ↓ 这里往下到 `trackRun` 全同步(撤回那条岔路除外,它不起进程):暂停请求要么在
     // takeFreeze 被消费、要么之后才到 —— 那时已有 handle 可杀。
     const freeze = takeFreeze(taskId, frozen);
     if (freeze) await abortFrozen(taskId, freeze, { restorable: !!followUpFrom });
-    // 原生命令必须独占整条 prompt(理由见上),不贴策略。
-    const prompt = nativeCommand ? promptBody : withGlobalBrowserPolicy(promptBody, promptLevel, browserGrant);
     const sessId = resuming ? prev!.id : id();
     // 起点从身份层分配（同 task-run）。续聊复用同一行会话,所以这一轮的起点必须严格晚于那条
     // 会话上已经见过的全部起点 —— 撞上就会被当成同一个回合身份,既不插行也不加数。
@@ -601,12 +591,7 @@ export async function continueTask(
       taskId, sessId, agentType: agent, ex, cwd,
       handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
       nativeSteer: {
-        // 同上:投递这一刻现读,撤销才对活动任务即时生效。
-        prepare: async (text) => withGlobalBrowserPolicy(
-          withSkillInvocation({ agentType: agent, cwd, text, userId: runOwner }),
-          "reminder",
-          await browserGrantForProject(task.projectId),
-        ),
+        prepare: (text) => withSkillInvocation({ agentType: agent, cwd, text, userId: runOwner }),
         record: (text, at) => recordUserConversationTurn({
           taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text, at,
         }),

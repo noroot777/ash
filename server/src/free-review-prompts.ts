@@ -1,8 +1,10 @@
 // 自由工作流的三段 prompt 文案（从 free-workflow.ts 拆出，纯行数拆分）：
 // 派审回合、自动修复交接、轮数用尽后的手动修复交接；外加「驳回 / 辩论」那条支线的
 // 措辞（修复交接里的驳回选项、辩论每一段的开场白）。
-import { freeReviewDebateTurns, freeReviewDebates, freeReviewRuns, tasks } from "./db/schema.js";
-import { freeReviewEvidenceDir, freeReviewReportPath } from "./free-review-files.js";
+import { and, eq } from "drizzle-orm";
+import { db } from "./db/index.js";
+import { freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, tasks } from "./db/schema.js";
+import { freeReviewEvidenceDir, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { reviewRequestReference } from "./review-request-context.js";
 import { settledRulingsFor } from "./free-review-settled.js";
 import { REPORT_SUMMARY_FORMAT, REPORT_SUMMARY_REMINDER } from "./review-report-format.js";
@@ -11,7 +13,13 @@ import {
   REVIEWER_REGRESSION_CLAUSE,
 } from "@ash/shared/free-workflow";
 import { CLASS_REPAIR_NOTE, REVIEW_SWEEP_PROTOCOL, REVIEW_SWEEP_REMINDER } from "./review-sweep.js";
-import { freeReviewHistorySection } from "./review-history.js";
+import { lstat, rename } from "node:fs/promises";
+import { join } from "node:path";
+import { replaceEvidenceFile, safeRunDirectory } from "./review-evidence.js";
+import { appendTaskTimeline } from "./task-timeline.js";
+import { id } from "./util.js";
+import { extractReportFindings, freeReviewHistory } from "./review-history.js";
+import { RECURRENCE_LIST_FILE, recurrenceListMarkdown, recurrenceRepairNote, roundRecurrence } from "./review-recurrence.js";
 import { refreshRegressionEvidence } from "./regression-evidence-lifecycle.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -38,7 +46,12 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
   });
   // 前面各轮（含别的审查链）报过的现象行：跨 run 的会话是断的，不搬过去它就只能把自己
   // 复现到的那一条当独立缺陷报上来（理由见 review-history.ts 文件头）。
-  const history = await freeReviewHistorySection(task.id, { runId: run.id, round });
+  const history = await freeReviewHistory(task.id, { runId: run.id, round });
+  // 清单里**实际内联了**哪几个编号落到这一轮上：审查者交卷时声明的承接只认这些（review-recurrence.ts）。
+  // 夹具传进来的 run 不在库里时这一笔什么都不改。
+  await db.update(freeReviewRounds).set({ historyRefs: history.refs.length ? history.refs : null })
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, round)))
+    .catch(() => undefined);
   const acceptedMerge = run.targetKind === "accepted_merge" && run.targetBranch && run.targetBaseCommit && run.targetCommit;
   const target = acceptedMerge
     ? `\n\n本轮审查的是已经验收后的合并快照，不是原任务工作区：\n` +
@@ -61,14 +74,10 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     // 所以把「能复现」收窄到最重的那几条，其余条目的去处由扫描义务那一节交代。
     `你是独立审查者，不是继续实现需求。默认产物**可能**有问题，主动把问题找全；最严重的那几条要做到能复现。\n\n` +
     `任务：${task.id}\n${requirements}\n\n` +
-    `${focus}${settled}${history}${note}${target}\n\n` +
+    `${focus}${settled}${history.text}${note}${target}\n\n` +
     // 扫描义务摆在具体动作之前：先定「这一轮要扫到什么程度」，再说「先看 git status」。
     REVIEW_SWEEP_PROTOCOL + regression + "\n\n" +
     `先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
-    // 浏览器策略**不在这里拼**:正文是提前生成的,这里拼死的只能是一份「默认未授权」的
-    // 文本,而投递时读到的项目授权会被去重锚点挡在门外 —— 已经在项目设置里授权过的站点,
-    // 审查回合照样停下来等人点头,无人值守就断在这儿(第 6 链第 1 轮审查 P2)。
-    // 统一由投递点 withGlobalBrowserPolicy 贴那一份**带最新授权**的。
     REVIEW_VALIDATION_REQUIREMENT + "\n\n" +
     `用过 playwright 就在结束前清掉工作区产物；所有验证临时服务与浏览器进程都要停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}，截图按需放同一目录；证据不要 git add/commit。\n\n` +
@@ -134,10 +143,57 @@ function disputeOption(taskId: string): string {
     `驳回后**不要**调 complete_task（这一轮停在等裁定，不是完成）。`;
 }
 
+/**
+ * 同一谱系连续两轮没收口时附在这一条交接里的那段指令（只这一轮，判据见 review-recurrence.ts）。
+ * 摆在「先读报告」之后、类问题边界之前：它改的是这一轮**怎么修**，后面那几段照旧成立。
+ */
+async function recurrenceNote(taskId: string, runId: string, round: number): Promise<string> {
+  const found = await roundRecurrence(taskId, runId, round);
+  if (!found) return "";
+  const note = recurrenceRepairNote(found);
+  if (!note.listed) return note.text;
+  // 条目多到指令里放不下：完整清单落到报告同目录，指令只报条数并指过去（不截掉任何一条）。
+  // **指令长度在每条出路上都守 ≤ 300B**：清单落不了盘时不改成整串内联（那正是绕开上限的那条路），
+  // 而是这一次交接不发 —— 时间线上留一句原因，自动修复由收尾对账重试、手动修复可以再点一次。
+  const failure = await writeRecurrenceList(taskId, runId, round, recurrenceListMarkdown(found,
+    extractReportFindings(readFreeReviewReport(taskId, runId, round))));
+  if (!failure) return note.text;
+  const why = `同类问题熔断的完整清单写不进证据目录（${failure}），这一次修复交接先不发`;
+  await appendTaskTimeline(taskId, `${why}：条目太多放不进指令，不给清单执行者就不知道要一次改全哪几条。会自动重试；` +
+    `也可以修好证据目录后再点「按意见修复」。`, { eventKey: `recurrence-list:${runId}:${round}` }).catch(() => false);
+  throw new Error(why);
+}
+
+/**
+ * 把清单写进报告同目录。那个目录审查者写得进去，所以走证据目录的安全写入（祖先不许是链接、替换目录项
+ * 而不是顺着旧文件上的链接写穿，见 review-evidence.ts）；同名位置被别的东西占着（比如一个目录）就先挪开
+ * 再写一次。返回 null = 写好了，否则是写不进去的原因。
+ */
+async function writeRecurrenceList(taskId: string, runId: string, round: number, content: string): Promise<string | null> {
+  const dir = freeReviewEvidenceDir(taskId, runId, round);
+  const path = join(dir, RECURRENCE_LIST_FILE);
+  try {
+    if (!(await safeRunDirectory(dir, true))) return "证据目录的上级是链接，或不在数据目录里";
+    try {
+      await replaceEvidenceFile(path, content);
+    } catch (error) {
+      const occupied = await lstat(path).catch(() => null);
+      if (!occupied || occupied.isFile() || occupied.isSymbolicLink()) throw error;
+      await rename(path, join(dir, `.${RECURRENCE_LIST_FILE}.${id()}.displaced`));
+      await replaceEvidenceFile(path, content);
+    }
+    return null;
+  } catch (error) {
+    console.error(`[ash] 熔断清单没写进证据目录 task=${taskId}:`, error);
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 export async function freeRepairPrompt(taskId: string, run: ReviewRunRow): Promise<string> {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
   return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按报告修复，不要扩大原任务边界。` +
+    await recurrenceNote(taskId, run.id, run.currentRound) +
     CLASS_REPAIR_NOTE +
     `修复并验证后调 complete_task(taskId="${taskId}")；已预约的复审会在本回合正常结束后自动启动。\n\n` +
     `证据目录：${dir}` +
@@ -225,6 +281,7 @@ export async function freeManualRepairPrompt(
         `，不要再驳回；确有做不到的地方就用 ask_question 说清楚，别默默跳过。\n`
       : "") +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, round)})，再按第 ${round} 轮意见修复，不要扩大原任务边界。` +
+    await recurrenceNote(taskId, run.id, round) +
     CLASS_REPAIR_NOTE +
     `修复并验证后调 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
     `用户若在修复期间预约了复审，本回合正常结束后按预约开始，否则等用户决定再审或验收。\n\n` +

@@ -36,14 +36,13 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { isGoalExecution, parseCliCommand } from "@ash/shared/cli-commands";
 import { interruptCliGoal, preflightCliGoalCommand, prepareCliInvocation } from "./task-cli-state.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
-import { browserGrantForProject, withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { clearHandoffNotice, handoffNoticeFrom } from "./handoff-notice.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { preparePendingCheckpointStart } from "./pending-checkpoint-recovery.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { freshRunFailureTarget, reportTurnFailure } from "./turn-failure.js";
 import { acknowledgeTaskStart } from "./task-start-receipt.js";
-import { AUTONOMY, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
+import { AUTONOMY, backgroundWaitFor, COMPLETION_PROTOCOL, DIRECTION_PROTOCOL } from "./run-prompts.js";
 import { assembleFreshPrompt } from "./turn-prompt.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
@@ -187,14 +186,12 @@ export async function runTask(
     // 同样要投:会话文件没随任务到货时,接过来的任务第一次跑走的正是这里(见
     // handoff-notice.ts;续跑那条路在 orchestrator.ts)。
     const handoffNotice = reviewTask ? "" : handoffNoticeFrom(task.handoff);
-    // 这里只拼正文,浏览器策略留到起跑前最后一刻(takeFreeze 那一段)用现读的授权来贴 ——
-    // 这一句到 spawn 之间还隔着两个 await,在这里拼死授权的话,用户在启动期间收回授权就
-    // 拦不住了(同第 3 轮审查 P1 的续聊路径)。
-    const promptBody = assembleFreshPrompt({
+    const prompt = assembleFreshPrompt({
       autonomy: AUTONOMY,
       // fresh run 一律是一条全新的 CLI 会话,所以 `freshContext` 恒真;这一轮交结论还是
       // 交代码由 `reviewTask`(历史独立审查任务)定。判据本体见 craft-rules.ts。
       craft: { freshContext: true, verifying: reviewTask },
+      backgroundWait: backgroundWaitFor(agentType),
       completion: COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free"),
       direction: DIRECTION_PROTOCOL(directionToken),
       teamPreamble,
@@ -208,23 +205,13 @@ export async function runTask(
       ...(await runEnvForOwner(runOwner, agentType)),
       ...turnIdentityEnv({ taskId, turnToken, directionToken }),
     };
-    // 启动末段的顺序是**定死的**:查冻结事实 → 读浏览器授权(最后一个 await)→ 同步定论
-    // → spawn。三样东西互相挤,只有这一种排法同时满足:
-    //   · 授权必须是**最后一个** await 读到的。放在查冻结事实之前的话,那次查库的工夫里
-    //     用户收回授权就拦不住 —— 撤销已经落库,发出去的第一条消息却还写着「已预先授权」
-    //     (第 6 链第 1 轮审查 P1 实测到的就是这个)。
-    //   · 内存里的停止标记必须留到**同步段**消费。消费早了,之后到的停止既杀不到(还没
-    //     trackRun)也拦不住(闸已经过了)—— 第 3 轮审查 P2 就是这么开出来的窗口。
-    //   · 那么被挤到前面的只能是查库的那半边冻结事实,它也确实是三者里最赔得起的:最常见
-    //     的「分组暂停」有内存标记兜底(pauseGroup 先写 paused 再扫 status,扫到这一轮还没
-    //     running/没 handle 时会留标记),剩下任务被删/归档只在读授权那一次 select 的时长
-    //     里漏判,后果是多跑一个回合,而授权漏判的后果是动用户的登录态。
+    // 启动末段的顺序是**定死的**:查冻结事实(最后一个 await)→ 同步定论 → spawn。内存里的
+    // 停止标记必须留到**同步段**消费。消费早了,之后到的停止既杀不到(还没 trackRun)也拦不住
+    // (闸已经过了)—— 第 3 轮审查 P2 就是这么开出来的窗口。
     const frozen = await freezeFacts(taskId, !!opts.freezeGuard);
-    const browserGrant = await browserGrantForProject(task.projectId);
     // ↓ 这里往下到 spawn 全同步(撤回那条岔路除外,它不起进程)。
     const freeze = takeFreeze(taskId, frozen);
     if (freeze) await abortFrozen(taskId, freeze);
-    const prompt = withGlobalBrowserPolicy(promptBody, "full", browserGrant);
     const sessId = id();
     // 回合起点从身份层分配,不自己取 `now()`（见 session-turns.ts 的 nextTurnStart）：唯一性
     // 是**会话级**不变量,八处起跑入口各自取时钟就各自碰运气。顺带让 trace/detach 的文件名
@@ -315,12 +302,7 @@ export async function runTask(
       taskId, sessId, agentType, ex, cwd: ws.path,
       handle, out, turnStart, cliSessionId, autoTitle,
       nativeSteer: {
-        // 现读而不是用上面那个快照:任务跑着的时候用户可能已经收回授权了。
-        prepare: async (text) => withGlobalBrowserPolicy(
-          withSkillInvocation({ agentType, cwd: ws.path, text, userId: runOwner }),
-          "reminder",
-          await browserGrantForProject(task.projectId),
-        ),
+        prepare: (text) => withSkillInvocation({ agentType, cwd: ws.path, text, userId: runOwner }),
         record: (text, at) => recordUserConversationTurn({
           taskId, sessionId: sessId, role: "single", agentType, out, text, at,
         }),

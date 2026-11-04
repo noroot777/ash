@@ -277,6 +277,8 @@
   color: var(--amber);
   font-size: 10px;
   line-height: 1.5;
+  /* 补不上 ash MCP 时原因里带着要手工加的那段配置，换行得留着才抄得走。 */
+  white-space: pre-wrap;
 }
 
 /* 「派不出任务」比「某个选项静默失效」更重：前者是这一行现在完全跑不了。 */

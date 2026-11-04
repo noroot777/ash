@@ -26,7 +26,6 @@ import {
 import type { PreviewMode } from "@ash/shared/preview";
 import type { AgentType } from "@ash/shared";
 import { runEnvForOwner } from "./auth/run-env.js";
-import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { assistOpeningPrompt, assistRetryPrompt } from "./preview-assist-prompt.js";
@@ -198,7 +197,7 @@ async function think(
   }, PREVIEW_ASSIST_THINK_MS);
   try {
     handle = executor.run({
-      prompt: withGlobalBrowserPolicy(prompt, sessionId ? "reminder" : "full"),
+      prompt,
       cwd,
       sessionId,
       // 这不是一个任务回合：完成协议的那三个变量一个都不能有。不显式清掉的话，子进程会从

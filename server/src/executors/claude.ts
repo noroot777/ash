@@ -361,9 +361,7 @@ export class ClaudeExecutor implements AgentExecutor {
           onInterrupted?.();
           await ack.promise;
           await beforeSend?.();
-          // **正文在这里才定稿**。上面等 ACK 最多 2 秒,用户完全可能在这几秒里收回浏览器
-          // 授权 —— 在等待之前就把正文拼死的话,撤销的 PATCH 都已经 200 了,这条还没写进
-          // stdin 的消息仍写着「本项目已预先授权 x.com」(第 8 链第 1 轮审查 P1)。
+          // **正文在这里才定稿**(惰性正文见 steer-text.ts)。
           await writeChecked(userLine(await resolveSteerText(text)));
         } catch (error) {
           ack.cancel();

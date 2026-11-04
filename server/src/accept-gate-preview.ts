@@ -83,15 +83,6 @@ async function isolatedGitDir(format: string): Promise<{ gitDir: string; empty: 
   return created;
 }
 
-/**
- * 不读系统 / 全局配置与属性的 git 环境（再加上调用方自己的 `GIT_DIR` 等，本地配置也就只剩调用方写的那份）。
- * 快照之外，最终发布（git-accept-publish.ts）也走这一个口子。
- */
-export async function sealedGitEnv(): Promise<{ env: NodeJS.ProcessEnv; empty: string }> {
-  const { empty } = await scratch();
-  return { env: cleanEnv(empty), empty };
-}
-
 /** git 输出的一行路径：只去掉行尾换行，不动路径本身的字节（目录名可以以空格结尾）。 */
 export const outputLine = (stdout: string): string => stdout.replace(/\n$/, "");
 

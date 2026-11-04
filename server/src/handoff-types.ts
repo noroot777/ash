@@ -108,6 +108,10 @@ export interface HandoffFreeReviewRound {
   disputeResolutionNote?: string | null;
   // 驳回未裁定时被用户新派的审查取代的时刻；不带过去，对端会把它当成还欠着裁定。
   disputeSupersededAt?: string | null;
+  // 同类问题承接（review-recurrence.ts）：发过的清单编号与审查者声明的承接。不带过去，对端
+  // 那条谱系就断了 —— 熔断按承接现算，跨机器之后照样要算得出来。老载荷没有 = 没有。
+  historyRefs?: string[] | null;
+  carries?: { finding: number; from: string }[] | null;
   startedAt: string;
   endedAt: string | null;
 }

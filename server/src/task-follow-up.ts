@@ -6,6 +6,7 @@ import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display"
 import { desc, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
+import { latestFollowUp } from "./task-follow-up-pick.js";
 import { sessionTranscriptPath } from "./transcript.js";
 
 type UserSeg = Extract<ConvSeg, { kind: "user" }>;
@@ -15,9 +16,6 @@ const isFollowUp = (seg: ConvSeg): seg is UserSeg => isUserFollowUp(seg);
 // 分档往回读：先 64KB（绝大多数情况一把就够），没找到再 1MB，还没有就整个文件读到头。
 // 只读固定长度的尾巴是不够的 —— agent 一条回复动辄几十 KB，我说的那句很容易被它盖住。
 const TAIL_STEPS = [64 * 1024, 1024 * 1024, 32 * 1024 * 1024];
-// 一个任务最多往回翻几次会话：追问一般就在最新那次里，但重试/续跑过的任务，最新
-// 那次可能是刚起的会话（我还一句都没说），得再往前找。
-const MAX_SESSIONS = 4;
 // 悬浮卡片显示的上限。再长的正文没人在悬浮里读，也不该为它撑大列表接口的响应。
 const TEXT_CAP = 1200;
 
@@ -72,25 +70,24 @@ export async function followUpsFor(taskIds: string[]): Promise<TaskFollowUp[]> {
     .from(sessions)
     .where(inArray(sessions.taskId, unique))
     .orderBy(desc(sessions.startedAt));
-  // 一个任务可能跑过很多轮；startedAt 倒序后每个任务取最近的几次，新的排前面。
-  const recent = new Map<string, string[]>();
-  for (const row of rows) {
-    const list = recent.get(row.taskId) ?? [];
-    if (list.length >= MAX_SESSIONS) continue;
-    list.push(row.id);
-    recent.set(row.taskId, list);
-  }
+  const byTask = new Map<string, string[]>();
+  for (const row of rows) byTask.set(row.taskId, [...(byTask.get(row.taskId) ?? []), row.id]);
 
-  const results = await Promise.all([...recent].map(async ([taskId, sessionIds]) => {
-    for (const sessionId of sessionIds) {
+  // 任务的**每一条**会话都要读：最后一句话落在哪条会话里，不读是不知道的（见 latestFollowUp）。
+  // 会话正文都不大（一次读到头的那一档就够），一个任务的会话挨个读，同时开着的文件仍是
+  // 一个任务一个，跟以前一样多。
+  const results = await Promise.all([...byTask].map(async ([taskId, sessionIds]) => {
+    const candidates: { seg: UserSeg; order: number }[] = [];
+    for (const [order, sessionId] of sessionIds.entries()) {
       try {
         const seg = await lastFollowUpIn(sessionTranscriptPath(taskId, sessionId));
-        if (seg) return toFollowUp(taskId, seg);
+        if (seg) candidates.push({ seg, order });
       } catch {
-        // 这次会话的正文读不动（被删了/权限），往前一次接着找。
+        // 这次会话的正文读不动（被删了/权限），别的会话照样算。
       }
     }
-    return null;
+    const seg = latestFollowUp(candidates);
+    return seg ? toFollowUp(taskId, seg) : null;
   }));
   return results.filter((row): row is TaskFollowUp => row !== null && row.text.length + row.attachments.length > 0);
 }

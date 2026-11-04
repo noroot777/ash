@@ -21,6 +21,8 @@ import { db } from "./db/index.js";
 import { freeReviewRounds, freeReviewRuns } from "./db/schema.js";
 import { freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { readConclusion, readReport, reviewRoundDir } from "./review-evidence.js";
+import { chainSequence, findingRefBase } from "./review-recurrence-refs.js";
+import { RECURRENCE_HINT } from "@ash/shared/free-workflow";
 import { join } from "node:path";
 import { fromMarkdown } from "mdast-util-from-markdown";
 
@@ -88,6 +90,11 @@ export interface PriorRound {
   reportPath: string;
   /** 从报告里抽出来的现象行。 */
   findings: string[];
+  /**
+   * 这一轮条目编号的前缀（`<链序>.<轮>`），第 i 条的编号就是 `<前缀>.<i>`；省略 = 不编号。
+   * 只有自由工作流给：审查者靠它在 report_stage 里声明承接（`review-recurrence.ts`）。
+   */
+  refBase?: string;
 }
 
 /**
@@ -242,7 +249,7 @@ export function extractReportFindings(report: string): string[] {
  * 拼成 prompt 的一节。空清单返回空串 —— 第一条链的第 1 轮本来就没有历史，塞一句
  * 「此前没有发现」只是让它多读一行。
  */
-type Entry = { round: PriorRound; text: string };
+type Entry = { round: PriorRound; text: string; ref?: string };
 
 /**
  * 24 个名额怎么分给 N 轮。
@@ -310,8 +317,11 @@ function allocate(entries: Entry[], bodyBudget: number): { kept: Entry[]; silent
 }
 
 /** 条目清单里的一行。分配算字节和正文渲染必须用**同一份**，否则量的和发的不是一回事。 */
-const lineOf = ({ round, text }: Entry): string =>
-  `- 〔${round.label}${round.conclusion ? ` · ${round.conclusion}` : ""}〕${text}`;
+const lineOf = ({ round, text, ref }: Entry): string =>
+  `- ${ref ? `[${ref}]` : ""}〔${round.label}${round.conclusion ? ` · ${round.conclusion}` : ""}〕${text}`;
+
+// 清单里有编号时紧跟在条目后面的那一句（`RECURRENCE_HINT`）：只在真列出了编号时出现 ——
+// 没有清单（第一轮）或折成摘要时一个字都不发。参数格式住在 report_stage 的字段说明里。
 
 const labelList = (rounds: PriorRound[], limit = 6): string => {
   const labels = [...new Set(rounds.map((round) => round.label))];
@@ -338,20 +348,27 @@ export const PRIOR_FINDINGS_TAIL =
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 
 export function priorFindingsSection(rounds: PriorRound[]): string {
+  return priorFindings(rounds).text;
+}
+
+/** 渲染这一节，同时交出**实际内联了**的条目编号（审查者能引用的只有这几个）。 */
+export function priorFindings(rounds: PriorRound[]): Rendered {
   const entries = entriesOf(rounds);
-  if (!entries.length) return "";
+  if (!entries.length) return { text: "", refs: [] };
   // 候选从大到小，取**第一个装得下的**。次序是「先折地址清单、再缩条目预算」：地址折成
   // 一个公共目录仍然指得到（读的人多翻一层就是了），条目砍掉就真没了。
   for (const maxPaths of [MAX_PATHS, 4, 2, 1, 0]) {
-    const text = renderPriorFindings(rounds, entries, MAX_BODY, maxPaths);
-    if (bytes(text) <= SECTION_CAP) return text;
+    const rendered = renderPriorFindings(rounds, entries, MAX_BODY, maxPaths);
+    if (bytes(rendered.text) <= SECTION_CAP) return rendered;
   }
   for (let budget = Math.floor(MAX_BODY * 0.75); budget >= 300; budget = Math.floor(budget * 0.75)) {
-    const text = renderPriorFindings(rounds, entries, budget, 0);
-    if (bytes(text) <= SECTION_CAP) return text;
+    const rendered = renderPriorFindings(rounds, entries, budget, 0);
+    if (bytes(rendered.text) <= SECTION_CAP) return rendered;
   }
-  return digestPriorFindings(entries);
+  return { text: digestPriorFindings(entries), refs: [] };
 }
+
+type Rendered = { text: string; refs: string[] };
 
 /**
  * 最后一级：一条都不内联，只说清「多少条、分布在几轮、去哪读」，后面接完整的固定契约。
@@ -383,7 +400,9 @@ function entriesOf(rounds: PriorRound[]): Entry[] {
   // 报告在哪」，不编内容。
   return rounds.flatMap((round) =>
     round.findings.length
-      ? round.findings.map((text) => ({ round, text }))
+      ? round.findings.map((text, index) => ({
+        round, text, ...(round.refBase ? { ref: `${round.refBase}.${index + 1}` } : {}),
+      }))
       : round.conclusion === "verify_failed"
         ? [{ round, text: `现象行没抽出来，整份报告在 ${round.reportPath}` }]
         : []);
@@ -394,9 +413,10 @@ function renderPriorFindings(
   entries: Entry[],
   bodyBudget: number,
   maxPaths: number,
-): string {
+): Rendered {
   const { kept, silentRounds, mode } = allocate(entries, bodyBudget);
   const body = kept.map(lineOf).join("\n");
+  const refs = kept.flatMap((entry) => entry.ref ? [entry.ref] : []);
 
   // 路径清单里**一条都没内联到的那几轮排在最前**。
   //
@@ -425,7 +445,8 @@ function renderPriorFindings(
         ? `  另有 ${unlisted.length} 份没有列出，在 ${commonDirectory(unlisted)} 下\n`
         : "")
     : `报告全文共 ${allPaths.length} 份，地址太长列不下，都在 ${commonDirectory(allPaths)} 下\n`;
-  return `\n\n【这个任务此前报过的发现（${entries.length} 条，按轮次先后）】\n${body}\n` +
+  const text = `\n\n【这个任务此前报过的发现（${entries.length} 条，按轮次先后）】\n${body}\n` +
+    (refs.length ? RECURRENCE_HINT : "") +
     (dropped > 0
       ? `（${mode}；另外 ${dropped} 条没有内联` +
         (silentRounds.length ? `，其中 ${labelList(silentRounds)} 一条都没列出` : "") +
@@ -433,6 +454,7 @@ function renderPriorFindings(
       : "") +
     pathLines +
     PRIOR_FINDINGS_TAIL;
+  return { text, refs };
 }
 
 /** 自由工作流：同一个任务**所有** run 的更早轮次（不只是本条链）。 */
@@ -450,6 +472,7 @@ export async function freeReviewPriorRounds(
     ))
     .orderBy(asc(freeReviewRuns.createdAt), asc(freeReviewRounds.round));
   const chains = [...new Set(rows.map(({ run }) => run.id))];
+  const sequence = await chainSequence(taskId);
   return rows.map(({ run, round }) => ({
     label: chains.length > 1 && run.id !== current.runId
       ? `第 ${chains.indexOf(run.id) + 1} 条审查链第 ${round.round} 轮`
@@ -457,6 +480,7 @@ export async function freeReviewPriorRounds(
     conclusion: round.conclusion,
     reportPath: freeReviewReportPath(taskId, run.id, round.round),
     findings: extractReportFindings(readFreeReviewReport(taskId, run.id, round.round)),
+    refBase: findingRefBase(sequence.get(run.id) ?? 0, round.round),
   }));
 }
 
@@ -477,10 +501,18 @@ export async function freeReviewHistorySection(
   taskId: string,
   current: { runId: string; round: number },
 ): Promise<string> {
+  return (await freeReviewHistory(taskId, current)).text;
+}
+
+/** 同上，连同这一节实际内联了的条目编号（派审时落到这一轮的 `history_refs`）。 */
+export async function freeReviewHistory(
+  taskId: string,
+  current: { runId: string; round: number },
+): Promise<Rendered> {
   try {
-    return priorFindingsSection(await freeReviewPriorRounds(taskId, current));
+    return priorFindings(await freeReviewPriorRounds(taskId, current));
   } catch {
-    return "";
+    return { text: "", refs: [] };
   }
 }
 

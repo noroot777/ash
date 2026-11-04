@@ -206,10 +206,9 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   const { peerNoticeText } = await import("../src/peer-context.js");
   const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
   const {
-    AUTONOMY, COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL,
+    AUTONOMY, backgroundWaitFor, COLLAB_INVITE, COMPLETION_PROTOCOL, COMPLETION_REMINDER, DIRECTION_PROTOCOL,
     FOLLOW_UP_REMINDER, PLANNING_TURN,
   } = await import("../src/run-prompts.js");
-  const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
   const { gateFailurePrompt } = await import("../src/accept-gate-messages.js");
   const task = (await db.select().from(tasks)).find((row) => row.id === "pb-task")!;
 
@@ -254,14 +253,11 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   // 产出质量规则本体。单独一份 = 这两句话自己的棘轮:想把它写成判断表,得先在 diff 里把
   // 那个数改大(用户 2026-10-30 的口径是「原句一字不改、不加判据不加护栏」)。
   add("turn/craft-rules", craftRulesFor({ freshContext: true, verifying: false }));
+  add("turn/background-wait", backgroundWaitFor("claude"));
   add("turn/completion-protocol-free", COMPLETION_PROTOCOL("pb-task", false, false, true));
   add("turn/completion-protocol-normal", COMPLETION_PROTOCOL("pb-task", false, false, false));
   add("turn/completion-reminder-free", COMPLETION_REMINDER("pb-task", false, false, true));
   add("turn/follow-up-reminder-free", FOLLOW_UP_REMINDER("pb-task", "done", false, false, "", true));
-  add("browser/full-ungranted", withGlobalBrowserPolicy("", "full", null));
-  add("browser/full-granted", withGlobalBrowserPolicy("", "full",
-    { domains: ["x.com", "weixin.com", "excalidraw.com"] }));
-  add("browser/reminder-granted", withGlobalBrowserPolicy("", "reminder", { domains: ["x.com"] }));
   add("accept/gate-failure", gateFailurePrompt({
     command: "npm run test:accept", summary: "退出码 1", logPath: join(root, "gate.log"),
     tail: "1 failing", cwd: join(root, "snapshot"), sourceCwd: repo,
@@ -401,7 +397,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   // ── 投递态：**真正发出去的那一条**。片段各自压着预算、拼起来翻倍，是这一摞里最贵的
   //    一种退步，而它只在这一层量得到（第 1 轮审查 F2）。走的是 orchestrator 用的同一个
   //    `assembleTurnPrompt`，不是它的拷贝 —— 拷贝迟早和真实投递路径分叉。
-  const deliver = (userText: string, reviewReminder: TurnReminder, taskId = "pb-task") => withGlobalBrowserPolicy(
+  const deliver = (userText: string, reviewReminder: TurnReminder, taskId = "pb-task") =>
     assembleTurnPrompt({
       invite: COLLAB_INVITE,
       brief: invitedTaskBrief(task.body, true, true),
@@ -414,12 +410,10 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       userText,
       workspaceReset: "",
       completion: COMPLETION_REMINDER(taskId, false, true, true),
+      backgroundWait: backgroundWaitFor("claude"),
       direction: DIRECTION_PROTOCOL("pb-token"),
       reviewReminder,
-    }),
-    "full",
-    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
-  );
+    });
   const reviewReminder = await freeReviewReminder("pb-task");
   add("delivered/review-dispatch", deliver(await freeReviewPrompt(task as never, run, 2, repo), reviewReminder));
   add("delivered/review-resume", deliver(freeReviewResumeMessage(task as never, run, 2), reviewReminder));
@@ -452,10 +446,11 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   // 这两份 fresh 的**口径**:量的是所有任务共有的那一截开场,团队前言、审查任务书、接力
   // 前言、同伴告知一律置空(它们各有自己的样本)。所以 `delivered/fresh-review-run` 不是
   // 「生产里审查首条消息的大小」—— 真实那条还要加上 `review/dispatch-*` 那一摞。
-  const fresh = (reviewTask: boolean) => withGlobalBrowserPolicy(
+  const fresh = (reviewTask: boolean) =>
     assembleFreshPrompt({
       autonomy: AUTONOMY,
       craft: { freshContext: true, verifying: reviewTask },
+      backgroundWait: backgroundWaitFor("claude"),
       completion: COMPLETION_PROTOCOL("pb-task", false, reviewTask, true),
       direction: DIRECTION_PROTOCOL("pb-token"),
       teamPreamble: "",
@@ -463,10 +458,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       handoffNotice: "",
       peerNotice: "",
       objective: initialTaskObjective(task.body, task.title, reviewTask),
-    }),
-    "full",
-    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
-  );
+    });
   add("delivered/fresh-run", fresh(false));
   add("delivered/fresh-review-run", fresh(true));
   // 首次 @ 另一位执行者接手(以及旧会话接不上、/clear 之后新开的那一条 —— 判据同一个
@@ -477,7 +469,7 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
   // `parts.peerNotice`」—— 当时所有样本的同伴字段一律传空,那条回归在这一摞里量不到。
   // 片段保留本身另有机械断言钉着(test-prompt-budget.ts 的「片段保留」那一节),这里负责
   // 让**按字节量的投递态**也真带着它。
-  add("delivered/invited-first", withGlobalBrowserPolicy(
+  add("delivered/invited-first",
     assembleTurnPrompt({
       invite: COLLAB_INVITE,
       brief: invitedTaskBrief(task.body, true, false),
@@ -491,31 +483,25 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       userText: "接着把设置页改完。",
       workspaceReset: "",
       completion: COMPLETION_REMINDER("pb-task", false, false, true),
+      backgroundWait: backgroundWaitFor("claude"),
       direction: DIRECTION_PROTOCOL("pb-token"),
       reviewReminder: NO_REMINDER,
     }),
-    "full",
-    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
-  ));
+  );
   // 团队调度台开台。它大是 `LEAD_PREAMBLE` 本身的体积(派活哲学那一摞),跟本条规则无关。
-  add("delivered/team-lead-first", withGlobalBrowserPolicy(
+  add("delivered/team-lead-first",
     leadFirstMessage({
       preamble: LEAD_PREAMBLE("pb-task", "codex"),
       craft: { freshContext: true, verifying: false },
       objective: task.body,
       newMessage: "",
     }),
-    "full",
-    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
-  ));
-  // 「先规划后实施」:开场就是规划回合那一条。它刻意只有正文加一句,浏览器策略也发缩略版
-  //（`promptLevel = planning || resuming ? "reminder" : "full"`）。
-  add("delivered/plan-first", withGlobalBrowserPolicy(
+  );
+  // 「先规划后实施」:开场就是规划回合那一条。它刻意只有正文加一句。
+  add("delivered/plan-first",
     PLANNING_TURN({ freshContext: true, verifying: false }, "先想清楚设置页怎么改。"),
-    "reminder",
-    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
-  ));
-  add("delivered/repair", withGlobalBrowserPolicy(
+  );
+  add("delivered/repair",
     assembleTurnPrompt({
       invite: "",
       brief: "",
@@ -527,12 +513,50 @@ export async function renderPromptSamples(root: string): Promise<PromptSample[]>
       userText: await freeRepairPrompt("pb-task", run),
       workspaceReset: "",
       completion: FOLLOW_UP_REMINDER("pb-task", "done", false, false, "", true),
+      backgroundWait: backgroundWaitFor("claude"),
       direction: DIRECTION_PROTOCOL("pb-token"),
       reviewReminder: "",
     }),
-    "full",
-    { domains: ["x.com", "weixin.com", "excalidraw.com"] },
-  ));
+  );
+
+  // ── 同类问题熔断（review-recurrence.ts）：**只有触发轮**的修复交接多出一段 ──────────
+  //
+  // 种在所有别的样本之后：这两轮挂在 pb-task 名下，早种的话会改掉上面那几份历史清单的形状。
+  // 第 1 轮报两条，第 2 轮的第 1 条承接第 1 轮第 1 条 → 连续两轮 → 熔断。`delivered/repair-breaker`
+  // 与 `delivered/repair` 的差别**只许**是那一段指令（闸里逐字节核），这就是「其余轮投递态一个
+  // 字节不变」的证明。
+  const { chainSequence } = await import("../src/review-recurrence-refs.js");
+  const breakerRun = { ...(run as object), id: "pb-run-breaker", currentRound: 2 } as never;
+  await db.insert(freeReviewRuns).values({ ...(breakerRun as object), createdAt: "2026-10-28T00:00:00.000Z" } as never);
+  const chain = (await chainSequence("pb-task")).get("pb-run-breaker")!;
+  for (const round of [1, 2]) {
+    await db.insert(freeReviewRounds).values({
+      id: `pb-run-breaker-${round}`, runId: "pb-run-breaker", round, status: "failed", conclusion: "verify_failed",
+      reviewedCommit: "0".repeat(40), startedAt: at, endedAt: at,
+      carries: round === 2 ? [{ finding: 1, from: `${chain}.1.1` }] : null,
+    } as never);
+    const report = freeReviewReportPath("pb-task", "pb-run-breaker", round);
+    mkdirSync(dirname(report), { recursive: true });
+    writeFileSync(report, "## 结论\n\n**必须修的问题**：\n\n### 1\n- 你会遇到：切换项目后筛选条件丢失\n\n" +
+      "### 2\n- 你会遇到：导出按钮点了没有反应\n");
+  }
+  // 审查者侧：清单带编号时多出的那一句（`RECURRENCE_HINT`）连同行首编号一起量。
+  add("section/history-refs", await freeReviewHistorySection("pb-task", { runId: "pb-run-breaker", round: 3 }));
+  add("delivered/repair-breaker",
+    assembleTurnPrompt({
+      invite: "",
+      brief: "",
+      handoffNotice: "",
+      peerNotice: "",
+      craft: { freshContext: false, verifying: false },
+      userText: await freeRepairPrompt("pb-task", breakerRun),
+      workspaceReset: "",
+      completion: FOLLOW_UP_REMINDER("pb-task", "done", false, false, "", true),
+      backgroundWait: backgroundWaitFor("claude"),
+      direction: DIRECTION_PROTOCOL("pb-token"),
+      reviewReminder: "",
+    }),
+  );
 
   const registered = new Map<string, Parameters<typeof toolTexts>[0]>();
   const sink = { registerTool(name: string, config: never) { registered.set(name, config); } } as never;

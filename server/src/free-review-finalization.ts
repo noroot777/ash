@@ -8,6 +8,7 @@ import { reviewLifecycle } from "./review-lifecycle-lock.js";
 import { freeRepairPrompt } from "./free-review-prompts.js";
 import { appendFinalizationTimeline, enqueueFinalizationRepair, finalizationStep } from "./regression-finalization.js";
 import { reviewIdentityMatches, settlementAuthority } from "./review-ownership.js";
+import { recurrenceTimeline, roundRecurrence } from "./review-recurrence.js";
 
 export async function finalizeFreeReview(state: typeof regressionEvidence.$inferSelect): Promise<void> {
   const { run, outcome, at } = JSON.parse(state.finalization!.payload) as {
@@ -47,7 +48,11 @@ export async function finalizeFreeReview(state: typeof regressionEvidence.$infer
           ? `自由工作流第 ${run.currentRound} 轮审查未通过，意见已放入待发送队列；修复正常结束后按最新预约复审。`
           : `自由工作流第 ${run.currentRound} 轮审查未通过；任务已进入更新的方向或归档，未自动投递旧修复指令。`
           : "自由工作流审查仍未通过，自动复审次数已用完；现在由你决定验收通过、按意见修复或再开一轮审查。";
+  // 熔断那一轮在时间线上留一句（审查记录上的那一份由状态接口按承接现算，见 review-recurrence.ts）。
+  const recurrence = (outcome === "repair" || outcome === "exhausted") && run.targetKind !== "accepted_merge"
+    ? await roundRecurrence(run.taskId, run.id, run.currentRound) : null;
   await step("timeline", () => appendFinalizationTimeline(run.taskId,
-    `${text}${authority.target ? "" : "原提问随本轮终止失效。"}`, `${state.generation}:timeline`));
+    `${text}${authority.target ? "" : "原提问随本轮终止失效。"}${recurrence ? recurrenceTimeline(recurrence.length) : ""}`,
+    `${state.generation}:timeline`));
   await step("publish", async () => { bus.publish({ type: "task.review", taskId: run.taskId }); });
 }

@@ -1,11 +1,13 @@
 // 「后续追问」判据的回归测试（纯函数，不碰 DB 也不摸盘）：
 //   isUserFollowUp —— 哪几种话算「我自己发的」，哪几种是机器代发/代写的
 //   parseSessionOutput —— 落盘的 by:"system" 标记要能原样解回来
+//   latestFollowUp —— 一个任务的多条会话里，哪一句才是「最后一条追问」
 // 这条判据同时喂着两个界面（详情页 Inspector 的「后续追问」、侧边栏铺开后那一列），
 // 而它判错了界面上看不出来 —— 只会显示成「我说过的一句话」，所以在这里钉住。
 // 跑:npm -w server run test:follow-up
 import assert from "node:assert/strict";
 import { isUserFollowUp, parseSessionOutput } from "@ash/shared";
+import { latestFollowUp } from "../src/task-follow-up-pick.ts";
 
 // ── 算我发的 ────────────────────────────────────────────────────────────────
 
@@ -54,5 +56,36 @@ assert.equal(
   "user",
   "代写消息仍是 user 回合（followUpFrom 要靠它护住终态），只是多带一位标记",
 );
+
+// ── 多条会话里挑最后一句 ────────────────────────────────────────────────────
+// order = 会话按开始时间倒序的位置（0 = 最近开始的那条）。
+
+// 真实现场（2026-11-03）：执行会话开得最早、一路续跑，后面跟着四条审查会话。最后一句
+// 在执行会话里，它排在最后也得挑中它 —— 不能因为它「开得早」就被审查会话挤出去。
+assert.equal(
+  latestFollowUp([
+    { seg: { text: "审查里插的一句", at: "2026-11-03T04:10:00.000Z" }, order: 1 },
+    { seg: { text: "执行会话里最新的追问", at: "2026-11-03T08:50:00.000Z" }, order: 4 },
+  ])?.text,
+  "执行会话里最新的追问",
+  "按发言时刻比，不按会话开始先后",
+);
+assert.equal(
+  latestFollowUp([
+    { seg: { text: "老会话没时刻", at: null }, order: 0 },
+    { seg: { text: "有时刻的", at: "2026-01-01T00:00:00.000Z" }, order: 3 },
+  ])?.text,
+  "有时刻的",
+  "没时刻的老发言一律算旧",
+);
+assert.equal(
+  latestFollowUp([
+    { seg: { text: "更早开始的老会话", at: null }, order: 2 },
+    { seg: { text: "较晚开始的老会话", at: null }, order: 1 },
+  ])?.text,
+  "较晚开始的老会话",
+  "都没时刻时按会话开始先后兜底",
+);
+assert.equal(latestFollowUp([]), null, "一句都没有就是没有");
 
 console.log("✓ follow-up predicate");

@@ -14,40 +14,136 @@
 //
 // 这几步全程持有目标检出的 `index.lock`（与 git 自己的约定相同：拿不到就说明有别的 git 在用这个检出，
 // 拒），最后才把临时索引换进去。分支本身由调用方带旧值挪（update-ref 不读属性、不调过滤器）。
-import { copyFile, open, rename, rm } from "node:fs/promises";
-import { join } from "node:path";
+//
+// 顺序是「先演、再挪分支、最后写文件」（用户 2026-11-04 拍板，第 6 轮审查第 3～5 轮 F1）。写文件那一步
+// 不是事务，旧做法先写文件、挪分支被拒再把写下的放回原样；但「放回」要删掉这次写下的条目，而删之前
+// 证明它仍是自己写的那个版本（没被另一个窗口原地保存过、目录项没被换过）在用户态没有原子做法，
+// 三轮下来每补一道核对都还剩一个窗口。所以不再放回：
+//  · 两树合并先在临时索引上演一遍（`read-tree -n`，不写文件）—— 会覆盖本地改动或未跟踪文件这类拒绝
+//    在这里就出来，什么都没动；
+//  · 再挪分支（带旧值，被别人挪过就拒）—— 最常见的失败「测过之后目标分支动了」在写任何文件之前出来；
+//  · 最后才写文件、换索引。写到一半失败（权限、磁盘满）就停在那儿如实交付：分支已挪的，换上测过那棵
+//    的索引，`git status` 显示的正是还没写成的那些（测过那棵里有的 `git checkout HEAD -- <路径>` 补齐，
+//    没有的是该删没删掉的，手动删）；不提交那一档
+//    分支和索引都没动，交付动过的那些。每个路径按「还是原样 / 已是测过那份 / 两样都不是 / 核不出来」
+//    分开报（classify），只有核实了都还是原样才说没写。ash 不删检出里的任何东西。
+import { constants } from "node:fs";
+import { access, copyFile, lstat, open, rename, rm } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import { type CheckoutSettings, readOnlyGit, sealedGitDir } from "./accept-gate-preview.js";
 import { execFileText as exec } from "./exec.js";
 
 const MAX_BUFFER = 32 * 1024 * 1024;
 
 export type SealedCheckout = {
-  /** 在封好的环境里跑一条 git（工作区 = 目标检出，索引 = 临时那份）；`attrs` = 属性取自哪棵树。 */
-  run(attrs: string, args: string[]): Promise<string>;
+  /** 在封好的环境里跑一条 git（工作区 = 目标检出，索引缺省 = 临时那份）；`attrs` = 属性取自哪棵树。 */
+  run(attrs: string, args: string[], index?: string): Promise<string>;
   dispose(): Promise<void>;
 };
 
 /** 为目标检出 `checkout` 建一份封好的发布环境。`settings` 是门禁测的时候用的检出语义。 */
-async function sealedCheckout(checkout: string, settings: CheckoutSettings): Promise<SealedCheckout & { index: string }> {
+async function sealedCheckout(checkout: string, settings: CheckoutSettings): Promise<SealedCheckout & { index: string; dir: string; checkout: string }> {
   const filemode = (await readOnlyGit(checkout, ["config", "--type=bool", "core.filemode"]).catch(() => null))?.stdout.trim() || "true";
   const sealed = await sealedGitDir(checkout, [["core.filemode", filemode], ...settings]);
   const index = join(sealed.dir, "index");
-  const env = { ...sealed.env, GIT_INDEX_FILE: index };
   return {
     index,
-    run: async (attrs, args) => (await exec("git", [`--attr-source=${attrs}`, ...args], { env, maxBuffer: MAX_BUFFER })).stdout,
+    dir: sealed.dir,
+    checkout,
+    run: async (attrs, args, file = index) => (await exec("git", [`--attr-source=${attrs}`, ...args],
+      { env: { ...sealed.env, GIT_INDEX_FILE: file }, maxBuffer: MAX_BUFFER })).stdout,
     dispose: sealed.dispose,
   };
 }
 
-export type SealedMove =
-  | { ok: true }
-  | { ok: false; stage: "locked" | "blocked" | "publish"; message: string; restored?: boolean };
+const zList = (text: string) => text.split("\0").filter(Boolean);
+const failure = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 /**
- * 把目标检出（HEAD 在 `from`）的工作区与索引改成 `to` 那棵树，在封好的环境里。`publish` 在换上新索引
- * 之前调用（挪分支；不提交那一档不传）：它失败就把工作区按同一个环境退回 `from`，索引原样不动。
- * `attrs` 是测过的那棵树（属性的唯一出处）。
+ * 写到一半失败之后，这次要改的一个路径现在是什么样（第 6 轮审查第 6 轮 F1：只看「等不等于测过那份」，
+ * 把写了一半截断的文件当成了「还没写」）。`original` = 还是合并之前那份（该删的也还在 / 本来就没有的
+ * 也还没有），`target` = 已经是测过那份，`partial` = 两样都不是（写了一半、或被别人改了），`unknown` =
+ * 读不了、核不出来。`inFrom` / `inTo` = 合并之前 / 测过的那棵树里有没有它。
+ */
+export type PathState = { path: string; state: "original" | "target" | "partial" | "unknown"; inFrom: boolean; inTo: boolean };
+
+/** 按封好的语义把 `changed` 逐个对照合并之前（`from`）和测过的（`to`）两份；测过那份的索引留在 `toIndex`。 */
+async function classify(sealed: Awaited<ReturnType<typeof sealedCheckout>>, attrs: string, from: string, to: string,
+  changed: readonly string[], toIndex: string): Promise<PathState[]> {
+  const side = async (tree: string, file: string) => {
+    await sealed.run(attrs, ["read-tree", tree], file);
+    await sealed.run(attrs, ["update-index", "-q", "--refresh"], file).catch(() => "");
+    return { tracked: new Set(zList(await sealed.run(attrs, ["ls-files", "-z"], file))),
+      dirty: new Set(zList(await sealed.run(attrs, ["diff-files", "--name-only", "-z"], file))) };
+  };
+  const before = await side(from, join(sealed.dir, "index.before"));
+  const after = await side(to, toIndex);
+  const states: PathState[] = [];
+  for (const path of changed) {
+    const full = join(sealed.checkout, path);
+    // 在不在要说得准：只有「不存在」才算不存在，别的错误（没权限、读失败）都是核不出来。
+    const present = await lstat(full).then(
+      async stats => stats.isSymbolicLink() || await access(full, constants.R_OK).then(() => true, () => false) ? "yes" : "unknown",
+      (error: NodeJS.ErrnoException) => error.code === "ENOENT" ? "no" : "unknown");
+    const inFrom = before.tracked.has(path);
+    const inTo = after.tracked.has(path);
+    const matches = (side: typeof before, tracked: boolean) => tracked ? present === "yes" && !side.dirty.has(path) : present === "no";
+    const state = present === "unknown" ? "unknown" : matches(after, inTo) ? "target" : matches(before, inFrom) ? "original" : "partial";
+    states.push({ path, state, inFrom, inTo });
+  }
+  return states;
+}
+
+/**
+ * 失败回执。`blocked` / `publish` = 分支和检出里的文件都没动。`partial` = 写文件写到一半失败：
+ * `published` 说分支挪没挪；`paths` 是这次要改的每个路径现在的样子（null = 核不出来，`changed` 是全部
+ * 可能被动过的路径，也是 null 就连这个都列不出）；`indexInstalled` = 已换上测过那棵的索引（只有分支挪了
+ * 才换）。`index` = 文件都写成了，只有索引没换上。
+ */
+export type SealedMove =
+  | { ok: true }
+  | { ok: false; stage: "locked"; message: string }
+  | { ok: false; stage: "blocked"; message: string }
+  | { ok: false; stage: "publish"; message: string }
+  | { ok: false; stage: "partial"; message: string; published: boolean; paths: PathState[] | null;
+    changed: string[] | null; indexInstalled: boolean }
+  | { ok: false; stage: "index"; message: string; published: boolean };
+
+/**
+ * 拿到锁之后核真实索引（第 6 轮审查 F2）：「工作区干净」是拿锁之前核的，那之后另一个终端仍可能
+ * `git add` 了东西（再把文件改回原样，工作区与物理摘要都看不出来）。新索引是从目标提交建的，直接换上去
+ * 就把那份暂存抹掉了。所以持锁后读一份真实索引的拷贝，它的暂存内容必须正是目标提交那棵树；不是就拒，
+ * 什么都还没写。持着锁，之后谁也改不了它。返回 null = 对得上。
+ *
+ * 真实索引不一定自包含（第 6 轮审查第 2 轮 F2）：拆分索引（`core.splitIndex`）的主文件只记增量，靠
+ * 扩展引用旁边的 `sharedindex.<哈希>`，git 按「索引文件所在目录」找它。所以拷贝时把它一起拷到副本旁边；
+ * 读不了就如实说读不了，不当成「多了暂存」。
+ */
+async function stagedBeyond(env: Awaited<ReturnType<typeof sealedCheckout>>, attrs: string, checkout: string,
+  index: string, from: string): Promise<string | null> {
+  const copy = join(env.dir, "index.real");
+  if (!await copyFile(index, copy).then(() => true, (error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  })) return null;
+  let staged: string[];
+  try {
+    const shared = (await readOnlyGit(checkout, ["rev-parse", "--shared-index-path"])).stdout.trim();
+    if (shared) await copyFile(resolve(checkout, shared), join(env.dir, basename(shared)));
+    staged = zList(await env.run(attrs, ["diff-index", "--cached", "--name-only", "-z", from], copy));
+  } catch (error) {
+    return `读不了目标检出的暂存区（${failure(error)}），没法确认换上测过的索引不会抹掉别人的暂存`;
+  }
+  if (!staged.length) return null;
+  const shown = staged.slice(0, 10).join("、") + (staged.length > 10 ? ` 等 ${staged.length} 个` : "");
+  return `目标检出的暂存区在核对之后有了别的内容（${shown}），换上测过的索引会把它们抹掉`;
+}
+
+/**
+ * 把目标检出（HEAD 在 `from`）的工作区与索引改成 `to` 那棵树，在封好的环境里。`publish` 是挪分支那一步
+ * （不提交那一档不传），在演过两树合并之后、写任何文件之前调用。`attrs` 是测过的那棵树（属性的唯一出处）。
+ *
+ * 不抛异常：回执由真实走到了哪一步决定（见 SealedMove）。之后只剩清理临时目录，它失败不改变回执。
  */
 export async function sealedMove(checkout: string, settings: CheckoutSettings, from: string, to: string, attrs: string,
   publish?: () => Promise<string | null>): Promise<SealedMove> {
@@ -58,28 +154,57 @@ export async function sealedMove(checkout: string, settings: CheckoutSettings, f
   await handle.close();
   let installed = false;
   let sealed: Awaited<ReturnType<typeof sealedCheckout>> | null = null;
-  try {
-    sealed = await sealedCheckout(checkout, settings);
-    // 新建的索引没有文件状态，先按封好的语义逐个核一遍字节补上（与目标提交对不上的照旧记成「改过」，
-    // 下一步要改到它时 git 就拒），两树合并才认得出哪些文件是干净的。
-    await sealed.run(attrs, ["read-tree", from]);
-    await sealed.run(attrs, ["update-index", "-q", "--refresh"]).catch(() => "");
+  const outcome = await (async (): Promise<SealedMove> => {
+    let published = false;
+    let wrote = false;
     try {
-      await sealed.run(attrs, ["read-tree", "-m", "-u", from, to]);
+      const env = sealed = await sealedCheckout(checkout, settings);
+      const drift = await stagedBeyond(env, attrs, checkout, index, from);
+      if (drift) return { ok: false, stage: "blocked", message: drift };
+      // 新建的索引没有文件状态，先按封好的语义逐个核一遍字节补上（与目标提交对不上的照旧记成「改过」，
+      // 要改到它时 git 就拒），两树合并才认得出哪些文件是干净的。先演一遍，什么都不写。
+      await env.run(attrs, ["read-tree", from]);
+      await env.run(attrs, ["update-index", "-q", "--refresh"]).catch(() => "");
+      await env.run(attrs, ["read-tree", "-n", "-m", "-u", from, to]);
+      const refused = await publish?.().catch(failure) ?? null;
+      if (refused) return { ok: false, stage: "publish", message: refused };
+      published = !!publish;
+      try {
+        await env.run(attrs, ["read-tree", "-m", "-u", from, to]);
+      } catch (error) {
+        return await stopped(env, failure(error), published);
+      }
+      wrote = true;
+      await copyFile(env.index, lock);
+      await rename(lock, index);
+      installed = true;
+      return { ok: true };
     } catch (error) {
-      return { ok: false, stage: "blocked", message: error instanceof Error ? error.message : String(error) };
+      if (wrote) return { ok: false, stage: "index", message: failure(error), published };
+      if (published && sealed) return stopped(sealed, failure(error), published);
+      return { ok: false, stage: "blocked", message: failure(error) };
     }
-    const refused = await publish?.() ?? null;
-    if (refused) {
-      const restored = await sealed.run(attrs, ["read-tree", "-m", "-u", to, from]).then(() => true, () => false);
-      return { ok: false, stage: "publish", message: refused, restored };
+  })();
+
+  /** 写到一半失败：不放回（见文件头）。分支挪了就换上测过那棵的索引；核出哪些写成了、哪些还没有。 */
+  async function stopped(env: Awaited<ReturnType<typeof sealedCheckout>>, message: string,
+    published: boolean): Promise<SealedMove> {
+    const changed = await env.run(attrs, ["diff-tree", "-r", "-z", "--name-only", from, to]).then(zList, () => null);
+    const target = join(env.dir, "index.tested");
+    const paths = changed && await classify(env, attrs, from, to, changed, target).catch(() => null);
+    let indexInstalled = false;
+    if (published && paths) {
+      indexInstalled = await copyFile(target, lock).then(() => rename(lock, index)).then(() => true, () => false);
+      installed = indexInstalled;
     }
-    await copyFile(sealed.index, lock);
-    await rename(lock, index);
-    installed = true;
-    return { ok: true };
-  } finally {
-    if (!installed) await rm(lock, { force: true });
-    await sealed?.dispose();
+    return { ok: false, stage: "partial", message, published, paths, changed, indexInstalled };
   }
+
+  const lockStuck = !installed && await rm(lock, { force: true }).then(() => false, () => true);
+  // 清理失败不改变回执（走到哪一步的事实已定），但留一条看得见的记录。
+  const done = sealed as Awaited<ReturnType<typeof sealedCheckout>> | null;
+  await done?.dispose().catch((error: unknown) =>
+    console.warn(`[ash] 验收发布的临时目录没能删掉：${done.dir}（${failure(error)}），可以手动删掉`));
+  if (!lockStuck || outcome.ok) return outcome;
+  return { ...outcome, message: `${outcome.message}（另外 ${lock} 没能删掉，它在的时候这个检出里的 git 命令都会拒绝，请手动删掉）` };
 }

@@ -22,7 +22,7 @@ import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAG
 // 那条线共用它),所以这里**不再复述**类问题那一段,只留一句「它不自动等于界内」。
 import {
   DEFER_BOUNDARY_CRITERION, DEFER_REASON_FIELD_GUIDE,
-  PLAIN_SUMMARY_EXAMPLE, PLAIN_SUMMARY_GUIDE, REVIEW_VALIDATION_REQUIREMENT,
+  PLAIN_SUMMARY_EXAMPLE, PLAIN_SUMMARY_GUIDE, RECURS_FIELD_GUIDE, REVIEW_VALIDATION_REQUIREMENT,
 } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
 import { TASK_STAGE } from "../schemas.js";
@@ -44,11 +44,14 @@ server.registerTool(
         generation: z.string().min(1),
         monitorIds: z.array(z.string().min(1)).min(1),
       }).optional().describe("正常情况不要传。两种例外——① 上报被拒、说这是「口径切换前开的旧审查轮次」:按它说的交 monitorIds,**要的是一次本轮真实执行**(构建、冒烟、浏览器点检都算),不要为此去跑回归;② 重放旧回合那条没投递成功的 report_stage 时原样带回当时的值"),
+      // 类型放宽成 any 是故意的：这一栏**填错只能按没填算**，不能让 schema 校验把整份结论拒掉
+      //（服务端 `parseCarries` 认三种写法，读不懂的一条都不落）。
+      recurs: z.any().optional().describe(RECURS_FIELD_GUIDE),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
-  async ({ taskId, stage, directionToken, verificationBasis }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage, verificationBasis }, directionToken)); }
+  async ({ taskId, stage, directionToken, verificationBasis, recurs }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage, verificationBasis, recurs }, directionToken)); }
     catch (e) { return fail(e); }
   },
 );

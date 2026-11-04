@@ -415,7 +415,7 @@ async function endTurn(lead: Lead): Promise<void> {
   if (!idleNow) return;
   if (lead.pending.length) {
     await flushUnqueued(lead); // 上次写库被拒的那几条,趁这会儿补进队列
-    // **快照,不是引用**。`sendToLead` 要 await(投递前现读浏览器授权),这期间调度台可能
+    // **快照,不是引用**。`sendToLead` 要 await(排在同一台的投递链后面),这期间调度台可能
     // 又忙起来(用户插话)并收下新的执行者汇报,它们会追加进同一个 `lead.pending`。拿引用的
     // 话,下面 `lead.pending = []` 把新来的一起清掉、`batch` 里的 seq 也把它们的行一并销账
     // —— 一份从没交给调度者的执行结果就此永久消失,刷新、续聊、换台都找不回来
