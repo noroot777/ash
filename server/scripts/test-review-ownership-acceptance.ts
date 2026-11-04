@@ -48,6 +48,10 @@ export async function testReviewAcceptanceOwnership(open: Awaited<ReturnType<typ
         await until("stale gate automatic acceptance refused", async () => existsSync(transcript)
           && /验收前置命令通过后自动继续验收，但没能完成：审查所属的原目标方向已失效/.test(readFileSync(transcript, "utf8")));
         assert.equal((await db.select().from(schema.acceptGateRuns).where(eq(schema.acceptGateRuns.id, gate.id)))[0]?.status, "passed");
+        // 方向已失效是确定的拒绝，不是临时故障：销账，不留给下次启动再续一次、再被拒一次。
+        await until("stale gate follow-up settled", async () => (await db.select().from(schema.acceptGateRuns)
+          .where(eq(schema.acceptGateRuns.id, gate.id)))[0]?.settlement === null);
+        assert.doesNotMatch(readFileSync(transcript, "utf8"), /这一步还欠着/);
       }
       const current = (await db.select().from(tasks).where(eq(tasks.id, task.id)))[0]!;
       assert.equal(current.stage, "implemented");
