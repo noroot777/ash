@@ -11,7 +11,7 @@ import { kindOf, scanIgnoredArtifacts, type ArtifactKind } from "./task-artifact
 import { committedInWindows, resolveArtifactScope } from "./task-artifact-scope.js";
 import { footprintArbiter, type FootprintArbiter } from "./task-artifact-footprint.js";
 import { pathLens } from "./task-artifact-paths.js";
-import { matchingBranchVersions } from "./task-artifact-version.js";
+import { checkBranchVersions, lastCommitTimes, type BranchVersionCheck } from "./task-artifact-version.js";
 import { windowHit } from "./task-artifact-windows.js";
 
 // 「这个任务做出来的、值得看一眼的东西」——图片、网页、音视频、PDF。
@@ -299,11 +299,15 @@ export async function readTaskArtifacts(
 
   // 分支证明只替**分支末端那一版**作保：共享目录上（worktree 已清理、退回主仓展示）先核一遍
   // 磁盘上这份是不是那一版（task-artifact-version.ts）。独占目录里磁盘上这份就是它的，不用核。
+  // 有未提交改动的不在这里核：现在这一版就是磁盘上那份未提交的，下面按它落下的时刻判。
   const branchVersion = !exclusive && branchSource
-    ? await matchingBranchVersions(root.path, prefix, branchSource, stated
+    ? await checkBranchVersions(root.path, prefix, branchSource, stated
       .filter(({ path, origins, info }) => proven.has(path) && !origins.has("working") && info?.isFile())
       .map(({ path }) => path))
-    : new Set<string>();
+    : new Map<string, BranchVersionCheck>();
+  // 对不上 / 核不出来的那几条，现在这一版是哪次提交落下的——并发裁决拿这个时刻去问那一刻谁在。
+  const offBranch = [...branchVersion].filter(([, check]) => check !== "match").map(([path]) => path);
+  const offBranchAt = offBranch.length && root.gitRepo ? await lastCommitTimes(root.path, offBranch) : new Map<string, number>();
 
   const artifacts: TaskArtifact[] = [];
   /** 靠推断区间认进来的条数——面板要单独说一句。 */
@@ -328,7 +332,17 @@ export async function readTaskArtifacts(
     // 第 2 轮审查 F3 的老问题），也不让它冒充确定。
     const byCommit = timeCommitted.get(path);
     const working = origins.has("working");
-    const branchProof = exclusive || branchVersion.has(path);
+    const check = branchVersion.get(path);
+    const branchProof = exclusive || check === "match";
+    // 分支版本**确定对不上**（或者核不出来）：磁盘上这份不是它分支上那一版，旧路径证据、mtime、
+    // 目录远近都不能再替这一版作保——它最多是个候选（它的分支确实动过这条路径），而且现在这一版
+    // 若是同一刻别的任务在它们那儿提交的，照样判给别人（复审第 2 轮 #2）。
+    if (check === "mismatch" || check === "unknown") {
+      const verdict = arbiter?.judge(path, offBranchAt.get(path) ?? null);
+      if (verdict === "theirs") { claimed += 1; continue; }
+      pushArtifact(path, origins, info, mtimeMs, false);
+      continue;
+    }
     if (!branchProof) {
       const version = currentVersion(byCommit, working, mtimeMs);
       const prior = proven.has(path) || !!byCommit;

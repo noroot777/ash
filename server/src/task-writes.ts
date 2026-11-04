@@ -59,9 +59,12 @@ export async function recordTaskWrites(
     if (cwd) absolute.push(resolve(cwd, raw));
   }
   const weak = event.cwd ? 1 : 0;
+  // 「从什么时候起」按这一步**开始**的时刻记（裁决只认文件落下时已经成立的记录，见
+  // task-artifact-footprint.ts 的 `asOf`）。
+  const began = event.tookMs ? new Date(Date.parse(at) - event.tookMs).toISOString() : at;
   for (const path of new Set(absolute)) {
     await db.insert(taskWrites)
-      .values({ taskId, path, weak, firstAt: at, lastAt: at })
+      .values({ taskId, path, weak, firstAt: began, lastAt: at })
       .onConflictDoUpdate({
         target: [taskWrites.taskId, taskWrites.path, taskWrites.weak],
         set: { lastAt: sql`excluded.last_at` },

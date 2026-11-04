@@ -103,5 +103,11 @@ export function codexCommandCwd(item: unknown, base?: string): AgentEvent | null
   const record = item as Record<string, unknown>;
   if (["declined", "inprogress", ""].includes(codexStatus(record))) return null;
   const paths = cleanPaths([record.cwd], base);
-  return paths.length ? { kind: "writes", paths, cwd: true } : null;
+  if (!paths.length) return null;
+  // 命令是做完才报的；跑了多久（app-server 带 `durationMs`）要交出去，记录端据此把「从什么时候起
+  // 在这儿干活」往回拨——一条跑十分钟的渲染命令，它的产物早在报出来之前就落盘了。
+  const took = Number(record.durationMs ?? record.duration_ms);
+  return Number.isFinite(took) && took > 0
+    ? { kind: "writes", paths, cwd: true, tookMs: took }
+    : { kind: "writes", paths, cwd: true };
 }

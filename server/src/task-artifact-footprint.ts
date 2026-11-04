@@ -69,22 +69,21 @@ interface Trail {
 const EVIDENCE_SKEW_MS = 60 * 1000;
 
 /**
- * 判 `at` 那一刻落下的文件时，这个任务的哪些写入位置能拿来作证：那一刻**已经成立**的，加上跟
- * 那一刻落在**同一段运行区间**里的。
+ * 判 `at` 那一刻落下的文件时，这个任务的哪些写入位置能拿来作证：只认那一刻**已经成立**的
+ * （记录的起点不晚于它，容一个落定余量）。
  *
- * **后来另起一段才有的证据不能回头改判早先的文件**（复审第 1 轮 #1）：两个任务曾同时在跑，其中
- * 一个两小时后续聊、在对方成品旁边写了一份说明——拿整个生命周期的记录来比，对方那份早就做完、
- * 一个字没改的网页会被判给它。
+ * **后来才有的证据不能回头改判早先的文件**（复审第 1 轮 #1、第 2 轮 #1）：两个任务曾同时在跑，
+ * 其中一个后来在对方成品旁边写了一份说明——哪怕还在同一段运行区间里——拿它来比，对方那份早就
+ * 做完、一个字没改的网页会被判给它。「落在同一段区间里」只说明两件事时间上挨着，不说明那份
+ * 文件是这次写入产生的。能解释的延迟只有一种：一步操作本身花的时间（命令跑了十分钟才报出来），
+ * 那已经在写入端按开始时刻记好了（task-writes.ts）。
  *
- * 同一段区间里稍晚才有的记录照算：那是同一趟活。后台哨兵常常是先跑出了几个文件之后才挂上的，
- * 一刀切成「必须早于文件」的话，老任务（只有哨兵目录可比）在自己那段区间里出的东西全成了
- * 拿不准，最初那次串台又以候选的形式回来了（实测起因那两个任务：0 个 → 300 多个）。
+ * 代价如实承担：老任务只有哨兵目录可比，哨兵挂上之前出的文件拿不出当时的证据，只能当候选——
+ * 不回填老任务是定好的边界，候选至少是照实说的。
  */
-const asOf = (trail: Trail | undefined, at: number | null, windows: readonly RunWindow[]): Footprint => {
-  const sameRun = (mark: Mark) => at !== null
-    && windows.some((w) => w.start <= Math.min(at, mark.at) && Math.max(at, mark.at) <= w.end);
+const asOf = (trail: Trail | undefined, at: number | null): Footprint => {
   const keep = (marks: Mark[]) => marks
-    .filter((mark) => at !== null && (mark.at <= at + EVIDENCE_SKEW_MS || sameRun(mark)))
+    .filter((mark) => at !== null && mark.at <= at + EVIDENCE_SKEW_MS)
     .map((mark) => mark.segs);
   return trail ? { strong: keep(trail.strong), weak: keep(trail.weak) } : { strong: [], weak: [] };
 };
@@ -237,8 +236,7 @@ const hasPrint = (print: Footprint) => print.strong.length > 0 || print.weak.len
  *   1. 找出同一刻**也在**这个目录里跑的别的任务。没有 → `alone`，照旧按时间认。
  *   2. 本任务一条写入记录都没有（老任务、没接上的执行器）→ `unsure`：拿不出证据就不硬判。
  *
- * 2–5 里说的「写入记录」只认这个文件落下时已经有的、或者跟它同一段运行区间里的（`asOf`）：
- * 之后另起一段才有的记录不参赛。
+ * 2–5 里说的「写入记录」只认这个文件落下时已经有的（`asOf`）：之后才有的记录不参赛。
  *   3. 有写入记录的对手里，有人比本任务离这个文件更近 → `theirs`，从清单里拿掉。
  *   4. 本任务严格最近、而且所有对手都有写入记录可比 → `mine`，归属确定。
  *   5. 其余（一样近、或者有对手没记录可比）→ `unsure`，留作候选。
@@ -287,14 +285,14 @@ export async function footprintArbiter(
     judge(relPath, mtimeMs) {
       const present = rivals.filter((rival) => withinWindows(mtimeMs, rival.windows));
       if (!present.length) return incomplete ? "unsure" : "alone";
-      const ownPrint = asOf(mine, mtimeMs, scope.windows);
+      const ownPrint = asOf(mine, mtimeMs);
       if (!hasPrint(ownPrint)) return "unsure";
       const dir = segmentsOf(relPath).slice(0, -1);
       const own = closeness(dir, ownPrint);
       let best: [number, number] = [0, 0];
       let blind = false;
       for (const rival of present) {
-        const print = asOf(prints.get(rival.id), mtimeMs, rival.windows);
+        const print = asOf(prints.get(rival.id), mtimeMs);
         if (!hasPrint(print)) { blind = true; continue; }
         const theirs = closeness(dir, print);
         if (compare(theirs, best) > 0) best = theirs;

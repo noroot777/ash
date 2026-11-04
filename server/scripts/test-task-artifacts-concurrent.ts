@@ -460,6 +460,28 @@ rl.on('line', (line) => {
   await recordTaskWrites("LateB0000013", "s-LateB-2", { kind: "writes", paths: [join(late, "videos/a/deep/later.md")] }, iso(minutes(T, 130)));
   assert.equal(await lateConf("LateA0000012"), "exact", "两小时后别人在旁边写的说明，不能把 A 早就做完的网页改判出去");
   assert.equal(await lateConf("LateB0000013"), null, "B 那份说明是网页做完之后才有的，不能拿来认领它");
+  // 同一段运行区间里也一样：C、D 各一条从 T 到 T+180 的长回合，C 的网页 T+20 就做完了，D 到 T+120
+  // 才在旁边写说明。「同一段区间」只说明时间挨着，不说明网页是这次写入产生的。
+  const longRun = join(stage, "longrun");
+  mkdirSync(join(longRun, "videos/a/deep"), { recursive: true });
+  await db.insert(projects).values({ id: "pr", name: "longrun", repoPath: longRun, createdAt: iso(T) });
+  const longRoot = { ...root, path: longRun, projectId: "pr" };
+  await runTask("LongC0000016", T, minutes(T, 180), { dir: longRun, project: "pr" });
+  await runTask("LongD0000017", T, minutes(T, 180), { dir: longRun, project: "pr" });
+  await recordTaskWrites("LongC0000016", "s-LongC0000016", { kind: "writes", paths: [join(longRun, "videos/a/build.py")] }, iso(minutes(T, 2)));
+  await recordTaskWrites("LongD0000017", "s-LongD0000017", { kind: "writes", paths: [join(longRun, "videos/b/build.py")] }, iso(minutes(T, 2)));
+  writeFileSync(join(longRun, "videos/a/deep/final.html"), "<p>C</p>");
+  utimesSync(join(longRun, "videos/a/deep/final.html"), minutes(T, 20), minutes(T, 20));
+  await recordTaskWrites("LongD0000017", "s-LongD0000017", { kind: "writes", paths: [join(longRun, "videos/a/deep/later.md")] }, iso(minutes(T, 120)));
+  const longConf = async (id: string) => conf(await readTaskArtifacts(id, longRoot), "videos/a/deep/final.html");
+  assert.equal(await longConf("LongC0000016"), "exact", "同一段区间里晚了一百分钟的说明，也不能把 C 早就做完的网页改判出去");
+  assert.equal(await longConf("LongD0000017"), null);
+  // 唯一能解释的延迟是这一步本身花的时间：一条跑了十分钟的命令，是从开始那一刻起就在那个目录里干活。
+  assert.deepEqual(codexCommandCwd({ status: "completed", cwd: "/w/r", durationMs: 600000 }), { kind: "writes", paths: ["/w/r"], cwd: true, tookMs: 600000 });
+  await recordTaskWrites("LongD0000017", "s-LongD0000017", { kind: "writes", paths: [join(longRun, "videos/d")], cwd: true, tookMs: 10 * 60 * 1000 }, iso(minutes(T, 40)));
+  const tookRow = (await db.select().from(taskWrites).where(eq(taskWrites.path, join(longRun, "videos/d")))).at(0);
+  assert.equal(tookRow?.firstAt, iso(minutes(T, 30)), "命令跑了多久，「从什么时候起」就往回拨多久");
+  assert.equal(tookRow?.lastAt, iso(minutes(T, 40)));
 
   // 裁决本身读失败（写入位置那张表读不了）：核不了不等于没别人，按时间认的一律当候选。
   await db.run(sql`ALTER TABLE task_writes RENAME TO task_writes_off`);
@@ -484,23 +506,34 @@ rl.on('line', (line) => {
   bgit(["add", "."]);
   bgit(["commit", "-q", "-m", "base"]);
   bgit(["checkout", "-q", "-b", "ash/Branch00"]);
-  writeFileSync(join(branchRepo, "report.html"), "<p>A version</p>");
-  writeFileSync(join(branchRepo, "keep.png"), png);
+  mkdirSync(join(branchRepo, "a"));
+  writeFileSync(join(branchRepo, "a/report.html"), "<p>A version</p>");
+  writeFileSync(join(branchRepo, "a/keep.png"), png);
   bgit(["add", "."]);
   bgit(["commit", "-q", "-m", "A"]);
   bgit(["checkout", "-q", "main"]);
-  writeFileSync(join(branchRepo, "report.html"), "<p>B version</p>");
-  writeFileSync(join(branchRepo, "keep.png"), png);
+  mkdirSync(join(branchRepo, "a"), { recursive: true });
+  writeFileSync(join(branchRepo, "a/report.html"), "<p>B version</p>");
+  writeFileSync(join(branchRepo, "a/keep.png"), png);
   bgit(["add", "."]);
   bgit(["commit", "-q", "-m", "B"]);
+  // 它现在在共享目录上干活（旧分支留着），写过的位置就在 a/ 底下，B 那一版网页的修改时刻也落在它
+  // 的精确区间里——时间、目录远近都偏向它，但内容已经核过对不上，这些都不能再替这一版作保。
+  for (const rel of ["a/report.html", "a/keep.png"]) utimesSync(join(branchRepo, rel), minutes(T, 10), minutes(T, 10));
   await db.insert(projects).values({ id: "pb", name: "branchrepo", repoPath: branchRepo, createdAt: iso(T) });
-  await runTask("Branch000014", T, minutes(T, 30), {
-    dir: join(branchRepo, ".worktrees/Branch000014"), project: "pb", extra: { useWorktree: true, mergeTargetBranch: "main" },
-  });
+  await runTask("Branch000014", T, minutes(T, 30), { dir: branchRepo, project: "pb", extra: { mergeTargetBranch: "main" } });
+  await recordTaskWrites("Branch000014", "s-Branch000014", { kind: "writes", paths: [join(branchRepo, "a/build.py")] }, iso(minutes(T, 2)));
   const branchRead = await readTaskArtifacts("Branch000014", { ...repoRoot, path: branchRepo, repo: branchRepo, projectId: "pb" });
   assert.equal(branchRead.error, null, `${branchRead.error}`);
-  assert.equal(conf(branchRead, "keep.png"), "exact", "磁盘上这份就是分支那一版：分支证明照旧成立");
-  assert.equal(conf(branchRead, "report.html"), "approx", "磁盘上是别人后来提交的另一版：不能凭分支差异标成确定");
+  assert.equal(conf(branchRead, "a/keep.png"), "exact", "磁盘上这份就是分支那一版：分支证明照旧成立");
+  assert.equal(conf(branchRead, "a/report.html"), "approx",
+    "磁盘上是别人后来提交的另一版：内容核过对不上，mtime 和目录远近都不能把它升回确定");
+  // 三态，且一个读不出来的（刚被删掉）不连累同批的其它文件。
+  const { checkBranchVersions } = await import("../src/task-artifact-version.js");
+  assert.deepEqual(
+    Object.fromEntries(await checkBranchVersions(branchRepo, "", "ash/Branch00", ["a/keep.png", "a/report.html", "a/gone.png"])),
+    { "a/keep.png": "match", "a/report.html": "mismatch", "a/gone.png": "unknown" },
+  );
 
   // ── 3f. 对手按目录找：别的项目、开在上层目录的都算 ────────────────────────────
   // 另一个项目登记在上层目录，它的任务在那儿跑、往这个目录的 videos/upper 里写东西。按项目找
