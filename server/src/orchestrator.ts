@@ -486,8 +486,10 @@ export async function continueTask(
             // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
             // 恢复不了的恢复命令,见 ResumeFields。
             ...ex.resumeFields(cwd, cliSessionId),
-            // 重建上下文那一轮:换上新的 CLI 会话,标记就此了结。
-            ...(reseed ? { cliSessionId, contextRebuildAt: null } : {}),
+            // 重建上下文那一轮:换上新的 CLI 会话。标记**这里不清** —— 进程起来不等于新会话
+            // 已经收下并存好重建的历史(init 之前就失败、被停、重启时没接回都有可能),这一轮
+            // 成功收尾时才了结(single-run.ts);没了结,下一轮就再按删除后的记录重建一次。
+            ...(reseed ? { cliSessionId } : {}),
             // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
             // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
             agentPid: runningHandle.detached?.pid ?? null,

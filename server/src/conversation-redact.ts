@@ -22,8 +22,8 @@
 // 新内容，再各自原子替换（run-file-lock.ts），写失败就如实报失败，不会报成删好了。
 //
 // 一次删除横跨数据库与两份文件，没有跨存储的事务，所以按「哪一步断了都能原样重试」排顺序：
-// ③ 失效标记 → ② 问答墓碑（一笔原子写）→ trace → 正文。正文是最后一步，只要它没换成，用户
-// 看到的就还是那一段、删除入口还在；重试时已经写下的墓碑按 `deletedFrom`/`answerIds` 认回
+// 只读校验 → ③ 失效标记 → ② 问答墓碑（一笔原子写）→ trace → 正文。正文是最后一步，只要它
+// 没换成，用户看到的就还是那一段、删除入口还在；重试时已经写下的墓碑按 `deletedFrom`/`answerIds` 认回
 // 同一段（shared/questions.ts `pairAnswerMessages`），不会再清一条别的记录，也不会被当成
 // 「内容变了」拒掉。
 //
@@ -228,15 +228,16 @@ export async function deleteConversationSegments(sessionId: string, targets: rea
   if (!release) throw new RedactRefusal(busy, 409);
   let answersTouched = false;
   try {
-    // **先挂上「下一轮重建上下文」再动别的**：反过来的话，抹完正文、这一笔没写成，下一轮就
+    const mdPath = sessionTranscriptPath(task.id, sessionId);
+    const tracePath = sessionTracePath(task.id, sessionId);
+    // 先校验、认出被删的答复（只读）：指名对不上（页面旧了）就到此为止，什么都不动 —— 包括下面
+    // 那道全任务的失效标记，否则一次 409 就白白让每条会话都丢掉旧上下文。
+    const { users } = await withRunFileLock([mdPath, tracePath], () => planRewrite(mdPath, tracePath, targets))
+      .catch((error) => { throw unfinished(error); });
+    // **挂上「下一轮重建上下文」再动任何存储**：反过来的话，抹完正文、这一笔没写成，下一轮就
     // 照旧 --resume 那条还记得原话的 CLI 会话。先挂后抹最坏是白重建一次。
     await db.update(sessions).set({ contextRebuildAt: now() })
       .where(and(eq(sessions.taskId, task.id), isNotNull(sessions.cliSessionId)));
-    const mdPath = sessionTranscriptPath(task.id, sessionId);
-    const tracePath = sessionTracePath(task.id, sessionId);
-    // 先校验、认出被删的答复（只读），再清问答历史，最后换文件（顺序的理由见文件头）。
-    const { users } = await withRunFileLock([mdPath, tracePath], () => planRewrite(mdPath, tracePath, targets))
-      .catch((error) => { throw unfinished(error); });
     answersTouched = await tombstoneAnswers(task.id, sessionId, users).catch((error) => { throw unfinished(error); });
     await withRunFileLock([mdPath, tracePath], () => {
       // 锁里从读到换名全是同步的：同进程的同步追加插不进来，异步追加都在排这把锁。两次进锁

@@ -561,6 +561,11 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
       // 仍然重放得到那段输出。`detached` 不存在时照旧清空(这一路没有可接的进程)。
       ...(detached ? (progressSecured ? { agentOffset: detached.committed() } : {}) : { agentOffset: null }),
       ...(dropSession ? LOST_SESSION_PATCH : {}),
+      // 删过消息之后的重建（conversation-redact.ts）只在这里了结：这一轮在新 CLI 会话上完整、
+      // 成功地跑完，且拿到了它的会话 id —— 重建的历史这才确实在一条接得回的会话里。失败、
+      // 被停、被引导、会话作废都留着标记，下一轮照样拿删除后的记录重建，不会退回只带任务
+      // 正文从头开始（删除期间不可能有回合在跑，所以这一轮看到的标记就是它起跑时兑现的那个）。
+      ...(!stopped && !steered && !executionFailed && !dropSession && cliSessionId ? { contextRebuildAt: null } : {}),
     })
     .where(eq(sessions.id, sessId));
   // 这一回合的区间单独落一行：产物归属要的是「它在写这个目录」的那几段，而上面那行

@@ -4,8 +4,9 @@
 //   ① 解析：默认不含被删段，按原位排版的界面传 keepDeleted 拿到占位
 //   ② 纯函数：指名对不上整批拒绝；抹掉正文与哨兵载荷、留住回合身份；trace 只摘被删回复那段时间
 //   ③ 入口：在跑 / 团队任务 / 回合锁被占都拒；成功后 .md 与 trace 里一个字不剩、会话行挂上重建标记
-//   ④ 下一轮：不再 --resume 旧 CLI 会话，换新会话、把删除后的记录当历史喂进去，标记了结；
-//      再下一轮照常 --resume 新会话
+//   ④ 下一轮：不再 --resume 旧 CLI 会话，换新会话、把删除后的记录当历史喂进去；这一轮若在
+//      新会话收下历史之前就失败，标记留着、再下一轮照样重建；成功跑完一轮标记才了结，
+//      之后照常 --resume 新会话
 //   ⑥ 答复按记录身份删（原文相同也不删错）；删到一半（问答历史或文件哪一步断了）重试都能
 //      续上；失效标记跨接力不丢（不带原生会话文件、对端照样重建）
 // 跑:npm -w server run test:conversation-redact
@@ -39,6 +40,9 @@ const pick=(flag)=>{const i=argv.indexOf(flag);return i<0?null:argv[i+1];};
 const sid=pick("--resume")||pick("--session-id");
 const file=path.join(process.env.ASH_TEST_PROBES,process.pid+"-"+process.hrtime.bigint()+".json");
 const out={argv,stdin:[]};
+// 失败开关：在吐出 init 之前就退出（认证/供应商连接失败那一类），只失败一次。
+const failOnce=process.env.ASH_TEST_FAIL_ONCE;
+if(failOnce&&fs.existsSync(failOnce)){fs.unlinkSync(failOnce);fs.writeFileSync(file,JSON.stringify(out));process.exit(1);}
 let buf="";let answered=false;
 process.stdin.on("data",(d)=>{buf+=d;let i;while((i=buf.indexOf("\\n"))>=0){const line=buf.slice(0,i);buf=buf.slice(i+1);
   out.stdin.push(line);fs.writeFileSync(file,JSON.stringify(out));
@@ -54,6 +58,8 @@ writeFileSync(fakeBin, IS_WINDOWS ? `@node "${probeJs}" %*\r\n` : `#!/bin/sh\nex
 chmodSync(fakeBin, 0o755);
 process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
 process.env.ASH_TEST_PROBES = probes;
+const failOnce = join(stage, "fail-once");
+process.env.ASH_TEST_FAIL_ONCE = failOnce;
 type Probe = { argv: string[]; stdin: string[] };
 const readProbes = (): Probe[] => readdirSync(probes).filter((f) => f.endsWith(".json"))
   .map((f) => JSON.parse(readFileSync(join(probes, f), "utf8")) as Probe);
@@ -207,6 +213,7 @@ await db.insert(sessions).values({
   };
   assert.equal((await post({ segments: [{ index: "2" }] })).status, 400, "格式不对 400");
   assert.equal((await post({ segments: [{ index: 2, fingerprint: "stale" }] })).status, 409, "正文旧了 409");
+  assert.equal((await sessionRow(sessionId)).contextRebuildAt, null, "页面旧了被拒的删除不让任何会话丢掉旧上下文");
   const published: string[] = [];
   const off = bus.subscribe((event) => { if (event.type === "conversation.redacted") published.push(event.sessionId); });
   // 删除与回合之外的追加（时间线旁注）排同一把逐文件锁。先由别人占着锁，确定性地验两头都在等：
@@ -432,6 +439,19 @@ async function turn(text: string): Promise<Probe> {
 }
 let newCli = "";
 try {
+  // 重建的那一轮在新 CLI 会话吐出 init 之前就失败：重建义务不能就此消失。
+  clearProbes();
+  writeFileSync(failOnce, "");
+  assert.equal(await continueTask(taskId, "先试一次"), true, "这一轮要被接管");
+  await until("假 claude 起跑", () => readProbes().length > 0);
+  await until("回合结算", settled);
+  const failed = readProbes()[0]!;
+  assert.ok(!failed.argv.includes("--resume"), "失败的那一轮也是新会话");
+  const afterFailure = await sessionRow(sessionId);
+  assert.ok(afterFailure.contextRebuildAt, "新会话没收下历史就失败：重建标记留着");
+  assert.notEqual(afterFailure.cliSessionId, OLD_CLI, "旧 CLI 会话也不会再被接回");
+  ok("重建那一轮在 init 前失败：标记留着，不退回只带任务正文的全新起跑");
+
   const first = await turn("改用 B 方案");
   assert.ok(!first.argv.includes("--resume"), `删过消息的下一轮不能再 --resume 旧会话：${first.argv.join(" ")}`);
   const sid = first.argv[first.argv.indexOf("--session-id") + 1];
@@ -442,17 +462,18 @@ try {
   assert.match(prompt, /好的，A 方案已经改完。/, "带上删除后留下的对话");
   assert.match(prompt, /哨兵之后的正常回复。/);
   assert.match(prompt, /改用 B 方案/, "这一轮的新消息在里面");
+  assert.match(prompt, /先试一次/, "上一轮失败时发的那句也作为历史带上");
   assert.doesNotMatch(prompt, /SECRET/, "被删的内容一个字都不进新会话");
   const row = await sessionRow(sessionId);
   assert.equal(row.contextRebuildAt, null, "重建过一次，标记了结");
   assert.equal(row.cliSessionId, sid, "会话行换上新的 CLI 会话 id");
   newCli = sid!;
-  ok("下一轮：不 resume 旧会话，新会话带着删除后的记录起跑");
+  ok("再下一轮：照样重建，带着删除后留下的全部记录；成功跑完才了结标记");
 
   const second = await turn("继续");
   assert.equal(second.argv[second.argv.indexOf("--resume") + 1], newCli, "再下一轮照常 resume 新会话");
   assert.doesNotMatch(second.stdin.join("\n"), /上下文已重建/, "只重建一次");
-  ok("再下一轮：照常 resume，不再重建");
+  ok("之后：照常 resume 新会话，不再重建");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
