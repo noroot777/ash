@@ -150,12 +150,13 @@ try {
   assert.equal(result.artifacts.find((a) => a.path === "out/海报.png")?.kind, "image");
   assert.equal(result.artifacts.find((a) => a.path === "out/海报.png")?.dir, "out");
   assert.equal(result.artifacts.find((a) => a.path === "out/海报.png")?.size, png.length * 2);
-  // **强弱与状态是两件事**：这个 fixture 跑在项目主仓上（不是独占 worktree）,而它那条会话
-  // 没有逐回合记录,所以按时间认的那几条只能是候选；任务分支的差异自带归属、不吃时间,所以
-  // 那两条是确定的 —— 哪怕其中一条此刻的状态标签是「未提交」（它刚被改过）。
-  assert.equal(confOf(result, "out/海报.png"), "exact",
-    "任务分支上的提交动过它:归属是确定的,跟它此刻的状态标签无关");
-  assert.equal(confOf(result, "out/页面.html"), "exact");
+  // 这个 fixture 跑在项目主仓上（不是独占 worktree）,而它那条会话没有逐回合记录,所以按时间
+  // 认的那几条只能是候选。任务分支的差异只替**分支那一版**作保：`out/页面.html` 磁盘上就是
+  // 分支那一版,确定；`out/海报.png` 提交之后又被改过、还没提交,现在这份不是分支那一版,
+  // 是谁改的只剩时间可问——跟别的按时间认的一样落候选。
+  assert.equal(confOf(result, "out/海报.png"), "approx",
+    "分支提交只证明分支那一版是它的,之后没提交的改动不沾这份证明");
+  assert.equal(confOf(result, "out/页面.html"), "exact", "磁盘上就是分支那一版");
   assert.equal(confOf(result, "output/渲染.png"), "approx",
     "被忽略的那一档只有「在这个目录里 + 时间对得上」一条线索,而这段区间是估出来的");
   assert.equal(confOf(result, "out/草稿.png"), "approx");

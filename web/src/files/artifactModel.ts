@@ -37,14 +37,42 @@ export const ARTIFACT_ORIGIN_HINT: Record<TaskArtifact["origin"], string> = {
 };
 
 /**
- * 候选那一档的角标。
+ * 候选那一档：默认折起来，收在「拿不准归属的」那一栏，逐条说为什么拿不准。
  *
- * 只给 `approx` 一个角标,`exact` 什么都不加：清单里绝大多数条目是确定的,给每一条都挂个
- * 「确定」只是噪音,真正需要被认出来的是**混进来的那几个**。
+ * 确定的不加角标——那是多数，标了只是噪音；真正需要被认出来的是混进来的那几个。拿不准的也不
+ * 混在确定的中间：共享目录上两个任务同时在跑时，候选可能有几百个，摊开就把它真正做出来的
+ * 东西淹了（原需求抱怨的正是这个）。
  */
 export const ARTIFACT_CONFIDENCE_LABEL = "候选";
-export const ARTIFACT_CONFIDENCE_HINT =
-  "只落在估出来的时间段里，或者同一时间别的任务也在这个目录里写东西、分不出是谁的，可能是别人做的";
+export const ARTIFACT_DOUBTFUL_HEAD = "拿不准归属的";
+
+export const ARTIFACT_DOUBT_LABEL: Record<NonNullable<TaskArtifact["doubt"]>, string> = {
+  estimated: "时间是估的",
+  concurrent: "同时有别的任务",
+  unchecked: "没核全",
+  version: "后来被改过",
+  contested: "别人写过同样内容",
+};
+
+export const ARTIFACT_DOUBT_HINT: Record<NonNullable<TaskArtifact["doubt"]>, string> = {
+  estimated: "只落在估出来的时间段里（会话寿命、没收尾的回合），可能是别人在同一个目录里做的",
+  concurrent: "做出来的那一刻，别的任务也在这个目录里干活；命令生成的文件分不出是谁做的",
+  unchecked: "没能核对那一刻还有谁在这个目录里干活，不敢算确定",
+  version: "它动过这个文件，但现在这份已经不是它那一版，可能被别人改过",
+  contested: "它和别的任务写下过一模一样的内容，证明不了是谁的",
+};
+
+/** 老服务端没给 `doubt` 的候选，按最早那一种（估出来的时间段）解释。 */
+export const doubtOf = (artifact: TaskArtifact) => artifact.doubt ?? "estimated";
+
+/** 拿不准的那些里，同一时间也在这个目录里干活的任务（去重、按出现次数从多到少）。 */
+export function alongsideOf(artifacts: readonly TaskArtifact[]): string[] {
+  const counts = new Map<string, number>();
+  for (const artifact of artifacts) {
+    for (const title of artifact.alongside ?? []) counts.set(title, (counts.get(title) ?? 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]).map(([title]) => title);
+}
 
 /**
  * 整份清单**凭什么算这个任务的**。
@@ -55,7 +83,7 @@ export const ARTIFACT_CONFIDENCE_HINT =
  */
 export const ARTIFACT_SCOPE_NOTE: Record<TaskArtifactsResult["scope"], string | null> = {
   exclusive: null, // 独占目录：不必解释，清单就是它做的
-  shared: "这个任务和别人共用一个工作目录，下面是按它运行的那几段时间认出来的；同一段时间里并行跑的任务可能互相串。",
+  shared: "这个任务和别人共用一个工作目录：上面那些有直接证据，拿不准的都收在「拿不准归属的」那一栏。",
 };
 
 export function groupArtifacts(artifacts: readonly TaskArtifact[]): ArtifactGroup[] {

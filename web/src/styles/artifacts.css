@@ -57,6 +57,13 @@
 /* 候选：描边而不是填色——它说的是「这一条有多硬」,跟左边那三个讲状态的角标不是一回事。 */
 .artifacts__facts em[data-confidence="approx"] { border:.5px dashed color-mix(in lch,var(--amber) 42%,var(--line2)); background:transparent; padding:0 3px; color:var(--amber); }
 
+/* 拿不准归属的那一栏：默认折起来，跟确定的那几组之间隔一道线，免得被当成同一份清单。 */
+.artifacts__doubtful { margin-top:14px; border-top:.5px dashed color-mix(in lch,var(--amber) 35%,var(--line)); padding-top:8px; }
+.artifacts__doubtful-toggle { display:flex; align-items:center; gap:5px; border:0; background:transparent; padding:2px 0; color:var(--amber); font-size:10px; font-weight:600; }
+.artifacts__doubtful-toggle:hover { color:var(--ink); }
+.artifacts__doubtful-toggle small { border-radius:999px; background:color-mix(in lch,var(--amber) 12%,var(--panel)); padding:1px 6px; font-size:9px; font-weight:500; }
+.artifacts__doubtful-note { margin:3px 0 0; color:var(--faint); font-size:9.5px; line-height:1.6; }
+
 /* 「交给本机应用打开」压在卡片右上角，而且是卡片的**兄弟**不是子元素：套在按钮里浏览器
    会把它拎出去，点哪儿都变成点了整张卡（file-tree 那边踩过同一个坑）。 */
 .artifacts__open { position:absolute; z-index:2; top:5px; right:5px; display:grid; width:20px; height:20px; place-items:center; border:1px solid var(--line2); border-radius:6px; background:color-mix(in lch,var(--panel) 82%,transparent); color:var(--muted); opacity:0; }

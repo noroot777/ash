@@ -1,25 +1,15 @@
 import { access, readdir, stat } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { join } from "node:path";
+import { kindOf } from "./artifact-kind.js";
 import { execFileText as exec } from "./exec.js";
 import { withinWindows, type RunWindow } from "./task-artifact-windows.js";
 
 // 产物面板的**文件系统那一半**：哪些路径要整棵绕开、被忽略的条目按什么顺序扫、预算怎么
 // 花。归属证据在 `task-artifact-scope.ts`，三档合成在 `task-artifacts.ts`。
 
-export type ArtifactKind = "image" | "video" | "audio" | "page" | "pdf";
-
-const KIND_BY_EXTENSION = new Map<string, ArtifactKind>([
-  ...["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg", "heic", "tif", "tiff"]
-    .map((ext) => [ext, "image"] as const),
-  ...["mp4", "mov", "webm", "mkv", "avi", "m4v", "ogv"].map((ext) => [ext, "video"] as const),
-  ...["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "aiff"].map((ext) => [ext, "audio"] as const),
-  ...["html", "htm"].map((ext) => [ext, "page"] as const),
-  ["pdf", "pdf"],
-] as const satisfies readonly (readonly [string, ArtifactKind])[]);
-
-export function kindOf(path: string): ArtifactKind | null {
-  return KIND_BY_EXTENSION.get(extname(path).replace(/^\./, "").toLowerCase()) ?? null;
-}
+// 「哪些算产物」的那张扩展名表住在 `artifact-kind.ts`：执行器那一侧（写完当场记内容指纹）
+// 也要用它，而这份文件带着 git、扫描预算这些执行器用不上的东西。
+export { kindOf, type ArtifactKind } from "./artifact-kind.js";
 
 // 扫被忽略的目录时绕开的那些：依赖树、构建缓存、IDE 自留地，以及**别的任务的隔离工作
 // 区**（`.worktrees/<任务>`、`.claude/worktrees/`）。前几类本来就塞满 .svg/.png，一个都
@@ -285,7 +275,7 @@ async function walkFocusFirst(
  * `windows` 只用来排优先级（预算花在最可能有产出的地方），**不在这里做时间筛选**：独占
  * 工作区整个不吃时间判据，筛不筛由调用方按归属证据决定。
  *
- * `focus` 是任务自己写过的目录（相对根，见 task-artifact-footprint.ts），同样只管顺序：先扫
+ * `focus` 是任务自己写过的目录（相对根，见 task-artifact-direct.ts），同样只管顺序：先扫
  * 这几处，预算不够时丢掉的是离它最远的那些。**不收窄范围**——命令可能把东西写到项目里
  * 别的地方，收窄就漏了。
  */

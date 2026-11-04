@@ -315,17 +315,21 @@ export type ArtifactKind = "image" | "video" | "audio" | "page" | "pdf";
 export type ArtifactOrigin = "working" | "committed" | "ignored";
 
 /**
- * **这一条**的归属有多硬（服务端 `task-artifacts.ts` 的 `exactProof`）。
+ * **这一条**的归属有多硬（判据在服务端 `task-artifacts.ts` 顶部）。
  *
- * - `exact` —— 确定：目录独占、任务分支上的提交动过它、或者落在一段**精确**区间里；
- * - `approx` —— 候选：只落在**估出来**的区间里（会话寿命、没收尾的回合），可能是别人在同一个
- *   目录里做的。
+ * - `exact` —— 确定：有直接证据（目录独占、亲手写下且一字未变、任务分支那一版、精确区间里
+ *   而且当时没有别的任务在这个目录里干活）；
+ * - `approx` —— 候选：拿不准，原因见 `doubt`。
  *
  * 整份清单那一档（`ArtifactScopeKind`）说的是「这个目录是不是它独占的」,这一列说的是
- * 「**这一个**文件凭什么算它的」—— 共享目录里两种条目是混着的,只给页脚一个总数,用户看得见
- * 数目却看不出是哪几个（本轮审查第 5 条）。
+ * 「**这一个**文件凭什么算它的」。
  */
 export type ArtifactConfidence = "exact" | "approx";
+/**
+ * 候选为什么拿不准：只落在估出来的时间段里 / 那一刻还有别的任务在这个目录里干活 / 没能核对
+ * 那一刻还有谁 / 它动过但现在这份已经不是它那一版 / 别的任务写下过一模一样的内容。
+ */
+export type ArtifactDoubt = "estimated" | "concurrent" | "unchecked" | "version" | "contested";
 
 export type TaskArtifact = {
   /** 相对工作区根、posix 分隔符——跟文件树、文件查看器同一个主键。 */
@@ -337,6 +341,10 @@ export type TaskArtifact = {
   mtime: string | null;
   origin: ArtifactOrigin;
   confidence: ArtifactConfidence;
+  /** 候选为什么拿不准；老服务端不给这一项。 */
+  doubt?: ArtifactDoubt;
+  /** `doubt=concurrent` 时，那一刻也在这个目录里干活的任务标题。 */
+  alongside?: string[];
 };
 
 /**

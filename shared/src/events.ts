@@ -67,12 +67,12 @@ export type AgentEvent =
   | { kind: "context"; context: ContextUsage }
   // 这一步工具调用**写到了哪里**:执行器从原生事件的结构化参数里当场取出(写文件/改文件
   // 工具的目标路径、命令的工作目录),趁它还没被截短。只给服务端记「任务写过的位置」
-  // (server/src/task-writes.ts),生成物面板在共享目录上靠它分开同时在跑的任务。不进
-  // trace、不推给前端(/events 出口处滤掉),展示端永远见不到它。
-  // `paths` 是绝对路径或相对会话工作目录;`cwd: true` = 这几个是**命令的工作目录**(弱
-  // 证据:进去可能只是看一眼),缺省 = 写文件/改文件工具的目标文件。`tookMs` = 这一步从开始
-  // 到报出来花了多久(命令跑了几分钟才完成时,它在那个目录里干活是从开始那一刻算起的)。
-  | { kind: "writes"; paths: string[]; cwd?: true; tookMs?: number }
+  // (server/src/task-writes.ts),生成物面板靠它认出「这份文件是它亲手写的」。不进 trace、
+  // 不推给前端(/events 出口处滤掉),展示端永远见不到它。
+  // `paths` 是绝对路径或相对会话工作目录;`cwd: true` = 这几个是**命令的工作目录**,缺省 =
+  // 写文件/改文件工具的目标文件。`digests` = 写成那一刻这些文件的内容指纹(路径 → sha256,
+  // 只给产物那几类文件,见 server/src/file-digest.ts)。
+  | { kind: "writes"; paths: string[]; cwd?: true; digests?: Record<string, string> }
   // level="notice" = 这条不是执行故障,是**执行过程里的一条提示**:上游在重试、还在等
   // 回话、这一轮为什么落成这个状态。分级的理由:提示混在故障里,新用户看到红叉只会读成
   // 「它崩了」,而真出故障时那句提示又会盖住真正的原因(docs/incidents.md「接力到多用户

@@ -4,9 +4,10 @@ import type { AgentEvent } from "@ash/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { sessions, sessionTurns, taskWrites } from "./db/schema.js";
+import { pathLens } from "./task-artifact-paths.js";
 
 // 「这个任务往哪里写过东西」的写入端。执行器当场报出 `writes` 事件（executors/tool-writes.ts），
-// 这里按任务落库；读取端是生成物面板的并发裁决（task-artifact-footprint.ts）。
+// 这里按任务落库；读取端是生成物面板（task-artifact-direct.ts、task-artifact-rivals.ts）。
 //
 // **挂在总线上，不挂在某一条执行链里**：单飞、讨论、团队调度台三条链都把执行器事件原样广播
 // 出去，在这里接一次就全覆盖了，下一条新执行链不用记得补（同一个办法见 uploads.ts 的
@@ -47,32 +48,35 @@ export async function recordTaskWrites(
   event: Extract<AgentEvent, { kind: "writes" }>,
   at = new Date().toISOString(),
 ): Promise<void> {
-  const absolute: string[] = [];
+  // 落库存**归一后的路径**（软链解开）：读取端按真实路径比，同一个目录从两个入口写进来、从两个
+  // 入口去看，认出来的必须是同一份（XPvT3Fdm8bi5 第 2 轮 #3）。指纹按执行器报上来的那个写法对。
+  const lens = pathLens();
+  const rows = new Map<string, string | null>();
   for (const raw of event.paths) {
-    if (isAbsolute(raw)) {
-      absolute.push(resolve(raw));
-      continue;
+    let absolute = raw;
+    if (!isAbsolute(raw)) {
+      // 相对路径又查不到会话目录：无从知道它指哪儿，不记——记错比不记更糟（会把别处的
+      // 产物判给它）。
+      const cwd = await currentCwd(sessionId);
+      if (!cwd) continue;
+      absolute = resolve(cwd, raw);
     }
-    // 相对路径又查不到会话目录：无从知道它指哪儿，不记——记错比不记更糟（会把别处的
-    // 产物判给它）。
-    const cwd = await currentCwd(sessionId);
-    if (cwd) absolute.push(resolve(cwd, raw));
+    rows.set(await lens.canonical(absolute), event.digests?.[raw] ?? null);
   }
   const weak = event.cwd ? 1 : 0;
-  // 「从什么时候起」按这一步**开始**的时刻记（裁决只认文件落下时已经成立的记录，见
-  // task-artifact-footprint.ts 的 `asOf`）。
-  const began = event.tookMs ? new Date(Date.parse(at) - event.tookMs).toISOString() : at;
-  for (const path of new Set(absolute)) {
+  for (const [path, digest] of rows) {
     await db.insert(taskWrites)
-      .values({ taskId, path, weak, firstAt: began, lastAt: at })
+      .values({ taskId, path, weak, firstAt: at, lastAt: at, digest })
       .onConflictDoUpdate({
         target: [taskWrites.taskId, taskWrites.path, taskWrites.weak],
-        // 两端都取极值：一步长命令的记录可能在一条后开始、先报完的记录之后才到，到得晚不等于
-        // 开始得晚——直接覆盖会把「最早在这儿写」往后挪，把「最后一次」往前拨。时刻都是同一种
-        // ISO 写法，按字典序比就是按时间比。
+        // 两次记录可能乱序落库（每一条都要先查目录、解软链）：时刻两端各取极值，内容指纹只认
+        // **更晚那一次**写下的——它才对应现在磁盘上该有的那一版。时刻都是同一种 ISO 写法，按字典序
+        // 比就是按时间比。
         set: {
           firstAt: sql`min(${taskWrites.firstAt}, excluded.first_at)`,
           lastAt: sql`max(${taskWrites.lastAt}, excluded.last_at)`,
+          digest: sql`case when excluded.last_at >= ${taskWrites.lastAt}
+            then coalesce(excluded.digest, ${taskWrites.digest}) else ${taskWrites.digest} end`,
         },
       });
   }

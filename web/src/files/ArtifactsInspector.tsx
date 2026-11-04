@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowClockwise,
   ArrowSquareOut,
   Browser,
+  CaretDown,
+  CaretRight,
   FileAudio,
   FilePdf,
   FileVideo,
@@ -14,11 +16,15 @@ import { api, type TaskArtifact } from "../lib/api.ts";
 import { InspectorHeadActions } from "../inspector/index.ts";
 import { formatSize } from "./fileModel.ts";
 import {
-  ARTIFACT_ORIGIN_HINT,
-  ARTIFACT_CONFIDENCE_HINT,
   ARTIFACT_CONFIDENCE_LABEL,
+  ARTIFACT_DOUBT_HINT,
+  ARTIFACT_DOUBT_LABEL,
+  ARTIFACT_DOUBTFUL_HEAD,
+  ARTIFACT_ORIGIN_HINT,
   ARTIFACT_ORIGIN_LABEL,
   ARTIFACT_SCOPE_NOTE,
+  alongsideOf,
+  doubtOf,
   formatArtifactTime,
   groupArtifacts,
   useTaskArtifacts,
@@ -84,7 +90,13 @@ export function ArtifactsInspector({
   const { result, error, loading, refresh } = useTaskArtifacts(taskId);
   const [refreshing, setRefreshing] = useState(false);
   const artifacts = result?.artifacts ?? [];
-  const groups = groupArtifacts(artifacts);
+  const confirmed = artifacts.filter((artifact) => artifact.confidence !== "approx");
+  const doubtful = artifacts.filter((artifact) => artifact.confidence === "approx");
+  const alongside = alongsideOf(doubtful);
+  const doubts = [...new Set(doubtful.map(doubtOf))];
+  const [doubtfulOpen, setDoubtfulOpen] = useState(false);
+  // 换了任务就重新折起来：上一个任务点开过，不代表这一个也要摊开。
+  useEffect(() => setDoubtfulOpen(false), [taskId]);
 
   const reload = async () => {
     setRefreshing(true);
@@ -121,81 +133,45 @@ export function ArtifactsInspector({
 
       {loading && !result && <p className="artifacts__state"><SpinnerGap size={14} aria-hidden="true" />正在扫描…</p>}
 
-      {!loading && !error && !artifacts.length && (
+      {!loading && !error && !confirmed.length && (
         <div className="artifacts__empty">
           <Images size={22} aria-hidden="true" />
-          <b>还没有可以看的产物</b>
+          <b>{doubtful.length ? "没有能确定是它做的产物" : "还没有可以看的产物"}</b>
           <p>
             这里收的是任务做出来的图片、网页、音视频和 PDF。
-            {result?.since
-              ? "代码类的改动去「改动」那一格看。"
-              : "这个任务还没跑过，等它写出东西来就会出现在这里。"}
+            {doubtful.length
+              ? "下面那些拿不准是不是它做的，点开逐条看。"
+              : result?.since
+                ? "代码类的改动去「改动」那一格看。"
+                : "这个任务还没跑过，等它写出东西来就会出现在这里。"}
           </p>
         </div>
       )}
 
-      {groups.map((group) => (
-        <section key={group.key} className="artifacts__group">
-          <h4 className="artifacts__group-head">
-            {group.label}
-            <small>{group.items.length}</small>
-          </h4>
-          <div className="artifacts__grid">
-            {group.items.map((artifact) => (
-              <div key={artifact.path} className="artifacts__cell">
-                <button
-                  type="button"
-                  className={`artifacts__card${artifact.path === activePath ? " is-active" : ""}`}
-                  aria-label={`打开 ${artifact.path}，${ARTIFACT_ORIGIN_LABEL[artifact.origin]}${
-                    artifact.confidence === "approx" ? `，${ARTIFACT_CONFIDENCE_LABEL}` : ""
-                  }`}
-                  // 翻页的那一串按**这一组**给（图片跟图片翻、网页跟网页翻）：分组本来就是
-                  // 「同一类东西」的意思，跨组翻到一份 html 只会让人以为点错了。
-                  onClick={() => onOpenFile(artifact.path, group.items.map((item) => item.path))}
-                >
-                  <span className="artifacts__thumb" data-kind={artifact.kind}>
-                    <Thumb taskId={taskId} artifact={artifact} />
-                  </span>
-                  <span className="artifacts__meta">
-                    <b>{artifact.name}</b>
-                    {artifact.dir && <small className="artifacts__dir">{artifact.dir}</small>}
-                    <small className="artifacts__facts">
-                      <em data-origin={artifact.origin}>{ARTIFACT_ORIGIN_LABEL[artifact.origin]}</em>
-                      {/* 候选那一档逐条标出来。页脚只说「有 N 个是按估出来的时间段认的」时,
-                          用户看得见数目、看不出是哪几个,于是整张清单一起贬值（本轮审查第 5 条）。
-                          确定的那些不加角标——那是多数,标了只是噪音。 */}
-                      {artifact.confidence === "approx" && (
-                        // 解释走下面那张图例（跟 origin 那三个角标同一个做法）：原生 title 在每秒
-                        // 重渲染的界面里永远弹不出来,`scripts/check-conventions.mjs` 也拦着。
-                        <em data-confidence="approx">{ARTIFACT_CONFIDENCE_LABEL}</em>
-                      )}
-                      {formatSize(artifact.size)}
-                      {formatArtifactTime(artifact.mtime) && <span>{formatArtifactTime(artifact.mtime)}</span>}
-                    </small>
-                  </span>
-                </button>
-                {/* 交给本机应用打开：网页要完整保真（沙箱里字体、跨源请求都拿不到）、
-                    视频要系统播放器时的出口。 */}
-                <button
-                  type="button"
-                  className="artifacts__open"
-                  aria-label={`用本机应用打开 ${artifact.name}`}
-                  onClick={async () => {
-                    try {
-                      await api.openTaskFile(taskId, artifact.path, null);
-                      notify("已交给本机应用打开");
-                    } catch (reason) {
-                      notify(reason instanceof Error ? reason.message : String(reason));
-                    }
-                  }}
-                >
-                  <ArrowSquareOut size={11} aria-hidden="true" />
-                </button>
-              </div>
-            ))}
-          </div>
+      <ArtifactGroups taskId={taskId} artifacts={confirmed} activePath={activePath} onOpenFile={onOpenFile} notify={notify} />
+
+      {/* 拿不准的默认折起来：共享目录上同时在跑的任务，候选可能有几百个，摊开就把它真正做出来
+          的东西淹了。折起来不是藏起来——数目和原因都在标题上，点开逐条看。 */}
+      {doubtful.length > 0 && (
+        <section className="artifacts__doubtful">
+          <button
+            type="button"
+            className="artifacts__doubtful-toggle"
+            aria-expanded={doubtfulOpen}
+            onClick={() => setDoubtfulOpen((open) => !open)}
+          >
+            {doubtfulOpen ? <CaretDown size={11} aria-hidden="true" /> : <CaretRight size={11} aria-hidden="true" />}
+            {ARTIFACT_DOUBTFUL_HEAD}
+            <small>{doubtful.length}</small>
+          </button>
+          {alongside.length > 0 && (
+            <p className="artifacts__doubtful-note">同一时间也在这个目录里干活：{alongside.join("、")}</p>
+          )}
+          {doubtfulOpen && (
+            <ArtifactGroups taskId={taskId} artifacts={doubtful} activePath={activePath} onOpenFile={onOpenFile} notify={notify} />
+          )}
         </section>
-      ))}
+      )}
 
       {result?.truncated && <p className="artifacts__notice">产物太多，只列出了最近的一批</p>}
 
@@ -214,16 +190,95 @@ export function ArtifactsInspector({
               <dd>{ARTIFACT_ORIGIN_HINT[origin]}</dd>
             </div>
           ))}
-          {/* 清单里真有候选时才解释它——独占目录下一个都不会有,凭空多一行只会让人以为
-              这份清单也靠猜。 */}
-          {artifacts.some((artifact) => artifact.confidence === "approx") && (
-            <div>
-              <dt data-confidence="approx">{ARTIFACT_CONFIDENCE_LABEL}</dt>
-              <dd>{ARTIFACT_CONFIDENCE_HINT}</dd>
+          {/* 清单里真有那一种拿不准时才解释它——独占目录下一个都不会有，凭空多几行只会让人
+              以为这份清单也靠猜。 */}
+          {doubts.map((doubt) => (
+            <div key={doubt}>
+              <dt data-confidence="approx">{ARTIFACT_DOUBT_LABEL[doubt]}</dt>
+              <dd>{ARTIFACT_DOUBT_HINT[doubt]}</dd>
             </div>
-          )}
+          ))}
         </dl>
       )}
     </div>
   );
+}
+
+/** 一份清单按类型分组铺开。确定的和拿不准的各用一份，翻页的那一串也各管各的。 */
+function ArtifactGroups({
+  taskId,
+  artifacts,
+  activePath,
+  onOpenFile,
+  notify,
+}: {
+  taskId: string;
+  artifacts: readonly TaskArtifact[];
+  activePath: string | null;
+  onOpenFile: (path: string, reel?: readonly string[]) => void;
+  notify: (message: string) => void;
+}) {
+  return groupArtifacts(artifacts).map((group) => (
+    <section key={group.key} className="artifacts__group">
+      <h4 className="artifacts__group-head">
+        {group.label}
+        <small>{group.items.length}</small>
+      </h4>
+      <div className="artifacts__grid">
+        {group.items.map((artifact) => (
+          <div key={artifact.path} className="artifacts__cell">
+            <button
+              type="button"
+              className={`artifacts__card${artifact.path === activePath ? " is-active" : ""}`}
+              aria-label={`打开 ${artifact.path}，${ARTIFACT_ORIGIN_LABEL[artifact.origin]}${
+                artifact.confidence === "approx"
+                  ? `，${ARTIFACT_CONFIDENCE_LABEL}：${ARTIFACT_DOUBT_LABEL[doubtOf(artifact)]}`
+                  : ""
+              }`}
+              // 翻页的那一串按**这一组**给（图片跟图片翻、网页跟网页翻）：分组本来就是
+              // 「同一类东西」的意思，跨组翻到一份 html 只会让人以为点错了。
+              onClick={() => onOpenFile(artifact.path, group.items.map((item) => item.path))}
+            >
+              <span className="artifacts__thumb" data-kind={artifact.kind}>
+                <Thumb taskId={taskId} artifact={artifact} />
+              </span>
+              <span className="artifacts__meta">
+                <b>{artifact.name}</b>
+                {artifact.dir && <small className="artifacts__dir">{artifact.dir}</small>}
+                <small className="artifacts__facts">
+                  <em data-origin={artifact.origin}>{ARTIFACT_ORIGIN_LABEL[artifact.origin]}</em>
+                  {/* 拿不准的逐条说**为什么**拿不准：同样是候选，「时间是估的」和「同时有别的
+                      任务」是两回事，用户据此决定要不要点开看。确定的不加角标——那是多数。 */}
+                  {artifact.confidence === "approx" && (
+                    // 解释走下面那张图例（跟 origin 那三个角标同一个做法）：原生 title 在每秒
+                    // 重渲染的界面里永远弹不出来,`scripts/check-conventions.mjs` 也拦着。
+                    <em data-confidence="approx">{ARTIFACT_DOUBT_LABEL[doubtOf(artifact)]}</em>
+                  )}
+                  {formatSize(artifact.size)}
+                  {formatArtifactTime(artifact.mtime) && <span>{formatArtifactTime(artifact.mtime)}</span>}
+                </small>
+              </span>
+            </button>
+            {/* 交给本机应用打开：网页要完整保真（沙箱里字体、跨源请求都拿不到）、
+                视频要系统播放器时的出口。 */}
+            <button
+              type="button"
+              className="artifacts__open"
+              aria-label={`用本机应用打开 ${artifact.name}`}
+              onClick={async () => {
+                try {
+                  await api.openTaskFile(taskId, artifact.path, null);
+                  notify("已交给本机应用打开");
+                } catch (reason) {
+                  notify(reason instanceof Error ? reason.message : String(reason));
+                }
+              }}
+            >
+              <ArrowSquareOut size={11} aria-hidden="true" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
+      ));
 }

@@ -10,7 +10,7 @@ import type { CommitEvidence } from "./task-artifact-scope.js";
 //
 // 磁盘上这份的 blob 用 `hash-object` 算（会按 `.gitattributes` 做同样的换行/过滤处理，内容一样就
 // 一定相等）。结果都是三态：`mismatch` 是一条确定的负证据，调用方不能当成「还没找到正证据」，
-// 再拿 mtime、目录远近把它重新升成确定；`unknown`（读不出来）同样不能替它作保。
+// 再拿 mtime 把它重新升成确定；`unknown`（读不出来）同样不能替它作保。
 
 export type BranchVersionCheck = "match" | "mismatch" | "unknown";
 
@@ -133,29 +133,5 @@ export async function checkCommitVersions(
     const commit = best.get(path);
     out.set(path, commit ? { commit } : "mismatch");
   }
-  return out;
-}
-
-/** 一次最多查这么多条路径的「现在这一版是什么时候提交的」（每条一次 git log）。 */
-const MAX_COMMIT_LOOKUPS = 64;
-
-/**
- * 每条路径在当前检出上**最后一次被提交**的时刻（毫秒）。查不到（从没提交过、超过额度、读失败）
- * 就没有这一项。只用来问「那一刻是不是别人在场」，好把别人的东西判出去——它**不**用来认定
- * 版本，更不能把哪一条升成确定。
- */
-export async function lastCommitTimes(rootPath: string, relPaths: readonly string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  await Promise.all(relPaths.slice(0, MAX_COMMIT_LOOKUPS).map(async (path) => {
-    try {
-      const { stdout } = await exec("git", [
-        "--no-optional-locks", "-C", rootPath, "log", "-1", "--format=%ct", "HEAD", "--", `:(literal)${path}`,
-      ]);
-      const seconds = Number(stdout.trim());
-      if (stdout.trim() && Number.isFinite(seconds)) out.set(path, seconds * 1000);
-    } catch {
-      // 读不出来就没有这一项：调用方按「不知道是什么时候」处理。
-    }
-  }));
   return out;
 }

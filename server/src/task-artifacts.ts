@@ -7,13 +7,12 @@ import { execFileText as exec } from "./exec.js";
 import type { WorkspaceRoot } from "./file-browser.js";
 import { readFileGitStatus } from "./file-git-status.js";
 import { taskBranchChangedPaths } from "./git-diff.js";
+import { directEvidence, type DirectEvidence, type DirectVerdict } from "./task-artifact-direct.js";
+import { pathLens } from "./task-artifact-paths.js";
+import { concurrentRivals, type Rivals } from "./task-artifact-rivals.js";
 import { kindOf, scanIgnoredArtifacts, type ArtifactKind } from "./task-artifact-scan.js";
 import { committedInWindows, resolveArtifactScope, type CommitEvidence } from "./task-artifact-scope.js";
-import { footprintArbiter, type FootprintArbiter } from "./task-artifact-footprint.js";
-import { pathLens } from "./task-artifact-paths.js";
-import {
-  checkBranchVersions, checkCommitVersions, lastCommitTimes, type BranchVersionCheck, type CommitVersionCheck,
-} from "./task-artifact-version.js";
+import { checkBranchVersions, checkCommitVersions, type CommitVersionCheck } from "./task-artifact-version.js";
 import { windowHit } from "./task-artifact-windows.js";
 
 // 「这个任务做出来的、值得看一眼的东西」——图片、网页、音视频、PDF。
@@ -30,14 +29,20 @@ import { windowHit } from "./task-artifact-windows.js";
 //   • ignored   —— 被 .gitignore 挡着（output/、dist/…）。git 两条线都看不见它，只能扫
 //     文件系统。
 //
-// **归属强弱分两档，决定了要不要再问时间**（判据本体在 `task-artifact-scope.ts`）：
+// **归属强弱：什么能算「确定」**（判据本体在 `task-artifact-scope.ts`）：
 //   • 目录独占（任务自己或它跟随的那个任务的 worktree）—— 目录就是归属证据，三档都不问
 //     时间。这一档必须不设上限：哨兵起的后台渲染可以在回合收尾二十分钟后才落盘，拿「回合
 //     结束 + 宽限」去卡它，真做出来的东西反而消失（第 1 轮审查 F3）。
-//   • 共享工作区（`useWorktree=false`，直接在项目主仓干活）—— 唯一的线索是时间，于是
-//     working 和 ignored 两档都要求文件落在「它在写这个目录」的那几段里。**committed 不
-//     再问 mtime**：那一档的路径本来就是按提交时刻挑出来的，再拿 mtime 卡一遍只会把后来
-//     被别的分支 checkout 刷过时间的文件漏掉。
+//   • 共享工作区（`useWorktree=false`、非 git 目录、跟着领队目录的执行者）上，**只有直接证据
+//     才算确定**：
+//       - 写文件工具亲手写下、磁盘上这份一字未变（`task-artifact-direct.ts`）；
+//       - 任务分支上的提交动过它、而且磁盘上这份就是分支那一版（`task-artifact-version.ts`）；
+//       - 按时间认的（区间里的提交、未提交的改动、被忽略的文件）：落在精确区间里，**而且那一刻
+//         没有别的任务也在这个目录里干活**（`task-artifact-rivals.ts`）。
+//     其余一律是候选，逐条说明为什么拿不准（`ArtifactDoubt`）。**推断只能让一条变成候选，不能
+//     让它变成确定，也不能把它从清单里拿掉**——唯一会拿掉的是「现在这份正是别的任务亲手写下的」，
+//     那是直接证据。曾经按「谁在附近写过东西」猜作者，每一种猜法都有反例，猜错就是把别人的东西
+//     标成确定、或者把自己的藏起来。
 //
 // mtime 这条判据永远**只对共享工作区**成立，别往独占目录推：建 worktree 是一次检出，所有
 // 被跟踪的文件 mtime 都等于任务开跑那一刻，拿 mtime 去问「是不是这次生成的」会把整个仓库
@@ -55,16 +60,21 @@ export type ArtifactScopeKind = "exclusive" | "shared";
 /**
  * **这一条**的归属有多硬。
  *
- * `exact` = 有确定证据：目录独占、任务分支上的提交动过它、mtime 落在一段**精确**区间里且没有
- * 别的任务同时在跑，或者同时在跑但它离本任务写过的地方更近（task-artifact-footprint.ts）。
- * `approx` = 只落在**估出来**的区间里（会话寿命、没收尾的回合、宽到下一次起跑的那种），或者
- * 同一刻别的任务也在这个目录里跑、写入位置分不出是谁的，所以它只是候选,可能是别人做的。
+ * `exact` = 有直接证据（见文件顶部那几条）。`approx` = 候选，原因见 `doubt`。
  *
- * 为什么要逐条给:服务端本来就按条算出了这一档（`exactProof`）,却只在页脚汇总一句「有 N 个是
- * 按估出来的时间段认的」——用户看得见数目,看不出**是哪几个**,于是整张清单一起贬值,面板就只能
- * 当个列表看（本轮审查第 5 条）。这一列**不参与归属判定**,它只是把已经算出来的强弱如实带到界面。
+ * 为什么要逐条给：只在页脚汇总一句「有 N 个拿不准」时，用户看得见数目、看不出**是哪几个**，
+ * 于是整张清单一起贬值（第 5 轮审查）。这一列**不参与归属判定**，只是把算出来的强弱带到界面。
  */
 export type ArtifactConfidence = "exact" | "approx";
+/**
+ * 候选**为什么**拿不准，面板逐条说：
+ *   - `estimated`  只落在估出来的区间里（会话寿命、没收尾的回合）；
+ *   - `concurrent` 那一刻还有别的任务也在这个目录里干活（是谁见 `alongside`）；
+ *   - `unchecked`  没能核对那一刻还有谁在场（核对失败、在场的太多没核全）；
+ *   - `version`    它确实动过这条路径，但磁盘上现在这份不是它那一版（后来被改过）；
+ *   - `contested`  它和别的任务亲手写下过一模一样的内容，谁也证明不了。
+ */
+export type ArtifactDoubt = "estimated" | "concurrent" | "unchecked" | "version" | "contested";
 
 export interface TaskArtifact {
   /** 相对工作区根、posix 分隔符——跟文件树、文件查看器用的是同一个主键。 */
@@ -77,6 +87,10 @@ export interface TaskArtifact {
   origin: ArtifactOrigin;
   /** 这一条是确定的还是候选（见 `ArtifactConfidence`）。 */
   confidence: ArtifactConfidence;
+  /** 候选为什么拿不准；确定的没有这一项。 */
+  doubt?: ArtifactDoubt;
+  /** `doubt=concurrent` 时，那一刻也在这个目录里干活的任务标题。 */
+  alongside?: string[];
 }
 
 export interface TaskArtifactsResult {
@@ -98,6 +112,27 @@ export interface TaskArtifactsResult {
 }
 
 const MAX_ARTIFACTS = 400;
+
+/** 核对「那一刻还有谁在场」失败时：谁也不能被当成「没人在场」，只靠时间认的都按候选列。 */
+const UNCHECKED: Rivals = {
+  at: () => [],
+  titles: new Map(),
+  incomplete: "没能核对同一时间还有谁在这个目录里干活，只靠时间认的都按候选列",
+};
+
+/** 这几条里哪些被 .gitignore 挡着（问不出来就当没挡着）。 */
+async function ignoredAmong(rootPath: string, paths: readonly string[]): Promise<Set<string>> {
+  if (!paths.length) return new Set();
+  try {
+    const { stdout } = await exec("git", ["-C", rootPath, "check-ignore", "-z", "--stdin"], {
+      input: paths.map((path) => `${path}\0`).join(""),
+    });
+    return new Set(stdout.split("\0").filter(Boolean));
+  } catch {
+    // 一条都没被挡着时 check-ignore 以 1 退出，也落在这里。
+    return new Set();
+  }
+}
 
 /**
  * 三路线索合成一份产物清单。
@@ -128,18 +163,16 @@ export async function readTaskArtifacts(
    */
   const evidence = new Map<string, Set<ArtifactOrigin>>();
   /**
-   * 任务分支差异证明下来的那些——**唯一不吃时间、也不过并发裁决**的归属证据（分支名由
-   * taskId 派生，上面每个提交都是它做的）。
+   * 任务分支差异列出来的路径——分支名由 taskId 派生，上面每个提交都是它做的，不吃时间。还要
+   * 核一遍磁盘上这份是不是分支那一版才算确定（`checkBranchVersions`）。
    *
    * 跟 `evidence` 分开记,因为那张表记的是「它现在是什么状态」（工作区改动 / 已提交 /
    * 被忽略），答不了「这条归属有多硬」——而面板要说的恰恰是后者（第 4 轮审查 N2）。
    */
   const proven = new Set<string>();
   /**
-   * 按时间在运行区间里找到的提交动过的路径 → 那几次提交（提交号、时刻、精确还是估算区间）。
-   * 这是**共享目录上的提交**：同一刻别的任务也在这个仓库里跑时，提交是谁做的跟 mtime 一样问
-   * 不出来，要拿提交时刻去过并发裁决；而且得先核出磁盘上现在这份是其中哪一次落下的，不能当成
-   * 分支差异那种自带归属的证据。
+   * 按时间在运行区间里找到的提交动过的路径 → 那几次提交。共享仓库里的提交不自带归属：要先核出
+   * 磁盘上这份是其中哪一次落下的，再拿那一刻去问「是不是只有它在场」。
    */
   const timeCommitted = new Map<string, CommitEvidence[]>();
   const remember = (path: string, origin: ArtifactOrigin) => {
@@ -159,23 +192,27 @@ export async function readTaskArtifacts(
   // 有没有「这个文件归它」的证据可用：目录独占算一种，跑过（有区间）算另一种。按时间认的
   // 那几档都要过这道门槛；任务分支的 diff 不用，它自己就是证据（见下）。
   const hasEvidence = exclusive || windows.length > 0;
-  // 同一刻还有别的任务在这个目录里跑时，时间分不开它们，按「谁在附近写过东西」裁决
-  // （判法见 task-artifact-footprint.ts）。
-  //
-  // **核不了不等于没别人**：裁决本身读失败时，换上一个「一律比不出来」的裁决者，而不是当它
-  // 不存在——后者等于「确认没有竞争者」，精确区间里的每个文件都会被当成确定归它，两个并发任务
-  // 又同时把同一份东西列成自己的（复审第 1 轮 #5）。
-  const arbiter = task && scope
-    ? await footprintArbiter(task, scope, root, pathLens()).catch((error): FootprintArbiter => {
-      problems.push(`读并发任务的写入位置失败：${error instanceof Error ? error.message : String(error)}`);
-      return { judge: () => "unsure", focus: [], incomplete: "没能核对同一时间还有谁在这个目录里干活，按时间认的都按候选列" };
+  const lens = pathLens();
+  // 共享目录上的两样东西：亲手写下的直接证据、那一刻还有谁在场。都读失败也不致命——直接证据
+  // 没了只是少认几个确定的；在场核对没了，只靠时间认的一律当候选（`UNCHECKED`），**不能**当成
+  // 「没别人」。
+  const direct: DirectEvidence | null = task && scope && !exclusive
+    ? await directEvidence(root, scope.owners.map((owner) => owner.id), lens).catch((error) => {
+      problems.push(`读任务亲手写下的文件失败：${error instanceof Error ? error.message : String(error)}`);
+      return null;
     })
     : null;
-  if (arbiter?.incomplete) incomplete.push(arbiter.incomplete);
-
+  const rivals: Rivals | null = task && scope && !exclusive
+    ? await concurrentRivals(task, scope, root, lens).catch((error) => {
+      problems.push(`读同一时间在这个目录里干活的任务失败：${error instanceof Error ? error.message : String(error)}`);
+      return UNCHECKED;
+    })
+    : null;
+  if (rivals?.incomplete) incomplete.push(rivals.incomplete);
   /** 任务分支名与工作区根在仓库里的位置——分支证明要拿去跟磁盘上现在这份比内容。 */
   let branchSource: string | null = null;
   let prefix = "";
+
   if (root.gitRepo) {
     // 工作区里还没提交的改动：在共享目录上这**不是**归属证明（谁动的都显示在同一份
     // `git status` 里），所以要先有证据才读。
@@ -249,7 +286,7 @@ export async function readTaskArtifacts(
   const scanned = new Set<string>();
   if (hasEvidence) {
     try {
-      const scan = await scanIgnoredArtifacts(root.path, root.gitRepo, windows, arbiter?.focus ?? []);
+      const scan = await scanIgnoredArtifacts(root.path, root.gitRepo, windows, direct?.focus ?? []);
       for (const path of scan.paths) scanned.add(path);
       incomplete.push(...scan.incomplete);
     } catch (error) {
@@ -258,6 +295,11 @@ export async function readTaskArtifacts(
   }
 
   for (const path of scanned) remember(path, "ignored");
+  // 亲手写下的那些不靠扫描找：扫描有预算、按时间筛，而这条证据两样都不吃。git 仓库里它不在上面
+  // 三路里，要么被忽略了（扫描没扫到），要么是早就提交、之后没再动的。
+  const unseen = (direct?.ownPaths ?? []).filter((path) => !evidence.has(path));
+  const unseenIgnored = root.gitRepo ? await ignoredAmong(root.path, unseen) : new Set(unseen);
+  for (const path of unseen) remember(path, unseenIgnored.has(path) ? "ignored" : "committed");
 
   // 并发 stat：候选可能有上千个，一个个串着问，面板每 8 秒就白等一轮。
   const stated = await Promise.all([...evidence].map(async ([path, origins]) => {
@@ -265,136 +307,123 @@ export async function readTaskArtifacts(
     return { path, origins, info };
   }));
 
-  // 提交证据只替**它落下的那一版**作保：共享目录上先核一遍磁盘上这份是不是那一版
-  // （task-artifact-version.ts）——任务分支差异比分支末端，按时间找到的提交比那几次提交各自
-  // 落下的内容。独占目录里磁盘上这份就是它的，不用核。有未提交改动的不在这里核：现在这一版就是
-  // 磁盘上那份未提交的，下面按它落下的时刻判。
+  // 提交证据只替**它落下的那一版**作保：先核一遍磁盘上这份是不是那一版（task-artifact-version.ts）
+  // ——任务分支差异比分支末端，按时间找到的提交比那几次提交各自落下的内容。独占目录里磁盘上这份
+  // 就是它的，不用核。有未提交改动的不在这里核：现在这一版就是磁盘上那份未提交的，按它落下的时刻判。
   const clean = stated.filter(({ origins, info }) => !origins.has("working") && info?.isFile()).map(({ path }) => path);
-  const [branchVersion, commitVersion] = exclusive
-    ? [new Map<string, BranchVersionCheck>(), new Map<string, CommitVersionCheck>()]
+  const [branchVersion, commitVersion, directVerdict] = exclusive
+    ? [new Map<string, string>(), new Map<string, CommitVersionCheck>(), new Map<string, DirectVerdict>()]
     : await Promise.all([
       branchSource
         ? checkBranchVersions(root.path, prefix, branchSource, clean.filter((path) => proven.has(path)))
-        : new Map<string, BranchVersionCheck>(),
+        : new Map<string, string>(),
       checkCommitVersions(root.path, prefix, new Map(clean
         .filter((path) => timeCommitted.has(path))
         .map((path) => [path, timeCommitted.get(path)!]))),
+      Promise.all(stated.map(async ({ path }) => [path, await direct?.judge(path) ?? null] as const))
+        .then((pairs) => new Map(pairs)),
     ]);
-  // 对不上 / 核不出来的那几条，现在这一版是哪次提交落下的——并发裁决只拿这个时刻去问「那一刻是
-  // 不是别人在场」，好把别人的东西判出去；它不认定版本、不把谁升成确定。
-  const offVersion = new Set([
-    ...[...branchVersion].filter(([, check]) => check !== "match").map(([path]) => path),
-    ...[...commitVersion].filter(([, check]) => typeof check === "string").map(([path]) => path),
-  ]);
-  const offVersionAt = offVersion.size && root.gitRepo ? await lastCommitTimes(root.path, [...offVersion]) : new Map<string, number>();
+  const ownWritten = new Set(direct?.ownPaths ?? []);
 
   const artifacts: TaskArtifact[] = [];
-  /** 靠推断区间认进来的条数——面板要单独说一句。 */
-  let guessed = 0;
-  /** 同一时间别的任务也在这儿跑、按写入位置判给了它们的条数。 */
+  /** 现在这份正是别的任务亲手写下的、没列进来的条数。 */
   let claimed = 0;
   for (const { path, origins, info } of stated) {
     if (!info || !info.isFile()) continue; // 已删除 / 已改名的旧路径
     const mtimeMs = Number.isFinite(info.mtimeMs) ? info.mtimeMs : null;
-    // 归属成立的路：目录独占、任务分支差异，这两条本身就是确定的，不吃时间；其余——运行区间里
-    // 找到的提交、工作区改动、被忽略的文件——都只有「在这个目录里 + 时间对得上」这一条线索，
-    // 共享目录上必须筛。
-    //
-    // 分**确定**和**候选**两档,按它最强的那条证据算：精确区间里的提交、mtime 落在精确区间
-    // 里算确定；估出来的区间——不管是靠 mtime 落在里面,还是那一段里的提交——都只是候选,要
-    // 单独数一笔说出来（第 3 轮审查必须修 1、第 4 轮审查 N2）。
-    //
-    // **证据要跟现在这一版文件绑在一起**：面板打开的是磁盘上现在的内容，一条路径过去某一刻
-    // 归它，不能证明现在这一版还归它（第 2 轮审查 #1）。所以先问「现在这一版是什么时候落下的」
-    // （`version`），再拿那个时刻去对区间、去过并发裁决；更早那次属于它的提交只够让它**留作
-    // 候选**（`prior`）——不把它从面板上抹掉（自己提交过的东西被别人顺手改了一下就消失，是
-    // 第 2 轮审查 F3 的老问题），也不让它冒充确定。
-    const branchProof = exclusive || branchVersion.get(path) === "match";
-    // 提交证据**确定对不上**（或者核不出来）：磁盘上这份不是它那几次提交落下的任何一版，旧路径
-    // 证据、mtime、目录远近、提交日期都不能再替这一版作保——它最多是个候选（它确实动过这条路径），
-    // 而且现在这一版若是同一刻别的任务在它们那儿提交的，照样判给别人（复审第 2 轮 #2、第 3 轮 #2）。
-    // 分支那一版对得上的不走这里：那条证据本身就够了。
-    if (!branchProof && offVersion.has(path)) {
-      const verdict = arbiter?.judge(path, offVersionAt.get(path) ?? null);
-      if (verdict === "theirs") { claimed += 1; continue; }
-      pushArtifact(path, origins, info, mtimeMs, false);
+    const push = (doubt?: ArtifactDoubt, alongside?: string[]) =>
+      artifacts.push(toArtifact(path, origins, info.size, mtimeMs, doubt, alongside));
+    if (exclusive) { push(); continue; }
+
+    // 1. 亲手写下的直接证据：不问时间、不问还有谁在场。
+    const verdict = directVerdict.get(path) ?? null;
+    if (verdict === "theirs") { claimed += 1; continue; }
+    if (verdict === "mine") { push(); continue; }
+    if (verdict === "contested") { push("contested"); continue; }
+
+    // 2. 提交证据：磁盘上这份就是分支那一版 → 确定；它的提交动过、但现在这份不是那一版 → 候选。
+    const working = origins.has("working");
+    if (proven.has(path) && !working) {
+      if (branchVersion.get(path) === "match") push();
+      else push("version");
       continue;
     }
-    if (!branchProof) {
-      // 现在这一版落下的时刻：区间里核出来的那次提交（强弱跟着它所在的区间），否则——未提交的
-      // 改动、被忽略的文件——就是磁盘上这份的 mtime。
-      const matched = commitVersion.get(path);
-      const version = matched && typeof matched === "object"
-        ? { at: matched.commit.at, hit: (matched.commit.exact ? "exact" : "approx") as "exact" | "approx" }
-        : { at: mtimeMs, hit: windowHit(mtimeMs, windows) };
-      const prior = proven.has(path) || timeCommitted.has(path);
-      const hit = version.hit;
-      if (!hit && !prior) continue;
-      let exactProof = hit === "exact";
-      // 只靠时间认进来的还要过一道并发裁决：同一刻别的任务也在这个目录里跑的话，落在区间里
-      // 不再说明什么。离别人写过的地方更近 → 不是它的；离它自己的更近 → 确定是它的（哪怕区间
-      // 是估的）；比不出来 → 只能当候选。
-      if (arbiter) {
-        const verdict = arbiter.judge(path, version.at);
-        if (verdict === "theirs") { claimed += 1; continue; }
-        if (verdict === "mine" && hit) exactProof = true;
-        if (verdict === "unsure") exactProof = false;
-      }
-      pushArtifact(path, origins, info, mtimeMs, exactProof);
+    // 3. 只能按时间认的：现在这一版落下的时刻——区间里核出来的那次提交，否则就是 mtime。
+    const matched = !working ? commitVersion.get(path) : undefined;
+    if (timeCommitted.has(path) && !working && !(matched && typeof matched === "object")) {
+      push("version");
       continue;
     }
-    pushArtifact(path, origins, info, mtimeMs, true);
+    const version = matched && typeof matched === "object"
+      ? { at: matched.commit.at, hit: (matched.commit.exact ? "exact" : "approx") as "exact" | "approx" }
+      : { at: mtimeMs, hit: windowHit(mtimeMs, windows) };
+    // 它确实动过这条路径（分支、提交、亲手写过），可现在这份落在它的区间外面：是后来被谁改过的
+    // 版本。不从面板上抹掉（自己做过的东西被顺手改一下就消失），也不冒充确定。
+    const prior = proven.has(path) || timeCommitted.has(path) || ownWritten.has(path);
+    if (!version.hit) {
+      if (prior) push("version");
+      continue;
+    }
+    if (version.hit === "approx") { push("estimated"); continue; }
+    const present = rivals?.at(version.at) ?? [];
+    if (present.length) {
+      push("concurrent", present.map((id) => rivals!.titles.get(id) ?? id));
+      continue;
+    }
+    if (rivals?.incomplete) { push("unchecked"); continue; }
+    push();
   }
 
-  function pushArtifact(
-    path: string,
-    origins: Set<ArtifactOrigin>,
-    info: NonNullable<(typeof stated)[number]["info"]>,
-    mtimeMs: number | null,
-    exactProof: boolean,
-  ) {
-    const committedProof = origins.has("committed");
-    // 逐条的强弱就是**上面那个 `exactProof`**,不是另起一套判据:页脚那句「有 N 个是按估出来
-    // 的时间段认的」和每一条的标记从此同源,数目与标出来的条数恒等。
-    //
-    // 注意 `committedProof` 不够硬:它只说「有个提交动过这条路径」,而那个提交可能是从**估出来
-    // 的**区间里捞的、或者是同一刻别的任务做的（`proven` 才是任务分支差异那种确定证据）。
-    const confidence: ArtifactConfidence = exactProof ? "exact" : "approx";
-    if (confidence === "approx") guessed += 1;
-    // 标签说的是**它现在是什么状态**：有未提交的改动就显示工作区改动（哪怕归属是提交证明
-    // 下来的），否则按最强的那条证据。
-    const origin: ArtifactOrigin = origins.has("working")
-      ? "working"
-      : (committedProof ? "committed" : "ignored");
-    artifacts.push({
-      path,
-      name: basename(path),
-      dir: path.split("/").slice(0, -1).join("/"),
-      kind: kindOf(path)!,
-      size: info.size,
-      mtime: mtimeMs === null ? null : new Date(mtimeMs).toISOString(),
-      origin,
-      confidence,
-    });
-  }
-
+  const guessed = artifacts.filter((artifact) => artifact.confidence === "approx").length;
   if (guessed > 0) {
-    incomplete.push(`清单里有 ${guessed} 个归属拿不准（见上面那几条）：按估出来的时间段认的，或者同一时间别的任务也在这个目录里写东西、分不出是谁的，可能混进别人做的东西`);
+    incomplete.push(`清单里有 ${guessed} 个归属拿不准（收在「拿不准的」那一栏）：按估出来的时间段认的，或者同一时间还有别的任务在这个目录里干活、分不出是谁做的`);
   }
   if (claimed > 0) {
-    incomplete.push(`同一时间别的任务也在这个目录里干活，有 ${claimed} 个文件离它们写过的地方更近，算作它们的，没列在这里`);
+    incomplete.push(`有 ${claimed} 个文件现在这份是别的任务亲手写下的，没列在这里`);
   }
 
-  // 新的排前面：面板要回答的是「它刚刚做出了什么」。
-  artifacts.sort((a, b) => (Date.parse(b.mtime ?? "") || 0) - (Date.parse(a.mtime ?? "") || 0)
-    || a.path.localeCompare(b.path, "zh-Hans-CN", { numeric: true, sensitivity: "base" }));
+  // 新的排前面：面板要回答的是「它刚刚做出了什么」。超过条数上限时先留确定的——一堆候选不能把
+  // 真东西挤出清单——留下来的再按新旧排。
+  const newest = (a: TaskArtifact, b: TaskArtifact) => (Date.parse(b.mtime ?? "") || 0) - (Date.parse(a.mtime ?? "") || 0)
+    || a.path.localeCompare(b.path, "zh-Hans-CN", { numeric: true, sensitivity: "base" });
+  const kept = [...artifacts]
+    .sort((a, b) => Number(a.confidence === "approx") - Number(b.confidence === "approx") || newest(a, b))
+    .slice(0, MAX_ARTIFACTS)
+    .sort(newest);
 
   return {
-    artifacts: artifacts.slice(0, MAX_ARTIFACTS),
+    artifacts: kept,
     truncated: artifacts.length > MAX_ARTIFACTS,
     since: scope?.firstRunAt ?? null,
     scope: exclusive ? "exclusive" : "shared",
     incomplete,
     error: problems.join("；") || null,
+  };
+}
+
+/** 一条产物。origin 说的是**它现在是什么状态**，跟归属强弱（doubt）无关。 */
+function toArtifact(
+  path: string,
+  origins: Set<ArtifactOrigin>,
+  size: number,
+  mtimeMs: number | null,
+  doubt?: ArtifactDoubt,
+  alongside?: string[],
+): TaskArtifact {
+  // 有未提交的改动就显示工作区改动（哪怕归属是提交证明下来的），否则按最强的那条证据。
+  const origin: ArtifactOrigin = origins.has("working")
+    ? "working"
+    : (origins.has("committed") ? "committed" : "ignored");
+  return {
+    path,
+    name: basename(path),
+    dir: path.split("/").slice(0, -1).join("/"),
+    kind: kindOf(path)!,
+    size,
+    mtime: mtimeMs === null ? null : new Date(mtimeMs).toISOString(),
+    origin,
+    confidence: doubt ? "approx" : "exact",
+    ...(doubt ? { doubt } : {}),
+    ...(alongside?.length ? { alongside } : {}),
   };
 }

@@ -27,7 +27,7 @@ import { findArchivedRollout, findRollout, readCodexContext } from "./codex-roll
 import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 import { CodexNativeCommands } from "./codex-native-commands.js";
-import { CodexWriteClock } from "./tool-writes.js";
+import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 import { isGoalExecution } from "@ash/shared/cli-commands";
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
@@ -69,7 +69,6 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
   const childEvents = new CodexChildActivity(opts.cwd);
-  const writeClock = new CodexWriteClock(opts.cwd);
   const childImages = new Map<string, ImageStore>();
   const childModelReads = new Set<string>();
   const childModelVersions = new Map<string, number>();
@@ -237,7 +236,6 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
 
   const handleItemStarted = (item: any) => {
     for (const activity of codexNativeWork(item)) push(activity);
-    writeClock.start(item);
     if (item?.type === "commandExecution") push({ kind: "tool", name: "exec", detail: short(item.command) });
     else if (item?.type === "fileChange") push({ kind: "tool", name: "edit", detail: short(item.changes) });
     else if (item?.type === "mcpToolCall") push({ kind: "tool", name: `${item.server}/${item.tool}`, detail: short(item.arguments) });
@@ -248,8 +246,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const handleItemCompleted = (item: any) => {
     for (const activity of codexNativeWork(item)) push(activity);
     // 写到了哪里要等**做完**才知道（失败、被拒的改文件不算写过，见 tool-writes.ts）。
-    const writes = item?.type === "fileChange" ? writeClock.complete(item, "change")
-      : item?.type === "commandExecution" ? writeClock.complete(item, "command") : null;
+    const writes = item?.type === "fileChange" ? codexChangeWrites(item, opts.cwd)
+      : item?.type === "commandExecution" ? codexCommandCwd(item, opts.cwd) : null;
     if (writes) push(writes);
     if (item?.type === "dynamicToolCall") {
       const activity = nativeWork.result(item.id, item.contentItems ?? item.result, item.success === false);
