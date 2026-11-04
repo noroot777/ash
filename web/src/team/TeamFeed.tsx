@@ -274,7 +274,7 @@ export function TeamFeed({
             }
             return <SystemEventNote item={item} mode={noticeMode} key={row.key} />;
           })}
-          {historyReady && <QuestionHistoryRemainder messages={rows.flatMap((row) => row.kind === "conv" && row.item.kind === "user" ? [row.item.text] : [])} />}
+          {historyReady && <QuestionHistoryRemainder />}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={teamTailKey(rows)} />

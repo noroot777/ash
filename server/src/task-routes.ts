@@ -620,7 +620,8 @@ api.patch("/tasks/:id", async (c) => {
     // setTaskStatus 内部在 done/canceled 时会自动触发 queue 推进(DESIGN §3),
     // 所以这里不需要再手动 wake 下游。
     if (b.status !== undefined) {
-      await setTaskStatus(tid, b.status);
+      // 用户手动标完成是一次完成;本来就是 done 再标一次不是(见 status.ts 的 `completion`)。
+      await setTaskStatus(tid, b.status, b.status === "done" && existing.status !== "done" ? { completion: true } : undefined);
     }
   } finally {
     // 每一条出路都得还回去（含上面那个 409 early return），否则任务就被一次 PATCH 锁死。

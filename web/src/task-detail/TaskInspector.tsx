@@ -353,7 +353,9 @@ export function TaskInspector({
                 ? "正在运行。入队不会打断它:它跑完后,排在它后面的任务自动开始。"
                 : "独立任务。选一个同组任务，等它跑完这个再自动开始。"}</p>
             </>
-          ) : <p className="task-inspector-note">独立任务，不在任何队列中。</p>}
+          ) : <p className="task-inspector-note">{task.status === "done" || task.status === "failed" || task.status === "canceled"
+            ? "已结束的任务不进队列（队列会直接跳过它）。想等别的任务完成再让它接着做，在回复框的发送按钮旁选「等任务完成」。"
+            : "独立任务，不在任何队列中。"}</p>}
         </section>
 
         <section>

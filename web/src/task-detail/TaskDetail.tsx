@@ -468,6 +468,22 @@ export function TaskDetail({
                         notify(reason instanceof Error ? reason.message : String(reason));
                       }
                     }}
+                    // 只有单个智能体的任务、且此刻没在跑才能删：服务端同样会挡，这里不出按钮是
+                    // 为了不让人点了才知道（团队调度台、duet 还没接「下一轮重建上下文」）。
+                    onDeleteMessage={task.mode === "single" && !handedOut && task.status !== "running" && task.status !== "queued"
+                      ? async (sources) => {
+                        try {
+                          for (const sessionId of new Set(sources.map((source) => source.sessionId))) {
+                            await api.deleteConversationSegments(sessionId, sources.filter((source) => source.sessionId === sessionId)
+                              .map(({ sessionId: _, ...target }) => target));
+                          }
+                          notify("已删除。下一轮会换一条新的会话，只带着删除后留下的记录继续");
+                        } catch (reason) {
+                          notify(reason instanceof Error ? reason.message : String(reason));
+                        }
+                        await conversation.refetch();
+                      }
+                      : undefined}
                     reviewRetry={freeReviewRetryIdentity(free.state?.reviews)}
                     reviews={free.state?.reviews}
                     onOpenReviewPanel={() => openTab("review")}
@@ -488,6 +504,7 @@ export function TaskDetail({
                   <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
                   {!handedOut && <ReplyBox
                     task={task}
+                    tasks={allTasks}
                     hasConversation={hasConversation}
                     conversationItems={conversation.items}
                     // 哨兵那一条也住这儿:它跟派审/预览是同一类东西——任务正跑着也得
@@ -554,7 +571,9 @@ export function TaskDetail({
                           ? (task.status === "running" || task.status === "queued"
                             ? "任务进行中，已排队；这一轮结束后自动发出"
                             : "任务在队列中等待，已排队；轮到它时自动发出")
-                          : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
+                          : result.message.mode === "after"
+                            ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送`
+                            : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
                         return result;
                       }
                       if ("command" in result) {

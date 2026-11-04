@@ -281,6 +281,8 @@ export const api = {
       model?: string | null;
       reasoningEffort?: string | null;
       sendAt?: string;
+      /** 等这个任务完成后再发(与 sendAt 二选一)。 */
+      afterTaskId?: string;
     },
   ): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/reply`, json("POST", { text, ...options })),
@@ -559,6 +561,13 @@ export const api = {
   },
   sessionTrace: (sessionId: string): Promise<SessionTraceEntry[]> =>
     request(`/sessions/${id(sessionId)}/trace`),
+  // 删会话里的几段（真人专属闸后面，走 humanAction 带凭据）。指名用「第几段 + 指纹」，
+  // 页面上那份正文旧了服务端会 409，而不是删错一段。
+  deleteConversationSegments: (
+    sessionId: string,
+    segments: Array<{ index: number; fingerprint: string; answerId?: string } | { trace: { from: string; to: string; fingerprint: string } }>,
+  ): Promise<{ deleted: number }> =>
+    humanAction(`/sessions/${id(sessionId)}/conversation/delete`, json("POST", { segments })),
   duetTranscript: (taskId: string): Promise<unknown[]> =>
     request(`/tasks/${id(taskId)}/duet`),
 
@@ -576,6 +585,8 @@ export const api = {
     request(`/scheduled-messages/${id(messageId)}`, { method: "DELETE" }),
   steerScheduledMessage: (messageId: string): Promise<{ steered: true; messageId: string }> =>
     request(`/scheduled-messages/${id(messageId)}/steer`, json("POST", {})),
+  sendScheduledMessageNow: (messageId: string): Promise<{ released: true }> =>
+    request(`/scheduled-messages/${id(messageId)}/send-now`, json("POST", {})),
 
   // 哨兵那一组住在 apiMonitors.ts（同样是为了守住 700 行），调用点写法不变。
   ...monitorApi,

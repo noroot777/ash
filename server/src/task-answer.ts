@@ -47,13 +47,16 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
     ? { agent: asker.agent, executorId: asker.executorId, model: null, reasoningEffort: null }
     : {});
   const answerText = record.reply;
+  // 这条答复的身份跟着原话走（排队的那一路在 answer_id 列上），落进会话那条用户回合：删除消息与
+  // 问答卡都按它认记录，不按原文猜（两次都答「可以」时原文一模一样）。
+  const answerIds = [record.id];
   // 答复也是真人回合:共享项目里给别人的任务答疑,烧的是**我**的 key(§八)。
   const acting = ownerIdOf(actorOf(c));
   let reviewQueued = false;
   try {
     if (!await claimQuestionAnswer(task, record, async (transaction) => {
       reviewQueued = await queueReviewAnswer(transaction, task,
-        pendingMessageRow({ taskId, text: answerText, ...route, ownerUserId: acting }));
+        pendingMessageRow({ taskId, text: answerText, ...route, ownerUserId: acting, answerId: record.id }));
     })) return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
   } catch (error) {
     if (error instanceof ReviewSuperseded) {
@@ -87,23 +90,23 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   if (task.mode === "single" && !sideways) {
     const claim = await claimQueueSeat(taskId);
     if (!claim.ok) {
-      await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting, execution: true });
+      await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting, execution: true, answerId: record.id });
       return c.json({ answered: true, resumed: false, queued: true, blockedBy: claim.blockers, record });
     }
     const seat = claim.seat;
-    void continueTask(taskId, answerText, { ...route, actingUserId: acting })
+    void continueTask(taskId, answerText, { ...route, actingUserId: acting, answerIds })
       .then(async (started) => {
         if (started) return;
         // 回合被别的执行抢占:原话退回托盘,仍按执行型等队列位置,不按终态续聊放行。
-        await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting, execution: true });
+        await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting, execution: true, answerId: record.id });
       })
       .catch((err) => console.error(`[ash] 答复续跑 ${taskId} 异常:`, err))
       .finally(() => { if (seat) void seat.release(); });
     return c.json({ answered: true, resumed: true, record });
   }
-  void continueTask(taskId, answerText, { ...route, actingUserId: acting }).then(async (started) => {
+  void continueTask(taskId, answerText, { ...route, actingUserId: acting, answerIds }).then(async (started) => {
     if (started) return;
-    await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting });
+    await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting, answerId: record.id });
   });
   return c.json({ answered: true, resumed: true, record });
 }

@@ -28,7 +28,8 @@ import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { mountTaskSteerRoutes } from "./task-steer.js";
-import { publishPendingMessages } from "./pending-messages.js";
+import { flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
+import { withAfterGates } from "./pending-after.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimOwnTurn, releaseTurn, stopTask } from "./runs.js";
@@ -453,7 +454,10 @@ api.get("/tasks/:id/scheduled-messages", async (c) => {
       eq(scheduledMessages.status, "pending"),
     ))
     .orderBy(asc(scheduledMessages.sendAt), asc(scheduledMessages.createdAt), asc(scheduledMessages.id));
-  return c.json(rows.map(toScheduledMessage));
+  // 等前置任务的那几条先按服务端判据过一遍(顺手锁存):托盘读 `afterDoneAt` 就是「等到了没」的
+  // 权威答案。前置被停止/出错后状态放回 done 并不是又完成了一次,只看任务列表的状态会说错。
+  const gated = await withAfterGates(rows);
+  return c.json(gated.map(({ afterDone: _d, afterEndedAt: _e, afterWaitReason: _w, ...row }) => toScheduledMessage(row)));
 });
 
 // Cancel a pending scheduled message (by message id).
@@ -482,6 +486,30 @@ api.delete("/scheduled-messages/:mid", async (c) => {
   publishPendingMessages(m.taskId);
   await recoverPendingCheckpoints(m.taskId);
   return c.json({ canceled: true });
+});
+
+// 「不等了」:等前置任务的消息改成普通排队消息,本任务一空闲就发。前置任务失败/取消/被删时
+// 托盘靠它给用户一个出口(pending-after.ts 不替用户决定发还是丢)。租约条件同取消:有人
+// 正在送它就别动。
+api.post("/scheduled-messages/:mid/send-now", async (c) => {
+  const mid = c.req.param("mid");
+  const m = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, mid))).at(0);
+  if (!m) return c.json({ error: "not found" }, 404);
+  if (m.status !== "pending" || m.mode !== "after") {
+    return c.json({ error: "只有还在等前置任务的消息能直接发送", status: m.status, mode: m.mode }, 409);
+  }
+  const released = await db.update(scheduledMessages).set({ mode: "queued", afterTaskId: null, afterDoneAt: null, afterSeq: null })
+    .where(and(
+      eq(scheduledMessages.id, mid),
+      eq(scheduledMessages.status, "pending"),
+      eq(scheduledMessages.mode, "after"),
+      isNull(scheduledMessages.deliveringSince),
+    ))
+    .returning({ id: scheduledMessages.id });
+  if (!released.length) return c.json({ error: "消息刚被开始投递或已发送" }, 409);
+  publishPendingMessages(m.taskId);
+  flushPendingForTask(m.taskId);
+  return c.json({ released: true });
 });
 
 // Retry a failed duet: re-run only the failed (last) turn, then continue —

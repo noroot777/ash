@@ -1,6 +1,6 @@
 // 同类问题熔断（`server/src/review-recurrence.ts`）在提示词上的那几笔账，用户直接问过预算：
 //
-// - 审查者侧常驻增量 ≤ 320B：`recurs` 字段说明 ≤ 200B + 清单旁那一句 ≤ 120B；
+// - 审查者侧常驻增量 ≤ 360B：`recurs` 字段说明 ≤ 200B + 清单旁那一句 ≤ 160B（2026-11-04 补形状示例，上限 120 → 160）；
 // - 执行者侧常驻增量 = 0；熔断指令**只在触发轮**出现，≤ 300B。
 //
 // 「其余轮投递态一个字节不变」怎么证：`delivered/repair` 的预算原数没动（棘轮表里那一行），
@@ -14,14 +14,20 @@ import type { PromptSample } from "./prompt-budget-samples.js";
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 
 /** 单源：每段只许出现在声明的那几份样本里，且每份至多一次。 */
-const PLACEMENT: Array<{ name: "RECURS_FIELD_GUIDE" | "RECURRENCE_HINT"; cap: number; where: string[] }> = [
+const PLACEMENT: Array<{ name: "RECURS_FIELD_GUIDE" | "RECURRENCE_HINT" | "RECURS_SHAPE_ERROR"; cap: number; where: string[] }> = [
   { name: "RECURS_FIELD_GUIDE", cap: 200, where: ["mcp/report_stage"] },
   // 只在清单真列出了编号时出现：第一轮、折成摘要、就地验证那条线（不编号）都一个字节不发。
-  { name: "RECURRENCE_HINT", cap: 120, where: ["section/history-refs"] },
+  { name: "RECURRENCE_HINT", cap: 160, where: ["section/history-refs"] },
+  // MCP 边界的校验错误：只在填错时回给审查者，任何常驻样本里都不许有它。
+  { name: "RECURS_SHAPE_ERROR", cap: 100, where: [] },
 ];
 
 export async function assertRecurrenceBudget(samples: PromptSample[]): Promise<void> {
   const shared = await import("@ash/shared/free-workflow");
+  // 三处讲的是同一个形状：清单旁那一句和字段说明各教一种写法时，审查者照字面交了裸编号数组。
+  for (const { name } of PLACEMENT) {
+    assert.ok(shared[name].includes(shared.RECURS_SHAPE_EXAMPLE), `${name} 里没有那个形状示例 ${shared.RECURS_SHAPE_EXAMPLE}`);
+  }
   for (const { name, cap, where } of PLACEMENT) {
     const text = shared[name];
     assert.ok(bytes(text) <= cap, `${name} 有 ${bytes(text)}B，用户给的上限是 ${cap}B`);

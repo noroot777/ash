@@ -6,6 +6,7 @@ import { desc, eq } from "drizzle-orm";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
+import { withRunFileLock } from "./run-file-lock.js";
 import { sessionTranscriptPath, TURN_SENTINEL, writeTurn } from "./transcript.js";
 import { now } from "./util.js";
 
@@ -61,7 +62,8 @@ export async function appendTaskTimeline(
     const at = now();
     const transcriptPath = sessionTranscriptPath(taskId, session.id);
     mkdirSync(dirname(transcriptPath), { recursive: true });
-    await new Promise<void>((resolve, reject) => {
+    // 回合之外随时会来：与删除消息的改写排同一把锁（run-file-lock.ts）。
+    await withRunFileLock([transcriptPath], () => new Promise<void>((resolve, reject) => {
       const out = createWriteStream(transcriptPath, { flags: "a" });
       out.once("error", reject);
       out.once("finish", resolve);
@@ -69,7 +71,7 @@ export async function appendTaskTimeline(
         ...(target?.eventKey ? { eventKey: target.eventKey } : {}),
       }, at);
       out.end();
-    });
+    }));
     bus.publish({
       type: "agent.event",
       taskId,

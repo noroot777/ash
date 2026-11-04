@@ -8,6 +8,7 @@ import { acceptGateRuns, tasks } from "./db/schema.js";
 import { handOffGateFailure, parseChoices, resolveInterruptedHandoff } from "./accept-gate-handoff.js";
 import { parseGateSettlement } from "./accept-gate-exit.js";
 import { latestRun } from "./accept-gate-state.js";
+import { ReviewSuperseded } from "./review-ownership.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
 type GateRow = typeof acceptGateRuns.$inferSelect;
@@ -25,7 +26,9 @@ const clearOwed = (runId: string) =>
  *
  * **销账只认办完的证明**（第 2、3 轮审查）。settlement 记号是重启后唯一的线索，清早了就再也补不上：
  *  · 绿：acceptTask 这一次**走完了**、给出了结果（合上了，或者明确受阻并已在时间线上交代）。
- *    它中途抛出来的异常不是结果 —— 记号留着。重启后再看到记号时，任务已经 accepted 而且「点头
+ *    它中途抛出来的异常不是结果 —— 记号留着；唯一例外是「审查所属的原目标方向已失效」
+ *    （ReviewSuperseded）：那是确定的拒绝，方向只会往前走、不会回来，重试只会再撞一次，所以按
+ *    「没能完成」这个结果交代并销账。重启后再看到记号时，任务已经 accepted 而且「点头
  *    之后」那段尾巴（发布命令等，acceptedTailPending）也落定了才算不欠；merged、凭据已写、
  *    accepted 但尾巴还挂着，都是走到一半，照样进 acceptTask，由它自己的续做路径收完；
  *  · 红：修复输入已经落进会话（continueWhenIdle 的 onDelivered），或者带审查权限那条已经持久
@@ -80,7 +83,10 @@ async function continueAcceptance(row: GateRow): Promise<void> {
     acceptGatePassedRunId: row.id,
     reviewAuthority: choices.reviewAuthority,
   }).catch(async (error) => {
-    // 抛出来的不是「验收没过」这个结果，是这一次没走完（读库失败、进程内异常……）。照样告诉
+    // 门禁跑着的时候任务换了方向：acceptTask 按当初那份审查权限拒绝，用的是抛而不是返回。
+    // 它是结果不是故障 —— 下次启动再续一次只会再被拒一次，「这一步还欠着」也不属实。
+    if (error instanceof ReviewSuperseded) return { accepted: false as const, error: error.message };
+    // 其余抛出来的不是「验收没过」这个结果，是这一次没走完（读库失败、进程内异常……）。照样告诉
     // 用户，但欠账留着：下次启动会接着做，不把一次临时故障变成永远没人补的那一步。
     const reason = error instanceof Error ? error.message : String(error);
     await appendTaskTimeline(row.taskId, `验收前置命令通过后自动继续验收时出错（${reason}）。这一步还欠着：`

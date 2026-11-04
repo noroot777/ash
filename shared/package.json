@@ -78,6 +78,10 @@
       "types": "./src/team.ts",
       "default": "./src/team.ts"
     },
+    "./session-output": {
+      "types": "./src/session-output.ts",
+      "default": "./src/session-output.ts"
+    },
     "./session-notes": {
       "types": "./src/session-notes.ts",
       "default": "./src/session-notes.ts"

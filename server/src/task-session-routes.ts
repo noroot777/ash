@@ -8,8 +8,11 @@ import { mergeImageJournal } from "./agent-image-journal.js";
 import type { Session } from "@ash/shared";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
+import { actorOf } from "./auth/context.js";
+import { canSeeProject } from "./auth/visibility.js";
+import { deleteConversationSegments, RedactRefusal, type RedactTarget } from "./conversation-redact.js";
 import { db } from "./db/index.js";
-import { sessions } from "./db/schema.js";
+import { sessions, tasks } from "./db/schema.js";
 import { backfillArtifactUploads, eventAttachmentPath } from "./uploads.js";
 import { sessionCliConfigDir } from "./auth/run-env.js";
 import { resumeCommandFor } from "./executors/resume.js";
@@ -47,7 +50,8 @@ async function toSession(
     role: r.role as Session["role"],
     agentType: r.agentType as Session["agentType"],
     transcriptPath: sessionTranscriptPath(r.taskId, r.id),
-    resumeCommand: r.cliSessionId
+    // 删过消息、还没重建的会话：旧 CLI 会话还记着原话，不把接回它的命令递给用户（conversation-redact.ts）。
+    resumeCommand: r.contextRebuildAt ? null : r.cliSessionId
       ? resumeCommandFor(r.agentType, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.resumeEnv, r.resumeArgs,
         archived ? { configDir: codexHome(configDir) } : undefined)
       : r.resumeCommand,
@@ -192,6 +196,29 @@ export function mountTaskSessionRoutes(api: Hono): void {
     // 文件不在就是没有；只有文件在却读不动、或者内容坏了，才是真的坏了。
     if (read.missing) return c.json([]);
     return c.json({ error: "trace unreadable" }, 500);
+  });
+
+  // 删掉这条会话里的几段（真人专属：auth/personal-gate.ts 的 HUMAN_ONLY_PATHS）。
+  // 盘上就地抹掉、下一轮换新 CLI 会话重建上下文，两件事都在 conversation-redact.ts。
+  api.post("/sessions/:id/conversation/delete", async (c) => {
+    const sid = c.req.param("id");
+    const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
+    const task = row && (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
+    if (!task || !(await canSeeProject(actorOf(c), task.projectId))) return c.json({ error: "not found" }, 404);
+    const body = await c.req.json().catch(() => null) as { segments?: unknown } | null;
+    const segments = Array.isArray(body?.segments) ? body.segments : [];
+    const targets = segments.filter((target): target is RedactTarget => {
+      const t = target as { index?: unknown; fingerprint?: unknown; answerId?: unknown; trace?: { from?: unknown; to?: unknown; fingerprint?: unknown } };
+      return (Number.isInteger(t?.index) && typeof t.fingerprint === "string" && (t.answerId === undefined || typeof t.answerId === "string"))
+        || (typeof t?.trace?.from === "string" && typeof t.trace.to === "string" && typeof t.trace.fingerprint === "string");
+    });
+    if (!targets.length || targets.length !== segments.length) return c.json({ error: "segments 格式不对" }, 400);
+    try {
+      return c.json(await deleteConversationSegments(sid, targets));
+    } catch (error) {
+      if (error instanceof RedactRefusal) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
   });
 
   // 过程提示的窄出口。给读不动整份 trace 的消费者(手机端每几秒重拉一次)。两种投影的

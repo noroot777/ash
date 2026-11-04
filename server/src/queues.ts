@@ -182,6 +182,24 @@ async function invisibleTaskIds(c: Context, ids: string[]): Promise<string[]> {
   return ids.filter((taskId) => !visible.has(taskId));
 }
 
+// 已结束(完成/失败/取消)的任务入队 = 一个永远不会执行的成员:selectNextInQueue 对
+// 终态透明跳过,它不会被拉起,排在它后面的也不会等它,而入队那一下看上去是成功的。
+// 前端入口(web canJoinQueue / queueAfterOptions)早就不给这条路,写入口得同口径拦下,
+// MCP 的 queue_insert / create_queue 才不会悄悄造出这种成员。口径同调度:状态过
+// queueStatus(终态任务的续聊回合仍按终态看)。返回挡路的任务 id。
+export function finishedMembers(rows: { id: string; status: string; followUpFrom?: string | null }[]): string[] {
+  return rows
+    .filter((t) => {
+      const s = queueStatus(t);
+      return s === "done" || s === "failed" || s === "canceled";
+    })
+    .map((t) => t.id);
+}
+
+const FINISHED_HINT = "队列会直接跳过已结束的任务，它不会再执行，排在它后面的也不会等它。"
+  + "要重跑失败或已取消的任务，先把它改回待排期再入队；要在别的任务完成后让它接着做事，"
+  + "在它的回复框里用「等某任务完成后发送」。";
+
 export function mountQueueRoutes(api: Hono): void {
   // 列出某 queue 的内容(含每个 task 的状态)
   api.get("/queues/:queueId", async (c) => {
@@ -320,6 +338,10 @@ export function mountQueueRoutes(api: Hono): void {
       return c.json({ error: `task ${b.taskId} 不能加入队列:${handedOff}` }, 409);
     }
 
+    if (finishedMembers([tr]).length) {
+      return c.json({ error: `task ${b.taskId} 已结束，不能加入队列。${FINISHED_HINT}`, status: tr.status }, 409);
+    }
+
     // 候选 task 不能已在别的 queue 里(task_id PK 保证,但提前给个友好错误)
     const otherQueue = (
       await db.select().from(queueItems).where(eq(queueItems.taskId, b.taskId))
@@ -400,6 +422,10 @@ export function mountQueueRoutes(api: Hono): void {
         { error: `这些 task 已接力到另一台机器,历史副本不能加入队列: ${handedOff.map((r) => r.id).join(", ")}` },
         409,
       );
+    }
+    const finished = finishedMembers(rows);
+    if (finished.length > 0) {
+      return c.json({ error: `这些 task 已结束，不能用来建队: ${finished.join(", ")}。${FINISHED_HINT}` }, 409);
     }
     // 同项目(主判据)+ 同 group(加细)—— 理由同 assertSameGroup 顶部。
     const ps = new Set(rows.map((r) => r.projectId));

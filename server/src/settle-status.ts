@@ -265,7 +265,7 @@ export async function settleTaskStatus(
       // 检查点被这一轮消费掉了:随后的 setStatus 只广播 task.status,带不动 resume_prompt,
       // 页面会继续把任务读成「在等续跑」(见 task-resume-prompt.ts 顶部)。
       if (consumedCheckpoint) await announceResumePrompt(taskId);
-      await setStatus(taskId, "done"); // done 的终态钩子自会推进队列
+      await setStatus(taskId, "done", { completion: true }); // done 的终态钩子自会推进队列
       notify("done");
       return { status: "done", confirmedDone: true, nativeTurn };
     }
@@ -303,6 +303,9 @@ export async function settleTaskStatus(
       await setStatus(taskId, landing, {
         consume: { followUpFrom: null },
         ...(landing === "paused" ? { quietAdvance: true } : {}),
+        // 续聊这一轮**正常结束**(没停、没错、没留提问)才是一次完成;停止/出错/提问只是把
+        // 原来的 done 放回去,不能让「等它这一轮完成」的消息当成等到了。
+        ...(!reason && !t.question && !stopped && exitStatus === 0 ? { completion: true } : {}),
       });
     });
     const label = FOLLOW_UP_LABEL[back] ?? back;
@@ -433,7 +436,7 @@ export async function settleTaskStatus(
     return { status: "paused", note, confirmedDone: false, nativeTurn };
   }
   if (confirmed || !STRICT_DONE) {
-    await setStatus(taskId, "done");
+    await setStatus(taskId, "done", { completion: true });
     notify("done");
     return { status: "done", confirmedDone: confirmed, nativeTurn };
   }

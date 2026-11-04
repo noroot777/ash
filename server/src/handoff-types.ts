@@ -62,9 +62,16 @@ export interface HandoffMessagePayload {
   model: string | null;
   reasoningEffort: string | null;
   sessionRole: string | null;
-  mode: string; // timed | queued
+  mode: string; // timed | queued | after
   sendAt: string;
+  // mode=after 等的那个任务。任务 id 跨机原样保留,前置任务一起接力过来时照常生效;
+  // 没过来就在托盘里显示「前置任务不存在」等用户决定。老源机不带这个字段。
+  afterTaskId?: string | null;
+  // 源机上已经等到了(前置完成已锁存):落地后不再去查一个可能没跟过来的前置任务。
+  afterDoneAt?: string | null;
   createdAt: string;
+  // 这条是哪一条问答的答复(问答历史跟着任务一起走,id 两边一致);老源机不带 = 不是答复。
+  answerId?: string | null;
 }
 
 // 任务的定时计划(schedules 表)。lastRunAt/enabled 原样带走:触发过的一次性计划
@@ -184,6 +191,10 @@ export interface HandoffSessionRow {
   // 对端只保留「会话文件真的搬过去了」的 cliSessionId,其余置空——否则 --resume
   // 一个不存在的会话,CLI 当场报错,比全新起跑更糟。
   cliSessionId: string | null;
+  // 这条会话里删过消息、旧 CLI 上下文已作废(conversation-redact.ts):导出侧不带原生会话文件、
+  // cliSessionId 置空,对端照样挂着它,下一回合拿删除后的记录重建(turn-session-pick.ts)。
+  // 老源机不带这一项 = 没删过。
+  contextRebuildAt?: string | null;
   commandLine: string | null;
   startedAt: string;
   endedAt: string | null;

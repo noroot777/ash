@@ -388,4 +388,13 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE session_turns ADD COLUMN monitor_wake INTEGER NOT NULL DEFAULT 0",
   // usage_turns 里记在哨兵唤醒回合上的那几轮(见 schema-sessions.ts 同名列)。
   "ALTER TABLE sessions ADD COLUMN usage_monitor_wake_turns INTEGER",
+  // 「等某任务完成后发送」的那个任务(mode=after)。存量行 NULL。
+  "ALTER TABLE scheduled_messages ADD COLUMN after_task_id TEXT",
+  "ALTER TABLE scheduled_messages ADD COLUMN after_done_at TEXT",
+  "ALTER TABLE scheduled_messages ADD COLUMN after_seq INTEGER",
+  "ALTER TABLE tasks ADD COLUMN done_seq INTEGER NOT NULL DEFAULT 0",
+  // 删过消息、下一轮要换新 CLI 会话重建上下文（见 schema-sessions.ts 同名列）。存量行 NULL。
+  "ALTER TABLE sessions ADD COLUMN context_rebuild_at TEXT",
+  // 排队中的答复是哪一条问答的（见 db/schema.ts 同名列）。存量行 NULL = 不是答复。
+  "ALTER TABLE scheduled_messages ADD COLUMN answer_id TEXT",
 ];

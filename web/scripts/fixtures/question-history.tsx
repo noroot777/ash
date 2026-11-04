@@ -27,7 +27,7 @@ function Fixture() {
       <output>{taskId}</output>
     </nav>
     {mounted && (mode === "snapshot"
-      ? <QuestionHistoryProvider taskId={taskId} history={history} live={false} messages={[]}><QuestionHistoryRemainder messages={[]} /></QuestionHistoryProvider>
+      ? <QuestionHistoryProvider taskId={taskId} history={history} live={false} messages={[]}><QuestionHistoryRemainder /></QuestionHistoryProvider>
       : mode === "team"
         ? <TeamFeed task={task} rows={[]} workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null} />
         : <ConversationFeed task={task} questionHistory={history} liveQuestionHistory items={[]} sessions={[]} loading={false} error={null} />)}

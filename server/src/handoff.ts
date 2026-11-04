@@ -16,7 +16,7 @@
 // V1 明确不做:team/duet 模式。跨机器的身份与鉴权见 handoff-identity.ts(本机身份)、
 // handoff-peer-client.ts(出站核对对端)、handoff-peers.ts(入站审批)。
 import { hostname } from "node:os";
-import { exportHandoffMessage } from "./handoff-messages.js";
+import { exportHandoffMessages } from "./handoff-messages.js";
 import { existsSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { win32 } from "node:path";
@@ -44,7 +44,9 @@ type TaskScopedPreflightResult = HandoffPreflightResult & { taskScopedReturn: bo
 import { HandoffError } from "./handoff-types.js";
 import type { HandoffManifest } from "./handoff-types.js";
 // 盘点与打包(会话文件、runs 产物、git bundle)在 handoff-collect.ts,这里只留流程编排。
-import { collectFreeWorkflow, collectRunArtifacts, collectRunArtifactTexts, collectSessionFiles, packGitState } from "./handoff-collect.js";
+import {
+  collectFreeWorkflow, collectRunArtifacts, collectRunArtifactTexts, collectSessionFiles, handoffSessionContext, packGitState,
+} from "./handoff-collect.js";
 // 出站请求一律走 handoff-peer-client:每个请求带身份签名,且**打包前**先核对对端指纹
 // (地址会漂,而接力推的是整个仓库和会话历史)。原理见那个文件顶部。
 import {
@@ -61,6 +63,7 @@ import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
 import { exportWaitOrigins } from "./handoff-wait.js";
 import { collectGateRuns } from "./handoff-accept-gate.js";
+import { withRunFileLock } from "./run-file-lock.js";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
   const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -508,7 +511,7 @@ export async function exportHandoff(
           id: s.id, role: s.role, agentType: s.agentType, executor: s.executor,
           turnModel: s.turnModel, turnReasoningEffort: s.turnReasoningEffort,
           worktreePath: s.worktreePath, branch: s.branch, cwd: s.cwd,
-          cliSessionId: found.has(s.id) ? s.cliSessionId : null,
+          ...handoffSessionContext(s, found.has(s.id)),
           commandLine: s.commandLine, startedAt: s.startedAt, endedAt: s.endedAt,
           exitStatus: s.exitStatus, stoppedAs: s.stoppedAs, sideTurn: s.sideTurn,
           activeMs: s.activeMs, turnStartedAt: s.turnStartedAt,
@@ -522,7 +525,7 @@ export async function exportHandoff(
         acceptGateRuns: await collectGateRuns(task.id),
         git: gitState,
         uploads,
-        messages: pendingMsgs.map(exportHandoffMessage),
+        messages: await exportHandoffMessages(pendingMsgs.map((message) => message.id)),
         schedule: scheduleRow
           ? {
               kind: scheduleRow.kind, at: scheduleRow.at, cron: scheduleRow.cron,
@@ -639,7 +642,8 @@ export async function exportHandoff(
           t: "system" as const, agent: latest.agentType, by: "system" as const, at: now(),
           text: `🔁 任务已接力到 ${marker.peerName}（${targetUrl}）继续执行,本机这份从此只是历史存档。`,
         };
-        await appendFile(sessionTranscriptPath(taskId, latest.id), `\n${TURN_SENTINEL}${JSON.stringify(line)}\n`)
+        const transcript = sessionTranscriptPath(taskId, latest.id);
+        await withRunFileLock([transcript], () => appendFile(transcript, `\n${TURN_SENTINEL}${JSON.stringify(line)}\n`))
           .catch(() => { /* 产物目录可能不存在（从未跑过）,标记列已落库,不阻塞 */ });
       }
       // 源机原件收尾:已随任务迁走的待发送消息取消掉(时间线留档),否则用户移除接力

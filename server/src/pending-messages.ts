@@ -38,7 +38,7 @@ import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { releaseTurn, turnSourceReview, whenTurnIdle } from "./runs.js";
 import type { TurnIdentity, TurnSource } from "./runs.js";
-import { forgetStalled, forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, noteStalledPending, settleBusyAgain } from "./pending-delivery-timing.js";
+import { forgetStalled, forgetTiming, markDue, noteBusyAgain, noteDeliveryTiming, noteStalledPending, pendingMessageLabel, settleBusyAgain } from "./pending-delivery-timing.js";
 import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-redelivery.js";
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
@@ -50,6 +50,7 @@ import { bindUploadsToTask } from "./uploads.js";
 import { dispatchPendingMessage } from "./pending-dispatch.js";
 import { pendingMessageOrder } from "./pending-monitor-batch.js";
 import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
+import { insertAfterMessage, withAfterGates, type AfterGate } from "./pending-after.js";
 import { forgetDeliveryCrossing } from "./delivery-crossing.js";
 import {
   CHECKPOINT_RUN_ORIGIN, preparePendingCheckpointStart, recoverPendingCheckpoints,
@@ -107,8 +108,12 @@ export function pendingMessageRow(input: {
   execution?: boolean;
   // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
   sendAt?: Date;
+  /** mode=after 时等的那个任务(有效性与基线在插入那一刻求,见 enqueueMessage / pending-after.ts)。 */
+  afterTaskId?: string | null;
   /** 这条消息承载的那一笔结果交接的身份(见 schema 的 `handoff_token`);普通消息不填。 */
   handoffToken?: string | null;
+  /** 这条是哪一条问答的答复（见 schema 的 `answer_id`）；普通消息不填。 */
+  answerId?: string | null;
 }): Row {
   return {
     id: id(),
@@ -126,6 +131,9 @@ export function pendingMessageRow(input: {
     origin: input.origin ?? null,
     monitorWake: input.monitorWake ?? null,
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
+    afterTaskId: input.mode === "after" ? input.afterTaskId ?? null : null,
+    afterDoneAt: null,
+    afterSeq: null,
     execution: input.execution ?? false,
     sendAt: (input.sendAt ?? new Date()).toISOString(),
     status: "pending" as const,
@@ -136,6 +144,7 @@ export function pendingMessageRow(input: {
     // 新消息没接走任何交代（接走发生在投递那一刻，见 monitorWakeCheckpoint）。
     checkpointTaken: null,
     handoffToken: input.handoffToken ?? null,
+    answerId: input.answerId ?? null,
     // 普通消息不承载续跑交代,所以凭证两列一起空着(账本在 monitor-session.ts 里才写)。
     checkpointAuto: null,
     checkpointGeneration: null,
@@ -146,8 +155,10 @@ export function pendingMessageRow(input: {
 }
 
 export async function enqueueMessage(input: Parameters<typeof pendingMessageRow>[0]): Promise<Row> {
-  const row = pendingMessageRow(input);
-  await db.insert(scheduledMessages).values(row);
+  let row = pendingMessageRow(input);
+  // 等前置任务的那种:依赖的有效性与基线跟插入同一个 batch(pending-after.ts)。
+  if (row.mode === "after" && row.afterTaskId) row = await insertAfterMessage(row);
+  else await db.insert(scheduledMessages).values(row);
   // 附件在**入队这一刻**挂到任务上(uploads.ts):这里才知道是谁发的,投递时那条路
   // 是后端触发的、没有发起人,认不出「这个文件本来就是我的」。
   await bindUploadsToTask(input.attachments, row.taskId, row.ownerUserId);
@@ -213,8 +224,8 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
   publishPendingMessages(message.taskId);
   await recoverPendingCheckpoints(message.taskId);
   if (message.origin === CHECKPOINT_RUN_ORIGIN) return;
-  const label = message.mode === "queued" ? "排队消息" : "定时消息";
-  const when = message.mode === "queued" ? "" : `（原定 ${message.sendAt}）`;
+  const label = pendingMessageLabel(message.mode);
+  const when = message.mode === "timed" ? `（原定 ${message.sendAt}）` : "";
   // 原文必须一起留下:这条消息取消之后就从托盘里消失了,不把用户打的字抄进时间线,
   // 他就只能凭记忆重打一遍。截断只为不撑爆时间线,够认出是哪句话即可。
   const text = message.text.trim();
@@ -360,6 +371,12 @@ function waitReason(
   return `任务当前状态（${task.status}）还不适合投递`;
 }
 
+// 滞留告警的计时起点:after 消息从前置任务完成那一刻算(排下它的时刻离那时可能隔了几小时,
+// 一到期就报「滞留」是假警报);读不到完成时刻就从此刻算。
+function stallView(m: Row & AfterGate, at: Date): Row {
+  return m.mode === "after" ? { ...m, sendAt: m.afterEndedAt ?? at.toISOString() } : m;
+}
+
 async function scanPendingMessages(taskId?: string): Promise<void> {
   // 进程正在收尾(测试关库、server 退出)时直接收手。这条链路有好几个 fire-and-forget
   // 的触发源(验收锁放开那一推、重投定时器),关库之后它们照样会醒一次,然后刷一串
@@ -373,7 +390,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
     .select()
     .from(scheduledMessages)
     .where(and(eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince)));
-  const pending = (taskId ? all.filter((m) => m.taskId === taskId) : all)
+  const pending = (await withAfterGates(taskId ? all.filter((m) => m.taskId === taskId) : all))
     .sort(pendingMessageOrder);
   const fired = new Set<string>();
   for (const m of pending) {
@@ -419,13 +436,15 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
       const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
         reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
       if (verdict.action === "wait") {
+        // 还没到期(钟点未到、前置任务未完成)的等待是它自己的语义,不是滞留。
+        if (!isDueForDelivery(m, at)) continue;
         // 已经判定过该发、这一轮又变回「等」= 任务重新忙起来了。计这一段,好把它从
         // 「挡回后空等」里扣掉(见 noteBusyAgain)。
         noteBusyAgain(m.id, at.getTime());
         // 「等」是正常的,**一直等**不是:久久发不出去要出声并留痕,否则它和「根本没这条
         // 消息」在日志与界面上长得一模一样(见 noteStalledPending)。判定本身不带 reason,
         // 在这里按刚查到的那几样组装一句人话 —— 用户想知道的就是「在等什么」。
-        noteStalledPending(m, waitReason(t, { queueBlocked, groupPaused }), at.getTime());
+        noteStalledPending(stallView(m, at), waitReason(t, { queueBlocked, groupPaused }), at.getTime());
         continue;
       }
       if (verdict.action === "cancel") {
@@ -471,7 +490,7 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
             // 同 wait 分支:认领不到执行占位也是一种「一直发不出去」,久了要说出来。
             // 三档各说各的真话:套用「同队有人在跑」会让用户去等一个不存在的前项
             // (第 ll7XKsu_ps0n 链第 2 轮指出的同一个毛病)。
-            noteStalledPending(m, claim.transient
+            noteStalledPending(stallView(m, at), claim.transient
               ? "队列占位读写失败，正在重试"
               : claim.self
                 ? "这个任务已经有另一条启动路径占着执行位"
@@ -543,14 +562,14 @@ export async function handDuePendingMessageToRun(
   // 已有投递在途:它自己会开回合,这里再开默认「继续」就是同一任务两路起跑。
   if (inFlight.has(taskId)) return true;
   const at = new Date();
-  const due = (await db
+  const due = (await withAfterGates(await db
     .select()
     .from(scheduledMessages)
     .where(and(
       eq(scheduledMessages.taskId, taskId),
       eq(scheduledMessages.status, "pending"),
       isNull(scheduledMessages.deliveringSince),
-    )))
+    ))))
     // 哨兵事件(origin 非空)不参与让位交接:它不是用户的执行指令,拿来当首轮输入会被
     // 升级成执行意图、还绕开唤醒闸(monitorWakeGuard)与终态取消;留给扫描按哨兵语义送。
     .filter((m) => !m.origin && isDueForDelivery(m, at))
@@ -646,10 +665,14 @@ export async function hasDeliverablePendingMessages(taskId: string, at = new Dat
   if (!task || task.archived) return false;
   if (task.mode !== "single" && task.mode !== "team") return false;
   const rows = await db
-    .select({ mode: scheduledMessages.mode, sendAt: scheduledMessages.sendAt, origin: scheduledMessages.origin })
+    .select({
+      mode: scheduledMessages.mode, sendAt: scheduledMessages.sendAt, origin: scheduledMessages.origin,
+      id: scheduledMessages.id, taskId: scheduledMessages.taskId,
+      afterTaskId: scheduledMessages.afterTaskId, afterDoneAt: scheduledMessages.afterDoneAt, afterSeq: scheduledMessages.afterSeq,
+    })
     .from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
-  for (const m of rows) {
+  for (const m of await withAfterGates(rows)) {
     if (!isDueForDelivery(m, at)) continue;
     // 哨兵事件那一档:它唯一的出口是「唤醒这个任务」,任务已经结束(且没有在跑的审查替它
     // 兜着)时下一次投递只会被 `deliveryVerdict` 取消掉 —— 跟上面「归档 / 类型不支持回复」

@@ -359,6 +359,17 @@ export function AcceptanceControls({
     }
   };
 
+  const acceptButton = (
+    <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock || gateUnread} onClick={() => setAction("accept")}>
+      {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
+      {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (checkingDependencies ? "检查验收依赖"
+        : gateUnread ? (gate.error ? "前置命令状态待核对" : "读取前置命令状态") : midGate ? "放行，继续下一站" : "验收通过")}
+    </button>
+  );
+  // 项目设了前置命令时，「验收通过」和「这次跳过它，直接合并」是同一个决定的两个答案，
+  // 所以主按钮住进门禁卡的按钮行，跟跳过、重跑排在一起；顶栏只留打回。门禁卡不在场
+  // （读不到、被失败详情顶替）或这一站只是放行时，主按钮仍在顶栏。
+  const acceptInGate = !midGate && task.stage !== "merged" && !gateFallback && !!gate.state?.command;
   return (
     <>
       <div className="team-accept-actions">
@@ -370,11 +381,7 @@ export function AcceptanceControls({
           ) : <span><CheckCircle size={13} weight="fill" />验收完成</span>
         ) : (
           <>
-            <button type="button" className="is-primary" disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock || gateUnread} onClick={() => setAction("accept")}>
-              {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
-              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (checkingDependencies ? "检查验收依赖"
-                : gateUnread ? (gate.error ? "前置命令状态待核对" : "读取前置命令状态") : midGate ? "放行，继续下一站" : "验收通过")}
-            </button>
+            {!acceptInGate && acceptButton}
             <button type="button" disabled={archived || inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />{duet ? "打回再讨论" : "打回修改"}</button>
           </>
         )}
@@ -395,6 +402,7 @@ export function AcceptanceControls({
         disabled={archived || inFlight || busy || checkingDependencies || !!acceptanceBlock}
         gate={gate}
         onIntent={openGateIntent}
+        acceptAction={acceptInGate ? acceptButton : undefined}
       />}
       {verification.verification && action !== "accept" && <UnexecutedVerificationNotice verification={verification.verification} continuing={midGate} />}
       {action === "accept" && (

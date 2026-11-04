@@ -90,10 +90,11 @@ export function PendingMessageTray({
               paddingVertical: 4,
             }}
           >
-            {/* 排队消息不看时间（跑完就发），所以那一列写「排队中」而不是一个骗人的时刻。 */}
-            <Ionicons name={m.mode === "queued" ? "layers-outline" : "time-outline"} size={13} color={theme.faint} />
+            {/* 排队消息不看时间（跑完就发），等任务的看的是另一个任务完成没有：那一列写它们各自
+                在等什么，而不是一个骗人的时刻（sendAt 对它们只是入队时间）。 */}
+            <Ionicons name={m.mode === "queued" ? "layers-outline" : m.mode === "after" ? "hourglass-outline" : "time-outline"} size={13} color={theme.faint} />
             <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>
-              {m.mode === "queued" ? "排队中" : formatInstant(m.sendAt)}
+              {m.mode === "queued" ? "排队中" : m.mode === "after" ? "等任务完成" : formatInstant(m.sendAt)}
             </Text>
             <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
               {displayText || "[附件]"}

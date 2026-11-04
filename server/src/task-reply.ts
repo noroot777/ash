@@ -7,7 +7,9 @@ import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
+import { visibleTaskIds } from "./auth/visibility.js";
 import { continueTask } from "./orchestrator.js";
+import { AfterTargetGoneError, resolveAfterTarget } from "./pending-after.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat } from "./queue-seat.js";
@@ -25,6 +27,8 @@ export type TaskReplyBody = {
   model?: string | null;
   reasoningEffort?: string | null;
   sendAt?: string;
+  /** 等这个任务完成后再发(mode=after,见 pending-after.ts)。与 sendAt 二选一。 */
+  afterTaskId?: string;
   annotationBatchId?: string;
   annotationRevision?: number;
 };
@@ -57,6 +61,24 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   const isTeam = r.mode === "team";
   if (!isTeam && r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
   if (b.annotationBatchId) return replyWithAnnotationBatch(c, taskId, b.annotationBatchId, b.annotationRevision ?? 0);
+  // 「稍后发送」的两种方式先校验,再进原生命令旁路:命令处理器见到 sendAt/afterTaskId 就把
+  // 命令留到投递那一刻执行,所以不合法的延期请求必须在它之前拦下,否则命令会当场执行。
+  if (b.afterTaskId != null) {
+    if (typeof b.afterTaskId !== "string" || !b.afterTaskId) return c.json({ error: "afterTaskId 无效" }, 400);
+    if (b.sendAt) return c.json({ error: "定时发送和等任务完成后发送只能选一个" }, 400);
+    // 看不见的任务 = 不存在:否则挨个 id 试就能问出别人的任务在不在、何时完成。
+    if (b.afterTaskId !== taskId && !(await visibleTaskIds(actorOf(c), [b.afterTaskId])).length) {
+      return c.json({ error: "要等的任务不存在" }, 404);
+    }
+    const target = await resolveAfterTarget({ afterTaskId: b.afterTaskId, taskId, projectId: r.projectId });
+    if (!target.ok) return c.json({ error: target.error }, target.status);
+  }
+  if (b.sendAt) {
+    const when = new Date(b.sendAt);
+    if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {
+      return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
+    }
+  }
   try {
     const command = await taskCliCommand(c, r, b);
     if (command) return command;
@@ -83,30 +105,32 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     !isTeam && !checkpointFollowUp && !goalControl &&
     (goalRecovery || r.status === "paused" || r.status === "backlog");
   const queueWhileWaiting = executionReply && (await queueBlockers(taskId)).length > 0;
-  if (b.sendAt || queueWhileRunning || queueWhileWaiting) {
-    let when = new Date();
-    if (b.sendAt) {
-      when = new Date(b.sendAt);
-      if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) {
-        return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
-      }
+  if (b.sendAt || b.afterTaskId || queueWhileRunning || queueWhileWaiting) {
+    const when = b.sendAt ? new Date(b.sendAt) : new Date();
+    let row: Awaited<ReturnType<typeof enqueueMessage>>;
+    try {
+      row = await enqueueMessage({
+        taskId,
+        text: (b.text ?? "").trim(),
+        attachments: b.attachments,
+        agent: b.agent ?? null,
+        executorId: b.executorId ?? null,
+        model: b.model?.trim() || null,
+        reasoningEffort: b.reasoningEffort?.trim() || null,
+        ownerUserId: ownerIdOf(actorOf(c)),
+        mode: b.sendAt ? "timed" : b.afterTaskId ? "after" : "queued",
+        afterTaskId: b.afterTaskId ?? null,
+        // 排队等轮次时暂存的回复 = 执行型:投递它就是任务的执行回合,整队守卫与分组
+        // 暂停都要挡,失败重投也不丢意图(schema 的 execution 注释)。普通运行中追问
+        // 与定时/等前置任务的提醒不是——它们落地是续聊/到点提醒,照旧旁路。
+        execution: goalRecovery || (queueWhileWaiting && !b.sendAt && !b.afterTaskId),
+        sendAt: when,
+      });
+    } catch (error) {
+      // 上面核过之后、落库之前前置被删了:依赖跟插入同一个 batch 求(pending-messages.ts),这里如实拒收。
+      if (error instanceof AfterTargetGoneError) return c.json({ error: error.message }, 409);
+      throw error;
     }
-    const row = await enqueueMessage({
-      taskId,
-      text: (b.text ?? "").trim(),
-      attachments: b.attachments,
-      agent: b.agent ?? null,
-      executorId: b.executorId ?? null,
-      model: b.model?.trim() || null,
-      reasoningEffort: b.reasoningEffort?.trim() || null,
-      ownerUserId: ownerIdOf(actorOf(c)),
-      mode: b.sendAt ? "timed" : "queued",
-      // 排队等轮次时暂存的回复 = 执行型:投递它就是任务的执行回合,整队守卫与分组
-      // 暂停都要挡,失败重投也不丢意图(schema 的 execution 注释)。普通运行中追问
-      // 与定时提醒不是——它们落地是续聊/到点提醒,照旧旁路。
-      execution: goalRecovery || (queueWhileWaiting && !b.sendAt),
-      sendAt: when,
-    });
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
   }
 

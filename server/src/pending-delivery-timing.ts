@@ -17,6 +17,11 @@ const busyAgain = new Map<string, { since: number | null; total: number }>();
 
 export const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
+/** 三种待发送消息在时间线/日志里的叫法。 */
+export function pendingMessageLabel(mode: string): string {
+  return mode === "queued" ? "排队消息" : mode === "after" ? "等前置任务的消息" : "定时消息";
+}
+
 export function markDue(messageId: string, at: number): number {
   const first = dueSince.get(messageId);
   if (first != null) return first;
@@ -121,7 +126,7 @@ export async function noteStalledPending(
   if (!Number.isFinite(age) || age < STALLED_MS) return;
   if (stalledTold.has(message.id) || stalledWriting.has(message.id)) return;
   stalledWriting.add(message.id);
-  const label = message.mode === "queued" ? "排队消息" : "定时消息";
+  const label = pendingMessageLabel(message.mode);
   const waited = `${Math.round(age / 60_000)} 分钟`;
   console.warn(
     `[ash] ${label}等了 ${waited} 还没送出去 task=${message.taskId} message=${message.id}`

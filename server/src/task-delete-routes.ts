@@ -5,9 +5,11 @@
 // 挂回去。`deleteTaskCompletely` 跟着一起搬——项目删除那条路(project-routes.ts)也
 // 调它,留在建任务那份文件里只会让人以为它跟建任务有关。
 import type { TaskWorkspaceDiscardResult } from "@ash/shared";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
+import { latchWaitersOnDelete } from "./pending-after.js";
+import { publishPendingMessages } from "./pending-messages.js";
 import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, taskWrites, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
@@ -85,7 +87,13 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 那段时间里新写进来的行会被漏掉,而批里的子查询跟删除是同一条语句。
   const debates = db.select({ id: freeReviewDebates.id }).from(freeReviewDebates)
     .where(eq(freeReviewDebates.taskId, taskId));
+  // 别的任务上「等它完成后发送」的消息:托盘要跟着改口,先记下是谁在等(只用于通知)。
+  const waiters = await db.selectDistinct({ taskId: scheduledMessages.taskId }).from(scheduledMessages)
+    .where(and(eq(scheduledMessages.afterTaskId, taskId), eq(scheduledMessages.status, "pending")));
   await db.batch([
+    // 已经等到的先锁存,删了就再也查不到它完成过 —— **跟删行同一批**:这一刻之前登记的都在,
+    // 之后的登记在同一个 batch 里就看不到这个前置、落不下来(pending-after.ts 文件头)。
+    latchWaitersOnDelete(taskId),
     db.delete(taskBranchReceipts).where(eq(taskBranchReceipts.taskId, taskId)),
     // 被挡回的用户操作:不删就是一堆指着已删任务、再也打不开的孤儿行。
     db.delete(taskNotices).where(eq(taskNotices.taskId, taskId)),
@@ -129,6 +137,7 @@ async function deleteTaskRows(taskId: string): Promise<void> {
   // 就再也不会有那一下,留着就是长命进程里只增不减的无主条目（第 1 轮审查 N3）。
   // **只在确实删除时清**:暂停、失败、停止一律不清 —— 那几笔还是有效证据。
   forgetTaskUnconfirmed(taskId);
+  for (const waiter of waiters) publishPendingMessages(waiter.taskId);
 }
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支

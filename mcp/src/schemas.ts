@@ -2,12 +2,34 @@
 // 各处写死，新增一个执行器后 MCP 侧会莫名 400（见下面那段注释）。
 import { z } from "zod";
 import { AGENT_TYPES, STAGE_ORDER } from "@ash/shared";
-import { TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
+import { RECURS_SHAPE_ERROR, TASK_WORKFLOW_MODES } from "@ash/shared/free-workflow";
 
 export const AGENT_TYPE = z.enum(AGENT_TYPES);
 export const MODE = z.enum(["parallel", "serial"]);
 export const TASK_STATUS = z.enum(["backlog", "done", "failed", "canceled"]);
 export const TASK_STAGE = z.enum(STAGE_ORDER);
+
+// report_stage 的 `recurs`（同类问题承接）。只认服务端 `parseCarries` 读得懂的两种形状：
+// `{"1":"2.1.1"}`（字段说明教的那种）和 `[{finding:1, from:"2.1.1"}]`；被序列化成字符串的同样先解开再核。
+// 形状不对**在这里当场拒**、带一句正确示例（`RECURS_SHAPE_ERROR`）：以前是 `z.any()`，错位一路
+// 放到服务端被静默丢掉，审查者到回合结束都不知道自己白填了（v9Ps5S1vbnKt 三轮裸编号数组）。
+// MCP SDK 把校验失败包成 isError 的工具结果，审查者同一回合里改正重发即可。
+// 编号对不上清单这类「形状对、内容不对」的仍归服务端，按没填算 —— 那一层这里看不见。
+//
+// 不把这两种形状展开进 JSON Schema：字段说明里已经带形状和示例，展开只会让每个回合的工具清单
+// 多背一截结构；不填（含 null、空串）照旧合法。
+const RECURS_SHAPE = z.union([
+  z.record(z.string().regex(/^[1-9]\d*$/), z.string().min(1)),
+  z.array(z.object({ finding: z.number().int().positive(), from: z.string().min(1) }).strict()),
+]);
+export const RECURS = z.unknown().superRefine((value, ctx) => {
+  if (value === undefined || value === null || (typeof value === "string" && !value.trim())) return;
+  let parsed = value;
+  if (typeof value === "string") {
+    try { parsed = JSON.parse(value); } catch { /* 不是 JSON 的字符串，下面照样不合格 */ }
+  }
+  if (!RECURS_SHAPE.safeParse(parsed).success) ctx.addIssue({ code: z.ZodIssueCode.custom, message: RECURS_SHAPE_ERROR });
+});
 
 // 工作方式。**措辞是给 agent 看的判据，不是字段说明**：它手上只有这段话能决定选哪个，
 // 说成「free / preset 二选一」它就会随便挑一个。所以直接写「默认 free，什么时候才该改」。

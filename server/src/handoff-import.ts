@@ -15,6 +15,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { existsSync } from "node:fs";
 import { importMessageOrigin } from "./handoff-messages.js";
 import { db } from "./db/index.js";
+import { afterDependencyValues, resolveAfterTarget } from "./pending-after.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
   acceptGateRuns, projects, scheduledMessages, schedules, sessionTurns, sessions, tasks,
@@ -34,7 +35,7 @@ import { buildFreeWorkflowRows } from "./handoff-import-free-workflow.js";
 import {
   importGitBundle, jsonOr, SETTLED, validate, writePayloadFiles, type CliConfigDirs,
 } from "./handoff-import-payload.js";
-import { claudeSessionFilePath } from "./handoff-collect.js";
+import { claudeSessionFilePath, handoffSessionContext } from "./handoff-collect.js";
 import { cliConfigDirForOwner } from "./auth/run-env.js";
 import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
@@ -273,7 +274,9 @@ async function importValidated(
     .filter((s) => s.agentType === agentType)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
     .at(-1);
-  const resumable = !!latest && !!usable.get(latest.id);
+  // 删过消息的会话不带原生会话文件,但下一回合会拿删除后的记录重建上下文(turn-session-pick.ts),
+  // 不是空手上阵,所以不按「历史没迁移」处理。
+  const resumable = !!latest && (!!usable.get(latest.id) || !!latest.contextRebuildAt);
   const noticeLines = [
     `【任务接力】本任务从另一台机器(${m.sourceHost})接力到本机继续。`,
     m.git ? "git 分支和已提交的改动已随任务迁移。" : "代码没有随任务迁移,以本机仓库当前状态为准。",
@@ -415,7 +418,9 @@ async function importValidated(
     worktreePath: useWorktree ? workspace : null,
     branch: s.branch,
     cwd: workspace,
-    cliSessionId: usable.get(s.id) ? s.cliSessionId : null,
+    // 删过消息的会话:失效标记照原样落下,旧 CLI 会话即便到货也不认(判据与导出侧同一份)。
+    contextRebuildAt: null,
+    ...handoffSessionContext(s, !!usable.get(s.id)),
     // 会话文件刚被写进**这个人**的 CLI 配置目录(上面的 cliDirs),之后的回合默认也按他跑。
     // 不盖这个戳,任务再接力出去时导出侧只能退回猜任务归属人。
     runOwnerUserId: context.ownerUserId ?? null,
@@ -460,6 +465,30 @@ async function importValidated(
   }));
   // 自由工作流的审查历史(翻译成本机行,落库在下面两条路径里各自执行)。
   const freeWorkflowRows = await buildFreeWorkflowRows(m.task.id, m.freeWorkflow, notes);
+  // 等前置任务的消息:外来的任务 id 不是授权证明,跟本机回复走同一道核验(resolveAfterTarget:
+  // 同项目、存在、能完成;导入人对目标项目的权限路由层已核)。核过才按**本机**那个前置定基线 ——
+  // 对端的完成计数在这台机器上没有意义;核不过就不绑定(落成「前置不在本机」,托盘给直接发送)。
+  // 源机已经等到的(`afterDoneAt`)原样认,依赖本身是否成立已经不重要了。
+  const afterDeps = new Map<string, boolean>();
+  const unboundReasons = new Set<string>();
+  for (const msg of messages) {
+    if (msg.mode !== "after" || typeof msg.afterTaskId !== "string" || afterDeps.has(msg.afterTaskId)) continue;
+    const target = await resolveAfterTarget({ afterTaskId: msg.afterTaskId, taskId: m.task.id, projectId: project.id });
+    afterDeps.set(msg.afterTaskId, target.ok);
+    // 核不过的原因照实说(不在本机 / 别的项目 / 调度台 / 等自己),别都说成「不在本机」。
+    if (!target.ok && !(typeof msg.afterDoneAt === "string" && msg.afterDoneAt)) {
+      unboundReasons.add(target.status === 404 ? "前置任务不在本机" : target.error);
+    }
+  }
+  if (unboundReasons.size) {
+    notes.push(`有「等任务完成后发送」的消息没有绑定前置任务（${[...unboundReasons].join("；")}），可在托盘里直接发送或撤回`);
+  }
+  // 行里的绑定与基线在**插入那一刻**按本机前置求(`afterDependencyValues`):上面这一轮核验只用来
+  // 给出说明,插入时前置已被删/改了项目,就落成不绑定,而不是沿用核验时那份基线。
+  const afterDep = (msg: (typeof messages)[number]) =>
+    msg.mode === "after" && typeof msg.afterTaskId === "string" && afterDeps.get(msg.afterTaskId)
+      ? afterDependencyValues(msg.afterTaskId, m.task.id, project.id)
+      : null;
   const messageRows = messages.map((msg) => ({
     ...importMessageOrigin(msg, notes),
     id: id(),
@@ -471,12 +500,17 @@ async function importValidated(
     model: msg.model,
     reasoningEffort: msg.reasoningEffort,
     sessionRole: msg.sessionRole,
-    mode: msg.mode === "queued" ? "queued" as const : "timed" as const,
+    // after 绝不能落成 timed:它的 sendAt 只是入队时刻,当成钟点就是一落地立刻发出。
+    mode: msg.mode === "queued" ? "queued" as const : msg.mode === "after" ? "after" as const : "timed" as const,
+    afterTaskId: afterDep(msg)?.afterTaskId ?? null,
+    afterDoneAt: msg.mode === "after" && typeof msg.afterDoneAt === "string" ? msg.afterDoneAt : null,
+    afterSeq: afterDep(msg)?.afterSeq ?? null,
     sendAt: msg.sendAt,
     status: "pending" as const,
     createdAt: msg.createdAt,
     sentAt: null,
     deliveringSince: null,
+    answerId: msg.answerId ?? null,
   }));
 
   if (returning) {

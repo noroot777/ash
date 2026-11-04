@@ -100,6 +100,8 @@ export interface TurnPromptParts {
    * `/clear` 之后新开）才非空。
    */
   craft: CraftContext;
+  /** 删过消息、换新 CLI 会话的那一轮：删除之后留下的对话记录（`history-reseed.ts`）。其余回合不传。 */
+  history?: string;
   /** 这一轮真正要说的话（已过技能处理、已拼附件）。 */
   userText: string;
   /** 工作目录被重建时的说明。 */
@@ -134,6 +136,7 @@ export function assembleTurnPrompt(parts: TurnPromptParts): string {
     // 照样算了传了，只有拼装这一行不再读它，编译和当时的样本（同伴字段一律传空）全绿。
     // 这条不变量现在由体积闸的「片段保留」断言机械钉住，见 test-prompt-budget.ts。
     craftRulesFor(parts.craft) +
+    (parts.history ?? "") +
     parts.userText +
     parts.workspaceReset +
     parts.completion +

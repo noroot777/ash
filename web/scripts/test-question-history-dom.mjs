@@ -193,6 +193,21 @@ try {
   assert.doesNotMatch(await switched.page.locator("main").textContent(), /task-a的问题|wrong-task/);
   await switched.page.close();
 
+  // 删除是单向的：删除之前发出、删除事件之后才落地的那一发旧读取，不能把墓碑盖回未删的答复
+  // （否则正文里已经没有它，末尾却又补出一张没有删除入口的卡）。
+  let releaseBeforeDelete;
+  const beforeDelete = new Promise((resolve) => { releaseBeforeDelete = resolve; });
+  pending.push(() => releaseBeforeDelete({ json: [] }));
+  const tombstoned = await open("", { respond: async () => beforeDelete });
+  await waitForCalls(tombstoned, 1);
+  const tombstone = { id: "gone", answeredAt: record("gone").answeredAt, question: null, answer: "", reply: "", deleted: true };
+  await sse(tombstoned.page, "message", { type: "task.updated", task: { id: "history-a", questionHistory: [tombstone] } });
+  releaseBeforeDelete({ json: [record("gone"), record("kept")] });
+  await count(tombstoned.page, 1);
+  assert.match(await tombstoned.page.locator("main").textContent(), /kept的答案/, "旧读取里别的记录照常补上");
+  assert.doesNotMatch(await tombstoned.page.locator("main").textContent(), /gone的答案/, "迟到的旧读取不能复活删掉的答复");
+  await tombstoned.page.close();
+
   const snapshot = await open("mode=snapshot&history=seed");
   await count(snapshot.page, 1);
   assert.equal(await snapshot.page.evaluate(() => window.__sources.length), 0, "远端快照不订阅本地事件");

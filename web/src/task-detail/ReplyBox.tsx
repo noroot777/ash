@@ -1,14 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task } from "@ash/shared";
+import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { parseCliCommand } from "@ash/shared/cli-commands";
-import { ArrowUp, Clock, SpinnerGap, X } from "@phosphor-icons/react";
-import {
-  ScheduledMessageTray,
-  ScheduledSendPanel,
-  useScheduledMessages,
-} from "../components/ScheduledMessages.tsx";
-import { defaultOnceTime, toLocalDateTime } from "../components/ScheduleControl.tsx";
+import { ArrowUp, SpinnerGap, X } from "@phosphor-icons/react";
+import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
+import { LaterSendPanel, SendSplit, useLaterSend, type LaterChoice } from "../components/LaterSend.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { AgentPlate } from "../components/AgentPlate.tsx";
 import {
@@ -57,6 +53,7 @@ export function ReplyBox({
   inlinePanel,
   topRail,
   conversationItems = [],
+  tasks = [],
 }: {
   task: Task;
   hasConversation: boolean;
@@ -69,6 +66,7 @@ export function ReplyBox({
       model?: string | null;
       reasoningEffort?: string | null;
       sendAt?: string;
+      afterTaskId?: string;
       // 只用于显示:这一回合会由谁跑。服务端不认这个字段(调用方要摘掉再发),
       // 它补的是「消息已发出、会话行还没落库」那一两秒里横幅没名字可报的空窗。
       executorLabel?: string | null;
@@ -96,6 +94,8 @@ export function ReplyBox({
   inlinePanel?: ReactNode;
   topRail?: ReactNode;
   conversationItems?: ConversationItem[];
+  /** 「等某任务完成后发送」的候选,以及托盘里报出在等谁。 */
+  tasks?: TaskListItem[];
 }) {
   const draft = useTaskReplyDraft(task.id);
   const shellRef = useReplyLayout();
@@ -114,9 +114,7 @@ export function ReplyBox({
   // 只剩 `@` 那条路会开这个浮层：正文里选中智能体之后紧接着选模型。点胶囊改配置由
   // 胶囊自己管（三段各开各的浮层，见 components/RunTargetPicker.tsx）。
   const [picker, setPicker] = useState<{ agent: AgentType } | null>(null);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [sendAt, setSendAt] = useState("");
-  const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
+  const later = useLaterSend();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendKeys = useSendKeyLabels();
   // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
@@ -171,8 +169,7 @@ export function ReplyBox({
     mention.reset();
     setTarget(null);
     setPicker(null);
-    setScheduleOpen(false);
-    setSendAt("");
+    later.reset();
   };
 
   useEffect(() => {
@@ -286,7 +283,7 @@ export function ReplyBox({
     setCommandIndex(0);
     setMenuDismissed(false);
     setTarget(null);
-    setScheduleOpen(false);
+    later.close();
   };
 
   const cancelCommand = () => {
@@ -362,8 +359,8 @@ export function ReplyBox({
   // 一旦确定，就不必再去草稿里猜哪一段是刚发出去的。
   const inFlightSend = useRef<Promise<void> | null>(null);
 
-  const send = (scheduledAt?: string): Promise<void> => {
-    const run = runSend(scheduledAt).then(() => {});
+  const send = (choice?: LaterChoice): Promise<void> => {
+    const run = runSend(choice).then(() => {});
     inFlightSend.current = run;
     void run.finally(() => {
       if (inFlightSend.current === run) inFlightSend.current = null;
@@ -371,7 +368,7 @@ export function ReplyBox({
     return run;
   };
 
-  const runSend = async (scheduledAt?: string, annotation?: AnnotationReply): Promise<boolean> => {
+  const runSend = async (choice?: LaterChoice, annotation?: AnnotationReply): Promise<boolean> => {
     if (!annotation && menuOpen) {
       pickCommand(candidates[selectedIndex]!);
       return false;
@@ -407,7 +404,8 @@ export function ReplyBox({
           executorId: target?.executorId ?? null,
           model: target?.model ?? null,
           reasoningEffort: target?.reasoningEffort ?? null,
-          sendAt: scheduledAt,
+          sendAt: choice?.sendAt,
+          afterTaskId: choice?.afterTaskId,
           executorLabel: activeExecutorLabel,
         },
       );
@@ -418,8 +416,7 @@ export function ReplyBox({
         setValue((current) => clearSentDraft(current, draftAtSend));
         draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
         uploads.clearError();
-        setScheduleOpen(false);
-        setSendAt("");
+        later.reset();
       }
       setTarget(null);
       return true;
@@ -432,14 +429,9 @@ export function ReplyBox({
     }
   };
 
-  const scheduledTime = new Date(sendAt).getTime();
-  const canSchedule = Number.isFinite(scheduledTime)
-    && scheduledTime > Date.now()
-    && (!!value.trim() || uploads.attachments.length > 0);
-
   // 撤回:先把消息从队列上取下来(失败就什么都不动,免得内容一式两份),成功后正文、
   // 附件、这条消息当初 @ 指派的执行器配置一并放回对话框——发它时是什么样,撤回后就
-  // 还是什么样,用户接着改就行。定时消息连原定时间也留着(还没到点才留)。
+  // 还是什么样,用户接着改就行。「稍后」的设定也留着(定时的还没到点才留,等任务的原样留)。
   //
   // 有发送正在飞就先等它结算完:发送成功会把它自己那份草稿清掉,清完再并入撤回的内容。
   // 顺序一确定,两边都不必去猜草稿里哪一段是谁的(靠猜会猜错,2026-08-27 审查实测)。
@@ -456,9 +448,7 @@ export function ReplyBox({
         reasoningEffort: message.reasoningEffort,
       });
     }
-    if (message.mode === "timed" && new Date(message.sendAt).getTime() > Date.now()) {
-      setSendAt(toLocalDateTime(new Date(message.sendAt)));
-    }
+    later.restore(message);
     textareaRef.current?.focus();
   };
 
@@ -505,19 +495,19 @@ export function ReplyBox({
           }}
         />
       )}
-      {scheduleOpen && !menuOpen && !mention.open && !picker && (
-        <ScheduledSendPanel
-          value={sendAt}
+      {later.open && !menuOpen && !mention.open && !picker && (
+        <LaterSendPanel
+          later={later}
+          tasks={tasks}
+          projectId={task.projectId}
+          taskId={task.id}
           busy={sending}
-          canSubmit={canSchedule}
-          triggerRef={scheduleTriggerRef}
-          onChange={setSendAt}
-          onCancel={() => setScheduleOpen(false)}
-          onSubmit={() => void send(new Date(sendAt).toISOString())}
+          hasContent={!!value.trim() || uploads.attachments.length > 0}
+          onSubmit={(choice) => void send(choice)}
         />
       )}
       <div className="reply-context">
-      {inlinePanel && !menuOpen && !mention.open && !picker && !scheduleOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      {inlinePanel && !menuOpen && !mention.open && !picker && !later.open && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
         key={task.id}
         messages={scheduled.messages}
@@ -528,6 +518,8 @@ export function ReplyBox({
         onSteer={(messageId) => void scheduled.steer(messageId)}
         onWithdraw={(message) => void withdraw(message)}
         onCancel={(messageId) => void scheduled.cancel(messageId)}
+        tasks={tasks}
+        onSendNow={(messageId) => void scheduled.sendNow(messageId)}
       />
       <UploadAttachmentList
         attachments={uploads.attachments}
@@ -556,7 +548,7 @@ export function ReplyBox({
             setMenuDismissed(false);
             setCommandIndex(0);
             mention.onValueChange();
-            setScheduleOpen(false);
+            later.close();
             command?.onChange?.(commandCandidates(next).length > 0 ? "" : next);
           }}
           onPaste={uploads.onPaste}
@@ -601,19 +593,6 @@ export function ReplyBox({
             candidates={screenshotCandidates(conversationItems, [...parseAttachmentText(task.body).paths, ...uploads.attachments.map((attachment) => attachment.path)])}
             disabled={disabled || sending || uploads.uploading || commandActive} queueing={queueing}
             executorLabel={activeExecutorLabel} onSend={(reply) => runSend(undefined, reply)} />
-          <button
-            ref={scheduleTriggerRef}
-            className="reply-schedule-button"
-            type="button"
-            disabled={disabled || sending || uploads.uploading || commandActive || mention.open}
-            aria-label="选择定时发送时间"
-            onClick={() => {
-              if (!sendAt) setSendAt(defaultOnceTime());
-              setScheduleOpen((open) => !open);
-            }}
-          >
-            <Clock size={14} />
-          </button>
           {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后
               向右接着配置；跟新建面板、工作流站点用同一组件。
               没在 @ 召唤时改它 = 改任务的常设配置，之后每条消息都按新的跑；正在召唤
@@ -648,15 +627,17 @@ export function ReplyBox({
                 : queueing ? (target ? "排队：跑完按上面这套发出" : `${sendKeys.sendShort} 排队，跑完自动发出`)
                   : target ? "本回合按上面这套跑" : `${sendKeys.sendShort} 发送`}
           </span>
-          <button
-            className="task-send-button"
-            type="button"
-            disabled={sending || uploads.uploading || (!commandActive && (disabled || (!value.trim() && !uploads.attachments.length)))}
-            onClick={() => void send()}
-            aria-label={selectedIsSkill ? "把技能补进正文" : commandActive ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
-          >
-            {sending ? <SpinnerGap size={15} className="is-spinning" /> : <ArrowUp size={15} weight="bold" />}
-          </button>
+          <SendSplit later={later} disabled={disabled || sending || uploads.uploading || commandActive || mention.open}>
+            <button
+              className="task-send-button"
+              type="button"
+              disabled={sending || uploads.uploading || (!commandActive && (disabled || (!value.trim() && !uploads.attachments.length)))}
+              onClick={() => void send()}
+              aria-label={selectedIsSkill ? "把技能补进正文" : commandActive ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
+            >
+              {sending ? <SpinnerGap size={15} className="is-spinning" /> : <ArrowUp size={15} weight="bold" />}
+            </button>
+          </SendSplit>
         </div>
       </div>
     </div>

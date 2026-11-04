@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { parseSessionOutput } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared/session-output";
 import type { scheduledMessages as scheduledMessagesTable } from "../src/db/schema.js";
 
 export type SteerCaseContext = {

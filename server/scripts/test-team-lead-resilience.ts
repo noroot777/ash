@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared/session-output";
 import {
   POISON, root, db, dbClient, ensureSchema, projects, sessions, tasks,
   haltTeam, sendInbound, teamIsLive, bus, SESSION_POISONED_NOTE, eq, at, ok,

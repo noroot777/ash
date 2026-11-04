@@ -80,6 +80,22 @@ export async function repoRefTips(repoPath: string): Promise<{ name: string; com
 
 
 /**
+ * 一条会话跨接力之后还能不能接回原生 CLI 会话 —— 导出(handoff.ts)与导入(handoff-import.ts)共用,
+ * 两头同一个判据。`carried`:原生会话文件真的随任务搬过去了(导入侧还要 CLI 自己找得到)。
+ * 删过消息的会话(contextRebuildAt)无论文件到没到都不认旧 id,标记原样带过去,下一回合拿删除后
+ * 的记录重建(turn-session-pick.ts);失效状态在哪个边界丢了,删掉的原话就从哪里回来。
+ */
+export function handoffSessionContext(
+  s: { cliSessionId: string | null; contextRebuildAt?: string | null },
+  carried: boolean,
+): { cliSessionId: string | null; contextRebuildAt?: string } {
+  return {
+    cliSessionId: carried && !s.contextRebuildAt ? s.cliSessionId : null,
+    ...(s.contextRebuildAt ? { contextRebuildAt: s.contextRebuildAt } : {}),
+  };
+}
+
+/**
  * 会话文件盘点:每条会话的文件在哪、能不能搬。dryRun 时不读内容（preflight 用）。
  *
  * 目录**逐条会话解析**,不是整批一个:多人模式下 `sessions.cli_config_dir` 记着
@@ -103,6 +119,12 @@ export async function collectSessionFiles(
   const notes: string[] = [];
   for (const s of rows) {
     if (!s.cliSessionId) continue;
+    // 删过消息的会话:原生会话文件里还记着删掉的原话,不能随任务搬走(conversation-redact.ts)。
+    // 对端拿删除后的 .md 重建上下文,效果与本机下一回合一样。
+    if (s.contextRebuildAt) {
+      notes.push(`会话 ${s.id}:删过消息,旧的 CLI 会话不随任务迁移,对端下一回合按删除后的记录重建`);
+      continue;
+    }
     let abs: string | null = null;
     let rel = "";
     let kind: HandoffFilePayload["kind"];

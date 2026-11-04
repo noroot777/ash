@@ -94,7 +94,7 @@ try {
   assert.equal(await text("rail"), "panel-3", "上键在开头回绕");
   await page.keyboard.press("Home");
   assert.equal(await text("rail"), "panel-0", "Home 到第一个");
-  // 图标条下面还坐着一颗「切换 Inspector 面板」的「+」:它是动作,不在这一组里。
+  // 图标条下面还坐着一颗「添加 Inspector 面板」的「+」:它是动作,不在这一组里。
   assert.equal(
     await page.locator('.inspector-host__add').getAttribute("data-choice-value"),
     null,
