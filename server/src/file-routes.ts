@@ -15,6 +15,8 @@ import { openInIde, probeIdes } from "./openers/ide.js";
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
 import { readFileGitStatus } from "./file-git-status.js";
 import { readTaskArtifacts } from "./task-artifacts.js";
+import { actorOf } from "./auth/context.js";
+import { visibleProjectIds } from "./auth/visibility.js";
 import { watchTaskWrites } from "./task-writes.js";
 import { pagePreviewNotice, taskPageUrlFor } from "./task-page.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
@@ -141,7 +143,7 @@ export function mountFileRoutes(api: Hono) {
       });
     }
     try {
-      return c.json({ root: publicRoot(root), ...await readTaskArtifacts(taskId, root) });
+      return c.json({ root: publicRoot(root), ...await readTaskArtifacts(taskId, root, await visibleProjectIds(actorOf(c))) });
     } catch (error) {
       return c.json({ error: messageOf(error) }, statusOf(error) as 400);
     }

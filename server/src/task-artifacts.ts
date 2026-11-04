@@ -121,6 +121,17 @@ const UNCHECKED: Rivals = {
   incomplete: "没能核对同一时间还有哪些任务在跑，只靠时间认的都按候选列",
 };
 
+/** 查看者无权查看的那个项目里的任务，只说有，不说是谁。 */
+const HIDDEN_RIVAL = "另一个你无权查看的任务";
+
+/** 同时在跑的任务在面板上叫什么：看得见它那个项目才给标题。 */
+function nameRival(rivals: Rivals, id: string, visible: ReadonlySet<string> | null | undefined): string {
+  const known = rivals.titles.get(id);
+  if (!known) return HIDDEN_RIVAL;
+  // `visible` 是 undefined 只会出现在不过类型检查的老脚本里，按不设限处理。
+  return visible == null || visible.has(known.projectId) ? known.title : HIDDEN_RIVAL;
+}
+
 /** 这几条里哪些被 .gitignore 挡着（问不出来就当没挡着）。 */
 async function ignoredAmong(rootPath: string, paths: readonly string[]): Promise<Set<string>> {
   if (!paths.length) return new Set();
@@ -144,6 +155,11 @@ async function ignoredAmong(rootPath: string, paths: readonly string[]): Promise
 export async function readTaskArtifacts(
   taskId: string,
   root: WorkspaceRoot,
+  /**
+   * 查看者看得见的项目（`visibleProjectIds`），null = 不设限。只管**展示**：同时在跑的任务照样
+   * 全实例核对，只是看不见的那些不报标题（审查 TgRjUOJWF1Ci 第 2 轮 #1）。
+   */
+  visibleProjects: ReadonlySet<string> | null,
 ): Promise<TaskArtifactsResult> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   const problems: string[] = [];
@@ -372,7 +388,7 @@ export async function readTaskArtifacts(
     if (version.hit === "approx") { push("estimated"); continue; }
     const present = rivals?.at(version.at) ?? [];
     if (present.length) {
-      push("concurrent", present.map((id) => rivals!.titles.get(id) ?? id));
+      push("concurrent", [...new Set(present.map((id) => nameRival(rivals!, id, visibleProjects)))]);
       continue;
     }
     // 没核全那一刻还有谁在跑、或者读不出亲手写下的记录（它可能正是别人亲手写下的）：都不敢算确定。

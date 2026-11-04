@@ -34,8 +34,11 @@ const ROUGH_MARGIN_MS = 24 * 60 * 60 * 1000;
 export interface Rivals {
   /** 这一刻也在跑的别的任务（id）。 */
   at(ms: number | null): string[];
-  /** 在跑的任务的标题，面板上说「同一时间 X 也在跑」用。 */
-  titles: Map<string, string>;
+  /**
+   * 在跑的任务的标题和所属项目，面板上说「同一时间 X 也在跑」用。这里是**全实例**的——核对必须
+   * 看全，但标题给不给看要按查看者的权限另算（task-artifacts.ts 的 `nameRival`）。
+   */
+  titles: Map<string, { title: string; projectId: string }>;
   /** 没核全时的一句人话（面板照实说）；有它时只靠时间认的条目一律当候选。 */
   incomplete?: string;
 }
@@ -115,8 +118,9 @@ export async function concurrentRivals(
     windows: (await runWindows([{ id }], root, lens, { anywhere: true })).windows,
   })))).filter((rival) => rival.windows.some((span) => scope.windows.some((own) => overlaps(span, own))));
   const titles = new Map(rivals.length
-    ? (await db.select({ id: tasks.id, title: tasks.title }).from(tasks).where(inArray(tasks.id, rivals.map((r) => r.id))))
-      .map((row) => [row.id, row.title?.trim() || row.id] as const)
+    ? (await db.select({ id: tasks.id, title: tasks.title, projectId: tasks.projectId }).from(tasks)
+      .where(inArray(tasks.id, rivals.map((r) => r.id))))
+      .map((row) => [row.id, { title: row.title?.trim() || row.id, projectId: row.projectId }] as const)
     : []);
   return {
     titles,

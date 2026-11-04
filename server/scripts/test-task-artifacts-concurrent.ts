@@ -296,8 +296,8 @@ rl.on('line', (line) => {
   };
   const rootAt = (dir: string, projectId: string) => ({ path: dir, branch: null, gitRepo: false, source: "repo" as const, repo: null, projectId });
   const root = rootAt(shared, "pc");
-  const read = async (id: string, at = root) => {
-    const got = await readTaskArtifacts(id, at);
+  const read = async (id: string, at = root, visible: Set<string> | null = null) => {
+    const got = await readTaskArtifacts(id, at, visible);
     assert.equal(got.error, null, `${id} 读得通：${got.error}`);
     return got;
   };
@@ -395,6 +395,11 @@ rl.on('line', (line) => {
   const near = await read("Near00000007", rootAt(target, "pt"));
   assert.equal(conf(near, "outside.html"), "concurrent", "输出目标记不下来：那一刻有别的任务在跑，就不能算确定");
   assert.deepEqual(pick(near, "outside.html")?.alongside, ["任务Far000000008"]);
+  // 查看者看不见对方那个项目（审查 TgRjUOJWF1Ci 第 2 轮 #1）：照样当候选，但不报它的标题。
+  const nearForMember = await read("Near00000007", rootAt(target, "pt"), new Set(["pt"]));
+  assert.equal(conf(nearForMember, "outside.html"), "concurrent", "看不见的任务照样算在跑");
+  assert.deepEqual(pick(nearForMember, "outside.html")?.alongside, ["另一个你无权查看的任务"], "看不见的项目不报标题");
+  assert.ok(!JSON.stringify(nearForMember).includes("Far000000008"), "响应里哪儿都不能带出它");
   assert.equal(conf(near, "between.png"), "exact", "它两段之间没在跑：照旧按时间认");
   // 同一个目录换个入口（软链）：亲手写下的记录按真实路径认。
   const link = join(stage, "empty-link");
@@ -426,7 +431,7 @@ rl.on('line', (line) => {
   assert.ok(crowded.incomplete.some((note) => note.includes("没能逐个核对")), `没核全要说出来：${JSON.stringify(crowded.incomplete)}`);
   await db.run(sql`ALTER TABLE task_writes RENAME TO task_writes_off`);
   try {
-    const broken = await readTaskArtifacts("Host00000001", root);
+    const broken = await readTaskArtifacts("Host00000001", root, null);
     assert.equal(conf(broken, "videos/早到的.png"), "unchecked", "读不出亲手写下的记录：它可能正是别人亲手写下的，不能算确定");
     assert.ok(broken.error?.includes("亲手写下"), `失败要说出来：${broken.error}`);
   } finally {

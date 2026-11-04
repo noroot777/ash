@@ -73,7 +73,7 @@ try {
     await db.insert(projects).values({ id: name, name, repoPath: repo, createdAt: iso(T) });
     const root = { path: repo, branch: "main", gitRepo: true, source: "repo" as const, repo, projectId: name };
     const conf = async (id: string, rel: string) => {
-      const got = await readTaskArtifacts(id, root);
+      const got = await readTaskArtifacts(id, root, null);
       assert.equal(got.error, null, `${id} 读得通：${got.error}`);
       const hit = got.artifacts.find((artifact) => artifact.path === rel);
       return hit ? (hit.confidence === "exact" ? "exact" : hit.doubt ?? "approx") : null;
