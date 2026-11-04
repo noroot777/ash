@@ -9,9 +9,9 @@
 //      codex 新建文件的全文），**不读磁盘**——回执到达之前文件可能已经被别人覆盖了；
 //   2. 记录端：相对路径按会话目录展开、软链解开、同一路径去重，乱序到达只往外扩，指纹认更晚的；
 //   3. 归属：亲手写下且一字未变 → 确定，不问时间和还有谁；现在这份正是别人亲手写下的 → 不列；
-//      两边写下过同样内容 → 候选；只能按时间认的，那一刻还有别的任务在跑——**不管它在哪个目录**，
-//      命令的输出落在哪儿记不下来——→ 候选并说出是谁，没核全 / 核对失败 → 候选；协作关系不算别人；
-//   4. 没有并发的时候行为一点不变。
+//      两边写下过同样内容 → 候选；只能按时间认的**一律候选**（哪怕那一刻只有它在跑：ash 管不到的
+//      后台进程照样能写，用户 2026-11-04 拍板），那一刻还有别的任务在跑——不管它在哪个目录——
+//      就说出是谁（看不见的项目不报标题）；协作关系不算别人。
 // git 仓库那一半（提交、分支版本）在 test-task-artifacts-evidence.ts。
 // 跑：npm -w server run test:task-artifacts-concurrent
 import assert from "node:assert/strict";
@@ -322,7 +322,7 @@ rl.on('line', (line) => {
   assert.ok(host.incomplete.some((note) => note.includes("别的任务亲手写下的")), `不列的要说一声：${JSON.stringify(host.incomplete)}`);
   assert.equal(conf(host, "videos/host/assets/chunk-01.mp4"), "concurrent", "命令渲染的、那一刻讲解任务也在：分不出是谁的，当候选");
   assert.deepEqual(pick(host, "videos/host/assets/chunk-01.mp4")?.alongside, ["任务Explain00002"], "说出当时还有谁在");
-  assert.equal(conf(host, "videos/早到的.png"), "exact", "那一刻只有它在跑：照旧按时间认");
+  assert.equal(conf(host, "videos/早到的.png"), "timed", "那一刻只有它在跑也只是候选：只按时间认的证明不了是它做的");
   assert.ok(!host.incomplete.some((note) => note.includes("估出来")),
     `区间都是精确的，不该说「估出来的」（并发这类原因标在卡片上）：${JSON.stringify(host.incomplete)}`);
   const explain = await read("Explain00002");
@@ -363,7 +363,7 @@ rl.on('line', (line) => {
     expiresAt: iso(minutes(T, 80)), endedAt: iso(minutes(T, 60)),
   });
   place(shared, "videos/explain/delivery/成片.mp4", minutes(T, 55));
-  assert.equal(conf(await read("Explain00002"), "videos/explain/delivery/成片.mp4"), "exact", "哨兵挂在子目录里也是在这儿干活");
+  assert.equal(conf(await read("Explain00002"), "videos/explain/delivery/成片.mp4"), "timed", "哨兵挂在子目录里也是在这儿干活（宿主那时已收工，不点名）");
   assert.equal(conf(await read("Host00000001"), "videos/explain/delivery/成片.mp4"), null);
 
   // ── 3b. 那一刻还有谁在跑：整台机器上的全部任务 ─────────────────────────────────
@@ -380,7 +380,8 @@ rl.on('line', (line) => {
   await runTask("Lead00000005", minutes(T, 45), minutes(T, 70), { extra: { mode: "team" } });
   await db.update(tasks).set({ parentId: "Lead00000005" }).where(eq(tasks.id, "Explain00002"));
   await runTask("Review000006", minutes(T, 45), minutes(T, 70), { extra: { reviewOf: "Explain00002" } });
-  assert.equal(conf(await read("Explain00002"), "videos/explain/delivery/成片.mp4"), "exact", "领队、审查本任务的不是别人");
+  const withCrew = await read("Explain00002");
+  assert.equal(conf(withCrew, "videos/explain/delivery/成片.mp4"), "timed", "领队、审查本任务的不是别人：不算「同时有别的任务」");
   // 审查 TgRjUOJWF1Ci 第 1 轮 #2 的复现：B 在兄弟目录里跑，用命令把网页写进 A 的目录；它报上来的
   // 只有命令的工作目录。A 那边这份不能是确定的；B 不在跑的那段照旧确定。
   const target = join(stage, "shell-target");
@@ -400,7 +401,7 @@ rl.on('line', (line) => {
   assert.equal(conf(nearForMember, "outside.html"), "concurrent", "看不见的任务照样算在跑");
   assert.deepEqual(pick(nearForMember, "outside.html")?.alongside, ["另一个你无权查看的任务"], "看不见的项目不报标题");
   assert.ok(!JSON.stringify(nearForMember).includes("Far000000008"), "响应里哪儿都不能带出它");
-  assert.equal(conf(near, "between.png"), "exact", "它两段之间没在跑：照旧按时间认");
+  assert.equal(conf(near, "between.png"), "timed", "它两段之间没在跑：不点名，但仍是候选");
   // 同一个目录换个入口（软链）：亲手写下的记录按真实路径认。
   const link = join(stage, "empty-link");
   symlinkSync(shared, link);
@@ -412,27 +413,25 @@ rl.on('line', (line) => {
   assert.equal(conf(via, "via/page.html"), null, "从另一个入口看，别人亲手写下的照样认得出来");
   assert.equal(conf(via, "via/shot.png"), "concurrent");
 
-  // ── 3c. 没核全、核对失败：一律候选 ──────────────────────────────────────────
-  const crowd = join(stage, "crowd");
-  mkdirSync(crowd, { recursive: true });
-  await db.insert(projects).values({ id: "pk", name: "crowd", repoPath: crowd, createdAt: iso(T) });
-  const crowdRoot = rootAt(crowd, "pk");
-  const C = minutes(T, -2 * 24 * 60);
-  await runTask("Crowd0000000", C, minutes(C, 40), { dir: crowd, project: "pk" });
-  place(crowd, "mine/a.png", minutes(C, 20));
-  // 跟它的区间重叠，但图出来的那一刻都已经收工：核全了的话，答案是「没别人」。
-  const crowdRival = (i: number) =>
-    runTask(`Crowd${String(i).padStart(7, "0")}`, minutes(C, 10), minutes(C, 15), { dir: elsewhere, project: "po" });
-  for (let i = 1; i <= 48; i += 1) await crowdRival(i);
-  assert.equal(conf(await read("Crowd0000000", crowdRoot), "mine/a.png"), "exact", "48 个都核到了、那一刻都不在：确定");
-  await crowdRival(49);
-  const crowded = await read("Crowd0000000", crowdRoot);
-  assert.equal(conf(crowded, "mine/a.png"), "unchecked", "在场的人多到核不过来：没核到的里面可能就有当时在场的");
-  assert.ok(crowded.incomplete.some((note) => note.includes("没能逐个核对")), `没核全要说出来：${JSON.stringify(crowded.incomplete)}`);
+  // ── 3c. 「那一刻只有它在跑」也不算确定 ──────────────────────────────────────
+  // 审查 TgRjUOJWF1Ci 第 2 轮 #2 的复现：别的任务起了个后台进程，自己的回合收了尾，后台几秒后才把
+  // 网页写进这里——ash 的记录里那一刻只有本任务在跑。按时间认的在共享目录上一律是候选（用户
+  // 2026-11-04 拍板），不靠「没看到别人」升成确定。
+  const bg = join(stage, "bg-target");
+  mkdirSync(bg, { recursive: true });
+  await db.insert(projects).values({ id: "pb", name: "bg", repoPath: bg, createdAt: iso(T) });
+  const B0 = minutes(T, -2 * 24 * 60);
+  await runTask("BgOwner00001", B0, minutes(B0, 40), { dir: bg, project: "pb" });
+  await runTask("BgOther00002", minutes(B0, 5), minutes(B0, 10), { dir: elsewhere, project: "po" });
+  place(bg, "foreign.html", minutes(B0, 10.1), "<h1>written by a background job of BgOther</h1>");
+  const bgRead = await read("BgOwner00001", rootAt(bg, "pb"));
+  assert.equal(conf(bgRead, "foreign.html"), "timed", "ash 记录里那一刻没别人，照样只是候选");
+  assert.deepEqual(bgRead.incomplete, [], "这不是记录缺口，不往页脚说");
   await db.run(sql`ALTER TABLE task_writes RENAME TO task_writes_off`);
   try {
     const broken = await readTaskArtifacts("Host00000001", root, null);
-    assert.equal(conf(broken, "videos/早到的.png"), "unchecked", "读不出亲手写下的记录：它可能正是别人亲手写下的，不能算确定");
+    assert.notEqual(conf(broken, "videos/host/收尾.html"), "exact", "读不出亲手写下的记录：那条直接证据就没了");
+    assert.equal(conf(broken, "videos/早到的.png"), "timed");
     assert.ok(broken.error?.includes("亲手写下"), `失败要说出来：${broken.error}`);
   } finally {
     await db.run(sql`ALTER TABLE task_writes_off RENAME TO task_writes`);
@@ -448,18 +447,19 @@ rl.on('line', (line) => {
   await recordTaskWrites("Focus0000013", "s-Focus0000013", { kind: "writes", paths: [join(scanDir, "output/z/render.py")] }, iso(minutes(F, 2)));
   place(scanDir, "output/z/final.png", minutes(F, 5));
   const focused = await read("Focus0000013", rootAt(scanDir, "pd"));
-  assert.equal(conf(focused, "output/z/final.png"), "exact", `写过的那处先扫，成片不能被预算挤掉：${JSON.stringify(focused.incomplete)}`);
+  assert.equal(conf(focused, "output/z/final.png"), "timed", `写过的那处先扫，成片不能被预算挤掉：${JSON.stringify(focused.incomplete)}`);
 
-  // ── 4. 没有并发：跟以前一模一样 ───────────────────────────────────────────
+  // ── 4. 没有并发：照样列出来，只是按时间认的仍是候选，页脚不多说 ──────────────
   const later = minutes(T, 900);
   await runTask("Solo00000014", later, minutes(later, 10));
   place(shared, "videos/explain/后来的.png", minutes(later, 5));
   const solo = await read("Solo00000014");
-  assert.equal(conf(solo, "videos/explain/后来的.png"), "exact", "这一段只有它在跑：照旧按时间认");
+  assert.equal(conf(solo, "videos/explain/后来的.png"), "timed", "这一段只有它在跑：列出来，候选");
+  assert.equal(pick(solo, "videos/explain/后来的.png")?.alongside, undefined, "没别人在跑就不点名");
   assert.deepEqual(solo.incomplete, [], `没有并发就什么都不该说：${JSON.stringify(solo.incomplete)}`);
 
   console.log("✓ task writes: claude 主会话/子智能体、codex 主线程/子线程报出写入位置；指纹只从这次操作写下的内容算、不读磁盘；记录端展开相对路径、解开软链、去重、乱序只往外扩");
-  console.log("✓ task artifacts: 亲手写下且未变 → 确定；别人亲手写下的 → 不列；只靠时间认的、那一刻还有任务在跑（不管在哪）→ 候选并说出是谁；没核全/失败 → 候选；没并发不变");
+  console.log("✓ task artifacts: 亲手写下且未变 → 确定；别人亲手写下的 → 不列；只靠时间认的一律候选，当时还有任务在跑（不管在哪）就说出是谁、看不见的不报标题");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

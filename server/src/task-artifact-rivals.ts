@@ -7,23 +7,18 @@ import type { PathLens } from "./task-artifact-paths.js";
 import { workspaceRunOwners, type ArtifactScope, type ArtifactTask } from "./task-artifact-scope.js";
 import { runWindows, withinWindows, type RunWindow } from "./task-artifact-windows.js";
 
-// 「那一刻还有没有别的任务在跑」——共享目录上，只靠时间认的那些文件（命令渲染的视频、截图，
-// 没有提交证据也没有亲手写下的记录）能不能算**确定**，就看这一问。
+// 「那一刻还有哪些别的任务在跑」——共享目录上只靠时间认的那些候选（命令渲染的视频、截图），卡片上
+// 照实说一句「当时 X 也在跑」。
 //
-// **问的是整台机器上的全部任务，不是「跟这个目录沾边的」**：命令写到哪儿是记不下来的——codex 只报
-// 命令的工作目录，claude 的 Bash 什么都不报——一个在别的项目里开工的任务，照样能用一条脚本把
-// 网页、视频生成到这里。按工作目录、按写入记录去找「可能在这儿写的人」，找到的永远只是一部分，
-// 而「没找到」会被当成「没有」，把别人的成品标成确定（审查 TgRjUOJWF1Ci 第 1 轮 #2；之前按目录
-// 关系一档一档补上层目录、软链入口、写进来的记录，补不完）。ash 起的每个任务都有运行区间，这个
-// 集合才是完整的：那一刻只有它在跑，按时间认才算数。
+// **只用来说明，不参与判定**：只靠时间认的在共享目录上一律是候选（task-artifacts.ts 顶部），这里
+// 找不全也不会让谁变成确定——任务能起 ash 管不到的进程，「没找到别人」本来就证明不了「没有别人」。
+// 所以核对有上限（`MAX_RIVALS`）、读失败也只是少说一句。
 //
-// **它只回答「在不在」，不回答「是谁做的」**：同时在跑就分不出来（要知道得做进程级的文件追踪），
-// 这一条只能当候选，并把在跑的是谁照实说出来。找不全、读失败一律往候选那边落。
+// 问的是整台机器上的全部任务，不只是跟这个目录沾边的：命令写到哪儿记不下来，别的项目里的任务
+// 照样能用一条脚本把东西生成到这里。标题给不给看，按查看者的权限另算（task-artifacts.ts 的
+// `nameRival`）。
 
-/**
- * 最多核对这么多个——每个都要算一遍运行区间。超了就如实说「没核全」，只靠时间认的条目全部降成
- * 候选：没核对的那些里可能就有当时在跑的。
- */
+/** 最多核对这么多个（每个都要算一遍运行区间），按最近活动先留。超出的那些卡片上就不点名了。 */
 const MAX_RIVALS = 48;
 /**
  * 粗筛时往前多看这么久：对手的区间可能比它的会话起止更宽（收尾宽限、没收尾的按 6 小时兜底），
@@ -34,13 +29,8 @@ const ROUGH_MARGIN_MS = 24 * 60 * 60 * 1000;
 export interface Rivals {
   /** 这一刻也在跑的别的任务（id）。 */
   at(ms: number | null): string[];
-  /**
-   * 在跑的任务的标题和所属项目，面板上说「同一时间 X 也在跑」用。这里是**全实例**的——核对必须
-   * 看全，但标题给不给看要按查看者的权限另算（task-artifacts.ts 的 `nameRival`）。
-   */
+  /** 在跑的任务的标题和所属项目（全实例；给不给看按查看者权限另算）。 */
   titles: Map<string, { title: string; projectId: string }>;
-  /** 没核全时的一句人话（面板照实说）；有它时只靠时间认的条目一律当候选。 */
-  incomplete?: string;
 }
 
 const overlaps = (a: RunWindow, b: RunWindow) => a.start <= b.end && b.start <= a.end;
@@ -110,8 +100,6 @@ export async function concurrentRivals(
   const candidates = await rivalCandidates(task, scope.windows);
   const excluded = await collaborators(candidates, ownerIds, task.id);
   const pending = candidates.filter((id) => !excluded.has(id));
-  // 截断只发生在协作关系筛掉之后，剩下的按最近活动排队。仍然超了就是真没核全。
-  const incomplete = pending.length > MAX_RIVALS;
   const rivals = (await Promise.all(pending.slice(0, MAX_RIVALS).map(async (id) => ({
     id,
     // 它在哪个目录跑都算：命令的输出落在哪儿，从它的工作目录看不出来。
@@ -124,9 +112,6 @@ export async function concurrentRivals(
     : []);
   return {
     titles,
-    incomplete: incomplete
-      ? `同一时间在跑的任务太多（超过 ${MAX_RIVALS} 个），没能逐个核对，只靠时间认的都按候选列`
-      : undefined,
     at: (ms) => rivals.filter((rival) => withinWindows(ms, rival.windows)).map((rival) => rival.id),
   };
 }

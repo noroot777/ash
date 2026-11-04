@@ -317,8 +317,7 @@ export type ArtifactOrigin = "working" | "committed" | "ignored";
 /**
  * **这一条**的归属有多硬（判据在服务端 `task-artifacts.ts` 顶部）。
  *
- * - `exact` —— 确定：有直接证据（目录独占、亲手写下且一字未变、任务分支那一版、精确区间里
- *   而且当时没有别的任务在跑）；
+ * - `exact` —— 确定：有直接证据（目录独占、亲手写下且一字未变、任务分支那一版）；
  * - `approx` —— 候选：拿不准，原因见 `doubt`。
  *
  * 整份清单那一档（`ArtifactScopeKind`）说的是「这个目录是不是它独占的」,这一列说的是
@@ -326,10 +325,10 @@ export type ArtifactOrigin = "working" | "committed" | "ignored";
  */
 export type ArtifactConfidence = "exact" | "approx";
 /**
- * 候选为什么拿不准：只落在估出来的时间段里 / 那一刻还有别的任务在跑 / 没能核对
- * 那一刻还有谁 / 它动过但现在这份已经不是它那一版 / 别的任务写下过一模一样的内容。
+ * 候选为什么拿不准：只落在估出来的时间段里 / 只按时间认、那一刻还有别的任务在跑 / 只按时间认
+ * （多半是命令生成的）/ 它动过但现在这份已经不是它那一版 / 别的任务写下过一模一样的内容。
  */
-export type ArtifactDoubt = "estimated" | "concurrent" | "unchecked" | "version" | "contested";
+export type ArtifactDoubt = "estimated" | "concurrent" | "timed" | "version" | "contested";
 
 export type TaskArtifact = {
   /** 相对工作区根、posix 分隔符——跟文件树、文件查看器同一个主键。 */

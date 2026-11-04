@@ -1,8 +1,9 @@
 // 生成物归属的 git 那一半（非 git 共享目录那一半在 test-task-artifacts-concurrent.ts）。
 //
 // 共享仓库里的提交不自带归属：任务分支差异要核磁盘上这份是不是分支那一版；按时间找到的提交要核
-// 磁盘上这份是其中哪一次落下的，再拿那一刻去问「是不是只有它在场」。这里钉：
-//   1. 两个任务同时在主分支上提交：那一刻对方在场的提交只是候选；只有自己在场时的照旧确定；
+// 磁盘上这份是其中哪一次落下的。按时间找到的提交在共享仓库里一律只是候选（谁提交的，时间证明
+// 不了），区别只在卡片上说什么。这里钉：
+//   1. 两个任务同时在主分支上提交：那一刻对方也在跑，点名；只有自己在跑时也只是候选；
 //   2. 「它的提交动过这条路径」不等于「现在这份是它那一版」：之后被人提交改过、合并时解成了别人
 //      那一版、回拨了日期的提交换了内容、同一条路径先在精确区间后在估出来的区间各提交一次——
 //      都不能当成确定；
@@ -94,7 +95,7 @@ try {
   utimesSync(join(both.repo, "a/早.png"), minutes(S0, 25), minutes(S0, 25));
   assert.equal(await both.conf("GitA00000001", "a/out.png"), "concurrent", "提交那一刻 B 也在：分不出是谁的");
   assert.equal(await both.conf("GitB00000002", "a/out.png"), "concurrent");
-  assert.equal(await both.conf("GitB00000002", "b/late.png"), "exact", "A 收工之后只有 B 在：照旧确定");
+  assert.equal(await both.conf("GitB00000002", "b/late.png"), "timed", "A 收工之后只有 B 在跑：不点名，仍是候选");
   assert.equal(await both.conf("GitA00000001", "b/late.png"), null);
   assert.equal(await both.conf("GitA00000001", "a/早.png"), "concurrent", "现在这份是两边都在时改出来的未提交版本：按改动那一刻认");
 
@@ -150,7 +151,7 @@ try {
   mix.commit("c/z.html", "second", minutes(S4, 35));
   assert.equal(await mix.conf("MixA00000006", "c/z.html"), "estimated", "磁盘上是估出来的区间里那次提交落下的");
   mix.commit("c/y.html", "only exact", minutes(S4, 6));
-  assert.equal(await mix.conf("MixA00000006", "c/y.html"), "exact", "对照：磁盘上就是精确区间里那一版");
+  assert.equal(await mix.conf("MixA00000006", "c/y.html"), "timed", "对照：磁盘上就是精确区间里那一版——不是「后来被改过」也不是「时间是估的」");
 
   // ── 3. 任务分支差异只替分支那一版作保 ───────────────────────────────────────
   // 任务的 worktree 清理掉了、分支还在，面板退回主仓展示。主仓里这条路径后来被提交成了另一版。
@@ -190,7 +191,7 @@ try {
   assert.equal(await hand.conf("HandA0000008", "site/index.html"), "exact", "亲手写下、一字未变：不问那一刻还有谁");
   assert.equal(await hand.conf("HandB0000009", "site/index.html"), null, "现在这份正是 A 亲手写下的：B 那边不列");
 
-  console.log("✓ task artifacts(git): 同时提交当候选、只有自己在场照旧确定；内容不是它那一版的不算确定；分支证明核版本；亲手写下的直接认");
+  console.log("✓ task artifacts(git): 按时间找到的提交都是候选（同时在跑的点名）；内容不是它那一版的标「后来被改过」；分支证明核版本；亲手写下的直接认");
 } finally {
   await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });

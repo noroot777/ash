@@ -49,7 +49,7 @@ export const ARTIFACT_DOUBTFUL_HEAD = "拿不准归属的";
 export const ARTIFACT_DOUBT_LABEL: Record<NonNullable<TaskArtifact["doubt"]>, string> = {
   estimated: "时间是估的",
   concurrent: "同时有别的任务在跑",
-  unchecked: "没核全",
+  timed: "只按时间认的",
   version: "后来被改过",
   contested: "别人写过同样内容",
 };
@@ -57,7 +57,7 @@ export const ARTIFACT_DOUBT_LABEL: Record<NonNullable<TaskArtifact["doubt"]>, st
 export const ARTIFACT_DOUBT_HINT: Record<NonNullable<TaskArtifact["doubt"]>, string> = {
   estimated: "只落在估出来的时间段里（会话寿命、没收尾的回合），可能是别人在同一个目录里做的",
   concurrent: "做出来的那一刻还有别的任务在跑；别的任务就算不在这个目录，也能用命令把文件写进来，分不出是谁做的",
-  unchecked: "没能核对那一刻还有哪些任务在跑，不敢算确定",
+  timed: "不是它亲手写下的（多半是命令生成的），共用目录时只能按时间认，证明不了是它做的",
   version: "它动过这个文件，但现在这份已经不是它那一版，可能被别人改过",
   contested: "它和别的任务写下过一模一样的内容，证明不了是谁的",
 };
