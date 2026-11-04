@@ -68,7 +68,7 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   let lastEventType: string | null = null;
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
-  const childEvents = new CodexChildActivity();
+  const childEvents = new CodexChildActivity(opts.cwd);
   const childImages = new Map<string, ImageStore>();
   const childModelReads = new Set<string>();
   const childModelVersions = new Map<string, number>();
@@ -246,8 +246,8 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
   const handleItemCompleted = (item: any) => {
     for (const activity of codexNativeWork(item)) push(activity);
     // 写到了哪里要等**做完**才知道（失败、被拒的改文件不算写过，见 tool-writes.ts）。
-    const writes = item?.type === "fileChange" ? codexChangeWrites(item)
-      : item?.type === "commandExecution" ? codexCommandCwd(item) : null;
+    const writes = item?.type === "fileChange" ? codexChangeWrites(item, opts.cwd)
+      : item?.type === "commandExecution" ? codexCommandCwd(item, opts.cwd) : null;
     if (writes) push(writes);
     if (item?.type === "dynamicToolCall") {
       const activity = nativeWork.result(item.id, item.contentItems ?? item.result, item.success === false);

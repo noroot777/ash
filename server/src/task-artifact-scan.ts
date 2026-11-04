@@ -163,10 +163,17 @@ async function orderedIgnoredEntries(
     candidates.push({ rel, dir });
   }
 
+  // 任务自己写过的那几处（或装着它们的上层）：比时间更直接的线索，**排在一切额度之前**。
+  // 判它不用问文件属性，所以先分出来——要是混在别的条目里一起吃排序额度，落在第 4000 条之后的
+  // 重点入口会被统一扔到末尾，扫描预算在前面那些普通目录上烧光，自己的成片一个都轮不到（复审
+  // 第 1 轮 #4）。
+  const focused = candidates.filter(({ rel }) => touchesFocus(rel, focus));
+  const others = candidates.filter(({ rel }) => !touchesFocus(rel, focus));
+
   const latestEnd = windows.length ? Math.max(...windows.map((window) => window.end)) : 0;
   const ranked: { rel: string; rank: number; mtime: number }[] = [];
-  const stated = candidates.slice(0, MAX_RANK_STATS);
-  if (candidates.length > stated.length) {
+  const stated = others.slice(0, MAX_RANK_STATS);
+  if (others.length > stated.length) {
     incomplete.push(`被忽略的条目太多（${candidates.length} 条），只对最前面 ${MAX_RANK_STATS} 条排过序`);
   }
   for (let at = 0; at < stated.length; at += RANK_STAT_BATCH) {
@@ -175,16 +182,15 @@ async function orderedIgnoredEntries(
       const mtime = info && Number.isFinite(info.mtimeMs) ? info.mtimeMs : 0;
       // 0 = 这一档自己就在区间里动过；1 = 区间之后才动过（仍可能装着区间里的文件）；
       // 2 = 区间之前就没再动过（只可能装着后来被改写的旧文件）。
-      // -1 = 任务自己写过的那几处（或装着它们的上层）：比时间更直接的线索，排在最前。
-      const rank = touchesFocus(rel, focus) ? -1 : withinWindows(mtime, windows) ? 0 : (mtime > latestEnd ? 1 : 2);
+      const rank = withinWindows(mtime, windows) ? 0 : (mtime > latestEnd ? 1 : 2);
       return { rel, rank, mtime };
     }));
     ranked.push(...batch);
   }
   // 没排过序的那些接在后面：宁可排在最后，也不要整个丢掉。
-  for (const { rel } of candidates.slice(stated.length)) ranked.push({ rel, rank: 3, mtime: 0 });
+  for (const { rel } of others.slice(stated.length)) ranked.push({ rel, rank: 3, mtime: 0 });
   ranked.sort((a, b) => a.rank - b.rank || b.mtime - a.mtime);
-  return ranked.map((entry) => entry.rel);
+  return [...focused.map(({ rel }) => rel), ...ranked.map((entry) => entry.rel)];
 }
 
 /** `rel` 跟某个重点目录是同一处、在它底下、或者装着它。 */

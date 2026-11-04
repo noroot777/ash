@@ -9,8 +9,9 @@ import { readFileGitStatus } from "./file-git-status.js";
 import { taskBranchChangedPaths } from "./git-diff.js";
 import { kindOf, scanIgnoredArtifacts, type ArtifactKind } from "./task-artifact-scan.js";
 import { committedInWindows, resolveArtifactScope } from "./task-artifact-scope.js";
-import { footprintArbiter } from "./task-artifact-footprint.js";
+import { footprintArbiter, type FootprintArbiter } from "./task-artifact-footprint.js";
 import { pathLens } from "./task-artifact-paths.js";
+import { matchingBranchVersions } from "./task-artifact-version.js";
 import { windowHit } from "./task-artifact-windows.js";
 
 // 「这个任务做出来的、值得看一眼的东西」——图片、网页、音视频、PDF。
@@ -182,14 +183,21 @@ export async function readTaskArtifacts(
   const hasEvidence = exclusive || windows.length > 0;
   // 同一刻还有别的任务在这个目录里跑时，时间分不开它们，按「谁在附近写过东西」裁决
   // （判法见 task-artifact-footprint.ts）。
+  //
+  // **核不了不等于没别人**：裁决本身读失败时，换上一个「一律比不出来」的裁决者，而不是当它
+  // 不存在——后者等于「确认没有竞争者」，精确区间里的每个文件都会被当成确定归它，两个并发任务
+  // 又同时把同一份东西列成自己的（复审第 1 轮 #5）。
   const arbiter = task && scope
-    ? await footprintArbiter(task, scope, root, pathLens()).catch((error) => {
+    ? await footprintArbiter(task, scope, root, pathLens()).catch((error): FootprintArbiter => {
       problems.push(`读并发任务的写入位置失败：${error instanceof Error ? error.message : String(error)}`);
-      return null;
+      return { judge: () => "unsure", focus: [], incomplete: "没能核对同一时间还有谁在这个目录里干活，按时间认的都按候选列" };
     })
     : null;
   if (arbiter?.incomplete) incomplete.push(arbiter.incomplete);
 
+  /** 任务分支名与工作区根在仓库里的位置——分支证明要拿去跟磁盘上现在这份比内容。 */
+  let branchSource: string | null = null;
+  let prefix = "";
   if (root.gitRepo) {
     // 工作区里还没提交的改动：在共享目录上这**不是**归属证明（谁动的都显示在同一份
     // `git status` 里），所以要先有证据才读。
@@ -206,7 +214,6 @@ export async function readTaskArtifacts(
       ? (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0)
       : undefined;
     if (task && project?.repoPath) {
-      let prefix = "";
       try {
         prefix = (await exec("git", ["-C", root.path, "rev-parse", "--show-prefix"])).stdout.replace(/\r?\n$/, "");
       } catch {
@@ -223,6 +230,7 @@ export async function readTaskArtifacts(
         task.worktreeStartCommit,
       );
       if (committed.available) {
+        branchSource = committed.sourceBranch ?? null;
         // 分支 diff **自带归属**：分支名由 taskId 派生，`merge-base..分支` 里的每个提交都是
         // 它做的，跟它在哪个目录跑过、有没有留下运行区间都无关。worktree 事后被删、面板降级
         // 到主仓展示时，这是唯一还拿得出来的证据，不能被上面那道时间门槛一起挡掉。
@@ -289,6 +297,14 @@ export async function readTaskArtifacts(
     return { path, origins, info };
   }));
 
+  // 分支证明只替**分支末端那一版**作保：共享目录上（worktree 已清理、退回主仓展示）先核一遍
+  // 磁盘上这份是不是那一版（task-artifact-version.ts）。独占目录里磁盘上这份就是它的，不用核。
+  const branchVersion = !exclusive && branchSource
+    ? await matchingBranchVersions(root.path, prefix, branchSource, stated
+      .filter(({ path, origins, info }) => proven.has(path) && !origins.has("working") && info?.isFile())
+      .map(({ path }) => path))
+    : new Set<string>();
+
   const artifacts: TaskArtifact[] = [];
   /** 靠推断区间认进来的条数——面板要单独说一句。 */
   let guessed = 0;
@@ -312,7 +328,7 @@ export async function readTaskArtifacts(
     // 第 2 轮审查 F3 的老问题），也不让它冒充确定。
     const byCommit = timeCommitted.get(path);
     const working = origins.has("working");
-    const branchProof = exclusive || (proven.has(path) && !working);
+    const branchProof = exclusive || branchVersion.has(path);
     if (!branchProof) {
       const version = currentVersion(byCommit, working, mtimeMs);
       const prior = proven.has(path) || !!byCommit;

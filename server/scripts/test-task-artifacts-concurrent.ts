@@ -14,7 +14,10 @@
 //      （命令工作目录）压不过真写过（写文件工具）。对手按**目录**找（跨项目、开在上层目录的
 //      都算），别处干活的不占名额，没比全如实降级；审查自己、领队不算对手；共享仓库里按时间
 //      找到的提交也按提交时刻裁决，而且裁决的是**现在这一版**（之后被别人改过、提交过的，
-//      旧提交不能替它作保）；任务写过的深层目录先扫，不被它写过的上层目录吞掉；
+//      旧提交不能替它作保；任务分支证明也要核对磁盘上这份是不是分支那一版）；判某一刻的文件
+//      只认那一刻已经有的写入记录（后来续聊写的说明不能回头改判早先的成品）；裁决读失败时一律
+//      当候选；任务写过的深层目录先扫，不被它写过的上层目录吞掉，也不被排序额度挤到末尾；
+//      相对路径按这一趟实际的工作目录展开；
 //   4. 没有并发的时候行为一点不变。
 // 跑：npm -w server run test:task-artifacts-concurrent
 import assert from "node:assert/strict";
@@ -23,7 +26,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { releaseTmpDb, requireTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "ash-artifacts-concurrent-"));
@@ -57,6 +60,11 @@ try {
     assert.equal(codexChangeWrites({ status, changes: [{ path: "/w/a.ts" }] }), null, `没做成（${status}）的改文件不算写过`);
   }
   assert.deepEqual(codexCommandCwd({ status: "completed", command: "ls", cwd: "/w/sub" }), { kind: "writes", paths: ["/w/sub"], cwd: true });
+  // 相对路径在执行器这一层就按这一趟起进程的目录展开；拿不到绝对目录才原样交给记录端。
+  assert.deepEqual(claudeToolWrites("Write", { file_path: "out/a.html" }, "/run/new")?.paths, ["/run/new/out/a.html"]);
+  assert.deepEqual(codexChangeWrites({ status: "completed", changes: [{ path: "out/b.md" }] }, "/run/new")?.paths, ["/run/new/out/b.md"]);
+  assert.deepEqual(codexCommandCwd({ status: "completed", cwd: "sub" }, "/run/new")?.paths, ["/run/new/sub"]);
+  assert.deepEqual(claudeToolWrites("Write", { file_path: "out/a.html" }, ".")?.paths, ["out/a.html"], "接管进程时的 \".\" 不算基准");
   assert.deepEqual(codexCommandCwd({ status: "failed", command: "false", cwd: "/w/sub" })?.paths, ["/w/sub"], "失败的命令也确实在那儿跑过");
   assert.equal(codexCommandCwd({ status: "declined", command: "rm", cwd: "/w/sub" }), null, "被拒绝的命令压根没跑");
   assert.equal(codexCommandCwd({ status: "completed", command: "ls" }), null, "协议没带工作目录就不记");
@@ -194,6 +202,26 @@ rl.on('line', (line) => {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.equal((await db.select().from(taskWrites)).length, 3, "总线上的 writes 事件要落进库里");
+  // 总线那两条按「现在」落的账；把它们挪回讲解任务当时写下的那一刻（T+11），下面的裁决只认
+  // 文件落下时已经有的记录。
+  await db.update(taskWrites).set({ firstAt: iso(minutes(T, 11)), lastAt: iso(minutes(T, 11)) })
+    .where(eq(taskWrites.taskId, "Explain00002"));
+
+  // 同一条会话续聊换了工作目录、执行器又没给绝对路径时：按眼下这一回合的目录展开，不按会话
+  // 当初的目录（也不能被上一次查到的结果缓存住）。
+  await db.insert(tasks).values({ id: "Move00000011", projectId: "pc", title: "move", body: "-", mode: "single",
+    status: "done", agentType: "claude", useWorktree: false, createdAt: iso(T), updatedAt: iso(T) });
+  await db.insert(sessions).values({ id: "s-move", taskId: "Move00000011", role: "main", agentType: "claude",
+    executor: "claude", cwd: join(stage, "old"), startedAt: iso(T) });
+  await db.insert(sessionTurns).values({ id: "t-move-1", sessionId: "s-move", taskId: "Move00000011", cwd: join(stage, "old"), startedAt: iso(T), endedAt: iso(minutes(T, 5)) });
+  await recordTaskWrites("Move00000011", "s-move", { kind: "writes", paths: ["output/before.md"] }, iso(minutes(T, 1)));
+  await db.insert(sessionTurns).values({ id: "t-move-2", sessionId: "s-move", taskId: "Move00000011", cwd: join(stage, "new"), startedAt: iso(minutes(T, 10)) });
+  await recordTaskWrites("Move00000011", "s-move", { kind: "writes", paths: ["output/after.md"] }, iso(minutes(T, 11)));
+  assert.deepEqual(
+    (await db.select().from(taskWrites).where(eq(taskWrites.taskId, "Move00000011"))).map((row) => row.path).sort(),
+    [join(stage, "new/output/after.md"), join(stage, "old/output/before.md")],
+    "换了工作目录之后写的，要记在新目录下",
+  );
 
   // ── 3. 裁决 ─────────────────────────────────────────────────────────────────
   const place = (rel: string, at: Date) => {
@@ -361,6 +389,25 @@ rl.on('line', (line) => {
     assert.equal(conf(got, "output/z/final.png"), "exact",
       `${gitRepo ? "git" : "非 git"}：上层也写过时，深层那处照样先扫，成片不能被预算挤掉：${JSON.stringify(got.incomplete)}`);
   }
+  // 被忽略的入口比排序额度（4000）还多，任务自己写过的那个入口排在最后：它照样要先扫，不能
+  // 因为没轮上排序就被扔到所有普通入口后面。
+  const manyRepo = join(stage, "manyrepo");
+  mkdirSync(manyRepo, { recursive: true });
+  execFileSync("git", ["-C", manyRepo, "init", "-q"]);
+  writeFileSync(join(manyRepo, ".gitignore"), "/d*/\n/zz-mine/\n");
+  for (let d = 0; d <= 4000; d += 1) {
+    const dir = join(manyRepo, `d${String(d).padStart(4, "0")}`);
+    mkdirSync(dir);
+    for (let i = 0; i < 10; i += 1) writeFileSync(join(dir, `${i}.txt`), "");
+  }
+  mkdirSync(join(manyRepo, "zz-mine"));
+  writeFileSync(join(manyRepo, "zz-mine/final.png"), png);
+  utimesSync(join(manyRepo, "zz-mine/final.png"), minutes(T, 5), minutes(T, 5));
+  await db.insert(projects).values({ id: "pm", name: "manyrepo", repoPath: manyRepo, createdAt: iso(T) });
+  await runTask("Many00000015", T, minutes(T, 15), { dir: manyRepo, project: "pm" });
+  await recordTaskWrites("Many00000015", "s-Many00000015", { kind: "writes", paths: [join(manyRepo, "zz-mine/render.py")] }, iso(minutes(T, 2)));
+  const many = await readTaskArtifacts("Many00000015", { ...repoRoot, path: manyRepo, repo: manyRepo, projectId: "pm" });
+  assert.equal(conf(many, "zz-mine/final.png"), "exact", `重点入口排在排序额度之外也要先扫：${JSON.stringify(many.incomplete)}`);
 
   // ── 3e. 没比全就如实降级 ──────────────────────────────────────────────────
   // 同一个目录里同时在跑的任务多到核不过来：没核到的那些里可能就有离得更近的人，不能判「是它的」。
@@ -388,6 +435,72 @@ rl.on('line', (line) => {
   const crowded = await crowdConf();
   assert.equal(crowded.at, "approx", "超过上限、没核全：只能当候选");
   assert.ok(crowded.got.incomplete.some((note) => note.includes("没能逐个比对")), `没比全要说出来：${JSON.stringify(crowded.got.incomplete)}`);
+
+  // ── 3e'. 后来的记录不能回头改判早先的成品 ─────────────────────────────────────
+  // A、B 曾同时在跑，A 的网页那时就做完了。B 两小时后续聊，只在 A 的网页旁边写了一份说明。
+  const late = join(stage, "late");
+  mkdirSync(join(late, "videos/a/deep"), { recursive: true });
+  await db.insert(projects).values({ id: "pl", name: "late", repoPath: late, createdAt: iso(T) });
+  const lateRoot = { ...root, path: late, projectId: "pl" };
+  await runTask("LateA0000012", T, minutes(T, 40), { dir: late, project: "pl" });
+  await runTask("LateB0000013", T, minutes(T, 40), { dir: late, project: "pl" });
+  await recordTaskWrites("LateA0000012", "s-LateA0000012", { kind: "writes", paths: [join(late, "videos/a/build.py")] }, iso(minutes(T, 2)));
+  await recordTaskWrites("LateB0000013", "s-LateB0000013", { kind: "writes", paths: [join(late, "videos/b/build.py")] }, iso(minutes(T, 2)));
+  writeFileSync(join(late, "videos/a/deep/final.html"), "<p>A</p>");
+  utimesSync(join(late, "videos/a/deep/final.html"), minutes(T, 20), minutes(T, 20));
+  const lateConf = async (id: string) => conf(await readTaskArtifacts(id, lateRoot), "videos/a/deep/final.html");
+  assert.equal(await lateConf("LateA0000012"), "exact");
+  await db.insert(sessions).values({
+    id: "s-LateB-2", taskId: "LateB0000013", role: "main", agentType: "claude", executor: "claude", cwd: late,
+    startedAt: iso(minutes(T, 120)), endedAt: iso(minutes(T, 140)), turnStartedAt: iso(minutes(T, 120)), exitStatus: 0,
+    cliSessionId: "cli-LateB-2", commandLine: "claude -p", activeMs: 20 * 60 * 1000,
+    turnsStarted: 1, turnsBase: 0, turnsBaseApprox: false, turnsLost: 0,
+  });
+  await db.insert(sessionTurns).values({ id: "t-LateB-2", sessionId: "s-LateB-2", taskId: "LateB0000013", cwd: late, startedAt: iso(minutes(T, 120)), endedAt: iso(minutes(T, 140)) });
+  await recordTaskWrites("LateB0000013", "s-LateB-2", { kind: "writes", paths: [join(late, "videos/a/deep/later.md")] }, iso(minutes(T, 130)));
+  assert.equal(await lateConf("LateA0000012"), "exact", "两小时后别人在旁边写的说明，不能把 A 早就做完的网页改判出去");
+  assert.equal(await lateConf("LateB0000013"), null, "B 那份说明是网页做完之后才有的，不能拿来认领它");
+
+  // 裁决本身读失败（写入位置那张表读不了）：核不了不等于没别人，按时间认的一律当候选。
+  await db.run(sql`ALTER TABLE task_writes RENAME TO task_writes_off`);
+  try {
+    const broken = await readTaskArtifacts("LateA0000012", lateRoot);
+    assert.equal(conf(broken, "videos/a/deep/final.html"), "approx", "裁决失败不能退回「确定」");
+    assert.ok(broken.error?.includes("写入位置"), `失败要说出来：${broken.error}`);
+  } finally {
+    await db.run(sql`ALTER TABLE task_writes_off RENAME TO task_writes`);
+  }
+
+  // ── 3e''. 任务分支证明只替分支那一版作保 ─────────────────────────────────────
+  // 任务的 worktree 清理掉了、分支还在，面板退回主仓展示。主仓里这条路径后来被别的任务提交成了
+  // 另一版：分支差异只证明「它的分支改过这条路径」，磁盘上这份不是它的那一版。
+  const branchRepo = join(stage, "branchrepo");
+  mkdirSync(branchRepo, { recursive: true });
+  const bgit = (args: string[]) => execFileSync("git", ["-C", branchRepo, ...args]);
+  bgit(["init", "-q", "-b", "main"]);
+  bgit(["config", "user.email", "t@t"]);
+  bgit(["config", "user.name", "t"]);
+  writeFileSync(join(branchRepo, "README.md"), "base");
+  bgit(["add", "."]);
+  bgit(["commit", "-q", "-m", "base"]);
+  bgit(["checkout", "-q", "-b", "ash/Branch00"]);
+  writeFileSync(join(branchRepo, "report.html"), "<p>A version</p>");
+  writeFileSync(join(branchRepo, "keep.png"), png);
+  bgit(["add", "."]);
+  bgit(["commit", "-q", "-m", "A"]);
+  bgit(["checkout", "-q", "main"]);
+  writeFileSync(join(branchRepo, "report.html"), "<p>B version</p>");
+  writeFileSync(join(branchRepo, "keep.png"), png);
+  bgit(["add", "."]);
+  bgit(["commit", "-q", "-m", "B"]);
+  await db.insert(projects).values({ id: "pb", name: "branchrepo", repoPath: branchRepo, createdAt: iso(T) });
+  await runTask("Branch000014", T, minutes(T, 30), {
+    dir: join(branchRepo, ".worktrees/Branch000014"), project: "pb", extra: { useWorktree: true, mergeTargetBranch: "main" },
+  });
+  const branchRead = await readTaskArtifacts("Branch000014", { ...repoRoot, path: branchRepo, repo: branchRepo, projectId: "pb" });
+  assert.equal(branchRead.error, null, `${branchRead.error}`);
+  assert.equal(conf(branchRead, "keep.png"), "exact", "磁盘上这份就是分支那一版：分支证明照旧成立");
+  assert.equal(conf(branchRead, "report.html"), "approx", "磁盘上是别人后来提交的另一版：不能凭分支差异标成确定");
 
   // ── 3f. 对手按目录找：别的项目、开在上层目录的都算 ────────────────────────────
   // 另一个项目登记在上层目录，它的任务在那儿跑、往这个目录的 videos/upper 里写东西。按项目找

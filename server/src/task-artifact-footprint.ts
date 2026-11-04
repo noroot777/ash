@@ -50,6 +50,45 @@ interface Footprint {
   weak: string[][];
 }
 
+/** 一处写入位置，连同它**从什么时候起**成立（写入记录的首次时刻、哨兵的起点）。 */
+interface Mark {
+  segs: string[];
+  at: number;
+}
+
+/** 一个任务全部的写入位置，带时刻；判某一刻的文件时先用 `asOf` 截到那一刻。 */
+interface Trail {
+  strong: Mark[];
+  weak: Mark[];
+}
+
+/**
+ * 写入记录比文件晚到这么久以内仍算「当时就在」：写文件工具的结果是写完之后才回来的，记录端
+ * 落库又在那之后，同一次写入的记录时刻天然比文件的修改时刻晚一点。
+ */
+const EVIDENCE_SKEW_MS = 60 * 1000;
+
+/**
+ * 判 `at` 那一刻落下的文件时，这个任务的哪些写入位置能拿来作证：那一刻**已经成立**的，加上跟
+ * 那一刻落在**同一段运行区间**里的。
+ *
+ * **后来另起一段才有的证据不能回头改判早先的文件**（复审第 1 轮 #1）：两个任务曾同时在跑，其中
+ * 一个两小时后续聊、在对方成品旁边写了一份说明——拿整个生命周期的记录来比，对方那份早就做完、
+ * 一个字没改的网页会被判给它。
+ *
+ * 同一段区间里稍晚才有的记录照算：那是同一趟活。后台哨兵常常是先跑出了几个文件之后才挂上的，
+ * 一刀切成「必须早于文件」的话，老任务（只有哨兵目录可比）在自己那段区间里出的东西全成了
+ * 拿不准，最初那次串台又以候选的形式回来了（实测起因那两个任务：0 个 → 300 多个）。
+ */
+const asOf = (trail: Trail | undefined, at: number | null, windows: readonly RunWindow[]): Footprint => {
+  const sameRun = (mark: Mark) => at !== null
+    && windows.some((w) => w.start <= Math.min(at, mark.at) && Math.max(at, mark.at) <= w.end);
+  const keep = (marks: Mark[]) => marks
+    .filter((mark) => at !== null && (mark.at <= at + EVIDENCE_SKEW_MS || sameRun(mark)))
+    .map((mark) => mark.segs);
+  return trail ? { strong: keep(trail.strong), weak: keep(trail.weak) } : { strong: [], weak: [] };
+};
+
 const ALONE: FootprintArbiter = { judge: () => "alone", focus: [] };
 
 const segmentsOf = (rel: string) => rel.split(/[\\/]/).filter(Boolean);
@@ -160,13 +199,13 @@ async function collaborators(candidates: string[], ownerIds: readonly string[], 
   return out;
 }
 
-/** 这些任务各自在工作区根底下写过哪些目录。根外面的不算（那是别处的活）。 */
-async function footprints(ids: string[], root: WorkspaceRoot, lens: PathLens): Promise<Map<string, Footprint>> {
-  const out = new Map<string, Footprint>(ids.map((id) => [id, { strong: [], weak: [] }]));
+/** 这些任务各自在工作区根底下写过哪些目录、从什么时候起。根外面的不算（那是别处的活）。 */
+async function footprints(ids: string[], root: WorkspaceRoot, lens: PathLens): Promise<Map<string, Trail>> {
+  const out = new Map<string, Trail>(ids.map((id) => [id, { strong: [], weak: [] }]));
   if (!ids.length) return out;
   const [writeRows, monitorRows] = await Promise.all([
     db.select().from(taskWrites).where(inArray(taskWrites.taskId, ids)),
-    db.select({ taskId: monitors.taskId, cwd: monitors.cwd }).from(monitors)
+    db.select({ taskId: monitors.taskId, cwd: monitors.cwd, at: monitors.startedAt }).from(monitors)
       .where(and(inArray(monitors.taskId, ids), ne(monitors.cwd, ""))),
   ]);
   const rootPath = await lens.canonical(root.path);
@@ -175,19 +214,21 @@ async function footprints(ids: string[], root: WorkspaceRoot, lens: PathLens): P
     if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
     return segmentsOf(rel);
   };
-  const add = (id: string, strength: keyof Footprint, segs: string[] | null) => {
-    if (segs) out.get(id)?.[strength].push(segs);
+  const add = (id: string, strength: keyof Trail, segs: string[] | null, at: string | null) => {
+    const ms = Date.parse(at ?? "");
+    // 说不出从什么时候起的记录，哪一刻都不能拿来作证。
+    if (segs && Number.isFinite(ms)) out.get(id)?.[strength].push({ segs, at: ms });
   };
   for (const row of writeRows) {
     // 写文件工具记的是**文件**，比的是它所在的目录；命令记的本来就是目录。
-    add(row.taskId, row.weak ? "weak" : "strong", await under(row.weak ? row.path : dirname(row.path)));
+    add(row.taskId, row.weak ? "weak" : "strong", await under(row.weak ? row.path : dirname(row.path)), row.firstAt);
   }
   // 哨兵的工作目录：后台渲染、长跑脚本的产物多半就落在那儿，算强证据。
-  for (const row of monitorRows) if (row.cwd) add(row.taskId, "strong", await under(row.cwd));
+  for (const row of monitorRows) if (row.cwd) add(row.taskId, "strong", await under(row.cwd), row.at);
   return out;
 }
 
-const hasPrint = (print: Footprint | undefined) => !!print && (print.strong.length > 0 || print.weak.length > 0);
+const hasPrint = (print: Footprint) => print.strong.length > 0 || print.weak.length > 0;
 
 /**
  * 给共享目录上的这次查询配一个裁决者。目录独占、没跑过的，用不着裁决。
@@ -195,6 +236,9 @@ const hasPrint = (print: Footprint | undefined) => !!print && (print.strong.leng
  * 判法（对一个修改时间落在本任务区间里的文件）：
  *   1. 找出同一刻**也在**这个目录里跑的别的任务。没有 → `alone`，照旧按时间认。
  *   2. 本任务一条写入记录都没有（老任务、没接上的执行器）→ `unsure`：拿不出证据就不硬判。
+ *
+ * 2–5 里说的「写入记录」只认这个文件落下时已经有的、或者跟它同一段运行区间里的（`asOf`）：
+ * 之后另起一段才有的记录不参赛。
  *   3. 有写入记录的对手里，有人比本任务离这个文件更近 → `theirs`，从清单里拿掉。
  *   4. 本任务严格最近、而且所有对手都有写入记录可比 → `mine`，归属确定。
  *   5. 其余（一样近、或者有对手没记录可比）→ `unsure`，留作候选。
@@ -228,12 +272,13 @@ export async function footprintArbiter(
     : undefined;
 
   const prints = await footprints([...ownerIds, ...rivals.map((rival) => rival.id)], root, lens);
-  const mine: Footprint = { strong: [], weak: [] };
+  const mine: Trail = { strong: [], weak: [] };
   for (const id of ownerIds) {
     const print = prints.get(id);
     if (print) { mine.strong.push(...print.strong); mine.weak.push(...print.weak); }
   }
-  const focus = [...new Set(mine.strong.filter((segs) => segs.length > 0).map((segs) => segs.join("/")))];
+  // 扫描顺序不吃时间：先扫它写过的地方，不管是什么时候写的。
+  const focus = [...new Set(mine.strong.filter((mark) => mark.segs.length > 0).map((mark) => mark.segs.join("/")))];
   if (!rivals.length && !incomplete) return { judge: () => "alone", focus };
 
   return {
@@ -242,15 +287,16 @@ export async function footprintArbiter(
     judge(relPath, mtimeMs) {
       const present = rivals.filter((rival) => withinWindows(mtimeMs, rival.windows));
       if (!present.length) return incomplete ? "unsure" : "alone";
-      if (!hasPrint(mine)) return "unsure";
+      const ownPrint = asOf(mine, mtimeMs, scope.windows);
+      if (!hasPrint(ownPrint)) return "unsure";
       const dir = segmentsOf(relPath).slice(0, -1);
-      const own = closeness(dir, mine);
+      const own = closeness(dir, ownPrint);
       let best: [number, number] = [0, 0];
       let blind = false;
       for (const rival of present) {
-        const print = prints.get(rival.id);
+        const print = asOf(prints.get(rival.id), mtimeMs, rival.windows);
         if (!hasPrint(print)) { blind = true; continue; }
-        const theirs = closeness(dir, print!);
+        const theirs = closeness(dir, print);
         if (compare(theirs, best) > 0) best = theirs;
       }
       if (compare(best, own) > 0 && (best[0] > 0 || best[1] > 0)) return "theirs";

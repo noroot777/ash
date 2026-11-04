@@ -423,11 +423,11 @@ async function* codexStreamEvents(
       else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text + "\n\n" });
       else if (it.type === "command_execution") {
         push({ kind: "tool", name: "exec", detail: shortStr(it.command) });
-        const cwd = codexCommandCwd(it);
+        const cwd = codexCommandCwd(it, contextOptions.cwd);
         if (cwd) push(cwd);
       } else if (it.type === "file_change" || it.type === "patch") {
         push({ kind: "tool", name: "edit", detail: shortStr(it.path ?? it.summary) });
-        const writes = codexChangeWrites(it);
+        const writes = codexChangeWrites(it, contextOptions.cwd);
         if (writes) push(writes);
       }
       else if (it.type === "mcp_tool_call") {

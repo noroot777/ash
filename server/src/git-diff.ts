@@ -155,7 +155,7 @@ export async function taskBranchChangedPaths(
   taskId: string,
   requestedTarget: string | null | undefined,
   startCommit?: string | null,
-): Promise<{ available: boolean; paths: string[]; reason?: string }> {
+): Promise<{ available: boolean; paths: string[]; reason?: string; sourceBranch?: string }> {
   const repo = expandHome(repoPath);
   const range = await taskBranchRange(repo, taskId, requestedTarget, startCommit);
   if (!range.ok) return { available: false, paths: [], reason: range.reason };
@@ -165,7 +165,8 @@ export async function taskBranchChangedPaths(
       ["-C", repo, "diff", "--name-only", "-z", range.mergeBase, range.sourceBranch],
       { maxBuffer: 16 * 1024 * 1024 },
     );
-    return { available: true, paths: stdout.split("\0").filter(Boolean) };
+    // 分支名一并交回：调用方要拿分支末端那份内容跟磁盘上现在这份比（task-artifact-version.ts）。
+    return { available: true, paths: stdout.split("\0").filter(Boolean), sourceBranch: range.sourceBranch };
   } catch {
     return { available: false, paths: [], reason: "task_diff_unreadable" };
   }

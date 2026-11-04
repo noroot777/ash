@@ -58,7 +58,7 @@ export function parseClaudeStream(
   // 第 5 轮 R1)。所以 sink 在这里建好传进去,由 push 同步进账,这一层只负责收口。
   const images = markdownImageSink(cwd, accounting);
   return settleMarkdownImages(
-    claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, images, cliSessionId),
+    claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, images, cliSessionId, cwd),
     images,
   );
 }
@@ -73,6 +73,7 @@ async function* claudeStreamEvents(
   waitNoticeMs: number,
   images: MarkdownImageSink,
   cliSessionId?: string,
+  cwd?: string,
 ): AsyncIterable<AgentEvent> {
   // 队列、唤醒、收尾、增量合并、子活动合并和**图片记账的时点**都在这条共用流水线里
   // (见 event-queue.ts)。顺序是硬要求:字节在 `delta`/`push` 的那一刻就冻住,交代排在
@@ -98,7 +99,7 @@ async function* claudeStreamEvents(
   let contextModel: string | null = null;
   const seenImages: ImageStore = imageStore();
   // 写文件调用要等结果没报错才算写过（见 tool-writes.ts），主会话与子智能体共用这一本。
-  const writeLedger = new ClaudeWriteLedger();
+  const writeLedger = new ClaudeWriteLedger(cwd);
   const childImages = new Map<string, ImageStore>();
   const nativeWork = new NativeWorkTrace();
   // claude 自带 `Monitor` 工具的只读投影（见 ../claude-monitors.ts）。放在这一层的理由：
