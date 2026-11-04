@@ -25,7 +25,7 @@ import {
   PLAIN_SUMMARY_EXAMPLE, PLAIN_SUMMARY_GUIDE, RECURS_FIELD_GUIDE, REVIEW_VALIDATION_REQUIREMENT,
 } from "@ash/shared/free-workflow";
 import { call, fail, ok } from "../runtime.js";
-import { TASK_STAGE } from "../schemas.js";
+import { RECURS, TASK_STAGE } from "../schemas.js";
 
 export function registerTaskTurnTools(server: McpServer): void {
 server.registerTool(
@@ -44,9 +44,8 @@ server.registerTool(
         generation: z.string().min(1),
         monitorIds: z.array(z.string().min(1)).min(1),
       }).optional().describe("正常情况不要传。两种例外——① 上报被拒、说这是「口径切换前开的旧审查轮次」:按它说的交 monitorIds,**要的是一次本轮真实执行**(构建、冒烟、浏览器点检都算),不要为此去跑回归;② 重放旧回合那条没投递成功的 report_stage 时原样带回当时的值"),
-      // 类型放宽成 any 是故意的：这一栏**填错只能按没填算**，不能让 schema 校验把整份结论拒掉
-      //（服务端 `parseCarries` 认三种写法，读不懂的一条都不落）。
-      recurs: z.any().optional().describe(RECURS_FIELD_GUIDE),
+      // 形状不对当场拒（见 `RECURS`）：拒的是这一次调用，审查者拿到错误同一回合里重发，结论不丢。
+      recurs: RECURS.optional().describe(RECURS_FIELD_GUIDE),
       directionToken: z.string().min(1).describe("最新用户方向附带的 directionToken；必须原样传入，不能省略或沿用更早消息里的值"),
     },
   },
