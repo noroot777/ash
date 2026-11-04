@@ -21,7 +21,7 @@
 // 外来的任务 id 不是授权证明,导入时核不过就不绑定;消费侧再按项目兜一遍,任何写入口漏了都
 // 不会让一条消息跟着别的项目的任务完成而放行。跨机交接带的是**已等到**这个事实本身
 // (`afterDoneAt`,导出前按完成计数求一次,handoff-messages.ts),不是让目标机重新去猜。
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { TASK_STATUS_LABELS } from "@ash/shared";
 import { db } from "./db/index.js";
@@ -104,47 +104,76 @@ export function afterGateOf(
   return { ...NOT_AFTER, afterWaitReason: `等前置任务${name}完成（当前：${label}）` };
 }
 
-/** 给一批消息贴上前置判定。非 after 的原样返回(afterDone=false 对它们不起作用)。
- * 判到等到了而行上还没锁存的,按**消息 id** 补锁并让托盘重拉 —— 只锁这几行,不按前置 id 扩散。
+const factColumns = {
+  id: tasks.id, projectId: tasks.projectId, title: tasks.title, mode: tasks.mode, status: tasks.status,
+  archived: tasks.archived, endedAt: tasks.endedAt, doneSeq: tasks.doneSeq,
+};
+type TaskFact = AfterTaskFacts & { projectId: string };
+
+/** 纯计算:按前置事实给每条消息贴判定;刚判到等到、行上还没锁存的,带上要补锁的时刻。
  * 前置跟接收任务不在同一项目的一律当查不到:依赖只在写入口核过的范围内成立(见文件头)。 */
-export async function withAfterGates<T extends AfterRow>(rows: T[]): Promise<(T & AfterGate)[]> {
-  const open = rows.filter((m) => m.mode === "after" && m.afterTaskId && !m.afterDoneAt);
-  const ids = [...new Set(open.flatMap((m) => [m.afterTaskId!, m.taskId]))];
-  const facts = ids.length
-    ? await db
-      .select({
-        id: tasks.id, projectId: tasks.projectId, title: tasks.title, mode: tasks.mode, status: tasks.status,
-        archived: tasks.archived, endedAt: tasks.endedAt, doneSeq: tasks.doneSeq,
-      })
-      .from(tasks)
-      .where(inArray(tasks.id, ids))
-    : [];
+function gateRows<T extends AfterRow>(rows: T[], facts: TaskFact[]): { gated: (T & AfterGate)[]; latch: (T & AfterGate)[] } {
   const byId = new Map(facts.map((t) => [t.id, t] as const));
   const predecessor = (m: T) => {
     const after = m.afterTaskId ? byId.get(m.afterTaskId) : undefined;
     return after && after.projectId === byId.get(m.taskId)?.projectId ? after : null;
   };
   const at = new Date().toISOString();
-  const latch: string[] = [];
+  const latch: (T & AfterGate)[] = [];
   const gated = rows.map((m) => {
     if (m.mode !== "after") return { ...m, ...NOT_AFTER };
     const gate = afterGateOf(m, predecessor(m));
     if (!gate.afterDone || m.afterDoneAt) return { ...m, ...gate };
-    latch.push(m.id);
     const doneAt = gate.afterEndedAt ?? at;
-    return { ...m, ...gate, afterDoneAt: doneAt, afterEndedAt: doneAt };
+    const row = { ...m, ...gate, afterDoneAt: doneAt, afterEndedAt: doneAt };
+    latch.push(row);
+    return row;
   });
-  if (latch.length) {
-    for (const m of gated) {
-      if (!latch.includes(m.id)) continue;
-      await db.update(scheduledMessages).set({ afterDoneAt: m.afterDoneAt })
-        .where(and(eq(scheduledMessages.id, m.id), isNull(scheduledMessages.afterDoneAt)));
-    }
-    const { publishPendingMessages } = await import("./pending-messages.js");
-    for (const taskId of new Set(gated.filter((m) => latch.includes(m.id)).map((m) => m.taskId))) {
-      publishPendingMessages(taskId);
-    }
+  return { gated, latch };
+}
+
+/** 补锁存:按**消息 id** 写、只写还空着的 —— 只锁这几行,不按前置 id 扩散;写完让托盘重拉。 */
+async function latchRows(rows: AfterRow[]): Promise<void> {
+  if (!rows.length) return;
+  for (const m of rows) {
+    await db.update(scheduledMessages).set({ afterDoneAt: m.afterDoneAt })
+      .where(and(eq(scheduledMessages.id, m.id), isNull(scheduledMessages.afterDoneAt)));
   }
+  const { publishPendingMessages } = await import("./pending-messages.js");
+  for (const taskId of new Set(rows.map((m) => m.taskId))) publishPendingMessages(taskId);
+}
+
+/** 给一批消息贴上前置判定。非 after 的原样返回(afterDone=false 对它们不起作用)。判到等到了而
+ * 行上还没锁存的顺手补锁。调用方传进来的行要是刚从库里读的 —— 跨进程冻结用 `freezePendingWithAfterGates`。 */
+export async function withAfterGates<T extends AfterRow>(rows: T[]): Promise<(T & AfterGate)[]> {
+  const open = rows.filter((m) => m.mode === "after" && m.afterTaskId && !m.afterDoneAt);
+  const ids = [...new Set(open.flatMap((m) => [m.afterTaskId!, m.taskId]))];
+  const facts = ids.length ? await db.select(factColumns).from(tasks).where(inArray(tasks.id, ids)) : [];
+  const { gated, latch } = gateRows(rows, facts);
+  await latchRows(latch);
+  return gated;
+}
+
+/**
+ * 交接载荷的冻结点:按消息 id **重读**这批消息与它们的前置任务,两份事实出自同一个 batch
+ * (一个 BEGIN…COMMIT,中间没有让出点,见 db/node-sqlite-client.ts),再按这一份视图判定。
+ * 调用方早先读到的行只用来定「是哪几条」:打包要花一阵,期间前置可能完成、被锁存、再被删 ——
+ * 旧对象上的空锁存、已不存在的前置,都会把一条已经等到的消息降回「没等到」。已不在 pending 的
+ * (期间被撤回/取消)不再交出去。按传入的 id 顺序返回。
+ */
+export async function freezePendingWithAfterGates(messageIds: string[]): Promise<(typeof scheduledMessages.$inferSelect & AfterGate)[]> {
+  if (!messageIds.length) return [];
+  const picked = and(inArray(scheduledMessages.id, messageIds), eq(scheduledMessages.status, "pending"));
+  const [rows, facts] = await db.batch([
+    db.select().from(scheduledMessages).where(picked),
+    db.select(factColumns).from(tasks).where(or(
+      inArray(tasks.id, db.select({ id: scheduledMessages.afterTaskId }).from(scheduledMessages).where(picked)),
+      inArray(tasks.id, db.select({ id: scheduledMessages.taskId }).from(scheduledMessages).where(picked)),
+    )),
+  ]);
+  const order = new Map(messageIds.map((mid, index) => [mid, index] as const));
+  const { gated, latch } = gateRows(rows.sort((a, b) => order.get(a.id)! - order.get(b.id)!), facts);
+  await latchRows(latch);
   return gated;
 }
 

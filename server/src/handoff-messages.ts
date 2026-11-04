@@ -3,14 +3,14 @@ import { HandoffError, type HandoffMessagePayload } from "./handoff-types.js";
 import { id } from "./util.js";
 
 /**
- * 冻结交接载荷里的待发送消息。等前置任务的那几条**此刻**按完成计数求一次「等到了没」
- * (withAfterGates,顺手锁存):前置任务一般不跟着过来,目标机只能读这份事实,读不到源机的
- * 计数。快照读得早、打包又慢,所以放在载荷成形这一刻求,而不是沿用打包前读到的那几行。
- * 这一刻之后前置才完成的,目标机看不到 —— 那条在目标机落成「前置不在本机」,托盘给直接发送。
+ * 冻结交接载荷里的待发送消息。前置任务一般不跟着过来,目标机只能读这份「等到了没」,读不到
+ * 源机的计数,所以在载荷成形这一刻按消息 id 重读消息与前置、同一份视图判定(顺手锁存),
+ * 而不是沿用打包前读到的那几行(freezePendingWithAfterGates)。这一刻之后前置才完成的,
+ * 目标机看不到 —— 那条在目标机落成「前置不在本机」,托盘给直接发送。
  */
-export async function exportHandoffMessages(messages: (typeof scheduledMessages.$inferSelect)[]): Promise<HandoffMessagePayload[]> {
-  const { withAfterGates } = await import("./pending-after.js");
-  return (await withAfterGates(messages)).map(exportHandoffMessage);
+export async function exportHandoffMessages(messageIds: string[]): Promise<HandoffMessagePayload[]> {
+  const { freezePendingWithAfterGates } = await import("./pending-after.js");
+  return (await freezePendingWithAfterGates(messageIds)).map(exportHandoffMessage);
 }
 
 /** 单条映射;交接载荷走上面的 `exportHandoffMessages`(先按完成计数求过)。 */

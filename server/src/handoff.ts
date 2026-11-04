@@ -522,7 +522,7 @@ export async function exportHandoff(
         acceptGateRuns: await collectGateRuns(task.id),
         git: gitState,
         uploads,
-        messages: await exportHandoffMessages(pendingMsgs),
+        messages: await exportHandoffMessages(pendingMsgs.map((message) => message.id)),
         schedule: scheduleRow
           ? {
               kind: scheduleRow.kind, at: scheduleRow.at, cron: scheduleRow.cron,

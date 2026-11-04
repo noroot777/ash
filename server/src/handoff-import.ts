@@ -466,13 +466,19 @@ async function importValidated(
   // 对端的完成计数在这台机器上没有意义;核不过就不绑定(落成「前置不在本机」,托盘给直接发送)。
   // 源机已经等到的(`afterDoneAt`)原样认,依赖本身是否成立已经不重要了。
   const afterDeps = new Map<string, { afterTaskId: string; afterSeq: number } | null>();
+  const unboundReasons = new Set<string>();
   for (const msg of messages) {
     if (msg.mode !== "after" || typeof msg.afterTaskId !== "string" || afterDeps.has(msg.afterTaskId)) continue;
     const target = await resolveAfterTarget({ afterTaskId: msg.afterTaskId, taskId: m.task.id, projectId: project.id });
     afterDeps.set(msg.afterTaskId, target.ok ? { afterTaskId: msg.afterTaskId, afterSeq: target.afterSeq } : null);
+    // 核不过的原因照实说(不在本机 / 别的项目 / 调度台 / 等自己),别都说成「不在本机」。
+    if (!target.ok && !(typeof msg.afterDoneAt === "string" && msg.afterDoneAt)) {
+      unboundReasons.add(target.status === 404 ? "前置任务不在本机" : target.error);
+    }
   }
-  const unbound = [...afterDeps.values()].filter((dep) => !dep).length;
-  if (unbound) notes.push(`${unbound} 个「等任务完成后发送」的前置任务不在本机项目里，相关消息没有绑定，可在托盘里直接发送或撤回`);
+  if (unboundReasons.size) {
+    notes.push(`有「等任务完成后发送」的消息没有绑定前置任务（${[...unboundReasons].join("；")}），可在托盘里直接发送或撤回`);
+  }
   const afterDep = (msg: (typeof messages)[number]) =>
     msg.mode === "after" && typeof msg.afterTaskId === "string" ? afterDeps.get(msg.afterTaskId) ?? null : null;
   const messageRows = messages.map((msg) => ({
