@@ -494,6 +494,8 @@ api.get("/events", (c) =>
     await filter.refresh();
     const unsub = bus.subscribe((ev) => {
       if (!filter.allow(ev)) return;
+      // 「这一步写到了哪里」只给服务端记账（task-writes.ts），展示端用不上，不往线上推。
+      if (ev.type === "agent.event" && ev.event.kind === "writes") return;
       stream.writeSSE({ data: JSON.stringify(ev) }).catch(() => {});
     });
     stream.onAbort(() => {

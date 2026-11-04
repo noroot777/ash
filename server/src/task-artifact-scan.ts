@@ -145,6 +145,7 @@ export interface ScanOutcome {
 async function orderedIgnoredEntries(
   rootPath: string,
   windows: readonly RunWindow[],
+  focus: readonly string[],
   incomplete: string[],
 ): Promise<string[]> {
   const { stdout } = await exec("git", [
@@ -174,7 +175,8 @@ async function orderedIgnoredEntries(
       const mtime = info && Number.isFinite(info.mtimeMs) ? info.mtimeMs : 0;
       // 0 = 这一档自己就在区间里动过；1 = 区间之后才动过（仍可能装着区间里的文件）；
       // 2 = 区间之前就没再动过（只可能装着后来被改写的旧文件）。
-      const rank = withinWindows(mtime, windows) ? 0 : (mtime > latestEnd ? 1 : 2);
+      // -1 = 任务自己写过的那几处（或装着它们的上层）：比时间更直接的线索，排在最前。
+      const rank = touchesFocus(rel, focus) ? -1 : withinWindows(mtime, windows) ? 0 : (mtime > latestEnd ? 1 : 2);
       return { rel, rank, mtime };
     }));
     ranked.push(...batch);
@@ -185,7 +187,18 @@ async function orderedIgnoredEntries(
   return ranked.map((entry) => entry.rel);
 }
 
-/** 走一棵子树，把能看的文件挑出来。带深度、条数双上限，撞上就记一句、停。 */
+/** `rel` 跟某个重点目录是同一处、在它底下、或者装着它。 */
+const touchesFocus = (rel: string, focus: readonly string[]) =>
+  focus.some((dir) => rel === dir || rel.startsWith(`${dir}/`) || dir.startsWith(`${rel}/`));
+
+/** 去掉被别的重点目录装着的那几个——先走外层就够了，里层会被再走一遍。 */
+const outermost = (focus: readonly string[]) =>
+  focus.filter((dir) => !focus.some((other) => other !== dir && dir.startsWith(`${other}/`)));
+
+/**
+ * 走一棵子树，把能看的文件挑出来。带深度、条数双上限，撞上就记一句、停。
+ * `walked` 里的子树已经走过了（重点目录先走的那几棵），这一趟跳过。
+ */
 async function walkForArtifacts(
   rootPath: string,
   relDir: string,
@@ -193,6 +206,7 @@ async function walkForArtifacts(
   found: Set<string>,
   profiles: Map<string, boolean>,
   incomplete: string[],
+  walked: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   const queue: { rel: string; depth: number }[] = [{ rel: relDir, depth: 0 }];
   let unreadable = 0;
@@ -217,7 +231,7 @@ async function walkForArtifacts(
       if (budget.entries-- <= 0) break;
       const rel = current.rel ? `${current.rel}/${dirent.name}` : dirent.name;
       if (dirent.isDirectory()) {
-        if (skipsDirPath(rel)) continue;
+        if (skipsDirPath(rel) || walked.has(rel)) continue;
         queue.push({ rel, depth: current.depth + 1 });
       } else if (dirent.isFile() && kindOf(dirent.name)) {
         if (await insideBrowserProfile(rootPath, current.rel || ".", profiles)) break; // 整个目录都在 profile 里
@@ -234,11 +248,16 @@ async function walkForArtifacts(
  *
  * `windows` 只用来排优先级（预算花在最可能有产出的地方），**不在这里做时间筛选**：独占
  * 工作区整个不吃时间判据，筛不筛由调用方按归属证据决定。
+ *
+ * `focus` 是任务自己写过的目录（相对根，见 task-artifact-footprint.ts），同样只管顺序：先扫
+ * 这几处，预算不够时丢掉的是离它最远的那些。**不收窄范围**——命令可能把东西写到项目里
+ * 别的地方，收窄就漏了。
  */
 export async function scanIgnoredArtifacts(
   rootPath: string,
   gitRepo: boolean,
   windows: readonly RunWindow[],
+  focus: readonly string[] = [],
 ): Promise<ScanOutcome> {
   const paths = new Set<string>();
   const incomplete: string[] = [];
@@ -246,13 +265,20 @@ export async function scanIgnoredArtifacts(
   const budget = { entries: MAX_WALK_ENTRIES };
 
   if (!gitRepo) {
-    // 不是 git 仓库：没有任何 git 线索，整棵树都得自己走。
-    await walkForArtifacts(rootPath, "", budget, paths, profiles, incomplete);
+    // 不是 git 仓库：没有任何 git 线索，整棵树都得自己走——任务写过的那几处先走。
+    // 写过之后又被删掉的目录不算「读不动」，直接不走。
+    const first: string[] = [];
+    for (const dir of outermost(focus)) {
+      if (skipsDirPath(dir)) continue;
+      if (await stat(join(rootPath, dir)).then((info) => info.isDirectory(), () => false)) first.push(dir);
+    }
+    for (const dir of first) await walkForArtifacts(rootPath, dir, budget, paths, profiles, incomplete);
+    await walkForArtifacts(rootPath, "", budget, paths, profiles, incomplete, new Set(first));
     if (budget.entries <= 0) incomplete.push("工作目录太大，只扫了一部分");
     return { paths, incomplete };
   }
 
-  for (const entry of await orderedIgnoredEntries(rootPath, windows, incomplete)) {
+  for (const entry of await orderedIgnoredEntries(rootPath, windows, focus, incomplete)) {
     if (budget.entries <= 0) break;
     const isDir = await stat(join(rootPath, entry)).then((info) => info.isDirectory(), () => false);
     if (isDir) {

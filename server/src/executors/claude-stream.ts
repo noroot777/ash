@@ -9,6 +9,7 @@ import type { AgentEvent, AgentType } from "@ash/shared";
 import { guessContextWindow } from "@ash/shared/usage";
 import { NativeWorkTrace } from "./native-work.js";
 import { childActivity } from "./native-agent-activity.js";
+import { claudeToolWrites } from "./tool-writes.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
@@ -189,6 +190,11 @@ async function* claudeStreamEvents(
         if (block.type === "tool_result") claudeMonitors.toolResult(block.tool_use_id, block.content);
         if (block.type === "tool_use") background.toolUse(block.name, block.id, block.input);
         if (block.type === "tool_result") background.toolResult(block.tool_use_id, block.is_error === true);
+        // 子智能体写的文件同样是这个任务写的（见 tool-writes.ts）。
+        if (block.type === "tool_use") {
+          const writes = claudeToolWrites(block.name, block.input);
+          if (writes) push(writes);
+        }
         // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
         // 收工具结果里那几张 base64 截图 —— 它们不是正文语法,按块交代就是对的。
         if (block.type === "tool_result") {
@@ -309,6 +315,8 @@ async function* claudeStreamEvents(
           background.toolUse(block.name, block.id, block.input);
           push(nativeWork.call(block.name, block.input, block.id)
             ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
+          const writes = claudeToolWrites(block.name, block.input);
+          if (writes) push(writes);
         }
       }
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload

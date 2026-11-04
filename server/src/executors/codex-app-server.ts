@@ -27,6 +27,7 @@ import { findArchivedRollout, findRollout, readCodexContext } from "./codex-roll
 import { archiveCodexThread, codexArchiveNotice, CODEX_ARCHIVE_TIMEOUT_MS } from "./codex-session-archive.js";
 import { pruneArchivedCodexDesktopThreads } from "./codex-desktop-catalog.js";
 import { CodexNativeCommands } from "./codex-native-commands.js";
+import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 import { isGoalExecution } from "@ash/shared/cli-commands";
 /** 一个 app-server 进程承载一个单飞回合，收尾归档后关闭；配置仍来自用户本机。 */
 export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
@@ -235,9 +236,15 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
 
   const handleItemStarted = (item: any) => {
     for (const activity of codexNativeWork(item)) push(activity);
-    if (item?.type === "commandExecution") push({ kind: "tool", name: "exec", detail: short(item.command) });
-    else if (item?.type === "fileChange") push({ kind: "tool", name: "edit", detail: short(item.changes) });
-    else if (item?.type === "mcpToolCall") push({ kind: "tool", name: `${item.server}/${item.tool}`, detail: short(item.arguments) });
+    if (item?.type === "commandExecution") {
+      push({ kind: "tool", name: "exec", detail: short(item.command) });
+      const cwd = codexCommandCwd(item);
+      if (cwd) push(cwd);
+    } else if (item?.type === "fileChange") {
+      push({ kind: "tool", name: "edit", detail: short(item.changes) });
+      const writes = codexChangeWrites(item);
+      if (writes) push(writes);
+    } else if (item?.type === "mcpToolCall") push({ kind: "tool", name: `${item.server}/${item.tool}`, detail: short(item.arguments) });
     else if (item?.type === "dynamicToolCall") push(nativeWork.call(item.tool, item.arguments, item.id)
       ?? { kind: "tool", name: item.tool, detail: short(item.arguments) });
     else if (item?.type === "imageGeneration") push({ kind: "tool", name: "image_gen", detail: short(item.revisedPrompt) });

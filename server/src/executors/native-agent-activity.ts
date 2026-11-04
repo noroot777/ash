@@ -1,6 +1,7 @@
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { codexErrorEvent } from "./codex-error-event.js";
 import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
+import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 
 export function childActivity(id: string, event: NativeAgentActivity): AgentEvent {
   return { kind: "tool", name: "Agent", nativeWork: { type: "activity", id, event, at: new Date().toISOString() } };
@@ -28,8 +29,16 @@ export class CodexChildActivity {
     } else if (method === "item/plan/delta") {
       if (p.delta) push({ kind: "thinking", text: p.delta });
     } else if (method === "item/started") {
-      if (item?.type === "commandExecution") push({ kind: "tool", name: "exec", detail: short(item.command) });
-      else if (item?.type === "fileChange") push({ kind: "tool", name: "edit", detail: short(item.changes) });
+      // 子线程写到的位置同样算这个任务的，直接放在顶层（不包进子智能体活动，见 tool-writes.ts）。
+      if (item?.type === "commandExecution") {
+        push({ kind: "tool", name: "exec", detail: short(item.command) });
+        const cwd = codexCommandCwd(item);
+        if (cwd) out.push(cwd);
+      } else if (item?.type === "fileChange") {
+        push({ kind: "tool", name: "edit", detail: short(item.changes) });
+        const writes = codexChangeWrites(item);
+        if (writes) out.push(writes);
+      }
       else if (item?.type === "mcpToolCall") push({ kind: "tool", name: `${item.server}/${item.tool}`, detail: short(item.arguments) });
       else if (item?.type === "dynamicToolCall") push({ kind: "tool", name: item.tool, detail: short(item.arguments) });
       else if (item?.type === "webSearch") push({ kind: "tool", name: "WebSearch", detail: short(item.query ?? item.action) });

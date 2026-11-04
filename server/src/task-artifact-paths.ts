@@ -41,6 +41,8 @@ export function pathLens() {
   };
 
   return {
+    /** 归一后的绝对路径（`realpath -m` 语义）。拿来比父子关系、数共同前缀。 */
+    canonical,
     async sameDir(a: string | null | undefined, b: string): Promise<boolean> {
       const left = (a ?? "").trim();
       if (!left) return false;

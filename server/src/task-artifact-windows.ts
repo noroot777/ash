@@ -1,4 +1,5 @@
 import { asc, inArray } from "drizzle-orm";
+import { relative, sep } from "node:path";
 import { db } from "./db/index.js";
 import { monitors } from "./db/schema-monitors.js";
 import { sessionTurns, sessions } from "./db/schema.js";
@@ -159,7 +160,11 @@ export async function runWindows(
   /**
    * 这条记录说的目录，跟我们正在看的这个**算不算同一摊活**。三档，别只留两档：
    *
-   *   `exact`     —— 就是这个目录。
+   *   `exact`     —— 就是这个目录，或者它底下的某个子目录（进子项目跑的命令、哨兵的工作目录
+   *                  常常是 `videos/<这一期>`——那仍然是在往这个工作区里写。漏掉这一档时，一个
+   *                  任务在子目录里挂的后台渲染整段不算它的运行时间，渲染出来的东西反被同时在跑
+   *                  的另一个任务认走）。别的任务的隔离工作区（`.worktrees/<任务>`、
+   *                  `.claude/worktrees/`）也长在这棵树下，但那是另一摊活，不算。
    *   `stale`     —— 记录下来的目录**已经不在了**（worktree 被删，面板因此降级到主仓展示），
    *                  或者那条老行压根没记目录。谁也无从查证它当时往哪儿写，而这个降级后的
    *                  目录是唯一还能展示的地方：接受，但算**宽的**（approx）。
@@ -178,6 +183,10 @@ export async function runWindows(
     const recorded = (cwd ?? fallback ?? "").trim();
     if (!recorded) return "stale";
     if (await lens.sameDir(recorded, root.path)) return "exact";
+    if (await lens.underDir(recorded, root.path)) {
+      const rel = relative(await lens.canonical(root.path), await lens.canonical(recorded));
+      return rel.split(sep).some((part) => part === ".worktrees" || part === ".claude") ? "elsewhere" : "exact";
+    }
     if (!root.repo || !(await lens.underDir(recorded, root.repo))) return "elsewhere";
     return (await lens.dirExists(recorded)) ? "elsewhere" : "stale";
   };

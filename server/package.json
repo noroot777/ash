@@ -212,6 +212,7 @@
     "test:file-browser": "tsx scripts/test-file-browser.ts",
     "test:task-file-raw": "tsx scripts/test-task-file-raw.ts",
     "test:task-artifacts": "tsx scripts/test-task-artifacts.ts",
+    "test:task-artifacts-concurrent": "tsx scripts/test-task-artifacts-concurrent.ts",
     "test:artifact-scope": "tsx scripts/test-task-artifact-scope.ts",
     "test:task-page": "tsx scripts/test-task-page.ts",
     "test:file-search": "tsx scripts/test-file-search.ts",

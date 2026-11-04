@@ -27,6 +27,7 @@ import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
 const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
 import { openCodexAppServer } from "./codex-app-server.js";
 import { readCodexAppServerState } from "./codex-app-server-state.js";
+import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
 // sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
@@ -420,8 +421,15 @@ async function* codexStreamEvents(
         push({ kind: "text", text: it.text + "\n\n" });
       }
       else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text + "\n\n" });
-      else if (it.type === "command_execution") push({ kind: "tool", name: "exec", detail: shortStr(it.command) });
-      else if (it.type === "file_change" || it.type === "patch") push({ kind: "tool", name: "edit", detail: shortStr(it.path ?? it.summary) });
+      else if (it.type === "command_execution") {
+        push({ kind: "tool", name: "exec", detail: shortStr(it.command) });
+        const cwd = codexCommandCwd(it);
+        if (cwd) push(cwd);
+      } else if (it.type === "file_change" || it.type === "patch") {
+        push({ kind: "tool", name: "edit", detail: shortStr(it.path ?? it.summary) });
+        const writes = codexChangeWrites(it);
+        if (writes) push(writes);
+      }
       else if (it.type === "mcp_tool_call") {
         for (const path of persistToolResultImages(it.result, seenImages)) push({ kind: "attachment", path });
       }

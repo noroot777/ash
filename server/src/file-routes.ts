@@ -15,6 +15,7 @@ import { openInIde, probeIdes } from "./openers/ide.js";
 import { listWorkspaceDir, searchWorkspaceFiles } from "./file-search.js";
 import { readFileGitStatus } from "./file-git-status.js";
 import { readTaskArtifacts } from "./task-artifacts.js";
+import { watchTaskWrites } from "./task-writes.js";
 import { pagePreviewNotice, taskPageUrlFor } from "./task-page.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -51,6 +52,10 @@ function publicRoot(root: WorkspaceRoot) {
 }
 
 export function mountFileRoutes(api: Hono) {
+  // 生成物面板的并发裁决靠「任务写过的位置」，记录从这一刻开始（见 task-writes.ts）。挂在
+  // 这里而不是 index.ts：「有这个读接口」和「有它要读的记录」是同一件事，隔离测试里也不会
+  // 只装一半。
+  watchTaskWrites();
   /** 解析任务根目录；解析不出来时由调用方把 404 交出去。 */
   const rootFor = async (taskId: string) => taskFileRoot(taskId);
 

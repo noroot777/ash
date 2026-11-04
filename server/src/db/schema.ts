@@ -425,6 +425,9 @@ export * from "./schema-free-workflow.js";
 // `schema-task-notice.ts`。整份原样再导出,理由同上。
 export * from "./schema-task-notice.js";
 
+// 任务写过的位置(task_writes,生成物面板的并发裁决用),表定义 + 建表在 `schema-task-writes.ts`。
+export * from "./schema-task-writes.js";
+
 // 验收前置命令的执行记录(accept_gate_runs)在 `schema-accept-gate.ts`。同上,原样再导出。
 export * from "./schema-accept-gate.js";
 

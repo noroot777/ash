@@ -9,6 +9,8 @@ import { readFileGitStatus } from "./file-git-status.js";
 import { taskBranchChangedPaths } from "./git-diff.js";
 import { kindOf, scanIgnoredArtifacts, type ArtifactKind } from "./task-artifact-scan.js";
 import { committedInWindows, resolveArtifactScope } from "./task-artifact-scope.js";
+import { footprintArbiter } from "./task-artifact-footprint.js";
+import { pathLens } from "./task-artifact-paths.js";
 import { windowHit } from "./task-artifact-windows.js";
 
 // 「这个任务做出来的、值得看一眼的东西」——图片、网页、音视频、PDF。
@@ -50,9 +52,10 @@ export type ArtifactScopeKind = "exclusive" | "shared";
 /**
  * **这一条**的归属有多硬。
  *
- * `exact` = 有确定证据：目录独占、任务分支上的提交动过它、或者 mtime 落在一段**精确**区间里。
- * `approx` = 只落在**估出来**的区间里（会话寿命、没收尾的回合、宽到下一次起跑的那种），所以
- * 它只是候选,可能是别人在同一个目录里做的。
+ * `exact` = 有确定证据：目录独占、任务分支上的提交动过它、mtime 落在一段**精确**区间里且没有
+ * 别的任务同时在跑，或者同时在跑但它离本任务写过的地方更近（task-artifact-footprint.ts）。
+ * `approx` = 只落在**估出来**的区间里（会话寿命、没收尾的回合、宽到下一次起跑的那种），或者
+ * 同一刻别的任务也在这个目录里跑、写入位置分不出是谁的，所以它只是候选,可能是别人做的。
  *
  * 为什么要逐条给:服务端本来就按条算出了这一档（`exactProof`）,却只在页脚汇总一句「有 N 个是
  * 按估出来的时间段认的」——用户看得见数目,看不出**是哪几个**,于是整张清单一起贬值,面板就只能
@@ -145,6 +148,14 @@ export async function readTaskArtifacts(
   // 有没有「这个文件归它」的证据可用：目录独占算一种，跑过（有区间）算另一种。按时间认的
   // 那几档都要过这道门槛；任务分支的 diff 不用，它自己就是证据（见下）。
   const hasEvidence = exclusive || windows.length > 0;
+  // 同一刻还有别的任务在这个目录里跑时，时间分不开它们，按「谁在附近写过东西」裁决
+  // （判法见 task-artifact-footprint.ts）。
+  const arbiter = task && scope
+    ? await footprintArbiter(task, scope, root, pathLens()).catch((error) => {
+      problems.push(`读并发任务的写入位置失败：${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    })
+    : null;
 
   if (root.gitRepo) {
     // 工作区里还没提交的改动：在共享目录上这**不是**归属证明（谁动的都显示在同一份
@@ -221,7 +232,7 @@ export async function readTaskArtifacts(
   const scanned = new Set<string>();
   if (hasEvidence) {
     try {
-      const scan = await scanIgnoredArtifacts(root.path, root.gitRepo, windows);
+      const scan = await scanIgnoredArtifacts(root.path, root.gitRepo, windows, arbiter?.focus ?? []);
       for (const path of scan.paths) scanned.add(path);
       incomplete.push(...scan.incomplete);
     } catch (error) {
@@ -240,6 +251,8 @@ export async function readTaskArtifacts(
   const artifacts: TaskArtifact[] = [];
   /** 靠推断区间认进来的条数——面板要单独说一句。 */
   let guessed = 0;
+  /** 同一时间别的任务也在这儿跑、按写入位置判给了它们的条数。 */
+  let claimed = 0;
   for (const { path, origins, info } of stated) {
     if (!info || !info.isFile()) continue; // 已删除 / 已改名的旧路径
     const mtimeMs = Number.isFinite(info.mtimeMs) ? info.mtimeMs : null;
@@ -252,8 +265,17 @@ export async function readTaskArtifacts(
     // 提交都是确定的；估出来的区间——不管是靠 mtime 落在里面,还是那一段里的提交——都只是
     // 候选,要单独数一笔说出来（第 3 轮审查必须修 1、第 4 轮审查 N2）。
     const hit = exclusive ? "exact" : windowHit(mtimeMs, windows);
-    const exactProof = exclusive || proven.has(path) || hit === "exact";
+    let exactProof = exclusive || proven.has(path) || hit === "exact";
     if (!exactProof && !committedProof && !hit) continue;
+    // 只靠时间认进来的（共享目录、没有提交证据）还要过一道并发裁决：同一刻别的任务也在这个
+    // 目录里跑的话，落在区间里不再说明什么。离别人写过的地方更近 → 不是它的；离它自己的
+    // 更近 → 确定是它的（哪怕区间是估的）；比不出来 → 只能当候选。
+    if (!exclusive && !committedProof && arbiter) {
+      const verdict = arbiter.judge(path, mtimeMs);
+      if (verdict === "theirs") { claimed += 1; continue; }
+      if (verdict === "mine") exactProof = true;
+      if (verdict === "unsure") exactProof = false;
+    }
     // 逐条的强弱就是**上面那个 `exactProof`**,不是另起一套判据:页脚那句「有 N 个是按估出来
     // 的时间段认的」和每一条的标记从此同源,数目与标出来的条数恒等。
     //
@@ -279,7 +301,10 @@ export async function readTaskArtifacts(
   }
 
   if (guessed > 0) {
-    incomplete.push(`清单里有 ${guessed} 个是按估出来的时间段认的（见上面那几条），可能混进别人做的东西`);
+    incomplete.push(`清单里有 ${guessed} 个归属拿不准（见上面那几条）：按估出来的时间段认的，或者同一时间别的任务也在这个目录里写东西、分不出是谁的，可能混进别人做的东西`);
+  }
+  if (claimed > 0) {
+    incomplete.push(`同一时间别的任务也在这个目录里干活，有 ${claimed} 个文件离它们写过的地方更近，算作它们的，没列在这里`);
   }
 
   // 新的排前面：面板要回答的是「它刚刚做出了什么」。

@@ -44,7 +44,7 @@ export const ARTIFACT_ORIGIN_HINT: Record<TaskArtifact["origin"], string> = {
  */
 export const ARTIFACT_CONFIDENCE_LABEL = "候选";
 export const ARTIFACT_CONFIDENCE_HINT =
-  "只落在估出来的时间段里（会话寿命、没收尾的回合），可能是别人在同一个目录里做的";
+  "只落在估出来的时间段里，或者同一时间别的任务也在这个目录里写东西、分不出是谁的，可能是别人做的";
 
 /**
  * 整份清单**凭什么算这个任务的**。
