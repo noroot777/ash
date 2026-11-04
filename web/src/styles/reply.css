@@ -23,25 +23,17 @@
   .scheduled-message-row > .scheduled-message-guide { width: 24px; justify-content: center; padding: 0; }
   .scheduled-message-guide > span { display: none; }
 }
-.scheduled-send-panel { position: absolute; z-index: 26; right: clamp(14px, 3vw, 34px); bottom: 100%; width: min(300px, calc(100% - 28px)); margin-bottom: 7px; border: 1px solid var(--line2); border-radius: 11px; background: var(--panel); padding: 11px; box-shadow: var(--menu-shadow); }
-/* 「什么时候发」两档:分段按钮本身就是标题,不再另起一行「定时发送 / 发送时间」。 */
-.later-send-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin-bottom: 9px; border-radius: 8px; background: var(--raised); padding: 2px; }
-.later-send-kinds > button { height: 25px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 10.5px; }
-.later-send-kinds > button[aria-checked="true"] { background: var(--panel); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 0.5px var(--line2); }
-.later-send-target, .later-send-target .ui-select-trigger { width: 100%; }
-.scheduled-send-panel input { width: 100%; height: 31px; border: 1px solid var(--line2); border-radius: 7px; background: var(--canvas); padding: 0 8px; color: var(--ink); font: 11px var(--font-sans); outline: none; }
-.scheduled-send-panel input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in lch, var(--accent) 13%, transparent); }
-.scheduled-send-panel > footer { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
-.scheduled-send-panel > footer > button { display: inline-flex; height: 27px; align-items: center; gap: 5px; border: 0; border-radius: 6px; background: transparent; padding: 0 9px; color: var(--muted); font-size: 10.5px; }
-.scheduled-send-panel > footer > button:last-child { background: var(--accent); color: white; font-weight: 600; }
-.scheduled-send-panel button:disabled { opacity: .42; }
-/* 发送 + 稍后发送:一颗分体按钮。主按钮的底色/尺寸照旧归两个回复框各自的样式,这里只把
-   两半拼起来:中间一道细缝,右半那颗小三角打开「稍后发送」浮层。 */
-.send-split { display: inline-flex; flex: 0 0 auto; align-items: stretch; border-radius: 7px; }
-.send-split > :first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.send-split-more { display: grid; width: 16px; place-items: center; border: 0; border-left: 1px solid color-mix(in lch, white 30%, var(--accent)); border-radius: 0 7px 7px 0; background: var(--accent); padding: 0; color: white; }
-.send-split-more:hover:not(:disabled), .send-split-more[aria-expanded="true"] { background: #5560c4; }
-.send-split-more:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
+/* 发送按钮:主按钮带文案 + 连体的「发送设置」段(studio-submit-mode),跟新建面板的
+   「创建并运行 ▸」同一套长相,只是按回复框的行高缩一号。浮层本身是 studio-popover。 */
+.send-split { display: inline-flex; flex: 0 0 auto; align-items: stretch; }
+.send-split-main { display: inline-flex; height: 29px; align-items: center; gap: 7px; border: 0; border-radius: 7px 0 0 7px; background: var(--accent); padding: 0 10px 0 11px; color: white; font-size: 11px; font-weight: 600; white-space: nowrap; box-shadow: 0 0 0 1px rgb(67 76 164 / 28%), 0 1px 2px rgb(40 42 48 / 12%); }
+.send-split-main:hover:not(:disabled) { background: #5560c4; }
+.send-split-main:disabled { opacity: .5; }
+.send-split-main:focus-visible { outline: 2px solid color-mix(in lch, var(--accent) 55%, transparent); outline-offset: 1px; }
+.send-split .studio-submit-mode.studio-aux-button { height: 29px; gap: 4px; border-radius: 0 7px 7px 0; padding: 0 7px; }
+.send-split .studio-submit-mode.studio-aux-button:disabled { opacity: .5; }
+.team-reply-box footer .send-split-main,
+.team-reply-box footer .send-split .studio-submit-mode.studio-aux-button { height: 27px; }
 /* 托盘里「等某任务完成后发送」那一行:在等谁。等不到了(失败/取消/删除)标琥珀色,旁边给「直接发送」。 */
 .scheduled-message-row > .scheduled-message-after { max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-message-row > .scheduled-message-after.is-stuck { color: var(--amber); }
@@ -142,6 +134,5 @@
 .agent-model-picker-crumb > code { font-family: var(--font-mono); font-size: 9.5px; }
 .agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--faint); font-size: 9px; }
 .team-reply-shell { position: relative; }
-.team-reply-box footer .send-split-more { width: 15px; }
 
 /* 哨兵条：跟待发送消息托盘同一套视觉语言（它们讲的是同一件事——还没落到会话里的东西）。 */

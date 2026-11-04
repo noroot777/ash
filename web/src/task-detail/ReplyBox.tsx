@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, ScheduledMessage, SkillEntry, Task, TaskListItem } from "@ash/shared";
 import { sameExecutor } from "@ash/shared/executors";
 import { parseCliCommand } from "@ash/shared/cli-commands";
-import { ArrowUp, SpinnerGap, X } from "@phosphor-icons/react";
+import { X } from "@phosphor-icons/react";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
-import { LaterSendPanel, SendSplit, useLaterSend, type LaterChoice } from "../components/LaterSend.tsx";
+import { SendSplit, useLaterSend } from "../components/LaterSend.tsx";
 import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { AgentPlate } from "../components/AgentPlate.tsx";
 import {
@@ -283,7 +283,6 @@ export function ReplyBox({
     setCommandIndex(0);
     setMenuDismissed(false);
     setTarget(null);
-    later.close();
   };
 
   const cancelCommand = () => {
@@ -359,8 +358,8 @@ export function ReplyBox({
   // 一旦确定，就不必再去草稿里猜哪一段是刚发出去的。
   const inFlightSend = useRef<Promise<void> | null>(null);
 
-  const send = (choice?: LaterChoice): Promise<void> => {
-    const run = runSend(choice).then(() => {});
+  const send = (): Promise<void> => {
+    const run = runSend().then(() => {});
     inFlightSend.current = run;
     void run.finally(() => {
       if (inFlightSend.current === run) inFlightSend.current = null;
@@ -368,7 +367,8 @@ export function ReplyBox({
     return run;
   };
 
-  const runSend = async (choice?: LaterChoice, annotation?: AnnotationReply): Promise<boolean> => {
+  // 截图批注是另一条入口，照旧立即发；正文这条按回复框当前的发送方式发。
+  const runSend = async (annotation?: AnnotationReply): Promise<boolean> => {
     if (!annotation && menuOpen) {
       pickCommand(candidates[selectedIndex]!);
       return false;
@@ -378,6 +378,12 @@ export function ReplyBox({
       return false;
     }
     if (disabled || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
+    const choice = annotation ? {} : later.choice;
+    // 选了「稍后」却没配好：拦下并说清，绝不悄悄退回立即发送。
+    if (!choice) {
+      setSendError(`${later.submitLabel}：${later.blocker}`);
+      return false;
+    }
     setSending(true);
     setSendError(null);
     setCommandResult(null);
@@ -404,8 +410,8 @@ export function ReplyBox({
           executorId: target?.executorId ?? null,
           model: target?.model ?? null,
           reasoningEffort: target?.reasoningEffort ?? null,
-          sendAt: choice?.sendAt,
-          afterTaskId: choice?.afterTaskId,
+          sendAt: choice.sendAt,
+          afterTaskId: choice.afterTaskId,
           executorLabel: activeExecutorLabel,
         },
       );
@@ -495,19 +501,8 @@ export function ReplyBox({
           }}
         />
       )}
-      {later.open && !menuOpen && !mention.open && !picker && (
-        <LaterSendPanel
-          later={later}
-          tasks={tasks}
-          projectId={task.projectId}
-          taskId={task.id}
-          busy={sending}
-          hasContent={!!value.trim() || uploads.attachments.length > 0}
-          onSubmit={(choice) => void send(choice)}
-        />
-      )}
       <div className="reply-context">
-      {inlinePanel && !menuOpen && !mention.open && !picker && !later.open && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      {inlinePanel && !menuOpen && !mention.open && !picker && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
         key={task.id}
         messages={scheduled.messages}
@@ -548,7 +543,6 @@ export function ReplyBox({
             setMenuDismissed(false);
             setCommandIndex(0);
             mention.onValueChange();
-            later.close();
             command?.onChange?.(commandCandidates(next).length > 0 ? "" : next);
           }}
           onPaste={uploads.onPaste}
@@ -592,7 +586,7 @@ export function ReplyBox({
           <ScreenshotAnnotation key={task.id} taskId={task.id}
             candidates={screenshotCandidates(conversationItems, [...parseAttachmentText(task.body).paths, ...uploads.attachments.map((attachment) => attachment.path)])}
             disabled={disabled || sending || uploads.uploading || commandActive} queueing={queueing}
-            executorLabel={activeExecutorLabel} onSend={(reply) => runSend(undefined, reply)} />
+            executorLabel={activeExecutorLabel} onSend={(reply) => runSend(reply)} />
           {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后
               向右接着配置；跟新建面板、工作流站点用同一组件。
               没在 @ 召唤时改它 = 改任务的常设配置，之后每条消息都按新的跑；正在召唤
@@ -620,24 +614,19 @@ export function ReplyBox({
               <X size={10} weight="bold" />
             </button>
           )}
-          <span>
-            {uploads.uploading ? uploadingLabel(uploads.pending)
-              : selectedIsSkill ? "回车补全"
-                : commandActive ? "回车配置"
-                : queueing ? (target ? "排队：跑完按上面这套发出" : `${sendKeys.sendShort} 排队，跑完自动发出`)
-                  : target ? "本回合按上面这套跑" : `${sendKeys.sendShort} 发送`}
-          </span>
-          <SendSplit later={later} disabled={disabled || sending || uploads.uploading || commandActive || mention.open}>
-            <button
-              className="task-send-button"
-              type="button"
-              disabled={sending || uploads.uploading || (!commandActive && (disabled || (!value.trim() && !uploads.attachments.length)))}
-              onClick={() => void send()}
-              aria-label={selectedIsSkill ? "把技能补进正文" : commandActive ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
-            >
-              {sending ? <SpinnerGap size={15} className="is-spinning" /> : <ArrowUp size={15} weight="bold" />}
-            </button>
-          </SendSplit>
+          <SendSplit
+            later={later}
+            label={queueing ? "排队发送" : "发送"}
+            status={uploads.uploading ? uploadingLabel(uploads.pending) : selectedIsSkill ? "补全" : commandActive ? "配置" : null}
+            ariaLabel={selectedIsSkill ? "把技能补进正文" : commandActive ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
+            sending={sending}
+            disabled={sending || uploads.uploading || (!commandActive && (disabled || (!value.trim() && !uploads.attachments.length)))}
+            configDisabled={disabled || sending || uploads.uploading || commandActive || mention.open}
+            onSend={() => void send()}
+            tasks={tasks}
+            projectId={task.projectId}
+            taskId={task.id}
+          />
         </div>
       </div>
     </div>

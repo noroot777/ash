@@ -6,9 +6,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ScheduledMessage, Task, TaskListItem } from "@ash/shared";
 import { cliCommandsForMode } from "@ash/shared/cli-commands";
-import { PaperPlaneTilt, SpinnerGap } from "@phosphor-icons/react";
 import { ScheduledMessageTray, useScheduledMessages } from "../components/ScheduledMessages.tsx";
-import { LaterSendPanel, SendSplit, useLaterSend, type LaterChoice } from "../components/LaterSend.tsx";
+import { SendSplit, useLaterSend, type LaterChoice } from "../components/LaterSend.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { FileMentionMenu } from "../components/MentionMenu.tsx";
 import type { ReplyTaskResult } from "../lib/api.ts";
@@ -17,7 +16,6 @@ import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useFileMention } from "../lib/useFileMention.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
-import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
@@ -53,7 +51,6 @@ export function TeamReplyBox({
   const [error, setError] = useState<string | null>(null);
   const later = useLaterSend();
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const sendKeys = useSendKeyLabels();
   // 跟着输入行数长高;顶边那条拖动条拖过之后以拖出来的高度为准——跟普通任务回复框
   // 同一套(task-detail/ReplyResizeHandle.tsx),高度只有 useAutoGrowTextarea 一个写者,
   // 所以 CSS 那边把原生右下角把手关掉了。
@@ -89,16 +86,22 @@ export function TeamReplyBox({
   }, [task.id]);
   // 正在飞的那一次发送；撤回排在它后面，见下面的 withdraw。
   const inFlightSend = useRef<Promise<void> | null>(null);
-  const send = (choice?: LaterChoice): Promise<void> => {
-    const run = runSend(choice);
+  const send = (): Promise<void> => {
+    const run = runSend();
     inFlightSend.current = run;
     void run.finally(() => {
       if (inFlightSend.current === run) inFlightSend.current = null;
     });
     return run;
   };
-  const runSend = async (choice?: LaterChoice) => {
+  const runSend = async () => {
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
+    // 选了「稍后」却没配好：拦下并说清，绝不悄悄退回立即发送。
+    const choice = later.choice;
+    if (!choice) {
+      setError(`${later.submitLabel}：${later.blocker}`);
+      return;
+    }
     setSending(true);
     setError(null);
     // 发出去的是这一份；成功后只在草稿逐字还是这一份时才清掉，动过就整份留着
@@ -107,7 +110,7 @@ export function TeamReplyBox({
     const sentText = value.trim();
     const sentPaths = uploads.attachments.map((attachment) => attachment.path);
     try {
-      const result = await onSend(sentText, sentPaths, choice ?? {});
+      const result = await onSend(sentText, sentPaths, choice);
       // 执行器门禁弹了对话框、用户点了取消:草稿和附件一个字都不能清。
       if (result === null) return;
       if ("scheduled" in result) scheduled.add(result.message);
@@ -148,17 +151,6 @@ export function TeamReplyBox({
       {mention.open && !slash.open && (
         <FileMentionMenu mention={mention} label="引用工作区文件" className="team-reply-mention-menu" />
       )}
-      {later.open && (
-        <LaterSendPanel
-          later={later}
-          tasks={tasks}
-          projectId={task.projectId}
-          taskId={task.id}
-          busy={sending}
-          hasContent={!!value.trim() || uploads.attachments.length > 0}
-          onSubmit={(choice) => void send(choice)}
-        />
-      )}
       <div className="reply-context">
       <ScheduledMessageTray
         key={task.id}
@@ -188,7 +180,7 @@ export function TeamReplyBox({
           value={value}
           disabled={disabled}
           placeholder={disabled ? "团队已归档（只读）" : task.status === "idle" ? "调度者待命中，说句话就接回同一会话…" : "插一句话（改方向、加要求、直接替它拍板）…"}
-          onChange={(event) => { setValue(event.target.value); later.close(); slash.onValueChange(); mention.onValueChange(); }}
+          onChange={(event) => { setValue(event.target.value); slash.onValueChange(); mention.onValueChange(); }}
           onPaste={uploads.onPaste}
           onKeyDown={(event) => {
             if (slash.onKeyDown(event)) return;
@@ -198,12 +190,19 @@ export function TeamReplyBox({
         />
         <footer>
           <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending} />
-          <span>{uploads.uploading ? uploadingLabel(uploads.pending) : `调度台 · ${sendKeys.sendShort} 发送`}</span>
-          <SendSplit later={later} disabled={disabled || sending || uploads.uploading}>
-            <button type="button" className="team-send-button" disabled={disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)} onClick={() => void send()} aria-label="发送给调度者">
-              {sending ? <SpinnerGap size={14} className="is-spinning" /> : <PaperPlaneTilt size={14} weight="fill" />}
-            </button>
-          </SendSplit>
+          <SendSplit
+            later={later}
+            label="发送"
+            status={uploads.uploading ? uploadingLabel(uploads.pending) : null}
+            ariaLabel="发送给调度者"
+            sending={sending}
+            disabled={disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)}
+            configDisabled={disabled || sending || uploads.uploading}
+            onSend={() => void send()}
+            tasks={tasks}
+            projectId={task.projectId}
+            taskId={task.id}
+          />
         </footer>
       </div>
     </div>
