@@ -391,4 +391,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 「等某任务完成后发送」的那个任务(mode=after)。存量行 NULL。
   "ALTER TABLE scheduled_messages ADD COLUMN after_task_id TEXT",
   "ALTER TABLE scheduled_messages ADD COLUMN after_done_at TEXT",
+  "ALTER TABLE scheduled_messages ADD COLUMN after_seq INTEGER",
+  "ALTER TABLE tasks ADD COLUMN done_seq INTEGER NOT NULL DEFAULT 0",
 ];

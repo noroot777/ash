@@ -37,6 +37,8 @@ assert.deepEqual(sendAfterState(t("x", { status: "running" })), { label: "等「
 assert.equal(sendAfterState(t("x", { status: "canceled" })).stuck, true);
 assert.equal(sendAfterState(t("x", { status: "paused", archived: true })).stuck, true);
 assert.equal(sendAfterState(t("x", { status: "done" })).stuck, false);
+assert.deepEqual(sendAfterState(t("x", { mode: "team", status: "idle" as never })), { label: "「x」是团队调度台，等不到完成", stuck: true },
+  "存量的等调度台:说清等不到,给直接发送");
 // 服务端锁存了完成时刻 = 等到了:前置随后被删、重跑、失败都不改口。
 for (const task of [undefined, t("x", { status: "running" }), t("x", { status: "failed" })]) {
   assert.deepEqual(sendAfterState(task, "2026-11-04T09:00:00Z").stuck, false);

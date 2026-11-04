@@ -9,7 +9,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { continueTask } from "./orchestrator.js";
-import { afterTargetUnsupported } from "./pending-after.js";
+import { afterBaselineOf, afterTargetUnsupported } from "./pending-after.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat } from "./queue-seat.js";
@@ -63,18 +63,22 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   if (b.annotationBatchId) return replyWithAnnotationBatch(c, taskId, b.annotationBatchId, b.annotationRevision ?? 0);
   // 「稍后发送」的两种方式先校验,再进原生命令旁路:命令处理器见到 sendAt/afterTaskId 就把
   // 命令留到投递那一刻执行,所以不合法的延期请求必须在它之前拦下,否则命令会当场执行。
+  let afterSeq: number | null = null;
   if (b.afterTaskId != null) {
     if (typeof b.afterTaskId !== "string" || !b.afterTaskId) return c.json({ error: "afterTaskId 无效" }, 400);
     if (b.sendAt) return c.json({ error: "定时发送和等任务完成后发送只能选一个" }, 400);
     if (b.afterTaskId === taskId) return c.json({ error: "不能等这个任务自己完成后再发给它" }, 400);
     // 看不见的任务 = 不存在:否则挨个 id 试就能问出别人的任务在不在、何时完成。
     const after = (await visibleTaskIds(actorOf(c), [b.afterTaskId])).length
-      ? (await db.select({ projectId: tasks.projectId, mode: tasks.mode }).from(tasks).where(eq(tasks.id, b.afterTaskId))).at(0)
+      ? (await db.select({ projectId: tasks.projectId, mode: tasks.mode, status: tasks.status, doneSeq: tasks.doneSeq })
+        .from(tasks).where(eq(tasks.id, b.afterTaskId))).at(0)
       : undefined;
     if (!after) return c.json({ error: "要等的任务不存在" }, 404);
     if (after.projectId !== r.projectId) return c.json({ error: "只能等同一项目里的任务" }, 400);
     const unsupported = afterTargetUnsupported(after);
     if (unsupported) return c.json({ error: unsupported }, 400);
+    // 等的是**这一刻之后**的那次完成(前置正停在 done 上就是那一次):基线跟状态出自同一行读取。
+    afterSeq = afterBaselineOf(after);
   }
   if (b.sendAt) {
     const when = new Date(b.sendAt);
@@ -121,6 +125,7 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
       ownerUserId: ownerIdOf(actorOf(c)),
       mode: b.sendAt ? "timed" : b.afterTaskId ? "after" : "queued",
       afterTaskId: b.afterTaskId ?? null,
+      afterSeq,
       // 排队等轮次时暂存的回复 = 执行型:投递它就是任务的执行回合,整队守卫与分组
       // 暂停都要挡,失败重投也不丢意图(schema 的 execution 注释)。普通运行中追问
       // 与定时/等前置任务的提醒不是——它们落地是续聊/到点提醒,照旧旁路。

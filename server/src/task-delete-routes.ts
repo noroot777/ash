@@ -8,6 +8,7 @@ import type { TaskWorkspaceDiscardResult } from "@ash/shared";
 import { eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
+import { latchAfterTask } from "./pending-after.js";
 import { acceptGateRuns, freeReviewDebateTurns, freeReviewDebates, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, monitorPendingCalls, monitors, noteTasks, projects, queueItems, schedules, scheduledMessages, sessionTurns, sessions, taskMemos, taskNotices, tasks, teamInbound, taskBranchReceipts } from "./db/schema.js";
 import { revokeTaskMonitors, settleTaskRevocation } from "./claude-monitor-backfill.js";
 import { clearScanCursorsStatement } from "./claude-monitor-cursors.js";
@@ -36,6 +37,8 @@ import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.j
 // BEGIN…COMMIT 里同步跑完这些语句,中途抛错整批回滚:**要么任务连同它的一切都没了,要么一切
 // 原样还在**,不存在第三种状态。
 export async function deleteTaskCompletely(taskId: string): Promise<void> {
+  // 别的任务上「等它完成后发送」的消息:已经等到的先锁存,删了就再也查不到它完成过(pending-after.ts)。
+  await latchAfterTask(taskId);
   try {
     await deleteTaskRows(taskId);
   } finally {

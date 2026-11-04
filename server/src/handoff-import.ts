@@ -15,6 +15,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { existsSync } from "node:fs";
 import { importMessageOrigin } from "./handoff-messages.js";
 import { db } from "./db/index.js";
+import { afterBaselineOf } from "./pending-after.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
   acceptGateRuns, projects, scheduledMessages, schedules, sessionTurns, sessions, tasks,
@@ -460,6 +461,11 @@ async function importValidated(
   }));
   // 自由工作流的审查历史(翻译成本机行,落库在下面两条路径里各自执行)。
   const freeWorkflowRows = await buildFreeWorkflowRows(m.task.id, m.freeWorkflow, notes);
+  // 等前置任务的消息按**本机**那个前置任务定基线:对端的完成计数在这台机器上没有意义。
+  const afterIds = [...new Set(messages.flatMap((msg) => msg.mode === "after" && typeof msg.afterTaskId === "string" ? [msg.afterTaskId] : []))];
+  const localAfter = new Map((afterIds.length
+    ? await db.select({ id: tasks.id, status: tasks.status, doneSeq: tasks.doneSeq }).from(tasks).where(inArray(tasks.id, afterIds))
+    : []).map((t) => [t.id, afterBaselineOf(t)] as const));
   const messageRows = messages.map((msg) => ({
     ...importMessageOrigin(msg, notes),
     id: id(),
@@ -475,6 +481,7 @@ async function importValidated(
     mode: msg.mode === "queued" ? "queued" as const : msg.mode === "after" ? "after" as const : "timed" as const,
     afterTaskId: msg.mode === "after" && typeof msg.afterTaskId === "string" ? msg.afterTaskId : null,
     afterDoneAt: msg.mode === "after" && typeof msg.afterDoneAt === "string" ? msg.afterDoneAt : null,
+    afterSeq: msg.mode === "after" && typeof msg.afterTaskId === "string" ? localAfter.get(msg.afterTaskId) ?? null : null,
     sendAt: msg.sendAt,
     status: "pending" as const,
     createdAt: msg.createdAt,

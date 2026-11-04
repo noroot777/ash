@@ -1,4 +1,4 @@
-import { and, eq, inArray, type SQL } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
@@ -145,6 +145,9 @@ async function writeTaskStatus(
   } else if (TERMINAL.includes(status)) {
     patch.endedAt = endedAt = updatedAt;
     patch.queueAdvanceRequest = null;
+    // 「完成」这个事件跟 status=done 同一条 UPDATE 落下:等它完成后发送的消息比的就是它
+    // (pending-after.ts)。拆成两笔的话,两笔之间崩掉或迟到的处理都分不清是哪一次完成。
+    if (status === "done") patch.doneSeq = sql`${tasks.doneSeq} + 1`;
   }
   if (status !== "running") {
     // 回合内的身份随回合结束作废。**`direction_epoch` 不在此列,那不是漏写**:它正是为了
@@ -239,7 +242,7 @@ async function writeTaskStatus(
   }
   // 别的任务上「等它完成后发送」的消息:完成了就锁存并发;失败/取消了托盘要改口说在等什么。
   if (status === "done" || status === "canceled" || status === "failed") {
-    void import("./pending-after.js").then(({ flushPendingAfterTask }) => flushPendingAfterTask(taskId, status))
+    void import("./pending-after.js").then(({ flushPendingAfterTask }) => flushPendingAfterTask(taskId))
       .catch((err) => console.error(`[ash] flushPendingAfterTask(${taskId}) failed:`, err));
   }
   return true;

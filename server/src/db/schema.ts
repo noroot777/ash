@@ -301,6 +301,10 @@ export const tasks = sqliteTable("tasks", {
    * `task-direction-epoch.ts`（那边有唯一写入口的理由和结构锁）。
    */
   directionEpoch: integer("direction_epoch").notNull().default(0),
+  // 这个任务落过几次 done。只增不减,跟 status=done **同一条 UPDATE** 写(status.ts):「等它完成
+  // 后发送」的消息记下登记那一刻的值,完成就是「它变大了」—— 事件与状态同一笔,崩溃漏不掉,
+  // 迟到的钩子也分不清新旧(见 pending-after.ts)。
+  doneSeq: integer("done_seq").notNull().default(0),
   // 这一轮是 CLI 原生命令（`/compact`）：整条消息由 CLI 本地执行，不进模型 —— 既不是
   // 任务的执行，也不是一轮验证。结算钩子（派验证 / 收验证轮 / 推工作流）必须整段跳过，
   // 否则「压一下上下文」会被记成一轮验证跑完，还白吃一轮配额。开跑时写，结算后清空；
@@ -485,6 +489,8 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   afterTaskId: text("after_task_id"),
   // mode=after 的前置任务落 done 的那一刻(锁存:之后前置再跑/失败/被删都撤不回,见 pending-after.ts)。
   afterDoneAt: text("after_done_at"),
+  // mode=after 登记那一刻前置任务的完成基线:前置的 done_seq 超过它才算等到(pending-after.ts)。
+  afterSeq: integer("after_seq"),
   // 执行意图:1 = 这条是任务**排队等轮次时**暂存的回复,投递它 = 开启任务的执行回合
   // —— 整队在跑守卫与分组暂停都挡它,重投也不丢(第 xNb655YqYzcA 链第 5 轮:起跑失败
   // 后的自动重投曾丢掉意图,借终态续聊豁免并行执行/穿透暂停)。0 = 普通消息(运行中

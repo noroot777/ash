@@ -108,8 +108,9 @@ export function pendingMessageRow(input: {
   execution?: boolean;
   // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
   sendAt?: Date;
-  /** mode=after 时等的那个任务(见 pending-after.ts)。 */
+  /** mode=after 时等的那个任务,与登记那一刻它的完成基线(`afterBaselineOf`,见 pending-after.ts)。 */
   afterTaskId?: string | null;
+  afterSeq?: number | null;
   /** 这条消息承载的那一笔结果交接的身份(见 schema 的 `handoff_token`);普通消息不填。 */
   handoffToken?: string | null;
 }): Row {
@@ -131,6 +132,7 @@ export function pendingMessageRow(input: {
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
     afterTaskId: input.mode === "after" ? input.afterTaskId ?? null : null,
     afterDoneAt: null,
+    afterSeq: input.mode === "after" ? input.afterSeq ?? null : null,
     execution: input.execution ?? false,
     sendAt: (input.sendAt ?? new Date()).toISOString(),
     status: "pending" as const,
@@ -661,7 +663,8 @@ export async function hasDeliverablePendingMessages(taskId: string, at = new Dat
   const rows = await db
     .select({
       mode: scheduledMessages.mode, sendAt: scheduledMessages.sendAt, origin: scheduledMessages.origin,
-      afterTaskId: scheduledMessages.afterTaskId, afterDoneAt: scheduledMessages.afterDoneAt,
+      id: scheduledMessages.id, taskId: scheduledMessages.taskId,
+      afterTaskId: scheduledMessages.afterTaskId, afterDoneAt: scheduledMessages.afterDoneAt, afterSeq: scheduledMessages.afterSeq,
     })
     .from(scheduledMessages)
     .where(and(eq(scheduledMessages.taskId, taskId), eq(scheduledMessages.status, "pending")));
