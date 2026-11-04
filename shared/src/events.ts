@@ -179,6 +179,8 @@ export type ServerEvent =
       bySystem?: true;
       monitorWake?: MonitorWakeData;
     }
+  // 会话里有几段被用户删掉了（盘上已就地抹掉）：开着这个任务的页面整份重读正文。
+  | { type: "conversation.redacted"; taskId: string; sessionId: string }
   | {
       type: "duet.progress";
       taskId: string;

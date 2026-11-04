@@ -7,6 +7,7 @@ import { MessageAttachments } from "./Attachments.tsx";
 import { MonitorWakeInput } from "./MonitorWakeInput.tsx";
 import { monitorWakeInput } from "./monitorWakeModel.ts";
 import type { ConversationItem } from "./conversationModel.ts";
+import { DeleteMessageButton } from "./MessageDelete.tsx";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 import {
   SYSTEM_NOTICE_MODES,
@@ -219,6 +220,7 @@ export function SystemAuthoredMessage({ item, related = [], surface = "task", mo
           <div className="system-action-line">
             <p><b>{title}</b>{summary && <span> · {summary}</span>}</p>
             {item.at && <time>{formatInstant(item.at)}</time>}
+            <DeleteMessageButton item={item} />
           </div>
           <div className="system-action-meta">
             {conflict && projectId && taskId && <button type="button" onClick={() => openGitWorkbench({ projectId, taskId, view: "branches" })}>打开 Git 工作台处理</button>}

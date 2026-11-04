@@ -37,7 +37,7 @@ export async function pickTurnSession(input: {
   slash: CliCommand | null;
   freshSession?: boolean;
   resumeSessionId?: string;
-}): Promise<{ all: SessionRow[]; prev: SessionRow | undefined; resuming: boolean }> {
+}): Promise<{ all: SessionRow[]; prev: SessionRow | undefined; resuming: boolean; reseed: boolean }> {
   const { taskId, task, agent, sessionRole, profileId, runOwner, slash } = input;
   const opts = { freshSession: input.freshSession, resumeSessionId: input.resumeSessionId };
   // A single task can now host several agents — one session line per agentType,
@@ -88,5 +88,7 @@ export async function pickTurnSession(input: {
     prev = undefined;
   }
   const resuming = !!prev?.cliSessionId && !["fork", "new", "clear"].includes(slash?.name ?? "");
-  return { all, prev, resuming };
+  // 用户删过这条会话里的消息：会话行照旧续（同一份 .md 接着写），CLI 会话却不能再
+  // --resume —— 它还记着原话。换一条新的、拿删除之后的记录重建（conversation-redact.ts）。
+  return { all, prev, resuming, reseed: resuming && !!prev?.contextRebuildAt };
 }

@@ -369,3 +369,15 @@
 }
 .task-markdown-image-retry:hover { color: var(--text); }
 .task-markdown-image-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 删除消息：跟复制同一颗皮肤（头部图标、尾栏胶囊），紧挨着复制排在它右边；悬停转红，说明这是删。 */
+.task-message header .copy-button + .message-delete-button,
+.task-user-bubble header .copy-button + .message-delete-button { margin-left: 0; }
+.task-message header button.message-delete-button:hover,
+.task-user-bubble header button.message-delete-button:hover,
+.monitor-wake-meta button.message-delete-button:hover,
+.task-message-footer button.message-delete-button:hover { color: var(--red); }
+.system-action-line .message-delete-button { display: grid; width: 18px; height: 18px; align-self: center; place-items: center; border: 0; border-radius: 4px; background: transparent; color: var(--faint); opacity: 0; }
+.system-action-wrap:hover .system-action-line .message-delete-button,
+.system-action-line .message-delete-button:focus-visible { opacity: 1; }
+.system-action-line .message-delete-button:hover { background: var(--raised); color: var(--red); }

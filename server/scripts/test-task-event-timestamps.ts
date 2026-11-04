@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSessionOutput, type ServerEvent } from "@ash/shared";
+import type { ServerEvent } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared/session-output";
 import { eq } from "drizzle-orm";
 
 const root = mkdtempSync(join(tmpdir(), "ash-task-event-timestamps-"));

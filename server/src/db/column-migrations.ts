@@ -388,4 +388,6 @@ export const COLUMN_MIGRATIONS: string[] = [
   "ALTER TABLE session_turns ADD COLUMN monitor_wake INTEGER NOT NULL DEFAULT 0",
   // usage_turns 里记在哨兵唤醒回合上的那几轮(见 schema-sessions.ts 同名列)。
   "ALTER TABLE sessions ADD COLUMN usage_monitor_wake_turns INTEGER",
+  // 删过消息、下一轮要换新 CLI 会话重建上下文（见 schema-sessions.ts 同名列）。存量行 NULL。
+  "ALTER TABLE sessions ADD COLUMN context_rebuild_at TEXT",
 ];

@@ -3,7 +3,7 @@ import { File, Gavel, ShieldCheck, GitFork } from "@phosphor-icons/react";
 import type { Session, TaskListItem } from "@ash/shared";
 import type { FreeReviewRun } from "@ash/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
-import type { ConversationItem } from "./conversationModel.ts";
+import type { ConversationItem, ConversationSource } from "./conversationModel.ts";
 import { conversationTailKey } from "./conversationModel.ts";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
@@ -45,6 +45,7 @@ import { MonitorWakeReply } from "./MonitorWakeInput.tsx";
 import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
 import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts";
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
+import { DeleteMessageButton, MessageDeleteProvider } from "./MessageDelete.tsx";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -97,6 +98,7 @@ function AgentMessage({
         icon
         iconSize={12}
       />}
+      {headless && <DeleteMessageButton item={item} label="删除" />}
       {onFork && <button type="button" className="task-message-copy-action" onClick={onFork}>
         <GitFork size={12} aria-hidden="true" />派生新任务
       </button>}
@@ -130,6 +132,7 @@ function AgentMessage({
               </small>
             )}
             <CopyButton value={item.markdown} ariaLabel="复制这条回复" icon />
+            <DeleteMessageButton item={item} />
           </header>
         )}
         {wakeReply && <MonitorWakeReply />}
@@ -175,6 +178,7 @@ function UserMessage({
           {displayBody && (
             <CopyButton value={displayBody} ariaLabel="复制这条回复" icon />
           )}
+          <DeleteMessageButton item={item} />
         </header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
@@ -202,6 +206,7 @@ export function ConversationFeed({
   questionHistory,
   liveQuestionHistory,
   historyReady = true,
+  onDeleteMessage,
 }: {
   task: TaskListItem;
   items: ConversationItem[];
@@ -240,6 +245,8 @@ export function ConversationFeed({
    * 每一条记录都像是没出现过，补渲染会把整段历史当成卡片糊在屏幕上。
    */
   historyReady?: boolean;
+  /** 删掉一条已落盘的消息。不给就一颗删除按钮都不出（正在跑、团队/研讨任务、只读视图）。 */
+  onDeleteMessage?: (sources: ConversationSource[]) => Promise<void>;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   // 被挡回的用户操作合进同一条任务历史。**无条件合** —— 「有没有正文」跟「这段历史该不该
@@ -354,6 +361,7 @@ export function ConversationFeed({
   return (
     <QuestionHistoryProvider key={task.id} taskId={task.id} history={questionHistory} live={liveQuestionHistory}
       messages={items.flatMap((item) => item.kind === "user" ? [item] : [])}>
+    <MessageDeleteProvider onDelete={onDeleteMessage}>
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         {modeFromUrl && <SystemNoticeModeSwitch mode={noticeMode} search={search} />}
@@ -426,6 +434,7 @@ export function ConversationFeed({
       </div>
       {dock && <div className="task-question-dock">{dock}</div>}
     </ImagePreviewGroup>
+    </MessageDeleteProvider>
     </QuestionHistoryProvider>
   );
 }

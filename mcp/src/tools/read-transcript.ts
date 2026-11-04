@@ -13,7 +13,7 @@
 // 这里就读到什么**,两边不会漂。
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { parseSessionOutput } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared/session-output";
 import { call, callText, fail, ok } from "../runtime.js";
 
 type TaskRow = Record<string, unknown>;

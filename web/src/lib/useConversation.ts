@@ -278,6 +278,8 @@ export function useConversation(
           refreshSessions();
         }
       }
+      // 别处（另一个窗口）删了这条会话里的消息：盘上已经改写过，整份重读。
+      if (event.type === "conversation.redacted" && event.taskId === taskId) void load(true);
       if (
         event.type === "task.status" &&
         event.taskId === taskId &&

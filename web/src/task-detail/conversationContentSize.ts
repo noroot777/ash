@@ -91,8 +91,11 @@ export const segmentContentSize = (segment: AgentContentSegment): number =>
 type AgentItem = Extract<ConversationItem, { kind: "agent" }>;
 type UserItem = Extract<ConversationItem, { kind: "user" }>;
 type EventItem = Extract<ConversationItem, { kind: "event" }>;
+// 出处与删除标记是身份，不是内容：删掉的气泡在条目表里根本不出现。
+const ORIGIN_SIZE = { sources: () => 0, deleted: () => 0 } as const;
 
 const AGENT_SIZE: SizeTable<AgentItem> = {
+  ...ORIGIN_SIZE,
   kind: () => 0,
   id: () => 0,
   sessionId: () => 0,
@@ -117,6 +120,7 @@ const AGENT_SIZE: SizeTable<AgentItem> = {
 const AGENT_KEYS = Object.keys(AGENT_SIZE) as (keyof AgentItem)[];
 
 const USER_SIZE: SizeTable<UserItem> = {
+  ...ORIGIN_SIZE,
   kind: () => 0,
   id: () => 0,
   at: () => 0,
@@ -131,6 +135,7 @@ const USER_SIZE: SizeTable<UserItem> = {
 const USER_KEYS = Object.keys(USER_SIZE) as (keyof UserItem)[];
 
 const EVENT_SIZE: SizeTable<EventItem> = {
+  ...ORIGIN_SIZE,
   kind: () => 0,
   id: () => 0,
   at: () => 0,
