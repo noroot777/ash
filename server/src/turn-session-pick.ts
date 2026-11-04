@@ -87,15 +87,18 @@ export async function pickTurnSession(input: {
     await db.update(sessions).set(LOST_SESSION_PATCH).where(eq(sessions.id, prev.id));
     prev = undefined;
   }
-  const resuming = !!prev?.cliSessionId && !["fork", "new", "clear"].includes(slash?.name ?? "");
   // 用户删过这个任务里的消息：旧 CLI 会话还记着原话，凡是要在它上面接着跑的都不行。
   //  - 普通消息：会话行照旧续（同一份 .md 接着写），CLI 会话换一条新的、拿删除之后的记录
   //    重建（reseed，conversation-redact.ts / history-reseed.ts）；
   //  - CLI 命令（`/fork` 把旧上下文整份复制进新分支，`/review` `/compact` `/plan` `/goal`
   //    都在旧上下文上让模型干活）：没有「换新会话再执行」的等价物，明说先发一条普通消息。
   //    `/new` `/clear` 本来就不带旧上下文，照常放行。
-  const stale = !!prev?.cliSessionId && !!prev.contextRebuildAt;
+  // 标记看的是会话行本身，**不看它此刻有没有 cliSessionId**：接力导入（handoff-import.ts）、
+  // 会话失效（LOST_SESSION_PATCH）都会把 id 置空而标记还在 —— 那种行照样续、照样重建，
+  // 不能当成「没有可续的会话」另开一行，把删除之后的那份记录也一并丢了。
+  const stale = !!prev?.contextRebuildAt;
   if (stale && slash && !["new", "clear"].includes(slash.name)) throw new Error(STALE_CONTEXT_COMMAND(slash.name));
+  const resuming = (!!prev?.cliSessionId || stale) && !["fork", "new", "clear"].includes(slash?.name ?? "");
   return { all, prev, resuming, reseed: resuming && stale };
 }
 

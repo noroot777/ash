@@ -19,7 +19,10 @@ export type ConvSeg =
   | { kind: "agent"; text: string; endedAt?: string; deleted?: true }
   // bySystem：走真人回合通道、但作者是后端的那种（验证打回、验收冲突交接）。
   // 它们**必须**是 user 回合（要 followUpFrom 护住任务原来的终态），所以只能另开一位来标。
-  | { kind: "user"; text: string; at?: string; bySystem?: true; monitorWake?: MonitorWakeData; deleted?: true }
+  // answerIds：这一句承载的是哪几条问答答复（任务问答历史里那条记录的 id，task-answer.ts 在
+  // 发出答复时写下）。删除与问答卡都按它认记录，不按答复原文猜 —— 两次答「可以」原文一模一样。
+  // 删掉之后它仍留在墓碑行上（它不是正文，是身份）。
+  | { kind: "user"; text: string; at?: string; bySystem?: true; monitorWake?: MonitorWakeData; answerIds?: string[]; deleted?: true }
   // level:"notice" = 结算说明（「这一轮为什么落成这个状态」），由 server 结算时写下。
   // 展示端据此上「提示」的语气，而不是让关键词表去猜——说明里天然带着「未完成」这种词。
   // aside:true = 任务时间线旁注（appendTaskTimeline 写的那些：预约审查、验收阶段更新、
@@ -32,7 +35,12 @@ export type SessionSegmentSpan = { seg: ConvSeg; first: number; last: number };
 
 type Sentinel = {
   t?: string; text?: string; at?: string; by?: string; level?: string; aside?: boolean;
-  monitorWake?: MonitorWakeData; deleted?: boolean;
+  monitorWake?: MonitorWakeData; answerIds?: unknown; deleted?: boolean;
+};
+
+const answerIdsOf = (value: unknown): { answerIds?: string[] } => {
+  const ids = Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && !!id) : [];
+  return ids.length ? { answerIds: ids } : {};
 };
 
 export function parseSessionSpans(out: string): SessionSegmentSpan[] {
@@ -104,6 +112,7 @@ export function parseSessionSpans(out: string): SessionSegmentSpan[] {
                 text: j.text ?? "",
                 at: j.at,
                 ...(j.by === "system" ? { bySystem: true as const, ...(j.monitorWake ? { monitorWake: j.monitorWake } : {}) } : {}),
+                ...answerIdsOf(j.answerIds),
                 ...deleted,
               },
           index,

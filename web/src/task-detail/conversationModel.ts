@@ -33,12 +33,13 @@ export type { AgentAuxEvent, AgentContentSegment, AttachmentSource } from "./con
 export type { LiveAgentEvent } from "./conversationTurnParts.ts";
 
 export type TimelineEntry =
-  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; sessionId?: string; sessionRole?: string; source?: "optimistic" | "server" }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; answerIds?: string[]; sessionId?: string; sessionRole?: string; source?: "optimistic" | "server" }
   | { kind: "server"; id: string; event: LiveAgentEvent };
 
 /** 落盘气泡出自哪条会话的哪几段 / 哪段执行过程（删除消息拿它指名，见 server/src/conversation-redact.ts）。 */
 export type ConversationSource =
-  | { sessionId: string; index: number; fingerprint: string }
+  // answerId：这段答复对的是哪条问答记录（问答卡认出来的那条，见 QuestionHistory.tsx）。
+  | { sessionId: string; index: number; fingerprint: string; answerId?: string }
   | { sessionId: string; trace: { from: string; to: string; fingerprint: string } };
 // deleted：已删除的段排版时仍占原位（回合起止靠它推），buildConversationItems 收尾前拿掉。
 type PersistedOrigin = { sources?: ConversationSource[]; deleted?: true };
@@ -95,6 +96,8 @@ export type ConversationItem =
       isAnswer?: boolean;
       bySystem?: boolean;
       monitorWake?: MonitorWakeData;
+      /** 这句承载的问答答复（记录 id，见 shared/session-output.ts 的 ConvSeg）。 */
+      answerIds?: string[];
       /**
        * 这条输入喂进了**哪条会话**（同 event 那一路）。真人在输入框里打的字没有它（还没落到
        * 任何一条会话上），系统代写的那些一律有。
@@ -393,6 +396,7 @@ function appendPersistedSession(
         // 但「后续追问」不收它 —— 判据统一在 shared 的 isUserFollowUp。
         bySystem: segment.bySystem,
         monitorWake: segment.monitorWake,
+        answerIds: segment.answerIds,
         ...origin(index),
       });
       turnStartedAt = segment.at ?? turnStartedAt;

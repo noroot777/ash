@@ -563,7 +563,7 @@ export const api = {
   // 页面上那份正文旧了服务端会 409，而不是删错一段。
   deleteConversationSegments: (
     sessionId: string,
-    segments: Array<{ index: number; fingerprint: string } | { trace: { from: string; to: string; fingerprint: string } }>,
+    segments: Array<{ index: number; fingerprint: string; answerId?: string } | { trace: { from: string; to: string; fingerprint: string } }>,
   ): Promise<{ deleted: number }> =>
     humanAction(`/sessions/${id(sessionId)}/conversation/delete`, json("POST", { segments })),
   duetTranscript: (taskId: string): Promise<unknown[]> =>

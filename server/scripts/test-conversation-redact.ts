@@ -6,12 +6,15 @@
 //   ③ 入口：在跑 / 团队任务 / 回合锁被占都拒；成功后 .md 与 trace 里一个字不剩、会话行挂上重建标记
 //   ④ 下一轮：不再 --resume 旧 CLI 会话，换新会话、把删除后的记录当历史喂进去，标记了结；
 //      再下一轮照常 --resume 新会话
+//   ⑥ 答复按记录身份删（原文相同也不删错）；删到一半（问答历史或文件哪一步断了）重试都能
+//      续上；失效标记跨接力不丢（不带原生会话文件、对端照样重建）
 // 跑:npm -w server run test:conversation-redact
 import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { parseSessionOutput, parseSessionSpans, segmentFingerprint, traceSpanFingerprint } from "@ash/shared/session-output";
+import { pairAnswerMessages, type QuestionRecord } from "@ash/shared/questions";
 import { IS_WINDOWS } from "../src/platform.js";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
@@ -71,6 +74,10 @@ const { withRunFileLock } = await import("../src/run-file-lock.js");
 const { sessionsForTask } = await import("../src/task-session-routes.js");
 const { Hono } = await import("hono");
 const { mountTaskSessionRoutes } = await import("../src/task-session-routes.js");
+const { recordUserConversationTurn } = await import("../src/conversation-turn.js");
+const { pendingMessageRow } = await import("../src/pending-messages.js");
+const { deliveryOptions } = await import("../src/pending-verdict.js");
+const { collectSessionFiles, handoffSessionContext } = await import("../src/handoff-collect.js");
 await ensureSchema();
 
 const line = (turn: Record<string, unknown>) => `${TURN_SENTINEL}${JSON.stringify(turn)}`;
@@ -294,6 +301,114 @@ await db.insert(sessions).values({
   assert.equal(history[1]?.deleted, true, "被删的答复在问答历史里只留墓碑");
   assert.doesNotMatch(JSON.stringify(history), /SECRET/, "问答历史里也一个字不剩（问答卡、get_task 都读它）");
   ok("答复连问答历史一起删、只剩执行过程的回合按时间段删、写盘失败如实报且原样不动");
+}
+
+// ── ⑥ 答复的身份、删到一半续上、失效标记跨接力 ─────────────────────────────────
+{
+  const SAME = "【答复】\n可以";
+  const first: QuestionRecord = { id: "q-first", answeredAt: T(20), question: "只在测试环境执行吗？", answer: "可以", reply: SAME };
+  const second: QuestionRecord = { id: "q-second", answeredAt: T(21), question: "允许在生产环境执行吗？", answer: "可以", reply: SAME };
+  const other: QuestionRecord = { id: "q-other", answeredAt: T(22), question: "别的问题", answer: "不行", reply: "【答复】\n不行" };
+  // 发出答复时记录 id 就跟着原话落盘；排队的答复投递时也带着它。
+  const chunks: string[] = [];
+  const sink = { write: (chunk: string) => { chunks.push(chunk); return true; } } as unknown as NodeJS.WritableStream;
+  recordUserConversationTurn({ taskId: "t-x", sessionId: "s-x", role: "single", agentType: "claude", out: sink, text: SAME, at: T(21), answerIds: ["q-second"] });
+  const written = parseSessionOutput(chunks.join(""))[0];
+  assert.deepEqual(written?.kind === "user" && written.answerIds, ["q-second"], "答复的记录 id 跟着原话落盘");
+  assert.deepEqual(deliveryOptions(pendingMessageRow({ taskId: "t-x", text: SAME, answerId: "q-second" })).answerIds, ["q-second"], "排队的答复投递时带上记录 id");
+  // 配对（服务端删除与问答卡同一份）：老会话同文按先后对；写着 answerIds 的只认它。
+  const legacy = pairAnswerMessages([first, second], [{ key: "a", text: SAME }, { key: "b", text: SAME }]);
+  assert.deepEqual([legacy.paired.get("a")?.id, legacy.paired.get("b")?.id], ["q-first", "q-second"]);
+  const byId = pairAnswerMessages([first, second], [{ key: "a", text: SAME }, { key: "b", text: SAME, answerIds: ["q-first"] }]);
+  assert.deepEqual([byId.paired.get("a")?.id, byId.paired.get("b")?.id], ["q-second", "q-first"], "有 answerIds 的不按原文猜");
+
+  const answerLines = (ids?: [string[], string[]]) => [
+    line({ t: "user", agent: "claude", text: SAME, at: T(20), ...(ids ? { answerIds: ids[0] } : {}) }), "只在测试环境跑。", line({ t: "agentEnd", at: T(20) }),
+    line({ t: "user", agent: "claude", text: SAME, at: T(21), ...(ids ? { answerIds: ids[1] } : {}) }), "去生产环境跑。", line({ t: "agentEnd", at: T(21) }), "",
+  ].join("\n");
+  async function seedAnswers(id: string, md: string, history: QuestionRecord[]) {
+    const sid = await seed(id);
+    writeFileSync(sessionTranscriptPath(id, sid), md);
+    writeFileSync(sessionTracePath(id, sid), "");
+    await db.update(tasks).set({ questionHistory: JSON.stringify(history) }).where(eq(tasks.id, id));
+    const now = parseSessionSpans(md);
+    const at = (index: number, answerId?: string) => ({ index, fingerprint: segmentFingerprint(now[index]!.seg), ...(answerId ? { answerId } : {}) });
+    return { sid, at, md: () => readFileSync(sessionTranscriptPath(id, sid), "utf8") };
+  }
+  const answersLeft = (md: string) => parseSessionOutput(md).filter((seg) => seg.kind === "user").length;
+  const historyOf = async (id: string) => JSON.parse((await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!.questionHistory!) as QuestionRecord[];
+  const state = (records: QuestionRecord[]) => records.map((record) => `${record.id}:${record.deleted ? "deleted" : record.question}`);
+
+  // 新数据：段上写着 answerIds，删第二条只清第二条（审查实测：曾清掉第一条、留下「同意在生产环境执行」）。
+  const fresh = await seedAnswers("t-same-ids", answerLines([["q-first"], ["q-second"]]), [first, second]);
+  await redact.deleteConversationSegments(fresh.sid, [fresh.at(2)]);
+  assert.deepEqual(state(await historyOf("t-same-ids")), ["q-first:只在测试环境执行吗？", "q-second:deleted"]);
+  assert.deepEqual((await historyOf("t-same-ids"))[1]?.deletedFrom, { sessionId: fresh.sid, index: 2 }, "墓碑记着出自哪一段");
+  assert.deepEqual(parseSessionOutput(fresh.md(), { keepDeleted: true })[2], { kind: "user", text: "", at: T(21), answerIds: ["q-second"], deleted: true }, "墓碑行留着答复身份");
+
+  // 老会话（没有 answerIds）：页面指名、服务端核对；没指名又认不出就拒，不猜。
+  const old = await seedAnswers("t-same-legacy", answerLines(), [first, second, other]);
+  await refusal(redact.deleteConversationSegments(old.sid, [old.at(2)]), 409, "同文记录不唯一、页面没指名：拒绝而不是猜");
+  await refusal(redact.deleteConversationSegments(old.sid, [old.at(2, "q-other")]), 409, "指名的记录原文对不上：拒绝");
+  assert.equal(old.md(), answerLines(), "拒绝时正文不动");
+  await redact.deleteConversationSegments(old.sid, [old.at(2, "q-second")]);
+  assert.deepEqual(state(await historyOf("t-same-legacy")), ["q-first:只在测试环境执行吗？", "q-second:deleted", "q-other:别的问题"]);
+  ok("答复按记录身份删：原文相同也只清被删的那一条，老会话按页面指名并核对");
+
+  // 删到一半 ①：问答历史这一步失败（存储故障）—— 正文原样，修好后重试删得掉。
+  const dbFault = await seedAnswers("t-fault-db", answerLines([["q-first"], ["q-second"]]), [first, second]);
+  await db.update(tasks).set({ questionHistory: "{坏掉的" }).where(eq(tasks.id, "t-fault-db"));
+  await refusal(redact.deleteConversationSegments(dbFault.sid, [dbFault.at(2)]), 500, "问答历史写不进去就报失败");
+  assert.equal(dbFault.md(), answerLines([["q-first"], ["q-second"]]), "问答历史没清成时正文一个字都不动（删除入口还在）");
+  await db.update(tasks).set({ questionHistory: JSON.stringify([first, second]) }).where(eq(tasks.id, "t-fault-db"));
+  await redact.deleteConversationSegments(dbFault.sid, [dbFault.at(2)]);
+  assert.equal(answersLeft(dbFault.md()), 1);
+  assert.deepEqual(state(await historyOf("t-fault-db")), ["q-first:只在测试环境执行吗？", "q-second:deleted"], "重试补齐");
+
+  if (!IS_WINDOWS && process.getuid?.() !== 0) {
+    // 删到一半 ②：问答历史清成了、正文没换成 —— 那一段仍认得回这条墓碑，不会被挪给同文的
+    // 另一条记录；重试（页面此时指名的就是墓碑）把正文删掉，另一条记录始终不动。
+    const fileFault = await seedAnswers("t-fault-file", answerLines(), [first, second]);
+    const dir = dirname(sessionTranscriptPath("t-fault-file", fileFault.sid));
+    chmodSync(dir, 0o555);
+    try {
+      await refusal(redact.deleteConversationSegments(fileFault.sid, [fileFault.at(2, "q-second")]), 500, "文件写不进去就报失败");
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    assert.equal(fileFault.md(), answerLines(), "正文原样");
+    const half = await historyOf("t-fault-file");
+    assert.deepEqual(state(half), ["q-first:只在测试环境执行吗？", "q-second:deleted"]);
+    const messages = parseSessionSpans(fileFault.md()).flatMap(({ seg }, index) => seg.kind === "user"
+      ? [{ key: String(index), text: seg.text, source: { sessionId: fileFault.sid, index } }] : []);
+    const { paired, unpaired } = pairAnswerMessages(half, messages);
+    assert.deepEqual([paired.get("0")?.id, paired.get("2")?.id, unpaired.length], ["q-first", "q-second", 0], "没换成的那一段仍归墓碑，不挪给同文的另一条");
+    await redact.deleteConversationSegments(fileFault.sid, [fileFault.at(2, paired.get("2")!.id)]);
+    assert.equal(answersLeft(fileFault.md()), 1, "重试把正文删掉");
+    assert.deepEqual(state(await historyOf("t-fault-file")), ["q-first:只在测试环境执行吗？", "q-second:deleted"], "另一条记录始终不动");
+  }
+  ok("删到一半：问答历史或文件哪一步断了，重试都能续上，不会删错、也不会卡在「内容已变化」");
+
+  // 失效标记跨接力：删过消息的会话不搬原生会话文件、不认旧 id，标记原样带到对端。
+  const handoffSession = await seed("t-handoff");
+  await redact.deleteConversationSegments(handoffSession, [target(2)]);
+  const staleRow = await sessionRow(handoffSession);
+  assert.ok(staleRow.contextRebuildAt && staleRow.cliSessionId === OLD_CLI);
+  const collected = await collectSessionFiles([staleRow], repo, false);
+  assert.equal(collected.found.size + collected.files.length, 0, "删过消息的会话不随任务搬原生会话文件（里面还记着原话）");
+  assert.match(collected.notes.join("\n"), /删过消息/, "导出说明里讲清楚");
+  assert.deepEqual(handoffSessionContext(staleRow, true), { cliSessionId: null, contextRebuildAt: staleRow.contextRebuildAt }, "即便文件到了也不认旧 id，标记跟着走");
+  assert.deepEqual(handoffSessionContext({ cliSessionId: OLD_CLI, contextRebuildAt: null }, true), { cliSessionId: OLD_CLI }, "没删过的照旧");
+  // 对端落库的样子：cliSessionId 空、标记在。下一轮照样续这一行、拿删除后的记录重建，CLI 命令照样拒。
+  await db.update(sessions).set({ cliSessionId: null }).where(eq(sessions.id, handoffSession));
+  const handoffTask = (await db.select().from(tasks).where(eq(tasks.id, "t-handoff"))).at(0)!;
+  const imported = await pickTurnSession({ taskId: "t-handoff", task: handoffTask, agent: "claude", sessionRole: "single", profileId: null, runOwner: null, slash: null });
+  assert.deepEqual([imported.prev?.id, imported.resuming, imported.reseed], [handoffSession, true, true], "id 被置空的失效会话照样续这一行并重建");
+  await assert.rejects(
+    pickTurnSession({ taskId: "t-handoff", task: handoffTask, agent: "claude", sessionRole: "single", profileId: null, runOwner: null, slash: { name: "fork", args: "", text: "/fork" } }),
+    /删过消息/, "id 置空也照样拒旧上下文上的命令",
+  );
+  ok("失效标记跨接力不丢：不搬原生会话文件、导入不认旧 id，对端下一轮照样重建");
 }
 
 // ── ④ 下一轮：换新 CLI 会话并喂重建的历史；再下一轮照常 resume ─────────────────

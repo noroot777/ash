@@ -128,6 +128,8 @@ const USER_SIZE: SizeTable<UserItem> = {
   sessionRole: () => 0,
   isAnswer: () => 0,
   bySystem: () => 0,
+  // 身份，不是内容（同 sessionId）。
+  answerIds: () => 0,
   monitorWake: (value) => value ? JSON.stringify(value).length : 0,
   text: (value) => value.length,
   attachments: (value) => value.length,

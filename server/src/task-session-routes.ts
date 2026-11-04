@@ -208,8 +208,8 @@ export function mountTaskSessionRoutes(api: Hono): void {
     const body = await c.req.json().catch(() => null) as { segments?: unknown } | null;
     const segments = Array.isArray(body?.segments) ? body.segments : [];
     const targets = segments.filter((target): target is RedactTarget => {
-      const t = target as { index?: unknown; fingerprint?: unknown; trace?: { from?: unknown; to?: unknown; fingerprint?: unknown } };
-      return (Number.isInteger(t?.index) && typeof t.fingerprint === "string")
+      const t = target as { index?: unknown; fingerprint?: unknown; answerId?: unknown; trace?: { from?: unknown; to?: unknown; fingerprint?: unknown } };
+      return (Number.isInteger(t?.index) && typeof t.fingerprint === "string" && (t.answerId === undefined || typeof t.answerId === "string"))
         || (typeof t?.trace?.from === "string" && typeof t.trace.to === "string" && typeof t.trace.fingerprint === "string");
     });
     if (!targets.length || targets.length !== segments.length) return c.json({ error: "segments 格式不对" }, 400);

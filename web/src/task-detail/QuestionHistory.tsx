@@ -1,21 +1,52 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CaretDown, CheckCircle } from "@phosphor-icons/react";
-import { formatQuestionAnswers, legacyQuestionRecord, questionItems, questionOptionSelected, type QuestionRecord } from "@ash/shared/questions";
+import {
+  formatQuestionAnswers, legacyQuestionRecord, pairAnswerMessages, questionItems, questionOptionSelected, type QuestionRecord,
+} from "@ash/shared/questions";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 import { catchUpAbortKind } from "../lib/catchUp.ts";
 import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import type { ConversationSource } from "./conversationModel.ts";
 import { DeleteMessageButton, type DeletableItem } from "./MessageDelete.tsx";
 import { formatInstant } from "./utils.ts";
 
-type QuestionMessage = { id: string; text: string };
-const HistoryContext = createContext<{ records: QuestionRecord[]; messages: QuestionMessage[]; error?: string; retry?: () => void }>({ records: [], messages: [] });
+/** 会话里的一句真人输入（气泡）。答复卡按 `answerIds` / 出处认它对的是哪条问答记录。 */
+type QuestionMessage = { id: string; text: string; answerIds?: readonly string[]; sources?: ConversationSource[] };
+type Pairing = ReturnType<typeof pairAnswerMessages>;
+const HistoryContext = createContext<{ pairing: Pairing; error?: string; retry?: () => void }>({
+  pairing: { paired: new Map(), unpaired: [] },
+});
 
+/**
+ * 按 id 合并几份问答历史（props 快照、整份读取、事件推送，先后不定）。删除是单向的：哪一份
+ * 里它是墓碑就留墓碑 —— 删除之前发出、删除之后才到的那份旧读取不能把删掉的答复复活。记录
+ * 答复之后除了被删不会再变，所以别的字段不存在「旧的盖新的」。
+ */
 function mergeRecords(left: QuestionRecord[], right: QuestionRecord[]): QuestionRecord[] {
-  return [...new Map([...left, ...right].map((record) => [record.id, record])).values()]
-    .sort((a, b) => a.answeredAt.localeCompare(b.answeredAt));
+  const merged = new Map<string, QuestionRecord>();
+  for (const record of [...left, ...right]) {
+    const known = merged.get(record.id);
+    merged.set(record.id, known?.deleted && !record.deleted ? known : record);
+  }
+  return [...merged.values()].sort((a, b) => a.answeredAt.localeCompare(b.answeredAt));
+}
+
+const segmentOf = (sources: readonly ConversationSource[] | undefined) => {
+  const source = sources?.find((candidate) => "index" in candidate);
+  return source && "index" in source ? { sessionId: source.sessionId, index: source.index } : undefined;
+};
+
+/** 答复 ↔ 记录的配对，判据与服务端删除同一份（shared/questions.ts `pairAnswerMessages`）。 */
+function PairedHistory({ records, messages, error, retry, children }: {
+  records: QuestionRecord[]; messages: QuestionMessage[]; error?: string; retry?: () => void; children: ReactNode;
+}) {
+  const pairing = useMemo(() => pairAnswerMessages(records, messages.map((message) => ({
+    key: message.id, text: message.text, answerIds: message.answerIds, source: segmentOf(message.sources),
+  }))), [records, messages]);
+  return <HistoryContext value={{ pairing, error, retry }}>{children}</HistoryContext>;
 }
 
 export function QuestionHistoryProvider({ taskId, history, live = history === undefined, messages, children }: {
@@ -25,7 +56,7 @@ export function QuestionHistoryProvider({ taskId, history, live = history === un
   messages: QuestionMessage[];
   children: ReactNode;
 }) {
-  if (!live) return <HistoryContext value={{ records: history ?? [], messages }}>{children}</HistoryContext>;
+  if (!live) return <PairedHistory records={history ?? []} messages={messages}>{children}</PairedHistory>;
   return <LocalQuestionHistory key={taskId} taskId={taskId} history={history} messages={messages}>{children}</LocalQuestionHistory>;
 }
 
@@ -83,7 +114,7 @@ function LocalQuestionHistory({ taskId, history, messages, children }: {
     return () => clearTimeout(timer);
   }, [catchUp, connected]);
   const local = state.taskId === taskId ? state : { records: [], error: undefined };
-  return <HistoryContext value={{ records: local.records, messages, error: local.error, retry: reload }}>{children}</HistoryContext>;
+  return <PairedHistory records={local.records} messages={messages} error={local.error} retry={reload}>{children}</PairedHistory>;
 }
 
 /** `deletable`：这张卡出自会话里的那条答复（有出处才删得掉，见 MessageDelete.tsx）。 */
@@ -135,28 +166,23 @@ export function AnsweredQuestionCard({ record, deletable }: { record: QuestionRe
 }
 
 export function AnsweredQuestionMessage({ text, id, at, deletable }: { text: string; id: string; at?: string; deletable?: DeletableItem }) {
-  const { records, messages } = useContext(HistoryContext);
-  const matches = records.filter((record) => record.reply === text);
-  const occurrence = messages.filter((message) => message.text === text).findIndex((message) => message.id === id);
-  const record = matches[Math.max(0, occurrence)]
+  const { pairing } = useContext(HistoryContext);
+  const paired = pairing.paired.get(id);
+  const record = (paired && !paired.deleted ? paired : undefined)
     ?? legacyQuestionRecord(text, id, at)
     ?? { id, question: "你的答复", answer: text.trimStart().replace(/^【答复】\s*/, ""), reply: text, answeredAt: at ?? "" };
-  return <AnsweredQuestionCard record={record} deletable={deletable} />;
+  // 删除时指名这张卡对的那条记录：老会话的段上没有 answerIds，服务端靠它认（核对原文才删）。
+  const target = deletable && paired
+    ? { sources: deletable.sources?.map((source) => "index" in source ? { ...source, answerId: paired.id } : source) }
+    : deletable;
+  return <AnsweredQuestionCard record={record} deletable={target} />;
 }
 
-export function QuestionHistoryRemainder({ messages }: { messages: readonly string[] }) {
-  const { records, error, retry } = useContext(HistoryContext);
-  const remaining = [...messages];
-  // 用户删掉的答复只剩墓碑（server/src/conversation-redact.ts），不再补成卡片。
-  const unshown = records.filter((record) => {
-    if (record.deleted) return false;
-    const index = remaining.indexOf(record.reply);
-    if (index < 0) return true;
-    remaining.splice(index, 1);
-    return false;
-  });
+/** 问答历史里有、会话里找不到出处的那些答复（不在这几条会话里），补成卡片放在末尾。 */
+export function QuestionHistoryRemainder() {
+  const { pairing, error, retry } = useContext(HistoryContext);
   return <>
-    {unshown.map((record) => <AnsweredQuestionCard key={record.id} record={record} />)}
+    {pairing.unpaired.map((record) => <AnsweredQuestionCard key={record.id} record={record} />)}
     {error && <p className="task-question-history-error" role="status">问答记录加载失败 <button type="button" onClick={retry}>重试</button></p>}
   </>;
 }

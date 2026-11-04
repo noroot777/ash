@@ -262,6 +262,7 @@ export function useConversation(
           isAnswer: event.text.startsWith(ANSWER_PREFIX),
           bySystem: event.bySystem,
           monitorWake: event.monitorWake,
+          answerIds: event.answerIds,
           sessionId: event.sessionId,
           sessionRole: event.role,
           source: "server",
