@@ -154,3 +154,23 @@ export function segmentFingerprint(seg: ConvSeg): string {
   const at = seg.kind === "agent" ? "" : seg.at ?? "";
   return `${seg.kind}:${at}:${seg.text.length}:${hash.toString(16)}`;
 }
+
+/** trace 里不随删除摘掉的两种记账事件：回合身份 run、用量 usage。 */
+export const traceKeptOnDelete = (kind: string): boolean => kind === "run" || kind === "usage";
+
+/**
+ * 一段**只有执行过程、没有正文**的气泡（回合失败时常见）的指纹。它在 .md 里没有对应的段，
+ * 删除时只能按时间段指名：服务端取同一份 trace 里 [from, to] 之间的事件重算，对上才动手 ——
+ * 对不上（又落了新事件、跟别的气泡交错）就整批拒绝，不会多删一条。
+ */
+export function traceSpanFingerprint(entries: readonly { at: string; event: { kind: string } }[]): string {
+  // 图片 attachment 不进指纹：页面拿到的 trace 会从图片账本补回几条盘上没有的（server 的
+  // mergeImageJournal），两边数出来的不一样；它们照样落在时间窗里一起摘掉。
+  const kept = entries.filter((entry) => !traceKeptOnDelete(entry.event.kind) && entry.event.kind !== "attachment");
+  let hash = 0x811c9dc5;
+  for (const char of kept.map((entry) => `${entry.at}|${entry.event.kind}`).join("\n")) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `trace:${kept.length}:${hash.toString(16)}`;
+}

@@ -162,7 +162,7 @@ function UserMessage({
 }) {
   const parsed = parseAttachmentText(item.text);
   const displayBody = annotationBatchDisplayText(parsed.body) ?? parsed.body;
-  if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} />;
+  if (item.isAnswer || isQuestionAnswer(item.text)) return <AnsweredQuestionMessage text={item.text} id={item.id} at={item.at} deletable={item} />;
   const paths = [...parsed.paths, ...item.attachments];
   const bySystem = !!item.bySystem;
   const reviewPrompt = isReviewSystemPrompt(item.text);
@@ -352,6 +352,7 @@ export function ConversationFeed({
         >
           {item.text}
           {item.at && <time>{formatInstant(item.at)}</time>}
+          <DeleteMessageButton item={item} />
         </p>
       );
     }

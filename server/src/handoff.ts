@@ -61,6 +61,7 @@ import type { HandoffReturnContext } from "./handoff-peer-client.js";
 import { currentListeningPort } from "./listening-port.js";
 import { exportWaitOrigins } from "./handoff-wait.js";
 import { collectGateRuns } from "./handoff-accept-gate.js";
+import { withRunFileLock } from "./run-file-lock.js";
 
 export async function handoffRemoteUrl(taskId: string): Promise<string> {
   const row = (await db.select({ handoff: tasks.handoff }).from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -639,7 +640,8 @@ export async function exportHandoff(
           t: "system" as const, agent: latest.agentType, by: "system" as const, at: now(),
           text: `🔁 任务已接力到 ${marker.peerName}（${targetUrl}）继续执行,本机这份从此只是历史存档。`,
         };
-        await appendFile(sessionTranscriptPath(taskId, latest.id), `\n${TURN_SENTINEL}${JSON.stringify(line)}\n`)
+        const transcript = sessionTranscriptPath(taskId, latest.id);
+        await withRunFileLock([transcript], () => appendFile(transcript, `\n${TURN_SENTINEL}${JSON.stringify(line)}\n`))
           .catch(() => { /* 产物目录可能不存在（从未跑过）,标记列已落库,不阻塞 */ });
       }
       // 源机原件收尾:已随任务迁走的待发送消息取消掉(时间线留档),否则用户移除接力

@@ -279,13 +279,11 @@ export async function continueTask(
 
     // 这一轮续哪一条会话行(同一位智能体可能有好几条;接不接得上还要看 CLI 配置目录与
     // codex 版本守卫)——判据与两处持久说明都在 turn-session-pick.ts。
-    const { all, prev, resuming, reseed: rebuild } = await pickTurnSession({
+    const { all, prev, resuming, reseed } = await pickTurnSession({
       taskId, task, agent, sessionRole, profileId, runOwner, slash,
       freshSession: opts.freshSession, resumeSessionId: opts.resumeSessionId,
     });
     // 删过消息(reseed):会话行照旧续,CLI 会话换新的、拿删除后的记录重建(history-reseed.ts)。
-    // 原生命令(`/compact`)不进模型,照旧打在旧会话上,标记留给下一轮正经回合。
-    const reseed = rebuild && !nativeCommand;
     const cliResume = resuming && !reseed;
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
@@ -438,7 +436,7 @@ export async function continueTask(
       prompt,
       ...cli,
       cwd,
-      sessionId: cliResume || (!reseed && slash?.name === "fork") ? prev?.cliSessionId ?? undefined : undefined,
+      sessionId: cliResume || slash?.name === "fork" ? prev?.cliSessionId ?? undefined : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
       // 正文图片的持久账本:交代关系不再跟这条 for-await 消费者同生共死(agent-image-journal.ts)。
       images: markdownImageAccounting(taskId, sessId, turnStart, imageSeed),

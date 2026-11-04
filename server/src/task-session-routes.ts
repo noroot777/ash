@@ -50,7 +50,8 @@ async function toSession(
     role: r.role as Session["role"],
     agentType: r.agentType as Session["agentType"],
     transcriptPath: sessionTranscriptPath(r.taskId, r.id),
-    resumeCommand: r.cliSessionId
+    // 删过消息、还没重建的会话：旧 CLI 会话还记着原话，不把接回它的命令递给用户（conversation-redact.ts）。
+    resumeCommand: r.contextRebuildAt ? null : r.cliSessionId
       ? resumeCommandFor(r.agentType, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.resumeEnv, r.resumeArgs,
         archived ? { configDir: codexHome(configDir) } : undefined)
       : r.resumeCommand,
@@ -206,8 +207,11 @@ export function mountTaskSessionRoutes(api: Hono): void {
     if (!task || !(await canSeeProject(actorOf(c), task.projectId))) return c.json({ error: "not found" }, 404);
     const body = await c.req.json().catch(() => null) as { segments?: unknown } | null;
     const segments = Array.isArray(body?.segments) ? body.segments : [];
-    const targets = segments.filter((target): target is RedactTarget =>
-      Number.isInteger((target as RedactTarget)?.index) && typeof (target as RedactTarget)?.fingerprint === "string");
+    const targets = segments.filter((target): target is RedactTarget => {
+      const t = target as { index?: unknown; fingerprint?: unknown; trace?: { from?: unknown; to?: unknown; fingerprint?: unknown } };
+      return (Number.isInteger(t?.index) && typeof t.fingerprint === "string")
+        || (typeof t?.trace?.from === "string" && typeof t.trace.to === "string" && typeof t.trace.fingerprint === "string");
+    });
     if (!targets.length || targets.length !== segments.length) return c.json({ error: "segments 格式不对" }, 400);
     try {
       return c.json(await deleteConversationSegments(sid, targets));

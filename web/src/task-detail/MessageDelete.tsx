@@ -1,13 +1,13 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { Trash } from "@phosphor-icons/react";
-import type { ConversationItem, ConversationSource } from "./conversationModel.ts";
+import type { ConversationSource } from "./conversationModel.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 
 /**
  * 删掉一条消息（真人的、agent 的、哨兵的自动输入）。
  *
  * 由会话页给出删除动作（`ConversationFeed` 的 `onDeleteMessage`），气泡里的按钮从上下文
- * 取 —— 哨兵输入卡、系统代发卡都住在别的文件里，一路传 prop 下去不划算。拿不到动作
+ * 取 —— 哨兵输入卡、系统代发卡、答复卡、系统注记都住在别的文件里，一路传 prop 下去不划算。拿不到动作
  * （任务正在跑、团队/研讨任务、只读视图）或这颗气泡还没落盘（没有出处）就一颗都不出。
  */
 type DeleteMessage = (sources: ConversationSource[]) => Promise<void>;
@@ -18,8 +18,11 @@ export function MessageDeleteProvider({ onDelete, children }: { onDelete?: Delet
   return <MessageDeleteContext value={onDelete ?? null}>{children}</MessageDeleteContext>;
 }
 
+/** 有出处的那几种气泡（会话里的一段，或一段只有执行过程的 trace）。 */
+export type DeletableItem = { sources?: ConversationSource[] };
+
 export function DeleteMessageButton({ item, label }: {
-  item: ConversationItem;
+  item: DeletableItem;
   /** 尾栏那种描边胶囊要带字；气泡头部只有图标。 */
   label?: string;
 }) {

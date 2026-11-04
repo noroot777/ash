@@ -7,6 +7,7 @@ import { catchUpAbortKind } from "../lib/catchUp.ts";
 import { useCatchUp, useCatchUpLink } from "../lib/useCatchUp.ts";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { DeleteMessageButton, type DeletableItem } from "./MessageDelete.tsx";
 import { formatInstant } from "./utils.ts";
 
 type QuestionMessage = { id: string; text: string };
@@ -85,7 +86,8 @@ function LocalQuestionHistory({ taskId, history, messages, children }: {
   return <HistoryContext value={{ records: local.records, messages, error: local.error, retry: reload }}>{children}</HistoryContext>;
 }
 
-export function AnsweredQuestionCard({ record }: { record: QuestionRecord }) {
+/** `deletable`：这张卡出自会话里的那条答复（有出处才删得掉，见 MessageDelete.tsx）。 */
+export function AnsweredQuestionCard({ record, deletable }: { record: QuestionRecord; deletable?: DeletableItem }) {
   const items = questionItems(record);
   const answers = record.answers ?? (items.length === 1 ? [record.answer] : undefined);
   const partial = answers?.some((answer) => !answer.trim());
@@ -120,26 +122,34 @@ export function AnsweredQuestionCard({ record }: { record: QuestionRecord }) {
           </section>
         ))}
         {!answers && <div className="task-question-record-answer"><b>你的答案</b><p>{record.answer}</p></div>}
-        <footer><CopyButton value={answerText} label="复制答案" ariaLabel="复制答案" icon /><span>已发送的答复</span></footer>
+        <footer>
+          <span className="task-question-record-actions">
+            <CopyButton value={answerText} label="复制答案" ariaLabel="复制答案" icon />
+            {deletable && <DeleteMessageButton item={deletable} label="删除" />}
+          </span>
+          <span>已发送的答复</span>
+        </footer>
       </div>
     </details>
   );
 }
 
-export function AnsweredQuestionMessage({ text, id, at }: { text: string; id: string; at?: string }) {
+export function AnsweredQuestionMessage({ text, id, at, deletable }: { text: string; id: string; at?: string; deletable?: DeletableItem }) {
   const { records, messages } = useContext(HistoryContext);
   const matches = records.filter((record) => record.reply === text);
   const occurrence = messages.filter((message) => message.text === text).findIndex((message) => message.id === id);
   const record = matches[Math.max(0, occurrence)]
     ?? legacyQuestionRecord(text, id, at)
     ?? { id, question: "你的答复", answer: text.trimStart().replace(/^【答复】\s*/, ""), reply: text, answeredAt: at ?? "" };
-  return <AnsweredQuestionCard record={record} />;
+  return <AnsweredQuestionCard record={record} deletable={deletable} />;
 }
 
 export function QuestionHistoryRemainder({ messages }: { messages: readonly string[] }) {
   const { records, error, retry } = useContext(HistoryContext);
   const remaining = [...messages];
+  // 用户删掉的答复只剩墓碑（server/src/conversation-redact.ts），不再补成卡片。
   const unshown = records.filter((record) => {
+    if (record.deleted) return false;
     const index = remaining.indexOf(record.reply);
     if (index < 0) return true;
     remaining.splice(index, 1);

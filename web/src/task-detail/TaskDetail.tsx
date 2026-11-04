@@ -474,7 +474,8 @@ export function TaskDetail({
                       ? async (sources) => {
                         try {
                           for (const sessionId of new Set(sources.map((source) => source.sessionId))) {
-                            await api.deleteConversationSegments(sessionId, sources.filter((source) => source.sessionId === sessionId));
+                            await api.deleteConversationSegments(sessionId, sources.filter((source) => source.sessionId === sessionId)
+                              .map(({ sessionId: _, ...target }) => target));
                           }
                           notify("已删除。下一轮会换一条新的会话，只带着删除后留下的记录继续");
                         } catch (reason) {

@@ -17,6 +17,8 @@ export type QuestionRecord = QuestionSource & {
   answer: string;
   answers?: string[];
   reply: string;
+  /** 用户删掉了这条答复（server/src/conversation-redact.ts）：只留 id 与时刻，问答正文已清空。 */
+  deleted?: true;
 };
 
 export function questionItems(source: QuestionSource): QuestionItem[] {

@@ -88,7 +88,17 @@ export async function pickTurnSession(input: {
     prev = undefined;
   }
   const resuming = !!prev?.cliSessionId && !["fork", "new", "clear"].includes(slash?.name ?? "");
-  // 用户删过这条会话里的消息：会话行照旧续（同一份 .md 接着写），CLI 会话却不能再
-  // --resume —— 它还记着原话。换一条新的、拿删除之后的记录重建（conversation-redact.ts）。
-  return { all, prev, resuming, reseed: resuming && !!prev?.contextRebuildAt };
+  // 用户删过这个任务里的消息：旧 CLI 会话还记着原话，凡是要在它上面接着跑的都不行。
+  //  - 普通消息：会话行照旧续（同一份 .md 接着写），CLI 会话换一条新的、拿删除之后的记录
+  //    重建（reseed，conversation-redact.ts / history-reseed.ts）；
+  //  - CLI 命令（`/fork` 把旧上下文整份复制进新分支，`/review` `/compact` `/plan` `/goal`
+  //    都在旧上下文上让模型干活）：没有「换新会话再执行」的等价物，明说先发一条普通消息。
+  //    `/new` `/clear` 本来就不带旧上下文，照常放行。
+  const stale = !!prev?.cliSessionId && !!prev.contextRebuildAt;
+  if (stale && slash && !["new", "clear"].includes(slash.name)) throw new Error(STALE_CONTEXT_COMMAND(slash.name));
+  return { all, prev, resuming, reseed: resuming && stale };
 }
+
+export const STALE_CONTEXT_COMMAND = (name: string) =>
+  `这条会话里删过消息，旧的 CLI 上下文已作废，/${name} 会在旧上下文上执行，所以没有发出。`
+  + `先发一条普通消息，让它带着删除后的记录在新会话里接上，再用 /${name}。`;

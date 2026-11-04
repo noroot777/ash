@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { parseSessionOutput, parseSessionSpans, segmentFingerprint } from "@ash/shared/session-output";
+import { parseSessionOutput, parseSessionSpans, segmentFingerprint, traceSpanFingerprint } from "@ash/shared/session-output";
 import { IS_WINDOWS } from "../src/platform.js";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
 
@@ -66,6 +66,9 @@ const redact = await import("../src/conversation-redact.js");
 const { pickTurnSession } = await import("../src/turn-session-pick.js");
 const { continueTask } = await import("../src/orchestrator.js");
 const { isHumanOnlyPath } = await import("../src/auth/personal-gate.js");
+const { appendTaskTimeline } = await import("../src/task-timeline.js");
+const { withRunFileLock } = await import("../src/run-file-lock.js");
+const { sessionsForTask } = await import("../src/task-session-routes.js");
 const { Hono } = await import("hono");
 const { mountTaskSessionRoutes } = await import("../src/task-session-routes.js");
 await ensureSchema();
@@ -180,6 +183,12 @@ const refusal = async (promise: Promise<unknown>, status: number, what: string) 
 
 const taskId = "t-redact";
 const sessionId = await seed(taskId);
+// 同任务的另一位智能体：它可能读过 claude 的 .md（同伴会读彼此的记录），它的 CLI 上下文也得作废。
+const PEER_CLI = "codex-old-thread";
+await db.insert(sessions).values({
+  id: `${taskId}-peer`, taskId, role: "single", agentType: "codex", executor: "codex",
+  cliSessionId: PEER_CLI, startedAt: ts, turnStartedAt: ts, endedAt: ts, exitStatus: 0,
+});
 {
   const api = new Hono();
   mountTaskSessionRoutes(api);
@@ -193,8 +202,22 @@ const sessionId = await seed(taskId);
   assert.equal((await post({ segments: [{ index: 2, fingerprint: "stale" }] })).status, 409, "正文旧了 409");
   const published: string[] = [];
   const off = bus.subscribe((event) => { if (event.type === "conversation.redacted") published.push(event.sessionId); });
-  const res = await post({ segments: [target(2), target(3), target(4)] });
+  // 删除与回合之外的追加（时间线旁注）排同一把逐文件锁。先由别人占着锁，确定性地验两头都在等：
+  // 旁注不会在改写读完之后才落进旧文件（被换名盖掉），改写也不会在别人写到一半时动手。
+  const mdPath = sessionTranscriptPath(taskId, sessionId);
+  let unlock!: () => void;
+  const held = withRunFileLock([mdPath], () => new Promise<void>((resolve) => { unlock = resolve; }));
+  const appending = appendTaskTimeline(taskId, "并发旁注 KEEP", { sessionId });
+  const deleting = post({ segments: [target(2), target(3), target(4)] });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.doesNotMatch(readFileSync(mdPath, "utf8"), /并发旁注 KEEP/, "锁被占着时旁注不落盘");
+  assert.match(readFileSync(mdPath, "utf8"), /SECRET/, "锁被占着时改写不动手");
+  unlock();
+  await held;
+  const [res, appended] = await Promise.all([deleting, appending]);
   off?.();
+  assert.equal(appended, true);
+  assert.match(readFileSync(mdPath, "utf8"), /并发旁注 KEEP/, "排在锁后的旁注没被改写吞掉");
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.deepEqual(res.body, { deleted: 3 });
   assert.deepEqual(published, [sessionId], "广播一声，打开着的页面重拉");
@@ -207,7 +230,70 @@ const sessionId = await seed(taskId);
   const pick = await pickTurnSession({ taskId, task, agent: "claude", sessionRole: "single", profileId: null, runOwner: null, slash: null });
   assert.equal(pick.prev?.id, sessionId, "续的还是同一条会话行（同一份 .md 接着写）");
   assert.equal(pick.reseed, true, "但这一轮要重建上下文");
-  ok("删除成功：盘上抹净、广播、挂标记，下一轮判为重建");
+  assert.ok((await sessionRow(`${taskId}-peer`)).contextRebuildAt, "同任务另一位智能体的会话也挂上重建标记");
+  const peerPick = await pickTurnSession({ taskId, task, agent: "codex", sessionRole: "single", profileId: null, runOwner: null, slash: null });
+  assert.equal(peerPick.reseed, true, "另一位智能体下一轮同样换新会话重建，不再 resume 读过原话的旧线程");
+  const listed = await sessionsForTask(taskId);
+  assert.ok(listed.every((row) => row.resumeCommand === null), "还没重建的会话不递出接回旧 CLI 会话的命令");
+  // 要在旧上下文上跑的 CLI 命令一律不发：/fork 会把旧上下文整份复制进新分支。
+  for (const name of ["fork", "review", "compact"] as const) {
+    await assert.rejects(
+      pickTurnSession({ taskId, task, agent: "codex", sessionRole: "single", profileId: null, runOwner: null, slash: { name, args: "", text: `/${name}` } }),
+      /删过消息/, `/${name} 在重建前被拒`,
+    );
+  }
+  const fresh = await pickTurnSession({ taskId, task, agent: "codex", sessionRole: "single", profileId: null, runOwner: null, slash: { name: "new", args: "", text: "/new" } });
+  assert.equal(fresh.resuming, false, "/new 本来就不带旧上下文，照常放行");
+  ok("删除成功：盘上抹净、并发旁注不丢、广播、全任务挂标记，下一轮判为重建，旧上下文上的命令被拒");
+}
+
+// ── ⑤ 答复、只剩执行过程的回合、写盘失败 ───────────────────────────────────────
+{
+  const extra = "t-extra";
+  const extraSession = await seed(extra);
+  const REPLY = "【答复】\nSECRET 发错的答复";
+  const record = { id: "q1", answeredAt: T(9), question: "SECRET 用哪个方案？", answer: "SECRET 发错的答复", reply: REPLY };
+  const keep = { id: "q0", answeredAt: T(0), question: "早先的问题", answer: "留着", reply: "【答复】\n留着" };
+  await db.update(tasks).set({ questionHistory: JSON.stringify([keep, record]) }).where(eq(tasks.id, extra));
+  const mdPath = sessionTranscriptPath(extra, extraSession);
+  const tracePath = sessionTracePath(extra, extraSession);
+  // 一轮答复之后回合失败：没有正文，只有执行过程。
+  writeFileSync(mdPath, TRANSCRIPT + [line({ t: "user", agent: "claude", text: REPLY, at: T(9) }), ""].join("\n"));
+  const failedTurn = [
+    { at: T(10), turnStartedAt: T(9), event: { kind: "run", model: null, reasoningEffort: null } },
+    { at: T(11), turnStartedAt: T(9), event: { kind: "tool", name: "Bash", input: "SECRET 失败回合的命令" } },
+    { at: T(12), turnStartedAt: T(9), event: { kind: "error", message: "SECRET 失败" } },
+  ];
+  writeFileSync(tracePath, TRACE + failedTurn.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  const answerIndex = parseSessionSpans(readFileSync(mdPath, "utf8")).length - 1;
+  const answerTarget = { index: answerIndex, fingerprint: segmentFingerprint(parseSessionSpans(readFileSync(mdPath, "utf8"))[answerIndex]!.seg) };
+  const traceTarget = { trace: { from: T(11), to: T(12), fingerprint: traceSpanFingerprint(failedTurn) } };
+
+  await refusal(redact.deleteConversationSegments(extraSession, [{ trace: { ...traceTarget.trace, fingerprint: "trace:1:0" } }]), 409, "执行过程的指纹对不上拒绝");
+  if (!IS_WINDOWS && process.getuid?.() !== 0) {
+    // 写盘失败：如实报失败，正文与 trace 原样不动，问答历史也不动。
+    const dir = dirname(mdPath);
+    chmodSync(dir, 0o555);
+    try {
+      await refusal(redact.deleteConversationSegments(extraSession, [answerTarget, traceTarget]), 500, "写不进去就报失败，不报成删好了");
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    assert.match(readFileSync(mdPath, "utf8"), /SECRET 发错的答复/, "失败时正文原样");
+    assert.match(readFileSync(tracePath, "utf8"), /SECRET 失败回合的命令/, "失败时 trace 原样");
+    assert.equal(readdirSync(dir).filter((name) => name.endsWith(".tmp")).length, 0, "不留临时文件");
+  }
+  await redact.deleteConversationSegments(extraSession, [answerTarget, traceTarget]);
+  assert.doesNotMatch(readFileSync(mdPath, "utf8"), /发错的答复/, "答复从正文里抹掉");
+  const trace = readFileSync(tracePath, "utf8");
+  assert.doesNotMatch(trace, /失败回合的命令|SECRET 失败/, "只剩执行过程的那一轮从 trace 里摘掉");
+  assert.match(trace, /"kind":"run".*"turnStartedAt"|"turnStartedAt".*"kind":"run"/, "回合身份 run 留着");
+  const history = JSON.parse((await db.select().from(tasks).where(eq(tasks.id, extra))).at(0)!.questionHistory!) as Array<Record<string, unknown>>;
+  assert.deepEqual(history[0], keep, "别的答复不动");
+  assert.equal(history[1]?.id, "q1");
+  assert.equal(history[1]?.deleted, true, "被删的答复在问答历史里只留墓碑");
+  assert.doesNotMatch(JSON.stringify(history), /SECRET/, "问答历史里也一个字不剩（问答卡、get_task 都读它）");
+  ok("答复连问答历史一起删、只剩执行过程的回合按时间段删、写盘失败如实报且原样不动");
 }
 
 // ── ④ 下一轮：换新 CLI 会话并喂重建的历史；再下一轮照常 resume ─────────────────

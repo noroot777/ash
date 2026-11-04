@@ -377,7 +377,21 @@
 .task-user-bubble header button.message-delete-button:hover,
 .monitor-wake-meta button.message-delete-button:hover,
 .task-message-footer button.message-delete-button:hover { color: var(--red); }
-.system-action-line .message-delete-button { display: grid; width: 18px; height: 18px; align-self: center; place-items: center; border: 0; border-radius: 4px; background: transparent; color: var(--faint); opacity: 0; }
+.task-question-record-body > footer button.message-delete-button:hover { color: var(--red); }
+/* 系统代发卡、系统注记、回合分隔线、记录明细里的一行：只有图标，平时隐着，悬停那一行才露出来。 */
+.system-action-line .message-delete-button,
+.conversation-note .message-delete-button,
+.system-boundary .message-delete-button,
+.system-event-digest li .message-delete-button { display: inline-grid; flex: none; width: 18px; height: 18px; align-self: center; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--faint); opacity: 0; cursor: pointer; vertical-align: middle; }
+.system-event-digest li .message-delete-button { margin-left: 4px; }
+/* 对齐模式的分隔线是「头像 · 说明 · 线」三列网格，有删除按钮时给它插一列。 */
+.system-boundary.notice-mode-aligned:has(> .message-delete-button) { grid-template-columns: 20px auto 18px minmax(32px, 1fr); }
 .system-action-wrap:hover .system-action-line .message-delete-button,
-.system-action-line .message-delete-button:focus-visible { opacity: 1; }
-.system-action-line .message-delete-button:hover { background: var(--raised); color: var(--red); }
+.conversation-note:hover .message-delete-button,
+.system-boundary:hover .message-delete-button,
+.system-event-digest li:hover .message-delete-button,
+.message-delete-button:focus-visible { opacity: 1; }
+.system-action-line .message-delete-button:hover,
+.conversation-note .message-delete-button:hover,
+.system-boundary .message-delete-button:hover,
+.system-event-digest li .message-delete-button:hover { background: var(--raised); color: var(--red); }
