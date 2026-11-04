@@ -30,7 +30,14 @@ export type Draft = {
   // 新建任务框专用：正文来自随手记时，创建成功后要把任务 id 回写给这几条随手记。
   // 它跟着草稿一起活，所以「转任务 → 中途去看别的 → 回来再创建」的回链不会断。
   noteIds: string[];
+  // 回复框的发送方式(定时 / 等任务完成)。它决定这份正文**什么时候**发,跟正文同生共死:
+  // 切走再回来正文还在、条件却变回立即发送,按下去就提前发了(第 1 轮审查实测)。
+  // 缺省 / null = 立即发送。
+  later?: LaterDraft | null;
 };
+
+/** 选了「稍后」时的那份设置。时间过期、等的任务没了也原样留着,由用户改,不静默退回立即发。 */
+export type LaterDraft = { kind: "timed" | "after"; at: string; afterTaskId: string };
 
 type DraftContextValue = {
   drafts: Record<string, Draft>;
@@ -57,7 +64,7 @@ export function DraftProvider({ children }: { children: ReactNode }) {
       const previous = current[key] ?? EMPTY_DRAFT;
       const next = update(previous);
       if (!next.text && next.attachments.length === 0 && next.pendingUploads.length === 0
-        && next.noteIds.length === 0 && !next.screenshot) {
+        && next.noteIds.length === 0 && !next.screenshot && !next.later) {
         if (!(key in current)) return current;
         const { [key]: _removed, ...remaining } = current;
         return remaining;
@@ -66,7 +73,8 @@ export function DraftProvider({ children }: { children: ReactNode }) {
         && next.attachments === previous.attachments
         && next.pendingUploads === previous.pendingUploads
         && next.noteIds === previous.noteIds
-        && next.screenshot === previous.screenshot) return current;
+        && next.screenshot === previous.screenshot
+        && next.later === previous.later) return current;
       return { ...current, [key]: next };
     });
   }, []);
@@ -85,6 +93,8 @@ export type DraftHandle = {
   setAttachments: Dispatch<SetStateAction<UploadAttachment[]>>;
   setPendingUploads: Dispatch<SetStateAction<UploadingFile[]>>;
   setNoteIds: Dispatch<SetStateAction<string[]>>;
+  later: LaterDraft | null;
+  setLater: Dispatch<SetStateAction<LaterDraft | null>>;
   /** 此刻这份草稿的不可变对象(引用即版本标识,提交时捕获、收尾时对比归属)。 */
   value: Draft;
   /**
@@ -134,6 +144,12 @@ export function useDraft(key: string): DraftHandle {
       noteIds: typeof next === "function" ? next(current.noteIds) : next,
     }));
   }, [key, updateDraft]);
+  const setLater = useCallback<Dispatch<SetStateAction<LaterDraft | null>>>((next) => {
+    updateDraft(key, (current) => ({
+      ...current,
+      later: typeof next === "function" ? next(current.later ?? null) : next,
+    }));
+  }, [key, updateDraft]);
   const clearIfUnchanged = useCallback((submitted: Draft) => {
     updateDraft(key, (current) => (current === submitted ? EMPTY_DRAFT : current));
   }, [key, updateDraft]);
@@ -154,6 +170,8 @@ export function useDraft(key: string): DraftHandle {
     setAttachments,
     setPendingUploads,
     setNoteIds,
+    later: draft.later ?? null,
+    setLater,
     value: draft,
     clearIfUnchanged,
     clear,

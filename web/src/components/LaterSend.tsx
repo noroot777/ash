@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import type { Group, ScheduledMessage, TaskListItem } from "@ash/shared";
 import { ArrowUp, Clock, HourglassMedium, PaperPlaneRight, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import type { DraftHandle } from "../lib/DraftStore.tsx";
 import { sendAfterOptions } from "../lib/sendAfter.ts";
 import { useRovingChoice } from "../lib/useRovingChoice.ts";
 import { ComposerPopover } from "../composer/ComposerPopover.tsx";
@@ -30,42 +31,53 @@ function KindIcon({ kind }: { kind: LaterKind }) {
   return <PaperPlaneRight size={12} />;
 }
 
-export function useLaterSend() {
-  const [kind, setKindState] = useState<LaterKind>("now");
-  const [at, setAt] = useState("");
-  const [afterTaskId, setAfterTaskId] = useState("");
-
+/** 发送方式的读写。状态本身存在这份回复草稿里(DraftStore 的 later 字段),跟正文一起
+ *  跨切任务保留、一起清掉;这里只负责解释它。 */
+export function useLaterSend(draft: Pick<DraftHandle, "later" | "setLater">) {
+  const { later, setLater } = draft;
+  const kind: LaterKind = later?.kind ?? "now";
+  const at = later?.at ?? "";
+  const afterTaskId = later?.afterTaskId ?? "";
   const time = new Date(at).getTime();
-  /** null = 选了「稍后」但还没配好(没选任务 / 时间不晚于现在):这时不能发,也绝不退回立即发。 */
-  const choice: LaterChoice | null = kind === "now"
+  /** null = 选了「稍后」但还没配好(没选任务 / 时间不晚于现在):这时不能发,也绝不退回立即发。
+   *  每次调用都按此刻的时钟判:提交时要重判,不能拿渲染那一刻算好的结果。 */
+  const resolve = (): LaterChoice | null => kind === "now"
     ? {}
     : kind === "timed"
       ? Number.isFinite(time) && time > Date.now() ? { sendAt: new Date(time).toISOString() } : null
       : afterTaskId ? { afterTaskId } : null;
-  const blocker = choice ? null : kind === "timed" ? "发送时间得晚于现在" : "还没选要等哪个任务";
+  // 选定的时刻一过,按钮得自己变灰,不等下一次输入才重渲染。
+  const [, expire] = useState(0);
+  useEffect(() => {
+    if (kind !== "timed" || !Number.isFinite(time) || time <= Date.now()) return;
+    const timer = window.setTimeout(() => expire((count) => count + 1), Math.min(time - Date.now() + 50, 2 ** 31 - 1));
+    return () => window.clearTimeout(timer);
+  }, [kind, time]);
+  const choice = resolve();
+  const blockerOf = (current: LaterChoice | null) =>
+    current ? null : kind === "timed" ? "发送时间得晚于现在" : "还没选要等哪个任务";
 
-  const reset = () => {
-    setKindState("now");
-    setAt("");
-    setAfterTaskId("");
-  };
   return {
-    kind, at, afterTaskId, choice, blocker,
+    kind, at, afterTaskId, choice, resolve, blockerOf,
+    blocker: blockerOf(choice),
     submitLabel: KINDS.find((item) => item.value === kind)!.submit,
-    setAt, setAfterTaskId, reset,
+    setAt: (value: string) => setLater((current) => ({ kind: "timed", at: value, afterTaskId: current?.afterTaskId ?? "" })),
+    setAfterTaskId: (value: string) => setLater((current) => ({ kind: "after", at: current?.at ?? "", afterTaskId: value })),
+    reset: () => setLater(null),
     setKind: (next: LaterKind) => {
-      if (next === "now") return reset();
-      if (next === "timed" && !at) setAt(defaultOnceTime());
-      setKindState(next);
+      if (next === "now") return setLater(null);
+      setLater((current) => ({
+        kind: next,
+        at: current?.at || (next === "timed" ? defaultOnceTime() : ""),
+        afterTaskId: current?.afterTaskId ?? "",
+      }));
     },
     /** 撤回一条消息时把它当初的「稍后」也放回来:定时的还没到点才留,等任务的原样留。 */
     restore: (message: ScheduledMessage) => {
       if (message.mode === "after" && message.afterTaskId) {
-        setKindState("after");
-        setAfterTaskId(message.afterTaskId);
+        setLater({ kind: "after", at: "", afterTaskId: message.afterTaskId });
       } else if (message.mode === "timed" && new Date(message.sendAt).getTime() > Date.now()) {
-        setKindState("timed");
-        setAt(toLocalDateTime(new Date(message.sendAt)));
+        setLater({ kind: "timed", at: toLocalDateTime(new Date(message.sendAt)), afterTaskId: "" });
       }
     },
   };

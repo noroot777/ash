@@ -16,6 +16,7 @@ import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useFileMention } from "../lib/useFileMention.ts";
 import { useAutoGrowTextarea } from "../lib/useAutoGrowTextarea.ts";
 import { isSendKeyEvent } from "../lib/sendKey.ts";
+import { useSendKeyLabels } from "../lib/useComposerSendKey.ts";
 import { useTaskReplyDraft } from "../lib/DraftStore.tsx";
 import { useReplyLayout } from "../task-detail/useReplyLayout.ts";
 import { AttachmentPicker, UploadAttachmentList, uploadingLabel, useAttachments } from "../task-detail/Attachments.tsx";
@@ -49,7 +50,8 @@ export function TeamReplyBox({
   const setValue = draft.setText;
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const later = useLaterSend();
+  const later = useLaterSend(draft);
+  const sendKeys = useSendKeyLabels();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // 跟着输入行数长高;顶边那条拖动条拖过之后以拖出来的高度为准——跟普通任务回复框
   // 同一套(task-detail/ReplyResizeHandle.tsx),高度只有 useAutoGrowTextarea 一个写者,
@@ -82,7 +84,6 @@ export function TeamReplyBox({
   });
   useEffect(() => {
     setError(null);
-    later.reset();
   }, [task.id]);
   // 正在飞的那一次发送；撤回排在它后面，见下面的 withdraw。
   const inFlightSend = useRef<Promise<void> | null>(null);
@@ -97,9 +98,9 @@ export function TeamReplyBox({
   const runSend = async () => {
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     // 选了「稍后」却没配好：拦下并说清，绝不悄悄退回立即发送。
-    const choice = later.choice;
+    const choice = later.resolve();
     if (!choice) {
-      setError(`${later.submitLabel}：${later.blocker}`);
+      setError(`${later.submitLabel}：${later.blockerOf(choice)}`);
       return;
     }
     setSending(true);
@@ -107,6 +108,7 @@ export function TeamReplyBox({
     // 发出去的是这一份；成功后只在草稿逐字还是这一份时才清掉，动过就整份留着
     // （见 task-detail/withdrawDraft.ts 的 clearSentDraft）。
     const draftAtSend = value;
+    const laterAtSend = draft.later;
     const sentText = value.trim();
     const sentPaths = uploads.attachments.map((attachment) => attachment.path);
     try {
@@ -117,7 +119,7 @@ export function TeamReplyBox({
       setValue((current) => clearSentDraft(current, draftAtSend));
       draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
       uploads.clearError();
-      later.reset();
+      draft.setLater((current) => (current === laterAtSend ? null : current));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -179,7 +181,7 @@ export function TeamReplyBox({
           rows={2}
           value={value}
           disabled={disabled}
-          placeholder={disabled ? "团队已归档（只读）" : task.status === "idle" ? "调度者待命中，说句话就接回同一会话…" : "插一句话（改方向、加要求、直接替它拍板）…"}
+          placeholder={disabled ? "团队已归档（只读）" : task.status === "idle" ? `调度者待命中，说句话就接回同一会话…（${sendKeys.sendShort} 发送）` : `插一句话（改方向、加要求、直接替它拍板；${sendKeys.sendShort} 发送）…`}
           onChange={(event) => { setValue(event.target.value); slash.onValueChange(); mention.onValueChange(); }}
           onPaste={uploads.onPaste}
           onKeyDown={(event) => {

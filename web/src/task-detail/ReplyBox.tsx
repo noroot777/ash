@@ -114,7 +114,7 @@ export function ReplyBox({
   // 只剩 `@` 那条路会开这个浮层：正文里选中智能体之后紧接着选模型。点胶囊改配置由
   // 胶囊自己管（三段各开各的浮层，见 components/RunTargetPicker.tsx）。
   const [picker, setPicker] = useState<{ agent: AgentType } | null>(null);
-  const later = useLaterSend();
+  const later = useLaterSend(draft);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendKeys = useSendKeyLabels();
   // null = 没拖过,交给行数自动撑高(useAutoGrowTextarea)
@@ -158,10 +158,10 @@ export function ReplyBox({
     : task.archived
       ? command ? "任务已归档；仍可输入 /team 或 /duet 创建派生任务…" : "任务已归档，无法继续回复"
       : queueing
-        ? command ? "任务进行中；发送即排队，队尾可点“引导会话”；也可输入 /team 或 /duet…" : `任务进行中，发送即排队；需要立即接入当前对话可在队尾点“引导会话”（${sendKeys.sendShort}）…`
+        ? command ? "任务进行中；发送即排队，队尾可点“引导会话”" + `（${sendKeys.sendShort}）；也可输入 /team 或 /duet…` : `任务进行中，发送即排队；需要立即接入当前对话可在队尾点“引导会话”（${sendKeys.sendShort}）…`
         : !hasConversation
           ? command ? "可输入 /team 创建团队，或输入 /duet 发起讨论…" : "先运行任务，再继续回复"
-          : command ? "回复并继续；输入 /team 或 /duet 可派生新任务…" : `回复并继续（${sendKeys.sendShort} 发送，可粘贴图片或文件）…`;
+          : command ? `回复并继续（${sendKeys.sendShort} 发送）；输入 /team 或 /duet 可派生新任务…` : `回复并继续（${sendKeys.sendShort} 发送，可粘贴图片或文件）…`;
 
   const resetComposerState = () => {
     setCommandIndex(0);
@@ -169,7 +169,6 @@ export function ReplyBox({
     mention.reset();
     setTarget(null);
     setPicker(null);
-    later.reset();
   };
 
   useEffect(() => {
@@ -378,10 +377,10 @@ export function ReplyBox({
       return false;
     }
     if (disabled || sending || uploads.uploading || (!annotation && !value.trim() && !uploads.attachments.length)) return false;
-    const choice = annotation ? {} : later.choice;
+    const choice = annotation ? {} : later.resolve();
     // 选了「稍后」却没配好：拦下并说清，绝不悄悄退回立即发送。
     if (!choice) {
-      setSendError(`${later.submitLabel}：${later.blocker}`);
+      setSendError(`${later.submitLabel}：${later.blockerOf(choice)}`);
       return false;
     }
     setSending(true);
@@ -390,6 +389,7 @@ export function ReplyBox({
     // 发出去的是这一份。成功后只在草稿**逐字还是这一份**时才清掉；动过就整份留着，
     // 绝不去猜哪一段是刚发出去的（见 withdrawDraft.ts 的 clearSentDraft）。
     const draftAtSend = value;
+    const laterAtSend = draft.later;
     const sentText = annotation?.text ?? value.trim();
     const sentPaths = annotation?.attachments ?? uploads.attachments.map((attachment) => attachment.path);
     try {
@@ -422,7 +422,8 @@ export function ReplyBox({
         setValue((current) => clearSentDraft(current, draftAtSend));
         draft.setAttachments((current) => dropSentAttachments(current, sentPaths));
         uploads.clearError();
-        later.reset();
+        // 发送方式跟正文同口径：发送途中被改过就留着，那是下一条的设置。
+        draft.setLater((current) => (current === laterAtSend ? null : current));
       }
       setTarget(null);
       return true;
