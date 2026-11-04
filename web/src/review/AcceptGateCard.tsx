@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowClockwise, ArrowUUpLeft, CheckCircle, FileText, PencilSimple, SpinnerGap, WarningCircle, XCircle } from "@phosphor-icons/react";
 import type { AcceptGateBaseline, AcceptGateBasis, AcceptGateState, AcceptGateView } from "@ash/shared/accept-gate";
 import { ACCEPT_GATE_BASELINE_LABELS, ACCEPT_GATE_STATUS_LABELS, acceptGateBaselineEffect, acceptGateCancelMessage,
@@ -35,6 +35,11 @@ type AcceptGateCardProps = {
    */
   onIntent: (intent: "rerun" | "skip", latest: AcceptGateView | null) => void;
   disabled?: boolean;
+  /**
+   * 宿主交过来的「验收通过」主按钮，排在按钮行最前面。命令正在跑时不摆：那时没有
+   * 可按的，绿了会自动做完。
+   */
+  acceptAction?: ReactNode;
 };
 
 export function AcceptGateCard(props: AcceptGateCardProps) {
@@ -42,7 +47,7 @@ export function AcceptGateCard(props: AcceptGateCardProps) {
   return <AcceptGateCardView {...props} gate={gate} />;
 }
 
-export function AcceptGateCardView({ task, notify, onIntent, disabled = false, gate }: AcceptGateCardProps & {
+export function AcceptGateCardView({ task, notify, onIntent, disabled = false, acceptAction, gate }: AcceptGateCardProps & {
   gate: ReturnType<typeof useAcceptGate>;
 }) {
   const { state, error, stale, running, latest, basis, runningFor, reload } = gate;
@@ -340,6 +345,7 @@ ${shown.legacyDiagnosis}`}
           </>
         ) : (
           <>
+            {!running && !settled && acceptAction}
             {running ? (
               <button type="button" disabled={busy} onClick={() => void cancel()}>
                 <XCircle size={13} />不等了，收掉它
