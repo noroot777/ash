@@ -257,13 +257,19 @@ export const PLAIN_SUMMARY_EXAMPLE =
  * 审查者侧同类问题承接的两段常驻文案（判据与熔断在服务端 `review-recurrence.ts`）。
  *
  * 预算是用户直接问过的（体积闸 `test-prompt-budget.ts` 逐字节钉着）：字段说明 ≤ 200B、清单旁那一句
- * ≤ 120B。字段说明讲格式，清单旁那一句只讲「编号拿来干什么」—— 那一句只在清单真列出了编号时才发，
- * 第一轮审查和折成摘要的清单一个字节都不多付。
+ * ≤ 160B。那一句只在清单真列出了编号时才发，第一轮审查和折成摘要的清单一个字节都不多付。
+ *
+ * 两段写的是同一个形状（`RECURS_SHAPE_EXAMPLE`，体积闸核两段都含它）：2026-11-04 之前那一句只写
+ * 「填它行首编号」，审查者照字面交了裸编号数组（任务 v9Ps5S1vbnKt，三轮），承接全被静默丢掉、熔断
+ * 一次没触发。现在形状不对在 MCP 边界当场被拒（`RECURS_SHAPE_ERROR`），审查者同一回合里改正重发。
  */
+export const RECURS_SHAPE_EXAMPLE = '{"本轮第几条":"行首编号"}';
 export const RECURS_FIELD_GUIDE =
-  '可选,仅 verify_failed:本轮拦验收第几条承接历史清单哪条,{"本轮条序":"清单行首编号"},如 {"1":"2.3.1"};不是复发别填,填错按没填算';
+  `可选,仅 verify_failed:本轮拦验收第几条承接历史清单哪条,${RECURS_SHAPE_EXAMPLE},如 {"1":"2.1.1"};不是复发别填,形状不对会被拒`;
 export const RECURRENCE_HINT =
-  "哪条拦验收发现是上面某条的复发或没修好，就在 report_stage 的 recurs 里填它行首编号。\n";
+  `哪条拦验收发现是上面某条的复发或没修好，就在 report_stage 的 recurs 里按 ${RECURS_SHAPE_EXAMPLE} 填，如 {"1":"2.1.1"}。\n`;
+/** `recurs` 形状不对时 MCP 边界回给审查者的那句话：只在违规时出现。 */
+export const RECURS_SHAPE_ERROR = `recurs 要写成 ${RECURS_SHAPE_EXAMPLE}，如 {"1":"2.1.1"}；不是复发就别传`;
 
 // 审查链只落四个持久状态：reviewing 是唯一的「活」态（旁路审查回合正在跑），
 // passed / failed 是链的终局，stopped 是「最后一轮未通过后停住」。

@@ -87,7 +87,9 @@ const BUDGETS: Record<string, number> = {
   "section/settled-executor-100-nofile": 1050,
   "section/history-100": 3100,
   // 清单带编号的那一版（同类问题承接，review-recurrence.ts）：行首编号 + 一句 `RECURRENCE_HINT`。
-  "section/history-refs": 1550,
+  // 2026-11-04 +44（1475 → 1519 实测）：那一句补上形状示例 —— 只写「填它行首编号」时审查者交了裸编号
+  // 数组，三轮承接全被丢掉（v9Ps5S1vbnKt）。用户拍板只加这 44B。
+  "section/history-refs": 1594,
   // ── 投递态（`DELIVERED`）：真正发出去的那一条，片段相加之后的样子 ─────────────
   // 审查这几条在 2026-11-03 各涨了 198B：「跨回合的等待别交给内置后台」那一句（用户拍板
   // 放宽，见 TARGETS 那两行）。同日摘掉全局浏览器策略，这一节每份各降 2258B（规划那份
