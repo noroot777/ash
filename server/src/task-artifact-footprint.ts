@@ -1,11 +1,11 @@
-import { and, desc, eq, gte, inArray, isNull, lte, ne, or } from "drizzle-orm";
+import { and, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { dirname, isAbsolute, relative, sep } from "node:path";
 import { db } from "./db/index.js";
 import { monitors } from "./db/schema-monitors.js";
-import { sessions, tasks, taskWrites } from "./db/schema.js";
+import { sessions, sessionTurns, tasks, taskWrites } from "./db/schema.js";
 import type { WorkspaceRoot } from "./file-browser.js";
 import type { PathLens } from "./task-artifact-paths.js";
-import type { ArtifactScope, ArtifactTask } from "./task-artifact-scope.js";
+import { workspaceRunOwners, type ArtifactScope, type ArtifactTask } from "./task-artifact-scope.js";
 import { runWindows, withinWindows, type RunWindow } from "./task-artifact-windows.js";
 
 // 共享目录上**同时在跑**的任务怎么分开——时间判据答不了的那一问，交给「谁在这附近写过
@@ -21,8 +21,11 @@ import { runWindows, withinWindows, type RunWindow } from "./task-artifact-windo
 // 认。只有同一刻还有别的任务在这个目录里跑，才拿写入位置来比；比不出来（一样近、或者有一方
 // 没有任何写入记录）就照实标成候选，不硬判。
 
-/** 一次最多拿这么多个时间上挨着的任务来比——每个都要算一遍运行区间。 */
-const MAX_RIVALS = 24;
+/**
+ * 最多核对这么多个候选对手——每个都要算一遍运行区间。超了就如实说「没比全」，所有原本能判
+ * 成「没别人」「是它的」的条目都降成候选：没核对的那些里可能就有当时在场的人。
+ */
+const MAX_RIVALS = 48;
 /**
  * 粗筛时往前多看这么久：对手的区间可能比它的会话起止更宽（收尾宽限、没收尾的按 6 小时兜底），
  * 只按起止卡会漏掉。粗筛之后每个对手都会按自己真正的区间再核一遍，宽一点只是多算几个。
@@ -36,6 +39,8 @@ export interface FootprintArbiter {
   judge(relPath: string, mtimeMs: number | null): FootprintVerdict;
   /** 本任务写过的目录（相对工作区根），扫描时先看这几处。 */
   focus: string[];
+  /** 没比全时的一句人话（面板照实说）。 */
+  incomplete?: string;
 }
 
 interface Footprint {
@@ -71,37 +76,88 @@ const closeness = (dir: readonly string[], print: Footprint): [number, number] =
 
 const compare = (a: [number, number], b: [number, number]) => a[0] - b[0] || a[1] - b[1];
 
+const overlaps = (a: RunWindow, b: RunWindow) => a.start <= b.end && b.start <= a.end;
+
 /**
- * 时间上跟本任务挨着、在同一个项目里跑过的那些任务——候选对手。
+ * 时间上跟本任务挨着、**工作目录**跟这个目录沾边的那些任务——候选对手。
  *
- * 归属链上的任务（审查跟到被审、领队汇总执行者）不算对手：它们本来就跟本任务共用这摊活的
- * 归属，见 `workspaceRunOwners`。
+ * 按目录找，不按项目找：同一个目录可能被几个项目同时登记（一个项目开在 `~/code/empty`、
+ * 另一个开在 `~/code`），也可能被一个开在上层目录的任务写进来。「沾边」= 记下来的工作目录
+ * 就是它、在它底下、或者是它的上层；没记目录的老行只在同项目里才算（它当时在哪儿无从查证，
+ * 跟 `runWindows` 的 `stale` 那一档一个意思）。这里只是粗筛，最终以 `runWindows` 核出来的
+ * 区间为准。
+ *
+ * 粗筛按会话、回合、哨兵三处的记录收：会话的启动目录、每个回合实际的工作目录、哨兵的工作
+ * 目录可能各不相同。返回按最近活动排序（截断时先留最近的）。
  */
-async function rivalIds(task: ArtifactTask, ownerIds: string[], windows: readonly RunWindow[]): Promise<string[]> {
+async function rivalCandidates(
+  task: ArtifactTask,
+  windows: readonly RunWindow[],
+  root: WorkspaceRoot,
+  lens: PathLens,
+): Promise<string[]> {
   const from = new Date(Math.min(...windows.map((w) => w.start)) - ROUGH_MARGIN_MS).toISOString();
   const latest = Math.max(...windows.map((w) => w.end));
   const until = Number.isFinite(latest) ? new Date(latest).toISOString() : null;
-  const sameProject = db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, task.projectId));
-  const [sessionRows, monitorRows] = await Promise.all([
-    db.select({ taskId: sessions.taskId, at: sessions.startedAt }).from(sessions).where(and(
-      inArray(sessions.taskId, sameProject),
-      until ? lte(sessions.startedAt, until) : undefined,
-      or(isNull(sessions.endedAt), gte(sessions.endedAt, from)),
-    )).orderBy(desc(sessions.startedAt)),
-    db.select({ taskId: monitors.taskId, at: monitors.startedAt }).from(monitors).where(and(
-      inArray(monitors.taskId, sameProject),
-      until ? lte(monitors.startedAt, until) : undefined,
-      or(isNull(monitors.endedAt), gte(monitors.endedAt, from)),
-    )).orderBy(desc(monitors.startedAt)),
+  const [sessionRows, turnRows, monitorRows] = await Promise.all([
+    db.select({ taskId: sessions.taskId, cwd: sessions.cwd, alt: sessions.worktreePath, at: sessions.startedAt })
+      .from(sessions).where(and(
+        until ? lte(sessions.startedAt, until) : undefined,
+        or(isNull(sessions.endedAt), gte(sessions.endedAt, from)),
+      )),
+    db.select({ taskId: sessionTurns.taskId, cwd: sessionTurns.cwd, alt: sql<null>`null`, at: sessionTurns.startedAt })
+      .from(sessionTurns).where(and(
+        until ? lte(sessionTurns.startedAt, until) : undefined,
+        or(isNull(sessionTurns.endedAt), gte(sessionTurns.endedAt, from)),
+      )),
+    db.select({ taskId: monitors.taskId, cwd: monitors.cwd, alt: sql<null>`null`, at: monitors.startedAt })
+      .from(monitors).where(and(
+        until ? lte(monitors.startedAt, until) : undefined,
+        or(isNull(monitors.endedAt), gte(monitors.endedAt, from)),
+      )),
   ]);
-  const owners = new Set(ownerIds);
-  const ids: string[] = [];
-  for (const row of [...sessionRows, ...monitorRows].sort((a, b) => (b.at ?? "").localeCompare(a.at ?? ""))) {
-    if (owners.has(row.taskId) || ids.includes(row.taskId)) continue;
-    ids.push(row.taskId);
-    if (ids.length >= MAX_RIVALS) break;
+  const projectOf = new Map<string, string>();
+  const rows = [...sessionRows, ...turnRows, ...monitorRows].filter((row) => row.taskId !== task.id);
+  const unknownDir = rows.filter((row) => !(row.cwd ?? row.alt ?? "").trim()).map((row) => row.taskId);
+  if (unknownDir.length) {
+    for (const row of await db.select({ id: tasks.id, projectId: tasks.projectId }).from(tasks)
+      .where(inArray(tasks.id, [...new Set(unknownDir)]))) projectOf.set(row.id, row.projectId);
   }
-  return ids;
+  const related = async (row: (typeof rows)[number]) => {
+    const recorded = (row.cwd ?? row.alt ?? "").trim();
+    if (!recorded) return projectOf.get(row.taskId) === task.projectId;
+    return await lens.underDir(recorded, root.path) || await lens.underDir(root.path, recorded)
+      || (!!root.repo && await lens.underDir(recorded, root.repo) && !(await lens.dirExists(recorded)));
+  };
+  // 一个任务只要有一条记录沾边就入选；它别的记录只用来刷新「最近活动」。
+  const latestAt = new Map<string, string>();
+  for (const row of rows) {
+    const seen = latestAt.get(row.taskId);
+    if (seen !== undefined ? seen >= (row.at ?? "") : !(await related(row))) continue;
+    latestAt.set(row.taskId, row.at ?? "");
+  }
+  return [...latestAt].sort((a, b) => b[1].localeCompare(a[1])).map(([id]) => id);
+}
+
+/**
+ * 跟本任务**共用这摊活的归属**的任务不算对手，两个方向都要排：
+ *
+ *   - 本任务的归属链（它自己是审查就跟到被审、它是领队就收进全部执行者）——本来就算它的；
+ *   - 反过来，**把本任务算进自己归属链**的那些：审查本任务的、本任务所在团队的领队。它们的
+ *     运行时间里本来就包着本任务的活，当成对手会把本任务做的东西判成「拿不准」甚至判走。
+ *
+ * 同一个团队里的兄弟执行者**仍是对手**：它们各干各的（领队页汇总、执行者各认自己的，理由见
+ * `workspaceRunOwners`）。
+ */
+async function collaborators(candidates: string[], ownerIds: readonly string[], taskId: string): Promise<Set<string>> {
+  const out = new Set(ownerIds);
+  const rows = candidates.length
+    ? await db.select().from(tasks).where(inArray(tasks.id, candidates.filter((id) => !out.has(id))))
+    : [];
+  await Promise.all(rows.map(async (row) => {
+    if ((await workspaceRunOwners(row)).some((owner) => owner.id === taskId)) out.add(row.id);
+  }));
+  return out;
 }
 
 /** 这些任务各自在工作区根底下写过哪些目录。根外面的不算（那是别处的活）。 */
@@ -143,6 +199,9 @@ const hasPrint = (print: Footprint | undefined) => !!print && (print.strong.leng
  *   4. 本任务严格最近、而且所有对手都有写入记录可比 → `mine`，归属确定。
  *   5. 其余（一样近、或者有对手没记录可比）→ `unsure`，留作候选。
  *
+ * 对手太多没核全时（`incomplete`），1 和 4 都不成立——没核的那些里可能就有当时在场、离得
+ * 更近的人——一律降成 `unsure`；3 照旧，核到的那个对手确实更近。
+ *
  * 「更近」要真有东西可比：离得最近的那处也只跟这个文件共享工作区根本身（深度 0）的话，
  * 等于谁都没在附近写过，不算证据。
  */
@@ -154,10 +213,19 @@ export async function footprintArbiter(
 ): Promise<FootprintArbiter> {
   if (scope.exclusive || !scope.windows.length) return ALONE;
   const ownerIds = scope.owners.map((owner) => owner.id);
-  const rivals = (await Promise.all((await rivalIds(task, ownerIds, scope.windows)).map(async (id) => ({
+  const candidates = await rivalCandidates(task, scope.windows, root, lens);
+  const excluded = await collaborators(candidates, ownerIds, task.id);
+  const pending = candidates.filter((id) => !excluded.has(id));
+  // 截断只发生在**目录核对之后**：先把在别处干活的、协作关系上的都筛掉，剩下的才按最近活动
+  // 排队。仍然超了就是真没比全，下面整套判法都要知道这一点。
+  const incomplete = pending.length > MAX_RIVALS;
+  const rivals = (await Promise.all(pending.slice(0, MAX_RIVALS).map(async (id) => ({
     id,
-    windows: (await runWindows([{ id }], root, lens)).windows,
-  })))).filter((rival) => rival.windows.length > 0);
+    windows: (await runWindows([{ id }], root, lens, { fromAbove: true })).windows,
+  })))).filter((rival) => rival.windows.some((span) => scope.windows.some((own) => overlaps(span, own))));
+  const note = incomplete
+    ? `同一时间在这个目录附近跑过的任务太多（超过 ${MAX_RIVALS} 个），没能逐个比对写入位置，没判给别人的都按候选列`
+    : undefined;
 
   const prints = await footprints([...ownerIds, ...rivals.map((rival) => rival.id)], root, lens);
   const mine: Footprint = { strong: [], weak: [] };
@@ -166,13 +234,14 @@ export async function footprintArbiter(
     if (print) { mine.strong.push(...print.strong); mine.weak.push(...print.weak); }
   }
   const focus = [...new Set(mine.strong.filter((segs) => segs.length > 0).map((segs) => segs.join("/")))];
-  if (!rivals.length) return { judge: () => "alone", focus };
+  if (!rivals.length && !incomplete) return { judge: () => "alone", focus };
 
   return {
     focus,
+    incomplete: note,
     judge(relPath, mtimeMs) {
       const present = rivals.filter((rival) => withinWindows(mtimeMs, rival.windows));
-      if (!present.length) return "alone";
+      if (!present.length) return incomplete ? "unsure" : "alone";
       if (!hasPrint(mine)) return "unsure";
       const dir = segmentsOf(relPath).slice(0, -1);
       const own = closeness(dir, mine);
@@ -185,7 +254,7 @@ export async function footprintArbiter(
         if (compare(theirs, best) > 0) best = theirs;
       }
       if (compare(best, own) > 0 && (best[0] > 0 || best[1] > 0)) return "theirs";
-      if (!blind && compare(own, best) > 0 && (own[0] > 0 || own[1] > 0)) return "mine";
+      if (!blind && !incomplete && compare(own, best) > 0 && (own[0] > 0 || own[1] > 0)) return "mine";
       return "unsure";
     },
   };

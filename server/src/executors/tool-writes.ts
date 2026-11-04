@@ -7,6 +7,10 @@ import type { AgentEvent } from "@ash/shared";
 //
 // 只认**写文件、改文件的工具**和**命令的工作目录**两样。shell 命令写到哪儿从命令文本里分析
 // 不可靠（重定向、脚本里的路径、`-o` 参数五花八门），不猜。
+//
+// **只认写成了的**：工具入参只证明「试图写」。一次报错的 Edit（目标不存在、旧串对不上）什么都
+// 没改，却会被当成「这个任务在那儿写过东西」，把旁边别的任务的真产物判走。所以 claude 要等到
+// 对应的 tool_result 没报错才放出来（`ClaudeWriteLedger`），codex 只认 `completed` 的改文件项。
 
 /** claude 的写文件/改文件工具 → 目标路径所在的入参字段。 */
 const CLAUDE_WRITE_TOOLS: Record<string, string> = {
@@ -27,14 +31,47 @@ export function claudeToolWrites(name: unknown, input: unknown): AgentEvent | nu
   return paths.length ? { kind: "writes", paths } : null;
 }
 
+/** 一次调用的入参里最多攒这么多条等结果——中途被打断、永远等不到结果的那些不能无限堆。 */
+const MAX_PENDING_WRITES = 256;
+
 /**
- * codex 一次改文件动作写到的文件。两种协议形状都认：app-server 的 `fileChange.changes`、
+ * claude 的写文件调用要配上结果才算数：`tool_use` 先记下，`tool_result` 没报错才放出来。
+ * 主会话与子智能体共用一本（调用 id 全局唯一）。
+ */
+export class ClaudeWriteLedger {
+  private pending = new Map<string, AgentEvent>();
+
+  toolUse(name: unknown, input: unknown, id: unknown): void {
+    const writes = claudeToolWrites(name, input);
+    if (!writes || typeof id !== "string" || !id) return;
+    if (this.pending.size >= MAX_PENDING_WRITES) this.pending.delete(this.pending.keys().next().value!);
+    this.pending.set(id, writes);
+  }
+
+  toolResult(id: unknown, isError: boolean): AgentEvent | null {
+    if (typeof id !== "string") return null;
+    const writes = this.pending.get(id);
+    this.pending.delete(id);
+    return writes && !isError ? writes : null;
+  }
+}
+
+/**
+ * codex 的条目这一次到底做成了没有。改文件只认 `completed`（`failed`/`declined`/还在进行都不算）；
+ * 命令被拒绝（`declined`）就压根没在那个目录跑过，失败的命令照样在那儿跑过。
+ */
+const codexStatus = (item: Record<string, unknown>) =>
+  typeof item.status === "string" ? item.status.replace(/[_ -]/g, "").toLowerCase() : "";
+
+/**
+ * codex 一次改文件动作写到的文件——**只认已完成的**。两种协议形状都认：app-server 的 `fileChange.changes`、
  * `codex exec --json` 的 `file_change.changes`（`[{ path, kind }]`），以及老版本单个 `path`。
  * 改名的那一条另带 `move_path`/`movePath`，目标也算写过。
  */
 export function codexChangeWrites(item: unknown): AgentEvent | null {
   if (!item || typeof item !== "object") return null;
   const record = item as Record<string, unknown>;
+  if (codexStatus(record) !== "completed") return null;
   const changes = Array.isArray(record.changes) ? record.changes : [];
   const paths = cleanPaths([
     record.path,
@@ -48,9 +85,12 @@ export function codexChangeWrites(item: unknown): AgentEvent | null {
   return paths.length ? { kind: "writes", paths } : null;
 }
 
-/** codex 一条命令的工作目录（弱证据）。协议没带就是 null。 */
+/** codex 一条命令的工作目录（弱证据）。协议没带、或者命令被拒绝没跑，就是 null。 */
 export function codexCommandCwd(item: unknown): AgentEvent | null {
-  const cwd = item && typeof item === "object" ? (item as Record<string, unknown>).cwd : undefined;
+  if (!item || typeof item !== "object") return null;
+  const record = item as Record<string, unknown>;
+  if (["declined", "inprogress", ""].includes(codexStatus(record))) return null;
+  const cwd = record.cwd;
   const paths = cleanPaths([cwd]);
   return paths.length ? { kind: "writes", paths, cwd: true } : null;
 }

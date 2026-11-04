@@ -86,7 +86,7 @@ export async function isExclusiveRoot(task: ArtifactTask, root: WorkspaceRoot, l
  * 普通派生任务的 `parentId` 不算：那是「从父分支起步」的依赖关系，它有自己的工作目录。
  * 收来的区间最终还要过一遍工作目录核对（见 `runWindows`）。
  */
-async function workspaceRunOwners(task: ArtifactTask): Promise<ArtifactTask[]> {
+export async function workspaceRunOwners(task: ArtifactTask): Promise<ArtifactTask[]> {
   const owners = [task];
   const seen = new Set([task.id]);
   for (let cursor = 0; cursor < owners.length; cursor += 1) {
@@ -202,14 +202,23 @@ const supportsSinceAsFilter = (root: string): Promise<boolean> => {
 export async function committedInWindows(
   root: string,
   windows: readonly RunWindow[],
-): Promise<{ exact: string[]; approx: string[]; truncated: boolean; skippedWindows: number; dateWalk: boolean }> {
-  if (!windows.length) return { exact: [], approx: [], truncated: false, skippedWindows: 0, dateWalk: false };
+): Promise<{
+  exact: string[];
+  approx: string[];
+  /** 每条路径在区间里**最晚**那次提交的时刻（毫秒）。并发裁决按它去问「那一刻还有谁在跑」。 */
+  at: Map<string, number>;
+  truncated: boolean;
+  skippedWindows: number;
+  dateWalk: boolean;
+}> {
+  if (!windows.length) return { exact: [], approx: [], at: new Map(), truncated: false, skippedWindows: 0, dateWalk: false };
   const asFilter = await supportsSinceAsFilter(root);
   // 区间太多时保最近的几段：旧的那些对「它刚做出了什么」贡献最小。
   const ordered = [...windows].sort((a, b) => b.start - a.start);
   const picked = ordered.slice(0, MAX_WINDOW_QUERIES);
   const exact = new Set<string>();
   const approx = new Set<string>();
+  const at = new Map<string, number>();
   let truncated = false;
 
   for (const window of picked) {
@@ -222,7 +231,8 @@ export async function committedInWindows(
       // 恰好是 40 位十六进制、又躺在仓库根上的文件就会被认成提交号 —— 它自己从清单里消失,
       // 后面那一串路径还会被当成它的（`afterHeader` 跟着错位剥一个换行）。路径里出现 0x01
       // 这个控制字符在实践中不会发生,于是两类 token 从形状上就分得开（本轮审查不拦项）。
-      `--max-count=${MAX_WINDOW_COMMITS}`, "--name-only", "-z", "--format=%x00%x01%H",
+      // 提交号后面跟着 committer 时刻（秒）：并发裁决要知道「这次提交发生在哪一刻」。
+      `--max-count=${MAX_WINDOW_COMMITS}`, "--name-only", "-z", "--format=%x00%x01%H %ct",
     ];
     const { stdout } = await exec("git", args, { maxBuffer: 16 * 1024 * 1024 });
     // `-z` 下提交头和路径一律以 NUL 分隔；`%x00%x01%H` 让提交头自己也以 NUL 开场、并且带上
@@ -233,16 +243,20 @@ export async function committedInWindows(
     // 次，所以只在那个位置剥、而且只剥一个：无条件剥掉每个 token 的全部前导 CR/LF，会把
     // 「文件名真的以换行开头」的路径改写掉，`stat` 跟着查错地方（第 2 轮审查 N1）。
     let afterHeader = false;
+    let committedAt = Number.NaN;
     for (const raw of stdout.split("\0")) {
-      if (/^[\r\n]*\x01[0-9a-f]{40}$/.test(raw)) {
+      const header = /^[\r\n]*\x01[0-9a-f]{40} (\d+)$/.exec(raw);
+      if (header) {
         commits += 1;
         afterHeader = true;
+        committedAt = Number(header[1]) * 1000;
         continue;
       }
       const token = afterHeader ? raw.replace(/^\r?\n/, "") : raw;
       afterHeader = false;
       if (!token) continue;
       (window.approx ? approx : exact).add(token);
+      if (Number.isFinite(committedAt) && !(at.get(token)! >= committedAt)) at.set(token, committedAt);
     }
     if (commits >= MAX_WINDOW_COMMITS) truncated = true;
   }
@@ -250,6 +264,7 @@ export async function committedInWindows(
     exact: [...exact],
     // 同一条路径在两档区间里都出现过,算强的那一档。
     approx: [...approx].filter((path) => !exact.has(path)),
+    at,
     truncated,
     skippedWindows: ordered.length - picked.length,
     dateWalk: !asFilter,

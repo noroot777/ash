@@ -236,21 +236,19 @@ export function openCodexAppServer(opts: CodexAppServerOpts): RunHandle {
 
   const handleItemStarted = (item: any) => {
     for (const activity of codexNativeWork(item)) push(activity);
-    if (item?.type === "commandExecution") {
-      push({ kind: "tool", name: "exec", detail: short(item.command) });
-      const cwd = codexCommandCwd(item);
-      if (cwd) push(cwd);
-    } else if (item?.type === "fileChange") {
-      push({ kind: "tool", name: "edit", detail: short(item.changes) });
-      const writes = codexChangeWrites(item);
-      if (writes) push(writes);
-    } else if (item?.type === "mcpToolCall") push({ kind: "tool", name: `${item.server}/${item.tool}`, detail: short(item.arguments) });
+    if (item?.type === "commandExecution") push({ kind: "tool", name: "exec", detail: short(item.command) });
+    else if (item?.type === "fileChange") push({ kind: "tool", name: "edit", detail: short(item.changes) });
+    else if (item?.type === "mcpToolCall") push({ kind: "tool", name: `${item.server}/${item.tool}`, detail: short(item.arguments) });
     else if (item?.type === "dynamicToolCall") push(nativeWork.call(item.tool, item.arguments, item.id)
       ?? { kind: "tool", name: item.tool, detail: short(item.arguments) });
     else if (item?.type === "imageGeneration") push({ kind: "tool", name: "image_gen", detail: short(item.revisedPrompt) });
   };
   const handleItemCompleted = (item: any) => {
     for (const activity of codexNativeWork(item)) push(activity);
+    // 写到了哪里要等**做完**才知道（失败、被拒的改文件不算写过，见 tool-writes.ts）。
+    const writes = item?.type === "fileChange" ? codexChangeWrites(item)
+      : item?.type === "commandExecution" ? codexCommandCwd(item) : null;
+    if (writes) push(writes);
     if (item?.type === "dynamicToolCall") {
       const activity = nativeWork.result(item.id, item.contentItems ?? item.result, item.success === false);
       if (activity) push(activity);

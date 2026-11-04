@@ -29,21 +29,18 @@ export class CodexChildActivity {
     } else if (method === "item/plan/delta") {
       if (p.delta) push({ kind: "thinking", text: p.delta });
     } else if (method === "item/started") {
-      // 子线程写到的位置同样算这个任务的，直接放在顶层（不包进子智能体活动，见 tool-writes.ts）。
-      if (item?.type === "commandExecution") {
-        push({ kind: "tool", name: "exec", detail: short(item.command) });
-        const cwd = codexCommandCwd(item);
-        if (cwd) out.push(cwd);
-      } else if (item?.type === "fileChange") {
-        push({ kind: "tool", name: "edit", detail: short(item.changes) });
-        const writes = codexChangeWrites(item);
-        if (writes) out.push(writes);
-      }
+      if (item?.type === "commandExecution") push({ kind: "tool", name: "exec", detail: short(item.command) });
+      else if (item?.type === "fileChange") push({ kind: "tool", name: "edit", detail: short(item.changes) });
       else if (item?.type === "mcpToolCall") push({ kind: "tool", name: `${item.server}/${item.tool}`, detail: short(item.arguments) });
       else if (item?.type === "dynamicToolCall") push({ kind: "tool", name: item.tool, detail: short(item.arguments) });
       else if (item?.type === "webSearch") push({ kind: "tool", name: "WebSearch", detail: short(item.query ?? item.action) });
       else if (item?.type === "imageGeneration") push({ kind: "tool", name: "image_gen", detail: short(item.revisedPrompt) });
     } else if (method === "item/completed") {
+      // 子线程写到的位置同样算这个任务的，直接放在顶层（不包进子智能体活动）；只认做完了的
+      // （见 tool-writes.ts）。
+      const writes = item?.type === "fileChange" ? codexChangeWrites(item)
+        : item?.type === "commandExecution" ? codexCommandCwd(item) : null;
+      if (writes) out.push(writes);
       if (item?.type === "agentMessage") {
         push({ kind: "text", text: this.textDeltas.delete(key) ? "\n\n" : `${item.text ?? ""}\n\n` });
       } else if (item?.type === "reasoning") {

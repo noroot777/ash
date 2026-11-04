@@ -125,12 +125,19 @@ export async function readTaskArtifacts(
    */
   const evidence = new Map<string, Set<ArtifactOrigin>>();
   /**
-   * 归属是**确定**的那些（不是靠估出来的时间段认的）：任务分支差异、精确区间里的提交。
+   * 任务分支差异证明下来的那些——**唯一不吃时间、也不过并发裁决**的归属证据（分支名由
+   * taskId 派生，上面每个提交都是它做的）。
    *
    * 跟 `evidence` 分开记,因为那张表记的是「它现在是什么状态」（工作区改动 / 已提交 /
    * 被忽略），答不了「这条归属有多硬」——而面板要说的恰恰是后者（第 4 轮审查 N2）。
    */
   const proven = new Set<string>();
+  /**
+   * 按时间在运行区间里找到的提交动过的路径 → 那次提交落在精确区间还是估出来的区间、发生在
+   * 哪一刻。这是**共享目录上的提交**：同一刻别的任务也在这个仓库里跑时，提交是谁做的跟 mtime
+   * 一样问不出来，要拿提交时刻去过并发裁决，不能当成分支差异那种自带归属的证据。
+   */
+  const timeCommitted = new Map<string, { exact: boolean; at: number | null }>();
   const remember = (path: string, origin: ArtifactOrigin) => {
     if (!path || !kindOf(path)) return;
     const seen = evidence.get(path);
@@ -156,6 +163,7 @@ export async function readTaskArtifacts(
       return null;
     })
     : null;
+  if (arbiter?.incomplete) incomplete.push(arbiter.incomplete);
 
   if (root.gitRepo) {
     // 工作区里还没提交的改动：在共享目录上这**不是**归属证明（谁动的都显示在同一份
@@ -204,13 +212,13 @@ export async function readTaskArtifacts(
           const byTime = await committedInWindows(root.path, windows);
           // 精确区间里的提交是实测证据；估出来的区间里的只是候选，分开记，别让它冒充确定
           // （第 4 轮审查 N2）。
-          for (const path of byTime.exact) {
-            const rel = relocate(path);
-            if (rel) { remember(rel, "committed"); proven.add(rel); }
-          }
-          for (const path of byTime.approx) {
-            const rel = relocate(path);
-            if (rel) remember(rel, "committed");
+          for (const [paths, exact] of [[byTime.exact, true], [byTime.approx, false]] as const) {
+            for (const path of paths) {
+              const rel = relocate(path);
+              if (!rel) continue;
+              remember(rel, "committed");
+              timeCommitted.set(rel, { exact, at: byTime.at.get(path) ?? null });
+            }
           }
           if (byTime.truncated) {
             incomplete.push("它跑过的某一段里提交太多，已提交那一档只回看了最近的一批");
@@ -256,22 +264,25 @@ export async function readTaskArtifacts(
   for (const { path, origins, info } of stated) {
     if (!info || !info.isFile()) continue; // 已删除 / 已改名的旧路径
     const mtimeMs = Number.isFinite(info.mtimeMs) ? info.mtimeMs : null;
-    // 归属成立有两条独立的路：**提交证据**（它的提交动过这条路径）本身就是确定的，不吃时间；
-    // 工作区改动和被忽略的文件只有「在这个目录里 + 时间对得上」这一条线索，共享目录上必须筛。
     const committedProof = origins.has("committed");
-    // 独占目录不吃时间；共享目录上要么有提交证据，要么时间对得上。
+    // 归属成立的路：目录独占、任务分支差异，这两条本身就是确定的，不吃时间；其余——运行区间里
+    // 找到的提交、工作区改动、被忽略的文件——都只有「在这个目录里 + 时间对得上」这一条线索，
+    // 共享目录上必须筛。
     //
-    // 分**确定**和**候选**两档,按它最强的那条证据算：目录独占、任务分支差异、精确区间里的
-    // 提交都是确定的；估出来的区间——不管是靠 mtime 落在里面,还是那一段里的提交——都只是
-    // 候选,要单独数一笔说出来（第 3 轮审查必须修 1、第 4 轮审查 N2）。
+    // 分**确定**和**候选**两档,按它最强的那条证据算：精确区间里的提交、mtime 落在精确区间
+    // 里算确定；估出来的区间——不管是靠 mtime 落在里面,还是那一段里的提交——都只是候选,要
+    // 单独数一笔说出来（第 3 轮审查必须修 1、第 4 轮审查 N2）。
+    const branchProof = exclusive || proven.has(path);
+    const byCommit = timeCommitted.get(path);
     const hit = exclusive ? "exact" : windowHit(mtimeMs, windows);
-    let exactProof = exclusive || proven.has(path) || hit === "exact";
-    if (!exactProof && !committedProof && !hit) continue;
-    // 只靠时间认进来的（共享目录、没有提交证据）还要过一道并发裁决：同一刻别的任务也在这个
-    // 目录里跑的话，落在区间里不再说明什么。离别人写过的地方更近 → 不是它的；离它自己的
-    // 更近 → 确定是它的（哪怕区间是估的）；比不出来 → 只能当候选。
-    if (!exclusive && !committedProof && arbiter) {
-      const verdict = arbiter.judge(path, mtimeMs);
+    let exactProof = branchProof || byCommit?.exact === true || hit === "exact";
+    if (!exactProof && !byCommit && !hit) continue;
+    // 只靠时间认进来的还要过一道并发裁决：同一刻别的任务也在这个目录里跑的话，落在区间里
+    // 不再说明什么。离别人写过的地方更近 → 不是它的；离它自己的更近 → 确定是它的（哪怕区间
+    // 是估的）；比不出来 → 只能当候选。按时间找到的提交拿**提交时刻**去问「那一刻还有谁」，
+    // 其余拿 mtime。
+    if (!branchProof && arbiter) {
+      const verdict = arbiter.judge(path, byCommit ? byCommit.at : mtimeMs);
       if (verdict === "theirs") { claimed += 1; continue; }
       if (verdict === "mine") exactProof = true;
       if (verdict === "unsure") exactProof = false;
@@ -280,7 +291,7 @@ export async function readTaskArtifacts(
     // 的时间段认的」和每一条的标记从此同源,数目与标出来的条数恒等。
     //
     // 注意 `committedProof` 不够硬:它只说「有个提交动过这条路径」,而那个提交可能是从**估出来
-    // 的**区间里捞的（`proven` 才是任务分支差异那种确定证据）—— 那种条目照 candidate 算。
+    // 的**区间里捞的、或者是同一刻别的任务做的（`proven` 才是任务分支差异那种确定证据）。
     const confidence: ArtifactConfidence = exactProof ? "exact" : "approx";
     if (confidence === "approx") guessed += 1;
     // 标签说的是**它现在是什么状态**：有未提交的改动就显示工作区改动（哪怕归属是提交证明

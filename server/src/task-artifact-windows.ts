@@ -123,6 +123,14 @@ export async function runWindows(
   owners: readonly RunOwner[],
   root: WorkspaceRoot,
   lens: PathLens,
+  options: {
+    /**
+     * 在这个目录的**上层**跑也算在这儿干活。只给并发裁决找对手用（`task-artifact-footprint.ts`）：
+     * 在 `~/code` 跑的任务照样能往 `~/code/empty/videos` 写东西，问「那一刻还有谁可能在这儿写」
+     * 时不能漏掉它。本任务自己的区间不开这一档——上层目录里跑的那段时间不是它在这儿干活的证据。
+     */
+    fromAbove?: boolean;
+  } = {},
 ): Promise<{ windows: RunWindow[]; gaps: string[] }> {
   const ids = owners.map((row) => row.id);
 
@@ -187,6 +195,7 @@ export async function runWindows(
       const rel = relative(await lens.canonical(root.path), await lens.canonical(recorded));
       return rel.split(sep).some((part) => part === ".worktrees" || part === ".claude") ? "elsewhere" : "exact";
     }
+    if (options.fromAbove && await lens.underDir(root.path, recorded)) return "exact";
     if (!root.repo || !(await lens.underDir(recorded, root.repo))) return "elsewhere";
     return (await lens.dirExists(recorded)) ? "elsewhere" : "stale";
   };

@@ -244,6 +244,32 @@ async function walkForArtifacts(
 }
 
 /**
+ * 走 `relDir` 这棵子树，但**先走它里面的重点目录**，再走其余部分（走过的不重走）。
+ *
+ * 光把装着重点目录的那个入口排到前面不够：入口本身是一整棵大树时（一个被忽略的 `videos/`、
+ * 非 git 目录的根），里面按广度优先走，预算可能在别的子目录上烧光，任务自己写过的那一处照样
+ * 轮不到（第 1 轮审查 #6）。写过之后又被删掉的目录不算「读不动」，直接不走。
+ */
+async function walkFocusFirst(
+  rootPath: string,
+  relDir: string,
+  focus: readonly string[],
+  budget: { entries: number },
+  found: Set<string>,
+  profiles: Map<string, boolean>,
+  incomplete: string[],
+): Promise<void> {
+  const first: string[] = [];
+  for (const dir of outermost(focus)) {
+    if (relDir && !dir.startsWith(`${relDir}/`)) continue;
+    if (skipsDirPath(dir)) continue;
+    if (await stat(join(rootPath, dir)).then((info) => info.isDirectory(), () => false)) first.push(dir);
+  }
+  for (const dir of first) await walkForArtifacts(rootPath, dir, budget, found, profiles, incomplete);
+  await walkForArtifacts(rootPath, relDir, budget, found, profiles, incomplete, new Set(first));
+}
+
+/**
  * 扫出「被 .gitignore 挡着 / 根本不在 git 管辖里」的那些候选。
  *
  * `windows` 只用来排优先级（预算花在最可能有产出的地方），**不在这里做时间筛选**：独占
@@ -266,14 +292,7 @@ export async function scanIgnoredArtifacts(
 
   if (!gitRepo) {
     // 不是 git 仓库：没有任何 git 线索，整棵树都得自己走——任务写过的那几处先走。
-    // 写过之后又被删掉的目录不算「读不动」，直接不走。
-    const first: string[] = [];
-    for (const dir of outermost(focus)) {
-      if (skipsDirPath(dir)) continue;
-      if (await stat(join(rootPath, dir)).then((info) => info.isDirectory(), () => false)) first.push(dir);
-    }
-    for (const dir of first) await walkForArtifacts(rootPath, dir, budget, paths, profiles, incomplete);
-    await walkForArtifacts(rootPath, "", budget, paths, profiles, incomplete, new Set(first));
+    await walkFocusFirst(rootPath, "", focus, budget, paths, profiles, incomplete);
     if (budget.entries <= 0) incomplete.push("工作目录太大，只扫了一部分");
     return { paths, incomplete };
   }
@@ -282,7 +301,7 @@ export async function scanIgnoredArtifacts(
     if (budget.entries <= 0) break;
     const isDir = await stat(join(rootPath, entry)).then((info) => info.isDirectory(), () => false);
     if (isDir) {
-      await walkForArtifacts(rootPath, entry, budget, paths, profiles, incomplete);
+      await walkFocusFirst(rootPath, entry, focus, budget, paths, profiles, incomplete);
       continue;
     }
     budget.entries -= 1;

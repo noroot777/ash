@@ -9,7 +9,7 @@ import type { AgentEvent, AgentType } from "@ash/shared";
 import { guessContextWindow } from "@ash/shared/usage";
 import { NativeWorkTrace } from "./native-work.js";
 import { childActivity } from "./native-agent-activity.js";
-import { claudeToolWrites } from "./tool-writes.js";
+import { ClaudeWriteLedger } from "./tool-writes.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
@@ -97,6 +97,8 @@ async function* claudeStreamEvents(
   let contextUsed = 0;
   let contextModel: string | null = null;
   const seenImages: ImageStore = imageStore();
+  // 写文件调用要等结果没报错才算写过（见 tool-writes.ts），主会话与子智能体共用这一本。
+  const writeLedger = new ClaudeWriteLedger();
   const childImages = new Map<string, ImageStore>();
   const nativeWork = new NativeWorkTrace();
   // claude 自带 `Monitor` 工具的只读投影（见 ../claude-monitors.ts）。放在这一层的理由：
@@ -191,8 +193,9 @@ async function* claudeStreamEvents(
         if (block.type === "tool_use") background.toolUse(block.name, block.id, block.input);
         if (block.type === "tool_result") background.toolResult(block.tool_use_id, block.is_error === true);
         // 子智能体写的文件同样是这个任务写的（见 tool-writes.ts）。
-        if (block.type === "tool_use") {
-          const writes = claudeToolWrites(block.name, block.input);
+        if (block.type === "tool_use") writeLedger.toolUse(block.name, block.input, block.id);
+        if (block.type === "tool_result") {
+          const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true);
           if (writes) push(writes);
         }
         // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
@@ -315,8 +318,7 @@ async function* claudeStreamEvents(
           background.toolUse(block.name, block.id, block.input);
           push(nativeWork.call(block.name, block.input, block.id)
             ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
-          const writes = claudeToolWrites(block.name, block.input);
-          if (writes) push(writes);
+          writeLedger.toolUse(block.name, block.input, block.id);
         }
       }
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
@@ -330,6 +332,8 @@ async function* claudeStreamEvents(
         background.toolResult(block.tool_use_id, block.is_error === true);
         const activity = nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
         if (activity) push(activity);
+        const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true);
+        if (writes) push(writes);
         for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
       }
     } else if (ev.type === "result") {
