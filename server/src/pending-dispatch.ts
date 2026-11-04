@@ -71,6 +71,8 @@ export async function dispatchPendingMessage(
     const started = await continueTask(message.taskId, texts.join("\n\n"), {
       ...deliveryOptions(claimed[0]!),
       pendingMessageIds: claimed.map((current) => current.id),
+      // 合并成一回合的几条里有几条答复，就记几条（删这一回合时一并清掉它们的问答记录）。
+      answerIds: claimed.flatMap((current) => current.answerId ? [current.answerId] : []),
       monitorWake: batchMonitorWake(claimed, checkpoints.map((checkpoint) => checkpoint.checkpoint)),
       ...(guards.some(({ guard }) => guard) ? {
         wakeGuard: async () => {

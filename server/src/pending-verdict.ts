@@ -120,6 +120,7 @@ export function deliveryOptions(m: Row) {
   return {
     reviewDelivery: reviewDeliveryFrom(m),
     monitorWake: monitorWakeForDelivery(m.monitorWake),
+    ...(m.answerId ? { answerIds: [m.answerId] } : {}),
     attachments: JSON.parse(m.attachments) as string[],
     agent: (m.agent as AgentType) ?? undefined,
     // 要跑的还是用户当时选的那一套执行器/模型/思考强度（没选就是 null=按默认解析）。

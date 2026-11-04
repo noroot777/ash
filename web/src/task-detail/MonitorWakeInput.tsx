@@ -2,6 +2,7 @@ import { ArrowElbowDownRight, ArrowSquareIn, CaretDown, CaretRight, Check } from
 import { useId } from "react";
 import { CopyButton } from "../components/CopyButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
+import { DeleteMessageButton } from "./MessageDelete.tsx";
 import type { ConversationItem } from "./conversationModel.ts";
 import { monitorWakePreview, type MonitorWakeInput as WakeInput } from "./monitorWakeModel.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
@@ -36,6 +37,7 @@ export function MonitorWakeInput({ item, input, surface }: {
                     动作掐掉——否则「复制一下」会顺手把整张卡翻面。 */}
                 <span className="monitor-wake-copy" onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}>
                   <CopyButton value={item.text} ariaLabel="复制完整自动输入" icon />
+                  <DeleteMessageButton item={item} />
                 </span>
                 <span className="monitor-wake-fold-action">
                   <span className="monitor-wake-fold-open">展开</span>

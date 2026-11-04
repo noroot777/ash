@@ -90,6 +90,7 @@
 .task-question-record-answer.is-empty { border-color: var(--line); color: var(--faint); }
 .task-question-record-body > .task-question-record-answer { margin: 0 16px 16px; }
 .task-question-record-body > footer { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10px; }
+.task-question-record-actions { display: inline-flex; align-items: center; gap: 14px; }
 .task-question-record-body > footer button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; }
 .task-question-history-error { color: var(--red); font-size: 11px; }
 .team-feed .task-question-record { margin-left: 0; }

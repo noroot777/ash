@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { ServerEvent } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared/session-output";
 import { eq } from "drizzle-orm";
 import { IS_WINDOWS } from "../src/platform.js";
 import { releaseTmpDb } from "./tmp-db.js";

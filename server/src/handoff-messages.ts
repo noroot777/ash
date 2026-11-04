@@ -8,12 +8,14 @@ export function exportHandoffMessage(message: typeof scheduledMessages.$inferSel
     reasoningEffort: message.reasoningEffort, sessionRole: message.sessionRole,
     origin: message.origin, reviewRun: message.reviewRun, reviewRound: message.reviewRound,
     mode: message.mode, sendAt: message.sendAt, createdAt: message.createdAt,
+    ...(message.answerId ? { answerId: message.answerId } : {}),
   };
 }
 
 export function validateMessageOrigin(message: HandoffMessagePayload): void {
   if ((message.origin != null && typeof message.origin !== "string")
     || (message.reviewRun != null && typeof message.reviewRun !== "string")
+    || (message.answerId != null && typeof message.answerId !== "string")
     || (message.reviewRound != null && (!Number.isSafeInteger(message.reviewRound) || message.reviewRound < 1))) {
     throw new HandoffError("message 审查来源非法");
   }

@@ -19,7 +19,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { readSource, readSourceChain } from "../../scripts/read-source.mjs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
-import { parseSessionOutput } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared/session-output";
 import { readCodexCliVersion } from "../src/executors/codex-rollout.js";
 import {
   LOST_SESSION_PATCH,

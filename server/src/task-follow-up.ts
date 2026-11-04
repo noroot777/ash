@@ -1,6 +1,7 @@
 import { open, stat } from "node:fs/promises";
 import type { ConvSeg, TaskFollowUp } from "@ash/shared";
-import { isUserFollowUp, parseSessionOutput } from "@ash/shared";
+import { isUserFollowUp } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared/session-output";
 import { parseAttachmentText } from "@ash/shared/attachments";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
 import { desc, inArray } from "drizzle-orm";

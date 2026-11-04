@@ -1,6 +1,7 @@
 import type { ContextUsage, Session, TokenUsage } from "@ash/shared";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
-import { ANSWER_PREFIX, parseSessionOutput } from "@ash/shared";
+import { ANSWER_PREFIX } from "@ash/shared";
+import { parseSessionOutput, segmentFingerprint } from "@ash/shared/session-output";
 import { addUsage, usageTotal } from "@ash/shared/usage";
 import { normalizeSessionNoteText } from "@ash/shared/session-notes";
 import type { SessionTraceEntry } from "../lib/api.ts";
@@ -19,8 +20,9 @@ import {
   traceUsage,
 } from "./conversationTraceGroups.ts";
 import type { LiveAgentEvent, PersistedTurnTimes } from "./conversationTurnParts.ts";
-import { agentLabel, compactTurnText, latestTurnStart, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
+import { agentLabel, latestTurnStart, recordPersistedTurn, sessionRun } from "./conversationTurnParts.ts";
 import { appendLiveTimeline } from "./conversationLiveTurns.ts";
+import { appendTraceFragments } from "./conversationTraceFragments.ts";
 import { contentVersion } from "../lib/useStickToBottom.ts";
 import { conversationItemSize } from "./conversationContentSize.ts";
 export { conversationToMarkdown } from "./conversationMarkdown.ts";
@@ -31,11 +33,19 @@ export type { AgentAuxEvent, AgentContentSegment, AttachmentSource } from "./con
 export type { LiveAgentEvent } from "./conversationTurnParts.ts";
 
 export type TimelineEntry =
-  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; sessionId?: string; sessionRole?: string; source?: "optimistic" | "server" }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; monitorWake?: MonitorWakeData; answerIds?: string[]; sessionId?: string; sessionRole?: string; source?: "optimistic" | "server" }
   | { kind: "server"; id: string; event: LiveAgentEvent };
 
+/** 落盘气泡出自哪条会话的哪几段 / 哪段执行过程（删除消息拿它指名，见 server/src/conversation-redact.ts）。 */
+export type ConversationSource =
+  // answerId：这段答复对的是哪条问答记录（问答卡认出来的那条，见 QuestionHistory.tsx）。
+  | { sessionId: string; index: number; fingerprint: string; answerId?: string }
+  | { sessionId: string; trace: { from: string; to: string; fingerprint: string } };
+// deleted：已删除的段排版时仍占原位（回合起止靠它推），buildConversationItems 收尾前拿掉。
+type PersistedOrigin = { sources?: ConversationSource[]; deleted?: true };
+
 export type ConversationItem =
-  | {
+  | PersistedOrigin & {
       kind: "agent";
       id: string;
       sessionId: string;
@@ -77,7 +87,7 @@ export type ConversationItem =
       markdown: string;
       segments: AgentContentSegment[];
     }
-  | {
+  | PersistedOrigin & {
       kind: "user";
       id: string;
       text: string;
@@ -86,6 +96,8 @@ export type ConversationItem =
       isAnswer?: boolean;
       bySystem?: boolean;
       monitorWake?: MonitorWakeData;
+      /** 这句承载的问答答复（记录 id，见 shared/session-output.ts 的 ConvSeg）。 */
+      answerIds?: string[];
       /**
        * 这条输入喂进了**哪条会话**（同 event 那一路）。真人在输入框里打的字没有它（还没落到
        * 任何一条会话上），系统代写的那些一律有。
@@ -99,7 +111,7 @@ export type ConversationItem =
        *  （conversationReviewer 的 monitorWakeFedReviewer），不再从「谁先说过话」反推。 */
       sessionRole?: string;
     }
-  | {
+  | PersistedOrigin & {
       kind: "event";
       id: string;
       text: string;
@@ -226,6 +238,7 @@ function mergeTurnChunk(target: AgentItem, chunk: AgentItem): void {
   target.markerEndedAt = chunk.markerEndedAt ?? target.markerEndedAt;
   target.usage = target.usage && chunk.usage ? addUsage(target.usage, chunk.usage) : chunk.usage ?? target.usage;
   target.run = target.run ?? chunk.run;
+  target.sources = [...target.sources ?? [], ...chunk.sources ?? []];
 }
 
 /**
@@ -247,7 +260,12 @@ function appendPersistedSession(
   { session, output, trace = [] }: PersistedConversation,
   persistedTurns: PersistedTurnTimes,
 ): void {
-  const segments = parseSessionOutput(output);
+  // 删掉的段也要：序号（气泡的出处）和回合边界都按原位算，到 buildConversationItems 收尾再拿掉。
+  const segments = parseSessionOutput(output, { keepDeleted: true });
+  const origin = (index: number): PersistedOrigin => ({
+    sources: [{ sessionId: session.id, index, fingerprint: segmentFingerprint(segments[index]!) }],
+    ...(segments[index]!.deleted ? { deleted: true as const } : {}),
+  });
   const traceGroups = groupedTrace(normalizedPersistedTrace(trace, session));
   const consumedTrace = new Set<string>();
   // ── 一遍过认三件事：谁是旁注、哪条旁注要把上下两截并回一颗气泡、trace 从哪儿切开 ──
@@ -378,6 +396,8 @@ function appendPersistedSession(
         // 但「后续追问」不收它 —— 判据统一在 shared 的 isUserFollowUp。
         bySystem: segment.bySystem,
         monitorWake: segment.monitorWake,
+        answerIds: segment.answerIds,
+        ...origin(index),
       });
       turnStartedAt = segment.at ?? turnStartedAt;
       openTurn = null;
@@ -398,6 +418,7 @@ function appendPersistedSession(
         variant: "note",
         verify: isVerifyNote(text),
         aside: asideAt.has(segment.at ?? ""),
+        ...origin(index),
       });
       // 回合起点跟着**切点**走：切过的地方 trace 已经另成一组，下半截要靠这个起点认领
       // 自己那几条事件。合并发生在气泡层面（见下面的 mergeTurnChunk），两者不冲突。
@@ -434,6 +455,7 @@ function appendPersistedSession(
         usage: traceUsage(traceEntries),
         markdown: segment.text,
         segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
+        ...origin(index),
       };
       // 中间只隔着一条「那一刻回合还在飞」的旁注 —— 这就是同一回合的下半截，并回去。
       // 身份再核一道：同一条会话上换轮验证也算换人（reviewerKey），换了人就不是同一段
@@ -443,7 +465,8 @@ function appendPersistedSession(
       // 半、后半截还丢掉模型信息。
       const ownIdentity = traceEntries.some((entry) => entry.event.kind === "run");
       const sameSpeaker = !ownIdentity || reviewerKeyOf(openTurn?.reviewer) === reviewerKeyOf(chunk.reviewer);
-      if (openTurn && acrossAside && sameSpeaker) {
+      // 删没删也得一样：并起来就分不开了，删掉的那半截会跟着留下来的一起显示。
+      if (openTurn && acrossAside && sameSpeaker && !openTurn.deleted === !chunk.deleted) {
         mergeTurnChunk(openTurn, chunk);
       } else {
         items.push(chunk);
@@ -452,59 +475,8 @@ function appendPersistedSession(
       acrossAside = false;
     }
   });
-  // A failed turn can contain only tools/errors and no assistant prose. Keep
-  // its execution block visible instead of dropping the persisted trace.
-  //
-  // 另一类没有正文的组是**同一个回合的碎片**:常驻调度台被 CLI 自己唤醒续跑(后台监控
-  // 回调)时,服务端补上回合起点之前落的 trace,每条事件都拿自己的时刻当回合起点(修在
-  // server/src/team/session-consumer.ts,老数据仍是碎的)。一条条渲染就是一串「1 工具」
-  // 的空气泡。它们的共同特征是**没有 run 事件** —— 真回合起点一定写 run —— 所以顺着
-  // 时间粘回同一条,直到下一个 run 或下一段已经有正文的回合。
-  // 正文的权威来源只有 .md:兜底气泡里的 text 事件多半已经被上面某条气泡渲染过了
-  // （回合边界对不上时,同一段话会同时落在 .md 段落和无人认领的 trace 组里）。原样带
-  // 上就是一段话连说两遍,所以只留执行过程。
-  const persistedProse = segments
-    .filter((segment) => segment.kind === "agent")
-    .map((segment) => compactTurnText(segment.text))
-    .join("\0");
-  const withoutEchoedProse = (entries: SessionTraceEntry[]): SessionTraceEntry[] => entries.filter((entry) => {
-    if (entry.event.kind !== "text") return true;
-    const compact = compactTurnText(entry.event.text);
-    return !!compact && !persistedProse.includes(compact);
-  });
-  let fragment: { turn: string; entries: SessionTraceEntry[] } | null = null;
-  const flushFragment = (): void => {
-    const pending = fragment;
-    fragment = null;
-    if (!pending) return;
-    const entries = withoutEchoedProse(pending.entries);
-    if (!entries.some((entry) => entry.event.kind !== "run" && entry.event.kind !== "usage")) return;
-    const traceSegments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${pending.turn}`);
-    items.push({
-      kind: "agent",
-      id: `persisted:trace:${session.id}:${pending.turn}`,
-      sessionId: session.id,
-      label: agentLabel(session),
-      // 起点取第一条实质事件:被丢掉的复读正文往往比工具早好几分钟,拿组的 key 当起点
-      // 会把「模型在写字」的时间算进这条执行过程的用时里。
-      at: entries.find((entry) => entry.event.kind !== "usage")?.at ?? pending.turn,
-      endedAt: null,
-      markerEndedAt: null,
-      session,
-      run: traceRun(entries) ?? sessionRun(session),
-      reviewer: reviewerOf(traceVerifyRound(entries), session?.role),
-      usage: traceUsage(entries),
-      markdown: traceSegments.map((segment) => segment.markdown).join(""),
-      segments: traceSegments,
-    });
-  };
-  for (const [traceTurn, entries] of [...traceGroups].sort(([left], [right]) => Date.parse(left) - Date.parse(right))) {
-    if (consumedTrace.has(traceTurn) || entries.some((entry) => entry.event.kind === "run")) flushFragment();
-    if (consumedTrace.has(traceTurn)) continue;
-    if (fragment) fragment.entries.push(...entries);
-    else fragment = { turn: traceTurn, entries: [...entries] };
-  }
-  flushFragment();
+  // 没有正文、只剩执行过程的回合（conversationTraceFragments.ts）。
+  appendTraceFragments(items, session, segments, traceGroups, consumedTrace);
 
   /* 「这条会话**此刻**还卡在上游等回话」是**服务端给的一位事实**(`Session.awaitingUpstream`,
      判据见 server/src/session-waiting.ts),落在这条会话最后那颗气泡上 —— 折叠条读的就是
@@ -625,6 +597,11 @@ export function buildConversationItems(
     nextAgentAt = item.at ?? nextAgentAt;
     // 边界事件只给它正上方那一颗作数，再往上就是别的回合了。
     closedBelow = false;
+  }
+
+  // 删掉的那几段到这里才真正拿掉：上面推回合起止时它们还得占着原位。
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]!.deleted) items.splice(index, 1);
   }
 
   // 会话累计有两个来源：sessions 行是服务端账本（权威、跨刷新），但它要等下一次

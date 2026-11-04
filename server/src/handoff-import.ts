@@ -34,7 +34,7 @@ import { buildFreeWorkflowRows } from "./handoff-import-free-workflow.js";
 import {
   importGitBundle, jsonOr, SETTLED, validate, writePayloadFiles, type CliConfigDirs,
 } from "./handoff-import-payload.js";
-import { claudeSessionFilePath } from "./handoff-collect.js";
+import { claudeSessionFilePath, handoffSessionContext } from "./handoff-collect.js";
 import { cliConfigDirForOwner } from "./auth/run-env.js";
 import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
@@ -273,7 +273,9 @@ async function importValidated(
     .filter((s) => s.agentType === agentType)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
     .at(-1);
-  const resumable = !!latest && !!usable.get(latest.id);
+  // 删过消息的会话不带原生会话文件,但下一回合会拿删除后的记录重建上下文(turn-session-pick.ts),
+  // 不是空手上阵,所以不按「历史没迁移」处理。
+  const resumable = !!latest && (!!usable.get(latest.id) || !!latest.contextRebuildAt);
   const noticeLines = [
     `【任务接力】本任务从另一台机器(${m.sourceHost})接力到本机继续。`,
     m.git ? "git 分支和已提交的改动已随任务迁移。" : "代码没有随任务迁移,以本机仓库当前状态为准。",
@@ -415,7 +417,9 @@ async function importValidated(
     worktreePath: useWorktree ? workspace : null,
     branch: s.branch,
     cwd: workspace,
-    cliSessionId: usable.get(s.id) ? s.cliSessionId : null,
+    // 删过消息的会话:失效标记照原样落下,旧 CLI 会话即便到货也不认(判据与导出侧同一份)。
+    contextRebuildAt: null,
+    ...handoffSessionContext(s, !!usable.get(s.id)),
     // 会话文件刚被写进**这个人**的 CLI 配置目录(上面的 cliDirs),之后的回合默认也按他跑。
     // 不盖这个戳,任务再接力出去时导出侧只能退回猜任务归属人。
     runOwnerUserId: context.ownerUserId ?? null,
@@ -477,6 +481,7 @@ async function importValidated(
     createdAt: msg.createdAt,
     sentAt: null,
     deliveringSince: null,
+    answerId: msg.answerId ?? null,
   }));
 
   if (returning) {

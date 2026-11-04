@@ -38,7 +38,7 @@
 // 最新会话分档。
 import { open, stat } from "node:fs/promises";
 import type { AgentType, ConvSeg } from "@ash/shared";
-import { parseSessionOutput } from "@ash/shared";
+import { parseSessionOutput } from "@ash/shared/session-output";
 import { parseAttachmentText } from "@ash/shared/attachments";
 import { eq } from "drizzle-orm";
 import type { Hono } from "hono";

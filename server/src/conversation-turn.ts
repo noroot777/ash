@@ -21,13 +21,17 @@ export function recordUserConversationTurn(input: UserTurnOrigin & {
   at: string;
   /** 调用方给这一句的投递凭据（ContinueTaskOptions.deliveryKey），落盘供事后核对。 */
   eventKey?: string;
+  /** 这一句承载的问答答复（ContinueTaskOptions.answerIds）：删除与问答卡按它认记录。 */
+  answerIds?: readonly string[];
 }): void {
+  const answerIds = input.answerIds?.length ? { answerIds: [...input.answerIds] } : {};
   writeTurn(input.out, {
     t: "user",
     agent: input.agentType,
     text: input.text,
     ...(input.bySystem ? { by: "system" as const } : {}),
     ...(input.eventKey ? { eventKey: input.eventKey } : {}),
+    ...answerIds,
     ...(isMonitorWakeTurn(input) ? { monitorWake: input.monitorWake } : {}),
   }, input.at);
   bus.publish({
@@ -40,5 +44,6 @@ export function recordUserConversationTurn(input: UserTurnOrigin & {
     at: input.at,
     ...(input.bySystem ? { bySystem: true as const } : {}),
     ...(isMonitorWakeTurn(input) ? { monitorWake: input.monitorWake } : {}),
+    ...answerIds,
   });
 }

@@ -68,6 +68,7 @@ export function validate(input: unknown): HandoffManifest {
   if (!isStr(t.title) || !isStr(t.body) || !isStr(t.createdAt)) throw new HandoffError("task 关键字段缺失");
   validateWaitOrigins(t.waitOrigins);
   if (!Array.isArray(m.sessions) || m.sessions.length > 200) throw new HandoffError("sessions 非法");
+  if (m.sessions.some((s) => s.contextRebuildAt != null && !isStr(s.contextRebuildAt))) throw new HandoffError("session.contextRebuildAt 非法");
   if (!Array.isArray(m.files) || m.files.length > 500) throw new HandoffError("files 非法(最多 500 个)");
   for (const f of m.files) {
     if (!isStr(f.rel) || !isStr(f.dataBase64)) throw new HandoffError("file 载荷字段缺失");
