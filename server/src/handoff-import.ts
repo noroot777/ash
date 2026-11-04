@@ -41,7 +41,7 @@ import { discardMigratedWorkspace } from "./workspace-cleanup.js";
 import { id, now } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@ash/shared";
-import { importWaitOwnership } from "./handoff-wait.js";
+import { importWaitOwnership, manifestCarriesReview } from "./handoff-wait.js";
 import { collectGateRuns, replaceGateRuns } from "./handoff-accept-gate.js";
 
 export interface HandoffImportResult {
@@ -390,7 +390,8 @@ async function importValidated(
     handoff: JSON.stringify(marker),
     scheduleId,
   };
-  const waitOwnership = importWaitOwnership({ ...taskValues, id: m.task.id }, m.task.waitOrigins);
+  const waitOwnership = importWaitOwnership({ ...taskValues, id: m.task.id }, m.task.waitOrigins,
+    manifestCarriesReview(m));
   if ([waitOwnership?.question?.origin, waitOwnership?.checkpoint?.origin]
     .some((origin) => origin && origin.kind !== "ordinary")) {
     notes.push("接力保留了审查等待来源，但原机审查权限不能迁移；这些旧等待需在本机重新派审。");
