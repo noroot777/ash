@@ -9,7 +9,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { continueTask } from "./orchestrator.js";
-import { afterBaselineOf, afterTargetUnsupported } from "./pending-after.js";
+import { resolveAfterTarget } from "./pending-after.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat } from "./queue-seat.js";
@@ -67,18 +67,13 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   if (b.afterTaskId != null) {
     if (typeof b.afterTaskId !== "string" || !b.afterTaskId) return c.json({ error: "afterTaskId 无效" }, 400);
     if (b.sendAt) return c.json({ error: "定时发送和等任务完成后发送只能选一个" }, 400);
-    if (b.afterTaskId === taskId) return c.json({ error: "不能等这个任务自己完成后再发给它" }, 400);
     // 看不见的任务 = 不存在:否则挨个 id 试就能问出别人的任务在不在、何时完成。
-    const after = (await visibleTaskIds(actorOf(c), [b.afterTaskId])).length
-      ? (await db.select({ projectId: tasks.projectId, mode: tasks.mode, status: tasks.status, doneSeq: tasks.doneSeq })
-        .from(tasks).where(eq(tasks.id, b.afterTaskId))).at(0)
-      : undefined;
-    if (!after) return c.json({ error: "要等的任务不存在" }, 404);
-    if (after.projectId !== r.projectId) return c.json({ error: "只能等同一项目里的任务" }, 400);
-    const unsupported = afterTargetUnsupported(after);
-    if (unsupported) return c.json({ error: unsupported }, 400);
-    // 等的是**这一刻之后**的那次完成(前置正停在 done 上就是那一次):基线跟状态出自同一行读取。
-    afterSeq = afterBaselineOf(after);
+    if (b.afterTaskId !== taskId && !(await visibleTaskIds(actorOf(c), [b.afterTaskId])).length) {
+      return c.json({ error: "要等的任务不存在" }, 404);
+    }
+    const target = await resolveAfterTarget({ afterTaskId: b.afterTaskId, taskId, projectId: r.projectId });
+    if (!target.ok) return c.json({ error: target.error }, target.status);
+    afterSeq = target.afterSeq;
   }
   if (b.sendAt) {
     const when = new Date(b.sendAt);

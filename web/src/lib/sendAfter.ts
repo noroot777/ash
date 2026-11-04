@@ -47,7 +47,7 @@ export function sendAfterState(
 } {
   const name = `「${task?.title || "前置任务"}」`;
   if (doneAt) return { label: `${name}已完成`, stuck: false };
-  if (!task) return { label: "前置任务已删除", stuck: true };
+  if (!task) return { label: "前置任务不存在", stuck: true };
   // 升级前或接力过来的存量行:调度台收工落「待命」,永远等不到,得让用户拿主意。
   if (task.mode === "team") return { label: `${name}是团队调度台，等不到完成`, stuck: true };
   if (task.status === "done") return { label: `${name}已完成`, stuck: false };

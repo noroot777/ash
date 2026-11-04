@@ -15,7 +15,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { existsSync } from "node:fs";
 import { importMessageOrigin } from "./handoff-messages.js";
 import { db } from "./db/index.js";
-import { afterBaselineOf } from "./pending-after.js";
+import { resolveAfterTarget } from "./pending-after.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
   acceptGateRuns, projects, scheduledMessages, schedules, sessionTurns, sessions, tasks,
@@ -461,11 +461,20 @@ async function importValidated(
   }));
   // 自由工作流的审查历史(翻译成本机行,落库在下面两条路径里各自执行)。
   const freeWorkflowRows = await buildFreeWorkflowRows(m.task.id, m.freeWorkflow, notes);
-  // 等前置任务的消息按**本机**那个前置任务定基线:对端的完成计数在这台机器上没有意义。
-  const afterIds = [...new Set(messages.flatMap((msg) => msg.mode === "after" && typeof msg.afterTaskId === "string" ? [msg.afterTaskId] : []))];
-  const localAfter = new Map((afterIds.length
-    ? await db.select({ id: tasks.id, status: tasks.status, doneSeq: tasks.doneSeq }).from(tasks).where(inArray(tasks.id, afterIds))
-    : []).map((t) => [t.id, afterBaselineOf(t)] as const));
+  // 等前置任务的消息:外来的任务 id 不是授权证明,跟本机回复走同一道核验(resolveAfterTarget:
+  // 同项目、存在、能完成;导入人对目标项目的权限路由层已核)。核过才按**本机**那个前置定基线 ——
+  // 对端的完成计数在这台机器上没有意义;核不过就不绑定(落成「前置不在本机」,托盘给直接发送)。
+  // 源机已经等到的(`afterDoneAt`)原样认,依赖本身是否成立已经不重要了。
+  const afterDeps = new Map<string, { afterTaskId: string; afterSeq: number } | null>();
+  for (const msg of messages) {
+    if (msg.mode !== "after" || typeof msg.afterTaskId !== "string" || afterDeps.has(msg.afterTaskId)) continue;
+    const target = await resolveAfterTarget({ afterTaskId: msg.afterTaskId, taskId: m.task.id, projectId: project.id });
+    afterDeps.set(msg.afterTaskId, target.ok ? { afterTaskId: msg.afterTaskId, afterSeq: target.afterSeq } : null);
+  }
+  const unbound = [...afterDeps.values()].filter((dep) => !dep).length;
+  if (unbound) notes.push(`${unbound} 个「等任务完成后发送」的前置任务不在本机项目里，相关消息没有绑定，可在托盘里直接发送或撤回`);
+  const afterDep = (msg: (typeof messages)[number]) =>
+    msg.mode === "after" && typeof msg.afterTaskId === "string" ? afterDeps.get(msg.afterTaskId) ?? null : null;
   const messageRows = messages.map((msg) => ({
     ...importMessageOrigin(msg, notes),
     id: id(),
@@ -479,9 +488,9 @@ async function importValidated(
     sessionRole: msg.sessionRole,
     // after 绝不能落成 timed:它的 sendAt 只是入队时刻,当成钟点就是一落地立刻发出。
     mode: msg.mode === "queued" ? "queued" as const : msg.mode === "after" ? "after" as const : "timed" as const,
-    afterTaskId: msg.mode === "after" && typeof msg.afterTaskId === "string" ? msg.afterTaskId : null,
+    afterTaskId: afterDep(msg)?.afterTaskId ?? null,
     afterDoneAt: msg.mode === "after" && typeof msg.afterDoneAt === "string" ? msg.afterDoneAt : null,
-    afterSeq: msg.mode === "after" && typeof msg.afterTaskId === "string" ? localAfter.get(msg.afterTaskId) ?? null : null,
+    afterSeq: afterDep(msg)?.afterSeq ?? null,
     sendAt: msg.sendAt,
     status: "pending" as const,
     createdAt: msg.createdAt,

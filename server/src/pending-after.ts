@@ -16,6 +16,11 @@
 //     那句话凭空消失。一律判「等」,给一句人话说清在等什么(托盘与滞留告警读它)。
 //   • 团队调度台正常收尾落 idle,没有 done 这一步,等它永远等不到:写入口拒收(task-reply.ts),
 //     存量行在这里说清原因。
+//
+// 依赖关系只认**本机核过的**:同项目、存在、能完成(`resolveAfterTarget`,回复与接力导入共用)。
+// 外来的任务 id 不是授权证明,导入时核不过就不绑定;消费侧再按项目兜一遍,任何写入口漏了都
+// 不会让一条消息跟着别的项目的任务完成而放行。跨机交接带的是**已等到**这个事实本身
+// (`afterDoneAt`,导出前按完成计数求一次,handoff-messages.ts),不是让目标机重新去猜。
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { TASK_STATUS_LABELS } from "@ash/shared";
@@ -57,6 +62,22 @@ export function afterTargetUnsupported(task: { mode: string }): string | null {
   return task.mode === "team" ? "团队调度台收工后是待命、不会落到「完成」，不能等它完成后再发" : null;
 }
 
+/** 一条「等 afterTaskId 完成后发给 taskId」的依赖能不能在本机成立。成立时给出登记基线。
+ * 可见性由调用方先核(回复按发起人、接力按导入人对目标项目的权限);同项目隐含了它。 */
+export async function resolveAfterTarget(input: { afterTaskId: string; taskId: string; projectId: string }): Promise<
+  { ok: true; afterSeq: number } | { ok: false; status: 400 | 404; error: string }
+> {
+  if (input.afterTaskId === input.taskId) return { ok: false, status: 400, error: "不能等这个任务自己完成后再发给它" };
+  const after = (await db.select({ projectId: tasks.projectId, mode: tasks.mode, status: tasks.status, doneSeq: tasks.doneSeq })
+    .from(tasks).where(eq(tasks.id, input.afterTaskId))).at(0);
+  if (!after) return { ok: false, status: 404, error: "要等的任务不存在" };
+  if (after.projectId !== input.projectId) return { ok: false, status: 400, error: "只能等同一项目里的任务" };
+  const unsupported = afterTargetUnsupported(after);
+  if (unsupported) return { ok: false, status: 400, error: unsupported };
+  // 等的是**这一刻之后**的那次完成(前置正停在 done 上就是那一次):基线跟状态出自同一行读取。
+  return { ok: true, afterSeq: afterBaselineOf(after) };
+}
+
 /** 登记基线:前置的 `done_seq` 超过它才算等到。读状态与读计数必须出自同一行快照。 */
 export function afterBaselineOf(task: { status: string; doneSeq: number }): number {
   return task.status === "done" ? task.doneSeq - 1 : task.doneSeq;
@@ -84,24 +105,30 @@ export function afterGateOf(
 }
 
 /** 给一批消息贴上前置判定。非 after 的原样返回(afterDone=false 对它们不起作用)。
- * 判到等到了而行上还没锁存的,按**消息 id** 补锁并让托盘重拉 —— 只锁这几行,不按前置 id 扩散。 */
+ * 判到等到了而行上还没锁存的,按**消息 id** 补锁并让托盘重拉 —— 只锁这几行,不按前置 id 扩散。
+ * 前置跟接收任务不在同一项目的一律当查不到:依赖只在写入口核过的范围内成立(见文件头)。 */
 export async function withAfterGates<T extends AfterRow>(rows: T[]): Promise<(T & AfterGate)[]> {
-  const ids = [...new Set(rows.filter((m) => m.mode === "after" && m.afterTaskId && !m.afterDoneAt).map((m) => m.afterTaskId!))];
+  const open = rows.filter((m) => m.mode === "after" && m.afterTaskId && !m.afterDoneAt);
+  const ids = [...new Set(open.flatMap((m) => [m.afterTaskId!, m.taskId]))];
   const facts = ids.length
     ? await db
       .select({
-        id: tasks.id, title: tasks.title, mode: tasks.mode, status: tasks.status,
+        id: tasks.id, projectId: tasks.projectId, title: tasks.title, mode: tasks.mode, status: tasks.status,
         archived: tasks.archived, endedAt: tasks.endedAt, doneSeq: tasks.doneSeq,
       })
       .from(tasks)
       .where(inArray(tasks.id, ids))
     : [];
   const byId = new Map(facts.map((t) => [t.id, t] as const));
+  const predecessor = (m: T) => {
+    const after = m.afterTaskId ? byId.get(m.afterTaskId) : undefined;
+    return after && after.projectId === byId.get(m.taskId)?.projectId ? after : null;
+  };
   const at = new Date().toISOString();
   const latch: string[] = [];
   const gated = rows.map((m) => {
     if (m.mode !== "after") return { ...m, ...NOT_AFTER };
-    const gate = afterGateOf(m, m.afterTaskId ? byId.get(m.afterTaskId) ?? null : null);
+    const gate = afterGateOf(m, predecessor(m));
     if (!gate.afterDone || m.afterDoneAt) return { ...m, ...gate };
     latch.push(m.id);
     const doneAt = gate.afterEndedAt ?? at;

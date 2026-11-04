@@ -32,7 +32,7 @@ assert.equal(options.find((option) => option.value === "failed")?.disabled, fals
 assert.match(options.find((option) => option.value === "failed")!.detail!, /重跑完成后才发/);
 assert.equal(options.find((option) => option.value === "running")?.group, "前端");
 
-assert.deepEqual(sendAfterState(undefined), { label: "前置任务已删除", stuck: true });
+assert.deepEqual(sendAfterState(undefined), { label: "前置任务不存在", stuck: true });
 assert.deepEqual(sendAfterState(t("x", { status: "running" })), { label: "等「x」完成", stuck: false });
 assert.equal(sendAfterState(t("x", { status: "canceled" })).stuck, true);
 assert.equal(sendAfterState(t("x", { status: "paused", archived: true })).stuck, true);
@@ -61,7 +61,7 @@ const stuck = tray([message("stuck", "failed")]);
 assert.match(stuck, /「failed」失败/);
 assert.match(stuck, /is-stuck/);
 assert.match(stuck, /scheduled-message-send-now/);
-assert.match(tray([message("gone", "deleted")]), /前置任务已删除[\s\S]*scheduled-message-send-now/);
+assert.match(tray([message("gone", "deleted")]), /前置任务不存在[\s\S]*scheduled-message-send-now/);
 const released = tray([message("latched", "failed", "2026-11-04T09:00:00Z")]);
 assert.match(released, /「failed」已完成/, "锁存过的不因前置后来失败而改口");
 assert.doesNotMatch(released, /scheduled-message-send-now|is-stuck/);
