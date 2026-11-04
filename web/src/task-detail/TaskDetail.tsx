@@ -488,6 +488,7 @@ export function TaskDetail({
                   <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
                   {!handedOut && <ReplyBox
                     task={task}
+                    tasks={allTasks}
                     hasConversation={hasConversation}
                     conversationItems={conversation.items}
                     // 哨兵那一条也住这儿:它跟派审/预览是同一类东西——任务正跑着也得
@@ -554,7 +555,9 @@ export function TaskDetail({
                           ? (task.status === "running" || task.status === "queued"
                             ? "任务进行中，已排队；这一轮结束后自动发出"
                             : "任务在队列中等待，已排队；轮到它时自动发出")
-                          : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
+                          : result.message.mode === "after"
+                            ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送`
+                            : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
                         return result;
                       }
                       if ("command" in result) {

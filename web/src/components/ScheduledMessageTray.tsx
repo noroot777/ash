@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { ScheduledMessage } from "@ash/shared";
-import { ArrowUUpLeft, CaretDown, CaretUp, ChatsCircle, Clock, Pulse, Queue, SpinnerGap, Stack, Warning, X } from "@phosphor-icons/react";
+import type { ScheduledMessage, TaskListItem } from "@ash/shared";
+import { ArrowUUpLeft, CaretDown, CaretUp, ChatsCircle, Clock, Hourglass, PaperPlaneRight, Pulse, Queue, SpinnerGap, Stack, Warning, X } from "@phosphor-icons/react";
+import { sendAfterState } from "../lib/sendAfter.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { formatInstant } from "../task-detail/utils.ts";
 import {
@@ -17,10 +18,16 @@ type TrayProps = {
   onSteer?: (messageId: string) => void;
   onWithdraw: (message: ScheduledMessage) => void;
   onCancel?: (messageId: string) => void;
+  /** 「等某任务完成后发送」那一行要报出在等谁、还等不等得到;没给就只说「等前置任务」。 */
+  tasks?: TaskListItem[];
+  /** 前置任务不会再完成时(失败/取消/删除/归档),那一行给的出口:不等了,直接发。 */
+  onSendNow?: (messageId: string) => void;
 };
 
-function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, onCancel, onInspect, previewIndex }: {
+function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, onCancel, onInspect, previewIndex, tasks, onSendNow }: {
   message: ScheduledMessage;
+  tasks?: TaskListItem[];
+  onSendNow?: TrayProps["onSendNow"];
   busy: boolean;
   steering: boolean;
   steerable: boolean;
@@ -39,13 +46,17 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
   const source = scheduledMessageSource(message);
   const fromMonitor = source === "monitor";
   const exitCode = scheduledMessageExitCode(message);
-  const when = queued ? "排队中" : formatInstant(message.sendAt);
+  const after = message.mode === "after"
+    ? sendAfterState(tasks ? tasks.find((task) => task.id === message.afterTaskId) : { title: "前置任务", status: "running", archived: false })
+    : null;
+  const when = queued ? "排队中" : after ? after.label : formatInstant(message.sendAt);
   return <div className="scheduled-message-row">
     {previewIndex !== undefined && <span className="scheduled-message-position">{previewIndex + 1}</span>}
     {fromMonitor ? <Pulse size={12} aria-hidden="true" />
-      : queued ? <Queue size={12} aria-hidden="true" /> : <Clock size={12} aria-hidden="true" />}
+      : queued ? <Queue size={12} aria-hidden="true" /> : after ? <Hourglass size={12} aria-hidden="true" /> : <Clock size={12} aria-hidden="true" />}
     {fromMonitor ? <em>哨兵</em>
       : source === "managed" ? <em>审查答复</em> : source === "system" ? <em>系统</em> : queued ? <em>我的消息</em>
+        : after ? <em className={`scheduled-message-after${after.stuck ? " is-stuck" : ""}`}>{after.label}</em>
         : <time dateTime={message.sendAt}>{formatInstant(message.sendAt)}</time>}
     {message.agent && <span className="scheduled-message-agent">@{message.agent}</span>}
     <b>{onInspect ? <button type="button" className="scheduled-message-inspect" onClick={onInspect} aria-label={`查看完整输入：${summary}`}>{summary}</button> : summary}</b>
@@ -54,6 +65,10 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
       aria-label={`用最早的排队消息“${displayText || "附件"}”引导会话`} onClick={() => onSteer(message.id)}>
       {steering ? <SpinnerGap size={13} className="is-spinning" aria-hidden="true" /> : <ChatsCircle size={13} weight="duotone" aria-hidden="true" />}
       <span>{steering ? "引导中" : "引导会话"}</span>
+    </button>}
+    {after?.stuck && source === "mine" && onSendNow && <button type="button" className="scheduled-message-guide scheduled-message-send-now" disabled={busy}
+      aria-label={`不再等前置任务，把“${displayText || "附件"}”直接发出`} onClick={() => onSendNow(message.id)}>
+      <PaperPlaneRight size={12} aria-hidden="true" /><span>直接发送</span>
     </button>}
     {fromMonitor ? onCancel && <button type="button" disabled={busy}
       aria-label={`取消哨兵事件“${displayText}”这一次唤醒（仅移除本条输入，不执行停止哨兵操作）`} onClick={() => onCancel(message.id)}>
@@ -68,7 +83,7 @@ function MessageRow({ message, busy, steering, steerable, onSteer, onWithdraw, o
 }
 
 export function ScheduledMessageTray(props: TrayProps) {
-  const { messages, loading, error, cancelingIds, steeringIds, onSteer, onWithdraw, onCancel } = props;
+  const { messages, loading, error, cancelingIds, steeringIds, onSteer, onWithdraw, onCancel, tasks, onSendNow } = props;
   const [expanded, setExpanded] = useState(false);
   const [filter, setFilter] = useState<ScheduledMessageFilter>("all");
   const [pendingCancel, setPendingCancel] = useState<string | null>(null);
@@ -127,7 +142,7 @@ export function ScheduledMessageTray(props: TrayProps) {
   };
   const row = (message: ScheduledMessage, previewIndex?: number) => <MessageRow key={message.id} message={message} previewIndex={previewIndex}
     busy={cancelingIds.has(message.id) || !!steeringIds?.has(message.id)} steering={!!steeringIds?.has(message.id)}
-    steerable={message.id === steerable?.id} onSteer={onSteer} onWithdraw={onWithdraw}
+    steerable={message.id === steerable?.id} onSteer={onSteer} onWithdraw={onWithdraw} tasks={tasks} onSendNow={onSendNow}
     onCancel={onCancel ? setPendingCancel : undefined} onInspect={previewIndex !== undefined ? () => inspect(message.id) : undefined} />;
   const details = (message: ScheduledMessage) => <details className="scheduled-message-details" data-message-id={message.id}
     open={readableIds.has(message.id)} onToggle={(event) => {
@@ -146,9 +161,13 @@ export function ScheduledMessageTray(props: TrayProps) {
     ...(counts.managed ? [["managed", "审查答复"] as [ScheduledMessageFilter, string]] : []),
     ...(counts.system ? [["system", "系统"] as [ScheduledMessageFilter, string]] : []), ["attention", "需留意"]];
   const timed = ordered.filter((message) => message.mode === "timed").length;
+  const after = ordered.filter((message) => message.mode === "after").length;
   const sources = [counts.mine ? `我的消息 ${counts.mine}` : "", counts.monitor ? `哨兵 ${counts.monitor}` : "",
     counts.managed ? `审查答复 ${counts.managed}` : "", counts.system ? `系统 ${counts.system}` : "",
-    timed ? `含 ${timed} 条定时` : ""].filter(Boolean).join(" · ");
+    timed ? `含 ${timed} 条定时` : "", after ? `含 ${after} 条等任务` : ""].filter(Boolean).join(" · ");
+  const pace = timed === ordered.length ? "按设定时间发送"
+    : after === ordered.length ? "等前置任务完成后发送"
+      : timed + after === ordered.length ? "按设定时间或前置任务发送" : "等待当前一轮结束";
 
   return <>
     <div ref={trayRef} className="scheduled-message-tray" aria-label="待发送消息" onKeyDown={(event) => {
@@ -164,7 +183,7 @@ export function ScheduledMessageTray(props: TrayProps) {
         <header className="scheduled-message-summary">
           <span className="scheduled-message-stack"><Stack size={15} aria-hidden="true" /></span>
           <div className="scheduled-message-summary-copy"><strong>排队输入 <span>{ordered.length}</span></strong>
-            <small>{sources}<span> · </span>{timed === ordered.length ? "按设定时间发送" : "等待当前一轮结束"}</small></div>
+            <small>{sources}<span> · </span>{pace}</small></div>
           {counts.attention > 0 && <button type="button" className="scheduled-message-attention" onClick={() => {
             setFilter("attention"); setExpanded(true);
             if (listRef.current) listRef.current.scrollTop = 0;

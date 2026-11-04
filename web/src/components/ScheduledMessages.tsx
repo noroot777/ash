@@ -1,10 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ScheduledMessage } from "@ash/shared";
-import { Clock, SpinnerGap } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
-import { useDismissable } from "../lib/useDismissable.ts";
-import { toLocalDateTime } from "./ScheduleControl.tsx";
 import { bySendTime } from "./scheduledMessagePresentation.ts";
 export { ScheduledMessageTray } from "./ScheduledMessageTray.tsx";
 
@@ -121,6 +118,26 @@ export function useScheduledMessages(taskId: string) {
     }
   }, [reload]);
 
+  // 「不等了」:等前置任务的消息改成普通排队,任务一空闲就发。成功后那一行由 SSE 重拉改口,
+  // 这里不做乐观改写 —— 改成什么样以服务端为准。
+  const sendNow = useCallback(async (messageId: string) => {
+    setCancelingIds((current) => new Set(current).add(messageId));
+    setActionError(null);
+    try {
+      await api.sendScheduledMessageNow(messageId);
+      await reload({ quiet: true });
+    } catch (reason) {
+      setActionError({ messageId, message: reason instanceof Error ? reason.message : String(reason) });
+      void reload({ quiet: true });
+    } finally {
+      setCancelingIds((current) => {
+        const next = new Set(current);
+        next.delete(messageId);
+        return next;
+      });
+    }
+  }, [reload]);
+
   return {
     messages,
     loading,
@@ -130,56 +147,7 @@ export function useScheduledMessages(taskId: string) {
     add,
     cancel,
     steer,
+    sendNow,
     reload,
   };
-}
-
-export function ScheduledSendPanel({
-  value,
-  busy,
-  canSubmit,
-  triggerRef,
-  onChange,
-  onCancel,
-  onSubmit,
-}: {
-  value: string;
-  busy: boolean;
-  canSubmit: boolean;
-  triggerRef: RefObject<HTMLButtonElement | null>;
-  onChange: (value: string) => void;
-  onCancel: () => void;
-  onSubmit: () => void;
-}) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  useDismissable({
-    enabled: true,
-    containerRef: panelRef,
-    onClose: onCancel,
-    restoreFocusRef: triggerRef,
-  });
-
-  return (
-    <div ref={panelRef} className="scheduled-send-panel" role="dialog" aria-label="定时发送回复">
-      <b>定时发送</b>
-      <label>
-        <span>发送时间</span>
-        <input
-          type="datetime-local"
-          value={value}
-          min={toLocalDateTime(new Date(Date.now() + 60_000))}
-          disabled={busy}
-          autoFocus
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </label>
-      <footer>
-        <button type="button" disabled={busy} onClick={onCancel}>取消</button>
-        <button type="button" disabled={!canSubmit || busy} onClick={onSubmit}>
-          {busy ? <SpinnerGap size={12} className="is-spinning" /> : <Clock size={12} />}
-          定时发送
-        </button>
-      </footer>
-    </div>
-  );
 }

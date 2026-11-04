@@ -281,6 +281,8 @@ export const api = {
       model?: string | null;
       reasoningEffort?: string | null;
       sendAt?: string;
+      /** 等这个任务完成后再发(与 sendAt 二选一)。 */
+      afterTaskId?: string;
     },
   ): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/reply`, json("POST", { text, ...options })),
@@ -576,6 +578,8 @@ export const api = {
     request(`/scheduled-messages/${id(messageId)}`, { method: "DELETE" }),
   steerScheduledMessage: (messageId: string): Promise<{ steered: true; messageId: string }> =>
     request(`/scheduled-messages/${id(messageId)}/steer`, json("POST", {})),
+  sendScheduledMessageNow: (messageId: string): Promise<{ released: true }> =>
+    request(`/scheduled-messages/${id(messageId)}/send-now`, json("POST", {})),
 
   // 哨兵那一组住在 apiMonitors.ts（同样是为了守住 700 行），调用点写法不变。
   ...monitorApi,

@@ -422,14 +422,16 @@ export function TeamView({
                 <AcceptGateWaitCard key={task.id} taskId={task.id} expected notify={notify} />
               </div>
             )}
-            <TeamReplyBox task={task} onSend={async (text, attachments, options) => {
+            <TeamReplyBox task={task} tasks={allTasks} onSend={async (text, attachments, options) => {
               // 回复也会起一轮(与普通任务详情页同口径)。
               if (!(await confirmExecutorSwap(task.id))) return null;
               const result = await api.replyTask(task.id, text, { attachments, ...options });
               // 调度台是常驻会话,忙着也接得住,所以这里只可能是定时发送;仍按结果
               // 分支(而不是按请求参数),口径与普通任务一致。
               if ("scheduled" in result) {
-                notify(`已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送给调度者`);
+                notify(result.message.mode === "after"
+                  ? `已安排在「${allTasks.find((item) => item.id === result.message.afterTaskId)?.title || "所选任务"}」完成后发送给调度者`
+                  : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送给调度者`);
                 return result;
               }
               conversation.addUser(text, attachments);

@@ -150,7 +150,7 @@
 .team-reply-box textarea { display: block; width: 100%; min-height: 44px; resize: none; border: 0; background: transparent; padding: 9px 11px 2px; color: var(--ink); font-size: 12px; outline: 0; }
 .team-reply-box footer { display: flex; height: 34px; align-items: center; gap: 7px; padding: 0 6px 5px; color: var(--faint); font-size: 9.5px; }
 .team-reply-box footer span { margin-left: auto; }
-.team-reply-box footer > button:last-child { display: grid; width: 27px; height: 27px; place-items: center; border: 0; border-radius: 7px; background: var(--accent); color: white; }
+.team-reply-box footer .team-send-button { display: grid; width: 27px; height: 27px; place-items: center; border: 0; border-radius: 7px; background: var(--accent); color: white; }
 
 /* 调度台回复框的 `/` 补全菜单：跟普通任务回复框那张同一副长相（见 task-reply.css）。 */
 .team-reply-command-menu {
