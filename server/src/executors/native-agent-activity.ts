@@ -1,7 +1,7 @@
 import type { AgentEvent, NativeAgentActivity } from "@ash/shared";
 import { codexErrorEvent } from "./codex-error-event.js";
 import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
-import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
+import { CodexWriteClock } from "./tool-writes.js";
 
 export function childActivity(id: string, event: NativeAgentActivity): AgentEvent {
   return { kind: "tool", name: "Agent", nativeWork: { type: "activity", id, event, at: new Date().toISOString() } };
@@ -18,7 +18,11 @@ export class CodexChildActivity {
   private thinkingDeltas = new Set<string>();
 
   /** `cwd`：这个进程的工作目录，子线程报出来的相对路径按它展开（见 tool-writes.ts）。 */
-  constructor(private readonly cwd?: string) {}
+  private readonly writeClock: CodexWriteClock;
+
+  constructor(cwd?: string) {
+    this.writeClock = new CodexWriteClock(cwd);
+  }
 
   notification(method: string, p: any): AgentEvent[] {
     const out: AgentEvent[] = [];
@@ -32,6 +36,7 @@ export class CodexChildActivity {
     } else if (method === "item/plan/delta") {
       if (p.delta) push({ kind: "thinking", text: p.delta });
     } else if (method === "item/started") {
+      this.writeClock.start(item);
       if (item?.type === "commandExecution") push({ kind: "tool", name: "exec", detail: short(item.command) });
       else if (item?.type === "fileChange") push({ kind: "tool", name: "edit", detail: short(item.changes) });
       else if (item?.type === "mcpToolCall") push({ kind: "tool", name: `${item.server}/${item.tool}`, detail: short(item.arguments) });
@@ -41,8 +46,8 @@ export class CodexChildActivity {
     } else if (method === "item/completed") {
       // 子线程写到的位置同样算这个任务的，直接放在顶层（不包进子智能体活动）；只认做完了的
       // （见 tool-writes.ts）。
-      const writes = item?.type === "fileChange" ? codexChangeWrites(item, this.cwd)
-        : item?.type === "commandExecution" ? codexCommandCwd(item, this.cwd) : null;
+      const writes = item?.type === "fileChange" ? this.writeClock.complete(item, "change")
+        : item?.type === "commandExecution" ? this.writeClock.complete(item, "command") : null;
       if (writes) out.push(writes);
       if (item?.type === "agentMessage") {
         push({ kind: "text", text: this.textDeltas.delete(key) ? "\n\n" : `${item.text ?? ""}\n\n` });

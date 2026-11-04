@@ -130,6 +130,12 @@ export async function runWindows(
      * 时不能漏掉它。本任务自己的区间不开这一档——上层目录里跑的那段时间不是它在这儿干活的证据。
      */
     fromAbove?: boolean;
+    /**
+     * 不核对目录：它在哪儿跑的那段时间都算。同样只给找对手用，而且只给**确实往这个目录里写过
+     * 东西**的任务开（写入记录指进了这里，见 `task-artifact-footprint.ts` 的 `rivalCandidates`）：
+     * 在隔壁目录开工、用绝对路径写进来的任务，按工作目录核对一段区间都核不出来（复审第 3 轮 #3）。
+     */
+    anywhere?: boolean;
   } = {},
 ): Promise<{ windows: RunWindow[]; gaps: string[] }> {
   const ids = owners.map((row) => row.id);
@@ -188,6 +194,7 @@ export async function runWindows(
     cwd: string | null | undefined,
     fallback?: string | null,
   ): Promise<"exact" | "stale" | "elsewhere"> => {
+    if (options.anywhere) return "exact";
     const recorded = (cwd ?? fallback ?? "").trim();
     if (!recorded) return "stale";
     if (await lens.sameDir(recorded, root.path)) return "exact";

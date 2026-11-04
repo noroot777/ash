@@ -44,11 +44,22 @@ export function claudeToolWrites(name: unknown, input: unknown, base?: string): 
 const MAX_PENDING_WRITES = 256;
 
 /**
+ * 给写入事件补上「这一步花了多久」（`tookMs`）：记录端据此按**这一步开始的时刻**记「从什么时候
+ * 起在这儿写」（task-writes.ts）。裁决只认文件落下时已经成立的记录，而一步操作的开始时刻天然
+ * 不晚于它写出的文件——于是不必再给所有记录一个笼统的容差，一个无关的、晚了半分钟才写的说明也
+ * 就不能回头认领早先的成品（复审第 3 轮 #1）。
+ */
+const withTook = (writes: AgentEvent | null, tookMs: number | null | undefined): AgentEvent | null => {
+  if (!writes || writes.kind !== "writes" || !Number.isFinite(tookMs) || tookMs! <= 0) return writes;
+  return { ...writes, tookMs: Math.round(tookMs!) };
+};
+
+/**
  * claude 的写文件调用要配上结果才算数：`tool_use` 先记下，`tool_result` 没报错才放出来。
  * 主会话与子智能体共用一本（调用 id 全局唯一）。
  */
 export class ClaudeWriteLedger {
-  private pending = new Map<string, AgentEvent>();
+  private pending = new Map<string, { writes: AgentEvent; at: number }>();
 
   /** `base`：这条流所属进程的工作目录（相对路径按它展开）。 */
   constructor(private readonly base?: string) {}
@@ -57,14 +68,42 @@ export class ClaudeWriteLedger {
     const writes = claudeToolWrites(name, input, this.base);
     if (!writes || typeof id !== "string" || !id) return;
     if (this.pending.size >= MAX_PENDING_WRITES) this.pending.delete(this.pending.keys().next().value!);
-    this.pending.set(id, writes);
+    this.pending.set(id, { writes, at: Date.now() });
   }
 
   toolResult(id: unknown, isError: boolean): AgentEvent | null {
     if (typeof id !== "string") return null;
-    const writes = this.pending.get(id);
+    const entry = this.pending.get(id);
     this.pending.delete(id);
-    return writes && !isError ? writes : null;
+    return entry && !isError ? withTook(entry.writes, Date.now() - entry.at) : null;
+  }
+}
+
+/**
+ * codex 的改文件、命令条目做完才报写到了哪里；开始那一刻在 `item/started`（`item.started`）。
+ * 这本小账记下每个条目的开始时刻，完成时补上 `tookMs`。命令自带 `durationMs` 的以它为准。
+ */
+export class CodexWriteClock {
+  private started = new Map<string, number>();
+
+  constructor(private readonly base?: string) {}
+
+  start(item: unknown): void {
+    const id = item && typeof item === "object" ? (item as Record<string, unknown>).id : undefined;
+    if (typeof id !== "string" || !id) return;
+    if (this.started.size >= MAX_PENDING_WRITES) this.started.delete(this.started.keys().next().value!);
+    this.started.set(id, Date.now());
+  }
+
+  /** 一个做完的条目写到了哪里（改文件、命令都认）；不是这两类就是 null。 */
+  complete(item: unknown, kind: "change" | "command"): AgentEvent | null {
+    const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    const id = typeof record.id === "string" ? record.id : "";
+    const began = this.started.get(id);
+    this.started.delete(id);
+    const writes = kind === "change" ? codexChangeWrites(item, this.base) : codexCommandCwd(item, this.base);
+    const duration = Number(record.durationMs ?? record.duration_ms);
+    return withTook(writes, Number.isFinite(duration) && duration > 0 ? duration : began === undefined ? null : Date.now() - began);
   }
 }
 
@@ -103,11 +142,8 @@ export function codexCommandCwd(item: unknown, base?: string): AgentEvent | null
   const record = item as Record<string, unknown>;
   if (["declined", "inprogress", ""].includes(codexStatus(record))) return null;
   const paths = cleanPaths([record.cwd], base);
-  if (!paths.length) return null;
   // 命令是做完才报的；跑了多久（app-server 带 `durationMs`）要交出去，记录端据此把「从什么时候起
   // 在这儿干活」往回拨——一条跑十分钟的渲染命令，它的产物早在报出来之前就落盘了。
   const took = Number(record.durationMs ?? record.duration_ms);
-  return Number.isFinite(took) && took > 0
-    ? { kind: "writes", paths, cwd: true, tookMs: took }
-    : { kind: "writes", paths, cwd: true };
+  return paths.length ? withTook({ kind: "writes", paths, cwd: true }, took) : null;
 }

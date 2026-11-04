@@ -8,10 +8,12 @@ import type { WorkspaceRoot } from "./file-browser.js";
 import { readFileGitStatus } from "./file-git-status.js";
 import { taskBranchChangedPaths } from "./git-diff.js";
 import { kindOf, scanIgnoredArtifacts, type ArtifactKind } from "./task-artifact-scan.js";
-import { committedInWindows, resolveArtifactScope } from "./task-artifact-scope.js";
+import { committedInWindows, resolveArtifactScope, type CommitEvidence } from "./task-artifact-scope.js";
 import { footprintArbiter, type FootprintArbiter } from "./task-artifact-footprint.js";
 import { pathLens } from "./task-artifact-paths.js";
-import { checkBranchVersions, lastCommitTimes, type BranchVersionCheck } from "./task-artifact-version.js";
+import {
+  checkBranchVersions, checkCommitVersions, lastCommitTimes, type BranchVersionCheck, type CommitVersionCheck,
+} from "./task-artifact-version.js";
 import { windowHit } from "./task-artifact-windows.js";
 
 // 「这个任务做出来的、值得看一眼的东西」——图片、网页、音视频、PDF。
@@ -98,27 +100,6 @@ export interface TaskArtifactsResult {
 const MAX_ARTIFACTS = 400;
 
 /**
- * **现在这一版**文件是什么时候落下的——归属要对的是它，不是这条路径历史上的某一版。
- *
- *   - 有未提交的改动：就是现在磁盘上这份，按 mtime（区间里那次提交只证明了更早的版本）；
- *   - 区间之后又被提交改过：按那次之后的提交；
- *   - 现在这一版就是区间里那次提交：按那次提交，强弱跟着它所在的区间走；之后有没有被改过
- *     看不全时（`sure: false`）只能当候选；
- *   - 没有提交证据：按 mtime。
- *
- * `hit` 缺省 = 拿 `at` 去对区间。
- */
-function currentVersion(
-  byCommit: { exact: boolean; at: number | null; later: number | null; unknown: boolean } | undefined,
-  working: boolean,
-  mtimeMs: number | null,
-): { at: number | null; hit?: "exact" | "approx" | null; sure: boolean } {
-  if (working || !byCommit) return { at: mtimeMs, sure: true };
-  if (byCommit.later !== null) return { at: byCommit.later, sure: true };
-  return { at: byCommit.at, hit: byCommit.exact ? "exact" : "approx", sure: !byCommit.unknown };
-}
-
-/**
  * 三路线索合成一份产物清单。
  *
  * 任何一路读失败都只记一句 `error` 继续走完剩下的：git 不在、分支被删、目录只读，都不该
@@ -155,15 +136,12 @@ export async function readTaskArtifacts(
    */
   const proven = new Set<string>();
   /**
-   * 按时间在运行区间里找到的提交动过的路径 → 那次提交落在精确区间还是估出来的区间、发生在
-   * 哪一刻，以及**现在这一版**是不是还是那次提交落下的。这是**共享目录上的提交**：同一刻别的
-   * 任务也在这个仓库里跑时，提交是谁做的跟 mtime 一样问不出来，要拿提交时刻去过并发裁决，
-   * 不能当成分支差异那种自带归属的证据。
-   *
-   *   `later`   —— 区间之后又有人提交改过它：现在这一版是那次落下的（时刻）。
-   *   `unknown` —— 之后有没有被改过看不全（回看额度用满了）。
+   * 按时间在运行区间里找到的提交动过的路径 → 那几次提交（提交号、时刻、精确还是估算区间）。
+   * 这是**共享目录上的提交**：同一刻别的任务也在这个仓库里跑时，提交是谁做的跟 mtime 一样问
+   * 不出来，要拿提交时刻去过并发裁决；而且得先核出磁盘上现在这份是其中哪一次落下的，不能当成
+   * 分支差异那种自带归属的证据。
    */
-  const timeCommitted = new Map<string, { exact: boolean; at: number | null; later: number | null; unknown: boolean }>();
+  const timeCommitted = new Map<string, CommitEvidence[]>();
   const remember = (path: string, origin: ArtifactOrigin) => {
     if (!path || !kindOf(path)) return;
     const seen = evidence.get(path);
@@ -245,21 +223,11 @@ export async function readTaskArtifacts(
           const byTime = await committedInWindows(root.path, windows);
           // 精确区间里的提交是实测证据；估出来的区间里的只是候选，分开记，别让它冒充确定
           // （第 4 轮审查 N2）。
-          for (const [paths, exact] of [[byTime.exact, true], [byTime.approx, false]] as const) {
-            for (const path of paths) {
-              const rel = relocate(path);
-              if (!rel) continue;
-              remember(rel, "committed");
-              const at = byTime.at.get(path) ?? null;
-              const newest = byTime.latest.get(path);
-              timeCommitted.set(rel, {
-                exact,
-                at,
-                later: at !== null && newest !== undefined && newest > at ? newest : null,
-                unknown: at !== null && byTime.latestFloor !== null && at < byTime.latestFloor
-                  && !(newest !== undefined && newest > at),
-              });
-            }
+          for (const [path, commits] of byTime.commits) {
+            const rel = relocate(path);
+            if (!rel) continue;
+            remember(rel, "committed");
+            timeCommitted.set(rel, commits);
           }
           if (byTime.truncated) {
             incomplete.push("它跑过的某一段里提交太多，已提交那一档只回看了最近的一批");
@@ -297,17 +265,28 @@ export async function readTaskArtifacts(
     return { path, origins, info };
   }));
 
-  // 分支证明只替**分支末端那一版**作保：共享目录上（worktree 已清理、退回主仓展示）先核一遍
-  // 磁盘上这份是不是那一版（task-artifact-version.ts）。独占目录里磁盘上这份就是它的，不用核。
-  // 有未提交改动的不在这里核：现在这一版就是磁盘上那份未提交的，下面按它落下的时刻判。
-  const branchVersion = !exclusive && branchSource
-    ? await checkBranchVersions(root.path, prefix, branchSource, stated
-      .filter(({ path, origins, info }) => proven.has(path) && !origins.has("working") && info?.isFile())
-      .map(({ path }) => path))
-    : new Map<string, BranchVersionCheck>();
-  // 对不上 / 核不出来的那几条，现在这一版是哪次提交落下的——并发裁决拿这个时刻去问那一刻谁在。
-  const offBranch = [...branchVersion].filter(([, check]) => check !== "match").map(([path]) => path);
-  const offBranchAt = offBranch.length && root.gitRepo ? await lastCommitTimes(root.path, offBranch) : new Map<string, number>();
+  // 提交证据只替**它落下的那一版**作保：共享目录上先核一遍磁盘上这份是不是那一版
+  // （task-artifact-version.ts）——任务分支差异比分支末端，按时间找到的提交比那几次提交各自
+  // 落下的内容。独占目录里磁盘上这份就是它的，不用核。有未提交改动的不在这里核：现在这一版就是
+  // 磁盘上那份未提交的，下面按它落下的时刻判。
+  const clean = stated.filter(({ origins, info }) => !origins.has("working") && info?.isFile()).map(({ path }) => path);
+  const [branchVersion, commitVersion] = exclusive
+    ? [new Map<string, BranchVersionCheck>(), new Map<string, CommitVersionCheck>()]
+    : await Promise.all([
+      branchSource
+        ? checkBranchVersions(root.path, prefix, branchSource, clean.filter((path) => proven.has(path)))
+        : new Map<string, BranchVersionCheck>(),
+      checkCommitVersions(root.path, prefix, new Map(clean
+        .filter((path) => timeCommitted.has(path))
+        .map((path) => [path, timeCommitted.get(path)!]))),
+    ]);
+  // 对不上 / 核不出来的那几条，现在这一版是哪次提交落下的——并发裁决只拿这个时刻去问「那一刻是
+  // 不是别人在场」，好把别人的东西判出去；它不认定版本、不把谁升成确定。
+  const offVersion = new Set([
+    ...[...branchVersion].filter(([, check]) => check !== "match").map(([path]) => path),
+    ...[...commitVersion].filter(([, check]) => typeof check === "string").map(([path]) => path),
+  ]);
+  const offVersionAt = offVersion.size && root.gitRepo ? await lastCommitTimes(root.path, [...offVersion]) : new Map<string, number>();
 
   const artifacts: TaskArtifact[] = [];
   /** 靠推断区间认进来的条数——面板要单独说一句。 */
@@ -330,32 +309,35 @@ export async function readTaskArtifacts(
     // （`version`），再拿那个时刻去对区间、去过并发裁决；更早那次属于它的提交只够让它**留作
     // 候选**（`prior`）——不把它从面板上抹掉（自己提交过的东西被别人顺手改了一下就消失，是
     // 第 2 轮审查 F3 的老问题），也不让它冒充确定。
-    const byCommit = timeCommitted.get(path);
-    const working = origins.has("working");
-    const check = branchVersion.get(path);
-    const branchProof = exclusive || check === "match";
-    // 分支版本**确定对不上**（或者核不出来）：磁盘上这份不是它分支上那一版，旧路径证据、mtime、
-    // 目录远近都不能再替这一版作保——它最多是个候选（它的分支确实动过这条路径），而且现在这一版
-    // 若是同一刻别的任务在它们那儿提交的，照样判给别人（复审第 2 轮 #2）。
-    if (check === "mismatch" || check === "unknown") {
-      const verdict = arbiter?.judge(path, offBranchAt.get(path) ?? null);
+    const branchProof = exclusive || branchVersion.get(path) === "match";
+    // 提交证据**确定对不上**（或者核不出来）：磁盘上这份不是它那几次提交落下的任何一版，旧路径
+    // 证据、mtime、目录远近、提交日期都不能再替这一版作保——它最多是个候选（它确实动过这条路径），
+    // 而且现在这一版若是同一刻别的任务在它们那儿提交的，照样判给别人（复审第 2 轮 #2、第 3 轮 #2）。
+    // 分支那一版对得上的不走这里：那条证据本身就够了。
+    if (!branchProof && offVersion.has(path)) {
+      const verdict = arbiter?.judge(path, offVersionAt.get(path) ?? null);
       if (verdict === "theirs") { claimed += 1; continue; }
       pushArtifact(path, origins, info, mtimeMs, false);
       continue;
     }
     if (!branchProof) {
-      const version = currentVersion(byCommit, working, mtimeMs);
-      const prior = proven.has(path) || !!byCommit;
-      const hit = version.hit === undefined ? windowHit(version.at, windows) : version.hit;
+      // 现在这一版落下的时刻：区间里核出来的那次提交（强弱跟着它所在的区间），否则——未提交的
+      // 改动、被忽略的文件——就是磁盘上这份的 mtime。
+      const matched = commitVersion.get(path);
+      const version = matched && typeof matched === "object"
+        ? { at: matched.commit.at, hit: (matched.commit.exact ? "exact" : "approx") as "exact" | "approx" }
+        : { at: mtimeMs, hit: windowHit(mtimeMs, windows) };
+      const prior = proven.has(path) || timeCommitted.has(path);
+      const hit = version.hit;
       if (!hit && !prior) continue;
-      let exactProof = hit === "exact" && version.sure;
+      let exactProof = hit === "exact";
       // 只靠时间认进来的还要过一道并发裁决：同一刻别的任务也在这个目录里跑的话，落在区间里
       // 不再说明什么。离别人写过的地方更近 → 不是它的；离它自己的更近 → 确定是它的（哪怕区间
       // 是估的）；比不出来 → 只能当候选。
       if (arbiter) {
         const verdict = arbiter.judge(path, version.at);
         if (verdict === "theirs") { claimed += 1; continue; }
-        if (verdict === "mine" && hit && version.sure) exactProof = true;
+        if (verdict === "mine" && hit) exactProof = true;
         if (verdict === "unsure") exactProof = false;
       }
       pushArtifact(path, origins, info, mtimeMs, exactProof);

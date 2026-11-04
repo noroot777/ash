@@ -67,7 +67,13 @@ export async function recordTaskWrites(
       .values({ taskId, path, weak, firstAt: began, lastAt: at })
       .onConflictDoUpdate({
         target: [taskWrites.taskId, taskWrites.path, taskWrites.weak],
-        set: { lastAt: sql`excluded.last_at` },
+        // 两端都取极值：一步长命令的记录可能在一条后开始、先报完的记录之后才到，到得晚不等于
+        // 开始得晚——直接覆盖会把「最早在这儿写」往后挪，把「最后一次」往前拨。时刻都是同一种
+        // ISO 写法，按字典序比就是按时间比。
+        set: {
+          firstAt: sql`min(${taskWrites.firstAt}, excluded.first_at)`,
+          lastAt: sql`max(${taskWrites.lastAt}, excluded.last_at)`,
+        },
       });
   }
 }

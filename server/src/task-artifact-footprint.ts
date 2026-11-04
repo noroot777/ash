@@ -63,10 +63,12 @@ interface Trail {
 }
 
 /**
- * 写入记录比文件晚到这么久以内仍算「当时就在」：写文件工具的结果是写完之后才回来的，记录端
- * 落库又在那之后，同一次写入的记录时刻天然比文件的修改时刻晚一点。
+ * 写入记录比文件晚这么久以内仍算「当时就在」。写入端已经按**这一步操作开始的时刻**记账（工具
+ * 调用发出、条目 started 的那一刻，或完成时刻减去它自报的耗时，见 executors/tool-writes.ts），
+ * 一步操作写出的文件天然不早于它开始；剩下要容的只有文件时间戳精度和两边取时钟的先后。
+ * 留宽了，一份半分钟后才写的无关说明就能回头认领早先的成品（复审第 3 轮 #1）。
  */
-const EVIDENCE_SKEW_MS = 60 * 1000;
+const EVIDENCE_SKEW_MS = 2 * 1000;
 
 /**
  * 判 `at` 那一刻落下的文件时，这个任务的哪些写入位置能拿来作证：只认那一刻**已经成立**的
@@ -127,17 +129,22 @@ const overlaps = (a: RunWindow, b: RunWindow) => a.start <= b.end && b.start <= 
  *
  * 粗筛按会话、回合、哨兵三处的记录收：会话的启动目录、每个回合实际的工作目录、哨兵的工作
  * 目录可能各不相同。返回按最近活动排序（截断时先留最近的）。
+ *
+ * 还有一路**不看工作目录**：写入记录指进了这个目录的任务（复审第 3 轮 #3）。在隔壁目录开工、
+ * 用绝对路径把东西写进来的任务，工作目录跟这里一点不沾，却实打实在这儿写过——它们记在
+ * `writers` 里，后面核区间时不按目录卡（`runWindows` 的 `anywhere`）。
  */
 async function rivalCandidates(
   task: ArtifactTask,
   windows: readonly RunWindow[],
   root: WorkspaceRoot,
   lens: PathLens,
-): Promise<string[]> {
+): Promise<{ ids: string[]; writers: Set<string> }> {
   const from = new Date(Math.min(...windows.map((w) => w.start)) - ROUGH_MARGIN_MS).toISOString();
   const latest = Math.max(...windows.map((w) => w.end));
   const until = Number.isFinite(latest) ? new Date(latest).toISOString() : null;
-  const [sessionRows, turnRows, monitorRows] = await Promise.all([
+  const prefixes = [...new Set([root.path, await lens.canonical(root.path)].map((dir) => dir.replace(/[\\/]+$/, "")))];
+  const [sessionRows, turnRows, monitorRows, writeRows] = await Promise.all([
     db.select({ taskId: sessions.taskId, cwd: sessions.cwd, alt: sessions.worktreePath, at: sessions.startedAt })
       .from(sessions).where(and(
         until ? lte(sessions.startedAt, until) : undefined,
@@ -153,6 +160,16 @@ async function rivalCandidates(
         until ? lte(monitors.startedAt, until) : undefined,
         or(isNull(monitors.endedAt), gte(monitors.endedAt, from)),
       )),
+    db.select({ taskId: taskWrites.taskId, at: sql<string>`max(${taskWrites.lastAt})` })
+      .from(taskWrites).where(and(
+        ne(taskWrites.taskId, task.id),
+        until ? lte(taskWrites.firstAt, until) : undefined,
+        gte(taskWrites.lastAt, from),
+        or(...prefixes.flatMap((dir) => [
+          sql`${taskWrites.path} = ${dir}`,
+          sql`substr(${taskWrites.path}, 1, ${dir.length + 1}) = ${dir + sep}`,
+        ])),
+      )).groupBy(taskWrites.taskId),
   ]);
   const projectOf = new Map<string, string>();
   const rows = [...sessionRows, ...turnRows, ...monitorRows].filter((row) => row.taskId !== task.id);
@@ -174,7 +191,12 @@ async function rivalCandidates(
     if (seen !== undefined ? seen >= (row.at ?? "") : !(await related(row))) continue;
     latestAt.set(row.taskId, row.at ?? "");
   }
-  return [...latestAt].sort((a, b) => b[1].localeCompare(a[1])).map(([id]) => id);
+  const writers = new Set<string>();
+  for (const row of writeRows) {
+    writers.add(row.taskId);
+    if ((latestAt.get(row.taskId) ?? "") < (row.at ?? "")) latestAt.set(row.taskId, row.at ?? "");
+  }
+  return { ids: [...latestAt].sort((a, b) => b[1].localeCompare(a[1])).map(([id]) => id), writers };
 }
 
 /**
@@ -255,7 +277,7 @@ export async function footprintArbiter(
 ): Promise<FootprintArbiter> {
   if (scope.exclusive || !scope.windows.length) return ALONE;
   const ownerIds = scope.owners.map((owner) => owner.id);
-  const candidates = await rivalCandidates(task, scope.windows, root, lens);
+  const { ids: candidates, writers } = await rivalCandidates(task, scope.windows, root, lens);
   const excluded = await collaborators(candidates, ownerIds, task.id);
   const pending = candidates.filter((id) => !excluded.has(id));
   // 截断只发生在**目录核对之后**：先把在别处干活的、协作关系上的都筛掉，剩下的才按最近活动
@@ -263,7 +285,7 @@ export async function footprintArbiter(
   const incomplete = pending.length > MAX_RIVALS;
   const rivals = (await Promise.all(pending.slice(0, MAX_RIVALS).map(async (id) => ({
     id,
-    windows: (await runWindows([{ id }], root, lens, { fromAbove: true })).windows,
+    windows: (await runWindows([{ id }], root, lens, { fromAbove: true, anywhere: writers.has(id) })).windows,
   })))).filter((rival) => rival.windows.some((span) => scope.windows.some((own) => overlaps(span, own))));
   const note = incomplete
     ? `同一时间在这个目录附近跑过的任务太多（超过 ${MAX_RIVALS} 个），没能逐个比对写入位置，没判给别人的都按候选列`

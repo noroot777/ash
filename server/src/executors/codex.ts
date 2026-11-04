@@ -27,7 +27,7 @@ import { TURN_IDENTITY_ENV_KEYS } from "../turn-identity.js";
 const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
 import { openCodexAppServer } from "./codex-app-server.js";
 import { readCodexAppServerState } from "./codex-app-server-state.js";
-import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
+import { CodexWriteClock } from "./tool-writes.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
 // sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
@@ -381,6 +381,7 @@ async function* codexStreamEvents(
   // 那张蓝图(审查第 5 轮 R1)。
   const events = eventQueue({ images });
   const push = (event: AgentEvent) => events.push(event);
+  const writeClock = new CodexWriteClock(contextOptions.cwd);
 
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
@@ -400,6 +401,7 @@ async function* codexStreamEvents(
     if (/^item\.(started|updated|completed)$/.test(ev.type)) {
       for (const activity of codexNativeWork(ev.item)) push(activity);
     }
+    if (ev.type === "item.started") writeClock.start(ev.item);
     if (ev.type === "thread.started" && ev.thread_id) {
       threadId = ev.thread_id;
       push({ kind: "session", cliSessionId: ev.thread_id });
@@ -423,11 +425,11 @@ async function* codexStreamEvents(
       else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text + "\n\n" });
       else if (it.type === "command_execution") {
         push({ kind: "tool", name: "exec", detail: shortStr(it.command) });
-        const cwd = codexCommandCwd(it, contextOptions.cwd);
+        const cwd = writeClock.complete(it, "command");
         if (cwd) push(cwd);
       } else if (it.type === "file_change" || it.type === "patch") {
         push({ kind: "tool", name: "edit", detail: shortStr(it.path ?? it.summary) });
-        const writes = codexChangeWrites(it, contextOptions.cwd);
+        const writes = writeClock.complete(it, "change");
         if (writes) push(writes);
       }
       else if (it.type === "mcp_tool_call") {
