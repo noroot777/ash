@@ -222,6 +222,11 @@
   color: color-mix(in srgb, var(--cyan) 90%, var(--ink));
 }
 
+/* 已在图标条上的那几格置灰，图标的「用过」色也一起收掉，不然灰字旁边还亮着一个青色图标。 */
+.inspector-host__menu .ui-menu-item:disabled .inspector-rail-icon--used {
+  color: inherit;
+}
+
 .inspector-host__panel {
   display: flex;
   min-width: 0;

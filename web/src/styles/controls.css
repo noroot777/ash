@@ -194,9 +194,14 @@
   text-align: left;
 }
 
-.ui-menu-item:hover,
+.ui-menu-item:hover:not(:disabled),
 .ui-menu-item.is-selected {
   background: var(--raised);
+}
+
+.ui-menu-item:disabled {
+  color: var(--faint);
+  cursor: default;
 }
 
 .ui-menu-item.is-danger {

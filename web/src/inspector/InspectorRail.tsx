@@ -89,6 +89,9 @@ export function InspectorRail({
   // 实现,是全应用第四份拷贝 —— 契约只该有一个出处,否则补过的那几处好用、没补的
   // 照旧,而差别从代码上看不出来。
   const tabs = useRovingChoice(items.map((item) => item.id), activeId ?? "", onSelect, "tab");
+  // 「+」只管把还没上条的面板加进来；已经在条上的那几格在菜单里置灰，去那儿直接点图标。
+  const openedIds = new Set(items.map((item) => item.id));
+  const canAdd = allItems.some((item) => !openedIds.has(item.id));
 
   useDismissable({
     enabled: menuOpen,
@@ -122,24 +125,24 @@ export function InspectorRail({
           ref={menuButton}
           type="button"
           className="inspector-host__add"
-          aria-label="切换 Inspector 面板"
+          aria-label="添加 Inspector 面板"
           aria-haspopup="menu"
           aria-expanded={menuOpen}
-          disabled={allItems.length === 0}
+          disabled={!canAdd}
           {...addTip.anchorProps}
           onClick={() => setMenuOpen((open) => !open)}
         >
           <Plus size={15} weight="bold" aria-hidden="true" />
         </button>
         <HoverTip at={menuOpen ? null : addTip.at}>
-          {allItems.length > 0 ? "切换面板" : "没有可用面板"}
+          {canAdd ? "添加面板" : allItems.length > 0 ? "面板都已打开" : "没有可用面板"}
         </HoverTip>
         {menuOpen && (
           <Menu className="inspector-host__menu">
             {allItems.map((item) => (
               <MenuItem
                 key={item.id}
-                selected={item.id === activeId}
+                disabled={openedIds.has(item.id)}
                 shortcut={item.shortcut ? inspectorShortcutLabel(item.shortcut) : undefined}
                 aria-label={tabLabel(item)}
                 onClick={() => {

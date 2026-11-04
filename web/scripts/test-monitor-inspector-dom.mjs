@@ -38,12 +38,15 @@ try {
       0,
       "没挂过哨兵的任务，这一格不该占着图标条",
     );
-    await page.getByRole("button", { name: "切换 Inspector 面板" }).click();
+    await page.getByRole("button", { name: "添加 Inspector 面板" }).click();
     assert.equal(
       await page.locator('.inspector-host__menu .inspector-host__menu-title', { hasText: "哨兵" }).count(),
       1,
       "没挂过也得留在「+」菜单里：手动起哨兵只有这一个入口",
     );
+    const menuItem = (title) => page.locator(".inspector-host__menu .ui-menu-item", { hasText: title });
+    assert.equal(await menuItem("信息").isDisabled(), true, "已在图标条上的面板，「+」菜单里要置灰");
+    assert.equal(await menuItem("哨兵").isDisabled(), false, "没上条的面板在「+」菜单里照常可点");
     await page.close();
   }
   {
