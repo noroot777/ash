@@ -15,7 +15,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { existsSync } from "node:fs";
 import { importMessageOrigin } from "./handoff-messages.js";
 import { db } from "./db/index.js";
-import { resolveAfterTarget } from "./pending-after.js";
+import { afterDependencyValues, resolveAfterTarget } from "./pending-after.js";
 import {
   freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates,
   acceptGateRuns, projects, scheduledMessages, schedules, sessionTurns, sessions, tasks,
@@ -465,12 +465,12 @@ async function importValidated(
   // 同项目、存在、能完成;导入人对目标项目的权限路由层已核)。核过才按**本机**那个前置定基线 ——
   // 对端的完成计数在这台机器上没有意义;核不过就不绑定(落成「前置不在本机」,托盘给直接发送)。
   // 源机已经等到的(`afterDoneAt`)原样认,依赖本身是否成立已经不重要了。
-  const afterDeps = new Map<string, { afterTaskId: string; afterSeq: number } | null>();
+  const afterDeps = new Map<string, boolean>();
   const unboundReasons = new Set<string>();
   for (const msg of messages) {
     if (msg.mode !== "after" || typeof msg.afterTaskId !== "string" || afterDeps.has(msg.afterTaskId)) continue;
     const target = await resolveAfterTarget({ afterTaskId: msg.afterTaskId, taskId: m.task.id, projectId: project.id });
-    afterDeps.set(msg.afterTaskId, target.ok ? { afterTaskId: msg.afterTaskId, afterSeq: target.afterSeq } : null);
+    afterDeps.set(msg.afterTaskId, target.ok);
     // 核不过的原因照实说(不在本机 / 别的项目 / 调度台 / 等自己),别都说成「不在本机」。
     if (!target.ok && !(typeof msg.afterDoneAt === "string" && msg.afterDoneAt)) {
       unboundReasons.add(target.status === 404 ? "前置任务不在本机" : target.error);
@@ -479,8 +479,12 @@ async function importValidated(
   if (unboundReasons.size) {
     notes.push(`有「等任务完成后发送」的消息没有绑定前置任务（${[...unboundReasons].join("；")}），可在托盘里直接发送或撤回`);
   }
+  // 行里的绑定与基线在**插入那一刻**按本机前置求(`afterDependencyValues`):上面这一轮核验只用来
+  // 给出说明,插入时前置已被删/改了项目,就落成不绑定,而不是沿用核验时那份基线。
   const afterDep = (msg: (typeof messages)[number]) =>
-    msg.mode === "after" && typeof msg.afterTaskId === "string" ? afterDeps.get(msg.afterTaskId) ?? null : null;
+    msg.mode === "after" && typeof msg.afterTaskId === "string" && afterDeps.get(msg.afterTaskId)
+      ? afterDependencyValues(msg.afterTaskId, m.task.id, project.id)
+      : null;
   const messageRows = messages.map((msg) => ({
     ...importMessageOrigin(msg, notes),
     id: id(),

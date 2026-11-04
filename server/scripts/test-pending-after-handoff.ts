@@ -23,7 +23,7 @@ mkdirSync(process.env.HOME, { recursive: true });
 const { releaseTmpDb } = await import("./tmp-db.js");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, scheduledMessages } = await import("../src/db/schema.js");
-const { latchAfterTask, resolveAfterTarget, withAfterGates } = await import("../src/pending-after.js");
+const { flushPendingAfterTask, resolveAfterTarget, withAfterGates } = await import("../src/pending-after.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { enqueueMessage } = await import("../src/pending-messages.js");
@@ -63,7 +63,9 @@ try {
   assert.deepEqual(await resolve("local-idle-done"), { ok: true, afterSeq: 0 }, "停在 done 上:就是那一次");
 
   // ── ② 消费侧兜底 ─────────────────────────────────────────────────────────
-  const smuggled = await enqueueMessage({ taskId: "receiver", text: "跨项目", mode: "after", afterTaskId: "foreign", afterSeq: 0 });
+  // 写入口(登记那一批)本身就落不下跨项目的依赖;这里直接写一行,模拟任何一个漏核的入口。
+  const smuggled = { ...await enqueueMessage({ taskId: "receiver", text: "跨项目", mode: "queued" }), mode: "after", afterTaskId: "foreign", afterSeq: 0 };
+  await db.update(scheduledMessages).set({ mode: "after", afterTaskId: "foreign", afterSeq: 0 }).where(eq(scheduledMessages.id, smuggled.id));
   const [smuggledGate] = await withAfterGates([smuggled]);
   assert.equal(smuggledGate!.afterDone, false, "别的项目的任务完成了也不放行");
   assert.match(smuggledGate!.afterWaitReason!, /不可见/);
@@ -71,8 +73,8 @@ try {
 
   // ── ③ 导出 ───────────────────────────────────────────────────────────────
   // 前置已落 done(计数已加),完成钩子还没来得及补锁存 —— 行上的缓存是空的。
-  const ready = await enqueueMessage({ taskId: "receiver", text: "已等到", mode: "after", afterTaskId: "src-pre", afterSeq: 0 });
-  const open = await enqueueMessage({ taskId: "receiver", text: "没等到", mode: "after", afterTaskId: "src-pre-open", afterSeq: 0 });
+  const ready = await enqueueMessage({ taskId: "receiver", text: "已等到", mode: "after", afterTaskId: "src-pre" });
+  const open = await enqueueMessage({ taskId: "receiver", text: "没等到", mode: "after", afterTaskId: "src-pre-open" });
   await db.update(tasks).set({ status: "done", doneSeq: 1, endedAt: "2026-11-04T10:00:00.000Z" }).where(eq(tasks.id, "src-pre"));
   const exported = await exportHandoffMessages([ready.id, open.id]);
   assert.equal(exported[0]!.afterDoneAt, "2026-11-04T10:00:00.000Z", "导出时按完成计数求出已等到,不交出空缓存");
@@ -81,12 +83,12 @@ try {
   assert.deepEqual(exported.map((message) => message.text), ["已等到", "没等到"], "按传入顺序");
 
   // 打包期间:早先读到这条(空锁存)→ 前置完成 → 锁存落库 → 前置被删。冻结时不能信旧对象。
-  const vanishing = await enqueueMessage({ taskId: "receiver", text: "打包期间等到了", mode: "after", afterTaskId: "src-pre-gone", afterSeq: 0 });
+  const vanishing = await enqueueMessage({ taskId: "receiver", text: "打包期间等到了", mode: "after", afterTaskId: "src-pre-gone" });
   const withdrawn = await enqueueMessage({ taskId: "receiver", text: "打包期间撤回了", mode: "queued" });
   const earlySnapshot = [vanishing, withdrawn];
   assert.equal(earlySnapshot[0]!.afterDoneAt, null);
-  await setTaskStatus("src-pre-gone", "done");
-  await latchAfterTask("src-pre-gone");
+  await setTaskStatus("src-pre-gone", "done", { completion: true });
+  await flushPendingAfterTask("src-pre-gone");
   await deleteTaskCompletely("src-pre-gone");
   await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, withdrawn.id));
   const frozen = await exportHandoffMessages(earlySnapshot.map((message) => message.id));

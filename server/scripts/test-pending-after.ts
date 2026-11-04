@@ -1,13 +1,16 @@
 // 「等某任务完成后发送」(mode=after)与「已结束任务不能入队」的回归。
 //   ① 纯判定:afterBaselineOf / afterGateOf / isDueForDelivery / deliveryVerdict / finishedMembers
 //   ② 落库:/reply 带 afterTaskId 的校验与落行(含原生命令不当场执行、团队调度台拒收、登记基线)、
-//      setTaskStatus 落 done 与完成计数同一笔、withAfterGates 按计数判定并按消息补锁存、
-//      完成后崩溃再重跑也撤不回、迟到的完成处理不带走续聊期间新排下的消息、删前置之前先锁存、
+//      只有声明为完成的那一笔 done 才加计数(真实结算:续聊被停止/出错/提问只是放回原状态,
+//      正常结束才算)、withAfterGates 按计数判定并按消息补锁存、完成后崩溃再重跑也撤不回、
+//      迟到的完成处理不带走续聊期间新排下的消息、登记与依赖校验同一 batch(前置不在就落不下)、
+//      删前置时锁存与删行同一 batch、
 //      hasDeliverablePendingMessages 不把没等到前置任务的消息算成「该发」、send-now 改成排队、
 //      前置任务的终态钩子(flushPendingAfterTask)确实把等它的消息扫一遍
 //   ③ 队列写入口:insert / create 拒绝已结束的任务
-// 全程不投递,不会拉起真 agent:send-now 那一下会触发一次扫描,所以先把任务归档,让扫描
-// 判「取消」而不是续跑;队列那一组的队头是 running,推进不会再拉起任何成员。
+// 全程不投递,不会拉起真 agent:接收任务在消息到期之前就置成 running;send-now 那一下会触发
+// 一次扫描,所以先把任务归档,让扫描判「取消」而不是续跑;队列那一组的队头是 running,推进
+// 不会再拉起任何成员。
 // 跑:npm -w server run test:pending-after
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -23,7 +26,8 @@ process.env.ASH_RUNS_DIR = join(root, "runs");
 const { releaseTmpDb } = await import("./tmp-db.js");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks, scheduledMessages, queueItems } = await import("../src/db/schema.js");
-const { afterBaselineOf, afterGateOf, flushPendingAfterTask, latchAfterTask, withAfterGates } = await import("../src/pending-after.js");
+const { AfterTargetGoneError, afterBaselineOf, afterGateOf, flushPendingAfterTask, withAfterGates } = await import("../src/pending-after.js");
+const { settleTaskStatus } = await import("../src/settle-status.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { deleteTaskCompletely } = await import("../src/task-delete-routes.js");
 const { deliveryVerdict, isDueForDelivery } = await import("../src/pending-verdict.js");
@@ -100,7 +104,7 @@ try {
   await db.insert(tasks).values([
     task("me", "done"), task("pre", "running"), task("other", "backlog", "pa-q"),
     { ...task("lead", "idle"), mode: "team" }, { ...task("fu", "running"), followUpFrom: "done", doneSeq: 1 },
-    task("seq", "running"), task("del", "running"),
+    task("seq", "running"), task("del", "running"), task("busy", "running"),
     task("q-head", "running"), task("q-done", "done"), task("q-canceled", "canceled"), task("q-fresh", "backlog"),
   ] as never);
 
@@ -146,12 +150,32 @@ try {
   const message = queued.body.message as { id: string; mode: string; afterTaskId: string };
   assert.equal(message.mode, "after");
   assert.equal(message.afterTaskId, "pre");
+  // 从这里起让 me 忙着:后面这条消息会到期,me 空闲的话哪次全局扫描碰上它就真去投递(拉起执行器)。
+  await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "me"));
   // 落 done 与完成计数是同一条 UPDATE(状态钩子在这个任务上无事可做:不在队列、没人等它)。
-  await setTaskStatus("seq", "done");
-  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "seq"))).at(0)!.doneSeq, 1);
+  const seqOf = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!.doneSeq;
+  await setTaskStatus("seq", "done", { completion: true });
+  assert.equal(await seqOf("seq"), 1);
+  await setTaskStatus("seq", "running");
+  await setTaskStatus("seq", "done", { completion: true });
+  assert.equal(await seqOf("seq"), 2, "每完成一次加一");
   await setTaskStatus("seq", "running");
   await setTaskStatus("seq", "done");
-  assert.equal((await db.select().from(tasks).where(eq(tasks.id, "seq"))).at(0)!.doneSeq, 2, "每落一次 done 加一");
+  assert.equal(await seqOf("seq"), 2, "没声明是完成的 done(放回原状态)不加");
+
+  // 真实结算:已完成任务的续聊这一轮被停止、出错、留了提问 —— 状态放回 done,但不是又完成了一次。
+  for (const [id, exit, stopped, question] of [
+    ["fu-stop", 1, "canceled", null], ["fu-crash", 1, null, null], ["fu-ask", 0, null, "还要你拍板"], ["fu-ok", 0, null, null],
+  ] as const) {
+    await db.insert(tasks).values({ ...task(id, "running"), followUpFrom: "done", doneSeq: 4, question } as never);
+    const waiter = await enqueueMessage({ taskId: "busy", text: id, mode: "after", afterTaskId: id });
+    assert.equal(waiter.afterSeq, 4);
+    const settlement = await settleTaskStatus(id, exit, stopped);
+    assert.equal(settlement.status, "done", `${id}:状态照旧放回 done`);
+    const counted = id === "fu-ok";
+    assert.equal(await seqOf(id), counted ? 5 : 4, counted ? "续聊正常结束是一次完成" : `${id}:不是一次完成`);
+    assert.equal((await withAfterGates([waiter]))[0]!.afterDone, counted, `${id}:等它这一轮的消息${counted ? "等到了" : "照旧等"}`);
+  }
   const row = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, message.id))).at(0)!;
   assert.equal(row.status, "pending");
   assert.equal(row.execution, false, "等前置任务的消息不是执行型");
@@ -182,7 +206,7 @@ try {
   const followUpId = (followUp.body.message as { id: string }).id;
   const followUpRow = () => db.select().from(scheduledMessages).where(eq(scheduledMessages.id, followUpId)).then((r) => r.at(0)!);
   assert.equal((await followUpRow()).afterSeq, 1, "续聊中:基线是已落过的那一次");
-  await latchAfterTask("fu");
+  await flushPendingAfterTask("fu");
   assert.equal((await followUpRow()).afterDoneAt, null, "迟到的完成处理不放行续聊期间新排下的消息");
   assert.equal((await withAfterGates([await followUpRow()]))[0]!.afterDone, false, "续聊中的已完成任务不算完成");
   await db.update(tasks).set({ status: "done", doneSeq: 2, followUpFrom: null }).where(eq(tasks.id, "fu"));
@@ -210,16 +234,30 @@ try {
   await flushPendingAfterTask("pre");
   assert.equal(await settled(waiting.id), "canceled", "前置任务的终态钩子要把等它的消息所在任务扫一遍");
 
-  // 删前置之前先锁存:删了就查不到它完成过。没等到的那条照旧等(托盘显示已删除、给直接发送)。
-  const doneBeforeDelete = await enqueueMessage({ taskId: "me", text: "删前已等到", mode: "after", afterTaskId: "del", afterSeq: 0 });
-  const notYet = await enqueueMessage({ taskId: "me", text: "删前没等到", mode: "after", afterTaskId: "del", afterSeq: 1 });
+  // 登记跟依赖校验同一个 batch:前置不在、不在同一项目、是调度台,这一行都落不下(不靠调用方先核过)。
+  for (const gone of ["nope", "other", "lead"]) {
+    await assert.rejects(enqueueMessage({ taskId: "me", text: gone, mode: "after", afterTaskId: gone }), AfterTargetGoneError);
+  }
+  assert.equal((await db.select().from(scheduledMessages).where(eq(scheduledMessages.text, "nope"))).length, 0, "落不下就一行不留");
+
+  // 删前置时锁存与删行同一批:删了就查不到它完成过。没等到的那条照旧等(托盘显示不存在、给直接发送)。
+  const doneBeforeDelete = await enqueueMessage({ taskId: "me", text: "删前已等到", mode: "after", afterTaskId: "del" });
+  // 直接改库,不走 setTaskStatus:它的终态钩子会先把等到的锁存掉,就证明不了删除那一批自己会锁。
   await db.update(tasks).set({ status: "done", doneSeq: 1 }).where(eq(tasks.id, "del"));
+  const notYet = await enqueueMessage({ taskId: "me", text: "删前没等到", mode: "after", afterTaskId: "del" });
+  await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "del"));
+  assert.equal(notYet.afterSeq, 0, "停在 done 上登记:基线退一格");
+  await db.update(scheduledMessages).set({ afterSeq: 1 }).where(eq(scheduledMessages.id, notYet.id));
+  const legacy = await enqueueMessage({ taskId: "me", text: "升级前的行", mode: "after", afterTaskId: "del" });
+  await db.update(scheduledMessages).set({ afterSeq: null }).where(eq(scheduledMessages.id, legacy.id));
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "del"));
   await deleteTaskCompletely("del");
   const afterDelete = async (mid: string) => (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, mid))).at(0)!;
   assert.ok((await afterDelete(doneBeforeDelete.id)).afterDoneAt, "删除前已等到的完成被锁存");
   assert.equal((await withAfterGates([await afterDelete(doneBeforeDelete.id)]))[0]!.afterDone, true);
   assert.equal((await afterDelete(notYet.id)).afterDoneAt, null);
   assert.match((await withAfterGates([await afterDelete(notYet.id)]))[0]!.afterWaitReason!, /已删除/);
+  assert.ok((await afterDelete(legacy.id)).afterDoneAt, "没有基线的老行:前置停在 done 上被删也锁存");
 
   // ── ③ 队列写入口 ──────────────────────────────────────────────────────────
   assert.equal((await post("/queues", { taskIds: ["q-head", "q-done"] })).status, 409, "建队不收已完成的");

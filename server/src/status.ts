@@ -39,6 +39,14 @@ export type SetTaskStatusOptions = {
    */
   expectStatus?: TaskStatus | TaskStatus[];
   /**
+   * 这一笔 done 是**一次完成**,不是「把续聊/启动失败/重启对账打断之前的原状态放回去」。
+   * 只有它会给 `done_seq` 加一(「等它完成后发送」比的就是这个,pending-after.ts),而且跟
+   * status 同一条 UPDATE。默认不算:恢复原状态的入口(停止、出错、提问、启动失败、重启对账、
+   * 引导回退)一律不传,传它的只有真正收尾的那几处(结算交卷、续聊正常结束、duet 收官、
+   * 用户手动标完成)。非 done 时忽略。
+   */
+  completion?: boolean;
+  /**
    * 由所有权层包住实际数据库提交,失去所有权时返回 false。
    * 数据库驱动可能等待写门,同步谓词不能覆盖这个窗口。队列占位通过共用认领链,
    * 把核验、等待写门、提交及广播串在一起;队列推进异步排到链尾,不在这里等待重入。
@@ -147,7 +155,8 @@ async function writeTaskStatus(
     patch.queueAdvanceRequest = null;
     // 「完成」这个事件跟 status=done 同一条 UPDATE 落下:等它完成后发送的消息比的就是它
     // (pending-after.ts)。拆成两笔的话,两笔之间崩掉或迟到的处理都分不清是哪一次完成。
-    if (status === "done") patch.doneSeq = sql`${tasks.doneSeq} + 1`;
+    // 只认调用方声明的完成(`completion`):放回原 done 不是新的一次完成。
+    if (status === "done" && opts?.completion) patch.doneSeq = sql`${tasks.doneSeq} + 1`;
   }
   if (status !== "running") {
     // 回合内的身份随回合结束作废。**`direction_epoch` 不在此列,那不是漏写**:它正是为了

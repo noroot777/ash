@@ -36,8 +36,9 @@ export function sendAfterOptions({ tasks, groups, projectId, taskId }: {
 }
 
 /** 托盘里那一行「在等谁、还等得到吗」。stuck = 它不会自己完成了,要用户拿主意。
- * `doneAt` 是服务端锁存的完成时刻:记下了就是等到了,之后前置任务再跑、失败或被删都不改口。
- * 没锁存时只认实际 status=done —— 已完成任务又在处理新消息时显示「运行中」,服务端也判没完成。 */
+ * `doneAt` 是服务端判过的完成时刻(列表接口按服务端判据过一遍再给):有就是等到了,之后前置再跑、
+ * 失败或被删都不改口;没有就是没等到 —— 前置此刻显示「已完成」也一样:那多半是它这一轮被停止、
+ * 出错或留了提问,状态放回了原来的 done,并没有又完成一次。 */
 export function sendAfterState(
   task: Pick<TaskListItem, "title" | "status" | "archived"> & Partial<Pick<TaskListItem, "mode">> | undefined,
   doneAt: string | null = null,
@@ -50,7 +51,7 @@ export function sendAfterState(
   if (!task) return { label: "前置任务不存在", stuck: true };
   // 升级前或接力过来的存量行:调度台收工落「待命」,永远等不到,得让用户拿主意。
   if (task.mode === "team") return { label: `${name}是团队调度台，等不到完成`, stuck: true };
-  if (task.status === "done") return { label: `${name}已完成`, stuck: false };
+  if (task.status === "done") return { label: `${name}这一轮没有完成`, stuck: true };
   if (task.archived) return { label: `${name}已归档`, stuck: true };
   if (task.status === "failed" || task.status === "canceled") {
     return { label: `${name}${TASK_STATUS_LABELS[task.status]}`, stuck: true };

@@ -17,11 +17,18 @@
 //   • 团队调度台正常收尾落 idle,没有 done 这一步,等它永远等不到:写入口拒收(task-reply.ts),
 //     存量行在这里说清原因。
 //
+// 「完成」只认调用方声明的那一笔(status.ts 的 `completion`):停止、出错、提问、启动失败、重启
+// 对账把续聊前的 done 放回去,不是又完成了一次 —— 计数不动,等这一轮的消息照旧等。
+//
+// 登记与删除前置各是**一个 batch**(一个 BEGIN…COMMIT,中间没有让出点):依赖的有效性与基线在
+// 插入那一刻用子查询求(`afterDependencyValues`),前置正被删就落不下;删除前置时锁存与删行同批
+// (`latchWaitersOnDelete`),不会有「刚核过、还没落库」的消息漏在两笔之间。
+//
 // 依赖关系只认**本机核过的**:同项目、存在、能完成(`resolveAfterTarget`,回复与接力导入共用)。
 // 外来的任务 id 不是授权证明,导入时核不过就不绑定;消费侧再按项目兜一遍,任何写入口漏了都
 // 不会让一条消息跟着别的项目的任务完成而放行。跨机交接带的是**已等到**这个事实本身
 // (`afterDoneAt`,导出前按完成计数求一次,handoff-messages.ts),不是让目标机重新去猜。
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { TaskStatus } from "@ash/shared";
 import { TASK_STATUS_LABELS } from "@ash/shared";
 import { db } from "./db/index.js";
@@ -76,6 +83,60 @@ export async function resolveAfterTarget(input: { afterTaskId: string; taskId: s
   if (unsupported) return { ok: false, status: 400, error: unsupported };
   // 等的是**这一刻之后**的那次完成(前置正停在 done 上就是那一次):基线跟状态出自同一行读取。
   return { ok: true, afterSeq: afterBaselineOf(after) };
+}
+
+/**
+ * 登记一条依赖时写进行里的两列,都是**插入那一刻**求值的子查询:前置在、跟接收任务同项目、
+ * 不是调度台,`after_task_id` 才是它,否则为 NULL(调用方据此拒收或落成「不绑定」);基线同理
+ * 跟这一刻的状态出自同一行(`afterBaselineOf` 的 SQL 版)。`projectId` 缺省 = 接收任务所在项目。
+ */
+export function afterDependencyValues(afterTaskId: string, receiverTaskId: string, projectId?: string): { afterTaskId: SQL; afterSeq: SQL } {
+  const project = projectId === undefined ? sql`(select project_id from tasks where id = ${receiverTaskId})` : sql`${projectId}`;
+  const valid = sql`id = ${afterTaskId} and id <> ${receiverTaskId} and project_id = ${project} and mode <> 'team'`;
+  return {
+    afterTaskId: sql`(select id from tasks where ${valid})`,
+    afterSeq: sql`(select case when status = 'done' then done_seq - 1 else done_seq end from tasks where ${valid})`,
+  };
+}
+
+/** 「等某任务完成后发送」登记那一刻前置已经不成立(被删、换了项目…),消息没有落下。 */
+export class AfterTargetGoneError extends Error {}
+
+/**
+ * 落一条 after 消息:插入与「依赖不成立就收回」同一个 batch。校验之后、插入之前那条缝里前置被删,
+ * 这一行就不留下(抛 AfterTargetGoneError),而不是登记成一条永远等不到、也追溯不到完成的消息。
+ */
+export async function insertAfterMessage<R extends typeof scheduledMessages.$inferInsert & { id: string; taskId: string; afterTaskId: string | null }>(
+  row: R,
+): Promise<typeof scheduledMessages.$inferSelect> {
+  const [inserted, dropped] = await db.batch([
+    db.insert(scheduledMessages).values({ ...row, ...afterDependencyValues(row.afterTaskId!, row.taskId) }).returning(),
+    db.delete(scheduledMessages)
+      .where(and(eq(scheduledMessages.id, row.id), isNull(scheduledMessages.afterTaskId)))
+      .returning({ id: scheduledMessages.id }),
+  ]);
+  if (dropped.length) throw new AfterTargetGoneError("要等的任务刚被删除或已不可等，消息没有排下");
+  return inserted[0]!;
+}
+
+/**
+ * 删除前置任务时跟删行同批执行的锁存:等它的、此刻已经等到(计数越过基线;升级前没有基线的
+ * 看是否停在 done)而还没锁存的消息,记下完成时刻。判据与 `afterGateOf`/`gateRows` 同一套,
+ * 包括「同项目、非调度台」。删了之后就再也查不到它完成过。
+ */
+export function latchWaitersOnDelete(afterTaskId: string) {
+  return db.update(scheduledMessages)
+    .set({ afterDoneAt: sql`coalesce((select ended_at from tasks where id = ${afterTaskId}), ${new Date().toISOString()})` })
+    .where(and(
+      eq(scheduledMessages.afterTaskId, afterTaskId),
+      eq(scheduledMessages.mode, "after"),
+      eq(scheduledMessages.status, "pending"),
+      isNull(scheduledMessages.afterDoneAt),
+      sql`exists (select 1 from tasks p, tasks r
+        where p.id = ${afterTaskId} and r.id = ${scheduledMessages.taskId}
+          and p.project_id = r.project_id and p.mode <> 'team'
+          and (case when ${scheduledMessages.afterSeq} is null then p.status = 'done' else p.done_seq > ${scheduledMessages.afterSeq} end))`,
+    ));
 }
 
 /** 登记基线:前置的 `done_seq` 超过它才算等到。读状态与读计数必须出自同一行快照。 */
@@ -183,11 +244,6 @@ async function pendingAfter(afterTaskId: string) {
     eq(scheduledMessages.mode, "after"),
     eq(scheduledMessages.status, "pending"),
   ));
-}
-
-/** 把等 `afterTaskId` 的消息里已经等到的锁存下来。前置任务被删之前调:删了就查不到 done_seq 了。 */
-export async function latchAfterTask(afterTaskId: string): Promise<void> {
-  await withAfterGates(await pendingAfter(afterTaskId));
 }
 
 /**

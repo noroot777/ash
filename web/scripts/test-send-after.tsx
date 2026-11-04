@@ -36,7 +36,8 @@ assert.deepEqual(sendAfterState(undefined), { label: "前置任务不存在", st
 assert.deepEqual(sendAfterState(t("x", { status: "running" })), { label: "等「x」完成", stuck: false });
 assert.equal(sendAfterState(t("x", { status: "canceled" })).stuck, true);
 assert.equal(sendAfterState(t("x", { status: "paused", archived: true })).stuck, true);
-assert.equal(sendAfterState(t("x", { status: "done" })).stuck, false);
+assert.deepEqual(sendAfterState(t("x", { status: "done" })), { label: "「x」这一轮没有完成", stuck: true },
+  "前置显示已完成而服务端没判等到:那是停止/出错后放回的 done,给出口");
 assert.deepEqual(sendAfterState(t("x", { mode: "team", status: "idle" as never })), { label: "「x」是团队调度台，等不到完成", stuck: true },
   "存量的等调度台:说清等不到,给直接发送");
 // 服务端锁存了完成时刻 = 等到了:前置随后被删、重跑、失败都不改口。

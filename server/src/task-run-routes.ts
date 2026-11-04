@@ -29,6 +29,7 @@ import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { mountTaskSteerRoutes } from "./task-steer.js";
 import { flushPendingForTask, publishPendingMessages } from "./pending-messages.js";
+import { withAfterGates } from "./pending-after.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { queueClaimError, seatThenStart } from "./queue-seat.js";
 import { claimOwnTurn, releaseTurn, stopTask } from "./runs.js";
@@ -453,7 +454,10 @@ api.get("/tasks/:id/scheduled-messages", async (c) => {
       eq(scheduledMessages.status, "pending"),
     ))
     .orderBy(asc(scheduledMessages.sendAt), asc(scheduledMessages.createdAt), asc(scheduledMessages.id));
-  return c.json(rows.map(toScheduledMessage));
+  // 等前置任务的那几条先按服务端判据过一遍(顺手锁存):托盘读 `afterDoneAt` 就是「等到了没」的
+  // 权威答案。前置被停止/出错后状态放回 done 并不是又完成了一次,只看任务列表的状态会说错。
+  const gated = await withAfterGates(rows);
+  return c.json(gated.map(({ afterDone: _d, afterEndedAt: _e, afterWaitReason: _w, ...row }) => toScheduledMessage(row)));
 });
 
 // Cancel a pending scheduled message (by message id).

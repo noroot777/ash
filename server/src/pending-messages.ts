@@ -50,7 +50,7 @@ import { bindUploadsToTask } from "./uploads.js";
 import { dispatchPendingMessage } from "./pending-dispatch.js";
 import { pendingMessageOrder } from "./pending-monitor-batch.js";
 import { hasPendingDeliveryRecovery } from "./pending-delivery-recovery.js";
-import { withAfterGates, type AfterGate } from "./pending-after.js";
+import { insertAfterMessage, withAfterGates, type AfterGate } from "./pending-after.js";
 import { forgetDeliveryCrossing } from "./delivery-crossing.js";
 import {
   CHECKPOINT_RUN_ORIGIN, preparePendingCheckpointStart, recoverPendingCheckpoints,
@@ -108,9 +108,8 @@ export function pendingMessageRow(input: {
   execution?: boolean;
   // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
   sendAt?: Date;
-  /** mode=after 时等的那个任务,与登记那一刻它的完成基线(`afterBaselineOf`,见 pending-after.ts)。 */
+  /** mode=after 时等的那个任务(有效性与基线在插入那一刻求,见 enqueueMessage / pending-after.ts)。 */
   afterTaskId?: string | null;
-  afterSeq?: number | null;
   /** 这条消息承载的那一笔结果交接的身份(见 schema 的 `handoff_token`);普通消息不填。 */
   handoffToken?: string | null;
 }): Row {
@@ -132,7 +131,7 @@ export function pendingMessageRow(input: {
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
     afterTaskId: input.mode === "after" ? input.afterTaskId ?? null : null,
     afterDoneAt: null,
-    afterSeq: input.mode === "after" ? input.afterSeq ?? null : null,
+    afterSeq: null,
     execution: input.execution ?? false,
     sendAt: (input.sendAt ?? new Date()).toISOString(),
     status: "pending" as const,
@@ -153,8 +152,10 @@ export function pendingMessageRow(input: {
 }
 
 export async function enqueueMessage(input: Parameters<typeof pendingMessageRow>[0]): Promise<Row> {
-  const row = pendingMessageRow(input);
-  await db.insert(scheduledMessages).values(row);
+  let row = pendingMessageRow(input);
+  // 等前置任务的那种:依赖的有效性与基线跟插入同一个 batch(pending-after.ts)。
+  if (row.mode === "after" && row.afterTaskId) row = await insertAfterMessage(row);
+  else await db.insert(scheduledMessages).values(row);
   // 附件在**入队这一刻**挂到任务上(uploads.ts):这里才知道是谁发的,投递时那条路
   // 是后端触发的、没有发起人,认不出「这个文件本来就是我的」。
   await bindUploadsToTask(input.attachments, row.taskId, row.ownerUserId);

@@ -44,8 +44,8 @@ function acquireDuetTurn(taskId: string, turnHeld?: TurnIdentity | null): TurnId
   return turn;
 }
 
-async function setStatus(taskId: string, status: TaskStatus) {
-  await setTaskStatus(taskId, status);
+async function setStatus(taskId: string, status: TaskStatus, opts?: { completion?: boolean }) {
+  await setTaskStatus(taskId, status, opts);
 }
 
 // A turn is unusable if the CLI errored, exited non-zero, or (for voices)
@@ -314,7 +314,7 @@ export async function resumeDuet(
     if (failedTurn.speaker !== "A" && failedTurn.speaker !== "B") {
       // A retired code-writing turn failed. The discussion itself is already a
       // valid /duet result, so retrying the historical task now settles it there.
-      await setStatus(taskId, "done");
+      await setStatus(taskId, "done", { completion: true });
       return true;
     }
 
@@ -469,7 +469,7 @@ export async function resumeAtGate(
     await setStatus(taskId, "running");
 
     if (action.kind === "reject") { await setStatus(taskId, "canceled"); return true; }
-    if (action.kind === "approve") { await setStatus(taskId, "done"); return true; }
+    if (action.kind === "approve") { await setStatus(taskId, "done", { completion: true }); return true; }
     await reDiscuss(ctx, action.kind, action.text, action.kind === "ask" ? action.target : undefined, action.attachments);
     await finishDiscussion(ctx);
   } catch (err) {
@@ -559,7 +559,7 @@ async function finishDiscussion(ctx: Ctx): Promise<void> {
     }));
     if (!approved) return void (await setStatus(taskId, "canceled"));
   }
-  await setStatus(taskId, "done"); // 讨论结束,共同方案(合稿)即是产出
+  await setStatus(taskId, "done", { completion: true }); // 讨论结束,共同方案(合稿)即是产出
 }
 
 // Open a HITL gate and act on the human's decision; loops on inject/ask. The

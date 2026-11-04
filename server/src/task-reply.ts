@@ -9,7 +9,7 @@ import { handoffBlockReason } from "./handoff-guard.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
 import { visibleTaskIds } from "./auth/visibility.js";
 import { continueTask } from "./orchestrator.js";
-import { resolveAfterTarget } from "./pending-after.js";
+import { AfterTargetGoneError, resolveAfterTarget } from "./pending-after.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { queueBlockers } from "./queues.js";
 import { claimQueueSeat } from "./queue-seat.js";
@@ -63,7 +63,6 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   if (b.annotationBatchId) return replyWithAnnotationBatch(c, taskId, b.annotationBatchId, b.annotationRevision ?? 0);
   // 「稍后发送」的两种方式先校验,再进原生命令旁路:命令处理器见到 sendAt/afterTaskId 就把
   // 命令留到投递那一刻执行,所以不合法的延期请求必须在它之前拦下,否则命令会当场执行。
-  let afterSeq: number | null = null;
   if (b.afterTaskId != null) {
     if (typeof b.afterTaskId !== "string" || !b.afterTaskId) return c.json({ error: "afterTaskId 无效" }, 400);
     if (b.sendAt) return c.json({ error: "定时发送和等任务完成后发送只能选一个" }, 400);
@@ -73,7 +72,6 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
     }
     const target = await resolveAfterTarget({ afterTaskId: b.afterTaskId, taskId, projectId: r.projectId });
     if (!target.ok) return c.json({ error: target.error }, target.status);
-    afterSeq = target.afterSeq;
   }
   if (b.sendAt) {
     const when = new Date(b.sendAt);
@@ -109,24 +107,30 @@ export async function replyToTask(c: Context, taskId: string, body?: TaskReplyBo
   const queueWhileWaiting = executionReply && (await queueBlockers(taskId)).length > 0;
   if (b.sendAt || b.afterTaskId || queueWhileRunning || queueWhileWaiting) {
     const when = b.sendAt ? new Date(b.sendAt) : new Date();
-    const row = await enqueueMessage({
-      taskId,
-      text: (b.text ?? "").trim(),
-      attachments: b.attachments,
-      agent: b.agent ?? null,
-      executorId: b.executorId ?? null,
-      model: b.model?.trim() || null,
-      reasoningEffort: b.reasoningEffort?.trim() || null,
-      ownerUserId: ownerIdOf(actorOf(c)),
-      mode: b.sendAt ? "timed" : b.afterTaskId ? "after" : "queued",
-      afterTaskId: b.afterTaskId ?? null,
-      afterSeq,
-      // 排队等轮次时暂存的回复 = 执行型:投递它就是任务的执行回合,整队守卫与分组
-      // 暂停都要挡,失败重投也不丢意图(schema 的 execution 注释)。普通运行中追问
-      // 与定时/等前置任务的提醒不是——它们落地是续聊/到点提醒,照旧旁路。
-      execution: goalRecovery || (queueWhileWaiting && !b.sendAt && !b.afterTaskId),
-      sendAt: when,
-    });
+    let row: Awaited<ReturnType<typeof enqueueMessage>>;
+    try {
+      row = await enqueueMessage({
+        taskId,
+        text: (b.text ?? "").trim(),
+        attachments: b.attachments,
+        agent: b.agent ?? null,
+        executorId: b.executorId ?? null,
+        model: b.model?.trim() || null,
+        reasoningEffort: b.reasoningEffort?.trim() || null,
+        ownerUserId: ownerIdOf(actorOf(c)),
+        mode: b.sendAt ? "timed" : b.afterTaskId ? "after" : "queued",
+        afterTaskId: b.afterTaskId ?? null,
+        // 排队等轮次时暂存的回复 = 执行型:投递它就是任务的执行回合,整队守卫与分组
+        // 暂停都要挡,失败重投也不丢意图(schema 的 execution 注释)。普通运行中追问
+        // 与定时/等前置任务的提醒不是——它们落地是续聊/到点提醒,照旧旁路。
+        execution: goalRecovery || (queueWhileWaiting && !b.sendAt && !b.afterTaskId),
+        sendAt: when,
+      });
+    } catch (error) {
+      // 上面核过之后、落库之前前置被删了:依赖跟插入同一个 batch 求(pending-messages.ts),这里如实拒收。
+      if (error instanceof AfterTargetGoneError) return c.json({ error: error.message }, 409);
+      throw error;
+    }
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
   }
 
