@@ -22,7 +22,7 @@ import { isDiagnosticSession } from "./turn-failure.js";
 //   ② **时间区间**（shared）：共享工作区（`useWorktree=false`，直接在项目主仓干活）上，
 //      同一个目录先后乃至同时跑过很多任务，唯一能把它们分开的线索只有时间。这一档是
 //      **候选归属**，不是确认：同时在跑的两个任务，谁写的那个文件，光看时间问不出来。所以
-//      只有那一刻没有别人在场才算确定（`task-artifact-rivals.ts`）；写文件工具亲手写下、内容
+//      只有那一刻没有别的任务在跑才算确定（`task-artifact-rivals.ts`）；写文件工具亲手写下、内容
 //      一字未变的那些另有直接证据，不吃时间（`task-artifact-direct.ts`）。
 //
 // 时间区间那一档自己占一个文件：`task-artifact-windows.ts`（区间从哪来、为什么不能拿

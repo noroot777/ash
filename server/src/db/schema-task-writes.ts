@@ -1,8 +1,7 @@
 // ── 任务写过的位置 ─────────────────────────────────────────────────────────────
 // 执行器当场报出来的「这一步写到了哪里」（`writes` 事件，取法见 executors/tool-writes.ts），
 // 按任务去重落一行。写入端是 `task-writes.ts`；读取端是生成物面板：写文件工具记下的文件连同
-// 内容指纹是「这份是它亲手写的」的直接证据（task-artifact-direct.ts），写进某个目录的记录也说明
-// 「那段时间它在这儿干活」（task-artifact-rivals.ts）。
+// 内容指纹是「这份是它亲手写的」的直接证据（task-artifact-direct.ts），它写过的目录扫描时先看。
 //
 // 一个任务对同一个路径只留一行（首次 / 最近一次 / 最近一次写下的内容指纹），量级是「它碰过的
 // 文件数」，不随回合涨。
@@ -19,7 +18,7 @@ export const taskWrites = sqliteTable(
     weak: integer("weak").notNull(),
     firstAt: text("first_at").notNull(),
     lastAt: text("last_at").notNull(),
-    /** 最近一次写成那一刻的内容指纹（file-digest.ts）；不是产物、太大、读不了时为空。 */
+    /** 最近一次写下的内容的指纹（从那次操作自己带的内容算，file-digest.ts）；推不出内容、不是产物、太大时为空。 */
     digest: text("digest"),
   },
   (t) => ({ pk: primaryKey({ columns: [t.taskId, t.path, t.weak] }) }),

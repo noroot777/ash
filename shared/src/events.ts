@@ -70,8 +70,9 @@ export type AgentEvent =
   // (server/src/task-writes.ts),生成物面板靠它认出「这份文件是它亲手写的」。不进 trace、
   // 不推给前端(/events 出口处滤掉),展示端永远见不到它。
   // `paths` 是绝对路径或相对会话工作目录;`cwd: true` = 这几个是**命令的工作目录**,缺省 =
-  // 写文件/改文件工具的目标文件。`digests` = 写成那一刻这些文件的内容指纹(路径 → sha256,
-  // 只给产物那几类文件,见 server/src/file-digest.ts)。
+  // 写文件/改文件工具的目标文件。`digests` = 这次操作写下的内容的指纹(路径 → sha256,只给
+  // 产物那几类文件、只给能从操作本身推出全文的,**不是**事后读磁盘,见
+  // server/src/executors/tool-writes.ts)。
   | { kind: "writes"; paths: string[]; cwd?: true; digests?: Record<string, string> }
   // level="notice" = 这条不是执行故障,是**执行过程里的一条提示**:上游在重试、还在等
   // 回话、这一轮为什么落成这个状态。分级的理由:提示混在故障里,新用户看到红叉只会读成

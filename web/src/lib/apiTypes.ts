@@ -318,7 +318,7 @@ export type ArtifactOrigin = "working" | "committed" | "ignored";
  * **这一条**的归属有多硬（判据在服务端 `task-artifacts.ts` 顶部）。
  *
  * - `exact` —— 确定：有直接证据（目录独占、亲手写下且一字未变、任务分支那一版、精确区间里
- *   而且当时没有别的任务在这个目录里干活）；
+ *   而且当时没有别的任务在跑）；
  * - `approx` —— 候选：拿不准，原因见 `doubt`。
  *
  * 整份清单那一档（`ArtifactScopeKind`）说的是「这个目录是不是它独占的」,这一列说的是
@@ -326,7 +326,7 @@ export type ArtifactOrigin = "working" | "committed" | "ignored";
  */
 export type ArtifactConfidence = "exact" | "approx";
 /**
- * 候选为什么拿不准：只落在估出来的时间段里 / 那一刻还有别的任务在这个目录里干活 / 没能核对
+ * 候选为什么拿不准：只落在估出来的时间段里 / 那一刻还有别的任务在跑 / 没能核对
  * 那一刻还有谁 / 它动过但现在这份已经不是它那一版 / 别的任务写下过一模一样的内容。
  */
 export type ArtifactDoubt = "estimated" | "concurrent" | "unchecked" | "version" | "contested";
@@ -343,7 +343,7 @@ export type TaskArtifact = {
   confidence: ArtifactConfidence;
   /** 候选为什么拿不准；老服务端不给这一项。 */
   doubt?: ArtifactDoubt;
-  /** `doubt=concurrent` 时，那一刻也在这个目录里干活的任务标题。 */
+  /** `doubt=concurrent` 时，那一刻也在跑的任务标题。 */
   alongside?: string[];
 };
 

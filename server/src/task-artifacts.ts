@@ -38,7 +38,8 @@ import { windowHit } from "./task-artifact-windows.js";
 //       - 写文件工具亲手写下、磁盘上这份一字未变（`task-artifact-direct.ts`）；
 //       - 任务分支上的提交动过它、而且磁盘上这份就是分支那一版（`task-artifact-version.ts`）；
 //       - 按时间认的（区间里的提交、未提交的改动、被忽略的文件）：落在精确区间里，**而且那一刻
-//         没有别的任务也在这个目录里干活**（`task-artifact-rivals.ts`）。
+//         没有别的任务在跑**——不管它在哪个目录跑，命令的输出落在哪儿是记不下来的
+//         （`task-artifact-rivals.ts`）。
 //     其余一律是候选，逐条说明为什么拿不准（`ArtifactDoubt`）。**推断只能让一条变成候选，不能
 //     让它变成确定，也不能把它从清单里拿掉**——唯一会拿掉的是「现在这份正是别的任务亲手写下的」，
 //     那是直接证据。曾经按「谁在附近写过东西」猜作者，每一种猜法都有反例，猜错就是把别人的东西
@@ -69,8 +70,8 @@ export type ArtifactConfidence = "exact" | "approx";
 /**
  * 候选**为什么**拿不准，面板逐条说：
  *   - `estimated`  只落在估出来的区间里（会话寿命、没收尾的回合）；
- *   - `concurrent` 那一刻还有别的任务也在这个目录里干活（是谁见 `alongside`）；
- *   - `unchecked`  没能核对那一刻还有谁在场（核对失败、在场的太多没核全）；
+ *   - `concurrent` 那一刻还有别的任务在跑（是谁见 `alongside`）；
+ *   - `unchecked`  没能核对那一刻还有谁在跑（核对失败、在跑的太多没核全）；
  *   - `version`    它确实动过这条路径，但磁盘上现在这份不是它那一版（后来被改过）；
  *   - `contested`  它和别的任务亲手写下过一模一样的内容，谁也证明不了。
  */
@@ -89,7 +90,7 @@ export interface TaskArtifact {
   confidence: ArtifactConfidence;
   /** 候选为什么拿不准；确定的没有这一项。 */
   doubt?: ArtifactDoubt;
-  /** `doubt=concurrent` 时，那一刻也在这个目录里干活的任务标题。 */
+  /** `doubt=concurrent` 时，那一刻也在跑的任务标题。 */
   alongside?: string[];
 }
 
@@ -117,7 +118,7 @@ const MAX_ARTIFACTS = 400;
 const UNCHECKED: Rivals = {
   at: () => [],
   titles: new Map(),
-  incomplete: "没能核对同一时间还有谁在这个目录里干活，只靠时间认的都按候选列",
+  incomplete: "没能核对同一时间还有哪些任务在跑，只靠时间认的都按候选列",
 };
 
 /** 这几条里哪些被 .gitignore 挡着（问不出来就当没挡着）。 */
@@ -193,9 +194,9 @@ export async function readTaskArtifacts(
   // 那几档都要过这道门槛；任务分支的 diff 不用，它自己就是证据（见下）。
   const hasEvidence = exclusive || windows.length > 0;
   const lens = pathLens();
-  // 共享目录上的两样东西：亲手写下的直接证据、那一刻还有谁在场。都读失败也不致命——直接证据
-  // 没了只是少认几个确定的；在场核对没了，只靠时间认的一律当候选（`UNCHECKED`），**不能**当成
-  // 「没别人」。
+  // 共享目录上的两样东西：亲手写下的直接证据、那一刻还有哪些任务在跑。读失败都不致命，但都
+  // 不能当成「没别人」：在跑的核不出来（`UNCHECKED`）、亲手写下的读不出来（那个文件可能正是别人
+  // 亲手写下的），只靠时间认的一律当候选。
   const direct: DirectEvidence | null = task && scope && !exclusive
     ? await directEvidence(root, scope.owners.map((owner) => owner.id), lens).catch((error) => {
       problems.push(`读任务亲手写下的文件失败：${error instanceof Error ? error.message : String(error)}`);
@@ -204,7 +205,7 @@ export async function readTaskArtifacts(
     : null;
   const rivals: Rivals | null = task && scope && !exclusive
     ? await concurrentRivals(task, scope, root, lens).catch((error) => {
-      problems.push(`读同一时间在这个目录里干活的任务失败：${error instanceof Error ? error.message : String(error)}`);
+      problems.push(`读同一时间在跑的任务失败：${error instanceof Error ? error.message : String(error)}`);
       return UNCHECKED;
     })
     : null;
@@ -337,7 +338,11 @@ export async function readTaskArtifacts(
 
     // 1. 亲手写下的直接证据：不问时间、不问还有谁在场。
     const verdict = directVerdict.get(path) ?? null;
-    if (verdict === "theirs") { claimed += 1; continue; }
+    if (verdict === "theirs") {
+      // 只数本来会列进来的（它动过、或者时间对得上）：本来就不沾的，说「没列」只是添乱。
+      if (proven.has(path) || timeCommitted.has(path) || windowHit(mtimeMs, windows)) claimed += 1;
+      continue;
+    }
     if (verdict === "mine") { push(); continue; }
     if (verdict === "contested") { push("contested"); continue; }
 
@@ -370,13 +375,17 @@ export async function readTaskArtifacts(
       push("concurrent", present.map((id) => rivals!.titles.get(id) ?? id));
       continue;
     }
-    if (rivals?.incomplete) { push("unchecked"); continue; }
+    // 没核全那一刻还有谁在跑、或者读不出亲手写下的记录（它可能正是别人亲手写下的）：都不敢算确定。
+    if (rivals?.incomplete || (rivals && !direct)) { push("unchecked"); continue; }
     push();
   }
 
-  const guessed = artifacts.filter((artifact) => artifact.confidence === "approx").length;
-  if (guessed > 0) {
-    incomplete.push(`清单里有 ${guessed} 个归属拿不准（收在「拿不准的」那一栏）：按估出来的时间段认的，或者同一时间还有别的任务在这个目录里干活、分不出是谁做的`);
+  // 估出来的时间段是**记录缺口**，跟「清单可能不全」是一类事，单独说一句；其余几种原因是逐条的
+  // 判断，标在每张卡片上（「拿不准归属的」那一栏有图例），不在这里笼统汇总——汇总成一句话，
+  // 原因就会跟卡片上的对不上。
+  const estimated = artifacts.filter((artifact) => artifact.doubt === "estimated").length;
+  if (estimated > 0) {
+    incomplete.push(`清单里有 ${estimated} 个是按估出来的时间段认的（收在「拿不准归属的」那一栏），可能混进别人做的东西`);
   }
   if (claimed > 0) {
     incomplete.push(`有 ${claimed} 个文件现在这份是别的任务亲手写下的，没列在这里`);

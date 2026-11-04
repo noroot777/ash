@@ -7,7 +7,7 @@ import { sessions, sessionTurns, taskWrites } from "./db/schema.js";
 import { pathLens } from "./task-artifact-paths.js";
 
 // 「这个任务往哪里写过东西」的写入端。执行器当场报出 `writes` 事件（executors/tool-writes.ts），
-// 这里按任务落库；读取端是生成物面板（task-artifact-direct.ts、task-artifact-rivals.ts）。
+// 这里按任务落库；读取端是生成物面板（task-artifact-direct.ts）。
 //
 // **挂在总线上，不挂在某一条执行链里**：单飞、讨论、团队调度台三条链都把执行器事件原样广播
 // 出去，在这里接一次就全覆盖了，下一条新执行链不用记得补（同一个办法见 uploads.ts 的
@@ -70,13 +70,13 @@ export async function recordTaskWrites(
       .onConflictDoUpdate({
         target: [taskWrites.taskId, taskWrites.path, taskWrites.weak],
         // 两次记录可能乱序落库（每一条都要先查目录、解软链）：时刻两端各取极值，内容指纹只认
-        // **更晚那一次**写下的——它才对应现在磁盘上该有的那一版。时刻都是同一种 ISO 写法，按字典序
-        // 比就是按时间比。
+        // **更晚那一次**写下的——它才对应现在磁盘上该有的那一版；更晚那次推不出内容（没有指纹）时
+        // 也照样清掉旧的，旧的已经不是它最后写下的样子。时刻都是同一种 ISO 写法，按字典序比就是
+        // 按时间比。
         set: {
           firstAt: sql`min(${taskWrites.firstAt}, excluded.first_at)`,
           lastAt: sql`max(${taskWrites.lastAt}, excluded.last_at)`,
-          digest: sql`case when excluded.last_at >= ${taskWrites.lastAt}
-            then coalesce(excluded.digest, ${taskWrites.digest}) else ${taskWrites.digest} end`,
+          digest: sql`case when excluded.last_at >= ${taskWrites.lastAt} then excluded.digest else ${taskWrites.digest} end`,
         },
       });
   }

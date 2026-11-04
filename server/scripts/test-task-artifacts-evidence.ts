@@ -28,10 +28,12 @@ try {
   const { recordTaskWrites } = await import("../src/task-writes.js");
   const { readTaskArtifacts } = await import("../src/task-artifacts.js");
   const { checkBranchVersions } = await import("../src/task-artifact-version.js");
-  const { fileDigestSync } = await import("../src/file-digest.js");
+  const { contentDigest } = await import("../src/file-digest.js");
   const iso = (at: Date) => at.toISOString();
   const minutes = (base: Date, n: number) => new Date(base.getTime() + n * 60 * 1000);
   const T = new Date(Date.now() - 3 * 60 * 60 * 1000);
+  /** 第 k 个场景的起点。各场景错开两天：「那一刻还有没有别的任务在跑」问的是整台机器，不分仓库。 */
+  const sceneAt = (k: number) => minutes(T, -k * 2 * 24 * 60);
 
   const runTask = async (id: string, start: Date, end: Date, dir: string, project: string, extra: Partial<typeof tasks.$inferInsert> = {}) => {
     await db.insert(tasks).values({
@@ -80,15 +82,16 @@ try {
   };
 
   // ── 1. 两个任务同时在主分支上提交 ───────────────────────────────────────────
+  const S0 = sceneAt(0);
   const both = await gitRepoAt("both");
-  await runTask("GitA00000001", T, minutes(T, 40), both.repo, "both");
-  await runTask("GitB00000002", minutes(T, 10), minutes(T, 50), both.repo, "both");
-  both.commit("a/早.png", "A early", minutes(T, 5));
-  both.commit("a/out.png", "A out", minutes(T, 20));
-  both.commit("b/late.png", "B late", minutes(T, 45));
+  await runTask("GitA00000001", S0, minutes(S0, 40), both.repo, "both");
+  await runTask("GitB00000002", minutes(S0, 10), minutes(S0, 50), both.repo, "both");
+  both.commit("a/早.png", "A early", minutes(S0, 5));
+  both.commit("a/out.png", "A out", minutes(S0, 20));
+  both.commit("b/late.png", "B late", minutes(S0, 45));
   // B 在两边都在跑的时候改了 A 早先提交的图，还没提交。
   both.put("a/早.png", "B edit, not committed");
-  utimesSync(join(both.repo, "a/早.png"), minutes(T, 25), minutes(T, 25));
+  utimesSync(join(both.repo, "a/早.png"), minutes(S0, 25), minutes(S0, 25));
   assert.equal(await both.conf("GitA00000001", "a/out.png"), "concurrent", "提交那一刻 B 也在：分不出是谁的");
   assert.equal(await both.conf("GitB00000002", "a/out.png"), "concurrent");
   assert.equal(await both.conf("GitB00000002", "b/late.png"), "exact", "A 收工之后只有 B 在：照旧确定");
@@ -97,58 +100,63 @@ try {
 
   // ── 2. 「动过这条路径」不等于「现在这份是它那一版」 ──────────────────────────
   // 2a. A 收工之后被别人提交改过。
+  const S1 = sceneAt(1);
   const after = await gitRepoAt("after");
-  await runTask("AfterA000003", T, minutes(T, 40), after.repo, "after");
-  after.commit("a/v.png", "A version", minutes(T, 5));
-  after.commit("a/v.png", "someone later", minutes(T, 90));
+  await runTask("AfterA000003", S1, minutes(S1, 40), after.repo, "after");
+  after.commit("a/v.png", "A version", minutes(S1, 5));
+  after.commit("a/v.png", "someone later", minutes(S1, 90));
   assert.equal(await after.conf("AfterA000003", "a/v.png"), "version", "现在这份不是 A 那次提交落下的：候选，也不从面板上抹掉");
 
   // 2b. 合并时把冲突解成了别人那一版：合并提交默认不列路径，按时间只找得到 A 的那次提交。
+  const S2 = sceneAt(2);
   const merge = await gitRepoAt("merge");
-  merge.commit("a/v.html", "base", minutes(T, -120));
+  merge.commit("a/v.html", "base", minutes(S2, -120));
   merge.git(["checkout", "-q", "-b", "side"]);
-  merge.commit("a/v.html", "B version", minutes(T, -60));
+  merge.commit("a/v.html", "B version", minutes(S2, -60));
   merge.git(["checkout", "-q", "main"]);
-  await runTask("MergeA000004", T, minutes(T, 40), merge.repo, "merge");
-  merge.commit("a/v.html", "A version", minutes(T, 5));
+  await runTask("MergeA000004", S2, minutes(S2, 40), merge.repo, "merge");
+  merge.commit("a/v.html", "A version", minutes(S2, 5));
   try {
-    merge.git(["merge", "-q", "--no-edit", "side"], minutes(T, 20));
+    merge.git(["merge", "-q", "--no-edit", "side"], minutes(S2, 20));
   } catch {
     // 冲突是预期内的：手工解成 B 那一版。
   }
   merge.put("a/v.html", "B version");
   merge.git(["add", "a/v.html"]);
-  merge.git(["commit", "-q", "--no-edit"], minutes(T, 20));
+  merge.git(["commit", "-q", "--no-edit"], minutes(S2, 20));
   assert.equal(await merge.conf("MergeA000004", "a/v.html"), "version",
     "A 在区间里提交过这条路径，可磁盘上是合并时解成的 B 那一版：不能按「最晚那次是 A 的」认成确定");
 
   // 2c. 之后有人提交了另一版、日期却回拨到 A 开工之前。
+  const S3 = sceneAt(3);
   const back = await gitRepoAt("backdated");
-  await runTask("BackA0000005", T, minutes(T, 40), back.repo, "backdated");
-  back.commit("a/w.html", "A version", minutes(T, 5));
-  back.commit("a/w.html", "replaced later", minutes(T, -100));
-  utimesSync(join(back.repo, "a/w.html"), minutes(T, 10), minutes(T, 10));
+  await runTask("BackA0000005", S3, minutes(S3, 40), back.repo, "backdated");
+  back.commit("a/w.html", "A version", minutes(S3, 5));
+  back.commit("a/w.html", "replaced later", minutes(S3, -100));
+  utimesSync(join(back.repo, "a/w.html"), minutes(S3, 10), minutes(S3, 10));
   assert.equal(await back.conf("BackA0000005", "a/w.html"), "version", "磁盘上这份是回拨了日期的那次提交落下的");
 
   // 2d. 同一条路径先在精确区间、后在估出来的区间各提交一次，磁盘上是后一次那份。
+  const S4 = sceneAt(4);
   const mix = await gitRepoAt("mixed");
-  await runTask("MixA00000006", T, minutes(T, 20), mix.repo, "mixed");
+  await runTask("MixA00000006", S4, minutes(S4, 20), mix.repo, "mixed");
   // 第二条会话没有逐回合记录：它的区间是从会话起止推断出来的。
   await db.insert(sessions).values({
     id: "s-MixA00000006-2", taskId: "MixA00000006", role: "main", agentType: "claude", executor: "claude",
-    cwd: mix.repo, startedAt: iso(minutes(T, 30)), endedAt: iso(minutes(T, 40)), exitStatus: 0,
+    cwd: mix.repo, startedAt: iso(minutes(S4, 30)), endedAt: iso(minutes(S4, 40)), exitStatus: 0,
     cliSessionId: "cli-mix-2", commandLine: "claude -p", turnsStarted: 0, turnsBase: 0, turnsBaseApprox: false, turnsLost: 0,
   });
-  mix.commit("c/z.html", "first", minutes(T, 5));
-  mix.commit("c/z.html", "second", minutes(T, 35));
+  mix.commit("c/z.html", "first", minutes(S4, 5));
+  mix.commit("c/z.html", "second", minutes(S4, 35));
   assert.equal(await mix.conf("MixA00000006", "c/z.html"), "estimated", "磁盘上是估出来的区间里那次提交落下的");
-  mix.commit("c/y.html", "only exact", minutes(T, 6));
+  mix.commit("c/y.html", "only exact", minutes(S4, 6));
   assert.equal(await mix.conf("MixA00000006", "c/y.html"), "exact", "对照：磁盘上就是精确区间里那一版");
 
   // ── 3. 任务分支差异只替分支那一版作保 ───────────────────────────────────────
   // 任务的 worktree 清理掉了、分支还在，面板退回主仓展示。主仓里这条路径后来被提交成了另一版。
+  const S5 = sceneAt(5);
   const branch = await gitRepoAt("branchrepo");
-  branch.commit("README.md", "base", minutes(T, -10));
+  branch.commit("README.md", "base", minutes(S5, -10));
   branch.git(["checkout", "-q", "-b", "ash/Branch00"]);
   branch.put("a/report.html", "<p>A version</p>");
   branch.put("a/keep.png", "keep");
@@ -158,8 +166,8 @@ try {
   branch.put("a/report.html", "<p>B version</p>");
   branch.put("a/keep.png", "keep");
   branch.git(["add", "."]);
-  branch.git(["commit", "-q", "-m", "B"], minutes(T, -5));
-  await runTask("Branch000007", T, minutes(T, 30), branch.repo, "branchrepo", { mergeTargetBranch: "main" });
+  branch.git(["commit", "-q", "-m", "B"], minutes(S5, -5));
+  await runTask("Branch000007", S5, minutes(S5, 30), branch.repo, "branchrepo", { mergeTargetBranch: "main" });
   assert.equal(await branch.conf("Branch000007", "a/keep.png"), "exact", "磁盘上这份就是分支那一版：分支证明照旧成立");
   assert.equal(await branch.conf("Branch000007", "a/report.html"), "version", "磁盘上是别人提交的另一版：内容对不上就不能算确定");
   // 三态，且一个读不出来的（不存在）不连累同批的其它文件。
@@ -170,14 +178,15 @@ try {
 
   // ── 4. 亲手写下的，在 git 仓库里一样直接认 ───────────────────────────────────
   // 两个任务同时在跑，A 亲手写了一份网页并提交：提交那一刻 B 在场，但内容就是 A 写下的那份。
+  const S6 = sceneAt(6);
   const hand = await gitRepoAt("hand");
-  await runTask("HandA0000008", T, minutes(T, 40), hand.repo, "hand");
-  await runTask("HandB0000009", T, minutes(T, 40), hand.repo, "hand");
+  await runTask("HandA0000008", S6, minutes(S6, 40), hand.repo, "hand");
+  await runTask("HandB0000009", S6, minutes(S6, 40), hand.repo, "hand");
   hand.put("site/index.html", "<p>A wrote this</p>");
   const abs = join(hand.repo, "site/index.html");
-  await recordTaskWrites("HandA0000008", "s-HandA0000008", { kind: "writes", paths: [abs], digests: { [abs]: fileDigestSync(abs)! } }, iso(minutes(T, 10)));
+  await recordTaskWrites("HandA0000008", "s-HandA0000008", { kind: "writes", paths: [abs], digests: { [abs]: contentDigest("<p>A wrote this</p>")! } }, iso(minutes(S6, 10)));
   hand.git(["add", "site/index.html"]);
-  hand.git(["commit", "-q", "-m", "site"], minutes(T, 12));
+  hand.git(["commit", "-q", "-m", "site"], minutes(S6, 12));
   assert.equal(await hand.conf("HandA0000008", "site/index.html"), "exact", "亲手写下、一字未变：不问那一刻还有谁");
   assert.equal(await hand.conf("HandB0000009", "site/index.html"), null, "现在这份正是 A 亲手写下的：B 那边不列");
 

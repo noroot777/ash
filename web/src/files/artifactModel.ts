@@ -48,7 +48,7 @@ export const ARTIFACT_DOUBTFUL_HEAD = "拿不准归属的";
 
 export const ARTIFACT_DOUBT_LABEL: Record<NonNullable<TaskArtifact["doubt"]>, string> = {
   estimated: "时间是估的",
-  concurrent: "同时有别的任务",
+  concurrent: "同时有别的任务在跑",
   unchecked: "没核全",
   version: "后来被改过",
   contested: "别人写过同样内容",
@@ -56,8 +56,8 @@ export const ARTIFACT_DOUBT_LABEL: Record<NonNullable<TaskArtifact["doubt"]>, st
 
 export const ARTIFACT_DOUBT_HINT: Record<NonNullable<TaskArtifact["doubt"]>, string> = {
   estimated: "只落在估出来的时间段里（会话寿命、没收尾的回合），可能是别人在同一个目录里做的",
-  concurrent: "做出来的那一刻，别的任务也在这个目录里干活；命令生成的文件分不出是谁做的",
-  unchecked: "没能核对那一刻还有谁在这个目录里干活，不敢算确定",
+  concurrent: "做出来的那一刻还有别的任务在跑；别的任务就算不在这个目录，也能用命令把文件写进来，分不出是谁做的",
+  unchecked: "没能核对那一刻还有哪些任务在跑，不敢算确定",
   version: "它动过这个文件，但现在这份已经不是它那一版，可能被别人改过",
   contested: "它和别的任务写下过一模一样的内容，证明不了是谁的",
 };
@@ -65,7 +65,7 @@ export const ARTIFACT_DOUBT_HINT: Record<NonNullable<TaskArtifact["doubt"]>, str
 /** 老服务端没给 `doubt` 的候选，按最早那一种（估出来的时间段）解释。 */
 export const doubtOf = (artifact: TaskArtifact) => artifact.doubt ?? "estimated";
 
-/** 拿不准的那些里，同一时间也在这个目录里干活的任务（去重、按出现次数从多到少）。 */
+/** 拿不准的那些里，同一时间也在跑的任务（去重、按出现次数从多到少）。 */
 export function alongsideOf(artifacts: readonly TaskArtifact[]): string[] {
   const counts = new Map<string, number>();
   for (const artifact of artifacts) {

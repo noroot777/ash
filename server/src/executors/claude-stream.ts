@@ -9,7 +9,7 @@ import type { AgentEvent, AgentType } from "@ash/shared";
 import { guessContextWindow } from "@ash/shared/usage";
 import { NativeWorkTrace } from "./native-work.js";
 import { childActivity } from "./native-agent-activity.js";
-import { ClaudeWriteLedger } from "./tool-writes.js";
+import { ClaudeWriteLedger, soleReceipt } from "./tool-writes.js";
 import { NativeActivityBuffer } from "./native-activity-buffer.js";
 import { spawnAgent, spawnErrorMessage, forceFinishOnExit } from "./spawn.js";
 import { calibrateSkills } from "../skills.js";
@@ -196,7 +196,7 @@ async function* claudeStreamEvents(
         // 子智能体写的文件同样是这个任务写的（见 tool-writes.ts）。
         if (block.type === "tool_use") writeLedger.toolUse(block.name, block.input, block.id);
         if (block.type === "tool_result") {
-          const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true);
+          const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true, soleReceipt(ev));
           if (writes) push(writes);
         }
         // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
@@ -333,7 +333,7 @@ async function* claudeStreamEvents(
         background.toolResult(block.tool_use_id, block.is_error === true);
         const activity = nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
         if (activity) push(activity);
-        const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true);
+        const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true, soleReceipt(ev));
         if (writes) push(writes);
         for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
       }

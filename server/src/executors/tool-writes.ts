@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import { kindOf } from "../artifact-kind.js";
-import { fileDigestSync } from "../file-digest.js";
+import { contentDigest } from "../file-digest.js";
 
 // 工具调用「写到了哪里」——从执行器原生事件的**结构化参数**里取，不从展示用的 detail 里抠：
 // detail 被截到 1500 字，claude 的 Write 连同整段文件内容一起序列化，截完就不是合法 JSON 了
@@ -15,9 +15,18 @@ import { fileDigestSync } from "../file-digest.js";
 // 没改，却会被当成「这个任务在那儿写过东西」，把旁边别的任务的真产物判走。所以 claude 要等到
 // 对应的 tool_result 没报错才放出来（`ClaudeWriteLedger`），codex 只认 `completed` 的改文件项。
 //
-// **写成了的那一刻顺手记下内容指纹**（`digests`，只给产物那几类文件）。这是生成物面板唯一不靠
+// **内容指纹只从这次操作自己带的内容算**（`digests`，只给产物那几类文件）。这是生成物面板唯一不靠
 // 推断的归属证据：磁盘上现在这份跟它亲手写下的一模一样，就是它的（task-artifact-direct.ts）。
-// 指纹在这里当场算、随事件带走，不等记录端慢慢消费时再读——那中间别人可能已经把文件改了。
+// 所以指纹必须证明的是「这次操作写下了什么」，不是「收到消息时这条路径上有什么」——写完到这条
+// 消息被解析之间隔着进程间管道和事件排队，别人完全可以在那中间把文件覆盖掉；当时去读磁盘，就会
+// 把别人的版本记成自己亲手写下的（审查 TgRjUOJWF1Ci 第 1 轮 #1，同步读、提前读都补不上）。
+// 能从操作本身推出写完后全文的才给指纹：
+//   - claude Write：入参就是全文；
+//   - claude Edit / MultiEdit：回执（`tool_use_result`）带着工具自己读到的改之前的原文，按这次的
+//     替换推一遍；
+//   - codex 新建文件（app-server 的 `add`）：`diff` 就是全文。
+// 推不出来的（codex 改已有文件只给 diff、`codex exec` 什么内容都不给、NotebookEdit、回执缺字段）
+// 只报路径，不给指纹——那就只是「写过」，升不成确定。推错了也只会对不上磁盘、落成候选。
 
 /** claude 的写文件/改文件工具 → 目标路径所在的入参字段。 */
 const CLAUDE_WRITE_TOOLS: Record<string, string> = {
@@ -49,40 +58,91 @@ export function claudeToolWrites(name: unknown, input: unknown, base?: string): 
 /** 一次调用的入参里最多攒这么多条等结果——中途被打断、永远等不到结果的那些不能无限堆。 */
 const MAX_PENDING_WRITES = 256;
 
-/** 写成了的文件补上内容指纹（只认绝对路径、产物那几类）。一个都算不出来就原样返回。 */
-const withDigests = (writes: AgentEvent): AgentEvent => {
-  if (writes.kind !== "writes" || writes.cwd) return writes;
-  const digests: Record<string, string> = {};
-  for (const path of writes.paths) {
-    if (!isAbsolute(path) || !kindOf(path)) continue;
-    const digest = fileDigestSync(path);
-    if (digest) digests[path] = digest;
+const text = (value: unknown): string | null => (typeof value === "string" ? value : null);
+const recordOf = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" ? value as Record<string, unknown> : {};
+
+/** 在 `original` 上做一次替换；旧串找不到就推不出来。 */
+function replaced(original: string, oldText: string, newText: string, all: boolean): string | null {
+  if (!oldText) return original === "" ? newText : null;
+  if (all) return original.includes(oldText) ? original.split(oldText).join(newText) : null;
+  const at = original.indexOf(oldText);
+  return at < 0 ? null : original.slice(0, at) + newText + original.slice(at + oldText.length);
+}
+
+/**
+ * claude 一次写文件调用**写完之后的全文**：只从入参和回执里推，不读磁盘（见文件顶部）。回执里
+ * 的字段优先——那是工具实际用的（它会规整引号之类），入参只是模型请求的。
+ */
+function claudeWrittenText(name: string, input: Record<string, unknown>, result: Record<string, unknown>): string | null {
+  if (name === "Write") return text(input.content) ?? text(result.content);
+  const original = text(result.originalFile) ?? text(result.originalFileContents);
+  if (original === null) return null;
+  if (name === "Edit") {
+    const oldText = text(result.oldString) ?? text(input.old_string);
+    const newText = text(result.newString) ?? text(input.new_string);
+    if (oldText === null || newText === null) return null;
+    return replaced(original, oldText, newText, (result.replaceAll ?? input.replace_all) === true);
   }
-  return Object.keys(digests).length ? { ...writes, digests } : writes;
+  if (name === "MultiEdit") {
+    const edits = Array.isArray(result.edits) ? result.edits : Array.isArray(input.edits) ? input.edits : null;
+    let current: string | null = edits ? original : null;
+    for (const edit of edits ?? []) {
+      const entry = recordOf(edit);
+      const oldText = text(entry.old_string) ?? text(entry.oldString);
+      const newText = text(entry.new_string) ?? text(entry.newString);
+      if (current === null || oldText === null || newText === null) return null;
+      current = replaced(current, oldText, newText, (entry.replace_all ?? entry.replaceAll) === true);
+    }
+    return current;
+  }
+  return null;
+}
+
+/** 给一份写入补上指纹（只给绝对路径、产物那几类）。 */
+const withDigest = (writes: Extract<AgentEvent, { kind: "writes" }>, path: string, written: string | null): AgentEvent => {
+  const digest = written !== null && isAbsolute(path) && kindOf(path) ? contentDigest(written) : null;
+  return digest ? { ...writes, digests: { [path]: digest } } : writes;
 };
+
+/**
+ * 一条 claude 消息上的 `tool_use_result`（工具自己的结构化回执）——只在这条消息只装着一个工具结果
+ * 时才认：装着好几个时它对应哪个说不清，宁可不用（不用只是少给一个指纹）。
+ */
+export function soleReceipt(message: { tool_use_result?: unknown; message?: { content?: unknown } }): unknown {
+  const blocks = Array.isArray(message.message?.content) ? message.message.content : [];
+  return blocks.filter((block) => recordOf(block).type === "tool_result").length === 1 ? message.tool_use_result : undefined;
+}
 
 /**
  * claude 的写文件调用要配上结果才算数：`tool_use` 先记下，`tool_result` 没报错才放出来。
  * 主会话与子智能体共用一本（调用 id 全局唯一）。
  */
 export class ClaudeWriteLedger {
-  private pending = new Map<string, AgentEvent>();
+  private pending = new Map<string, { name: string; input: Record<string, unknown>; writes: Extract<AgentEvent, { kind: "writes" }> }>();
 
   /** `base`：这条流所属进程的工作目录（相对路径按它展开）。 */
   constructor(private readonly base?: string) {}
 
   toolUse(name: unknown, input: unknown, id: unknown): void {
     const writes = claudeToolWrites(name, input, this.base);
-    if (!writes || typeof id !== "string" || !id) return;
+    if (!writes || writes.kind !== "writes" || typeof id !== "string" || !id) return;
     if (this.pending.size >= MAX_PENDING_WRITES) this.pending.delete(this.pending.keys().next().value!);
-    this.pending.set(id, writes);
+    this.pending.set(id, { name: name as string, input: recordOf(input), writes });
   }
 
-  toolResult(id: unknown, isError: boolean): AgentEvent | null {
+  /** `result`：这条工具结果的结构化回执（`soleReceipt`），没有就不传。 */
+  toolResult(id: unknown, isError: boolean, result?: unknown): AgentEvent | null {
     if (typeof id !== "string") return null;
-    const writes = this.pending.get(id);
+    const call = this.pending.get(id);
     this.pending.delete(id);
-    return writes && !isError ? withDigests(writes) : null;
+    if (!call || isError) return null;
+    const path = call.writes.paths[0]!;
+    const receipt = recordOf(result);
+    // 回执说的不是这个文件（对不上号）就不用它。
+    const target = text(receipt.filePath);
+    const usable = !target || resolve(this.base && isAbsolute(this.base) ? this.base : "/", target) === path ? receipt : {};
+    return withDigest(call.writes, path, claudeWrittenText(call.name, call.input, usable));
   }
 }
 
@@ -103,16 +163,27 @@ export function codexChangeWrites(item: unknown, base?: string): AgentEvent | nu
   const record = item as Record<string, unknown>;
   if (codexStatus(record) !== "completed") return null;
   const changes = Array.isArray(record.changes) ? record.changes : [];
+  const digests: Record<string, string> = {};
   const paths = cleanPaths([
     record.path,
     ...changes.flatMap((change) => {
       if (!change || typeof change !== "object") return [];
       const entry = change as Record<string, unknown>;
       const kind = entry.kind && typeof entry.kind === "object" ? entry.kind as Record<string, unknown> : {};
+      const moved = entry.move_path ?? entry.movePath ?? kind.move_path ?? kind.movePath;
+      // 新建文件的 diff 就是全文（app-server 协议）；改已有文件的 diff 推不出全文，不给指纹。
+      const created = (entry.kind === "add" || kind.type === "add") && !moved;
+      const [path] = cleanPaths([entry.path], base);
+      const content = text(entry.diff);
+      if (created && path && content !== null && isAbsolute(path) && kindOf(path)) {
+        const digest = contentDigest(content);
+        if (digest) digests[path] = digest;
+      }
       return [entry.path, entry.move_path, entry.movePath, kind.move_path, kind.movePath];
     }),
   ], base);
-  return paths.length ? withDigests({ kind: "writes", paths }) : null;
+  if (!paths.length) return null;
+  return Object.keys(digests).length ? { kind: "writes", paths, digests } : { kind: "writes", paths };
 }
 
 /** codex 一条命令的工作目录（弱证据）。协议没带、或者命令被拒绝没跑，就是 null。 */

@@ -125,15 +125,9 @@ export async function runWindows(
   lens: PathLens,
   options: {
     /**
-     * 在这个目录的**上层**跑也算在这儿干活。只给找「同时在场的人」用（`task-artifact-rivals.ts`）：
-     * 在 `~/code` 跑的任务照样能往 `~/code/empty/videos` 写东西，问「那一刻还有谁可能在这儿写」
-     * 时不能漏掉它。本任务自己的区间不开这一档——上层目录里跑的那段时间不是它在这儿干活的证据。
-     */
-    fromAbove?: boolean;
-    /**
-     * 不核对目录：它在哪儿跑的那段时间都算。同样只给找对手用，而且只给**确实往这个目录里写过
-     * 东西**的任务开，而且调用方只留下跟那些写入记录挨着的几段（见 `task-artifact-rivals.ts`）：
-     * 在隔壁目录开工、用绝对路径写进来的任务，按工作目录核对一段区间都核不出来（复审第 3 轮 #3）。
+     * 不核对目录：它在哪儿跑的那段时间都算。只给找「同时在跑的别的任务」用
+     * （`task-artifact-rivals.ts`）：命令的输出落在哪儿从工作目录看不出来，那一刻它在别处跑，
+     * 照样可能把东西写到这里。本任务自己的区间不开这一档。
      */
     anywhere?: boolean;
   } = {},
@@ -202,7 +196,6 @@ export async function runWindows(
       const rel = relative(await lens.canonical(root.path), await lens.canonical(recorded));
       return rel.split(sep).some((part) => part === ".worktrees" || part === ".claude") ? "elsewhere" : "exact";
     }
-    if (options.fromAbove && await lens.underDir(root.path, recorded)) return "exact";
     if (!root.repo || !(await lens.underDir(recorded, root.repo))) return "elsewhere";
     return (await lens.dirExists(recorded)) ? "elsewhere" : "stale";
   };

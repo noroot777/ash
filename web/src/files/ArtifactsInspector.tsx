@@ -165,7 +165,7 @@ export function ArtifactsInspector({
             <small>{doubtful.length}</small>
           </button>
           {alongside.length > 0 && (
-            <p className="artifacts__doubtful-note">同一时间也在这个目录里干活：{alongside.join("、")}</p>
+            <p className="artifacts__doubtful-note">同一时间也在跑：{alongside.join("、")}</p>
           )}
           {doubtfulOpen && (
             <ArtifactGroups taskId={taskId} artifacts={doubtful} activePath={activePath} onOpenFile={onOpenFile} notify={notify} />

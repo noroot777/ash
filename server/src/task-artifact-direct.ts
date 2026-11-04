@@ -1,13 +1,14 @@
+import { or, sql } from "drizzle-orm";
 import { dirname, join, relative, sep } from "node:path";
 import { db } from "./db/index.js";
 import { taskWrites } from "./db/schema.js";
 import { fileDigest } from "./file-digest.js";
 import type { WorkspaceRoot } from "./file-browser.js";
 import type { PathLens } from "./task-artifact-paths.js";
-import { writesUnder } from "./task-artifact-rivals.js";
 
 // 生成物归属里**唯一不靠推断**的那条证据：这份文件是它用写文件工具亲手写下的，而且磁盘上现在
-// 这份跟它写成那一刻一模一样（内容指纹在执行器那一侧当场记下，见 executors/tool-writes.ts）。
+// 这份跟它那次写下的内容一模一样（指纹从那次操作自己带的内容算，不读磁盘，见
+// executors/tool-writes.ts）。
 //
 // 不问时间、不问目录远近、不问同时还有谁在跑：内容对得上就是对得上。反过来也一样——现在这份
 // 正是**别的任务**亲手写下的那一版，那它就是别人的，不列进来。两边写下的恰好是同一份内容时，
@@ -28,6 +29,14 @@ export interface DirectEvidence {
 }
 
 const posix = (rel: string) => rel.split(sep).join("/");
+
+/** 写入记录里指向这个目录（它自己或底下）的那几行的条件。 */
+function writesUnder(prefixes: readonly string[]) {
+  return or(...prefixes.flatMap((dir) => [
+    sql`${taskWrites.path} = ${dir}`,
+    sql`substr(${taskWrites.path}, 1, ${dir.length + 1}) = ${dir + sep}`,
+  ]));
+}
 
 export async function directEvidence(
   root: WorkspaceRoot,
