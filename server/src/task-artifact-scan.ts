@@ -191,10 +191,6 @@ async function orderedIgnoredEntries(
 const touchesFocus = (rel: string, focus: readonly string[]) =>
   focus.some((dir) => rel === dir || rel.startsWith(`${dir}/`) || dir.startsWith(`${rel}/`));
 
-/** 去掉被别的重点目录装着的那几个——先走外层就够了，里层会被再走一遍。 */
-const outermost = (focus: readonly string[]) =>
-  focus.filter((dir) => !focus.some((other) => other !== dir && dir.startsWith(`${other}/`)));
-
 /**
  * 走一棵子树，把能看的文件挑出来。带深度、条数双上限，撞上就记一句、停。
  * `walked` 里的子树已经走过了（重点目录先走的那几棵），这一趟跳过。
@@ -249,6 +245,10 @@ async function walkForArtifacts(
  * 光把装着重点目录的那个入口排到前面不够：入口本身是一整棵大树时（一个被忽略的 `videos/`、
  * 非 git 目录的根），里面按广度优先走，预算可能在别的子目录上烧光，任务自己写过的那一处照样
  * 轮不到（第 1 轮审查 #6）。写过之后又被删掉的目录不算「读不动」，直接不走。
+ *
+ * **嵌套的重点目录不合并，最深的先走**：任务在 `output/` 放了说明、又在 `output/z/` 出了成片
+ * 时，两处都是重点。只留外层的话 `output/` 整棵又回到广度优先，成片所在的那一层照样排在一堆
+ * 无关文件后面（第 2 轮审查 #2）。去重交给「走过的不重走」那张表，不在排计划时删。
  */
 async function walkFocusFirst(
   rootPath: string,
@@ -259,14 +259,18 @@ async function walkFocusFirst(
   profiles: Map<string, boolean>,
   incomplete: string[],
 ): Promise<void> {
-  const first: string[] = [];
-  for (const dir of outermost(focus)) {
-    if (relDir && !dir.startsWith(`${relDir}/`)) continue;
+  const walked = new Set<string>();
+  const depth = (dir: string) => dir.split("/").length;
+  const inside = [...new Set(focus)]
+    .filter((dir) => !relDir || dir === relDir || dir.startsWith(`${relDir}/`))
+    .sort((a, b) => depth(b) - depth(a));
+  for (const dir of inside) {
     if (skipsDirPath(dir)) continue;
-    if (await stat(join(rootPath, dir)).then((info) => info.isDirectory(), () => false)) first.push(dir);
+    if (!(await stat(join(rootPath, dir)).then((info) => info.isDirectory(), () => false))) continue;
+    await walkForArtifacts(rootPath, dir, budget, found, profiles, incomplete, walked);
+    walked.add(dir);
   }
-  for (const dir of first) await walkForArtifacts(rootPath, dir, budget, found, profiles, incomplete);
-  await walkForArtifacts(rootPath, relDir, budget, found, profiles, incomplete, new Set(first));
+  if (!walked.has(relDir)) await walkForArtifacts(rootPath, relDir, budget, found, profiles, incomplete, walked);
 }
 
 /**

@@ -13,7 +13,8 @@
 //   3. 裁决：离谁写过的地方更近就归谁；一样近、或有一方没记录可比，就只当候选；进去看一眼
 //      （命令工作目录）压不过真写过（写文件工具）。对手按**目录**找（跨项目、开在上层目录的
 //      都算），别处干活的不占名额，没比全如实降级；审查自己、领队不算对手；共享仓库里按时间
-//      找到的提交也按提交时刻裁决；
+//      找到的提交也按提交时刻裁决，而且裁决的是**现在这一版**（之后被别人改过、提交过的，
+//      旧提交不能替它作保）；任务写过的深层目录先扫，不被它写过的上层目录吞掉；
 //   4. 没有并发的时候行为一点不变。
 // 跑：npm -w server run test:task-artifacts-concurrent
 import assert from "node:assert/strict";
@@ -309,8 +310,17 @@ rl.on('line', (line) => {
     git(["add", rel]);
     git(["commit", "-q", "-m", rel], at);
   };
+  // 只有 A 在跑时它提交的两份（B 从 T+10 才开工）。
+  commit("b/page.html", minutes(T, 5));
+  commit("a/v.png", minutes(T, 5));
   commit("a/out.png", minutes(T, 20));
   commit("b/shot.png", minutes(T, 25));
+  // A 收工之后，B 又提交改了一遍 A 的图。
+  writeFileSync(join(repo, "a/v.png"), Buffer.concat([png, Buffer.from("B")]));
+  git(["commit", "-q", "-am", "B touches a/v.png"], minutes(T, 45));
+  // B 在两边都在跑的时候改了 A 早先提交的网页，还没提交。
+  writeFileSync(join(repo, "b/page.html"), "B current version, not committed");
+  utimesSync(join(repo, "b/page.html"), minutes(T, 20), minutes(T, 20));
   const repoRoot = { path: repo, branch: "main", gitRepo: true, source: "repo" as const, repo, projectId: "pg" };
   const readRepo = async (id: string) => {
     const got = await readTaskArtifacts(id, repoRoot);
@@ -320,9 +330,37 @@ rl.on('line', (line) => {
   const gitA = await readRepo("GitA00000007");
   assert.equal(conf(gitA, "a/out.png"), "exact", "自己目录里的提交：确定是它的");
   assert.equal(conf(gitA, "b/shot.png"), null, "同一刻对方在场、离对方写过的地方更近：别人的提交不许混进来");
+  assert.equal(conf(gitA, "b/page.html"), null,
+    "A 早先提交过这个网页，可现在磁盘上是 B 并发时改出来的未提交版本：按现在这一版裁决，归 B");
+  assert.equal(conf(gitA, "a/v.png"), "approx",
+    "A 收工后被别人提交改过：现在这一版不是 A 那次提交落下的，只能当候选（也不从面板上抹掉）");
   const gitB = await readRepo("GitB00000008");
   assert.equal(conf(gitB, "b/shot.png"), "exact");
   assert.equal(conf(gitB, "a/out.png"), null, "按提交时刻裁决：那一刻两边都在场，提交在 A 的目录里");
+  assert.equal(conf(gitB, "b/page.html"), "exact", "现在这一版是 B 在自己目录里改的");
+  assert.equal(gitB.artifacts.find((artifact) => artifact.path === "b/page.html")?.origin, "working");
+
+  // ── 3d'. 深层的重点目录不被上层的吞掉 ────────────────────────────────────────
+  // 任务在 output/ 放了说明、又在 output/z/ 出了成片；output/ 被忽略，旁边一个子目录里堆着
+  // 比扫描预算还多的无关文件。两处都写过，最深的那处要先扫——git 与非 git 两条入口都一样。
+  const scanRepo = join(stage, "scanrepo");
+  mkdirSync(join(scanRepo, "output/a"), { recursive: true });
+  mkdirSync(join(scanRepo, "output/z"), { recursive: true });
+  execFileSync("git", ["-C", scanRepo, "init", "-q"]);
+  writeFileSync(join(scanRepo, ".gitignore"), "output/\n");
+  for (let i = 0; i < 40010; i += 1) writeFileSync(join(scanRepo, `output/a/${i}.txt`), "");
+  await db.insert(projects).values({ id: "ps", name: "scanrepo", repoPath: scanRepo, createdAt: iso(T) });
+  await runTask("Focus0000010", T, minutes(T, 15), { dir: scanRepo, project: "ps" });
+  for (const rel of ["output/BRIEF.md", "output/z/render.py"]) {
+    await recordTaskWrites("Focus0000010", "s-Focus0000010", { kind: "writes", paths: [join(scanRepo, rel)] }, iso(minutes(T, 2)));
+  }
+  writeFileSync(join(scanRepo, "output/z/final.png"), png);
+  utimesSync(join(scanRepo, "output/z/final.png"), minutes(T, 5), minutes(T, 5));
+  for (const gitRepo of [true, false]) {
+    const got = await readTaskArtifacts("Focus0000010", { ...repoRoot, path: scanRepo, repo: gitRepo ? scanRepo : null, gitRepo, projectId: "ps" });
+    assert.equal(conf(got, "output/z/final.png"), "exact",
+      `${gitRepo ? "git" : "非 git"}：上层也写过时，深层那处照样先扫，成片不能被预算挤掉：${JSON.stringify(got.incomplete)}`);
+  }
 
   // ── 3e. 没比全就如实降级 ──────────────────────────────────────────────────
   // 同一个目录里同时在跑的任务多到核不过来：没核到的那些里可能就有离得更近的人，不能判「是它的」。

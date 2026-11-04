@@ -97,6 +97,27 @@ export interface TaskArtifactsResult {
 const MAX_ARTIFACTS = 400;
 
 /**
+ * **现在这一版**文件是什么时候落下的——归属要对的是它，不是这条路径历史上的某一版。
+ *
+ *   - 有未提交的改动：就是现在磁盘上这份，按 mtime（区间里那次提交只证明了更早的版本）；
+ *   - 区间之后又被提交改过：按那次之后的提交；
+ *   - 现在这一版就是区间里那次提交：按那次提交，强弱跟着它所在的区间走；之后有没有被改过
+ *     看不全时（`sure: false`）只能当候选；
+ *   - 没有提交证据：按 mtime。
+ *
+ * `hit` 缺省 = 拿 `at` 去对区间。
+ */
+function currentVersion(
+  byCommit: { exact: boolean; at: number | null; later: number | null; unknown: boolean } | undefined,
+  working: boolean,
+  mtimeMs: number | null,
+): { at: number | null; hit?: "exact" | "approx" | null; sure: boolean } {
+  if (working || !byCommit) return { at: mtimeMs, sure: true };
+  if (byCommit.later !== null) return { at: byCommit.later, sure: true };
+  return { at: byCommit.at, hit: byCommit.exact ? "exact" : "approx", sure: !byCommit.unknown };
+}
+
+/**
  * 三路线索合成一份产物清单。
  *
  * 任何一路读失败都只记一句 `error` 继续走完剩下的：git 不在、分支被删、目录只读，都不该
@@ -134,10 +155,14 @@ export async function readTaskArtifacts(
   const proven = new Set<string>();
   /**
    * 按时间在运行区间里找到的提交动过的路径 → 那次提交落在精确区间还是估出来的区间、发生在
-   * 哪一刻。这是**共享目录上的提交**：同一刻别的任务也在这个仓库里跑时，提交是谁做的跟 mtime
-   * 一样问不出来，要拿提交时刻去过并发裁决，不能当成分支差异那种自带归属的证据。
+   * 哪一刻，以及**现在这一版**是不是还是那次提交落下的。这是**共享目录上的提交**：同一刻别的
+   * 任务也在这个仓库里跑时，提交是谁做的跟 mtime 一样问不出来，要拿提交时刻去过并发裁决，
+   * 不能当成分支差异那种自带归属的证据。
+   *
+   *   `later`   —— 区间之后又有人提交改过它：现在这一版是那次落下的（时刻）。
+   *   `unknown` —— 之后有没有被改过看不全（回看额度用满了）。
    */
-  const timeCommitted = new Map<string, { exact: boolean; at: number | null }>();
+  const timeCommitted = new Map<string, { exact: boolean; at: number | null; later: number | null; unknown: boolean }>();
   const remember = (path: string, origin: ArtifactOrigin) => {
     if (!path || !kindOf(path)) return;
     const seen = evidence.get(path);
@@ -217,7 +242,15 @@ export async function readTaskArtifacts(
               const rel = relocate(path);
               if (!rel) continue;
               remember(rel, "committed");
-              timeCommitted.set(rel, { exact, at: byTime.at.get(path) ?? null });
+              const at = byTime.at.get(path) ?? null;
+              const newest = byTime.latest.get(path);
+              timeCommitted.set(rel, {
+                exact,
+                at,
+                later: at !== null && newest !== undefined && newest > at ? newest : null,
+                unknown: at !== null && byTime.latestFloor !== null && at < byTime.latestFloor
+                  && !(newest !== undefined && newest > at),
+              });
             }
           }
           if (byTime.truncated) {
@@ -264,7 +297,6 @@ export async function readTaskArtifacts(
   for (const { path, origins, info } of stated) {
     if (!info || !info.isFile()) continue; // 已删除 / 已改名的旧路径
     const mtimeMs = Number.isFinite(info.mtimeMs) ? info.mtimeMs : null;
-    const committedProof = origins.has("committed");
     // 归属成立的路：目录独占、任务分支差异，这两条本身就是确定的，不吃时间；其余——运行区间里
     // 找到的提交、工作区改动、被忽略的文件——都只有「在这个目录里 + 时间对得上」这一条线索，
     // 共享目录上必须筛。
@@ -272,21 +304,44 @@ export async function readTaskArtifacts(
     // 分**确定**和**候选**两档,按它最强的那条证据算：精确区间里的提交、mtime 落在精确区间
     // 里算确定；估出来的区间——不管是靠 mtime 落在里面,还是那一段里的提交——都只是候选,要
     // 单独数一笔说出来（第 3 轮审查必须修 1、第 4 轮审查 N2）。
-    const branchProof = exclusive || proven.has(path);
+    //
+    // **证据要跟现在这一版文件绑在一起**：面板打开的是磁盘上现在的内容，一条路径过去某一刻
+    // 归它，不能证明现在这一版还归它（第 2 轮审查 #1）。所以先问「现在这一版是什么时候落下的」
+    // （`version`），再拿那个时刻去对区间、去过并发裁决；更早那次属于它的提交只够让它**留作
+    // 候选**（`prior`）——不把它从面板上抹掉（自己提交过的东西被别人顺手改了一下就消失，是
+    // 第 2 轮审查 F3 的老问题），也不让它冒充确定。
     const byCommit = timeCommitted.get(path);
-    const hit = exclusive ? "exact" : windowHit(mtimeMs, windows);
-    let exactProof = branchProof || byCommit?.exact === true || hit === "exact";
-    if (!exactProof && !byCommit && !hit) continue;
-    // 只靠时间认进来的还要过一道并发裁决：同一刻别的任务也在这个目录里跑的话，落在区间里
-    // 不再说明什么。离别人写过的地方更近 → 不是它的；离它自己的更近 → 确定是它的（哪怕区间
-    // 是估的）；比不出来 → 只能当候选。按时间找到的提交拿**提交时刻**去问「那一刻还有谁」，
-    // 其余拿 mtime。
-    if (!branchProof && arbiter) {
-      const verdict = arbiter.judge(path, byCommit ? byCommit.at : mtimeMs);
-      if (verdict === "theirs") { claimed += 1; continue; }
-      if (verdict === "mine") exactProof = true;
-      if (verdict === "unsure") exactProof = false;
+    const working = origins.has("working");
+    const branchProof = exclusive || (proven.has(path) && !working);
+    if (!branchProof) {
+      const version = currentVersion(byCommit, working, mtimeMs);
+      const prior = proven.has(path) || !!byCommit;
+      const hit = version.hit === undefined ? windowHit(version.at, windows) : version.hit;
+      if (!hit && !prior) continue;
+      let exactProof = hit === "exact" && version.sure;
+      // 只靠时间认进来的还要过一道并发裁决：同一刻别的任务也在这个目录里跑的话，落在区间里
+      // 不再说明什么。离别人写过的地方更近 → 不是它的；离它自己的更近 → 确定是它的（哪怕区间
+      // 是估的）；比不出来 → 只能当候选。
+      if (arbiter) {
+        const verdict = arbiter.judge(path, version.at);
+        if (verdict === "theirs") { claimed += 1; continue; }
+        if (verdict === "mine" && hit && version.sure) exactProof = true;
+        if (verdict === "unsure") exactProof = false;
+      }
+      pushArtifact(path, origins, info, mtimeMs, exactProof);
+      continue;
     }
+    pushArtifact(path, origins, info, mtimeMs, true);
+  }
+
+  function pushArtifact(
+    path: string,
+    origins: Set<ArtifactOrigin>,
+    info: NonNullable<(typeof stated)[number]["info"]>,
+    mtimeMs: number | null,
+    exactProof: boolean,
+  ) {
+    const committedProof = origins.has("committed");
     // 逐条的强弱就是**上面那个 `exactProof`**,不是另起一套判据:页脚那句「有 N 个是按估出来
     // 的时间段认的」和每一条的标记从此同源,数目与标出来的条数恒等。
     //

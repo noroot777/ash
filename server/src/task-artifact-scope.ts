@@ -207,11 +207,23 @@ export async function committedInWindows(
   approx: string[];
   /** 每条路径在区间里**最晚**那次提交的时刻（毫秒）。并发裁决按它去问「那一刻还有谁在跑」。 */
   at: Map<string, number>;
+  /**
+   * 每条路径**到当前检出为止**最后一次被提交的时刻——现在这一版文件是哪次提交落下的。比 `at`
+   * 晚，就说明区间之后又有人提交改过它：区间里那次提交只证明旧版本归它（第 2 轮审查 #1）。
+   */
+  latest: Map<string, number>;
+  /**
+   * `latest` 那一趟回看用满了额度时，看到的最老那次提交的时刻：`at` 比它还早的路径，之后有没有
+   * 被改过就看不全了。没用满是 null。
+   */
+  latestFloor: number | null;
   truncated: boolean;
   skippedWindows: number;
   dateWalk: boolean;
 }> {
-  if (!windows.length) return { exact: [], approx: [], at: new Map(), truncated: false, skippedWindows: 0, dateWalk: false };
+  if (!windows.length) {
+    return { exact: [], approx: [], at: new Map(), latest: new Map(), latestFloor: null, truncated: false, skippedWindows: 0, dateWalk: false };
+  }
   const asFilter = await supportsSinceAsFilter(root);
   // 区间太多时保最近的几段：旧的那些对「它刚做出了什么」贡献最小。
   const ordered = [...windows].sort((a, b) => b.start - a.start);
@@ -220,53 +232,79 @@ export async function committedInWindows(
   const approx = new Set<string>();
   const at = new Map<string, number>();
   let truncated = false;
+  const log = (start: number, end: number) => commitPaths(root, [
+    `${asFilter ? "--since-as-filter" : "--since"}=${new Date(start).toISOString()}`,
+    // 开着的那一段（还在写）不设上界：Infinity 塞进 Date 只会抛。
+    ...(Number.isFinite(end) ? [`--until=${new Date(end).toISOString()}`] : []),
+  ]);
 
   for (const window of picked) {
-    const args = [
-      "--no-optional-locks", "-c", "core.quotePath=false", "-C", root, "log",
-      `${asFilter ? "--since-as-filter" : "--since"}=${new Date(window.start).toISOString()}`,
-      // 开着的那一段（还在写）不设上界：Infinity 塞进 Date 只会抛。
-      ...(Number.isFinite(window.end) ? [`--until=${new Date(window.end).toISOString()}`] : []),
-      // 提交头前面那个 `%x01` 是**哨兵**:光靠「NUL 开场 + 40 位十六进制」认提交头,一个名字
-      // 恰好是 40 位十六进制、又躺在仓库根上的文件就会被认成提交号 —— 它自己从清单里消失,
-      // 后面那一串路径还会被当成它的（`afterHeader` 跟着错位剥一个换行）。路径里出现 0x01
-      // 这个控制字符在实践中不会发生,于是两类 token 从形状上就分得开（本轮审查不拦项）。
-      // 提交号后面跟着 committer 时刻（秒）：并发裁决要知道「这次提交发生在哪一刻」。
-      `--max-count=${MAX_WINDOW_COMMITS}`, "--name-only", "-z", "--format=%x00%x01%H %ct",
-    ];
-    const { stdout } = await exec("git", args, { maxBuffer: 16 * 1024 * 1024 });
-    // `-z` 下提交头和路径一律以 NUL 分隔；`%x00%x01%H` 让提交头自己也以 NUL 开场、并且带上
-    // 那个哨兵，于是「0x01 + 40 位十六进制」这一个 token 就是提交号，其余 token 都是路径。
-    let commits = 0;
-    // `-z` 只管用 NUL 分隔，**不管 git 在提交头和它的路径列表之间插的那个换行**——实测格式
-    // 是 `\0<hash>\0\n<path>\0<path>\0`。那个换行只在**紧跟提交头的第一条路径**前面出现一
-    // 次，所以只在那个位置剥、而且只剥一个：无条件剥掉每个 token 的全部前导 CR/LF，会把
-    // 「文件名真的以换行开头」的路径改写掉，`stat` 跟着查错地方（第 2 轮审查 N1）。
-    let afterHeader = false;
-    let committedAt = Number.NaN;
-    for (const raw of stdout.split("\0")) {
-      const header = /^[\r\n]*\x01[0-9a-f]{40} (\d+)$/.exec(raw);
-      if (header) {
-        commits += 1;
-        afterHeader = true;
-        committedAt = Number(header[1]) * 1000;
-        continue;
-      }
-      const token = afterHeader ? raw.replace(/^\r?\n/, "") : raw;
-      afterHeader = false;
-      if (!token) continue;
-      (window.approx ? approx : exact).add(token);
-      if (Number.isFinite(committedAt) && !(at.get(token)! >= committedAt)) at.set(token, committedAt);
+    const found = await log(window.start, window.end);
+    for (const { path, committedAt } of found.entries) {
+      (window.approx ? approx : exact).add(path);
+      if (!(at.get(path)! >= committedAt)) at.set(path, committedAt);
     }
-    if (commits >= MAX_WINDOW_COMMITS) truncated = true;
+    if (found.full) truncated = true;
+  }
+  // 现在这一版是谁落下的：从最早那段区间起一路看到当前检出（git log 从新到旧给，所以额度只会
+  // 截掉最老的那头）。
+  const latest = new Map<string, number>();
+  const since = await log(Math.min(...picked.map((window) => window.start)), Infinity);
+  for (const { path, committedAt } of since.entries) {
+    if (!(latest.get(path)! >= committedAt)) latest.set(path, committedAt);
   }
   return {
     exact: [...exact],
     // 同一条路径在两档区间里都出现过,算强的那一档。
     approx: [...approx].filter((path) => !exact.has(path)),
     at,
+    latest,
+    latestFloor: since.full ? since.oldest : null,
     truncated,
     skippedWindows: ordered.length - picked.length,
     dateWalk: !asFilter,
   };
+}
+
+/** 一次 `git log` 里每个提交动过的路径和提交时刻；`full` = 额度用满了，`oldest` = 看到的最老那次。 */
+async function commitPaths(root: string, range: string[]): Promise<{
+  entries: { path: string; committedAt: number }[];
+  full: boolean;
+  oldest: number;
+}> {
+  const args = [
+    "--no-optional-locks", "-c", "core.quotePath=false", "-C", root, "log", ...range,
+    // 提交头前面那个 `%x01` 是**哨兵**:光靠「NUL 开场 + 40 位十六进制」认提交头,一个名字
+    // 恰好是 40 位十六进制、又躺在仓库根上的文件就会被认成提交号 —— 它自己从清单里消失,
+    // 后面那一串路径还会被当成它的（`afterHeader` 跟着错位剥一个换行）。路径里出现 0x01
+    // 这个控制字符在实践中不会发生,于是两类 token 从形状上就分得开（本轮审查不拦项）。
+    // 提交号后面跟着 committer 时刻（秒）：并发裁决要知道「这次提交发生在哪一刻」。
+    `--max-count=${MAX_WINDOW_COMMITS}`, "--name-only", "-z", "--format=%x00%x01%H %ct",
+  ];
+  const { stdout } = await exec("git", args, { maxBuffer: 16 * 1024 * 1024 });
+  // `-z` 下提交头和路径一律以 NUL 分隔；`%x00%x01%H` 让提交头自己也以 NUL 开场、并且带上
+  // 那个哨兵，于是「0x01 + 40 位十六进制」这一个 token 就是提交号，其余 token 都是路径。
+  const entries: { path: string; committedAt: number }[] = [];
+  let commits = 0;
+  let oldest = Infinity;
+  // `-z` 只管用 NUL 分隔，**不管 git 在提交头和它的路径列表之间插的那个换行**——实测格式
+  // 是 `\0<hash>\0\n<path>\0<path>\0`。那个换行只在**紧跟提交头的第一条路径**前面出现一
+  // 次，所以只在那个位置剥、而且只剥一个：无条件剥掉每个 token 的全部前导 CR/LF，会把
+  // 「文件名真的以换行开头」的路径改写掉，`stat` 跟着查错地方（第 2 轮审查 N1）。
+  let afterHeader = false;
+  let committedAt = Number.NaN;
+  for (const raw of stdout.split("\0")) {
+    const header = /^[\r\n]*\x01[0-9a-f]{40} (\d+)$/.exec(raw);
+    if (header) {
+      commits += 1;
+      afterHeader = true;
+      committedAt = Number(header[1]) * 1000;
+      oldest = Math.min(oldest, committedAt);
+      continue;
+    }
+    const token = afterHeader ? raw.replace(/^\r?\n/, "") : raw;
+    afterHeader = false;
+    if (token && Number.isFinite(committedAt)) entries.push({ path: token, committedAt });
+  }
+  return { entries, full: commits >= MAX_WINDOW_COMMITS, oldest };
 }
