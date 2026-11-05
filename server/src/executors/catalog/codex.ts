@@ -1,14 +1,8 @@
 import { CodexExecutor } from "../codex.js";
 import { resumeInner } from "../spawn.js";
-import { relayApi } from "../../llm.js";
-import { protocolConverterBaseUrl } from "../../openai-converter/common.js";
+import { codexRelay } from "../codex-provider.js";
 import { modelEffortKey } from "@ash/shared/cli-presets";
 import type { CliSpec } from "./types.js";
-
-// codex 的 key 走 env_key 间接引用(TOML 里只出现变量名),真 key 只活在进程环境里 ——
-// `-c` 参数会原样进 commandLine,而 commandLine 存进 sessions.command_line 并在 UI 展示。
-const RELAY_ENV_KEY = "ASH_RELAY_KEY";
-const RELAY_PROVIDER_ID = "ash_relay";
 
 // `codex debug models` 的输出(0.153.4 实测):一整个 JSON,`{"models":[{slug,display_name,
 // visibility,priority,supported_reasoning_levels,…}]}`。它是**本机 CLI 内置的目录**,
@@ -132,17 +126,6 @@ export const codexSpec: CliSpec = {
       resumeArgs: (id) => ["resume", id],
       interactive: resumeInner.codex,
     },
-    relay: (r) => ({
-      env: { [RELAY_ENV_KEY]: r.apiKey },
-      // wire_api 必须是 responses:codex 0.14x 起废弃了 chat(启动直接报错退出)。
-      args: [
-        "-c", `model_provider="${RELAY_PROVIDER_ID}"`,
-        "-c", `model_providers.${RELAY_PROVIDER_ID}.name="${r.name.replace(/"/g, "")}"`,
-        "-c", `model_providers.${RELAY_PROVIDER_ID}.base_url="${relayApi(r.protocolConversionEnabled ? protocolConverterBaseUrl(r.providerId) : r.baseUrl)}"`,
-        "-c", `model_providers.${RELAY_PROVIDER_ID}.wire_api="responses"`,
-        "-c", `model_providers.${RELAY_PROVIDER_ID}.env_key="${RELAY_ENV_KEY}"`,
-      ],
-      envHint: `${RELAY_ENV_KEY}=<你的key> `,
-    }),
+    relay: codexRelay,
   },
 };
