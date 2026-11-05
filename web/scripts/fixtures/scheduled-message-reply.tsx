@@ -23,7 +23,7 @@ function Fixture() {
     <div className="task-detail-body" style={{ height: "calc(100dvh - 48px)" }}>
       <section className={team ? "team-flow-main" : "task-detail-main"}>
         <div className="conversation-scroll-region"><section className={team ? "team-feed" : "task-conversation"}>会话内容</section></div>
-        {team ? <TeamReplyBox task={task} onSend={async () => null} />
+        {team ? <TeamReplyBox task={task} tasks={[]} onSend={async () => null} />
           : <ReplyBox task={task} hasConversation onSend={async () => null}
             topRail={<div className="task-reply-rail"><button className="task-reply-rail-button">打开预览</button><button className="task-reply-rail-button">接力到…</button></div>} />}
       </section>
