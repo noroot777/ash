@@ -10,8 +10,7 @@ import { findArchivedRollout, readCodexContext } from "./codex-rollout.js";
 import { archiveVisibleCodexSession, unarchiveCodexThread } from "./codex-session-archive.js";
 import { spawnForRun, detachedInfo, type DetachedChild } from "./detached.js";
 import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
-import { relayApi } from "../llm.js";
-import { protocolConverterBaseUrl } from "../openai-converter/common.js";
+import { codexRelay } from "./codex-provider.js";
 import {
   formatFailureForTimeline,
   formatSessionPoisonForTimeline,
@@ -28,12 +27,6 @@ const ASH_MCP_IDENTITY_ENV_VARS = TURN_IDENTITY_ENV_KEYS;
 import { openCodexAppServer } from "./codex-app-server.js";
 import { readCodexAppServerState } from "./codex-app-server-state.js";
 import { codexChangeWrites, codexCommandCwd } from "./tool-writes.js";
-
-// 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
-// sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
-// 指向一个环境变量名,于是 TOML 里只出现变量名,真 key 只活在进程环境里。
-const RELAY_ENV_KEY = "ASH_RELAY_KEY";
-const RELAY_PROVIDER_ID = "ash_relay";
 
 // Drives the real `codex` CLI in non-interactive JSON mode (prompt via stdin, `-`).
 //   first:  codex exec --json --skip-git-repo-check -C <cwd>
@@ -62,7 +55,7 @@ export class CodexExecutor implements AgentExecutor {
     this.resumeEnvHint = resumeEnvHint(
       this.type,
       this.configOverrides,
-      this.relay ? `${RELAY_ENV_KEY}=<你的key> ` : undefined,
+      this.relay ? codexRelay(this.relay).envHint : undefined,
     );
     this.label = opts.name ?? `codex@local${opts.model ? "·" + opts.model : ""}`;
   }
@@ -82,21 +75,7 @@ export class CodexExecutor implements AgentExecutor {
   // base_url 要带版本段,交给 relayApi 归一(库里存的可能是根地址、也可能历史数据自带
   // /v1,硬拼会拼出 /v1/v1);key 只通过 env_key 间接引用,不出现在命令行。
   private relayArgs(): string[] {
-    if (!this.relay) return [];
-    const p = `model_providers.${RELAY_PROVIDER_ID}`;
-    const baseUrl = this.relay.protocolConversionEnabled
-      ? relayApi(protocolConverterBaseUrl(this.relay.providerId))
-      : relayApi(this.relay.baseUrl);
-    return [
-      "-c", `model_provider="${RELAY_PROVIDER_ID}"`,
-      "-c", `${p}.name="${this.relay.name.replace(/"/g, "")}"`,
-      "-c", `${p}.base_url="${baseUrl}"`,
-      // codex 0.14x 起废弃了 wire_api="chat"(启动直接报错退出),只认 Responses API。
-      // 供应商只有 /chat/completions 时，protocolConversionEnabled 会把 base_url 指到
-      // ash 内置转换端点，再由它转换请求、流式事件与最终响应。
-      "-c", `${p}.wire_api="responses"`,
-      "-c", `${p}.env_key="${RELAY_ENV_KEY}"`,
-    ];
+    return this.relay ? codexRelay(this.relay).args ?? [] : [];
   }
 
   // 供应商的 key + 盖过 CLI 自己配置文件的那几项(声明见 shared/src/cli-overrides.ts;
@@ -104,7 +83,7 @@ export class CodexExecutor implements AgentExecutor {
   // `undefined` 值 = 从子进程环境里删掉那个变量(见 cliConfigOverrideEnvPatch)。
   private env(): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv());
-    if (this.relay) env[RELAY_ENV_KEY] = this.relay.apiKey;
+    if (this.relay) Object.assign(env, codexRelay(this.relay).env);
     return env;
   }
 
