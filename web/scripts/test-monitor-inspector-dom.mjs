@@ -287,12 +287,15 @@ try {
     });
     const armed = Date.now() + 5000;
     while (calls < 1 && Date.now() < armed) await page.waitForTimeout(20);
-    // 直播事件补刷一发，它带回更新的计数。
-    await page.evaluate(() => {
-      for (const source of window.__sources.filter((item) => !item.closed)) {
-        source.onmessage?.({ data: JSON.stringify({ type: "task.monitors", taskId: "task-a" }) });
-      }
-    });
+    assert.ok(calls >= 1, "第一发读取确实出门并卡住了");
+    // 断线重连作废在途那一发、重读一遍，新的那份带回更新的计数。不能拿直播事件当这一发：
+    // 追平层对它是合流（在途就记一笔，等那一发落地或到点再跑，见 lib/catchUp.ts），被卡住的
+    // 要是真读取，新计数 15 秒内都不会来。以前用事件也能过，靠的是 StrictMode 开发态重挂把
+    // 第一发作废了 —— 页面起得慢、那一发没来得及出门时（并行跑、冷编译）就露馅。
+    await page.waitForFunction(() => window.__sources.some((item) => !item.closed));
+    await page.evaluate(() => { for (const source of window.__sources) source.onerror?.({}); });
+    await page.waitForTimeout(80);
+    await page.evaluate(() => { for (const source of window.__sources) source.onopen?.({}); });
     await page.locator(".monitor-card__meta").filter({ hasText: "11 条事件" }).waitFor();
 
     releaseFirst();
