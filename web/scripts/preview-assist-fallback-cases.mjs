@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import { editorText } from "./preview-assist-shared.mjs";
 
-export async function fallbackArbitrationCases({ browser, address, caseId }) {
+export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   // ⑭ 没有 Web Locks 的那一档（裸 http 的局域网地址不是安全上下文，ash 常这么开）：只能点名，
   //    于是「暂且算我的」必须可撤回 —— 正主的应答迟到 800ms，远超 300ms 静默超时。
   const lanContext = await browser.newContext({ viewport: { width: 1000, height: 1200 } });
@@ -23,7 +23,7 @@ export async function fallbackArbitrationCases({ browser, address, caseId }) {
   const lan = await lanContext.newPage();
   const lanErrors = [];
   lan.on("pageerror", (failure) => lanErrors.push(failure.message));
-  await lan.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-lan`);
+  await lan.goto(`${origin}/scripts/fixtures/project-settings-draft.html?case=${caseId}-lan`);
   const lanScript = lan.getByRole("textbox", { name: "启动脚本", exact: true });
   const lanProgress = lan.locator(".preview-assist-progress");
   await lanScript.waitFor();
@@ -74,7 +74,7 @@ export async function fallbackArbitrationCases({ browser, address, caseId }) {
   const owner = await lanContext.newPage();
   const ownerErrors = [];
   owner.on("pageerror", (failure) => ownerErrors.push(failure.message));
-  await owner.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-lan`);
+  await owner.goto(`${origin}/scripts/fixtures/project-settings-draft.html?case=${caseId}-lan`);
   const ownerScript = owner.getByRole("textbox", { name: "启动脚本", exact: true });
   const ownerProgress = owner.locator(".preview-assist-progress");
   const ownerNotices = async () => JSON.parse(await owner.getByTestId("notices").textContent());
@@ -304,7 +304,7 @@ export async function fallbackArbitrationCases({ browser, address, caseId }) {
       return post.call(this, note);
     };
   });
-  const settingsUrl = `http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-clone`;
+  const settingsUrl = `${origin}/scripts/fixtures/project-settings-draft.html?case=${caseId}-clone`;
   const carrier = await cloneContext.newPage();
   const carrierErrors = [];
   carrier.on("pageerror", (failure) => carrierErrors.push(failure.message));
@@ -315,7 +315,7 @@ export async function fallbackArbitrationCases({ browser, address, caseId }) {
   await carrier.getByRole("button", { name: "AI 协助填写" }).click();
   await carrier.locator(".preview-assist-progress").getByText("正在读这个项目", { exact: false }).waitFor();
   // 跳到同源的空白中间页：这一跳会触发 pagehide，把接力凭据留在这个标签的 sessionStorage 里
-  await carrier.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/blank.html`);
+  await carrier.goto(`${origin}/scripts/fixtures/blank.html`);
   const clones = [];
   for (let i = 0; i < 2; i += 1) {
     const [opened] = await Promise.all([

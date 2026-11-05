@@ -26,23 +26,13 @@
 //      已确认的那一档；两条真实路径各验一遍 —— 另一项设置同时存成了，以及保存在途中
 //      离开设置页再回来（第 4 轮审查）。界面继续声称一个没存成的档位比显示滞后危险。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const base = `http://127.0.0.1:${address.port}/scripts/fixtures/send-key.html`;
+  const base = `${web.origin}/scripts/fixtures/send-key.html`;
 
   browser = await launchChrome();
   const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
@@ -313,7 +303,7 @@ try {
   console.log("send-key test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }
 
 function serverSendKey(page) {

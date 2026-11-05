@@ -6,27 +6,16 @@
 // 跑的是真 WorkspaceShell（接线、URL、主区都真），闸门只掐住 api.handoffTargets。
 // 跑：npm -w web run test:sidebar-remote-race
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.setDefaultTimeout(15_000);
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/sidebar-remote-race.html?project=p1`);
+  await page.goto(`${web.origin}/scripts/fixtures/sidebar-remote-race.html?project=p1`);
 
   const localRow = page.locator('.workspace-task-tree [data-task-id="local"]');
   const farRow = (id) => page.locator(`.workspace-handoff-task[data-task-id="${id}"]`);
@@ -191,5 +180,5 @@ try {
   console.log("outbound open race tests passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

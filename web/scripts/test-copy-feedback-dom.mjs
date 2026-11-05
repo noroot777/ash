@@ -3,26 +3,15 @@
 // 按钮自己变（components/CopyButton.tsx）——没有反馈时「点了没生效」和「点了已生效」
 // 长得一模一样，用户只能反复点。设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const context = await browser.newContext({ viewport: { width: 1000, height: 1100 }, timezoneId: "Asia/Shanghai" });
-  const origin = `http://127.0.0.1:${address.port}`;
+  const origin = web.origin;
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
   const page = await context.newPage();
   await page.goto(`${origin}/scripts/fixtures/copy-feedback.html`);
@@ -95,5 +84,5 @@ try {
   console.log("copy feedback: 头部图标、续写段尾栏、会话 id、resume 命令四处点完都有就地反馈 ✔");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

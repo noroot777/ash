@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 删除不再先落盘（「存不下去就不许删」是删除按钮点不动的来由），代价是点确认的那一刻
 // 草稿可能还脏着：确认框一关，800ms 自动保存就重新计时，于是一次 PATCH 和 DELETE 并排
@@ -15,17 +13,11 @@ import { createServer } from "vite";
 // 还钉住另一半：**那道闸关上之后得有人把它重新打开**。删除确认框开着的时候自动保存被挡
 // 掉，用户若取消确认（或删除失败），草稿还脏着却再没人排下一次定时器 —— 它就一直停在
 // 「等待自动保存」，不手动点一下永远不落盘（第 2 轮审查的非阻塞项）。
-const root = fileURLToPath(new URL("..", import.meta.url));
-
 // DELETE 比 PATCH 先发、后回：正是「保存回包迟到」那个顺序。
 const DELETE_DELAY_MS = 1400;
 const PATCH_DELAY_MS = 1600;
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const note = (id, body, updatedAt) => ({
   id,
@@ -39,10 +31,6 @@ const note = (id, body, updatedAt) => ({
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1180, height: 860 } });
   const rows = new Map([
@@ -84,7 +72,7 @@ try {
     }
     await reply([]);
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/notes-panel.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/notes-panel.html`);
 
   const row = (title) => page.getByRole("button", { name: new RegExp(title) });
   const editor = page.locator(".note-editor textarea");
@@ -152,5 +140,5 @@ try {
   console.log("notes panel delete-race test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

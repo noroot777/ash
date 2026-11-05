@@ -1,31 +1,22 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { testShellScriptEditor } from "./shell-script-editor-checks.mjs";
 
 const editorText = async (editor) => editor.locator(".cm-line").evaluateAll((lines) => lines.map((line) => line.querySelector(".cm-placeholder") ? "" : line.textContent).join("\n"));
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
   await page.emulateMedia({ reducedMotion: "reduce" });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const caseId = `${process.pid}-${Date.now()}`;
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}`);
+  await page.goto(`${web.origin}/scripts/fixtures/project-settings-draft.html?case=${caseId}`);
 
   const preview = page.getByRole("textbox", { name: "启动脚本", exact: true });
   const name = page.locator("label", { hasText: "项目名称" }).locator("input");
@@ -314,7 +305,7 @@ try {
   await page.getByTestId("server-refresh").click();
   assert.equal(await worktreeToggle.getAttribute("aria-checked"), "true", "worktree 默认值必须真的落库，刷新后不能回弹");
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}-member&member`);
+  await page.goto(`${web.origin}/scripts/fixtures/project-settings-draft.html?case=${caseId}-member&member`);
   await help.waitFor();
   assert.equal(await preview.getAttribute("aria-readonly"), "true");
   assert.equal(await preview.getAttribute("contenteditable"), "false");
@@ -335,5 +326,5 @@ try {
   console.log("project settings draft + preview help: ok (multi-service persistence, proxy defaults, drafts, focus containment, accessibility, inert cleanup, drag selection, dismissal, scroll hints, narrow screen, read-only)");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

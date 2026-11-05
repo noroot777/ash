@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 派审对话框里删审查者。每一段一张干净页面：
 //
@@ -32,12 +30,7 @@ import { createServer } from "vite";
 // ⑬ 回车面：点选别的审查者后焦点停在那张卡上，这时按回车要发起派审，而不是把那张卡
 //    再点一遍；方向键换选之后同理，派出去的是换到的那位。
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const AGENTS = [{
   id: "codex-local",
@@ -76,10 +69,7 @@ const waitFor = async (check, label, timeout = 8000) => {
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const base = `http://127.0.0.1:${address.port}/scripts/fixtures/free-review-delete.html`;
+  const base = `${web.origin}/scripts/fixtures/free-review-delete.html`;
 
   browser = await launchChrome();
 
@@ -552,5 +542,5 @@ try {
   console.log("test-free-review-delete: OK");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

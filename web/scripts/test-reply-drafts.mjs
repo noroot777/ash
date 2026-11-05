@@ -1,21 +1,10 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
   let uploadCount = 0;
@@ -51,7 +40,7 @@ try {
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/reply-drafts.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/reply-drafts.html`);
 
   const input = page.getByRole("textbox", { name: "回复任务" });
   await input.fill("任务 A 的未发送内容");
@@ -112,5 +101,5 @@ try {
   console.log("task reply draft test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

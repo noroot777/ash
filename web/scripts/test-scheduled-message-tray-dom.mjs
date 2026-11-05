@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
 const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0, strictPort: false } });
+const web = await startWebServer();
 const message = (index) => {
   const kind = index % 5;
   const time = new Date(Date.UTC(2026, 9, 24, 10, 0, index)).toISOString();
@@ -27,8 +25,6 @@ const steered = [];
 let browser;
 try {
   await mkdir(artifacts, { recursive: true });
-  await server.listen();
-  const address = server.httpServer.address();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.setDefaultTimeout(10000);
@@ -55,7 +51,7 @@ try {
       }
     } else await route.fulfill({ json: [] });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/scheduled-message-tray.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/scheduled-message-tray.html`);
   const card = page.locator(".scheduled-message-card");
   const list = page.getByRole("region", { name: "排队输入完整列表" });
   const draft = page.getByRole("textbox", { name: "回复草稿" });
@@ -249,5 +245,5 @@ try {
 } finally {
   releaseCancel?.();
   await browser?.close();
-  await server.close();
+  await web.close();
 }

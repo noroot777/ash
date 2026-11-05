@@ -1,19 +1,12 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 随手记里粘的图是「传完之后由 effect 折进当前草稿」的，所以上传没落地就切走/关掉，
 // 结果要么没人接住（附件白传），要么落到刚切过去的那条头上。这条钉住：这些动作一律
 // 排在上传落地之后，而且落地后接着跑，用户不用自己再点一次。
-const root = fileURLToPath(new URL("..", import.meta.url));
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const note = (id, body) => ({
   id,
@@ -27,10 +20,6 @@ const note = (id, body) => ({
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1100, height: 820 } });
   const rows = new Map([["note-a", note("note-a", "第一条随手记")], ["note-b", note("note-b", "第二条随手记")]]);
@@ -66,7 +55,7 @@ try {
     }
     await reply([]);
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/notes-panel.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/notes-panel.html`);
 
   const pasteInto = async (name) => {
     await page.locator(".note-editor-preview").click();
@@ -116,5 +105,5 @@ try {
   console.log("notes panel upload test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

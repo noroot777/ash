@@ -1,19 +1,12 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 讨论的 G1 收敛门也能粘图（注入意见/提问继续那个输入区）。这条钉住的是：输入区是可以
 // 再点一下收起来的，收起来之后在途上传既不能从界面上消失，也不能让「放行结束 / 打回终止」
 // 抢在传完之前把这道门关掉——那两下都会让刚粘的图连同这次操作一起没了。
-const root = fileURLToPath(new URL("..", import.meta.url));
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const paste = (name) => async (page) => page.evaluate(({ name, png }) => {
   const textarea = document.querySelector(".duet-gate-composer textarea");
@@ -25,10 +18,6 @@ const paste = (name) => async (page) => page.evaluate(({ name, png }) => {
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
   const held = new Map();
@@ -58,7 +47,7 @@ try {
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/duet-gate-upload.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/duet-gate-upload.html`);
 
   const inject = page.getByRole("button", { name: "注入意见" });
   const approve = page.getByRole("button", { name: "放行结束" });
@@ -139,5 +128,5 @@ try {
   console.log("duet gate upload test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

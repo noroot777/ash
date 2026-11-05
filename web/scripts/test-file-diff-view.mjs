@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 文件树里「有颜色」的文件点开要摊 diff，而不是全文——改过的文件，用户点它是想看改了什么。
 // 全文没被拿走：diff 头上有「查看文件全文」，切过去的全文又有「查看改动」，两边能互相回。
@@ -11,11 +10,7 @@ import { createServer } from "vite";
 // 里跨刷新保留；并排时连续的删除和新增要按位置对齐，一侧没有对应行时补空格。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const FILE_TEXT = "const keep = 0;\nexport const value = 2;\n";
 // 删 2 行、加 3 行：并排视图要把它们对齐成 3 行，最后一行左边补空。
@@ -128,10 +123,6 @@ const listing = {
 const diffCalls = [];
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1180, height: 700 } });
   await page.route("**/api/tasks/**", async (route) => {
@@ -176,7 +167,7 @@ try {
     return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
   });
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/file-diff-view.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/file-diff-view.html`);
   const row = (name) => page.locator(".file-tree__row").filter({ has: page.locator(".file-tree__name", { hasText: name }) }).first();
   const center = page.getByTestId("center");
   const diffView = center.locator("[aria-label='工作区改动']");
@@ -336,5 +327,5 @@ try {
   console.log("file tree opens changed files as diff: ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

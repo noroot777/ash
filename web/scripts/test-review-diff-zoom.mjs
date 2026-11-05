@@ -1,24 +1,13 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/review-diff-zoom.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/review-diff-zoom.html`);
 
   const zoomLayer = page.locator(".zoom-layer");
   const zoomButton = page.locator("#fixture-main .single-review-zoom");
@@ -266,5 +255,5 @@ try {
   console.log("review diff zoom test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 删文件 / 删文件夹这条路。钉三件事：
 //
@@ -13,11 +12,7 @@ import { createServer } from "vite";
 //    删完树上那一行当场消失（`fileTreeChanged`），不等 5 秒轮询。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const WORKSPACE = { path: "/tmp/file-entry-delete", branch: "feature/delete", gitRepo: true, source: "session" };
 
@@ -80,10 +75,6 @@ const racePaths = new Set(["scratch.log"]);
 let listingCalls = 0;
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1180, height: 760 } });
   await page.route("**/api/tasks/**", async (route) => {
@@ -144,7 +135,7 @@ try {
     return json({ error: "unhandled" }, 404);
   });
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/file-entry-delete.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/file-entry-delete.html`);
   const center = page.getByTestId("center");
   const row = (name) => page.locator(".file-tree__row-wrap").filter({ has: page.locator(".file-tree__name", { hasText: name }) }).first();
   const dialog = page.getByRole("dialog");
@@ -245,5 +236,5 @@ try {
   console.log("test-file-entry-delete: OK");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

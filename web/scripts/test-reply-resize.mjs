@@ -2,16 +2,9 @@
 // 普通任务回复框和团队调度台回复框是同一套交互、各记各的高度,所以两种变体都验一遍。
 // 跑法:npm -w web run test:reply-resize
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 // 与 src/task-detail/ReplyResizeHandle.tsx 里两套 pin 的 minHeight 对齐。
 const VARIANTS = [
@@ -21,10 +14,7 @@ const VARIANTS = [
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const base = `http://127.0.0.1:${address.port}/scripts/fixtures/reply-resize.html`;
+  const base = `${web.origin}/scripts/fixtures/reply-resize.html`;
 
   browser = await launchChrome();
 
@@ -137,5 +127,5 @@ try {
   console.log("reply resize test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

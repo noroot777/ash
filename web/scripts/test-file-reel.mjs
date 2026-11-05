@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 生成物点开之后能一张接一张地翻（左右方向键 + 顶栏那两颗按钮）。
 //
@@ -14,11 +13,7 @@ import { createServer } from "vite";
 // ④ 一组只有一个的时候整组控件都不出现（「1 / 1」和两颗点不动的箭头是噪音）。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 // 1×1 透明 png：<img> 得真能加载出来，坏图会退成 alt 文本，看不出翻没翻。
 const PNG = Buffer.from(
@@ -69,10 +64,6 @@ const listing = {
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   await page.route("**/api/tasks/**", async (route) => {
@@ -116,7 +107,7 @@ try {
     return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
   });
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/file-reel.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/file-reel.html`);
 
   const card = (name) => page.locator(".artifacts__card").filter({ hasText: name }).first();
   const title = page.locator(".file-viewer__title b");
@@ -195,5 +186,5 @@ try {
   console.log("file reel test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

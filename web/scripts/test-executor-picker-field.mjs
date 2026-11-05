@@ -2,23 +2,12 @@
 // 2026-08-13：派审查里选 grok、选了 grok-4.5，胶囊却弹回 codex@local。
 // 跑法：npm -w web run test:executor-picker-field
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 900, height: 640 } });
   await page.route("**/api/llm-providers", (route) => route.fulfill({
@@ -46,7 +35,7 @@ try {
       skipped: null,
     }]),
   }));
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/executor-picker-field.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/executor-picker-field.html`);
 
   const agentTrigger = page.getByRole("button", { name: /智能体：/ });
   const modelTrigger = page.getByRole("button", { name: /模型：/ });
@@ -84,5 +73,5 @@ try {
   console.log("executor picker field test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

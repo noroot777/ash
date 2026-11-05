@@ -1,26 +1,15 @@
 // 批量接力弹窗的信息层级回归：弹窗打开就得回答「哪些任务会被搬走、各带走什么」，
 // 而不是先甩五段说明文字。跑：npm -w web run test:bulk-handoff-dialog
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1000 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/bulk-handoff-dialog.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/bulk-handoff-dialog.html`);
 
   const picks = page.locator(".handoff-bulk-list");
   await picks.waitFor();
@@ -84,7 +73,7 @@ try {
   if (shot) await page.locator(".handoff-bulk-dialog").screenshot({ path: shot });
 
   // 5. 一个都没在跑时说清楚为什么、去哪儿单独搬，主按钮不能还亮着。
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/bulk-handoff-dialog.html?empty=1`);
+  await page.goto(`${web.origin}/scripts/fixtures/bulk-handoff-dialog.html?empty=1`);
   const empty = page.locator(".handoff-bulk-body .handoff-bulk-warning");
   await empty.waitFor();
   assert.match(await empty.innerText(), /没有正在跑的任务可接力[\s\S]*单任务接力/);
@@ -97,7 +86,7 @@ try {
   // 6. 预检全过、**打包阶段**才撞上「对端不认识你」:结果页不能是死胡同。
   //    第 2 轮审查复现的就是这一档 —— 代码已经识别为「可就地补 key」,可结果页把输入框
   //    整个挡在了另一个渲染分支里,用户只看得到「已完成:成功 0 个」和一颗「完成」。
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/bulk-handoff-dialog.html?runkey=1`);
+  await page.goto(`${web.origin}/scripts/fixtures/bulk-handoff-dialog.html?runkey=1`);
   await page.locator(".handoff-bulk-list").waitFor();
   await page.getByRole("button", { name: "检查 2 个接力任务" }).click();
   await page.getByRole("button", { name: /停止并接力 2 个任务/ }).click();
@@ -124,7 +113,7 @@ try {
   );
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }
 
 console.log("bulk handoff dialog layout ok");

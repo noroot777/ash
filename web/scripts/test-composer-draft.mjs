@@ -1,19 +1,12 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 新建任务框是主工作区的一个内嵌状态：点一下侧栏的任务、开聊天、进设置，它就整个卸载。
 // 这条钉住「写到一半去看一眼别的」不等于清空——正文、传好的图、还在传的图都得留着，
 // 而且只在**创建成功**或用户自己按「清空草稿」时才丢。
-const root = fileURLToPath(new URL("..", import.meta.url));
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const paste = (name) => async (page) => page.evaluate(({ name, png }) => {
   const textarea = document.querySelector(".composer-objective textarea");
@@ -25,10 +18,6 @@ const paste = (name) => async (page) => page.evaluate(({ name, png }) => {
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
   const createdBodies = [];
@@ -98,7 +87,7 @@ try {
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/composer-draft.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/composer-draft.html`);
 
   const objective = page.locator(".composer-objective textarea");
   const leave = page.getByRole("button", { name: "去别的页面", exact: true });
@@ -184,5 +173,5 @@ try {
   console.log("composer draft persistence test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

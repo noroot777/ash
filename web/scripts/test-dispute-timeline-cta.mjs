@@ -9,26 +9,15 @@
 // ④ 它得长得像颗按钮：在那句话的同一行上、不被挤断行——①②③ 全过的那一版，按钮是竖着
 //    的三个字（用户 2026-09-24：「这个按钮做的也太儿戏了」）。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/dispute-timeline-cta.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/dispute-timeline-cta.html`);
 
   const open = page.locator(".open-fixture");
   const resolved = page.locator(".resolved-fixture");
@@ -79,7 +68,7 @@ try {
   //    20px 的头像列（用户 2026-09-24 截图：「这个按钮做的也太儿戏了」）。DOM 断言对这类
   //    事一无所知，所以这里量真实盒子：**同一行、不折行**，四种旁注方案挨个过。
   for (const mode of ["aligned", "footnote", "collapsed", "attached"]) {
-    await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/dispute-timeline-cta.html?systemNotices=${mode}`);
+    await page.goto(`${web.origin}/scripts/fixtures/dispute-timeline-cta.html?systemNotices=${mode}`);
     const row = page.locator(".open-fixture .system-event-digest, .open-fixture .system-event-row").first();
     await row.waitFor();
     const cta = await page.locator(".open-fixture .system-event-cta").boundingBox();
@@ -106,5 +95,5 @@ try {
   console.log("dispute timeline cta tests passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

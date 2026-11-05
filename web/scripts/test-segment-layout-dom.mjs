@@ -13,28 +13,17 @@
 // (见 markdownLayout),压根没有 `.task-agent-segment` 这一层了。画不出东西的步骤因此连
 // 一个节点都不进 DOM —— 这个数就是那件事的直接读数。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/segment-layout.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/segment-layout.html`);
   await page.locator("#feed").waitFor();
 
   const feed = page.locator("#feed");
@@ -119,5 +108,5 @@ try {
   console.log("segment-layout DOM regression passed(平铺 + 展开过程 两种排布)");
 } finally {
   if (browser) await browser.close();
-  await server.close();
+  await web.close();
 }

@@ -9,26 +9,15 @@
 //   ④ 把自己降下去要过确认，而且降完这一屏得自己关上：导航项没了、面板还挂着，而普通
 //      成员拿到的 `GET /users` 是精简版，照原样渲染就是一屏空目录名。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1000 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/users-role.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/users-role.html`);
 
   const rows = page.locator(".users-row");
   await rows.first().waitFor();
@@ -116,7 +105,7 @@ try {
   //     一闪而过那一帧靠轮询抓不着，用 MutationObserver 盯每一次提交的 DOM。
 
   // ⑤ auth state 慢半拍刷回来。
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/users-role.html?slowRefresh=500`);
+  await page.goto(`${web.origin}/scripts/fixtures/users-role.html?slowRefresh=500`);
   await page.locator(".users-row").first().waitFor();
   await watchForSlimRows(page);
   await selfDemote(page, rows, roleOf);
@@ -124,7 +113,7 @@ try {
   assert.equal(await slimRowsSeen(page), 0, "auth 刷回来之前，一帧都不许拿精简名单渲染管理表");
 
   // ⑥ auth state 刷不回来。
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/users-role.html?failRefresh=1`);
+  await page.goto(`${web.origin}/scripts/fixtures/users-role.html?failRefresh=1`);
   await page.locator(".users-row").first().waitFor();
   await watchForSlimRows(page);
   await selfDemote(page, rows, roleOf);
@@ -144,7 +133,7 @@ try {
   console.log("[users-role] ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }
 
 /** 把「阿岚」（也就是当前这个会话自己）降成普通成员，走完那道确认。 */

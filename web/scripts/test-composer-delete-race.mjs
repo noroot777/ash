@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 新建面板「创建并排队」在途提交期间删除刚建任务的迟到响应回归(第 7、8、9 轮审查)。
 // 夹具挂真实 useTasks + 真实面板开合接线(fixtures/composer-delete-race.tsx):
@@ -16,11 +14,9 @@ import { launchChrome } from "./dom-stage.mjs";
 //      正文都保留(逐字段比较漏附件的回归;不删任务,正是审查的原始复现);
 //   G. 第 10 轮:同 F 但正文改过又改回原值 → 放行,草稿保留(任何变化都失去清空资格);
 //   E. 对照:没删过的首次创建照常插入并选中、面板收起。
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 let browser;
 try {
-  await server.listen();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
@@ -88,7 +84,7 @@ try {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
   });
 
-  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/composer-delete-race.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/composer-delete-race.html`);
   const objective = page.getByRole("textbox", { name: "任务目标" });
   const rows = page.getByTestId("rows");
   const composerOpen = page.getByTestId("composer-open");
@@ -235,5 +231,5 @@ try {
   console.log("composer delete-while-inflight regression passed (refetch + draft ownership + attachments)");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

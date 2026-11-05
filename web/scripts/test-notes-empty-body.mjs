@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 「写几个字 → 全删掉 → 点下面的删除」曾经把整个面板焊死：删除按钮点不动、Esc 也关不掉、
 // 换不到别的随手记。根因是落盘函数把「正文空，服务端不收」和「保存真失败」压成同一个
@@ -15,14 +13,9 @@ import { createServer } from "vite";
 // ⑥ 「在途那次请求存了哪一版」不等于「当前草稿可以安全离开」：附件单独落盘的结论是
 //    「正文空存不上」，可等它回包时正文早写上新内容了 —— 统一关口必须回头重判当前草稿，
 //    不能拿上一次请求的结论替它放行（第 2 轮审查发现 1）。
-const root = fileURLToPath(new URL("..", import.meta.url));
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const note = (id, body, updatedAt) => ({
   id,
@@ -36,10 +29,6 @@ const note = (id, body, updatedAt) => ({
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1180, height: 860 } });
   const rows = new Map([
@@ -104,7 +93,7 @@ try {
     }
     await reply([]);
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/notes-panel.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/notes-panel.html`);
 
   const selectedRow = page.locator(".note-row.is-selected");
   const status = page.locator(".notes-panel footer span").first();
@@ -226,5 +215,5 @@ try {
   console.log("notes panel empty-body test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

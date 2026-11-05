@@ -16,16 +16,9 @@
 // 隔离：调用方怎么取 key 都不许漏节点。顺带把 React 的重复 key 警告也收进断言 —— 开发构建
 // 里它是这类事故唯一的免费信号。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const gateRun = {
   id: "gate-run-1",
@@ -49,10 +42,6 @@ const gateRun = {
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1100, height: 700 } });
   const errors = [];
@@ -77,7 +66,7 @@ try {
     return route.fulfill({ status: 500, json: { error: "unexpected request" } });
   });
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/reply-rail.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/reply-rail.html`);
   const rail = page.locator(".task-reply-rail");
   await rail.waitFor();
   // 两张卡都得先真的画出来,否则后面数到的 1 可能只是「它压根没出现」。
@@ -144,5 +133,5 @@ try {
   console.log("reply rail dom ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

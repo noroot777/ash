@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 const artifacts = await mkdtemp(join(tmpdir(), "ash-conversation-fork-"));
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer.address();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   const errors = [];
@@ -44,7 +39,7 @@ try {
     if (path.endsWith("/notices")) return json({ notices: [], remedy: null });
     return json([]);
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/conversation-fork.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/conversation-fork.html`);
   const forks = page.getByRole("button", { name: "派生新任务", exact: true });
   // 打断的那条、审查那条都确实渲染在页面上（不是因为没画出来才数不到按钮）。
   await page.getByText("刚查到一半就被打断的回复", { exact: true }).waitFor();
@@ -134,5 +129,5 @@ try {
   console.log(`conversation fork UI, creation failure/retry, draft isolation, narrow screen: passed (${artifacts})`);
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

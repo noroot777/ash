@@ -10,9 +10,7 @@
 //
 // 跑法：npm -w web run test:context-compact-quick
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const PROFILE = {
   id: "claude-official",
@@ -25,19 +23,10 @@ const PROFILE = {
   isDefault: true,
 };
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 760 } });
   const patches = [];
@@ -66,7 +55,7 @@ try {
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/context-compact-quick.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/context-compact-quick.html`);
 
   /** 等一个只有 node 侧看得见的条件（请求计数）成立。 */
   const until = async (predicate, message) => {
@@ -136,5 +125,5 @@ try {
   console.log("context compact quick settings test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

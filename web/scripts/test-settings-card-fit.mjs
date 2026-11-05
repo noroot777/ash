@@ -10,32 +10,21 @@
 //
 // 跑法：npm -w web run test:settings-card-fit
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { assertCardsFit, findCardBleed } from "./settings-card-fit.mjs";
 
 const WIDTHS = [1440, 1180, 1000, 900, 820, 700, 620];
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await page.emulateMedia({ reducedMotion: "reduce" });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/settings-card-fit.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/settings-card-fit.html`);
   await page.locator(".project-preview .settings-card").waitFor();
   await page.locator(".agent-profile-table").first().waitFor();
 
@@ -84,5 +73,5 @@ try {
   console.log("settings card fit: ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const entry = (path, kind = "file", options = {}) => ({
   name: path.split("/").at(-1),
@@ -80,10 +75,6 @@ const listing = (taskId, path) => {
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 900, height: 760 } });
   // 没有这一条，组件新增必填回调时这页只会在点击那一刻静悄悄抛一个未捕获异常——
@@ -114,7 +105,7 @@ try {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(listing(taskId, path)) });
   });
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/file-tree-git.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/file-tree-git.html`);
   const row = (name) => page.locator(".file-tree__row", { has: page.locator(".file-tree__name", { hasText: name }) });
   const exactRow = (name) => page.locator(".file-tree__row").filter({ has: page.locator(".file-tree__name", { hasText: name }) }).first();
   const gitKind = async (name) => exactRow(name).getAttribute("data-git-kind");
@@ -314,5 +305,5 @@ try {
   console.log("file tree git decorations: ok（含头部「打开工作目录」真实点击）");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

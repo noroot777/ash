@@ -13,12 +13,9 @@
 //      登录完会被钉在登录页、错误屏上点「重试」永远退不出去。
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
 import { readSource } from "../../scripts/read-source.mjs";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
 const gateSource = readSource(new URL("../src/auth/AuthGate.tsx", import.meta.url));
 const indexSource = readSource(new URL("../index.html", import.meta.url));
 const probeSource = readSource(new URL("../src/lib/authProbe.ts", import.meta.url));
@@ -46,14 +43,7 @@ assert.match(probeSource, /window\.__ashAuthProbe/, "authProbe.ts 接的全局�
 
 const AUTH_STATE = { mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false };
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  // watch: null —— 这几个夹具页跑完就走,不需要 HMR。留着 watcher 会在收尾时残留 FSEvent
-  // 句柄,进程偶发退不出去(实测 1/6);而这条测试挂在 build 链上,卡住就是一次无输出、
-  // 无报错、永不返回的构建。
-  server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
-});
+const web = await startWebServer();
 
 // ④ 用的那个:直接把**真 index.html 原文**喂给浏览器,不经 vite。
 // 早先这一段是在 vite 上导航 `/` 再用 page.route 把 `main.tsx` 顶掉的,那会让 vite 只
@@ -93,10 +83,7 @@ const watchTransitions = `
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const origin = `http://127.0.0.1:${address.port}`;
+  const origin = web.origin;
 
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 800 } });
@@ -166,7 +153,7 @@ try {
   console.log("auth boot: 快路径无过渡屏、慢路径只给等待态、预热与 bundle 并行、快照只兑现一次 ✔");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
   indexHost.closeAllConnections?.();
   await new Promise((resolve) => indexHost.close(resolve));
 }

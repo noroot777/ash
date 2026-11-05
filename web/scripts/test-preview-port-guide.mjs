@@ -16,26 +16,15 @@
 //   ④ **没写端口不报警。** 一半的运行时自己读 PORT 环境变量，对它们报警等于教一条错规则。
 //      唯一会弹出来的是方言写反了，那条零误报。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/preview-port-guide.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/preview-port-guide.html`);
 
   const box = page.getByLabel("本次预览命令");
   const guide = page.locator(".preview-port-guide");
@@ -126,5 +115,5 @@ try {
   console.log("preview port guide: rule both halves, one-click samples, host dialect, mismatch-only warning, on-screen port drift (fixable / config-pinned / silent-when-correct) and per-occurrence dismissal passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

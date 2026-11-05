@@ -10,9 +10,7 @@
 // 这条测试走真链路:真 RunTargetPicker 的第三段 + 真 `api.patchSettings`。服务端用
 // page.route 顶掉,按「当前额度档」给出两套不同的目录,就像真服务端那样。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const MODEL = "codex-auto-review";
 // 共用档:服务端探到了 CLI 的原话。隔离档:一次都不问宿主机 CLI,只给内置快照,
@@ -31,19 +29,10 @@ const CATALOG = (shared) => [{
   ...(shared ? { modelEfforts: { [MODEL]: ["low", "medium", "high", "xhigh", "max"] } } : {}),
 }];
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
 
@@ -79,7 +68,7 @@ try {
   await page.route("**/api/llm-providers", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/cli-effort-policy.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/cli-effort-policy.html`);
 
   const effortTrigger = page.getByRole("button", { name: /智能水平：/ });
   const toggle = page.getByTestId("toggle-quota");
@@ -158,5 +147,5 @@ try {
   console.log("cli effort policy switch test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

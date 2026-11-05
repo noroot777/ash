@@ -3,6 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "//testStage": "test 链被 scripts/test-runner.mjs 并行跑时，先用它起一份共用的 Chrome 和 vite 交给所有 DOM 回归（单独跑某条测试时不经过它）。",
+  "testStage": "scripts/dom-stage.mjs",
   "scripts": {
     "test:cli-commands": "node scripts/test-cli-commands-ui.mjs && node scripts/test-cli-goal-lifecycle-ui.mjs",
     "test:native-work": "npm -w @ash/server run test:native-work && tsx scripts/test-native-work-metadata.ts && tsx scripts/test-native-work-presentation.tsx && node scripts/test-native-work-dom.mjs",

@@ -1,19 +1,12 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 远程访问 ash 时粘一张图，上传要走完整条链路（base64 过网 + 落盘），可能好几秒到十几秒。
 // 这条钉住那段时间里界面必须说话：在途卡片 + 百分比 + 创建按钮先挡住（否则刚粘的图会被
 // 悄悄扔掉，因为附件路径是上传成功才有的），以及取消不算失败。
-const root = fileURLToPath(new URL("..", import.meta.url));
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 // 一次粘贴一个或多个文件：多文件时是**一个** paste 事件带多张，跟真实的多选粘贴一致。
 const paste = (...names) => async (page) => page.evaluate(({ names, png }) => {
@@ -26,10 +19,6 @@ const paste = (...names) => async (page) => page.evaluate(({ names, png }) => {
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
   const createdBodies = [];
@@ -107,7 +96,7 @@ try {
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/composer-upload.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/composer-upload.html`);
 
   const objective = page.locator(".composer-objective textarea");
   await objective.fill("把这张图上的问题修掉");
@@ -212,5 +201,5 @@ try {
   console.log("composer upload progress test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

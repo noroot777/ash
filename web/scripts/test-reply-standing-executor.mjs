@@ -7,23 +7,12 @@
 // 留着新的乐观值 —— 胶囊写着新模型、实际跑的是旧的。
 // 跑法：npm -w web run test:reply-standing-executor
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   // 两个已注册执行器（胶囊的候选来自它们），其余接口在这个 fixture 里不参与判定。
   const PROFILES = [
@@ -40,7 +29,7 @@ try {
         body: path.endsWith("/agents") ? JSON.stringify(PROFILES) : "[]",
       });
     });
-    await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/reply-standing-executor.html${query}`);
+    await page.goto(`${web.origin}/scripts/fixtures/reply-standing-executor.html${query}`);
     return page;
   };
 
@@ -172,5 +161,5 @@ try {
   console.log("reply standing executor test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

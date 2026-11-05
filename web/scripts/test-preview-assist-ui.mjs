@@ -37,25 +37,14 @@
 // null 该读成哪一种、填还是不填。
 // 跑法：npm -w web run test:preview-assist-ui
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { editorText } from "./preview-assist-shared.mjs";
 import { fallbackArbitrationCases } from "./preview-assist-fallback-cases.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   // 一个 context 里开页面（不是 browser.newPage()，那样每页一份独立存储）：⑪ 要的正是
   // **同源、共享 localStorage 的两个标签页**，作业所有权不能在它们之间串。
@@ -65,7 +54,7 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const caseId = `assist-${process.pid}-${Date.now()}`;
-  const url = `http://127.0.0.1:${address.port}/scripts/fixtures/project-settings-draft.html?case=${caseId}`;
+  const url = `${web.origin}/scripts/fixtures/project-settings-draft.html?case=${caseId}`;
   await page.goto(url);
 
   const script = page.getByRole("textbox", { name: "启动脚本", exact: true });
@@ -421,10 +410,10 @@ try {
   assert.deepEqual(errors, [], "AI 协助面板不应产生运行时异常");
 
   // ⑭–⑰ 那一整档（没有 Web Locks 的降级路）各自另开 context，拆到单独文件里，见那边的开头说明。
-  await fallbackArbitrationCases({ browser, address, caseId });
+  await fallbackArbitrationCases({ browser, origin: web.origin, caseId });
 
   console.log("preview ai assist: ok (rounds, cancel, restart vs expiry, dropped start recovered, dropped-but-succeeded kept, manual edit protected, keep-mine wording, fill once, stale success not reapplied, foreign job stays read-only, reused job never claimed, second tab never claims, copied session never claims, silent owner still owns, late answer revokes, provisional claim never fills, same-tab reload keeps filling, reloaded owner outranks provisional copy, cloned handoff never fills, picked model really runs, stale first read never buries a running job, cross-round self-write mark consumed)");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

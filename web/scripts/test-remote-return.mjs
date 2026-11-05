@@ -1,17 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 let browser;
 const routeErrors = [];
 const releasePending = [];
 try {
-  await server.listen();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1180, height: 780 } });
   page.setDefaultTimeout(10_000);
@@ -81,7 +77,7 @@ try {
     }
     await route.fulfill({ status: 500, json: { error: routeErrors.at(-1) } }).catch(() => undefined);
   });
-  const url = `http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/remote-return.html`;
+  const url = `${web.origin}/scripts/fixtures/remote-return.html`;
   const openReturn = async () => {
     await page.getByRole("button", { name: "移回本机…", exact: true }).click();
     return page.getByRole("dialog");
@@ -357,7 +353,7 @@ try {
 } finally {
   releasePending.forEach((release) => release());
   await browser?.close();
-  await server.close();
+  await web.close();
   assert.deepEqual(routeErrors, [], "所有模拟 API 请求都应被处理；未预期请求或重复移回必须在主流程报错");
 }
 

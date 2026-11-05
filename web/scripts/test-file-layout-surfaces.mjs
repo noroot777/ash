@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // **平铺/目录树在另外两处清单上：Git 工作台「更改」、审查页「改动文件」轨。**
 //
@@ -15,19 +13,11 @@ import { createServer } from "vite";
 //   ② 审查页：选中态是按 sections 下标记的，摆成树之后下标不能错位——错了就是「点 A 开 B」；
 //   ③ localStorage 用不了时，切换仍然当场生效（只是记不住），见文件末尾那一节。
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const base = `http://127.0.0.1:${address.port}/scripts/fixtures`;
+  const base = `${web.origin}/scripts/fixtures`;
 
   browser = await launchChrome();
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -141,5 +131,5 @@ try {
   console.log("file layout surfaces test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

@@ -13,13 +13,11 @@
 //  ⑩ 铺开那一列：迟到的旧批量摘要不许把已经显示的新摘要顶回去。
 //  ⑪ 同一条备忘的两发写逆序返回时，晚到的旧回执不许盖掉后发那一版。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const LONG = "几百字一条的备忘：".repeat(40);
 
-let server;
+let web;
 let browser;
 
 /** 这一页的后端：一份内存清单 + 几条端点。返回的对象能让用例直接读/改它。 */
@@ -191,13 +189,8 @@ async function selectContents(locator) {
 }
 
 try {
-  server = await createServer({
-    root: fileURLToPath(new URL("..", import.meta.url)),
-    logLevel: "error",
-    server: { host: "127.0.0.1", port: 0 },
-  });
-  await server.listen();
-  const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+  web = await startWebServer();
+  const origin = web.origin;
   browser = await launchChrome();
 
   // ── ① 面板：空态 → 写一条 → 改 → 删 ─────────────────────────────────────
@@ -573,5 +566,5 @@ try {
   console.log("task-memo DOM regression passed");
 } finally {
   await browser?.close();
-  await server?.close();
+  await web?.close();
 }

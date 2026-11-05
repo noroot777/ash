@@ -6,9 +6,7 @@
 // - 直播事件顺手补的那发 sessions 没有代号守卫，切走后才回来会盖掉新任务的会话；
 // - 正文读失败时如果也算「读完了」，问答卡照样铺满一屏——那正是要消除的形态。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 会话 .md 里每条回合行的前导分隔符（0x1e），前端按它切出 user/system 段。
 const RS = String.fromCharCode(30);
@@ -24,13 +22,12 @@ const session = (id, taskId, startedAt = "2026-09-10T01:00:00Z") => ({
 });
 const outputFor = (sessionId) => outputs[sessionId] ?? outputs[sessionId.replace(/-(s\d+|late)$/, "")] ?? "";
 
-const server = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 let browser;
 const pending = [];
 try {
-  await server.listen();
   browser = await launchChrome();
-  const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+  const origin = web.origin;
   const failures = [];
 
   /** 开一页，路由交给调用方按段定制；默认行为是「两个任务都正常」。 */
@@ -562,5 +559,5 @@ try {
 } finally {
   pending.forEach((release) => release());
   await browser?.close();
-  await server.close();
+  await web.close();
 }

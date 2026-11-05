@@ -2,23 +2,12 @@
 // 逻辑层的分类和 continuation 由 test:conversation-notes 钉住，这里钉的是渲染结果。
 // 设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   // 旁注上的时间是 formatInstant 按**本地时区**渲染的，fixture 里写的是 UTC 时刻。
   // 不钉时区的话，同一份 fixture 在 UTC 机器上显示 07:02、在 UTC+8 上显示 15:02，
@@ -28,7 +17,7 @@ try {
     viewport: { width: 1000, height: 1400 },
     timezoneId: "Asia/Shanghai",
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/conversation-notes.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/conversation-notes.html`);
 
   const notes = page.locator(".system-event-digest");
   await notes.first().waitFor();
@@ -150,5 +139,5 @@ try {
   console.log("conversation-notes-dom ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

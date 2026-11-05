@@ -8,12 +8,9 @@
 // 生效(凭据是一份,不是每个开关一份)。
 // 设 SHOT=<路径> 顺带截一张图自查版式。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0, strictPort: false } });
+const web = await startWebServer();
 
 const HEADER = "x-ash-human-action-token";
 // 下一份凭据走**响应头**(shared 的 HUMAN_ACTION_TOKEN_NEXT_HEADER):烧掉它的是闸,发下一份
@@ -29,12 +26,9 @@ const at = (n) => `2026-10-31T0${n}:00:00.000Z`;
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 900, height: 900 }, timezoneId: "Asia/Shanghai" });
-  const origin = `http://127.0.0.1:${address.port}`;
+  const origin = web.origin;
   const fixture = `${origin}/scripts/fixtures/turn-remedy.html`;
 
   /** 每次 reclaim 请求带上来的凭据,按顺序记下 —— 轮换对不对全看这串。 */
@@ -179,5 +173,5 @@ try {
   console.log("turn remedy: 读不准的记录照实说、没恢复时开关与下一步都留着、凭据按响应头轮换(业务拒绝之后照样按得动)、凭据 403 给出重新加载入口 ✔");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

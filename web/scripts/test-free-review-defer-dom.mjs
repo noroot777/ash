@@ -14,26 +14,15 @@
 // ⑧ 那一句人话真的被渲染成大字正文色——它是整屏唯一的主角，被通用段落样式压成灰小字
 //    就等于白写（这两条都是第 1 轮审查记下的 N1/N2）。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/free-review-defer.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/free-review-defer.html`);
 
   const deferOnly = page.locator(".defer-only-fixture");
   const reasonOnly = page.locator(".reason-only-fixture");
@@ -289,5 +278,5 @@ try {
 
   console.log("free review defer dom tests passed");} finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

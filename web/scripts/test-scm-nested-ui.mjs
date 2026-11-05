@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // **嵌套 Git 仓库那一行：看得见，但一个操作都不给。**
 //
@@ -35,18 +34,11 @@ const overview = {
   commits: [],
 };
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const url = `http://127.0.0.1:${address.port}/scripts/fixtures/scm-stale.html`;
+  const url = `${web.origin}/scripts/fixtures/scm-stale.html`;
 
   browser = await launchChrome();
   const page = await browser.newPage();
@@ -101,5 +93,5 @@ try {
   console.log("scm nested ui test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

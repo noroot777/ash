@@ -18,28 +18,17 @@
 //
 // 跑法:npm -w web run test:roving-choice
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
   const failures = [];
   page.on("pageerror", (error) => failures.push(String(error)));
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/roving-choice.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/roving-choice.html`);
   await page.locator('[data-testid="pill"]').waitFor();
 
   /** 一组的现状:每颗候选的取值、选中位、Tab 停靠点、焦点在不在它身上。 */
@@ -159,5 +148,5 @@ try {
   console.log("test-roving-choice ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

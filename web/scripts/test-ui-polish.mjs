@@ -1,24 +1,15 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 800 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/ui-polish.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/ui-polish.html`);
 
   const render = (html) => page.locator("#root").evaluate((node, value) => { node.innerHTML = value; }, html);
   const renderProbe = (name) => page.locator("#root").evaluate((node, value) => {
@@ -184,5 +175,5 @@ try {
   console.log("[ui-polish] responsive reachability, auth scoping, panel geometry, danger color and reduced-motion checks passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

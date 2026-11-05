@@ -8,26 +8,15 @@
 //   ③ A 的请求**晚一步**回来时，不许清掉 B 正在进行的动作、不许关掉 B 的日志入口，
 //      也不许在 B 的页面上弹通知、开新标签页 —— 用户此刻看的根本不是 A。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/preview-task-switch.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/preview-task-switch.html`);
 
   // ① A 上点开预览，请求挂着 —— 这颗现在是可点的取消。
   await page.getByRole("button", { name: "打开预览" }).click();
@@ -80,5 +69,5 @@ try {
   console.log("preview task switch: ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

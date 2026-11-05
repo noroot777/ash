@@ -1,21 +1,13 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object");
-  const url = `http://127.0.0.1:${address.port}/scripts/fixtures/git-workbench-polling.html`;
+  const url = `${web.origin}/scripts/fixtures/git-workbench-polling.html`;
   browser = await launchChrome();
   const page = await browser.newPage();
   const control = (expression, argument) => page.evaluate(expression, argument);
@@ -95,5 +87,5 @@ try {
   console.log("git workbench polling test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

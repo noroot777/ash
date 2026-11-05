@@ -7,10 +7,8 @@
 //
 // 跑法：npm -w web run test:provider-visibility
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { assertCardsFit, findCardBleed } from "./settings-card-fit.mjs";
-import { createServer } from "vite";
 
 const provider = (id, name, pinnedModels) => ({
   id,
@@ -26,19 +24,10 @@ const provider = (id, name, pinnedModels) => ({
   createdAt: new Date().toISOString(),
 });
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
   await page.route("**/api/llm-providers", (route) => route.fulfill({
@@ -67,7 +56,7 @@ try {
       skipped: null,
     }]),
   }));
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/provider-visibility.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/provider-visibility.html`);
 
   const modelTrigger = page.getByRole("button", { name: /模型：/ });
   await modelTrigger.click();
@@ -97,7 +86,7 @@ try {
   assert.match(await panel.textContent() ?? "", /没有匹配的模型/);
 
   // ② 另一半:选不到它这件事,供应商页面要当面说,并且就在那儿给出去处。
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/provider-mount-state.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/provider-mount-state.html`);
   const row = (name) => page.locator(".provider-row").filter({ hasText: name });
   await row("已挂中转").first().waitFor();
   assert.match(await row("已挂中转").first().textContent() ?? "", /1 个执行器在用/);
@@ -156,7 +145,7 @@ try {
       body: JSON.stringify([{ id: "claude-relay", name: "claude@已挂中转", type: "claude", providerId: "p-mounted", isDefault: true }]),
     });
   });
-  await settingsPage.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/providers-settings-load.html`);
+  await settingsPage.goto(`${web.origin}/scripts/fixtures/providers-settings-load.html`);
 
   await settingsPage.locator(".provider-row").first().waitFor();
   assert.equal(await settingsPage.locator(".provider-row").count(), 2, "读到的两家供应商不许因为 /agents 失败而消失");
@@ -193,7 +182,7 @@ try {
   await settingsPage.route("**/api/llm-providers", (route) => route.fulfill({
     status: 503, contentType: "application/json", body: JSON.stringify({ error: "模拟：供应商列表暂时不可用" }),
   }));
-  await settingsPage.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/providers-settings-load.html`);
+  await settingsPage.goto(`${web.origin}/scripts/fixtures/providers-settings-load.html`);
   await settingsPage.getByText(/供应商列表读取失败/).waitFor();
   assert.doesNotMatch(await settingsPage.locator(".settings-section").textContent() ?? "", /还没有供应商/);
   assert.match(await settingsPage.getByTestId("notices").textContent() ?? "", /供应商列表暂时不可用/);
@@ -202,5 +191,5 @@ try {
   console.log("provider visibility test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

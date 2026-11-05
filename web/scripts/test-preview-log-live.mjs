@@ -11,24 +11,14 @@
 //   ④ 取消赢了、那趟 POST 却随后 200 回来：不许再说「预览已打开」，不许开窗——它手上
 //      那个地址已经被 DELETE 停掉了。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { checkPreviewServiceRegressions } from "./preview-service-review-checks.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const base = `http://127.0.0.1:${address.port}/scripts/fixtures/preview-log-live.html`;
+  const base = `${web.origin}/scripts/fixtures/preview-log-live.html`;
 
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
@@ -189,5 +179,5 @@ try {
   console.log("preview log live: ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

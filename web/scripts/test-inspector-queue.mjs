@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 真实 Inspector 回调链的迟到响应回归(第 6 轮审查两条拦验收):
 // ① insert 响应在途期间 SSE 送达更晚的「移出」,旧响应放行后不得反转回排队中;
@@ -11,11 +9,9 @@ const T1 = "2026-10-08T06:00:05.000Z"; // K1 健康入队
 const T6 = "2026-10-08T06:00:06.000Z"; // K2 的在途 insert 响应(旧)
 const T9 = "2026-10-08T06:00:09.000Z"; // SSE 送达的移出(新)
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 let browser;
 try {
-  await server.listen();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
@@ -47,7 +43,7 @@ try {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
   });
 
-  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/inspector-queue.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/inspector-queue.html`);
   const rows = page.getByTestId("rows");
   const pickA = async () => {
     await page.locator(".task-inspector-queue-after .ui-select-trigger").click();
@@ -88,5 +84,5 @@ try {
   console.log("inspector queue-after late-response regression passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 验收动作宿主(.acceptance-host)的几何。钉的是一条契约,不是某一张卡的特例:
 //
@@ -17,8 +15,7 @@ import { launchChrome } from "./dom-stage.mjs";
 //    展开钮和状态点,所以标题认显式标记而不是「第一个孩子」。
 // ④ 窄视口下地板不许反过来把自己顶出去(min() 退回 100%),以及 duet 在 600px 以下
 //    改竖排时 ② 仍然成立(纵向主轴下 flex-basis:100% 会变成高度,所以契约写的是 min-width)。
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0, strictPort: false } });
+const web = await startWebServer();
 
 const BLOCK = "验收前置命令尚未确认整棵进程树退出，工作区仍被占用；暂不能合并或清理。";
 
@@ -58,10 +55,7 @@ const probe = () => [...document.querySelectorAll("[data-host]")].map((section) 
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const fixture = `http://127.0.0.1:${address.port}/scripts/fixtures/acceptance-host-layout.html`;
+  const fixture = `${web.origin}/scripts/fixtures/acceptance-host-layout.html`;
   browser = await launchChrome();
 
   // 880px 是现场那一屏的中栏宽度：标题块在修复前被压到 56px、折成 128px 高的竖排，
@@ -102,5 +96,5 @@ try {
   console.log("acceptance host layout: title floor, full-row default for unclassed members, four hosts, 1280/880/760/560px passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

@@ -1,20 +1,16 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const server = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false } });
+const web = await startWebServer();
 let browser;
 try {
-  await server.listen();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" }));
   page.setDefaultTimeout(5000);
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
-  const fixture = `http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/page-interactions.html`;
+  const fixture = `${web.origin}/scripts/fixtures/page-interactions.html`;
   const card = page.getByRole("status", { name: "未提交改动" });
   const submit = card.getByRole("button", { name: "一键提交改动" });
   for (const scenario of ["running", "disabled", "shared"]) {
@@ -70,5 +66,5 @@ try {
   console.log("acceptance workspace DOM: shared scope, disabled vs busy, persistent failure across polling and successful retry passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

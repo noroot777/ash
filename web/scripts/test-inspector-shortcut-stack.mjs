@@ -1,21 +1,11 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
 const serveOnly = process.argv.includes("--serve");
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const url = `http://127.0.0.1:${address.port}/scripts/fixtures/inspector-shortcut-stack.html`;
+  const url = `${web.origin}/scripts/fixtures/inspector-shortcut-stack.html`;
   if (serveOnly) {
     console.log(JSON.stringify({ url }));
     await new Promise((resolve) => { process.once("SIGINT", resolve); process.once("SIGTERM", resolve); });
@@ -32,5 +22,5 @@ try {
   }
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

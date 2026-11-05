@@ -9,26 +9,17 @@
 //      点开之后退回自由输入的完整路径框（服务端不钳他，界面不该更严）。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const HOME = "/srv/ash-root/xiaocai";
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1000 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/create-project-scope.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/create-project-scope.html`);
 
   const dialog = page.locator(".create-project-dialog");
   await dialog.waitFor();
@@ -97,7 +88,7 @@ try {
   // ④ 普通成员没有出口；管理员有，而且点开之后是自由填完整路径。
   assert.equal(await dialog.getByRole("button", { name: "用其它路径…" }).count(), 0, "普通成员不该看到跳出目录的开关");
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/create-project-scope.html?role=admin`);
+  await page.goto(`${web.origin}/scripts/fixtures/create-project-scope.html?role=admin`);
   await dialog.locator(".path-scoped").waitFor();
   assert.equal(
     await dialog.locator(".path-scoped code").innerText(),
@@ -125,5 +116,5 @@ try {
   console.log("create-project scope: ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

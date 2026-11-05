@@ -20,16 +20,9 @@
 //    「各段各渲染一遍」——那样结论里引用明细里的图片定义/脚注就两头落空(审查第 4 轮
 //    R2)。所以两层都展开时,整篇报告仍然只有一个 `.task-markdown`。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 /** 一段文本里某个片段出现几次。数「恰好一次」用它，不用 `getByText`——后者连祖先一起算。 */
 const times = (text, needle) => text.split(needle).length - 1;
@@ -54,13 +47,9 @@ const spread = async (scope) => {
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/review-report-split.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/review-report-split.html`);
 
   const six = page.locator(".six-problems-fixture");
   await six.locator(".task-markdown").first().waitFor();
@@ -204,5 +193,5 @@ try {
   console.log("review report summary fold dom ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

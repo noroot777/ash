@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 写操作落地了、但「现在的工作区长什么样」没读到时，面板必须**说出来并停掉写操作**。
 //
@@ -29,18 +28,10 @@ const overviewOf = (staged) => ({
   commits: [],
 });
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
 
@@ -61,7 +52,7 @@ try {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, affected: 1 }) });
   });
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/scm-stale.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/scm-stale.html`);
 
   const stageOne = page.getByRole("button", { name: "暂存 a.txt" });
   const commit = page.locator(".scm-commit__submit");
@@ -99,5 +90,5 @@ try {
   console.log("scm stale test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

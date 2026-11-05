@@ -3,26 +3,15 @@
 // 所以一个用例把三处都走一遍，免得改一处漏两处。
 // 跑：npm -w web run test:task-tree-paging
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/task-tree-paging.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/task-tree-paging.html`);
 
   // —— 一、主列表：45 条旧任务被年龄闸折起来。
   const mainList = page.locator(".workspace-task-section");
@@ -91,5 +80,5 @@ try {
   console.log("✓ 任务树分页展开：主列表 / 执行者 / 其他项目都是一次 20 条，收起随时可用");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

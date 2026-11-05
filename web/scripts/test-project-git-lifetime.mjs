@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // **git 操作跑到一半，浮层不许被误触抹掉。**
 //
@@ -28,8 +26,6 @@ import { createServer } from "vite";
 // ⑦ 守的是**读取错误跟操作结果必须住在一起**：分家成两套状态，合并出来的 error 就永远
 // 非空，做成了的操作会一直显示成在报错。
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-
 const until = async (probe, hint) => {
   for (let i = 0; i < 100; i += 1) {
     if (await probe()) return;
@@ -38,18 +34,11 @@ const until = async (probe, hint) => {
   throw new Error(`等不到：${hint}`);
 };
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const url = `http://127.0.0.1:${address.port}/scripts/fixtures/project-git-lifetime.html`;
+  const url = `${web.origin}/scripts/fixtures/project-git-lifetime.html`;
 
   browser = await launchChrome();
   const page = await browser.newPage();
@@ -207,5 +196,5 @@ try {
   console.log("project git lifetime test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

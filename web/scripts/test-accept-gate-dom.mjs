@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
 import { testAcceptGateWaitBar } from "./test-accept-gate-wait-bar.mjs";
@@ -37,12 +35,7 @@ import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
 // 姊妹文件装的是**另外几个表面**（这份贴着 700 行上限，按表面拆）：主会话页那条「正在跑」
 // 的折叠条在 test-accept-gate-wait-bar.mjs（⑩ 那条并发读取就在那边），断线重连与任务投影
 // 对账在 test-accept-gate-recovery.mjs，真人动作那一道闸在 test-accept-gate-actions.mjs。
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const json = (route, body, status = 200) =>
   route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -73,10 +66,7 @@ const basis = (mode, runRow = null) => ({ mode, run: runRow });
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-  const base = `http://127.0.0.1:${address.port}/scripts/fixtures/accept-gate.html`;
+  const base = `${web.origin}/scripts/fixtures/accept-gate.html`;
 
   browser = await launchChrome();
 
@@ -626,5 +616,5 @@ try {
   console.log("accept gate card DOM regression passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

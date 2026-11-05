@@ -1,17 +1,10 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 撤回一条待发送消息 = 把它从队列上取下来 + 原样放回对话框（正文、图片、文件）。
 // 这条用真浏览器点那颗按钮，钉住两件事：取消成功才回填、取消失败一个字都不动。
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const message = (id, text, attachments) => ({
   id,
@@ -38,10 +31,6 @@ const PENDING = [
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
   let deleted = [];
@@ -82,7 +71,7 @@ try {
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/withdraw-scheduled.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/withdraw-scheduled.html`);
 
   const input = page.getByRole("textbox", { name: "回复任务" });
   await page.getByRole("button", { name: "展开全部 3 条" }).click();
@@ -135,5 +124,5 @@ try {
   console.log("withdraw scheduled message test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

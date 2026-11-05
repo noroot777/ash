@@ -10,26 +10,15 @@
 // 审查门、团队执行者要跑，拿任务状态当闸，讲完的回合会一直摊着不收（用户 2026-09-01：
 // 「这个执行完了怎么没有自动折叠」）。折起来之后用户自己动过折角，重绘也不许按回去。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1400 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/turn-fold.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/turn-fold.html`);
 
   const turn = (name) => page.locator(`[data-case="${name}"]`);
   const fold = (name) => turn(name).locator("details.task-turn-process");
@@ -175,5 +164,5 @@ try {
   console.log("turn fold dom tests passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

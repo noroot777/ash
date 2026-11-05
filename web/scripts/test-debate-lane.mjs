@@ -12,26 +12,15 @@
 //    542px 里那七段是一根一万像素高的细条）。
 // 外加一条兜底：拿不到 reviews（只读会话视图）时，原始行必须原样还在，不能凭空少掉。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1100 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/debate-lane.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/debate-lane.html`);
 
   const folded = page.locator(".folded-fixture");
   const fallback = page.locator(".fallback-fixture");
@@ -160,5 +149,5 @@ try {
   console.log("debate lane tests passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

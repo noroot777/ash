@@ -1,21 +1,14 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const server = await createServer({
-  root: fileURLToPath(new URL("..", import.meta.url)), logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer.address();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/personal-cli-settings.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/personal-cli-settings.html`);
   const block = agent => page.locator(".pcli-block").filter({ has: page.getByRole("heading", { name: agent, exact: true }) });
   await block("codex").waitFor();
   assert.equal(await page.getByRole("button", { name: "新建技能", exact: true }).count(), 0);
@@ -66,5 +59,5 @@ try {
   console.log("personal CLI settings: creation entry removed; existing skill and full-size memory editors verified");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

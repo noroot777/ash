@@ -13,16 +13,9 @@
 //   ⑤ 话里那条「设置 → 项目设置 → 预览 → 选择服务」是**能点的路**：点一下就去那一节、
 //      停在预览那张卡上。而且链接不许改动原话——这段文字是拿来照抄的。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 /** 两个槽位此刻各自在显示什么（没挂上去就是 null）。 */
 const readSlots = () => {
@@ -48,13 +41,9 @@ const visibleSlot = (page, testId) => page.locator(`[data-testid="${testId}"].is
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/preview-error-toast.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/preview-error-toast.html`);
 
   // ① 起预览 —— 后端 409 回来一整份「认出了哪几个、各自怎么起」。
   await page.getByRole("button", { name: "打开预览" }).click();
@@ -105,5 +94,5 @@ try {
   console.log("preview error toast: ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

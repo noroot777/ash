@@ -3,31 +3,20 @@
 // 未识别的 /api 请求会明确失败，不会落到真实后端。跑：npm -w web run test:handoff-source-addresses
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
 const originalUrl = "http://192.168.1.51:4317";
 const savedUrl = "http://192.168.1.187:4317";
 const output = process.env.HANDOFF_SOURCE_SHOT_DIR;
 if (output) await mkdir(output, { recursive: true });
 
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1180, height: 900 } });
-  const fixture = `http://127.0.0.1:${address.port}/scripts/fixtures/handoff-source-addresses.html`
+  const fixture = `${web.origin}/scripts/fixtures/handoff-source-addresses.html`
     + "?project=fixture-project&task=fixture-task";
   await page.goto(fixture);
   await page.evaluate(() => localStorage.removeItem("ash:fixture:handoff-source-address"));
@@ -88,7 +77,7 @@ try {
   if (output) await page.screenshot({ path: `${output}/handoff-source-refreshed.png`, fullPage: true });
 
   for (const scenario of ["return", "pending-return", "pending-out"]) {
-    await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/handoff-key-identity.html?scenario=${scenario}`);
+    await page.goto(`${web.origin}/scripts/fixtures/handoff-key-identity.html?scenario=${scenario}`);
     const keyInput = page.getByRole("textbox", { name: "你在对端的账号 key" });
     await keyInput.fill("wrong-key");
     await page.getByRole("button", { name: "保存并重新检查" }).click();
@@ -102,7 +91,7 @@ try {
   }
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }
 
 console.log("handoff source addresses browser flow ok");

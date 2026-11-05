@@ -1,13 +1,9 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 let browser;
 try {
-  await server.listen();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
@@ -57,7 +53,7 @@ try {
     if (path === "/api/tasks/task-1" && request.method() === "GET") taskRefetches += 1;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
   });
-  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/composer-upload.html?repo`);
+  await page.goto(`${web.origin}/scripts/fixtures/composer-upload.html?repo`);
   const objective = page.getByRole("textbox", { name: "任务目标" });
   const switchMode = (name) => page.getByRole("tab", { name, exact: true }).click();
   const openLaunch = () => page.getByRole("button", { name: /^启动设置：/ }).click();
@@ -291,5 +287,5 @@ try {
   console.log("composer studio: auxiliary popovers, nested dismissal, persistent config, templates, responsive layout, payload and project worktree default passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

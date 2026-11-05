@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
 const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0, strictPort: false } });
+const web = await startWebServer();
 const messages = Array.from({ length: 10 }, (_, index) => ({
   id: `monitor-${index}`, taskId: "task-a", text: `【哨兵结束】检查 ${index}，退出码 0。命令自己跑完了。`,
   attachments: [], agent: "codex", executorId: null, model: null, reasoningEffort: null, sessionRole: null,
@@ -16,8 +14,7 @@ const messages = Array.from({ length: 10 }, (_, index) => ({
 let browser;
 try {
   await mkdir(artifacts, { recursive: true });
-  await server.listen();
-  const base = `http://127.0.0.1:${server.httpServer.address().port}`;
+  const base = web.origin;
   browser = await launchChrome();
   for (const variant of ["single", "team"]) {
     const context = await browser.newContext({ viewport: { width: 390, height: 400 } });
@@ -93,5 +90,5 @@ try {
   console.log("✓ 原型共用高度边界与中性取消说明通过");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

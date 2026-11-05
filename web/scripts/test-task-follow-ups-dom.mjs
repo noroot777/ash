@@ -3,26 +3,15 @@
 // 不能只是把焦点挪过去 —— 默认那一条本来就露着，光挪焦点画面上什么都不变。
 // 跑法：npm -w web run test:task-follow-ups-dom
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/task-follow-ups.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/task-follow-ups.html`);
 
   const head = page.locator(".task-inspector-follow-ups-head");
   const items = page.locator(".task-inspector-follow-ups li pre");
@@ -75,5 +64,5 @@ try {
   console.log("task follow-ups Q tests passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

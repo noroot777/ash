@@ -4,9 +4,7 @@
 // 从 test-monitor-inspector-dom.mjs 拆出来的（全局约定:单文件不超过 700 行）。那边是面板/图标
 // 条/切任务这一组用例，`test-monitor-composer-dom.mjs` 是「它什么时候算完」那一格 —— 两边起的
 // 是同一份台子，所以台子只写一处:哪天 fixture 的 API 形状变了，不会只改对一半。
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 export const LONG_CWD = "/Users/fjh/code/harness/.worktrees/S3Bp7iPC8wOe/server/scripts/fixtures/deeply/nested/working/directory";
 export const LONG_COMMAND = "tail -F /var/log/very-long-path/build-output-with-an-extremely-long-name.log | grep --line-buffered -E 'ERROR|FAILED|Traceback'";
@@ -41,14 +39,9 @@ export const monitor = (id, taskId, over = {}) => ({
  * 判据在**每次渲染**里同步跑,它一抛整棵树就卸载 —— 那种事只有真壳子看得见。
  */
 export async function openHarness() {
-const server = await createServer({
-  root: fileURLToPath(new URL("..", import.meta.url)),
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0 },
-});
-  await server.listen();
+  const web = await startWebServer();
   const browser = await launchChrome();
-  const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+  const origin = web.origin;
   const failures = [];
   const open = async (handler, query = "") => {
     const page = await browser.newPage();
@@ -87,7 +80,7 @@ const server = await createServer({
   );
   const close = async () => {
     await browser.close();
-    await server.close();
+    await web.close();
   };
-  return { server, browser, origin, failures, open, idsOf, waitIds, close };
+  return { browser, origin, failures, open, idsOf, waitIds, close };
 }

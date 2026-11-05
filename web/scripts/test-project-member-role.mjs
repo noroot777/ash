@@ -7,26 +7,15 @@
 //   ② 选「项目管理员」再加，请求里带的就是 admin，落到名单里那一行也是管理员；
 //   ③ 加完角色回落成「成员」——下一次加人不继承上一次那个更高的权限。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1000 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/project-member-role.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/project-member-role.html`);
 
   const add = page.locator(".pmem-add");
   await add.waitFor();
@@ -86,5 +75,5 @@ try {
   console.log("project member role tests passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

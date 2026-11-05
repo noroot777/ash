@@ -9,26 +9,15 @@
 //   ⑤ 设置页自己指的路同样能点：「默认规则」里那句「worktree 默认值搬去项目级了」一点
 //      就落到项目设置的工作目录那张卡上。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/settings-path-jump.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/settings-path-jump.html`);
 
   // ① 报一句「预览起不来」，那条路成了链接，原话没被改动。
   await page.getByTestId("raise-ambiguous").click();
@@ -81,5 +70,5 @@ try {
   console.log("settings path jump: ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

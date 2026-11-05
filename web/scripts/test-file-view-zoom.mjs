@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 // 中间栏摊开的文件全文 / 单文件 diff 也能放大：跟审查里的分支 diff 同一种层（`.zoom-layer`）
 // ——铺满窗口、盖住左边的任务栏、让开右边的 inspector（文件树还要接着点）、Esc 退出。
@@ -13,11 +12,7 @@ import { createServer } from "vite";
 //    成左缘一条细条——它们共用同一个 `useZoomLayer`，修在共用层，就得三处各验一遍。
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const FILE_TEXT = "const keep = 0;\nexport const value = 2;\n";
 const DIFF_TEXT = [
@@ -58,10 +53,6 @@ const listing = {
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   await page.route("**/api/tasks/**", async (route) => {
@@ -112,7 +103,7 @@ try {
     return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
   });
 
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/file-view-zoom.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/file-view-zoom.html`);
 
   const row = (name) => page.locator(".file-tree__row").filter({ has: page.locator(".file-tree__name", { hasText: name }) }).first();
   const zoomLayer = page.locator(".zoom-layer");
@@ -268,5 +259,5 @@ try {
   console.log("file view zoom test passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

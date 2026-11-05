@@ -2,23 +2,12 @@
 // 判定逻辑由 test:reviewer-turn 钉住，这里钉的是「看得出来」和「没动别的」两件事。
 // 设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
   await page.route(/\/api\/tasks\/t1\/review\/file/, async (route) => {
@@ -38,7 +27,7 @@ try {
       body: `# 自由派审报告 ${params.get("run")} 第 ${params.get("round")} 轮`,
     });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/reviewer-turn.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/reviewer-turn.html`);
 
   const messages = page.locator(".task-message--agent");
   await messages.first().waitFor();
@@ -307,5 +296,5 @@ try {
   console.log("reviewer-turn-dom ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

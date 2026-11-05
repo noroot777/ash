@@ -1,17 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
 const output = fileURLToPath(new URL("../../output/playwright", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object");
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   // 抽屉是滑进来的：量位置前先等它的 CSS 动画跑完（fake clock 不影响 CSS 动画时间线）。
@@ -26,7 +21,7 @@ try {
     await page.clock.runFor(200);
     await page.getByLabel("子智能体执行详情", { exact: true }).waitFor({ state: "detached" });
   };
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/native-work.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/native-work.html`);
   await page.clock.install();
 
   assert.equal(await page.getByRole("tab", { name: "子智能体" }).count(), 0, "Inspector starts hidden");
@@ -231,5 +226,5 @@ try {
   console.log("native work Inspector DOM regression passed");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

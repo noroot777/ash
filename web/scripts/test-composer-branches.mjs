@@ -1,18 +1,14 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 let browser;
 try {
-  await server.listen();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const url = `http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/composer-branches.html`;
+  const url = `${web.origin}/scripts/fixtures/composer-branches.html`;
   const objective = page.getByRole("textbox", { name: "任务目标" });
   const directory = page.getByRole("button", { name: /^工作目录：/ });
   const submit = page.locator(".studio-submit");
@@ -168,5 +164,5 @@ try {
   assert.deepEqual(errors, []);
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

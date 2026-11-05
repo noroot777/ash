@@ -1,21 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object");
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const url = `http://127.0.0.1:${address.port}/scripts/fixtures/task-mode-paging.html`;
+  const url = `${web.origin}/scripts/fixtures/task-mode-paging.html`;
   await page.goto(url);
   await page.locator('[data-task-id="a-live"]').waitFor();
   const group = (name) => page.locator(".workspace-task-project-group").filter({
@@ -155,5 +150,5 @@ try {
   console.log("✓ 任务模式分页：独立 20 条展开、历史深链/切模式不自动展开、年龄闸优先且自动揭示不带历史、计数口径不变、J/K/上下键按可见顺序导航");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

@@ -16,26 +16,15 @@
 // 「哪一档」的判据由纯函数测试穷举（`test-review-report-format/boundary/fallback/claim`）。
 // 这一份只验**屏幕上真的是那样**。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage();
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/review-report-split.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/review-report-split.html`);
 
   const conforming = page.locator(".conforming-fixture");
   await conforming.locator(".task-markdown").first().waitFor();
@@ -370,5 +359,5 @@ try {
   console.log("review report split dom ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

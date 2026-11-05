@@ -13,28 +13,17 @@
 // 去 DOM 上猜。这份测试钉的就是「产品算的那个数，在真实 DOM 更新里管不管用」——
 // 纯函数断言预设标记已经正确，挡不住这一类。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/stick-to-bottom.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/stick-to-bottom.html`);
   await page.locator("#feed").waitFor();
 
   const feed = page.locator("#feed");
@@ -181,5 +170,5 @@ try {
   console.log("stick-to-bottom DOM regression passed");
 } finally {
   if (browser) await browser.close();
-  await server.close();
+  await web.close();
 }

@@ -7,15 +7,10 @@
 // 跑法：npm -w web run test:file-mention-dom
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
-import { createServer } from "vite";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({
-  root,
-  logLevel: "error",
-  server: { host: "127.0.0.1", port: 0, strictPort: false },
-});
+const web = await startWebServer();
 
 const PROFILES = [
   { id: "profile-codex", name: "codex@local", type: "codex", isDefault: true },
@@ -37,10 +32,6 @@ const IGNORED = new Set(["dist/api.js"]);
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
-
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   // 让某一个查询慢下来：验「旧候选不许被新 token 的回车选中」那一条时打开。
@@ -114,7 +105,7 @@ try {
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/file-mention.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/file-mention.html`);
 
   const textarea = page.getByRole("textbox", { name: "回复任务" });
   const menu = page.getByRole("listbox", { name: "召唤智能体或引用文件" });
@@ -300,5 +291,5 @@ try {
   console.log("file-mention-dom: ok");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }

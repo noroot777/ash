@@ -6,24 +6,18 @@
 // 照单全收。同时钉住反向那一条 —— 用户点开折叠块、专门去选里面某条工具输出时,
 // 拿到的仍是那条输出本身(别为了去噪把人家要的东西也抹了)。
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, startWebServer } from "./dom-stage.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
-const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
+const web = await startWebServer();
 
 let browser;
 try {
-  await server.listen();
-  const address = server.httpServer?.address();
-  assert(address && typeof address === "object", "Vite test server did not expose a port");
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
   page.setDefaultTimeout(20_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/selection-content.html`);
+  await page.goto(`${web.origin}/scripts/fixtures/selection-content.html`);
   await page.getByText("第 3 条改完了。", { exact: true }).waitFor();
 
   const memo = page.getByRole("button", { name: "添加到备忘", exact: true });
@@ -258,5 +252,5 @@ try {
   console.log("✓ 会话选文只取正文:剔不出正文时内部还原能收口(不逐帧重算)、每一截都是原选区的子区间(从正文岛中间起步不补前半句)、只选到空白时撤掉浮条、折起来的卡片保住摘要行那段正文、隐藏子树一个字不漏、浮条按下去必定兑现、跨消息选区剔掉执行过程/头像身份头/账目尾栏(展开状态也剔)、装置压头压尾、整段都是装置时不给浮条、整个落在装置内时原样保留、无装置时与原生 toString 一致、代码缩进与多行用户消息的排版原样保住、没有任何标记的卡片靠 HTML 语义照样剔干净头尾");
 } finally {
   await browser?.close();
-  await server.close();
+  await web.close();
 }
