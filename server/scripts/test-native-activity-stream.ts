@@ -59,7 +59,10 @@ assert.equal(body(push("a", { kind: "thinking", text: "分析" })), "A");
 const beforeTool = push("a", { kind: "tool", name: "Read", detail: "src/main.ts" });
 assert.deepEqual(activity(beforeTool).map((event) => event.kind), ["thinking", "tool"]);
 assert.equal(body(buffer.push({ kind: "tool", name: "Agent", nativeWork: { type: "agent", id: "b", status: "completed" } })), "B");
-assert.deepEqual(push("c", { kind: "text", text: "换行\n" }), [childActivity("c", { kind: "text", text: "换行\n" })]);
+// 以换行收尾的文本原样直通：比的是推进去的**那一个**事件。另造一个 childActivity 当期望值会
+// 再打一次 `new Date()`，两次调用跨过毫秒边界时 `at` 不等，断言就随机红。
+const passthrough = childActivity("c", { kind: "text", text: "换行\n" });
+assert.deepEqual(buffer.push(passthrough), [passthrough]);
 push("a", { kind: "text", text: "续跑末尾" });
 assert.equal(body(buffer.push({ kind: "turnEnd" })), "续跑末尾");
 assert.deepEqual(buffer.push({ kind: "done", exitStatus: 0 }), [{ kind: "done", exitStatus: 0 }]);
