@@ -6,8 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "vite";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const fixture = spawn(process.execPath, ["--import", "tsx", "server/scripts/side-chat-browser-fixture.ts"], { cwd: fileURLToPath(new URL("../..", import.meta.url)), stdio: ["ignore", "pipe", "pipe"] });
@@ -25,7 +24,7 @@ try {
   server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0, proxy: { "/api": { target: backend } } } });
   await server.listen();
   const address = server.httpServer.address();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   page.setDefaultTimeout(10000);
   const errors = [];

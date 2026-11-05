@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 // 验收动作宿主(.acceptance-host)的几何。钉的是一条契约,不是某一张卡的特例:
 //
@@ -63,7 +62,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const fixture = `http://127.0.0.1:${address.port}/scripts/fixtures/acceptance-host-layout.html`;
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
 
   // 880px 是现场那一屏的中栏宽度：标题块在修复前被压到 56px、折成 128px 高的竖排，
   // 恰好是「地板」那条断言唯一会红的宽度档。560px 则是 duet 改竖排的那一档。

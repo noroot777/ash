@@ -14,9 +14,8 @@
 //  ⑪ 同一条备忘的两发写逆序返回时，晚到的旧回执不许盖掉后发那一版。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const LONG = "几百字一条的备忘：".repeat(40);
 
@@ -199,7 +198,7 @@ try {
   });
   await server.listen();
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
 
   // ── ① 面板：空态 → 写一条 → 改 → 删 ─────────────────────────────────────
   {

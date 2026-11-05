@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -85,7 +84,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 900, height: 760 } });
   // 没有这一条，组件新增必填回调时这页只会在点击那一刻静悄悄抛一个未捕获异常——
   // tsc 不看 scripts/fixtures，回归又从来不点那两颗按钮，于是两道闸一起漏（第 3 轮审查 N1）。

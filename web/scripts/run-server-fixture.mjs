@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 export async function runServerFixture(script, check) {
   const repo = fileURLToPath(new URL("../../", import.meta.url));
@@ -46,7 +45,7 @@ export async function runServerFixture(script, check) {
       await exited;
       return;
     }
-    browser = await chromium.launch(await chromeLaunchOptions());
+    browser = await launchChrome();
     const page = await browser.newPage();
     page.setDefaultTimeout(10_000);
     const errors = [];

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 // 夹具里的 `/image-preview-*.png` 得**真吐出字节**：取不到的站内图会被正文自己收掉
@@ -32,7 +31,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage();
   const localOpenRequests = [];
   const taskFileOpenRequests = [];

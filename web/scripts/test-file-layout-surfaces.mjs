@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 // **平铺/目录树在另外两处清单上：Git 工作台「更改」、审查页「改动文件」轨。**
@@ -30,7 +29,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const base = `http://127.0.0.1:${address.port}/scripts/fixtures`;
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
 
   // ── ① Git 工作台「更改」 ────────────────────────────────────────────────

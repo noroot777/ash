@@ -4,8 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "vite";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { previewAnnotationRuntime } from "../../server/src/preview-annotation-runtime.ts";
 import { parseAnnotationBatch } from "../../shared/src/page-annotation-batch.ts";
 import { checkFloatingPreview, previewClearRatio } from "./preview-floating-checks.mjs";
@@ -20,7 +19,7 @@ export async function testPreviewWorkspaceDom() {
   try {
     await server.listen();
     const address = server.httpServer.address();
-    browser = await chromium.launch(await chromeLaunchOptions());
+    browser = await launchChrome();
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));

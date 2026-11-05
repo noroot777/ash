@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
@@ -30,7 +29,7 @@ try {
   await mkdir(artifacts, { recursive: true });
   await server.listen();
   const address = server.httpServer.address();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.setDefaultTimeout(10000);
   const errors = [];

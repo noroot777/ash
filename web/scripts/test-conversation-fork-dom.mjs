@@ -3,9 +3,8 @@ import { fileURLToPath } from "node:url";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
@@ -14,7 +13,7 @@ let browser;
 try {
   await server.listen();
   const address = server.httpServer.address();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));

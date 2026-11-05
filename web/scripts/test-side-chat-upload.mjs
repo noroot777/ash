@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 // 侧聊里 Ctrl/⌘V 粘图：跑的是真的 /uploads 路由 + 真的 /chats/:id/messages，所以这条
 // 用例同时钉住三段——传上去、拼进 prompt（attachmentsPrompt 那段固定文本）、在气泡里
@@ -25,7 +24,7 @@ try {
   server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0, proxy: { "/api": { target: backend } } } });
   await server.listen();
   const address = server.httpServer.address();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
   page.setDefaultTimeout(10000);
   const errors = [];

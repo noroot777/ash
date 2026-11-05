@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({ root, logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
@@ -13,7 +12,7 @@ const routeErrors = [];
 const releasePending = [];
 try {
   await server.listen();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1180, height: 780 } });
   page.setDefaultTimeout(10_000);
   const pageErrors = [];

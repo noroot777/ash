@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 // 派审对话框里删审查者。每一段一张干净页面：
@@ -82,7 +81,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const base = `http://127.0.0.1:${address.port}/scripts/fixtures/free-review-delete.html`;
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
 
   // 一个独立页面 + 一份独立的「服务端」内存清单。onList / onDelete 返回 true 表示它已经
   // 自己 fulfill 了这一次请求（用来演慢响应和 503）。

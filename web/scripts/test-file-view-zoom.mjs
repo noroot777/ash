@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 // 中间栏摊开的文件全文 / 单文件 diff 也能放大：跟审查里的分支 diff 同一种层（`.zoom-layer`）
@@ -63,7 +62,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   await page.route("**/api/tasks/**", async (route) => {
     const url = new URL(route.request().url());

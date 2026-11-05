@@ -4,9 +4,8 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const output = await mkdtemp(join(tmpdir(), "ash-chat-browser-"));
@@ -33,7 +32,7 @@ try {
   await server.listen();
   const address = server.httpServer.address();
   assert(address && typeof address === "object");
-  browser = await chromium.launch({ ...await chromeLaunchOptions(), headless: true });
+  browser = await launchChrome();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   page.setDefaultTimeout(12000);
   const errors = [];

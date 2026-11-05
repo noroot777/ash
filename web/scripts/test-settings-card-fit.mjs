@@ -11,9 +11,8 @@
 // 跑法：npm -w web run test:settings-card-fit
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { assertCardsFit, findCardBleed } from "./settings-card-fit.mjs";
 
 const WIDTHS = [1440, 1180, 1000, 900, 820, 700, 620];
@@ -31,7 +30,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await page.emulateMedia({ reducedMotion: "reduce" });
   const errors = [];

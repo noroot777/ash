@@ -7,9 +7,8 @@
 // - 正文读失败时如果也算「读完了」，问答卡照样铺满一屏——那正是要消除的形态。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 // 会话 .md 里每条回合行的前导分隔符（0x1e），前端按它切出 user/system 段。
 const RS = String.fromCharCode(30);
@@ -30,7 +29,7 @@ let browser;
 const pending = [];
 try {
   await server.listen();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const failures = [];
 

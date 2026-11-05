@@ -11,8 +11,7 @@
 // page.route 顶掉,按「当前额度档」给出两套不同的目录,就像真服务端那样。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 const MODEL = "codex-auto-review";
@@ -45,7 +44,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage();
 
   // 服务端替身。`shared` 就是实例设置里那一档,PATCH 改它、GET 目录读它。

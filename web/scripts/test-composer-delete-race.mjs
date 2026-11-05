@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 // 新建面板「创建并排队」在途提交期间删除刚建任务的迟到响应回归(第 7、8、9 轮审查)。
 // 夹具挂真实 useTasks + 真实面板开合接线(fixtures/composer-delete-race.tsx):
@@ -22,7 +21,7 @@ const server = await createServer({ root, logLevel: "error", server: { host: "12
 let browser;
 try {
   await server.listen();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));

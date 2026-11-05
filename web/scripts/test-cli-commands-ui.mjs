@@ -6,8 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { goalRecoveryFixtures, goalRecoverySessions, runGoalRecoveryUi, seedGoalRecoveryTranscripts } from "./cli-goal-recovery-ui.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "ash-cli-ui-"));
@@ -144,7 +143,7 @@ try {
     assert.ok(Date.now() < deadline && backend.exitCode === null, log);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  browser = await chromium.launch({ ...await chromeLaunchOptions(), headless: true });
+  browser = await launchChrome();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));

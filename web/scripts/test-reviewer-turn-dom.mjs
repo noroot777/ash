@@ -3,8 +3,7 @@
 // 设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -20,7 +19,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
   await page.route(/\/api\/tasks\/t1\/review\/file/, async (route) => {
     const round = new URL(route.request().url()).searchParams.get("round") ?? "?";

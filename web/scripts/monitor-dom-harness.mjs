@@ -5,9 +5,8 @@
 // 条/切任务这一组用例，`test-monitor-composer-dom.mjs` 是「它什么时候算完」那一格 —— 两边起的
 // 是同一份台子，所以台子只写一处:哪天 fixture 的 API 形状变了，不会只改对一半。
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 export const LONG_CWD = "/Users/fjh/code/harness/.worktrees/S3Bp7iPC8wOe/server/scripts/fixtures/deeply/nested/working/directory";
 export const LONG_COMMAND = "tail -F /var/log/very-long-path/build-output-with-an-extremely-long-name.log | grep --line-buffered -E 'ERROR|FAILED|Traceback'";
@@ -48,7 +47,7 @@ const server = await createServer({
   server: { host: "127.0.0.1", port: 0 },
 });
   await server.listen();
-  const browser = await chromium.launch(await chromeLaunchOptions());
+  const browser = await launchChrome();
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const failures = [];
   const open = async (handler, query = "") => {

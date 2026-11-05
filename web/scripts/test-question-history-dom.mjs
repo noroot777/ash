@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const server = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
 let browser;
@@ -11,7 +10,7 @@ const pending = [];
 const record = (id) => ({ id, question: `${id}的问题`, answer: `${id}的答案`, reply: `【答复】\n${id}的答案`, answeredAt: `2026-09-10T02:00:00Z` });
 try {
   await server.listen();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
   const open = async (query, { autoOpen = true, respond = async () => ({ json: [] }) } = {}) => {
     const page = await browser.newPage();

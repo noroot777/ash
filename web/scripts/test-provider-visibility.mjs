@@ -8,8 +8,7 @@
 // 跑法：npm -w web run test:provider-visibility
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { assertCardsFit, findCardBleed } from "./settings-card-fit.mjs";
 import { createServer } from "vite";
 
@@ -40,7 +39,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
   await page.route("**/api/llm-providers", (route) => route.fulfill({
     status: 200,

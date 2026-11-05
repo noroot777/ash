@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 // 随手记里粘的图是「传完之后由 effect 折进当前草稿」的，所以上传没落地就切走/关掉，
@@ -32,7 +31,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1100, height: 820 } });
   const rows = new Map([["note-a", note("note-a", "第一条随手记")], ["note-b", note("note-b", "第二条随手记")]]);
   const patched = [];

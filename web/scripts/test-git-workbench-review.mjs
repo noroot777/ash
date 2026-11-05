@@ -11,9 +11,8 @@ import {
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -193,7 +192,7 @@ try {
   await vite.listen();
   const address = vite.httpServer?.address();
   assert(address && typeof address === "object", "Vite did not expose a port");
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
   page.on("request", (request) => {
     if (

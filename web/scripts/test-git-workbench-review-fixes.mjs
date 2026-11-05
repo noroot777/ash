@@ -5,9 +5,8 @@ import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -110,7 +109,7 @@ try {
   url.searchParams.set("gitView", "changes");
   url.searchParams.set("gitRoot", info.root);
   await mkdir(output, { recursive: true });
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await page.goto(url.href);
   await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();

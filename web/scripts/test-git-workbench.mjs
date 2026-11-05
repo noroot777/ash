@@ -5,9 +5,8 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -151,7 +150,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/git-workbench.html?project=${encodeURIComponent(info.projectId)}`;
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
   page.on("pageerror", (error) => browserErrors.push(error.message));
   page.on("console", (message) => {

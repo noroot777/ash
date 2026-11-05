@@ -38,8 +38,7 @@
 // 跑法：npm -w web run test:preview-assist-ui
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 import { editorText } from "./preview-assist-shared.mjs";
 import { fallbackArbitrationCases } from "./preview-assist-fallback-cases.mjs";
@@ -57,7 +56,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   // 一个 context 里开页面（不是 browser.newPage()，那样每页一份独立存储）：⑪ 要的正是
   // **同源、共享 localStorage 的两个标签页**，作业所有权不能在它们之间串。
   const context = await browser.newContext({ viewport: { width: 1000, height: 1200 } });

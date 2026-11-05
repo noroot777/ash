@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const serveOnly = process.argv.includes("--serve");
@@ -21,7 +20,7 @@ try {
     console.log(JSON.stringify({ url }));
     await new Promise((resolve) => { process.once("SIGINT", resolve); process.once("SIGTERM", resolve); });
   } else {
-    browser = await chromium.launch(await chromeLaunchOptions());
+    browser = await launchChrome();
     const page = await browser.newPage();
     await page.goto(url);
     const result = page.locator("#result");

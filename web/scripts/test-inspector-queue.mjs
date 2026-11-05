@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 // 真实 Inspector 回调链的迟到响应回归(第 6 轮审查两条拦验收):
 // ① insert 响应在途期间 SSE 送达更晚的「移出」,旧响应放行后不得反转回排队中;
@@ -17,7 +16,7 @@ const server = await createServer({ root, logLevel: "error", server: { host: "12
 let browser;
 try {
   await server.listen();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));

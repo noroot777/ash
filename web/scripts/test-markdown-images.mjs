@@ -9,8 +9,7 @@
 //   ⑤ 画进正文的那张不再挂一张附件卡片，正文没提的照旧挂着。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
 import { IMAGE_SHAPES } from "./fixtures/markdown-shapes.ts";
@@ -76,7 +75,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/markdown-images.html`);
   await page.locator(".orphan-fixture .task-markdown").first().waitFor();

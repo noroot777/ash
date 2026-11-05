@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
@@ -79,7 +78,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const base = `http://127.0.0.1:${address.port}/scripts/fixtures/accept-gate.html`;
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
 
   // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
   // 带 delay（响应体迟到多久）或 status（直接给个 500）。不给就一直回 store.gate。

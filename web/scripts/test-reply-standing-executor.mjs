@@ -8,8 +8,7 @@
 // 跑法：npm -w web run test:reply-standing-executor
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -25,7 +24,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   // 两个已注册执行器（胶囊的候选来自它们），其余接口在这个 fixture 里不参与判定。
   const PROFILES = [
     { id: "profile-codex", name: "codex@local", type: "codex", isDefault: true },

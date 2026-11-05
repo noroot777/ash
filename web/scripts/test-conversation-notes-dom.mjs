@@ -3,8 +3,7 @@
 // 设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -20,7 +19,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   // 旁注上的时间是 formatInstant 按**本地时区**渲染的，fixture 里写的是 UTC 时刻。
   // 不钉时区的话，同一份 fixture 在 UTC 机器上显示 07:02、在 UTC+8 上显示 15:02，
   // 断言就随跑测试的机器（甚至同一台机器改了时区）时好时坏。这里把页面时区固定住，

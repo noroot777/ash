@@ -11,8 +11,7 @@
 // 跑法：npm -w web run test:context-compact-quick
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 const PROFILE = {
@@ -39,7 +38,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 760 } });
   const patches = [];
   // 前两次读执行器清单故意打成 503：一次留给「原地重试」，一次留给「收起再展开」。

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 // **git 操作跑到一半，浮层不许被误触抹掉。**
@@ -52,7 +51,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/project-git-lifetime.html`;
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage();
   await page.goto(url);
 

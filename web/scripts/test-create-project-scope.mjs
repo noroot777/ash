@@ -9,8 +9,7 @@
 //      点开之后退回自由输入的完整路径框（服务端不钳他，界面不该更严）。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 const HOME = "/srv/ash-root/xiaocai";
@@ -27,7 +26,7 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 1000 } });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/create-project-scope.html`);
 

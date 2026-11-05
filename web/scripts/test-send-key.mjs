@@ -27,8 +27,7 @@
 //      离开设置页再回来（第 4 轮审查）。界面继续声称一个没存成的档位比显示滞后危险。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -45,7 +44,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const base = `http://127.0.0.1:${address.port}/scripts/fixtures/send-key.html`;
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
   const page = await context.newPage();
 

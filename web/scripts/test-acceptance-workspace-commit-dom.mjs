@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const server = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), logLevel: "error",
   server: { host: "127.0.0.1", port: 0, strictPort: false } });
 let browser;
 try {
   await server.listen();
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" }));
   page.setDefaultTimeout(5000);

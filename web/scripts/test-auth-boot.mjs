@@ -14,10 +14,9 @@
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright-core";
 import { createServer } from "vite";
 import { readSource } from "../../scripts/read-source.mjs";
-import { chromeLaunchOptions } from "./chrome-path.mjs";
+import { launchChrome } from "./dom-stage.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const gateSource = readSource(new URL("../src/auth/AuthGate.tsx", import.meta.url));
@@ -99,7 +98,7 @@ try {
   assert(address && typeof address === "object", "Vite test server did not expose a port");
   const origin = `http://127.0.0.1:${address.port}`;
 
-  browser = await chromium.launch(await chromeLaunchOptions());
+  browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 800 } });
   // 这里每一步都该是秒级的:真卡住时要看见「卡在哪一步」,而不是让整条 build 无限期挂着。
   page.setDefaultTimeout(20_000);
