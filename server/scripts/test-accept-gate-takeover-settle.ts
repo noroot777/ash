@@ -108,7 +108,11 @@ export async function testGateTakeoverSettle(fixture: GateFixture): Promise<void
     const s = await stage("deadline");
     const row = await crash(s, "armed");
     const limit = 2_000;
-    await until(() => Date.now() - Date.parse(row.startedAt) > limit + 300, "跑过时限", limit + 5_000);
+    // 用时由启动器自己量、从它的进程起来才开始算；行上的 startedAt 落在建快照之前，比那早出
+    // 好几百毫秒到几秒（负载一高就超过余量，命令按「期限内」退出被判成 passed）。照产品接管时
+    // 的同一个锚点等：launchedAt 是 spawn 返回之后才写的，启动器此时一定已经在计时。
+    const launchedAt = Date.parse(readGateLaunch(row.logPath)!.launchedAt!);
+    await until(() => Date.now() - launchedAt > limit + 300, "跑过时限", limit + 5_000);
     writeFileSync(s.release, "0");
     await until(() => existsSync(gateExitPath(row.logPath)) && !alive(row.pid!), "命令跑完");
     overrideGateWatchTimings({ timeoutMs: limit });
