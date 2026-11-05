@@ -9,6 +9,7 @@
 // 并行执行器（scripts/test-runner.mjs）跑前端回归时先起一份共用的 Chrome 和 vite，用下面两个
 // 环境变量交给每条测试：每条测试照旧开自己的 context/page，彼此不共享任何页面状态，只省掉
 // 一百多次起停和 vite 的冷编译。单独跑某条测试时这两个变量不存在，各起各的。
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { createServer } from "vite";
@@ -19,12 +20,25 @@ export const SHARED_WEB_ENV = "ASH_TEST_WEB_ORIGIN";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
+/**
+ * 测试里的 vite 各用一份预构建缓存目录，别跟默认的 node_modules/.vite 混用。
+ *
+ * vite 按配置算一个哈希（插件名、optimizeDeps 都算在内），对不上就把整个 deps 目录重建一遍。
+ * 自带插件或依赖配置的那几条测试跟别人算出来的哈希不一样，以前串行跑轮流重建无伤大雅；并行
+ * 时它一重建，同时在跑、共用那个目录的 vite 发给页面的依赖文件就没了，页面停在白屏上干等到
+ * 超时（实测：它们一起跑，共用 vite 上的三条页面全部 30 秒等不到首屏）。
+ */
+export function viteCacheDir(name) {
+  return join(root, "node_modules", ".vite-test", name);
+}
+
 // watch: null —— 测试页跑完就走，不需要 HMR；留着 watcher 收尾时会残留 FSEvent 句柄，进程
 // 偶发退不出去。共用那份还多一层理由：任何一次文件变动触发的整页刷新会同时打断所有在跑的测试。
 async function viteServer(extra = {}) {
   const server = await createServer({
     root,
     logLevel: "error",
+    cacheDir: viteCacheDir("stage"),
     server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
     ...extra,
   });

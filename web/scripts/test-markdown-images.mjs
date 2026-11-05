@@ -9,7 +9,7 @@
 //   ⑤ 画进正文的那张不再挂一张附件卡片，正文没提的照旧挂着。
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, viteCacheDir } from "./dom-stage.mjs";
 import { createServer } from "vite";
 import { markdownImageRefs } from "@ash/shared/markdown-images";
 import { IMAGE_SHAPES } from "./fixtures/markdown-shapes.ts";
@@ -21,6 +21,7 @@ const PIXELS = '<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6"><re
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
+  cacheDir: viteCacheDir("markdown-images"),
   logLevel: "error",
   server: { host: "127.0.0.1", port: 0, strictPort: false },
   plugins: [{

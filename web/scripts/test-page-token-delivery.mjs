@@ -14,6 +14,7 @@
 // 应用文档必须带凭据**。只验「文档上有 token」证不出前者 —— 那正是上一版通过登记的盲区。
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
+import { viteCacheDir } from "./dom-stage.mjs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -90,6 +91,7 @@ try {
   // 「Failed to scan for dependencies」的收尾噪音(esbuild 被连带停掉),跟本条无关。
   dev = await createServer({
     root, logLevel: "error",
+    cacheDir: viteCacheDir("page-token"),
     optimizeDeps: { noDiscovery: true, include: [] },
     server: { host: "127.0.0.1", port: 0, strictPort: false },
   });

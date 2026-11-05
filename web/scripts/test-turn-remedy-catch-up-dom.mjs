@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, viteCacheDir } from "./dom-stage.mjs";
 import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -42,6 +42,7 @@ const emit = (event) => {
 
 const server = await createServer({
   root, logLevel: "error", server: { host: "127.0.0.1", port: 0 },
+  cacheDir: viteCacheDir("turn-remedy-catch-up"),
   plugins: [{
     name: "turn-remedy-catch-up-api",
     configureServer(dev) {

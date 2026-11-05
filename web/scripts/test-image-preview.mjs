@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./dom-stage.mjs";
+import { launchChrome, viteCacheDir } from "./dom-stage.mjs";
 import { createServer } from "vite";
 
 // 夹具里的 `/image-preview-*.png` 得**真吐出字节**：取不到的站内图会被正文自己收掉
@@ -11,6 +11,7 @@ const PIXELS = '<svg xmlns="http://www.w3.org/2000/svg" width="6" height="6"><re
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({
   root,
+  cacheDir: viteCacheDir("image-preview"),
   logLevel: "error",
   server: { host: "127.0.0.1", port: 0, strictPort: false },
   plugins: [{
