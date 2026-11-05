@@ -136,8 +136,10 @@ function schedule(leaves, history) {
  * 跑一组步骤（每步 = 一条链）。所有叶子进同一个池子（排队顺序见 schedule）；某步的叶子全部绿了
  * 就报这一步通过。返回第一条红的叶子（全绿为 null）和它的退出码。
  *
- * 不变量：无论怎么结束（全绿、某条红、执行器自己出错、收到信号），返回之前这一轮起过的进程
- * 都已经收干净 —— 包括已经退出的叶子留下的后台进程。
+ * 不变量：无论怎么结束（全绿、某条红、执行器自己出错、收到信号），返回之前这一轮认得出来的
+ * 进程都已经收干净 —— 包括已经退出的叶子留下的后台进程；看不全或收不掉就判红，不报通过。
+ * 认得出来的边界见 test-runner-processes.mjs 开头：macOS 上清空环境、脱离进程组、父进程又
+ * 先退的后代认不出来（用户 2026-11-05 接受这个限制，与 ash 验收门禁在 macOS 上同口径）。
  */
 export async function runSteps(repo, steps, { jobs = defaultJobs(), env = process.env, log = console.log } = {}) {
   if (process.platform === "win32" || env.ASH_TEST_RUNNER === "serial") return runSequentially(repo, steps, env, log);
