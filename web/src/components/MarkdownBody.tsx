@@ -4,6 +4,7 @@ import { CaretDown, X } from "@phosphor-icons/react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ReviewConclusion } from "@ash/shared";
+import { CodeBlock } from "./CodeBlock.tsx";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import { splitReviewReport } from "./reviewReportSections.ts";
 import {
@@ -175,7 +176,7 @@ function markdownComponents(latest: { current: MarkdownContext }): Components {
         <table {...props}>{children}</table>
       </div>
     ),
-    pre: ({ children }) => <pre className="task-code-block">{children}</pre>,
+    pre: ({ node, children }) => <CodeBlock node={node}>{children}</CodeBlock>,
     code: ({ children, className }) => <code className={className}>{children}</code>,
     // `div` 在这个应用里只可能是 markdownLayout 插的标记(没装 rehype-raw,正文里的
     // 裸 HTML 一个字都不解析),所以认标记之后原样兜底就够了。

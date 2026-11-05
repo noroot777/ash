@@ -113,8 +113,20 @@
 .task-markdown th > :last-child,
 .task-markdown td > :last-child { margin-bottom: 0; }
 .task-markdown code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: var(--ink); font-size: 11.5px; overflow-wrap: anywhere; }
-.task-code-block { overflow-x: auto; margin: 9px 0; border: 1px solid var(--line); border-radius: 8px; background: #f4f4f5; padding: 10px 12px; color: #27272a; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; white-space: pre; }
+.task-code-block-wrap { position: relative; margin: 9px 0; }
+.task-code-block { overflow-x: auto; margin: 0; border: 1px solid var(--line); border-radius: 8px; background: #f4f4f5; padding: 10px 12px; color: #27272a; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; white-space: pre; }
 .task-code-block code { background: transparent; padding: 0; color: inherit; overflow-wrap: normal; }
+/* 代码块右上角那颗复制：悬停这一块才露脸，免得长对话里满屏图标；触屏没有悬停，常亮。
+   复制反馈期间同样常亮，理由同气泡头部那颗（见文件开头）。 */
+.task-code-copy { position: absolute; top: 6px; right: 6px; display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--raised); color: var(--faint); opacity: 0; transition: opacity .12s; }
+.task-code-block-wrap:hover .task-code-copy,
+.task-code-copy:focus-visible,
+.task-code-copy.is-copied,
+.task-code-copy.is-copy-failed { opacity: 1; }
+.task-code-copy:hover { color: var(--ink); }
+.task-code-copy.copy-button.is-copied { color: var(--green); }
+.task-code-copy.copy-button.is-copy-failed { color: var(--red); }
+@media (hover: none) { .task-code-copy { opacity: 1; } }
 .task-markdown-image { display: block; max-width: 100%; border: 0; background: transparent; padding: 0; }
 .task-markdown img { display: block; max-width: min(100%, 680px); max-height: 460px; border: 1px solid var(--line); border-radius: 8px; object-fit: contain; }
 .markdown-action-error { margin: 7px 0 0; color: var(--red); font-size: 10.5px; }
