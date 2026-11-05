@@ -33,7 +33,7 @@ const { leaf, code } = outcome;
 
 if (code !== 0) {
   const step = STEPS[leaf?.step];
-  console.log(`[accept-test] ${step ? `${step.label}未通过` : "回归被中断"}${leaf?.command ? `（${leaf.label}）` : ""}，阻止验收。`);
+  console.log(`[accept-test] ${step ? `${step.label}未通过` : outcome.reason ?? "回归被中断"}${leaf?.command ? `（${leaf.label}）` : ""}，阻止验收。`);
   process.exit(code);
 }
 

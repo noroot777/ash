@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,7 @@ function fixture(context, { backend = "node backend.mjs && npm run test:more", w
   const root = mkdtempSync(join(tmpdir(), "ash accept-test "));
   context.after(() => rmSync(root, { recursive: true, force: true }));
   for (const dir of ["scripts", "server", "web"]) mkdirSync(join(root, dir));
-  for (const name of ["accept-test.mjs", "test-runner.mjs", "npm.mjs"]) {
+  for (const name of ["accept-test.mjs", "test-runner.mjs", "test-runner-processes.mjs", "npm.mjs"]) {
     cpSync(join(repo, "scripts", name), join(root, "scripts", name));
   }
   writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, workspaces: ["server", "web"] }));
@@ -46,6 +46,8 @@ function fixture(context, { backend = "node backend.mjs && npm run test:more", w
         environment: Object.keys(process.env).filter((key) => /^ASH_(?:DB|RUNS_DIR)$/i.test(key)) }));
     console.log(${JSON.stringify(stdout)});
     console.error(${JSON.stringify(`${stdout}_STDERR`)});
+    // FIXTURE_IGNORE_TERM_<名字>：不理 SIGTERM，逼执行器走到强杀那一步。
+    if (process.env[${JSON.stringify(`FIXTURE_IGNORE_TERM_${name.toUpperCase()}`)}]) process.on("SIGTERM", () => {});
     // FIXTURE_ORPHAN_<名字>：起一个 detached 的后台进程（自成一组、跟父进程断开），把 pid 记下来。
     if (process.env[${JSON.stringify(`FIXTURE_ORPHAN_${name.toUpperCase()}`)}]) {
       const { spawn } = await import("node:child_process");
@@ -83,6 +85,23 @@ function run(root, env = {}) {
     env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root, ...env },
     timeout: 60_000,
   });
+}
+
+// 异步跑一次，等 ready() 成立后给执行器发 signalName，返回退出码。
+async function runAndSignal(root, env, ready, signalName) {
+  const child = spawn(process.execPath, [join(root, "scripts", "accept-test.mjs")], {
+    cwd: tmpdir(), env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root, ...env }, stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stdout += chunk; });
+  const exited = new Promise((settle) => child.once("exit", (code, killedBy) => settle({ code, killedBy })));
+  const deadline = Date.now() + 20_000;
+  while (!ready() && Date.now() < deadline) await new Promise((wait) => setTimeout(wait, 50));
+  assert.ok(ready(), `没等到可以发信号的时机：${stdout}`);
+  child.kill(signalName);
+  const { code, killedBy } = await exited;
+  return { code, killedBy, stdout };
 }
 
 const seen = (root, name) => JSON.parse(readFileSync(join(root, `${name}.json`), "utf8"));
@@ -258,6 +277,64 @@ test("共用台子起不来时报红，已经在跑的叶子照样收掉", paral
   assert.ok(Date.now() - startedAt < 9_000, "台子起不来之后还在等别的叶子跑完");
   assert.match(result.stdout, /共用台子起不来：injected-stage-failure/);
   assert.match(result.stdout, /前端全量回归未通过/);
+  assert.doesNotMatch(result.stdout, /验收前置检查全部通过/);
+});
+
+// 第三方库常在执行器进程上装「收到信号就自己收摊然后 process.exit」的处理（Playwright、vite
+// 都会）。这里的台子照样装一遍，看执行器是不是仍由自己收完场才退出。
+const greedyStage = (root, { slowStop = false } = {}) => `
+  import { spawn } from "node:child_process";
+  import { writeFileSync } from "node:fs";
+  export async function startSharedStage() {
+    for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(name, () => process.exit(99));
+    process.stdin.on("end", () => process.exit(98));
+    const resource = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+    writeFileSync(${JSON.stringify(join(root, "resource.pid"))}, String(resource.pid));
+    return {
+      env: { FIXTURE_STAGE: "shared" },
+      stop: async () => {
+        writeFileSync(${JSON.stringify(join(root, "stopping"))}, "");
+        ${slowStop ? "await new Promise((wait) => setTimeout(wait, 800));" : ""}
+        resource.kill("SIGKILL");
+        await new Promise((settle) => resource.once("exit", settle));
+        writeFileSync(${JSON.stringify(join(root, "stopped"))}, "");
+      },
+    };
+  }
+`;
+
+test("收到信号时先把在跑的叶子收干净再退出，台子里装的退出处理抢不走", parallelOnly, async (context) => {
+  for (const signalName of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    const root = fixture(context, { backend: "node backend.mjs", webExtra: { testStage: "stage.mjs" } });
+    writeFileSync(join(root, "web", "stage.mjs"), greedyStage(root));
+    const { code, stdout } = await runAndSignal(root, {
+      ASH_TEST_JOBS: "2", FIXTURE_WAIT_BACKEND: "never", FIXTURE_IGNORE_TERM_BACKEND: "1", FIXTURE_WAIT_WEB: "never",
+    }, () => existsSync(join(root, "backend.started")) && existsSync(join(root, "web.started")), signalName);
+    assert.equal(alive(Number(readFileSync(join(root, "backend.started"), "utf8"))), false, `${signalName}：不理 SIGTERM 的叶子没被收掉`);
+    assert.equal(existsSync(join(root, "stopped")), true, `${signalName}：台子没被执行器收掉`);
+    assert.equal(code, { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 }[signalName], stdout);
+    assert.match(stdout, new RegExp(`收到 ${signalName}，回归被中断`));
+  }
+});
+
+test("收尾时再来信号也不打断收尾", parallelOnly, async (context) => {
+  const root = fixture(context, { webExtra: { testStage: "stage.mjs" } });
+  writeFileSync(join(root, "web", "stage.mjs"), greedyStage(root, { slowStop: true }));
+  const { code, stdout } = await runAndSignal(root, {}, () => existsSync(join(root, "stopping")), "SIGTERM");
+  assert.equal(existsSync(join(root, "stopped")), true, "台子收到一半被打断了");
+  assert.equal(alive(Number(readFileSync(join(root, "resource.pid"), "utf8"))), false);
+  assert.equal(code, 143, stdout);
+});
+
+test("进程清单看不全时不能报通过", { skip: process.platform !== "darwin" && "只有 macOS 靠 ps 看环境，Linux 读 /proc" }, (context) => {
+  // PATH 里只放 node：叶子照样跑得起来，但执行器找不到 ps，看不了谁还带着本轮的记号。
+  const root = fixture(context);
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  symlinkSync(process.execPath, join(bin, "node"));
+  const result = run(root, { PATH: bin });
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /无法确认这条起的进程已经收干净/);
   assert.doesNotMatch(result.stdout, /验收前置检查全部通过/);
 });
 

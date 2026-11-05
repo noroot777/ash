@@ -92,7 +92,9 @@ export async function startSharedStage() {
   const { server, origin } = await viteServer({ optimizeDeps: { entries: ["index.html", "scripts/fixtures/*.html"] } });
   let chrome;
   try {
-    chrome = await chromium.launchServer(await chromeLaunchOptions());
+    // 共用的这份归执行器管：Playwright 默认在执行器进程上装「收到信号就关浏览器然后
+    // process.exit」，会抢在执行器收场之前把它带走。关掉，由执行器收尾时调 stop()。
+    chrome = await chromium.launchServer({ ...await chromeLaunchOptions(), handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
   } catch (error) {
     await server.close();
     throw error;
