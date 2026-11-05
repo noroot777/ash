@@ -1,5 +1,5 @@
-// claude 内置**后台子代理**（Agent）与**后台 Bash**（`run_in_background`）随回合收尾被收走时，
-// 在任务时间线上如实留一笔。内置 Monitor 那一档见 claude-monitor-reaped.ts，口径照抬。
+// claude 内置**后台子代理**（Agent）、**后台工作流**（Workflow）与**后台 Bash**（`run_in_background`）
+// 随回合收尾被收走时，在任务时间线上如实留一笔。内置 Monitor 那一档见 claude-monitor-reaped.ts，口径照抬。
 //
 // ── 为什么要留这一笔 ─────────────────────────────────────────────────────────
 //
@@ -70,7 +70,7 @@ import { db, dbClient } from "./db/index.js";
 import { sessions } from "./db/schema.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
-export type BackgroundKind = "agent" | "bash";
+export type BackgroundKind = "agent" | "workflow" | "bash";
 
 /** 一种后台任务这一轮的结局分档。各档互斥，`total` 是它们之和。 */
 export interface BackgroundTally {
@@ -115,7 +115,7 @@ interface Tracked {
   stopOk?: boolean;
 }
 
-const KIND_LABEL: Record<BackgroundKind, string> = { agent: "后台子代理", bash: "后台 Bash" };
+const KIND_LABEL: Record<BackgroundKind, string> = { agent: "后台子代理", workflow: "后台工作流", bash: "后台 Bash" };
 
 /** 能停掉后台任务的工具。入参里指名目标的字段：`task_id`，旧名 `shell_id`。 */
 const STOP_TOOLS = new Set(["TaskStop", "KillShell", "KillBash"]);
@@ -357,11 +357,13 @@ function tallyOf(list: Iterable<readonly [Tracked, Outcome]>): Partial<Record<Ba
 }
 
 /**
- * `local_agent` 是子代理；`local_bash` 除去内置 Monitor 起的就是后台 Bash。别的类型没见过，
- * 不猜。
+ * `local_agent` 是子代理；`local_workflow` 是 Workflow 工具起的整个工作流（里面的子智能体
+ * 共用这一个 task_id，不单独起 task）；`local_bash` 除去内置 Monitor 起的就是后台 Bash。
+ * 别的类型没见过，不猜。
  */
 function kindOf(taskType: unknown, tool: string | undefined): BackgroundKind | null {
   if (taskType === "local_agent") return "agent";
+  if (taskType === "local_workflow") return "workflow";
   if (taskType === "local_bash" && tool !== "Monitor") return "bash";
   return null;
 }

@@ -270,4 +270,41 @@ const earlyChild = fromTools([
 assert.equal(earlyChild.length, 1, "派活结果晚到时合并已出现的子线程");
 assert.equal(earlyChild[0].status, "completed");
 assert.equal(earlyChild[0].activity?.filter((event) => event.kind === "text").map((event) => event.text).join(""), "已经开始\n\n");
+
+// Workflow 工具：整个工作流只有一条 local_workflow，子智能体只出现在 task_progress 的
+// workflow_progress 快照里（字段照 2026-11-05 任务 Ot0ch1PLEB-Q 的 run 文件实测值）。
+const wfAgent = (index: number, label: string, state: string, extra: Record<string, unknown> = {}) =>
+  ({ type: "workflow_agent", index, label, phaseIndex: 1, phaseTitle: "摸底", model: "claude-fable-5-1[1m]", state, promptPreview: `派给 ${label} 的说明`, ...extra });
+const wfProgress = (...agents: unknown[]) => ({ type: "system", subtype: "task_progress", task_id: "w1", tool_use_id: "wf",
+  description: "摸底: read:auth", workflow_progress: [{ type: "workflow_phase", index: 1, title: "摸底" }, ...agents] });
+const workflowRun = async (tail: unknown[]) => {
+  const out: AgentEvent[] = [];
+  for await (const event of parseClaudeStream(emit([
+    assistant("wf", "Workflow", { script: "export const meta = {}" }),
+    { type: "system", subtype: "task_started", task_id: "w1", tool_use_id: "wf", task_type: "local_workflow", description: "飞书方案", workflow_name: "feishu" },
+    result("wf", "Workflow launched in background"),
+    wfProgress(wfAgent(1, "read:auth", "start"), wfAgent(2, "research", "start")),
+    wfProgress(wfAgent(1, "read:auth", "progress", { agentId: "a1", startedAt: 1, lastToolName: "Grep", lastToolSummary: "auth-mode" }),
+      wfAgent(2, "research", "start", { agentId: "a2", startedAt: 1 })),
+    wfProgress(wfAgent(1, "read:auth", "progress", { agentId: "a1", startedAt: 1, lastToolName: "Grep", lastToolSummary: "auth-mode" }),
+      wfAgent(2, "research", "start", { agentId: "a2", startedAt: 1 })),
+    { type: "system", subtype: "task_progress", task_id: "w1", tool_use_id: "wf", description: "摸底: research", last_tool_name: "research" },
+    ...tail,
+  ]) as any)) out.push(event);
+  return out;
+};
+const wfEvents = await workflowRun([wfProgress(wfAgent(1, "read:auth", "done", { agentId: "a1", startedAt: 1, resultPreview: "鉴权摸清了" }),
+  wfAgent(2, "research", "error", { agentId: "a2", startedAt: 1, error: "rate limited" }))]);
+const wfRows = fromTools(wfEvents.filter((event) => event.kind === "tool"));
+assert.deepEqual(wfRows.map((row) => [row.title, row.status, row.nativeId]), [["摸底 · read:auth", "completed", "a1"], ["摸底 · research", "failed", "a2"]],
+  "工作流里的每个子智能体各占一行，排队时没有 agentId 也不会后来另起一行");
+assert.equal(wfRows[0].result, "鉴权摸清了");
+assert.equal(wfRows[1].result, "rate limited");
+assert.equal(wfRows[0].description, "派给 read:auth 的说明");
+assert.equal(wfRows[0].model, "claude-fable-5-1[1m]");
+assert.deepEqual(wfRows[0].activity?.map((event) => event.kind === "tool" && [event.name, event.detail]), [["Grep", "auth-mode"]], "工具进度只在变了时记一笔");
+assert.equal(wfEvents.filter((event) => event.kind === "tool" && event.nativeWork?.type === "agent").length, 6, "全量快照重发时没变的行不再产出事件");
+const wfStopped = fromTools((await workflowRun([{ type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "stopped" }]))
+  .filter((event) => event.kind === "tool"));
+assert.deepEqual(wfStopped.map((row) => row.status), ["stopped", "stopped"], "工作流整体停了，没报终态的子智能体跟着记停");
 console.log("子智能体解析、任务编号隔离、异步状态、计划更新、历史兼容与刷新一致性通过");

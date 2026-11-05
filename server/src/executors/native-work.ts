@@ -1,6 +1,6 @@
-import type { AgentEvent, NativeWorkEvent } from "@ash/shared";
+import type { AgentEvent, NativeWorkEvent, NativeWorkStatus } from "@ash/shared";
 import { nativeWorkStatus as nativeStatus } from "@ash/shared/native-work";
-import { ClaudeChildActivity } from "./native-agent-activity.js";
+import { ClaudeChildActivity, childActivity } from "./native-agent-activity.js";
 
 const names = new Set(["agent", "task", "taskcreate", "taskupdate", "taskget", "tasklist", "taskoutput", "taskstop", "todowrite", "update_plan",
   "spawn_agent", "wait", "wait_agent", "send_input", "send_message", "close_agent", "resume_agent", "followup_task", "interrupt_agent", "list_agents"]);
@@ -17,6 +17,7 @@ export class NativeWorkTrace {
   private taskCalls = new Map<string, string>();
   private agentCalls = new Set<string>();
   private progressAgents = new Set<string>();
+  private workflows = new ClaudeWorkflowWork();
   private serial = 0;
 
   call(name: string, input: unknown, id?: string, parentId?: string): AgentEvent | null {
@@ -44,6 +45,7 @@ export class NativeWorkTrace {
   claudeMessage(ev: any): AgentEvent[] {
     const out: AgentEvent[] = this.childActivity.message(ev);
     if (ev.type === "system" && /^task_(started|progress|notification)$/.test(ev.subtype)) {
+      if (this.workflows.owns(ev)) return [...out, ...this.workflows.message(ev)];
       const knownAgent = this.agentCalls.has(ev.tool_use_id) || this.taskCalls.has(ev.task_id);
       const agentType = ev.task_type === "local_agent" || ev.task_type === "remote_agent";
       if (ev.task_type === "local_bash" || (!agentType && !knownAgent)) return out;
@@ -89,6 +91,77 @@ export class NativeWorkTrace {
     }
     return out;
   }
+}
+
+/**
+ * Workflow 工具起的子智能体。
+ *
+ * 它们跟 Agent 工具派的不是一路：整个工作流只有**一个** `local_workflow` 后台任务（一个
+ * task_id），里面的子智能体既没有自己的 `task_started`，正文也不带 `parent_tool_use_id`
+ * 回流到主会话的流里（各自的记录只落在 `~/.claude/projects/…/subagents/workflows/<runId>/`）。
+ * 流里唯一能看到它们的地方是这个任务 `task_progress` 上的 `workflow_progress` 快照：每个
+ * `workflow_agent` 一条（index / label / phaseTitle / agentId / model / state /
+ * lastToolName / resultPreview …），每份快照带的是全量列表，CLI 节流着发、不是每条都带。
+ *
+ * 行的身份用「工作流调用 + index」而不是 agentId：排队时还没分到 agentId（state=start 且没有
+ * startedAt），同一行后来才补上。快照是全量重发的，只在内容变了时才产出事件，免得把执行记录刷爆。
+ */
+class ClaudeWorkflowWork {
+  private runs = new Map<string, Map<string, string>>();
+  private tools = new Map<string, string>();
+
+  owns(ev: any): boolean {
+    return ev.task_type === "local_workflow" || Array.isArray(ev.workflow_progress) || this.runs.has(ev.task_id);
+  }
+
+  message(ev: any): AgentEvent[] {
+    const run = String(ev.tool_use_id || ev.task_id || "workflow");
+    const seen = this.runs.get(ev.task_id) ?? new Map<string, string>();
+    this.runs.set(ev.task_id, seen);
+    const out: AgentEvent[] = [];
+    for (const entry of Array.isArray(ev.workflow_progress) ? ev.workflow_progress : []) {
+      if (entry?.type !== "workflow_agent" || entry.index == null) continue;
+      const id = `${run}:workflow-agent:${entry.index}`;
+      const label = typeof entry.label === "string" ? entry.label : `#${entry.index}`;
+      const failure = entry.state === "error" && typeof entry.error === "string" ? entry.error : "";
+      const work: NativeWorkEvent = {
+        type: "agent", id, status: workflowAgentStatus(entry),
+        title: typeof entry.phaseTitle === "string" && entry.phaseTitle ? `${entry.phaseTitle} · ${label}` : label,
+        ...(typeof entry.agentId === "string" ? { nativeId: entry.agentId } : {}),
+        ...(typeof entry.model === "string" ? { model: entry.model } : {}),
+        ...(typeof entry.agentType === "string" ? { agentType: entry.agentType } : {}),
+        ...(typeof entry.promptPreview === "string" ? { description: entry.promptPreview } : {}),
+        ...(typeof entry.resultPreview === "string" || failure ? { result: clip(entry.resultPreview ?? failure) } : {}),
+      };
+      const signature = JSON.stringify(work);
+      if (seen.get(id) !== signature) { seen.set(id, signature); out.push(event("Agent", work)); }
+      const tool = typeof entry.lastToolName === "string" ? `${entry.lastToolName}\u0000${entry.lastToolSummary ?? ""}` : "";
+      if (tool && this.tools.get(id) !== tool) {
+        this.tools.set(id, tool);
+        out.push(childActivity(id, { kind: "tool", name: entry.lastToolName, ...(entry.lastToolSummary ? { detail: String(entry.lastToolSummary).slice(0, 1500) } : {}) }));
+      }
+    }
+    // 工作流整体收工却没走完的那几个：它没有逐个报终态，只能按整体的结局记成停了。
+    if (ev.subtype === "task_notification" && nativeStatus(ev.status) !== "completed") {
+      for (const [id, signature] of seen) {
+        const row = JSON.parse(signature) as NativeWorkEvent & { type: "agent" };
+        if (row.status !== "running" && row.status !== "pending") continue;
+        const stopped = { ...row, status: "stopped" as const };
+        seen.set(id, JSON.stringify(stopped));
+        out.push(event("Agent", stopped));
+      }
+    }
+    return out;
+  }
+}
+
+/** `workflow_agent.state` 的取值见 claude CLI：start（没有 startedAt = 还在排队）/ progress / done / error / interrupt …。 */
+function workflowAgentStatus(entry: any): NativeWorkStatus {
+  if (entry.state === "start") return entry.startedAt ? "running" : "pending";
+  if (entry.state === "done") return "completed";
+  if (entry.state === "error") return entry.skipped ? "stopped" : "failed";
+  if (entry.state === "interrupt") return "stopped";
+  return typeof entry.state === "string" ? "running" : "unknown";
 }
 
 export function nativePlanSnapshot(id: string, plan: unknown, explanation?: string): AgentEvent {

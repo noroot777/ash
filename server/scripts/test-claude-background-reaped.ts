@@ -117,6 +117,17 @@ async function main(): Promise<void> {
   check(healthy.tally().bash?.finished === 1, "回合内跑完的后台 Bash 计入「自己结束」");
   check(backgroundReapedNotice(healthy.tally()) === "", "一个都没被收走就不写时间线");
 
+  // ── ③b Workflow 工具：整个工作流一条 local_workflow，调用立即返回，回合结束时还在跑 ──
+  // 2026-11-05 任务 Ot0ch1PLEB-Q：工作流第一阶段 4 个子智能体刚开工，回合就结束了。
+  const workflow = new ClaudeBackgroundTrace("workflow");
+  call(workflow, "Workflow", "toolu_wf", { script: "export const meta = {}" });
+  started(workflow, "w7px6sljq", "toolu_wf", "local_workflow");
+  returned(workflow, "toolu_wf");
+  result(workflow);
+  const w = workflow.tally().workflow;
+  check(w?.total === 1 && w.reaped === 1, "后台工作流记成「回合结束时还在跑」", JSON.stringify(workflow.tally()));
+  check(backgroundReapedNotice(workflow.tally()).includes("1 个后台工作流"), "时间线那句话点名后台工作流", backgroundReapedNotice(workflow.tally()));
+
   // ── ④ 内置 Monitor 起的 local_bash 归 claude-monitor-reaped.ts，这里不重复数 ──
   const mon = new ClaudeBackgroundTrace("monitor");
   call(mon, "Monitor", "toolu_m");
