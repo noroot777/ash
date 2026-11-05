@@ -538,12 +538,15 @@ try {
 
   // ㊹ 最终合并 · 分支已经挪到测过的结果、文件也写下了，之后清理临时发布目录失败（第 6 轮审查 F3）：清理
   // 是发布之后的事，它失败不能把回执改成「目标分支没动」—— 照常算合进去了。包装在真正写文件的那条
-  // `read-tree -m -u` 之后把那个临时目录改成 0555，删它时就是真实的 EACCES。
+  // `read-tree -m -u` 之后把那个临时目录改成 0555，删它时就是真实的 EACCES。那个目录就是包装器收到的
+  // `GIT_DIR`（封好的环境把它设成 `<临时目录>/git`）的上一级 —— 别按名字前缀去 TMPDIR 里猜「最新的那个」：
+  // 前缀改过名（ash-publish- → 共用的 ash-sealed-），并发跑的别的门禁也在建同名前缀的目录。
+  // 写成 `G''IT_DIR` 是因为 wrapGit 会把脚本里每个 `GIT` 换成真 git 的路径。
   {
     const sample = await fixture("landing-cleanup-after-publish", { baseline: "merge_preview" });
     const stuck = join(root, "stuck-publish-dir");
     const bin = wrapGit("cleanup-after", " read-tree -m -u ",
-      `d=$(ls -dt "\${TMPDIR:-/tmp}"/ash-publish-* | head -n 1) && printf '%s' "$d" > '${stuck}' && chmod 555 "$d"`, true);
+      `d=$(dirname "$(printenv G''IT_DIR)") && printf '%s' "$d" > '${stuck}' && chmod 555 "$d"`, true);
     const { landed, expectedTree } = await withPath(bin, arm => landGuarded(sample, arm));
     assert.ok(existsSync(stuck), "临时发布目录真的锁住了");
     const dir = readFileSync(stuck, "utf8");
