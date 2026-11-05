@@ -67,10 +67,16 @@ export async function testAcceptGateActions({ browser, base, run }) {
       assert.match(await dialog.innerText(), /这一次不跑.*上一次是红的/s);
       assert.equal(store.requests.length, 1, "opening skip confirmation must not mutate anything");
       await dialog.getByRole("button", { name: "取消", exact: true }).click();
-      await page.getByRole("button", { name: "验收通过", exact: true }).click();
-      dialog = page.getByRole("dialog");
-      assert.equal(await dialog.getByRole("button", { name: "跳过前置命令并验收" }).count(), 0);
-      await dialog.getByRole("button", { name: "取消", exact: true }).click();
+      if (projection === "error") {
+        // 门禁读不出来时主按钮不许把「没读到」当「没在跑」：禁用并改口待核对；跳过/重跑出口
+        // 自带上次那份现场，照常能用（下面接着点的就是它）。
+        assert.equal(await page.getByRole("button", { name: "前置命令状态待核对", exact: true }).isDisabled(), true);
+      } else {
+        await page.getByRole("button", { name: "验收通过", exact: true }).click();
+        dialog = page.getByRole("dialog");
+        assert.equal(await dialog.getByRole("button", { name: "跳过前置命令并验收" }).count(), 0);
+        await dialog.getByRole("button", { name: "取消", exact: true }).click();
+      }
       await failure.getByRole("button", { name: "这次跳过它，直接合并" }).click();
       dialog = page.getByRole("dialog");
       await dialog.getByRole("checkbox", { name: "合并后提交代码" }).uncheck();
@@ -118,9 +124,10 @@ export async function testAcceptGateActions({ browser, base, run }) {
       await page.goto(`${base}?controls=1`);
       await page.locator('.accept-gate-card[aria-busy="true"]').waitFor();
       assert.match(await page.getByRole("region", { name: "验收前置命令" }).innerText(), /正在读取/);
-      await page.getByRole("button", { name: "验收通过", exact: true }).click();
-      assert.equal(await page.getByRole("dialog").getByRole("button", { name: "验收通过", exact: true }).isDisabled(), true);
+      // 还没读到门禁时连确认框都不给开：主按钮禁用并说明在读，读到之后才变回「验收通过」。
+      assert.equal(await page.getByRole("button", { name: "读取前置命令状态", exact: true }).isDisabled(), true);
       release();
+      await page.getByRole("button", { name: "验收通过", exact: true }).click();
       await page.getByRole("dialog").getByText("npm run current-check", { exact: true }).waitFor();
       await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
       assert.match(await page.locator(".accept-gate-command").innerText(), /npm run current-check/);
