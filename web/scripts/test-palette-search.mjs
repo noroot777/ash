@@ -54,7 +54,13 @@ try {
 
   // ── 2. 鼠标划过不改选中，也不给任何「像选中」的底色 ────────────────────
   const rowAt = (index) => page.locator(`.palette-results [data-palette-index="${index}"]`);
-  const background = (index) => rowAt(index).evaluate((node) => getComputedStyle(node).backgroundColor);
+  // 底色换行时有 150ms 过渡（.ui-selectable），取过渡跑完后的终值：并行跑、帧被压慢时，刚按
+  // 方向键离开的那行还停在半截颜色上，拿它当「没碰过」的基准就比歪了。
+  const background = (index) => rowAt(index).evaluate(async (node) => {
+    const transitions = document.getAnimations().filter((animation) => animation instanceof CSSTransition);
+    await Promise.all(transitions.map((animation) => animation.finished.catch(() => {})));
+    return getComputedStyle(node).backgroundColor;
+  });
   const idle = await background(5);
   await rowAt(3).hover();
   assert.equal(await selectedIndex(), "0", "指针经过某一行不代表用户在挑它，选中态不该跟着鼠标跑");

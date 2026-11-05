@@ -44,7 +44,10 @@ try {
     getComputedStyle(node.closest(".workspace-task-row-wrap").querySelector(".workspace-task-title")).maskImage);
   const idleMask = await titleMask();
   await handoffPendingRow.hover();
-  await page.waitForTimeout(180);
+  // meta 淡入有 130ms 过渡，等它跑完再读：固定睡一会儿在并行跑、帧被压慢时会读到半截透明度。
+  await page.evaluate(() => Promise.all(document.getAnimations()
+    .filter((animation) => animation instanceof CSSTransition)
+    .map((animation) => animation.finished.catch(() => {}))));
   assert.equal(await handoffOutMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "1", "指向转出任务时标记应显示");
   const hoverMask = await titleMask();
   assert.notEqual(hoverMask, idleMask, "指到时标题要额外让开星标那格");
