@@ -403,6 +403,9 @@ async function* claudeStreamEvents(
           message: ev.api_error_status ? `HTTP ${ev.api_error_status}: ${detail}` : detail,
         });
       }
+      // 单飞这一路的回合结束就是收台(见 ClaudeControlBridge.reapsAtTurnEnd);用户插话打断
+      // 的那个 result 不算,进程还要接着跑下一段。
+      if (resident?.reapsAtTurnEnd && !ownInterrupt) for (const activity of nativeWork.reaped()) push(activity);
       // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。
       if (resident) push({ kind: "turnEnd" });
       // 只清字节去重表,不动 `refs`:引用身份在一条流里单调递增,复位会让两个回合的
@@ -422,6 +425,7 @@ async function* claudeStreamEvents(
     if (events.closed) return;
     resident?.failPending(new Error(`Claude 进程错误：${err.message}`));
     push({ kind: "error", message: spawnErrorMessage(bin, err) });
+    for (const activity of nativeWork.reaped()) push(activity);
     push({ kind: "done", exitStatus: 1 });
     events.close();
   });
@@ -431,6 +435,8 @@ async function* claudeStreamEvents(
     flushText(); // emit any text tail that never hit the flush threshold
     const exit = code ?? 0;
     if (exit !== 0 && stderr.trim()) push({ kind: "error", message: normalizeClaudeCliError(stderr).slice(0, 2000) });
+    // 进程没了,寄生在里面的工作流也没了(团队调度台走的是这一路)。
+    for (const activity of nativeWork.reaped()) push(activity);
     push({ kind: "done", exitStatus: exit });
     events.close();
   });
@@ -438,6 +444,7 @@ async function* claudeStreamEvents(
     resident?.failPending(new Error("Claude 进程在 interrupt ACK 前异常收尾"));
     flushText();
     push({ kind: "error", message: "进程已退出但输出流未正常收尾(疑有残留子进程占用管道),已强制结束本回合" });
+    for (const activity of nativeWork.reaped()) push(activity);
     push({ kind: "done", exitStatus: exit });
     events.close();
   });

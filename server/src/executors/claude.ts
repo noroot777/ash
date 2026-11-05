@@ -262,7 +262,7 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", settings.cleanup);
     const detached = detachedInfo(child);
     return singleRunFromResident(
-      this.residentFromChild(child, sessionId, commandLine, settings.cleanup, opts.cwd, opts.images),
+      this.residentFromChild(child, sessionId, commandLine, settings.cleanup, opts.cwd, opts.images, true),
       detached,
     );
   }
@@ -274,7 +274,7 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", settingsCleanup);
     if (child.stdin && opts.commandLine.includes("--input-format")) {
       return singleRunFromResident(
-        this.residentFromChild(child, opts.sessionId, opts.commandLine, settingsCleanup, opts.cwd, opts.images),
+        this.residentFromChild(child, opts.sessionId, opts.commandLine, settingsCleanup, opts.cwd, opts.images, true),
         detached,
       );
     }
@@ -321,8 +321,9 @@ export class ClaudeExecutor implements AgentExecutor {
     settingsCleanup: () => void = () => {},
     cwd?: string,
     images?: MarkdownImageAccounting,
+    reapsAtTurnEnd = false,
   ): ResidentHandle {
-    const resident = new ClaudeControlBridge();
+    const resident = new ClaudeControlBridge(reapsAtTurnEnd);
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
       const input = child.stdin;
       if (!input || input.destroyed || input.writableEnded || !input.writable) {

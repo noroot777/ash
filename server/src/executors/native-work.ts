@@ -20,6 +20,11 @@ export class NativeWorkTrace {
   private workflows = new ClaudeWorkflowWork();
   private serial = 0;
 
+  /** 智能体进程收台时随之消失的那部分原生工作（目前只有工作流子智能体）的终态。只报一次。 */
+  reaped(): AgentEvent[] {
+    return this.workflows.reaped();
+  }
+
   call(name: string, input: unknown, id?: string, parentId?: string): AgentEvent | null {
     if (typeof name !== "string" || !names.has(nativeToolName(name))) return null;
     const callId = id || `native-${++this.serial}`;
@@ -103,11 +108,16 @@ export class NativeWorkTrace {
  * `workflow_agent` 一条（index / label / phaseTitle / agentId / model / state /
  * lastToolName / resultPreview …），每份快照带的是全量列表，CLI 节流着发、不是每条都带。
  *
- * 行的身份用「工作流调用 + index」而不是 agentId：排队时还没分到 agentId（state=start 且没有
- * startedAt），同一行后来才补上。快照是全量重发的，只在内容变了时才产出事件，免得把执行记录刷爆。
+ * 行的身份是「这次工作流 + index」：排队时还没分到 agentId（state=start 且没有 startedAt），
+ * 同一行后来才补上。工作流那一半在**第一次见到它时**定下、按 task_id 记住 —— 后续消息带不带
+ * `tool_use_id` 都不改，否则同一个子智能体会按消息字段的有无分裂成两行。快照是全量重发的，
+ * 只在内容变了时才产出事件，免得把执行记录刷爆。
+ *
+ * 个体的最后一份快照不保证送到（节流、整体收工、进程被收台），所以整体有了结局时，还没
+ * 报终态的那几行由 `settle` 收尾：不能让它们一直挂着「进行中」，也不能替它们编一个成功。
  */
 class ClaudeWorkflowWork {
-  private runs = new Map<string, Map<string, string>>();
+  private runs = new Map<string, { prefix: string; rows: Map<string, string> }>();
   private tools = new Map<string, string>();
 
   owns(ev: any): boolean {
@@ -115,15 +125,16 @@ class ClaudeWorkflowWork {
   }
 
   message(ev: any): AgentEvent[] {
-    const run = String(ev.tool_use_id || ev.task_id || "workflow");
-    const seen = this.runs.get(ev.task_id) ?? new Map<string, string>();
-    this.runs.set(ev.task_id, seen);
+    const key = String(ev.task_id || ev.tool_use_id || "workflow");
+    const run = this.runs.get(key) ?? { prefix: String(ev.tool_use_id || key), rows: new Map<string, string>() };
+    this.runs.set(key, run);
     const out: AgentEvent[] = [];
     for (const entry of Array.isArray(ev.workflow_progress) ? ev.workflow_progress : []) {
       if (entry?.type !== "workflow_agent" || entry.index == null) continue;
-      const id = `${run}:workflow-agent:${entry.index}`;
+      const id = `${run.prefix}:workflow-agent:${entry.index}`;
       const label = typeof entry.label === "string" ? entry.label : `#${entry.index}`;
       const failure = entry.state === "error" && typeof entry.error === "string" ? entry.error : "";
+      const result = typeof entry.resultPreview === "string" && entry.resultPreview ? entry.resultPreview : failure;
       const work: NativeWorkEvent = {
         type: "agent", id, status: workflowAgentStatus(entry),
         title: typeof entry.phaseTitle === "string" && entry.phaseTitle ? `${entry.phaseTitle} · ${label}` : label,
@@ -131,25 +142,37 @@ class ClaudeWorkflowWork {
         ...(typeof entry.model === "string" ? { model: entry.model } : {}),
         ...(typeof entry.agentType === "string" ? { agentType: entry.agentType } : {}),
         ...(typeof entry.promptPreview === "string" ? { description: entry.promptPreview } : {}),
-        ...(typeof entry.resultPreview === "string" || failure ? { result: clip(entry.resultPreview ?? failure) } : {}),
+        ...(result ? { result: clip(result) } : {}),
       };
       const signature = JSON.stringify(work);
-      if (seen.get(id) !== signature) { seen.set(id, signature); out.push(event("Agent", work)); }
+      if (run.rows.get(id) !== signature) { run.rows.set(id, signature); out.push(event("Agent", work)); }
       const tool = typeof entry.lastToolName === "string" ? `${entry.lastToolName}\u0000${entry.lastToolSummary ?? ""}` : "";
       if (tool && this.tools.get(id) !== tool) {
         this.tools.set(id, tool);
         out.push(childActivity(id, { kind: "tool", name: entry.lastToolName, ...(entry.lastToolSummary ? { detail: String(entry.lastToolSummary).slice(0, 1500) } : {}) }));
       }
     }
-    // 工作流整体收工却没走完的那几个：它没有逐个报终态，只能按整体的结局记成停了。
-    if (ev.subtype === "task_notification" && nativeStatus(ev.status) !== "completed") {
-      for (const [id, signature] of seen) {
-        const row = JSON.parse(signature) as NativeWorkEvent & { type: "agent" };
-        if (row.status !== "running" && row.status !== "pending") continue;
-        const stopped = { ...row, status: "stopped" as const };
-        seen.set(id, JSON.stringify(stopped));
-        out.push(event("Agent", stopped));
-      }
+    if (ev.subtype === "task_notification") out.push(...this.settle(run.rows, nativeStatus(ev.status)));
+    return out;
+  }
+
+  /** 智能体进程收台：工作流寄生在这个进程里，还没走完的全都跟着停了。 */
+  reaped(): AgentEvent[] {
+    return [...this.runs.values()].flatMap((run) => this.settle(run.rows, "stopped"));
+  }
+
+  // 整体成功收工时，没报终态的那一行可能真跑完了（只是最后一份快照没赶上），说不准，
+  // 就照实记成「已结束、结果没收到」；整体停了/失败了，没走完的就是跟着停了。
+  private settle(rows: Map<string, string>, outcome: NativeWorkStatus): AgentEvent[] {
+    const out: AgentEvent[] = [];
+    for (const [id, signature] of rows) {
+      const row = JSON.parse(signature) as NativeWorkEvent & { type: "agent" };
+      if (row.status !== "running" && row.status !== "pending") continue;
+      const settled: NativeWorkEvent = outcome === "completed"
+        ? { ...row, status: "unknown", closed: true, message: "工作流已结束，未收到此项最终状态。" }
+        : { ...row, status: "stopped" };
+      rows.set(id, JSON.stringify(settled));
+      out.push(event("Agent", settled));
     }
     return out;
   }

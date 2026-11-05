@@ -236,7 +236,9 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         }
         const previous = rows.get(id);
         if (activity.closed && (previous?.status === "completed" || previous?.status === "failed")) patch.status = previous.status;
-        if (activity.status === "unknown" && rows.has(id)) delete patch.status;
+        // unknown 通常只是「这一条没带状态」(身份补报之类),不能盖掉已有的;带 closed 的是
+        // 生产方明说「这一项已经了结、终态说不准」(工作流整体收工而个体快照没赶上)。
+        if (activity.status === "unknown" && rows.has(id) && !(activity.closed && previous && !terminal(previous.status))) delete patch.status;
         for (const field of ["message", "result"] as const) {
           const value = activity[field];
           if (typeof value !== "string" || !value) continue;

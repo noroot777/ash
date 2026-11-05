@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent, Session } from "@ash/shared";
 import { parseClaudeStream } from "../src/executors/claude.js";
+import { ClaudeControlBridge } from "../src/executors/claude-control.js";
 import { parseCodexStream } from "../src/executors/codex.js";
 import { openCodexAppServer } from "../src/executors/codex-app-server.js";
 import { codexChildWork, codexNativeWork, codexSubAgentWork, NativeWorkTrace } from "../src/executors/native-work.js";
@@ -277,7 +278,7 @@ const wfAgent = (index: number, label: string, state: string, extra: Record<stri
   ({ type: "workflow_agent", index, label, phaseIndex: 1, phaseTitle: "摸底", model: "claude-fable-5-1[1m]", state, promptPreview: `派给 ${label} 的说明`, ...extra });
 const wfProgress = (...agents: unknown[]) => ({ type: "system", subtype: "task_progress", task_id: "w1", tool_use_id: "wf",
   description: "摸底: read:auth", workflow_progress: [{ type: "workflow_phase", index: 1, title: "摸底" }, ...agents] });
-const workflowRun = async (tail: unknown[]) => {
+const workflowRun = async (tail: unknown[], resident?: ClaudeControlBridge) => {
   const out: AgentEvent[] = [];
   for await (const event of parseClaudeStream(emit([
     assistant("wf", "Workflow", { script: "export const meta = {}" }),
@@ -290,7 +291,7 @@ const workflowRun = async (tail: unknown[]) => {
       wfAgent(2, "research", "start", { agentId: "a2", startedAt: 1 })),
     { type: "system", subtype: "task_progress", task_id: "w1", tool_use_id: "wf", description: "摸底: research", last_tool_name: "research" },
     ...tail,
-  ]) as any)) out.push(event);
+  ]) as any, resident)) out.push(event);
   return out;
 };
 const wfEvents = await workflowRun([wfProgress(wfAgent(1, "read:auth", "done", { agentId: "a1", startedAt: 1, resultPreview: "鉴权摸清了" }),
@@ -307,4 +308,30 @@ assert.equal(wfEvents.filter((event) => event.kind === "tool" && event.nativeWor
 const wfStopped = fromTools((await workflowRun([{ type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "stopped" }]))
   .filter((event) => event.kind === "tool"));
 assert.deepEqual(wfStopped.map((row) => row.status), ["stopped", "stopped"], "工作流整体停了，没报终态的子智能体跟着记停");
+// 个体的最后一份快照没赶上、整体却成功收工了：不能一直挂「进行中」，也不能替它编一个成功。
+const wfUnsettled = fromTools((await workflowRun([wfProgress(wfAgent(1, "read:auth", "done", { agentId: "a1", startedAt: 1, resultPreview: "鉴权摸清了" }),
+  wfAgent(2, "research", "progress", { agentId: "a2", startedAt: 1 })),
+{ type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "completed" }])).filter((event) => event.kind === "tool"));
+assert.deepEqual(wfUnsettled.map((row) => [row.status, row.message]), [["completed", undefined], ["unknown", "工作流已结束，未收到此项最终状态。"]],
+  "整体成功收工时，没报终态的那一行记成已结束、终态未知");
+// 进程收台（2026-11-05 任务 SGK-4lWyRQCX）：没有任何终态通知，流就断了。工作流寄生在进程里，没走完的就是停了。
+const wfReaped = fromTools((await workflowRun([])).filter((event) => event.kind === "tool"));
+assert.deepEqual(wfReaped.map((row) => row.status), ["stopped", "stopped"], "进程结束时还在跑的子智能体记停");
+// 单飞：本回合的 result 一到 ash 就收台、不再读流，所以终态必须赶在 turnEnd 之前；团队调度台的进程活过回合，不收。
+const endOfTurn = { type: "result", subtype: "success", result: "工作流已在后台跑起来" };
+const turnSlice = (events: AgentEvent[]) => events.slice(0, events.findIndex((event) => event.kind === "turnEnd"));
+const singleTurn = turnSlice(await workflowRun([endOfTurn], new ClaudeControlBridge(true)));
+assert.deepEqual(fromTools(singleTurn.filter((event) => event.kind === "tool")).map((row) => row.status), ["stopped", "stopped"], "单飞回合结束即收台，工作流跟着停");
+const residentTurn = turnSlice(await workflowRun([endOfTurn], new ClaudeControlBridge(false)));
+assert.deepEqual(fromTools(residentTurn.filter((event) => event.kind === "tool")).map((row) => row.status), ["running", "running"], "常驻进程的回合结束不收工作流");
+// 行身份在第一次见到工作流时就定下：后续消息缺不缺 tool_use_id，同一个子智能体都只有一行。
+const driftTrace = new NativeWorkTrace();
+const drift = [
+  { type: "system", subtype: "task_started", task_id: "w9", task_type: "local_workflow" },
+  { ...wfProgress(wfAgent(1, "read:auth", "progress", { agentId: "a1", startedAt: 1 })), task_id: "w9", tool_use_id: undefined },
+  { ...wfProgress(wfAgent(1, "read:auth", "progress", { agentId: "a1", startedAt: 1, lastToolName: "Read" })), task_id: "w9", tool_use_id: "wf9" },
+  { ...wfProgress(wfAgent(1, "read:auth", "error", { agentId: "a1", startedAt: 1, resultPreview: "", error: "rate limited" })), task_id: "w9", tool_use_id: undefined },
+].flatMap((line) => driftTrace.claudeMessage(line));
+const driftRows = fromTools(drift);
+assert.deepEqual(driftRows.map((row) => [row.status, row.result]), [["failed", "rate limited"]], "调用编号时有时无不分裂成两行；空的结果预览不遮掉失败原因");
 console.log("子智能体解析、任务编号隔离、异步状态、计划更新、历史兼容与刷新一致性通过");

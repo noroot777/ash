@@ -13,6 +13,12 @@ const responseError = (response: any): string => {
 /** Claude stream-json 的 interrupt 请求与真实 control_response 配对。 */
 export class ClaudeControlBridge {
   interruptPending = false;
+  /**
+   * 这条常驻流是不是**单飞**那一路：本回合的 `result` 一到，`singleRunFromResident` 就关掉
+   * stdin 收台、不再读流。进程里还在跑的工作流跟着没了，它们的终态只能赶在 `turnEnd` 之前发。
+   * 团队调度台的进程跨回合活着，不在这时收尾。
+   */
+  constructor(readonly reapsAtTurnEnd = false) {}
   private sequence = 0;
   private readonly pending = new Map<string, PendingControl>();
 
