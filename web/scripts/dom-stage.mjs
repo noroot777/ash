@@ -42,10 +42,15 @@ async function viteServer(extra = {}) {
     server: { host: "127.0.0.1", port: 0, strictPort: false, watch: null },
     ...extra,
   });
-  await server.listen();
-  const address = server.httpServer?.address();
-  if (!address || typeof address !== "object") throw new Error("Vite test server did not expose a port");
-  return { server, origin: `http://127.0.0.1:${address.port}` };
+  try {
+    await server.listen();
+    const address = server.httpServer?.address();
+    if (!address || typeof address !== "object") throw new Error("Vite test server did not expose a port");
+    return { server, origin: `http://127.0.0.1:${address.port}` };
+  } catch (error) {
+    await server.close();
+    throw error;
+  }
 }
 
 /** 本条测试用的 vite：`origin` 拼页面地址，`close()` 收尾（共用那份由执行器收，这里是空操作）。 */
@@ -61,11 +66,20 @@ export async function launchChrome() {
   const shared = process.env[SHARED_BROWSER_ENV];
   if (shared) return chromium.connect(shared);
   const server = await chromium.launchServer(await chromeLaunchOptions());
-  const browser = await chromium.connect(server.wsEndpoint());
+  let browser;
+  try {
+    browser = await chromium.connect(server.wsEndpoint());
+  } catch (error) {
+    await server.kill();
+    throw error;
+  }
   const disconnect = browser.close.bind(browser);
   browser.close = async (options) => {
-    await disconnect(options);
-    await server.kill();
+    try {
+      await disconnect(options);
+    } finally {
+      await server.kill();
+    }
   };
   return browser;
 }
@@ -76,12 +90,21 @@ export async function launchChrome() {
  */
 export async function startSharedStage() {
   const { server, origin } = await viteServer({ optimizeDeps: { entries: ["index.html", "scripts/fixtures/*.html"] } });
-  const chrome = await chromium.launchServer(await chromeLaunchOptions());
+  let chrome;
+  try {
+    chrome = await chromium.launchServer(await chromeLaunchOptions());
+  } catch (error) {
+    await server.close();
+    throw error;
+  }
   return {
     env: { [SHARED_WEB_ENV]: origin, [SHARED_BROWSER_ENV]: chrome.wsEndpoint() },
     stop: async () => {
-      await chrome.kill();
-      await server.close();
+      try {
+        await chrome.kill();
+      } finally {
+        await server.close();
+      }
     },
   };
 }

@@ -7,7 +7,7 @@
 // 跑法：node scripts/test-runner.mjs <workspace> <script>（如 `web test`）；验收入口
 // scripts/accept-test.mjs 用 runSteps() 把后端、前端两步并进同一个池子。
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -15,20 +15,23 @@ import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 
 const manifest = (dir) => JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
 
-function workspaceDirs(repo) {
-  const dirs = new Map([[".", repo]]);
+// `npm -w <ref>` 跟 npm 一个认法：先按包名，否则当成相对**发起这条链的包目录**的路径 ——
+// 子包里写 `npm -w server` 指的是它自己底下的 server，npm 会报找不到，这里也不能替它圆过去。
+function workspaceResolver(repo) {
+  const names = new Map();
+  const dirs = new Set([repo]);
   for (const entry of manifest(repo).workspaces ?? []) {
     const dir = resolve(repo, entry);
-    dirs.set(entry, dir);
+    dirs.add(dir);
     const { name } = manifest(dir);
-    if (name) dirs.set(name, dir);
+    if (name) names.set(name, dir);
   }
-  return dirs;
+  return (from, ref) => names.get(ref) ?? (dirs.has(resolve(from, ref)) ? resolve(from, ref) : undefined);
 }
 
 /** 把 `<workspace>` 包里的 `<script>` 链展开成叶子，顺序与原链一致。 */
 export function expandChain(repo, workspace, script) {
-  const dirs = workspaceDirs(repo);
+  const findWorkspace = workspaceResolver(repo);
   const leaves = [];
   const visit = (dir, name) => {
     const chain = manifest(dir).scripts?.[name];
@@ -40,13 +43,13 @@ export function expandChain(repo, workspace, script) {
       const other = /^npm (?:-w|--workspace) (\S+) run (\S+)$/.exec(part);
       if (local) visit(dir, local[1]);
       else if (other) {
-        const target = dirs.get(other[1]);
+        const target = findWorkspace(dir, other[1]);
         if (!target) throw new Error(`找不到 workspace ${other[1]}（${relative(repo, dir) || "."} 的 ${name}）`);
         visit(target, other[2]);
       } else leaves.push({ cwd: dir, command: part, script: name, label: `${relative(repo, dir) || "."}: ${part}` });
     }
   };
-  const start = dirs.get(workspace);
+  const start = findWorkspace(repo, workspace);
   if (!start) throw new Error(`找不到 workspace ${workspace}`);
   visit(start, script);
   return leaves;
@@ -124,25 +127,60 @@ function descendants(roots) {
   return found;
 }
 
+// 叶子起的每个进程都从环境里继承一个归属记号（`<变量>=<叶子序号>`）。测试 detached 出去、
+// 父进程又先退了的子进程会被过继给 init，按父子关系和进程组都再也认不出是谁的；记号跟着
+// 进程走，靠它才收得干净。测试自己把环境清空了起的进程认不出来，这类只能靠进程组和进程树。
+function marked(variable, leafIndex) {
+  const wanted = leafIndex === undefined ? `${variable}=` : `${variable}=${leafIndex} `;
+  const found = [];
+  if (process.platform === "linux") {
+    for (const entry of readdirSync("/proc")) {
+      const pid = Number(entry);
+      if (!(pid > 0) || pid === process.pid) continue;
+      try {
+        const environ = `${readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").join(" ")} `;
+        if (environ.startsWith(wanted) || environ.includes(` ${wanted}`)) found.push(pid);
+      } catch {
+        // 已经退了，或者不是我们的。
+      }
+    }
+    return found;
+  }
+  // macOS 的 ps -E 把环境接在命令行后面，以空格分隔。
+  const listed = spawnSync("ps", ["-A", "-E", "-ww", "-o", "pid=,command="], { encoding: "utf8", maxBuffer: 64 << 20 });
+  for (const line of (listed.stdout ?? "").split("\n")) {
+    const pid = Number(line.trim().split(/\s/, 1)[0]);
+    if (pid > 0 && pid !== process.pid && `${line} `.includes(` ${wanted}`)) found.push(pid);
+  }
+  return found;
+}
+
 const signal = (pid, name) => {
   try {
     process.kill(pid, name);
-  } catch {
-    // 已经退了。
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
   }
 };
+
+const pause = (ms) => new Promise((wait) => setTimeout(wait, ms));
 
 /**
  * 跑一组步骤（每步 = 一条链）。所有叶子进同一个池子（排队顺序见 schedule）；某步的叶子全部绿了
  * 就报这一步通过。返回第一条红的叶子（全绿为 null）和它的退出码。
+ *
+ * 不变量：无论怎么结束（全绿、某条红、执行器自己出错、收到信号），返回之前这一轮起过的进程
+ * 都已经收干净 —— 包括已经退出的叶子留下的后台进程。
  */
 export async function runSteps(repo, steps, { jobs = defaultJobs(), env = process.env, log = console.log } = {}) {
-  if (process.platform === "win32") return runSequentially(repo, steps, env, log);
+  if (process.platform === "win32" || env.ASH_TEST_RUNNER === "serial") return runSequentially(repo, steps, env, log);
   const queue = schedule(steps.flatMap((step, index) => expandChain(repo, step.workspace, step.script)
     .map((leaf) => ({ ...leaf, step: index }))), readHistory());
   const timings = {};
   const remaining = steps.map((_, index) => queue.filter((leaf) => leaf.step === index).length);
   const logs = mkdtempSync(join(tmpdir(), "ash-test-runner-"));
+  const owner = `ASH_TEST_RUNNER_${process.pid}_${Date.now().toString(36)}`;
   const stages = new Map();
   const running = new Map();
   let failure = null;
@@ -157,29 +195,57 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
     return stages.get(module).then((stage) => stage.env);
   };
 
+  // 收掉一批进程组和带记号的进程：先 SIGTERM 给它们收尾的机会，到点 SIGKILL。返回收掉了几个。
+  const sweep = async (groups, leafIndex) => {
+    const alive = () => [...groups.filter((group) => signal(-group, 0)).map((group) => -group), ...marked(owner, leafIndex)];
+    let targets = alive();
+    if (!targets.length) return 0;
+    const count = targets.length;
+    for (const pid of targets) signal(pid, "SIGTERM");
+    for (const deadline = Date.now() + 3_000; targets.length && Date.now() < deadline; targets = alive()) await pause(100);
+    for (const pid of targets) signal(pid, "SIGKILL");
+    return count;
+  };
+
   // `sh -c` 当 shield：detached 让 sh 自己当进程组组长，被测脚本是组内的普通成员 —— 跟在
   // `npm run` 底下「继承调用方的组、组长另有其人」同形。不能 detached 被测脚本本身：一批产品
   // 代码的职责就是杀干净同组进程，它当了组长就会把自己杀掉（exit 143、日志却全是 passed）。
   // 命令后面那句 `exit` 不能省，否则 sh 会把自己 exec 掉，被测脚本又成了组长。
   const launch = async (leaf) => {
-    const extra = await stageEnv(leaf.cwd);
+    const index = queue.indexOf(leaf);
+    let extra;
+    try {
+      extra = await stageEnv(leaf.cwd);
+    } catch (error) {
+      return { leaf, status: { code: 1, error: new Error(`共用台子起不来：${error?.message ?? error}`) }, seconds: 0 };
+    }
     // 等台子的这段时间里别的叶子可能已经红了、收场也扫过了，这时再起就成了没人收的孤儿。
     if (failure) return { leaf, status: { code: 1, skipped: true } };
-    const file = join(logs, `${queue.indexOf(leaf)}.log`);
-    const output = openSync(file, "w");
+    const file = join(logs, `${index}.log`);
     const startedAt = Date.now();
-    const child = spawn("/bin/sh", ["-c", `${leaf.command}\n__rc=$?; exit $__rc`], {
-      cwd: leaf.cwd,
-      detached: true,
-      stdio: ["ignore", output, output],
-      env: { ...env, ...extra, npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
-    });
-    closeSync(output);
+    let child;
+    try {
+      const output = openSync(file, "w");
+      try {
+        child = spawn("/bin/sh", ["-c", `${leaf.command}\n__rc=$?; exit $__rc`], {
+          cwd: leaf.cwd,
+          detached: true,
+          stdio: ["ignore", output, output],
+          env: { ...env, ...extra, [owner]: String(index), npm_lifecycle_event: leaf.script, PATH: binPath(repo, leaf.cwd, env.PATH) },
+        });
+      } finally {
+        closeSync(output);
+      }
+    } catch (error) {
+      return { leaf, file, status: { code: 1, error }, seconds: 0 };
+    }
     running.set(leaf, child);
     const status = await new Promise((settle) => {
       child.once("error", (error) => settle({ code: 127, error }));
       child.once("exit", (code, killed) => settle({ code: code ?? 1, killed }));
     });
+    // 主进程退了不等于这条叶子收干净了：它的组里、它 detached 出去的，都还得收。
+    status.leftovers = await sweep(child.pid > 0 ? [child.pid] : [], index);
     running.delete(leaf);
     return { leaf, file, status, seconds: (Date.now() - startedAt) / 1000 };
   };
@@ -189,54 +255,76 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
     timings[leaf.label] = { seconds, failed: !passed };
     done += 1;
     log(`\n── [${done}/${total}] ${passed ? "✓" : "✗"} ${leaf.label}（${seconds.toFixed(1)}s）`);
-    if (existsSync(file)) process.stdout.write(readFileSync(file));
+    try {
+      if (file && existsSync(file)) process.stdout.write(readFileSync(file));
+    } catch (error) {
+      log(`[test-runner] 读不到这条的输出：${error.message}`);
+    }
     if (status.error) log(`[test-runner] 无法启动：${status.error.message}`);
     if (status.killed) log(`[test-runner] 被信号 ${status.killed} 终止。`);
+    if (status.leftovers) log(`[test-runner] 退出后还留着 ${status.leftovers} 个进程（组），已收掉。`);
   };
 
+  // 收掉在跑的叶子，等到每一条都退出、各自的残留也收完（launch 里那次 sweep）才返回。
   const stopAll = async () => {
     const shields = [...running.values()].map((child) => child.pid).filter((pid) => pid > 0);
-    // 先记下整棵树：组杀只到 shield 那一组，测试自己 detached 出去的子进程得按父子关系补刀。
+    // 先记下整棵树：组杀只到 shield 那一组，清空了环境又 detached 出去的子进程只能按父子关系补刀。
     const strays = descendants(shields);
     for (const pid of shields) signal(-pid, "SIGTERM");
     const deadline = Date.now() + 5_000;
-    while (running.size && Date.now() < deadline) await new Promise((wait) => setTimeout(wait, 100));
+    while (running.size && Date.now() < deadline) await pause(100);
     for (const pid of shields) signal(-pid, "SIGKILL");
     for (const pid of strays) signal(pid, "SIGKILL");
-    while (running.size) await new Promise((wait) => setTimeout(wait, 100));
+    while (running.size) await pause(100);
+  };
+
+  // 所有红都走这里：记下第一条，然后收场。之后再红的（多半是被收掉的）只报「已中止」。
+  const fail = async (leaf, code, message) => {
+    if (failure) return;
+    failure = { leaf, code: code || 1 };
+    if (message) log(`[test-runner] ${message}`);
+    if (running.size) log(`\n[test-runner] ${leaf?.label ?? "执行器"} 未通过，收掉在跑的 ${running.size} 条。`);
+    await stopAll();
   };
 
   const interrupt = (name) => {
     log(`[test-runner] 收到 ${name}，收掉在跑的 ${running.size} 条。`);
-    failure ??= { leaf: null, code: 128 + (name === "SIGINT" ? 2 : 15) };
-    void stopAll();
+    void fail(null, 128 + (name === "SIGINT" ? 2 : 15));
   };
   const onTerm = () => interrupt("SIGTERM");
   const onInt = () => interrupt("SIGINT");
   process.on("SIGTERM", onTerm).on("SIGINT", onInt);
 
+  let settled = false;
   try {
     let next = 0;
     const worker = async () => {
       while (!failure && next < queue.length) {
-        const result = await launch(queue[next++]);
-        if (failure) {
-          if (result.status.code !== 0 && !result.status.skipped) log(`[test-runner] 已中止：${result.leaf.label}`);
-          continue;
+        const leaf = queue[next++];
+        try {
+          const result = await launch(leaf);
+          if (failure) {
+            if (result.status.code !== 0 && !result.status.skipped) log(`[test-runner] 已中止：${leaf.label}`);
+            continue;
+          }
+          report(result);
+          if (result.status.code !== 0) return await fail(leaf, result.status.code);
+          if (--remaining[leaf.step] === 0) steps[leaf.step].onPass?.();
+        } catch (error) {
+          return await fail(leaf, 1, `执行器自身出错（${leaf.label}）：${error?.stack ?? error}`);
         }
-        report(result);
-        if (result.status.code !== 0) {
-          failure = { leaf: result.leaf, code: result.status.code || 1 };
-          if (running.size) log(`\n[test-runner] ${result.leaf.label} 未通过，收掉在跑的 ${running.size} 条。`);
-          await stopAll();
-          return;
-        }
-        if (--remaining[result.leaf.step] === 0) steps[result.leaf.step].onPass?.();
       }
     };
     await Promise.all(Array.from({ length: Math.max(1, jobs) }, worker));
+    settled = true;
   } finally {
     process.off("SIGTERM", onTerm).off("SIGINT", onInt);
+    // 正常走到这里时 running 已经空了；万一是异常跳出来的，先记成红（还在等台子的叶子就不会
+    // 再起），再照样收干净往下走。
+    if (!settled) failure ??= { leaf: null, code: 1 };
+    await stopAll();
+    const leftovers = await sweep([]);
+    if (leftovers) log(`[test-runner] 收尾时还有 ${leftovers} 个本轮起的进程，已收掉。`);
     for (const stage of stages.values()) await stage.then((started) => started.stop(), () => undefined);
     rmSync(logs, { recursive: true, force: true });
     writeHistory(timings);
@@ -245,6 +333,7 @@ export async function runSteps(repo, steps, { jobs = defaultJobs(), env = proces
 }
 
 // Windows 上没有 /bin/sh 和 ps，进程组也是另一套语义：照旧按链一步一步交给 npm 跑。
+// 其它平台设 ASH_TEST_RUNNER=serial 也走这条，门禁自检靠它在本机核对这份契约。
 function runSequentially(repo, steps, env, log) {
   for (const step of steps) {
     const args = step.workspace === "." ? ["run", step.script] : ["-w", step.workspace, "run", step.script];
