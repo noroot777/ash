@@ -113,8 +113,23 @@
 .task-markdown th > :last-child,
 .task-markdown td > :last-child { margin-bottom: 0; }
 .task-markdown code { border-radius: 4px; background: var(--raised); padding: 1px 4px; color: var(--ink); font-size: 11.5px; overflow-wrap: anywhere; }
-.task-code-block { overflow-x: auto; margin: 9px 0; border: 1px solid var(--line); border-radius: 8px; background: #f4f4f5; padding: 10px 12px; color: #27272a; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; white-space: pre; }
+/* 框（边框、底色、圆角）画在外层，外层分两栏：代码在左栏里自己横向滚动，复制按钮独占
+   右侧一条窄栏。按钮不叠在代码上面，所以任何宽度、任何滚动位置都遮不住一个字——触屏上
+   它常亮，叠上去就会永久挡住首行末尾。 */
+.task-code-block-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; margin: 9px 0; border: 1px solid var(--line); border-radius: 8px; background: #f4f4f5; }
+.task-code-block { overflow-x: auto; margin: 0; padding: 10px 4px 10px 12px; color: #27272a; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; white-space: pre; }
 .task-code-block code { background: transparent; padding: 0; color: inherit; overflow-wrap: normal; }
+/* 悬停这一块才露脸，免得长对话里满屏图标；触屏没有悬停，常亮。复制反馈期间同样常亮，
+   理由同气泡头部那颗（见文件开头）。 */
+.task-code-copy { display: grid; width: 24px; height: 24px; margin: 6px 6px 0 0; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); opacity: 0; transition: opacity .12s; }
+.task-code-block-wrap:hover .task-code-copy,
+.task-code-copy:focus-visible,
+.task-code-copy.is-copied,
+.task-code-copy.is-copy-failed { opacity: 1; }
+.task-code-copy:hover { background: color-mix(in lch, var(--ink) 7%, transparent); color: var(--ink); }
+.task-code-copy.copy-button.is-copied { color: var(--green); }
+.task-code-copy.copy-button.is-copy-failed { color: var(--red); }
+@media (hover: none) { .task-code-copy { opacity: 1; } }
 .task-markdown-image { display: block; max-width: 100%; border: 0; background: transparent; padding: 0; }
 .task-markdown img { display: block; max-width: min(100%, 680px); max-height: 460px; border: 1px solid var(--line); border-radius: 8px; object-fit: contain; }
 .markdown-action-error { margin: 7px 0 0; color: var(--red); font-size: 10.5px; }
