@@ -17,7 +17,8 @@ export type SettingsSection =
   | "config"
   | "users"
   | "account"
-  | "defaults";
+  | "defaults"
+  | "feishu";
 
 // `requires` 决定这一节**在导航里显不显示**,不决定它存不存在 —— 两者分开的原因见
 // 下面 parseSettingsSection 的注释。判据只有两种:
@@ -40,6 +41,9 @@ export const SYSTEM_NAV: readonly NavItem[] = [
   { id: "workflows", label: "起手式" },
   { id: "reviewers", label: "审查者" },
   { id: "cli-env", label: "个人 CLI 环境", requires: "multi" },
+  // 不挂 requires：多人模式下每个人也要来这里绑自己的飞书，凭证/推送那几张卡由面板按
+  // 服务端回的 canManage 自己收成只读。
+  { id: "feishu", label: "飞书" },
   { id: "config", label: "配置搬家" },
   { id: "users", label: "用户", requires: "multiAdmin" },
   { id: "account", label: "我的账号", requires: "multi" },
@@ -80,4 +84,6 @@ export const SECTION_ANCHORS: Partial<Record<SettingsSection, Record<string, str
   // 「预览命令」是这张卡的旧名字，存量文案里还有（改成「自定义脚本 / 选择服务」之前的说法）。
   project: { 预览: "preview", 预览命令: "preview", 工作目录: "worktree", 常用命令: "commands" },
   defaults: { 输入框: "send-key", 发送键: "send-key" },
+  // 服务端报错里写「设置 → 飞书 → 绑定」这类路径时，点一下就停在那张卡上。
+  feishu: { 连接: "feishu-connection", 绑定: "feishu-binding", 推送: "feishu-push", 群: "feishu-groups" },
 };

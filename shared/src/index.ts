@@ -579,3 +579,7 @@ export function isUserFollowUp(seg: { kind: string; text?: string | null; bySyst
 }
 
 export type { BranchPlanEntry, BranchPlanView, BranchDependency, FamilyAcceptanceResult } from "./branch-plan.ts";
+export type {
+  FeishuBinding, FeishuConnection, FeishuGroup, FeishuGroupClaim, FeishuGroups, FeishuStatus,
+  ImApiKind, ImBindCode, ImConnectionState, ImDomain, ImHealthState, ImOptions, ImQuotaLevel, ImUsage,
+} from "./im.ts";

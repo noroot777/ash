@@ -1,0 +1,432 @@
+/* 设置 → 飞书。基础的卡片 / 行 / 字段样式在 styles/settings.css，这里只补飞书分区自己的。 */
+
+/* 字段名：.settings-field > span 那条只认 span，这一节有的字段名是 <label htmlFor>（为了让
+   输入框的可读名字只是字段名本身，不把旁边的说明和按钮也念进去）。 */
+.feishu-inline-field > label,
+.feishu-inline-field > .feishu-field-name {
+  width: 128px;
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* 输入框 + 说明叠成一栏；它也是 .settings-field 的直接子 span，要撤掉字段名那条 128px 定宽。
+   颜色只给说明文字：Tailwind 的 preflight 让 input 继承外层 color，挂在这一栏上会把输入框里
+   的值也染成提示色，看着像占位文字。 */
+.feishu-inline-field > .feishu-field-body {
+  display: grid;
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 5px;
+}
+
+.feishu-inline-field > .feishu-field-body small {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.feishu-field-body .feishu-field-error {
+  color: var(--red);
+}
+
+.feishu-quota-input {
+  max-width: 160px;
+}
+
+.feishu-secret-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.feishu-state-row small {
+  line-height: 1.5;
+}
+
+.feishu-stale {
+  color: var(--amber) !important;
+}
+
+.feishu-warn {
+  display: block;
+  color: var(--amber);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-row small.feishu-warn {
+  color: var(--amber);
+}
+
+/* 开关的「已开启」在窄屏上会被挤成一字一行。 */
+.feishu-settings .settings-row > .ui-choice,
+.feishu-actions .ui-choice {
+  flex: none;
+  white-space: nowrap;
+}
+
+.feishu-actions {
+  display: inline-flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- 连接卡：事实清单 ---- */
+
+.feishu-facts {
+  display: grid;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 16px;
+  gap: 6px;
+}
+
+.feishu-facts > div {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 12px;
+  font-size: 12px;
+}
+
+.feishu-facts dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.feishu-facts dd {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+.feishu-fact-note {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ---- 额度 ---- */
+
+.feishu-usage-figure {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.feishu-usage-figure b {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.feishu-usage-figure em {
+  margin-left: 4px;
+  color: var(--faint);
+  font-style: normal;
+}
+
+.feishu-meter {
+  height: 6px;
+  margin: 0 16px 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--raised);
+}
+
+.feishu-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+}
+
+.feishu-meter i[data-level="frugal"] { background: var(--cyan); }
+.feishu-meter i[data-level="essential"] { background: var(--amber); }
+.feishu-meter i[data-level="exhausted"] { background: var(--red); }
+
+.feishu-levels {
+  display: grid;
+  border-bottom: 1px solid var(--line);
+  padding: 0 16px 12px;
+  gap: 4px;
+}
+
+.feishu-levels > div {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 12px;
+  border-radius: 7px;
+  padding: 5px 8px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.feishu-levels > div.is-current {
+  background: var(--raised);
+  color: var(--ink);
+}
+
+.feishu-levels b {
+  font-weight: 600;
+}
+
+.feishu-levels b em {
+  margin-left: 6px;
+  color: var(--faint);
+  font-style: normal;
+  font-weight: 400;
+}
+
+.feishu-level-now {
+  border-radius: 999px;
+  background: var(--accent-soft);
+  padding: 0 7px;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.feishu-kinds {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 16px;
+  font-size: 12px;
+}
+
+.feishu-kinds summary,
+.feishu-guide summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.feishu-kinds table {
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.feishu-kinds th,
+.feishu-kinds td {
+  padding: 3px 24px 3px 0;
+  font-size: 12px;
+  text-align: left;
+}
+
+.feishu-kinds th {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.feishu-kinds .settings-muted {
+  padding: 8px 0 0;
+}
+
+.feishu-kinds-note {
+  margin: 8px 0 0;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.feishu-outbox {
+  flex: none;
+  white-space: nowrap;
+}
+
+.feishu-outbox.is-dead {
+  color: var(--amber) !important;
+}
+
+/* ---- 开通顺序与边界 ---- */
+
+.feishu-guide {
+  padding: 12px 16px 14px;
+}
+
+/* 列表记号要自己写回来：Tailwind 的 preflight 把 ol/ul 的 list-style 清掉了，而这几步的
+   先后顺序本身就是要传达的信息。 */
+.feishu-steps {
+  display: grid;
+  margin: 12px 0 0;
+  padding-left: 20px;
+  list-style: decimal;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.feishu-steps code,
+.feishu-bounds code,
+.feishu-foot-text code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.feishu-scopes {
+  display: grid;
+  margin: 6px 0 6px;
+  padding: 0;
+  gap: 4px;
+  list-style: none;
+}
+
+.feishu-scopes li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.feishu-scopes li > span:last-child {
+  color: var(--muted);
+}
+
+.feishu-scopes em {
+  color: var(--faint);
+  font-style: normal;
+}
+
+.feishu-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 0 2px 0 6px;
+}
+
+.feishu-copy-icon {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+}
+
+.feishu-copy-icon:hover {
+  color: var(--ink);
+}
+
+.feishu-copy-icon.is-copied { color: var(--green); }
+.feishu-copy-icon.is-copy-failed { color: var(--red); }
+
+.feishu-bounds {
+  margin-top: 14px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--amber) 7%, var(--panel));
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.feishu-bounds ul {
+  display: grid;
+  margin: 6px 0 0;
+  padding-left: 18px;
+  list-style: disc;
+  gap: 4px;
+}
+
+/* ---- 绑定码 ---- */
+
+.feishu-code-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 2px;
+}
+
+.feishu-code {
+  border: 1px dashed var(--line2);
+  border-radius: 8px;
+  background: var(--canvas);
+  padding: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  user-select: all;
+}
+
+.feishu-copy {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.feishu-copy:hover { color: var(--ink); }
+.feishu-copy.is-copied { color: var(--green); }
+.feishu-copy.is-copy-failed { color: var(--red); }
+
+.feishu-countdown {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.feishu-pending {
+  background: color-mix(in lch, var(--accent) 5%, var(--panel));
+}
+
+.feishu-pending small {
+  line-height: 1.5;
+}
+
+/* ---- 推送 / 群 ---- */
+
+.feishu-title-only {
+  align-items: flex-start;
+}
+
+.feishu-project-checks {
+  display: grid;
+  max-height: 220px;
+  flex: none;
+  overflow-y: auto;
+  gap: 2px;
+}
+
+.feishu-foot-text {
+  line-height: 1.6;
+}
+
+@media (max-width: 720px) {
+  .settings-row.feishu-group-row,
+  .settings-row.feishu-group-new,
+  .settings-row.feishu-usage,
+  .settings-row.feishu-pending,
+  .settings-row.feishu-code-row,
+  .settings-row.feishu-title-only {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .feishu-inline-field {
+    flex-wrap: wrap;
+  }
+
+  .feishu-facts > div,
+  .feishu-levels > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}

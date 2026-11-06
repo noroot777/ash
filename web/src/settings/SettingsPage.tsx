@@ -5,6 +5,7 @@ import {
   Archive,
   ArrowLeft,
   ArrowsLeftRight,
+  ChatTeardropDots,
   CirclesThreePlus,
   FolderSimple,
   PlugsConnected,
@@ -21,6 +22,7 @@ import { AccountSettings } from "./AccountSettings.tsx";
 import { ArchiveSettings } from "./ArchiveSettings.tsx";
 import { ConfigTransferSettings } from "./ConfigTransferSettings.tsx";
 import { DefaultsSettings } from "./DefaultsSettings.tsx";
+import { FeishuSettings } from "./FeishuSettings.tsx";
 import { ExecutorsSettings } from "./ExecutorsSettings.tsx";
 import { GroupsSettings } from "./GroupsSettings.tsx";
 import { ModesSettings } from "./ModesSettings.tsx";
@@ -65,6 +67,7 @@ const NAV_ICONS: Record<SettingsSection, ComponentType<{ size?: number; "aria-hi
   users: UsersThree,
   account: UserCircle,
   defaults: SlidersHorizontal,
+  feishu: ChatTeardropDots,
 };
 
 // 内容**横着长**的那几节要更宽的栏。880px 那档是为「一行一个设置项」的竖排表单定的，
@@ -205,6 +208,7 @@ export function SettingsPage({
           {section === "users" && <UsersSettings notify={notify} onAccount={() => onSection("account")} />}
           {section === "account" && <AccountSettings notify={notify} />}
           {section === "defaults" && <DefaultsSettings notify={notify} onOpen={onSection} />}
+          {section === "feishu" && <FeishuSettings notify={notify} onOpen={onSection} />}
           {section === "project" && project && (
             <ProjectSettingsPanel
               project={project}

@@ -48,6 +48,7 @@ import { monitorApi } from "./apiMonitors.ts";
 import { taskMemoApi } from "./apiTaskMemos.ts";
 import { previewAssistApi } from "./apiPreviewAssist.ts";
 import { handoffApi } from "./handoffApi.ts";
+import { feishuApi } from "./feishuApi.ts";
 import { fileApi } from "./fileApi.ts";
 import { pendingMergeApi } from "./pendingMergeApi.ts";
 import { humanAction } from "./humanActionToken.ts";
@@ -600,6 +601,8 @@ export const api = {
   ...previewAssistApi,
   // 任务备忘同理，住在 apiTaskMemos.ts。
   ...taskMemoApi,
+  // 飞书通道那一组住在 feishuApi.ts（守 700 行）。
+  ...feishuApi,
 
   queue: (queueId: string): Promise<{
     queueId: string;
