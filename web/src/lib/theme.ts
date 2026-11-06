@@ -23,7 +23,13 @@ const STORAGE_KEY = "ash.colorTheme";
 const isColorTheme = (value: unknown): value is ColorTheme =>
   typeof value === "string" && (COLOR_THEMES as readonly string[]).includes(value);
 
+// 不在浏览器里(Node 里 renderToStaticMarkup 的回归)就没有页面可拨：下面读镜像、挂监听、
+// 首次上色都跳过，偏好按「跟随系统」、解析成浅色。这个模块经 settingsSync 被大半个前端间接
+// import,顶层一碰 `window` 就让那些服务端渲染的用例在加载阶段直接抛 ReferenceError。
+const browser = typeof window !== "undefined";
+
 function readCached(): ColorTheme {
+  if (!browser) return "system";
   try {
     const cached = window.localStorage.getItem(STORAGE_KEY);
     return isColorTheme(cached) ? cached : "system";
@@ -33,7 +39,7 @@ function readCached(): ColorTheme {
   }
 }
 
-const media = typeof window.matchMedia === "function"
+const media = browser && typeof window.matchMedia === "function"
   ? window.matchMedia("(prefers-color-scheme: dark)")
   : null;
 
@@ -50,6 +56,7 @@ export const colorTheme = (): ColorTheme => preference;
 export const resolvedTheme = (): ResolvedTheme => resolve(preference);
 
 function paint(): void {
+  if (!browser) return;
   const root = document.documentElement;
   const resolved = resolve(preference);
   root.dataset.theme = resolved;
@@ -83,7 +90,7 @@ function toHex(color: string): string | null {
  */
 export function syncColorTheme(next: ColorTheme): void {
   if (!isColorTheme(next)) return;
-  try {
+  if (browser) try {
     window.localStorage.setItem(STORAGE_KEY, next);
   } catch {
     // 存不进去只是下次开页可能闪一下，不影响这一次。
@@ -105,7 +112,7 @@ media?.addEventListener("change", paint);
 
 // 另一个标签页里换了配色，这里跟着翻：那边换档时会写这份镜像，而 storage 事件只发给
 // **别的**标签页。同源同 cookie,两个标签页一定是同一个人，镜像就是他刚选的那一档。
-window.addEventListener("storage", (event) => {
+if (browser) window.addEventListener("storage", (event) => {
   if (event.key !== STORAGE_KEY || !isColorTheme(event.newValue) || event.newValue === preference) return;
   preference = event.newValue;
   paint();
