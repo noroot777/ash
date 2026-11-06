@@ -22,7 +22,10 @@ const EDGE_GAP = 8;
 const MENU_PAD = 4;
 /** 跳过去之后，那颗气泡的顶边离视口顶边留多少：贴死在边上不好认。 */
 const JUMP_OFFSET = 16;
-/** 隔这么久没再来 scroll 就算滚动停了：平滑滚动一帧一个事件，中间不会断这么久。 */
+/**
+ * 没有 scrollend 的浏览器：隔这么久没再来 scroll 就算滚动停了。只是兜底的猜法 —— 机器一忙
+ * 平滑滚动的帧也会断这么久，所以停没停优先听 scrollend 的。
+ */
 const SCROLL_SETTLE_MS = 160;
 
 function isTextEntry(target: EventTarget | null): boolean {
@@ -128,19 +131,29 @@ export function ConversationInputRail({
     const release = () => {
       pinRef.current = null;
     };
+    // 滚动停了：停在落点上就算落定（当场比位置，不等那一帧的 measure 先记上），没停在落点上
+    // 就是被接管了、或者到不了，放开。
     let settle = 0;
     const settled = () => {
       settle = 0;
-      if (!pinRef.current || pinRef.current.landed) return;
+      const pin = pinRef.current;
+      if (!pin || pin.landed) return;
+      if (Math.abs(container.scrollTop - pin.top) <= 1) {
+        pin.landed = true;
+        return;
+      }
       pinRef.current = null;
       measure();
     };
+    const scrollEnds = "onscrollend" in window;
     const onScroll = () => {
       schedule();
+      if (scrollEnds) return;
       window.clearTimeout(settle);
       settle = window.setTimeout(settled, SCROLL_SETTLE_MS);
     };
     container.addEventListener("scroll", onScroll, { passive: true });
+    if (scrollEnds) container.addEventListener("scrollend", settled);
     container.addEventListener("wheel", release, { passive: true });
     container.addEventListener("touchmove", release, { passive: true });
     const observer = new ResizeObserver(schedule);
@@ -149,6 +162,7 @@ export function ConversationInputRail({
       cancelAnimationFrame(frame);
       window.clearTimeout(settle);
       container.removeEventListener("scroll", onScroll);
+      container.removeEventListener("scrollend", settled);
       container.removeEventListener("wheel", release);
       container.removeEventListener("touchmove", release);
       observer.disconnect();
