@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
-import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
@@ -275,7 +275,7 @@ export class ClaudeExecutor implements AgentExecutor {
     child.on("close", settingsCleanup);
     if (child.stdin && opts.commandLine.includes("--input-format")) {
       return singleRunFromResident(
-        this.residentFromChild(child, opts.sessionId, opts.commandLine, settingsCleanup, opts.cwd, opts.images, true, consumedEvents(opts.consumed)),
+        this.residentFromChild(child, opts.sessionId, opts.commandLine, settingsCleanup, opts.cwd, opts.images, true, opts.consumed),
         detached,
       );
     }
@@ -323,7 +323,7 @@ export class ClaudeExecutor implements AgentExecutor {
     cwd?: string,
     images?: MarkdownImageAccounting,
     reapsAtTurnEnd = false,
-    consumed?: readonly unknown[],
+    consumed?: ConsumedOutput,
   ): ResidentHandle {
     const resident = new ClaudeControlBridge(reapsAtTurnEnd);
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
@@ -459,18 +459,27 @@ export function singleRunFromResident(
     try {
       for await (const event of resident.events) {
         if (event.kind === "turnEnd") {
+          // 插话打断出来的结尾:进程还要接着跑插话开的那一回合。接管回来的这一代没发过那次打断
+          // (计数是 0),只能靠这个标记认。
+          if (event.interrupted) {
+            intermediateEnds = Math.max(0, intermediateEnds - 1);
+            continue;
+          }
           if (intermediateEnds > 0) {
             intermediateEnds -= 1;
             continue;
           }
           clearHold();
           if (event.background) {
+            // 期限从开始等的那一刻算,不随重启接管重新给满(起点由解析层落盘,见 claude-recovery.ts)。
+            const since = Date.parse(event.background.since ?? "");
+            const left = Number.isFinite(since) ? Math.max(0, holdMs - (Date.now() - since)) : holdMs;
             holdTimer = setTimeout(() => {
               const at = new Date().toISOString();
               holdExpired = { kind: "background_timeout", reason: holdTimeoutMessage(holdMs), at, since: at, durable: false };
               accepting = false;
               resident.close();
-            }, holdMs);
+            }, left);
             holdTimer.unref?.();
             continue;
           }
@@ -541,28 +550,6 @@ export function singleRunFromResident(
     },
     cleanup: resident.cleanup,
   };
-}
-
-/**
- * 接管时上一个 ash 进程已经消费掉的那段输出,按行解析。只给后台任务账本重建状态用
- * (claude-stream.ts 的 `consumed`):`task_started` 都在水位之前,不重放的话新账本是空的。
- * 读不出来就退回空集 —— 那是这份修补之前的行为,并打一条告警。
- */
-function consumedEvents(consumed?: ConsumedOutput): unknown[] {
-  if (!consumed || consumed.offset <= 0) return [];
-  try {
-    const text = readFileSync(consumed.outPath).subarray(0, consumed.offset).toString("utf8");
-    const events: unknown[] = [];
-    for (const line of text.split("\n")) {
-      const t = line.trim();
-      if (!t) continue;
-      try { events.push(JSON.parse(t)); } catch { /* 不是事件行 */ }
-    }
-    return events;
-  } catch (error) {
-    console.warn(`[ash] 读不出接管前已消费的输出（${consumed.outPath}），后台任务账本只能从空开始:`, error);
-    return [];
-  }
 }
 
 const holdTimeoutMessage = (ms: number) =>

@@ -96,7 +96,9 @@ export type AgentEvent =
   // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
   // `background` = 这一刻还没跑完的后台子代理 / 工作流个数（只在有的时候带）。单飞据此先不
   // 收台：它们跑完 CLI 会自己开下一回合（server/src/executors/claude.ts `singleRunFromResident`）。
-  | { kind: "turnEnd"; background?: { agent: number; workflow: number } }
+  // `since` = 从哪一刻开始等的（重启接管不重新起算期限）。`interrupted` = 这个结尾是 ash 插话
+  // 打断出来的，进程还要接着跑下一段。
+  | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true }
   | { kind: "done"; exitStatus: number };
 
 // synthesis = 收敛后的合稿轮(共同方案);impl/review are legacy transcript speakers

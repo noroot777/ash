@@ -155,8 +155,8 @@ export class ClaudeBackgroundTrace {
   /** 时间线写入串成一条链：回合边界那次和流结束那次不能乱序，`finish` 要等它写完。 */
   private writes: Promise<void> = Promise.resolve();
   private cliSessionId: string;
-  /** 重放已消费的那段输出时只重建账本：那几笔该说的上一个 ash 进程说过了。 */
-  private replaying = false;
+  /** 重放已消费的那段输出时只重建账本：那几笔该说的上一个 ash 进程说过了（见 executors/claude-recovery.ts）。 */
+  quiet = false;
 
   constructor(cliSessionId?: string) {
     this.cliSessionId = cliSessionId ?? "";
@@ -184,32 +184,6 @@ export class ClaudeBackgroundTrace {
     if (!targets) return;
     this.stopCalls.delete(toolUseId);
     if (!isError) for (const task of targets) task.stopOk = true;
-  }
-
-  /**
-   * 重启接管：把上一个 ash 进程已经消费掉的那段原始输出喂回来，**只重建账本**（谁起了、谁的
-   * 发起调用返回了、谁收到了终态），不往时间线上写。接管是从已消费的水位之后接着读的，不重放
-   * 的话 `task_started` 全在水位之前，账本是空的 —— 「没记到后台任务」会被读成「没有后台任务」，
-   * 回合一结尾就把还在干活的工作流收掉。
-   */
-  replay(ev: any): void {
-    if (!ev || typeof ev !== "object") return;
-    this.replaying = true;
-    try {
-      this.event(ev);
-      if (ev.type !== "assistant" && ev.type !== "user") return;
-      for (const block of Array.isArray(ev.message?.content) ? ev.message.content : []) {
-        if (block?.type === "tool_use") this.toolUse(block.name, block.id, block.input);
-        if (block?.type === "tool_result") this.toolResult(block.tool_use_id, block.is_error === true);
-      }
-    } finally {
-      this.replaying = false;
-    }
-  }
-
-  /** 此刻是不是停在回合之间（最后一条主回合事件是 `result`）。接管时判要不要接着等用。 */
-  get betweenTurns(): boolean {
-    return this.idle;
   }
 
   event(ev: any): void {
@@ -364,7 +338,7 @@ export class ClaudeBackgroundTrace {
   }
 
   private report(notice: string): void {
-    if (!notice || this.replaying) return;
+    if (!notice || this.quiet) return;
     this.writes = this.writes.then(() => this.write(notice));
   }
 

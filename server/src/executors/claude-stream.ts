@@ -20,6 +20,8 @@ import { ClaudeControlBridge } from "./claude-control.js";
 import { ClaudeBackgroundTrace } from "../claude-background-reaped.js";
 import { ClaudeMonitorTrace } from "../claude-monitors.js";
 import { runOriginOfChild } from "../claude-monitor-origin.js";
+import { consumedEvents, holdSince, interruptedResults, isOwnInterruptAck, startsTurn } from "./claude-recovery.js";
+import type { ConsumedOutput } from "./types.js";
 import { claudeRetryMessage, isClaudeRetry } from "./claude-retry-notice.js";
 import { normalizeClaudeCliError, shortJson, claudeContextUsed, claudeContextWindow, claudeUsage } from "./claude-metadata.js";
 
@@ -48,9 +50,9 @@ export function parseClaudeStream(
   cwd?: string,
   // 正文图片的持久账本/身份种子(RunOpts.images),见 markdown-image-stream.ts。
   accounting?: MarkdownImageAccounting,
-  // 接管时上一个 ash 进程已经消费掉的那段原始输出(按行解析好的事件),只用来重建后台任务
-  // 账本与子智能体投影,不再推送。见 ../claude-background-reaped.ts 的 `replay`。
-  consumed?: readonly unknown[],
+  // 接管时上一个 ash 进程已经消费掉的那段原始输出(文件 + 字节水位)。先静音重放一遍,接回的
+  // 状态才和不间断执行一致,见 ./claude-recovery.ts。
+  consumed?: ConsumedOutput,
 ): AsyncIterable<AgentEvent> {
   // 正文里的图**不在这份解析里收**:它要按「一份文档」认身份,而这里一条模型消息就是
   // 一片碎片 —— 上一条消息给定义、下一条引用它时,按消息扫压根不认那张图(审查第 4 轮
@@ -77,7 +79,7 @@ async function* claudeStreamEvents(
   images: MarkdownImageSink,
   cliSessionId?: string,
   cwd?: string,
-  consumed?: readonly unknown[],
+  consumed?: ConsumedOutput,
 ): AsyncIterable<AgentEvent> {
   // 队列、唤醒、收尾、增量合并、子活动合并和**图片记账的时点**都在这条共用流水线里
   // (见 event-queue.ts)。顺序是硬要求:字节在 `delta`/`push` 的那一刻就冻住,交代排在
@@ -92,7 +94,15 @@ async function* claudeStreamEvents(
   // message that trails the deltas is used ONLY for tool_use — replaying its text
   // would duplicate everything the deltas already streamed.
   const events = eventQueue({ images, activity: new NativeActivityBuffer(), coalesce: { text: 40 } });
-  const push = (event: AgentEvent) => events.push(event);
+  // 重放水位之前那段输出时(见下面 `consumed`)一律静音:那些话上一个 ash 进程已经说过了。
+  // 只有最后一个回合结尾推出的那几条要留着 —— 它们决定接回之后收不收台,见 `ending`。
+  let replaying = false;
+  let ending: AgentEvent[] | null = null;
+  let capturing = false;
+  const push = (event: AgentEvent) => {
+    if (!replaying) events.push(event);
+    else if (capturing) ending?.push(event);
+  };
   const flushText = () => events.flush();
 
   // 上下文水位。**只有 `assistant` 事件里的 `message.usage` 是单次 API 调用的快照**
@@ -121,29 +131,12 @@ async function* claudeStreamEvents(
   // 后台子代理 / 后台 Bash 的同类账本：认人同样要 tool_use、tool_result、system 三样一起看。
   // 它们随回合收尾被收走时在时间线上留一笔（见 ../claude-background-reaped.ts）。
   const background = new ClaudeBackgroundTrace(cliSessionId);
-  if (consumed?.length) {
-    // 重启接管:水位之前那段的后台任务和工作流子智能体,上一个 ash 进程见过、这一个没见过。
-    // 投影的输出上一个进程已经落过盘,这里只要状态,产出一律丢掉。
-    for (const ev of consumed as any[]) {
-      background.replay(ev);
-      nativeWork.claudeMessage(ev);
-      if (ev?.parent_tool_use_id || !Array.isArray(ev?.message?.content)) continue;
-      for (const block of ev.message.content) {
-        if (ev.type === "assistant" && block?.type === "tool_use") nativeWork.call(block.name, block.input, block.id);
-        if (ev.type === "user" && block?.type === "tool_result") nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
-      }
-    }
-    if (resident) resident.turnActive = !background.betweenTurns;
-    // 接回时正停在「等后台」的空档:那个让单飞先不收台的回合结尾在水位之前,这一代没见过,
-    // 照它重发一遍,等待和它的期限才接得上(期限从接回这一刻重新起算)。
-    const waiting = resident?.reapsAtTurnEnd && background.betweenTurns ? background.waiting() : null;
-    if (waiting && waiting.agent + waiting.workflow > 0) {
-      push({ kind: "system", text: backgroundHoldNotice(waiting), at: new Date().toISOString(), level: "notice", aside: true });
-      push({ kind: "turnEnd", background: waiting });
-    }
-  }
-
-  const rl = createInterface({ input: child.stdout! });
+  // 接管时读不出水位之前那段:后台还有没有活、回合在不在进行,一概说不准(见 ./claude-recovery.ts)。
+  // 回合结尾一律按「可能还有」先不收台,等到期限按未完成结算 —— 不能拿空账本判「没有后台工作」。
+  let recoveryUnknown = false;
+  // 第几个回合结尾(孤儿回执不算)。等后台的起点按它落盘,重启接管时认得出是不是同一次等待。
+  let turns = 0;
+  const outPath = (child as { ashPaths?: { out?: string } }).ashPaths?.out;
 
   // 「在等上游回话」等到什么份上就该说一声。CLI 发请求时给一条 status:"requesting",
   // 之后连接要是挂住,那就是**彻底的静默**:不重试、不报错、一个事件都没有
@@ -185,15 +178,9 @@ async function* claudeStreamEvents(
     });
   }, Math.max(1_000, Math.floor(waitNoticeMs / 10)));
   waitTimer.unref?.(); // 心跳不能拖着进程不让退
-  rl.on("line", (line) => {
-    const t = line.trim();
-    if (!t) return;
-    let ev: any;
-    try {
-      ev = JSON.parse(t);
-    } catch {
-      return;
-    }
+  // 逐行处理。直播与重放共用这一份 —— 接回后的状态和不间断执行一致靠的就是这一条
+  // (./claude-recovery.ts);重放时对外的产出由 `push` 静音,写库、落文件这类副作用在这里跳过。
+  const handle = (ev: any): void => {
     // requesting 与 api_retry **都算「正在等上游回话」**:真实序列是一次 requesting 之后
     // 连着若干条 api_retry,中间不再有新的 requesting。把 retry 当「别的事件」解除等待,
     // 等于第一次失败之后心跳就永久熄火,而那之后每一次重试请求同样可能挂住(第 1 轮
@@ -207,14 +194,15 @@ async function* claudeStreamEvents(
       awaitingSince = null;
     }
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
-    claudeMonitors.event(ev);
+    // Monitor 的投影自己落库,接管时从库里认回来(../claude-monitors.ts),不重放。
+    if (!replaying) claudeMonitors.event(ev);
     background.event(ev);
     // 主智能体开口了(或 CLI 起了新一轮):一个回合正在进行。后台任务的进度(system
     // task_*)不算 —— 回合结束之后它们照样在流里滚。
-    if (!ev.parent_tool_use_id && (ev.type === "assistant" || ev.type === "stream_event"
-      || (ev.type === "system" && (ev.subtype === "init" || ev.subtype === "status")))) {
+    if (startsTurn(ev)) {
       if (ev.type === "assistant") turnSpoke = true;
       if (resident) resident.turnActive = true;
+      ending = null;
     }
     if (ev.parent_tool_use_id) {
       const images = childImages.get(ev.parent_tool_use_id) ?? imageStore();
@@ -224,8 +212,8 @@ async function* claudeStreamEvents(
         // 盯的也是同一份活。漏接的话面板会说「这个任务上还没有哨兵」，而 agent 那边
         // 明明已经挂上了——跟主智能体那条路是同一个毛病，只是入口在这个分支里。
         // 注意这个分支**会提前 return**，所以必须在这儿接，不能指望下面那段顶层处理。
-        if (block.type === "tool_use") claudeMonitors.toolUse(block.name, block.input, block.id);
-        if (block.type === "tool_result") claudeMonitors.toolResult(block.tool_use_id, block.content);
+        if (block.type === "tool_use" && !replaying) claudeMonitors.toolUse(block.name, block.input, block.id);
+        if (block.type === "tool_result" && !replaying) claudeMonitors.toolResult(block.tool_use_id, block.content);
         if (block.type === "tool_use") background.toolUse(block.name, block.id, block.input);
         if (block.type === "tool_result") background.toolResult(block.tool_use_id, block.is_error === true);
         // 子智能体写的文件同样是这个任务写的（见 tool-writes.ts）。
@@ -236,29 +224,31 @@ async function* claudeStreamEvents(
         }
         // 正文里的图归 withMarkdownImages(子智能体那份抽屉正文是它自己一笔账);这里只
         // 收工具结果里那几张 base64 截图 —— 它们不是正文语法,按块交代就是对的。
-        if (block.type === "tool_result") {
+        if (block.type === "tool_result" && !replaying) {
           for (const path of persistToolResultImages(block.content, images)) push(childActivity(ev.parent_tool_use_id, { kind: "attachment", path }));
         }
       }
       return;
     }
     if (ev.type === "control_response") {
-      resident?.handleResponse(ev);
+      // 重放里的回执配不上这一代的请求;它说明的「这条 result 是打断出来的」已经由
+      // interruptedResults 先认过了。
+      if (!replaying) resident?.handleResponse(ev);
       return;
     }
     if (ev.type === "stream_event") {
       const se = ev.event;
-      if (se?.type === "content_block_delta" && se.delta?.type === "text_delta" && se.delta.text) {
+      if (!replaying && se?.type === "content_block_delta" && se.delta?.type === "text_delta" && se.delta.text) {
         events.delta("text", se.delta.text);
       }
       return; // deltas drive the live stream; the trailing complete message handles tools
     }
     if (ev.type === "system" && ev.session_id) {
-      if (ev.subtype === "init") onInitialized();
+      if (ev.subtype === "init" && !replaying) onInitialized();
       // init 事件白送一份**权威**技能清单(skills / slash_commands / cwd 都在里面),
       // 顺手校准 skills 模块的扫描结果 —— 这是唯一不用额外起一个 CLI 进程就能拿到
       // 「这个 CLI 自己认哪些技能」的机会,别浪费。纯旁路:失败也不能影响事件流。
-      if (calibrateAs && ev.subtype === "init" && typeof ev.cwd === "string") {
+      if (calibrateAs && !replaying && ev.subtype === "init" && typeof ev.cwd === "string") {
         try {
           calibrateSkills(calibrateAs, ev.cwd, ev.skills, ev.slash_commands);
         } catch {
@@ -350,7 +340,7 @@ async function* claudeStreamEvents(
         } else if (block.type === "tool_use") {
           // Monitor 的入参只有这儿有：system/task_started 只带 tool_use_id，要靠它回指
           // 才分得清「内置 Monitor」和「普通后台 Bash」。
-          claudeMonitors.toolUse(block.name, block.input, block.id);
+          if (!replaying) claudeMonitors.toolUse(block.name, block.input, block.id);
           background.toolUse(block.name, block.id, block.input);
           push(nativeWork.call(block.name, block.input, block.id)
             ?? { kind: "tool", name: block.name, detail: shortJson(block.input) });
@@ -364,13 +354,13 @@ async function* claudeStreamEvents(
         if (block?.type !== "tool_result") continue;
         // 起手回执里那句 `expires in 20m` 是来源侧唯一说出**生效**期限的地方（入参那个
         // timeout_ms 只是请求值，claude 会自己钳）。见 claude-monitors.ts 的 toolResult。
-        claudeMonitors.toolResult(block.tool_use_id, block.content);
+        if (!replaying) claudeMonitors.toolResult(block.tool_use_id, block.content);
         background.toolResult(block.tool_use_id, block.is_error === true);
         const activity = nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
         if (activity) push(activity);
         const writes = writeLedger.toolResult(block.tool_use_id, block.is_error === true, soleReceipt(ev));
         if (writes) push(writes);
-        for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
+        if (!replaying) for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
       }
     } else if (ev.type === "result") {
       // **不是每一条 `result` 都是「本回合说完了」。** claude CLI resume 时会先替
@@ -404,6 +394,10 @@ async function* claudeStreamEvents(
       const failed = (!!ev.subtype && ev.subtype !== "success") || apiError;
       if (ev.origin?.kind === "task-notification" && !turnSpoke && !failed) return;
       turnSpoke = false;
+      turns += 1;
+      // 这一个结尾推出的事件,重放时留着(见 `ending`);下一个回合一开始就作废。
+      ending = [];
+      capturing = true;
       flushText();
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
       const usage = claudeUsage(ev);
@@ -459,15 +453,23 @@ async function* claudeStreamEvents(
       //
       // 等待说明发成 system 旁注而不是 notice error:后者是「上游在重试」的契约,停滞看门狗会把
       // 它计成重试、页面会显示「在等上游」—— 而这里上游好好的,是我们在等自己的后台。
+      //
+      // 接管时状态未知(`recoveryUnknown`)就当后台可能还有活:账本是空的不等于没有。
       const waiting = resident?.reapsAtTurnEnd && !ownInterrupt && !failed ? background.waiting() : null;
-      const holding = !!waiting && waiting.agent + waiting.workflow > 0;
+      const holding = !!waiting && (waiting.agent + waiting.workflow > 0 || recoveryUnknown);
       if (holding) {
-        push({ kind: "system", text: backgroundHoldNotice(waiting), at: new Date().toISOString(), level: "notice", aside: true });
+        push({ kind: "system", text: backgroundHoldNotice(waiting, recoveryUnknown), at: new Date().toISOString(), level: "notice", aside: true });
       } else if (resident?.reapsAtTurnEnd && !ownInterrupt) {
         for (const activity of nativeWork.reaped()) push(activity);
       }
-      // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。
-      if (resident) push(holding ? { kind: "turnEnd", background: waiting! } : { kind: "turnEnd" });
+      // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。打断出来的那个结尾要标出来:
+      // 单飞据此不收台(接管回来的这一代没有发过那次打断,只能靠这个认)。等后台的起点重放时
+      // 先不记,真要重发这个结尾时再定(见下面的 `deferred`)。
+      if (resident) {
+        push(holding
+          ? { kind: "turnEnd", background: { ...waiting!, ...(replaying ? {} : { since: holdSince(outPath, turns) }) } }
+          : ownInterrupt ? { kind: "turnEnd", interrupted: true } : { kind: "turnEnd" });
+      }
       // 只清字节去重表,不动 `refs`:引用身份在一条流里单调递增,复位会让两个回合的
       // 身份撞上。字节去重按回合清是故意的 —— 同一个路径在下一回合被重拍过,那是新的
       // 一张图,得有自己的拷贝。
@@ -476,7 +478,74 @@ async function* claudeStreamEvents(
       // 回合结束 = 压缩绝不可能还在进行中。兜底复位,免得将来 CLI 新增一条我们没认出来
       // 的终止路径时,残留的标志把下一回合的开始提示吞掉(常驻进程一份标志跨多回合)。
       compacting = false;
+      capturing = false;
     }
+  };
+
+  // 重启接管:先把水位之前那段静音走一遍(见 ./claude-recovery.ts 文件头)。
+  let deferred: { events: AgentEvent[]; turn: number } | null = null;
+  const emitDeferred = () => {
+    if (!deferred) return;
+    const { events: held, turn } = deferred;
+    deferred = null;
+    const at = new Date().toISOString();
+    for (const event of held) {
+      if (event.kind === "system") push({ ...event, at });
+      else if (event.kind === "turnEnd" && event.background) push({ ...event, background: { ...event.background, since: holdSince(outPath, turn) } });
+      else push(event);
+    }
+  };
+  if (consumed && consumed.offset > 0) {
+    replaying = true;
+    background.quiet = true;
+    try {
+      const own = interruptedResults(consumedEvents(consumed));
+      let index = 0;
+      for (const ev of consumedEvents(consumed)) {
+        if (resident && own.results.has(index)) resident.interruptPending = true;
+        handle(ev);
+        index += 1;
+      }
+      if (resident && own.pending) resident.interruptPending = true;
+    } catch (error) {
+      recoveryUnknown = true;
+      ending = null;
+      // 忙闲同样说不准。当它空闲:插话直接送,真在忙 CLI 也只是排到这一回合之后;当它在忙则可能
+      // 去打断一个空闲会话,那不会再吐 result,插话开的那一回合结尾会被当成打断的结尾、收不了台。
+      if (resident) resident.turnActive = false;
+      console.warn(`[ash] 读不出接管前已消费的输出（${consumed.outPath}），按「后台状态未知」接着跑:`, error);
+    } finally {
+      replaying = false;
+      capturing = false;
+      background.quiet = false;
+    }
+    // 水位正停在一个回合结尾之后:上一代当时据它收台或开始等后台,这一代没见过,得照样重发。
+    // 收台的那种推迟到水位之后的第一行再定 —— 那一行若是 ash 那次打断的回执,这个结尾就是插话
+    // 打断出来的(CLI 的回执可以晚于那条 result,两种先后都有),不能拿它收台;水位之后一直没有
+    // 输出就等一秒照发。等后台的那种不必等:真是打断出来的,插话开的那一回合结尾会重新判。
+    if (ending && resident && !resident.turnActive) deferred = { events: ending, turn: turns };
+    ending = null;
+    if (deferred?.events.some((event) => event.kind === "turnEnd" && event.background)) emitDeferred();
+  }
+  const deferTimer = deferred ? setTimeout(emitDeferred, 1_000) : null;
+  deferTimer?.unref?.();
+
+  const rl = createInterface({ input: child.stdout! });
+  rl.on("line", (line) => {
+    const t = line.trim();
+    if (!t) return;
+    let ev: any;
+    try {
+      ev = JSON.parse(t);
+    } catch {
+      return;
+    }
+    if (deferred && isOwnInterruptAck(ev)) {
+      deferred = null;
+      if (resident) resident.turnActive = true; // 插话那条消息正在(或马上)送进去
+    }
+    emitDeferred();
+    handle(ev);
   });
 
   let stderr = "";
@@ -491,6 +560,7 @@ async function* claudeStreamEvents(
   });
   child.on("close", (code) => {
     if (events.closed) return;
+    emitDeferred();
     resident?.failPending(new Error("Claude 进程在 interrupt ACK 前退出"));
     flushText(); // emit any text tail that never hit the flush threshold
     const exit = code ?? 0;
@@ -501,6 +571,7 @@ async function* claudeStreamEvents(
     events.close();
   });
   forceFinishOnExit(child, () => events.closed, (exit) => {
+    emitDeferred();
     resident?.failPending(new Error("Claude 进程在 interrupt ACK 前异常收尾"));
     flushText();
     push({ kind: "error", message: "进程已退出但输出流未正常收尾(疑有残留子进程占用管道),已强制结束本回合" });
@@ -514,6 +585,7 @@ async function* claudeStreamEvents(
     yield* events.drain();
   } finally {
     clearInterval(waitTimer);
+    if (deferTimer) clearTimeout(deferTimer);
     // agent 进程结束 = 它名下的内置 Monitor 全都跟着没了（它们本来就在这棵进程树里）。
     // 不收尾的话面板上会永远留着几张「正在盯着」的僵尸卡。
     //
@@ -527,7 +599,10 @@ async function* claudeStreamEvents(
 }
 
 /** 回合说完了、后台还有活没跑完时落在执行过程里的那一句。 */
-export function backgroundHoldNotice(waiting: { agent: number; workflow: number }): string {
+export function backgroundHoldNotice(waiting: { agent: number; workflow: number }, unknown = false): string {
+  if (unknown && !waiting.agent && !waiting.workflow) {
+    return "重启接管时读不出之前的输出，确认不了后台还有没有活在跑，先按还在跑等着；确认没有的话可以直接停止。";
+  }
   const parts = [
     waiting.workflow ? `${waiting.workflow} 个工作流` : "",
     waiting.agent ? `${waiting.agent} 个后台子代理` : "",
