@@ -16,7 +16,7 @@
 // 「锁占着、进程还没在册、令牌还没绑」:`claimOwnTurn` 排在 `trackRun` 之前(所以 `isRunning`
 // 答不了「有没有人正在起跑」,见 runs.ts `claimReconcileTurn`),`bindTurnToken` 排在它之后。
 // 于是只剩「这个状态持续了多久」可用,而**有一整类持有者的等待本来就没有时长上界**:
-//   · duet 的人工裁决门 —— `duet/index.ts` `runGate` 里 `await waitForGate(taskId)`,
+//   · duet 的人工裁决门 —— `duet/index.ts` `runGate` 里 `await waitForGate(taskId, version)`,
 //     等的是用户点一下,可以是几小时;这一支从头到尾不绑令牌(duet 目录里没有
 //     `bindTurnToken`),子进程这期间也确实不在册;
 //   · dispatch 的准备期 —— 合并结果审查要 `preparePostMergeReviewWorktree`,整段包在

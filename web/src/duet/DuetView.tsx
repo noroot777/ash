@@ -230,7 +230,7 @@ export function DuetView({
     if ((next.kind === "inject" || next.kind === "ask") && !(await confirmExecutorSwap(task.id))) return;
     setBusy(true);
     try {
-      await api.gate(task.id, next);
+      await api.gate(task.id, next, gate?.version);
       await refreshTask();
       notify(next.kind === "approve" ? "已放行并结束讨论" : next.kind === "reject" ? "已打回并终止讨论" : "意见已送入，讨论继续");
     } catch (reason) {
@@ -285,7 +285,7 @@ export function DuetView({
     onTaskCreated(created);
     setTeamModal(false);
     const followUpFailures = await runCreatedHandoffFollowUps({
-      closeGate: gateOpen ? () => api.gate(task.id, { kind: "approve" }) : null,
+      closeGate: gateOpen ? () => api.gate(task.id, { kind: "approve" }, gate?.version) : null,
       startTeam: () => api.runTask(created.id),
     });
     setTeamBusy(false);

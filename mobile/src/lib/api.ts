@@ -98,6 +98,8 @@ export type DuetTranscriptGate = {
   taskId: string;
   gate: GateName;
   open: boolean;
+  /** 这场讨论第几次开门(老记录没有)。 */
+  version?: number;
   consensus?: boolean;
   conclusionA?: string | null;
   conclusionB?: string | null;

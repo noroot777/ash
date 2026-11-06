@@ -18,7 +18,7 @@ import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-
 import { appendTaskTimeline } from "./task-timeline.js";
 import { createTasks, enrichTasks } from "./task-store.js";
 import { id, now } from "./util.js";
-import type { ReviewRoundRow, ReviewRunRow } from "./free-review-dispute.js";
+import { DisputeStaleError, type ReviewRoundRow, type ReviewRunRow } from "./free-review-dispute.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
@@ -111,7 +111,7 @@ export async function deferOpenDispute(
       .set({ disputeResolution: "deferred", disputeResolvedAt: at, disputeResolutionNote: note })
       .where(and(eq(freeReviewRounds.id, round.id), isNull(freeReviewRounds.disputeResolution)))
       .returning({ id: freeReviewRounds.id });
-    if (!claimed.length) throw new Error("这一轮驳回已经被裁定过了");
+    if (!claimed.length) throw new DisputeStaleError("这一轮驳回已经被裁定过了");
 
     let created: Task;
     try {

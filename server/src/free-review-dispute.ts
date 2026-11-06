@@ -132,6 +132,29 @@ export function hasDispute(round: ReviewRoundRow | null | undefined): boolean {
 const disputeWritten = sql`(coalesce(${freeReviewRounds.disputeReason}, '') <> '' or coalesce(${freeReviewRounds.disputeDeferReason}, '') <> '')`;
 
 /**
+ * 「等着用户裁定」的那组条件（不含任务过滤）：驳回已写下、没裁定、没被用户新派的审查取代、
+ * 是工作区审查。按任务查（`unresolvedDisputes`）和跨任务查（`openDisputeTargets`）共用这一份，
+ * 两处各写一遍的话，飞书推出去的卡和审查面板上的卡迟早不是同一批。
+ */
+const awaitingRuling = and(
+  eq(freeReviewRuns.targetKind, "workspace"),
+  disputeWritten,
+  isNull(freeReviewRounds.disputeResolution),
+  isNull(freeReviewRounds.disputeSupersededAt),
+);
+
+// 排序键与界面上那张卡的 `dispute.at` 同一个兜底（free-workflow-state.ts）：接力载荷允许
+// 驳回时间为空，两边各按各的排，显示的那条和「默认那条」就会是两条。
+const disputeTime = sql<string>`coalesce(${freeReviewRounds.disputeAt}, ${freeReviewRounds.endedAt}, ${freeReviewRounds.startedAt})`;
+
+/**
+ * 用户点的那条驳回已经不在等裁定了：别处已经裁过（另一个标签页、飞书卡片），或者被新一轮
+ * 审查取代。单独一个类型，是为了让入口能回一个结构化的 `stale`，调用方不必去比对文案才知道
+ * 「这条已经在别处处理了」。
+ */
+export class DisputeStaleError extends Error {}
+
+/**
  * 「执行者到底说了什么」——发给辩论双方的那一份完整材料。
  *
  * 必须**三段都带**，而且必须是一个函数：辩论提示原来直接取 `round.disputeReason!`，
@@ -170,19 +193,46 @@ export async function currentRoundOf(run: ReviewRunRow): Promise<ReviewRoundRow 
  * 也找不到它——欠着的那个裁定就这么静默没了（第 1 轮审查问题 2）。合并结果审查是验收后的
  * 独立只读链，不参与。
  */
-async function unresolvedDisputes(taskId: string): Promise<{ run: ReviewRunRow; round: ReviewRoundRow }[]> {
+export async function unresolvedDisputes(taskId: string): Promise<{ run: ReviewRunRow; round: ReviewRoundRow }[]> {
   return db.select({ run: freeReviewRuns, round: freeReviewRounds }).from(freeReviewRounds)
     .innerJoin(freeReviewRuns, eq(freeReviewRuns.id, freeReviewRounds.runId))
-    .where(and(
-      eq(freeReviewRuns.taskId, taskId),
-      eq(freeReviewRuns.targetKind, "workspace"),
-      disputeWritten,
-      isNull(freeReviewRounds.disputeResolution),
-      isNull(freeReviewRounds.disputeSupersededAt),
-    ))
-    // 排序键与界面上那张卡的 `dispute.at` 同一个兜底（free-workflow-state.ts）：接力载荷允许
-    // 驳回时间为空，两边各按各的排，显示的那条和「默认那条」就会是两条。
-    .orderBy(desc(sql`coalesce(${freeReviewRounds.disputeAt}, ${freeReviewRounds.endedAt}, ${freeReviewRounds.startedAt})`));
+    .where(and(eq(freeReviewRuns.taskId, taskId), awaitingRuling))
+    .orderBy(desc(disputeTime));
+}
+
+/** 一条等裁定的驳回在别的表面（飞书）上的身份与摘要：`{runId, round}` 就是裁定接口的 target。 */
+export type OpenDisputeTarget = {
+  taskId: string;
+  runId: string;
+  round: number;
+  /** 排序与展示用的驳回时间（兜底同 `unresolvedDisputes`）。 */
+  disputeAt: string;
+  /** 写给用户的一句话；加这一列之前的老驳回为 null。 */
+  summary: string | null;
+  /** 执行者提了「转独立任务」那一段 = 卡片上才该有那个出口。 */
+  hasDefer: boolean;
+};
+
+/**
+ * **跨任务**列出所有等裁定的驳回，最近的在前 —— 给启动时全量对账用（按任务一条条查要先知道
+ * 有哪些任务）。条件与 `unresolvedDisputes` 同一组，所以按 taskId 过滤后两边是同一批。
+ *
+ * 只按驳回本身判，不看任务归档 / 接力：那两种裁定时会被 `resolveFreeReviewDispute` 如实拒，
+ * 推不推卡由调用方决定。
+ */
+export async function openDisputeTargets(): Promise<OpenDisputeTarget[]> {
+  const rows = await db.select({
+    taskId: freeReviewRuns.taskId,
+    runId: freeReviewRuns.id,
+    round: freeReviewRounds.round,
+    disputeAt: disputeTime,
+    summary: freeReviewRounds.disputeSummary,
+    deferReason: freeReviewRounds.disputeDeferReason,
+  }).from(freeReviewRounds)
+    .innerJoin(freeReviewRuns, eq(freeReviewRuns.id, freeReviewRounds.runId))
+    .where(awaitingRuling)
+    .orderBy(desc(disputeTime));
+  return rows.map(({ deferReason, ...row }) => ({ ...row, hasDefer: !!deferReason }));
 }
 
 /**
@@ -224,13 +274,14 @@ export async function targetedOpenDispute(
   none = "现在没有等待裁定的驳回",
 ): Promise<{ run: ReviewRunRow; round: ReviewRoundRow }> {
   const open = await unresolvedDisputes(taskId);
-  if (!open.length) throw new Error(none);
+  // 点的是具体那一条、而任务上已经一条都不剩：同样是「那条已在别处处理」，按 stale 报。
+  if (!open.length) throw target ? new DisputeStaleError(none) : new Error(none);
   if (!target) {
     if (open.length > 1) throw new Error(`现在有 ${open.length} 条驳回在等裁定，请在审查面板里对具体那一条操作`);
     return open[0]!;
   }
   const hit = open.find(({ run, round }) => run.id === target.runId && round.round === target.round);
-  if (!hit) throw new Error(`第 ${target.round} 轮那条驳回已经不在等裁定了（已被裁定，或被新一轮审查取代），刷新后再看`);
+  if (!hit) throw new DisputeStaleError(`第 ${target.round} 轮那条驳回已经不在等裁定了（已被裁定，或被新一轮审查取代），刷新后再看`);
   return hit;
 }
 
@@ -489,9 +540,21 @@ export async function resolveFreeReviewDispute(
   }
 
   const at = now();
-  await db.update(freeReviewRounds)
+  // CAS：只有把裁定从空写成非空的那一次算数。上面那道「还在待裁定之列」与这里之间隔着
+  // 好几个 await，两个表面（web 与飞书卡片）同时点时两边都过得了那道检查；只按 id 写的话
+  // 后写的会盖掉先写的 —— 先到的 upheld 已经起了修复，后到的 withdrawn 再把记录改成
+  // 「不用改了」。输掉的那一路如实报「已经裁定过了」，与 deferred 那条路（free-review-defer.ts）
+  // 同一个口径。
+  const ruled = await db.update(freeReviewRounds)
     .set({ disputeResolution: resolution, disputeResolvedAt: at, disputeResolutionNote: note })
-    .where(eq(freeReviewRounds.id, open.round.id));
+    .where(and(
+      eq(freeReviewRounds.id, open.round.id),
+      disputeWritten,
+      isNull(freeReviewRounds.disputeResolution),
+      isNull(freeReviewRounds.disputeSupersededAt),
+    ))
+    .returning({ id: freeReviewRounds.id });
+  if (!ruled.length) throw new DisputeStaleError("这一轮驳回已经被裁定过了");
   await appendTaskTimeline(taskId, (resolution === "withdrawn"
     ? `你裁定第 ${open.round.round} 轮的未通过意见不用改了（采纳执行者的说法，报告与证据原样保留，审查结论本身不改写）。`
     // 写了要点时不能只说「照报告修复」：用户写要点，多半正是因为要改的不是报告那版。

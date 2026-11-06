@@ -14,6 +14,7 @@ import type {
   FreeReviewDisputeResolution,
   FreeReviewDisputeTarget,
   GateAction,
+  GateRequest,
   Group,
   Note,
   Project,
@@ -286,8 +287,11 @@ export const api = {
     },
   ): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/reply`, json("POST", { text, ...options })),
-  gate: (taskId: string, action: GateAction): Promise<unknown> =>
-    request(`/tasks/${id(taskId)}/gate`, json("POST", action)),
+  // expectedVersion = 用户此刻看到的那扇门(duet.gate 事件上的 version)。带上它,门已经往下走了
+  // (另一个标签页先点了、讨论回炉后又开了一扇)时服务端回 409,而不是把一份没读过的方案放行掉;
+  // 不带(老记录里没有版本)= 不核版本。
+  gate: (taskId: string, action: GateAction, expectedVersion?: number): Promise<unknown> =>
+    request(`/tasks/${id(taskId)}/gate`, json("POST", { ...action, expectedVersion } satisfies GateRequest)),
   teamHalt: (taskId: string): Promise<{ ok: true }> =>
     request(`/tasks/${id(taskId)}/team/halt`, { method: "POST" }),
   teamCuaStatus: (taskId: string): Promise<TeamCuaStatus> =>

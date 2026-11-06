@@ -227,6 +227,8 @@
     "test:dir-picker": "tsx scripts/test-dir-picker.ts",
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
     "test:duet-attachments": "tsx scripts/test-duet-attachments.ts",
+    "//test:duet-gate-version": "收敛闸口的版本号：旧卡片（飞书消息、另一个标签页）点不中新开的那扇门、门继续等；老记录按开门序号补版本；重启补救那一路 stale 在占锁前就回；已结束的讨论带版本一律 409，不被旧卡拉起；请求体非法回 400。",
+    "test:duet-gate-version": "tsx scripts/test-duet-gate-version.ts",
     "test:terminal": "tsx scripts/test-terminal-pty.ts && tsx scripts/test-terminal.ts && tsx scripts/test-project-commands.ts && tsx scripts/test-service-ports-scan.ts && tsx scripts/test-stop-evidence.ts && tsx scripts/test-stop-review.ts && tsx scripts/test-stop-verification.ts && tsx scripts/test-service-ports.ts && tsx scripts/test-service-ports-script.ts && tsx scripts/test-terminal-capacity.ts && tsx scripts/test-terminal-lifecycle.ts && tsx scripts/test-launch-abandon.ts && tsx scripts/test-launch-abandon-races.ts",
     "test:win-launch": "tsx scripts/test-win-launch.ts && tsx scripts/test-powershell-command.ts && tsx scripts/test-user-shell-powershell.ts",
     "test:path-boundary": "tsx scripts/test-path-boundary.ts",

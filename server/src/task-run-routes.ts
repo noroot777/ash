@@ -1,6 +1,5 @@
 import type {
   AgentType,
-  GateAction,
   ScheduledMessage,
   ScheduledMessageMode,
   ScheduledMessageStatus,
@@ -15,9 +14,9 @@ import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } 
 import { db } from "./db/index.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { queueItems, scheduledMessages, tasks } from "./db/schema.js";
-import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
+import { resumeDuet, runDuet } from "./duet/index.js";
 import { readDuetTurns } from "./duet/transcript-reads.js";
-import { resolveGate } from "./duet/gates.js";
+import { mountDuetGateRoutes } from "./duet/gate-route.js";
 import { runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { preparePendingCheckpointStart, recoverPendingCheckpoints } from "./pending-checkpoint-recovery.js";
@@ -65,6 +64,8 @@ export function mountTaskRunRoutes(api: Hono): void {
   mountTaskSessionRoutes(api);
   mountTaskSteerRoutes(api);
   mountTaskQuestionRoutes(api);
+  // 收敛闸口 `POST /tasks/:id/gate`(放行 / 打回 / 注入意见 / 提问)住在 duet/gate-route.ts。
+  mountDuetGateRoutes(api);
   const toScheduledMessage = (r: typeof scheduledMessages.$inferSelect): ScheduledMessage => ({
     ...r,
     attachments: JSON.parse(r.attachments),
@@ -603,53 +604,5 @@ api.post("/tasks/:id/requeue", async (c) => {
 });
 
 // ── archive / unarchive ──────────────────────────────────────────────────────
-
-// ── HITL gate decision (§7) — 放行 / 打回 / 注入意见 / 提问 ───────────────────
-api.post("/tasks/:id/gate", async (c) => {
-  const taskId = c.req.param("id");
-  const action = await c.req.json<GateAction>();
-  if (resolveGate(taskId, action)) return c.json({ ok: true });
-  // No in-memory gate (e.g. the server restarted). If the task is still awaiting
-  // a decision, resume the duet from the gate and apply the action.
-  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (t?.status === "awaiting_review" && t.mode === "duet") {
-    // 重启后闸口重放会真的续跑讨论——接力出去的任务不给续(与 /run 同一条硬拦口径)。
-    const blocked = handoffBlockReason(t.handoff);
-    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
-    // 同 /run:先原子占位再启动,占不到说明确有回合在跑(闸口重放会真的续跑讨论)。
-    const turn = claimOwnTurn(taskId, "duet");
-    if (!turn) {
-      return c.json({ error: "任务回合正在进行，稍后再处理裁决", status: t.status }, 409);
-    }
-    if (isAcceptingTask(taskId)) {
-      releaseTurn(taskId, turn);
-      return c.json({ error: "任务正在验收（含发布尾段），结束后再处理裁决", status: t.status }, 409);
-    }
-    void resumeAtGate(taskId, action, { turnHeld: turn, actingUserId: ownerIdOf(actorOf(c)) });
-    return c.json({ ok: true, resumed: true });
-  }
-  // 讨论已经收口后，验收打回仍沿用同一对讨论者和同一份 transcript 回炉；这不是
-  // 新开一场讨论，所以复用 gate 的 inject 语义，但只接受会产生新一轮的动作。
-  if (t?.mode === "duet" && ["done", "failed", "canceled"].includes(t.status)
-    && (action.kind === "inject" || action.kind === "ask")) {
-    if (t.stage === "accepted" || t.stage === "merged") {
-      return c.json({ error: "讨论已经验收完成；如需继续，请先新开一轮讨论", stage: t.stage }, 409);
-    }
-    if (t.archived) return c.json({ error: "讨论已归档，先取消归档再继续", archived: true }, 409);
-    const blocked = handoffBlockReason(t.handoff);
-    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
-    const turn = claimOwnTurn(taskId, "duet");
-    if (!turn) {
-      return c.json({ error: "讨论回合正在进行，稍后再提交验收意见", status: t.status }, 409);
-    }
-    if (isAcceptingTask(taskId)) {
-      releaseTurn(taskId, turn);
-      return c.json({ error: "讨论正在验收，结束后再提交意见", status: t.status }, 409);
-    }
-    void resumeAtGate(taskId, action, { turnHeld: turn, actingUserId: ownerIdOf(actorOf(c)) });
-    return c.json({ ok: true, resumed: true, revision: true }, 202);
-  }
-  return c.json({ error: "no open gate for this task" }, 409);
-});
 
 }

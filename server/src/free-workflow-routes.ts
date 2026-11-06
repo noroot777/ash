@@ -14,6 +14,7 @@ import { startFreeReviewDebate, submitDebateStatement } from "./free-review-deba
 import { adjustFreeReviewRounds } from "./free-review-rounds.js";
 import { noted } from "./user-action-rejection.js";
 import {
+  DisputeStaleError,
   disputeFreeReview,
   disputeInputOf,
   disputeResolutionOf,
@@ -147,7 +148,11 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
         disputeTargetOf(body.target),
       );
       return c.json({ ...result, state: await freeWorkflowState(c.req.param("id")) });
-    } catch (error) { return c.json(await noted(c.req.param("id"), "裁定驳回", errorBody(error)), 409); }
+    } catch (error) {
+      // stale = 用户点的那条已经在别处裁过（或被新一轮审查取代），调用方不必比对文案就能认出来。
+      const body = error instanceof DisputeStaleError ? { ...errorBody(error), stale: true } : errorBody(error);
+      return c.json(await noted(c.req.param("id"), "裁定驳回", body), 409);
+    }
   });
   api.post("/tasks/:id/free-workflow/review/debate", async (c) => {
     const blocked = await blockedByHandoff(c);

@@ -22,6 +22,14 @@ export type GateAction =
   | { kind: "inject"; text: string; attachments?: string[] } // 注入意见 → 回炉再讨论（始终双方一起回炉）
   | { kind: "ask"; text: string; target?: "A" | "B"; attachments?: string[] }; // 提问 → 答完继续；target 缺省=问双方，指定=只问那一位讨论者
 
+// `POST /tasks/:id/gate` 的请求体:动作本身 + 「我点的是第几扇门」。
+// 为什么要带门的版本:同一场讨论会反复开门(注入/提问后重新合稿、再开一扇),而按钮可能
+// 来自一张早就过时的卡片(飞书消息、另一个标签页)。不带版本时,旧卡上的「放行」会把
+// 用户还没读过的新方案放行掉,旧卡上的「注入」会把已经结束的讨论重新拉起来。
+// 版本号 = 这场讨论第几次开门,随 `duet.gate` 事件落进 transcript(server/src/duet/gate-version.ts)。
+// 不带 expectedVersion = 老客户端,行为与加版本之前一致。
+export type GateRequest = GateAction & { expectedVersion?: number };
+
 // ── Executor streaming events (§12) ──────────────────────────────────────────
 export type AgentEvent =
   | { kind: "thinking"; text: string }
@@ -210,7 +218,9 @@ export type ServerEvent =
       startedAt?: string;
       durationMs?: number;
     }
-  | { type: "duet.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; consensusBy?: DuetConsensusBy; conclusionA?: string | null; conclusionB?: string | null }
+  // version:这场讨论第几次开门(开门与关门那一对带同一个数)。可选,因为加它之前落盘的老记录没有;
+  // 读端缺省时按开门序号补(server/src/duet/gate-version.ts)。
+  | { type: "duet.gate"; taskId: string; gate: GateName; open: boolean; version?: number; consensus?: boolean; consensusBy?: DuetConsensusBy; conclusionA?: string | null; conclusionB?: string | null }
   // A human intervention in a /duet timeline (gate inject/ask). Carries the time
   // so the timeline can show when the user spoke. Persisted in the transcript too.
   // target: when a 提问 was directed at one voice, which side — so the timeline

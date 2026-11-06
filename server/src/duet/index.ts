@@ -19,6 +19,7 @@ import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import * as P from "./prompts.js";
 import { waitForGate } from "./gates.js";
+import { lastOpenedGateVersion, nextGateVersion } from "./gate-version.js";
 import { gateUserMessage } from "./user-message.js";
 import { canSettleDuet as canSettle, duetConsensusBy as consensusBy, isDuetConsensus as isConsensus } from "./settlement.js";
 import { recordGateEvent, recordUserTurn } from "./timeline.js";
@@ -465,7 +466,9 @@ export async function resumeAtGate(
       planRound: lastPlanRound(rows),
       lastUserNote: lastUserNoteOf(rows),
     };
-    recordGateEvent({ type: "duet.gate", taskId, gate: "G1", open: false });
+    // 关门那一行带上被关的那扇门的版本,和开门行配成一对(重启后内存里的门没了,版本取文件里最近一次开门)。
+    const closing = lastOpenedGateVersion(taskId);
+    recordGateEvent({ type: "duet.gate", taskId, gate: "G1", open: false, ...(closing ? { version: closing } : {}) });
     await setStatus(taskId, "running");
 
     if (action.kind === "reject") { await setStatus(taskId, "canceled"); return true; }
@@ -574,12 +577,16 @@ async function runGate(
   while (true) {
     await setStatus(taskId, "awaiting_review");
     const info = getInfo?.();
+    // 每开一次门发一个新版本(理由见 gate-version.ts)。先登记门、再记开门事件:收到开门事件
+    // 的那一侧(界面、飞书)马上就可能来点,这时门必须已经在等了。
+    const version = nextGateVersion(taskId);
+    const decision = waitForGate(taskId, version);
     recordGateEvent({
-      type: "duet.gate", taskId, gate: "G1", open: true,
+      type: "duet.gate", taskId, gate: "G1", open: true, version,
       consensus: info?.consensus, consensusBy: info?.consensusBy, conclusionA: info?.conclusionA, conclusionB: info?.conclusionB,
     });
-    const action = await waitForGate(taskId);
-    recordGateEvent({ type: "duet.gate", taskId, gate: "G1", open: false });
+    const action = await decision;
+    recordGateEvent({ type: "duet.gate", taskId, gate: "G1", open: false, version });
     if (action.kind === "approve") {
       await setStatus(taskId, "running");
       return true;

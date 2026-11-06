@@ -9,7 +9,9 @@
 // ③ 老的「按意见修复」按钮只维持它修的那一轮自己的驳回；
 // ④ 辩论开场认目标，续段认开场记下的那一轮；转独立任务的时间线写对轮次；
 // ⑤ 驳回时间为空的老数据，服务端排序与界面上那张卡同一个兜底；
-// ⑥ 理由是空串的老行：查询、CAS 与界面判「有没有驳回」同一个口径。
+// ⑥ 理由是空串的老行：查询、CAS 与界面判「有没有驳回」同一个口径；
+// ⑦ 两个表面（web 与飞书卡片）同时对同一条点不同的档：只有一档落库，输的那一路报 stale；
+// ⑧ 跨任务的待裁定清单（飞书启动对账用）与按任务查的是同一批，路由对过时目标回 stale。
 //
 // 修复要真走到投递那一步（它就是被测对象），所以起跑链会跑到执行器边界：ASH_RUNS_DIR 指向
 // 临时目录时 spawn 一律被拦（executors/spawn.ts `guardAgentSpawn`），PATH 上再垫一个只会
@@ -42,7 +44,11 @@ try {
   } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { claimTurn } = await import("../src/runs.js");
-  const { disputeFreeReview, openDisputeOf, resolveFreeReviewDispute } = await import("../src/free-review-dispute.js");
+  const {
+    DisputeStaleError, disputeFreeReview, openDisputeOf, openDisputeTargets, resolveFreeReviewDispute, unresolvedDisputes,
+  } = await import("../src/free-review-dispute.js");
+  const { Hono } = await import("hono");
+  const { mountFreeWorkflowRoutes } = await import("../src/free-workflow-routes.js");
   const { startFreeReviewDebate } = await import("../src/free-review-debate.js");
   const { startManualFreeReviewRepair } = await import("../src/free-review-manual-repair.js");
   const { freeReviewReportPath } = await import("../src/free-review-files.js");
@@ -203,6 +209,56 @@ try {
   await disputeFreeReview("t-empty", { summary: "这条我不认，报告看错了文件。", reason: "看错了文件", deferReason: null });
   assert.equal((await openDisputeOf("t-empty"))?.round.id, "t-empty-chain-r1", "空串挡不住真正写下的那条驳回");
 
+  // ── ⑦ 同一条驳回被两个表面同时裁定：两边都过得了「还在待裁定之列」那道检查，CAS 只放一档 ──
+  await seed("t-race", [{ run: "chain", round: 1, dispute: true }]);
+  const raceTarget = { runId: "t-race-chain", round: 1 };
+  const race = await Promise.allSettled([
+    resolveFreeReviewDispute("t-race", "withdrawn", null, raceTarget),
+    resolveFreeReviewDispute("t-race", "upheld", null, raceTarget),
+  ]);
+  assert.equal(race.filter((r) => r.status === "fulfilled").length, 1, "同一条驳回只能被裁定一次");
+  const lost = race.find((r): r is PromiseRejectedResult => r.status === "rejected")!;
+  assert.ok(lost.reason instanceof DisputeStaleError, "输掉的那一路是「已在别处处理」，不是别的错误");
+  const winner = race[0]!.status === "fulfilled" ? "withdrawn" : "upheld";
+  assert.equal((await roundOf("t-race-chain-r1")).disputeResolution, winner, "库里留的是先落库的那一档，不被后到的盖掉");
+  assert.equal(timeline("t-race").match(/你裁定/g)?.length, 1, "时间线上也只有一条裁定");
+  if (winner === "upheld") await deliveredRepair("t-race"); // 让修复那一趟结算完，免得和下面交错
+
+  // ── ⑧ 跨任务的待裁定清单 ──
+  await seed("t-list", [{ run: "chain", round: 1, dispute: true, deferReason: "越界：另一个模块" }]);
+  const targets = await openDisputeTargets();
+  for (const taskId of ["t-wrong", "t-cascade", "t-blocked", "t-history", "t-defer", "t-button", "t-debate", "t-order", "t-empty", "t-race", "t-list"]) {
+    assert.deepEqual(
+      targets.filter((t) => t.taskId === taskId).map((t) => `${t.runId}#${t.round}`),
+      (await unresolvedDisputes(taskId)).map(({ run, round }) => `${run.id}#${round.round}`),
+      `${taskId}：跨任务清单与按任务查的必须是同一批、同一顺序`,
+    );
+  }
+  assert.ok(targets.some((t) => t.runId === "t-cascade-older"), "还在等裁定的旧驳回在清单里");
+  assert.ok(!targets.some((t) => t.taskId === "t-race" || t.taskId === "t-defer"), "裁定过的不在清单里");
+  for (let i = 1; i < targets.length; i++) {
+    assert.ok(targets[i - 1]!.disputeAt >= targets[i]!.disputeAt, "最近的驳回在前");
+  }
+  assert.deepEqual(targets.find((t) => t.taskId === "t-list"), {
+    taskId: "t-list", runId: "t-list-chain", round: 1, disputeAt: "2026-11-01T00:00:00.000Z",
+    summary: "chain 第 1 轮我不认", hasDefer: true,
+  });
+  assert.equal(targets.find((t) => t.runId === "t-cascade-older")?.hasDefer, false);
+
+  // 路由：目标已经裁过 → 409 + stale；参数错这种不是「别处已处理」，不带 stale。
+  const api = new Hono();
+  mountFreeWorkflowRoutes(api);
+  const resolve = (taskId: string, body: unknown) => api.request(`/tasks/${taskId}/free-workflow/review/dispute/resolution`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const staleResponse = await resolve("t-race", { resolution: "withdrawn", target: raceTarget });
+  assert.equal(staleResponse.status, 409);
+  assert.equal(((await staleResponse.json()) as { stale?: boolean }).stale, true, "过时目标回结构化的 stale");
+  const badResponse = await resolve("t-list", { resolution: "maybe", target: { runId: "t-list-chain", round: 1 } });
+  assert.equal(badResponse.status, 409);
+  assert.equal(((await badResponse.json()) as { stale?: boolean }).stale, undefined);
+
+  console.log("✓ 两个表面同时裁定同一条：只落一档，输的一路报 stale；跨任务待裁定清单与按任务查同一批");
   console.log("✓ 驳回存在与否：SQL 查询、CAS 与界面同一个判据（空串不算）");
   console.log("✓ 裁定带目标：只裁那一条，修复按那一轮的报告与要点投递（旧链、历史轮、最新已通过都对）");
   console.log("✓ 好几条待裁定时不替用户挑；老按钮只维持它修的那一轮；辩论认目标；转出时间线写对轮次");

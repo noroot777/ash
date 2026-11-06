@@ -38,6 +38,8 @@ export type DuetTurn = {
 export type DuetGate = {
   gate: GateName;
   open: boolean;
+  /** 这场讨论第几次开门;加版本之前的老记录没有。点闸口按钮时原样带回去,服务端据此拒掉过时的点击。 */
+  version?: number;
   consensus?: boolean;
   consensusBy?: DuetConsensusBy;
   conclusionA?: string | null;
@@ -131,6 +133,7 @@ export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState 
       gate: {
         gate: event.gate,
         open: event.open,
+        version: event.version ?? previous?.version,
         consensus: event.consensus ?? previous?.consensus,
         consensusBy: event.consensusBy ?? previous?.consensusBy ?? (event.consensus ? "both" : undefined),
         conclusionA: event.conclusionA ?? previous?.conclusionA,
