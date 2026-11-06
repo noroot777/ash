@@ -46,6 +46,7 @@ import { monitorWakeInput, monitorWakeReplyIds } from "./monitorWakeModel.ts";
 import { mergeNoticeItems, useRejectionNotices } from "./useRejectionNotices.ts";
 import { ReclaimTurnSwitch } from "./ReclaimTurnSwitch.tsx";
 import { DeleteMessageButton, MessageDeleteProvider } from "./MessageDelete.tsx";
+import { conversationInputAnchor, conversationInputs } from "./conversationInputs.ts";
 
 // 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
 // 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
@@ -171,7 +172,7 @@ function UserMessage({
   }
   return (
     <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}`}>
-      <div className="task-user-bubble">
+      <div className="task-user-bubble" {...conversationInputAnchor(item.id)}>
         <header>
           <b>{bySystem ? "系统" : "你"}</b>
           {item.at && <time>{formatInstant(item.at)}</time>}
@@ -189,6 +190,7 @@ function UserMessage({
 
 export function ConversationFeed({
   task,
+  requirement,
   items: feedItems,
   sessions,
   pendingExecutor,
@@ -209,6 +211,11 @@ export function ConversationFeed({
   onDeleteMessage,
 }: {
   task: TaskListItem;
+  /**
+   * 原始需求（任务正文与创建时刻）。会话流里没有它的气泡，左侧输入导航靠它排出第一格；
+   * 列表项不带正文，拿不到就只排追问。
+   */
+  requirement?: { text: string; at?: string | null } | null;
   items: ConversationItem[];
   sessions: Session[];
   /** 刚发出去、服务端还没落下会话行的那一回合目标(见 runActivityExecutor)。 */
@@ -254,6 +261,12 @@ export function ConversationFeed({
   // (第 2 轮审查 F4)。合流之后它和会话正文里的 aside 旁注走同一套渲染。
   const { items: noticeItems, remedy: turnRemedy, reload: reloadNotices } = useRejectionNotices(task.id);
   const items = useMemo(() => mergeNoticeItems(feedItems, noticeItems), [feedItems, noticeItems]);
+  const requirementText = requirement?.text;
+  const requirementAt = requirement?.at;
+  const inputs = useMemo(
+    () => conversationInputs(requirementText === undefined ? null : { text: requirementText, at: requirementAt }, items),
+    [items, requirementAt, requirementText],
+  );
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
   const activityExecutor = runActivityExecutor({
     sessions,
@@ -431,7 +444,7 @@ export function ConversationFeed({
           {historyReady && <QuestionHistoryRemainder />}
           {footer}
         </div>
-        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={conversationTailKey(items)} inputs={inputs} />
       </div>
       {dock && <div className="task-question-dock">{dock}</div>}
     </ImagePreviewGroup>

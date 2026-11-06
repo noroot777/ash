@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import type { Task, TaskListItem } from "@ash/shared";
 import { runActivityPhase, runActivityTail } from "@ash/shared/run-activity";
 import { annotationBatchDisplayText } from "@ash/shared/page-annotation-display";
@@ -29,6 +29,7 @@ import { durationBetween, formatInstant, parseAttachmentText } from "../task-det
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 import { MonitorWakeReply } from "../task-detail/MonitorWakeInput.tsx";
 import { monitorWakeReplyIds } from "../task-detail/monitorWakeModel.ts";
+import { conversationInputAnchor, conversationInputs } from "../task-detail/conversationInputs.ts";
 
 function AgentRow({
   row,
@@ -83,7 +84,7 @@ function UserRow({ row, noticeMode }: { row: Extract<TeamFeedRow, { kind: "conv"
   }
   return (
     <article className={`team-feed-user${bySystem ? " is-system-authored" : ""}`}>
-      <div>
+      <div {...conversationInputAnchor(row.id)}>
         <header><b>{bySystem ? "系统" : "你"}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
         {displayBody && (bySystem ? <MarkdownBody text={displayBody} /> : <p>{displayBody}</p>)}
         <MessageAttachments paths={paths} />
@@ -212,6 +213,11 @@ export function TeamFeed({
   const showNoticeModeSwitch = SYSTEM_NOTICE_DEMO_REQUESTED;
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
   const wakeReplies = monitorWakeReplyIds(rows.flatMap((row) => row.kind === "conv" ? [row.item] : []));
+  // 调度台的原始需求同样不在流里（首条会话从调度者的拆解开始），左侧导航靠它排出第一格。
+  const inputs = useMemo(
+    () => conversationInputs({ text: task.body, at: task.createdAt }, rows.flatMap((row) => row.kind === "conv" ? [row.item] : [])),
+    [rows, task.body, task.createdAt],
+  );
   const hiddenTimes = new Set<string>();
   let previousConversationItem: Extract<TeamFeedRow, { kind: "conv" }>["item"] | null = null;
   for (const row of rows) {
@@ -277,7 +283,7 @@ export function TeamFeed({
           {historyReady && <QuestionHistoryRemainder />}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>
-        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={teamTailKey(rows)} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} tailKey={teamTailKey(rows)} inputs={inputs} />
       </div>
     </ImagePreviewGroup>
     </QuestionHistoryProvider>
