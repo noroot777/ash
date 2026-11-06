@@ -46,6 +46,8 @@ export function useImageZoom(src: string, containerRef: RefObject<HTMLElement | 
 
   // 至少能放到适应尺寸的 4 倍，也至少能看到原图像素的 2 倍。
   const maxScale = Math.max(4, 2 / fitRatio);
+  // 排版只缩不放（max-width/max-height），所以没被缩小时 clientWidth 与 naturalWidth 整数相等、
+  // 比值恰好是 1；只要被缩小过哪怕 1 像素，这里就严格大于 1。不需要也不该再拿阈值去猜。
   const actualScale = 1 / fitRatio;
 
   const measure = useCallback(() => {
@@ -69,7 +71,12 @@ export function useImageZoom(src: string, containerRef: RefObject<HTMLElement | 
   useEffect(() => {
     const box = containerRef.current;
     if (!box) return;
+    // 观察器挂上就会先报一次当前尺寸，那一次不是「变了」——当成变化会把刚打开就做的缩放撤掉。
+    let last = { width: box.clientWidth, height: box.clientHeight };
     const observer = new ResizeObserver(() => {
+      const size = { width: box.clientWidth, height: box.clientHeight };
+      if (size.width === last.width && size.height === last.height) return;
+      last = size;
       setAnimated(false);
       setView(FIT);
       measure();
@@ -135,7 +142,7 @@ export function useImageZoom(src: string, containerRef: RefObject<HTMLElement | 
   // 适应窗口 ⇄ 实际大小；原图本来就不比窗口大时，「实际大小」就是适应尺寸，改成放大一倍。
   const toggle = useCallback((anchor?: Point) => {
     setAnimated(true);
-    zoom((scale) => scale > 1 ? 1 : actualScale > 1.01 ? actualScale : 2, anchor);
+    zoom((scale) => scale > 1 ? 1 : actualScale > 1 ? actualScale : 2, anchor);
   }, [actualScale, zoom]);
 
   useEffect(() => {

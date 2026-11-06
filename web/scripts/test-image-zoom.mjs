@@ -7,9 +7,10 @@ import { launchChrome, startWebServer } from "./dom-stage.mjs";
 // ② 真实触屏双指捏合时，不动的那根手指下面始终是图上同一处；
 // ③ 文件树/生成物点开的图片在中栏原地缩放，图被裁在查看区里。
 
-const W = 1200;
-const H = 800;
-const PIXELS = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><defs><pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#678" stroke-width="2"/></pattern></defs><rect width="${W}" height="${H}" fill="#eef"/><rect width="${W}" height="${H}" fill="url(#g)"/></svg>`;
+const grid = (W, H) => `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><defs><pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#678" stroke-width="2"/></pattern></defs><rect width="${W}" height="${H}" fill="#eef"/><rect width="${W}" height="${H}" fill="url(#g)"/></svg>`;
+const PIXELS = grid(1200, 800);
+// 1280 宽的视口里灯箱给图留 1128px，这张只宽出 8px：适应时缩到 99.3%。
+const NEAR = grid(1136, 400);
 
 const web = await startWebServer();
 let browser;
@@ -21,6 +22,7 @@ try {
   await page.route("**/api/**", (route) => route.fulfill({ status: 404, contentType: "application/json", body: "{}" }));
   const svg = (route) => route.fulfill({ status: 200, contentType: "image/svg+xml", body: PIXELS });
   await page.route("**/image-zoom-large.svg", svg);
+  await page.route("**/image-zoom-near.svg", (route) => route.fulfill({ status: 200, contentType: "image/svg+xml", body: NEAR }));
   await page.route("**/api/tasks/demo/file/raw?*", svg);
   await page.route("**/api/tasks/demo/file?*", (route) => route.fulfill({
     status: 200,
@@ -38,7 +40,7 @@ try {
   const fitPercent = async (image) => image.evaluate((img) => Math.round(img.clientWidth / img.naturalWidth * 100));
 
   // ① 灯箱：适应时不到 100%，切「实际大小」正好 100%。
-  await page.locator("#thumb img").click();
+  await page.locator("#thumb img").first().click();
   const dialog = page.getByRole("dialog", { name: /图片预览/ });
   await dialog.waitFor();
   const lightboxImage = dialog.locator("img");
@@ -50,6 +52,33 @@ try {
   assert.equal(await percentOf(dialog), 100, "actual size of a mildly downscaled image is 100%, not 2x");
   await dialog.getByRole("button", { name: "适应窗口 / 实际大小" }).click();
   assert.equal(await percentOf(dialog), fit);
+
+  // ①b 只被缩小了不到 1% 的图，「实际大小」同样是 100%，不是两倍。
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  await page.locator("#thumb img").nth(1).click();
+  await dialog.waitFor();
+  await page.waitForFunction(() => document.querySelector(".image-preview-lightbox img")?.complete);
+  const nearFit = await fitPercent(lightboxImage);
+  assert.equal(nearFit, 99, `fixture should fit at 99%, got ${nearFit}%`);
+  await page.waitForFunction(() => document.querySelector(".image-preview-lightbox .image-zoom-controls button:nth-child(2)")?.textContent === "99%");
+  await dialog.getByRole("button", { name: "适应窗口 / 实际大小" }).click();
+  assert.equal(await percentOf(dialog), 100, "an image downscaled by under 1% still toggles to exactly 100%");
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+
+  // ①c 刚打开、容器尺寸观察器还没报第一次尺寸时就缩放：那次「首报」不是尺寸变了，不能把缩放撤掉。
+  await page.evaluate(async () => {
+    document.querySelector("#thumb img").click();
+    await Promise.resolve();
+    const button = document.querySelector(".image-preview-lightbox [aria-label='放大图片']");
+    if (!button) throw new Error("lightbox did not open synchronously");
+    button.click();
+  });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.waitForTimeout(250);
+  assert(await percentOf(dialog) > fit, "zooming right after opening survives the observer's first report");
+  await page.keyboard.press("0");
 
   // ② 双指：A 指不动、B 指往外拉，A 指下面的图像点不该漂。先放到两条轴都超出视口——还没
   // 超出的那条轴按规矩居中，锚点会被拉回中线，那是有意的，不是漂移。
