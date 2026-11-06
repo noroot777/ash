@@ -98,6 +98,8 @@ function Fixture() {
   const refresh = useCallback(async () => {
     const params = new URLSearchParams(location.search);
     const delay = Number(params.get("slowRefresh") ?? 0);
+    // 只是把那一拍中间态拉长：断言等的是「这一屏关上」，加上 MutationObserver 记下的整段过程，
+    // 延迟在负载下变长只会让中间态更久，不会让断言读错时刻。
     if (delay > 0) await new Promise((done) => setTimeout(done, delay));
     if (params.get("failRefresh")) throw new Error("auth state 读不出来");
     setMyRole(users.find((u) => u.id === SELF_ID)?.role ?? "member");

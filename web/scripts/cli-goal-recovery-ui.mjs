@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fetchesSettled, settlePage, trackFetches } from "./wait-until.mjs";
 
 const scopeKey = (profileId) => encodeURIComponent(JSON.stringify([profileId, null]));
 const held = (profileId, objective) => ({ profileId, ownerUserId: null, goalHold: true, goal: { objective, status: "budgetLimited", tokenBudget: 150, tokensUsed: 150 } });
@@ -50,6 +51,8 @@ export async function runGoalRecoveryUi({ page, base, screenshots, sessionEnds, 
     if (expectedStatus === 202) await idleTask(taskId, previous);
     return body;
   };
+  // 下面那条「旧任务迟到的命令结果不许串到新选中的任务上」要等那一发应答真被页面消费完。
+  await trackFetches(page, "/api/tasks/goal-empty-ui/reply$");
   await page.goto(`${base}/?project=cli-ui&task=goal-empty-ui`);
   const beforeEmpty = await (await fetch(`${base}/api/tasks/goal-empty-ui`)).json();
   const emptyScopes = await send("goal-empty-ui", "/goal --scopes", 200);
@@ -84,6 +87,10 @@ export async function runGoalRecoveryUi({ page, base, screenshots, sessionEnds, 
   await returned;
   await page.unroute("**/api/tasks/goal-empty-ui/reply", delayedReply);
   await page.getByRole("button", { name: "发送回复", exact: true }).waitFor();
+  // 浏览器收到应答不等于页面处理完：等这两发（上面那次直接查询 + 被按住的这次）都被消费完，
+  // 再冲刷一轮提交，才去看那条结果有没有串过来。
+  await fetchesSettled(page, 2, "被按住的那发 /goal --scopes 应答已被页面消费完");
+  await settlePage(page);
   assert.equal(await localResult.count(), 0, "an old task's delayed command result must not leak into the selected task");
 
   await page.goto(`${base}/?project=cli-ui&task=goal-drift-ui`);

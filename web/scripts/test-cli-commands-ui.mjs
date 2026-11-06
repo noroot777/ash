@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./dom-stage.mjs";
+import { waitUntil } from "./wait-until.mjs";
 import { goalRecoveryFixtures, goalRecoverySessions, runGoalRecoveryUi, seedGoalRecoveryTranscripts } from "./cli-goal-recovery-ui.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "ash-cli-ui-"));
@@ -42,6 +43,9 @@ await db.insert(tasks).values([
   { id: "fresh-plan-task", projectId: "cli-ui", title: "计划模式重新运行", body: "开始实施测试夹具", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, plan: true } }), createdAt: at, updatedAt: at },
   { id: "fresh-claude-plan-task", projectId: "cli-ui", title: "Claude 首跑清除计划", body: "由 Claude 正常实施", mode: "single", status: "backlog", agentType: "claude", executorId: "claude-ui", autoTitle: false, cliState: JSON.stringify({ codex: { activeScope: encodeURIComponent(JSON.stringify(["codex-ui", null])), scopes: Object.fromEntries(["codex-ui", "codex-ui-other"].map((profileId) => [encodeURIComponent(JSON.stringify([profileId, null])), { profileId, ownerUserId: null, plan: true }])) } }), createdAt: at, updatedAt: at },
   { id: "queue-plan-task", projectId: "cli-ui", groupId: "queue-ui", title: "计划模式队列起跑", body: "开始实施队列任务", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, plan: true } }), autoTitle: false, createdAt: at, updatedAt: at },
+  // 「整组起跑也不许拉起持有目标暂停标记的那位」需要一个正向信号：同组里一位普通成员。
+  // 起跑时两位是同一次 launchableMembers 里挑的，它真起跑了，说明那一次挑选已经做完。
+  { id: "goal-ui-probe", projectId: "cli-ui", groupId: "goal-ui", title: "目标保护的对照成员", body: "整组起跑的对照", mode: "single", status: "backlog", agentType: "codex", executorId: "codex-ui", autoTitle: false, createdAt: at, updatedAt: at },
   { id: "scoped-goal-task", projectId: "cli-ui", groupId: "goal-ui", title: "切换执行器保留目标", body: "保持目标与预算", mode: "single", status: "paused", agentType: "codex", executorId: "codex-ui", cliState: JSON.stringify({ codex: { profileId: "codex-ui", ownerUserId: null, goalHold: true, goal: { objective: "让 test/auth 全过", status: "budgetLimited", tokenBudget: 150, tokensUsed: 150 } } }), autoTitle: false, createdAt: at, updatedAt: at },
   ...["codex", "claude"].map((agentType) => ({ id: `live-${agentType}-goal`, projectId: "cli-ui", title: `${agentType} 运行中清除目标`, body: "实时目标控制验证", mode: "single", status: "backlog", agentType, executorId: `${agentType}-ui`, autoTitle: false, createdAt: at, updatedAt: at })),
 ]);
@@ -123,6 +127,8 @@ const boot = `
     Executor.prototype.prepareResume = async function(options) {
       await prepareResume?.call(this, options);
       if (/^live-(codex|claude)-goal$/.test(options.env?.ASH_TASK_ID ?? "")) {
+        // 夹具模拟「续跑前的准备有点慢」。后面每一步都按事实等（调用记录、页面文案、任务空闲），
+        // 没有断言依赖它恰好是 1 秒，负载下更慢也只是晚点到。
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     };
@@ -137,12 +143,11 @@ const base = `http://127.0.0.1:${port}`;
 let browser;
 let page;
 try {
-  const deadline = Date.now() + 10_000;
-  while (true) {
-    try { if ((await fetch(`${base}/api/projects`)).ok) break; } catch {}
-    assert.ok(Date.now() < deadline && backend.exitCode === null, log);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  // 后端起来之前（或者它自己先退出了）一直等；满载时冷启动 server/dist 可能要十几秒。
+  await waitUntil(async () => backend.exitCode !== null
+    || await fetch(`${base}/api/projects`).then((response) => response.ok, () => false),
+  { timeout: 30_000, message: "测试后端开始应答 /api/projects（后端输出见下方 catch 打印的日志）" });
+  assert.equal(backend.exitCode, null, log);
   browser = await launchChrome();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const pageErrors = [];
@@ -179,17 +184,12 @@ try {
     await page.getByRole("option", { name: new RegExp(`^/${name}(?:\\s|$)`) }).waitFor();
   }
   const sessionEnds = async (taskId) => new Map((await (await fetch(`${base}/api/tasks/${taskId}/sessions`)).json()).map((session) => [session.id, session.endedAt]));
-  const idleTask = async (taskId, previousEnds) => {
-    const deadline = Date.now() + 10_000;
-    while (true) {
-      const task = await (await fetch(`${base}/api/tasks/${taskId}`)).json();
-      const recorded = await (await fetch(`${base}/api/tasks/${taskId}/sessions`)).json();
-      const completed = recorded.some((session) => session.endedAt && session.endedAt !== previousEnds.get(session.id));
-      if (completed && !["running", "queued"].includes(task.status)) return task;
-      assert.ok(Date.now() < deadline, `task remained busy: ${taskId}\n${log}`);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  };
+  const idleTask = (taskId, previousEnds) => waitUntil(async () => {
+    const task = await (await fetch(`${base}/api/tasks/${taskId}`)).json();
+    const recorded = await (await fetch(`${base}/api/tasks/${taskId}/sessions`)).json();
+    const completed = recorded.some((session) => session.endedAt && session.endedAt !== previousEnds.get(session.id));
+    return completed && !["running", "queued"].includes(task.status) && task;
+  }, { interval: 50, message: `任务 ${taskId} 跑完这一回合、回到空闲（task remained busy）` });
   const sendCodex = async (text) => {
     const previousEnds = await sessionEnds("codex-ui-task");
     await codexReply.fill(`${text} `);
@@ -454,7 +454,9 @@ try {
   await page.getByText("目标：让 test/auth 全过；预算 150；已用 150", { exact: true }).waitFor();
   const beforeHeldRun = [...await sessionEnds("scoped-goal-task")];
   assert.equal((await fetch(`${base}/api/groups/goal-ui/run`, { method: "POST" })).status, 202);
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  // 整组起跑在后台跑：等同组那位普通成员真起跑并跑完，那一次挑选（持有标记的那位就在
+  // 那一步被筛掉或拉起）必然已经做完，再断言持有标记的那位没被拉起来。
+  await idleTask("goal-ui-probe", new Map());
   assert.deepEqual([...await sessionEnds("scoped-goal-task")], beforeHeldRun);
   assert.equal((await (await fetch(`${base}/api/tasks/scoped-goal-task`)).json()).status, "paused");
   await page.screenshot({ path: join(screenshots, "goal-survives-profile-switch.png"), fullPage: true });
@@ -514,13 +516,10 @@ try {
     const startLiveGoal = async (text) => {
       const previousTurn = (await lastInvocation()).turnToken;
       await sendLive(text, 202);
-      const deadline = Date.now() + 10_000;
-      let invocation = await lastInvocation();
-      while (invocation.taskId !== taskId || !invocation.turnToken || invocation.turnToken === previousTurn) {
-        assert.ok(Date.now() < deadline, `new goal turn did not start: ${taskId} ${text}\n${log}`);
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        invocation = await lastInvocation();
-      }
+      const invocation = await waitUntil(async () => {
+        const latest = await lastInvocation();
+        return latest.taskId === taskId && latest.turnToken && latest.turnToken !== previousTurn && latest;
+      }, { interval: 50, message: `new goal turn did not start: ${taskId} ${text}` });
       assert.equal(invocation.cliCommand?.text, text);
       await page.getByText(/^目标：等待实时目标控制；/).filter({ hasText: `测试回合 ${invocation.turnToken}`, visible: true }).last().waitFor();
       return invocation;
@@ -543,11 +542,8 @@ try {
     const beforeClear = await sessionEnds(taskId);
     assert.equal((await sendLive("/goal clear", 200)).command, true);
     if (agentType === "claude") {
-      const deadline = Date.now() + 10_000;
-      while ((await lastInvocation()).cliCommand?.text !== "/goal clear") {
-        assert.ok(Date.now() < deadline, log);
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
+      await waitUntil(async () => (await lastInvocation()).cliCommand?.text === "/goal clear",
+        { interval: 50, message: `${taskId} 收到 /goal clear 那一回合的调用` });
     }
     const cleared = await idleTask(taskId, beforeClear);
     assert.equal(cleared.status, "paused");
@@ -648,6 +644,7 @@ try {
   if (backend.exitCode === null) {
     const closed = once(backend, "close");
     backend.kill("SIGTERM");
+    // 收尾兜底：SIGTERM 收不掉才强杀，只决定最多等多久，不是睡完再断言。
     const force = setTimeout(() => backend.kill("SIGKILL"), 5000);
     await closed;
     clearTimeout(force);

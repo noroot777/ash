@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, fetchesSettled, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -77,6 +78,11 @@ try {
     }
     await route.fulfill({ status: 500, json: { error: routeErrors.at(-1) } }).catch(() => undefined);
   });
+  // 任务相关的请求（2 秒一拍的远端快照、移回、以及快照失败后回头查本机那一读）：负向断言前
+  // 要等的是「它们的应答已被页面消费完」，连同消费时顺手补发的那一读。
+  await trackFetches(page, "/api/tasks/");
+  const snapshotsDone = async () => (await fetchLog(page))
+    .filter((entry) => entry.url.endsWith("/remote-snapshot") && entry.state === "settled").length;
   const url = `${web.origin}/scripts/fixtures/remote-return.html`;
   const openReturn = async () => {
     await page.getByRole("button", { name: "移回本机…", exact: true }).click();
@@ -91,7 +97,10 @@ try {
   assert.match(await dialog.getByRole("alert").innerText(), /移回未完成[\s\S]*return\/ping[\s\S]*fetch failed/);
   assert.equal(await dialog.getByRole("button", { name: "重试移回", exact: true }).isEnabled(), true);
   const beforePoll = snapshotCount;
-  await page.waitForTimeout(3_200);
+  const polledBefore = await snapshotsDone();
+  // 等错误出现之后的那一拍正常轮询真的回来、被页面消费完，再看它有没有把失败清掉。
+  await waitUntil(async () => await snapshotsDone() > polledBefore, "移回失败之后的那一拍远端轮询被页面消费完");
+  await settlePage(page);
   assert.ok(snapshotCount > beforePoll, "覆盖错误出现后的正常远端轮询");
   assert.equal(await dialog.getByRole("alert").isVisible(), true, "后续正常轮询不能清掉移回失败");
   assert.equal(requests.length, 1);
@@ -149,6 +158,8 @@ try {
   await page.waitForFunction((elapsed) => Number(document.querySelector(".remote-return-progress")?.textContent?.match(/已等待 (\d+) 秒/)?.[1]) >= elapsed, elapsedSeconds);
   await page.getByRole("button", { name: "离开详情", exact: true }).click();
   assert.equal(await page.locator(".remote-task-detail").count(), 0);
+  // 故意让详情在卸载状态下多停一秒多：重挂后的秒数必须接着原来的开始时间往上数。睡得更久
+  // 只会让「已等待」更大，下面那条 > elapsed 的等待照样成立，所以负载下不会误判。
   await page.waitForTimeout(1_100);
   await page.getByRole("button", { name: "重新打开详情", exact: true }).click();
   await page.waitForFunction((elapsed) => Number(document.querySelector(".remote-return-progress")?.textContent?.match(/已等待 (\d+) 秒/)?.[1]) > elapsed, elapsedSeconds);
@@ -263,7 +274,10 @@ try {
     const snapshotFinished = page.waitForResponse((result) => result.url().includes(`/${task.id}/remote-snapshot`));
     heldSnapshot.release();
     await snapshotFinished;
-    await page.waitForTimeout(100);
+    // 浏览器收到应答不等于页面处理完：等迟到的移回结果与快照都被页面消费完、冲刷提交，
+    // 再断言它们没有污染当前任务。
+    await fetchesSettled(page, 0, "迟到的移回结果与那份被按住的快照都已被页面消费完");
+    await settlePage(page);
     assert.equal(await page.getByRole("alert").count(), 0, "上一任务的迟到失败不能污染当前任务");
     assert.equal(await page.getByRole("status").filter({ hasText: "本机任务" }).count(), 0, "上一任务的迟到成功不能切走当前任务");
     assert.match(await page.locator(".workspace-toast").innerText(), new RegExp(task.title), "后台移回的迟到结果应通知具体任务");

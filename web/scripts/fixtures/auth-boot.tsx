@@ -2,7 +2,9 @@
 //
 // `GET /api/auth/state` 在这里被人为拖慢,模拟远程访问那一个真实存在的 RTT —— 本机上它
 // 快到量不出来,而这条路径上出过的毛病(首屏先把整块品牌外壳渲染出来、拿到状态再跳走)
-// 只在慢的时候看得见。延迟由 `?delay=` 传进来,测试拿它跨过 / 不跨过 AuthGate 的等待阈值。
+// 只在慢的时候看得见。`?delay=0` 是快路径;`?delay=hold` 把应答**扣住**,直到测试调
+// `window.__releaseAuthState()` 才放 —— 慢路径要断言「等待态在、工作台还没来」,那段窗口
+// 不能交给定时器去赌(从前是阈值 +600ms,满载时测试这边几次往返就能把 600ms 用完)。
 //
 // `?mode=probe-once` 是另一条:不渲染界面,只验预热快照的**一次性**语义(见文件末尾)。
 //
@@ -16,7 +18,8 @@ import { AuthGate } from "../../src/auth/AuthGate.tsx";
 import { authApi } from "../../src/lib/authApi.ts";
 
 const params = new URLSearchParams(location.search);
-const delay = Number(params.get("delay") ?? 0);
+const hold = params.get("delay") === "hold";
+const delay = hold ? 0 : Number(params.get("delay") ?? 0);
 
 // 自用模式:AuthGate 对它应当**整体透明**,直接渲染 children。
 const state: AuthState = { mode: "single", needsSetup: false, user: null, rootDir: null, homeDir: null, needsOnboarding: false };
@@ -27,7 +30,12 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   if (new URL(href, location.origin).pathname === "/api/auth/state") {
     realRequests += 1;
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (hold) {
+      await new Promise((resolve) => { (window as unknown as { __releaseAuthState: () => void }).__releaseAuthState = () => resolve(undefined); });
+    } else {
+      // 模拟网络往返。快路径传 0:跟 AuthGate 的阈值定时器比的是页面定时器的到期先后,不看负载。
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
     return new Response(JSON.stringify(state), { status: 200, headers: { "content-type": "application/json" } });
   }
   return realFetch(input as never, init);

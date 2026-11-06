@@ -57,6 +57,7 @@ export async function runServerFixture(script, check) {
     await browser?.close();
     if (child.exitCode === null && child.signalCode === null) {
       stop();
+      // 收尾兜底：礼貌关不掉才强杀。只决定「最多等多久」，不是睡完再断言，负载下慢点也只是晚点强杀。
       const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
       await exited;
       clearTimeout(timer);
