@@ -70,12 +70,18 @@ export interface SteerEntry {
 const journalOf = (outPath: string) => `${outPath}.steer.json`;
 
 /**
- * 写进 stdin 的那一侧:`entries` 是发过的打断;`sentAfter` 是最近一次空档里直接送消息时已经有
- * 几个回合结尾 —— 重放完结尾数还是它,那条消息开的回合就还没结尾(哪怕一个字都还没吐)。
+ * 写进 stdin 的那一侧,**一律按回合结尾的序号记**,接管时随着读到第几个结尾逐条认领 —— 输出的
+ * 已消费水位每秒才落一次库,它和这份同步写下的记录不是同一时刻的快照,结尾可能落在水位之前,
+ * 也可能落在之后的尾流里(自由审查 ZbBv9az0Qgtf 第 2 轮)。只在「前缀读完」那一刻核一次的话,
+ * 落在尾流里的那几条就认不回来。
+ *
+ * - `entries`:发过的打断,各自认领的是它**产生**的那个结尾(见 SteerEntry)。
+ * - `sends`:空档里直接送消息时已经读到第几个结尾 —— 那个结尾之后会话就因这条消息在忙,它不再
+ *   是「回合说完了」(上一代送消息时已经不再等它)。
  */
 export interface SteerJournal {
   entries: SteerEntry[];
-  sentAfter?: number;
+  sends?: number[];
 }
 
 /** 读回打断记录。还没记过 = 没发过打断;别的读不出来一律抛(身份未知,不能当成没有)。 */
@@ -91,13 +97,13 @@ export function loadSteerJournal(outPath: string): SteerJournal {
   const entries = Array.isArray(saved?.entries) ? saved.entries : null;
   const valid = (entry: any): entry is SteerEntry => typeof entry?.id === "string" && Number.isInteger(entry.result)
     && (entry.sent === undefined || typeof entry.sent === "boolean");
-  const sentAfter = saved?.sentAfter;
-  if (!entries || !entries.every(valid) || (sentAfter !== undefined && !Number.isInteger(sentAfter))) {
+  const sends = saved?.sends;
+  if (!entries || !entries.every(valid) || (sends !== undefined && !(Array.isArray(sends) && sends.every(Number.isInteger)))) {
     throw new Error(`打断记录 ${journalOf(outPath)} 格式不对`);
   }
   return {
     entries: entries.map(({ id, result, sent }: SteerEntry) => ({ id, result, ...(sent === undefined ? {} : { sent }) })),
-    ...(sentAfter === undefined ? {} : { sentAfter }),
+    ...(sends === undefined ? {} : { sends: [...sends] }),
   };
 }
 

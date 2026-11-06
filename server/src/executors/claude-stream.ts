@@ -427,6 +427,10 @@ async function* claudeStreamEvents(
       // 插话开的下一回合,按这一回合结束处理,并告诉用户那条插话要重发。
       const ownInterrupt = !!claim && !claim.abandoned;
       const realFailure = failed && !claim;
+      // 上一代读完这个结尾、开始等后台之后,在空档里直接送进去过一条消息:这个结尾已经被那条消息开
+      // 的回合取代,不等后台、不收台,会话在忙(下面推完结尾就开新回合,这个结尾随之过期)。它落在
+      // 已消费水位之前还是之后的尾流里都一样认(见 claude-recovery.ts 的 SteerJournal)。
+      const superseded = !!resident && !claim && resident.takeSend(resident.turns);
       if (claim?.abandoned) {
         push({ kind: "system", text: "插话打断了这一回合，但 ash 恰在送出插话内容之前重启，那条消息没有送到，需要的话请重新发一次。", at: new Date().toISOString(), level: "notice" });
       }
@@ -461,11 +465,11 @@ async function* claudeStreamEvents(
       // 它计成重试、页面会显示「在等上游」—— 而这里上游好好的,是我们在等自己的后台。
       //
       // 接管时状态未知(`recoveryUnknown`)就当后台可能还有活:账本是空的不等于没有。
-      const waiting = resident?.reapsAtTurnEnd && !ownInterrupt && !realFailure ? background.waiting() : null;
+      const waiting = resident?.reapsAtTurnEnd && !ownInterrupt && !realFailure && !superseded ? background.waiting() : null;
       const holding = !!waiting && (waiting.agent + waiting.workflow > 0 || recoveryUnknown);
       if (holding) {
         push({ kind: "system", text: backgroundHoldNotice(waiting, recoveryUnknown), at: new Date().toISOString(), level: "notice", aside: true });
-      } else if (resident?.reapsAtTurnEnd && !ownInterrupt) {
+      } else if (resident?.reapsAtTurnEnd && !ownInterrupt && !superseded) {
         for (const activity of nativeWork.reaped()) push(activity);
       }
       // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。打断出来的那个结尾要标出来:
@@ -475,6 +479,7 @@ async function* claudeStreamEvents(
         push(holding
           ? { kind: "turnEnd", background: { ...waiting!, ...(replaying ? {} : { since: holdSince(outPath, resident.turns) }) }, epoch: resident.epoch }
           : ownInterrupt ? { kind: "turnEnd", interrupted: true } : { kind: "turnEnd", epoch: resident.epoch });
+        if (superseded) resident.beginTurn(true);
       }
       // 只清字节去重表,不动 `refs`:引用身份在一条流里单调递增,复位会让两个回合的
       // 身份撞上。字节去重按回合清是故意的 —— 同一个路径在下一回合被重拍过,那是新的
@@ -518,9 +523,6 @@ async function* claudeStreamEvents(
       // 起点同样落盘(按 -1 这个「接管时读不出」的结尾认),反复重启不重新给满。
       push({ kind: "turnEnd", background: { ...waiting, since: holdSince(outPath, -1) }, epoch: resident.epoch });
     }
-    // 空档里直接送进去的消息开的回合可能还一个字都没吐:输出里看着是空闲,其实在忙。照记录认,
-    // 那个旧结尾也就不再重发(上一代送消息时已经不等它了)。
-    if (!recoveryUnknown && resident?.inputPending) resident.beginTurn(true);
     // 水位正停在一个回合结尾之后:上一代当时据它收台或开始等后台,这一代没见过,得照样重发。
     // 打断出来的结尾不在此列(回合仍算在忙)。时刻与回合身份用重发这一刻的:重放里的计数跟这一代
     // 对不上;这之后再开回合,它照样过期。

@@ -325,7 +325,8 @@ export class ClaudeExecutor implements AgentExecutor {
     reapsAtTurnEnd = false,
     consumed?: ConsumedOutput,
   ): ResidentHandle {
-    const resident = new ClaudeControlBridge(reapsAtTurnEnd, (child as { ashPaths?: { out?: string } }).ashPaths?.out);
+    // 打断/发送记录只给单飞落:接管(attach)只接单飞,常驻调度台重启是另开一台,不重放。
+    const resident = new ClaudeControlBridge(reapsAtTurnEnd, reapsAtTurnEnd ? (child as { ashPaths?: { out?: string } }).ashPaths?.out : undefined);
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
       const input = child.stdin;
       if (!input || input.destroyed || input.writableEnded || !input.writable) {

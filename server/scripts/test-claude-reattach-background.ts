@@ -367,7 +367,8 @@ console.log("✓ 插话正文没送出去就重启:按回合结束收台,说明�
 }
 
 // ③j 等后台的空档里插话直接送进去了,那一回合还没吐字就重启:接回后会话算在忙,下一条插话照样
-// 先打断;旧的等后台结尾不再重发。直播那一侧送消息时就把这件事落盘。(自由审查 ZbBv9az0Qgtf R1-B)
+// 先打断;旧的等后台结尾不再重发。直播那一侧送消息时就把这件事落盘。(自由审查 ZbBv9az0Qgtf
+// 第 1 轮 R1-B、第 2 轮 R1)
 {
   const steerAck = `
   if (message.type === "control_request") {
@@ -383,24 +384,42 @@ console.log("✓ 插话正文没送出去就重启:按回合结束收台,说明�
   await liveHandle.steer!("FIRST");
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.deepEqual(first.stderr().split("\n").filter((l) => l.startsWith("INPUT ")), ["INPUT user"], "空档里直接送");
-  assert.equal(JSON.parse(readFileSync(`${liveOut}.steer.json`, "utf8")).sentAfter, 1, "送之前记下「第 1 个结尾之后送过一条」");
+  assert.deepEqual(JSON.parse(readFileSync(`${liveOut}.steer.json`, "utf8")).sends, [1], "送之前记下「第 1 个结尾之后送过一条」");
   liveHandle.kill();
   await liveConsuming.catch(() => {});
 
-  const out = join(root, "idle-sent-before-restart.jsonl");
-  writeFileSync(`${out}.steer.json`, JSON.stringify({ entries: [], sentAfter: 1 }));
-  const { stderr, handle } = reattach("idle-sent-before-restart", [...launch, ...heldEnd], [], steerAck);
-  const seen: any[] = [];
-  const consuming = (async () => { for await (const event of handle.events) seen.push(event); })();
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.ok(!seen.some((e) => e.kind === "system" && /1 个工作流/.test(e.text)), "旧的等后台结尾不再重发");
-  await handle.steer!("SECOND");
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.deepEqual(stderr().split("\n").filter((l) => l.startsWith("INPUT ")), ["INPUT control_request", "INPUT user"],
-    "接回后会话在忙:插话先打断");
-  handle.kill();
-  await consuming.catch(() => {});
-  console.log("✓ 空档直接送的消息还没吐字就重启:接回后照样算忙,下一条插话先打断");
+  // 已消费水位每秒才落一次库,和同步写下的发送记录不是同一时刻:那个结尾可能在水位之前,也可能
+  // 还在尾流里(甚至一条都没消费过)。切在哪都得认出来;旧期限在重启期间过了也不能拿它收台。
+  const heldText = say("已在后台跑起来");
+  const heldResult = { ...result, result: "已在后台跑起来" };
+  // 落后不止一个结尾:第 1 个结尾后送了 FIRST,它那一回合说完(后台还在跑,又等),再送了 THEN。
+  const twice = [...launch, ...heldText, heldResult, { type: "system", subtype: "init", session_id: "sess-r" },
+    ...say("FIRST 的答复"), { ...result, result: "FIRST 的答复" }];
+  for (const [name, prefix, tail, expired, sends] of [
+    ["sent-on-watermark", [...launch, ...heldText, heldResult], [], false, [1]],
+    ["sent-watermark-lagging", [...launch, ...heldText], [heldResult], false, [1]],
+    ["sent-watermark-lagging-expired", [...launch, ...heldText], [heldResult], true, [1]],
+    ["sent-nothing-consumed", [], [...launch, ...heldText, heldResult], false, [1]],
+    ["sent-twice-lagging", launch, twice.slice(launch.length), true, [1, 2]],
+  ] as const) {
+    const out = join(root, `${name}.jsonl`);
+    writeFileSync(`${out}.steer.json`, JSON.stringify({ entries: [], sends }));
+    if (expired) writeFileSync(`${out}.hold.json`, JSON.stringify({ turn: 1, since: new Date(Date.now() - HOLD_MS - 1000).toISOString() }));
+    const { stderr, handle } = reattach(name, [...prefix], [...tail], steerAck);
+    const seen: any[] = [];
+    const consuming = (async () => { for await (const event of handle.events) seen.push(event); })();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.ok(!seen.some((e) => e.kind === "system" && /1 个工作流/.test(e.text)), `${name}: 那个结尾已被送进去的消息取代,不再等后台`);
+    assert.ok(!seen.some((e) => e.kind === "error" || e.kind === "done"), `${name}: 不拿旧期限收台`);
+    assert.equal(handle.failure?.() ?? null, null, `${name}: 没有失败判决`);
+    await handle.steer!("SECOND");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.deepEqual(stderr().split("\n").filter((l) => l.startsWith("INPUT ")), ["INPUT control_request", "INPUT user"],
+      `${name}: 接回后会话在忙:插话先打断`);
+    handle.kill();
+    await consuming.catch(() => {});
+  }
+  console.log("✓ 空档直接送的消息还没吐字就重启:水位切在哪都认得出会话在忙,下一条插话先打断,旧期限不收台");
 }
 
 // ④ 等后台的收尾(自由审查 c2vZ4d3LmL1q 第 1 轮),都走真实 spawn 出来的流,不经接管。

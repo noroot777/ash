@@ -38,8 +38,9 @@ export class ClaudeControlBridge {
    * 那一刻**之后**的第一个还没被认领的结尾 —— 打断总会让 CLI 收一个结尾。
    */
   private entries: SteerEntry[] = [];
-  /** 最近一次空档里直接送消息时的回合结尾数(见 SteerJournal.sentAfter)。 */
-  private sentAfter: number | undefined;
+  /** 空档里直接送过消息的那几个结尾(见 SteerJournal.sends);`inheritedSends` 是接管读回来、还没认领的。 */
+  private sends: number[] = [];
+  private inheritedSends = new Set<number>();
   private unclaimed: (SteerEntry & { inherited?: true })[] = [];
 
   /**
@@ -62,7 +63,8 @@ export class ClaudeControlBridge {
     if (!this.journalPath) return;
     const journal = loadSteerJournal(this.journalPath);
     this.entries = journal.entries;
-    this.sentAfter = journal.sentAfter;
+    this.sends = journal.sends ?? [];
+    this.inheritedSends = new Set(this.sends);
     this.unclaimed = this.entries.map((entry) => ({ ...entry, inherited: true }));
     for (const entry of this.entries) {
       const n = Number(entry.id.replace(/^ash_int_/, ""));
@@ -96,13 +98,18 @@ export class ClaudeControlBridge {
    * 下一条插话就不打断、排到它后面去了(自由审查 ZbBv9az0Qgtf R1-B)。落不了盘就抛,消息不写。
    */
   noteSend(): void {
-    this.persist(this.entries, this.turns);
-    this.sentAfter = this.turns;
+    const sends = [...this.sends, this.turns];
+    this.persist(this.entries, sends);
+    this.sends = sends;
   }
 
-  /** 接管时:最近那条直接送进去的消息开的回合还没结尾。 */
-  get inputPending(): boolean {
-    return this.sentAfter !== undefined && this.sentAfter === this.turns;
+  /**
+   * 第 `result` 个结尾之后,上一代在空档里直接送过一条消息:这个结尾已经被那条消息开的回合
+   * 取代 —— 会话在忙,不是在等后台。认领掉,只认一次。这一代自己记的不在此列(记的时候那个结尾
+   * 已经读过了)。
+   */
+  takeSend(result: number): boolean {
+    return this.inheritedSends.delete(result);
   }
 
   /** 打断没写出去:撤掉它的认领。 */
@@ -129,8 +136,8 @@ export class ClaudeControlBridge {
     return { abandoned: !!entry.inherited && entry.sent === false };
   }
 
-  private persist(entries: SteerEntry[], sentAfter = this.sentAfter): void {
-    if (this.journalPath) saveSteerJournal(this.journalPath, { entries, ...(sentAfter === undefined ? {} : { sentAfter }) });
+  private persist(entries: SteerEntry[], sends = this.sends): void {
+    if (this.journalPath) saveSteerJournal(this.journalPath, { entries, ...(sends.length ? { sends } : {}) });
   }
 
   private sequence = 0;
