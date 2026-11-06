@@ -160,7 +160,7 @@ export function Toggle({
   return (
     <button
       type="button"
-      className="ui-choice"
+      className="ui-choice ui-choice--switch"
       role="switch"
       aria-checked={checked}
       disabled={disabled}
