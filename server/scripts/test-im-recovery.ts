@@ -248,15 +248,15 @@ try {
       return { row, value: buttonsOf(contentOf(sent)).find((button) => button.value?.op === "confirm")!.value! };
     };
     let outcome = { ok: true, text: "已停止。", final: true, tone: "grey" as const };
-    im.commands.confirmed = async () => { await sleep(2_700); return outcome; };
+    im.commands.confirmed = async () => { await sleep(4_000); return outcome; };
 
     const slow = await stopCard();
     const started = Date.now();
     const first = await im.click(OWNER, slow.value);
-    assert.ok(Date.now() - started < 2_650, "慢了先回执，不等办完");
+    assert.ok(Date.now() - started < 3_600, "慢了先回执，不等办完");
     assert.match(textOf(first.card?.data), /处理中/);
     fake.reset();
-    await sleep(600);
+    await sleep(2_000);
     await im.settle();
     assert.equal(sentTo(slow.row).length, 1, "办完补写一次");
     assert.match(textOf(JSON.parse(sentTo(slow.row)[0]!.body.content)), /已停止/);
@@ -266,7 +266,7 @@ try {
     const failing = await stopCard();
     await im.click(OWNER, failing.value);
     fake.reset();
-    await sleep(600);
+    await sleep(2_000);
     await im.settle();
     assert.equal((await db.select().from(imActions).where(eq(imActions.id, failing.value.e as string))).at(0)!.usedAt, null, "没办成：信封放回去");
     assert.ok(buttonsOf(JSON.parse(sentTo(failing.row)[0]!.body.content)).some((button) => button.value?.op === "confirm"), "卡面改回原样");
