@@ -10,6 +10,7 @@
 // 跑法：npm -w web run test:conversation-input-rail-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -64,7 +65,7 @@ try {
   // 等页面里某个条件成立；等不到就按断言失败报出来。
   const until = async (condition, message, arg) => {
     try {
-      await page.waitForFunction(condition, arg, { timeout: 3_000 });
+      await page.waitForFunction(condition, arg, { timeout: WAIT_TIMEOUT_MS });
     } catch {
       assert.fail(message);
     }
