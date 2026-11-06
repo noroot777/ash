@@ -110,7 +110,7 @@ rl.on('line', (line) => {
     if ('${mode}' === 'unsupported') send({ id: m.id, error: { message: 'unsupported method' } });
     else send({ id: m.id, result: { thread: { id: '${mode}' === 'wrong-thread' ? 'main' : 'child', model: '${mode}' === 'missing-model' ? undefined : 'actual-child-model',
       reasoningEffort: 'xhigh', source: { subAgent: { thread_spawn: { agent_path: '/root/page_audit' } } } } } });
-    setTimeout(() => send({ method: 'turn/completed', params: { threadId: 'main', turn: { status: 'completed' } } }), 20);
+    setTimeout(() => send({ method: 'turn/completed', params: { threadId: 'main', turn: { id: 'turn', status: 'completed' } } }), 20);
   }
 });
 `], { stdio: ["pipe", "pipe", "pipe"] }) });

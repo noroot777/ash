@@ -196,9 +196,13 @@ try {
   rmSync(imageDir, { recursive: true, force: true });
 }
 
+// 整个回合一次写出：读端一块收齐、同步分完所有行之后，turn/start 应答的续体才轮得到。
+// 回合身份因此只能来自 turn/completed 自带的 turn.id（真协议总带），不能靠分块碰运气 ——
+// 曾经不带 id、又是逐条写，门禁 16 路满载时读端偶尔一块收齐，这条用例就永远等不到收尾。
 const app = openCodexAppServer({ bin: "codex", args: [], cwd: process.cwd(), prompt: "fixture", startProcess: () => spawn(process.execPath, ["-e", `
 const rl = require('node:readline').createInterface({ input: process.stdin });
-const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
+let batch = '';
+const send = (m) => { batch += JSON.stringify(m) + '\\n'; };
 rl.on('line', (line) => {
   const m = JSON.parse(line);
   if (m.method === 'initialize') send({ id: m.id, result: {} });
@@ -213,10 +217,12 @@ rl.on('line', (line) => {
     send({ method: 'item/started', params: { threadId: 'child', item: { type: 'commandExecution', id: 'child-exec', command: 'npm run verify-child' } } });
     send({ method: 'item/completed', params: { threadId: 'child', item: { type: 'commandExecution', id: 'child-exec', aggregatedOutput: '验证成功', exitCode: 0 } } });
     send({ method: 'item/completed', params: { threadId: 'child', item: { type: 'agentMessage', id: 'child-msg', text: '子结果' } } });
-    send({ method: 'turn/completed', params: { threadId: 'child', turn: { status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } } });
     send({ method: 'item/completed', params: { threadId: 'main', item: { type: 'agentMessage', id: 'main-msg', text: '主回复仍继续' } } });
-    send({ method: 'turn/completed', params: { threadId: 'main', turn: { status: 'completed' } } });
+    send({ method: 'turn/completed', params: { threadId: 'main', turn: { id: 'turn', status: 'completed' } } });
   }
+  process.stdout.write(batch);
+  batch = '';
 });
 `], { stdio: ["pipe", "pipe", "pipe"] }) });
 const appEvents: AgentEvent[] = [];
