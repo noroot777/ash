@@ -75,8 +75,9 @@ try {
   browser = await launchChrome();
 
   // `states` 给的是**按请求次序**排好的几份响应（用来排并发/乱序那一类场面）：每份可以
-  // 带 status（直接给个 500）或 after（扣住这一份，等第 after 次读取的响应**送出去**之后
-  // 才回 —— 乱序靠这个排，不靠「迟到多少毫秒」：满载时后一发可能比任何固定延迟都晚才到）。
+  // 带 status（直接给个 500）、after（扣住这一份，等第 after 次读取的响应**送出去**之后
+  // 才回 —— 乱序靠这个排，不靠「迟到多少毫秒」：满载时后一发可能比任何固定延迟都晚才到）
+  // 或 hold（扣到测试放行这个 promise 才回）。
   // 不给就一直回 store.gate。`store.served(i)` 在第 i 次读取的响应送出（或因页面已 abort
   // 而送不出）之后兑现；页面那一侧有没有消费完看 fetchesSettled（只记 TRACKED_READS）。
   const open = async ({ gate, role = "admin", query = "", command, states, tasks = [], events = false, cancelOutcome = "canceled", projectDown = false } = {}) => {
@@ -90,6 +91,9 @@ try {
       window.emitGateEvent = event => {
         for (const stream of streams) stream.onmessage?.({ data: JSON.stringify(event) });
       };
+      // 断线与重连分两步给：连在一起发，React 会把 false→true 批成一次渲染，「断线作废」就不发生。
+      window.dropGateStream = () => { for (const stream of streams) stream.onerror?.(); };
+      window.reopenGateStream = () => { for (const stream of streams) stream.onopen?.(); };
     });
     await trackFetches(page, TRACKED_READS);
     const served = [];
@@ -157,6 +161,7 @@ try {
       store.reads += 1;
       store.requestIds.push(route.request().url().split("/").at(-2));
       if (plan?.after !== undefined) await servedAt(plan.after).promise;
+      if (plan?.hold) await plan.hold;
       const status = plan?.status || store.status;
       // 被扣住的那一份送出去时，页面可能早已把这一发 abort 了（这正是被验的行为之一）。
       await (status ? json(route, { error: "数据库忙" }, status) : json(route, plan?.body ?? store.gate)).catch(() => {});
