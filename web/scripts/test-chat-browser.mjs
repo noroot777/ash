@@ -21,6 +21,7 @@ let fixtureLogs = "";
 fixture.stderr.on("data", (chunk) => { fixtureLogs += chunk.toString(); });
 try {
   const fixtureUrl = await new Promise((resolve, reject) => {
+    // 这是等夹具服务打出地址的期限，不是睡眠：地址一出现就 resolve，20s 只决定它真起不来时多久报错。
     const timer = setTimeout(() => reject(new Error(`fixture startup timed out: ${fixtureLogs}`)), 20000);
     fixture.once("exit", (code) => { clearTimeout(timer); reject(new Error(`fixture exited ${code}: ${fixtureLogs}`)); });
     fixture.stdout.on("data", (chunk) => {

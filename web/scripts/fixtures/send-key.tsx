@@ -33,11 +33,15 @@ import { useSendKeyLabels } from "../../src/lib/useComposerSendKey.ts";
 //   __reopenSettings()         把发送键卡片卸载再挂上、并重新读一次设置 —— 等价于
 //                              「离开设置页再回来」：卡片级的「保存中」就这么丢掉的
 //   __allowReads()             取消剩余的 GET 失败
-//   __state()                  { mode, value, skill, epoch, applied }
+//   __state()                  { mode, value, skill, epoch, applied, held, consumed }
 //                              mode  = 此刻真正生效的那一档（含排着队还没落地的选择）
 //                              value = settingsSync **交出去的快照**里的那一档，按设计
 //                                      只该有服务端确认过的值
 //                              applied = 真正落到「服务端」的 PATCH 条数
+//                              held  = { patch, probe }：此刻有没有一条 PATCH / GET 被扣在桩上
+//                              consumed = { reads, writes }：应用**已经读完应答体**的 GET / PATCH
+//                                      条数（成败都算）。测试拿它判「那条迟到的应答已经被
+//                                      处理掉了」，不靠睡一会儿赌它到了
 
 const params = new URLSearchParams(location.search);
 const stored: AppSettings = {
@@ -50,6 +54,14 @@ let patchFailsLeft = 0;
 // 还没计这一笔。同字段有没有抢跑，看这个数比看值准：两次写的值可能恰好相同。
 let applied = 0;
 
+// 应用读完应答体的那一刻记一笔：request() 不论成败都会读体，读完之后的处理（新旧判定、
+// publish、setSettings）都在随后的微任务里，测试那边再冲刷一轮 MessageChannel 就落定了。
+const consumed = { reads: 0, writes: 0 };
+const counted = (response: Response, kind: keyof typeof consumed) => {
+  const text = response.text.bind(response);
+  response.text = () => text().finally(() => { consumed[kind] += 1; });
+  return response;
+};
 const reply = (body: unknown) => new Response(JSON.stringify(body), {
   status: 200, headers: { "content-type": "application/json" },
 });
@@ -62,6 +74,12 @@ let probing = false;
 
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
+  const response = await stub(input, init);
+  const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (new URL(href, location.origin).pathname !== "/api/settings") return response;
+  return counted(response, init?.method === "PATCH" ? "writes" : "reads");
+};
+async function stub(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const path = new URL(href, location.origin).pathname;
   if (path === "/api/settings") {
@@ -91,7 +109,7 @@ window.fetch = async (input, init) => {
   }
   if (path.startsWith("/api/")) return reply({});
   return realFetch(input, init);
-};
+}
 
 function Fixture() {
   const [settings, setSettings] = useState<AppSettings>(stored);
@@ -144,6 +162,8 @@ function Fixture() {
         skill: settings.skillRefreshSeconds,
         epoch: cardEpoch,
         applied,
+        held: { patch: patchGate !== null, probe: probeGate !== null },
+        consumed: { ...consumed },
       }),
     });
   }, [settings, cardEpoch]);

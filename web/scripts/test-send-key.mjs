@@ -27,6 +27,7 @@
 //      离开设置页再回来（第 4 轮审查）。界面继续声称一个没存成的档位比显示滞后危险。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage, waitUntil, WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -56,13 +57,21 @@ try {
   };
   // 等某个可观察状态落定。超时时报出「等的是什么 + 实际是什么」—— 这几条用例靠等待
   // 本身当断言，只剩一行 TimeoutError 的话，下一个人没法知道是哪一档没跟上。
-  const settleTo = async (predicate, message) => {
+  const settleTo = async (predicate, message, arg) => {
     try {
-      await page.waitForFunction(predicate, undefined, { timeout: 5000 });
+      await page.waitForFunction(predicate, arg, { timeout: WAIT_TIMEOUT_MS });
     } catch {
       assert.fail(`${message}；实际 ${JSON.stringify(await state())}`);
     }
   };
+  // 乱序要靠事实排，不靠睡：「那条请求已经扣在桩上」「那条应答已经被应用读完」都是夹具
+  // 报出来的事实（__state 的 held / consumed），读完之后的处理在微任务里，再冲刷一轮就落定。
+  const held = (kind, message) => settleTo((want) => window.__state().held[want], message, kind);
+  const consumed = async (kind, after, message) => {
+    await settleTo(([want, count]) => window.__state().consumed[want] > count, message, [kind, after]);
+    await settlePage(page);
+  };
+  const consumedSoFar = async (kind) => (await state()).consumed[kind];
 
   // ① 服务端那份说 ⌘/Ctrl+回车：裸回车只换行。
   await open("?send-key=mod-enter");
@@ -112,7 +121,9 @@ try {
 
   // ⑧ 读设置一直失败也**不许**退回出厂默认（这里服务端存的是 mod-enter）。
   await open("?send-key=mod-enter&fail=999");
-  await page.waitForTimeout(2000); // 盖过开场那轮重试（3 次、每次间隔 0.5s）
+  // 盖过开场那轮重试：不睡，等它真的全败完 —— 设置页自己读的那一次 + 输入框那轮的 3 次
+  // （useComposerSendKey 的 MAX_ATTEMPTS），4 条 503 都被应用读完，「放弃」就已经发生了。
+  await consumed("reads", 3, "开场那 4 次读设置都失败并被处理完");
   assert.equal((await state()).mode, null, "读不到就该一直是未知，不许拿出厂默认冒充");
   await typeThen("读设置失败了", "Enter");
   assert.deepEqual(await entries(), [], "读设置失败不等于用户选过回车直发");
@@ -120,15 +131,16 @@ try {
   // 读通之后，服务端那一份立刻算数。
   await page.evaluate(() => window.__allowReads());
   await page.evaluate(() => window.__probe());
-  await page.waitForFunction(() => window.__state().mode === "mod-enter", undefined, { timeout: 5000 });
+  await settleTo(() => window.__state().mode === "mod-enter", "读通之后服务端那一份立刻算数");
 
   // ⑥ 保存之前发出的那条 GET 迟到回来，不许顶掉刚存好的那一档。
   await open("?send-key=enter");
   await page.evaluate(() => window.__probeHeld()); // 这条在保存之前发出，被扣住
   await picker.selectOption("mod-enter");
-  await page.waitForFunction(() => window.__state().mode === "mod-enter", undefined, { timeout: 5000 });
+  await settleTo(() => window.__state().mode === "mod-enter", "保存成功后该当场切到 ⌘/Ctrl 那一档");
+  const readsBeforeLate = await consumedSoFar("reads");
   await page.evaluate(() => window.__releaseProbe());
-  await page.waitForTimeout(300);
+  await consumed("reads", readsBeforeLate, "迟到的那条 GET 回来并被处理完");
   assert.equal((await state()).mode, "mod-enter", "迟到的旧读取不该把刚存好的那一档顶回去");
   await typeThen("旧读取之后", "Enter");
   assert.deepEqual(await entries(), [], "旧读取之后裸回车仍该按已保存的那一档当换行");
@@ -138,10 +150,12 @@ try {
   await open("?send-key=enter");
   await page.evaluate(() => window.__holdPatch(true)); // 放行才写：模拟「还没到服务端」
   await picker.selectOption("mod-enter");
+  await held("patch", "发送键那条 PATCH 扣在桩上");
+  const readsBeforeProbe = await consumedSoFar("reads");
   await page.evaluate(() => window.__probe());         // 读到的还是 enter，且先回来
-  await page.waitForTimeout(300);
+  await consumed("reads", readsBeforeProbe, "那条后发的 GET 先回来并被处理完");
   await page.evaluate(() => window.__releasePatch());
-  await page.waitForFunction(() => window.__state().mode === "mod-enter", undefined, { timeout: 5000 });
+  await settleTo(() => window.__state().mode === "mod-enter", "保存落地后该是 ⌘/Ctrl 那一档");
   assert.equal(
     await page.evaluate(async () => (await (await fetch("/api/settings")).json()).composerSendKey),
     "mod-enter", "服务端这时确实存的是 mod-enter",
@@ -154,11 +168,12 @@ try {
   await open("?send-key=enter");
   await page.evaluate(() => window.__holdPatch(false)); // 服务端已经写了，只是应答在路上
   await page.evaluate(() => window.__patchSkill(7200));
-  await page.waitForTimeout(200);
+  await held("patch", "另一张卡那条 PATCH 已经写进服务端、应答扣在桩上");
   await picker.selectOption("mod-enter");
-  await page.waitForFunction(() => window.__state().value === "mod-enter", undefined, { timeout: 5000 });
+  await settleTo(() => window.__state().value === "mod-enter", "发送键自己那次保存该先生效");
+  const writesBeforeLate = await consumedSoFar("writes");
   await page.evaluate(() => window.__releasePatch());
-  await page.waitForTimeout(400);
+  await consumed("writes", writesBeforeLate, "另一张卡那条迟到的应答回来并被处理完");
   const after = await state();
   assert.equal(after.value, "mod-enter", "另一张卡的旧应答不该把发送键的显示值退回去");
   assert.equal(after.mode, "mod-enter", "实际按键行为同样不该退");
@@ -171,11 +186,13 @@ try {
   await page.evaluate(() => window.__holdPatch(true)); // 放行才写：保存还没到服务端
   await picker.selectOption("mod-enter");
   await page.evaluate(() => window.__probeHeld());     // 这条真读到 enter，应答也扣住
-  await page.waitForTimeout(200);
+  await held("patch", "发送键那条 PATCH 扣在桩上");
+  await held("probe", "那条 GET 读到了旧值、应答扣在桩上");
   await page.evaluate(() => window.__releasePatch());  // 保存落地并结束
   await settleTo(() => window.__state().mode === "mod-enter", "保存成功后该当场切到 ⌘/Ctrl 那一档");
+  const readsBeforeCross = await consumedSoFar("reads");
   await page.evaluate(() => window.__releaseProbe());  // 旧读取这才回来
-  await page.waitForTimeout(300);
+  await consumed("reads", readsBeforeCross, "跨过保存的那条 GET 回来并被处理完");
   assert.equal((await state()).mode, "mod-enter", "整段跨过一次保存的读取不算数");
   assert.equal(await picker.inputValue(), "mod-enter", "下拉同样不该退档");
   await assertHint(hint, "⌘ / Ctrl + Enter 发送 · Enter 换行");
@@ -187,7 +204,7 @@ try {
   await open("?send-key=enter");
   await page.evaluate(() => window.__holdPatch(true)); // 发送键这条扣住，还没到服务端
   await picker.selectOption("mod-enter");
-  await page.waitForTimeout(200);
+  await held("patch", "发送键那条 PATCH 先发出、扣在桩上");
   await page.evaluate(() => window.__patchSkill(3600)); // 后发、先完成，应答里发送键还是 enter
   await settleTo(() => window.__state().skill === 3600, "另一项设置自己那次保存该先生效");
   await page.evaluate(() => window.__releasePatch());
@@ -203,10 +220,11 @@ try {
   await open("?send-key=enter");
   await page.evaluate(() => window.__holdPatch(true));
   await picker.selectOption("mod-enter");
-  await page.waitForTimeout(200);
+  await held("patch", "发送键那条 PATCH 先发出、扣在桩上");
   await page.evaluate(() => window.__failPatch(1));
+  const writesBeforeFail = await consumedSoFar("writes");
   await page.evaluate(() => window.__patchSkill(7200)); // 503
-  await page.waitForTimeout(300);
+  await consumed("writes", writesBeforeFail, "后发的那次保存先失败、503 已被处理完");
   await page.evaluate(() => window.__releasePatch());
   await settleTo(() => window.__state().value === "mod-enter", "另一项保存失败，不该把成功的发送键保存拒掉");
   assert.equal((await state()).mode, "mod-enter", "实际按键行为也得是存成的那一档");
@@ -219,13 +237,13 @@ try {
   await settleTo(() => window.__state().mode === "mod-enter", "开场该学到服务端那一份");
   await page.evaluate(() => window.__holdPatch(true)); // 第一条:放行才写,还没到服务端
   await picker.selectOption("enter");
-  await page.waitForTimeout(200);
+  await held("patch", "第一条 PATCH 扣在桩上");
   await page.evaluate(() => window.__reopenSettings()); // 离开再回来:卡片的 saving 丢了
   // 重新挂载的标志就是下拉不再禁用 —— 报告指出的正是这个:上一个实例的「保存中」没了。
   await picker.locator("xpath=.").waitFor();
   await page.waitForFunction(
     () => !document.querySelector('[data-settings-anchor="send-key"] select')?.disabled,
-    undefined, { timeout: 5000 },
+    undefined, { timeout: WAIT_TIMEOUT_MS },
   ).catch(() => assert.fail("卡片该重新挂载、下拉不再带着上一个实例的「保存中」"));
   assert.equal((await state()).epoch, 1, "卡片确实重新挂载过一次");
   assert.equal(
@@ -233,7 +251,10 @@ try {
     "重新挂载的下拉该显示用户最后选的那一档，不是他已经改掉的旧值",
   );
   await picker.selectOption("mod-enter");              // 第二条:排在第一条后面,还没发出
-  await page.waitForTimeout(300);
+  // 不睡：第二条已经进了队（选完当场生效），它若不排队，发出与落到桩上都在这之后的微任务里，
+  // 冲刷一轮就该看见；还是 0 就是没抢跑。
+  await settleTo(() => window.__state().mode === "mod-enter", "第二次选择已经进队、当场生效");
+  await settlePage(page);
   assert.equal(
     (await state()).applied, 0,
     "第一条还扣着，同字段的第二条就不该抢先落到服务端",
@@ -256,7 +277,7 @@ try {
   await settleTo(() => window.__state().mode === "enter", "开场该学到服务端那一份");
   await page.evaluate(() => window.__holdPatch(true, true)); // 扣住，放行时 503
   await picker.selectOption("mod-enter");
-  await page.waitForTimeout(250);
+  await held("patch", "发送键那条 PATCH 扣在桩上");
   assert.equal((await state()).mode, "mod-enter", "在途期间按用户刚选的那一档走");
   assert.equal(await picker.inputValue(), "mod-enter", "下拉显示的也是它");
   await page.evaluate(() => window.__patchSkill(7200));      // 另一项设置存成了
@@ -281,11 +302,11 @@ try {
   await settleTo(() => window.__state().mode === "enter", "开场该学到服务端那一份");
   await page.evaluate(() => window.__holdPatch(true, true));
   await picker.selectOption("mod-enter");
-  await page.waitForTimeout(250);
+  await held("patch", "发送键那条 PATCH 扣在桩上");
   await page.evaluate(() => window.__reopenSettings());
   await page.waitForFunction(
     () => !document.querySelector('[data-settings-anchor="send-key"] select')?.disabled,
-    undefined, { timeout: 5000 },
+    undefined, { timeout: WAIT_TIMEOUT_MS },
   ).catch(() => assert.fail("卡片该重新挂载、下拉不再带着上一个实例的「保存中」"));
   assert.equal(await picker.inputValue(), "mod-enter", "重新挂载时显示在途的那一档");
   assert.equal((await state()).value, "enter", "交出去的快照仍只有已确认的值");
@@ -319,15 +340,12 @@ function serverSendKey(page) {
  * 超时,`async () => false` 立刻通过)。要读页面以外的东西就用 `page.evaluate` 自己轮。
  */
 async function settleServerTo(page, expected, message) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if ((await serverSendKey(page)) === expected) return;
-    await page.waitForTimeout(100);
-  }
-  assert.fail(`${message}；服务端现在是 ${await serverSendKey(page)}`);
+  await waitUntil(async () => (await serverSendKey(page)) === expected, `${message}（等服务端那一份变成 ${expected}）`)
+    .catch(async () => assert.fail(`${message}；服务端现在是 ${await serverSendKey(page)}`));
 }
 
 async function assertHint(hint, expected) {
-  await hint.filter({ hasText: expected }).waitFor({ timeout: 5000 })
+  await hint.filter({ hasText: expected }).waitFor({ timeout: WAIT_TIMEOUT_MS })
     .catch(async () => {
       assert.equal(await hint.innerText(), expected, "提示文案没跟着这一档变");
     });

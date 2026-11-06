@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const web = await startWebServer();
@@ -31,11 +32,18 @@ const FILES = [
 const IGNORED = new Set(["dist/api.js"]);
 
 let browser;
+let releaseSlow = () => {};
 try {
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
-  // 让某一个查询慢下来：验「旧候选不许被新 token 的回车选中」那一条时打开。
+  // 让某一个查询扣住不回：验「旧候选不许被新 token 的回车选中」那一条时打开，验完由测试放行。
+  // 扣住而不是延迟固定毫秒：满载时那几步断言本身就可能比任何延迟都慢，结果先到就什么都没测到。
   let slowQuery = null;
+  let slowGate = Promise.resolve();
+  const holdSlow = (query) => {
+    slowQuery = query;
+    slowGate = new Promise((resolve) => { releaseSlow = resolve; });
+  };
   // 让某一个查询报「还有更多没列出来」：验那句提示有没有接上。
   let moreQuery = null;
   // 装成没更新过的服务端（不认 `dir`、回平铺清单且不报 mode）。
@@ -80,9 +88,7 @@ try {
         });
       }
       const query = (url.searchParams.get("q") ?? "").toLowerCase();
-      if (slowQuery && query.includes(slowQuery)) {
-        await new Promise((resolve) => { setTimeout(resolve, 1500); });
-      }
+      if (slowQuery && query.includes(slowQuery)) await slowGate;
       const matched = FILES
         .filter((path) => (query ? path.toLowerCase().includes(query) : !IGNORED.has(path)))
         .sort((a, b) => Number(IGNORED.has(a)) - Number(IGNORED.has(b)));
@@ -125,7 +131,7 @@ try {
       return texts.length === want.length && want.every((needle, index) => texts[index]?.includes(needle));
     },
     expected,
-    { timeout: 5000 },
+    { timeout: WAIT_TIMEOUT_MS },
   );
 
   // ① 只敲一个 @：两类候选都在，文件那半边是**根这一层**（目录 + 根下的文件），
@@ -181,14 +187,14 @@ try {
   await textarea.fill("");
   await textarea.type("看 @src/lib/");
   await settled(["apiClient.ts", "useFileMention.ts"]);
-  slowQuery = "readme";
+  holdSlow("readme");
   await textarea.fill("");
   await textarea.type("读 @README");
   // 新查询还没回来：菜单只该说「正在搜索」，一条旧候选都不该留着。
   await page.waitForFunction(
     () => document.querySelector(".mention-menu p")?.textContent?.includes("正在搜索"),
     null,
-    { timeout: 4000 },
+    { timeout: WAIT_TIMEOUT_MS },
   );
   assert.equal(await options.count(), 0, "新 token 还没出结果时不许留着上一轮的候选");
   await page.keyboard.press("Enter");
@@ -198,10 +204,11 @@ try {
     "候选还没到货时回车既不能插旧路径，也不能插换行把 token 顶走",
   );
   // 到货之后照常能选。
+  slowQuery = null;
+  releaseSlow();
   await settled(["README.md"]);
   await page.keyboard.press("Enter");
   assert.equal(await textarea.inputValue(), "读 @README.md ");
-  slowQuery = null;
 
   // ⑨ 菜单开着时 `⌘↵` 仍然是发送：光标那条回车归菜单，带修饰键的那条不归。
   await textarea.fill("");
@@ -233,7 +240,7 @@ try {
   await page.waitForFunction(
     () => document.querySelector(".mention-menu p")?.textContent?.includes("再敲几个字"),
     null,
-    { timeout: 4000 },
+    { timeout: WAIT_TIMEOUT_MS },
   );
   moreQuery = null;
 
@@ -279,7 +286,7 @@ try {
   await page.waitForFunction(
     () => document.querySelector(".mention-menu p")?.textContent?.includes("重启 ash 服务"),
     null,
-    { timeout: 4000 },
+    { timeout: WAIT_TIMEOUT_MS },
   );
   assert.equal(
     await menu.getByRole("option").filter({ hasText: "README.md" }).count(),
@@ -290,6 +297,7 @@ try {
 
   console.log("file-mention-dom: ok");
 } finally {
+  releaseSlow();
   await browser?.close();
   await web.close();
 }

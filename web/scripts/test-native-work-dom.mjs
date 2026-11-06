@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage } from "./wait-until.mjs";
 
 const output = fileURLToPath(new URL("../../output/playwright", import.meta.url));
 const web = await startWebServer();
@@ -93,6 +94,7 @@ try {
   assert.equal(await pending.locator(".native-work__duration-value").count(), 0);
   const activeSpan = await card.locator(".native-work__duration-value").innerText();
   await page.clock.fastForward(60_000);
+  await settlePage(page); // 假时钟触发的秒表 setState 还排在 React 调度里；冲刷掉再读 DOM
   assert.notEqual(await card.locator(".native-work__duration-value").innerText(), activeSpan, "运行项实时更新跨度");
   assert.equal(await pending.locator(".native-work__duration-value").count(), 0, "待处理项不会随时钟递增");
   assert.match(await page.locator(".native-work__detail").filter({ hasText: "所属子智能体" }).innerText(), /运行中的资料搜集/);
@@ -196,6 +198,7 @@ try {
   await conversation.getByText("刷新后仍应保留的完成结果", { exact: false }).waitFor();
   assert.match(await headline.innerText(), /09\/08 08:00–08:08\s*·\s*8分 0秒/, "收工后抬头给出完整区间和跨度");
   await page.clock.fastForward(60_000);
+  await settlePage(page); // 假时钟触发的秒表 setState 还排在 React 调度里；冲刷掉再读 DOM
   assert.match(await headline.innerText(), /8分 0秒/, "完成后跨度保持固定");
   assert.equal(await conversation.locator(".native-agent__live").count(), 0);
   await conversation.locator(".task-turn-process > summary").click();
@@ -220,6 +223,7 @@ try {
   await firstCompleted.locator(".native-work__timing > summary").click();
   assert.match(await firstCompleted.innerText(), /未记录开始时间，无法计算跨度/);
   await page.clock.fastForward(60_000);
+  await settlePage(page); // 假时钟触发的秒表 setState 还排在 React 调度里；冲刷掉再读 DOM
   assert.equal(await snapshotPending.locator(".native-work__duration-value").count(), 0);
   await page.screenshot({ path: `${output}/native-work-plan-timing.png`, fullPage: true });
   await snapshotPending.first().screenshot({ path: `${output}/native-work-pending-fixed.png` });

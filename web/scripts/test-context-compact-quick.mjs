@@ -11,6 +11,7 @@
 // 跑法：npm -w web run test:context-compact-quick
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { waitUntil } from "./wait-until.mjs";
 
 const PROFILE = {
   id: "claude-official",
@@ -57,15 +58,6 @@ try {
   });
   await page.goto(`${web.origin}/scripts/fixtures/context-compact-quick.html`);
 
-  /** 等一个只有 node 侧看得见的条件（请求计数）成立。 */
-  const until = async (predicate, message) => {
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      if (predicate()) return;
-      await page.waitForTimeout(50);
-    }
-    throw new Error(message);
-  };
-
   // ③ codex 那颗：面板里只有明细，没有快捷设置。
   await page.locator('[data-testid="codex-chip"] .context-meter-chip').click();
   await page.locator(".token-usage-panel").waitFor();
@@ -86,7 +78,7 @@ try {
   assert.match(await failure.innerText(), /执行器清单暂时不可用/, "读失败要如实说原因");
   assert.equal(agentReads, 1);
   await page.locator(".context-compact-retry").click();
-  await until(() => agentReads === 2, "「重试」必须真的再发一次请求");
+  await waitUntil(() => agentReads === 2, "「重试」必须真的再发一次请求");
   await failure.waitFor();
   await page.locator(".context-compact-toggle").click(); // 收起
   await page.locator(".context-compact-toggle").click(); // 再展开

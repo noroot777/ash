@@ -7,6 +7,7 @@
 // - 正文读失败时如果也算「读完了」，问答卡照样铺满一屏——那正是要消除的形态。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, fetchesSettled, outlastPageTimers, settlePage, trackFetches, waitUntil, WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 // 会话 .md 里每条回合行的前导分隔符（0x1e），前端按它切出 user/system 段。
 const RS = String.fromCharCode(30);
@@ -21,6 +22,8 @@ const session = (id, taskId, startedAt = "2026-09-10T01:00:00Z") => ({
   startedAt, endedAt: "2026-09-10T02:10:00Z",
 });
 const outputFor = (sessionId) => outputs[sessionId] ?? outputs[sessionId.replace(/-(s\d+|late)$/, "")] ?? "";
+// 页面侧记账的读取：sessions 列表、会话正文与执行过程（见 wait-until.mjs 的 trackFetches）。
+const TRACKED = String.raw`/api/(tasks/[^/]+/sessions|sessions/[^/]+/(output|trace))$`;
 
 const web = await startWebServer();
 let browser;
@@ -33,10 +36,27 @@ try {
   /** 开一页，路由交给调用方按段定制；默认行为是「两个任务都正常」。 */
   const open = async (handler, query = "") => {
     const page = await browser.newPage();
-    page.setDefaultTimeout(5000);
+    page.setDefaultTimeout(WAIT_TIMEOUT_MS);
     page.on("pageerror", (error) => failures.push(error.message));
+    await trackFetches(page, TRACKED);
+    // 「两个写者不许同时在途」按页面侧的事实记：每发 sessions 出门那一刻，同一任务还有几发没被
+    // 页面消费完（读完或被 abort）。Node 侧桩的计数晚于页面发出，满载时拿它判「此刻没出门」会偏。
+    await page.addInitScript(() => {
+      const tracked = window.fetch;
+      window.__overlaps = [];
+      window.fetch = (input, init) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (/\/api\/tasks\/[^/]+\/sessions$/.test(url)) {
+          const inFlight = (window.__ashFetches ?? []).filter((entry) => entry.url === url && entry.state === "pending").length;
+          window.__overlaps.push({ url, inFlight });
+        }
+        return tracked(input, init);
+      };
+    });
     await page.addInitScript(() => {
       window.__sources = [];
+      // 替身的 onopen 晚一拍（setTimeout 0）只为像真的 EventSource 那样异步连上；没有断言依赖
+      // 这一拍的长短，用到「已连上」的地方都按 DOM/桩上的事实等。
       window.EventSource = class {
         constructor(url) { this.url = url; this.closed = false; window.__sources.push(this); setTimeout(() => { if (!this.closed) this.onopen?.({}); }, 0); }
         close() { this.closed = true; }
@@ -61,16 +81,27 @@ try {
   };
   const sessionsOf = (page) => page.getByTestId("sessions").textContent();
   const readyOf = (page) => page.getByTestId("ready").textContent();
+  /** 页面侧（不是桩那一侧）这个任务已经发出的 sessions 读取，按发出顺序。 */
+  const sessionsFetches = async (page, taskId) =>
+    (await fetchLog(page)).filter((entry) => entry.url.endsWith(`/api/tasks/${taskId}/sessions`));
+  /** 出门时同一任务还有别的 sessions 在途的那几发；不许有。 */
+  const overlapsOf = (page) => page.evaluate(() => window.__overlaps.filter((entry) => entry.inFlight > 0));
+  /** 等水位读数变成 want。等不到不在这里抛：紧跟着的那条断言会报出实际读数。 */
+  const contextBecomes = (page, want) => page.waitForFunction(
+    (value) => document.querySelector('[data-testid="context"]')?.textContent === value, want,
+  ).catch(() => undefined);
 
   // ── 正常切换：正文没到位之前，一张问答卡都不该出现 ──────────────────────
   {
     let releaseB;
     const held = new Promise((resolve) => { releaseB = resolve; });
     pending.push(() => releaseB());
+    let bAsked = 0;
     // 任务 B 的正文卡住不放：切过去之后那段「还没读到」的状态会一直摆在那，
     // 中间态就能稳稳地断言，而不用去赌某一帧。
     const page = await open(async (route, path) => {
       if (path === "/api/tasks/task-b/sessions") {
+        bAsked += 1;
         await held;
         await route.fulfill({ json: [session("task-b-s1", "task-b")] });
         return true;
@@ -93,13 +124,17 @@ try {
       new MutationObserver(sample).observe(document.body, { subtree: true, childList: true, characterData: true });
     });
     await page.getByRole("button", { name: "切换任务" }).click();
-    await page.waitForTimeout(200);
+    // 不睡：等切过去、B 那发 sessions 已经扣在桩上、「正在读取」已经画出来，再把排着的提交冲刷掉。
+    // 此后还能把问答卡画出来的只有那发被扣住的读取。
+    await page.waitForFunction(() => document.querySelector("nav output")?.textContent === "task-b");
+    await waitUntil(() => bAsked >= 1, "任务 B 的 sessions 到了桩上并被扣住");
+    await page.getByText("正在读取会话…").waitFor();
+    await settlePage(page);
     assert.equal(await page.locator(".task-question-record").count(), 0, "任务 B 的正文还没读到，它的问答历史不该先摆出来");
     const flash = await page.evaluate(() => window.__flash);
     assert.equal(flash.cards, 0, "切换过程中一帧都不该闪出答复卡");
     assert.equal(flash.texts.some((text) => text.includes("任务 A 的回复正文")), false, "切过去之后不该还留着上一个任务的正文");
     assert.equal(flash.texts.some((text) => text.includes("点击「运行」开始")), false, "会话只是还没读完，不是空会话");
-    await page.getByText("正在读取会话…").waitFor();
 
     releaseB();
     await page.waitForFunction(() => document.querySelectorAll(".task-question-record").length === 2);
@@ -120,11 +155,17 @@ try {
     // 直播事件补的那一发。
     let holdTaskA = false;
     let heldCalls = 0;
+    let lateServed;
+    const lateDone = new Promise((resolve) => { lateServed = resolve; });
     const page = await open(async (route, path) => {
       if (path !== "/api/tasks/task-a/sessions" || !holdTaskA) return false;
       heldCalls += 1;
       await late;
-      await route.fulfill({ json: [session("task-a-late", "task-a")] });
+      try {
+        await route.fulfill({ json: [session("task-a-late", "task-a")] });
+      } finally {
+        lateServed();
+      }
       return true;
     });
     await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
@@ -138,15 +179,17 @@ try {
       }
     });
     // 等那一发真的出门，否则下面的切换会把它连同旧 token 一起甩在后面，什么都没测到。
-    const deadline = Date.now() + 5000;
-    while (heldCalls < 1 && Date.now() < deadline) await page.waitForTimeout(20);
+    await waitUntil(() => heldCalls >= 1, "直播事件补发的那一发 sessions 到了桩上并被扣住");
     assert.equal(heldCalls, 1, "直播事件确实补发了一次 sessions（否则这一段什么都没测）");
     await page.getByRole("button", { name: "切换任务" }).click();
     await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-b-s1");
     assert.equal(await readyOf(page), "true/true");
 
     releaseLate();
-    await page.waitForTimeout(300);
+    // 不睡：等迟到的那发真的送了出去，且页面已经把它消费完（读完，或切走时就被掐掉），再看它盖没盖上来。
+    await lateDone;
+    await fetchesSettled(page, 0, "迟到的那发 sessions 与之后的读取都被页面消费完（读完或被 abort）");
+    await settlePage(page);
     assert.equal(await sessionsOf(page), "task-b-s1", "切走之后才回来的那发 sessions 不该盖到当前任务上");
     await page.close();
   }
@@ -162,6 +205,8 @@ try {
     let phase = "warmup";
     let holdOutput = false;
     let sessionsCalls = 0;
+    let outputServed;
+    const outputDone = new Promise((resolve) => { outputServed = resolve; });
     const withContext = (id, used) => ({
       ...session(id, "task-a"),
       context: { used, window: 200000, windowEstimated: false },
@@ -176,7 +221,11 @@ try {
       }
       if (path === "/api/sessions/task-a-s1/output" && holdOutput) {
         await heldOutput;
-        await route.fulfill({ body: outputFor("task-a-s1") });
+        try {
+          await route.fulfill({ body: outputFor("task-a-s1") });
+        } finally {
+          outputServed();
+        }
         return true;
       }
       return false;
@@ -187,8 +236,7 @@ try {
     holdOutput = true;
     const before = sessionsCalls;
     await page.getByRole("button", { name: "重读会话" }).click();
-    const reloadDeadline = Date.now() + 5000;
-    while (sessionsCalls <= before && Date.now() < reloadDeadline) await page.waitForTimeout(20);
+    await waitUntil(() => sessionsCalls > before, "重读那一发 sessions 到了桩上");
     assert.ok(sessionsCalls > before, "重读确实发出了一发 sessions");
 
     // 这中间起了一条新会话，直播事件补刷把它写了进去。
@@ -203,7 +251,10 @@ try {
     await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1,task-a-s2");
 
     releaseOutput();
-    await page.waitForTimeout(300);
+    // 不睡：等被扣住的正文送出去、页面上这一轮读取全部消费完，重读那一份要落地就已经落地了。
+    await outputDone;
+    await fetchesSettled(page, 0, "重读那一轮（正文与执行过程）都被页面消费完");
+    await settlePage(page);
     assert.equal(
       await sessionsOf(page),
       "task-a-s1,task-a-s2",
@@ -246,12 +297,12 @@ try {
       return true;
     });
     await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
+    await fetchesSettled(page, 1, "开场那几发读取（至少挂载那一发）都被页面消费完");
+    const opening = (await sessionsFetches(page, "task-a")).length;
 
     armed = true;
     await page.getByRole("button", { name: "重读会话" }).click();
-    const heldDeadline = Date.now() + 5000;
-    while (!reloadHeld && Date.now() < heldDeadline) await page.waitForTimeout(20);
-    assert.ok(reloadHeld, "重读那一发已经出门并卡住");
+    await waitUntil(() => reloadHeld, "重读那一发已经出门并卡在桩上");
 
     // 卡住期间连来三发直播事件：它们只能排队，一发都不该挤出门。
     for (let i = 0; i < 3; i += 1) {
@@ -262,22 +313,24 @@ try {
           }) });
         }
       });
-      await page.waitForTimeout(100);
+      // 事件处理和链上的续发都在页面里同步/微任务里跑完；冲刷之后还没出门就是没出门。
+      await settlePage(page);
     }
+    assert.equal((await sessionsFetches(page, "task-a")).length, opening + 1,
+      "上一发还没落地，后面的刷新不许出门（页面侧一发都没多发）");
     assert.equal(laterCalls, 0, "上一发还没落地，后面的刷新不许出门——并发一旦发生就再也分不出谁读得更晚");
 
     releaseReload();
     // 放行后：重读那一发先落地（180k），排队的补刷跟着出门并带回压缩后的 40k。
-    const settleDeadline = Date.now() + 5000;
-    while (Date.now() < settleDeadline && await page.getByTestId("context").textContent() !== "40000") {
-      await page.waitForTimeout(50);
-    }
+    await contextBecomes(page, "40000");
     assert.equal(await page.getByTestId("context").textContent(), "40000", "排队的那一发出门后，水位跟着服务端降下来");
+    await fetchesSettled(page, 0, "放行之后链上的读取都被页面消费完");
     assert.ok(laterCalls >= 1, "卡住期间挤进来的刷新不是被丢掉，只是被推迟到上一发之后");
     assert.equal(laterCalls, 1, "三次事件折叠成一发：它们要的是同一份最新状态");
 
-    // 再等一会：不会有更早读到的那份把 180k 顶回来。
-    await page.waitForTimeout(300);
+    // 不会有更早读到的那份把 180k 顶回来：上面已等到每一发都被页面消费完，再冲刷一轮就读终态。
+    await settlePage(page);
+    assert.deepEqual(await overlapsOf(page), [], "任何一发 sessions 出门时同任务都不许还有别的在途");
     assert.equal(await page.getByTestId("context").textContent(), "40000", "压缩后的水位不许被读得更早的那份顶回去");
     assert.equal(await sessionsOf(page), "task-a-s1");
     assert.equal(await readyOf(page), "true/true");
@@ -312,6 +365,8 @@ try {
     // 超时那条路把上限调到 700ms 好等；抢占那条路调到 30s，确保救场的是抢占而不是超时。
     }, recovery === "timeout" ? "?sessionsTimeout=700" : "?sessionsTimeout=30000");
     await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
+    await fetchesSettled(page, 1, "开场那几发读取（至少挂载那一发）都被页面消费完");
+    const opening = (await sessionsFetches(page, "task-a")).length;
 
     armed = true;
     // 直播事件补的那一发卡死在连接层。
@@ -323,25 +378,34 @@ try {
       }
     });
     await fireLiveEvent();
-    const armedDeadline = Date.now() + 5000;
-    while (calls < 1 && Date.now() < armedDeadline) await page.waitForTimeout(20);
+    await waitUntil(() => calls >= 1, "卡死的那一发到了桩上");
     assert.equal(calls, 1, "卡死的那一发确实出门了");
 
     if (recovery === "preempt") {
-      await page.waitForTimeout(300);
+      // 「一直卡着」的正向信号：一个 300ms 后到期的页面定时器已经触发（此前排上的短期重试都走过了），
+      // 而页面侧那一发仍未结算、也没有第二发出门。
+      await outlastPageTimers(page, 300);
+      const stuck = await sessionsFetches(page, "task-a");
+      assert.deepEqual(stuck.slice(opening).map((entry) => entry.state), ["pending"],
+        "没人抢占时它就一直卡在那（页面侧仍只有这一发、且没结算）");
       assert.equal(calls, 1, "没人抢占时它就一直卡在那——这正是要救的场面");
       // 用户点「重读会话」：它要能把那一发掐掉自己上，而不是排在后面陪等。
       await page.getByRole("button", { name: "重读会话" }).click();
     } else {
       // 后面又来了一发直播刷新，规规矩矩排在队里。链要能靠自己的超时把它放出来。
       await fireLiveEvent();
-      await page.waitForTimeout(100);
-      assert.equal(calls, 1, "排队中，还没轮到它");
+      await settlePage(page);
+      // 不睡 100ms 再数：超时只有 700ms，满载时这一下读之前它可能已经合法地到点被掐、后一发跟着出门。
+      // 所以「排队中」按页面侧事实判——它此刻还在途，就只出了这一发；不管哪个时刻读，后一发出门时
+      // 它都必须已经结算（下面的 overlapsOf）。
+      const queued = await sessionsFetches(page, "task-a");
+      if (queued[opening]?.state === "pending") {
+        assert.equal(queued.length, opening + 1, "排队中，还没轮到它（页面侧没有第二发）");
+      }
     }
-    const settleDeadline = Date.now() + 6000;
-    while (Date.now() < settleDeadline && await page.getByTestId("context").textContent() !== "40000") {
-      await page.waitForTimeout(50);
-    }
+    await contextBecomes(page, "40000");
+    await fetchesSettled(page, 0, `${recovery}：卡死那一发被收尾、后一发读完`);
+    assert.deepEqual(await overlapsOf(page), [], `${recovery}：后一发出门时，卡死的那一发必须已经被收尾`);
     assert.equal(calls, 2, `${recovery}：卡死的那一发被收尾之后，后面的读取要能出门`);
     assert.equal(
       await page.getByTestId("context").textContent(),
@@ -421,6 +485,8 @@ try {
       return false;
     }, "?sessionsTimeout=30000");
     await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
+    await fetchesSettled(page, 1, "开场那几发读取（至少挂载那一发）都被页面消费完");
+    const openingA = (await sessionsFetches(page, "task-a")).length;
 
     armed = true;
     const fire = (payload) => page.evaluate((data) => {
@@ -428,28 +494,30 @@ try {
     }, JSON.stringify(payload));
     // 任务 A：一发出门后卡死，后面再排两发（直播补刷一发 + 收口状态触发的全量重读一发）。
     await fire({ type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s1" } });
-    const armedDeadline = Date.now() + 5000;
-    while (aCalls < 1 && Date.now() < armedDeadline) await page.waitForTimeout(20);
+    await waitUntil(() => aCalls >= 1, "任务 A 的第一发到了桩上并被扣住");
     assert.equal(aCalls, 1, "任务 A 的第一发已经出门并卡住");
     await fire({ type: "agent.event", taskId: "task-a", event: { kind: "session", sessionId: "task-a-s1" } });
     await fire({ type: "task.status", taskId: "task-a", status: "done" });
-    await page.waitForTimeout(150);
+    await settlePage(page);
+    assert.equal((await sessionsFetches(page, "task-a")).length, openingA + 1, "它们都排在卡死那一发后面（页面侧没多发）");
     assert.equal(aCalls, 1, "它们都排在卡死那一发后面");
 
     // 切到任务 B，B 的第一发也卡死。
     await page.getByRole("button", { name: "切换任务" }).click();
-    const bDeadline = Date.now() + 5000;
-    while (bCalls < 1 && Date.now() < bDeadline) await page.waitForTimeout(20);
-    await page.waitForTimeout(400);
+    await waitUntil(() => bCalls >= 1, "任务 B 的第一发到了桩上并被扣住");
+    // 不睡：A 排着的那两发只会在 A 卡着的那一发收尾之后才轮到。等页面侧它被切走时掐掉、冲刷一轮，
+    // 它们出不出门就已经定了。
+    await waitUntil(async () => (await sessionsFetches(page, "task-a"))[openingA]?.state === "settled",
+      "切走时任务 A 卡着的那一发被掐掉（页面侧已结算）");
+    await settlePage(page);
+    assert.equal((await sessionsFetches(page, "task-a")).length, openingA + 1, "切走之后，任务 A 排着的那两发不许再出门（页面侧）");
     assert.equal(aCalls, 1, "切走之后，任务 A 排着的那两发不许再出门");
     assert.equal(bCalls, 1, "当前任务卡在第一发上");
 
     // 用户在任务 B 点「重读会话」：要掐掉的是 B 自己那一发。
     await page.getByRole("button", { name: "重读会话" }).click();
-    const settleDeadline = Date.now() + 5000;
-    while (Date.now() < settleDeadline && await page.getByTestId("context").textContent() !== "40000") {
-      await page.waitForTimeout(50);
-    }
+    await contextBecomes(page, "40000");
+    await fetchesSettled(page, 0, "抢占之后页面上的读取都已消费完");
     assert.equal(bCalls, 2, "抢占掐的是当前任务那一发，第二发要能立刻出门");
     assert.equal(await page.getByTestId("context").textContent(), "40000", "救回来的是当前任务的最新水位");
     assert.equal(await sessionsOf(page), "task-b-s1");
@@ -481,6 +549,8 @@ try {
     // 上限调到 30s，确保救场的是抢占本身，不是超时顺手把队列放开了。
     }, "?sessionsTimeout=30000");
     await page.waitForFunction(() => document.querySelector('[data-testid="sessions"]')?.textContent === "task-a-s1");
+    await fetchesSettled(page, 1, "开场那几发读取（至少挂载那一发）都被页面消费完");
+    const opening = (await sessionsFetches(page, "task-a")).length;
 
     armed = true;
     const fireSession = () => page.evaluate(() => {
@@ -491,27 +561,26 @@ try {
       }
     });
     await fireSession();
-    const armedDeadline = Date.now() + 5000;
-    while (calls < 1 && Date.now() < armedDeadline) await page.waitForTimeout(20);
+    await waitUntil(() => calls >= 1, "第一发轻量刷新到了桩上并被扣住");
     assert.equal(calls, 1, "第一发轻量刷新出门并卡住");
     await fireSession();
-    await page.waitForTimeout(150);
+    await settlePage(page);
+    assert.equal((await sessionsFetches(page, "task-a")).length, opening + 1, "第二发轻量刷新排在它后面，还没出门（页面侧）");
     assert.equal(calls, 1, "第二发轻量刷新排在它后面，还没出门");
 
     await page.getByRole("button", { name: "重读会话" }).click();
-    const settleDeadline = Date.now() + 5000;
-    while (Date.now() < settleDeadline && await page.getByTestId("context").textContent() !== "40000") {
-      await page.waitForTimeout(50);
-    }
+    await contextBecomes(page, "40000");
     assert.equal(await page.getByTestId("context").textContent(), "40000", "手动重读把水位读回来了");
+    // 被作废的那一发只可能在卡着的那一发收尾之后才轮到；等页面上每一发都消费完（卡着的那一发
+    // 被抢占掐掉）再冲刷，它出不出门就已经定了，不靠再睡一会儿。
+    await fetchesSettled(page, 0, "抢占之后页面上的读取都已消费完");
     assert.equal(calls, 2, "出门的是手动那一发，排在前头的旧刷新被作废——不是排在它后面");
-    await page.waitForTimeout(300);
+    assert.equal((await sessionsFetches(page, "task-a")).length, opening + 2, "被作废的那一发不会事后补出门（页面侧）");
     assert.equal(calls, 2, "被作废的那一发不会事后补出门");
 
     // 作废不能把「还有人排着」这个标记留在那，否则后面的直播事件再也刷不动。
     await fireSession();
-    const resumeDeadline = Date.now() + 5000;
-    while (calls < 3 && Date.now() < resumeDeadline) await page.waitForTimeout(20);
+    await waitUntil(() => calls >= 3, "抢占之后新来的直播事件补的那一发到了桩上");
     assert.equal(calls, 3, "抢占之后，新来的直播事件照样能排队出门");
     assert.equal(await readyOf(page), "true/true");
     await page.close();
@@ -536,7 +605,8 @@ try {
     // 等这一轮读取结束（失败也是结束），再看它有没有把问答历史铺出来。
     const failureNote = failing === "sessions" ? /会话列表暂时不可读|会话读取失败/ : /正文暂未读全/;
     await page.locator(".task-conversation-error").filter({ hasText: failureNote }).waitFor();
-    await page.waitForTimeout(200);
+    // 错误和「读完了」是同一次提交落下的；把它之后排着的 effect 冲刷掉再看问答卡，不靠睡。
+    await settlePage(page);
     assert.equal(
       await page.locator(".task-question-record").count(),
       0,
