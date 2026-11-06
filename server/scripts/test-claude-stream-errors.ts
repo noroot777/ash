@@ -24,7 +24,7 @@ const fail = (m: string) => { console.log("   ✕ " + m); bad++; };
 const ok = (m: string) => console.log("   ✓ " + m);
 
 /** 跑一段假 CLI stdout,收集 parseClaudeStream 吐出的事件。 */
-async function collect(lines: unknown[], resident?: { interruptPending: boolean; failPending: () => void }) {
+async function collect(lines: unknown[], resident?: { interruptPending: boolean; failPending: () => void; reapsAtTurnEnd?: boolean }) {
   const script = join(dir, `stub-${Math.random().toString(36).slice(2, 8)}.mjs`);
   writeFileSync(
     script,
@@ -418,6 +418,40 @@ console.log("10) 孤儿后台任务的回执不是回合结果,不许拿它收�
   else fail(`全 0 usage 被当成回合用量落下来了:${JSON.stringify(zeroUsage[0])}`);
   if (!events.some((e) => e.kind === "error")) ok("孤儿回执本身不是故障,不报错");
   else fail(`孤儿回执被误报成故障:${events.filter((e) => e.kind === "error").map((e) => e.message).join(" / ")}`);
+}
+
+// 起因(2026-11-05,任务 SGK-4lWyRQCX):智能体在后台发起工作流后结束回合「等它返回」,单飞
+// 一见 result 就收台,工作流跟着进程没了。CLI 自己的口径是后台的活没完回合就没完:它跑完后
+// 拿完成通知自己开一回合收尾,那一回合的 result 同样带 origin:task-notification(2026-11-06
+// 实测),跟上面的孤儿回执只差在「主智能体说没说话」。
+console.log("11) 后台工作流没跑完先不收台;完成通知开的那一回合是真回合");
+{
+  const resident = { interruptPending: false, failPending: () => {}, reapsAtTurnEnd: true };
+  const events = await collect(
+    [
+      { type: "system", subtype: "init", session_id: "sess-13" },
+      { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "tool_use", id: "wf", name: "Workflow", input: { script: "export const meta = {}" } }] } },
+      { type: "system", subtype: "task_started", task_id: "w1", tool_use_id: "wf", task_type: "local_workflow", description: "飞书方案" },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "wf", content: "Workflow launched in background" }] } },
+      { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "text", text: "已在后台跑起来" }] } },
+      { type: "result", subtype: "success", num_turns: 2, result: "已在后台跑起来", session_id: "sess-13" },
+      { type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "completed", summary: "done" },
+      { type: "system", subtype: "init", session_id: "sess-13" },
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "合成终稿\n" } } },
+      { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "text", text: "合成终稿" }] } },
+      { type: "result", subtype: "success", num_turns: 1, result: "合成终稿", origin: { kind: "task-notification" }, session_id: "sess-13" },
+    ],
+    resident,
+  );
+  const ends = events.filter((e) => e.kind === "turnEnd");
+  if (ends.length === 2 && ends[0].background?.workflow === 1 && !ends[1].background) ok("第一回合结尾带着「还有 1 个工作流在跑」,完成通知那一回合结尾不再带");
+  else fail(`回合结尾不对:${JSON.stringify(ends)}`);
+  const notice = events.find((e) => e.kind === "error");
+  if (notice?.level === "notice" && notice.affectsTurn === false && /1 个工作流/.test(notice.message)) ok("执行过程里说明在等后台工作流,不算故障");
+  else fail(`等待说明不对:${JSON.stringify(notice)}`);
+  const text = events.filter((e) => e.kind === "text").map((e) => e.text).join("");
+  if (text.includes("合成终稿") && events.findIndex((e) => e.kind === "text" && e.text.includes("合成终稿")) < events.lastIndexOf(ends[1])) ok("完成通知开的那一回合照常吐正文、照常结尾");
+  else fail(`完成通知那一回合被当成孤儿回执吞了:${JSON.stringify(text)}`);
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");

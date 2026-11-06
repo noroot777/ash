@@ -94,7 +94,9 @@ export type AgentEvent =
   | { kind: "error"; message: string; scope?: "session"; level?: "notice"; affectsTurn?: false }
   // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
   // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
-  | { kind: "turnEnd" }
+  // `background` = 这一刻还没跑完的后台子代理 / 工作流个数（只在有的时候带）。单飞据此先不
+  // 收台：它们跑完 CLI 会自己开下一回合（server/src/executors/claude.ts `singleRunFromResident`）。
+  | { kind: "turnEnd"; background?: { agent: number; workflow: number } }
   | { kind: "done"; exitStatus: number };
 
 // synthesis = 收敛后的合稿轮(共同方案);impl/review are legacy transcript speakers

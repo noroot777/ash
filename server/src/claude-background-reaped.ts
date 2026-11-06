@@ -18,9 +18,11 @@
 //           summary "Background agent \"…\" didn't finish before the previous session ended"
 // ```
 //
-// 内置 Monitor 有 PreToolUse hook 改道成 ash 哨兵兜底，这两种没有（它们不是「等」的工具，
-// 拦不得），所以只能事前在每回合提醒里说一句（turn-prompt.ts 的 `backgroundWait`），事后
-// 在这里如实记账。
+// 内置 Monitor 有 PreToolUse hook 改道成 ash 哨兵兜底，这几种没有（它们不是「等」的工具，
+// 拦不得）。2026-11-06 起单飞回合结尾会等后台子代理 / 工作流跑完再收台（`waiting()`，见
+// executors/claude.ts 的 `singleRunFromResident`），它们只在等超时、被停止、ash 重启接管这类
+// 场合才会被收走；后台 Bash 照旧不等，事前在每回合提醒里说一句（run-prompts.ts 的
+// `BACKGROUND_WAIT_WARNING`）。事后一律在这里如实记账。
 //
 // ── 怎么认「后台」──────────────────────────────────────────────────────────
 //
@@ -292,6 +294,20 @@ export class ClaudeBackgroundTrace {
 
   private runs(): Tracked[] {
     return [...this.earlier, ...this.tasks.values()];
+  }
+
+  /**
+   * 此刻还没了结的后台子代理 / 后台工作流各有几个。单飞回合收尾时据此决定**先不收台**
+   * （见 executors/claude.ts 的 `singleRunFromResident`）：它们是有终点的活，跑完 CLI 会拿完成
+   * 通知自己开下一回合 —— `claude -p` 自己就是这么等的（2026-11-06 实测）。后台 Bash 不算：
+   * 开发服务器一类压根不会自己结束，为它留着进程就是无限期挂住。
+   */
+  waiting(): { agent: number; workflow: number } {
+    const open = this.runs().filter((task) => task.background && !task.note && !task.stopOk);
+    return {
+      agent: open.filter((task) => task.kind === "agent").length,
+      workflow: open.filter((task) => task.kind === "workflow").length,
+    };
   }
 
   /**

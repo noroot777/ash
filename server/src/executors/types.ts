@@ -144,6 +144,8 @@ export interface ResidentHandle {
   /** 忘掉恢复 id；Codex 常驻的下一回合会 fresh，进程级常驻执行器可不实现。 */
   dropSession?(): void;
   close(): void; // 优雅收尾:关 stdin,等它自己退出
+  /** 此刻有没有回合在进行(claude 才答得上来,见 ClaudeControlBridge.turnActive)。 */
+  turnActive?(): boolean;
   kill(): void; // 硬杀,走 killChild 三层击杀
   /**
    * 覆盖这个句柄**已经启动过的所有回合/后代**的幂等 finalizer。`kill()` 只负责进程本体

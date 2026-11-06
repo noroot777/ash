@@ -102,6 +102,9 @@ async function* claudeStreamEvents(
   const writeLedger = new ClaudeWriteLedger(cwd);
   const childImages = new Map<string, ImageStore>();
   const nativeWork = new NativeWorkTrace();
+  // 上一条 result 之后主智能体说过话没有。孤儿回执与「完成通知自己开的一回合」都带
+  // `origin:task-notification`,分得开它们的只有这一条(见 result 分支)。
+  let turnSpoke = false;
   // claude 自带 `Monitor` 工具的只读投影（见 ../claude-monitors.ts）。放在这一层的理由：
   // 认人要同时看 tool_use 块（工具名）和 system 事件（后台任务生命周期），只有这里两样
   // 都流过。整条链 fire-and-forget，记账失败不影响事件流。
@@ -181,6 +184,13 @@ async function* claudeStreamEvents(
     for (const activity of nativeWork.claudeMessage(ev)) push(activity);
     claudeMonitors.event(ev);
     background.event(ev);
+    // 主智能体开口了(或 CLI 起了新一轮):一个回合正在进行。后台任务的进度(system
+    // task_*)不算 —— 回合结束之后它们照样在流里滚。
+    if (!ev.parent_tool_use_id && (ev.type === "assistant" || ev.type === "stream_event"
+      || (ev.type === "system" && (ev.subtype === "init" || ev.subtype === "status")))) {
+      if (ev.type === "assistant") turnSpoke = true;
+      if (resident) resident.turnActive = true;
+    }
     if (ev.parent_tool_use_id) {
       const images = childImages.get(ev.parent_tool_use_id) ?? imageStore();
       childImages.set(ev.parent_tool_use_id, images);
@@ -356,7 +366,14 @@ async function* claudeStreamEvents(
       // **覆盖**不是累加(shared/src/events.ts),照收会把本回合账目清零;session 也已经
       // 由它前面那条 init 推过了。跳过之后真正的 result 照常到达;万一 CLI 只吐了这一条
       // 就没了下文,进程退出还有 forceFinishOnExit 兜底,不会静默挂死。
-      if (ev.origin?.kind === "task-notification") return;
+      //
+      // **只跳过主智能体一个字都没说的那种。** 后台工作流 / 子代理跑完,CLI 拿完成通知自己开
+      // 的那一回合**同样**带 `origin:task-notification`,可那是真回合:智能体读了结果、干了活、
+      // 交了卷(2026-11-06 实测 `claude -p` 与 stream-json 两种形态都是这样)。整条跳过它,
+      // 单飞那一路就永远等不到这一回合的结尾。
+      if (ev.origin?.kind === "task-notification" && !turnSpoke) return;
+      turnSpoke = false;
+      if (resident) resident.turnActive = false;
       flushText();
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
       const usage = claudeUsage(ev);
@@ -403,11 +420,18 @@ async function* claudeStreamEvents(
           message: ev.api_error_status ? `HTTP ${ev.api_error_status}: ${detail}` : detail,
         });
       }
-      // 单飞这一路的回合结束就是收台(见 ClaudeControlBridge.reapsAtTurnEnd);用户插话打断
-      // 的那个 result 不算,进程还要接着跑下一段。
-      if (resident?.reapsAtTurnEnd && !ownInterrupt) for (const activity of nativeWork.reaped()) push(activity);
+      // 单飞这一路的回合结束本来就是收台(见 ClaudeControlBridge.reapsAtTurnEnd);用户插话
+      // 打断的那个 result 不算,进程还要接着跑下一段。名下还有没跑完的后台子代理 / 工作流
+      // 时先不收:它们跑完 CLI 会自己开下一回合,收了台它们就白跑了(任务 SGK-4lWyRQCX)。
+      const waiting = resident?.reapsAtTurnEnd && !ownInterrupt ? background.waiting() : null;
+      const holding = !!waiting && waiting.agent + waiting.workflow > 0;
+      if (holding) {
+        push({ kind: "error", level: "notice", affectsTurn: false, message: backgroundHoldNotice(waiting) });
+      } else if (resident?.reapsAtTurnEnd && !ownInterrupt) {
+        for (const activity of nativeWork.reaped()) push(activity);
+      }
       // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。
-      if (resident) push({ kind: "turnEnd" });
+      if (resident) push(holding ? { kind: "turnEnd", background: waiting! } : { kind: "turnEnd" });
       // 只清字节去重表,不动 `refs`:引用身份在一条流里单调递增,复位会让两个回合的
       // 身份撞上。字节去重按回合清是故意的 —— 同一个路径在下一回合被重拍过,那是新的
       // 一张图,得有自己的拷贝。
@@ -464,4 +488,13 @@ async function* claudeStreamEvents(
     // 同理：进程没了，名下还在跑的后台子代理 / 后台 Bash 也全没了。不抛（见 finish）。
     await background.finish();
   }
+}
+
+/** 回合说完了、后台还有活没跑完时落在执行过程里的那一句。 */
+export function backgroundHoldNotice(waiting: { agent: number; workflow: number }): string {
+  const parts = [
+    waiting.workflow ? `${waiting.workflow} 个工作流` : "",
+    waiting.agent ? `${waiting.agent} 个后台子代理` : "",
+  ].filter(Boolean).join("、");
+  return `后台还有 ${parts}在跑，等它们跑完智能体会接着干。`;
 }

@@ -317,13 +317,15 @@ assert.deepEqual(wfUnsettled.map((row) => [row.status, row.message]), [["complet
 // 进程收台（2026-11-05 任务 SGK-4lWyRQCX）：没有任何终态通知，流就断了。工作流寄生在进程里，没走完的就是停了。
 const wfReaped = fromTools((await workflowRun([])).filter((event) => event.kind === "tool"));
 assert.deepEqual(wfReaped.map((row) => row.status), ["stopped", "stopped"], "进程结束时还在跑的子智能体记停");
-// 单飞：本回合的 result 一到 ash 就收台、不再读流，所以终态必须赶在 turnEnd 之前；团队调度台的进程活过回合，不收。
+// 单飞：工作流还在跑时回合结尾先不收台（turnEnd 带上还在等的个数），子智能体照旧在跑；
+// 没有要等的后台活时收台，还挂着「进行中」的终态必须赶在 turnEnd 之前（之后 ash 就不读流了）。
 const endOfTurn = { type: "result", subtype: "success", result: "工作流已在后台跑起来" };
-const turnSlice = (events: AgentEvent[]) => events.slice(0, events.findIndex((event) => event.kind === "turnEnd"));
+const turnSlice = (events: AgentEvent[]) => events.slice(0, events.findIndex((event) => event.kind === "turnEnd") + 1);
 const singleTurn = turnSlice(await workflowRun([endOfTurn], new ClaudeControlBridge(true)));
-assert.deepEqual(fromTools(singleTurn.filter((event) => event.kind === "tool")).map((row) => row.status), ["stopped", "stopped"], "单飞回合结束即收台，工作流跟着停");
-const residentTurn = turnSlice(await workflowRun([endOfTurn], new ClaudeControlBridge(false)));
-assert.deepEqual(fromTools(residentTurn.filter((event) => event.kind === "tool")).map((row) => row.status), ["running", "running"], "常驻进程的回合结束不收工作流");
+assert.deepEqual(singleTurn.at(-1), { kind: "turnEnd", background: { agent: 0, workflow: 1 } }, "单飞回合结尾带上还在等的工作流");
+assert.deepEqual(fromTools(singleTurn.filter((event) => event.kind === "tool")).map((row) => row.status), ["running", "running"], "等着的工作流不记停");
+const settledTurn = turnSlice(await workflowRun([{ type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "completed" }, endOfTurn], new ClaudeControlBridge(true)));
+assert.deepEqual(settledTurn.at(-1), { kind: "turnEnd" }, "工作流了结之后的回合结尾照常收台");
 // 行身份在第一次见到工作流时就定下：后续消息缺不缺 tool_use_id，同一个子智能体都只有一行。
 const driftTrace = new NativeWorkTrace();
 const drift = [

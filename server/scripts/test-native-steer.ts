@@ -61,6 +61,39 @@ await claude.cleanup?.();
 assert.equal(claudeCleanupCalls, 1, "单飞适配器必须保留底层进程的 cleanup");
 console.log("✓ Claude 原生引导保持同一进程，中间 turnEnd 不结算");
 
+// 回合说完了、后台还有工作流没跑完（任务 SGK-4lWyRQCX）：先不收台，读到它跑完后 CLI 自己开的
+// 那一回合的结尾才收；空档里没有回合可打断，插话直接送进去。
+const holdEvents = eventQueue();
+const holdCalls: string[] = [];
+let holdActive = true;
+const holdResident: ResidentHandle = {
+  sessionId: "claude-hold",
+  commandLine: "claude hold",
+  events: holdEvents.stream,
+  interrupt: () => { holdCalls.push("interrupt"); },
+  send: (text) => { holdCalls.push(`send:${text}`); holdActive = true; return true; },
+  turnActive: () => holdActive,
+  close: () => { holdCalls.push("close"); holdEvents.end(); },
+  kill: () => { holdCalls.push("kill"); holdEvents.end(); },
+  cleanup: async () => ({ kind: "empty" } as const),
+};
+const hold = singleRunFromResident(holdResident);
+const holdIterator = hold.events[Symbol.asyncIterator]();
+holdEvents.push({ kind: "text", text: "已在后台跑起来" });
+assert.deepEqual(await holdIterator.next(), { value: { kind: "text", text: "已在后台跑起来" }, done: false });
+holdActive = false;
+holdEvents.push({ kind: "turnEnd", background: { agent: 0, workflow: 1 } });
+await new Promise<void>((resolve) => setImmediate(resolve));
+await hold.steer!("进度如何");
+assert.deepEqual(holdCalls, ["send:进度如何"], "空档里插话不打断、直接送进去，也不收台");
+holdEvents.push({ kind: "text", text: "工作流的结果" });
+assert.deepEqual(await holdIterator.next(), { value: { kind: "text", text: "工作流的结果" }, done: false },
+  "后台还有工作流时回合结尾不结算");
+holdEvents.push({ kind: "turnEnd" });
+assert.deepEqual(await holdIterator.next(), { value: { kind: "done", exitStatus: 0 }, done: false });
+assert.equal(holdCalls.at(-1), "close", "后台的活跑完之后那一回合结尾才收台");
+console.log("✓ Claude 后台工作流没跑完先不收台，空档插话直接送达");
+
 const partialEvents = eventQueue();
 const partialCalls: string[] = [];
 const partialResident: ResidentHandle = {

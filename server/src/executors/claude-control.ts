@@ -19,6 +19,11 @@ export class ClaudeControlBridge {
    * 团队调度台的进程跨回合活着，不在这时收尾。
    */
   constructor(readonly reapsAtTurnEnd = false) {}
+  /**
+   * 此刻有没有回合在进行。回合结束(`result`)之后为 false,主智能体再开口、或我们送进一条
+   * 消息就为 true。单飞等后台工作的空档里插话靠它判断:没有回合可打断,直接送进去。
+   */
+  turnActive = true;
   private sequence = 0;
   private readonly pending = new Map<string, PendingControl>();
 

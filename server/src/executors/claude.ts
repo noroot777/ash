@@ -345,8 +345,10 @@ export class ClaudeExecutor implements AgentExecutor {
         const stdin = child.stdin;
         if (!stdin || stdin.destroyed || stdin.writableEnded) return false;
         stdin.write(userLine(text));
+        resident.turnActive = true;
         return true;
       },
+      turnActive: () => resident.turnActive,
       interrupt: () => {
         resident.interruptPending = true;
         child.stdin?.write(resident.request().line);
@@ -410,27 +412,67 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 }
 
+/**
+ * 单飞等后台工作最多等多久。工作流跑半小时到一小时很常见；到点还没跑完就收台，被收走的那几个
+ * 照常记进时间线（claude-background-reaped.ts）。
+ */
+const BACKGROUND_HOLD_MS = Number(process.env.ASH_BACKGROUND_HOLD_MS) || 2 * 60 * 60_000;
+
+/**
+ * 单飞：一个回合 = 一个进程。回合 `result` 一到就关 stdin 收台 —— **除非名下还有后台子代理 /
+ * 工作流没跑完**（turnEnd 带 `background`）。它们寄生在这个进程里，收了台就白跑了；而 CLI
+ * 自己的口径是「后台的活没完，这一回合就没完」：`claude -p` 会一直压着结果，直到它们跑完、
+ * 拿完成通知自己开一回合收尾（2026-11-06 实测）。所以这里照着等：进程留着、流接着读，任务
+ * 仍是运行中，下一个不再带 `background` 的回合结尾才收台。等待期间插话照常送达（没有回合可
+ * 打断，就直接送进去），停止照常杀进程；最多等 `BACKGROUND_HOLD_MS`。
+ */
 export function singleRunFromResident(
   resident: ResidentHandle,
   detached?: RunHandle["detached"],
 ): RunHandle {
   let intermediateEnds = 0;
   let accepting = true;
+  let holdTimer: ReturnType<typeof setTimeout> | null = null;
+  let holdExpired = false;
+  const clearHold = () => {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = null;
+  };
   const events = (async function* (): AsyncIterable<AgentEvent> {
-    for await (const event of resident.events) {
-      if (event.kind === "turnEnd") {
-        if (intermediateEnds > 0) {
-          intermediateEnds -= 1;
-          continue;
+    try {
+      for await (const event of resident.events) {
+        if (event.kind === "turnEnd") {
+          if (intermediateEnds > 0) {
+            intermediateEnds -= 1;
+            continue;
+          }
+          clearHold();
+          if (event.background) {
+            holdTimer = setTimeout(() => {
+              holdExpired = true;
+              accepting = false;
+              resident.close();
+            }, BACKGROUND_HOLD_MS);
+            holdTimer.unref?.();
+            continue;
+          }
+          accepting = false;
+          resident.close();
+          yield { kind: "done", exitStatus: 0 };
+          return;
         }
-        accepting = false;
-        resident.close();
-        yield { kind: "done", exitStatus: 0 };
-        return;
+        if (event.kind === "done") {
+          accepting = false;
+          if (holdExpired) {
+            yield { kind: "error", level: "notice", affectsTurn: false,
+              message: `后台工作等了 ${Math.round(BACKGROUND_HOLD_MS / 60_000)} 分钟还没跑完，已收掉进程。` };
+          }
+        }
+        yield event;
+        if (event.kind === "done") return;
       }
-      if (event.kind === "done") accepting = false;
-      yield event;
-      if (event.kind === "done") return;
+    } finally {
+      clearHold();
     }
   })();
   return {
@@ -440,6 +482,14 @@ export function singleRunFromResident(
     detached,
     async steer(text: SteerText, beforeSend) {
       if (!accepting) throw new Error("Claude 当前回合已经结束");
+      // 等后台工作的空档:没有回合可打断(打断一个空闲会话不会再吐 result,计数就错位了),
+      // 消息直接送进去自己开一回合;那一回合的结尾照常判要不要接着等。
+      if (resident.turnActive?.() === false) {
+        await beforeSend?.();
+        if (!resident.send(await resolveSteerText(text))) throw new Error("Claude 当前回合 stdin 已关闭");
+        clearHold();
+        return;
+      }
       intermediateEnds += 1;
       let interrupted = false;
       try {
