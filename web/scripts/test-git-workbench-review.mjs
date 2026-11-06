@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { fetchesSettled, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -40,6 +41,7 @@ function startBackend() {
     });
     child.once("error", reject);
     child.once("exit", (code, signal) => fail(`Fixture exited before readiness (${code ?? signal})`));
+    // 不是睡眠：就绪那一行一到就 resolve；15 秒只是夹具起不来时的报错上限。
     setTimeout(() => fail("Fixture did not become ready"), 15_000).unref();
   });
   const close = async () => {
@@ -54,6 +56,7 @@ function startBackend() {
     }
     const didExit = await Promise.race([
       exited.then(() => true),
+      // 收尾兜底：子进程按时退出就不等；超时只是改用 SIGKILL，没有断言依赖它。
       new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
     ]);
     if (!didExit && child.exitCode === null) {
@@ -133,6 +136,10 @@ const refresh = async () => {
   await page.getByRole("menu", { name: "工作台选项" }).getByRole("menuitem", { name: "刷新 Git 工作台" }).click();
   const response = await pending;
   assert.equal(response.ok(), true, `refresh failed with HTTP ${response.status()}`);
+  // 等到的那一份响应可能是点刷新之前就在飞的那趟轮询（满载时常见）：它带的是改仓库之前的
+  // 快照，页面会按序号丢掉它，真正的刷新还在路上。再等页面上所有工作台读取都消费完——刷新
+  // 那一发在点击时就已发出，必在其中。
+  await fetchesSettled(page, 0, "刷新发出的工作台读取已被页面消费完");
   await page.getByLabel("选择工作树").waitFor({ state: "visible" });
 };
 
@@ -186,6 +193,11 @@ try {
     server: {
       host: "127.0.0.1",
       port: 0,
+      // 光写 watch: null 不够：加载了 web/vite.config.ts 时，vite 合并配置会跳过值为 null 的项，
+      // watcher 照开。同一检出里任何文件一变它就推整页刷新，把测试做到一半的页面冲掉（实测：
+      // 别的执行者改 web/scripts 里的文件时，review / refresh-paths 两条因此中途被刷新）。
+      // 关掉 HMR 连接，刷新就推不到页面上。
+      hmr: false,
       proxy: { "/api": { target: `http://127.0.0.1:${info.port}` } },
     },
   });
@@ -194,6 +206,15 @@ try {
   assert(address && typeof address === "object", "Vite did not expose a port");
   browser = await launchChrome();
   page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  // 页面上的工作台状态读取（refresh 要等「点刷新之后发出的那一发」真被页面消费完）。
+  await trackFetches(page, "/git/workbench\\?");
+  // 记下工作台发出、还没拿到响应的 /api 请求（mutateRepository 要等它们都结束）。
+  const inFlight = new Set();
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.startsWith("/api/")) inFlight.add(request);
+  });
+  page.on("requestfinished", (request) => inFlight.delete(request));
+  page.on("requestfailed", (request) => inFlight.delete(request));
   page.on("request", (request) => {
     if (
       request.method() === "POST" &&
@@ -210,13 +231,22 @@ try {
   await page.goto(url.href);
   await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();
   await page.getByLabel("选择工作树").waitFor();
+  // 改仓库之前，工作台在服务端跑的 git 读（会短暂持有 index.lock）必须都已结束。从前是
+  // 「离开页面 + 睡 300ms + 2 秒内等锁消失」：满载时一发离开前已发出的读可能 300ms 后才在服务端
+  // 起 git，锁检查早就放行了。现在先在浏览器里把新的 /api 请求全挡掉（挡下的到不了服务端），
+  // 再等此前已发出的每一发都**拿到了响应**（服务端回了 = 那次 git 已经跑完），之后才离开页面。
   const mutateRepository = async (mutation) => {
+    const blocked = new Set();
+    const block = (route) => { blocked.add(route.request()); return route.abort(); };
+    await page.route("**/api/**", block);
+    await waitUntil(() => {
+      const left = [...inFlight].filter((request) => !blocked.has(request));
+      if (left.length) throw new Error(`还在途：${left.map((request) => request.url()).join(", ")}`);
+      return true;
+    }, "工作台已发出的 /api 请求都拿到响应");
     await page.goto("about:blank");
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    for (let attempt = 0; existsSync(join(info.root, ".git/index.lock")); attempt += 1) {
-      assert(attempt < 100, "workbench Git read did not release index.lock");
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    await page.unroute("**/api/**", block);
+    await waitUntil(() => !existsSync(join(info.root, ".git/index.lock")), "workbench Git read did not release index.lock");
     mutation();
     await page.goto(url.href);
     await page.getByRole("navigation", { name: "Git 工作台视图" }).waitFor();

@@ -60,7 +60,27 @@ win.__holdNextGet = (fail = false) => { holdNextGet = true; heldGetArrived = fal
 win.__heldGetArrived = () => heldGetArrived;
 win.__releaseGet = () => releaseGet?.();
 
-window.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+// 页面发出、还没把响应体读完的请求有几发（挂着不回的也算）。测试据此判「迟到的那趟读已经
+// 被页面处理过了」，不靠睡：读完那一刻应用的后续在同一个微任务检查点里跑完。
+let unread = 0;
+win.__quiet = () => unread === 0;
+const tracked = (response: Response) => {
+  let done = false;
+  const finish = () => { if (!done) { done = true; unread -= 1; } };
+  for (const name of ["text", "json"] as const) {
+    const read = response[name].bind(response);
+    (response as unknown as Record<string, () => Promise<unknown>>)[name] = () =>
+      read().then((value) => { finish(); return value; }, (error) => { finish(); throw error; });
+  }
+  return response;
+};
+
+window.fetch = (input: RequestInfo | URL): Promise<Response> => {
+  unread += 1;
+  return serve(input).then(tracked);
+};
+
+const serve = async (input: RequestInfo | URL): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const { pathname } = new URL(href, location.origin);
   const match = /^\/api\/projects\/(p[12])\/git(\/fetch|\/checkout)?$/.exec(pathname);

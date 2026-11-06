@@ -7,18 +7,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { waitUntil } from "./wait-until.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
 const fixturePath = join(repo, "server/scripts/fixtures/git-workbench-server.ts");
-
-const until = async (probe, hint, attempts = 160) => {
-  for (let i = 0; i < attempts; i += 1) {
-    if (await probe()) return;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`等不到：${hint}`);
-};
 
 function startBackend() {
   const child = spawn(process.execPath, ["--import", "tsx", fixturePath], {
@@ -42,6 +35,7 @@ function startBackend() {
     });
     child.once("error", reject);
     child.once("exit", (code, signal) => fail(`Git workbench fixture exited before readiness (${code ?? signal})`));
+    // 不是睡眠：就绪那一行一到就 resolve；15 秒只是夹具起不来时的报错上限。
     setTimeout(() => fail("Git workbench fixture did not become ready"), 15_000).unref();
   });
   const close = async () => {
@@ -56,6 +50,7 @@ function startBackend() {
     }
     const didExit = await Promise.race([
       exited.then(() => true),
+      // 收尾兜底：子进程按时退出就不等；超时只是改用 SIGKILL，没有断言依赖它。
       new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
     ]);
     if (!didExit && child.exitCode === null) {
@@ -86,7 +81,7 @@ const chooseMenuItem = async (trigger, item) => {
   await page.getByRole("menu", { name: label }).getByRole("menuitem", { name: item, exact: true }).click();
 };
 const currentView = async () => new URL(page.url()).searchParams.get("gitView");
-const waitIdle = () => until(async () => page.getByLabel("选择工作树").isEnabled(), "Git 工作台操作结束");
+const waitIdle = () => waitUntil(async () => page.getByLabel("选择工作树").isEnabled(), "Git 工作台操作结束");
 const performAction = async (trigger, expectedOk = true) => {
   let actionReceived = false;
   const pending = page.waitForResponse((response) => response.request().method() === "POST" && /\/git\/workbench\/actions$/.test(new URL(response.url()).pathname));
@@ -110,7 +105,7 @@ const performAction = async (trigger, expectedOk = true) => {
   return body;
 };
 const waitMessage = async (pattern) => {
-  await until(async () => pattern.test(await page.getByTestId("fixture-notice").innerText()), pattern.toString());
+  await waitUntil(async () => pattern.test(await page.getByTestId("fixture-notice").innerText()), pattern.toString());
 };
 const submitDialog = async (title, button = title) => {
   const box = dialog(title);
@@ -142,6 +137,11 @@ try {
       host: "127.0.0.1",
       port: 0,
       strictPort: false,
+      // 光写 watch: null 不够：加载了 web/vite.config.ts 时，vite 合并配置会跳过值为 null 的项，
+      // watcher 照开。同一检出里任何文件一变它就推整页刷新，把测试做到一半的页面冲掉（实测：
+      // 别的执行者改 web/scripts 里的文件时，review / refresh-paths 两条因此中途被刷新）。
+      // 关掉 HMR 连接，刷新就推不到页面上。
+      hmr: false,
       proxy: { "/api": { target: `http://127.0.0.1:${info.port}` } },
     },
   });
@@ -294,7 +294,7 @@ try {
   // 制造一份新的真实改动，从 UI 贮藏并查看差异。
   await writeFile(join(info.root, "stash-browser.txt"), "stash from browser test\n");
   await chooseMenuItem(page.getByLabel("工作台选项"), "刷新 Git 工作台");
-  await until(async () => /1/.test(await tab("变更").innerText()), "刷新后看到新改动");
+  await waitUntil(async () => /1/.test(await tab("变更").innerText()), "刷新后看到新改动");
   await tab("贮藏").click();
   await page.getByRole("button", { name: "贮藏改动", exact: true }).click();
   const stashDialog = dialog("贮藏当前改动");
@@ -305,7 +305,7 @@ try {
   await stashRow.getByRole("button", { name: /^查看差异 stash@/ }).click();
   const stashDiff = stashRow.locator(".gwb-stash-diff");
   await stashDiff.waitFor();
-  await until(async () => /stash-browser\.txt|stash from browser test/.test(await stashDiff.innerText()), "贮藏差异内容");
+  await waitUntil(async () => /stash-browser\.txt|stash from browser test/.test(await stashDiff.innerText()), "贮藏差异内容");
   if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "stash-non-empty.png") });
 
   // 一次必然失败的删除留进日志，刷新后仍在；随后进入真实 merge 冲突。
@@ -406,7 +406,7 @@ try {
   await worktreeRow.waitFor();
   if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, "worktree-real-data.png") });
   await worktreeRow.getByRole("button", { name: "打开工作树", exact: true }).click();
-  await until(async () => new URL(page.url()).searchParams.has("gitRoot"), "工作树路径写入 URL");
+  await waitUntil(async () => new URL(page.url()).searchParams.has("gitRoot"), "工作树路径写入 URL");
   const openedRoot = new URL(page.url()).searchParams.get("gitRoot");
   assert(openedRoot && openedRoot !== info.root, "打开工作树必须切换根路径");
   assert.equal(new URL(page.url()).searchParams.has("gitTask"), false, "切换工作树清除返回任务");

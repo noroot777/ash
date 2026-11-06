@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchesSettled, settlePage, trackFetches } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const web = await startWebServer();
@@ -105,6 +106,8 @@ try {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(listing(taskId, path)) });
   });
 
+  // 页面那一侧有没有把 A 的文件列表响应消费完：「A 的旧响应晚到也不许覆盖 B」靠它判。
+  await trackFetches(page, "/api/tasks/tree-a/files\\?");
   await page.goto(`${web.origin}/scripts/fixtures/file-tree-git.html`);
   const row = (name) => page.locator(".file-tree__row", { has: page.locator(".file-tree__name", { hasText: name }) });
   const exactRow = (name) => page.locator(".file-tree__row").filter({ has: page.locator(".file-tree__name", { hasText: name }) }).first();
@@ -222,10 +225,12 @@ try {
   assert(calls.slice(beforeManual).some((call) => call.path === "src/features/deep"), "手动刷新没有重拉展开层");
 
   // 模拟提交和磁盘文件增删。等真实 5 秒轮询，不点刷新：装饰消失、列表同步变化。
+  // 直接等装饰消失（期限 = 一个轮询周期 + 满载余量），不先睡一个轮询周期赌它到了；
+  // 根列表和 Git 状态在同一份响应里，装饰消失那一刻列表也已经是新的。
   gitA = { changes: [], truncated: false, error: null };
   treeAVersion = 1;
-  await page.waitForTimeout(5300);
-  await page.locator(".file-tree__row[data-git-kind]").waitFor({ state: "detached" });
+  // （带装饰的行有好几行，locator.waitFor 在多于一个匹配时直接报 strict 违规，所以用 waitForFunction。）
+  await page.waitForFunction(() => !document.querySelector(".file-tree__row[data-git-kind]"), null, { timeout: 20_000 });
   assert.equal(await head.getAttribute("data-git-kind"), null, "提交后工作区根仍残留 Git 颜色");
   assert.equal(await elementColor(branch), await tokenColor("--ink"), "提交后分支名没有恢复普通颜色");
   assert.equal(await elementColor(branchIcon), await tokenColor("--accent"), "提交后工作区图标没有恢复普通颜色");
@@ -252,7 +257,9 @@ try {
   await page.getByText("feature/other-task", { exact: true }).waitFor();
   await page.getByText("only-b.txt", { exact: true }).waitFor();
   resolveDelayedA?.();
-  await page.waitForTimeout(250);
+  // A 那发迟到的根列表已被页面读完（或切任务时已 abort），渲染冲刷过，才断言没被它污染。
+  await fetchesSettled(page, 0, "A 那发迟到的根列表已被页面消费完");
+  await settlePage(page);
   assert.equal(await page.getByText("feature/file-colors", { exact: true }).count(), 0, "旧任务分支污染了新任务");
   assert.equal(await page.getByText("generated.txt", { exact: true }).count(), 0, "旧任务文件污染了新任务");
   assert.equal(await page.getByText("only-b.txt", { exact: true }).count(), 1);

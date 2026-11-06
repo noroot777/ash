@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { WAIT_TIMEOUT_MS, fetchesSettled, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 // **写之前发出的那次 GET 后到时，不许它说了算。**
 //
@@ -33,14 +34,6 @@ const overviewOf = (staged) => ({
   commits: [],
 });
 
-const until = async (probe, hint, attempts = 100) => {
-  for (let i = 0; i < attempts; i += 1) {
-    if (probe()) return;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`等不到：${hint}`);
-};
-
 /**
  * 跑一遍「扣住一次 GET → 写 → 放行那次 GET」。
  *
@@ -48,6 +41,8 @@ const until = async (probe, hint, attempts = 100) => {
  */
 async function race(browser, url, { writeStatus }) {
   const page = await browser.newPage();
+  // 页面那一侧有没有把面板的状态读取消费完：「过期 GET 不许盖回去」要等它真的落过地。
+  await trackFetches(page, "/api/tasks/t1/scm$");
   let staged = false;
   let statusReadable = true;
   let holdNext = false;
@@ -90,7 +85,7 @@ async function race(browser, url, { writeStatus }) {
   //    （d8f6ab5f）连同推送一起撤掉了，面板本来就每 5 秒自己读一次，这一局要的
   //    「写之前发出的那次读」照旧成立。等的窗口因此要盖得住一个轮询周期。
   holdNext = true;
-  await until(() => heldArrived, "被扣住的那次 GET 到达服务端", 240);
+  await waitUntil(() => heldArrived, { timeout: 5_000 + WAIT_TIMEOUT_MS, message: "被扣住的那次 GET（下一轮轮询）到达服务端" });
 
   // ② 紧接着点暂存，写先回来。
   await stageOne.click();
@@ -101,10 +96,10 @@ async function race(browser, url, { writeStatus }) {
 
   // ③ 放行那条写之前发出的 GET。
   release();
-  await until(() => heldDelivered, "被扣住的那次 GET 送达浏览器");
-  // 响应到浏览器、fetch 落地、React 重渲染都在这之后，给它一点时间真的把状态写进去
-  // ——测的是「盖回去了没有」，所以必须等它有机会盖。
-  await page.waitForTimeout(400);
+  await waitUntil(() => heldDelivered, "被扣住的那次 GET 送达浏览器");
+  // 测的是「盖回去了没有」，所以必须等它有机会盖：等页面把那份迟到的快照读完、渲染冲刷过。
+  await fetchesSettled(page, 0, "被扣住的那次过期 GET 已被页面消费完");
+  await settlePage(page);
 
   if (writeStatus) {
     assert.equal(await unstageOne.count(), 1, "写已经成功，过期 GET 不许把列表盖回未暂存");

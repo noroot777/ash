@@ -43,6 +43,18 @@ const state = (root: string, version: string): GitWorkbenchState => ({
 type PendingRead = {
   root: string;
   resolve: (response: Response) => void;
+  // 页面把这一发的响应体读完了（读完那一刻 useWorkbench 的后续在同一个微任务检查点里跑完）：
+  // 测试据此判「迟到的那份已经被处理过了」，不靠睡。
+  consumed: boolean;
+};
+
+const consumable = (entry: PendingRead, response: Response) => {
+  for (const name of ["text", "json"] as const) {
+    const read = response[name].bind(response);
+    (response as unknown as Record<string, () => Promise<unknown>>)[name] = () =>
+      read().then((value) => { entry.consumed = true; return value; });
+  }
+  return response;
 };
 
 const reads: PendingRead[] = [];
@@ -53,10 +65,11 @@ let holdAction = false;
 const controls = {
   readCount: () => reads.length,
   actionCount: () => actions,
+  consumed: (index: number) => reads[index]?.consumed === true,
   releaseRead: (index: number, version: string) =>
-    reads[index]?.resolve(reply(state(reads[index].root, version))),
+    reads[index]?.resolve(consumable(reads[index], reply(state(reads[index].root, version)))),
   failRead: (index: number, message: string) =>
-    reads[index]?.resolve(reply({ error: message }, 500)),
+    reads[index]?.resolve(consumable(reads[index], reply({ error: message }, 500))),
   holdAction: () => { holdAction = true; },
   releaseAction: () => actionRelease?.(),
 };
@@ -88,7 +101,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   return new Promise<Response>((resolve) => {
-    reads.push({ root: url.searchParams.get("root") || "/repo-a", resolve });
+    reads.push({ root: url.searchParams.get("root") || "/repo-a", resolve, consumed: false });
   });
 };
 

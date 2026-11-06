@@ -53,7 +53,12 @@ try {
   assert.notEqual(hoverMask, idleMask, "指到时标题要额外让开星标那格");
   await handoffPendingRow.click();
   await page.mouse.move(4, 4);
-  await page.waitForTimeout(180);
+  // 移开鼠标后 hover 那组过渡开始回落：同上，等页面上的 CSS 过渡跑完再读，不睡固定时长。
+  // 等之前先过一帧，让 hover 状态的变化落成样式（过渡在样式重算时才创建）。
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
+  await page.evaluate(() => Promise.all(document.getAnimations()
+    .filter((animation) => animation instanceof CSSTransition)
+    .map((animation) => animation.finished.catch(() => {}))));
   const selectedTail = await handoffPendingRow.evaluate((node) => {
     const wrap = node.closest(".workspace-task-row-wrap");
     return {

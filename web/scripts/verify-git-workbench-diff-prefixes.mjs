@@ -23,6 +23,7 @@ function startBackend() {
   let stdout = "";
   let stderr = "";
   const ready = new Promise((resolve, reject) => {
+    // 不是睡眠：就绪那一行一到就 resolve 并清掉它；15 秒只是夹具起不来时的报错上限。
     const timer = setTimeout(
       () => reject(new Error(`fixture startup timeout\n${stderr}\n${stdout}`)),
       15_000,
@@ -51,6 +52,7 @@ function startBackend() {
     const exited = new Promise(resolve => child.once("exit", resolve));
     if (child.connected) child.send({ type: "close" });
     else child.kill("SIGTERM");
+    // 收尾兜底：子进程按时退出就不等；超时只是改用 SIGKILL，没有断言依赖它。
     await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 5_000))]);
     if (child.exitCode === null) child.kill("SIGKILL");
   };
@@ -146,6 +148,11 @@ try {
       host: "127.0.0.1",
       port: 0,
       watch: null,
+      // 光写 watch: null 不够：加载了 web/vite.config.ts 时，vite 合并配置会跳过值为 null 的项，
+      // watcher 照开。同一检出里任何文件一变它就推整页刷新，把测试做到一半的页面冲掉（实测：
+      // 别的执行者改 web/scripts 里的文件时，review / refresh-paths 两条因此中途被刷新）。
+      // 关掉 HMR 连接，刷新就推不到页面上。
+      hmr: false,
       proxy: { "/api": { target: `http://127.0.0.1:${info.port}` } },
     },
   });
