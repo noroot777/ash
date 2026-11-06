@@ -39,19 +39,19 @@
 .ui-button--primary {
   background: var(--accent);
   color: white;
-  box-shadow: 0 0 0 1px rgb(67 76 164 / 28%), 0 1px 2px rgb(40 42 48 / 12%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-active) 28%, transparent), 0 1px 2px rgb(40 42 48 / 12%);
 }
 
 .ui-button--primary:hover,
 .ui-button--primary.is-hover {
-  background: #5560c4;
+  background: var(--accent-hover);
   color: white;
-  box-shadow: 0 0 0 1px rgb(67 76 164 / 38%), 0 2px 4px rgb(40 42 48 / 14%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-active) 38%, transparent), 0 2px 4px rgb(40 42 48 / 14%);
 }
 
 .ui-button--primary:active,
 .ui-button--primary.is-active {
-  background: #4d57b5;
+  background: var(--accent-active);
   box-shadow: inset 0 1px 2px rgb(20 24 80 / 24%);
 }
 
@@ -84,15 +84,15 @@
 }
 
 .ui-button--danger {
-  border-color: rgb(217 61 76 / 38%);
+  border-color: color-mix(in srgb, var(--red) 38%, transparent);
   background: var(--panel);
   color: var(--red);
 }
 
 .ui-button--danger:hover,
 .ui-button--danger.is-hover {
-  background: rgb(217 61 76 / 6%);
-  box-shadow: 0 0 0 1px rgb(217 61 76 / 22%);
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--red) 22%, transparent);
 }
 
 .task-pin {
@@ -131,7 +131,7 @@
 .ui-input.is-hover,
 .ui-input:focus,
 .ui-input.is-focus {
-  border-color: lch(78.5% 0 282);
+  border-color: color-mix(in lch, var(--line2) 62%, var(--faint));
 }
 
 .ui-select-trigger {
@@ -143,7 +143,7 @@
   border-radius: 8px;
   background: var(--panel);
   padding: 0 10px;
-  color: lch(20% 1 282);
+  color: color-mix(in lch, var(--ink) 65%, var(--muted));
   font-size: 13px;
   text-align: left;
   box-shadow: var(--control-shadow);
@@ -245,10 +245,26 @@
   color: var(--ink);
 }
 
-.ui-tabs button[aria-selected="true"] {
-  background: var(--panel);
+/* 同一副长相也给按钮单选用(role=radio,见 useRovingChoice):分页认 aria-selected,单选认 aria-checked。 */
+.ui-tabs button[aria-selected="true"],
+.ui-tabs button[aria-checked="true"] {
+  background: var(--lifted);
   color: var(--ink);
   box-shadow: 0 1px 3px rgb(40 42 48 / 14%);
+}
+
+/* 深浅色开关(components/ColorThemeChoice.tsx):图标 + 字。设置页里它是 .settings-row 的
+   直接子 div,那条规则会把它改成纵向 grid —— 这里用两个类压回横排。 */
+.ui-tabs.color-theme-choice {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+}
+
+.color-theme-choice button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .ui-choice {
@@ -288,7 +304,7 @@
 }
 
 .ui-choice:hover .ui-checkbox {
-  border-color: lch(65% 2 282);
+  border-color: var(--faint);
 }
 
 .ui-toggle {
@@ -297,7 +313,7 @@
   height: 20px;
   flex: 0 0 30px;
   border-radius: 72px;
-  background: lch(82.484% 0.054 281.837);
+  background: color-mix(in lch, var(--line2) 82%, var(--faint));
   transition: background-color 150ms ease-out, opacity 150ms ease-out;
 }
 
@@ -309,6 +325,7 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
+  /* 拨钮两种模式都是白的：深色下关着的轨道是灰、开着是主色，白钮都看得清。 */
   background: white;
   box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
   transition: transform 150ms ease-out;

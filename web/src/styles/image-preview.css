@@ -1,5 +1,6 @@
 .image-preview-trigger { cursor: zoom-in; }
 
+/* 灯箱整套（遮罩、按钮、缩放条）两种模式都是深色，颜色不跟主题走。 */
 .image-preview-lightbox {
   position: fixed;
   z-index: 220;

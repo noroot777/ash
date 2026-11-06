@@ -17,7 +17,7 @@
 .review-inspector__overview small { margin-top: 1px; color: var(--faint); font-size: 9.5px; }
 .review-inspector__status { display: grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border-radius: 8px; background: color-mix(in lch,var(--accent) 9%,var(--raised)); color: var(--accent); }
 .review-inspector__status.is-verified { background: var(--green-bg); color: var(--green); }
-.review-inspector__status.is-verify_failed { background: color-mix(in lch,var(--red) 9%,white); color: var(--red); }
+.review-inspector__status.is-verify_failed { background: var(--red-bg); color: var(--red); }
 .review-inspector__actions { display: grid; gap: 4px; margin-top: 11px; }
 .review-inspector__actions button { display: flex; min-height: 31px; align-items: center; gap: 6px; border: 0; border-radius: 7px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10.5px; text-align: left; }
 .review-inspector__actions button:first-child { background: color-mix(in lch,var(--accent) 8%,var(--panel)); color: var(--accent); font-weight: 650; }
@@ -64,7 +64,7 @@
 .review-round > button > b { color: var(--ink); font-size: 10.5px; white-space: nowrap; }
 .review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in lch,var(--accent) 9%,var(--raised)); padding: 2px 6px; color: var(--accent); font-size: 9.5px; font-style: normal; font-weight: 650; white-space: nowrap; }
 .review-round.is-verified > button > em { background: var(--green-bg); color: var(--green); }
-.review-round.is-verify-failed > button > em, .review-round.is-inconclusive > button > em { background: color-mix(in lch,var(--red) 9%,white); color: var(--red); }
+.review-round.is-verify-failed > button > em, .review-round.is-inconclusive > button > em { background: var(--red-bg); color: var(--red); }
 .review-round > button > small { min-width: 0; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .review-round > button > svg:last-child { margin-left: auto; flex: 0 0 auto; transition: transform 140ms ease; }
 .review-round > button[aria-expanded="false"] > svg:last-child { transform: rotate(-90deg); }

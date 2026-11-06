@@ -13,6 +13,9 @@
 .gwb-design .repo-name b svg, .gwb-design .gwb-worktree-picker { flex-shrink: 0; }
 .gwb-design .top-btn.gwb-back-btn { background: #1e3a8a; color: #fff; }
 .gwb-design .top-btn.gwb-back-btn:hover { background: #1e40af; color: #fff; }
+/* 这块藏青在深色顶栏上几乎和底色糊在一起，深色下提亮一档；白字两边都不变。 */
+[data-theme="dark"] .gwb-design .top-btn.gwb-back-btn { background: #2f4fb0; }
+[data-theme="dark"] .gwb-design .top-btn.gwb-back-btn:hover { background: #3a5cc4; }
 .gwb-design .branch-pill { min-width: 0; flex-shrink: 0; max-width: 25vw; }
 .gwb-design .branch-pill svg { flex-shrink: 0; }
 .gwb-design .branch-pill b { min-width: 0; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -46,7 +49,7 @@
 .gwb-design .gwb-diff-footer .diff-tip { margin: 0; }
 .gwb-design .gwb-diff-feedback { margin: 0 0 8px; font-size: 11px; color: var(--muted); }
 .gwb-design .gwb-diff-line { border: none; border-radius: 0; box-shadow: none; width: 100%; padding: 0; text-align: left; min-height: 16px; font: inherit; }
-.gwb-design button.gwb-diff-line.is-hunk { width: auto; font: 10px var(--font-mono); min-height: 18px; color: #4f58a8; }
+.gwb-design button.gwb-diff-line.is-hunk { width: auto; font: 10px var(--font-mono); min-height: 18px; color: color-mix(in lch, var(--accent) 72%, var(--ink)); }
 .gwb-design .diff-lines { overflow-x: auto; }
 .gwb-design .diff-line { min-width: max-content; width: 100%; }
 .gwb-design .gwb-diff-number { user-select: none; }

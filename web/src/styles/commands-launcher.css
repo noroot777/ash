@@ -52,7 +52,7 @@
   background: var(--panel);
   color: var(--ink);
   border-radius: 13px;
-  box-shadow: lch(0 0 0 / 0.07) 0 0 0 1px, var(--shadow);
+  box-shadow: color-mix(in srgb, var(--ink) 7%, transparent) 0 0 0 1px, var(--shadow);
   overflow: hidden;
   text-align: left;
 }
@@ -211,7 +211,7 @@
 }
 .cmd-pop__row-actions button:hover { background: var(--raised); box-shadow: var(--control-hover-shadow); }
 .cmd-pop__row-actions button.is-primary { background: var(--accent); color: #fff; box-shadow: none; }
-.cmd-pop__row-actions button.is-primary:hover { background: #4f5ac4; }
+.cmd-pop__row-actions button.is-primary:hover { background: var(--accent-hover); }
 .cmd-pop__row-actions button.is-danger { color: var(--red); }
 
 /* ── 底部:管理入口 ────────────────────────────────────── */

@@ -72,6 +72,12 @@ const bobActor = actorOf(bob);
   assert.equal((await personal.settingsFor(bob.id)).composerSendKey, "mod-enter");
   assert.equal((await personal.settingsFor(alice.id)).composerSendKey, "enter", "没写过的人落回出厂默认");
   assert.equal((await appSettings.getAppSettings()).composerSendKey, "enter", "个人面不该写进全局那份");
+
+  // 深浅色也是个人面:同一台机器上两个人各看各的。
+  await personal.patchSettingsFor(aliceActor, { colorTheme: "dark" });
+  assert.equal((await personal.settingsFor(alice.id)).colorTheme, "dark");
+  assert.equal((await personal.settingsFor(bob.id)).colorTheme, "system", "没写过的人落回出厂默认(跟随系统)");
+  assert.equal((await appSettings.getAppSettings()).colorTheme, "system", "个人面不该写进全局那份");
 }
 
 // ── ② 实例面要管理员;接力目标机另走一条路 ────────────────────────────────
@@ -99,6 +105,8 @@ const bobActor = actorOf(bob);
     appSettings.parseAppSettingsPatch({ composerSendKey: "mod-enter" }),
     { composerSendKey: "mod-enter" },
   );
+  assert.throws(() => appSettings.parseAppSettingsPatch({ colorTheme: "auto" }), /colorTheme/);
+  assert.deepEqual(appSettings.parseAppSettingsPatch({ colorTheme: "light" }), { colorTheme: "light" });
 }
 
 // ── ④ 读侧:认不出的值等同没写过 ──────────────────────────────────────────

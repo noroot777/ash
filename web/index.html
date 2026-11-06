@@ -7,6 +7,22 @@
     <link rel="icon" href="data:," />
     <title>Ash</title>
     <script>
+      // 深浅色在第一帧之前拨好:等 bundle 起来再拨，深色用户每次开页都先闪一屏白。
+      // 读的是 src/lib/theme.ts 存下的那份本机镜像(键名与判据两边一致，改一边看另一边);
+      // 读不到就跟随系统。theme-color 两个色值 = global.css 里浅 / 深两套的 --chrome。
+      (function () {
+        var pref = null;
+        try { pref = localStorage.getItem("ash.colorTheme"); } catch (e) {}
+        var dark = pref === "dark" || (pref !== "light" && window.matchMedia
+          && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        var root = document.documentElement;
+        root.setAttribute("data-theme", dark ? "dark" : "light");
+        root.style.colorScheme = dark ? "dark" : "light";
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute("content", dark ? "#151518" : "#efeff0");
+      })();
+    </script>
+    <script>
       // 身份确认要一个来回，而它决定首屏渲染什么（工作台 / 向导 / 登录页）。放在这里 =
       // HTML 一解析就起飞，与 bundle 的下载和解析**并行**；等 React 挂上来时结果多半已经
       // 在手。挪进 bundle 里就变成串行的第二段，本机看不出来，远程访问那段空窗刚好够闪

@@ -14,6 +14,17 @@
   --chat-ink: var(--ink);
   --chat-muted: var(--muted);
 }
+/* 助手的蓝灰侧栏与藏青强调色带品牌色调，深色另给一套。 */
+[data-theme="dark"] .assistant-shell.chat-shell {
+  --assistant-rail: lch(8.5% 3 265);
+  --assistant-rail-ink: lch(88% 5 265);
+  --assistant-rail-muted: lch(66% 9 265);
+  --assistant-rail-line: lch(21% 5 265);
+  --assistant-rail-hover: lch(15% 5 265);
+  --assistant-rail-selected: lch(20% 10 265);
+  --accent: #7196cc;
+  --accent-soft: lch(23% 14 268);
+}
 .assistant-shell button:focus-visible,.assistant-shell input:focus-visible,.assistant-shell textarea:focus-visible,.assistant-shell .chat-connection:focus-visible { outline-color: var(--accent); }
 .assistant-shell .chat-rail,.assistant-shell .chat-channels button,.assistant-shell .chat-rail-note strong { color: var(--assistant-rail-ink); }
 .assistant-shell .chat-brand > svg { color: var(--accent); }
@@ -33,6 +44,8 @@
 .assistant-shell .chat-date span { background: var(--panel); border-color: var(--line); }
 .assistant-shell .chat-message:hover { background: var(--panel); }
 .assistant-shell .tone-user { background: var(--assistant-rail-muted); }
+/* 「你」的头像是白字实底，深色下侧栏灰字变亮了，底色留在浅色那一档。 */
+[data-theme="dark"] .assistant-shell .tone-user { background: #52657d; }
 .assistant-shell .chat-message-content time { color: var(--faint); }
 .assistant-shell .chat-bot-label { background: var(--accent-soft); color: var(--accent); }
 .assistant-shell .chat-typing,.assistant-shell .chat-live-line,.assistant-shell .chat-history-note { color: var(--muted); }
@@ -43,11 +56,11 @@
 .assistant-shell .chat-jump { background: var(--panel); border-color: var(--line); color: var(--accent); box-shadow: 0 3px 12px #2d435d10; }
 .assistant-shell .chat-live-line > button { color: var(--muted); }
 .assistant-shell .chat-composer { background: var(--panel); border-color: var(--line2); box-shadow: 0 2px 9px #2d435d06; }
-.assistant-shell .chat-composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px #38639422; }
+.assistant-shell .chat-composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent); }
 .assistant-shell .chat-composer textarea::placeholder,.assistant-shell .chat-composer footer > span,.assistant-shell .chat-composer-hint { color: var(--faint); }
 .assistant-shell .chat-composer footer > button { color: var(--muted); }
 .assistant-shell .chat-composer footer .chat-send { background: var(--accent); color: white; }
-.assistant-shell .chat-composer footer .chat-send:hover:not(:disabled) { background: #2d5079; }
+.assistant-shell .chat-composer footer .chat-send:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 80%, var(--ink)); }
 .assistant-shell .chat-error { color: var(--red); border-color: color-mix(in srgb, var(--red) 25%, var(--panel)); background: color-mix(in srgb, var(--red) 7%, var(--panel)); }
 .assistant-shell .chat-info { border-color: var(--assistant-rail-line); background: var(--canvas); }
 .assistant-shell .chat-info-title,.assistant-shell .chat-info h3,.assistant-shell .chat-presence strong { color: var(--assistant-rail-ink); }

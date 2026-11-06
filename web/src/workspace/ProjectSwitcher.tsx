@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { ProjectView } from "@ash/shared";
 import { CaretDown, Check, FolderPlus, GearSix, ListChecks, MagnifyingGlass } from "@phosphor-icons/react";
+import { ColorThemeChoice } from "../components/ColorThemeChoice.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { shortenHomePath, useHostInfo } from "../lib/useHostInfo.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
@@ -18,6 +19,7 @@ export function ProjectSwitcher({
   onTaskMode,
   onCreate,
   onSettings,
+  notify,
 }: {
   projects: ProjectView[];
   current: ProjectView | null;
@@ -26,6 +28,7 @@ export function ProjectSwitcher({
   onTaskMode: () => void;
   onCreate: () => void;
   onSettings: () => void;
+  notify: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -107,6 +110,9 @@ export function ProjectSwitcher({
                 它开的是设置页首页，G S 走的也是这里——两处绝不能各去各的地方。 */}
             <kbd>{SETTINGS_SHORTCUT_LABEL}</kbd>
           </button>
+          {/* 深浅色的快捷开关，和「设置 → 默认规则 → 外观」是同一份偏好。点了不收起下拉：
+              翻面后多半还想对比一眼，收起来就得再开一次。 */}
+          <ColorThemeChoice notify={notify} className="workspace-project-theme" />
 
           <label className="workspace-project-search">
             <MagnifyingGlass size={14} aria-hidden="true" />
