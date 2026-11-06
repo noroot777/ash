@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { afterFrames, animationsSettled } from "./wait-until.mjs";
 
 // 看图缩放（`useImageZoom` + `ImageZoomControls`），灯箱与文件查看器共用一份。这里钉三条
 // `test-image-preview` 的 6×6 小图夹具测不到的：
@@ -75,8 +76,8 @@ try {
     if (!button) throw new Error("lightbox did not open synchronously");
     button.click();
   });
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  await page.waitForTimeout(250);
+  // 尺寸观察器的回调在渲染那一步派发：走过两帧，「首报」一定已经报过，它引起的提交再冲刷掉。
+  await afterFrames(page, 2);
   assert(await percentOf(dialog) > fit, "zooming right after opening survives the observer's first report");
   await page.keyboard.press("0");
 
@@ -84,7 +85,7 @@ try {
   // 超出的那条轴按规矩居中，锚点会被拉回中线，那是有意的，不是漂移。
   await dialog.getByRole("button", { name: "放大图片", exact: true }).click();
   await dialog.getByRole("button", { name: "放大图片", exact: true }).click();
-  await page.waitForTimeout(300);
+  await animationsSettled(page);
   const zoomed = await percentOf(dialog);
   const cy = 380;
   const a = { x: 400, y: cy };
