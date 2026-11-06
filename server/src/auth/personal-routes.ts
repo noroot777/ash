@@ -51,6 +51,9 @@ function refuseSelf(c: Context): Response {
   if (actorOf(c).kind === "agent") {
     return c.json({ error: "个人设置只对账号本人开放：回合凭证代表的是那一条任务，不是这个账号" }, 403);
   }
+  if (actorOf(c).kind === "im") {
+    return c.json({ error: "个人设置只对账号本人开放：请在 ash 页面上操作，不能经飞书修改" }, 403);
+  }
   return c.json({ error: "请先登录" }, 401);
 }
 

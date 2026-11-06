@@ -26,6 +26,8 @@ data/
 *.db
 *.db-wal
 *.db-shm
+# 库文件旁的飞书应用凭证（含 App Secret）：临时实例的 ASH_DB 落在仓库里时它跟着落进来。
+*.feishu.json
 
 # playwright CLI 落在工作区的临时产物(审查用完即弃;残留会弄脏工作区挡验收合并)
 .playwright-cli/

@@ -12,6 +12,7 @@ import { ensureAcceptGateSchema } from "./schema-accept-gate.js";
 import { ensureTaskBackgroundSchema } from "./schema-task-background.js";
 import { ensureRegressionChecksSchema } from "./schema-regression-checks.js";
 import { ensureRegressionEvidenceSchema } from "./schema-regression-evidence.js";
+import { ensureImSchema } from "./schema-im.js";
 import { ensurePageAnnotationSchema } from "./schema-page-annotation.js";
 import { ensureTaskNoticeSchema } from "./schema-task-notice.js";
 import { ensureTaskWritesSchema } from "./schema-task-writes.js";
@@ -400,6 +401,7 @@ export async function ensureSchema() {
   await ensureTaskBackgroundSchema(client);
   await ensureRegressionChecksSchema(client);
   await ensureRegressionEvidenceSchema(client);
+  await ensureImSchema(client);
   // DDL 到此为止。剩下那一半(一次性数据搬运 + 退役字段/表清理)在 `migrations.ts`。
   await runDataMigrations(client);
 }

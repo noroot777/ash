@@ -5,7 +5,7 @@ import type { ChatMember } from "@ash/shared/chat";
 import { isAllMention } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { agents, chatRooms, projects, tasks } from "../db/schema.js";
-import { actorOf, isAccountHolder } from "../auth/context.js";
+import { actorOf, isHumanPrincipal } from "../auth/context.js";
 import { canSeeProject } from "../auth/visibility.js";
 import { canUseOwned, filterOwned } from "../auth/owned.js";
 import { id } from "../util.js";
@@ -13,7 +13,8 @@ import type { RoomRow } from "./service.js";
 
 export async function visibleRoom(c: Context): Promise<RoomRow | undefined> {
   const actor = actorOf(c);
-  if (!isAccountHolder(actor)) return;
+  // 经飞书转述的本人（im 身份）也算：它的归属与可见性就是绑定的那个账号的（ownerIdOf）。
+  if (!isHumanPrincipal(actor)) return;
   const row = (await db.select().from(chatRooms).where(eq(chatRooms.id, c.req.param("roomId")!))).at(0);
   if (row?.kind === "side") {
     const parent = row.parentTaskId ? (await db.select().from(tasks).where(eq(tasks.id, row.parentTaskId))).at(0) : undefined;
@@ -27,7 +28,7 @@ export async function visibleProject(c: Context, projectId: string) {
 }
 
 export function isHumanRequest(c: Context) {
-  return isAccountHolder(actorOf(c)) && !c.req.header("x-ash-source-task-id") && !c.req.header("x-ash-turn-token");
+  return isHumanPrincipal(actorOf(c)) && !c.req.header("x-ash-source-task-id") && !c.req.header("x-ash-turn-token");
 }
 
 /** 成员 + 执行器的组合键。用 JSON 拼，免得分隔符和 id / 类型里的字符撞上。 */

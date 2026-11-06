@@ -229,6 +229,8 @@
     "test:duet-attachments": "tsx scripts/test-duet-attachments.ts",
     "//test:duet-gate-version": "收敛闸口的版本号：旧卡片（飞书消息、另一个标签页）点不中新开的那扇门、门继续等；老记录按开门序号补版本；重启补救那一路 stale 在占锁前就回；已结束的讨论带版本一律 409，不被旧卡拉起；请求体非法回 400。",
     "test:duet-gate-version": "tsx scripts/test-duet-gate-version.ts",
+    "//test:im": "飞书通道：长连接帧与分片回执、REST 的 token 与额度闸、月额度降级；经飞书的 im 身份只做得了白名单里的事、多人模式按绑定账号算可见性；决策卡推送幂等、点按钮结果随回调带回、旧卡点不中新事、别处处理掉卡片跟着收起、积压只推汇总、额度见底不发卡；回复卡片即答复、斜杠命令先确认后执行、助手房间与群聊房间的来回、附件转存。全用假的开放平台，不连真飞书。",
+    "test:im": "tsx scripts/test-im-wire.ts && tsx scripts/test-im-actor.ts && tsx scripts/test-im-cards.ts && tsx scripts/test-im-inbound.ts",
     "test:terminal": "tsx scripts/test-terminal-pty.ts && tsx scripts/test-terminal.ts && tsx scripts/test-project-commands.ts && tsx scripts/test-service-ports-scan.ts && tsx scripts/test-stop-evidence.ts && tsx scripts/test-stop-review.ts && tsx scripts/test-stop-verification.ts && tsx scripts/test-service-ports.ts && tsx scripts/test-service-ports-script.ts && tsx scripts/test-terminal-capacity.ts && tsx scripts/test-terminal-lifecycle.ts && tsx scripts/test-launch-abandon.ts && tsx scripts/test-launch-abandon-races.ts",
     "test:win-launch": "tsx scripts/test-win-launch.ts && tsx scripts/test-powershell-command.ts && tsx scripts/test-user-shell-powershell.ts",
     "test:path-boundary": "tsx scripts/test-path-boundary.ts",

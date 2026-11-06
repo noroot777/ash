@@ -21,7 +21,7 @@ import type { UserRole } from "@ash/shared";
  */
 export const SINGLE_USER_ID = "__local__";
 
-export type ActorKind = "single" | "user" | "agent" | "anonymous";
+export type ActorKind = "single" | "user" | "agent" | "im" | "anonymous";
 
 export interface Actor {
   kind: ActorKind;
@@ -30,9 +30,39 @@ export interface Actor {
   role: UserRole;
   /** agent 身份专属:发起这次调用的任务。用于把创建动作钳制在它的项目/目录里。 */
   taskId?: string;
+  /** im 身份专属:是哪一个飞书用户(open_id)经通道发起的,留痕用。 */
+  imOpenId?: string;
   /** 登录名(日志与错误文案用)。 */
   name: string;
 }
+
+/**
+ * 每一种身份能做什么,集中在这一张表里。`satisfies Record<ActorKind, …>` 让新加一种身份时
+ * 漏配一档就编译不过 —— 散在各处的 `kind === "…"` 判断做不到这一点(加 im 时实测:没有任何
+ * 一处穷举分支会报错)。
+ *
+ *  · accountHolder:账号本人。改资料、改个人 CLI 环境、真人专属动作都看它。
+ *  · admin:能不能当实例管理员。byRole = 看 users.role。
+ *  · humanPrincipal:「这次是一个人在说话」—— 聊天只收人话。im 是人经飞书转述过来的,
+ *    算;agent 回合凭证代表的是一条任务,不算。
+ *  · hostAccess:能不能碰宿主机本身(终端、目录选择器)。自用模式下这两条原本对任何身份
+ *    都放行(机主就是全部),但经飞书转述的那一跳不该拿到一个真 shell:飞书账号被盗、
+ *    消息被注入,都会直接变成这台机器上的命令。
+ */
+interface KindPolicy {
+  accountHolder: boolean;
+  admin: "always" | "byRole" | "never";
+  humanPrincipal: boolean;
+  hostAccess: boolean;
+}
+
+const KIND_POLICY = {
+  single: { accountHolder: true, admin: "always", humanPrincipal: true, hostAccess: true },
+  user: { accountHolder: true, admin: "byRole", humanPrincipal: true, hostAccess: true },
+  agent: { accountHolder: false, admin: "never", humanPrincipal: false, hostAccess: true },
+  im: { accountHolder: false, admin: "never", humanPrincipal: true, hostAccess: false },
+  anonymous: { accountHolder: false, admin: "never", humanPrincipal: false, hostAccess: false },
+} as const satisfies Record<ActorKind, KindPolicy>;
 
 export const SINGLE_ACTOR: Actor = {
   kind: "single",
@@ -65,8 +95,10 @@ export function actorOf(c: Context): Actor {
 }
 
 /** 多人模式下这次请求是不是实例管理员。自用模式恒 true。 */
-export const isAdminActor = (actor: Actor): boolean =>
-  actor.kind === "single" || actor.role === "admin";
+export const isAdminActor = (actor: Actor): boolean => {
+  const admin = KIND_POLICY[actor.kind].admin;
+  return admin === "always" || (admin === "byRole" && actor.role === "admin");
+};
 
 /**
  * 「这次请求是**账号本人**在操作」。改自己的资料、改个人 CLI 环境、导入配置、退出项目
@@ -77,12 +109,18 @@ export const isAdminActor = (actor: Actor): boolean =>
  * 姓名/git 署名、改他的全局 CLAUDE.md 与个人技能(下一次派任务喂给所有 CLI 的东西),
  * 或者把 owner 从项目里退出去(第 2 轮审查 P1)。
  */
-export const isAccountHolder = (actor: Actor): boolean =>
-  actor.kind === "single" || actor.kind === "user";
+export const isAccountHolder = (actor: Actor): boolean => KIND_POLICY[actor.kind].accountHolder;
 
-/** 归属列该写什么。自用模式写 null(见 SINGLE_USER_ID 的注释)。 */
+/** 「这次是一个人在说话」(账号本人,或经 IM 通道转述的本人)。聊天路由的准入看它。 */
+export const isHumanPrincipal = (actor: Actor): boolean => KIND_POLICY[actor.kind].humanPrincipal;
+
+/**
+ * 归属列该写什么。自用模式写 null(见 SINGLE_USER_ID 的注释)。按 userId 也认一遍:
+ * 自用模式下的 im 身份带的是 SINGLE_USER_ID,只按 kind 判的话 "__local__" 会被当成真
+ * 用户 id 写进 sessions/uploads/chat_rooms 的归属列,之后按归属找会话就对不上。
+ */
 export const ownerIdOf = (actor: Actor): string | null =>
-  actor.kind === "single" ? null : actor.userId;
+  actor.kind === "single" || actor.userId === SINGLE_USER_ID ? null : actor.userId;
 
 export class AuthError extends Error {
   readonly status: 401 | 403;
@@ -119,9 +157,12 @@ export async function instanceAdminOnly(
   c: { get: (key: string) => unknown },
   what: string,
 ): Promise<{ status: 403; body: { error: string } } | null> {
+  const actor = actorOf(c as never);
+  if (!KIND_POLICY[actor.kind].hostAccess) {
+    return { status: 403, body: { error: `${what}不对经飞书等 IM 通道发来的请求开放，请在 ash 页面上操作` } };
+  }
   const { isMultiUser } = await import("./mode.js");
   if (!(await isMultiUser())) return null;
-  const actor = actorOf(c as never);
   if (isAdminActor(actor)) return null;
   return {
     status: 403,

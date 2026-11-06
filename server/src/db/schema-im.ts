@@ -1,0 +1,221 @@
+// ── IM 通道（飞书）─────────────────────────────────────────────────────────────
+// 方案见 docs/feishu-integration.md。这几张表只住在 server 本地：preview-seed 是显式白名单
+// （preview-seed.ts），im_* 天然不会被复制进预览库 —— 预览实例拿不到凭证、也不该替机主发卡。
+//
+// 凭证（App Secret）不在这里，在库文件旁的 `<db>.feishu.json`（im/config.ts）。
+//
+// 几张表的分工：
+//   im_bindings    飞书身份 ↔ ash 身份。键是 (channel, app_id, open_id)：换应用就要重绑，有意为之。
+//   im_bind_codes  网页发起的一次性绑定码（只存哈希）。码由飞书侧认领、再回网页确认，两步都留痕。
+//   im_outbox      发出去的每一张卡/每一条消息。推送由对账驱动（im/reconcile.ts），这张表就是
+//                  「已经推过什么、现在长什么样」的唯一记录 —— 飞书回读 2.0 卡片只给降级文字，
+//                  卡片当前的样子只能自己记。行 id 兼作发消息的 uuid，崩溃后重发不会推两条。
+//   im_actions     按钮信封。按钮 value 里只放信封 id；收件人、代次、过期、是否用过都在库里，
+//                  重启后也不能重放。
+//   im_inbound     入站消息与回调的去重键 + 处理进度（助手房间的回复要等它跑完再发回去）。
+//   im_groups      群 ↔ 项目的绑定（群里的 @ 进项目群聊房间；卡片要不要改推到群里）。
+//   im_group_rooms 群里每个说话人各自的那间项目群聊房间（多人模式下群聊房间是创建者私有的，
+//                  所以一人一间；自用模式只有机主一人，user_key 为空串）。
+//   im_meta        水位线、本月调用计数、机器人自己的 open_id 等零散键值。
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { Client } from "./node-sqlite-client.js";
+
+export const imBindings = sqliteTable("im_bindings", {
+  channel: text("channel").notNull(),
+  appId: text("app_id").notNull(),
+  openId: text("open_id").notNull(),
+  /** ash 账号。自用模式下为空（= 机主）。 */
+  userId: text("user_id"),
+  /** 单聊会话 id：首次收到这个人的单聊消息时记下，发消息仍按 open_id 发。 */
+  chatId: text("chat_id"),
+  /** 这个人在飞书里说话落进的助手房间（kind=assistant）。房间被网页删掉后会重建。 */
+  assistantRoomId: text("assistant_room_id"),
+  /** 「当前项目」：助手派任务、/new 建任务落在哪个项目。 */
+  projectId: text("project_id"),
+  boundAt: text("bound_at").notNull(),
+}, (t) => [
+  primaryKey({ columns: [t.channel, t.appId, t.openId] }),
+  index("im_bindings_user").on(t.userId),
+]);
+
+export const imBindCodes = sqliteTable("im_bind_codes", {
+  id: text("id").primaryKey(),
+  /** 发起绑定的 ash 账号；自用模式为空串（主键/唯一索引里 NULL 不相等，所以不用 NULL）。 */
+  owner: text("owner").notNull(),
+  /** user = 绑定本人的飞书账号（在单聊里发码）；group = 把一个群绑到项目（在群里 @ 机器人发码）。 */
+  purpose: text("purpose").notNull(),
+  /** purpose=group：要绑到哪个项目。 */
+  projectId: text("project_id"),
+  codeHash: text("code_hash").notNull(),
+  /** open → claimed（飞书里有人发来了这串码）→ confirmed / rejected；过期按 expires_at 判。 */
+  state: text("state").notNull(),
+  claimedAppId: text("claimed_app_id"),
+  claimedOpenId: text("claimed_open_id"),
+  claimedChatId: text("claimed_chat_id"),
+  /** purpose=group：认领时查到的群名。 */
+  claimedName: text("claimed_name"),
+  claimedAt: text("claimed_at"),
+  createdAt: text("created_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+}, (t) => [index("im_bind_codes_owner").on(t.owner), index("im_bind_codes_hash").on(t.codeHash)]);
+
+export const imOutbox = sqliteTable("im_outbox", {
+  id: text("id").primaryKey(),
+  channel: text("channel").notNull(),
+  appId: text("app_id").notNull(),
+  receiveType: text("receive_type").notNull(),
+  receiveId: text("receive_id").notNull(),
+  /** 收件人（单聊的 open_id）。群消息为空 —— 群卡片上的按钮按点击人的绑定校验。 */
+  recipientOpenId: text("recipient_open_id"),
+  taskId: text("task_id"),
+  /** question / accept / failed / dispute / duet_gate / done / gate / summary / reply / notice / confirm / online */
+  kind: text("kind").notNull(),
+  /** 这张卡代表的那一「代」事项，如某一轮提问的代次。同一收件人、同一任务、同一 kind 下唯一。 */
+  subject: text("subject").notNull(),
+  /** 回复哪条飞书消息（助手回复、话题里的回帖）。 */
+  replyTo: text("reply_to"),
+  replyInThread: integer("reply_in_thread").notNull().default(0),
+  msgType: text("msg_type").notNull(),
+  /** 卡片/消息当前的内容（JSON）。 */
+  content: text("content").notNull(),
+  /** pending → sent；决策类卡片在别处处理掉后 → resolved；重试耗尽 → dead。 */
+  state: text("state").notNull(),
+  messageId: text("message_id"),
+  /** resolved 之后要不要/有没有把卡改成「已处理」：pending / done / skipped（额度不够时跳过）。 */
+  patchState: text("patch_state"),
+  resolution: text("resolution"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  nextAt: text("next_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  sentAt: text("sent_at"),
+  resolvedAt: text("resolved_at"),
+}, (t) => [
+  uniqueIndex("im_outbox_subject").on(t.receiveId, t.taskId, t.kind, t.subject),
+  index("im_outbox_task").on(t.taskId),
+  index("im_outbox_state").on(t.state),
+  index("im_outbox_message").on(t.messageId),
+]);
+
+export const imActions = sqliteTable("im_actions", {
+  id: text("id").primaryKey(),
+  outboxId: text("outbox_id").notNull(),
+  taskId: text("task_id"),
+  action: text("action").notNull(),
+  payload: text("payload").notNull().default("{}"),
+  /** 只有这个 open_id 点得动；群卡片为空串，改按点击人的绑定校验。 */
+  recipientOpenId: text("recipient_open_id").notNull(),
+  /** 发卡那一刻事项的代次；点击时与当前代次不一致就拒绝（旧卡答不中新问题）。 */
+  generation: text("generation").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  usedAt: text("used_at"),
+  result: text("result"),
+  createdAt: text("created_at").notNull(),
+}, (t) => [index("im_actions_outbox").on(t.outboxId)]);
+
+export const imInbound = sqliteTable("im_inbound", {
+  /** `msg:<message_id>` 或 `evt:<event_id>`（按钮回调没有自己的 message_id）。 */
+  id: text("id").primaryKey(),
+  channel: text("channel").notNull(),
+  appId: text("app_id").notNull(),
+  openId: text("open_id"),
+  chatId: text("chat_id"),
+  chatType: text("chat_type"),
+  /** bind / answer / reply / command / assistant / group / callback / denied / ignored */
+  kind: text("kind").notNull(),
+  taskId: text("task_id"),
+  roomId: text("room_id"),
+  /** 实际送进 ash 的正文（附件转存后的路径也定在这里，重试时用同一份，chat 的幂等要求逐字节相同）。 */
+  body: text("body"),
+  attachments: text("attachments"),
+  /** received → done / failed；助手房间：sent（已投进房间）→ replied（回复已发回飞书）。 */
+  state: text("state").notNull(),
+  detail: text("detail"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (t) => [index("im_inbound_state").on(t.state)]);
+
+export const imGroups = sqliteTable("im_groups", {
+  channel: text("channel").notNull(),
+  appId: text("app_id").notNull(),
+  chatId: text("chat_id").notNull(),
+  projectId: text("project_id").notNull(),
+  name: text("name"),
+  /** 谁把这个群绑上的（ash 账号；自用模式为空）。群里的 @ 用这个人的身份执行。 */
+  boundBy: text("bound_by"),
+  /** 1 = 本项目任务的卡片改发到这个群（而不是各自的单聊）。 */
+  pushCards: integer("push_cards").notNull().default(0),
+  boundAt: text("bound_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.channel, t.appId, t.chatId] })]);
+
+export const imGroupRooms = sqliteTable("im_group_rooms", {
+  channel: text("channel").notNull(),
+  appId: text("app_id").notNull(),
+  chatId: text("chat_id").notNull(),
+  /** 说话人的 ash 账号；自用模式为空串。 */
+  userKey: text("user_key").notNull(),
+  roomId: text("room_id").notNull(),
+}, (t) => [primaryKey({ columns: [t.channel, t.appId, t.chatId, t.userKey] })]);
+
+export const imMeta = sqliteTable("im_meta", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** 建表（幂等，每次启动都跑）。表定义与 DDL 放同一个文件，免得加列只改一边。 */
+export async function ensureImSchema(client: Client): Promise<void> {
+  await client.executeMultiple(`
+    CREATE TABLE IF NOT EXISTS im_bindings (
+      channel TEXT NOT NULL, app_id TEXT NOT NULL, open_id TEXT NOT NULL, user_id TEXT,
+      chat_id TEXT, assistant_room_id TEXT, project_id TEXT, bound_at TEXT NOT NULL,
+      PRIMARY KEY (channel, app_id, open_id)
+    );
+    CREATE INDEX IF NOT EXISTS im_bindings_user ON im_bindings(user_id);
+    CREATE TABLE IF NOT EXISTS im_bind_codes (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, purpose TEXT NOT NULL, project_id TEXT,
+      code_hash TEXT NOT NULL, state TEXT NOT NULL,
+      claimed_app_id TEXT, claimed_open_id TEXT, claimed_chat_id TEXT, claimed_name TEXT, claimed_at TEXT,
+      created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS im_bind_codes_owner ON im_bind_codes(owner);
+    CREATE INDEX IF NOT EXISTS im_bind_codes_hash ON im_bind_codes(code_hash);
+    CREATE TABLE IF NOT EXISTS im_outbox (
+      id TEXT PRIMARY KEY, channel TEXT NOT NULL, app_id TEXT NOT NULL,
+      receive_type TEXT NOT NULL, receive_id TEXT NOT NULL, recipient_open_id TEXT,
+      task_id TEXT, kind TEXT NOT NULL, subject TEXT NOT NULL,
+      reply_to TEXT, reply_in_thread INTEGER NOT NULL DEFAULT 0,
+      msg_type TEXT NOT NULL, content TEXT NOT NULL, state TEXT NOT NULL, message_id TEXT,
+      patch_state TEXT, resolution TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, next_at TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sent_at TEXT, resolved_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS im_outbox_subject ON im_outbox(receive_id, task_id, kind, subject);
+    CREATE INDEX IF NOT EXISTS im_outbox_task ON im_outbox(task_id);
+    CREATE INDEX IF NOT EXISTS im_outbox_state ON im_outbox(state);
+    CREATE INDEX IF NOT EXISTS im_outbox_message ON im_outbox(message_id);
+    CREATE TABLE IF NOT EXISTS im_actions (
+      id TEXT PRIMARY KEY, outbox_id TEXT NOT NULL, task_id TEXT, action TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}', recipient_open_id TEXT NOT NULL, generation TEXT NOT NULL,
+      expires_at TEXT NOT NULL, used_at TEXT, result TEXT, created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS im_actions_outbox ON im_actions(outbox_id);
+    CREATE TABLE IF NOT EXISTS im_inbound (
+      id TEXT PRIMARY KEY, channel TEXT NOT NULL, app_id TEXT NOT NULL,
+      open_id TEXT, chat_id TEXT, chat_type TEXT, kind TEXT NOT NULL,
+      task_id TEXT, room_id TEXT, body TEXT, attachments TEXT,
+      state TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS im_inbound_state ON im_inbound(state);
+    CREATE TABLE IF NOT EXISTS im_groups (
+      channel TEXT NOT NULL, app_id TEXT NOT NULL, chat_id TEXT NOT NULL, project_id TEXT NOT NULL,
+      name TEXT, bound_by TEXT, push_cards INTEGER NOT NULL DEFAULT 0, bound_at TEXT NOT NULL,
+      PRIMARY KEY (channel, app_id, chat_id)
+    );
+    CREATE TABLE IF NOT EXISTS im_group_rooms (
+      channel TEXT NOT NULL, app_id TEXT NOT NULL, chat_id TEXT NOT NULL, user_key TEXT NOT NULL, room_id TEXT NOT NULL,
+      PRIMARY KEY (channel, app_id, chat_id, user_key)
+    );
+    CREATE TABLE IF NOT EXISTS im_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
+  `);
+}

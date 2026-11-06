@@ -22,6 +22,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { tasks } from "../db/schema.js";
 import { SINGLE_ACTOR, ANONYMOUS_ACTOR, setActor, type Actor } from "./context.js";
+import { imGate } from "./im-actor.js";
 import { isMultiUser } from "./mode.js";
 import { resolveSession, touchUser, findUserByKey } from "./store.js";
 
@@ -236,6 +237,11 @@ async function cookieActor(c: Context): Promise<Actor | null> {
 export function authGate(): MiddlewareHandler {
   return async (c: Context, next: Next) => {
     const path = new URL(c.req.url).pathname;
+
+    // 进程内经 IM 通道派发的请求（身份绑在 Request 对象上，外部请求造不出来，见 im-actor.ts）。
+    // 必须排在模式判断之前：自用模式那一支会把它落成机主，多人模式那一支会把它落成匿名。
+    const im = await imGate(c, next);
+    if (im !== null) return im;
 
     if (!(await isMultiUser())) {
       setActor(c, (await agentActor(c)) ?? SINGLE_ACTOR);

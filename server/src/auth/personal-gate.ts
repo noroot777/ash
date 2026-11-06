@@ -21,7 +21,7 @@
 // 「拿得到 key」。真正花掉 key 的动作(`POST /llm-providers/models`、`…/test`)是写方法,
 // 被这道闸挡在外面。
 import type { MiddlewareHandler } from "hono";
-import { actorOf } from "./context.js";
+import { actorOf, isAccountHolder } from "./context.js";
 import {
   HUMAN_ACTION_TOKEN_HEADER,
   HUMAN_ACTION_TOKEN_NEXT_HEADER,
@@ -115,6 +115,11 @@ const HUMAN_ONLY_PATHS = [
   // 删会话消息：抹掉的是盘上的原话、不可撤回。agent 拿着回合凭证能按动它，就等于能替用户
   // 改写「我当时说过什么」、顺手把自己挨过的批评删掉。
   /^\/api\/sessions\/[^/]+\/conversation\/delete$/,
+  // 飞书通道：换凭证 = 换掉「谁能当这台机器的遥控器」；绑定码与确认 = 把一个飞书账号认作
+  // 本人（从此它点卡片就是本人在操作）。agent 在本机裸 curl 拿到的就是机主身份，它若能自己
+  // 申请绑定码、再自己点确认，就能把攻击者的飞书账号绑成机主 —— 所以只认页面凭据。
+  /^\/api\/im\/feishu\/credentials$/,
+  /^\/api\/im\/feishu\/(?:binding|groups)\/(?:code|confirm)$/,
 ];
 
 /** 导出给回归测试直接钉住:哪几条只有真人按得动。 */
@@ -172,8 +177,9 @@ export function personalWriteGate(): MiddlewareHandler {
       issued = issueHumanActionToken();
     }
     if (!(await isMultiUser())) return handoff();
-    // 只拦 agent:真人(cookie / Bearer)本来就是账号本人,匿名早被 authGate 拦掉了。
-    if (actorOf(c).kind !== "agent") return handoff();
+    // 只放账号本人:真人(cookie / Bearer)本来就是,匿名早被 authGate 拦掉了。agent 回合凭证
+    // 与经飞书转述的 im 身份都不是本人 —— 后者原先按「不是 agent 就放」会穿过去。
+    if (isAccountHolder(actorOf(c))) return handoff();
     if (!isPersonalWritePath(c.req.path)) return handoff();
     return c.json({ error: AGENT_PERSONAL_REFUSAL }, 403);
   };

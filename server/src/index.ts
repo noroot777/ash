@@ -637,6 +637,12 @@ activeServer = serve({ fetch: app.fetch, port }, (info) => {
       void import("./executors/model-probe.js")
         .then(({ startClaudeModelRefreshLoop }) => startClaudeModelRefreshLoop())
         .catch((error) => console.error("[ash] Claude 模型目录定时检查启动失败:", error));
+      // 飞书长连接（没配凭证就什么都不做）。同一个库起了多个实例（没拿到单实例锁）时不连：
+      // 飞书长连接是集群模式，两个客户端会随机分走事件。通道以绑定者身份调本进程的路由，
+      // 所以要传 app.fetch —— 走完整的鉴权与可见性中间件（im/ash-client.ts）。
+      void import("./im/channel.js")
+        .then(({ startFeishuChannel }) => startFeishuChannel({ fetch: app.fetch, exclusive: singletonLock !== null }))
+        .catch((error) => console.error("[ash] 飞书通道启动失败:", error));
     } catch (e) {
       exitAfterStartupFailure("scheduler failed to start", e);
     }

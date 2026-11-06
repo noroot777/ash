@@ -1,7 +1,7 @@
 // 移回的**授权**一侧:哪台机器有资格把一条任务免审批地移回本机,落回哪个项目。
 // 「该往哪个地址移回」是另一件事,在 handoff-return-address.ts。
 import type { HandoffPingProject, HandoffReturnGrant, TaskHandoff } from "@ash/shared";
-import type { Actor } from "./auth/context.js";
+import { isAdminActor, type Actor } from "./auth/context.js";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { handoffPeers, projects, tasks } from "./db/schema.js";
@@ -88,7 +88,7 @@ export async function returnGrantOwners(fingerprint: string): Promise<Set<string
  */
 export function canRevokeReturnGrant(actor: Actor, owners: Set<string | null>): boolean {
   if (owners.size === 0) return false;
-  if (actor.kind === "single" || actor.role === "admin") return true;
+  if (isAdminActor(actor)) return true;
   return owners.size === 1 && Boolean(actor.userId) && owners.has(actor.userId ?? null);
 }
 

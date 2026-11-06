@@ -21,6 +21,8 @@ import { searchAll } from "./search.js";
 import { repoKey } from "./git.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountChatRoutes } from "./chat/routes.js";
+import { mountImRoutes } from "./im/routes.js";
+import { feishuHealthPublic } from "./im/channel.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { mountWorkflowRoutes } from "./workflows.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
@@ -76,6 +78,8 @@ mountUserRoutes(api);
 mountPersonalCliRoutes(api);
 mountNoteRoutes(api);
 mountChatRoutes(api);
+// 得排在任务路由前面：它包着归档 / 删除这几条，成功后叫飞书通道对账（im/routes.ts 开头）。
+mountImRoutes(api);
 mountLocalOpenRoutes(api);
 mountDirectoryPickerRoutes(api);
 mountFsBrowseRoutes(api);
@@ -102,6 +106,8 @@ api.get("/health", (c) => c.json({
   ts: now(),
   pid: process.pid,
   previousResidualLock: previousResidualLockPublic(),
+  // 飞书长连接连没连上（只这一档，不带应用标识与错误原文：这个端点免登录）。
+  feishu: feishuHealthPublic(),
 }));
 
 // 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数
