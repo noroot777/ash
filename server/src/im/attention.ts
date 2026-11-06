@@ -10,7 +10,8 @@
 //   failed    这一次失败的结束时刻（重试后再失败就换了）
 //   dispute   那条驳回所在的审查链 + 轮次（就是裁定接口的 target）
 //   duet_gate 闸口版本（duet/gate-version.ts）
-//   verify_failed / accept  这一版的结束时刻（团队取执行者里最晚的那个）
+//   verify_failed / accept  这一版成果的身份（task-result-version.ts：结束时刻；团队连同执行者和调度台
+//             自己的回合）
 // failed / accept 的代次与验收、重试接口收的期望值是同一份身份（task-result-version.ts），按钮带着它进去。
 import type { QuestionItem, Task } from "@ash/shared";
 import { questionItems, questionKey } from "@ash/shared/questions";
@@ -22,7 +23,7 @@ import { freeReviewRuns } from "../db/schema-free-workflow.js";
 import { currentGateVersion } from "../duet/gate-version.js";
 import { unresolvedDisputes } from "../free-review-dispute.js";
 import { enrichTasks, toTaskListItem } from "../task-store.js";
-import { failureVersionOf, latestEnd } from "../task-result-version.js";
+import { failureVersionOf, resultVersionOf } from "../task-result-version.js";
 import { questionOccurrenceOf } from "../task-wait-ownership.js";
 
 export type Turn =
@@ -108,10 +109,10 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
         turn = { kind, generation: `g:${gateVersion}`, version: gateVersion! };
         break;
       case "verify_failed":
-        turn = { kind, generation: `v:${latestEnd([task, ...crew])}` };
+        turn = { kind, generation: `v:${await resultVersionOf(task)}` };
         break;
       case "accept":
-        turn = { kind, generation: `a:${latestEnd([task, ...crew])}`, reviewFailed: await latestReviewFailed(task.id) };
+        turn = { kind, generation: `a:${await resultVersionOf(task)}`, reviewFailed: await latestReviewFailed(task.id) };
         break;
     }
     out.set(task.id, {

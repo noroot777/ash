@@ -33,7 +33,7 @@ import { extrasFor } from "./extras.js";
 import type { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
-import { advanceOutcomes, forgetOutcomes, outcomesOf, outcomesRecorded } from "./outcomes.js";
+import { advanceOutcomes, forgetOutcomes, outcomesOf, outcomesRecorded, staleOutcomeTasks } from "./outcomes.js";
 import { cardHeaderOf, OutboxSender, type Destination, type OutboxRow } from "./outbox.js";
 import { destinationsFor } from "./recipients.js";
 import { scopeFor, type OutboxScope } from "./scope.js";
@@ -131,7 +131,7 @@ export class Reconciler {
     const open = await db.selectDistinct({ id: imOutbox.taskId }).from(imOutbox)
       .where(and(eq(imOutbox.appId, this.appId), inArray(imOutbox.state, OPEN_STATES), isNotNull(imOutbox.taskId)));
     const disputes = (await openDisputeTargets()).map((target) => target.taskId);
-    const ids = [...new Set([...candidates.map((row) => row.id), ...open.map((row) => row.id!), ...disputes])];
+    const ids = [...new Set([...candidates.map((row) => row.id), ...open.map((row) => row.id!), ...disputes, ...await staleOutcomeTasks(this.appId)])];
     await this.run(() => this.reconcile(ids));
   }
 

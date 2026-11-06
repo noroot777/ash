@@ -4,17 +4,22 @@
 // 不在打开状态，以卡为判据就一条也发不出（审查实测）；门禁的结果更可能根本没有对应的卡。所以每个
 // 任务记一份「上次对账看到的结局」（im_outcomes），对账时现算一遍，变了就发一条新消息 —— 原地改卡
 // 在手机上不会提醒。
-//   result  验收合并的是哪一版成果（task-result-version.ts）；没验收是 "-"
+//   result  最近一次验收的身份：落章时写下的那几样合并事实（acceptanceIdentity）。不拿成果版本
+//           （结束时刻）当身份：验收之后问一句、跑一次合并结果审查，结束时刻都会变，会把同一次验收
+//           再推一遍（对抗复核实测）。牌子摘下的那段时间不记 —— 这一轮没改东西、原样挂回来的还是
+//           同一次验收，不算新的。
 //   gate    最近一次跑出结果（通过 / 没通过）的那一次门禁；被打断、取消的不算结果
 // 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
 // 待验收卡本身负责（新卡就是一条新消息），这里不重复发。
+// 已知的盲区：非 git、又没设门禁的任务摘牌后再验收一次，落章事实和上一次一模一样，第二次不再推。
+// 事件丢了（重启、通道重启正好落在对账前）由全量对账按「账和现状对不上」补（staleOutcomeTasks）。
 import { isAcceptedStage } from "@ash/shared";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { acceptGateRuns } from "../db/schema-accept-gate.js";
 import { imOutcomes } from "../db/schema-im.js";
+import { tasks } from "../db/schema.js";
 import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
-import { resultVersionOf } from "../task-result-version.js";
 import { now } from "../util.js";
 import type { TaskView } from "./attention.js";
 import { scrubTitle } from "./scrub.js";
@@ -22,7 +27,15 @@ import { scrubTitle } from "./scrub.js";
 type OutcomeKind = "result" | "gate";
 const NONE = "-";
 
-/** 一样结局此刻的值，和它变成这个值时该发的那句话（null = 变成这样不用告诉人，比如摘牌回到没验收）。 */
+/** 这一次验收的身份：落章时写下、摘牌后挂回时原样恢复的那几样（task-stage.ts 的 AcceptedSnapshot）。 */
+const acceptanceIdentity = sql<string>`'accepted:' || coalesce(${tasks.acceptedSourceCommit}, '') || '|' || coalesce(${tasks.acceptedTargetBranch}, '')
+  || '|' || coalesce(${tasks.acceptedBaseCommit}, '') || '|' || coalesce(${tasks.acceptedMergeCommit}, '')
+  || '|' || coalesce(${tasks.acceptedMergeMethod}, '') || '|' || coalesce(${tasks.acceptedGateRunId}, '')`;
+/** 最近一次跑出结果的门禁，跟 outcomesOf 里那一份同一个口径。 */
+const latestGate = sql<string>`coalesce((SELECT r.id || ':' || r.status FROM accept_gate_runs r
+  WHERE r.task_id = ${imOutcomes.taskId} AND r.status IN ('passed', 'failed') ORDER BY r.started_at DESC LIMIT 1), '-')`;
+
+/** 一样结局此刻的值，和它变成这个值时该发的那句话（null = 变成这样不用告诉人）。没验收时不出 result 这一样。 */
 export interface Outcome { kind: OutcomeKind; value: string; text: string | null }
 
 export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
@@ -37,10 +50,26 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
       ? { kind: "gate", value: `${run.id}:${run.status}`,
         text: run.status === "passed" ? `验收前置命令通过了：${title}` : `验收前置命令没通过：${title}，详情回 ash 看。` }
       : { kind: "gate", value: NONE, text: null },
-    isAcceptedStage(task.stage)
-      ? { kind: "result", value: `accepted:${await resultVersionOf(task)}`, text: `已验收合并：${title}` }
-      : { kind: "result", value: NONE, text: null },
+    ...(isAcceptedStage(task.stage) ? [{
+      kind: "result" as const, text: `已验收合并：${title}`,
+      value: (await db.select({ identity: acceptanceIdentity }).from(tasks).where(eq(tasks.id, task.id))).at(0)?.identity ?? NONE,
+    }] : []),
   ];
+}
+
+/**
+ * 账和现状对不上的任务（全量对账带上它们）：已验收、账上却不是这一次验收的；最近一次门禁结果跟账上不同的。
+ * 已验收的任务不在全量对账的常规候选里，那一次事件丢了就再没人来对。
+ */
+export async function staleOutcomeTasks(appId: string): Promise<string[]> {
+  const accepted = await db.select({ id: tasks.id }).from(tasks).where(and(
+    eq(tasks.archived, false), inArray(tasks.stage, ["accepted", "merged"]),
+    sql`NOT EXISTS (SELECT 1 FROM im_outcomes o WHERE o.app_id = ${appId} AND o.task_id = ${tasks.id}
+      AND o.kind = 'result' AND o.value = ${acceptanceIdentity})`,
+  ));
+  const gates = await db.select({ id: imOutcomes.taskId }).from(imOutcomes)
+    .where(and(eq(imOutcomes.appId, appId), eq(imOutcomes.kind, "gate"), ne(imOutcomes.value, latestGate)));
+  return [...new Set([...accepted, ...gates].map((row) => row.id))];
 }
 
 /** 账上已经是此刻的样子（绝大多数对账都是这样）：不必开事务、不必找收件人。 */

@@ -2,10 +2,11 @@
 //
 // 钉住的几件事（理由见 server/src/task-result-version.ts、im/outcomes.ts、im/relay.ts 的文件头）：
 // ① 验收：按钮按下去、真正验收之前任务又跑出了新结果 → 不验收，卡上说明；门禁跑着的时候任务又跑出新结果
-//    → 门禁过了也不验收（延期的那次验收带着同一版身份）；
+//    → 门禁过了也不验收（延期的那次验收带着同一版身份）；团队调度台自己又跑一轮也算新结果；
 // ② 重试：按钮按下去之后任务又失败了一次 → 不重试；/retry 只认回复在失败卡上；
-// ③ 通知：飞书上点验收成功 → 回一条「已验收合并」；门禁通过 / 没通过各一条；重复对账不重发；第一次看到的
-//    任务不补推；「完成也推」关着只记账，再打开也不补推；
+// ③ 通知：飞书上点验收成功 → 回一条「已验收合并」；门禁通过 / 没通过各一条；重复对账不重发；同一次验收
+//    摘牌挂回、再跑一轮不重发；第一次看到的任务不补推；「完成也推」关着只记账，再打开也不补推；事件丢了由
+//    全量对账补上；
 // ④ 房间：同一个人在群里 / 单聊里同时发两句，只留一间、两句都进那一间（多建的删掉）；群这期间换了绑定 →
 //    不落映射；群列表照实标出哪个群在收卡、看的人能不能改；
 // ⑤ @ 占位去掉之后，正文的缩进原样。
@@ -35,7 +36,7 @@ function gate() {
 let failure: unknown = null;
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
-  const { acceptGateRuns, chatRooms, projects, sessions, tasks } = await import("../src/db/schema.js");
+  const { acceptGateRuns, chatRooms, projects, sessions, sessionTurns, tasks } = await import("../src/db/schema.js");
   const { imBindings, imGroups, imOutbox, imOutcomes } = await import("../src/db/schema-im.js");
   const { and, desc, eq, like } = await import("drizzle-orm");
   const { api } = await import("../src/routes.js");
@@ -49,6 +50,8 @@ try {
   const { deleteGroup, groupOf, groupRoomOf, groupsView } = await import("../src/im/groups.js");
   const { parseMessage } = await import("../src/im/feishu/message.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
+  const { resultVersionOf } = await import("../src/task-result-version.js");
+  const { viewsOf } = await import("../src/im/attention.js");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf } = await import("./im-fixture.js");
 
   await ensureSchema();
@@ -116,6 +119,40 @@ try {
     await im.reconciler.full();
     await im.settle();
     assert.equal((await noticesOf("ta")).length, 1, "重复对账不重发");
+
+    // 同一次验收：摘牌又原样挂回（问了一句、没改东西），已验收时又跑了一轮旁路回合 —— 结束时刻都变了，不再推。
+    await db.update(tasks).set({ stage: null, status: "running", endedAt: null }).where(eq(tasks.id, "ta"));
+    await im.reconciler.reconcile(["ta"]);
+    await db.update(tasks).set({ stage: "accepted", status: "done", endedAt: later(80) }).where(eq(tasks.id, "ta"));
+    await im.reconciler.reconcile(["ta"]);
+    await db.update(tasks).set({ status: "running", endedAt: null }).where(eq(tasks.id, "ta"));
+    await im.reconciler.reconcile(["ta"]);
+    await db.update(tasks).set({ status: "done", endedAt: later(90) }).where(eq(tasks.id, "ta"));
+    await im.reconciler.reconcile(["ta"]);
+    await im.settle();
+    assert.equal((await noticesOf("ta")).length, 1, "同一次验收：摘牌挂回、再跑一轮都不重推");
+    // 真的又验收了一次（落章事实换了）：再推一条。
+    await db.update(tasks).set({ acceptedMergeCommit: "c0ffee" }).where(eq(tasks.id, "ta"));
+    await im.reconciler.reconcile(["ta"]);
+    await im.settle();
+    assert.equal((await noticesOf("ta")).length, 2, "新的一次验收再推一条");
+  }
+
+  // ── ① 续：团队调度台自己又跑了一轮，成果就换了一版 ─────────────────────
+  {
+    await db.insert(tasks).values([
+      { id: "tlead", projectId: "p1", title: "团队", body: "", mode: "team", status: "idle", createdAt: at, updatedAt: at },
+      { id: "tworker", projectId: "p1", parentId: "tlead", title: "执行者", body: "", mode: "single", status: "done", endedAt: later(110), createdAt: at, updatedAt: at },
+    ] as never);
+    const lead = await taskRow("tlead");
+    assert.equal(await resultVersionOf(lead), later(110), "调度台自己的 ended_at 一直空着：先按执行者算");
+    const view = (await viewsOf(["tlead"])).get("tlead")!;
+    assert.equal(view.turn?.kind, "accept");
+    assert.equal(view.turn?.generation, `a:${later(110)}`, "卡片代次和验收核的是同一份");
+    // 调度台每轮收尾落回 idle、不写 ended_at：它自己的回合只记在 session_turns 上。
+    await db.insert(sessionTurns).values({ id: "turn-lead", sessionId: "s-lead", taskId: "tlead", startedAt: later(120) } as never);
+    assert.equal(await resultVersionOf(lead), later(120), "调度台自己又跑了一轮：成果换了一版，旧卡上的验收不再算数");
+    assert.equal((await viewsOf(["tlead"])).get("tlead")!.turn?.generation, `a:${later(120)}`);
   }
 
   // ── ② 旧失败上的重试 ─────────────────────────────────────────────────────
@@ -170,6 +207,26 @@ try {
     await im.reconciler.reconcile(["tq"]);
     await im.settle();
     assert.equal((await noticesOf("tq")).length, 0, "开关关着时的结局，打开后不补推");
+
+    // 事件丢了（对账前重启、通道重启）：已验收的任务不在全量对账的常规候选里，按「账和现状对不上」补上。
+    await db.insert(tasks).values({ id: "tlost", projectId: "p1", title: "丢了事件", body: "", status: "done", endedAt: at, createdAt: at, updatedAt: at } as never);
+    await im.reconciler.reconcile(["tlost"]);
+    await im.settle();
+    await db.update(tasks).set({ stage: "accepted", acceptedGateMode: "unset" }).where(eq(tasks.id, "tlost"));
+    await db.update(imOutbox).set({ state: "resolved", resolution: "acted" }).where(eq(imOutbox.taskId, "tlost"));
+    await im.reconciler.full();
+    await im.settle();
+    assert.match(await noticeText("tlost"), /已验收合并：「丢了事件」/, "全量对账补上丢了的验收通知");
+    await db.insert(acceptGateRuns).values({
+      id: "run-lost", taskId: "tq", projectId: "p1", command: "true", cwd: stage, status: "failed",
+      logPath: join(stage, "run-lost.log"), startedAt: later(100), finishedAt: later(101),
+    } as never);
+    await im.reconciler.full();
+    await im.settle();
+    assert.match(await noticeText("tq"), /验收前置命令没通过：「关着开关验收」/, "全量对账补上丢了的门禁通知");
+    await im.reconciler.full();
+    await im.settle();
+    assert.equal((await noticesOf("tq")).length, 1, "补过的不再补");
   }
 
   // ── ③ 续：门禁出结果；门禁跑着时任务又跑出新结果 ─────────────────────────
