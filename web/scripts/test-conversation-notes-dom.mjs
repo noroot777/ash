@@ -3,6 +3,7 @@
 // 设 SHOT=<路径> 可以顺带截一张图自查版式。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -113,7 +114,7 @@ try {
   assert.equal(await messages.last().locator(".task-message-footer").count(), 1, "会话统计条应留在旁注之前的当前回合里");
   assert.equal(await notes.last().evaluate((note) => note === note.parentElement?.lastElementChild), true, "实时旁注应稳定留在当前回合与统计条之后");
 
-  await page.setViewportSize({ width: 390, height: 1000 });
+  await resizeViewport(page, { width: 390, height: 1000 });
   const narrowTime = await notes.last().locator("summary time").evaluate((time) => {
     const range = document.createRange();
     range.selectNodeContents(time);

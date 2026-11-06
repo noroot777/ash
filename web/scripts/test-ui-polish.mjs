@@ -21,7 +21,7 @@ try {
 
   await renderProbe("settings");
   for (const [width, columns] of [[420, "176px 244px"], [600, "176px 424px"], [640, "176px 464px"], [641, "176px 465px"], [660, "176px 484px"], [680, "176px 504px"], [681, "240px 441px"], [760, "240px 520px"]]) {
-    await page.setViewportSize({ width, height: 900 });
+    await resizeViewport(page, { width, height: 900 });
     assert.equal(await page.locator(".settings-shell").evaluate((node) => getComputedStyle(node).gridTemplateColumns), columns);
   }
 

@@ -10,7 +10,7 @@
 // 跑法：npm -w web run test:conversation-input-rail-dom
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { WAIT_TIMEOUT_MS } from "./wait-until.mjs";
+import { WAIT_TIMEOUT_MS, resizeViewport } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -410,7 +410,7 @@ try {
   assert.equal((await metrics()).top, readingAt, "摊开之前往上翻过的，收起时不该被拽到底");
 
   // 窄屏下正文的左边距比刻度带还窄：挂着导航时正文让到刻度带右边，免得指正文弹卡片、点正文跳走。
-  await page.setViewportSize({ width: 600, height: 640 });
+  await resizeViewport(page, { width: 600, height: 640 });
   assert.equal(await feed.evaluate((element) => getComputedStyle(element).paddingLeft), "34px", "正文应从刻度带右边起");
 
   assert.deepEqual(errors, [], "页面不应报错");

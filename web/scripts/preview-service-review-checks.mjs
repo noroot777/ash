@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { resizeViewport } from "./wait-until.mjs";
 
 export async function checkPreviewServiceRegressions(browser, base) {
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
@@ -10,7 +11,7 @@ export async function checkPreviewServiceRegressions(browser, base) {
     await page.keyboard.press("Tab");
     assert(await page.locator(".preview-service-links a").first().evaluate((el) => el === document.activeElement), "日志入口之后应进入第二行的服务链接");
 
-    await page.setViewportSize({ width: 620, height: 900 });
+    await resizeViewport(page, { width: 620, height: 900 });
     assert.equal(await page.locator(".preview-service-links").isVisible(), false, "窄屏应统一收起多服务预览链接");
     await page.goto(`${base}?mode=single-short`);
     const singleLink = page.getByRole("link", { name: "在新窗口打开预览", includeHidden: true });
