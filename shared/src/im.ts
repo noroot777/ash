@@ -110,8 +110,12 @@ export interface FeishuGroup {
   boundAt: string;
   /** 本项目任务的卡片改发到这个群（话题里回复 = 回复任务），而不是发到个人单聊。 */
   pushCards: boolean;
+  /** 卡片此刻真的发到这个群：同一个项目好几个群都开着推送时，只有最近绑的那个收。 */
+  receiving: boolean;
   /** 谁绑的（显示名）。 */
   boundBy: string | null;
+  /** 看的人能不能改、解绑这个群（绑它的人本人或实例管理员）。 */
+  canEdit: boolean;
 }
 
 export interface FeishuGroupClaim {

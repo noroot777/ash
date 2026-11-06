@@ -30,11 +30,19 @@ function postBody(raw: Record<string, unknown>): { title?: string; content?: Pos
   return {};
 }
 
-/** 去掉 @ 占位符（@_user_1 之类）。 */
+/**
+ * 去掉 @ 占位符（@_user_1 之类）。只收拾带占位符的那几行（@ 留下的空隙收成一个空格、行首尾去掉）；
+ * 别的行原样，代码、表格的缩进和对齐靠的就是那些空格。
+ */
 export function stripMentions(text: string, mentions: FeishuMention[]): string {
-  let out = text;
-  for (const mention of mentions) out = out.split(mention.key).join("");
-  return out.replace(/@_user_\d+/g, "").replace(/[ \t]+/g, " ").trim();
+  const keys = mentions.map((mention) => mention.key).filter(Boolean).sort((a, b) => b.length - a.length);
+  const lines = text.split("\n").map((line) => {
+    let out = line;
+    for (const key of keys) out = out.split(key).join("");
+    out = out.replace(/@_user_\d+/g, "");
+    return out === line ? line : out.replace(/[ \t]{2,}/g, " ").trim();
+  });
+  return lines.join("\n").replace(/^(?:[ \t]*\n)+/, "").trimEnd();
 }
 
 export function parseMessage(messageType: string, content: string, mentions: FeishuMention[]): ParsedMessage {

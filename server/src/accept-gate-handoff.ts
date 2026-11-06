@@ -28,13 +28,16 @@ type GateRow = typeof acceptGateRuns.$inferSelect;
 
 /** 用户在确认框里做的那几个选择：门禁绿了之后要**原样**替他接着做完。 */
 export type AcceptGateChoices = { by: AcceptBy; commit?: boolean; confirmUnverified?: boolean;
-  reviewAuthority?: import("./review-ownership.js").ReviewAuthority };
+  reviewAuthority?: import("./review-ownership.js").ReviewAuthority;
+  /** 他点的是哪一版成果（task-result-version.ts）：门禁跑着时任务又跑完一轮，绿了也不替他验后来那一版。 */
+  expectedResultVersion?: string };
 
 export function parseChoices(raw: string | null): AcceptGateChoices {
   try {
     const parsed = JSON.parse(raw ?? "{}") as AcceptGateChoices;
     return { by: parsed.by === "workflow" ? "workflow" : "human", commit: parsed.commit,
-      confirmUnverified: parsed.confirmUnverified, reviewAuthority: parsed.reviewAuthority };
+      confirmUnverified: parsed.confirmUnverified, reviewAuthority: parsed.reviewAuthority,
+      ...(typeof parsed.expectedResultVersion === "string" ? { expectedResultVersion: parsed.expectedResultVersion } : {}) };
   } catch { return { by: "human" }; }
 }
 

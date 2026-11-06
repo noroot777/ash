@@ -33,9 +33,10 @@ import { extrasFor } from "./extras.js";
 import type { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
+import { advanceOutcomes, forgetOutcomes, outcomesOf, outcomesRecorded } from "./outcomes.js";
 import { cardHeaderOf, OutboxSender, type Destination, type OutboxRow } from "./outbox.js";
 import { destinationsFor } from "./recipients.js";
-import { scopeFor, scopeOfRow, type OutboxScope } from "./scope.js";
+import { scopeFor, type OutboxScope } from "./scope.js";
 
 export const FLOOD_LIMIT = 5;
 export const TURN_KINDS = ["question", "failed", "dispute", "duet_gate", "verify_failed", "accept"] as const;
@@ -141,7 +142,8 @@ export class Reconciler {
     for (let i = 0; i < ids.length; i += BATCH) {
       const views = await viewsOf(ids.slice(i, i + BATCH));
       for (const [taskId, view] of views) {
-        creations.push(...await this.settleTask(taskId, view, options.publicBaseUrl, options.notifyCompleted, options.titleOnlyProjectIds));
+        creations.push(...await this.settleTask(taskId, view, options.publicBaseUrl, options.titleOnlyProjectIds));
+        await this.announce(taskId, view, options.notifyCompleted);
       }
     }
     await this.create(creations, options.publicBaseUrl, options.titleOnlyProjectIds);
@@ -150,7 +152,7 @@ export class Reconciler {
 
   /** 对一个任务：收掉对不上的卡，返回该新推的。 */
   private async settleTask(
-    taskId: string, view: TaskView | null, base: string | null, notifyCompleted: boolean, titleOnly: string[],
+    taskId: string, view: TaskView | null, base: string | null, titleOnly: string[],
   ): Promise<Creation[]> {
     const turn = view?.turn ?? null;
     const dests = view && turn ? await destinationsFor(this.appId, view) : [];
@@ -166,9 +168,6 @@ export class Reconciler {
       }
       const text = await resolutionText(row, view);
       await this.resolve(row, text, view ? taskLink(base, view) : null);
-      if (notifyCompleted && row.kind === "accept" && row.messageId && view && isAcceptedStage(view.task.stage)) {
-        await this.notice(row, `已验收合并：${cardHeaderOf(row.content).title}`, `merged:${row.subject}`);
-      }
     }
     if (!view || !turn) return [];
     const out: Creation[] = [];
@@ -320,13 +319,34 @@ export class Reconciler {
     return rows.length ? id : null;
   }
 
-  /** 一条附在原卡下面的文字通知（回复那张卡，手机上会有提醒，原卡改动不会）。 */
-  private async notice(row: OutboxRow, text: string, subject: string): Promise<void> {
-    const dest: Destination = { receiveType: row.receiveType as Destination["receiveType"], receiveId: row.receiveId, recipientOpenId: row.recipientOpenId };
-    await this.insert({
-      dest, taskId: row.taskId, kind: "notice", subject, msgType: "text", content: JSON.stringify({ text }), replyTo: row.messageId,
-      scope: scopeOfRow(row) ?? await scopeFor(this.appId, dest, { kind: "task", taskId: row.taskId ?? "" }),
-    });
+  /**
+   * 验收合并、门禁出结果：按结局账（outcomes.ts）的变化各发一条新的文字通知（手机上会提醒，改卡不会），
+   * 有这个人的待验收卡就回复在它下面。账总是跟着改（开关关着也改），开关再打开时不补推关着期间的结局；
+   * 执行者、归档、接力出去的任务只记账不发。
+   */
+  private async announce(taskId: string, view: TaskView | null, notifyCompleted: boolean): Promise<void> {
+    if (!view) return forgetOutcomes(this.appId, taskId);
+    const current = await outcomesOf(view);
+    if (await outcomesRecorded(this.appId, taskId, current)) return;
+    const quiet = !notifyCompleted || view.teamWorker || view.task.archived || view.task.handoff?.direction === "out";
+    const targets: { dest: Destination; scope: OutboxScope; replyTo: string | null }[] = [];
+    for (const dest of quiet ? [] : await destinationsFor(this.appId, view)) {
+      const card = (await db.select({ messageId: imOutbox.messageId }).from(imOutbox).where(and(
+        eq(imOutbox.appId, this.appId), eq(imOutbox.taskId, taskId), eq(imOutbox.receiveId, dest.receiveId),
+        eq(imOutbox.kind, "accept"), isNotNull(imOutbox.messageId),
+      )).orderBy(desc(imOutbox.createdAt)).limit(1)).at(0);
+      targets.push({ dest, scope: await scopeFor(this.appId, dest, { kind: "task", taskId }), replyTo: card?.messageId ?? null });
+    }
+    await db.transaction(async (tx) => {
+      for (const outcome of await advanceOutcomes(tx, this.appId, taskId, current)) {
+        for (const { dest, scope, replyTo } of targets) {
+          await this.insert({
+            dest, taskId, kind: "notice", subject: `${outcome.kind}:${outcome.value}`, msgType: "text",
+            content: JSON.stringify({ text: outcome.text }), replyTo, scope,
+          }, tx);
+        }
+      }
+    }, { behavior: "immediate" });
   }
 
   /** 给这个收件人发一张「有 N 件事在等你」的汇总（列出全部 held 的卡）。 */

@@ -21,7 +21,7 @@ import {
 import { clearCredentials, domainUrl, isValidAppId, readCredentials, writeCredentials } from "./config.js";
 import { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
-import { confirmGroupCode, deleteGroup, groupOf, groupsView, patchGroup } from "./groups.js";
+import { canEditGroup, confirmGroupCode, deleteGroup, groupOf, groupsView, patchGroup } from "./groups.js";
 import { patchOptions, readOptions } from "./meta.js";
 import { outboxCounts } from "./outbox.js";
 import { SYSTEM_SCOPE } from "./scope.js";
@@ -203,7 +203,7 @@ export function mountImRoutes(api: Hono): void {
   });
 
   // ── 群绑定 ────────────────────────────────────────────────────────────────
-  const groupsFor = async (c: Context) => groupsView(ownerOf(c), currentAppId(), await visibleProjectIds(actorOf(c)));
+  const groupsFor = async (c: Context) => groupsView(ownerOf(c), isAdminActor(actorOf(c)), currentAppId(), await visibleProjectIds(actorOf(c)));
 
   api.get("/im/feishu/groups", async (c) => c.json(await groupsFor(c)));
 
@@ -244,7 +244,7 @@ export function mountImRoutes(api: Hono): void {
     const appId = currentAppId();
     const group = appId ? await groupOf(appId, c.req.param("chatId") ?? "") : null;
     if (!group || !(await canSeeProject(actorOf(c), group.projectId))) return { error: c.json({ error: "没有这个群" }, 404) };
-    if ((group.boundBy ?? "") !== ownerOf(c) && !isAdminActor(actorOf(c))) {
+    if (!canEditGroup(group, ownerOf(c), isAdminActor(actorOf(c)))) {
       return { error: c.json({ error: "这个群是别人绑的，只有他本人或实例管理员能改" }, 403) };
     }
     return { group };

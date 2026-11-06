@@ -16,6 +16,8 @@
 //   im_groups      群 ↔ 项目的绑定（群里的 @ 进项目群聊房间；卡片要不要改推到群里）。
 //   im_group_rooms 群里每个说话人各自的那间项目群聊房间（多人模式下群聊房间是创建者私有的，
 //                  所以一人一间；自用模式只有机主一人，user_key 为空串）。
+//   im_outcomes    每个任务上次对账时看到的结局（验收合并了哪一版、门禁最近一次的结果）。通知按它的
+//                  变化发（im/outcomes.ts），不看决策卡收没收起。
 //   im_meta        水位线、本月调用计数、机器人自己的 open_id 等零散键值。
 import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
@@ -186,6 +188,15 @@ export const imGroupRooms = sqliteTable("im_group_rooms", {
   roomId: text("room_id").notNull(),
 }, (t) => [primaryKey({ columns: [t.channel, t.appId, t.chatId, t.userKey] })]);
 
+export const imOutcomes = sqliteTable("im_outcomes", {
+  appId: text("app_id").notNull(),
+  taskId: text("task_id").notNull(),
+  /** result（验收合并）| gate（验收前置命令） */
+  kind: text("kind").notNull(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.appId, t.taskId, t.kind] })]);
+
 export const imMeta = sqliteTable("im_meta", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
@@ -243,6 +254,10 @@ export async function ensureImSchema(client: Client): Promise<void> {
     CREATE TABLE IF NOT EXISTS im_group_rooms (
       channel TEXT NOT NULL, app_id TEXT NOT NULL, chat_id TEXT NOT NULL, user_key TEXT NOT NULL, room_id TEXT NOT NULL,
       PRIMARY KEY (channel, app_id, chat_id, user_key)
+    );
+    CREATE TABLE IF NOT EXISTS im_outcomes (
+      app_id TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY (app_id, task_id, kind)
     );
     CREATE TABLE IF NOT EXISTS im_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
   `);

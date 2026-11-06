@@ -21,7 +21,7 @@ import { now } from "../util.js";
 import type { Actor } from "../auth/context.js";
 import { imActorFor, type ImPrincipal } from "../auth/im-actor.js";
 import { canSeeProject } from "../auth/visibility.js";
-import { viewsOf, type TaskView } from "./attention.js";
+import { versionOf, viewsOf, type TaskView } from "./attention.js";
 import { taskPath, type AshClient, type AshResult } from "./ash-client.js";
 import { CHANNEL } from "./binding.js";
 import { settledCard, taskLink } from "./cards.js";
@@ -259,9 +259,12 @@ export class CardActions {
           ...body, questionKey: payload.questionKey, questionOccurrence: envelope.generation,
         }), `已答复：${scrubText(shown, 300)}`, "答复了提问", "已答复。");
       }
+      // 重试、验收带着卡上那一次失败 / 那一版成果进去（task-result-version.ts），接口占着互斥再核：
+      // 点下去之前另一端又跑完一轮，旧卡就重试不了、验收不了后来那一版。
       case "failed":
         if (op !== "retry") return "认不出这个按钮";
-        return async () => outcomeOf(await ash.post(principal, taskPath(id, "/retry")), "已重试，任务重新开始跑了。", "点了「重试」");
+        return async () => outcomeOf(await ash.post(principal, taskPath(id, "/retry"), { expectedFailure: versionOf(envelope.generation) }),
+          "已重试，任务重新开始跑了。", "点了「重试」");
       case "dispute": {
         const labels: Record<string, string> = { upheld: "让它接着改", withdrawn: "这一轮不用改了", deferred: "转为独立任务" };
         if (!labels[op]) return "认不出这个按钮";
@@ -280,7 +283,7 @@ export class CardActions {
       }
       case "accept":
         if (op !== "accept") return "认不出这个按钮";
-        return async () => acceptOutcome(await ash.post(principal, taskPath(id, "/accept"), {}));
+        return async () => acceptOutcome(await ash.post(principal, taskPath(id, "/accept"), { expectedResultVersion: versionOf(envelope.generation) }));
       default:
         return "认不出这个按钮";
     }

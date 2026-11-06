@@ -28,9 +28,12 @@ export async function groupsOfApp(appId: string): Promise<GroupRow[]> {
     .orderBy(desc(imGroups.boundAt));
 }
 
-/** 这个项目的卡片该推到哪个群（打开了「卡片推到群里」的那个；绑了好几个取最近绑的）。 */
+/** 这个项目的卡片该推到哪个群（打开了「卡片推到群里」的那个；绑了好几个取最近绑的）。groups 按绑定时间倒序。 */
+const receiverOf = (groups: GroupRow[], projectId: string) =>
+  groups.find((group) => group.projectId === projectId && group.pushCards === 1) ?? null;
+
 export async function pushGroupOf(appId: string, projectId: string): Promise<GroupRow | null> {
-  return (await groupsOfApp(appId)).find((group) => group.projectId === projectId && group.pushCards === 1) ?? null;
+  return receiverOf(await groupsOfApp(appId), projectId);
 }
 
 async function namesOf(ids: string[]): Promise<Map<string, string>> {
@@ -39,12 +42,16 @@ async function namesOf(ids: string[]): Promise<Map<string, string>> {
   return new Map(rows.filter((row) => ids.includes(row.id)).map((row) => [row.id, row.name]));
 }
 
+/** 改/解绑群的资格：绑它的人本人，或实例管理员（routes.ts 的接口按同一条拦）。 */
+export const canEditGroup = (group: GroupRow, owner: string, admin: boolean) => admin || (group.boundBy ?? "") === owner;
+
 /**
  * 网页上的群列表。`visible` 为 null = 不设限（自用模式 / 管理员），否则只列这些项目的群。
  * claims 只列本人发起、还没确认的那张群码。
  */
-export async function groupsView(owner: string, appId: string | null, visible: Set<string> | null): Promise<FeishuGroups> {
-  const rows = appId ? (await groupsOfApp(appId)).filter((row) => visible === null || visible.has(row.projectId)) : [];
+export async function groupsView(owner: string, admin: boolean, appId: string | null, visible: Set<string> | null): Promise<FeishuGroups> {
+  const all = appId ? await groupsOfApp(appId) : [];
+  const rows = all.filter((row) => visible === null || visible.has(row.projectId));
   const names = await namesOf(rows.flatMap((row) => row.boundBy ? [row.boundBy] : []));
   const groups: FeishuGroup[] = rows.map((row) => ({
     chatId: row.chatId,
@@ -52,7 +59,9 @@ export async function groupsView(owner: string, appId: string | null, visible: S
     projectId: row.projectId,
     boundAt: row.boundAt,
     pushCards: row.pushCards === 1,
+    receiving: receiverOf(all, row.projectId)?.chatId === row.chatId,
     boundBy: row.boundBy ? names.get(row.boundBy) ?? null : null,
+    canEdit: canEditGroup(row, owner, admin),
   }));
   const code = await liveCodeOf(owner, "group");
   const claims: FeishuGroupClaim[] = code && code.projectId ? [{
@@ -150,7 +159,25 @@ export async function groupRoomOf(appId: string, chatId: string, userKey: string
   ))).at(0)?.roomId ?? null;
 }
 
-export async function setGroupRoom(appId: string, chatId: string, userKey: string, roomId: string): Promise<void> {
-  await db.insert(imGroupRooms).values({ channel: CHANNEL, appId, chatId, userKey, roomId })
-    .onConflictDoUpdate({ target: [imGroupRooms.channel, imGroupRooms.appId, imGroupRooms.chatId, imGroupRooms.userKey], set: { roomId } });
+/**
+ * 领这个人在这个群里的那一间（relay.ts groupRoom）：映射还是入口读到的那一间（或者还没有）才换成新建的
+ * 这间；别处已经领到了就认那一间 —— 出口只放行映射上的那一间（scope.ts），各领各的，没领到的那间的回复
+ * 就永远发不出去。群这期间解绑重绑过、换过项目（入口读到的那一次绑定已经不是现在这样）返回 null：
+ * 旧绑定下建的房间不落进新绑定的映射。
+ */
+export async function claimGroupRoom(group: GroupRow, userKey: string, expected: string | null, roomId: string): Promise<string | null> {
+  const { appId, chatId } = group;
+  return db.transaction(async (tx) => {
+    const bound = (await tx.select({ boundAt: imGroups.boundAt, projectId: imGroups.projectId }).from(imGroups).where(and(
+      eq(imGroups.channel, CHANNEL), eq(imGroups.appId, appId), eq(imGroups.chatId, chatId),
+    ))).at(0);
+    if (bound?.boundAt !== group.boundAt || bound.projectId !== group.projectId) return null;
+    const current = (await tx.select({ roomId: imGroupRooms.roomId }).from(imGroupRooms).where(and(
+      eq(imGroupRooms.channel, CHANNEL), eq(imGroupRooms.appId, appId), eq(imGroupRooms.chatId, chatId), eq(imGroupRooms.userKey, userKey),
+    ))).at(0)?.roomId ?? null;
+    if (current !== null && current !== expected) return current;
+    await tx.insert(imGroupRooms).values({ channel: CHANNEL, appId, chatId, userKey, roomId })
+      .onConflictDoUpdate({ target: [imGroupRooms.channel, imGroupRooms.appId, imGroupRooms.chatId, imGroupRooms.userKey], set: { roomId } });
+    return roomId;
+  }, { behavior: "immediate" });
 }

@@ -45,6 +45,7 @@ import { enrichTasks } from "./task-store.js";
 import { mountTaskQuestionRoutes } from "./task-question-routes.js";
 import { occupyResumePrompt } from "./task-resume-prompt.js";
 import { actorOf, ownerIdOf } from "./auth/context.js";
+import { failureVersionOf } from "./task-result-version.js";
 
 // 手动启动入口的队列认领失败话术(/run、/fire、/retry、重跑上一回合共用,
 // 本体在 queue-seat.ts 的 queueClaimError:transient 故障必须说真话)。
@@ -517,6 +518,9 @@ api.post("/scheduled-messages/:mid/send-now", async (c) => {
 // instead of re-running the whole duet. Single tasks just re-run.
 api.post("/tasks/:id/retry", async (c) => {
   const taskId = c.req.param("id");
+  // 调用方要重试的是哪一次失败（飞书失败卡的代次，task-result-version.ts）；不传 = 眼前这一次。
+  const expectedFailure = await c.req.json<{ expectedFailure?: unknown }>()
+    .then((body) => (typeof body?.expectedFailure === "string" ? body.expectedFailure : undefined), () => undefined);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再重试", archived: true }, 409);
@@ -536,6 +540,16 @@ api.post("/tasks/:id/retry", async (c) => {
   if (isAcceptingTask(taskId)) {
     releaseTurn(taskId, turn);
     return c.json(await noted(taskId, "重跑上一回合", { error: "任务正在验收（含发布尾段），结束后再重试", status: r.status }), 409);
+  }
+  // 占着回合再核是哪一次失败：占位之前读的那一行可能已经过时（别处刚重试过、又失败了一次）。
+  if (expectedFailure !== undefined) {
+    const held = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!held || held.status !== "failed" || failureVersionOf(held) !== expectedFailure) {
+      releaseTurn(taskId, turn);
+      return c.json(await noted(taskId, "重跑上一回合", {
+        error: "要重试的那次失败之后任务又跑过了：请看最新的状态再重试", stale: true, status: held?.status ?? r.status,
+      }), 409);
+    }
   }
   // 「这一次是谁点的」四个人工入口(run / fire / retry / 闸口重放)一个都不能漏:漏掉
   // 就退回任务归属人,于是共享项目里 B 点「重试」烧的是 A 的 key、提交署 A 的名

@@ -51,7 +51,7 @@ const server = {
     : { state: "none" }) as FeishuBinding,
   groups: (params.get("groups") === "demo"
     ? {
-      groups: [{ chatId: "oc_team", name: "ash 开发群", projectId: "p-ash", boundAt: at(-600), pushCards: false, boundBy: "fjh" }],
+      groups: [{ chatId: "oc_team", name: "ash 开发群", projectId: "p-ash", boundAt: at(-600), pushCards: false, receiving: false, boundBy: "fjh", canEdit: true }],
       claims: [{ codeId: "gcode-1", projectId: "p-daily", chatId: "oc_daily", name: "日报群", claimedAt: at(-1), expiresAt: at(8) }],
     }
     : { groups: [], claims: [] }) as FeishuGroups,
@@ -167,7 +167,7 @@ async function handle(method: string, path: string, body: Record<string, unknown
     if (!claim) return reply({ error: "没有这条认领" }, 404, human);
     server.groups.claims = server.groups.claims.filter((item) => item !== claim);
     if (path.endsWith("/confirm") && claim.chatId) {
-      server.groups.groups.push({ chatId: claim.chatId, name: claim.name, projectId: claim.projectId, boundAt: at(0), pushCards: false, boundBy: "fjh" });
+      server.groups.groups.push({ chatId: claim.chatId, name: claim.name, projectId: claim.projectId, boundAt: at(0), pushCards: false, receiving: false, boundBy: "fjh", canEdit: true });
     }
     return reply(server.groups, 200, human);
   }
@@ -175,7 +175,7 @@ async function handle(method: string, path: string, body: Record<string, unknown
   if (group) {
     const chatId = decodeURIComponent(group[1]);
     if (method === "DELETE") server.groups.groups = server.groups.groups.filter((item) => item.chatId !== chatId);
-    else server.groups.groups = server.groups.groups.map((item) => item.chatId === chatId ? { ...item, ...body } : item);
+    else server.groups.groups = server.groups.groups.map((item) => item.chatId === chatId ? { ...item, ...body, receiving: typeof body.pushCards === "boolean" ? body.pushCards : item.receiving } : item);
     return reply(server.groups);
   }
   if (path === "/api/im/feishu/test") return reply({ ok: true });

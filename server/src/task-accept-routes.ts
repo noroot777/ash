@@ -25,14 +25,18 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     return c.json({ verification: await unexecutedVerification(task) });
   });
   api.post("/tasks/:id/accept", async (c) => {
-    const input = await c.req.json<{ confirmUnverified?: unknown; commit?: unknown; gate?: unknown }>().catch(() => null);
+    const input = await c.req.json<{ confirmUnverified?: unknown; commit?: unknown; gate?: unknown; expectedResultVersion?: unknown }>().catch(() => null);
     // commit 只认真正的布尔：别的一律当「没传」= 跟项目设置走。含糊的真值转换在这儿
     // 就是替用户决定要不要在他的目标分支上产生提交。
     const commit = typeof input?.commit === "boolean" ? input.commit : undefined;
     // 验收前置命令的额外指令。认不出的值一律当没传（照常：有新鲜结果就复用，没有就跑）——
     // 「跳过门禁」是放弃一道用户自己定的放行条件，不接受从含糊输入里推出来。
     const gate = input?.gate === "skip" || input?.gate === "rerun" ? input.gate : undefined;
-    const result = await acceptTask(c.req.param("id"), "human", { confirmUnverified: input?.confirmUnverified === true, commit, acceptGate: gate });
+    // 调用方看到的那一版（飞书卡片的代次，task-result-version.ts）；不是字符串一律当没传。
+    const expectedResultVersion = typeof input?.expectedResultVersion === "string" ? input.expectedResultVersion : undefined;
+    const result = await acceptTask(c.req.param("id"), "human", {
+      confirmUnverified: input?.confirmUnverified === true, commit, acceptGate: gate, expectedResultVersion,
+    });
     if (result.accepted) return c.json(result);
     const { httpStatus, ...body } = result;
     return httpStatus === 404 ? c.json(body, 404) : c.json(body, 409);

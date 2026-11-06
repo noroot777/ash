@@ -38,6 +38,8 @@ import { claimAcceptTarget, mergePreflight } from "./task-accept-merge-preflight
 import { gateMergeSource } from "./accept-gate-state.js";
 import { acceptGateCheck, type AcceptGateIntent, type AcceptGateSnapshot } from "./accept-gate.js";
 import { discardPendingAcceptanceGate, finishAcceptanceGate } from "./task-accept-gate-launch.js";
+import { acceptanceContext } from "./task-accept-context.js";
+import { resultVersionOf } from "./task-result-version.js";
 import type { UnexecutedVerification } from "@ash/shared/workflow-policy";
 import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 
@@ -113,6 +115,7 @@ async function acceptTaskUnlocked(
   gateIntent?: AcceptGateIntent,
   gatePassedRunId?: string,
   reviewAuthority?: ReviewAuthority,
+  expectedResultVersion?: string,
   onAutoCommit?: (outcome: AcceptanceAutoCommitOutcome) => void,
 ): Promise<AcceptTaskResult> {
   const preflight = await acceptancePreflight(taskId);
@@ -120,6 +123,15 @@ async function acceptTaskUnlocked(
 
   const initial = await acceptanceGuard(taskId, "initial");
   if (initial.failure) return initial.failure;
+  // 调用方点的是它看到的那一版（飞书卡片）：已经不是那一版就不验收。核在验收互斥里 —— 占着它，任务
+  // 起不了新的一轮（task-result-version.ts）；门禁之后自动续的那一次带着同一个值再核一遍。
+  if (expectedResultVersion !== undefined && await resultVersionOf(initial.task!) !== expectedResultVersion) {
+    await appendTaskTimeline(taskId, "验收没有执行：点验收时看到的那一版之后，任务又跑出了新的结果。看过最新的再验收。");
+    return {
+      accepted: false, httpStatus: 409, taskId, reason: "result_changed", phase: "initial", status: initial.task!.status,
+      error: "要验收的那一版之后任务又跑出了新结果，这一次没有验收：请看过最新的再验收",
+    };
+  }
   // `let`:验收目标一旦冻结(mergePreflight / 合并段那一处领取),后面每一步都得拿**带着冻结值**
   // 的这一份往下走,见 task-accept-merge-preflight.ts 的 claimAcceptTarget。
   let task = initial.task!;
@@ -194,7 +206,7 @@ async function acceptTaskUnlocked(
   }
   let gateBasis: AcceptGateSnapshot | null = null;
   const gate = await acceptGateCheck(task, gateProject, {
-    choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority },
+    choices: { by, commit: commitOverride, confirmUnverified, reviewAuthority, expectedResultVersion },
     intent: gateIntent,
     passedRunId: gatePassedRunId,
     onBasis: basis => { gateBasis = basis; },
@@ -572,29 +584,6 @@ async function acceptTaskUnlocked(
 }
 
 // 验收要动的是仓库级共享状态(目标分支的 ref、项目工作区、worktree 注册表),
-// 所以整段验收都在仓库锁里跑:并行点下的多个验收**排队依次合并**,而不是一起
-// 冲进同一个 `.git`(见 repo-lock.ts 的三类事故)。整段而非只锁 merge 的原因是
-// 守卫判断不能过期 —— acceptTaskUnlocked 拿到锁后才重新读任务与项目,所以排在
-// 后面的验收看到的是前一个合并完成后的世界(目标分支已前进、stage 已更新)。
-async function acceptanceContext(taskId: string): Promise<{
-  repoPath: string | null;
-  freeWorkflow: boolean;
-  status?: string;
-}> {
-  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  // 没有独立 worktree 的任务只改 stage,不碰 git,不必占用仓库锁。
-  if (!task) return { repoPath: null, freeWorkflow: false };
-  if (!task.useWorktree) {
-    return { repoPath: null, freeWorkflow: task.workflowMode === "free", status: task.status };
-  }
-  const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-  return {
-    repoPath: project?.repoPath ?? null,
-    freeWorkflow: task.workflowMode === "free",
-    status: task.status,
-  };
-}
-
 // `by` 默认 human：这个函数的调用方绝大多数是「用户按了验收通过」（HTTP 路由、MCP
 // accept_task），只有 workflow-steps 里那条「线自己走到这一站」要显式传 "workflow"。
 //
@@ -610,6 +599,8 @@ export async function acceptTask(
     acceptGate?: AcceptGateIntent;
     /** **内部用**：门禁绿了之后系统自己接着做完的那一次带的凭据（见 accept-gate.ts）。 */
     acceptGatePassedRunId?: string;
+    /** 调用方看到的那一版成果（task-result-version.ts）；此刻已经换了一版就拒绝。不传 = 验此刻这一版。 */
+    expectedResultVersion?: string;
   } = {},
 ): Promise<AcceptTaskResult> {
   const originalFinalizer = !!advanceOpts.reviewAuthority?.finalization && !advanceOpts.acceptGatePassedRunId;
@@ -664,7 +655,7 @@ export async function acceptTask(
           return acceptTaskUnlocked(
             taskId, by, advanceOpts.confirmUnverified === true, advanceOpts.commit,
             advanceOpts.acceptGate, advanceOpts.acceptGatePassedRunId,
-            advanceOpts.reviewAuthority,
+            advanceOpts.reviewAuthority, advanceOpts.expectedResultVersion,
             outcome => { autoCommit = outcome; },
           );
         });

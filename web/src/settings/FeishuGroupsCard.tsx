@@ -111,13 +111,17 @@ export function FeishuGroupsCard({ groups, projects, bound, onGroups, onOpen, no
           <div key={group.chatId} className="settings-row feishu-group-row">
             <div>
               <b>{group.name ?? "未命名的群"}</b>
-              <small>绑定于 {formatTime(group.boundAt)}{group.boundBy ? ` · 由 ${group.boundBy} 绑定` : ""}</small>
+              <small>
+                绑定于 {formatTime(group.boundAt)}{group.boundBy ? ` · 由 ${group.boundBy} 绑定` : ""}
+                {!group.canEdit && " · 只有绑它的人或实例管理员能改"}
+                {group.pushCards && !group.receiving && " · 同一项目更晚绑定的群也开着推送，卡片只发到那个群"}
+              </small>
             </div>
             <span className="feishu-actions">
               <select
                 aria-label={`${group.name ?? "未命名的群"} 绑定的项目`}
                 value={group.projectId}
-                disabled={busy}
+                disabled={busy || !group.canEdit}
                 onChange={(event) => void run(() => api.patchFeishuGroup(group.chatId, { projectId: event.target.value }), "群绑定的项目已切换", "保存失败")}
               >
                 {!projects.some((project) => project.id === group.projectId) && <option value={group.projectId}>（已看不到的项目）</option>}
@@ -126,10 +130,10 @@ export function FeishuGroupsCard({ groups, projects, bound, onGroups, onOpen, no
               <Toggle
                 label={group.pushCards ? "卡片发到群里" : "卡片发单聊"}
                 checked={group.pushCards}
-                disabled={busy}
+                disabled={busy || !group.canEdit}
                 onChange={(checked) => void run(() => api.patchFeishuGroup(group.chatId, { pushCards: checked }), checked ? "这个项目的卡片改发到群里" : "这个项目的卡片改回发单聊", "保存失败")}
               />
-              <Button variant="ghost" disabled={busy} onClick={() => setUnbinding(group)}>解绑</Button>
+              <Button variant="ghost" disabled={busy || !group.canEdit} onClick={() => setUnbinding(group)}>解绑</Button>
             </span>
           </div>
         ))}

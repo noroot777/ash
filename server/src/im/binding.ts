@@ -226,6 +226,23 @@ export async function unbindOwner(owner: string): Promise<BindingRow | null> {
   return binding;
 }
 
+/**
+ * 领这个人的助手房间（relay.ts assistantRoom），判据同 groups.ts claimGroupRoom：绑定还是入口读到的那一次、
+ * 记着的还是读到的那一间（或者还没有）才换成新建的这间，否则认已经记上的那间；换过绑定返回 null。
+ */
+export async function claimAssistantRoom(
+  key: { appId: string; openId: string }, boundAt: string, expected: string | null, roomId: string,
+): Promise<string | null> {
+  return db.transaction(async (tx) => {
+    const where = and(eq(imBindings.channel, CHANNEL), eq(imBindings.appId, key.appId), eq(imBindings.openId, key.openId));
+    const binding = (await tx.select().from(imBindings).where(where)).at(0);
+    if (binding?.boundAt !== boundAt) return null;
+    if (binding.assistantRoomId && binding.assistantRoomId !== expected) return binding.assistantRoomId;
+    await tx.update(imBindings).set({ assistantRoomId: roomId }).where(where);
+    return roomId;
+  }, { behavior: "immediate" });
+}
+
 export async function updateBinding(
   key: { appId: string; openId: string },
   patch: Partial<Pick<BindingRow, "chatId" | "assistantRoomId" | "projectId">>,

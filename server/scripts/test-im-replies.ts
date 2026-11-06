@@ -3,7 +3,7 @@
 // 永远发不出去），只核群还绑着那个项目、项目是不是只推标题。
 //
 // 钉住的几件事：
-// ① 任务删了：回它的卡发 /retry、/stop，点它确认卡上的「确定」没办成 —— 原因都发得出去；
+// ① 任务删了：回它的失败卡发 /retry、回它的卡发 /stop，点它确认卡上的「确定」没办成 —— 原因都发得出去；
 // ② 助手房间没了：投不进房间、拿回复时房间不在 —— 说明都发得出去；
 // ③ 多人模式的群：看不到群绑定项目的成员 @ 机器人、回任务卡 /reply、/retry、/stop —— 原因都发到群里；
 //    群换了项目，那句报错就不发了；
@@ -28,7 +28,7 @@ try {
   const { chatRooms, projects, tasks } = await import("../src/db/schema.js");
   const { taskNotices } = await import("../src/db/schema-task-notice.js");
   const { imActions, imBindings, imGroups, imOutbox } = await import("../src/db/schema-im.js");
-  const { and, eq } = await import("drizzle-orm");
+  const { and, eq, inArray } = await import("drizzle-orm");
   const mode = await import("../src/auth/mode.js");
   const store = await import("../src/auth/store.js");
   const visibility = await import("../src/auth/visibility.js");
@@ -54,14 +54,18 @@ try {
 
   // ── ① 任务删了 ───────────────────────────────────────────────────────────
   {
-    await db.insert(tasks).values({
+    await db.insert(tasks).values([{
       id: "tx", projectId: "p1", title: "要删的任务", body: "", status: "paused", question: "选哪个？",
       questionOptions: JSON.stringify(["甲", "乙"]), createdAt: at, updatedAt: at,
-    } as never);
-    await im.reconciler.reconcile(["tx"]);
+    }, {
+      id: "txf", projectId: "p1", title: "要删的失败任务", body: "", status: "failed", endedAt: at, createdAt: at, updatedAt: at,
+    }] as never);
+    await im.reconciler.reconcile(["tx", "txf"]);
     await im.settle();
     const card = (await db.select().from(imOutbox).where(eq(imOutbox.taskId, "tx"))).find((row) => row.state === "sent")!;
     assert.ok(card?.messageId, "提问卡发出去了");
+    const failedCard = (await db.select().from(imOutbox).where(eq(imOutbox.taskId, "txf"))).find((row) => row.state === "sent")!;
+    assert.equal(failedCard?.kind, "failed", "失败卡发出去了");
     // 确认卡在任务还在时就出来了；「确定」放慢，走「处理中 → 结果改卡」那一路。
     const stop = await im.say({ text: "/stop", parentId: card.messageId! });
     await im.settle();
@@ -70,9 +74,9 @@ try {
     const confirmed = im.commands.confirmed.bind(im.commands);
     im.commands.confirmed = async (principal, payload) => { await sleep(3_000); return confirmed(principal, payload); };
 
-    await db.delete(tasks).where(eq(tasks.id, "tx"));
+    await db.delete(tasks).where(inArray(tasks.id, ["tx", "txf"]));
     fake.reset();
-    const retry = await im.say({ text: "/retry", parentId: card.messageId! });
+    const retry = await im.say({ text: "/retry", parentId: failedCard.messageId! });
     const stopAgain = await im.say({ text: "/stop", parentId: card.messageId! });
     await im.settle();
     assert.match(repliesTo(retry), /没能重试：/, "任务删了，/retry 的原因照发");
@@ -143,15 +147,11 @@ try {
   await db.insert(tasks).values({ id: "tg", projectId: "pa", title: "群里的任务", body: "", status: "failed", createdAt: at, updatedAt: at, endedAt: at, ownerUserId: alice.id } as never);
   await db.insert(imBindings).values({ channel: "feishu", appId: APP, openId: "ou_bob", userId: bob.id, boundAt: at });
   await db.insert(imGroups).values({ channel: "feishu", appId: APP, chatId: "oc_pa", projectId: "pa", name: "a 群", boundBy: alice.id, pushCards: 1, boundAt: at });
-  const group = { receiveType: "chat_id" as const, receiveId: "oc_pa", recipientOpenId: null };
-  await im.reconciler.run(async () => im.reconciler.insert({
-    dest: group, taskId: "tg", kind: "notice", subject: "n:tg", msgType: "interactive",
-    content: JSON.stringify({ header: { title: { content: "群里的任务" } }, elements: [] }),
-    scope: await scopeFor(APP, group, { kind: "task", taskId: "tg" }),
-  }));
+  await im.reconciler.run(() => im.reconciler.reconcile(["tg"]));
   await im.settle();
   const groupCard = (await db.select().from(imOutbox).where(and(eq(imOutbox.taskId, "tg"), eq(imOutbox.receiveId, "oc_pa")))).at(0)!;
-  assert.ok(groupCard.messageId, `群里的卡发出去了：${groupCard.state} ${groupCard.resolution}`);
+  assert.ok(groupCard.messageId, `群里的失败卡发出去了：${groupCard.state} ${groupCard.resolution}`);
+  assert.equal(groupCard.kind, "failed");
   const asBob = (text: string, parentId?: string) => im.say({ openId: "ou_bob", chatType: "group", chatId: "oc_pa", text, mentionBot: true, parentId });
   {
     fake.reset();

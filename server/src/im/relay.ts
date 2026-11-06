@@ -18,11 +18,12 @@ import { db } from "../db/index.js";
 import { imInbound } from "../db/schema-im.js";
 import { now } from "../util.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
+import { deleteChatRoom } from "../chat/lifecycle.js";
 import type { AshClient } from "./ash-client.js";
-import { bindingOf, CHANNEL, updateBinding } from "./binding.js";
+import { bindingOf, CHANNEL, claimAssistantRoom } from "./binding.js";
 import { taskLink } from "./cards.js";
 import type { CommandRunner, InboundContext } from "./commands.js";
-import { groupOf, groupRoomOf, setGroupRoom, type GroupRow } from "./groups.js";
+import { claimGroupRoom, groupOf, groupRoomOf, type GroupRow } from "./groups.js";
 import { readOptions } from "./meta.js";
 import type { Destination } from "./outbox.js";
 import { scopeFor, type OutboxScope } from "./scope.js";
@@ -33,6 +34,14 @@ const REPLY_TIMEOUT_MS = 20 * 60_000;
 const DONE = new Set<ChatMessage["status"]>(["done", "failed", "stopped"]);
 
 type Snapshot = { room: ChatRoom; messages: ChatMessage[]; tasks: TaskListItem[] };
+
+/** 刚建的房间没领到（别人先领了，或者绑定刚换过）：删掉它，免得网页上多一间空房间。返回该用的那一间。 */
+function settleClaim(created: string, claimed: string | null): string | null {
+  if (claimed !== created) {
+    void deleteChatRoom(created).catch((error) => console.warn(`[ash] 飞书多建的房间 ${created} 没删掉:`, (error as Error).message));
+  }
+  return claimed;
+}
 
 export const chatMessageIdOf = (inboundId: string) => `im-${createHash("sha256").update(inboundId).digest("hex").slice(0, 24)}`;
 
@@ -52,12 +61,19 @@ export class RoomRelay {
     this.timer = null;
   }
 
-  /** 这个人的助手房间；没有（或被网页删了）就照他最近用过的助手配置新建一间「飞书」。 */
+  /**
+   * 这个人的助手房间；没有（或被网页删了）就照他最近用过的助手配置新建一间「飞书」。
+   * 同一个人连发几句是并发处理的（channel.ts），可能同时发现没有房间、各建一间：建好之后按「映射还是我读到
+   * 的那一间」领取（binding.ts claimAssistantRoom），只有一间领得到，其余的用胜出的那间、删掉自己建的。
+   */
   async assistantRoom(ctx: InboundContext): Promise<string | { error: string }> {
     const { principal, binding } = ctx;
-    if (binding.assistantRoomId) {
-      const existing = await this.deps.ash.get(principal, `/api/chats/${encodeURIComponent(binding.assistantRoomId)}`);
-      if (existing.ok) return binding.assistantRoomId;
+    // 入口读的那份绑定可能已经过时（同时到的另一句刚建了房间）。
+    const fresh = await bindingOf(this.deps.appId, principal.openId);
+    const known = (fresh ? fresh.assistantRoomId : binding.assistantRoomId) ?? null;
+    if (known) {
+      const existing = await this.deps.ash.get(principal, `/api/chats/${encodeURIComponent(known)}`);
+      if (existing.ok) return (binding.assistantRoomId = known);
     }
     const rooms = await this.deps.ash.get<ChatRoom[]>(principal, "/api/chats?kind=assistant");
     const template = rooms.ok && Array.isArray(rooms.data)
@@ -68,18 +84,25 @@ export class RoomRelay {
       kind: "assistant", projectId: "", name: "飞书", members: [template.members[0]],
     });
     if (!created.ok) return { error: `没能建助手房间：${created.error}` };
-    await updateBinding(principal, { assistantRoomId: created.data.id });
-    binding.assistantRoomId = created.data.id;
-    return created.data.id;
+    const claimed = settleClaim(created.data.id, await claimAssistantRoom(principal, binding.boundAt, known, created.data.id));
+    if (!claimed) return { error: "你刚换过绑定：请再发一次。" };
+    return (binding.assistantRoomId = claimed);
   }
 
-  /** 群里这个人的那间项目群聊房间（多人模式下群聊房间是创建者私有的，所以一人一间）。 */
+  /**
+   * 群里这个人的那间项目群聊房间（多人模式下群聊房间是创建者私有的，所以一人一间）。并发与领取同
+   * assistantRoom，领取还要群的绑定没换过：出口只放行映射上的那一间（scope.ts），各用各建的那间的话，
+   * 没记进映射的那间的回复永远发不出去。
+   */
   async groupRoom(ctx: InboundContext, group: GroupRow): Promise<{ roomId: string; mention: string | null } | { error: string }> {
     const userKey = ctx.binding.userId ?? "";
     const known = await groupRoomOf(this.deps.appId, group.chatId, userKey);
     if (known) {
       const existing = await this.deps.ash.get<Snapshot>(ctx.principal, `/api/chats/${encodeURIComponent(known)}`);
-      if (existing.ok) return { roomId: known, mention: existing.data.room?.members?.[0]?.name ?? null };
+      // 房间得还在这个群绑的项目里：不在了（群换过项目）就另建，话不能投进别的项目。
+      if (existing.ok && (existing.data.room?.projectId ?? "") === group.projectId) {
+        return { roomId: known, mention: existing.data.room?.members?.[0]?.name ?? null };
+      }
     }
     // 成员照这个人最近一间助手房间的智能体来：群聊里 @ 机器人，就是让它来答。
     const rooms = await this.deps.ash.get<ChatRoom[]>(ctx.principal, "/api/chats?kind=assistant");
@@ -91,8 +114,9 @@ export class RoomRelay {
       kind: "chat", projectId: group.projectId, name: scrubTitle(`飞书群 ${group.name ?? ""}`.trim(), 60), members: [template.members[0]],
     });
     if (!created.ok) return { error: `没能建群聊房间：${created.error}` };
-    await setGroupRoom(this.deps.appId, group.chatId, userKey, created.data.id);
-    return { roomId: created.data.id, mention: template.members[0]!.name };
+    const claimed = settleClaim(created.data.id, await claimGroupRoom(group, userKey, known, created.data.id));
+    if (!claimed) return { error: "这个群刚换过绑定：请再发一次。" };
+    return { roomId: claimed, mention: template.members[0]!.name };
   }
 
   /**

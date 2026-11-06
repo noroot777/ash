@@ -20,6 +20,7 @@ import { groupOf } from "./groups.js";
 import { readOptions } from "./meta.js";
 import { cardHeaderOf, type Destination, type OutboxRow } from "./outbox.js";
 import type { Outcome } from "./actions.js";
+import { versionOf } from "./attention.js";
 import type { Reconciler } from "./reconcile.js";
 import { admit, replyScope, scopeFor, SYSTEM_SCOPE, type OutboxScope, type ScopeBody } from "./scope.js";
 import { scrubText, scrubTitle } from "./scrub.js";
@@ -123,10 +124,11 @@ export class CommandRunner {
           await this.scoped(ctx, { kind: "task", taskId }));
       }
       case "retry": {
-        if (!ctx.card?.taskId) return this.say(ctx, "回复某张失败卡片再发 /retry。", SYSTEM_SCOPE);
+        // 重试的是那张失败卡上的那一次（与卡上的「重试」按钮同一个判据，actions.ts）：别的卡认不出是哪一次。
+        if (!ctx.card?.taskId || ctx.card.kind !== "failed") return this.say(ctx, "回复那张失败卡片再发 /retry（发 /todo 能找到它）。", SYSTEM_SCOPE);
         const taskId = ctx.card.taskId;
         await ctx.commit?.(taskId);
-        const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/retry"));
+        const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/retry"), { expectedFailure: versionOf(ctx.card.subject) });
         return this.say(ctx, result.ok ? "已重试，任务重新开始跑了。" : `没能重试：${scrubText(result.error, 300)}`, await this.answered(ctx, { taskId }),
           { taskId, ...(result.ok ? {} : { brief: "没能重试，原因见 ash。" }) });
       }

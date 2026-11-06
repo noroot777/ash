@@ -11,6 +11,7 @@
 //   dispute   那条驳回所在的审查链 + 轮次（就是裁定接口的 target）
 //   duet_gate 闸口版本（duet/gate-version.ts）
 //   verify_failed / accept  这一版的结束时刻（团队取执行者里最晚的那个）
+// failed / accept 的代次与验收、重试接口收的期望值是同一份身份（task-result-version.ts），按钮带着它进去。
 import type { QuestionItem, Task } from "@ash/shared";
 import { questionItems, questionKey } from "@ash/shared/questions";
 import { humanTurnOf, type HumanTurnKind } from "@ash/shared/task-attention";
@@ -21,6 +22,7 @@ import { freeReviewRuns } from "../db/schema-free-workflow.js";
 import { currentGateVersion } from "../duet/gate-version.js";
 import { unresolvedDisputes } from "../free-review-dispute.js";
 import { enrichTasks, toTaskListItem } from "../task-store.js";
+import { failureVersionOf, latestEnd } from "../task-result-version.js";
 import { questionOccurrenceOf } from "../task-wait-ownership.js";
 
 export type Turn =
@@ -35,14 +37,16 @@ export interface TaskView {
   task: Task;
   ownerUserId: string | null;
   projectName: string;
+  /** 团队执行者：验收、结局都记在调度台身上。 */
+  teamWorker: boolean;
   turn: Turn | null;
 }
 
+/** failed / accept 的代次去掉种类前缀，就是重试、验收接口认的那份身份。 */
+export const versionOf = (generation: string) => generation.replace(/^[a-z]:/, "");
+
 /** 卡片上带按钮的那几种（verify_failed 只是通知）。 */
 export const DECISION_KINDS: ReadonlySet<HumanTurnKind> = new Set(["question", "failed", "dispute", "duet_gate", "accept"]);
-
-const latestEnd = (items: Pick<Task, "endedAt">[]) =>
-  items.map((item) => item.endedAt ?? "").reduce((max, at) => (at > max ? at : max), "") || "-";
 
 /** 最近一条工作区审查没通过（自由工作流）。待验收卡上据此要求二次确认。 */
 async function latestReviewFailed(taskId: string): Promise<boolean> {
@@ -77,8 +81,9 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
     const crew = workers.filter((worker) => worker.parentId === task.id);
     const gateVersion = task.mode === "duet" && task.status === "awaiting_review" ? await currentGateVersion(task.id) : null;
     const disputes = task.workflowMode === "free" && task.mode === "single" ? await unresolvedDisputes(task.id) : [];
+    const teamWorker = !!task.parentId && parents.get(task.parentId) === "team";
     const kind = humanTurnOf(toTaskListItem(task), crew.map(toTaskListItem), {
-      teamWorker: !!task.parentId && parents.get(task.parentId) === "team",
+      teamWorker,
       duetGateOpen: gateVersion !== null,
       disputeOpen: disputes.length > 0,
     });
@@ -88,7 +93,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
         turn = { kind, generation: questionOccurrenceOf(row), questionKey: questionKey(task), items: questionItems(task) };
         break;
       case "failed":
-        turn = { kind, generation: `f:${task.endedAt ?? task.updatedAt}` };
+        turn = { kind, generation: `f:${failureVersionOf(task)}` };
         break;
       case "dispute": {
         // 好几条同时等裁定时一张卡只管一条：最近的那条。裁掉它，下一条再成一张新卡。
@@ -113,6 +118,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
       task,
       ownerUserId: row.ownerUserId ?? null,
       projectName: projectNames.get(task.projectId) ?? "",
+      teamWorker,
       turn,
     });
   }
