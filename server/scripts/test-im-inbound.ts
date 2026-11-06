@@ -4,6 +4,7 @@
 // ① 绑定码：单聊里发个人码 → 认领、回一句「回网页确认」；没绑定的人单聊只提示一次，群里不出声；
 //    群里没 @ 机器人的话一律不理；
 // ② 回复任务卡：此刻在等答复就是答复（多题按题号拆）；不是提问就当成发给任务的消息；收到点个表情；
+//    答复只认那张卡自己问的那道题：回旧提问卡、回别的卡都不答到眼下这道题上；
 // ③ 命令：/help /project /new（先确认，点确定才建任务并开跑）/stop（先确认，取消就不停）/todo；
 //    不认识的消息类型回一句说明；
 // ④ 助手房间：单聊里直接说话 → 照最近一间助手房间的配置建一间「飞书」，投进去；回复按 reply_to
@@ -104,6 +105,37 @@ try {
     assert.equal(nudgeRow.kind, "reply");
     assert.equal(nudgeRow.state, "done", `发给任务的消息该被收下：${nudgeRow.detail}`);
     await Promise.all([["tq", "paused"], ["tm", "paused"], ["tf", "failed"]].map(([id, from]) => waitIdle(() => statusOf(id!), from)));
+
+    // 两代提问：在第一问的卡下回「是」，不能答到第二问上。
+    await db.insert(tasks).values(task({ id: "tg", title: "两代提问", status: "paused", question: "只检查、不修改？" }) as never);
+    await im.reconciler.reconcile(["tg"]);
+    await im.settle();
+    const firstCard = await cardOf("tg");
+    await db.update(tasks).set({ question: "删除所有数据？", updatedAt: new Date().toISOString() }).where(eq(tasks.id, "tg"));
+    await im.reconciler.reconcile(["tg"]);
+    await im.settle();
+    const secondCard = await cardOf("tg");
+    assert.notEqual(secondCard.id, firstCard.id, "第二问推了新卡");
+    const late = await im.say({ text: "是", parentId: firstCard.messageId! });
+    await im.settle();
+    assert.equal((await db.select().from(tasks).where(eq(tasks.id, "tg"))).at(0)!.question, "删除所有数据？", "旧卡下的回复没答到新问题上");
+    assert.equal((await inboundOf(late)).detail, "stale_question");
+    assert.match(textOf(contentOf(repliesTo(late)[0]!)), /问题已经换了/);
+    // 回的是这个任务的另一种卡（不是提问卡）：也不当答复。
+    await db.insert(imOutbox).values({
+      id: "row-tg-failed", channel: "feishu", appId: APP, receiveType: "open_id", receiveId: OWNER, recipientOpenId: OWNER,
+      taskId: "tg", kind: "failed", subject: "f:old", msgType: "interactive", content: "{}", state: "resolved", messageId: "om_tg_failed",
+      createdAt: at, updatedAt: at,
+    });
+    const offCard = await im.say({ text: "是", parentId: "om_tg_failed" });
+    assert.equal((await inboundOf(offCard)).detail, "not_question_card");
+    assert.equal((await db.select().from(tasks).where(eq(tasks.id, "tg"))).at(0)!.question, "删除所有数据？");
+    const right = await im.say({ text: "不要删", parentId: secondCard.messageId! });
+    assert.equal((await inboundOf(right)).state, "done", "回在眼下这道题的卡下才是答复");
+    assert.match((await db.select().from(tasks).where(eq(tasks.id, "tg"))).at(0)!.questionHistory ?? "", /不要删/);
+    const after = await im.say({ text: "再补一句", parentId: secondCard.messageId! });
+    assert.equal((await inboundOf(after)).detail, "stale_question", "答过的题再回不当答复");
+    await waitIdle(() => statusOf("tg"), "paused");
   }
 
   // ── ③ 命令 ───────────────────────────────────────────────────────────────
@@ -196,7 +228,7 @@ try {
     const claim = await im.say({ chatType: "group", chatId: "oc_team", text: groupCode.code, mentionBot: true });
     await im.settle();
     assert.match(textOf(contentOf(repliesTo(claim)[0]!)), /收到群绑定码/);
-    const confirmed = await confirmGroupCode("", groupCode.codeId, APP);
+    const confirmed = await confirmGroupCode("", groupCode.codeId, APP, { canSeeProject: async () => true, admin: false });
     assert.equal(confirmed.ok, true);
     assert.equal((await groupOf(APP, "oc_team"))!.name, "研发群", "认领时查到的群名");
     const talk = await im.say({ chatType: "group", chatId: "oc_team", text: "今天谁在改登录页？", mentionBot: true });

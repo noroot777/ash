@@ -118,6 +118,9 @@ export function mountImRoutes(api: Hono): void {
     if ("error" in result) return c.json({ error: result.error }, 400);
     (await quotaMeter()).setQuota(result.options.monthlyQuota);
     if (result.options.enabled !== before.enabled) await restartFeishuChannel();
+    // 只推标题、深链改了：已经推出去、还挂着按钮的卡也按新的样子改一遍（对账按渲染指纹判）。
+    else if (result.options.publicBaseUrl !== before.publicBaseUrl
+      || result.options.titleOnlyProjectIds.join() !== before.titleOnlyProjectIds.join()) refreshPushes();
     return c.json(await statusOf(actorOf(c)));
   });
 
@@ -206,8 +209,12 @@ export function mountImRoutes(api: Hono): void {
   api.post("/im/feishu/groups/confirm", async (c) => {
     const body = await bodyOf(c);
     if (typeof body.codeId !== "string") return c.json({ error: "缺少 codeId" }, 400);
-    const result = await confirmGroupCode(ownerOf(c), body.codeId, currentAppId());
-    if (!result.ok) return c.json({ error: result.error }, 409);
+    const actor = actorOf(c);
+    const result = await confirmGroupCode(ownerOf(c), body.codeId, currentAppId(), {
+      canSeeProject: (projectId) => canSeeProject(actor, projectId),
+      admin: isAdminActor(actor),
+    });
+    if (!result.ok) return c.json({ error: result.error }, result.status ?? 409);
     refreshPushes();
     return c.json(await groupsFor(c));
   });

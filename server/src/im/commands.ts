@@ -28,6 +28,8 @@ export interface InboundContext {
   dest: Destination;
   /** 这条消息回复的是哪张任务卡（没回复卡片为 null）。 */
   card: OutboxRow | null;
+  /** 马上要做一件不幂等的事（重启后不能照原文重办）：先把这一步记下来（inbound.ts 顶部）。 */
+  commit?: (taskId: string | null) => Promise<void>;
 }
 
 const CONFIRM_TTL_MS = 10 * 60_000;
@@ -89,6 +91,7 @@ export class CommandRunner {
       }
       case "retry": {
         if (!ctx.card?.taskId) return this.say(ctx, "回复某张失败卡片再发 /retry。");
+        await ctx.commit?.(ctx.card.taskId);
         const result = await this.deps.ash.post(ctx.principal, taskPath(ctx.card.taskId, "/retry"));
         return this.say(ctx, result.ok ? "已重试，任务重新开始跑了。" : `没能重试：${result.error}`, undefined, ctx.card.taskId);
       }

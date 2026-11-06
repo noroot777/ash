@@ -10,12 +10,17 @@
 //
 // 一口气要新推的卡太多（刚绑定时有一堆历史待验收、重启后积压）→ 这些卡登记成 held、只发
 // 一张汇总，用户点「逐张推给我」或发 /todo 再推。
+//
+// 「同一代」只说明还是那件事，不说明卡片内容还对：标题改了、项目改成只推标题、深链换了，代次都
+// 不变。所以每张决策卡还记一个渲染指纹（render_key），对不上就原地重渲染（没发的直接换内容，
+// 发出去的排一次改卡）。发件边界再对一次账（vet）：排队期间授权或隐私设置变了的，不按旧样子发。
+import { createHash } from "node:crypto";
 import { isAcceptedStage } from "@ash/shared";
 import { and, desc, eq, gt, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
 import { acceptGateRuns } from "../db/schema-accept-gate.js";
-import { imOutbox } from "../db/schema-im.js";
+import { imActions, imOutbox } from "../db/schema-im.js";
 import { tasks } from "../db/schema.js";
 import { openDisputeTargets } from "../free-review-dispute.js";
 import { now } from "../util.js";
@@ -26,10 +31,10 @@ import { extrasFor } from "./extras.js";
 import { renderCard } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
 import { cardHeaderOf, type Destination, type OutboxRow, type OutboxSender } from "./outbox.js";
-import { destinationsFor } from "./recipients.js";
+import { destinationsFor, stillEntitled } from "./recipients.js";
 
 export const FLOOD_LIMIT = 5;
-const TURN_KINDS = ["question", "failed", "dispute", "duet_gate", "verify_failed", "accept"] as const;
+export const TURN_KINDS = ["question", "failed", "dispute", "duet_gate", "verify_failed", "accept"] as const;
 const OPEN_STATES = ["pending", "sent", "held"];
 /** 卡片被点过、结果已回写（不许被对账「复活」成原样）。 */
 export const ACTED = "acted";
@@ -47,7 +52,9 @@ export class Reconciler {
   private chain: Promise<unknown> = Promise.resolve();
   private stopped = false;
 
-  constructor(private readonly appId: string, private readonly sender: OutboxSender) {}
+  constructor(private readonly appId: string, private readonly sender: OutboxSender) {
+    sender.setGuard((row) => this.vet(row));
+  }
 
   /** 发件表的所有改动都排进这一条链：对账和按钮回调不会交错改同一行。 */
   run<T>(job: () => Promise<T>): Promise<T> {
@@ -120,14 +127,18 @@ export class Reconciler {
     const creations: Creation[] = [];
     for (let i = 0; i < ids.length; i += BATCH) {
       const views = await viewsOf(ids.slice(i, i + BATCH));
-      for (const [taskId, view] of views) creations.push(...await this.settleTask(taskId, view, options.publicBaseUrl, options.notifyCompleted));
+      for (const [taskId, view] of views) {
+        creations.push(...await this.settleTask(taskId, view, options.publicBaseUrl, options.notifyCompleted, options.titleOnlyProjectIds));
+      }
     }
     await this.create(creations, options.publicBaseUrl, options.titleOnlyProjectIds);
     this.sender.kick();
   }
 
   /** 对一个任务：收掉对不上的卡，返回该新推的。 */
-  private async settleTask(taskId: string, view: TaskView | null, base: string | null, notifyCompleted: boolean): Promise<Creation[]> {
+  private async settleTask(
+    taskId: string, view: TaskView | null, base: string | null, notifyCompleted: boolean, titleOnly: string[],
+  ): Promise<Creation[]> {
     const turn = view?.turn ?? null;
     const dests = view && turn ? await destinationsFor(this.appId, view) : [];
     const rows = await db.select().from(imOutbox).where(and(
@@ -135,8 +146,11 @@ export class Reconciler {
     ));
     for (const row of rows) {
       if (!OPEN_STATES.includes(row.state)) continue;
-      const keep = !!turn && row.kind === turn.kind && row.subject === turn.generation && dests.some((d) => d.receiveId === row.receiveId);
-      if (keep) continue;
+      const dest = turn && row.kind === turn.kind && row.subject === turn.generation ? dests.find((d) => d.receiveId === row.receiveId) : undefined;
+      if (dest) {
+        await this.refresh(row, view as Creation["view"], dest, base, titleOnly);
+        continue;
+      }
       const text = await resolutionText(row, view);
       await this.resolve(row, text, view ? taskLink(base, view) : null);
       if (notifyCompleted && row.kind === "accept" && row.messageId && view && isAcceptedStage(view.task.stage)) {
@@ -148,12 +162,15 @@ export class Reconciler {
     for (const dest of dests) {
       const existing = rows.find((row) => row.receiveId === dest.receiveId && row.kind === turn.kind && row.subject === turn.generation);
       if (!existing) out.push({ view: view as Creation["view"], dest });
-      else if (existing.state === "resolved" && existing.resolution !== ACTED) await this.revive(existing, view as Creation["view"], dest, base);
+      else if (existing.state === "resolved" && existing.resolution !== ACTED) await this.revive(existing, view as Creation["view"], dest, base, titleOnly);
     }
     return out;
   }
 
-  /** 把一张卡收成说明文字。没发出去的直接作废，发出去的带按钮的卡排一次改卡。 */
+  /**
+   * 把一张卡收成说明文字。库里一律换成收好的样子 —— 正在发的那一张发完会照库里这份改过去
+   * （outbox.ts sendOne）；已经发出去的带按钮的卡排一次改卡；还没发的就此作废。
+   */
   async resolve(row: OutboxRow, text: string, link: string | null, resolution = text): Promise<void> {
     const at = now();
     const patchable = row.state === "sent" && row.messageId && row.kind !== "verify_failed";
@@ -162,16 +179,18 @@ export class Reconciler {
       resolution,
       resolvedAt: at,
       updatedAt: at,
-      ...(patchable ? { content: JSON.stringify(renderCard(settledCard(cardHeaderOf(row.content), text, { link }))), patchState: "pending" } : {}),
+      content: JSON.stringify(renderCard(settledCard(cardHeaderOf(row.content), text, { link }))),
+      ...(patchable ? { patchState: "pending" } : {}),
     }).where(eq(imOutbox.id, row.id));
   }
 
-  private async revive(row: OutboxRow, view: Creation["view"], dest: Destination, base: string | null): Promise<void> {
-    const options = await readOptions();
-    const content = await this.cardFor(row.id, view, dest, base, options.titleOnlyProjectIds);
+  private async revive(row: OutboxRow, view: Creation["view"], dest: Destination, base: string | null, titleOnly: string[]): Promise<void> {
+    const envelope = await this.envelopeFor(row.id, view, dest);
+    const { content, renderKey } = await this.render(view, dest, envelope, base, titleOnly);
     await db.update(imOutbox).set({
       state: row.messageId ? "sent" : "pending",
       content,
+      renderKey,
       resolution: null,
       resolvedAt: null,
       patchState: row.messageId ? "pending" : null,
@@ -179,19 +198,69 @@ export class Reconciler {
     }).where(eq(imOutbox.id, row.id));
   }
 
-  private async cardFor(rowId: string, view: Creation["view"], dest: Destination, base: string | null, titleOnly: string[]): Promise<string> {
+  /** 还是同一件事、同一个收件人：渲染输入变了就原地重渲染（信封沿用，按钮照样有效）。 */
+  private async refresh(row: OutboxRow, view: Creation["view"], dest: Destination, base: string | null, titleOnly: string[]): Promise<void> {
+    if (row.renderKey === renderKeyOf(view, dest, base, titleOnly)) return;
+    let envelope = "";
+    if (DECISION_KINDS.has(view.turn.kind)) {
+      const latest = (await db.select({ id: imActions.id, usedAt: imActions.usedAt }).from(imActions)
+        .where(and(eq(imActions.outboxId, row.id), eq(imActions.action, view.turn.kind)))
+        .orderBy(desc(imActions.createdAt)).limit(1)).at(0);
+      // 按钮已经点下去了（正在办，或者卡上正显示着办的结果）：卡面归那一下管，不拿原样盖掉它。
+      if (latest?.usedAt) return;
+      envelope = latest?.id ?? await this.envelopeFor(row.id, view, dest);
+    }
+    const { content, renderKey } = await this.render(view, dest, envelope, base, titleOnly);
+    await db.update(imOutbox).set({
+      content,
+      renderKey,
+      updatedAt: now(),
+      ...(row.state === "sent" && row.messageId ? { patchState: "pending" } : {}),
+    }).where(eq(imOutbox.id, row.id));
+  }
+
+  private async envelopeFor(rowId: string, view: Creation["view"], dest: Destination): Promise<string> {
     const turn = view.turn;
+    if (!DECISION_KINDS.has(turn.kind)) return "";
     const payload: Record<string, unknown> =
       turn.kind === "question" ? { questionKey: turn.questionKey, options: turn.items[0]?.options ?? [], count: turn.items.length }
         : turn.kind === "dispute" ? { runId: turn.runId, round: turn.round }
           : turn.kind === "duet_gate" ? { version: turn.version }
             : turn.kind === "accept" ? { reviewFailed: turn.reviewFailed }
               : {};
-    const envelope = DECISION_KINDS.has(turn.kind)
-      ? await createEnvelope({ outboxId: rowId, taskId: view.task.id, action: turn.kind, payload, recipientOpenId: dest.recipientOpenId, generation: turn.generation })
-      : "";
+    return createEnvelope({ outboxId: rowId, taskId: view.task.id, action: turn.kind, payload, recipientOpenId: dest.recipientOpenId, generation: turn.generation });
+  }
+
+  private async render(
+    view: Creation["view"], dest: Destination, envelope: string, base: string | null, titleOnly: string[],
+  ): Promise<{ content: string; renderKey: string }> {
     const ctx = { link: taskLink(base, view), titleOnly: titleOnly.includes(view.task.projectId) };
-    return JSON.stringify(renderCard(turnCard(view, turn, ctx, envelope, await extrasFor(view))));
+    return {
+      content: JSON.stringify(renderCard(turnCard(view, view.turn, ctx, envelope, await extrasFor(view)))),
+      renderKey: renderKeyOf(view, dest, base, titleOnly),
+    };
+  }
+
+  /**
+   * 发件边界：这一行此刻还该不该发、该发什么样。决策卡按此刻的现状再对一次账（收件人还能不能看、
+   * 只推标题、内容版本）；其余挂着任务的消息（合并通知、回执）只核收件人还有没有资格。
+   */
+  async vet(row: OutboxRow): Promise<OutboxRow | null> {
+    if (!row.taskId) return row;
+    if ((TURN_KINDS as readonly string[]).includes(row.kind)) {
+      await this.run(() => this.reconcile([row.taskId!]));
+    } else {
+      // 任务已经删了：没有东西可泄露，回执（「这个任务已经被删除了」）照发。
+      const view = (await viewsOf([row.taskId])).get(row.taskId) ?? null;
+      if (view && !await stillEntitled(this.appId, row, view.task.projectId)) {
+        await this.run(async () => {
+          await db.update(imOutbox).set({ state: "resolved", resolution: "收件人已无权查看这个任务", resolvedAt: now(), updatedAt: now() })
+            .where(and(eq(imOutbox.id, row.id), eq(imOutbox.state, "pending")));
+        });
+      }
+    }
+    const fresh = (await db.select().from(imOutbox).where(eq(imOutbox.id, row.id))).at(0);
+    return fresh?.state === "pending" ? fresh : null;
   }
 
   private async create(creations: Creation[], base: string | null, titleOnly: string[]): Promise<void> {
@@ -201,20 +270,26 @@ export class Reconciler {
       const flood = items.length > FLOOD_LIMIT;
       for (const { view, dest } of items) {
         const rowId = nanoid(20);
-        const content = await this.cardFor(rowId, view, dest, base, titleOnly);
-        await this.insert({ id: rowId, dest, taskId: view.task.id, kind: view.turn.kind, subject: view.turn.generation, content, state: flood ? "held" : "pending" });
+        const envelope = await this.envelopeFor(rowId, view, dest);
+        const { content, renderKey } = await this.render(view, dest, envelope, base, titleOnly);
+        const inserted = await this.insert({
+          id: rowId, dest, taskId: view.task.id, kind: view.turn.kind, subject: view.turn.generation, content, renderKey, state: flood ? "held" : "pending",
+        });
+        // settleTask 已经确认这一格是空的：还撞上唯一键就是键与查询的口径不一致，不能当作已入队。
+        if (!inserted) console.warn(`[ash] 飞书卡片入队被同键旧记录挡住（${view.turn.kind} ${view.task.id} → ${dest.receiveId}）`);
       }
       if (flood) await this.summarize(items[0]!.dest);
     }
   }
 
+  /** 入队。返回 null = 同键（应用、收件人、任务、种类、代次）已经有一行 —— 回执与通知靠这个幂等。 */
   async insert(input: {
-    id?: string; dest: Destination; taskId: string | null; kind: string; subject: string; content: string;
+    id?: string; dest: Destination; taskId: string | null; kind: string; subject: string; content: string; renderKey?: string;
     state?: string; msgType?: "interactive" | "text"; replyTo?: string | null; replyInThread?: boolean;
-  }): Promise<string> {
+  }): Promise<string | null> {
     const at = now();
     const id = input.id ?? nanoid(20);
-    await db.insert(imOutbox).values({
+    const rows = await db.insert(imOutbox).values({
       id,
       channel: "feishu",
       appId: this.appId,
@@ -228,11 +303,12 @@ export class Reconciler {
       replyInThread: input.replyInThread ? 1 : 0,
       msgType: input.msgType ?? "interactive",
       content: input.content,
+      renderKey: input.renderKey ?? null,
       state: input.state ?? "pending",
       createdAt: at,
       updatedAt: at,
-    }).onConflictDoNothing();
-    return id;
+    }).onConflictDoNothing().returning({ id: imOutbox.id });
+    return rows.length ? id : null;
   }
 
   /** 一条附在原卡下面的文字通知（回复那张卡，手机上会有提醒，原卡改动不会）。 */
@@ -300,4 +376,15 @@ async function resolutionText(row: OutboxRow, view: TaskView | null): Promise<st
       return live ? "任务又开始跑了。" : "已在别处处理。";
     default: return "已处理。";
   }
+}
+
+/**
+ * 决策卡的渲染输入指纹。只收会改变卡面、又不改变代次的那几样；出错提示、闸口结论这类现读的补充
+ * 在同一代里不会变，不算进来（算进来就得每次对账都去读 trace）。
+ */
+export function renderKeyOf(view: Creation["view"], dest: Destination, base: string | null, titleOnly: string[]): string {
+  const input = JSON.stringify([
+    view.task.title, view.projectName, view.turn, dest.receiveType, taskLink(base, view), titleOnly.includes(view.task.projectId),
+  ]);
+  return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }

@@ -13,7 +13,7 @@ import { db } from "../db/index.js";
 import { imBindCodes, imGroupRooms, imGroups } from "../db/schema-im.js";
 import { users } from "../db/schema-multiuser.js";
 import { now } from "../util.js";
-import { CHANNEL, liveCodeOf } from "./binding.js";
+import { bindingOfOwner, CHANNEL, liveCodeOf } from "./binding.js";
 
 export type GroupRow = typeof imGroups.$inferSelect;
 
@@ -66,16 +66,37 @@ export async function groupsView(owner: string, appId: string | null, visible: S
   return { groups, claims };
 }
 
-export type GroupConfirm = { ok: true; group: GroupRow } | { ok: false; error: string };
+export type GroupConfirm = { ok: true; group: GroupRow } | { ok: false; error: string; status?: 403 };
 
-/** 网页上确认群绑定。同一个群重绑到别的项目 = 覆盖（群聊房间随之换掉）。 */
-export async function confirmGroupCode(owner: string, codeId: string, currentAppId: string | null): Promise<GroupConfirm> {
+/** 确认那一刻确认人的权限（由路由按当前登录身份现算）。 */
+export interface GroupConfirmAuthz {
+  canSeeProject: (projectId: string) => Promise<boolean>;
+  admin: boolean;
+}
+
+/**
+ * 网页上确认群绑定。生成码到确认之间可能隔了好几分钟，那时核过的都要按此刻重核一遍：
+ * 还能不能看见这个项目、本人的飞书绑定还是不是认领时发码的那个账号。同一个群重绑到别的项目
+ * = 覆盖（群聊房间随之换掉）；那个群原来是别人绑的，只有实例管理员能覆盖（与改 / 解绑同一道闸）。
+ */
+export async function confirmGroupCode(
+  owner: string, codeId: string, currentAppId: string | null, authz: GroupConfirmAuthz,
+): Promise<GroupConfirm> {
   const code = await liveCodeOf(owner, "group", codeId);
   if (!code || !code.projectId) return { ok: false, error: "这张群绑定码已过期或已作废，请重新生成" };
   if (code.state !== "claimed" || !code.claimedChatId || !code.claimedAppId) {
     return { ok: false, error: "还没在群里收到这串码：请在群里 @ 机器人把它发出去" };
   }
   if (code.claimedAppId !== currentAppId) return { ok: false, error: "认领时用的飞书应用已经换掉了，请重新生成绑定码" };
+  if (!await authz.canSeeProject(code.projectId)) return { ok: false, status: 403, error: "你已经看不到这个项目了，不能把群绑到它上面" };
+  const mine = await bindingOfOwner(owner);
+  if (!mine || mine.appId !== currentAppId || mine.openId !== code.claimedOpenId) {
+    return { ok: false, error: "你的飞书绑定在认领之后变了：请重新生成群绑定码，用现在绑定的飞书账号在群里发" };
+  }
+  const existing = await groupOf(code.claimedAppId, code.claimedChatId);
+  if (existing && (existing.boundBy ?? "") !== owner && !authz.admin) {
+    return { ok: false, status: 403, error: "这个群已经被别人绑到了项目上，只有他本人或实例管理员能改" };
+  }
   const group: GroupRow = {
     channel: CHANNEL,
     appId: code.claimedAppId,

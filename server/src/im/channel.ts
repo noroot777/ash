@@ -7,12 +7,19 @@
 // bus 订阅里只记任务 id（Reconciler.mark），不读库也不抛错：订阅回调是同步跑在发布方栈上的，
 // 那里抛错会打断发布方。漏掉的事件（删任务不发事件、某些状态变化只改库）由定时全量对账兜住 ——
 // 对账只读库，没有变化就一次 API 都不花。
+//
+// 启动时先接管上一次运行没办完的（点了一半的按钮、收下没办的消息），再全量对账：对账要看到
+// 按钮已经放回去的卡，才不会把它当成办完了收起来。
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import type { FeishuConnection, ImConnectionState, ImHealthState, ImUsage } from "@ash/shared";
+import { and, eq } from "drizzle-orm";
 import { bus } from "../bus.js";
+import { db } from "../db/index.js";
+import { imOutbox } from "../db/schema-im.js";
 import { resolveAshDbFile } from "../db/path.js";
 import { IS_PREVIEW_INSTANCE } from "../preview-instance.js";
+import { now } from "../util.js";
 import { isMultiUser } from "../auth/mode.js";
 import { getUser } from "../auth/store.js";
 import type { AppFetch } from "../auth/im-actor.js";
@@ -43,6 +50,8 @@ export interface FeishuRuntime {
 
 interface Running extends FeishuRuntime {
   relay: RoomRelay;
+  inbound: InboundRouter;
+  actions: CardActions;
   sweep: ReturnType<typeof setInterval>;
   unsubscribe: () => void;
 }
@@ -131,6 +140,8 @@ async function bringUp(): Promise<void> {
   const self = running;
   void (async () => {
     self.bot = await botOf(self);
+    await self.actions.recover();
+    await self.inbound.recover();
     await self.reconciler.full();
   })().catch((error) => console.error("[ash] 飞书通道初次对账出错:", error));
 }
@@ -152,6 +163,7 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
   const ws = new FeishuWsClient({
     appId, appSecret: credentials.appSecret, domain: domainUrl(credentials.domain),
     onEvent: (envelope) => dispatch(envelope, inbound, actions),
+    onAckLost: (envelope, result) => ackLost(envelope, result, appId, reconciler, sender),
     onStatus: (status) => { if (status.state === "connected" && runtime) void announce(runtime); },
   });
   const unsubscribe = bus.subscribe((ev) => {
@@ -172,17 +184,19 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
   });
   const sweep = setInterval(() => void reconciler.full().catch((error) => console.error("[ash] 飞书定时对账出错:", error)), FULL_SWEEP_MS);
   sweep.unref?.();
-  runtime = { appId, api, ws, sender, reconciler, relay, bot: null, sweep, unsubscribe };
+  runtime = { appId, api, ws, sender, reconciler, relay, inbound, actions, bot: null, sweep, unsubscribe };
   return runtime;
 }
 
 /**
- * 长连接上来的事件。消息事件不等处理完就回执（下载附件、投进房间都可能超过 3 秒；
- * 重推了也有 im_inbound 去重）；卡片回调要等结果，结果卡随回执带回去。
+ * 长连接上来的事件。消息事件落了库就回执，不等办完（下载附件、投进房间都可能超过 3 秒）：
+ * 回执了飞书就不再推，落库之前就回执，这时退出这条消息就丢了；落库失败抛出去，回执带 500，
+ * 飞书会重推。卡片回调要等结果，结果卡随回执带回去。
  */
 async function dispatch(envelope: FeishuEnvelope, inbound: InboundRouter, actions: CardActions): Promise<unknown> {
   if (envelope.eventType === "im.message.receive_v1") {
-    void inbound.handle(envelope.event as MessageEvent).catch((error) => console.error("[ash] 飞书消息处理出错:", error));
+    const inboundId = await inbound.accept(envelope.event as MessageEvent);
+    if (inboundId) void inbound.process(inboundId).catch((error) => console.error("[ash] 飞书消息处理出错:", error));
     return undefined;
   }
   if (envelope.eventType === "card.action.trigger") {
@@ -190,6 +204,21 @@ async function dispatch(envelope: FeishuEnvelope, inbound: InboundRouter, action
     return event ? actions.handle(event) : undefined;
   }
   return undefined;
+}
+
+/**
+ * 卡片回调的结果卡本该随回执带回去，回执却没送出（处理期间连接断了）：已经当场回写的那张卡
+ * 改走一次改卡补上。
+ */
+function ackLost(envelope: FeishuEnvelope, result: unknown, appId: string, reconciler: Reconciler, sender: OutboxSender): void {
+  if (envelope.eventType !== "card.action.trigger" || !(result && typeof result === "object" && "card" in result)) return;
+  const messageId = (envelope.event as { context?: { open_message_id?: unknown } }).context?.open_message_id;
+  if (typeof messageId !== "string" || !messageId) return;
+  void reconciler.run(async () => {
+    await db.update(imOutbox).set({ patchState: "result", updatedAt: now() }).where(and(
+      eq(imOutbox.appId, appId), eq(imOutbox.messageId, messageId), eq(imOutbox.patchState, "done"),
+    ));
+  }).then(() => sender.kick()).catch((error) => console.error("[ash] 飞书回执补写出错:", error));
 }
 
 export function callbackOf(envelope: FeishuEnvelope): CallbackEvent | null {

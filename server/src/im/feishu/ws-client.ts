@@ -56,6 +56,8 @@ export interface FeishuWsOptions {
   /** 开放平台域名，如 https://open.feishu.cn（Lark 国际版是 https://open.larksuite.com）。 */
   domain: string;
   onEvent: (envelope: FeishuEnvelope) => Promise<unknown> | unknown;
+  /** 事件处理完时收它的那条连接已经断了：回执（连同随回执带回的卡）没送出去。 */
+  onAckLost?: (envelope: FeishuEnvelope, result: unknown) => void;
   onStatus?: (status: ConnStatus) => void;
   deps?: Partial<FeishuWsDeps>;
 }
@@ -236,7 +238,7 @@ export class FeishuWsClient {
     });
     socket.addEventListener("message", (ev: { data: unknown }) => {
       if (generation !== this.generation) return;
-      void this.onMessage(ev.data);
+      void this.onMessage(ev.data, socket);
     });
     socket.addEventListener("error", () => {
       // 真正的善后统一放在 close 里；undici 出错后总会再发 close。
@@ -265,13 +267,15 @@ export class FeishuWsClient {
     }, delay);
   }
 
-  private send(frame: Frame): void {
-    const socket = this.socket;
-    if (!socket || socket.readyState !== OPEN) return;
+  /** 发一帧。via = 必须走这条连接（回执只能回给收到事件的那条）。返回有没有发出去。 */
+  private send(frame: Frame, via: WsLike | null = this.socket): boolean {
+    if (!via || via.readyState !== OPEN) return false;
     try {
-      socket.send(encodeFrame(frame));
+      via.send(encodeFrame(frame));
+      return true;
     } catch (error) {
       console.error("[ash] 飞书长连接发帧失败:", (error as Error).message);
+      return false;
     }
   }
 
@@ -294,7 +298,7 @@ export class FeishuWsClient {
     this.pingTimer = this.deps.setTimeout(() => this.ping(generation), this.pingIntervalMs);
   }
 
-  private async onMessage(data: unknown): Promise<void> {
+  private async onMessage(data: unknown, source: WsLike): Promise<void> {
     if (this.livenessTimer) {
       this.deps.clearTimeout(this.livenessTimer);
       this.livenessTimer = null;
@@ -329,10 +333,12 @@ export class FeishuWsClient {
 
     const started = this.deps.now();
     const resp: { code: number; data?: string } = { code: 200 };
+    let envelope: FeishuEnvelope | null = null;
+    let result: unknown;
     try {
-      const envelope = parseEnvelope(merged);
+      envelope = parseEnvelope(merged);
       if (envelope) {
-        const result = await this.options.onEvent(envelope);
+        result = await this.options.onEvent(envelope);
         if (result !== undefined && result !== null) {
           resp.data = Buffer.from(JSON.stringify(result)).toString("base64");
         }
@@ -341,11 +347,13 @@ export class FeishuWsClient {
       resp.code = 500;
       console.error("[ash] 飞书事件处理抛错:", error);
     }
-    this.send({
+    // 回执只回给收到这一帧的那条连接：处理期间重连了，旧帧的头发到新连接上对不上任何请求。
+    const acked = this.send({
       ...frame,
       headers: [...frame.headers, { key: "biz_rt", value: String(this.deps.now() - started) }],
       payload: new TextEncoder().encode(JSON.stringify(resp)),
-    });
+    }, source);
+    if (!acked && envelope && resp.code === 200) this.options.onAckLost?.(envelope, result);
   }
 
   private merge(frame: Frame): Record<string, unknown> | null {

@@ -5,10 +5,20 @@
 //   ④ 回复了某张任务卡 → 这张卡是提问就答复，否则当成给任务发消息；
 //   ⑤ 其余：单聊进助手房间、群里 @ 进项目群聊房间（relay.ts）。
 // 群消息只处理 @ 了机器人的（开放平台只推这类，这里再判一次）。
+//
+// 收和办分两步：accept 先把消息原文落库（长连接等它落库才回执），process 再去办。一行的进度：
+//   received    收下了、还没碰任何收不回来的事 —— 重启后照原文重办一遍（绑定认领、命令回执、投进
+//               聊天房间都按消息 id 幂等；附件转存过的沿用记下的路径）；
+//   dispatching 正要答复 / 给任务发消息 / 重试 —— 这几下不幂等，重启后不重办，照实告诉用户「不确定
+//               送到没有」；
+//   done / failed，聊天房间另有 sent → replied（relay.ts）。
+//
+// 回复卡片答复提问，只认那张卡自己问的那道题（卡片代次 + 发卡时记下的 questionKey）：任务眼下
+// 在问的可能已经是另一道了，不能拿此刻的提问去替一条旧回复补上身份。
 import type { QuestionItem } from "@ash/shared";
-import { and, eq, gt, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, like } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { imInbound, imOutbox } from "../db/schema-im.js";
+import { imActions, imInbound, imOutbox } from "../db/schema-im.js";
 import { now } from "../util.js";
 import { imActorFor, type ImPrincipal } from "../auth/im-actor.js";
 import { viewsOf } from "./attention.js";
@@ -19,11 +29,18 @@ import { parseCommand, type CommandRunner, type InboundContext } from "./command
 import type { FeishuApi } from "./feishu/api.js";
 import { parseMessage, type FeishuMention } from "./feishu/message.js";
 import { groupOf } from "./groups.js";
-import type { Destination } from "./outbox.js";
+import type { Destination, OutboxRow } from "./outbox.js";
 import type { Reconciler } from "./reconcile.js";
 import type { RoomRelay } from "./relay.js";
 
 const HINT_EVERY_MS = 24 * 3600_000;
+/** 重启时比这更早收下的消息不再补办（补办一条一小时前的话多半已经不合时宜），只告诉用户重发。 */
+const RECOVER_WITHIN_MS = 3600_000;
+
+type InboundRow = typeof imInbound.$inferSelect;
+/** 本进程正在办的消息：通道重启后新的那一份接管时跳过它们（旧的那份还在办）。 */
+const inFlight = new Set<string>();
+type Message = NonNullable<MessageEvent["message"]> & { message_id: string; chat_id: string };
 
 export interface MessageEvent {
   sender?: { sender_id?: { open_id?: string }; sender_type?: string };
@@ -67,31 +84,74 @@ export class InboundRouter {
     await db.update(imInbound).set({ ...patch, updatedAt: now() }).where(eq(imInbound.id, id));
   }
 
+  /** 收下并办完（测试与不经长连接的调用方用）。 */
   async handle(event: MessageEvent): Promise<void> {
+    const inboundId = await this.accept(event);
+    if (inboundId) await this.process(inboundId);
+  }
+
+  /** 收下一条消息：连原文一起落库。返回 null = 重复投递，或者不是要处理的消息。 */
+  async accept(event: MessageEvent): Promise<string | null> {
     const message = event.message;
     const openId = event.sender?.sender_id?.open_id;
-    if (event.sender?.sender_type !== "user" || !message?.message_id || !message.chat_id || !openId) return;
-    const chatType = message.chat_type === "p2p" ? "p2p" : "group";
+    if (event.sender?.sender_type !== "user" || !message?.message_id || !message.chat_id || !openId) return null;
     const inboundId = `msg:${message.message_id}`;
     const fresh = await db.insert(imInbound).values({
-      id: inboundId, channel: CHANNEL, appId: this.deps.appId, openId, chatId: message.chat_id, chatType,
-      kind: "received", state: "received", createdAt: now(), updatedAt: now(),
+      id: inboundId, channel: CHANNEL, appId: this.deps.appId, openId, chatId: message.chat_id,
+      chatType: message.chat_type === "p2p" ? "p2p" : "group",
+      kind: "received", state: "received", payload: JSON.stringify(message), createdAt: now(), updatedAt: now(),
     }).onConflictDoNothing().returning({ id: imInbound.id });
-    if (!fresh.length) return;
+    return fresh.length ? inboundId : null;
+  }
+
+  /** 办一条收下了、还没办过的消息。 */
+  async process(inboundId: string): Promise<void> {
+    if (inFlight.has(inboundId)) return;
+    inFlight.add(inboundId);
     try {
-      await this.route(inboundId, message as Required<MessageEvent>["message"] & { message_id: string; chat_id: string }, openId, chatType);
+      const row = (await db.select().from(imInbound).where(eq(imInbound.id, inboundId))).at(0);
+      if (!row || row.state !== "received" || !row.payload || !row.openId) return;
+      await this.route(row, JSON.parse(row.payload) as Message, row.openId, row.chatType === "p2p" ? "p2p" : "group");
+      // 一路上没记结局的（命令、认领、提示）到这里才算办完；回执在这之前已经入队了。
+      await this.finish(inboundId, { state: "done" });
     } catch (error) {
       console.error("[ash] 飞书消息处理出错:", error);
-      await this.record(inboundId, { state: "failed", detail: String((error as Error).message).slice(0, 500) });
+      await this.finish(inboundId, { state: "failed", detail: String((error as Error).message).slice(0, 500) });
+    } finally {
+      inFlight.delete(inboundId);
     }
   }
 
-  private async route(
-    inboundId: string,
-    message: NonNullable<MessageEvent["message"]> & { message_id: string; chat_id: string },
-    openId: string,
-    chatType: "p2p" | "group",
-  ): Promise<void> {
+  /** 只收尾还没有结局的那一行（聊天房间的 sent / replied 不动）。 */
+  private async finish(inboundId: string, patch: Partial<typeof imInbound.$inferInsert>): Promise<void> {
+    await db.update(imInbound).set({ ...patch, updatedAt: now() })
+      .where(and(eq(imInbound.id, inboundId), inArray(imInbound.state, ["received", "dispatching"])));
+  }
+
+  /** 上一次运行收下、没办完的消息（启动时、对账之前调）。 */
+  async recover(): Promise<number> {
+    const rows = await db.select().from(imInbound).where(and(
+      eq(imInbound.appId, this.deps.appId), like(imInbound.id, "msg:%"), inArray(imInbound.state, ["received", "dispatching"]),
+    ));
+    for (const row of rows) {
+      if (inFlight.has(row.id)) continue;
+      const fresh = Date.parse(row.createdAt) > Date.now() - RECOVER_WITHIN_MS;
+      if (row.state === "received" && fresh && row.payload) { await this.process(row.id); continue; }
+      if (row.openId && row.chatId) {
+        const dest: Destination = row.chatType === "p2p"
+          ? { receiveType: "open_id", receiveId: row.openId, recipientOpenId: row.openId }
+          : { receiveType: "chat_id", receiveId: row.chatId, recipientOpenId: null };
+        await this.deps.commands.say({ messageId: row.id.replace(/^msg:/, ""), dest }, row.state === "dispatching"
+          ? "处理这条消息时 ash 正好重启，不确定送到没有：请在 ash 里看一眼，没到的话再发一次。"
+          : "ash 停机期间没来得及处理这条消息，请再发一次。", `r:${row.id.replace(/^msg:/, "")}:recover`, row.taskId);
+      }
+      await this.finish(row.id, { state: "failed", detail: row.state === "dispatching" ? "interrupted" : "expired" });
+    }
+    return rows.length;
+  }
+
+  private async route(row: InboundRow, message: Message, openId: string, chatType: "p2p" | "group"): Promise<void> {
+    const inboundId = row.id;
     const mentions: FeishuMention[] = (message.mentions ?? []).map((m) => ({ key: m.key ?? "", openId: m.id?.open_id ?? null }));
     if (chatType === "group") {
       const bot = this.deps.botOpenId();
@@ -109,7 +169,7 @@ export class InboundRouter {
     if (code) {
       const name = chatType === "group" ? await this.deps.api.chatInfo(message.chat_id).then((r) => (r.ok ? r.data.name : null)) : null;
       const claimed = await claimCode(code, { appId: this.deps.appId, openId, chatId: message.chat_id, chatType, name });
-      await this.record(inboundId, { kind: "bind", state: "done", detail: claimed.kind });
+      await this.record(inboundId, { kind: "bind", detail: claimed.kind });
       return say({
         claimed: claimed.kind === "claimed" && claimed.purpose === "group"
           ? "收到群绑定码。回到 ash 网页 设置 → 飞书 → 群，点「确认」就绑好了。"
@@ -125,7 +185,7 @@ export class InboundRouter {
     const binding = await bindingOf(this.deps.appId, openId);
     const actor = binding ? await imActorFor(principal) : null;
     if (!binding || !actor) {
-      await this.record(inboundId, { kind: "denied", state: "done" });
+      await this.record(inboundId, { kind: "denied" });
       if (chatType !== "p2p") return;
       const recent = await db.select({ id: imInbound.id }).from(imInbound).where(and(
         eq(imInbound.openId, openId), eq(imInbound.kind, "denied"),
@@ -138,71 +198,123 @@ export class InboundRouter {
     }
     if (chatType === "p2p" && binding.chatId !== message.chat_id) await updateBinding(principal, { chatId: message.chat_id });
     if (!parsed.supported) {
-      await this.record(inboundId, { kind: "ignored", state: "done" });
+      await this.record(inboundId, { kind: "ignored" });
       return say("我只认文字、图片和文件。");
     }
 
-    const parents = [message.parent_id, message.root_id].filter((id): id is string => !!id);
-    const card = parents.length
-      ? (await db.select().from(imOutbox).where(and(eq(imOutbox.appId, this.deps.appId), inArray(imOutbox.messageId, parents))))
-        .find((row) => row.taskId) ?? null
-      : null;
-    const ctx: InboundContext = { messageId: message.message_id, chatId: message.chat_id, chatType, principal, binding, dest, card };
+    const ctx: InboundContext = {
+      messageId: message.message_id, chatId: message.chat_id, chatType, principal, binding, dest,
+      card: await this.cardOf(message), commit: (taskId) => this.record(inboundId, { taskId, state: "dispatching" }),
+    };
 
     let text = parsed.text;
     const command = parseCommand(text);
     if (command && command.name !== "answer" && command.name !== "reply") {
-      await this.record(inboundId, { kind: "command", state: "done", detail: command.name });
+      await this.record(inboundId, { kind: "command", detail: command.name });
       return this.deps.commands.run(ctx, command.name, command.rest);
     }
     if (command) text = command.rest;
 
-    // 附件转存一次，路径记下来（重试时复用同一份）。
-    const saved = await saveAttachments(this.deps.api, this.deps.ash, principal, message.message_id, parsed.attachments);
+    // 附件转存一次，路径记下来（重办时沿用同一份，不再下载、不再转存）。
+    const saved = row.attachments
+      ? { paths: JSON.parse(row.attachments) as string[], failures: [] as string[] }
+      : await saveAttachments(this.deps.api, this.deps.ash, principal, message.message_id, parsed.attachments);
     await this.record(inboundId, { body: text, attachments: JSON.stringify(saved.paths) });
-    if (saved.failures.length) await say(`有附件没收下：\n${saved.failures.join("\n")}`);
-    if (!text.trim() && !saved.paths.length) return this.record(inboundId, { kind: "ignored", state: "done" });
+    if (saved.failures.length) {
+      await this.deps.commands.say(ctx, `有附件没收下：\n${saved.failures.join("\n")}`, `r:${message.message_id}:att`);
+    }
+    if (!text.trim() && !saved.paths.length) return this.record(inboundId, { kind: "ignored" });
 
-    if (card?.taskId) return this.toTask(inboundId, ctx, card.taskId, text, saved.paths);
+    if (ctx.card?.taskId) return this.toTask(inboundId, ctx, ctx.card, command?.name ?? null, text, saved.paths);
     if (chatType === "p2p") {
       const room = await this.deps.relay.assistantRoom(ctx);
-      if (typeof room !== "string") { await this.record(inboundId, { kind: "assistant", state: "failed", detail: room.error }); return say(room.error); }
+      if (typeof room !== "string") { await say(room.error); return this.record(inboundId, { kind: "assistant", state: "failed", detail: room.error }); }
       await this.record(inboundId, { kind: "assistant" });
       if (await this.deps.relay.post(ctx, inboundId, room, text, saved.paths, null)) void this.react(message.message_id);
       return;
     }
     const group = await groupOf(this.deps.appId, message.chat_id);
     if (!group) {
-      await this.record(inboundId, { kind: "group", state: "done", detail: "unbound" });
+      await this.record(inboundId, { kind: "group", detail: "unbound" });
       return say("这个群还没绑定 ash 项目：在 ash 网页 设置 → 飞书 → 群 里绑定。回复任务卡片不受影响。");
     }
     const room = await this.deps.relay.groupRoom(ctx, group);
-    if ("error" in room) { await this.record(inboundId, { kind: "group", state: "failed", detail: room.error }); return say(room.error); }
+    if ("error" in room) { await say(room.error); return this.record(inboundId, { kind: "group", state: "failed", detail: room.error }); }
     await this.record(inboundId, { kind: "group" });
     if (await this.deps.relay.post(ctx, inboundId, room.roomId, text, saved.paths, room.mention)) void this.react(message.message_id);
   }
 
-  /** 回复任务卡：此刻在等答复就答复（提问回合结束前答复会被拒，那就当普通消息），否则发给任务。 */
-  private async toTask(inboundId: string, ctx: InboundContext, taskId: string, text: string, paths: string[]): Promise<void> {
+  /** 这条消息回复的是哪张任务卡：直接回复的那条优先，其次是话题的根。 */
+  private async cardOf(message: Message): Promise<OutboxRow | null> {
+    const parents = [message.parent_id, message.root_id].filter((id): id is string => !!id);
+    if (!parents.length) return null;
+    const rows = (await db.select().from(imOutbox).where(and(eq(imOutbox.appId, this.deps.appId), inArray(imOutbox.messageId, parents))))
+      .filter((row) => row.taskId);
+    return parents.map((id) => rows.find((row) => row.messageId === id)).find(Boolean) ?? null;
+  }
+
+  /**
+   * 回复任务卡。任务在等答复、而且回的正是问这道题的那张卡 → 用那张卡记下的 questionKey 答复；
+   * 回的是别的卡（旧的提问卡、失败卡、验收卡……）→ 不当答复，说清楚该回哪张。其余（不在提问、
+   * 带了附件、明说 /reply）→ 当成给任务发一条消息。
+   */
+  private async toTask(
+    inboundId: string, ctx: InboundContext, card: OutboxRow, intent: string | null, text: string, paths: string[],
+  ): Promise<void> {
+    const taskId = card.taskId!;
     const view = (await viewsOf([taskId])).get(taskId) ?? null;
     const say = (line: string) => this.deps.commands.say(ctx, line, `r:${ctx.messageId}`, taskId);
-    if (!view) { await this.record(inboundId, { kind: "reply", taskId, state: "failed" }); return say("这个任务已经被删除了。"); }
-    if (view.turn?.kind === "question" && !paths.length) {
-      const items: QuestionItem[] = view.turn.items;
+    // 先把回话入队再记结局：中间退出，重办时同一句回话入不了第二次（同 subject）。
+    const refuse = async (detail: string, line: string) => {
+      await say(line);
+      return this.record(inboundId, { kind: "reply", taskId, state: "failed", detail });
+    };
+    if (!view) return refuse("deleted", "这个任务已经被删除了。");
+    const turn = view.turn;
+    const answering = intent !== "reply" && !paths.length;
+    if (answering && card.kind === "question" && (turn?.kind !== "question" || card.subject !== turn.generation)) {
+      return refuse("stale_question", turn?.kind === "question"
+        ? "这张卡上的问题已经换了：请回复最新那张提问卡（发 /todo 能找到它）。只想给任务捎句话，用 /reply 开头。"
+        : "这道题已经答过了。还想给任务捎句话，用 /reply 开头再发一次。");
+    }
+    if (answering && turn?.kind === "question") {
+      if (card.kind !== "question") {
+        return refuse("not_question_card", "任务眼下在等一道提问，这张卡不是那道题：请回复那张提问卡（发 /todo 能找到它）。只想给任务捎句话，用 /reply 开头。");
+      }
+      const questionKey = await this.questionKeyOf(card);
+      if (!questionKey) return refuse("no_question_key", "认不出这张卡问的是哪道题了：请在 ash 里答复。");
+      const items: QuestionItem[] = turn.items;
       const split = splitNumberedAnswers(text, items.length);
       // 多题没按题号写：整段作为一条答复（与网页上「直接写一段话」同一条路）。
       const body = split ? { answers: split } : { answer: text };
-      const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/answer"), { ...body, questionKey: view.turn.questionKey });
-      await this.record(inboundId, { kind: "answer", taskId, state: result.ok ? "done" : "failed", detail: result.ok ? null : result.error });
-      if (!result.ok) return say(`没答上：${result.error}`);
+      await this.record(inboundId, { kind: "answer", taskId, state: "dispatching" });
+      const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/answer"), { ...body, questionKey });
+      if (!result.ok) await say(`没答上：${result.error}`);
+      await this.record(inboundId, { state: result.ok ? "done" : "failed", detail: result.ok ? null : result.error });
+      if (!result.ok) return;
       this.deps.reconciler.mark(taskId);
       return void this.react(ctx.messageId);
     }
+    await this.record(inboundId, { kind: "reply", taskId, state: "dispatching" });
     const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/reply"), { text, ...(paths.length ? { attachments: paths } : {}) });
-    await this.record(inboundId, { kind: "reply", taskId, state: result.ok ? "done" : "failed", detail: result.ok ? null : result.error });
-    if (!result.ok) return say(`没发进任务：${result.error}`);
+    if (!result.ok) await say(`没发进任务：${result.error}`);
+    await this.record(inboundId, { state: result.ok ? "done" : "failed", detail: result.ok ? null : result.error });
+    if (!result.ok) return;
     this.deps.reconciler.mark(taskId);
     void this.react(ctx.messageId);
+  }
+
+  /** 发这张提问卡时记下的 questionKey（信封 payload 里）。 */
+  private async questionKeyOf(card: OutboxRow): Promise<string | null> {
+    const envelope = (await db.select({ payload: imActions.payload }).from(imActions)
+      .where(and(eq(imActions.outboxId, card.id), eq(imActions.action, "question")))
+      .orderBy(desc(imActions.createdAt)).limit(1)).at(0);
+    try {
+      const key = (JSON.parse(envelope?.payload ?? "{}") as { questionKey?: unknown }).questionKey;
+      return typeof key === "string" && key ? key : null;
+    } catch {
+      return null;
+    }
   }
 
   /** 「收到了」：在用户那条消息上点个表情（额度吃紧时第一个省掉）。 */

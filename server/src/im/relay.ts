@@ -102,8 +102,8 @@ export class RoomRelay {
       id: messageId, body, ...(paths.length ? { attachments: paths } : {}), ...projectId,
     });
     if (!sent.ok) {
-      await this.mark(inboundId, "failed", sent.error);
       await this.deps.commands.say(ctx, `没能送进 ash：${sent.error}`);
+      await this.mark(inboundId, "failed", sent.error);
       return false;
     }
     await db.update(imInbound).set({ state: "sent", roomId, detail: messageId, updatedAt: now() }).where(eq(imInbound.id, inboundId));
@@ -138,17 +138,18 @@ export class RoomRelay {
     const feishuMessageId = row.id.replace(/^msg:/, "");
     const reply = (text: string) => this.deps.commands.say({ messageId: feishuMessageId, dest }, text, `relay:${row.id}`);
     const snapshot = await this.deps.ash.get<Snapshot>(principal, `/api/chats/${encodeURIComponent(row.roomId)}`);
+    // 先把回复入队、再记结局：中间退出，下一圈还会再看这一行，同一个 subject 的回复入不了第二次。
     if (!snapshot.ok) {
-      await this.mark(row.id, "failed", snapshot.error);
-      return reply(`没拿到回复：${snapshot.error}`);
+      await reply(`没拿到回复：${snapshot.error}`);
+      return this.mark(row.id, "failed", snapshot.error);
     }
     const answers = snapshot.data.messages.filter((message) => message.role === "agent" && message.replyTo === row.detail);
     const timedOut = Date.parse(row.updatedAt) + REPLY_TIMEOUT_MS < Date.now();
     if (!answers.length) {
       // 没有任何成员被点到（群聊里没 @ 到人）就不会有回复。
       if (timedOut || snapshot.data.messages.some((message) => message.id === row.detail && !message.mentions.length)) {
-        await this.mark(row.id, "replied", null);
         if (timedOut) await reply("等了 20 分钟没等到回复，去 ash 里看看吧。");
+        await this.mark(row.id, "replied", null);
       }
       return;
     }
@@ -166,7 +167,7 @@ export class RoomRelay {
         lines.push(`· ${scrubTitle(task.title, 50)}${message.taskId === taskId ? "（新建）" : ""}${link ? ` ${link}` : ""}`);
       }
     }
-    await this.mark(row.id, "replied", null);
     await reply(lines.join("\n"));
+    await this.mark(row.id, "replied", null);
   }
 }

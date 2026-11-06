@@ -8,6 +8,7 @@
 // ⑤ 飞书设置接口：换凭证 / 绑定码 / 确认是真人专属；agent 回合凭证改不了任何东西；非管理员
 //    看不到额度、改不了实例选项；群列表按项目可见性裁、别人绑的群改不动；
 // ⑥ 绑定码：认领只认对的地方（个人码在单聊、群码在群里且必须是码主本人发）、过期与重复认领；
+//    确认群绑定按确认那一刻重核：看不到项目了、本人飞书绑定换了人都不生效，别人绑的群只有管理员能覆盖；
 // ⑦ 源码扫描：im/ 下面一行都不许碰真人凭据（通道替人点按钮不等于真人在页面上点）。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -24,7 +25,8 @@ let failure: unknown = null;
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks } = await import("../src/db/schema.js");
-  const { imBindings, imGroups } = await import("../src/db/schema-im.js");
+  const { imBindings, imGroupRooms, imGroups } = await import("../src/db/schema-im.js");
+  const { and, eq, isNull } = await import("drizzle-orm");
   const { Hono } = await import("hono");
   const { authGate } = await import("../src/auth/middleware.js");
   const { resourceGate } = await import("../src/auth/resource-gate.js");
@@ -169,8 +171,37 @@ try {
     const inGroup = { appId: APP, openId: "ou_somebody", chatId: "oc_group", chatType: "group" as const, name: "研发群" };
     assert.equal((await claimCode(groupCore, inGroup)).kind, "not_owner", "群码必须是码主本人发");
     assert.equal((await claimCode(groupCore, { ...inGroup, openId: "ou_new" })).kind, "claimed");
-    const groupDone = await confirmGroupCode("", group.codeId, APP);
+    const allowed = { canSeeProject: async () => true, admin: false };
+    const groupDone = await confirmGroupCode("", group.codeId, APP, allowed);
     assert.equal(groupDone.ok && groupDone.group.name, "研发群");
+
+    // 确认那一刻重核：每一种不该生效的都不许动群绑定、不许清群聊房间。
+    const claimFor = async (chatId: string) => {
+      const code = await createBindCode("", "group", "p1");
+      assert.equal((await claimCode(code.code.replace(/^ASH-|-/g, ""), { ...inGroup, chatId, openId: "ou_new" })).kind, "claimed");
+      return code.codeId;
+    };
+    const groupRow = async (chatId: string) => (await db.select().from(imGroups).where(and(eq(imGroups.appId, APP), eq(imGroups.chatId, chatId)))).at(0);
+    await db.insert(imGroups).values({ channel: "feishu", appId: APP, chatId: "oc_theirs", projectId: "p1", name: "别人的群", boundBy: "u_someone", pushCards: 1, boundAt: new Date().toISOString() });
+    await db.insert(imGroupRooms).values({ channel: "feishu", appId: APP, chatId: "oc_theirs", userKey: "u_someone", roomId: "room-theirs" });
+
+    const lostProject = await confirmGroupCode("", await claimFor("oc_theirs"), APP, { canSeeProject: async () => false, admin: true });
+    assert.equal(!lostProject.ok && lostProject.status, 403, "看不到项目了就不能确认");
+    const notAdmin = await confirmGroupCode("", await claimFor("oc_theirs"), APP, allowed);
+    assert.equal(!notAdmin.ok && notAdmin.status, 403, "别人绑的群，非管理员覆盖不了");
+    assert.equal((await groupRow("oc_theirs"))?.boundBy, "u_someone", "拒绝时原绑定原样留着");
+    assert.equal((await db.select().from(imGroupRooms).where(eq(imGroupRooms.chatId, "oc_theirs"))).length, 1, "群聊房间映射也没被清");
+
+    const swapped = await claimFor("oc_mine");
+    await db.update(imBindings).set({ openId: "ou_swapped" }).where(and(eq(imBindings.appId, APP), isNull(imBindings.userId)));
+    const afterSwap = await confirmGroupCode("", swapped, APP, allowed);
+    assert.equal(afterSwap.ok, false, "认领之后本人的飞书绑定换了人，这张码不再生效");
+    assert.equal(await groupRow("oc_mine"), undefined);
+    await db.update(imBindings).set({ openId: "ou_new" }).where(and(eq(imBindings.appId, APP), isNull(imBindings.userId)));
+
+    const byAdmin = await confirmGroupCode("", await claimFor("oc_theirs"), APP, { canSeeProject: async () => true, admin: true });
+    assert.equal(byAdmin.ok, true, "管理员可以覆盖");
+    assert.equal((await groupRow("oc_theirs"))?.boundBy, null);
   }
 
   // ── ⑦ 源码扫描 ───────────────────────────────────────────────────────────

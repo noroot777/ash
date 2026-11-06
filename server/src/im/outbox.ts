@@ -10,6 +10,9 @@
 // 先不推（一口气积压太多时只发一张汇总，逐张的等用户要）；重试耗尽 → dead。
 // 改卡单独记在 patch_state：pending / result = 库里的 content 比飞书上那张新，要 PATCH 过去
 // （result = 回写用户刚点的那一下，额度见底也照发）；done / skipped / failed 是结果。
+//
+// 发件边界还要再核一次（guard，由对账器挂上）：入队时的授权与隐私设置不是发出那一刻的 ——
+// 排着队的时候项目可能改成了只推标题、收件人可能被移出了项目、进程可能刚重启还没对过账。
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imOutbox } from "../db/schema-im.js";
@@ -49,7 +52,13 @@ export function cardHeaderOf(content: string): { title: string; subtitle?: strin
   }
 }
 
+/** 发之前的最后一道核对：返回此刻该发的那一行（内容可能刚重渲染过），null = 不发了。 */
+export type SendGuard = (row: OutboxRow) => Promise<OutboxRow | null>;
+
+const GUARD_RETRY_MS = 30_000;
+
 export class OutboxSender {
+  private guard: SendGuard | null = null;
   private running = false;
   private again = false;
   private stopped = false;
@@ -63,6 +72,10 @@ export class OutboxSender {
       sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); }),
     },
   ) {}
+
+  setGuard(guard: SendGuard): void {
+    this.guard = guard;
+  }
 
   start(): void {
     this.stopped = false;
@@ -116,8 +129,21 @@ export class OutboxSender {
       // 改卡排在发新卡前面：回写结果是用户正盯着看的。
       const patch = await this.nextPatch();
       if (patch) { await this.patchOne(patch); await this.clock.sleep(SPACING_MS); continue; }
-      const send = await this.nextSend();
-      if (!send) return;
+      const next = await this.nextSend();
+      if (!next) return;
+      let send: OutboxRow | null = next;
+      if (this.guard) {
+        try {
+          send = await this.guard(next);
+        } catch (error) {
+          // 核对本身出错（读库失败等）：宁可晚发，不在没核过的情况下发。
+          console.error("[ash] 飞书发件前核对出错:", error);
+          await db.update(imOutbox).set({ nextAt: new Date(this.clock.now() + GUARD_RETRY_MS).toISOString(), updatedAt: now() })
+            .where(eq(imOutbox.id, next.id));
+          continue;
+        }
+      }
+      if (!send) continue;
       await this.sendOne(send);
       await this.clock.sleep(SPACING_MS);
     }
@@ -131,13 +157,14 @@ export class OutboxSender {
       : await this.api.send({ type: row.receiveType as "open_id" | "chat_id", id: row.receiveId }, msg, row.id, purpose);
     const at = now();
     if (res.ok) {
-      // 发出去的这段时间里它可能已经被收掉（resolved）：那就把「已处理」的样子改过去。
+      // 发出去的这段时间里它可能已经被收掉（resolved）、或者重渲染过：库里那份才是该有的样子，
+      // 与刚发出去的不一样就排一次改卡（SET 里的列都按更新前的值算）。
       await db.update(imOutbox).set({
         messageId: res.data.messageId,
         sentAt: at,
         updatedAt: at,
         state: sql`CASE WHEN ${imOutbox.state} = 'pending' THEN 'sent' ELSE ${imOutbox.state} END`,
-        patchState: sql`CASE WHEN ${imOutbox.state} = 'resolved' THEN 'pending' ELSE ${imOutbox.patchState} END`,
+        patchState: sql`CASE WHEN ${imOutbox.state} = 'resolved' OR ${imOutbox.content} <> ${row.content} THEN 'pending' ELSE ${imOutbox.patchState} END`,
         lastError: null,
       }).where(eq(imOutbox.id, row.id));
       return;

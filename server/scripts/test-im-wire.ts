@@ -6,8 +6,9 @@
 // ① 帧：编码再解码逐字段相同（含 bigint seqId、空 payload）；
 // ② 长连接：分片按 message_id 合并、只在收齐后回执一次；回执原样带回帧头并附 biz_rt，
 //    payload 是 {code:200,data:base64(onEvent 的返回)}；onEvent 抛错回 500；旧连接迟到的帧丢弃；
-//    接入点鉴权失败停在 failed（不无限重试）；
+//    接入点鉴权失败停在 failed（不无限重试）；处理期间连接断了，回执不发到新连接上、报给 onAckLost；
 // ③ REST：token 缓存复用；被额度闸拦下的调用不发请求、标成 quota blocked；token 失效换一次重试；
+//    下载回来的文件哪怕是 JSON 类型也是文件本身，只有错误包装才按错误算；
 // ④ 额度：70/90/99% 三道线各砍掉该砍的用途；计数落库、重读接得上；北京时间跨月清零；
 // ⑤ 消息解析 / 脱敏 / 命令 / 绑定码 / 多题答复按题号拆。
 import assert from "node:assert/strict";
@@ -77,10 +78,12 @@ try {
   const sockets: FakeSocket[] = [];
   const timers: (() => void)[] = [];
   const handled: unknown[] = [];
+  const lost: { eventId: string; result: unknown }[] = [];
   let respond: (event: unknown) => unknown = () => ({ toast: { type: "success", content: "ok" } });
   const ws = new FeishuWsClient({
     appId: "cli_test0000", appSecret: "s", domain: "https://open.fake",
     onEvent: (envelope) => { handled.push(envelope); return respond(envelope); },
+    onAckLost: (envelope, result) => { lost.push({ eventId: envelope.eventId, result }); },
     deps: {
       fetch: endpointOk as typeof fetch,
       createSocket: (url) => { const socket = new FakeSocket(url); sockets.push(socket); return socket as never; },
@@ -152,6 +155,25 @@ try {
   first.deliver({ ...part(0, bytes), headers: [{ key: "type", value: "event" }, { key: "message_id", value: "msg-3" }] });
   await tick();
   assert.equal(handled.length, before, "旧连接的帧不再处理");
+
+  // 处理到一半连接断了、又连上一条新的：回执不能发到新连接上（帧头对不上任何请求），报给上层补写。
+  let finish: (value: unknown) => void = () => {};
+  respond = () => new Promise((resolve) => { finish = resolve; });
+  const second = sockets[1]!;
+  second.deliver({ ...part(0, bytes), headers: [{ key: "type", value: "event" }, { key: "message_id", value: "msg-4" }] });
+  for (let i = 0; i < 5 && handled.length === before; i++) await tick();
+  assert.equal(handled.length, before + 1);
+  second.close();
+  timers.at(-1)!();
+  for (let i = 0; i < 5 && sockets.length < 3; i++) await tick();
+  const third = sockets[2]!;
+  third.open();
+  finish({ toast: { type: "success", content: "late" } });
+  for (let i = 0; i < 5 && !lost.length; i++) await tick();
+  const ackedOn = (socket: FakeSocket) => socket.sent.map((data) => decodeFrame(data)).filter((frame) => headerOf(frame, "message_id") === "msg-4");
+  assert.equal(ackedOn(third).length, 0, "旧帧的回执不发到新连接");
+  assert.equal(ackedOn(second).length, 0, "断掉的那条也发不出去");
+  assert.deepEqual(lost, [{ eventId: "ev-1", result: { toast: { type: "success", content: "late" } } }], "回执没送出报给上层");
   ws.stop();
 
   // 接入点鉴权失败：停在 failed，不安排重试。
@@ -211,6 +233,24 @@ try {
     const blocked = await api.patchCard("om_1", {}, "resolved");
     assert.equal(isQuotaBlocked(blocked), true, "被额度闸拦下");
     assert.equal(calls.length, before, "拦下的调用不发请求");
+
+    // 下载：类型是 JSON 的文件照样是文件；明确的错误包装才是错误。
+    const file = new TextEncoder().encode('{"name":"配置","items":[1,2]}');
+    let resource: () => Response = () => new Response(file, { headers: { "content-type": "application/json" } });
+    const downloads = new FeishuApi({
+      appId: "cli_test0000", appSecret: "s", domain: "https://open.fake", beforeCall: () => true,
+      deps: {
+        fetch: (async (url: string) => url.endsWith("/tenant_access_token/internal")
+          ? Response.json({ code: 0, tenant_access_token: "t", expire: 7200 })
+          : resource()) as unknown as typeof fetch,
+      },
+    });
+    const json = await downloads.download("om_1", "file_1", "file");
+    assert.equal(json.ok, true, "JSON 类型的文件下载成功");
+    assert.deepEqual(json.ok && [...json.data.bytes], [...file], "拿到的是文件原样的字节");
+    resource = () => Response.json({ code: 234003, msg: "File not in msg." });
+    const missing = await downloads.download("om_1", "file_1", "file");
+    assert.equal(!missing.ok && missing.code, 234003, "错误包装按接口错误算");
   }
 
   // ── ④ 额度 ────────────────────────────────────────────────────────────────

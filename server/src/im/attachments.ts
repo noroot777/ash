@@ -38,8 +38,13 @@ export async function saveAttachments(
       out.failures.push(`${label}：${isQuotaBlocked(downloaded) ? "本月飞书额度见底，没下载" : `下载失败（${downloaded.msg}）`}`);
       continue;
     }
+    if (!(downloaded.data?.bytes instanceof Uint8Array)) {
+      out.failures.push(`${label}：下载回来的不是文件内容`);
+      continue;
+    }
     const fromName = item.name ? MIME_BY_EXT[extname(item.name).toLowerCase()] : undefined;
-    const mime = (downloaded.data.contentType.split(";")[0]?.trim() || fromName || (item.kind === "image" ? "image/png" : "application/octet-stream"));
+    const declared = typeof downloaded.data.contentType === "string" ? downloaded.data.contentType.split(";")[0]?.trim() : "";
+    const mime = declared || fromName || (item.kind === "image" ? "image/png" : "application/octet-stream");
     const dataUrl = `data:${mime};base64,${Buffer.from(downloaded.data.bytes).toString("base64")}`;
     const saved = await ash.post<{ path: string }>(principal, "/api/uploads", { dataUrl, ...(item.name ? { name: item.name } : {}) });
     if (saved.ok && typeof saved.data.path === "string") out.paths.push(saved.data.path);

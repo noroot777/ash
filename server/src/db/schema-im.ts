@@ -17,6 +17,7 @@
 //   im_group_rooms 群里每个说话人各自的那间项目群聊房间（多人模式下群聊房间是创建者私有的，
 //                  所以一人一间；自用模式只有机主一人，user_key 为空串）。
 //   im_meta        水位线、本月调用计数、机器人自己的 open_id 等零散键值。
+import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { Client } from "./node-sqlite-client.js";
 
@@ -76,8 +77,13 @@ export const imOutbox = sqliteTable("im_outbox", {
   replyTo: text("reply_to"),
   replyInThread: integer("reply_in_thread").notNull().default(0),
   msgType: text("msg_type").notNull(),
-  /** 卡片/消息当前的内容（JSON）。 */
+  /** 卡片/消息当前的内容（JSON）：库里这份就是「飞书上应该长的样子」，发出去的和它不一样就要改卡。 */
   content: text("content").notNull(),
+  /**
+   * 决策卡：渲染这张卡用到的输入（标题、项目、只推标题、深链、这一件事的内容）的指纹。代次只说明
+   * 「还是那件事」，说明不了「卡片内容还对不对」—— 设置改了、标题改了，代次不变、内容要重渲染。
+   */
+  renderKey: text("render_key"),
   /** pending → sent；决策类卡片在别处处理掉后 → resolved；重试耗尽 → dead。 */
   state: text("state").notNull(),
   messageId: text("message_id"),
@@ -92,7 +98,9 @@ export const imOutbox = sqliteTable("im_outbox", {
   sentAt: text("sent_at"),
   resolvedAt: text("resolved_at"),
 }, (t) => [
-  uniqueIndex("im_outbox_subject").on(t.receiveId, t.taskId, t.kind, t.subject),
+  // 应用要在键里：换了应用、同一个群，旧应用那行不能挡住新应用的卡。task_id 为空的行（命令回执、
+  // 助手回复）也要去重 —— SQLite 唯一索引里 NULL 互不相等，所以按空串算。
+  uniqueIndex("im_outbox_dedupe").on(t.appId, t.receiveId, sql`coalesce(${t.taskId}, '')`, t.kind, t.subject),
   index("im_outbox_task").on(t.taskId),
   index("im_outbox_state").on(t.state),
   index("im_outbox_message").on(t.messageId),
@@ -109,7 +117,10 @@ export const imActions = sqliteTable("im_actions", {
   /** 发卡那一刻事项的代次；点击时与当前代次不一致就拒绝（旧卡答不中新问题）。 */
   generation: text("generation").notNull(),
   expiresAt: text("expires_at").notNull(),
+  /** 被点下、正在执行（result 为空）或已办完（result 有值）。动作没做成会放回成空。 */
   usedAt: text("used_at"),
+  /** 占用它的那个进程（envelopes.ts 的 CLAIMER）。重启后占用者不在了，由 actions.ts 的 recover 收尾。 */
+  claimedBy: text("claimed_by"),
   result: text("result"),
   createdAt: text("created_at").notNull(),
 }, (t) => [index("im_actions_outbox").on(t.outboxId)]);
@@ -129,7 +140,12 @@ export const imInbound = sqliteTable("im_inbound", {
   /** 实际送进 ash 的正文（附件转存后的路径也定在这里，重试时用同一份，chat 的幂等要求逐字节相同）。 */
   body: text("body"),
   attachments: text("attachments"),
-  /** received → done / failed；助手房间：sent（已投进房间）→ replied（回复已发回飞书）。 */
+  /** 消息事件原文（JSON）：重启时还没处理完的，照它重新处理一遍。 */
+  payload: text("payload"),
+  /**
+   * received（已落库、还没办）→ dispatching（正要做一件重做不安全的事：给任务发消息、答复、重试）
+   * → done / failed；助手房间：sent（已投进房间）→ replied（回复已发回飞书）。
+   */
   state: text("state").notNull(),
   detail: text("detail"),
   createdAt: text("created_at").notNull(),
@@ -186,24 +202,24 @@ export async function ensureImSchema(client: Client): Promise<void> {
       receive_type TEXT NOT NULL, receive_id TEXT NOT NULL, recipient_open_id TEXT,
       task_id TEXT, kind TEXT NOT NULL, subject TEXT NOT NULL,
       reply_to TEXT, reply_in_thread INTEGER NOT NULL DEFAULT 0,
-      msg_type TEXT NOT NULL, content TEXT NOT NULL, state TEXT NOT NULL, message_id TEXT,
+      msg_type TEXT NOT NULL, content TEXT NOT NULL, render_key TEXT, state TEXT NOT NULL, message_id TEXT,
       patch_state TEXT, resolution TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, next_at TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sent_at TEXT, resolved_at TEXT
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS im_outbox_subject ON im_outbox(receive_id, task_id, kind, subject);
+    DROP INDEX IF EXISTS im_outbox_subject;
     CREATE INDEX IF NOT EXISTS im_outbox_task ON im_outbox(task_id);
     CREATE INDEX IF NOT EXISTS im_outbox_state ON im_outbox(state);
     CREATE INDEX IF NOT EXISTS im_outbox_message ON im_outbox(message_id);
     CREATE TABLE IF NOT EXISTS im_actions (
       id TEXT PRIMARY KEY, outbox_id TEXT NOT NULL, task_id TEXT, action TEXT NOT NULL,
       payload TEXT NOT NULL DEFAULT '{}', recipient_open_id TEXT NOT NULL, generation TEXT NOT NULL,
-      expires_at TEXT NOT NULL, used_at TEXT, result TEXT, created_at TEXT NOT NULL
+      expires_at TEXT NOT NULL, used_at TEXT, claimed_by TEXT, result TEXT, created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS im_actions_outbox ON im_actions(outbox_id);
     CREATE TABLE IF NOT EXISTS im_inbound (
       id TEXT PRIMARY KEY, channel TEXT NOT NULL, app_id TEXT NOT NULL,
       open_id TEXT, chat_id TEXT, chat_type TEXT, kind TEXT NOT NULL,
-      task_id TEXT, room_id TEXT, body TEXT, attachments TEXT,
+      task_id TEXT, room_id TEXT, body TEXT, attachments TEXT, payload TEXT,
       state TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS im_inbound_state ON im_inbound(state);
@@ -218,4 +234,24 @@ export async function ensureImSchema(client: Client): Promise<void> {
     );
     CREATE TABLE IF NOT EXISTS im_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
   `);
+  // 早期库补列（CREATE TABLE IF NOT EXISTS 不会给已有的表加列）。
+  const added: [table: string, column: string, ddl: string][] = [
+    ["im_outbox", "render_key", "ALTER TABLE im_outbox ADD COLUMN render_key TEXT"],
+    ["im_actions", "claimed_by", "ALTER TABLE im_actions ADD COLUMN claimed_by TEXT"],
+    ["im_inbound", "payload", "ALTER TABLE im_inbound ADD COLUMN payload TEXT"],
+  ];
+  for (const [table, column, ddl] of added) {
+    const columns = await client.execute(`PRAGMA table_info(${table})`);
+    if (!columns.rows.some((row) => row.name === column)) await client.execute(ddl);
+  }
+  // 唯一键换了组成（加应用、空 task_id 按空串）：只在还没建过时做一次，先清掉同键的重复行、留最早那条。
+  const indexes = await client.execute("PRAGMA index_list(im_outbox)");
+  if (!indexes.rows.some((row) => row.name === "im_outbox_dedupe")) {
+    await client.execute(`DELETE FROM im_outbox WHERE rowid NOT IN (
+      SELECT min(rowid) FROM im_outbox GROUP BY app_id, receive_id, coalesce(task_id, ''), kind, subject
+    )`);
+    await client.execute(
+      "CREATE UNIQUE INDEX im_outbox_dedupe ON im_outbox(app_id, receive_id, coalesce(task_id, ''), kind, subject)",
+    );
+  }
 }

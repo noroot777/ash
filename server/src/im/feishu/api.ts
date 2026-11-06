@@ -92,8 +92,13 @@ export class FeishuApi {
       return { ok: false, code: 0, msg: `网络错误：${(error as Error).message}`, retryable: true };
     }
     const contentType = response.headers.get("content-type") ?? "";
-    if (binary && response.ok && !contentType.includes("application/json")) {
-      return { ok: true, data: { bytes: new Uint8Array(await response.arrayBuffer()), contentType } };
+    if (binary && response.ok) {
+      // 下载成功时正文就是文件本身，哪怕它的类型是 JSON（用户发的 .json 文件）；只有明确长成
+      // 错误包装（数字 code 非 0 + msg）的才按接口错误算。
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const failure = contentType.includes("application/json") ? errorEnvelopeOf(bytes) : null;
+      if (!failure) return { ok: true, data: { bytes, contentType } };
+      return { ok: false, code: failure.code, msg: failure.msg, retryable: RATE_LIMIT_CODES.has(failure.code) || TOKEN_INVALID_CODES.has(failure.code) };
     }
     let json: any;
     try {
@@ -207,4 +212,13 @@ function blocked<T>(): ApiResult<T> {
 
 export function isQuotaBlocked(result: ApiResult<unknown>): boolean {
   return !result.ok && result.code === QUOTA_BLOCKED;
+}
+
+function errorEnvelopeOf(bytes: Uint8Array): { code: number; msg: string } | null {
+  try {
+    const json = JSON.parse(new TextDecoder().decode(bytes)) as { code?: unknown; msg?: unknown };
+    return typeof json?.code === "number" && json.code !== 0 && typeof json.msg === "string" ? { code: json.code, msg: json.msg } : null;
+  } catch {
+    return null;
+  }
 }

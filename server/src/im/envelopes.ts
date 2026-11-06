@@ -6,13 +6,20 @@
 //      他自己的身份，权限照他本人的算；
 //   ③ 没被用过（并发两下只有一下抢得到，CAS 在 claim 里）；
 //   ④ 事情还是那件事：发卡时记下的代次与此刻现算的一致（attention.ts），否则是旧卡。
-import { and, eq, isNull } from "drizzle-orm";
+//
+// 占用记下是哪个进程占的（claimed_by）：点下去之后、办完之前进程没了，信封就停在「已占用、没结果」，
+// 永远显示「已经处理过了」。重启后 unfinishedEnvelopes 把这些找出来，由 actions.ts 判断那一下到底
+// 办成了没有 —— 不能一股脑放回去，办成了的再执行一遍就是重复副作用。
+import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
 import { imActions } from "../db/schema-im.js";
 import { now } from "../util.js";
 
 export const ENVELOPE_TTL_MS = 14 * 24 * 3600_000;
+
+/** 本进程的占用标识：重启后换一个，旧进程占着没办完的就认得出来。 */
+const CLAIMER = `${process.pid}:${nanoid(8)}`;
 
 export type EnvelopeRow = typeof imActions.$inferSelect;
 
@@ -61,18 +68,26 @@ export async function checkEnvelope(envelopeId: string, operatorOpenId: string, 
   return { ok: true, envelope, payload };
 }
 
-/** 占用信封。返回 false = 刚被另一下点击抢先了。 */
+/** 占用信封。返回 false = 刚被另一下点击抢先了。result 清空：上一次没做成留下的原因不算「办完了」。 */
 export async function claimEnvelope(envelopeId: string): Promise<boolean> {
-  const rows = await db.update(imActions).set({ usedAt: now() })
+  const rows = await db.update(imActions).set({ usedAt: now(), claimedBy: CLAIMER, result: null })
     .where(and(eq(imActions.id, envelopeId), isNull(imActions.usedAt))).returning({ id: imActions.id });
   return rows.length > 0;
 }
 
 /** 动作没做成（接口拒了）：放回去，用户改改还能再点。 */
 export async function releaseEnvelope(envelopeId: string, result: string): Promise<void> {
-  await db.update(imActions).set({ usedAt: null, result }).where(eq(imActions.id, envelopeId));
+  await db.update(imActions).set({ usedAt: null, claimedBy: null, result }).where(eq(imActions.id, envelopeId));
 }
 
 export async function finishEnvelope(envelopeId: string, result: string): Promise<void> {
   await db.update(imActions).set({ result }).where(eq(imActions.id, envelopeId));
+}
+
+/** 别的进程（上一次运行）占着、没办完的信封。 */
+export async function unfinishedEnvelopes(): Promise<EnvelopeRow[]> {
+  return db.select().from(imActions).where(and(
+    isNotNull(imActions.usedAt), isNull(imActions.result),
+    or(isNull(imActions.claimedBy), ne(imActions.claimedBy, CLAIMER)),
+  ));
 }
