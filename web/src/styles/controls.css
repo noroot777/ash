@@ -232,6 +232,8 @@
 
 .ui-tabs button {
   height: 22px;
+  /* 高度写死,折行只会把字挤出盒子(中文可逐字断行),同 .ui-button 那条。 */
+  white-space: nowrap;
   border: 0;
   border-radius: 9999px;
   background: transparent;
@@ -253,14 +255,8 @@
   box-shadow: 0 1px 3px rgb(40 42 48 / 14%);
 }
 
-/* 深浅色开关(components/ColorThemeChoice.tsx):图标 + 字。设置页里它是 .settings-row 的
-   直接子 div,那条规则会把它改成纵向 grid —— 这里用两个类压回横排。 */
-.ui-tabs.color-theme-choice {
-  display: inline-flex;
-  flex: none;
-  gap: 2px;
-}
-
+/* 深浅色开关(components/ColorThemeChoice.tsx):图标 + 字。摆法(设置页那行靠右、项目下拉里
+   撑满一行)由摆它的地方定，这里不碰 display。 */
 .color-theme-choice button {
   display: inline-flex;
   align-items: center;

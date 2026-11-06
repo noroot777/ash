@@ -103,6 +103,14 @@ export function onColorThemeChange(listener: () => void): () => void {
 // 按 preference 解析，钉死时 media 怎么变结果都一样。
 media?.addEventListener("change", paint);
 
+// 另一个标签页里换了配色，这里跟着翻：那边换档时会写这份镜像，而 storage 事件只发给
+// **别的**标签页。同源同 cookie,两个标签页一定是同一个人，镜像就是他刚选的那一档。
+window.addEventListener("storage", (event) => {
+  if (event.key !== STORAGE_KEY || !isColorTheme(event.newValue) || event.newValue === preference) return;
+  preference = event.newValue;
+  paint();
+});
+
 // 模块一加载就按镜像拨一次：index.html 那段脚本已经拨过的话这是空操作，没拨过的入口
 // (测试台、将来别的 html)也不会停在「没有 data-theme」的半截状态。
 paint();

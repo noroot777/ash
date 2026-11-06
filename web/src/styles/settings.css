@@ -166,6 +166,13 @@
   gap: 3px;
 }
 
+/* 上面那条是给左边「标题 + 说明」那块的;右边的控件本身也是 div 时(分段开关 .ui-tabs,
+   见设置 → 默认规则 → 外观)得压回它自己的横排，否则三颗按钮会竖着叠起来。 */
+.settings-row > .ui-tabs {
+  display: inline-flex;
+  flex: none;
+}
+
 .settings-row b,
 .settings-danger-row b {
   font-size: 13px;
