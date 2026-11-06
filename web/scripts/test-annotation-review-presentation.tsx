@@ -44,7 +44,7 @@ assert(conversation.includes("#1 加大按钮"));
 assert(!conversation.includes("preview_page_data"));
 assert(!conversation.includes("公共组件 vs 单实例"));
 const teamConversation = renderToStaticMarkup(<TeamFeed
-  task={{ id: "task-a", status: "done", mode: "team", agentType: "codex" } as never}
+  task={{ id: "task-a", body: "批注演示的原始需求", status: "done", mode: "team", agentType: "codex" } as never}
   rows={[{ kind: "conv", key: "annotation", item: { kind: "user", id: "annotation", text: annotationBatchPrompt(record.batch), attachments: [], at: "2026-09-10" } }]}
   workers={[]} onOpenWorker={() => undefined} onAskLead={() => undefined} delegatingIds={new Set()} indicatorForTask={() => null}
 />);
