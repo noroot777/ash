@@ -93,9 +93,9 @@ export function mountDuetGateRoutes(api: Hono): void {
       if (expectedVersion !== undefined) {
         let current: number;
         try {
-          current = lastOpenedGateVersion(taskId);
+          current = await lastOpenedGateVersion(taskId);
         } catch {
-          return c.json({ error: "这一下没读到讨论记录，确认不了你点的是哪一扇门：请稍后再点" }, 503);
+          return c.json({ error: "这一下没读到闸口版本，确认不了你点的是哪一扇门：请稍后再点" }, 503);
         }
         if (current !== expectedVersion) return c.json({ error: STALE, stale: true, gateVersion: current || null }, 409);
       }

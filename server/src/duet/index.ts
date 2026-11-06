@@ -471,9 +471,9 @@ export async function resumeAtGate(
       planRound: lastPlanRound(rows),
       lastUserNote: lastUserNoteOf(rows),
     };
-    // 关门那一行带上被关的那扇门的版本,和开门行配成一对(重启后内存里的门没了,版本取文件里最近一次开门)。
+    // 关门那一行带上被关的那扇门的版本,和开门行配成一对(重启后内存里的门没了,版本取最近一次发出去的号)。
     let closing = 0;
-    try { closing = lastOpenedGateVersion(taskId); } catch { /* 读不了就不带版本,跟老记录一样 */ }
+    try { closing = await lastOpenedGateVersion(taskId); } catch { /* 读不了就不带版本,跟老记录一样 */ }
     recordGateEvent({ type: "duet.gate", taskId, gate: "G1", open: false, ...(closing ? { version: closing } : {}) });
     await setStatus(taskId, "running");
 
@@ -581,11 +581,12 @@ async function runGate(
   getInfo?: () => { consensus: boolean; consensusBy?: DuetConsensusBy; conclusionA: string | null; conclusionB: string | null },
 ): Promise<boolean> {
   while (true) {
+    // 每开一次门领一个新版本(理由见 gate-version.ts),在库里落定了才往下开:领不到就抛出去由外层 failDuet
+    // 落成失败,这扇门不开、卡片不推,状态也还没写成 awaiting_review(那样重启补救会拿上一扇门的号放行)。
+    const version = await nextGateVersion(taskId);
     await setStatus(taskId, "awaiting_review");
     const info = getInfo?.();
-    // 每开一次门发一个新版本(理由见 gate-version.ts)。先登记门、再记开门事件:收到开门事件
-    // 的那一侧(界面、飞书)马上就可能来点,这时门必须已经在等了。
-    const version = nextGateVersion(taskId);
+    // 先登记门、再记开门事件:收到开门事件的那一侧(界面、飞书)马上就可能来点,这时门必须已经在等了。
     const decision = waitForGate(taskId, version);
     recordGateEvent({
       type: "duet.gate", taskId, gate: "G1", open: true, version,

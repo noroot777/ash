@@ -17,7 +17,8 @@
 // ⑤ @ 占位去掉之后，正文的缩进原样；
 // ⑥ 团队验收占住全队（team-acceptance-hold.ts）：占着的时候共享执行者起不了跑、改不了状态、加不了新执行者、
 //    别人带 force 也写不了工作区、调度台不在线时用户的话不开台；验收自己的守卫不把这份占位当成在飞；占住之后
-//    调度台又跑了一轮 → 之后每道守卫都拒；放开之后一切照旧；占的那一刻被别人短暂占着的成员，下一道守卫补占上。
+//    调度台又跑了一轮 → 之后每道守卫都拒；放开之后一切照旧；占的那一刻被别人短暂占着的成员，下一道守卫补占上；
+// ⑦ 攒着的执行者汇报两处同时来送（回合收尾、团队验收结束）：只送进去一遍；前一次没收下，后一次照样重试。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -256,6 +257,50 @@ try {
     assert.equal(claimOwnTurn("tworker", "single"), null, "补占之后照样起不了跑");
     releaseAgain();
     assert.ok(!isTurnClaimed("tworker"), "补占的那一把也随验收结束放开");
+  }
+
+  // ── ⑦ 待送汇报两处同时来送 ───────────────────────────────────────────────
+  {
+    const { createWriteStream } = await import("node:fs");
+    const { createSessionConsumer } = await import("../src/team/session-consumer.js");
+    const { enqueueInbound, pendingInbound } = await import("../src/team/inbound-queue.js");
+    // 手工组装一台空着的调度台：send 记下每次投递，accept 决定这一次收不收。
+    const desk = async (id: string, accept: (attempt: number) => boolean) => {
+      await db.insert(tasks).values({ id, projectId: "p1", title: "调度台", body: "", mode: "team", status: "idle", createdAt: at, updatedAt: at } as never);
+      mkdirSync(join(stage, "runs", id), { recursive: true });
+      const attempts: string[] = [];
+      const delivered: string[] = [];
+      const lead = {
+        taskId: id, sessId: `s-${id}`, cliSessionId: "thread", agentType: "codex", ownerUserId: null,
+        executorId: null, model: null, reasoningEffort: null, cwd: stage,
+        handle: {
+          send: (text: string) => { attempts.push(text); const ok = accept(attempts.length); if (ok) delivered.push(text); return ok; },
+          interrupt() {}, close() {}, kill() {}, dropSession() {},
+        },
+        out: createWriteStream(join(stage, "runs", id, `s-${id}.md`), { flags: "a" }),
+        busy: false, turnStart: null, pending: [await enqueueInbound(id, "汇报一"), await enqueueInbound(id, "汇报二")],
+        notices: [], pendingCredential: null, wantedStatus: null, statusTimer: null, retired: false, idleTimer: null, closing: null,
+      };
+      const consumer = createSessionConsumer({
+        leads: new Map([[id, lead]]) as never, adoptInbound: async () => {}, flushUnqueued: async () => {}, releasePending: () => {},
+      });
+      return { lead, attempts, delivered, deliver: () => consumer.deliverPending(lead as never) };
+    };
+
+    const both = await desk("tdesk-both", () => true);
+    assert.deepEqual(await Promise.all([both.deliver(), both.deliver()]), [true, true], "两次都说「台上有回合在跑」，谁都别落 idle");
+    assert.equal(both.delivered.length, 1, "同一批汇报只送进去一遍");
+    assert.match(both.delivered[0], /汇报一[\s\S]*汇报二/, "两条合并成一条");
+    assert.equal(both.lead.pending.length, 0);
+    assert.deepEqual(await pendingInbound("tdesk-both"), [], "送进去之后销账");
+
+    const retry = await desk("tdesk-retry", (attempt) => attempt > 1);
+    assert.deepEqual(await Promise.all([retry.deliver(), retry.deliver()]), [false, true], "前一次没收下，后一次接着重试");
+    assert.equal(retry.attempts.length, 2);
+    assert.equal(retry.delivered.length, 1);
+    assert.equal((await pendingInbound("tdesk-retry")).length, 0);
+    both.lead.out.end();
+    retry.lead.out.end();
   }
 
   // ── ② 旧失败上的重试 ─────────────────────────────────────────────────────

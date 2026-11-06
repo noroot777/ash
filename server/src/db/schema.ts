@@ -231,6 +231,8 @@ export const tasks = sqliteTable("tasks", {
    * 新的一次,审查第 2 轮实测)。老数据为空:加列之前的验收,读侧回落到合并事实。
    */
   acceptanceId: text("acceptance_id"),
+  /** duet 闸口最近发出去的版本号(第几次开门),开门之前在这里领号,理由见 duet/gate-version.ts。空 = 加列之后没开过门。 */
+  duetGateVersion: integer("duet_gate_version"),
   baseUpdateIntent: text("base_update_intent"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   creationOrigin: text("creation_origin"),

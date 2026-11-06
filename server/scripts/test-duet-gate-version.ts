@@ -2,8 +2,9 @@
 //
 // 钉住的几种情况(理由见 server/src/duet/gate-version.ts 与 gate-route.ts 的文件头):
 // ① 内存里的门:版本对不上回 stale、门继续等;对上才放行;不带版本保持旧行为;
-// ② 版本号从 transcript 里数:老记录(没有 version、事件名还是 debate.gate)按开门序号补;
-//    文件没写进去时(recordGateEvent 只是尽力写)也不会发出重复的版本;
+// ② 版本号开门前在库里领(tasks.duet_gate_version):加列之前的老讨论拿 transcript 里数出来的垫底
+//    (没有 version、事件名还是 debate.gate 的按开门序号补);开门行没写进文件(recordGateEvent 只是尽力写)
+//    再加上重启,也不会发出重复的版本(审查第 3 轮复现);垫底要读的 transcript 读不了、任务不在库里,领号失败;
 // ③ 重启补救那一路:版本不符回 409 stale,而且是在占回合锁之前就回 —— 锁不会泄漏;
 //    版本相符照常续上,关门那一行带着被关那扇门的版本;
 // ④ 讨论已经 done:带版本的注入/放行一律 409 stale,不走验收打回;
@@ -37,7 +38,7 @@ try {
   await ensureSchema();
   const at = new Date().toISOString();
   await db.insert(projects).values({ id: "p", name: "duet gate version", repoPath: root, apiKeys: null, createdAt: at });
-  const duetTask = (id: string, status: "awaiting_review" | "done") => db.insert(tasks).values({
+  const duetTask = (id: string, status: "awaiting_review" | "done" | "running") => db.insert(tasks).values({
     id, projectId: "p", groupId: null, parentId: null, title: id, body: "", mode: "duet",
     status, labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: null, executorId: null,
     autoTitle: false, duet: JSON.stringify({ topic: "闸口版本", voiceA: "claude", voiceB: "codex", gateG1: "on" }),
@@ -92,7 +93,8 @@ try {
   assert.deepEqual(oldClient.body, { ok: true, gateVersion: 7 }, "不带版本的老客户端照常放行");
   assert.deepEqual(await routedOld, { kind: "approve" }, "approve 上的 text/side 服务端本来就不读,不往下传");
 
-  // ── ② 版本号从 transcript 里数 ─────────────────────────────────────────────
+  // ── ② 版本号在库里领 ─────────────────────────────────────────────────────
+  await duetTask("legacy", "running");
   writeTranscript("legacy", [
     { round: 1, speaker: "A", text: "我的观点" },
     // 正文里出现闸口事件的字样也不能被当成一次开门。
@@ -103,26 +105,67 @@ try {
     { type: "duet.gate", taskId: "legacy", gate: "G1", open: true },
     { type: "duet.gate", taskId: "legacy", gate: "G1", open: false },
   ]);
-  assert.equal(lastOpenedGateVersion("legacy"), 2, "老记录(debate.gate、没有 version)按开门序号补");
-  assert.equal(nextGateVersion("legacy"), 3, "新开的门接着老记录往下数");
-  assert.equal(nextGateVersion("legacy"), 4, "上一扇门没写进文件也不能重发同一个版本");
+  assert.equal(await lastOpenedGateVersion("legacy"), 2, "老记录(debate.gate、没有 version)按开门序号补");
+  assert.equal(await nextGateVersion("legacy"), 3, "新开的门接着老记录往下数");
+  assert.equal(await nextGateVersion("legacy"), 4, "上一扇门没写进文件也不能重发同一个版本");
+  assert.equal(await lastOpenedGateVersion("legacy"), 4, "领过号之后认库里的");
   appendFileSync(transcript("legacy"), JSON.stringify({ type: "duet.gate", taskId: "legacy", gate: "G1", open: true, version: 9 }) + "\n");
-  assert.equal(lastOpenedGateVersion("legacy"), 9, "行上带了 version 就用它");
-  assert.equal(nextGateVersion("legacy"), 10);
-  assert.equal(lastOpenedGateVersion("never-opened"), 0, "从没开过门 = 0");
-  assert.equal(nextGateVersion("never-opened"), 1);
+  assert.equal(await nextGateVersion("legacy"), 5, "领过号之后 transcript 只是历史,不再左右发号");
+  await duetTask("legacy-versioned", "running");
+  writeTranscript("legacy-versioned", [{ type: "duet.gate", taskId: "legacy-versioned", gate: "G1", open: true, version: 9 }]);
+  assert.equal(await lastOpenedGateVersion("legacy-versioned"), 9, "老讨论的行上带了 version 就用它");
+  assert.equal(await nextGateVersion("legacy-versioned"), 10);
+  await duetTask("never-opened", "running");
+  assert.equal(await lastOpenedGateVersion("never-opened"), 0, "从没开过门 = 0");
+  assert.equal(await nextGateVersion("never-opened"), 1);
+
+  // 审查第 3 轮复现:第 4 扇门的开门行没写进 transcript(磁盘满),server 随后重启 —— 内存里什么都不剩。
+  // 重启要换一份全新的模块实例来演(老实现把发过的号记在模块里的 Map 上,同一份实例演不出重启)。
+  await duetTask("lost-write", "running");
+  for (let i = 1; i <= 3; i++) {
+    const v = await nextGateVersion("lost-write");
+    recordGateEvent({ type: "duet.gate", taskId: "lost-write", gate: "G1", open: true, version: v });
+    recordGateEvent({ type: "duet.gate", taskId: "lost-write", gate: "G1", open: false, version: v });
+  }
+  assert.equal(await nextGateVersion("lost-write"), 4, "第 4 扇门领到号;开门行故意不写");
+  const restarted: typeof import("../src/duet/gate-version.js") = await import("../src/duet/gate-version.js?restarted");
+  await db.update(tasks).set({ status: "awaiting_review" }).where(eq(tasks.id, "lost-write"));
+  assert.equal(await restarted.currentGateVersion("lost-write"), 4, "重启后停在闸口:开着的是第 4 扇,不是文件里最后那扇");
+  const lostStale = await post("lost-write", { kind: "approve", expectedVersion: 3 });
+  assert.equal(lostStale.status, 409, "第 3 张卡不能借重启补救放行第 4 扇门");
+  assert.equal(lostStale.body.gateVersion, 4);
+  assert.equal(isTurnClaimed("lost-write"), false);
+  await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "lost-write"));
+  const fifth = await restarted.nextGateVersion("lost-write");
+  assert.equal(fifth, 5, "重启之后的下一扇门不能再发 4");
+  const fifthGate = waitForGate("lost-write", fifth);
+  const oldCard = await post("lost-write", { kind: "approve", expectedVersion: 4 });
+  assert.equal(oldCard.status, 409, "第 4 张卡上的放行点不中第 5 扇门");
+  assert.equal(oldCard.body.stale, true);
+  assert.equal(openGateVersion("lost-write"), 5, "门继续等");
+  resolveGate("lost-write", { kind: "reject" }, 5);
+  await fifthGate;
+
+  // 领不到号就抛:垫底要读的 transcript 读不了(这里是个目录)、任务不在库里 —— 不拿时钟或 0 凑一个号。
+  await duetTask("unreadable", "running");
+  mkdirSync(transcript("unreadable"), { recursive: true });
+  await assert.rejects(nextGateVersion("unreadable"), /EISDIR/, "读不了老记录就不发号");
+  await assert.rejects(lastOpenedGateVersion("unreadable"), /EISDIR/);
+  assert.equal((await db.select({ v: tasks.duetGateVersion }).from(tasks).where(eq(tasks.id, "unreadable"))).at(0)?.v, null,
+    "领号失败什么都不落");
+  await assert.rejects(nextGateVersion("no-such-task"), /不在库里/);
 
   // ── ③ 重启补救那一路 ──────────────────────────────────────────────────────
   // 用真的写入口落两扇门(第 1 扇已关,第 2 扇开着),然后内存里没有门 = server 重启过。
   await duetTask("restart", "awaiting_review");
-  const v1 = nextGateVersion("restart");
+  const v1 = await nextGateVersion("restart");
   recordGateEvent({ type: "duet.gate", taskId: "restart", gate: "G1", open: true, version: v1 });
   recordGateEvent({ type: "duet.gate", taskId: "restart", gate: "G1", open: false, version: v1 });
-  const v2 = nextGateVersion("restart");
+  const v2 = await nextGateVersion("restart");
   recordGateEvent({ type: "duet.gate", taskId: "restart", gate: "G1", open: true, version: v2 });
   assert.deepEqual([v1, v2], [1, 2]);
   assert.equal(openGateVersion("restart"), null);
-  assert.equal(await currentGateVersion("restart"), 2, "重启后的门:版本取 transcript 里最近一次开门");
+  assert.equal(await currentGateVersion("restart"), 2, "重启后的门:版本取最近一次发出去的号");
 
   const restartStale = await post("restart", { kind: "approve", expectedVersion: 1 });
   assert.equal(restartStale.status, 409);
@@ -197,7 +240,7 @@ try {
   await inMemory;
 
   console.log("✓ 闸口版本:旧卡点不中新门、门继续等;不带版本的老客户端照旧");
-  console.log("✓ 版本从 transcript 数(老记录按序号补、写失败不重号);重启补救 stale 不占锁,对上版本照常续、关门行带版本");
+  console.log("✓ 版本在库里领(老讨论按 transcript 垫底、开门行写丢再重启也不重号、领不到就抛);重启补救 stale 不占锁,对上版本照常续、关门行带版本");
   console.log("✓ 已结束的讨论不被旧卡拉起;请求体非法一律 400;currentGateVersion 三档");
 } catch (error) {
   failure = error;

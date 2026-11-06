@@ -10,12 +10,14 @@
 // 为什么不用 round:讨论 done 之后被定时/`/fire` 重跑时,runDuet 从第 1 轮重新数,
 // 而 transcript 不清空,轮次会重复;开门次数只增不减。
 //
-// 为什么记在 transcript 里而不加数据库列:transcript 本来就是 duet 重启后重建状态的依据
-// (`resumeAtGate` 就读它),而且只追加不删 —— `resumeDuet` 重写文件时只拿掉失败的那一轮,
-// 闸口行都保留。读文件的写法与 `resumeAtGate` 一致,直接读 RUNS_DIR 下那一份。
+// 为什么记在数据库列里(`tasks.duet_gate_version`)而不从 transcript 数:版本号就是「你点的是哪一扇门」的身份,
+// 发出去就不能再发第二次。transcript 里的开门行是尽力写的(`recordGateEvent`),某次追加失败(磁盘满)之后文件里
+// 少一扇门,server 一重启就把同一个号再发一次,旧卡上的「放行」又对上了新门(审查第 3 轮实测)。所以每开一扇门
+// 之前先在库里把号领走,领不到就不开门 —— 不拿内存、不拿时钟凑一个号。transcript 里的开门/关门行照写,那是历史
+// 和界面用的,不再是发号的依据。加列之前开过门的老讨论列是空的:第一次领号时拿 transcript 里数出来的最大版本垫底。
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { tasks } from "../db/schema.js";
 import { RUNS_DIR } from "../paths.js";
@@ -59,31 +61,32 @@ function openedVersions(taskId: string): number[] {
   return out;
 }
 
-/** 最近一次开门的版本;这场讨论从没开过门返回 0。读不了 transcript 时抛错(见 openedVersions)。 */
-export function lastOpenedGateVersion(taskId: string): number {
-  return openedVersions(taskId).at(-1) ?? 0;
+/** 加列之前开过的门:transcript 里最大的那个版本,从没开过 = 0。读不了往外抛(见 openedVersions)。 */
+function legacyGateVersion(taskId: string): number {
+  return openedVersions(taskId).reduce((max, v) => Math.max(max, v), 0);
 }
 
-// 本进程发出过的最大版本。`recordGateEvent` 写 transcript 只是尽力而为,某次追加失败时
-// 文件里就少一扇门 —— 只看文件会把同一个版本号发两次,旧卡就又能对上新门了。
-const issued = new Map<string, number>();
+/** 最近一次发出去的门版本;这场讨论从没开过门返回 0。读不了(库或老讨论的 transcript)时抛错。 */
+export async function lastOpenedGateVersion(taskId: string): Promise<number> {
+  const row = (await db.select({ version: tasks.duetGateVersion }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  return row?.version ?? legacyGateVersion(taskId);
+}
 
 /**
- * 给即将打开的那扇门发号:文件里最大的版本和本进程发过的最大版本取大,再加一。
- * 文件这一下读不了时不能退回 0(会重发旧号):本进程发过号就接着它发,没发过就用秒级时间戳 —— 一定比文件里
- * 按 1、2、3… 发出来的大,写进 transcript 之后后面的读数照样接得上。
+ * 给即将打开的那扇门领号,**在库里落定之后才返回**:调用方拿到号再开门、再推卡片;抛错就别开门。
+ * 列还空着时以 transcript 里的最大版本垫底,transcript 读不了同样抛错 —— 垫错了就会重发老号。
  */
-export function nextGateVersion(taskId: string): number {
-  let onDisk: number;
-  try {
-    onDisk = openedVersions(taskId).reduce((max, v) => Math.max(max, v), 0);
-  } catch (error) {
-    console.warn(`[ash] 读不了讨论记录,闸口版本改用兜底发号 task=${taskId}:`, (error as Error).message);
-    onDisk = issued.has(taskId) ? 0 : Math.floor(Date.now() / 1000);
-  }
-  const next = Math.max(onDisk, issued.get(taskId) ?? 0) + 1;
-  issued.set(taskId, next);
-  return next;
+export async function nextGateVersion(taskId: string): Promise<number> {
+  const row = (await db.select({ version: tasks.duetGateVersion }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!row) throw new Error(`任务 ${taskId} 不在库里,闸口领不到版本号`);
+  const floor = row.version ?? legacyGateVersion(taskId);
+  // coalesce:垫底只在列还空着的那一次生效,之后一律接着库里的往下发。
+  const issued = (await db.update(tasks)
+    .set({ duetGateVersion: sql`coalesce(${tasks.duetGateVersion}, ${floor}) + 1` })
+    .where(eq(tasks.id, taskId))
+    .returning({ version: tasks.duetGateVersion })).at(0)?.version;
+  if (!isVersion(issued)) throw new Error(`任务 ${taskId} 的闸口版本号没有落进库里`);
+  return issued;
 }
 
 /**
@@ -92,10 +95,10 @@ export function nextGateVersion(taskId: string): number {
  *
  *  · 内存里有开着的门:就是它的版本(讨论正在 `runGate` 里等)。
  *  · 内存里没有、任务停在 duet 的 awaiting_review、回合锁也没人占:server 重启丢了内存里的门,
- *    `/gate` 会走重启补救那一路(`resumeAtGate`),版本取 transcript 里最近一次开门。
+ *    `/gate` 会走重启补救那一路(`resumeAtGate`),版本取最近一次发出去的那个号。
  *  · 锁被占着而内存里又没有门:正在开门的路上(状态已写成 awaiting_review、门还没登记),
  *    或者正在回炉。这时报 null,等 `duet.gate` 开门事件来了再看。
- *  · 要读 transcript 却读不了:抛错,调用方别据此收卡或发卡(im/attention.ts viewsOf 把这个任务当成「这一下看不清」)。
+ *  · 版本读不了(库,或老讨论要读 transcript):抛错,调用方别据此收卡或发卡(im/attention.ts viewsOf 把这个任务当成「这一下看不清」)。
  *
  * 不能从 shared 的「此刻轮到你了吗」推出来:那份判据把 awaiting_review 算作「机器在动」
  * (`shared/src/task-attention.ts` 的 isTaskLive),所以闸口要单独判。
@@ -103,12 +106,13 @@ export function nextGateVersion(taskId: string): number {
 export async function currentGateVersion(taskId: string): Promise<number | null> {
   const live = openGateVersion(taskId);
   if (live !== null) return live;
-  const task = (await db.select({ mode: tasks.mode, status: tasks.status }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  const task = (await db.select({ mode: tasks.mode, status: tasks.status, version: tasks.duetGateVersion })
+    .from(tasks).where(eq(tasks.id, taskId))).at(0);
   // 读库那一下有 await,门可能刚好在这期间开了或关了 —— 以读库之后这一刻的内存与锁为准。
   const opened = openGateVersion(taskId);
   if (opened !== null) return opened;
   if (task?.mode !== "duet" || task.status !== "awaiting_review") return null;
   if (isTurnClaimed(taskId)) return null;
-  const version = lastOpenedGateVersion(taskId);
+  const version = task.version ?? legacyGateVersion(taskId);
   return version > 0 ? version : null;
 }

@@ -19,6 +19,8 @@ export interface Lead {
   busy: boolean;
   /** 投递串行链(见 session-consumer.ts 的 sendToLead):保证同一台的 send 按调用顺序落地。 */
   sending?: Promise<void>;
+  /** 待送汇报的合并投递串行链(见 session-consumer.ts 的 deliverPending):取批到销账整段不和另一次交错。 */
+  delivering?: Promise<void>;
   /**
    * 队首那个身份的起点 —— 执行器此刻在跑的那一轮。由 `lead-turns.ts` 跟着 `held` 一起维护,
    * 别处只读。

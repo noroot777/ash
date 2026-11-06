@@ -62,7 +62,7 @@
 | 失败 | status=failed，或回合起不来 | 「重试」→ `POST /tasks/:id/retry`（只接受 failed） | P1 |
 | 已收尾的完成 / 门禁结果 | 完成且已验收或合并，或门禁出结果 | 只做告知，默认推。原地改卡片不会触发推送提醒，所以「完成」一律发新消息，不靠改旧卡 | P1 |
 | 驳回待裁定 | 执行者驳回了审查意见 | 三个按钮 → `.../review/dispute/resolution`，带上 `target:{runId, round}`。按钮文案要写清楚：`withdrawn` 的意思是「采纳执行者的说法」，不是「撤回」 | P2 |
-| duet 收敛闸 | `duet.gate` | approve / inject。**reject 实际上会取消任务**（`server/src/duet/index.ts:560`），文案必须写「否决并取消」，并且二次确认。`GateAction` 目前没有版本号，要先补上（见 6.4） | P2 |
+| duet 收敛闸 | `duet.gate` | approve / inject。**reject 实际上会取消任务**（`server/src/duet/index.ts:560`），文案必须写「否决并取消」，并且二次确认。闸口带版本号（见 6.4） | P2 |
 
 **每张卡片都带：** 项目名、任务标题、一句「卡在哪」（取自 `GET /sessions/:id/notices`），以及一个打开 ash 的深链 `<base>/?project=<pid>&task=<id>`，`<base>` 在设置里配成 Tailscale 地址。手机不一定连着 Tailscale，多人模式下也未必有登录态，所以**卡片本身必须能独立完成决策**，深链只是补充。
 
@@ -132,7 +132,7 @@ CardKit 的流式模式开启 10 分钟后自动关闭，单张卡片每秒最�
 
 校验通过后，按收件人的身份进程内调 API，然后在库里标记已用，重启后也不能重放。
 
-**必须带代次，不能只靠内容键。** `questionKey` 只是 `JSON.stringify([question, options, items])`（`shared/src/questions.ts:86-88`），按内容算，没有代次。agent 原样再问一次「继续吗？」，旧卡片照样能答中新问题。提问的代次可以用提问历史的长度加 updatedAt。duet 闸口目前没有版本号：注入一次意见之后闸口会重新打开，这时点旧卡片上的 approve，就放行了一份你没读过的新方案。所以闸口卡必须先补版本号才能做。
+**必须带代次，不能只靠内容键。** `questionKey` 只是 `JSON.stringify([question, options, items])`（`shared/src/questions.ts:86-88`），按内容算，没有代次。agent 原样再问一次「继续吗？」，旧卡片照样能答中新问题。提问的代次可以用提问历史的长度加 updatedAt。duet 闸口原来没有版本号：注入一次意见之后闸口会重新打开，这时点旧卡片上的 approve，就放行了一份你没读过的新方案。现在每开一扇门之前先在库里领一个号（`tasks.duet_gate_version`，`server/src/duet/gate-version.ts`），领不到就不开门。不能从 transcript 里数：开门行只是尽力写，写失败之后再一重启，同一个号就会再发一次（审查第 3 轮实测）。
 
 agent 伪造的卡片上的按钮会因为没有登记过的信封而点不动。但卡片里的链接仍然是钓鱼面，所以**卡片里除了 ash 深链，不放任何外链**。agent 写的文本一律按 plain_text 渲染，剥掉 `<at>`。
 
@@ -163,7 +163,7 @@ agent 伪造的卡片上的按钮会因为没有登记过的信封而点不动�
 | **P0 实测**（2026-11-06 完成） | 一次性脚本，不进仓库。卡片回调能经长连接收到，回调里拿得到 `operator.open_id`，结论见第十节 | 无 |
 | **P0' 合并判据** | 「此刻轮到你动手了吗」从 web、mobile 各一份合成 `shared/` 里的一份，界面行为不变 | `shared/src/`、`web/src/lib/taskAttention.ts`、`mobile/src/lib/taskTree.ts` |
 | **P1 决策收件箱**（只支持自用模式，只走单聊） | 绑定流程；提问卡、待验收卡、失败卡；完成和门禁通知（默认推）；在别处处理掉的卡片原地改成「已处理」；启动对账带水位线；连接状态 | `server/src/im/{config,connection,outbox,reconcile,cards,actions,bind-routes}.ts`，新表放在 `server/src/db/schema-im.ts` 并且不进 preview-seed；`index.ts` 加一行；web 设置页加飞书分区；回归测试覆盖对账、信封（过期/他人点击/重复点击/代次不符）、启动刷屏，以及通道模块不引用 `issueHumanActionToken` |
-| **P2 审批** | 驳回裁定卡；duet 闸口卡（先给 GateAction 补版本号） | `server/src/im/actions.ts`、`server/src/duet/gates.ts` |
+| **P2 审批** | 驳回裁定卡；duet 闸口卡（带闸口版本号） | `server/src/im/actions.ts`、`server/src/duet/gates.ts` |
 | **P3 遥控** | `im` 身份；单聊进助手房间；回复提问卡 = 答复、`/reply` 开头 = reply；斜杠命令；附件；`/new`、`/stop` 先出确认卡再执行 | `server/src/auth/context.ts`、`middleware.ts`、`chat/route-access.ts`、`server/src/im/{inbound,commands}.ts` |
 | **P4 群与多人** | 多人模式绑定；群绑项目、话题绑任务；推送前按收件人可见性过滤（`server/src/auth/visibility.ts`） | `server/src/im/group-policy.ts` 等 |
 | 以后再说 | 第二个适配器（钉钉 Stream、企业微信长连接，用来检验抽象是否真的与平台无关）；多实例经 handoff 签名通道单网关转发；给 agent 用的 lark-cli 技能（用独立应用） | — |

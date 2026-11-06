@@ -122,7 +122,8 @@ export async function resumeLeadAfterAcceptance(taskId: string): Promise<void> {
   if (lead && !lead.closing && existsSync(lead.cwd)) {
     if (lead.busy || !lead.pending.length) return; // 忙着的那台回合收尾时自己会合并送
     clearIdle(lead);
-    await consumer().deliverPending(lead);
+    // 没送进去(失败已经报过)而这台还空着:把刚才停掉的空闲回收计时接回去,别让它从此不被回收。
+    if (!(await consumer().deliverPending(lead)) && !lead.busy && !lead.closing) consumer().armIdle(lead);
     return;
   }
   if (lead?.closing) return; // 正在收尾的那台关掉时自己会把队列交给下一台

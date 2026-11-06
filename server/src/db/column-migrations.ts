@@ -341,6 +341,8 @@ export const COLUMN_MIGRATIONS: string[] = [
   // 这是哪一次验收(见 db/schema.ts 同名列)。存量行为空 = 加列之前的验收,**不回填**:回填会让已验收的
   // 任务个个换一个身份,飞书那边把它们当成新验收再推一遍。
   "ALTER TABLE tasks ADD COLUMN acceptance_id TEXT",
+  // duet 闸口版本号(见 db/schema.ts 同名列)。存量行为空,第一次开门时拿 transcript 里数出来的版本垫底。
+  "ALTER TABLE tasks ADD COLUMN duet_gate_version INTEGER",
   // 项目级浏览器登录态授权白名单（JSON 字符串数组）。空/null = 不授权,是默认。
   "ALTER TABLE projects ADD COLUMN browser_cdp_domains TEXT",
   // ── 多人模式(docs/multi-user-plan.md §八)──────────────────────────────

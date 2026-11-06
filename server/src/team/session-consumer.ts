@@ -414,16 +414,29 @@ async function endTurn(lead: Lead): Promise<void> {
   // 更不能落 idle 或起空闲回收计时 —— 一台正在干活的调度台会被当成闲置收掉。
   if (!idleNow) return;
   if (lead.pending.length && await deliverPending(lead)) return;
+  if (lead.busy) return; // 排在前面的那次补送(团队验收结束)已经把新回合送进去了,这台不是空的
   await setLeadStatus(lead, "idle", endIso);
   armIdle(lead);
 }
 
 /**
- * 把攒着的执行者汇报合并成一条送进去(回合收尾时、团队验收结束时)。true = 送进去了,新的一轮已经起了;
- * false = 没收下,汇报原样留在待送队列里(失败已经报过)。
+ * 把攒着的执行者汇报合并成一条送进去(回合收尾时、团队验收结束时)。true = 这台此刻有回合在跑(这一次送进去的,
+ * 或排在前面那一次刚送进去的),调用方别落 idle;false = 没收下,汇报原样留在待送队列里(失败已经报过)。
+ *
+ * 两处会来送,所以**取批 → 投递 → 销账整段按台排队**:各自快照、各自 send 的话,同一批汇报两边都会拿去送一遍
+ * (审查第 3 轮)。轮到后一次时,前一次送走的已经摘掉了;前一次送成、起了新回合,后一次不往忙着的台上塞,
+ * 剩下的等那一轮收尾再合并送;前一次没收下,后一次照样重试。
  */
-async function deliverPending(lead: Lead): Promise<boolean> {
+function deliverPending(lead: Lead): Promise<boolean> {
+  const run = (lead.delivering ?? Promise.resolve()).then(() => deliverPendingNow(lead));
+  lead.delivering = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function deliverPendingNow(lead: Lead): Promise<boolean> {
+  if (lead.busy) return true;
   await flushUnqueued(lead); // 上次写库被拒的那几条,趁这会儿补进队列
+  if (!lead.pending.length) return false;
   // **快照,不是引用**。`sendToLead` 要 await(排在同一台的投递链后面),这期间调度台可能
   // 又忙起来(用户插话)并收下新的执行者汇报,它们会追加进同一个 `lead.pending`。拿引用的
   // 话,下面 `lead.pending = []` 把新来的一起清掉、`batch` 里的 seq 也把它们的行一并销账
@@ -656,6 +669,7 @@ async function closeLead(
 }
 
   return {
+    armIdle,
     beginTurn,
     clearIdle,
     consume,
