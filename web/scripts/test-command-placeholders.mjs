@@ -11,7 +11,7 @@
 // 跑法：npm -w web run test:command-placeholders
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
+import { fetchLog, fetchesSettled, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const LINE = 21;
 const PADDING = 16;
@@ -139,11 +139,16 @@ try {
   await page.keyboard.press("Escape");
 
   // ⑨ 服务起着的时候,头部那颗 ▶ **就地**换成红框的停止(用户 2026-10-26 点名)。
+  // 打开浮层会重读一次会话事实（CommandsLauncher 的 open → refresh）。只等浮层出现不够：
+  // 停止按钮在「在跑」和「启动脚本已退、服务在外面」两幕里长得一样，满载时那一发还没回来，
+  // 读到的状态行仍是上一幕的。所以等打开之后发出的那一发被页面读完，再冲刷一轮。
   const reopen = async () => {
     if (await pop.count()) await page.keyboard.press("Escape");
     await page.waitForFunction(() => !document.querySelector(".cmd-pop"));
+    const before = (await fetchLog(page)).length;
     await statusTrigger.click();
     await pop.waitFor();
+    await fetchesSettled(page, before + 1, "打开浮层时重读的那一次会话事实已被页面读完");
   };
   await page.evaluate(() => { window.__service = "live"; });
   await reopen();
