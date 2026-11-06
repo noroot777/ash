@@ -7,7 +7,7 @@
 // 的结果被当成孤儿回执吞掉、请求中途接回的插话不打断(自由审查 KqmEd8oQLV5_ 第 2 轮)。
 //
 // 输出流里**看不见**的是 ash 自己写进 stdin 的那一侧:哪个回合结尾是我们打断出来的、插话正文送
-// 没送进去。它们在写 stdin 之前就落在输出文件旁的 steer journal 里(`loadSteerJournal`,由
+// 没送进去、空档里直接送进去的消息(它开的回合可能还一个字都没吐)。它们在写 stdin 之前就落在输出文件旁的 steer journal 里(`loadSteerJournal`,由
 // ClaudeControlBridge 记),重放按它认。上一版拿输出里的回执先后去猜(回执可以晚到、前面可以
 // 插进后台进度),猜错就把被打断的结尾当成自然结束、提前收台(自由审查 i8RAcPM3zvgD R1)。
 //
@@ -69,27 +69,42 @@ export interface SteerEntry {
 
 const journalOf = (outPath: string) => `${outPath}.steer.json`;
 
+/**
+ * 写进 stdin 的那一侧:`entries` 是发过的打断;`sentAfter` 是最近一次空档里直接送消息时已经有
+ * 几个回合结尾 —— 重放完结尾数还是它,那条消息开的回合就还没结尾(哪怕一个字都还没吐)。
+ */
+export interface SteerJournal {
+  entries: SteerEntry[];
+  sentAfter?: number;
+}
+
 /** 读回打断记录。还没记过 = 没发过打断;别的读不出来一律抛(身份未知,不能当成没有)。 */
-export function loadSteerJournal(outPath: string): SteerEntry[] {
+export function loadSteerJournal(outPath: string): SteerJournal {
   let raw: string;
   try {
     raw = readFileSync(journalOf(outPath), "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { entries: [] };
     throw error;
   }
   const saved = JSON.parse(raw);
   const entries = Array.isArray(saved?.entries) ? saved.entries : null;
   const valid = (entry: any): entry is SteerEntry => typeof entry?.id === "string" && Number.isInteger(entry.result)
     && (entry.sent === undefined || typeof entry.sent === "boolean");
-  if (!entries || !entries.every(valid)) throw new Error(`打断记录 ${journalOf(outPath)} 格式不对`);
-  return entries.map(({ id, result, sent }: SteerEntry) => ({ id, result, ...(sent === undefined ? {} : { sent }) }));
+  const sentAfter = saved?.sentAfter;
+  if (!entries || !entries.every(valid) || (sentAfter !== undefined && !Number.isInteger(sentAfter))) {
+    throw new Error(`打断记录 ${journalOf(outPath)} 格式不对`);
+  }
+  return {
+    entries: entries.map(({ id, result, sent }: SteerEntry) => ({ id, result, ...(sent === undefined ? {} : { sent }) })),
+    ...(sentAfter === undefined ? {} : { sentAfter }),
+  };
 }
 
 /** 整份重写(先写临时文件再改名,断电也不会留下半份)。写不进去就抛。 */
-export function saveSteerJournal(outPath: string, entries: SteerEntry[]): void {
+export function saveSteerJournal(outPath: string, journal: SteerJournal): void {
   const path = journalOf(outPath);
-  writeFileSync(`${path}.tmp`, JSON.stringify({ entries }));
+  writeFileSync(`${path}.tmp`, JSON.stringify(journal));
   renameSync(`${path}.tmp`, path);
 }
 

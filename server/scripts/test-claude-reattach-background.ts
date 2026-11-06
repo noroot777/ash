@@ -347,6 +347,62 @@ console.log("✓ 插话正文没送出去就重启:按回合结束收台,说明�
   console.log("✓ 打断记录读不出:按状态未知处理");
 }
 
+// ③i 读不出记录、CLI 正闲着等自己的后台(之后可能再没有回合结尾):接回当场就开始等、给说明,
+// 到期按核实不了结算 —— 不能等一个可能永远不来的结尾才承担期限。(自由审查 ZbBv9az0Qgtf R1-A)
+{
+  const out = join(root, "corrupt-at-idle.jsonl");
+  writeFileSync(`${out}.steer.json`, "{");
+  writeFileSync(`${out}.hold.json`, JSON.stringify({ turn: -1, since: new Date(Date.now() - HOLD_MS + 300).toISOString() }));
+  const { child, handle } = reattach("corrupt-at-idle", [...launch, ...heldEnd], [progress]);
+  const keepAlive = setInterval(() => {}, 100);
+  const { events, consuming } = await drain(handle, 2000);
+  clearInterval(keepAlive);
+  await consuming;
+  assert.ok(events.some((e) => e.kind === "system" && /读不出/.test(e.text)), "当场说明为什么在等");
+  assert.ok(events.some((e) => e.kind === "error" && /确认不了后台工作跑没跑完/.test(e.message)), "到期如实报核实不了");
+  assert.equal(events.at(-1)?.kind, "done");
+  assert.equal(handle.failure?.()?.kind, "background_unverified");
+  await closed(child);
+  console.log("✓ 读不出记录、CLI 闲着等后台:接回当场开始等,到期按核实不了结算");
+}
+
+// ③j 等后台的空档里插话直接送进去了,那一回合还没吐字就重启:接回后会话算在忙,下一条插话照样
+// 先打断;旧的等后台结尾不再重发。直播那一侧送消息时就把这件事落盘。(自由审查 ZbBv9az0Qgtf R1-B)
+{
+  const steerAck = `
+  if (message.type === "control_request") {
+    emit({ type: "result", subtype: "error_during_execution" });
+    emit({ type: "control_response", response: { subtype: "success", request_id: message.request_id } });
+  }`;
+  const liveOut = join(root, "idle-send-live.jsonl");
+  const first = stubCli("idle-send-live", [...launch, ...heldEnd], steerAck);
+  Object.assign(first.child, { ashPaths: { out: liveOut } });
+  const liveHandle = executor.attach(first.child, { sessionId: "sess-r", commandLine });
+  const liveConsuming = (async () => { for await (const _ of liveHandle.events) { /* 只看落盘与对面收到了什么 */ } })();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  await liveHandle.steer!("FIRST");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(first.stderr().split("\n").filter((l) => l.startsWith("INPUT ")), ["INPUT user"], "空档里直接送");
+  assert.equal(JSON.parse(readFileSync(`${liveOut}.steer.json`, "utf8")).sentAfter, 1, "送之前记下「第 1 个结尾之后送过一条」");
+  liveHandle.kill();
+  await liveConsuming.catch(() => {});
+
+  const out = join(root, "idle-sent-before-restart.jsonl");
+  writeFileSync(`${out}.steer.json`, JSON.stringify({ entries: [], sentAfter: 1 }));
+  const { stderr, handle } = reattach("idle-sent-before-restart", [...launch, ...heldEnd], [], steerAck);
+  const seen: any[] = [];
+  const consuming = (async () => { for await (const event of handle.events) seen.push(event); })();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.ok(!seen.some((e) => e.kind === "system" && /1 个工作流/.test(e.text)), "旧的等后台结尾不再重发");
+  await handle.steer!("SECOND");
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.deepEqual(stderr().split("\n").filter((l) => l.startsWith("INPUT ")), ["INPUT control_request", "INPUT user"],
+    "接回后会话在忙:插话先打断");
+  handle.kill();
+  await consuming.catch(() => {});
+  console.log("✓ 空档直接送的消息还没吐字就重启:接回后照样算忙,下一条插话先打断");
+}
+
 // ④ 等后台的收尾(自由审查 c2vZ4d3LmL1q 第 1 轮),都走真实 spawn 出来的流,不经接管。
 /** 直接跑一条流(不接管);`hold` 给的话预先记下「第 1 个回合结尾从多久之前开始等」,把期限缩到眼前。 */
 function live(name: string, tail: unknown[], ignoreEof = false, heldFor?: number) {

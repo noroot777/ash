@@ -346,6 +346,13 @@ export class ClaudeExecutor implements AgentExecutor {
         // stdin 没了/已经关掉 = 这条消息一个字都进不去,如实说不(见 ResidentHandle.send)。
         const stdin = child.stdin;
         if (!stdin || stdin.destroyed || stdin.writableEnded) return false;
+        // 先记下「送过一条」再写(同一个同步段):重启接管靠它认出这个会话在忙,见 noteSend。
+        try {
+          resident.noteSend();
+        } catch (error) {
+          console.warn("[ash] 记不下这条消息的发送记录，先不送:", error);
+          return false;
+        }
         stdin.write(userLine(text));
         resident.beginTurn(true);
         return true;
@@ -591,7 +598,7 @@ export function singleRunFromResident(
         // 准备正文的这段 await 里,完成通知可能已经让 CLI 自己开了一回合:那就照忙碌那条路打断
         // 再送,而不是排在它后面(beforeSend 已经跑过,不再跑第二遍)。
         if (resident.turnActive?.() === false) {
-          if (!resident.send(body)) throw new Error("Claude 当前回合 stdin 已关闭");
+          if (!resident.send(body)) throw new Error("Claude 没收下这条消息（stdin 已关闭，或记不下发送记录）");
           clearHold();
           return;
         }

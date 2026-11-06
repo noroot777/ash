@@ -38,6 +38,8 @@ export class ClaudeControlBridge {
    * 那一刻**之后**的第一个还没被认领的结尾 —— 打断总会让 CLI 收一个结尾。
    */
   private entries: SteerEntry[] = [];
+  /** 最近一次空档里直接送消息时的回合结尾数(见 SteerJournal.sentAfter)。 */
+  private sentAfter: number | undefined;
   private unclaimed: (SteerEntry & { inherited?: true })[] = [];
 
   /**
@@ -58,7 +60,9 @@ export class ClaudeControlBridge {
   /** 重启接管:把上一代记下的打断读回来(读不出就抛,调用方按状态未知处理)。 */
   restore(): void {
     if (!this.journalPath) return;
-    this.entries = loadSteerJournal(this.journalPath);
+    const journal = loadSteerJournal(this.journalPath);
+    this.entries = journal.entries;
+    this.sentAfter = journal.sentAfter;
     this.unclaimed = this.entries.map((entry) => ({ ...entry, inherited: true }));
     for (const entry of this.entries) {
       const n = Number(entry.id.replace(/^ash_int_/, ""));
@@ -86,6 +90,21 @@ export class ClaudeControlBridge {
     for (const entry of this.unclaimed) if (entry.id === requestId) entry.sent = true;
   }
 
+  /**
+   * 空档里要直接送一条消息了(调用方在同一个同步段里紧接着写 stdin)。它开的回合在吐出第一个字
+   * 之前,输出里什么都看不见 —— 不记下来,重启接管会把一个已经收到消息、正在忙的会话当成空闲,
+   * 下一条插话就不打断、排到它后面去了(自由审查 ZbBv9az0Qgtf R1-B)。落不了盘就抛,消息不写。
+   */
+  noteSend(): void {
+    this.persist(this.entries, this.turns);
+    this.sentAfter = this.turns;
+  }
+
+  /** 接管时:最近那条直接送进去的消息开的回合还没结尾。 */
+  get inputPending(): boolean {
+    return this.sentAfter !== undefined && this.sentAfter === this.turns;
+  }
+
   /** 打断没写出去:撤掉它的认领。 */
   withdraw(requestId: string): void {
     const entries = this.entries.filter((entry) => entry.id !== requestId);
@@ -110,8 +129,8 @@ export class ClaudeControlBridge {
     return { abandoned: !!entry.inherited && entry.sent === false };
   }
 
-  private persist(entries: SteerEntry[]): void {
-    if (this.journalPath) saveSteerJournal(this.journalPath, entries);
+  private persist(entries: SteerEntry[], sentAfter = this.sentAfter): void {
+    if (this.journalPath) saveSteerJournal(this.journalPath, { entries, ...(sentAfter === undefined ? {} : { sentAfter }) });
   }
 
   private sequence = 0;

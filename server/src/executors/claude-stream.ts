@@ -508,6 +508,19 @@ async function* claudeStreamEvents(
       capturing = false;
       background.quiet = false;
     }
+    // 读不出来时,单飞这一路就地开始「等后台」:不知道会不会还有下一个回合结尾,不能等到它来了
+    // 才承担期限 —— CLI 若正闲着等自己的后台,那个结尾可能永远不来(自由审查 ZbBv9az0Qgtf R1-A)。
+    // 说明当场给用户;期限到了按核实不了结算。真在回合中途,它一开口就开了新回合,这份等待随即
+    // 作废,那一回合的结尾再按未知判。
+    if (recoveryUnknown && resident?.reapsAtTurnEnd) {
+      const waiting = background.waiting();
+      push({ kind: "system", text: backgroundHoldNotice(waiting, true), at: new Date().toISOString(), level: "notice", aside: true });
+      // 起点同样落盘(按 -1 这个「接管时读不出」的结尾认),反复重启不重新给满。
+      push({ kind: "turnEnd", background: { ...waiting, since: holdSince(outPath, -1) }, epoch: resident.epoch });
+    }
+    // 空档里直接送进去的消息开的回合可能还一个字都没吐:输出里看着是空闲,其实在忙。照记录认,
+    // 那个旧结尾也就不再重发(上一代送消息时已经不等它了)。
+    if (!recoveryUnknown && resident?.inputPending) resident.beginTurn(true);
     // 水位正停在一个回合结尾之后:上一代当时据它收台或开始等后台,这一代没见过,得照样重发。
     // 打断出来的结尾不在此列(回合仍算在忙)。时刻与回合身份用重发这一刻的:重放里的计数跟这一代
     // 对不上;这之后再开回合,它照样过期。
