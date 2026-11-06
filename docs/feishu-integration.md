@@ -6,7 +6,7 @@
 
 **推荐形态：ash server 进程内置一个 IM 通道模块，飞书是它的第一个适配器。** 在飞书侧建一个「企业自建应用 + 应用机器人」，由 ash 主动连出去走**长连接（WebSocket）**。一个 ash 实例对应一个飞书应用。
 
-定位是**遥控器加决策收件箱，不是第二个主界面**。需要你拍板的节点（提问、待验收、失败）推成卡片，你在卡片上点一下就处理完。长会话、diff 审阅、预览仍然回 web 看。
+定位是**遥控器加决策收件箱，不是第二个主界面**。需要你拍板的节点（提问、待验收、失败）推成卡片，你在卡片上点一下就处理完；任务完成也推。长会话、diff 审阅、预览仍然回 web 看。
 
 为什么这样选：
 
@@ -49,7 +49,7 @@
 3. 启动时全量对一次账，但要带**水位线**，只补上次在线以后新出现的，或者合并成一张汇总卡，否则重启一次就会刷屏。
 4. 发消息时带飞书的 `uuid` 参数（1 小时内同一 uuid 最多成功一次），用发件表的行 id 当 uuid，防止崩溃后重试发出两条。
 
-**判据要和 web、mobile 用同一份。** 「这个任务要不要人管」现在 web 有一份（`web/src/lib/taskAttention.ts`），mobile 另有一份（`mobile/src/lib/taskTree.ts`），都不在 `shared/`。飞书如果再写第三份，迟早会出现飞书说「等你验收」、页面却不是这样的情况。建议把它下沉到 `shared/` 做成纯函数，三方共用。这一步是 P1 的前置条件。
+**「此刻轮到你动手了吗」只算一份。** 一个任务在某一刻要么在自己跑（不用管），要么在等你（回答提问、点验收、处理失败）。界面上那颗「需要你处理」的信号点就是这样算出来的。现在 web 算一份（`web/src/lib/taskAttention.ts`），mobile 抄了一份（`mobile/src/lib/taskTree.ts`），飞书再写第三份的话，迟早会出现飞书说「等你验收」、页面上却不是这样的情况。所以第一步先把它挪进 `shared/` 合成一份，web、mobile、飞书共用。这是纯内部整理，界面行为不变。
 
 举个例子说明为什么非用同一份判据不可：三份草案起初都把「待验收」写成 `stage=awaiting_acceptance`。但自由工作流（默认模式）跑完时 stage 多数是 null，web 的真实判据是「已 done 且没盖过章」（`taskAttention.ts:106-110,133-146`，注释里记着这一档改过两次的经过）。照草案那样写，大多数任务永远收不到验收卡。
 
@@ -58,9 +58,9 @@
 | 卡片 | 什么时候推（按库状态判） | 按钮 → ash API | 期次 |
 |---|---|---|---|
 | 提问 | `question` 非空，且任务已经 paused（团队调度台例外）。还在 running 时答复会 409（`server/src/task-answer.ts:33`） | 每个选项一个按钮，外加自由作答表单 → `POST /tasks/:id/answer` | P1 |
-| 待验收 | shared 里的那个判据 | 「验收合并」→ `POST /tasks/:id/accept`。**先回执，再异步执行**，结果靠 patch 卡片回写：合并要排仓库锁、要跑尾段（`server/src/task-accept.ts` 里的 `withRepoLock`、`finishAcceptedTail`），3 秒的回调窗口里做不完 | P1 |
+| 完成待验收 | 任务完成且没验收过（shared 里那份判据）。自由工作流下「完成」和「待验收」是同一张卡 | 「验收合并」→ `POST /tasks/:id/accept`。**先回执，再异步执行**，结果靠 patch 卡片回写：合并要排仓库锁、要跑尾段（`server/src/task-accept.ts` 里的 `withRepoLock`、`finishAcceptedTail`），3 秒的回调窗口里做不完 | P1 |
 | 失败 | status=failed，或回合起不来 | 「重试」→ `POST /tasks/:id/retry`（只接受 failed） | P1 |
-| 完成 / 门禁结果 | done，或门禁出结果 | 只做告知，默认可以关掉。原地改卡片不会触发推送提醒，所以完成时要另加一个表情回应 | P1 |
+| 已收尾的完成 / 门禁结果 | 完成且已验收或合并，或门禁出结果 | 只做告知，默认推。原地改卡片不会触发推送提醒，所以「完成」一律发新消息，不靠改旧卡 | P1 |
 | 驳回待裁定 | 执行者驳回了审查意见 | 三个按钮 → `.../review/dispute/resolution`，带上 `target:{runId, round}`。按钮文案要写清楚：`withdrawn` 的意思是「采纳执行者的说法」，不是「撤回」 | P2 |
 | duet 收敛闸 | `duet.gate` | approve / inject。**reject 实际上会取消任务**（`server/src/duet/index.ts:560`），文案必须写「否决并取消」，并且二次确认。`GateAction` 目前没有版本号，要先补上（见 6.4） | P2 |
 
@@ -161,8 +161,8 @@ agent 伪造的卡片上的按钮会因为没有登记过的信封而点不动�
 | 期 | 交付 | 主要改动 |
 |---|---|---|
 | **P0 实测** | 一次性脚本，不进仓库。确认 `WSClient` 能稳定收到 `card.action.trigger`，回调里拿得到 `operator.open_id`（官方文档说能，SDK 的 README 说不能）；查清免费版配额 | 无 |
-| **P0' 判据下沉** | 「这个任务现在要人做什么」下沉到 `shared/`，web 和 mobile 都改用它 | `shared/src/`、`web/src/lib/taskAttention.ts`、`mobile/src/lib/taskTree.ts` |
-| **P1 决策收件箱**（只支持自用模式，只走单聊） | 绑定流程；提问卡、待验收卡、失败卡；完成和门禁通知（可关）；在别处处理掉的卡片原地改成「已处理」；启动对账带水位线；连接状态 | `server/src/im/{config,connection,outbox,reconcile,cards,actions,bind-routes}.ts`，新表放在 `server/src/db/schema-im.ts` 并且不进 preview-seed；`index.ts` 加一行；web 设置页加飞书分区；回归测试覆盖对账、信封（过期/他人点击/重复点击/代次不符）、启动刷屏，以及通道模块不引用 `issueHumanActionToken` |
+| **P0' 合并判据** | 「此刻轮到你动手了吗」从 web、mobile 各一份合成 `shared/` 里的一份，界面行为不变 | `shared/src/`、`web/src/lib/taskAttention.ts`、`mobile/src/lib/taskTree.ts` |
+| **P1 决策收件箱**（只支持自用模式，只走单聊） | 绑定流程；提问卡、待验收卡、失败卡；完成和门禁通知（默认推）；在别处处理掉的卡片原地改成「已处理」；启动对账带水位线；连接状态 | `server/src/im/{config,connection,outbox,reconcile,cards,actions,bind-routes}.ts`，新表放在 `server/src/db/schema-im.ts` 并且不进 preview-seed；`index.ts` 加一行；web 设置页加飞书分区；回归测试覆盖对账、信封（过期/他人点击/重复点击/代次不符）、启动刷屏，以及通道模块不引用 `issueHumanActionToken` |
 | **P2 审批** | 驳回裁定卡；duet 闸口卡（先给 GateAction 补版本号） | `server/src/im/actions.ts`、`server/src/duet/gates.ts` |
 | **P3 遥控** | `im` 身份；单聊进助手房间；回复卡片 = reply；斜杠命令；附件；`/new`、`/stop` 先出确认卡再执行 | `server/src/auth/context.ts`、`middleware.ts`、`chat/route-access.ts`、`server/src/im/{inbound,commands}.ts` |
 | **P4 群与多人** | 多人模式绑定；群绑项目、话题绑任务；推送前按收件人可见性过滤（`server/src/auth/visibility.ts`） | `server/src/im/group-policy.ts` 等 |
@@ -170,12 +170,12 @@ agent 伪造的卡片上的按钮会因为没有登记过的信封而点不动�
 
 P1 的攻击面只有一项：已绑定的本人，在单聊里处理自己任务的待决事项。但它已经覆盖了最大的价值：离开电脑时，手机上收到提问，点一下任务就接着跑。
 
-## 九、需要你拍板的事
+## 九、已定的事（用户 2026-11-06 答复）
 
-1. **你能不能在一个自己当管理员的飞书租户里发版自建应用？** 长连接只支持自建应用，权限一改就要发版。如果只能在公司租户里排队审批，迭代会很慢，那就应该另建一个自己的团队，或者用测试企业。
-2. **要不要先做 P0'（把「要人处理」的判据下沉到 shared）？** 这会让任务从「加一个飞书功能」变成「先重构关注度模型」，但不做的话，飞书和 web 的口径必然漂移。
-3. **推送阈值**：默认只推「决策」和「失败」，「完成」默认关，行不行？卡兹克的经验是，一天几十条推送，人很快就会屏蔽机器人。
-4. **能接受「飞书账号 = 这台机器的 shell 凭据」吗？** 如果不能，验收合并这类动作在 P1 也只给链接、不给按钮。
+1. 能在自己当管理员的飞书租户里发版自建应用，按长连接方案走。
+2. P0' 照做。它不是「挑哪些任务要人管」，而是把「此刻轮到你动手了吗」的算法从两份合成一份，界面行为不变。
+3. 完成也推，默认开。
+4. 接受「飞书账号 = 这台机器的 shell 凭据」，P1 的验收合并给按钮。
 
 ## 出处
 
