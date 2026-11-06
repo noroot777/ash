@@ -23,10 +23,12 @@ const STORAGE_KEY = "ash.colorTheme";
 const isColorTheme = (value: unknown): value is ColorTheme =>
   typeof value === "string" && (COLOR_THEMES as readonly string[]).includes(value);
 
-// 不在浏览器里(Node 里 renderToStaticMarkup 的回归)就没有页面可拨：下面读镜像、挂监听、
-// 首次上色都跳过，偏好按「跟随系统」、解析成浅色。这个模块经 settingsSync 被大半个前端间接
-// import,顶层一碰 `window` 就让那些服务端渲染的用例在加载阶段直接抛 ReferenceError。
-const browser = typeof window !== "undefined";
+// 不在浏览器里(Node 里 renderToStaticMarkup 的回归，或只桩了一个 `{ location }` 当 window
+// 的纯函数回归)就没有页面可拨：下面读镜像、挂监听、首次上色都跳过，偏好按「跟随系统」、
+// 解析成浅色。这个模块经 settingsSync 被大半个前端间接 import,顶层一碰 `window` 的方法就让
+// 那些用例在加载阶段直接抛错。所以按「有没有 document」判，而不是只看 window 在不在。
+const browser = typeof window !== "undefined" && typeof document !== "undefined"
+  && typeof window.addEventListener === "function";
 
 function readCached(): ColorTheme {
   if (!browser) return "system";
