@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { fetchLog, fetchesSettled, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
+import { fetchLog, fetchesSettled, resizeViewport, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -108,7 +108,7 @@ try {
     await mkdir(dirname(screenshot), { recursive: true });
     await page.screenshot({ path: screenshot, fullPage: true });
   }
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   const mobileBounds = await dialog.boundingBox();
   assert.ok(mobileBounds && mobileBounds.x >= 0 && mobileBounds.x + mobileBounds.width <= 390);
   assert.ok(mobileBounds.y >= 0 && mobileBounds.y + mobileBounds.height <= 844, "窄屏仍能看到完整错误和重试按钮");

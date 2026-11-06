@@ -10,7 +10,7 @@ import { parseAnnotationBatch } from "../../shared/src/page-annotation-batch.ts"
 import { checkFloatingPreview, previewClearRatio } from "./preview-floating-checks.mjs";
 import { checkExpandedPreviewShortcuts, checkPreviewControlShortcuts, checkPreviewPalette } from "./preview-shortcut-checks.mjs";
 import { checkPreviewPanelOverlap } from "./preview-panel-overlap-checks.mjs";
-import { settlePage, waitUntil } from "./wait-until.mjs";
+import { resizeViewport, settlePage, waitUntil } from "./wait-until.mjs";
 
 export async function testPreviewWorkspaceDom() {
   const cacheDir = await mkdtemp(join(tmpdir(), "ash-preview-workspace-test-"));
@@ -480,7 +480,7 @@ export async function testPreviewWorkspaceDom() {
     await checkFloatingPreview(page, runtimeFrame, draft);
     await checkPreviewPanelOverlap(page, draft);
     for (const viewport of [{ width: 900, height: 600 }, { width: 760, height: 500 }, { width: 390, height: 844 }]) {
-      await page.setViewportSize(viewport);
+      await resizeViewport(page, viewport);
       assert.deepEqual(await iframe.boundingBox(), { x: 0, y: 0, ...viewport });
       await button('展开标注工具').waitFor();
       assert.equal(await page.locator('.preview-workspace-notes').isVisible(), false);

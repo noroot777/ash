@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
-import { fetchesSettled, trackFetches, waitUntil } from "./wait-until.mjs";
+import { fetchesSettled, resizeViewport, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -385,7 +385,7 @@ try {
 
   screenshotDirectory = mkdtempSync(join(tmpdir(), "ash-git-workbench-review-"));
   await page.screenshot({ path: join(screenshotDirectory, "backups-desktop.png"), fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   assert((await page.evaluate(() => document.documentElement.scrollWidth)) <= 390);
   await page.screenshot({ path: join(screenshotDirectory, "backups-mobile.png"), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 960 });

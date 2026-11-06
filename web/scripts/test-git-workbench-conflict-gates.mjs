@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
-import { fetchesSettled, trackFetches } from "./wait-until.mjs";
+import { fetchesSettled, resizeViewport, trackFetches } from "./wait-until.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -277,7 +277,7 @@ try {
     0,
     "regular merge must keep its abort path instead of discard-conflicts",
   );
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   assert(
     (await page.evaluate(() => document.documentElement.scrollWidth)) <= 390,
     "mobile conflict summary should not overflow horizontally",
@@ -586,7 +586,7 @@ try {
   const discardConflicts = page.getByRole("button", { name: "放弃冲突改动", exact: true });
   await expectEnabled(discardConflicts, "discard squash conflict");
   assert.doesNotMatch(await page.locator(".gwb-operation").innerText(), /贮藏等操作/);
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   assert(
     (await page.evaluate(() => document.documentElement.scrollWidth)) <= 390,
     "mobile squash conflict actions should not overflow horizontally",

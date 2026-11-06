@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const fixture = spawn(process.execPath, ["--import", "tsx", "server/scripts/side-chat-browser-fixture.ts"], { cwd: fileURLToPath(new URL("../..", import.meta.url)), stdio: ["ignore", "pipe", "pipe"] });
@@ -232,7 +233,7 @@ try {
   assert.equal((await state()).kills, 0);
   await page.screenshot({ path: join(artifacts, "side-chat-deferral-preserved.png") });
   await control("forward-mode", {});
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   const pane = await page.getByRole("region", { name: "任务侧聊", exact: true }).boundingBox();
   assert.ok(pane && pane.width > 250 && pane.x >= 0 && pane.x + pane.width <= 391);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));

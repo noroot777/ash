@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { WAIT_TIMEOUT_MS, fetchLog, fetchesSettled, outlastPageTimers, settlePage, waitUntil } from "./wait-until.mjs";
+import { WAIT_TIMEOUT_MS, fetchLog, fetchesSettled, outlastPageTimers, resizeViewport, settlePage, waitUntil } from "./wait-until.mjs";
 
 /** useAcceptGate 退避重试曲线的封顶那一档。 */
 const GATE_RETRY_CAP_MS = 10_000;
@@ -65,7 +65,7 @@ export async function testAcceptGateRecovery({ open, run, basis }) {
       // 秒表心跳是 1 秒：一个 1.2 秒后到期的页面定时器触发时，它要走早就走过了。
       await outlastPageTimers(page, 1200);
       assert.equal(await surface.locator(".wait-bar__when").innerText(), elapsed);
-      await page.setViewportSize({ width: 340, height: 820 });
+      await resizeViewport(page, { width: 340, height: 820 });
       assert.equal(await refresh.isVisible(), true);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     }

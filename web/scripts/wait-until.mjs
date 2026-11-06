@@ -11,7 +11,7 @@
 //   · `outlastPageTimers` —— 「过一阵也不该变」：等页面里一个更晚到期的定时器触发，证明
 //     此前排上的心跳/重试都已经走过一次（定时器按到期先后触发，跟负载无关）。
 //   · `afterFrames` / `animationsSettled` —— 读几何、透明度或截图之前：布局重算落地、有限时长
-//     的过渡走完。
+//     的过渡走完。改视口用 `resizeViewport`，它把这两步一起做了。
 //   · `settlePage`  —— 负向断言（「X 不该出现」）之前的最后一步：先用上面两样等到能证明
 //     竞争已经结束的正向信号，再用它把页面里**已经排上队**的任务（React 的提交、effect）
 //     冲刷掉，然后才读 DOM。它本身不等任何还没发生的事，所以不能单独拿来代替正向信号。
@@ -157,10 +157,10 @@ export async function outlastPageTimers(page, ms) {
  * 帧来得晚，不会让回调跳过（页面须在前台：后台页的 rAF 会被节流）。
  */
 export async function afterFrames(page, count = 2) {
-  await page.evaluate((frames) => new Promise((resolve) => {
+  await withinDeadline(page.evaluate((frames) => new Promise((resolve) => {
     const step = (left) => (left ? requestAnimationFrame(() => step(left - 1)) : resolve());
     step(frames);
-  }), count);
+  }), count), () => `页面走过 ${count} 个渲染帧（装了 page.clock 的页面 rAF 是假的，要推时钟）`);
   await settlePage(page);
 }
 
@@ -171,12 +171,39 @@ export async function afterFrames(page, count = 2) {
  * `selector` 给了就只看那个元素子树里的动画。
  */
 export async function animationsSettled(page, selector = null) {
-  await page.evaluate((scope) => {
+  await withinDeadline(page.evaluate((scope) => {
     const root = scope ? document.querySelector(scope) : document;
     const animations = root ? root.getAnimations(scope ? { subtree: true } : undefined) : [];
     return Promise.all(animations
       .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
       .map((animation) => animation.finished.catch(() => undefined)));
-  }, selector);
+  }, selector), async () => {
+    const running = await page.evaluate((scope) => {
+      const root = scope ? document.querySelector(scope) : document;
+      return (root ? root.getAnimations(scope ? { subtree: true } : undefined) : [])
+        .filter((animation) => animation.playState === "running" && animation.effect?.getComputedTiming().endTime !== Infinity)
+        .map((animation) => `${animation.effect?.target?.className || animation.effect?.target?.tagName || "?"} 的 ${animation.transitionProperty ?? animation.animationName ?? "动画"}`);
+    }, selector).catch(() => []);
+    return `有限时长的过渡/动画都走完${running.length ? `（还在走：${running.join("、")}）` : ""}`;
+  });
   await settlePage(page);
+}
+
+/**
+ * 改视口并等它带出来的变化都落定：重排、resize/ResizeObserver 引起的提交、媒体查询切换触发的
+ * 过渡（比如窄屏下 `.inspector-host` 的 width 过渡）。之后量几何、截图才是同一时刻的样子。
+ */
+export async function resizeViewport(page, size) {
+  await page.setViewportSize(size);
+  await afterFrames(page);
+  await animationsSettled(page);
+}
+
+/** 页面侧的等待没有自己的期限：在 Node 侧给它一个，超时说清在等什么。 */
+async function withinDeadline(promise, describe, timeout = WAIT_TIMEOUT_MS) {
+  let timer;
+  const expired = new Promise((resolve) => { timer = setTimeout(resolve, timeout, withinDeadline); });
+  const outcome = await Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+  if (outcome === withinDeadline) throw new Error(`等了 ${timeout}ms 仍未成立：${await describe()}`);
+  return outcome;
 }

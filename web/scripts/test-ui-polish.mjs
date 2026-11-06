@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const web = await startWebServer();
@@ -25,7 +26,7 @@ try {
   }
 
   for (const width of [420, 600, 640]) {
-    await page.setViewportSize({ width, height: 800 });
+    await resizeViewport(page, { width, height: 800 });
     const navigation = await page.locator(".settings-shell").evaluate((node) => {
       const sidebar = node.querySelector(".settings-sidebar");
       const main = node.querySelector(".settings-main");
@@ -51,7 +52,7 @@ try {
     assert.equal(navigation.lastIsClickable, true, `${width}px 下最后一个设置入口应可点击`);
   }
 
-  await page.setViewportSize({ width: 1280, height: 700 });
+  await resizeViewport(page, { width: 1280, height: 700 });
   await renderProbe("auth");
   const authTop = await page.locator(".auth-shell").evaluate((node) => {
     node.scrollTop = 0;

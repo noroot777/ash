@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const output = await mkdtemp(join(tmpdir(), "ash-chat-browser-"));
@@ -143,7 +144,7 @@ try {
   assert.ok(page.url().includes("task="));
   await page.getByRole("button", { name: "聊天", exact: true }).click();
   await input.waitFor();
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   const bounds = await page.locator(".chat-shell").boundingBox();
   assert(bounds && bounds.width >= 370);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
@@ -180,7 +181,7 @@ try {
   }
   await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
   for (const width of [320, 390, 700, 900, 1440]) {
-    await page.setViewportSize({ width, height: 1000 });
+    await resizeViewport(page, { width, height: 1000 });
     const tabBounds = await modeTabs.boundingBox();
     assert(tabBounds && tabBounds.x >= 0 && tabBounds.x + tabBounds.width <= width, `${width}px 侧栏收起时模式栏不越界`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
@@ -253,7 +254,7 @@ try {
   await page.getByRole("status").filter({ hasText: "较早历史已整理为共享摘要" }).waitFor();
   await page.reload();
   await page.getByRole("status").filter({ hasText: "近期消息保留原文" }).waitFor();
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
   await page.screenshot({ path: `${output}/chat-context-mobile.png`, animations: "disabled" });
   await page.request.post(`${fixtureUrl}/api/fixture/chat-context/${summaryRoomId}`, { data: { seed: true, count: 20, mode: "invalid" } });

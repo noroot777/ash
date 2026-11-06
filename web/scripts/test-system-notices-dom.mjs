@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./dom-stage.mjs";
 import { createServer } from "vite";
+import { resizeViewport } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const server = await createServer({ root, logLevel: "error", define: { "import.meta.env.VITE_ASH_PREVIEW": '"1"' },
@@ -154,7 +155,7 @@ try {
   assert.ok(attachedStyle.timeGap <= 16, "消息尾注的时间同样应紧跟最后一个摘要信息块");
   assert.equal(await page.locator('.system-notice-mode-switch a[aria-current="page"]').innerText(), "消息尾注");
 
-  await page.setViewportSize({ width: 390, height: 900 });
+  await resizeViewport(page, { width: 390, height: 900 });
   const geometry = await page.evaluate(() => ({
     overflow: document.documentElement.scrollWidth > innerWidth,
     actionWidth: Math.round(document.querySelector(".system-action-note").getBoundingClientRect().width),
@@ -213,7 +214,7 @@ try {
   await page.goto(`${fixture}?boundaries`);
   await page.locator("[data-boundary-mode] .system-boundary").first().waitFor();
   for (const width of [1100, 390]) {
-    await page.setViewportSize({ width, height: 1000 });
+    await resizeViewport(page, { width, height: 1000 });
     const boundaries = await page.locator("[data-boundary-mode] .system-boundary").evaluateAll((elements) =>
       elements.map((element) => {
         const icon = element.querySelector(".system-event-avatar");
@@ -249,7 +250,7 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${width}px 回合边界不应横向溢出`);
   }
   if (process.env.BOUNDARY_SHOT) {
-    await page.setViewportSize({ width: 1100, height: 1000 });
+    await resizeViewport(page, { width: 1100, height: 1000 });
     await page.screenshot({ path: process.env.BOUNDARY_SHOT, fullPage: true });
   }
   console.log("system-notices-dom ok");

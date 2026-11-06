@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const workspace = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -298,7 +299,9 @@ try {
   assert.equal(await reference.locator("blockquote").innerText(), longSelection, "切回 parent 恢复自己的引用");
   assert.equal((await state()).delivered.length, 0, "所有选文操作都不直接投递主任务");
 
-  await page.setViewportSize({ width: 390, height: 844 });
+  // 窄屏下 inspector 宿主换成浮层宽度，`.inspector-host` 的 width 过渡要走 160ms：
+  // 面板和引用块分两次量，量在过渡中途就会拿到两个不同时刻的几何。
+  await resizeViewport(page, { width: 390, height: 844 });
   const pane = await page.getByRole("region", { name: "任务侧聊", exact: true }).boundingBox();
   assert.ok(pane && pane.width > 250 && pane.x >= 0 && pane.x + pane.width <= 391);
   const quoteBox = await reference.boundingBox();

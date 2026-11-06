@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { resizeViewport } from "./wait-until.mjs";
 
 const editorText = async (editor) => editor.locator(".cm-line").evaluateAll((lines) => lines.map((line) => line.querySelector(".cm-placeholder") ? "" : line.textContent).join("\n"));
 const waitForText = (page, expected) => page.waitForFunction((text) =>
@@ -70,7 +71,7 @@ export async function testShellScriptEditor(page, editor, save) {
   const box = await container.boundingBox();
   assert.ok(box.x >= 0 && box.x + box.width <= 390, "长命令不能撑出窄屏");
   assert.equal(await editorText(editor), long);
-  await page.setViewportSize({ width: 1000, height: 1200 });
+  await resizeViewport(page, { width: 1000, height: 1200 });
   await editor.fill(script);
   if (process.env.PREVIEW_EDITOR_SHOT) await container.screenshot({ path: process.env.PREVIEW_EDITOR_SHOT });
 

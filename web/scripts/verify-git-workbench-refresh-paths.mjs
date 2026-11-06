@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
-import { WAIT_TIMEOUT_MS, fetchesSettled, settlePage, trackFetches } from "./wait-until.mjs";
+import { WAIT_TIMEOUT_MS, fetchesSettled, resizeViewport, settlePage, trackFetches } from "./wait-until.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -477,7 +477,7 @@ try {
       await assertInsideViewport(apply, 1200, 760, "desktop staged selection button");
       await assertInsideViewport(note, 1200, 760, "desktop staged selection guidance");
       await page.screenshot({ path: join(output, "unstage-plus-guidance-desktop.png") });
-      await page.setViewportSize({ width: 390, height: 844 });
+      await resizeViewport(page, { width: 390, height: 844 });
       await assertInsideViewport(apply, 390, 844, "mobile staged selection button");
       await assertInsideViewport(note, 390, 844, "mobile staged selection guidance");
       await page.screenshot({ path: join(output, "unstage-plus-guidance-mobile.png") });

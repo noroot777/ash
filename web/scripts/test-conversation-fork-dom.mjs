@@ -3,6 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const web = await startWebServer();
 const artifacts = await mkdtemp(join(tmpdir(), "ash-conversation-fork-"));
@@ -79,7 +80,7 @@ try {
   assert.equal(payload.parentId, undefined);
   await page.locator(".composer-fork-context > summary").click();
   await page.screenshot({ path: join(artifacts, "fork-composer.png") });
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await page.screenshot({ path: join(artifacts, "fork-mobile.png") });
   rejectCreation = false;

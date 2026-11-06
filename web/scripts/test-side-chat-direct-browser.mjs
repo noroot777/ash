@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const workspace = fileURLToPath(new URL("../..", import.meta.url));
 const webRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -209,7 +210,7 @@ try {
   assert.equal(await roomPicker.inputValue(), "");
   assert.equal(await input.inputValue(), "尚未提交的新侧聊草稿");
 
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resizeViewport(page, { width: 390, height: 844 });
   const paneBox = await pane.boundingBox();
   assert.ok(paneBox && paneBox.width > 250 && paneBox.x >= 0 && paneBox.x + paneBox.width <= 391);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));

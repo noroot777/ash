@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { resizeViewport } from "./wait-until.mjs";
 
 const artifacts = fileURLToPath(new URL("../../output/playwright/", import.meta.url));
 const web = await startWebServer();
@@ -219,7 +220,7 @@ try {
     "没有系统排入的输入时不多这颗筛选器");
   await reload(Array.from({ length: 30 }, (_, index) => message(index)));
   for (const width of [1280, 768, 390, 320]) {
-    await page.setViewportSize({ width, height: width < 500 ? 700 : 900 });
+    await resizeViewport(page, { width, height: width < 500 ? 700 : 900 });
     await settle();
     const position = await geometry();
     assert.ok(position.card.top >= 48, `${width}px 不裁剪卡片顶部`);
