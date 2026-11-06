@@ -46,6 +46,10 @@ const lateSession = { id: "s-late", projectId: "p-one", cwd: "/workspace/p-one",
  */
 const plainDaemonSession = { id: "s-plain-daemon", projectId: "p-one", cwd: "/workspace/p-one", shell: "/bin/zsh", name: "构建", commandId: "plain", startedAt: 5, exitCode: 0, stoppedByUser: false, groupAlive: false, ports: [9191], portsAlive: true, stop: { kind: "none" as const }, portsTruncated: false };
 
+/** __slowFact 那几发查询扣在这里,用例调 window.__releaseSlowFact() 一起放。 */
+const slowFactGate = Promise.withResolvers<void>();
+(window as unknown as { __releaseSlowFact: () => void }).__releaseSlowFact = () => slowFactGate.resolve();
+
 const realFetch = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -54,8 +58,10 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   // 两者都不该点亮侧栏顶行那颗 ▶ —— 它只说当前项目的常用命令。
   const listing = pathname.match(/^\/api\/projects\/([^/]+)\/terminal\/sessions$/);
   if (listing) {
-    // __slowFact:让**第一个项目**的这次查询慢 400ms 回来,并且带上它自己在跑的一条命令 ——
-    // 用例借此重演「切走之后旧事实才落回来」。其余时候一如既往,立刻回同一份。
+    // __slowFact:让**第一个项目**的这次查询扣着不回(直到用例调 __releaseSlowFact),并且带上它
+    // 自己在跑的一条命令 —— 用例借此重演「切走之后旧事实才落回来」。扣多久由用例定、不是固定
+    // 毫秒数:满载时切项目本身就可能比任何固定延迟都慢,旧事实会在切走之前合法落地,乱序就没排出来。
+    // __slowFactHeld 记扣下了几发。其余时候一如既往,立刻回同一份。
     const slow = (window as unknown as { __slowFact?: boolean }).__slowFact === true && listing[1] === "p-one";
     // 服务会话:用例用 window.__service 切六种现场 —— 在跑 / 真·守护化(启动脚本退了,
     // 但它打印过的端口还有人听) / 启动脚本自己退了而端口上也没人(docker compose up -d
@@ -94,7 +100,11 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
       ...(slow ? [lateSession] : []),
       ...((window as unknown as { __plainDaemon?: boolean }).__plainDaemon === true ? [plainDaemonSession] : []),
     ];
-    if (slow) await new Promise((done) => window.setTimeout(done, 400));
+    if (slow) {
+      const holder = window as unknown as { __slowFactHeld?: number };
+      holder.__slowFactHeld = (holder.__slowFactHeld ?? 0) + 1;
+      await slowFactGate.promise;
+    }
     return reply({ sessions });
   }
   const command = pathname.match(/^\/api\/projects\/([^/]+)\/commands\/([^/]+)\/(start|stop|restart)$/);

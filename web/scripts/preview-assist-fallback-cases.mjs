@@ -2,7 +2,7 @@
 // 地址上，那不是安全上下文）只能靠跨页点名，于是这一整档都得另开 context 才测得着。
 //
 // 这里装 ⑭–⑰ 四组（⑬ 及之前那些共用主 context 的用例在 test-preview-assist-ui.mjs 里）：
-//   ⑭ 「暂且算我的」必须可撤回：正主的应答迟到 800ms，远超 300ms 静默超时；
+//   ⑭ 「暂且算我的」必须可撤回：正主的应答迟到到副本已经暂且认领（300ms 静默超时走完）之后；
 //   ⑮ 顺序反过来（作业先成功、确认后到）→ 暂且认下的那一份撑不起不可逆的动作；
 //   ⑯ 同一个标签自己刷新是顺序交接、不是分身，照旧自动填；刷新后又动过手的只许摆出来让他挑
 //      （⑯b 改成新内容、⑯e 首次读取被压住时改、⑯f 重新敲一遍旧草稿、⑯g 再清空一次、
@@ -11,15 +11,18 @@
 //
 // 由 test-preview-assist-ui.mjs 起的 vite + 浏览器喂进来，本文件只管用例本身。
 import assert from "node:assert/strict";
-import { editorText } from "./preview-assist-shared.mjs";
+import {
+  assistPollSettled, editorText, heldGetPending, holdOwnerAnswers, releaseHeldGet, trackAssistFetches,
+} from "./preview-assist-shared.mjs";
 
 export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   // ⑭ 没有 Web Locks 的那一档（裸 http 的局域网地址不是安全上下文，ash 常这么开）：只能点名，
-  //    于是「暂且算我的」必须可撤回 —— 正主的应答迟到 800ms，远超 300ms 静默超时。
+  //    于是「暂且算我的」必须可撤回 —— 正主的应答迟到，晚过副本的 300ms 静默超时。
   const lanContext = await browser.newContext({ viewport: { width: 1000, height: 1200 } });
   await lanContext.addInitScript(() => {
     Object.defineProperty(Navigator.prototype, "locks", { configurable: true, get: () => undefined });
   });
+  await trackAssistFetches(lanContext);
   const lan = await lanContext.newPage();
   const lanErrors = [];
   lan.on("pageerror", (failure) => lanErrors.push(failure.message));
@@ -31,16 +34,9 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   await lanScript.fill("# 局域网那一档：正主在等 AI");
   await lan.getByRole("button", { name: "AI 协助填写" }).click();
   await lanProgress.getByText("正在读这个项目", { exact: false }).waitFor();
-  await lan.evaluate(() => {
-    const post = BroadcastChannel.prototype.postMessage;
-    BroadcastChannel.prototype.postMessage = function (note) {
-      if (note && typeof note === "object" && note.kind === "held") {
-        setTimeout(() => post.call(this, note), 800);
-        return undefined;
-      }
-      return post.call(this, note);
-    };
-  });
+  // 正主的应答先扣下：「迟到」要迟到副本**已经暂且认了领之后**，这得排出来，不能赌一个
+  // 固定的 800ms 一定比副本那边的 300ms 静默超时晚（满载时副本页自己的定时器也会晚）。
+  const releaseLanAnswers = await holdOwnerAnswers(lan);
   const [slow] = await Promise.all([
     lanContext.waitForEvent("page"),
     lan.evaluate(() => { window.open(location.href, "_blank"); }),
@@ -53,14 +49,19 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   const slowNotices = async () => JSON.parse(await slow.getByTestId("notices").textContent());
   await slowScript.waitFor();
   const slowBefore = await editorText(slowScript);
-  // 迟到的那句应答一到，先前那次认领就得当场翻过来
+  // 副本已经暂且认了领（裁决不出结果它不会去问服务端，所以卡片出现 = 静默超时已经走完）
+  await slowProgress.getByText("正在读这个项目", { exact: false }).waitFor();
+  assert.equal(await slowProgress.getByText("别的页面点的", { exact: false }).count(), 0,
+    "这一步要测的正是「应答还没到、它已经暂且认了领」");
+  // 迟到的那句应答现在才到，先前那次认领就得当场翻过来
+  await releaseLanAnswers();
   await slowProgress.getByText("别的页面点的", { exact: false }).waitFor();
   await lan.getByTestId("assist-succeed").click();
   await lan.waitForFunction((expected) =>
     [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
       .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
   await slowProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
-  await slow.waitForTimeout(1500);
+  await assistPollSettled(slow);
   assert.equal(await editorText(slowScript), slowBefore, "撤回之后，副本不许再把结果填进自己的输入框");
   assert.deepEqual((await slowNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
   assert.deepEqual(slowErrors, [], "副本页不应产生运行时异常");
@@ -82,17 +83,10 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   await ownerScript.fill("# 局域网正主：等 AI 自己填上来");
   await owner.getByRole("button", { name: "AI 协助填写" }).click();
   await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
-  // 这一次把确认压到 5 秒之后 —— 足够让作业先成功
-  await owner.evaluate(() => {
-    const post = BroadcastChannel.prototype.postMessage;
-    BroadcastChannel.prototype.postMessage = function (note) {
-      if (note && typeof note === "object" && note.kind === "held") {
-        setTimeout(() => post.call(this, note), 5000);
-        return undefined;
-      }
-      return post.call(this, note);
-    };
-  });
+  // 这一次确认一直扣着，直到作业成功、副本那边的断言都做完（这一页到 ⑯ 开头刷新时补丁随
+  // 文档一起没了）。从前是压 5 秒：满载时作业还没成功它就先到了，副本读到的是「别的页面点的」，
+  // 「暂且认领撑不起不可逆动作」这一档根本没测着。
+  await holdOwnerAnswers(owner);
   const [early] = await Promise.all([
     lanContext.waitForEvent("page"),
     owner.evaluate(() => { window.open(location.href, "_blank"); }),
@@ -116,7 +110,7 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
       .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
   // 副本这边：脚本摆出来等拍板，一个字都不许自己填
   await earlyProgress.getByText("归属没能确认", { exact: false }).waitFor();
-  await early.waitForTimeout(1500);
+  await assistPollSettled(early);
   assert.equal(await editorText(earlyScript), earlyBefore, "归属没定下来就不许改用户的输入框");
   assert.match(await earlyProgress.innerText(), /npm run dev -- --port \$PORT/, "摆出来的那条脚本还是要看得见");
   assert.deepEqual((await earlyNotices()).filter((line) => line.includes("脚本已填入")), [], "没填就不该提示填入");
@@ -193,10 +187,12 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   await owner.getByTestId("assist-hold-next-get").click();
   await owner.reload();
   await ownerScript.waitFor();
-  // 首次读取还没回来（卡片还没出现），这时候动输入框
+  // 首次读取已经发出、被压在路上（卡片还没出现），这时候动输入框
+  const heldE = await heldGetPending(owner);
   assert.equal(await ownerProgress.count(), 0, "这一条要的就是「首次读取还没回来」那一段");
   const duringSlow = "# 我在刷新后刚写的新内容";
   await ownerScript.fill(duringSlow);
+  await releaseHeldGet(owner, heldE);
   await ownerProgress.getByText("你在这期间改过", { exact: false }).waitFor();
   assert.equal(await editorText(ownerScript), duringSlow, "首次读取还在路上时写的内容照样不许被顶掉");
   assert.match(await ownerProgress.innerText(), /npm run dev -- --port \$PORT/, "AI 那条要摆出来让他自己挑");
@@ -218,9 +214,11 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   await owner.getByTestId("assist-hold-next-get").click();
   await owner.reload();
   await ownerScript.waitFor();
+  const heldF = await heldGetPending(owner);
   assert.equal(await ownerProgress.count(), 0, "这一条要的还是「首次读取还没回来」那一段");
   assert.notEqual(await editorText(ownerScript), retyped, "刷新把未保存的草稿丢了，这一条才测得着「重新敲一遍」");
   await ownerScript.fill(retyped);
+  await releaseHeldGet(owner, heldF);
   await ownerProgress.getByText("你在这期间改过", { exact: false }).waitFor();
   assert.equal(await editorText(ownerScript), retyped, "重新敲一遍旧草稿也是编辑，不许被顶掉");
   assert.deepEqual((await ownerNotices()).filter((line) => line.includes("脚本已填入")), [],
@@ -240,8 +238,11 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   await owner.getByTestId("assist-hold-next-get").click();
   await owner.reload();
   await ownerScript.waitFor();
+  const heldG = await heldGetPending(owner);
+  assert.equal(await ownerProgress.count(), 0, "这一条要的还是「首次读取还没回来」那一段");
   assert.equal(await editorText(ownerScript), saved, "刷新后框里是已保存那一份");
   await ownerScript.fill("");
+  await releaseHeldGet(owner, heldG);
   await ownerProgress.getByText("你在这期间改过", { exact: false }).waitFor();
   assert.equal(await editorText(ownerScript), "", "他刷新后自己清空的，就别替他填回去");
   assert.deepEqual((await ownerNotices()).filter((line) => line.includes("脚本已填入")), [],
@@ -253,13 +254,7 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   await ownerScript.fill("# 刷新前：等 AI（第三发）");
   await owner.getByRole("button", { name: "AI 协助填写" }).click();
   await ownerProgress.getByText("正在读这个项目", { exact: false }).waitFor();
-  await owner.evaluate(() => {
-    const post = BroadcastChannel.prototype.postMessage;
-    BroadcastChannel.prototype.postMessage = function (note) {
-      if (note && typeof note === "object" && note.kind === "held") return undefined;
-      return post.call(this, note);
-    };
-  });
+  await holdOwnerAnswers(owner); // 一直不答，直到下面正主自己刷新
   const [rival] = await Promise.all([
     lanContext.waitForEvent("page"),
     owner.evaluate(() => { window.open(location.href, "_blank"); }),
@@ -284,7 +279,7 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
     [...document.querySelectorAll('.cm-content[aria-label="启动脚本"] .cm-line')]
       .map((line) => line.textContent).join("\n") === expected, "npm run dev -- --port $PORT");
   await rivalProgress.getByText("没有动上面输入框里的内容", { exact: false }).waitFor();
-  await rival.waitForTimeout(1500);
+  await assistPollSettled(rival);
   assert.equal(await editorText(rivalScript), rivalBefore, "被顶回去的那一页不许改自己的输入框");
   assert.deepEqual((await rivalNotices()).filter((line) => line.includes("脚本已填入")), [], "它没填就不该提示填入");
   assert.deepEqual(rivalErrors, [], "副本页不应产生运行时异常");
@@ -296,6 +291,7 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   //    （第 11 轮审查复现）。这一档里把跨页仲裁整个掐掉（held 一律不发），所以剩下的唯一防线就是
   //    凭据自己：只有「刷新出来的那一份文档」认得它，而且读到就删、认不认都删。
   const cloneContext = await browser.newContext({ viewport: { width: 1000, height: 1200 } });
+  await trackAssistFetches(cloneContext);
   await cloneContext.addInitScript(() => {
     Object.defineProperty(Navigator.prototype, "locks", { configurable: true, get: () => undefined });
     const post = BroadcastChannel.prototype.postMessage;
@@ -338,7 +334,7 @@ export async function fallbackArbitrationCases({ browser, origin, caseId }) {
   for (let i = 0; i < clones.length; i += 1) {
     await cloneProgress[i].getByText("归属没能确认", { exact: false }).waitFor();
   }
-  await clones[0].waitForTimeout(1500);
+  for (const clone of clones) await assistPollSettled(clone);
   for (let i = 0; i < clones.length; i += 1) {
     assert.equal(await editorText(cloneScripts[i]), cloneBefore[i], `克隆出来的第 ${i + 1} 页不许自己填脚本`);
     const lines = JSON.parse(await clones[i].getByTestId("notices").textContent());

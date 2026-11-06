@@ -10,6 +10,7 @@
 // 跑法：npm -w web run test:agent-profile-add-gate
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, settlePage, trackFetches } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -27,6 +28,9 @@ try {
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
+  // 页面那一侧也记一份：提交函数要是漏了门禁，createAgent 在点击处理里就**同步**发出 fetch，
+  // 那次 click() 一返回它就已经在这份日志里了 —— 不必等它走到 Node 侧的路由。
+  await trackFetches(page, "/api/agents");
   await page.goto(`${web.origin}/scripts/fixtures/agent-profile-add-gate.html`);
 
   const add = page.locator(".agent-profile-group.is-codex .agent-profile-group-add");
@@ -47,7 +51,9 @@ try {
 
   // ③ 绕过 disabled 直接触发（键盘/程序化路径）：提交函数自己也得挡住。
   await add.evaluate((node) => node.click());
-  await page.waitForTimeout(500);
+  await settlePage(page);
+  const posted = (await fetchLog(page)).filter((entry) => entry.method === "POST");
+  assert.deepEqual(posted, [], `门禁没落在提交函数里，页面发出了注册请求：${JSON.stringify(posted)}`);
   assert.equal(registerAttempts.length, 0, `门禁没落在提交函数里：${JSON.stringify(registerAttempts)}`);
 
   // 真被触发时给的是升级说明本身，不是「请先去检测」那句死循环指引。

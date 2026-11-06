@@ -12,6 +12,8 @@
 // 跑法：npm -w web run test:terminal-dock
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, fetchesSettled, waitUntil } from "./wait-until.mjs";
+import { trackStubbedFetches } from "./wait-until-extra.mjs";
 
 const web = await startWebServer();
 
@@ -21,6 +23,10 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  // 夹具在页面里当假服务端：记下每一发会话请求（列表 / 新建 / 结束）。「不该多建一个 shell」
+  // 要等的正向信号是「引导那次列表读取落地了，它引起的请求也都落地了」—— 多建的那一发就是
+  // 它落地后由抽屉的 effect 发出的，fetchesSettled 冲刷之后复核时看得见。
+  await trackStubbedFetches(page, "/terminal/sessions");
   await page.goto(`${web.origin}/scripts/fixtures/terminal-dock.html`);
 
   const bar = page.locator(".status-bar");
@@ -28,6 +34,13 @@ try {
   const terminalButton = page.getByRole("button", { name: "终端（G Z）" });
   const tabs = bar.locator(".status-bar__tab");
   const calls = async () => JSON.parse(await page.getByTestId("calls").textContent());
+  const sessionReads = async (projectId) => (await fetchLog(page))
+    .filter((entry) => entry.method === "GET" && entry.url.includes(`/projects/${projectId}/terminal/sessions`)).length;
+  /** 这一下触发的会话列表读取已经发出，而且它和它引起的请求（多建的 shell 就在其中）都已落地。 */
+  const bootstrapSettled = async (projectId, before, what) => {
+    await waitUntil(async () => (await sessionReads(projectId)) > before, `${what}：会话列表读取已发出`);
+    await fetchesSettled(page, 0, `${what}：会话列表读取与它引起的请求都已落地`);
+  };
 
   const states = await page.evaluate(async () => {
     const { attachStatusOf, createAttachTab } = await import("/src/workspace/terminalTabs.ts");
@@ -108,9 +121,10 @@ try {
   // ⑥ 抽屉开着切项目:旧项目的 tab 一帧都不许交给新项目 —— 它会被当成「这个项目要建 shell」,
   //   平白多起一个(而且是在别人的项目上)。新项目自己需要的那一个照常建。
   const beforeReopen = await calls();
+  const readsBeforeReopen = await sessionReads("p-one");
   await terminalButton.click();
   await page.locator(".project-terminal").waitFor();
-  await page.waitForTimeout(500);
+  await bootstrapSettled("p-one", readsBeforeReopen, "重新展开抽屉");
   // 收起再展开只是把现场摆回来:这个 tab 已经有会话了(自己建的,id 记在 sessionId 上),
   // 抽屉重挂载时不许再建一个。
   assert.deepEqual(await calls(), beforeReopen, `重新展开不该再建 shell，实际 ${JSON.stringify(await calls())}`);
@@ -118,7 +132,8 @@ try {
   await page.getByRole("button", { name: "切项目" }).click();
   await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "第二个项目");
   await page.waitForFunction(() => JSON.parse(document.querySelector("#calls").textContent).some((entry) => entry === "create:p-two"));
-  await page.waitForTimeout(400); // 给「多建一个」留出暴露的时间,不然断言太早
+  // 「多建一个」若有，就是引导读取或第一发新建落地之后由 effect 发出的：等在途的会话请求全部落地。
+  await fetchesSettled(page, 0, "切到第二个项目后的会话请求都已落地");
   const afterSwitch = await calls();
   assert.deepEqual(
     afterSwitch.filter((entry) => entry === "create:p-two"),
@@ -142,9 +157,10 @@ try {
   // 切回去:第一个项目的会话还活着,按 server 的事实原样恢复(刚才新建的那个 shell +
   // 还在跑的命令日志),一个新会话都不用建。
   const beforeBack = await calls();
+  const readsBeforeBack = await sessionReads("p-one");
   await page.getByRole("button", { name: "切项目" }).click();
   await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "测试项目");
-  await page.waitForTimeout(600); // 多建一个的话,这段时间足够它冒出来
+  await bootstrapSettled("p-one", readsBeforeBack, "切回第一个项目"); // 多建一个的话，它就在这之后发出
   assert.deepEqual(await calls(), beforeBack, `切回已有活 shell 的项目不该再建会话，实际 ${JSON.stringify(await calls())}`);
   assert.equal(await tabs.count(), 2, "恢复的是 server 上那两条现场，不多不少");
   assert.match(await bar.locator(".status-bar__tabs").innerText(), /网页前端/, "还在跑的命令日志跟着现场回来");
@@ -165,8 +181,16 @@ try {
   await page.getByRole("button", { name: "切项目" }).click();
   await page.waitForFunction(() => document.querySelector(".status-bar__project span:last-child")?.textContent === "第二个项目");
   const beforeLate = await calls();
+  const noticesBeforeLate = JSON.parse(await page.getByTestId("notices").textContent()).length;
   await page.getByRole("button", { name: "命令结果晚返回" }).click();
-  await page.waitForTimeout(600); // 抽屉要是被它展开了,引导 effect 这段时间足够建出一个 shell
+  // 正向信号：那条晚到的结果已经被处理掉了 —— 要么「日志没在这儿打开」那句说出来了（对的走法），
+  // 要么抽屉被它展开了（错的走法，下面的断言来报）。两种都认，坏了才报得出是哪一条，而不是干等超时。
+  // 抽屉要是被展开，引导读取会在随后的 effect 里发出、落地后再建 shell —— 等在途的会话请求全部落地。
+  await page.waitForFunction((before) =>
+    JSON.parse(document.querySelector('[data-testid="notices"]').textContent).length > before
+      || document.querySelector(".project-terminal") !== null,
+  noticesBeforeLate);
+  await fetchesSettled(page, 0, "晚到的命令结果处理完之后，会话请求都已落地");
   assert.deepEqual(await calls(), beforeLate, `别的项目晚返回的命令结果不该在当前项目建会话，实际 ${JSON.stringify(await calls())}`);
   assert.equal(await page.locator(".project-terminal").count(), 0, "没人碰过这个项目的终端，抽屉不该自己展开");
   assert.equal(await tabs.count(), 0, "上一个项目的命令日志不该挂到当前项目上");

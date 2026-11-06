@@ -8,7 +8,8 @@
 // 跑法：npm -w web run test:provider-visibility
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { assertCardsFit, findCardBleed } from "./settings-card-fit.mjs";
+import { waitUntil } from "./wait-until.mjs";
+import { assertCardsFit, findCardBleed, layoutSettled } from "./settings-card-fit.mjs";
 
 const provider = (id, name, pinnedModels) => ({
   id,
@@ -108,7 +109,7 @@ try {
     await page.locator("main.settings-main").evaluate((main, width) => {
       main.style.width = `${width}px`;
     }, cardWidth);
-    await page.waitForTimeout(80);
+    await layoutSettled(page);
     // 顶穿的先是那两颗图标按钮(删除/编辑)而不是文字,所以这里量几何而不是量字:
     // 文字体检(findCardBleed)只走文本节点,一个只长图标的按钮被挤出去它是看不见的。
     const overflow = await page.locator(".provider-row").evaluateAll((rows) =>
@@ -127,14 +128,16 @@ try {
   //    (审查第 1 轮实测:/agents 一个 503,已加的供应商全没了,页面却说「还没有供应商」)
   const settingsPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   let agentsStatus = 503;
-  let agentsDelayMs = 0;
+  // 非空时 /agents 扣在这里不回，直到测试放行（「它慢」由测试排出来，不赌固定毫秒数）。
+  let agentsHold = null;
+  let agentsHeld = 0;
   await settingsPage.route("**/api/llm-providers", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify([provider("p-mounted", "已挂中转", ["relay-opus"]), provider("p-orphan", "没人挂的中转", ["orphan-opus"])]),
   }));
   await settingsPage.route("**/api/agents", async (route) => {
-    if (agentsDelayMs) await new Promise((resolve) => setTimeout(resolve, agentsDelayMs));
+    if (agentsHold) { agentsHeld += 1; await agentsHold.promise; }
     if (agentsStatus !== 200) {
       await route.fulfill({ status: agentsStatus, contentType: "application/json", body: JSON.stringify({ error: "模拟：执行器列表暂时不可用" }) });
       return;
@@ -169,13 +172,17 @@ try {
   assert.match(await settingsText(), /1 个执行器在用/);
   assert.doesNotMatch(await settingsText(), /执行器清单读取失败/);
 
-  // /agents 慢,也不许把整张卡一起拖在「读取中…」。
+  // /agents 慢,也不许把整张卡一起拖在「读取中…」。从前是「/agents 压 2 秒、行 1.5 秒内要出来」：
+  // 满载时重载页面本身就能超过 1.5 秒。现在 /agents 一直扣着，行在它**还没回**的时候就得出来。
   agentsStatus = 200;
-  agentsDelayMs = 2000;
+  agentsHold = Promise.withResolvers();
+  const heldBefore = agentsHeld;
   await settingsPage.reload();
-  await settingsPage.locator(".provider-row").first().waitFor({ timeout: 1500 });
+  await settingsPage.locator(".provider-row").first().waitFor();
+  await waitUntil(() => agentsHeld > heldBefore, "重载后的 /agents 请求已到达、被扣住");
   assert.equal(await settingsPage.locator(".provider-row").count(), 2);
-  agentsDelayMs = 0;
+  agentsHold.resolve();
+  agentsHold = null;
 
   // 反过来:主体读不到时,说的是「读取失败」而不是「一个都没有」。
   await settingsPage.unroute("**/api/llm-providers");

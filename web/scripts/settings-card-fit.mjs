@@ -11,6 +11,8 @@
 //
 // 两条都放过的情况（不是毛病）：横向滚动容器里的字贴着自己的容器边（滚得出来）、
 // text-overflow:ellipsis 的定长单行（切得是有意的）、无障碍专用的 1×1 隐藏文字。
+import { afterFrames } from "./wait-until-extra.mjs";
+
 export const CARD_BLEED_PROBE = () => {
   const out = [];
   const desc = (el) => {
@@ -72,12 +74,22 @@ export const CARD_BLEED_PROBE = () => {
 /** 在当前页面上体检一遍，返回可直接打印的问题清单（空数组 = 干净）。 */
 export const findCardBleed = (page) => page.evaluate(CARD_BLEED_PROBE);
 
+/**
+ * 改完视口/尺寸之后，等到「新尺寸生效了、它引起的重算也都落地了」再量：几何本身是同步的（读
+ * 尺寸会强制排版），等的是 resize / ResizeObserver 驱动的那部分 —— 它们在渲染那一步里派发，
+ * 走过两帧再冲刷一轮，由它们触发的 React 提交也已落地。负载重只会让帧来得晚。
+ */
+export async function layoutSettled(page, width) {
+  if (width !== undefined) await page.waitForFunction((expected) => window.innerWidth === expected, width);
+  await afterFrames(page, 2);
+}
+
 /** 按一串视口宽度体检；任一宽度上出问题就抛，错误里带上是哪一块、差多少。 */
 export async function assertCardsFit(page, widths, label) {
   const { default: assert } = await import("node:assert/strict");
   for (const width of widths) {
     await page.setViewportSize({ width, height: 1000 });
-    await page.waitForTimeout(120);
+    await layoutSettled(page, width);
     const findings = await findCardBleed(page);
     assert.equal(
       findings.length,

@@ -11,7 +11,7 @@
 // 跑法：npm -w web run test:settings-card-fit
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { assertCardsFit, findCardBleed } from "./settings-card-fit.mjs";
+import { assertCardsFit, findCardBleed, layoutSettled } from "./settings-card-fit.mjs";
 
 const WIDTHS = [1440, 1180, 1000, 900, 820, 700, 620];
 
@@ -62,7 +62,7 @@ try {
 
   // ④ 体检本身得有牙：故意撤掉那段说明的内边距，必须被抓出来。
   await page.addStyleTag({ content: ".project-preview .settings-card > .preview-launch-scope-help { padding-inline: 0 !important; }" });
-  await page.waitForTimeout(60);
+  await layoutSettled(page);
   const caught = await findCardBleed(page);
   assert.ok(
     caught.some((finding) => finding.where.includes("preview-launch-scope-help")),

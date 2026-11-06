@@ -11,6 +11,8 @@
 // 跑法：npm -w web run test:command-placeholders
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, settlePage, waitUntil } from "./wait-until.mjs";
+import { trackStubbedFetches } from "./wait-until-extra.mjs";
 
 const LINE = 21;
 const PADDING = 16;
@@ -24,6 +26,8 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const url = `${web.origin}/scripts/fixtures/command-placeholders.html`;
+  // 夹具在页面里当假服务端：记下每一发会话查询，⑧ 要等「迟到的那一发已被页面读完」。
+  await trackStubbedFetches(page, "/terminal/sessions$");
   await page.goto(url);
 
   const buildEditor = page.getByRole("textbox", { name: "构建的命令" });
@@ -307,12 +311,18 @@ try {
   await page.keyboard.press("Escape");
   await page.evaluate(() => { window.__slowFact = true; });
   if (await pop.count()) await page.keyboard.press("Escape"); // 收值框关了,弹层还开着 —— 先合上
-  await statusTrigger.click();           // 开弹层 = 对第一个项目发一次查询(这次慢 400ms)
+  await statusTrigger.click();           // 开弹层 = 对第一个项目发一次查询(这次被夹具扣住)
   await pop.waitFor();
+  await page.waitForFunction(() => (window.__slowFactHeld ?? 0) > 0); // 那次查询确实发出去、扣在路上了
   await page.keyboard.press("Escape");   // 关掉弹层,但那次查询还在路上
   await page.getByRole("button", { name: "切项目" }).click();
   await page.waitForFunction(() => document.querySelector('[data-testid="config"]')?.textContent === '{"service":null,"commands":[]}');
-  await page.waitForTimeout(800);        // 旧事实这会儿早落回来了
+  // 现在才放旧事实回来,并等页面把第一个项目的每一发会话查询都读完(被 abort 也算),再冲刷一轮渲染。
+  await page.evaluate(() => window.__releaseSlowFact());
+  await waitUntil(async () => (await fetchLog(page))
+    .filter((entry) => entry.url.includes("/projects/p-one/terminal/sessions")).every((entry) => entry.state === "settled"),
+  "第一个项目那次迟到的会话查询已被页面消费完");
+  await settlePage(page);
   assert.equal(
     await page.locator(".cmd-launcher.is-live").count(),
     0,

@@ -2,6 +2,8 @@
 // 跑法:npm -w web run test:agent-plate
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage } from "./wait-until.mjs";
+import { afterFrames } from "./wait-until-extra.mjs";
 
 const web = await startWebServer();
 
@@ -105,7 +107,10 @@ try {
   await page.getByTestId("grow").click();
   await page.getByTestId("to-antigravity").click();
   await page.waitForFunction(() => document.querySelector(".agent-plate-word")?.textContent === "antigravity");
-  await page.waitForTimeout(200);
+  // 字号是 AgentPlate 的 effect 和 ResizeObserver 算出来的：先冲刷掉换名字那次提交的 effect，
+  // 再走两帧让「框变高」的 ResizeObserver 回调派发完（metrics 自己还会等入场动画跑完）。
+  await settlePage(page);
+  await afterFrames(page, 2);
   fills(await metrics());
   await shot("long");
 

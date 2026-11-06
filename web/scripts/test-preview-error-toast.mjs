@@ -14,6 +14,7 @@
 //      停在预览那张卡上。而且链接不许改动原话——这段文字是拿来照抄的。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { outlastPageTimers } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -47,26 +48,27 @@ try {
 
   // ① 起预览 —— 后端 409 回来一整份「认出了哪几个、各自怎么起」。
   await page.getByRole("button", { name: "打开预览" }).click();
-  await visibleSlot(page, "workspace-toast-pinned").waitFor({ timeout: 5000 });
+  await visibleSlot(page, "workspace-toast-pinned").waitFor();
   const expected = await page.evaluate(() => window.__ambiguous);
   const shown = await page.evaluate(readSlots);
   assert.equal(shown.pinned?.text, expected, "报错被截断或换了内容");
   assert.equal(shown.pinned?.clickable, true, "常驻提示 pointer-events 是 none，关不掉也选不中");
   assert.equal(shown.pinned?.closers, 1, "常驻提示没给关闭按钮");
 
-  // 自动消失的窗口是 2.6s，多等一截再看。
-  await page.waitForTimeout(4000);
+  // 自动消失的窗口是 2.6s（普通提示那条通道的定时器，从 notify 那一刻起算，早于此刻），
+  // 再加 200ms 的淡出卸载。一个 2.8s 后到期的页面定时器触发时，它们要走早就走完了。
+  await outlastPageTimers(page, 2800);
   assert.equal((await page.evaluate(readSlots)).pinned?.text, expected, "预览起不来那一句自己消失了——用户只看见红了一下");
 
   // ② 用户还在读报错，别处插进来一条普通提示：两句并存，报错不许被顶掉。
   await page.getByTestId("plain-notice").click();
-  await visibleSlot(page, "workspace-toast-transient").waitFor({ timeout: 5000 });
+  await visibleSlot(page, "workspace-toast-transient").waitFor();
   const both = await page.evaluate(readSlots);
   assert.equal(both.pinned?.text, expected, "一条普通提示就把常驻的预览报错顶掉了");
   assert.equal(both.transient?.text, "已复制", "普通提示没显示出来");
   assert.equal(both.transient?.closers, 0, "常规提示也长出了关闭按钮");
   // 普通提示自己走之后，报错**依然**在（老实现里正是这个定时器把整个 toast 清空的）。
-  await visibleSlot(page, "workspace-toast-transient").waitFor({ state: "detached", timeout: 5000 });
+  await visibleSlot(page, "workspace-toast-transient").waitFor({ state: "detached" });
   const after = await page.evaluate(readSlots);
   assert.equal(after.transient, null, "常规提示被一起改成了常驻");
   assert.equal(after.pinned?.text, expected, "普通提示的定时器把常驻的预览报错扫掉了");
@@ -84,7 +86,7 @@ try {
 
   // ③ 按那颗关闭才收得掉。整个节点摘掉（不只是掉 is-visible）才算收干净，所以等 detached。
   await page.getByRole("button", { name: "关闭提示" }).click();
-  await page.getByTestId("workspace-toast-pinned").waitFor({ state: "detached", timeout: 5000 });
+  await page.getByTestId("workspace-toast-pinned").waitFor({ state: "detached" });
   assert.equal((await page.evaluate(readSlots)).pinned, null, "点了关闭，提示还赖着");
   assert.equal(
     await page.evaluate(() => document.querySelectorAll(".workspace-toast-close").length), 0,
