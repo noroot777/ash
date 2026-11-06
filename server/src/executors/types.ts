@@ -45,6 +45,12 @@ export interface RunOpts {
 // event stream. The orchestrator records sessionId/commandLine for traceability
 // before/while consuming the stream. `kill` terminates the
 // underlying subprocess (manual stop) — the stream then ends like a normal exit.
+/** 接管时上一个 ash 进程已经消费到哪:输出文件与字节水位(sessions.agent_out_path / agent_offset)。 */
+export interface ConsumedOutput {
+  outPath: string;
+  offset: number;
+}
+
 export interface RunHandle {
   cliCommand?: CliCommand;
   sessionId: string;
@@ -232,7 +238,7 @@ export interface AgentExecutor {
   // 地方再抄一张 CLI 名单（见 server/CLAUDE.md「执行器与模型」）。
   // configDir = 那个进程当初起跑时用的 CLI 配置目录(多用户模式下的个人 CODEX_HOME);
   // 接回来读它自己的私有产物(codex 的 rollout 水位)要去同一个目录。
-  attach?(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting }): RunHandle;
+  attach?(child: ChildProcess, opts: { sessionId: string; commandLine: string; configDir?: string | null; cwd?: string; images?: MarkdownImageAccounting; consumed?: ConsumedOutput }): RunHandle;
   // 常驻会话。两种实现形态,契约相同(events 只在 close/kill 后结束):
   //   • claude = **进程级**常驻,一个进程吃多个回合(stdin 双向注入)
   //   • codex  = **会话级**常驻,每回合一个 `exec resume <thread_id>` 进程

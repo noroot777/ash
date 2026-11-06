@@ -141,6 +141,7 @@
     "//test:review-recurrence": "同类问题熔断:承接编号校验(含 MCP 边界的形状校验)、谱系计数(紧邻轮次/跨链)、熔断指令只在触发轮出现并留痕、熔断提问的选择题硬格式。",
     "test:review-recurrence": "tsx scripts/test-review-recurrence.ts && tsx scripts/test-review-recurs-boundary.ts",
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
+    "test:claude-reattach": "tsx scripts/test-claude-reattach-background.ts",
     "test:session-lost": "tsx scripts/test-session-lost.ts",
     "test:duet-session-lost": "tsx scripts/test-duet-session-lost.ts",
     "//test:duet-stall-visibility": "讨论里的停滞诊断发言进行中就落进 transcript.jsonl(讨论页刷新只读这一份),以及 trace 那 200 格满了之后关键事件挤掉一条普通的、不挤掉自己。",

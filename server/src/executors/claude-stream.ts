@@ -48,6 +48,9 @@ export function parseClaudeStream(
   cwd?: string,
   // 正文图片的持久账本/身份种子(RunOpts.images),见 markdown-image-stream.ts。
   accounting?: MarkdownImageAccounting,
+  // 接管时上一个 ash 进程已经消费掉的那段原始输出(按行解析好的事件),只用来重建后台任务
+  // 账本与子智能体投影,不再推送。见 ../claude-background-reaped.ts 的 `replay`。
+  consumed?: readonly unknown[],
 ): AsyncIterable<AgentEvent> {
   // 正文里的图**不在这份解析里收**:它要按「一份文档」认身份,而这里一条模型消息就是
   // 一片碎片 —— 上一条消息给定义、下一条引用它时,按消息扫压根不认那张图(审查第 4 轮
@@ -58,7 +61,7 @@ export function parseClaudeStream(
   // 第 5 轮 R1)。所以 sink 在这里建好传进去,由 push 同步进账,这一层只负责收口。
   const images = markdownImageSink(cwd, accounting);
   return settleMarkdownImages(
-    claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, images, cliSessionId, cwd),
+    claudeStreamEvents(child, resident, bin, calibrateAs, compactWindow, onInitialized, waitNoticeMs, images, cliSessionId, cwd, consumed),
     images,
   );
 }
@@ -74,6 +77,7 @@ async function* claudeStreamEvents(
   images: MarkdownImageSink,
   cliSessionId?: string,
   cwd?: string,
+  consumed?: readonly unknown[],
 ): AsyncIterable<AgentEvent> {
   // 队列、唤醒、收尾、增量合并、子活动合并和**图片记账的时点**都在这条共用流水线里
   // (见 event-queue.ts)。顺序是硬要求:字节在 `delta`/`push` 的那一刻就冻住,交代排在
@@ -117,6 +121,27 @@ async function* claudeStreamEvents(
   // 后台子代理 / 后台 Bash 的同类账本：认人同样要 tool_use、tool_result、system 三样一起看。
   // 它们随回合收尾被收走时在时间线上留一笔（见 ../claude-background-reaped.ts）。
   const background = new ClaudeBackgroundTrace(cliSessionId);
+  if (consumed?.length) {
+    // 重启接管:水位之前那段的后台任务和工作流子智能体,上一个 ash 进程见过、这一个没见过。
+    // 投影的输出上一个进程已经落过盘,这里只要状态,产出一律丢掉。
+    for (const ev of consumed as any[]) {
+      background.replay(ev);
+      nativeWork.claudeMessage(ev);
+      if (ev?.parent_tool_use_id || !Array.isArray(ev?.message?.content)) continue;
+      for (const block of ev.message.content) {
+        if (ev.type === "assistant" && block?.type === "tool_use") nativeWork.call(block.name, block.input, block.id);
+        if (ev.type === "user" && block?.type === "tool_result") nativeWork.result(block.tool_use_id, block.content, block.is_error === true);
+      }
+    }
+    if (resident) resident.turnActive = !background.betweenTurns;
+    // 接回时正停在「等后台」的空档:那个让单飞先不收台的回合结尾在水位之前,这一代没见过,
+    // 照它重发一遍,等待和它的期限才接得上(期限从接回这一刻重新起算)。
+    const waiting = resident?.reapsAtTurnEnd && background.betweenTurns ? background.waiting() : null;
+    if (waiting && waiting.agent + waiting.workflow > 0) {
+      push({ kind: "system", text: backgroundHoldNotice(waiting), at: new Date().toISOString(), level: "notice", aside: true });
+      push({ kind: "turnEnd", background: waiting });
+    }
+  }
 
   const rl = createInterface({ input: child.stdout! });
 
@@ -379,7 +404,6 @@ async function* claudeStreamEvents(
       const failed = (!!ev.subtype && ev.subtype !== "success") || apiError;
       if (ev.origin?.kind === "task-notification" && !turnSpoke && !failed) return;
       turnSpoke = false;
-      if (resident) resident.turnActive = false;
       flushText();
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
       const usage = claudeUsage(ev);
@@ -406,6 +430,9 @@ async function* claudeStreamEvents(
       // result(标志立即清掉),所以最坏情况也只影响一个回合的错误上报。
       const ownInterrupt = resident?.interruptPending === true;
       if (resident) resident.interruptPending = false;
+      // 我们自己打断的那一回合收尾时,插话那条消息已经(或马上就要)送进去开下一回合:会话
+      // 仍算在忙。这里清成空闲,紧跟着的第二次插话就会走「空档直接送」、不再打断第一条。
+      if (resident && !ownInterrupt) resident.turnActive = false;
       // claude CLI 把 **API 层**的失败(404 模型不存在、401、限流…)报成
       // `subtype:"success"` + `is_error:true` + `api_error_status` —— 只看 subtype
       // 会把它整条判成正常结束。两路判据都要算上,否则回合「成功」但一个字没说。

@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
-import { readdirSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@ash/shared";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/shared/cli-overrides";
 import { cliHostEnv } from "./cli-env.js";
-import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
+import type { AgentExecutor, ConsumedOutput, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import type { MarkdownImageAccounting } from "./markdown-image-stream.js";
 import type { StallVerdict } from "../turn-stall-verdict.js";
 import { resolveSteerText, type SteerText } from "./steer-text.js";
@@ -268,14 +268,14 @@ export class ClaudeExecutor implements AgentExecutor {
     );
   }
 
-  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; cwd?: string; images?: MarkdownImageAccounting }): RunHandle {
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string; cwd?: string; images?: MarkdownImageAccounting; consumed?: ConsumedOutput }): RunHandle {
     child.on("close", () => cleanupClaudeGoalContext(opts.commandLine));
     const detached = detachedInfo(child);
     const settingsCleanup = runtimeSettingsCleanupFromCommandLine(opts.commandLine);
     child.on("close", settingsCleanup);
     if (child.stdin && opts.commandLine.includes("--input-format")) {
       return singleRunFromResident(
-        this.residentFromChild(child, opts.sessionId, opts.commandLine, settingsCleanup, opts.cwd, opts.images, true),
+        this.residentFromChild(child, opts.sessionId, opts.commandLine, settingsCleanup, opts.cwd, opts.images, true, consumedEvents(opts.consumed)),
         detached,
       );
     }
@@ -323,6 +323,7 @@ export class ClaudeExecutor implements AgentExecutor {
     cwd?: string,
     images?: MarkdownImageAccounting,
     reapsAtTurnEnd = false,
+    consumed?: readonly unknown[],
   ): ResidentHandle {
     const resident = new ClaudeControlBridge(reapsAtTurnEnd);
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
@@ -338,7 +339,7 @@ export class ClaudeExecutor implements AgentExecutor {
       commandLine,
       events: cleanupWithEvents(
         // 同 attach：可引导流接管回来时同样没有新的 init。
-        parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow(), settingsCleanup, undefined, sessionId, cwd, images),
+        parseClaudeStream(child, resident, this.bin, this.type, this.compactWindow(), settingsCleanup, undefined, sessionId, cwd, images, consumed),
         settingsCleanup,
       ),
       send: (text: string) => {
@@ -367,6 +368,7 @@ export class ClaudeExecutor implements AgentExecutor {
           await beforeSend?.();
           // **正文在这里才定稿**(惰性正文见 steer-text.ts)。
           await writeChecked(userLine(await resolveSteerText(text)));
+          resident.turnActive = true; // 同 send:消息一送进去会话就在忙,别等模型先开口
         } catch (error) {
           ack.cancel();
           // interrupt 尚未写出时才撤销；一旦写出，CLI 会产生一个 turnEnd，消费层必须
@@ -501,9 +503,16 @@ export function singleRunFromResident(
       // 消息直接送进去自己开一回合;那一回合的结尾照常判要不要接着等。
       if (resident.turnActive?.() === false) {
         await beforeSend?.();
-        if (!resident.send(await resolveSteerText(text))) throw new Error("Claude 当前回合 stdin 已关闭");
-        clearHold();
-        return;
+        const body = await resolveSteerText(text);
+        // 准备正文的这段 await 里,完成通知可能已经让 CLI 自己开了一回合:那就照忙碌那条路打断
+        // 再送,而不是排在它后面(beforeSend 已经跑过,不再跑第二遍)。
+        if (resident.turnActive?.() === false) {
+          if (!resident.send(body)) throw new Error("Claude 当前回合 stdin 已关闭");
+          clearHold();
+          return;
+        }
+        text = body;
+        beforeSend = undefined;
       }
       intermediateEnds += 1;
       let interrupted = false;
@@ -523,6 +532,8 @@ export function singleRunFromResident(
         }
         throw error;
       }
+      // 插话开了新的一回合:要不要接着等后台,由那一回合的结尾重新判,旧的等待期限作废。
+      clearHold();
     },
     kill() {
       accepting = false;
@@ -530,6 +541,28 @@ export function singleRunFromResident(
     },
     cleanup: resident.cleanup,
   };
+}
+
+/**
+ * 接管时上一个 ash 进程已经消费掉的那段输出,按行解析。只给后台任务账本重建状态用
+ * (claude-stream.ts 的 `consumed`):`task_started` 都在水位之前,不重放的话新账本是空的。
+ * 读不出来就退回空集 —— 那是这份修补之前的行为,并打一条告警。
+ */
+function consumedEvents(consumed?: ConsumedOutput): unknown[] {
+  if (!consumed || consumed.offset <= 0) return [];
+  try {
+    const text = readFileSync(consumed.outPath).subarray(0, consumed.offset).toString("utf8");
+    const events: unknown[] = [];
+    for (const line of text.split("\n")) {
+      const t = line.trim();
+      if (!t) continue;
+      try { events.push(JSON.parse(t)); } catch { /* 不是事件行 */ }
+    }
+    return events;
+  } catch (error) {
+    console.warn(`[ash] 读不出接管前已消费的输出（${consumed.outPath}），后台任务账本只能从空开始:`, error);
+    return [];
+  }
 }
 
 const holdTimeoutMessage = (ms: number) =>

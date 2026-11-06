@@ -169,6 +169,8 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         // 账本与身份种子也要接上:接管的是同一条会话,文档身份必须续着发,交代关系照旧落
         // 持久账(agent-image-journal.ts)。回合起点沿用库里这一轮的 —— 接回的还是同一轮,
         // 所以**主文档**的前半截也在种子里(mainTurnStartedAt),不只是子文档。
+        // 水位之前那段输出:后台任务账本要靠它重建,否则接回的回合一结尾就把还在跑的后台工作收掉。
+        consumed: { outPath: sess.agentOutPath, offset: sess.agentOffset ?? 0 },
         images: markdownImageAccounting(
           task.id,
           sess.id,
