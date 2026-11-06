@@ -343,6 +343,40 @@ function live(name: string, tail: unknown[], ignoreEof = false, heldFor?: number
   console.log("✓ 后台跑完后主智能体整理得慢:旧期限已撤,不算超时");
 }
 
+// ④d 同上,但父回合结尾、完成通知、新回合开头挤在一块 stdout 里一起到(第 2 轮 R2):解析先把
+// 新回合认了,那个结尾排着队后到,不能拿它重新建起旧期限。
+{
+  const { child, handle } = live("burst-delivery", [
+    ...launch, ...heldEnd, notification,
+    { type: "system", subtype: "init", session_id: "sess-r" }, ...say("开始整理结果"),
+    { __wait: 600 }, ...say("合成终稿"), { ...result, origin: { kind: "task-notification" }, result: "合成终稿" },
+  ], false, HOLD_MS - 300);
+  const keepAlive = setInterval(() => {}, 100);
+  const { events, consuming } = await drain(handle, 2000);
+  clearInterval(keepAlive);
+  await consuming;
+  assert.ok(!events.some((e) => e.kind === "error"), "同一块到达也不报后台超时");
+  assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 0 });
+  assert.equal(handle.failure?.() ?? null, null);
+  await closed(child);
+  console.log("✓ 结尾、完成通知、新回合挤在一块到:旧期限照样作废");
+}
+
+// ④e 接管时前缀读不出、下一条 result 之前进程就以 0 退了:跑没跑完核实不了,不按完成结算。(R1)
+{
+  const { child } = stubCli("unknown-exit", [progress, { __wait: 100 }, { __exit: 0 }]);
+  const handle = executor.attach(child, {
+    sessionId: "sess-r", commandLine, consumed: { outPath: join(root, "missing-exit.jsonl"), offset: 4096 },
+  });
+  const { events, consuming } = await drain(handle, 1500);
+  await consuming;
+  assert.equal(events.at(-1)?.kind, "done");
+  assert.ok(events.some((e) => e.kind === "error" && /确认不了后台工作跑没跑完/.test(e.message)), "如实报核实不了");
+  assert.equal(handle.failure?.()?.kind, "background_unverified");
+  await closed(child);
+  console.log("✓ 接管状态未知时进程退了:按核实不了结算,不记成完成");
+}
+
 dbClient.close();
 rmSync(root, { recursive: true, force: true });
 console.log("claude 接管与连续插话回归通过");

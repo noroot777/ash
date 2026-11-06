@@ -124,11 +124,14 @@ assert.deepEqual(await expiryIterator.next(), { value: { kind: "done", exitStatu
 assert.equal(expiry.failure?.()?.kind, "background_timeout", "超时结论交给结算");
 console.log("✓ Claude 后台工作等到时限：杀进程、报错、按未完成结算");
 
-/** 一个只会吐事件的假常驻句柄;`turnStart` 模拟 CLI 自己开了一回合。 */
-function fakeResident(name: string) {
+/**
+ * 一个只会吐事件的假常驻句柄;`turnStart` 模拟 CLI 自己开了一回合(回合身份 +1)。`killEnds=false`
+ * 模拟收到 SIGTERM 还没退、等着升级 SIGKILL 的进程:kill 之后流先不结束。
+ */
+function fakeResident(name: string, killEnds = true) {
   const queue = eventQueue();
   const calls: string[] = [];
-  let listener: (() => void) | null = null;
+  let epoch = 0;
   const handle: ResidentHandle = {
     sessionId: name,
     commandLine: "claude hold",
@@ -136,12 +139,12 @@ function fakeResident(name: string) {
     interrupt: () => { calls.push("interrupt"); },
     send: () => true,
     turnActive: () => false,
-    onTurnStart: (fn) => { listener = fn; },
+    epoch: () => epoch,
     close: () => { calls.push("close"); queue.push({ kind: "done", exitStatus: 0 }); queue.end(); },
-    kill: () => { calls.push("kill"); queue.push({ kind: "done", exitStatus: 0 }); queue.end(); },
+    kill: () => { calls.push("kill"); if (killEnds) { queue.push({ kind: "done", exitStatus: 0 }); queue.end(); } },
     cleanup: async () => ({ kind: "empty" } as const),
   };
-  return { queue, calls, handle, turnStart: () => listener?.() };
+  return { queue, calls, handle, turnStart: () => { epoch += 1; }, epoch: () => epoch };
 }
 const settle = async (run: ReturnType<typeof singleRunFromResident>) => {
   const out: AgentEvent[] = [];
@@ -185,23 +188,65 @@ const settle = async (run: ReturnType<typeof singleRunFromResident>) => {
 }
 console.log("✓ Claude 后台没跑完进程就退了:按未完成结算,用户停止除外");
 
-// CLI 自己开了下一回合(完成通知到了、主智能体在整理结果):等后台的期限撤掉,整理慢不算超时。
-{
-  const fake = fakeResident("claude-hold-turn-start");
+// CLI 自己开了下一回合(完成通知到了、主智能体在整理结果):等后台的期限作废,整理慢不算超时。
+// 两种先后都要对:定时器已经建起来之后才开回合;开回合在先、那个结尾排着队后到(第 2 轮 R2:
+// 一整块 stdout 里「结尾 → 完成通知 → 新回合」一起到,解析先跑完,消费后到)。
+for (const order of ["armed-first", "turn-first"] as const) {
+  const fake = fakeResident(`claude-hold-${order}`);
   const run = singleRunFromResident(fake.handle, undefined, 30);
   const iterator = run.events[Symbol.asyncIterator]();
-  fake.queue.push({ kind: "turnEnd", background: { agent: 0, workflow: 1 } });
+  if (order === "turn-first") fake.turnStart();
+  fake.queue.push({ kind: "turnEnd", background: { agent: 0, workflow: 1 }, epoch: 0 });
   fake.queue.push({ kind: "text", text: "开始整理" });
   assert.deepEqual(await iterator.next(), { value: { kind: "text", text: "开始整理" }, done: false });
-  fake.turnStart();
+  if (order === "armed-first") fake.turnStart();
   await new Promise((resolve) => setTimeout(resolve, 80));
-  assert.deepEqual(fake.calls, [], "期限撤掉了,不杀");
-  fake.queue.push({ kind: "turnEnd" });
+  assert.deepEqual(fake.calls, [], `${order}: 期限作废了,不杀`);
+  fake.queue.push({ kind: "turnEnd", epoch: fake.epoch() });
   assert.deepEqual(await iterator.next(), { value: { kind: "done", exitStatus: 0 }, done: false });
-  assert.equal(run.failure?.() ?? null, null, "整理慢不算后台超时");
+  assert.equal(run.failure?.() ?? null, null, `${order}: 整理慢不算后台超时`);
+}
+// 过期的普通结尾也不收台:消费到它时插话开的新回合已经在跑了。
+{
+  const fake = fakeResident("claude-stale-end");
+  const run = singleRunFromResident(fake.handle, undefined, 60_000);
+  const iterator = run.events[Symbol.asyncIterator]();
+  fake.turnStart();
+  fake.queue.push({ kind: "turnEnd", epoch: 0 });
+  fake.queue.push({ kind: "text", text: "插话之后" });
+  assert.deepEqual(await iterator.next(), { value: { kind: "text", text: "插话之后" }, done: false });
+  assert.deepEqual(fake.calls, [], "过期结尾不收台");
+  fake.queue.push({ kind: "turnEnd", epoch: fake.epoch() });
+  assert.deepEqual(await iterator.next(), { value: { kind: "done", exitStatus: 0 }, done: false });
+}
+// 用户停止临近到期、进程还没退(等 SIGKILL 升级):旧期限不补报超时。
+{
+  const fake = fakeResident("claude-stop-near-expiry", false);
+  const run = singleRunFromResident(fake.handle, undefined, 30);
+  const iterator = run.events[Symbol.asyncIterator]();
+  fake.queue.push({ kind: "turnEnd", background: { agent: 0, workflow: 1 }, epoch: 0 });
+  fake.queue.push({ kind: "text", text: "等着" });
+  await iterator.next();
+  run.kill();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  fake.queue.push({ kind: "done", exitStatus: 0 });
+  fake.queue.end();
+  assert.deepEqual(await iterator.next(), { value: { kind: "done", exitStatus: 0 }, done: false }, "没有额外的超时错误");
+  assert.equal(run.failure?.() ?? null, null);
+  assert.deepEqual(fake.calls, ["kill"], "只有用户那一次 kill");
+}
+// 进程退出时后台跑没跑完核实不了:单独一种判决,不说成「没跑完」,也不当跑完了。
+{
+  const fake = fakeResident("claude-unverified-exit");
+  const run = singleRunFromResident(fake.handle, undefined, 60_000);
+  fake.queue.push({ kind: "done", exitStatus: 0, unfinished: { agent: 0, workflow: 0, unknown: true } });
+  fake.queue.end();
+  const out = await settle(run);
+  assert.ok(out.some((e) => e.kind === "error" && /确认不了后台工作跑没跑完/.test(e.message)));
+  assert.equal(run.failure?.()?.kind, "background_unverified");
 }
 clearInterval(keepAlive);
-console.log("✓ Claude 完成通知开了下一回合就撤掉等后台的期限");
+console.log("✓ Claude 等后台的期限按回合身份作废:先开回合后到结尾、停止临近到期、过期结尾都对");
 
 const partialEvents = eventQueue();
 const partialCalls: string[] = [];

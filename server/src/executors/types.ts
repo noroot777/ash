@@ -158,8 +158,12 @@ export interface ResidentHandle {
   close(): void; // 优雅收尾:关 stdin,等它自己退出
   /** 此刻有没有回合在进行(claude 才答得上来,见 ClaudeControlBridge.turnActive)。 */
   turnActive?(): boolean;
-  /** CLI 自己开了一回合(从空闲变成在忙,不含我们送消息那一下)时叫一声。单飞据此结束「等后台」。 */
-  onTurnStart?(listener: () => void): void;
+  /**
+   * 此刻是第几个回合:CLI 自己开一回合、我们送进一条消息,都 +1。回合结尾带着它(turnEnd.epoch),
+   * 单飞消费到一个结尾时拿它对一下 —— 解析和消费之间隔着队列,消费时可能已经开了新回合,那个
+   * 结尾就过期了。比「新回合开始时回调一声」可靠:回调与消费谁先跑说不准。
+   */
+  epoch?(): number;
   kill(): void; // 硬杀,走 killChild 三层击杀
   /**
    * 覆盖这个句柄**已经启动过的所有回合/后代**的幂等 finalizer。`kill()` 只负责进程本体

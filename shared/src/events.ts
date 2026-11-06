@@ -97,10 +97,12 @@ export type AgentEvent =
   // `background` = 这一刻还没跑完的后台子代理 / 工作流个数（只在有的时候带）。单飞据此先不
   // 收台：它们跑完 CLI 会自己开下一回合（server/src/executors/claude.ts `singleRunFromResident`）。
   // `since` = 从哪一刻开始等的（重启接管不重新起算期限）。`interrupted` = 这个结尾是 ash 插话
-  // 打断出来的，进程还要接着跑下一段。
-  | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true }
-  // `unfinished` = 进程没了的那一刻名下还有后台子代理 / 工作流没跑完（单飞据此不按完成结算）。
-  | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number } };
+  // 打断出来的，进程还要接着跑下一段。`epoch` = 这个结尾属于第几个回合（ResidentHandle.epoch）：
+  // 消费到它时已经开了新回合，它就过期了，不再据它收台或开始等。
+  | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true; epoch?: number }
+  // `unfinished` = 进程没了的那一刻名下还有后台子代理 / 工作流没跑完（单飞据此不按完成结算）；
+  // `unknown` = 后台状态核实不了（重启接管时读不出之前的输出），计数只是已知的那部分。
+  | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number; unknown?: true } };
 
 // synthesis = 收敛后的合稿轮(共同方案);impl/review are legacy transcript speakers
 export type DuetSpeaker = "A" | "B" | "synthesis" | "impl" | "review" | "user";

@@ -24,8 +24,16 @@ export class ClaudeControlBridge {
    * 消息就为 true。单飞等后台工作的空档里插话靠它判断:没有回合可打断,直接送进去。
    */
   turnActive = true;
-  /** CLI 自己开了一回合(解析层见到 `turnActive` 从 false 变 true)。见 ResidentHandle.onTurnStart。 */
-  onTurnStart: (() => void) | null = null;
+  /** 第几个回合(见 ResidentHandle.epoch)。只经 `beginTurn` 推进。 */
+  epoch = 0;
+  /**
+   * 一个回合开始了。`sent`:我们刚送进一条消息 —— 那一定是新的一段(排在当前回合之后也算),
+   * 无条件 +1;CLI 自己开口只在从空闲变成在忙时 +1。
+   */
+  beginTurn(sent = false): void {
+    if (sent || !this.turnActive) this.epoch += 1;
+    this.turnActive = true;
+  }
   private sequence = 0;
   private readonly pending = new Map<string, PendingControl>();
 

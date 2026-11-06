@@ -201,8 +201,7 @@ async function* claudeStreamEvents(
     // task_*)不算 —— 回合结束之后它们照样在流里滚。
     if (startsTurn(ev)) {
       if (ev.type === "assistant") turnSpoke = true;
-      if (resident && !resident.turnActive && !replaying) resident.onTurnStart?.();
-      if (resident) resident.turnActive = true;
+      resident?.beginTurn();
       ending = null;
     }
     if (ev.parent_tool_use_id) {
@@ -468,8 +467,8 @@ async function* claudeStreamEvents(
       // 先不记,真要重发这个结尾时再定(见下面的 `deferred`)。
       if (resident) {
         push(holding
-          ? { kind: "turnEnd", background: { ...waiting!, ...(replaying ? {} : { since: holdSince(outPath, turns) }) } }
-          : ownInterrupt ? { kind: "turnEnd", interrupted: true } : { kind: "turnEnd" });
+          ? { kind: "turnEnd", background: { ...waiting!, ...(replaying ? {} : { since: holdSince(outPath, turns) }) }, epoch: resident.epoch }
+          : ownInterrupt ? { kind: "turnEnd", interrupted: true } : { kind: "turnEnd", epoch: resident.epoch });
       }
       // 只清字节去重表,不动 `refs`:引用身份在一条流里单调递增,复位会让两个回合的
       // 身份撞上。字节去重按回合清是故意的 —— 同一个路径在下一回合被重拍过,那是新的
@@ -490,9 +489,12 @@ async function* claudeStreamEvents(
     const { events: held, turn } = deferred;
     deferred = null;
     const at = new Date().toISOString();
+    // 回合身份用重发这一刻的:重放里的计数跟这一代对不上;这之后再开回合,它照样过期。
+    const epoch = resident?.epoch;
     for (const event of held) {
       if (event.kind === "system") push({ ...event, at });
-      else if (event.kind === "turnEnd" && event.background) push({ ...event, background: { ...event.background, since: holdSince(outPath, turn) } });
+      else if (event.kind === "turnEnd" && event.background) push({ ...event, background: { ...event.background, since: holdSince(outPath, turn) }, epoch });
+      else if (event.kind === "turnEnd" && !event.interrupted) push({ ...event, epoch });
       else push(event);
     }
   };
@@ -543,18 +545,20 @@ async function* claudeStreamEvents(
     }
     if (deferred && isOwnInterruptAck(ev)) {
       deferred = null;
-      if (resident) resident.turnActive = true; // 插话那条消息正在(或马上)送进去
+      resident?.beginTurn(); // 插话那条消息正在(或马上)送进去
     }
     emitDeferred();
     handle(ev);
   });
 
-  // 进程没了的那一刻还有后台工作没跑完:如实交给单飞,退出码是 0 也不能按完成结算。
+  // 进程没了的那一刻还有后台工作没跑完,或者跑没跑完核实不了(接管时读不出之前的输出):如实
+  // 交给单飞,退出码是 0 也不能按完成结算。三种情况分得开:不带 = 都了结了,带计数 = 还有这些
+  // 没跑完,带 unknown = 说不准(计数只是已知的那部分,不拿它冒充全部)。
   const done = (exitStatus: number): AgentEvent => {
-    const unfinished = resident?.reapsAtTurnEnd ? background.waiting() : null;
-    return unfinished && unfinished.agent + unfinished.workflow > 0
-      ? { kind: "done", exitStatus, unfinished }
-      : { kind: "done", exitStatus };
+    if (!resident?.reapsAtTurnEnd) return { kind: "done", exitStatus };
+    const waiting = background.waiting();
+    if (recoveryUnknown) return { kind: "done", exitStatus, unfinished: { ...waiting, unknown: true } };
+    return waiting.agent + waiting.workflow > 0 ? { kind: "done", exitStatus, unfinished: waiting } : { kind: "done", exitStatus };
   };
   let stderr = "";
   child.stderr?.on("data", (d) => (stderr += d.toString()));
