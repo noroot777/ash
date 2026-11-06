@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -74,6 +75,9 @@ try {
   assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 1, "上传期间必须有在途卡片顶着");
   assert.equal(await page.locator(".task-upload-chip img").count(), 0, "上传完成前不应提前显示缩略图");
   await input.press("Control+Enter");
+  // 发送清空正文是在 await onSend 之后排的一次提交：快捷键这一下若没被挡住，冲刷一轮之后
+  // 正文就已经清掉了（夹具的 onSend 立刻 resolve，期间没有网络往返）。
+  await settlePage(page);
   assert.equal(await input.inputValue(), "任务 A 的未发送内容", "上传中用快捷键也不能提前发送正文");
 
   releaseFirstUpload();
@@ -91,6 +95,9 @@ try {
 
   await page.getByRole("button", { name: "任务 A" }).click();
   await sendButton.click();
+  // 清空在 await onSend 之后才排上，等它落地再看。
+  await waitUntil(async () => await input.inputValue() === "", "发送成功后当前任务正文被清掉");
+  await settlePage(page);
   assert.equal(await input.inputValue(), "", "发送成功后应清掉当前任务正文");
   assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "发送成功后应清掉当前任务图片");
 

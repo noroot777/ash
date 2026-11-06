@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { settlePage, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 let browser;
@@ -13,15 +14,9 @@ try {
   const directory = page.getByRole("button", { name: /^工作目录：/ });
   const submit = page.locator(".studio-submit");
   const records = async () => JSON.parse(await page.getByTestId("created").innerText());
-  const waitFor = async (check) => {
-    const deadline = Date.now() + 10_000;
-    while (!await check()) {
-      assert(Date.now() < deadline, "等待分支状态超时");
-      await page.waitForTimeout(25);
-    }
-  };
   const directoryLabel = () => directory.getAttribute("aria-label");
-  const expectAutomatic = () => waitFor(async () => (await directoryLabel()).includes("跟随项目分支（创建时确定）"));
+  const AUTOMATIC = "跟随项目分支（创建时确定）";
+  const expectAutomatic = () => waitUntil(async () => (await directoryLabel()).includes(AUTOMATIC), "工作目录回到「跟随项目分支」");
   const selectBase = async (name) => {
     await directory.click();
     await page.getByRole("button", { name: /^base 分支/ }).click();
@@ -31,16 +26,16 @@ try {
   const checkout = async (branch, pending = false) => {
     await page.locator(".workspace-git-context").click();
     await page.getByRole("button", { name: new RegExp(`^${branch}(?:\\s|$)`) }).click();
-    if (pending) await waitFor(async () => await page.locator(".workspace-git-context").getAttribute("aria-busy") === "true");
+    if (pending) await waitUntil(async () => await page.locator(".workspace-git-context").getAttribute("aria-busy") === "true", `切到 ${branch} 进入在途态`);
     else await page.locator(".project-git-panel__ok").getByText(`已切换到 ${branch}`, { exact: true }).waitFor();
     await page.keyboard.press("Escape");
   };
   const create = async (body) => {
     const before = (await records()).length;
     await objective.fill(body);
-    await waitFor(() => submit.isEnabled());
+    await waitUntil(() => submit.isEnabled(), `「${body}」可以提交`);
     await submit.click();
-    await waitFor(async () => (await records()).length === before + 1);
+    await waitUntil(async () => (await records()).length === before + 1, `「${body}」创建完成并记进夹具`);
     return (await records()).at(-1);
   };
 
@@ -84,8 +79,15 @@ try {
     await checkout("version-upgrade");
     await expectAutomatic();
     await page.getByRole("button", { name: "释放分支读取", exact: true }).click();
-    await page.waitForTimeout(200);
-    await expectAutomatic();
+    // 断言「迟到的旧响应没覆盖新状态」之前，被扣住的每一发都得已经回来、被面板读完：夹具在
+    // 放行时记下放了几发、每读完一发记一次。读完那一刻面板自己的后续在同一个微任务检查点里
+    // 跑完，再冲刷一轮它排上的提交，读到的就是终态。
+    const reads = await waitUntil(() => page.evaluate(() => {
+      const held = window.__heldBranchReads;
+      return held.released > 0 && held.consumed >= held.released && held;
+    }), "被扣住的分支读取全部回到面板并被读完");
+    await settlePage(page);
+    assert.ok((await directoryLabel()).includes(AUTOMATIC), `迟到的旧分支读取（${reads.released} 发）不许覆盖跟随状态：${await directoryLabel()}`);
     assert.doesNotMatch(await page.getByTestId("notices").innerText(), /旧分支读取失败/);
     const task = await create(delayed);
     assert.equal(task.worktreeBase, null);

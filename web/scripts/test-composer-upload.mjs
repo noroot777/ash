@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 // 远程访问 ash 时粘一张图，上传要走完整条链路（base64 过网 + 落盘），可能好几秒到十几秒。
 // 这条钉住那段时间里界面必须说话：在途卡片 + 百分比 + 创建按钮先挡住（否则刚粘的图会被
@@ -25,8 +26,8 @@ try {
   // 上传一直吊着，直到测试自己放行——这就是「远程链路很慢」的那段时间。
   const held = new Map();
   const release = async (name) => {
-    for (let i = 0; i < 100 && !held.has(name); i++) await page.waitForTimeout(50);
-    held.get(name)?.();
+    await waitUntil(() => held.has(name), `${name} 的上传请求到达路由桩并被扣住`);
+    held.get(name)();
   };
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -96,7 +97,16 @@ try {
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
+  // 「没创建」以页面这一侧调没调 fetch 为准：提交函数是同步调 api.createTask 的。
+  await trackFetches(page, "/api/tasks");
   await page.goto(`${web.origin}/scripts/fixtures/composer-upload.html`);
+  const createCalls = async () => (await fetchLog(page)).filter((entry) => entry.method === "POST").length;
+  // 切模式的 tab 是同步提交的；等它选中再冲刷一轮，读到的就是切过去之后的那一版。
+  const switchTab = async (name) => {
+    await page.getByRole("tab", { name, exact: true }).click();
+    await page.getByRole("tab", { name, exact: true, selected: true }).waitFor();
+    await settlePage(page);
+  };
 
   const objective = page.locator(".composer-objective textarea");
   await objective.fill("把这张图上的问题修掉");
@@ -118,13 +128,15 @@ try {
   // ② 传完之前不许创建：附件路径是上传成功才有的，这时候创建等于把刚粘的图扔了。
   assert.equal(await submit.isDisabled(), true, "上传未完成时创建按钮必须禁用");
   await objective.press("Control+Enter");
-  await page.waitForTimeout(300);
+  // 快捷键在 keydown 里同步走进提交函数，它要创建就在这一刻调 fetch；press 返回时事件已经
+  // 处理完，冲刷一轮把它排上的提交也收掉，然后看页面上有没有发过创建请求。
+  await settlePage(page);
+  assert.equal(await createCalls(), 0, "快捷键也不能绕过上传中的门禁");
   assert.equal(createdBodies.length, 0, "快捷键也不能绕过上传中的门禁");
 
   // ②b 切到「讨论」不能把在途的藏起来：创建之后面板就没了，这张图同样没人接住；
   //     藏起来只会让用户以为已经传完（第 1 轮审查 P1）。
-  await page.getByRole("tab", { name: "讨论", exact: true }).click();
-  await page.waitForTimeout(200);
+  await switchTab("讨论");
   assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 1, "切到讨论后在途卡片必须还在");
   assert.match(await page.locator(".studio-input-status").innerText(), /上传中 \d+%/, "讨论模式底栏也要说在传");
   assert.equal(await submit.isDisabled(), true, "讨论模式同样不能在上传未完成时创建");
@@ -139,8 +151,7 @@ try {
 
   // ③b 讨论同样收附件：议题也可以是「一句话 + 一张截图」，所以传好的那张要照常列出来，
   //     附件按钮也得在——它曾经在讨论模式下整个不渲染。
-  await page.getByRole("tab", { name: "讨论", exact: true }).click();
-  await page.waitForTimeout(200);
+  await switchTab("讨论");
   assert.equal(await page.locator(".task-upload-chip img").count(), 1, "讨论模式要照常列出传好的附件");
   assert.match(await page.locator(".studio-input-status").innerText(), /1 个附件/, "讨论模式底栏也按附件计数");
   assert.equal(await page.getByRole("button", { name: "上传附件" }).count(), 1, "讨论模式必须有附件入口");
@@ -161,7 +172,8 @@ try {
   await page.getByText("queued-second.png", { exact: true }).waitFor();
   assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 2, "整批都要先挂进在途");
   await page.getByRole("button", { name: "取消上传 queued-second.png" }).click();
-  await page.getByText("queued-second.png", { exact: true }).waitFor({ state: "detached", timeout: 2000 });
+  // 第一张一直被扣着，所以「等它传完才轮到」的实现在这里永远等不到消失，期限给多长都分得开。
+  await page.getByText("queued-second.png", { exact: true }).waitFor({ state: "detached" });
   assert.equal(await page.locator(".task-upload-chip.is-uploading").count(), 1, "取消排队那张时第一张还在传");
   assert.match(
     await page.locator(".studio-input-status").innerText(),

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchLog, outlastPageTimers, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 // 「写几个字 → 全删掉 → 点下面的删除」曾经把整个面板焊死：删除按钮点不动、Esc 也关不掉、
 // 换不到别的随手记。根因是落盘函数把「正文空，服务端不收」和「保存真失败」压成同一个
@@ -93,6 +94,9 @@ try {
     }
     await reply([]);
   });
+  // 「没发 PATCH」以页面这一侧为准：路由桩的 patched 要等 Node 侧回调跑到才记上，页面里
+  // fetch 一调用就记下了。
+  await trackFetches(page, "/api/notes/");
   await page.goto(`${web.origin}/scripts/fixtures/notes-panel.html`);
 
   const selectedRow = page.locator(".note-row.is-selected");
@@ -105,8 +109,15 @@ try {
     await editor.waitFor();
     await editor.fill(text);
   };
-  // 自动保存的防抖是 800ms，等过那一档才能断言「它没发请求」而不是「它还没发」。
-  const pastAutosave = () => page.waitForTimeout(1100);
+  // 自动保存的防抖是 800ms，等过那一档才能断言「它没发请求」而不是「它还没发」。不靠睡：
+  // 先冲刷掉 fill 排上的提交（排防抖定时器的 effect 随之跑完），再在页面里排一个更晚到期
+  // 的定时器等它触发 —— 防抖那个必然先到期、先跑（它要发的 PATCH 在同一个任务里就调用了
+  // fetch），负载再重也只是两个都晚点到。
+  const pastAutosave = async () => {
+    await settlePage(page);
+    await outlastPageTimers(page, 1000);
+  };
+  const pagePatches = async () => (await fetchLog(page)).filter((entry) => entry.method === "PATCH");
   const pastePng = async (name) => {
     await page.locator(".note-editor-preview, .note-editor textarea").first().click();
     await editor.waitFor();
@@ -116,13 +127,14 @@ try {
       data.items.add(new File([bytes], name, { type: "image/png" }));
       textarea.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
     }, { name, png: PNG });
-    for (let i = 0; i < 100 && !uploaded.includes(name); i++) await page.waitForTimeout(50);
+    await waitUntil(() => uploaded.includes(name), `${name} 的上传请求到达路由桩`);
   };
 
   // ① 清空一条已存在的随手记：不往服务端发空正文，状态栏说清为什么没存。
   await row("第一条随手记").waitFor();
   await typeBody("");
   await pastAutosave();
+  assert.deepEqual(await pagePatches(), [], "空正文不该发 PATCH，服务端只会回 400");
   assert.equal(patched.length, 0, "空正文不该发 PATCH，服务端只会回 400");
   assert.match(await status.innerText(), /不能为空/, "状态栏要说清这条为什么没存上");
 
@@ -136,7 +148,7 @@ try {
   await row("第一条随手记").click();
   await typeBody("第一条随手记（改过）");
   await row("第二条随手记").click();
-  for (let i = 0; i < 60 && !patched.length; i++) await page.waitForTimeout(50);
+  await waitUntil(() => patched.length > 0, "切走之前的那次 PATCH 到达路由桩");
   assert.deepEqual(
     patched.at(-1),
     { id: "note-a", body: "第一条随手记（改过）", attachments: [] },
@@ -149,12 +161,12 @@ try {
   await pastAutosave();
   await page.locator(".notes-footer-actions button", { hasText: "删除" }).click();
   const dialog = page.locator(".task-confirm-dialog");
-  await dialog.waitFor({ timeout: 4000 });
+  await dialog.waitFor();
   assert.match(await dialog.innerText(), /第一条随手记（改过）/, "确认框该认服务端那份标题");
 
   // ⑤ 确认之后真的删掉，用户看得到结果。
   await dialog.locator("footer button.is-danger").click();
-  await page.getByText("提示：随手记已删除").waitFor({ timeout: 4000 });
+  await page.getByText("提示：随手记已删除").waitFor();
   assert.deepEqual(deleted, ["note-a"], "确认之后必须真的发 DELETE");
   assert.equal(await row("第一条随手记（改过）").count(), 0, "删掉的那条要从列表里走掉");
 
@@ -163,7 +175,7 @@ try {
   await page.locator(".note-row.is-selected", { hasText: "第二条随手记" }).waitFor();
   await typeBody("");
   await pastePng("note-b-shot.png");
-  for (let i = 0; i < 120 && !patched.some((entry) => entry.id === "note-b"); i++) await page.waitForTimeout(50);
+  await waitUntil(() => patched.some((entry) => entry.id === "note-b"), "note-b 只存附件的那次 PATCH 到达路由桩");
   assert.deepEqual(
     patched.filter((entry) => entry.id === "note-b").at(-1),
     { id: "note-b", attachments: ["/tmp/uploads/note-b-shot.png"] },
@@ -174,7 +186,7 @@ try {
   // 离开再回来：附件还在，正文回到服务端那份原文。
   await page.locator(".notes-list-tools button[aria-label='新建随手记']").click();
   await row("第二条随手记").click();
-  await page.locator(".note-attachments").getByText("note-b-shot.png", { exact: true }).waitFor({ timeout: 4000 });
+  await page.locator(".note-attachments").getByText("note-b-shot.png", { exact: true }).waitFor();
 
   // ⑦ 附件那半边还在等回包，正文已经补上新内容：离开之前必须把这份正文存下来。在途那次
   //    请求存的是「请求发出时」的草稿，它回报 unsavable 只说明那一版正文是空的，跟当前草
@@ -182,15 +194,17 @@ try {
   const held = holdPatch((entry) => entry.id === "note-b" && entry.body === undefined);
   await typeBody("");
   await pastePng("note-b-second.png");
-  for (let i = 0; i < 160 && !held.hit; i++) await page.waitForTimeout(50);
+  await waitUntil(() => held.hit, "附件那半边的 PATCH 到达路由桩并被扣住");
   assert.ok(held.hit, "附件那半边应当已经把 PATCH 发出去了");
   const LATE = "回包路上补的正文";
   await editor.fill(LATE);
   // 不等回包就换走（这里用「新建」这个出口，它和换一条、关面板、转任务同走一道关口）。
   await page.locator(".notes-list-tools button[aria-label='新建随手记']").click();
-  await page.waitForTimeout(300);
+  // 放行之前「新建」那道离开关口必须已经在等这次在途请求：点击的处理函数在 click 返回前
+  // 就同步跑进了 flush（上传早已落地，afterUploads 不排队），冲刷一轮把它排上的提交也收掉。
+  await settlePage(page);
   held.release();
-  for (let i = 0; i < 160 && rows.get("note-b")?.body !== LATE; i++) await page.waitForTimeout(50);
+  await waitUntil(() => rows.get("note-b")?.body === LATE, `回包之后补上的正文被存进服务端：${JSON.stringify(patched)}`);
   assert.deepEqual(
     patched.filter((entry) => entry.id === "note-b" && entry.body !== undefined).at(-1),
     { id: "note-b", body: LATE, attachments: ["/tmp/uploads/note-b-shot.png", "/tmp/uploads/note-b-second.png"] },
@@ -198,13 +212,13 @@ try {
   );
   assert.equal(rows.get("note-b").body, LATE, "服务端那份必须是用户最后打的内容");
   await row(LATE).click();
-  await page.locator(".note-row.is-selected", { hasText: LATE }).waitFor({ timeout: 4000 });
+  await page.locator(".note-row.is-selected", { hasText: LATE }).waitFor();
 
   // ⑧ 清空正文之后 Esc 也关得掉 —— 面板不是一按清空就焊死的笼子。
   await typeBody("");
   await pastAutosave();
   await page.keyboard.press("Escape");
-  await page.getByText("面板已关闭").waitFor({ timeout: 4000 });
+  await page.getByText("面板已关闭").waitFor();
   assert.equal(await page.locator(".notes-panel").count(), 0, "清空正文之后必须关得掉面板");
 
   assert.ok(

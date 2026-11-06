@@ -16,6 +16,7 @@ let server;
 const artifacts = await mkdtemp(join(tmpdir(), "ash-side-chat-browser-"));
 try {
   const backend = await new Promise((resolve, reject) => {
+    // 这是启动期限，不是睡眠：读到 SIDE_FIXTURE_URL 当场清掉，只有夹具 20 秒都起不来才报错。
     const timer = setTimeout(() => reject(new Error(`fixture startup timeout: ${logs}`)), 20000);
     const consume = (chunk) => { logs += chunk; const match = logs.match(/SIDE_FIXTURE_URL=(http:\/\/[^\s]+)/); if (match) { clearTimeout(timer); resolve(match[1]); } };
     fixture.stdout.on("data", consume); fixture.stderr.on("data", consume);
