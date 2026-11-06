@@ -23,15 +23,7 @@ const STORAGE_KEY = "ash.colorTheme";
 const isColorTheme = (value: unknown): value is ColorTheme =>
   typeof value === "string" && (COLOR_THEMES as readonly string[]).includes(value);
 
-// 不在浏览器里(Node 里 renderToStaticMarkup 的回归，或只桩了一个 `{ location }` 当 window
-// 的纯函数回归)就没有页面可拨：下面读镜像、挂监听、首次上色都跳过，偏好按「跟随系统」、
-// 解析成浅色。这个模块经 settingsSync 被大半个前端间接 import,顶层一碰 `window` 的方法就让
-// 那些用例在加载阶段直接抛错。所以按「有没有 document」判，而不是只看 window 在不在。
-const browser = typeof window !== "undefined" && typeof document !== "undefined"
-  && typeof window.addEventListener === "function";
-
 function readCached(): ColorTheme {
-  if (!browser) return "system";
   try {
     const cached = window.localStorage.getItem(STORAGE_KEY);
     return isColorTheme(cached) ? cached : "system";
@@ -41,7 +33,14 @@ function readCached(): ColorTheme {
   }
 }
 
-const media = browser && typeof window.matchMedia === "function"
+// 服务端渲染的测试脚本会顺着组件把这里一起 import 进去(那边没有 window/document):
+// 没有页面就没有开关可拨，模块只当一份偏好存着，下面那些挂监听、首次上色都跳过。
+// 只看 window 在不在不够:纯函数回归会把 window 桩成 `{ location }`(test-report-roots),
+// 那边照样没有页面，顶层一调 addEventListener 就在加载阶段抛错。
+const inBrowser = typeof window !== "undefined" && typeof document !== "undefined"
+  && typeof window.addEventListener === "function";
+
+const media = inBrowser && typeof window.matchMedia === "function"
   ? window.matchMedia("(prefers-color-scheme: dark)")
   : null;
 
@@ -58,7 +57,6 @@ export const colorTheme = (): ColorTheme => preference;
 export const resolvedTheme = (): ResolvedTheme => resolve(preference);
 
 function paint(): void {
-  if (!browser) return;
   const root = document.documentElement;
   const resolved = resolve(preference);
   root.dataset.theme = resolved;
@@ -92,7 +90,7 @@ function toHex(color: string): string | null {
  */
 export function syncColorTheme(next: ColorTheme): void {
   if (!isColorTheme(next)) return;
-  if (browser) try {
+  try {
     window.localStorage.setItem(STORAGE_KEY, next);
   } catch {
     // 存不进去只是下次开页可能闪一下，不影响这一次。
@@ -112,14 +110,16 @@ export function onColorThemeChange(listener: () => void): () => void {
 // 按 preference 解析，钉死时 media 怎么变结果都一样。
 media?.addEventListener("change", paint);
 
-// 另一个标签页里换了配色，这里跟着翻：那边换档时会写这份镜像，而 storage 事件只发给
-// **别的**标签页。同源同 cookie,两个标签页一定是同一个人，镜像就是他刚选的那一档。
-if (browser) window.addEventListener("storage", (event) => {
-  if (event.key !== STORAGE_KEY || !isColorTheme(event.newValue) || event.newValue === preference) return;
-  preference = event.newValue;
-  paint();
-});
+if (inBrowser) {
+  // 另一个标签页里换了配色，这里跟着翻：那边换档时会写这份镜像，而 storage 事件只发给
+  // **别的**标签页。同源同 cookie,两个标签页一定是同一个人，镜像就是他刚选的那一档。
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STORAGE_KEY || !isColorTheme(event.newValue) || event.newValue === preference) return;
+    preference = event.newValue;
+    paint();
+  });
 
-// 模块一加载就按镜像拨一次：index.html 那段脚本已经拨过的话这是空操作，没拨过的入口
-// (测试台、将来别的 html)也不会停在「没有 data-theme」的半截状态。
-paint();
+  // 模块一加载就按镜像拨一次：index.html 那段脚本已经拨过的话这是空操作，没拨过的入口
+  // (测试台、将来别的 html)也不会停在「没有 data-theme」的半截状态。
+  paint();
+}

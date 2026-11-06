@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { NativeWorkItem } from "./nativeWorkModel.ts";
+import { formatInstant, formatInstantRange } from "./utils.ts";
 
 export function nativeWorkDuration(row: NativeWorkItem, now: number): string {
   const start = row.startedAt ? Date.parse(row.startedAt) : NaN;
@@ -24,6 +25,16 @@ export function nativeWorkDate(at?: string): { date: string; time: string } | nu
   };
 }
 
+/**
+ * 起止区间，与任务检查器里那条同一个写法（`11/06 14:05 → 14:59`）；一个时刻都没记下就是空串，
+ * 让列表卡片自己决定空着——「尚未开始」「时间未记录」那类说明留给展开后的时间详情。
+ */
+export function nativeWorkRange(row: NativeWorkItem): string {
+  if (formatInstant(row.startedAt)) return formatInstantRange(row.startedAt, row.endedAt);
+  const end = formatInstant(row.endedAt);
+  return end ? `${end} 结束` : "";
+}
+
 /** 抬头那一条和列表卡片读同一份时间：跑着的时候跨度自己每秒往前走。 */
 export function useNativeWorkTiming(row: NativeWorkItem) {
   const active = row.status === "running";
@@ -35,12 +46,7 @@ export function useNativeWorkTiming(row: NativeWorkItem) {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [active, row.startedAt]);
-  const start = nativeWorkDate(row.startedAt);
-  const end = nativeWorkDate(row.endedAt);
-  const range = start
-    ? `${start.date} ${start.time}${end
-      ? `–${end.date === start.date ? "" : `${end.date} `}${end.time}` : " 起"}`
-    : end ? `${end.date} ${end.time} 结束` : awaitingStart ? "尚未开始" : "时间未记录";
+  const range = nativeWorkRange(row) || (awaitingStart ? "尚未开始" : "时间未记录");
   const duration = awaitingStart ? "—" : nativeWorkDuration(row, now);
   return { active, awaitingStart, range, duration, hasDuration: duration !== "—" && duration !== "未记录" };
 }
