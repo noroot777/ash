@@ -258,9 +258,11 @@ export class Reconciler {
     view: Creation["view"], dest: Destination, envelope: string, base: string | null, titleOnly: string[],
   ): Promise<{ content: string; renderKey: string }> {
     const ctx = { link: taskLink(base, view), titleOnly: titleOnly.includes(view.task.projectId) };
+    const extras = await extrasFor(view);
     return {
-      content: JSON.stringify(renderCard(turnCard(view, view.turn, ctx, envelope, await extrasFor(view)))),
-      renderKey: renderKeyOf(view, dest, base, titleOnly),
+      content: JSON.stringify(renderCard(turnCard(view, view.turn, ctx, envelope, extras))),
+      // 补充内容这一下没读到：指纹故意对不上，下一次对账重读、读到了就改卡（不然这张缺内容的卡一直挂着）。
+      renderKey: `${renderKeyOf(view, dest, base, titleOnly)}${extras.unread ? "|extras-unread" : ""}`,
     };
   }
 

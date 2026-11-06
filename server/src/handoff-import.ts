@@ -42,7 +42,7 @@ import { id, now } from "./util.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { isAcceptedStage, type TaskHandoff, type TaskStage } from "@ash/shared";
 import { importWaitOwnership, manifestCarriesReview } from "./handoff-wait.js";
-import { collectGateRuns, replaceGateRuns } from "./handoff-accept-gate.js";
+import { collectGateRuns, replaceGateRuns, returningAcceptanceId } from "./handoff-accept-gate.js";
 
 export interface HandoffImportResult {
   ok: true;
@@ -381,7 +381,7 @@ async function importValidated(
     acceptedMergeMethod: m.task.acceptedMergeMethod ?? null,
     acceptedGateMode: m.task.acceptedGateMode ?? null,
     acceptedGateRunId: m.task.acceptedGateRunId ?? null,
-    acceptanceId: m.task.acceptanceId ?? null,
+    acceptanceId: returningAcceptanceId(existing, m.task),
     pinnedAt: m.task.pinnedAt,
     starredAt: m.task.starredAt,
     createdAt: m.task.createdAt,

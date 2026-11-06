@@ -80,6 +80,11 @@ export function normalizeOptions(input: ImOptions): ImOptions {
 /** 校验并写入。返回错误文案或新选项。 */
 export async function patchOptions(patch: Record<string, unknown>): Promise<{ error: string } | { options: ImOptions }> {
   const current = await readOptions();
+  // 坏着的时候 current 是默认值（「只推标题」那张单子是空的）：改哪一项都会把空单子整份写回去、坏的记号跟着消掉，
+  // 原来只推标题的项目再打开推送就推全文。先让他把单子核对一遍（改一次「只推标题」就存下整份），再改别的。
+  if (corrupt && !("titleOnlyProjectIds" in patch)) {
+    return { error: "存着的飞书选项读不懂：先在下面「只推标题」里把该勾的项目核对一遍（改动一次就会重新存下整份选项），再改别的。" };
+  }
   const next: ImOptions = { ...current };
   if ("enabled" in patch) {
     if (typeof patch.enabled !== "boolean") return { error: "enabled 必须是布尔值" };

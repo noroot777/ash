@@ -5,13 +5,15 @@
 //    → 门禁过了也不验收（延期的那次验收带着同一版身份）；团队调度台自己又跑一轮也算新结果；
 // ② 重试：按钮按下去之后任务又失败了一次 → 不重试；/retry 只认回复在失败卡上；
 // ③ 通知：飞书上点验收成功 → 回一条「已验收合并」；门禁通过 / 没通过各一条；重复对账不重发；同一次验收
-//    摘牌挂回、再跑一轮不重发，就地任务真的再验收一次照样推；第一次看到的任务不补推；「完成也推」关着只记账，再打开也不补推；事件丢了由
+//    摘牌挂回、再跑一轮不重发（对账手里的视图过期了也不配出假身份），就地任务真的再验收一次照样推；agent 自报
+//    的 merged 之后真去验收合并另领身份；老对端移回来的任务不丢本机的身份；第一次看到的任务不补推；「完成也推」关着只记账，再打开也不补推；事件丢了由
 //    全量对账补上；
 // ④ 房间：同一个人在群里 / 单聊里同时发两句，只留一间、两句都进那一间（多建的删掉）；群这期间换了绑定 →
 //    不落映射；群列表照实标出哪个群在收卡、看的人能不能改；
 //    读房间只是这一下没读到（500）→ 不换房间、映射原样，这句不投、叫他再发；等回复时读不到 → 下一圈再看，
 //    房间真没了（404）才说没拿到回复；库里的按钮记录坏了 → 拒掉、不按空的去验收；飞书传来的正文解析不了 →
-//    叫他重发；发件队列里一行坏的 → 标成放弃、后面的照发；
+//    叫他重发；发件队列里一行坏的 → 标成放弃、后面的照发；门禁之后接着验收、当初的选择读不出来 → 不验收；
+//    存着的选项坏了 → 先核对「只推标题」才让改别的；卡片补充内容这一下没读到 → 卡上说明、下一次对账重读；
 // ⑤ @ 占位去掉之后，正文的缩进原样；
 // ⑥ 团队验收占住全队（team-acceptance-hold.ts）：占着的时候共享执行者起不了跑、改不了状态、加不了新执行者、
 //    别人带 force 也写不了工作区、调度台不在线时用户的话不开台；验收自己的守卫不把这份占位当成在飞；占住之后
@@ -49,7 +51,9 @@ try {
   const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
   const { whenAcceptGateSettled } = await import("../src/accept-gate.js");
   const { prepareWorktree } = await import("../src/git.js");
-  const { patchOptions } = await import("../src/im/meta.js");
+  const { optionsError, patchOptions, readOptions, resetOptionsCache, writeMeta } = await import("../src/im/meta.js");
+  const { parseChoices } = await import("../src/accept-gate-handoff.js");
+  const { extrasFor } = await import("../src/im/extras.js");
   const { CardActions } = await import("../src/im/actions.js");
   const { RoomRelay } = await import("../src/im/relay.js");
   const { bindingOf } = await import("../src/im/binding.js");
@@ -58,6 +62,9 @@ try {
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { resultVersionOf } = await import("../src/task-result-version.js");
   const { viewsOf } = await import("../src/im/attention.js");
+  const { outcomesOf } = await import("../src/im/outcomes.js");
+  const { commitAcceptanceStage, REPORTED_ACCEPTANCE_PREFIX } = await import("../src/review-acceptance.js");
+  const { returningAcceptanceId } = await import("../src/handoff-accept-gate.js");
   const { commitReopenAcceptedStage, peekAcceptedStage, reopenAcceptedStage, restoreTaskStage } = await import("../src/task-stage.js");
   const { holdDrift, holdMembers, holdTeamForAcceptance } = await import("../src/team-acceptance-hold.js");
   const { claimOwnTurn, heldForAcceptance, isTurnClaimed, releaseTurn } = await import("../src/runs.js");
@@ -137,8 +144,11 @@ try {
     const firstAcceptance = (await taskRow("ta")).acceptanceId;
     assert.ok(firstAcceptance, "落下验收章就领了一个身份");
     const peeked = (await peekAcceptedStage("ta"))!;
+    const before = (await viewsOf(["ta"])).get("ta")!;
     await commitReopenAcceptedStage("ta");
     assert.equal((await taskRow("ta")).acceptanceId, null, "摘牌连身份一起摘掉");
+    assert.ok(!(await outcomesOf(before)).some((outcome) => outcome.kind === "result"),
+      "对账手里的视图还说已验收、牌子已经摘了：按现读的牌子算，不配出一个谁都不是的身份");
     await db.update(tasks).set({ status: "running", endedAt: null }).where(eq(tasks.id, "ta"));
     await im.reconciler.reconcile(["ta"]);
     await db.update(tasks).set({ status: "done", endedAt: later(80) }).where(eq(tasks.id, "ta"));
@@ -162,6 +172,27 @@ try {
     assert.notEqual((await taskRow("ta")).acceptanceId, firstAcceptance, "新的一次验收换了身份");
     assert.equal((await noticesOf("ta")).length, 2, "新的一次验收再推一条");
     assert.match(await noticeText("ta"), /已验收合并：「改过的第三版」/);
+  }
+
+  // ── ③ 续：哪些算同一次验收 ─────────────────────────────────────────────
+  {
+    // agent 自报的 merged 只是它说合了：用户之后真去验收合并是另一次，另领身份；真合过的 merged → accepted 是同一次。
+    await db.insert(tasks).values([
+      { id: "trep", projectId: "p1", title: "自报", body: "", status: "done", stage: "merged", acceptanceId: `${REPORTED_ACCEPTANCE_PREFIX}x1`, createdAt: at, updatedAt: at },
+      { id: "treal", projectId: "p1", title: "真合过", body: "", status: "done", stage: "merged", acceptanceId: "real0000001", createdAt: at, updatedAt: at },
+    ] as never);
+    await commitAcceptanceStage("trep", "accepted");
+    await commitAcceptanceStage("treal", "accepted");
+    const reported = (await taskRow("trep")).acceptanceId!;
+    assert.ok(reported && !reported.startsWith(REPORTED_ACCEPTANCE_PREFIX), `真验收另领了身份：${reported}`);
+    assert.equal((await taskRow("treal")).acceptanceId, "real0000001");
+
+    // 移回来的 manifest 是老对端导出的（没有这一项）：对端没再验收过就沿用本机的身份，验收过就按合并事实认。
+    const local = await taskRow("treal");
+    const manifest = { stage: local.stage, acceptedMergeCommit: local.acceptedMergeCommit, acceptedTargetBranch: local.acceptedTargetBranch } as never;
+    assert.equal(returningAcceptanceId(local, manifest), "real0000001", "老对端没动过：身份留着");
+    assert.equal(returningAcceptanceId(local, { ...(manifest as object), acceptedMergeCommit: "beef" } as never), null, "对端又合了一次：不沿用");
+    assert.equal(returningAcceptanceId(local, { ...(manifest as object), acceptanceId: null } as never), null, "新对端明说没有：照它的");
   }
 
   // ── ① 续：团队调度台自己又跑了一轮，成果就换了一版 ─────────────────────
@@ -497,6 +528,30 @@ try {
     assert.equal(garbled!.state, "dead");
     assert.match(garbled!.lastError ?? "", /解析不了/);
     assert.equal((await db.select().from(imOutbox).where(eq(imOutbox.id, "row-after"))).at(0)!.state, "sent", "后面那条照发");
+
+    // 门禁跑完要接着验收：当初那一下的选择没记（老数据）按人点的；记了却读不出来，不按「什么都没选」去验收。
+    assert.deepEqual(parseChoices(null), { by: "human", commit: undefined, confirmUnverified: undefined, reviewAuthority: undefined });
+    assert.equal(parseChoices("{坏"), null);
+    assert.equal(parseChoices("[]"), null);
+
+    // 存着的选项坏了：先核对「只推标题」那张单子（改一次就存下整份），别的一律先不让改 —— 不然空单子整份写回去。
+    const saved = await readOptions();
+    await writeMeta("options", "{坏");
+    resetOptionsCache();
+    assert.equal((await readOptions()).enabled, false, "坏了先停推");
+    assert.match(optionsError() ?? "", /读不懂/);
+    assert.match(JSON.stringify(await patchOptions({ enabled: true })), /只推标题/, "只开总开关：拒");
+    assert.match(JSON.stringify(await patchOptions({ notifyCompleted: false })), /只推标题/, "改别的也拒：不然坏的记号跟着消掉");
+    const fixed = await patchOptions({ titleOnlyProjectIds: ["p1"] });
+    assert.ok("options" in fixed && !fixed.options.enabled && fixed.options.titleOnlyProjectIds[0] === "p1", "核对过单子：存下整份、推送仍关着");
+    assert.equal(optionsError(), null);
+    assert.ok("options" in await patchOptions({ ...saved }), "这之后照常改");
+
+    // 卡片的补充内容这一下没读到（不是没有）：卡上说一句，指纹对不上，下一次对账重读。
+    mkdirSync(join(stage, "runs", "tgate", "transcript.jsonl"), { recursive: true });
+    const gateView = { task: { id: "tgate" }, turn: { kind: "duet_gate" } } as never;
+    assert.deepEqual(await extrasFor(gateView), { unread: true }, "读到的是个目录（EISDIR）：不当成没有结论");
+    assert.deepEqual(await extrasFor({ task: { id: "tnone" }, turn: { kind: "duet_gate" } } as never), {}, "文件不在 = 还没有，不算没读到");
   }
 
   // ── ⑤ @ 占位与缩进 ───────────────────────────────────────────────────────

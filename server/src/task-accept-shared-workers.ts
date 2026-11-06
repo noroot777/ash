@@ -5,6 +5,7 @@ import { setTaskStage } from "./task-stage.js";
 import { id } from "./util.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { isSharedTeamWorker } from "./task-result-version.js";
+import { REPORTED_ACCEPTANCE_PREFIX } from "./review-acceptance.js";
 
 // 团队级验收联动：parentId 指向团队且不用独立 worktree 的共享执行者没有自己的分支，
 // 团队验收成功时把它们的 stage 一起标成 accepted（从 task-accept.ts 拆出，纯行数拆分）。
@@ -25,7 +26,10 @@ export async function acceptSharedTeamWorkers(leadId: string): Promise<SharedWor
     if (!["done", "failed", "canceled"].includes(worker.status)) continue;
     // 这一次团队验收给它也领一个验收身份（db/schema.ts acceptanceId）：通用的 setTaskStage 不领 —— 验证起不来时
     // 把旧章写回去也走它，那不是新的一次验收。
-    await db.update(tasks).set({ acceptanceId: id() }).where(eq(tasks.id, worker.id));
+    // merged → accepted 是同一次（review-acceptance.ts 同一个口径）。身份先落、牌子后挂：中间那一刻还没挂牌，对账看不到半截。
+    if (worker.stage !== "merged" || worker.acceptanceId?.startsWith(REPORTED_ACCEPTANCE_PREFIX)) {
+      await db.update(tasks).set({ acceptanceId: id() }).where(eq(tasks.id, worker.id));
+    }
     await setTaskStage(worker.id, "accepted");
     await publishTaskUpdated(worker.id);
     updated += 1;

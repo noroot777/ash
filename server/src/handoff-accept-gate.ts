@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { acceptGateRuns } from "./db/schema.js";
+import { acceptGateRuns, type tasks } from "./db/schema.js";
 import { gateLogFileNames } from "./accept-gate-diagnosis.js";
 import { acceptGateLogPath } from "./accept-gate-process.js";
 import { hasOwnedGateProcess, reconcileGateProcesses } from "./accept-gate-ownership.js";
@@ -18,6 +18,22 @@ export type HandoffGateRun = Pick<GateRow, "id" | "command" | "status" | "exitCo
     // 两头都停在保守的那一边(第 2 轮审查 F1)。旧 manifest 没这个字段 → null → 按旧代待。
     diagnosisGeneration?: GateRow["diagnosisGeneration"] };
 const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+
+const ACCEPTANCE_FACTS = ["acceptedSourceCommit", "acceptedTargetBranch", "acceptedBaseCommit", "acceptedMergeCommit",
+  "acceptedMergeMethod", "acceptedGateRunId"] as const;
+
+/**
+ * 移入这一行的验收身份（db/schema.ts acceptanceId）。老对端的 manifest 不带这一项（undefined，不是 null）：
+ * 牌子和合并事实跟本机这份一样 = 对端没再验收过，沿用本机的身份（整行覆盖成 null 的话，同一次验收在飞书上
+ * 会被当成新的一次再推一遍）；不一样就是对端又验收了一次，按加列之前的验收处理（按合并事实认）。
+ */
+export function returningAcceptanceId(
+  existing: typeof tasks.$inferSelect | undefined, task: HandoffManifest["task"],
+): string | null {
+  if (task.acceptanceId !== undefined) return task.acceptanceId;
+  if (!existing || existing.stage !== task.stage) return null;
+  return ACCEPTANCE_FACTS.every((column) => existing[column] === (task[column] ?? null)) ? existing.acceptanceId : null;
+}
 
 export function validateGatePayload(manifest: HandoffManifest): void {
   const mode = manifest.task.acceptedGateMode;

@@ -42,6 +42,8 @@ const FULL_SWEEP_MS = 10 * 60_000;
 
 export interface FeishuRuntime {
   appId: string;
+  /** 这条通道起来时读到的应用（不含 Secret）：凭证文件之后这一下读不了，设置页照它显示，不当成没配。 */
+  config: Pick<FeishuCredentials, "appId" | "domain" | "updatedAt">;
   api: FeishuApi;
   ws: FeishuWsClient;
   sender: OutboxSender;
@@ -213,7 +215,8 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
   });
   const sweep = setInterval(() => void reconciler.full().catch((error) => console.error("[ash] 飞书定时对账出错:", error)), FULL_SWEEP_MS);
   sweep.unref?.();
-  runtime = { appId, api, ws, sender, reconciler, relay, inbound, actions, bot: null, sweep, unsubscribe };
+  const config = { appId, domain: credentials.domain, updatedAt: credentials.updatedAt };
+  runtime = { appId, config, api, ws, sender, reconciler, relay, inbound, actions, bot: null, sweep, unsubscribe };
   return runtime;
 }
 

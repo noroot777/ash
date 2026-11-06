@@ -32,13 +32,17 @@ export type AcceptGateChoices = { by: AcceptBy; commit?: boolean; confirmUnverif
   /** 他点的是哪一版成果（task-result-version.ts）：门禁跑着时任务又跑完一轮，绿了也不替他验后来那一版。 */
   expectedResultVersion?: string };
 
-export function parseChoices(raw: string | null): AcceptGateChoices {
-  try {
-    const parsed = JSON.parse(raw ?? "{}") as AcceptGateChoices;
-    return { by: parsed.by === "workflow" ? "workflow" : "human", commit: parsed.commit,
-      confirmUnverified: parsed.confirmUnverified, reviewAuthority: parsed.reviewAuthority,
-      ...(typeof parsed.expectedResultVersion === "string" ? { expectedResultVersion: parsed.expectedResultVersion } : {}) };
-  } catch { return { by: "human" }; }
+/**
+ * 当初那一下验收的选择。没记（老数据）按「人点的、什么都没另选」；记了却读不出来（坏了）返回 null ——
+ * 不能也按什么都没选去办：那就成了不核他点的是哪一版、不照他选的提交方式去验收。
+ */
+export function parseChoices(raw: string | null): AcceptGateChoices | null {
+  let parsed: AcceptGateChoices;
+  try { parsed = JSON.parse(raw ?? "{}") as AcceptGateChoices; } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  return { by: parsed.by === "workflow" ? "workflow" : "human", commit: parsed.commit,
+    confirmUnverified: parsed.confirmUnverified, reviewAuthority: parsed.reviewAuthority,
+    ...(typeof parsed.expectedResultVersion === "string" ? { expectedResultVersion: parsed.expectedResultVersion } : {}) };
 }
 
 /**
@@ -81,7 +85,7 @@ export async function handOffGateFailure(row: GateRow, view: AcceptGateView, aga
     try { await db.update(acceptGateRuns).set({ settlement: null }).where(eq(acceptGateRuns.id, row.id)); }
     finally { onFinal?.(); }
   };
-  const authority = !again ? parseChoices(row.acceptOptions).reviewAuthority : undefined;
+  const authority = !again ? parseChoices(row.acceptOptions)?.reviewAuthority : undefined;
   const task = (await db.select().from(tasks).where(eq(tasks.id, row.taskId))).at(0);
   const project = (await db.select().from(projects).where(eq(projects.id, row.projectId))).at(0);
   const sourceCwd = task && project ? await existingTaskWorkspacePath(task, project.repoPath) ?? project.repoPath : row.cwd;

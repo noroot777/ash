@@ -12,6 +12,7 @@ import { RegressionConclusionRejected, RegressionEvidenceUnavailable } from "./r
 import { reviewRoundDir } from "./review-evidence.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { REPORTED_ACCEPTANCE_PREFIX } from "./review-acceptance.js";
 import { id, now } from "./util.js";
 
 export async function setTaskStage(
@@ -74,8 +75,9 @@ export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
     const evidence = scope && (await transaction.select().from(regressionEvidence)
       .where(eq(regressionEvidence.directory, reviewRoundDir(taskId, scope.round))))[0];
     if (evidence?.settlement && task.stage !== stage) throw new RegressionConclusionRejected("本轮已进入结算，不能更改结论");
-    // 自报 merged / accepted 也是一次新的验收（上面已挡住本来就盖着章的），同样领一个身份（db/schema.ts acceptanceId）。
-    const acceptanceId = stage === "merged" || stage === "accepted" ? { acceptanceId: id() } : {};
+    // 自报 merged / accepted 也是一次新的验收（上面已挡住本来就盖着章的），同样领一个身份（db/schema.ts acceptanceId），
+    // 带上自报的记号：之后真去验收合并的那一次另领身份。
+    const acceptanceId = stage === "merged" || stage === "accepted" ? { acceptanceId: `${REPORTED_ACCEPTANCE_PREFIX}${id()}` } : {};
     await transaction.update(tasks).set({ stage, ...acceptanceId, updatedAt }).where(eq(tasks.id, taskId));
   });
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
@@ -175,9 +177,22 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
 
 /** write-ahead 的第二步：真正执行摘牌（清 stage + 合并快照 + 尾段进度）并广播。 */
 export async function commitReopenAcceptedStage(taskId: string): Promise<void> {
-  await clearAcceptedSnapshot(taskId);
-  await clearTaskStage(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
+  await recordBranchReceipt(taskId);
+  // 牌子和快照同一条语句摘：分两步的话中间那一刻是「还挂着已验收、这一次验收的身份却空了」，
+  // 飞书对账恰好读到就会当成又一次验收去推（im/outcomes.ts）。
+  const updatedAt = now();
+  await db.update(tasks).set({ ...CLEARED_SNAPSHOT, stage: null, updatedAt }).where(eq(tasks.id, taskId));
+  bus.publish({ type: "task.stage", taskId, stage: null, updatedAt });
+  await appendTaskTimeline(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
 }
+
+const CLEARED_SNAPSHOT = {
+  acceptedSourceCommit: null,
+  acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
+  acceptedMergeMethod: null, acceptedPendingTree: null,
+  acceptedGateMode: null, acceptedGateRunId: null,
+  acceptedTailPending: false, acceptedTailDone: "[]", acceptanceId: null,
+} as const;
 
 /**
  * 摘牌里「合并快照」那一半：只清三列 + 尾段进度，不动 stage、不写时间线。
@@ -188,13 +203,7 @@ export async function commitReopenAcceptedStage(taskId: string): Promise<void> {
 export async function clearAcceptedSnapshot(taskId: string): Promise<void> {
   await recordBranchReceipt(taskId);
   // 上一周期的合并事实在 git 历史与时间线里都有。
-  await db.update(tasks).set({
-    acceptedSourceCommit: null,
-    acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
-    acceptedMergeMethod: null, acceptedPendingTree: null,
-    acceptedGateMode: null, acceptedGateRunId: null,
-    acceptedTailPending: false, acceptedTailDone: "[]", acceptanceId: null, updatedAt: now(),
-  }).where(eq(tasks.id, taskId));
+  await db.update(tasks).set({ ...CLEARED_SNAPSHOT, updatedAt: now() }).where(eq(tasks.id, taskId));
 }
 
 /** peek + commit 的组合（没有 write-ahead 需求的调用方用，如团队派活）。 */

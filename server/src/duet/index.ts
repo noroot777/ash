@@ -447,8 +447,13 @@ export async function resumeAtGate(
     const sA = latest("voiceA");
     const sB = latest("voiceB");
 
-    let rows: any[] = [];
-    try { rows = readFileSync(join(RUNS_DIR, taskId, "transcript.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { /* none */ }
+    // 没有这份文件 = 还没有讨论记录；别的读错往外抛（这一轮记失败、报出原因），不当成「没有讨论记录」从第一轮
+    // 失忆地续谈。坏的那一行（追加写到一半被杀）跳过，跟 gate-version.ts 读开门行一个口径，不连累整份。
+    let raw = "";
+    try { raw = readFileSync(join(RUNS_DIR, taskId, "transcript.jsonl"), "utf8"); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const rows: any[] = raw.split("\n").filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
     const lastOf = (sp: string) => [...rows].reverse().find((r) => !r.type && r.speaker === sp);
     const ra = lastOf("A");
     const rb = lastOf("B");

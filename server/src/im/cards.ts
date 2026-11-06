@@ -19,7 +19,11 @@ export interface CardExtras {
   failureNotice?: string | null;
   /** 闸口卡：两位讨论者的结论。 */
   conclusions?: { a: string | null; b: string | null; consensus: boolean } | null;
+  /** 上面这两样这一下没读到（不是本来就没有）：卡上说一句，对账过一会儿重读、读到了改卡（reconcile.ts render）。 */
+  unread?: boolean;
 }
+
+const EXTRAS_UNREAD = "（这张卡的补充内容这一下没读到，稍后自动补上；也可以回 ash 里看）";
 
 export const KIND_LABEL: Record<Turn["kind"], string> = {
   question: "等你答复",
@@ -104,6 +108,7 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
     case "failed":
       if (ctx.titleOnly) blocks.push({ type: "note", text: TITLE_ONLY });
       else if (extras.failureNotice) blocks.push({ type: "text", text: scrubText(extras.failureNotice, 800) });
+      else if (extras.unread) blocks.push({ type: "note", text: EXTRAS_UNREAD });
       blocks.push({ type: "buttons", buttons: [{ text: "重试", style: "primary", value: value(envelope, "retry") }, ...linkButton(ctx)] });
       blocks.push({ type: "note", text: "重试会从中断处接着跑。要给任务捎句话，回复这张卡片时以 /reply 开头。" });
       return { ...header(view, turn.kind), blocks };
@@ -125,6 +130,7 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
     case "duet_gate": {
       const c = extras.conclusions;
       if (ctx.titleOnly) blocks.push({ type: "note", text: TITLE_ONLY });
+      else if (extras.unread) blocks.push({ type: "note", text: EXTRAS_UNREAD });
       else if (c) {
         if (c.consensus && c.a) blocks.push({ type: "text", text: `共识：${scrubText(c.a, 1500)}` });
         else {

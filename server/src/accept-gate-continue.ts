@@ -76,6 +76,12 @@ export async function followUpGate(row: GateRow, view: AcceptGateView, resumeNot
  */
 async function continueAcceptance(row: GateRow): Promise<void> {
   const choices = parseChoices(row.acceptOptions);
+  if (!choices) {
+    // 不是欠着的一步（下次启动再读也还是坏的）：说清楚，交回给人点。
+    await appendTaskTimeline(row.taskId, "验收前置命令通过了，但当初那一下验收的选择（点的是哪一版、怎么提交）读不出来了，"
+      + "没有替你自动验收：回 ash 看过这一版再点一次验收。");
+    return;
+  }
   const { acceptTask } = await import("./task-accept.js");
   const result = await acceptTask(row.taskId, choices.by, {
     commit: choices.commit,

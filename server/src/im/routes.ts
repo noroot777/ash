@@ -51,9 +51,10 @@ async function statusOf(actor: Actor): Promise<FeishuStatus> {
   const read = readCredentials();
   const manage = canManage(actor);
   const options = await readOptions();
+  // 读不了不等于没配：通道还连着就照它起来时那份显示（原因在 configError 里），不掉进「第一次配置」的样子。
   const config = read.kind === "ok"
     ? { appId: read.credentials.appId, domain: read.credentials.domain, updatedAt: read.credentials.updatedAt }
-    : null;
+    : read.kind === "broken" ? feishuRuntime()?.config ?? null : null;
   const appId = config?.appId ?? null;
   return {
     canManage: manage,

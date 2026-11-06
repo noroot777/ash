@@ -13,7 +13,7 @@
 // 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
 // 待验收卡本身负责（新卡就是一条新消息），这里不重复发。
 // 事件丢了（重启、通道重启正好落在对账前）由全量对账按「账和现状对不上」补（staleOutcomeTasks）。
-import { isAcceptedStage } from "@ash/shared";
+import { isAcceptedStage, type TaskStage } from "@ash/shared";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { acceptGateRuns } from "../db/schema-accept-gate.js";
@@ -45,16 +45,17 @@ export async function outcomesOf(view: TaskView): Promise<Outcome[]> {
   const run = (await db.select({ id: acceptGateRuns.id, status: acceptGateRuns.status }).from(acceptGateRuns)
     .where(and(eq(acceptGateRuns.taskId, task.id), inArray(acceptGateRuns.status, ["passed", "failed"])))
     .orderBy(desc(acceptGateRuns.startedAt)).limit(1)).at(0);
+  // 牌子和身份同一条语句现读，不拿视图快照里的 stage 配后读的身份：两次读之间摘了牌，配出来的是一个谁都不是的身份。
+  const accepted = isAcceptedStage(task.stage)
+    ? (await db.select({ stage: tasks.stage, identity: acceptanceIdentity }).from(tasks).where(eq(tasks.id, task.id))).at(0)
+    : undefined;
   // 门禁在前：绿了紧接着自动合并时，两条按事情发生的先后发。
   return [
     run
       ? { kind: "gate", value: `${run.id}:${run.status}`,
         text: run.status === "passed" ? `验收前置命令通过了：${title}` : `验收前置命令没通过：${title}，详情回 ash 看。` }
       : { kind: "gate", value: NONE, text: null },
-    ...(isAcceptedStage(task.stage) ? [{
-      kind: "result" as const, text: `已验收合并：${title}`,
-      value: (await db.select({ identity: acceptanceIdentity }).from(tasks).where(eq(tasks.id, task.id))).at(0)?.identity ?? NONE,
-    }] : []),
+    ...(accepted && isAcceptedStage(accepted.stage as TaskStage | null) ? [{ kind: "result" as const, text: `已验收合并：${title}`, value: accepted.identity }] : []),
   ];
 }
 

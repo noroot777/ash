@@ -47,7 +47,7 @@ export function FeishuConnectionCard({ status, pollError, syncedAt, onStatus, no
             <b className="feishu-state" data-state={connection.state}>
               <StatusChip tone={view.tone}>{view.label}</StatusChip>
             </b>
-            <small>{connection.state === "broken" && status.configError ? `${view.detail}（${status.configError}）` : view.detail}</small>
+            <small>{status.configError ? `${view.detail}（${status.configError}）` : view.detail}</small>
             {pollError && (
               <small className="feishu-stale">
                 最近一次读取状态失败：{pollError}

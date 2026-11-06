@@ -7,6 +7,12 @@ import { assertReviewAuthority, finalizationAuthority, ReviewSuperseded, type Re
 import { id, now } from "./util.js";
 import type { AcceptTail } from "./task-accept-tail.js";
 
+/**
+ * agent 自报（report_stage）的 merged / accepted 领的身份带这个前缀：那只是它说合了，之后用户真去验收合并的
+ * 那一次是另一次验收，要另领身份（否则飞书上认不出真合进去的那一次）。
+ */
+export const REPORTED_ACCEPTANCE_PREFIX = "reported-";
+
 export async function commitAcceptanceStage(taskId: string, stage: "merged" | "accepted",
   patch: Partial<typeof tasks.$inferInsert> = {}, authority?: ReviewAuthority): Promise<void> {
   await db.transaction(async (transaction) => {
@@ -26,8 +32,9 @@ export async function commitAcceptanceStage(taskId: string, stage: "merged" | "a
       } }).where(eq(regressionEvidence.directory, state.directory));
     }
     // 从没盖章的状态落下来 = 新的一次验收；已经是 merged / accepted（merged → accepted、重试）是同一次，
-    // 连老数据的空值一起沿用（db/schema.ts acceptanceId）。
-    const acceptanceId = task.stage === "merged" || task.stage === "accepted" ? task.acceptanceId : id();
+    // 连老数据的空值一起沿用（db/schema.ts acceptanceId）。自报盖的章不算（见 REPORTED_ACCEPTANCE_PREFIX）。
+    const same = (task.stage === "merged" || task.stage === "accepted") && !task.acceptanceId?.startsWith(REPORTED_ACCEPTANCE_PREFIX);
+    const acceptanceId = same ? task.acceptanceId : id();
     await transaction.update(tasks).set({ ...patch, stage, acceptanceId, updatedAt: now(), waitOwnership: ownership,
       ...(authority?.finalization ? { acceptedTailPending: true, acceptedTailDone: "[]" } : {}),
     }).where(eq(tasks.id, taskId));
