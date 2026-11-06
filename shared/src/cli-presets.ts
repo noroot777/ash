@@ -179,7 +179,9 @@ export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
 // rejected by the CLI/API at run time (for example gpt-5.5 tops out at xhigh).
 // 同样是全键 Record;空数组 = 该 CLI 没有(或还没实测出)思考强度档位。
 export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
-  claude: ["low", "medium", "high", "xhigh", "max"],
+  // ultracode 排最后,跟桌面版智能水平滑条同序。它不是更深的推理:CLI 把 `--effort ultracode`
+  // 记成 xhigh 再打开整段会话的工作流编排开关(2.1.283 bundle `J={ultracode:"xhigh"}`)。
+  claude: ["low", "medium", "high", "xhigh", "max", "ultracode"],
   // ultra 排在 max 之后:codex 自己的目录就是这个序(max=最深推理,ultra=最深推理+自动委派)。
   codex: ["low", "medium", "high", "xhigh", "max", "ultra"],
   // 2026-07-30 核对 docs/cli/headless 与 changelog:`--effort` 在 CLI 1.1.5 加入,只有这三档。
@@ -208,6 +210,7 @@ export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
 
 export const REASONING_EFFORT_DETAIL: Record<string, string> = {
   xhigh: "超高推理",
+  ultracode: "xhigh + 多智能体工作流编排",
   ultra: "仅部分模型支持",
 };
 
@@ -367,7 +370,7 @@ export function resolveReasoningEfforts(
   // probe 优先:CLI 自己报的档位胜过任何内置规则。拿不到(没装 / 没登录 / 这家没来源)
   // 时下面两级一字不差地照旧,所以接 probe 不会让任何现有组合变得跑不起来。
   const hit = lookupProbed(probed, ref);
-  if (hit) return { efforts: hit, source: "probe", ruleId: null };
+  if (hit) return { efforts: withUltracode(type, hit), source: "probe", ruleId: null };
   let winner: ModelEffortRule | null = null;
   for (const rule of MODEL_EFFORT_RULES) {
     if (!rule.types.includes(type)) continue;
@@ -376,7 +379,18 @@ export function resolveReasoningEfforts(
     if (!winner || ruleScore(rule) > ruleScore(winner)) winner = rule;
   }
   if (!winner) return { efforts: fallback, source: "cli-fallback", ruleId: null };
-  return { efforts: winner.efforts, source: "model-rule", ruleId: winner.id };
+  return { efforts: withUltracode(type, winner.efforts), source: "model-rule", ruleId: winner.id };
+}
+
+/**
+ * claude 的 ModelInfo 只报 low→max,ultracode 不在里面:CLI 自己的判据是「这个模型
+ * 支持 xhigh」(`/effort` 的候选也是在模型档位后面按这一条追加 `|ultracode`)。所以
+ * probe 和规则表给出的集合都按同一条补上,不支持 xhigh 的模型(haiku)照旧没有。
+ */
+function withUltracode(type: AgentType, efforts: readonly string[]): readonly string[] {
+  return type === "claude" && efforts.includes("xhigh") && !efforts.includes("ultracode")
+    ? [...efforts, "ultracode"]
+    : efforts;
 }
 
 /**

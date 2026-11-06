@@ -187,6 +187,24 @@ assert.deepEqual(
   [],
   "无独立 effort 的模型应返回空集合，让 UI 跳过强度步骤",
 );
+// ultracode 跟 CLI 自己的判据走:模型支持 xhigh 就有。claude 的 ModelInfo 不报它,
+// 所以 probe 给出的集合也要补上;不支持 xhigh 的(probe 里砍掉了 xhigh)就不能补。
+assert.deepEqual(
+  reasoningEffortsFor("claude", "opus", { opus: ["low", "medium", "high", "xhigh", "max"] }),
+  ["low", "medium", "high", "xhigh", "max", "ultracode"],
+  "claude probe 报出 xhigh 时 ultracode 排在最后",
+);
+assert.deepEqual(
+  reasoningEffortsFor("claude", "sonnet", { sonnet: ["low", "medium", "high", "max"] }),
+  ["low", "medium", "high", "max"],
+  "模型不支持 xhigh 时不能有 ultracode",
+);
+assert.equal(reasoningEffortsFor("claude", null).at(-1), "ultracode", "不知道模型时并集里有 ultracode");
+assert.equal(
+  isReasoningEffortSupported("codex", "gpt-5.6-sol", "ultracode"),
+  false,
+  "ultracode 只属于 claude",
+);
 assert.deepEqual(
   reasoningEffortsFor("antigravity", "gemini-3.6-flash-medium"),
   [],
