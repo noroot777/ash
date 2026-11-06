@@ -2,7 +2,7 @@
 //   ① 带绑定码 → 认领（binding.ts / groups.ts），回一句「回网页确认」；
 //   ② 发消息的人没绑定 → 单聊回一句怎么绑（一天最多一次），群里不理；
 //   ③ 斜杠命令 → commands.ts；
-//   ④ 回复了某张任务卡 → 这张卡是提问就答复，否则当成给任务发消息；
+//   ④ 回复了某张任务卡 → 这张卡是眼下这道提问就答复；以 /reply 开头的才当成给任务发消息；
 //   ⑤ 其余：单聊进助手房间、群里 @ 进项目群聊房间（relay.ts）。
 // 群消息只处理 @ 了机器人的（开放平台只推这类，这里再判一次）。
 //
@@ -16,6 +16,9 @@
 // 回复卡片答复提问，只认那张卡自己问的那一次（卡片代次 = 那一次提问的身份，task-wait-ownership.ts
 // questionOccurrenceOf；外加发卡时记下的 questionKey），带不带附件都走答复接口，由它在写入那一刻核：
 // 任务眼下在问的可能已经是另一道、或者同一道题又问了一次，不能拿此刻的提问去替一条旧回复补上身份。
+//
+// 直接回复不是提问的卡（失败卡、待验收卡、通知……）不发给任务：送到之前任务可能刚问了一道新题，
+// 发给任务的消息会顶掉它，等于替一道没看过的题作了答（用户 2026-11-06 选定：要捎话就明说 /reply）。
 //
 // 回执各按内容记授权来源（scope.ts）：静态的提示是 system，带着任务接口报错的是 task。
 import type { QuestionItem } from "@ash/shared";
@@ -287,9 +290,8 @@ export class InboundRouter {
 
   /**
    * 回复任务卡。任务在等答复、而且回的正是问这一次的那张卡 → 答复（附件随答复一起进那一轮，带着卡片
-   * 代次与 questionKey，答复接口写入那一刻核）；回的是旧提问卡、或者任务在等提问而回的是别的卡 →
-   * 带不带附件都不收：发给任务的消息会顶掉眼下那道题，等于替一条旧回复答了新题。明说 /reply 的、
-   * 任务不在提问时回的非提问卡 → 当成给任务发一条消息。
+   * 代次与 questionKey，答复接口写入那一刻核）；回的是旧提问卡、或者不是提问卡 → 带不带附件都不收，
+   * 告诉他怎么办。明说 /reply 的 → 当成给任务发一条消息（他自己知道是在给任务新的指示）。
    */
   private async toTask(
     inboundId: string, ctx: InboundContext, card: OutboxRow, intent: string | null, text: string, paths: string[],
@@ -314,8 +316,10 @@ export class InboundRouter {
         ? "这张卡上的问题已经换了：请回复最新那张提问卡（发 /todo 能找到它）。只想给任务捎句话，用 /reply 开头。"
         : "这道题已经答过了。还想给任务捎句话，用 /reply 开头再发一次。");
     }
-    if (!explicit && turn?.kind === "question" && card.kind !== "question") {
-      return refuse("not_question_card", "任务眼下在等一道提问，这张卡不是那道题：请回复那张提问卡（发 /todo 能找到它）。只想给任务捎句话，用 /reply 开头。");
+    if (!explicit && card.kind !== "question") {
+      return refuse("not_question_card", turn?.kind === "question"
+        ? "任务眼下在等一道提问，这张卡不是那道题：请回复那张提问卡（发 /todo 能找到它）。只想给任务捎句话，用 /reply 开头。"
+        : "直接回复只用来答提问卡，这句话没发给任务。要给任务捎句话，回复时以 /reply 开头再发一次（附件一样能带）。");
     }
     if (!explicit && current) {
       const questionKey = await this.questionKeyOf(card);

@@ -3,7 +3,8 @@
 // 钉住的几件事（理由见 server/src/im/inbound.ts、commands.ts、relay.ts 的文件头）：
 // ① 绑定码：单聊里发个人码 → 认领、回一句「回网页确认」；没绑定的人单聊只提示一次，群里不出声；
 //    群里没 @ 机器人的话一律不理；
-// ② 回复任务卡：此刻在等答复就是答复（多题按题号拆）；不是提问就当成发给任务的消息；收到点个表情；
+// ② 回复任务卡：此刻在等答复就是答复（多题按题号拆）；直接回复不是提问的卡不发给任务、告诉他用 /reply，
+//    以 /reply 开头的才发给任务；收到点个表情；
 //    答复只认那张卡自己问的那一次：回旧提问卡、回别的卡都不答到眼下这道题上（带附件也一样）；
 //    回眼下这道题的卡带附件也是答复，附件跟着答复走；答复送到接口那一刻同一道题已经又问了一次
 //    （题面一模一样）→ 接口按那一次的身份拒收；回在机器人自己的文字回执下面，认话题根上那张卡；
@@ -105,10 +106,15 @@ try {
     assert.deepEqual(record.answers, ["Postgres", "先不要"], "多题按题号拆");
 
     const failedCard = await cardOf("tf");
-    const nudge = await im.say({ text: "换个思路再试", parentId: failedCard.messageId! });
+    const implicit = await im.say({ text: "换个思路再试", parentId: failedCard.messageId! });
+    await im.settle();
+    assert.equal((await inboundOf(implicit)).detail, "not_question_card", "直接回复失败卡不发给任务");
+    assert.match(textOf(contentOf(repliesTo(implicit)[0]!)), /以 \/reply 开头/, "告诉他怎么捎话");
+    assert.equal(await statusOf("tf"), "failed", "任务没被续上");
+    const nudge = await im.say({ text: "/reply 换个思路再试", parentId: failedCard.messageId! });
     const nudgeRow = await inboundOf(nudge);
     assert.equal(nudgeRow.kind, "reply");
-    assert.equal(nudgeRow.state, "done", `发给任务的消息该被收下：${nudgeRow.detail}`);
+    assert.equal(nudgeRow.state, "done", `明说 /reply 的才发给任务：${nudgeRow.detail}`);
     await Promise.all([["tq", "paused"], ["tm", "paused"], ["tf", "failed"]].map(([id, from]) => waitIdle(() => statusOf(id!), from)));
 
     // 两代提问：在第一问的卡下回「是」，不能答到第二问上。

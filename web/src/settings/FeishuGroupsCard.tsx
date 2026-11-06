@@ -153,7 +153,7 @@ export function FeishuGroupsCard({ groups, projects, bound, onGroups, onOpen, no
         <div className="settings-card-foot feishu-foot-text">
           <span>
             群里的 @ 消息进这个项目的群聊房间，用发言人自己的 ash 身份执行；没绑定飞书的人 @ 机器人不会有反应。
-            打开「卡片发到群里」后，这个项目的任务卡片改发到群里、不再发单聊，在群话题里回复就是回复那个任务。
+            打开「卡片发到群里」后，这个项目的任务卡片改发到群里、不再发单聊，在群话题里回复提问卡就是答复，回复别的卡以 /reply 开头才会发给那个任务。
             群功能要在应用权限里开 <code>im:message.group_at_msg:readonly</code> 并重新发版。
           </span>
         </div>

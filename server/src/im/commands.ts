@@ -41,7 +41,7 @@ export interface InboundContext {
 const CONFIRM_TTL_MS = 10 * 60_000;
 
 export const HELP = [
-  "直接回复任务卡片 = 答复它的提问 / 给任务发消息（附图片、文件也行）。",
+  "直接回复提问卡 = 答复它（附图片、文件也行）；回复别的任务卡要以 /reply 开头，才会发给那个任务。",
   "单聊里直接说话 = 跟 ash 助手聊（它能帮你查任务、建任务）。",
   "/todo —— 还有哪些事等你；积压的卡逐张推过来",
   "/project —— 看看能选哪些项目；/project 2 或 /project 名字 —— 设为当前项目",
@@ -120,7 +120,7 @@ export class CommandRunner {
           { taskId, ...(result.ok ? {} : { brief: "没能重试，原因见 ash。" }) });
       }
       default:
-        // /answer、/reply 与「直接回复卡片」是同一件事，由调用方当普通回复处理。
+        // /answer、/reply 由调用方按回复卡片处理（inbound.ts toTask），走不到这里。
         return this.say(ctx, HELP, SYSTEM_SCOPE);
     }
   }
