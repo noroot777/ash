@@ -31,6 +31,12 @@ try {
   assert.deepEqual((await page.locator(".native-work__status").allInnerTexts()).sort(),
     ["进行中", "待处理", "已完成", "失败", "已停止", "状态未知"].sort());
 
+  // 每张卡片折叠着就能看到起止时间，与任务检查器同一个写法；一个时刻都没记下的不占位。
+  const when = (status) => page.locator(`.native-work__entry[data-status="${status}"] .native-work__when`);
+  assert.match(await when("completed").innerText(), /^09\/08 08:00 → 08:01$/, "同一天的结束只写时刻");
+  assert.match(await when("running").innerText(), /^09\/08 08:00 起$/, "还在跑的用「起」收尾");
+  assert.equal(await when("pending").count(), 0, "未开工的卡片不放时间");
+
   await mkdir(output, { recursive: true });
   const inspector = page.locator(".inspector-host");
   const inspectorStyle = await inspector.getAttribute("style");
@@ -194,7 +200,7 @@ try {
   assert.equal(await page.locator(".native-work__title", { hasText: "运行中的资料搜集" }).locator("xpath=ancestor::details[1]").getAttribute("data-status"), "completed");
   await page.getByRole("button", { name: "查看执行：运行中的资料搜集", exact: true }).click();
   await conversation.getByText("刷新后仍应保留的完成结果", { exact: false }).waitFor();
-  assert.match(await headline.innerText(), /09\/08 08:00–08:08\s*·\s*8分 0秒/, "收工后抬头给出完整区间和跨度");
+  assert.match(await headline.innerText(), /09\/08 08:00 → 08:08\s*·\s*8分 0秒/, "收工后抬头给出完整区间和跨度");
   await page.clock.fastForward(60_000);
   assert.match(await headline.innerText(), /8分 0秒/, "完成后跨度保持固定");
   assert.equal(await conversation.locator(".native-agent__live").count(), 0);

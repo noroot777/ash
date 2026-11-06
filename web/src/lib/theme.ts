@@ -33,7 +33,11 @@ function readCached(): ColorTheme {
   }
 }
 
-const media = typeof window.matchMedia === "function"
+// 服务端渲染的测试脚本会顺着组件把这里一起 import 进去(那边没有 window/document):
+// 没有页面就没有开关可拨，模块只当一份偏好存着，下面那些挂监听、首次上色都跳过。
+const inBrowser = typeof window !== "undefined";
+
+const media = inBrowser && typeof window.matchMedia === "function"
   ? window.matchMedia("(prefers-color-scheme: dark)")
   : null;
 
@@ -103,14 +107,16 @@ export function onColorThemeChange(listener: () => void): () => void {
 // 按 preference 解析，钉死时 media 怎么变结果都一样。
 media?.addEventListener("change", paint);
 
-// 另一个标签页里换了配色，这里跟着翻：那边换档时会写这份镜像，而 storage 事件只发给
-// **别的**标签页。同源同 cookie,两个标签页一定是同一个人，镜像就是他刚选的那一档。
-window.addEventListener("storage", (event) => {
-  if (event.key !== STORAGE_KEY || !isColorTheme(event.newValue) || event.newValue === preference) return;
-  preference = event.newValue;
-  paint();
-});
+if (inBrowser) {
+  // 另一个标签页里换了配色，这里跟着翻：那边换档时会写这份镜像，而 storage 事件只发给
+  // **别的**标签页。同源同 cookie,两个标签页一定是同一个人，镜像就是他刚选的那一档。
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STORAGE_KEY || !isColorTheme(event.newValue) || event.newValue === preference) return;
+    preference = event.newValue;
+    paint();
+  });
 
-// 模块一加载就按镜像拨一次：index.html 那段脚本已经拨过的话这是空操作，没拨过的入口
-// (测试台、将来别的 html)也不会停在「没有 data-theme」的半截状态。
-paint();
+  // 模块一加载就按镜像拨一次：index.html 那段脚本已经拨过的话这是空操作，没拨过的入口
+  // (测试台、将来别的 html)也不会停在「没有 data-theme」的半截状态。
+  paint();
+}

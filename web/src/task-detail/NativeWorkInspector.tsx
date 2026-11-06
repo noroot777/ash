@@ -1,15 +1,20 @@
 import { ArrowUpRight, CaretDown, Robot } from "@phosphor-icons/react";
 import { NATIVE_WORK_NO_ASSIGNMENT, NATIVE_WORK_STATUS_LABELS as labels, type NativeWorkItem } from "./nativeWorkModel.ts";
 import { NativeWorkMeta } from "./NativeWorkMeta.tsx";
+import { nativeWorkRange } from "./nativeWorkTiming.ts";
 import "../styles/native-work.css";
 
 function WorkRow({ row, parent, open, onOpen }: { row: NativeWorkItem; parent?: NativeWorkItem; open: boolean; onOpen: () => void }) {
+  const range = nativeWorkRange(row);
   return (
     <article className={`native-work__entry${open ? " is-open" : ""}`} data-status={row.status} data-kind={row.kind}>
       <details className="native-work__row" data-status={row.status}>
         <summary>
           <span className="native-work__title">{row.title}</span>
-          <span className="native-work__status" data-status={row.status}>{labels[row.status]}</span>
+          <span className="native-work__state">
+            <span className="native-work__status" data-status={row.status}>{labels[row.status]}</span>
+            {range && <span className="native-work__when">{range}</span>}
+          </span>
           <CaretDown className="native-work__chevron" size={13} aria-hidden="true" />
         </summary>
         <p className="native-work__full-title">{row.title}</p>
