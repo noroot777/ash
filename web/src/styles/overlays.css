@@ -10,6 +10,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 遮罩两种模式都是压暗的深色。 */
   background: rgb(20 21 26 / 45%);
   backdrop-filter: blur(1.5px);
 }

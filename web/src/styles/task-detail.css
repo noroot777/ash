@@ -126,9 +126,9 @@
   box-shadow: 0 1px 2px rgb(40 42 48 / 12%);
 }
 
-.task-primary-action:hover:not(:disabled) { background: #5560c4; }
-.task-primary-action.is-danger { border-color: rgb(217 61 76 / 38%); background: var(--panel); color: var(--red); }
-.task-primary-action.is-danger:hover:not(:disabled) { background: rgb(217 61 76 / 6%); }
+.task-primary-action:hover:not(:disabled) { background: var(--accent-hover); }
+.task-primary-action.is-danger { border-color: color-mix(in srgb, var(--red) 38%, transparent); background: var(--panel); color: var(--red); }
+.task-primary-action.is-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 6%, transparent); }
 .task-requeue-action { flex: 0 0 auto; border-color: var(--line2); background: var(--panel); color: var(--muted); box-shadow: var(--control-shadow); }
 .task-requeue-action:hover:not(:disabled) { background: var(--overlay); color: var(--ink); }
 
@@ -256,7 +256,7 @@ button.task-inspector-follow-ups-head[aria-expanded="true"]::after { content: "ï
 .task-resume-editor footer { display: flex; min-height: 34px; align-items: center; gap: 4px; border-top: 0.5px solid var(--line); padding: 5px 6px; }
 .task-resume-editor footer > span { margin-right: auto; color: var(--faint); font-size: 8.5px; }
 .task-resume-editor button.is-primary { background: var(--accent); color: white; }
-.task-resume-editor button.is-primary:hover:not(:disabled) { background: #5560c4; color: white; }
+.task-resume-editor button.is-primary:hover:not(:disabled) { background: var(--accent-hover); color: white; }
 .task-change-summary__state { display: flex; align-items: center; gap: 6px; margin: 3px 0 6px; color: var(--faint); font-size: 10px; }
 .task-change-summary__state.is-error { color: var(--red); }
 .task-change-summary__facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; }
@@ -304,7 +304,7 @@ button.task-inspector-follow-ups-head[aria-expanded="true"]::after { content: "ï
 .task-confirm-dialog:focus { outline: none; }
 .task-confirm-dialog > header { display: flex; align-items: center; gap: 9px; }
 .task-confirm-dialog > header > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
-.task-confirm-dialog > header > span.is-danger { background: rgb(217 61 76 / 10%); color: var(--red); }
+.task-confirm-dialog > header > span.is-danger { background: color-mix(in srgb, var(--red) 10%, transparent); color: var(--red); }
 .task-confirm-dialog h2 { margin: 0; font-size: 14px; }
 .task-confirm-dialog > p { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .task-confirm-dialog > footer { display: flex; justify-content: flex-end; gap: 7px; margin-top: 16px; }

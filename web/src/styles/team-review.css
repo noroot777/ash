@@ -95,7 +95,7 @@
 .review-dispatch-control form footer { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
 .review-dispatch-control form footer > span { min-width: 0; flex: 1; color: var(--faint); font-size: 9px; }
 .review-dispatch-control form footer > button { display: inline-flex; height: 28px; align-items: center; gap: 5px; border: 0; border-radius: 7px; background: var(--accent); padding: 0 9px; color: white; font-size: 9.5px; font-weight: 650; }
-.review-dispatch-control form footer > button:hover:not(:disabled) { background: #5560c4; }
+.review-dispatch-control form footer > button:hover:not(:disabled) { background: var(--accent-hover); }
 .review-dispatch-control form footer > button:disabled { cursor: not-allowed; opacity: .5; }
 .team-review-round { margin: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .team-review-round.is-verified { border-color: color-mix(in lch,var(--green) 25%,var(--line)); }
@@ -105,7 +105,7 @@
 .team-review-round > button > b { color: var(--ink); font-size: 10.5px; }
 .team-review-round > button > em { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in lch,var(--accent) 9%,var(--raised)); padding: 2px 6px; color: var(--accent); font-size: 9.5px; font-style: normal; font-weight: 650; }
 .team-review-round.is-verified > button > em { background: var(--green-bg); color: var(--green); }
-.team-review-round.is-verify_failed > button > em { background: color-mix(in lch,var(--red) 9%,white); color: var(--red); }
+.team-review-round.is-verify_failed > button > em { background: var(--red-bg); color: var(--red); }
 .team-review-round > button > small { color: var(--faint); font-size: 9.5px; }
 .team-review-round > button > svg:last-child { margin-left: auto; transition: transform 140ms ease; }
 .team-review-round > button[aria-expanded="false"] > svg:last-child { transform: rotate(-90deg); }
@@ -179,7 +179,7 @@
 /* 验收做完之后那张只读回执的「没通过」档:它不是关口(没有任何东西拦着你了),只是这次
    合并没有通过记录 —— 所以是琥珀不是红。色值自带 alpha 而不是跟 --line 混:--line 的
    色度是 0、色相却记着 282,lch 会沿短弧把黄插值成品红。 */
-.accept-gate-card.is-skipped { border-color: rgb(181 123 0 / 34%); background: rgb(181 123 0 / 5.5%); }
+.accept-gate-card.is-skipped { border-color: color-mix(in srgb, var(--amber) 34%, transparent); background: color-mix(in srgb, var(--amber) 5.5%, transparent); }
 .accept-gate-card.is-skipped > header > span:first-child { color: var(--amber); }
 .accept-gate-card > header { display: flex; align-items: flex-start; gap: 8px; }
 .accept-gate-card > header > span:first-child { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: var(--raised); color: var(--muted); }
@@ -198,7 +198,7 @@
    「不用我修、该怎么办」的地方，所以不折起来。原文是**纯文本**（gateCommandMissNotice
    不发 markdown：同一份字还要进门禁日志和 MCP 回执，星号反引号在那两处只会原样显示
    —— 第 1 轮审查 N4），自带换行与序号，所以 pre-line。 */
-.accept-gate-diagnosis { border: 1px solid color-mix(in lch,var(--amber) 34%,var(--line)); border-radius: 7px; background: rgb(181 123 0 / 6%); padding: 7px 9px; color: var(--ink); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+.accept-gate-diagnosis { border: 1px solid color-mix(in lch,var(--amber) 34%,var(--line)); border-radius: 7px; background: color-mix(in srgb, var(--amber) 6%, transparent); padding: 7px 9px; color: var(--ink); line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
 .accept-gate-diagnosis > span { display: block; margin-bottom: 3px; color: var(--amber); font-size: 9.5px; font-weight: 650; }
 /* 已失效的历史结论:虚线 + 灰调,一眼看出它跟上面那块当前结论不是同一回事。 */
 .accept-gate-diagnosis.is-obsolete { border-style: dashed; border-color: var(--line2); background: var(--panel); color: var(--muted); }

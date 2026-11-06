@@ -44,6 +44,7 @@ import { DEFAULT_APP_SETTINGS } from "@ash/shared";
 import { json, request } from "./apiClient.ts";
 import { syncHostCliPolicy } from "./hostCliPolicy.ts";
 import { syncComposerSendKey } from "./sendKey.ts";
+import { syncColorTheme } from "./theme.ts";
 
 type SettingKey = keyof AppSettings;
 
@@ -145,8 +146,8 @@ function shownFrom(confirmed: AppSettings): AppSettings {
 }
 
 /**
- * 把两档「页面要跟着变脸」的政策推出去 ——「CLI 额度」给 hostCliPolicy,「哪一下算
- * 发送」给 sendKey。还没读到任何设置时**什么都不推**:未知态下裸回车一律当换行,
+ * 把几档「页面要跟着变脸」的政策推出去 ——「CLI 额度」给 hostCliPolicy,「哪一下算
+ * 发送」给 sendKey,配色给 theme。还没读到任何设置时**什么都不推**:未知态下裸回车一律当换行,
  * 不拿出厂默认冒充用户的选择(第 2 轮审查问题 2)。
  *
  * 钉在这里而不是各个调用点:前端学到这些档位的路**只有 `/settings` 那两条**,而漏掉
@@ -163,6 +164,8 @@ function publish(): void {
   //    卡片上写的「改完立刻生效,不用刷新页面」。
   syncHostCliPolicy({ instanceMode: latest.instanceMode, sharedHostCli: latest.sharedHostCli });
   syncComposerSendKey(shown.composerSendKey);
+  // 配色同「发送键」:纯前端语义，在途的选择立刻生效，保存失败时随下一次 publish 退回。
+  syncColorTheme(shown.colorTheme);
 }
 
 function apply(settings: AppSettings): AppSettings {

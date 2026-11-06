@@ -185,6 +185,17 @@
   font-size: 9.5px;
 }
 
+/* 下拉里那颗深浅色开关撑满一行，三档平分。 */
+.workspace-project-theme {
+  display: flex;
+  margin-top: 4px;
+}
+
+.workspace-project-theme button {
+  flex: 1;
+  justify-content: center;
+}
+
 .workspace-project-search {
   display: flex;
   height: 31px;

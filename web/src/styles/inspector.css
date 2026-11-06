@@ -302,7 +302,7 @@
 .inspector-host__add:focus-visible,
 .inspector-toggle:focus-visible,
 .inspector-host__menu .ui-menu-item:focus-visible {
-  outline: 2px solid color-mix(in lch, var(--accent) 72%, white);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 

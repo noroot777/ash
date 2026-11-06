@@ -15,6 +15,8 @@ import {
 import { createPortal } from "react-dom";
 import { CaretLeft, CaretRight, X } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { ImageZoomControls } from "./ImageZoomControls.tsx";
+import { useImageZoom } from "./useImageZoom.ts";
 
 type ImageProps = ComponentPropsWithoutRef<"img"> & { label?: string };
 type ImageLinkProps = ComponentPropsWithoutRef<"a"> & {
@@ -47,6 +49,14 @@ type ActivePreview = {
 
 const ImageGroupContext = createContext<ImageGroupContextValue | null>(null);
 
+const ZOOM_KEYS: Record<string, "zoomIn" | "zoomOut" | "reset"> = {
+  "+": "zoomIn",
+  "=": "zoomIn",
+  "-": "zoomOut",
+  "_": "zoomOut",
+  "0": "reset",
+};
+
 function ImageLightbox({
   images,
   index,
@@ -65,6 +75,8 @@ function ImageLightbox({
     if (!grouped) return;
     onIndexChange((index + delta + images.length) % images.length);
   }, [grouped, images.length, index, onIndexChange]);
+  const zoom = useImageZoom(current?.src ?? "", box);
+  const { zoomIn, zoomOut, reset: resetZoom } = zoom;
 
   // 大图是从别的浮层里点开的（审查抽屉、菜单、对话气泡），portal 到 body 之后 DOM 上就
   // 不在它们内部了——不登记进这一摞层，点这张大图/关闭按钮会被外层读成「点了外面」，
@@ -77,7 +89,7 @@ function ImageLightbox({
     return () => { document.body.style.overflow = previousOverflow; };
   }, []);
 
-  // 键盘另拦一道:左右翻页是这里独有的,而 Esc 要挡住那些不在层栈里、直接监听 document
+  // 键盘另拦一道:左右翻页、+/-/0 缩放是这里独有的,而 Esc 要挡住那些不在层栈里、直接监听 document
   // 的全局快捷键(铺开的侧边栏、全屏视图),否则关一张图会顺手把底下的视图也收了。
   useEffect(() => {
     const interceptKeys = (event: KeyboardEvent) => {
@@ -93,11 +105,15 @@ function ImageLightbox({
         event.preventDefault();
         event.stopImmediatePropagation();
         step(1);
+      } else if (!event.metaKey && !event.ctrlKey && !event.altKey && ZOOM_KEYS[event.key]) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        ({ zoomIn, zoomOut, reset: resetZoom })[ZOOM_KEYS[event.key]!]();
       }
     };
     document.addEventListener("keydown", interceptKeys, true);
     return () => document.removeEventListener("keydown", interceptKeys, true);
-  }, [grouped, onClose, step]);
+  }, [grouped, onClose, resetZoom, step, zoomIn, zoomOut]);
 
   if (!current) return null;
   const label = current.label || current.alt || "图片";
@@ -126,12 +142,20 @@ function ImageLightbox({
           <CaretLeft size={24} weight="bold" aria-hidden="true" />
         </button>
       )}
-      <img src={current.src} alt={current.alt} draggable={false} onMouseDown={(event) => event.stopPropagation()} />
+      <img
+        {...zoom.imageProps}
+        ref={zoom.imageRef}
+        src={current.src}
+        alt={current.alt}
+        draggable={false}
+        onMouseDown={(event) => event.stopPropagation()}
+      />
       {grouped && (
         <button className="image-preview-lightbox__next" type="button" aria-label="下一张图片" onClick={() => step(1)}>
           <CaretRight size={24} weight="bold" aria-hidden="true" />
         </button>
       )}
+      <ImageZoomControls zoom={zoom} />
     </div>,
     document.body,
   );

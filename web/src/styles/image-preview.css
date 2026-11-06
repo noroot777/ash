@@ -1,5 +1,6 @@
 .image-preview-trigger { cursor: zoom-in; }
 
+/* 灯箱整套（遮罩、按钮、缩放条）两种模式都是深色，颜色不跟主题走。 */
 .image-preview-lightbox {
   position: fixed;
   z-index: 220;
@@ -23,6 +24,7 @@
   box-shadow: 0 24px 90px rgb(0 0 0 / 46%);
   object-fit: contain;
   user-select: none;
+  touch-action: none;
 }
 
 .image-preview-lightbox > button {
@@ -48,6 +50,7 @@
 
 .image-preview-lightbox__meta {
   position: absolute;
+  z-index: 1;
   top: 17px;
   left: 22px;
   right: 70px;
@@ -62,6 +65,44 @@
 
 .image-preview-lightbox__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-preview-lightbox__meta small { flex: 0 0 auto; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.78; }
+
+.image-zoom-controls {
+  position: absolute;
+  z-index: 1;
+  bottom: 12px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 999px;
+  background: rgb(0 0 0 / 46%);
+  color: white;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+  transform: translateX(-50%);
+  backdrop-filter: blur(8px);
+}
+
+.image-zoom-controls button {
+  display: grid;
+  place-items: center;
+  min-width: 30px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+}
+
+.image-zoom-controls button:nth-child(2) {
+  min-width: 54px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-zoom-controls button:hover:not(:disabled) { background: rgb(255 255 255 / 14%); }
+.image-zoom-controls button:disabled { opacity: 0.38; }
+.image-zoom-controls button:focus-visible { outline: 2px solid rgb(255 255 255 / 82%); outline-offset: 1px; }
 
 @media (max-width: 640px) {
   .image-preview-lightbox { padding: 56px 48px 48px; }

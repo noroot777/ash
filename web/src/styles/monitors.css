@@ -12,7 +12,7 @@
 /* 「还没读完」那一条：比报错轻（它不是错误，是在进行中），但要比正文显眼。 */
 .monitor-inspector__pending {
   margin: 0 0 8px; padding: 6px 8px; border-radius: 6px;
-  background: var(--surface-2, rgba(127, 127, 127, 0.1));
+  background: var(--overlay);
   color: var(--muted); font-size: 10.5px; line-height: 1.6;
 }
 .monitor-inspector__empty { color: var(--faint); font-size: 10.5px; line-height: 1.7; }
@@ -83,7 +83,7 @@
 .monitor-composer__actions button { display: inline-flex; min-height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 10px; color: var(--muted); font-size: 10.5px; }
 .monitor-composer__actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .monitor-composer__actions button.is-primary { border-color: transparent; background: var(--accent); color: white; font-weight: 650; }
-.monitor-composer__actions button.is-primary:hover:not(:disabled) { background: color-mix(in lch, var(--accent) 88%, black); color: white; }
+.monitor-composer__actions button.is-primary:hover:not(:disabled) { background: var(--accent-hover); color: white; }
 .monitor-composer__actions button:disabled { cursor: not-allowed; opacity: .48; }
 /* 不能挂哨兵时那一句：说清为什么，而不是让「+」凭空消失。 */
 .monitor-inspector__blocked { margin: 0 0 9px; border-left: 2px solid var(--line2); padding-left: 8px; color: var(--faint); font-size: 10px; line-height: 1.6; }
@@ -97,7 +97,7 @@
 .monitor-wait__what { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 /* 「这一刻认不回来」那一段:它是**受阻**,不是说明 —— 用边线把它从旁注里拎出来(灰到底的
    小字里,用户要先看见这一句才知道「等着」等不来)。 */
-.monitor-wait__note--stuck { border-left: 1.5px solid rgb(181 123 0 / 48%); padding-left: 7px; color: var(--muted); }
+.monitor-wait__note--stuck { border-left: 1.5px solid color-mix(in srgb, var(--amber) 48%, transparent); padding-left: 7px; color: var(--muted); }
 
 /* ── 按来源分段(MonitorInspector)──────────────────────────────────────────────
    两种哨兵的能力不对等,混排会让用户对着一张只读卡去找停止按钮。段头做得轻:一行小字,

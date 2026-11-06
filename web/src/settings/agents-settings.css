@@ -52,6 +52,17 @@
 .agent-profile-group.is-kimi { --agent-color: #27758d; }
 .agent-profile-group.is-qwen { --agent-color: #596fa2; }
 
+/* 上面这组品牌色偏深（头像上当字色用），深色底上看不清，深色模式换成同色相的亮一档。 */
+[data-theme="dark"] .agent-profile-group { --agent-color: #a8a39a; }
+[data-theme="dark"] .agent-profile-group.is-claude { --agent-color: #d9915f; }
+[data-theme="dark"] .agent-profile-group.is-codex { --agent-color: #52b3a0; }
+[data-theme="dark"] .agent-profile-group.is-antigravity { --agent-color: #a08fd2; }
+[data-theme="dark"] .agent-profile-group.is-gemini { --agent-color: #7ba8dc; }
+[data-theme="dark"] .agent-profile-group.is-opencode { --agent-color: #b590ca; }
+[data-theme="dark"] .agent-profile-group.is-grok { --agent-color: #9ba3ae; }
+[data-theme="dark"] .agent-profile-group.is-kimi { --agent-color: #58b2cc; }
+[data-theme="dark"] .agent-profile-group.is-qwen { --agent-color: #91a3d8; }
+
 .agent-profile-group-head {
   display: grid;
   min-height: 46px;

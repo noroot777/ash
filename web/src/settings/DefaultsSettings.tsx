@@ -5,6 +5,7 @@ import type { ComposerSendKey } from "@ash/shared";
 import { useIsInstanceAdmin, useIsMultiUser } from "../auth/authContext.ts";
 import { api } from "../lib/api.ts";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
+import { ColorThemeCard } from "./ColorThemeCard.tsx";
 import { ComposerSendKeyCard } from "./ComposerSendKeyCard.tsx";
 import { HandoffSettings } from "./HandoffSettings.tsx";
 import { InstanceModeCard } from "./InstanceModeCard.tsx";
@@ -103,6 +104,7 @@ export function DefaultsSettings({ notify, onOpen }: {
         loading={loading}
         onChange={patchSendKey}
       />
+      <ColorThemeCard notify={notify} />
       <HandoffSettings
         settings={settings}
         loading={loading}

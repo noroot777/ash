@@ -166,6 +166,7 @@ export function WorkspaceSidebar({
             onTaskMode={onTaskMode}
             onCreate={onNewProject}
             onSettings={onSettings}
+            notify={notify}
           />
           {currentProject && (
             <ProjectGitContext

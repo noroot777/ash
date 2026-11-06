@@ -31,6 +31,7 @@ body:has(.preview-workspace.is-expanded) .palette-scrim { z-index: 185; }
 .preview-workspace-error { margin: 0; padding: 8px 14px; color: var(--red); }
 .preview-workspace-body { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) 275px; }
 .preview-workspace-stage { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 250px; background: var(--raised); }
+/* iframe 衬底照浏览器默认的白，两种模式都一样：被预览的页面多数没给自己设底色。 */
 .preview-workspace-stage iframe { display: block; flex: 1; min-height: 0; width: 100%; border: 0; background: white; }
 .preview-workspace-connection { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; text-align: center; background: var(--panel); z-index: 1; }
 .preview-workspace-connection p { max-width: 320px; color: var(--muted); line-height: 1.7; }
@@ -52,8 +53,8 @@ body:has(.preview-workspace.is-expanded) .palette-scrim { z-index: 185; }
 .preview-workspace-list-row .preview-workspace-item { flex: 1; min-width: 0; }
 .preview-workspace .preview-workspace-delete { color: var(--red); flex-shrink: 0; }
 .preview-workspace .preview-workspace-item { width: 100%; justify-content: flex-start; padding: 9px; text-align: left; }
-.preview-workspace-item > b { display: grid; place-items: center; width: 25px; height: 25px; flex-shrink: 0; background: #d93d4c; color: white; border-radius: 50%; font: 700 11px var(--font-mono); }
-.preview-workspace-item[aria-pressed="true"] > b { background: #5e6ad2; }
+.preview-workspace-item > b { display: grid; place-items: center; width: 25px; height: 25px; flex-shrink: 0; background: var(--red); color: white; border-radius: 50%; font: 700 11px var(--font-mono); }
+.preview-workspace-item[aria-pressed="true"] > b { background: var(--accent); }
 .preview-workspace-item > span { display: grid; gap: 4px; min-width: 0; }
 .preview-workspace-item strong, .preview-workspace-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preview-workspace-item strong { font-size: 11px; font-weight: 600; }

@@ -1,5 +1,5 @@
 import type { AppSettings } from "@ash/shared";
-import { COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "@ash/shared";
+import { COLOR_THEMES, COMPOSER_SEND_KEYS, DEFAULT_APP_SETTINGS } from "@ash/shared";
 import { ACCEPT_CLEAN } from "@ash/shared/workflow";
 import { db } from "./db/index.js";
 import { MAX_BODY_MB } from "./handoff-body.js";
@@ -52,6 +52,11 @@ const SETTING_SPECS = {
   composerSendKey: {
     ok: (v: unknown) => typeof v === "string" && (COMPOSER_SEND_KEYS as readonly string[]).includes(v),
     hint: `必须是 ${COMPOSER_SEND_KEYS.join(" / ")} 之一（回车直接发送 / ⌘-Ctrl+回车发送）`,
+  },
+  // 界面配色。个人面的键:同一台机器上两个人各看各的深浅色。
+  colorTheme: {
+    ok: (v: unknown) => typeof v === "string" && (COLOR_THEMES as readonly string[]).includes(v),
+    hint: `必须是 ${COLOR_THEMES.join(" / ")} 之一（跟随系统 / 浅色 / 深色）`,
   },
   handoffRequireApproval: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },
   handoffEncrypt: { ok: (v: unknown) => typeof v === "boolean", hint: "必须是 boolean" },

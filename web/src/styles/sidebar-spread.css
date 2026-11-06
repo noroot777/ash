@@ -193,7 +193,7 @@
 }
 
 .workspace-task-row-wrap.is-selected .workspace-spread-clip {
-  background: var(--panel);
+  background: var(--lifted);
 }
 
 /* ── 筛选条：占的是顶部工具行本来就空着的左半边 ─────────── */
