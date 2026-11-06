@@ -30,6 +30,7 @@ import { branchDependency, branchOwner, commitAt, dependentTasks, plannedMergeTa
 import { resolveWorktreeBranchName } from "./git.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { holdTeamForAcceptance } from "./team-acceptance-hold.js";
 import { withReviewAuthority, type ReviewAuthority } from "./review-ownership.js";
 import { unexecutedVerification } from "./task-accept-verification.js";
 import { acceptancePreflight } from "./task-accept-preflight.js";
@@ -628,7 +629,10 @@ export async function acceptTask(
   let result: AcceptTaskResult;
   let autoCommit: AcceptanceAutoCommitOutcome | undefined;
   let freeWorkflowLocked = false;
+  let releaseHold = () => {};
   try {
+    // 团队验收占住全队直到尾段结束（team-acceptance-hold.ts）。先占后查：下面每道守卫看到的都是占住之后的样子。
+    releaseHold = await holdTeamForAcceptance(taskId);
     try {
       const context = await acceptanceContext(taskId);
       if (context.freeWorkflow && !tryAcquireFreeWorkflowAction(taskId)) {
@@ -677,7 +681,9 @@ export async function acceptTask(
     await discardPendingAcceptanceGate(taskId, error);
     throw error;
   } finally {
+    // 先摘验收互斥再放占位：放占位会当场叫醒排着等这一轮的交接（turn-lock.ts releaserFor），它们看到验收还挂着就退避了。
     endAccepting(taskId);
+    releaseHold();
     // 撞冲突时登记的「叫任务自己去解」必须**在验收锁释放之后**才发:锁还锁着时
     // continueTask 会因验收互斥静默退避(accept-conflict.ts 顶部注释)。
     flushConflictHandoff(taskId);

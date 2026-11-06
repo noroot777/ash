@@ -14,7 +14,8 @@ const DEFAULT_QUOTA = 10_000;
 
 export function FeishuPushCard({ status, projects, onStatus, notify }: {
   status: FeishuStatus;
-  projects: ProjectView[];
+  /** null = 项目清单还没读到（不是没有项目）。 */
+  projects: ProjectView[] | null;
   onStatus: (next: FeishuStatus) => void;
   notify: (message: string) => void;
 }) {
@@ -146,7 +147,9 @@ export function FeishuPushCard({ status, projects, onStatus, notify }: {
               {!options.publicBaseUrl && "现在没填深链地址，这些卡片就只剩标题了。"}
             </small>
           </div>
-          {projects.length ? (
+          {projects === null ? (
+            <span>项目清单这一下没读到，稍后自动重试</span>
+          ) : projects.length ? (
             <div className="feishu-project-checks" role="group" aria-label="只推标题和链接的项目">
               {projects.map((project) => (
                 <Checkbox

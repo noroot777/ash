@@ -60,7 +60,7 @@ export async function loadEnvelope(envelopeId: string): Promise<EnvelopeRow | nu
 
 export type EnvelopeCheck =
   | { ok: true; envelope: EnvelopeRow; payload: Record<string, unknown> }
-  | { ok: false; reason: "missing" | "expired" | "not_yours" | "used"; envelope?: EnvelopeRow };
+  | { ok: false; reason: "missing" | "expired" | "not_yours" | "used" | "corrupt"; envelope?: EnvelopeRow };
 
 /** ①②③ 三关（④ 要读任务现状，由调用方做）。 */
 export async function checkEnvelope(envelopeId: string, operatorOpenId: string, at = Date.now()): Promise<EnvelopeCheck> {
@@ -69,8 +69,11 @@ export async function checkEnvelope(envelopeId: string, operatorOpenId: string, 
   if (Date.parse(envelope.expiresAt) <= at) return { ok: false, reason: "expired", envelope };
   if (envelope.recipientOpenId && envelope.recipientOpenId !== operatorOpenId) return { ok: false, reason: "not_yours", envelope };
   if (envelope.usedAt) return { ok: false, reason: "used", envelope };
-  let payload: Record<string, unknown> = {};
-  try { payload = JSON.parse(envelope.payload); } catch { /* 坏了按空的 */ }
+  // 读不出来不能按空的往下办：payload 里带着这张卡认的是哪一版（version / questionKey / runId），
+  // 空着进核心接口就成了「不核版本、办最新的那一版」。
+  let payload: Record<string, unknown>;
+  try { payload = JSON.parse(envelope.payload) as Record<string, unknown>; } catch { return { ok: false, reason: "corrupt", envelope }; }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { ok: false, reason: "corrupt", envelope };
   return { ok: true, envelope, payload };
 }
 

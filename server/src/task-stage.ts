@@ -12,7 +12,7 @@ import { RegressionConclusionRejected, RegressionEvidenceUnavailable } from "./r
 import { reviewRoundDir } from "./review-evidence.js";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
 
 export async function setTaskStage(
   taskId: string,
@@ -74,7 +74,9 @@ export async function reportTaskStage(taskId: string, stage: TaskStage, opts: {
     const evidence = scope && (await transaction.select().from(regressionEvidence)
       .where(eq(regressionEvidence.directory, reviewRoundDir(taskId, scope.round))))[0];
     if (evidence?.settlement && task.stage !== stage) throw new RegressionConclusionRejected("本轮已进入结算，不能更改结论");
-    await transaction.update(tasks).set({ stage, updatedAt }).where(eq(tasks.id, taskId));
+    // 自报 merged / accepted 也是一次新的验收（上面已挡住本来就盖着章的），同样领一个身份（db/schema.ts acceptanceId）。
+    const acceptanceId = stage === "merged" || stage === "accepted" ? { acceptanceId: id() } : {};
+    await transaction.update(tasks).set({ stage, ...acceptanceId, updatedAt }).where(eq(tasks.id, taskId));
   });
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
   const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);
@@ -127,6 +129,8 @@ export type AcceptedSnapshot = {
   tailPending: boolean;
   /** 尾段逐站进度（step id 清单）；缺省 = 旧版基线，按空清单恢复。 */
   tailDone?: string[];
+  /** 这是哪一次验收（db/schema.ts acceptanceId）；缺省 = 旧版基线或加列之前的验收，按空恢复。 */
+  acceptanceId?: string | null;
 };
 export type ReopenedAcceptance = { stage: "accepted" | "merged"; snapshot: AcceptedSnapshot };
 
@@ -151,6 +155,7 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
     gateRunId: tasks.acceptedGateRunId,
     tailPending: tasks.acceptedTailPending,
     tailDone: tasks.acceptedTailDone,
+    acceptanceId: tasks.acceptanceId,
   }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || (t.stage !== "accepted" && t.stage !== "merged")) return null;
   let tailDone: string[] = [];
@@ -163,6 +168,7 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
       method: t.method, pendingTree: t.pendingTree,
       gateMode: t.gateMode, gateRunId: t.gateRunId,
       tailPending: t.tailPending, tailDone,
+      ...(t.acceptanceId ? { acceptanceId: t.acceptanceId } : {}),
     },
   };
 }
@@ -187,7 +193,7 @@ export async function clearAcceptedSnapshot(taskId: string): Promise<void> {
     acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
     acceptedMergeMethod: null, acceptedPendingTree: null,
     acceptedGateMode: null, acceptedGateRunId: null,
-    acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now(),
+    acceptedTailPending: false, acceptedTailDone: "[]", acceptanceId: null, updatedAt: now(),
   }).where(eq(tasks.id, taskId));
 }
 
@@ -228,6 +234,7 @@ export async function restoreTaskStage(
       acceptedGateRunId: snapshot.gateRunId ?? null,
       acceptedTailPending: snapshot.tailPending,
       acceptedTailDone: JSON.stringify(snapshot.tailDone ?? []),
+      acceptanceId: snapshot.acceptanceId ?? null,
     } : {}),
     updatedAt,
   }).where(eq(tasks.id, taskId));

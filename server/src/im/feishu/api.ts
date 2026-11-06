@@ -25,9 +25,13 @@ export interface FeishuApiOptions {
   deps?: Partial<ApiDeps>;
 }
 
+/**
+ * stage: "token" = 败在取 tenant_access_token 这一步，这条消息本身根本没发出去（凭证被轮换、应用停用……）。
+ * 那是应用凭证的问题，不是这条消息的定论：调用方不能据此把消息判死、把卡判成改不了（outbox.ts）。
+ */
 export type ApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; code: number; msg: string; retryable: boolean; throttled?: boolean };
+  | { ok: false; code: number; msg: string; retryable: boolean; throttled?: boolean; stage?: "token" };
 
 export interface SentMessage {
   messageId: string;
@@ -39,6 +43,9 @@ export type ReceiveIdType = "open_id" | "chat_id";
 // 4xx 里只有限流值得重试；鉴权、权限、参数错误重试多少次都一样。
 const RATE_LIMIT_CODES = new Set([99991400, 11232, 230020]);
 const TOKEN_INVALID_CODES = new Set([99991661, 99991663, 99991668]);
+// 回复的那条消息没了：撤回了（230011）、话题不在了（230019）、机器人看不到它了（230050）、它快自毁了（230111）。
+// 锚点没了不等于去处没了 —— 会话还在，调用方改成直接发进同一个会话（outbox.ts）。
+const ANCHOR_GONE_CODES = new Set([230011, 230019, 230050, 230111]);
 // 被额度闸拦下的调用：不重试（下一次对账会再判一遍）。
 const QUOTA_BLOCKED = -1;
 
@@ -46,6 +53,8 @@ export class FeishuApi {
   private readonly deps: ApiDeps;
   private token: { value: string; expiresAt: number } | null = null;
   private tokenInflight: Promise<ApiResult<string>> | null = null;
+  /** 最近一次取 token 失败的原因（取成功就清掉）：通道状态里报出来，消息积压着不发时看得到是为什么。 */
+  tokenError: string | null = null;
 
   constructor(private readonly options: FeishuApiOptions) {
     this.deps = { fetch: (...args) => fetch(...args), now: () => Date.now(), ...options.deps };
@@ -59,9 +68,16 @@ export class FeishuApi {
       const res = await this.raw("POST", "/open-apis/auth/v3/tenant_access_token/internal", {
         app_id: this.options.appId, app_secret: this.options.appSecret,
       }, null);
-      if (!res.ok) return res;
+      if (!res.ok) {
+        this.tokenError = `取飞书 tenant_access_token 失败：${res.code} ${res.msg}`.slice(0, 300);
+        return { ...res, stage: "token" };
+      }
       const body = res.data as { tenant_access_token?: string; expire?: number };
-      if (!body.tenant_access_token) return { ok: false, code: 0, msg: "没拿到 tenant_access_token", retryable: true };
+      if (!body.tenant_access_token) {
+        this.tokenError = "取飞书 tenant_access_token 失败：响应里没有 token";
+        return { ok: false, code: 0, msg: "没拿到 tenant_access_token", retryable: true, stage: "token" };
+      }
+      this.tokenError = null;
       // 提前 5 分钟换：飞书在过期前半小时内重新取会拿到新 token，旧的同时仍有效。
       const ttl = Math.max(60, (body.expire ?? 7200) - 300) * 1000;
       this.token = { value: body.tenant_access_token, expiresAt: this.deps.now() + ttl };
@@ -105,7 +121,8 @@ export class FeishuApi {
     try {
       json = await response.json();
     } catch {
-      return { ok: false, code: response.status, msg: `HTTP ${response.status}，响应不是 JSON`, retryable: response.status >= 500 };
+      // 飞书自己的业务错误总是 JSON；不是 JSON 的几乎都出自网关、代理（429、408、5xx、断在半截的响应），一律当暂时的。
+      return { ok: false, code: response.status, msg: `HTTP ${response.status}，响应不是 JSON`, retryable: true, throttled: response.status === 429 };
     }
     const code = Number(json?.code ?? (response.ok ? 0 : response.status));
     if (code !== 0) {
@@ -213,6 +230,16 @@ function blocked<T>(): ApiResult<T> {
 
 export function isQuotaBlocked(result: ApiResult<unknown>): boolean {
   return !result.ok && result.code === QUOTA_BLOCKED;
+}
+
+/** 回复失败是因为被回复的那条消息没了（ANCHOR_GONE_CODES）。 */
+export function isAnchorGone(result: ApiResult<unknown>): boolean {
+  return !result.ok && ANCHOR_GONE_CODES.has(result.code);
+}
+
+/** 败在取 token（见 ApiResult.stage）。 */
+export function isTokenFailure(result: ApiResult<unknown>): boolean {
+  return !result.ok && result.stage === "token";
 }
 
 function errorEnvelopeOf(bytes: Uint8Array): { code: number; msg: string } | null {

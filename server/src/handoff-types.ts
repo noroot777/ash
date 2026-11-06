@@ -292,6 +292,9 @@ export interface HandoffManifest {
     // **acceptedPendingTree 不带**：那是本机项目目录索引的内容指纹,搬到另一台机器上没有
     // 任何可核对的对象,带过去只会让对端拿一个假指纹去判「还躺着没提交」。
     acceptedMergeMethod?: string | null;
+    // 这是哪一次验收（db/schema.ts acceptanceId）：跟着那几样合并事实一起走。移回时整行覆盖，不带的话本机的旧
+    // 身份配上对端的新验收，飞书那边认不出是新的一次。
+    acceptanceId?: string | null;
     pinnedAt: number | null;
     starredAt: number | null;
     createdAt: string;

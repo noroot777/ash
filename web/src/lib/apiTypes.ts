@@ -424,7 +424,7 @@ export type AcceptTaskFailure = {
     id: string;
     title: string;
     status: string;
-    role: "task" | "shared_worker";
+    role: "task" | "shared_worker" | "workspace_peer";
   }[];
   warnings?: AcceptTaskWarning[];
   conflictHandoff?: { notified: boolean; message: string };

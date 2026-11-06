@@ -89,6 +89,7 @@ const UNBOUNDED_WAIT_ROLES = new Set([
   "handoff",   // 等打包 worktree 并传给对端
   "scm",       // 等 SCM 面板那一串 git 操作
   "reconcile", // 诊断路径自己的预占
+  "accept-hold", // 团队验收占着这一队:等合并、门禁判定、发布尾段(turn-lock.ts ACCEPT_HOLD_ROLE)
 ]);
 
 export type SuspectTurn = {

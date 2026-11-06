@@ -381,6 +381,7 @@ async function importValidated(
     acceptedMergeMethod: m.task.acceptedMergeMethod ?? null,
     acceptedGateMode: m.task.acceptedGateMode ?? null,
     acceptedGateRunId: m.task.acceptedGateRunId ?? null,
+    acceptanceId: m.task.acceptanceId ?? null,
     pinnedAt: m.task.pinnedAt,
     starredAt: m.task.starredAt,
     createdAt: m.task.createdAt,

@@ -11,7 +11,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imOutbox } from "../db/schema-im.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
-import { taskPath, type AshClient } from "./ash-client.js";
+import { failureOf, taskPath, type AshClient } from "./ash-client.js";
 import { updateBinding, type BindingRow } from "./binding.js";
 import { confirmCard, taskLink, todoText } from "./cards.js";
 import { createEnvelope } from "./envelopes.js";
@@ -155,15 +155,19 @@ export class CommandRunner {
     await this.scoped(ctx, { kind: "digest", rowIds: shown.slice(0, 15).map((row) => row.id) }));
   }
 
-  private async projects(ctx: InboundContext): Promise<Project[]> {
+  /** 他看得到的项目。没读到就是没读到（返回 null，已回过一句说明）：不能当成「一个都看不到」去答。 */
+  private async projects(ctx: InboundContext): Promise<Project[] | null> {
     const result = await this.deps.ash.get<Project[]>(ctx.principal, "/api/projects");
-    return result.ok && Array.isArray(result.data) ? result.data : [];
+    if (result.ok) return Array.isArray(result.data) ? result.data : [];
+    await this.say(ctx, `这一下没读到你的项目列表（${scrubText(result.error, 120)}）：请稍后再试。`, await this.answered(ctx, {}));
+    return null;
   }
 
   /** 他能看哪些项目、他的当前项目是哪个：只属于他本人，只在单聊里答。 */
   private async project(ctx: InboundContext, rest: string): Promise<void> {
     if (ctx.chatType !== "p2p") return this.say(ctx, "/project 请在和我的单聊里用：它会列出你个人能看到的项目。", SYSTEM_SCOPE);
     const list = await this.projects(ctx);
+    if (!list) return;
     const mine = await this.scoped(ctx, { kind: "principal" });
     if (!rest) {
       if (!list.length) return this.say(ctx, "你还看不到任何项目。", SYSTEM_SCOPE);
@@ -190,7 +194,9 @@ export class CommandRunner {
     const inGroup = ctx.chatType !== "p2p";
     const projectId = inGroup ? (await groupOf(this.deps.appId, ctx.chatId))?.projectId ?? null : ctx.binding.projectId;
     if (inGroup && !projectId) return this.say(ctx, "这个群还没绑定 ash 项目：先在 ash 网页 设置 → 飞书 → 群 里绑定，或者在单聊里用 /new。", SYSTEM_SCOPE);
-    const project = projectId ? (await this.projects(ctx)).find((item) => item.id === projectId) : undefined;
+    const list = projectId ? await this.projects(ctx) : [];
+    if (!list) return;
+    const project = list.find((item) => item.id === projectId);
     if (!project) {
       return this.say(ctx, inGroup ? "你看不到这个群绑定的项目，建不了任务。" : "还没选当前项目（或你已经看不到它了）：先发 /project 选一个。", SYSTEM_SCOPE);
     }
@@ -213,6 +219,11 @@ export class CommandRunner {
       const created = await this.deps.ash.post<{ id: string }>(principal, "/api/tasks", {
         projectId: payload.projectId, title: payload.title, body: payload.body,
       });
+      // 请求本身被拒（参数、权限）才放回信封让他再点；5xx、没调通的任务可能已经建出来了，再点一下就是第二个：
+      // 按「办完了、结局不明」收起，跟 ash 重启打断确认卡同一个说法（actions.ts recoverOne）。
+      if (!created.ok && failureOf(created) === "transient") {
+        return { ok: true, final: true, tone: "orange", text: `不确定建成没有（${scrubText(created.error, 120)}）：请在 ash 里看一眼，需要的话重新发 /new。` };
+      }
       if (!created.ok) return { ok: false, text: scrubText(created.error, 300), final: false };
       // 任务已经建出来了：后面再出什么错都不能算「没办成」—— 那会放回信封，再点一下就又建一个。
       const run = await this.deps.ash.post(principal, taskPath(created.data.id, "/run"));

@@ -39,6 +39,7 @@ import { execFileText as exec } from "./exec.js";
 import { gitError } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { beginAccepting, endAccepting } from "./acceptance-lock.js";
+import { holdTeamForAcceptance } from "./team-acceptance-hold.js";
 import { acceptanceGuard } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -313,7 +314,9 @@ export async function commitPendingMerge(taskId: string): Promise<PendingMergeAc
   if (!beginAccepting(taskId)) {
     return { ok: false, httpStatus: 409, reason: "acceptance_in_progress", error: "该任务正在验收中，等它结束再试" };
   }
+  let releaseHold = () => {};
   try {
+    releaseHold = await holdTeamForAcceptance(taskId); // 同验收：团队占住全队再查再动手（team-acceptance-hold.ts）
     const guard = await acceptanceGuard(taskId, "before_merge");
     if (guard.failure) {
       return { ok: false, httpStatus: guard.failure.httpStatus, reason: guard.failure.reason, error: guard.failure.error };
@@ -358,7 +361,8 @@ export async function commitPendingMerge(taskId: string): Promise<PendingMergeAc
       } as PendingMergeActionResult;
     });
   } finally {
-    endAccepting(taskId);
+    endAccepting(taskId); // 先摘互斥再放占位，理由同 acceptTask
+    releaseHold();
   }
 }
 
@@ -378,7 +382,9 @@ export async function remergePendingMerge(
   if (!beginAccepting(taskId)) {
     return { ok: false, httpStatus: 409, reason: "acceptance_in_progress", error: "该任务正在验收中，等它结束再试" };
   }
+  let releaseHold = () => {};
   try {
+    releaseHold = await holdTeamForAcceptance(taskId); // 同验收：团队占住全队再查再动手（team-acceptance-hold.ts）
     const guard = await acceptanceGuard(taskId, "before_merge");
     if (guard.failure) {
       return { ok: false, httpStatus: guard.failure.httpStatus, reason: guard.failure.reason, error: guard.failure.error };
@@ -427,7 +433,8 @@ export async function remergePendingMerge(
       } as PendingMergeActionResult;
     });
   } finally {
-    endAccepting(taskId);
+    endAccepting(taskId); // 先摘互斥再放占位，理由同 acceptTask
+    releaseHold();
   }
 }
 

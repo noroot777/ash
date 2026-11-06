@@ -69,6 +69,11 @@ export const INBOUND_DONE = (t: { id: string; title: string }) =>
 export const LEAD_NUDGE =
   `〔系统〕用户点了「继续」把你唤醒。看一眼有没有需要跟进的事(执行者状态、没答的问题、没派完的活),有就接着干,没有就说明当前进展并结束回合。`;
 
+// 团队验收期间调度台不在线、执行者消息被挡在外面的,验收结束补开一次台时的那句话(team/session.ts
+// resumeLeadAfterAcceptance)。攒着的消息由新的一台认领,这一轮收尾时合并送进来。
+export const LEAD_AFTER_ACCEPTANCE =
+  `〔系统〕团队刚验收完。验收期间有执行者消息没能送进来,这一轮结束后会合并补送给你;这一轮不用做别的,直接结束回合。`;
+
 // 调度台被中断(server 重启 / 手动停止 / 进程回收)后,再次被唤醒时的开场提示。
 export const LEAD_RESUMED =
   `〔系统〕你的进程之前被中断过(服务重启、被手动停止、或长时间空闲被回收),现在已经用同一个会话把你接回来了。上下文都还在,接着下面这条消息处理即可。\n\n`;

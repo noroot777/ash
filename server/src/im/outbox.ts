@@ -19,7 +19,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-
 import { db } from "../db/index.js";
 import { imOutbox } from "../db/schema-im.js";
 import { now } from "../util.js";
-import { isQuotaBlocked, type FeishuApi } from "./feishu/api.js";
+import { isAnchorGone, isQuotaBlocked, isTokenFailure, type FeishuApi } from "./feishu/api.js";
 import type { ImPurpose } from "./quota.js";
 
 export type OutboxRow = typeof imOutbox.$inferSelect;
@@ -34,6 +34,8 @@ export interface Destination {
 const SPACING_MS = 220;
 const BACKOFF_MS = [5_000, 30_000, 120_000, 600_000, 1_800_000, 3_600_000];
 const QUOTA_RETRY_MS = 30 * 60_000;
+// 取 token 失败（凭证被轮换、应用停用）：不算这一条的尝试次数，隔一阵再试；凭证修好后积压的自然发出去、改过来。
+const TOKEN_RETRY_MS = 5 * 60_000;
 
 /** 决策卡（带按钮、要人拍板）的 kind。 */
 export const DECISION_OUTBOX_KINDS = ["question", "failed", "dispute", "duet_gate", "accept", "confirm", "summary"] as const;
@@ -175,12 +177,28 @@ export class OutboxSender {
     }
   }
 
+  /** 这一行要发 / 要改成的内容。解析不了就标成放弃、记下原因（返回 undefined）：一行坏的每圈都抛错，会把后面整条队列卡住。 */
+  private async contentOf(row: OutboxRow, mode: "send" | "patch"): Promise<unknown> {
+    try {
+      return JSON.parse(row.content) as unknown;
+    } catch (error) {
+      const lastError = `内容解析不了：${(error as Error).message}`.slice(0, 500);
+      console.warn(`[ash] 飞书${mode === "send" ? "消息放弃发送" : "卡片放弃改写"}（${row.kind} ${row.taskId ?? ""}）：${lastError}`);
+      await db.update(imOutbox).set(mode === "send" ? { state: "dead", nextAt: null, lastError, updatedAt: now() } : { patchState: "skipped", lastError, updatedAt: now() })
+        .where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, row.content)));
+      return undefined;
+    }
+  }
+
   private async sendOne(row: OutboxRow): Promise<void> {
-    const msg = { msgType: row.msgType as "interactive" | "text", content: JSON.parse(row.content) as unknown };
+    const content = await this.contentOf(row, "send");
+    if (content === undefined) return;
+    const msg = { msgType: row.msgType as "interactive" | "text", content };
     const purpose = purposeOfKind(row.kind);
-    const res = row.replyTo
-      ? await this.api.reply(row.replyTo, msg, row.id, purpose, row.replyInThread === 1)
-      : await this.api.send({ type: row.receiveType as "open_id" | "chat_id", id: row.receiveId }, msg, row.id, purpose);
+    const to = { type: row.receiveType as "open_id" | "chat_id", id: row.receiveId };
+    let res = row.replyTo ? await this.api.reply(row.replyTo, msg, row.id, purpose, row.replyInThread === 1) : await this.api.send(to, msg, row.id, purpose);
+    // 被回复的那条撤回了、看不到了：不带锚点直接发进同一个会话（另一个 uuid：飞书按 uuid 判重，别跟那次失败的回复撞上）。
+    if (row.replyTo && isAnchorGone(res)) res = await this.api.send(to, msg, `a${row.id}`, purpose);
     const at = now();
     if (res.ok) {
       // 发出去的这段时间里它可能已经被收掉（resolved）、或者重渲染过：库里那份才是该有的样子，
@@ -202,8 +220,9 @@ export class OutboxSender {
       }).where(eq(imOutbox.id, row.id));
       return;
     }
-    if (isQuotaBlocked(res)) {
-      await db.update(imOutbox).set({ nextAt: new Date(this.clock.now() + QUOTA_RETRY_MS).toISOString(), lastError: res.msg, updatedAt: at })
+    if (isQuotaBlocked(res) || isTokenFailure(res)) {
+      const wait = isTokenFailure(res) ? TOKEN_RETRY_MS : QUOTA_RETRY_MS;
+      await db.update(imOutbox).set({ nextAt: new Date(this.clock.now() + wait).toISOString(), lastError: res.msg, updatedAt: at })
         .where(eq(imOutbox.id, row.id));
       return;
     }
@@ -222,7 +241,9 @@ export class OutboxSender {
   private async patchOne(row: OutboxRow): Promise<void> {
     const purpose: ImPurpose = row.patchState === "result" || row.patchState === "acking" ? "result" : row.state === "resolved" ? "resolved" : "decision";
     const snapshot = row.content;
-    const res = await this.api.patchCard(row.messageId!, JSON.parse(snapshot), purpose);
+    const card = await this.contentOf(row, "patch");
+    if (card === undefined) return;
+    const res = await this.api.patchCard(row.messageId!, card, purpose);
     const at = now();
     if (res.ok) {
       // 改卡期间 content 又变了（又一次对账）：CAS 落空，保持待改，下一圈再改一次。
@@ -233,6 +254,13 @@ export class OutboxSender {
     const lastError = `${res.code} ${res.msg}`.slice(0, 500);
     if (isQuotaBlocked(res)) {
       await db.update(imOutbox).set({ patchState: "skipped", lastError, updatedAt: at }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot)));
+      return;
+    }
+    if (isTokenFailure(res)) {
+      await db.update(imOutbox).set({
+        lastError, updatedAt: at, nextAt: new Date(this.clock.now() + TOKEN_RETRY_MS).toISOString(),
+        ...(row.patchState === "acking" ? { patchState: "result" } : {}),
+      }).where(eq(imOutbox.id, row.id));
       return;
     }
     const attempts = row.attempts + 1;

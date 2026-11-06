@@ -296,13 +296,16 @@ try {
   // ── ⑤ 解析 / 脱敏 / 命令 / 绑定码 / 多题答复 ─────────────────────────────
   {
     const mentions = [{ key: "@_user_1", openId: "ou_bot" }];
-    assert.deepEqual(parseMessage("text", JSON.stringify({ text: "@_user_1  帮我看看" }), mentions), { text: "帮我看看", attachments: [], supported: true });
+    assert.deepEqual(parseMessage("text", JSON.stringify({ text: "@_user_1 帮我看看" }), mentions), { text: "帮我看看", attachments: [], supported: true });
     const post = parseMessage("post", JSON.stringify({ zh_cn: { title: "标题", content: [[{ tag: "text", text: "第一行" }, { tag: "img", image_key: "img_1" }], [{ tag: "a", text: "链接" }]] } }), []);
     assert.equal(post.text, "标题\n第一行\n链接");
     assert.deepEqual(post.attachments, [{ kind: "image", key: "img_1", name: null }]);
     assert.deepEqual(parseMessage("file", JSON.stringify({ file_key: "f1", file_name: "a.pdf" }), []).attachments, [{ kind: "file", key: "f1", name: "a.pdf" }]);
     assert.equal(parseMessage("sticker", "{}", []).supported, false);
-    assert.equal(parseMessage("text", "不是 JSON", []).text, "");
+    // 解析不了不当空消息：标出来，让收件的一侧叫他重发（认不得的类型照旧是「不支持」）。
+    assert.deepEqual(parseMessage("text", "不是 JSON", []), { text: "", attachments: [], supported: true, unreadable: true });
+    assert.equal(parseMessage("image", "", []).unreadable, true);
+    assert.equal(parseMessage("sticker", "不是 JSON", []).supported, false);
 
     const scrubbed = scrubText("key=sk-abcdefghijklmnopqrstuvwxyz0123 <at id=all></at> 全体 t-abcdefghijklmnopqrstuvwxyz");
     assert.equal(scrubbed.includes("abcdefghijklmnopqrstuvwxyz"), false, `密钥要抹掉：${scrubbed}`);

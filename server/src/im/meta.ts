@@ -33,14 +33,32 @@ export const DEFAULT_OPTIONS: ImOptions = {
 
 const OPTIONS_KEY = "options";
 let cached: ImOptions | null = null;
+let corrupt: string | null = null;
 
+/**
+ * 存着的选项坏了（不是 JSON、不是对象、「只推标题」那张单子不是数组）不能按默认值来：默认是「全文都推」，
+ * 设成只推标题的项目会开始推全文，发出去就收不回。坏了就先关掉通道（enabled: false），设置页报出原因
+ * （optionsError），管理员重新保存一次选项就好了。坏的那份不缓存，库里修好了下一次就读得到。
+ */
 export async function readOptions(): Promise<ImOptions> {
   if (cached) return cached;
   const raw = await readMeta(OPTIONS_KEY);
-  let parsed: Partial<ImOptions> = {};
-  try { parsed = raw ? JSON.parse(raw) : {}; } catch { /* 坏了就按默认 */ }
-  cached = normalizeOptions({ ...DEFAULT_OPTIONS, ...parsed });
+  let parsed: unknown = {};
+  try { parsed = raw ? JSON.parse(raw) : {}; } catch { parsed = null; }
+  const shaped = !!parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    && (!("titleOnlyProjectIds" in parsed) || Array.isArray((parsed as ImOptions).titleOnlyProjectIds));
+  if (!shaped) {
+    corrupt = "存着的飞书选项读不懂，已先停掉推送：请核对下面各项设置后重新打开。";
+    return { ...DEFAULT_OPTIONS, enabled: false };
+  }
+  corrupt = null;
+  cached = normalizeOptions({ ...DEFAULT_OPTIONS, ...(parsed as Partial<ImOptions>) });
   return cached;
+}
+
+/** 选项坏着的话是什么原因（设置页显示）；没坏为 null。 */
+export function optionsError(): string | null {
+  return corrupt;
 }
 
 const URL_RE = /^https?:\/\/[^\s/?#]+(?::\d+)?(?:\/[^\s?#]*)?$/i;
@@ -92,10 +110,12 @@ export async function patchOptions(patch: Record<string, unknown>): Promise<{ er
   const normalized = normalizeOptions(next);
   await writeMeta(OPTIONS_KEY, JSON.stringify(normalized));
   cached = normalized;
+  corrupt = null;
   return { options: normalized };
 }
 
 /** 测试换库后清缓存用。 */
 export function resetOptionsCache(): void {
   cached = null;
+  corrupt = null;
 }

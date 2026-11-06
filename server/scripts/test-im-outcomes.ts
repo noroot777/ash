@@ -5,11 +5,17 @@
 //    → 门禁过了也不验收（延期的那次验收带着同一版身份）；团队调度台自己又跑一轮也算新结果；
 // ② 重试：按钮按下去之后任务又失败了一次 → 不重试；/retry 只认回复在失败卡上；
 // ③ 通知：飞书上点验收成功 → 回一条「已验收合并」；门禁通过 / 没通过各一条；重复对账不重发；同一次验收
-//    摘牌挂回、再跑一轮不重发；第一次看到的任务不补推；「完成也推」关着只记账，再打开也不补推；事件丢了由
+//    摘牌挂回、再跑一轮不重发，就地任务真的再验收一次照样推；第一次看到的任务不补推；「完成也推」关着只记账，再打开也不补推；事件丢了由
 //    全量对账补上；
 // ④ 房间：同一个人在群里 / 单聊里同时发两句，只留一间、两句都进那一间（多建的删掉）；群这期间换了绑定 →
 //    不落映射；群列表照实标出哪个群在收卡、看的人能不能改；
-// ⑤ @ 占位去掉之后，正文的缩进原样。
+//    读房间只是这一下没读到（500）→ 不换房间、映射原样，这句不投、叫他再发；等回复时读不到 → 下一圈再看，
+//    房间真没了（404）才说没拿到回复；库里的按钮记录坏了 → 拒掉、不按空的去验收；飞书传来的正文解析不了 →
+//    叫他重发；发件队列里一行坏的 → 标成放弃、后面的照发；
+// ⑤ @ 占位去掉之后，正文的缩进原样；
+// ⑥ 团队验收占住全队（team-acceptance-hold.ts）：占着的时候共享执行者起不了跑、改不了状态、加不了新执行者、
+//    别人带 force 也写不了工作区、调度台不在线时用户的话不开台；验收自己的守卫不把这份占位当成在飞；占住之后
+//    调度台又跑了一轮 → 之后每道守卫都拒；放开之后一切照旧。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -37,7 +43,7 @@ let failure: unknown = null;
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { acceptGateRuns, chatRooms, projects, sessions, sessionTurns, tasks } = await import("../src/db/schema.js");
-  const { imBindings, imGroups, imOutbox, imOutcomes } = await import("../src/db/schema-im.js");
+  const { imActions, imBindings, imGroups, imInbound, imOutbox, imOutcomes } = await import("../src/db/schema-im.js");
   const { and, desc, eq, like } = await import("drizzle-orm");
   const { api } = await import("../src/routes.js");
   const { mountTaskAcceptanceRoutes } = await import("../src/task-accept-routes.js");
@@ -52,6 +58,12 @@ try {
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { resultVersionOf } = await import("../src/task-result-version.js");
   const { viewsOf } = await import("../src/im/attention.js");
+  const { commitReopenAcceptedStage, peekAcceptedStage, reopenAcceptedStage, restoreTaskStage } = await import("../src/task-stage.js");
+  const { holdDrift, holdMembers, holdTeamForAcceptance } = await import("../src/team-acceptance-hold.js");
+  const { claimOwnTurn, heldForAcceptance, isTurnClaimed, releaseTurn } = await import("../src/runs.js");
+  const { acceptanceGuard } = await import("../src/task-accept-guard.js");
+  const { claimWorkspaceWrite, ACCEPTING_REFUSAL } = await import("../src/workspace-write-gate.js");
+  const { deliverToLead } = await import("../src/team/session.js");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf } = await import("./im-fixture.js");
 
   await ensureSchema();
@@ -120,22 +132,36 @@ try {
     await im.settle();
     assert.equal((await noticesOf("ta")).length, 1, "重复对账不重发");
 
-    // 同一次验收：摘牌又原样挂回（问了一句、没改东西），已验收时又跑了一轮旁路回合 —— 结束时刻都变了，不再推。
-    await db.update(tasks).set({ stage: null, status: "running", endedAt: null }).where(eq(tasks.id, "ta"));
+    // 同一次验收：摘牌又原样挂回（问了一句、没改东西：生产的 peek → 摘牌 → 挂回），已验收时又跑了一轮旁路
+    // 回合，事后又补记了一笔合并事实 —— 结束时刻、合并事实都变了，还是那一次，不再推。
+    const firstAcceptance = (await taskRow("ta")).acceptanceId;
+    assert.ok(firstAcceptance, "落下验收章就领了一个身份");
+    const peeked = (await peekAcceptedStage("ta"))!;
+    await commitReopenAcceptedStage("ta");
+    assert.equal((await taskRow("ta")).acceptanceId, null, "摘牌连身份一起摘掉");
+    await db.update(tasks).set({ status: "running", endedAt: null }).where(eq(tasks.id, "ta"));
     await im.reconciler.reconcile(["ta"]);
-    await db.update(tasks).set({ stage: "accepted", status: "done", endedAt: later(80) }).where(eq(tasks.id, "ta"));
+    await db.update(tasks).set({ status: "done", endedAt: later(80) }).where(eq(tasks.id, "ta"));
+    assert.ok(await restoreTaskStage("ta", peeked.stage, "这一轮没改东西，验收章原样挂回。", peeked.snapshot));
+    assert.equal((await taskRow("ta")).acceptanceId, firstAcceptance, "原样挂回：身份随快照回来");
     await im.reconciler.reconcile(["ta"]);
     await db.update(tasks).set({ status: "running", endedAt: null }).where(eq(tasks.id, "ta"));
     await im.reconciler.reconcile(["ta"]);
-    await db.update(tasks).set({ status: "done", endedAt: later(90) }).where(eq(tasks.id, "ta"));
+    await db.update(tasks).set({ status: "done", endedAt: later(90), acceptedMergeCommit: "c0ffee" }).where(eq(tasks.id, "ta"));
     await im.reconciler.reconcile(["ta"]);
     await im.settle();
-    assert.equal((await noticesOf("ta")).length, 1, "同一次验收：摘牌挂回、再跑一轮都不重推");
-    // 真的又验收了一次（落章事实换了）：再推一条。
-    await db.update(tasks).set({ acceptedMergeCommit: "c0ffee" }).where(eq(tasks.id, "ta"));
+    assert.equal((await noticesOf("ta")).length, 1, "同一次验收：摘牌挂回、再跑一轮、补记合并事实都不重推");
+    // 改出新的一版、真的再验收一次（就地任务：落下的合并事实和上一次一模一样）：再推一条。
+    await reopenAcceptedStage("ta");
+    await db.update(tasks).set({ title: "改过的第三版", acceptedMergeCommit: null, endedAt: later(95) }).where(eq(tasks.id, "ta"));
     await im.reconciler.reconcile(["ta"]);
     await im.settle();
+    const again = await openCard("ta", "accept");
+    assert.match(JSON.stringify(await press(im.actions, buttonOf(again, "accept").value!)), /已验收合并/);
+    await im.settle();
+    assert.notEqual((await taskRow("ta")).acceptanceId, firstAcceptance, "新的一次验收换了身份");
     assert.equal((await noticesOf("ta")).length, 2, "新的一次验收再推一条");
+    assert.match(await noticeText("ta"), /已验收合并：「改过的第三版」/);
   }
 
   // ── ① 续：团队调度台自己又跑了一轮，成果就换了一版 ─────────────────────
@@ -153,6 +179,39 @@ try {
     await db.insert(sessionTurns).values({ id: "turn-lead", sessionId: "s-lead", taskId: "tlead", startedAt: later(120) } as never);
     assert.equal(await resultVersionOf(lead), later(120), "调度台自己又跑了一轮：成果换了一版，旧卡上的验收不再算数");
     assert.equal((await viewsOf(["tlead"])).get("tlead")!.turn?.generation, `a:${later(120)}`);
+
+    // ⑥ 团队验收占住全队。开独立 worktree 的执行者不在占位里（改不到团队的目录，验收也不给它盖章）。
+    await db.insert(tasks).values({ id: "tsolo", projectId: "p1", parentId: "tlead", title: "独立执行者", body: "", mode: "single", status: "done", useWorktree: true, endedAt: later(90), createdAt: at, updatedAt: at } as never);
+    const release = await holdTeamForAcceptance("tlead");
+    assert.deepEqual([...holdMembers("tlead")].sort(), ["tlead", "tworker"], "占住的是调度台和共享执行者");
+    assert.ok(heldForAcceptance("tworker") && !heldForAcceptance("tsolo"));
+    assert.equal(claimOwnTurn("tworker", "single"), null, "验收期间共享执行者起不了新的一轮");
+    const busyAnswer = await app.request("/api/tasks/tworker", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "backlog" }) });
+    assert.equal(busyAnswer.status, 409, "改回 backlog 也等验收结束");
+    assert.match(JSON.stringify(await busyAnswer.json()), /所属团队正在验收/);
+    const addWorker = await app.request("/api/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId: "p1", parentId: "tlead", title: "后加的", body: "x" }) });
+    assert.equal(addWorker.status, 409, "验收期间加不了执行者：新来的不在占位里");
+    assert.match(JSON.stringify(await addWorker.json()), /所属团队正在验收/);
+    const peers = [{ id: "tlead", status: "idle" }, { id: "tworker", status: "done" }] as never;
+    const context = { task: await taskRow("tlead"), root: { path: stage, source: "worktree" }, peers, busy: null } as never;
+    await assert.rejects(claimWorkspaceWrite({
+      taskId: "tlead", context, forced: true,
+      busyError: (who) => new Error(who), archivedError: (message) => new Error(message), missingError: () => new Error("missing"),
+    }), (error: Error) => error.message === ACCEPTING_REFUSAL, "别人带 force 也写不了被验收占着的工作区");
+    assert.equal(await deliverToLead("tlead", "验收中插一句"), false, "调度台不在线：验收期间不开台，话退回托盘");
+    assert.equal((await acceptanceGuard("tlead", "before_merge")).failure, null, "验收自己的守卫不把这份占位当成在飞");
+    // 占住之后调度台 CLI 自己又起了一轮：之后每道守卫都拒（进门那一道由卡片上的版本核）。
+    await db.insert(sessionTurns).values({ id: "turn-lead-2", sessionId: "s-lead", taskId: "tlead", startedAt: later(130) } as never);
+    assert.match((await holdDrift("tlead")) ?? "", /验收途中团队又跑出了新的结果/);
+    const drifted = (await acceptanceGuard("tlead", "before_merge")).failure;
+    assert.equal(drifted?.reason, "result_changed", "成果变了：这一次不验收");
+    release();
+    assert.equal(holdMembers("tlead").size, 0);
+    assert.equal(await holdDrift("tlead"), null);
+    assert.ok(!isTurnClaimed("tworker"), "放开之后不再占着");
+    const after = claimOwnTurn("tworker", "single");
+    assert.ok(after, "验收结束：执行者照常起跑");
+    releaseTurn("tworker", after!);
   }
 
   // ── ② 旧失败上的重试 ─────────────────────────────────────────────────────
@@ -303,11 +362,14 @@ try {
       return async () => { if (++arrivals === 2) both(); await ready; };
     };
     let meet = rendezvous();
+    /** 读单间房间时回 500（库忙、chat 那边抛了），模拟「这一下没读到」。 */
+    let flaky = false;
     const relay = new RoomRelay({
       appId: APP, commands: im.commands,
       ash: {
         get: async (who: typeof principal, path: string) => {
           if (path.startsWith("/api/chats?")) { await meet(); return im.ash.get(who, path as `/api/${string}`); }
+          if (flaky) return { ok: false, status: 500, error: "database is locked", data: {} };
           const id = decodeURIComponent(path.split("/").pop()!);
           const room = (await db.select().from(chatRooms).where(eq(chatRooms.id, id))).at(0);
           return room ? { ok: true, status: 200, data: { room: { projectId: room.projectId, members: JSON.parse(room.members) } } } : { ok: false, status: 404, error: "chat not found", data: {} };
@@ -356,6 +418,36 @@ try {
     await sleep(100);
     const assistants = await db.select().from(chatRooms).where(and(eq(chatRooms.kind, "assistant"), like(chatRooms.id, "race-room-%")));
     assert.equal(assistants.length, 1, "多建的助手房间删掉了");
+
+    // 读房间只是这一下没读到：不换房间。换了的话旧房间里还在路上的回复，出口就不认了（只认映射上那一间）。
+    flaky = true;
+    const created = serial;
+    const blip = await relay.assistantRoom({ ...p2p, binding: (await bindingOf(APP, OWNER))! });
+    assert.match(typeof blip === "string" ? blip : blip.error, /这一下没读到你的助手房间/, "读不到：这句不投，叫他再发");
+    assert.equal((await bindingOf(APP, OWNER))!.assistantRoomId, rooms[0], "映射原样");
+    await relay.groupRoom(ctx, (await groupOf(APP, "oc_race"))!);
+    flaky = false;
+    const groupRoom = await groupRoomOf(APP, "oc_race", "");
+    assert.ok(groupRoom, "群里先建一间");
+    flaky = true;
+    const groupBlip = await relay.groupRoom(ctx, (await groupOf(APP, "oc_race"))!);
+    assert.match("error" in groupBlip ? groupBlip.error : "", /这一下没读到你在这个群的房间/);
+    assert.equal(await groupRoomOf(APP, "oc_race", ""), groupRoom, "群里的映射也原样");
+    assert.equal(serial, created + 1, "读不到的那两次都没另建房间");
+
+    // 等回复时读不到房间：下一圈再看；房间真没了才说没拿到回复。
+    await db.insert(imInbound).values({
+      id: "msg:om_wait", channel: "feishu", appId: APP, openId: OWNER, chatId: "oc_p2p", chatType: "p2p", kind: "assistant",
+      roomId: "gone-room", detail: "im-x", state: "sent", createdAt: at, updatedAt: new Date().toISOString(),
+    } as never);
+    fake.reset();
+    await relay.poll();
+    assert.equal((await db.select().from(imInbound).where(eq(imInbound.id, "msg:om_wait"))).at(0)!.state, "sent", "这一下没读到：不算结局");
+    flaky = false;
+    await relay.poll();
+    await im.settle();
+    assert.equal((await db.select().from(imInbound).where(eq(imInbound.id, "msg:om_wait"))).at(0)!.state, "failed", "房间没了：这才算没拿到回复");
+    assert.match(JSON.stringify(fake.sends().map(contentOf)), /没拿到回复/);
   }
 
   // ── ④ 续：群列表照实说「哪个群在收卡」「你能不能改」──────────────────────
@@ -370,12 +462,63 @@ try {
     assert.equal((await groupsView("u_me", true, APP, null)).groups.find((item) => item.chatId === "oc_new")!.canEdit, true, "管理员改得了");
   }
 
+  // ── ④ 续：库里读出来的东西坏了，不当成空的往下办 ────────────────────────────
+  {
+    // 按钮记录坏了：不能按空的办（空着就是不带版本去验收最新那一版），拒掉并说清。
+    await db.insert(tasks).values({ id: "tbad", projectId: "p1", title: "按钮坏了", body: "", status: "done", useWorktree: false, workflowMode: "free", endedAt: at, createdAt: at, updatedAt: at } as never);
+    await db.insert(sessions).values({ id: "s-tbad", taskId: "tbad", role: "single", agentType: "claude", executor: "claude", cwd: join(stage, "plain"), startedAt: at, endedAt: at, activeMs: 0 } as never);
+    await im.reconciler.reconcile(["tbad"]);
+    await im.settle();
+    const card = await openCard("tbad", "accept");
+    await db.update(imActions).set({ payload: "{坏" }).where(eq(imActions.outboxId, card.id));
+    const response = await press(im.actions, buttonOf(card, "accept").value!);
+    assert.match(JSON.stringify(response), /按钮记录读不出来/, "说清为什么没办");
+    assert.equal((await taskRow("tbad")).stage, null, "没有不核版本就验收");
+
+    // 飞书传来的正文解析不了：不当空消息吞掉，记成没办成、叫他重发。
+    fake.reset();
+    await im.inbound.handle({
+      sender: { sender_id: { open_id: OWNER }, sender_type: "user" },
+      message: { message_id: "om_garbled", chat_id: "oc_p2p", chat_type: "p2p", message_type: "text", content: "{坏", mentions: [] },
+    } as never);
+    await im.settle();
+    assert.equal((await db.select().from(imInbound).where(eq(imInbound.id, "msg:om_garbled"))).at(0)!.state, "failed");
+    assert.match(JSON.stringify(fake.sends().map(contentOf)), /没读懂/);
+
+    // 发件队列里有一行内容坏了：标成放弃，排在它后面的照发，不卡住整条队列。
+    fake.reset();
+    const row = (id: string, content: string) => ({
+      id, channel: "feishu", appId: APP, receiveType: "open_id", receiveId: OWNER, recipientOpenId: OWNER, taskId: null,
+      kind: "online", subject: id, msgType: "text", content, state: "pending", createdAt: at, updatedAt: at,
+    });
+    await db.insert(imOutbox).values([row("row-garbled", "{坏"), row("row-after", JSON.stringify({ text: "后面这条" }))] as never);
+    await im.sender.drainNow();
+    const [garbled] = await db.select().from(imOutbox).where(eq(imOutbox.id, "row-garbled"));
+    assert.equal(garbled!.state, "dead");
+    assert.match(garbled!.lastError ?? "", /解析不了/);
+    assert.equal((await db.select().from(imOutbox).where(eq(imOutbox.id, "row-after"))).at(0)!.state, "sent", "后面那条照发");
+  }
+
   // ── ⑤ @ 占位与缩进 ───────────────────────────────────────────────────────
   {
     const mentions = [{ key: "@_user_1", openId: "ou_bot" }];
-    const code = "@_user_1  看下这段\n    def f():\n        return  1\n";
+    const code = "@_user_1 看下这段\n    def f():\n        return  1\n";
     assert.equal(parseMessage("text", JSON.stringify({ text: code }), mentions).text, "看下这段\n    def f():\n        return  1");
     assert.equal(parseMessage("text", JSON.stringify({ text: "@_user_1\n  缩进的第一行" }), mentions).text, "  缩进的第一行");
+    // 跟 @ 写在同一行的对齐、制表符也原样：只去掉占位符和隔开它的那一个空格。
+    assert.equal(parseMessage("text", JSON.stringify({ text: "@_user_1 /reply x  =  1\t# 对齐" }), mentions).text, "/reply x  =  1\t# 对齐");
+    assert.equal(parseMessage("text", JSON.stringify({ text: "看下  @_user_1 这里\t\t对齐" }), mentions).text, "看下  这里\t\t对齐");
+    assert.equal(parseMessage("text", JSON.stringify({ text: "    return  1  @_user_1" }), mentions).text, "    return  1");
+    // 只去一个分隔空白：行首 @ 后面多打的空格是缩进；行中间只有一侧有空白就留着它，不把两个词粘起来；连着的 @ 当一段。
+    assert.equal(parseMessage("text", JSON.stringify({ text: "@_user_1    def f():" }), mentions).text, "   def f():");
+    assert.equal(parseMessage("text", JSON.stringify({ text: "@_user_1  看下这段" }), mentions).text, " 看下这段");
+    assert.equal(parseMessage("text", JSON.stringify({ text: "a@_user_1 b" }), mentions).text, "a b");
+    assert.equal(parseMessage("text", JSON.stringify({ text: "a @_user_1b" }), mentions).text, "a b");
+    assert.equal(parseMessage("text", JSON.stringify({ text: "a @_user_1 @_user_2 b" }), mentions).text, "a b");
+    assert.equal(parseMessage("text", JSON.stringify({ text: "a@_user_1b" }), mentions).text, "ab");
+    // post 里的 @ 是单独的节点：同样只去它和一个分隔空白，正文的缩进原样。
+    const post = { zh_cn: { content: [[{ tag: "at", user_id: "@_user_1" }, { tag: "text", text: "   def f():" }], [{ tag: "text", text: "看下" }, { tag: "at", user_id: "@_user_1" }, { tag: "text", text: " 这里" }]] } };
+    assert.equal(parseMessage("post", JSON.stringify(post), mentions).text, "  def f():\n看下 这里");
   }
 
   im.reconciler.stop();

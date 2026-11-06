@@ -4,7 +4,7 @@ import { db } from "./db/index.js";
 import { regressionEvidence, scheduledMessages, tasks } from "./db/schema.js";
 import type { TaskWaitOwnership } from "./db/schema-task-wait.js";
 import { assertReviewAuthority, finalizationAuthority, ReviewSuperseded, type ReviewAuthority } from "./review-ownership.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
 import type { AcceptTail } from "./task-accept-tail.js";
 
 export async function commitAcceptanceStage(taskId: string, stage: "merged" | "accepted",
@@ -25,7 +25,10 @@ export async function commitAcceptanceStage(taskId: string, stage: "merged" | "a
         ...(stage === "accepted" ? { runningStep: undefined, steps: [...new Set([...plan.steps, stepId])] } : {}),
       } }).where(eq(regressionEvidence.directory, state.directory));
     }
-    await transaction.update(tasks).set({ ...patch, stage, updatedAt: now(), waitOwnership: ownership,
+    // 从没盖章的状态落下来 = 新的一次验收；已经是 merged / accepted（merged → accepted、重试）是同一次，
+    // 连老数据的空值一起沿用（db/schema.ts acceptanceId）。
+    const acceptanceId = task.stage === "merged" || task.stage === "accepted" ? task.acceptanceId : id();
+    await transaction.update(tasks).set({ ...patch, stage, acceptanceId, updatedAt: now(), waitOwnership: ownership,
       ...(authority?.finalization ? { acceptedTailPending: true, acceptedTailDone: "[]" } : {}),
     }).where(eq(tasks.id, taskId));
   }, { behavior: "immediate" });

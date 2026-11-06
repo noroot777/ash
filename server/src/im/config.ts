@@ -7,7 +7,7 @@
 // 飞书长连接是集群模式，同一应用连上两个客户端，事件会被随机分走一半。
 //
 // 要如实写给用户的边界：agent 与 server 是同一个 OS 用户，读得到这个文件；Windows 上 chmod 不生效。
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { resolveAshDbFile } from "../db/path.js";
 
@@ -37,12 +37,20 @@ export function isValidAppId(value: string): boolean {
 export type CredentialsRead =
   | { kind: "missing" }
   | { kind: "ok"; credentials: FeishuCredentials }
-  | { kind: "broken"; error: string };
+  /** transient = 文件在、这一下读不了（权限、句柄耗尽、IO 错）：通道过一会儿自己再试，不是格式坏了。 */
+  | { kind: "broken"; error: string; transient?: boolean };
 
 export function readCredentials(path = credentialsPath()): CredentialsRead {
-  if (!existsSync(path)) return { kind: "missing" };
+  // 只有「没有这个文件」才是没配：existsSync 对读不了的（没权限、目录坏了）也回 false，会把「读不了」报成「没配」。
+  let text: string;
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<FeishuCredentials> & { version?: number };
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+    return { kind: "broken", error: `飞书凭证文件这一下读不了（${(error as Error).message}）：${path}`, transient: true };
+  }
+  try {
+    const raw = JSON.parse(text) as Partial<FeishuCredentials> & { version?: number };
     if (raw.version !== 1 || typeof raw.appId !== "string" || typeof raw.appSecret !== "string") {
       return { kind: "broken", error: `飞书凭证文件格式不认识：${path}` };
     }
@@ -59,7 +67,7 @@ export function readCredentials(path = credentialsPath()): CredentialsRead {
       },
     };
   } catch {
-    return { kind: "broken", error: `飞书凭证文件损坏或不可读：${path}` };
+    return { kind: "broken", error: `飞书凭证文件损坏：${path}` };
   }
 }
 

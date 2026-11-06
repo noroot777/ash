@@ -20,7 +20,8 @@ export function FeishuBindingCard({ binding, online, projects, onBinding, notify
   binding: FeishuBinding;
   /** 机器人此刻在不在线；不在线时码发过去没人收，要提前说。 */
   online: { ok: boolean; label: string };
-  projects: ProjectView[];
+  /** null = 项目清单还没读到（不是没有项目）。 */
+  projects: ProjectView[] | null;
   onBinding: (next: FeishuBinding) => void;
   notify: (message: string) => void;
 }) {
@@ -157,10 +158,10 @@ export function FeishuBindingCard({ binding, online, projects, onBinding, notify
             onChange={(event) => void run(() => api.setFeishuBindingProject(event.target.value || null), "当前项目已切换", "当前项目保存失败")}
           >
             <option value="">未指定</option>
-            {binding.projectId && !projects.some((project) => project.id === binding.projectId) && (
-              <option value={binding.projectId}>（已看不到的项目）</option>
+            {binding.projectId && !(projects ?? []).some((project) => project.id === binding.projectId) && (
+              <option value={binding.projectId}>{projects ? "（已看不到的项目）" : "（项目名没读到）"}</option>
             )}
-            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            {(projects ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
         </div>
         <div className="settings-row">

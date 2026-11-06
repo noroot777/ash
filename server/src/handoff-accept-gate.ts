@@ -23,6 +23,7 @@ export function validateGatePayload(manifest: HandoffManifest): void {
   const mode = manifest.task.acceptedGateMode;
   if (mode != null && !["passed", "skipped", "unset"].includes(mode)) throw new HandoffError("acceptedGateMode 非法");
   if (manifest.task.acceptedGateRunId != null && !validId(manifest.task.acceptedGateRunId)) throw new HandoffError("acceptedGateRunId 非法");
+  if (manifest.task.acceptanceId != null && !validId(manifest.task.acceptanceId)) throw new HandoffError("acceptanceId 非法");
   const runs = manifest.acceptGateRuns;
   if (runs == null) return;
   if (!Array.isArray(runs) || runs.length > 10_000) throw new HandoffError("acceptGateRuns 非法");

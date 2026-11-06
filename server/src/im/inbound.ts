@@ -225,6 +225,11 @@ export class InboundRouter {
       await this.record(inboundId, { kind: "ignored" });
       return say("我只认文字、图片和文件。");
     }
+    if (parsed.unreadable) {
+      const why = "这条消息没读懂（飞书传来的内容解析不了），没有发出去：请再发一次。";
+      await this.record(inboundId, { state: "failed", detail: why });
+      return say(why);
+    }
 
     const ctx: InboundContext = {
       messageId: message.message_id, chatId: message.chat_id, chatType, principal, binding, dest,
@@ -241,8 +246,14 @@ export class InboundRouter {
 
     // 附件转存一次，路径记下来（重办时沿用同一份，不再下载、不再转存）。
     const saved = row.attachments
-      ? { paths: JSON.parse(row.attachments) as string[], failures: [] as string[] }
+      ? { paths: JSON.parse(row.attachments) as string[], failures: [] as string[], transient: false }
       : await saveAttachments(this.deps.api, this.deps.ash, principal, message.message_id, parsed.attachments);
+    if (saved.transient) {
+      // 不记路径：这一句整句没发，他再发一次是新的一条消息，重新下载。
+      const why = `附件这一下没收下（${scrubText(saved.failures.join("；"), 300)}），这句话没发出去：请稍后再发一次。`;
+      await this.deps.commands.say(ctx, why, SYSTEM_SCOPE, { subject: `r:${message.message_id}:att` });
+      return this.record(inboundId, { state: "failed", detail: why });
+    }
     await this.record(inboundId, { body: text, attachments: JSON.stringify(saved.paths) });
     if (saved.failures.length) {
       // 列的是他自己刚发的附件和下载 / 转存的报错，不含 ash 里的数据。
@@ -297,7 +308,8 @@ export class InboundRouter {
     inboundId: string, ctx: InboundContext, card: OutboxRow, intent: string | null, text: string, paths: string[],
   ): Promise<void> {
     const taskId = card.taskId!;
-    const view = (await viewsOf([taskId])).get(taskId) ?? null;
+    const views = await viewsOf([taskId]);
+    const view = views.get(taskId) ?? null;
     const say = (line: string) => this.deps.commands.say(ctx, line, SYSTEM_SCOPE, { taskId });
     /** 任务接口的报错：他自己这次操作的结局（scope.ts reply），只推标题的项目换成短句。 */
     const sayError = async (line: string) => this.deps.commands.say(ctx, line, await this.deps.commands.answered(ctx, { taskId }),
@@ -307,6 +319,7 @@ export class InboundRouter {
       await say(line);
       return this.record(inboundId, { kind: "reply", taskId, state: "failed", detail });
     };
+    if (!views.has(taskId)) return refuse("unreadable", "这一下没读清这个任务的现状，这句没发出去：请稍后再发一次。");
     if (!view) return refuse("deleted", "这个任务已经被删除了。");
     const turn = view.turn;
     const explicit = intent === "reply";

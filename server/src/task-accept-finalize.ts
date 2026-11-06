@@ -11,6 +11,7 @@ import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage, type SharedWork
 import type { AcceptFailure } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { publishTaskUpdated } from "./task-store.js";
+import { holdDrift } from "./team-acceptance-hold.js";
 import { now } from "./util.js";
 import type { AcceptGateSnapshot } from "./accept-gate.js";
 
@@ -36,6 +37,13 @@ export async function finalizeAcceptance(
   }
   if (!preview.stopped) {
     await appendTaskTimeline(task.id, `本次验收保留工作区，继续完成验收。${preview.message}停止记录已保留。`);
+  }
+  // 盖章前最后核一次团队成果（调度台 CLI 自己起的回合挡不住，见 team-acceptance-hold.ts）：变了就不盖，合并结果照常保留。
+  const drift = await holdDrift(task.id);
+  if (drift) {
+    const error = `${completed.completedMerge ? "合并已完成，结果已保留。" : ""}${drift}`;
+    await appendTaskTimeline(task.id, error);
+    return { failure: { accepted: false, httpStatus: 409, taskId: task.id, reason: "result_changed", error, status: task.status, phase: "before_accept", ...completed } };
   }
   await commitAcceptanceStage(task.id, "accepted", basis ?? {}, authority);
   bus.publish({ type: "task.stage", taskId: task.id, stage: "accepted", updatedAt: now() });

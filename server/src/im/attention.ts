@@ -59,7 +59,8 @@ async function latestReviewFailed(taskId: string): Promise<boolean> {
 
 /**
  * 一批任务的现状。返回的 Map 里，查不到的任务（被删了）对应 null —— 删任务不发事件，
- * 对账要靠这一档把它名下的卡片收掉。
+ * 对账要靠这一档把它名下的卡片收掉。**不在 Map 里** = 这一下看不清现状（讨论记录读不了，见 duet/gate-version.ts）：
+ * 调用方什么都别动，不收卡、不发卡、不说「已删除」，下一次再看。
  */
 export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView | null>> {
   const out = new Map<string, TaskView | null>(taskIds.map((taskId) => [taskId, null]));
@@ -80,7 +81,14 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
   for (const task of enriched) {
     const row = rowById.get(task.id)!;
     const crew = workers.filter((worker) => worker.parentId === task.id);
-    const gateVersion = task.mode === "duet" && task.status === "awaiting_review" ? await currentGateVersion(task.id) : null;
+    let gateVersion: number | null = null;
+    try {
+      gateVersion = task.mode === "duet" && task.status === "awaiting_review" ? await currentGateVersion(task.id) : null;
+    } catch (error) {
+      console.warn(`[ash] 读不清讨论闸口现状，这一轮先不动它的卡 task=${task.id}:`, (error as Error).message);
+      out.delete(task.id);
+      continue;
+    }
     const disputes = task.workflowMode === "free" && task.mode === "single" ? await unresolvedDisputes(task.id) : [];
     const teamWorker = !!task.parentId && parents.get(task.parentId) === "team";
     const kind = humanTurnOf(toTaskListItem(task), crew.map(toTaskListItem), {

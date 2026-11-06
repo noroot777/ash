@@ -15,7 +15,8 @@ import { useNow } from "./useFeishuPoll.ts";
 
 export function FeishuGroupsCard({ groups, projects, bound, onGroups, onOpen, notify }: {
   groups: FeishuGroups;
-  projects: ProjectView[];
+  /** null = 项目清单还没读到（不是没有项目）。 */
+  projects: ProjectView[] | null;
   /** 本人已经绑了飞书：群里发码的人得是已绑定的人，机器人才认。 */
   bound: boolean;
   onGroups: (next: FeishuGroups) => void;
@@ -29,8 +30,11 @@ export function FeishuGroupsCard({ groups, projects, bound, onGroups, onOpen, no
   const claims = groups.claims;
   const now = useNow(claims.length > 0);
   const live = claims.filter((claim) => !isExpired(claim.expiresAt, now));
-  const target = projectId || projects[0]?.id || "";
-  const projectName = (id: string) => projects.find((project) => project.id === id)?.name ?? "（已看不到的项目）";
+  const list = projects ?? [];
+  const target = projectId || list[0]?.id || "";
+  // 清单没读到时不下「看不到」的结论。
+  const missing = projects ? "（已看不到的项目）" : "（项目名没读到）";
+  const projectName = (id: string) => list.find((project) => project.id === id)?.name ?? missing;
 
   const run = async (work: () => Promise<FeishuGroups>, done: string, fail: string) => {
     setBusy(true);
@@ -124,8 +128,8 @@ export function FeishuGroupsCard({ groups, projects, bound, onGroups, onOpen, no
                 disabled={busy || !group.canEdit}
                 onChange={(event) => void run(() => api.patchFeishuGroup(group.chatId, { projectId: event.target.value }), "群绑定的项目已切换", "保存失败")}
               >
-                {!projects.some((project) => project.id === group.projectId) && <option value={group.projectId}>（已看不到的项目）</option>}
-                {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                {!list.some((project) => project.id === group.projectId) && <option value={group.projectId}>{missing}</option>}
+                {list.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
               </select>
               <Toggle
                 label={group.pushCards ? "卡片发到群里" : "卡片发单聊"}
@@ -148,8 +152,9 @@ export function FeishuGroupsCard({ groups, projects, bound, onGroups, onOpen, no
             </small>
           </div>
           <span className="feishu-actions">
-            <select aria-label="要绑群的项目" value={target} disabled={busy || !projects.length} onChange={(event) => setProjectId(event.target.value)}>
-              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            <select aria-label="要绑群的项目" value={target} disabled={busy || !list.length} onChange={(event) => setProjectId(event.target.value)}>
+              {projects === null && <option value="">项目清单没读到</option>}
+              {list.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
             </select>
             <Button variant="secondary" disabled={busy || !target} onClick={() => void generate()}>生成群绑定码</Button>
           </span>

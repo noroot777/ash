@@ -1,7 +1,7 @@
 // 验收前的「在飞检查」（从 task-accept.ts 拆出，纯行数拆分）：任务或共享执行者正在
 // running/queued、或回合已被 claim（DB status 尚未落 running 的窗口），都算在飞——
 // 后者只看 status 会在 agent 已开跑时合并并删掉它正在用的 worktree（审查实测复现）。
-import { eq, or } from "drizzle-orm";
+import { eq, inArray, or } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import type { ConflictHandoff } from "./accept-conflict.js";
@@ -10,6 +10,7 @@ import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { isTurnClaimed } from "./runs.js";
 import { hasOwnedGateProcess, hasStoppingGateProcess, reconcileGateProcesses } from "./accept-gate-ownership.js";
+import { holdDrift, holdMembers, holdScope } from "./team-acceptance-hold.js";
 
 export type AcceptWarning = {
   reason: "temporary_cleanup_failed";
@@ -21,7 +22,8 @@ export type InFlightTask = {
   id: string;
   title: string;
   status: string;
-  role: "task" | "shared_worker";
+  /** workspace_peer = 团队 worktree 里其余的共用者（审查任务等，team-acceptance-hold.ts）。 */
+  role: "task" | "shared_worker" | "workspace_peer";
 };
 
 export type AcceptFailure = {
@@ -63,10 +65,16 @@ export async function acceptanceState(taskId: string): Promise<{
 
   // DB status 之外还要看 turn 锁：续聊从 claimOwnTurn 到写 running 之间有真实窗口，
   // 只看 status 会在 agent 已开跑时合并并删掉它正在用的 worktree（审查实测复现）。
+  // 这次团队验收自己占着的那几把不算（team-acceptance-hold.ts）：那是验收冻住全队用的，不是有回合在飞。
+  const ours = holdMembers(taskId);
   const inFlight = (row: typeof tasks.$inferSelect) =>
-    row.status === "running" || row.status === "queued" || isTurnClaimed(row.id);
+    row.status === "running" || row.status === "queued" || (isTurnClaimed(row.id) && !ours.has(row.id));
+  // 常驻调度台的回合不占 turn 锁：投递口收下消息那一刻就在跑了，状态落 running 还要隔两次写库；CLI 自己起的
+  // 那一轮更是一条消息都没经过 ash。开台中同理。这些只有调度台进程这边看得见。
+  const leadBusy = task.mode === "team" && !task.parentId
+    && (await import("./team/session.js")).teamLeadBusy(task.id);
   const inFlightTasks: InFlightTask[] = [];
-  if (inFlight(task)) {
+  if (inFlight(task) || leadBusy) {
     inFlightTasks.push({ id: task.id, title: task.title, status: task.status, role: "task" });
   }
   if (task.mode === "team") {
@@ -80,6 +88,13 @@ export async function acceptanceState(taskId: string): Promise<{
       const notSettled = worker.status === "backlog" || worker.status === "paused";
       if (!worker.useWorktree && (inFlight(worker) || notSettled || hasOwnedGateProcess(worker.id))) {
         inFlightTasks.push({ id: worker.id, title: worker.title, status: worker.status, role: "shared_worker" });
+      }
+    }
+    // 团队 worktree 里其余的共用者：验收占住了它们，占不到的那几位此刻有回合在跑，照样往这个目录里写。
+    const outsiders = [...holdScope(taskId)].filter((id) => !related.some((row) => row.id === id));
+    if (outsiders.length) {
+      for (const peer of await db.select().from(tasks).where(inArray(tasks.id, outsiders))) {
+        if (inFlight(peer)) inFlightTasks.push({ id: peer.id, title: peer.title, status: peer.status, role: "workspace_peer" });
       }
     }
   }
@@ -167,6 +182,11 @@ export async function acceptanceGuard(
         phase,
       },
     };
+  }
+  // 团队验收占住全队之后成果还变了（调度台 CLI 自己起的回合挡不住，见 team-acceptance-hold.ts）：这一版没人看过。
+  const drift = phase === "initial" ? null : await holdDrift(taskId);
+  if (drift) {
+    return { task: state.task, failure: { accepted: false, httpStatus: 409, taskId, reason: "result_changed", error: drift, status: state.task.status, phase } };
   }
   if (state.task.baseUpdateIntent && !options.allowBaseUpdatePending) return { task: state.task, failure: { accepted: false, httpStatus: 409, taskId, reason: "base_update_pending", error: "上次基线更新尚未结算，请在「派生与验收」中重试，或点击「处理未完成的基线更新」核对实际结果", phase } };
   if (state.inFlightTasks.length === 0) return { task: state.task, failure: null };

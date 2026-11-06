@@ -413,41 +413,50 @@ async function endTurn(lead: Lead): Promise<void> {
   // 还有回合在手：攒着的执行者汇报等它真正空下来再合并送（省一轮模型调用本来就是这么来的）,
   // 更不能落 idle 或起空闲回收计时 —— 一台正在干活的调度台会被当成闲置收掉。
   if (!idleNow) return;
-  if (lead.pending.length) {
-    await flushUnqueued(lead); // 上次写库被拒的那几条,趁这会儿补进队列
-    // **快照,不是引用**。`sendToLead` 要 await(排在同一台的投递链后面),这期间调度台可能
-    // 又忙起来(用户插话)并收下新的执行者汇报,它们会追加进同一个 `lead.pending`。拿引用的
-    // 话,下面 `lead.pending = []` 把新来的一起清掉、`batch` 里的 seq 也把它们的行一并销账
-    // —— 一份从没交给调度者的执行结果就此永久消失,刷新、续聊、换台都找不回来
-    // (第 7 链第 1 轮审查 P1)。
-    const batch = [...lead.pending];
-    const merged = batch.map((m) => m.text).join("\n\n---\n\n");
-    const at = now();
-    // 顺序是刻意的:**收下了才算送出去**。先销账、先落盘再 send 的话,send 一拒收
-    // (进程正在收尾)这批汇报就再也没人送得出去了 —— 下一台健康调度台永远等不到
-    // (2026-08-26 第 11 轮审查)。落盘同样要等收下之后:没送成还记一条「已投递」的
-    // system turn,下一台真送成时同一份汇报在 .md 里就是两条。
-    const delivery = await sendToLead(lead, merged);
-    if (delivery.sent) {
-      // 只摘走这一批(按对象身份)。await 期间新来的留在队列里,下一次回合收尾照常送。
-      const sent = new Set<PendingInbound>(batch);
-      lead.pending = lead.pending.filter((m) => !sent.has(m));
-      // 销账失败宁可重送不可丢:行还在就是下一台会再送一遍(.md 里会多一条),而删早了
-      // 是永久消失。所以这里只上报,不回滚也不掀掉这台调度台。
-      // seq=null 的压根没进过队列(写库被拒),没有账可销。
-      const seqs = batch.map((m) => m.seq).filter((seq): seq is number => seq !== null);
-      await persistOrReport(lead, "待送消息销账", () => consumeInbound(seqs), at);
-      recordSystemTurn(lead, merged, at);
-      // 身份用投递口那一刻的（`delivery.at`）：holdTurn 已经按它持有住了,另要一个起点会让
-      // 同一轮在活动册上留下两个。取不到时交给 beginTurn 的默认值（身份层分配器),别回退到
-      // 上面那个 `at` —— 它是直接 `now()` 来的,不保证在这条会话上唯一。
-      await beginTurn(lead, delivery.at ?? undefined);
-      return;
-    }
-    reportLeadFailure(lead, "攒着的执行者汇报没能送进调度台进程(它正在收尾),先留在待送队列里交给下一台接手的调度台。", at);
-  }
+  if (lead.pending.length && await deliverPending(lead)) return;
   await setLeadStatus(lead, "idle", endIso);
   armIdle(lead);
+}
+
+/**
+ * 把攒着的执行者汇报合并成一条送进去(回合收尾时、团队验收结束时)。true = 送进去了,新的一轮已经起了;
+ * false = 没收下,汇报原样留在待送队列里(失败已经报过)。
+ */
+async function deliverPending(lead: Lead): Promise<boolean> {
+  await flushUnqueued(lead); // 上次写库被拒的那几条,趁这会儿补进队列
+  // **快照,不是引用**。`sendToLead` 要 await(排在同一台的投递链后面),这期间调度台可能
+  // 又忙起来(用户插话)并收下新的执行者汇报,它们会追加进同一个 `lead.pending`。拿引用的
+  // 话,下面 `lead.pending = []` 把新来的一起清掉、`batch` 里的 seq 也把它们的行一并销账
+  // —— 一份从没交给调度者的执行结果就此永久消失,刷新、续聊、换台都找不回来
+  // (第 7 链第 1 轮审查 P1)。
+  const batch = [...lead.pending];
+  const merged = batch.map((m) => m.text).join("\n\n---\n\n");
+  const at = now();
+  // 顺序是刻意的:**收下了才算送出去**。先销账、先落盘再 send 的话,send 一拒收
+  // (进程正在收尾)这批汇报就再也没人送得出去了 —— 下一台健康调度台永远等不到
+  // (2026-08-26 第 11 轮审查)。落盘同样要等收下之后:没送成还记一条「已投递」的
+  // system turn,下一台真送成时同一份汇报在 .md 里就是两条。
+  const delivery = await sendToLead(lead, merged);
+  if (delivery.sent) {
+    // 只摘走这一批(按对象身份)。await 期间新来的留在队列里,下一次回合收尾照常送。
+    const sent = new Set<PendingInbound>(batch);
+    lead.pending = lead.pending.filter((m) => !sent.has(m));
+    // 销账失败宁可重送不可丢:行还在就是下一台会再送一遍(.md 里会多一条),而删早了
+    // 是永久消失。所以这里只上报,不回滚也不掀掉这台调度台。
+    // seq=null 的压根没进过队列(写库被拒),没有账可销。
+    const seqs = batch.map((m) => m.seq).filter((seq): seq is number => seq !== null);
+    await persistOrReport(lead, "待送消息销账", () => consumeInbound(seqs), at);
+    recordSystemTurn(lead, merged, at);
+    // 身份用投递口那一刻的（`delivery.at`）：holdTurn 已经按它持有住了,另要一个起点会让
+    // 同一轮在活动册上留下两个。取不到时交给 beginTurn 的默认值（身份层分配器),别回退到
+    // 上面那个 `at` —— 它是直接 `now()` 来的,不保证在这条会话上唯一。
+    await beginTurn(lead, delivery.at ?? undefined);
+    return true;
+  }
+  reportLeadFailure(lead, delivery.refused === "accepting"
+    ? "团队正在验收：攒着的执行者汇报先留在待送队列里，验收结束后送进调度台。"
+    : "攒着的执行者汇报没能送进调度台进程(它正在收尾),先留在待送队列里交给下一台接手的调度台。", at);
+  return false;
 }
 
 // 中途已经播过完整轮换说明后,收尾那两句只补一个指路,不重复整段。文案与前端判色的
@@ -650,6 +659,7 @@ async function closeLead(
     beginTurn,
     clearIdle,
     consume,
+    deliverPending,
     recordSystemTurn,
     reportLeadFailure,
     retireLead,

@@ -22,21 +22,35 @@ import { clearCredentials, domainUrl, isValidAppId, readCredentials, writeCreden
 import { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
 import { canEditGroup, confirmGroupCode, deleteGroup, groupOf, groupsView, patchGroup } from "./groups.js";
-import { patchOptions, readOptions } from "./meta.js";
+import { optionsError, patchOptions, readOptions } from "./meta.js";
 import { outboxCounts } from "./outbox.js";
 import { SYSTEM_SCOPE } from "./scope.js";
 
 const canManage = (actor: Actor) => isAdminActor(actor) && isAccountHolder(actor);
 const ownerOf = (c: Context) => ownerKeyOf(ownerIdOf(actorOf(c)));
 
-function currentAppId(): string | null {
+/**
+ * 此刻配着的飞书应用（null = 没配）。凭证文件读不了（坏了、读到写了一半的、没权限）不等于没配、也不等于换了应用：
+ * 先拿正在跑的那条通道的应用兜底，也没有就是不知道（ok: false）—— 绑定和群的接口这时直接回 503（mountImRoutes）。
+ * 当成没配的话，网页会把每个绑定都标成「应用换了、要重新绑」，确认绑定被说成换了应用，群列表变空、改群报没有这个群。
+ */
+function appIdRead(): { ok: true; appId: string | null } | { ok: false; error: string } {
   const read = readCredentials();
-  return read.kind === "ok" ? read.credentials.appId : null;
+  if (read.kind === "ok") return { ok: true, appId: read.credentials.appId };
+  if (read.kind === "missing") return { ok: true, appId: null };
+  const running = feishuRuntime()?.appId;
+  return running ? { ok: true, appId: running } : { ok: false, error: read.error };
+}
+
+function currentAppId(): string | null {
+  const read = appIdRead();
+  return read.ok ? read.appId : null;
 }
 
 async function statusOf(actor: Actor): Promise<FeishuStatus> {
   const read = readCredentials();
   const manage = canManage(actor);
+  const options = await readOptions();
   const config = read.kind === "ok"
     ? { appId: read.credentials.appId, domain: read.credentials.domain, updatedAt: read.credentials.updatedAt }
     : null;
@@ -45,9 +59,9 @@ async function statusOf(actor: Actor): Promise<FeishuStatus> {
     canManage: manage,
     multiUser: await isMultiUser(),
     config,
-    configError: read.kind === "broken" ? read.error : channelConfigError(),
+    configError: read.kind === "broken" ? read.error : optionsError() ?? channelConfigError(),
     connection: connectionOf(),
-    options: await readOptions(),
+    options,
     usage: manage ? await quotaUsage() : null,
     instanceTag: instanceTag(),
     outbox: manage && appId ? await outboxCounts(appId) : null,
@@ -92,6 +106,13 @@ export function mountImRoutes(api: Hono): void {
     }
     await next();
   });
+
+  const appKnown = async (c: Context, next: () => Promise<void>) => {
+    const read = appIdRead();
+    if (!read.ok) return c.json({ error: `飞书凭证文件这会儿读不了（${read.error}）：修好之前看不了、也改不了绑定。` }, 503);
+    await next();
+  };
+  for (const path of ["/im/feishu/binding", "/im/feishu/binding/*", "/im/feishu/groups", "/im/feishu/groups/*"]) api.use(path, appKnown);
 
   api.get("/im/feishu/status", async (c) => c.json(await statusOf(actorOf(c))));
 

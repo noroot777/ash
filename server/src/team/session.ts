@@ -37,7 +37,7 @@ import { tasks, projects, sessions, groups } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now, attachmentsPrompt } from "../util.js";
 import { setTaskStatus } from "../status.js";
-import { trackRun, discardStartingRun, stopTask } from "../runs.js";
+import { trackRun, discardStartingRun, heldForAcceptance, stopTask } from "../runs.js";
 import { acknowledgeTaskStart } from "../task-start-receipt.js";
 import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
@@ -46,7 +46,7 @@ import { LOST_SESSION_PATCH } from "../executors/session-lost.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeRunError } from "../transcript.js";
 import { isMonitorWakeTurn, recordUserConversationTurn, type UserTurnOrigin } from "../conversation-turn.js";
-import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET, leadFirstMessage } from "./prompts.js";
+import { LEAD_AFTER_ACCEPTANCE, LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET, leadFirstMessage } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 import { affectedCodexResumeVersion, announceAffectedSessionReplacement } from "../session-version-guard.js";
 import { announceSessionNote } from "../session-notice.js";
@@ -102,6 +102,31 @@ class TeamOpenHalted extends Error {
 
 export function teamIsLive(taskId: string): boolean {
   return leads.has(taskId) || opening.has(taskId);
+}
+
+/** 调度台此刻有没有回合在跑（含开台中）。验收守卫拿它当「在飞」：常驻调度台的回合不占回合锁。 */
+export function teamLeadBusy(taskId: string): boolean {
+  return !!leads.get(taskId)?.busy || opening.has(taskId);
+}
+
+// 团队验收期间（team-acceptance-hold.ts）调度台不在线、执行者消息被挡下排进库里的：验收结束补开一次台，好让新的
+// 一台读到它们（adoptInbound）。只记「欠一次唤醒」，消息本身已经落库。
+const deferredWakes = new Set<string>();
+
+/**
+ * 团队验收结束：把验收期间投递口拒收、攒在待送队列里的执行者汇报送进调度台；调度台当时不在线、
+ * 唤醒被挡下的，补开一次台。
+ */
+export async function resumeLeadAfterAcceptance(taskId: string): Promise<void> {
+  const lead = leads.get(taskId);
+  if (lead && !lead.closing) {
+    deferredWakes.delete(taskId);
+    if (lead.busy || !lead.pending.length) return; // 忙着的那台回合收尾时自己会合并送
+    clearIdle(lead);
+    await consumer().deliverPending(lead);
+    return;
+  }
+  if (deferredWakes.delete(taskId)) await deliver(taskId, LEAD_AFTER_ACCEPTANCE, "inbound");
 }
 
 // 用户插话(continueTask 顶部分流过来)。
@@ -206,6 +231,9 @@ async function deliver(
         if (throwOnOpenFailure) throw new Error(why);
         return false;
       }
+      // 团队正在验收：开台就是一个新回合，改的正是验收要合的那份工作目录（team-acceptance-hold.ts）。查在
+      // 这儿、和下面的 open 之间不隔 await：验收那边先占后查「开台中」，两边总有一边看得见另一边。
+      if (heldForAcceptance(taskId)) return await deferredByAcceptance(taskId, text, kind);
       // 开台失败(典型:worktree 建不出来)不能静默 —— 路由是 void 调用的,抛出去
       // 只会变成被兜底吞掉的 unhandledRejection,用户什么都看不到。
       // 这一档仍算「接管了」(true):失败原因已经如实写进会话,消息本身是随开台一起
@@ -235,6 +263,21 @@ async function deliver(
   return push(lead, text, kind, origin);
 }
 
+
+// 验收期间不开台。用户的话回 false（上层退回待发送托盘，验收结束 endAccepting 补送）；执行者消息落进持久待送
+// 队列，记下欠一次唤醒（resumeLeadAfterAcceptance）。开台、「继续」的唤醒语不排：入口那边已经因为验收拒掉了。
+async function deferredByAcceptance(taskId: string, text: string, kind: Kind): Promise<boolean> {
+  if (kind === "user") {
+    await noteToLead(taskId, "团队正在验收：这句话没有送进调度台，留在待发送托盘里，验收结束后自动补送。");
+    return false;
+  }
+  if (kind !== "inbound" || !text.trim()) return false;
+  if (text === LEAD_NUDGE) return true;
+  // 补开台那一句撞上了下一次验收：消息还在库里，再欠一次就行。
+  if (text !== LEAD_AFTER_ACCEPTANCE) await stashUnqueued(taskId, text);
+  deferredWakes.add(taskId);
+  return true;
+}
 
 // 调度台此刻不在线时,配置里写的是哪种 CLI(判定 `/compact` 这类原生命令要用)。
 // 导出给路由层用:立即回复端点要先认出「这是发给调度台的原生命令」,才能把「送不出去」
@@ -346,9 +389,11 @@ async function push(lead: Lead, text: string, kind: Kind, origin: UserTurnOrigin
     // **先确认进程收下了,再往时间线上落**。落早了这一句会以「用户已经说过」的样子留在
     // .md 里,可它接着还要由下一台补送 —— 同一句话在会话里出现两遍,而中间那一遍模型
     // 根本没收到。被拒时只留失败说明:原文还在待发送托盘里,用户看得见也等得到。
-    const { sent, interrupted, at: turnAt } = await sendToLead(lead, promptedText, { steer: true, monitorWake: isMonitorWakeTurn(origin) });
+    const { sent, interrupted, at: turnAt, refused } = await sendToLead(lead, promptedText, { steer: true, monitorWake: isMonitorWakeTurn(origin) });
     if (!sent) {
-      reportLeadFailure(lead, "这条消息没能送进调度台进程 —— 它正在收尾。这一句留在待发送托盘里,等下一台调度台接手时自动补送。", at);
+      reportLeadFailure(lead, refused === "accepting"
+        ? "团队正在验收：这一句留在待发送托盘里，验收结束后自动补送。"
+        : "这条消息没能送进调度台进程 —— 它正在收尾。这一句留在待发送托盘里,等下一台调度台接手时自动补送。", at);
       return false;
     }
     if (interrupted) recordSystemTurn(lead, INTERRUPT_NOTE, at);
@@ -373,8 +418,12 @@ async function push(lead: Lead, text: string, kind: Kind, origin: UserTurnOrigin
   // 队列等下一台送(这时候别落盘正文,否则下一台真送成时同一条汇报会在 .md 里出现两遍)。
   const delivery = await sendToLead(lead, text);
   if (!delivery.sent) {
+    // 唤醒语本身不排队：它只是「来看看」，验收结束会补一次（resumeLeadAfterAcceptance 送的是攒着的汇报）。
+    if (delivery.refused === "accepting" && text === LEAD_NUDGE) return true;
     lead.pending.push(await queueInbound(lead, text, at));
-    reportLeadFailure(lead, "执行者消息没能送进调度台进程(它正在收尾),先排进待送队列交给下一台接手的调度台。", at);
+    reportLeadFailure(lead, delivery.refused === "accepting"
+      ? "团队正在验收：执行者消息先排进待送队列，验收结束后送进调度台。"
+      : "执行者消息没能送进调度台进程(它正在收尾),先排进待送队列交给下一台接手的调度台。", at);
     return true;
   }
   recordSystemTurn(lead, text, at);

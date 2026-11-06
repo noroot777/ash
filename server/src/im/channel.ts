@@ -65,6 +65,17 @@ let chain: Promise<void> = Promise.resolve();
 // 计数跨重连共用一份：换凭证不清零（额度是按应用算的，但同一个月里换应用很少见，宁可多算）。
 const meter = new QuotaMeter();
 let meterLoaded: Promise<void> | null = null;
+// 「这一下」起不来（凭证文件读不了、读库失败）时过一会儿自己再试：不是配置错了，不该等管理员手动点重连。
+const RETRY_MS = 60_000;
+let retry: ReturnType<typeof setTimeout> | null = null;
+function retryLater(): void {
+  retry ??= setTimeout(() => { retry = null; void restartFeishuChannel(); }, RETRY_MS);
+  retry.unref?.();
+}
+function cancelRetry(): void {
+  if (retry) clearTimeout(retry);
+  retry = null;
+}
 // 「实例已上线」每个进程每个应用只发一次：断线重连不再发，省额度。
 const announced = new Set<string>();
 
@@ -82,13 +93,15 @@ export function startFeishuChannel(input: { fetch: AppFetch; exclusive: boolean 
 export function restartFeishuChannel(): Promise<void> {
   chain = chain.then(bringUp).catch((error) => {
     gate = "failed";
-    configError = null;
+    configError = error instanceof Error ? error.message : String(error);
     console.error("[ash] 飞书通道启动失败:", error);
+    retryLater();
   });
   return chain;
 }
 
 export function stopFeishuChannel(): Promise<void> {
+  cancelRetry();
   chain = chain.then(() => tearDown());
   return chain;
 }
@@ -102,7 +115,8 @@ export function feishuRuntime(): FeishuRuntime | null {
  * 的旧值）。没读之前不许计数 —— 那会拿 0 起数，把库里本月的计数覆盖掉。
  */
 export function quotaMeter(): Promise<QuotaMeter> {
-  meterLoaded ??= meter.load();
+  // 读失败不缓存：缓存住的话之后每次起通道、看状态都报同一个错，直到重启进程。
+  meterLoaded ??= meter.load().catch((error) => { meterLoaded = null; throw error; });
   return meterLoaded.then(() => meter);
 }
 
@@ -123,12 +137,18 @@ async function tearDown(): Promise<void> {
 }
 
 async function bringUp(): Promise<void> {
+  cancelRetry();
   await tearDown();
   configError = null;
   if (!host) return;
   const read = readCredentials();
   if (read.kind === "missing") { gate = "unconfigured"; return; }
-  if (read.kind === "broken") { gate = "broken"; configError = read.error; return; }
+  if (read.kind === "broken") {
+    gate = "broken";
+    configError = read.error;
+    if (read.transient) retryLater();
+    return;
+  }
   if (!host.exclusive) { gate = "not_exclusive"; return; }
   const options = await readOptions();
   if (!options.enabled) { gate = "disabled"; return; }
@@ -142,6 +162,9 @@ async function bringUp(): Promise<void> {
   // 三件事各自兜底：取机器人信息、接管按钮失败了也照样对账（对账不靠它们）。
   void (async () => {
     self.bot = await botOf(self).catch((error) => { console.error("[ash] 飞书取机器人信息出错:", error); return null; });
+    // 没查到不等于没有：这一下没查到（网络、令牌），过一会儿再查，直到查到或这套通道拆掉。查到之前群里按
+    // 「@ 了谁都算 @ 我」认（只订阅了群里 @ 机器人的消息，见 docs/feishu-integration.md 权限一节）。
+    if (!self.bot) retryBot(self);
     await self.actions.recover().catch((error) => console.error("[ash] 飞书接管没收尾的按钮出错:", error));
     // 补办消息要下载附件、调接口，不让它挡着对账。
     await Promise.all([
@@ -252,6 +275,18 @@ export function callbackOf(envelope: FeishuEnvelope): CallbackEvent | null {
   };
 }
 
+function retryBot(self: Running): void {
+  const timer = setTimeout(() => {
+    if (running !== self || self.bot) return;
+    void botOf(self).catch(() => null).then((bot) => {
+      if (running !== self) return;
+      if (bot) self.bot = bot;
+      else retryBot(self);
+    });
+  }, RETRY_MS);
+  timer.unref?.();
+}
+
 /** 机器人自己的 open_id（群里判断有没有 @ 它）。同一个应用不会变，记在库里免得每次重启都查。 */
 async function botOf(runtime: FeishuRuntime): Promise<{ openId: string; name: string } | null> {
   const key = `bot:${runtime.appId}`;
@@ -300,7 +335,7 @@ export function connectionOf(): FeishuConnection {
     since: iso(status.since),
     connectedAt: iso(status.connectedAt),
     lastEventAt: iso(status.lastEventAt),
-    error: status.error ?? null,
+    error: status.error ?? running.api.tokenError,
     reconnectAttempts: status.reconnectAttempts,
     botName: running.bot?.name ?? null,
   };

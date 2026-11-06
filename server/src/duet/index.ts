@@ -467,7 +467,8 @@ export async function resumeAtGate(
       lastUserNote: lastUserNoteOf(rows),
     };
     // 关门那一行带上被关的那扇门的版本,和开门行配成一对(重启后内存里的门没了,版本取文件里最近一次开门)。
-    const closing = lastOpenedGateVersion(taskId);
+    let closing = 0;
+    try { closing = lastOpenedGateVersion(taskId); } catch { /* 读不了就不带版本,跟老记录一样 */ }
     recordGateEvent({ type: "duet.gate", taskId, gate: "G1", open: false, ...(closing ? { version: closing } : {}) });
     await setStatus(taskId, "running");
 

@@ -91,7 +91,12 @@ export function mountDuetGateRoutes(api: Hono): void {
       if (blocked) return c.json({ error: blocked, handoff: true }, 409);
       // 版本比对放在占锁之前:对不上就直接回,手里没有锁要还。
       if (expectedVersion !== undefined) {
-        const current = lastOpenedGateVersion(taskId);
+        let current: number;
+        try {
+          current = lastOpenedGateVersion(taskId);
+        } catch {
+          return c.json({ error: "这一下没读到讨论记录，确认不了你点的是哪一扇门：请稍后再点" }, 503);
+        }
         if (current !== expectedVersion) return c.json({ error: STALE, stale: true, gateVersion: current || null }, 409);
       }
       // 同 /run:先原子占位再启动,占不到说明确有回合在跑(闸口重放会真的续跑讨论)。

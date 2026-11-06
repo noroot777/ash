@@ -224,6 +224,13 @@ export const tasks = sqliteTable("tasks", {
   acceptedGateMode: text("accepted_gate_mode"),
   /** `passed` 时指着真的跑绿的那一次(accept_gate_runs.id)。**不是**最近那一次。 */
   acceptedGateRunId: text("accepted_gate_run_id"),
+  /**
+   * **这是哪一次验收**:每次真落下验收章(从没盖章的状态进 merged / accepted)生成一个,merged → accepted
+   * 是同一次、沿用;摘牌清空,原样挂回时随快照一起回来(task-stage.ts)。上面那几列合并事实当不了这个身份
+   * —— 就地验收、只标记、不合并的那几档,前后两次真验收落下的事实一模一样(飞书「完成也推」据此分辨是不是
+   * 新的一次,审查第 2 轮实测)。老数据为空:加列之前的验收,读侧回落到合并事实。
+   */
+  acceptanceId: text("acceptance_id"),
   baseUpdateIntent: text("base_update_intent"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   creationOrigin: text("creation_origin"),

@@ -2,7 +2,9 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { setTaskStage } from "./task-stage.js";
+import { id } from "./util.js";
 import { publishTaskUpdated } from "./task-store.js";
+import { isSharedTeamWorker } from "./task-result-version.js";
 
 // 团队级验收联动：parentId 指向团队且不用独立 worktree 的共享执行者没有自己的分支，
 // 团队验收成功时把它们的 stage 一起标成 accepted（从 task-accept.ts 拆出，纯行数拆分）。
@@ -14,13 +16,16 @@ export type SharedWorkerAcceptance = {
 
 export async function acceptSharedTeamWorkers(leadId: string): Promise<SharedWorkerAcceptance> {
   const sharedWorkers = (await db.select().from(tasks).where(eq(tasks.parentId, leadId)))
-    .filter((worker) => !worker.useWorktree);
+    .filter(isSharedTeamWorker);
   let updated = 0;
   for (const worker of sharedWorkers) {
     if (worker.stage === "accepted") continue;
     // 只盖真正结束了的（guard 已挡 backlog/paused，这里是纵深防御）：验收章不能落在
     // 从未执行或还等续跑的工作上。
     if (!["done", "failed", "canceled"].includes(worker.status)) continue;
+    // 这一次团队验收给它也领一个验收身份（db/schema.ts acceptanceId）：通用的 setTaskStage 不领 —— 验证起不来时
+    // 把旧章写回去也走它，那不是新的一次验收。
+    await db.update(tasks).set({ acceptanceId: id() }).where(eq(tasks.id, worker.id));
     await setTaskStage(worker.id, "accepted");
     await publishTaskUpdated(worker.id);
     updated += 1;

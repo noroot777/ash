@@ -14,7 +14,7 @@ import { detectTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
 import { cachedModelEfforts } from "./executors/model-probe.js";
 import { monitorBlockedReason } from "@ash/shared/monitor";
-import { claimOwnTurn, releaseTurn } from "./runs.js";
+import { claimOwnTurn, heldForAcceptance, releaseTurn, turnBusyText } from "./runs.js";
 import { advanceQueueInBackground } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { createTasks, enrichTasks, publishTaskUpdated, toTaskListItem } from "./task-store.js";
@@ -176,6 +176,10 @@ api.post("/tasks", async (c) => {
     if (taskRef && !(await taskInProject(taskRef, b.projectId))) {
       return c.json({ error: "task not found", [field]: taskRef }, 404);
     }
+  }
+  // 团队验收占着全队（team-acceptance-hold.ts）：这时加进来的执行者、审查任务不在占位里，能照常起跑、改共享目录。
+  if ((b.parentId && heldForAcceptance(b.parentId)) || (b.reviewOf && heldForAcceptance(b.reviewOf))) {
+    return c.json({ error: "所属团队正在验收，结束后再添加执行者或审查", parentId: b.parentId ?? null, reviewOf: b.reviewOf ?? null }, 409);
   }
   // 没显式指定就按**这个请求配不配自由工作流**推导（`freeWorkflowFits` 与下面三条门禁
   // 共用同一份判据）。以前这里写死 `preset`，于是同一件事从界面建和从 MCP/脚本建会落到
@@ -607,6 +611,11 @@ api.patch("/tasks/:id", async (c) => {
   // 而且终态任务会被队列推进透明跳过 —— 锁住 backlog 反而可能和「改回 backlog 就该被
   // 队列拉起来」那一步抢自己的锁。判据直接用 `monitorBlockedReason`，与起跑那一侧
   // 同一份，两边永远不会对「哪算结束」分家。
+  // 团队验收占着这一位（team-acceptance-hold.ts）：改回 backlog 会让它重新排进队列、改成终态会让验收联动盖错章、
+  // 翻 mode 会换掉验收按哪套判据算成员和成果，都等验收结束。
+  if ((b.status !== undefined || b.mode !== undefined) && heldForAcceptance(tid)) {
+    return c.json({ error: turnBusyText(tid, "改状态"), status: existing.status }, 409);
+  }
   const lockTurn = b.status !== undefined && monitorBlockedReason({ status: b.status }) !== null;
   const turn = lockTurn ? claimOwnTurn(tid, "status") : null;
   if (lockTurn && !turn) {

@@ -503,7 +503,7 @@ export async function exportHandoff(
           acceptedMergeCommit: task.acceptedMergeCommit,
           acceptedMergeMethod: task.acceptedMergeMethod,
           acceptedGateMode: task.acceptedGateMode as HandoffManifest["task"]["acceptedGateMode"],
-          acceptedGateRunId: task.acceptedGateRunId,
+          acceptedGateRunId: task.acceptedGateRunId, acceptanceId: task.acceptanceId,
           pinnedAt: task.pinnedAt, starredAt: task.starredAt,
           createdAt: task.createdAt, startedAt: task.startedAt, endedAt: task.endedAt,
         },

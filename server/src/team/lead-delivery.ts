@@ -2,6 +2,7 @@
 // 的合并汇报)。单独成一个文件,是因为这里管着两件互相缠着的事 —— 按调用顺序串行、以及
 // 「打断与投递必须是同一个动作」,它们的理由都在下面那段注释里,跟事件消费循环放一起只会
 // 被淹掉(而且 session-consumer.ts 已经顶到 700 行上限)。
+import { heldForAcceptance } from "../runs.js";
 import { bindTurnSource, nextTurnStart } from "../session-turns.js";
 import { holdTurn } from "./lead-turns.js";
 import type { Lead } from "./session-types.js";
@@ -14,7 +15,7 @@ import type { Lead } from "./session-types.js";
  * 必须拿它去 `beginTurn`,不能自己再取一次 `now()` —— 那会是**另一个**身份,于是同一轮在活动
  * 册上登记两个起点,其中一个谁都不会来收。
  */
-export type LeadDelivery = { sent: boolean; interrupted: boolean; at: string | null };
+export type LeadDelivery = { sent: boolean; interrupted: boolean; at: string | null; refused?: "accepting" };
 
 /**
  * 把一条消息交给这台调度台的进程,**返回它收下了没有**(见 ResidentHandle.send)。
@@ -35,6 +36,10 @@ export type LeadDelivery = { sent: boolean; interrupted: boolean; at: string | n
 export async function sendToLead(lead: Lead, text: string, opts: { steer?: boolean; monitorWake?: boolean } = {}): Promise<LeadDelivery> {
   const delivery = (lead.sending ?? Promise.resolve()).then(async (): Promise<LeadDelivery> => {
     try {
+      // 团队正在验收(team-acceptance-hold.ts):送进去就是一个新回合,改的正是验收要合的那份工作目录。
+      // 挡在这儿而不是入口:这是写 stdin 之前最后一个同步点,入口查完到这里隔着排队和 await。没收下照常按
+      // 「没送出去」交回去(用户的话回托盘、执行者汇报进待送队列),验收结束补送。
+      if (heldForAcceptance(lead.taskId)) return { sent: false, interrupted: false, at: null, refused: "accepting" };
       // 判据取在这里:轮到这一条之后、写 stdin 之前,中间不再有 await。
       const interrupted = !!opts.steer && lead.busy;
       if (interrupted) lead.handle.interrupt();

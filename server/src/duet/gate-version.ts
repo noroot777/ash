@@ -31,10 +31,18 @@ const isVersion = (v: unknown): v is number => typeof v === "number" && Number.i
  * 行上带了 version 就用它;没带(加版本之前的老记录)就按开门序号补 —— 老记录全没带时
  * 补出来就是 1、2、3…,和新记录的发号规则同一套,两种算法在新老交界处接得上。
  * 坏行(半截写入)跳过,不让一行坏数据把版本判断整个掀翻。
+ *
+ * 文件不存在 = 从没开过门;**读不了**(权限、句柄耗尽、IO 错)往外抛,不能当成没开过:那样重启后版本从 1 重发,
+ * 旧卡又对上新门,开着的门也会被判成「没开」、卡片被收起(审查第 2 轮同类:读失败当成「没有」)。
  */
 function openedVersions(taskId: string): number[] {
   let raw: string;
-  try { raw = readFileSync(join(RUNS_DIR, taskId, "transcript.jsonl"), "utf8"); } catch { return []; }
+  try {
+    raw = readFileSync(join(RUNS_DIR, taskId, "transcript.jsonl"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
   const out: number[] = [];
   let last = 0;
   for (const line of raw.split("\n")) {
@@ -51,7 +59,7 @@ function openedVersions(taskId: string): number[] {
   return out;
 }
 
-/** 最近一次开门的版本;这场讨论从没开过门返回 0。 */
+/** 最近一次开门的版本;这场讨论从没开过门返回 0。读不了 transcript 时抛错(见 openedVersions)。 */
 export function lastOpenedGateVersion(taskId: string): number {
   return openedVersions(taskId).at(-1) ?? 0;
 }
@@ -60,9 +68,19 @@ export function lastOpenedGateVersion(taskId: string): number {
 // 文件里就少一扇门 —— 只看文件会把同一个版本号发两次,旧卡就又能对上新门了。
 const issued = new Map<string, number>();
 
-/** 给即将打开的那扇门发号:文件里最大的版本和本进程发过的最大版本取大,再加一。 */
+/**
+ * 给即将打开的那扇门发号:文件里最大的版本和本进程发过的最大版本取大,再加一。
+ * 文件这一下读不了时不能退回 0(会重发旧号):本进程发过号就接着它发,没发过就用秒级时间戳 —— 一定比文件里
+ * 按 1、2、3… 发出来的大,写进 transcript 之后后面的读数照样接得上。
+ */
 export function nextGateVersion(taskId: string): number {
-  const onDisk = openedVersions(taskId).reduce((max, v) => Math.max(max, v), 0);
+  let onDisk: number;
+  try {
+    onDisk = openedVersions(taskId).reduce((max, v) => Math.max(max, v), 0);
+  } catch (error) {
+    console.warn(`[ash] 读不了讨论记录,闸口版本改用兜底发号 task=${taskId}:`, (error as Error).message);
+    onDisk = issued.has(taskId) ? 0 : Math.floor(Date.now() / 1000);
+  }
   const next = Math.max(onDisk, issued.get(taskId) ?? 0) + 1;
   issued.set(taskId, next);
   return next;
@@ -77,6 +95,7 @@ export function nextGateVersion(taskId: string): number {
  *    `/gate` 会走重启补救那一路(`resumeAtGate`),版本取 transcript 里最近一次开门。
  *  · 锁被占着而内存里又没有门:正在开门的路上(状态已写成 awaiting_review、门还没登记),
  *    或者正在回炉。这时报 null,等 `duet.gate` 开门事件来了再看。
+ *  · 要读 transcript 却读不了:抛错,调用方别据此收卡或发卡(im/attention.ts viewsOf 把这个任务当成「这一下看不清」)。
  *
  * 不能从 shared 的「此刻轮到你了吗」推出来:那份判据把 awaiting_review 算作「机器在动」
  * (`shared/src/task-attention.ts` 的 isTaskLive),所以闸口要单独判。

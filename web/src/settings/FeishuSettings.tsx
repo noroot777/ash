@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import type { FeishuBinding, FeishuGroups, FeishuStatus, ProjectView } from "@ash/shared";
+import type { FeishuBinding, FeishuGroups, FeishuStatus } from "@ash/shared";
 import { api } from "../lib/api.ts";
 import { FeishuBindingCard } from "./FeishuBindingCard.tsx";
 import { FeishuConnectionCard } from "./FeishuConnectionCard.tsx";
@@ -43,14 +42,9 @@ export function FeishuSettings({ notify, onOpen }: {
   const status = useFeishuPoll(api.feishuStatus, statusInterval, "读取飞书状态失败");
   const binding = useFeishuPoll(api.feishuBinding, bindingInterval, "读取飞书绑定失败");
   const groups = useFeishuPoll(api.feishuGroups, groupsInterval, "读取群绑定失败");
-  const [projects, setProjects] = useState<ProjectView[]>([]);
-
-  useEffect(() => {
-    let alive = true;
-    // 项目清单只用来填下拉和勾选框，读不到就当没有项目，不拦整页。
-    api.projects().then((rows) => { if (alive) setProjects(rows); }).catch(() => {});
-    return () => { alive = false; };
-  }, []);
+  // 项目清单只用来填下拉和勾选框，读不到不拦整页 —— 但也不当成「没有项目」：那样推送卡说「还没有项目」、每个群都
+  // 标成「已看不到的项目」，像是权限丢了。null = 还没读到，各卡照实说，定时重读。
+  const projects = useFeishuPoll(api.projects, () => SLOW_POLL_MS, "读取项目清单失败").data;
 
   const current = status.data;
   const view = current ? connectionView(current.connection.state, current.connection.error, current.connection.reconnectAttempts) : null;

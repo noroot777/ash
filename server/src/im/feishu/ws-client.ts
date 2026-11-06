@@ -65,9 +65,10 @@ export interface FeishuWsOptions {
 }
 
 const OPEN = 1;
-// 接入点返回的 code。只有「服务端内部错误 / 忙」值得重试，其余（鉴权失败、超连接数）
-// 重试也不会好，停在 failed 等人改配置。
-const RETRYABLE_CODES = new Set([1, 1000040343]);
+// 接入点返回的 code（与飞书官方 SDK 同一张表：0 成功、1 忙、403 无权、514 鉴权失败、1000040343 内部错误、
+// 1000040350 超连接数）。只有 403 / 514 是配置问题、重试也不会好，停在 failed 等人改；别的（包括不认识的码、
+// 超连接数 —— 别处的旧连接断掉就好了）按退避接着重连，状态里照实显示错误，不能把一次没见过的码当成永久失败。
+const PERMANENT_CODES = new Set([403, 514]);
 // 看门狗：发出 ping 后这么久没有任何入站帧，就当连接已死、主动重连。SDK 默认不开看门狗，
 // 但长连接静默断掉是先例里踩过的坑（cc-connect），宁可多重连一次。
 const LIVENESS_MS = 60_000;
@@ -185,7 +186,7 @@ export class FeishuWsClient {
     }
     if (body?.code !== 0) {
       const code = Number(body?.code);
-      return { ok: false, retryable: RETRYABLE_CODES.has(code), error: `接入点拒绝：code=${code} ${body?.msg ?? ""}`.trim() };
+      return { ok: false, retryable: !PERMANENT_CODES.has(code), error: `接入点拒绝：code=${code} ${body?.msg ?? ""}`.trim() };
     }
     const url = String(body.data?.URL ?? "");
     const config = body.data?.ClientConfig ?? {};

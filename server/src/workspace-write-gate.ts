@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { taskFileRoot, type WorkspaceRoot } from "./file-browser.js";
-import { claimIdleWorkspaceTurns, claimWorkspaceTurn, isTurnClaimed } from "./runs.js";
+import { claimIdleWorkspaceTurns, claimWorkspaceTurn, heldForAcceptance, isTurnClaimed } from "./runs.js";
 import { isolatedWorkspaceOwner, workspaceParticipants, type WorkspacePeer } from "./task-workspace.js";
 
 // ── 「能不能动这个任务的工作目录」的公共门禁 ─────────────────────────────────
@@ -27,6 +27,9 @@ import { isolatedWorkspaceOwner, workspaceParticipants, type WorkspacePeer } fro
 // 会被各自既有的守卫挡回去。
 
 const RUNNING_STATES = new Set(["running", "queued"]);
+const NONE: ReadonlySet<string> = new Set();
+/** 团队验收占着这个目录（team-acceptance-hold.ts）：force 也不解，跟归档一样是只读。 */
+export const ACCEPTING_REFUSAL = "团队正在验收，工作区暂时只读：验收结束后再改。";
 
 export const ARCHIVED_REFUSAL = "任务已归档。归档 = 冻结，工作区在归档期间只读；要改先取消归档。";
 export const NOT_CREATED_REFUSAL = "这个任务应该在自己的独立工作区里干活，但那个目录还没建出来（任务还没跑过）。"
@@ -48,13 +51,14 @@ export async function loadWorkspaceTask(taskId: string): Promise<WorkspaceTaskRo
   return (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0) ?? null;
 }
 
-/** 这个目录此刻有没有任务在飞——有就回那一位。 */
-export function busyWorkspacePeer(peers: WorkspacePeer[]): WorkspacePeer | null {
-  return peers.find((peer) => isTurnClaimed(peer.id) || RUNNING_STATES.has(peer.status ?? "")) ?? null;
+/** 这个目录此刻有没有任务在飞——有就回那一位。`held` = 调用方自己占着的那几把（团队验收的自动提交），不算在飞。 */
+export function busyWorkspacePeer(peers: WorkspacePeer[], held: ReadonlySet<string> = NONE): WorkspacePeer | null {
+  return peers.find((peer) => (isTurnClaimed(peer.id) && !held.has(peer.id)) || RUNNING_STATES.has(peer.status ?? "")) ?? null;
 }
 
 /** 「谁在飞」这句话：兄弟任务得报出名字，不然用户只会以为是自己这个任务在跑。 */
 export function workspaceBusyLabel(taskId: string, peer: WorkspacePeer): string {
+  if (heldForAcceptance(peer.id)) return "所属团队正在验收（含发布尾段）";
   return peer.id === taskId
     ? "任务正在运行"
     : `共用这个工作目录的另一个任务「${peer.title?.trim() || peer.id}」正在运行`;
@@ -77,13 +81,14 @@ export async function workspaceReadOnlyReason(
 /** 解析目录并圈出共用者。解析不出来时把响应交给调用方。 */
 export async function resolveWorkspaceContext(
   taskId: string,
+  held: ReadonlySet<string> = NONE,
 ): Promise<WorkspaceWriteContext | { error: string; status: 404 }> {
   const task = await loadWorkspaceTask(taskId);
   if (!task) return { error: "这个任务还没有可浏览的工作目录", status: 404 };
   const root = await taskFileRoot(taskId);
   if (!root) return { error: "这个任务还没有可浏览的工作目录", status: 404 };
   const peers = await workspaceParticipants(task, root.path);
-  return { task, root, peers, busy: busyWorkspacePeer(peers) };
+  return { task, root, peers, busy: busyWorkspacePeer(peers, held) };
 }
 
 export interface WorkspaceClaimOptions {
@@ -95,6 +100,8 @@ export interface WorkspaceClaimOptions {
   busyError: (who: string) => Error;
   archivedError: (message: string) => Error;
   missingError: () => Error;
+  /** 调用方自己已经占着的共用者（团队验收的自动提交，见 team-acceptance-hold.ts）：不再占，也不当成别人。 */
+  held?: ReadonlySet<string>;
 }
 
 /**
@@ -111,10 +118,14 @@ export interface WorkspaceClaimOptions {
  */
 export async function claimWorkspaceWrite(options: WorkspaceClaimOptions): Promise<(() => void) | undefined> {
   const { taskId, context, forced } = options;
+  const held = options.held ?? NONE;
+  // 别人的团队验收占着这个目录：force 也不解。不先拒的话，force 那条「能占几把占几把」会跳过被占的那几位照写。
+  if (context.peers.some((peer) => !held.has(peer.id) && heldForAcceptance(peer.id))) throw options.archivedError(ACCEPTING_REFUSAL);
   const claimed = new Set(context.peers.map((peer) => peer.id));
+  const claimable = [...claimed].filter((id) => !held.has(id));
   const release = (forced
-    ? claimIdleWorkspaceTurns([...claimed])
-    : claimWorkspaceTurn([...claimed])) ?? undefined;
+    ? claimIdleWorkspaceTurns(claimable)
+    : claimWorkspaceTurn(claimable)) ?? undefined;
   try {
     const fresh = await loadWorkspaceTask(taskId);
     if (!fresh) throw options.missingError();

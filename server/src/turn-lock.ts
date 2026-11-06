@@ -140,6 +140,14 @@ export const RECONCILE_TURN_ROLE = "reconcile";
 export const SEAT_ROLLBACK_ROLE = "seat-rollback";
 
 /**
+ * 团队验收占住这一队（调度台 + 共享执行者，team-acceptance-hold.ts）时写进 `turns` 的身份。**不是一个回合**:
+ * 占着它,队里谁都起不了新的一轮(`claimOwnTurn` 占不到),归档、删除、改状态、写工作区也被各自的
+ * `isTurnClaimed` 守卫挡回;验收自己的守卫认得它(task-accept-guard.ts)。释放时照常排空「等这一轮跑完」的
+ * 交接,被挡下的投递随即补上。同 scm 预占:不碰起跑冻结,也不进可疑锁判据(turn-lock-reclaim.ts)。
+ */
+export const ACCEPT_HOLD_ROLE = "accept-hold";
+
+/**
  * 冻结一个**正在起跑**的回合：已 claim、还没 spawn，所以没有 handle 可杀。
  * 返回 false = 这个任务根本没有回合在起跑（调用方无事可做）。
  *
@@ -156,6 +164,7 @@ export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"
   if (role === undefined || role === WORKSPACE_TURN_ROLE || role === WAKE_TURN_ROLE) return false;
   if (role === RECONCILE_TURN_ROLE) return false; // 残留结算也不是回合,理由同上
   if (role === SEAT_ROLLBACK_ROLE) return false; // 占位回滚也不是回合,理由同上
+  if (role === ACCEPT_HOLD_ROLE) return false; // 团队验收的占位也不是回合,理由同上
   startFreeze.set(taskId, settle);
   return true;
 }
@@ -350,6 +359,29 @@ export function claimIdleWorkspaceTurns(taskIds: string[]): () => void {
     if (owner) claimed.push({ taskId, owner });
   }
   return releaserFor(claimed);
+}
+
+/**
+ * 团队验收占住这一队:能占到几把占几把(同 `claimIdleWorkspaceTurns`),占不到的是此刻真有回合在跑的那些 ——
+ * 不必回给调用方,验收自己的守卫照常看得见它们(`isTurnClaimed`)并拒绝验收。交回占到了谁和释放函数。
+ */
+export function claimAcceptanceHold(taskIds: string[]): { held: ReadonlySet<string>; release: () => void } {
+  const claimed: Array<{ taskId: string; owner: TurnIdentity }> = [];
+  for (const taskId of new Set(taskIds)) {
+    const owner = claimOwnTurn(taskId, ACCEPT_HOLD_ROLE);
+    if (owner) claimed.push({ taskId, owner });
+  }
+  return { held: new Set(claimed.map((item) => item.taskId)), release: releaserFor(claimed) };
+}
+
+/** 这个任务此刻是不是被团队验收占着。 */
+export function heldForAcceptance(taskId: string): boolean {
+  return turns.get(taskId)?.role === ACCEPT_HOLD_ROLE;
+}
+
+/** 「回合占着」对人怎么说:团队验收占着的说清是在验收,别让人以为有一轮在跑、去点人工放开。 */
+export function turnBusyText(taskId: string, then: string): string {
+  return heldForAcceptance(taskId) ? `所属团队正在验收（含发布尾段），结束后再${then}` : `任务回合正在进行，结束后再${then}`;
 }
 
 /**

@@ -7,6 +7,7 @@ import { assertAcceptanceWorkspaceCommit } from "./accept-workspace-ownership.js
 import type { AcceptFailure } from "./task-accept-guard.js";
 import type { AcceptanceAutoCommitOutcome } from "@ash/shared/accept-workspace";
 import { acceptanceAutoCommitDecision } from "./accept-workspace-decision.js";
+import { holdMembers } from "./team-acceptance-hold.js";
 
 export async function autoCommitAcceptanceWorkspace(
   task: typeof tasks.$inferSelect,
@@ -21,7 +22,9 @@ export async function autoCommitAcceptanceWorkspace(
   };
   let commitRequired = false;
   try {
-    const context = await resolveWorkspaceContext(task.id);
+    // 团队验收自己占着的那几把（team-acceptance-hold.ts）不算有人在跑，也不再占一遍。
+    const held = holdMembers(task.id);
+    const context = await resolveWorkspaceContext(task.id, held);
     if ("error" in context) return skip(context.error);
     if (!context.root.gitRepo) return skip("当前工作目录不是 Git 仓库");
     const status = await readScmStatus(context.root.path);
@@ -37,7 +40,7 @@ export async function autoCommitAcceptanceWorkspace(
       const freshDecision = await acceptanceAutoCommitDecision(context, await readScmStatus(context.root.path), true, null);
       if (freshDecision.action !== "commit") throw new ScmOperationError(freshDecision.reason, 409);
       return claimWorkspaceWrite({
-        taskId: task.id, context, forced: false,
+        taskId: task.id, context, forced: false, held,
         busyError: who => new ScmOperationError(`${who}，不能自动提交`, 409),
         archivedError: message => new ScmOperationError(message, 409),
         missingError: () => new ScmOperationError("任务不存在", 404),

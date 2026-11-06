@@ -88,6 +88,7 @@ const REJECT_TEXT: Record<string, string> = {
   expired: "卡片已过期，请在 ash 里处理",
   not_yours: "这张卡片不是发给你的",
   used: "这张卡片已经处理过了",
+  corrupt: "这张卡片的按钮记录读不出来了，请在 ash 里处理",
 };
 
 /** 结局事务。只用 tx 写（根 db 的写会等这个事务收尾，事务里调它就卡死 5 秒再抛错）。 */
@@ -155,7 +156,9 @@ export class CardActions {
   private async turnJob(
     envelope: EnvelopeRow, payload: Record<string, unknown>, op: string, event: CallbackEvent, row: OutboxRow, actor: Actor,
   ): Promise<Job | CallbackResponse> {
-    const view = (await viewsOf([envelope.taskId ?? ""])).get(envelope.taskId ?? "") ?? null;
+    const views = await viewsOf([envelope.taskId ?? ""]);
+    if (!views.has(envelope.taskId ?? "")) return toast("warning", "这一下没读清任务现状，请稍后再点");
+    const view = views.get(envelope.taskId ?? "") ?? null;
     if (view && !await canSeeProject(actor, view.task.projectId)) return toast("error", "你看不到这个任务所在的项目，点不了这张卡");
     const link = view ? taskLink((await readOptions()).publicBaseUrl, view) : null;
     if (!view?.turn || view.turn.kind !== envelope.action || view.turn.generation !== envelope.generation) {
@@ -220,7 +223,10 @@ export class CardActions {
       });
       return;
     }
-    const view = envelope.taskId ? (await viewsOf([envelope.taskId])).get(envelope.taskId) ?? null : null;
+    const views = envelope.taskId ? await viewsOf([envelope.taskId]) : null;
+    // 看不清现状就先不结：信封留着占用，下一次 recover() 再判（同 viewsOf 的约定）。
+    if (views && !views.has(envelope.taskId!)) return;
+    const view = views?.get(envelope.taskId!) ?? null;
     const untouched = !!view?.turn && view.turn.kind === envelope.action && view.turn.generation === envelope.generation;
     await commit(this.deps.reconciler, async (tx) => {
       const concluded = untouched ? await releaseEnvelope(tx, claim, "interrupted") : await finishEnvelope(tx, claim, "interrupted");

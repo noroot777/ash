@@ -23,7 +23,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { isTurnClaimed } from "./runs.js";
+import { heldForAcceptance, isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { hasLiveAcceptGate } from "./accept-gate.js";
 import { reconcileGateProcesses } from "./accept-gate-ownership.js";
@@ -51,7 +51,8 @@ export async function taskBusyRejection(taskId: string, verb: string): Promise<T
   const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!row) return hasLiveAcceptGate(taskId) ? { error: `验收前置命令尚未确认退出，暂不能${verb}` } : null;
   // 「在执行」和「在验收」要分开报 —— 用户要做的事不一样(一个去停,一个等它跑完);
-  // 两句之和正好是 isTaskBusy。
+  // 两句之和正好是 isTaskBusy。团队验收占着的执行者(team-acceptance-hold.ts)也占着 turn,但它是在等验收,不是在执行。
+  if (heldForAcceptance(taskId)) return { error: `所属团队正在验收，结束后再${verb}`, status: row.status };
   if (row.status === "running" || row.status === "queued" || isTurnClaimed(taskId)) {
     return { error: `任务正在执行，请先停止再${verb}`, status: row.status };
   }

@@ -4,14 +4,14 @@
 // 不在打开状态，以卡为判据就一条也发不出（审查实测）；门禁的结果更可能根本没有对应的卡。所以每个
 // 任务记一份「上次对账看到的结局」（im_outcomes），对账时现算一遍，变了就发一条新消息 —— 原地改卡
 // 在手机上不会提醒。
-//   result  最近一次验收的身份：落章时写下的那几样合并事实（acceptanceIdentity）。不拿成果版本
-//           （结束时刻）当身份：验收之后问一句、跑一次合并结果审查，结束时刻都会变，会把同一次验收
-//           再推一遍（对抗复核实测）。牌子摘下的那段时间不记 —— 这一轮没改东西、原样挂回来的还是
-//           同一次验收，不算新的。
+//   result  最近一次验收的身份：tasks.acceptance_id（每次真落章领一个，摘牌挂回随快照回来）。不拿成果
+//           版本（结束时刻）当身份：验收之后问一句、跑一次合并结果审查，结束时刻都会变，会把同一次验收
+//           再推一遍（对抗复核实测）；也不拿合并事实：就地、只标记的那几档前后两次真验收落下的事实一模
+//           一样，第二次就推不出来（审查第 2 轮实测）。加列之前的老验收没有 id，才回落到合并事实。牌子
+//           摘下的那段时间不记 —— 这一轮没改东西、原样挂回来的还是同一次验收，不算新的。
 //   gate    最近一次跑出结果（通过 / 没通过）的那一次门禁；被打断、取消的不算结果
 // 第一次看到一个任务只记下现状不发：刚绑定、刚升级时不把历史结局补推一遍。「任务完成」那一下由
 // 待验收卡本身负责（新卡就是一条新消息），这里不重复发。
-// 已知的盲区：非 git、又没设门禁的任务摘牌后再验收一次，落章事实和上一次一模一样，第二次不再推。
 // 事件丢了（重启、通道重启正好落在对账前）由全量对账按「账和现状对不上」补（staleOutcomeTasks）。
 import { isAcceptedStage } from "@ash/shared";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
@@ -27,10 +27,11 @@ import { scrubTitle } from "./scrub.js";
 type OutcomeKind = "result" | "gate";
 const NONE = "-";
 
-/** 这一次验收的身份：落章时写下、摘牌后挂回时原样恢复的那几样（task-stage.ts 的 AcceptedSnapshot）。 */
-const acceptanceIdentity = sql<string>`'accepted:' || coalesce(${tasks.acceptedSourceCommit}, '') || '|' || coalesce(${tasks.acceptedTargetBranch}, '')
+/** 这一次验收的身份（db/schema.ts acceptanceId）；加列之前的老验收没有，按落章时写下的那几样合并事实认。 */
+const acceptanceIdentity = sql<string>`CASE WHEN ${tasks.acceptanceId} IS NOT NULL THEN 'acceptance:' || ${tasks.acceptanceId}
+  ELSE 'accepted:' || coalesce(${tasks.acceptedSourceCommit}, '') || '|' || coalesce(${tasks.acceptedTargetBranch}, '')
   || '|' || coalesce(${tasks.acceptedBaseCommit}, '') || '|' || coalesce(${tasks.acceptedMergeCommit}, '')
-  || '|' || coalesce(${tasks.acceptedMergeMethod}, '') || '|' || coalesce(${tasks.acceptedGateRunId}, '')`;
+  || '|' || coalesce(${tasks.acceptedMergeMethod}, '') || '|' || coalesce(${tasks.acceptedGateRunId}, '') END`;
 /** 最近一次跑出结果的门禁，跟 outcomesOf 里那一份同一个口径。 */
 const latestGate = sql<string>`coalesce((SELECT r.id || ':' || r.status FROM accept_gate_runs r
   WHERE r.task_id = ${imOutcomes.taskId} AND r.status IN ('passed', 'failed') ORDER BY r.started_at DESC LIMIT 1), '-')`;
