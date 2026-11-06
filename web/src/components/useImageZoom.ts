@@ -10,17 +10,21 @@ import {
 } from "react";
 
 /**
- * 灯箱里的缩放与平移。
+ * 看图时的缩放与平移：大图灯箱和文件查看器共用这一份，工具条是 `ImageZoomControls`。
  *
- * 图片本身照旧按 CSS 的 max-width/max-height 「适应窗口」排版，缩放只叠一层 transform：
- * `scale` 是相对适应尺寸的倍数（1 = 适应窗口），`x/y` 是相对排版位置的平移。这样排版
- * 永远不变，滚轮、拖拽、双指只改 transform，不会触发重排；换图或窗口尺寸一变就回到 1。
+ * 图片本身照旧按 CSS 的 max-width/max-height 「适应容器」排版，缩放只叠一层 transform：
+ * `scale` 是相对适应尺寸的倍数（1 = 适应容器），`x/y` 是相对排版位置的平移。这样排版
+ * 永远不变，滚轮、拖拽、双指只改 transform，不会触发重排；换图或容器尺寸一变就回到 1。
+ * 平移的边界按图片的 offsetParent 算，所以容器得是定位元素（灯箱是 fixed，文件查看器
+ * 的图片区是 relative）。
  */
 type View = { scale: number; x: number; y: number };
 type Point = { x: number; y: number };
 
 const FIT: View = { scale: 1, x: 0, y: 0 };
 const BUTTON_STEP = 1.5;
+
+export type ImageZoom = ReturnType<typeof useImageZoom>;
 
 export function useImageZoom(src: string, containerRef: RefObject<HTMLElement | null>) {
   const imageRef = useRef<HTMLImageElement>(null);
@@ -54,15 +58,25 @@ export function useImageZoom(src: string, containerRef: RefObject<HTMLElement | 
     if (imageRef.current?.complete) measure();
   }, [measure, src]);
 
+  // 换图时上一张没收尾的手势作废，免得半截拖拽/捏合落到新图上。
   useEffect(() => {
-    const reset = () => {
+    pointers.current.clear();
+    press.current = null;
+    setDragging(false);
+  }, [src]);
+
+  // 看的是容器而不是窗口：文件查看器所在的中栏会随侧栏开合、铺满放大而变宽变窄，窗口却没动。
+  useEffect(() => {
+    const box = containerRef.current;
+    if (!box) return;
+    const observer = new ResizeObserver(() => {
       setAnimated(false);
       setView(FIT);
       measure();
-    };
-    window.addEventListener("resize", reset);
-    return () => window.removeEventListener("resize", reset);
-  }, [measure]);
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [containerRef, measure]);
 
   // 平移只在图比视口大的那条轴上放开，且图的边缘不能拖进视口里留出空白。
   const clamp = useCallback((next: View): View => {
@@ -121,7 +135,7 @@ export function useImageZoom(src: string, containerRef: RefObject<HTMLElement | 
   // 适应窗口 ⇄ 实际大小；原图本来就不比窗口大时，「实际大小」就是适应尺寸，改成放大一倍。
   const toggle = useCallback((anchor?: Point) => {
     setAnimated(true);
-    zoom((scale) => scale > 1 ? 1 : actualScale >= 1.5 ? actualScale : 2, anchor);
+    zoom((scale) => scale > 1 ? 1 : actualScale > 1.01 ? actualScale : 2, anchor);
   }, [actualScale, zoom]);
 
   useEffect(() => {
@@ -160,12 +174,13 @@ export function useImageZoom(src: string, containerRef: RefObject<HTMLElement | 
       setView((current) => current.scale > 1 ? clamp({ ...current, x: current.x + dx, y: current.y + dy }) : current);
       return;
     }
-    // 双指：两指间距之比是缩放，两指中点的位移是平移。
+    // 双指：两指间距之比是缩放，两指中点的位移是平移。以挪动前的中点为锚缩放，再把它搬到
+    // 新中点——两指下面始终是图上同一处。
     const other = others[0]![1];
     const before = Math.hypot(previous.x - other.x, previous.y - other.y);
     const after = Math.hypot(point.x - other.x, point.y - other.y);
     if (!before) return;
-    const mid = { x: (point.x + other.x) / 2, y: (point.y + other.y) / 2 };
+    const mid = { x: (previous.x + other.x) / 2, y: (previous.y + other.y) / 2 };
     zoom((scale) => scale * (after / before), mid, { x: (point.x - previous.x) / 2, y: (point.y - previous.y) / 2 });
   };
   const onPointerEnd = (event: PointerEvent<HTMLImageElement>) => {
@@ -188,6 +203,7 @@ export function useImageZoom(src: string, containerRef: RefObject<HTMLElement | 
 
   return {
     imageRef,
+    percent: Math.round(view.scale * fitRatio * 100),
     imageProps: {
       style,
       onLoad: measure,
@@ -196,7 +212,6 @@ export function useImageZoom(src: string, containerRef: RefObject<HTMLElement | 
       onPointerUp: onPointerEnd,
       onPointerCancel: onPointerEnd,
     },
-    percent: Math.round(view.scale * fitRatio * 100),
     canZoomIn: view.scale < maxScale - 0.001,
     canZoomOut: view.scale > 1,
     zoomIn,

@@ -75,8 +75,8 @@ try {
   // 缩放：读数按原图像素算，夹具图比窗口小，适应窗口就是 100%。
   const zoomGroup = dialog.getByRole("group", { name: "缩放" });
   const percent = zoomGroup.getByRole("button", { name: "适应窗口 / 实际大小" });
-  const zoomIn = zoomGroup.getByRole("button", { name: "放大", exact: true });
-  const zoomOut = zoomGroup.getByRole("button", { name: "缩小", exact: true });
+  const zoomIn = zoomGroup.getByRole("button", { name: "放大图片", exact: true });
+  const zoomOut = zoomGroup.getByRole("button", { name: "缩小图片", exact: true });
   const transform = () => dialog.locator("img").evaluate((image) => image.style.transform);
   assert.equal(await percent.textContent(), "100%");
   assert.equal(await zoomOut.isDisabled(), true, "fit-to-window is the floor, zoom-out starts disabled");
@@ -98,7 +98,7 @@ try {
   const box = await dialog.locator("img").boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, -300);
-  await page.waitForFunction(() => document.querySelector(".image-preview-lightbox__zoom button:nth-child(2)")?.textContent !== "100%");
+  await page.waitForFunction(() => document.querySelector(".image-zoom-controls button:nth-child(2)")?.textContent !== "100%");
   const wheeled = Number((await percent.textContent()).replace("%", ""));
   assert(wheeled > 100, `wheel up should zoom in, got ${wheeled}%`);
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);

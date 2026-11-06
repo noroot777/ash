@@ -65,7 +65,7 @@
 .image-preview-lightbox__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-preview-lightbox__meta small { flex: 0 0 auto; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.78; }
 
-.image-preview-lightbox__zoom {
+.image-zoom-controls {
   position: absolute;
   z-index: 1;
   bottom: 12px;
@@ -82,7 +82,7 @@
   backdrop-filter: blur(8px);
 }
 
-.image-preview-lightbox__zoom button {
+.image-zoom-controls button {
   display: grid;
   place-items: center;
   min-width: 30px;
@@ -93,15 +93,15 @@
   color: inherit;
 }
 
-.image-preview-lightbox__zoom button:nth-child(2) {
+.image-zoom-controls button:nth-child(2) {
   min-width: 54px;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
-.image-preview-lightbox__zoom button:hover:not(:disabled) { background: rgb(255 255 255 / 14%); }
-.image-preview-lightbox__zoom button:disabled { opacity: 0.38; }
-.image-preview-lightbox__zoom button:focus-visible { outline: 2px solid rgb(255 255 255 / 82%); outline-offset: 1px; }
+.image-zoom-controls button:hover:not(:disabled) { background: rgb(255 255 255 / 14%); }
+.image-zoom-controls button:disabled { opacity: 0.38; }
+.image-zoom-controls button:focus-visible { outline: 2px solid rgb(255 255 255 / 82%); outline-offset: 1px; }
 
 @media (max-width: 640px) {
   .image-preview-lightbox { padding: 56px 48px 48px; }

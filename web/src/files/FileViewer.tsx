@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut,
   CaretLeft,
@@ -12,6 +12,8 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
+import { ImageZoomControls } from "../components/ImageZoomControls.tsx";
+import { useImageZoom } from "../components/useImageZoom.ts";
 import { api, type FileContent } from "../lib/api.ts";
 import { useZoomLayer, ZoomToggle } from "../lib/zoomLayer.tsx";
 import { formatSize, isImageName } from "./fileModel.ts";
@@ -26,6 +28,18 @@ function TextBody({ file }: { file: FileContent }) {
         {lines.map((_line, index) => <span key={index}>{index + 1}</span>)}
       </div>
       <pre className="file-viewer__text"><code>{file.text}</code></pre>
+    </div>
+  );
+}
+
+// 文件里的图片就在中栏原地缩放，跟大图灯箱同一套手势与工具条；左右键照旧留给连续翻图。
+function ImageBody({ src, name }: { src: string; name: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const zoom = useImageZoom(src, box);
+  return (
+    <div className="file-viewer__media file-viewer__media--image" ref={box}>
+      <img {...zoom.imageProps} ref={zoom.imageRef} src={src} alt={name} draggable={false} />
+      <ImageZoomControls zoom={zoom} />
     </div>
   );
 }
@@ -70,13 +84,7 @@ function Body({
   showSource: boolean;
 }) {
   const rawUrl = api.taskFileRawUrl(taskId, file.path);
-  if (file.kind === "image") {
-    return (
-      <div className="file-viewer__media">
-        <img src={rawUrl} alt={file.name} />
-      </div>
-    );
-  }
+  if (file.kind === "image") return <ImageBody src={rawUrl} name={file.name} />;
   if (file.kind === "pdf") {
     // iframe 的无障碍名用 aria-label 而不是 title：原生 title 在这个仓库是受管控的存量。
     return <iframe className="file-viewer__pdf" src={rawUrl} aria-label={`${file.name} 预览`} />;

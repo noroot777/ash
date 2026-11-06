@@ -13,8 +13,9 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { CaretLeft, CaretRight, Minus, Plus, X } from "@phosphor-icons/react";
+import { CaretLeft, CaretRight, X } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { ImageZoomControls } from "./ImageZoomControls.tsx";
 import { useImageZoom } from "./useImageZoom.ts";
 
 type ImageProps = ComponentPropsWithoutRef<"img"> & { label?: string };
@@ -75,6 +76,7 @@ function ImageLightbox({
     onIndexChange((index + delta + images.length) % images.length);
   }, [grouped, images.length, index, onIndexChange]);
   const zoom = useImageZoom(current?.src ?? "", box);
+  const { zoomIn, zoomOut, reset: resetZoom } = zoom;
 
   // 大图是从别的浮层里点开的（审查抽屉、菜单、对话气泡），portal 到 body 之后 DOM 上就
   // 不在它们内部了——不登记进这一摞层，点这张大图/关闭按钮会被外层读成「点了外面」，
@@ -106,12 +108,12 @@ function ImageLightbox({
       } else if (!event.metaKey && !event.ctrlKey && !event.altKey && ZOOM_KEYS[event.key]) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        zoom[ZOOM_KEYS[event.key]!]();
+        ({ zoomIn, zoomOut, reset: resetZoom })[ZOOM_KEYS[event.key]!]();
       }
     };
     document.addEventListener("keydown", interceptKeys, true);
     return () => document.removeEventListener("keydown", interceptKeys, true);
-  }, [grouped, onClose, step, zoom]);
+  }, [grouped, onClose, resetZoom, step, zoomIn, zoomOut]);
 
   if (!current) return null;
   const label = current.label || current.alt || "图片";
@@ -153,17 +155,7 @@ function ImageLightbox({
           <CaretRight size={24} weight="bold" aria-hidden="true" />
         </button>
       )}
-      <div className="image-preview-lightbox__zoom" role="group" aria-label="缩放">
-        <button type="button" aria-label="缩小" disabled={!zoom.canZoomOut} onClick={zoom.zoomOut}>
-          <Minus size={15} weight="bold" aria-hidden="true" />
-        </button>
-        <button type="button" aria-label="适应窗口 / 实际大小" onClick={() => zoom.toggle()}>
-          {zoom.percent}%
-        </button>
-        <button type="button" aria-label="放大" disabled={!zoom.canZoomIn} onClick={zoom.zoomIn}>
-          <Plus size={15} weight="bold" aria-hidden="true" />
-        </button>
-      </div>
+      <ImageZoomControls zoom={zoom} />
     </div>,
     document.body,
   );
