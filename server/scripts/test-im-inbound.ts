@@ -4,7 +4,8 @@
 // ① 绑定码：单聊里发个人码 → 认领、回一句「回网页确认」；没绑定的人单聊只提示一次，群里不出声；
 //    群里没 @ 机器人的话一律不理；
 // ② 回复任务卡：此刻在等答复就是答复（多题按题号拆）；不是提问就当成发给任务的消息；收到点个表情；
-//    答复只认那张卡自己问的那道题：回旧提问卡、回别的卡都不答到眼下这道题上；
+//    答复只认那张卡自己问的那道题：回旧提问卡、回别的卡都不答到眼下这道题上（带附件也一样）；
+//    回在机器人自己的文字回执下面，认话题根上那张卡；
 // ③ 命令：/help /project /new（先确认，点确定才建任务并开跑）/stop（先确认，取消就不停）/todo；
 //    不认识的消息类型回一句说明；
 // ④ 助手房间：单聊里直接说话 → 照最近一间助手房间的配置建一间「飞书」，投进去；回复按 reply_to
@@ -13,7 +14,7 @@
 // ⑥ 群：在群里 @ 机器人发群码 → 认领（带群名）→ 确认 → 群里 @ 机器人说话进项目群聊房间，
 //    自动补上 @成员名（群聊房间里不点名没人答）。
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireTmpDb, releaseTmpDb } from "./tmp-db.js";
@@ -55,6 +56,7 @@ try {
   const statusOf = async (id: string) => (await db.select({ s: tasks.status }).from(tasks).where(eq(tasks.id, id))).at(0)?.s;
   const repliesTo = (messageId: string) => fake.sends().filter((send) => send.path.includes(`/messages/${messageId}/reply`));
   const inboundOf = async (messageId: string) => (await db.select().from(imInbound).where(eq(imInbound.id, `msg:${messageId}`))).at(0)!;
+  const uploads = () => existsSync(join(stage, "uploads")) ? readdirSync(join(stage, "uploads")).length : 0;
 
   await im.reconciler.full();
   await im.settle();
@@ -136,6 +138,39 @@ try {
     const after = await im.say({ text: "再补一句", parentId: secondCard.messageId! });
     assert.equal((await inboundOf(after)).detail, "stale_question", "答过的题再回不当答复");
     await waitIdle(() => statusOf("tg"), "paused");
+
+    // 带附件走的是「给任务发消息」，那条路会清掉眼下的提问 —— 回旧卡、回别的卡带图也得先拦下。
+    await db.insert(tasks).values(task({ id: "th", title: "带图回旧卡", status: "paused", question: "选 A 还是 B？" }) as never);
+    await im.reconciler.reconcile(["th"]);
+    await im.settle();
+    const oldCard = await cardOf("th");
+    await db.update(tasks).set({ question: "那 C 呢？", updatedAt: new Date().toISOString() }).where(eq(tasks.id, "th"));
+    await im.reconciler.reconcile(["th"]);
+    await im.settle();
+    const newCard = await cardOf("th");
+    assert.notEqual(newCard.id, oldCard.id);
+    const questionOf = async () => (await db.select().from(tasks).where(eq(tasks.id, "th"))).at(0)!.question;
+    const stalePhoto = await im.say({ messageType: "image", content: { image_key: "img_stale" }, parentId: oldCard.messageId! });
+    assert.equal((await inboundOf(stalePhoto)).detail, "stale_question", "旧卡下带图也不当消息发");
+    assert.equal(await questionOf(), "那 C 呢？", "眼下这道题没被清掉");
+    await db.insert(imOutbox).values({
+      id: "row-th-failed", channel: "feishu", appId: APP, receiveType: "open_id", receiveId: OWNER, recipientOpenId: OWNER,
+      taskId: "th", kind: "failed", subject: "f:old", msgType: "interactive", content: "{}", state: "resolved", messageId: "om_th_failed",
+      createdAt: at, updatedAt: at,
+    });
+    const offPhoto = await im.say({ messageType: "image", content: { image_key: "img_off" }, parentId: "om_th_failed" });
+    assert.equal((await inboundOf(offPhoto)).detail, "not_question_card", "别的卡下带图也不当消息发");
+    assert.equal(await questionOf(), "那 C 呢？");
+    // 回在机器人的文字回执下面（父消息是那条回执，话题根是眼下这张提问卡）：认根上的卡，照常是答复。
+    await db.insert(imOutbox).values({
+      id: "row-th-ack", channel: "feishu", appId: APP, receiveType: "open_id", receiveId: OWNER, recipientOpenId: OWNER,
+      taskId: "th", kind: "reply", subject: "ack:th", msgType: "text", content: JSON.stringify({ text: "没办成" }), state: "sent",
+      messageId: "om_th_ack", replyTo: newCard.messageId, createdAt: at, updatedAt: at,
+    });
+    const threaded = await im.say({ text: "选 C", parentId: "om_th_ack", rootId: newCard.messageId! });
+    assert.equal((await inboundOf(threaded)).kind, "answer", `话题里的回复认根上的提问卡：${(await inboundOf(threaded)).detail}`);
+    assert.equal(await questionOf(), null);
+    await waitIdle(() => statusOf("th"), "paused");
   }
 
   // ── ③ 命令 ───────────────────────────────────────────────────────────────
@@ -198,12 +233,13 @@ try {
     });
     assert.equal((await db.select().from(chatMessages).where(and(eq(chatMessages.roomId, room.id), eq(chatMessages.role, "user")))).length, 1);
 
+    const uploadsBefore = uploads();
     const photo = await im.say({ messageType: "image", content: { image_key: "img_v3_key" } });
     const photoRow = await inboundOf(photo);
     const paths = JSON.parse(photoRow.attachments ?? "[]") as string[];
     assert.equal(paths.length, 1, `图片转存了：${photoRow.detail}`);
     assert.ok(paths[0]!.startsWith(join(stage, "uploads")), "落在上传目录里");
-    assert.equal(readdirSync(join(stage, "uploads")).length, 1);
+    assert.equal(uploads(), uploadsBefore + 1);
     const photoMessage = (await db.select().from(chatMessages).where(eq(chatMessages.id, chatMessageIdOf(`msg:${photo}`)))).at(0)!;
     assert.ok(photoMessage.body.includes(paths[0]!), "附件路径随消息进了房间");
 

@@ -123,7 +123,7 @@ export async function assemble(app: Hono, fake: FakeFeishu) {
     actions.handle({ eventId: `ev-${++events}`, operatorOpenId, value, formValue, name });
   let messages = 0;
   const say = async (input: {
-    openId?: string; text?: string; chatType?: "p2p" | "group"; chatId?: string; parentId?: string;
+    openId?: string; text?: string; chatType?: "p2p" | "group"; chatId?: string; parentId?: string; rootId?: string;
     messageType?: string; content?: unknown; mentionBot?: boolean;
   }) => {
     const messageId = `om_in_${++messages}`;
@@ -132,7 +132,7 @@ export async function assemble(app: Hono, fake: FakeFeishu) {
       sender: { sender_id: { open_id: input.openId ?? OWNER }, sender_type: "user" },
       message: {
         message_id: messageId, chat_id: input.chatId ?? "oc_p2p", chat_type: input.chatType ?? "p2p",
-        parent_id: input.parentId, root_id: input.parentId,
+        parent_id: input.parentId, root_id: input.rootId ?? input.parentId,
         message_type: input.messageType ?? "text",
         content: JSON.stringify(input.content ?? { text: `${input.mentionBot ? "@_user_1 " : ""}${input.text ?? ""}` }),
         mentions,

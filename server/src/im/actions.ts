@@ -246,21 +246,19 @@ export class CardActions {
     const link = outcome.link !== undefined ? outcome.link : job.link;
     const card = renderCard(settledCard(cardHeaderOf(row.content), outcome.text, { link }, outcome.tone ?? (outcome.ok ? "green" : "red")));
     if (!outcome.ok) {
-      await releaseEnvelope(envelope.id, outcome.text);
-      if (via === "patch") {
-        // 「处理中」那张已经换上去了，用户看不到 toast：卡面改回原样（信封已放回，按钮能再点），
-        // 原因回复在卡片下面。
-        if (row.messageId) {
-          await this.restore(row);
-          await this.deps.reconciler.run(() => this.deps.reconciler.insert({
-            dest: { receiveType: row.receiveType as "open_id" | "chat_id", receiveId: row.receiveId, recipientOpenId: row.recipientOpenId },
-            taskId: row.taskId, kind: "reply", subject: `fail:${envelope.id}:${Date.now()}`, msgType: "text",
-            content: JSON.stringify({ text: `没办成：${outcome.text}` }), replyTo: row.messageId,
-          }));
-          this.deps.sender.kick();
-        }
-        if (job.taskId) this.deps.reconciler.mark(job.taskId);
+      if (via === "patch" && row.messageId) {
+        // 「处理中」那张已经换上去了，用户看不到 toast：卡面改回原样、原因回复在卡片下面，最后才放回
+        // 信封 —— 反过来的话，中间退出卡面就一直停在「处理中」（信封已经放回，recover 看不到它）。
+        await this.restore(row);
+        await this.deps.reconciler.run(() => this.deps.reconciler.insert({
+          dest: { receiveType: row.receiveType as "open_id" | "chat_id", receiveId: row.receiveId, recipientOpenId: row.recipientOpenId },
+          taskId: row.taskId, kind: "reply", subject: `fail:${envelope.id}:${Date.now()}`, msgType: "text",
+          content: JSON.stringify({ text: `没办成：${outcome.text}` }), replyTo: row.messageId,
+        }));
+        this.deps.sender.kick();
       }
+      await releaseEnvelope(envelope.id, outcome.text);
+      if (via === "patch" && job.taskId) this.deps.reconciler.mark(job.taskId);
       return toast("error", outcome.text);
     }
     await finishEnvelope(envelope.id, outcome.text);

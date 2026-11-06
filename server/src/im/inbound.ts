@@ -30,7 +30,7 @@ import type { FeishuApi } from "./feishu/api.js";
 import { parseMessage, type FeishuMention } from "./feishu/message.js";
 import { groupOf } from "./groups.js";
 import type { Destination, OutboxRow } from "./outbox.js";
-import type { Reconciler } from "./reconcile.js";
+import { TURN_KINDS, type Reconciler } from "./reconcile.js";
 import type { RoomRelay } from "./relay.js";
 
 const HINT_EVERY_MS = 24 * 3600_000;
@@ -244,19 +244,24 @@ export class InboundRouter {
     if (await this.deps.relay.post(ctx, inboundId, room.roomId, text, saved.paths, room.mention)) void this.react(message.message_id);
   }
 
-  /** 这条消息回复的是哪张任务卡：直接回复的那条优先，其次是话题的根。 */
+  /**
+   * 这条消息回复的是哪张任务卡：直接回复的那条优先，其次是话题的根。回的是机器人自己的文字回执
+   * （「没答上：…」这类，挂着任务但不是卡）时认话题根上那张卡，都没有才退回那条回执。
+   */
   private async cardOf(message: Message): Promise<OutboxRow | null> {
     const parents = [message.parent_id, message.root_id].filter((id): id is string => !!id);
     if (!parents.length) return null;
     const rows = (await db.select().from(imOutbox).where(and(eq(imOutbox.appId, this.deps.appId), inArray(imOutbox.messageId, parents))))
       .filter((row) => row.taskId);
-    return parents.map((id) => rows.find((row) => row.messageId === id)).find(Boolean) ?? null;
+    const ordered = parents.flatMap((id) => rows.filter((row) => row.messageId === id));
+    return ordered.find((row) => (TURN_KINDS as readonly string[]).includes(row.kind)) ?? ordered.at(0) ?? null;
   }
 
   /**
-   * 回复任务卡。任务在等答复、而且回的正是问这道题的那张卡 → 用那张卡记下的 questionKey 答复；
-   * 回的是别的卡（旧的提问卡、失败卡、验收卡……）→ 不当答复，说清楚该回哪张。其余（不在提问、
-   * 带了附件、明说 /reply）→ 当成给任务发一条消息。
+   * 回复任务卡。任务在等答复、而且回的正是问这道题的那张卡 → 用那张卡记下的 questionKey 答复
+   * （带了附件答复装不下，当成发给任务的消息 —— 回的就是这道题，意思对得上）；回的是旧提问卡、
+   * 或者任务在等提问而回的是别的卡 → 带不带附件都不收：发给任务的消息会顶掉眼下那道题，等于替一条
+   * 旧回复答了新题。明说 /reply 的、任务不在提问时回的非提问卡 → 当成给任务发一条消息。
    */
   private async toTask(
     inboundId: string, ctx: InboundContext, card: OutboxRow, intent: string | null, text: string, paths: string[],
@@ -271,16 +276,17 @@ export class InboundRouter {
     };
     if (!view) return refuse("deleted", "这个任务已经被删除了。");
     const turn = view.turn;
-    const answering = intent !== "reply" && !paths.length;
-    if (answering && card.kind === "question" && (turn?.kind !== "question" || card.subject !== turn.generation)) {
+    const explicit = intent === "reply";
+    const current = turn?.kind === "question" && card.kind === "question" && card.subject === turn.generation;
+    if (!explicit && card.kind === "question" && !current) {
       return refuse("stale_question", turn?.kind === "question"
         ? "这张卡上的问题已经换了：请回复最新那张提问卡（发 /todo 能找到它）。只想给任务捎句话，用 /reply 开头。"
         : "这道题已经答过了。还想给任务捎句话，用 /reply 开头再发一次。");
     }
-    if (answering && turn?.kind === "question") {
-      if (card.kind !== "question") {
-        return refuse("not_question_card", "任务眼下在等一道提问，这张卡不是那道题：请回复那张提问卡（发 /todo 能找到它）。只想给任务捎句话，用 /reply 开头。");
-      }
+    if (!explicit && turn?.kind === "question" && card.kind !== "question") {
+      return refuse("not_question_card", "任务眼下在等一道提问，这张卡不是那道题：请回复那张提问卡（发 /todo 能找到它）。只想给任务捎句话，用 /reply 开头。");
+    }
+    if (!explicit && current && !paths.length) {
       const questionKey = await this.questionKeyOf(card);
       if (!questionKey) return refuse("no_question_key", "认不出这张卡问的是哪道题了：请在 ash 里答复。");
       const items: QuestionItem[] = turn.items;

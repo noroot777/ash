@@ -141,8 +141,11 @@ async function bringUp(): Promise<void> {
   void (async () => {
     self.bot = await botOf(self);
     await self.actions.recover();
-    await self.inbound.recover();
-    await self.reconciler.full();
+    // 补办消息要下载附件、调接口，不让它挡着对账。
+    await Promise.all([
+      self.inbound.recover().catch((error) => console.error("[ash] 飞书接管未办完的消息出错:", error)),
+      self.reconciler.full(),
+    ]);
   })().catch((error) => console.error("[ash] 飞书通道初次对账出错:", error));
 }
 
