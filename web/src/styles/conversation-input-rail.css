@@ -1,0 +1,158 @@
+/* 会话左侧的输入导航（components/ConversationInputRail.tsx）：每条横线是我说过的一句话。
+   整层铺满会话区但不接指针，只有刻度带、悬停卡片和 Q 摊开的列表接，正文照常能点能选。 */
+
+/* 刻度带占着会话区最左边 30px。挂着导航时正文至少从这儿往右起（各会话流的左内边距取
+   max(这个, 自己原来的)）：窄屏下正文的左边距比刻度带还窄，指着正文会弹卡片、点正文会跳走。 */
+.conversation-scroll-region:has(> .conversation-input-rail) { --conversation-input-gutter: 34px; }
+
+.conversation-input-rail {
+  position: absolute;
+  z-index: 9;
+  inset: 0;
+  pointer-events: none;
+}
+
+.conversation-input-strip {
+  position: absolute;
+  left: 0;
+  width: 30px;
+  overflow: hidden;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.conversation-input-tick {
+  position: absolute;
+  left: 8px;
+  height: 1.5px;
+  margin-top: -0.75px;
+  border: 0;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--faint) 55%, transparent);
+  padding: 0;
+  pointer-events: none;
+  transition: width 120ms ease-out, background-color 120ms ease-out;
+}
+
+/* 读到这一条：亮一些（长出的那一截在组件里算）。 */
+.conversation-input-tick.is-active { background: var(--muted); }
+.conversation-input-tick.is-hovered { background: var(--ink); }
+
+/* 外面这一层左边留一截透明的边：指针从刻度带挪到卡片上的路上不算离开，点卡片也能跳。 */
+.conversation-input-card {
+  position: absolute;
+  left: 30px;
+  width: min(320px, calc(100% - 46px));
+  padding-left: 4px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.conversation-input-card > div {
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 9px 12px 8px;
+  box-shadow: var(--menu-shadow);
+}
+
+.conversation-input-card p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+}
+
+.conversation-input-card footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.conversation-input-card footer span { display: inline-flex; align-items: center; gap: 2px; }
+
+.conversation-input-card kbd {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--raised);
+  padding: 0 4px;
+  color: var(--faint);
+  font-size: 9px;
+  font-family: inherit;
+}
+
+.conversation-input-menu {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  width: min(440px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  transform: translateY(-50%);
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 4px;
+  box-shadow: var(--menu-shadow);
+  pointer-events: auto;
+  animation: conversation-input-menu-in 120ms ease-out;
+}
+
+.conversation-input-menu button {
+  display: grid;
+  width: 100%;
+  min-height: 28px;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 8px 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+}
+
+/* 每行前面那一截横线就是导航条上的那一格：摊开前后认得出是同一排东西。 */
+.conversation-input-menu button::before {
+  width: 8px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: color-mix(in srgb, currentColor 55%, transparent);
+  content: "";
+}
+
+.conversation-input-menu button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-input-menu button > time { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+.conversation-input-menu button:hover,
+.conversation-input-menu button:focus-visible { outline: 0; background: var(--hover-bg); color: var(--ink); }
+.conversation-input-menu button.is-current { color: var(--ink); }
+.conversation-input-menu button.is-current::before { width: 14px; background: currentColor; }
+
+/* 跳过去之后闪一下落点那颗气泡；挂在气泡本身上（由导航条加、动画完自己摘）。 */
+.is-jump-target { animation: conversation-input-flash 1.6s ease-out; }
+
+@keyframes conversation-input-flash {
+  0%, 20% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+@keyframes conversation-input-menu-in {
+  from { opacity: 0; transform: translate(-4px, -50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-input-tick { transition: none; }
+  .conversation-input-menu { animation: none; }
+}

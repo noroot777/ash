@@ -4,10 +4,9 @@ import {
   createInspectorShortcutSequence,
   hasInspectorShortcutTarget,
 } from "../inspector/shortcuts.ts";
-import { revealInspectorSection } from "../inspector/sections.ts";
+import { CONVERSATION_INPUTS_SHORTCUT, toggleConversationInputs } from "../components/conversationInputNav.ts";
 import { createKeyChordSequence } from "../lib/keyChord.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
-import { FOLLOW_UPS_SECTION_ID, FOLLOW_UPS_SHORTCUT } from "../task-detail/followUpsSection.ts";
 import { GO_CHORD_KEYS, GO_CHORD_PREFIX, isGoChordKey } from "./goChord.ts";
 
 // enabled 只关**列表导航那几颗单键**（j/k/f/c/r/q 和铺开态的 Esc/Enter）：它们要么改选中行、
@@ -204,9 +203,11 @@ export function useWorkspaceShortcuts({
         clickVisibleRunAction();
         return;
       }
-      // Q 直达信息面板的「后续追问」。铺开态里详情被盖在下面，滚过去也看不见，所以不认；
-      // 眼下没有哪份 Inspector 有这一节（团队页、新建面板）就原样放过这颗键。
-      if (event.key === FOLLOW_UPS_SHORTCUT && !spreadOpen && revealInspectorSection(FOLLOW_UPS_SECTION_ID)) {
+      // Q 把会话左侧的输入导航摊开成列表（见 components/conversationInputNav.ts）。铺开态里
+      // 会话被盖在下面，摊开了也看不见，所以不认；眼下没有哪条会话挂着导航（新建面板、
+      // 还没追问过的任务）就原样放过这颗键。摊开之后再按 Q 由那张列表自己收：它是 role="menu"，
+      // 上面的 hasBlockingLayer() 已经把这里整段挡掉了。
+      if (event.key === CONVERSATION_INPUTS_SHORTCUT && !spreadOpen && toggleConversationInputs()) {
         event.preventDefault();
       }
     };
