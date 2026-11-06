@@ -5,7 +5,7 @@
 //   · 指上去附近几条横线一起鼓起来，旁边浮出那条输入的全文（长输入在卡片里滚得到结尾）；
 //   · 点一下会话直接跳到那颗气泡（原始需求跳到顶），而且跳过去之后来了新消息不把人拽回底部；
 //   · 按 Q 把每条输入都摊开（第一行之后的正文整段跟着，开头一样的两条分得开），方向键挑、回车跳；Esc / 再按 Q / 点外面收起；输入框里的 q 是字；
-//     会话被抽屉盖住时不摊开；
+//     会话被抽屉盖住时不摊开；列表半透明、放得下就 760 宽，摊开期间后面的会话不跟着新消息滚，收起再补上；
 //   · 滚轮落在导航条上照样滚会话，窄屏下正文不被刻度带压住。
 // 跑法：npm -w web run test:conversation-input-rail-dom
 import assert from "node:assert/strict";
@@ -198,6 +198,25 @@ try {
     await menu.locator(".conversation-input-menu-rest > span").evaluateAll((elements) => elements.every((element) => element.scrollHeight <= element.clientHeight + 1)),
     "摊开的正文不该被截断",
   );
+  // 加宽、半透（2026-11-06 用户挑的「半透 + 760」）：会话区放得下就 760 宽，窄了左右各让出 8px；
+  // 后面的会话隔着玻璃糊成色块透出来。
+  const look = await menu.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    room: element.parentElement.clientWidth - 16,
+    filter: getComputedStyle(element).backdropFilter,
+    background: getComputedStyle(element).backgroundColor,
+  }));
+  assert.equal(look.width, Math.min(760, look.room), `会话区不够宽时列表贴着两边：${JSON.stringify(look)}`);
+  assert.match(look.filter, /blur\(/, `列表应是毛玻璃：${look.filter}`);
+  assert.match(look.background, /(\/ |, )0?\.\d+\)$/, `列表底色应半透明：${look.background}`);
+  const shell = page.locator("main");
+  await shell.evaluate((element) => {
+    element.style.width = "1000px";
+  });
+  assert.equal(await menu.evaluate((element) => element.getBoundingClientRect().width), 760, "会话区够宽时列表就是 760 宽");
+  await shell.evaluate((element) => {
+    element.style.width = "760px";
+  });
   const focused = () => page.evaluate(() => document.activeElement?.querySelector("span")?.textContent ?? null);
   assert.equal(await focused(), "原始需求：在会话左侧加一条输入导航", "焦点落在正读着的那一条");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-current")), "location", "读屏也要知道哪一条是正读着的");
@@ -298,6 +317,97 @@ try {
   ], "开头一样的两条，摊开后各自的后文都在");
   await page.keyboard.press("Escape");
   await flush();
+
+  // 摊开期间后面的会话不跟着新消息滚：玻璃底下一直有东西在动，字也跟着晃。收起时补上那一下；
+  // 被列表盖住的回顶 / 回底按钮先藏起来。
+  const atBottom = () => {
+    const element = document.querySelector('[data-testid="feed"]');
+    return element.scrollHeight - element.scrollTop - element.clientHeight <= 2;
+  };
+  // 不经指针来一段新回复（列表开着时点哪儿都算点外面），并等它真渲染出来：会话长高了才算来了。
+  const appendReply = async () => {
+    const before = await feed.evaluate((element) => element.scrollHeight);
+    await page.evaluate(() => window.dispatchEvent(new Event("fixture-append")));
+    await until((height) => document.querySelector('[data-testid="feed"]').scrollHeight > height, "新回复应渲染出来", before);
+    await flush();
+  };
+  // 回到跟随（End 是贴底逻辑认的「我要看最新」）并落到最新一条。
+  const follow = async () => {
+    await page.keyboard.press("End");
+    await feed.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await settle();
+  };
+  const openList = async () => {
+    await page.keyboard.press("q");
+    await menu.waitFor();
+  };
+  // 先确认没摊开时新消息照常跟到底：不然下面「摊开期间不跟」量到的只是本来就没在跟。
+  await follow();
+  await appendReply();
+  await until(atBottom, "没摊开时新消息应照常跟到底");
+  const topButton = page.locator(".conversation-scroll-button--top");
+  const topButtonClickable = () => topButton.evaluate((element) => getComputedStyle(element).pointerEvents !== "none");
+  assert.equal(await topButtonClickable(), true, "没摊开时回顶按钮照常能点");
+  await openList();
+  assert.equal(await topButtonClickable(), false, "被列表盖住的回顶按钮应藏起来");
+  await appendReply();
+  await flush();
+  const held = await metrics();
+  assert.ok(held.distance > 100, `列表摊开期间新消息不该带着会话往下滚：${JSON.stringify(held)}`);
+  await page.keyboard.press("Escape");
+  await until(atBottom, "收起列表后应补上那一下、落到最新一条");
+  assert.equal(await topButtonClickable(), true, "收起后回顶按钮回来");
+
+  // 点外面收起：按下那一刻列表就收了，补到底却要等松手 —— 不然松手的 click 落到换过的内容上。
+  await openList();
+  await appendReply();
+  const outside = await page.getByTestId("text-entry").boundingBox();
+  await page.mouse.move(outside.x + 20, outside.y + outside.height / 2);
+  await page.mouse.down();
+  await flush();
+  await flush();
+  assert.equal(await menu.count(), 0, "按下就收起");
+  assert.ok((await metrics()).distance > 100, "手还按着时不该补那一下");
+  await page.mouse.up();
+  await until(atBottom, "松手后应补上那一下");
+  await page.getByTestId("text-entry").evaluate((element) => element.blur());
+
+  // 摊开时在露出来的会话上往下滚了一格（滚在刻度带最左边、列表没盖住的那一截上）：离底远只是因为
+  // 按住了没跟，不算离开跟随，收起照样补到底。
+  await openList();
+  await appendReply();
+  const stripBox = await strip.boundingBox();
+  await page.mouse.move(stripBox.x + 3, stripBox.y + stripBox.height / 2);
+  await page.mouse.wheel(0, 120);
+  await settle();
+  await page.keyboard.press("Escape");
+  await until(atBottom, "摊开时往下滚过一格，收起照样应补到底");
+  await page.mouse.move(600, 300);
+
+  // 从列表里挑了一条跳过去：收起那一下不补。
+  await openList();
+  await appendReply();
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await settle();
+  await flush();
+  const picked = await bubbleOffset("persisted:user:s3:1");
+  assert.ok(picked >= 10 && picked <= 22, `从列表里挑了一条跳过去，收起那一下不该再把人拽到底：${picked}`);
+
+  // 摊开之前往上翻过的：摊开、来新消息、收起，都不被拽下去。
+  await follow();
+  await page.mouse.move(600, 300);
+  await page.mouse.wheel(0, -300);
+  await settle();
+  const readingAt = (await metrics()).top;
+  await openList();
+  await appendReply();
+  await page.keyboard.press("Escape");
+  await flush();
+  await flush();
+  assert.equal((await metrics()).top, readingAt, "摊开之前往上翻过的，收起时不该被拽到底");
 
   // 窄屏下正文的左边距比刻度带还窄：挂着导航时正文让到刻度带右边，免得指正文弹卡片、点正文跳走。
   await page.setViewportSize({ width: 600, height: 640 });

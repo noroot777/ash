@@ -163,7 +163,7 @@
     "test:inspector-queue": "node scripts/test-inspector-queue.mjs",
     "//test:conversation-inputs": "会话左侧输入导航的纯逻辑:哪些话算「我说的」(原始需求打头,哨兵/审查打回/答复不算)、刻度间距与放大、读到哪一条、Q 的目标摞(看不见的不认、后挂的优先)。",
     "test:conversation-inputs": "tsx scripts/test-conversation-inputs.ts",
-    "//test:conversation-input-rail-dom": "输入导航真渲染真按键:指上去附近横线鼓起来、浮出那条输入全文(长输入在卡片里滚得到结尾);点横线会话跳到那颗气泡、标的就是点的那条,跳转半路被接管就交还给滚动位置,新消息不把人拽回底部;Q 把每条输入整段摊开(开头一样的靠后文分得开)、方向键挑回车跳、Esc/Q 收起,工作区重渲后再按 Q 也只收起;会话被抽屉盖住时 Q 不摊开;输入框里的 q 是字;滚轮落在导航条上照样滚会话;窄屏正文让到刻度带右边。",
+    "//test:conversation-input-rail-dom": "输入导航真渲染真按键:指上去附近横线鼓起来、浮出那条输入全文(长输入在卡片里滚得到结尾);点横线会话跳到那颗气泡、标的就是点的那条,跳转半路被接管就交还给滚动位置,新消息不把人拽回底部;Q 把每条输入整段摊开(开头一样的靠后文分得开)、方向键挑回车跳、Esc/Q 收起,工作区重渲后再按 Q 也只收起;列表半透明、放得下就 760 宽,摊开期间后面的会话不跟着新消息滚、收起再补上(点外面收起等松手再补,挑一条跳过去或摊开前往上翻过的不补),被盖住的回顶/回底按钮先藏起来;会话被抽屉盖住时 Q 不摊开;输入框里的 q 是字;滚轮落在导航条上照样滚会话;窄屏正文让到刻度带右边。",
     "test:conversation-input-rail-dom": "node scripts/test-conversation-input-rail-dom.mjs",
     "test:notes-upload": "node scripts/test-notes-upload.mjs",
     "test:notes-empty-body": "node scripts/test-notes-empty-body.mjs",

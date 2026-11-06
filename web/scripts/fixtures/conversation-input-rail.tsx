@@ -39,6 +39,7 @@ const seed: Item[] = [
   { kind: "agent", id: "a6", text: "加上了。" },
 ];
 const noop = () => {};
+const appendReply = (list: Item[]): Item[] => [...list, { kind: "agent", id: `tail-${list.length}`, text: "又来了一段新回复。" }];
 
 function Fixture() {
   const scroll = useRef<HTMLDivElement>(null);
@@ -51,6 +52,12 @@ function Fixture() {
     const bump = () => setRenders((count) => count + 1);
     window.addEventListener("fixture-rerender", bump);
     return () => window.removeEventListener("fixture-rerender", bump);
+  }, []);
+  // 不经指针来一段新回复：列表摊开时点哪个按钮都算点外面，会先把列表收起。
+  useEffect(() => {
+    const append = () => setItems(appendReply);
+    window.addEventListener("fixture-append", append);
+    return () => window.removeEventListener("fixture-append", append);
   }, []);
   const inputs = useMemo(() => conversationInputs({ text: REQUIREMENT, at: "2026-11-03T00:00:00.000Z" }, items), [items]);
   const tailKey = contentVersion(items, (item) => item.text.length, (item) => item.id);
@@ -74,10 +81,7 @@ function Fixture() {
   return (
     <main style={{ display: "flex", flexDirection: "column", width: 760, height: 520 }}>
       <input data-testid="text-entry" aria-label="文本输入" />
-      <button type="button" data-testid="append" onClick={() => setItems((list) => [
-        ...list,
-        { kind: "agent", id: `tail-${list.length}`, text: "又来了一段新回复。" },
-      ])}>来一段新回复</button>
+      <button type="button" data-testid="append" onClick={() => setItems(appendReply)}>来一段新回复</button>
       <button type="button" data-testid="cover" onClick={() => setCovered(true)}>拉出抽屉</button>
       <button type="button" data-testid="append-twins" onClick={() => setItems((list) => [
         ...list,
