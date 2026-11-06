@@ -80,7 +80,7 @@ CardKit 的流式模式开启 10 分钟后自动关闭，单张卡片每秒最�
 
 ## 五、入站
 
-1. **先落库再回执，然后异步处理。** 飞书要求 3 秒内处理完，否则会重推。按 `message_id` 唯一键去重，官方原话是「不要依赖 event_id」。
+1. **先落库再回执，然后异步处理。** 飞书要求 3 秒内处理完，否则会重推。消息按 `message_id` 唯一键去重，官方原话是「不要依赖 event_id」。按钮回调没有自己的 message_id（点的是哪张卡在 `context.open_message_id` 里），按回调顶层的 `event_id` 去重；真正兜底的是信封只能用一次（6.4）。实测回调超过 3 秒飞书**不会**重推，点击就这么丢了，所以回调必须当场回执，不能指望重推补救（见第十节）。
 2. **准入默认拒绝**，未授权的消息静默丢弃（见 6.1）。
 3. **执行走进程内的完整路由栈，不直接调 service 函数。** 鉴权、可见性、个人面这几道闸都是挂在 `/api/*` 上的中间件（`server/src/index.ts:393-405`）。而 `actorOf()` 取不到身份时会兜底成**管理员**（`server/src/auth/context.ts:63-65`），直接调 service 函数，一旦忘了设身份，就会静默拿到管理员权限。做法是：
    - 用 `app.fetch(req, env)`，身份放进 env。真实网络请求的 env 由 `@hono/node-server` 自己填 `{incoming, outgoing}`，外部伪造不了。
@@ -147,20 +147,20 @@ agent 伪造的卡片上的按钮会因为没有登记过的信封而点不动�
 
 ## 七、部署与运维
 
-- **SDK**：用官方 `@larksuiteoapi/node-sdk` 的 `WSClient`。它是纯 JS，Windows 上没有原生模块负担；`domain` 参数可以切到 Lark 国际版。SDK 里还有一个现成的高层 Channel 模块（`createLarkChannel`），但它会接管流式等行为，P1 先不用。
+- **SDK**：用官方 `@larksuiteoapi/node-sdk` 的 `WSClient`。它是纯 JS，Windows 上没有原生模块负担；`domain` 参数可以切到 Lark 国际版。SDK 里还有一个现成的高层 Channel 模块（`createLarkChannel`），但它会接管流式等行为，P1 先不用。实测 1.76.0：新版卡片回调以普通 `event` 帧到达，SDK 的 `EventDispatcher` 注册 `card.action.trigger` 就能收到，不用自己解帧。SDK 确实会丢掉 `type=card` 的帧，但新版回调根本不走那种帧。后台订阅了哪些事件，就要给哪些注册处理函数（没注册的 SDK 只打一条 warn），机器人自己加的表情回应也会作为事件推回来，要按操作者把自己过滤掉。
 - **启动位置**：放在 listen 成功之后，`startScheduler()` 旁边，复用「预览实例不启动」那个分支（`server/src/index.ts:623-640`）。凭证文件不存在就不启动。`index.ts` 只加一行，逻辑全放进 `server/src/im/`，单文件不超过 700 行。
 - **连接状态要持久可见**：显示在 `/api/health` 和设置页上。ash 自己挂了，机器人就会静默下线；ash 默认也没有开机自启。
 - **多实例**：飞书长连接是集群模式，同一个应用的多个客户端之间不广播，每条事件只随机给其中一个，而且飞书不告诉你连了几个。所以**一个实例一个应用**：Mac 和 Windows 真机（192.168.1.187）各建一个。预览实例和 `PORT=… ASH_DB=…` 起的测试实例因为拿不到凭证文件，天然不会连。低成本的撞车检测办法：每次连上就给机主发一句「实例 <指纹> 已上线」。
 - **丢事件**：长连接会静默丢事件（cc-connect 踩过）。出站靠对账兜底；入站的按钮点击丢了，用户再点一次即可，信封保证幂等。
 - **事件循环**：长连接心跳和整个 server 共用一个事件循环。Windows 上出过 node-pty 卡死主线程的事故，那种情况下机器人会被飞书判离线。适配器接口设计成纯消息传递，将来需要的话可以整体挪进 worker 线程。碰了 win32 分支就上真机跑一遍。
-- **配额**：同一个群里所有机器人共享 5 QPS，同一用户也是 5 QPS，由发件表限流。免费版自建应用的 API 月配额现在是多少（1 万次还是 100 万次）没核实，P0 要先查清。
+- **配额**：同一个群里所有机器人共享 5 QPS，同一用户也是 5 QPS，由发件表限流。免费版自建应用的 API 月配额现在是多少（1 万次还是 100 万次）仍没核实：开放平台没有查询配额的接口，要到开发者后台的用量页面看。P1 的发件表要记调用次数，接近上限时在设置页如实显示。
 - **飞书侧开通顺序**：自建应用的权限和事件订阅每改一次都要发版，部分权限要企业管理员审核。后台保存「长连接」订阅方式时本地程序必须已经连上，所以要先在 ash 里配好凭证、连上，再去控制台保存。
 
 ## 八、分期
 
 | 期 | 交付 | 主要改动 |
 |---|---|---|
-| **P0 实测** | 一次性脚本，不进仓库。确认 `WSClient` 能稳定收到 `card.action.trigger`，回调里拿得到 `operator.open_id`（官方文档说能，SDK 的 README 说不能）；查清免费版配额 | 无 |
+| **P0 实测**（2026-11-06 完成） | 一次性脚本，不进仓库。卡片回调能经长连接收到，回调里拿得到 `operator.open_id`，结论见第十节。免费版配额仍未查清 | 无 |
 | **P0' 合并判据** | 「此刻轮到你动手了吗」从 web、mobile 各一份合成 `shared/` 里的一份，界面行为不变 | `shared/src/`、`web/src/lib/taskAttention.ts`、`mobile/src/lib/taskTree.ts` |
 | **P1 决策收件箱**（只支持自用模式，只走单聊） | 绑定流程；提问卡、待验收卡、失败卡；完成和门禁通知（默认推）；在别处处理掉的卡片原地改成「已处理」；启动对账带水位线；连接状态 | `server/src/im/{config,connection,outbox,reconcile,cards,actions,bind-routes}.ts`，新表放在 `server/src/db/schema-im.ts` 并且不进 preview-seed；`index.ts` 加一行；web 设置页加飞书分区；回归测试覆盖对账、信封（过期/他人点击/重复点击/代次不符）、启动刷屏，以及通道模块不引用 `issueHumanActionToken` |
 | **P2 审批** | 驳回裁定卡；duet 闸口卡（先给 GateAction 补版本号） | `server/src/im/actions.ts`、`server/src/duet/gates.ts` |
@@ -176,6 +176,27 @@ P1 的攻击面只有一项：已绑定的本人，在单聊里处理自己任�
 2. P0' 照做。它不是「挑哪些任务要人管」，而是把「此刻轮到你动手了吗」的算法从两份合成一份，界面行为不变。
 3. 完成也推，默认开。
 4. 接受「飞书账号 = 这台机器的 shell 凭据」，P1 的验收合并给按钮。
+
+## 十、第零期实测结论（2026-11-06）
+
+用一次性探针连真实应用「ash 助手」，在单聊里发消息、点一张 JSON 2.0 测试卡片上的按钮。SDK 是 `@larksuiteoapi/node-sdk` 1.76.0，飞书国内版。
+
+| 验证项 | 结果 | 对方案的影响 |
+|---|---|---|
+| 卡片按钮回调能否经长连接到达 | **能。** 5 次点击全部以 `type=event` 帧到达，没出现过 `type=card` 帧。SDK README 里「长连接不支持回调」的说法已过时 | 用 SDK 的 `EventDispatcher` 就行，不用自己解帧 |
+| 回调里有什么 | 顶层就是这些字段（SDK 已把 header 和 event 拍平）：`schema, event_id, token, create_time, event_type, tenant_key, app_id, operator{open_id, union_id, tenant_key}, action{value, form_value}, host, context{open_message_id, open_chat_id}` | 信封校验用 `operator.open_id`；点的是哪张卡用 `context.open_message_id`；去重用 `event_id` |
+| 自由作答表单 | 能。`action.form_value` 形如 `{"answer":"…"}`，键是 input 的 `name` | 提问卡的自由作答直接用表单 |
+| 先回执、后改卡 | 能。回调里先回「处理中」，6 秒后用 `PATCH /im/v1/messages/:id` 改卡，返回 code 0。不需要回调里那个 30 分钟内最多用 2 次的延时更新 token | 验收这类慢动作：回调先回执，结果一律走 patch。改卡次数只受「单条消息 5 QPS、14 天内」限制 |
+| 回执超过 3 秒 | 回调 4 秒才回，飞书**没有重推**（只来了 1 帧）。8 秒后再 patch 照样成功 | 超时的点击会丢，不会重来。回调里只做毫秒级的信封校验和入队，其余全部异步 |
+| 发消息带同一个 `uuid` 连发两次 | 两次都返回 code 0、**同一个** message_id，只发出一条 | 发件表重试时带同一个 uuid 就能放心重发，不会重复推送 |
+| 表情回执 | 能（code 0），收到消息后约 0.6 秒加上 | 「已收到」回执可行 |
+| 发送者身份 | 有 `open_id`、`union_id`；没开通讯录权限时 `user_id` 为 null | 绑定键按原计划用 `(app_id, open_id)` |
+| 回读消息内容 | `GET /im/v1/messages/:id` 对 2.0 卡片只返回一段降级提示文字（「请升级至最新版本客户端」） | 卡片现在长什么样只能 ash 自己记在发件表里，不能回读飞书 |
+| 延迟 | 回调帧到达处理函数约 1 毫秒；发一张卡约 0.4 秒 | 3 秒窗口很宽裕 |
+
+另外顺带收到三种事件：用户进入单聊（`im.chat.access_event.bot_p2p_chat_entered_v1`）、消息已读（`im.message.message_read_v1`）、机器人自己加的表情（`im.message.reaction.created_v1`）。P1 只订阅需要的事件，多余的从后台去掉。
+
+还没验证的：同步回卡在手机上的显示效果（日志看不出来，要人眼确认），以及免费版 API 月配额。
 
 ## 出处
 
