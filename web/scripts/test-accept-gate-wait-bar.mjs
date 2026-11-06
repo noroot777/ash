@@ -5,6 +5,7 @@
 // ⑱ 读不出来要照实说(各自的理由与出处写在下面它们自己头上)。
 import assert from "node:assert/strict";
 import { stopwatchSeconds, waitForStopwatchTick } from "./accept-gate-stopwatch.mjs";
+import { fetchesSettled, settlePage, waitUntil } from "./wait-until.mjs";
 
 export async function testAcceptGateWaitBar({ open, run }) {
   // ⑮ 主会话页那条折叠条（用户 2026-10-23 的 04-A）：门禁跑的十几分钟里任务本身
@@ -46,23 +47,30 @@ export async function testAcceptGateWaitBar({ open, run }) {
   //    连上之后的对账那一次）。让**先发出**的那一次响应体迟到、并且回的是「正在跑」，
   //    后发出的那一次先回来、回的是「已通过」—— 落地的必须是后者。从前旧响应会把它写回
   //    「正在跑」，秒表接着加，而此后没有任何事件会来纠正它。
+  //
+  //    乱序和「迟到的那次已经回来了」都要靠事实成立，不靠睡：第 1 次扣到第 2 次送出去之后
+  //    才回（满载时第 2 次可能比任何固定延迟都晚发出），断言前等两次都被页面消费完（读完或
+  //    被 abort）再冲刷一轮。从前这里是「迟到 1200ms + 睡 1800ms」，门禁 8 路并行时 1.8 秒
+  //    连第 2 次都还没落地，读到的是第 1 次合法落地的「在跑」（2026-11-06 闪红）。
   {
     const running = run({ status: "running", exitCode: null, finishedAt: null });
-    const { page } = await open({
+    const { page, store } = await open({
       gate: { command: running.command, running: null, latest: run(), basis: null },
       query: "?wait=1&expected=1",
       states: [
-        // 第 1 次（挂载）：慢，而且说「在跑」。
-        { delay: 1200, body: { command: running.command, running, latest: running, basis: null } },
-        // 第 2 次（连上之后对账）：快，说「已经通过了」。
+        // 第 1 次（挂载）：扣到第 2 次送出去之后才回，而且说「在跑」。
+        { after: 1, body: { command: running.command, running, latest: running, basis: null } },
+        // 第 2 次（连上之后对账）：立刻回，说「已经通过了」。
         { body: { command: running.command, running: null, latest: run(), basis: null } },
       ],
     });
     await page.locator("h1").waitFor();
-    // 等那条迟到的响应落回来（1200ms + 余量），期间它一旦落地就会把这条重新画出来。
-    await page.waitForTimeout(1800);
+    await waitUntil(() => store.reads >= 2, "SSE 连上之后的那次对账读取发出去");
+    await store.served(0);
+    const log = await fetchesSettled(page, 2, "两次读取都被页面消费完（迟到的那次读完或被 abort）");
+    await settlePage(page);
     assert.equal(await page.locator(".accept-gate-wait").count(), 0,
-      "迟到的旧响应不许把已经结束的那次又写回「正在跑」");
+      `迟到的旧响应不许把已经结束的那次又写回「正在跑」（两次读取的结局：${log.slice(0, 2).map((entry) => entry.outcome).join(" / ")}）`);
     await page.close();
   }
 
