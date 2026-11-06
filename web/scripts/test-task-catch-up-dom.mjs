@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome, viteCacheDir } from "./dom-stage.mjs";
 import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
+import { fetchLog, fetchesSettled, outlastPageTimers, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const row = (overrides) => ({
@@ -92,21 +93,33 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   if (process.env.TRACE) page.on("console", (message) => console.log(`[page ${Date.now() % 100000}]`, message.text()));
+  // 页面这一侧每一发 /api/tasks 有没有被消费完：桩只知道自己送出去了，「页面已经按它渲染」
+  // 要看这里（见 wait-until.mjs）。
+  await trackFetches(page, "/api/tasks");
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/task-catch-up.html`);
 
   // ① 开局:列表读到了,SSE 连上了(连上本身也会触发一次追平)。
   await page.waitForSelector('[data-task="t-1"]');
   await page.waitForSelector('main[data-connected="true"]');
   await page.waitForFunction(() => document.querySelectorAll("li").length === 1);
+  // 连上那一次对账要先走完再记「之前」：它由一个零延迟定时器发车（useCatchUpLink），越过它、
+  // 再等页面上的读取都落完，下面数到的才只是哨兵事件换来的那一发。
+  await settlePage(page);
+  await outlastPageTimers(page, 1);
+  await fetchesSettled(page, 0, "开局的列表读取与连上那次对账都已被页面读完");
   const hitsBefore = store.hits;
 
   // ② 哨兵起来了:服务端的权威列表变了(多一行、t-1 的哨兵在跑),事件送达 —— 但这一发
   //    GET 掉了。页面此刻必须还是旧的那一份(静默,不该有横幅、不该有报错)。
   store.list = [row({ monitorRunning: true }), row({ id: "t-2", title: "任务二" })];
   store.failures = 1;
+  const readsBeforeEvent = (await fetchLog(page)).length;
   emit({ type: "task.monitors", taskId: "t-1" });
-  await page.waitForFunction((expected) => Number(
-    document.querySelector("ul")?.dataset.rows) === expected, 1, { timeout: 4000 }).catch(() => {});
+  // 「这一刻还是旧快照」要在那发 503 被页面读完之后才说得算（之前这里什么都没等，读到的
+  // 可能是 GET 还没出门的那一刻）。重试排在它落地 5 秒之后，这几步远在那之前。
+  await waitUntil(async () => (await fetchLog(page)).slice(readsBeforeEvent).some((entry) => entry.outcome === "http 503"),
+    "哨兵事件换来的那一发 GET 回了 503、已被页面读完");
+  await settlePage(page);
   assert.equal(await page.locator("li").count(), 1, "GET 掉了,这一刻页面还是旧快照");
   assert.equal(store.hits, hitsBefore + 1, "事件应当只换来一发 GET");
   assert.equal(await page.locator('[data-task="t-1"]').getAttribute("data-monitor"), "false");
@@ -138,8 +151,7 @@ try {
   const hitsBeforeStale = store.hits;
   gate.on = true;
   emit({ type: "task.monitors", taskId: "t-1" }); // 这一发被扣在服务端,快照 = 此刻这三行
-  const arrival = Date.now() + 10_000;
-  while (store.hits < hitsBeforeStale + 1 && Date.now() < arrival) await page.waitForTimeout(50);
+  await waitUntil(() => store.hits >= hitsBeforeStale + 1, "这一发到达桩并被扣住");
   assert.equal(store.hits, hitsBeforeStale + 1, "这一发应当已经到达并被扣住");
   // 断线:流关掉 —— connected 翻 false,useTasks 那个 effect 的 cleanup 随即 cancel。
   for (const stream of streams) stream.end();
@@ -161,7 +173,8 @@ try {
   assert.equal(await page.locator('[data-task="t-1"]').getAttribute("data-monitor"), "true",
     "追平回来的那份快照要如实写上「哨兵在跑」");
   // 迟到的那一发旧快照落地也不许把追平的结果盖回去(它发起更早,消费方按发起序号丢掉它)。
-  await page.waitForTimeout(800);
+  // 先等它在页面上结算（读完，或断线时已被掐掉）再看。
+  await fetchesSettled(page, 0, "扣住的那一发旧快照已被页面读完或掐掉");
   assert.equal(await page.locator("li").count(), 4, "迟到的旧快照不许把追平的结果盖回去");
   assert.equal(await page.locator("main").getAttribute("data-connected"), "true");
 

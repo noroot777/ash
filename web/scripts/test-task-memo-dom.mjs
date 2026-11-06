@@ -14,6 +14,7 @@
 //  ⑪ 同一条备忘的两发写逆序返回时，晚到的旧回执不许盖掉后发那一版。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { fetchesSettled, trackFetches, waitUntil, WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 const LONG = "几百字一条的备忘：".repeat(40);
 
@@ -140,11 +141,14 @@ function backend() {
 
 async function openPage(origin, api, query = "") {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  page.setDefaultTimeout(8000);
+  // 条件等待的期限按满载给（门禁 8 路并行），真坏了也只是晚几秒报。
+  page.setDefaultTimeout(WAIT_TIMEOUT_MS);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(() => window.localStorage.clear());
   if (api) await page.route("**/api/**", (route) => api.route(route));
+  // 「迟到的应答已经被页面收下」看页面这一侧（见 wait-until.mjs）：桩只知道自己送出去了。
+  await trackFetches(page, "/api/");
   await page.goto(`${origin}/scripts/fixtures/task-memo.html${query}`);
   return { page, errors };
 }
@@ -158,18 +162,6 @@ async function openPage(origin, api, query = "") {
  */
 const bodyShowing = (panel, text) =>
   panel.locator(".task-memo-card__body").filter({ hasText: text }).first().waitFor();
-
-/**
- * 等一个 **Node 侧**的条件成真 —— 用来等后端桩收到某一发请求，页面侧的 waitFor 看不到它。
- * `check` 可以是 async（比如还要顺带问一眼 DOM）。
- */
-async function waitFor(check, what, timeout = 8000) {
-  const deadline = Date.now() + timeout;
-  while (!(await check())) {
-    if (Date.now() > deadline) throw new Error(`等不到：${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
 
 /** 会话里选中一段话，跟真人拖选一样把事件补齐（照 test-side-chat-selection-browser.mjs）。 */
 async function selectContents(locator) {
@@ -351,10 +343,10 @@ try {
     // **等到补发那一发 GET 出现**才算旧应答真的被收下并判了废：补发只写在作废那条分支
     // 里，它出现就是证据。少了这道屏障，「卡片仍是 1 条」在放行之前就已经成立，这个
     // 用例等于什么都没验（第 2 轮审查 N5）。
-    await waitFor(() => reads() >= 2, "旧快照作废后补发一发 GET");
-    // 再等一会儿让补发的应答落地：它拉回的是含那条的最新快照，所以处理完**仍是** 1 条，
-    // 而且不该再触发下一发（那会是重拉死循环）。
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await waitUntil(() => reads() >= 2, "旧快照作废后补发一发 GET");
+    // 等补发的应答被页面读完：它拉回的是含那条的最新快照，所以处理完**仍是** 1 条，而且不该
+    // 再触发下一发（那会是重拉死循环 —— 真有那一发，冲刷之后的复核会看见它并接着等它落完）。
+    await fetchesSettled(page, 0, "补发那一发 GET 已被页面读完");
     assert.equal(reads(), 2, "补发那一发自己不该再引出一发");
     await bodyShowing(panel, "按住读取时写进来的那条");
     assert.equal(
@@ -500,7 +492,7 @@ try {
     const { page, errors } = await openPage(origin, api, "?fetch=1&n=2");
     const cell = page.getByTestId("row-old-tail").locator(".workspace-spread-cell--last");
     await cell.waitFor();
-    await waitFor(() => api.heldDigests.length >= 1, "批量摘要那一发已经按在手里");
+    await waitUntil(() => api.heldDigests.length >= 1, "批量摘要那一发已经按在手里");
 
     // 写一条：store 推一版写入版本，那一列据此补发只问这个任务的摘要（不按住，照常回）。
     await page.getByTestId("write-memo").click();
@@ -509,9 +501,9 @@ try {
     // 放行按住的那一发批量摘要：它带的是写入之前的快照。
     api.holdBulkDigests = false;
     await api.releaseDigests();
-    // 再等一会儿让它真的落到 setState 上 —— 没有版本边界的话这一格就在这里倒退回第二版
+    // 等它被页面读完、落到 setState 上 —— 没有版本边界的话这一格就在这里倒退回第二版
     // （第 3 轮审查 N1 实测：显示第三版、旧应答一到退回第二版，而库里仍是第三版）。
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await fetchesSettled(page, 0, "迟到的那发批量摘要已被页面读完");
     const text = await cell.textContent();
     assert.match(text, /第三版：刚刚存上的那条备忘/, `迟到的旧批量摘要不许顶掉新的：${text}`);
     assert.doesNotMatch(text, /第二版/, `那一格不许倒退：${text}`);
@@ -536,7 +528,7 @@ try {
     const b = "后发那一发：严格增长门和回归一起过";
     api.holdWrites = true;
     await page.getByTestId("race-edits").click();
-    await waitFor(() => api.heldWrites.length >= 2, "两发 PATCH 都按在手里");
+    await waitUntil(() => api.heldWrites.length >= 2, "两发 PATCH 都按在手里");
 
     // 先放后发的那一发（它是最新的），再放先发的 —— 后者带的是旧正文。
     api.holdWrites = false;
@@ -550,12 +542,13 @@ try {
     // 走了这条分支的证据（不然「正文还是 b」在放行之前就已经成立，这用例等于没验）。
     // 回归时的形态是另一种：它直接写进本地状态，正文当场变回 a。两种都等，失败才报在
     // 断言上而不是等待超时。
-    await waitFor(
+    await waitUntil(
       async () => reads() > before || (await showsOld()) > 0,
       "旧回执要么作废重拉、要么（回归时）把正文盖回去",
     );
     assert.ok(reads() > before, "晚到的旧回执必须作废重拉，不能直接写进本地状态");
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // 重拉那一发被页面读完再看正文（它若把旧正文带回来，此刻已经画上去了）。
+    await fetchesSettled(page, 0, "作废后重拉的那一发 GET 已被页面读完");
     await bodyShowing(panel, b);
     assert.equal(await showsOld(), 0, "晚到的旧回执把正文盖回了先发那一版");
     assert.equal(api.rows[0].body, b, "后端那边本来就是后发那一版");

@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import { launchChrome, viteCacheDir } from "./dom-stage.mjs";
 import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
+import { settlePage, waitUntil, WAIT_TIMEOUT_MS } from "./wait-until.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const at = (n) => `2026-10-31T0${n}:00:00.000Z`;
@@ -95,6 +96,28 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   if (process.env.TRACE) page.on("console", (message) => console.log(`[page ${Date.now() % 100000}]`, message.text()));
+  // 页面收到了哪些 SSE 事件（按到达顺序）。「这条事件不该换来一发 GET」要先知道页面**已经收到
+  // 并处理过**它 —— 流是真的，事件什么时候到页面由负载说了算。监听器在构造时挂上，应用的
+  // onmessage 在同一次派发里紧跟着跑（它对事件的反应是同步发车，见 useRejectionNotices），所以
+  // 这里读得到它，就说明它该发的那一发（如果有）已经在 `__notices.issued` 里了。
+  await page.addInitScript(() => {
+    const Native = window.EventSource;
+    window.__sseSeen = [];
+    window.EventSource = class extends Native {
+      constructor(...args) {
+        super(...args);
+        this.addEventListener("message", (message) => {
+          try { window.__sseSeen.push(JSON.parse(message.data)); } catch { /* 心跳 */ }
+        });
+      }
+    };
+  });
+  const seen = () => page.evaluate(() => window.__sseSeen.length);
+  /** 等页面收到第 `count` 条 SSE 事件（从页面打开起算），再冲刷它引起的渲染。 */
+  const received = async (count, message) => {
+    await waitUntil(async () => (await seen()) >= count, message);
+    await settlePage(page);
+  };
 
   const stage = page.locator('[data-stage="t-stale"]');
   const notices = stage.locator(".turn-remedy-notices li");
@@ -110,10 +133,10 @@ try {
   assert.equal(await remedy.count(), 0, "还没读到时不摆那个开关 —— 摆一颗按下去 409 的按钮更糟");
   // 连上事件流自己就是一次追平,所以要等它之后再数:此后多出来的每一发都只能是重试。
   const afterConnect = store.hits;
-  const deadline = Date.now() + CATCH_UP_RETRY_MS + 10_000;
-  while (store.hits <= afterConnect && Date.now() < deadline) await page.waitForTimeout(200);
-  assert(store.hits > afterConnect,
-    `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms),不是等用户点一下、也不是等任务换了 id`);
+  await waitUntil(() => store.hits > afterConnect, {
+    timeout: CATCH_UP_RETRY_MS + WAIT_TIMEOUT_MS,
+    message: `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms),不是等用户点一下、也不是等任务换了 id`,
+  });
   store.down = false;
   // 没有人刷新、没有第二次事件、没有重连:它必须自己追上。
   await remedy.waitFor({ timeout: CATCH_UP_RETRY_MS + 10_000 });
@@ -134,9 +157,13 @@ try {
 
   // 别的任务的那一条不算:一个开着的详情页不该被整个实例的通知量牵着走。
   const quiet = store.hits;
+  const quietIssued = (await page.evaluate(() => window.__notices)).issued;
+  const quietSeen = await seen();
   emit({ type: "task.notices", taskId: "t-somebody-else" });
   emit({ type: "task.monitors", taskId: "t-stale" });
-  await page.waitForTimeout(600);
+  await received(quietSeen + 2, "那两条不相干的事件都已送到页面");
+  assert.equal((await page.evaluate(() => window.__notices)).issued, quietIssued,
+    "不是这个任务的信号、不是这一族的信号,都不该换来一发 GET(页面这一侧)");
   assert.equal(store.hits, quiet, "不是这个任务的信号、不是这一族的信号,都不该换来一发 GET");
 
   // ── ③ 断线期间的变化没人补发:每次连上都重新对一遍账 ──────────────────────────
@@ -168,14 +195,15 @@ try {
   const before = store.hits;
   gate.on = true;
   emit({ type: "task.notices", taskId: "t-stale" }); // 第一发:3 条记录 + 入口还在,被扣住
-  const arrival = Date.now() + 10_000;
-  while (store.hits < before + 1 && Date.now() < arrival) await page.waitForTimeout(50);
+  await waitUntil(() => store.hits >= before + 1, "第一发到达桩并被扣住");
   assert.equal(store.hits, before + 1, "第一发应当已经到达并被扣住");
   // 扣着的这段时间里服务端变了:别处把占位放开了,又多一条记录。
   store.notices = [rejected(4), rejected(3), rejected(2), rejected(1)];
   store.remedy = null;
+  const seenBefore = await seen();
   emit({ type: "task.notices", taskId: "t-stale" });
-  await page.waitForTimeout(800);
+  // 第二条事件确实到了页面、页面也对它做完了反应，此刻再数「在途期间发了几发」。
+  await received(seenBefore + 1, "在途期间那第二条事件已送到页面");
   const during = await probe();
   assert.equal(during.issued, issued + 1,
     "在途期间不许并发开第二发 —— 并发才有乱序,而迟到的旧快照会把新状态盖回去");
