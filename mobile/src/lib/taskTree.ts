@@ -1,14 +1,15 @@
 // 任务列表的**排序与折叠**。规则与 web 的 `web/src/workspace/taskTreeModel.ts` 一一对应，
-// 逐条搬过来（没往 shared 放：worktree 下 shared 的软链解析有坑，而这套规则只有两个前端
-// 用得上）。改这里的任何一条，去那边同步。
+// 逐条搬过来（排序折叠只有两个前端用得上，没往 shared 放）。改这里的任何一条，去那边同步。
+// 「等你验收 / 等你指挥」这类判据不在此列：那是 shared/src/task-attention.ts 的一份。
 //
 // 排序的第一原则：**更新时间倒序，而且只有这一条**。
 // 从前 web 把列表按状态切成八大块（运行中 / 暂停中 / … / 失败 / 已取消），时间序只在块内
 // 生效，于是刚炸的任务被扔到列表最末，找它得一路滚到底。现在不按状态提升任何一档 ——
 // 失败、待验收、等你答复这些靠行内的颜色和标识认（见 TaskStatusChips），不靠位置。
 // 置顶（pinnedAt）是唯一的例外，那是用户手动摁下去的。
-import { isAcceptedStage, type TaskListItem } from "@ash/shared";
-import { isTeamSettled, teamNeverStarted, workersOf } from "@ash/shared/team";
+import type { TaskListItem } from "@ash/shared";
+import { isTaskAwaitingAcceptance } from "@ash/shared/task-attention";
+import { workersOf } from "@ash/shared/team";
 import { needsYourCommand } from "@/lib/taskAttention";
 
 export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -106,19 +107,6 @@ export function advanceHiddenReveal(
   return { lastKey: revealKey, reveal: true };
 }
 
-// 「干完了但我还没盖章」。stage 多数时候是 null —— 只有走过 report_stage 的任务才有值，
-// null 一律算**没验收**：用户要的是「凡是我没点过验收的都得看得见」。团队的「干完了」
-// 写在执行者身上（调度台自己没有 done 终态），所以要连执行者一起判。
-function awaitsAcceptance(task: TaskListItem, allTasks: TaskListItem[]): boolean {
-  if (isAcceptedStage(task.stage)) return false;
-  if (task.stage === "awaiting_acceptance") return true;
-  if (task.mode === "team" && !task.parentId) {
-    if (teamNeverStarted(task.status)) return false;
-    return isTeamSettled(task.status === "running", workersOf(allTasks, task.id));
-  }
-  return task.status === "done";
-}
-
 /**
  * 年龄闸的豁免名单。判据与 web 的 keepVisibleInPreview 同源：星标、置顶、等你验收、
  * 失败、等你指挥的行永不因旧被藏 —— 用户手动按的记号、没盖的章、坏在半路的活、
@@ -136,5 +124,5 @@ export function keepVisibleFor(allTasks: TaskListItem[]): (task: TaskListItem) =
     || task.pinnedAt != null
     || task.status === "failed"
     || needsYourCommand(task, allTasks)
-    || awaitsAcceptance(task, allTasks);
+    || isTaskAwaitingAcceptance(task, workersOf(allTasks, task.id));
 }

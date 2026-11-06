@@ -1,9 +1,10 @@
 // 「这个任务在等我指挥吗」的判据。纯逻辑放在 lib：列表的年龄闸（lib/taskTree）和行内
 // 的标识（components/TaskStatusChips）读的必须是同一份 —— **标出来的和留下来的必须是
 // 同一批**，各写一份迟早会一边标着「等你答复」一边把它折进「显示另外 N 条」。
-// 判据与 web 的 `web/src/lib/taskAttention.ts` 对应（那边叫 needsYourCommand），改一处
-// 去那边同步。
+// 判据本体是 shared/src/task-attention.ts 的 needsYourCommand（web 与 server 的飞书推送
+// 同读那一份）；这里只多一层 mobile 的展示口径：归档任务不再等任何人，一律不标。
 import type { TaskListItem } from "@ash/shared";
+import { isTeamLead, needsYourCommand as stuckOnYou } from "@ash/shared/task-attention";
 import { workersOf } from "@ash/shared/team";
 
 export type AttentionKind = "question" | "verify_failed";
@@ -39,7 +40,7 @@ export function attentionCounts(tasks: TaskListItem[]): { questions: number; ver
  * 「留下来的比标出来的多」，同样违反上面那条原则。web 端同此。
  */
 export function needsYourCommand(task: TaskListItem, allTasks: TaskListItem[]): boolean {
-  if (attentionKind(task) !== null) return true;
-  if (task.mode !== "team" || task.parentId) return false;
-  return workersOf(allTasks, task.id).some((worker) => attentionKind(worker) !== null);
+  const own = (item: TaskListItem) => !item.archived && stuckOnYou(item);
+  if (own(task)) return true;
+  return isTeamLead(task) && workersOf(allTasks, task.id).some(own);
 }

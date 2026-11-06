@@ -1,19 +1,19 @@
-import type { Task, TaskListItem, TaskStatus } from "@ash/shared";
-import { isTeamSettled, teamNeverStarted } from "@ash/shared/team";
+import { isAcceptedStage as sharedIsAcceptedStage, type Task, type TaskListItem } from "@ash/shared";
+import {
+  awaitsYourWord, hasFailed, isTaskAwaitingAcceptance, isTaskLive, isTeamLead, isTeamSettledLead,
+} from "@ash/shared/task-attention";
 
-// 「轮到谁动」的判据集中在这里：侧边栏筛选的分堆和行首圆点读的是同一份。
+// 「轮到谁动」的判据本体在 shared/src/task-attention.ts（mobile 与 server 的飞书推送读的
+// 也是那一份）；这里只放 web 自己的分堆与任务模式口径，并把 shared 的谓词原样转出，
+// 让 web 内部继续从 lib 一处引用。
 // 放在 lib 而不是 workspace，是因为 lib/useTaskReadState 也要用它 —— 反过来引会成环。
 // 注意任务树的**排序**不看这里：那边只认更新时间（见 workspace/taskTreeModel.ts）。
+export {
+  awaitsAcceptance, awaitsYourWord, hasFailed, isTaskAwaitingAcceptance, isTaskLive, isTeamSettledLead,
+  needsYourCommand,
+} from "@ash/shared/task-attention";
 
 export type SpreadBucket = "todo" | "run" | "wait" | "done" | "accepted";
-
-// 「机器在动」的三种 status。团队调度台自己从不落在这三档上，所以下面几条判据里
-// 团队一律要连执行者一起看。
-const LIVE_STATUSES = new Set<TaskStatus>(["running", "queued", "awaiting_review"]);
-
-function isTeamLead(task: Pick<TaskListItem, "mode" | "parentId">): boolean {
-  return task.mode === "team" && !task.parentId;
-}
 
 // 「调度台 id → 它的执行者」。下面每条判据都要它，而每个调用点各自 filter 一遍是 O(n²)：
 // 侧栏一千多行、筛选每次渲染都算一遍，那是能卡住的量级。建一次传下去。
@@ -32,29 +32,6 @@ export function indexWorkers(tasks: TaskListItem[]): WorkerIndex {
 
 export function workersFrom(index: WorkerIndex | null | undefined, taskId: string): TaskListItem[] {
   return index?.get(taskId) ?? [];
-}
-
-// 「机器在动」。团队写在执行者身上：调度台派完活自己就落回 idle，只盯它会把一屋子
-// 执行者正在跑的团队判成静止。
-export function isTaskLive(task: TaskListItem, workers: TaskListItem[] = []): boolean {
-  if (LIVE_STATUSES.has(task.status)) return true;
-  return isTeamLead(task) && workers.some((worker) => LIVE_STATUSES.has(worker.status));
-}
-
-// 「这个团队收工了」。开过台是前提 —— 还停在 backlog 的团队是**没开始**，不是干完了。
-// 收工判据只用 shared 的 isTeamSettled（web/CLAUDE.md 的约定）。
-export function isTeamSettledLead(task: TaskListItem, workers: TaskListItem[] = []): boolean {
-  return isTeamLead(task)
-    && !teamNeverStarted(task.status)
-    && isTeamSettled(task.status === "running", workers);
-}
-
-// 「这一行摔了」。跑挂了（status=failed）和验证没过（stage=verify_failed）是同一件事的
-// 两种记法 —— 都是活停在半路、而且下一步得人来看。判据抽出来是因为**分堆和任务模式
-// 共用它**：spreadBucket 把它归「需要你处理」，inTaskMode 据此放行，两处分头写过一次，
-// 结果就是失败的任务在筛选条上算作「需要你处理」、却进不了任务模式那份列表。
-export function hasFailed(task: Pick<TaskListItem, "status" | "stage">): boolean {
-  return task.status === "failed" || task.stage === "verify_failed";
 }
 
 // 分堆的判据只问一句：这一行现在轮到谁动。轮到我 = todo（等答复 / 待验收 / 失败），
@@ -77,7 +54,7 @@ export function hasFailed(task: Pick<TaskListItem, "status" | "stage">): boolean
 export function spreadBucket(task: TaskListItem, workers: TaskListItem[] = []): SpreadBucket {
   if (task.question) return "todo";
   if (hasFailed(task)) return "todo";
-  // 等我盖章 = 轮到我动，判据跟任务模式共用一份（见下面 isTaskAwaitingAcceptance）。
+  // 等我盖章 = 轮到我动，判据跟任务模式共用一份（见 shared 的 isTaskAwaitingAcceptance）。
   // 干完没点头的因此落「需要你处理」，而不是「已收尾」—— 后者是「这事翻篇了」的意思。
   if (isTaskAwaitingAcceptance(task, workers)) return "todo";
   if (isTaskLive(task, workers)) return "run";
@@ -96,17 +73,9 @@ export function spreadBucket(task: TaskListItem, workers: TaskListItem[] = []): 
 }
 
 // 盖过章了吗。merged 也算 —— 合并即走完了验收链路（accept_task 的终点）。
+// 判据本体是 shared 的 isAcceptedStage(stage)，这里收整个任务只是 web 调用点的习惯。
 export function isAcceptedStage(task: Pick<Task, "stage">): boolean {
-  return task.stage === "accepted" || task.stage === "merged";
-}
-
-// 「干完了但还没盖章」。settled 由调用方判断（单飞看 status === "done"，团队看 isTeamSettled），
-// 因为团队要拿执行者才能算收工，这个模块不碰执行者列表。
-//
-// 注意 stage 多数时候是 null —— 只有走过 report_stage 的任务才有值。null 一律算**没验收**：
-// 用户要的就是「凡是我没点过验收的，都得看得见」，而不是「只有 agent 主动报过待验收的才算」。
-export function awaitsAcceptance(task: Pick<Task, "stage">, settled: boolean): boolean {
-  return settled && !isAcceptedStage(task);
+  return sharedIsAcceptedStage(task.stage);
 }
 
 // 「任务模式」（侧栏跨项目那一档）放行哪些行的判据，就下面这四条 —— 机器在动、摔了、
@@ -116,49 +85,6 @@ export function awaitsAcceptance(task: Pick<Task, "stage">, settled: boolean): b
 // 判据跟 spreadBucket 用的是同一批谓词，连**顺序**都一样（先看在跑、再让盖过章的出局），
 // 所以进得来的行必定落在筛选条上的 在跑 / 需要你处理 / 排着·暂停 三档里，永远不会掉进
 // 「已收尾」「验收完成」这种模式自己都不认的档。这条不变式由 test-spread-filter 钉住。
-
-// 「等我说句话」。提问是明着要答案，paused 是停在检查点等续跑 —— 两样都是「活还在半路，
-// 而且下一步得人动手」。**团队要连执行者一起看**：调度台派完活自己落回 idle，执行者在
-// 底下卡着提问时，只读调度台那一行会把整个团队判成没事发生。
-export function awaitsYourWord(task: TaskListItem, workers: TaskListItem[] = []): boolean {
-  if (task.question || task.status === "paused") return true;
-  return isTeamLead(task) && workers.some((worker) => worker.question || worker.status === "paused");
-}
-
-// 「等我盖章」= 干完了、没盖过章。**不设时限**，跟行首那颗未验收圆点（useTaskReadState
-// 的 awaitsAcceptance）同一个口径：没点过头的活就是没落地的活，搁多久都算。
-//
-// 这一档来回改过两次，原委记在这儿免得再绕：
-//   · 起初回落到「done 且没盖章」，于是三百多条历史任务把任务模式淹了；
-//   · 收窄成只认显式 stage=awaiting_acceptance —— 可自由工作流只调 complete_task，
-//     stage 多数时候是 null，今天刚干完、界面上写着「完成待验收」的任务反而进不来；
-//   · 2026-08-26 查明淹掉列表的是 daily-report 那条流水线（541 条里它占 518 条，
-//     连 28 条显式 awaiting_acceptance 也全是它的）。用户把那批一次性标成已验收，
-//     并明确「以后不会发生这种事情」，剩下的一共 22 条 —— 到这里时限就没有存在理由了。
-// 所以真正的判据只有「盖没盖章」这一条，别再往里加年龄、条数之类的兜底：那是拿口径
-// 去补数据的问题，历史证明补不对。
-//
-// 团队的「干完了」写在执行者身上（调度台自己没有 done 终态），所以要连执行者一起判。
-export function isTaskAwaitingAcceptance(task: TaskListItem, workers: TaskListItem[] = []): boolean {
-  if (isAcceptedStage(task)) return false;
-  if (task.stage === "awaiting_acceptance") return true;
-  return awaitsAcceptance(task, task.status === "done" || isTeamSettledLead(task, workers));
-}
-
-// 「停在这儿等你指挥」= 明着问你（question），或者验证没过（verify_failed）。两样都是
-// 「机器不动了，下一步得你拍板」，也都在行内标了出来 —— 所以列表的年龄闸拿它当豁免：
-// 标出来的和留下来的必须是同一批，一条卡着等答复的任务不该因为卡了超过一天反而被折起来。
-//
-// 跟 awaitsYourWord 的分工：那条收的是「等我说句话」（提问 / 停在检查点），服务的是
-// 任务模式收哪些行；这条收的是「等我指挥」，多一档验证未通过，少一档 paused —— 停在
-// 检查点是等续跑指令，行内没有跟提问同级的醒目标识，硬拉进豁免就成了「留下来的比标
-// 出来的多」，同样违反上面那条原则。
-//
-// 团队要连执行者一起看：调度台派完活自己落回 idle，问题和「验证未通过」都写在执行者身上。
-export function needsYourCommand(task: TaskListItem, workers: TaskListItem[] = []): boolean {
-  const stuck = (item: TaskListItem) => !!item.question || item.stage === "verify_failed";
-  return stuck(task) || (isTeamLead(task) && workers.some(stuck));
-}
 
 export function inTaskMode(task: TaskListItem, workers: TaskListItem[] = []): boolean {
   if (isTaskLive(task, workers)) return true;
