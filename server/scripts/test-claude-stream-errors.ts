@@ -446,12 +446,61 @@ console.log("11) 后台工作流没跑完先不收台;完成通知开的那一�
   const ends = events.filter((e) => e.kind === "turnEnd");
   if (ends.length === 2 && ends[0].background?.workflow === 1 && !ends[1].background) ok("第一回合结尾带着「还有 1 个工作流在跑」,完成通知那一回合结尾不再带");
   else fail(`回合结尾不对:${JSON.stringify(ends)}`);
-  const notice = events.find((e) => e.kind === "error");
-  if (notice?.level === "notice" && notice.affectsTurn === false && /1 个工作流/.test(notice.message)) ok("执行过程里说明在等后台工作流,不算故障");
+  // 等待说明必须是旁注,不能是 error:notice error 是「上游在重试」的契约,停滞看门狗会把它
+  // 计成重试(5 分钟警告、30 分钟熔断),页面也会显示「在等上游」。
+  const notice = events.find((e) => e.kind === "system");
+  if (notice?.level === "notice" && notice.aside === true && /1 个工作流/.test(notice.text)) ok("执行过程里说明在等后台工作流,是旁注");
   else fail(`等待说明不对:${JSON.stringify(notice)}`);
+  if (!events.some((e) => e.kind === "error")) ok("等后台工作这一段没有任何 error 事件(看门狗不计重试)");
+  else fail(`等待期间出现了 error:${JSON.stringify(events.filter((e) => e.kind === "error"))}`);
   const text = events.filter((e) => e.kind === "text").map((e) => e.text).join("");
   if (text.includes("合成终稿") && events.findIndex((e) => e.kind === "text" && e.text.includes("合成终稿")) < events.lastIndexOf(ends[1])) ok("完成通知开的那一回合照常吐正文、照常结尾");
   else fail(`完成通知那一回合被当成孤儿回执吞了:${JSON.stringify(text)}`);
+}
+
+console.log("12) 完成通知开的那一回合一开口就失败:失败照报,不当孤儿回执吞掉");
+{
+  const resident = { interruptPending: false, failPending: () => {}, reapsAtTurnEnd: true };
+  const events = await collect(
+    [
+      { type: "system", subtype: "init", session_id: "sess-14" },
+      { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "tool_use", id: "wf", name: "Workflow", input: { script: "export const meta = {}" } }] } },
+      { type: "system", subtype: "task_started", task_id: "w1", tool_use_id: "wf", task_type: "local_workflow", description: "飞书方案" },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "wf", content: "Workflow launched in background" }] } },
+      { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "text", text: "已在后台跑起来" }] } },
+      { type: "result", subtype: "success", num_turns: 2, result: "已在后台跑起来", session_id: "sess-14" },
+      { type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "completed", summary: "done" },
+      { type: "system", subtype: "init", session_id: "sess-14" },
+      { type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, errors: ["401 Unauthorized"], origin: { kind: "task-notification" }, session_id: "sess-14" },
+    ],
+    resident,
+  );
+  const errors = events.filter((e) => e.kind === "error");
+  if (errors.some((e) => /401 Unauthorized/.test(e.message) && e.level !== "notice")) ok("401 作为真错误报出来");
+  else fail(`失败被吞了:${JSON.stringify(errors)}`);
+  const ends = events.filter((e) => e.kind === "turnEnd");
+  if (ends.length === 2 && ends[0].background && !ends[1].background) ok("失败那一回合照常结尾、不再等");
+  else fail(`回合结尾不对:${JSON.stringify(ends)}`);
+}
+
+console.log("13) 回合本身报了失败就不等后台:结局已定,收台并把没跑完的记停");
+{
+  const resident = { interruptPending: false, failPending: () => {}, reapsAtTurnEnd: true };
+  const events = await collect(
+    [
+      { type: "system", subtype: "init", session_id: "sess-15" },
+      { type: "assistant", message: { model: "claude-opus-5", content: [{ type: "tool_use", id: "wf", name: "Workflow", input: { script: "export const meta = {}" } }] } },
+      { type: "system", subtype: "task_started", task_id: "w1", tool_use_id: "wf", task_type: "local_workflow", description: "飞书方案" },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "wf", content: "Workflow launched in background" }] } },
+      { type: "result", subtype: "success", is_error: true, api_error_status: 429, num_turns: 2, result: "rate limited", session_id: "sess-15" },
+    ],
+    resident,
+  );
+  const ends = events.filter((e) => e.kind === "turnEnd");
+  if (ends.length === 1 && !ends[0].background) ok("失败回合的结尾不带 background");
+  else fail(`回合结尾不对:${JSON.stringify(ends)}`);
+  if (!events.some((e) => e.kind === "system" && /工作流在跑/.test(e.text))) ok("不出等待说明");
+  else fail("失败回合还在说「等后台」");
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");

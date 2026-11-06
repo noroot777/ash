@@ -45,7 +45,7 @@ import { now } from "./util.js";
  * 映射点的 `else` 会静默把它当成第一种 —— 两份同义枚举之间的翻译,错了编译器一声不响。现在
  * 结算原因直接引用这个类型,措辞表按它穷举(`Record<StallVerdictKind, string>`),加一种就编译不过。
  */
-export type StallVerdictKind = "tripped" | "unverified";
+export type StallVerdictKind = "tripped" | "unverified" | "background_timeout";
 
 export interface StallVerdict {
   /**
@@ -54,6 +54,8 @@ export interface StallVerdict {
    * - `unverified` 结局核实不了(接管上一个进程留下的回合时判决日志读不出来)。两者落位一样
    *                (都是 failed、都不许凭确认升级),但对用户说的话必须不一样 —— 拿熔断那段
    *                「整段时间里只收到重试类错误」去描述一次日志故障就是编事实。
+   * - `background_timeout` 执行器等名下的后台工作等到时限还没跑完、收了台(不经看门狗,由
+   *                执行器自己的 `RunHandle.failure()` 交出来,只在内存里)。
    */
   kind: StallVerdictKind;
   /** 判失败的原因原文(熔断诊断那一段),给结算侧需要时转述。 */

@@ -495,7 +495,7 @@ async function consumeRunStream(a: SingleRunArgs, markStreamDrained: () => void)
     // `clearStallFailure`),所以这一笔取值已经不是必需的 —— 留着是因为它把「读」和「销」摆成
     // 了同一段里的一对,下一个人改结算顺序时看得见配对关系,不必再去 turn-stall-verdict.ts 确认
     // 回收策略。
-    watchdogFailure = stallFailure(sessId, a.turnStart);
+    watchdogFailure = stallFailure(sessId, a.turnStart) ?? a.handle.failure?.() ?? null;
     clearTurnStall(sessId, a.handle);
     if (offsetTimer) clearInterval(offsetTimer);
     const cleaned = await a.handle.cleanup?.().catch((error): CleanupResult => {

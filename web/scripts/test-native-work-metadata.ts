@@ -40,6 +40,12 @@ assert.equal(closed.endedAt, end, "回收与重复终态不能延长执行跨度
 const missingEnd = rowFrom([spawn, launched, { ...completed, at: undefined },
   { type: "agent", id: "child", at: later, status: "stopped", closed: true }]);
 assert.equal(missingEnd.endedAt, undefined, "缺失的结束时间不能用后来的回收时间补造");
+// 工作流整体收工而个体快照没赶上:了结、终态不明,结束时刻照记,跨度停在那一刻。
+const settledUnknown = rowFrom([spawn, launched, { type: "agent", id: "child", at: end, status: "unknown", closed: true,
+  message: "工作流已结束，未收到此项最终状态。" }]);
+assert.equal(settledUnknown.status, "unknown");
+assert.equal(settledUnknown.endedAt, end, "了结而终态不明的行也要有结束时间");
+assert.equal(nativeWorkDuration(settledUnknown, Date.parse(later)), "2分 5秒");
 const resumed = rowFrom([spawn, launched, completed, { type: "agent", id: "child", at: later, status: "running" }]);
 assert.equal(resumed.startedAt, start);
 assert.equal(resumed.endedAt, undefined, "恢复执行后清除旧结束时间");

@@ -155,6 +155,8 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
   const pendingRoutes: { from: string; targets: { rowId: string; text: string }[] }[] = [];
   const taskIds = new Map<string, string>();
   const endedRows = new Set<string>();
+  // 生产方明说「已经了结、终态说不准」的那几行(closed + unknown):没有终态也有结束时刻。
+  const closedRows = new Set<string>();
   const legacyOrdinals = new Map<string, number>();
   for (const item of items) {
     if (item.kind !== "agent") continue;
@@ -167,8 +169,9 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
       if (observedAt) {
         if (!next.startedAt && next.status === "running") next.startedAt = observedAt;
         if (terminal(next.status) && (!previous || !terminal(previous.status))) next.endedAt = observedAt;
+        else if (closedRows.has(id) && !next.endedAt) next.endedAt = observedAt;
       }
-      if (!terminal(next.status)) delete next.endedAt;
+      if (!terminal(next.status) && !closedRows.has(id)) delete next.endedAt;
       if (next.result && next.message === next.result) delete next.message;
       rows.set(id, next);
       if (item.endedAt) endedRows.add(id);
@@ -239,6 +242,9 @@ export function buildNativeWork(items: ConversationItem[], taskStatus: TaskStatu
         // unknown 通常只是「这一条没带状态」(身份补报之类),不能盖掉已有的;带 closed 的是
         // 生产方明说「这一项已经了结、终态说不准」(工作流整体收工而个体快照没赶上)。
         if (activity.status === "unknown" && rows.has(id) && !(activity.closed && previous && !terminal(previous.status))) delete patch.status;
+        // 只记「了结而终态不明」那种;已有终态的行被回收不延长跨度、也不替缺失的结束时间补造。
+        if (activity.closed && activity.status === "unknown" && !(previous && terminal(previous.status))) closedRows.add(id);
+        else if (activity.status !== "unknown") closedRows.delete(id);
         for (const field of ["message", "result"] as const) {
           const value = activity[field];
           if (typeof value !== "string" || !value) continue;

@@ -8,6 +8,7 @@ import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@ash/share
 import { cliHostEnv } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import type { MarkdownImageAccounting } from "./markdown-image-stream.js";
+import type { StallVerdict } from "../turn-stall-verdict.js";
 import { resolveSteerText, type SteerText } from "./steer-text.js";
 import { spawnControllableForRun, spawnForRun, detachedInfo } from "./detached.js";
 import { cleanupAfterRun, spawnAgent, resumeFor, resumeInner, shq, killChild, redactSecrets, failedChild } from "./spawn.js";
@@ -414,9 +415,18 @@ export class ClaudeExecutor implements AgentExecutor {
 
 /**
  * 单飞等后台工作最多等多久。工作流跑半小时到一小时很常见；到点还没跑完就收台，被收走的那几个
- * 照常记进时间线（claude-background-reaped.ts）。
+ * 照常记进时间线（claude-background-reaped.ts）。只认有限正数且不超过 setTimeout 的上限
+ * （超了 Node 会按 1ms 触发，等于一进入等待就收台），坏值退回缺省。
  */
-const BACKGROUND_HOLD_MS = Number(process.env.ASH_BACKGROUND_HOLD_MS) || 2 * 60 * 60_000;
+const BACKGROUND_HOLD_MS = (() => {
+  const fallback = 2 * 60 * 60_000;
+  const raw = process.env.ASH_BACKGROUND_HOLD_MS?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (Number.isFinite(value) && value > 0 && value <= 2 ** 31 - 1) return value;
+  console.warn(`[ash] ASH_BACKGROUND_HOLD_MS=${raw} 不是有效的毫秒数，按缺省 ${fallback} 处理`);
+  return fallback;
+})();
 
 /**
  * 单飞：一个回合 = 一个进程。回合 `result` 一到就关 stdin 收台 —— **除非名下还有后台子代理 /
@@ -425,15 +435,20 @@ const BACKGROUND_HOLD_MS = Number(process.env.ASH_BACKGROUND_HOLD_MS) || 2 * 60 
  * 拿完成通知自己开一回合收尾（2026-11-06 实测）。所以这里照着等：进程留着、流接着读，任务
  * 仍是运行中，下一个不再带 `background` 的回合结尾才收台。等待期间插话照常送达（没有回合可
  * 打断，就直接送进去），停止照常杀进程；最多等 `BACKGROUND_HOLD_MS`。
+ *
+ * 等到点还没跑完 = 这一轮的活没干完：报一条真错误，并经 `failure()` 把「ash 判这一轮未完成」
+ * 交给结算 —— 收台后进程照样 exit 0，智能体也可能早在发起后台工作那一回合就交过卷，两样都
+ * 不能让它落成完成。
  */
 export function singleRunFromResident(
   resident: ResidentHandle,
   detached?: RunHandle["detached"],
+  holdMs = BACKGROUND_HOLD_MS,
 ): RunHandle {
   let intermediateEnds = 0;
   let accepting = true;
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
-  let holdExpired = false;
+  let holdExpired: StallVerdict | null = null;
   const clearHold = () => {
     if (holdTimer) clearTimeout(holdTimer);
     holdTimer = null;
@@ -449,10 +464,11 @@ export function singleRunFromResident(
           clearHold();
           if (event.background) {
             holdTimer = setTimeout(() => {
-              holdExpired = true;
+              const at = new Date().toISOString();
+              holdExpired = { kind: "background_timeout", reason: holdTimeoutMessage(holdMs), at, since: at, durable: false };
               accepting = false;
               resident.close();
-            }, BACKGROUND_HOLD_MS);
+            }, holdMs);
             holdTimer.unref?.();
             continue;
           }
@@ -463,10 +479,8 @@ export function singleRunFromResident(
         }
         if (event.kind === "done") {
           accepting = false;
-          if (holdExpired) {
-            yield { kind: "error", level: "notice", affectsTurn: false,
-              message: `后台工作等了 ${Math.round(BACKGROUND_HOLD_MS / 60_000)} 分钟还没跑完，已收掉进程。` };
-          }
+          const expired = holdExpired as StallVerdict | null; // 定时器回调里写的,控制流分析看不见
+          if (expired) yield { kind: "error", message: expired.reason };
         }
         yield event;
         if (event.kind === "done") return;
@@ -480,6 +494,7 @@ export function singleRunFromResident(
     commandLine: resident.commandLine,
     events,
     detached,
+    failure: () => holdExpired,
     async steer(text: SteerText, beforeSend) {
       if (!accepting) throw new Error("Claude 当前回合已经结束");
       // 等后台工作的空档:没有回合可打断(打断一个空闲会话不会再吐 result,计数就错位了),
@@ -516,6 +531,9 @@ export function singleRunFromResident(
     cleanup: resident.cleanup,
   };
 }
+
+const holdTimeoutMessage = (ms: number) =>
+  `后台工作等了 ${Math.round(ms / 60_000)} 分钟还没跑完，已收掉进程，本回合按未完成结算。`;
 
 // stream-json 的入站格式:一条 user 消息 = 一行 JSON。
 const userLine = (text: string) =>

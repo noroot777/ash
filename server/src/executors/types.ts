@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentType } from "@ash/shared";
 import type { ModelEffortMap } from "@ash/shared/cli-presets";
 import type { RunTracePaths } from "./diagnostics.js";
+import type { StallVerdict } from "../turn-stall-verdict.js";
 import type { DetachedPaths } from "./detached.js";
 import type { CliCommand, CliGoal, CliSessionState } from "@ash/shared/cli-commands";
 /**
@@ -56,6 +57,11 @@ export interface RunHandle {
   command?(command: CliCommand): Promise<string>;
   goal?(): CliGoal | null;
   goalStarted?(): boolean;
+  /**
+   * 执行器自己判定「这一轮没干完」的结论(事件流结束后读一次),与看门狗的熔断判决同一条
+   * 结算通道。目前只有 claude 单飞等后台工作等到超时这一种(executors/claude.ts)。
+   */
+  failure?(): StallVerdict | null;
   /**
    * 事件流结束后回收 CLI 甩出去的后台后代;没有真实进程的失败句柄可省略。
    *

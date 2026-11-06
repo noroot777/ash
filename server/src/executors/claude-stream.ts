@@ -371,7 +371,13 @@ async function* claudeStreamEvents(
       // 的那一回合**同样**带 `origin:task-notification`,可那是真回合:智能体读了结果、干了活、
       // 交了卷(2026-11-06 实测 `claude -p` 与 stream-json 两种形态都是这样)。整条跳过它,
       // 单飞那一路就永远等不到这一回合的结尾。
-      if (ev.origin?.kind === "task-notification" && !turnSpoke) return;
+      //
+      // **报了失败的也不跳**:那一回合第一个 API 请求就挂掉(401、限流)时主智能体同样一个字
+      // 都没说,只凭「说没说话」判会把这条权威失败整条吞掉,单飞那一路接着空等到超时。孤儿回执
+      // 是成功形状的(`subtype:"success"`、没有 `is_error`),失败字段先看。
+      const apiError = ev.is_error === true || typeof ev.api_error_status === "number";
+      const failed = (!!ev.subtype && ev.subtype !== "success") || apiError;
+      if (ev.origin?.kind === "task-notification" && !turnSpoke && !failed) return;
       turnSpoke = false;
       if (resident) resident.turnActive = false;
       flushText();
@@ -403,8 +409,7 @@ async function* claudeStreamEvents(
       // claude CLI 把 **API 层**的失败(404 模型不存在、401、限流…)报成
       // `subtype:"success"` + `is_error:true` + `api_error_status` —— 只看 subtype
       // 会把它整条判成正常结束。两路判据都要算上,否则回合「成功」但一个字没说。
-      const apiError = ev.is_error === true || typeof ev.api_error_status === "number";
-      if (((ev.subtype && ev.subtype !== "success") || apiError) && !ownInterrupt) {
+      if (failed && !ownInterrupt) {
         // CLI **自己**失败时(会话找不到、启动期崩)`result` 是空的,原因只在
         // `errors[]` 里。不读它就只剩一句 `result: error_during_execution`——用户看不出
         // 发生了什么,`session-lost.ts` 那条「no conversation found」的识别也永远匹配不上,
@@ -423,10 +428,14 @@ async function* claudeStreamEvents(
       // 单飞这一路的回合结束本来就是收台(见 ClaudeControlBridge.reapsAtTurnEnd);用户插话
       // 打断的那个 result 不算,进程还要接着跑下一段。名下还有没跑完的后台子代理 / 工作流
       // 时先不收:它们跑完 CLI 会自己开下一回合,收了台它们就白跑了(任务 SGK-4lWyRQCX)。
-      const waiting = resident?.reapsAtTurnEnd && !ownInterrupt ? background.waiting() : null;
+      // 这一回合本身报了失败就不等:结局已经定了,等下去只是把一个失败的结算拖后两小时。
+      //
+      // 等待说明发成 system 旁注而不是 notice error:后者是「上游在重试」的契约,停滞看门狗会把
+      // 它计成重试、页面会显示「在等上游」—— 而这里上游好好的,是我们在等自己的后台。
+      const waiting = resident?.reapsAtTurnEnd && !ownInterrupt && !failed ? background.waiting() : null;
       const holding = !!waiting && waiting.agent + waiting.workflow > 0;
       if (holding) {
-        push({ kind: "error", level: "notice", affectsTurn: false, message: backgroundHoldNotice(waiting) });
+        push({ kind: "system", text: backgroundHoldNotice(waiting), at: new Date().toISOString(), level: "notice", aside: true });
       } else if (resident?.reapsAtTurnEnd && !ownInterrupt) {
         for (const activity of nativeWork.reaped()) push(activity);
       }

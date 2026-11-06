@@ -92,7 +92,38 @@ assert.deepEqual(await holdIterator.next(), { value: { kind: "text", text: "工�
 holdEvents.push({ kind: "turnEnd" });
 assert.deepEqual(await holdIterator.next(), { value: { kind: "done", exitStatus: 0 }, done: false });
 assert.equal(holdCalls.at(-1), "close", "后台的活跑完之后那一回合结尾才收台");
+assert.equal(hold.failure?.() ?? null, null, "正常等到后台跑完不留失败结论");
 console.log("✓ Claude 后台工作流没跑完先不收台，空档插话直接送达");
+
+// 等到时限还没跑完:收台、报真错误,并把「未完成」交给结算 —— 进程收台后照样 exit 0,
+// 智能体也可能早就交过卷,两样都不能让它落成完成。
+const expiryEvents = eventQueue();
+const expiryCalls: string[] = [];
+const expiryResident: ResidentHandle = {
+  sessionId: "claude-hold-expiry",
+  commandLine: "claude hold",
+  events: expiryEvents.stream,
+  interrupt: () => { expiryCalls.push("interrupt"); },
+  send: () => true,
+  turnActive: () => false,
+  close: () => { expiryCalls.push("close"); expiryEvents.push({ kind: "done", exitStatus: 0 }); expiryEvents.end(); },
+  kill: () => { expiryCalls.push("kill"); expiryEvents.end(); },
+  cleanup: async () => ({ kind: "empty" } as const),
+};
+// 收台定时器 unref 了(不替 ash 拖住退出),测试进程里得另有东西撑着事件循环。
+const keepAlive = setInterval(() => {}, 1000);
+const expiry = singleRunFromResident(expiryResident, undefined, 30);
+const expiryIterator = expiry.events[Symbol.asyncIterator]();
+expiryEvents.push({ kind: "turnEnd", background: { agent: 1, workflow: 0 } });
+const expiryError = await expiryIterator.next();
+assert.equal(expiryCalls[0], "close", "到点收台");
+assert.equal(expiryError.value?.kind, "error");
+assert.equal((expiryError.value as any).level, undefined, "超时是真错误,不是过程提示");
+assert.match((expiryError.value as any).message, /按未完成结算/);
+assert.deepEqual(await expiryIterator.next(), { value: { kind: "done", exitStatus: 0 }, done: false });
+assert.equal(expiry.failure?.()?.kind, "background_timeout", "超时结论交给结算");
+clearInterval(keepAlive);
+console.log("✓ Claude 后台工作等到时限：收台、报错、按未完成结算");
 
 const partialEvents = eventQueue();
 const partialCalls: string[] = [];
