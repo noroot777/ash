@@ -10,7 +10,7 @@ import type { AcceptGateView } from "@ash/shared/accept-gate";
 import { handoffBlockReason } from "./handoff-guard.js";
 import { isTurnClaimed } from "./runs.js";
 import { hasOwnedGateProcess, hasStoppingGateProcess, reconcileGateProcesses } from "./accept-gate-ownership.js";
-import { holdDrift, holdMembers, holdScope } from "./team-acceptance-hold.js";
+import { holdDrift, holdMembers, holdScope, topUpHold } from "./team-acceptance-hold.js";
 
 export type AcceptWarning = {
   reason: "temporary_cleanup_failed";
@@ -107,6 +107,8 @@ export async function acceptanceGuard(
   options: { allowBaseUpdatePending?: boolean } = {},
 ): Promise<{ task: typeof tasks.$inferSelect | null; failure: AcceptFailure | null }> {
   await reconcileGateProcesses(taskId);
+  // 团队验收占位那一刻没占到的，先补占（team-acceptance-hold.ts topUpHold）；还占不到的下面按在飞拒绝。
+  topUpHold(taskId);
   const state = await acceptanceState(taskId);
   if (!state.task) {
     return {

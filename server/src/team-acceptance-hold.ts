@@ -25,7 +25,7 @@ import { workspaceParticipants } from "./task-workspace.js";
 import { isSharedTeamWorker, resultVersionOf } from "./task-result-version.js";
 
 /** members = 占到的那几位；scope = 想占的全部（占不到的此刻有回合在跑，验收守卫据此拒绝）。 */
-type Hold = { members: ReadonlySet<string>; scope: ReadonlySet<string>; version: string | null };
+type Hold = { members: Set<string>; scope: ReadonlySet<string>; version: string | null; releases: (() => void)[] };
 const holds = new Map<string, Hold>();
 const NONE: ReadonlySet<string> = new Set();
 
@@ -44,15 +44,15 @@ export async function holdTeamForAcceptance(taskId: string): Promise<() => void>
   const peers = own ? await workspaceParticipants(lead, root!.path) : [];
   const scope = new Set([taskId, ...workers.map((worker) => worker.id), ...peers.map((peer) => peer.id)]);
   const { held, release } = claimAcceptanceHold([...scope]);
-  const hold: Hold = { members: held, scope, version: null };
+  const hold: Hold = { members: new Set(held), scope, version: null, releases: [release] };
   holds.set(taskId, hold);
   let released = false;
   const releaseAll = () => {
     if (released) return;
     released = true;
     if (holds.get(taskId) === hold) holds.delete(taskId);
-    release();
-    void afterHold(taskId, [...held]);
+    for (const release of hold.releases) release();
+    void afterHold(taskId, [...hold.members]);
   };
   try {
     // 占住之后才记：从这一刻起，能改这一版成果的只剩调度台 CLI 自己起的回合（见文件头）。
@@ -62,6 +62,21 @@ export async function holdTeamForAcceptance(taskId: string): Promise<() => void>
     throw error;
   }
   return releaseAll;
+}
+
+/**
+ * 把占位那一刻没占到的补占上。占不到的未必是有回合在跑：也可能是别的短暂占用者（源码管理写操作在仓库锁里
+ * 占着全部共用者），它一放手，这一位就谁都没冻着，之后照样起得了跑。所以每道验收守卫之前补一次（task-accept-guard.ts）：
+ * 补上了就冻住；还占不到的，守卫照「回合锁被别人占着」拒绝。
+ */
+export function topUpHold(taskId: string): void {
+  const hold = holds.get(taskId);
+  if (!hold) return;
+  const missing = [...hold.scope].filter((id) => !hold.members.has(id));
+  if (!missing.length) return;
+  const { held, release } = claimAcceptanceHold(missing);
+  for (const id of held) hold.members.add(id);
+  hold.releases.push(release);
 }
 
 /** 这次团队验收占着的那几位（守卫据此不把自己的占位当成「有回合在飞」）。没在验收就是空的。 */

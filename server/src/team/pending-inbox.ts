@@ -108,5 +108,10 @@ export function createPendingInbox(report: (lead: Lead, text: string, at?: strin
     lead.pending = [];
   }
 
-  return { adoptInbound, queueInbound, flushUnqueued, releasePending, stashUnqueued };
+  /** 这条任务名下有没有还没送进调度台的消息（库里的队列，加上落库失败留在这里的那几条）。 */
+  async function hasPending(taskId: string): Promise<boolean> {
+    return !!unqueuedFallback.get(taskId)?.length || (await pendingInbound(taskId)).length > 0;
+  }
+
+  return { adoptInbound, queueInbound, flushUnqueued, releasePending, stashUnqueued, hasPending };
 }

@@ -109,24 +109,24 @@ export function teamLeadBusy(taskId: string): boolean {
   return !!leads.get(taskId)?.busy || opening.has(taskId);
 }
 
-// 团队验收期间（team-acceptance-hold.ts）调度台不在线、执行者消息被挡下排进库里的：验收结束补开一次台，好让新的
-// 一台读到它们（adoptInbound）。只记「欠一次唤醒」，消息本身已经落库。
-const deferredWakes = new Set<string>();
-
 /**
  * 团队验收结束：把验收期间投递口拒收、攒在待送队列里的执行者汇报送进调度台；调度台当时不在线、
- * 唤醒被挡下的，补开一次台。
+ * 唤醒被挡下的，补开一次台（新的一台开起来会读到库里那几条，adoptInbound）。
+ *
+ * 欠不欠这一次唤醒按库里的待送队列认，不另记一份内存账：消息在验收期间已经落了库（deferredByAcceptance），
+ * 重启之后下一次验收结束照样补得上。验收合并会删掉团队的 worktree：调度台还钉在那个目录上就不往里送，
+ * 交给 deliver 收掉它、重新开台（同 deliver 里「脚下的目录没了」那一段）。
  */
 export async function resumeLeadAfterAcceptance(taskId: string): Promise<void> {
   const lead = leads.get(taskId);
-  if (lead && !lead.closing) {
-    deferredWakes.delete(taskId);
+  if (lead && !lead.closing && existsSync(lead.cwd)) {
     if (lead.busy || !lead.pending.length) return; // 忙着的那台回合收尾时自己会合并送
     clearIdle(lead);
     await consumer().deliverPending(lead);
     return;
   }
-  if (deferredWakes.delete(taskId)) await deliver(taskId, LEAD_AFTER_ACCEPTANCE, "inbound");
+  if (lead?.closing) return; // 正在收尾的那台关掉时自己会把队列交给下一台
+  if (await hasPending(taskId)) await deliver(taskId, LEAD_AFTER_ACCEPTANCE, "inbound");
 }
 
 // 用户插话(continueTask 顶部分流过来)。
@@ -273,9 +273,8 @@ async function deferredByAcceptance(taskId: string, text: string, kind: Kind): P
   }
   if (kind !== "inbound" || !text.trim()) return false;
   if (text === LEAD_NUDGE) return true;
-  // 补开台那一句撞上了下一次验收：消息还在库里，再欠一次就行。
+  // 补开台那一句撞上了下一次验收：消息还在库里，那一次验收结束再补。
   if (text !== LEAD_AFTER_ACCEPTANCE) await stashUnqueued(taskId, text);
-  deferredWakes.add(taskId);
   return true;
 }
 
@@ -661,7 +660,7 @@ export function attachLead(lead: Lead): void {
 // ── 事件消费 ──// ── 事件消费 ────────────────────────────────────────────────────────────────
 // 待送托盘与消费者互相引用(adoptInbound 要 reportLeadFailure 报失败,consume 要
 // adoptInbound 认领):托盘先建、失败上报晚绑定 —— 两边都只在运行时才互相调用。
-const { adoptInbound, queueInbound, flushUnqueued, releasePending, stashUnqueued } =
+const { adoptInbound, queueInbound, flushUnqueued, releasePending, stashUnqueued, hasPending } =
   createPendingInbox((lead, text, at) => reportLeadFailure(lead, text, at));
 // 消费者**懒建**:这个模块身处一个真实的导入环里(team/lead-status → status →
 // task-complete → monitors → monitor-consume → monitor-events → pending-messages →

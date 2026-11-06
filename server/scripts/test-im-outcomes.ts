@@ -17,7 +17,7 @@
 // ⑤ @ 占位去掉之后，正文的缩进原样；
 // ⑥ 团队验收占住全队（team-acceptance-hold.ts）：占着的时候共享执行者起不了跑、改不了状态、加不了新执行者、
 //    别人带 force 也写不了工作区、调度台不在线时用户的话不开台；验收自己的守卫不把这份占位当成在飞；占住之后
-//    调度台又跑了一轮 → 之后每道守卫都拒；放开之后一切照旧。
+//    调度台又跑了一轮 → 之后每道守卫都拒；放开之后一切照旧；占的那一刻被别人短暂占着的成员，下一道守卫补占上。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -243,6 +243,19 @@ try {
     const after = claimOwnTurn("tworker", "single");
     assert.ok(after, "验收结束：执行者照常起跑");
     releaseTurn("tworker", after!);
+
+    // 占位那一刻共享执行者正被别的短暂占用者占着（源码管理写操作）：放手之后不补占就谁都没冻着它。
+    // 每道守卫之前补占一次：还被占着按在飞拒绝，放手了就补上。
+    const scm = claimOwnTurn("tworker", "scm")!;
+    const releaseAgain = await holdTeamForAcceptance("tlead");
+    assert.ok(!holdMembers("tlead").has("tworker"), "占的那一刻没占到");
+    assert.equal((await acceptanceGuard("tlead", "before_merge")).failure?.httpStatus, 409, "还被别人占着：不验收");
+    releaseTurn("tworker", scm);
+    assert.equal((await acceptanceGuard("tlead", "before_merge")).failure, null);
+    assert.ok(holdMembers("tlead").has("tworker") && heldForAcceptance("tworker"), "放手之后下一道守卫补占上了");
+    assert.equal(claimOwnTurn("tworker", "single"), null, "补占之后照样起不了跑");
+    releaseAgain();
+    assert.ok(!isTurnClaimed("tworker"), "补占的那一把也随验收结束放开");
   }
 
   // ── ② 旧失败上的重试 ─────────────────────────────────────────────────────
