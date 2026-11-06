@@ -15,9 +15,16 @@ import "../../src/styles/global.css";
 type Item = { kind: "user" | "agent"; id: string; text: string; at?: string; bySystem?: boolean; short?: boolean };
 
 const REQUIREMENT = "原始需求：在会话左侧加一条输入导航\n指上去看全文，点一下跳过去";
+// 第一次追问是一条很长的多行输入：悬停卡片、Q 摊开的列表都得读得到它的结尾。
+const LONG_LAST_LINE = "第24段：摊开之后每一条都要看得到全文，不能只剩第一行。";
+const LONG_FOLLOW_UP = [
+  "第一次追问：Q 摊开全部",
+  ...Array.from({ length: 23 }, (_, index) => `第${index + 1}段：摊开之后每一条都要看得到全文，不能只剩第一行。`),
+  LONG_LAST_LINE,
+].join("\n");
 const seed: Item[] = [
   { kind: "agent", id: "a0", text: "先摸一下现状。" },
-  { kind: "user", id: "persisted:user:s1:2", text: "第一次追问：Q 摊开全部", at: "2026-11-03T01:00:00.000Z" },
+  { kind: "user", id: "persisted:user:s1:2", text: LONG_FOLLOW_UP, at: "2026-11-03T01:00:00.000Z" },
   { kind: "agent", id: "a1", text: "好的。" },
   { kind: "user", id: "monitor", text: "【哨兵事件】回归跑完了", bySystem: true },
   { kind: "agent", id: "a2", text: "回归是绿的。" },
@@ -72,6 +79,13 @@ function Fixture() {
         { kind: "agent", id: `tail-${list.length}`, text: "又来了一段新回复。" },
       ])}>来一段新回复</button>
       <button type="button" data-testid="cover" onClick={() => setCovered(true)}>拉出抽屉</button>
+      <button type="button" data-testid="append-twins" onClick={() => setItems((list) => [
+        ...list,
+        { kind: "user", id: "persisted:user:s3:1", text: "请按以下要求修改\n标题改成「我的输入」", at: "2026-11-03T05:00:00.000Z" },
+        { kind: "agent", id: "a7", text: "改好了。" },
+        { kind: "user", id: "persisted:user:s3:3", text: "请按以下要求修改\n列表要能读到每条的结尾", at: "2026-11-03T06:00:00.000Z" },
+        { kind: "agent", id: "a8", text: "也改好了。" },
+      ])}>追问两条开头一样的</button>
       <div className="conversation-scroll-region" data-testid="region">
         <div className="task-conversation" ref={scroll} data-testid="feed">
           {items.map((item) => item.kind === "user" ? (

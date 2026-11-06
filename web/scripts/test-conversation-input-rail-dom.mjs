@@ -2,9 +2,9 @@
 //
 // 钉的是用户要的那几件事（2026-11-06，照 codex 桌面版那条做）：
 //   · 每条横线是我说过的一句话 —— 原始需求打头，后面是追问；哨兵投喂、审查打回不算；
-//   · 指上去附近几条横线一起鼓起来，旁边浮出那条输入的全文；
+//   · 指上去附近几条横线一起鼓起来，旁边浮出那条输入的全文（长输入在卡片里滚得到结尾）；
 //   · 点一下会话直接跳到那颗气泡（原始需求跳到顶），而且跳过去之后来了新消息不把人拽回底部；
-//   · 按 Q 整条摊开成列表，方向键挑、回车跳；Esc / 再按 Q / 点外面收起；输入框里的 q 是字；
+//   · 按 Q 把每条输入都摊开（第一行之后的正文整段跟着，开头一样的两条分得开），方向键挑、回车跳；Esc / 再按 Q / 点外面收起；输入框里的 q 是字；
 //     会话被抽屉盖住时不摊开；
 //   · 滚轮落在导航条上照样滚会话，窄屏下正文不被刻度带压住。
 // 跑法：npm -w web run test:conversation-input-rail-dom
@@ -61,6 +61,15 @@ try {
   };
   const currentTick = () => page.locator('.conversation-input-tick[aria-current="location"]').getAttribute("aria-label");
   const widths = () => ticks.evaluateAll((elements) => elements.map((element) => Number.parseFloat(element.style.width)));
+  // 等页面里某个条件成立；等不到就按断言失败报出来。
+  const until = async (condition, message, arg) => {
+    try {
+      await page.waitForFunction(condition, arg, { timeout: 3_000 });
+    } catch {
+      assert.fail(message);
+    }
+  };
+  const LONG_LAST_LINE = "第24段：摊开之后每一条都要看得到全文，不能只剩第一行。";
 
   // ── 哪些话上了导航 ──
   await flush();
@@ -100,6 +109,23 @@ try {
   await flush();
   assert.equal(await card.count(), 0, "指针离开导航条，卡片收起");
   assert.ok((await widths()).every((width, index) => width === (index === 4 ? 12 : 8)), "指针离开后横线恢复原长（只有正读着的那条长一截）");
+
+  // 长输入：卡片给全文，高出卡片的部分在卡片里自己滚、滚得到结尾；卡片还能滚时滚轮不带着会话走。
+  await pointAt(1);
+  const cardText = card.locator("p");
+  assert.ok((await cardText.textContent()).endsWith(LONG_LAST_LINE), "卡片里是长输入的全文");
+  assert.ok(await cardText.evaluate((element) => element.scrollHeight > element.clientHeight + 20), "长输入高出卡片，得能在卡片里滚");
+  const cardBox = await card.boundingBox();
+  const feedBeforeCard = await metrics();
+  await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2);
+  await page.mouse.wheel(0, 5_000);
+  await until(() => {
+    const element = document.querySelector(".conversation-input-card p");
+    return element !== null && element.scrollTop > 0 && element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
+  }, "卡片里应滚得到长输入的结尾");
+  assert.equal((await metrics()).top, feedBeforeCard.top, "卡片还在滚的时候不该带着会话滚");
+  await page.mouse.move(600, 300);
+  await flush();
 
   // 滚轮落在刻度带上照样滚会话：导航条盖在会话上，却不在滚动容器里头。
   await pointAt(2);
@@ -159,11 +185,27 @@ try {
     "第二次追问：点横线要跳到气泡",
     "第三次追问：哨兵别算进去",
     "第四次追问：读到哪一条要标出来",
-  ], "摊开后每条输入一行");
+  ], "摊开后每条输入一块，第一行打头");
+  const rests = () => menu.getByRole("menuitem").evaluateAll((elements) => elements.map((element) => (
+    element.querySelector(".conversation-input-menu-rest")?.textContent ?? ""
+  )));
+  const opened = await rests();
+  assert.equal(opened[0], "指上去看全文，点一下跳过去", "第一行之后的正文整段接在下面");
+  assert.ok(opened[1].endsWith(LONG_LAST_LINE), "长输入摊开后一直到结尾都在");
+  assert.deepEqual(opened.slice(2), ["", "", ""], "只有一行的输入下面不多出东西");
+  assert.ok(
+    await menu.locator(".conversation-input-menu-rest > span").evaluateAll((elements) => elements.every((element) => element.scrollHeight <= element.clientHeight + 1)),
+    "摊开的正文不该被截断",
+  );
   const focused = () => page.evaluate(() => document.activeElement?.querySelector("span")?.textContent ?? null);
   assert.equal(await focused(), "原始需求：在会话左侧加一条输入导航", "焦点落在正读着的那一条");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-current")), "location", "读屏也要知道哪一条是正读着的");
   await page.keyboard.press("ArrowDown");
+  assert.equal(await focused(), "第一次追问：Q 摊开全部", "方向键挑");
+  assert.ok(
+    await menu.evaluate((element) => document.activeElement.getBoundingClientRect().top >= element.getBoundingClientRect().top - 1),
+    "挪到比列表还高的长输入上，露出的是它的开头",
+  );
   await page.keyboard.press("ArrowDown");
   assert.equal(await focused(), "第二次追问：点横线要跳到气泡", "方向键挑");
   await page.keyboard.press("ArrowUp");
@@ -225,6 +267,36 @@ try {
   assert.equal(await entry.inputValue(), "q");
   await flush();
   assert.equal(await menu.count(), 0, "输入框里打 q 不应摊开列表");
+
+  // 平滑跳转半路被接管（拖滚动条、按翻页键之类，不经滚轮）：滚动一停就别再死守着点的那一条。
+  await pointAt(0);
+  await page.mouse.down();
+  await page.mouse.up();
+  await feed.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await page.mouse.move(600, 300);
+  await until(
+    () => document.querySelector('.conversation-input-tick[aria-current="location"]')?.getAttribute("aria-label") === "第四次追问：读到哪一条要标出来",
+    "跳转被半路接管、停在了底部，标的应回到按位置推出来的那一条",
+  );
+
+  // 开头一样的两次追问：摊开后靠后文分得开。
+  await page.getByTestId("append-twins").click();
+  await page.getByTestId("append-twins").evaluate((element) => element.blur());
+  await flush();
+  await page.keyboard.press("q");
+  await menu.waitFor();
+  const twins = await menu.getByRole("menuitem").evaluateAll((elements) => elements.slice(-2).map((element) => [
+    element.querySelector("span").textContent,
+    element.querySelector(".conversation-input-menu-rest").textContent,
+  ]));
+  assert.deepEqual(twins, [
+    ["请按以下要求修改", "标题改成「我的输入」"],
+    ["请按以下要求修改", "列表要能读到每条的结尾"],
+  ], "开头一样的两条，摊开后各自的后文都在");
+  await page.keyboard.press("Escape");
+  await flush();
 
   // 窄屏下正文的左边距比刻度带还窄：挂着导航时正文让到刻度带右边，免得指正文弹卡片、点正文跳走。
   await page.setViewportSize({ width: 600, height: 640 });

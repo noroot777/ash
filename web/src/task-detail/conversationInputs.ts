@@ -74,6 +74,17 @@ export function conversationInputHeadline(input: ConversationInput): string {
   return input.attachments.map((path) => attachmentView(path).name).join("、");
 }
 
+/**
+ * 第一行（headline）之后的正文，Q 摊开的列表里接在 headline 下面整段给出：开头一样的两次追问
+ * 靠它分得开，长输入也读得到结尾。只有一行的是空串；中间的空行、缩进原样留着。
+ */
+export function conversationInputRest(input: ConversationInput): string {
+  const lines = input.text.split("\n");
+  const first = lines.findIndex((line) => line.trim());
+  if (first < 0) return "";
+  return lines.slice(first + 1).join("\n").replace(/^\s*\n/, "").trimEnd();
+}
+
 /** 气泡选择器：值里有冒号这类字符（条目 id 是 `persisted:user:…`），必须转义。 */
 export function conversationInputSelector(id: string): string {
   return `[${CONVERSATION_INPUT_ATTRIBUTE}="${CSS.escape(id)}"]`;

@@ -5,6 +5,7 @@ import {
   REQUIREMENT_INPUT_ID,
   conversationInputAnchor,
   conversationInputHeadline,
+  conversationInputRest,
   conversationInputs,
 } from "../src/task-detail/conversationInputs.ts";
 import {
@@ -62,6 +63,12 @@ assert.deepEqual(imageOnly.map((input) => [input.id, input.text, input.attachmen
 assert.equal(conversationInputHeadline(inputs[0]!), "原始需求正文");
 assert.equal(conversationInputHeadline({ id: "x", text: "\n\n  第三行才有字\n后面", attachments: [] }), "第三行才有字");
 assert.equal(conversationInputHeadline(imageOnly[0]!), "shot.png");
+
+// 第一行之后的正文：Q 摊开时整段接在 headline 下面。
+assert.equal(conversationInputRest(inputs[0]!), "第二行");
+assert.equal(conversationInputRest(inputs[1]!), "", "只有一行");
+assert.equal(conversationInputRest({ id: "x", text: "\n标题\n\n\n  缩进的第二段\n\n第三段", attachments: [] }), "  缩进的第二段\n\n第三段", "开头的空行去掉，中间的空行和缩进留着");
+assert.equal(conversationInputRest(imageOnly[0]!), "");
 
 assert.deepEqual(conversationInputAnchor("persisted:user:s1:3"), { "data-conversation-input": "persisted:user:s1:3" });
 

@@ -4,10 +4,11 @@ import { useDismissable } from "../lib/useDismissable.ts";
 import {
   REQUIREMENT_INPUT_ID,
   conversationInputHeadline,
+  conversationInputRest,
   conversationInputSelector,
   type ConversationInput,
 } from "../task-detail/conversationInputs.ts";
-import { formatInstant } from "../task-detail/utils.ts";
+import { attachmentView, formatInstant } from "../task-detail/utils.ts";
 import { CONVERSATION_INPUTS_SHORTCUT, registerConversationInputsTarget } from "./conversationInputNav.ts";
 import { TICK_ACTIVE_EXTRA, activeInput, nearestTick, railPitch, tickWidth } from "./conversationInputRailGeometry.ts";
 
@@ -17,8 +18,12 @@ const RAIL_MARGIN = 28;
 const STRIP_PAD = 10;
 /** 悬停卡片、列表离会话区上下边至少这么远。 */
 const EDGE_GAP = 8;
+/** 列表的内边距（同 CSS）：方向键挪到的那一条露出来时，上下也留这么一点。 */
+const MENU_PAD = 4;
 /** 跳过去之后，那颗气泡的顶边离视口顶边留多少：贴死在边上不好认。 */
 const JUMP_OFFSET = 16;
+/** 隔这么久没再来 scroll 就算滚动停了：平滑滚动一帧一个事件，中间不会断这么久。 */
+const SCROLL_SETTLE_MS = 160;
 
 function isTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -51,6 +56,7 @@ export function ConversationInputRail({
   const rootRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const cardTextRef = useRef<HTMLParagraphElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [height, setHeight] = useState(0);
@@ -82,7 +88,8 @@ export function ConversationInputRail({
   inputsRef.current = inputs;
   // 刚点过的那一条：跳过去的路上、落定之后都标它。只按位置推的话，下一颗气泡离得近（连着
   // 追问了两句、中间只回了一句「好的」）或者落点被夹在了底部，标出来的就成了别的那条。
-  // 读者自己再一挪（落定之后位置变了、在会话上滚了滚轮），就交还给按位置推。
+  // 读者自己再一挪（落定之后位置变了、在会话上滚了滚轮），或者滚动停了却没到过落点（半路被
+  // 拖滚动条、按翻页键接管了，布局一变那个位置再也到不了），就交还给按位置推。
   const pinRef = useRef<{ index: number; top: number; landed: boolean } | null>(null);
   const measure = useCallback(() => {
     const container = scrollRef.current;
@@ -121,14 +128,27 @@ export function ConversationInputRail({
     const release = () => {
       pinRef.current = null;
     };
-    container.addEventListener("scroll", schedule, { passive: true });
+    let settle = 0;
+    const settled = () => {
+      settle = 0;
+      if (!pinRef.current || pinRef.current.landed) return;
+      pinRef.current = null;
+      measure();
+    };
+    const onScroll = () => {
+      schedule();
+      window.clearTimeout(settle);
+      settle = window.setTimeout(settled, SCROLL_SETTLE_MS);
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
     container.addEventListener("wheel", release, { passive: true });
     container.addEventListener("touchmove", release, { passive: true });
     const observer = new ResizeObserver(schedule);
     observer.observe(container);
     return () => {
       cancelAnimationFrame(frame);
-      container.removeEventListener("scroll", schedule);
+      window.clearTimeout(settle);
+      container.removeEventListener("scroll", onScroll);
       container.removeEventListener("wheel", release);
       container.removeEventListener("touchmove", release);
       observer.disconnect();
@@ -149,7 +169,7 @@ export function ConversationInputRail({
       top = bubble.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - JUMP_OFFSET;
     }
     const target = Math.max(0, Math.min(top, container.scrollHeight - container.clientHeight));
-    pinRef.current = { index, top: target, landed: false };
+    pinRef.current = { index, top: target, landed: Math.abs(container.scrollTop - target) <= 1 };
     setActive(index);
     // 落点就是底部（点的是最后一条）也一样脱离跟随：人是来看这颗气泡的，接着长出来的回复
     // 要是把视口往下带，它转眼就被顶出屏幕。想接着跟，按 ↓ 或者自己滚到底。
@@ -161,10 +181,13 @@ export function ConversationInputRail({
 
   // 刻度带和卡片盖在会话区上，却不在滚动容器里头：滚轮落在它们身上，浏览器顺着祖先找可滚的，
   // 找不到会话那一层。替它滚，并照会话自己的滚轮那样记一笔意图（往上滚 = 往回看）。
-  // 摊开的列表自己能滚，不转。
+  // 摊开的列表自己能滚，不转；卡片里的长输入还没滚到头时也让它自己滚，到头了再接着滚会话。
   const forwardWheel = (event: WheelEvent<HTMLDivElement>) => {
     const container = scrollRef.current;
-    if (!container || !event.deltaY || menuRef.current?.contains(event.target as Node)) return;
+    const target = event.target as Node;
+    if (!container || !event.deltaY || menuRef.current?.contains(target)) return;
+    const text = cardTextRef.current;
+    if (text?.contains(target) && (event.deltaY < 0 ? text.scrollTop > 0 : text.scrollTop + text.clientHeight < text.scrollHeight - 1)) return;
     pinRef.current = null;
     onReaderScroll(event.deltaY < 0);
     const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? container.clientHeight : 1;
@@ -209,7 +232,10 @@ export function ConversationInputRail({
     const current = menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[active];
     if (!menu || !current) return;
     current.focus({ preventScroll: true });
-    menu.scrollTop = current.offsetTop - (menu.clientHeight - current.offsetHeight) / 2;
+    // 整条摆得下就挪到中间，摆不下（很长的一条输入）就让它的开头顶在上边。
+    menu.scrollTop = current.offsetHeight < menu.clientHeight
+      ? current.offsetTop - (menu.clientHeight - current.offsetHeight) / 2
+      : current.offsetTop - MENU_PAD;
     // 只在摊开那一下对准；摊开期间滚动带动的 active 变化不该把焦点抢走，所以不依赖 active。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menuOpen]);
@@ -230,7 +256,7 @@ export function ConversationInputRail({
         const item = items[(index + items.length) % items.length];
         if (!item) return;
         item.focus({ preventScroll: true });
-        item.scrollIntoView({ block: "nearest" });
+        reveal(menu, item);
       };
       if (event.key === "ArrowDown") focusAt(at < 0 ? active : at + 1);
       else if (event.key === "ArrowUp") focusAt(at < 0 ? active : at - 1);
@@ -301,7 +327,7 @@ export function ConversationInputRail({
       {hoveredInput && hovered !== null && (
         <div ref={cardRef} className="conversation-input-card" onClick={() => jump(hovered)}>
           <div>
-            <p>{hoveredInput.text || conversationInputHeadline(hoveredInput)}</p>
+            <p ref={cardTextRef}>{hoveredInput.text || conversationInputHeadline(hoveredInput)}</p>
             <footer>
               {hoveredInput.at && <time dateTime={hoveredInput.at}>{formatInstant(hoveredInput.at)}</time>}
               {hoveredInput.attachments.length > 0 && (
@@ -330,12 +356,41 @@ export function ConversationInputRail({
             >
               <span>{conversationInputHeadline(input)}</span>
               {input.at && <time dateTime={input.at}>{formatInstant(input.at)}</time>}
+              <MenuItemRest input={input} />
             </button>
           ))}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * 摊开的列表里一条输入的其余部分：第一行之后的正文整段、附件名。不截断 —— Q 就是要把输入
+ * 都打开，开头一样的两次追问靠后文分得开，长输入也得读得到结尾（列表本身能滚）。
+ * 全用 span：它们在 button 里头，button 只收短语内容。
+ */
+function MenuItemRest({ input }: { input: ConversationInput }) {
+  const rest = conversationInputRest(input);
+  // 只发了附件的输入，headline 已经是附件名了，不再报一遍。
+  const files = input.text.trim() ? input.attachments.map((path) => attachmentView(path).name) : [];
+  if (!rest && !files.length) return null;
+  return (
+    <span className="conversation-input-menu-rest">
+      {rest && <span>{rest}</span>}
+      {files.length > 0 && (
+        <span className="conversation-input-menu-files"><Paperclip size={11} aria-hidden="true" />{files.join("、")}</span>
+      )}
+    </span>
+  );
+}
+
+/** 方向键挪到的那一条露出来：摆得下就整条露出；比列表还高的长输入，露出它的开头。 */
+function reveal(menu: HTMLElement, item: HTMLElement) {
+  const top = item.offsetTop - MENU_PAD;
+  const bottom = item.offsetTop + item.offsetHeight + MENU_PAD;
+  if (top < menu.scrollTop || item.offsetHeight + MENU_PAD * 2 > menu.clientHeight) menu.scrollTop = top;
+  else if (bottom > menu.scrollTop + menu.clientHeight) menu.scrollTop = bottom - menu.clientHeight;
 }
 
 /**
