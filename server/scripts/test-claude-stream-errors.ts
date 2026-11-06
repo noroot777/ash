@@ -17,6 +17,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const { parseClaudeStream } = await import("../src/executors/claude.js");
+// 常驻桥一律用真的:解析器会调它的回合身份、打断认领、后台账本(自由审查 i8RAcPM3zvgD R3 ——
+// 手写的半个替身缺一个方法就在中途 TypeError,后面几节根本跑不到)。
+const { ClaudeControlBridge } = await import("../src/executors/claude-control.js");
 
 const dir = mkdtempSync(join(tmpdir(), "ash-claude-stream-"));
 let bad = 0;
@@ -24,7 +27,7 @@ const fail = (m: string) => { console.log("   ✕ " + m); bad++; };
 const ok = (m: string) => console.log("   ✓ " + m);
 
 /** 跑一段假 CLI stdout,收集 parseClaudeStream 吐出的事件。 */
-async function collect(lines: unknown[], resident?: { interruptPending: boolean; failPending: () => void; reapsAtTurnEnd?: boolean }) {
+async function collect(lines: unknown[], resident?: InstanceType<typeof ClaudeControlBridge>) {
   const script = join(dir, `stub-${Math.random().toString(36).slice(2, 8)}.mjs`);
   writeFileSync(
     script,
@@ -112,9 +115,9 @@ console.log("2) 真模型的正文仍然只走 delta,不因为这次改动重复
 
 console.log("3) 用户主动打断仍然不算故障");
 {
-  // 假常驻桥要带上 failPending:进程退出时解析器会调它(claude.ts 的 close/error 分支),
-  // 只塞 interruptPending 的话整个文件会在这里 TypeError 掉,后面几节根本跑不到。
-  const resident = { interruptPending: true, failPending: () => {} };
+  // 我们发过一次打断:它认领下一个回合结尾(见 ClaudeControlBridge.claimInterrupt)。
+  const resident = new ClaudeControlBridge();
+  resident.claimInterrupt(resident.request().requestId, false);
   const events = await collect(
     [
       { type: "system", session_id: "sess-3" },
@@ -388,7 +391,7 @@ console.log("10) 孤儿后台任务的回执不是回合结果,不许拿它收�
     origin: { kind: "task-notification" },
     session_id: "sess-12",
   };
-  const resident = { interruptPending: false, failPending: () => {} };
+  const resident = new ClaudeControlBridge();
   const events = await collect(
     [
       { type: "system", subtype: "init", session_id: "sess-12" },
@@ -426,7 +429,7 @@ console.log("10) 孤儿后台任务的回执不是回合结果,不许拿它收�
 // 实测),跟上面的孤儿回执只差在「主智能体说没说话」。
 console.log("11) 后台工作流没跑完先不收台;完成通知开的那一回合是真回合");
 {
-  const resident = { interruptPending: false, failPending: () => {}, reapsAtTurnEnd: true };
+  const resident = new ClaudeControlBridge(true);
   const events = await collect(
     [
       { type: "system", subtype: "init", session_id: "sess-13" },
@@ -460,7 +463,7 @@ console.log("11) 后台工作流没跑完先不收台;完成通知开的那一�
 
 console.log("12) 完成通知开的那一回合一开口就失败:失败照报,不当孤儿回执吞掉");
 {
-  const resident = { interruptPending: false, failPending: () => {}, reapsAtTurnEnd: true };
+  const resident = new ClaudeControlBridge(true);
   const events = await collect(
     [
       { type: "system", subtype: "init", session_id: "sess-14" },
@@ -485,7 +488,7 @@ console.log("12) 完成通知开的那一回合一开口就失败:失败照报,�
 
 console.log("13) 回合本身报了失败就不等后台:结局已定,收台并把没跑完的记停");
 {
-  const resident = { interruptPending: false, failPending: () => {}, reapsAtTurnEnd: true };
+  const resident = new ClaudeControlBridge(true);
   const events = await collect(
     [
       { type: "system", subtype: "init", session_id: "sess-15" },

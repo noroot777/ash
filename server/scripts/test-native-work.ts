@@ -321,11 +321,19 @@ assert.deepEqual(wfReaped.map((row) => row.status), ["stopped", "stopped"], "进
 // 没有要等的后台活时收台，还挂着「进行中」的终态必须赶在 turnEnd 之前（之后 ash 就不读流了）。
 const endOfTurn = { type: "result", subtype: "success", result: "工作流已在后台跑起来" };
 const turnSlice = (events: AgentEvent[]) => events.slice(0, events.findIndex((event) => event.kind === "turnEnd") + 1);
-const singleTurn = turnSlice(await workflowRun([endOfTurn], new ClaudeControlBridge(true)));
-assert.deepEqual(singleTurn.at(-1), { kind: "turnEnd", background: { agent: 0, workflow: 1 } }, "单飞回合结尾带上还在等的工作流");
+// 结尾还带着回合身份(epoch,单飞据它认过期结尾)和开始等的时刻(since;没有落盘位置时就是这一刻)。
+const singleBridge = new ClaudeControlBridge(true);
+const holdStarted = Date.now();
+const singleTurn = turnSlice(await workflowRun([endOfTurn], singleBridge));
+const singleEnd = singleTurn.at(-1) as Extract<AgentEvent, { kind: "turnEnd" }>;
+const holdSince = Date.parse(singleEnd.background?.since ?? "");
+assert.ok(holdSince >= holdStarted && holdSince <= Date.now(), "开始等后台的时刻是结尾那一刻");
+assert.deepEqual({ ...singleEnd, background: { ...singleEnd.background!, since: undefined } },
+  { kind: "turnEnd", background: { agent: 0, workflow: 1, since: undefined }, epoch: singleBridge.epoch }, "单飞回合结尾带上还在等的工作流");
 assert.deepEqual(fromTools(singleTurn.filter((event) => event.kind === "tool")).map((row) => row.status), ["running", "running"], "等着的工作流不记停");
-const settledTurn = turnSlice(await workflowRun([{ type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "completed" }, endOfTurn], new ClaudeControlBridge(true)));
-assert.deepEqual(settledTurn.at(-1), { kind: "turnEnd" }, "工作流了结之后的回合结尾照常收台");
+const settledBridge = new ClaudeControlBridge(true);
+const settledTurn = turnSlice(await workflowRun([{ type: "system", subtype: "task_notification", task_id: "w1", tool_use_id: "wf", status: "completed" }, endOfTurn], settledBridge));
+assert.deepEqual(settledTurn.at(-1), { kind: "turnEnd", epoch: settledBridge.epoch }, "工作流了结之后的回合结尾照常收台");
 // 行身份在第一次见到工作流时就定下：后续消息缺不缺 tool_use_id，同一个子智能体都只有一行。
 const driftTrace = new NativeWorkTrace();
 const drift = [

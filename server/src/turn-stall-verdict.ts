@@ -45,7 +45,7 @@ import { now } from "./util.js";
  * 映射点的 `else` 会静默把它当成第一种 —— 两份同义枚举之间的翻译,错了编译器一声不响。现在
  * 结算原因直接引用这个类型,措辞表按它穷举(`Record<StallVerdictKind, string>`),加一种就编译不过。
  */
-export type StallVerdictKind = "tripped" | "unverified" | "background_timeout" | "background_lost" | "background_unverified";
+export type StallVerdictKind = "tripped" | "unverified" | "background_timeout" | "background_lost" | "background_unverified" | "wrapup_missing";
 
 export interface StallVerdict {
   /**
@@ -58,8 +58,10 @@ export interface StallVerdict {
    *                执行器自己的 `RunHandle.failure()` 交出来,只在内存里)。
    * - `background_lost` 后台工作还没跑完,进程就自己没了(同样由执行器的 `failure()` 交出来)。
    *                退出码是 0 也不代表它们跑完了。
-   * - `background_unverified` 进程退出时后台工作跑没跑完核实不了(接管时读不出之前的输出)。
-   *                不能说成「没跑完」,也不能当成跑完了。
+   * - `background_unverified` 后台工作跑没跑完核实不了(接管时读不出之前的输出),进程就退了或
+   *                等到了时限。不能说成「没跑完」,也不能当成跑完了。
+   * - `wrapup_missing` 后台工作都跑完了,智能体却一直没开回合整理结果(等到时限或进程退了)。
+   *                不是后台的问题,不能说成后台没跑完。
    */
   kind: StallVerdictKind;
   /** 判失败的原因原文(熔断诊断那一段),给结算侧需要时转述。 */

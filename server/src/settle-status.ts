@@ -163,8 +163,12 @@ const BACKGROUND_LOST_NOTE =
   + "已经跑完的子智能体结果在会话里;点重试会从当前会话接着跑,让智能体看看还差什么。";
 
 const BACKGROUND_UNVERIFIED_NOTE =
-  "ash 重启接管时读不出这个进程之前的输出,确认不了后台工作流/子代理跑没跑完,智能体进程就退出了。"
+  "ash 重启接管时读不出这个进程之前的输出,确认不了后台工作流/子代理跑没跑完,等到时限或进程退出时都没能核实。"
   + "按未完成结算:可能都跑完了,也可能没有,两种都不该悄悄记成完成。点重试会从当前会话接着跑,让智能体核对一下。";
+
+const WRAPUP_MISSING_NOTE =
+  "后台工作流/子代理都跑完了,智能体却一直没开始整理结果,本回合按未完成结算(说明见上面那条红字)。"
+  + "子智能体的结果在会话里;点重试会从当前会话接着跑,让智能体接着整理。";
 
 /** 落位说明按原因分。穷举的 `Record` 不是装饰:加一种原因而忘了写措辞,这里就编译不过。 */
 const ASH_FAILURE_NOTE: Record<StallVerdictKind, string> = {
@@ -173,6 +177,7 @@ const ASH_FAILURE_NOTE: Record<StallVerdictKind, string> = {
   background_timeout: BACKGROUND_TIMEOUT_NOTE,
   background_lost: BACKGROUND_LOST_NOTE,
   background_unverified: BACKGROUND_UNVERIFIED_NOTE,
+  wrapup_missing: WRAPUP_MISSING_NOTE,
 };
 
 /** 终态续聊那一支的一句话版本(同一张穷举表的道理)。 */
@@ -181,7 +186,8 @@ const ASH_FAILURE_FOLLOW_UP: Record<StallVerdictKind, string> = {
   unverified: "续聊回合是上次中断留下的,结局核实不了",
   background_timeout: "续聊回合等后台工作等到时限还没跑完",
   background_lost: "续聊回合的后台工作还没跑完进程就退出了",
-  background_unverified: "续聊回合退出时后台工作跑没跑完核实不了",
+  background_unverified: "续聊回合的后台工作跑没跑完核实不了",
+  wrapup_missing: "续聊回合的后台工作跑完了,智能体却没开始整理结果",
 };
 
 const GROUP_PAUSED_NOTE =

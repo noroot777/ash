@@ -325,7 +325,7 @@ export class ClaudeExecutor implements AgentExecutor {
     reapsAtTurnEnd = false,
     consumed?: ConsumedOutput,
   ): ResidentHandle {
-    const resident = new ClaudeControlBridge(reapsAtTurnEnd);
+    const resident = new ClaudeControlBridge(reapsAtTurnEnd, (child as { ashPaths?: { out?: string } }).ashPaths?.out);
     const writeChecked = (data: string): Promise<void> => new Promise((resolve, reject) => {
       const input = child.stdin;
       if (!input || input.destroyed || input.writableEnded || !input.writable) {
@@ -352,13 +352,16 @@ export class ClaudeExecutor implements AgentExecutor {
       },
       turnActive: () => resident.turnActive,
       epoch: () => resident.epoch,
+      backgroundPending: () => resident.backgroundPending(),
       interrupt: () => {
-        resident.interruptPending = true;
-        child.stdin?.write(resident.request().line);
+        const request = resident.request();
+        resident.claimInterrupt(request.requestId, false);
+        child.stdin?.write(request.line);
       },
       steer: async (text: SteerText, onInterrupted, beforeSend) => {
-        resident.interruptPending = true;
         const request = resident.request();
+        // 认领先落盘、再写 stdin(同一个同步段):重启接管靠它认出被打断的结尾,见 claimInterrupt。
+        resident.claimInterrupt(request.requestId, true);
         const ack = resident.waitFor(request.requestId);
         let interruptWritten = false;
         try {
@@ -368,13 +371,15 @@ export class ClaudeExecutor implements AgentExecutor {
           await ack.promise;
           await beforeSend?.();
           // **正文在这里才定稿**(惰性正文见 steer-text.ts)。
-          await writeChecked(userLine(await resolveSteerText(text)));
+          const line = userLine(await resolveSteerText(text));
+          resident.markSent(request.requestId); // 与下面那次写在同一个同步段里
+          await writeChecked(line);
           resident.beginTurn(true); // 同 send:消息一送进去会话就在忙,别等模型先开口
         } catch (error) {
           ack.cancel();
           // interrupt 尚未写出时才撤销；一旦写出，CLI 会产生一个 turnEnd，消费层必须
-          // 保留对应计数，即使紧接着的新 user 消息写失败。
-          if (!interruptWritten) resident.interruptPending = false;
+          // 保留对应认领，即使紧接着的新 user 消息写失败。
+          if (!interruptWritten) resident.withdraw(request.requestId);
           throw error;
         }
       },
@@ -432,6 +437,12 @@ const BACKGROUND_HOLD_MS = (() => {
 })();
 
 /**
+ * 后台都跑完之后最多等多久让 CLI 开回合收尾。正常是立刻开(完成通知一到就开);等这么久还没开,
+ * 就是主智能体这边出了问题,不再算后台的账。
+ */
+const WRAPUP_START_MS = 10 * 60_000;
+
+/**
  * 单飞：一个回合 = 一个进程。回合 `result` 一到就关 stdin 收台 —— **除非名下还有后台子代理 /
  * 工作流没跑完**（turnEnd 带 `background`）。它们寄生在这个进程里，收了台就白跑了；而 CLI
  * 自己的口径是「后台的活没完，这一回合就没完」：`claude -p` 会一直压着结果，直到它们跑完、
@@ -444,29 +455,71 @@ const BACKGROUND_HOLD_MS = (() => {
  * 起算。作废靠回合身份（`resident.epoch` 对 turnEnd.epoch），不靠「新回合开始时回调一声」——
  * 结尾要排队才到这里，回调可能先跑，清掉的是还没建起来的那个定时器。同理，过期的结尾也不收台。
  *
+ * 「后台跑完了」和「下一回合开始了」是两件事（自由审查 i8RAcPM3zvgD R2）：账本归零（最后一个
+ * 完成通知到了）等后台的责任就结束，改成等 CLI 开回合收尾，最多 `wrapupMs`；判后台超时/丢失之前
+ * 一律核对实时账本（`resident.backgroundPending`），跑完了就不能说成没跑完。
+ *
  * 等到点还没跑完 = 这一轮的活没干完：硬杀进程（关 stdin 只是请它退出，它可以接着等自己的
  * 后台、一直不走），报一条真错误，并经 `failure()` 把「ash 判这一轮未完成」交给结算 —— 智能体
  * 可能早在发起后台工作那一回合就交过卷，不能让它落成完成。后台还没跑完进程就自己退了（哪怕
- * exit 0）同理，见 `done.unfinished`。
+ * exit 0）同理，见 `done.unfinished`；后台跑完了却一直没开回合收尾（或者没开就退了）也同理，
+ * 只是原因如实说成后者。
  */
 export function singleRunFromResident(
   resident: ResidentHandle,
   detached?: RunHandle["detached"],
   holdMs = BACKGROUND_HOLD_MS,
+  wrapupMs = WRAPUP_START_MS,
 ): RunHandle {
   let intermediateEnds = 0;
   let accepting = true;
-  let holdTimer: ReturnType<typeof setTimeout> | null = null;
-  let heldEpoch: number | undefined;
+  // 在等什么:`background` = 后台还有没跑完的;`wrapup` = 后台都跑完了,等 CLI 开回合收尾。
+  // `epoch` 是开始等的那个结尾的回合身份,之后开了新回合这份等待就作废。
+  let hold: { phase: "background" | "wrapup"; epoch: number | undefined; timer: ReturnType<typeof setTimeout> } | null = null;
   let verdict: StallVerdict | null = null;
   let stopped = false; // 用户停止:不另外判「后台没跑完」,停止自有它的结算
   const clearHold = () => {
-    if (holdTimer) clearTimeout(holdTimer);
-    holdTimer = null;
+    if (hold) clearTimeout(hold.timer);
+    hold = null;
   };
-  // 这一刻还在等后台:定时器在,且等的那个回合之后没再开新回合。
-  const holding = () => !!holdTimer && (heldEpoch === undefined || resident.epoch?.() === heldEpoch);
   const stale = (epoch: number | undefined) => epoch !== undefined && resident.epoch !== undefined && resident.epoch() !== epoch;
+  // 这一刻还在等:等的那个回合之后没再开新回合。
+  const holding = () => !!hold && !stale(hold.epoch);
+  // 后台账本此刻怎么样。没有实时账本的常驻答不上来,按还在跑。
+  const ledger = (): "pending" | "unknown" | "settled" => {
+    const pending = resident.backgroundPending?.();
+    if (!pending || pending.agent + pending.workflow > 0) return "pending";
+    return pending.unknown ? "unknown" : "settled";
+  };
+  const judge = (kind: StallVerdict["kind"], reason: string): StallVerdict => {
+    const at = new Date().toISOString();
+    return { kind, reason, at, since: at, durable: false };
+  };
+  const fail = (failed: StallVerdict) => {
+    verdict = failed;
+    accepting = false;
+    resident.kill();
+  };
+  const wait = (phase: "background" | "wrapup", epoch: number | undefined, ms: number) => {
+    clearHold();
+    const timer = setTimeout(() => {
+      const current = hold;
+      hold = null;
+      if (stopped || !accepting || !current || stale(current.epoch)) return; // 已经不在等了
+      if (current.phase === "wrapup") return fail(judge("wrapup_missing", wrapupTimeoutMessage(wrapupMs)));
+      const state = ledger();
+      if (state === "settled") return wait("wrapup", current.epoch, wrapupMs);
+      fail(state === "unknown"
+        ? judge("background_unverified", holdUnverifiedMessage(holdMs))
+        : judge("background_timeout", holdTimeoutMessage(holdMs)));
+    }, ms);
+    timer.unref?.();
+    hold = { phase, epoch, timer };
+  };
+  // 最后一个完成通知到了:等后台的责任到此为止,改等收尾。
+  const reassess = () => {
+    if (hold?.phase === "background" && holding() && ledger() === "settled") wait("wrapup", hold.epoch, wrapupMs);
+  };
   const events = (async function* (): AsyncIterable<AgentEvent> {
     try {
       for await (const event of resident.events) {
@@ -488,18 +541,8 @@ export function singleRunFromResident(
           if (event.background) {
             // 期限从开始等的那一刻算,不随重启接管重新给满(起点由解析层落盘,见 claude-recovery.ts)。
             const since = Date.parse(event.background.since ?? "");
-            const left = Number.isFinite(since) ? Math.max(0, holdMs - (Date.now() - since)) : holdMs;
-            heldEpoch = event.epoch;
-            holdTimer = setTimeout(() => {
-              holdTimer = null;
-              if (stopped || !accepting || stale(heldEpoch)) return; // 已经不在等了
-              const at = new Date().toISOString();
-              verdict = { kind: "background_timeout", reason: holdTimeoutMessage(holdMs), at, since: at, durable: false };
-              holdTimer = null;
-              accepting = false;
-              resident.kill();
-            }, left);
-            holdTimer.unref?.();
+            wait("background", event.epoch, Number.isFinite(since) ? Math.max(0, holdMs - (Date.now() - since)) : holdMs);
+            reassess(); // 排队到这里的这段时间里,它们可能已经全跑完了
             continue;
           }
           accepting = false;
@@ -509,16 +552,22 @@ export function singleRunFromResident(
         }
         if (event.kind === "done") {
           accepting = false;
-          // 在等后台时进程没了,或者没了的那一刻账上还有没跑完的、跑没跑完说不准的:都不是跑完了。
-          if (!verdict && !stopped && (holding() || event.unfinished)) {
-            const at = new Date().toISOString();
-            verdict = event.unfinished?.unknown
-              ? { kind: "background_unverified", reason: BACKGROUND_UNVERIFIED_MESSAGE, at, since: at, durable: false }
-              : { kind: "background_lost", reason: backgroundLostMessage(event.unfinished), at, since: at, durable: false };
+          // 进程没了的那一刻账上还有没跑完的、跑没跑完说不准的:都不是跑完了。在等着的时候没了、
+          // 账上却都跑完了:是没开回合收尾,不是后台丢了。
+          if (!verdict && !stopped) {
+            if (event.unfinished) {
+              verdict = event.unfinished.unknown
+                ? judge("background_unverified", BACKGROUND_UNVERIFIED_MESSAGE)
+                : judge("background_lost", backgroundLostMessage(event.unfinished));
+            } else if (holding()) {
+              verdict = resident.backgroundPending
+                ? judge("wrapup_missing", WRAPUP_LOST_MESSAGE)
+                : judge("background_lost", backgroundLostMessage());
+            }
           }
           const failed = verdict as StallVerdict | null; // 定时器回调里也会写,控制流分析看不见
           if (failed) yield { kind: "error", message: failed.reason };
-        }
+        } else reassess();
         yield event;
         if (event.kind === "done") return;
       }
@@ -595,6 +644,14 @@ const BACKGROUND_UNVERIFIED_MESSAGE =
 
 const holdTimeoutMessage = (ms: number) =>
   `后台工作等了 ${Math.round(ms / 60_000)} 分钟还没跑完，已收掉进程，本回合按未完成结算。`;
+
+const holdUnverifiedMessage = (ms: number) =>
+  `重启接管时读不出之前的输出，确认不了后台工作跑没跑完；等了 ${Math.round(ms / 60_000)} 分钟智能体也没接着干，已收掉进程，本回合按未完成结算。`;
+
+const wrapupTimeoutMessage = (ms: number) =>
+  `后台工作都跑完了，智能体等了 ${Math.round(ms / 60_000)} 分钟还没开始整理结果，已收掉进程，本回合按未完成结算。`;
+
+const WRAPUP_LOST_MESSAGE = "后台工作都跑完了，智能体还没开始整理结果进程就退出了，本回合按未完成结算。";
 
 // stream-json 的入站格式:一条 user 消息 = 一行 JSON。
 const userLine = (text: string) =>

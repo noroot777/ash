@@ -3,7 +3,8 @@
 //
 // 接管的不变量是「接回后的状态 = 不间断读完整条输出的状态」(src/executors/claude-recovery.ts),
 // 所以 ③ 那组把水位切在各种位置上:通知回合说完话之后、新回合请求中途、打断回执前后,以及
-// 前缀读不出来、等后台的期限跨重启。
+// 前缀读不出来、等后台的期限跨重启。哪个结尾是 ash 打断出来的,按写 stdin 之前落盘的打断记录
+// 认(`.steer.json`),不按回执先后猜(自由审查 i8RAcPM3zvgD R1)。
 //
 // 都走真实的 `ClaudeExecutor.attach → residentFromChild → parseClaudeStream →
 // singleRunFromResident`,对面是一个按 stream-json 协议说话的假 CLI 子进程:
@@ -166,13 +167,15 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
   console.log("✓ 没有可重放的输出时照常收台");
 }
 
-// ② 连续插话:第一条送进去之后模型还没开口,第二条照样要打断。
+// ② 连续插话:第一条送进去之后模型还没开口,第二条照样要打断。两次打断各认领一个结尾,落盘。
 {
   const { child, stderr } = stubCli("steer-twice", [{ type: "system", subtype: "status", status: "requesting" }], `
   if (message.type === "control_request") {
     emit({ type: "result", subtype: "error_during_execution" });
     emit({ type: "control_response", response: { subtype: "success", request_id: message.request_id } });
   }`);
+  const out = join(root, "steer-twice.jsonl");
+  Object.assign(child, { ashPaths: { out } });
   const handle = executor.attach(child, { sessionId: "sess-r", commandLine });
   const consuming = (async () => { for await (const _ of handle.events) { /* 只看对面收到了什么 */ } })();
   await new Promise((resolve) => setTimeout(resolve, 150));
@@ -183,9 +186,28 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
   const inputs = stderr().split("\n").filter((l) => l.startsWith("INPUT "));
   assert.deepEqual(inputs, ["INPUT control_request", "INPUT user", "INPUT control_request", "INPUT user"],
     "第二次插话也要先打断第一条开的那一回合");
+  assert.deepEqual(JSON.parse(readFileSync(`${out}.steer.json`, "utf8")).entries, [
+    { id: "ash_int_1", result: 1, sent: true },
+    { id: "ash_int_2", result: 2, sent: true },
+  ], "每次打断认领下一个结尾,正文送出前记下");
   handle.kill();
   await consuming.catch(() => {});
-  console.log("✓ 连续插话:第二条照样打断第一条开的那一回合");
+  console.log("✓ 连续插话:第二条照样打断第一条开的那一回合,两次打断的身份都落盘");
+}
+
+// ②b 打断记录落不了盘:插话直接报错,stdin 一个字都不写(写了接管时就认不出那个结尾)。
+{
+  const { child, stderr } = stubCli("journal-unwritable", [{ type: "system", subtype: "status", status: "requesting" }]);
+  Object.assign(child, { ashPaths: { out: join(root, "no-such-dir", "out.jsonl") } });
+  const handle = executor.attach(child, { sessionId: "sess-r", commandLine });
+  const consuming = (async () => { for await (const _ of handle.events) { /* 只看对面收到了什么 */ } })();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  await assert.rejects(handle.steer!("LOST"));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(!stderr().includes("INPUT"), "没记下身份就不打断");
+  handle.kill();
+  await consuming.catch(() => {});
+  console.log("✓ 打断记录落不了盘:不打断、不送,如实报错");
 }
 
 // ③a 通知回合已经说完话(assistant 在水位之前),只剩它的 result 在水位之后:那是真回合的结尾,
@@ -267,26 +289,63 @@ const interruptedResult = { type: "result", subtype: "error_during_execution", i
   console.log("✓ 等后台的期限从原起点算,重启不重新给满");
 }
 
-// ③f 插话打断出来的那个 result 在水位之前:不许拿它收台,插话开的那一回合结尾才收。回执与 result
-// 两种先后都有,回执还可能落在水位之后。
+// ③f 插话打断出来的那个 result 在水位附近:不许拿它收台,插话开的那一回合结尾才收。回执与 result
+// 两种先后都有,回执还可能落在水位之后、晚到一秒多、前面插进后台进度 —— 都不影响,身份看打断记录。
+const steered = (out: string, sent = true) =>
+  writeFileSync(`${out}.steer.json`, JSON.stringify({ entries: [{ id: "ash_int_1", result: 1, sent }] }));
+const followUp = [{ type: "system", subtype: "init", session_id: "sess-r" }, ...say("插话之后的答复"), result];
 for (const [name, prefix, tail] of [
   ["ack-first", [...launch.slice(0, 2), ack("ash_int_1"), interruptedResult], []],
   ["ack-last", [...launch.slice(0, 2), interruptedResult, ack("ash_int_1")], []],
   ["ack-in-tail", [...launch.slice(0, 2), interruptedResult], [ack("ash_int_1")]],
   ["result-in-tail", [...launch.slice(0, 2), ack("ash_int_1")], [interruptedResult]],
+  ["ack-delayed", [...launch.slice(0, 2), interruptedResult], [{ __wait: 1450 }, ack("ash_int_1")]],
+  ["progress-before-ack", [...launch.slice(0, 2), interruptedResult], [progress, { __wait: 60 }, ack("ash_int_1")]],
+  ["no-ack-yet", [...launch.slice(0, 2)], [interruptedResult, { __wait: 1200 }, ack("ash_int_1")]],
 ] as const) {
-  const { child, handle } = reattach(`steered-${name}`, [...prefix], [
-    ...tail, { type: "system", subtype: "init", session_id: "sess-r" }, ...say("插话之后的答复"), result,
-  ]);
-  const { events, consuming } = await drain(handle, 1500);
+  const out = join(root, `steered-${name}.jsonl`);
+  steered(out);
+  const { child, stderr, handle } = reattach(`steered-${name}`, [...prefix], [...tail, ...followUp]);
+  const { events, consuming } = await drain(handle, 2600);
   const text = events.filter((e) => e.kind === "text").map((e) => e.text).join("");
   assert.ok(text.includes("插话之后的答复"), `${name}: 插话开的那一回合照常跑完`);
   assert.ok(!events.some((e) => e.kind === "error"), `${name}: 打断出来的结尾不是故障`);
   assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 0 }, `${name}: 那一回合结尾收台`);
   await consuming;
   await closed(child);
+  assert.ok(stderr().includes("STDIN_CLOSED"), `${name}: 收台是关 stdin`);
 }
-console.log("✓ 打断出来的结尾在水位附近:回执先到、后到、落在水位之后都不收台");
+console.log("✓ 打断出来的结尾在水位附近:回执先到、后到、晚到、被进度插队都不提前收台");
+
+// ③g 上一代发了插话的打断,正文没送进去就重启了:那个结尾按这一回合结束处理(不报故障),
+// 并说明插话没送到 —— 不能空等一个永远不会来的插话回合。
+for (const [name, prefix, tail] of [
+  ["abandoned", [...launch.slice(0, 2), interruptedResult], []],
+  ["abandoned-in-tail", [...launch.slice(0, 2)], [interruptedResult]],
+] as const) {
+  const out = join(root, `${name}.jsonl`);
+  steered(out, false);
+  const { child, handle } = reattach(name, [...prefix], [...tail]);
+  const { events, consuming } = await drain(handle, 1500);
+  await consuming;
+  assert.ok(!events.some((e) => e.kind === "error"), `${name}: 我们打断的,不是故障`);
+  assert.ok(events.some((e) => e.kind === "system" && /没有送到/.test(e.text)), `${name}: 说明插话没送到`);
+  assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 0 }, `${name}: 照常收台`);
+  await closed(child);
+}
+console.log("✓ 插话正文没送出去就重启:按回合结束收台,说明要重发");
+
+// ③h 打断记录读不出(残缺):哪个结尾是打断出来的说不准,按状态未知接着等,不当成自然结束。
+{
+  const out = join(root, "journal-corrupt.jsonl");
+  writeFileSync(`${out}.steer.json`, "{");
+  const { handle, stderr } = reattach("journal-corrupt", [...launch.slice(0, 2), interruptedResult], []);
+  const { events } = await drain(handle, 400);
+  assert.ok(!events.some((e) => e.kind === "done"), "状态未知不许收台");
+  assert.ok(!stderr().includes("STDIN_CLOSED"));
+  handle.kill();
+  console.log("✓ 打断记录读不出:按状态未知处理");
+}
 
 // ④ 等后台的收尾(自由审查 c2vZ4d3LmL1q 第 1 轮),都走真实 spawn 出来的流,不经接管。
 /** 直接跑一条流(不接管);`hold` 给的话预先记下「第 1 个回合结尾从多久之前开始等」,把期限缩到眼前。 */
@@ -360,6 +419,38 @@ function live(name: string, tail: unknown[], ignoreEof = false, heldFor?: number
   assert.equal(handle.failure?.() ?? null, null);
   await closed(child);
   console.log("✓ 结尾、完成通知、新回合挤在一块到:旧期限照样作废");
+}
+
+// ④f 后台已经全跑完、CLI 隔了一会儿才开回合收尾,期限恰好落在这段空档里:不算后台超时。
+// (自由审查 i8RAcPM3zvgD R2:上一版期限只认「开了新回合」,完成通知到了也照样判超时、硬杀。)
+{
+  const { child, handle } = live("completed-before-next-turn", [
+    ...launch, ...heldEnd, { __wait: 50 }, notification, { __wait: 400 },
+    { type: "system", subtype: "init", session_id: "sess-r" }, ...say("合成终稿"),
+    { ...result, origin: { kind: "task-notification" }, result: "合成终稿" },
+  ], false, HOLD_MS - 200);
+  const keepAlive = setInterval(() => {}, 100);
+  const { events, consuming } = await drain(handle, 2000);
+  clearInterval(keepAlive);
+  await consuming;
+  assert.ok(!events.some((e) => e.kind === "error"), "后台跑完了就不报后台超时");
+  assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 0 });
+  assert.equal(handle.failure?.() ?? null, null);
+  await closed(child);
+  console.log("✓ 后台跑完、下一回合还没开:期限不再算后台的账");
+}
+
+// ④g 后台都跑完了,CLI 没开回合收尾就自己退了:按未完成结算,但原因如实说,不说成后台没跑完。
+{
+  const { child, handle } = live("completed-then-exit", [...launch, ...heldEnd, notification, { __wait: 100 }, { __exit: 0 }]);
+  const { events, consuming } = await drain(handle, 1500);
+  await consuming;
+  assert.equal(events.at(-1)?.kind, "done");
+  assert.ok(events.some((e) => e.kind === "error" && /都跑完了/.test(e.message)), "说是没开始整理结果");
+  assert.ok(!events.some((e) => e.kind === "error" && /还没跑完/.test(e.message)), "不说成后台没跑完");
+  assert.equal(handle.failure?.()?.kind, "wrapup_missing");
+  await closed(child);
+  console.log("✓ 后台跑完了、没收尾就退了:按未完成结算,原因如实");
 }
 
 // ④e 接管时前缀读不出、下一条 result 之前进程就以 0 退了:跑没跑完核实不了,不按完成结算。(R1)
