@@ -8,7 +8,7 @@
 // 失败、待验收、等你答复这些靠行内的颜色和标识认（见 TaskStatusChips），不靠位置。
 // 置顶（pinnedAt）是唯一的例外，那是用户手动摁下去的。
 import type { TaskListItem } from "@ash/shared";
-import { isTaskAwaitingAcceptance } from "@ash/shared/task-attention";
+import { isTaskAwaitingAcceptance, isTeamLead } from "@ash/shared/task-attention";
 import { workersOf } from "@ash/shared/team";
 import { needsYourCommand } from "@/lib/taskAttention";
 
@@ -124,5 +124,6 @@ export function keepVisibleFor(allTasks: TaskListItem[]): (task: TaskListItem) =
     || task.pinnedAt != null
     || task.status === "failed"
     || needsYourCommand(task, allTasks)
-    || isTaskAwaitingAcceptance(task, workersOf(allTasks, task.id));
+    // 只有团队调度台才有执行者：单飞行不必为它扫一遍全表（列表每次重算都会过一遍所有旧行）。
+    || isTaskAwaitingAcceptance(task, isTeamLead(task) ? workersOf(allTasks, task.id) : []);
 }

@@ -7,7 +7,9 @@ import { isTeamSettled, teamNeverStarted } from "./team.ts";
 // 展示口径（mobile 不标归档、web 的分堆顺序等）。
 //
 // 团队一律要连执行者一起看（workers 由调用方给）：调度台派完活自己落回 idle，问题、
-// 失败、收工都写在执行者身上。传空执行者表 = 按调度台自己那一行判。
+// 失败、收工都写在执行者身上。传空执行者表 = 按调度台自己那一行判。workers 是
+// parentId === task.id 的那些行，这里不再按 parentId 过滤 —— 误把全表传进来，所有任务都会被
+// 当成它的执行者。
 
 // 「机器在动」的三种 status。团队调度台自己从不落在这三档上。
 const LIVE_STATUSES = new Set<TaskStatus>(["running", "queued", "awaiting_review"]);

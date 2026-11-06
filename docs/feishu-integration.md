@@ -51,7 +51,7 @@
 
 **「此刻轮到你动手了吗」只算一份。** 一个任务在某一刻要么在自己跑（不用管），要么在等你（回答提问、点验收、处理失败）。界面上那颗「需要你处理」的信号点就是这样算出来的。现在 web 算一份（`web/src/lib/taskAttention.ts`），mobile 抄了一份（`mobile/src/lib/taskTree.ts`），飞书再写第三份的话，迟早会出现飞书说「等你验收」、页面上却不是这样的情况。所以第一步先把它挪进 `shared/` 合成一份，web、mobile、飞书共用。这是纯内部整理，界面行为不变。
 
-举个例子说明为什么非用同一份判据不可：三份草案起初都把「待验收」写成 `stage=awaiting_acceptance`。但自由工作流（默认模式）跑完时 stage 多数是 null，web 的真实判据是「已 done 且没盖过章」（`taskAttention.ts:106-110,133-146`，注释里记着这一档改过两次的经过）。照草案那样写，大多数任务永远收不到验收卡。
+举个例子说明为什么非用同一份判据不可：三份草案起初都把「待验收」写成 `stage=awaiting_acceptance`。但自由工作流（默认模式）跑完时 stage 多数是 null，web 的真实判据是「已 done 且没盖过章」（现在在 `shared/src/task-attention.ts` 的 `isTaskAwaitingAcceptance`，注释里记着这一档改过两次的经过）。照草案那样写，大多数任务永远收不到验收卡。
 
 ### 4.2 卡片清单
 

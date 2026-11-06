@@ -17,6 +17,9 @@
       ],
       "@ash/shared/page-annotation-display": [
         "../shared/src/page-annotation-display.ts"
+      ],
+      "@ash/shared/task-attention": [
+        "../shared/src/task-attention.ts"
       ]
     },
     "allowImportingTsExtensions": true,
