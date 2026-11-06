@@ -94,7 +94,7 @@ export class ChatService {
       if (!(await tx.select({ id: chatRooms.id }).from(chatRooms).where(eq(chatRooms.id, row.id))).length) throw new Error("聊天已删除。");
       await tx.insert(chatMessages).values({ id: messageId, roomId: row.id, role: "user", author, body, mentions: JSON.stringify(mentions.map((member) => member.id)), createdAt: timestamp });
       for (const [position, member] of mentions.entries()) {
-        await tx.insert(chatMessages).values({ id: id(), roomId: row.id, role: "agent", memberId: member.id, author: member.name, status: "queued", createdAt: new Date(Date.parse(timestamp) + position + 1).toISOString(), context: JSON.stringify({ cutoff, tail, source: body, member, projectId: row.kind === "assistant" ? projectId ?? row.projectId : row.projectId }) });
+        await tx.insert(chatMessages).values({ id: id(), roomId: row.id, role: "agent", memberId: member.id, author: member.name, status: "queued", replyTo: messageId, createdAt: new Date(Date.parse(timestamp) + position + 1).toISOString(), context: JSON.stringify({ cutoff, tail, source: body, member, projectId: row.kind === "assistant" ? projectId ?? row.projectId : row.projectId }) });
       }
     });
     void this.pump();

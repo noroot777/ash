@@ -63,6 +63,8 @@ export interface ChatMessage {
   assistant?: AssistantResult;
   /** 这条回复跑过的工具/思考/异常，跑的中途就随快照流出来，跑完仍留在原地。 */
   trace?: ChatTraceEvent[];
+  /** 智能体回复：回应的是哪一条用户消息。加这一列之前的老回复为 null。 */
+  replyTo?: string | null;
   forwardError?: string | null;
   forward?: {
     messageId: string;

@@ -80,3 +80,48 @@ export function needsYourCommand(task: TaskListItem, workers: TaskListItem[] = [
   const stuck = (item: TaskListItem) => !!item.question || item.stage === "verify_failed";
   return stuck(task) || (isTeamLead(task) && workers.some(stuck));
 }
+
+// ── 推给人的「下一步」：飞书推送用 ──────────────────────────────────────────────
+// 「此刻要人做哪一件事」只取一件：一个任务在某一刻只有一个下一步，卡片也只有一张（下一步
+// 变了，旧卡改成已处理、新卡另发）。判断顺序与各条路由的前置条件一一对上 —— 卡片上的
+// 按钮按下去不能是 409：
+//   · 归档、接力出去、团队执行者、独立审查任务：不推（answer/retry/accept 都会拒；执行者的
+//     提问是问调度台的，验收也是验收整个团队）。
+//   · duet 闸口开着：闸口卡。它在 awaiting_review 上，isTaskLive 会把它算作「机器在动」，
+//     所以排在 live 判断之前。
+//   · 有提问、且提问回合已经结束（团队调度台不受这条限制）：提问卡。还在 running 时答复会 409。
+//   · status=failed：失败卡。retry 只收 failed。
+//   · 机器在动：不推。
+//   · 有待裁定的驳回：驳回卡（排在待验收前面：驳回不裁，验收就是在没看审查意见的情况下合并）。
+//   · stage=verify_failed：只发通知、不给按钮（强制通过不可逆，见 docs/feishu-integration.md）。
+//   · 干完了没盖章：待验收卡。门禁正在跑、验证轮还没出结论这类「过一会儿就能按」的状态不算
+//     换了下一步 —— 卡片留着，按下去由验收接口如实说「还在跑」，免得一张卡来回收、发好几遍。
+// 检查点暂停（paused）不推：它会被队列或哨兵自己叫醒，界面上也没有跟提问同级的醒目标识。
+export type HumanTurnKind = "duet_gate" | "question" | "failed" | "dispute" | "verify_failed" | "accept";
+
+/** shared 自己算不出来、要 server 读库或读内存补上的几样。 */
+export interface HumanTurnFacts {
+  /** 父任务是团队调度台：这是团队执行者。 */
+  teamWorker?: boolean;
+  /** duet 闸口此刻开着。 */
+  duetGateOpen?: boolean;
+  /** 自由工作流有待裁定的驳回。 */
+  disputeOpen?: boolean;
+}
+
+export function humanTurnOf(
+  task: TaskListItem,
+  workers: TaskListItem[] = [],
+  facts: HumanTurnFacts = {},
+): HumanTurnKind | null {
+  if (task.archived || task.handoff?.direction === "out" || facts.teamWorker || task.reviewOf) return null;
+  if (task.mode === "duet" && facts.duetGateOpen) return "duet_gate";
+  if (task.question && (isTeamLead(task) || (task.status !== "running" && task.status !== "queued"))) return "question";
+  if (task.status === "failed") return "failed";
+  if (isTaskLive(task, workers)) return null;
+  if (facts.disputeOpen) return "dispute";
+  if (task.stage === "verify_failed") return "verify_failed";
+  if (isAcceptedStage(task.stage)) return null;
+  const settled = task.status === "done" || isTeamSettledLead(task, workers);
+  return awaitsAcceptance(task, settled) ? "accept" : null;
+}

@@ -35,6 +35,9 @@ export const chatMessages = sqliteTable("chat_messages", {
   // 快照，写进列它就流出来了；跑完、被停、进程崩掉重启之后这份记录仍在原地——这是
   // 它落列而不是只攒在内存里的理由。
   trace: text("trace"),
+  // 智能体回复回应的是哪一条用户消息（同一事务里插入的那条）。飞书等外部通道靠它把
+  // 「我投进房间的那句话」和「它引出的回复」对上，不去猜相邻两行的时间戳。
+  replyTo: text("reply_to"),
   createdAt: text("created_at").notNull(),
 }, (table) => [index("chat_messages_room").on(table.roomId, table.createdAt)]);
 
@@ -125,6 +128,9 @@ export async function ensureChatSchema(client: Pick<Client, "executeMultiple" | 
   }
   if (!messageColumns.rows.some((column) => column.name === "trace")) {
     await client.execute("ALTER TABLE chat_messages ADD COLUMN trace TEXT");
+  }
+  if (!messageColumns.rows.some((column) => column.name === "reply_to")) {
+    await client.execute("ALTER TABLE chat_messages ADD COLUMN reply_to TEXT");
   }
   await client.execute("UPDATE chat_messages SET model_reply=body WHERE role='agent' AND status='done' AND model_reply IS NULL");
   const columns = await client.execute("PRAGMA table_info(chat_context_states)");
