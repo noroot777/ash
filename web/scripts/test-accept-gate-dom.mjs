@@ -4,10 +4,10 @@ import { testAcceptGateRecovery } from "./test-accept-gate-recovery.mjs";
 import { testAcceptGateActions } from "./test-accept-gate-actions.mjs";
 import { testAcceptGateWaitBar } from "./test-accept-gate-wait-bar.mjs";
 import { CATCH_UP_RETRY_MS } from "../src/lib/catchUp.ts";
-import { trackFetches } from "./wait-until.mjs";
+import { fetchesSettled, trackFetches, waitUntil } from "./wait-until.mjs";
 
-/** 页面上要记结算的读取：门禁状态（不含 /log、/cancel 这些子路径）与任务列表。 */
-const TRACKED_READS = "/api/tasks(/[^/]+/accept-gate)?$";
+/** 页面上要记结算的读取：门禁状态（不含 /log、/cancel 这些子路径）、任务列表、项目（角色）。 */
+const TRACKED_READS = "/api/(tasks(/[^/]+/accept-gate)?|projects)$";
 
 // 验收台上那张「验收前置命令」卡。钉住的是四件在真实页面上才看得出来的事：
 //
@@ -194,8 +194,8 @@ try {
   // ② 成员能看见未设置的状态，但没有修改项目配置的入口。
   {
     const { page } = await open({ gate: { command: null, running: null, latest: null }, role: "member" });
-    await page.locator("h1").waitFor();
-    await page.waitForTimeout(300);
+    // 「没有入口」只在**读到了** member 之后才有意义：等门禁和项目两发都落完再看。
+    await fetchesSettled(page, 2, "门禁状态与项目角色都已读到");
     assert.match(await page.locator(".accept-gate-command").innerText(), /未设置/);
     assert.equal(await page.getByRole("button", { name: "设一条" }).count(), 0);
     await page.close();
@@ -210,9 +210,8 @@ try {
     assert.match(await card.textContent(), /没设验收前置命令/, "角色没读到不该连卡一起不显示");
     // 先证「它真的在自己重试」：不碰页面，等到读取次数自己涨过首发那一拨。
     const baseline = store.projectReads;
-    const deadline = Date.now() + CATCH_UP_RETRY_MS + 10_000;
-    while (store.projectReads <= baseline && Date.now() < deadline) await page.waitForTimeout(200);
-    assert(store.projectReads > baseline, `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms)，不是等下一次交互`);
+    await waitUntil(() => store.projectReads > baseline, { timeout: CATCH_UP_RETRY_MS + 10_000,
+      message: `读失败要自己重试(间隔 ${CATCH_UP_RETRY_MS}ms)，不是等下一次交互` });
     assert.equal(await card.getByRole("button", { name: "设一条" }).count(), 0, "还没读到角色时不摆必然 403 的按钮");
     // 服务端恢复之后那颗按钮要自己回来 —— 旧实现把 503 记成 `false`，它永远不再出现。
     store.projectDown = false;
@@ -329,8 +328,7 @@ try {
   // ⑨ 命令被撤掉了：这一按就是直接合并，这张卡不该再摆「重跑 / 这次跳过」。
   {
     const { page } = await open({ gate: { command: null, running: null, latest: run() } });
-    await page.locator("h1").waitFor();
-    await page.waitForTimeout(300);
+    await fetchesSettled(page, 2, "门禁状态与项目角色都已读到");
     const card = page.locator(".accept-gate-card");
     assert.match(await card.innerText(), /历史记录/);
     assert.equal(await card.getByRole("button", { name: "设一条" }).count(), 1);

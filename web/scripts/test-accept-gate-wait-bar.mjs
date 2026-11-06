@@ -28,17 +28,17 @@ export async function testAcceptGateWaitBar({ open, run }) {
     assert.equal(await bar.getByRole("button", { name: /不等了/ }).count(), 0);
     await bar.locator(".wait-bar__bar").click();
     await bar.getByRole("button", { name: /不等了/ }).click();
-    await page.waitForTimeout(200);
-    assert.equal(store.canceled, 1, "收掉它要真打那一发 cancel");
-    assert.equal(await page.locator(".accept-gate-wait").count(), 0, "收掉之后这条就该消失 —— 它只说「正在跑」");
+    await waitUntil(() => store.canceled === 1, "收掉它要真打那一发 cancel");
+    await page.locator(".accept-gate-wait").waitFor({ state: "detached" })
+      .catch(() => assert.fail("收掉之后这条就该消失 —— 它只说「正在跑」"));
+    assert.equal(store.canceled, 1, "只打一发 cancel");
     await page.close();
   }
 
   // ⑯ 没在跑就彻底不占地方：跑完之后该看的是验收台上那张回执，不是这条。
   {
     const { page } = await open({ gate: { command: "./kb.sh test full", running: null, latest: run() }, query: "?wait=1" });
-    await page.locator("h1").waitFor();
-    await page.waitForTimeout(300);
+    await fetchesSettled(page, 1, "门禁状态已读到");
     assert.equal(await page.locator(".accept-gate-wait").count(), 0);
     await page.close();
   }
@@ -87,8 +87,7 @@ export async function testAcceptGateWaitBar({ open, run }) {
     assert.match(await bar.innerText(), /状态读不出来/);
     const before = store.reads;
     await bar.getByRole("button", { name: "重试" }).click();
-    await page.waitForTimeout(200);
-    assert.ok(store.reads > before, "重试要真的再读一次");
+    await waitUntil(() => store.reads > before, "重试要真的再读一次");
     await page.close();
   }
 }

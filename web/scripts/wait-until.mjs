@@ -22,7 +22,8 @@ export const WAIT_TIMEOUT_MS = 15_000;
 
 /**
  * 轮询 `check` 直到它返回真值，返回那个值。`check` 可以是 async，抛错按「还没成立」算
- * （超时信息里会带上最后一次的错）。第二个参数可以直接写成说明字符串。
+ * （超时信息里会带上最后一次的错）。第二个参数可以直接写成说明字符串；`message` 也可以是
+ * 函数，超时那一刻才求值（用来带上「最后看到的是什么」）。
  */
 export async function waitUntil(check, options = {}) {
   const { timeout = WAIT_TIMEOUT_MS, interval = 25, message = "条件成立" } =
@@ -41,7 +42,7 @@ export async function waitUntil(check, options = {}) {
     await new Promise((resolve) => setTimeout(resolve, interval));
   }
   const tail = lastError ? `（最后一次检查抛错：${lastError instanceof Error ? lastError.message : lastError}）` : "";
-  throw new Error(`等了 ${timeout}ms 仍未成立：${message}${tail}`);
+  throw new Error(`等了 ${timeout}ms 仍未成立：${typeof message === "function" ? message() : message}${tail}`);
 }
 
 /**
@@ -90,13 +91,15 @@ export function fetchLog(page) {
  */
 export function fetchesSettled(page, count = 0, message = `页面上被记的请求（至少 ${count} 发）都已消费完`) {
   const quiet = (log) => log.length >= count && log.every((entry) => entry.state === "settled");
+  let seen = [];
+  const pending = () => seen.map((entry, index) => ({ index, ...entry })).filter((entry) => entry.state !== "settled");
   return waitUntil(async () => {
-    const before = await fetchLog(page);
+    const before = seen = await fetchLog(page);
     if (!quiet(before)) return false;
     await settlePage(page);
     const after = await fetchLog(page);
     return after.length === before.length && quiet(after) && after;
-  }, message);
+  }, () => `${message}（已记 ${seen.length} 发，未结算：${JSON.stringify(pending().map(({ index, method, url }) => `#${index} ${method} ${url}`))}）`);
 }
 
 /**
