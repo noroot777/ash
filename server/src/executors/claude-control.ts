@@ -24,6 +24,8 @@ export class ClaudeControlBridge {
    * 消息就为 true。单飞等后台工作的空档里插话靠它判断:没有回合可打断,直接送进去。
    */
   turnActive = true;
+  /** CLI 自己开了一回合(解析层见到 `turnActive` 从 false 变 true)。见 ResidentHandle.onTurnStart。 */
+  onTurnStart: (() => void) | null = null;
   private sequence = 0;
   private readonly pending = new Map<string, PendingControl>();
 

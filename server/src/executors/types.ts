@@ -158,6 +158,8 @@ export interface ResidentHandle {
   close(): void; // 优雅收尾:关 stdin,等它自己退出
   /** 此刻有没有回合在进行(claude 才答得上来,见 ClaudeControlBridge.turnActive)。 */
   turnActive?(): boolean;
+  /** CLI 自己开了一回合(从空闲变成在忙,不含我们送消息那一下)时叫一声。单飞据此结束「等后台」。 */
+  onTurnStart?(listener: () => void): void;
   kill(): void; // 硬杀,走 killChild 三层击杀
   /**
    * 覆盖这个句柄**已经启动过的所有回合/后代**的幂等 finalizer。`kill()` 只负责进程本体

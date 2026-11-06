@@ -351,6 +351,7 @@ export class ClaudeExecutor implements AgentExecutor {
         return true;
       },
       turnActive: () => resident.turnActive,
+      onTurnStart: (listener) => { resident.onTurnStart = listener; },
       interrupt: () => {
         resident.interruptPending = true;
         child.stdin?.write(resident.request().line);
@@ -438,9 +439,13 @@ const BACKGROUND_HOLD_MS = (() => {
  * 仍是运行中，下一个不再带 `background` 的回合结尾才收台。等待期间插话照常送达（没有回合可
  * 打断，就直接送进去），停止照常杀进程；最多等 `BACKGROUND_HOLD_MS`。
  *
- * 等到点还没跑完 = 这一轮的活没干完：报一条真错误，并经 `failure()` 把「ash 判这一轮未完成」
- * 交给结算 —— 收台后进程照样 exit 0，智能体也可能早在发起后台工作那一回合就交过卷，两样都
- * 不能让它落成完成。
+ * 等后台的期限只管「回合之间在等后台」这一段：CLI 自己开了下一回合（完成通知到了，主智能体
+ * 开始整理结果）就撤掉，那之后慢不慢归停滞看门狗管；那一回合结尾还有没跑完的再重新起算。
+ *
+ * 等到点还没跑完 = 这一轮的活没干完：硬杀进程（关 stdin 只是请它退出，它可以接着等自己的
+ * 后台、一直不走），报一条真错误，并经 `failure()` 把「ash 判这一轮未完成」交给结算 —— 智能体
+ * 可能早在发起后台工作那一回合就交过卷，不能让它落成完成。后台还没跑完进程就自己退了（哪怕
+ * exit 0）同理，见 `done.unfinished`。
  */
 export function singleRunFromResident(
   resident: ResidentHandle,
@@ -450,11 +455,13 @@ export function singleRunFromResident(
   let intermediateEnds = 0;
   let accepting = true;
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
-  let holdExpired: StallVerdict | null = null;
+  let verdict: StallVerdict | null = null;
+  let stopped = false; // 用户停止:不另外判「后台没跑完」,停止自有它的结算
   const clearHold = () => {
     if (holdTimer) clearTimeout(holdTimer);
     holdTimer = null;
   };
+  resident.onTurnStart?.(clearHold);
   const events = (async function* (): AsyncIterable<AgentEvent> {
     try {
       for await (const event of resident.events) {
@@ -476,9 +483,10 @@ export function singleRunFromResident(
             const left = Number.isFinite(since) ? Math.max(0, holdMs - (Date.now() - since)) : holdMs;
             holdTimer = setTimeout(() => {
               const at = new Date().toISOString();
-              holdExpired = { kind: "background_timeout", reason: holdTimeoutMessage(holdMs), at, since: at, durable: false };
+              verdict = { kind: "background_timeout", reason: holdTimeoutMessage(holdMs), at, since: at, durable: false };
+              holdTimer = null;
               accepting = false;
-              resident.close();
+              resident.kill();
             }, left);
             holdTimer.unref?.();
             continue;
@@ -490,8 +498,13 @@ export function singleRunFromResident(
         }
         if (event.kind === "done") {
           accepting = false;
-          const expired = holdExpired as StallVerdict | null; // 定时器回调里写的,控制流分析看不见
-          if (expired) yield { kind: "error", message: expired.reason };
+          // 在等后台时进程没了,或者没了的那一刻账上还有没跑完的:都不是跑完了。
+          if (!verdict && !stopped && (holdTimer || event.unfinished)) {
+            const at = new Date().toISOString();
+            verdict = { kind: "background_lost", reason: backgroundLostMessage(event.unfinished), at, since: at, durable: false };
+          }
+          const failed = verdict as StallVerdict | null; // 定时器回调里也会写,控制流分析看不见
+          if (failed) yield { kind: "error", message: failed.reason };
         }
         yield event;
         if (event.kind === "done") return;
@@ -505,7 +518,7 @@ export function singleRunFromResident(
     commandLine: resident.commandLine,
     events,
     detached,
-    failure: () => holdExpired,
+    failure: () => verdict,
     async steer(text: SteerText, beforeSend) {
       if (!accepting) throw new Error("Claude 当前回合已经结束");
       // 等后台工作的空档:没有回合可打断(打断一个空闲会话不会再吐 result,计数就错位了),
@@ -536,6 +549,7 @@ export function singleRunFromResident(
         if (!interrupted) intermediateEnds = Math.max(0, intermediateEnds - 1);
         else {
           accepting = false;
+          stopped = true; // 为了带着插话重开而杀,不是后台工作丢了
           resident.kill();
           throw Object.assign(error instanceof Error ? error : new Error(String(error)), { nativeSteerRestart: true });
         }
@@ -546,10 +560,19 @@ export function singleRunFromResident(
     },
     kill() {
       accepting = false;
+      stopped = true;
       resident.kill();
     },
     cleanup: resident.cleanup,
   };
+}
+
+function backgroundLostMessage(unfinished?: { agent: number; workflow: number }): string {
+  const parts = [
+    unfinished?.workflow ? `${unfinished.workflow} 个工作流` : "",
+    unfinished?.agent ? `${unfinished.agent} 个后台子代理` : "",
+  ].filter(Boolean).join("、");
+  return `后台工作${parts ? `（${parts}）` : ""}还没跑完，智能体进程就退出了，本回合按未完成结算。`;
 }
 
 const holdTimeoutMessage = (ms: number) =>

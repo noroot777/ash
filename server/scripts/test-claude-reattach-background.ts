@@ -31,8 +31,12 @@ await ensureSchema();
 
 const line = (value: unknown) => JSON.stringify(value) + "\n";
 
-/** 假 CLI:先吐 `tail`(接管水位之后的那段),stdin 收到什么记进 `inputs`,关掉 stdin 就退出。 */
-function stubCli(name: string, tail: unknown[], onInput = "") {
+/**
+ * 假 CLI:先吐 `tail`(接管水位之后的那段),stdin 收到什么记进 stderr,关掉 stdin 就退出。
+ * `tail` 里的 `{ __wait: ms }` 是停一会儿、`{ __exit: code }` 是自己退出;`ignoreEof` 模拟
+ * 收到输入结束也不走、接着等自己后台的 CLI。
+ */
+function stubCli(name: string, tail: unknown[], onInput = "", ignoreEof = false) {
   const script = join(root, `${name}.cjs`);
   writeFileSync(script, `
 const readline = require("node:readline");
@@ -41,8 +45,14 @@ readline.createInterface({ input: process.stdin }).on("line", (raw) => {
   const message = JSON.parse(raw);
   process.stderr.write("INPUT " + message.type + "\\n");
   ${onInput}
-}).on("close", () => { process.stderr.write("STDIN_CLOSED\\n"); process.exit(0); });
-for (const value of ${JSON.stringify(tail)}) emit(value);
+}).on("close", () => { process.stderr.write("STDIN_CLOSED\\n"); if (!${ignoreEof}) process.exit(0); });
+(async () => {
+  for (const value of ${JSON.stringify(tail)}) {
+    if (value.__wait) await new Promise((resolve) => setTimeout(resolve, value.__wait));
+    else if ("__exit" in value) process.exit(value.__exit);
+    else emit(value);
+  }
+})();
 setTimeout(() => process.exit(0), 3000);
 `);
   const child = spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"] });
@@ -88,7 +98,7 @@ function reattach(name: string, prefixEvents: unknown[], tail: unknown[], onInpu
   return { ...stub, handle, consumedPath };
 }
 const closed = async (child: ReturnType<typeof spawn>) => {
-  if (child.exitCode === null) await new Promise((resolve) => child.once("close", resolve));
+  if (child.exitCode === null && child.signalCode === null) await new Promise((resolve) => child.once("close", resolve));
 };
 const notification = { type: "system", subtype: "task_notification", task_id: "wf", tool_use_id: "wf-call", status: "completed", summary: "done" };
 const heldEnd = [...say("已在后台跑起来"), { ...result, result: "已在后台跑起来" }];
@@ -277,6 +287,61 @@ for (const [name, prefix, tail] of [
   await closed(child);
 }
 console.log("✓ 打断出来的结尾在水位附近:回执先到、后到、落在水位之后都不收台");
+
+// ④ 等后台的收尾(自由审查 c2vZ4d3LmL1q 第 1 轮),都走真实 spawn 出来的流,不经接管。
+/** 直接跑一条流(不接管);`hold` 给的话预先记下「第 1 个回合结尾从多久之前开始等」,把期限缩到眼前。 */
+function live(name: string, tail: unknown[], ignoreEof = false, heldFor?: number) {
+  const out = join(root, `${name}.jsonl`);
+  if (heldFor !== undefined) writeFileSync(`${out}.hold.json`, JSON.stringify({ turn: 1, since: new Date(Date.now() - heldFor).toISOString() }));
+  const stub = stubCli(name, tail, "", ignoreEof);
+  Object.assign(stub.child, { ashPaths: { out } });
+  return { ...stub, handle: executor.attach(stub.child, { sessionId: "sess-r", commandLine }) };
+}
+
+// ④a 等后台时 CLI 自己以 0 退出、没有完成通知:不是跑完了,按未完成结算。
+{
+  const { child, handle } = live("exit-while-holding", [...launch, ...heldEnd, { __wait: 100 }, { __exit: 0 }]);
+  const { events, consuming } = await drain(handle, 1500);
+  await consuming;
+  assert.equal(events.at(-1)?.kind, "done");
+  assert.ok(events.some((e) => e.kind === "error" && /1 个工作流/.test(e.message) && /还没跑完/.test(e.message)), "报真错误");
+  assert.equal(handle.failure?.()?.kind, "background_lost", "退出码 0 也按未完成结算");
+  await closed(child);
+  console.log("✓ 等后台时进程自己退了:按未完成结算");
+}
+
+// ④b 到期了 CLI 收到输入结束却不走:照样杀掉,错误和收尾都在期限之后马上来。
+{
+  const { child, stderr, handle } = live("eof-ignored", [...launch, ...heldEnd, progress], true, HOLD_MS - 200);
+  const keepAlive = setInterval(() => {}, 100);
+  const { events, consuming } = await drain(handle, 1200);
+  clearInterval(keepAlive);
+  assert.ok(events.some((e) => e.kind === "error" && /后台工作等了/.test(e.message)), "到期就报,不等它自己退");
+  assert.equal(events.at(-1)?.kind, "done", "事件流在期限之后马上结束");
+  assert.equal(handle.failure?.()?.kind, "background_timeout");
+  assert.ok(!stderr().includes("STDIN_CLOSED"), "不是靠关 stdin 请它走的");
+  await consuming;
+  await closed(child);
+  console.log("✓ 到期 CLI 不理输入结束:杀进程,错误与收尾按时到");
+}
+
+// ④c 后台在期限之前跑完了,主智能体整理结果跨过了原期限:不算后台超时。
+{
+  const { child, handle } = live("slow-delivery", [
+    ...launch, ...heldEnd, { __wait: 100 }, notification,
+    { type: "system", subtype: "init", session_id: "sess-r" }, ...say("开始整理结果"),
+    { __wait: 600 }, ...say("合成终稿"), { ...result, origin: { kind: "task-notification" }, result: "合成终稿" },
+  ], false, HOLD_MS - 300);
+  const keepAlive = setInterval(() => {}, 100);
+  const { events, consuming } = await drain(handle, 2000);
+  clearInterval(keepAlive);
+  await consuming;
+  assert.ok(!events.some((e) => e.kind === "error"), "整理慢不报后台超时");
+  assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 0 });
+  assert.equal(handle.failure?.() ?? null, null);
+  await closed(child);
+  console.log("✓ 后台跑完后主智能体整理得慢:旧期限已撤,不算超时");
+}
 
 dbClient.close();
 rmSync(root, { recursive: true, force: true });

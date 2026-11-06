@@ -99,7 +99,8 @@ export type AgentEvent =
   // `since` = 从哪一刻开始等的（重启接管不重新起算期限）。`interrupted` = 这个结尾是 ash 插话
   // 打断出来的，进程还要接着跑下一段。
   | { kind: "turnEnd"; background?: { agent: number; workflow: number; since?: string }; interrupted?: true }
-  | { kind: "done"; exitStatus: number };
+  // `unfinished` = 进程没了的那一刻名下还有后台子代理 / 工作流没跑完（单飞据此不按完成结算）。
+  | { kind: "done"; exitStatus: number; unfinished?: { agent: number; workflow: number } };
 
 // synthesis = 收敛后的合稿轮(共同方案);impl/review are legacy transcript speakers
 export type DuetSpeaker = "A" | "B" | "synthesis" | "impl" | "review" | "user";

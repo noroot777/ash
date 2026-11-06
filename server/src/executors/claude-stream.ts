@@ -201,6 +201,7 @@ async function* claudeStreamEvents(
     // task_*)不算 —— 回合结束之后它们照样在流里滚。
     if (startsTurn(ev)) {
       if (ev.type === "assistant") turnSpoke = true;
+      if (resident && !resident.turnActive && !replaying) resident.onTurnStart?.();
       if (resident) resident.turnActive = true;
       ending = null;
     }
@@ -548,6 +549,13 @@ async function* claudeStreamEvents(
     handle(ev);
   });
 
+  // 进程没了的那一刻还有后台工作没跑完:如实交给单飞,退出码是 0 也不能按完成结算。
+  const done = (exitStatus: number): AgentEvent => {
+    const unfinished = resident?.reapsAtTurnEnd ? background.waiting() : null;
+    return unfinished && unfinished.agent + unfinished.workflow > 0
+      ? { kind: "done", exitStatus, unfinished }
+      : { kind: "done", exitStatus };
+  };
   let stderr = "";
   child.stderr?.on("data", (d) => (stderr += d.toString()));
   child.on("error", (err: NodeJS.ErrnoException) => {
@@ -555,7 +563,7 @@ async function* claudeStreamEvents(
     resident?.failPending(new Error(`Claude 进程错误：${err.message}`));
     push({ kind: "error", message: spawnErrorMessage(bin, err) });
     for (const activity of nativeWork.reaped()) push(activity);
-    push({ kind: "done", exitStatus: 1 });
+    push(done(1));
     events.close();
   });
   child.on("close", (code) => {
@@ -567,7 +575,7 @@ async function* claudeStreamEvents(
     if (exit !== 0 && stderr.trim()) push({ kind: "error", message: normalizeClaudeCliError(stderr).slice(0, 2000) });
     // 进程没了,寄生在里面的工作流也没了(团队调度台走的是这一路)。
     for (const activity of nativeWork.reaped()) push(activity);
-    push({ kind: "done", exitStatus: exit });
+    push(done(exit));
     events.close();
   });
   forceFinishOnExit(child, () => events.closed, (exit) => {
@@ -576,7 +584,7 @@ async function* claudeStreamEvents(
     flushText();
     push({ kind: "error", message: "进程已退出但输出流未正常收尾(疑有残留子进程占用管道),已强制结束本回合" });
     for (const activity of nativeWork.reaped()) push(activity);
-    push({ kind: "done", exitStatus: exit });
+    push(done(exit));
     events.close();
   });
 
