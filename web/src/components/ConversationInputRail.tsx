@@ -47,6 +47,7 @@ export function ConversationInputRail({
   inputs,
   scrollRef,
   onReaderScroll,
+  onCover,
 }: {
   inputs: readonly ConversationInput[];
   scrollRef: RefObject<HTMLElement | null>;
@@ -55,6 +56,11 @@ export function ConversationInputRail({
    * true = 往回看了，下一条新消息不许把他拽回底部。
    */
   onReaderScroll: (detachFromBottom: boolean) => void;
+  /**
+   * 列表摊开 / 收起。摊开时它半透明地盖住会话区大半：后面的会话要是还跟着新消息往上滚，玻璃底下
+   * 就一直有东西在动，字也跟着晃。交给贴底逻辑在这期间按住不跟，收起时再补上。
+   */
+  onCover: (covered: boolean) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
@@ -238,6 +244,12 @@ export function ConversationInputRail({
   }), []);
 
   useDismissable({ enabled: menuOpen, containerRef: menuRef, onClose: closeMenu });
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    onCover(true);
+    return () => onCover(false);
+  }, [menuOpen, onCover]);
 
   // 摊开时焦点落在「正读着的那一条」上，并把它挪到列表中间：人按 Q 多半是想去它前后几条。
   useLayoutEffect(() => {

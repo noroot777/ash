@@ -155,6 +155,11 @@ export function useStickToBottom(
   const forceStickRef = useRef(true);
   const tailAppendedRef = useRef(false);
   const lastTailKeyRef = useRef<string | number | null>(null);
+  /** 有东西半透明地盖在会话上、正被人看着（Q 摊开的输入列表）：这期间不跟，见 `hold`。 */
+  const heldRef = useRef(false);
+  /** 手（鼠标键 / 手指）正按着；按着的时候放开跟随要等松手，见 `hold`。 */
+  const pressedRef = useRef(false);
+  const releaseOnLiftRef = useRef(false);
 
   const markProgrammaticScrollSettled = useCallback(() => {
     cancelFrameRef(clearProgrammaticFrameRef);
@@ -184,7 +189,7 @@ export function useStickToBottom(
     frameRef.current = requestAnimationFrame(() => {
       frameRef.current = 0;
       const element = scrollRef.current;
-      if (!element) return;
+      if (!element || heldRef.current) return;
       /* 容器此刻没有布局 —— 它所在的面板被 `display:none` 藏起来了,几何全是 0,判不出
          任何东西。这时**不能把信号消费掉**:藏着的时候来的新消息,信号会在这一次空转里
          被吃光,面板切回来反而不跟了。原地留着,等恢复可见时 ResizeObserver 再叫一次。
@@ -229,6 +234,22 @@ export function useStickToBottom(
     cancelFrameRef(clearProgrammaticFrameRef);
   }, []);
 
+  /* 按住 / 放开跟随。按住期间的信号跟面板藏起来时一样原地留着，放开时再判一次：一直跟着的人
+     收起来就落到最新一条；收起之前挪过位置（从列表里挑了一条跳过去）的，照常不跟。
+     放开常常就发生在按下的那一刻（点外面收起）：这时就补到底，松手的那下 click 会落到换过的
+     内容上 —— 点的按钮没生效、拖选的选区跨到新内容上。所以手还按着就等松开再放。 */
+  const hold = useCallback((held: boolean) => {
+    if (held) {
+      heldRef.current = true;
+      releaseOnLiftRef.current = false;
+    } else if (pressedRef.current) {
+      releaseOnLiftRef.current = true;
+    } else {
+      heldRef.current = false;
+      scheduleStick();
+    }
+  }, [scheduleStick]);
+
   const resumeStickToBottom = useCallback(() => {
     stuckRef.current = true;
     detachingUserIntentRef.current = false;
@@ -245,6 +266,7 @@ export function useStickToBottom(
        不派发 scroll,也就不该改这个状态,「他在底部」的意图要一直留着。 */
     atBottomRef.current = distance <= BOTTOM_EPSILON;
     const userDriven = userScrollIntentRef.current || scrollbarDragRef.current;
+    const wasStuck = stuckRef.current;
     stuckRef.current = stickStateAfterScroll({
       stuck: stuckRef.current,
       nearBottom,
@@ -252,6 +274,15 @@ export function useStickToBottom(
       userDriven,
       detaching: detachingUserIntentRef.current,
     });
+    /* 按住跟随期间(见 `hold`)读者自己在露出来的会话上滚了:
+       —— 本来在跟、这一下也不是往回看:照旧算在跟。离底这么远只是因为按住了没跟,没按住的话
+          他就在底部,往下滚是空操作。
+       —— 其余情形(往回看了,或本来就没在跟):按住期间攒下的那截新内容不再算「刚长出来的」,
+          放开时不为它补 —— 滚近了底照常接上跟随,但不因那截积压再跳一次。 */
+    if (heldRef.current && userDriven) {
+      if (wasStuck && !detachingUserIntentRef.current) stuckRef.current = true;
+      else tailAppendedRef.current = false;
+    }
     /* 到此为止:这里**只**改「接下来跟不跟」,不碰 scrollTop,也不碰底边基准。
        —— 不碰 scrollTop,是因为滚轮和触控板在浏览器里是一段带惯性的平滑动画,它还没
           走完;此刻替用户把位置设到底,等于把那段动画掐掉再瞬移。
@@ -278,6 +309,27 @@ export function useStickToBottom(
     }
     lastTailKeyRef.current = tailKey;
   }, [scheduleStick, tailKey]);
+
+  useEffect(() => {
+    const press = () => {
+      pressedRef.current = true;
+    };
+    const lift = () => {
+      pressedRef.current = false;
+      if (!releaseOnLiftRef.current) return;
+      releaseOnLiftRef.current = false;
+      heldRef.current = false;
+      scheduleStick();
+    };
+    window.addEventListener("pointerdown", press, true);
+    window.addEventListener("pointerup", lift, true);
+    window.addEventListener("pointercancel", lift, true);
+    return () => {
+      window.removeEventListener("pointerdown", press, true);
+      window.removeEventListener("pointerup", lift, true);
+      window.removeEventListener("pointercancel", lift, true);
+    };
+  }, [scheduleStick]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -366,11 +418,15 @@ export function useStickToBottom(
     tailAppendedRef.current = false;
     forceStickRef.current = false;
     lastTailKeyRef.current = null;
+    heldRef.current = false;
+    pressedRef.current = false;
+    releaseOnLiftRef.current = false;
   }, []);
 
   return {
     resume: resumeStickToBottom,
     noteUserScrollIntent,
     resumeStickToBottom,
+    hold,
   };
 }

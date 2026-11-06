@@ -24,7 +24,7 @@ export function ConversationScrollControls({
    */
   inputs?: readonly ConversationInput[];
 }) {
-  const { noteUserScrollIntent, resume } = useStickToBottom(scrollRef, resetKey, tailKey);
+  const { noteUserScrollIntent, resume, hold } = useStickToBottom(scrollRef, resetKey, tailKey);
   const { atTop, atBottom } = useScrollEdges(scrollRef, resetKey);
 
   const scrollToEdge = (target: "top" | "bottom") => {
@@ -48,6 +48,7 @@ export function ConversationScrollControls({
           inputs={inputs}
           scrollRef={scrollRef}
           onReaderScroll={noteUserScrollIntent}
+          onCover={hold}
         />
       )}
       <button
