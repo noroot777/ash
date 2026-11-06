@@ -16,7 +16,7 @@ import { queueReviewAnswer } from "./review-continuation.js";
 import { ReviewSuperseded } from "./review-ownership.js";
 import { questionWaitOrigin } from "./task-wait-ownership.js";
 
-export type TaskAnswerBody = QuestionAnswerInput & { answer?: string };
+export type TaskAnswerBody = QuestionAnswerInput & { answer?: string; attachments?: string[] };
 
 /** 普通答复路由和远程接力代理共用的提问 CAS + 续会话实现。 */
 export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBody): Promise<Response> {
@@ -24,6 +24,12 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   if (b.answer !== undefined && typeof b.answer !== "string") return c.json({ error: "answer 必须是文本" }, 400);
   const answer = (b.answer ?? "").trim();
   if (!answer && b.answers === undefined) return c.json({ error: "answer 不能为空" }, 400);
+  if (b.attachments !== undefined && (!Array.isArray(b.attachments) || b.attachments.some((path) => typeof path !== "string"))) {
+    return c.json({ error: "attachments 必须是路径数组" }, 400);
+  }
+  if (b.questionOccurrence !== undefined && typeof b.questionOccurrence !== "string") return c.json({ error: "questionOccurrence 必须是文本" }, 400);
+  // 附件随答复一起进那一轮（与回复同一条路：投递时拼进提示词、文件归到这个任务）。
+  const attachments = b.attachments?.length ? { attachments: b.attachments } : {};
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return c.json({ error: "not found" }, 404);
   if (task.archived) return c.json({ error: "任务已归档，先取消归档再答复", archived: true }, 409);
@@ -56,7 +62,7 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   try {
     if (!await claimQuestionAnswer(task, record, async (transaction) => {
       reviewQueued = await queueReviewAnswer(transaction, task,
-        pendingMessageRow({ taskId, text: answerText, ...route, ownerUserId: acting, answerId: record.id }));
+        pendingMessageRow({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id }));
     })) return c.json({ error: "问题已更新或已被答复，本次未投递，请刷新后查看" }, 409);
   } catch (error) {
     if (error instanceof ReviewSuperseded) {
@@ -90,23 +96,23 @@ export async function answerTask(c: Context, taskId: string, body?: TaskAnswerBo
   if (task.mode === "single" && !sideways) {
     const claim = await claimQueueSeat(taskId);
     if (!claim.ok) {
-      await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting, execution: true, answerId: record.id });
+      await enqueueMessage({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, execution: true, answerId: record.id });
       return c.json({ answered: true, resumed: false, queued: true, blockedBy: claim.blockers, record });
     }
     const seat = claim.seat;
-    void continueTask(taskId, answerText, { ...route, actingUserId: acting, answerIds })
+    void continueTask(taskId, answerText, { ...attachments, ...route, actingUserId: acting, answerIds })
       .then(async (started) => {
         if (started) return;
         // 回合被别的执行抢占:原话退回托盘,仍按执行型等队列位置,不按终态续聊放行。
-        await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting, execution: true, answerId: record.id });
+        await enqueueMessage({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, execution: true, answerId: record.id });
       })
       .catch((err) => console.error(`[ash] 答复续跑 ${taskId} 异常:`, err))
       .finally(() => { if (seat) void seat.release(); });
     return c.json({ answered: true, resumed: true, record });
   }
-  void continueTask(taskId, answerText, { ...route, actingUserId: acting, answerIds }).then(async (started) => {
+  void continueTask(taskId, answerText, { ...attachments, ...route, actingUserId: acting, answerIds }).then(async (started) => {
     if (started) return;
-    await enqueueMessage({ taskId, text: answerText, ...route, ownerUserId: acting, answerId: record.id });
+    await enqueueMessage({ taskId, text: answerText, ...attachments, ...route, ownerUserId: acting, answerId: record.id });
   });
   return c.json({ answered: true, resumed: true, record });
 }

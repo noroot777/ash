@@ -31,6 +31,7 @@ try {
   const { and, eq } = await import("drizzle-orm");
   const { patchOptions } = await import("../src/im/meta.js");
   const { HELP } = await import("../src/im/commands.js");
+  const { scopeFor, SYSTEM_SCOPE } = await import("../src/im/scope.js");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf, waitIdle } = await import("./im-fixture.js");
 
   /** 能把下一次发消息卡在半路的假飞书。 */
@@ -92,8 +93,9 @@ try {
     await im.settle();
     assert.equal((await rowsOf("tx")).at(0)?.state, "sent", "新应用的卡没被旧应用那一行挡住");
 
-    const again = await im.reconciler.insert({ dest, taskId: null, kind: "reply", subject: "r:once", msgType: "text", content: JSON.stringify({ text: "一" }) });
-    const twice = await im.reconciler.insert({ dest, taskId: null, kind: "reply", subject: "r:once", msgType: "text", content: JSON.stringify({ text: "二" }) });
+    const once = { dest, taskId: null, kind: "reply", subject: "r:once", msgType: "text", scope: SYSTEM_SCOPE };
+    const again = await im.reconciler.insert({ ...once, content: JSON.stringify({ text: "一" }) });
+    const twice = await im.reconciler.insert({ ...once, content: JSON.stringify({ text: "二" }) });
     assert.ok(again);
     assert.equal(twice, null, "同键第二次入队报出来");
   }
@@ -133,7 +135,11 @@ try {
     im.sender.stop();
     await db.insert(tasks).values(task({ id: "tr", title: "排队时解绑", status: "failed", endedAt: at }) as never);
     await im.reconciler.reconcile(["tr"]);
-    await im.reconciler.insert({ dest: { receiveType: "chat_id", receiveId: "oc_nobody", recipientOpenId: null }, taskId: "tp", kind: "notice", subject: "n:1", msgType: "text", content: JSON.stringify({ text: "通知" }) });
+    const nobody = { receiveType: "chat_id" as const, receiveId: "oc_nobody", recipientOpenId: null };
+    await im.reconciler.insert({
+      dest: nobody, taskId: "tp", kind: "notice", subject: "n:1", msgType: "text", content: JSON.stringify({ text: "通知" }),
+      scope: await scopeFor(APP, nobody, { kind: "task", taskId: "tp" }),
+    });
     await db.delete(imBindings).where(eq(imBindings.openId, OWNER));
     fake.reset();
     im.sender.start();
@@ -232,7 +238,7 @@ try {
     assert.match(replyOf("om_crash_3").join(), /没来得及处理/, "太旧的不补办");
     fake.reset();
     assert.equal(await im.inbound.recover(), 0, "接管过的不再接管");
-    await im.commands.say({ messageId: "om_crash_1", dest }, HELP);
+    await im.commands.say({ messageId: "om_crash_1", dest }, HELP, SYSTEM_SCOPE);
     await im.settle();
     assert.equal(fake.sends().length, 0, "同一条消息的同一句回执只入队一次");
   }

@@ -9,6 +9,8 @@ export type QuestionSource = {
 export type QuestionAnswerInput = {
   answers?: string[];
   questionKey?: string;
+  /** 答的是哪一次提问（server 的 questionOccurrenceOf）；同样的题再问一次，旧的身份答不中新的。 */
+  questionOccurrence?: string;
 };
 
 export type QuestionRecord = QuestionSource & {

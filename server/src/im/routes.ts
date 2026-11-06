@@ -24,6 +24,7 @@ import { renderCard } from "./feishu/cards.js";
 import { confirmGroupCode, deleteGroup, groupOf, groupsView, patchGroup } from "./groups.js";
 import { patchOptions, readOptions } from "./meta.js";
 import { outboxCounts } from "./outbox.js";
+import { SYSTEM_SCOPE } from "./scope.js";
 
 const canManage = (actor: Actor) => isAdminActor(actor) && isAccountHolder(actor);
 const ownerOf = (c: Context) => ownerKeyOf(ownerIdOf(actorOf(c)));
@@ -60,10 +61,13 @@ function refreshPushes(): void {
 
 const bodyOf = async (c: Context) => (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 
-export function mountImRoutes(api: Hono): void {
-  // 归档 / 取回、删任务、删项目都直接改库、不发总线事件（网页靠接口返回值自己更新），通道只能等
-  // 十分钟一次的全量对账才看得到 —— 这期间飞书里那张卡还挂着按钮。这几条挂在任务路由之前，
-  // 等它们成功返回再顺手对一次账（2026-11-06 实测：网页上归档后卡片迟迟不收）。
+/**
+ * 直接改库、不发总线事件的那几条（网页靠接口返回值自己更新），通道只能等十分钟一次的全量对账才看得到：
+ *   · 归档 / 取回、删任务、删项目 —— 这期间飞书里那张卡还挂着按钮（2026-11-06 实测：网页上归档后卡片迟迟不收）；
+ *   · 停用 / 恢复账号、改角色、加 / 移项目成员 —— 谁能看哪张卡变了，已经发出去的卡要跟着收起或补推。
+ * 等它们成功返回再顺手对一次账。要挂在这些路由之前（routes.ts 里最先调）。
+ */
+export function mountImSweeps(api: Hono): void {
   const sweepAfter = (method: string) => async (c: Context, next: () => Promise<void>) => {
     await next();
     if (c.req.method === method && c.res.ok) feishuRuntime()?.reconciler.sweepSoon();
@@ -72,6 +76,15 @@ export function mountImRoutes(api: Hono): void {
   api.use("/tasks/:id/unarchive", sweepAfter("POST"));
   api.use("/tasks/:id", sweepAfter("DELETE"));
   api.use("/projects/:id", sweepAfter("DELETE"));
+  api.use("/users/:id", sweepAfter("PATCH"));
+  api.use("/users/:id/suspend", sweepAfter("POST"));
+  api.use("/users/:id/resume", sweepAfter("POST"));
+  api.use("/projects/:id/members", sweepAfter("POST"));
+  api.use("/projects/:id/members/:userId", sweepAfter("PATCH"));
+  api.use("/projects/:id/members/:userId", sweepAfter("DELETE"));
+}
+
+export function mountImRoutes(api: Hono): void {
   // 写操作统一先过这一道：只放账号本人（agent 回合凭证、匿名都进不来）。
   api.use("/im/feishu/*", async (c, next) => {
     if (c.req.method !== "GET" && !isAccountHolder(actorOf(c))) {
@@ -142,7 +155,7 @@ export function mountImRoutes(api: Hono): void {
     });
     await runtime.reconciler.run(() => runtime.reconciler.insert({
       dest: { receiveType: "open_id", receiveId: binding.openId, recipientOpenId: binding.openId },
-      taskId: null, kind: "test", subject: `test:${Date.now()}`, content: JSON.stringify(card),
+      taskId: null, kind: "test", subject: `test:${Date.now()}`, content: JSON.stringify(card), scope: SYSTEM_SCOPE,
     }));
     runtime.reconciler.kick();
     return c.json({ ok: true });

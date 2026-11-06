@@ -13,12 +13,13 @@
 //
 // 「同一代」只说明还是那件事，不说明卡片内容还对：标题改了、项目改成只推标题、深链换了，代次都
 // 不变。所以每张决策卡还记一个渲染指纹（render_key），对不上就原地重渲染（没发的直接换内容，
-// 发出去的排一次改卡）。发件边界再对一次账（vet）：排队期间授权或隐私设置变了的，不按旧样子发。
+// 发出去的排一次改卡）。发件、改卡前再核一次（exits.ts）：排队期间授权或隐私设置变了的，不按旧样子发。
 import { createHash } from "node:crypto";
 import { isAcceptedStage } from "@ash/shared";
 import { and, desc, eq, gt, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
+import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
 import { acceptGateRuns } from "../db/schema-accept-gate.js";
 import { imActions, imOutbox } from "../db/schema-im.js";
 import { tasks } from "../db/schema.js";
@@ -27,11 +28,14 @@ import { now } from "../util.js";
 import { DECISION_KINDS, viewsOf, withTeamLeads, type TaskView, type Turn } from "./attention.js";
 import { KIND_LABEL, settledCard, summaryCard, taskLink, turnCard } from "./cards.js";
 import { createEnvelope } from "./envelopes.js";
+import { OutboxExits, summaryItems } from "./exits.js";
 import { extrasFor } from "./extras.js";
+import type { FeishuApi } from "./feishu/api.js";
 import { renderCard } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
-import { cardHeaderOf, type Destination, type OutboxRow, type OutboxSender } from "./outbox.js";
-import { destinationsFor, stillEntitled } from "./recipients.js";
+import { cardHeaderOf, OutboxSender, type Destination, type OutboxRow } from "./outbox.js";
+import { destinationsFor } from "./recipients.js";
+import { scopeFor, scopeOfRow, type OutboxScope } from "./scope.js";
 
 export const FLOOD_LIMIT = 5;
 export const TURN_KINDS = ["question", "failed", "dispute", "duet_gate", "verify_failed", "accept"] as const;
@@ -39,6 +43,10 @@ const OPEN_STATES = ["pending", "sent", "held"];
 /** 卡片被点过、结果已回写（不许被对账「复活」成原样）。 */
 export const ACTED = "acted";
 const BATCH = 40;
+/** 改卡标记：已经排着结果回写（result / acking）的不降级成受额度约束的 pending。 */
+const REPATCH = sql`CASE WHEN ${imOutbox.patchState} IN ('result', 'acking') THEN 'result' ELSE 'pending' END`;
+
+type Clock = ConstructorParameters<typeof OutboxSender>[3];
 
 interface Creation {
   view: TaskView & { turn: Turn };
@@ -52,8 +60,13 @@ export class Reconciler {
   private chain: Promise<unknown> = Promise.resolve();
   private stopped = false;
 
-  constructor(private readonly appId: string, private readonly sender: OutboxSender) {
-    sender.setGuard((row) => this.vet(row));
+  readonly sender: OutboxSender;
+  readonly exits: OutboxExits;
+  readonly turnKinds: readonly string[] = TURN_KINDS;
+
+  constructor(readonly appId: string, api: FeishuApi, clock?: Clock) {
+    this.exits = new OutboxExits(this);
+    this.sender = new OutboxSender(api, appId, this.exits, clock);
   }
 
   /** 发件表的所有改动都排进这一条链：对账和按钮回调不会交错改同一行。 */
@@ -180,7 +193,8 @@ export class Reconciler {
       resolvedAt: at,
       updatedAt: at,
       content: JSON.stringify(renderCard(settledCard(cardHeaderOf(row.content), text, { link }))),
-      ...(patchable ? { patchState: "pending" } : {}),
+      brief: null,
+      ...(patchable ? { patchState: REPATCH, nextAt: null } : {}),
     }).where(eq(imOutbox.id, row.id));
   }
 
@@ -191,11 +205,19 @@ export class Reconciler {
       state: row.messageId ? "sent" : "pending",
       content,
       renderKey,
+      brief: null,
+      scope: JSON.stringify(await this.turnScope(view, dest)),
       resolution: null,
       resolvedAt: null,
-      patchState: row.messageId ? "pending" : null,
+      patchState: row.messageId ? REPATCH : null,
+      nextAt: null,
       updatedAt: now(),
     }).where(eq(imOutbox.id, row.id));
+  }
+
+  /** 决策卡的授权来源：这个任务；收件去处按此刻那一次绑定盖章。 */
+  private turnScope(view: Creation["view"], dest: Destination): Promise<OutboxScope> {
+    return scopeFor(this.appId, dest, { kind: "task", taskId: view.task.id });
   }
 
   /** 还是同一件事、同一个收件人：渲染输入变了就原地重渲染（信封沿用，按钮照样有效）。 */
@@ -214,8 +236,10 @@ export class Reconciler {
     await db.update(imOutbox).set({
       content,
       renderKey,
+      brief: null,
+      scope: JSON.stringify(await this.turnScope(view, dest)),
       updatedAt: now(),
-      ...(row.state === "sent" && row.messageId ? { patchState: "pending" } : {}),
+      ...(row.state === "sent" && row.messageId ? { patchState: REPATCH, nextAt: null } : {}),
     }).where(eq(imOutbox.id, row.id));
   }
 
@@ -241,28 +265,6 @@ export class Reconciler {
     };
   }
 
-  /**
-   * 发件边界：这一行此刻还该不该发、该发什么样。决策卡按此刻的现状再对一次账（收件人还能不能看、
-   * 只推标题、内容版本）；其余挂着任务的消息（合并通知、回执）只核收件人还有没有资格。
-   */
-  async vet(row: OutboxRow): Promise<OutboxRow | null> {
-    if (!row.taskId) return row;
-    if ((TURN_KINDS as readonly string[]).includes(row.kind)) {
-      await this.run(() => this.reconcile([row.taskId!]));
-    } else {
-      // 任务已经删了：没有东西可泄露，回执（「这个任务已经被删除了」）照发。
-      const view = (await viewsOf([row.taskId])).get(row.taskId) ?? null;
-      if (view && !await stillEntitled(this.appId, row, view.task.projectId)) {
-        await this.run(async () => {
-          await db.update(imOutbox).set({ state: "resolved", resolution: "收件人已无权查看这个任务", resolvedAt: now(), updatedAt: now() })
-            .where(and(eq(imOutbox.id, row.id), eq(imOutbox.state, "pending")));
-        });
-      }
-    }
-    const fresh = (await db.select().from(imOutbox).where(eq(imOutbox.id, row.id))).at(0);
-    return fresh?.state === "pending" ? fresh : null;
-  }
-
   private async create(creations: Creation[], base: string | null, titleOnly: string[]): Promise<void> {
     const byDest = new Map<string, Creation[]>();
     for (const item of creations) byDest.set(item.dest.receiveId, [...(byDest.get(item.dest.receiveId) ?? []), item]);
@@ -274,6 +276,7 @@ export class Reconciler {
         const { content, renderKey } = await this.render(view, dest, envelope, base, titleOnly);
         const inserted = await this.insert({
           id: rowId, dest, taskId: view.task.id, kind: view.turn.kind, subject: view.turn.generation, content, renderKey, state: flood ? "held" : "pending",
+          scope: await this.turnScope(view, dest),
         });
         // settleTask 已经确认这一格是空的：还撞上唯一键就是键与查询的口径不一致，不能当作已入队。
         if (!inserted) console.warn(`[ash] 飞书卡片入队被同键旧记录挡住（${view.turn.kind} ${view.task.id} → ${dest.receiveId}）`);
@@ -282,14 +285,18 @@ export class Reconciler {
     }
   }
 
-  /** 入队。返回 null = 同键（应用、收件人、任务、种类、代次）已经有一行 —— 回执与通知靠这个幂等。 */
+  /**
+   * 入队。返回 null = 同键（应用、收件人、任务、种类、代次）已经有一行 —— 回执与通知靠这个幂等。
+   * scope 必填（发件授权，scope.ts）；brief = 只推标题时换上的那一版；tx = 和别的写放进同一个事务。
+   */
   async insert(input: {
     id?: string; dest: Destination; taskId: string | null; kind: string; subject: string; content: string; renderKey?: string;
     state?: string; msgType?: "interactive" | "text"; replyTo?: string | null; replyInThread?: boolean;
-  }): Promise<string | null> {
+    scope: OutboxScope; brief?: string | null;
+  }, tx?: ConclusionTransaction): Promise<string | null> {
     const at = now();
     const id = input.id ?? nanoid(20);
-    const rows = await db.insert(imOutbox).values({
+    const rows = await (tx ?? db).insert(imOutbox).values({
       id,
       channel: "feishu",
       appId: this.appId,
@@ -304,6 +311,8 @@ export class Reconciler {
       msgType: input.msgType ?? "interactive",
       content: input.content,
       renderKey: input.renderKey ?? null,
+      scope: JSON.stringify(input.scope),
+      brief: input.brief ?? null,
       state: input.state ?? "pending",
       createdAt: at,
       updatedAt: at,
@@ -313,9 +322,10 @@ export class Reconciler {
 
   /** 一条附在原卡下面的文字通知（回复那张卡，手机上会有提醒，原卡改动不会）。 */
   private async notice(row: OutboxRow, text: string, subject: string): Promise<void> {
+    const dest: Destination = { receiveType: row.receiveType as Destination["receiveType"], receiveId: row.receiveId, recipientOpenId: row.recipientOpenId };
     await this.insert({
-      dest: { receiveType: row.receiveType as Destination["receiveType"], receiveId: row.receiveId, recipientOpenId: row.recipientOpenId },
-      taskId: row.taskId, kind: "notice", subject, msgType: "text", content: JSON.stringify({ text }), replyTo: row.messageId,
+      dest, taskId: row.taskId, kind: "notice", subject, msgType: "text", content: JSON.stringify({ text }), replyTo: row.messageId,
+      scope: scopeOfRow(row) ?? await scopeFor(this.appId, dest, { kind: "task", taskId: row.taskId ?? "" }),
     });
   }
 
@@ -327,11 +337,10 @@ export class Reconciler {
     if (!held.length) return;
     const rowId = nanoid(20);
     const envelope = await createEnvelope({ outboxId: rowId, taskId: null, action: "summary", recipientOpenId: dest.recipientOpenId, generation: "summary" });
-    const items = held.map((row) => {
-      const header = cardHeaderOf(row.content);
-      return { title: header.title, kind: row.kind as Turn["kind"], projectName: header.subtitle?.split(" · ")[0] ?? "" };
+    await this.insert({
+      id: rowId, dest, taskId: null, kind: "summary", subject: `s:${Date.now()}`, content: JSON.stringify(renderCard(summaryCard(summaryItems(held), envelope))),
+      scope: await scopeFor(this.appId, dest, { kind: "digest", rowIds: held.map((row) => row.id) }),
     });
-    await this.insert({ id: rowId, dest, taskId: null, kind: "summary", subject: `s:${Date.now()}`, content: JSON.stringify(renderCard(summaryCard(items, envelope))) });
   }
 
   /** 把这个收件人 held 的卡放出去几张（/todo、汇总卡上的按钮）。返回放了几张、还剩几张。 */

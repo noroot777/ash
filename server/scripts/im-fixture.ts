@@ -10,7 +10,6 @@ import { AshClient } from "../src/im/ash-client.js";
 import { CommandRunner } from "../src/im/commands.js";
 import { FeishuApi } from "../src/im/feishu/api.js";
 import { InboundRouter, type MessageEvent } from "../src/im/inbound.js";
-import { OutboxSender } from "../src/im/outbox.js";
 import { QuotaMeter } from "../src/im/quota.js";
 import { Reconciler } from "../src/im/reconcile.js";
 import { RoomRelay } from "../src/im/relay.js";
@@ -106,8 +105,8 @@ export async function assemble(app: Hono, fake: FakeFeishu) {
   meter.setQuota(1_000_000);
   const api = new FeishuApi({ appId: APP, appSecret: "s", domain: "https://open.fake", beforeCall: (kind, purpose) => meter.take(kind, purpose), deps: { fetch: fake.fetch } });
   const ash = new AshClient(app.fetch);
-  const sender = new OutboxSender(api, APP, { now: () => Date.now(), sleep: async () => {} });
-  const reconciler = new Reconciler(APP, sender);
+  const reconciler = new Reconciler(APP, api, { now: () => Date.now(), sleep: async () => {} });
+  const sender = reconciler.sender;
   const commands = new CommandRunner({ appId: APP, ash, reconciler });
   const actions = new CardActions({ appId: APP, ash, reconciler, sender, commands });
   const relay = new RoomRelay({ appId: APP, ash, commands });

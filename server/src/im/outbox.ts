@@ -9,10 +9,12 @@
 // 一行的生命：pending →（发出）sent →（别处处理掉 / 换了下一步）resolved；held = 已登记、
 // 先不推（一口气积压太多时只发一张汇总，逐张的等用户要）；重试耗尽 → dead。
 // 改卡单独记在 patch_state：pending / result = 库里的 content 比飞书上那张新，要 PATCH 过去
-// （result = 回写用户刚点的那一下，额度见底也照发）；done / skipped / failed 是结果。
+// （result = 回写用户刚点的那一下，额度见底也照发）；acking = 结果卡已随卡片回调回执带回去、还没确认
+// 送到，next_at 到期还没确认就当 result 改一次（至少交付一次，同样的内容改两次没有副作用）；
+// done / skipped / failed 是结果。改卡失败按 next_at 退避，不在同一圈里连撞。
 //
-// 发件边界还要再核一次（guard，由对账器挂上）：入队时的授权与隐私设置不是发出那一刻的 ——
-// 排着队的时候项目可能改成了只推标题、收件人可能被移出了项目、进程可能刚重启还没对过账。
+// 发出和改卡都要先过出口核对（OutboxGuard，构造时必须给，由对账器实现）：入队时的授权与隐私设置
+// 不是发出那一刻的 —— 排着队的时候收件人可能解了绑、被移出了项目，项目可能改成了只推标题（scope.ts）。
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { imOutbox } from "../db/schema-im.js";
@@ -38,6 +40,8 @@ export const DECISION_OUTBOX_KINDS = ["question", "failed", "dispute", "duet_gat
 
 export function purposeOfKind(kind: string): ImPurpose {
   if ((DECISION_OUTBOX_KINDS as readonly string[]).includes(kind)) return "decision";
+  // fail = 点下去没办成的原因：和回写结果同一个用途，额度见底也要让他知道那一下没生效。
+  if (kind === "fail") return "result";
   if (kind === "reply" || kind === "bind") return "reply";
   return "notice";
 }
@@ -52,13 +56,20 @@ export function cardHeaderOf(content: string): { title: string; subtitle?: strin
   }
 }
 
-/** 发之前的最后一道核对：返回此刻该发的那一行（内容可能刚重渲染过），null = 不发了。 */
-export type SendGuard = (row: OutboxRow) => Promise<OutboxRow | null>;
+/**
+ * 出口核对。返回此刻该发 / 该改成的那一行（内容可能刚重渲染过、换成了只推标题版、或者收件人已无权查看
+ * 而换成了中性的收起卡），null = 不发了 / 不用改了。
+ */
+export interface OutboxGuard {
+  send(row: OutboxRow): Promise<OutboxRow | null>;
+  patch(row: OutboxRow): Promise<OutboxRow | null>;
+}
 
 const GUARD_RETRY_MS = 30_000;
+/** 还要改到飞书上的（acking 另按期限算）。 */
+const PATCHING = ["pending", "result"];
 
 export class OutboxSender {
-  private guard: SendGuard | null = null;
   private running = false;
   private again = false;
   private stopped = false;
@@ -67,15 +78,12 @@ export class OutboxSender {
   constructor(
     private readonly api: FeishuApi,
     private readonly appId: string,
+    private readonly guard: OutboxGuard,
     private readonly clock: { now: () => number; sleep: (ms: number) => Promise<void> } = {
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); }),
     },
   ) {}
-
-  setGuard(guard: SendGuard): void {
-    this.guard = guard;
-  }
 
   start(): void {
     this.stopped = false;
@@ -119,31 +127,49 @@ export class OutboxSender {
   }
 
   private async nextPatch(): Promise<OutboxRow | null> {
+    const at = new Date(this.clock.now()).toISOString();
     return (await db.select().from(imOutbox).where(and(
-      eq(imOutbox.appId, this.appId), isNotNull(imOutbox.messageId), inArray(imOutbox.patchState, ["pending", "result"]),
+      eq(imOutbox.appId, this.appId), isNotNull(imOutbox.messageId),
+      or(
+        and(inArray(imOutbox.patchState, PATCHING), or(isNull(imOutbox.nextAt), lte(imOutbox.nextAt, at))),
+        and(eq(imOutbox.patchState, "acking"), lte(imOutbox.nextAt, at)),
+      ),
     )).orderBy(asc(imOutbox.updatedAt)).limit(1)).at(0) ?? null;
+  }
+
+  /** 核对本身出错（读库失败等）：宁可晚发，不在没核过的情况下发 / 改。 */
+  private async guarded(row: OutboxRow, mode: keyof OutboxGuard): Promise<OutboxRow | null | "error"> {
+    try {
+      return await this.guard[mode](row);
+    } catch (error) {
+      console.error(`[ash] 飞书${mode === "send" ? "发件" : "改卡"}前核对出错:`, error);
+      await db.update(imOutbox).set({ nextAt: new Date(this.clock.now() + GUARD_RETRY_MS).toISOString(), updatedAt: now() })
+        .where(eq(imOutbox.id, row.id));
+      return "error";
+    }
   }
 
   private async drain(): Promise<void> {
     while (!this.stopped) {
       // 改卡排在发新卡前面：回写结果是用户正盯着看的。
       const patch = await this.nextPatch();
-      if (patch) { await this.patchOne(patch); await this.clock.sleep(SPACING_MS); continue; }
-      const next = await this.nextSend();
-      if (!next) return;
-      let send: OutboxRow | null = next;
-      if (this.guard) {
-        try {
-          send = await this.guard(next);
-        } catch (error) {
-          // 核对本身出错（读库失败等）：宁可晚发，不在没核过的情况下发。
-          console.error("[ash] 飞书发件前核对出错:", error);
-          await db.update(imOutbox).set({ nextAt: new Date(this.clock.now() + GUARD_RETRY_MS).toISOString(), updatedAt: now() })
-            .where(eq(imOutbox.id, next.id));
+      if (patch) {
+        const vetted = await this.guarded(patch, "patch");
+        if (vetted === "error") continue;
+        if (!vetted) {
+          // 不用改了（行没了、没有可改的消息）：标掉，免得下一圈又捡到它。
+          await db.update(imOutbox).set({ patchState: "skipped", updatedAt: now() })
+            .where(and(eq(imOutbox.id, patch.id), eq(imOutbox.content, patch.content), eq(imOutbox.patchState, patch.patchState!)));
           continue;
         }
+        await this.patchOne(vetted);
+        await this.clock.sleep(SPACING_MS);
+        continue;
       }
-      if (!send) continue;
+      const next = await this.nextSend();
+      if (!next) return;
+      const send = await this.guarded(next, "send");
+      if (!send || send === "error") continue;
       await this.sendOne(send);
       await this.clock.sleep(SPACING_MS);
     }
@@ -159,12 +185,19 @@ export class OutboxSender {
     if (res.ok) {
       // 发出去的这段时间里它可能已经被收掉（resolved）、或者重渲染过：库里那份才是该有的样子，
       // 与刚发出去的不一样就排一次改卡（SET 里的列都按更新前的值算）。
+      // 已经排着结果回写的（result / acking）不降级成 pending：那是额度见底也要发的用途。
       await db.update(imOutbox).set({
         messageId: res.data.messageId,
         sentAt: at,
         updatedAt: at,
         state: sql`CASE WHEN ${imOutbox.state} = 'pending' THEN 'sent' ELSE ${imOutbox.state} END`,
-        patchState: sql`CASE WHEN ${imOutbox.state} = 'resolved' OR ${imOutbox.content} <> ${row.content} THEN 'pending' ELSE ${imOutbox.patchState} END`,
+        // 文字消息改不了，不排改卡。
+        ...(row.msgType !== "interactive" ? {} : {
+          patchState: sql`CASE WHEN ${imOutbox.patchState} IN ('result', 'acking') THEN 'result'
+            WHEN ${imOutbox.state} = 'resolved' OR ${imOutbox.content} <> ${row.content} THEN 'pending' ELSE ${imOutbox.patchState} END`,
+        }),
+        attempts: 0,
+        nextAt: null,
         lastError: null,
       }).where(eq(imOutbox.id, row.id));
       return;
@@ -187,22 +220,32 @@ export class OutboxSender {
   }
 
   private async patchOne(row: OutboxRow): Promise<void> {
-    const purpose: ImPurpose = row.patchState === "result" ? "result" : row.state === "resolved" ? "resolved" : "decision";
+    const purpose: ImPurpose = row.patchState === "result" || row.patchState === "acking" ? "result" : row.state === "resolved" ? "resolved" : "decision";
     const snapshot = row.content;
     const res = await this.api.patchCard(row.messageId!, JSON.parse(snapshot), purpose);
     const at = now();
-    // 改卡期间 content 又变了（又一次对账）：保持 pending，下一圈再改一次。
-    const settled = res.ok ? "done" : isQuotaBlocked(res) ? "skipped" : res.retryable && row.attempts < 3 ? null : "failed";
-    if (settled === null) {
-      await db.update(imOutbox).set({ attempts: row.attempts + 1, lastError: `${res.ok ? "" : `${res.code} ${res.msg}`}`.slice(0, 500), updatedAt: at })
-        .where(eq(imOutbox.id, row.id));
+    if (res.ok) {
+      // 改卡期间 content 又变了（又一次对账）：CAS 落空，保持待改，下一圈再改一次。
+      await db.update(imOutbox).set({ patchState: "done", attempts: 0, nextAt: null, lastError: null, updatedAt: at })
+        .where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot)));
       return;
     }
+    const lastError = `${res.code} ${res.msg}`.slice(0, 500);
+    if (isQuotaBlocked(res)) {
+      await db.update(imOutbox).set({ patchState: "skipped", lastError, updatedAt: at }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot)));
+      return;
+    }
+    const attempts = row.attempts + 1;
+    if (!res.retryable || attempts > BACKOFF_MS.length) {
+      await db.update(imOutbox).set({ patchState: "failed", attempts, lastError, updatedAt: at }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot)));
+      console.warn(`[ash] 飞书改卡放弃（${row.kind} ${row.taskId ?? ""}）：${lastError}`);
+      return;
+    }
+    // 退避重试。acking 到这里已经过期没确认，改成 result 继续按退避改。
     await db.update(imOutbox).set({
-      patchState: settled,
-      updatedAt: at,
-      ...(res.ok ? {} : { lastError: `${res.code} ${res.msg}`.slice(0, 500) }),
-    }).where(and(eq(imOutbox.id, row.id), eq(imOutbox.content, snapshot)));
+      attempts, lastError, updatedAt: at, nextAt: new Date(this.clock.now() + BACKOFF_MS[attempts - 1]!).toISOString(),
+      ...(row.patchState === "acking" ? { patchState: "result" } : {}),
+    }).where(eq(imOutbox.id, row.id));
   }
 }
 

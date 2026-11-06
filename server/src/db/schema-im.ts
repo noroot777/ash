@@ -84,10 +84,18 @@ export const imOutbox = sqliteTable("im_outbox", {
    * 「还是那件事」，说明不了「卡片内容还对不对」—— 设置改了、标题改了，代次不变、内容要重渲染。
    */
   renderKey: text("render_key"),
+  /** 这份内容凭什么能给这个收件人看（JSON，im/scope.ts）：发出、改卡、回调回执三个出口都按它现算资格。 */
+  scope: text("scope"),
+  /** 只推标题版的内容：项目此刻设成了只推标题时，出口换成这一份（content 里带着答复原文、出错原因这类细节）。 */
+  brief: text("brief"),
   /** pending → sent；决策类卡片在别处处理掉后 → resolved；重试耗尽 → dead。 */
   state: text("state").notNull(),
   messageId: text("message_id"),
-  /** resolved 之后要不要/有没有把卡改成「已处理」：pending / done / skipped（额度不够时跳过）。 */
+  /**
+   * 库里的 content 要不要改到飞书那张卡上：pending / result（回写用户刚点的那一下，额度见底也照发）/
+   * acking（结果卡随卡片回调回执带回去了、还没确认送到 —— next_at 到期没确认就当 result 改一次）；
+   * done / skipped / failed 是结果。
+   */
   patchState: text("patch_state"),
   resolution: text("resolution"),
   attempts: integer("attempts").notNull().default(0),
@@ -122,6 +130,8 @@ export const imActions = sqliteTable("im_actions", {
   /** 占用它的那个进程（envelopes.ts 的 CLAIMER）。重启后占用者不在了，由 actions.ts 的 recover 收尾。 */
   claimedBy: text("claimed_by"),
   result: text("result"),
+  /** 办完了、还没记进任务时间线的那一句（和结局同一个事务写下；记上了清空，重启后补记）。 */
+  audit: text("audit"),
   createdAt: text("created_at").notNull(),
 }, (t) => [index("im_actions_outbox").on(t.outboxId)]);
 
@@ -140,6 +150,8 @@ export const imInbound = sqliteTable("im_inbound", {
   /** 实际送进 ash 的正文（附件转存后的路径也定在这里，重试时用同一份，chat 的幂等要求逐字节相同）。 */
   body: text("body"),
   attachments: text("attachments"),
+  /** 聊天房间的回复发回飞书时凭的授权来源（JSON，im/scope.ts）：投进房间那一刻盖下。 */
+  scope: text("scope"),
   /** 消息事件原文（JSON）：重启时还没处理完的，照它重新处理一遍。 */
   payload: text("payload"),
   /**
@@ -202,7 +214,7 @@ export async function ensureImSchema(client: Client): Promise<void> {
       receive_type TEXT NOT NULL, receive_id TEXT NOT NULL, recipient_open_id TEXT,
       task_id TEXT, kind TEXT NOT NULL, subject TEXT NOT NULL,
       reply_to TEXT, reply_in_thread INTEGER NOT NULL DEFAULT 0,
-      msg_type TEXT NOT NULL, content TEXT NOT NULL, render_key TEXT, state TEXT NOT NULL, message_id TEXT,
+      msg_type TEXT NOT NULL, content TEXT NOT NULL, render_key TEXT, scope TEXT, brief TEXT, state TEXT NOT NULL, message_id TEXT,
       patch_state TEXT, resolution TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, next_at TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, sent_at TEXT, resolved_at TEXT
     );
@@ -213,13 +225,13 @@ export async function ensureImSchema(client: Client): Promise<void> {
     CREATE TABLE IF NOT EXISTS im_actions (
       id TEXT PRIMARY KEY, outbox_id TEXT NOT NULL, task_id TEXT, action TEXT NOT NULL,
       payload TEXT NOT NULL DEFAULT '{}', recipient_open_id TEXT NOT NULL, generation TEXT NOT NULL,
-      expires_at TEXT NOT NULL, used_at TEXT, claimed_by TEXT, result TEXT, created_at TEXT NOT NULL
+      expires_at TEXT NOT NULL, used_at TEXT, claimed_by TEXT, result TEXT, audit TEXT, created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS im_actions_outbox ON im_actions(outbox_id);
     CREATE TABLE IF NOT EXISTS im_inbound (
       id TEXT PRIMARY KEY, channel TEXT NOT NULL, app_id TEXT NOT NULL,
       open_id TEXT, chat_id TEXT, chat_type TEXT, kind TEXT NOT NULL,
-      task_id TEXT, room_id TEXT, body TEXT, attachments TEXT, payload TEXT,
+      task_id TEXT, room_id TEXT, body TEXT, attachments TEXT, scope TEXT, payload TEXT,
       state TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS im_inbound_state ON im_inbound(state);
@@ -237,8 +249,12 @@ export async function ensureImSchema(client: Client): Promise<void> {
   // 早期库补列（CREATE TABLE IF NOT EXISTS 不会给已有的表加列）。
   const added: [table: string, column: string, ddl: string][] = [
     ["im_outbox", "render_key", "ALTER TABLE im_outbox ADD COLUMN render_key TEXT"],
+    ["im_outbox", "scope", "ALTER TABLE im_outbox ADD COLUMN scope TEXT"],
+    ["im_outbox", "brief", "ALTER TABLE im_outbox ADD COLUMN brief TEXT"],
+    ["im_actions", "audit", "ALTER TABLE im_actions ADD COLUMN audit TEXT"],
     ["im_actions", "claimed_by", "ALTER TABLE im_actions ADD COLUMN claimed_by TEXT"],
     ["im_inbound", "payload", "ALTER TABLE im_inbound ADD COLUMN payload TEXT"],
+    ["im_inbound", "scope", "ALTER TABLE im_inbound ADD COLUMN scope TEXT"],
   ];
   for (const [table, column, ddl] of added) {
     const columns = await client.execute(`PRAGMA table_info(${table})`);

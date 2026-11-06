@@ -3,15 +3,15 @@
 //   · 项目绑了群、而且打开了「卡片推到群里」：推到群里（谁点按钮就以谁的身份执行）。
 //   · 否则推给**任务的主人**的单聊：自用模式是机主那一个绑定；多人模式是任务 owner 的绑定。
 // 推之前再核一遍这个人现在还能不能看见这个任务（多人模式下被移出项目、账号停用的不推）——
-// 推出去的卡上有任务标题，等于把任务给他看了。入队到发出之间这些也可能变，所以发件边界
-// 还要按 stillEntitled 再核一次（reconcile.ts vet）。
+// 推出去的卡上有任务标题，等于把任务给他看了。入队到发出之间这些也可能变，所以发件、改卡前
+// 还要按行上记的授权来源再核一次（scope.ts / exits.ts）。
 import { canSeeProject } from "../auth/visibility.js";
 import { imActorFor } from "../auth/im-actor.js";
 import { isMultiUser } from "../auth/mode.js";
 import type { TaskView } from "./attention.js";
-import { bindingOf, bindingOfOwner, bindingsOfApp, CHANNEL, ownerKeyOf, type BindingRow } from "./binding.js";
-import { groupOf, pushGroupOf } from "./groups.js";
-import type { Destination, OutboxRow } from "./outbox.js";
+import { bindingOfOwner, bindingsOfApp, CHANNEL, ownerKeyOf, type BindingRow } from "./binding.js";
+import { pushGroupOf } from "./groups.js";
+import type { Destination } from "./outbox.js";
 
 async function usable(binding: BindingRow, projectId: string): Promise<boolean> {
   const actor = await imActorFor({ channel: CHANNEL, appId: binding.appId, openId: binding.openId });
@@ -36,14 +36,4 @@ export async function destinationsFor(appId: string, view: TaskView): Promise<De
     }
   }
   return out;
-}
-
-/**
- * 一条挂着任务的消息（合并通知、回执）此刻还能不能发到它的收件人：单聊 = 那个人的绑定还在、
- * 还看得见这个项目；群 = 这个群此刻还绑在这个项目上。
- */
-export async function stillEntitled(appId: string, row: Pick<OutboxRow, "receiveType" | "receiveId">, projectId: string): Promise<boolean> {
-  if (row.receiveType === "chat_id") return (await groupOf(appId, row.receiveId))?.projectId === projectId;
-  const binding = await bindingOf(appId, row.receiveId);
-  return !!binding && await usable(binding, projectId);
 }

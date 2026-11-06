@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { freeReviewRuns, regressionEvidence, tasks } from "./db/schema.js";
 import type { ReviewTargetIdentity } from "./db/schema-regression-evidence.js";
@@ -136,6 +136,18 @@ const belongsTo = (origin: WaitOrigin | undefined, state: EvidenceRow) => origin
 
 export function questionWaitMatches(owner: TaskRow, question = owner.waitOwnership?.question): boolean {
   return !!question && owner.question === question.text && owner.questionOptions === question.options && owner.questionItems === question.items;
+}
+
+/**
+ * 「这一次提问」的身份：同样的题面再问一次也是另一次。提问占位（每次 ask 一个随机 id）对得上就用它；
+ * 老数据没有占位，退回到「第几次提问 + 题面指纹」。飞书卡片记着发卡时的这个值，答复时带回来核
+ * （task-question-record.ts），旧卡答不中新的那一次。
+ */
+export function questionOccurrenceOf(owner: TaskRow): string {
+  if (questionWaitMatches(owner)) return `q:${owner.waitOwnership!.question!.occupancy}`;
+  const history = owner.questionHistory ? (JSON.parse(owner.questionHistory) as unknown[]).length : 0;
+  const text = `${owner.question}\n${owner.questionOptions ?? ""}\n${owner.questionItems ?? ""}`;
+  return `q:${history}:${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
 }
 
 export async function expireTaskWait(transaction: ConclusionTransaction, owner: TaskRow, state: EvidenceRow): Promise<boolean> {

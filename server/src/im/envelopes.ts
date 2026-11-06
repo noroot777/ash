@@ -10,10 +10,16 @@
 // 占用记下是哪个进程占的（claimed_by）：点下去之后、办完之前进程没了，信封就停在「已占用、没结果」，
 // 永远显示「已经处理过了」。重启后 unfinishedEnvelopes 把这些找出来，由 actions.ts 判断那一下到底
 // 办成了没有 —— 不能一股脑放回去，办成了的再执行一遍就是重复副作用。
-import { and, eq, isNotNull, isNull, ne, or } from "drizzle-orm";
+//
+// 结局（finish 办完 / release 放回）只能和它要交付的东西 —— 卡上该显示的样子、待改卡的标记、失败原因
+// 那条回复 —— 在同一个事务里写（actions.ts commit）：result 一旦非空，unfinishedEnvelopes 就再也
+// 看不到它，「有结局」必须能推出「发件表里已经有一条持久的待交付」。所以这两个函数只收事务，并且按
+// 「还被同一个占用者占着、还没有结局」做 CAS，落空就整笔不做。
+import { and, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "../db/index.js";
-import { imActions } from "../db/schema-im.js";
+import { imActions, imOutbox } from "../db/schema-im.js";
+import type { ConclusionTransaction } from "../regression-conclusion-commit.js";
 import { now } from "../util.js";
 
 export const ENVELOPE_TTL_MS = 14 * 24 * 3600_000;
@@ -68,26 +74,52 @@ export async function checkEnvelope(envelopeId: string, operatorOpenId: string, 
   return { ok: true, envelope, payload };
 }
 
-/** 占用信封。返回 false = 刚被另一下点击抢先了。result 清空：上一次没做成留下的原因不算「办完了」。 */
-export async function claimEnvelope(envelopeId: string): Promise<boolean> {
-  const rows = await db.update(imActions).set({ usedAt: now(), claimedBy: CLAIMER, result: null })
+/** 一次占用：哪个信封、被谁、在什么时候占着（同一个进程放回再点是另一次占用）。结局按它做 CAS。 */
+export interface Claim { id: string; claimedBy: string | null; usedAt: string }
+
+/** 占用信封。返回 null = 刚被另一下点击抢先了。result 清空：上一次没做成留下的原因不算「办完了」。 */
+export async function claimEnvelope(envelopeId: string): Promise<Claim | null> {
+  const usedAt = now();
+  const rows = await db.update(imActions).set({ usedAt, claimedBy: CLAIMER, result: null })
     .where(and(eq(imActions.id, envelopeId), isNull(imActions.usedAt))).returning({ id: imActions.id });
-  return rows.length > 0;
+  return rows.length ? { id: envelopeId, claimedBy: CLAIMER, usedAt } : null;
 }
 
-/** 动作没做成（接口拒了）：放回去，用户改改还能再点。 */
-export async function releaseEnvelope(envelopeId: string, result: string): Promise<void> {
-  await db.update(imActions).set({ usedAt: null, claimedBy: null, result }).where(eq(imActions.id, envelopeId));
+export const claimOf = (envelope: EnvelopeRow): Claim => ({ id: envelope.id, claimedBy: envelope.claimedBy, usedAt: envelope.usedAt ?? "" });
+
+const stillClaimed = (claim: Claim) => and(
+  eq(imActions.id, claim.id), eq(imActions.usedAt, claim.usedAt), isNull(imActions.result),
+  claim.claimedBy === null ? isNull(imActions.claimedBy) : eq(imActions.claimedBy, claim.claimedBy),
+);
+
+/** 动作没做成（接口拒了）：放回去，用户改改还能再点。返回 false = 已经不归这次占用（整笔回滚）。 */
+export async function releaseEnvelope(tx: ConclusionTransaction, claim: Claim, result: string): Promise<boolean> {
+  return (await tx.update(imActions).set({ usedAt: null, claimedBy: null, result })
+    .where(stillClaimed(claim)).returning({ id: imActions.id })).length > 0;
 }
 
-export async function finishEnvelope(envelopeId: string, result: string): Promise<void> {
-  await db.update(imActions).set({ result }).where(eq(imActions.id, envelopeId));
+/** 办完了（或判定为中断）。audit = 还要记进任务时间线的那一句（记上后 auditDone 清掉）。 */
+export async function finishEnvelope(tx: ConclusionTransaction, claim: Claim, result: string, audit: string | null = null): Promise<boolean> {
+  return (await tx.update(imActions).set({ result, audit })
+    .where(stillClaimed(claim)).returning({ id: imActions.id })).length > 0;
+}
+
+export async function auditDone(envelopeId: string): Promise<void> {
+  await db.update(imActions).set({ audit: null }).where(eq(imActions.id, envelopeId));
+}
+
+/** 这个应用发出去的卡上的信封（换过应用的旧信封归旧应用，不在这里收尾）。 */
+const ofApp = (appId: string) => inArray(imActions.outboxId, db.select({ id: imOutbox.id }).from(imOutbox).where(eq(imOutbox.appId, appId)));
+
+/** 有结局、时间线那一句还没记上的（记的途中退出了）。 */
+export async function unauditedEnvelopes(appId: string): Promise<EnvelopeRow[]> {
+  return db.select().from(imActions).where(and(isNotNull(imActions.result), isNotNull(imActions.audit), ofApp(appId)));
 }
 
 /** 别的进程（上一次运行）占着、没办完的信封。 */
-export async function unfinishedEnvelopes(): Promise<EnvelopeRow[]> {
+export async function unfinishedEnvelopes(appId: string): Promise<EnvelopeRow[]> {
   return db.select().from(imActions).where(and(
     isNotNull(imActions.usedAt), isNull(imActions.result),
-    or(isNull(imActions.claimedBy), ne(imActions.claimedBy, CLAIMER)),
+    or(isNull(imActions.claimedBy), ne(imActions.claimedBy, CLAIMER)), ofApp(appId),
   ));
 }

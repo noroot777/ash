@@ -21,7 +21,7 @@ import { searchAll } from "./search.js";
 import { repoKey } from "./git.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountChatRoutes } from "./chat/routes.js";
-import { mountImRoutes } from "./im/routes.js";
+import { mountImRoutes, mountImSweeps } from "./im/routes.js";
 import { feishuHealthPublic } from "./im/channel.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { mountWorkflowRoutes } from "./workflows.js";
@@ -71,6 +71,8 @@ import { visibleProjectIds } from "./auth/visibility.js";
 import { canUseOwned, filterOwned, ownerStamp } from "./auth/owned.js";
 
 export const api = new Hono();
+// 改了谁能看哪张卡的那几条成功后叫飞书通道对账：包在它们外面，得最先挂（im/routes.ts mountImSweeps）。
+mountImSweeps(api);
 // 认证 / 首启向导 / 用户与项目成员。挂在最前:它们里有几条是**闸外**的公开端点
 // (见 auth/middleware.ts 的 PUBLIC 清单),前端得先问出「什么模式、我是谁」。
 mountAuthRoutes(api);
@@ -78,7 +80,6 @@ mountUserRoutes(api);
 mountPersonalCliRoutes(api);
 mountNoteRoutes(api);
 mountChatRoutes(api);
-// 得排在任务路由前面：它包着归档 / 删除这几条，成功后叫飞书通道对账（im/routes.ts 开头）。
 mountImRoutes(api);
 mountLocalOpenRoutes(api);
 mountDirectoryPickerRoutes(api);

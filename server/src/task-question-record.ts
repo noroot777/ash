@@ -7,6 +7,7 @@ import { tasks } from "./db/schema.js";
 import type { TaskRow } from "./task-store.js";
 import { now } from "./util.js";
 import type { ConclusionTransaction } from "./regression-conclusion-commit.js";
+import { questionOccurrenceOf } from "./task-wait-ownership.js";
 
 export function prepareQuestionRecord(task: TaskRow, answer: string, input: QuestionAnswerInput): QuestionRecord {
   const source: QuestionSource = {
@@ -16,6 +17,11 @@ export function prepareQuestionRecord(task: TaskRow, answer: string, input: Ques
   };
   if (input.questionKey !== undefined && input.questionKey !== questionKey(source)) {
     throw new Error("问题已更新，请查看最新问题后重新答复");
+  }
+  // 题面相同也可能是又问了一次：带着发问那一次身份来的（飞书卡片），只答那一次。之后到写入之间
+  // 任务再变，claimQuestionAnswer 按整行条件写，照样落空。
+  if (input.questionOccurrence !== undefined && input.questionOccurrence !== questionOccurrenceOf(task)) {
+    throw new Error("这道题已经答过或又问了一次，请查看最新问题后重新答复");
   }
   const answers = input.answers;
   if (answers !== undefined && (!Array.isArray(answers)

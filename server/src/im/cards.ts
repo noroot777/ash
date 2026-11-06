@@ -184,6 +184,17 @@ export function settledCard(
   };
 }
 
+/** 收件人已无权查看时改成的样子：不带任务标题、状态和链接（原卡上的正文还留在对方飞书里，得把它盖掉）。 */
+/** why 是出口判定的固定措辞（scope.ts 的 deny 原因），不含业务数据。 */
+export function neutralCard(why?: string): CardModel {
+  return { title: "ash", tone: "grey", blocks: [{ type: "text", text: why ? `这张卡已收起：${why}。` : "这张卡已收起。" }] };
+}
+
+/** /todo 的清单正文（出口重核后有几张不能再列时，用同一个样子重排）。 */
+export function todoText(titles: string[], total: number, tail: string): string {
+  return [`还有 ${total} 件事等你：`, ...titles.slice(0, 15).map((title) => `· ${title}`), tail].join("\n");
+}
+
 export interface SummaryItem {
   title: string;
   kind: Turn["kind"];

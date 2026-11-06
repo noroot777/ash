@@ -32,10 +32,11 @@ import { FeishuApi } from "./feishu/api.js";
 import { FeishuWsClient, type ConnStatus, type FeishuEnvelope } from "./feishu/ws-client.js";
 import { InboundRouter, type MessageEvent } from "./inbound.js";
 import { readMeta, readOptions, writeMeta } from "./meta.js";
-import { OutboxSender } from "./outbox.js";
+import type { OutboxSender } from "./outbox.js";
 import { QuotaMeter } from "./quota.js";
 import { Reconciler } from "./reconcile.js";
 import { RoomRelay } from "./relay.js";
+import { SYSTEM_SCOPE } from "./scope.js";
 
 const FULL_SWEEP_MS = 10 * 60_000;
 
@@ -138,15 +139,16 @@ async function bringUp(): Promise<void> {
   running.sender.start();
   running.relay.start();
   const self = running;
+  // 三件事各自兜底：取机器人信息、接管按钮失败了也照样对账（对账不靠它们）。
   void (async () => {
-    self.bot = await botOf(self);
-    await self.actions.recover();
+    self.bot = await botOf(self).catch((error) => { console.error("[ash] 飞书取机器人信息出错:", error); return null; });
+    await self.actions.recover().catch((error) => console.error("[ash] 飞书接管没收尾的按钮出错:", error));
     // 补办消息要下载附件、调接口，不让它挡着对账。
     await Promise.all([
       self.inbound.recover().catch((error) => console.error("[ash] 飞书接管未办完的消息出错:", error)),
-      self.reconciler.full(),
+      self.reconciler.full().catch((error) => console.error("[ash] 飞书通道初次对账出错:", error)),
     ]);
-  })().catch((error) => console.error("[ash] 飞书通道初次对账出错:", error));
+  })();
 }
 
 function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
@@ -156,8 +158,8 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
     beforeCall: (kind, purpose) => meter.take(kind, purpose),
   });
   const ash = new AshClient(fetch);
-  const sender = new OutboxSender(api, appId);
-  const reconciler = new Reconciler(appId, sender);
+  const reconciler = new Reconciler(appId, api);
+  const sender = reconciler.sender;
   const commands = new CommandRunner({ appId, ash, reconciler });
   const actions = new CardActions({ appId, ash, reconciler, sender, commands });
   const relay = new RoomRelay({ appId, ash, commands });
@@ -166,7 +168,8 @@ function assemble(credentials: FeishuCredentials, fetch: AppFetch): Running {
   const ws = new FeishuWsClient({
     appId, appSecret: credentials.appSecret, domain: domainUrl(credentials.domain),
     onEvent: (envelope) => dispatch(envelope, inbound, actions),
-    onAckLost: (envelope, result) => ackLost(envelope, result, appId, reconciler, sender),
+    onAcked: (envelope, result, elapsedMs) => acked(envelope, result, elapsedMs <= ACK_WINDOW_MS, appId, reconciler, sender),
+    onAckLost: (envelope, result) => acked(envelope, result, false, appId, reconciler, sender),
     onStatus: (status) => { if (status.state === "connected" && runtime) void announce(runtime); },
   });
   const unsubscribe = bus.subscribe((ev) => {
@@ -209,19 +212,23 @@ async function dispatch(envelope: FeishuEnvelope, inbound: InboundRouter, action
   return undefined;
 }
 
+/** 飞书等卡片回调回执的时限是 3 秒；离它太近才发出去的，当作没送到。 */
+const ACK_WINDOW_MS = 2_700;
+
 /**
- * 卡片回调的结果卡本该随回执带回去，回执却没送出（处理期间连接断了）：已经当场回写的那张卡
- * 改走一次改卡补上。
+ * 卡片回调的结果卡随回执带回去了（actions.ts 先记成 acking）。在时限内发出 → done；没发出去（处理
+ * 期间连接断了）或者超时 → result，改走一次改卡补上。进程死在这之前就都没来得及：acking 的期限一过，
+ * 发件队列照样会去改（outbox.ts nextPatch）。
  */
-function ackLost(envelope: FeishuEnvelope, result: unknown, appId: string, reconciler: Reconciler, sender: OutboxSender): void {
+function acked(envelope: FeishuEnvelope, result: unknown, delivered: boolean, appId: string, reconciler: Reconciler, sender: OutboxSender): void {
   if (envelope.eventType !== "card.action.trigger" || !(result && typeof result === "object" && "card" in result)) return;
   const messageId = (envelope.event as { context?: { open_message_id?: unknown } }).context?.open_message_id;
   if (typeof messageId !== "string" || !messageId) return;
   void reconciler.run(async () => {
-    await db.update(imOutbox).set({ patchState: "result", updatedAt: now() }).where(and(
-      eq(imOutbox.appId, appId), eq(imOutbox.messageId, messageId), eq(imOutbox.patchState, "done"),
+    await db.update(imOutbox).set({ patchState: delivered ? "done" : "result", nextAt: null, updatedAt: now() }).where(and(
+      eq(imOutbox.appId, appId), eq(imOutbox.messageId, messageId), eq(imOutbox.patchState, "acking"),
     ));
-  }).then(() => sender.kick()).catch((error) => console.error("[ash] 飞书回执补写出错:", error));
+  }).then(() => { if (!delivered) sender.kick(); }).catch((error) => console.error("[ash] 飞书回执确认出错:", error));
 }
 
 export function callbackOf(envelope: FeishuEnvelope): CallbackEvent | null {
@@ -274,6 +281,7 @@ async function announce(runtime: FeishuRuntime): Promise<void> {
       await runtime.reconciler.insert({
         dest: { receiveType: "open_id", receiveId: binding.openId, recipientOpenId: binding.openId },
         taskId: null, kind: "online", subject: `online:${process.pid}:${Date.now()}`, msgType: "text", content: JSON.stringify({ text }),
+        scope: SYSTEM_SCOPE,
       });
     }
   });

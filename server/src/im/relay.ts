@@ -6,6 +6,9 @@
 // 重启后重投也是同一条（chat 按 id + 正文判重）。
 //
 // 智能体回复对上用户那条消息靠 chat_messages.reply_to（同一事务里插入的那条回复）。
+//
+// 房间里的回复带着 ash 里的东西：投进房间那一刻按房间盖下授权来源（scope.ts room），记在 im_inbound 上，
+// 回复发回飞书时出口按它现核（房间还在、还归他、群还绑着那个项目）。
 import { createHash } from "node:crypto";
 import type { TaskListItem } from "@ash/shared";
 import type { ChatMessage, ChatRoom } from "@ash/shared/chat";
@@ -15,12 +18,13 @@ import { imInbound } from "../db/schema-im.js";
 import { now } from "../util.js";
 import type { ImPrincipal } from "../auth/im-actor.js";
 import type { AshClient } from "./ash-client.js";
-import { CHANNEL, updateBinding } from "./binding.js";
+import { bindingOf, CHANNEL, updateBinding } from "./binding.js";
 import { taskLink } from "./cards.js";
 import type { CommandRunner, InboundContext } from "./commands.js";
-import { groupRoomOf, setGroupRoom, type GroupRow } from "./groups.js";
+import { groupOf, groupRoomOf, setGroupRoom, type GroupRow } from "./groups.js";
 import { readOptions } from "./meta.js";
 import type { Destination } from "./outbox.js";
+import { scopeFor, type OutboxScope } from "./scope.js";
 import { scrubText, scrubTitle } from "./scrub.js";
 
 const POLL_MS = 2_000;
@@ -94,19 +98,23 @@ export class RoomRelay {
    * 把一句话投进房间。群聊房间里要 @ 成员才会有人答：自动在前面补上 @成员名。
    * 返回 false = 投递失败（已回过一句说明）。
    */
-  async post(ctx: InboundContext, inboundId: string, roomId: string, text: string, paths: string[], mentionName: string | null): Promise<boolean> {
+  async post(
+    ctx: InboundContext, inboundId: string, roomId: string, text: string, paths: string[], mentionName: string | null, projectId: string | null,
+  ): Promise<boolean> {
     const messageId = chatMessageIdOf(inboundId);
+    const scope = await this.deps.commands.scoped(ctx, { kind: "room", roomId, projectId });
     const body = mentionName ? `@${mentionName} ${text}` : text;
-    const projectId = ctx.chatType === "p2p" && ctx.binding.projectId ? { projectId: ctx.binding.projectId } : {};
+    const current = ctx.chatType === "p2p" && ctx.binding.projectId ? { projectId: ctx.binding.projectId } : {};
     const sent = await this.deps.ash.post(ctx.principal, `/api/chats/${encodeURIComponent(roomId)}/messages`, {
-      id: messageId, body, ...(paths.length ? { attachments: paths } : {}), ...projectId,
+      id: messageId, body, ...(paths.length ? { attachments: paths } : {}), ...current,
     });
     if (!sent.ok) {
-      await this.deps.commands.say(ctx, `没能送进 ash：${sent.error}`);
+      await this.deps.commands.say(ctx, `没能送进 ash：${scrubText(sent.error, 300)}`, scope);
       await this.mark(inboundId, "failed", sent.error);
       return false;
     }
-    await db.update(imInbound).set({ state: "sent", roomId, detail: messageId, updatedAt: now() }).where(eq(imInbound.id, inboundId));
+    await db.update(imInbound).set({ state: "sent", roomId, detail: messageId, scope: JSON.stringify(scope), updatedAt: now() })
+      .where(eq(imInbound.id, inboundId));
     return true;
   }
 
@@ -136,11 +144,12 @@ export class RoomRelay {
       ? { receiveType: "open_id", receiveId: row.openId, recipientOpenId: row.openId }
       : { receiveType: "chat_id", receiveId: row.chatId, recipientOpenId: null };
     const feishuMessageId = row.id.replace(/^msg:/, "");
-    const reply = (text: string) => this.deps.commands.say({ messageId: feishuMessageId, dest }, text, `relay:${row.id}`);
+    const scope = await this.scopeOf(row, dest);
+    const reply = (text: string) => this.deps.commands.say({ messageId: feishuMessageId, dest }, text, scope, { subject: `relay:${row.id}` });
     const snapshot = await this.deps.ash.get<Snapshot>(principal, `/api/chats/${encodeURIComponent(row.roomId)}`);
     // 先把回复入队、再记结局：中间退出，下一圈还会再看这一行，同一个 subject 的回复入不了第二次。
     if (!snapshot.ok) {
-      await reply(`没拿到回复：${snapshot.error}`);
+      await reply(`没拿到回复：${scrubText(snapshot.error, 300)}`);
       return this.mark(row.id, "failed", snapshot.error);
     }
     const answers = snapshot.data.messages.filter((message) => message.role === "agent" && message.replyTo === row.detail);
@@ -169,5 +178,13 @@ export class RoomRelay {
     }
     await reply(lines.join("\n"));
     await this.mark(row.id, "replied", null);
+  }
+
+  /** 投进房间时盖下的来源。旧版本投的没有：按此刻的绑定补一份（群里的房间按群此刻绑的项目）。 */
+  private async scopeOf(row: typeof imInbound.$inferSelect, dest: Destination): Promise<OutboxScope> {
+    if (row.scope) return JSON.parse(row.scope) as OutboxScope;
+    const group = row.chatType === "p2p" ? null : await groupOf(this.deps.appId, row.chatId!);
+    return scopeFor(this.deps.appId, dest, { kind: "room", roomId: row.roomId!, projectId: group?.projectId ?? null },
+      row.chatType === "p2p" ? null : await bindingOf(this.deps.appId, row.openId!));
   }
 }

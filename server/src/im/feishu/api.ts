@@ -93,10 +93,11 @@ export class FeishuApi {
     }
     const contentType = response.headers.get("content-type") ?? "";
     if (binary && response.ok) {
-      // 下载成功时正文就是文件本身，哪怕它的类型是 JSON（用户发的 .json 文件）；只有明确长成
-      // 错误包装（数字 code 非 0 + msg）的才按接口错误算。
+      // 下载成功时正文就是文件本身，哪怕它的类型是 JSON（用户发的 .json 文件）。带着文件名
+      // （Content-Disposition）的就是文件；没有的，只有明确长成错误包装（数字 code 非 0 + msg）的才按接口错误算。
       const bytes = new Uint8Array(await response.arrayBuffer());
-      const failure = contentType.includes("application/json") ? errorEnvelopeOf(bytes) : null;
+      const named = !!response.headers.get("content-disposition");
+      const failure = !named && contentType.includes("application/json") ? errorEnvelopeOf(bytes) : null;
       if (!failure) return { ok: true, data: { bytes, contentType } };
       return { ok: false, code: failure.code, msg: failure.msg, retryable: RATE_LIMIT_CODES.has(failure.code) || TOKEN_INVALID_CODES.has(failure.code) };
     }

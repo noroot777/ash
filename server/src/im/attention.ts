@@ -11,7 +11,6 @@
 //   dispute   那条驳回所在的审查链 + 轮次（就是裁定接口的 target）
 //   duet_gate 闸口版本（duet/gate-version.ts）
 //   verify_failed / accept  这一版的结束时刻（团队取执行者里最晚的那个）
-import { createHash } from "node:crypto";
 import type { QuestionItem, Task } from "@ash/shared";
 import { questionItems, questionKey } from "@ash/shared/questions";
 import { humanTurnOf, type HumanTurnKind } from "@ash/shared/task-attention";
@@ -21,8 +20,8 @@ import { projects, tasks } from "../db/schema.js";
 import { freeReviewRuns } from "../db/schema-free-workflow.js";
 import { currentGateVersion } from "../duet/gate-version.js";
 import { unresolvedDisputes } from "../free-review-dispute.js";
-import { enrichTasks, toTaskListItem, type TaskRow } from "../task-store.js";
-import { questionWaitMatches } from "../task-wait-ownership.js";
+import { enrichTasks, toTaskListItem } from "../task-store.js";
+import { questionOccurrenceOf } from "../task-wait-ownership.js";
 
 export type Turn =
   | { kind: "question"; generation: string; questionKey: string; items: QuestionItem[] }
@@ -41,14 +40,6 @@ export interface TaskView {
 
 /** 卡片上带按钮的那几种（verify_failed 只是通知）。 */
 export const DECISION_KINDS: ReadonlySet<HumanTurnKind> = new Set(["question", "failed", "dispute", "duet_gate", "accept"]);
-
-const fingerprint = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 12);
-
-function questionGeneration(row: TaskRow): string {
-  if (questionWaitMatches(row)) return `q:${row.waitOwnership!.question!.occupancy}`;
-  const history = row.questionHistory ? (JSON.parse(row.questionHistory) as unknown[]).length : 0;
-  return `q:${history}:${fingerprint(`${row.question}\n${row.questionOptions ?? ""}\n${row.questionItems ?? ""}`)}`;
-}
 
 const latestEnd = (items: Pick<Task, "endedAt">[]) =>
   items.map((item) => item.endedAt ?? "").reduce((max, at) => (at > max ? at : max), "") || "-";
@@ -94,7 +85,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
     let turn: Turn | null = null;
     switch (kind) {
       case "question":
-        turn = { kind, generation: questionGeneration(row), questionKey: questionKey(task), items: questionItems(task) };
+        turn = { kind, generation: questionOccurrenceOf(row), questionKey: questionKey(task), items: questionItems(task) };
         break;
       case "failed":
         turn = { kind, generation: `f:${task.endedAt ?? task.updatedAt}` };

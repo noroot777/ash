@@ -4,8 +4,9 @@
 // ① 绑定码：单聊里发个人码 → 认领、回一句「回网页确认」；没绑定的人单聊只提示一次，群里不出声；
 //    群里没 @ 机器人的话一律不理；
 // ② 回复任务卡：此刻在等答复就是答复（多题按题号拆）；不是提问就当成发给任务的消息；收到点个表情；
-//    答复只认那张卡自己问的那道题：回旧提问卡、回别的卡都不答到眼下这道题上（带附件也一样）；
-//    回在机器人自己的文字回执下面，认话题根上那张卡；
+//    答复只认那张卡自己问的那一次：回旧提问卡、回别的卡都不答到眼下这道题上（带附件也一样）；
+//    回眼下这道题的卡带附件也是答复，附件跟着答复走；答复送到接口那一刻同一道题已经又问了一次
+//    （题面一模一样）→ 接口按那一次的身份拒收；回在机器人自己的文字回执下面，认话题根上那张卡；
 // ③ 命令：/help /project /new（先确认，点确定才建任务并开跑）/stop（先确认，取消就不停）/todo；
 //    不认识的消息类型回一句说明；
 // ④ 助手房间：单聊里直接说话 → 照最近一间助手房间的配置建一间「飞书」，投进去；回复按 reply_to
@@ -28,13 +29,15 @@ requireTmpDb("test-im-inbound");
 let failure: unknown = null;
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
-  const { projects, tasks } = await import("../src/db/schema.js");
+  const { projects, tasks, uploads: uploadRows } = await import("../src/db/schema.js");
   const { chatMessages, chatRooms } = await import("../src/db/schema-chat.js");
   const { imBindings, imInbound, imOutbox } = await import("../src/db/schema-im.js");
   const { and, eq, inArray } = await import("drizzle-orm");
   const { bindingOf, bindingView, createBindCode, rejectCode } = await import("../src/im/binding.js");
   const { confirmGroupCode, groupOf } = await import("../src/im/groups.js");
   const { chatMessageIdOf } = await import("../src/im/relay.js");
+  const { AshClient } = await import("../src/im/ash-client.js");
+  const { InboundRouter } = await import("../src/im/inbound.js");
   const { APP, OWNER, FakeFeishu, buildApp, assemble, contentOf, textOf, buttonsOf, waitIdle } = await import("./im-fixture.js");
 
   await ensureSchema();
@@ -139,7 +142,7 @@ try {
     assert.equal((await inboundOf(after)).detail, "stale_question", "答过的题再回不当答复");
     await waitIdle(() => statusOf("tg"), "paused");
 
-    // 带附件走的是「给任务发消息」，那条路会清掉眼下的提问 —— 回旧卡、回别的卡带图也得先拦下。
+    // 发给任务的消息会清掉眼下的提问 —— 回旧卡、回别的卡带图也得先拦下。
     await db.insert(tasks).values(task({ id: "th", title: "带图回旧卡", status: "paused", question: "选 A 还是 B？" }) as never);
     await im.reconciler.reconcile(["th"]);
     await im.settle();
@@ -171,6 +174,48 @@ try {
     assert.equal((await inboundOf(threaded)).kind, "answer", `话题里的回复认根上的提问卡：${(await inboundOf(threaded)).detail}`);
     assert.equal(await questionOf(), null);
     await waitIdle(() => statusOf("th"), "paused");
+
+    // 回眼下这道题的卡、只发了一张图：照样是答复，附件跟着答复进那一轮。
+    await db.insert(tasks).values(task({ id: "ti", title: "带图答复", status: "paused", question: "发张截图？" }) as never);
+    await im.reconciler.reconcile(["ti"]);
+    await im.settle();
+    const shot = await im.say({ messageType: "image", content: { image_key: "img_answer" }, parentId: (await cardOf("ti")).messageId! });
+    assert.equal((await inboundOf(shot)).kind, "answer", `带图回提问卡是答复：${(await inboundOf(shot)).detail}`);
+    const ti = (await db.select().from(tasks).where(eq(tasks.id, "ti"))).at(0)!;
+    assert.equal(ti.question, null);
+    assert.match(ti.questionHistory ?? "", /见附件/);
+    await waitIdle(() => statusOf("ti"), "paused");
+    assert.equal((await db.select().from(uploadRows).where(eq(uploadRows.taskId, "ti"))).length, 1, "附件跟着答复归到这个任务");
+
+    // 答复送到接口的那一刻，同一道题已经答过、又一字不差地问了一次：按发卡时那一次核，不答到新的这次上。
+    await db.insert(tasks).values(task({ id: "tj", title: "同题再问", status: "paused", question: "继续吗？" }) as never);
+    await im.reconciler.reconcile(["tj"]);
+    await im.settle();
+    const tjCard = await cardOf("tj");
+    const reasked = new AshClient(async (request: Request) => {
+      if (request.method === "POST" && new URL(request.url).pathname.endsWith("/tasks/tj/answer")) {
+        await db.update(tasks).set({
+          questionHistory: JSON.stringify([{ id: "h1", question: "继续吗？", answer: "早先答过", answeredAt: at, reply: "【答复】早先答过" }]),
+        }).where(eq(tasks.id, "tj"));
+      }
+      return app.fetch(request);
+    });
+    const racer = new InboundRouter({
+      appId: APP, api: im.api, ash: reasked, commands: im.commands, relay: im.relay, reconciler: im.reconciler, botOpenId: () => "ou_bot",
+    });
+    await racer.handle({
+      sender: { sender_id: { open_id: OWNER }, sender_type: "user" },
+      message: {
+        message_id: "om_race", chat_id: "oc_p2p", chat_type: "p2p", parent_id: tjCard.messageId!, root_id: tjCard.messageId!,
+        message_type: "image", content: JSON.stringify({ image_key: "img_race" }),
+      },
+    });
+    await im.settle();
+    assert.equal((await inboundOf("om_race")).state, "failed", "旧那一次的答复不落到新这一次上");
+    const tj = (await db.select().from(tasks).where(eq(tasks.id, "tj"))).at(0)!;
+    assert.equal(tj.question, "继续吗？", "新这一次还在等答复");
+    assert.equal((JSON.parse(tj.questionHistory!) as unknown[]).length, 1);
+    assert.match(textOf(contentOf(repliesTo("om_race")[0]!)), /没答上/);
   }
 
   // ── ③ 命令 ───────────────────────────────────────────────────────────────

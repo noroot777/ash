@@ -5,7 +5,7 @@ import type { ChatMember } from "@ash/shared/chat";
 import { isAllMention } from "@ash/shared/chat";
 import { db } from "../db/index.js";
 import { agents, chatRooms, projects, tasks } from "../db/schema.js";
-import { actorOf, isHumanPrincipal } from "../auth/context.js";
+import { actorOf, isHumanPrincipal, type Actor } from "../auth/context.js";
 import { canSeeProject } from "../auth/visibility.js";
 import { canUseOwned, filterOwned } from "../auth/owned.js";
 import { id } from "../util.js";
@@ -16,15 +16,24 @@ export async function visibleRoom(c: Context): Promise<RoomRow | undefined> {
   // 经飞书转述的本人（im 身份）也算：它的归属与可见性就是绑定的那个账号的（ownerIdOf）。
   if (!isHumanPrincipal(actor)) return;
   const row = (await db.select().from(chatRooms).where(eq(chatRooms.id, c.req.param("roomId")!))).at(0);
-  if (row?.kind === "side") {
+  if (row && await roomVisibleTo(row, actor)) return row;
+}
+
+/** 房间可见性的唯一判据（不依赖请求上下文：飞书发件出口也用它核「这条回复还能不能发给他」）。 */
+export async function roomVisibleTo(row: RoomRow, actor: Actor): Promise<boolean> {
+  if (row.kind === "side") {
     const parent = row.parentTaskId ? (await db.select().from(tasks).where(eq(tasks.id, row.parentTaskId))).at(0) : undefined;
-    if (!parent || parent.projectId !== row.projectId) return;
+    if (!parent || parent.projectId !== row.projectId) return false;
   }
-  if (row && await canUseOwned(row, actor) && ((row.kind === "assistant" && !row.projectId) || await visibleProject(c, row.projectId))) return row;
+  return await canUseOwned(row, actor) && ((row.kind === "assistant" && !row.projectId) || await projectVisibleTo(actor, row.projectId));
 }
 
 export async function visibleProject(c: Context, projectId: string) {
-  return await canSeeProject(actorOf(c), projectId) && (await db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId))).length > 0;
+  return projectVisibleTo(actorOf(c), projectId);
+}
+
+async function projectVisibleTo(actor: Actor, projectId: string) {
+  return await canSeeProject(actor, projectId) && (await db.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId))).length > 0;
 }
 
 export function isHumanRequest(c: Context) {

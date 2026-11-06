@@ -57,6 +57,8 @@ export interface FeishuWsOptions {
   domain: string;
   onEvent: (envelope: FeishuEnvelope) => Promise<unknown> | unknown;
   /** 事件处理完时收它的那条连接已经断了：回执（连同随回执带回的卡）没送出去。 */
+  /** 回执发出去了（只代表交给了那条连接；elapsedMs = 从收到事件到发出回执，飞书只等 3 秒）。 */
+  onAcked?: (envelope: FeishuEnvelope, result: unknown, elapsedMs: number) => void;
   onAckLost?: (envelope: FeishuEnvelope, result: unknown) => void;
   onStatus?: (status: ConnStatus) => void;
   deps?: Partial<FeishuWsDeps>;
@@ -353,7 +355,10 @@ export class FeishuWsClient {
       headers: [...frame.headers, { key: "biz_rt", value: String(this.deps.now() - started) }],
       payload: new TextEncoder().encode(JSON.stringify(resp)),
     }, source);
-    if (!acked && envelope && resp.code === 200) this.options.onAckLost?.(envelope, result);
+    if (envelope && resp.code === 200) {
+      if (acked) this.options.onAcked?.(envelope, result, this.deps.now() - started);
+      else this.options.onAckLost?.(envelope, result);
+    }
   }
 
   private merge(frame: Frame): Record<string, unknown> | null {
