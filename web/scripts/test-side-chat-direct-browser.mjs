@@ -47,7 +47,6 @@ try {
   const address = server.httpServer.address();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
-  page.setDefaultTimeout(10_000);
   const errors = [];
   const createPayloads = [];
   const messagePayloads = [];

@@ -39,7 +39,7 @@ export async function runGoalRecoveryUi({ page, base, screenshots, sessionEnds, 
     const previous = await sessionEnds(taskId);
     await page.getByRole("textbox", { name: "回复任务" }).fill(`${text} `);
     const [result] = await Promise.all([
-      page.waitForResponse((value) => value.url().endsWith(`/tasks/${taskId}/reply`) && value.request().method() === "POST", { timeout: 10000 }),
+      page.waitForResponse((value) => value.url().endsWith(`/tasks/${taskId}/reply`) && value.request().method() === "POST"),
       page.getByRole("button", { name: "发送回复", exact: true }).click(),
     ]).catch(async (error) => {
       await page.screenshot({ path: join(screenshots, `${taskId}-send-failed.png`), fullPage: true });

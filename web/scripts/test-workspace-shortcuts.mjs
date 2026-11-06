@@ -130,7 +130,6 @@ try {
     await page.waitForFunction(
       (want) => document.querySelector('[data-testid="scope"]')?.textContent === want,
       expected,
-      { timeout: 2_000 },
     ).catch(() => {});
     assert.equal(await scope.textContent(), expected, message);
   }

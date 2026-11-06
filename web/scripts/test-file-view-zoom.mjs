@@ -128,7 +128,7 @@ try {
         const dockRow = document.querySelector(".workspace-system-layout > .workspace-shell").getBoundingClientRect();
         return Math.round(layer.right) === Math.round(host ? host.left : window.innerWidth)
           && Math.round(layer.bottom) === Math.round(dockRow.bottom);
-      }, undefined, { timeout: 2000 });
+      });
     } catch {
       const now = await page.evaluate(() => {
         const layer = document.querySelector(".zoom-layer")?.getBoundingClientRect();

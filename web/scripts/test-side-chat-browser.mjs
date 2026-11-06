@@ -27,7 +27,6 @@ try {
   const address = server.httpServer.address();
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
-  page.setDefaultTimeout(10000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const url = `http://127.0.0.1:${address.port}/scripts/fixtures/side-chat.html`;

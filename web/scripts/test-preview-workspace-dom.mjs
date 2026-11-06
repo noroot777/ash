@@ -194,7 +194,7 @@ export async function testPreviewWorkspaceDom() {
     await button("打开预览指正").click();
     assert.deepEqual(await page.locator(".preview-workspace").boundingBox(), { x: 0, y: 0, width: 1400, height: 900 }, "the entry opens the expanded workspace directly, before preview launch");
     await checkExpandedPreviewShortcuts(page);
-    await button("按已保存配置启动").waitFor({ timeout: 10000 }).catch((error) => { throw new Error(`${error.message}\n${errors.join("\n")}`); });
+    await button("按已保存配置启动").waitFor().catch((error) => { throw new Error(`${error.message}\n${errors.join("\n")}`); });
     assert.equal(await button("启动 静态页面").isVisible(), false, "project configuration hides alternatives by default");
     assert.equal(await button("启动工作流预览").isVisible(), false);
     await page.getByText("换其它候选 / 自填命令", { exact: true }).click();

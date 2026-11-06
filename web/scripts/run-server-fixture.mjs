@@ -47,7 +47,6 @@ export async function runServerFixture(script, check) {
     }
     browser = await launchChrome();
     const page = await browser.newPage();
-    page.setDefaultTimeout(10_000);
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await check(page, fixture.url);

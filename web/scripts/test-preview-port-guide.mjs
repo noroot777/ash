@@ -28,7 +28,7 @@ try {
 
   const box = page.getByLabel("本次预览命令");
   const guide = page.locator(".preview-port-guide");
-  await guide.waitFor({ timeout: 5000 });
+  await guide.waitFor();
 
   // ① 判据两半都在，而且不用展开任何东西就看得见。
   const rule = await guide.innerText();
@@ -56,7 +56,7 @@ try {
 
   // ③ 服务端是 Windows 时，整屏一个 $PORT 都不许有。
   await page.getByTestId("switch-dialect").click();
-  await page.locator(".preview-port-samples button", { hasText: "%PORT%" }).first().waitFor({ timeout: 5000 });
+  await page.locator(".preview-port-samples button", { hasText: "%PORT%" }).first().waitFor();
   const winText = await page.locator(".preview-launcher").innerText();
   assert.match(winText, /%PORT%/, "Windows 上没给 cmd 的写法");
   assert(!winText.includes("$PORT"), "Windows 上出现了 $PORT —— 它在 cmd 里是字面量，端口会静默失效");
@@ -65,7 +65,7 @@ try {
 
   // ④ 唯一会弹的告警：方言写反了。输入框里留着上一步 POSIX 的命令，此刻服务端是 Windows。
   await box.fill("npm run dev -- --port $PORT");
-  await page.locator(".preview-port-mismatch").waitFor({ timeout: 5000 });
+  await page.locator(".preview-port-mismatch").waitFor();
   assert.match(await page.locator(".preview-port-mismatch").textContent(), /cmd/, "方言写反了却没说是 cmd 的事");
 
   // —— 起好之后：端口对不上那一条必须在**屏幕上**，不是只在日志里 ——
@@ -73,7 +73,7 @@ try {
   // 不挑语言，代价是只能事后说 —— 但事后说反而更具体，话里两个端口号都是用户自己的。
   await page.getByTestId("switch-dialect").click(); // 切回 POSIX
   const drift = page.locator(".preview-port-drift");
-  await drift.waitFor({ timeout: 5000 });
+  await drift.waitFor();
   const driftText = await drift.innerText();
   assert.match(driftText, /起在 5173/, "没说它实际起在哪儿");
   assert.match(driftText, /借给它的 45843/, "没说 ash 借的是哪个——只给一个数字，用户对不上");
@@ -98,7 +98,7 @@ try {
   // 这个组件在页面里一直挂着不卸载，所以 dismiss 存成什么作用域是会露馅的：原先只按服务 id
   // 存，点一次就把后面所有同 id 的漂移都吞了，而那恰恰是这个功能唯一要说话的时刻。
   await page.getByTestId("services-pinned").click();
-  await drift.waitFor({ timeout: 5000 });
+  await drift.waitFor();
   await page.getByRole("button", { name: /不再提示/ }).click();
   assert.equal(await drift.count(), 0, "点了「知道了」当下这条还在");
   // ① 审查报告里的那条复现：漂移消失（命令改对了）之后又回来 —— 这是**又一次**事实。

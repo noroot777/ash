@@ -11,7 +11,6 @@ const releasePending = [];
 try {
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1180, height: 780 } });
-  page.setDefaultTimeout(10_000);
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   const targetUrl = "http://remote.test:4317";

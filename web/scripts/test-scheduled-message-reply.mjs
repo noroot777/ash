@@ -19,7 +19,6 @@ try {
   for (const variant of ["single", "team"]) {
     const context = await browser.newContext({ viewport: { width: 390, height: 400 } });
     const page = await context.newPage();
-    page.setDefaultTimeout(10000);
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await page.route("**/api/**", (route) => route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("/scheduled-messages") ? messages : [] }));

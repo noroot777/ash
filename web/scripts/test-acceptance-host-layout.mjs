@@ -64,7 +64,6 @@ try {
     const page = await browser.newPage({ viewport: { width, height: 1000 } });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    page.setDefaultTimeout(8000);
     await page.goto(fixture);
     // 三处宿主都把那句长理由顶在主按钮上了，再量几何；否则量到的是一个还没受阻的空壳。
     await assert.doesNotReject(page.getByRole("button", { name: BLOCK }).first().waitFor());

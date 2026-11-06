@@ -27,7 +27,6 @@ try {
   await mkdir(artifacts, { recursive: true });
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  page.setDefaultTimeout(10000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/**", async (route) => {

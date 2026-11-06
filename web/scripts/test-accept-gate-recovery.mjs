@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { fetchLog, fetchesSettled, outlastPageTimers, settlePage, waitUntil } from "./wait-until.mjs";
+import { WAIT_TIMEOUT_MS, fetchLog, fetchesSettled, outlastPageTimers, settlePage, waitUntil } from "./wait-until.mjs";
+
+/** useAcceptGate 退避重试曲线的封顶那一档。 */
+const GATE_RETRY_CAP_MS = 10_000;
 
 const capture = async (page, name) => {
   if (process.env.ASH_BROWSER_EVIDENCE_DIR) {
@@ -69,8 +72,11 @@ export async function testAcceptGateRecovery({ open, run, basis }) {
     await capture(page, query ? "wait-stale-with-refresh" : "acceptance-stale-with-refresh");
     const reads = store.reads;
     store.status = 0;
-    if (query) await surface.waitFor({ state: "hidden", timeout: 6000 });
-    else await surface.filter({ hasText: "验收前置命令已通过" }).waitFor({ timeout: 6000 });
+    // 恢复靠的是追平层自己排的下一次退避重试（useAcceptGate 的曲线 1→2→4→8 秒、封顶 10 秒；
+    // 前面截图、换视口那几步的工夫里它可能已经退了几档），所以期限是「最长一档 + 落地」。
+    const recovery = { timeout: GATE_RETRY_CAP_MS + WAIT_TIMEOUT_MS };
+    if (query) await surface.waitFor({ state: "hidden", ...recovery });
+    else await surface.filter({ hasText: "验收前置命令已通过" }).waitFor(recovery);
     assert.ok(store.reads > reads, "a failed terminal read recovers without another SSE event or reconnect");
     assert.equal(store.canceled + store.handoffs + store.patches.length, 0);
     await capture(page, query ? "wait-recovered" : "acceptance-recovered");
