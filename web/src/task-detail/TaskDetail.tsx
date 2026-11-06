@@ -430,6 +430,7 @@ export function TaskDetail({
                   >
                   <ConversationFeed
                     task={task}
+                    requirement={{ text: task.body, at: task.createdAt }}
                     questionHistory={task.questionHistory}
                     liveQuestionHistory
                     historyReady={conversation.transcriptReady}

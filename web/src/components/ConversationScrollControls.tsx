@@ -2,6 +2,8 @@ import type { RefObject } from "react";
 import { ArrowDown, ArrowUp } from "@phosphor-icons/react";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import type { ConversationInput } from "../task-detail/conversationInputs.ts";
+import { ConversationInputRail } from "./ConversationInputRail.tsx";
 
 type ResetKey = string | number | null | undefined;
 
@@ -9,11 +11,18 @@ export function ConversationScrollControls({
   scrollRef,
   resetKey,
   tailKey,
+  inputs,
 }: {
   scrollRef: RefObject<HTMLElement | null>;
   resetKey: ResetKey;
   /** 会话内容版本(`contentVersion`),决定「多出要看的东西了要不要跟过去」。 */
   tailKey: string | number;
+  /**
+   * 我说过的话(`conversationInputs`):给了且不止一条,左侧就挂输入导航。跟上下两颗按钮
+   * 放在一起,是因为它也是「把视口挪到别处」的控件 —— 每一跳都得先跟贴底逻辑打招呼,
+   * 否则跳过去读着读着,下一条新消息就把人拽回了底部。
+   */
+  inputs?: readonly ConversationInput[];
 }) {
   const { noteUserScrollIntent, resume } = useStickToBottom(scrollRef, resetKey, tailKey);
   const { atTop, atBottom } = useScrollEdges(scrollRef, resetKey);
@@ -32,6 +41,15 @@ export function ConversationScrollControls({
 
   return (
     <>
+      {inputs && inputs.length > 1 && (
+        <ConversationInputRail
+          // 换任务即换一条导航：悬停、摊开、读到哪一条都不该带过去。
+          key={resetKey ?? undefined}
+          inputs={inputs}
+          scrollRef={scrollRef}
+          onReaderScroll={noteUserScrollIntent}
+        />
+      )}
       <button
         className={`conversation-scroll-button conversation-scroll-button--top${atTop ? " is-hidden" : ""}`}
         type="button"

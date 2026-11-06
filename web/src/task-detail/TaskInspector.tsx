@@ -16,7 +16,6 @@ import { taskParentLink } from "../components/TaskOrigin.tsx";
 import { taskCreationLabel } from "@ash/shared/task-origin";
 import { QueueDrawer } from "./QueueDrawer.tsx";
 import { InspectorPromptContent } from "./InspectorPromptContent.tsx";
-import { TaskFollowUps, type TaskFollowUp } from "./TaskFollowUps.tsx";
 import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
 import { formatInstant, formatInstantRange, taskDurationInfo } from "./utils.ts";
 
@@ -154,7 +153,7 @@ export function TaskInspector({
   groups: Group[];
   sessions: Session[];
   allTasks: TaskListItem[];
-  followUps?: TaskFollowUp[];
+  followUps?: { text: string; attachments: string[]; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
@@ -283,7 +282,23 @@ export function TaskInspector({
               <summary>原始需求</summary>
               <InspectorPromptContent text={task.body} emptyText="这个任务没有正文说明。" />
             </details>
-            <TaskFollowUps key={task.id} followUps={followUps} />
+            <details className="task-inspector-follow-ups">
+              <summary>后续追问</summary>
+              {followUps.length ? (
+                <ol>
+                  {followUps.map((followUp, index) => (
+                    <li key={`${followUp.at ?? "pending"}:${index}`}>
+                      {followUp.at && <time dateTime={followUp.at}>{formatInstant(followUp.at)}</time>}
+                      <InspectorPromptContent
+                        text={followUp.text}
+                        attachments={followUp.attachments}
+                        emptyText="（空消息）"
+                      />
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="task-inspector-note">暂无后续追问。</p>}
+            </details>
           </section>
         </ImagePreviewGroup>
 
