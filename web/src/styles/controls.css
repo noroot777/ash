@@ -274,6 +274,15 @@
   text-align: left;
 }
 
+/* 开关的标签是「已开启 / 提交」这类状态短词，必须整块一行。它常被放在 space-between
+   的设置行右端，旁边说明一长，flex 收缩会把按钮压到 min-content；中文可逐字断行，
+   min-content 就只剩一个字宽，标签被挤成竖排。不换行 + 不收缩，挤压全交给左边说明。
+   复选框不加这条：它的标签可能是一整句话，确实该换行。 */
+.ui-choice--switch {
+  flex: none;
+  white-space: nowrap;
+}
+
 .ui-checkbox {
   position: relative;
   width: 14px;
