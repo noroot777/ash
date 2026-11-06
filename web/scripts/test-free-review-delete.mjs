@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { fetchLog, fetchesSettled, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
+import { animationsSettled, fetchLog, fetchesSettled, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 // 派审对话框里删审查者。每一段一张干净页面：
 //
@@ -153,7 +153,7 @@ try {
     await ui.trash("顶级审查").click();
     await confirm.waitFor();
     // 只为截图：等确认框的入场动画走完再拍。下面的文案断言读的是已挂载的 DOM，跟动画走没走完无关。
-    await page.waitForTimeout(320);
+    await animationsSettled(page);
     await page.screenshot({ path: "/tmp/ash-free-review-delete-confirm.png", fullPage: true });
     const otherText = await confirm.innerText();
     assert.match(otherText, /确定删除“顶级审查”/);
