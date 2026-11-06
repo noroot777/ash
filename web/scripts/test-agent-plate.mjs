@@ -2,8 +2,7 @@
 // 跑法:npm -w web run test:agent-plate
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { settlePage } from "./wait-until.mjs";
-import { afterFrames } from "./wait-until-extra.mjs";
+import { afterFrames, settlePage } from "./wait-until.mjs";
 
 const web = await startWebServer();
 

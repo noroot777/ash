@@ -9,8 +9,7 @@
 //      也不许在 B 的页面上弹通知、开新标签页 —— 用户此刻看的根本不是 A。
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { fetchLog, settlePage, waitUntil } from "./wait-until.mjs";
-import { trackStubbedFetches } from "./wait-until-extra.mjs";
+import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -19,7 +18,7 @@ try {
   browser = await launchChrome();
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
   // 夹具在页面里当假服务端：记下每一发预览启动请求，好知道 A 那趟什么时候被页面读完。
-  await trackStubbedFetches(page, "/free-workflow/preview$");
+  await trackFetches(page, "/free-workflow/preview$");
   await page.goto(`${web.origin}/scripts/fixtures/preview-task-switch.html`);
 
   // ① A 上点开预览，请求挂着 —— 这颗现在是可点的取消。

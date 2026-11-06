@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
+import { animationsSettled, fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 // 删文件 / 删文件夹这条路。钉三件事：
 //
@@ -80,11 +80,6 @@ try {
   const page = await browser.newPage({ viewport: { width: 1180, height: 760 } });
   // 页面那一侧的文件树读取与删除请求（按发出顺序）：「删完当场重读」靠先后顺序判，不靠计时。
   await trackFetches(page, "/api/tasks/[^/]+/(files\\?|file$)");
-  // 开场动画落定再截图（否则存下来的是半透明的中间帧）：等页面上有限时长的动画都跑完，
-  // 不赌「300ms 应该够了」。无限循环的（转圈）不等。
-  const animationsDone = () => page.evaluate(() => Promise.all(document.getAnimations()
-    .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
-    .map((animation) => animation.finished.catch(() => undefined))));
   await page.route("**/api/tasks/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -191,7 +186,8 @@ try {
   assert.equal(await confirmButton().isDisabled(), true, "名字没抄全就不能点");
   await typed.fill("src");
   assert.equal(await confirmButton().isDisabled(), false);
-  await animationsDone();
+  // 开场动画落定再截图（否则存下来的是半透明的中间帧）。
+  await animationsSettled(page);
   await page.screenshot({ path: "/tmp/ash-file-delete-dialog.png", fullPage: true });
 
   const listingBefore = listingCalls;
@@ -239,7 +235,7 @@ try {
   assert.match(noTrashText, /删掉之后就真没了/);
   assert.equal(await dialog.locator(".file-delete__type").count(), 1, "没有废纸篓时必须抄名字");
   assert.equal(await dialog.locator(".file-delete__fact ul").count(), 0, "单个文件不必再列一遍它自己");
-  await animationsDone();
+  await animationsSettled(page);
   await page.screenshot({ path: "/tmp/ash-file-delete-permanent.png", fullPage: true });
   await dialog.locator(".file-delete__type input").fill("scratch.log");
   await confirmButton().click();

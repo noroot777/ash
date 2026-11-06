@@ -39,20 +39,8 @@ try {
     page.setDefaultTimeout(WAIT_TIMEOUT_MS);
     page.on("pageerror", (error) => failures.push(error.message));
     await trackFetches(page, TRACKED);
-    // 「两个写者不许同时在途」按页面侧的事实记：每发 sessions 出门那一刻，同一任务还有几发没被
-    // 页面消费完（读完或被 abort）。Node 侧桩的计数晚于页面发出，满载时拿它判「此刻没出门」会偏。
-    await page.addInitScript(() => {
-      const tracked = window.fetch;
-      window.__overlaps = [];
-      window.fetch = (input, init) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        if (/\/api\/tasks\/[^/]+\/sessions$/.test(url)) {
-          const inFlight = (window.__ashFetches ?? []).filter((entry) => entry.url === url && entry.state === "pending").length;
-          window.__overlaps.push({ url, inFlight });
-        }
-        return tracked(input, init);
-      };
-    });
+    // 「两个写者不许同时在途」按页面侧的事实记：每发 sessions 出门那一刻同一任务还有几发没被页面
+    // 消费完（trackFetches 的 inFlightAtIssue）。Node 侧桩的计数晚于页面发出，满载时拿它判会偏。
     await page.addInitScript(() => {
       window.__sources = [];
       // 替身的 onopen 晚一拍（setTimeout 0）只为像真的 EventSource 那样异步连上；没有断言依赖
@@ -85,7 +73,8 @@ try {
   const sessionsFetches = async (page, taskId) =>
     (await fetchLog(page)).filter((entry) => entry.url.endsWith(`/api/tasks/${taskId}/sessions`));
   /** 出门时同一任务还有别的 sessions 在途的那几发；不许有。 */
-  const overlapsOf = (page) => page.evaluate(() => window.__overlaps.filter((entry) => entry.inFlight > 0));
+  const overlapsOf = async (page) => (await fetchLog(page))
+    .filter((entry) => /\/api\/tasks\/[^/]+\/sessions$/.test(entry.url) && entry.inFlightAtIssue > 0);
   /** 等水位读数变成 want。等不到不在这里抛：紧跟着的那条断言会报出实际读数。 */
   const contextBecomes = (page, want) => page.waitForFunction(
     (value) => document.querySelector('[data-testid="context"]')?.textContent === value, want,

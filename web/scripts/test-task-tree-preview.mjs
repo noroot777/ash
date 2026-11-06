@@ -4,6 +4,7 @@
 // 跑：npm -w web run test:task-tree-preview
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
+import { animationsSettled } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -45,9 +46,7 @@ try {
   const idleMask = await titleMask();
   await handoffPendingRow.hover();
   // meta 淡入有 130ms 过渡，等它跑完再读：固定睡一会儿在并行跑、帧被压慢时会读到半截透明度。
-  await page.evaluate(() => Promise.all(document.getAnimations()
-    .filter((animation) => animation instanceof CSSTransition)
-    .map((animation) => animation.finished.catch(() => {}))));
+  await animationsSettled(page);
   assert.equal(await handoffOutMark.locator("..").evaluate((node) => getComputedStyle(node).opacity), "1", "指向转出任务时标记应显示");
   const hoverMask = await titleMask();
   assert.notEqual(hoverMask, idleMask, "指到时标题要额外让开星标那格");
@@ -56,9 +55,7 @@ try {
   // 移开鼠标后 hover 那组过渡开始回落：同上，等页面上的 CSS 过渡跑完再读，不睡固定时长。
   // 等之前先过一帧，让 hover 状态的变化落成样式（过渡在样式重算时才创建）。
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
-  await page.evaluate(() => Promise.all(document.getAnimations()
-    .filter((animation) => animation instanceof CSSTransition)
-    .map((animation) => animation.finished.catch(() => {}))));
+  await animationsSettled(page);
   const selectedTail = await handoffPendingRow.evaluate((node) => {
     const wrap = node.closest(".workspace-task-row-wrap");
     return {

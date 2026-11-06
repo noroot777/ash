@@ -12,8 +12,7 @@
 // 跑法：npm -w web run test:terminal-dock
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { fetchLog, fetchesSettled, waitUntil } from "./wait-until.mjs";
-import { trackStubbedFetches } from "./wait-until-extra.mjs";
+import { fetchesSettled, fetchLog, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -26,7 +25,7 @@ try {
   // 夹具在页面里当假服务端：记下每一发会话请求（列表 / 新建 / 结束）。「不该多建一个 shell」
   // 要等的正向信号是「引导那次列表读取落地了，它引起的请求也都落地了」—— 多建的那一发就是
   // 它落地后由抽屉的 effect 发出的，fetchesSettled 冲刷之后复核时看得见。
-  await trackStubbedFetches(page, "/terminal/sessions");
+  await trackFetches(page, "/terminal/sessions");
   await page.goto(`${web.origin}/scripts/fixtures/terminal-dock.html`);
 
   const bar = page.locator(".status-bar");

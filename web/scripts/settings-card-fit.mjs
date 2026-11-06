@@ -11,7 +11,7 @@
 //
 // 两条都放过的情况（不是毛病）：横向滚动容器里的字贴着自己的容器边（滚得出来）、
 // text-overflow:ellipsis 的定长单行（切得是有意的）、无障碍专用的 1×1 隐藏文字。
-import { afterFrames } from "./wait-until-extra.mjs";
+import { afterFrames } from "./wait-until.mjs";
 
 export const CARD_BLEED_PROBE = () => {
   const out = [];

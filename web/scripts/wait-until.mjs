@@ -10,6 +10,8 @@
 //     （响应体读完，或者被 abort）。Node 侧的路由桩只知道「我送出去了」，不知道页面处理没有。
 //   · `outlastPageTimers` —— 「过一阵也不该变」：等页面里一个更晚到期的定时器触发，证明
 //     此前排上的心跳/重试都已经走过一次（定时器按到期先后触发，跟负载无关）。
+//   · `afterFrames` / `animationsSettled` —— 读几何、透明度或截图之前：布局重算落地、有限时长
+//     的过渡走完。
 //   · `settlePage`  —— 负向断言（「X 不该出现」）之前的最后一步：先用上面两样等到能证明
 //     竞争已经结束的正向信号，再用它把页面里**已经排上队**的任务（React 的提交、effect）
 //     冲刷掉，然后才读 DOM。它本身不等任何还没发生的事，所以不能单独拿来代替正向信号。
@@ -51,20 +53,31 @@ export async function waitUntil(check, options = {}) {
  *
  * 「响应体读完」那一刻应用自己的后续（setState 之类）在同一个微任务检查点里跑完，所以
  * 读到 settled 之后再 `settlePage` 一次，页面就已经把这发响应处理干净了。
+ *
+ * 夹具在页面里自己把 `window.fetch` 换成假服务端的也记得到：给 `window.fetch` 赋值会被截下来、
+ * 套一层同样的记账再交出去。`target` 可以是 page，也可以是 BrowserContext —— 后者对这个
+ * context 里之后打开的每一页（含 `window.open` 出来的）都生效，读的时候照样按页 `fetchLog(page)`。
  */
-export async function trackFetches(page, pattern) {
-  await page.addInitScript((source) => {
+export async function trackFetches(target, pattern) {
+  await target.addInitScript((source) => {
     const matcher = new RegExp(source);
     const log = (window.__ashFetches ??= []);
-    const original = window.fetch.bind(window);
-    window.fetch = (input, init) => {
+    // 被换进来的那份可能自己又调回被包过的旧 fetch（测试里再套一层记别的东西）：外层已经在记
+    // 这一发，同步调下去的内层就直接放行，一发只记一条。
+    let nested = false;
+    const tracked = (impl) => (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (!matcher.test(url)) return original(input, init);
-      const entry = { url, method: init?.method ?? (typeof input === "object" && "method" in input ? input.method : "GET"), state: "pending" };
+      if (nested || !matcher.test(url)) return impl(input, init);
+      // inFlightAtIssue：这一发出门那一刻同一 URL 还有几发没被消费完 —— 「不许并发」类断言按它判。
+      const inFlightAtIssue = log.filter((other) => other.url === url && other.state === "pending").length;
+      const entry = { url, method: init?.method ?? (typeof input === "object" && "method" in input ? input.method : "GET"), state: "pending", inFlightAtIssue };
       log.push(entry);
       const settle = (outcome) => { entry.state = "settled"; entry.outcome = outcome; };
-      return original(input, init).then((response) => {
-        // 204 之类没有响应体的，应用不会去读它：拿到响应头就算消费完。
+      // 换进来的假服务端是同步算好这一刻的答复再返回的，所以这条记录一出现，它要答什么就已经定了。
+      return new Promise((resolve) => {
+        nested = true;
+        try { resolve(impl(input, init)); } finally { nested = false; }
+      }).then((response) => {
         if (response.body === null) settle(response.ok ? "ok" : `http ${response.status}`);
         for (const name of ["text", "json", "arrayBuffer", "blob"]) {
           const read = response[name].bind(response);
@@ -76,10 +89,17 @@ export async function trackFetches(page, pattern) {
         return response;
       }, (error) => { settle("aborted"); throw error; });
     };
+    let current = tracked(window.fetch.bind(window));
+    Object.defineProperty(window, "fetch", {
+      configurable: true,
+      enumerable: true,
+      get: () => current,
+      set: (impl) => { current = tracked(impl); },
+    });
   }, pattern);
 }
 
-/** `trackFetches` 记下的那几发（按发出顺序）：`[{ url, method, state, outcome }]`。 */
+/** `trackFetches` 记下的那几发（按发出顺序）：`[{ url, method, state, outcome, inFlightAtIssue }]`。 */
 export function fetchLog(page) {
   return page.evaluate(() => (window.__ashFetches ?? []).map((entry) => ({ ...entry })));
 }
@@ -128,5 +148,35 @@ export async function settlePage(page, rounds = 4) {
  */
 export async function outlastPageTimers(page, ms) {
   await page.evaluate((delay) => new Promise((resolve) => setTimeout(resolve, delay)), ms);
+  await settlePage(page);
+}
+
+/**
+ * 走过 `count` 个渲染帧再冲刷一轮：改了视口/尺寸之后「布局与它引起的重算都落地了」。resize 事件
+ * 和 ResizeObserver 回调都在渲染那一步里派发，走过两帧它们触发的 React 提交也已排上。慢只会让
+ * 帧来得晚，不会让回调跳过（页面须在前台：后台页的 rAF 会被节流）。
+ */
+export async function afterFrames(page, count = 2) {
+  await page.evaluate((frames) => new Promise((resolve) => {
+    const step = (left) => (left ? requestAnimationFrame(() => step(left - 1)) : resolve());
+    step(frames);
+  }), count);
+  await settlePage(page);
+}
+
+/**
+ * 等页面上**有限时长**的 CSS 过渡/动画都走完（量几何、读透明度、截图之前）。`getAnimations`
+ * 会先刷一遍样式，刚触发的过渡也看得见；无限循环的那种（转圈、呼吸点）永远不会结束，不算在内。
+ * 不赌「300ms 应该够了」：满载时帧被推迟，文档时间线跟着落后，到点读到的可能还是半途。
+ * `selector` 给了就只看那个元素子树里的动画。
+ */
+export async function animationsSettled(page, selector = null) {
+  await page.evaluate((scope) => {
+    const root = scope ? document.querySelector(scope) : document;
+    const animations = root ? root.getAnimations(scope ? { subtree: true } : undefined) : [];
+    return Promise.all(animations
+      .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
+      .map((animation) => animation.finished.catch(() => undefined)));
+  }, selector);
   await settlePage(page);
 }

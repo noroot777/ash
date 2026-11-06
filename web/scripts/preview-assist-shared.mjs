@@ -1,19 +1,18 @@
 // 「AI 协助」几组浏览器回归共用的小工具。用例本身分在两个文件里：
 //   · test-preview-assist-ui.mjs          —— 单页生命周期 + 同 context 多标签（①–⑬、⑱、⑲）
 //   · preview-assist-fallback-cases.mjs   —— 没有 Web Locks 的降级路（⑭–⑰）
-import { fetchLog, fetchesSettled, outlastPageTimers, settlePage, waitUntil } from "./wait-until.mjs";
-import { trackStubbedFetches } from "./wait-until-extra.mjs";
+import { fetchesSettled, fetchLog, outlastPageTimers, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 /** 读启动脚本输入框里的文字。占位行要读成空串，否则「清空」这一档比不出来。 */
 export const editorText = async (editor) => editor.locator(".cm-line").evaluateAll((lines) =>
   lines.map((line) => (line.querySelector(".cm-placeholder") ? "" : line.textContent)).join("\n"));
 
 // ── 条件等待：这几组用例里「过一拍也不该变」「压住的那次读取」靠的都是下面几样事实，不靠睡。
-// 夹具在页面里自己当假服务端（换掉了 window.fetch），所以记请求用 trackStubbedFetches，
+// 夹具在页面里自己当假服务端（换掉了 window.fetch），trackFetches 照样记得到，
 // 在打开页面之前对整个 context 装一次（window.open 出来的副本页也算在内）。
 
 export const ASSIST_ROUTE = "/preview/assist$";
-export const trackAssistFetches = (context) => trackStubbedFetches(context, ASSIST_ROUTE);
+export const trackAssistFetches = (context) => trackFetches(context, ASSIST_ROUTE);
 
 /** 跑着时的轮询心跳是 1.2 秒（PreviewAiAssist 的 setInterval）。 */
 const POLL_MS = 1200;

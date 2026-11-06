@@ -11,8 +11,7 @@
 // 跑法：npm -w web run test:command-placeholders
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
-import { fetchLog, settlePage, waitUntil } from "./wait-until.mjs";
-import { trackStubbedFetches } from "./wait-until-extra.mjs";
+import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const LINE = 21;
 const PADDING = 16;
@@ -27,7 +26,7 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   const url = `${web.origin}/scripts/fixtures/command-placeholders.html`;
   // 夹具在页面里当假服务端：记下每一发会话查询，⑧ 要等「迟到的那一发已被页面读完」。
-  await trackStubbedFetches(page, "/terminal/sessions$");
+  await trackFetches(page, "/terminal/sessions$");
   await page.goto(url);
 
   const buildEditor = page.getByRole("textbox", { name: "构建的命令" });

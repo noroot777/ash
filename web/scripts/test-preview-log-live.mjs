@@ -13,8 +13,7 @@
 import assert from "node:assert/strict";
 import { launchChrome, startWebServer } from "./dom-stage.mjs";
 import { checkPreviewServiceRegressions } from "./preview-service-review-checks.mjs";
-import { fetchLog, settlePage, waitUntil } from "./wait-until.mjs";
-import { trackStubbedFetches } from "./wait-until-extra.mjs";
+import { fetchLog, settlePage, trackFetches, waitUntil } from "./wait-until.mjs";
 
 const web = await startWebServer();
 
@@ -91,7 +90,7 @@ try {
   //     `await appendTaskTimeline` 才回 200，而 DELETE 故意不抢那把锁。
   const late = await browser.newPage({ viewport: { width: 1000, height: 900 } });
   // 夹具在页面里当假服务端：记下页面发出的每一发预览请求，好知道那趟 POST 什么时候被读完。
-  await trackStubbedFetches(late, "/free-workflow/preview$");
+  await trackFetches(late, "/free-workflow/preview$");
   await late.goto(`${base}?mode=cancel-late-success`);
   const lateOpen = late.getByRole("button", { name: "打开预览" });
   await lateOpen.waitFor();
@@ -136,7 +135,7 @@ try {
   );
 
   const serviceSwitch = await browser.newPage({ viewport: { width: 1000, height: 900 } });
-  await trackStubbedFetches(serviceSwitch, "/free-workflow/preview/log");
+  await trackFetches(serviceSwitch, "/free-workflow/preview/log");
   await serviceSwitch.goto(`${base}?mode=service-switch`);
   await serviceSwitch.getByTestId("preview-log-open").click();
   const serviceBody = serviceSwitch.locator(".preview-log-body");

@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
+import { animationsSettled } from "./wait-until.mjs";
 
-// 量几何之前等页面上**有限时长**的 CSS 过渡/动画都走完（getAnimations 会先刷样式，刚触发的
-// 过渡也看得见）。无限循环的那种（连接状态的呼吸点之类）永远不会结束，不算在内。从前是睡
-// 320ms 赌过渡已经走完：满载时帧会被推迟，文档时间线跟着落后，量到的可能还是半途的宽度。
-const settle = page => page.waitForFunction(() => document.getAnimations().every((animation) =>
-  animation.playState !== "running"
-  || animation.effect?.getComputedTiming().endTime === Infinity), undefined, { timeout: 15_000 });
+// 量几何之前等页面上有限时长的 CSS 过渡/动画都走完。从前是睡 320ms 赌过渡已经走完：满载时帧会
+// 被推迟，文档时间线跟着落后，量到的可能还是半途的宽度。
 
 export async function checkAssistantEntry(page, fixtureUrl) {
   await page.setViewportSize({ width: 1200, height: 820 });
@@ -105,7 +102,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   const setSidebarWidth = async width => {
     await separator().press("Home");
     for (let current = 220; current < width; current += 10) await separator().press("ArrowRight");
-    await settle(page);
+    await animationsSettled(page);
     assert.equal(Number(await separator().getAttribute("aria-valuenow")), width);
   };
   const footerGeometry = () => page.locator(".workspace-sidebar-bottom").evaluate(node => {
@@ -140,7 +137,7 @@ export async function checkAssistantEntry(page, fixtureUrl) {
   await setSidebarWidth(220);
   await page.keyboard.press("f");
   await page.locator(".workspace-sidebar.is-spread-open").waitFor();
-  await settle(page);
+  await animationsSettled(page);
   const framesPromise = page.evaluate(() => new Promise(resolve => {
     const frames = [];
     const sample = () => {
