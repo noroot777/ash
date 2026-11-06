@@ -105,7 +105,7 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
       if (ctx.titleOnly) blocks.push({ type: "note", text: TITLE_ONLY });
       else if (extras.failureNotice) blocks.push({ type: "text", text: scrubText(extras.failureNotice, 800) });
       blocks.push({ type: "buttons", buttons: [{ text: "重试", style: "primary", value: value(envelope, "retry") }, ...linkButton(ctx)] });
-      blocks.push({ type: "note", text: "重试会从中断处接着跑。回复这张卡片 = 给任务发一条消息。" });
+      blocks.push({ type: "note", text: "重试会从中断处接着跑。要给任务捎句话，回复这张卡片时以 /reply 开头。" });
       return { ...header(view, turn.kind), blocks };
     case "dispute":
       blocks.push(ctx.titleOnly
@@ -161,7 +161,7 @@ export function turnCard(view: TaskView, turn: Turn, ctx: CardContext, envelope:
         ? { title: "最近一轮审查没通过", text: "确定照样验收合并吗？" }
         : { title: "验收合并", text: "会把任务分支合进目标分支并清理工作区。确定吗？" };
       blocks.push({ type: "buttons", buttons: [{ text: "验收合并", style: "primary", value: value(envelope, "accept"), confirm }, ...linkButton(ctx)] });
-      blocks.push({ type: "note", text: "项目设了验收前置命令的话会先跑一遍（可能十几分钟），结果会更新在这张卡上。回复这张卡片 = 给任务发一条消息。" });
+      blocks.push({ type: "note", text: "项目设了验收前置命令的话会先跑一遍（可能十几分钟），结果会更新在这张卡上。要给任务捎句话，回复这张卡片时以 /reply 开头。" });
       return { ...header(view, turn.kind), blocks };
     }
   }

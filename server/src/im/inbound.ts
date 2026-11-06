@@ -254,7 +254,7 @@ export class InboundRouter {
     if (chatType === "p2p") {
       const room = await this.deps.relay.assistantRoom(ctx);
       if (typeof room !== "string") {
-        await this.deps.commands.say(ctx, room.error, await this.deps.commands.scoped(ctx, { kind: "principal" }));
+        await this.deps.commands.say(ctx, room.error, await this.deps.commands.answered(ctx, {}));
         return this.record(inboundId, { kind: "assistant", state: "failed", detail: room.error });
       }
       await this.record(inboundId, { kind: "assistant" });
@@ -268,7 +268,7 @@ export class InboundRouter {
     }
     const room = await this.deps.relay.groupRoom(ctx, group);
     if ("error" in room) {
-      await this.deps.commands.say(ctx, room.error, await this.deps.commands.scoped(ctx, { kind: "project", projectId: group.projectId }));
+      await this.deps.commands.say(ctx, room.error, await this.deps.commands.answered(ctx, { projectId: group.projectId }));
       return this.record(inboundId, { kind: "group", state: "failed", detail: room.error });
     }
     await this.record(inboundId, { kind: "group" });
@@ -299,8 +299,8 @@ export class InboundRouter {
     const taskId = card.taskId!;
     const view = (await viewsOf([taskId])).get(taskId) ?? null;
     const say = (line: string) => this.deps.commands.say(ctx, line, SYSTEM_SCOPE, { taskId });
-    /** 任务接口的报错可能带着任务里的东西：按任务记来源，只推标题的项目换成短句。 */
-    const sayError = async (line: string) => this.deps.commands.say(ctx, line, await this.deps.commands.scoped(ctx, { kind: "task", taskId }),
+    /** 任务接口的报错：他自己这次操作的结局（scope.ts reply），只推标题的项目换成短句。 */
+    const sayError = async (line: string) => this.deps.commands.say(ctx, line, await this.deps.commands.answered(ctx, { taskId }),
       { taskId, brief: "没办成，原因见 ash。" });
     // 先把回话入队再记结局：中间退出，重办时同一句回话入不了第二次（同 subject）。
     const refuse = async (detail: string, line: string) => {

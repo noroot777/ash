@@ -3,8 +3,8 @@
 // 会改东西、而且改了收不回来的（/new 建任务并开跑、/stop 停任务）先回一张确认卡，点「确定」
 // 才执行 —— 手机上误触、输入法联想补全都很常见。确认卡 10 分钟有效。
 //
-// 每一句回执都要说清凭什么能发给这个人（scope.ts）：不含 ash 数据的静态句是 system，带着任务、项目、
-// 个人信息的按各自来源记，出口照此现核。个人的东西（能看哪些项目、当前项目）不进群；群里建任务
+// 每一句回执都要说清凭什么能发给这个人（scope.ts）：不含 ash 数据的静态句是 system，他自己这次操作的
+// 结局（接口报错）是 reply，带着任务、项目、个人信息的按各自来源记，出口照此现核。个人的东西（能看哪些项目、当前项目）不进群；群里建任务
 // 只建到这个群绑定的项目上。
 import type { Project } from "@ash/shared";
 import { and, eq, inArray } from "drizzle-orm";
@@ -21,7 +21,7 @@ import { readOptions } from "./meta.js";
 import { cardHeaderOf, type Destination, type OutboxRow } from "./outbox.js";
 import type { Outcome } from "./actions.js";
 import type { Reconciler } from "./reconcile.js";
-import { admit, scopeFor, SYSTEM_SCOPE, type OutboxScope, type ScopeBody } from "./scope.js";
+import { admit, replyScope, scopeFor, SYSTEM_SCOPE, type OutboxScope, type ScopeBody } from "./scope.js";
 import { scrubText, scrubTitle } from "./scrub.js";
 
 export interface InboundContext {
@@ -83,6 +83,11 @@ export class CommandRunner {
     return scopeFor(this.deps.appId, ctx.dest, body, ctx.chatType === "group" ? ctx.binding : null);
   }
 
+  /** 回给他的、他这次操作的结局（scope.ts reply）。about = 这次操作落在哪个任务 / 项目上。 */
+  answered(ctx: Pick<InboundContext, "dest">, about: { taskId?: string | null; projectId?: string | null }): Promise<OutboxScope> {
+    return replyScope(this.deps.appId, ctx.dest, about);
+  }
+
   private async card(
     ctx: InboundContext, title: string, text: string, payload: Record<string, unknown>, danger: boolean, scope: OutboxScope, brief?: string,
   ): Promise<void> {
@@ -107,16 +112,22 @@ export class CommandRunner {
       case "new": return this.newTask(ctx, rest);
       case "stop": {
         if (!ctx.card?.taskId) return this.say(ctx, "回复某张任务卡片再发 /stop，才知道要停哪个任务。", SYSTEM_SCOPE);
+        const taskId = ctx.card.taskId;
+        // 确认卡带着任务标题、按任务记来源：任务删了或他看不到时出口会把它拦下，所以先以他的身份问一句，
+        // 不行就把原因回给他（否则只剩沉默）。
+        const seen = await this.deps.ash.get(ctx.principal, taskPath(taskId));
+        if (!seen.ok) return this.say(ctx, `停不了：${scrubText(seen.error, 300)}`, await this.answered(ctx, { taskId }),
+          { taskId, brief: "停不了，原因见 ash。" });
         const title = cardHeaderOf(ctx.card.content).title;
-        return this.card(ctx, "停掉任务？", `「${title}」会被停掉（可以之后在 ash 里重试续跑）。`, { command: "stop", taskId: ctx.card.taskId }, true,
-          await this.scoped(ctx, { kind: "task", taskId: ctx.card.taskId }));
+        return this.card(ctx, "停掉任务？", `「${title}」会被停掉（可以之后在 ash 里重试续跑）。`, { command: "stop", taskId }, true,
+          await this.scoped(ctx, { kind: "task", taskId }));
       }
       case "retry": {
         if (!ctx.card?.taskId) return this.say(ctx, "回复某张失败卡片再发 /retry。", SYSTEM_SCOPE);
         const taskId = ctx.card.taskId;
         await ctx.commit?.(taskId);
         const result = await this.deps.ash.post(ctx.principal, taskPath(taskId, "/retry"));
-        return this.say(ctx, result.ok ? "已重试，任务重新开始跑了。" : `没能重试：${result.error}`, await this.scoped(ctx, { kind: "task", taskId }),
+        return this.say(ctx, result.ok ? "已重试，任务重新开始跑了。" : `没能重试：${scrubText(result.error, 300)}`, await this.answered(ctx, { taskId }),
           { taskId, ...(result.ok ? {} : { brief: "没能重试，原因见 ash。" }) });
       }
       default:

@@ -70,6 +70,9 @@ try {
   // 飞书对输入框的上限是 1000：超了整张卡被拒（2026-11-06 真机实测 230099）。
   const inputs = JSON.stringify(questionCard).match(/"max_length":(\d+)/g) ?? [];
   assert.ok(inputs.length > 0 && inputs.every((item) => Number(item.split(":")[1]) <= 1000), `输入框 max_length 不能超过 1000：${inputs}`);
+  // 直接回复只用来答提问卡（inbound.ts）：失败卡上的提示得说清要以 /reply 开头。
+  const failedCall = firstSends.find((send) => send !== questionCall)!;
+  assert.match(textOf(contentOf(failedCall)), /以 \/reply 开头/, "失败卡提示以 /reply 开头回复");
   await im.reconciler.full();
   await im.settle();
   assert.equal(fake.sends().length, 2, "再对一遍不重复推");
@@ -169,6 +172,7 @@ try {
     assert.equal(acceptRow.kind, "accept");
     const acceptButton = buttonsOf(JSON.parse(acceptRow.content)).find((button) => button.value?.op === "accept")!;
     assert.equal(acceptButton.confirm, true, "验收按钮要二次确认");
+    assert.match(textOf(JSON.parse(acceptRow.content)), /以 \/reply 开头/, "待验收卡提示以 /reply 开头回复");
     await db.update(tasks).set({ stage: "accepted" }).where(eq(tasks.id, "ta"));
     fake.reset();
     await im.reconciler.reconcile(["ta"]);

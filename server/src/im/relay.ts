@@ -8,7 +8,8 @@
 // 智能体回复对上用户那条消息靠 chat_messages.reply_to（同一事务里插入的那条回复）。
 //
 // 房间里的回复带着 ash 里的东西：投进房间那一刻按房间盖下授权来源（scope.ts room），记在 im_inbound 上，
-// 回复发回飞书时出口按它现核（房间还在、还归他、群还绑着那个项目）。
+// 回复发回飞书时出口按它现核（房间还在、还归他、群还绑着那个项目）。投不进去、拿不到回复、等超时这几句
+// 说明不带房间里的东西，按他自己这次操作的结局（reply）发 —— 房间没了正是它们要说的事。
 import { createHash } from "node:crypto";
 import type { TaskListItem } from "@ash/shared";
 import type { ChatMessage, ChatRoom } from "@ash/shared/chat";
@@ -109,7 +110,7 @@ export class RoomRelay {
       id: messageId, body, ...(paths.length ? { attachments: paths } : {}), ...current,
     });
     if (!sent.ok) {
-      await this.deps.commands.say(ctx, `没能送进 ash：${scrubText(sent.error, 300)}`, scope);
+      await this.deps.commands.say(ctx, `没能送进 ash：${scrubText(sent.error, 300)}`, await this.deps.commands.answered(ctx, { projectId }));
       await this.mark(inboundId, "failed", sent.error);
       return false;
     }
@@ -145,11 +146,13 @@ export class RoomRelay {
       : { receiveType: "chat_id", receiveId: row.chatId, recipientOpenId: null };
     const feishuMessageId = row.id.replace(/^msg:/, "");
     const scope = await this.scopeOf(row, dest);
-    const reply = (text: string) => this.deps.commands.say({ messageId: feishuMessageId, dest }, text, scope, { subject: `relay:${row.id}` });
+    const reply = async (text: string, notice = false) => this.deps.commands.say({ messageId: feishuMessageId, dest }, text,
+      notice ? await this.deps.commands.answered({ dest }, { projectId: scope.kind === "room" ? scope.projectId : null }) : scope,
+      { subject: `relay:${row.id}` });
     const snapshot = await this.deps.ash.get<Snapshot>(principal, `/api/chats/${encodeURIComponent(row.roomId)}`);
     // 先把回复入队、再记结局：中间退出，下一圈还会再看这一行，同一个 subject 的回复入不了第二次。
     if (!snapshot.ok) {
-      await reply(`没拿到回复：${scrubText(snapshot.error, 300)}`);
+      await reply(`没拿到回复：${scrubText(snapshot.error, 300)}`, true);
       return this.mark(row.id, "failed", snapshot.error);
     }
     const answers = snapshot.data.messages.filter((message) => message.role === "agent" && message.replyTo === row.detail);
@@ -157,7 +160,7 @@ export class RoomRelay {
     if (!answers.length) {
       // 没有任何成员被点到（群聊里没 @ 到人）就不会有回复。
       if (timedOut || snapshot.data.messages.some((message) => message.id === row.detail && !message.mentions.length)) {
-        if (timedOut) await reply("等了 20 分钟没等到回复，去 ash 里看看吧。");
+        if (timedOut) await reply("等了 20 分钟没等到回复，去 ash 里看看吧。", true);
         await this.mark(row.id, "replied", null);
       }
       return;

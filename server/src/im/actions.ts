@@ -34,7 +34,7 @@ import { renderCard, type CardTone } from "./feishu/cards.js";
 import { readOptions } from "./meta.js";
 import { cardHeaderOf, type Destination, type OutboxRow, type OutboxSender } from "./outbox.js";
 import { ACTED, type Reconciler } from "./reconcile.js";
-import { scopeOfRow } from "./scope.js";
+import { replyScope, scopeOfRow } from "./scope.js";
 import { scrubText } from "./scrub.js";
 import type { CommandRunner } from "./commands.js";
 
@@ -315,16 +315,19 @@ export class CardActions {
     const { claim, row, job } = click;
     const header = cardHeaderOf(row.content);
     const link = outcome.link !== undefined ? outcome.link : job.link;
-    // 卡上、toast 里显示哪一版按出口同一个判据定：没资格的换中性卡，只推标题的用短的那一版。
-    const verdict = await this.deps.reconciler.exits.admission(row);
-    const terse = !verdict.ok || verdict.titleOnly;
     // 结局的话可能带着接口报错原文：出口前统一过一遍脱敏。
     const said = scrubText(outcome.text, 800);
     if (!outcome.ok) {
       // 「处理中」那张已经换上去了，用户看不到 toast：卡面改回原样、原因回复在卡片下面、放回信封，一起提交。
+      // 原因是他自己这一下的结局（scope.ts reply）：任务删了、他看不到了正是常见的原因，不能按卡的来源拦。
       const repair = via === "patch" && !!row.messageId;
       const dest: Destination = { receiveType: row.receiveType as Destination["receiveType"], receiveId: row.receiveId, recipientOpenId: row.recipientOpenId };
-      const scope = scopeOfRow(row) ?? { kind: "task" as const, taskId: row.taskId ?? "", bound: null };
+      const source = scopeOfRow(row);
+      const scope = await replyScope(this.deps.appId, dest, {
+        taskId: row.taskId ?? (source?.kind === "task" ? source.taskId : null), projectId: source?.kind === "project" ? source.projectId : null,
+      });
+      const told = await this.deps.reconciler.exits.admission({ ...row, scope: JSON.stringify(scope) });
+      const terse = !told.ok || told.titleOnly;
       const released = await commit(this.deps.reconciler, async (tx) => {
         if (!await releaseEnvelope(tx, claim, said)) return false;
         if (!repair) return true;
@@ -340,6 +343,8 @@ export class CardActions {
       if (via === "patch" && job.taskId) this.deps.reconciler.mark(job.taskId);
       return toast("error", terse ? "没办成，原因见 ash。" : said.slice(0, 60));
     }
+    // 卡上、toast 里显示哪一版按出口同一个判据定：没资格的换中性卡，只推标题的用短的那一版。
+    const verdict = await this.deps.reconciler.exits.admission(row);
     const tone = outcome.tone ?? "green";
     const full = renderCard(settledCard(header, said, { link }, tone));
     const brief = outcome.brief ? renderCard(settledCard(header, outcome.brief, { link }, tone)) : null;
@@ -392,11 +397,15 @@ function acceptOutcome(result: AshResult): Outcome {
   return { ok: false, final: false, text: scrubText(result.error, 400) };
 }
 
-/** 时间线上留一笔「是从飞书点的」。任务还没有会话时退回系统提示。记上了（同一个 eventKey 不会记两次）就清掉待记。 */
+/**
+ * 时间线上留一笔「是从飞书点的」。任务还没有会话（或记不进去）时退回系统提示。真记上了（同一个 eventKey
+ * 不会记两次）才清掉待记；两边都没记上就留着，下次启动的 recover() 再补。
+ */
 async function audit(taskId: string, envelopeId: string, text: string): Promise<void> {
   try {
-    if (!await appendTaskTimeline(taskId, text, { eventKey: `im:${envelopeId}` })) await noteSystemNotice(taskId, `im:${envelopeId}`, "飞书操作", text);
-    await auditDone(envelopeId);
+    const landed = await appendTaskTimeline(taskId, text, { eventKey: `im:${envelopeId}` })
+      || await noteSystemNotice(taskId, `im:${envelopeId}`, "飞书操作", text);
+    if (landed) await auditDone(envelopeId);
   } catch (error) {
     console.warn(`[ash] 飞书操作记入时间线失败（${taskId}）:`, (error as Error).message);
   }
