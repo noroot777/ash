@@ -16,9 +16,14 @@
 //   摘要失败）一律让整份指纹变 null——把「无法证明内容」变成一个稳定的串，等于凭空给出
 //   「内容没变」的证明。
 // - **子模块与嵌套仓库递归摘要**。git 在父仓里只报它「改了」，里面再怎么改父仓的那一行都不变，
-//   只取它的 HEAD 会漏掉其中未提交的改动。
+//   只取它的 HEAD 会漏掉其中未提交的改动。递归前先证明**这个目录自己就是仓库根**：普通目录里
+//   跑 git 会一路向上找到父仓，拿「是目录」当「是仓库」就会对着自己无限递归（已跟踪文件改成
+//   同名目录时就是这样）。不是仓库根的目录只记「类型变了」，里面的文件 status 会逐个列出来。
+// - **丢了仓库标记的子模块**（gitlink 还在索引里、目录里的 `.git` 没了）`git status` 一个字都
+//   不报，里面怎么改都看不见。所以每次都过一遍索引里的 gitlink：要么是独立仓库（status 管得到），
+//   要么空着 / 不存在（没初始化），否则证明不了。
 import { createHash } from "node:crypto";
-import { lstat, readlink } from "node:fs/promises";
+import { lstat, readdir, readlink, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { execFileText as exec } from "./exec.js";
 import { countsAsProjectChange, expandHome, headCommit } from "./git.js";
@@ -36,26 +41,39 @@ const CACHE_LIMIT = 20_000;
 const blobCache = new Map<string, { stat: string; blob: string }>();
 
 /** `verify`：结果要拿去授权（打锚点 / 放行修复），每个文件都重读字节，不信 stat 缓存。 */
-export async function workspaceSnapshot(path: string, opts: { verify?: boolean } = {}): Promise<WorkspaceSnapshot> {
-  const cwd = expandHome(path);
+export function workspaceSnapshot(path: string, opts: { verify?: boolean } = {}): Promise<WorkspaceSnapshot> {
+  return snapshotOf(expandHome(path), !!opts.verify, new Set());
+}
+
+/** `seen`：这条递归链上已经摘要过的仓库根（规范化路径），撞上就是绕回来了。 */
+async function snapshotOf(cwd: string, verify: boolean, seen: Set<string>): Promise<WorkspaceSnapshot> {
   const head = await headCommit(cwd);
   let top: string;
   let changed: string[];
+  let gitlinks: string[];
   try {
-    const [root, status] = await Promise.all([
+    const [root, status, index] = await Promise.all([
       exec("git", ["-C", cwd, "rev-parse", "--show-toplevel"]),
       exec("git", ["-C", cwd, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"],
         { maxBuffer: STATUS_MAX_BUFFER }),
+      exec("git", ["-C", cwd, "ls-files", "--stage", "-z"], { maxBuffer: STATUS_MAX_BUFFER }),
     ]);
     top = root.stdout.trim();
     changed = status.stdout.split("\0").filter(countsAsProjectChange).map((line) => line.slice(3));
+    // `--stage -z` 每条是「mode object stage\tpath」。
+    gitlinks = index.stdout.split("\0").filter((row) => row.startsWith("160000 "))
+      .map((row) => row.slice(row.indexOf("\t") + 1));
   } catch {
     return { head, dirty: null, fingerprint: null };
   }
   const dirty = changed.length > 0;
   if (!head) return { head, dirty, fingerprint: null };
   try {
-    const contents = await contentHashes(top, changed, !!opts.verify);
+    const root = await realpath(top);
+    if (seen.has(root)) throw new Error(`仓库递归绕回了自己：${root}`);
+    const chain = new Set([...seen, root]);
+    await Promise.all(gitlinks.map((file) => assertGitlinkVisible(join(top, file))));
+    const contents = await contentHashes(top, changed, verify, chain);
     const digest = createHash("sha256").update(`${head}\n`);
     for (const file of [...changed].sort()) digest.update(`${file}\0${contents.get(file)}\n`);
     return { head, dirty, fingerprint: `v1:${digest.digest("hex")}` };
@@ -70,7 +88,9 @@ const missing = (error: unknown) => {
 };
 
 /** 每个改动路径此刻的内容标识：普通文件是 blob 哈希，其余几类各给一个能区分变化的串。证明不了就抛。 */
-async function contentHashes(top: string, files: string[], verify: boolean): Promise<Map<string, string>> {
+async function contentHashes(
+  top: string, files: string[], verify: boolean, chain: Set<string>,
+): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const misses: { file: string; abs: string; stat: string; mode: string }[] = [];
   await Promise.all(files.map(async (file) => {
@@ -82,9 +102,10 @@ async function contentHashes(top: string, files: string[], verify: boolean): Pro
     if (!info) return void out.set(file, "deleted");
     if (info.isSymbolicLink()) return void out.set(file, `link:${await readlink(abs)}`);
     if (info.isDirectory()) {
-      const nested = await workspaceSnapshot(abs, { verify });
+      if (!await isRepoRoot(abs)) return void out.set(file, "dir");
+      const nested = await snapshotOf(abs, verify, chain);
       if (!nested.fingerprint) throw new Error(`嵌套仓库摘要失败：${file}`);
-      return void out.set(file, `dir:${nested.fingerprint}`);
+      return void out.set(file, `repo:${nested.fingerprint}`);
     }
     const mode = info.mode & 0o111 ? "x" : "";
     const stat = `${info.size}:${info.mtimeMs}:${info.ctimeMs}:${info.ino}:${mode}`;
@@ -107,4 +128,20 @@ async function contentHashes(top: string, files: string[], verify: boolean): Pro
     out.set(miss.file, `${miss.mode}${blobs[i]}`);
   });
   return out;
+}
+
+/** 这个目录自己就是一个仓库的根（而不是 git 从它往上找到的父仓）。读不出来就抛。 */
+async function isRepoRoot(dir: string): Promise<boolean> {
+  const { stdout } = await exec("git", ["-C", dir, "rev-parse", "--show-toplevel"]);
+  return await realpath(stdout.trim()) === await realpath(dir);
+}
+
+/** 索引里的一个 gitlink 此刻的内容 status 管不管得到：独立仓库、空目录、不存在都行，其余抛。 */
+async function assertGitlinkVisible(dir: string): Promise<void> {
+  const entries = await readdir(dir).catch((error: unknown) => {
+    if (missing(error)) return [];
+    throw error;
+  });
+  if (!entries.length || await isRepoRoot(dir)) return;
+  throw new Error(`子模块丢了仓库标记，里面的改动 git 看不见：${dir}`);
 }

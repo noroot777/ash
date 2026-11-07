@@ -104,19 +104,46 @@ try {
   assert.notEqual((await workspaceSnapshot(parent, { verify: true })).fingerprint, subBefore.fingerprint,
     "子模块里继续改代码，指纹要变");
 
-  // 未跟踪的嵌套仓库同理；顺带带换行的文件名（--stdin-paths 切不开，单独算）也要按内容算。
+  // 子模块丢了仓库标记（目录里的 .git 没了）：git status 一个字都不报，里面怎么改都看不见——证明不了。
+  rmSync(join(parent, "module", ".git"));
+  assert.equal((await workspaceSnapshot(parent, { verify: true })).fingerprint, null, "看不见的子模块内容不能算没变");
+  assert.equal((await workspaceSnapshot(parent)).fingerprint, null, "显示路径同一个判据");
+  // 没初始化的子模块（空目录）照常有指纹。
+  rmSync(join(parent, "module"), { recursive: true });
+  mkdirSync(join(parent, "module"));
+  assert.ok((await workspaceSnapshot(parent, { verify: true })).fingerprint, "空的 gitlink 目录不挡指纹");
+
+  // 未跟踪的嵌套仓库同理。
   const host = makeRepo("host");
   const nested = makeRepo("host/nested");
   writeFileSync(join(nested, "a.txt"), "nested 1\n");
-  writeFileSync(join(host, "odd\nname.txt"), "1\n");
   const hostBefore = await workspaceSnapshot(host, { verify: true });
   assert.ok(hostBefore.fingerprint);
   writeFileSync(join(nested, "a.txt"), "nested 2\n");
-  const hostNested = await workspaceSnapshot(host, { verify: true });
-  assert.notEqual(hostNested.fingerprint, hostBefore.fingerprint, "嵌套仓库里的改动要算进去");
-  writeFileSync(join(host, "odd\nname.txt"), "2\n");
-  assert.notEqual((await workspaceSnapshot(host, { verify: true })).fingerprint, hostNested.fingerprint,
-    "带换行的文件名也按内容算，不按 stat");
+  assert.notEqual((await workspaceSnapshot(host, { verify: true })).fingerprint, hostBefore.fingerprint,
+    "嵌套仓库里的改动要算进去");
+
+  // 已跟踪文件改成同名目录：从那个目录跑 git 会找到父仓，不能当成嵌套仓库递归（曾无限递归卡死）。
+  const retyped = makeRepo("retyped");
+  rmSync(join(retyped, "a.txt"));
+  mkdirSync(join(retyped, "a.txt"));
+  writeFileSync(join(retyped, "a.txt", "child.txt"), "c1\n");
+  const retypedBefore = await workspaceSnapshot(retyped, { verify: true });
+  assert.ok(retypedBefore.fingerprint, "文件改目录照常出指纹，不卡住");
+  assert.equal((await workspaceSnapshot(retyped)).fingerprint, retypedBefore.fingerprint, "显示路径同样能算完");
+  writeFileSync(join(retyped, "a.txt", "child.txt"), "c2\n");
+  assert.notEqual((await workspaceSnapshot(retyped, { verify: true })).fingerprint, retypedBefore.fingerprint,
+    "目录里的文件由 status 逐个列出，内容变了指纹要变");
+
+  // 带换行的文件名（--stdin-paths 切不开，单独算）也按内容算。Windows 文件系统根本建不出这种名字。
+  if (process.platform !== "win32") {
+    writeFileSync(join(host, "odd\nname.txt"), "1\n");
+    const oddBefore = await workspaceSnapshot(host, { verify: true });
+    assert.ok(oddBefore.fingerprint);
+    writeFileSync(join(host, "odd\nname.txt"), "2\n");
+    assert.notEqual((await workspaceSnapshot(host, { verify: true })).fingerprint, oddBefore.fingerprint,
+      "带换行的文件名也按内容算，不按 stat");
+  }
 
   // 读不到 ≠ 删掉了：权限挡住的文件让整份指纹变未知，不能生成一个能反复匹配的串。
   if (process.platform !== "win32" && process.getuid?.() !== 0) {
