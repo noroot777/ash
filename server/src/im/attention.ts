@@ -1,5 +1,5 @@
 // 「这个任务此刻要人做哪一件事」在 server 侧的完整答案：shared 的 humanTurnOf 判种类，
-// 这里补上它算不出来的事实（闸口开没开、有没有待裁定的驳回、是不是团队执行者），再给每一
+// 这里补上它算不出来的事实（闸口开没开、有没有待裁定的驳回、是不是团队执行者、托盘里有没有马上要送进去的消息），再给每一
 // 件事配一个**代次**（generation）。
 //
 // 代次 = 「同一种事里的第几回」。卡片上记着发卡那一刻的代次，按钮按下去时现算一遍，对不上
@@ -22,10 +22,11 @@ import { acceptanceMessage } from "@ash/shared/accept-message";
 import { isFinalHumanGate } from "@ash/shared/workflow-policy";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { projects, tasks } from "../db/schema.js";
+import { projects, scheduledMessages, tasks } from "../db/schema.js";
 import { freeReviewRuns } from "../db/schema-free-workflow.js";
 import { currentGateVersion } from "../duet/gate-version.js";
 import { unresolvedDisputes } from "../free-review-dispute.js";
+import { hasDeliverablePendingMessages } from "../pending-messages.js";
 import { enrichTasks, toTaskListItem } from "../task-store.js";
 import { humanGateOf, NO_GATE } from "../task-human-gate.js";
 import { failureVersionOf, resultVersionOf } from "../task-result-version.js";
@@ -46,6 +47,8 @@ export interface TaskView {
   projectName: string;
   /** 团队执行者：验收、结局都记在调度台身上。 */
   teamWorker: boolean;
+  /** 托盘里有此刻就该送进会话的消息：一空下来就送进去、接着跑。 */
+  deliveryPending: boolean;
   turn: Turn | null;
 }
 
@@ -116,6 +119,10 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
   const projectRows = new Map((await db.select({ id: projects.id, name: projects.name, acceptCommit: projects.acceptCommit }).from(projects)
     .where(inArray(projects.id, [...new Set(rows.map((row) => row.projectId))]))).map((p) => [p.id, p]));
   const rowById = new Map(rows.map((row) => [row.id, row]));
+  // 托盘里有消息的才逐个按投递端的判据核（大多数任务一条都没有）。
+  const trayed = new Set((await db.selectDistinct({ taskId: scheduledMessages.taskId }).from(scheduledMessages)
+    .where(and(inArray(scheduledMessages.taskId, rows.map((row) => row.id)), eq(scheduledMessages.status, "pending"))))
+    .map((row) => row.taskId));
 
   for (const task of enriched) {
     const row = rowById.get(task.id)!;
@@ -130,10 +137,12 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
     }
     const disputes = task.workflowMode === "free" && task.mode === "single" ? await unresolvedDisputes(task.id) : [];
     const teamWorker = !!task.parentId && parents.get(task.parentId) === "team";
+    const deliveryPending = trayed.has(task.id) && await hasDeliverablePendingMessages(task.id);
     const kind = humanTurnOf(toTaskListItem(task), crew.map(toTaskListItem), {
       teamWorker,
       duetGateOpen: gateVersion !== null,
       disputeOpen: disputes.length > 0,
+      deliveryPending,
     });
     let turn: Turn | null = null;
     switch (kind) {
@@ -171,6 +180,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
       ownerUserId: row.ownerUserId ?? null,
       projectName: projectRows.get(task.projectId)?.name ?? "",
       teamWorker,
+      deliveryPending,
       turn,
     });
   }

@@ -90,6 +90,8 @@ export function needsYourCommand(task: TaskListItem, workers: TaskListItem[] = [
 //   · duet 闸口开着：闸口卡。它在 awaiting_review 上，isTaskLive 会把它算作「机器在动」，
 //     所以排在 live 判断之前。
 //   · 有提问、且提问回合已经结束（团队调度台不受这条限制）：提问卡。还在 running 时答复会 409。
+//   · 托盘里有此刻就该送进会话的消息（排队追问、审查没过排着的修复意见）：不推。任务一空下来它就
+//     送进去、接着跑，推出去的卡转眼就得撤回。
 //   · status=failed：失败卡。retry 只收 failed。
 //   · 机器在动：不推。
 //   · 有待裁定的驳回：驳回卡（排在待验收前面：驳回不裁，验收就是在没看审查意见的情况下合并）。
@@ -107,6 +109,8 @@ export interface HumanTurnFacts {
   duetGateOpen?: boolean;
   /** 自由工作流有待裁定的驳回。 */
   disputeOpen?: boolean;
+  /** 托盘里有此刻就该送进会话的消息（判据同投递端，server pending-messages.ts hasDeliverablePendingMessages）。 */
+  deliveryPending?: boolean;
 }
 
 export function humanTurnOf(
@@ -117,6 +121,7 @@ export function humanTurnOf(
   if (task.archived || task.handoff?.direction === "out" || facts.teamWorker || task.reviewOf) return null;
   if (task.mode === "duet" && facts.duetGateOpen) return "duet_gate";
   if (task.question && (isTeamLead(task) || (task.status !== "running" && task.status !== "queued"))) return "question";
+  if (facts.deliveryPending) return null;
   if (task.status === "failed") return "failed";
   if (isTaskLive(task, workers)) return null;
   if (facts.disputeOpen) return "dispute";
