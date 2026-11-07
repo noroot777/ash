@@ -4,10 +4,12 @@
 // 钉住的几件事：
 // ① 状态落了 done、回合锁还占着（这一轮还在结算）→ 不推；锁一放开自己再对一次，没人接着跑就推出去；
 // ② 锁放开的那一下就被下一轮占上（预约的审查）→ 一张卡都不推，状态落 running 也没有卡要撤；
-// ③ 托盘里排着马上要送进去的消息（审查没过的修复意见）→ 不推；消息送走、任务又停下来才推；
+// ③ 托盘里排着马上要送进去的消息（排队追问）→ 不推；消息送走、任务又停下来才推；
 // ④ 卡已经发出去，又排进一条马上要送的消息 → 撤回那张卡；
 // ⑤ 定在以后的定时消息不算：照常推；
-// ⑥ 失败卡同理：排着消息的失败任务不推失败卡。
+// ⑥ 失败卡同理：排着消息的失败任务不推失败卡；
+// ⑦ 讨论的裁决门是持着回合锁等人点的：门开着照推闸口卡，不等锁放开（那要等到他点了门）；
+// ⑧ 排着的消息被挡着送不出去（执行型消息、分组暂停着）：不算会接着跑，失败卡照推、不撤。
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +24,7 @@ requireTmpDb("test-im-settling");
 let failure: unknown = null;
 try {
   const { db, ensureSchema } = await import("../src/db/index.js");
-  const { projects, scheduledMessages, tasks } = await import("../src/db/schema.js");
+  const { groups, projects, scheduledMessages, tasks } = await import("../src/db/schema.js");
   const { imBindings, imOutbox } = await import("../src/db/schema-im.js");
   const { claimOwnTurn, releaseTurn } = await import("../src/turn-lock.js");
   const { eq } = await import("drizzle-orm");
@@ -80,10 +82,10 @@ try {
   await im.settle();
 
   // ── ③ 托盘里排着马上要送的消息：不推；送走、又停下来才推 ───────────────
-  await db.insert(tasks).values(task({ id: "tc", title: "审查没过", status: "done", endedAt: at }) as never);
-  await db.insert(scheduledMessages).values(message({ id: "mc", taskId: "tc", origin: "review-settlement:r1", text: "按审查意见修复" }) as never);
+  await db.insert(tasks).values(task({ id: "tc", title: "排着追问", status: "done", endedAt: at }) as never);
+  await db.insert(scheduledMessages).values(message({ id: "mc", taskId: "tc", text: "顺手把文案也改了" }) as never);
   await reconcile("tc");
-  assert.equal((await rowsOf("tc")).length, 0, "修复意见马上就送进去：不推");
+  assert.equal((await rowsOf("tc")).length, 0, "追问马上就送进去：不推");
   await db.update(scheduledMessages).set({ status: "sent", sentAt: at } as never).where(eq(scheduledMessages.id, "mc"));
   await reconcile("tc");
   assert.equal((await rowsOf("tc")).length, 1, "托盘空了、任务停着：推");
@@ -116,6 +118,37 @@ try {
   const te = await rowsOf("te");
   assert.equal(te.length, 1);
   assert.equal(te[0]!.kind, "failed");
+
+  // ── ⑦ 讨论裁决门：持锁等人，照推 ───────────────────────────────────────
+  const { resolveGate, waitForGate } = await import("../src/duet/gates.js");
+  await db.insert(tasks).values(task({ id: "tg", title: "讨论等拍板", mode: "duet", status: "awaiting_review", duetGateVersion: 1 }) as never);
+  const duet = claimOwnTurn("tg", "duet")!;
+  const decision = waitForGate("tg", 1);
+  await reconcile("tg");
+  const tg = await rowsOf("tg");
+  assert.equal(tg.length, 1, "门开着、锁照旧占着：闸口卡照推");
+  assert.equal(tg[0]!.kind, "duet_gate");
+  assert.ok(tg[0]!.messageId);
+  resolveGate("tg", { kind: "reject" });
+  await decision;
+  releaseTurn("tg", duet);
+
+  // ── ⑧ 送不出去的不算：分组暂停着的执行型消息 ─────────────────────────────
+  await db.insert(groups).values({ id: "gp", projectId: "p1", name: "暂停的分组", paused: true, createdAt: at } as never);
+  await db.insert(tasks).values(task({ id: "th", title: "暂停分组里失败了", groupId: "gp", status: "failed", endedAt: at }) as never);
+  await reconcile("th");
+  const thRow = (await rowsOf("th"))[0]!;
+  assert.equal(thRow.kind, "failed");
+  fake.reset();
+  await db.insert(scheduledMessages).values(message({ id: "mh", taskId: "th", execution: true, text: "再试一次" }) as never);
+  await reconcile("th");
+  assert.equal(fake.recalls().length, 0, "分组暂停着，这条不会自己送出去：不撤失败卡");
+  const thAfter = await rowsOf("th");
+  assert.equal(thAfter.length, 1);
+  assert.equal(thAfter[0]!.state, "sent", "失败卡还在等他处理");
+  await db.update(groups).set({ paused: false } as never).where(eq(groups.id, "gp"));
+  await reconcile("th");
+  assert.equal((await rowsOf("th"))[0]!.patchState, "recalled", "分组恢复了、消息马上就送：这才撤回");
 
   im.reconciler.stop();
   im.sender.stop();

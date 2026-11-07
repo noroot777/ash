@@ -109,7 +109,7 @@ export interface HumanTurnFacts {
   duetGateOpen?: boolean;
   /** 自由工作流有待裁定的驳回。 */
   disputeOpen?: boolean;
-  /** 托盘里有此刻就该送进会话的消息（判据同投递端，server pending-messages.ts hasDeliverablePendingMessages）。 */
+  /** 托盘里有此刻判得出「送」的消息：一空下来就送进去、接着跑（判据同投递扫描，server pending-delivery-facts.ts）。 */
   deliveryPending?: boolean;
 }
 

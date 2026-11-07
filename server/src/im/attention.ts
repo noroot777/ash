@@ -26,7 +26,7 @@ import { projects, scheduledMessages, tasks } from "../db/schema.js";
 import { freeReviewRuns } from "../db/schema-free-workflow.js";
 import { currentGateVersion } from "../duet/gate-version.js";
 import { unresolvedDisputes } from "../free-review-dispute.js";
-import { hasDeliverablePendingMessages } from "../pending-messages.js";
+import { deliversOnItsOwn } from "../pending-delivery-facts.js";
 import { enrichTasks, toTaskListItem } from "../task-store.js";
 import { humanGateOf, NO_GATE } from "../task-human-gate.js";
 import { failureVersionOf, resultVersionOf } from "../task-result-version.js";
@@ -47,7 +47,7 @@ export interface TaskView {
   projectName: string;
   /** 团队执行者：验收、结局都记在调度台身上。 */
   teamWorker: boolean;
-  /** 托盘里有此刻就该送进会话的消息：一空下来就送进去、接着跑。 */
+  /** 托盘里有此刻判得出「送」的消息（判据同投递扫描）：一空下来就送进去、接着跑。 */
   deliveryPending: boolean;
   turn: Turn | null;
 }
@@ -137,7 +137,7 @@ export async function viewsOf(taskIds: string[]): Promise<Map<string, TaskView |
     }
     const disputes = task.workflowMode === "free" && task.mode === "single" ? await unresolvedDisputes(task.id) : [];
     const teamWorker = !!task.parentId && parents.get(task.parentId) === "team";
-    const deliveryPending = trayed.has(task.id) && await hasDeliverablePendingMessages(task.id);
+    const deliveryPending = trayed.has(task.id) && await deliversOnItsOwn(task.id);
     const kind = humanTurnOf(toTaskListItem(task), crew.map(toTaskListItem), {
       teamWorker,
       duetGateOpen: gateVersion !== null,

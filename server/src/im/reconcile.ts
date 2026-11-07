@@ -20,7 +20,9 @@
 //
 // 状态停下来了、回合锁却还占着 = 这一轮还在结算，或者下一轮已经占了位还没落 running：预约的审查、审查没过
 // 排着的修复都是在这把锁放开的那一下接上的。这时推「等你验收」，转眼就得撤回（飞书里就是一张卡闪一下）。
-// 所以这一刻不动它名下的卡，锁一放开再对一次。
+// 所以这一刻不动它名下的卡，锁一放开再对一次。讨论的裁决门例外：runGate 就是持着这把锁等人点门（duet/index.ts），
+// 门开着时锁不会先放；而裁决门这一种下一步只在门真开着时才算得出来（duet/gate-version.ts currentGateVersion），
+// 不会是结算途中的过渡。其余占锁的（结算、预约审查接棒、验收、源码管理）都是机器在办事，办完就放。
 import { createHash } from "node:crypto";
 import { isAcceptedStage } from "@ash/shared";
 import { and, desc, eq, gt, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
@@ -163,7 +165,7 @@ export class Reconciler {
 
   /** 有事要人管、回合锁却还占着：先不动，锁放开再对（文件头）。没事要管的照常收卡 —— 又跑起来了就该撤回。 */
   private stillSettling(taskId: string, view: TaskView | null): boolean {
-    if (!view?.turn || !isTurnClaimed(taskId)) return false;
+    if (!view?.turn || view.turn.kind === "duet_gate" || !isTurnClaimed(taskId)) return false;
     if (!this.settling.has(taskId)) {
       this.settling.add(taskId);
       whenTurnIdle(taskId, () => {

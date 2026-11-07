@@ -31,9 +31,8 @@ import { bus } from "./bus.js";
 import { createDeliveryLease } from "./delivery-lease.js";
 import { leasesHeldBy, mintLeaseStamp } from "./delivery-fence.js";
 import { db, dbClient } from "./db/index.js";
-import { scheduledMessages, tasks, groups } from "./db/schema.js";
+import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
-import { queueBlockers } from "./queues.js";
 import { claimQueueSeat, type QueueSeat } from "./queue-seat.js";
 import { taskStartStatus } from "./task-start-status.js";
 import { releaseTurn, turnSourceReview, whenTurnIdle } from "./runs.js";
@@ -43,8 +42,8 @@ import { forgetRedelivery, retryBlocked, scheduleRedelivery } from "./pending-re
 import { monitorBlockedReason, monitorIdFromOrigin } from "@ash/shared/monitor";
 import { monitorEventSourceState } from "./monitor-session.js";
 import type { MonitorWakeData } from "@ash/shared/monitor-wake";
-import { deliveryOptions, deliveryVerdict, isDueForDelivery, pendingExecutionIntent } from "./pending-verdict.js";
-import { reviewDeliveryBlocked, reviewDeliveryFrom } from "./review-ownership.js";
+import { deliveryOptions, isDueForDelivery, pendingExecutionIntent } from "./pending-verdict.js";
+import { deliveryVerdictOf } from "./pending-delivery-facts.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { bindUploadsToTask } from "./uploads.js";
 import { dispatchPendingMessage } from "./pending-dispatch.js";
@@ -407,34 +406,8 @@ async function scanPendingMessages(taskId?: string): Promise<void> {
         await db.update(scheduledMessages).set({ execution }).where(and(eq(scheduledMessages.id, m.id), eq(scheduledMessages.status, "pending")));
         m.execution = execution;
       }
-      // checkpoint 追问经待发送路径投递(定时发送、第一句还在回答时自动排队的第二句)
-      // 时,与直接回复同判据旁路(task-reply.ts / orchestrator 的 checkpointFollowUp):
-      // paused+resumePrompt 任务上的非执行型消息,投递是续聊不是执行 —— 占位会把
-      // paused 翻成 queued,orchestrator 误判成执行回合:消费继续指令、无确认结算
-      // failed(第 ll7XKsu_ps0n 链第 1 轮:定时追问与连续追问实测,直接回复对照正常)。
-      const checkpointFollowUp =
-        reviewDeliveryFrom(m)?.kind === "answer" ||
-        t != null && t.mode === "single" && !m.execution && t.status === "paused" && !!t.resumePrompt;
-      // paused/backlog 的单任务、以及执行型消息(不论任务状态)才需要问队列;执行型
-      // 还要问分组暂停。其余状态别白查几张表。
-      const needQueueCheck =
-        t != null && t.mode === "single" && !checkpointFollowUp
-        && (m.execution || t.status === "paused" || t.status === "backlog");
-      const queueBlocked = needQueueCheck ? (await queueBlockers(m.taskId)).length > 0 : false;
-      const groupPaused =
-        t != null && t.mode === "single" && m.execution && t.groupId
-          ? !!(await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0)?.paused
-          : false;
-      // 「**起它的那次、那一轮**审查现在是什么状态」——只对哨兵事件查,但**无条件查**,
-      // 不按任务状态短路:来源失效是这条消息自己的资格,而审查完全可以跑在一个 paused
-      // 任务上、它收尾时也不触发任何终态清理(第 2 轮审查 F5)。只多这一次库查,而且只在
-      // 托盘里真有哨兵事件时才发生。
-      const monitorSource = t != null && monitorIdFromOrigin(m.origin) !== null
-        ? await monitorEventSourceState(m.origin)
-        : undefined;
-      const reviewBlocked = await reviewDeliveryBlocked(reviewDeliveryFrom(m), m.taskId);
-      const verdict = deliveryVerdict(m, t ? { ...t, queueBlocked, groupPaused, monitorSource, reviewBlocked,
-        reviewUncertain: t.waitOwnership?.start?.phase === "uncertain" } : null, at);
+      // 判定要的那几样持久事实（队列占位、分组暂停、哨兵来源、审查归属）读齐了交给纯判定；飞书推卡按同一份判（pending-delivery-facts.ts）。
+      const { verdict, facts: { needQueueCheck, queueBlocked, groupPaused } } = await deliveryVerdictOf(m, t, at);
       if (verdict.action === "wait") {
         // 还没到期(钟点未到、前置任务未完成)的等待是它自己的语义,不是滞留。
         if (!isDueForDelivery(m, at)) continue;
